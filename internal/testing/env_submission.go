@@ -67,6 +67,9 @@ func (e *TestEnv) close(timeLeap bool) {
 	if err := closed.SetValidated(); err != nil {
 		e.t.Fatalf("validate closed ledger: %v", err)
 	}
+	if err := e.localTxs.Sweep(closed); err != nil {
+		e.t.Fatalf("sweep local transactions: %v", err)
+	}
 	e.ledger = closed
 	e.lastClosedLedger = closed
 	e.clock.Set(closed.CloseTime())
@@ -412,6 +415,10 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 // and sequence-gap queuing.
 // Reference: rippled NetworkOPs::processTransaction -> TxQ::apply -> NetworkOPs::apply
 func (e *TestEnv) submitViaTxQ(txn tx.Transaction) TxResult {
+	return e.submitViaTxQWithLocal(txn, true)
+}
+
+func (e *TestEnv) submitViaTxQWithLocal(txn tx.Transaction, local bool) TxResult {
 	e.t.Helper()
 
 	accountAddr := txn.GetCommon().Account
@@ -426,6 +433,9 @@ func (e *TestEnv) submitViaTxQ(txn tx.Transaction) TxResult {
 	txn = pending.Parsed
 	adapter := openledger.NewTxqAdapter(e.ledger, e.openLedgerApplyConfig(e.ledger, e.VerifySignatures))
 	result := e.txQueue.Apply(adapter, txn, pending.Hash, pending.Account)
+	if local && (e.txQApplyFlags&tx.TapFAIL_HARD == 0 || result.Result.IsSuccess()) && result.Result != ter.TefALREADY {
+		e.localTxs.PushBack(e.ledger.Sequence(), pending)
+	}
 
 	if result.Applied {
 		applyResult := adapter.LastApplyResult()
@@ -447,17 +457,14 @@ func (e *TestEnv) submitViaTxQ(txn tx.Transaction) TxResult {
 		// load dropped, instead of waiting for the next close — diverging from
 		// rippled (see TxQ_test.cpp "clear queue failure (load)"). The
 		// close-time drain in Close()/CloseWithTimeLeap() handles queued txns.
-		e.retryHeldTransactions(accountAddr)
+		if result.Result.IsSuccess() {
+			e.retryHeldTransactions(accountAddr)
+		}
 
 		return txResultFromApply(*applyResult)
 	}
 
 	if result.Queued {
-		// Queued txns are owned by the TxQ, so they join the local-tx set (drained
-		// only at close), not the held set (retried mid-window): retrying a queued
-		// entry mid-window would let it bypass the queue into the open ledger.
-		e.addLocalTransaction(accountAddr, txn)
-
 		return txResultFromTER(ter.TerQUEUED, true)
 	}
 
@@ -466,11 +473,6 @@ func (e *TestEnv) submitViaTxQ(txn tx.Transaction) TxResult {
 	// the gap-filling transaction applies.
 	if isRetryable(result.Result) {
 		e.addHeldTransaction(accountAddr, txn)
-	} else if isTelLocal(result.Result) {
-		// A tel (local) result joins the local-tx set: rippled replays every
-		// locally-submitted tx at the next open-ledger build regardless of result
-		// code, so these apply only at close, never mid-window.
-		e.addLocalTransaction(accountAddr, txn)
 	}
 
 	return txResultFromTER(result.Result, false)
@@ -483,13 +485,6 @@ func isRetryable(result ter.Result) bool {
 	return result >= -99 && result < 0
 }
 
-// isTelLocal returns true if the result is a tel (local error) code.
-// tel codes are in the range -399 to -300.
-// Reference: rippled TER.h telLOCAL_ERROR = -399, telCAN_NOT_QUEUE = -381
-func isTelLocal(result ter.Result) bool {
-	return result >= -399 && result <= -300
-}
-
 // addHeldTransaction records a sequence-gap-held (ter*) transaction for the
 // mid-window retry.
 func (e *TestEnv) addHeldTransaction(accountAddr string, txn tx.Transaction) {
@@ -497,15 +492,6 @@ func (e *TestEnv) addHeldTransaction(accountAddr string, txn tx.Transaction) {
 		e.heldTxns = make(map[string][]tx.Transaction)
 	}
 	e.heldTxns[accountAddr] = append(e.heldTxns[accountAddr], txn)
-}
-
-// addLocalTransaction records a TxQ-owned transaction (queued or tel-rejected)
-// in the local-tx set, replayed only at the close-time open-ledger rebuild.
-func (e *TestEnv) addLocalTransaction(accountAddr string, txn tx.Transaction) {
-	if e.localTxns == nil {
-		e.localTxns = make(map[string][]tx.Transaction)
-	}
-	e.localTxns[accountAddr] = append(e.localTxns[accountAddr], txn)
 }
 
 func (e *TestEnv) preparePendingTransactions(groups map[string][]tx.Transaction) []openledger.PendingTx {
@@ -534,7 +520,7 @@ func (e *TestEnv) retryHeldBeforeCloseViaTxQ() {
 	e.heldTxns = nil
 	openledger.CanonicalSort(pending, e.ledger.ParentHash())
 	for _, held := range pending {
-		e.submitViaTxQ(held.Parsed)
+		e.submitViaTxQWithLocal(held.Parsed, false)
 	}
 }
 
@@ -561,14 +547,18 @@ func (e *TestEnv) retryHeldBeforeCloseDirect() {
 }
 
 func (e *TestEnv) retryLocalsViaTxQ() {
-	if len(e.localTxns) == 0 {
+	if e.localTxs.Size() == 0 {
 		return
 	}
-	pending := e.preparePendingTransactions(e.localTxns)
-	e.localTxns = nil
-	openledger.CanonicalSort(pending, [32]byte{})
-	for _, local := range pending {
-		e.submitViaTxQ(local.Parsed)
+	for _, local := range e.localTxs.GetTxSet() {
+		prepared, err := openledger.ParsePendingTx(local.Blob)
+		if err != nil {
+			e.t.Fatalf("parse local transaction %x: %v", local.Hash, err)
+		}
+		if prepared.Hash != local.Hash || prepared.Account != local.Account {
+			e.t.Fatalf("local transaction identity does not match blob %x", local.Hash)
+		}
+		e.submitViaTxQWithLocal(prepared.Parsed, false)
 	}
 }
 
@@ -595,7 +585,7 @@ func (e *TestEnv) retryHeldTransactions(accountAddr string) {
 
 	for _, heldTxn := range held {
 		// Retry by routing through the TxQ again
-		result := e.submitViaTxQ(heldTxn)
+		result := e.submitViaTxQWithLocal(heldTxn, false)
 		if result.Success {
 			// Successfully applied, continue with next held transaction
 			continue

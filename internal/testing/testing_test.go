@@ -14,6 +14,7 @@ import (
 	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
 	delegatetx "github.com/LeJamon/go-xrpl/internal/tx/delegate"
 	"github.com/LeJamon/go-xrpl/internal/tx/offer"
+	paymenttx "github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -383,6 +384,48 @@ func TestSignedSubmitUsesTxQ(t *testing.T) {
 	require.True(t, result.Queued)
 	require.False(t, result.Applied)
 	require.Equal(t, uint64(1), env.TxQMetrics().TxCount)
+}
+
+func TestTxQDoesNotRetryHeldTransactionAfterTec(t *testing.T) {
+	env := NewTestEnvWithTxQ(t, txq.StandaloneConfig())
+	alice := NewAccount("alice")
+	env.Fund(alice)
+	env.Close()
+
+	sequence := env.Seq(alice)
+	heldSequence := sequence + 1
+	held := accounttx.NewAccountSet(alice.Address)
+	held.Sequence = &heldSequence
+	require.Equal(t, ter.TerPRE_SEQ, env.Submit(held).Result)
+
+	unfunded := NewAccount("unfunded")
+	claimed := paymenttx.NewPayment(alice.Address, unfunded.Address, XRPTxAmount(1))
+	result := env.Submit(claimed)
+	require.Equal(t, ter.TecNO_DST_INSUF_XRP, result.Result)
+	require.True(t, result.Applied)
+	require.Equal(t, sequence+1, env.Seq(alice))
+
+	heldHash, err := tx.ComputeTransactionHash(held)
+	require.NoError(t, err)
+	exists, err := env.Ledger().TxExists(heldHash)
+	require.NoError(t, err)
+	require.False(t, exists)
+}
+
+func TestTxQRetainsAndSweepsLocalFailure(t *testing.T) {
+	env := NewTestEnvWithTxQ(t, txq.StandaloneConfig())
+	alice := NewAccount("alice")
+	env.Fund(alice)
+	env.Close()
+
+	pastSequence := env.Seq(alice) - 1
+	obsolete := accounttx.NewAccountSet(alice.Address)
+	obsolete.Sequence = &pastSequence
+	require.Equal(t, ter.TefPAST_SEQ, env.Submit(obsolete).Result)
+	require.Equal(t, 1, env.localTxs.Size())
+
+	env.Close()
+	require.Zero(t, env.localTxs.Size())
 }
 
 func TestFeeSettingsStayInSync(t *testing.T) {

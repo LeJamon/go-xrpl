@@ -312,7 +312,10 @@ func (a *TxqAdapter) preclaimTransactionWithFlags(txn tx.Transaction, accountID 
 
 	key := keylet.Account(accountID)
 	data, err := clone.Read(key)
-	if err != nil || data == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if data == nil {
 		return ter.TerNO_ACCOUNT
 	}
 	ar, err := state.ParseAccountRoot(data)

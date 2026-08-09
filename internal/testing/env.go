@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/localtxs"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
@@ -128,13 +129,7 @@ type TestEnv struct {
 	// account succeeds, mirroring rippled's mHeldTransactions. Keyed by account.
 	heldTxns map[string][]tx.Transaction
 
-	// localTxns stores TxQ-owned transactions: successfully queued entries and tel*
-	// (local) rejections. Like rippled's m_localTX, they are replayed only when a
-	// new open ledger is built at close, never mid-window — holding them out of the
-	// mid-window retry stops a queued entry from bypassing the queue into the open
-	// ledger when the load floor drops (double-charging / consuming reserved
-	// tickets). Keyed by account.
-	localTxns map[string][]tx.Transaction
+	localTxs *localtxs.LocalTxs
 
 	// replayOnClose enables the open-ledger consensus replay behavior.
 	// When true, Close() rebuilds the closed ledger from the parent
@@ -299,6 +294,7 @@ func newTestEnv(t testing.TB, cfg genesis.Config) *TestEnv {
 		rulesBuilder: amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported),
 		openLedger:   true, // Normal test mode: check fee adequacy
 		feeTrack:     feetrack.New(),
+		localTxs:     localtxs.New(),
 	}
 	master := MasterAccount()
 	if err := env.registerAccount(master); err != nil {

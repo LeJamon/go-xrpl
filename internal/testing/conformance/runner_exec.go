@@ -424,7 +424,15 @@ func (r *runner) execTx(stepIdx int, step Step) {
 		defer r.env.SetBypassTxQ(false)
 	}
 
-	result := r.env.Submit(parsed)
+	submitParsed := func(transaction tx.Transaction) jtx.TxResult {
+		return r.env.SubmitWithOptions(transaction, jtx.SubmitOptions{
+			SkipFee:       true,
+			SkipSequence:  true,
+			SkipNetworkID: true,
+			SkipSignature: true,
+		})
+	}
+	result := submitParsed(parsed)
 
 	// When go-xrpl returns terPRE_SEQ but the fixture expects a different result,
 	// the account's ledger sequence is behind the fixture's baked-in sequence.
@@ -466,13 +474,13 @@ func (r *runner) execTx(stepIdx int, step Step) {
 						key := fmt.Sprintf("%s:%d", common.Account, currentSeq)
 						if disabledTx, ok := r.disabledTxBySeq[key]; ok {
 							delete(r.disabledTxBySeq, key)
-							r.env.Submit(disabledTx)
+							submitParsed(disabledTx)
 						} else {
 							r.env.BumpSequenceAndDeductAmount(acc, bumpFee)
 						}
 						currentSeq++
 					}
-					result = r.env.Submit(parsed)
+					result = submitParsed(parsed)
 				}
 			}
 		}
