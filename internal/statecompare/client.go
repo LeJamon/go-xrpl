@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	txcodec "github.com/LeJamon/go-xrpl/internal/tx"
@@ -107,13 +108,8 @@ func manifestDSNFromEnv() (string, error) {
 	cfg.Port = port
 	cfg.Database = getEnvOrDefault("POSTGRES_DB", "xrpl_state")
 	cfg.Username = getEnvOrDefault("POSTGRES_USER", "postgres")
-	cfg.Password = os.Getenv("POSTGRES_PASSWORD")
+	cfg.Password = getEnvOrDefault("POSTGRES_PASSWORD", "postgres")
 	cfg.SSLMode = getEnvOrDefault("POSTGRES_SSLMODE", "disable")
-	switch cfg.SSLMode {
-	case "disable", "require", "verify-ca", "verify-full":
-	default:
-		return "", fmt.Errorf("invalid POSTGRES_SSLMODE %q", cfg.SSLMode)
-	}
 	if err := cfg.Validate(); err != nil {
 		return "", fmt.Errorf("invalid manifest database configuration: %w", err)
 	}
@@ -209,7 +205,7 @@ func (c *Client) Transactions(ctx context.Context, snapshot *LedgerSnapshot) ([]
 	if err != nil {
 		return nil, err
 	}
-	record, err := pack.readLedgerAt(int(snapshot.blobOffset), snapshot.TransactionCount)
+	record, err := pack.readLedgerAtContext(ctx, int(snapshot.blobOffset), snapshot.TransactionCount)
 	if err != nil {
 		return nil, fmt.Errorf("decoding ledger pack %q at offset %d: %w", snapshot.blobKey, snapshot.blobOffset, err)
 	}
@@ -219,7 +215,7 @@ func (c *Client) Transactions(ctx context.Context, snapshot *LedgerSnapshot) ([]
 	if err := validateLedgerHeader(record.headerBlob, snapshot); err != nil {
 		return nil, fmt.Errorf("ledger %d header: %w", snapshot.LedgerIndex, err)
 	}
-	return validateTransactions(record.txs, snapshot)
+	return validateTransactions(ctx, record.txs, snapshot)
 }
 
 func (c *Client) ledgerPack(ctx context.Context, key string) (*ledgerPack, error) {
@@ -255,7 +251,7 @@ func (c *Client) ledgerPack(ctx context.Context, key string) (*ledgerPack, error
 	if int64(len(data)) != object.size {
 		return nil, fmt.Errorf("ledger pack %q size changed while reading: got %d, want %d", key, len(data), object.size)
 	}
-	pack, err := indexLedgerPack(data)
+	pack, err := indexLedgerPackContext(ctx, data)
 	if err != nil {
 		return nil, fmt.Errorf("indexing ledger pack %q: %w", key, err)
 	}
@@ -300,7 +296,7 @@ func validateLedgerHeader(raw []byte, snapshot *LedgerSnapshot) error {
 	return nil
 }
 
-func validateTransactions(records []txRecord, snapshot *LedgerSnapshot) ([]Transaction, error) {
+func validateTransactions(ctx context.Context, records []txRecord, snapshot *LedgerSnapshot) ([]Transaction, error) {
 	if uint64(len(records)) != uint64(snapshot.TransactionCount) {
 		return nil, fmt.Errorf("ledger %d contains %d transactions, manifest declares %d", snapshot.LedgerIndex, len(records), snapshot.TransactionCount)
 	}
@@ -309,6 +305,15 @@ func validateTransactions(records []txRecord, snapshot *LedgerSnapshot) ([]Trans
 	seenIndices := make([]bool, len(records))
 	tree := shamap.New(shamap.TypeTransaction)
 	for _, record := range records {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if err := validateCanonicalObject(record.txBlob); err != nil {
+			return nil, fmt.Errorf("ledger %d transaction %x is not canonical: %w", snapshot.LedgerIndex, record.txHash, err)
+		}
+		if err := validateCanonicalObject(record.metaBlob); err != nil {
+			return nil, fmt.Errorf("ledger %d metadata for transaction %x is not canonical: %w", snapshot.LedgerIndex, record.txHash, err)
+		}
 		calculated := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), record.txBlob)
 		if calculated != record.txHash {
 			return nil, fmt.Errorf("ledger %d transaction hash does not match blob", snapshot.LedgerIndex)
@@ -356,6 +361,21 @@ func validateTransactions(records []txRecord, snapshot *LedgerSnapshot) ([]Trans
 		return nil, fmt.Errorf("ledger %d transaction tree root does not match manifest", snapshot.LedgerIndex)
 	}
 	return ordered, nil
+}
+
+func validateCanonicalObject(blob []byte) error {
+	decoded, err := binarycodec.DecodeBytes(blob)
+	if err != nil {
+		return err
+	}
+	canonical, err := binarycodec.EncodeBytesTrusted(decoded)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(blob, canonical) {
+		return errors.New("non-canonical binary object")
+	}
+	return nil
 }
 
 func (c *Client) ValidateRange(ctx context.Context, from, to uint32) (bool, uint32, error) {

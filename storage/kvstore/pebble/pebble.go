@@ -35,12 +35,32 @@ func New(path string, options Options) (*Store, error) {
 	return newWithCache(path, pebbleCache, resolved)
 }
 
+// NewReadOnly opens an existing Pebble store without taking its exclusive
+// writer lock.
+func NewReadOnly(path string, options Options) (*Store, error) {
+	resolved, err := options.Resolve()
+	if err != nil {
+		return nil, err
+	}
+	pebbleCache := pebble.NewCache(resolved.BlockCacheBytes)
+	defer pebbleCache.Unref()
+	return openWithCache(path, pebbleCache, resolved, true)
+}
+
 func newWithCache(path string, pebbleCache *pebble.Cache, options Options) (*Store, error) {
-	if err := os.MkdirAll(path, 0755); err != nil {
-		return nil, fmt.Errorf("kvstore/pebble: failed to create directory %s: %w", path, err)
+	return openWithCache(path, pebbleCache, options, false)
+}
+
+func openWithCache(path string, pebbleCache *pebble.Cache, options Options, readOnly bool) (*Store, error) {
+	if !readOnly {
+		if err := os.MkdirAll(path, 0755); err != nil {
+			return nil, fmt.Errorf("kvstore/pebble: failed to create directory %s: %w", path, err)
+		}
 	}
 
-	db, err := pebble.Open(path, makePebbleOptions(options, pebbleCache))
+	pebbleOptions := makePebbleOptions(options, pebbleCache)
+	pebbleOptions.ReadOnly = readOnly
+	db, err := pebble.Open(path, pebbleOptions)
 	if err != nil {
 		return nil, fmt.Errorf("kvstore/pebble: failed to open %s: %w", path, err)
 	}

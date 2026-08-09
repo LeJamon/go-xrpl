@@ -67,7 +67,17 @@ func makeTransactions(t *testing.T, indices ...uint32) []txRecord {
 	t.Helper()
 	records := make([]txRecord, len(indices))
 	for i, index := range indices {
-		blob := bytes.Repeat([]byte{byte(i + 1)}, minTransactionBytes)
+		blob, err := binarycodec.EncodeBytes(map[string]any{
+			"TransactionType": "Payment",
+			"Sequence":        uint32(i + 1),
+			"Fee":             "10",
+			"Account":         "rMBzp8CgpE441cp5PVyA9rpVV7oT8hP3ys",
+			"Destination":     "rMBzp8CgpE441cp5PVyA9rpVV7oT8hP3ys",
+			"Amount":          "1000000",
+		})
+		if err != nil {
+			t.Fatalf("encode transaction: %v", err)
+		}
 		records[i] = txRecord{
 			txHash:   sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), blob),
 			txBlob:   blob,
@@ -246,6 +256,15 @@ func TestValidateTransactionsRejectsCorruption(t *testing.T) {
 	}{
 		{"hash", func(records []txRecord, _ *LedgerSnapshot) { records[0].txHash[0] ^= 1 }},
 		{"duplicate index", func(records []txRecord, _ *LedgerSnapshot) { records[1].metaBlob = encodeMeta(t, 0) }},
+		{"noncanonical transaction", func(records []txRecord, snap *LedgerSnapshot) {
+			blob := records[0].txBlob
+			if len(blob) < 8 || blob[0] != 0x12 || blob[3] != 0x24 {
+				t.Fatalf("unexpected transaction prefix %x", blob[:min(len(blob), 8)])
+			}
+			records[0].txBlob = append(append(bytes.Clone(blob[3:8]), blob[:3]...), blob[8:]...)
+			records[0].txHash = sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), records[0].txBlob)
+			snap.TransactionHash = transactionRoot(t, records)
+		}},
 		{"count", func(_ []txRecord, snap *LedgerSnapshot) { snap.TransactionCount++ }},
 		{"root", func(_ []txRecord, snap *LedgerSnapshot) { snap.TransactionHash[0] ^= 1 }},
 	}
@@ -257,7 +276,7 @@ func TestValidateTransactionsRejectsCorruption(t *testing.T) {
 			}
 			snap := *snapshot
 			test.mutate(records, &snap)
-			if _, err := validateTransactions(records, &snap); err == nil {
+			if _, err := validateTransactions(context.Background(), records, &snap); err == nil {
 				t.Fatal("validateTransactions unexpectedly succeeded")
 			}
 		})
@@ -295,6 +314,33 @@ func TestManifestDSNEscapesCredentials(t *testing.T) {
 	password, _ := parsed.User.Password()
 	if parsed.User.Username() != "user:name" || password != "p@ss/word" {
 		t.Fatalf("credentials did not round trip through DSN: %q", dsn)
+	}
+	t.Setenv("POSTGRES_PASSWORD", "")
+	dsn, err = manifestDSNFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err = url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password, _ = parsed.User.Password()
+	if password != "postgres" {
+		t.Fatalf("default password = %q, want postgres", password)
+	}
+	for _, mode := range []string{"allow", "prefer"} {
+		t.Setenv("POSTGRES_SSLMODE", mode)
+		dsn, err = manifestDSNFromEnv()
+		if err != nil {
+			t.Fatalf("POSTGRES_SSLMODE=%s: %v", mode, err)
+		}
+		parsed, err = url.Parse(dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := parsed.Query().Get("sslmode"); got != mode {
+			t.Fatalf("sslmode = %q, want %q", got, mode)
+		}
 	}
 	t.Setenv("POSTGRES_PORT", "not-a-port")
 	if _, err := manifestDSNFromEnv(); err == nil {

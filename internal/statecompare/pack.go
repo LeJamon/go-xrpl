@@ -212,6 +212,13 @@ func packReadError(ctx context.Context, message string, err error) error {
 }
 
 func indexLedgerPack(blob []byte) (*ledgerPack, error) {
+	return indexLedgerPackContext(context.Background(), blob)
+}
+
+func indexLedgerPackContext(ctx context.Context, blob []byte) (*ledgerPack, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if int64(len(blob)) > maxLedgerPackBytes {
 		return nil, fmt.Errorf("%w: ledger pack size %d exceeds limit %d", errPack, len(blob), maxLedgerPackBytes)
 	}
@@ -240,6 +247,9 @@ func indexLedgerPack(blob []byte) (*ledgerPack, error) {
 		records:    make([]recordBoundary, 0, int(count)),
 	}
 	for i := uint32(0); i < count; i++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		start := off
 		seq, next, err := readUint64(blob, off, fmt.Sprintf("ledger %d sequence", i))
 		if err != nil {
@@ -249,7 +259,7 @@ func indexLedgerPack(blob []byte) (*ledgerPack, error) {
 		if expectedSeq > math.MaxUint32 || seq != expectedSeq {
 			return nil, fmt.Errorf("%w: ledger record %d has sequence %d, want %d", errPack, i, seq, expectedSeq)
 		}
-		off, err = skipLedgerRecord(blob, next, i)
+		off, err = skipLedgerRecord(ctx, blob, next, i)
 		if err != nil {
 			return nil, err
 		}
@@ -261,7 +271,7 @@ func indexLedgerPack(blob []byte) (*ledgerPack, error) {
 	return pack, nil
 }
 
-func skipLedgerRecord(blob []byte, off int, record uint32) (int, error) {
+func skipLedgerRecord(ctx context.Context, blob []byte, off int, record uint32) (int, error) {
 	headerBlob, off, err := readBytes(blob, off, header.SizeBase, fmt.Sprintf("ledger %d header", record))
 	if err != nil {
 		return 0, err
@@ -277,6 +287,9 @@ func skipLedgerRecord(blob []byte, off int, record uint32) (int, error) {
 		return 0, fmt.Errorf("%w: ledger %d transaction count %d cannot fit in %d bytes", errPack, record, txCount, len(blob)-off)
 	}
 	for i := uint32(0); i < txCount; i++ {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		if _, next, err := take(blob, off, hashLen, fmt.Sprintf("ledger %d transaction %d hash", record, i)); err != nil {
 			return 0, err
 		} else {
@@ -303,6 +316,13 @@ func skipLedgerRecord(blob []byte, off int, record uint32) (int, error) {
 }
 
 func (p *ledgerPack) readLedgerAt(offset int, expectedTxCount uint32) (ledgerBlob, error) {
+	return p.readLedgerAtContext(context.Background(), offset, expectedTxCount)
+}
+
+func (p *ledgerPack) readLedgerAtContext(ctx context.Context, offset int, expectedTxCount uint32) (ledgerBlob, error) {
+	if err := ctx.Err(); err != nil {
+		return ledgerBlob{}, err
+	}
 	i := sort.Search(len(p.records), func(i int) bool { return p.records[i].start >= offset })
 	if i == len(p.records) || p.records[i].start != offset {
 		return ledgerBlob{}, fmt.Errorf("%w: ledger offset %d is not a record boundary", errPack, offset)
@@ -325,6 +345,9 @@ func (p *ledgerPack) readLedgerAt(offset int, expectedTxCount uint32) (ledgerBlo
 	}
 	lb := ledgerBlob{seq: uint32(seq), headerBlob: headerBlob, txs: make([]txRecord, 0, int(txCount))}
 	for i := uint32(0); i < txCount; i++ {
+		if err := ctx.Err(); err != nil {
+			return ledgerBlob{}, err
+		}
 		hashBytes, next, err := take(p.data, off, hashLen, fmt.Sprintf("transaction %d hash", i))
 		if err != nil {
 			return ledgerBlob{}, err

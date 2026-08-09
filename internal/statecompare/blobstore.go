@@ -147,6 +147,18 @@ type s3BlobStore struct {
 	client    *http.Client
 }
 
+type idleReadConn struct {
+	net.Conn
+	timeout time.Duration
+}
+
+func (c *idleReadConn) Read(p []byte) (int, error) {
+	if err := c.Conn.SetReadDeadline(time.Now().Add(c.timeout)); err != nil {
+		return 0, err
+	}
+	return c.Conn.Read(p)
+}
+
 var (
 	bucketPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 	regionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*$`)
@@ -157,8 +169,19 @@ func newS3BlobStore(cfg blobStoreConfig) (*s3BlobStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.DialContext = (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, errors.New("statecompare: default HTTP transport is not configurable")
+	}
+	transport := defaultTransport.Clone()
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		conn, err := dialer.DialContext(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		return &idleReadConn{Conn: conn, timeout: 90 * time.Second}, nil
+	}
 	transport.TLSHandshakeTimeout = 10 * time.Second
 	transport.ResponseHeaderTimeout = 30 * time.Second
 	transport.IdleConnTimeout = 90 * time.Second

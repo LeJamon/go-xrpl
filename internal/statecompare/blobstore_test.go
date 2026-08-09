@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGetBoolEnvStrict(t *testing.T) {
@@ -22,6 +24,19 @@ func TestGetBoolEnvStrict(t *testing.T) {
 	t.Setenv("TEST_BOOL", "truthy")
 	if _, err := getBoolEnv("TEST_BOOL", false); err == nil {
 		t.Fatal("invalid boolean accepted")
+	}
+}
+
+func TestIdleReadConnTimesOutStalledReads(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	conn := &idleReadConn{Conn: client, timeout: 20 * time.Millisecond}
+	_, err := conn.Read(make([]byte, 1))
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("Read error = %v, want timeout", err)
 	}
 }
 

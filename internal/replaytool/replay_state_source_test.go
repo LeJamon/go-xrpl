@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/statecompare"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -59,6 +60,51 @@ func TestOpenOrBuildBasePublishesOnlyVerifiedImport(t *testing.T) {
 	}
 	if err := base.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOpenOrBuildBaseSerializesConcurrentBuilders(t *testing.T) {
+	entries, root := syntheticEntries(t, 8)
+	dir := t.TempDir()
+	basePath := filepath.Join(dir, "ckpt-3")
+	firstSource := &nodestoreStateSource{dir: dir, baseCacheMB: 8, overlay: backend.NewMemory()}
+	secondSource := &nodestoreStateSource{dir: dir, baseCacheMB: 8, overlay: backend.NewMemory()}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	type result struct {
+		base *backend.NodeStore
+		err  error
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	firstResult := make(chan result, 1)
+	go func() {
+		base, err := firstSource.openOrBuildBase(ctx, basePath, root, func(fn func(statecompare.StateEntry) error) error {
+			close(started)
+			<-release
+			return streamAll(entries)(fn)
+		})
+		firstResult <- result{base: base, err: err}
+	}()
+	<-started
+
+	secondResult := make(chan result, 1)
+	go func() {
+		base, err := secondSource.openOrBuildBase(ctx, basePath, root, func(func(statecompare.StateEntry) error) error {
+			return errors.New("second builder streamed checkpoint")
+		})
+		secondResult <- result{base: base, err: err}
+	}()
+	close(release)
+
+	for _, result := range []result{<-firstResult, <-secondResult} {
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if err := result.base.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
