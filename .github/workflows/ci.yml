@@ -171,6 +171,13 @@ jobs:
           repository: XRPLF/rippled
           ref: 3c43f4614f87965298773279ff5b85d4c56c637b
           path: rippled-worktrees/v3.2.0-oracle
+      - name: Check out rippled v3.3.0 oracle
+        if: matrix.group == 'libs'
+        uses: actions/checkout@v5
+        with:
+          repository: XRPLF/rippled
+          ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
+          path: rippled-worktrees/v3.3.0-oracle
       - uses: ./.github/actions/setup
       - run: go test ${{ matrix.race }} -count=1 -timeout 15m ${{ matrix.packages }}
 
