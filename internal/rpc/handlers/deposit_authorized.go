@@ -64,13 +64,13 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, lookupErr
 	}
 	lookupExtra := ledgerEntryResponseFields(ledger, validated)
-	if _, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, sourceAccount, ledgerIndex); err != nil {
+	if _, err := ctx.Services.Ledger().GetAccountInfo(ctx.Context, sourceAccount, ledgerIndex); err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorSrcActNotFound("Source account not found.").WithExtra(lookupExtra)
 		}
 		return nil, rpcInternalError("deposit_authorized: source account lookup failed", err)
 	}
-	if _, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, destinationAccount, ledgerIndex); err != nil {
+	if _, err := ctx.Services.Ledger().GetAccountInfo(ctx.Context, destinationAccount, ledgerIndex); err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorDstActNotFound("Destination account not found.").WithExtra(lookupExtra)
 		}
@@ -89,7 +89,7 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	// The service performs the ledger-side checks (source/destination
 	// existence, credential existence/acceptance/expiry/ownership/duplicates,
 	// and the direct + credential-based preauth lookups).
-	result, err := ctx.Services.Ledger.GetDepositAuthorized(
+	result, err := ctx.Services.Ledger().GetDepositAuthorized(
 		ctx.Context,
 		sourceAccount,
 		destinationAccount,

@@ -34,7 +34,7 @@ func newBatchServer(t *testing.T) *Server {
 			"account_info": echoHandler(),
 		}),
 		timeout:  time.Second,
-		services: types.NewServiceContainer(nil),
+		services: types.NewTestServiceGraph(types.NewServiceContainer(nil)),
 	}
 	return srv
 }

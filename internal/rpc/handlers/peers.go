@@ -63,8 +63,8 @@ func (m *PeerReservationsAddMethod) Handle(ctx *types.RpcContext, params json.Ra
 	}
 
 	result := map[string]any{}
-	if ctx.Services != nil && ctx.Services.PeerReservationAdd != nil {
-		prevDesc, replaced, err := ctx.Services.PeerReservationAdd(key, desc)
+	if ctx.Services != nil && ctx.Services.PeerReservationAdd() != nil {
+		prevDesc, replaced, err := ctx.Services.PeerReservationAdd()(key, desc)
 		if err != nil {
 			return nil, rpcInternalError("peer_reservations_add: persisting reservation failed", err)
 		}
@@ -97,8 +97,8 @@ func (m *PeerReservationsDelMethod) Handle(ctx *types.RpcContext, params json.Ra
 	}
 
 	result := map[string]any{}
-	if ctx.Services != nil && ctx.Services.PeerReservationDel != nil {
-		prevDesc, existed, err := ctx.Services.PeerReservationDel(key)
+	if ctx.Services != nil && ctx.Services.PeerReservationDel() != nil {
+		prevDesc, existed, err := ctx.Services.PeerReservationDel()(key)
 		if err != nil {
 			return nil, rpcInternalError("peer_reservations_del: persisting reservation failed", err)
 		}
@@ -116,8 +116,8 @@ type PeerReservationsListMethod struct{ adminHandler }
 
 func (m *PeerReservationsListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	reservations := make([]any, 0)
-	if ctx.Services != nil && ctx.Services.PeerReservationList != nil {
-		entries := ctx.Services.PeerReservationList()
+	if ctx.Services != nil && ctx.Services.PeerReservationList() != nil {
+		entries := ctx.Services.PeerReservationList()()
 		// Rippled's PeerReservationTable::list() sorts ascending by nodeId
 		// (PeerReservationTable.cpp:57) so the wire order is deterministic.
 		sort.Slice(entries, func(i, j int) bool {

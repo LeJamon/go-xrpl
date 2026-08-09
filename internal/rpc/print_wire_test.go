@@ -21,7 +21,7 @@ import (
 // output is observed end-to-end.
 func printTestServer(t *testing.T) *Server {
 	t.Helper()
-	svc := servicesForMissingMethods(newMockLedgerServiceMissingMethods())
+	svc := types.NewServiceContainer(newMockLedgerServiceMissingMethods())
 	svc.PeerDisconnects = func() (uint64, uint64) { return 7, 3 }
 	svc.JqTransOverflow = func() uint64 { return 9 }
 	svc.LastCloseInfo = func() (int, int) { return 5, 1900 }
@@ -32,7 +32,8 @@ func printTestServer(t *testing.T) *Server {
 		}
 	}
 
-	srv := NewServer(ServerOptions{Timeout: time.Second, Services: svc, PeerSource: &stubPeerSource{
+	graph := types.NewTestServiceGraph(svc)
+	srv := NewServer(ServerOptions{Timeout: time.Second, Services: graph, PeerSource: &stubPeerSource{
 		peers:                  []map[string]any{{"address": "192.0.2.1:51235"}},
 		cluster:                map[string]any{},
 		criticalFailuresLocal:  4,

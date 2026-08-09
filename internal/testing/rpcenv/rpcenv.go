@@ -128,7 +128,7 @@ func (e *Env) RPCAs(method string, params any, role types.Role, apiVersion int) 
 		Context:    context.Background(),
 		Role:       role,
 		ApiVersion: apiVersion,
-		Services:   e.services,
+		Services:   types.NewTestServiceGraph(e.services),
 	}
 	return handler.Handle(ctx, raw)
 }

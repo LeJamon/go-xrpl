@@ -97,8 +97,10 @@ func (m *rpcSubMetrics) recordDeliveryFailure(endpoint, reason string, details .
 // urlSubscriptionRegistry owns URL-based admin subscriptions. Each URL maps
 // to one subscriber in the shared manager and one delivery goroutine.
 type urlSubscriptionRegistry struct {
-	ws     *WebSocketServer
-	client *http.Client
+	manager            *subscription.Manager
+	services           *types.ServiceGraph
+	ledgerInfoProvider types.LedgerInfoProvider
+	client             *http.Client
 	// ctx cancels in-flight deliveries on Close so shutdown isn't held
 	// hostage by a stalled endpoint.
 	ctx    context.Context
@@ -118,10 +120,12 @@ type urlSubscriptionRegistry struct {
 	closeDone        chan struct{}
 }
 
-func newURLSubscriptionRegistry(ws *WebSocketServer) *urlSubscriptionRegistry {
+func newURLSubscriptionRegistry(manager *subscription.Manager, services *types.ServiceGraph, ledgerInfoProvider types.LedgerInfoProvider) *urlSubscriptionRegistry {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &urlSubscriptionRegistry{
-		ws: ws,
+		manager:            manager,
+		services:           services,
+		ledgerInfoProvider: ledgerInfoProvider,
 		client: &http.Client{
 			Timeout: rpcSubRequestTimeout,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
@@ -138,6 +142,16 @@ func newURLSubscriptionRegistry(ws *WebSocketServer) *urlSubscriptionRegistry {
 		closeDone:        make(chan struct{}),
 		principalWorkers: make(map[string]int),
 	}
+}
+
+// NewURLSubscriptionService constructs the transport-neutral RPCSub registry.
+// It is called before HTTP and WebSocket transports are built so neither
+// transport needs to mutate the application graph.
+func NewURLSubscriptionService(manager *subscription.Manager, services *types.ServiceGraph, ledgerInfoProvider types.LedgerInfoProvider) types.URLSubscriptionService {
+	if manager == nil {
+		manager = subscription.NewManager()
+	}
+	return newURLSubscriptionRegistry(manager, services, ledgerInfoProvider)
 }
 
 func (r *urlSubscriptionRegistry) metricsSnapshot() rpcSubMetricsSnapshot {
@@ -177,8 +191,8 @@ func (r *urlSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types
 		return nil, rpcErr
 	}
 	prefix := request.WithoutBooks().WithoutAccountHistory()
-	scope := r.ws.subscriptionManager.NewRequestScope()
-	if rpcErr := r.ws.subscriptionManager.HandleSubscribeScoped(lookup.sub.registration, scope, prefix, true); rpcErr != nil {
+	scope := r.manager.NewRequestScope()
+	if rpcErr := r.manager.HandleSubscribeScoped(lookup.sub.registration, scope, prefix, true); rpcErr != nil {
 		return fail(rpcErr)
 	}
 	history, rpcErr := prepareAccountHistorySubscribe(ctx, request)
@@ -191,7 +205,7 @@ func (r *urlSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types
 	history.apply(lookup.sub.conn)
 	if rpcErr := applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *types.RpcError {
 		bookRequest.ApiVersion = request.ApiVersion
-		if rpcErr := r.ws.subscriptionManager.HandleSubscribeScoped(lookup.sub.registration, scope, bookRequest, true); rpcErr != nil {
+		if rpcErr := r.manager.HandleSubscribeScoped(lookup.sub.registration, scope, bookRequest, true); rpcErr != nil {
 			return rpcErr
 		}
 		setSubscriptionLoadCost(ctx, bookRequest)
@@ -199,7 +213,7 @@ func (r *urlSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types
 	}); rpcErr != nil {
 		return fail(rpcErr)
 	}
-	result := r.ws.buildSubscribeAckSampled(ctx, request, serverState)
+	result := buildSubscribeAckSampled(r.ledgerInfoProvider, ctx, request, serverState)
 	if history != nil {
 		result["warning"] = accountHistoryWarning
 	}
@@ -226,8 +240,8 @@ func (r *urlSubscriptionRegistry) Unsubscribe(ctx *types.RpcContext, request typ
 		return map[string]any{}, nil
 	}
 	prefix := request.WithoutBooks().WithoutAccountHistory()
-	scope := r.ws.subscriptionManager.NewRequestScope()
-	if rpcErr := r.ws.subscriptionManager.HandleUnsubscribeScoped(sub.registration, scope, prefix); rpcErr != nil {
+	scope := r.manager.NewRequestScope()
+	if rpcErr := r.manager.HandleUnsubscribeScoped(sub.registration, scope, prefix); rpcErr != nil {
 		r.mu.Unlock()
 		return nil, rpcErr
 	}
@@ -238,7 +252,7 @@ func (r *urlSubscriptionRegistry) Unsubscribe(ctx *types.RpcContext, request typ
 	}
 	history.apply(sub.conn)
 	if rpcErr := applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *types.RpcError {
-		return r.ws.subscriptionManager.HandleUnsubscribeScoped(sub.registration, scope, bookRequest)
+		return r.manager.HandleUnsubscribeScoped(sub.registration, scope, bookRequest)
 	}); rpcErr != nil {
 		r.mu.Unlock()
 		return nil, rpcErr
@@ -312,7 +326,7 @@ func (r *urlSubscriptionRegistry) findOrCreateLocked(request types.SubscriptionR
 		}
 	})
 	sub.conn.SetDisconnect(func() { go r.retire(sub) })
-	registration, attached := r.ws.subscriptionManager.Attach(sub.conn)
+	registration, attached := r.manager.Attach(sub.conn)
 	if !attached {
 		subCancel()
 		return rpcSubLookup{}, types.RpcErrorInternal()
@@ -340,10 +354,10 @@ func (r *urlSubscriptionRegistry) tryRemoveLocked(key string) *rpcSub {
 	if !ok {
 		return nil
 	}
-	if r.ws.subscriptionManager.HasStreamSubscriptions(sub.registration) {
+	if r.manager.HasStreamSubscriptions(sub.registration) {
 		return nil
 	}
-	if hasAccountHistorySubscriptions(r.ws.services, sub.conn) {
+	if hasAccountHistorySubscriptions(r.services, sub.conn) {
 		return nil
 	}
 	return r.removeLocked(key, sub)
@@ -360,8 +374,8 @@ func (r *urlSubscriptionRegistry) removeLocked(key string, sub *rpcSub) *rpcSub 
 			delete(r.principalCounts, sub.principal)
 		}
 	}
-	r.ws.subscriptionManager.Detach(sub.registration)
-	removeAccountHistoryConnection(r.ws.services, sub.conn)
+	r.manager.Detach(sub.registration)
+	removeAccountHistoryConnection(r.services, sub.conn)
 	sub.stop()
 	return sub
 }
@@ -398,8 +412,8 @@ func (r *urlSubscriptionRegistry) Close() {
 
 	r.cancel()
 	for _, sub := range subs {
-		r.ws.subscriptionManager.Detach(sub.registration)
-		removeAccountHistoryConnection(r.ws.services, sub.conn)
+		r.manager.Detach(sub.registration)
+		removeAccountHistoryConnection(r.services, sub.conn)
 		sub.stop()
 	}
 	for _, sub := range subs {

@@ -17,10 +17,11 @@ import (
 func TestJSONProxyUsesSingleDispatchAccounting(t *testing.T) {
 	services := types.NewServiceContainer(nil)
 	services.ClientLoad = types.NewClientLoadShedder()
+	graph := types.NewTestServiceGraph(services)
 	var targetCalls int
 	server := NewServer(ServerOptions{
 		Timeout:  time.Second,
-		Services: services,
+		Services: graph,
 		Registry: mustTestMethodRegistryWithOverrides(t, map[string]types.MethodHandler{
 			"json_proxy_target": &stubHandler{
 				handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
@@ -32,8 +33,6 @@ func TestJSONProxyUsesSingleDispatchAccounting(t *testing.T) {
 			},
 		}),
 	})
-	services.Dispatcher = server
-
 	leases := make([]func(), 0, types.MaxJobQueueClients-1)
 	for range types.MaxJobQueueClients - 1 {
 		leases = append(leases, services.ClientLoad.Begin())
@@ -119,9 +118,10 @@ func TestHTTPStructuredIDRedactionAcrossDispatchShapes(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			services := types.NewServiceContainer(nil)
+			graph := types.NewTestServiceGraph(services)
 			server := NewServer(ServerOptions{
 				Timeout:  time.Second,
-				Services: services,
+				Services: graph,
 				Registry: mustTestMethodRegistryWithOverrides(t, map[string]types.MethodHandler{
 					"capture": &stubHandler{
 						handle: func(_ *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
@@ -133,8 +133,6 @@ func TestHTTPStructuredIDRedactionAcrossDispatchShapes(t *testing.T) {
 					},
 				}),
 			})
-			services.Dispatcher = server
-
 			response := postTransportRegressionRequest(t, server, test.body)
 			require.Equal(t, http.StatusOK, response.Code)
 			for _, secret := range test.secrets {
@@ -160,7 +158,7 @@ func TestURLUserinfoIsRedactedAcrossTransportEchoes(t *testing.T) {
 	}
 	httpServer := NewServer(ServerOptions{
 		Timeout:  time.Second,
-		Services: types.NewServiceContainer(nil),
+		Services: types.NewTestServiceGraph(types.NewServiceContainer(nil)),
 		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
 			"userinfo_fail": fail,
 		}),

@@ -22,7 +22,7 @@ func newTxTablesOffContext() *types.RpcContext {
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: &txTablesOffLedger{newMockLedgerService()}},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: &txTablesOffLedger{newMockLedgerService()}}),
 	}
 }
 

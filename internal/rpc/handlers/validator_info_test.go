@@ -60,14 +60,14 @@ func makeValidatorPubKey(prefix byte) []byte {
 	return pk
 }
 
-func installServices(pk []byte, manifests types.ManifestLookup) *types.ServiceContainer {
-	return &types.ServiceContainer{
+func installServices(pk []byte, manifests types.ManifestLookup) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{
 		ValidatorPublicKey: pk,
 		Manifests:          manifests,
-	}
+	})
 }
 
-func adminCtx(services *types.ServiceContainer) *types.RpcContext {
+func adminCtx(services *types.ServiceGraph) *types.RpcContext {
 	return &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,

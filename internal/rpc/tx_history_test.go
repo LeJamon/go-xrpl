@@ -41,10 +41,10 @@ func (m *mockLedgerServiceTxHistory) GetTransactionHistory(ctx context.Context, 
 	}, nil
 }
 
-func newTxHistoryTestServices(mock *mockLedgerServiceTxHistory) *types.ServiceContainer {
-	return &types.ServiceContainer{
+func newTxHistoryTestServices(mock *mockLedgerServiceTxHistory) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger: mock,
-	}
+	})
 }
 
 // Tests
@@ -297,7 +297,7 @@ func TestTxHistoryServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		params := map[string]any{

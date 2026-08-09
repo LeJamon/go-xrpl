@@ -48,7 +48,7 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 			}
 		}
 	}
-	result, err := ctx.Services.Ledger.GetAccountNFTs(
+	result, err := ctx.Services.Ledger().GetAccountNFTs(
 		ctx.Context,
 		account,
 		ledgerIndex,

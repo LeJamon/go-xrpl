@@ -187,7 +187,7 @@ func rejectDisabledSigning(ctx *types.RpcContext) *types.RpcError {
 	if ctx != nil && ctx.Role.IsAdmin() {
 		return nil
 	}
-	if ctx != nil && ctx.Services != nil && ctx.Services.Capabilities.SigningEnabled {
+	if ctx != nil && ctx.Services != nil && ctx.Services.Capabilities().SigningEnabled {
 		return nil
 	}
 	return types.RpcErrorNotSupported("Signing is not supported by this server.")
@@ -261,11 +261,11 @@ func checkPayment(txMap map[string]any, params json.RawMessage, doPath bool, rpc
 			"Field 'build_path' not allowed in this context.")
 	}
 	if buildPath && amount.IsMPT() {
-		if rpcCtx == nil || rpcCtx.Services == nil || rpcCtx.Services.Ledger == nil {
+		if rpcCtx == nil || rpcCtx.Services == nil || rpcCtx.Services.Ledger() == nil {
 			return types.RpcErrorInvalidParams(
 				"Field 'build_path' not allowed in this context.")
 		}
-		rulesSource, ok := rpcCtx.Services.Ledger.(types.TransactionRulesSource)
+		rulesSource, ok := rpcCtx.Services.Ledger().(types.TransactionRulesSource)
 		if !ok {
 			return types.RpcErrorInvalidParams(
 				"Field 'build_path' not allowed in this context.")
@@ -314,7 +314,7 @@ func checkPayment(txMap map[string]any, params json.RawMessage, doPath bool, rpc
 			return types.RpcErrorInvalidParams(
 				"Cannot build XRP to XRP paths.")
 		}
-		if rpcCtx == nil || rpcCtx.Services == nil || rpcCtx.Services.Ledger == nil {
+		if rpcCtx == nil || rpcCtx.Services == nil || rpcCtx.Services.Ledger() == nil {
 			return rpcInternalInvariantError("payment: ledger service unavailable for path construction")
 		}
 		release, rpcErr := acquirePathfind(rpcCtx)
@@ -322,7 +322,7 @@ func checkPayment(txMap map[string]any, params json.RawMessage, doPath bool, rpc
 			return rpcErr
 		}
 		defer release()
-		viewSource, ok := rpcCtx.Services.Ledger.(types.OpenLedgerViewSource)
+		viewSource, ok := rpcCtx.Services.Ledger().(types.OpenLedgerViewSource)
 		if !ok {
 			return rpcInternalInvariantError("payment: open ledger view unavailable for path construction")
 		}
@@ -432,7 +432,7 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 
 	// Check if ledger service is available (needed for auto-filling fields)
 	// only after credentials have entered the shared signing preprocessing.
-	if !offline && (services == nil || services.Ledger == nil) {
+	if !offline && (services == nil || services.Ledger() == nil) {
 		return nil, rpcInternalInvariantError("sign: ledger service unavailable")
 	}
 
@@ -496,7 +496,7 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 		// The source account must exist in the current ledger, whether or
 		// not Sequence is supplied (rpcSRC_ACT_NOT_FOUND).
 		var err error
-		sourceAccountInfo, err = services.Ledger.GetAccountInfo(ctx, srcAddress, "current")
+		sourceAccountInfo, err = services.Ledger().GetAccountInfo(ctx, srcAddress, "current")
 		if err != nil {
 			if errors.Is(err, svcerr.ErrAccountNotFound) {
 				return nil, types.RpcErrorSrcActNotFound("Source account not found.")
@@ -508,7 +508,7 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 		// TicketSequence supplies the sequence instead (Sequence = 0).
 		if _, ok := txMap["Sequence"]; !ok {
 			_, hasTicket := txMap["TicketSequence"]
-			seq, err := services.Ledger.GetAutofillSequence(srcAddress, hasTicket)
+			seq, err := services.Ledger().GetAutofillSequence(srcAddress, hasTicket)
 			if err != nil {
 				if errors.Is(err, svcerr.ErrAccountNotFound) {
 					return nil, types.RpcErrorSrcActNotFound("Source account not found.")
@@ -530,7 +530,7 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 		// legacy networks (ID <= 1024) must NOT include NetworkID;
 		// new networks (ID > 1024) require it and it is auto-filled here.
 		if _, ok := txMap["NetworkID"]; !ok {
-			serverInfo := services.Ledger.GetServerInfo()
+			serverInfo := services.Ledger().GetServerInfo()
 			if serverInfo.NetworkID > 1024 {
 				txMap["NetworkID"] = serverInfo.NetworkID
 			}
@@ -548,7 +548,7 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 			if mErr != nil {
 				return nil, rpcInternalError("sign: fee probe marshaling failed", mErr)
 			}
-			fee, feeErr := services.Ledger.GetAutofillFee(probe, rpcCtx.Role.IsUnlimited(), feeOpts.Mult, feeOpts.Div)
+			fee, feeErr := services.Ledger().GetAutofillFee(probe, rpcCtx.Role.IsUnlimited(), feeOpts.Mult, feeOpts.Div)
 			if feeErr != nil {
 				var hfe *svcerr.HighFeeError
 				if errors.As(feeErr, &hfe) {
@@ -651,8 +651,8 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 
 func authorizeSigningKey(ctx *types.RpcContext, account, derivedAccount string, requireAccount bool) *types.RpcError {
 	var accountInfo *types.AccountInfo
-	if ctx != nil && ctx.Services != nil && ctx.Services.Ledger != nil {
-		info, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, account, "current")
+	if ctx != nil && ctx.Services != nil && ctx.Services.Ledger() != nil {
+		info, err := ctx.Services.Ledger().GetAccountInfo(ctx.Context, account, "current")
 		if err != nil {
 			if !errors.Is(err, svcerr.ErrAccountNotFound) {
 				return rpcInternalError("signing authorization account lookup failed", err)
@@ -687,18 +687,18 @@ func signingKeyAuthorization(account, derivedAccount string, accountInfo *types.
 	return types.RpcErrorBadSecret()
 }
 
-func rejectSigningWhenLoaded(services *types.ServiceContainer, unlimited bool) *types.RpcError {
-	if unlimited || services == nil || services.IsLoadedCluster == nil || !services.IsLoadedCluster() {
+func rejectSigningWhenLoaded(services *types.ServiceGraph, unlimited bool) *types.RpcError {
+	if unlimited || services == nil || services.IsLoadedCluster() == nil || !services.IsLoadedCluster()() {
 		return nil
 	}
 	return types.RpcErrorTooBusy()
 }
 
-func rejectOnlineSigningWithoutCurrentLedger(services *types.ServiceContainer, offline bool, apiVersion int) *types.RpcError {
-	if offline || services == nil || services.Ledger == nil {
+func rejectOnlineSigningWithoutCurrentLedger(services *types.ServiceGraph, offline bool, apiVersion int) *types.RpcError {
+	if offline || services == nil || services.Ledger() == nil {
 		return nil
 	}
-	info := services.Ledger.GetServerInfo()
+	info := services.Ledger().GetServerInfo()
 	if info.Standalone || !types.ValidatedLedgerStale(info) {
 		return nil
 	}

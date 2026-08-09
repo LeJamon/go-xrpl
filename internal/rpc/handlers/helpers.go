@@ -66,8 +66,8 @@ func ledgerAmendmentRules(l types.LedgerReader) (*amendment.Rules, error) {
 	return amendment.EmptyRules(), nil
 }
 
-func requireLedgerService(services *types.ServiceContainer) *types.RpcError {
-	if services == nil || services.Ledger == nil {
+func requireLedgerService(services *types.ServiceGraph) *types.RpcError {
+	if services == nil || services.Ledger() == nil {
 		return rpcInternalInvariantError("rpc: ledger service unavailable")
 	}
 	return nil
@@ -79,11 +79,11 @@ func requireLedgerService(services *types.ServiceContainer) *types.RpcError {
 // database answers notEnabled even for otherwise-malformed requests.
 // Services that don't implement types.TxTablesProvider are assumed to
 // have history available.
-func requireTxTables(services *types.ServiceContainer) *types.RpcError {
+func requireTxTables(services *types.ServiceGraph) *types.RpcError {
 	if err := requireLedgerService(services); err != nil {
 		return err
 	}
-	if p, ok := services.Ledger.(types.TxTablesProvider); ok && !p.UseTxTables() {
+	if p, ok := services.Ledger().(types.TxTablesProvider); ok && !p.UseTxTables() {
 		return types.RpcErrorNotEnabled("")
 	}
 	return nil
@@ -93,7 +93,7 @@ func requireTxTables(services *types.ServiceContainer) *types.RpcError {
 // capability. The check belongs at each transport/handler entry point so a
 // disabled server rejects before parsing request parameters or charging load.
 func RequirePathSearch(ctx *types.RpcContext) *types.RpcError {
-	if ctx == nil || ctx.Services == nil || ctx.Services.Capabilities.PathSearchMax == 0 {
+	if ctx == nil || ctx.Services == nil || ctx.Services.Capabilities().PathSearchMax == 0 {
 		return types.RpcErrorNotSupported("")
 	}
 	return nil
@@ -107,7 +107,7 @@ func shedCheck(ctx *types.RpcContext) *types.ClientLoadShedder {
 	if ctx == nil || ctx.Role.IsUnlimited() || ctx.Services == nil {
 		return nil
 	}
-	return ctx.Services.ClientLoad
+	return ctx.Services.ClientLoad()
 }
 
 // RequireNotBusyClient rejects non-admin RPC requests when the client job queue is full.
@@ -153,14 +153,14 @@ func acquirePathfind(ctx *types.RpcContext) (release func(), rpcErr *types.RpcEr
 		return func() {}, nil
 	}
 	services := ctx.Services
-	s := services.ClientLoad
+	s := services.ClientLoad()
 	if ctx.Role.IsUnlimited() {
 		if s == nil {
 			return func() {}, nil
 		}
 		return s.AcquirePathfindUnlimited(), nil
 	}
-	if services.IsLoadedLocal != nil && services.IsLoadedLocal() {
+	if services.IsLoadedLocal() != nil && services.IsLoadedLocal()() {
 		return nil, types.RpcErrorTooBusy()
 	}
 	if s == nil {
@@ -179,10 +179,10 @@ func acquirePathfind(ctx *types.RpcContext) (release func(), rpcErr *types.RpcEr
 // waitPathfind queues a default-ledger request behind the bounded path-finding
 // workers until a slot is available or the request is canceled.
 func waitPathfind(ctx *types.RpcContext) (release func(), rpcErr *types.RpcError) {
-	if ctx == nil || ctx.Services == nil || ctx.Services.ClientLoad == nil {
+	if ctx == nil || ctx.Services == nil || ctx.Services.ClientLoad() == nil {
 		return func() {}, nil
 	}
-	release, acquired := ctx.Services.ClientLoad.WaitPathfind(ctx.Context)
+	release, acquired := ctx.Services.ClientLoad().WaitPathfind(ctx.Context)
 	if !acquired {
 		return nil, types.RpcErrorTooBusy()
 	}
@@ -410,7 +410,7 @@ func preflightAccountPage(
 		}
 		return "", nil, rpcErr
 	}
-	if _, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, account, ledgerIndex); err != nil {
+	if _, err := ctx.Services.Ledger().GetAccountInfo(ctx.Context, account, ledgerIndex); err != nil {
 		rpcErr := mapAccountQueryErr(err, internalDetail)
 		return "", nil, rpcErr
 	}
@@ -571,7 +571,7 @@ func resolveLedgerSelection(
 	if err := requireLedgerService(ctx.Services); err != nil {
 		return ledgerselector.Result[types.LedgerReader]{}, err
 	}
-	svc := ctx.Services.Ledger
+	svc := ctx.Services.Ledger()
 
 	bySequence := func(sequence uint32) (types.LedgerReader, bool, error) {
 		reader, err := svc.GetLedgerBySequence(sequence)

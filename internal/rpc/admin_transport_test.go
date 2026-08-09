@@ -27,7 +27,7 @@ func transportTestPort() *PortContext {
 
 func transportTestServer(t *testing.T, calls *atomic.Int32) *Server {
 	t.Helper()
-	srv := NewServer(ServerOptions{Timeout: time.Second, Services: types.NewServiceContainer(nil), Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+	srv := NewServer(ServerOptions{Timeout: time.Second, Services: types.NewTestServiceGraph(types.NewServiceContainer(nil)), Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
 		"stop": &stubHandler{
 			role: types.RoleGuest,
 			handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {

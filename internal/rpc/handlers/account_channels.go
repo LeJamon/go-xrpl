@@ -51,7 +51,7 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
-	result, err := ctx.Services.Ledger.GetAccountChannels(
+	result, err := ctx.Services.Ledger().GetAccountChannels(
 		ctx.Context,
 		account,
 		destinationAccount,

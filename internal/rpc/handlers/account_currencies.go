@@ -50,7 +50,7 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 	}
 
 	// Get account currencies from the ledger service
-	result, err := ctx.Services.Ledger.GetAccountCurrencies(
+	result, err := ctx.Services.Ledger().GetAccountCurrencies(
 		ctx.Context,
 		account,
 		ledgerIndex,

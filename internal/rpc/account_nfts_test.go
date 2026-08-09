@@ -182,8 +182,8 @@ func (m *mockAccountNFTsLedgerService) GetClosedLedgerView() (types.LedgerStateV
 }
 
 // newAccountNFTsTestServices builds a *types.ServiceContainer wrapping the mock.
-func newAccountNFTsTestServices(mock *mockAccountNFTsLedgerService) *types.ServiceContainer {
-	return &types.ServiceContainer{Ledger: mock}
+func newAccountNFTsTestServices(mock *mockAccountNFTsLedgerService) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 }
 
 // TestAccountNFTsErrorValidation tests error handling for invalid inputs

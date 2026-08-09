@@ -113,10 +113,10 @@ func (m *mockLedgerServiceTx) GetLedgerRange(ctx context.Context, minSeq, maxSeq
 }
 
 // servicesForTx builds a per-test ServiceContainer with a tx mock.
-func servicesForTx(mock *mockLedgerServiceTx) *types.ServiceContainer {
-	return &types.ServiceContainer{
+func servicesForTx(mock *mockLedgerServiceTx) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger: mock,
-	}
+	})
 }
 
 func TestTxDeliveredAmountHistoricalContext(t *testing.T) {
@@ -1587,7 +1587,7 @@ func TestTxMethodServiceNilLedger(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: nil},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 	}
 
 	params := map[string]any{
@@ -2037,7 +2037,7 @@ func TestTxMethodCTIDLookupUsesMetadataTransactionIndex(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: service},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: service}),
 	}
 
 	result, rpcErr := (&handlers.TxMethod{}).Handle(ctx, params)
@@ -2063,7 +2063,7 @@ func TestTxMethodCTIDLookupSkipsMalformedLeaf(t *testing.T) {
 		}
 		return nil, errors.New("ledger not found")
 	}
-	services := &types.ServiceContainer{Ledger: service}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: service})
 	params, err := json.Marshal(map[string]any{
 		"ctid":   "C000006400000000",
 		"binary": true,
@@ -2288,7 +2288,7 @@ func TestTxMethodCTIDCorruptedStoredData(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: mock},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 	}
 	ctid, ok := handlers.EncodeCTID(ledger.sequence, 0, 0)
 	require.True(t, ok)
@@ -2334,7 +2334,7 @@ func TestTxMethodCTIDStoredDataWithoutMetadata(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: mock},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 	}
 	ctid, ok := handlers.EncodeCTID(ledger.sequence, 0, 0)
 	require.True(t, ok)

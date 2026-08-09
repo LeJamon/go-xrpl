@@ -87,7 +87,7 @@ func TestAccountHandlerValidationOrder(t *testing.T) {
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: types.ApiVersion2,
-				Services:   &types.ServiceContainer{Ledger: newMockLedgerService()},
+				Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: newMockLedgerService()}),
 			}
 			result, rpcErr := tc.method.Handle(ctx, json.RawMessage(tc.params))
 			assert.Nil(t, result)
@@ -110,7 +110,7 @@ func TestAccountInfoQueueAndSignerValidationFollowAccountLookup(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion2,
-			Services:   &types.ServiceContainer{Ledger: service},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: service}),
 		}
 	}
 
@@ -181,7 +181,7 @@ func TestAccountHandlerOptionalValidationFollowsAccountSLE(t *testing.T) {
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: types.ApiVersion2,
-				Services:   &types.ServiceContainer{Ledger: service},
+				Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: service}),
 			}
 			result, rpcErr := tc.method.Handle(ctx, json.RawMessage(tc.params))
 			assert.Nil(t, result)

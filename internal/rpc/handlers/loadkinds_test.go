@@ -37,7 +37,7 @@ func TestLoadCostEarlyErrorTiming(t *testing.T) {
 			ctx := &types.RpcContext{
 				Context:  context.Background(),
 				LoadCost: uint32(resource.FeeReferenceRPC().Cost()),
-				Services: &types.ServiceContainer{Capabilities: types.RPCCapabilities{SigningEnabled: true}},
+				Services: types.NewTestServiceGraph(&types.ServiceContainer{Capabilities: types.RPCCapabilities{SigningEnabled: true}}),
 			}
 			_, rpcErr := test.handler.Handle(ctx, test.params)
 			if rpcErr == nil {
@@ -58,11 +58,11 @@ func TestRipplePathFindBusyAdmissionIsHeavy(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:  context.Background(),
 		LoadCost: uint32(resource.FeeReferenceRPC().Cost()),
-		Services: &types.ServiceContainer{
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{
 			Ledger:       &loadAdmissionLedger{serverInfo: &types.LedgerServerInfo{Standalone: true}},
 			ClientLoad:   shedder,
 			Capabilities: types.RPCCapabilities{PathSearchMax: 3},
-		},
+		}),
 	}
 
 	_, rpcErr := (&ripplePathFindMethod{}).Handle(ctx, json.RawMessage(`{}`))

@@ -34,13 +34,13 @@ type outboundCriticalQueueFailureSource interface {
 }
 
 func (m *PrintMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	if ctx.Services == nil || ctx.Services.Ledger == nil {
+	if ctx.Services == nil || ctx.Services.Ledger() == nil {
 		return nil, rpcInternalInvariantError("print: ledger service unavailable")
 	}
 
 	out := map[string]any{}
 
-	info := ctx.Services.Ledger.GetServerInfo()
+	info := ctx.Services.Ledger().GetServerInfo()
 	ledger := map[string]any{
 		"standalone":        info.Standalone,
 		"server_state":      info.ServerState,
@@ -73,28 +73,28 @@ func (m *PrintMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any
 	}
 
 	counters := map[string]any{}
-	if ctx.Services.PeerDisconnects != nil {
-		total, resources := ctx.Services.PeerDisconnects()
+	if ctx.Services.PeerDisconnects() != nil {
+		total, resources := ctx.Services.PeerDisconnects()()
 		counters["peer_disconnects"] = fmt.Sprintf("%d", total)
 		counters["peer_disconnects_resources"] = fmt.Sprintf("%d", resources)
 	}
-	if ctx.Services.JqTransOverflow != nil {
-		counters["jq_trans_overflow"] = fmt.Sprintf("%d", ctx.Services.JqTransOverflow())
+	if ctx.Services.JqTransOverflow() != nil {
+		counters["jq_trans_overflow"] = fmt.Sprintf("%d", ctx.Services.JqTransOverflow()())
 	}
 	if len(counters) > 0 {
 		out["counters"] = counters
 	}
 
-	if ctx.Services.LastCloseInfo != nil {
-		proposers, convergeMs := ctx.Services.LastCloseInfo()
+	if ctx.Services.LastCloseInfo() != nil {
+		proposers, convergeMs := ctx.Services.LastCloseInfo()()
 		out["last_close"] = map[string]any{
 			"proposers":        proposers,
 			"converge_time_ms": convergeMs,
 		}
 	}
 
-	if ctx.Services.StateAccounting != nil {
-		if snap := ctx.Services.StateAccounting(); len(snap.Modes) > 0 {
+	if ctx.Services.StateAccounting() != nil {
+		if snap := ctx.Services.StateAccounting()(); len(snap.Modes) > 0 {
 			states := make(map[string]any, len(snap.Modes))
 			for mode, e := range snap.Modes {
 				states[mode] = map[string]any{
@@ -167,7 +167,7 @@ func (m *CanDeleteMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	if ctx.Services == nil {
 		return nil, types.RpcErrorNotEnabled("")
 	}
-	store := ctx.Services.AdvisoryDeleteState
+	store := ctx.Services.AdvisoryDeleteState()
 	if store == nil || !store.AdvisoryDelete() {
 		return nil, types.RpcErrorNotEnabled("")
 	}
@@ -235,7 +235,7 @@ func resolveCanDeleteSeq(ctx *types.RpcContext, store types.AdvisoryDeleteStore,
 		if hb, err := hex.DecodeString(str); err == nil {
 			var h [32]byte
 			copy(h[:], hb)
-			lr, lerr := getLedgerByHashContext(ctx.Context, ctx.Services.Ledger, h)
+			lr, lerr := getLedgerByHashContext(ctx.Context, ctx.Services.Ledger(), h)
 			if errors.Is(lerr, svcerr.ErrLedgerNotFound) || (lerr == nil && lr == nil) {
 				return 0, types.RpcErrorLgrNotFound("ledgerNotFound")
 			}
@@ -305,19 +305,19 @@ func uptimeText(d time.Duration) string {
 }
 
 func (m *GetCountsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	if ctx.Services == nil || ctx.Services.Ledger == nil {
+	if ctx.Services == nil || ctx.Services.Ledger() == nil {
 		return nil, rpcInternalInvariantError("get_counts: ledger service unavailable")
 	}
 
 	result := map[string]any{
-		"standalone": ctx.Services.Ledger.GetServerInfo().Standalone,
+		"standalone": ctx.Services.Ledger().GetServerInfo().Standalone,
 	}
 
-	if ctx.Services.GetCounts == nil {
+	if ctx.Services.GetCounts() == nil {
 		return result, nil
 	}
 
-	c := ctx.Services.GetCounts()
+	c := ctx.Services.GetCounts()()
 	result["standalone"] = c.Standalone
 	result["uptime"] = uptimeText(time.Since(serverStartTime))
 

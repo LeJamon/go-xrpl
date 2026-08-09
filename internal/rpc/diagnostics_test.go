@@ -87,22 +87,23 @@ func (diagnosticTestHandler) RequiredCondition() types.Condition { return types.
 func TestDispatchDiagnosticsTreatsRPCResultsAsFinished(t *testing.T) {
 	diagnostics := NewRPCDiagnostics()
 	services := &types.ServiceContainer{RPCDiagnostics: diagnostics}
+	graph := types.NewTestServiceGraph(services)
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   services,
+		Services:   graph,
 	}
 
 	resolution := methodResolution{handler: diagnosticTestHandler{rpcErr: types.RpcErrorInvalidParams("bad request")}, resolved: true}
-	_, _ = dispatchResolvedMethod(nil, services, ctx, "normal_error", nil, resolution, rpcLog())
+	_, _ = dispatchResolvedMethod(nil, graph, ctx, "normal_error", nil, resolution, rpcLog())
 	stats := diagnostics.Snapshot().Methods["normal_error"]
 	if stats.Finished != 1 || stats.Errored != 0 {
 		t.Fatalf("ordinary RPC error stats = %#v", stats)
 	}
 
 	resolution = methodResolution{handler: diagnosticTestHandler{panicValue: "boom"}, resolved: true}
-	_, _ = dispatchResolvedMethod(nil, services, ctx, "panic", nil, resolution, rpcLog())
+	_, _ = dispatchResolvedMethod(nil, graph, ctx, "panic", nil, resolution, rpcLog())
 	stats = diagnostics.Snapshot().Methods["panic"]
 	if stats.Finished != 0 || stats.Errored != 1 {
 		t.Fatalf("panic stats = %#v", stats)

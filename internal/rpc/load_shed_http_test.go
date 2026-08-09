@@ -14,7 +14,8 @@ import (
 
 func TestNewServerLeavesServiceContainerUntouched(t *testing.T) {
 	services := types.NewServiceContainer(nil)
-	_ = NewServer(ServerOptions{Timeout: time.Second, Services: services})
+	graph := types.NewTestServiceGraph(services)
+	_ = NewServer(ServerOptions{Timeout: time.Second, Services: graph})
 
 	if services.ClientLoad != nil {
 		t.Fatal("NewServer mutated services.ClientLoad")
@@ -24,9 +25,10 @@ func TestNewServerLeavesServiceContainerUntouched(t *testing.T) {
 func TestRpcTooBusyUsesLegacyHTTP200(t *testing.T) {
 	services := types.NewServiceContainer(nil)
 	services.ClientLoad = types.NewClientLoadShedder()
+	graph := types.NewTestServiceGraph(services)
 	srv := NewServer(ServerOptions{
 		Timeout:  time.Second,
-		Services: services,
+		Services: graph,
 		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
 			"book_offers": &handlers.BookOffersMethod{},
 		}),
@@ -72,9 +74,10 @@ func TestRpcTooBusyUsesLegacyHTTP200(t *testing.T) {
 func TestRequestUnderThresholdReturnsHTTP200(t *testing.T) {
 	services := types.NewServiceContainer(nil)
 	services.ClientLoad = types.NewClientLoadShedder()
+	graph := types.NewTestServiceGraph(services)
 	srv := NewServer(ServerOptions{
 		Timeout:  time.Second,
-		Services: services,
+		Services: graph,
 		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
 			"book_offers": &handlers.BookOffersMethod{},
 		}),

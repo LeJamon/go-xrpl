@@ -39,7 +39,7 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		}
 	}
 
-	result, err := ctx.Services.Ledger.GetAccountOffers(ctx.Context, account, ledgerIndex, limit, marker)
+	result, err := ctx.Services.Ledger().GetAccountOffers(ctx.Context, account, ledgerIndex, limit, marker)
 	if err != nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr

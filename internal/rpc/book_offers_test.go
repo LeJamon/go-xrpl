@@ -43,8 +43,8 @@ func newBookOffersMock() *bookOffersMock {
 }
 
 // newBookOffersTestServices builds a *types.ServiceContainer wrapping the mock.
-func newBookOffersTestServices(mock *bookOffersMock) *types.ServiceContainer {
-	return &types.ServiceContainer{Ledger: mock}
+func newBookOffersTestServices(mock *bookOffersMock) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 }
 
 // TestBookOffersErrorValidation tests error handling for invalid inputs
@@ -1285,7 +1285,7 @@ func TestBookOffersServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)

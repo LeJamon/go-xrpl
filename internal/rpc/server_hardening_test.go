@@ -50,7 +50,7 @@ func newHardeningServer(t *testing.T, timeout time.Duration, method string, h ty
 	srv := &Server{
 		registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{method: h}),
 		timeout:  timeout,
-		services: types.NewServiceContainer(nil),
+		services: types.NewTestServiceGraph(types.NewServiceContainer(nil)),
 	}
 	return srv
 }

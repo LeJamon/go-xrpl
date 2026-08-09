@@ -163,8 +163,8 @@ func (m *mockLedgerServiceBC) addLedger(lr *mockLedgerReaderBC) {
 }
 
 // newTestServicesBC builds a *types.ServiceContainer wrapping the mock.
-func newTestServicesBC(mock *mockLedgerServiceBC) *types.ServiceContainer {
-	return &types.ServiceContainer{Ledger: mock}
+func newTestServicesBC(mock *mockLedgerServiceBC) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 }
 
 // Tests
@@ -543,7 +543,7 @@ func TestBookChangesServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		params := map[string]any{

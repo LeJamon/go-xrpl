@@ -107,7 +107,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	if version, present := apiVersionFromSingleParams(request.Params); present {
 		apiVersion = version
 	}
-	versionCtx := newRpcContext(dispatchCtx, role, apiVersion, clientIP, s.loadPeerSource(), s.services)
+	versionCtx := newRpcContext(dispatchCtx, role, apiVersion, clientIP, s.loadPeerSource(), s.services, s, s.urlSubscriptions)
 	versionCtx.ResourceIP = peerIP
 	if rpcErr := validateApiVersion(versionCtx); rpcErr != nil {
 		writeInvalidApiVersionHTTP(w)

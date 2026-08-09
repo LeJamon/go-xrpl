@@ -176,7 +176,7 @@ func TestLedgerBasicRequest(t *testing.T) {
 	mock.getLedgerDataFn = func(string, uint32, string) (*types.LedgerDataResult, error) {
 		return &types.LedgerDataResult{}, nil
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
@@ -392,7 +392,7 @@ func TestLedgerBadInput(t *testing.T) {
 		}
 		return nil, errors.New("ledger not found")
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
@@ -448,7 +448,7 @@ func TestLedgerCurrentRequest(t *testing.T) {
 		}
 		return nil, errors.New("not found")
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
@@ -517,7 +517,7 @@ func TestLedgerFullOption(t *testing.T) {
 		}
 		return nil, errors.New("not found")
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
@@ -606,7 +606,7 @@ func TestLedgerExpandedTransactionsStopAtMalformedLeaf(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: mock},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 	}
 
 	result, rpcErr := (&handlers.LedgerMethod{}).Handle(ctx, json.RawMessage(`{"ledger_index":2,"transactions":true,"expand":true}`))
@@ -677,7 +677,7 @@ func TestLedgerExpandedDeliveredAmountHistoricalCloseTime(t *testing.T) {
 					Context:    context.Background(),
 					Role:       types.RoleGuest,
 					ApiVersion: apiVersion,
-					Services:   &types.ServiceContainer{Ledger: mock},
+					Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 				}
 				params := json.RawMessage(`{"ledger_index":4594094,"transactions":true,"expand":true}`)
 
@@ -723,7 +723,7 @@ func TestLedgerAccountsOption(t *testing.T) {
 			},
 		}, nil
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerMethod{}
 
@@ -829,7 +829,7 @@ func TestLedgerQueueRequiresOpenSelector(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: mock},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 	}
 	method := &handlers.LedgerMethod{}
 
@@ -862,7 +862,7 @@ func TestLedgerLookupByHash(t *testing.T) {
 		}
 		return nil, svcerr.ErrLedgerNotFound
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
@@ -954,7 +954,7 @@ func TestLedgerResponseStructure(t *testing.T) {
 		}
 		return nil, errors.New("not found")
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
@@ -1021,7 +1021,7 @@ func TestLedgerServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -1040,7 +1040,7 @@ func TestLedgerNilLedgerReturned(t *testing.T) {
 	mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
 		return nil, errors.New("not found")
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
@@ -1092,7 +1092,7 @@ func TestLedgerLookupByIndex(t *testing.T) {
 		}
 		return nil, errors.New("not found")
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{

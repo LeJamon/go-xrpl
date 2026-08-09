@@ -29,7 +29,7 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		return nil, err
 	}
 
-	result, err := ctx.Services.Ledger.GetTransactionHistory(ctx.Context, request.Start)
+	result, err := ctx.Services.Ledger().GetTransactionHistory(ctx.Context, request.Start)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrTxHistoryUnavailable) {
 			return nil, types.RpcErrorNotEnabled("")

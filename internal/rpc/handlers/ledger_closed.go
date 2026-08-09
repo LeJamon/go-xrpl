@@ -14,12 +14,12 @@ func (m *LedgerClosedMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		return nil, err
 	}
 
-	seq := ctx.Services.Ledger.GetClosedLedgerIndex()
+	seq := ctx.Services.Ledger().GetClosedLedgerIndex()
 	if seq == 0 {
 		return nil, types.RpcErrorLgrNotFound("No closed ledger")
 	}
 
-	ledger, err := ctx.Services.Ledger.GetLedgerBySequence(seq)
+	ledger, err := ctx.Services.Ledger().GetLedgerBySequence(seq)
 	if err != nil {
 		return nil, types.RpcErrorLgrNotFound("Closed ledger not found")
 	}

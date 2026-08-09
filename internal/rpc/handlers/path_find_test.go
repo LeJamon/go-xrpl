@@ -12,9 +12,9 @@ import (
 )
 
 func pathFindTestContext(pathSearchMax int) *types.RpcContext {
-	return &types.RpcContext{Services: &types.ServiceContainer{
+	return &types.RpcContext{Services: types.NewTestServiceGraph(&types.ServiceContainer{
 		Capabilities: types.RPCCapabilities{PathSearchMax: pathSearchMax},
-	}}
+	})}
 }
 
 func TestPathFindCapabilityPrecedesValidation(t *testing.T) {
@@ -133,10 +133,10 @@ func TestRipplePathFindStaleDefaultUsesApiVersionError(t *testing.T) {
 			ledger := &pathFindTestLedger{info: types.LedgerServerInfo{}}
 			ctx := &types.RpcContext{
 				ApiVersion: test.api,
-				Services: &types.ServiceContainer{
+				Services: types.NewTestServiceGraph(&types.ServiceContainer{
 					Ledger:       ledger,
 					Capabilities: types.RPCCapabilities{PathSearchMax: 3},
-				},
+				}),
 			}
 			_, rpcErr := (&ripplePathFindMethod{}).Handle(ctx, json.RawMessage(`{}`))
 			if rpcErr == nil || rpcErr.ErrorString != test.want {
@@ -152,17 +152,17 @@ func TestRipplePathFindExplicitHistoricalBypassesStaleDefaultGate(t *testing.T) 
 	ledger := &pathFindTestLedger{info: types.LedgerServerInfo{}, view: view, reader: reader}
 	ctx := &types.RpcContext{
 		ApiVersion: types.ApiVersion2,
-		Services: &types.ServiceContainer{
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{
 			Ledger:       ledger,
 			Capabilities: types.RPCCapabilities{PathSearchMax: 3},
 			ClientLoad:   types.NewClientLoadShedder(),
-		},
+		}),
 	}
 	_, rpcErr := (&ripplePathFindMethod{}).Handle(ctx, json.RawMessage(`{"ledger_index":7}`))
 	if rpcErr == nil || rpcErr.ErrorString != "srcActMissing" {
 		t.Fatalf("explicit historical error = %v, want srcActMissing after lookup", rpcErr)
 	}
-	if got := ctx.Services.ClientLoad.PathfindActive(); got != 0 {
+	if got := ctx.Services.ClientLoad().PathfindActive(); got != 0 {
 		t.Fatalf("pathfind admission leaked after validation error: %d", got)
 	}
 }
@@ -190,10 +190,10 @@ func TestRipplePathFindExistsErrorsAreInternal(t *testing.T) {
 			}
 			view := &pathFindTestView{existsFn: existsFn}
 			ledger := &pathFindTestLedger{info: freshPathFindInfo(), view: view}
-			ctx := &types.RpcContext{Services: &types.ServiceContainer{
+			ctx := &types.RpcContext{Services: types.NewTestServiceGraph(&types.ServiceContainer{
 				Ledger:       ledger,
 				Capabilities: types.RPCCapabilities{PathSearchMax: 3},
-			}}
+			})}
 			params := json.RawMessage(`{"source_account":"` + account + `","destination_account":"` + account + `","destination_amount":"10"}`)
 			_, rpcErr := (&ripplePathFindMethod{}).Handle(ctx, params)
 			if rpcErr == nil || rpcErr.ErrorString != "internal" || rpcErr.Message != "Internal error." {

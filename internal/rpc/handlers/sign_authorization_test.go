@@ -33,10 +33,10 @@ func signingAuthorizationContext(ledger types.LedgerService) *types.RpcContext {
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion2,
-		Services: &types.ServiceContainer{
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{
 			Ledger:       ledger,
 			Capabilities: types.RPCCapabilities{SigningEnabled: true},
-		},
+		}),
 	}
 }
 
@@ -95,10 +95,10 @@ func TestSigningCapabilityGuardPrecedesParsingAndLoad(t *testing.T) {
 			ctx := &types.RpcContext{
 				Role:       types.RoleIdentified,
 				ApiVersion: types.ApiVersion2,
-				Services: &types.ServiceContainer{IsLoadedCluster: func() bool {
+				Services: types.NewTestServiceGraph(&types.ServiceContainer{IsLoadedCluster: func() bool {
 					loadedCalled = true
 					return true
-				}},
+				}}),
 			}
 			_, rpcErr := method.handle(ctx, json.RawMessage(`{`))
 			if rpcErr == nil || rpcErr.Code != types.RpcNOT_SUPPORTED || rpcErr.Message != "Signing is not supported by this server." {

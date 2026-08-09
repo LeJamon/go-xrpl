@@ -33,7 +33,7 @@ func (m *VersionMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		}
 	} else {
 		last := types.MaxSupportedApiVersion
-		if ctx.Services != nil && ctx.Services.BetaRPCAPI {
+		if ctx.Services != nil && ctx.Services.BetaRPCAPI() {
 			last = types.BetaApiVersion
 		}
 		version = map[string]any{

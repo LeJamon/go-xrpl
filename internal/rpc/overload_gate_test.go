@@ -105,7 +105,7 @@ func TestHTTPOverloadAdminUnlimitedBypass(t *testing.T) {
 
 func TestGateLoadKeysUnlimitedHTTPBySocketPeer(t *testing.T) {
 	manager := resource.NewManager(nil, nil)
-	ctx := newRpcContext(context.Background(), types.RoleIdentified, types.DefaultApiVersion, "198.51.100.7", nil, nil)
+	ctx := newRpcContext(context.Background(), types.RoleIdentified, types.DefaultApiVersion, "198.51.100.7", nil, nil, nil, nil)
 	ctx.ResourceIP = "203.0.113.5"
 	if rpcErr := gateLoad(manager, ctx, "ping", rpcLog()); rpcErr != nil {
 		t.Fatal(rpcErr)
@@ -121,7 +121,7 @@ func TestGateLoadKeepsWebSocketConnectionConsumer(t *testing.T) {
 	manager := resource.NewManager(nil, nil)
 	consumer := manager.NewInboundEndpoint("198.51.100.7")
 	defer consumer.Release()
-	ctx := newRpcContext(context.Background(), types.RoleAdmin, types.DefaultApiVersion, "198.51.100.7", nil, nil)
+	ctx := newRpcContext(context.Background(), types.RoleAdmin, types.DefaultApiVersion, "198.51.100.7", nil, nil, nil, nil)
 	ctx.ResourceIP = "203.0.113.5"
 	ctx.ResourceConsumer = consumer
 	if rpcErr := gateLoad(manager, ctx, "stop", rpcLog()); rpcErr != nil {
@@ -190,7 +190,7 @@ func TestHTTPBatchOverloadElement(t *testing.T) {
 			"ping": echoHandler(),
 		}),
 		timeout:         time.Second,
-		services:        types.NewServiceContainer(nil),
+		services:        types.NewTestServiceGraph(types.NewServiceContainer(nil)),
 		resourceManager: resource.NewManager(nil, nil),
 	}
 	pushOverDropThreshold(t, srv.resourceManager, "10.0.0.1") // postBatch posts from 10.0.0.1

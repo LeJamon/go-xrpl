@@ -18,6 +18,8 @@ import (
 // versions; the dispatch-layer cap, not the handler set, is what gates v3.
 func versionEchoServer(t *testing.T, beta bool) *Server {
 	t.Helper()
+	services := types.NewServiceContainer(nil)
+	services.BetaRPCAPI = beta
 	srv := &Server{
 		registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
 			"ping": &stubHandler{
@@ -28,9 +30,8 @@ func versionEchoServer(t *testing.T, beta bool) *Server {
 			},
 		}),
 		timeout:  time.Second,
-		services: types.NewServiceContainer(nil),
+		services: types.NewTestServiceGraph(services),
 	}
-	srv.services.BetaRPCAPI = beta
 	return srv
 }
 
@@ -179,9 +180,11 @@ func TestApiVersion_BatchV3RejectedWithoutBeta(t *testing.T) {
 // given beta flag.
 func versionEchoWSServer(t *testing.T, beta bool) *WebSocketServer {
 	t.Helper()
+	services := types.NewServiceContainer(nil)
+	services.BetaRPCAPI = beta
 	ws := NewWebSocketServer(WebSocketServerOptions{
 		Timeout:  30 * time.Second,
-		Services: types.NewServiceContainer(nil),
+		Services: types.NewTestServiceGraph(services),
 		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
 			"ping": &stubHandler{
 				apiVers: []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3},
@@ -191,7 +194,6 @@ func versionEchoWSServer(t *testing.T, beta bool) *WebSocketServer {
 			},
 		}),
 	})
-	ws.services.BetaRPCAPI = beta
 	return ws
 }
 

@@ -70,7 +70,7 @@ func serverInfoWarnings(t *testing.T, mock *mockServerInfoWarnings, isAdmin bool
 		Context:    context.Background(),
 		Role:       role,
 		ApiVersion: types.ApiVersion1,
-		Services:   services,
+		Services:   types.NewTestServiceGraph(services),
 	}
 
 	result, rpcErr := method.Handle(ctx, nil)
@@ -207,7 +207,7 @@ func TestFeatureMajorityFieldEndToEnd(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest, // majority is emitted to all callers, not admin-gated
 		ApiVersion: types.ApiVersion1,
-		Services:   services,
+		Services:   types.NewTestServiceGraph(services),
 	}
 
 	didHex := strings.ToUpper(hex.EncodeToString(did.ID[:]))

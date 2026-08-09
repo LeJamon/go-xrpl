@@ -41,7 +41,7 @@ func TestPeersAndServerInfoShareSource(t *testing.T) {
 		Role:       types.RoleAdmin,
 		ApiVersion: types.DefaultApiVersion,
 		PeerSource: src,
-		Services:   services,
+		Services:   types.NewTestServiceGraph(services),
 	}
 
 	peersRes, err := (&handlers.PeersMethod{}).Handle(ctx, nil)
@@ -65,7 +65,7 @@ func TestPeersAndServerInfoBothEmptyWithoutSource(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.DefaultApiVersion,
-		Services:   services,
+		Services:   types.NewTestServiceGraph(services),
 	}
 
 	peersRes, err := (&handlers.PeersMethod{}).Handle(ctx, nil)

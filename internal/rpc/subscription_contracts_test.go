@@ -36,6 +36,21 @@ func newHistorySubscriptionProvider() *historySubscriptionProvider {
 	}
 }
 
+func setHistoryServices(ws *WebSocketServer, ctx *types.RpcContext, ledger types.LedgerService, provider types.AccountHistorySubscriptionService) {
+	previous := ctx.Services
+	services := &types.ServiceContainer{
+		Ledger:                      ledger,
+		AccountHistorySubscriptions: provider,
+	}
+	if previous != nil {
+		services.ClientLoad = previous.ClientLoad()
+		services.RPCDiagnostics = previous.RPCDiagnostics()
+		services.Capabilities = previous.Capabilities()
+	}
+	ctx.Services = types.NewTestServiceGraph(services)
+	ws.services = ctx.Services
+}
+
 func (p *historySubscriptionProvider) ValidateSubscribe(conn types.AccountHistorySubscriptionSink, account string) *types.RpcError {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -176,8 +191,7 @@ func TestRTAccountsAliasAndCanonicalPrecedence(t *testing.T) {
 func TestAccountHistorySubscribeCapabilityAndValidation(t *testing.T) {
 	t.Run("transaction table gate precedes nested validation", func(t *testing.T) {
 		ws, conn, ctx := newSpecialDispatchHarness(t)
-		ctx.Services.Ledger = &txTablesOffLedger{newMockLedgerService()}
-		ctx.Services.AccountHistorySubscriptions = newHistorySubscriptionProvider()
+		setHistoryServices(ws, ctx, &txTablesOffLedger{newMockLedgerService()}, newHistorySubscriptionProvider())
 		ctx.LoadCost = uint32(resource.FeeReferenceRPC().Cost())
 
 		_, rpcErr := ws.executeSubscribe(conn, ctx, types.WebSocketCommand{
@@ -191,7 +205,7 @@ func TestAccountHistorySubscribeCapabilityAndValidation(t *testing.T) {
 
 	t.Run("missing replay provider fails closed", func(t *testing.T) {
 		ws, conn, ctx := newSpecialDispatchHarness(t)
-		ctx.Services.Ledger = newMockLedgerService()
+		setHistoryServices(ws, ctx, newMockLedgerService(), nil)
 		_, rpcErr := ws.executeSubscribe(conn, ctx, types.WebSocketCommand{
 			Params: json.RawMessage(`{"account_history_tx_stream":{"account":"` + historyAccountA + `"}}`),
 		})
@@ -202,8 +216,7 @@ func TestAccountHistorySubscribeCapabilityAndValidation(t *testing.T) {
 	t.Run("success sets medium load warning and rejects duplicates", func(t *testing.T) {
 		ws, conn, ctx := newSpecialDispatchHarness(t)
 		provider := newHistorySubscriptionProvider()
-		ctx.Services.Ledger = newMockLedgerService()
-		ctx.Services.AccountHistorySubscriptions = provider
+		setHistoryServices(ws, ctx, newMockLedgerService(), provider)
 		ctx.LoadCost = uint32(resource.FeeReferenceRPC().Cost())
 		command := types.WebSocketCommand{
 			Params: json.RawMessage(`{"account_history_tx_stream":{"account":"` + historyAccountA + `"}}`),
@@ -224,8 +237,7 @@ func TestAccountHistorySubscribeCapabilityAndValidation(t *testing.T) {
 
 	t.Run("bad account is invalidParams after medium charge", func(t *testing.T) {
 		ws, conn, ctx := newSpecialDispatchHarness(t)
-		ctx.Services.Ledger = newMockLedgerService()
-		ctx.Services.AccountHistorySubscriptions = newHistorySubscriptionProvider()
+		setHistoryServices(ws, ctx, newMockLedgerService(), newHistorySubscriptionProvider())
 		ctx.LoadCost = uint32(resource.FeeReferenceRPC().Cost())
 
 		_, rpcErr := ws.executeSubscribe(conn, ctx, types.WebSocketCommand{
@@ -240,8 +252,7 @@ func TestAccountHistorySubscribeCapabilityAndValidation(t *testing.T) {
 func TestAccountHistoryUnsubscribeModesAndCleanup(t *testing.T) {
 	ws, conn, ctx := newSpecialDispatchHarness(t)
 	provider := newHistorySubscriptionProvider()
-	ctx.Services.Ledger = newMockLedgerService()
-	ctx.Services.AccountHistorySubscriptions = provider
+	setHistoryServices(ws, ctx, newMockLedgerService(), provider)
 
 	subscribe := types.WebSocketCommand{
 		Params: json.RawMessage(`{"account_history_tx_stream":{"account":"` + historyAccountA + `"}}`),
@@ -285,7 +296,7 @@ func TestAccountHistoryUnsubscribeModesAndCleanup(t *testing.T) {
 
 func TestAccountHistoryUnsubscribeWithoutProviderIsNoOp(t *testing.T) {
 	ws, conn, ctx := newSpecialDispatchHarness(t)
-	ctx.Services.Ledger = &txTablesOffLedger{newMockLedgerService()}
+	setHistoryServices(ws, ctx, &txTablesOffLedger{newMockLedgerService()}, nil)
 
 	_, rpcErr := ws.executeUnsubscribe(conn, ctx, types.WebSocketCommand{
 		Params: json.RawMessage(`{"account_history_tx_stream":{"account":"not-an-account"}}`),
@@ -305,10 +316,10 @@ func TestAccountHistoryURLSubscriptionRetention(t *testing.T) {
 	defer sink.Close()
 
 	provider := newHistorySubscriptionProvider()
-	services := &types.ServiceContainer{
+	services := types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger:                      newMockLedgerService(),
 		AccountHistorySubscriptions: provider,
-	}
+	})
 	ws := NewWebSocketServer(WebSocketServerOptions{Services: services})
 	defer ws.urlSubs.Close()
 	requestContext, cancelRequest := context.WithCancel(context.Background())
@@ -335,7 +346,7 @@ func TestAccountHistoryURLSubscriptionRetention(t *testing.T) {
 	}
 	require.NotNil(t, conn)
 
-	services.Ledger = &txTablesOffLedger{newMockLedgerService()}
+	setHistoryServices(ws, ctx, &txTablesOffLedger{newMockLedgerService()}, provider)
 	request.AccountHistory.StopHistoryTxOnly = true
 	_, rpcErr = ws.urlSubs.Unsubscribe(ctx, request)
 	require.Nil(t, rpcErr)
@@ -356,10 +367,10 @@ func TestAccountHistoryURLValidationIsOrderedAndAtomic(t *testing.T) {
 	sink := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer sink.Close()
 	provider := newHistorySubscriptionProvider()
-	services := &types.ServiceContainer{
+	services := types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger:                      newMockLedgerService(),
 		AccountHistorySubscriptions: provider,
-	}
+	})
 	ws := NewWebSocketServer(WebSocketServerOptions{Services: services})
 	defer ws.urlSubs.Close()
 	ctx := &types.RpcContext{
@@ -428,18 +439,18 @@ func TestAccountHistoryHTTPURLMethods(t *testing.T) {
 	sink := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer sink.Close()
 	provider := newHistorySubscriptionProvider()
-	services := &types.ServiceContainer{
+	services := types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger:                      newMockLedgerService(),
 		AccountHistorySubscriptions: provider,
-	}
+	})
 	ws := NewWebSocketServer(WebSocketServerOptions{Services: services})
 	defer ws.urlSubs.Close()
-	services.URLSubscriptions = ws.urlSubs
 	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleAdmin,
-		ApiVersion: types.DefaultApiVersion,
-		Services:   services,
+		Context:          context.Background(),
+		Role:             types.RoleAdmin,
+		ApiVersion:       types.DefaultApiVersion,
+		Services:         services,
+		URLSubscriptions: ws.urlSubs,
 	}
 	params := json.RawMessage(`{
 		"url":"` + sink.URL + `",

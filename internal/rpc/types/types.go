@@ -96,13 +96,15 @@ type RpcContext struct {
 	ClientIP   string
 	ResourceIP string
 	PeerSource PeerSource
-	// Services is the per-request service container handlers read to
-	// reach the ledger service, dispatcher, manifest cache, etc. The
-	// HTTP/WebSocket dispatchers populate this from the server's wired
-	// container; tests construct RpcContext directly with whatever
-	// fixtures they need. Replaces the former package-level
-	// types.Services global.
-	Services *ServiceContainer
+	// Services is the immutable application graph shared by all requests.
+	// Transport-owned dependencies are carried separately below.
+	Services *ServiceGraph
+	// Dispatcher forwards the json proxy through the current transport's
+	// method registry without putting a transport back into the application
+	// graph.
+	Dispatcher MethodDispatcher
+	// URLSubscriptions is the transport-owned RPCSub registry, when enabled.
+	URLSubscriptions URLSubscriptionService
 	// LoadCost is the resource charge selected while handling the request.
 	// Dispatch initializes it to the reference cost; handlers raise it only
 	// after reaching the equivalent rippled work boundary.

@@ -27,9 +27,9 @@ func testNodePublic(t *testing.T, seed byte) string {
 
 // reservationServices builds a ServiceContainer whose peer_reservations_*
 // closures are backed by an in-memory map, standing in for the overlay table.
-func reservationServices() *types.ServiceContainer {
+func reservationServices() *types.ServiceGraph {
 	m := map[string]string{}
-	return &types.ServiceContainer{
+	return types.NewTestServiceGraph(&types.ServiceContainer{
 		PeerReservationAdd: func(key, desc string) (string, bool, error) {
 			prev, ok := m[key]
 			m[key] = desc
@@ -49,12 +49,12 @@ func reservationServices() *types.ServiceContainer {
 			}
 			return out
 		},
-	}
+	})
 }
 
 func TestPeerReservationsAddValidation(t *testing.T) {
 	method := &handlers.PeerReservationsAddMethod{}
-	ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: &types.ServiceContainer{}}
+	ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: types.NewTestServiceGraph(&types.ServiceContainer{})}
 
 	t.Run("missing public_key", func(t *testing.T) {
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{}`))
@@ -179,11 +179,11 @@ func TestPeerReservationsAddPersistenceError(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context: context.Background(),
 		Role:    types.RoleAdmin,
-		Services: &types.ServiceContainer{
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{
 			PeerReservationAdd: func(string, string) (string, bool, error) {
 				return "", false, errors.New("disk full")
 			},
-		},
+		}),
 	}
 	body, _ := json.Marshal(map[string]any{"public_key": testNodePublic(t, 3)})
 	_, rpcErr := (&handlers.PeerReservationsAddMethod{}).Handle(ctx, body)
@@ -192,7 +192,7 @@ func TestPeerReservationsAddPersistenceError(t *testing.T) {
 }
 
 func TestPeerReservationsEmptyWhenUnwired(t *testing.T) {
-	ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: &types.ServiceContainer{}}
+	ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: types.NewTestServiceGraph(&types.ServiceContainer{})}
 
 	// list returns an empty array, and add is a no-op that reports no previous.
 	resL, rpcErr := (&handlers.PeerReservationsListMethod{}).Handle(ctx, nil)

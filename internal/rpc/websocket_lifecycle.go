@@ -162,5 +162,7 @@ func (ws *WebSocketServer) shutdown(ctx context.Context) {
 
 	closeFrames.Wait()
 	ws.wg.Wait()
-	ws.urlSubs.Close()
+	if ws.urlSubs != nil {
+		ws.urlSubs.Close()
+	}
 }

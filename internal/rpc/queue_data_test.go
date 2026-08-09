@@ -66,7 +66,7 @@ func TestAccountInfoQueueData_RealQueue(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
-		Services:   services,
+		Services:   types.NewTestServiceGraph(services),
 	}
 	method := &handlers.AccountInfoMethod{}
 	paramsJSON, err := json.Marshal(map[string]any{
@@ -132,7 +132,7 @@ func TestAccountInfoQueueData_Tickets(t *testing.T) {
 			}
 		},
 	}
-	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: types.NewTestServiceGraph(services)}
 	method := &handlers.AccountInfoMethod{}
 	paramsJSON, _ := json.Marshal(map[string]any{"account": queueTestAccount, "queue": true, "ledger_index": "current"})
 
@@ -189,7 +189,7 @@ func TestLedgerQueueData_RealQueue(t *testing.T) {
 		},
 	}
 
-	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: types.NewTestServiceGraph(services)}
 	method := &handlers.LedgerMethod{}
 	paramsJSON, err := json.Marshal(map[string]any{"ledger_index": "current", "queue": true})
 	require.NoError(t, err)
@@ -284,7 +284,7 @@ func TestLedgerQueueDataRejectsClosedLedger(t *testing.T) {
 	result, rpcErr := (&handlers.LedgerMethod{}).Handle(&types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
-		Services:   services,
+		Services:   types.NewTestServiceGraph(services),
 	}, paramsJSON)
 
 	require.Nil(t, result)
@@ -309,7 +309,7 @@ func TestLedgerQueueData_EmptyOmitted(t *testing.T) {
 		Ledger:      mock,
 		QueueAllTxs: func() []types.QueuedTxInfo { return nil },
 	}
-	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: types.NewTestServiceGraph(services)}
 	method := &handlers.LedgerMethod{}
 	paramsJSON, _ := json.Marshal(map[string]any{"ledger_index": "current", "queue": true})
 

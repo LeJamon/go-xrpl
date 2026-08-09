@@ -472,7 +472,7 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	computedIndex := strings.ToUpper(hex.EncodeToString(entryKey[:]))
 	response["index"] = computedIndex
 
-	result, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, entryKey, ledgerIndex)
+	result, err := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, entryKey, ledgerIndex)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrLedgerEntryNotFound) {
 			return nil, types.RpcErrorEntryNotFound("").WithExtra(response)

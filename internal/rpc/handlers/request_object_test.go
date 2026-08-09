@@ -74,7 +74,7 @@ func TestStrictRequestObjects(t *testing.T) {
 func TestDecodeRejectionDoesNotInvokeCallbacks(t *testing.T) {
 	controller := &requestRejectAmendmentController{table: amendment.NewTable()}
 	_, rpcErr := (&FeatureMethod{}).Handle(
-		&types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: &types.ServiceContainer{Ledger: controller}},
+		&types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: controller})},
 		json.RawMessage(`{"feature":1,"vetoed":true}`),
 	)
 	require.NotNil(t, rpcErr)
@@ -90,7 +90,7 @@ func TestDecodeRejectionDoesNotInvokeCallbacks(t *testing.T) {
 		},
 	}
 	_, rpcErr = (&FetchInfoMethod{}).Handle(
-		&types.RpcContext{Services: services},
+		&types.RpcContext{Services: types.NewTestServiceGraph(services)},
 		json.RawMessage(`{"clear":true`),
 	)
 	require.NotNil(t, rpcErr)
@@ -99,7 +99,7 @@ func TestDecodeRejectionDoesNotInvokeCallbacks(t *testing.T) {
 
 	store := &requestRejectAdvisory{}
 	_, rpcErr = (&CanDeleteMethod{}).Handle(
-		&types.RpcContext{Context: context.Background(), Services: &types.ServiceContainer{AdvisoryDeleteState: store}},
+		&types.RpcContext{Context: context.Background(), Services: types.NewTestServiceGraph(&types.ServiceContainer{AdvisoryDeleteState: store})},
 		json.RawMessage(`{"can_delete":true}`),
 	)
 	require.NotNil(t, rpcErr)
@@ -114,7 +114,7 @@ func TestRequestObjectJsonCppCoercions(t *testing.T) {
 		FetchInfo:      func() map[string]any { return nil },
 	}
 	result, rpcErr := (&FetchInfoMethod{}).Handle(
-		&types.RpcContext{Services: services},
+		&types.RpcContext{Services: types.NewTestServiceGraph(services)},
 		json.RawMessage(`{"clear":"true"}`),
 	)
 	require.Nil(t, rpcErr)
@@ -123,7 +123,7 @@ func TestRequestObjectJsonCppCoercions(t *testing.T) {
 
 	controller := &requestRejectAmendmentController{table: amendment.NewTable()}
 	_, rpcErr = (&FeatureMethod{}).Handle(
-		&types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: &types.ServiceContainer{Ledger: controller}},
+		&types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: controller})},
 		json.RawMessage(`{"feature":"fixMasterKeyAsRegularKey","vetoed":"true"}`),
 	)
 	require.Nil(t, rpcErr)
@@ -131,7 +131,7 @@ func TestRequestObjectJsonCppCoercions(t *testing.T) {
 
 	controller = &requestRejectAmendmentController{table: amendment.NewTable()}
 	result, rpcErr = (&FeatureMethod{}).Handle(
-		&types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: &types.ServiceContainer{Ledger: controller}},
+		&types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: controller})},
 		json.RawMessage(`{"vetoed":true}`),
 	)
 	require.Nil(t, rpcErr)
@@ -188,7 +188,7 @@ func TestJsonCppRequestFields(t *testing.T) {
 
 func TestCanDeleteNotEnabledPrecedesDecode(t *testing.T) {
 	_, rpcErr := (&CanDeleteMethod{}).Handle(
-		&types.RpcContext{Services: &types.ServiceContainer{}},
+		&types.RpcContext{Services: types.NewTestServiceGraph(&types.ServiceContainer{})},
 		json.RawMessage(`{"can_delete":`),
 	)
 	require.NotNil(t, rpcErr)
@@ -208,7 +208,7 @@ func TestCanDeleteStrictRequestObjects(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			store := &requestRejectAdvisory{}
 			_, rpcErr := (&CanDeleteMethod{}).Handle(
-				&types.RpcContext{Context: context.Background(), Services: &types.ServiceContainer{AdvisoryDeleteState: store}},
+				&types.RpcContext{Context: context.Background(), Services: types.NewTestServiceGraph(&types.ServiceContainer{AdvisoryDeleteState: store})},
 				test.params,
 			)
 			require.NotNil(t, rpcErr)

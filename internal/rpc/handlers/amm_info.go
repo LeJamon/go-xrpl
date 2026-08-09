@@ -135,7 +135,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		ammKey = keylet.AMM(issue1Issuer, issue1Currency, issue2Issuer, issue2Currency).Key
 	}
 
-	ammEntry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, ammKey, ledgerIndex)
+	ammEntry, err := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, ammKey, ledgerIndex)
 	if err != nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr
@@ -525,7 +525,7 @@ func readAccountRoot(ctx *types.RpcContext, ledgerIndex, ident string) ([20]byte
 		return accountID, nil, types.RpcErrorActMalformed("Account malformed.")
 	}
 
-	entry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, keylet.Account(accountID).Key, ledgerIndex)
+	entry, err := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, keylet.Account(accountID).Key, ledgerIndex)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
 			return accountID, nil, types.RpcErrorLgrNotFound("Ledger not found.")
@@ -576,7 +576,7 @@ func ammPoolBalanceJSON(ctx *types.RpcContext, ledgerIndex string, ammAccountID 
 // readAMMXRPBalance returns the AMM account's XRP balance in drops, or 0 when
 // the AccountRoot can't be read.
 func readAMMXRPBalance(ctx *types.RpcContext, ledgerIndex string, ammAccountID [20]byte) uint64 {
-	entry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, keylet.Account(ammAccountID).Key, ledgerIndex)
+	entry, err := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, keylet.Account(ammAccountID).Key, ledgerIndex)
 	if err != nil || entry == nil || len(entry.Node) == 0 {
 		return 0
 	}
@@ -594,7 +594,7 @@ func readAMMXRPBalance(ctx *types.RpcContext, ledgerIndex string, ammAccountID [
 // Reference: rippled View.cpp accountHolds() lines 432-455 — balance from the
 // AMM's perspective, with .setIssuer(issuer) applied to the result.
 func readAMMIOUBalance(ctx *types.RpcContext, ledgerIndex string, ammAccountID [20]byte, issue ammIssue) string {
-	entry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, keylet.Line(ammAccountID, issue.Issuer, issue.Currency).Key, ledgerIndex)
+	entry, err := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, keylet.Line(ammAccountID, issue.Issuer, issue.Currency).Key, ledgerIndex)
 	if err != nil || entry == nil || len(entry.Node) == 0 {
 		return "0"
 	}
@@ -625,7 +625,7 @@ func ammIssueFrozen(ctx *types.RpcContext, ledgerIndex string, ammAccountID [20]
 	}
 
 	// Global freeze on the issuer.
-	if issuerEntry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, keylet.Account(issue.Issuer).Key, ledgerIndex); err == nil && issuerEntry != nil && len(issuerEntry.Node) > 0 {
+	if issuerEntry, err := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, keylet.Account(issue.Issuer).Key, ledgerIndex); err == nil && issuerEntry != nil && len(issuerEntry.Node) > 0 {
 		if issuerRoot, perr := state.ParseAccountRoot(issuerEntry.Node); perr == nil && issuerRoot != nil {
 			if (issuerRoot.Flags & state.LsfGlobalFreeze) != 0 {
 				return true
@@ -634,7 +634,7 @@ func ammIssueFrozen(ctx *types.RpcContext, ledgerIndex string, ammAccountID [20]
 	}
 
 	// Individual freeze on the trust line — checked on the issuer's side.
-	lineEntry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, keylet.Line(ammAccountID, issue.Issuer, issue.Currency).Key, ledgerIndex)
+	lineEntry, err := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, keylet.Line(ammAccountID, issue.Issuer, issue.Currency).Key, ledgerIndex)
 	if err != nil || lineEntry == nil || len(lineEntry.Node) == 0 {
 		return false
 	}

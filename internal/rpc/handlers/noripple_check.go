@@ -76,7 +76,7 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		return nil, types.RpcErrorActMalformed("Account malformed.").WithExtra(response)
 	}
 
-	result, err := ctx.Services.Ledger.GetNoRippleCheck(
+	result, err := ctx.Services.Ledger().GetNoRippleCheck(
 		ctx.Context,
 		account,
 		role,

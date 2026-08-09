@@ -72,7 +72,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		return nil, typeErr
 	}
 
-	result, err := ctx.Services.Ledger.GetLedgerData(ctx.Context, ledgerIndex, limit, markerStr)
+	result, err := ctx.Services.Ledger().GetLedgerData(ctx.Context, ledgerIndex, limit, markerStr)
 	if err != nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr

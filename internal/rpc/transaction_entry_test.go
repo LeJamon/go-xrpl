@@ -129,10 +129,10 @@ func (m *mockLedgerServiceTE) addLedger(lr *mockLedgerReaderTE) {
 	m.ledgersByHash[lr.hash] = lr
 }
 
-func newTransactionEntryTestServices(mock *mockLedgerServiceTE) *types.ServiceContainer {
-	return &types.ServiceContainer{
+func newTransactionEntryTestServices(mock *mockLedgerServiceTE) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger: mock,
-	}
+	})
 }
 
 // Tests
@@ -736,7 +736,7 @@ func TestTransactionEntryServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		params := map[string]any{

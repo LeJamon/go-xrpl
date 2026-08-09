@@ -37,7 +37,7 @@ func TestRPCHexCaseRegression(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: mock},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -71,7 +71,7 @@ func TestRPCHexCaseRegression(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: mock},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 		}
 
 		params, err := json.Marshal(map[string]any{"account": validAccount})

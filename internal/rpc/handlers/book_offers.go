@@ -158,7 +158,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		return nil, limitErr
 	}
 
-	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit, "", false)
+	result, err := ctx.Services.Ledger().GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit, "", false)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrStaleMarker) {
 			return nil, types.RpcErrorInvalidParams("Invalid marker: object pointed to by marker is gone; retry with a pinned ledger_index or ledger_hash.")
@@ -176,7 +176,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	response := map[string]any{
 		"offers": result.Offers,
 	}
-	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, ctx.Services.Ledger.GetCurrentLedgerIndex(), result.Validated)
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, ctx.Services.Ledger().GetCurrentLedgerIndex(), result.Validated)
 	return response, nil
 }
 

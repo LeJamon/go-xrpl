@@ -103,11 +103,11 @@ func resolveFeature(feature string) *amendment.Feature {
 
 // amendmentController returns the live amendment-vote controller if the wired
 // ledger service exposes one, else nil (e.g. test mocks).
-func amendmentController(services *types.ServiceContainer) amendmentVoteController {
-	if services == nil || services.Ledger == nil {
+func amendmentController(services *types.ServiceGraph) amendmentVoteController {
+	if services == nil || services.Ledger() == nil {
 		return nil
 	}
-	if c, ok := services.Ledger.(amendmentVoteController); ok {
+	if c, ok := services.Ledger().(amendmentVoteController); ok {
 		return c
 	}
 	return nil
@@ -118,12 +118,12 @@ func amendmentController(services *types.ServiceContainer) amendmentVoteControll
 // (amendment hash → close time at which it reached majority, XRPL epoch seconds).
 // Both are nil if the ledger is unavailable, meaning the caller should fall back
 // to deriving enabled status from the registry defaults.
-func (m *FeatureMethod) getAmendmentState(services *types.ServiceContainer) (enabled map[[32]byte]bool, majorities map[[32]byte]uint32) {
-	if services == nil || services.Ledger == nil {
+func (m *FeatureMethod) getAmendmentState(services *types.ServiceGraph) (enabled map[[32]byte]bool, majorities map[[32]byte]uint32) {
+	if services == nil || services.Ledger() == nil {
 		return nil, nil
 	}
 
-	view, err := services.Ledger.GetClosedLedgerView()
+	view, err := services.Ledger().GetClosedLedgerView()
 	if err != nil || view == nil {
 		return nil, nil
 	}

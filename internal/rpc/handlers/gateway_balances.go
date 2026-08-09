@@ -102,7 +102,7 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	}
 
 	// Get gateway balances from the ledger service
-	result, err := ctx.Services.Ledger.GetGatewayBalances(
+	result, err := ctx.Services.Ledger().GetGatewayBalances(
 		ctx.Context,
 		account,
 		hotWallets,

@@ -134,7 +134,7 @@ func TestLedgerOwnerFunds(t *testing.T) {
 	mock := &ownerFundsLedgerMock{ledgerMock: base, view: view, reader: reader}
 	services := &types.ServiceContainer{Ledger: mock}
 
-	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: types.NewTestServiceGraph(services)}
 	method := &handlers.LedgerMethod{}
 	for _, tc := range []struct {
 		apiVersion int
@@ -204,6 +204,7 @@ func TestLedgerOwnerFunds(t *testing.T) {
 	services.QueueAllTxs = func() []types.QueuedTxInfo {
 		return []types.QueuedTxInfo{{Account: accountID, TxID: [32]byte{0x02}, TxJSON: offerCreate}}
 	}
+	ctx.Services = types.NewTestServiceGraph(services)
 	reader.closed = false
 	base.currentLedgerIndex = 2
 	for _, tc := range []struct {
@@ -312,7 +313,7 @@ func TestLedgerOwnerFundsUsesTargetLedgerReservesIncludingZero(t *testing.T) {
 	}
 
 	services := &types.ServiceContainer{Ledger: &ownerFundsLedgerMock{ledgerMock: base, view: view, reader: reader}}
-	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: types.NewTestServiceGraph(services)}
 	paramsJSON, err := json.Marshal(map[string]any{
 		"ledger_index": 2,
 		"transactions": true,
@@ -533,7 +534,7 @@ func TestTransactionOwnerFundsMPT(t *testing.T) {
 	result, rpcErr := (&handlers.LedgerMethod{}).Handle(&types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
-		Services:   services,
+		Services:   types.NewTestServiceGraph(services),
 	}, paramsJSON)
 	require.Nil(t, rpcErr)
 	txns := resultToMap(t, result)["ledger"].(map[string]any)["transactions"].([]any)
@@ -558,7 +559,7 @@ func TestTransactionOwnerFundsMPT(t *testing.T) {
 	result, rpcErr = (&handlers.LedgerMethod{}).Handle(&types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
-		Services:   services,
+		Services:   types.NewTestServiceGraph(services),
 	}, queueParams)
 	require.Nil(t, result)
 	require.NotNil(t, rpcErr)

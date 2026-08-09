@@ -51,7 +51,8 @@ type WebSocketServer struct {
 	closing             bool
 	timeout             time.Duration
 	ledgerInfoProvider  types.LedgerInfoProvider
-	services            *types.ServiceContainer
+	services            *types.ServiceGraph
+	urlSubscriptions    types.URLSubscriptionService
 	urlSubs             *urlSubscriptionRegistry
 	peerSourceHolder
 	resourceManager   *resource.Manager
@@ -72,13 +73,14 @@ type WebSocketServer struct {
 // A nil subscription manager selects a new manager for the standalone server.
 type WebSocketServerOptions struct {
 	Timeout             time.Duration
-	Services            *types.ServiceContainer
+	Services            *types.ServiceGraph
 	ResourceManager     *resource.Manager
 	PeerSource          types.PeerSource
 	Registry            *types.MethodRegistry
 	PingInterval        time.Duration
 	LedgerInfoProvider  types.LedgerInfoProvider
 	SubscriptionManager *subscription.Manager
+	URLSubscriptions    types.URLSubscriptionService
 }
 
 // websocketConnection owns the transport-specific state for one logical
@@ -144,13 +146,15 @@ func NewWebSocketServer(options WebSocketServerOptions) *WebSocketServer {
 		ws.methodRegistry = defaultMethodRegistry()
 	}
 	ws.pathFindRefresh = newPathFindRefreshManager(ws)
-	if ws.services != nil {
-		ws.services.SubscriptionMetrics = manager.Metrics
+	if registry, ok := options.URLSubscriptions.(*urlSubscriptionRegistry); ok {
+		ws.urlSubs = registry
+		ws.urlSubscriptions = registry
+	} else if options.URLSubscriptions != nil {
+		ws.urlSubscriptions = options.URLSubscriptions
+	} else {
+		ws.urlSubs = newURLSubscriptionRegistry(manager, options.Services, options.LedgerInfoProvider)
+		ws.urlSubscriptions = ws.urlSubs
 	}
-	// The URL (RPCSub) registry lives on the WebSocket server because URL
-	// subscribers share its subscription manager's broadcast fan-out. Node
-	// composition installs the returned service on the shared container.
-	ws.urlSubs = newURLSubscriptionRegistry(ws)
 	ws.setPeerSource(options.PeerSource)
 	return ws
 }
@@ -249,8 +253,8 @@ func (ws *WebSocketServer) SubscriptionManager() *subscription.Manager {
 	return ws.subscriptionManager
 }
 
-// URLSubscriptionService returns the URL subscription registry that node
-// composition installs on the shared service container after construction.
+// URLSubscriptionService returns the transport-owned URL subscription
+// registry.
 func (ws *WebSocketServer) URLSubscriptionService() types.URLSubscriptionService {
-	return ws.urlSubs
+	return ws.urlSubscriptions
 }

@@ -39,9 +39,9 @@ func TestFetchInfoMethod_PassesThroughSnapshot(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context: context.Background(),
 		Role:    types.RoleAdmin,
-		Services: &types.ServiceContainer{
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{
 			FetchInfo: func() map[string]any { return snap },
-		},
+		}),
 	}
 
 	result, rpcErr := m.Handle(ctx, json.RawMessage(`{}`))
@@ -57,10 +57,10 @@ func TestFetchInfoMethod_ClearInvokesResetAndEchoes(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context: context.Background(),
 		Role:    types.RoleAdmin,
-		Services: &types.ServiceContainer{
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{
 			FetchInfo:      func() map[string]any { return map[string]any{} },
 			FetchInfoClear: func() { cleared = true },
-		},
+		}),
 	}
 
 	result, rpcErr := m.Handle(ctx, json.RawMessage(`{"clear":true}`))

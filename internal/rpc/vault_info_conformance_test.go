@@ -50,7 +50,7 @@ func vaultInfoTestContext(mock *vaultInfoMockLedgerService) (*handlers.VaultInfo
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: mock},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 	}
 }
 

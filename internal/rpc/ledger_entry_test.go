@@ -85,10 +85,10 @@ func (m *mockLedgerEntryService) GetLedgerByHash(hash [32]byte) (types.LedgerRea
 }
 
 // newLedgerEntryTestServices builds a per-test ServiceContainer wrapping mock.
-func newLedgerEntryTestServices(mock *mockLedgerEntryService) *types.ServiceContainer {
-	return &types.ServiceContainer{
+func newLedgerEntryTestServices(mock *mockLedgerEntryService) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger: mock,
-	}
+	})
 }
 
 // Direct Index Lookup Tests
@@ -1034,7 +1034,7 @@ func TestLedgerEntryServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		params := map[string]any{

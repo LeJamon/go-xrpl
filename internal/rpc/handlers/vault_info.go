@@ -36,7 +36,7 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		return nil, parseErr.WithExtra(response)
 	}
 
-	vaultEntry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, vaultKey, ledgerIndex)
+	vaultEntry, err := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, vaultKey, ledgerIndex)
 	if err != nil || vaultEntry == nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr.WithExtra(response)
@@ -58,7 +58,7 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	copy(shareMPTID[:], shareMPTIDBytes)
 	mptIssuanceKey := keylet.MPTIssuance(shareMPTID).Key
 
-	mptIssuanceEntry, mptErr := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, mptIssuanceKey, ledgerIndex)
+	mptIssuanceEntry, mptErr := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, mptIssuanceKey, ledgerIndex)
 	if mptErr != nil || mptIssuanceEntry == nil {
 		if rerr := mapLedgerLookupErr(mptErr); rerr != nil {
 			return nil, rerr.WithExtra(response)

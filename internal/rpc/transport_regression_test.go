@@ -31,7 +31,7 @@ func newTransportRegressionServer(t *testing.T) *Server {
 	t.Helper()
 	server := NewServer(ServerOptions{
 		Timeout:  time.Second,
-		Services: types.NewServiceContainer(nil),
+		Services: types.NewTestServiceGraph(types.NewServiceContainer(nil)),
 		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
 			"ping": &stubHandler{},
 			"stop": &stubHandler{role: types.RoleAdmin},
@@ -68,9 +68,10 @@ func TestTransportConstructorsShareInjectedResourceManager(t *testing.T) {
 }
 
 func TestRPCConstructorsUseExplicitDependencies(t *testing.T) {
-	services := types.NewServiceContainer(nil)
+	container := types.NewServiceContainer(nil)
 	clientLoad := types.NewClientLoadShedder()
-	services.ClientLoad = clientLoad
+	container.ClientLoad = clientLoad
+	services := types.NewTestServiceGraph(container)
 	manager := subscription.NewManager()
 	provider := stubLedgerInfoProvider{ledgerAvailable: true}
 	peerSource := &stubPeerSource{}
@@ -91,11 +92,11 @@ func TestRPCConstructorsUseExplicitDependencies(t *testing.T) {
 		SubscriptionManager: manager,
 	})
 
-	if services.ClientLoad != clientLoad || services.Dispatcher != nil || services.URLSubscriptions != nil {
+	if container.ClientLoad != clientLoad {
 		t.Fatal("RPC constructors mutated the service container")
 	}
 	clientLoad.Begin()
-	if httpServer.services.ClientLoad.InFlight() != 1 || wsServer.services.ClientLoad.InFlight() != 1 {
+	if httpServer.services.ClientLoad().InFlight() != 1 || wsServer.services.ClientLoad().InFlight() != 1 {
 		t.Fatal("HTTP and WebSocket servers did not observe the shared client-load shedder")
 	}
 	if wsServer.SubscriptionManager() != manager {
@@ -281,7 +282,7 @@ func TestHTTPEarlyDispatchErrorsChargeReferenceAndWarn(t *testing.T) {
 			method: "ping",
 			token:  "tooBusy",
 			setup: func(server *Server) {
-				server.services.ClientLoad = saturatedShedder()
+				server.services = types.NewTestServiceGraph(&types.ServiceContainer{ClientLoad: saturatedShedder()})
 			},
 		},
 		{name: "unknown", method: "does_not_exist", token: "unknownCmd", setup: func(*Server) {}},
@@ -290,7 +291,7 @@ func TestHTTPEarlyDispatchErrorsChargeReferenceAndWarn(t *testing.T) {
 			method: "gated",
 			token:  "noNetwork",
 			setup: func(server *Server) {
-				server.services.Ledger = newMockLedgerService()
+				server.services = types.NewTestServiceGraph(&types.ServiceContainer{Ledger: newMockLedgerService()})
 			},
 		},
 	}

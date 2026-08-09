@@ -77,7 +77,7 @@ func TestLedgerDataCurrentResponseFields(t *testing.T) {
 	}
 	ctx := &types.RpcContext{
 		Context:  context.Background(),
-		Services: &types.ServiceContainer{Ledger: mock},
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 	}
 
 	result, rpcErr := (&handlers.LedgerDataMethod{}).Handle(ctx, json.RawMessage(`{"ledger_index":"current"}`))
@@ -103,7 +103,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 		return result, nil
 	}
 
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
@@ -298,7 +298,7 @@ func TestLedgerDataBinaryMode(t *testing.T) {
 		return newDefaultLedgerDataResult(3, false), nil
 	}
 
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
@@ -382,7 +382,7 @@ func TestLedgerDataTypeFilter(t *testing.T) {
 		return result, nil
 	}
 
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
@@ -449,7 +449,7 @@ func TestLedgerDataMarkerPagination(t *testing.T) {
 		return newDefaultLedgerDataResult(3, false), nil
 	}
 
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
@@ -537,7 +537,7 @@ func TestLedgerDataResponseStructure(t *testing.T) {
 		}, nil
 	}
 
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
@@ -615,7 +615,7 @@ func TestLedgerDataServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -636,7 +636,7 @@ func TestLedgerDataServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: mock},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 		}
 
 		params := map[string]any{
@@ -707,7 +707,7 @@ func TestLedgerDataLedgerHeader(t *testing.T) {
 		return result, nil
 	}
 
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
@@ -791,7 +791,7 @@ func TestLedgerDataEmptyState(t *testing.T) {
 		return newDefaultLedgerDataResult(0, false), nil
 	}
 
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
@@ -831,7 +831,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: mock},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 		}
 		params := map[string]any{"ledger_index": "current", "marker": "not-a-valid-hash"}
 		paramsJSON, _ := json.Marshal(params)
@@ -854,7 +854,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: mock},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 		}
 		params := map[string]any{"ledger_index": "current", "marker": 12345}
 		paramsJSON, _ := json.Marshal(params)
@@ -880,7 +880,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: mock},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 		}
 		params := map[string]any{"ledger_index": "current", "marker": nil}
 		paramsJSON, _ := json.Marshal(params)
@@ -906,7 +906,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: mock},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 		}
 		params := map[string]any{"ledger_index": "current", "marker": ""}
 		paramsJSON, _ := json.Marshal(params)
@@ -936,7 +936,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: mock},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 		}
 		params := map[string]any{"ledger_index": "current", "marker": "0"}
 		paramsJSON, _ := json.Marshal(params)

@@ -20,11 +20,15 @@ const (
 )
 
 func signingEnabledHandlerContext(ctx *types.RpcContext) *types.RpcContext {
-	if ctx.Services == nil {
-		ctx.Services = &types.ServiceContainer{}
-	}
-	ctx.Services.Capabilities.SigningEnabled = true
 	return ctx
+}
+
+func signingEnabledTestGraph(services *types.ServiceContainer) *types.ServiceGraph {
+	if services == nil {
+		services = &types.ServiceContainer{}
+	}
+	services.Capabilities.SigningEnabled = true
+	return types.NewTestServiceGraph(services)
 }
 
 type loadAdmissionLedger struct {
@@ -135,7 +139,7 @@ func TestSignRejectsClusterOnlyAndArmedLocalLoad(t *testing.T) {
 			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				ApiVersion: 2,
-				Services:   &types.ServiceContainer{IsLoadedCluster: track.IsLoadedCluster},
+				Services:   signingEnabledTestGraph(&types.ServiceContainer{IsLoadedCluster: track.IsLoadedCluster}),
 			}
 			_, rpcErr := (&SignMethod{}).Handle(signingEnabledHandlerContext(ctx), signingLoadParams(true))
 			assertTooBusy(t, rpcErr)
@@ -154,7 +158,7 @@ func TestSignRejectsLoadedOnlineAndOfflineBeforeLedgerWork(t *testing.T) {
 			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				ApiVersion: 2,
-				Services:   services,
+				Services:   signingEnabledTestGraph(services),
 			}
 
 			_, rpcErr := (&SignMethod{}).Handle(signingEnabledHandlerContext(ctx), signingLoadParams(offline))
@@ -199,13 +203,13 @@ func TestOnlineSigningRejectsStaleLedgerBeforeLoad(t *testing.T) {
 				ctx := &types.RpcContext{
 					Context:    context.Background(),
 					ApiVersion: api.version,
-					Services: &types.ServiceContainer{
+					Services: signingEnabledTestGraph(&types.ServiceContainer{
 						Ledger: ledger,
 						IsLoadedCluster: func() bool {
 							loadChecks++
 							return true
 						},
-					},
+					}),
 				}
 
 				_, rpcErr := method.handle(signingEnabledHandlerContext(ctx), method.params)
@@ -263,10 +267,10 @@ func TestSigningLoadAdmissionValidatesCredentialsAndShapeFirst(t *testing.T) {
 			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				ApiVersion: 2,
-				Services: &types.ServiceContainer{IsLoadedCluster: func() bool {
+				Services: signingEnabledTestGraph(&types.ServiceContainer{IsLoadedCluster: func() bool {
 					loadChecks++
 					return true
-				}},
+				}}),
 			}
 			_, rpcErr := (&SignMethod{}).Handle(signingEnabledHandlerContext(ctx), test.params)
 			if rpcErr == nil || rpcErr.ErrorString != test.want {
@@ -291,7 +295,7 @@ func TestSigningLoadAdmissionUnlimitedExemption(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: 2,
-			Services:   &types.ServiceContainer{IsLoadedCluster: loaded},
+			Services:   signingEnabledTestGraph(&types.ServiceContainer{IsLoadedCluster: loaded}),
 		}
 		result, rpcErr := (&SignMethod{}).Handle(signingEnabledHandlerContext(ctx), signingLoadParams(true))
 		if rpcErr != nil {
@@ -308,7 +312,7 @@ func TestSigningLoadAdmissionUnlimitedExemption(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: 2,
-			Services:   &types.ServiceContainer{IsLoadedCluster: loaded},
+			Services:   signingEnabledTestGraph(&types.ServiceContainer{IsLoadedCluster: loaded}),
 		}
 		_, rpcErr := (&SignForMethod{}).Handle(signingEnabledHandlerContext(ctx), params)
 		if rpcErr != nil {
@@ -322,10 +326,10 @@ func TestSigningLoadAdmissionUnlimitedExemption(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: 2,
-			Services: &types.ServiceContainer{
+			Services: signingEnabledTestGraph(&types.ServiceContainer{
 				Ledger:          &loadAdmissionLedger{},
 				IsLoadedCluster: loaded,
-			},
+			}),
 		}
 		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
 		if rpcErr != nil && rpcErr.ErrorString == "tooBusy" {
@@ -344,10 +348,10 @@ func TestCredentialedSubmitAndMultisignMethodsRejectLoaded(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			ApiVersion: 2,
-			Services: &types.ServiceContainer{
+			Services: signingEnabledTestGraph(&types.ServiceContainer{
 				Ledger:          ledger,
 				IsLoadedCluster: func() bool { return true },
-			},
+			}),
 		}
 		_, rpcErr := (&SubmitMethod{}).Handle(signingEnabledHandlerContext(ctx), signingLoadParams(false))
 		assertTooBusy(t, rpcErr)
@@ -361,7 +365,7 @@ func TestCredentialedSubmitAndMultisignMethodsRejectLoaded(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			ApiVersion: 2,
-			Services:   &types.ServiceContainer{IsLoadedCluster: func() bool { return true }},
+			Services:   signingEnabledTestGraph(&types.ServiceContainer{IsLoadedCluster: func() bool { return true }}),
 		}
 		_, rpcErr := (&SignForMethod{}).Handle(signingEnabledHandlerContext(ctx), params)
 		assertTooBusy(t, rpcErr)
@@ -373,10 +377,10 @@ func TestCredentialedSubmitAndMultisignMethodsRejectLoaded(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			ApiVersion: 2,
-			Services: &types.ServiceContainer{
+			Services: signingEnabledTestGraph(&types.ServiceContainer{
 				Ledger:          ledger,
 				IsLoadedCluster: func() bool { return true },
-			},
+			}),
 		}
 		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
 		assertTooBusy(t, rpcErr)
@@ -393,10 +397,10 @@ func TestMultisignLoadAdmissionValidationPrecedence(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			ApiVersion: 2,
-			Services: &types.ServiceContainer{IsLoadedCluster: func() bool {
+			Services: signingEnabledTestGraph(&types.ServiceContainer{IsLoadedCluster: func() bool {
 				loadChecks++
 				return true
-			}},
+			}}),
 		}
 		_, rpcErr := (&SignForMethod{}).Handle(signingEnabledHandlerContext(ctx), params)
 		if rpcErr == nil || rpcErr.ErrorString != "invalidParams" {
@@ -413,10 +417,10 @@ func TestMultisignLoadAdmissionValidationPrecedence(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			ApiVersion: 2,
-			Services: &types.ServiceContainer{IsLoadedCluster: func() bool {
+			Services: signingEnabledTestGraph(&types.ServiceContainer{IsLoadedCluster: func() bool {
 				loadChecks++
 				return true
-			}},
+			}}),
 		}
 		_, rpcErr := (&SignForMethod{}).Handle(signingEnabledHandlerContext(ctx), params)
 		if rpcErr == nil || rpcErr.ErrorString != "invalidParams" {
@@ -433,13 +437,13 @@ func TestMultisignLoadAdmissionValidationPrecedence(t *testing.T) {
 		params := json.RawMessage(`{"tx_json":{"Account":"` + loadAdmissionAccount + `","Sequence":1,"Fee":"10","SigningPubKey":""}}`)
 		ctx := &types.RpcContext{
 			Context: context.Background(),
-			Services: &types.ServiceContainer{
+			Services: signingEnabledTestGraph(&types.ServiceContainer{
 				Ledger: ledger,
 				IsLoadedCluster: func() bool {
 					loadChecks++
 					return true
 				},
-			},
+			}),
 		}
 		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
 		if rpcErr == nil || rpcErr.ErrorString != "invalidParams" {
@@ -455,10 +459,10 @@ func TestMultisignLoadAdmissionValidationPrecedence(t *testing.T) {
 		params := json.RawMessage(`{"tx_json":{"TransactionType":"AccountSet","Account":"` + loadAdmissionAccount + `","Sequence":"bad","Fee":"10","SigningPubKey":""}}`)
 		ctx := &types.RpcContext{
 			Context: context.Background(),
-			Services: &types.ServiceContainer{
+			Services: signingEnabledTestGraph(&types.ServiceContainer{
 				Ledger:          ledger,
 				IsLoadedCluster: func() bool { return true },
-			},
+			}),
 		}
 		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
 		assertTooBusy(t, rpcErr)
@@ -474,7 +478,7 @@ func TestSubmitMultisignedUsesCanonicalFieldParsingAfterAdmission(t *testing.T) 
 		params := json.RawMessage(`{"tx_json":{"TransactionType":"AccountSet","Account":"` + loadAdmissionAccount + `","Sequence":"1","Fee":50,"SigningPubKey":""}}`)
 		ctx := &types.RpcContext{
 			Context:  context.Background(),
-			Services: &types.ServiceContainer{Ledger: ledger},
+			Services: signingEnabledTestGraph(&types.ServiceContainer{Ledger: ledger}),
 		}
 
 		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
@@ -488,7 +492,7 @@ func TestSubmitMultisignedUsesCanonicalFieldParsingAfterAdmission(t *testing.T) 
 		params := json.RawMessage(`{"tx_json":{"TransactionType":"AccountSet","Account":"` + loadAdmissionAccount + `","Sequence":"4294967296","Fee":"10","SigningPubKey":"","TxnSignature":""}}`)
 		ctx := &types.RpcContext{
 			Context:  context.Background(),
-			Services: &types.ServiceContainer{Ledger: ledger},
+			Services: signingEnabledTestGraph(&types.ServiceContainer{Ledger: ledger}),
 		}
 
 		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
@@ -502,7 +506,7 @@ func TestSubmitMultisignedUsesCanonicalFieldParsingAfterAdmission(t *testing.T) 
 		params := json.RawMessage(`{"tx_json":{"TransactionType":3,"Account":"` + loadAdmissionAccount + `","Sequence":1,"Fee":"10","SigningPubKey":""}}`)
 		ctx := &types.RpcContext{
 			Context:  context.Background(),
-			Services: &types.ServiceContainer{Ledger: ledger},
+			Services: signingEnabledTestGraph(&types.ServiceContainer{Ledger: ledger}),
 		}
 
 		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
@@ -516,7 +520,7 @@ func TestSubmitMultisignedUsesCanonicalFieldParsingAfterAdmission(t *testing.T) 
 		params := json.RawMessage(`{"tx_json":{"TransactionType":"3","Account":"` + loadAdmissionAccount + `","Sequence":1,"Fee":"10","SigningPubKey":""}}`)
 		ctx := &types.RpcContext{
 			Context:  context.Background(),
-			Services: &types.ServiceContainer{Ledger: ledger},
+			Services: signingEnabledTestGraph(&types.ServiceContainer{Ledger: ledger}),
 		}
 
 		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
@@ -543,7 +547,7 @@ func TestSubmitMultisignedUsesCanonicalFieldParsingAfterAdmission(t *testing.T) 
 		}
 		ctx := &types.RpcContext{
 			Context:  context.Background(),
-			Services: &types.ServiceContainer{Ledger: ledger},
+			Services: signingEnabledTestGraph(&types.ServiceContainer{Ledger: ledger}),
 		}
 
 		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
@@ -557,7 +561,7 @@ func TestSubmitMultisignedUsesCanonicalFieldParsingAfterAdmission(t *testing.T) 
 		params := json.RawMessage(`{"tx_json":{"TransactionType":"AccountSet","Account":"` + loadAdmissionAccount + `","Destination":"` + loadAdmissionSigner + `","Sequence":1,"Fee":"10","SigningPubKey":"","TxnSignature":""}}`)
 		ctx := &types.RpcContext{
 			Context:  context.Background(),
-			Services: &types.ServiceContainer{Ledger: ledger},
+			Services: signingEnabledTestGraph(&types.ServiceContainer{Ledger: ledger}),
 		}
 
 		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
@@ -584,7 +588,7 @@ func TestSubmitMultisignedUsesCanonicalFieldParsingAfterAdmission(t *testing.T) 
 		}
 		ctx := &types.RpcContext{
 			Context:  context.Background(),
-			Services: &types.ServiceContainer{Ledger: ledger},
+			Services: signingEnabledTestGraph(&types.ServiceContainer{Ledger: ledger}),
 		}
 
 		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
@@ -598,7 +602,7 @@ func TestSubmitMultisignedUsesCanonicalFieldParsingAfterAdmission(t *testing.T) 
 		params := json.RawMessage(`{"tx_json":{"TransactionType":"AccountSet","Account":"` + loadAdmissionAccount + `","Sequence":1,"Fee":"1/USD/` + loadAdmissionSigner + `","SigningPubKey":"","TxnSignature":""}}`)
 		ctx := &types.RpcContext{
 			Context:  context.Background(),
-			Services: &types.ServiceContainer{Ledger: ledger},
+			Services: signingEnabledTestGraph(&types.ServiceContainer{Ledger: ledger}),
 		}
 
 		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
@@ -641,7 +645,7 @@ func TestSubmitMultisignedUsesCanonicalFieldParsingAfterAdmission(t *testing.T) 
 		}
 		ctx := &types.RpcContext{
 			Context:  context.Background(),
-			Services: &types.ServiceContainer{Ledger: &loadAdmissionLedger{}},
+			Services: signingEnabledTestGraph(&types.ServiceContainer{Ledger: &loadAdmissionLedger{}}),
 		}
 
 		result, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
@@ -686,7 +690,7 @@ func TestSubmitMultisignedUsesCanonicalFieldParsingAfterAdmission(t *testing.T) 
 		}
 		ctx := &types.RpcContext{
 			Context:  context.Background(),
-			Services: &types.ServiceContainer{Ledger: ledger},
+			Services: signingEnabledTestGraph(&types.ServiceContainer{Ledger: ledger}),
 		}
 
 		_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
@@ -708,13 +712,13 @@ func TestSubmitWithoutCredentialsDoesNotConsultSigningLoad(t *testing.T) {
 			loadChecks := 0
 			ctx := &types.RpcContext{
 				Context: context.Background(),
-				Services: &types.ServiceContainer{
+				Services: signingEnabledTestGraph(&types.ServiceContainer{
 					Ledger: &loadAdmissionLedger{},
 					IsLoadedCluster: func() bool {
 						loadChecks++
 						return true
 					},
-				},
+				}),
 			}
 			_, rpcErr := (&SubmitMethod{}).Handle(ctx, test.params)
 			if rpcErr != nil && rpcErr.ErrorString == "tooBusy" {

@@ -924,7 +924,7 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 
 			test.invoke(ws, wsConn, &types.RpcContext{
 				ApiVersion: types.DefaultApiVersion,
-				Services:   &types.ServiceContainer{Capabilities: types.RPCCapabilities{PathSearchMax: 3}},
+				Services:   types.NewTestServiceGraph(&types.ServiceContainer{Capabilities: types.RPCCapabilities{PathSearchMax: 3}}),
 			}, cmd)
 			body := <-wsConn.Outbound()
 			if got := string(body); got != test.want {

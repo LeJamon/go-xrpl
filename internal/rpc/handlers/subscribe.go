@@ -33,10 +33,10 @@ func urlSubscriptionRequest(ctx *types.RpcContext, params json.RawMessage, metho
 	if ctx.Role != types.RoleAdmin {
 		return request, nil, types.RpcErrorNoPermission(method)
 	}
-	if ctx.Services == nil || ctx.Services.URLSubscriptions == nil {
+	if ctx == nil || ctx.URLSubscriptions == nil {
 		return request, nil, types.RpcErrorNotSupported("url-based (RPCSub) subscriptions are not supported")
 	}
-	return request, ctx.Services.URLSubscriptions, nil
+	return request, ctx.URLSubscriptions, nil
 }
 
 func (m *SubscribeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {

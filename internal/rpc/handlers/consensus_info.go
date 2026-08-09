@@ -17,8 +17,8 @@ type ConsensusInfoMethod struct{ adminHandler }
 
 func (m *ConsensusInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	info := map[string]any{}
-	if ctx.Services != nil && ctx.Services.ConsensusInfo != nil {
-		if live := ctx.Services.ConsensusInfo(true); live != nil {
+	if ctx.Services != nil && ctx.Services.ConsensusInfo() != nil {
+		if live := ctx.Services.ConsensusInfo()(true); live != nil {
 			info = live
 		}
 	}

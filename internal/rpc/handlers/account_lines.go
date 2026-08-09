@@ -55,7 +55,7 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
-	result, err := ctx.Services.Ledger.GetAccountLines(ctx.Context, account, ledgerIndex, peer, limit, marker)
+	result, err := ctx.Services.Ledger().GetAccountLines(ctx.Context, account, ledgerIndex, peer, limit, marker)
 	if err != nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr

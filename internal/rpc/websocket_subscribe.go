@@ -28,7 +28,7 @@ func (ws *WebSocketServer) executeSubscribe(wsConn *websocketConnection, ctx *ty
 		if !ctx.Role.IsAdmin() {
 			return nil, types.RpcErrorNoPermission("subscribe")
 		}
-		result, rpcErr := ws.urlSubs.Subscribe(ctx, request)
+		result, rpcErr := ws.urlSubscriptions.Subscribe(ctx, request)
 		if rpcErr != nil {
 			return nil, rpcErr
 		}
@@ -183,7 +183,7 @@ func (ws *WebSocketServer) executeUnsubscribe(wsConn *websocketConnection, ctx *
 		if !ctx.Role.IsAdmin() {
 			return nil, types.RpcErrorNoPermission("unsubscribe")
 		}
-		result, rpcErr := ws.urlSubs.Unsubscribe(ctx, request)
+		result, rpcErr := ws.urlSubscriptions.Unsubscribe(ctx, request)
 		if rpcErr != nil {
 			return nil, rpcErr
 		}
@@ -223,14 +223,18 @@ func (ws *WebSocketServer) buildSubscribeAck(ctx *types.RpcContext, request type
 }
 
 func (ws *WebSocketServer) buildSubscribeAckSampled(ctx *types.RpcContext, request types.SubscriptionRequest, serverState map[string]any) map[string]any {
+	return buildSubscribeAckSampled(ws.ledgerInfoProvider, ctx, request, serverState)
+}
+
+func buildSubscribeAckSampled(ledgerInfoProvider types.LedgerInfoProvider, ctx *types.RpcContext, request types.SubscriptionRequest, serverState map[string]any) map[string]any {
 	result := make(map[string]any)
 	for key, value := range serverState {
 		result[key] = value
 	}
 
 	if slices.Contains(request.Streams, types.SubLedger) {
-		if ws.ledgerInfoProvider != nil {
-			info := ws.ledgerInfoProvider.GetCurrentLedgerInfo()
+		if ledgerInfoProvider != nil {
+			info := ledgerInfoProvider.GetCurrentLedgerInfo()
 			if info != nil {
 				if info.LedgerAvailable {
 					result["ledger_index"] = info.LedgerIndex
@@ -254,7 +258,7 @@ func (ws *WebSocketServer) buildSubscribeAckSampled(ctx *types.RpcContext, reque
 	}
 
 	for _, book := range request.Books {
-		if (!book.Snapshot && !book.StateNow) || ctx.Services == nil || ctx.Services.Ledger == nil {
+		if (!book.Snapshot && !book.StateNow) || ctx.Services == nil || ctx.Services.Ledger() == nil {
 			continue
 		}
 		pays, gets, domain, rpcErr := subscription.SnapshotBook(book)
@@ -262,8 +266,8 @@ func (ws *WebSocketServer) buildSubscribeAckSampled(ctx *types.RpcContext, reque
 			continue
 		}
 		if book.Both || book.BothSides {
-			bids, _ := ws.snapshotBook(ctx, gets, pays, book.Taker, domain)
-			asks, _ := ws.snapshotBook(ctx, pays, gets, book.Taker, domain)
+			bids, _ := snapshotBook(ctx, gets, pays, book.Taker, domain)
+			asks, _ := snapshotBook(ctx, pays, gets, book.Taker, domain)
 			if bids != nil {
 				result["bids"] = appendOffers(result["bids"], bids)
 			}
@@ -272,7 +276,7 @@ func (ws *WebSocketServer) buildSubscribeAckSampled(ctx *types.RpcContext, reque
 			}
 			continue
 		}
-		offers, _ := ws.snapshotBook(ctx, gets, pays, book.Taker, domain)
+		offers, _ := snapshotBook(ctx, gets, pays, book.Taker, domain)
 		if offers != nil {
 			result["offers"] = appendOffers(result["offers"], offers)
 		}
@@ -287,10 +291,14 @@ func (ws *WebSocketServer) buildSubscribeAckSampled(ctx *types.RpcContext, reque
 // reject the entire subscribe (rippled Subscribe.cpp:339-394 ignores
 // the snapshot block on lookup failure too).
 func (ws *WebSocketServer) snapshotBook(ctx *types.RpcContext, takerGets, takerPays types.Amount, taker, domain string) ([]types.BookOffer, error) {
-	if ctx == nil || ctx.Services == nil || ctx.Services.Ledger == nil {
+	return snapshotBook(ctx, takerGets, takerPays, taker, domain)
+}
+
+func snapshotBook(ctx *types.RpcContext, takerGets, takerPays types.Amount, taker, domain string) ([]types.BookOffer, error) {
+	if ctx == nil || ctx.Services == nil || ctx.Services.Ledger() == nil {
 		return nil, nil
 	}
-	res, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, taker, domain, "validated", defaultBookSnapshotLimit, "", false)
+	res, err := ctx.Services.Ledger().GetBookOffers(ctx.Context, takerGets, takerPays, taker, domain, "validated", defaultBookSnapshotLimit, "", false)
 	if err != nil || res == nil {
 		return nil, err
 	}

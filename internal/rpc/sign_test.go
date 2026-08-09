@@ -13,11 +13,18 @@ import (
 )
 
 func signingEnabledContext(ctx *types.RpcContext) *types.RpcContext {
-	if ctx.Services == nil {
-		ctx.Services = &types.ServiceContainer{}
+	clone := *ctx
+	var ledger types.LedgerService
+	if ctx.Services != nil {
+		ledger = ctx.Services.Ledger()
 	}
-	ctx.Services.Capabilities.SigningEnabled = true
-	return ctx
+	clone.Services = types.NewTestServiceGraph(&types.ServiceContainer{
+		Ledger: ledger,
+		Capabilities: types.RPCCapabilities{
+			SigningEnabled: true,
+		},
+	})
+	return &clone
 }
 
 // WalletPropose Tests
@@ -262,7 +269,7 @@ func TestWalletPropose_Metadata(t *testing.T) {
 
 func TestSign_MissingTxJson(t *testing.T) {
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
@@ -280,7 +287,7 @@ func TestSign_MissingTxJson(t *testing.T) {
 
 func TestSign_MissingCredentials(t *testing.T) {
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
@@ -430,7 +437,7 @@ func TestSign_LegacySecretRejectsKeyTokens(t *testing.T) {
 
 func TestSign_InvalidKeyType(t *testing.T) {
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
@@ -457,7 +464,7 @@ func TestSign_InvalidKeyType(t *testing.T) {
 
 func TestSign_InvalidSeed(t *testing.T) {
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
@@ -487,7 +494,7 @@ func TestSign_InvalidSeed(t *testing.T) {
 
 func TestSign_AccountMismatch(t *testing.T) {
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
@@ -583,7 +590,7 @@ func TestSign_SrcActNotFound(t *testing.T) {
 	// (TransactionSign.cpp:458-465) -> rpcSRC_ACT_NOT_FOUND.
 	mock := newMockLedgerService()
 	mock.accountInfoErr = svcerr.ErrAccountNotFound
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
@@ -615,7 +622,7 @@ func TestSign_SrcActNotFound(t *testing.T) {
 func TestSign_AutofillSequence(t *testing.T) {
 	// Online signing with Sequence absent auto-fills it from account state.
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
@@ -703,7 +710,7 @@ func TestSign_TicketSequence_AutofillsSequenceZero(t *testing.T) {
 	// A present TicketSequence supplies the sequence: the autofilled
 	// Sequence must be 0 (rippled TransactionSign.cpp:469-483).
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
@@ -754,7 +761,7 @@ func TestSign_FeeMultMax_DefaultAccepted(t *testing.T) {
 	// With default fee_mult_max=10 and fee_div_max=1, a baseFee of 10
 	// should be accepted (10 <= 10*10/1 = 100).
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
@@ -789,7 +796,7 @@ func TestSign_FeeMultMax_ZeroRejects(t *testing.T) {
 	// fee_mult_max=0 means limit = baseFee * 0 / 1 = 0.
 	// Since networkFee (10) > 0, should return rpcHIGH_FEE.
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
@@ -819,7 +826,7 @@ func TestSign_FeeDivMax_LargeRejects(t *testing.T) {
 	// fee_div_max=100 means limit = baseFee * 10 / 100 = 1.
 	// Since networkFee (10) > 1, should return rpcHIGH_FEE.
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
@@ -849,7 +856,7 @@ func TestSign_FeeMultMax_NegativeRejectsInvalidParams(t *testing.T) {
 	// Negative fee_mult_max should return rpcINVALID_PARAMS when Fee is
 	// autofilled. Matches rippled: mult < 0 -> rpcINVALID_PARAMS
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
@@ -881,7 +888,7 @@ func TestSign_FeeDivMax_ZeroRejectsInvalidParams(t *testing.T) {
 	// fee_div_max=0 should return rpcINVALID_PARAMS (not positive) when
 	// Fee is autofilled. Matches rippled: div <= 0 -> rpcINVALID_PARAMS
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
@@ -913,7 +920,7 @@ func TestSign_FeeDivMax_NegativeRejectsInvalidParams(t *testing.T) {
 	// Negative fee_div_max should return rpcINVALID_PARAMS when Fee is
 	// autofilled.
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
@@ -944,7 +951,7 @@ func TestSign_FeeMultMax_FloatRejectsHighFee(t *testing.T) {
 	// Float fee_mult_max should return rpcHIGH_FEE (not rpcINVALID_PARAMS)
 	// when Fee is autofilled. Matches rippled: isInt() false -> rpcHIGH_FEE
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
@@ -975,7 +982,7 @@ func TestSign_FeeMultMax_FloatRejectsHighFee(t *testing.T) {
 func TestSign_FeeMultMax_StringRejectsHighFee(t *testing.T) {
 	// String fee_mult_max should return rpcHIGH_FEE when Fee is autofilled.
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{

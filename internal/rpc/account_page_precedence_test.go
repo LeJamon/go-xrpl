@@ -18,7 +18,7 @@ type accountPageMethod interface {
 	Handle(*types.RpcContext, json.RawMessage) (any, *types.RpcError)
 }
 
-func accountPageContext(services *types.ServiceContainer) *types.RpcContext {
+func accountPageContext(services *types.ServiceGraph) *types.RpcContext {
 	return &types.RpcContext{
 		Context: context.Background(), ApiVersion: types.ApiVersion1,
 		Role: types.RoleGuest, Services: services,

@@ -81,7 +81,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	// existence, signer weights, and quorum are deliberately not checked
 	// here: rippled leaves them to the engine's checkMultiSign
 	// (tefNOT_MULTI_SIGNING / tefBAD_SIGNATURE / tefBAD_QUORUM).
-	if _, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, txAccount, "current"); err != nil {
+	if _, err := ctx.Services.Ledger().GetAccountInfo(ctx.Context, txAccount, "current"); err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorSrcActNotFound("Source account not found.")
 		}
@@ -167,7 +167,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	// Route fail_hard submissions through the optional surface so they
 	// are not held or relayed on non-apply. Mirrors rippled
 	// NetworkOPs.cpp:1685-1689 (`!enforceFailHard`).
-	result, submitErr := submitWithFailHard(ctx.Services.Ledger, txJSON, txBlob, request.FailHard)
+	result, submitErr := submitWithFailHard(ctx.Services.Ledger(), txJSON, txBlob, request.FailHard)
 	if submitErr != nil {
 		return nil, rpcTransactionSubmissionError("submit_multisigned: transaction submission failed", submitErr)
 	}

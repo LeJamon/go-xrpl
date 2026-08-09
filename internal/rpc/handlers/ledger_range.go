@@ -39,7 +39,7 @@ func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, err
 	}
 
-	result, err := ctx.Services.Ledger.GetLedgerRange(ctx.Context, request.StartLedger, request.StopLedger)
+	result, err := ctx.Services.Ledger().GetLedgerRange(ctx.Context, request.StartLedger, request.StopLedger)
 	if err != nil {
 		return nil, rpcInternalError("ledger_range: ledger query failed", err)
 	}

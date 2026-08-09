@@ -38,7 +38,7 @@ func TestDispatchMethodEnforcesConditionMet(t *testing.T) {
 	t.Run("not synced is refused", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: newMockLedgerService()}, // zero serverInfo: disconnected
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: newMockLedgerService()}), // zero serverInfo: disconnected
 		}
 		_, rpcErr := dispatchMethod(reg, nil, ctx.Services, ctx, "gated", nil, types.RpcErrorNoPermission, rpcLog())
 		require.NotNil(t, rpcErr)
@@ -49,7 +49,7 @@ func TestDispatchMethodEnforcesConditionMet(t *testing.T) {
 	t.Run("synced passes", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: syncedStandalone()},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: syncedStandalone()}),
 		}
 		result, rpcErr := dispatchMethod(reg, nil, ctx.Services, ctx, "gated", nil, types.RpcErrorNoPermission, rpcLog())
 		require.Nil(t, rpcErr)

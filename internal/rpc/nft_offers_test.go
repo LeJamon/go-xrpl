@@ -157,10 +157,10 @@ func (m *mockNFTOffersLedgerService) GetClosedLedgerView() (types.LedgerStateVie
 }
 
 // newNFTOffersTestServices builds a per-test ServiceContainer wrapping mock.
-func newNFTOffersTestServices(mock *mockNFTOffersLedgerService) *types.ServiceContainer {
-	return &types.ServiceContainer{
+func newNFTOffersTestServices(mock *mockNFTOffersLedgerService) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger: mock,
-	}
+	})
 }
 
 // nft_buy_offers Tests

@@ -22,13 +22,13 @@ func prepareAccountHistorySubscribe(ctx *types.RpcContext, request types.Subscri
 		return nil, nil
 	}
 	services := rpcServices(ctx)
-	if services == nil || services.Ledger == nil {
+	if services == nil || services.Ledger() == nil {
 		return nil, types.RpcErrorNotEnabled("")
 	}
-	if tables, ok := services.Ledger.(types.TxTablesProvider); ok && !tables.UseTxTables() {
+	if tables, ok := services.Ledger().(types.TxTablesProvider); ok && !tables.UseTxTables() {
 		return nil, types.RpcErrorNotEnabled("")
 	}
-	if services.AccountHistorySubscriptions == nil {
+	if services.AccountHistorySubscriptions() == nil {
 		return nil, types.RpcErrorNotEnabled("")
 	}
 	if ctx != nil {
@@ -39,7 +39,7 @@ func prepareAccountHistorySubscribe(ctx *types.RpcContext, request types.Subscri
 		return nil, rpcErr
 	}
 	return &preparedAccountHistorySubscribe{
-		service: services.AccountHistorySubscriptions,
+		service: services.AccountHistorySubscriptions(),
 		account: account,
 	}, nil
 }
@@ -98,7 +98,7 @@ func prepareAccountHistoryUnsubscribe(ctx *types.RpcContext, request types.Subsc
 	services := rpcServices(ctx)
 	var service types.AccountHistorySubscriptionService
 	if services != nil {
-		service = services.AccountHistorySubscriptions
+		service = services.AccountHistorySubscriptions()
 	}
 	return &preparedAccountHistoryUnsubscribe{
 		service:     service,
@@ -156,19 +156,19 @@ func parseAccountHistoryRequest(request types.SubscriptionRequest, unsubscribe b
 	return account, historyOnly, nil
 }
 
-func rpcServices(ctx *types.RpcContext) *types.ServiceContainer {
+func rpcServices(ctx *types.RpcContext) *types.ServiceGraph {
 	if ctx == nil {
 		return nil
 	}
 	return ctx.Services
 }
 
-func removeAccountHistoryConnection(services *types.ServiceContainer, conn *subscription.Connection) {
-	if services != nil && services.AccountHistorySubscriptions != nil {
-		services.AccountHistorySubscriptions.RemoveConnection(conn)
+func removeAccountHistoryConnection(services *types.ServiceGraph, conn *subscription.Connection) {
+	if services != nil && services.AccountHistorySubscriptions() != nil {
+		services.AccountHistorySubscriptions().RemoveConnection(conn)
 	}
 }
 
-func hasAccountHistorySubscriptions(services *types.ServiceContainer, conn *subscription.Connection) bool {
-	return services != nil && services.AccountHistorySubscriptions != nil && services.AccountHistorySubscriptions.HasSubscriptions(conn)
+func hasAccountHistorySubscriptions(services *types.ServiceGraph, conn *subscription.Connection) bool {
+	return services != nil && services.AccountHistorySubscriptions() != nil && services.AccountHistorySubscriptions().HasSubscriptions(conn)
 }

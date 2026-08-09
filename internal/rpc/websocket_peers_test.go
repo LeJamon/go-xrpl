@@ -22,7 +22,7 @@ func TestWebSocket_PeersRPC_UsesPeerSource(t *testing.T) {
 	}
 
 	ledger := &mockLedgerService{}
-	services := &types.ServiceContainer{Ledger: ledger}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: ledger})
 
 	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Services: services, PeerSource: src})
 

@@ -76,13 +76,14 @@ func TestDispatchGateOrder(t *testing.T) {
 			if c.saturated {
 				services.ClientLoad = saturatedShedder()
 			}
+			graph := types.NewTestServiceGraph(services)
 			ctx := &types.RpcContext{
 				ApiVersion: c.apiVersion,
 				Role:       types.RoleGuest, // non-admin caller
-				Services:   services,
+				Services:   graph,
 			}
 
-			result, rpcErr := dispatchMethod(reg, nil, services, ctx, c.method, nil, types.RpcErrorForbidden, rpcLog())
+			result, rpcErr := dispatchMethod(reg, nil, graph, ctx, c.method, nil, types.RpcErrorForbidden, rpcLog())
 
 			if !c.wantErr {
 				require.Nil(t, rpcErr)
@@ -104,9 +105,10 @@ func TestDispatchGateOrder(t *testing.T) {
 func TestHTTPForbiddenBeatsBusy(t *testing.T) {
 	services := types.NewServiceContainer(nil)
 	services.ClientLoad = types.NewClientLoadShedder()
+	graph := types.NewTestServiceGraph(services)
 	srv := NewServer(ServerOptions{
 		Timeout:  time.Second,
-		Services: services,
+		Services: graph,
 		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
 			"stop": &stubHandler{role: types.RoleAdmin},
 		}),
@@ -153,9 +155,10 @@ func TestHTTPForbiddenBeatsBusy(t *testing.T) {
 // invalid_API_version bare token.
 func TestHTTPKnownMethodUnsupportedVersionIsUnknownCommand(t *testing.T) {
 	services := types.NewServiceContainer(nil)
+	graph := types.NewTestServiceGraph(services)
 	srv := NewServer(ServerOptions{
 		Timeout:  time.Second,
-		Services: services,
+		Services: graph,
 		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
 			"v1only": &stubHandler{role: types.RoleGuest, apiVers: []int{types.ApiVersion1}},
 		}),

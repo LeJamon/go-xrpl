@@ -22,15 +22,17 @@ func (s *Server) withTimeout(parent context.Context) (context.Context, context.C
 	return context.WithTimeout(parent, s.timeout)
 }
 
-func newRpcContext(ctx context.Context, role types.Role, apiVersion int, clientIP string, peers types.PeerSource, services *types.ServiceContainer) *types.RpcContext {
+func newRpcContext(ctx context.Context, role types.Role, apiVersion int, clientIP string, peers types.PeerSource, services *types.ServiceGraph, dispatcher types.MethodDispatcher, urlSubscriptions types.URLSubscriptionService) *types.RpcContext {
 	return &types.RpcContext{
-		Context:    ctx,
-		Role:       role,
-		ApiVersion: apiVersion,
-		ClientIP:   clientIP,
-		ResourceIP: clientIP,
-		PeerSource: peers,
-		Services:   services,
+		Context:          ctx,
+		Role:             role,
+		ApiVersion:       apiVersion,
+		ClientIP:         clientIP,
+		ResourceIP:       clientIP,
+		PeerSource:       peers,
+		Services:         services,
+		Dispatcher:       dispatcher,
+		URLSubscriptions: urlSubscriptions,
 	}
 }
 func redactedRequestMap(request map[string]any) map[string]any {
@@ -121,7 +123,7 @@ func resolveMethod(registry *types.MethodRegistry, method string, apiVersion int
 func dispatchMethod(
 	registry *types.MethodRegistry,
 	manager *resource.Manager,
-	services *types.ServiceContainer,
+	services *types.ServiceGraph,
 	ctx *types.RpcContext,
 	method string,
 	params json.RawMessage,
@@ -160,7 +162,7 @@ func admitMethod(
 }
 func dispatchResolvedMethod(
 	manager *resource.Manager,
-	services *types.ServiceContainer,
+	services *types.ServiceGraph,
 	ctx *types.RpcContext,
 	method string,
 	params json.RawMessage,
@@ -186,8 +188,8 @@ func dispatchResolvedMethod(
 		return nil, rpcErr
 	}
 
-	if services != nil && services.ClientLoad != nil {
-		release := services.ClientLoad.Begin()
+	if services != nil && services.ClientLoad() != nil {
+		release := services.ClientLoad().Begin()
 		defer release()
 	}
 	finishDiagnostics := startRPCDiagnostics(services, method)
@@ -200,11 +202,11 @@ func dispatchResolvedMethod(
 	finalizeLoad(manager, ctx, method, fee, log)
 	return result, rpcErr
 }
-func startRPCDiagnostics(services *types.ServiceContainer, method string) func(bool) {
-	if services == nil || services.RPCDiagnostics == nil {
+func startRPCDiagnostics(services *types.ServiceGraph, method string) func(bool) {
+	if services == nil || services.RPCDiagnostics() == nil {
 		return func(bool) {}
 	}
-	return services.RPCDiagnostics.Start(method)
+	return services.RPCDiagnostics().Start(method)
 }
 func dispatchNestedMethod(
 	registry *types.MethodRegistry,
@@ -278,7 +280,7 @@ func redactStructuredID(params json.RawMessage) json.RawMessage {
 // this request. nil-safe: a request without a service container (routing-only
 // tests) is treated as non-beta.
 func betaEnabled(ctx *types.RpcContext) bool {
-	return ctx.Services != nil && ctx.Services.BetaRPCAPI
+	return ctx.Services != nil && ctx.Services.BetaRPCAPI()
 }
 
 // validateApiVersion enforces the accepted api_version range, mirroring
@@ -324,17 +326,17 @@ func conditionMet(cond types.Condition, ctx *types.RpcContext) *types.RpcError {
 	if cond == types.NoCondition {
 		return nil
 	}
-	if ctx.Services == nil || ctx.Services.Ledger == nil {
+	if ctx.Services == nil || ctx.Services.Ledger() == nil {
 		return nil
 	}
-	svc := ctx.Services.Ledger
+	svc := ctx.Services.Ledger()
 
 	if svc.IsAmendmentBlocked() {
 		return types.NewRpcError(types.RpcAMENDMENT_BLOCKED,
 			"amendmentBlocked", "amendmentBlocked", "Amendment blocked, need upgrade.")
 	}
 
-	if ctx.Services.UNLBlocked != nil && ctx.Services.UNLBlocked() {
+	if ctx.Services.UNLBlocked() != nil && ctx.Services.UNLBlocked()() {
 		return types.NewRpcError(types.RpcEXPIRED_VALIDATOR_LIST,
 			"unlBlocked", "unlBlocked", "Validator list expired.")
 	}

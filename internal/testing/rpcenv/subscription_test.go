@@ -24,7 +24,7 @@ func openSubscriptionWebSocket(t *testing.T) (*rpc.WebSocketServer, *websocket.C
 	env := rpcenv.New(t)
 	ws := rpc.NewWebSocketServer(rpc.WebSocketServerOptions{
 		Timeout:  time.Second,
-		Services: env.Services(),
+		Services: types.NewTestServiceGraph(env.Services()),
 	})
 	httpServer := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
 	client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(httpServer.URL, "http"), nil)

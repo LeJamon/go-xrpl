@@ -93,7 +93,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	}
 
 	setLoadMedium(ctx)
-	result, err := ctx.Services.Ledger.GetAccountTransactions(
+	result, err := ctx.Services.Ledger().GetAccountTransactions(
 		ctx.Context,
 		account,
 		ledgerIndexMin,
@@ -123,7 +123,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 			return entry
 		}
 		entry := &ledgerCacheEntry{}
-		if source, ok := ctx.Services.Ledger.(types.LedgerContextReader); ok {
+		if source, ok := ctx.Services.Ledger().(types.LedgerContextReader); ok {
 			ledgerContext, lookupErr := source.GetLedgerContext(ctx.Context, seq)
 			if lookupErr == nil && ledgerContext != nil {
 				entry.hash = ledgerContext.Hash
@@ -133,7 +133,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 				return entry
 			}
 		}
-		ledger, lookupErr := ctx.Services.Ledger.GetLedgerBySequence(seq)
+		ledger, lookupErr := ctx.Services.Ledger().GetLedgerBySequence(seq)
 		if lookupErr == nil && ledger != nil {
 			entry.hash = ledger.Hash()
 			entry.closeTimeSec = ledger.CloseTime()
@@ -143,7 +143,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		return entry
 	}
 
-	serverInfo := ctx.Services.Ledger.GetServerInfo()
+	serverInfo := ctx.Services.Ledger().GetServerInfo()
 	networkID := serverInfo.NetworkID
 
 	isV2 := ctx.ApiVersion > 1
@@ -365,7 +365,7 @@ func parseAccountTxLedgerSelection(ctx *types.RpcContext, fields map[string]json
 }
 
 func resolveAccountTxLedgerSelection(ctx *types.RpcContext, selection accountTxLedgerSelection) (int64, int64, *types.RpcError) {
-	validatedMin, validatedMax, ok := accountTxValidatedRange(ctx.Services.Ledger.GetServerInfo().CompleteLedgers)
+	validatedMin, validatedMax, ok := accountTxValidatedRange(ctx.Services.Ledger().GetServerInfo().CompleteLedgers)
 	if !ok {
 		if ctx.ApiVersion == types.ApiVersion1 {
 			return 0, 0, types.NewRpcError(types.RpcLGR_IDXS_INVALID, "lgrIdxsInvalid", "lgrIdxsInvalid", "Ledger indexes invalid.")

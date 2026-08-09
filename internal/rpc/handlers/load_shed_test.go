@@ -11,12 +11,12 @@ import (
 func unlimitedCtx(s *types.ClientLoadShedder) *types.RpcContext {
 	return &types.RpcContext{
 		Role:     types.RoleAdmin,
-		Services: &types.ServiceContainer{ClientLoad: s},
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{ClientLoad: s}),
 	}
 }
 
 func gatedCtx(s *types.ClientLoadShedder) *types.RpcContext {
-	return &types.RpcContext{Services: &types.ServiceContainer{ClientLoad: s}}
+	return &types.RpcContext{Services: types.NewTestServiceGraph(&types.ServiceContainer{ClientLoad: s})}
 }
 
 func loadInFlight(s *types.ClientLoadShedder, n int64) {
@@ -29,7 +29,7 @@ func TestGates_NilOrUnwiredIsNoOp(t *testing.T) {
 	for _, ctx := range []*types.RpcContext{
 		nil,
 		{},
-		{Services: &types.ServiceContainer{}},
+		{Services: types.NewTestServiceGraph(&types.ServiceContainer{})},
 	} {
 		if rpcErr := RequireNotBusyClient(ctx); rpcErr != nil {
 			t.Fatalf("RequireNotBusyClient(%v) = %v, want nil", ctx, rpcErr)
@@ -130,9 +130,9 @@ func TestAcquirePathfind_JobCountGate(t *testing.T) {
 }
 
 func TestAcquirePathfind_LocalLoadGateWithoutClientCounter(t *testing.T) {
-	ctx := &types.RpcContext{Services: &types.ServiceContainer{
+	ctx := &types.RpcContext{Services: types.NewTestServiceGraph(&types.ServiceContainer{
 		IsLoadedLocal: func() bool { return true },
-	}}
+	})}
 	if _, rpcErr := acquirePathfind(ctx); rpcErr == nil || rpcErr.ErrorString != "tooBusy" {
 		t.Fatalf("local load should shed without ClientLoad, got %v", rpcErr)
 	}
@@ -142,10 +142,10 @@ func TestAcquirePathfind_UnlimitedBypassesLocalLoad(t *testing.T) {
 	s := types.NewClientLoadShedder()
 	ctx := &types.RpcContext{
 		Role: types.RoleAdmin,
-		Services: &types.ServiceContainer{
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{
 			ClientLoad:    s,
 			IsLoadedLocal: func() bool { return true },
-		},
+		}),
 	}
 	release, rpcErr := acquirePathfind(ctx)
 	if rpcErr != nil {

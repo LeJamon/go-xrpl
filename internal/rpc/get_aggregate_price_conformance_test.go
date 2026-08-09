@@ -279,7 +279,7 @@ func callAggregatePriceError(t *testing.T, service types.LedgerService, request 
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: service},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: service}),
 	}
 	return (&handlers.GetAggregatePriceMethod{}).Handle(ctx, encoded)
 }
@@ -367,7 +367,7 @@ func TestGetAggregatePriceWalksExactlyThreePriorOracleVersions(t *testing.T) {
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: types.ApiVersion1,
-				Services:   &types.ServiceContainer{Ledger: service},
+				Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: service}),
 			}
 			result, rpcErr := (&handlers.GetAggregatePriceMethod{}).Handle(ctx, encoded)
 			if !test.wantFound {
@@ -392,7 +392,7 @@ func callAggregatePrice(t *testing.T, service types.LedgerService, request map[s
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: service},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: service}),
 	}
 	result, rpcErr := (&handlers.GetAggregatePriceMethod{}).Handle(ctx, encoded)
 	require.Nil(t, rpcErr)

@@ -20,15 +20,15 @@ import (
 func channelAuthorizeTestContext(apiVersion int) *types.RpcContext {
 	return &types.RpcContext{
 		ApiVersion: apiVersion,
-		Services: &types.ServiceContainer{
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{
 			Capabilities: types.RPCCapabilities{SigningEnabled: true},
-		},
+		}),
 	}
 }
 
 func TestChannelAuthorizeSigningDisabledPrecedesValidation(t *testing.T) {
 	_, rpcErr := (&handlers.ChannelAuthorizeMethod{}).Handle(
-		&types.RpcContext{ApiVersion: types.ApiVersion2, Services: &types.ServiceContainer{}},
+		&types.RpcContext{ApiVersion: types.ApiVersion2, Services: types.NewTestServiceGraph(&types.ServiceContainer{})},
 		json.RawMessage(`{}`),
 	)
 	require.NotNil(t, rpcErr)

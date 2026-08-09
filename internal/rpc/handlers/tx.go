@@ -67,7 +67,7 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 		if err != nil {
 			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
-		if nodeNet := ctx.Services.Ledger.GetServerInfo().NetworkID; uint32(ctidNetworkID) != nodeNet {
+		if nodeNet := ctx.Services.Ledger().GetServerInfo().NetworkID; uint32(ctidNetworkID) != nodeNet {
 			return nil, types.RpcErrorWrongNetwork(fmt.Sprintf(
 				"Wrong network. You should submit this request to a node running on NetworkID: %d", ctidNetworkID))
 		}
@@ -108,13 +108,13 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 	var searched types.TxSearchResult
 	var err error
 	if hasLedgerRange {
-		if ranged, ok := ctx.Services.Ledger.(types.RangedTransactionLookup); ok {
+		if ranged, ok := ctx.Services.Ledger().(types.RangedTransactionLookup); ok {
 			txInfo, searched, err = ranged.GetTransactionWithRange(ctx.Context, txHash, rangeMin, rangeMax)
 		} else {
-			txInfo, err = ctx.Services.Ledger.GetTransaction(txHash)
+			txInfo, err = ctx.Services.Ledger().GetTransaction(txHash)
 		}
 	} else {
-		txInfo, err = ctx.Services.Ledger.GetTransaction(txHash)
+		txInfo, err = ctx.Services.Ledger().GetTransaction(txHash)
 	}
 	if err != nil && !errors.Is(err, svcerr.ErrTxnNotFound) {
 		if errors.Is(err, svcerr.ErrTxnDataCorrupt) {
@@ -137,7 +137,7 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 	// Resolve close time from the containing ledger
 	closeTimeSec := txInfo.CloseTime
 	if closeTimeSec == 0 && txInfo.LedgerIndex > 0 {
-		if ledger, err := ctx.Services.Ledger.GetLedgerBySequence(txInfo.LedgerIndex); err == nil {
+		if ledger, err := ctx.Services.Ledger().GetLedgerBySequence(txInfo.LedgerIndex); err == nil {
 			closeTimeSec = ledger.CloseTime()
 		}
 	}
@@ -191,7 +191,7 @@ func (m *TxMethod) buildResponse(
 	closeTimeSec int64,
 	binary bool,
 ) map[string]any {
-	networkID := ctx.Services.Ledger.GetServerInfo().NetworkID
+	networkID := ctx.Services.Ledger().GetServerInfo().NetworkID
 	if ctx.ApiVersion > 1 {
 		return m.buildResponseV2(storedTx, txInfo, hashStr, closeTimeSec, binary, networkID)
 	}
@@ -320,7 +320,7 @@ func (m *TxMethod) buildResponseV2(
 
 // lookupByCTID looks up a transaction using a CTID (Compact Transaction ID)
 func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex uint16, binary bool) (any, *types.RpcError) {
-	ledger, err := ctx.Services.Ledger.GetLedgerBySequence(ledgerSeq)
+	ledger, err := ctx.Services.Ledger().GetLedgerBySequence(ledgerSeq)
 	if err != nil {
 		return nil, types.RpcErrorTxnNotFound("Transaction not found.")
 	}
@@ -377,7 +377,7 @@ func (m *TxMethod) ctidResponse(
 		TxIndex:     uint32(txIndex),
 	}
 
-	networkID := uint16(ctx.Services.Ledger.GetServerInfo().NetworkID)
+	networkID := uint16(ctx.Services.Ledger().GetServerInfo().NetworkID)
 	response := m.buildResponse(ctx, storedTx, txInfo, hashStr, closeTimeSec, binary)
 
 	if binary {

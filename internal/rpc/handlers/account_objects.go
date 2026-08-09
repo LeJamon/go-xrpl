@@ -124,7 +124,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		return nil, mErr
 	}
 
-	result, err := ctx.Services.Ledger.GetAccountObjects(ctx.Context, account, ledgerIndex, effectiveType, limit, markerStr)
+	result, err := ctx.Services.Ledger().GetAccountObjects(ctx.Context, account, ledgerIndex, effectiveType, limit, markerStr)
 	if err != nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr

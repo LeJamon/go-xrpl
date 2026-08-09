@@ -33,15 +33,15 @@ func (m *FetchInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	response := make(map[string]any)
 
 	if request.Clear.value {
-		if ctx.Services != nil && ctx.Services.FetchInfoClear != nil {
-			ctx.Services.FetchInfoClear()
+		if ctx.Services != nil && ctx.Services.FetchInfoClear() != nil {
+			ctx.Services.FetchInfoClear()()
 		}
 		response["clear"] = true
 	}
 
 	info := map[string]any{}
-	if ctx.Services != nil && ctx.Services.FetchInfo != nil {
-		if snap := ctx.Services.FetchInfo(); snap != nil {
+	if ctx.Services != nil && ctx.Services.FetchInfo() != nil {
+		if snap := ctx.Services.FetchInfo()(); snap != nil {
 			info = snap
 		}
 	}
@@ -62,8 +62,8 @@ type TxReduceRelayMethod struct{ baseHandler }
 
 func (m *TxReduceRelayMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var metrics types.TxReduceRelayMetrics
-	if ctx.Services != nil && ctx.Services.TxReduceRelayMetrics != nil {
-		metrics = ctx.Services.TxReduceRelayMetrics()
+	if ctx.Services != nil && ctx.Services.TxReduceRelayMetrics() != nil {
+		metrics = ctx.Services.TxReduceRelayMetrics()()
 	}
 	return metrics.JSON(), nil
 }
@@ -80,10 +80,10 @@ func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	// The ledger invariant and standalone guard intentionally precede request
 	// decoding. This preserves rippled's notSynced result for every standalone
 	// request, including malformed parameters.
-	if ctx.Services == nil || ctx.Services.Ledger == nil {
+	if ctx.Services == nil || ctx.Services.Ledger() == nil {
 		return nil, rpcInternalInvariantError("connect: ledger service unavailable")
 	}
-	if ctx.Services.Ledger.IsStandalone() {
+	if ctx.Services.Ledger().IsStandalone() {
 		return nil, types.RpcErrorNotSynced("")
 	}
 
@@ -95,12 +95,12 @@ func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	if !ok || ip.IsUnspecified() {
 		return connectMessage(request.ip, request.port), nil
 	}
-	if ctx.Services.PeerConnect == nil {
+	if ctx.Services.PeerConnect() == nil {
 		return nil, types.RpcErrorNotEnabled("")
 	}
 
 	addr := netip.AddrPortFrom(ip, uint16(request.port)).String()
-	if err := ctx.Services.PeerConnect(addr); err != nil {
+	if err := ctx.Services.PeerConnect()(addr); err != nil {
 		switch {
 		case errors.Is(err, types.ErrPeerConnectQueueFull):
 			return nil, types.RpcErrorTooBusy()
@@ -282,8 +282,8 @@ type UnlListMethod struct{ adminHandler }
 
 func (m *UnlListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	unl := make([]any, 0)
-	if ctx.Services != nil && ctx.Services.ValidatorList != nil {
-		for _, v := range ctx.Services.ValidatorList.ListedValidators() {
+	if ctx.Services != nil && ctx.Services.ValidatorList() != nil {
+		for _, v := range ctx.Services.ValidatorList().ListedValidators() {
 			enc, err := addresscodec.EncodeNodePublicKey(v.MasterKey[:])
 			if err != nil {
 				continue
@@ -317,8 +317,8 @@ func (m *BlackListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		}
 	}
 
-	if ctx.Services != nil && ctx.Services.ResourceBlacklist != nil {
-		if result := ctx.Services.ResourceBlacklist(request.Threshold); result != nil {
+	if ctx.Services != nil && ctx.Services.ResourceBlacklist() != nil {
+		if result := ctx.Services.ResourceBlacklist()(request.Threshold); result != nil {
 			return result, nil
 		}
 	}

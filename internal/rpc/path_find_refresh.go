@@ -360,7 +360,7 @@ func (m *pathFindRefreshManager) pathFindShedder() *types.ClientLoadShedder {
 	if m.ws == nil || m.ws.services == nil {
 		return nil
 	}
-	return m.ws.services.ClientLoad
+	return m.ws.services.ClientLoad()
 }
 
 func (m *pathFindRefreshManager) generationCurrent(generation uint64) bool {

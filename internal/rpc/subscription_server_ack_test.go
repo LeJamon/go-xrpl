@@ -29,7 +29,7 @@ func TestServerSubscriptionInitialAcknowledgement(t *testing.T) {
 	ledger := newMockLedgerServiceServerInfo()
 	ledger.standalone = false
 	ledger.serverState = "validating"
-	services := &types.ServiceContainer{Ledger: ledger, NodePublicKey: testNodePublicKey()}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: ledger, NodePublicKey: testNodePublicKey()})
 	ws := NewWebSocketServer(WebSocketServerOptions{Services: services})
 	request := types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubServer}}
 
@@ -54,14 +54,14 @@ func TestServerSubscriptionInitialAcknowledgement(t *testing.T) {
 }
 
 func TestServerSubscriptionInitialLoadExcludesTxQEscalation(t *testing.T) {
-	services := &types.ServiceContainer{
+	services := types.NewTestServiceGraph(&types.ServiceContainer{
 		LoadFactorFees: func() types.LoadFactorFees {
 			return types.LoadFactorFees{Local: 256, Net: 256, Cluster: 256}
 		},
 		TxQMetrics: func() types.TxQServerMetrics {
 			return types.TxQServerMetrics{ReferenceFeeLevel: 256, OpenLedgerFeeLevel: 1024}
 		},
-	}
+	})
 	ws := NewWebSocketServer(WebSocketServerOptions{Services: services})
 	request := types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubServer}}
 	ack := ws.buildSubscribeAck(&types.RpcContext{Services: services}, request)
@@ -72,15 +72,16 @@ func TestServerSubscriptionInitialLoadExcludesTxQEscalation(t *testing.T) {
 func TestServerSubscriptionStateIsSampledBeforeRegistration(t *testing.T) {
 	for _, transport := range []string{"websocket", "url"} {
 		t.Run(transport, func(t *testing.T) {
-			services := &types.ServiceContainer{}
+			container := &types.ServiceContainer{}
 			var ws *WebSocketServer
-			services.LoadFactorFees = func() types.LoadFactorFees {
+			container.LoadFactorFees = func() types.LoadFactorFees {
 				factor := uint32(256)
 				if ws != nil && ws.subscriptionManager.GetSubscriberCount(types.SubServer) != 0 {
 					factor = 512
 				}
 				return types.LoadFactorFees{Local: factor, Net: factor, Cluster: factor}
 			}
+			services := types.NewTestServiceGraph(container)
 			ws = NewWebSocketServer(WebSocketServerOptions{Services: services})
 			ctx := &types.RpcContext{Services: services, Role: types.RoleAdmin}
 			var ack map[string]any
@@ -112,7 +113,7 @@ func TestServerSubscriptionStateIsSampledBeforeRegistration(t *testing.T) {
 
 func TestMPTBookSnapshotPreservesIssuanceID(t *testing.T) {
 	ledger := &mptSnapshotLedger{mockLedgerService: newMockLedgerService()}
-	services := &types.ServiceContainer{Ledger: ledger}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: ledger})
 	ws := NewWebSocketServer(WebSocketServerOptions{Services: services})
 	const mptID = "00000001C4F149B6F2A4B6A4C4A01C1570C4A040A3D9B221"
 	var request types.SubscriptionRequest

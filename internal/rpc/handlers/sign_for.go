@@ -73,8 +73,8 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	// integral NetworkID, else invalidParams. Unlike sign/submit — which autofill
 	// a missing NetworkID — sign_for rejects, so a multisigner cannot sign for the
 	// wrong network. Mirrors rippled checkNetworkID in transactionSignFor.
-	if ctx.Services != nil && ctx.Services.Ledger != nil {
-		if networkID := ctx.Services.Ledger.GetServerInfo().NetworkID; networkID > 1024 {
+	if ctx.Services != nil && ctx.Services.Ledger() != nil {
+		if networkID := ctx.Services.Ledger().GetServerInfo().NetworkID; networkID > 1024 {
 			v, ok := txMap["NetworkID"]
 			if !ok {
 				return nil, types.RpcErrorMissingField("tx_json.NetworkID")

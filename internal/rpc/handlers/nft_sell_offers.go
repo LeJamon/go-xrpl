@@ -14,5 +14,5 @@ func (m *NftSellOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-	return handleNFTOffers(ctx, params, ctx.Services.Ledger.GetNFTSellOffers)
+	return handleNFTOffers(ctx, params, ctx.Services.Ledger().GetNFTSellOffers)
 }

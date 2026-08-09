@@ -1550,7 +1550,7 @@ func TestWebSocketSnapshot_Single(t *testing.T) {
 			"XRP/": {types.BookOffer{Account: "rOffer1"}, types.BookOffer{Account: "rOffer2"}},
 		},
 	}
-	services := types.NewServiceContainer(mock)
+	services := types.NewTestServiceGraph(types.NewServiceContainer(mock))
 	ws := &WebSocketServer{services: services}
 
 	offers, err := ws.snapshotBook(
@@ -1577,7 +1577,7 @@ func TestWebSocketSnapshot_Both(t *testing.T) {
 			"USD/" + gateway: {types.BookOffer{Account: "rAsk"}},
 		},
 	}
-	services := types.NewServiceContainer(mock)
+	services := types.NewTestServiceGraph(types.NewServiceContainer(mock))
 	ws := &WebSocketServer{services: services}
 	ctx := &types.RpcContext{Context: context.Background(), Services: services}
 
@@ -1596,14 +1596,15 @@ func TestWebSocketSnapshot_Both(t *testing.T) {
 // than constant 256s.
 func TestComputeServerLoad_TracksTxQ(t *testing.T) {
 	mock := newMockLedgerService()
-	services := types.NewServiceContainer(mock)
-	services.TxQMetrics = func() types.TxQServerMetrics {
+	container := types.NewServiceContainer(mock)
+	container.TxQMetrics = func() types.TxQServerMetrics {
 		return types.TxQServerMetrics{
 			ReferenceFeeLevel:     256,
 			MinProcessingFeeLevel: 512,
 			OpenLedgerFeeLevel:    1024,
 		}
 	}
+	services := types.NewTestServiceGraph(container)
 
 	load := handlers.ComputeServerLoad(services)
 	assert.Equal(t, uint64(256), load.LoadBase)
@@ -1618,29 +1619,31 @@ func TestComputeServerLoad_TracksTxQ(t *testing.T) {
 
 func TestComputeServerLoad_UsesServerAndOverallMaxima(t *testing.T) {
 	mock := newMockLedgerService()
-	services := types.NewServiceContainer(mock)
-	services.LoadFactorFees = func() types.LoadFactorFees {
+	container := types.NewServiceContainer(mock)
+	container.LoadFactorFees = func() types.LoadFactorFees {
 		return types.LoadFactorFees{Local: 700, Net: 900, Cluster: 800}
 	}
-	services.TxQMetrics = func() types.TxQServerMetrics {
+	container.TxQMetrics = func() types.TxQServerMetrics {
 		return types.TxQServerMetrics{
 			ReferenceFeeLevel:     256,
 			MinProcessingFeeLevel: 256,
 			OpenLedgerFeeLevel:    600,
 		}
 	}
+	services := types.NewTestServiceGraph(container)
 
 	load := handlers.ComputeServerLoad(services)
 	assert.Equal(t, uint64(900), load.LoadFactorServer)
 	assert.Equal(t, uint64(900), load.LoadFactor)
 
-	services.TxQMetrics = func() types.TxQServerMetrics {
+	container.TxQMetrics = func() types.TxQServerMetrics {
 		return types.TxQServerMetrics{
 			ReferenceFeeLevel:     256,
 			MinProcessingFeeLevel: 256,
 			OpenLedgerFeeLevel:    1200,
 		}
 	}
+	services = types.NewTestServiceGraph(container)
 	load = handlers.ComputeServerLoad(services)
 	assert.Equal(t, uint64(900), load.LoadFactorServer)
 	assert.Equal(t, uint64(1200), load.LoadFactor)

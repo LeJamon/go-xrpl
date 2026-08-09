@@ -60,7 +60,7 @@ func canDeleteParams(t *testing.T, value any) json.RawMessage {
 func runCanDelete(t *testing.T, svc *types.ServiceContainer, params json.RawMessage) (map[string]any, *types.RpcError) {
 	t.Helper()
 	method := &handlers.CanDeleteMethod{}
-	result, rpcErr := method.Handle(adminCtx(svc), params)
+	result, rpcErr := method.Handle(adminCtx(types.NewTestServiceGraph(svc)), params)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}

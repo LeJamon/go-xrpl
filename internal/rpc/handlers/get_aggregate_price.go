@@ -141,7 +141,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 			return nil, types.RpcErrorInvalidParams("Invalid parameters.").WithExtra(lookupFields)
 		}
 
-		entry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, keylet.Oracle(accountID, documentID).Key, ledgerIndex)
+		entry, err := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, keylet.Oracle(accountID, documentID).Key, ledgerIndex)
 		if err != nil {
 			if errors.Is(err, svcerr.ErrLedgerEntryNotFound) {
 				continue
@@ -287,7 +287,7 @@ func iterateAggregatePriceData(ctx *types.RpcContext, initial map[string]any, vi
 		if !ok {
 			return nil
 		}
-		transaction, err := ctx.Services.Ledger.GetTransaction(previousID)
+		transaction, err := ctx.Services.Ledger().GetTransaction(previousID)
 		if err != nil {
 			if errors.Is(err, svcerr.ErrTxnNotFound) || errors.Is(err, svcerr.ErrLedgerNotFound) {
 				return nil

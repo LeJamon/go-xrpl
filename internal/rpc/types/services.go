@@ -2,6 +2,8 @@ package types
 
 import (
 	"context"
+	"fmt"
+	"reflect"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -19,6 +21,22 @@ import (
 // method in `json` to escape per-IP load charging.
 type MethodDispatcher interface {
 	ExecuteMethod(ctx *RpcContext, method string, params []byte) (any, *RpcError)
+}
+
+// Shutdowner requests an orderly node shutdown. The capability is wired before
+// RPC transports are constructed and remains stable for every request.
+type Shutdowner interface {
+	RequestShutdown()
+}
+
+// ShutdownFunc adapts a function to Shutdowner for construction and test
+// fixtures. Production wiring should use a controller that owns the channel.
+type ShutdownFunc func()
+
+func (f ShutdownFunc) RequestShutdown() {
+	if f != nil {
+		f()
+	}
 }
 
 // ValidatorListPublisherInfo is the per-publisher snapshot the
@@ -202,11 +220,9 @@ type ServiceContainer struct {
 	// LedgerService provides ledger operations
 	Ledger LedgerService
 
-	// Dispatcher forwards RPC calls (used by 'json' method)
-	Dispatcher MethodDispatcher
-
-	// ShutdownFunc gracefully stops the server (used by 'stop' method)
-	ShutdownFunc func()
+	// Shutdown requests an orderly node shutdown. It is supplied to the
+	// construction-only builder and copied into the immutable graph.
+	Shutdown Shutdowner
 
 	// NodePublicKey is the base58-encoded node identity public key (e.g. "n9...")
 	NodePublicKey string
@@ -460,14 +476,6 @@ type ServiceContainer struct {
 	// wired — the handler then returns notEnabled, matching rippled's
 	// advisoryDelete() gate.
 	AdvisoryDeleteState AdvisoryDeleteStore
-
-	// URLSubscriptions backs rippled's url-based (RPCSub) admin
-	// subscriptions: subscribe/unsubscribe requests carrying a url are
-	// routed here instead of to a per-connection subscription. Populated by
-	// the WebSocket server, which owns the registry so url subscribers share
-	// the broadcast fan-out with WebSocket connections. Nil when no
-	// WebSocket server is wired — the handlers then report notSupported.
-	URLSubscriptions URLSubscriptionService
 
 	// AccountHistorySubscriptions is the optional provider for rippled's
 	// experimental account_history_tx_stream. Nil means the node cannot perform
@@ -1641,11 +1649,454 @@ type NFTOffersResult struct {
 	Marker      string         `json:"marker,omitempty"` // Only present when more results available
 }
 
-// NewServiceContainer constructs a ServiceContainer wired to the given
-// ledger service. Callers attach the runtime services as components come
-// online.
+type serviceGraphProfile struct {
+	RequireLedger             bool
+	RequireShutdown           bool
+	RequireClientLoad         bool
+	RequireDiagnostics        bool
+	RequireConfig             bool
+	RequireSubscriptionMetric bool
+}
+
+// ServiceGraphBuilder is mutable construction state. It is never passed to a
+// request context or transport; Build returns the only published graph.
+type ServiceGraphBuilder struct {
+	ServiceContainer
+}
+
+// NewServiceContainer constructs the legacy mutable wiring state. New node
+// code should use NewServiceGraphBuilder; this function remains for small
+// fixture setup before NewTestServiceGraph is called.
 func NewServiceContainer(ledger LedgerService) *ServiceContainer {
-	return &ServiceContainer{
-		Ledger: ledger,
+	return &ServiceContainer{Ledger: ledger}
+}
+
+// NewServiceGraphBuilder starts construction with the mandatory ledger
+// dependency. Additional capabilities are attached while startup stages run.
+func NewServiceGraphBuilder(ledger LedgerService) *ServiceGraphBuilder {
+	return &ServiceGraphBuilder{ServiceContainer: ServiceContainer{Ledger: ledger}}
+}
+
+// Build validates the strict production dependency profile and publishes an
+// immutable graph.
+func (b *ServiceGraphBuilder) Build() (*ServiceGraph, error) {
+	return b.buildProfile(serviceGraphProfile{
+		RequireLedger:             true,
+		RequireShutdown:           true,
+		RequireClientLoad:         true,
+		RequireDiagnostics:        true,
+		RequireConfig:             true,
+		RequireSubscriptionMetric: true,
+	})
+}
+
+func (b *ServiceGraphBuilder) buildProfile(profile serviceGraphProfile) (*ServiceGraph, error) {
+	if b == nil {
+		return nil, fmt.Errorf("service graph builder is nil")
 	}
+	if profile.RequireLedger && serviceCapabilityNil(b.Ledger) {
+		return nil, fmt.Errorf("service graph requires a ledger service")
+	}
+	if profile.RequireShutdown && serviceCapabilityNil(b.Shutdown) {
+		return nil, fmt.Errorf("service graph requires a shutdown capability")
+	}
+	if profile.RequireClientLoad && b.ClientLoad == nil {
+		return nil, fmt.Errorf("service graph requires a client-load shedder")
+	}
+	if profile.RequireDiagnostics && serviceCapabilityNil(b.RPCDiagnostics) {
+		return nil, fmt.Errorf("service graph requires RPC diagnostics")
+	}
+	if profile.RequireConfig && b.ServerInfoConfig.Ports == nil {
+		return nil, fmt.Errorf("service graph requires a server configuration snapshot")
+	}
+	if profile.RequireSubscriptionMetric && b.SubscriptionMetrics == nil {
+		return nil, fmt.Errorf("service graph requires subscription metrics")
+	}
+
+	snapshot := cloneServiceContainer(b.ServiceContainer)
+	// These dependencies belong to the transport/request layer, not the
+	// application graph. They are deliberately absent from ServiceContainer.
+	return &ServiceGraph{snapshot: snapshot}, nil
+}
+
+func serviceCapabilityNil(capability any) bool {
+	if capability == nil {
+		return true
+	}
+	value := reflect.ValueOf(capability)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
+// NewTestServiceGraph publishes a sparse graph for handler and transport
+// fixtures. Production validation is exercised through ServiceGraphBuilder.Build.
+func NewTestServiceGraph(services *ServiceContainer) *ServiceGraph {
+	if services == nil {
+		services = &ServiceContainer{}
+	}
+	builder := &ServiceGraphBuilder{ServiceContainer: *services}
+	graph, err := builder.buildProfile(serviceGraphProfile{})
+	if err != nil {
+		panic(err)
+	}
+	return graph
+}
+
+// ServiceGraph is the immutable application capability graph published to
+// RPC contexts and transports. Its state is private; live capabilities may
+// expose their own synchronized operations, but the graph topology cannot be
+// changed after Build returns.
+type ServiceGraph struct {
+	snapshot ServiceContainer
+}
+
+func (g *ServiceGraph) services() *ServiceContainer {
+	if g == nil {
+		return nil
+	}
+	return &g.snapshot
+}
+
+func (g *ServiceGraph) Ledger() LedgerService {
+	if s := g.services(); s != nil {
+		return s.Ledger
+	}
+	return nil
+}
+
+func (g *ServiceGraph) Shutdowner() Shutdowner {
+	if s := g.services(); s != nil {
+		return s.Shutdown
+	}
+	return nil
+}
+
+func (g *ServiceGraph) NodePublicKey() string {
+	if s := g.services(); s != nil {
+		return s.NodePublicKey
+	}
+	return ""
+}
+
+func (g *ServiceGraph) SystemTime() func() time.Time {
+	if s := g.services(); s != nil {
+		return s.SystemTime
+	}
+	return nil
+}
+
+func (g *ServiceGraph) ServerInfoConfig() ServerInfoConfigSnapshot {
+	if s := g.services(); s != nil {
+		return cloneServerInfoConfig(s.ServerInfoConfig)
+	}
+	return ServerInfoConfigSnapshot{}
+}
+
+func (g *ServiceGraph) Capabilities() RPCCapabilities {
+	if s := g.services(); s != nil {
+		return s.Capabilities
+	}
+	return RPCCapabilities{}
+}
+
+func (g *ServiceGraph) LastCloseInfo() func() (int, int) {
+	if s := g.services(); s != nil {
+		return s.LastCloseInfo
+	}
+	return nil
+}
+
+func (g *ServiceGraph) ConsensusInfo() func(bool) map[string]any {
+	if s := g.services(); s != nil {
+		return s.ConsensusInfo
+	}
+	return nil
+}
+
+func (g *ServiceGraph) Manifests() ManifestLookup {
+	if s := g.services(); s != nil {
+		return s.Manifests
+	}
+	return nil
+}
+
+func (g *ServiceGraph) ValidatorPublicKey() []byte {
+	if s := g.services(); s != nil {
+		return append([]byte(nil), s.ValidatorPublicKey...)
+	}
+	return nil
+}
+
+func (g *ServiceGraph) ValidationQuorum() func() int {
+	if s := g.services(); s != nil {
+		return s.ValidationQuorum
+	}
+	return nil
+}
+
+func (g *ServiceGraph) ValidatorList() ValidatorListReader {
+	if s := g.services(); s != nil {
+		return s.ValidatorList
+	}
+	return nil
+}
+
+func (g *ServiceGraph) LocalStaticTrustedKeysBase58() func() []string {
+	if s := g.services(); s != nil {
+		return s.LocalStaticTrustedKeysBase58
+	}
+	return nil
+}
+
+func (g *ServiceGraph) TrustedValidatorKeysBase58() func() []string {
+	if s := g.services(); s != nil {
+		return s.TrustedValidatorKeysBase58
+	}
+	return nil
+}
+
+func (g *ServiceGraph) SigningKeysBase58() func() map[string]string {
+	if s := g.services(); s != nil {
+		return s.SigningKeysBase58
+	}
+	return nil
+}
+
+func (g *ServiceGraph) NegativeUNLBase58() func() []string {
+	if s := g.services(); s != nil {
+		return s.NegativeUNLBase58
+	}
+	return nil
+}
+
+func (g *ServiceGraph) BetaRPCAPI() bool {
+	if s := g.services(); s != nil {
+		return s.BetaRPCAPI
+	}
+	return false
+}
+
+func (g *ServiceGraph) TxQMetrics() func() TxQServerMetrics {
+	if s := g.services(); s != nil {
+		return s.TxQMetrics
+	}
+	return nil
+}
+
+func (g *ServiceGraph) TxQFeeMetrics() func() TxQFeeMetrics {
+	if s := g.services(); s != nil {
+		return s.TxQFeeMetrics
+	}
+	return nil
+}
+
+func (g *ServiceGraph) JqTransOverflow() func() uint64 {
+	if s := g.services(); s != nil {
+		return s.JqTransOverflow
+	}
+	return nil
+}
+
+func (g *ServiceGraph) PeerDisconnects() func() (uint64, uint64) {
+	if s := g.services(); s != nil {
+		return s.PeerDisconnects
+	}
+	return nil
+}
+
+func (g *ServiceGraph) PeerReservationAdd() func(string, string) (string, bool, error) {
+	if s := g.services(); s != nil {
+		return s.PeerReservationAdd
+	}
+	return nil
+}
+
+func (g *ServiceGraph) PeerReservationDel() func(string) (string, bool, error) {
+	if s := g.services(); s != nil {
+		return s.PeerReservationDel
+	}
+	return nil
+}
+
+func (g *ServiceGraph) PeerReservationList() func() []PeerReservationEntry {
+	if s := g.services(); s != nil {
+		return s.PeerReservationList
+	}
+	return nil
+}
+
+func (g *ServiceGraph) PeerConnect() func(string) error {
+	if s := g.services(); s != nil {
+		return s.PeerConnect
+	}
+	return nil
+}
+
+func (g *ServiceGraph) ResourceBlacklist() func(*int) map[string]any {
+	if s := g.services(); s != nil {
+		return s.ResourceBlacklist
+	}
+	return nil
+}
+
+func (g *ServiceGraph) StateAccounting() func() StateAccountingSnapshot {
+	if s := g.services(); s != nil {
+		return s.StateAccounting
+	}
+	return nil
+}
+
+func (g *ServiceGraph) CloseTimeOffset() func() time.Duration {
+	if s := g.services(); s != nil {
+		return s.CloseTimeOffset
+	}
+	return nil
+}
+
+func (g *ServiceGraph) FetchPackCacheSize() func() uint32 {
+	if s := g.services(); s != nil {
+		return s.FetchPackCacheSize
+	}
+	return nil
+}
+
+func (g *ServiceGraph) LoadFactorFees() func() LoadFactorFees {
+	if s := g.services(); s != nil {
+		return s.LoadFactorFees
+	}
+	return nil
+}
+
+func (g *ServiceGraph) IsLoadedCluster() func() bool {
+	if s := g.services(); s != nil {
+		return s.IsLoadedCluster
+	}
+	return nil
+}
+
+func (g *ServiceGraph) IsLoadedLocal() func() bool {
+	if s := g.services(); s != nil {
+		return s.IsLoadedLocal
+	}
+	return nil
+}
+
+func (g *ServiceGraph) ClientLoad() *ClientLoadShedder {
+	if s := g.services(); s != nil {
+		return s.ClientLoad
+	}
+	return nil
+}
+
+func (g *ServiceGraph) RPCDiagnostics() RPCDiagnostics {
+	if s := g.services(); s != nil {
+		return s.RPCDiagnostics
+	}
+	return nil
+}
+
+func (g *ServiceGraph) SubscriptionMetrics() func() SubscriptionMetrics {
+	if s := g.services(); s != nil {
+		return s.SubscriptionMetrics
+	}
+	return nil
+}
+
+func (g *ServiceGraph) GetCounts() func() CountsResult {
+	if s := g.services(); s != nil {
+		return s.GetCounts
+	}
+	return nil
+}
+
+func (g *ServiceGraph) TxReduceRelayMetrics() func() TxReduceRelayMetrics {
+	if s := g.services(); s != nil {
+		return s.TxReduceRelayMetrics
+	}
+	return nil
+}
+
+func (g *ServiceGraph) FetchInfo() func() map[string]any {
+	if s := g.services(); s != nil {
+		return s.FetchInfo
+	}
+	return nil
+}
+
+func (g *ServiceGraph) FetchInfoClear() func() {
+	if s := g.services(); s != nil {
+		return s.FetchInfoClear
+	}
+	return nil
+}
+
+func (g *ServiceGraph) RequestLedger() func([32]byte, uint32) (map[string]any, bool, bool) {
+	if s := g.services(); s != nil {
+		return s.RequestLedger
+	}
+	return nil
+}
+
+func (g *ServiceGraph) LedgerCleanerConfigure() func(LedgerCleanerParams) LedgerCleanerStatus {
+	if s := g.services(); s != nil {
+		return s.LedgerCleanerConfigure
+	}
+	return nil
+}
+
+func (g *ServiceGraph) LedgerCleanerStatusFn() func() LedgerCleanerStatus {
+	if s := g.services(); s != nil {
+		return s.LedgerCleanerStatusFn
+	}
+	return nil
+}
+
+func (g *ServiceGraph) UNLBlocked() func() bool {
+	if s := g.services(); s != nil {
+		return s.UNLBlocked
+	}
+	return nil
+}
+
+func (g *ServiceGraph) AdvisoryDeleteState() AdvisoryDeleteStore {
+	if s := g.services(); s != nil {
+		return s.AdvisoryDeleteState
+	}
+	return nil
+}
+
+func (g *ServiceGraph) AccountHistorySubscriptions() AccountHistorySubscriptionService {
+	if s := g.services(); s != nil {
+		return s.AccountHistorySubscriptions
+	}
+	return nil
+}
+
+func (g *ServiceGraph) QueueAccountTxs() func([20]byte) []QueuedTxInfo {
+	if s := g.services(); s != nil {
+		return s.QueueAccountTxs
+	}
+	return nil
+}
+
+func (g *ServiceGraph) QueueAllTxs() func() []QueuedTxInfo {
+	if s := g.services(); s != nil {
+		return s.QueueAllTxs
+	}
+	return nil
+}
+
+func cloneServiceContainer(input ServiceContainer) ServiceContainer {
+	input.ValidatorPublicKey = append([]byte(nil), input.ValidatorPublicKey...)
+	input.ServerInfoConfig = cloneServerInfoConfig(input.ServerInfoConfig)
+	return input
+}
+
+func cloneServerInfoConfig(input ServerInfoConfigSnapshot) ServerInfoConfigSnapshot {
+	input.Ports = append([]ServerInfoPortSnapshot(nil), input.Ports...)
+	return input
 }

@@ -170,8 +170,8 @@ func (m *mockAccountLinesLedgerService) GetClosedLedgerView() (types.LedgerState
 }
 
 // newAccountLinesTestServices builds a *types.ServiceContainer wrapping the mock.
-func newAccountLinesTestServices(mock *mockAccountLinesLedgerService) *types.ServiceContainer {
-	return &types.ServiceContainer{Ledger: mock}
+func newAccountLinesTestServices(mock *mockAccountLinesLedgerService) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 }
 
 // TestAccountLinesErrorValidation tests error handling for invalid inputs
@@ -1257,7 +1257,7 @@ func TestAccountLinesServiceNilLedger(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: nil},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 	}
 
 	params := map[string]any{

@@ -19,7 +19,7 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-	return handleNFTOffers(ctx, params, ctx.Services.Ledger.GetNFTBuyOffers)
+	return handleNFTOffers(ctx, params, ctx.Services.Ledger().GetNFTBuyOffers)
 }
 
 // handleNFTOffers is the shared nft_buy_offers / nft_sell_offers flow; the only

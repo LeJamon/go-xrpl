@@ -259,10 +259,19 @@ func (m *mockLedgerServiceSubmit) StoreTransaction(txHash [32]byte, txData []byt
 }
 
 // newSubmitTestServices builds a per-test ServiceContainer wrapping mock.
-func newSubmitTestServices(mock *mockLedgerServiceSubmit) *types.ServiceContainer {
-	return &types.ServiceContainer{
+func newSubmitTestServices(mock *mockLedgerServiceSubmit) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger: mock,
-	}
+	})
+}
+
+func newSubmitSigningTestServices(mock *mockLedgerServiceSubmit) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{
+		Ledger: mock,
+		Capabilities: types.RPCCapabilities{
+			SigningEnabled: true,
+		},
+	})
 }
 
 func rawSubmitParams(t *testing.T, txJSON map[string]any, extra map[string]any) json.RawMessage {
@@ -991,7 +1000,7 @@ func TestSubmitMethodServiceNilLedger(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: nil},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 	}
 
 	paramsJSON := rawSubmitParams(t, map[string]any{
@@ -1229,8 +1238,7 @@ func TestSubmitMethodOptionalParams(t *testing.T) {
 // the key, signs the transaction, and submits the signed blob.
 func TestSubmitMethodSigningCredentials(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	services := newSubmitTestServices(mock)
-	services.Capabilities.SigningEnabled = true
+	services := newSubmitSigningTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
 	ctx := &types.RpcContext{
@@ -1342,8 +1350,7 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 
 func TestSubmitMethodEmptyCredentialIsPresent(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	services := newSubmitTestServices(mock)
-	services.Capabilities.SigningEnabled = true
+	services := newSubmitSigningTestServices(mock)
 	params := json.RawMessage(`{
 		"tx_json": {
 			"TransactionType": "Payment",
@@ -1371,8 +1378,7 @@ func TestSubmitMethodEmptyCredentialIsPresent(t *testing.T) {
 
 func TestSubmitMethodMissingTxJSONPreservesCredentialPrecedence(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	services := newSubmitTestServices(mock)
-	services.Capabilities.SigningEnabled = true
+	services := newSubmitSigningTestServices(mock)
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
@@ -1417,8 +1423,7 @@ func TestSubmitMethodMissingTxJSONPreservesCredentialPrecedence(t *testing.T) {
 // API v2 should include "hash" at the root level of the response.
 func TestSubmitMethodApiV2Response(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	services := newSubmitTestServices(mock)
-	services.Capabilities.SigningEnabled = true
+	services := newSubmitSigningTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
 
@@ -1524,8 +1529,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 // For API v2+: Amount is removed, DeliverMax replaces it.
 func TestSubmitMethodDeliverMax(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
-	services := newSubmitTestServices(mock)
-	services.Capabilities.SigningEnabled = true
+	services := newSubmitSigningTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
 

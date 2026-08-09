@@ -113,7 +113,7 @@ func TestHTTPBatchAdminDenialForbidden(t *testing.T) {
 			"ping": echoHandler(),
 		}),
 		timeout:  time.Second,
-		services: types.NewServiceContainer(nil),
+		services: types.NewTestServiceGraph(types.NewServiceContainer(nil)),
 	}
 
 	body := `{"method":"batch","params":[

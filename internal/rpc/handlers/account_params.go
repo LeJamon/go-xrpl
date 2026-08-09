@@ -39,7 +39,7 @@ func rawJSONBool(raw json.RawMessage) (bool, bool) {
 }
 
 func requireAccountExists(ctx *types.RpcContext, account, ledgerIndex string) *types.RpcError {
-	_, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, account, ledgerIndex)
+	_, err := ctx.Services.Ledger().GetAccountInfo(ctx.Context, account, ledgerIndex)
 	if err == nil {
 		return nil
 	}

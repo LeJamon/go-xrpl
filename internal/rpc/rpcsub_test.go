@@ -91,37 +91,42 @@ func (s *rpcSubSink) expectNone(t *testing.T) {
 	}
 }
 
-// newRPCSubTestServer builds a WebSocket server whose service container
-// carries the url-subscription registry, plus admin/guest contexts for
-// driving the plain JSON-RPC handlers.
-func newRPCSubTestServer(t *testing.T) (*WebSocketServer, *types.ServiceContainer) {
+type rpcSubTestServices struct {
+	graph *types.ServiceGraph
+	url   types.URLSubscriptionService
+}
+
+// newRPCSubTestServer builds a WebSocket server and the explicit request
+// dependencies used by the plain JSON-RPC handlers.
+func newRPCSubTestServer(t *testing.T) (*WebSocketServer, *rpcSubTestServices) {
 	return newRPCSubTestServerWithProvider(t, nil)
 }
 
-func newRPCSubTestServerWithProvider(t *testing.T, provider types.LedgerInfoProvider) (*WebSocketServer, *types.ServiceContainer) {
+func newRPCSubTestServerWithProvider(t *testing.T, provider types.LedgerInfoProvider) (*WebSocketServer, *rpcSubTestServices) {
 	t.Helper()
-	services := types.NewServiceContainer(nil)
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second, Services: services, LedgerInfoProvider: provider})
-	services.URLSubscriptions = ws.URLSubscriptionService()
-	require.NotNil(t, services.URLSubscriptions, "composition must expose the url registry explicitly")
-	return ws, services
+	graph := types.NewTestServiceGraph(types.NewServiceContainer(nil))
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second, Services: graph, LedgerInfoProvider: provider})
+	url := ws.URLSubscriptionService()
+	require.NotNil(t, url, "composition must expose the url registry explicitly")
+	return ws, &rpcSubTestServices{graph: graph, url: url}
 }
 
-func adminCtx(services *types.ServiceContainer) *types.RpcContext {
+func adminCtx(services *rpcSubTestServices) *types.RpcContext {
 	return &types.RpcContext{
-		Role:       types.RoleAdmin,
-		ApiVersion: types.ApiVersion1,
-		Services:   services,
+		Role:             types.RoleAdmin,
+		ApiVersion:       types.ApiVersion1,
+		Services:         services.graph,
+		URLSubscriptions: services.url,
 	}
 }
 
-func subscribeURL(t *testing.T, services *types.ServiceContainer, params string) (any, *types.RpcError) {
+func subscribeURL(t *testing.T, services *rpcSubTestServices, params string) (any, *types.RpcError) {
 	t.Helper()
 	method := &handlers.SubscribeMethod{}
 	return method.Handle(adminCtx(services), json.RawMessage(params))
 }
 
-func unsubscribeURL(t *testing.T, services *types.ServiceContainer, params string) (any, *types.RpcError) {
+func unsubscribeURL(t *testing.T, services *rpcSubTestServices, params string) (any, *types.RpcError) {
 	t.Helper()
 	method := &handlers.UnsubscribeMethod{}
 	return method.Handle(adminCtx(services), json.RawMessage(params))

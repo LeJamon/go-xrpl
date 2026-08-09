@@ -2,9 +2,91 @@ package types
 
 import (
 	"context"
+	"reflect"
 	"sync"
 	"testing"
 )
+
+type serviceGraphLedger struct{ LedgerService }
+
+type serviceGraphDiagnostics struct{}
+
+func (serviceGraphDiagnostics) Start(string) func(bool) { return func(bool) {} }
+func (serviceGraphDiagnostics) Snapshot() RPCDiagnosticsSnapshot {
+	return RPCDiagnosticsSnapshot{}
+}
+
+func completeServiceGraphBuilder() *ServiceGraphBuilder {
+	return &ServiceGraphBuilder{ServiceContainer: ServiceContainer{
+		Ledger:              &serviceGraphLedger{},
+		Shutdown:            ShutdownFunc(func() {}),
+		ClientLoad:          NewClientLoadShedder(),
+		RPCDiagnostics:      serviceGraphDiagnostics{},
+		ServerInfoConfig:    ServerInfoConfigSnapshot{Ports: []ServerInfoPortSnapshot{}},
+		SubscriptionMetrics: func() SubscriptionMetrics { return SubscriptionMetrics{} },
+	}}
+}
+
+func TestServiceGraphBuildValidatesProductionDependencies(t *testing.T) {
+	if _, err := completeServiceGraphBuilder().Build(); err != nil {
+		t.Fatalf("complete graph build: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		remove func(*ServiceGraphBuilder)
+	}{
+		{name: "ledger", remove: func(b *ServiceGraphBuilder) { b.Ledger = nil }},
+		{name: "typed nil ledger", remove: func(b *ServiceGraphBuilder) { b.Ledger = (*serviceGraphLedger)(nil) }},
+		{name: "shutdown", remove: func(b *ServiceGraphBuilder) { b.Shutdown = nil }},
+		{name: "typed nil shutdown", remove: func(b *ServiceGraphBuilder) { b.Shutdown = ShutdownFunc(nil) }},
+		{name: "client load", remove: func(b *ServiceGraphBuilder) { b.ClientLoad = nil }},
+		{name: "diagnostics", remove: func(b *ServiceGraphBuilder) { b.RPCDiagnostics = nil }},
+		{name: "typed nil diagnostics", remove: func(b *ServiceGraphBuilder) { b.RPCDiagnostics = (*serviceGraphDiagnostics)(nil) }},
+		{name: "configuration", remove: func(b *ServiceGraphBuilder) { b.ServerInfoConfig.Ports = nil }},
+		{name: "subscription metrics", remove: func(b *ServiceGraphBuilder) { b.SubscriptionMetrics = nil }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder := completeServiceGraphBuilder()
+			test.remove(builder)
+			if _, err := builder.Build(); err == nil {
+				t.Fatal("incomplete production graph unexpectedly built")
+			}
+		})
+	}
+}
+
+func TestServiceGraphBuildCopiesTopologyAndSnapshots(t *testing.T) {
+	firstLedger := &serviceGraphLedger{}
+	secondLedger := &serviceGraphLedger{}
+	builder := completeServiceGraphBuilder()
+	builder.Ledger = firstLedger
+	builder.ValidatorPublicKey = []byte{1, 2, 3}
+	builder.ServerInfoConfig.Ports = []ServerInfoPortSnapshot{{Port: 5005, Protocol: "http"}}
+
+	graph, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder.Ledger = secondLedger
+	builder.ValidatorPublicKey[0] = 9
+	builder.ServerInfoConfig.Ports[0].Port = 6006
+
+	if graph.Ledger() != firstLedger {
+		t.Fatal("builder mutation changed the published ledger capability")
+	}
+	key := graph.ValidatorPublicKey()
+	config := graph.ServerInfoConfig()
+	if !reflect.DeepEqual(key, []byte{1, 2, 3}) || config.Ports[0].Port != 5005 {
+		t.Fatalf("published snapshots changed: key=%v config=%+v", key, config)
+	}
+	key[0] = 8
+	config.Ports[0].Port = 7007
+	if graph.ValidatorPublicKey()[0] != 1 || graph.ServerInfoConfig().Ports[0].Port != 5005 {
+		t.Fatal("accessors exposed mutable snapshot storage")
+	}
+}
 
 func TestClientLoadShedderReleaseOwnership(t *testing.T) {
 	var shedder ClientLoadShedder

@@ -216,10 +216,10 @@ func (m *mockDepositAuthorizedLedgerService) GetClosedLedgerView() (types.Ledger
 }
 
 // newDepositAuthorizedTestServices builds a per-test ServiceContainer wrapping mock.
-func newDepositAuthorizedTestServices(mock *mockDepositAuthorizedLedgerService) *types.ServiceContainer {
-	return &types.ServiceContainer{
+func newDepositAuthorizedTestServices(mock *mockDepositAuthorizedLedgerService) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger: mock,
-	}
+	})
 }
 
 // Error Validation Tests

@@ -174,10 +174,10 @@ func (m *mockGatewayBalancesLedgerService) GetClosedLedgerView() (types.LedgerSt
 }
 
 // newGatewayBalancesTestServices builds a per-test ServiceContainer wrapping mock.
-func newGatewayBalancesTestServices(mock *mockGatewayBalancesLedgerService) *types.ServiceContainer {
-	return &types.ServiceContainer{
+func newGatewayBalancesTestServices(mock *mockGatewayBalancesLedgerService) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger: mock,
-	}
+	})
 }
 
 // TestGatewayBalancesErrorValidation tests error handling for invalid inputs

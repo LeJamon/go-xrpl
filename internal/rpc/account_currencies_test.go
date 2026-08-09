@@ -176,8 +176,8 @@ func (m *mockAccountCurrenciesLedgerService) GetClosedLedgerView() (types.Ledger
 }
 
 // newAccountCurrenciesTestServices builds a *types.ServiceContainer wrapping the mock.
-func newAccountCurrenciesTestServices(mock *mockAccountCurrenciesLedgerService) *types.ServiceContainer {
-	return &types.ServiceContainer{Ledger: mock}
+func newAccountCurrenciesTestServices(mock *mockAccountCurrenciesLedgerService) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 }
 
 // TestAccountCurrenciesBadInput tests error handling for invalid inputs

@@ -25,7 +25,7 @@ func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Contex
 			"error":   makeBatchJSONError(rpcMethodNotFoundCode, "Method not found"),
 		}
 	}
-	ctx := newRpcContext(baseCtx, role, types.DefaultApiVersion, clientIP, s.loadPeerSource(), s.services)
+	ctx := newRpcContext(baseCtx, role, types.DefaultApiVersion, clientIP, s.loadPeerSource(), s.services, s, s.urlSubscriptions)
 	ctx.ResourceIP = resourceIP
 	if ver, ok := apiVersionFromBatchElement(el); ok {
 		ctx.ApiVersion = ver

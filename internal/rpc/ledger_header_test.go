@@ -47,7 +47,7 @@ func TestLedgerHeaderBasicRequest(t *testing.T) {
 		}
 		return nil, errors.New("ledger not found")
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerHeaderMethod{}
 	ctx := &types.RpcContext{
@@ -226,7 +226,7 @@ func TestLedgerHeaderBinaryFormat(t *testing.T) {
 	mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
 		return reader, nil
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerHeaderMethod{}
 	ctx := &types.RpcContext{
@@ -310,7 +310,7 @@ func TestLedgerHeaderHashFormat(t *testing.T) {
 	mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
 		return reader, nil
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerHeaderMethod{}
 	ctx := &types.RpcContext{
@@ -353,7 +353,7 @@ func TestLedgerHeaderBadInput(t *testing.T) {
 		}
 		return nil, errors.New("ledger not found")
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerHeaderMethod{}
 	ctx := &types.RpcContext{
@@ -419,7 +419,7 @@ func TestLedgerHeaderOpenLedger(t *testing.T) {
 		}
 		return nil, errors.New("not found")
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerHeaderMethod{}
 	ctx := &types.RpcContext{
@@ -466,7 +466,7 @@ func TestLedgerHeaderProductionOpenRootsAndFlags(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: rpcadapter.NewLedgerServiceAdapter(svc)},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: rpcadapter.NewLedgerServiceAdapter(svc)}),
 	}
 	result, rpcErr := (&handlers.LedgerHeaderMethod{}).Handle(ctx, json.RawMessage(`{"ledger_index":"current"}`))
 	require.Nil(t, rpcErr)
@@ -502,7 +502,7 @@ func TestLedgerHeaderCloseTimeEstimated(t *testing.T) {
 	mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
 		return reader, nil
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerHeaderMethod{}
 	ctx := &types.RpcContext{
@@ -564,7 +564,7 @@ func TestLedgerHeaderServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)

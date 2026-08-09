@@ -97,10 +97,10 @@ func (m *mockLedgerServiceSimulate) GetAutofillSequence(account string, hasTicke
 	return m.autofillSeq, nil
 }
 
-func newSimulateTestServices(mock *mockLedgerServiceSimulate) *types.ServiceContainer {
-	return &types.ServiceContainer{
+func newSimulateTestServices(mock *mockLedgerServiceSimulate) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger: mock,
-	}
+	})
 }
 
 // validAccountAddress is a well-known XRPL genesis account used in tests.

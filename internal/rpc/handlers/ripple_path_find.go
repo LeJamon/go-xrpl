@@ -72,8 +72,8 @@ func (m *ripplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	var view types.LedgerStateView
 	var meta *pathFindLedgerMeta
 	var rpcErr *types.RpcError
-	standalone := ctx != nil && ctx.Services != nil && ctx.Services.Ledger != nil &&
-		ctx.Services.Ledger.GetServerInfo().Standalone
+	standalone := ctx != nil && ctx.Services != nil && ctx.Services.Ledger() != nil &&
+		ctx.Services.Ledger().GetServerInfo().Standalone
 	usesLookup := hasLedgerSelector || standalone
 	if usesLookup {
 		view, meta, rpcErr = resolvePathFindLedger(ctx, ledgerSpec, true)
@@ -86,7 +86,7 @@ func (m *ripplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		}
 		defer release()
 	} else {
-		if types.ValidatedLedgerStale(ctx.Services.Ledger.GetServerInfo()) {
+		if types.ValidatedLedgerStale(ctx.Services.Ledger().GetServerInfo()) {
 			if ctx.ApiVersion == types.ApiVersion1 {
 				return nil, types.RpcErrorNoNetwork("")
 			}
@@ -432,7 +432,7 @@ func resolvePathFindLedger(
 	hasSelector bool,
 ) (types.LedgerStateView, *pathFindLedgerMeta, *types.RpcError) {
 	if !hasSelector {
-		view, err := ctx.Services.Ledger.GetClosedLedgerView()
+		view, err := ctx.Services.Ledger().GetClosedLedgerView()
 		if err != nil {
 			return nil, nil, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent", "Current ledger is unavailable.")
 		}
@@ -443,7 +443,7 @@ func resolvePathFindLedger(
 		return nil, nil, rpcErr
 	}
 
-	source, ok := ctx.Services.Ledger.(types.LedgerViewSource)
+	source, ok := ctx.Services.Ledger().(types.LedgerViewSource)
 	if !ok {
 		return nil, nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 	}
@@ -458,7 +458,7 @@ func resolvePathFindLedger(
 		return selected, view != nil && reader != nil, err
 	}
 	validated := func() (selectedPathFindLedger, bool, error) {
-		sequence := ctx.Services.Ledger.GetValidatedLedgerIndex()
+		sequence := ctx.Services.Ledger().GetValidatedLedgerIndex()
 		if sequence == 0 {
 			return selectedPathFindLedger{}, false, nil
 		}
@@ -466,10 +466,10 @@ func resolvePathFindLedger(
 	}
 	resolved, err := ledgerselector.Resolve(selection, ledgerselector.Callbacks[selectedPathFindLedger]{
 		Current: func() (selectedPathFindLedger, bool, error) {
-			return bySequence(ctx.Services.Ledger.GetCurrentLedgerIndex())
+			return bySequence(ctx.Services.Ledger().GetCurrentLedgerIndex())
 		},
 		Closed: func() (selectedPathFindLedger, bool, error) {
-			return bySequence(ctx.Services.Ledger.GetClosedLedgerIndex())
+			return bySequence(ctx.Services.Ledger().GetClosedLedgerIndex())
 		},
 		Validated:  validated,
 		BySequence: bySequence,

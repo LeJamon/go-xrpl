@@ -53,8 +53,8 @@ func (m *accountTxMock) GetLedgerByHash(hash [32]byte) (types.LedgerReader, erro
 }
 
 // newTestServicesAccountTx builds a *types.ServiceContainer wrapping the mock.
-func newTestServicesAccountTx(mock *accountTxMock) *types.ServiceContainer {
-	return &types.ServiceContainer{Ledger: mock}
+func newTestServicesAccountTx(mock *accountTxMock) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 }
 
 func TestAccountTxDeliveredAmountHistoricalContext(t *testing.T) {
@@ -1479,7 +1479,7 @@ func TestAccountTxServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)

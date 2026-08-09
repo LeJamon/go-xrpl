@@ -378,11 +378,11 @@ func ledgerRequestHasSelector(params json.RawMessage) (bool, *types.RpcError) {
 }
 
 func ledgerDefaultResponse(ctx *types.RpcContext) (map[string]any, *types.RpcError) {
-	closed, err := ctx.Services.Ledger.GetLedgerBySequence(ctx.Services.Ledger.GetClosedLedgerIndex())
+	closed, err := ctx.Services.Ledger().GetLedgerBySequence(ctx.Services.Ledger().GetClosedLedgerIndex())
 	if err != nil || closed == nil {
 		return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 	}
-	open, err := ctx.Services.Ledger.GetLedgerBySequence(ctx.Services.Ledger.GetCurrentLedgerIndex())
+	open, err := ctx.Services.Ledger().GetLedgerBySequence(ctx.Services.Ledger().GetCurrentLedgerIndex())
 	if err != nil || open == nil {
 		return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 	}
@@ -397,7 +397,7 @@ func ledgerDefaultResponse(ctx *types.RpcContext) (map[string]any, *types.RpcErr
 // Missing capabilities, lookup failures, and nil results are operational
 // errors because silently omitting owner_funds would produce a partial reply.
 func ownerFundsLedgerView(ctx *types.RpcContext, l types.LedgerReader) (types.LedgerStateView, error) {
-	src, ok := ctx.Services.Ledger.(types.LedgerViewSource)
+	src, ok := ctx.Services.Ledger().(types.LedgerViewSource)
 	if !ok {
 		return nil, errors.New("ledger service does not expose state views")
 	}
@@ -446,7 +446,7 @@ func (a *ledgerOwnerFundsAnnotator) annotate(txEntry, txJSON map[string]any) (bo
 		a.view = view
 	}
 	if needsReserves && !a.reservesRead {
-		_, fallbackBase, fallbackInc := a.ctx.Services.Ledger.GetCurrentFees()
+		_, fallbackBase, fallbackInc := a.ctx.Services.Ledger().GetCurrentFees()
 		reserveBase, reserveInc, err := reserveSettingsFromLedger(a.view, fallbackBase, fallbackInc)
 		if err != nil {
 			return false, fmt.Errorf("owner_funds reserve lookup: %w", err)
@@ -560,7 +560,7 @@ func dumpAccountState(ctx *types.RpcContext, l types.LedgerReader, binary, expan
 		limit = limitLedgerDataBinary.Default
 	}
 	for {
-		result, err := ctx.Services.Ledger.GetLedgerData(ctx.Context, ledgerIndex, limit, marker)
+		result, err := ctx.Services.Ledger().GetLedgerData(ctx.Context, ledgerIndex, limit, marker)
 		if err != nil {
 			return nil, err
 		}
@@ -591,10 +591,10 @@ func buildLedgerQueueData(
 	binary, expanded bool,
 	ownerFundsAnnotator *ledgerOwnerFundsAnnotator,
 ) ([]any, bool, error) {
-	if ctx.Services == nil || ctx.Services.QueueAllTxs == nil {
+	if ctx.Services == nil || ctx.Services.QueueAllTxs() == nil {
 		return nil, false, nil
 	}
-	txs := ctx.Services.QueueAllTxs()
+	txs := ctx.Services.QueueAllTxs()()
 	if len(txs) == 0 {
 		return nil, false, nil
 	}

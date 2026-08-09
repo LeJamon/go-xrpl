@@ -16,11 +16,11 @@ import (
 
 func newSpecialDispatchHarness(t *testing.T) (*WebSocketServer, *websocketConnection, *types.RpcContext) {
 	t.Helper()
-	services := &types.ServiceContainer{
+	services := types.NewTestServiceGraph(&types.ServiceContainer{
 		ClientLoad:     types.NewClientLoadShedder(),
 		RPCDiagnostics: NewRPCDiagnostics(),
 		Capabilities:   types.RPCCapabilities{PathSearchMax: 3},
-	}
+	})
 	manager := resource.NewManager(nil, nil)
 	ws := NewWebSocketServer(WebSocketServerOptions{
 		Timeout:         time.Second,
@@ -39,7 +39,7 @@ func newSpecialDispatchHarness(t *testing.T) (*WebSocketServer, *websocketConnec
 	require.True(t, attached)
 	conn.registration = registration
 	t.Cleanup(func() { ws.subscriptionManager.Detach(registration) })
-	ctx := newRpcContext(context.Background(), types.RoleGuest, types.DefaultApiVersion, "192.0.2.1", nil, services)
+	ctx := newRpcContext(context.Background(), types.RoleGuest, types.DefaultApiVersion, "192.0.2.1", nil, services, nil, nil)
 	consumer := manager.NewInboundEndpoint(ctx.ClientIP)
 	require.NotNil(t, consumer)
 	t.Cleanup(consumer.Release)
@@ -48,6 +48,19 @@ func newSpecialDispatchHarness(t *testing.T) (*WebSocketServer, *websocketConnec
 	ctx.ResourceAdmission, _ = consumer.Admit(resource.FeeReferenceRPC())
 	require.NotNil(t, ctx.ResourceAdmission)
 	return ws, conn, ctx
+}
+
+func setSpecialServices(ctx *types.RpcContext, mutate func(*types.ServiceContainer)) {
+	previous := ctx.Services
+	services := &types.ServiceContainer{}
+	if previous != nil {
+		services.ClientLoad = previous.ClientLoad()
+		services.RPCDiagnostics = previous.RPCDiagnostics()
+		services.Capabilities = previous.Capabilities()
+		services.IsLoadedLocal = previous.IsLoadedLocal()
+	}
+	mutate(services)
+	ctx.Services = types.NewTestServiceGraph(services)
 }
 
 func specialDispatchResponse(t *testing.T, conn *websocketConnection) map[string]any {
@@ -86,7 +99,7 @@ func TestWebSocketSpecialDispatchBusyBoundary(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ws, conn, ctx := newSpecialDispatchHarness(t)
 			for range test.inFlight {
-				ws.services.ClientLoad.Begin()
+				ws.services.ClientLoad().Begin()
 			}
 			if !test.wantCalled {
 				require.NoError(t, ws.resourceManager.ImportConsumers("peer", resource.Gossip{Items: []resource.GossipItem{{
@@ -97,7 +110,7 @@ func TestWebSocketSpecialDispatchBusyBoundary(t *testing.T) {
 			called := false
 			ws.handleSpecialCommand(conn, ctx, specialDispatchCommand("subscribe"), func(_ *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
 				called = true
-				if got := ws.services.ClientLoad.InFlight(); got != int64(test.inFlight+1) {
+				if got := ws.services.ClientLoad().InFlight(); got != int64(test.inFlight+1) {
 					t.Fatalf("in-flight inside handler = %d, want %d", got, test.inFlight+1)
 				}
 				return map[string]any{}, nil
@@ -113,7 +126,7 @@ func TestWebSocketSpecialDispatchBusyBoundary(t *testing.T) {
 			if !test.wantCalled && (!ctx.LoadWarning || response["warning"] != nil) {
 				t.Fatalf("busy admission must consume but hide its load warning: %v", response)
 			}
-			if got := ws.services.ClientLoad.InFlight(); got != int64(test.inFlight) {
+			if got := ws.services.ClientLoad().InFlight(); got != int64(test.inFlight) {
 				t.Fatalf("in-flight after dispatch = %d, want %d", got, test.inFlight)
 			}
 		})
@@ -188,10 +201,10 @@ func TestWebSocketSpecialDispatchRecoversPanic(t *testing.T) {
 	if got, want := resourceLocalBalance(t, ws.resourceManager, ctx.ClientIP), uint32(resource.FeeExceptionRPC().Cost()/resource.DecayWindowSeconds); got != want {
 		t.Fatalf("panic charge = %v, want %v", got, want)
 	}
-	if got := ws.services.ClientLoad.InFlight(); got != 0 {
+	if got := ws.services.ClientLoad().InFlight(); got != 0 {
 		t.Fatalf("in-flight leaked after panic: %d", got)
 	}
-	if stats := ws.services.RPCDiagnostics.Snapshot().Methods["subscribe"]; stats.Started != 1 || stats.Finished != 0 || stats.Errored != 1 {
+	if stats := ws.services.RPCDiagnostics().Snapshot().Methods["subscribe"]; stats.Started != 1 || stats.Finished != 0 || stats.Errored != 1 {
 		t.Fatalf("diagnostics = %#v", stats)
 	}
 }
@@ -220,7 +233,9 @@ func TestWebSocketPathFindDynamicLoadCost(t *testing.T) {
 
 func TestWebSocketPathFindCapabilityPrecedesSubcommandValidation(t *testing.T) {
 	ws, conn, ctx := newSpecialDispatchHarness(t)
-	ctx.Services.Capabilities.PathSearchMax = 0
+	setSpecialServices(ctx, func(services *types.ServiceContainer) {
+		services.Capabilities.PathSearchMax = 0
+	})
 	_, rpcErr := ws.executePathFind(conn, ctx, types.WebSocketCommand{Params: json.RawMessage(`{not json`)})
 	if rpcErr == nil || rpcErr.ErrorString != "notSupported" {
 		t.Fatalf("disabled path_find error = %v, want notSupported", rpcErr)
@@ -229,7 +244,9 @@ func TestWebSocketPathFindCapabilityPrecedesSubcommandValidation(t *testing.T) {
 
 func TestWebSocketPathFindCreateDoesNotUseLegacyBusyGate(t *testing.T) {
 	ws, conn, ctx := newSpecialDispatchHarness(t)
-	ctx.Services.IsLoadedLocal = func() bool { return true }
+	setSpecialServices(ctx, func(services *types.ServiceContainer) {
+		services.IsLoadedLocal = func() bool { return true }
+	})
 	_, rpcErr := ws.executePathFind(conn, ctx, types.WebSocketCommand{
 		Params: json.RawMessage(`{"subcommand":"create"}`),
 	})

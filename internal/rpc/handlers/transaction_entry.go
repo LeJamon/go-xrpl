@@ -90,7 +90,7 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 			}
 		}
 	} else {
-		txInfo, lookupErr = ctx.Services.Ledger.GetTransaction(txHash)
+		txInfo, lookupErr = ctx.Services.Ledger().GetTransaction(txHash)
 	}
 	if lookupErr != nil || txInfo == nil {
 		return nil, types.RpcErrorTransactionNotFound("Transaction not found.").WithExtra(lookupExtra)

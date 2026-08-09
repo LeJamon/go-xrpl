@@ -119,7 +119,8 @@ func TestServerInfoRoleAliasesAreAdminOnly(t *testing.T) {
 
 func TestServerInfoHostIDPrivacy(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
-	services := servicesForServerInfo(mock)
+	container := mutableServicesForServerInfo(mock)
+	services := types.NewTestServiceGraph(container)
 
 	guest := callServerStatus(t, &types.RpcContext{
 		Context:  t.Context(),
@@ -145,7 +146,8 @@ func TestServerInfoHostIDPrivacy(t *testing.T) {
 	}, false)
 	assert.NotContains(t, state, "hostid")
 
-	services.NodePublicKey = "invalid"
+	container.NodePublicKey = "invalid"
+	services = types.NewTestServiceGraph(container)
 	guest = callServerStatus(t, &types.RpcContext{Context: t.Context(), Services: services}, true)
 	assert.Equal(t, "go-xrpl", guest["hostid"])
 }
@@ -170,7 +172,14 @@ func TestServerInfoNetworkLedgerWaiting(t *testing.T) {
 }
 
 // servicesForServerInfo builds a per-test ServiceContainer with a server_info mock.
-func servicesForServerInfo(mock *mockLedgerServiceServerInfo) *types.ServiceContainer {
+func servicesForServerInfo(mock *mockLedgerServiceServerInfo) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{
+		Ledger:        mock,
+		NodePublicKey: testNodePublicKey(),
+	})
+}
+
+func mutableServicesForServerInfo(mock *mockLedgerServiceServerInfo) *types.ServiceContainer {
 	return &types.ServiceContainer{
 		Ledger:        mock,
 		NodePublicKey: testNodePublicKey(),
@@ -192,8 +201,8 @@ func callServerStatus(t *testing.T, ctx *types.RpcContext, human bool) map[strin
 func TestServerStatusRuntimeFields(t *testing.T) {
 	const gitHash = "0123456789abcdef0123456789abcdef01234567"
 	mock := newMockLedgerServiceServerInfo()
-	services := servicesForServerInfo(mock)
-	services.ServerInfoConfig = types.ServerInfoConfigSnapshot{
+	container := mutableServicesForServerInfo(mock)
+	container.ServerInfoConfig = types.ServerInfoConfigSnapshot{
 		Ports: []types.ServerInfoPortSnapshot{
 			{Port: 5005, Protocol: "ws2 http,http ignored"},
 			{Port: 6006, Protocol: "wss2, https", Admin: true},
@@ -203,7 +212,8 @@ func TestServerStatusRuntimeFields(t *testing.T) {
 		NodeSize:     "large",
 		GitHash:      gitHash,
 	}
-	services.FetchPackCacheSize = func() uint32 { return 7 }
+	container.FetchPackCacheSize = func() uint32 { return 7 }
+	services := types.NewTestServiceGraph(container)
 
 	publicPorts := []map[string]any{
 		{"port": "5005", "protocol": []string{"http", "ws2"}},
@@ -261,8 +271,9 @@ func TestServerStatusRuntimeFields(t *testing.T) {
 
 func TestServerStatusRuntimeFieldOmissions(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
-	services := servicesForServerInfo(mock)
-	services.FetchPackCacheSize = func() uint32 { return 0 }
+	container := mutableServicesForServerInfo(mock)
+	container.FetchPackCacheSize = func() uint32 { return 0 }
+	services := types.NewTestServiceGraph(container)
 
 	for _, human := range []bool{true, false} {
 		ctx := &types.RpcContext{
@@ -582,8 +593,9 @@ func TestServerInfoResponseFields(t *testing.T) {
 
 func TestServerInfoDisabledQuorumUsesRippledWireValue(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
-	services := servicesForServerInfo(mock)
-	services.ValidationQuorum = func() int { return math.MaxInt }
+	container := mutableServicesForServerInfo(mock)
+	container.ValidationQuorum = func() int { return math.MaxInt }
+	services := types.NewTestServiceGraph(container)
 	method := &handlers.ServerInfoMethod{}
 	ctx := &types.RpcContext{
 		Context: context.Background(), Role: types.RoleGuest,
@@ -898,7 +910,7 @@ func TestServerInfoServiceNilLedger(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: nil},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 	}
 
 	result, rpcErr := method.Handle(ctx, nil)
@@ -1032,10 +1044,11 @@ func TestServerInfoStateAccounting(t *testing.T) {
 // TestServerInfoTimeField tests the time field format
 func TestServerInfoTimeField(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
-	services := servicesForServerInfo(mock)
-	services.SystemTime = func() time.Time {
+	container := mutableServicesForServerInfo(mock)
+	container.SystemTime = func() time.Time {
 		return time.Date(2026, time.August, 3, 14, 5, 6, 789012345, time.FixedZone("test", 2*60*60))
 	}
+	services := types.NewTestServiceGraph(container)
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
@@ -1350,17 +1363,17 @@ func TestServerInfo_DynamicMetrics_FromHooks(t *testing.T) {
 	mock.serverInfo.ValidatedLedgerCloseTime = closeRippleEpoch
 	mock.serverInfo.ClosedLedgerCloseTime = closeRippleEpoch + 1
 
-	services := servicesForServerInfo(mock)
-	services.TxQMetrics = func() types.TxQServerMetrics {
+	container := mutableServicesForServerInfo(mock)
+	container.TxQMetrics = func() types.TxQServerMetrics {
 		return types.TxQServerMetrics{
 			ReferenceFeeLevel:     256,
 			MinProcessingFeeLevel: 512,
 			OpenLedgerFeeLevel:    1024,
 		}
 	}
-	services.JqTransOverflow = func() uint64 { return 13 }
-	services.PeerDisconnects = func() (uint64, uint64) { return 42, 9 }
-	services.StateAccounting = func() types.StateAccountingSnapshot {
+	container.JqTransOverflow = func() uint64 { return 13 }
+	container.PeerDisconnects = func() (uint64, uint64) { return 42, 9 }
+	container.StateAccounting = func() types.StateAccountingSnapshot {
 		return types.StateAccountingSnapshot{
 			Modes: map[string]types.StateAccountingEntry{
 				"disconnected": {Transitions: 1, DurationUs: 1500},
@@ -1373,6 +1386,7 @@ func TestServerInfo_DynamicMetrics_FromHooks(t *testing.T) {
 			InitialSyncUs:     1234,
 		}
 	}
+	services := types.NewTestServiceGraph(container)
 
 	method := &handlers.ServerInfoMethod{}
 	// An Admin role makes load_factor_fee_escalation emit even when
@@ -1427,14 +1441,15 @@ func TestServerInfo_DynamicMetrics_FromHooks(t *testing.T) {
 // metrics.
 func TestServerInfo_MachineMode_LoadFactorFees(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
-	services := servicesForServerInfo(mock)
-	services.TxQMetrics = func() types.TxQServerMetrics {
+	container := mutableServicesForServerInfo(mock)
+	container.TxQMetrics = func() types.TxQServerMetrics {
 		return types.TxQServerMetrics{
 			ReferenceFeeLevel:     256,
 			MinProcessingFeeLevel: 768,
 			OpenLedgerFeeLevel:    2048,
 		}
 	}
+	services := types.NewTestServiceGraph(container)
 
 	method := &handlers.ServerStateMethod{}
 	ctx := &types.RpcContext{
@@ -1462,13 +1477,14 @@ func TestServerInfo_MachineMode_LoadFactorFees(t *testing.T) {
 
 func TestServerInfo_LoadFactorEscalationAvoidsIntermediateOverflow(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
-	services := servicesForServerInfo(mock)
-	services.TxQMetrics = func() types.TxQServerMetrics {
+	container := mutableServicesForServerInfo(mock)
+	container.TxQMetrics = func() types.TxQServerMetrics {
 		return types.TxQServerMetrics{
 			ReferenceFeeLevel:  256,
 			OpenLedgerFeeLevel: 1 << 56,
 		}
 	}
+	services := types.NewTestServiceGraph(container)
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
@@ -1523,14 +1539,15 @@ func TestServerInfo_ValidatedLedgerAge_HighAgeThreshold(t *testing.T) {
 // loadFactorFeeEscalation == loadFactor, so the field is hidden.
 func TestServerInfo_HumanMode_LoadFactorFeeEscalation_NonAdminGate(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
-	services := servicesForServerInfo(mock)
-	services.TxQMetrics = func() types.TxQServerMetrics {
+	container := mutableServicesForServerInfo(mock)
+	container.TxQMetrics = func() types.TxQServerMetrics {
 		return types.TxQServerMetrics{
 			ReferenceFeeLevel:     256,
 			MinProcessingFeeLevel: 768, // diverges -> _queue still emitted
 			OpenLedgerFeeLevel:    1024,
 		}
 	}
+	services := types.NewTestServiceGraph(container)
 
 	method := &handlers.ServerInfoMethod{}
 	ctx := &types.RpcContext{
@@ -1594,7 +1611,7 @@ func TestServerInfo_ClosedLedgerAge_OmittedOnFutureCloseTime(t *testing.T) {
 // closed ledger. Suppressed entirely when neither is available.
 func TestServerInfo_SingleLedgerEmit(t *testing.T) {
 	method := &handlers.ServerInfoMethod{}
-	newCtx := func(svc *types.ServiceContainer) *types.RpcContext {
+	newCtx := func(svc *types.ServiceGraph) *types.RpcContext {
 		return &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
@@ -1649,13 +1666,14 @@ func TestServerInfo_HumanMode_LoadFactorServer(t *testing.T) {
 
 	t.Run("escalation > loadBase → field present", func(t *testing.T) {
 		mock := newMockLedgerServiceServerInfo()
-		services := servicesForServerInfo(mock)
-		services.TxQMetrics = func() types.TxQServerMetrics {
+		container := mutableServicesForServerInfo(mock)
+		container.TxQMetrics = func() types.TxQServerMetrics {
 			return types.TxQServerMetrics{
 				ReferenceFeeLevel:  256,
 				OpenLedgerFeeLevel: 1024,
 			}
 		}
+		services := types.NewTestServiceGraph(container)
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
@@ -1705,10 +1723,11 @@ func TestServerInfo_HumanMode_LoadFactorLocalNetCluster_AdminGate(t *testing.T) 
 	}
 	build := func(admin bool, withHook bool) map[string]any {
 		mock := newMockLedgerServiceServerInfo()
-		services := servicesForServerInfo(mock)
+		container := mutableServicesForServerInfo(mock)
 		if withHook {
-			services.LoadFactorFees = feesHook
+			container.LoadFactorFees = feesHook
 		}
+		services := types.NewTestServiceGraph(container)
 		role := types.RoleGuest
 		if admin {
 			role = types.RoleAdmin
@@ -1781,9 +1800,10 @@ func TestServerInfo_CloseTimeOffset_Threshold(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := newMockLedgerServiceServerInfo()
-			services := servicesForServerInfo(mock)
+			container := mutableServicesForServerInfo(mock)
 			offset := tc.offset
-			services.CloseTimeOffset = func() time.Duration { return offset }
+			container.CloseTimeOffset = func() time.Duration { return offset }
+			services := types.NewTestServiceGraph(container)
 			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
@@ -1849,9 +1869,10 @@ func TestServerInfoPubkeyValidator(t *testing.T) {
 	buildInfo := func(t *testing.T, admin bool, pk []byte, manifests types.ManifestLookup) (map[string]any, bool) {
 		t.Helper()
 		mock := newMockLedgerServiceServerInfo()
-		services := servicesForServerInfo(mock)
-		services.ValidatorPublicKey = pk
-		services.Manifests = manifests
+		container := mutableServicesForServerInfo(mock)
+		container.ValidatorPublicKey = pk
+		container.Manifests = manifests
+		services := types.NewTestServiceGraph(container)
 		role := types.RoleGuest
 		if admin {
 			role = types.RoleAdmin
@@ -1915,8 +1936,9 @@ func TestServerInfoPubkeyValidator(t *testing.T) {
 		want, err := addresscodec.EncodeNodePublicKey(signing)
 		require.NoError(t, err)
 		mock := newMockLedgerServiceServerInfo()
-		services := servicesForServerInfo(mock)
-		services.ValidatorPublicKey = signing
+		container := mutableServicesForServerInfo(mock)
+		container.ValidatorPublicKey = signing
+		services := types.NewTestServiceGraph(container)
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
@@ -1944,8 +1966,9 @@ func TestServerInfoValidatorListVisibility(t *testing.T) {
 		}},
 	}
 	mock := newMockLedgerServiceServerInfo()
-	services := servicesForServerInfo(mock)
-	services.ValidatorList = validatorList
+	container := mutableServicesForServerInfo(mock)
+	container.ValidatorList = validatorList
+	services := types.NewTestServiceGraph(container)
 
 	infoFor := func(t *testing.T, admin bool) map[string]any {
 		t.Helper()
@@ -1993,8 +2016,9 @@ func TestServerInfoValidatorListVisibility(t *testing.T) {
 
 func TestServerInfoExpiredValidatorListWarningIsPublic(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
-	services := servicesForServerInfo(mock)
-	services.ValidatorList = &serverInfoValidatorList{blocked: true}
+	container := mutableServicesForServerInfo(mock)
+	container.ValidatorList = &serverInfoValidatorList{blocked: true}
+	services := types.NewTestServiceGraph(container)
 	result, rpcErr := (&handlers.ServerInfoMethod{}).Handle(&types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,

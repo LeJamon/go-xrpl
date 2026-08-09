@@ -185,7 +185,7 @@ func TestCheckPaymentMPTGatePrecedesLaterValidation(t *testing.T) {
 		"Paths":    []any{},
 		"DomainID": "00",
 	}
-	ctx := &types.RpcContext{Services: &types.ServiceContainer{Ledger: ledger}}
+	ctx := &types.RpcContext{Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: ledger})}
 	rpcErr := checkPayment(txMap, json.RawMessage(`{"build_path":true}`), true, ctx)
 	if rpcErr == nil || rpcErr.Message != "Field 'build_path' not allowed in this context." {
 		t.Fatalf("error = %#v", rpcErr)
@@ -277,7 +277,7 @@ func TestSubmitMultisignedRejectsMalformedSignerBeforeBinaryEncoding(t *testing.
 	}
 	ctx := &types.RpcContext{
 		Context:  context.Background(),
-		Services: &types.ServiceContainer{Ledger: &loadAdmissionLedger{}},
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: &loadAdmissionLedger{}}),
 	}
 	_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
 	if rpcErr == nil || rpcErr.Message != "Signers array may only contain Signer entries." {

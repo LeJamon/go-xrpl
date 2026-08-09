@@ -174,8 +174,8 @@ func (m *mockAccountChannelsLedgerService) GetClosedLedgerView() (types.LedgerSt
 }
 
 // newAccountChannelsTestServices builds a *types.ServiceContainer wrapping the mock.
-func newAccountChannelsTestServices(mock *mockAccountChannelsLedgerService) *types.ServiceContainer {
-	return &types.ServiceContainer{Ledger: mock}
+func newAccountChannelsTestServices(mock *mockAccountChannelsLedgerService) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 }
 
 // TestAccountChannelsErrorValidation tests error handling for invalid inputs

@@ -37,8 +37,8 @@ func newAccountObjectsMock() *accountObjectsMock {
 }
 
 // newAccountObjectsTestServices builds a *types.ServiceContainer wrapping the mock.
-func newAccountObjectsTestServices(mock *accountObjectsMock) *types.ServiceContainer {
-	return &types.ServiceContainer{Ledger: mock}
+func newAccountObjectsTestServices(mock *accountObjectsMock) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 }
 
 // Test: Error cases – missing / invalid / malformed account
@@ -962,7 +962,7 @@ func TestAccountObjectsServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)

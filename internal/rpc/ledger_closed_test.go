@@ -54,7 +54,7 @@ func TestLedgerClosedBasicSuccess(t *testing.T) {
 		return nil, errors.New("not found")
 	}
 
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerClosedMethod{}
 	ctx := &types.RpcContext{
@@ -113,7 +113,7 @@ func TestLedgerClosedHashFormat(t *testing.T) {
 		return nil, errors.New("not found")
 	}
 
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerClosedMethod{}
 	ctx := &types.RpcContext{
@@ -171,7 +171,7 @@ func TestLedgerClosedServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -191,7 +191,7 @@ func TestLedgerClosedServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: mock},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -211,7 +211,7 @@ func TestLedgerClosedServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: mock},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)

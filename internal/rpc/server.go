@@ -33,20 +33,22 @@ func rpcLog() xrpllog.Logger { return xrpllog.Named(xrpllog.PartitionRPC) }
 
 type Server struct {
 	peerSourceHolder
-	registry        *types.MethodRegistry
-	timeout         time.Duration
-	services        *types.ServiceContainer
-	resourceManager *resource.Manager
+	registry         *types.MethodRegistry
+	timeout          time.Duration
+	services         *types.ServiceGraph
+	urlSubscriptions types.URLSubscriptionService
+	resourceManager  *resource.Manager
 }
 
 // ServerOptions controls construction of an HTTP JSON-RPC server.
 // Services may be nil for routing-only tests; constructors never mutate it.
 type ServerOptions struct {
-	Timeout         time.Duration
-	Services        *types.ServiceContainer
-	ResourceManager *resource.Manager
-	PeerSource      types.PeerSource
-	Registry        *types.MethodRegistry
+	Timeout          time.Duration
+	Services         *types.ServiceGraph
+	ResourceManager  *resource.Manager
+	PeerSource       types.PeerSource
+	Registry         *types.MethodRegistry
+	URLSubscriptions types.URLSubscriptionService
 }
 
 var _ types.MethodDispatcher = (*Server)(nil)
@@ -80,10 +82,11 @@ func NewServer(options ServerOptions) *Server {
 		manager = resource.NewManager(nil, nil)
 	}
 	server := &Server{
-		registry:        options.Registry,
-		timeout:         options.Timeout,
-		services:        options.Services,
-		resourceManager: manager,
+		registry:         options.Registry,
+		timeout:          options.Timeout,
+		services:         options.Services,
+		urlSubscriptions: options.URLSubscriptions,
+		resourceManager:  manager,
 	}
 	if server.registry == nil {
 		server.registry = defaultMethodRegistry()

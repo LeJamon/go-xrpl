@@ -90,7 +90,7 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		}
 		copy(targetHash[:], hb)
 
-		l, err := getLedgerByHashContext(ctx.Context, ctx.Services.Ledger, targetHash)
+		l, err := getLedgerByHashContext(ctx.Context, ctx.Services.Ledger(), targetHash)
 		if err == nil && l != nil {
 			return ledgerRequestSuccess(l), nil
 		}
@@ -107,7 +107,7 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		// resolve the sequence to a hash (rippled's getValidatedLedger gate).
 		// rippled distinguishes API v1 (rpcNO_CURRENT) from later versions
 		// (rpcNOT_SYNCED) here — RPCHelpers.cpp:1060-1062.
-		validatedSeq := ctx.Services.Ledger.GetValidatedLedgerIndex()
+		validatedSeq := ctx.Services.Ledger().GetValidatedLedgerIndex()
 		if validatedSeq == 0 {
 			if ctx.ApiVersion == types.ApiVersion1 {
 				return nil, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
@@ -126,7 +126,7 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		}
 		targetSeq = uint32(idx)
 
-		if l, err := ctx.Services.Ledger.GetLedgerBySequence(targetSeq); err == nil && l != nil {
+		if l, err := ctx.Services.Ledger().GetLedgerBySequence(targetSeq); err == nil && l != nil {
 			return ledgerRequestSuccess(l), nil
 		}
 	}
@@ -134,8 +134,8 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	// Not local — trigger (or join) a generic acquisition from peers. When no
 	// acquisition subsystem is wired (standalone / RPC-only) the ledger is
 	// simply reported as not found, matching rippled's standalone fallback.
-	if ctx.Services.RequestLedger != nil {
-		if acquiring, started, reference := ctx.Services.RequestLedger(targetHash, targetSeq); started {
+	if ctx.Services.RequestLedger() != nil {
+		if acquiring, started, reference := ctx.Services.RequestLedger()(targetHash, targetSeq); started {
 			if reference {
 				// Acquiring a reference ledger only to learn the target's hash:
 				// rippled wraps the snapshot as lgrNotFound + acquiring

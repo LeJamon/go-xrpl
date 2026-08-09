@@ -15,7 +15,7 @@ import (
 func ctxWith(apiVersion int, mock *mockLedgerService) *types.RpcContext {
 	return &types.RpcContext{
 		ApiVersion: apiVersion,
-		Services:   &types.ServiceContainer{Ledger: mock},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 	}
 }
 
@@ -113,7 +113,7 @@ func TestConditionMet_UNLBlocked(t *testing.T) {
 	m := syncedStandalone()
 	ctx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: m, UNLBlocked: func() bool { return true }},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: m, UNLBlocked: func() bool { return true }}),
 	}
 	rpcErr := conditionMet(types.NeedsCurrentLedger, ctx)
 	require.NotNil(t, rpcErr)
@@ -125,7 +125,7 @@ func TestConditionMet_UNLNotBlockedPasses(t *testing.T) {
 	m := syncedStandalone()
 	ctx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: m, UNLBlocked: func() bool { return false }},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: m, UNLBlocked: func() bool { return false }}),
 	}
 	assert.Nil(t, conditionMet(types.NeedsCurrentLedger, ctx))
 }
@@ -135,7 +135,7 @@ func TestConditionMet_AmendmentBlockedBeatsUNL(t *testing.T) {
 	m.amendmentBlocked = true
 	ctx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: m, UNLBlocked: func() bool { return true }},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: m, UNLBlocked: func() bool { return true }}),
 	}
 	rpcErr := conditionMet(types.NeedsCurrentLedger, ctx)
 	require.NotNil(t, rpcErr)

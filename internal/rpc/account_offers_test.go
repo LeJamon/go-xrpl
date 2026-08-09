@@ -41,8 +41,8 @@ func (m *accountOffersMock) GetAccountOffers(_ context.Context, account string, 
 }
 
 // newAccountOffersTestServices builds a *types.ServiceContainer wrapping the mock.
-func newAccountOffersTestServices(mock *accountOffersMock) *types.ServiceContainer {
-	return &types.ServiceContainer{Ledger: mock}
+func newAccountOffersTestServices(mock *accountOffersMock) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 }
 
 // TestAccountOffersErrorValidation tests error handling for invalid inputs
@@ -964,7 +964,7 @@ func TestAccountOffersServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		params := map[string]any{
