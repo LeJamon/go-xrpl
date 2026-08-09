@@ -114,9 +114,6 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 		return result, 0
 	}
 
-	// Charge an external delegate or sponsor. Sponsor reserve/MaxFee limits are
-	// rechecked here against the apply view before any transaction effect can
-	// commit.
 	if result := e.payExternalFeeOnTable(st, table, false); result != ter.TesSUCCESS {
 		return result, 0
 	}
@@ -228,8 +225,7 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 func (e *Engine) applyPreApplyAccountChanges(st *applyState) ter.Result {
 	// Reference: rippled Transactor::payFee + consumeSeqProxy in Transactor.cpp
 	if st.hasExternalFeePayer() {
-		// A delegate or fee sponsor pays externally; the source account's
-		// balance is not reduced by the fee.
+		// The fee payer is updated separately by payExternalFeeOnTable.
 	} else {
 		// Normal transactions: fee is charged to the source account.
 		st.account.Balance -= st.fee
@@ -400,7 +396,6 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 		return r
 	}
 
-	// Charge the external delegate or sponsor on tec recovery.
 	// Reference: rippled Transactor.cpp reset().
 	if r := e.payExternalFeeOnTable(st, tecTable, true); r != ter.TesSUCCESS {
 		return r
@@ -833,7 +828,6 @@ func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (
 		return r
 	}
 
-	// Charge the external delegate or sponsor after invariant recovery.
 	if r := e.payExternalFeeOnTable(st, invTecTable, true); r != ter.TesSUCCESS {
 		return r
 	}
