@@ -4,11 +4,13 @@ package pebble
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
 	"github.com/cockroachdb/pebble"
+	"github.com/cockroachdb/pebble/vfs"
 )
 
 // Store is a thin wrapper around CockroachDB/Pebble that implements kvstore.KeyValueStore.
@@ -19,10 +21,21 @@ import (
 // bare atomic flag — checked, then acted on — leaves a window where a racing
 // Close turns the panic loose. The RWMutex closes that window.
 type Store struct {
-	mu     sync.RWMutex
-	db     *pebble.DB
-	closed bool
+	mu       sync.RWMutex
+	db       *pebble.DB
+	closed   bool
+	readOnly bool
 }
+
+// readOnlyFS suppresses Pebble's exclusive database lock. Callers may use it
+// only for immutable stores that were closed before publication.
+type readOnlyFS struct{ vfs.FS }
+
+type noOpCloser struct{}
+
+func (noOpCloser) Close() error { return nil }
+
+func (readOnlyFS) Lock(string) (io.Closer, error) { return noOpCloser{}, nil }
 
 // New opens a Pebble database at the given path.
 func New(path string, options Options) (*Store, error) {
@@ -60,12 +73,15 @@ func openWithCache(path string, pebbleCache *pebble.Cache, options Options, read
 
 	pebbleOptions := makePebbleOptions(options, pebbleCache)
 	pebbleOptions.ReadOnly = readOnly
+	if readOnly {
+		pebbleOptions.FS = readOnlyFS{FS: vfs.Default}
+	}
 	db, err := pebble.Open(path, pebbleOptions)
 	if err != nil {
 		return nil, fmt.Errorf("kvstore/pebble: failed to open %s: %w", path, err)
 	}
 
-	return &Store{db: db}, nil
+	return &Store{db: db, readOnly: readOnly}, nil
 }
 
 // Get retrieves the value for the given key.
@@ -180,6 +196,9 @@ func (s *Store) Sync() error {
 	if s.closed {
 		return kvstore.ErrClosed
 	}
+	if s.readOnly {
+		return nil
+	}
 	return s.db.LogData(nil, pebble.Sync)
 }
 
@@ -196,6 +215,9 @@ func (s *Store) Close() error {
 		return nil // already closed
 	}
 	s.closed = true
+	if s.readOnly {
+		return s.db.Close()
+	}
 	flushErr := s.db.Flush()
 	return errors.Join(flushErr, s.db.Close())
 }
