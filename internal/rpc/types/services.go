@@ -774,8 +774,6 @@ func (s *ClientLoadShedder) release(counter *atomic.Int64, signal bool) func() {
 	}
 }
 
-// Begin records the start of a client-RPC dispatch and returns its release
-// function.
 func (s *ClientLoadShedder) Begin() func() {
 	if s == nil {
 		return noOpLoadShedRelease

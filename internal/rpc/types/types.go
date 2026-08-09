@@ -143,7 +143,6 @@ type MethodRegistryBuilder struct {
 	built   bool
 }
 
-// NewMethodRegistryBuilder returns an empty method registry builder.
 func NewMethodRegistryBuilder() *MethodRegistryBuilder {
 	return &MethodRegistryBuilder{}
 }
