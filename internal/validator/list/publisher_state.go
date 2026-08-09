@@ -546,8 +546,8 @@ func (a *Aggregator) promotePendingSequenceLocked(s *publisherState, sequence ui
 				a.validatorManifests.PromoteToTrusted(key)
 			}
 		}
-		a.applyEmbeddedPendingManifestsLocked(s, chosen.EmbeddedManifests)
 	}
+	a.applyEmbeddedPendingManifestsLocked(s, chosen.EmbeddedManifests)
 	delete(s.Remaining, sequence)
 	a.recordMaxSequenceLocked(s, sequence)
 	a.normalizeRemainingLocked(s)

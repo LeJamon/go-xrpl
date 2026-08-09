@@ -1230,6 +1230,68 @@ func TestAggregatorExpiredPendingPromotionDoesNotApplyEmbeddedManifest(t *testin
 	require.Equal(t, 1, validatorCache.UntrustedCount())
 }
 
+func TestAggregatorExpiredPendingPromotionAppliesManifestListedByAnotherPublisher(t *testing.T) {
+	expiredPub := newPublisher(t, 0x80, 0x81)
+	activePub := newPublisher(t, 0x82, 0x83)
+	valMaster32, valMasterPriv := deterministicKey(0x84)
+	valEph32, valEphPriv := deterministicKey(0x85)
+	var valMaster, valEph [33]byte
+	copy(valMaster[:], append([]byte{0xED}, valMaster32...))
+	copy(valEph[:], append([]byte{0xED}, valEph32...))
+	valManifestRaw := buildManifest(t, valMaster, valMasterPriv, valEph, valEphPriv, 1)
+	valManifest := base64.StdEncoding.EncodeToString(valManifestRaw)
+
+	now := fixedClock()()
+	mutableNow := now
+	validatorCache := manifest.NewCache(1)
+	agg, err := list.New(list.Config{
+		PublisherKeys: []list.PublisherKey{
+			list.PublisherKey(expiredPub.masterPub),
+			list.PublisherKey(activePub.masterPub),
+		},
+		Threshold:          1,
+		ValidatorManifests: validatorCache,
+		PublisherManifests: manifest.NewCache(),
+		Clock:              func() time.Time { return mutableNow },
+	})
+	require.NoError(t, err)
+	activeBlob, activeSignature := activePub.signList(t, 1, 0, now.Add(24*time.Hour).Unix(), [][33]byte{valMaster})
+	require.Equal(t, list.Accepted, mustApply(t, agg, activePub.manifestB64, activeBlob, activeSignature))
+	parsedManifest, err := manifest.Deserialize(valManifestRaw)
+	require.NoError(t, err)
+	require.Equal(t, manifest.Accepted, validatorCache.ApplyManifest(parsedManifest, manifest.Capped))
+
+	type entry struct {
+		ValidationPublicKey string `json:"validation_public_key"`
+		Manifest            string `json:"manifest,omitempty"`
+	}
+	body := struct {
+		Sequence   uint32  `json:"sequence"`
+		Expiration uint32  `json:"expiration"`
+		Effective  uint32  `json:"effective"`
+		Validators []entry `json:"validators"`
+	}{
+		Sequence:   4,
+		Expiration: uint32(now.Add(90*time.Minute).Unix() - protocol.RippleEpochUnix),
+		Effective:  uint32(now.Add(time.Hour).Unix() - protocol.RippleEpochUnix),
+		Validators: []entry{{
+			ValidationPublicKey: hex.EncodeToString(valMaster[:]),
+			Manifest:            valManifest,
+		}},
+	}
+	jsonBytes, err := json.Marshal(body)
+	require.NoError(t, err)
+	blob := []byte(base64.StdEncoding.EncodeToString(jsonBytes))
+	signature := []byte(hex.EncodeToString(ed25519.Sign(expiredPub.ephPriv, jsonBytes)))
+	require.Equal(t, list.Pending, mustApply(t, agg, expiredPub.manifestB64, blob, signature))
+
+	mutableNow = now.Add(2 * time.Hour)
+	agg.Tick()
+	require.True(t, agg.IsMasterListed(valMaster))
+	require.False(t, validatorCache.IsUntrusted(valMaster))
+	require.Zero(t, validatorCache.UntrustedCount())
+}
+
 func TestAggregatorOnChangeCallbackBoundaries(t *testing.T) {
 	newCase := func(t *testing.T, seed byte) (*list.Aggregator, *publisherFixture, []byte, []byte, [33]byte) {
 		t.Helper()

@@ -425,7 +425,10 @@ func TestRouter_HandleManifests_RelaysAcceptedEntriesToAllPeers(t *testing.T) {
 	for i := range wires {
 		require.Equal(t, wires[i], got[i], "accepted manifests must retain input order and bytes")
 	}
-	require.Equal(t, []badDataCall{{peerID: 7, reason: "manifest-invalid"}}, badData.getBadDataCalls())
+	require.Equal(t, []badDataCall{
+		{peerID: 7, reason: "manifests-oversize"},
+		{peerID: 7, reason: "manifest-invalid"},
+	}, badData.getBadDataCalls())
 }
 
 func TestRouter_ManifestWorkerDoesNotBlockDispatch(t *testing.T) {
