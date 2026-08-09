@@ -23,10 +23,10 @@ type ApplyContext struct {
 	AccountID [20]byte
 
 	// SourceFeeCharged is the fee (in drops) actually deducted from Account for
-	// this transaction: the transaction fee for a normal tx, or 0 for a delegated
-	// tx (whose fee is paid by the delegate, leaving the source untouched). Added
-	// to Account.Balance it yields the prior balance the reserve checks compare
-	// against — rippled's mPriorBalance.
+	// this transaction: the transaction fee for a normal tx, or 0 when a
+	// delegate/sponsor pays and leaves the source untouched. Added to
+	// Account.Balance it yields the prior balance used by reserve checks —
+	// rippled's mPriorBalance.
 	SourceFeeCharged uint64
 
 	// Config holds engine configuration (reserves, ledger sequence, etc.)
@@ -162,9 +162,8 @@ func (ctx *ApplyContext) LookupDestination(account string) (*state.AccountRoot, 
 }
 
 // PriorBalance returns the source account's balance before its own fee was
-// deducted — rippled's mPriorBalance. For a delegated transaction the fee is
-// charged to the delegate, not the source, so SourceFeeCharged is 0 and the
-// prior balance is just the untouched source balance.
+// deducted — rippled's mPriorBalance. When a delegate or sponsor pays,
+// SourceFeeCharged is 0 and the prior balance is the untouched source balance.
 func (ctx *ApplyContext) PriorBalance() uint64 {
 	return ctx.Account.Balance + ctx.SourceFeeCharged
 }

@@ -12,13 +12,15 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // preclaim validates the transaction against the current ledger state.
 // Mirrors rippled's invoke_preclaim pipeline (applySteps.cpp, PR #6192):
 //
-//	checkSeqProxy → checkPriorTxAndLastLedger → checkSign (+ checkBatchSign) →
-//	checkFee → checkPermission → tx-type preclaim.
+//	checkSeqProxy → checkPriorTxAndLastLedger → checkSponsor →
+//	checkSign (+ checkBatchSign) → checkFee → checkPermission →
+//	tx-type preclaim.
 //
 // The signature stage precedes the fee and permission checks so that no
 // fee-charging TER is ever returned before the signature has been verified.
@@ -52,6 +54,9 @@ func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) (result ter.Re
 		return result
 	}
 	if result := e.checkPriorTxAndLastLedger(common, account, txHash); result != ter.TesSUCCESS {
+		return result
+	}
+	if result := e.checkSponsor(common); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -121,6 +126,9 @@ func (e *Engine) preclaimInner(tx txcore.Transaction, txHash [32]byte) (result t
 		return result
 	}
 	if result := e.checkPriorTxAndLastLedger(common, account, txHash); result != ter.TesSUCCESS {
+		return result
+	}
+	if result := e.checkSponsor(common); result != ter.TesSUCCESS {
 		return result
 	}
 	if result := e.checkPseudoAccountSign(common); result != ter.TesSUCCESS {
@@ -220,10 +228,10 @@ func (e *Engine) checkPriorTxAndLastLedger(common *txcore.Common, account *state
 	return ter.TesSUCCESS
 }
 
-// checkFee enforces fee adequacy and that the fee payer (delegate or source)
-// can afford the fee. Reference: rippled Transactor::checkFee in Transactor.cpp.
+// checkFee enforces fee adequacy and that the selected source, delegate,
+// pre-funded sponsorship, or co-signed sponsor can afford the fee.
+// Reference: rippled Transactor::checkFee in Transactor.cpp.
 func (e *Engine) checkFee(tx txcore.Transaction, common *txcore.Common, account *state.AccountRoot) ter.Result {
-	// When a delegate is present, the fee is checked against the delegate's balance.
 	fee := e.calculateFee(tx)
 	baseFeeForTx := e.preclaimBaseFee(tx)
 
@@ -254,21 +262,20 @@ func (e *Engine) checkFee(tx txcore.Transaction, common *txcore.Common, account 
 		return ter.TesSUCCESS
 	}
 
-	// Determine who pays the fee: delegate (if present) or the source account.
-	// Reference: rippled Transactor::checkFee lines 295-297:
-	//   auto const id = ctx.tx.isFieldPresent(sfDelegate)
-	//       ? ctx.tx.getAccountID(sfDelegate)
-	//       : ctx.tx.getAccountID(sfAccount);
-	feePayerBalance, balResult := e.feePayerBalance(common, account)
-	if balResult != ter.TesSUCCESS {
-		return balResult
+	payer, result := e.getFeePayer(common)
+	if result != ter.TesSUCCESS {
+		return result
 	}
-	if feePayerBalance < fee {
+	_, maxSpendable, result := e.feePayerBalanceAndSpendable(payer, account)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	if maxSpendable < fee {
 		// Reference: rippled Transactor::checkFee lines 304-316. Only a closed
 		// ledger with a non-zero balance below the fee yields a deterministic
 		// claimed-fee result; on any open view (open ledger, queued retry, or
 		// load-fee enforcement — rippled's ctx.view.open()) it is retryable.
-		if feePayerBalance > 0 && !e.config.IsViewOpen() {
+		if maxSpendable > 0 && !e.config.IsViewOpen() {
 			return ter.TecINSUFF_FEE
 		}
 		return ter.TerINSUF_FEE_B
@@ -296,27 +303,6 @@ func (e *Engine) enforceFeeFloor(fee, baseFeeForTx uint64) ter.Result {
 
 func (e *Engine) preclaimBaseFee(tx txcore.Transaction) uint64 {
 	return sign.CalculateBaseFee(tx, e.view, e.config)
-}
-
-// feePayerBalance returns the balance of the account that will be charged the fee
-// (delegate when sfDelegate is present, otherwise the source account).
-func (e *Engine) feePayerBalance(common *txcore.Common, account *state.AccountRoot) (uint64, ter.Result) {
-	if common.Delegate == "" {
-		return account.Balance, ter.TesSUCCESS
-	}
-	delegateID, delegateErr := state.DecodeAccountID(common.Delegate)
-	if delegateErr != nil {
-		return 0, ter.TerNO_ACCOUNT
-	}
-	delegateAccount, readErr := txcore.ReadAccountRoot(e.view, delegateID)
-	if readErr != nil {
-		// Real storage or parse failure, not a missing account.
-		return 0, ter.TefINTERNAL
-	}
-	if delegateAccount == nil {
-		return 0, ter.TerNO_ACCOUNT
-	}
-	return delegateAccount.Balance, ter.TesSUCCESS
 }
 
 // checkPermission validates that, when sfDelegate is set, the delegate SLE
@@ -355,14 +341,95 @@ func (e *Engine) checkPermission(tx txcore.Transaction, common *txcore.Common, a
 	return ter.TerNO_DELEGATE_PERMISSION
 }
 
-// checkSign performs signature authorization for both single-signed and
-// multi-signed transactions, dispatching to checkSingleSign / checkMultiSign.
+// checkSponsor validates the common sponsorship permission before signature
+// authorization and fee selection. A co-signature bypasses the relationship
+// SLE, but never the sponsor-account existence check.
+func (e *Engine) checkSponsor(common *txcore.Common) ter.Result {
+	if common.Sponsor == "" {
+		if common.HasField("Sponsor") {
+			return ter.TerNO_ACCOUNT
+		}
+		return ter.TesSUCCESS
+	}
+	if common.Delegate != "" && common.SponsorFlags != nil &&
+		*common.SponsorFlags&txcore.SpfSponsorReserve != 0 {
+		return ter.TemINVALID
+	}
+
+	sponsorID, err := state.DecodeAccountID(common.Sponsor)
+	if err != nil {
+		return ter.TerNO_ACCOUNT
+	}
+	sponsor, readErr := txcore.ReadAccountRoot(e.view, sponsorID)
+	if readErr != nil {
+		return ter.TefINTERNAL
+	}
+	if sponsor == nil {
+		return ter.TerNO_ACCOUNT
+	}
+	if common.SponsorSignature != nil {
+		return ter.TesSUCCESS
+	}
+
+	initiator := common.Account
+	if common.Delegate != "" {
+		initiator = common.Delegate
+	}
+	initiatorID, err := state.DecodeAccountID(initiator)
+	if err != nil {
+		return ter.TerNO_PERMISSION
+	}
+	data, readErr := e.view.Read(keylet.Sponsorship(sponsorID, initiatorID))
+	if readErr != nil {
+		return ter.TefINTERNAL
+	}
+	if data == nil {
+		return ter.TerNO_PERMISSION
+	}
+	sponsorship, parseErr := state.ParseSponsorship(data)
+	if parseErr != nil {
+		return ter.TefINTERNAL
+	}
+	flags := uint32(0)
+	if common.SponsorFlags != nil {
+		flags = *common.SponsorFlags
+	}
+	if flags&txcore.SpfSponsorFee != 0 &&
+		sponsorship.Flags&entry.LsfSponsorshipRequireSignForFee != 0 {
+		return ter.TerNO_PERMISSION
+	}
+	if flags&txcore.SpfSponsorReserve != 0 &&
+		sponsorship.Flags&entry.LsfSponsorshipRequireSignForReserve != 0 {
+		return ter.TerNO_PERMISSION
+	}
+	return ter.TesSUCCESS
+}
+
+// checkSign performs sponsor authorization first, then the transaction's
+// ordinary single- or multi-sign authorization.
 // Reference: rippled Transactor::checkSign in Transactor.cpp.
 // When a delegate is present, the idAccount for signature checking is the
 // delegate. Reference: rippled line 602:
 //
 //	auto const idAccount = ctx.tx[~sfDelegate].value_or(ctx.tx[sfAccount]);
 func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common) ter.Result {
+	if sponsor := common.SponsorSignature; sponsor != nil {
+		// Dry-run/test mode permits an empty signature object. Real submissions
+		// have already failed crypto verification in preflight.
+		if !(e.config.SkipSignatureVerification &&
+			sponsor.SigningPubKey == "" && len(sponsor.Signers) == 0) {
+			if result := e.rejectPseudoAccount(common.Sponsor); result != ter.TesSUCCESS {
+				return result
+			}
+			if len(sponsor.Signers) > 0 {
+				if result := e.checkMultiSignForAccount(common.Sponsor, sponsor.Signers); result != ter.TesSUCCESS {
+					return result
+				}
+			} else if result := e.checkSingleSignForAccount(common.Sponsor, sponsor.SigningPubKey); result != ter.TesSUCCESS {
+				return result
+			}
+		}
+	}
 	if result := e.checkPseudoAccountSign(common); result != ter.TesSUCCESS {
 		return result
 	}
@@ -376,19 +443,26 @@ func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common) ter.Res
 }
 
 func (e *Engine) checkPseudoAccountSign(common *txcore.Common) ter.Result {
-	// Under LendingProtocol a pseudo-account (AMM / Vault / LoanBroker) can never
-	// authorize a transaction: rippled Transactor::checkSign returns tefBAD_AUTH
-	// for any tx signed by a pseudo-account, at the top of the signature stage.
-	if e.rules().Enabled(amendment.FeatureLendingProtocol) {
-		idAccount := common.Account
-		if common.Delegate != "" {
-			idAccount = common.Delegate
-		}
-		if idAccountID, err := state.DecodeAccountID(idAccount); err == nil {
-			if data, rerr := e.view.Read(keylet.Account(idAccountID)); rerr == nil && data != nil {
-				if ar, perr := state.ParseAccountRoot(data); perr == nil && ar.IsPseudoAccount() {
-					return ter.TefBAD_AUTH
-				}
+	idAccount := common.Account
+	if common.Delegate != "" {
+		idAccount = common.Delegate
+	}
+	return e.checkPseudoAccount(idAccount)
+}
+
+func (e *Engine) checkPseudoAccount(idAccount string) ter.Result {
+	if !e.rules().Enabled(amendment.FeatureLendingProtocol) &&
+		!e.rules().Enabled(amendment.FeatureBatch) {
+		return ter.TesSUCCESS
+	}
+	return e.rejectPseudoAccount(idAccount)
+}
+
+func (e *Engine) rejectPseudoAccount(idAccount string) ter.Result {
+	if idAccountID, err := state.DecodeAccountID(idAccount); err == nil {
+		if data, rerr := e.view.Read(keylet.Account(idAccountID)); rerr == nil && data != nil {
+			if ar, perr := state.ParseAccountRoot(data); perr == nil && ar.IsPseudoAccount() {
+				return ter.TefBAD_AUTH
 			}
 		}
 	}
@@ -407,13 +481,17 @@ func (e *Engine) checkMultiSign(common *txcore.Common) ter.Result {
 	if common.Delegate != "" {
 		idAccount = common.Delegate
 	}
+	return e.checkMultiSignForAccount(idAccount, common.Signers)
+}
+
+func (e *Engine) checkMultiSignForAccount(idAccount string, signers []txcore.SignerWrapper) ter.Result {
 	idAccountID, idErr := state.DecodeAccountID(idAccount)
 	if idErr != nil {
 		return ter.TefBAD_SIGNATURE
 	}
 	// Convert tx Signers to SignerInfo for checkBatchMultiSign
-	txSigners := make([]txcore.SignerInfo, len(common.Signers))
-	for i, sw := range common.Signers {
+	txSigners := make([]txcore.SignerInfo, len(signers))
+	for i, sw := range signers {
 		txSigners[i] = txcore.SignerInfo{
 			Account:       sw.Signer.Account,
 			SigningPubKey: sw.Signer.SigningPubKey,
@@ -426,20 +504,22 @@ func (e *Engine) checkMultiSign(common *txcore.Common) ter.Result {
 // the idAccount's master/regular key configuration.
 // Reference: rippled Transactor::checkSingleSign in Transactor.cpp lines 682-740.
 func (e *Engine) checkSingleSign(common *txcore.Common) ter.Result {
+	idAccount := common.Account
+	if common.Delegate != "" {
+		idAccount = common.Delegate
+	}
+	return e.checkSingleSignForAccount(idAccount, common.SigningPubKey)
+}
+
+func (e *Engine) checkSingleSignForAccount(idAccount, signingPubKey string) ter.Result {
 	// Single-signed transaction: check signing key authorization.
 	// This runs regardless of SkipSignatureVerification because authorization
 	// (master key disabled, regular key) is a ledger-state check, not a
 	// cryptographic check. The actual signature verification is done in
 	// Validate() and gated by SkipSignatureVerification.
-	signerAddress, addrErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(common.SigningPubKey)
+	signerAddress, addrErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(signingPubKey)
 	if addrErr != nil {
 		return ter.TefBAD_AUTH
-	}
-
-	// Determine the idAccount: delegate if present, else source account.
-	idAccount := common.Account
-	if common.Delegate != "" {
-		idAccount = common.Delegate
 	}
 
 	// Read the idAccount's data for signature authorization check

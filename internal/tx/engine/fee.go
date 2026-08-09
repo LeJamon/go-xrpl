@@ -17,13 +17,10 @@ func (e *Engine) calculateFee(tx txcore.Transaction) uint64 {
 			return fee
 		}
 	}
-	// If no fee specified, use base fee (adjusted for multi-sig if applicable)
-	baseFee := e.config.BaseFee
-	if sign.IsMultiSigned(tx) {
-		numSigners := len(common.Signers)
-		return sign.CalculateMultiSigFee(baseFee, numSigners)
-	}
-	return baseFee
+	// This fallback is used only by internal/test callers that have not passed
+	// through required-wire-field validation. Keep it identical to the ordinary
+	// signer + sponsor-signer fee formula.
+	return sign.CalculateDefaultBaseFee(tx, e.config)
 }
 
 // parseTxDeclaredFee extracts the fee declared in the transaction itself.

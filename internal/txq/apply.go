@@ -190,10 +190,18 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	if ctx.GetApplyFlags()&tx.TapFAIL_HARD != 0 {
 		return ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
 	}
+	if txn.TxType() == tx.TypeBatch {
+		return ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
+	}
 	if common.Delegate != "" {
 		return ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
 	}
-	if common.SponsorFlags != nil && *common.SponsorFlags&tx.SpfSponsorFee != 0 {
+	// A fee-sponsored transaction may apply directly, but it must never be
+	// held: its payer is external to the per-source-account balance chain
+	// modelled by TxQ. Reserve-only sponsorship does not change that chain and
+	// remains queueable.
+	if common.Sponsor != "" && common.SponsorFlags != nil &&
+		*common.SponsorFlags&tx.SpfSponsorFee != 0 {
 		return ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
 	}
 

@@ -15,6 +15,7 @@ type seqTx struct {
 	seq          uint32
 	fee          string
 	delegate     string
+	sponsor      string
 	sponsorFlags *uint32
 }
 
@@ -26,6 +27,7 @@ func (m *seqTx) GetCommon() *tx.Common {
 		Sequence:     &s,
 		Fee:          m.fee,
 		Delegate:     m.delegate,
+		Sponsor:      m.sponsor,
 		SponsorFlags: m.sponsorFlags,
 	}
 }
@@ -34,6 +36,10 @@ func (m *seqTx) Flatten() (map[string]any, error) { return map[string]any{}, nil
 func (m *seqTx) GetRawBytes() []byte              { return []byte{byte(m.seq)} }
 func (m *seqTx) SetRawBytes([]byte)               {}
 func (m *seqTx) RequiredAmendments() [][32]byte   { return nil }
+
+type batchSeqTx struct{ *seqTx }
+
+func (m *batchSeqTx) TxType() tx.Type { return tx.TypeBatch }
 
 // stubApplyCtx is a configurable txq.ApplyContext for admission tests. The
 // preflight/preclaim/apply results are dialled in per test so we can pin which
@@ -143,38 +149,21 @@ func TestAcceptDropsTefCategory(t *testing.T) {
 	}
 }
 
-func TestApplyRejectsDelegatedAndFeeSponsoredTransactionsFromQueue(t *testing.T) {
-	feeSponsorFlags := tx.SpfSponsorFee
-	tests := []struct {
-		name string
-		txn  *seqTx
-	}{
-		{
-			name: "delegated",
-			txn:  &seqTx{seq: 6, fee: "10", delegate: "rDelegate"},
-		},
-		{
-			name: "fee sponsored",
-			txn:  &seqTx{seq: 6, fee: "10", sponsorFlags: &feeSponsorFlags},
-		},
+func TestApplyRejectsDelegatedTransactionFromQueue(t *testing.T) {
+	q := New(makeAdmissionConfig())
+	ctx := &stubApplyCtx{
+		seq:      5,
+		balance:  1_000_000,
+		exists:   true,
+		baseFee:  10,
+		preclaim: ter.TesSUCCESS,
 	}
+	transaction := &seqTx{seq: 6, fee: "10", delegate: "rDelegate"}
 
-	for i, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			q := New(makeAdmissionConfig())
-			ctx := &stubApplyCtx{
-				seq:      5,
-				balance:  1_000_000,
-				exists:   true,
-				baseFee:  10,
-				preclaim: ter.TesSUCCESS,
-			}
-			result := q.Apply(ctx, test.txn, [32]byte{byte(i + 1)}, [20]byte{1})
-			require.Equal(t, ter.TelCAN_NOT_QUEUE, result.Result)
-			require.False(t, result.Applied)
-			require.Zero(t, q.Size())
-		})
-	}
+	result := q.Apply(ctx, transaction, [32]byte{1}, [20]byte{1})
+	require.Equal(t, ter.TelCAN_NOT_QUEUE, result.Result)
+	require.False(t, result.Applied)
+	require.Zero(t, q.Size())
 }
 
 func TestAcceptRevisitsNextAccountCandidateAcrossGap(t *testing.T) {
@@ -588,6 +577,118 @@ func TestApply_H1_PreclaimPassesQueues(t *testing.T) {
 
 	require.Equal(t, ter.TerQUEUED, res.Result)
 	require.True(t, res.Queued)
+}
+
+func TestApplyFeeSponsoredTransactionCannotQueueButMayApplyDirectly(t *testing.T) {
+	account := [20]byte{9}
+	feeFlag := tx.SpfSponsorFee
+	sponsor := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+
+	t.Run("cannot queue", func(t *testing.T) {
+		q := New(makeAdmissionConfig())
+		ctx := &stubApplyCtx{
+			seq:        5,
+			balance:    1_000_000_000,
+			exists:     true,
+			baseFee:    10,
+			txInLedger: 100,
+		}
+		transaction := &seqTx{
+			seq:          5,
+			fee:          "10",
+			sponsor:      sponsor,
+			sponsorFlags: &feeFlag,
+		}
+
+		result := q.Apply(ctx, transaction, [32]byte{0xEF}, account)
+		require.Equal(t, ter.TelCAN_NOT_QUEUE, result.Result)
+		require.False(t, result.Applied)
+		require.False(t, result.Queued)
+		require.Zero(t, q.Size())
+	})
+
+	t.Run("may apply directly", func(t *testing.T) {
+		q := New(makeAdmissionConfig())
+		ctx := &stubApplyCtx{
+			seq:      5,
+			balance:  1_000_000_000,
+			exists:   true,
+			baseFee:  10,
+			applyRes: ter.TesSUCCESS,
+			applied:  true,
+		}
+		transaction := &seqTx{
+			seq:          5,
+			fee:          "10",
+			sponsor:      sponsor,
+			sponsorFlags: &feeFlag,
+		}
+
+		result := q.Apply(ctx, transaction, [32]byte{0xF0}, account)
+		require.Equal(t, ter.TesSUCCESS, result.Result)
+		require.True(t, result.Applied)
+		require.False(t, result.Queued)
+	})
+
+	t.Run("reserve only remains queueable", func(t *testing.T) {
+		q := New(makeAdmissionConfig())
+		ctx := &stubApplyCtx{
+			seq:        5,
+			balance:    1_000_000_000,
+			exists:     true,
+			baseFee:    10,
+			txInLedger: 100,
+		}
+		reserveFlag := tx.SpfSponsorReserve
+		transaction := &seqTx{
+			seq:          5,
+			fee:          "10",
+			sponsor:      sponsor,
+			sponsorFlags: &reserveFlag,
+		}
+
+		result := q.Apply(ctx, transaction, [32]byte{0xF1}, account)
+		require.Equal(t, ter.TerQUEUED, result.Result)
+		require.True(t, result.Queued)
+	})
+}
+
+func TestApplyBatchCannotQueueButMayApplyDirectly(t *testing.T) {
+	account := [20]byte{9}
+
+	t.Run("cannot queue", func(t *testing.T) {
+		q := New(makeAdmissionConfig())
+		ctx := &stubApplyCtx{
+			seq:        5,
+			balance:    1_000_000_000,
+			exists:     true,
+			baseFee:    10,
+			txInLedger: 100,
+		}
+
+		result := q.Apply(ctx, &batchSeqTx{seqTx: &seqTx{seq: 5, fee: "10"}}, [32]byte{0xF2}, account)
+		require.Equal(t, ter.TelCAN_NOT_QUEUE, result.Result)
+		require.False(t, result.Applied)
+		require.False(t, result.Queued)
+		require.Zero(t, q.Size())
+	})
+
+	t.Run("may apply directly", func(t *testing.T) {
+		q := New(makeAdmissionConfig())
+		ctx := &stubApplyCtx{
+			seq:      5,
+			balance:  1_000_000_000,
+			exists:   true,
+			baseFee:  10,
+			applyRes: ter.TesSUCCESS,
+			applied:  true,
+		}
+
+		result := q.Apply(ctx, &batchSeqTx{seqTx: &seqTx{seq: 5, fee: "10"}}, [32]byte{0xF3}, account)
+		require.Equal(t, ter.TesSUCCESS, result.Result)
+		require.True(t, result.Applied)
+		require.False(t, result.Queued)
+	})
 }
 
 // TestApply_BadFeeRejected pins that a malformed Fee string is rejected with

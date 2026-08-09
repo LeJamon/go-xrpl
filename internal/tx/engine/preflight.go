@@ -135,6 +135,9 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 	if result := e.preflightMultiSignStructure(tx, common); result != ter.TesSUCCESS {
 		return result
 	}
+	if result := e.preflightSponsorSignStructure(common); result != ter.TesSUCCESS {
+		return result
+	}
 	if result := e.preflightBatchSignerStructure(tx); result != ter.TesSUCCESS {
 		return result
 	}
@@ -364,6 +367,9 @@ func checkSponsorFields(transaction txcore.Transaction, common *txcore.Common, r
 	if hasSponsorSignature && (!hasSponsor || !hasSponsorFlags) {
 		return ter.TemMALFORMED
 	}
+	if hasSponsorSignature && common.SponsorSignature == nil {
+		return ter.TemMALFORMED
+	}
 	if hasSponsorFlags {
 		if common.SponsorFlags == nil {
 			return ter.TemINVALID_FLAG
@@ -508,6 +514,49 @@ func (e *Engine) preflightMultiSignStructure(tx txcore.Transaction, common *txco
 	return ter.TesSUCCESS
 }
 
+// preflightSponsorSignStructure enforces the signature-object shape even when
+// cryptographic verification is disabled (simulation and the test harness).
+// Nested multisigners are ordered and unique by binary AccountID, but unlike
+// top-level Signers they are not compared with the transaction Account.
+func (e *Engine) preflightSponsorSignStructure(common *txcore.Common) ter.Result {
+	sponsor := common.SponsorSignature
+	if sponsor == nil {
+		return ter.TesSUCCESS
+	}
+	if sponsor.SigningPubKey != "" {
+		if len(sponsor.Signers) != 0 {
+			return ter.TemINVALID
+		}
+		return ter.TesSUCCESS
+	}
+	if len(sponsor.Signers) == 0 {
+		if sponsor.TxnSignature != "" {
+			return ter.TemINVALID
+		}
+		// An empty object is accepted only by dry-run/test configurations.
+		// The crypto verifier rejects it on a normal submission.
+		return ter.TesSUCCESS
+	}
+	if sponsor.TxnSignature != "" {
+		return ter.TemINVALID
+	}
+	if n := len(sponsor.Signers); n < sign.MinMultiSigners || n > sign.MaxMultiSigners {
+		return ter.TemINVALID
+	}
+	var lastAccountID [20]byte
+	for _, sw := range sponsor.Signers {
+		signerID, err := state.DecodeAccountID(sw.Signer.Account)
+		if err != nil {
+			return ter.TemINVALID
+		}
+		if signerID == lastAccountID || bytes.Compare(lastAccountID[:], signerID[:]) > 0 {
+			return ter.TemINVALID
+		}
+		lastAccountID = signerID
+	}
+	return ter.TesSUCCESS
+}
+
 // preflightBatchSignerStructure enforces the rules-gated upper bound on each
 // multi-signed BatchSigner's nested Signers array. rippled checks this inside
 // multiSignHelper (called from Batch::preflight with ctx.rules); an out-of-range
@@ -551,6 +600,14 @@ func (e *Engine) verifySignatures(tx txcore.Transaction) ter.Result {
 	// Validity::SigBad), which rippled maps to temINVALID.
 	if cp := tx.GetCommon().CounterpartySignature; cp != nil {
 		if err := sign.VerifyCounterpartySignature(tx, cp, true); err != nil {
+			return ter.TemINVALID
+		}
+	}
+	// SponsorSignature is checked after CounterpartySignature, matching
+	// STTx::checkSign. Its contents are excluded from the signing projection,
+	// but every signature still binds all ordinary transaction fields.
+	if sponsor := tx.GetCommon().SponsorSignature; sponsor != nil {
+		if err := sign.VerifySponsorSignature(tx, sponsor, true); err != nil {
 			return ter.TemINVALID
 		}
 	}

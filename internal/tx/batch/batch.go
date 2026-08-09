@@ -126,6 +126,7 @@ var (
 	ErrBatchInnerHasSigners       = ter.Errorf(ter.TemBAD_SIGNER, "inner transaction cannot include Signers")
 	ErrBatchInnerHasSigningPubKey = ter.Errorf(ter.TemBAD_REGKEY, "inner transaction SigningPubKey must be empty")
 	ErrBatchInnerBadFee           = ter.Errorf(ter.TemBAD_FEE, "inner transaction must have a fee of 0")
+	ErrBatchInnerFeeSponsored     = ter.Errorf(ter.TemINVALID_FLAG, "inner transaction cannot sponsor its fee")
 	ErrBatchInnerSeqAndTicket     = ter.Errorf(ter.TemSEQ_AND_TICKET, "inner transaction must have exactly one of Sequence and TicketSequence")
 	ErrBatchInnerTicketAndTxnID   = ter.Errorf(ter.TemINVALID_INNER_BATCH, "inner transaction must not carry AccountTxnID when using a ticket")
 	ErrBatchInnerDupSeqOrTicket   = ter.Errorf(ter.TemREDUNDANT, "duplicate inner Sequence or TicketSequence for account")
@@ -194,7 +195,7 @@ func (b *Batch) InnerTransactions() []tx.Transaction {
 // mirroring the checkSignatureFields lambda in rippled Batch::preflight: a
 // TxnSignature yields temBAD_SIGNATURE, a Signers array temBAD_SIGNER, and a
 // non-empty SigningPubKey temBAD_REGKEY. It is applied to every inner
-// transaction and to its nested CounterpartySignature.
+// transaction and to its nested CounterpartySignature/SponsorSignature.
 func checkInnerSignatureFields(signingPubKey, txnSignature string, hasSigners bool) error {
 	if txnSignature != "" {
 		return ErrBatchInnerHasTxnSignature
@@ -258,8 +259,24 @@ func (b *Batch) validateInnerTransactions() (map[string]struct{}, error) {
 				return nil, err
 			}
 		}
+		if sponsor := innerCommon.SponsorSignature; sponsor != nil {
+			if err := checkInnerSignatureFields(
+				sponsor.SigningPubKey,
+				sponsor.TxnSignature,
+				len(sponsor.Signers) > 0,
+			); err != nil {
+				return nil, err
+			}
+		}
 		if err := validateInnerFee(innerCommon.Fee); err != nil {
 			return nil, err
+		}
+		// Inner transactions have Fee=0, so fee sponsorship is nonsensical and
+		// explicitly rejected by rippled. Reserve sponsorship remains allowed
+		// for the transaction types on the common allow-list.
+		if innerCommon.Sponsor != "" && innerCommon.SponsorFlags != nil &&
+			*innerCommon.SponsorFlags&tx.SpfSponsorFee != 0 {
+			return nil, ErrBatchInnerFeeSponsored
 		}
 
 		// The inner's own preflight1 rejects a ticket combined with AccountTxnID
@@ -309,10 +326,17 @@ func (b *Batch) validateInnerTransactions() (map[string]struct{}, error) {
 			}
 		}
 
-		// An inner account that is not the outer account must be covered by a
-		// BatchSigner. Reference: rippled Batch.cpp:376-379.
-		if innerCommon.Account != b.Account {
-			requiredSigners[innerCommon.Account] = struct{}{}
+		authorizer := innerCommon.Account
+		if innerCommon.Delegate != "" {
+			authorizer = innerCommon.Delegate
+		}
+		if authorizer != b.Account {
+			requiredSigners[authorizer] = struct{}{}
+		}
+		if innerCommon.SponsorSignature != nil &&
+			innerCommon.Sponsor != "" &&
+			innerCommon.Sponsor != b.Account {
+			requiredSigners[innerCommon.Sponsor] = struct{}{}
 		}
 	}
 	return requiredSigners, nil
@@ -441,7 +465,7 @@ func (b *Batch) Flatten() (map[string]any, error) {
 // CalculateMinimumFee mirrors rippled Batch::calculateBaseFee
 // (Batch.cpp:53-150). The total fee a batch must pay is the sum of:
 //   - batchBase   = view.fees().base + Transactor::calculateBaseFee(view, tx)
-//     = baseFee + (1 + len(outer.Signers)) * baseFee
+//     = baseFee + (1 + len(outer.Signers) + len(sponsor.Signers)) * baseFee
 //   - txnFees     = Σ inner-tx dispatched base fees
 //   - signerFees  = effectiveSignerCount * baseFee
 //
@@ -452,7 +476,7 @@ func (b *Batch) Flatten() (map[string]any, error) {
 // transactions return the overflow sentinel as a defense-in-depth fallback.
 func (b *Batch) CalculateMinimumFee(view tx.LedgerView, config tx.EngineConfig) uint64 {
 	baseFee := config.BaseFee
-	outerSigners := uint64(len(b.Common.Signers))
+	outerSigners := uint64(len(b.Common.Signers) + sign.SponsorSignerCount(b))
 	batchBase := baseFee + (1+outerSigners)*baseFee
 
 	var txnFees uint64
