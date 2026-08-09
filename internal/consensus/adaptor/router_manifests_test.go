@@ -96,17 +96,6 @@ func buildWireManifest(t *testing.T, seq uint32, masterSeed, ephSeed byte) []byt
 	return raw
 }
 
-func rawManifestCollection(entries ...[]byte) []byte {
-	var payload []byte
-	for _, wire := range entries {
-		entry := protowire.AppendTag(nil, 1, protowire.BytesType)
-		entry = protowire.AppendBytes(entry, wire)
-		payload = protowire.AppendTag(payload, 1, protowire.BytesType)
-		payload = protowire.AppendBytes(payload, entry)
-	}
-	return payload
-}
-
 func nestedManifestGroups(depth int) []byte {
 	var payload []byte
 	for range depth {
