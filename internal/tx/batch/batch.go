@@ -78,8 +78,34 @@ type BatchSigner struct {
 type BatchSignerData struct {
 	Account           string             `json:"Account"`
 	SigningPubKey     string             `json:"SigningPubKey"`
-	BatchTxnSignature string             `json:"BatchTxnSignature"`
+	BatchTxnSignature string             `json:"TxnSignature,omitempty"`
 	Signers           []tx.SignerWrapper `json:"Signers,omitempty"`
+	txnSignatureSet   bool
+	signersSet        bool
+}
+
+func (s *BatchSignerData) UnmarshalJSON(data []byte) error {
+	type signerAlias BatchSignerData
+	var decoded signerAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*s = BatchSignerData(decoded)
+	_, s.txnSignatureSet = fields["TxnSignature"]
+	_, s.signersSet = fields["Signers"]
+	return nil
+}
+
+func (s BatchSignerData) hasTxnSignature() bool {
+	return s.txnSignatureSet || s.BatchTxnSignature != ""
+}
+
+func (s BatchSignerData) hasSigners() bool {
+	return s.signersSet || len(s.Signers) > 0
 }
 
 // Batch flags. The mode-flag bit positions match rippled TxFlags.h exactly so
@@ -200,8 +226,8 @@ func (b *Batch) InnerTransactions() []tx.Transaction {
 // TxnSignature yields temBAD_SIGNATURE, a Signers array temBAD_SIGNER, and a
 // non-empty SigningPubKey temBAD_REGKEY. It is applied to every inner
 // transaction and to its nested CounterpartySignature/SponsorSignature.
-func checkInnerSignatureFields(signingPubKey, txnSignature string, hasSigners bool) error {
-	if txnSignature != "" {
+func checkInnerSignatureFields(signingPubKey string, hasTxnSignature, hasSigners bool) error {
+	if hasTxnSignature {
 		return ErrBatchInnerHasTxnSignature
 	}
 	if hasSigners {
@@ -213,12 +239,11 @@ func checkInnerSignatureFields(signingPubKey, txnSignature string, hasSigners bo
 	return nil
 }
 
-// validateInnerTransactions runs the per-inner checks.
-// Reference: rippled Batch.cpp:249-380 (per-inner checks in Batch::preflight).
-func (b *Batch) validateInnerTransactions() error {
+// PreflightInnerTransactions validates and preflights each inner transaction in
+// protocol order before advancing to the next one.
+func (b *Batch) PreflightInnerTransactions(preflight func(tx.Transaction) ter.Result) error {
 	flags := b.GetFlags()
 	enforceUnique := flags&(BatchFlagAllOrNothing|BatchFlagUntilFailure) != 0
-
 	uniqueHashes := make(map[[32]byte]struct{}, len(b.RawTransactions))
 	accountSeqTicket := make(map[string]map[uint32]struct{})
 	for _, rt := range b.RawTransactions {
@@ -254,21 +279,35 @@ func (b *Batch) validateInnerTransactions() error {
 		if innerCommon.GetFlags()&tx.TfInnerBatchTxn == 0 {
 			return ErrBatchInnerMissingFlag
 		}
-		if err := checkInnerSignatureFields(innerCommon.SigningPubKey, innerCommon.TxnSignature, len(innerCommon.Signers) > 0); err != nil {
+		if err := checkInnerSignatureFields(
+			innerCommon.SigningPubKey,
+			innerCommon.HasField("TxnSignature") || innerCommon.TxnSignature != "",
+			innerCommon.HasField("Signers") || len(innerCommon.Signers) > 0,
+		); err != nil {
 			return err
+		}
+		var wireFields map[string]any
+		if raw := inner.GetRawBytes(); len(raw) != 0 {
+			wireFields, _ = binarycodec.DecodeBytes(raw)
 		}
 		// A CounterpartySignature is optional on an inner transaction and should
 		// not be present, but if it is it must not carry any signature material.
 		if cp := innerCommon.CounterpartySignature; cp != nil {
-			if err := checkInnerSignatureFields(cp.SigningPubKey, cp.TxnSignature, len(cp.Signers) > 0); err != nil {
+			hasTxnSignature, hasSigners := nestedSignatureFieldPresence(wireFields, "CounterpartySignature")
+			if err := checkInnerSignatureFields(
+				cp.SigningPubKey,
+				hasTxnSignature || cp.TxnSignature != "",
+				hasSigners || len(cp.Signers) > 0,
+			); err != nil {
 				return err
 			}
 		}
 		if sponsor := innerCommon.SponsorSignature; sponsor != nil {
+			hasTxnSignature, hasSigners := nestedSignatureFieldPresence(wireFields, "SponsorSignature")
 			if err := checkInnerSignatureFields(
 				sponsor.SigningPubKey,
-				sponsor.TxnSignature,
-				len(sponsor.Signers) > 0,
+				hasTxnSignature || sponsor.TxnSignature != "",
+				hasSigners || len(sponsor.Signers) > 0,
 			); err != nil {
 				return err
 			}
@@ -283,20 +322,11 @@ func (b *Batch) validateInnerTransactions() error {
 			*innerCommon.SponsorFlags&tx.SpfSponsorFee != 0 {
 			return ErrBatchInnerFeeSponsored
 		}
-
-		// The inner's own preflight1 rejects a ticket combined with AccountTxnID
-		// (getSeqProxy().isTicket() && sfAccountTxnID present -> temINVALID, surfaced
-		// on the outer as temINVALID_INNER_BATCH). rippled runs the full inner
-		// preflight here, after the fee check; go-xrpl folds this specific rule into
-		// the inner loop since it never reaches the deferred engine inner-preflight
-		// otherwise. Reference: rippled Batch.cpp inner preflight -> Transactor.cpp preflight1.
-		usesTicket := innerCommon.TicketSequence != nil && (innerCommon.Sequence == nil || *innerCommon.Sequence == 0)
-		if usesTicket && innerCommon.AccountTxnID != "" {
-			return ErrBatchInnerTicketAndTxnID
+		if preflight(inner) != ter.TesSUCCESS {
+			return ErrBatchInvalidInnerTx
 		}
 
-		// rippled treats sfSequence absent and sfSequence==0 identically via
-		// getFieldU32; Go's *uint32 nil and *0 collapse the same way here.
+		// sfSequence absent and sfSequence==0 are equivalent here.
 		seqVal := uint32(0)
 		if innerCommon.Sequence != nil {
 			seqVal = *innerCommon.Sequence
@@ -332,6 +362,13 @@ func (b *Batch) validateInnerTransactions() error {
 		}
 	}
 	return nil
+}
+
+func nestedSignatureFieldPresence(fields map[string]any, name string) (hasTxnSignature, hasSigners bool) {
+	object, _ := fields[name].(map[string]any)
+	_, hasTxnSignature = object["TxnSignature"]
+	_, hasSigners = object["Signers"]
+	return hasTxnSignature, hasSigners
 }
 
 func (b *Batch) requiredBatchSigners() map[string]struct{} {
@@ -387,8 +424,7 @@ func (b *Batch) validateBatchSignerBounds() error {
 	return nil
 }
 
-// Reference: rippled Batch.cpp preflight()
-func (b *Batch) Validate() error {
+func (b *Batch) ValidateBatchOuter() error {
 	if err := b.BaseTx.Validate(); err != nil {
 		return err
 	}
@@ -422,13 +458,17 @@ func (b *Batch) Validate() error {
 		return ErrBatchTooManySigners
 	}
 
-	// Runs before the engine's BatchOuter loop so malformed inners surface
-	// with their specific TER instead of generic temINVALID_INNER_BATCH.
-	// Reference: rippled Batch.cpp:249-380.
-	if err := b.validateInnerTransactions(); err != nil {
+	return nil
+}
+
+// Reference: rippled Batch.cpp preflight()
+func (b *Batch) Validate() error {
+	if err := b.ValidateBatchOuter(); err != nil {
 		return err
 	}
-	return nil
+	return b.PreflightInnerTransactions(func(tx.Transaction) ter.Result {
+		return ter.TesSUCCESS
+	})
 }
 
 // PreflightSigValidated checks exact signer coverage only after all cryptographic
@@ -473,11 +513,11 @@ func (b *Batch) Flatten() (map[string]any, error) {
 				"Account":       s.BatchSigner.Account,
 				"SigningPubKey": s.BatchSigner.SigningPubKey,
 			}
-			if s.BatchSigner.BatchTxnSignature != "" {
+			if s.BatchSigner.hasTxnSignature() {
 				signerMap["TxnSignature"] = s.BatchSigner.BatchTxnSignature
 			}
 			// Include nested Signers for multi-sign batch signers
-			if len(s.BatchSigner.Signers) > 0 {
+			if s.BatchSigner.hasSigners() {
 				nestedSigners := make([]map[string]any, len(s.BatchSigner.Signers))
 				for j, nested := range s.BatchSigner.Signers {
 					nestedMap := map[string]any{
@@ -503,8 +543,9 @@ func (b *Batch) Flatten() (map[string]any, error) {
 	return m, nil
 }
 
-// CalculateMinimumFee mirrors rippled Batch::calculateBaseFee
-// (Batch.cpp:53-150). The total fee a batch must pay is the sum of:
+// CalculateMinimumFee returns the transaction's base fee. Preclaim performs the
+// same calculation and rejects malformed or overflowing totals.
+// The total fee a batch must pay is the sum of:
 //   - batchBase   = view.fees().base + Transactor::calculateBaseFee(view, tx)
 //     = baseFee + (1 + len(outer.Signers) + len(sponsor.Signers)) * baseFee
 //   - txnFees     = Σ inner-tx dispatched base fees
@@ -513,49 +554,87 @@ func (b *Batch) Flatten() (map[string]any, error) {
 // effectiveSignerCount counts each BatchSigner once when it carries a
 // direct BatchTxnSignature and as len(Signers) when the entry is a
 // multi-signed batch signer (Batch.cpp:128-134). Inner transactions use the
-// same per-type fee dispatch as standalone transactions. Inner Batch
-// transactions return the overflow sentinel as a defense-in-depth fallback.
+// same per-type fee dispatch as standalone transactions.
 func (b *Batch) CalculateMinimumFee(view tx.LedgerView, config tx.EngineConfig) uint64 {
-	baseFee := config.BaseFee
-	outerSigners := uint64(len(b.Common.Signers) + sign.SponsorSignerCount(b))
-	batchBase := baseFee + (1+outerSigners)*baseFee
+	if fee, ok := b.calculateMinimumFee(view, config); ok {
+		return fee
+	}
+	return config.BaseFee
+}
+
+func (b *Batch) calculateMinimumFee(view tx.LedgerView, config tx.EngineConfig) (uint64, bool) {
+	const maxAmount = uint64(^uint64(0) >> 1)
+
+	if len(b.RawTransactions) > MaxBatchTransactions || len(b.BatchSigners) > MaxBatchSigners {
+		return 0, false
+	}
+
+	outerSignerCount := uint64(len(b.Common.Signers) + sign.SponsorSignerCount(b))
+	baseFee, ok := batchFeeMul(config.BaseFee, outerSignerCount+1, maxAmount)
+	if !ok {
+		return 0, false
+	}
+	batchBase, ok := batchFeeAdd(config.BaseFee, baseFee, maxAmount)
+	if !ok {
+		return 0, false
+	}
 
 	var txnFees uint64
-	for _, rt := range b.RawTransactions {
-		inner := rt.RawTransaction.InnerTx
-		if inner == nil {
-			continue
+	for _, raw := range b.RawTransactions {
+		inner := raw.RawTransaction.InnerTx
+		if inner == nil || inner.TxType() == tx.TypeBatch {
+			return 0, false
 		}
-		txnFees += innerBaseFee(inner, view, config)
+		innerFee := sign.CalculateBaseFee(inner, view, config)
+		txnFees, ok = batchFeeAdd(txnFees, innerFee, maxAmount)
+		if !ok {
+			return 0, false
+		}
 	}
 
 	var signerCount uint64
-	for _, bs := range b.BatchSigners {
-		if bs.BatchSigner.BatchTxnSignature != "" {
+	for _, wrapper := range b.BatchSigners {
+		signer := wrapper.BatchSigner
+		switch {
+		case signer.hasTxnSignature():
 			signerCount++
-		} else if len(bs.BatchSigner.Signers) > 0 {
-			signerCount += uint64(len(bs.BatchSigner.Signers))
+		case len(signer.Signers) > sign.MaxMultiSigners:
+			return 0, false
+		case len(signer.Signers) > 0:
+			signerCount += uint64(len(signer.Signers))
 		}
 	}
-
-	return batchBase + txnFees + signerCount*baseFee
-}
-
-// innerBaseFee dispatches the same per-transaction fee override used for a
-// standalone transaction. Inner Batch transactions return the overflow sentinel.
-func innerBaseFee(inner tx.Transaction, view tx.LedgerView, config tx.EngineConfig) uint64 {
-	if inner.TxType() == tx.TypeBatch {
-		return overflowFee
+	signerFees, ok := batchFeeMul(config.BaseFee, signerCount, maxAmount)
+	if !ok {
+		return 0, false
 	}
-	return sign.CalculateBaseFee(inner, view, config)
+	innerFees, ok := batchFeeAdd(txnFees, signerFees, maxAmount)
+	if !ok {
+		return 0, false
+	}
+	return batchFeeAdd(batchBase, innerFees, maxAmount)
 }
 
-// overflowFee is the sentinel fee returned when fee calculation hits an
-// impossible condition (inner ttBATCH, overflow). It is larger than any
-// legitimate batch fee can ever be, ensuring the outer tx fails the
-// minimum-fee gate. Mirrors rippled Batch.cpp:66 returning INITIAL_XRP
-// (100 billion XRP) — we use a similarly impossible drops sentinel.
-const overflowFee uint64 = 100_000_000_000 * 1_000_000 // 100 billion XRP in drops
+func batchFeeAdd(a, b, max uint64) (uint64, bool) {
+	if a > max || b > max-a {
+		return 0, false
+	}
+	return a + b, true
+}
+
+func batchFeeMul(a, b, max uint64) (uint64, bool) {
+	if a != 0 && b > max/a {
+		return 0, false
+	}
+	return a * b, true
+}
+
+func (b *Batch) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	if _, ok := b.calculateMinimumFee(view, config); !ok {
+		return ter.TecINSUFF_FEE
+	}
+	return ter.TesSUCCESS
+}
 
 // AddInnerTransaction adds an inner transaction to the batch.
 // The transaction should have Fee="0", SigningPubKey="", and tfInnerBatchTxn flag set.

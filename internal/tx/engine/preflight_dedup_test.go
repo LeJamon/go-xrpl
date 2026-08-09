@@ -28,13 +28,9 @@ func dedupEngine(rules *amendment.Rules) *Engine {
 	})
 }
 
-// TestPreflight_SkipsRepeatStructural proves the structural verdict is memoised:
-// once preflight succeeds under a set of rules, a second preflight of the same
-// parsed transaction under those same rules skips the structural pass — shown by
-// corrupting a structural field afterwards and observing the check still passes.
-// This is the open-ledger apply strand's double preflight (TxQ.Apply then
-// Engine.Apply) collapsing to a single structural pass (#1153).
-func TestPreflight_SkipsRepeatStructural(t *testing.T) {
+// TestPreflight_CacheRejectsMutatedStructure proves the structural verdict is
+// bound to the fields that produced it.
+func TestPreflight_CacheRejectsMutatedStructure(t *testing.T) {
 	rules := amendment.AllSupportedRules()
 	txn := newDedupTx()
 	eng := dedupEngine(rules)
@@ -49,12 +45,12 @@ func TestPreflight_SkipsRepeatStructural(t *testing.T) {
 		t.Fatal("a successful preflight must cache the structural verdict")
 	}
 
-	// Corrupt a structural field; the cached verdict must short-circuit the
-	// structural pass so the second preflight still passes.
+	// Corrupt a structural field. The changed transaction identity invalidates
+	// the verdict and forces the structural checks to run again.
 	txn.GetCommon().Sequence = nil
 	txn.GetCommon().TicketSequence = nil
-	if res := eng.preflight(txn); res != ter.TesSUCCESS {
-		t.Fatalf("cached structural verdict must skip the repeat; got %s", res)
+	if res := eng.preflight(txn); res != ter.TemBAD_SEQUENCE {
+		t.Fatalf("mutated transaction must not reuse structural verdict; got %s", res)
 	}
 }
 

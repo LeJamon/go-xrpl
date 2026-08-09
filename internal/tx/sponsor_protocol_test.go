@@ -141,7 +141,7 @@ func TestSponsorTransactionCodecRoundTrip(t *testing.T) {
 			if parsed.TxType() != wantType {
 				t.Fatalf("parsed type = %v, want %v", parsed.TxType(), wantType)
 			}
-			if !bytes.Equal(parsed.GetCommon().RawBytes, raw) {
+			if !bytes.Equal(parsed.GetRawBytes(), raw) {
 				t.Fatal("ParseFromBinary did not preserve canonical bytes")
 			}
 		})
@@ -278,8 +278,13 @@ func TestSponsorCommonFieldsJSONRoundTrip(t *testing.T) {
 	if got.Sponsor != tx.Sponsor || got.SponsorFlags == nil || *got.SponsorFlags != flags {
 		t.Fatalf("Sponsor fields = (%q, %#v), want (%q, %d)", got.Sponsor, got.SponsorFlags, tx.Sponsor, flags)
 	}
-	if !reflect.DeepEqual(got.SponsorSignature, tx.SponsorSignature) {
-		t.Fatalf("SponsorSignature = %#v, want %#v", got.SponsorSignature, tx.SponsorSignature)
+	if got.SponsorSignature == nil ||
+		got.SponsorSignature.SigningPubKey != tx.SponsorSignature.SigningPubKey ||
+		got.SponsorSignature.TxnSignature != tx.SponsorSignature.TxnSignature {
+		t.Fatalf("SponsorSignature = %#v, want values from %#v", got.SponsorSignature, tx.SponsorSignature)
+	}
+	if !got.SponsorSignature.HasField("SigningPubKey") || !got.SponsorSignature.HasField("TxnSignature") {
+		t.Fatal("parsed SponsorSignature did not retain field presence")
 	}
 }
 

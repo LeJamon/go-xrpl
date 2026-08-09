@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -79,6 +80,7 @@ func TestBatchSignerSigningDataBindings(t *testing.T) {
 	require.NoError(t, err)
 
 	b := NewBatch(testOuter)
+	b.Fee = "50"
 	b.SetSequence(7)
 	b.SetFlags(BatchFlagAllOrNothing)
 	b.AddInnerTransaction(makeTestPaymentFrom(signerAccount))
@@ -99,6 +101,24 @@ func TestBatchSignerSigningDataBindings(t *testing.T) {
 
 	require.NoError(t, b.Validate())
 	require.NoError(t, b.VerifyBatchSignatures())
+	t.Run("explicit empty Signers", func(t *testing.T) {
+		fields, err := b.Flatten()
+		require.NoError(t, err)
+		batchSigners := fields["BatchSigners"].([]map[string]any)
+		batchSigner := batchSigners[0]["BatchSigner"].(map[string]any)
+		batchSigner["Signers"] = []map[string]any{}
+
+		encoded, err := binarycodec.Encode(fields)
+		require.NoError(t, err)
+		blob, err := hex.DecodeString(encoded)
+		require.NoError(t, err)
+		parsed, err := tx.ParseFromBinary(blob)
+		require.NoError(t, err)
+		parsedBatch := parsed.(*Batch)
+
+		require.True(t, parsedBatch.BatchSigners[0].BatchSigner.hasSigners())
+		require.Error(t, parsedBatch.VerifyBatchSignatures())
+	})
 
 	t.Run("outer account", func(t *testing.T) {
 		original := b.Account

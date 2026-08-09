@@ -130,6 +130,24 @@ func TestGetAutofillFee_ConfidentialMPTSigners(t *testing.T) {
 	}
 }
 
+func TestGetAutofillFee_MalformedTransactionUsesReferenceFee(t *testing.T) {
+	svc, err := service.New(defaultServiceConfig())
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("service.Start: %v", err)
+	}
+
+	fee, err := svc.GetAutofillFee(nil, false, 10, 1)
+	if err != nil {
+		t.Fatalf("GetAutofillFee(nil): %v", err)
+	}
+	if fee != 10 {
+		t.Fatalf("malformed transaction autofill fee = %d; want reference fee 10", fee)
+	}
+}
+
 // TestGetAutofillFee_LoadedLocal verifies the LoadFeeTrack integration:
 // raising the local factor inflates the autofilled fee by exactly
 // localFee/LoadBase, matching rippled scaleFeeLoad (LoadFeeTrack.cpp:106-110).

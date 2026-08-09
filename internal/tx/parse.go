@@ -13,22 +13,22 @@ import (
 // Uses the registry-based FromJSON for all registered types, with a fallback
 // to BaseTx for unregistered types.
 func ParseJSON(data []byte) (Transaction, error) {
+	var header struct {
+		TransactionType string `json:"TransactionType"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return nil, fmt.Errorf("failed to parse transaction: %w", err)
+	}
 	tx, err := FromJSON(data)
 	if err == ErrUnknownTransactionType {
 		// Fallback: parse as generic BaseTx for unregistered types
-		var header struct {
-			TransactionType string `json:"TransactionType"`
-		}
-		if err := json.Unmarshal(data, &header); err != nil {
-			return nil, fmt.Errorf("failed to parse transaction: %w", err)
-		}
 		txType, knownType := TypeFromName(header.TransactionType)
 		presentFields, err := jsonPresentFields(data)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse transaction fields: %w", err)
 		}
+		var values map[string]any
 		if knownType {
-			var values map[string]any
 			if err := json.Unmarshal(data, &values); err != nil {
 				return nil, fmt.Errorf("failed to parse transaction fields: %w", err)
 			}
@@ -42,6 +42,12 @@ func ParseJSON(data []byte) (Transaction, error) {
 		}
 		baseTx.SetPresentFields(presentFields)
 		baseTx.txType = txType
+		if values == nil {
+			if err := json.Unmarshal(data, &values); err != nil {
+				return nil, fmt.Errorf("failed to parse transaction fields: %w", err)
+			}
+		}
+		baseTx.setFallbackFields(values)
 		return &baseTx, nil
 	}
 	return tx, err
@@ -62,14 +68,25 @@ func ParseHash256NonZero(s string) ([32]byte, error) {
 	return h, nil
 }
 
-// ParseFromBinary parses a binary transaction blob into a Transaction
+// ParseFromBinary parses a binary transaction blob and retains its canonical encoding.
 func ParseFromBinary(blob []byte) (Transaction, error) {
+	parsed, decoded, canonical, err := parseFromBinaryUnbound(blob)
+	if err != nil {
+		return nil, err
+	}
+	if err := bindCanonicalRawBytes(parsed, decoded, canonical); err != nil {
+		return nil, err
+	}
+	return parsed, nil
+}
+
+func parseFromBinaryUnbound(blob []byte) (Transaction, map[string]any, []byte, error) {
 	const (
 		minTransactionBytes = 32
 		maxTransactionBytes = 1 << 20
 	)
 	if len(blob) < minTransactionBytes || len(blob) > maxTransactionBytes {
-		return nil, ter.Errorf(ter.TemMALFORMED, "transaction length invalid")
+		return nil, nil, nil, ter.Errorf(ter.TemMALFORMED, "transaction length invalid")
 	}
 
 	// Decode the canonical binary directly; the blob is already bytes, so
@@ -77,7 +94,11 @@ func ParseFromBinary(blob []byte) (Transaction, error) {
 	// this per-transaction hot path.
 	jsonMap, err := binarycodec.DecodeBytes(blob)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode binary transaction: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to decode binary transaction: %w", err)
+	}
+	canonical, err := binarycodec.EncodeBytes(jsonMap)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to canonicalize binary transaction: %w", err)
 	}
 
 	// Extract present fields from the decoded map
@@ -90,16 +111,21 @@ func ParseFromBinary(blob []byte) (Transaction, error) {
 	typeName, _ := jsonMap["TransactionType"].(string)
 	txType, knownType := TypeFromName(typeName)
 	if _, hasTemplate := txTemplates[txType]; !knownType || !hasTemplate {
-		return nil, ter.Errorf(ter.TemMALFORMED, "invalid transaction type %q", typeName)
+		return nil, nil, nil, ter.Errorf(ter.TemMALFORMED, "invalid transaction type %q", typeName)
 	}
 	if err := ValidateTemplateFields(txType, jsonMap); err != nil {
-		return nil, ter.Errorf(ter.TemMALFORMED, "%s", err)
+		return nil, nil, nil, ter.Errorf(ter.TemMALFORMED, "%s", err)
+	}
+	if txType == TypeBatch {
+		if reason := batchMapConstructionChecksFailureReason(jsonMap); reason != "" {
+			return nil, nil, nil, ter.Errorf(ter.TemMALFORMED, "%s", reason)
+		}
 	}
 
 	// Convert map to JSON bytes
 	jsonBytes, err := json.Marshal(jsonMap)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal decoded transaction: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to marshal decoded transaction: %w", err)
 	}
 
 	// The TransactionType is already known from the decoded map, so build the
@@ -110,7 +136,7 @@ func ParseFromBinary(blob []byte) (Transaction, error) {
 	if knownType {
 		if t, nerr := NewFromType(txType); nerr == nil {
 			if err := json.Unmarshal(jsonBytes, t); err != nil {
-				return nil, fmt.Errorf("failed to parse transaction: %w", err)
+				return nil, nil, nil, fmt.Errorf("failed to parse transaction: %w", err)
 			}
 			parsed = t
 		}
@@ -118,16 +144,11 @@ func ParseFromBinary(blob []byte) (Transaction, error) {
 	if parsed == nil {
 		parsed, err = ParseJSON(jsonBytes)
 		if err != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
 	}
 
 	parsed.GetCommon().SetPresentFields(presentFields)
 
-	// Preserve the original serialized bytes so that downstream consumers
-	// (e.g. sortCanonicalSalted) can use them for hash/SHAMap computation
-	// without re-encoding, ensuring byte-exact fidelity with the source.
-	parsed.SetRawBytes(blob)
-
-	return parsed, nil
+	return parsed, jsonMap, canonical, nil
 }

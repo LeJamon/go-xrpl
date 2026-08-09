@@ -205,7 +205,7 @@ func TestService_SubmitTransaction_BadSignatureIsNotQueryable(t *testing.T) {
 	}
 }
 
-func TestService_SubmitTransaction_BatchSignerFailureRemainsQueryable(t *testing.T) {
+func TestService_SubmitTransaction_BatchSignerFailureIsNotHeld(t *testing.T) {
 	cfg := defaultServiceConfig()
 	cfg.Standalone = false
 	cfg.Startup.Mode = service.StartupFresh
@@ -270,19 +270,8 @@ func TestService_SubmitTransaction_BatchSignerFailureRemainsQueryable(t *testing
 	if result.Applied {
 		t.Fatal("invalid BatchSigner signature must not apply")
 	}
-	hold, err := svc.GetTransaction(hash)
-	if err != nil {
-		t.Fatalf("GetTransaction(held batch) = %v", err)
-	}
-	if hold.Validated || hold.LedgerIndex != 0 || hold.TxIndex != ^uint32(0) {
-		t.Fatalf("held batch advertised validated-ledger state: %+v", hold)
-	}
-	heldBlob, metaBlob, err := tx.SplitTxWithMetaBlob(hold.TxData)
-	if err != nil {
-		t.Fatalf("split held batch: %v", err)
-	}
-	if string(heldBlob) != string(blob) || metaBlob != nil {
-		t.Fatalf("held batch payload = (%x, %x), want tx-only input", heldBlob, metaBlob)
+	if _, err := svc.GetTransaction(hash); !errors.Is(err, service.ErrTxnNotFound) {
+		t.Fatalf("GetTransaction(bad BatchSigner) = %v, want ErrTxnNotFound", err)
 	}
 }
 

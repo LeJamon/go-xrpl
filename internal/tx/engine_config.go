@@ -1,7 +1,9 @@
 package tx
 
 import (
+	"bytes"
 	"encoding/hex"
+	"errors"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -284,6 +286,99 @@ func SerializeTransaction(tx Transaction) ([]byte, error) {
 		}
 		return append([]byte(nil), rawBytes...), nil
 	}
+	return serializeCurrentTransaction(tx)
+}
+
+// ComputeCurrentTransactionHash computes the transaction ID from the current
+// parsed fields, ignoring any original wire bytes retained on the object.
+func ComputeCurrentTransactionHash(tx Transaction) ([32]byte, error) {
+	txBytes, err := serializeCurrentTransaction(tx)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return hashWithTxnPrefix(txBytes), nil
+}
+
+// CurrentFieldsMatchRaw reports whether the transaction's current parsed fields
+// still describe the retained wire transaction.
+func CurrentFieldsMatchRaw(tx Transaction) (bool, error) {
+	if len(tx.GetRawBytes()) == 0 {
+		return true, nil
+	}
+	originalID, ok := tx.GetCommon().RawFieldsIdentity()
+	if !ok {
+		return false, nil
+	}
+	currentID, err := ComputeCurrentTransactionHash(tx)
+	if err != nil {
+		return false, err
+	}
+	return currentID == originalID, nil
+}
+
+// BindRawBytes associates wire bytes with the transaction's current parsed
+// fields so later signature verification can detect object mutation.
+func BindRawBytes(tx Transaction, raw []byte) error {
+	if len(raw) == 0 {
+		tx.SetRawBytes(nil)
+		return nil
+	}
+	rawFields, err := binarycodec.DecodeBytes(raw)
+	if err != nil {
+		return err
+	}
+	canonical, err := binarycodec.EncodeBytes(rawFields)
+	if err != nil {
+		return err
+	}
+	return bindCanonicalRawBytes(tx, rawFields, canonical)
+}
+
+func bindCanonicalRawBytes(tx Transaction, rawFields map[string]any, canonical []byte) error {
+	_, alreadyBound := tx.GetCommon().RawFieldsIdentity()
+	sameRaw := bytes.Equal(tx.GetRawBytes(), canonical)
+	if alreadyBound && sameRaw {
+		tx.SetRawBytes(canonical)
+		return nil
+	}
+	currentFields, err := tx.Flatten()
+	if err != nil {
+		return err
+	}
+	PopulateRequiredWireFields(currentFields, tx.GetCommon())
+	currentProjectionID, err := transactionFieldProjectionID(currentFields)
+	if err != nil {
+		return err
+	}
+	rawProjectionID, err := transactionFieldProjectionID(rawFields)
+	if err != nil {
+		return err
+	}
+	if currentProjectionID != rawProjectionID {
+		return errors.New("raw transaction fields do not match transaction")
+	}
+	currentID, err := ComputeCurrentTransactionHash(tx)
+	if err != nil {
+		return err
+	}
+	tx.SetRawBytes(canonical)
+	tx.GetCommon().MarkRawFieldsIdentity(currentID)
+	return nil
+}
+
+func transactionFieldProjectionID(fields map[string]any) ([32]byte, error) {
+	hexValue, err := binarycodec.Encode(fields)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	encoded, err := hex.DecodeString(hexValue)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return hashWithTxnPrefix(encoded), nil
+}
+
+func serializeCurrentTransaction(tx Transaction) ([]byte, error) {
 	txMap, err := tx.Flatten()
 	if err != nil {
 		return nil, err

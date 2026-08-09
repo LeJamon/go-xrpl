@@ -2,6 +2,7 @@ package batch
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/clawback"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 func TestMain(m *testing.M) {
@@ -32,6 +34,11 @@ func TestBatchBinaryRoundTripPreservesInnerTransactions(t *testing.T) {
 	outer.Flags = &flags
 	outer.AddInnerTransaction(makeTestPayment())
 	outer.AddInnerTransaction(makeTestPayment())
+	outer.BatchSigners = []BatchSigner{{BatchSigner: BatchSignerData{
+		Account:           testSigner1,
+		SigningPubKey:     "ED0000000000000000000000000000000000000000000000000000000000000000",
+		BatchTxnSignature: "ABCD",
+	}}}
 
 	flat, err := outer.Flatten()
 	require.NoError(t, err)
@@ -46,6 +53,8 @@ func TestBatchBinaryRoundTripPreservesInnerTransactions(t *testing.T) {
 	parsedBatch, ok := parsed.(*Batch)
 	require.True(t, ok)
 	require.Len(t, parsedBatch.RawTransactions, 2)
+	require.Len(t, parsedBatch.BatchSigners, 1)
+	require.Equal(t, "ABCD", parsedBatch.BatchSigners[0].BatchSigner.BatchTxnSignature)
 
 	for i, rawTransaction := range parsedBatch.RawTransactions {
 		inner := rawTransaction.RawTransaction.InnerTx
@@ -64,6 +73,80 @@ func TestBatchBinaryRoundTripPreservesInnerTransactions(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, originalHash, parsedHash)
 	}
+}
+
+func TestBatchBinaryParseRejectsStructuralAbuseBeforeInnerConstruction(t *testing.T) {
+	outer := NewBatch(testOuter)
+	outer.Fee = "40"
+	outerSequence := uint32(1)
+	outer.Sequence = &outerSequence
+	flags := BatchFlagAllOrNothing
+	outer.Flags = &flags
+	for range MaxBatchTransactions + 1 {
+		outer.AddInnerTransaction(makeTestPayment())
+	}
+
+	flat, err := outer.Flatten()
+	require.NoError(t, err)
+	encoded, err := binarycodec.Encode(flat)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(encoded)
+	require.NoError(t, err)
+	_, err = tx.ParseFromBinary(blob)
+	require.ErrorContains(t, err, "Raw Transactions array exceeds max entries")
+	jsonBlob, err := json.Marshal(flat)
+	require.NoError(t, err)
+	_, err = tx.ParseJSON(jsonBlob)
+	require.ErrorContains(t, err, "Raw Transactions array exceeds max entries")
+
+	nested := NewBatch(testOuter)
+	nested.Fee = "0"
+	nested.Sequence = &outerSequence
+	nested.Flags = &flags
+	nested.AddInnerTransaction(makeTestPayment())
+	nested.AddInnerTransaction(makeTestPayment())
+	outer = NewBatch(testOuter)
+	outer.Fee = "40"
+	outer.Sequence = &outerSequence
+	outer.Flags = &flags
+	outer.AddInnerTransaction(nested)
+	outer.AddInnerTransaction(makeTestPayment())
+	flat, err = outer.Flatten()
+	require.NoError(t, err)
+	encoded, err = binarycodec.Encode(flat)
+	require.NoError(t, err)
+	blob, err = hex.DecodeString(encoded)
+	require.NoError(t, err)
+	_, err = tx.ParseFromBinary(blob)
+	require.ErrorContains(t, err, "Raw Transactions may not contain batch transactions")
+	jsonBlob, err = json.Marshal(flat)
+	require.NoError(t, err)
+	_, err = tx.ParseJSON(jsonBlob)
+	require.ErrorContains(t, err, "Raw Transactions may not contain batch transactions")
+}
+
+func TestBatchLocalChecksRecurseIntoBinaryInners(t *testing.T) {
+	outer := NewBatch(testOuter)
+	outer.Fee = "40"
+	outerSequence := uint32(1)
+	outer.Sequence = &outerSequence
+	flags := BatchFlagAllOrNothing
+	outer.Flags = &flags
+	inner := makeTestPayment()
+	inner.GetCommon().Memos = []tx.MemoWrapper{{Memo: tx.Memo{MemoData: strings.Repeat("AA", 1100)}}}
+	outer.AddInnerTransaction(inner)
+	outer.AddInnerTransaction(makeTestPayment())
+
+	flat, err := outer.Flatten()
+	require.NoError(t, err)
+	encoded, err := binarycodec.Encode(flat)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(encoded)
+	require.NoError(t, err)
+	parsed, err := tx.ParseFromBinary(blob)
+	require.NoError(t, err)
+	require.Equal(t, ter.TemMALFORMED, tx.PassesTransactionLocalChecks(parsed))
+	require.Contains(t, tx.TransactionLocalChecksFailureReason(parsed), "memo exceeds")
 }
 
 func TestBatchBinaryRoundTripPreservesTicketedInnerSequence(t *testing.T) {
@@ -710,15 +793,110 @@ func TestCalculateMinimumFee_OuterMultiSign(t *testing.T) {
 	require.Equal(t, uint64(50), b.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10}))
 }
 
-// TestCalculateMinimumFee_InnerBatchSentinel pins
-// Batch.cpp:92-97 — an inner that is itself ttBATCH (forbidden) is
-// surfaced via an overflow sentinel so the outer minimum-fee gate
-// rejects, rather than silently computing a normal fee.
-func TestCalculateMinimumFee_InnerBatchSentinel(t *testing.T) {
+func TestCalculateMinimumFee_InvalidStructureFallsBackAndPreclaimRejects(t *testing.T) {
 	outer := NewBatch(testOuter)
 	innerBatch := NewBatch("rInner")
 	outer.AddInnerTransaction(innerBatch)
-	fee := outer.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10})
-	// Sentinel is ≥ 100B XRP in drops; any realistic caller will reject.
-	require.Greater(t, fee, uint64(100_000_000_000), "inner ttBATCH must surface as overflow sentinel")
+	config := tx.EngineConfig{BaseFee: 10}
+	require.Equal(t, uint64(10), outer.CalculateMinimumFee(nil, config))
+	require.Equal(t, ter.TecINSUFF_FEE, outer.Preclaim(nil, config))
+}
+
+func TestCalculateMinimumFeeCountsPresentEmptyBatchTxnSignature(t *testing.T) {
+	outer := NewBatch(testOuter)
+	outer.Fee = "50"
+	seq := uint32(1)
+	outer.Sequence = &seq
+	flags := BatchFlagAllOrNothing
+	outer.Flags = &flags
+	outer.AddInnerTransaction(makeTestPayment())
+	outer.AddInnerTransaction(makeTestPayment())
+	flat, err := outer.Flatten()
+	require.NoError(t, err)
+	flat["BatchSigners"] = []map[string]any{{"BatchSigner": map[string]any{
+		"Account":       testSigner1,
+		"SigningPubKey": "",
+		"TxnSignature":  "",
+	}}}
+	encoded, err := binarycodec.Encode(flat)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(encoded)
+	require.NoError(t, err)
+	parsed, err := tx.ParseFromBinary(blob)
+	require.NoError(t, err)
+	parsedBatch := parsed.(*Batch)
+	require.True(t, parsedBatch.BatchSigners[0].BatchSigner.hasTxnSignature())
+	require.Equal(t, uint64(50), parsedBatch.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10}))
+}
+
+func TestInnerExplicitEmptySignatureFieldsAreRejected(t *testing.T) {
+	tests := []struct {
+		name    string
+		field   string
+		value   any
+		wantErr error
+	}{
+		{name: "TxnSignature", field: "TxnSignature", value: "", wantErr: ErrBatchInnerHasTxnSignature},
+		{name: "Signers", field: "Signers", value: []any{}, wantErr: ErrBatchInnerHasSigners},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			outer := NewBatch(testOuter)
+			outer.Fee = "40"
+			outer.SetSequence(1)
+			outer.SetFlags(BatchFlagAllOrNothing)
+			outer.AddInnerTransaction(makeTestPayment())
+			outer.AddInnerTransaction(makeTestPayment())
+			fields, err := outer.Flatten()
+			require.NoError(t, err)
+			rawTransactions := fields["RawTransactions"].([]map[string]any)
+			inner := rawTransactions[0]["RawTransaction"].(map[string]any)
+			inner[test.field] = test.value
+			encoded, err := binarycodec.Encode(fields)
+			require.NoError(t, err)
+			blob, err := hex.DecodeString(encoded)
+			require.NoError(t, err)
+			parsed, err := tx.ParseFromBinary(blob)
+			require.NoError(t, err)
+			require.ErrorIs(t, parsed.(*Batch).Validate(), test.wantErr)
+		})
+	}
+}
+
+func TestBindRawBytesRejectsExplicitEmptyInnerFieldMismatch(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+		value any
+	}{
+		{name: "TxnSignature", field: "TxnSignature", value: ""},
+		{name: "Signers", field: "Signers", value: []map[string]any{}},
+		{name: "CounterpartySignature", field: "CounterpartySignature", value: map[string]any{
+			"SigningPubKey": "",
+			"TxnSignature":  "",
+		}},
+		{name: "SponsorSignature", field: "SponsorSignature", value: map[string]any{
+			"SigningPubKey": "",
+			"TxnSignature":  "",
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			outer := NewBatch(testOuter)
+			outer.SetFlags(BatchFlagAllOrNothing)
+			outer.AddInnerTransaction(makeTestPayment())
+			outer.AddInnerTransaction(makeTestPayment())
+			fields, err := outer.Flatten()
+			require.NoError(t, err)
+			rawTransactions := fields["RawTransactions"].([]map[string]any)
+			rawTransactions[0]["RawTransaction"].(map[string]any)[test.field] = test.value
+			encoded, err := binarycodec.Encode(fields)
+			require.NoError(t, err)
+			blob, err := hex.DecodeString(encoded)
+			require.NoError(t, err)
+			require.Error(t, tx.BindRawBytes(outer, blob))
+			require.Empty(t, outer.GetRawBytes())
+		})
+	}
 }

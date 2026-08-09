@@ -253,7 +253,7 @@ func TestTransactionLocalChecksBatchLimits(t *testing.T) {
 				localChecksTransaction: newLocalChecksTransaction(TypeBatch, map[string]any{}),
 				signers:                make([]BatchSignerInfo, MaxBatchSigners+1),
 			},
-			want: "Batch Signers array exceeds max entries.",
+			want: "BatchSigners array exceeds max entries.",
 		},
 		{
 			name: "raw transactions at limit",
@@ -302,7 +302,7 @@ func TestTransactionMapLocalChecksBatchLimits(t *testing.T) {
 		{
 			name:   "batch signers over limit",
 			fields: map[string]any{"BatchSigners": make([]any, MaxBatchSigners+1)},
-			want:   "Batch Signers array exceeds max entries.",
+			want:   "BatchSigners array exceeds max entries.",
 		},
 		{
 			name:   "raw transactions at limit",

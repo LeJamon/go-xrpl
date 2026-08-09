@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -37,17 +38,20 @@ func (e *Engine) preflight(tx txcore.Transaction) (result ter.Result) {
 
 	common := tx.GetCommon()
 	rules := e.rules()
+	currentTxID, currentTxIDErr := txcore.ComputeCurrentTransactionHash(tx)
 
 	// Structural preflight is ledger-state-independent, so its verdict is
 	// memoised on the transaction and a re-preflight under the same rules skips
 	// the repeat (see Common.preflightedRules). Signature verification stays out
 	// of the memo and always runs below, so a multi-signed tx's view-dependent
 	// signer-list check is never cached.
-	if !common.PreflightVerified(rules) {
+	if currentTxIDErr != nil || !common.PreflightVerified(rules, currentTxID) {
 		if result := e.preflightStructure(tx, common); result != ter.TesSUCCESS {
 			return result
 		}
-		common.MarkPreflightVerified(rules)
+		if currentTxIDErr == nil {
+			common.MarkPreflightVerified(rules, currentTxID)
+		}
 	}
 
 	// preflight2 — cryptographic signature verification runs LAST, after the
@@ -120,17 +124,9 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 	if result := runTypePreflight(tx, rules); result != ter.TesSUCCESS {
 		return result
 	}
-	// Batch runs each inner transaction's full structural preflight before
-	// preflight2 verifies any signature.
-	// Reference: rippled Batch.cpp:303-312.
-	if outer, ok := tx.(BatchOuter); ok {
-		for _, inner := range outer.InnerTransactions() {
-			if inner == nil {
-				return ter.TemINVALID_INNER_BATCH
-			}
-			if r := e.preflightInner(inner); r != ter.TesSUCCESS {
-				return ter.TemINVALID_INNER_BATCH
-			}
+	if outer, ok := tx.(txcore.BatchInnerPreflightRunner); ok {
+		if err := outer.PreflightInnerTransactions(e.preflightInner); err != nil {
+			return parseValidationError(err)
 		}
 	}
 
@@ -245,6 +241,12 @@ func checkPreflightRules(tx txcore.Transaction, rules *amendment.Rules) ter.Resu
 }
 
 func runTypePreflight(tx txcore.Transaction, rules *amendment.Rules) ter.Result {
+	if batch, ok := tx.(txcore.BatchInnerPreflightRunner); ok {
+		if err := batch.ValidateBatchOuter(); err != nil {
+			return parseValidationError(err)
+		}
+		return checkPreflightRules(tx, rules)
+	}
 	if rp, ok := tx.(txcore.RulesAwarePreflighter); ok {
 		if err := rp.PreflightWithRules(rules); err != nil {
 			return parseValidationError(err)
@@ -255,14 +257,6 @@ func runTypePreflight(tx txcore.Transaction, rules *amendment.Rules) ter.Result 
 		return parseValidationError(err)
 	}
 	return checkPreflightRules(tx, rules)
-}
-
-// BatchOuter is implemented by transaction types whose inner transactions
-// each need to pass preflight as part of the outer's preflight pipeline.
-// Reference: rippled Batch.cpp preflight() — `ripple::preflight(..., tapBATCH)`
-// per inner STTx; any failure → temINVALID_INNER_BATCH on the outer.
-type BatchOuter interface {
-	InnerTransactions() []txcore.Transaction
 }
 
 // preflightInner runs the structural checks for an inner batch tx. rippled routes
@@ -300,6 +294,10 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	}
 	if result := checkSigningKeyShape(common); result != ter.TesSUCCESS {
 		return result
+	}
+	usesTicket := (common.Sequence == nil || *common.Sequence == 0) && common.TicketSequence != nil
+	if usesTicket && common.AccountTxnID != "" {
+		return ter.TemINVALID
 	}
 	if result := checkDelegate(innerTx, common, rules); result != ter.TesSUCCESS {
 		return result
@@ -587,6 +585,16 @@ func (e *Engine) verifySignatures(tx txcore.Transaction) ter.Result {
 	if e.config.SkipSignatureVerification {
 		return ter.TesSUCCESS
 	}
+	if matches, err := txcore.CurrentFieldsMatchRaw(tx); err != nil || !matches {
+		return ter.TemINVALID
+	}
+	txID, idErr := txcore.ComputeCurrentTransactionHash(tx)
+	if idErr == nil && tx.GetCommon().SignatureVerified(txID) {
+		return ter.TesSUCCESS
+	}
+	if idErr == nil && sigcache.Verified(txID) {
+		return ter.TesSUCCESS
+	}
 	// Verify the outer single/multi-sign signature first, mirroring rippled's
 	// preflight2 (checkValidity) which precedes the batch-signer check.
 	if result := e.verifyOuterSignature(tx); result != ter.TesSUCCESS {
@@ -618,6 +626,10 @@ func (e *Engine) verifySignatures(tx txcore.Transaction) ter.Result {
 		if err := bsv.VerifyBatchSignatures(); err != nil {
 			return ter.TemINVALID
 		}
+	}
+	if idErr == nil {
+		tx.GetCommon().MarkSignatureVerified(txID)
+		sigcache.MarkVerified(txID)
 	}
 	return ter.TesSUCCESS
 }
@@ -653,64 +665,46 @@ func (e *Engine) verifyOuterSignature(tx txcore.Transaction) ter.Result {
 	// malformed-key-type case that does warrant temBAD_SIGNATURE is already
 	// caught unconditionally in preflight1 (preflightCommon).
 	//
-	// A verdict cached off-strand (PrewarmSignature) means this same signature
-	// was already verified under the same rules, so the verify is skipped here to
-	// keep it off the open-ledger apply mutex (issue #1105). Only positive
-	// verdicts are cached, so a cold cache still runs the full verify below.
-	if tx.GetCommon().SignatureVerified() {
-		return ter.TesSUCCESS
-	}
-	// tx-ID-keyed verified-good cache (rippled SF_SIGGOOD analog): the object
-	// SignatureVerified flag is cold after the consensus build re-parses the
-	// agreed tx set, but the tx ID survives, so a hit skips the redundant
-	// re-verify. Positive-only — a miss still runs the full verify below.
-	txID, idErr := txcore.ComputeTransactionHash(tx)
-	if idErr == nil && sigcache.Verified(txID) {
-		return ter.TesSUCCESS
-	}
 	if err := sign.VerifySignature(tx, mustBeFullyCanonical); err != nil {
 		return ter.TemINVALID
-	}
-	if idErr == nil {
-		sigcache.MarkVerified(txID)
 	}
 	return ter.TesSUCCESS
 }
 
-// PrewarmSignature cryptographically verifies a single-signed transaction's
-// signature ahead of the open-ledger apply strand and caches a positive verdict
-// on the transaction, so the in-strand signature check skips the repeat verify.
+// PrewarmSignature cryptographically verifies all signatures ahead of the
+// open-ledger apply strand and caches a positive verdict on the transaction, so
+// the in-strand signature check skips the repeat verification.
 // This moves the dominant per-tx cost — ECDSA/EdDSA verification — off the
 // apply mutex onto the ingress workers, where it runs concurrently, mirroring
 // rippled caching SF_SIGGOOD in checkValidity before the apply strand (#1105).
 //
-// It never rejects and never caches a negative verdict: multi-signed, unsigned,
-// and bad-signature transactions leave the cache cold so the in-strand preflight
-// runs unchanged and reports the canonical, ordered result. Multi-signed
-// transactions stay on the in-strand path because go-xrpl interleaves their
-// crypto check with ledger-state signer-list authorization, which must observe
-// the apply view.
-func PrewarmSignature(txn txcore.Transaction) {
+// It returns a signature error to ingress callers and never caches a negative
+// verdict. Authorization against ledger signer lists remains in preclaim.
+var ErrInvalidSignature = errors.New("invalid transaction signature")
+
+func PrewarmSignature(txn txcore.Transaction) error {
 	if txn == nil {
-		return
+		return nil
 	}
 	common := txn.GetCommon()
-	if common == nil || common.SignatureVerified() {
-		return
+	if common == nil {
+		return nil
 	}
-	// Only single-signed transactions are verified off-strand; an empty
-	// SigningPubKey marks a multi-signed or unsigned (inner-batch) transaction.
-	if common.SigningPubKey == "" {
-		return
+	txID, idErr := txcore.ComputeCurrentTransactionHash(txn)
+	if idErr == nil && common.SignatureVerified(txID) {
+		return nil
 	}
-	if sign.VerifySignature(txn, true) == nil {
-		common.MarkSignatureVerified()
-		// Publish to the tx-ID cache so the consensus build path (fresh object,
-		// cold flag) skips the redundant verify.
-		if txID, err := txcore.ComputeTransactionHash(txn); err == nil {
-			sigcache.MarkVerified(txID)
-		}
+	if reason := sign.CheckSTTxSignature(txn, nil, true); reason != "" {
+		return fmt.Errorf("%w: %s", ErrInvalidSignature, reason)
 	}
+	if idErr != nil {
+		return nil
+	}
+	common.MarkSignatureVerified(txID)
+	// Publish to the tx-ID cache so the consensus build path (fresh object,
+	// cold flag) skips the redundant whole-transaction signature verify.
+	sigcache.MarkVerified(txID)
+	return nil
 }
 
 // hasInvalidAmount reports whether the transaction carries a non-canonical

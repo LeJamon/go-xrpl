@@ -23,6 +23,8 @@ import (
 //	tx-type preclaim.
 //
 // Delegated permission is established before signature and fee validation.
+// The signature stage precedes the fee check so that no fee-charging TER is
+// returned before the signature has been verified.
 func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) (result ter.Result) {
 	// Any panic reachable from adversarial ledger state — most commonly an
 	// IOUAmount / XRPLNumber arithmetic overflow while reading a crafted balance
@@ -58,11 +60,15 @@ func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) (result ter.Re
 	if result := e.checkSponsor(common); result != ter.TesSUCCESS {
 		return result
 	}
-
 	if result := e.checkPermission(tx, common, accountID); result != ter.TesSUCCESS {
 		return result
 	}
 
+	// The signature is verified before the fee check so that a transaction that
+	// fails both reports the signature failure. No fee-charging TER
+	// (terINSUF_FEE_B, ...) may precede the signature check, which would risk
+	// charging a fee on an unauthorized transaction.
+	// Reference: rippled applySteps.cpp invoke_preclaim (PR #6192).
 	if result := e.checkSign(tx, common); result != ter.TesSUCCESS {
 		return result
 	}
@@ -125,10 +131,10 @@ func (e *Engine) preclaimInner(tx txcore.Transaction, txHash [32]byte) (result t
 	if result := e.checkSponsor(common); result != ter.TesSUCCESS {
 		return result
 	}
-	if result := e.checkPseudoAccountSign(common); result != ter.TesSUCCESS {
+	if result := e.checkPermission(tx, common, accountID); result != ter.TesSUCCESS {
 		return result
 	}
-	if result := e.checkPermission(tx, common, accountID); result != ter.TesSUCCESS {
+	if result := e.checkPseudoAccountSign(common); result != ter.TesSUCCESS {
 		return result
 	}
 	if preclaimer, ok := tx.(txcore.Preclaimer); ok {

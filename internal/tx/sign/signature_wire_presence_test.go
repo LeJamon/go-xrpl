@@ -120,6 +120,9 @@ func TestVerifySignaturePreservesExplicitEmptyMemos(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			transaction := primarySignedTx(t)
+			for field := range test.counterparty {
+				test.parsed.MarkFieldPresent(field)
+			}
 			transaction.GetCommon().CounterpartySignature = test.parsed
 			candidate, err := transaction.Flatten()
 			if err != nil {
@@ -130,7 +133,9 @@ func TestVerifySignaturePreservesExplicitEmptyMemos(t *testing.T) {
 			if err != nil {
 				t.Fatalf("encode transaction: %v", err)
 			}
-			transaction.SetRawBytes(blob)
+			if err := txcore.BindRawBytes(transaction, blob); err != nil {
+				t.Fatalf("bind raw transaction: %v", err)
+			}
 			if reason := CheckSTTxSignature(transaction, nil, true); reason != test.want {
 				t.Fatalf("counterparty signature reason = %q, want %q", reason, test.want)
 			}

@@ -48,6 +48,7 @@ var (
 var (
 	ErrConsensusParentMismatch = errors.New("consensus parent does not match the closed ledger")
 	ErrPreferredChainSwitch    = errors.New("invalid preferred chain switch")
+	ErrInvalidLocalTransaction = errors.New("transaction failed local checks")
 )
 
 // Config holds configuration for the LedgerService
@@ -894,11 +895,22 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result
 	if err != nil {
 		return openledger.ResultFailure, err
 	}
+	if ptx.Parsed.GetCommon().GetFlags()&tx.TfInnerBatchTxn != 0 {
+		return openledger.ResultFailure, fmt.Errorf(
+			"%w: Batch inner transactions are never considered validly signed.",
+			txengine.ErrInvalidSignature,
+		)
+	}
 	// Verify the signature off the open-ledger apply mutex so the dominant
 	// per-tx cost runs concurrently across ingress workers instead of serialising
 	// under modifyMu; the in-strand check then reuses the cached verdict (#1105).
 	if !cfg.SkipSignatureVerification {
-		txengine.PrewarmSignature(ptx.Parsed)
+		if err := txengine.PrewarmSignature(ptx.Parsed); err != nil {
+			return openledger.ResultFailure, err
+		}
+	}
+	if reason := tx.TransactionLocalChecksFailureReason(ptx.Parsed); reason != "" {
+		return openledger.ResultFailure, fmt.Errorf("%w: %s", ErrInvalidLocalTransaction, reason)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -917,14 +929,14 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result
 	if local && s.localTxs != nil {
 		s.localTxs.PushBack(current.Sequence(), ptx)
 	}
-	s.dispatchProposedTransaction(ptx, blob, outcome, current)
+	s.dispatchProposedTransaction(ptx, ptx.Blob, outcome, current)
 	if outcome.Applied {
 		s.eventPublisher.dispatchServerStatusEvent()
 	}
 	return outcome.Class, nil
 }
 
-// PrewarmSignatures verifies the outer signatures of raw tx blobs in parallel
+// PrewarmSignatures verifies all signatures on raw tx blobs in parallel
 // and caches the verdicts, so a consensus build over an acquired tx set hits the
 // sig-cache instead of paying cold checks in-strand under the apply mutex. The
 // per-relayed-tx prewarm in SubmitOpenLedgerTx (#1105) covers only individually-

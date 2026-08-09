@@ -98,12 +98,11 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		return nil, ErrNoOpenLedger
 	}
 	if rawBlob != nil {
-		transaction.SetRawBytes(rawBlob)
+		if err := tx.BindRawBytes(transaction, rawBlob); err != nil {
+			return nil, err
+		}
 	}
-	blob := rawBlob
-	if blob == nil {
-		blob = transaction.GetRawBytes()
-	}
+	blob := transaction.GetRawBytes()
 
 	cfg, cfgErr := s.applyConfigLocked()
 	if cfgErr != nil {
@@ -125,10 +124,9 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		}, nil
 	}
 	// Local submission checks (rippled STTx::passesLocalChecks via NetworkOPs):
-	// memo size/charset limits are enforced only here, on the local ingress, not
-	// in the consensus-critical engine preflight. A relayed or consensus-applied
-	// transaction carrying an oversized/invalid memo still applies, so this
-	// refusal cannot fork the ledger.
+	// memo size/charset limits are enforced on RPC and peer ingress, not in the
+	// consensus-critical engine preflight. A transaction already admitted to a
+	// consensus set remains governed only by consensus-critical checks.
 	if localResult := tx.PassesTransactionLocalChecks(ptx.Parsed); localResult != ter.TesSUCCESS {
 		return &SubmitResult{
 			Result:        localResult,
@@ -199,7 +197,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		s.pendingTxs = append(s.pendingTxs, ptx)
 	}
 
-	s.dispatchProposedTransaction(ptx, rawBlob, outcome, s.openLedgerView.Current())
+	s.dispatchProposedTransaction(ptx, ptx.Blob, outcome, s.openLedgerView.Current())
 	if outcome.Applied {
 		s.eventPublisher.dispatchServerStatusEvent()
 	}
@@ -420,7 +418,10 @@ func (s *Service) GetAutofillFee(parsedTx tx.Transaction, unlimited bool, mult, 
 		Rules:            rulesFromLedger(s.closedLedger, s.logger),
 	}
 
-	feeDefault := computeBaseFeeForTx(s.openLedger, parsedTx, feeCfg)
+	feeDefault := baseFee
+	if parsedTx != nil && tx.PassesTransactionLocalChecks(parsedTx) == ter.TesSUCCESS {
+		feeDefault = computeBaseFeeForTx(s.openLedger, parsedTx, feeCfg)
+	}
 
 	loadFee, scaleErr := feetrack.ScaleFeeLoad(feeDefault, s.feeTrack, unlimited)
 	if scaleErr != nil {

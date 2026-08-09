@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"sort"
 
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
@@ -71,6 +72,10 @@ func (b *Batch) batchTransactionIDs() ([][32]byte, error) {
 		if inner == nil {
 			return nil, ErrBatchNilInnerTx
 		}
+		matches, err := tx.CurrentFieldsMatchRaw(inner)
+		if err != nil || !matches {
+			return nil, ErrBatchInnerHashUncomputable
+		}
 		id, err := tx.ComputeTransactionHash(inner)
 		if err != nil {
 			return nil, ErrBatchInnerHashUncomputable
@@ -89,6 +94,9 @@ func (b *Batch) batchTransactionIDs() ([][32]byte, error) {
 // signer coverage is checked afterward in PreflightSigValidated.
 // Reference: rippled STTx::checkBatchSign, checkBatchSingleSign, checkBatchMultiSign.
 func (b *Batch) VerifyBatchSignatures() error {
+	if len(b.BatchSigners) > MaxBatchSigners {
+		return errors.New("BatchSigners array exceeds max entries.")
+	}
 	if err := b.validateBatchSignerBounds(); err != nil {
 		return err
 	}
@@ -117,7 +125,7 @@ func (b *Batch) VerifyBatchSignatures() error {
 // carries nested Signers is signed two ways and rejected.
 // Reference: rippled singleSignHelper.
 func verifyBatchSingleSign(message []byte, signer BatchSignerData) error {
-	if len(signer.Signers) > 0 {
+	if signer.hasSigners() {
 		return ErrBatchInvalidSignature
 	}
 	signerID, err := state.DecodeAccountID(signer.Account)
@@ -144,7 +152,7 @@ func verifyBatchMultiSign(message []byte, signer BatchSignerData) error {
 	// A multi-signed BatchSigner carries its signatures in the nested Signers
 	// array; a direct BatchTxnSignature alongside it would mean the entry is
 	// signed two ways, which is rejected.
-	if signer.BatchTxnSignature != "" {
+	if signer.hasTxnSignature() {
 		return ErrBatchInvalidSignature
 	}
 
@@ -271,10 +279,10 @@ func (b *Batch) validateBatchSigners(requiredSigners map[string]struct{}) error 
 		for i := range b.BatchSigners {
 			signer := b.BatchSigners[i].BatchSigner
 			if signer.SigningPubKey == "" {
-				if len(signer.Signers) == 0 || signer.BatchTxnSignature != "" {
+				if len(signer.Signers) == 0 || signer.hasTxnSignature() {
 					return ErrBatchInvalidSignature
 				}
-			} else if len(signer.Signers) > 0 {
+			} else if signer.hasSigners() {
 				return ErrBatchInvalidSignature
 			}
 		}

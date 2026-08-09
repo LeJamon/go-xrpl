@@ -105,13 +105,13 @@ func TestPreclaimPrecedence_SignBeforeFee(t *testing.T) {
 	})
 }
 
-// TestPreclaimPrecedence_PermissionBeforeSign pins the delegated permission
-// check before signature and fee validation.
-func TestPreclaimPrecedence_PermissionBeforeSign(t *testing.T) {
+// TestPreclaimPrecedence_PermissionBeforeSignAndFee pins delegated permission
+// ahead of signature authorization and fee checks.
+func TestPreclaimPrecedence_PermissionBeforeSignAndFee(t *testing.T) {
 	// Source delegates to the genesis account. No Delegate SLE exists, so
 	// checkPermission yields terNO_DELEGATE_PERMISSION. Signature is verified
 	// against the delegate (genesis); disabling its master key makes checkSign
-	// yield tefMASTER_DISABLED. The delegate funds the fee, so checkFee passes.
+	// yield tefMASTER_DISABLED.
 	makeTx := func() *txcore.BaseTx {
 		tx := txcore.NewBaseTx(txcore.TypeAccountSet, precedenceSourceAddr)
 		tx.Fee = "10"
@@ -152,4 +152,87 @@ func TestPreclaimPrecedence_PermissionBeforeSign(t *testing.T) {
 			t.Fatalf("permission-only failure = %v, want TerNO_DELEGATE_PERMISSION", got)
 		}
 	})
+
+	t.Run("insufficient fee + no delegate permission returns permission error", func(t *testing.T) {
+		tx := makeTx()
+		tx.Fee = "100"
+		e := precedenceEngine(t, map[string]*state.AccountRoot{
+			precedenceSourceAddr: source,
+			precedenceGenesisAddr: {
+				Account:  precedenceGenesisAddr,
+				Balance:  0,
+				Sequence: 1,
+			},
+		})
+		if got := e.preclaim(tx, [32]byte{}); got != ter.TerNO_DELEGATE_PERMISSION {
+			t.Fatalf("combined fee+permission failure = %v, want TerNO_DELEGATE_PERMISSION", got)
+		}
+	})
+}
+
+type batchSignerPrecedenceTx struct {
+	txcore.BaseTx
+	signers []txcore.BatchSignerInfo
+}
+
+func (t *batchSignerPrecedenceTx) GetBatchSigners() []txcore.BatchSignerInfo {
+	return t.signers
+}
+
+func TestPreclaimPrecedence_PermissionBeforeBatchSignerAuthorization(t *testing.T) {
+	base := txcore.NewBaseTx(txcore.TypeBatch, precedenceSourceAddr)
+	base.Fee = "10"
+	base.Sequence = u32(5)
+	base.SigningPubKey = precedenceGenesisPubKey
+	base.Delegate = precedenceGenesisAddr
+	txn := &batchSignerPrecedenceTx{
+		BaseTx: *base,
+		signers: []txcore.BatchSignerInfo{{
+			Account:       precedenceSourceAddr,
+			SigningPubKey: precedenceGenesisPubKey,
+		}},
+	}
+	e := precedenceEngine(t, map[string]*state.AccountRoot{
+		precedenceSourceAddr: {
+			Account:  precedenceSourceAddr,
+			Balance:  1_000_000,
+			Sequence: 5,
+		},
+		precedenceGenesisAddr: {
+			Account:  precedenceGenesisAddr,
+			Balance:  1_000_000,
+			Sequence: 1,
+		},
+	})
+
+	if got := e.preclaim(txn, [32]byte{}); got != ter.TerNO_DELEGATE_PERMISSION {
+		t.Fatalf("combined Batch signer+permission failure = %v, want TerNO_DELEGATE_PERMISSION", got)
+	}
+}
+
+func TestPreclaimInnerPrecedence_PermissionBeforePseudoAccountAuthorization(t *testing.T) {
+	txn := txcore.NewBaseTx(txcore.TypeAccountSet, precedenceSourceAddr)
+	txn.Fee = "0"
+	txn.Sequence = u32(5)
+	txn.SigningPubKey = ""
+	txn.Delegate = precedenceGenesisAddr
+
+	pseudoID := [32]byte{1}
+	e := precedenceEngine(t, map[string]*state.AccountRoot{
+		precedenceSourceAddr: {
+			Account:  precedenceSourceAddr,
+			Balance:  1_000_000,
+			Sequence: 5,
+		},
+		precedenceGenesisAddr: {
+			Account:  precedenceGenesisAddr,
+			Balance:  1_000_000,
+			Sequence: 1,
+			AMMID:    pseudoID,
+		},
+	})
+
+	if got := e.preclaimInner(txn, [32]byte{1}); got != ter.TerNO_DELEGATE_PERMISSION {
+		t.Fatalf("combined pseudo delegate+permission failure = %v, want TerNO_DELEGATE_PERMISSION", got)
+	}
 }

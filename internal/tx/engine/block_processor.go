@@ -88,6 +88,15 @@ func (bp *BlockProcessor) applyTransaction(
 			err = fmt.Errorf("apply panic: %v", r)
 		}
 	}()
+	if canonical := transaction.GetRawBytes(); len(canonical) != 0 {
+		txBlob = canonical
+	} else {
+		canonical, err := txcore.SerializeTransaction(transaction)
+		if err != nil {
+			return result, err
+		}
+		txBlob = canonical
+	}
 
 	result = BlockTxResult{
 		Index:     transactionIndex,
@@ -172,23 +181,20 @@ type ParsedTx struct {
 	// Transaction is the parsed transaction
 	Transaction txcore.Transaction
 
-	// RawBlob is the original binary blob
+	// RawBlob is the canonical binary blob.
 	RawBlob []byte
 }
 
 // ParseAndPrepare parses a transaction blob and returns a ParsedTx ready for processing.
-// It also sets the raw bytes on the transaction for hash computation.
+// The returned transaction and blob retain the canonical field order.
 func ParseAndPrepare(txBlob []byte) (*ParsedTx, error) {
 	transaction, err := txcore.ParseFromBinary(txBlob)
 	if err != nil {
 		return nil, err
 	}
 
-	// Store the raw bytes for hash computation
-	transaction.SetRawBytes(txBlob)
-
 	return &ParsedTx{
 		Transaction: transaction,
-		RawBlob:     txBlob,
+		RawBlob:     transaction.GetRawBytes(),
 	}, nil
 }

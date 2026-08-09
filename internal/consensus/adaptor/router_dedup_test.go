@@ -2,6 +2,8 @@ package adaptor
 
 import (
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -216,4 +218,90 @@ func TestProposalSuppression_AdmitsOnlyAfterEngineAcceptance(t *testing.T) {
 
 	router.handleProposal(inbound)
 	assert.Equal(t, 2, engine.calls, "accepted duplicate must bypass the engine")
+}
+
+func TestTransactionSuppressionClaimIsAtomic(t *testing.T) {
+	cache := newTransactionSuppression(5*time.Minute, 64)
+	var hash [32]byte
+	hash[0] = 1
+
+	var processed atomic.Int32
+	var workers sync.WaitGroup
+	start := make(chan struct{})
+	for range 64 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			if shouldProcess, _ := cache.claim(hash); shouldProcess {
+				processed.Add(1)
+			}
+		}()
+	}
+	close(start)
+	workers.Wait()
+	require.Equal(t, int32(1), processed.Load())
+}
+
+func TestTransactionSuppressionVerdictAndIntervals(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	cache := newTransactionSuppression(5*time.Minute, 64)
+	cache.now = func() time.Time { return now }
+	var hash [32]byte
+	hash[0] = 1
+
+	shouldProcess, bad := cache.claim(hash)
+	require.True(t, shouldProcess)
+	require.False(t, bad)
+	cache.markBad(hash)
+
+	shouldProcess, bad = cache.claim(hash)
+	require.False(t, shouldProcess)
+	require.True(t, bad)
+
+	now = now.Add(transactionProcessInterval)
+	shouldProcess, bad = cache.claim(hash)
+	require.True(t, shouldProcess)
+	require.True(t, bad)
+
+	now = now.Add(5 * time.Minute)
+	shouldProcess, bad = cache.claim(hash)
+	require.True(t, shouldProcess)
+	require.False(t, bad)
+}
+
+func TestTransactionSuppressionValidDuplicateIsSilent(t *testing.T) {
+	cache := newTransactionSuppression(5*time.Minute, 64)
+	var hash [32]byte
+	hash[0] = 1
+
+	shouldProcess, bad := cache.claim(hash)
+	require.True(t, shouldProcess)
+	require.False(t, bad)
+
+	shouldProcess, bad = cache.claim(hash)
+	require.False(t, shouldProcess)
+	require.False(t, bad)
+}
+
+func TestTransactionSuppressionDuplicateRefreshesRetention(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	cache := newTransactionSuppression(5*time.Minute, 64)
+	cache.now = func() time.Time { return now }
+	var hash [32]byte
+	hash[0] = 1
+
+	shouldProcess, _ := cache.claim(hash)
+	require.True(t, shouldProcess)
+	cache.markBad(hash)
+
+	now = now.Add(9 * time.Second)
+	shouldProcess, bad := cache.claim(hash)
+	require.False(t, shouldProcess)
+	require.True(t, bad)
+
+	now = now.Add(5*time.Minute - 5*time.Second)
+	shouldProcess, bad = cache.claim(hash)
+	require.True(t, shouldProcess)
+	require.True(t, bad)
 }

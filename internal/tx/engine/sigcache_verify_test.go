@@ -22,7 +22,7 @@ func TestSigCache_PopulatesOnVerifySuccess(t *testing.T) {
 	if sigcache.Verified(id) {
 		t.Fatal("cache must start cold for a never-verified tx")
 	}
-	if res := verifyingEngine(rules).verifyOuterSignature(txn); res != ter.TesSUCCESS {
+	if res := verifyingEngine(rules).verifySignatures(txn); res != ter.TesSUCCESS {
 		t.Fatalf("a good signature must verify; got %s", res)
 	}
 	if !sigcache.Verified(id) {
@@ -45,7 +45,7 @@ func TestSigCache_MissRejectsBadSignature(t *testing.T) {
 	if sigcache.Verified(id) {
 		t.Fatal("a forged/never-verified tx must not be pre-cached")
 	}
-	if res := verifyingEngine(rules).verifyOuterSignature(txn); res != ter.TemINVALID {
+	if res := verifyingEngine(rules).verifySignatures(txn); res != ter.TemINVALID {
 		t.Fatalf("a cache miss must run the full verify and reject the bad signature; got %s", res)
 	}
 	if sigcache.Verified(id) {
@@ -72,7 +72,7 @@ func TestSigCache_HitSkipsVerify(t *testing.T) {
 	if txn.GetCommon().SignatureVerified() {
 		t.Fatal("object-level flag must be cold so the pass can only come from the tx-ID cache")
 	}
-	if res := verifyingEngine(rules).verifyOuterSignature(txn); res != ter.TesSUCCESS {
+	if res := verifyingEngine(rules).verifySignatures(txn); res != ter.TesSUCCESS {
 		t.Fatalf("a tx-ID cache hit must skip the crypto verify and pass; got %s", res)
 	}
 	sigcache.Reset()
