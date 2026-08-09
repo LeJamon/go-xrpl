@@ -327,7 +327,10 @@ func validatePendingDirectories(state *shamap.SHAMap, pending map[[32]byte]struc
 // divergingObjects returns the objects that differ between goXRPL's post-state
 // and mainnet's reconstructed post-state, with both serialized sides and a
 // decoded view for readability.
-const maxDiagnosticObjects = 1000
+const (
+	maxDiagnosticObjects = 1000
+	maxDiagnosticBytes   = 16 << 20
+)
 
 func divergingObjects(goxrpl, mainnet *shamap.SHAMap) ([]divergingObject, error) {
 	objects, _, err := divergingObjectsContext(context.Background(), goxrpl, mainnet)
@@ -335,19 +338,37 @@ func divergingObjects(goxrpl, mainnet *shamap.SHAMap) ([]divergingObject, error)
 }
 
 func divergingObjectsContext(ctx context.Context, goxrpl, mainnet *shamap.SHAMap) ([]divergingObject, bool, error) {
+	return divergingObjectsContextBounded(ctx, goxrpl, mainnet, maxDiagnosticBytes)
+}
+
+func divergingObjectsContextBounded(ctx context.Context, goxrpl, mainnet *shamap.SHAMap, maxBytes int) ([]divergingObject, bool, error) {
 	differences, err := goxrpl.CompareContext(ctx, mainnet, maxDiagnosticObjects)
 	if err != nil {
 		return nil, false, err
 	}
 	out := make([]divergingObject, 0, differences.Len())
+	used := 0
 	for _, difference := range differences.Differences {
+		size := 0
+		if difference.FirstItem != nil {
+			size += difference.FirstItem.DataSize()
+		}
+		if difference.SecondItem != nil {
+			size += difference.SecondItem.DataSize()
+		}
+		if size > maxBytes-used {
+			return out, false, nil
+		}
+		used += size
 		obj := divergingObject{Index: hex.EncodeToString(difference.Key[:])}
 		if difference.FirstItem != nil {
-			obj.GoXRPL = hex.EncodeToString(difference.FirstItem.Data())
+			data := difference.FirstItem.Data()
+			obj.GoXRPL = hex.EncodeToString(data)
 			obj.GoXRPLDecoded = decodeEntryData(obj.GoXRPL)
 		}
 		if difference.SecondItem != nil {
-			obj.Mainnet = hex.EncodeToString(difference.SecondItem.Data())
+			data := difference.SecondItem.Data()
+			obj.Mainnet = hex.EncodeToString(data)
 			obj.MainnetDecoded = decodeEntryData(obj.Mainnet)
 		}
 		out = append(out, obj)

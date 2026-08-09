@@ -319,6 +319,28 @@ func TestDivergingObjectsAreBounded(t *testing.T) {
 	}
 }
 
+func TestDivergingObjectsAreByteBounded(t *testing.T) {
+	left := shamap.New(shamap.TypeState)
+	right := shamap.New(shamap.TypeState)
+	for i := byte(1); i <= 2; i++ {
+		var key [32]byte
+		key[31] = i
+		if err := left.Put(key, []byte{1, 2, 3}); err != nil {
+			t.Fatal(err)
+		}
+		if err := right.Put(key, []byte{4, 5, 6}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	objects, complete, err := divergingObjectsContextBounded(context.Background(), left, right, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || len(objects) != 1 {
+		t.Fatalf("complete=%v objects=%d", complete, len(objects))
+	}
+}
+
 // TestReconstructFromMeta_CreatedOfferDefaults is the issue's exact scenario: a
 // created Offer whose NewFields omits the soeREQUIRED default-zero fields
 // (Flags, BookNode, OwnerNode) and the threaded PreviousTxn pair. The
@@ -772,6 +794,74 @@ func TestDirectoryPlacements_DelegateBothOwners(t *testing.T) {
 				t.Fatalf("placements = %+v, want %x/%x", placements, want[0], want[1])
 			}
 		})
+	}
+}
+
+func TestDirectoryPlacements_OfferAdditionalBooks(t *testing.T) {
+	primary := mustIndex(t, "0000000000000000000000000000000000000000000000000000000000000010")
+	additional := mustIndex(t, "0000000000000000000000000000000000000000000000000000000000000020")
+	placements, err := directoryPlacements(shamap.New(shamap.TypeState), "Offer", map[string]any{
+		"Account":       testAccount,
+		"OwnerNode":     "0",
+		"BookDirectory": protocol.Hash256Hex(primary),
+		"BookNode":      "1",
+		"AdditionalBooks": []any{map[string]any{"Book": map[string]any{
+			"BookDirectory": protocol.Hash256Hex(additional),
+			"BookNode":      "2",
+		}}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountID, _ := state.DecodeAccountID(testAccount)
+	want := [][32]byte{
+		keylet.OwnerDirPage(accountID, 0).Key,
+		keylet.DirPage(primary, 1).Key,
+		keylet.DirPage(additional, 2).Key,
+	}
+	if len(placements) != len(want) {
+		t.Fatalf("placements = %d, want %d", len(placements), len(want))
+	}
+	for i := range want {
+		if placements[i].Key != want[i] || (i > 0 && placements[i].Strategy != dirAppend) {
+			t.Fatalf("placement %d = %+v, want %x", i, placements[i], want[i])
+		}
+	}
+}
+
+func TestApplyDirDeltaRemovalPreservesLegacyOrder(t *testing.T) {
+	a := [32]byte{0x01}
+	b := [32]byte{0x02}
+	c := [32]byte{0x03}
+	members := [][32]byte{c, a, b}
+	got := applyDirDelta(members, &dirDelta{
+		strategy:   dirSorted,
+		operations: []dirOperation{{key: a}},
+	})
+	want := [][32]byte{c, b}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("members = %x, want %x", got, want)
+	}
+}
+
+func TestApplyDirDeltaInsertionSortsLegacyOrder(t *testing.T) {
+	a := [32]byte{0x01}
+	b := [32]byte{0x02}
+	c := [32]byte{0x03}
+	d := [32]byte{0x04}
+	members := [][32]byte{c, a, b}
+	got := applyDirDelta(members, &dirDelta{
+		strategy:   dirSorted,
+		operations: []dirOperation{{key: d, add: true}},
+	})
+	want := [][32]byte{a, b, c, d}
+	if len(got) != len(want) {
+		t.Fatalf("members = %x, want %x", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("members = %x, want %x", got, want)
+		}
 	}
 }
 

@@ -189,6 +189,26 @@ func TestUnpackStateStreamRejectsTruncated(t *testing.T) {
 	}
 }
 
+func TestUnpackStateStreamRejectsTrailingData(t *testing.T) {
+	blob := append(packState(1, []StateEntry{{Index: idx(0x01), Data: []byte("x")}}), 0xff)
+	if _, _, err := unpackStateStream(bytes.NewReader(blob), func([32]byte, []byte) error { return nil }); !errors.Is(err, errPack) {
+		t.Fatalf("trailing data error = %v, want errPack", err)
+	}
+}
+
+func TestUnpackStateStreamRejectsDuplicateAndUnorderedIndexes(t *testing.T) {
+	for name, entries := range map[string][]StateEntry{
+		"duplicate": {{Index: idx(0x01)}, {Index: idx(0x01)}},
+		"unordered": {{Index: idx(0x02)}, {Index: idx(0x01)}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := unpackStateStream(bytes.NewReader(packState(1, entries)), func([32]byte, []byte) error { return nil }); !errors.Is(err, errPack) {
+				t.Fatalf("index order error = %v, want errPack", err)
+			}
+		})
+	}
+}
+
 // TestUnpackStateStreamPropagatesCallbackError verifies a callback failure stops
 // the decode and surfaces unchanged (not wrapped as a pack error).
 func TestUnpackStateStreamPropagatesCallbackError(t *testing.T) {
@@ -267,6 +287,26 @@ func TestUnpackStateRejectsTruncated(t *testing.T) {
 	blob := packState(1, []StateEntry{{Index: idx(0x01), Data: []byte("abcdef")}})
 	if _, _, err := unpackState(blob[:len(blob)-3]); !errors.Is(err, errPack) {
 		t.Errorf("truncated: err = %v, want errPack", err)
+	}
+}
+
+func TestUnpackStateRejectsTrailingData(t *testing.T) {
+	blob := append(packState(1, []StateEntry{{Index: idx(0x01), Data: []byte("x")}}), 0xff)
+	if _, _, err := unpackState(blob); !errors.Is(err, errPack) {
+		t.Fatalf("trailing data error = %v, want errPack", err)
+	}
+}
+
+func TestUnpackStateRejectsDuplicateAndUnorderedIndexes(t *testing.T) {
+	for name, entries := range map[string][]StateEntry{
+		"duplicate": {{Index: idx(0x01)}, {Index: idx(0x01)}},
+		"unordered": {{Index: idx(0x02)}, {Index: idx(0x01)}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := unpackState(packState(1, entries)); !errors.Is(err, errPack) {
+				t.Fatalf("index order error = %v, want errPack", err)
+			}
+		})
 	}
 }
 

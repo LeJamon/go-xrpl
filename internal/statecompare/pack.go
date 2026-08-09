@@ -2,6 +2,7 @@ package statecompare
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -104,6 +105,7 @@ func unpackState(blob []byte) (uint64, []StateEntry, error) {
 	}
 
 	entries := make([]StateEntry, 0, count)
+	var previous [indexLen]byte
 	for range count {
 		if off+indexLen > len(blob) {
 			return 0, nil, fmt.Errorf("%w: truncated state index", errPack)
@@ -111,10 +113,17 @@ func unpackState(blob []byte) (uint64, []StateEntry, error) {
 		var e StateEntry
 		copy(e.Index[:], blob[off:off+indexLen])
 		off += indexLen
+		if len(entries) > 0 && bytes.Compare(e.Index[:], previous[:]) <= 0 {
+			return 0, nil, fmt.Errorf("%w: state indexes are not strictly increasing", errPack)
+		}
+		previous = e.Index
 		if e.Data, off, err = getBytes(blob, off); err != nil {
 			return 0, nil, err
 		}
 		entries = append(entries, e)
+	}
+	if off != len(blob) {
+		return 0, nil, fmt.Errorf("%w: trailing data after state entries", errPack)
 	}
 	return seq, entries, nil
 }
@@ -147,6 +156,8 @@ func unpackStateStreamContext(ctx context.Context, r io.Reader, fn func(index [3
 	count := binary.BigEndian.Uint32(meta[8:])
 
 	var index [32]byte
+	var previous [32]byte
+	havePrevious := false
 	var lenBuf [4]byte
 	for range count {
 		if err := ctx.Err(); err != nil {
@@ -155,6 +166,11 @@ func unpackStateStreamContext(ctx context.Context, r io.Reader, fn func(index [3
 		if _, err := io.ReadFull(br, index[:]); err != nil {
 			return 0, 0, fmt.Errorf("%w: truncated state index", errPack)
 		}
+		if havePrevious && bytes.Compare(index[:], previous[:]) <= 0 {
+			return 0, 0, fmt.Errorf("%w: state indexes are not strictly increasing", errPack)
+		}
+		previous = index
+		havePrevious = true
 		if _, err := io.ReadFull(br, lenBuf[:]); err != nil {
 			return 0, 0, fmt.Errorf("%w: truncated data length", errPack)
 		}
@@ -169,6 +185,11 @@ func unpackStateStreamContext(ctx context.Context, r io.Reader, fn func(index [3
 		if err := fn(index, data); err != nil {
 			return 0, 0, err
 		}
+	}
+	if _, err := br.ReadByte(); err == nil {
+		return 0, 0, fmt.Errorf("%w: trailing data after state entries", errPack)
+	} else if !errors.Is(err, io.EOF) {
+		return 0, 0, fmt.Errorf("%w: checking state trailer: %v", errPack, err)
 	}
 	return seq, count, nil
 }

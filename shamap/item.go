@@ -36,6 +36,11 @@ func (item *Item) Data() []byte {
 	return result
 }
 
+// DataSize returns the serialized payload size without copying it.
+func (item *Item) DataSize() int {
+	return len(item.data)
+}
+
 func (item *Item) dataBytes() []byte {
 	return item.data
 }

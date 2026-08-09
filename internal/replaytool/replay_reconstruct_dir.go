@@ -195,6 +195,31 @@ func directoryPlacements(state *shamap.SHAMap, entryType string, fields map[stri
 		if book, ok := metaHash256(fields, "BookDirectory"); ok {
 			add(keylet.DirPage(book, metaUint64(fields["BookNode"])), dirAppend)
 		}
+		if raw, present := fields["AdditionalBooks"]; present {
+			books, ok := raw.([]any)
+			if !ok {
+				return nil, fmt.Errorf("Offer has invalid AdditionalBooks type %T", raw)
+			}
+			for i, rawBook := range books {
+				wrapper, ok := rawBook.(map[string]any)
+				if !ok {
+					return nil, fmt.Errorf("Offer AdditionalBooks[%d] has invalid type %T", i, rawBook)
+				}
+				bookFields, ok := wrapper["Book"].(map[string]any)
+				if !ok {
+					return nil, fmt.Errorf("Offer AdditionalBooks[%d] has invalid Book", i)
+				}
+				book, ok := metaHash256(bookFields, "BookDirectory")
+				if !ok {
+					return nil, fmt.Errorf("Offer AdditionalBooks[%d] has invalid BookDirectory", i)
+				}
+				node, err := parseMetaUint64(bookFields["BookNode"])
+				if err != nil {
+					return nil, fmt.Errorf("Offer AdditionalBooks[%d] has invalid BookNode: %w", i, err)
+				}
+				add(keylet.DirPage(book, node), dirAppend)
+			}
+		}
 
 	case "NFTokenOffer":
 		// NFToken offers are additionally listed in the per-token buy or sell
@@ -347,9 +372,8 @@ func reconstructDirIndexes(state *shamap.SHAMap, deltas map[[32]byte]*dirDelta, 
 }
 
 // applyDirDelta applies one page's membership operations in transaction order.
-// Removals preserve relative order and additions append, then the whole page is
-// sorted when the directory is sorted (dirInsert) rather than append-ordered
-// (dirAppend).
+// Removals preserve relative order. Sorted-directory additions sort the page
+// before insertion; append-ordered additions go to the tail.
 func applyDirDelta(members [][32]byte, d *dirDelta) [][32]byte {
 	present := make(map[[32]byte]bool, len(members))
 	for _, k := range members {
@@ -358,7 +382,19 @@ func applyDirDelta(members [][32]byte, d *dirDelta) [][32]byte {
 	for _, op := range d.operations {
 		if op.add {
 			if !present[op.key] {
-				members = append(members, op.key)
+				if d.strategy == dirSorted {
+					sort.Slice(members, func(i, j int) bool {
+						return bytes.Compare(members[i][:], members[j][:]) < 0
+					})
+					at := sort.Search(len(members), func(i int) bool {
+						return bytes.Compare(members[i][:], op.key[:]) >= 0
+					})
+					members = append(members, [32]byte{})
+					copy(members[at+1:], members[at:])
+					members[at] = op.key
+				} else {
+					members = append(members, op.key)
+				}
 				present[op.key] = true
 			}
 			continue
@@ -375,11 +411,6 @@ func applyDirDelta(members [][32]byte, d *dirDelta) [][32]byte {
 		delete(present, op.key)
 	}
 
-	if d.strategy == dirSorted {
-		sort.Slice(members, func(i, j int) bool {
-			return bytes.Compare(members[i][:], members[j][:]) < 0
-		})
-	}
 	return members
 }
 

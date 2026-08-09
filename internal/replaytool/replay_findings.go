@@ -233,6 +233,6 @@ func buildFinding(commit string, ledgerIndex uint32, parentHash [32]byte, result
 		DivergingObjectsComplete: complete,
 		DivergingObjectsLimit:    maxDiagnosticObjects,
 		TxSet:                    txSet,
-		Errors:                   result.Errors,
+		Errors:                   append([]string(nil), result.Errors...),
 	}
 }

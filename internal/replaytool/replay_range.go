@@ -490,16 +490,25 @@ func recordDivergenceAndReset(
 	result *blockResult,
 	preState, goxrplPost *shamap.SHAMap,
 ) (*shamap.SHAMap, error) {
+	writeFailedFinding := func(verified bool, stage string, stageErr error) error {
+		finding := buildFinding(commit, ledgerIndex, parentHash, result, verified, nil, false)
+		finding.Errors = append(finding.Errors, fmt.Sprintf("%s: %v", stage, stageErr))
+		if err := findings.Write(finding); err != nil {
+			return errors.Join(stageErr, fmt.Errorf("writing failed finding: %w", err))
+		}
+		return stageErr
+	}
+
 	corrected, verified, err := reconstructMainnetState(ctx, client, preState, ledgerIndex, result.ExpectedAccountHash, result.Rules)
 	if err != nil {
-		return nil, fmt.Errorf("reconstructing mainnet state: %w", err)
+		return nil, fmt.Errorf("reconstructing mainnet state: %w", writeFailedFinding(false, "reconstruction failed", err))
 	}
 	var diverging []divergingObject
 	divergingComplete := true
 	if verified {
 		diverging, divergingComplete, err = divergingObjectsContext(ctx, goxrplPost, corrected)
 		if err != nil {
-			return nil, fmt.Errorf("computing diverging objects: %w", err)
+			return nil, fmt.Errorf("computing diverging objects: %w", writeFailedFinding(true, "diagnostics failed", err))
 		}
 	}
 	finding := buildFinding(commit, ledgerIndex, parentHash, result, verified, diverging, divergingComplete)
