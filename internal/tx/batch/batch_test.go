@@ -609,7 +609,7 @@ func TestBatchRequiredSignersUseInnerAuthorizers(t *testing.T) {
 
 		require.ErrorIs(t, b.Validate(), ErrBatchMissingSigner)
 
-		b.BatchSigners = []BatchSigner{{BatchSigner: BatchSignerData{Account: testSigner2}}}
+		b.BatchSigners = []BatchSigner{{BatchSigner: BatchSignerData{Account: testSigner2, SigningPubKey: "ABC"}}}
 		require.NoError(t, b.Validate())
 	})
 }
