@@ -121,7 +121,10 @@ func (e *EscrowFinish) CalculateBaseFee(view tx.LedgerView, config tx.EngineConf
 		}
 	}
 
-	fee := sign.CalculateMultiSigFee(base, len(e.GetCommon().Signers))
+	fee := sign.CalculateMultiSigFee(
+		base,
+		len(e.GetCommon().Signers)+sign.SponsorSignerCount(e),
+	)
 
 	if e.Fulfillment != nil {
 		fulfillmentLen := len(*e.Fulfillment) / 2

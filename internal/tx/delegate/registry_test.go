@@ -94,6 +94,8 @@ func TestDelegateSet_EveryRegisteredTypeHasDelegationDecision(t *testing.T) {
 		tx.TypeLoanDelete:                   false,
 		tx.TypeLoanManage:                   false,
 		tx.TypeLoanPay:                      false,
+		tx.TypeSponsorshipTransfer:          false,
+		tx.TypeSponsorshipSet:               true,
 		tx.TypeAmendment:                    false,
 		tx.TypeFee:                          false,
 		tx.TypeUNLModify:                    false,
