@@ -672,6 +672,83 @@ func TestWebSocketSubscribeErrorWireEnvelope(t *testing.T) {
 	}
 }
 
+func TestWebSocketErrorProjectorPreservesExtrasAndCanonicalFields(t *testing.T) {
+	outbound := make(chan []byte, 3)
+	wsConn := &websocketConnection{Connection: subscription.NewConnection("error-projector", outbound)}
+	ws := &WebSocketServer{}
+	fields := map[string]any{
+		"error":           "spoofed",
+		"status":          "spoofed",
+		"error_code":      999,
+		"error_message":   "spoofed",
+		"error_exception": "spoofed",
+		"code":            999,
+		"message":         "spoofed",
+		"type":            "spoofed",
+		"index":           7,
+	}
+	ws.sendErrorResponse(wsConn, types.RpcErrorInvalidParams("").WithExtra(fields), 1, nil, nil)
+
+	var response map[string]any
+	if err := json.Unmarshal(<-outbound, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["status"] != "error" || response["error"] != "invalidParams" || response["error_code"] != float64(types.RpcINVALID_PARAMS) || response["error_message"] != "Invalid parameters." {
+		t.Fatalf("canonical WS error = %#v", response)
+	}
+	if response["index"] != float64(7) {
+		t.Fatalf("non-reserved extra missing: %#v", response)
+	}
+	if response["type"] != "response" {
+		t.Fatalf("response type = %v, want response", response["type"])
+	}
+	for _, key := range []string{"error_exception", "code", "message"} {
+		if _, ok := response[key]; ok {
+			t.Errorf("reserved extra %q was projected: %#v", key, response)
+		}
+	}
+
+	bare := types.RpcErrorEntryNotFoundBare("").WithExtra(map[string]any{
+		"error_code":    999,
+		"error_message": "spoofed",
+		"index":         9,
+	})
+	ws.sendErrorResponse(wsConn, bare, 2, nil, nil)
+	response = nil
+	if err := json.Unmarshal(<-outbound, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["error"] != "entryNotFound" || response["index"] != float64(9) {
+		t.Fatalf("bare WS error = %#v", response)
+	}
+	for _, key := range []string{"error_code", "error_message"} {
+		if _, ok := response[key]; ok {
+			t.Errorf("bare error projected %q: %#v", key, response)
+		}
+	}
+
+	exception := types.RpcErrorInvalidTransaction("decode failed").WithExtra(map[string]any{
+		"error":           "spoofed",
+		"error_code":      999,
+		"error_message":   "spoofed",
+		"error_exception": "spoofed",
+		"index":           10,
+	})
+	ws.sendErrorResponse(wsConn, exception, 3, nil, nil)
+	response = nil
+	if err := json.Unmarshal(<-outbound, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["error"] != "invalidTransaction" || response["error_exception"] != "decode failed" || response["index"] != float64(10) {
+		t.Fatalf("exception WS error = %#v", response)
+	}
+	for _, key := range []string{"error_code", "error_message"} {
+		if _, ok := response[key]; ok {
+			t.Errorf("exception error projected %q: %#v", key, response)
+		}
+	}
+}
+
 func TestWebSocketHandlerPanicWireEnvelope(t *testing.T) {
 	const panicCause = "websocket panic must stay private"
 	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})

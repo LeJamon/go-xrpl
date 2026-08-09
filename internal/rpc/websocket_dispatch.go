@@ -331,19 +331,11 @@ func (ws *WebSocketServer) sendCommandError(wsConn *websocketConnection, rpcErr 
 	ws.sendErrorResponse(wsConn, rpcErr, cmd.ID, nil, cmd.Request)
 }
 func (ws *WebSocketServer) sendErrorResponse(wsConn *websocketConnection, rpcErr *types.RpcError, id any, opts *types.WebSocketResponseOptions, request map[string]any) {
-	response := map[string]any{
-		"type":   "response",
-		"status": "error",
-		"error":  rpcErr.ErrorString,
-	}
+	response := rpcErr.ResponseFields()
+	response["type"] = "response"
+	response["status"] = "error"
 	if id != nil {
 		response["id"] = id
-	}
-	if rpcErr.ErrorException != "" {
-		response["error_exception"] = rpcErr.ErrorException
-	} else if !rpcErr.IsBareToken() {
-		response["error_code"] = rpcErr.Code
-		response["error_message"] = rpcErr.Message
 	}
 
 	if opts != nil {

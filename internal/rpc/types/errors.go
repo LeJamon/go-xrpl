@@ -25,7 +25,7 @@ import "fmt"
 type RpcError struct {
 	Code           int    `json:"error_code"`
 	ErrorString    string `json:"error"`
-	Type           string `json:"type"`
+	Type           string `json:"-"`
 	Message        string `json:"error_message,omitempty"`
 	ErrorException string `json:"error_exception,omitempty"`
 
@@ -69,7 +69,14 @@ func (e *RpcError) WithExtra(fields map[string]any) *RpcError {
 		return nil
 	}
 	cp := *e
-	cp.Extra = fields
+	if fields == nil {
+		cp.Extra = nil
+		return &cp
+	}
+	cp.Extra = make(map[string]any, len(fields))
+	for key, value := range fields {
+		cp.Extra[key] = value
+	}
 	return &cp
 }
 
@@ -135,15 +142,32 @@ func (e RpcError) ErrorObject() map[string]any {
 
 // ResponseFields returns the error fields used in XRPL response envelopes.
 func (e RpcError) ResponseFields() map[string]any {
-	fields := map[string]any{"error": e.ErrorString}
-	if !e.IsBareToken() {
+	fields := make(map[string]any, len(e.Extra)+3)
+	for key, value := range e.Extra {
+		if isReservedErrorResponseField(key) {
+			continue
+		}
+		fields[key] = value
+	}
+	fields["error"] = e.ErrorString
+	if e.ErrorException != "" {
+		fields["error_exception"] = e.ErrorException
+	} else if !e.IsBareToken() {
 		fields["error_code"] = e.Code
 		fields["error_message"] = e.Message
 	}
-	for key, value := range e.Extra {
-		fields[key] = value
-	}
 	return fields
+}
+
+func isReservedErrorResponseField(key string) bool {
+	switch key {
+	case "type", "status", "error", "error_code", "error_message", "error_exception",
+		"code", "message", "request", "id", "jsonrpc", "ripplerpc", "api_version",
+		"warning", "warnings", "forwarded":
+		return true
+	default:
+		return false
+	}
 }
 
 // rippled error_code_i enum, mirrored 1:1 by value (ErrorCodes.h:42-160).
@@ -252,6 +276,111 @@ const (
 	RpcUNEXPECTED_LEDGER_TYPE = 99
 )
 
+// rpcErrorInfo is the canonical metadata for an XRPL RPC error code. It
+// mirrors rippled's RPC::ErrorInfo table in ErrorCodes.cpp.
+type rpcErrorInfo struct {
+	Code       int
+	Token      string
+	Message    string
+	HTTPStatus int
+}
+
+var rpcErrorInfos = map[int]rpcErrorInfo{
+	RpcACT_MALFORMED:          {RpcACT_MALFORMED, "actMalformed", "Account malformed.", 200},
+	RpcACT_NOT_FOUND:          {RpcACT_NOT_FOUND, "actNotFound", "Account not found.", 200},
+	RpcALREADY_MULTISIG:       {RpcALREADY_MULTISIG, "alreadyMultisig", "Already multisigned.", 200},
+	RpcALREADY_SINGLE_SIG:     {RpcALREADY_SINGLE_SIG, "alreadySingleSig", "Already single-signed.", 200},
+	RpcAMENDMENT_BLOCKED:      {RpcAMENDMENT_BLOCKED, "amendmentBlocked", "Amendment blocked, need upgrade.", 503},
+	RpcEXPIRED_VALIDATOR_LIST: {RpcEXPIRED_VALIDATOR_LIST, "unlBlocked", "Validator list expired.", 503},
+	RpcATX_DEPRECATED:         {RpcATX_DEPRECATED, "deprecated", "Use the new API or specify a ledger range.", 400},
+	RpcBAD_KEY_TYPE:           {RpcBAD_KEY_TYPE, "badKeyType", "Bad key type.", 400},
+	RpcBAD_FEATURE:            {RpcBAD_FEATURE, "badFeature", "Feature unknown or invalid.", 500},
+	RpcBAD_ISSUER:             {RpcBAD_ISSUER, "badIssuer", "Issuer account malformed.", 400},
+	RpcBAD_MARKET:             {RpcBAD_MARKET, "badMarket", "No such market.", 404},
+	RpcBAD_SECRET:             {RpcBAD_SECRET, "badSecret", "Secret does not match account.", 403},
+	RpcBAD_SEED:               {RpcBAD_SEED, "badSeed", "Disallowed seed.", 403},
+	RpcBAD_SYNTAX:             {RpcBAD_SYNTAX, "badSyntax", "Syntax error.", 400},
+	RpcCHANNEL_MALFORMED:      {RpcCHANNEL_MALFORMED, "channelMalformed", "Payment channel is malformed.", 400},
+	RpcCHANNEL_AMT_MALFORMED:  {RpcCHANNEL_AMT_MALFORMED, "channelAmtMalformed", "Payment channel amount is malformed.", 400},
+	RpcMISSING_COMMAND:        {RpcMISSING_COMMAND, "commandMissing", "Missing command entry.", 400},
+	RpcDB_DESERIALIZATION:     {RpcDB_DESERIALIZATION, "dbDeserialization", "Database deserialization error.", 502},
+	RpcDST_ACT_MALFORMED:      {RpcDST_ACT_MALFORMED, "dstActMalformed", "Destination account is malformed.", 400},
+	RpcDST_ACT_MISSING:        {RpcDST_ACT_MISSING, "dstActMissing", "Destination account not provided.", 400},
+	RpcDST_ACT_NOT_FOUND:      {RpcDST_ACT_NOT_FOUND, "dstActNotFound", "Destination account not found.", 404},
+	RpcDST_AMT_MALFORMED:      {RpcDST_AMT_MALFORMED, "dstAmtMalformed", "Destination amount/currency/issuer is malformed.", 400},
+	RpcDST_AMT_MISSING:        {RpcDST_AMT_MISSING, "dstAmtMissing", "Destination amount/currency/issuer is missing.", 400},
+	RpcDST_ISR_MALFORMED:      {RpcDST_ISR_MALFORMED, "dstIsrMalformed", "Destination issuer is malformed.", 400},
+	RpcEXCESSIVE_LGR_RANGE:    {RpcEXCESSIVE_LGR_RANGE, "excessiveLgrRange", "Ledger range exceeds 1000.", 400},
+	RpcFORBIDDEN:              {RpcFORBIDDEN, "forbidden", "Bad credentials.", 403},
+	RpcHIGH_FEE:               {RpcHIGH_FEE, "highFee", "Current transaction fee exceeds your limit.", 402},
+	RpcINTERNAL:               {RpcINTERNAL, "internal", "Internal error.", 500},
+	RpcINVALID_LGR_RANGE:      {RpcINVALID_LGR_RANGE, "invalidLgrRange", "Ledger range is invalid.", 400},
+	RpcINVALID_PARAMS:         {RpcINVALID_PARAMS, "invalidParams", "Invalid parameters.", 400},
+	RpcINVALID_HOTWALLET:      {RpcINVALID_HOTWALLET, "invalidHotWallet", "Invalid hotwallet.", 400},
+	RpcISSUE_MALFORMED:        {RpcISSUE_MALFORMED, "issueMalformed", "Issue is malformed.", 400},
+	RpcJSON_RPC:               {RpcJSON_RPC, "json_rpc", "JSON-RPC transport error.", 500},
+	RpcLGR_IDXS_INVALID:       {RpcLGR_IDXS_INVALID, "lgrIdxsInvalid", "Ledger indexes invalid.", 400},
+	RpcLGR_IDX_MALFORMED:      {RpcLGR_IDX_MALFORMED, "lgrIdxMalformed", "Ledger index malformed.", 400},
+	RpcLGR_NOT_FOUND:          {RpcLGR_NOT_FOUND, "lgrNotFound", "Ledger not found.", 404},
+	RpcLGR_NOT_VALIDATED:      {RpcLGR_NOT_VALIDATED, "lgrNotValidated", "Ledger not validated.", 202},
+	RpcMASTER_DISABLED:        {RpcMASTER_DISABLED, "masterDisabled", "Master key is disabled.", 403},
+	RpcNOT_ENABLED:            {RpcNOT_ENABLED, "notEnabled", "Not enabled in configuration.", 501},
+	RpcNOT_IMPL:               {RpcNOT_IMPL, "notImpl", "Not implemented.", 501},
+	RpcNOT_READY:              {RpcNOT_READY, "notReady", "Not ready to handle this request.", 503},
+	RpcNOT_SUPPORTED:          {RpcNOT_SUPPORTED, "notSupported", "Operation not supported.", 501},
+	RpcNO_CLOSED:              {RpcNO_CLOSED, "noClosed", "Closed ledger is unavailable.", 503},
+	RpcNO_CURRENT:             {RpcNO_CURRENT, "noCurrent", "Current ledger is unavailable.", 503},
+	RpcNOT_SYNCED:             {RpcNOT_SYNCED, "notSynced", "Not synced to the network.", 503},
+	RpcNO_EVENTS:              {RpcNO_EVENTS, "noEvents", "Current transport does not support events.", 405},
+	RpcNO_NETWORK:             {RpcNO_NETWORK, "noNetwork", "Not synced to the network.", 503},
+	RpcWRONG_NETWORK:          {RpcWRONG_NETWORK, "wrongNetwork", "Wrong network.", 503},
+	RpcNO_PERMISSION:          {RpcNO_PERMISSION, "noPermission", "You don't have permission for this command.", 401},
+	RpcNO_PF_REQUEST:          {RpcNO_PF_REQUEST, "noPathRequest", "No pathfinding request in progress.", 404},
+	RpcOBJECT_NOT_FOUND:       {RpcOBJECT_NOT_FOUND, "objectNotFound", "The requested object was not found.", 404},
+	RpcPUBLIC_MALFORMED:       {RpcPUBLIC_MALFORMED, "publicMalformed", "Public key is malformed.", 400},
+	RpcSENDMAX_MALFORMED:      {RpcSENDMAX_MALFORMED, "sendMaxMalformed", "SendMax amount malformed.", 400},
+	RpcSIGNING_MALFORMED:      {RpcSIGNING_MALFORMED, "signingMalformed", "Signing of transaction is malformed.", 400},
+	RpcSLOW_DOWN:              {RpcSLOW_DOWN, "slowDown", "You are placing too much load on the server.", 429},
+	RpcSRC_ACT_MALFORMED:      {RpcSRC_ACT_MALFORMED, "srcActMalformed", "Source account is malformed.", 400},
+	RpcSRC_ACT_MISSING:        {RpcSRC_ACT_MISSING, "srcActMissing", "Source account not provided.", 400},
+	RpcSRC_ACT_NOT_FOUND:      {RpcSRC_ACT_NOT_FOUND, "srcActNotFound", "Source account not found.", 404},
+	RpcDELEGATE_ACT_NOT_FOUND: {RpcDELEGATE_ACT_NOT_FOUND, "delegateActNotFound", "Delegate account not found.", 404},
+	RpcSRC_CUR_MALFORMED:      {RpcSRC_CUR_MALFORMED, "srcCurMalformed", "Source currency is malformed.", 400},
+	RpcSRC_ISR_MALFORMED:      {RpcSRC_ISR_MALFORMED, "srcIsrMalformed", "Source issuer is malformed.", 400},
+	RpcSTREAM_MALFORMED:       {RpcSTREAM_MALFORMED, "malformedStream", "Stream malformed.", 400},
+	RpcTOO_BUSY:               {RpcTOO_BUSY, "tooBusy", "The server is too busy to help you now.", 503},
+	RpcTXN_NOT_FOUND:          {RpcTXN_NOT_FOUND, "txnNotFound", "Transaction not found.", 404},
+	RpcMETHOD_NOT_FOUND:       {RpcMETHOD_NOT_FOUND, "unknownCmd", "Unknown method.", 405},
+	RpcORACLE_MALFORMED:       {RpcORACLE_MALFORMED, "oracleMalformed", "Oracle request is malformed.", 400},
+	RpcBAD_CREDENTIALS:        {RpcBAD_CREDENTIALS, "badCredentials", "Credentials do not exist, are not accepted, or have expired.", 400},
+	RpcTX_SIGNED:              {RpcTX_SIGNED, "transactionSigned", "Transaction should not be signed.", 400},
+	RpcDOMAIN_MALFORMED:       {RpcDOMAIN_MALFORMED, "domainMalformed", "Domain is malformed.", 400},
+	RpcENTRY_NOT_FOUND:        {RpcENTRY_NOT_FOUND, "entryNotFound", "Entry not found.", 400},
+	RpcUNEXPECTED_LEDGER_TYPE: {RpcUNEXPECTED_LEDGER_TYPE, "unexpectedLedgerType", "Unexpected ledger type.", 400},
+}
+
+var unknownRpcErrorInfo = rpcErrorInfo{
+	Code:       RpcUNKNOWN,
+	Token:      "unknown",
+	Message:    "An unknown error code.",
+	HTTPStatus: 200,
+}
+
+// rpcErrorInfoForCode returns rippled's metadata for code, or its unknown-code
+// defaults when code is outside the canonical table.
+func rpcErrorInfoForCode(code int) rpcErrorInfo {
+	if info, ok := rpcErrorInfos[code]; ok {
+		return info
+	}
+	return unknownRpcErrorInfo
+}
+
+// RpcErrorHTTPStatus returns the HTTP status associated with a canonical RPC
+// error code. Unknown and reserved codes retain rippled's default of 200.
+func RpcErrorHTTPStatus(code int) int {
+	return rpcErrorInfoForCode(code).HTTPStatus
+}
+
 // go-xrpl-specific error codes for conditions rippled does not assign an
 // error_code_i slot. These deliberately avoid colliding with any rippled code.
 const (
@@ -285,6 +414,9 @@ func RpcErrorUnknown(message string) *RpcError {
 }
 
 func RpcErrorInvalidParams(message string) *RpcError {
+	if message == "" {
+		message = rpcErrorInfoForCode(RpcINVALID_PARAMS).Message
+	}
 	return NewRpcError(RpcINVALID_PARAMS, "invalidParams", "invalidParams", message)
 }
 

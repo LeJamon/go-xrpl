@@ -74,24 +74,18 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	lookupFields := ledgerEntryResponseFields(ledger, lookupValidated)
 	_, accountID, decodeErr := addresscodec.DecodeClassicAddressToAccountID(account)
 	if decodeErr != nil {
-		rpcErr := types.RpcErrorActMalformed("Account malformed.")
-		rpcErr.Extra = lookupFields
-		return nil, rpcErr
+		return nil, types.RpcErrorActMalformed("Account malformed.").WithExtra(lookupFields)
 	}
 	canonicalAccount, encodeErr := addresscodec.EncodeAccountIDToClassicAddress(accountID)
 	if encodeErr != nil {
-		rpcErr := types.RpcErrorActMalformed("Account malformed.")
-		rpcErr.Extra = lookupFields
-		return nil, rpcErr
+		return nil, types.RpcErrorActMalformed("Account malformed.").WithExtra(lookupFields)
 	}
 
 	info, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, canonicalAccount, ledgerIndex)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			lookupFields["account"] = canonicalAccount
-			rpcErr := types.RpcErrorActNotFound("Account not found.")
-			rpcErr.Extra = lookupFields
-			return nil, rpcErr
+			return nil, types.RpcErrorActNotFound("Account not found.").WithExtra(lookupFields)
 		}
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
 			return nil, types.RpcErrorLgrNotFound("Ledger not found.")
@@ -104,9 +98,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		queue = jsonCppBoolRaw(queueRaw)
 	}
 	if queue && ledger.IsClosed() {
-		rpcErr := types.RpcErrorInvalidParams("Invalid parameters.")
-		rpcErr.Extra = lookupFields
-		return nil, rpcErr
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.").WithExtra(lookupFields)
 	}
 
 	signerLists := false
@@ -164,9 +156,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 
 	if signerListsRaw, ok := rawFields["signer_lists"]; ctx.ApiVersion > 1 && ok {
 		if _, valid := rawJSONBool(signerListsRaw); !valid {
-			rpcErr := types.RpcErrorInvalidParams("Invalid parameters.")
-			rpcErr.Extra = response
-			return nil, rpcErr
+			return nil, types.RpcErrorInvalidParams("Invalid parameters.").WithExtra(response)
 		}
 	}
 

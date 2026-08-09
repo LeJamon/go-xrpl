@@ -627,7 +627,7 @@ func isRpcErrorStructShape(structure *gotypes.Struct) bool {
 	}{
 		{name: "Code", kind: gotypes.Int, tag: `json:"error_code"`},
 		{name: "ErrorString", kind: gotypes.String, tag: `json:"error"`},
-		{name: "Type", kind: gotypes.String, tag: `json:"type"`},
+		{name: "Type", kind: gotypes.String, tag: `json:"-"`},
 		{name: "Message", kind: gotypes.String, tag: `json:"error_message,omitempty"`},
 		{name: "ErrorException", kind: gotypes.String, tag: `json:"error_exception,omitempty"`},
 		{name: "Extra", tag: `json:"-"`, mapType: true},
