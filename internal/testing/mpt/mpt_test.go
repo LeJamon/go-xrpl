@@ -704,6 +704,7 @@ func TestMPT_SetValidation(t *testing.T) {
 		env.DisableFeature("MPTokensV1")
 		env.DisableFeature("SingleAssetVault")
 		env.DisableFeature("DynamicMPT")
+		env.DisableFeature("ConfidentialTransfer")
 		env.Close()
 		alice := jtx.NewAccount("alice")
 		bob := jtx.NewAccount("bob")

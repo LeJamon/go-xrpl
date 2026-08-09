@@ -313,7 +313,7 @@ func participant(pub, ciphertext []byte) mptcrypto.Participant {
 	return mptcrypto.Participant{PublicKey: pub, Ciphertext: ciphertext}
 }
 
-func (c *ConfidentialMPTConvert) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (c *ConfidentialMPTConvert) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
 	id, _ := parseConfidentialID(c.MPTokenIssuanceID)
 	issuance, _, accountID, result := readConfidentialIssuance(view, id, c.Account)
 	if result != ter.TesSUCCESS {
@@ -335,7 +335,7 @@ func (c *ConfidentialMPTConvert) Preclaim(view tx.LedgerView, _ tx.EngineConfig)
 	if mptutil.IsFrozen(view, id, accountID) {
 		return ter.TecLOCKED
 	}
-	if result := mptutil.RequireAuth(view, id, accountID, false); result != ter.TesSUCCESS {
+	if result := mptutil.RequireAuthAt(view, id, accountID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
 		return result
 	}
 	if token.MPTAmount < c.MPTAmount {
@@ -373,7 +373,7 @@ func (c *ConfidentialMPTConvert) Preclaim(view tx.LedgerView, _ tx.EngineConfig)
 	return ter.TesSUCCESS
 }
 
-func (c *ConfidentialMPTMergeInbox) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (c *ConfidentialMPTMergeInbox) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
 	id, _ := parseConfidentialID(c.MPTokenIssuanceID)
 	_, _, token, _, accountID, result := commonConfidentialChecks(view, id, c.Account, false)
 	if result != ter.TesSUCCESS {
@@ -385,10 +385,10 @@ func (c *ConfidentialMPTMergeInbox) Preclaim(view tx.LedgerView, _ tx.EngineConf
 	if mptutil.IsFrozen(view, id, accountID) {
 		return ter.TecLOCKED
 	}
-	return mptutil.RequireAuth(view, id, accountID, false)
+	return mptutil.RequireAuthAt(view, id, accountID, false, config.ParentCloseTime)
 }
 
-func (c *ConfidentialMPTConvertBack) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (c *ConfidentialMPTConvertBack) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
 	id, _ := parseConfidentialID(c.MPTokenIssuanceID)
 	issuance, _, accountID, result := readConfidentialIssuance(view, id, c.Account)
 	if result != ter.TesSUCCESS {
@@ -419,7 +419,7 @@ func (c *ConfidentialMPTConvertBack) Preclaim(view tx.LedgerView, _ tx.EngineCon
 	if mptutil.IsFrozen(view, id, accountID) {
 		return ter.TecLOCKED
 	}
-	if result := mptutil.RequireAuth(view, id, accountID, false); result != ter.TesSUCCESS {
+	if result := mptutil.RequireAuthAt(view, id, accountID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
 		return result
 	}
 	blindBytes, _ := decodeFixed(c.BlindingFactor, 32)

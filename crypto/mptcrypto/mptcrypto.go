@@ -14,6 +14,8 @@ const (
 	BlindingFactorSize   = 32
 	ConvertProofSize     = 64
 	ConvertBackProofSize = 816
+	SendProofSize        = 946
+	ClawbackProofSize    = 64
 	CommitmentSize       = 33
 )
 

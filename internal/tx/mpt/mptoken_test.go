@@ -438,7 +438,8 @@ func TestMPTokenIssuanceSetPreflightOrder(t *testing.T) {
 }
 
 // allRules mirrors rippled's testSetValidation(all - featureSingleAssetVault):
-// every supported amendment except SingleAssetVault and DynamicMPT, so their
+// every supported amendment except SingleAssetVault, DynamicMPT, and
+// ConfidentialTransfer, so their
 // "changes nothing" no-op rejection does not fire and the legacy Set-validation
 // shape checks are exercised in isolation. The SAV-on no-op behaviour has its
 // own coverage via a rules set that enables SingleAssetVault.
@@ -447,6 +448,7 @@ func allRules() *amendment.Rules {
 		FromPreset(amendment.PresetAllSupported).
 		DisableByName("SingleAssetVault").
 		DisableByName("DynamicMPT").
+		DisableByName("ConfidentialTransfer").
 		Build()
 }
 

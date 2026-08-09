@@ -25,4 +25,10 @@ func Register() {
 	tx.Register(tx.TypeConfidentialMPTConvertBack, func() tx.Transaction {
 		return &ConfidentialMPTConvertBack{BaseTx: *tx.NewBaseTx(tx.TypeConfidentialMPTConvertBack, "")}
 	})
+	tx.Register(tx.TypeConfidentialMPTSend, func() tx.Transaction {
+		return &ConfidentialMPTSend{BaseTx: *tx.NewBaseTx(tx.TypeConfidentialMPTSend, "")}
+	})
+	tx.Register(tx.TypeConfidentialMPTClawback, func() tx.Transaction {
+		return &ConfidentialMPTClawback{BaseTx: *tx.NewBaseTx(tx.TypeConfidentialMPTClawback, "")}
+	})
 }

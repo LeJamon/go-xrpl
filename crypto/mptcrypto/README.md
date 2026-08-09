@@ -21,6 +21,7 @@ libraries, or linked binaries. Obtain legal clearance before distributing an
 `mptcrypto`-linked artifact.
 
 Without both the build tag and cgo, the backend is unavailable and the
-ConfidentialTransfer amendment remains unsupported. This layer intentionally
-keeps the amendment unsupported even with the native backend; the transaction
-family is not advertised until all confidential transaction types are present.
+ConfidentialTransfer amendment remains unsupported. Builds with both
+`mptcrypto` and cgo advertise the complete transaction family as supported only
+when the native secp256k1 context initializes successfully; the amendment
+remains vote-default-no in every build.

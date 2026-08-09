@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/crypto/mptcrypto"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -84,6 +85,18 @@ func TestConfidentialMPTUnmarshalClearsReusedReceiver(t *testing.T) {
 		convertBack.BalanceCommitment != "" || convertBack.AuditorEncryptedAmount != nil {
 		t.Fatalf("reused ConvertBack retained stale fields: %+v", convertBack)
 	}
+
+	clawback := ConfidentialMPTClawback{MPTokenIssuanceID: "stale", Holder: "stale", MPTAmount: 9, ZKProof: "stale"}
+	if err := json.Unmarshal([]byte(`{"MPTAmount":"9223372036854775807"}`), &clawback); err != nil {
+		t.Fatal(err)
+	}
+	if clawback.MPTAmount != protocol.MaxMPTokenAmount || clawback.MPTokenIssuanceID != "" || clawback.Holder != "" || clawback.ZKProof != "" {
+		t.Fatalf("reused Clawback retained stale fields: %+v", clawback)
+	}
+	flat, err := clawback.Flatten()
+	if err != nil || flat["MPTAmount"] != "9223372036854775807" {
+		t.Fatalf("clawback flatten = %#v, %v", flat, err)
+	}
 }
 
 func TestConfidentialMPTCodecRoundTrip(t *testing.T) {
@@ -117,13 +130,81 @@ func TestConfidentialMPTCodecRoundTrip(t *testing.T) {
 	}
 }
 
-func TestConfidentialMPTBaseFee(t *testing.T) {
-	transaction := &ConfidentialMPTMergeInbox{BaseTx: *tx.NewBaseTx(tx.TypeConfidentialMPTMergeInbox, "")}
-	if got := transaction.CalculateBaseFee(nil, tx.EngineConfig{BaseFee: 10}); got != 100 {
-		t.Fatalf("base fee = %d, want 100", got)
+func TestConfidentialMPTSendCodecRoundTrip(t *testing.T) {
+	input := map[string]any{
+		"TransactionType":            "ConfidentialMPTSend",
+		"Account":                    "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+		"Sequence":                   uint32(1),
+		"Fee":                        "100",
+		"SigningPubKey":              "",
+		"MPTokenIssuanceID":          "00000001ABCDEF0123456789ABCDEF0123456789ABCDEF12",
+		"Destination":                "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"DestinationTag":             uint32(7),
+		"SenderEncryptedAmount":      makeHex(66, 0x11),
+		"DestinationEncryptedAmount": makeHex(66, 0x22),
+		"IssuerEncryptedAmount":      makeHex(66, 0x33),
+		"AuditorEncryptedAmount":     makeHex(66, 0x44),
+		"ZKProof":                    makeHex(mptcrypto.SendProofSize, 0x55),
+		"AmountCommitment":           makeHex(33, 0x66),
+		"BalanceCommitment":          makeHex(33, 0x77),
+		"CredentialIDs":              []any{makeHex(32, 0x88)},
 	}
-	transaction.Signers = make([]tx.SignerWrapper, 2)
-	if got := transaction.CalculateBaseFee(nil, tx.EngineConfig{BaseFee: 10}); got != 120 {
+	encoded, err := binarycodec.EncodeBytes(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := binarycodec.DecodeBytes(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"SenderEncryptedAmount", "DestinationEncryptedAmount", "IssuerEncryptedAmount", "AuditorEncryptedAmount", "ZKProof", "AmountCommitment", "BalanceCommitment", "CredentialIDs"} {
+		if _, ok := decoded[field]; !ok {
+			t.Fatalf("decoded send omitted %s", field)
+		}
+	}
+}
+
+func TestConfidentialMPTClawbackCodecRoundTrip(t *testing.T) {
+	input := map[string]any{
+		"TransactionType":   "ConfidentialMPTClawback",
+		"Account":           "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+		"Sequence":          uint32(1),
+		"Fee":               "100",
+		"SigningPubKey":     "",
+		"MPTokenIssuanceID": "00000001ABCDEF0123456789ABCDEF0123456789ABCDEF12",
+		"Holder":            "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"MPTAmount":         "9223372036854775807",
+		"ZKProof":           makeHex(mptcrypto.ClawbackProofSize, 0x11),
+	}
+	encoded, err := binarycodec.EncodeBytes(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := binarycodec.DecodeBytes(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded["MPTAmount"] != "9223372036854775807" {
+		t.Fatalf("MPTAmount = %#v", decoded["MPTAmount"])
+	}
+}
+
+func TestConfidentialMPTBaseFee(t *testing.T) {
+	transactions := []interface {
+		CalculateBaseFee(tx.LedgerView, tx.EngineConfig) uint64
+	}{
+		&ConfidentialMPTMergeInbox{BaseTx: *tx.NewBaseTx(tx.TypeConfidentialMPTMergeInbox, "")},
+		&ConfidentialMPTSend{BaseTx: *tx.NewBaseTx(tx.TypeConfidentialMPTSend, "")},
+		&ConfidentialMPTClawback{BaseTx: *tx.NewBaseTx(tx.TypeConfidentialMPTClawback, "")},
+	}
+	for _, transaction := range transactions {
+		if got := transaction.CalculateBaseFee(nil, tx.EngineConfig{BaseFee: 10}); got != 100 {
+			t.Fatalf("base fee = %d, want 100", got)
+		}
+	}
+	merge := transactions[0].(*ConfidentialMPTMergeInbox)
+	merge.Signers = make([]tx.SignerWrapper, 2)
+	if got := merge.CalculateBaseFee(nil, tx.EngineConfig{BaseFee: 10}); got != 120 {
 		t.Fatalf("multisigned base fee = %d, want 120", got)
 	}
 }

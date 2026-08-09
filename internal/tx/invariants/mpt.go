@@ -224,7 +224,8 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 			}
 			return nil
 
-		case TypeConfidentialMPTConvert, TypeConfidentialMPTMergeInbox, TypeConfidentialMPTConvertBack:
+		case TypeConfidentialMPTConvert, TypeConfidentialMPTMergeInbox, TypeConfidentialMPTConvertBack,
+			TypeConfidentialMPTSend, TypeConfidentialMPTClawback:
 			if mptIssuancesCreated != 0 || mptIssuancesDeleted != 0 ||
 				mptokensCreated != 0 || mptokensDeleted != 0 {
 				return &InvariantViolation{Name: "ValidMPTIssuance", Message: "confidential MPT transaction created or deleted an MPT ledger entry"}

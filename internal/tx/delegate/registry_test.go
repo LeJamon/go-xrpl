@@ -74,6 +74,8 @@ func TestDelegateSet_EveryRegisteredTypeHasDelegationDecision(t *testing.T) {
 		tx.TypeConfidentialMPTConvert:       false,
 		tx.TypeConfidentialMPTMergeInbox:    true,
 		tx.TypeConfidentialMPTConvertBack:   true,
+		tx.TypeConfidentialMPTSend:          true,
+		tx.TypeConfidentialMPTClawback:      true,
 		tx.TypeCredentialCreate:             true,
 		tx.TypeCredentialAccept:             true,
 		tx.TypeCredentialDelete:             true,

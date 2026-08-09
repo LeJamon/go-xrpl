@@ -2,11 +2,13 @@ package mpt
 
 import (
 	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
+	ledgercore "github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -15,8 +17,18 @@ import (
 )
 
 type confidentialPreclaimView struct {
-	entries map[[32]byte][]byte
-	rules   *amendment.Rules
+	entries        map[[32]byte][]byte
+	rules          *amendment.Rules
+	failMutationAt int
+	mutations      int
+}
+
+func cloneConfidentialView(view *confidentialPreclaimView) *confidentialPreclaimView {
+	entries := make(map[[32]byte][]byte, len(view.entries))
+	for key, value := range view.entries {
+		entries[key] = append([]byte(nil), value...)
+	}
+	return &confidentialPreclaimView{entries: entries, rules: view.rules}
 }
 
 func (v *confidentialPreclaimView) Read(k keylet.Keylet) ([]byte, error) {
@@ -29,17 +41,44 @@ func (v *confidentialPreclaimView) Exists(k keylet.Keylet) (bool, error) {
 }
 
 func (v *confidentialPreclaimView) Insert(k keylet.Keylet, data []byte) error {
+	v.mutations++
+	if v.failMutationAt == v.mutations {
+		return errConfidentialMutation
+	}
 	v.entries[k.Key] = data
 	return nil
 }
 
 func (v *confidentialPreclaimView) Update(k keylet.Keylet, data []byte) error {
+	v.mutations++
+	if v.failMutationAt == v.mutations {
+		return errConfidentialMutation
+	}
 	v.entries[k.Key] = data
 	return nil
 }
 
 func (v *confidentialPreclaimView) Erase(k keylet.Keylet) error {
+	v.mutations++
+	if v.failMutationAt == v.mutations {
+		return errConfidentialMutation
+	}
 	delete(v.entries, k.Key)
+	return nil
+}
+
+var errConfidentialMutation = errors.New("injected confidential mutation failure")
+
+func (v *confidentialPreclaimView) ApplyAtomically(apply func(ledgercore.Writer) error) error {
+	staged := cloneConfidentialView(v)
+	staged.failMutationAt = v.failMutationAt
+	staged.mutations = v.mutations
+	if err := apply(staged); err != nil {
+		v.mutations = staged.mutations
+		return err
+	}
+	v.entries = staged.entries
+	v.mutations = staged.mutations
 	return nil
 }
 
