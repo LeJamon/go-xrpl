@@ -167,7 +167,6 @@ func (r *runner) execFund(stepIdx int, step Step) {
 	}
 	r.accounts[step.Account] = acc
 
-	// Bypass TxQ for this setup operation.
 	r.env.SetBypassTxQ(true)
 	defer func() {
 		r.env.SetBypassTxQ(false)
@@ -184,7 +183,6 @@ func (r *runner) execFund(stepIdx int, step Step) {
 // execTrust handles a "trust" step.
 // Trust operations bypass TxQ, matching rippled's apply() for setup operations.
 func (r *runner) execTrust(stepIdx int, step Step) {
-	// Bypass TxQ for this setup operation.
 	r.env.SetBypassTxQ(true)
 	defer func() {
 		r.env.SetBypassTxQ(false)
@@ -264,8 +262,6 @@ func (r *runner) execClose(stepIdx int, step Step) {
 		}
 		r.env.SetTime(targetTime.Add(-resolution))
 	}
-	// If the fixture provides a tx_set_hash, pass it to the environment as the
-	// canonical sort salt so the build uses the same ordering as rippled.
 	if step.TxSetHash != nil {
 		saltBytes, err := hex.DecodeString(*step.TxSetHash)
 		if err != nil {

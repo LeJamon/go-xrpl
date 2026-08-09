@@ -57,7 +57,6 @@ func readRippleState(reader ledgerEntryReader, lineKey keylet.Keylet) (*state.Ri
 	return rippleState, true, nil
 }
 
-// Balance returns the XRP balance of an account in drops.
 func (e *TestEnv) Balance(acc *Account) uint64 {
 	e.t.Helper()
 	accountRoot, exists, err := readAccountRoot(e.ledger, acc.ID)

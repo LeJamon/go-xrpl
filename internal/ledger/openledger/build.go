@@ -9,7 +9,6 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-// BuildConfig controls one closed-ledger build from a closed parent.
 type BuildConfig struct {
 	CloseTime     time.Time
 	CloseFlags    uint8
@@ -17,13 +16,11 @@ type BuildConfig struct {
 	Apply         ApplyConfig
 }
 
-// BuildResult is published only after the ledger has been fully applied and closed.
 type BuildResult struct {
 	Ledger  *ledger.Ledger
 	Retries []PendingTx
 }
 
-// BuildClosedLedger applies one canonical transaction set to a fresh child of parent.
 func BuildClosedLedger(parent *ledger.Ledger, transactions []PendingTx, cfg BuildConfig) (BuildResult, error) {
 	if parent == nil {
 		return BuildResult{}, errors.New("openledger.BuildClosedLedger: parent is nil")

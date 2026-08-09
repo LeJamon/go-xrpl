@@ -151,7 +151,6 @@ type TestEnv struct {
 	// parent for replay-on-close. Updated in Close().
 	lastClosedLedger *ledger.Ledger
 
-	// nextCloseSalt overrides the canonical sort salt for the next closed-ledger build.
 	// Set from the fixture's tx_set_hash field to match rippled's exact ordering.
 	// Cleared after use.
 	nextCloseSalt *[32]byte

@@ -197,8 +197,6 @@ func (s *Service) buildClosedLedgerLocked(pending []openledger.PendingTx, closeT
 	return freshLedger, retriableTxs, nil
 }
 
-// prepareNewOpenLedgerLocked rebuilds both open-ledger representations on
-// closed before callers publish it as the canonical closed frontier.
 func (s *Service) prepareNewOpenLedgerLocked(closed *ledger.Ledger, retriableTxs []openledger.PendingTx) (*ledger.Ledger, error) {
 	newOpen, err := ledger.NewOpen(closed, time.Now())
 	if err != nil {

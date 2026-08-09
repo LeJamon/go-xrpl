@@ -7,7 +7,6 @@ import (
 
 // TxResult represents the result of applying a transaction.
 type TxResult struct {
-	// Result is the canonical typed transaction engine result.
 	Result ter.Result
 
 	// Code is the transaction engine result code (e.g., "tesSUCCESS").
@@ -19,7 +18,6 @@ type TxResult struct {
 	// Applied indicates whether the transaction and its fee effects were committed.
 	Applied bool
 
-	// Queued indicates whether the TxQ retained the transaction for a later ledger.
 	Queued bool
 
 	// Fee is the amount charged in drops. It is zero for queued and rejected transactions.

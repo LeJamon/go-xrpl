@@ -248,7 +248,6 @@ func (e *TestEnv) Submit(transaction tx.Transaction) TxResult {
 	return e.SubmitWithOptions(transaction, SubmitOptions{})
 }
 
-// SubmitWithOptions submits a transaction with explicit autofill opt-outs.
 func (e *TestEnv) SubmitWithOptions(txn tx.Transaction, options SubmitOptions) TxResult {
 	e.t.Helper()
 	e.autoFill(txn, options)
