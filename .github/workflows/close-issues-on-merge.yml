@@ -1,0 +1,32 @@
+name: Close issues on merge
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  issues: write
+
+jobs:
+  close-issues:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close referenced issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
+        run: |
+          issue_numbers="$(
+            printf '%s\n' "$PR_BODY" |
+              grep -Eio '(^|[^[:alnum:]_])(fix(e[sd])?|close[sd]?|resolve[sd]?)[[:space:]]+#[0-9]+' |
+              grep -Eo '#[0-9]+' |
+              tr -d '#' |
+              sort -un ||
+              true
+          )"
+
+          while IFS= read -r issue_number; do
+            [ -n "$issue_number" ] || continue
+            gh issue close "$issue_number" --repo "$GITHUB_REPOSITORY" --reason completed
+          done <<< "$issue_numbers"
