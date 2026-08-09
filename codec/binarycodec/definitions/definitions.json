@@ -3981,6 +3981,7 @@
     "temBAD_ISSUER": -294,
     "temBAD_LIMIT": -293,
     "temBAD_MPT": -249,
+    "temBAD_CIPHERTEXT": -248,
     "temBAD_NFTOKEN_TRANSFER_FEE": -262,
     "temBAD_OFFER": -292,
     "temBAD_PATH": -291,

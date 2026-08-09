@@ -196,6 +196,21 @@ jobs:
       # cgo, and no CGO dev headers are installed for this leg.
       - run: CGO_ENABLED=0 go test -count=1 -timeout 15m ./crypto/...
 
+  test-mpt-crypto:
+    name: Test (Confidential MPT native backend, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - name: Install Conan
+        run: pipx install conan==2.18.1
+      - name: Build and test native backend
+        run: ./scripts/setup-mpt-crypto.sh test ./crypto/mptcrypto/...
+
   consensus-smoke:
     name: Consensus smoke (2 rippled + 1 goxrpl)
     runs-on: ubuntu-latest

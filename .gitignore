@@ -36,3 +36,7 @@ main
 .worktrees/
 worktrees/
 tasks/
+
+# Optional native Confidential MPT dependency state.
+.conan-home/
+.mpt-crypto/

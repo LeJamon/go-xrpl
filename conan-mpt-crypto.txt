@@ -1,0 +1,10 @@
+[requires]
+mpt-crypto/1.0.2#b313cef0c1a493eb970ad185b2e9bab7
+
+[options]
+mpt-crypto/*:shared=False
+mpt-crypto/*:fPIC=True
+mpt-crypto/*:tests=True
+
+[generators]
+PkgConfigDeps
