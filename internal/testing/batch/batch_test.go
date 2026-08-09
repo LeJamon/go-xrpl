@@ -754,7 +754,7 @@ func TestAllOrNothing(t *testing.T) {
 		preAlice := env.Balance(alice)
 		preBob := env.Balance(bob)
 
-		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
 		seq := env.Seq(alice)
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
@@ -1413,6 +1413,7 @@ func TestBatchDelegate(t *testing.T) {
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(innerTx0).
 			AddInnerTx(innerTx1).
+			AddSigner(bob, "").
 			Build()
 
 		result := env.Submit(batch)
@@ -1462,7 +1463,7 @@ func TestBatchDelegate(t *testing.T) {
 		batch := NewBatchBuilder(alice, aliceSeq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(innerTx0).
 			AddInnerTx(innerTx1).
-			AddSigner(bob, "DEADBEEF").
+			AddSigner(carol, "").
 			Build()
 
 		result := env.Submit(batch)
@@ -1726,9 +1727,7 @@ func TestTicketsOpenLedger(t *testing.T) {
 // =============================================================================
 
 func TestBatchTxQueue(t *testing.T) {
-	t.Run("outer batch txns count towards queue size", func(t *testing.T) {
-		// Reference: rippled Batch_test.cpp testBatchTxQueue() first sub-test
-		// "only outer batch transactions are counter towards the queue size"
+	t.Run("batch cannot queue", func(t *testing.T) {
 		cfg := makeSmallQueueConfig(2)
 		env := jtx.NewTestEnvWithTxQ(t, cfg)
 		env.EnableFeatureNow("Batch")
@@ -1760,17 +1759,18 @@ func TestBatchTxQueue(t *testing.T) {
 		bobSeq := env.Seq(bob)
 		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
 
-		// Queue Batch: regular batch fee is too low to bypass escalation.
+		// A Batch paying only its base fee cannot bypass escalation and is rejected
+		// instead of entering the queue.
 		batch := NewBatchBuilder(alice, aliceSeq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, aliceSeq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, bobSeq)).
 			AddSigner(bob, "").
 			Build()
 		result = env.Submit(batch)
-		jtx.RequireTxFail(t, result, "terQUEUED")
-		checkMetrics(t, env, 2, nil, 3, 2)
+		jtx.RequireTxFail(t, result, "telCAN_NOT_QUEUE")
+		checkMetrics(t, env, 1, nil, 3, 2)
 
-		// Replace Queued Batch with open ledger fee.
+		// Paying the open-ledger fee allows direct application.
 		olFee := env.OpenLedgerFee(batchFee)
 		batch2 := NewBatchBuilder(alice, aliceSeq, olFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, aliceSeq+1)).
