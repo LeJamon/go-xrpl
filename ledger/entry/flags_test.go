@@ -65,6 +65,16 @@ func TestLedgerSpecificFlags(t *testing.T) {
 		{"LsfMPTCanTrade", LsfMPTCanTrade, 0x00000010},
 		{"LsfMPTCanTransfer", LsfMPTCanTransfer, 0x00000020},
 		{"LsfMPTCanClawback", LsfMPTCanClawback, 0x00000040},
+		{"LsfMPTCanHoldConfidentialBalance", LsfMPTCanHoldConfidentialBalance, 0x00000080},
+		{"LsifMPTCanLock", LsifMPTCanLock, 0x00000002},
+		{"LsifMPTRequireAuth", LsifMPTRequireAuth, 0x00000004},
+		{"LsifMPTCanEscrow", LsifMPTCanEscrow, 0x00000008},
+		{"LsifMPTCanTrade", LsifMPTCanTrade, 0x00000010},
+		{"LsifMPTCanTransfer", LsifMPTCanTransfer, 0x00000020},
+		{"LsifMPTCanClawback", LsifMPTCanClawback, 0x00000040},
+		{"LsifMPTCanHoldConfidentialBalance", LsifMPTCanHoldConfidentialBalance, 0x00000080},
+		{"LsifMPTMetadata", LsifMPTMetadata, 0x00010000},
+		{"LsifMPTTransferFee", LsifMPTTransferFee, 0x00020000},
 
 		// ltMPTOKEN
 		{"LsfMPTAuthorized", LsfMPTAuthorized, 0x00000002},

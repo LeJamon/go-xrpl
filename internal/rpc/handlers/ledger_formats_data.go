@@ -20,7 +20,7 @@ var ledgerCommonFields = []ledgerFormatField{
 // definitions LedgerEntryTypes, e.g. "AccountRoot","DirectoryNode") to its
 // UNIQUE fields (common fields excluded), in ledger_entries.macro order.
 // Transcribed from rippled 3.2.0 ledger_entries.macro plus the Sponsor protocol
-// additions pinned to rippled 3.3.0-rc1 commit 18e311e1.
+// additions pinned to rippled 3.3.0 commit 00a178fb.
 var ledgerFormatTemplates = map[string][]ledgerFormatField{
 	"NFTokenOffer": {
 		{"Owner", 0},
@@ -282,7 +282,7 @@ var ledgerFormatTemplates = map[string][]ledgerFormatField{
 		{"PreviousTxnID", 0},
 		{"PreviousTxnLgrSeq", 0},
 		{"DomainID", 1},
-		{"MutableFlags", 2},
+		{"ImmutableFlags", 2},
 		{"ReferenceHolding", 1},
 	},
 	"MPToken": {

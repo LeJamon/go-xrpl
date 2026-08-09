@@ -25,7 +25,7 @@ func TestParseMPTokenIssuanceGeneratedDecoder(t *testing.T) {
 		DomainID:          &domainID,
 		ReferenceHolding:  &referenceHolding,
 		Flags:             7,
-		MutableFlags:      9,
+		ImmutableFlags:    9,
 		PreviousTxnID:     previousTxnID,
 		PreviousTxnLgrSeq: 23,
 	}
@@ -40,7 +40,7 @@ func TestParseMPTokenIssuanceGeneratedDecoder(t *testing.T) {
 	}
 	if got.Issuer != want.Issuer || got.Sequence != want.Sequence || got.OwnerNode != want.OwnerNode ||
 		got.OutstandingAmount != want.OutstandingAmount || got.TransferFee != want.TransferFee ||
-		got.AssetScale != want.AssetScale || got.Flags != want.Flags || got.MutableFlags != want.MutableFlags ||
+		got.AssetScale != want.AssetScale || got.Flags != want.Flags || got.ImmutableFlags != want.ImmutableFlags ||
 		got.PreviousTxnID != want.PreviousTxnID || got.PreviousTxnLgrSeq != want.PreviousTxnLgrSeq {
 		t.Fatalf("fixed fields differ:\n got  %+v\n want %+v", got, want)
 	}

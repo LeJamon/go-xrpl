@@ -64,19 +64,27 @@ var txFlagsTable = map[string]map[string]uint32{
 		"tfMutable":      0x00000010,
 	},
 	"MPTokenIssuanceCreate": {
-		"tfMPTCanLock":     0x00000002,
-		"tfMPTRequireAuth": 0x00000004,
-		"tfMPTCanEscrow":   0x00000008,
-		"tfMPTCanTrade":    0x00000010,
-		"tfMPTCanTransfer": 0x00000020,
-		"tfMPTCanClawback": 0x00000040,
+		"tfMPTCanLock":                    0x00000002,
+		"tfMPTRequireAuth":                0x00000004,
+		"tfMPTCanEscrow":                  0x00000008,
+		"tfMPTCanTrade":                   0x00000010,
+		"tfMPTCanTransfer":                0x00000020,
+		"tfMPTCanClawback":                0x00000040,
+		"tfMPTCanHoldConfidentialBalance": 0x00000080,
 	},
 	"MPTokenAuthorize": {
 		"tfMPTUnauthorize": 0x00000001,
 	},
 	"MPTokenIssuanceSet": {
-		"tfMPTLock":   0x00000001,
-		"tfMPTUnlock": 0x00000002,
+		"tfMPTLock":                          0x00000001,
+		"tfMPTUnlock":                        0x00000002,
+		"tfMPTSetCanLock":                    0x00000004,
+		"tfMPTSetRequireAuth":                0x00000008,
+		"tfMPTSetCanEscrow":                  0x00000010,
+		"tfMPTSetCanTrade":                   0x00000020,
+		"tfMPTSetCanTransfer":                0x00000040,
+		"tfMPTSetCanClawback":                0x00000080,
+		"tfMPTSetCanHoldConfidentialBalance": 0x00000100,
 	},
 	"NFTokenCreateOffer": {
 		"tfSellNFToken": 0x00000001,
@@ -141,10 +149,9 @@ var txFlagsTable = map[string]map[string]uint32{
 	},
 }
 
-// ledgerFlagsTable maps a ledger-object group name to its lsf*/lsmf* flag map.
+// ledgerFlagsTable maps a ledger-object group name to its lsf* flag map.
 // Keys are the LEDGER_OBJECT macro names from rippled getAllLedgerFlags()
-// (note "DirNode", and the synthetic "MPTokenIssuanceMutable" group for the
-// MPTokenIssuance mutable-flag set).
+// (note "DirNode").
 var ledgerFlagsTable = map[string]map[string]uint32{
 	"AccountRoot": {
 		"lsfPasswordSpent":                0x00010000,
@@ -192,23 +199,14 @@ var ledgerFlagsTable = map[string]map[string]uint32{
 		"lsfSellNFToken": 0x00000001,
 	},
 	"MPTokenIssuance": {
-		"lsfMPTLocked":      0x00000001,
-		"lsfMPTCanLock":     0x00000002,
-		"lsfMPTRequireAuth": 0x00000004,
-		"lsfMPTCanEscrow":   0x00000008,
-		"lsfMPTCanTrade":    0x00000010,
-		"lsfMPTCanTransfer": 0x00000020,
-		"lsfMPTCanClawback": 0x00000040,
-	},
-	"MPTokenIssuanceMutable": {
-		"lsmfMPTCanMutateCanLock":     0x00000002,
-		"lsmfMPTCanMutateRequireAuth": 0x00000004,
-		"lsmfMPTCanMutateCanEscrow":   0x00000008,
-		"lsmfMPTCanMutateCanTrade":    0x00000010,
-		"lsmfMPTCanMutateCanTransfer": 0x00000020,
-		"lsmfMPTCanMutateCanClawback": 0x00000040,
-		"lsmfMPTCanMutateMetadata":    0x00010000,
-		"lsmfMPTCanMutateTransferFee": 0x00020000,
+		"lsfMPTLocked":                     0x00000001,
+		"lsfMPTCanLock":                    0x00000002,
+		"lsfMPTRequireAuth":                0x00000004,
+		"lsfMPTCanEscrow":                  0x00000008,
+		"lsfMPTCanTrade":                   0x00000010,
+		"lsfMPTCanTransfer":                0x00000020,
+		"lsfMPTCanClawback":                0x00000040,
+		"lsfMPTCanHoldConfidentialBalance": 0x00000080,
 	},
 	"MPToken": {
 		"lsfMPTLocked":     0x00000001,

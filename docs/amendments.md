@@ -7,7 +7,7 @@ XRPL amendments known to this node, generated from the amendment registry
 amendment's behavior; **Default vote** is whether the node votes for it by
 default (operators override via the `[amendments]` config section).
 
-Total: 108 amendments.
+Total: 109 amendments.
 
 | Amendment | Supported | Default vote |
 |-----------|-----------|--------------|
@@ -17,6 +17,7 @@ Total: 108 amendments.
 | `CheckCashMakesTrustLine` | yes | no |
 | `Checks` | yes | no |
 | `Clawback` | yes | no |
+| `ConfidentialTransfer` | no | no |
 | `Credentials` | yes | no |
 | `CryptoConditions` | yes | no |
 | `CryptoConditionsSuite` | yes | no |
@@ -26,7 +27,7 @@ Total: 108 amendments.
 | `DepositAuth` | yes | no |
 | `DepositPreauth` | yes | no |
 | `DisallowIncoming` | yes | no |
-| `DynamicMPT` | no | no |
+| `DynamicMPT` | yes | no |
 | `DynamicNFT` | yes | no |
 | `EnforceInvariants` | yes | no |
 | `Escrow` | yes | no |
