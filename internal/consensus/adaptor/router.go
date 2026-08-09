@@ -155,9 +155,9 @@ type Router struct {
 	manifestClassify       func([33]byte) manifest.ManifestRateLimitCapPolicy
 	manifestUntrustedLimit int
 	manifestLimitSet       bool
-	manifestShuffle      func([][]byte)
-	manifestWorkerCancel context.CancelFunc
-	manifestWorkerDone   chan struct{}
+	manifestShuffle        func([][]byte)
+	manifestWorkerCancel   context.CancelFunc
+	manifestWorkerDone     chan struct{}
 
 	// overlay is held so the router can relay accepted manifests and emit
 	// the local cache to peers. Nil in tests without manifest support.
