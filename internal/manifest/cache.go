@@ -38,12 +38,8 @@ const (
 )
 
 const (
-	// DefaultMaxUntrustedCount is the built-in limit for capped manifest
-	// applications.
 	DefaultMaxUntrustedCount = 300
 
-	// DefaultMaxTrustedCount is the built-in trusted-manifest message limit.
-	// The cache itself only enforces the untrusted limit.
 	DefaultMaxTrustedCount = 300
 )
 
@@ -276,8 +272,6 @@ func (c *Cache) PromoteToTrusted(masterKey [33]byte) {
 	c.mu.Unlock()
 }
 
-// MaxUntrustedCount returns the immutable untrusted capacity configured for
-// this cache.
 func (c *Cache) MaxUntrustedCount() int {
 	if c == nil {
 		return 0
@@ -285,8 +279,6 @@ func (c *Cache) MaxUntrustedCount() int {
 	return c.maxUntrustedCount
 }
 
-// UntrustedCount returns the number of cached masters currently consuming an
-// untrusted capacity slot.
 func (c *Cache) UntrustedCount() int {
 	if c == nil {
 		return 0
@@ -296,8 +288,6 @@ func (c *Cache) UntrustedCount() int {
 	return len(c.untrustedMasters)
 }
 
-// IsUntrusted reports whether masterKey currently consumes an untrusted
-// capacity slot.
 func (c *Cache) IsUntrusted(masterKey [33]byte) bool {
 	if c == nil {
 		return false

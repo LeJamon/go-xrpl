@@ -170,8 +170,6 @@ func TestManifest_CappedCapacityUpdatesAndPromotion(t *testing.T) {
 	require.True(t, cache.IsUntrusted(firstMaster))
 	require.Equal(t, 1, cache.UntrustedCount())
 
-	// A full capped cache rejects a new master before signature/key checks and
-	// retains every accepted entry without eviction.
 	badSecondWire := append([]byte(nil), secondWire...)
 	badSecondWire[len(badSecondWire)-1] ^= 0x01
 	badSecond, err := manifest.Deserialize(badSecondWire)
@@ -184,7 +182,6 @@ func TestManifest_CappedCapacityUpdatesAndPromotion(t *testing.T) {
 	_, ok = cache.GetManifest(firstMaster)
 	require.True(t, ok)
 
-	// Rotations and revocations of an already-cached master bypass capacity.
 	rotationWire, _, _ := buildManifest(t, 2, false, 0x41, 0x45)
 	rotation, err := manifest.Deserialize(rotationWire)
 	require.NoError(t, err)
@@ -196,8 +193,6 @@ func TestManifest_CappedCapacityUpdatesAndPromotion(t *testing.T) {
 	require.Equal(t, manifest.Accepted, cache.ApplyManifest(revocation, manifest.Capped))
 	require.Equal(t, 1, cache.UntrustedCount())
 
-	// Promotion frees the slot but keeps the cached revocation; a subsequent
-	// capped insertion may consume that slot.
 	cache.PromoteToTrusted(firstMaster)
 	cache.PromoteToTrusted(firstMaster)
 	require.Equal(t, 0, cache.UntrustedCount())
@@ -205,8 +200,6 @@ func TestManifest_CappedCapacityUpdatesAndPromotion(t *testing.T) {
 	require.Equal(t, manifest.Accepted, cache.ApplyManifest(second, manifest.Capped))
 	require.Equal(t, 1, cache.UntrustedCount())
 
-	// An uncapped update of a counted master frees its slot and de-listing does
-	// not add it back.
 	secondRotationWire, _, _ := buildManifest(t, 2, false, 0x43, 0x46)
 	secondRotation, err := manifest.Deserialize(secondRotationWire)
 	require.NoError(t, err)
@@ -231,7 +224,6 @@ func TestManifest_UncappedBypassesCapacityAndRolesAreIsolated(t *testing.T) {
 	require.Equal(t, manifest.UntrustedCapacity, validators.ApplyManifest(second, manifest.Capped))
 	require.Equal(t, manifest.UntrustedCapacity, publishers.ApplyManifest(second, manifest.Capped))
 
-	// Configured/listed/DB paths remain uncapped and are isolated per role.
 	require.Equal(t, manifest.Accepted, validators.ApplyManifest(second, manifest.Uncapped))
 	require.False(t, validators.IsUntrusted(secondMaster))
 	require.Equal(t, 1, validators.UntrustedCount())
