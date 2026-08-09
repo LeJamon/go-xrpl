@@ -93,12 +93,6 @@ func (r *Router) handleInboundMessage(msg *peermanagement.InboundMessage) {
 	}
 }
 
-// handleManifests ingests a TMManifests frame, applies admitted entries, and
-// relays the accepted subset as aggregate frames to peers other than the source.
-//
-// Decode failures attribute "manifest-decode" badData to the sender. A
-// mix of valid and invalid entries in the same frame results in the
-// valid ones being applied; the frame isn't rejected wholesale.
 func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 	if r.manifests == nil {
 		// Cache not wired (tests or minimal configs) — silently drop.

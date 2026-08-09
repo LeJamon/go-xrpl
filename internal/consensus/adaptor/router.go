@@ -155,8 +155,6 @@ type Router struct {
 	manifestClassify       func([33]byte) manifest.ManifestRateLimitCapPolicy
 	manifestUntrustedLimit int
 	manifestLimitSet       bool
-	// manifestShuffle is injectable so snapshot tests can assert selection
-	// deterministically. A nil function uses the production random shuffle.
 	manifestShuffle      func([][]byte)
 	manifestWorkerCancel context.CancelFunc
 	manifestWorkerDone   chan struct{}
@@ -591,8 +589,6 @@ func (r *Router) SetManifestUntrustedLimit(limit int) {
 	r.manifestLimitSet = true
 }
 
-// SetManifestShuffle overrides snapshot shuffling. Passing nil restores the
-// production random shuffle.
 func (r *Router) SetManifestShuffle(shuffle func([][]byte)) {
 	r.manifestShuffle = shuffle
 }
