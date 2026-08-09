@@ -332,14 +332,12 @@ func (b *Batch) validateInnerTransactions() (map[string]struct{}, error) {
 			}
 		}
 
-		// An inner account that is not the outer account must be covered by a
-		// BatchSigner. Delegate changes permission/signature authorization for
-		// the inner transactor, but it does not replace the inner Account in the
-		// outer BatchSigner coverage set.
-		// Reference: rippled Batch.cpp:376-379 and Batch_test.cpp
-		// testBatchDelegate.
-		if innerCommon.Account != b.Account {
-			requiredSigners[innerCommon.Account] = struct{}{}
+		authorizer := innerCommon.Account
+		if innerCommon.Delegate != "" {
+			authorizer = innerCommon.Delegate
+		}
+		if authorizer != b.Account {
+			requiredSigners[authorizer] = struct{}{}
 		}
 		if innerCommon.SponsorSignature != nil &&
 			innerCommon.Sponsor != "" &&

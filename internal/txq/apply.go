@@ -346,7 +346,7 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 
 			// canBeHeld check (per-account limit).
 			// Reference: TxQ.cpp:980-988 → canBeHeld (TxQ.cpp:383-447)
-			if rejected, result := q.canBeHeld(common, originalFlags, ledgerSeq, aq, replacingCandidate, seqProxy, acctSeq); rejected {
+			if rejected, result := q.canBeHeld(txn.TxType(), common, originalFlags, ledgerSeq, aq, replacingCandidate, seqProxy, acctSeq); rejected {
 				return result
 			}
 		}
@@ -479,7 +479,7 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	// If multiTxn was not needed, we still need canBeHeld checks.
 	// Reference: TxQ.cpp:1227-1238
 	if !requiresMultiTxn {
-		if rejected, result := q.canBeHeld(common, originalFlags, ledgerSeq, aq, replacingCandidate, seqProxy, acctSeq); rejected {
+		if rejected, result := q.canBeHeld(txn.TxType(), common, originalFlags, ledgerSeq, aq, replacingCandidate, seqProxy, acctSeq); rejected {
 			return result
 		}
 	}
@@ -713,8 +713,11 @@ func (q *TxQ) tryClearAccountQueue(
 	return &ApplyResult{Result: result, Applied: true}
 }
 
-func (q *TxQ) canBeHeld(common *tx.Common, flags tx.ApplyFlags, ledgerSeq uint32, aq *accountQueue, replacingCandidate *candidate, seqProxy SeqProxy, acctSeq uint32) (bool, ApplyResult) {
+func (q *TxQ) canBeHeld(txType tx.Type, common *tx.Common, flags tx.ApplyFlags, ledgerSeq uint32, aq *accountQueue, replacingCandidate *candidate, seqProxy SeqProxy, acctSeq uint32) (bool, ApplyResult) {
 	if common.HasField("PreviousTxnID") || common.AccountTxnID != "" || flags&tx.TapFAIL_HARD != 0 {
+		return true, ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
+	}
+	if txType == tx.TypeBatch {
 		return true, ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
 	}
 	if common.Delegate != "" {
