@@ -21,11 +21,7 @@ import (
 	"github.com/cockroachdb/pebble/vfs"
 )
 
-// StateSource loads the seed account-state SHAMap for a ledger. It exists so
-// the SHAMap's backing — fully in-memory versus nodestore-lazy — is swappable
-// without touching the replay loop, as the mainnet-replay design requires
-// ("load state behind an interface, not loadInitialState's Put loop").
-type StateSource interface {
+type stateSource interface {
 	// Load returns the verified seed state map for the ledger, its snapshot,
 	// and the fee schedule extracted from the state.
 	Load(ctx context.Context, ledgerIndex uint32) (*shamap.SHAMap, *statecompare.LedgerSnapshot, drops.Fees, error)
@@ -59,6 +55,7 @@ type nodestoreStateSource struct {
 	overlay        *backend.NodeStore
 	overlayDir     string
 	opened         []*backend.NodeStore
+	closed         bool
 }
 
 // baseNodeCacheItems / overlayNodeCacheItems size the positive node LRU (a count
@@ -120,7 +117,10 @@ func (s *nodestoreStateSource) Load(ctx context.Context, ledgerIndex uint32) (*s
 	}
 
 	// Targeted lookup; lazily fetches only the FeeSettings path, not the tree.
-	fees := extractFeesFromSHAMap(stateMap)
+	fees, err := feesFromStateMap(stateMap)
+	if err != nil {
+		return nil, nil, drops.Fees{}, err
+	}
 	return stateMap, snapshot, fees, nil
 }
 
@@ -194,7 +194,7 @@ func (s *nodestoreStateSource) openOrBuildBase(
 		return nil, fmt.Errorf("publishing base nodestore %s: %w", basePath, err)
 	}
 	removeStage = false
-	if err := syncDirectory(s.dir); err != nil {
+	if err := syncStateSourceDirectory(s.dir); err != nil {
 		return nil, err
 	}
 	return openVerifiedBase(ctx, basePath, s.baseCacheMB, accountHash)
@@ -272,10 +272,10 @@ func writeBaseMarker(path string, accountHash [32]byte) error {
 	if writeErr == nil {
 		writeErr = file.Sync()
 	}
-	return errors.Join(writeErr, file.Close(), syncDirectory(path))
+	return errors.Join(writeErr, file.Close(), syncStateSourceDirectory(path))
 }
 
-func syncDirectory(path string) error {
+func syncStateSourceDirectory(path string) error {
 	dir, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("opening directory %s for sync: %w", path, err)
@@ -299,6 +299,10 @@ func openVerifiedBase(ctx context.Context, path string, cacheMB int, accountHash
 }
 
 func (s *nodestoreStateSource) Close() error {
+	if s.closed {
+		return nil
+	}
+	s.closed = true
 	var closeErr error
 	for _, fam := range s.opened {
 		closeErr = errors.Join(closeErr, fam.Close())
@@ -393,7 +397,7 @@ func flushToFamily(ctx context.Context, m *shamap.SHAMap, fam shamap.Family) err
 // the in-memory source. baseCacheMB / overlayCacheMB size the Pebble block
 // caches of the nodestore base and overlay; they are ignored by the in-memory
 // source.
-func newStateSource(client *statecompare.Client, nodestoreDir string, baseCacheMB, overlayCacheMB int) (StateSource, error) {
+func newStateSource(client *statecompare.Client, nodestoreDir string, baseCacheMB, overlayCacheMB int) (stateSource, error) {
 	if nodestoreDir == "" {
 		return &memoryStateSource{client: client}, nil
 	}

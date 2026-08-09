@@ -151,6 +151,53 @@ func (sm *SHAMap) walkLeavesRec(ctx context.Context, node mapNode, fn func(*Item
 	return true, nil
 }
 
+func (sm *SHAMap) walkLeavesReleasingRec(ctx context.Context, node mapNode, fn func(*Item) bool) (bool, error) {
+	if node == nil {
+		return true, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+
+	inner, ok := node.(*innerNode)
+	if !ok {
+		leaf, ok := node.(mapLeaf)
+		if !ok {
+			return false, ErrInvalidType
+		}
+		return fn(leaf.Item()), nil
+	}
+
+	for i := range BranchFactor {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		child, _, present := inner.LoadChild(i)
+		if !present {
+			continue
+		}
+		loaded := child == nil
+		if loaded {
+			var err error
+			child, err = sm.descendCtx(ctx, inner, i)
+			if err != nil {
+				return false, fmt.Errorf("failed to get child %d: %w", i, err)
+			}
+		}
+		if child == nil {
+			continue
+		}
+		cont, err := sm.walkLeavesReleasingRec(ctx, child, fn)
+		if loaded {
+			sm.releaseChild(inner, i, child)
+		}
+		if err != nil || !cont {
+			return cont, err
+		}
+	}
+	return true, nil
+}
+
 // onlyBelow checks if there's exactly one item below the given node
 // Returns the item if found, nil if there are 0 or multiple items
 func (sm *SHAMap) onlyBelow(node mapNode) (*Item, error) {

@@ -15,14 +15,14 @@ func TestFindingsWriter_JSONL(t *testing.T) {
 		t.Fatalf("newFindingsWriter: %v", err)
 	}
 
-	result := &BlockResult{
+	result := &blockResult{
 		TxCount:             2,
 		ExpectedLedgerHash:  [32]byte{0xDE, 0xAD},
 		ExpectedAccountHash: [32]byte{0xBE, 0xEF},
 		AccountHash:         [32]byte{0x12},
 		TotalCoins:          99,
 		ExpectedTotalCoins:  100,
-		TxResults: []TxApplyInfo{
+		TxResults: []txApplyInfo{
 			{Index: 0, Hash: "abc", TxType: "Payment", Result: "tesSUCCESS"},
 		},
 	}
@@ -57,11 +57,11 @@ func TestFindingsWriter_JSONL(t *testing.T) {
 
 	var lines int
 	scanner := bufio.NewScanner(file)
-	var first Finding
+	var first finding
 	var second map[string]json.RawMessage
 	var third map[string]json.RawMessage
 	for scanner.Scan() {
-		var fd Finding
+		var fd finding
 		if err := json.Unmarshal(scanner.Bytes(), &fd); err != nil {
 			t.Fatalf("line %d not valid JSON: %v", lines, err)
 		}

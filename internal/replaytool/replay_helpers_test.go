@@ -1,11 +1,13 @@
 package replaytool
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,30 +52,56 @@ func TestDecodeEntryData(t *testing.T) {
 }
 
 func TestBuildRulesFromAmendments(t *testing.T) {
-	// Empty list → no amendments enabled.
-	empty := buildRulesFromAmendments(nil)
-	if empty.Enabled(amendment.FeatureID("Flow")) {
-		t.Error("empty rules should enable nothing")
+	// Empty declarations still include rippled's permanently enabled rules.
+	empty, err := buildRulesFromAmendments(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty.Enabled(amendment.FeatureFixCleanup3_2_0) {
+		t.Error("empty declarations enabled a non-permanent amendment")
+	}
+	for _, id := range amendment.PermanentlyEnabledIDs() {
+		if !empty.Enabled(id) {
+			t.Fatalf("permanent amendment %x is disabled", id)
+		}
 	}
 
 	// By name.
 	flowID := amendment.FeatureID("Flow")
-	byName := buildRulesFromAmendments([]string{"Flow"})
+	byName, err := buildRulesFromAmendments([]string{"Flow"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !byName.Enabled(flowID) {
 		t.Error("Flow should be enabled by name")
 	}
 
-	// By 64-char hex id, plus an unknown name that must be ignored without error.
 	idHex := hex.EncodeToString(flowID[:])
-	byID := buildRulesFromAmendments([]string{idHex, "NotARealAmendmentName"})
+	byID, err := buildRulesFromAmendments([]string{idHex})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !byID.Enabled(flowID) {
 		t.Error("Flow should be enabled by hex id")
+	}
+	if _, err := buildRulesFromAmendments([]string{"NotARealAmendmentName"}); err == nil {
+		t.Fatal("unknown amendment name should fail")
+	}
+	if _, err := buildRulesFromAmendments([]string{"Flow", idHex}); err == nil {
+		t.Fatal("duplicate amendment should fail")
+	}
+	nonPermanent, err := buildRulesFromAmendments([]string{"fixCleanup3_2_0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sameRuleSet(empty, nonPermanent) {
+		t.Fatal("different amendment declarations compared equal")
 	}
 }
 
 func TestWriteResultJSON(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "result.json")
-	res := &ReplayResult{
+	res := &replayResult{
 		Success:         true,
 		LedgerHash:      [32]byte{0xDE, 0xAD},
 		AccountHash:     [32]byte{0xBE, 0xEF},
@@ -83,7 +111,7 @@ func TestWriteResultJSON(t *testing.T) {
 		PostStateCount:  4,
 		Duration:        5 * time.Millisecond,
 		Errors:          []string{},
-		TxResults:       []TxApplyInfo{{Index: 0, Hash: "abc"}},
+		TxResults:       []txApplyInfo{{Index: 0, Hash: "abc"}},
 	}
 	if err := writeResultJSON(out, res); err != nil {
 		t.Fatalf("writeResultJSON: %v", err)
@@ -102,50 +130,80 @@ func TestWriteResultJSON(t *testing.T) {
 	if parsed["transaction_count"].(float64) != 1 {
 		t.Errorf("transaction_count = %v", parsed["transaction_count"])
 	}
+	if transactions, ok := parsed["transactions"].([]any); !ok || len(transactions) != 1 {
+		t.Fatalf("transactions = %#v", parsed["transactions"])
+	}
 	if parsed["ledger_hash"].(string)[:4] != "dead" {
 		t.Errorf("ledger_hash = %v", parsed["ledger_hash"])
 	}
 }
 
-func TestExtractFeesFromState(t *testing.T) {
-	// No FeeSettings entry → defaults.
-	def := extractFeesFromState(nil)
-	if def.Base != 10 || def.Reserve != 10_000_000 || def.Increment != 2_000_000 {
-		t.Errorf("default fees = %+v", def)
+func TestWriteAtomicJSONPreservesPriorArtifact(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "artifact.json")
+	prior := []byte(`{"valid":true}`)
+	if err := os.WriteFile(path, prior, 0o644); err != nil {
+		t.Fatal(err)
 	}
+	if err := writeAtomicJSON(path, make(chan int)); err == nil {
+		t.Fatal("unsupported JSON value should fail")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(prior) {
+		t.Fatalf("prior artifact changed: %q", got)
+	}
+}
 
-	// Modern XRPFees entry stored at the fees keylet → read back exactly.
-	blob, err := state.SerializeFeeSettings(&state.FeeSettings{
-		XRPFeesMode:           true,
-		BaseFeeDrops:          15,
-		ReserveBaseDrops:      5_000_000,
-		ReserveIncrementDrops: 1_000_000,
+func TestLoadValidatedFixtureRejectsCanonicalDuplicateStateKey(t *testing.T) {
+	dir := t.TempDir()
+	zeroHash := strings.Repeat("0", 64)
+	index := feeSettingsIndexHex
+	entryBlob, err := state.SerializeFeeSettings(&state.FeeSettings{
+		XRPFeesMode: true, BaseFeeDrops: 10, ReserveBaseDrops: 10_000_000, ReserveIncrementDrops: 2_000_000,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	entries := []StateEntry{{Index: feeSettingsIndexHex, Data: hex.EncodeToString(blob)}}
-	fees := extractFeesFromState(entries)
-	if fees.Base != 15 || fees.Reserve != 5_000_000 || fees.Increment != 1_000_000 {
-		t.Errorf("modern fees = %+v", fees)
+	entryData := hex.EncodeToString(entryBlob)
+	files := map[string]string{
+		"state.json": `{"ledger_index":1,"account_hash":"` + zeroHash + `","entries":[` +
+			`{"index":"` + index + `","data":"` + entryData + `"},` +
+			`{"index":"` + strings.ToLower(index) + `","data":"` + entryData + `"}]}`,
+		"env.json": `{"ledger_index":2,"parent_hash":"` + zeroHash + `","parent_close_time":0,"close_time":0,` +
+			`"close_time_resolution":10,"close_flags":0,"total_coins":"0",` +
+			`"fees":{"base_fee":10,"reserve_base":10000000,"reserve_increment":2000000},"amendments":[]}`,
+		"txs.json": `{"transactions":[]}`,
+		"expected.json": `{"ledger_index":2,"ledger_hash":"` + zeroHash + `","account_hash":"` + zeroHash +
+			`","transaction_hash":"` + zeroHash + `","total_coins":"0","transactions":[]}`,
+	}
+	for name, data := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := loadValidatedFixture(context.Background(), dir); err == nil || !strings.Contains(err.Error(), "duplicates index") {
+		t.Fatalf("loadValidatedFixture error = %v", err)
 	}
 }
 
-func TestLoadJSON(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "obj.json")
-	if err := os.WriteFile(path, []byte(`{"ledger_index":42,"account_hash":"ABCD"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	var sf StateFixture
-	if err := loadJSON(path, &sf); err != nil {
-		t.Fatalf("loadJSON: %v", err)
-	}
-	if sf.LedgerIndex != 42 || sf.AccountHash != "ABCD" {
-		t.Errorf("loaded fixture = %+v", sf)
-	}
-	if err := loadJSON(filepath.Join(dir, "missing.json"), &sf); err == nil {
-		t.Error("expected error for missing file")
+func TestLoadStrictJSONRejectsUnknownAndTrailingValues(t *testing.T) {
+	for name, data := range map[string]string{
+		"unknown":   `{"ledger_index":1,"account_hash":"AA","entries":[],"extra":true}`,
+		"trailing":  `{"ledger_index":1,"account_hash":"AA","entries":[]} {}`,
+		"duplicate": `{"ledger_index":1,"ledger_index":2,"account_hash":"AA","entries":[]}`,
+		"null":      `{"ledger_index":1,"account_hash":null,"entries":[]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state.json")
+			if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := loadStrictJSON(path, &stateFixture{}, "ledger_index", "account_hash", "entries"); err == nil {
+				t.Fatal("invalid JSON was accepted")
+			}
+		})
 	}
 }
 
@@ -164,35 +222,5 @@ func TestReplayCloseTimeBounds(t *testing.T) {
 		if _, err := replayCloseTime(seconds); err == nil {
 			t.Errorf("replayCloseTime(%d) succeeded", seconds)
 		}
-	}
-}
-
-func TestLoadFixtures(t *testing.T) {
-	dir := t.TempDir()
-	files := map[string]string{
-		"state.json":    `{"ledger_index":100,"account_hash":"AA","entries":[]}`,
-		"env.json":      `{"ledger_index":100,"parent_hash":"BB","total_coins":"100"}`,
-		"txs.json":      `{"transactions":[]}`,
-		"expected.json": `{"ledger_index":100,"ledger_hash":"CC"}`,
-	}
-	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	stateFx, env, txs, expected, err := loadFixtures(dir)
-	if err != nil {
-		t.Fatalf("loadFixtures: %v", err)
-	}
-	if stateFx.LedgerIndex != 100 || env.ParentHash != "BB" || txs == nil || expected.LedgerHash != "CC" {
-		t.Errorf("unexpected fixtures: state=%+v env=%+v expected=%+v", stateFx, env, expected)
-	}
-
-	// Removing a required file surfaces an error rather than partial fixtures.
-	if err := os.Remove(filepath.Join(dir, "txs.json")); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, _, _, err := loadFixtures(dir); err == nil {
-		t.Error("expected error when a fixture file is missing")
 	}
 }

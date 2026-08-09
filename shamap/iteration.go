@@ -43,3 +43,13 @@ func (sm *SHAMap) ForEachCtx(ctx context.Context, fn func(*Item) bool) error {
 
 	return sm.walkLeavesUnsafe(ctx, sm.tree.root, fn)
 }
+
+// ForEachCtxReleasing walks items in key order while releasing children that
+// the walk loaded from a backing family. Resident children are left untouched.
+func (sm *SHAMap) ForEachCtxReleasing(ctx context.Context, fn func(*Item) bool) error {
+	sm.tree.mu.RLock()
+	defer sm.tree.mu.RUnlock()
+
+	_, err := sm.walkLeavesReleasingRec(ctx, sm.tree.root, fn)
+	return err
+}

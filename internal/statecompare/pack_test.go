@@ -73,6 +73,66 @@ func TestUnpackStateStreamRejectsBoundsTrailingAndCancellation(t *testing.T) {
 	}
 }
 
+func TestUnpackStateStreamRejectsNonIncreasingIndexes(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries []StateEntry
+	}{
+		{
+			name: "duplicate",
+			entries: []StateEntry{
+				{Index: [32]byte{1}, Data: []byte{1}},
+				{Index: [32]byte{1}, Data: []byte{2}},
+			},
+		},
+		{
+			name: "descending",
+			entries: []StateEntry{
+				{Index: [32]byte{2}, Data: []byte{1}},
+				{Index: [32]byte{1}, Data: []byte{2}},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data := encodeStatePack(10, test.entries)
+			err := unpackStateStream(
+				context.Background(),
+				bytes.NewReader(data),
+				statePackExpectation{seq: 10, count: uint32(len(test.entries)), size: int64(len(data))},
+				func([32]byte, []byte) error { return nil },
+			)
+			if !errors.Is(err, errPack) {
+				t.Fatalf("error = %v, want errPack", err)
+			}
+		})
+	}
+}
+
+func TestUnpackStateStreamPropagatesCallbackError(t *testing.T) {
+	data := encodeStatePack(10, []StateEntry{
+		{Index: [32]byte{1}, Data: []byte{1}},
+		{Index: [32]byte{2}, Data: []byte{2}},
+	})
+	sentinel := errors.New("callback failed")
+	calls := 0
+	err := unpackStateStream(
+		context.Background(),
+		bytes.NewReader(data),
+		statePackExpectation{seq: 10, count: 2, size: int64(len(data))},
+		func([32]byte, []byte) error {
+			calls++
+			return sentinel
+		},
+	)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("error = %v, want callback error", err)
+	}
+	if calls != 1 {
+		t.Fatalf("callback calls = %d, want 1", calls)
+	}
+}
+
 func TestIndexLedgerPackRejectsMalformedEnvelope(t *testing.T) {
 	_, valid := ledgerFixture(t)
 	for _, data := range [][]byte{

@@ -206,7 +206,10 @@ func TestCompareStates(t *testing.T) {
 		"dd": {Index: "DD", DataHex: "4444"},
 	}
 
-	added, removed, modified, unchanged := compareStates(map1, map2)
+	added, removed, modified, unchanged, err := compareStates(map1, map2)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(added) != 1 || added[0].Index != "DD" {
 		t.Errorf("added = %+v", added)
 	}

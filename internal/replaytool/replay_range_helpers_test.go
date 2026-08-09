@@ -31,7 +31,10 @@ func feeIndexKey(t *testing.T) [32]byte {
 func TestExtractFeesFromSHAMap_Default(t *testing.T) {
 	sm := shamap.New(shamap.TypeState)
 	// No FeeSettings entry → defaults.
-	f := extractFeesFromSHAMap(sm)
+	f, err := feesFromStateMap(sm)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if f != drops.DefaultFees() {
 		t.Errorf("extractFeesFromSHAMap (empty) = %+v want defaults", f)
 	}
@@ -51,7 +54,10 @@ func TestExtractFeesFromSHAMap_Modern(t *testing.T) {
 	if err := sm.Put(feeIndexKey(t), blob); err != nil {
 		t.Fatalf("seeding fee settings: %v", err)
 	}
-	f := extractFeesFromSHAMap(sm)
+	f, err := feesFromStateMap(sm)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if f.Base != 20 || f.Reserve != 7_500_000 || f.Increment != 1_500_000 {
 		t.Errorf("extractFeesFromSHAMap (modern) = %+v", f)
 	}

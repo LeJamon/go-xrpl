@@ -9,23 +9,18 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 
 	"github.com/spf13/cobra"
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/cmdexit"
-	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
-	"github.com/LeJamon/go-xrpl/internal/ledger/header"
-	ledgerstate "github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/statecompare"
-	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -53,6 +48,8 @@ type replayRangeRunner struct {
 	legacyPayChanDirGate bool
 	payChanDirFirstFixed uint32
 }
+
+var replayGCTuning sync.Mutex
 
 // newReplayRangeCmd builds the `replay-range` command and its flags.
 func newReplayRangeCmd() *cobra.Command {
@@ -163,8 +160,7 @@ Example:
 	return cmd
 }
 
-// RangeReplayStats holds statistics for the replay run
-type RangeReplayStats struct {
+type rangeReplayStats struct {
 	BlocksProcessed   int
 	BlocksSuccessful  int
 	TotalTransactions int
@@ -217,13 +213,18 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 	// The default in-memory state path keeps the whole tree live for the run, so
 	// a higher GC trigger trades RAM for fewer full marks of a mostly-static set.
 	if r.gogc > 0 {
-		debug.SetGCPercent(r.gogc)
+		replayGCTuning.Lock()
+		previousGCPercent := debug.SetGCPercent(r.gogc)
+		defer func() {
+			debug.SetGCPercent(previousGCPercent)
+			replayGCTuning.Unlock()
+		}()
 	}
 
 	fmt.Fprintln(r.out, "================================================================================")
 	fmt.Fprintln(r.out, "                    XRPL Continuous State Replay")
 	fmt.Fprintln(r.out, "================================================================================")
-	fmt.Fprintf(r.out, "Range:      %d -> %d (%d blocks)\n", r.from, r.to, uint64(r.to)-uint64(r.from))
+	fmt.Fprintf(r.out, "Range:      %d -> %d (%d blocks)\n", r.from, r.to, r.to-r.from)
 	switch {
 	case !r.legacyPayChanDirGate:
 		fmt.Fprintln(r.out, "Compatibility: post-fix fixPayChanRecipientOwnerDir semantics for every target ledger (rippled v3.2.0)")
@@ -241,7 +242,11 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("connecting to database: %w", err)
 	}
-	defer func() { runErr = errors.Join(runErr, client.Close()) }()
+	defer func() {
+		if err := client.Close(); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("closing database client: %w", err))
+		}
+	}()
 	fmt.Fprintln(r.out, "      Connected to PostgreSQL")
 
 	// Validate range exists
@@ -253,13 +258,7 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 	if !valid {
 		return fmt.Errorf("ledger %d not found in database; run 'python main.py sync-range %d %d' first", missingLedger, startLedger, r.to)
 	}
-	fmt.Fprintf(r.out, "      All %d ledgers present in database\n", uint64(r.to)-uint64(startLedger)+1)
-
-	source, err := newStateSource(client, r.nodestoreDir, r.baseCacheMB, r.overlayCacheMB)
-	if err != nil {
-		return fmt.Errorf("initializing state source: %w", err)
-	}
-	defer func() { runErr = errors.Join(runErr, source.Close()) }()
+	fmt.Fprintf(r.out, "      All %d ledgers present in database\n", r.to-startLedger+1)
 
 	var findings *findingsWriter
 	if r.continueOnDivergence {
@@ -267,7 +266,11 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 		if err != nil {
 			return fmt.Errorf("opening findings file: %w", err)
 		}
-		defer func() { runErr = errors.Join(runErr, findings.Close()) }()
+		defer func() {
+			if err := findings.Close(); err != nil {
+				runErr = errors.Join(runErr, fmt.Errorf("closing findings: %w", err))
+			}
+		}()
 	}
 
 	var stateMap *shamap.SHAMap
@@ -282,6 +285,15 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 			return fmt.Errorf("resuming from checkpoint: %w", err)
 		}
 	} else {
+		source, err := newStateSource(client, r.nodestoreDir, r.baseCacheMB, r.overlayCacheMB)
+		if err != nil {
+			return fmt.Errorf("initializing state source: %w", err)
+		}
+		defer func() {
+			if err := source.Close(); err != nil {
+				runErr = errors.Join(runErr, fmt.Errorf("closing state source: %w", err))
+			}
+		}()
 		fmt.Fprintf(r.out, "[3/3] Loading initial state at ledger %d...\n", startLedger)
 		stateMap, preSnapshot, fees, err = source.Load(ctx, startLedger)
 		if err != nil {
@@ -296,13 +308,14 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 	fmt.Fprintln(r.out, "--- Starting Continuous Replay ---")
 	fmt.Fprintln(r.out)
 
-	stats := &RangeReplayStats{}
+	stats := &rangeReplayStats{}
+	var artifactErr error
 	commit := goxrplCommit(r.goxrplCommit)
 	currentStateMap := stateMap
 	previousSnapshot := preSnapshot
 
-	for seq := uint64(startLedger) + 1; seq <= uint64(r.to); seq++ {
-		targetLedger := uint32(seq)
+	for sequence := uint64(startLedger) + 1; sequence <= uint64(r.to); sequence++ {
+		targetLedger := uint32(sequence)
 		blockStart := time.Now()
 
 		// Process this block
@@ -346,15 +359,30 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 				fmt.Fprintf(r.out, "[%d] divergence recorded; reset to mainnet ground truth, continuing\n", targetLedger)
 				currentStateMap = resumed
 				previousSnapshot = result.PostSnapshot
-				fees = extractFeesFromSHAMap(currentStateMap)
-				r.maybeCheckpoint(targetLedger, currentStateMap)
+				fees, err = feesFromStateMap(currentStateMap)
+				if err != nil {
+					stats.FailedAtBlock = targetLedger
+					stats.FailureReason = err.Error()
+					fmt.Fprintf(r.out, "[%d] ERROR loading fees: %v\n", targetLedger, err)
+					break
+				}
+				if err := r.maybeCheckpoint(ctx, targetLedger, currentStateMap); err != nil {
+					stats.FailedAtBlock = targetLedger
+					stats.FailureReason = err.Error()
+					fmt.Fprintf(r.out, "[%d] ERROR: %v\n", targetLedger, err)
+					break
+				}
 				continue
 			}
 
 			stats.FailedAtBlock = targetLedger
 			stats.FailureReason = "hash mismatch"
 			fmt.Fprintln(r.out)
-			r.dumpRangeDebugInfo(targetLedger, result, currentStateMap, newStateMap)
+			artifactErr = r.dumpRangeDebugInfo(ctx, targetLedger, result, currentStateMap, newStateMap)
+			if artifactErr != nil {
+				stats.FailureReason = errors.Join(errors.New(stats.FailureReason), artifactErr).Error()
+				fmt.Fprintf(r.out, "ERROR writing requested diagnostics: %v\n", artifactErr)
+			}
 			r.printRangeFailure(targetLedger, result)
 			break
 		}
@@ -378,10 +406,21 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 		previousSnapshot = result.PostSnapshot
 
 		// Update fees from the new state (in case a SetFee transaction was processed)
-		fees = extractFeesFromSHAMap(currentStateMap)
+		fees, err = feesFromStateMap(currentStateMap)
+		if err != nil {
+			stats.FailedAtBlock = targetLedger
+			stats.FailureReason = err.Error()
+			fmt.Fprintf(r.out, "[%d] ERROR loading fees: %v\n", targetLedger, err)
+			break
+		}
 
 		// Periodically checkpoint so a crash or stop can resume mid-range.
-		r.maybeCheckpoint(targetLedger, currentStateMap)
+		if err := r.maybeCheckpoint(ctx, targetLedger, currentStateMap); err != nil {
+			stats.FailedAtBlock = targetLedger
+			stats.FailureReason = err.Error()
+			fmt.Fprintf(r.out, "[%d] ERROR: %v\n", targetLedger, err)
+			break
+		}
 	}
 
 	stats.TotalDuration = time.Since(startTime)
@@ -392,7 +431,7 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 
 	if stats.FailedAtBlock > 0 {
 		// The failure is already reported above; only the exit code is left.
-		return cmdexit.ErrReported
+		return errors.Join(cmdexit.ErrReported, artifactErr)
 	}
 	return nil
 }
@@ -409,16 +448,18 @@ func (r *replayRangeRunner) validateFlags() error {
 
 // maybeCheckpoint writes a checkpoint when checkpointing is enabled and the
 // ledger seq lands on the configured interval.
-func (r *replayRangeRunner) maybeCheckpoint(seq uint32, stateMap *shamap.SHAMap) {
+func (r *replayRangeRunner) maybeCheckpoint(ctx context.Context, seq uint32, stateMap *shamap.SHAMap) error {
 	if r.checkpointDir == "" || r.checkpointInterval == 0 ||
 		seq%r.checkpointInterval != 0 {
-		return
+		return nil
 	}
-	if err := writeCheckpoint(r.checkpointDir, seq, stateMap); err != nil {
-		fmt.Fprintf(r.out, "      WARNING: failed to write checkpoint at %d: %v\n", seq, err)
-	} else if r.verbose {
+	if err := writeCheckpoint(ctx, r.checkpointDir, seq, stateMap); err != nil {
+		return fmt.Errorf("writing checkpoint at ledger %d: %w", seq, err)
+	}
+	if r.verbose {
 		fmt.Fprintf(r.out, "      checkpoint written at ledger %d\n", seq)
 	}
+	return nil
 }
 
 // findingsPath resolves where divergence findings are written: an explicit
@@ -445,21 +486,31 @@ func recordDivergenceAndReset(
 	commit string,
 	ledgerIndex uint32,
 	parentHash [32]byte,
-	result *BlockResult,
+	result *blockResult,
 	preState, goxrplPost *shamap.SHAMap,
 ) (*shamap.SHAMap, error) {
-	corrected, verified, err := reconstructMainnetState(ctx, client, preState, result.PostSnapshot)
+	writeFailedFinding := func(verified bool, stage string, stageErr error) error {
+		finding := buildFinding(commit, ledgerIndex, parentHash, result, verified, nil, false)
+		finding.Errors = append(finding.Errors, fmt.Sprintf("%s: %v", stage, stageErr))
+		if err := findings.Write(finding); err != nil {
+			return errors.Join(stageErr, fmt.Errorf("writing failed finding: %w", err))
+		}
+		return stageErr
+	}
+
+	corrected, verified, err := reconstructMainnetState(ctx, client, preState, result.PostSnapshot, result.Rules)
 	if err != nil {
-		return nil, fmt.Errorf("reconstructing mainnet state: %w", err)
+		return nil, fmt.Errorf("reconstructing mainnet state: %w", writeFailedFinding(false, "reconstruction failed", err))
 	}
 	var diverging []divergingObject
+	divergingComplete := true
 	if verified {
-		diverging, err = divergingObjects(goxrplPost, corrected)
+		diverging, divergingComplete, err = divergingObjectsContext(ctx, goxrplPost, corrected)
 		if err != nil {
-			return nil, fmt.Errorf("computing diverging objects: %w", err)
+			return nil, fmt.Errorf("computing diverging objects: %w", writeFailedFinding(true, "diagnostics failed", err))
 		}
 	}
-	finding := buildFinding(commit, ledgerIndex, parentHash, result, verified, diverging)
+	finding := buildFinding(commit, ledgerIndex, parentHash, result, verified, diverging, divergingComplete)
 	if err := findings.Write(finding); err != nil {
 		return nil, fmt.Errorf("writing finding: %w", err)
 	}
@@ -469,8 +520,7 @@ func recordDivergenceAndReset(
 	return corrected, nil
 }
 
-// BlockResult holds the result of processing a single block
-type BlockResult struct {
+type blockResult struct {
 	Success                 bool
 	TxCount                 int
 	LedgerHash              [32]byte
@@ -482,8 +532,9 @@ type BlockResult struct {
 	ExpectedTransactionHash [32]byte
 	ExpectedTotalCoins      uint64
 	PostSnapshot            *statecompare.LedgerSnapshot
-	TxResults               []TxApplyInfo
+	TxResults               []txApplyInfo
 	Errors                  []string
+	Rules                   *amendment.Rules
 }
 
 func loadInitialState(ctx context.Context, client *statecompare.Client, ledgerIndex uint32) (*shamap.SHAMap, *statecompare.LedgerSnapshot, drops.Fees, error) {
@@ -514,10 +565,12 @@ func loadInitialState(ctx context.Context, client *statecompare.Client, ledgerIn
 		return nil, nil, drops.Fees{}, err
 	}
 
-	// Seed fees from the verified state. extractFeesFromSHAMap honors both the
-	// modern XRPFees format and the legacy FeeSettings fields, so post-amendment
-	// ranges seed the correct fees instead of silently falling back to defaults.
-	fees := extractFeesFromSHAMap(stateMap)
+	// Seed fees from the verified state, failing if a present FeeSettings entry
+	// is malformed.
+	fees, err := feesFromStateMap(stateMap)
+	if err != nil {
+		return nil, nil, drops.Fees{}, err
+	}
 
 	return stateMap, snapshot, fees, nil
 }
@@ -541,7 +594,7 @@ func verifyStateRoot(stateMap *shamap.SHAMap, expected [32]byte, ledgerIndex uin
 // and fees needed to continue replay from seq+1.
 func resumeFromCheckpoint(ctx context.Context, client *statecompare.Client, dir string, seq uint32) (*shamap.SHAMap, *statecompare.LedgerSnapshot, drops.Fees, error) {
 	path := checkpointPath(dir, seq)
-	stateMap, ckptSeq, err := loadCheckpoint(path)
+	stateMap, ckptSeq, err := loadCheckpoint(ctx, path)
 	if err != nil {
 		return nil, nil, drops.Fees{}, err
 	}
@@ -558,7 +611,10 @@ func resumeFromCheckpoint(ctx context.Context, client *statecompare.Client, dir 
 		return nil, nil, drops.Fees{}, err
 	}
 
-	fees := extractFeesFromSHAMap(stateMap)
+	fees, err := feesFromStateMap(stateMap)
+	if err != nil {
+		return nil, nil, drops.Fees{}, err
+	}
 	return stateMap, snapshot, fees, nil
 }
 
@@ -571,7 +627,7 @@ func loadRulesFromState(stateMap *shamap.SHAMap) (*amendment.Rules, error) {
 		return nil, fmt.Errorf("reading amendments entry: %w", err)
 	}
 	if !found || item == nil {
-		return amendment.EmptyRules(), nil
+		return amendment.NewRules(amendment.PermanentlyEnabledIDs()), nil
 	}
 	rules, err := ledger.LoadAmendmentsFromLedgerEntry(item.Data())
 	if err != nil {
@@ -584,22 +640,6 @@ func replayPreFixPayChanRecipientOwnerDir(targetLedger uint32, legacyGate bool, 
 	return legacyGate && (firstFixedLedger == 0 || targetLedger < firstFixedLedger)
 }
 
-// extractFeesFromSHAMap extracts the fee schedule from the FeeSettings entry of
-// a state SHAMap, falling back to the default schedule when it is absent or
-// undecodable.
-func extractFeesFromSHAMap(stateMap *shamap.SHAMap) drops.Fees {
-	item, found, err := stateMap.Get(keylet.Fees().Key)
-	if err != nil || !found || item == nil {
-		return drops.DefaultFees()
-	}
-
-	feeSettings, err := ledgerstate.ParseFeeSettings(item.Data())
-	if err != nil {
-		return drops.DefaultFees()
-	}
-	return feeSettings.Fees()
-}
-
 func (r *replayRangeRunner) processBlock(
 	ctx context.Context,
 	client *statecompare.Client,
@@ -607,190 +647,8 @@ func (r *replayRangeRunner) processBlock(
 	preSnapshot *statecompare.LedgerSnapshot,
 	targetLedger uint32,
 	fees drops.Fees,
-) (*BlockResult, *shamap.SHAMap, error) {
-	result := &BlockResult{
-		TxResults: make([]TxApplyInfo, 0),
-		Errors:    make([]string, 0),
-	}
-
-	// Get expected values for this ledger
-	postSnapshot, err := client.Snapshot(ctx, targetLedger)
-	if err != nil {
-		return nil, nil, fmt.Errorf("getting target snapshot: %w", err)
-	}
-	if err := validateReplaySnapshotLink(preSnapshot, postSnapshot, targetLedger); err != nil {
-		return nil, nil, err
-	}
-	result.PostSnapshot = postSnapshot
-	result.ExpectedLedgerHash = postSnapshot.LedgerHash
-	result.ExpectedAccountHash = postSnapshot.AccountHash
-	result.ExpectedTransactionHash = postSnapshot.TransactionHash
-	result.ExpectedTotalCoins = postSnapshot.TotalCoins
-
-	// Get transactions for this ledger
-	txs, err := client.Transactions(ctx, postSnapshot)
-	if err != nil {
-		return nil, nil, fmt.Errorf("getting transactions: %w", err)
-	}
-	result.TxCount = len(txs)
-
-	// Create transaction map
-	txMap := shamap.New(shamap.TypeTransaction)
-
-	// Setup ledger header
-	closeTime, err := replayCloseTime(postSnapshot.CloseTime)
-	if err != nil {
-		return nil, nil, fmt.Errorf("ledger %d close time: %w", targetLedger, err)
-	}
-	parentCloseTime, err := replayCloseTime(preSnapshot.CloseTime)
-	if err != nil {
-		return nil, nil, fmt.Errorf("ledger %d parent close time: %w", targetLedger, err)
-	}
-	applicationResolution := consensus.GetNextLedgerTimeResolution(
-		preSnapshot.CloseTimeResolution,
-		preSnapshot.CloseFlags&header.LCFNoConsensusTime == 0,
-		targetLedger,
-	)
-	if applicationResolution != postSnapshot.CloseTimeResolution {
-		return nil, nil, fmt.Errorf(
-			"ledger %d close time resolution: got %d, derived %d from parent",
-			targetLedger, postSnapshot.CloseTimeResolution, applicationResolution,
-		)
-	}
-	applicationCloseTime := ledger.ApplicationViewCloseTime(parentCloseTime, closeTime, applicationResolution)
-
-	ledgerHeader := header.LedgerHeader{
-		LedgerIndex:         targetLedger,
-		ParentHash:          preSnapshot.LedgerHash,
-		ParentCloseTime:     parentCloseTime,
-		CloseTime:           applicationCloseTime,
-		CloseTimeResolution: uint8(postSnapshot.CloseTimeResolution),
-		CloseFlags:          postSnapshot.CloseFlags,
-		Drops:               preSnapshot.TotalCoins, // Start with parent's total coins
-	}
-
-	// Create open ledger with current state
-	openLedger, err := ledger.NewOpenWithHeader(ledgerHeader, preStateMap, txMap, fees)
-	if err != nil {
-		return nil, nil, fmt.Errorf("creating replay ledger: %w", err)
-	}
-
-	// Derive the active amendment set from the parent (pre) state's Amendments
-	// entry, mirroring rippled, where a ledger's rules come from its parent.
-	// Flag-ledger EnableAmendment pseudo-transactions applied in this block
-	// update the Amendments entry in the post state, so the rule set evolves
-	// automatically as the range advances.
-	rules, err := loadRulesFromState(preStateMap)
-	if err != nil {
-		return nil, nil, fmt.Errorf("loading amendments: %w", err)
-	}
-	replayPreFix := replayPreFixPayChanRecipientOwnerDir(targetLedger, r.legacyPayChanDirGate, r.payChanDirFirstFixed)
-
-	// Flag-ledger NegativeUNL transition: on a flag ledger, apply the pending
-	// ValidatorToDisable / ValidatorToReEnable transitions to the NegativeUNL
-	// entry BEFORE creating the tx-apply engine and applying txs, mirroring
-	// rippled BuildLedger.cpp:48-53 (updateNegativeUNL runs on the freshly-built
-	// ledger before the OpenView tx-apply accum) and the catchup path in
-	// inbound/replay_delta.go. A UNLModify pseudo-tx sets the pending transition
-	// at one flag ledger; the next flag ledger moves it into DisabledValidators.
-	// Without this the next flag ledger after a UNLModify forks account_hash even
-	// though every transaction matches.
-	if protocol.IsFlagLedger(targetLedger) {
-		if err := openLedger.UpdateNegativeUNL(); err != nil {
-			return nil, nil, fmt.Errorf("flag-ledger updateNegativeUNL: %w", err)
-		}
-	}
-
-	// Setup engine
-	engineConfig := tx.EngineConfig{
-		BaseFee:                              uint64(fees.Base),
-		ReserveBase:                          uint64(fees.Reserve),
-		ReserveIncrement:                     uint64(fees.Increment),
-		LedgerSequence:                       targetLedger,
-		ParentHash:                           preSnapshot.LedgerHash,
-		ParentCloseTime:                      protocol.ToRippleTime(parentCloseTime),
-		ApplicationCloseTime:                 protocol.ToRippleTime(applicationCloseTime),
-		ApplicationCloseTimeSet:              true,
-		SkipSignatureVerification:            true,
-		Standalone:                           true,
-		ReplayPreFixPayChanRecipientOwnerDir: replayPreFix,
-		Rules:                                rules,
-	}
-
-	engine := txengine.NewEngine(openLedger, engineConfig)
-	blockProcessor := txengine.NewBlockProcessor(engine)
-
-	// Apply transactions. The hot success path skips the full per-tx decode: the
-	// three ledger hashes never read it, verbose output gates it, and the
-	// on-failure dump materializes it on demand from the retained blob.
-	wantTxDetail := r.verbose || r.dumpDir != ""
-	for _, txEntry := range txs {
-		txInfo := TxApplyInfo{
-			Index: int(txEntry.TxIndex),
-			Hash:  hex.EncodeToString(txEntry.TxHash[:]),
-		}
-
-		// Parse transaction
-		parsedTx, err := txengine.ParseAndPrepare(txEntry.TxBlob)
-		if err != nil {
-			txInfo.Error = fmt.Sprintf("failed to parse: %v", err)
-			fillTxDisplay(&txInfo, txEntry.TxBlob, nil, wantTxDetail)
-			result.TxResults = append(result.TxResults, txInfo)
-			result.Errors = append(result.Errors, fmt.Sprintf("tx %d: %s", txEntry.TxIndex, txInfo.Error))
-			continue
-		}
-		fillTxDisplay(&txInfo, txEntry.TxBlob, parsedTx.Transaction, wantTxDetail)
-
-		// Apply transaction
-		blockTxResult, err := blockProcessor.ApplyLedgerTransaction(parsedTx.Transaction, parsedTx.RawBlob)
-		if err != nil {
-			txInfo.Error = fmt.Sprintf("failed to apply: %v", err)
-			result.TxResults = append(result.TxResults, txInfo)
-			result.Errors = append(result.Errors, fmt.Sprintf("tx %d: %s", txEntry.TxIndex, txInfo.Error))
-			continue
-		}
-
-		applyResult := blockTxResult.ApplyResult
-		txInfo.Result = applyResult.Result.String()
-		txInfo.ResultCode = int(applyResult.Result)
-		txInfo.Applied = applyResult.Applied
-		txInfo.Fee = applyResult.Fee
-		txInfo.Metadata = applyResult.Metadata
-
-		result.TxResults = append(result.TxResults, txInfo)
-
-		if r.verbose && r.decoded {
-			fmt.Fprintf(r.out, "        [%d] %-20s %-12s\n", txEntry.TxIndex, txInfo.TxType, txInfo.Result)
-		}
-	}
-
-	// Close ledger. Close() updates the LedgerHashes skip lists from the
-	// header's ParentHash as its first step, so no separate skip-list pass is
-	// needed here — doing one would double-append the parent hash.
-	if err := openLedger.Close(closeTime, postSnapshot.CloseFlags); err != nil {
-		return nil, nil, fmt.Errorf("closing ledger: %w", err)
-	}
-
-	// Get result hashes
-	result.LedgerHash = openLedger.Hash()
-	result.AccountHash, _ = openLedger.StateMapHash()
-	result.TransactionHash, _ = openLedger.TxMapHash()
-	result.TotalCoins = openLedger.TotalDrops()
-
-	// Check all three hashes
-	ledgerHashMatch := result.LedgerHash == result.ExpectedLedgerHash
-	accountHashMatch := result.AccountHash == result.ExpectedAccountHash
-	txHashMatch := result.TransactionHash == result.ExpectedTransactionHash
-
-	result.Success = ledgerHashMatch && accountHashMatch && txHashMatch && result.TotalCoins == result.ExpectedTotalCoins && len(result.Errors) == 0
-
-	// Get the new state map for next iteration
-	newStateMap, err := openLedger.StateMapSnapshot()
-	if err != nil {
-		return nil, nil, fmt.Errorf("getting state snapshot: %w", err)
-	}
-
-	return result, newStateMap, nil
+) (*blockResult, *shamap.SHAMap, error) {
+	return r.processBlockShared(ctx, client, preStateMap, preSnapshot, targetLedger, fees)
 }
 
 func validateReplaySnapshotLink(preSnapshot, postSnapshot *statecompare.LedgerSnapshot, targetLedger uint32) error {
@@ -812,7 +670,7 @@ func validateReplaySnapshotLink(preSnapshot, postSnapshot *statecompare.LedgerSn
 	return nil
 }
 
-func (r *replayRangeRunner) dumpRangeDebugInfo(ledgerIndex uint32, result *BlockResult, preStateMap, postStateMap *shamap.SHAMap) {
+func (r *replayRangeRunner) dumpRangeDebugInfo(ctx context.Context, ledgerIndex uint32, result *blockResult, preStateMap, postStateMap *shamap.SHAMap) error {
 	dir := r.dumpDir
 	if dir == "" {
 		dir = fmt.Sprintf("./debug/ledger_%d", ledgerIndex)
@@ -823,8 +681,7 @@ func (r *replayRangeRunner) dumpRangeDebugInfo(ledgerIndex uint32, result *Block
 	fmt.Fprintf(r.out, "Writing debug files to: %s\n", dir)
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		fmt.Fprintf(r.out, "ERROR: Failed to create dump directory: %v\n", err)
-		return
+		return fmt.Errorf("creating dump directory: %w", err)
 	}
 
 	// Materializing a nodestore-lazy map would walk millions of nodes; skip
@@ -832,57 +689,37 @@ func (r *replayRangeRunner) dumpRangeDebugInfo(ledgerIndex uint32, result *Block
 	// targeted, object-level findings instead.
 	if preStateMap.IsBacked() || postStateMap.IsBacked() {
 		fmt.Fprintf(r.out, "  Skipping full state/diff dump for nodestore-lazy state; use --continue-on-divergence for object-level findings\n")
-		r.writeTxResults(dir, result)
-		return
+		return r.writeTxResults(dir, result)
 	}
-
-	pre := hexStateMap(preStateMap)
-	post := hexStateMap(postStateMap)
 
 	postStateFile := filepath.Join(dir, "post_state.json")
-	postStateData := postStateEntries(post)
-	if err := writeJSONFile(postStateFile, postStateData); err != nil {
-		fmt.Fprintf(r.out, "  ERROR: Failed to write post_state.json: %v\n", err)
-	} else {
-		fmt.Fprintf(r.out, "  Wrote %s (%d entries)\n", postStateFile, len(postStateData))
+	postStateCount, err := writeStateArtifact(ctx, postStateFile, postStateMap)
+	if err != nil {
+		return fmt.Errorf("writing post_state.json: %w", err)
 	}
+	fmt.Fprintf(r.out, "  Wrote %s (%d entries)\n", postStateFile, postStateCount)
 
 	diffFile := filepath.Join(dir, "state_diff.json")
-	diff := computeStateDiff(pre, post)
-	if err := writeJSONFile(diffFile, diff); err != nil {
-		fmt.Fprintf(r.out, "  ERROR: Failed to write state_diff.json: %v\n", err)
-	} else {
-		fmt.Fprintf(r.out, "  Wrote %s\n", diffFile)
+	if _, err := writeStateDiffArtifact(ctx, diffFile, preStateMap, postStateMap); err != nil {
+		return fmt.Errorf("writing state_diff.json: %w", err)
 	}
+	fmt.Fprintf(r.out, "  Wrote %s\n", diffFile)
 
-	r.writeTxResults(dir, result)
-}
-
-// hexStateMap walks a fully in-memory state SHAMap into a lowercase-hex index →
-// hex-data map. Only safe for non-backed maps; a nodestore-lazy map would fetch
-// the whole tree.
-func hexStateMap(stateMap *shamap.SHAMap) map[string]string {
-	out := make(map[string]string)
-	_ = stateMap.ForEach(func(item *shamap.Item) bool {
-		key := item.Key()
-		out[hex.EncodeToString(key[:])] = hex.EncodeToString(item.Data())
-		return true
-	})
-	return out
+	return r.writeTxResults(dir, result)
 }
 
 // writeTxResults writes the per-transaction apply results for a block.
-func (r *replayRangeRunner) writeTxResults(dir string, result *BlockResult) {
+func (r *replayRangeRunner) writeTxResults(dir string, result *blockResult) error {
 	txResultsFile := filepath.Join(dir, "tx_results.json")
 	materializeDecoded(result.TxResults)
 	if err := writeJSONFile(txResultsFile, result.TxResults); err != nil {
-		fmt.Fprintf(r.out, "  ERROR: Failed to write tx_results.json: %v\n", err)
-		return
+		return fmt.Errorf("writing tx_results.json: %w", err)
 	}
 	fmt.Fprintf(r.out, "  Wrote %s (%d transactions)\n", txResultsFile, len(result.TxResults))
+	return nil
 }
 
-func (r *replayRangeRunner) printRangeFailure(ledgerIndex uint32, result *BlockResult) {
+func (r *replayRangeRunner) printRangeFailure(ledgerIndex uint32, result *blockResult) {
 	fmt.Fprintln(r.out)
 	fmt.Fprintln(r.out, "================================================================================")
 	fmt.Fprintf(r.out, "                      FAILED at ledger %d\n", ledgerIndex)
@@ -932,7 +769,7 @@ func (r *replayRangeRunner) printRangeHashRow(name string, got, expected [32]byt
 	}
 }
 
-func (r *replayRangeRunner) printRangeSummary(stats *RangeReplayStats) {
+func (r *replayRangeRunner) printRangeSummary(stats *rangeReplayStats) {
 	fmt.Fprintln(r.out, "================================================================================")
 	if stats.FailedAtBlock > 0 {
 		fmt.Fprintf(r.out, "FAILED at block %d: %s\n", stats.FailedAtBlock, stats.FailureReason)

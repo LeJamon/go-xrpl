@@ -2,6 +2,7 @@ package statecompare
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -158,6 +159,8 @@ func unpackStateStream(
 
 	remaining := expected.size - packEnvelopeLen
 	var index [indexLen]byte
+	var previous [indexLen]byte
+	havePrevious := false
 	var lenBuf [4]byte
 	for i := uint32(0); i < packCount; i++ {
 		if err := ctx.Err(); err != nil {
@@ -169,6 +172,11 @@ func unpackStateStream(
 		if _, err := io.ReadFull(br, index[:]); err != nil {
 			return packReadError(ctx, fmt.Sprintf("truncated state index %d", i), err)
 		}
+		if havePrevious && bytes.Compare(index[:], previous[:]) <= 0 {
+			return fmt.Errorf("%w: state indexes are not strictly increasing", errPack)
+		}
+		previous = index
+		havePrevious = true
 		if _, err := io.ReadFull(br, lenBuf[:]); err != nil {
 			return packReadError(ctx, fmt.Sprintf("truncated state data length %d", i), err)
 		}
