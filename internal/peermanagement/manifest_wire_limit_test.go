@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"sync/atomic"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
@@ -96,6 +97,50 @@ func compressedManifestFrame(t *testing.T, payload []byte, uncompressedSize uint
 	return frame
 }
 
+type headerOnlyReader struct {
+	data  []byte
+	calls atomic.Int64
+}
+
+func (r *headerOnlyReader) Read(dst []byte) (int, error) {
+	r.calls.Add(1)
+	if len(r.data) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(dst, r.data)
+	r.data = r.data[n:]
+	return n, nil
+}
+
+func TestPeerRejectsUnnegotiatedCompressionAtHeader(t *testing.T) {
+	header := make([]byte, message.HeaderSizeCompressed)
+	require.NoError(t, message.EncodeHeader(
+		header,
+		uint32(message.MaxMessageSize-1),
+		message.TypeManifests,
+		message.AlgorithmLZ4,
+		DefaultMaxManifestPayload,
+	))
+	underlying := &headerOnlyReader{data: header}
+	spoolDir, err := prepareManifestSpoolDir(t.TempDir())
+	require.NoError(t, err)
+	peer, _, _ := newManifestLimitTestPeer(t, false)
+	peer.SetInboundReadBudget(newReadBudget(int64(DefaultMaxManifestPayload)))
+	peer.SetManifestSpoolDir(spoolDir)
+	peer.bufReader = bufio.NewReader(underlying)
+
+	err = peer.readLoop(context.Background())
+	require.EqualError(t, err, "compressed frame without negotiated compression")
+	require.Equal(t, int64(1), underlying.calls.Load(), "header-only input must not trigger a body read")
+	require.NotZero(t, peer.BadDataCount())
+	peer.inboundReadBudget.mu.Lock()
+	require.Zero(t, peer.inboundReadBudget.used)
+	peer.inboundReadBudget.mu.Unlock()
+	entries, err := os.ReadDir(spoolDir)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+}
+
 func TestManifestWireLimitCompressedClaimsDropWithoutDecode(t *testing.T) {
 	limit := uint32(DefaultMaxManifestPayload)
 	tests := []struct {
@@ -140,6 +185,44 @@ func TestManifestWireLimitCompressedClaimsDropWithoutDecode(t *testing.T) {
 			peer.inboundReadBudget.mu.Unlock()
 		})
 	}
+}
+
+func TestManifestWireLimitCompressedExactLimitDispatches(t *testing.T) {
+	limit := DefaultMaxManifestPayload
+	uncompressed := manifestPayloadAtSize(limit)
+	compressed, err := message.CompressLZ4(uncompressed)
+	require.NoError(t, err)
+	require.NotEmpty(t, compressed)
+	require.Less(t, len(compressed), len(uncompressed))
+
+	var wire bytes.Buffer
+	wire.Write(compressedManifestFrame(t, compressed, uint32(limit)))
+	appendUncompressedFrame(t, &wire, message.TypePing, []byte{0x08, 0x00})
+
+	spoolDir, err := prepareManifestSpoolDir(t.TempDir())
+	require.NoError(t, err)
+	peer, manifestMessages, events := newManifestLimitTestPeer(t, true)
+	peer.SetInboundReadBudget(newReadBudget(int64(limit + len(compressed))))
+	peer.SetManifestSpoolDir(spoolDir)
+	peer.bufReader = bufio.NewReader(bytes.NewReader(wire.Bytes()))
+
+	err = peer.readLoop(context.Background())
+	require.ErrorIs(t, err, io.EOF)
+	accepted := <-manifestMessages
+	require.Equal(t, uncompressed, accepted.Payload)
+	require.Nil(t, accepted.ManifestFrame)
+	require.NoError(t, accepted.Close())
+	ping := <-events
+	require.Equal(t, message.TypePing, ping.MessageType)
+	ping.release()
+	require.Zero(t, peer.BadDataCount())
+	require.Equal(t, uint64(1), peer.traffic.Stats(CategoryManifests).MessagesIn)
+	peer.inboundReadBudget.mu.Lock()
+	require.Zero(t, peer.inboundReadBudget.used)
+	peer.inboundReadBudget.mu.Unlock()
+	entries, err := os.ReadDir(spoolDir)
+	require.NoError(t, err)
+	require.Empty(t, entries)
 }
 
 func TestManifestWireLimitPreservesCompressionNegotiationFailure(t *testing.T) {
