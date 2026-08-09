@@ -32,6 +32,7 @@ type OverlayConfig struct {
 	ResourceLimits       ResourceLimitsConfig `toml:"resource_limits" mapstructure:"resource_limits"`
 }
 
+// Manifest count defaults and bounds apply to overlay admission and wire limits.
 const (
 	DefaultMaxUntrustedCount = 300
 	DefaultMaxTrustedCount   = 300
@@ -140,6 +141,7 @@ func (o *OverlayConfig) Validate() error {
 	return nil
 }
 
+// EffectiveMaxUntrustedCount returns the configured limit or its default.
 func (o *OverlayConfig) EffectiveMaxUntrustedCount() int {
 	if o == nil || o.MaxUntrustedCount == nil {
 		return DefaultMaxUntrustedCount
@@ -147,6 +149,7 @@ func (o *OverlayConfig) EffectiveMaxUntrustedCount() int {
 	return *o.MaxUntrustedCount
 }
 
+// EffectiveMaxTrustedCount returns the configured limit or its default.
 func (o *OverlayConfig) EffectiveMaxTrustedCount() int {
 	if o == nil || o.MaxTrustedCount == nil {
 		return DefaultMaxTrustedCount
