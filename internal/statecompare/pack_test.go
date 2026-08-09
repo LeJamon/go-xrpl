@@ -4,359 +4,171 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
+	"math"
 	"testing"
 )
 
-// packState and packLedgerBatch mirror the lab's core/pack.py encoders. The Go
-// client only ever decodes packs in production, so the encoders live here as
-// fixture builders that exercise the decoder over a faithful round trip.
-func packState(seq uint64, entries []StateEntry) []byte {
-	out := []byte(packMagic)
-	out = append(out, packVersion, kindState)
-	out = binary.BigEndian.AppendUint64(out, seq)
-	out = binary.BigEndian.AppendUint32(out, uint32(len(entries)))
-	for _, e := range entries {
-		out = append(out, e.Index[:]...)
-		out = binary.BigEndian.AppendUint32(out, uint32(len(e.Data)))
-		out = append(out, e.Data...)
+func encodeStatePack(seq uint32, entries []StateEntry) []byte {
+	var out bytes.Buffer
+	out.WriteString(packMagic)
+	out.WriteByte(packVersion)
+	out.WriteByte(kindState)
+	_ = binary.Write(&out, binary.BigEndian, uint64(seq))
+	_ = binary.Write(&out, binary.BigEndian, uint32(len(entries)))
+	for _, entry := range entries {
+		out.Write(entry.Index[:])
+		writeSized(&out, entry.Data)
 	}
-	return out
+	return out.Bytes()
 }
 
-func packLedgerBatch(batchStart uint64, ledgers []ledgerBlob) ([]byte, map[uint64]int) {
-	out := []byte(packMagic)
-	out = append(out, packVersion, kindLedger)
-	out = binary.BigEndian.AppendUint64(out, batchStart)
-	out = binary.BigEndian.AppendUint32(out, uint32(len(ledgers)))
-	offsets := make(map[uint64]int, len(ledgers))
-	for _, lg := range ledgers {
-		offsets[lg.seq] = len(out)
-		out = binary.BigEndian.AppendUint64(out, lg.seq)
-		out = binary.BigEndian.AppendUint32(out, uint32(len(lg.headerBlob)))
-		out = append(out, lg.headerBlob...)
-		out = binary.BigEndian.AppendUint32(out, uint32(len(lg.txs)))
-		for _, tx := range lg.txs {
-			out = append(out, tx.txHash[:]...)
-			out = binary.BigEndian.AppendUint32(out, uint32(len(tx.txBlob)))
-			out = append(out, tx.txBlob...)
-			out = binary.BigEndian.AppendUint32(out, uint32(len(tx.metaBlob)))
-			out = append(out, tx.metaBlob...)
+func TestUnpackStateStreamValidatesBeforeCallback(t *testing.T) {
+	entries := []StateEntry{{Index: [32]byte{1}, Data: []byte{2, 3}}}
+	data := encodeStatePack(10, entries)
+	called := 0
+	err := unpackStateStream(context.Background(), bytes.NewReader(data), statePackExpectation{
+		seq: 11, count: 1, size: int64(len(data)),
+	}, func([32]byte, []byte) error { called++; return nil })
+	if !errors.Is(err, errPack) || called != 0 {
+		t.Fatalf("wrong identity error=%v callbacks=%d", err, called)
+	}
+
+	err = unpackStateStream(context.Background(), bytes.NewReader(data), statePackExpectation{
+		seq: 10, count: 1, size: int64(len(data)),
+	}, func(index [32]byte, value []byte) error {
+		called++
+		if index != entries[0].Index || !bytes.Equal(value, entries[0].Data) {
+			t.Fatalf("callback entry = %x/%x", index, value)
 		}
-	}
-	return out, offsets
-}
-
-func idx(b byte) [32]byte {
-	var a [32]byte
-	for i := range a {
-		a[i] = b
-	}
-	return a
-}
-
-func TestStatePackRoundtrip(t *testing.T) {
-	entries := []StateEntry{
-		{Index: idx(0x01), Data: []byte("hello")},
-		{Index: idx(0x02), Data: []byte{}},
-		{Index: idx(0xff), Data: []byte{0x00, 0x01, 0x02}},
-	}
-	blob := packState(99250000, entries)
-
-	seq, got, err := unpackState(blob)
-	if err != nil {
-		t.Fatalf("unpackState: %v", err)
-	}
-	if seq != 99250000 {
-		t.Errorf("seq = %d, want 99250000", seq)
-	}
-	if len(got) != len(entries) {
-		t.Fatalf("got %d entries, want %d", len(got), len(entries))
-	}
-	for i, e := range entries {
-		if got[i].Index != e.Index {
-			t.Errorf("entry %d index = %x, want %x", i, got[i].Index, e.Index)
-		}
-		if !bytes.Equal(got[i].Data, e.Data) {
-			t.Errorf("entry %d data = %x, want %x", i, got[i].Data, e.Data)
-		}
-	}
-}
-
-// TestStatePackGoldenBytes pins the on-wire encoding so it cannot silently
-// drift from the lab's pack.py format (which the bytes were derived from).
-func TestStatePackGoldenBytes(t *testing.T) {
-	blob := packState(1, []StateEntry{{Index: idx(0x01), Data: []byte("x")}})
-	const want = "58534350" + "01" + "01" + // magic, version, kind=state
-		"0000000000000001" + // checkpoint seq = 1
-		"00000001" + // entry count = 1
-		"0101010101010101010101010101010101010101010101010101010101010101" + // index
-		"00000001" + "78" // data len = 1, "x"
-	if got := hex.EncodeToString(blob); got != want {
-		t.Errorf("state pack bytes:\n got %s\nwant %s", got, want)
-	}
-}
-
-func TestUnpackStateStreamRoundtrip(t *testing.T) {
-	entries := []StateEntry{
-		{Index: idx(0x01), Data: []byte("hello")},
-		{Index: idx(0x02), Data: []byte{}},
-		{Index: idx(0xff), Data: []byte{0x00, 0x01, 0x02}},
-	}
-	blob := packState(99250000, entries)
-
-	var got []StateEntry
-	seq, count, err := unpackStateStream(bytes.NewReader(blob), func(index [32]byte, data []byte) error {
-		got = append(got, StateEntry{Index: index, Data: append([]byte(nil), data...)})
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("unpackStateStream: %v", err)
 	}
-	if seq != 99250000 {
-		t.Errorf("seq = %d, want 99250000", seq)
-	}
-	if count != uint32(len(entries)) {
-		t.Errorf("count = %d, want %d", count, len(entries))
-	}
-	if len(got) != len(entries) {
-		t.Fatalf("got %d entries, want %d", len(got), len(entries))
-	}
-	for i, e := range entries {
-		if got[i].Index != e.Index {
-			t.Errorf("entry %d index = %x, want %x", i, got[i].Index, e.Index)
-		}
-		if !bytes.Equal(got[i].Data, e.Data) {
-			t.Errorf("entry %d data = %x, want %x", i, got[i].Data, e.Data)
-		}
-	}
 }
 
-// TestUnpackStateStreamMatchesBuffered cross-checks the streaming decoder
-// against the buffered one over the same pack, so the two paths cannot drift.
-func TestUnpackStateStreamMatchesBuffered(t *testing.T) {
-	entries := []StateEntry{
-		{Index: idx(0x10), Data: []byte("abcdefghijkl")},
-		{Index: idx(0x20), Data: bytes.Repeat([]byte{0x7e}, 300)},
+func TestUnpackStateStreamRejectsBoundsTrailingAndCancellation(t *testing.T) {
+	data := encodeStatePack(10, []StateEntry{{Index: [32]byte{1}, Data: []byte{2}}})
+	tests := []struct {
+		name string
+		data []byte
+		exp  statePackExpectation
+	}{
+		{"truncated", data[:len(data)-1], statePackExpectation{seq: 10, count: 1, size: int64(len(data))}},
+		{"trailing", append(bytes.Clone(data), 0), statePackExpectation{seq: 10, count: 1, size: int64(len(data))}},
+		{"oversized count", data, statePackExpectation{seq: 10, count: math.MaxUint32, size: int64(len(data))}},
 	}
-	blob := packState(42, entries)
-
-	wantSeq, want, err := unpackState(blob)
-	if err != nil {
-		t.Fatalf("unpackState: %v", err)
-	}
-
-	var got []StateEntry
-	gotSeq, _, err := unpackStateStream(bytes.NewReader(blob), func(index [32]byte, data []byte) error {
-		got = append(got, StateEntry{Index: index, Data: append([]byte(nil), data...)})
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("unpackStateStream: %v", err)
-	}
-	if gotSeq != wantSeq {
-		t.Errorf("stream seq = %d, want %d", gotSeq, wantSeq)
-	}
-	if len(got) != len(want) {
-		t.Fatalf("stream got %d entries, want %d", len(got), len(want))
-	}
-	for i := range want {
-		if got[i].Index != want[i].Index || !bytes.Equal(got[i].Data, want[i].Data) {
-			t.Errorf("entry %d mismatch between stream and buffered decode", i)
-		}
-	}
-}
-
-func TestUnpackStateStreamRejectsBadMagicAndKind(t *testing.T) {
-	if _, _, err := unpackStateStream(bytes.NewReader([]byte("NOTAPACK"+"\x00\x00\x00\x00")), nil); !errors.Is(err, errPack) {
-		t.Errorf("bad magic: err = %v, want errPack", err)
-	}
-	lblob, _ := packLedgerBatch(1, nil)
-	if _, _, err := unpackStateStream(bytes.NewReader(lblob), nil); !errors.Is(err, errPack) {
-		t.Errorf("kind mismatch: err = %v, want errPack", err)
-	}
-}
-
-func TestUnpackStateStreamRejectsTruncated(t *testing.T) {
-	blob := packState(1, []StateEntry{{Index: idx(0x01), Data: []byte("abcdef")}})
-	noop := func([32]byte, []byte) error { return nil }
-	if _, _, err := unpackStateStream(bytes.NewReader(blob[:len(blob)-3]), noop); !errors.Is(err, errPack) {
-		t.Errorf("truncated data: err = %v, want errPack", err)
-	}
-	if _, _, err := unpackStateStream(bytes.NewReader(blob[:8]), noop); !errors.Is(err, errPack) {
-		t.Errorf("truncated header: err = %v, want errPack", err)
-	}
-}
-
-func TestUnpackStateStreamRejectsTrailingData(t *testing.T) {
-	blob := append(packState(1, []StateEntry{{Index: idx(0x01), Data: []byte("x")}}), 0xff)
-	if _, _, err := unpackStateStream(bytes.NewReader(blob), func([32]byte, []byte) error { return nil }); !errors.Is(err, errPack) {
-		t.Fatalf("trailing data error = %v, want errPack", err)
-	}
-}
-
-func TestUnpackStateStreamRejectsDuplicateAndUnorderedIndexes(t *testing.T) {
-	for name, entries := range map[string][]StateEntry{
-		"duplicate": {{Index: idx(0x01)}, {Index: idx(0x01)}},
-		"unordered": {{Index: idx(0x02)}, {Index: idx(0x01)}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, _, err := unpackStateStream(bytes.NewReader(packState(1, entries)), func([32]byte, []byte) error { return nil }); !errors.Is(err, errPack) {
-				t.Fatalf("index order error = %v, want errPack", err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := unpackStateStream(context.Background(), bytes.NewReader(test.data), test.exp, func([32]byte, []byte) error { return nil }); err == nil {
+				t.Fatal("malformed pack accepted")
 			}
 		})
 	}
-}
-
-// TestUnpackStateStreamPropagatesCallbackError verifies a callback failure stops
-// the decode and surfaces unchanged (not wrapped as a pack error).
-func TestUnpackStateStreamPropagatesCallbackError(t *testing.T) {
-	blob := packState(1, []StateEntry{
-		{Index: idx(0x01), Data: []byte("a")},
-		{Index: idx(0x02), Data: []byte("b")},
-	})
-	sentinel := errors.New("boom")
-	calls := 0
-	_, _, err := unpackStateStream(bytes.NewReader(blob), func([32]byte, []byte) error {
-		calls++
-		return sentinel
-	})
-	if !errors.Is(err, sentinel) {
-		t.Errorf("err = %v, want sentinel", err)
-	}
-	if calls != 1 {
-		t.Errorf("callback called %d times, want 1 (decode should stop on error)", calls)
-	}
-}
-
-func TestLedgerBatchRoundtripAndOffsets(t *testing.T) {
-	ledgers := []ledgerBlob{
-		{seq: 1000, headerBlob: []byte("H0"), txs: []txRecord{
-			{txHash: idx(0xaa), txBlob: []byte("tx0"), metaBlob: []byte("meta0")},
-			{txHash: idx(0xbb), txBlob: []byte("tx1"), metaBlob: []byte("meta1")},
-		}},
-		{seq: 1001, headerBlob: []byte("H1")},
-		{seq: 1002, headerBlob: []byte("H2"), txs: []txRecord{
-			{txHash: idx(0xcc), txBlob: []byte("tx2"), metaBlob: []byte("meta2")},
-		}},
-	}
-	blob, offsets := packLedgerBatch(1000, ledgers)
-
-	// Seek straight to one ledger at its manifest-recorded offset.
-	one, err := readLedgerAt(blob, offsets[1002])
-	if err != nil {
-		t.Fatalf("readLedgerAt(1002): %v", err)
-	}
-	if one.seq != 1002 {
-		t.Errorf("seq = %d, want 1002", one.seq)
-	}
-	if len(one.txs) != 1 || !bytes.Equal(one.txs[0].metaBlob, []byte("meta2")) {
-		t.Errorf("ledger 1002 txs = %+v, want one tx with meta2", one.txs)
-	}
-
-	mid, err := readLedgerAt(blob, offsets[1000])
-	if err != nil {
-		t.Fatalf("readLedgerAt(1000): %v", err)
-	}
-	if len(mid.txs) != 2 || !bytes.Equal(mid.txs[1].txBlob, []byte("tx1")) {
-		t.Errorf("ledger 1000 second tx = %+v, want tx1", mid.txs)
-	}
-
-	empty, err := readLedgerAt(blob, offsets[1001])
-	if err != nil {
-		t.Fatalf("readLedgerAt(1001): %v", err)
-	}
-	if len(empty.txs) != 0 {
-		t.Errorf("ledger 1001 txs = %d, want 0", len(empty.txs))
-	}
-}
-
-func TestUnpackStateRejectsBadMagicAndKind(t *testing.T) {
-	if _, _, err := unpackState([]byte("NOTAPACK" + "\x00\x00\x00\x00")); !errors.Is(err, errPack) {
-		t.Errorf("bad magic: err = %v, want errPack", err)
-	}
-	// A LEDGER pack must not decode as a STATE pack.
-	lblob, _ := packLedgerBatch(1, nil)
-	if _, _, err := unpackState(lblob); !errors.Is(err, errPack) {
-		t.Errorf("kind mismatch: err = %v, want errPack", err)
-	}
-}
-
-func TestUnpackStateRejectsTruncated(t *testing.T) {
-	blob := packState(1, []StateEntry{{Index: idx(0x01), Data: []byte("abcdef")}})
-	if _, _, err := unpackState(blob[:len(blob)-3]); !errors.Is(err, errPack) {
-		t.Errorf("truncated: err = %v, want errPack", err)
-	}
-}
-
-func TestUnpackStateRejectsTrailingData(t *testing.T) {
-	blob := append(packState(1, []StateEntry{{Index: idx(0x01), Data: []byte("x")}}), 0xff)
-	if _, _, err := unpackState(blob); !errors.Is(err, errPack) {
-		t.Fatalf("trailing data error = %v, want errPack", err)
-	}
-}
-
-func TestUnpackStateRejectsDuplicateAndUnorderedIndexes(t *testing.T) {
-	for name, entries := range map[string][]StateEntry{
-		"duplicate": {{Index: idx(0x01)}, {Index: idx(0x01)}},
-		"unordered": {{Index: idx(0x02)}, {Index: idx(0x01)}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, _, err := unpackState(packState(1, entries)); !errors.Is(err, errPack) {
-				t.Fatalf("index order error = %v, want errPack", err)
-			}
-		})
-	}
-}
-
-func TestReadLedgerAtOutOfRange(t *testing.T) {
-	blob, _ := packLedgerBatch(1, []ledgerBlob{{seq: 1, headerBlob: []byte("H")}})
-	if _, err := readLedgerAt(blob, len(blob)+1); !errors.Is(err, errPack) {
-		t.Errorf("offset past end: err = %v, want errPack", err)
-	}
-	if _, err := readLedgerAt(blob, 0); !errors.Is(err, errPack) {
-		t.Errorf("offset inside header: err = %v, want errPack", err)
-	}
-}
-
-func TestPackDecodersRejectUnboundedLengthsAndCounts(t *testing.T) {
-	state := []byte(packMagic)
-	state = append(state, packVersion, kindState)
-	state = binary.BigEndian.AppendUint64(state, 1)
-	state = binary.BigEndian.AppendUint32(state, 1)
-	state = append(state, make([]byte, indexLen)...)
-	state = binary.BigEndian.AppendUint32(state, ^uint32(0))
-	if _, _, err := unpackStateStream(bytes.NewReader(state), nil); !errors.Is(err, errPack) {
-		t.Fatalf("stream oversized length error = %v, want errPack", err)
-	}
-	if _, _, err := unpackState(state); !errors.Is(err, errPack) {
-		t.Fatalf("buffered oversized length error = %v, want errPack", err)
-	}
-
-	stateCount := []byte(packMagic)
-	stateCount = append(stateCount, packVersion, kindState)
-	stateCount = binary.BigEndian.AppendUint64(stateCount, 1)
-	stateCount = binary.BigEndian.AppendUint32(stateCount, ^uint32(0))
-	if _, _, err := unpackState(stateCount); !errors.Is(err, errPack) {
-		t.Fatalf("oversized state count error = %v, want errPack", err)
-	}
-
-	ledger := []byte(packMagic)
-	ledger = append(ledger, packVersion, kindLedger)
-	ledger = binary.BigEndian.AppendUint64(ledger, 1)
-	ledger = binary.BigEndian.AppendUint32(ledger, 0)
-	ledger = binary.BigEndian.AppendUint32(ledger, ^uint32(0))
-	if _, err := readLedgerAt(ledger, packHeaderLen); !errors.Is(err, errPack) {
-		t.Fatalf("oversized transaction count error = %v, want errPack", err)
-	}
-}
-
-func TestUnpackStateStreamContextCancellation(t *testing.T) {
-	blob := packState(1, []StateEntry{{Index: idx(1), Data: []byte("abcdefghijkl")}})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, _, err := unpackStateStreamContext(ctx, bytes.NewReader(blob), nil); !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled stream error = %v, want %v", err, context.Canceled)
+	if err := unpackStateStream(ctx, bytes.NewReader(data), statePackExpectation{seq: 10, count: 1, size: int64(len(data))}, func([32]byte, []byte) error { return nil }); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation error = %v", err)
 	}
+}
+
+func TestUnpackStateStreamRejectsNonIncreasingIndexes(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries []StateEntry
+	}{
+		{
+			name: "duplicate",
+			entries: []StateEntry{
+				{Index: [32]byte{1}, Data: []byte{1}},
+				{Index: [32]byte{1}, Data: []byte{2}},
+			},
+		},
+		{
+			name: "descending",
+			entries: []StateEntry{
+				{Index: [32]byte{2}, Data: []byte{1}},
+				{Index: [32]byte{1}, Data: []byte{2}},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data := encodeStatePack(10, test.entries)
+			err := unpackStateStream(
+				context.Background(),
+				bytes.NewReader(data),
+				statePackExpectation{seq: 10, count: uint32(len(test.entries)), size: int64(len(data))},
+				func([32]byte, []byte) error { return nil },
+			)
+			if !errors.Is(err, errPack) {
+				t.Fatalf("error = %v, want errPack", err)
+			}
+		})
+	}
+}
+
+func TestUnpackStateStreamPropagatesCallbackError(t *testing.T) {
+	data := encodeStatePack(10, []StateEntry{
+		{Index: [32]byte{1}, Data: []byte{1}},
+		{Index: [32]byte{2}, Data: []byte{2}},
+	})
+	sentinel := errors.New("callback failed")
+	calls := 0
+	err := unpackStateStream(
+		context.Background(),
+		bytes.NewReader(data),
+		statePackExpectation{seq: 10, count: 2, size: int64(len(data))},
+		func([32]byte, []byte) error {
+			calls++
+			return sentinel
+		},
+	)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("error = %v, want callback error", err)
+	}
+	if calls != 1 {
+		t.Fatalf("callback calls = %d, want 1", calls)
+	}
+}
+
+func TestIndexLedgerPackRejectsMalformedEnvelope(t *testing.T) {
+	_, valid := ledgerFixture(t)
+	for _, data := range [][]byte{
+		valid[:len(valid)-1],
+		append(bytes.Clone(valid), 0),
+		func() []byte { b := bytes.Clone(valid); binary.BigEndian.PutUint32(b[14:18], math.MaxUint32); return b }(),
+		func() []byte {
+			b := bytes.Clone(valid)
+			binary.BigEndian.PutUint64(b[6:14], uint64(math.MaxUint32)+1)
+			return b
+		}(),
+	} {
+		if _, err := indexLedgerPack(data); !errors.Is(err, errPack) {
+			t.Fatalf("indexLedgerPack error = %v, want malformed pack", err)
+		}
+	}
+}
+
+func FuzzIndexLedgerPack(f *testing.F) {
+	_, seed := ledgerFixtureForFuzz()
+	f.Add(seed)
+	f.Add([]byte(packMagic))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_, _ = indexLedgerPack(data)
+	})
+}
+
+func ledgerFixtureForFuzz() (*LedgerSnapshot, []byte) {
+	return nil, []byte{packMagic[0], packMagic[1], packMagic[2], packMagic[3], packVersion, kindLedger}
+}
+
+func FuzzUnpackStateStream(f *testing.F) {
+	seed := encodeStatePack(1, nil)
+	f.Add(seed, uint32(0), int64(len(seed)))
+	f.Add([]byte(packMagic), uint32(math.MaxUint32), int64(packEnvelopeLen))
+	f.Fuzz(func(t *testing.T, data []byte, count uint32, size int64) {
+		_ = unpackStateStream(context.Background(), bytes.NewReader(data), statePackExpectation{seq: 1, count: count, size: size}, func([32]byte, []byte) error { return nil })
+	})
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/require"
 )
@@ -26,8 +27,12 @@ func newSpecialDispatchHarness(t *testing.T) (*WebSocketServer, *websocketConnec
 	ws.methodRegistry.Register("path_find", &stubHandler{})
 	send := make(chan []byte, 1)
 	conn := &websocketConnection{
-		Connection: types.NewConnectionWithContext(context.Background(), "special-dispatch", send),
+		Connection: subscription.NewConnectionWithContext(context.Background(), "special-dispatch", send),
 	}
+	registration, attached := ws.subscriptionManager.Attach(conn.Connection)
+	require.True(t, attached)
+	conn.registration = registration
+	t.Cleanup(func() { ws.subscriptionManager.Detach(registration) })
 	ctx := newRpcContext(context.Background(), types.RoleGuest, types.DefaultApiVersion, "192.0.2.1", nil, services)
 	consumer := manager.NewInboundEndpoint(ctx.ClientIP)
 	require.NotNil(t, consumer)
@@ -42,7 +47,7 @@ func newSpecialDispatchHarness(t *testing.T) (*WebSocketServer, *websocketConnec
 func specialDispatchResponse(t *testing.T, conn *websocketConnection) map[string]any {
 	t.Helper()
 	select {
-	case body := <-conn.SendChannel:
+	case body := <-conn.Outbound():
 		var response map[string]any
 		if err := json.Unmarshal(body, &response); err != nil {
 			t.Fatalf("decode response %s: %v", body, err)
@@ -280,8 +285,8 @@ func TestWebSocketSubscribeBothSidesAlias(t *testing.T) {
 	if rpcErr != nil {
 		t.Fatalf("subscribe error = %v", rpcErr)
 	}
-	books := conn.Subscriptions[types.SubBook].Books
-	if len(books) != 2 {
-		t.Fatalf("book subscriptions = %d, want 2", len(books))
+	books := conn.registration.Snapshot().BookCount()
+	if books != 2 {
+		t.Fatalf("book subscriptions = %d, want 2", books)
 	}
 }

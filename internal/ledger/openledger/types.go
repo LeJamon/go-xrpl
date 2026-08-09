@@ -7,6 +7,7 @@ package openledger
 
 import (
 	"bytes"
+	"fmt"
 	"sort"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -71,11 +72,12 @@ func ParsePendingTx(blob []byte) (PendingTx, error) {
 
 	common := transaction.GetCommon()
 
-	var accountID [20]byte
 	_, accountBytes, decErr := addresscodec.DecodeClassicAddressToAccountID(common.Account)
-	if decErr == nil && len(accountBytes) == 20 {
-		copy(accountID[:], accountBytes)
+	if decErr != nil || len(accountBytes) != 20 {
+		return PendingTx{}, fmt.Errorf("invalid transaction account %q", common.Account)
 	}
+	var accountID [20]byte
+	copy(accountID[:], accountBytes)
 
 	txHash, hashErr := tx.ComputeTransactionHash(transaction)
 	if hashErr != nil {
@@ -177,17 +179,18 @@ func computeAccountKey(account [20]byte, salt [32]byte) [32]byte {
 // ComputeSalt builds the RCLTxSet SHAMap (TypeTransaction, tnTRANSACTION_NM
 // keyed by tx hash) and returns its root — the value rippled passes as the
 // CanonicalTXSet salt on the consensus-build path. Insertion-order-
-// independent. Returns the zero hash on construction failure;
-// CanonicalSort remains deterministic via (sequence, txID) tiebreakers.
+// independent. Construction and hashing errors are returned to the caller.
 // Reference: rippled RCLConsensus.cpp:512, RCLCxTx.h:62-90.
-func ComputeSalt(txs []PendingTx) [32]byte {
+func ComputeSalt(txs []PendingTx) ([32]byte, error) {
 	txMap := shamap.New(shamap.TypeTransaction)
 	for _, ptx := range txs {
-		_ = txMap.PutWithNodeType(ptx.Hash, ptx.Blob, shamap.NodeTypeTransactionNoMeta)
+		if err := txMap.PutWithNodeType(ptx.Hash, ptx.Blob, shamap.NodeTypeTransactionNoMeta); err != nil {
+			return [32]byte{}, fmt.Errorf("insert transaction %x into canonical set: %w", ptx.Hash, err)
+		}
 	}
 	hash, err := txMap.Hash()
 	if err != nil {
-		return [32]byte{}
+		return [32]byte{}, fmt.Errorf("hash canonical transaction set: %w", err)
 	}
-	return hash
+	return hash, nil
 }

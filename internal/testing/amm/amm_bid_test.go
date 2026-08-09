@@ -159,7 +159,7 @@ func TestInvalidBid(t *testing.T) {
 		bidTx := amm.AMMBid(bad, amm.XRP(), env.USD).
 			BidMax(amm.LPTokenAmount(env, amm.XRP(), env.USD, 100)).
 			Build()
-		result := env.Submit(jtx.WithSeq(bidTx, 1))
+		result := env.SubmitWithOptions(jtx.WithSeq(bidTx, 1), jtx.SubmitOptions{SkipSignature: true})
 
 		if result.Success {
 			t.Fatal("Should not allow bid from non-existent account")

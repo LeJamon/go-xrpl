@@ -115,6 +115,28 @@ func TestDelegate_OrdinaryPaymentEffectsAndFeePayer(t *testing.T) {
 	require.Equal(t, bobSequence, env.Seq(bob))
 }
 
+func TestDelegate_OrdinarySubmitUsesDelegateRegularKey(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	env.EnableFeature("PermissionDelegationV1_1")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	regularKey := jtx.NewAccount("regularKey")
+	carol := jtx.NewAccount("carol")
+	env.Fund(alice, bob, regularKey, carol)
+	env.Close()
+
+	jtx.RequireTxSuccess(t, grantPermissions(env, alice, bob, "Payment"))
+	env.SetRegularKey(bob, regularKey)
+	env.DisableMasterKey(bob)
+	env.Close()
+
+	env.SetVerifySignatures(true)
+	payment := paymenttx.NewPayment(alice.Address, carol.Address, tx.NewXRPAmount(1_000_000))
+	payment.Delegate = bob.Address
+	jtx.RequireTxSuccess(t, env.Submit(payment))
+	require.Equal(t, regularKey.PublicKeyHex(), payment.SigningPubKey)
+}
+
 func TestDelegate_DeniedPaymentIsAtomic(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	env.EnableFeature("PermissionDelegationV1_1")

@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 
@@ -86,7 +87,8 @@ type ApplyConfig struct {
 	// Reference: rippled Application::buildLedger reads
 	// previousLedger->rules() and threads it through; no equivalent
 	// "all-on" fallback exists there.
-	Rules *amendment.Rules
+	Rules                 *amendment.Rules
+	NumberContextOverride *state.NumberContext
 	// ApplyFlags is the engine ApplyFlags driving this submission.
 	// Mirrors rippled NetworkOPs::apply which threads its flags into
 	// TxQ::canBeHeld (TxQ.cpp:393-399 rejects tapFAIL_HARD).
@@ -175,6 +177,7 @@ func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte
 		Logger:                    cfg.Logger,
 		SkipSignatureVerification: cfg.SkipSignatureVerification,
 		Rules:                     cfg.Rules,
+		NumberContextOverride:     cfg.NumberContextOverride,
 		ApplyFlags:                cfg.ApplyFlags,
 		FeeTrack:                  cfg.FeeTrack,
 		ViewOpen:                  cfg.Mode == OpenLedgerMode,
@@ -262,6 +265,7 @@ func applyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 			Logger:                    cfg.Logger,
 			SkipSignatureVerification: skipSig,
 			Rules:                     cfg.Rules,
+			NumberContextOverride:     cfg.NumberContextOverride,
 			ApplyFlags:                cfg.ApplyFlags,
 			FeeTrack:                  cfg.FeeTrack,
 			ViewOpen:                  cfg.Mode == OpenLedgerMode,

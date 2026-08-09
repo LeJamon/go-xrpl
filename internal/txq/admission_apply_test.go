@@ -59,7 +59,9 @@ type stubApplyCtx struct {
 	balanceErr  error
 	reserve     uint64
 	exists      bool
+	existsErr   error
 	tickets     map[uint32]bool
+	ticketErr   error
 	baseFee     uint64
 	txInLedger  uint32
 	ledgerSeq   uint32
@@ -83,13 +85,13 @@ func (c *stubApplyCtx) GetAccountSequence([20]byte) (uint32, error) {
 	c.observeRead()
 	return c.seq, c.sequenceErr
 }
-func (c *stubApplyCtx) AccountExists([20]byte) bool {
+func (c *stubApplyCtx) AccountExists([20]byte) (bool, error) {
 	c.observeRead()
-	return c.exists
+	return c.exists, c.existsErr
 }
-func (c *stubApplyCtx) TicketExists(_ [20]byte, t uint32) bool {
+func (c *stubApplyCtx) TicketExists(_ [20]byte, t uint32) (bool, error) {
 	c.observeRead()
-	return c.tickets[t]
+	return c.tickets[t], c.ticketErr
 }
 func (c *stubApplyCtx) GetAccountBalance([20]byte) (uint64, error) {
 	c.observeRead()
@@ -760,12 +762,34 @@ func TestApplyAccountRootReadErrorsAreFatal(t *testing.T) {
 				baseFee:    10,
 			},
 		},
+		{
+			name: "existence",
+			ctx: &stubApplyCtx{
+				seq:       4,
+				existsErr: errors.New("existence read failed"),
+				baseFee:   10,
+			},
+		},
+		{
+			name: "ticket existence",
+			ctx: &stubApplyCtx{
+				seq:        4,
+				exists:     true,
+				ticketErr:  errors.New("ticket read failed"),
+				baseFee:    10,
+				txInLedger: 100,
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			q := mustNew(makeAdmissionConfig())
-			res := q.Apply(tt.ctx, &seqTx{seq: 5, fee: "10"}, [32]byte{0xEF}, [20]byte{9})
+			transaction := &seqTx{seq: 5, fee: "10"}
+			if tt.name == "ticket existence" {
+				transaction.ticket = 5
+			}
+			res := q.Apply(tt.ctx, transaction, [32]byte{0xEF}, [20]byte{9})
 			require.Equal(t, ter.TefINTERNAL, res.Result)
 			require.False(t, res.Applied)
 			require.False(t, res.Queued)

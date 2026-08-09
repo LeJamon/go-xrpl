@@ -219,7 +219,7 @@ func (r *replayRangeRunner) processBlockShared(
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading amendments: %w", err)
 	}
-	transactions, err := client.Transactions(ctx, targetLedger)
+	transactions, err := client.Transactions(ctx, postSnapshot)
 	if err != nil {
 		return nil, nil, fmt.Errorf("getting transactions: %w", err)
 	}
@@ -228,7 +228,7 @@ func (r *replayRangeRunner) processBlockShared(
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		if transaction.TxIndex != i {
+		if transaction.TxIndex != uint32(i) {
 			return nil, nil, fmt.Errorf("ledger %d transaction indices are not contiguous: position %d has %d", targetLedger, i, transaction.TxIndex)
 		}
 		parsed, err := txengine.ParseAndPrepare(transaction.TxBlob)

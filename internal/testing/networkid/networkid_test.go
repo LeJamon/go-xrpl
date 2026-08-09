@@ -97,7 +97,7 @@ func TestNetworkID_DevNet1025(t *testing.T) {
 	// No NetworkID → telREQUIRES_NETWORK_ID
 	t.Run("No NetworkID fails", func(t *testing.T) {
 		noop := account.NewAccountSet(alice.Address)
-		result := env.Submit(noop)
+		result := env.SubmitWithOptions(noop, jtx.SubmitOptions{SkipNetworkID: true})
 		jtx.RequireTxFail(t, result, "telREQUIRES_NETWORK_ID")
 	})
 

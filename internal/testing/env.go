@@ -1,13 +1,18 @@
 package jtx
 
 import (
+	"bytes"
+	"fmt"
+	"math"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/localtxs"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
@@ -23,18 +28,14 @@ import (
 type TestEnv struct {
 	// t is the active testing.TB used for Helper / Fatalf / Cleanup, captured at
 	// construction. testing.TB is an interface so both *testing.T and *testing.B work.
-	t        testing.TB
-	ledger   *ledger.Ledger
-	clock    *ManualClock
-	accounts map[string]*Account
+	t                 testing.TB
+	ledger            *ledger.Ledger
+	clock             *ManualClock
+	accounts          map[string]*Account
+	accountsByAddress map[string]*Account
 
 	// Genesis ledger reference
 	genesisLedger *ledger.Ledger
-
-	// Lightweight ledger history: sequence -> state map root hash.
-	// Matches rippled's LedgerHistory pattern -- stores only hashes, not full objects.
-	// Past state can be reconstructed on demand via NewFromRootHash(hash, family).
-	ledgerRootHashes map[uint32][32]byte
 
 	// Current ledger sequence
 	currentSeq uint32
@@ -123,30 +124,12 @@ type TestEnv struct {
 	// for every normal submission.
 	invariantViolationHook txengine.InvariantViolationHook
 
-	// closingTxTotal tracks outer transactions and committed Batch inners, matching
-	// the entries rippled inserts into the closed transaction map.
-	closingTxTotal uint32
-
-	// closingFeeTransactions retains the exact outer and committed inner entries
-	// whose fee levels are recomputed against the final closed view.
-	closingFeeTransactions []tx.Transaction
-
-	// pendingBatchApplies contains successful outer Batch transactions admitted
-	// through TxQ. Their inners run only when the ledger is built on Close.
-	pendingBatchApplies []pendingBatchApply
-
 	// heldTxns stores transactions that hit a retryable (ter*) result because of a
 	// sequence gap. They are retried mid-window once a transaction for the same
 	// account succeeds, mirroring rippled's mHeldTransactions. Keyed by account.
 	heldTxns map[string][]tx.Transaction
 
-	// localTxns stores TxQ-owned transactions: successfully queued entries and tel*
-	// (local) rejections. Like rippled's m_localTX, they are replayed only when a
-	// new open ledger is built at close, never mid-window — holding them out of the
-	// mid-window retry stops a queued entry from bypassing the queue into the open
-	// ledger when the load floor drops (double-charging / consuming reserved
-	// tickets). Keyed by account.
-	localTxns map[string][]tx.Transaction
+	localTxs *localtxs.LocalTxs
 
 	// replayOnClose enables the open-ledger consensus replay behavior.
 	// When true, Close() rebuilds the closed ledger from the parent
@@ -161,29 +144,13 @@ type TestEnv struct {
 	//   prerequisite objects are created by batch transactions
 	//
 	// Reference: rippled BuildLedger.cpp applyTransactions()
-	replayOnClose bool
-
-	// openLedgerSetupTxns tracks fund/trust setup transactions submitted
-	// to the current open ledger. Applied first during replay (in submission
-	// order) to ensure prerequisites (accounts, trust lines) exist before
-	// user transactions are replayed in canonical order.
-	openLedgerSetupTxns []tx.Transaction
-
-	// openLedgerUserTxns tracks fixture/user transactions submitted to the
-	// current open ledger. Applied second during replay in canonical sorted
-	// order (sortCanonicalSalted), matching rippled's CanonicalTXSet.
-	openLedgerUserTxns []tx.Transaction
-
-	// inSetupMode indicates whether the current transactions are setup
-	// operations (fund/trust). When true, transactions are routed to
-	// openLedgerSetupTxns; when false, to openLedgerUserTxns.
-	inSetupMode bool
+	replayOnClose       bool
+	needsConsensusBuild bool
 
 	// lastClosedLedger stores the most recent closed ledger, used as the
 	// parent for replay-on-close. Updated in Close().
 	lastClosedLedger *ledger.Ledger
 
-	// nextCloseSalt overrides the canonical sort salt for the next closeWithReplay.
 	// Set from the fixture's tx_set_hash field to match rippled's exact ordering.
 	// Cleared after use.
 	nextCloseSalt *[32]byte
@@ -192,61 +159,10 @@ type TestEnv struct {
 // NewTestEnv creates a new test environment with a genesis ledger.
 func NewTestEnv(t testing.TB) *TestEnv {
 	t.Helper()
-
-	// Ensure every transaction type is registered before tests run.
-	// Idempotent — safe to call from any test environment constructor.
-	all.RegisterAll()
-
-	// Create genesis ledger with test configuration matching rippled's test env
-	// (200 XRP base reserve, 50 XRP increment -- see rippled/src/test/jtx/impl/envconfig.cpp)
 	genesisConfig := genesis.DefaultConfig()
 	genesisConfig.Fees.ReserveBase = drops.DropsPerXRP * 200     // 200 XRP
 	genesisConfig.Fees.ReserveIncrement = drops.DropsPerXRP * 50 // 50 XRP
-	genesisResult, err := genesis.Create(genesisConfig)
-	if err != nil {
-		t.Fatalf("Failed to create genesis ledger: %v", err)
-	}
-
-	// Note: drops.Fees has unexported fields, so we use a zero value
-	var fees drops.Fees
-	genesisLedger, err := ledger.FromGenesis(
-		genesisResult.Header,
-		genesisResult.StateMap,
-		genesisResult.TxMap,
-		fees,
-	)
-	if err != nil {
-		t.Fatalf("Failed to construct genesis ledger: %v", err)
-	}
-
-	clock := NewManualClock()
-	openLedger, err := ledger.NewOpen(genesisLedger, clock.Now())
-	if err != nil {
-		t.Fatalf("Failed to create open ledger: %v", err)
-	}
-
-	env := &TestEnv{
-		t:                t,
-		ledger:           openLedger,
-		clock:            clock,
-		accounts:         make(map[string]*Account),
-		genesisLedger:    genesisLedger,
-		ledgerRootHashes: make(map[uint32][32]byte),
-		currentSeq:       2,
-		baseFee:          10,
-		reserveBase:      200_000_000, // 200 XRP (matches rippled test env)
-		reserveIncrement: 50_000_000,  // 50 XRP (matches rippled test env)
-		// Initialize with all supported amendments enabled (like rippled's testable_amendments())
-		rulesBuilder: amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported),
-		openLedger:   true, // Normal test mode: check fee adequacy
-		feeTrack:     feetrack.New(),
-	}
-
-	// Register master account
-	master := MasterAccount()
-	env.accounts[master.Name] = master
-
-	return env
+	return newTestEnv(t, genesisConfig)
 }
 
 // NewTestEnvWithTxQ creates a test environment with a transaction queue.
@@ -295,7 +211,11 @@ func (e *TestEnv) enablePebbleBacking(t testing.TB) {
 	if err != nil {
 		t.Fatalf("Failed to create state family: %v", err)
 	}
-	t.Cleanup(func() { stateFamily.Close() })
+	t.Cleanup(func() {
+		if err := stateFamily.Close(); err != nil {
+			t.Errorf("close state family: %v", err)
+		}
+	})
 	e.stateFamily = stateFamily
 	e.genesisLedger.SetStateMapFamily(stateFamily)
 
@@ -310,9 +230,29 @@ func (e *TestEnv) enablePebbleBacking(t testing.TB) {
 // NewTestEnvWithConfig creates a new test environment with custom genesis configuration.
 func NewTestEnvWithConfig(t testing.TB, cfg genesis.Config) *TestEnv {
 	t.Helper()
+	return newTestEnv(t, cfg)
+}
 
+func newTestEnv(t testing.TB, cfg genesis.Config) *TestEnv {
+	t.Helper()
 	// Ensure every transaction type is registered before tests run.
 	all.RegisterAll()
+	baseFee := cfg.Fees.BaseFee.Drops()
+	reserveBase := cfg.Fees.ReserveBase.Drops()
+	reserveIncrement := cfg.Fees.ReserveIncrement.Drops()
+	if baseFee < 0 || reserveBase < 0 || reserveIncrement < 0 {
+		t.Fatal("genesis fees cannot be negative")
+	}
+	modernFees := false
+	for _, feature := range cfg.Amendments {
+		if feature == amendment.FeatureXRPFees {
+			modernFees = true
+			break
+		}
+	}
+	if !modernFees && (reserveBase > math.MaxUint32 || reserveIncrement > math.MaxUint32) {
+		t.Fatal("legacy genesis reserves exceed uint32")
+	}
 
 	genesisResult, err := genesis.Create(cfg)
 	if err != nil {
@@ -338,25 +278,78 @@ func NewTestEnvWithConfig(t testing.TB, cfg genesis.Config) *TestEnv {
 	}
 
 	env := &TestEnv{
-		t:                t,
-		ledger:           openLedger,
-		clock:            clock,
-		accounts:         make(map[string]*Account),
-		genesisLedger:    genesisLedger,
-		ledgerRootHashes: make(map[uint32][32]byte),
-		currentSeq:       2,
-		baseFee:          uint64(cfg.Fees.BaseFee.Drops()),
-		reserveBase:      uint64(cfg.Fees.ReserveBase.Drops()),
-		reserveIncrement: uint64(cfg.Fees.ReserveIncrement.Drops()),
+		t:                 t,
+		ledger:            openLedger,
+		clock:             clock,
+		accounts:          make(map[string]*Account),
+		accountsByAddress: make(map[string]*Account),
+		genesisLedger:     genesisLedger,
+		lastClosedLedger:  genesisLedger,
+		currentSeq:        2,
+		baseFee:           uint64(baseFee),
+		reserveBase:       uint64(reserveBase),
+		reserveIncrement:  uint64(reserveIncrement),
 		// Initialize with all supported amendments enabled (like rippled's testable_amendments())
 		rulesBuilder: amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported),
 		openLedger:   true, // Normal test mode: check fee adequacy
 		feeTrack:     feetrack.New(),
+		localTxs:     localtxs.New(),
 	}
 	master := MasterAccount()
-	env.accounts[master.Name] = master
+	if err := env.registerAccount(master); err != nil {
+		t.Fatalf("register master account: %v", err)
+	}
 
 	return env
+}
+
+func (e *TestEnv) registerAccount(account *Account) error {
+	if account == nil {
+		return fmt.Errorf("cannot register nil account")
+	}
+	_, decoded, err := addresscodec.DecodeClassicAddressToAccountID(account.Address)
+	if err != nil || len(decoded) != len(account.ID) {
+		return fmt.Errorf("account %q has invalid classic address %q", account.Name, account.Address)
+	}
+	if !bytes.Equal(decoded, account.ID[:]) {
+		return fmt.Errorf("account %q address does not match its account ID", account.Name)
+	}
+	byName := e.accounts[account.Name]
+	if byName != nil && !sameAccountIdentity(byName, account) {
+		return fmt.Errorf("account name %q is already registered with different credentials", account.Name)
+	}
+	byAddress := e.accountsByAddress[account.Address]
+	if byAddress != nil && !sameAccountIdentity(byAddress, account) {
+		return fmt.Errorf("account address %s is already registered with different credentials", account.Address)
+	}
+	if byName != nil {
+		e.accountsByAddress[account.Address] = byName
+		return nil
+	}
+	if byAddress != nil {
+		e.accounts[account.Name] = byAddress
+		return nil
+	}
+	e.accounts[account.Name] = account
+	e.accountsByAddress[account.Address] = account
+	return nil
+}
+
+// Memoize registers an account's fixture identity without funding it.
+func (e *TestEnv) Memoize(account *Account) {
+	e.t.Helper()
+	if err := e.registerAccount(account); err != nil {
+		e.t.Fatalf("memoize account: %v", err)
+	}
+}
+
+func sameAccountIdentity(left, right *Account) bool {
+	return left != nil && right != nil &&
+		left.Address == right.Address &&
+		left.ID == right.ID &&
+		left.KeyType == right.KeyType &&
+		bytes.Equal(left.PublicKey, right.PublicKey) &&
+		bytes.Equal(left.PrivateKey, right.PrivateKey)
 }
 
 // SetOpenLedger controls whether the engine checks fee adequacy.
@@ -407,8 +400,10 @@ func (e *TestEnv) ReinitializeTxQ() {
 // SetBaseFee changes the base fee for subsequent transactions.
 // Used to apply post-initFee() fee changes in conformance tests.
 func (e *TestEnv) SetBaseFee(baseFee uint64) {
+	if err := e.writeFeeSettings(baseFee, e.reserveBase, e.reserveIncrement); err != nil {
+		e.t.Fatalf("set base fee: %v", err)
+	}
 	e.baseFee = baseFee
-	e.syncFeeSettings()
 }
 
 // FeeTrack returns the environment's LoadFeeTrack so conformance fixtures
@@ -437,9 +432,11 @@ func (e *TestEnv) ResetLoadFee() {
 // SetReserves changes the reserve base and increment for subsequent transactions.
 // Used to apply post-initFee() reserve changes in conformance tests.
 func (e *TestEnv) SetReserves(reserveBase, reserveIncrement uint64) {
+	if err := e.writeFeeSettings(e.baseFee, reserveBase, reserveIncrement); err != nil {
+		e.t.Fatalf("set reserves: %v", err)
+	}
 	e.reserveBase = reserveBase
 	e.reserveIncrement = reserveIncrement
-	e.syncFeeSettings()
 }
 
 // syncFeeSettings writes the env's current fee/reserve values into the ledger's
@@ -448,34 +445,43 @@ func (e *TestEnv) SetReserves(reserveBase, reserveIncrement uint64) {
 // SetBaseFee/SetReserves, so without this sync the engine (which reads reserves
 // from the FeeSettings object, e.g. payment.GetLedgerReserves) would keep seeing
 // the stale genesis values and misclassify offers as unfunded.
-func (e *TestEnv) syncFeeSettings() {
+func (e *TestEnv) writeFeeSettings(baseFee, reserveBase, reserveIncrement uint64) error {
 	feesKey := keylet.Fees()
 	data, err := e.ledger.Read(feesKey)
-	if err != nil || len(data) == 0 {
-		return
+	if err != nil {
+		return fmt.Errorf("read FeeSettings: %w", err)
+	}
+	if len(data) == 0 {
+		return fmt.Errorf("read FeeSettings: entry is missing")
 	}
 	fs, err := state.ParseFeeSettings(data)
 	if err != nil {
-		return
+		return fmt.Errorf("parse FeeSettings: %w", err)
 	}
 	if fs.XRPFeesMode {
-		fs.BaseFeeDrops = e.baseFee
-		fs.ReserveBaseDrops = e.reserveBase
-		fs.ReserveIncrementDrops = e.reserveIncrement
+		fs.BaseFeeDrops = baseFee
+		fs.ReserveBaseDrops = reserveBase
+		fs.ReserveIncrementDrops = reserveIncrement
 	} else {
-		fs.BaseFee = e.baseFee
-		fs.ReserveBase = uint32(e.reserveBase)
-		fs.ReserveIncrement = uint32(e.reserveIncrement)
+		if reserveBase > uint64(^uint32(0)) || reserveIncrement > uint64(^uint32(0)) {
+			return fmt.Errorf("legacy FeeSettings reserves exceed uint32")
+		}
+		fs.BaseFee = baseFee
+		fs.ReserveBase = uint32(reserveBase)
+		fs.ReserveIncrement = uint32(reserveIncrement)
 	}
 	newData, err := state.SerializeFeeSettings(fs)
 	if err != nil {
-		return
+		return fmt.Errorf("serialize FeeSettings: %w", err)
 	}
-	_ = e.ledger.Update(feesKey, newData)
+	if err := e.ledger.Update(feesKey, newData); err != nil {
+		return fmt.Errorf("update FeeSettings: %w", err)
+	}
+	return nil
 }
 
 // SetNextCloseSalt sets the canonical sort salt for the next replay close.
-// When set, closeWithReplay() uses this salt instead of computing one from
+// When set, the closed-ledger build uses this salt instead of computing one from
 // the transaction set. Cleared after use.
 func (e *TestEnv) SetNextCloseSalt(salt [32]byte) {
 	e.nextCloseSalt = &salt

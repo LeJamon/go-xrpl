@@ -27,12 +27,30 @@ import (
 // Reference: rippled src/test/jtx/impl/directory.cpp bumpLastPage()
 func (e *TestEnv) BumpDirectoryLastPage(acc *Account, targetPage uint64, adjustField string) error {
 	e.t.Helper()
+	staged, err := e.ledger.MutableSnapshotUnflushed()
+	if err != nil {
+		return fmt.Errorf("snapshot directory mutation: %w", err)
+	}
+	stagedEnv := *e
+	stagedEnv.ledger = staged
+	if err := stagedEnv.bumpDirectoryLastPage(acc, targetPage, adjustField); err != nil {
+		return err
+	}
+	if err := e.ledger.AdoptState(staged); err != nil {
+		return fmt.Errorf("commit directory mutation: %w", err)
+	}
+	return nil
+}
 
+func (e *TestEnv) bumpDirectoryLastPage(acc *Account, targetPage uint64, adjustField string) error {
 	dirRootKey := keylet.OwnerDir(acc.ID)
 
 	// Read the root directory page
 	rootData, err := e.ledger.Read(dirRootKey)
-	if err != nil || rootData == nil {
+	if err != nil {
+		return fmt.Errorf("failed to read directory root: %w", err)
+	}
+	if rootData == nil {
 		return fmt.Errorf("directory root not found")
 	}
 	root, err := state.ParseDirectoryNode(rootData)
@@ -46,6 +64,14 @@ func (e *TestEnv) BumpDirectoryLastPage(acc *Account, targetPage uint64, adjustF
 		return fmt.Errorf("directory too small (only root page)")
 	}
 
+	targetKey := keylet.DirPage(dirRootKey.Key, targetPage)
+	targetExists, err := e.ledger.Exists(targetKey)
+	if err != nil {
+		return fmt.Errorf("failed to check target page %d: %w", targetPage, err)
+	}
+	if targetExists {
+		return fmt.Errorf("target page %d already exists", targetPage)
+	}
 	if lastIndex >= targetPage {
 		return fmt.Errorf("target page %d must be greater than current last page %d", targetPage, lastIndex)
 	}
@@ -53,7 +79,10 @@ func (e *TestEnv) BumpDirectoryLastPage(acc *Account, targetPage uint64, adjustF
 	// Read the last page
 	lastPageKey := keylet.DirPage(dirRootKey.Key, lastIndex)
 	lastPageData, err := e.ledger.Read(lastPageKey)
-	if err != nil || lastPageData == nil {
+	if err != nil {
+		return fmt.Errorf("failed to read last page %d: %w", lastIndex, err)
+	}
+	if lastPageData == nil {
 		return fmt.Errorf("last page %d not found", lastIndex)
 	}
 	lastPage, err := state.ParseDirectoryNode(lastPageData)
@@ -71,11 +100,11 @@ func (e *TestEnv) BumpDirectoryLastPage(acc *Account, targetPage uint64, adjustF
 	}
 
 	// Create new page at targetPage with the same entries
-	newPageKey := keylet.DirPage(dirRootKey.Key, targetPage)
+	newPageKey := targetKey
 	newPage := &state.DirectoryNode{
 		RootIndex: dirRootKey.Key,
 		Indexes:   indexes,
-		Owner:     root.Owner,
+		Owner:     lastPage.Owner,
 	}
 	// Mirror the original last page's link presence: rippled sets IndexPrevious
 	// via setFieldU64 only when non-zero (a page whose previous is the root
@@ -110,7 +139,10 @@ func (e *TestEnv) BumpDirectoryLastPage(acc *Account, targetPage uint64, adjustF
 	if prevIndex != 0 {
 		prevPageKey := keylet.DirPage(dirRootKey.Key, prevIndex)
 		prevPageData, err := e.ledger.Read(prevPageKey)
-		if err != nil || prevPageData == nil {
+		if err != nil {
+			return fmt.Errorf("failed to read previous page %d: %w", prevIndex, err)
+		}
+		if prevPageData == nil {
 			return fmt.Errorf("previous page %d not found", prevIndex)
 		}
 		prevPage, err := state.ParseDirectoryNode(prevPageData)
@@ -139,8 +171,11 @@ func (e *TestEnv) BumpDirectoryLastPage(acc *Account, targetPage uint64, adjustF
 	for _, itemKey := range indexes {
 		itemKeylet := keylet.Keylet{Key: itemKey}
 		itemData, err := e.ledger.Read(itemKeylet)
-		if err != nil || itemData == nil {
-			continue // Skip entries that can't be read
+		if err != nil {
+			return fmt.Errorf("failed to read moved entry %x: %w", itemKey, err)
+		}
+		if itemData == nil {
+			return fmt.Errorf("moved entry %x not found", itemKey)
 		}
 
 		updated, err := updateDirNodeFields(itemData, adjustField, lastIndex, targetPage)
@@ -173,12 +208,22 @@ func updateDirNodeFields(data []byte, fieldName string, oldPage, newPage uint64)
 	newValue := tx.FormatUint64Hex(newPage)
 	adjusted := 0
 	if fieldName != "" {
-		if _, ok := jsonMap[fieldName]; !ok {
+		value, ok := jsonMap[fieldName]
+		if !ok {
 			return nil, fmt.Errorf("field %s not present on moved entry", fieldName)
+		}
+		encoded, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("field %s is not a UInt64", fieldName)
+		}
+		current, err := strconv.ParseUint(encoded, 16, 64)
+		if err != nil || current != oldPage {
+			return nil, fmt.Errorf("field %s does not point at page %d", fieldName, oldPage)
 		}
 		jsonMap[fieldName] = newValue
 		adjusted++
 	} else {
+		var match string
 		for k, v := range jsonMap {
 			if !strings.HasSuffix(k, "Node") {
 				continue
@@ -191,8 +236,14 @@ func updateDirNodeFields(data []byte, fieldName string, oldPage, newPage uint64)
 			if err != nil || cur != oldPage {
 				continue
 			}
-			jsonMap[k] = newValue
+			match = k
 			adjusted++
+		}
+		if adjusted > 1 {
+			return nil, fmt.Errorf("multiple directory node fields point at page %d", oldPage)
+		}
+		if adjusted == 1 {
+			jsonMap[match] = newValue
 		}
 	}
 	if adjusted == 0 {

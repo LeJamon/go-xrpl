@@ -238,7 +238,7 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 
 	// Connect to database
 	fmt.Fprintln(r.out, "[1/3] Connecting to database...")
-	client, err := statecompare.NewClientFromEnv()
+	client, err := statecompare.NewClientFromEnv(ctx)
 	if err != nil {
 		return fmt.Errorf("connecting to database: %w", err)
 	}
@@ -498,7 +498,7 @@ func recordDivergenceAndReset(
 		return stageErr
 	}
 
-	corrected, verified, err := reconstructMainnetState(ctx, client, preState, ledgerIndex, result.ExpectedAccountHash, result.Rules)
+	corrected, verified, err := reconstructMainnetState(ctx, client, preState, result.PostSnapshot, result.Rules)
 	if err != nil {
 		return nil, fmt.Errorf("reconstructing mainnet state: %w", writeFailedFinding(false, "reconstruction failed", err))
 	}
@@ -547,7 +547,7 @@ func loadInitialState(ctx context.Context, client *statecompare.Client, ledgerIn
 	// Stream the state pack into the map so the whole pack and the full entry
 	// slice are never materialized in RAM at once.
 	stateMap := shamap.New(shamap.TypeState)
-	if err := client.StreamStateEntries(ctx, ledgerIndex, func(entry statecompare.StateEntry) error {
+	if err := client.StreamStateEntries(ctx, snapshot, func(entry statecompare.StateEntry) error {
 		if err := stateMap.Put(entry.Index, entry.Data); err != nil {
 			return fmt.Errorf("injecting entry: %w", err)
 		}

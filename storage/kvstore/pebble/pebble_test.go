@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
 	"github.com/LeJamon/go-xrpl/storage/kvstore/kvstoretest"
 	"github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
+	cockroachpebble "github.com/cockroachdb/pebble"
 )
 
 // The ledger-persist fsync path depends on the store exposing a real Sync;
@@ -56,6 +57,41 @@ func TestStorePersistence(t *testing.T) {
 	}
 	if !bytes.Equal(got, []byte("value")) {
 		t.Fatalf("Get after reopen = %q, want %q", got, "value")
+	}
+}
+
+func TestReadOnlyStoreSupportsConcurrentOpens(t *testing.T) {
+	dir := t.TempDir()
+	writable, err := pebble.New(dir, pebble.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writable.Put([]byte("key"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := pebble.NewReadOnly(dir, pebble.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := pebble.NewReadOnly(dir, pebble.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+
+	for _, store := range []*pebble.Store{first, second} {
+		value, err := store.Get([]byte("key"))
+		if err != nil || string(value) != "value" {
+			t.Fatalf("Get = %q, %v", value, err)
+		}
+		if err := store.Put([]byte("key"), []byte("changed")); !errors.Is(err, cockroachpebble.ErrReadOnly) {
+			t.Fatalf("Put error = %v, want read-only", err)
+		}
 	}
 }
 

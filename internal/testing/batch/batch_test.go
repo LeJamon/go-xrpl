@@ -123,7 +123,7 @@ func TestEnabled(t *testing.T) {
 		p.Fee = fmt.Sprintf("%d", env.BaseFee())
 		p.SigningPubKey = "" // inner batch format, but submitted directly
 
-		result := env.Submit(p)
+		result := env.SubmitWithOptions(p, jtx.SubmitOptions{SkipSignature: true})
 		jtx.RequireTxFail(t, result, "temINVALID_FLAG")
 	})
 
@@ -143,7 +143,7 @@ func TestEnabled(t *testing.T) {
 		p.Fee = fmt.Sprintf("%d", env.BaseFee())
 		p.SigningPubKey = ""
 
-		result := env.Submit(p)
+		result := env.SubmitWithOptions(p, jtx.SubmitOptions{SkipSignature: true})
 		jtx.RequireTxFail(t, result, "temINVALID")
 	})
 
@@ -160,7 +160,7 @@ func TestEnabled(t *testing.T) {
 		p.Fee = fmt.Sprintf("%d", env.BaseFee())
 		p.SigningPubKey = ""
 
-		result := env.Submit(p)
+		result := env.SubmitWithOptions(p, jtx.SubmitOptions{SkipSignature: true})
 		jtx.RequireTxFail(t, result, "temINVALID_FLAG")
 	})
 }
@@ -1787,6 +1787,12 @@ func TestBatchTxQueue(t *testing.T) {
 		// maxSize = 6 * 2 = 12. txInLedger = 1 (carol's noop from queue).
 		maxSize := uint64(12)
 		checkMetrics(t, env, 0, &maxSize, 1, 6)
+		closed := env.LastClosedLedger()
+		require.Equal(t, uint32(6), closed.TxCount())
+		root, err := closed.TxMapHash()
+		require.NoError(t, err)
+		require.NotEqual(t, [32]byte{}, root)
+		require.Equal(t, root, closed.Header().TxHash)
 	})
 
 	t.Run("inner batch txns count towards ledger tx count", func(t *testing.T) {

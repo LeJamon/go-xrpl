@@ -18,8 +18,8 @@ func newTestSubscriptionManager() *subscription.Manager {
 }
 
 // newTestConnection creates a new Connection for testing
-func newTestConnection(id string) *types.Connection {
-	return types.NewConnection(id, make(chan []byte, 100))
+func newTestConnection(id string) *subscription.Connection {
+	return subscription.NewConnection(id, make(chan []byte, 100))
 }
 
 // Stream Subscription Tests
@@ -87,13 +87,13 @@ func TestSubscribeStreamTypes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sm := newTestSubscriptionManager()
 			conn := newTestConnection("test-conn-1")
-			sm.AddConnection(conn)
+			_ = testRegistration(t, sm, conn)
 
 			request := types.SubscriptionRequest{
 				Streams: []types.SubscriptionType{tc.streamType},
 			}
 
-			err := sm.HandleSubscribe(conn, request, true)
+			err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 
 			if tc.expectError {
 				require.NotNil(t, err, "Expected error for stream type: %s", tc.streamString)
@@ -102,12 +102,10 @@ func TestSubscribeStreamTypes(t *testing.T) {
 				require.Nil(t, err, "Expected no error for stream type: %s", tc.streamString)
 
 				// Verify subscription was recorded
-				_, exists := conn.Subscriptions[tc.streamType]
-				assert.True(t, exists, "Expected subscription to be recorded for stream: %s", tc.streamString)
+				assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(tc.streamType), "Expected subscription to be recorded for stream: %s", tc.streamString)
 			}
 
 			// Cleanup
-			sm.RemoveConnection(conn.ID)
 		})
 	}
 }
@@ -116,21 +114,19 @@ func TestSubscribeStreamTypes(t *testing.T) {
 func TestSubscribeMultipleStreams(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	request := types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{types.SubLedger, types.SubTransactions, types.SubValidations},
 	}
 
-	err := sm.HandleSubscribe(conn, request, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.Nil(t, err, "Expected no error for multiple valid streams")
 
 	// Verify all subscriptions were recorded
-	assert.Contains(t, conn.Subscriptions, types.SubLedger)
-	assert.Contains(t, conn.Subscriptions, types.SubTransactions)
-	assert.Contains(t, conn.Subscriptions, types.SubValidations)
-
-	sm.RemoveConnection(conn.ID)
+	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubLedger))
+	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubTransactions))
+	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubValidations))
 }
 
 // TestSubscribeInvalidStreamName tests subscribing to an invalid stream name
@@ -172,13 +168,13 @@ func TestSubscribeInvalidStreamName(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sm := newTestSubscriptionManager()
 			conn := newTestConnection("test-conn-1")
-			sm.AddConnection(conn)
+			_ = testRegistration(t, sm, conn)
 
 			request := types.SubscriptionRequest{
 				Streams: []types.SubscriptionType{types.SubscriptionType(tc.streamName)},
 			}
 
-			err := sm.HandleSubscribe(conn, request, true)
+			err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 
 			if tc.expectError {
 				require.NotNil(t, err, "Expected error for invalid stream: %s", tc.streamName)
@@ -187,8 +183,6 @@ func TestSubscribeInvalidStreamName(t *testing.T) {
 				assert.Equal(t, "malformedStream", err.ErrorString)
 				assert.Equal(t, "Stream malformed.", err.Message)
 			}
-
-			sm.RemoveConnection(conn.ID)
 		})
 	}
 }
@@ -206,25 +200,22 @@ func TestSubscribeAccounts(t *testing.T) {
 
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	request := types.SubscriptionRequest{
 		Accounts: validAccounts,
 	}
 
-	err := sm.HandleSubscribe(conn, request, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.Nil(t, err, "Expected no error for valid accounts")
 
 	// Verify subscription was recorded with all accounts
-	config, exists := conn.Subscriptions[types.SubAccounts]
-	require.True(t, exists, "Expected accounts subscription to be recorded")
-	assert.Equal(t, len(validAccounts), len(config.Accounts))
+	accounts := testRegistration(t, sm, conn).Snapshot().Accounts(types.SubAccounts)
+	assert.Equal(t, len(validAccounts), len(accounts))
 
 	for _, acc := range validAccounts {
-		assert.Contains(t, config.Accounts, acc)
+		assert.Contains(t, accounts, acc)
 	}
-
-	sm.RemoveConnection(conn.ID)
 }
 
 // TestSubscribeAccountsProposed tests subscribing to proposed transactions for accounts
@@ -236,16 +227,14 @@ func TestSubscribeAccountsProposed(t *testing.T) {
 
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	request := types.SubscriptionRequest{
 		AccountsProposed: validAccounts,
 	}
 
-	err := sm.HandleSubscribe(conn, request, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.Nil(t, err, "Expected no error for valid accounts_proposed")
-
-	sm.RemoveConnection(conn.ID)
 }
 
 // TestSubscribeAccountInvalidFormat tests subscribing with invalid account formats
@@ -319,13 +308,13 @@ func TestSubscribeAccountInvalidFormat(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sm := newTestSubscriptionManager()
 			conn := newTestConnection("test-conn-1")
-			sm.AddConnection(conn)
+			_ = testRegistration(t, sm, conn)
 
 			request := types.SubscriptionRequest{
 				Accounts: []string{tc.account},
 			}
 
-			err := sm.HandleSubscribe(conn, request, true)
+			err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 
 			if tc.expectError {
 				require.NotNil(t, err, "Expected error for invalid account: %s", tc.account)
@@ -336,8 +325,6 @@ func TestSubscribeAccountInvalidFormat(t *testing.T) {
 			} else {
 				require.Nil(t, err, "Expected no error for valid account: %s", tc.account)
 			}
-
-			sm.RemoveConnection(conn.ID)
 		})
 	}
 }
@@ -346,19 +333,17 @@ func TestSubscribeAccountInvalidFormat(t *testing.T) {
 func TestSubscribeAccountsProposedInvalidFormat(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	request := types.SubscriptionRequest{
 		AccountsProposed: []string{"invalid_account"},
 	}
 
-	err := sm.HandleSubscribe(conn, request, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.NotNil(t, err, "Expected error for invalid accounts_proposed")
 	assert.Equal(t, types.RpcACT_MALFORMED, err.Code)
 	assert.Equal(t, "actMalformed", err.ErrorString)
 	assert.Equal(t, "Account malformed.", err.Message)
-
-	sm.RemoveConnection(conn.ID)
 }
 
 // Book Subscription Tests
@@ -368,7 +353,7 @@ func TestSubscribeAccountsProposedInvalidFormat(t *testing.T) {
 func TestSubscribeBooks(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	// Valid book subscription: XRP for USD
 	takerPays, _ := json.Marshal(map[string]any{
@@ -388,22 +373,18 @@ func TestSubscribeBooks(t *testing.T) {
 		},
 	}
 
-	err := sm.HandleSubscribe(conn, request, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.Nil(t, err, "Expected no error for valid book subscription")
 
 	// Verify subscription was recorded
-	config, exists := conn.Subscriptions[types.SubBook]
-	require.True(t, exists, "Expected book subscription to be recorded")
-	assert.Equal(t, 1, len(config.Books))
-
-	sm.RemoveConnection(conn.ID)
+	assert.Equal(t, 1, testRegistration(t, sm, conn).Snapshot().BookCount())
 }
 
 // TestSubscribeBooksWithSnapshot tests the snapshot flag for initial order book state
 func TestSubscribeBooksWithSnapshot(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	takerPays, _ := json.Marshal(map[string]any{
 		"currency": "USD",
@@ -423,20 +404,17 @@ func TestSubscribeBooksWithSnapshot(t *testing.T) {
 		},
 	}
 
-	err := sm.HandleSubscribe(conn, request, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.Nil(t, err, "Expected no error for book subscription with snapshot")
 
-	config := conn.Subscriptions[types.SubBook]
-	assert.True(t, config.Books[0].Snapshot, "Snapshot flag should be true")
-
-	sm.RemoveConnection(conn.ID)
+	assert.Equal(t, 1, testRegistration(t, sm, conn).Snapshot().BookCount())
 }
 
 // TestSubscribeBooksWithBoth tests the both flag for both sides of order book
 func TestSubscribeBooksWithBoth(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	takerPays, _ := json.Marshal(map[string]any{
 		"currency": "USD",
@@ -456,13 +434,10 @@ func TestSubscribeBooksWithBoth(t *testing.T) {
 		},
 	}
 
-	err := sm.HandleSubscribe(conn, request, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.Nil(t, err, "Expected no error for book subscription with both")
 
-	config := conn.Subscriptions[types.SubBook]
-	assert.True(t, config.Books[0].Both, "Both flag should be true")
-
-	sm.RemoveConnection(conn.ID)
+	assert.Equal(t, 2, testRegistration(t, sm, conn).Snapshot().BookCount())
 }
 
 // TestSubscribeBooksInvalidCurrency pins the per-site book errors of
@@ -606,7 +581,7 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sm := newTestSubscriptionManager()
 			conn := newTestConnection("test-conn-1")
-			sm.AddConnection(conn)
+			_ = testRegistration(t, sm, conn)
 
 			takerPays, _ := json.Marshal(tc.takerPays)
 			takerGets, _ := json.Marshal(tc.takerGets)
@@ -620,13 +595,11 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 				},
 			}
 
-			err := sm.HandleSubscribe(conn, request, true)
+			err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 			require.NotNil(t, err, "Expected error for: %s", tc.name)
 			assert.Equal(t, tc.wantCode, err.Code)
 			assert.Equal(t, tc.wantError, err.ErrorString)
 			assert.Equal(t, tc.wantMsg, err.Message)
-
-			sm.RemoveConnection(conn.ID)
 		})
 	}
 }
@@ -683,7 +656,7 @@ func TestSubscribeBooksCrossConformanceWithBookOffers(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sm := newTestSubscriptionManager()
 			conn := newTestConnection("test-conn-1")
-			sm.AddConnection(conn)
+			_ = testRegistration(t, sm, conn)
 
 			takerPays, _ := json.Marshal(tc.book.takerPays)
 			takerGets, _ := json.Marshal(tc.book.takerGets)
@@ -693,7 +666,7 @@ func TestSubscribeBooksCrossConformanceWithBookOffers(t *testing.T) {
 					{TakerPays: takerPays, TakerGets: takerGets},
 				},
 			}
-			err := sm.HandleSubscribe(conn, request, true)
+			err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 			require.NotNil(t, err, "subscribe should reject the same malformed shape book_offers refuses")
 			assert.Equal(t, tc.wantError, err.ErrorString)
 		})
@@ -704,7 +677,7 @@ func TestSubscribeBooksCrossConformanceWithBookOffers(t *testing.T) {
 func TestSubscribeBooksMultiple(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	// Book 1: XRP for USD
 	takerPays1, _ := json.Marshal(map[string]any{
@@ -737,13 +710,10 @@ func TestSubscribeBooksMultiple(t *testing.T) {
 		},
 	}
 
-	err := sm.HandleSubscribe(conn, request, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.Nil(t, err, "Expected no error for multiple valid books")
 
-	config := conn.Subscriptions[types.SubBook]
-	assert.Equal(t, 2, len(config.Books))
-
-	sm.RemoveConnection(conn.ID)
+	assert.Equal(t, 2, testRegistration(t, sm, conn).Snapshot().BookCount())
 }
 
 // Unsubscribe Tests
@@ -753,39 +723,36 @@ func TestSubscribeBooksMultiple(t *testing.T) {
 func TestUnsubscribeFromStreams(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	// First subscribe
 	subscribeRequest := types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{types.SubLedger, types.SubTransactions, types.SubValidations},
 	}
-	err := sm.HandleSubscribe(conn, subscribeRequest, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), subscribeRequest, true)
 	require.Nil(t, err)
-	assert.Equal(t, 3, len(conn.Subscriptions))
+	assert.Equal(t, 3, testRegistration(t, sm, conn).Snapshot().ItemCount())
 
 	// Then unsubscribe from one stream
 	unsubscribeRequest := types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{types.SubLedger},
 	}
-	err = sm.HandleUnsubscribe(conn, unsubscribeRequest, true)
+	err = sm.HandleUnsubscribe(testRegistration(t, sm, conn), unsubscribeRequest)
 	require.Nil(t, err)
 
 	// Verify ledger subscription was removed
-	_, exists := conn.Subscriptions[types.SubLedger]
-	assert.False(t, exists, "Ledger subscription should be removed")
+	assert.False(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubLedger))
 
 	// Verify other subscriptions remain
-	assert.Contains(t, conn.Subscriptions, types.SubTransactions)
-	assert.Contains(t, conn.Subscriptions, types.SubValidations)
-
-	sm.RemoveConnection(conn.ID)
+	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubTransactions))
+	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubValidations))
 }
 
 // TestUnsubscribeFromAccounts tests unsubscribing from accounts
 func TestUnsubscribeFromAccounts(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	accounts := []string{
 		"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", // Genesis
@@ -797,34 +764,31 @@ func TestUnsubscribeFromAccounts(t *testing.T) {
 	subscribeRequest := types.SubscriptionRequest{
 		Accounts: accounts,
 	}
-	err := sm.HandleSubscribe(conn, subscribeRequest, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), subscribeRequest, true)
 	require.Nil(t, err)
 
-	config := conn.Subscriptions[types.SubAccounts]
-	assert.Equal(t, 3, len(config.Accounts))
+	assert.Len(t, testRegistration(t, sm, conn).Snapshot().Accounts(types.SubAccounts), 3)
 
 	// Unsubscribe from one account
 	unsubscribeRequest := types.SubscriptionRequest{
 		Accounts: []string{"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 	}
-	err = sm.HandleUnsubscribe(conn, unsubscribeRequest, true)
+	err = sm.HandleUnsubscribe(testRegistration(t, sm, conn), unsubscribeRequest)
 	require.Nil(t, err)
 
 	// Verify the account was removed
-	config = conn.Subscriptions[types.SubAccounts]
-	assert.Equal(t, 2, len(config.Accounts))
-	assert.NotContains(t, config.Accounts, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
-	assert.Contains(t, config.Accounts, "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK")
-	assert.Contains(t, config.Accounts, "rH4KEcG9dEwGwpn6AyoWK9cZPLL4RLSmWW")
-
-	sm.RemoveConnection(conn.ID)
+	remaining := testRegistration(t, sm, conn).Snapshot().Accounts(types.SubAccounts)
+	assert.Len(t, remaining, 2)
+	assert.NotContains(t, remaining, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
+	assert.Contains(t, remaining, "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK")
+	assert.Contains(t, remaining, "rH4KEcG9dEwGwpn6AyoWK9cZPLL4RLSmWW")
 }
 
 // TestUnsubscribeFromAllAccounts tests unsubscribing from all accounts removes the subscription
 func TestUnsubscribeFromAllAccounts(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	accounts := []string{
 		"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
@@ -835,21 +799,18 @@ func TestUnsubscribeFromAllAccounts(t *testing.T) {
 	subscribeRequest := types.SubscriptionRequest{
 		Accounts: accounts,
 	}
-	err := sm.HandleSubscribe(conn, subscribeRequest, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), subscribeRequest, true)
 	require.Nil(t, err)
 
 	// Unsubscribe from all
 	unsubscribeRequest := types.SubscriptionRequest{
 		Accounts: accounts,
 	}
-	err = sm.HandleUnsubscribe(conn, unsubscribeRequest, true)
+	err = sm.HandleUnsubscribe(testRegistration(t, sm, conn), unsubscribeRequest)
 	require.Nil(t, err)
 
 	// Verify accounts subscription is completely removed
-	_, exists := conn.Subscriptions[types.SubAccounts]
-	assert.False(t, exists, "Accounts subscription should be removed when all accounts are unsubscribed")
-
-	sm.RemoveConnection(conn.ID)
+	assert.False(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubAccounts))
 }
 
 // TestUnsubscribeFromBooks tests unsubscribing from order books
@@ -857,7 +818,7 @@ func TestUnsubscribeFromAllAccounts(t *testing.T) {
 func TestUnsubscribeFromBooks(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	takerPays1, _ := json.Marshal(map[string]any{
 		"currency": "USD",
@@ -873,11 +834,10 @@ func TestUnsubscribeFromBooks(t *testing.T) {
 			{TakerPays: takerPays1, TakerGets: takerGets1},
 		},
 	}
-	err := sm.HandleSubscribe(conn, subscribeRequest, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), subscribeRequest, true)
 	require.Nil(t, err)
 
-	_, exists := conn.Subscriptions[types.SubBook]
-	require.True(t, exists, "Book subscription should exist")
+	require.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubBook))
 
 	// Unsubscribe from books
 	unsubscribeRequest := types.SubscriptionRequest{
@@ -885,14 +845,11 @@ func TestUnsubscribeFromBooks(t *testing.T) {
 			{TakerPays: takerPays1, TakerGets: takerGets1},
 		},
 	}
-	err = sm.HandleUnsubscribe(conn, unsubscribeRequest, true)
+	err = sm.HandleUnsubscribe(testRegistration(t, sm, conn), unsubscribeRequest)
 	require.Nil(t, err)
 
 	// Verify book subscription is removed
-	_, exists = conn.Subscriptions[types.SubBook]
-	assert.False(t, exists, "Book subscription should be removed after unsubscribing")
-
-	sm.RemoveConnection(conn.ID)
+	assert.False(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubBook))
 }
 
 // TestUnsubscribeFromNonSubscribedStream tests that unsubscribing from a non-subscribed stream succeeds silently
@@ -900,57 +857,52 @@ func TestUnsubscribeFromBooks(t *testing.T) {
 func TestUnsubscribeFromNonSubscribedStream(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	// Subscribe to ledger only
 	subscribeRequest := types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{types.SubLedger},
 	}
-	err := sm.HandleSubscribe(conn, subscribeRequest, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), subscribeRequest, true)
 	require.Nil(t, err)
 
 	// Unsubscribe from transactions (which we never subscribed to)
 	unsubscribeRequest := types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{types.SubTransactions},
 	}
-	err = sm.HandleUnsubscribe(conn, unsubscribeRequest, true)
+	err = sm.HandleUnsubscribe(testRegistration(t, sm, conn), unsubscribeRequest)
 
 	// Should succeed silently
 	require.Nil(t, err, "Unsubscribing from non-subscribed stream should succeed silently")
 
 	// Ledger subscription should still exist
-	assert.Contains(t, conn.Subscriptions, types.SubLedger)
-
-	sm.RemoveConnection(conn.ID)
+	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubLedger))
 }
 
 // TestUnsubscribeFromNonSubscribedAccount tests unsubscribing from a non-subscribed account
 func TestUnsubscribeFromNonSubscribedAccount(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	// Subscribe to one account
 	subscribeRequest := types.SubscriptionRequest{
 		Accounts: []string{"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 	}
-	err := sm.HandleSubscribe(conn, subscribeRequest, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), subscribeRequest, true)
 	require.Nil(t, err)
 
 	// Unsubscribe from a different account
 	unsubscribeRequest := types.SubscriptionRequest{
 		Accounts: []string{"rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"},
 	}
-	err = sm.HandleUnsubscribe(conn, unsubscribeRequest, true)
+	err = sm.HandleUnsubscribe(testRegistration(t, sm, conn), unsubscribeRequest)
 
 	// Should succeed silently
 	require.Nil(t, err, "Unsubscribing from non-subscribed account should succeed silently")
 
 	// Original account subscription should still exist
-	config := conn.Subscriptions[types.SubAccounts]
-	assert.Contains(t, config.Accounts, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
-
-	sm.RemoveConnection(conn.ID)
+	assert.Contains(t, testRegistration(t, sm, conn).Snapshot().Accounts(types.SubAccounts), "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
 }
 
 // Additional Error Cases
@@ -960,7 +912,7 @@ func TestUnsubscribeFromNonSubscribedAccount(t *testing.T) {
 func TestSubscribeMissingTakerPays(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	takerGets, _ := json.Marshal(map[string]any{
 		"currency": "XRP",
@@ -976,20 +928,18 @@ func TestSubscribeMissingTakerPays(t *testing.T) {
 	}
 
 	// rippled Subscribe.cpp:238-242 → rpcINVALID_PARAMS.
-	err := sm.HandleSubscribe(conn, request, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.NotNil(t, err, "Expected error for missing taker_pays")
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "invalidParams", err.ErrorString)
 	assert.Equal(t, "Invalid parameters.", err.Message)
-
-	sm.RemoveConnection(conn.ID)
 }
 
 // TestSubscribeMissingTakerGets tests book subscription without taker_gets
 func TestSubscribeMissingTakerGets(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	takerPays, _ := json.Marshal(map[string]any{
 		"currency": "USD",
@@ -1006,20 +956,18 @@ func TestSubscribeMissingTakerGets(t *testing.T) {
 	}
 
 	// rippled Subscribe.cpp:238-242 → rpcINVALID_PARAMS.
-	err := sm.HandleSubscribe(conn, request, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.NotNil(t, err, "Expected error for missing taker_gets")
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "invalidParams", err.ErrorString)
 	assert.Equal(t, "Invalid parameters.", err.Message)
-
-	sm.RemoveConnection(conn.ID)
 }
 
 // TestSubscribeInvalidTakerPaysJSON tests book subscription with invalid JSON in taker_pays
 func TestSubscribeInvalidTakerPaysJSON(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	takerGets, _ := json.Marshal(map[string]any{
 		"currency": "XRP",
@@ -1036,20 +984,18 @@ func TestSubscribeInvalidTakerPaysJSON(t *testing.T) {
 
 	// A non-object side fails rippled's structural check
 	// (Subscribe.cpp:238-242) → rpcINVALID_PARAMS.
-	err := sm.HandleSubscribe(conn, request, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.NotNil(t, err, "Expected error for invalid taker_pays JSON")
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "invalidParams", err.ErrorString)
 	assert.Equal(t, "Invalid parameters.", err.Message)
-
-	sm.RemoveConnection(conn.ID)
 }
 
 // TestSubscribeInvalidTakerGetsJSON tests book subscription with invalid JSON in taker_gets
 func TestSubscribeInvalidTakerGetsJSON(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	takerPays, _ := json.Marshal(map[string]any{
 		"currency": "USD",
@@ -1067,38 +1013,22 @@ func TestSubscribeInvalidTakerGetsJSON(t *testing.T) {
 
 	// A non-object side fails rippled's structural check
 	// (Subscribe.cpp:238-242) → rpcINVALID_PARAMS.
-	err := sm.HandleSubscribe(conn, request, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.NotNil(t, err, "Expected error for invalid taker_gets JSON")
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "invalidParams", err.ErrorString)
 	assert.Equal(t, "Invalid parameters.", err.Message)
-
-	sm.RemoveConnection(conn.ID)
 }
 
 // Subscription Manager State Tests
 
-// TestSubscriptionManagerAddRemoveConnection tests connection management
-func TestSubscriptionManagerAddRemoveConnection(t *testing.T) {
+func TestSubscriptionManagerAttachDetach(t *testing.T) {
 	sm := newTestSubscriptionManager()
-
-	// Add connection
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
-	assert.Equal(t, 1, sm.ConnectionCount())
-
-	// Verify connection exists
-	retrievedConn := sm.Connection("test-conn-1")
-	assert.NotNil(t, retrievedConn)
-	assert.Equal(t, "test-conn-1", retrievedConn.ID)
-
-	// Remove connection
-	sm.RemoveConnection("test-conn-1")
-	assert.Equal(t, 0, sm.ConnectionCount())
-
-	// Verify connection no longer exists
-	retrievedConn = sm.Connection("test-conn-1")
-	assert.Nil(t, retrievedConn)
+	registration := testRegistration(t, sm, conn)
+	assert.Equal(t, uint64(1), sm.Metrics().Connections)
+	require.True(t, sm.Detach(registration))
+	assert.Zero(t, sm.Metrics().Connections)
 }
 
 // TestSubscriptionManagerMultipleConnections tests managing multiple connections
@@ -1109,15 +1039,15 @@ func TestSubscriptionManagerMultipleConnections(t *testing.T) {
 	conn2 := newTestConnection("conn-2")
 	conn3 := newTestConnection("conn-3")
 
-	sm.AddConnection(conn1)
-	sm.AddConnection(conn2)
-	sm.AddConnection(conn3)
-	assert.Equal(t, 3, sm.ConnectionCount())
+	registration1 := testRegistration(t, sm, conn1)
+	registration2 := testRegistration(t, sm, conn2)
+	registration3 := testRegistration(t, sm, conn3)
+	assert.Equal(t, uint64(3), sm.Metrics().Connections)
 
 	// Subscribe each to different streams
-	sm.HandleSubscribe(conn1, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}}, true)
-	sm.HandleSubscribe(conn2, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubTransactions}}, true)
-	sm.HandleSubscribe(conn3, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger, types.SubTransactions}}, true)
+	sm.HandleSubscribe(testRegistration(t, sm, conn1), types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}}, true)
+	sm.HandleSubscribe(testRegistration(t, sm, conn2), types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubTransactions}}, true)
+	sm.HandleSubscribe(testRegistration(t, sm, conn3), types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger, types.SubTransactions}}, true)
 
 	// Verify subscriber counts
 	assert.Equal(t, 2, sm.GetSubscriberCount(types.SubLedger))
@@ -1125,61 +1055,13 @@ func TestSubscriptionManagerMultipleConnections(t *testing.T) {
 	assert.Equal(t, 0, sm.GetSubscriberCount(types.SubValidations))
 
 	// Remove one connection
-	sm.RemoveConnection("conn-3")
-	assert.Equal(t, 2, sm.ConnectionCount())
+	require.True(t, sm.Detach(registration3))
+	assert.Equal(t, uint64(2), sm.Metrics().Connections)
 	assert.Equal(t, 1, sm.GetSubscriberCount(types.SubLedger))
 	assert.Equal(t, 1, sm.GetSubscriberCount(types.SubTransactions))
 
-	// Cleanup
-	sm.RemoveConnection("conn-1")
-	sm.RemoveConnection("conn-2")
-}
-
-// TestIsSubscribed tests the IsSubscribed helper method
-func TestIsSubscribed(t *testing.T) {
-	sm := newTestSubscriptionManager()
-	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
-
-	// Initially not subscribed
-	assert.False(t, sm.IsSubscribed("test-conn-1", "ledger"))
-
-	// Subscribe
-	sm.HandleSubscribe(conn, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}}, true)
-
-	// Now subscribed
-	assert.True(t, sm.IsSubscribed("test-conn-1", "ledger"))
-	assert.False(t, sm.IsSubscribed("test-conn-1", "transactions"))
-
-	// Non-existent connection
-	assert.False(t, sm.IsSubscribed("non-existent", "ledger"))
-
-	sm.RemoveConnection(conn.ID)
-}
-
-// TestGetConnectionSubscriptions tests getting all subscriptions for a connection
-func TestGetConnectionSubscriptions(t *testing.T) {
-	sm := newTestSubscriptionManager()
-	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
-
-	// Subscribe to multiple things
-	sm.HandleSubscribe(conn, types.SubscriptionRequest{
-		Streams:  []types.SubscriptionType{types.SubLedger, types.SubTransactions},
-		Accounts: []string{"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
-	}, true)
-
-	subs := sm.ConnectionSubscriptions("test-conn-1")
-	require.NotNil(t, subs)
-	assert.Contains(t, subs, types.SubLedger)
-	assert.Contains(t, subs, types.SubTransactions)
-	assert.Contains(t, subs, types.SubAccounts)
-
-	// Non-existent connection
-	subs = sm.ConnectionSubscriptions("non-existent")
-	assert.Nil(t, subs)
-
-	sm.RemoveConnection(conn.ID)
+	require.True(t, sm.Detach(registration1))
+	require.True(t, sm.Detach(registration2))
 }
 
 // IsValidXRPLAddress Tests
@@ -1274,30 +1156,6 @@ func TestIsValidXRPLAddress(t *testing.T) {
 			assert.Equal(t, tc.expected, result, "IsValidXRPLAddress(%q) = %v, want %v", tc.address, result, tc.expected)
 		})
 	}
-}
-
-// Subscribe Response Tests
-
-// TestGetSubscribeResponse tests generating a subscribe confirmation response
-func TestGetSubscribeResponse(t *testing.T) {
-	sm := newTestSubscriptionManager()
-
-	response := sm.SubscribeResponse(
-		100, // ledgerIndex
-		"4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652", // ledgerHash
-		735000000, // ledgerTime
-		10,        // feeBase
-		10000000,  // reserveBase
-		2000000,   // reserveInc
-	)
-
-	assert.Equal(t, "success", response.Status)
-	assert.Equal(t, uint32(100), response.LedgerIndex)
-	assert.Equal(t, "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652", response.LedgerHash)
-	assert.Equal(t, uint32(735000000), response.LedgerTime)
-	assert.Equal(t, int32(10), response.FeeBase)
-	assert.Equal(t, int32(10000000), response.ReserveBase)
-	assert.Equal(t, int32(2000000), response.ReserveInc)
 }
 
 // Subscribe/Unsubscribe Method Tests (RPC Handler level)
@@ -1421,29 +1279,29 @@ func TestBroadcastToStream(t *testing.T) {
 	conn2 := newTestConnection("conn-2")
 	conn3 := newTestConnection("conn-3")
 
-	sm.AddConnection(conn1)
-	sm.AddConnection(conn2)
-	sm.AddConnection(conn3)
+	_ = testRegistration(t, sm, conn1)
+	_ = testRegistration(t, sm, conn2)
+	_ = testRegistration(t, sm, conn3)
 
 	// Subscribe conn1 and conn3 to ledger
-	sm.HandleSubscribe(conn1, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}}, true)
-	sm.HandleSubscribe(conn2, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubTransactions}}, true)
-	sm.HandleSubscribe(conn3, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}}, true)
+	sm.HandleSubscribe(testRegistration(t, sm, conn1), types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}}, true)
+	sm.HandleSubscribe(testRegistration(t, sm, conn2), types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubTransactions}}, true)
+	sm.HandleSubscribe(testRegistration(t, sm, conn3), types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}}, true)
 
 	// Broadcast to ledger stream
 	testData := []byte(`{"type":"ledgerClosed","ledger_index":100}`)
-	sm.BroadcastToStream(types.SubLedger, testData, nil)
+	sm.BroadcastToStream(types.SubLedger, testData)
 
 	// conn1 and conn3 should receive the message
 	select {
-	case msg := <-conn1.SendChannel:
+	case msg := <-conn1.Outbound():
 		assert.Equal(t, testData, msg)
 	default:
 		t.Error("conn1 should have received the message")
 	}
 
 	select {
-	case msg := <-conn3.SendChannel:
+	case msg := <-conn3.Outbound():
 		assert.Equal(t, testData, msg)
 	default:
 		t.Error("conn3 should have received the message")
@@ -1451,15 +1309,11 @@ func TestBroadcastToStream(t *testing.T) {
 
 	// conn2 should NOT receive the message
 	select {
-	case <-conn2.SendChannel:
+	case <-conn2.Outbound():
 		t.Error("conn2 should NOT have received the message")
 	default:
 		// Expected - no message
 	}
-
-	sm.RemoveConnection("conn-1")
-	sm.RemoveConnection("conn-2")
-	sm.RemoveConnection("conn-3")
 }
 
 // TestBroadcastToAccounts tests broadcasting to account subscribers
@@ -1469,118 +1323,34 @@ func TestBroadcastToAccounts(t *testing.T) {
 	conn1 := newTestConnection("conn-1")
 	conn2 := newTestConnection("conn-2")
 
-	sm.AddConnection(conn1)
-	sm.AddConnection(conn2)
+	_ = testRegistration(t, sm, conn1)
+	_ = testRegistration(t, sm, conn2)
 
 	// Subscribe to different accounts
-	sm.HandleSubscribe(conn1, types.SubscriptionRequest{
+	sm.HandleSubscribe(testRegistration(t, sm, conn1), types.SubscriptionRequest{
 		Accounts: []string{"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 	}, true)
-	sm.HandleSubscribe(conn2, types.SubscriptionRequest{
+	sm.HandleSubscribe(testRegistration(t, sm, conn2), types.SubscriptionRequest{
 		Accounts: []string{"rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"},
 	}, true)
 
 	// Broadcast for first account
 	testData := []byte(`{"type":"transaction","account":"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}`)
-	sm.BroadcastToAccounts(testData, []string{"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"})
+	sm.BroadcastToAccountsVersioned(testData, testData, []string{"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"})
 
 	// Only conn1 should receive
 	select {
-	case msg := <-conn1.SendChannel:
+	case msg := <-conn1.Outbound():
 		assert.Equal(t, testData, msg)
 	default:
 		t.Error("conn1 should have received the message")
 	}
 
 	select {
-	case <-conn2.SendChannel:
+	case <-conn2.Outbound():
 		t.Error("conn2 should NOT have received the message")
 	default:
 		// Expected
-	}
-
-	sm.RemoveConnection("conn-1")
-	sm.RemoveConnection("conn-2")
-}
-
-// TestBookMatchesCurrency tests the order book matching logic
-func TestBookMatchesCurrency(t *testing.T) {
-	tests := []struct {
-		name        string
-		takerGets   map[string]any
-		takerPays   map[string]any
-		specGets    types.CurrencySpec
-		specPays    types.CurrencySpec
-		shouldMatch bool
-	}{
-		{
-			name: "XRP for USD - match",
-			takerGets: map[string]any{
-				"currency": "XRP",
-			},
-			takerPays: map[string]any{
-				"currency": "USD",
-				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-			},
-			specGets:    types.CurrencySpec{Currency: "XRP", Issuer: ""},
-			specPays:    types.CurrencySpec{Currency: "USD", Issuer: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
-			shouldMatch: true,
-		},
-		{
-			name: "XRP for USD - no match (different issuer)",
-			takerGets: map[string]any{
-				"currency": "XRP",
-			},
-			takerPays: map[string]any{
-				"currency": "USD",
-				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-			},
-			specGets:    types.CurrencySpec{Currency: "XRP", Issuer: ""},
-			specPays:    types.CurrencySpec{Currency: "USD", Issuer: "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"},
-			shouldMatch: false,
-		},
-		{
-			name: "XRP for USD - no match (different currency)",
-			takerGets: map[string]any{
-				"currency": "XRP",
-			},
-			takerPays: map[string]any{
-				"currency": "USD",
-				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-			},
-			specGets:    types.CurrencySpec{Currency: "XRP", Issuer: ""},
-			specPays:    types.CurrencySpec{Currency: "EUR", Issuer: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
-			shouldMatch: false,
-		},
-		{
-			name: "USD for EUR - match (both IOUs)",
-			takerGets: map[string]any{
-				"currency": "USD",
-				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-			},
-			takerPays: map[string]any{
-				"currency": "EUR",
-				"issuer":   "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-			},
-			specGets:    types.CurrencySpec{Currency: "USD", Issuer: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
-			specPays:    types.CurrencySpec{Currency: "EUR", Issuer: "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"},
-			shouldMatch: true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			takerGets, _ := json.Marshal(tc.takerGets)
-			takerPays, _ := json.Marshal(tc.takerPays)
-
-			book := types.BookRequest{
-				TakerGets: takerGets,
-				TakerPays: takerPays,
-			}
-
-			result := types.BookMatchesCurrency(book, tc.specGets, tc.specPays)
-			assert.Equal(t, tc.shouldMatch, result)
-		})
 	}
 }
 
@@ -1590,61 +1360,54 @@ func TestBookMatchesCurrency(t *testing.T) {
 func TestSubscribeDuplicateStreamIdempotent(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	// Subscribe once
 	request := types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{types.SubLedger},
 	}
-	err := sm.HandleSubscribe(conn, request, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.Nil(t, err)
-	assert.Equal(t, 1, len(conn.Subscriptions))
+	assert.Equal(t, 1, testRegistration(t, sm, conn).Snapshot().ItemCount())
 
 	// Subscribe again
-	err = sm.HandleSubscribe(conn, request, true)
+	err = sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.Nil(t, err)
-	assert.Equal(t, 1, len(conn.Subscriptions)) // Should still be 1
-
-	sm.RemoveConnection(conn.ID)
+	assert.Equal(t, 1, testRegistration(t, sm, conn).Snapshot().ItemCount()) // Should still be 1
 }
 
 // TestSubscribeDuplicateAccountsMerged tests that duplicate accounts are merged
 func TestSubscribeDuplicateAccountsMerged(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	// Subscribe to first account
 	request1 := types.SubscriptionRequest{
 		Accounts: []string{"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 	}
-	err := sm.HandleSubscribe(conn, request1, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request1, true)
 	require.Nil(t, err)
 
-	config := conn.Subscriptions[types.SubAccounts]
-	assert.Equal(t, 1, len(config.Accounts))
+	assert.Len(t, testRegistration(t, sm, conn).Snapshot().Accounts(types.SubAccounts), 1)
 
 	// Subscribe to a new account
 	request2 := types.SubscriptionRequest{
 		Accounts: []string{"rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"},
 	}
-	err = sm.HandleSubscribe(conn, request2, true)
+	err = sm.HandleSubscribe(testRegistration(t, sm, conn), request2, true)
 	require.Nil(t, err)
 
-	config = conn.Subscriptions[types.SubAccounts]
-	assert.Equal(t, 2, len(config.Accounts))
+	assert.Len(t, testRegistration(t, sm, conn).Snapshot().Accounts(types.SubAccounts), 2)
 
 	// Subscribe to an already subscribed account (should not duplicate)
 	request3 := types.SubscriptionRequest{
 		Accounts: []string{"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 	}
-	err = sm.HandleSubscribe(conn, request3, true)
+	err = sm.HandleSubscribe(testRegistration(t, sm, conn), request3, true)
 	require.Nil(t, err)
 
-	config = conn.Subscriptions[types.SubAccounts]
-	assert.Equal(t, 2, len(config.Accounts)) // Should still be 2
-
-	sm.RemoveConnection(conn.ID)
+	assert.Len(t, testRegistration(t, sm, conn).Snapshot().Accounts(types.SubAccounts), 2)
 }
 
 // Mixed Subscription Tests
@@ -1653,32 +1416,30 @@ func TestSubscribeDuplicateAccountsMerged(t *testing.T) {
 func TestSubscribeMixedStreamsAndAccounts(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	request := types.SubscriptionRequest{
 		Streams:  []types.SubscriptionType{types.SubLedger, types.SubTransactions},
 		Accounts: []string{"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 	}
 
-	err := sm.HandleSubscribe(conn, request, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.Nil(t, err)
 
-	assert.Contains(t, conn.Subscriptions, types.SubLedger)
-	assert.Contains(t, conn.Subscriptions, types.SubTransactions)
-	assert.Contains(t, conn.Subscriptions, types.SubAccounts)
+	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubLedger))
+	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubTransactions))
+	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubAccounts))
 
-	accountConfig := conn.Subscriptions[types.SubAccounts]
-	assert.Equal(t, 1, len(accountConfig.Accounts))
-	assert.Contains(t, accountConfig.Accounts, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
-
-	sm.RemoveConnection(conn.ID)
+	accounts := testRegistration(t, sm, conn).Snapshot().Accounts(types.SubAccounts)
+	assert.Len(t, accounts, 1)
+	assert.Contains(t, accounts, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
 }
 
 // TestSubscribeMixedStreamsAccountsAndBooks tests subscribing to streams, accounts, and books
 func TestSubscribeMixedStreamsAccountsAndBooks(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
+	_ = testRegistration(t, sm, conn)
 
 	takerPays, _ := json.Marshal(map[string]any{
 		"currency": "USD",
@@ -1696,14 +1457,12 @@ func TestSubscribeMixedStreamsAccountsAndBooks(t *testing.T) {
 		},
 	}
 
-	err := sm.HandleSubscribe(conn, request, true)
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.Nil(t, err)
 
-	assert.Contains(t, conn.Subscriptions, types.SubLedger)
-	assert.Contains(t, conn.Subscriptions, types.SubAccounts)
-	assert.Contains(t, conn.Subscriptions, types.SubBook)
-
-	sm.RemoveConnection(conn.ID)
+	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubLedger))
+	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubAccounts))
+	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubBook))
 }
 
 // URL (RPCSub) subscription tests live in rpcsub_test.go: URL requests are
@@ -1717,26 +1476,25 @@ func TestSubscribeMixedStreamsAccountsAndBooks(t *testing.T) {
 func TestSubscribeBookBoth_AutoSubscribesReverse(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
-	defer sm.RemoveConnection(conn.ID)
+	_ = testRegistration(t, sm, conn)
 
 	gateway := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	takerPays, _ := json.Marshal(map[string]any{"currency": "USD", "issuer": gateway})
 	takerGets, _ := json.Marshal(map[string]any{"currency": "XRP"})
 
-	err := sm.HandleSubscribe(conn, types.SubscriptionRequest{
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), types.SubscriptionRequest{
 		Books: []types.BookRequest{{TakerPays: takerPays, TakerGets: takerGets, Both: true}},
 	}, true)
 	require.Nil(t, err)
 
 	// Broadcast on the originally-subscribed side.
 	msg1 := []byte(`{"type":"transaction","side":"original"}`)
-	sm.BroadcastToOrderBook(msg1,
-		types.CurrencySpec{Currency: "XRP"},
-		types.CurrencySpec{Currency: "USD", Issuer: gateway},
-	)
+	sm.BroadcastToOrderBooksVersioned(msg1, msg1, []types.OrderBookSpec{{
+		TakerGets: types.CurrencySpec{Currency: "XRP"},
+		TakerPays: types.CurrencySpec{Currency: "USD", Issuer: gateway},
+	}})
 	select {
-	case received := <-conn.SendChannel:
+	case received := <-conn.Outbound():
 		assert.Equal(t, msg1, received)
 	default:
 		t.Fatal("Expected broadcast on original side to reach the connection")
@@ -1745,12 +1503,12 @@ func TestSubscribeBookBoth_AutoSubscribesReverse(t *testing.T) {
 	// Broadcast on the reversed side — should also reach because
 	// `both:true` auto-registers the partner pair.
 	msg2 := []byte(`{"type":"transaction","side":"reversed"}`)
-	sm.BroadcastToOrderBook(msg2,
-		types.CurrencySpec{Currency: "USD", Issuer: gateway},
-		types.CurrencySpec{Currency: "XRP"},
-	)
+	sm.BroadcastToOrderBooksVersioned(msg2, msg2, []types.OrderBookSpec{{
+		TakerGets: types.CurrencySpec{Currency: "USD", Issuer: gateway},
+		TakerPays: types.CurrencySpec{Currency: "XRP"},
+	}})
 	select {
-	case received := <-conn.SendChannel:
+	case received := <-conn.Outbound():
 		assert.Equal(t, msg2, received)
 	default:
 		t.Fatal("Expected broadcast on reversed side to reach the connection (both:true)")
@@ -1894,21 +1652,19 @@ func TestComputeServerLoad_UsesServerAndOverallMaxima(t *testing.T) {
 func TestSubscribeRtTransactionsAlias(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
-	defer sm.RemoveConnection(conn.ID)
+	_ = testRegistration(t, sm, conn)
 
-	err := sm.HandleSubscribe(conn, types.SubscriptionRequest{
+	err := sm.HandleSubscribe(testRegistration(t, sm, conn), types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{"rt_transactions"},
 	}, true)
 	require.Nil(t, err, "rt_transactions must be accepted")
 
-	_, ok := conn.Subscriptions[types.SubTransactionsProposed]
-	assert.True(t, ok, "rt_transactions must be normalised to SubTransactionsProposed")
+	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubTransactionsProposed))
 
 	msg := []byte(`{"type":"transaction","status":"proposed"}`)
-	sm.BroadcastToStream(types.SubTransactionsProposed, msg, nil)
+	sm.BroadcastToStream(types.SubTransactionsProposed, msg)
 	select {
-	case received := <-conn.SendChannel:
+	case received := <-conn.Outbound():
 		assert.Equal(t, msg, received)
 	default:
 		t.Fatal("Expected broadcast on transactions_proposed to reach rt_transactions subscriber")

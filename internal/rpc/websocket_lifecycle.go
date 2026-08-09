@@ -8,31 +8,45 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const slowConsumerPolicyReason = "Policy error: client is too slow."
+
 // attachConnection is the single point at which a new WS connection becomes
 // visible to both the per-server connection map and the subscription manager.
 // Pairing this with detachConnection keeps the two registries synchronized.
 func (ws *WebSocketServer) attachConnection(wsConn *websocketConnection) bool {
 	ws.bindPathFindRefreshManager(wsConn)
-	wsConn.Disconnect = wsConn.closeSocket
+	wsConn.SetDropLimit(1)
+	wsConn.SetDisconnect(func() { wsConn.closeWithPolicyViolation(slowConsumerPolicyReason) })
 
 	ws.connectionsMutex.Lock()
 	if ws.closing {
 		ws.connectionsMutex.Unlock()
 		return false
 	}
+	if _, exists := ws.connections[wsConn.ID()]; exists {
+		ws.connectionsMutex.Unlock()
+		return false
+	}
+	registration, attached := ws.subscriptionManager.Attach(wsConn.Connection)
+	if !attached {
+		ws.connectionsMutex.Unlock()
+		return false
+	}
+	wsConn.registration = registration
 	ws.wg.Add(3)
-	ws.connections[wsConn.ID] = wsConn
+	ws.connections[wsConn.ID()] = wsConn
 	ws.connectionsMutex.Unlock()
-	ws.subscriptionManager.AddConnection(wsConn.Connection)
 	return true
 }
 
 // detachConnection is the inverse of attachConnection.
 func (ws *WebSocketServer) detachConnection(wsConn *websocketConnection) {
 	ws.connectionsMutex.Lock()
-	delete(ws.connections, wsConn.ID)
+	if current := ws.connections[wsConn.ID()]; current == wsConn {
+		delete(ws.connections, wsConn.ID())
+	}
 	ws.connectionsMutex.Unlock()
-	ws.subscriptionManager.RemoveConnection(wsConn.ID)
+	ws.subscriptionManager.Detach(wsConn.registration)
 	removeAccountHistoryConnection(ws.services, wsConn.Connection)
 }
 
@@ -52,11 +66,13 @@ func (c *websocketConnection) closeSocket() {
 }
 func (c *websocketConnection) closeWithPolicyViolation(reason string) {
 	c.Cancel()
-	_ = c.conn.WriteControl(
-		websocket.CloseMessage,
-		websocket.FormatCloseMessage(websocket.ClosePolicyViolation, reason),
-		time.Now().Add(time.Second),
-	)
+	if c.conn != nil {
+		_ = c.conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, reason),
+			time.Now().Add(time.Second),
+		)
+	}
 	c.closeSocket()
 }
 func (ws *WebSocketServer) closeConnection(wsConn *websocketConnection) {
@@ -69,7 +85,7 @@ func (ws *WebSocketServer) closeConnection(wsConn *websocketConnection) {
 
 	wsConn.closeSocket()
 
-	wsLog().Debug("WebSocket connection closed", "connID", wsConn.ID)
+	wsLog().Debug("WebSocket connection closed", "connID", wsConn.ID())
 }
 
 // Close gracefully closes all active WebSocket connections and url (RPCSub)

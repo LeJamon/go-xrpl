@@ -111,7 +111,10 @@ func TestDepositPreauth_Invalid(t *testing.T) {
 
 	// Add DepositPreauth to an unfunded account.
 	t.Run("UnfundedAccount", func(t *testing.T) {
-		result := env.Submit(dp.Auth(alice, becky).Sequence(1).Build())
+		result := env.SubmitWithOptions(
+			dp.Auth(alice, becky).Sequence(1).Build(),
+			jtx.SubmitOptions{SkipSignature: true},
+		)
 		require.Equal(t, "terNO_ACCOUNT", result.Code)
 	})
 

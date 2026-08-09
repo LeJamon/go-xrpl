@@ -708,6 +708,12 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (derived *ledger.Ledger, 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if r.state == StateComplete {
+		if r.derived == nil {
+			return nil, errors.New("replay delta complete without derived ledger")
+		}
+		return r.derived, nil
+	}
 	if r.state != StateReplayReady {
 		return nil, fmt.Errorf("Apply called before response verified (state=%d)", r.state)
 	}

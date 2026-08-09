@@ -11,7 +11,6 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/check"
 	"github.com/LeJamon/go-xrpl/internal/testing/offer"
-	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/account"
 	"github.com/LeJamon/go-xrpl/internal/txq"
@@ -65,8 +64,7 @@ func TestRegression_LowBalanceDestroy(t *testing.T) {
 
 	// Fund alice with a small amount
 	aliceXRP := uint64(jtx.XRP(400))
-	result := env.Submit(payment.Pay(jtx.MasterAccount(), alice, aliceXRP).Build())
-	jtx.RequireTxSuccess(t, result)
+	env.FundAmountNoRipple(alice, aliceXRP)
 	env.Close()
 
 	aliceBalance := env.Balance(alice)
@@ -81,7 +79,7 @@ func TestRegression_LowBalanceDestroy(t *testing.T) {
 	seq := env.Seq(alice)
 	noop.GetCommon().Sequence = &seq
 
-	result = env.Submit(noop)
+	result := env.Submit(noop)
 	// Go engine rejects before applying (ter, not tec)
 	jtx.RequireTxFail(t, result, "terINSUF_FEE_B")
 }

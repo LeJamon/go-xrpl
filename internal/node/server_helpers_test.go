@@ -19,9 +19,11 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/rpc"
+	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/protocol"
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
+	"github.com/stretchr/testify/require"
 )
 
 func TestConsensusPhaseName(t *testing.T) {
@@ -253,14 +255,53 @@ func TestExtractBookPairsFromMetadataUsesAffectedNodeFields(t *testing.T) {
 	if len(books) != 3 {
 		t.Fatalf("got %d books, want 3: %+v", len(books), books)
 	}
-	if books[0].TakerGets.MPTIssuanceID != mptID || books[0].TakerPays.Currency != "XRP" || books[0].Domain != domain {
+	if books[0].TakerPays.MPTIssuanceID != mptID || books[0].TakerGets.Currency != "XRP" || books[0].Domain != domain {
 		t.Errorf("modified book = %+v", books[0])
 	}
-	if books[1].TakerGets.Currency != "USD" || books[1].TakerGets.Issuer != issuer || books[1].TakerPays.Currency != "XRP" {
+	if books[1].TakerPays.Currency != "USD" || books[1].TakerPays.Issuer != issuer || books[1].TakerGets.Currency != "XRP" {
 		t.Errorf("created book = %+v", books[1])
 	}
-	if books[2].TakerGets.Currency != "XRP" || books[2].TakerPays.Currency != "EUR" || books[2].TakerPays.Issuer != issuer {
+	if books[2].TakerPays.Currency != "XRP" || books[2].TakerGets.Currency != "EUR" || books[2].TakerGets.Issuer != issuer {
 		t.Errorf("deleted book = %+v", books[2])
+	}
+}
+
+func TestAffectedOfferMatchesTakerPerspectiveSubscription(t *testing.T) {
+	const issuer = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	meta := []byte(`{"AffectedNodes":[{"CreatedNode":{"LedgerEntryType":"Offer","NewFields":{"TakerGets":{"currency":"USD","issuer":"` + issuer + `","value":"2"},"TakerPays":"3"}}}]}`)
+	books := extractBookPairsFromMetadata(meta)
+	require.Len(t, books, 1)
+
+	manager := subscription.NewManager()
+	matching := subscription.NewConnection("matching", make(chan []byte, 1))
+	matchingRegistration, attached := manager.Attach(matching)
+	require.True(t, attached)
+	t.Cleanup(func() { manager.Detach(matchingRegistration) })
+	require.Nil(t, manager.HandleSubscribe(matchingRegistration, types.SubscriptionRequest{Books: []types.BookRequest{{
+		TakerPays: json.RawMessage(`{"currency":"USD","issuer":"` + issuer + `"}`),
+		TakerGets: json.RawMessage(`{"currency":"XRP"}`),
+	}}}, true))
+
+	inverse := subscription.NewConnection("inverse", make(chan []byte, 1))
+	inverseRegistration, attached := manager.Attach(inverse)
+	require.True(t, attached)
+	t.Cleanup(func() { manager.Detach(inverseRegistration) })
+	require.Nil(t, manager.HandleSubscribe(inverseRegistration, types.SubscriptionRequest{Books: []types.BookRequest{{
+		TakerPays: json.RawMessage(`{"currency":"XRP"}`),
+		TakerGets: json.RawMessage(`{"currency":"USD","issuer":"` + issuer + `"}`),
+	}}}, true))
+
+	manager.BroadcastToOrderBooksVersioned([]byte("accepted"), []byte("accepted"), books)
+	select {
+	case message := <-matching.Outbound():
+		require.Equal(t, []byte("accepted"), message)
+	case <-time.After(time.Second):
+		t.Fatal("taker-perspective book did not receive accepted offer")
+	}
+	select {
+	case message := <-inverse.Outbound():
+		t.Fatalf("inverse book received accepted offer: %s", message)
+	default:
 	}
 }
 
