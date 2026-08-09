@@ -288,6 +288,11 @@ browser origin must also configure Basic Auth.
 |-----|---------|---------|
 | `max_unknown_time` | `600` | Seconds a peer may stay in the "unknown" sanity state (300–1800). |
 | `max_diverged_time` | `300` | Seconds a peer may stay "diverged" before being dropped (60–900). |
+| `max_untrusted_count` | `300` | Maximum cached manifests for unlisted validator masters (50–1000). |
+| `max_trusted_count` | `300` | Trusted-manifest allowance used when sizing manifest messages (50–1000). |
+
+Both manifest-count keys are optional and default independently to `300`; an
+explicit value must be between `50` and `1000`, inclusive.
 
 ### `[transaction_queue]`
 

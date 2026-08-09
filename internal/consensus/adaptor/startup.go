@@ -380,6 +380,13 @@ func persistedManifests(cache *manifest.Cache, keep func([33]byte) bool) [][]byt
 	return out
 }
 
+func manifestCountSource(configured bool) string {
+	if configured {
+		return "configured"
+	}
+	return "default"
+}
+
 // NewFromConfig creates and wires all consensus/networking components from the app config.
 //
 // validationRepo is optional — pass nil to disable the on-disk validation
@@ -395,6 +402,10 @@ func NewFromConfig(
 	validationRepo relationaldb.ValidationRepository,
 	floor MinimumOnlineFloor,
 ) (_ *Components, err error) {
+	if err := appCfg.Overlay.Validate(); err != nil {
+		return nil, fmt.Errorf("validate overlay config: %w", err)
+	}
+
 	// Create validator identity first (nil if not a validator) so we can
 	// pass its pubkey into the overlay for the self-target TMSquelch
 	// filter: without this a peer could silence our own validator's
@@ -408,8 +419,16 @@ func NewFromConfig(
 		return nil, fmt.Errorf("parse validator_list_keys: %w", err)
 	}
 
-	validatorManifests := manifest.NewCache()
-	publisherManifests := manifest.NewCache()
+	maxUntrustedCount := appCfg.Overlay.EffectiveMaxUntrustedCount()
+	maxTrustedCount := appCfg.Overlay.EffectiveMaxTrustedCount()
+	slog.Info("manifest cache limits",
+		"t", "adaptor.NewFromConfig",
+		"max_untrusted_count", maxUntrustedCount,
+		"max_untrusted_count_source", manifestCountSource(appCfg.Overlay.MaxUntrustedCount != nil),
+		"max_trusted_count", maxTrustedCount,
+		"max_trusted_count_source", manifestCountSource(appCfg.Overlay.MaxTrustedCount != nil))
+	validatorManifests := manifest.NewCache(maxUntrustedCount)
+	publisherManifests := manifest.NewCache(maxUntrustedCount)
 	manifestStore, err := manifest.OpenSQLiteStore(ctx, appCfg.LocalStateDir())
 	if err != nil {
 		return nil, fmt.Errorf("open manifest store: %w", err)
@@ -645,7 +664,7 @@ func NewFromConfig(
 }
 
 func seedLocalManifest(cache *manifest.Cache, local *manifest.Manifest) error {
-	disposition := cache.ApplyManifest(local)
+	disposition := cache.ApplyManifest(local, manifest.Uncapped)
 	if disposition == manifest.Invalid {
 		return fmt.Errorf("seed local manifest into cache: disposition=%s", disposition)
 	}
@@ -659,7 +678,7 @@ func restoreManifests(role string, cache *manifest.Cache, rows [][]byte) {
 			slog.Warn("stored manifest rejected", "role", role, "row", i, "error", err)
 			continue
 		}
-		switch disposition := cache.ApplyManifest(parsed); disposition {
+		switch disposition := cache.ApplyManifest(parsed, manifest.Uncapped); disposition {
 		case manifest.Accepted, manifest.Stale:
 		default:
 			slog.Warn("stored manifest rejected", "role", role, "row", i, "disposition", disposition.String())

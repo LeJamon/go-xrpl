@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,9 @@ func LoadConfig(paths Paths) (*Config, error) {
 
 	// Load main configuration file (required)
 	if err := loadMainConfig(v, paths.Main); err != nil {
+		return nil, fmt.Errorf("failed to load main config: %w", err)
+	}
+	if err := validateManifestCountTypes(v); err != nil {
 		return nil, fmt.Errorf("failed to load main config: %w", err)
 	}
 
@@ -57,6 +61,37 @@ func LoadConfig(paths Paths) (*Config, error) {
 	}
 
 	return &config, nil
+}
+
+// validateManifestCountTypes rejects weakly-typed TOML values before
+// mapstructure can coerce them into *int fields. Manifest counts are integer
+// settings; accepting strings or floating-point values here would make a
+// malformed configuration appear valid after decoding.
+func validateManifestCountTypes(v *viper.Viper) error {
+	for _, key := range []string{"overlay.max_untrusted_count", "overlay.max_trusted_count"} {
+		if !v.IsSet(key) {
+			continue
+		}
+		raw := v.Get(key)
+		switch value := raw.(type) {
+		case int:
+		case int8:
+		case int16:
+		case int32:
+		case int64:
+		case uint:
+		case uint8:
+		case uint16:
+		case uint32:
+		case uint64:
+			if value > uint64(math.MaxInt) {
+				return fmt.Errorf("%s must be an integer count", key)
+			}
+		default:
+			return fmt.Errorf("%s must be an integer count", key)
+		}
+	}
+	return nil
 }
 
 // loadMainConfig loads the main configuration file

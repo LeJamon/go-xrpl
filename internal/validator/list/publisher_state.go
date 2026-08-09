@@ -35,6 +35,10 @@ func (a *Aggregator) applyListInternal(globalManifest, localManifest []byte, loc
 		manifestBytes = localManifest
 	}
 
+	if len(manifestBytes) > manifest.MaxManifestBase64 {
+		a.logger.Debug("validator list: manifest exceeds maximum base64 size", "site", siteURI)
+		return Untrusted, PublisherKey{}, 0
+	}
 	manifestRaw, err := decodeBase64Tolerant(manifestBytes)
 	if err != nil {
 		a.logger.Debug("validator list: manifest base64 decode failed", "error", err, "site", siteURI)
@@ -69,7 +73,7 @@ func (a *Aggregator) applyListInternal(globalManifest, localManifest []byte, loc
 	var manifestSequence uint32
 	manifestSequenceSet := false
 	if a.publisherManifests != nil {
-		switch d := a.publisherManifests.ApplyManifest(parsed); d {
+		switch d := a.publisherManifests.ApplyManifest(parsed, manifest.Uncapped); d {
 		case manifest.Accepted:
 			manifestAccepted = true
 		case manifest.Stale:
@@ -340,6 +344,9 @@ func (a *Aggregator) applyEmbeddedManifestsLocked(s *publisherState, entries []b
 		if v.Manifest == "" {
 			continue
 		}
+		if len(v.Manifest) > manifest.MaxManifestBase64 {
+			continue
+		}
 		raw, err := decodeBase64Tolerant([]byte(v.Manifest))
 		if err != nil {
 			continue
@@ -359,7 +366,7 @@ func (a *Aggregator) applyEmbeddedManifestRawLocked(listed map[[33]byte]struct{}
 			"master", hex.EncodeToString(masterKey[:]))
 		return
 	}
-	_ = a.validatorManifests.ApplyManifest(parsed)
+	_ = a.validatorManifests.ApplyManifest(parsed, manifest.Uncapped)
 }
 
 func (a *Aggregator) applyEmbeddedPendingManifestsLocked(s *publisherState, entries []pendingEmbeddedManifest) {
@@ -444,6 +451,9 @@ func (a *Aggregator) pendingEmbeddedManifests(blob *blobJSON) []pendingEmbeddedM
 	var out []pendingEmbeddedManifest
 	for _, entry := range blob.Validators {
 		if entry.Manifest == "" {
+			continue
+		}
+		if len(entry.Manifest) > manifest.MaxManifestBase64 {
 			continue
 		}
 		raw, err := decodeBase64Tolerant([]byte(entry.Manifest))

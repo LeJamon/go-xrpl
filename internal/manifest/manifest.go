@@ -44,7 +44,12 @@ import (
 // RevokedSequence marks a manifest as a master-key revocation.
 const RevokedSequence uint32 = math.MaxUint32
 
-const maxSerializedSize = 1024
+// MaxSerializedSize is the largest serialized manifest accepted by the
+// protocol. The bound is checked before STObject decoding so oversized input
+// cannot trigger parser allocations.
+const MaxSerializedSize = 358
+
+const maxSerializedSize = MaxSerializedSize
 
 // Manifest is a parsed, syntactically-valid validator manifest.
 // Signature verification is separate — callers invoke Verify before

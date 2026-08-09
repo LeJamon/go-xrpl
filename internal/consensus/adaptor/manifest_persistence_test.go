@@ -150,6 +150,17 @@ func TestNewFromConfigFailsWhenManifestStoreCannotLoad(t *testing.T) {
 	require.ErrorContains(t, err, "RawData")
 }
 
+func TestNewFromConfigRejectsInvalidManifestCacheLimit(t *testing.T) {
+	value := 49
+	components, err := NewFromConfig(context.Background(), &config.Config{
+		DatabasePath: t.TempDir(),
+		Overlay:      config.OverlayConfig{MaxUntrustedCount: &value},
+	}, nil, nil, nil)
+	require.Nil(t, components)
+	require.ErrorContains(t, err, "validate overlay config")
+	require.ErrorContains(t, err, "max_untrusted_count")
+}
+
 func applyTokenManifest(t *testing.T, cache *manifest.Cache, masterSeed, signingSeed byte, sequence uint32) [33]byte {
 	t.Helper()
 	fixture := newTokenFixtureWithSeeds(t, masterSeed, signingSeed, sequence)

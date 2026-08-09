@@ -744,6 +744,83 @@ func TestOverlayConfig_ResourceLimitsValidation(t *testing.T) {
 	}
 }
 
+func TestOverlayConfig_ManifestCountDefaultsAndBounds(t *testing.T) {
+	intValue := func(value int) *int { return &value }
+	tests := []struct {
+		name          string
+		untrusted     *int
+		trusted       *int
+		wantUntrusted int
+		wantTrusted   int
+		wantErr       bool
+	}{
+		{name: "absent", wantUntrusted: DefaultMaxUntrustedCount, wantTrusted: DefaultMaxTrustedCount},
+		{name: "untrusted_only", untrusted: intValue(50), wantUntrusted: 50, wantTrusted: DefaultMaxTrustedCount},
+		{name: "trusted_only", trusted: intValue(1000), wantUntrusted: DefaultMaxUntrustedCount, wantTrusted: 1000},
+		{name: "both", untrusted: intValue(1000), trusted: intValue(50), wantUntrusted: 1000, wantTrusted: 50},
+		{name: "untrusted_below_minimum", untrusted: intValue(49), wantErr: true},
+		{name: "untrusted_above_maximum", untrusted: intValue(1001), wantErr: true},
+		{name: "untrusted_zero", untrusted: intValue(0), wantErr: true},
+		{name: "untrusted_negative", untrusted: intValue(-1), wantErr: true},
+		{name: "trusted_below_minimum", trusted: intValue(49), wantErr: true},
+		{name: "trusted_above_maximum", trusted: intValue(1001), wantErr: true},
+		{name: "trusted_zero", trusted: intValue(0), wantErr: true},
+		{name: "trusted_negative", trusted: intValue(-1), wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			overlay := OverlayConfig{MaxUntrustedCount: test.untrusted, MaxTrustedCount: test.trusted}
+			err := overlay.Validate()
+			if test.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.wantUntrusted, overlay.EffectiveMaxUntrustedCount())
+			require.Equal(t, test.wantTrusted, overlay.EffectiveMaxTrustedCount())
+		})
+	}
+}
+
+func TestLoadConfig_ManifestCountTypedAndBoundaryValues(t *testing.T) {
+	validValues := []string{
+		"max_untrusted_count = 50\nmax_trusted_count = 1000",
+		"max_untrusted_count = 1000\nmax_trusted_count = 50",
+	}
+	for _, overlay := range validValues {
+		t.Run(strings.ReplaceAll(overlay, "\n", ";"), func(t *testing.T) {
+			path := writeConfig(t, t.TempDir(), "xrpld.toml", minimalTestConfig()+"\n[overlay]\n"+overlay+"\n")
+			cfg, err := LoadConfig(Paths{Main: path})
+			require.NoError(t, err)
+			require.NotNil(t, cfg.Overlay.MaxUntrustedCount)
+			require.NotNil(t, cfg.Overlay.MaxTrustedCount)
+		})
+	}
+
+	for _, value := range []string{"49", "1001", "0", "-1"} {
+		t.Run("untrusted_"+value, func(t *testing.T) {
+			path := writeConfig(t, t.TempDir(), "xrpld.toml", minimalTestConfig()+"\n[overlay]\nmax_untrusted_count = "+value+"\n")
+			_, err := LoadConfig(Paths{Main: path})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "max_untrusted_count")
+		})
+		t.Run("trusted_"+value, func(t *testing.T) {
+			path := writeConfig(t, t.TempDir(), "xrpld.toml", minimalTestConfig()+"\n[overlay]\nmax_trusted_count = "+value+"\n")
+			_, err := LoadConfig(Paths{Main: path})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "max_trusted_count")
+		})
+	}
+
+	for _, value := range []string{"\"50\"", "50.5", "true", "[50]"} {
+		t.Run("malformed_untrusted_"+value, func(t *testing.T) {
+			path := writeConfig(t, t.TempDir(), "xrpld.toml", minimalTestConfig()+"\n[overlay]\nmax_untrusted_count = "+value+"\n")
+			_, err := LoadConfig(Paths{Main: path})
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestConfigValidation_CompleteConfig(t *testing.T) {
 	assert.NoError(t, ValidateConfig(validCompleteConfig()))
 }

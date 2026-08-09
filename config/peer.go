@@ -17,15 +17,27 @@ import (
 //     gossip; nil (absent) means the built-in default (1 = verify on),
 //     0 skips validation for local dev networks — a security risk on a
 //     public network
+//   - max_untrusted_count / max_trusted_count are optional manifest limits;
+//     absence defaults independently to 300 and configured values must be in
+//     the inclusive range 50..1000
 type OverlayConfig struct {
 	PublicIP             string               `toml:"public_ip" mapstructure:"public_ip"`
 	IPLimit              int                  `toml:"ip_limit" mapstructure:"ip_limit"`
 	MaxUnknownTime       int                  `toml:"max_unknown_time" mapstructure:"max_unknown_time"`
 	MaxDivergedTime      int                  `toml:"max_diverged_time" mapstructure:"max_diverged_time"`
 	VerifyEndpoints      *int                 `toml:"verify_endpoints" mapstructure:"verify_endpoints"`
+	MaxUntrustedCount    *int                 `toml:"max_untrusted_count" mapstructure:"max_untrusted_count"`
+	MaxTrustedCount      *int                 `toml:"max_trusted_count" mapstructure:"max_trusted_count"`
 	InboundRetainedBytes int64                `toml:"inbound_retained_bytes" mapstructure:"inbound_retained_bytes"`
 	ResourceLimits       ResourceLimitsConfig `toml:"resource_limits" mapstructure:"resource_limits"`
 }
+
+const (
+	DefaultMaxUntrustedCount = 300
+	DefaultMaxTrustedCount   = 300
+	MinManifestCount         = 50
+	MaxManifestCount         = 1000
+)
 
 // ResourceLimitsConfig bounds peer reputation and cluster-gossip state.
 // Zero values retain the built-in limits.
@@ -109,8 +121,37 @@ func (o *OverlayConfig) Validate() error {
 	if limits.MaxImportItems > 1024 {
 		return fmt.Errorf("resource_limits.max_import_items must not exceed 1024, got %d", limits.MaxImportItems)
 	}
+	for _, count := range []struct {
+		name  string
+		value *int
+	}{
+		{name: "max_untrusted_count", value: o.MaxUntrustedCount},
+		{name: "max_trusted_count", value: o.MaxTrustedCount},
+	} {
+		if count.value == nil {
+			continue
+		}
+		if *count.value < MinManifestCount || *count.value > MaxManifestCount {
+			return fmt.Errorf("%s must be between %d and %d, got %d",
+				count.name, MinManifestCount, MaxManifestCount, *count.value)
+		}
+	}
 
 	return nil
+}
+
+func (o *OverlayConfig) EffectiveMaxUntrustedCount() int {
+	if o == nil || o.MaxUntrustedCount == nil {
+		return DefaultMaxUntrustedCount
+	}
+	return *o.MaxUntrustedCount
+}
+
+func (o *OverlayConfig) EffectiveMaxTrustedCount() int {
+	if o == nil || o.MaxTrustedCount == nil {
+		return DefaultMaxTrustedCount
+	}
+	return *o.MaxTrustedCount
 }
 
 // Validate performs validation on the transaction queue configuration.

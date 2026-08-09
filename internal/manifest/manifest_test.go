@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"math/big"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -146,8 +147,136 @@ func TestManifest_RejectsFieldsOutsideManifestFormat(t *testing.T) {
 }
 
 func TestManifest_RejectsOversizedPayloadBeforeDecode(t *testing.T) {
-	_, err := manifest.Deserialize(make([]byte, 1025))
-	require.ErrorContains(t, err, "payload exceeds 1024 bytes")
+	_, err := manifest.Deserialize(make([]byte, manifest.MaxSerializedSize+1))
+	require.ErrorContains(t, err, "payload exceeds 358 bytes")
+}
+
+func TestManifest_MaximumSerializedPayloadReachesDecoder(t *testing.T) {
+	_, err := manifest.Deserialize(make([]byte, manifest.MaxSerializedSize))
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "payload exceeds")
+}
+
+func TestManifest_CappedCapacityUpdatesAndPromotion(t *testing.T) {
+	firstWire, firstMaster, _ := buildManifest(t, 1, false, 0x41, 0x42)
+	first, err := manifest.Deserialize(firstWire)
+	require.NoError(t, err)
+	secondWire, secondMaster, _ := buildManifest(t, 1, false, 0x43, 0x44)
+	second, err := manifest.Deserialize(secondWire)
+	require.NoError(t, err)
+
+	cache := manifest.NewCache(1)
+	require.Equal(t, manifest.Accepted, cache.ApplyManifest(first, manifest.Capped))
+	require.True(t, cache.IsUntrusted(firstMaster))
+	require.Equal(t, 1, cache.UntrustedCount())
+
+	// A full capped cache rejects a new master before signature/key checks and
+	// retains every accepted entry without eviction.
+	badSecondWire := append([]byte(nil), secondWire...)
+	badSecondWire[len(badSecondWire)-1] ^= 0x01
+	badSecond, err := manifest.Deserialize(badSecondWire)
+	require.NoError(t, err)
+	require.Equal(t, manifest.UntrustedCapacity, cache.ApplyManifest(badSecond, manifest.Capped))
+	require.Equal(t, 1, cache.UntrustedCount())
+	_, ok := cache.GetManifest(secondMaster)
+	require.False(t, ok)
+	_, ok = cache.GetManifest(firstMaster)
+	require.True(t, ok)
+
+	// Rotations and revocations of an already-cached master bypass capacity.
+	rotationWire, _, _ := buildManifest(t, 2, false, 0x41, 0x45)
+	rotation, err := manifest.Deserialize(rotationWire)
+	require.NoError(t, err)
+	require.Equal(t, manifest.Accepted, cache.ApplyManifest(rotation, manifest.Capped))
+	require.Equal(t, 1, cache.UntrustedCount())
+	revocationWire, _, _ := buildManifest(t, manifest.RevokedSequence, true, 0x41, 0)
+	revocation, err := manifest.Deserialize(revocationWire)
+	require.NoError(t, err)
+	require.Equal(t, manifest.Accepted, cache.ApplyManifest(revocation, manifest.Capped))
+	require.Equal(t, 1, cache.UntrustedCount())
+
+	// Promotion frees the slot but keeps the cached revocation; a subsequent
+	// capped insertion may consume that slot.
+	cache.PromoteToTrusted(firstMaster)
+	cache.PromoteToTrusted(firstMaster)
+	require.Equal(t, 0, cache.UntrustedCount())
+	require.True(t, cache.Revoked(firstMaster))
+	require.Equal(t, manifest.Accepted, cache.ApplyManifest(second, manifest.Capped))
+	require.Equal(t, 1, cache.UntrustedCount())
+
+	// An uncapped update of a counted master frees its slot and de-listing does
+	// not add it back.
+	secondRotationWire, _, _ := buildManifest(t, 2, false, 0x43, 0x46)
+	secondRotation, err := manifest.Deserialize(secondRotationWire)
+	require.NoError(t, err)
+	require.Equal(t, manifest.Accepted, cache.ApplyManifest(secondRotation, manifest.Uncapped))
+	require.Equal(t, 0, cache.UntrustedCount())
+	require.Equal(t, manifest.Stale, cache.ApplyManifest(secondRotation, manifest.Capped))
+	require.Equal(t, 0, cache.UntrustedCount())
+}
+
+func TestManifest_UncappedBypassesCapacityAndRolesAreIsolated(t *testing.T) {
+	firstWire, firstMaster, _ := buildManifest(t, 1, false, 0x51, 0x52)
+	first, err := manifest.Deserialize(firstWire)
+	require.NoError(t, err)
+	secondWire, secondMaster, _ := buildManifest(t, 1, false, 0x53, 0x54)
+	second, err := manifest.Deserialize(secondWire)
+	require.NoError(t, err)
+
+	validators := manifest.NewCache(1)
+	publishers := manifest.NewCache(1)
+	require.Equal(t, manifest.Accepted, validators.ApplyManifest(first, manifest.Capped))
+	require.Equal(t, manifest.Accepted, publishers.ApplyManifest(first, manifest.Capped))
+	require.Equal(t, manifest.UntrustedCapacity, validators.ApplyManifest(second, manifest.Capped))
+	require.Equal(t, manifest.UntrustedCapacity, publishers.ApplyManifest(second, manifest.Capped))
+
+	// Configured/listed/DB paths remain uncapped and are isolated per role.
+	require.Equal(t, manifest.Accepted, validators.ApplyManifest(second, manifest.Uncapped))
+	require.False(t, validators.IsUntrusted(secondMaster))
+	require.Equal(t, 1, validators.UntrustedCount())
+	require.True(t, validators.IsUntrusted(firstMaster))
+	require.False(t, publishers.IsUntrusted(secondMaster))
+	require.Equal(t, 1, publishers.UntrustedCount())
+}
+
+func TestManifest_CappedCapacityConcurrentFirstInsert(t *testing.T) {
+	cache := manifest.NewCache(1)
+	const count = 12
+	manifests := make([]*manifest.Manifest, 0, count)
+	for i := 0; i < count; i++ {
+		wire, _, _ := buildManifest(t, 1, false, byte(0x61+i), byte(0x71+i))
+		parsed, err := manifest.Deserialize(wire)
+		require.NoError(t, err)
+		manifests = append(manifests, parsed)
+	}
+
+	results := make(chan manifest.Disposition, count)
+	var wg sync.WaitGroup
+	for _, parsed := range manifests {
+		wg.Add(1)
+		go func(m *manifest.Manifest) {
+			defer wg.Done()
+			results <- cache.ApplyManifest(m, manifest.Capped)
+		}(parsed)
+	}
+	wg.Wait()
+	close(results)
+
+	accepted := 0
+	capacity := 0
+	for disposition := range results {
+		switch disposition {
+		case manifest.Accepted:
+			accepted++
+		case manifest.UntrustedCapacity:
+			capacity++
+		default:
+			t.Fatalf("unexpected disposition %s", disposition)
+		}
+	}
+	require.Equal(t, 1, accepted)
+	require.Equal(t, count-1, capacity)
+	require.Equal(t, 1, cache.UntrustedCount())
 }
 
 func TestDispositionString(t *testing.T) {
@@ -160,6 +289,7 @@ func TestDispositionString(t *testing.T) {
 		{manifest.Invalid, "invalid"},
 		{manifest.BadMasterKey, "bad_master_key"},
 		{manifest.BadEphemeralKey, "bad_ephemeral_key"},
+		{manifest.UntrustedCapacity, "untrusted_capacity"},
 		{manifest.Disposition(99), "unknown"},
 	}
 	for _, test := range tests {

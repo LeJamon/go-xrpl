@@ -126,7 +126,7 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 			valid = true
 			return
 		}
-		switch d := r.manifests.ApplyManifest(parsed); d {
+		switch d := r.manifests.ApplyManifest(parsed, manifest.Uncapped); d {
 		case manifest.Accepted:
 			valid = true
 			accepted = append(accepted, wire)
