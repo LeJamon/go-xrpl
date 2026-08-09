@@ -434,12 +434,12 @@ func deleteCredential(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data 
 	return ter.TesSUCCESS
 }
 
-func deleteOracle(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []byte) ter.Result {
+func deleteOracle(ctx *tx.ApplyContext, _ keylet.Keylet, ik keylet.Keylet, data []byte) ter.Result {
 	od, err := state.ParseOracle(data)
 	if err != nil {
 		return ter.TefBAD_LEDGER
 	}
-	if r := oracle.DeleteOracleFromView(ctx.View, ik, od, ctx.AccountID, nil); r != ter.TesSUCCESS {
+	if r := oracle.DeleteOracleFromView(ctx.View, ik, od, ctx.AccountID, &ctx.Account.OwnerCount); r != ter.TesSUCCESS {
 		return ter.TefBAD_LEDGER
 	}
 	return ter.TesSUCCESS

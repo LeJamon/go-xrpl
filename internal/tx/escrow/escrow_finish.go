@@ -345,6 +345,11 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 		} else if result := tx.DecreaseOwnerCountFor(ctx, ownerID, sponsorAddress, 1); result != ter.TesSUCCESS {
 			return result
 		}
+		if destIsSelf {
+			if result := ctx.UpdateAccountRoot(ctx.AccountID, ctx.Account); result != ter.TesSUCCESS {
+				return result
+			}
+		}
 	}
 
 	// Transfer the escrowed amount to destination

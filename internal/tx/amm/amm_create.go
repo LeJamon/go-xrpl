@@ -153,10 +153,13 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Res
 	// Check reserve for the LP token trustline, then sufficient funding for both
 	// assets against the liquid (post-reserve) XRP balance.
 	// Reference: rippled AMMCreate.cpp line 145-170
-	if insufficientLPTokenReserve(account, config) {
+	if insufficientLPTokenReserve(view, account, config) {
 		return TecINSUF_RESERVE_LINE
 	}
-	reserveNeeded := accountReserve(config, account.OwnerCount+1)
+	reserveNeeded, ok := tx.AccountReserveForView(view, config, account, tx.ConfineOwnerCount(account.OwnerCount, 1))
+	if !ok {
+		return ter.TefINTERNAL
+	}
 	xrpLiquid := int64(account.Balance) - int64(reserveNeeded)
 	insufficient, result := insufficientBalance(view, accountID, a.Amount, xrpLiquid)
 	if result != ter.TesSUCCESS {
@@ -354,7 +357,6 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	isXRP1 := isXRPAsset(sortedAsset1)
 	isXRP2 := isXRPAsset(sortedAsset2)
 
-
 	// Reference: rippled AMMCreate.cpp sendAndTrustSet uses accountSend which
 	// handles issuer-as-sender (no self-trust-line debit needed).
 	if isXRP1 {
@@ -394,7 +396,10 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			// If deleting the creator's trust line also cleared the issuer's
 			// reserve on that line, decrement the issuer's owner count.
 			if tlResult.IssuerOwnerCountDelta != 0 {
-				_ = tx.DecreaseOwnerCountOnView(ctx.View, issuerID1, tlResult.IssuerSponsor, 1)
+				if err := tx.DecreaseOwnerCountOnView(ctx.View, issuerID1, tlResult.IssuerSponsor, 1); err != nil {
+					return ter.TefINTERNAL
+				}
+				ctx.SyncSenderSponsorCounts(tlResult.IssuerSponsor)
 			}
 		}
 	}
@@ -434,7 +439,10 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			// If deleting the creator's trust line also cleared the issuer's
 			// reserve on that line, decrement the issuer's owner count.
 			if tlResult.IssuerOwnerCountDelta != 0 {
-				_ = tx.DecreaseOwnerCountOnView(ctx.View, issuerID2, tlResult.IssuerSponsor, 1)
+				if err := tx.DecreaseOwnerCountOnView(ctx.View, issuerID2, tlResult.IssuerSponsor, 1); err != nil {
+					return ter.TefINTERNAL
+				}
+				ctx.SyncSenderSponsorCounts(tlResult.IssuerSponsor)
 			}
 		}
 	}

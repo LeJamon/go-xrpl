@@ -1148,7 +1148,8 @@ func createTrustLineForEscrow(
 	}
 	receiverNoRipple := receiverAcct.Flags&state.LsfDefaultRipple == 0
 	sponsorAddress := ""
-	if bumpOwnerCount && ctx != nil && destID == ctx.AccountID {
+	accountedByContext := bumpOwnerCount && ctx != nil && destID == ctx.AccountID
+	if accountedByContext {
 		var result ter.Result
 		sponsorAddress, result = tx.IncreaseOwnerCount(ctx, destID, ctx.Account, 1)
 		if result != ter.TesSUCCESS {
@@ -1177,7 +1178,7 @@ func createTrustLineForEscrow(
 	// Increment OwnerCount for the destination (receiver). On the cancel path
 	// rippled bumps the soon-erased escrow SLE instead of a real account, so the
 	// caller passes bumpOwnerCount=false and no account is charged for the line.
-	if bumpOwnerCount && sponsorAddress == "" {
+	if bumpOwnerCount && !accountedByContext {
 		if result := adjustOwnerCountViaView(view, destID, 1); result != ter.TesSUCCESS {
 			return result
 		}
@@ -1390,7 +1391,8 @@ func createMPTokenForEscrow(
 		return mapDirInsertError(err)
 	}
 	tokenData.OwnerNode = dirResult.Page
-	if bumpOwnerCount && ctx != nil && destID == ctx.AccountID {
+	accountedByContext := bumpOwnerCount && ctx != nil && destID == ctx.AccountID
+	if accountedByContext {
 		sponsorAddress, result := tx.IncreaseOwnerCount(ctx, destID, ctx.Account, 1)
 		if result != ter.TesSUCCESS {
 			return result
@@ -1411,7 +1413,7 @@ func createMPTokenForEscrow(
 
 	// On the cancel path rippled bumps the soon-erased escrow SLE rather than a
 	// real account, so the caller passes bumpOwnerCount=false.
-	if bumpOwnerCount && tokenData.Sponsor == "" {
+	if bumpOwnerCount && !accountedByContext {
 		if result := adjustOwnerCountViaView(view, destID, 1); result != ter.TesSUCCESS {
 			return result
 		}

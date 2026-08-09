@@ -53,6 +53,10 @@ type issuerSelfDebitHookMPT interface {
 }
 
 type ownerCountHook interface {
+	AdjustOwnerCounts(account [20]byte, current, next tx.OwnerCounts)
+}
+
+type legacyOwnerCountHook interface {
 	AdjustOwnerCount(account [20]byte, current, next uint32)
 }
 
@@ -759,10 +763,18 @@ func EnsureHolding(view state.LedgerView, id [24]byte, holder [20]byte, flags ui
 		return ter.TefINTERNAL
 	}
 	if adjustOwnerCount {
-		current := account.OwnerCount
+		current := tx.OwnerCounts{
+			Owner: account.OwnerCount, Sponsored: account.SponsoredOwnerCount,
+			Sponsoring: account.SponsoringOwnerCount,
+		}
 		account.OwnerCount++
 		if hook, ok := view.(ownerCountHook); ok {
-			hook.AdjustOwnerCount(holder, current, account.OwnerCount)
+			hook.AdjustOwnerCounts(holder, current, tx.OwnerCounts{
+				Owner: account.OwnerCount, Sponsored: account.SponsoredOwnerCount,
+				Sponsoring: account.SponsoringOwnerCount,
+			})
+		} else if hook, ok := view.(legacyOwnerCountHook); ok {
+			hook.AdjustOwnerCount(holder, current.Owner, account.OwnerCount)
 		}
 		data, err = state.SerializeAccountRoot(account)
 		if err != nil || view.Update(accountKey, data) != nil {
@@ -840,29 +852,8 @@ func RemoveHolding(view state.LedgerView, id [24]byte, holder [20]byte, adjustOw
 		return ter.TesSUCCESS
 	}
 
-	accountKey := keylet.Account(holder)
-	accountRaw, err := view.Read(accountKey)
-	if err != nil || accountRaw == nil {
-		return ter.TefINTERNAL
-	}
-	account, err := state.ParseAccountRoot(accountRaw)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	current := account.OwnerCount
 	if err := tx.DecreaseOwnerCountOnView(view, holder, token.Sponsor, 1); err != nil {
 		return ter.TefINTERNAL
-	}
-	accountRaw, err = view.Read(accountKey)
-	if err != nil || accountRaw == nil {
-		return ter.TefINTERNAL
-	}
-	account, err = state.ParseAccountRoot(accountRaw)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if hook, ok := view.(ownerCountHook); ok {
-		hook.AdjustOwnerCount(holder, current, account.OwnerCount)
 	}
 	return ter.TesSUCCESS
 }

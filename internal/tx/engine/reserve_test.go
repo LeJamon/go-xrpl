@@ -3,6 +3,7 @@ package engine
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -107,7 +108,10 @@ func TestCheckReserveWithFeeDelegatedBoundary(t *testing.T) {
 	const reserveFor3 = reserveBase + 3*reserveIncrement // accountReserve(3) = 16 XRP
 	const fee = uint64(10)
 
-	cfg := txcore.EngineConfig{ReserveBase: reserveBase, ReserveIncrement: reserveIncrement}
+	cfg := txcore.EngineConfig{
+		ReserveBase: reserveBase, ReserveIncrement: reserveIncrement,
+		Rules: amendment.EmptyRules(),
+	}
 	acct := &state.AccountRoot{Balance: reserveFor3 - 1}
 
 	delegated := &txcore.ApplyContext{Account: acct, Config: cfg, SourceFeeCharged: 0}

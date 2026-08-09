@@ -330,7 +330,12 @@ func (c *CheckCash) applyCashXRP(ctx *tx.ApplyContext, check *state.CheckData, c
 	// rippled's accountFunds(value) + fees().increment guard, which returns
 	// tecPATH_PARTIAL when the writer is at or above their reserve.
 	// Reference: CashCheck.cpp L162-185.
-	if requestedDrops > xrpAvailableFunds(creatorAccount, ctx) {
+	sponsorAddress, err := tx.LedgerEntrySponsorFromView(ctx.View, checkKey, "Sponsor")
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	sponsored := sponsorAddress != ""
+	if requestedDrops > xrpAvailableFunds(creatorAccount, ctx, sponsored) {
 		return ter.TecPATH_PARTIAL
 	}
 
@@ -339,7 +344,7 @@ func (c *CheckCash) applyCashXRP(ctx *tx.ApplyContext, check *state.CheckData, c
 	// where rippled returns tecUNFUNDED_PAYMENT. For DeliverMin, xrpDeliver
 	// collapses to DeliverMin in the underfunded case (min(sendMax, srcLiquid)
 	// never exceeds srcLiquid). Reference: CashCheck.cpp L304-319.
-	srcLiquid := xrpLiquidAfterCheck(creatorAccount, ctx)
+	srcLiquid := xrpLiquidAfterCheck(creatorAccount, ctx, sponsored)
 	if srcLiquid < requestedDrops {
 		return ter.TecUNFUNDED_PAYMENT
 	}
@@ -364,10 +369,6 @@ func (c *CheckCash) applyCashXRP(ctx *tx.ApplyContext, check *state.CheckData, c
 		return result
 	}
 
-	sponsorAddress, err := tx.LedgerEntrySponsorFromView(ctx.View, checkKey, "Sponsor")
-	if err != nil {
-		return ter.TefINTERNAL
-	}
 	if err := tx.DecreaseOwnerCount(ctx.View, creatorAccount, sponsorAddress, 1); err != nil {
 		return ter.TefINTERNAL
 	}
@@ -391,25 +392,28 @@ func (c *CheckCash) applyCashXRP(ctx *tx.ApplyContext, check *state.CheckData, c
 // reserve increment, since cashing the check releases its reserve.
 // Mirrors rippled's accountFunds(value) + fees().increment for native amounts.
 // Reference: CashCheck.cpp L162-185, View.cpp xrpLiquid (zero-clamp).
-func xrpAvailableFunds(creator *state.AccountRoot, ctx *tx.ApplyContext) uint64 {
-	reserve := ctx.AccountReserve(creator.OwnerCount)
+func xrpAvailableFunds(creator *state.AccountRoot, ctx *tx.ApplyContext, sponsored bool) uint64 {
+	reserve := ctx.AccountReserveFor(creator, creator.OwnerCount)
 	var liquid uint64
 	if creator.Balance > reserve {
 		liquid = creator.Balance - reserve
 	}
-	return liquid + ctx.Config.ReserveIncrement
+	if !sponsored {
+		liquid += ctx.Config.ReserveIncrement
+	}
+	return liquid
 }
 
 // xrpLiquidAfterCheck returns the writer's zero-clamped liquid XRP computed with
 // the check's reserve already released (owner count minus one), matching
 // rippled's xrpLiquid(psb, srcId, -1). This is the amount actually available to
 // fund the transfer in doApply. Reference: CashCheck.cpp L304, View.cpp xrpLiquid.
-func xrpLiquidAfterCheck(creator *state.AccountRoot, ctx *tx.ApplyContext) uint64 {
+func xrpLiquidAfterCheck(creator *state.AccountRoot, ctx *tx.ApplyContext, sponsored bool) uint64 {
 	ownerCount := creator.OwnerCount
-	if ownerCount > 0 {
+	if !sponsored && ownerCount > 0 {
 		ownerCount--
 	}
-	reserve := ctx.AccountReserve(ownerCount)
+	reserve := ctx.AccountReserveFor(creator, ownerCount)
 	if creator.Balance > reserve {
 		return creator.Balance - reserve
 	}

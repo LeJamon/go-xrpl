@@ -3,6 +3,7 @@ package tx
 import (
 	"fmt"
 	"math"
+	"math/bits"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -51,7 +52,37 @@ func RequiredAccountReserve(config EngineConfig, account *state.AccountRoot, own
 	if !ok {
 		return 0, false
 	}
-	return config.AccountReserveWithCounts(owners, reserveAccountCount(account, accountDelta)), true
+	return checkedAccountReserve(config, owners, reserveAccountCount(account, accountDelta))
+}
+
+func checkedAccountReserve(config EngineConfig, ownerCount, accountCount uint32) (uint64, bool) {
+	ownerHigh, ownerReserve := bits.Mul64(uint64(ownerCount), config.ReserveIncrement)
+	accountHigh, accountReserve := bits.Mul64(uint64(accountCount), config.ReserveBase)
+	if ownerHigh != 0 || accountHigh != 0 {
+		return 0, false
+	}
+	reserve, carry := bits.Add64(ownerReserve, accountReserve, 0)
+	return reserve, carry == 0
+}
+
+// AccountReserveForView returns account's reserve at the supplied raw owner
+// count, using the view's amendment rules.
+func AccountReserveForView(view LedgerView, config EngineConfig, account *state.AccountRoot, ownerCount uint32) (uint64, bool) {
+	if account == nil {
+		return 0, false
+	}
+	rules := config.Rules
+	if view != nil && view.Rules() != nil {
+		rules = view.Rules()
+	}
+	if rules == nil || !rules.Enabled(amendment.FeatureSponsor) {
+		return checkedAccountReserve(config, ownerCount, 1)
+	}
+	delta := int64(ownerCount) - int64(account.OwnerCount)
+	if delta > math.MaxInt || delta < math.MinInt {
+		return 0, false
+	}
+	return RequiredAccountReserve(config, account, int(delta), 0)
 }
 
 func (ctx *ApplyContext) reserveSponsorFor(accountID [20]byte, account *state.AccountRoot) (*state.AccountRoot, [20]byte, ter.Result) {
@@ -208,23 +239,48 @@ func DecreaseOwnerCount(
 	if count == 0 || count > math.MaxInt32 || account == nil {
 		return fmt.Errorf("owner count adjustment %d is outside the signed range", count)
 	}
+	accountCurrent := ownerCounts(account)
+	var sponsor *state.AccountRoot
+	var sponsorID [20]byte
+	var sponsorCurrent OwnerCounts
+	if sponsorAddress != "" {
+		var err error
+		sponsorID, err = state.DecodeAccountID(sponsorAddress)
+		if err != nil {
+			return err
+		}
+		sponsor, err = state.ReadAccountRoot(view, sponsorID)
+		if err != nil {
+			return fmt.Errorf("read reserve sponsor: %w", err)
+		}
+		if sponsor == nil {
+			return fmt.Errorf("read reserve sponsor: account does not exist")
+		}
+		sponsorCurrent = ownerCounts(sponsor)
+	}
 	account.OwnerCount = ConfineOwnerCount(account.OwnerCount, -int(count))
-	if sponsorAddress == "" {
-		return nil
+	if sponsor != nil {
+		account.SponsoredOwnerCount = ConfineOwnerCount(account.SponsoredOwnerCount, -int(count))
+		sponsor.SponsoringOwnerCount = ConfineOwnerCount(sponsor.SponsoringOwnerCount, -int(count))
 	}
-	sponsorID, err := state.DecodeAccountID(sponsorAddress)
-	if err != nil {
-		return err
-	}
-	sponsor, err := state.ReadAccountRoot(view, sponsorID)
-	if err != nil {
-		return fmt.Errorf("read reserve sponsor: %w", err)
+	if hook, ok := view.(ownerCountsAdjuster); ok {
+		if accountID, err := state.DecodeAccountID(account.Account); err == nil {
+			hook.AdjustOwnerCounts(accountID, accountCurrent, ownerCounts(account))
+		}
+		if sponsor != nil {
+			hook.AdjustOwnerCounts(sponsorID, sponsorCurrent, ownerCounts(sponsor))
+		}
+	} else if hook, ok := view.(ownerCountAdjuster); ok {
+		if accountID, err := state.DecodeAccountID(account.Account); err == nil {
+			hook.AdjustOwnerCount(accountID, accountCurrent.Owner, account.OwnerCount)
+		}
+		if sponsor != nil {
+			hook.AdjustOwnerCount(sponsorID, sponsorCurrent.Owner, sponsor.OwnerCount)
+		}
 	}
 	if sponsor == nil {
-		return fmt.Errorf("read reserve sponsor: account does not exist")
+		return nil
 	}
-	account.SponsoredOwnerCount = ConfineOwnerCount(account.SponsoredOwnerCount, -int(count))
-	sponsor.SponsoringOwnerCount = ConfineOwnerCount(sponsor.SponsoringOwnerCount, -int(count))
 	return updateAccountOnView(view, sponsorID, sponsor)
 }
 

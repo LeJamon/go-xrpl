@@ -347,7 +347,7 @@ func (l *LoanSet) chargeBorrower(ctx *tx.ApplyContext, borrower [20]byte) (bool,
 	if err != nil || br == nil {
 		return false, ter.TefBAD_LEDGER
 	}
-	if br.Balance < ctx.AccountReserve(br.OwnerCount+1) {
+	if br.Balance < ctx.AccountReserveFor(br, br.OwnerCount+1) {
 		return false, ter.TesSUCCESS
 	}
 	if e := tx.AdjustOwnerCount(ctx.View, borrower, 1); e != nil {

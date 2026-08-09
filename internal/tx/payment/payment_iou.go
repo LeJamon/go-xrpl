@@ -131,7 +131,7 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 		// Insufficient payment to meet the account reserve (accountReserve(0)).
 		// Reference: rippled Payment.cpp:319-331
 		amountDrops := uint64(p.Amount.Drops())
-		if amountDrops < ctx.AccountReserve(0) {
+		if amountDrops < ctx.Config.AccountReserve(0) {
 			return ter.TecNO_DST_INSUF_XRP
 		}
 

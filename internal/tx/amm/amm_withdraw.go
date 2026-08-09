@@ -827,6 +827,9 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 	ctx.Account.OwnerCount = accountFromView.OwnerCount
+	ctx.Account.SponsoredOwnerCount = accountFromView.SponsoredOwnerCount
+	ctx.Account.SponsoringOwnerCount = accountFromView.SponsoringOwnerCount
+	ctx.Account.SponsoringAccountCount = accountFromView.SponsoringAccountCount
 
 	return ter.TesSUCCESS
 }
@@ -850,15 +853,26 @@ func withdrawAssetToAccount(
 				return ter.TefINTERNAL
 			}
 			if !exists && enabledFixAMMv1_2 {
-				ownerCount := ctx.Account.OwnerCount
+				account := ctx.Account
 				if accountID != ctx.AccountID {
-					account, err := tx.ReadAccountRoot(ctx.View, accountID)
+					account, err = tx.ReadAccountRoot(ctx.View, accountID)
 					if err != nil || account == nil {
 						return ter.TefINTERNAL
 					}
-					ownerCount = account.OwnerCount
 				}
-				if ownerCount >= 2 && ctx.PriorBalance() < ctx.AccountReserve(ownerCount+1) {
+				effectiveOwners := account.OwnerCount
+				if ctx.Rules().Enabled(amendment.FeatureSponsor) {
+					var ok bool
+					effectiveOwners, ok = tx.EffectiveOwnerCount(account, 0)
+					if !ok {
+						return ter.TefINTERNAL
+					}
+				}
+				balance := account.Balance
+				if accountID == ctx.AccountID {
+					balance = ctx.PriorBalance()
+				}
+				if effectiveOwners >= 2 && balance < ctx.AccountReserveFor(account, tx.ConfineOwnerCount(account.OwnerCount, 1)) {
 					return ter.TecINSUFFICIENT_RESERVE
 				}
 				if result := mptutil.RequireAuthAt(ctx.View, id, accountID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
@@ -916,14 +930,32 @@ func withdrawIOUToAccount(
 		// reserve for the new trust line before creating it.
 		// Reference: rippled AMMWithdraw.cpp lines 583-601
 		if enabledFixAMMv1_2 {
-			ownerCount := ctx.Account.OwnerCount
+			account := ctx.Account
+			if accountID != ctx.AccountID {
+				account, err = tx.ReadAccountRoot(ctx.View, accountID)
+				if err != nil || account == nil {
+					return ter.TefINTERNAL
+				}
+			}
+			effectiveOwners := account.OwnerCount
+			if ctx.Rules().Enabled(amendment.FeatureSponsor) {
+				var ok bool
+				effectiveOwners, ok = tx.EffectiveOwnerCount(account, 0)
+				if !ok {
+					return ter.TefINTERNAL
+				}
+			}
 			// See also SetTrust::doApply(): ownerCount < 2 → no reserve needed
-			if ownerCount >= 2 {
-				reserve := ctx.AccountReserve(ownerCount + 1)
+			if effectiveOwners >= 2 {
+				reserve := ctx.AccountReserveFor(account, tx.ConfineOwnerCount(account.OwnerCount, 1))
 				// rippled compares max(priorBalance, balance); the fee only
 				// reduces the balance, so prior (pre-fee) balance is the larger
 				// term. Reference: rippled AMMWithdraw.cpp:599.
-				if ctx.PriorBalance() < reserve {
+				balance := account.Balance
+				if accountID == ctx.AccountID {
+					balance = ctx.PriorBalance()
+				}
+				if balance < reserve {
 					return ter.TecINSUFFICIENT_RESERVE
 				}
 			}

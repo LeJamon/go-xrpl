@@ -2,6 +2,7 @@ package payment
 
 import (
 	"bytes"
+	"math"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
@@ -652,12 +653,26 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 
 		// Use OwnerCountHook to get adjusted owner count (accounts for pending changes)
 		// Reference: rippled View.cpp xrpLiquid() line 627-628
-		ownerCount := sb.OwnerCountHook(offerOwner, account.OwnerCount)
+		counts := sb.OwnerCountsHook(offerOwner, tx.OwnerCounts{
+			Owner: account.OwnerCount, Sponsored: account.SponsoredOwnerCount,
+			Sponsoring: account.SponsoringOwnerCount,
+		})
+		ownerCount := counts.Owner
 
 		// Read reserve values from ledger's FeeSettings
 		// Reference: rippled View.cpp xrpLiquid() reads reserves from fees keylet
 		baseReserve, incrementReserve := GetLedgerReserves(sb)
-		reserve := baseReserve + int64(ownerCount)*incrementReserve
+		accountWithHook := *account
+		accountWithHook.OwnerCount = counts.Owner
+		accountWithHook.SponsoredOwnerCount = counts.Sponsored
+		accountWithHook.SponsoringOwnerCount = counts.Sponsoring
+		reserveDrops, ok := tx.AccountReserveForView(sb, tx.EngineConfig{
+			ReserveBase: uint64(baseReserve), ReserveIncrement: uint64(incrementReserve),
+		}, &accountWithHook, ownerCount)
+		if !ok || reserveDrops > math.MaxInt64 {
+			return ZeroXRPEitherAmount()
+		}
+		reserve := int64(reserveDrops)
 
 		// Use BalanceHook to get adjusted balance (accounts for pending credits)
 		// Reference: rippled View.cpp xrpLiquid() line 637

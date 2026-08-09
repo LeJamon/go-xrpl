@@ -15,6 +15,7 @@ import (
 	paymenttx "github.com/LeJamon/go-xrpl/internal/tx/payment"
 	signtx "github.com/LeJamon/go-xrpl/internal/tx/sign"
 	sponsortx "github.com/LeJamon/go-xrpl/internal/tx/sponsor"
+	trustsettx "github.com/LeJamon/go-xrpl/internal/tx/trustset"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
@@ -461,6 +462,72 @@ func TestSponsorshipTransferObjectCreateReassignEnd(t *testing.T) {
 	require.Equal(t, uint32(0), accountState(t, env, sponsor2).SponsoringOwnerCount)
 	require.Equal(t, uint32(1), sponsorshipEntry(t, env, sponsor2, sponsee).RemainingOwnerCount,
 		"ending sponsorship does not refund prefunded reserve capacity")
+}
+
+func TestSponsoredCheckCreateAndDeleteLifecycle(t *testing.T) {
+	env, sponsee, destination, sponsor, _ := sponsorEnv(t)
+	remaining := int32(1)
+	require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, sponsee, 0, &remaining).Code)
+
+	sequence := env.Seq(sponsee)
+	create := checktx.NewCheckCreate(sponsee.Address, destination.Address, tx.NewXRPAmount(jtx.XRP(1)))
+	create.Sponsor = sponsor.Address
+	reserve := tx.SpfSponsorReserve
+	create.SponsorFlags = &reserve
+	require.Equal(t, "tesSUCCESS", env.Submit(create).Code)
+
+	checkKey := keylet.Check(sponsee.ID, sequence)
+	gotSponsor, present := objectSponsor(t, env, checkKey)
+	require.True(t, present)
+	require.Equal(t, sponsor.Address, gotSponsor)
+	require.Equal(t, uint32(1), accountState(t, env, sponsee).OwnerCount)
+	require.Equal(t, uint32(1), accountState(t, env, sponsee).SponsoredOwnerCount)
+	require.Equal(t, uint32(1), accountState(t, env, sponsor).SponsoringOwnerCount)
+	require.Zero(t, sponsorshipEntry(t, env, sponsor, sponsee).RemainingOwnerCount)
+
+	cancel := checktx.NewCheckCancel(destination.Address, hex.EncodeToString(checkKey.Key[:]))
+	require.Equal(t, "tesSUCCESS", env.Submit(cancel).Code)
+	require.False(t, env.LedgerEntryExists(checkKey))
+	require.Zero(t, accountState(t, env, sponsee).OwnerCount)
+	require.Zero(t, accountState(t, env, sponsee).SponsoredOwnerCount)
+	require.Zero(t, accountState(t, env, sponsor).SponsoringOwnerCount)
+	require.Zero(t, sponsorshipEntry(t, env, sponsor, sponsee).RemainingOwnerCount,
+		"deleting a sponsored object must not restore prefunded capacity")
+}
+
+func TestSponsoredTrustLineCreateAndDeleteLifecycle(t *testing.T) {
+	env, sponsee, issuer, sponsor, _ := sponsorEnv(t)
+	remaining := int32(1)
+	require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, sponsee, 0, &remaining).Code)
+
+	limit := tx.NewIssuedAmountFromFloat64(100, "USD", issuer.Address)
+	create := trustsettx.NewTrustSet(sponsee.Address, limit)
+	create.Sponsor = sponsor.Address
+	reserve := tx.SpfSponsorReserve
+	create.SponsorFlags = &reserve
+	require.Equal(t, "tesSUCCESS", env.Submit(create).Code)
+
+	lineKey := keylet.Line(sponsee.ID, issuer.ID, "USD")
+	lineData, err := env.LedgerEntry(lineKey)
+	require.NoError(t, err)
+	line, err := state.ParseRippleState(lineData)
+	require.NoError(t, err)
+	if state.CompareAccountIDs(sponsee.ID, issuer.ID) < 0 {
+		require.Equal(t, sponsor.Address, line.LowSponsor)
+	} else {
+		require.Equal(t, sponsor.Address, line.HighSponsor)
+	}
+	require.Equal(t, uint32(1), accountState(t, env, sponsee).OwnerCount)
+	require.Equal(t, uint32(1), accountState(t, env, sponsee).SponsoredOwnerCount)
+	require.Equal(t, uint32(1), accountState(t, env, sponsor).SponsoringOwnerCount)
+
+	clear := trustsettx.NewTrustSet(sponsee.Address, tx.NewIssuedAmountFromFloat64(0, "USD", issuer.Address))
+	require.Equal(t, "tesSUCCESS", env.Submit(clear).Code)
+	require.False(t, env.LedgerEntryExists(lineKey))
+	require.Zero(t, accountState(t, env, sponsee).OwnerCount)
+	require.Zero(t, accountState(t, env, sponsee).SponsoredOwnerCount)
+	require.Zero(t, accountState(t, env, sponsor).SponsoringOwnerCount)
+	require.Zero(t, sponsorshipEntry(t, env, sponsor, sponsee).RemainingOwnerCount)
 }
 
 func TestSponsorshipTransferCosignedObjectReserveBoundary(t *testing.T) {
@@ -1290,6 +1357,8 @@ func TestSponsorAmendmentGate(t *testing.T) {
 	sponsee := jtx.NewAccount("gate-sponsee")
 	destination := jtx.NewAccount("gate-destination")
 	env.Fund(sponsor, sponsee)
+	env.DisableFeature("Sponsor")
+	env.Close()
 	remaining := int32(1)
 	require.Equal(t, "temDISABLED", setSponsorship(env, sponsor, sponsee, 0, &remaining).Code)
 

@@ -288,7 +288,10 @@ func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Re
 				if !lptExists {
 					extraOwner = 1
 				}
-				reserve := accountReserve(config, account.OwnerCount+extraOwner)
+				reserve, ok := tx.AccountReserveForView(view, config, account, tx.ConfineOwnerCount(account.OwnerCount, int(extraOwner)))
+				if !ok {
+					return ter.TefINTERNAL
+				}
 				xrpLiquid := int64(account.Balance) - int64(reserve)
 				if xrpLiquid < amt.Drops() {
 					if lptExists {
@@ -354,7 +357,7 @@ func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Re
 	// Reserve for the LP token trustline if the depositor holds no LP tokens.
 	// Reference: rippled AMMDeposit.cpp preclaim lines 353-362
 	if ammLPHolds(view, amm, accountID).IsZero() {
-		if insufficientLPTokenReserve(account, config) {
+		if insufficientLPTokenReserve(view, account, config) {
 			return TecINSUF_RESERVE_LINE
 		}
 	}
@@ -1006,8 +1009,8 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 			// Skip the depositor's debit if it IS the issuer — issuers issue from
 			// thin air. Reference: rippled accountSend() handles this internally.
 			if accountID != issuerID {
-				if err := updateTrustlineBalanceInView(accountID, issuerID, a.Asset.Currency, depositAmount1.Negate(), ctx.View, ctx.NumberContext()); err != nil {
-					return TecUNFUNDED_AMM
+				if result := debitDepositTrustline(ctx, accountID, issuerID, a.Asset.Currency, depositAmount1.Negate()); result != ter.TesSUCCESS {
+					return result
 				}
 			}
 			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset, depositAmount1, ctx.View, ctx.NumberContext()); err != nil {
@@ -1026,8 +1029,8 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 				return ter.TefINTERNAL
 			}
 			if accountID != issuerID {
-				if err := updateTrustlineBalanceInView(accountID, issuerID, a.Asset2.Currency, depositAmount2.Negate(), ctx.View, ctx.NumberContext()); err != nil {
-					return TecUNFUNDED_AMM
+				if result := debitDepositTrustline(ctx, accountID, issuerID, a.Asset2.Currency, depositAmount2.Negate()); result != ter.TesSUCCESS {
+					return result
 				}
 			}
 			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, depositAmount2, ctx.View, ctx.NumberContext()); err != nil {
@@ -1095,5 +1098,24 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
+	return ter.TesSUCCESS
+}
+
+func debitDepositTrustline(ctx *tx.ApplyContext, accountID, issuerID [20]byte, currency string, amount tx.Amount) ter.Result {
+	result, err := updateTrustlineBalanceInViewEx(accountID, issuerID, currency, amount, ctx.View, ctx.NumberContext())
+	if err != nil {
+		return TecUNFUNDED_AMM
+	}
+	if result.SenderOwnerCountDelta != 0 {
+		if err := tx.DecreaseOwnerCount(ctx.View, ctx.Account, result.SenderSponsor, 1); err != nil {
+			return ter.TefINTERNAL
+		}
+	}
+	if result.IssuerOwnerCountDelta != 0 {
+		if err := tx.DecreaseOwnerCountOnView(ctx.View, issuerID, result.IssuerSponsor, 1); err != nil {
+			return ter.TefINTERNAL
+		}
+		ctx.SyncSenderSponsorCounts(result.IssuerSponsor)
+	}
 	return ter.TesSUCCESS
 }

@@ -377,14 +377,6 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 		}
 	}
 
-	// tecINCOMPLETE (AMMDelete): re-delete trust lines that were found during processing.
-	// These trust lines were deleted in the (now discarded) sandbox.
-	// Reference: rippled Transactor.cpp lines 1207-1209: removeDeletedTrustLines()
-	//   which calls deleteAMMTrustLine() for each collected trust line key.
-	if len(removedTrustLineKeys) > 0 {
-		e.removeDeletedTrustLines(tecTable, removedTrustLineKeys)
-	}
-
 	// Restore account to original state, then apply only fee/sequence.
 	// This discards any changes the transaction made to OwnerCount,
 	// MintedNFTokens, BurnedNFTokens, etc.
@@ -400,6 +392,12 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 	// Reference: rippled Transactor.cpp reset().
 	if r := e.payExternalFeeOnTable(st, tecTable, true); r != ter.TesSUCCESS {
 		return r
+	}
+
+	// tecINCOMPLETE (AMMDelete): re-delete trust lines after reset so cleanup
+	// owner-count changes cannot be overwritten by the recovered source account.
+	if len(removedTrustLineKeys) > 0 {
+		e.removeDeletedTrustLines(tecTable, removedTrustLineKeys)
 	}
 
 	// tecOVERSIZE/tecKILLED: re-delete offers that were found during processing.

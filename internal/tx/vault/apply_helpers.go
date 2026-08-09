@@ -120,7 +120,7 @@ func addEmptyMPTHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset
 			return 0, ter.TefINTERNAL
 		}
 	}
-	if priorBalance < ctx.AccountReserve(tx.ConfineOwnerCount(holder.OwnerCount, 1)) {
+	if priorBalance < ctx.AccountReserveFor(holder, tx.ConfineOwnerCount(holder.OwnerCount, 1)) {
 		return 0, ter.TecINSUFFICIENT_RESERVE
 	}
 	token := &state.MPTokenData{Account: accountID, MPTokenIssuanceID: id}
@@ -284,7 +284,7 @@ func addEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset, p
 			return 0, ter.TefINTERNAL
 		}
 	}
-	if priorBalance < ctx.AccountReserve(tx.ConfineOwnerCount(holder.OwnerCount, 1)) {
+	if priorBalance < ctx.AccountReserveFor(holder, tx.ConfineOwnerCount(holder.OwnerCount, 1)) {
 		return 0, ter.TecNO_LINE_INSUF_RESERVE
 	}
 
@@ -357,17 +357,37 @@ func ensureHolderMPToken(ctx *tx.ApplyContext, holderID [20]byte, shareMPTID [24
 	}
 
 	isSubmitter := holderID == ctx.AccountID
-	var ownerCount uint32
+	var account *state.AccountRoot
 	if isSubmitter {
-		ownerCount = ctx.Account.OwnerCount
+		account = ctx.Account
 	} else {
-		ar, err := tx.ReadAccountRoot(ctx.View, holderID)
-		if err != nil || ar == nil {
+		var err error
+		account, err = tx.ReadAccountRoot(ctx.View, holderID)
+		if err != nil || account == nil {
 			return ter.TefINTERNAL
 		}
-		ownerCount = ar.OwnerCount
 	}
-	if ctx.PriorBalance() < ctx.ReserveForNewObject(ownerCount) {
+	effectiveOwners := account.OwnerCount
+	if ctx.Rules().Enabled(amendment.FeatureSponsor) {
+		var ok bool
+		effectiveOwners, ok = tx.EffectiveOwnerCount(account, 0)
+		if !ok {
+			return ter.TefINTERNAL
+		}
+	}
+	reserve := uint64(0)
+	if effectiveOwners >= 2 {
+		var ok bool
+		reserve, ok = tx.AccountReserveForView(ctx.View, ctx.Config, account, tx.ConfineOwnerCount(account.OwnerCount, 1))
+		if !ok {
+			return ter.TefINTERNAL
+		}
+	}
+	balance := account.Balance
+	if isSubmitter {
+		balance = ctx.PriorBalance()
+	}
+	if balance < reserve {
 		return ter.TecINSUFFICIENT_RESERVE
 	}
 
@@ -544,7 +564,11 @@ func spendableAsset(view tx.LedgerView, config tx.EngineConfig, accountID [20]by
 		}
 		reserve := uint64(0)
 		if !ar.IsPseudoAccount() {
-			reserve = config.AccountReserve(ar.OwnerCount)
+			var ok bool
+			reserve, ok = tx.AccountReserveForView(view, config, ar, ar.OwnerCount)
+			if !ok {
+				return zero(), fmt.Errorf("invalid reserve counters")
+			}
 		}
 		liquid := int64(ar.Balance) - int64(reserve)
 		if liquid < 0 {
