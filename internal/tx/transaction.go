@@ -445,7 +445,6 @@ type Common struct {
 	SponsorFlags     *uint32           `json:"SponsorFlags,omitempty"`
 	SponsorSignature *SponsorSignature `json:"SponsorSignature,omitempty"`
 
-	// rawBytes stores the canonical serialized bytes retained after parse or bind.
 	rawBytes []byte
 
 	// PresentFields tracks which fields were present in the original parsed data.
