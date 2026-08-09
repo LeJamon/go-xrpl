@@ -224,9 +224,46 @@ func NewIssuedAmountFromFloat64(value float64, currency, issuer string) Amount {
 
 // Memo represents a memo attached to a transaction
 type Memo struct {
-	MemoType   string `json:"MemoType,omitempty"`
-	MemoData   string `json:"MemoData,omitempty"`
-	MemoFormat string `json:"MemoFormat,omitempty"`
+	MemoType      string `json:"MemoType,omitempty"`
+	MemoData      string `json:"MemoData,omitempty"`
+	MemoFormat    string `json:"MemoFormat,omitempty"`
+	presentFields map[string]bool
+}
+
+func (m *Memo) UnmarshalJSON(data []byte) error {
+	type memoAlias Memo
+	var decoded memoAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*m = Memo(decoded)
+	m.presentFields = make(map[string]bool, len(fields))
+	for name := range fields {
+		m.presentFields[name] = true
+	}
+	return nil
+}
+
+func (m Memo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(m.toMap())
+}
+
+func (m Memo) toMap() map[string]any {
+	fields := make(map[string]any, len(m.presentFields))
+	if m.MemoType != "" || m.presentFields["MemoType"] {
+		fields["MemoType"] = m.MemoType
+	}
+	if m.MemoData != "" || m.presentFields["MemoData"] {
+		fields["MemoData"] = m.MemoData
+	}
+	if m.MemoFormat != "" || m.presentFields["MemoFormat"] {
+		fields["MemoFormat"] = m.MemoFormat
+	}
+	return fields
 }
 
 // MemoWrapper wraps a Memo for JSON serialization

@@ -54,4 +54,37 @@ func TestParseFromBinaryCanonicalizesFieldOrder(t *testing.T) {
 	require.Equal(t, canonicalID, boundID)
 }
 
+func TestParseFromBinaryPreservesExplicitEmptyMemoFields(t *testing.T) {
+	fields := map[string]any{
+		"TransactionType": "AccountSet",
+		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Sequence":        uint32(1),
+		"Fee":             "10",
+		"SigningPubKey":   "",
+		"Memos": []any{map[string]any{
+			"Memo": map[string]any{"MemoData": ""},
+		}},
+	}
+	blob, err := binarycodec.EncodeBytes(fields)
+	require.NoError(t, err)
+
+	parsed, err := ParseFromBinary(blob)
+	require.NoError(t, err)
+	require.Equal(t, blob, parsed.GetRawBytes())
+	matches, err := CurrentFieldsMatchRaw(parsed)
+	require.NoError(t, err)
+	require.True(t, matches)
+
+	flattened, err := parsed.Flatten()
+	require.NoError(t, err)
+	memos := flattened["Memos"].([]map[string]any)
+	require.Contains(t, memos[0]["Memo"], "MemoData")
+	require.Empty(t, memos[0]["Memo"].(map[string]any)["MemoData"])
+
+	parsed.GetCommon().Memos[0].Memo.MemoData = "AA"
+	matches, err = CurrentFieldsMatchRaw(parsed)
+	require.NoError(t, err)
+	require.False(t, matches)
+}
+
 func ptrTo[T any](value T) *T { return &value }
