@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/gorilla/websocket"
@@ -105,7 +107,7 @@ func TestHTTPOverloadAdminUnlimitedBypass(t *testing.T) {
 
 func TestGateLoadKeysUnlimitedHTTPBySocketPeer(t *testing.T) {
 	manager := resource.NewManager(nil, nil)
-	ctx := newRpcContext(context.Background(), types.RoleIdentified, types.DefaultApiVersion, "198.51.100.7", nil, nil)
+	ctx := newRpcContext(context.Background(), types.RoleIdentified, types.DefaultApiVersion, "198.51.100.7", nil, nil, nil, nil)
 	ctx.ResourceIP = "203.0.113.5"
 	if rpcErr := gateLoad(manager, ctx, "ping", rpcLog()); rpcErr != nil {
 		t.Fatal(rpcErr)
@@ -121,7 +123,7 @@ func TestGateLoadKeepsWebSocketConnectionConsumer(t *testing.T) {
 	manager := resource.NewManager(nil, nil)
 	consumer := manager.NewInboundEndpoint("198.51.100.7")
 	defer consumer.Release()
-	ctx := newRpcContext(context.Background(), types.RoleAdmin, types.DefaultApiVersion, "198.51.100.7", nil, nil)
+	ctx := newRpcContext(context.Background(), types.RoleAdmin, types.DefaultApiVersion, "198.51.100.7", nil, nil, nil, nil)
 	ctx.ResourceIP = "203.0.113.5"
 	ctx.ResourceConsumer = consumer
 	if rpcErr := gateLoad(manager, ctx, "stop", rpcLog()); rpcErr != nil {
@@ -172,8 +174,8 @@ func TestHTTPApiVersionPrecedesOverload(t *testing.T) {
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 (api-version before overload), got %d\nbody: %s", rr.Code, rr.Body.String())
 	}
-	if got := strings.TrimSpace(rr.Body.String()); got != types.InvalidApiVersionToken {
-		t.Fatalf("body = %q, want %q", got, types.InvalidApiVersionToken)
+	if got := strings.TrimSpace(rr.Body.String()); got != rpcerrors.InvalidApiVersionToken {
+		t.Fatalf("body = %q, want %q", got, rpcerrors.InvalidApiVersionToken)
 	}
 }
 
@@ -185,13 +187,14 @@ func TestHTTPApiVersionPrecedesOverload(t *testing.T) {
 // element and an ordinary element — never the forbidden (-32605) object.
 func TestHTTPBatchOverloadElement(t *testing.T) {
 	srv := &Server{
-		registry:        types.NewMethodRegistry(),
+		registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"stop": &stubHandler{role: types.RoleAdmin},
+			"ping": echoHandler(),
+		}),
 		timeout:         time.Second,
-		services:        types.NewServiceContainer(nil),
+		services:        types.NewTestServiceGraph(types.NewServiceContainer(nil)),
 		resourceManager: resource.NewManager(nil, nil),
 	}
-	srv.registry.Register("stop", &stubHandler{role: types.RoleAdmin})
-	srv.registry.Register("ping", echoHandler())
 	pushOverDropThreshold(t, srv.resourceManager, "10.0.0.1") // postBatch posts from 10.0.0.1
 
 	body := `{"method":"batch","params":[
@@ -247,8 +250,13 @@ func TestWSOverloadClosesBeforeRequestValidation(t *testing.T) {
 	for _, request := range tests {
 		t.Run(request, func(t *testing.T) {
 			manager := resource.NewManager(nil, nil)
-			ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 2 * time.Second, ResourceManager: manager})
-			ws.methodRegistry.Register("stop", &stubHandler{role: types.RoleAdmin})
+			ws := NewWebSocketServer(WebSocketServerOptions{
+				Timeout:         2 * time.Second,
+				ResourceManager: manager,
+				Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+					"stop": &stubHandler{role: types.RoleAdmin},
+				}),
+			})
 			pushOverDropThreshold(t, manager, "127.0.0.1")
 
 			_, adminNet, _ := net.ParseCIDR("10.0.0.0/8")

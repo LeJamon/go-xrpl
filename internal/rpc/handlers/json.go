@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -12,7 +13,7 @@ import (
 // Reference: rippled JSON.cpp
 type jsonMethod struct{ baseHandler }
 
-func (m *jsonMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *jsonMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	var request struct {
 		Method string          `json:"method"`
 		Params json.RawMessage `json:"params,omitempty"`
@@ -20,15 +21,25 @@ func (m *jsonMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any,
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+		}
+	}
+	if request.Method == "" && len(request.Params) > 0 {
+		var nested struct {
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params,omitempty"`
+		}
+		if json.Unmarshal(request.Params, &nested) == nil && nested.Method != "" {
+			request.Method = nested.Method
+			request.Params = nested.Params
 		}
 	}
 
 	if request.Method == "" {
-		return nil, types.RpcErrorInvalidParams("Missing required parameter: method")
+		return nil, rpcerrors.RpcErrorInvalidParams("Missing required parameter: method")
 	}
 
-	if ctx.Services == nil || ctx.Services.Dispatcher == nil {
+	if ctx == nil || ctx.Dispatcher == nil {
 		return nil, rpcInternalInvariantError("json: method dispatcher unavailable")
 	}
 
@@ -45,5 +56,5 @@ func (m *jsonMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any,
 		}
 	}
 
-	return ctx.Services.Dispatcher.ExecuteMethod(ctx, request.Method, forwardParams)
+	return ctx.Dispatcher.ExecuteMethod(ctx, request.Method, forwardParams)
 }

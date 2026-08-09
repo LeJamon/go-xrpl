@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -77,7 +79,7 @@ func TestLedgerDataCurrentResponseFields(t *testing.T) {
 	}
 	ctx := &types.RpcContext{
 		Context:  context.Background(),
-		Services: &types.ServiceContainer{Ledger: mock},
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 	}
 
 	result, rpcErr := (&handlers.LedgerDataMethod{}).Handle(ctx, json.RawMessage(`{"ledger_index":"current"}`))
@@ -103,7 +105,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 		return result, nil
 	}
 
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
@@ -278,12 +280,13 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 	}
 
 	t.Run("Limit above signed 32-bit range is rejected", func(t *testing.T) {
-		ctx.Unlimited = true
-		t.Cleanup(func() { ctx.Unlimited = false })
+		originalRole := ctx.Role
+		ctx.Role = types.RoleAdmin
+		t.Cleanup(func() { ctx.Role = originalRole })
 		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"current","limit":2147483648}`))
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 }
 
@@ -297,7 +300,7 @@ func TestLedgerDataBinaryMode(t *testing.T) {
 		return newDefaultLedgerDataResult(3, false), nil
 	}
 
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
@@ -381,7 +384,7 @@ func TestLedgerDataTypeFilter(t *testing.T) {
 		return result, nil
 	}
 
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
@@ -425,7 +428,7 @@ func TestLedgerDataTypeFilter(t *testing.T) {
 			result, rpcErr := method.Handle(ctx, json.RawMessage(input))
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		})
 	}
 }
@@ -448,7 +451,7 @@ func TestLedgerDataMarkerPagination(t *testing.T) {
 		return newDefaultLedgerDataResult(3, false), nil
 	}
 
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
@@ -536,7 +539,7 @@ func TestLedgerDataResponseStructure(t *testing.T) {
 		}, nil
 	}
 
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
@@ -605,7 +608,7 @@ func TestLedgerDataServiceUnavailable(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, nil)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
@@ -614,13 +617,13 @@ func TestLedgerDataServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
@@ -635,7 +638,7 @@ func TestLedgerDataServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: mock},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 		}
 
 		params := map[string]any{
@@ -646,7 +649,7 @@ func TestLedgerDataServiceUnavailable(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	})
 }
 
@@ -706,7 +709,7 @@ func TestLedgerDataLedgerHeader(t *testing.T) {
 		return result, nil
 	}
 
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
@@ -790,7 +793,7 @@ func TestLedgerDataEmptyState(t *testing.T) {
 		return newDefaultLedgerDataResult(0, false), nil
 	}
 
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerDataMethod{}
 	ctx := &types.RpcContext{
@@ -830,7 +833,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: mock},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 		}
 		params := map[string]any{"ledger_index": "current", "marker": "not-a-valid-hash"}
 		paramsJSON, _ := json.Marshal(params)
@@ -838,7 +841,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid field 'marker', not valid.", rpcErr.Message)
 	})
 
@@ -853,7 +856,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: mock},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 		}
 		params := map[string]any{"ledger_index": "current", "marker": 12345}
 		paramsJSON, _ := json.Marshal(params)
@@ -861,7 +864,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid field 'marker', not valid.", rpcErr.Message)
 		assert.False(t, called, "service must not be called for a non-string marker")
 	})
@@ -879,7 +882,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: mock},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 		}
 		params := map[string]any{"ledger_index": "current", "marker": nil}
 		paramsJSON, _ := json.Marshal(params)
@@ -887,7 +890,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid field 'marker', not valid.", rpcErr.Message)
 		assert.False(t, called, "service must not be called for a present null marker")
 	})
@@ -905,7 +908,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: mock},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 		}
 		params := map[string]any{"ledger_index": "current", "marker": ""}
 		paramsJSON, _ := json.Marshal(params)
@@ -913,7 +916,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid field 'marker', not valid.", rpcErr.Message)
 		assert.False(t, called, "service must not be called for a present empty marker")
 	})
@@ -935,7 +938,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: mock},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 		}
 		params := map[string]any{"ledger_index": "current", "marker": "0"}
 		paramsJSON, _ := json.Marshal(params)

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"sort"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -50,7 +52,7 @@ type pathAlternativeJSON struct {
 // Reference: rippled RipplePathFind.cpp + PathRequest::parseJson/isValid.
 type ripplePathFindMethod struct{ baseHandler }
 
-func (m *ripplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *ripplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	if rpcErr := RequirePathSearch(ctx); rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -59,7 +61,7 @@ func (m *ripplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	probe := map[string]json.RawMessage{}
 	if params != nil {
 		if err := json.Unmarshal(params, &probe); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
 		}
 	}
 	ledgerSpec, hasLedgerSelector, ledgerSpecErr := parseLedgerSpecifier(params)
@@ -71,9 +73,9 @@ func (m *ripplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	}
 	var view types.LedgerStateView
 	var meta *pathFindLedgerMeta
-	var rpcErr *types.RpcError
-	standalone := ctx != nil && ctx.Services != nil && ctx.Services.Ledger != nil &&
-		ctx.Services.Ledger.GetServerInfo().Standalone
+	var rpcErr *rpcerrors.RpcError
+	standalone := ctx != nil && ctx.Services != nil && ctx.Services.Ledger() != nil &&
+		ctx.Services.Ledger().GetServerInfo().Standalone
 	usesLookup := hasLedgerSelector || standalone
 	if usesLookup {
 		view, meta, rpcErr = resolvePathFindLedger(ctx, ledgerSpec, true)
@@ -86,11 +88,11 @@ func (m *ripplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		}
 		defer release()
 	} else {
-		if types.ValidatedLedgerStale(ctx.Services.Ledger.GetServerInfo()) {
+		if types.ValidatedLedgerStale(ctx.Services.Ledger().GetServerInfo()) {
 			if ctx.ApiVersion == types.ApiVersion1 {
-				return nil, types.RpcErrorNoNetwork("")
+				return nil, rpcerrors.RpcErrorNoNetwork("")
 			}
-			return nil, types.RpcErrorNotSynced("")
+			return nil, rpcerrors.RpcErrorNotSynced("")
 		}
 		view, meta, rpcErr = resolvePathFindLedger(ctx, types.LedgerSpecifier{}, false)
 		if rpcErr != nil {
@@ -101,47 +103,47 @@ func (m *ripplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	// Field validation follows rippled PathRequest::parseJson order exactly.
 	rawSrc, ok := probe["source_account"]
 	if !ok {
-		return nil, types.RpcErrorSrcActMissing("Source account not provided.")
+		return nil, rpcerrors.RpcErrorSrcActMissing("Source account not provided.")
 	}
 	rawDst, ok := probe["destination_account"]
 	if !ok {
-		return nil, types.RpcErrorDstActMissing("Destination account not provided.")
+		return nil, rpcerrors.RpcErrorDstActMissing("Destination account not provided.")
 	}
 	rawDstAmount, ok := probe["destination_amount"]
 	if !ok {
-		return nil, types.RpcErrorDstAmtMissing("Destination amount/currency/issuer is missing.")
+		return nil, rpcerrors.RpcErrorDstAmtMissing("Destination amount/currency/issuer is missing.")
 	}
 
 	srcAccount, ok := decodeAccountRaw(rawSrc)
 	if !ok {
-		return nil, types.RpcErrorSrcActMalformed("Source account is malformed.")
+		return nil, rpcerrors.RpcErrorSrcActMalformed("Source account is malformed.")
 	}
 	dstAccount, ok := decodeAccountRaw(rawDst)
 	if !ok {
-		return nil, types.RpcErrorDstActMalformed("Destination account is malformed.")
+		return nil, rpcerrors.RpcErrorDstActMalformed("Destination account is malformed.")
 	}
 
 	dstAmount, err := state.AmountFromJSON(rawDstAmount)
 	if err != nil || !pathfinder.IsValidAsset(dstAmount) {
-		return nil, types.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+		return nil, rpcerrors.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 	}
 
 	// destination_amount of exactly -1 selects convert-all mode.
 	// Reference: rippled PathRequest::parseJson convert_all_ check.
 	convertAll := dstAmount.Value() == "-1"
 	if !convertAll && dstAmount.Signum() <= 0 {
-		return nil, types.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+		return nil, rpcerrors.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 	}
 
 	var sendMax *state.Amount
 	if rawSendMax, hasSendMax := probe["send_max"]; hasSendMax {
 		// send_max requires destination_amount to be -1.
 		if !convertAll {
-			return nil, types.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+			return nil, rpcerrors.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 		}
 		amt, smErr := state.AmountFromJSON(rawSendMax)
 		if smErr != nil || !pathfinder.IsValidAsset(amt) || (amt.Signum() <= 0 && amt.Value() != "-1") {
-			return nil, types.RpcErrorSendMaxMalformed("SendMax amount malformed.")
+			return nil, rpcerrors.RpcErrorSendMaxMalformed("SendMax amount malformed.")
 		}
 		sendMax = &amt
 	}
@@ -156,18 +158,18 @@ func (m *ripplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		var parsed bool
 		domainID, parsed = types.ParsePathFindDomain(rawDomain)
 		if !parsed {
-			return nil, types.RpcErrorDomainMalformed("Domain is malformed.")
+			return nil, rpcerrors.RpcErrorDomainMalformed("Domain is malformed.")
 		}
 	}
 	if view == nil {
-		return nil, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent", "Current ledger is unavailable.")
+		return nil, rpcerrors.NewRpcError(rpcerrors.RpcNO_CURRENT, "noCurrent", "noCurrent", "Current ledger is unavailable.")
 	}
 
 	// Existence checks. Reference: rippled PathRequest::isValid.
 	if exists, err := view.Exists(keylet.Account(srcAccount)); err != nil {
 		return nil, rpcInternalError("ripple_path_find: source account lookup failed", err)
 	} else if !exists {
-		return nil, types.RpcErrorSrcActNotFound("Source account not found.")
+		return nil, rpcerrors.RpcErrorSrcActNotFound("Source account not found.")
 	}
 	if exists, err := view.Exists(keylet.Account(dstAccount)); err != nil {
 		return nil, rpcInternalError("ripple_path_find: destination account lookup failed", err)
@@ -175,7 +177,7 @@ func (m *ripplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		// Only XRP can be sent to a non-existent account, and the payment
 		// must meet the account reserve.
 		if !dstAmount.IsNative() {
-			return nil, types.RpcErrorActNotFound("Account not found.")
+			return nil, rpcerrors.RpcErrorActNotFound("Account not found.")
 		}
 		if !convertAll {
 			feeData, feeErr := view.Read(keylet.Fees())
@@ -188,7 +190,7 @@ func (m *ripplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 			}
 			reserveBase := fees.GetReserveBase()
 			if dstAmount.Drops() < int64(reserveBase) {
-				return nil, types.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+				return nil, rpcerrors.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 			}
 		}
 	}
@@ -290,7 +292,7 @@ func parseSourceCurrencies(
 	probe map[string]json.RawMessage,
 	srcAccount [20]byte,
 	sendMax *state.Amount,
-) ([]payment.Issue, *types.RpcError) {
+) ([]payment.Issue, *rpcerrors.RpcError) {
 	rawSC, ok := probe["source_currencies"]
 	if !ok {
 		return nil, nil
@@ -298,7 +300,7 @@ func parseSourceCurrencies(
 
 	var entries []json.RawMessage
 	if err := json.Unmarshal(rawSC, &entries); err != nil || len(entries) == 0 || len(entries) > maxSrcCurrencies {
-		return nil, types.RpcErrorSrcCurMalformed("Source currency is malformed.")
+		return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 	}
 
 	var sendMaxIssue payment.Issue
@@ -318,25 +320,25 @@ func parseSourceCurrencies(
 	for _, raw := range entries {
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &fields); err != nil {
-			return nil, types.RpcErrorSrcCurMalformed("Source currency is malformed.")
+			return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 		}
 		rawCurrency, hasCurrency := fields["currency"]
 		rawMPT, hasMPT := fields["mpt_issuance_id"]
 		_, hasIssuer := fields["issuer"]
 		if hasCurrency == hasMPT {
-			return nil, types.RpcErrorSrcCurMalformed("Source currency is malformed.")
+			return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 		}
 		if hasMPT && hasIssuer {
-			return nil, types.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
+			return nil, rpcerrors.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
 		}
 		if hasMPT {
 			var mptID string
 			if err := json.Unmarshal(rawMPT, &mptID); err != nil {
-				return nil, types.RpcErrorSrcCurMalformed("Source currency is malformed.")
+				return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 			}
 			id, ok := pathfinder.ParseSourceMPTID(mptID)
 			if !ok {
-				return nil, types.RpcErrorSrcCurMalformed("Source currency is malformed.")
+				return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 			}
 			issue := payment.NewMPTIssue(id)
 			if sendMax != nil {
@@ -349,7 +351,7 @@ func parseSourceCurrencies(
 		}
 		var currencyValue string
 		if err := json.Unmarshal(rawCurrency, &currencyValue); err != nil || !keylet.IsValidCurrencyCode(currencyValue) {
-			return nil, types.RpcErrorSrcCurMalformed("Source currency is malformed.")
+			return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 		}
 		currency := canonCurrency(currencyValue)
 		isXRPCur := currency == "XRP"
@@ -358,18 +360,18 @@ func parseSourceCurrencies(
 		if rawIssuer, hasIssuer := fields["issuer"]; hasIssuer {
 			var issuerStr string
 			if err := json.Unmarshal(rawIssuer, &issuerStr); err != nil {
-				return nil, types.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
+				return nil, rpcerrors.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
 			}
 			id, err := state.DecodeAccountID(issuerStr)
 			if err != nil {
-				return nil, types.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
+				return nil, rpcerrors.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
 			}
 			issuerID = id
 		}
 
 		if isXRPCur {
 			if issuerID != ([20]byte{}) {
-				return nil, types.RpcErrorSrcCurMalformed("Source currency is malformed.")
+				return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 			}
 		} else if issuerID == ([20]byte{}) {
 			issuerID = srcAccount
@@ -383,7 +385,7 @@ func parseSourceCurrencies(
 			// If neither issuer is the source and they are not equal, the
 			// source issuer is illegal.
 			if issuerID != srcAccount && sendMaxIssue.Issuer != srcAccount && issuerID != sendMaxIssue.Issuer {
-				return nil, types.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
+				return nil, rpcerrors.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
 			}
 			// If both are the source, use the source; otherwise use the one
 			// that's not the source.
@@ -430,11 +432,11 @@ func resolvePathFindLedger(
 	ctx *types.RpcContext,
 	spec types.LedgerSpecifier,
 	hasSelector bool,
-) (types.LedgerStateView, *pathFindLedgerMeta, *types.RpcError) {
+) (types.LedgerStateView, *pathFindLedgerMeta, *rpcerrors.RpcError) {
 	if !hasSelector {
-		view, err := ctx.Services.Ledger.GetClosedLedgerView()
+		view, err := ctx.Services.LedgerViews().GetClosedLedgerView()
 		if err != nil {
-			return nil, nil, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent", "Current ledger is unavailable.")
+			return nil, nil, rpcerrors.NewRpcError(rpcerrors.RpcNO_CURRENT, "noCurrent", "noCurrent", "Current ledger is unavailable.")
 		}
 		return view, nil, nil
 	}
@@ -443,9 +445,9 @@ func resolvePathFindLedger(
 		return nil, nil, rpcErr
 	}
 
-	source, ok := ctx.Services.Ledger.(types.LedgerViewSource)
+	source, ok := ctx.Services.Ledger().(types.LedgerViewSource)
 	if !ok {
-		return nil, nil, types.RpcErrorLgrNotFound("ledgerNotFound")
+		return nil, nil, rpcerrors.RpcErrorLgrNotFound("ledgerNotFound")
 	}
 	bySequence := func(sequence uint32) (selectedPathFindLedger, bool, error) {
 		view, reader, err := source.GetLedgerViewBySeq(sequence)
@@ -458,7 +460,7 @@ func resolvePathFindLedger(
 		return selected, view != nil && reader != nil, err
 	}
 	validated := func() (selectedPathFindLedger, bool, error) {
-		sequence := ctx.Services.Ledger.GetValidatedLedgerIndex()
+		sequence := ctx.Services.Ledger().GetValidatedLedgerIndex()
 		if sequence == 0 {
 			return selectedPathFindLedger{}, false, nil
 		}
@@ -466,17 +468,17 @@ func resolvePathFindLedger(
 	}
 	resolved, err := ledgerselector.Resolve(selection, ledgerselector.Callbacks[selectedPathFindLedger]{
 		Current: func() (selectedPathFindLedger, bool, error) {
-			return bySequence(ctx.Services.Ledger.GetCurrentLedgerIndex())
+			return bySequence(ctx.Services.Ledger().GetCurrentLedgerIndex())
 		},
 		Closed: func() (selectedPathFindLedger, bool, error) {
-			return bySequence(ctx.Services.Ledger.GetClosedLedgerIndex())
+			return bySequence(ctx.Services.Ledger().GetClosedLedgerIndex())
 		},
 		Validated:  validated,
 		BySequence: bySequence,
 		ByHash:     byHash,
 	})
 	if err != nil {
-		return nil, nil, types.RpcErrorLgrNotFound("ledgerNotFound")
+		return nil, nil, rpcerrors.RpcErrorLgrNotFound("ledgerNotFound")
 	}
 	validatedResult := resolved.Validated
 	if selection.Kind() == ledgerselector.KindCurrent {

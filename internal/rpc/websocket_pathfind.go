@@ -3,6 +3,8 @@ package rpc
 import (
 	"encoding/json"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -14,21 +16,21 @@ type pathFindUpdateTarget struct {
 	generation uint64
 }
 
-func (ws *WebSocketServer) executePathFind(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
+func (ws *WebSocketServer) executePathFind(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *rpcerrors.RpcError) {
 	if rpcErr := handlers.RequirePathSearch(ctx); rpcErr != nil {
 		return nil, rpcErr
 	}
 	var params map[string]json.RawMessage
 	if len(cmd.Params) == 0 || json.Unmarshal(cmd.Params, &params) != nil {
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	rawSubcommand, exists := params["subcommand"]
 	if !exists {
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	var subcommand *string
 	if err := json.Unmarshal(rawSubcommand, &subcommand); err != nil || subcommand == nil {
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	wsConn.SetAPIVersion(ctx.ApiVersion)
 
@@ -41,13 +43,13 @@ func (ws *WebSocketServer) executePathFind(wsConn *websocketConnection, ctx *typ
 	case "status":
 		return ws.executePathFindStatus(wsConn, ctx, cmd)
 	default:
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 }
 
 // executePathFindCreate creates a new persistent pathfinding session.
 // Any existing session on this connection is replaced (matching rippled).
-func (ws *WebSocketServer) executePathFindCreate(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
+func (ws *WebSocketServer) executePathFindCreate(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *rpcerrors.RpcError) {
 	ws.bindPathFindRefreshManager(wsConn)
 	wsConn.clearPathFindSession()
 
@@ -56,44 +58,44 @@ func (ws *WebSocketServer) executePathFindCreate(wsConn *websocketConnection, ct
 		return nil, rpcErr
 	}
 
-	if ctx.Services == nil || ctx.Services.Ledger == nil {
-		return nil, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
+	if ctx.Services == nil || ctx.Services.Ledger() == nil {
+		return nil, rpcerrors.NewRpcError(rpcerrors.RpcNO_CURRENT, "noCurrent", "noCurrent",
 			"No closed ledger available")
 	}
-	session.setSearchLevelMax(ctx.Services.Capabilities.PathSearchMax)
-	view, err := ctx.Services.Ledger.GetClosedLedgerView()
+	session.setSearchLevelMax(ctx.Services.Capabilities().PathSearchMax)
+	view, err := ctx.Services.LedgerViews().GetClosedLedgerView()
 	if err != nil {
-		return nil, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
+		return nil, rpcerrors.NewRpcError(rpcerrors.RpcNO_CURRENT, "noCurrent", "noCurrent",
 			"No closed ledger available")
 	}
 
 	event := session.Execute(view, false)
 
 	wsConn.installPathFindSession(session)
-	ws.queuePathFindSessions(currentPathFindView(ctx.Services.Ledger), wsConn)
+	ws.queuePathFindSessions(currentPathFindView(ctx.Services), wsConn)
 
 	return event, nil
 }
 
 // executePathFindClose closes the active pathfinding session on this connection.
-func (ws *WebSocketServer) executePathFindClose(wsConn *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
+func (ws *WebSocketServer) executePathFindClose(wsConn *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *rpcerrors.RpcError) {
 	session := wsConn.clearPathFindSession()
 
 	if session == nil {
-		return nil, types.RpcErrorNoPathRequest()
+		return nil, rpcerrors.RpcErrorNoPathRequest()
 	}
 
 	return session.Close(), nil
 }
 
 // executePathFindStatus returns the current status of the active pathfinding session.
-func (ws *WebSocketServer) executePathFindStatus(wsConn *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
+func (ws *WebSocketServer) executePathFindStatus(wsConn *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *rpcerrors.RpcError) {
 	wsConn.mutex.RLock()
 	session := wsConn.pathFindSession
 	wsConn.mutex.RUnlock()
 
 	if session == nil {
-		return nil, types.RpcErrorNoPathRequest()
+		return nil, rpcerrors.RpcErrorNoPathRequest()
 	}
 
 	return session.Status(), nil
@@ -129,13 +131,14 @@ func (ws *WebSocketServer) queuePathFindSessions(getView func() (types.LedgerSta
 	manager.enqueue(getView, targets)
 }
 
-func currentPathFindView(ledger types.LedgerService) func() (types.LedgerStateView, error) {
+func currentPathFindView(services *types.ServiceGraph) func() (types.LedgerStateView, error) {
 	return func() (types.LedgerStateView, error) {
+		ledger := services.Ledger()
 		if source, ok := ledger.(types.LedgerViewSource); ok {
 			view, _, err := source.GetLedgerViewBySeq(ledger.GetCurrentLedgerIndex())
 			return view, err
 		}
-		return ledger.GetClosedLedgerView()
+		return services.LedgerViews().GetClosedLedgerView()
 	}
 }
 func (c *websocketConnection) clearPathFindSession() *PathFindSession {

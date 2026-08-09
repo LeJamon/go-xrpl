@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -60,7 +62,7 @@ func TestSubmitMultisigned_MissingSequence(t *testing.T) {
 
 	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Equal(t, "Missing field 'tx_json.Sequence'.", rpcErr.Message)
 }
 
@@ -77,7 +79,7 @@ func TestSubmitMultisigned_InvalidSequenceType(t *testing.T) {
 
 	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Contains(t, rpcErr.Message, "tx_json.Sequence")
 }
 
@@ -93,7 +95,7 @@ func TestSubmitMultisigned_FeeNotPresent(t *testing.T) {
 
 	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Equal(t, "Missing field 'tx_json.Fee'.", rpcErr.Message)
 }
 
@@ -128,7 +130,7 @@ func TestSubmitMultisigned_FeeZero(t *testing.T) {
 
 	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Equal(t, "Invalid Fee field.  Fees must be greater than zero.", rpcErr.Message)
 }
 
@@ -145,7 +147,7 @@ func TestSubmitMultisigned_FeeNegative(t *testing.T) {
 
 	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Equal(t, "Invalid Fee field.  Fees must be greater than zero.", rpcErr.Message)
 }
 
@@ -162,7 +164,7 @@ func TestSubmitMultisigned_FeeNotNumericString(t *testing.T) {
 
 	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Equal(t, "Field 'tx_json.Fee' has invalid data.", rpcErr.Message)
 }
 
@@ -181,7 +183,7 @@ func TestSubmitMultisigned_TxnSignaturePresent(t *testing.T) {
 
 	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcSIGNING_MALFORMED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcSIGNING_MALFORMED, rpcErr.Code)
 	assert.Equal(t, "signingMalformed", rpcErr.ErrorString)
 	assert.Equal(t, "Signing of transaction is malformed.", rpcErr.Message)
 }
@@ -208,7 +210,7 @@ func TestSubmitMultisigned_SelfSigning(t *testing.T) {
 
 	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Contains(t, rpcErr.Message, "A Signer may not be the transaction's Account")
 	assert.Contains(t, rpcErr.Message, txAccount)
 }
@@ -244,7 +246,7 @@ func TestSubmitMultisigned_DuplicateSigners(t *testing.T) {
 
 	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Contains(t, rpcErr.Message, "Duplicate Signers:Signer:Account entries")
 	assert.Contains(t, rpcErr.Message, dupAccount)
 }
@@ -302,7 +304,7 @@ func TestSubmitMultisigned_SrcActMalformed(t *testing.T) {
 
 	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcSRC_ACT_MALFORMED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcSRC_ACT_MALFORMED, rpcErr.Code)
 	assert.Equal(t, "srcActMalformed", rpcErr.ErrorString)
 	assert.Equal(t, "Invalid field 'tx_json.Account'.", rpcErr.Message)
 }
@@ -321,7 +323,7 @@ func TestSubmitMultisigned_SrcActNotFound(t *testing.T) {
 
 	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, validMultisignedTxJSON()))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcSRC_ACT_NOT_FOUND, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcSRC_ACT_NOT_FOUND, rpcErr.Code)
 	assert.Equal(t, "srcActNotFound", rpcErr.ErrorString)
 	assert.Equal(t, "Source account not found.", rpcErr.Message)
 }
@@ -344,7 +346,7 @@ func TestSubmitMultisigned_ValidationOrder_SrcActNotFoundBeforeTxnSignature(t *t
 
 	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcSRC_ACT_NOT_FOUND, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcSRC_ACT_NOT_FOUND, rpcErr.Code)
 }
 
 // TestSubmitMultisigned_HappyPath submits a well-formed multi-signed
@@ -395,7 +397,7 @@ func TestSubmitMultisigned_SubmissionErrorUsesFixedMessage(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	assert.Equal(t, "internal", rpcErr.ErrorString)
 	assert.Equal(t, "Exception occurred during transaction submission.", rpcErr.Message)
 	assert.NotContains(t, rpcErr.Message, mock.submitError.Error())
@@ -417,5 +419,5 @@ func TestSubmitMultisigned_ValidationOrder_TxnSignatureBeforeFee(t *testing.T) {
 
 	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcSIGNING_MALFORMED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcSIGNING_MALFORMED, rpcErr.Code)
 }

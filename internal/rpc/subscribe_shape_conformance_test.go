@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -43,22 +44,22 @@ var subscribeShapeCases = []shapeCase{
 	// accounts (Subscribe.cpp:192-200; Subscribe_test.cpp:666-672 empty,
 	// :646-664 non-array). parseAccountIds returns an empty set for an empty
 	// array, a non-string element, or a bad id → rpcACT_MALFORMED.
-	{"empty accounts array", `{"accounts":[]}`, true, types.RpcACT_MALFORMED, "actMalformed", "Account malformed."},
-	{"null accounts", `{"accounts":null}`, true, types.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
-	{"string accounts", `{"accounts":"notanarray"}`, true, types.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
-	{"object accounts", `{"accounts":{}}`, true, types.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
-	{"non-string account element", `{"accounts":[123]}`, true, types.RpcACT_MALFORMED, "actMalformed", "Account malformed."},
-	{"bad account id", `{"accounts":["notanaccount"]}`, true, types.RpcACT_MALFORMED, "actMalformed", "Account malformed."},
+	{"empty accounts array", `{"accounts":[]}`, true, rpcerrors.RpcACT_MALFORMED, "actMalformed", "Account malformed."},
+	{"null accounts", `{"accounts":null}`, true, rpcerrors.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
+	{"string accounts", `{"accounts":"notanarray"}`, true, rpcerrors.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
+	{"object accounts", `{"accounts":{}}`, true, rpcerrors.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
+	{"non-string account element", `{"accounts":[123]}`, true, rpcerrors.RpcACT_MALFORMED, "actMalformed", "Account malformed."},
+	{"bad account id", `{"accounts":["notanaccount"]}`, true, rpcerrors.RpcACT_MALFORMED, "actMalformed", "Account malformed."},
 	// accounts_proposed, same semantics (Subscribe.cpp:181-189).
-	{"empty accounts_proposed", `{"accounts_proposed":[]}`, true, types.RpcACT_MALFORMED, "actMalformed", "Account malformed."},
-	{"null accounts_proposed", `{"accounts_proposed":null}`, true, types.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
+	{"empty accounts_proposed", `{"accounts_proposed":[]}`, true, rpcerrors.RpcACT_MALFORMED, "actMalformed", "Account malformed."},
+	{"null accounts_proposed", `{"accounts_proposed":null}`, true, rpcerrors.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
 	// streams (Subscribe.cpp:118-122 non-array, :126-127 non-string entry).
-	{"non-array streams", `{"streams":"ledger"}`, true, types.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
-	{"non-string stream entry", `{"streams":[123]}`, true, types.RpcSTREAM_MALFORMED, "malformedStream", "Stream malformed."},
+	{"non-array streams", `{"streams":"ledger"}`, true, rpcerrors.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
+	{"non-string stream entry", `{"streams":[123]}`, true, rpcerrors.RpcSTREAM_MALFORMED, "malformedStream", "Stream malformed."},
 	// books (Subscribe.cpp:233-234 non-array, :238 non-object entry;
 	// Subscribe_test.cpp:675-690).
-	{"non-array books", `{"books":"x"}`, true, types.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
-	{"non-object book entry", `{"books":[1]}`, true, types.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
+	{"non-array books", `{"books":"x"}`, true, rpcerrors.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
+	{"non-object book entry", `{"books":[1]}`, true, rpcerrors.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
 	// Accepted shapes: an absent field, an empty books array, and valid
 	// values must all succeed.
 	{"empty params", `{}`, false, 0, "", ""},
@@ -92,13 +93,13 @@ func TestSubscribeConformanceArrayFieldShapes(t *testing.T) {
 // (Unsubscribe.cpp:63-64, 113-136, 164-242).
 func TestUnsubscribeConformanceArrayFieldShapes(t *testing.T) {
 	cases := []shapeCase{
-		{"empty accounts array", `{"accounts":[]}`, true, types.RpcACT_MALFORMED, "actMalformed", "Account malformed."},
-		{"null accounts", `{"accounts":null}`, true, types.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
-		{"string accounts", `{"accounts":"notanarray"}`, true, types.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
-		{"empty accounts_proposed", `{"accounts_proposed":[]}`, true, types.RpcACT_MALFORMED, "actMalformed", "Account malformed."},
-		{"non-array streams", `{"streams":"ledger"}`, true, types.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
-		{"non-string stream entry", `{"streams":[123]}`, true, types.RpcSTREAM_MALFORMED, "malformedStream", "Stream malformed."},
-		{"non-object book entry", `{"books":[1]}`, true, types.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
+		{"empty accounts array", `{"accounts":[]}`, true, rpcerrors.RpcACT_MALFORMED, "actMalformed", "Account malformed."},
+		{"null accounts", `{"accounts":null}`, true, rpcerrors.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
+		{"string accounts", `{"accounts":"notanarray"}`, true, rpcerrors.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
+		{"empty accounts_proposed", `{"accounts_proposed":[]}`, true, rpcerrors.RpcACT_MALFORMED, "actMalformed", "Account malformed."},
+		{"non-array streams", `{"streams":"ledger"}`, true, rpcerrors.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
+		{"non-string stream entry", `{"streams":[123]}`, true, rpcerrors.RpcSTREAM_MALFORMED, "malformedStream", "Stream malformed."},
+		{"non-object book entry", `{"books":[1]}`, true, rpcerrors.RpcINVALID_PARAMS, "invalidParams", "Invalid parameters."},
 		{"empty params", `{}`, false, 0, "", ""},
 		{"empty books array", `{"books":[]}`, false, 0, "", ""},
 	}
@@ -130,7 +131,7 @@ func TestSubscribeConformanceCurrencyParsedTo160Bit(t *testing.T) {
 	const usdHex = "0000000000000000000000005553440000000000" // to_currency("USD")
 	const xrpHex = "0000000000000000000000000000000000000000"
 
-	subscribe := func(t *testing.T, params string) *types.RpcError {
+	subscribe := func(t *testing.T, params string) *rpcerrors.RpcError {
 		t.Helper()
 		sm := newTestSubscriptionManager()
 		conn := newTestConnection("cur-conn")
@@ -143,7 +144,7 @@ func TestSubscribeConformanceCurrencyParsedTo160Bit(t *testing.T) {
 			`"taker_gets":{"currency":"` + usdHex + `","issuer":"` + gw + `"}}]}`
 		err := subscribe(t, params)
 		require.NotNil(t, err)
-		assert.Equal(t, types.RpcBAD_MARKET, err.Code)
+		assert.Equal(t, rpcerrors.RpcBAD_MARKET, err.Code)
 		assert.Equal(t, "badMarket", err.ErrorString)
 	})
 
@@ -158,7 +159,7 @@ func TestSubscribeConformanceCurrencyParsedTo160Bit(t *testing.T) {
 			`"taker_gets":{"currency":"` + xrpHex + `","issuer":"` + gw + `"}}]}`
 		err := subscribe(t, params)
 		require.NotNil(t, err)
-		assert.Equal(t, types.RpcDST_ISR_MALFORMED, err.Code)
+		assert.Equal(t, rpcerrors.RpcDST_ISR_MALFORMED, err.Code)
 		assert.Equal(t, "dstIsrMalformed", err.ErrorString)
 	})
 }

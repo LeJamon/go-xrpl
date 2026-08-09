@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/did"
 	"github.com/LeJamon/go-xrpl/internal/testing/ticket"
@@ -170,7 +170,7 @@ func requireDIDRPCFields(t *testing.T, value any, uri, document string, document
 	}
 }
 
-func requireRPCError(t *testing.T, rpcErr *types.RpcError, code string) {
+func requireRPCError(t *testing.T, rpcErr *rpcerrors.RpcError, code string) {
 	t.Helper()
 	require.NotNil(t, rpcErr)
 	require.Equal(t, code, rpcErr.ErrorString)

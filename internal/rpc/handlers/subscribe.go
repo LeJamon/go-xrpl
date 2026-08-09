@@ -3,6 +3,8 @@ package handlers
 import (
 	"encoding/json"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -18,28 +20,28 @@ type SubscribeMethod struct{ baseHandler }
 // urlSubscriptionRequest applies the shared subscribe/unsubscribe gating
 // for plain JSON-RPC calls described on SubscribeMethod and resolves the
 // url-subscription service.
-func urlSubscriptionRequest(ctx *types.RpcContext, params json.RawMessage, method string) (types.SubscriptionRequest, types.URLSubscriptionService, *types.RpcError) {
+func urlSubscriptionRequest(ctx *types.RpcContext, params json.RawMessage, method string) (types.SubscriptionRequest, types.URLSubscriptionService, *rpcerrors.RpcError) {
 	var request types.SubscriptionRequest
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return request, nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return request, nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 
 	if !request.HasURL() {
 		// Must be a JSON-RPC call (rippled: no infoSub and no url).
-		return request, nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return request, nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	if ctx.Role != types.RoleAdmin {
-		return request, nil, types.RpcErrorNoPermission(method)
+		return request, nil, rpcerrors.RpcErrorNoPermission(method)
 	}
-	if ctx.Services == nil || ctx.Services.URLSubscriptions == nil {
-		return request, nil, types.RpcErrorNotSupported("url-based (RPCSub) subscriptions are not supported")
+	if ctx == nil || ctx.URLSubscriptions == nil {
+		return request, nil, rpcerrors.RpcErrorNotSupported("url-based (RPCSub) subscriptions are not supported")
 	}
-	return request, ctx.Services.URLSubscriptions, nil
+	return request, ctx.URLSubscriptions, nil
 }
 
-func (m *SubscribeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *SubscribeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	request, svc, rpcErr := urlSubscriptionRequest(ctx, params, "subscribe")
 	if rpcErr != nil {
 		return nil, rpcErr

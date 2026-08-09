@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -15,7 +16,7 @@ import (
 // call." branch), url from a non-admin → rpcNO_PERMISSION.
 type UnsubscribeMethod struct{ baseHandler }
 
-func (m *UnsubscribeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *UnsubscribeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	request, svc, rpcErr := urlSubscriptionRequest(ctx, params, "unsubscribe")
 	if rpcErr != nil {
 		return nil, rpcErr

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -29,8 +31,8 @@ import (
 // adaptor.
 type ValidatorsMethod struct{ adminHandler }
 
-func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
-	var services *types.ServiceContainer
+func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *rpcerrors.RpcError) {
+	var services *types.ServiceGraph
 	if ctx != nil {
 		services = ctx.Services
 	}
@@ -41,7 +43,7 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any
 	negativeUNL := []string{}
 
 	if ctx != nil && ctx.Services != nil {
-		if vl := ctx.Services.ValidatorList; vl != nil {
+		if vl := ctx.Services.ValidatorList(); vl != nil {
 			for _, p := range listSnapshot.publishers {
 				entry := map[string]any{
 					"pubkey_publisher": p.PublicKeyHex,
@@ -99,28 +101,28 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any
 				publisherLists = append(publisherLists, entry)
 			}
 		}
-		if fn := ctx.Services.TrustedValidatorKeysBase58; fn != nil {
+		if fn := ctx.Services.TrustedValidatorKeysBase58(); fn != nil {
 			trustedKeys = nonNilStrings(fn())
-		} else if vl := ctx.Services.ValidatorList; vl != nil {
+		} else if vl := ctx.Services.ValidatorList(); vl != nil {
 			for _, mk := range vl.TrustedMasterKeys() {
 				if enc, err := addresscodec.EncodeNodePublicKey(mk[:]); err == nil {
 					trustedKeys = append(trustedKeys, enc)
 				}
 			}
 		}
-		if fn := ctx.Services.SigningKeysBase58; fn != nil {
+		if fn := ctx.Services.SigningKeysBase58(); fn != nil {
 			for master, signing := range fn() {
 				signingKeys[master] = signing
 			}
 		}
-		if fn := ctx.Services.NegativeUNLBase58; fn != nil {
+		if fn := ctx.Services.NegativeUNLBase58(); fn != nil {
 			negativeUNL = nonNilStrings(fn())
 		}
 	}
 
 	quorum := 0
-	if ctx != nil && ctx.Services != nil && ctx.Services.ValidationQuorum != nil {
-		quorum = ctx.Services.ValidationQuorum()
+	if ctx != nil && ctx.Services != nil && ctx.Services.ValidationQuorum() != nil {
+		quorum = ctx.Services.ValidationQuorum()()
 	}
 	quorumRPC := validationQuorumForRPC(quorum)
 
@@ -149,21 +151,21 @@ type validatorListSnapshot struct {
 	expires     uint32
 }
 
-func resolveValidatorListSnapshot(services *types.ServiceContainer, now time.Time) validatorListSnapshot {
+func resolveValidatorListSnapshot(services *types.ServiceGraph, now time.Time) validatorListSnapshot {
 	snapshot := validatorListSnapshot{localStatic: []string{}}
 	if services == nil {
 		snapshot.summary = map[string]any{"count": 0, "status": "unknown", "expiration": "unknown"}
 		return snapshot
 	}
-	if services.LocalStaticTrustedKeysBase58 != nil {
-		snapshot.localStatic = nonNilStrings(services.LocalStaticTrustedKeysBase58())
+	if services.LocalStaticTrustedKeysBase58() != nil {
+		snapshot.localStatic = nonNilStrings(services.LocalStaticTrustedKeysBase58()())
 	}
 
 	publisherCount := 0
-	if services.ValidatorList != nil {
-		publisherCount = services.ValidatorList.PublisherCount()
-		snapshot.threshold = services.ValidatorList.Threshold()
-		snapshot.publishers = services.ValidatorList.Publishers()
+	if services.ValidatorList() != nil {
+		publisherCount = services.ValidatorList().PublisherCount()
+		snapshot.threshold = services.ValidatorList().Threshold()
+		snapshot.publishers = services.ValidatorList().Publishers()
 	}
 
 	listCount := publisherCount
@@ -220,11 +222,11 @@ func resolveValidatorListSnapshot(services *types.ServiceContainer, now time.Tim
 // rippled/src/xrpld/app/misc/detail/ValidatorSite.cpp:672-705.
 type validatorListSitesMethod struct{ adminHandler }
 
-func (m *validatorListSitesMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+func (m *validatorListSitesMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *rpcerrors.RpcError) {
 	sites := []map[string]any{}
 
-	if ctx != nil && ctx.Services != nil && ctx.Services.ValidatorList != nil {
-		for _, s := range ctx.Services.ValidatorList.Sites() {
+	if ctx != nil && ctx.Services != nil && ctx.Services.ValidatorList() != nil {
+		for _, s := range ctx.Services.ValidatorList().Sites() {
 			entry := map[string]any{
 				"uri":                  s.URI,
 				"refresh_interval_min": s.RefreshIntervalMin,

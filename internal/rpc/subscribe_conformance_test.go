@@ -19,6 +19,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -58,7 +59,7 @@ func TestSubscribeConformanceBadMarket(t *testing.T) {
 
 	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.NotNil(t, err, "same asset on both sides must be rejected")
-	assert.Equal(t, types.RpcBAD_MARKET, err.Code)
+	assert.Equal(t, rpcerrors.RpcBAD_MARKET, err.Code)
 	assert.Equal(t, "badMarket", err.ErrorString)
 	assert.Equal(t, "No such market.", err.Message)
 }
@@ -87,7 +88,7 @@ func TestSubscribeConformanceBadMarketXRP(t *testing.T) {
 
 	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.NotNil(t, err, "XRP/XRP book must be rejected")
-	assert.Equal(t, types.RpcBAD_MARKET, err.Code)
+	assert.Equal(t, rpcerrors.RpcBAD_MARKET, err.Code)
 	assert.Equal(t, "badMarket", err.ErrorString)
 	assert.Equal(t, "No such market.", err.Message)
 }
@@ -399,7 +400,7 @@ func TestSubscribeConformanceBookChangesStream(t *testing.T) {
 		Streams: []types.SubscriptionType{types.SubBookChanges},
 	})
 	require.NotNil(t, err, "book_changes is not unsubscribable in rippled")
-	assert.Equal(t, types.RpcSTREAM_MALFORMED, err.Code)
+	assert.Equal(t, rpcerrors.RpcSTREAM_MALFORMED, err.Code)
 	assert.Equal(t, "malformedStream", err.ErrorString)
 
 	assert.True(t, testRegistration(t, sm, conn).Snapshot().Has(types.SubBookChanges))
@@ -484,7 +485,7 @@ func TestSubscribeConformanceUnsubscribeInvalidStream(t *testing.T) {
 		Streams: []types.SubscriptionType{"not_a_stream"},
 	})
 	require.NotNil(t, err, "Unsubscribing from an unknown stream should fail")
-	assert.Equal(t, types.RpcSTREAM_MALFORMED, err.Code)
+	assert.Equal(t, rpcerrors.RpcSTREAM_MALFORMED, err.Code)
 	assert.Equal(t, "malformedStream", err.ErrorString)
 	assert.Equal(t, "Stream malformed.", err.Message)
 
@@ -685,7 +686,7 @@ func TestSubscribeConformanceBadTaker(t *testing.T) {
 		Books: []types.BookRequest{book},
 	}, true)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcACT_MALFORMED, err.Code)
+	assert.Equal(t, rpcerrors.RpcACT_MALFORMED, err.Code)
 	assert.Equal(t, "actMalformed", err.ErrorString)
 	assert.Equal(t, "Account malformed.", err.Message)
 }
@@ -711,7 +712,7 @@ func TestSubscribeConformanceDomain(t *testing.T) {
 			Books: []types.BookRequest{book},
 		}, true)
 		require.NotNil(t, err)
-		assert.Equal(t, types.RpcDOMAIN_MALFORMED, err.Code)
+		assert.Equal(t, rpcerrors.RpcDOMAIN_MALFORMED, err.Code)
 		assert.Equal(t, "domainMalformed", err.ErrorString)
 		assert.Equal(t, "Domain is malformed.", err.Message)
 	})
@@ -754,7 +755,7 @@ func TestUnsubscribeConformanceErrorEnvelopes(t *testing.T) {
 			Accounts: []string{"not_an_account"},
 		})
 		require.NotNil(t, err)
-		assert.Equal(t, types.RpcACT_MALFORMED, err.Code)
+		assert.Equal(t, rpcerrors.RpcACT_MALFORMED, err.Code)
 		assert.Equal(t, "actMalformed", err.ErrorString)
 		assert.Equal(t, "Account malformed.", err.Message)
 	})
@@ -765,7 +766,7 @@ func TestUnsubscribeConformanceErrorEnvelopes(t *testing.T) {
 			AccountsProposed: []string{"not_an_account"},
 		})
 		require.NotNil(t, err)
-		assert.Equal(t, types.RpcACT_MALFORMED, err.Code)
+		assert.Equal(t, rpcerrors.RpcACT_MALFORMED, err.Code)
 		assert.Equal(t, "actMalformed", err.ErrorString)
 	})
 
@@ -778,7 +779,7 @@ func TestUnsubscribeConformanceErrorEnvelopes(t *testing.T) {
 			Books: []types.BookRequest{book},
 		})
 		require.NotNil(t, err)
-		assert.Equal(t, types.RpcSRC_CUR_MALFORMED, err.Code)
+		assert.Equal(t, rpcerrors.RpcSRC_CUR_MALFORMED, err.Code)
 		assert.Equal(t, "srcCurMalformed", err.ErrorString)
 	})
 
@@ -791,7 +792,7 @@ func TestUnsubscribeConformanceErrorEnvelopes(t *testing.T) {
 			Books: []types.BookRequest{book},
 		})
 		require.NotNil(t, err)
-		assert.Equal(t, types.RpcBAD_MARKET, err.Code)
+		assert.Equal(t, rpcerrors.RpcBAD_MARKET, err.Code)
 		assert.Equal(t, "badMarket", err.ErrorString)
 	})
 
@@ -805,7 +806,7 @@ func TestUnsubscribeConformanceErrorEnvelopes(t *testing.T) {
 			Books: []types.BookRequest{book},
 		})
 		require.NotNil(t, err)
-		assert.Equal(t, types.RpcDOMAIN_MALFORMED, err.Code)
+		assert.Equal(t, rpcerrors.RpcDOMAIN_MALFORMED, err.Code)
 		assert.Equal(t, "domainMalformed", err.ErrorString)
 	})
 
@@ -847,7 +848,7 @@ func TestSubscribeConformanceStructuralCheckFirst(t *testing.T) {
 		Books: []types.BookRequest{{TakerPays: takerPays}},
 	}, true)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "invalidParams", err.ErrorString)
 	assert.Equal(t, "Invalid parameters.", err.Message)
 }

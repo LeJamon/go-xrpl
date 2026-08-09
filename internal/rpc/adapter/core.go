@@ -14,6 +14,8 @@ type LedgerServiceAdapter struct {
 }
 
 var _ types.LedgerService = (*LedgerServiceAdapter)(nil)
+var _ types.LedgerReadService = (*LedgerServiceAdapter)(nil)
+var _ types.LedgerMutationService = (*LedgerServiceAdapter)(nil)
 var _ types.LedgerNavigator = (*LedgerServiceAdapter)(nil)
 var _ types.LedgerAccessor = (*LedgerServiceAdapter)(nil)
 var _ types.TransactionSubmitter = (*LedgerServiceAdapter)(nil)
@@ -21,7 +23,6 @@ var _ types.AccountQuerier = (*LedgerServiceAdapter)(nil)
 var _ types.OwnerDirectoryReader = (*LedgerServiceAdapter)(nil)
 var _ types.TxTablesProvider = (*LedgerServiceAdapter)(nil)
 var _ types.RangedTransactionLookup = (*LedgerServiceAdapter)(nil)
-var _ types.TransactionSearcher = (*LedgerServiceAdapter)(nil)
 var _ types.LedgerContextReader = (*LedgerServiceAdapter)(nil)
 var _ types.LedgerViewSource = (*LedgerServiceAdapter)(nil)
 var _ types.OpenLedgerViewSource = (*LedgerServiceAdapter)(nil)

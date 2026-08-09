@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -27,9 +29,9 @@ func testNodePublic(t *testing.T, seed byte) string {
 
 // reservationServices builds a ServiceContainer whose peer_reservations_*
 // closures are backed by an in-memory map, standing in for the overlay table.
-func reservationServices() *types.ServiceContainer {
+func reservationServices() *types.ServiceGraph {
 	m := map[string]string{}
-	return &types.ServiceContainer{
+	return types.NewTestServiceGraph(&types.ServiceContainer{
 		PeerReservationAdd: func(key, desc string) (string, bool, error) {
 			prev, ok := m[key]
 			m[key] = desc
@@ -49,17 +51,17 @@ func reservationServices() *types.ServiceContainer {
 			}
 			return out
 		},
-	}
+	})
 }
 
 func TestPeerReservationsAddValidation(t *testing.T) {
 	method := &handlers.PeerReservationsAddMethod{}
-	ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: &types.ServiceContainer{}}
+	ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: types.NewTestServiceGraph(&types.ServiceContainer{})}
 
 	t.Run("missing public_key", func(t *testing.T) {
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Missing field 'public_key'.", rpcErr.Message)
 	})
 
@@ -68,7 +70,7 @@ func TestPeerReservationsAddValidation(t *testing.T) {
 	t.Run("malformed public_key", func(t *testing.T) {
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"public_key":"not-a-node-key"}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcPUBLIC_MALFORMED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcPUBLIC_MALFORMED, rpcErr.Code)
 		assert.Equal(t, "Public key is malformed.", rpcErr.Message)
 	})
 
@@ -77,7 +79,7 @@ func TestPeerReservationsAddValidation(t *testing.T) {
 	t.Run("empty public_key", func(t *testing.T) {
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"public_key":""}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcPUBLIC_MALFORMED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcPUBLIC_MALFORMED, rpcErr.Code)
 	})
 
 	// A 33-byte NodePublic-prefixed blob with an invalid key-type byte is
@@ -89,14 +91,14 @@ func TestPeerReservationsAddValidation(t *testing.T) {
 		body, _ := json.Marshal(map[string]any{"public_key": enc})
 		_, rpcErr := method.Handle(ctx, body)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcPUBLIC_MALFORMED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcPUBLIC_MALFORMED, rpcErr.Code)
 	})
 
 	// rippled diagnoses a non-string public_key with expected_field_error.
 	t.Run("non-string public_key", func(t *testing.T) {
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"public_key":123}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid field 'public_key', not a string.", rpcErr.Message)
 	})
 }
@@ -179,20 +181,20 @@ func TestPeerReservationsAddPersistenceError(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context: context.Background(),
 		Role:    types.RoleAdmin,
-		Services: &types.ServiceContainer{
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{
 			PeerReservationAdd: func(string, string) (string, bool, error) {
 				return "", false, errors.New("disk full")
 			},
-		},
+		}),
 	}
 	body, _ := json.Marshal(map[string]any{"public_key": testNodePublic(t, 3)})
 	_, rpcErr := (&handlers.PeerReservationsAddMethod{}).Handle(ctx, body)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 }
 
 func TestPeerReservationsEmptyWhenUnwired(t *testing.T) {
-	ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: &types.ServiceContainer{}}
+	ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: types.NewTestServiceGraph(&types.ServiceContainer{})}
 
 	// list returns an empty array, and add is a no-op that reports no previous.
 	resL, rpcErr := (&handlers.PeerReservationsListMethod{}).Handle(ctx, nil)

@@ -5,19 +5,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 func unlimitedCtx(s *types.ClientLoadShedder) *types.RpcContext {
 	return &types.RpcContext{
-		Role:      types.RoleAdmin,
-		Unlimited: true,
-		Services:  &types.ServiceContainer{ClientLoad: s},
+		Role:     types.RoleAdmin,
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{ClientLoad: s}),
 	}
 }
 
 func gatedCtx(s *types.ClientLoadShedder) *types.RpcContext {
-	return &types.RpcContext{Services: &types.ServiceContainer{ClientLoad: s}}
+	return &types.RpcContext{Services: types.NewTestServiceGraph(&types.ServiceContainer{ClientLoad: s})}
 }
 
 func loadInFlight(s *types.ClientLoadShedder, n int64) {
@@ -30,7 +31,7 @@ func TestGates_NilOrUnwiredIsNoOp(t *testing.T) {
 	for _, ctx := range []*types.RpcContext{
 		nil,
 		{},
-		{Services: &types.ServiceContainer{}},
+		{Services: types.NewTestServiceGraph(&types.ServiceContainer{})},
 	} {
 		if rpcErr := RequireNotBusyClient(ctx); rpcErr != nil {
 			t.Fatalf("RequireNotBusyClient(%v) = %v, want nil", ctx, rpcErr)
@@ -61,8 +62,8 @@ func TestRequireNotBusyClient_Strictness(t *testing.T) {
 	if rpcErr == nil {
 		t.Fatal("count==500 should shed")
 	}
-	if rpcErr.Code != types.RpcTOO_BUSY || rpcErr.ErrorString != "tooBusy" {
-		t.Errorf("got code=%d errorString=%q, want %d/%q", rpcErr.Code, rpcErr.ErrorString, types.RpcTOO_BUSY, "tooBusy")
+	if rpcErr.Code != rpcerrors.RpcTOO_BUSY || rpcErr.ErrorString != "tooBusy" {
+		t.Errorf("got code=%d errorString=%q, want %d/%q", rpcErr.Code, rpcErr.ErrorString, rpcerrors.RpcTOO_BUSY, "tooBusy")
 	}
 	if rpcErr.Message != "The server is too busy to help you now." {
 		t.Errorf("error_message = %q, want rippled-canonical", rpcErr.Message)
@@ -131,9 +132,9 @@ func TestAcquirePathfind_JobCountGate(t *testing.T) {
 }
 
 func TestAcquirePathfind_LocalLoadGateWithoutClientCounter(t *testing.T) {
-	ctx := &types.RpcContext{Services: &types.ServiceContainer{
+	ctx := &types.RpcContext{Services: types.NewTestServiceGraph(&types.ServiceContainer{
 		IsLoadedLocal: func() bool { return true },
-	}}
+	})}
 	if _, rpcErr := acquirePathfind(ctx); rpcErr == nil || rpcErr.ErrorString != "tooBusy" {
 		t.Fatalf("local load should shed without ClientLoad, got %v", rpcErr)
 	}
@@ -142,11 +143,11 @@ func TestAcquirePathfind_LocalLoadGateWithoutClientCounter(t *testing.T) {
 func TestAcquirePathfind_UnlimitedBypassesLocalLoad(t *testing.T) {
 	s := types.NewClientLoadShedder()
 	ctx := &types.RpcContext{
-		Unlimited: true,
-		Services: &types.ServiceContainer{
+		Role: types.RoleAdmin,
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{
 			ClientLoad:    s,
 			IsLoadedLocal: func() bool { return true },
-		},
+		}),
 	}
 	release, rpcErr := acquirePathfind(ctx)
 	if rpcErr != nil {
@@ -227,9 +228,14 @@ func TestWaitPathfindWaitsForRelease(t *testing.T) {
 		t.Fatalf("second acquire should succeed: %v", err2)
 	}
 
-	acquired := make(chan bool, 1)
+	type waitResult struct {
+		release func()
+		ok      bool
+	}
+	acquired := make(chan waitResult, 1)
 	go func() {
-		acquired <- s.WaitPathfind(context.Background())
+		release, ok := s.WaitPathfind(context.Background())
+		acquired <- waitResult{release: release, ok: ok}
 	}()
 
 	select {
@@ -240,15 +246,15 @@ func TestWaitPathfindWaitsForRelease(t *testing.T) {
 
 	r1()
 	select {
-	case ok := <-acquired:
-		if !ok {
+	case result := <-acquired:
+		if !result.ok {
 			t.Fatal("waiting pathfind should acquire the released slot")
 		}
+		result.release()
 	case <-time.After(time.Second):
 		t.Fatal("waiting pathfind did not acquire the released slot")
 	}
 
-	s.ReleasePathfind()
 	r2()
 	if got := s.PathfindActive(); got != 0 {
 		t.Fatalf("PathfindActive leaked after wait: %d", got)
@@ -257,14 +263,14 @@ func TestWaitPathfindWaitsForRelease(t *testing.T) {
 
 func TestWaitPathfindHonorsCancellation(t *testing.T) {
 	s := types.NewClientLoadShedder()
-	s.AcquirePathfindUnlimited()
-	s.AcquirePathfindUnlimited()
+	r1 := s.AcquirePathfindUnlimited()
+	r2 := s.AcquirePathfindUnlimited()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if s.WaitPathfind(ctx) {
+	if _, ok := s.WaitPathfind(ctx); ok {
 		t.Fatal("canceled pathfind wait should fail")
 	}
-	s.ReleasePathfind()
-	s.ReleasePathfind()
+	r1()
+	r2()
 }

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
@@ -60,11 +62,11 @@ func TestStrictRequestObjects(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := &types.RpcContext{Context: context.Background(), IsAdmin: true}
+			ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin}
 			result, rpcErr := test.handler.Handle(ctx, test.params)
 			require.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			require.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			require.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 			require.Equal(t, "invalidParams", rpcErr.ErrorString)
 			require.Equal(t, "Invalid parameters.", rpcErr.Message)
 		})
@@ -74,7 +76,7 @@ func TestStrictRequestObjects(t *testing.T) {
 func TestDecodeRejectionDoesNotInvokeCallbacks(t *testing.T) {
 	controller := &requestRejectAmendmentController{table: amendment.NewTable()}
 	_, rpcErr := (&FeatureMethod{}).Handle(
-		&types.RpcContext{Context: context.Background(), IsAdmin: true, Services: &types.ServiceContainer{Ledger: controller}},
+		&types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: controller})},
 		json.RawMessage(`{"feature":1,"vetoed":true}`),
 	)
 	require.NotNil(t, rpcErr)
@@ -90,7 +92,7 @@ func TestDecodeRejectionDoesNotInvokeCallbacks(t *testing.T) {
 		},
 	}
 	_, rpcErr = (&FetchInfoMethod{}).Handle(
-		&types.RpcContext{Services: services},
+		&types.RpcContext{Services: types.NewTestServiceGraph(services)},
 		json.RawMessage(`{"clear":true`),
 	)
 	require.NotNil(t, rpcErr)
@@ -99,7 +101,7 @@ func TestDecodeRejectionDoesNotInvokeCallbacks(t *testing.T) {
 
 	store := &requestRejectAdvisory{}
 	_, rpcErr = (&CanDeleteMethod{}).Handle(
-		&types.RpcContext{Context: context.Background(), Services: &types.ServiceContainer{AdvisoryDeleteState: store}},
+		&types.RpcContext{Context: context.Background(), Services: types.NewTestServiceGraph(&types.ServiceContainer{AdvisoryDeleteState: store})},
 		json.RawMessage(`{"can_delete":true}`),
 	)
 	require.NotNil(t, rpcErr)
@@ -114,7 +116,7 @@ func TestRequestObjectJsonCppCoercions(t *testing.T) {
 		FetchInfo:      func() map[string]any { return nil },
 	}
 	result, rpcErr := (&FetchInfoMethod{}).Handle(
-		&types.RpcContext{Services: services},
+		&types.RpcContext{Services: types.NewTestServiceGraph(services)},
 		json.RawMessage(`{"clear":"true"}`),
 	)
 	require.Nil(t, rpcErr)
@@ -123,7 +125,7 @@ func TestRequestObjectJsonCppCoercions(t *testing.T) {
 
 	controller := &requestRejectAmendmentController{table: amendment.NewTable()}
 	_, rpcErr = (&FeatureMethod{}).Handle(
-		&types.RpcContext{Context: context.Background(), IsAdmin: true, Services: &types.ServiceContainer{Ledger: controller}},
+		&types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: controller})},
 		json.RawMessage(`{"feature":"fixMasterKeyAsRegularKey","vetoed":"true"}`),
 	)
 	require.Nil(t, rpcErr)
@@ -131,7 +133,7 @@ func TestRequestObjectJsonCppCoercions(t *testing.T) {
 
 	controller = &requestRejectAmendmentController{table: amendment.NewTable()}
 	result, rpcErr = (&FeatureMethod{}).Handle(
-		&types.RpcContext{Context: context.Background(), IsAdmin: true, Services: &types.ServiceContainer{Ledger: controller}},
+		&types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: controller})},
 		json.RawMessage(`{"vetoed":true}`),
 	)
 	require.Nil(t, rpcErr)
@@ -188,11 +190,11 @@ func TestJsonCppRequestFields(t *testing.T) {
 
 func TestCanDeleteNotEnabledPrecedesDecode(t *testing.T) {
 	_, rpcErr := (&CanDeleteMethod{}).Handle(
-		&types.RpcContext{Services: &types.ServiceContainer{}},
+		&types.RpcContext{Services: types.NewTestServiceGraph(&types.ServiceContainer{})},
 		json.RawMessage(`{"can_delete":`),
 	)
 	require.NotNil(t, rpcErr)
-	require.Equal(t, types.RpcNOT_ENABLED, rpcErr.Code)
+	require.Equal(t, rpcerrors.RpcNOT_ENABLED, rpcErr.Code)
 }
 
 func TestCanDeleteStrictRequestObjects(t *testing.T) {
@@ -208,11 +210,11 @@ func TestCanDeleteStrictRequestObjects(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			store := &requestRejectAdvisory{}
 			_, rpcErr := (&CanDeleteMethod{}).Handle(
-				&types.RpcContext{Context: context.Background(), Services: &types.ServiceContainer{AdvisoryDeleteState: store}},
+				&types.RpcContext{Context: context.Background(), Services: types.NewTestServiceGraph(&types.ServiceContainer{AdvisoryDeleteState: store})},
 				test.params,
 			)
 			require.NotNil(t, rpcErr)
-			require.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			require.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 			require.Equal(t, "Invalid parameters.", rpcErr.Message)
 			require.Zero(t, store.getCalls)
 			require.Zero(t, store.setCalls)
@@ -238,5 +240,5 @@ func TestRequestObjectPreservesJsonCppIntegerRange(t *testing.T) {
 		json.RawMessage(`{"unknown":4294967296}`),
 	)
 	require.NotNil(t, rpcErr)
-	require.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	require.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 }

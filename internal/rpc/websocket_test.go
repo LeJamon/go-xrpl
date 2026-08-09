@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/gorilla/websocket"
@@ -672,14 +674,91 @@ func TestWebSocketSubscribeErrorWireEnvelope(t *testing.T) {
 	}
 }
 
+func TestWebSocketErrorProjectorPreservesExtrasAndCanonicalFields(t *testing.T) {
+	outbound := make(chan []byte, 3)
+	wsConn := &websocketConnection{Connection: subscription.NewConnection("error-projector", outbound)}
+	ws := &WebSocketServer{}
+	fields := map[string]any{
+		"error":           "spoofed",
+		"status":          "spoofed",
+		"error_code":      999,
+		"error_message":   "spoofed",
+		"error_exception": "spoofed",
+		"code":            999,
+		"message":         "spoofed",
+		"type":            "spoofed",
+		"index":           7,
+	}
+	ws.sendErrorResponse(wsConn, rpcerrors.RpcErrorInvalidParams("").WithExtra(fields), 1, nil, nil)
+
+	var response map[string]any
+	if err := json.Unmarshal(<-outbound, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["status"] != "error" || response["error"] != "invalidParams" || response["error_code"] != float64(rpcerrors.RpcINVALID_PARAMS) || response["error_message"] != "Invalid parameters." {
+		t.Fatalf("canonical WS error = %#v", response)
+	}
+	if response["index"] != float64(7) {
+		t.Fatalf("non-reserved extra missing: %#v", response)
+	}
+	if response["type"] != "response" {
+		t.Fatalf("response type = %v, want response", response["type"])
+	}
+	for _, key := range []string{"error_exception", "code", "message"} {
+		if _, ok := response[key]; ok {
+			t.Errorf("reserved extra %q was projected: %#v", key, response)
+		}
+	}
+
+	bare := rpcerrors.RpcErrorEntryNotFoundBare("").WithExtra(map[string]any{
+		"error_code":    999,
+		"error_message": "spoofed",
+		"index":         9,
+	})
+	ws.sendErrorResponse(wsConn, bare, 2, nil, nil)
+	response = nil
+	if err := json.Unmarshal(<-outbound, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["error"] != "entryNotFound" || response["index"] != float64(9) {
+		t.Fatalf("bare WS error = %#v", response)
+	}
+	for _, key := range []string{"error_code", "error_message"} {
+		if _, ok := response[key]; ok {
+			t.Errorf("bare error projected %q: %#v", key, response)
+		}
+	}
+
+	exception := rpcerrors.RpcErrorInvalidTransaction("decode failed").WithExtra(map[string]any{
+		"error":           "spoofed",
+		"error_code":      999,
+		"error_message":   "spoofed",
+		"error_exception": "spoofed",
+		"index":           10,
+	})
+	ws.sendErrorResponse(wsConn, exception, 3, nil, nil)
+	response = nil
+	if err := json.Unmarshal(<-outbound, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["error"] != "invalidTransaction" || response["error_exception"] != "decode failed" || response["index"] != float64(10) {
+		t.Fatalf("exception WS error = %#v", response)
+	}
+	for _, key := range []string{"error_code", "error_message"} {
+		if _, ok := response[key]; ok {
+			t.Errorf("exception error projected %q: %#v", key, response)
+		}
+	}
+}
+
 func TestWebSocketHandlerPanicWireEnvelope(t *testing.T) {
 	const panicCause = "websocket panic must stay private"
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
-	ws.methodRegistry.Register("panic", &stubHandler{
-		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
-			panic(panicCause)
-		},
-	})
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+		"panic": &stubHandler{
+			handle: func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
+				panic(panicCause)
+			},
+		}})})
 
 	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
 	defer httpSrv.Close()
@@ -720,12 +799,12 @@ func TestWebSocketHandlerPanicWireEnvelope(t *testing.T) {
 }
 
 func TestWebSocketOrdinaryErrorWireEnvelope(t *testing.T) {
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
-	ws.methodRegistry.Register("fail", &stubHandler{
-		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
-			return nil, rpcInternalError()
-		},
-	})
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+		"fail": &stubHandler{
+			handle: func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
+				return nil, rpcInternalError()
+			},
+		}})})
 
 	body := wsRawRoundTrip(t, ws, `{"command":"fail","id":7,"jsonrpc":"2.0","ripplerpc":"1.0","api_version":2,"secret":"private seed"}`)
 	const want = `{"api_version":2,"error":"internal","error_code":73,"error_message":"Internal error.","id":7,"jsonrpc":"2.0","request":{"api_version":2,"command":"fail","id":7,"jsonrpc":"2.0","ripplerpc":"1.0","secret":"<masked>"},"ripplerpc":"1.0","status":"error","type":"response"}`
@@ -736,13 +815,13 @@ func TestWebSocketOrdinaryErrorWireEnvelope(t *testing.T) {
 
 func TestWebSocketRedactsIDAndPreservesItInHandlerParams(t *testing.T) {
 	received := make(chan json.RawMessage, 1)
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
-	ws.methodRegistry.Register("capture", &stubHandler{
-		handle: func(_ *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-			received <- append(json.RawMessage(nil), params...)
-			return map[string]any{"ok": true}, nil
-		},
-	})
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+		"capture": &stubHandler{
+			handle: func(_ *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
+				received <- append(json.RawMessage(nil), params...)
+				return map[string]any{"ok": true}, nil
+			},
+		}})})
 
 	body := wsRawRoundTrip(t, ws, `{"command":"capture","method":"capture","api_version":1,"id":{"SeCrEt":"private-id"},"payload":"kept"}`)
 	const want = `{"api_version":1,"id":{"SeCrEt":"<masked>"},"result":{"ok":true},"status":"success","type":"response"}`
@@ -847,7 +926,7 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 
 			test.invoke(ws, wsConn, &types.RpcContext{
 				ApiVersion: types.DefaultApiVersion,
-				Services:   &types.ServiceContainer{Capabilities: types.RPCCapabilities{PathSearchMax: 3}},
+				Services:   types.NewTestServiceGraph(&types.ServiceContainer{Capabilities: types.RPCCapabilities{PathSearchMax: 3}}),
 			}, cmd)
 			body := <-wsConn.Outbound()
 			if got := string(body); got != test.want {
@@ -861,13 +940,27 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 }
 
 func TestWebSocketRejectsTrailingJSON(t *testing.T) {
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
-	ws.methodRegistry.Register("ping", &stubHandler{})
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+		"ping": &stubHandler{},
+	})})
 
 	body := wsRawRoundTrip(t, ws, `{"command":"ping","id":7}{"command":"ping","id":8}`)
 	const want = `{"error":"jsonInvalid","type":"error","value":"<redacted>"}`
 	if got := string(body); got != want {
 		t.Fatalf("trailing JSON response = %s, want %s", got, want)
+	}
+}
+
+func TestWebSocketJSONDispatchUsesServerRegistry(t *testing.T) {
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
+	body := wsRawRoundTrip(t, ws, `{"command":"json","params":{"method":"ping"},"id":7}`)
+
+	var response map[string]any
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatalf("decode response %s: %v", body, err)
+	}
+	if response["status"] != "success" || response["error"] != nil {
+		t.Fatalf("json dispatch response = %v", response)
 	}
 }
 
@@ -898,8 +991,9 @@ func TestWebSocketJSONInvalidWireEnvelope(t *testing.T) {
 }
 
 func TestWebSocketJSONIntegerBounds(t *testing.T) {
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
-	ws.methodRegistry.Register("ping", &stubHandler{})
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+		"ping": &stubHandler{},
+	})})
 
 	for _, request := range []string{
 		`{"command":"ping","id":4294967296}`,
@@ -938,12 +1032,12 @@ func TestWebSocketJSONIntegerBounds(t *testing.T) {
 }
 
 func TestWebSocketErrorExceptionWireEnvelope(t *testing.T) {
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
-	ws.methodRegistry.Register("simulate", &stubHandler{
-		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
-			return nil, types.RpcErrorInvalidTransaction("invalid transaction detail")
-		},
-	})
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+		"simulate": &stubHandler{
+			handle: func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
+				return nil, rpcerrors.RpcErrorInvalidTransaction("invalid transaction detail")
+			},
+		}})})
 
 	body := wsRawRoundTrip(t, ws, `{"command":"simulate","id":9}`)
 	const want = `{"error":"invalidTransaction","error_exception":"invalid transaction detail","id":9,"request":{"command":"simulate","id":9},"status":"error","type":"response"}`

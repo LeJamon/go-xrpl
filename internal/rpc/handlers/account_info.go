@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -39,7 +41,7 @@ const (
 // AccountInfoMethod handles the account_info RPC method.
 type AccountInfoMethod struct{ baseHandler }
 
-func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	rawFields, fieldsErr := rawJSONFields(params)
 	if fieldsErr != nil {
 		return nil, fieldsErr
@@ -50,16 +52,16 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		var valid bool
 		account, valid = rawJSONString(accountRaw)
 		if !valid {
-			return nil, types.RpcErrorInvalidField("account")
+			return nil, rpcerrors.RpcErrorInvalidField("account")
 		}
 	} else if identRaw, ok := rawFields["ident"]; ok {
 		var valid bool
 		account, valid = rawJSONString(identRaw)
 		if !valid {
-			return nil, types.RpcErrorInvalidField("ident")
+			return nil, rpcerrors.RpcErrorInvalidField("ident")
 		}
 	} else {
-		return nil, types.RpcErrorMissingField("account")
+		return nil, rpcerrors.RpcErrorMissingField("account")
 	}
 
 	if err := requireLedgerService(ctx.Services); err != nil {
@@ -74,27 +76,21 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	lookupFields := ledgerEntryResponseFields(ledger, lookupValidated)
 	_, accountID, decodeErr := addresscodec.DecodeClassicAddressToAccountID(account)
 	if decodeErr != nil {
-		rpcErr := types.RpcErrorActMalformed("Account malformed.")
-		rpcErr.Extra = lookupFields
-		return nil, rpcErr
+		return nil, rpcerrors.RpcErrorActMalformed("Account malformed.").WithExtra(lookupFields)
 	}
 	canonicalAccount, encodeErr := addresscodec.EncodeAccountIDToClassicAddress(accountID)
 	if encodeErr != nil {
-		rpcErr := types.RpcErrorActMalformed("Account malformed.")
-		rpcErr.Extra = lookupFields
-		return nil, rpcErr
+		return nil, rpcerrors.RpcErrorActMalformed("Account malformed.").WithExtra(lookupFields)
 	}
 
-	info, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, canonicalAccount, ledgerIndex)
+	info, err := ctx.Services.Ledger().GetAccountInfo(ctx.Context, canonicalAccount, ledgerIndex)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			lookupFields["account"] = canonicalAccount
-			rpcErr := types.RpcErrorActNotFound("Account not found.")
-			rpcErr.Extra = lookupFields
-			return nil, rpcErr
+			return nil, rpcerrors.RpcErrorActNotFound("Account not found.").WithExtra(lookupFields)
 		}
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
-			return nil, types.RpcErrorLgrNotFound("Ledger not found.")
+			return nil, rpcerrors.RpcErrorLgrNotFound("Ledger not found.")
 		}
 		return nil, rpcInternalError("account_info: ledger query failed", err)
 	}
@@ -104,9 +100,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		queue = jsonCppBoolRaw(queueRaw)
 	}
 	if queue && ledger.IsClosed() {
-		rpcErr := types.RpcErrorInvalidParams("Invalid parameters.")
-		rpcErr.Extra = lookupFields
-		return nil, rpcErr
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.").WithExtra(lookupFields)
 	}
 
 	signerLists := false
@@ -164,9 +158,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 
 	if signerListsRaw, ok := rawFields["signer_lists"]; ctx.ApiVersion > 1 && ok {
 		if _, valid := rawJSONBool(signerListsRaw); !valid {
-			rpcErr := types.RpcErrorInvalidParams("Invalid parameters.")
-			rpcErr.Extra = response
-			return nil, rpcErr
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.").WithExtra(response)
 		}
 	}
 
@@ -179,7 +171,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		signerListEntries, signerListErr := m.loadSignerLists(ctx.Context, ctx.Services, canonicalAccount, ledgerIndex)
 		if signerListErr != nil {
 			if errors.Is(signerListErr, svcerr.ErrLedgerNotFound) {
-				return nil, types.RpcErrorLgrNotFound("Ledger not found.")
+				return nil, rpcerrors.RpcErrorLgrNotFound("Ledger not found.")
 			}
 			return nil, rpcInternalError("account_info: signer list lookup failed", signerListErr)
 		}
@@ -273,8 +265,8 @@ func (m *AccountInfoMethod) buildAccountData(info *types.AccountInfo) map[string
 // max_spend_drops and auth_change, plus the aggregate counts, sequence/ticket
 // bounds, auth_change_queued and max_spend_drops_total. An empty (or unwired)
 // queue yields {txn_count: 0}.
-func buildAccountQueueData(services *types.ServiceContainer, account string) map[string]any {
-	if services == nil || services.QueueAccountTxs == nil {
+func buildAccountQueueData(services *types.ServiceGraph, account string) map[string]any {
+	if services == nil || services.QueueAccountTxs() == nil {
 		return map[string]any{"txn_count": 0}
 	}
 
@@ -285,7 +277,7 @@ func buildAccountQueueData(services *types.ServiceContainer, account string) map
 	var accountID [20]byte
 	copy(accountID[:], idBytes)
 
-	txs := services.QueueAccountTxs(accountID)
+	txs := services.QueueAccountTxs()(accountID)
 	if len(txs) == 0 {
 		return map[string]any{"txn_count": 0}
 	}
@@ -363,12 +355,12 @@ func buildAccountQueueData(services *types.ServiceContainer, account string) map
 }
 
 // loadSignerLists retrieves signer list objects for an account
-func (m *AccountInfoMethod) loadSignerLists(ctx context.Context, services *types.ServiceContainer, account string, ledgerIndex string) ([]any, error) {
+func (m *AccountInfoMethod) loadSignerLists(ctx context.Context, services *types.ServiceGraph, account string, ledgerIndex string) ([]any, error) {
 	signerLists := make([]any, 0, 1)
 	marker := ""
 	seenMarkers := make(map[string]struct{})
 	for {
-		result, err := services.Ledger.GetAccountObjects(ctx, account, ledgerIndex, "SignerList", 10, marker)
+		result, err := services.Ledger().GetAccountObjects(ctx, account, ledgerIndex, "SignerList", 10, marker)
 		if err != nil {
 			return nil, err
 		}

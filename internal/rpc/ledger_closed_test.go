@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -54,7 +56,7 @@ func TestLedgerClosedBasicSuccess(t *testing.T) {
 		return nil, errors.New("not found")
 	}
 
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerClosedMethod{}
 	ctx := &types.RpcContext{
@@ -113,7 +115,7 @@ func TestLedgerClosedHashFormat(t *testing.T) {
 		return nil, errors.New("not found")
 	}
 
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerClosedMethod{}
 	ctx := &types.RpcContext{
@@ -162,7 +164,7 @@ func TestLedgerClosedServiceUnavailable(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, nil)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
@@ -171,13 +173,13 @@ func TestLedgerClosedServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
@@ -191,13 +193,13 @@ func TestLedgerClosedServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: mock},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code, "Should return lgrNotFound error code")
+		assert.Equal(t, rpcerrors.RpcLGR_NOT_FOUND, rpcErr.Code, "Should return lgrNotFound error code")
 	})
 
 	t.Run("GetLedgerBySequence returns error", func(t *testing.T) {
@@ -211,13 +213,13 @@ func TestLedgerClosedServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: mock},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcLGR_NOT_FOUND, rpcErr.Code)
 	})
 }
 

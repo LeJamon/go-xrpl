@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"sort"
 
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 )
 
 // PeersMethod returns peers from ctx.PeerSource (rippled Peers.cpp).
@@ -15,7 +17,7 @@ import (
 // an object — empty when no [cluster_nodes] are configured.
 type PeersMethod struct{ adminHandler }
 
-func (m *PeersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *PeersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	var (
 		peers   []map[string]any
 		cluster map[string]any
@@ -42,7 +44,7 @@ func (m *PeersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any
 // (if any) under "previous". Empty result when no overlay is wired.
 type PeerReservationsAddMethod struct{ adminHandler }
 
-func (m *PeerReservationsAddMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *PeerReservationsAddMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	fields, rpcErr := objectParams(params)
 	if rpcErr != nil {
 		return nil, rpcErr
@@ -63,8 +65,8 @@ func (m *PeerReservationsAddMethod) Handle(ctx *types.RpcContext, params json.Ra
 	}
 
 	result := map[string]any{}
-	if ctx.Services != nil && ctx.Services.PeerReservationAdd != nil {
-		prevDesc, replaced, err := ctx.Services.PeerReservationAdd(key, desc)
+	if ctx.Services != nil && ctx.Services.PeerReservationAdd() != nil {
+		prevDesc, replaced, err := ctx.Services.PeerReservationAdd()(key, desc)
 		if err != nil {
 			return nil, rpcInternalError("peer_reservations_add: persisting reservation failed", err)
 		}
@@ -80,7 +82,7 @@ func (m *PeerReservationsAddMethod) Handle(ctx *types.RpcContext, params json.Ra
 // NodePublic key, returning the erased reservation (if any) under "previous".
 type PeerReservationsDelMethod struct{ adminHandler }
 
-func (m *PeerReservationsDelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *PeerReservationsDelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	fields, rpcErr := objectParams(params)
 	if rpcErr != nil {
 		return nil, rpcErr
@@ -97,8 +99,8 @@ func (m *PeerReservationsDelMethod) Handle(ctx *types.RpcContext, params json.Ra
 	}
 
 	result := map[string]any{}
-	if ctx.Services != nil && ctx.Services.PeerReservationDel != nil {
-		prevDesc, existed, err := ctx.Services.PeerReservationDel(key)
+	if ctx.Services != nil && ctx.Services.PeerReservationDel() != nil {
+		prevDesc, existed, err := ctx.Services.PeerReservationDel()(key)
 		if err != nil {
 			return nil, rpcInternalError("peer_reservations_del: persisting reservation failed", err)
 		}
@@ -114,10 +116,10 @@ func (m *PeerReservationsDelMethod) Handle(ctx *types.RpcContext, params json.Ra
 // "reservations". Empty when no overlay is wired.
 type PeerReservationsListMethod struct{ adminHandler }
 
-func (m *PeerReservationsListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *PeerReservationsListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	reservations := make([]any, 0)
-	if ctx.Services != nil && ctx.Services.PeerReservationList != nil {
-		entries := ctx.Services.PeerReservationList()
+	if ctx.Services != nil && ctx.Services.PeerReservationList() != nil {
+		entries := ctx.Services.PeerReservationList()()
 		// Rippled's PeerReservationTable::list() sorts ascending by nodeId
 		// (PeerReservationTable.cpp:57) so the wire order is deterministic.
 		sort.Slice(entries, func(i, j int) bool {
@@ -135,13 +137,13 @@ func (m *PeerReservationsListMethod) Handle(ctx *types.RpcContext, params json.R
 // objectParams decodes the request params into a field map. Absent params are
 // treated as an empty object so that missing required fields are diagnosed by
 // requiredStringField rather than here.
-func objectParams(params json.RawMessage) (map[string]json.RawMessage, *types.RpcError) {
+func objectParams(params json.RawMessage) (map[string]json.RawMessage, *rpcerrors.RpcError) {
 	fields := map[string]json.RawMessage{}
 	if len(params) == 0 {
 		return fields, nil
 	}
 	if err := json.Unmarshal(params, &fields); err != nil {
-		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+		return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 	}
 	return fields, nil
 }
@@ -149,14 +151,14 @@ func objectParams(params json.RawMessage) (map[string]json.RawMessage, *types.Rp
 // requiredStringField mirrors rippled's missing_field_error / expected_field_error
 // pattern: absent field → missing_field_error, present-but-not-string →
 // expected_field_error(name, "a string").
-func requiredStringField(fields map[string]json.RawMessage, name string) (string, *types.RpcError) {
+func requiredStringField(fields map[string]json.RawMessage, name string) (string, *rpcerrors.RpcError) {
 	raw, ok := fields[name]
 	if !ok {
-		return "", types.RpcErrorMissingField(name)
+		return "", rpcerrors.RpcErrorMissingField(name)
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err != nil {
-		return "", types.RpcErrorExpectedField(name, "a string")
+		return "", rpcerrors.RpcErrorExpectedField(name, "a string")
 	}
 	return s, nil
 }
@@ -164,14 +166,14 @@ func requiredStringField(fields map[string]json.RawMessage, name string) (string
 // optionalStringField returns "" when the field is absent and an
 // expected_field_error when present but not a string, matching rippled's
 // "if field F is present, make sure it has type T" handling.
-func optionalStringField(fields map[string]json.RawMessage, name string) (string, *types.RpcError) {
+func optionalStringField(fields map[string]json.RawMessage, name string) (string, *rpcerrors.RpcError) {
 	raw, ok := fields[name]
 	if !ok {
 		return "", nil
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err != nil {
-		return "", types.RpcErrorExpectedField(name, "a string")
+		return "", rpcerrors.RpcErrorExpectedField(name, "a string")
 	}
 	return s, nil
 }
@@ -181,14 +183,14 @@ func optionalStringField(fields map[string]json.RawMessage, name string) (string
 // parseBase58<PublicKey>(TokenType::NodePublic, ...): a key that fails to decode,
 // has the wrong length, or carries an invalid key-type byte yields
 // rpcPUBLIC_MALFORMED (Reservations.cpp:73-74).
-func parseNodePublic(publicKey string) (string, *types.RpcError) {
+func parseNodePublic(publicKey string) (string, *rpcerrors.RpcError) {
 	raw, err := addresscodec.DecodeNodePublicKey(publicKey)
 	if err != nil || !validPublicKeyType(raw) {
-		return "", types.RpcErrorPublicMalformed()
+		return "", rpcerrors.RpcErrorPublicMalformed()
 	}
 	canonical, err := addresscodec.EncodeNodePublicKey(raw)
 	if err != nil {
-		return "", types.RpcErrorPublicMalformed()
+		return "", rpcerrors.RpcErrorPublicMalformed()
 	}
 	return canonical, nil
 }

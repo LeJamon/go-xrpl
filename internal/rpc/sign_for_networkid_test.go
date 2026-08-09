@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -27,10 +29,10 @@ func TestSignFor_NetworkIDEnforcement(t *testing.T) {
 		return &types.RpcContext{
 			Context:    context.Background(),
 			ApiVersion: types.ApiVersion1,
-			Services: &types.ServiceContainer{
+			Services: types.NewTestServiceGraph(&types.ServiceContainer{
 				Ledger:       mock,
 				Capabilities: types.RPCCapabilities{SigningEnabled: true},
-			},
+			}),
 		}
 	}
 
@@ -59,7 +61,7 @@ func TestSignFor_NetworkIDEnforcement(t *testing.T) {
 	t.Run("network > 1024 requires NetworkID", func(t *testing.T) {
 		_, rpcErr := method.Handle(ctxWith(1025), params(nil))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Missing field 'tx_json.NetworkID'.", rpcErr.Message)
 	})
 
@@ -67,7 +69,7 @@ func TestSignFor_NetworkIDEnforcement(t *testing.T) {
 		nid := 999
 		_, rpcErr := method.Handle(ctxWith(1025), params(&nid))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid field 'tx_json.NetworkID'.", rpcErr.Message)
 	})
 

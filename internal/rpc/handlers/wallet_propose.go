@@ -8,12 +8,14 @@ import (
 	"math"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/rfc1751"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
-	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // WalletProposeMethod handles the wallet_propose RPC method
@@ -28,12 +30,12 @@ type walletProposeRequest struct {
 	KeyType    string `json:"key_type,omitempty"`
 }
 
-func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	var request walletProposeRequest
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
@@ -45,7 +47,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 
 	// Validate key type
 	if keyType != "secp256k1" && keyType != "ed25519" {
-		return nil, types.RpcErrorBadKeyType("Invalid field 'key_type'.")
+		return nil, rpcerrors.RpcErrorBadKeyType("Invalid field 'key_type'.")
 	}
 
 	var entropy []byte
@@ -58,7 +60,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		// Decode the provided seed
 		decodedEntropy, algo, err := addresscodec.DecodeSeed(request.Seed)
 		if err != nil {
-			return nil, types.RpcErrorBadSeed()
+			return nil, rpcerrors.RpcErrorBadSeed()
 		}
 		entropy = decodedEntropy
 
@@ -66,7 +68,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		// If a seed encodes ed25519 but user requests secp256k1, that's an error
 		if _, isEd25519 := algo.(ed25519.Algorithm); isEd25519 {
 			if keyType != "ed25519" {
-				return nil, types.RpcErrorBadSeed()
+				return nil, rpcerrors.RpcErrorBadSeed()
 			}
 		}
 	} else if request.SeedHex != "" {
@@ -74,7 +76,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		var err error
 		entropy, err = hex.DecodeString(request.SeedHex)
 		if err != nil || len(entropy) != 16 {
-			return nil, types.RpcErrorBadSeed()
+			return nil, rpcerrors.RpcErrorBadSeed()
 		}
 	} else if request.Passphrase != "" {
 		// Derive seed from passphrase using SHA-512 Half (first 16 bytes of SHA-512)

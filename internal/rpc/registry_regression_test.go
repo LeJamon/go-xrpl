@@ -9,8 +9,10 @@ import (
 )
 
 func TestRemovedShardMethodsAreUnknownCommands(t *testing.T) {
-	registry := types.NewMethodRegistry()
-	handlers.RegisterAll(registry)
+	registry, err := handlers.BuildRegistry()
+	if err != nil {
+		t.Fatalf("build registry: %v", err)
+	}
 	for _, name := range []string{"download_shard", "crawl_shards"} {
 		if _, ok := registry.Get(name); ok {
 			t.Fatalf("removed RPC method %q is still registered", name)

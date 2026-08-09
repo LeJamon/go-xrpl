@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -35,49 +37,49 @@ func TestAccountHandlerValidationOrder(t *testing.T) {
 			method:  &handlers.AccountOffersMethod{},
 			params:  `{"account":"` + account + `","ledger_hash":null,"limit":"bad"}`,
 			message: "Invalid field 'ledger_hash', not hex string.",
-			code:    types.RpcINVALID_PARAMS,
+			code:    rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:    "account_channels selector precedes destination type",
 			method:  &handlers.AccountChannelsMethod{},
 			params:  `{"account":"` + account + `","ledger_hash":null,"destination_account":1}`,
 			message: "Invalid field 'ledger_hash', not hex string.",
-			code:    types.RpcINVALID_PARAMS,
+			code:    rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:    "account_channels validates destination type after selector",
 			method:  &handlers.AccountChannelsMethod{},
 			params:  `{"account":"` + account + `","destination_account":1}`,
 			message: "Invalid field 'destination_account'.",
-			code:    types.RpcINVALID_PARAMS,
+			code:    rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:    "account_info account precedes queue",
 			method:  &handlers.AccountInfoMethod{},
 			params:  `{"queue":{"bad":true}}`,
 			message: "Missing field 'account'.",
-			code:    types.RpcINVALID_PARAMS,
+			code:    rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:    "account_nfts malformed account precedes limit",
 			method:  &handlers.AccountNftsMethod{},
 			params:  `{"account":"bad","limit":"bad"}`,
 			message: "Account malformed.",
-			code:    types.RpcACT_MALFORMED,
+			code:    rpcerrors.RpcACT_MALFORMED,
 		},
 		{
 			name:    "account_lines missing account precedes selector",
 			method:  &handlers.AccountLinesMethod{},
 			params:  `{"ledger_hash":null}`,
 			message: "Missing field 'account'.",
-			code:    types.RpcINVALID_PARAMS,
+			code:    rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:    "account_lines selector precedes malformed account",
 			method:  &handlers.AccountLinesMethod{},
 			params:  `{"account":"bad","ledger_hash":null}`,
 			message: "Invalid field 'ledger_hash', not hex string.",
-			code:    types.RpcINVALID_PARAMS,
+			code:    rpcerrors.RpcINVALID_PARAMS,
 		},
 	}
 
@@ -87,7 +89,7 @@ func TestAccountHandlerValidationOrder(t *testing.T) {
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: types.ApiVersion2,
-				Services:   &types.ServiceContainer{Ledger: newMockLedgerService()},
+				Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: newMockLedgerService()}),
 			}
 			result, rpcErr := tc.method.Handle(ctx, json.RawMessage(tc.params))
 			assert.Nil(t, result)
@@ -110,7 +112,7 @@ func TestAccountInfoQueueAndSignerValidationFollowAccountLookup(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion2,
-			Services:   &types.ServiceContainer{Ledger: service},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: service}),
 		}
 	}
 
@@ -120,7 +122,7 @@ func TestAccountInfoQueueAndSignerValidationFollowAccountLookup(t *testing.T) {
 			result, rpcErr := (&handlers.AccountInfoMethod{}).Handle(newContext(svcerr.ErrAccountNotFound), params)
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcACT_NOT_FOUND, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcACT_NOT_FOUND, rpcErr.Code)
 			assert.Equal(t, "Account not found.", rpcErr.Message)
 		})
 	}
@@ -130,7 +132,7 @@ func TestAccountInfoQueueAndSignerValidationFollowAccountLookup(t *testing.T) {
 		result, rpcErr := (&handlers.AccountInfoMethod{}).Handle(newContext(nil), params)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid parameters.", rpcErr.Message)
 	})
 
@@ -139,7 +141,7 @@ func TestAccountInfoQueueAndSignerValidationFollowAccountLookup(t *testing.T) {
 		result, rpcErr := (&handlers.AccountInfoMethod{}).Handle(newContext(nil), params)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid parameters.", rpcErr.Message)
 	})
 }
@@ -181,12 +183,12 @@ func TestAccountHandlerOptionalValidationFollowsAccountSLE(t *testing.T) {
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: types.ApiVersion2,
-				Services:   &types.ServiceContainer{Ledger: service},
+				Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: service}),
 			}
 			result, rpcErr := tc.method.Handle(ctx, json.RawMessage(tc.params))
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcACT_NOT_FOUND, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcACT_NOT_FOUND, rpcErr.Code)
 			assert.Equal(t, "Account not found.", rpcErr.Message)
 		})
 	}

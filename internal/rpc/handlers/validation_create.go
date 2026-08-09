@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/crypto"
 	"github.com/LeJamon/go-xrpl/crypto/rfc1751"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
-	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // ValidationCreateMethod handles the validation_create RPC method.
@@ -24,17 +26,17 @@ type validationCreateRequest struct {
 	Secret *string `json:"secret,omitempty"`
 }
 
-func (m *ValidationCreateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *ValidationCreateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	var request validationCreateRequest
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
 	seed, ok := validationSeed(request.Secret)
 	if !ok {
-		return nil, types.RpcErrorBadSeed()
+		return nil, rpcerrors.RpcErrorBadSeed()
 	}
 
 	// Validator keys are always secp256k1, derived directly from the root

@@ -8,9 +8,11 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+
 	definitions "github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
-	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/ledger/entry/schema"
 )
@@ -86,7 +88,7 @@ func buildServerDefinitions() {
 	serverDefsHash = strings.ToUpper(hex.EncodeToString(sum[:]))
 }
 
-func (m *ServerDefinitionsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *ServerDefinitionsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	serverDefsOnce.Do(buildServerDefinitions)
 
 	// When the client echoes a matching hash, return just the hash so it can
@@ -97,7 +99,7 @@ func (m *ServerDefinitionsMethod) Handle(ctx *types.RpcContext, params json.RawM
 			if hashRaw, ok := raw["hash"]; ok {
 				var hashStr string
 				if err := json.Unmarshal(hashRaw, &hashStr); err != nil || !isValidDefinitionsHash(hashStr) {
-					return nil, types.RpcErrorInvalidField("hash")
+					return nil, rpcerrors.RpcErrorInvalidField("hash")
 				}
 				if strings.EqualFold(hashStr, serverDefsHash) {
 					return map[string]any{"hash": serverDefsHash}, nil

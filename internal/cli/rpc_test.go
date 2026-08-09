@@ -37,8 +37,10 @@ func specByMethod(t *testing.T, method string) rpcCommandSpec {
 }
 
 func TestRPCCommandSpecsAreRegisteredHandlers(t *testing.T) {
-	registry := rpctypes.NewMethodRegistry()
-	handlers.RegisterAll(registry)
+	registry, err := handlers.BuildRegistry()
+	if err != nil {
+		t.Fatalf("build registry: %v", err)
+	}
 
 	seen := make(map[string]struct{}, len(rpcCommandSpecs))
 	for _, spec := range rpcCommandSpecs {
@@ -767,11 +769,11 @@ func TestRPCStopUsesAdminCredentialsWithRPCServer(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			shutdown := make(chan struct{}, 1)
-			services := &rpctypes.ServiceContainer{
-				ShutdownFunc: func() {
+			services := rpctypes.NewTestServiceGraph(&rpctypes.ServiceContainer{
+				Shutdown: rpctypes.ShutdownFunc(func() {
 					shutdown <- struct{}{}
-				},
-			}
+				}),
+			})
 			server := rpcserver.NewServer(rpcserver.ServerOptions{Timeout: time.Second, Services: services})
 			_, adminNet, err := net.ParseCIDR("127.0.0.0/8")
 			if err != nil {

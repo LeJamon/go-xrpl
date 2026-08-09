@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,8 +21,10 @@ func TestUnifiedResourceManagerGossipsWebSocketLoadIntoHTTPAdmission(t *testing.
 	ws := NewWebSocketServer(WebSocketServerOptions{
 		Timeout:         time.Second,
 		ResourceManager: managerA,
+		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"heavy": &heavyStub{stubHandler: stubHandler{}},
+		}),
 	})
-	ws.methodRegistry.Register("heavy", &heavyStub{stubHandler: stubHandler{}})
 
 	_, gateway, err := net.ParseCIDR("127.0.0.0/8")
 	require.NoError(t, err)

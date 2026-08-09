@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -176,7 +178,7 @@ func TestLedgerBasicRequest(t *testing.T) {
 	mock.getLedgerDataFn = func(string, uint32, string) (*types.LedgerDataResult, error) {
 		return &types.LedgerDataResult{}, nil
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
@@ -237,26 +239,26 @@ func TestLedgerBasicRequest(t *testing.T) {
 			result, rpcErr := method.Handle(ctx, json.RawMessage(params))
 			require.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		})
 	}
 
 	t.Run("Empty index does not bypass dump permission", func(t *testing.T) {
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"","full":true}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNO_PERMISSION, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcNO_PERMISSION, rpcErr.Code)
 	})
 
 	t.Run("Malformed selector precedes dump permission", func(t *testing.T) {
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_hash":"DEADBEEF","full":true}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Queue requires open ledger", func(t *testing.T) {
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"validated","queue":true}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 
 		_, rpcErr = method.Handle(ctx, json.RawMessage(`{"ledger_index":"current","queue":true}`))
 		require.Nil(t, rpcErr)
@@ -308,7 +310,6 @@ func TestLedgerBasicRequest(t *testing.T) {
 
 	t.Run("Open full response omits closed", func(t *testing.T) {
 		ctx.Role = types.RoleAdmin
-		ctx.Unlimited = true
 		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"current","full":true}`))
 		require.Nil(t, rpcErr)
 		closeTime := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(currentReader.CloseTime()) * time.Second)
@@ -333,7 +334,6 @@ func TestLedgerBasicRequest(t *testing.T) {
 			"validated":            false,
 		}, resultToMap(t, result))
 		ctx.Role = types.RoleGuest
-		ctx.Unlimited = false
 	})
 
 	t.Run("Deprecated type field emits warning", func(t *testing.T) {
@@ -343,7 +343,7 @@ func TestLedgerBasicRequest(t *testing.T) {
 		require.Len(t, warnings, 1)
 		warning, ok := warnings[0].(map[string]any)
 		require.True(t, ok)
-		assert.Equal(t, float64(2004), warning["id"])
+		assert.Equal(t, float64(types.WarningFieldsDeprecated), warning["id"])
 	})
 
 	t.Run("Numeric ledger_index", func(t *testing.T) {
@@ -394,7 +394,7 @@ func TestLedgerBadInput(t *testing.T) {
 		}
 		return nil, errors.New("ledger not found")
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
@@ -450,7 +450,7 @@ func TestLedgerCurrentRequest(t *testing.T) {
 		}
 		return nil, errors.New("not found")
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
@@ -519,7 +519,7 @@ func TestLedgerFullOption(t *testing.T) {
 		}
 		return nil, errors.New("not found")
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
@@ -608,7 +608,7 @@ func TestLedgerExpandedTransactionsStopAtMalformedLeaf(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: mock},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 	}
 
 	result, rpcErr := (&handlers.LedgerMethod{}).Handle(ctx, json.RawMessage(`{"ledger_index":2,"transactions":true,"expand":true}`))
@@ -679,7 +679,7 @@ func TestLedgerExpandedDeliveredAmountHistoricalCloseTime(t *testing.T) {
 					Context:    context.Background(),
 					Role:       types.RoleGuest,
 					ApiVersion: apiVersion,
-					Services:   &types.ServiceContainer{Ledger: mock},
+					Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 				}
 				params := json.RawMessage(`{"ledger_index":4594094,"transactions":true,"expand":true}`)
 
@@ -725,7 +725,7 @@ func TestLedgerAccountsOption(t *testing.T) {
 			},
 		}, nil
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerMethod{}
 
@@ -748,7 +748,7 @@ func TestLedgerAccountsOption(t *testing.T) {
 	}
 	_, rpcErr := method.Handle(guestCtx, paramsJSON)
 	require.NotNil(t, rpcErr, "guest must be denied the full/accounts dump")
-	assert.Equal(t, types.RpcNO_PERMISSION, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcNO_PERMISSION, rpcErr.Code)
 
 	// An unlimited (admin) role is permitted and dumps the state into the
 	// ledger object's accountState array.
@@ -756,7 +756,6 @@ func TestLedgerAccountsOption(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
-		Unlimited:  true,
 		Services:   services,
 	}
 	result, rpcErr := method.Handle(adminCtx, paramsJSON)
@@ -811,7 +810,7 @@ func TestLedgerAccountsOption(t *testing.T) {
 	result, rpcErr = method.Handle(adminCtx, currentParams)
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 }
 
 func TestLedgerQueueRequiresOpenSelector(t *testing.T) {
@@ -832,14 +831,14 @@ func TestLedgerQueueRequiresOpenSelector(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: mock},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 	}
 	method := &handlers.LedgerMethod{}
 
 	result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"validated","queue":true}`))
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Equal(t, "Invalid parameters.", rpcErr.Message)
 
 	result, rpcErr = method.Handle(ctx, json.RawMessage(`{"ledger_index":"current","queue":true}`))
@@ -865,7 +864,7 @@ func TestLedgerLookupByHash(t *testing.T) {
 		}
 		return nil, svcerr.ErrLedgerNotFound
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
@@ -927,7 +926,7 @@ func TestLedgerLookupByHash(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcLGR_NOT_FOUND, rpcErr.Code)
 	})
 
 	t.Run("Storage failure", func(t *testing.T) {
@@ -939,7 +938,7 @@ func TestLedgerLookupByHash(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	})
 }
 
@@ -957,7 +956,7 @@ func TestLedgerResponseStructure(t *testing.T) {
 		}
 		return nil, errors.New("not found")
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
@@ -1015,7 +1014,7 @@ func TestLedgerServiceUnavailable(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, nil)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
@@ -1024,13 +1023,13 @@ func TestLedgerServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 }
@@ -1043,7 +1042,7 @@ func TestLedgerNilLedgerReturned(t *testing.T) {
 	mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
 		return nil, errors.New("not found")
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
@@ -1095,7 +1094,7 @@ func TestLedgerLookupByIndex(t *testing.T) {
 		}
 		return nil, errors.New("not found")
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerMethod{}
 	ctx := &types.RpcContext{
@@ -1173,7 +1172,7 @@ func TestLedgerLookupByIndex(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code, "Should return lgrNotFound error")
+		assert.Equal(t, rpcerrors.RpcLGR_NOT_FOUND, rpcErr.Code, "Should return lgrNotFound error")
 	})
 }
 

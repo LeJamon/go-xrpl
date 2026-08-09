@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
@@ -44,10 +46,10 @@ func (m *mockLedgerServiceMissingMethods) GetOwnerInfo(_ context.Context, _ stri
 
 // servicesForMissingMethods builds a per-test ServiceContainer for tests
 // that exercise the "missing methods" handlers.
-func servicesForMissingMethods(mock *mockLedgerServiceMissingMethods) *types.ServiceContainer {
-	return &types.ServiceContainer{
+func servicesForMissingMethods(mock *mockLedgerServiceMissingMethods) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger: mock,
-	}
+	})
 }
 
 // mockValidatorList is a minimal ValidatorListReader for unl_list tests.
@@ -138,7 +140,7 @@ func TestOwnerInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Empty account returns per-section actMalformed", func(t *testing.T) {
@@ -351,13 +353,13 @@ func TestLedgerRequestMethod(t *testing.T) {
 		_, rpcErr := method.Handle(newCtx(), json.RawMessage(
 			`{"ledger_hash":"`+strings.Repeat("A", 64)+`","ledger_index":1}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Rejects neither ledger_hash nor ledger_index", func(t *testing.T) {
 		_, rpcErr := method.Handle(newCtx(), json.RawMessage(`{}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Rejects ledger_index at or beyond the validated ledger", func(t *testing.T) {
@@ -365,7 +367,7 @@ func TestLedgerRequestMethod(t *testing.T) {
 		result, rpcErr := method.Handle(newCtx(), json.RawMessage(`{"ledger_index": 100}`))
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Not found and no acquisition subsystem returns lgrNotFound", func(t *testing.T) {
@@ -374,7 +376,7 @@ func TestLedgerRequestMethod(t *testing.T) {
 			`{"ledger_hash":"`+strings.Repeat("0", 64)+`"}`))
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcLGR_NOT_FOUND, rpcErr.Code)
 	})
 
 	t.Run("RequiredRole is Admin", func(t *testing.T) {
@@ -386,7 +388,7 @@ func TestLedgerRequestMethod(t *testing.T) {
 
 func TestLedgerCleanerMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	services := servicesForMissingMethods(mock)
+	services := types.NewServiceContainer(mock)
 
 	method := &handlers.LedgerCleanerMethod{}
 
@@ -397,7 +399,7 @@ func TestLedgerCleanerMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
-			Services:   services,
+			Services:   types.NewTestServiceGraph(services),
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -426,7 +428,7 @@ func TestLedgerCleanerMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
-			Services:   services,
+			Services:   types.NewTestServiceGraph(services),
 		}
 
 		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"min_ledger":5,"max_ledger":9,"full":true}`))
@@ -455,7 +457,7 @@ func TestLedgerCleanerMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
-			Services:   services,
+			Services:   types.NewTestServiceGraph(services),
 		}
 
 		_, rpcErr := method.Handle(ctx, json.RawMessage(
@@ -500,7 +502,7 @@ func TestSimulateMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Both tx_json and tx_blob returns not implemented (stub)", func(t *testing.T) {
@@ -518,7 +520,7 @@ func TestSimulateMethod(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		// Stub returns NOT_IMPL after parameter validation passes
-		assert.True(t, rpcErr.Code == types.RpcINVALID_PARAMS || rpcErr.Code == types.RpcNOT_IMPL)
+		assert.True(t, rpcErr.Code == rpcerrors.RpcINVALID_PARAMS || rpcErr.Code == rpcerrors.RpcNOT_IMPL)
 	})
 
 	t.Run("RequiredRole is Guest", func(t *testing.T) {
@@ -560,7 +562,7 @@ func TestTxReduceRelayMethod(t *testing.T) {
 	})
 
 	t.Run("Renders real metrics as txr_* decimal strings when wired", func(t *testing.T) {
-		svc := servicesForMissingMethods(mock)
+		svc := types.NewServiceContainer(mock)
 		svc.TxReduceRelayMetrics = func() types.TxReduceRelayMetrics {
 			return types.TxReduceRelayMetrics{
 				TxCnt:           12,
@@ -576,7 +578,7 @@ func TestTxReduceRelayMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion1,
-			Services:   svc,
+			Services:   types.NewTestServiceGraph(svc),
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -624,7 +626,7 @@ func TestConnectMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNOT_SYNCED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcNOT_SYNCED, rpcErr.Code)
 		assert.Equal(t, "notSynced", rpcErr.ErrorString)
 		assert.Equal(t, "Not synced to the network.", rpcErr.Message)
 	})
@@ -644,7 +646,7 @@ func TestConnectMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNOT_SYNCED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcNOT_SYNCED, rpcErr.Code)
 	})
 
 	t.Run("Standalone rejects before malformed parameter decoding", func(t *testing.T) {
@@ -657,7 +659,7 @@ func TestConnectMethod(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, json.RawMessage(`{not json`))
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNOT_SYNCED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcNOT_SYNCED, rpcErr.Code)
 	})
 
 	mock.standalone = false
@@ -672,14 +674,14 @@ func TestConnectMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
-			Services:   svc,
+			Services:   types.NewTestServiceGraph(svc),
 		}
 
 		result, rpcErr := method.Handle(ctx, json.RawMessage(`{}`))
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Present non-address ip values return success without enqueue", func(t *testing.T) {
@@ -701,7 +703,7 @@ func TestConnectMethod(t *testing.T) {
 					t.Fatal("PeerConnect called for unspecified endpoint")
 					return nil
 				}}
-				ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: svc}
+				ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: types.NewTestServiceGraph(svc)}
 				result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ip":`+tc.rawIP+`}`))
 				require.Nil(t, rpcErr)
 				resultMap := result.(map[string]any)
@@ -716,11 +718,11 @@ func TestConnectMethod(t *testing.T) {
 				t.Fatal("PeerConnect called after failed IP coercion")
 				return nil
 			}}
-			ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: svc}
+			ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: types.NewTestServiceGraph(svc)}
 			result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ip":`+rawIP+`}`))
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		}
 	})
 
@@ -737,7 +739,7 @@ func TestConnectMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
-			Services:   svc,
+			Services:   types.NewTestServiceGraph(svc),
 		}
 
 		params := json.RawMessage(`{"ip": "10.0.0.1", "port": 2459}`)
@@ -758,7 +760,7 @@ func TestConnectMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
-			Services:   svc,
+			Services:   types.NewTestServiceGraph(svc),
 		}
 
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"ip": "10.0.0.2"}`))
@@ -786,7 +788,7 @@ func TestConnectMethod(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				var got string
 				svc := &types.ServiceContainer{Ledger: mock, PeerConnect: func(addr string) error { got = addr; return nil }}
-				ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: svc}
+				ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: types.NewTestServiceGraph(svc)}
 				result, rpcErr := method.Handle(ctx, json.RawMessage(fmt.Sprintf(`{"ip":%q,"port":%d}`, tc.ip, tc.port)))
 				require.Nil(t, rpcErr)
 				assert.Equal(t, tc.want, got)
@@ -816,7 +818,7 @@ func TestConnectMethod(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				var got string
 				svc := &types.ServiceContainer{Ledger: mock, PeerConnect: func(addr string) error { got = addr; return nil }}
-				ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: svc}
+				ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: types.NewTestServiceGraph(svc)}
 				result, rpcErr := method.Handle(ctx, json.RawMessage(fmt.Sprintf(`{"ip":"10.0.0.3","port":%s}`, tc.rawPort)))
 				require.Nil(t, rpcErr)
 				assert.Equal(t, tc.wantAddress, got)
@@ -828,27 +830,27 @@ func TestConnectMethod(t *testing.T) {
 	t.Run("Malformed and out-of-range ports are invalidParams", func(t *testing.T) {
 		for _, rawPort := range []string{`"1"`, "[]", "{}", "2147483648", "-2147483649"} {
 			svc := &types.ServiceContainer{Ledger: mock, PeerConnect: func(string) error { t.Fatal("PeerConnect called for invalid port"); return nil }}
-			ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: svc}
+			ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: types.NewTestServiceGraph(svc)}
 			_, rpcErr := method.Handle(ctx, json.RawMessage(fmt.Sprintf(`{"ip":"10.0.0.4","port":%s}`, rawPort)))
 			require.NotNil(t, rpcErr, rawPort)
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code, rawPort)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code, rawPort)
 		}
 	})
 
 	t.Run("Port validation precedes IP conversion", func(t *testing.T) {
 		svc := &types.ServiceContainer{Ledger: mock, PeerConnect: func(string) error { t.Fatal("PeerConnect called for invalid request"); return nil }}
-		ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: svc}
+		ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: types.NewTestServiceGraph(svc)}
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"ip":[],"port":"1"}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Unavailable scheduler returns notEnabled", func(t *testing.T) {
 		ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1,
-			Services: &types.ServiceContainer{Ledger: mock}}
+			Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})}
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"ip":"10.0.0.5"}`))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNOT_ENABLED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcNOT_ENABLED, rpcErr.Code)
 	})
 
 	t.Run("Admission errors map to RPC errors", func(t *testing.T) {
@@ -857,13 +859,13 @@ func TestConnectMethod(t *testing.T) {
 			err  error
 			code int
 		}{
-			{"queue full", types.ErrPeerConnectQueueFull, types.RpcTOO_BUSY},
-			{"closed", types.ErrPeerConnectClosed, types.RpcNOT_ENABLED},
-			{"unexpected", errors.New("boom"), types.RpcINTERNAL},
+			{"queue full", types.ErrPeerConnectQueueFull, rpcerrors.RpcTOO_BUSY},
+			{"closed", types.ErrPeerConnectClosed, rpcerrors.RpcNOT_ENABLED},
+			{"unexpected", errors.New("boom"), rpcerrors.RpcINTERNAL},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				svc := &types.ServiceContainer{Ledger: mock, PeerConnect: func(string) error { return tc.err }}
-				ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: svc}
+				ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: types.ApiVersion1, Services: types.NewTestServiceGraph(svc)}
 				_, rpcErr := method.Handle(ctx, json.RawMessage(`{"ip":"10.0.0.6"}`))
 				require.NotNil(t, rpcErr)
 				assert.Equal(t, tc.code, rpcErr.Code)
@@ -902,7 +904,7 @@ func TestPrintMethod(t *testing.T) {
 	})
 
 	t.Run("Aggregates wired subsystem state", func(t *testing.T) {
-		svc := servicesForMissingMethods(mock)
+		svc := types.NewServiceContainer(mock)
 		svc.PeerDisconnects = func() (uint64, uint64) { return 7, 3 }
 		svc.JqTransOverflow = func() uint64 { return 9 }
 		svc.LastCloseInfo = func() (int, int) { return 5, 1900 }
@@ -918,7 +920,7 @@ func TestPrintMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
-			Services:   svc,
+			Services:   types.NewTestServiceGraph(svc),
 			PeerSource: &stubPeerSource{
 				peers:   []map[string]any{{"address": "192.0.2.1:51235"}},
 				cluster: map[string]any{},
@@ -1004,7 +1006,7 @@ func TestValidatorInfoMethod(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		// Rippled's not_validator_error() = make_param_error("not a validator").
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "not a validator", rpcErr.Message)
 	})
 
@@ -1034,7 +1036,7 @@ func TestCanDeleteMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNOT_ENABLED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcNOT_ENABLED, rpcErr.Code)
 	})
 
 	t.Run("RequiredRole is Admin", func(t *testing.T) {
@@ -1069,7 +1071,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "invalidParams", rpcErr.ErrorString)
 		assert.Equal(t, "Missing field 'oracles'.", rpcErr.Message)
 	})
@@ -1087,7 +1089,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcORACLE_MALFORMED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcORACLE_MALFORMED, rpcErr.Code)
 		assert.Equal(t, "oracleMalformed", rpcErr.ErrorString)
 	})
 
@@ -1104,7 +1106,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcORACLE_MALFORMED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcORACLE_MALFORMED, rpcErr.Code)
 		assert.Equal(t, "oracleMalformed", rpcErr.ErrorString)
 	})
 
@@ -1121,7 +1123,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Missing field 'base_asset'.", rpcErr.Message)
 	})
 
@@ -1138,7 +1140,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Missing field 'quote_asset'.", rpcErr.Message)
 	})
 
@@ -1212,7 +1214,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcORACLE_MALFORMED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcORACLE_MALFORMED, rpcErr.Code)
 		assert.Equal(t, "oracleMalformed", rpcErr.ErrorString)
 	})
 
@@ -1229,7 +1231,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcORACLE_MALFORMED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcORACLE_MALFORMED, rpcErr.Code)
 		assert.Equal(t, "oracleMalformed", rpcErr.ErrorString)
 	})
 
@@ -1299,7 +1301,7 @@ func TestGetCountsMethod(t *testing.T) {
 	})
 
 	t.Run("Emits node store counters when wired", func(t *testing.T) {
-		svc := servicesForMissingMethods(mock)
+		svc := types.NewServiceContainer(mock)
 		svc.GetCounts = func() types.CountsResult {
 			return types.CountsResult{
 				Standalone: true,
@@ -1321,7 +1323,7 @@ func TestGetCountsMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
-			Services:   svc,
+			Services:   types.NewTestServiceGraph(svc),
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -1355,7 +1357,7 @@ func TestGetCountsMethod(t *testing.T) {
 	})
 
 	t.Run("Omits node store block and local_txs when unavailable", func(t *testing.T) {
-		svc := servicesForMissingMethods(mock)
+		svc := types.NewServiceContainer(mock)
 		svc.GetCounts = func() types.CountsResult {
 			return types.CountsResult{Standalone: false, LocalTxs: 0}
 		}
@@ -1363,7 +1365,7 @@ func TestGetCountsMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
-			Services:   svc,
+			Services:   types.NewTestServiceGraph(svc),
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -1421,7 +1423,7 @@ func TestLogLevelMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid parameters.", rpcErr.Message)
 	})
 
@@ -1522,7 +1524,7 @@ func TestLogRotateMethod(t *testing.T) {
 
 func TestAMMInfoMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	services := &types.ServiceContainer{Ledger: &ammInfoTestLedgerService{mock}}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: &ammInfoTestLedgerService{mock}})
 
 	method := &handlers.AMMInfoMethod{}
 
@@ -1542,7 +1544,7 @@ func TestAMMInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcACT_MALFORMED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcACT_MALFORMED, rpcErr.Code)
 		assert.Equal(t, "actMalformed", rpcErr.ErrorString)
 		assert.Equal(t, "Account malformed.", rpcErr.Message)
 	})
@@ -1562,7 +1564,7 @@ func TestAMMInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcACT_MALFORMED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcACT_MALFORMED, rpcErr.Code)
 		assert.Equal(t, "actMalformed", rpcErr.ErrorString)
 		assert.Equal(t, "Account malformed.", rpcErr.Message)
 	})
@@ -1583,7 +1585,7 @@ func TestAMMInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcACT_NOT_FOUND, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcACT_NOT_FOUND, rpcErr.Code)
 		assert.Equal(t, "actNotFound", rpcErr.ErrorString)
 	})
 
@@ -1601,7 +1603,7 @@ func TestAMMInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Invalid parameters - both assets and amm_account", func(t *testing.T) {
@@ -1621,7 +1623,7 @@ func TestAMMInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("RequiredRole is Guest", func(t *testing.T) {
@@ -1693,7 +1695,7 @@ func TestVaultInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Invalid parameters - neither vault_id nor owner+seq", func(t *testing.T) {
@@ -1709,7 +1711,7 @@ func TestVaultInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Invalid parameters - both vault_id and owner", func(t *testing.T) {
@@ -1728,7 +1730,7 @@ func TestVaultInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("RequiredRole is Guest", func(t *testing.T) {
@@ -1775,13 +1777,13 @@ func TestUnlListMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
-			Services: &types.ServiceContainer{
+			Services: types.NewTestServiceGraph(&types.ServiceContainer{
 				Ledger: mock,
 				ValidatorList: &mockValidatorList{listed: []types.ListedValidator{
 					{MasterKey: newKey(0), Trusted: true},
 					{MasterKey: newKey(100), Trusted: false},
 				}},
-			},
+			}),
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
@@ -1852,7 +1854,7 @@ func TestBlackListMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
-			Services:   svc,
+			Services:   types.NewTestServiceGraph(svc),
 		}
 
 		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"threshold": 100}`))
@@ -1877,7 +1879,7 @@ func TestBlackListMethod(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
-			Services:   svc,
+			Services:   types.NewTestServiceGraph(svc),
 		}
 
 		_, rpcErr := method.Handle(ctx, nil)
@@ -1950,7 +1952,7 @@ func TestMissingMethodsNilLedgerService(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: nil},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 	}
 
 	// Methods that depend on ledger service should return RpcINTERNAL when Ledger is nil
@@ -1979,7 +1981,7 @@ func TestMissingMethodsNilLedgerService(t *testing.T) {
 
 			// Should return an internal error, not panic
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 			assert.Nil(t, result)
 		})
 	}

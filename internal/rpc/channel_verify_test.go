@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -26,7 +28,7 @@ func TestChannelVerify_MissingPublicKey(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "public_key")
 }
 
@@ -44,7 +46,7 @@ func TestChannelVerify_MissingChannelID(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "channel_id")
 }
 
@@ -62,7 +64,7 @@ func TestChannelVerify_MissingAmount(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "amount")
 }
 
@@ -80,7 +82,7 @@ func TestChannelVerify_MissingSignature(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "Missing field 'signature'.", err.Message)
 }
 
@@ -99,25 +101,25 @@ func TestChannelVerify_PresentEmptyRequiredFields(t *testing.T) {
 		{
 			name:    "empty public key is malformed",
 			params:  `{"public_key":"","channel_id":"` + channelID + `","amount":"1","signature":"AA"}`,
-			code:    types.RpcPUBLIC_MALFORMED,
+			code:    rpcerrors.RpcPUBLIC_MALFORMED,
 			message: "Public key is malformed.",
 		},
 		{
 			name:    "empty channel id is malformed",
 			params:  `{"public_key":"` + publicKey + `","channel_id":"","amount":"1","signature":"AA"}`,
-			code:    types.RpcCHANNEL_MALFORMED,
+			code:    rpcerrors.RpcCHANNEL_MALFORMED,
 			message: "Payment channel is malformed.",
 		},
 		{
 			name:    "empty amount is malformed",
 			params:  `{"public_key":"` + publicKey + `","channel_id":"` + channelID + `","amount":"","signature":"AA"}`,
-			code:    types.RpcCHANNEL_AMT_MALFORMED,
+			code:    rpcerrors.RpcCHANNEL_AMT_MALFORMED,
 			message: "Payment channel amount is malformed.",
 		},
 		{
 			name:    "empty signature is invalid",
 			params:  `{"public_key":"` + publicKey + `","channel_id":"` + channelID + `","amount":"1","signature":""}`,
-			code:    types.RpcINVALID_PARAMS,
+			code:    rpcerrors.RpcINVALID_PARAMS,
 			message: "Invalid parameters.",
 		},
 	}
@@ -148,7 +150,7 @@ func TestChannelVerify_MalformedPublicKey(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcPUBLIC_MALFORMED, err.Code)
+	assert.Equal(t, rpcerrors.RpcPUBLIC_MALFORMED, err.Code)
 	assert.Equal(t, "publicMalformed", err.ErrorString)
 }
 
@@ -168,7 +170,7 @@ func TestChannelVerify_MalformedHexPublicKey(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcPUBLIC_MALFORMED, err.Code)
+	assert.Equal(t, rpcerrors.RpcPUBLIC_MALFORMED, err.Code)
 }
 
 func TestChannelVerify_InvalidChannelIDTooLong(t *testing.T) {
@@ -186,7 +188,7 @@ func TestChannelVerify_InvalidChannelIDTooLong(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcCHANNEL_MALFORMED, err.Code)
+	assert.Equal(t, rpcerrors.RpcCHANNEL_MALFORMED, err.Code)
 	assert.Equal(t, "channelMalformed", err.ErrorString)
 }
 
@@ -205,7 +207,7 @@ func TestChannelVerify_InvalidChannelIDTooShort(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcCHANNEL_MALFORMED, err.Code)
+	assert.Equal(t, rpcerrors.RpcCHANNEL_MALFORMED, err.Code)
 }
 
 func TestChannelVerify_AmountTooSmall(t *testing.T) {
@@ -223,7 +225,7 @@ func TestChannelVerify_AmountTooSmall(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcCHANNEL_AMT_MALFORMED, err.Code)
+	assert.Equal(t, rpcerrors.RpcCHANNEL_AMT_MALFORMED, err.Code)
 	assert.Equal(t, "channelAmtMalformed", err.ErrorString)
 }
 
@@ -242,7 +244,7 @@ func TestChannelVerify_AmountTooLarge(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcCHANNEL_AMT_MALFORMED, err.Code)
+	assert.Equal(t, rpcerrors.RpcCHANNEL_AMT_MALFORMED, err.Code)
 }
 
 func TestChannelVerify_NonHexSignature(t *testing.T) {
@@ -260,7 +262,7 @@ func TestChannelVerify_NonHexSignature(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "Invalid parameters.", err.Message)
 }
 

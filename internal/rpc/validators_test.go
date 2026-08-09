@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
@@ -25,7 +27,7 @@ import (
 // trusted_validator_keys, publisher_lists, validation_quorum are present.
 func TestValidatorsResponseStructure(t *testing.T) {
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.ValidatorsMethod{}
 	ctx := &types.RpcContext{
@@ -62,7 +64,7 @@ func TestValidatorsResponseStructure(t *testing.T) {
 // trusted_validator_keys.size() == 0 and publisher_lists.size() == 0.
 func TestValidatorsEmptyList(t *testing.T) {
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.ValidatorsMethod{}
 	ctx := &types.RpcContext{
@@ -96,10 +98,10 @@ func TestValidatorsEmptyList(t *testing.T) {
 }
 
 func TestValidatorsDisabledQuorumUsesRippledWireValue(t *testing.T) {
-	services := &types.ServiceContainer{
+	services := types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger:           newMockLedgerService(),
 		ValidationQuorum: func() int { return math.MaxInt },
-	}
+	})
 	method := &handlers.ValidatorsMethod{}
 	ctx := &types.RpcContext{
 		Context: context.Background(), Role: types.RoleAdmin,
@@ -117,7 +119,7 @@ func TestValidatorsDisabledQuorumUsesRippledWireValue(t *testing.T) {
 
 func TestValidatorsUsesEffectiveTrustedKeys(t *testing.T) {
 	const localKey = "nLocalValidator"
-	services := &types.ServiceContainer{
+	services := types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger: newMockLedgerService(),
 		LocalStaticTrustedKeysBase58: func() []string {
 			return nil
@@ -125,7 +127,7 @@ func TestValidatorsUsesEffectiveTrustedKeys(t *testing.T) {
 		TrustedValidatorKeysBase58: func() []string {
 			return []string{localKey}
 		},
-	}
+	})
 
 	result, rpcErr := (&handlers.ValidatorsMethod{}).Handle(&types.RpcContext{
 		Context:    context.Background(),
@@ -171,7 +173,7 @@ func TestValidatorsMethodMetadata(t *testing.T) {
 // The validators method accepts no parameters but should not fail if extras are sent.
 func TestValidatorsWithParams(t *testing.T) {
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.ValidatorsMethod{}
 	ctx := &types.RpcContext{
@@ -200,7 +202,7 @@ func TestValidatorsWithParams(t *testing.T) {
 // status == "success" and the result to contain validation key fields.
 func TestValidationCreateReturnsKeyPair(t *testing.T) {
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.ValidationCreateMethod{}
 	ctx := &types.RpcContext{
@@ -242,7 +244,7 @@ func TestValidationCreateReturnsKeyPair(t *testing.T) {
 // "BAWL MAN JADE MOON DOVE GEM SON NOW HAD ADEN GLOW TIRE" and expects success.
 func TestValidationCreateWithSecret(t *testing.T) {
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.ValidationCreateMethod{}
 	ctx := &types.RpcContext{
@@ -340,7 +342,7 @@ func TestValidationCreateRejectsKeyTokens(t *testing.T) {
 	require.NoError(t, err)
 	_, rpcErr = method.Handle(ctx, params)
 	require.NotNil(t, rpcErr, "a node public key must not be accepted as a seed")
-	assert.Equal(t, types.RpcBAD_SEED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcBAD_SEED, rpcErr.Code)
 }
 
 // TestValidationCreateEmptySecret verifies an explicit empty secret is rejected
@@ -358,7 +360,7 @@ func TestValidationCreateEmptySecret(t *testing.T) {
 	require.NoError(t, err)
 	_, rpcErr := method.Handle(ctx, params)
 	require.NotNil(t, rpcErr, "an explicit empty secret should be rejected")
-	assert.Equal(t, types.RpcBAD_SEED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcBAD_SEED, rpcErr.Code)
 }
 
 // TestValidationCreateAdminOnly tests that validation_create requires admin role.
@@ -396,7 +398,7 @@ func TestValidationCreateMethodMetadata(t *testing.T) {
 // is the correct response.
 func TestConsensusInfoResponseStructure(t *testing.T) {
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.ConsensusInfoMethod{}
 	ctx := &types.RpcContext{
@@ -455,7 +457,7 @@ func TestConsensusInfoMethodMetadata(t *testing.T) {
 // The consensus_info method accepts no parameters but should not fail if extras are sent.
 func TestConsensusInfoWithParams(t *testing.T) {
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.ConsensusInfoMethod{}
 	ctx := &types.RpcContext{
@@ -482,13 +484,14 @@ func TestConsensusInfoWithParams(t *testing.T) {
 // Reference: rippled Stop.cpp — returns message "ripple server stopping".
 func TestStopReturnsStoppingMessage(t *testing.T) {
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	container := types.NewServiceContainer(mock)
 
 	// Set up a shutdown function that records it was called
 	shutdownCalled := false
-	services.ShutdownFunc = func() {
+	container.Shutdown = types.ShutdownFunc(func() {
 		shutdownCalled = true
-	}
+	})
+	services := types.NewTestServiceGraph(container)
 
 	method := &handlers.StopMethod{}
 	ctx := &types.RpcContext{
@@ -556,7 +559,7 @@ func TestStopServiceUnavailable(t *testing.T) {
 
 	assert.Nil(t, result, "Expected nil result when service unavailable")
 	require.NotNil(t, rpcErr, "Expected RPC error when service unavailable")
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code,
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code,
 		"Should return internal error code")
 	assert.Equal(t, "Internal error.", rpcErr.Message,
 		"internal error text must remain canonical")
@@ -566,10 +569,7 @@ func TestStopServiceUnavailable(t *testing.T) {
 // When the shutdown function is not set, stop should return an internal error.
 func TestStopShutdownFuncNil(t *testing.T) {
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
-
-	// ShutdownFunc is nil by default
-	services.ShutdownFunc = nil
+	services := types.NewTestServiceGraph(types.NewServiceContainer(mock))
 
 	method := &handlers.StopMethod{}
 	ctx := &types.RpcContext{
@@ -583,7 +583,7 @@ func TestStopShutdownFuncNil(t *testing.T) {
 
 	assert.Nil(t, result, "Expected nil result when shutdown func nil")
 	require.NotNil(t, rpcErr, "Expected RPC error when shutdown func nil")
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code,
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code,
 		"Should return internal error code")
 	assert.Equal(t, "Internal error.", rpcErr.Message,
 		"internal error text must remain canonical")
@@ -592,12 +592,13 @@ func TestStopShutdownFuncNil(t *testing.T) {
 // TestStopWithParams tests that providing params does not affect stop behavior.
 func TestStopWithParams(t *testing.T) {
 	mock := newMockLedgerService()
-	services := &types.ServiceContainer{Ledger: mock}
+	container := types.NewServiceContainer(mock)
 
 	shutdownCalled := false
-	services.ShutdownFunc = func() {
+	container.Shutdown = types.ShutdownFunc(func() {
 		shutdownCalled = true
-	}
+	})
+	services := types.NewTestServiceGraph(container)
 
 	method := &handlers.StopMethod{}
 	ctx := &types.RpcContext{

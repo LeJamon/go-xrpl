@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodectypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
@@ -105,7 +107,7 @@ func TestPreprocessTransactionCanonicalizesAndValidatesSigners(t *testing.T) {
 			"Signers":         signers,
 		}
 	}
-	preprocess := func(signers any) (*types.RpcError, string) {
+	preprocess := func(signers any) (*rpcerrors.RpcError, string) {
 		transaction, rpcErr := preprocessTransaction(base(signers), transactionPreprocessOptions{
 			mode:            transactionPreprocessSubmitMultisigned,
 			preserveSigners: true,
@@ -185,7 +187,7 @@ func TestCheckPaymentMPTGatePrecedesLaterValidation(t *testing.T) {
 		"Paths":    []any{},
 		"DomainID": "00",
 	}
-	ctx := &types.RpcContext{Services: &types.ServiceContainer{Ledger: ledger}}
+	ctx := &types.RpcContext{Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: ledger})}
 	rpcErr := checkPayment(txMap, json.RawMessage(`{"build_path":true}`), true, ctx)
 	if rpcErr == nil || rpcErr.Message != "Field 'build_path' not allowed in this context." {
 		t.Fatalf("error = %#v", rpcErr)
@@ -277,7 +279,7 @@ func TestSubmitMultisignedRejectsMalformedSignerBeforeBinaryEncoding(t *testing.
 	}
 	ctx := &types.RpcContext{
 		Context:  context.Background(),
-		Services: &types.ServiceContainer{Ledger: &loadAdmissionLedger{}},
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: &loadAdmissionLedger{}}),
 	}
 	_, rpcErr := (&SubmitMultisignedMethod{}).Handle(ctx, params)
 	if rpcErr == nil || rpcErr.Message != "Signers array may only contain Signer entries." {

@@ -4,6 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -85,29 +86,29 @@ func (sm *Manager) Detach(registration *Registration) bool {
 	return sm.detachRecord(registration)
 }
 
-func (sm *Manager) HandleSubscribe(registration *Registration, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
+func (sm *Manager) HandleSubscribe(registration *Registration, request types.SubscriptionRequest, isAdmin bool) *rpcerrors.RpcError {
 	return sm.HandleSubscribeScoped(registration, sm.NewRequestScope(), request, isAdmin)
 }
 
-func (sm *Manager) HandleSubscribeScoped(registration *Registration, scope *RequestScope, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
+func (sm *Manager) HandleSubscribeScoped(registration *Registration, scope *RequestScope, request types.SubscriptionRequest, isAdmin bool) *rpcerrors.RpcError {
 	if scope == nil || scope.manager != sm {
-		return types.RpcErrorInternal()
+		return rpcerrors.RpcErrorInternal()
 	}
 	sm.mu.RLock()
 	record := sm.recordLocked(registration)
 	sm.mu.RUnlock()
 	if record == nil {
-		return types.RpcErrorInternal()
+		return rpcerrors.RpcErrorInternal()
 	}
 	w := request.WireArrays()
 	_, streams, streamsErr := resolveStreams(w.Present, w.Streams, request.Streams, scope)
 	record.conn.SetAPIVersion(request.ApiVersion)
 	for _, stream := range streams {
 		if !validStreams[stream] {
-			return types.RpcErrorMalformedStream()
+			return rpcerrors.RpcErrorMalformedStream()
 		}
 		if stream == types.SubPeerStatus && !isAdmin {
-			return types.RpcErrorNoPermission("subscribe")
+			return rpcerrors.RpcErrorNoPermission("subscribe")
 		}
 		if !w.Present {
 			if rpcErr := scope.consumeRaw(1); rpcErr != nil {
@@ -139,11 +140,11 @@ func (sm *Manager) HandleSubscribeScoped(registration *Registration, scope *Requ
 	}
 	if proposedPresent {
 		if len(proposed) == 0 {
-			return types.RpcErrorActMalformed("Account malformed.")
+			return rpcerrors.RpcErrorActMalformed("Account malformed.")
 		}
 		for _, acc := range proposed {
 			if !isValidXRPLAddress(acc) {
-				return types.RpcErrorActMalformed("Account malformed.")
+				return rpcerrors.RpcErrorActMalformed("Account malformed.")
 			}
 		}
 		if !w.Present {
@@ -168,11 +169,11 @@ func (sm *Manager) HandleSubscribeScoped(registration *Registration, scope *Requ
 	}
 	if accountsPresent {
 		if len(accounts) == 0 {
-			return types.RpcErrorActMalformed("Account malformed.")
+			return rpcerrors.RpcErrorActMalformed("Account malformed.")
 		}
 		for _, acc := range accounts {
 			if !isValidXRPLAddress(acc) {
-				return types.RpcErrorActMalformed("Account malformed.")
+				return rpcerrors.RpcErrorActMalformed("Account malformed.")
 			}
 		}
 		if !w.Present {
@@ -226,26 +227,26 @@ func (sm *Manager) HandleSubscribeScoped(registration *Registration, scope *Requ
 	return nil
 }
 
-func (sm *Manager) HandleUnsubscribe(registration *Registration, request types.SubscriptionRequest) *types.RpcError {
+func (sm *Manager) HandleUnsubscribe(registration *Registration, request types.SubscriptionRequest) *rpcerrors.RpcError {
 	return sm.HandleUnsubscribeScoped(registration, sm.NewRequestScope(), request)
 }
 
-func (sm *Manager) HandleUnsubscribeScoped(registration *Registration, scope *RequestScope, request types.SubscriptionRequest) *types.RpcError {
+func (sm *Manager) HandleUnsubscribeScoped(registration *Registration, scope *RequestScope, request types.SubscriptionRequest) *rpcerrors.RpcError {
 	if scope == nil || scope.manager != sm {
-		return types.RpcErrorInternal()
+		return rpcerrors.RpcErrorInternal()
 	}
 	sm.mu.RLock()
 	record := sm.recordLocked(registration)
 	sm.mu.RUnlock()
 	if record == nil {
-		return types.RpcErrorInternal()
+		return rpcerrors.RpcErrorInternal()
 	}
 	w := request.WireArrays()
 
 	_, streams, streamsErr := resolveStreams(w.Present, w.Streams, request.Streams, scope)
 	for _, stream := range streams {
 		if !validUnsubscribeStreams[stream] {
-			return types.RpcErrorMalformedStream()
+			return rpcerrors.RpcErrorMalformedStream()
 		}
 		if !w.Present {
 			if rpcErr := scope.consumeRaw(1); rpcErr != nil {
@@ -275,11 +276,11 @@ func (sm *Manager) HandleUnsubscribeScoped(registration *Registration, scope *Re
 	}
 	if proposedPresent {
 		if len(proposed) == 0 {
-			return types.RpcErrorActMalformed("Account malformed.")
+			return rpcerrors.RpcErrorActMalformed("Account malformed.")
 		}
 		for _, acc := range proposed {
 			if !isValidXRPLAddress(acc) {
-				return types.RpcErrorActMalformed("Account malformed.")
+				return rpcerrors.RpcErrorActMalformed("Account malformed.")
 			}
 		}
 		if !w.Present {
@@ -302,11 +303,11 @@ func (sm *Manager) HandleUnsubscribeScoped(registration *Registration, scope *Re
 	}
 	if accountsPresent {
 		if len(accounts) == 0 {
-			return types.RpcErrorActMalformed("Account malformed.")
+			return rpcerrors.RpcErrorActMalformed("Account malformed.")
 		}
 		for _, acc := range accounts {
 			if !isValidXRPLAddress(acc) {
-				return types.RpcErrorActMalformed("Account malformed.")
+				return rpcerrors.RpcErrorActMalformed("Account malformed.")
 			}
 		}
 		if !w.Present {

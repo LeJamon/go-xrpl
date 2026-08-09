@@ -5,17 +5,19 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 )
 
-func rawJSONFields(params json.RawMessage) (map[string]json.RawMessage, *types.RpcError) {
+func rawJSONFields(params json.RawMessage) (map[string]json.RawMessage, *rpcerrors.RpcError) {
 	fields := make(map[string]json.RawMessage)
 	if len(bytes.TrimSpace(params)) == 0 {
 		return fields, nil
 	}
 	if err := json.Unmarshal(params, &fields); err != nil {
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	return fields, nil
 }
@@ -38,13 +40,13 @@ func rawJSONBool(raw json.RawMessage) (bool, bool) {
 	return boolValue, ok
 }
 
-func requireAccountExists(ctx *types.RpcContext, account, ledgerIndex string) *types.RpcError {
-	_, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, account, ledgerIndex)
+func requireAccountExists(ctx *types.RpcContext, account, ledgerIndex string) *rpcerrors.RpcError {
+	_, err := ctx.Services.Ledger().GetAccountInfo(ctx.Context, account, ledgerIndex)
 	if err == nil {
 		return nil
 	}
 	if errors.Is(err, svcerr.ErrAccountNotFound) {
-		return types.RpcErrorActNotFound("Account not found.")
+		return rpcerrors.RpcErrorActNotFound("Account not found.")
 	}
 	if rpcErr := mapLedgerLookupErr(err); rpcErr != nil {
 		return rpcErr

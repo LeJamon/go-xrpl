@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
@@ -220,8 +222,8 @@ func (m *mockLedgerService) GetClosedLedgerView() (types.LedgerStateView, error)
 
 // newTestServices builds a *types.ServiceContainer wrapping the given LedgerService.
 // Accepts any type that implements types.LedgerService.
-func newTestServices(mock types.LedgerService) *types.ServiceContainer {
-	return &types.ServiceContainer{Ledger: mock}
+func newTestServices(mock types.LedgerService) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 }
 
 // TestAccountInfoErrorValidation tests error handling for invalid inputs
@@ -249,13 +251,13 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 			name:          "Missing account field - empty params",
 			params:        map[string]any{},
 			expectedError: "Missing field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing account field - nil params",
 			params:        nil,
 			expectedError: "Missing field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - integer",
@@ -263,7 +265,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 				"account": 12345,
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - float",
@@ -271,7 +273,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 				"account": 1.5,
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - boolean",
@@ -279,7 +281,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 				"account": true,
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - null",
@@ -287,7 +289,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 				"account": nil,
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - object",
@@ -295,7 +297,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 				"account": map[string]any{"nested": "value"},
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - array",
@@ -303,7 +305,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 				"account": []string{"value1", "value2"},
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Malformed account address - node public key format",
@@ -311,7 +313,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 				"account": "n94JNrQYkDrpt62bbSR7nVEhdyAvcJXRAsjEkFYyqRkh9SUTYEqV",
 			},
 			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_MALFORMED,
+			expectedCode:  rpcerrors.RpcACT_MALFORMED,
 		},
 		{
 			name: "Malformed account address - seed format",
@@ -319,7 +321,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 				"account": "foo",
 			},
 			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_MALFORMED,
+			expectedCode:  rpcerrors.RpcACT_MALFORMED,
 		},
 		{
 			name: "Account not found - valid format but not in ledger",
@@ -494,7 +496,7 @@ func TestAccountInfoLedgerSpecification(t *testing.T) {
 				mock.accountInfoErr = errors.New("ledger index malformed")
 			},
 			expectError:  true,
-			expectedCode: types.RpcINVALID_PARAMS,
+			expectedCode: rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "ledger_hash: valid hash",
@@ -531,7 +533,7 @@ func TestAccountInfoLedgerSpecification(t *testing.T) {
 				mock.accountInfoErr = svcerr.ErrLedgerNotFound
 			},
 			expectError:  true,
-			expectedCode: types.RpcLGR_NOT_FOUND, // 21 — rippled lookupLedger returns lgrNotFound
+			expectedCode: rpcerrors.RpcLGR_NOT_FOUND, // 21 — rippled lookupLedger returns lgrNotFound
 		},
 	}
 
@@ -920,7 +922,7 @@ func TestAccountInfoSignerListsFailClosed(t *testing.T) {
 	}{
 		{
 			name:     "GetAccountObjects error",
-			wantCode: types.RpcINTERNAL,
+			wantCode: rpcerrors.RpcINTERNAL,
 			wantMsg:  "Internal error.",
 			setup: func(mock *mockLedgerService) {
 				mock.accountObjectsSet = true
@@ -929,7 +931,7 @@ func TestAccountInfoSignerListsFailClosed(t *testing.T) {
 		},
 		{
 			name:     "nil GetAccountObjects result",
-			wantCode: types.RpcINTERNAL,
+			wantCode: rpcerrors.RpcINTERNAL,
 			wantMsg:  "Internal error.",
 			setup: func(mock *mockLedgerService) {
 				mock.accountObjectsSet = true
@@ -939,7 +941,7 @@ func TestAccountInfoSignerListsFailClosed(t *testing.T) {
 		},
 		{
 			name:     "corrupt signer list aborts response",
-			wantCode: types.RpcINTERNAL,
+			wantCode: rpcerrors.RpcINTERNAL,
 			wantMsg:  "Internal error.",
 			setup: func(mock *mockLedgerService) {
 				mock.accountObjectsSet = true
@@ -951,7 +953,7 @@ func TestAccountInfoSignerListsFailClosed(t *testing.T) {
 		},
 		{
 			name:     "signer list ledger not found",
-			wantCode: types.RpcLGR_NOT_FOUND,
+			wantCode: rpcerrors.RpcLGR_NOT_FOUND,
 			wantMsg:  "Ledger not found.",
 			setup: func(mock *mockLedgerService) {
 				mock.accountObjectsSet = true
@@ -960,7 +962,7 @@ func TestAccountInfoSignerListsFailClosed(t *testing.T) {
 		},
 		{
 			name:     "signer list repeated marker",
-			wantCode: types.RpcINTERNAL,
+			wantCode: rpcerrors.RpcINTERNAL,
 			wantMsg:  "Internal error.",
 			setup: func(mock *mockLedgerService) {
 				mock.accountObjectPages = map[string]*types.AccountObjectsResult{
@@ -971,7 +973,7 @@ func TestAccountInfoSignerListsFailClosed(t *testing.T) {
 		},
 		{
 			name:     "signer list marker cycle",
-			wantCode: types.RpcINTERNAL,
+			wantCode: rpcerrors.RpcINTERNAL,
 			wantMsg:  "Internal error.",
 			setup: func(mock *mockLedgerService) {
 				mock.accountObjectPages = map[string]*types.AccountObjectsResult{
@@ -1059,7 +1061,7 @@ func TestAccountInfoInvalidAccountTypes(t *testing.T) {
 			assert.Nil(t, result, "Expected nil result for invalid account type")
 			require.NotNil(t, rpcErr, "Expected RPC error for invalid account type")
 			// Should return invalid params error
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code,
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code,
 				"Expected invalidParams error code for type: %s", tc.name)
 		})
 	}
@@ -1084,17 +1086,17 @@ func TestAccountInfoMalformedAddresses(t *testing.T) {
 		address      string
 		expectedCode int
 	}{
-		{"node public key format", "n94JNrQYkDrpt62bbSR7nVEhdyAvcJXRAsjEkFYyqRkh9SUTYEqV", types.RpcACT_MALFORMED},
-		{"seed string", "foo", types.RpcACT_MALFORMED},
-		{"short string", "r", types.RpcACT_MALFORMED},
-		{"empty string", "", types.RpcACT_MALFORMED},
-		{"too short address", "rHb9CJAWyB4rj91VRWn96DkukG", types.RpcACT_MALFORMED},
-		{"too long address", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyThExtraChars", types.RpcACT_MALFORMED},
-		{"invalid characters", "rHb9CJAWyB4rj91VRWn96DkukG4bwdty!@", types.RpcACT_MALFORMED},
-		{"lowercase prefix", "rhb9cjAWyB4rj91VRWn96DkukG4bwdtyTh", types.RpcACT_MALFORMED},
-		{"zero prefix", "0Hb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", types.RpcACT_MALFORMED},
-		{"numeric only", "12345678901234567890123456789012345", types.RpcACT_MALFORMED},
-		{"hex string", "0x1234567890ABCDEF1234567890ABCDEF12345678", types.RpcACT_MALFORMED},
+		{"node public key format", "n94JNrQYkDrpt62bbSR7nVEhdyAvcJXRAsjEkFYyqRkh9SUTYEqV", rpcerrors.RpcACT_MALFORMED},
+		{"seed string", "foo", rpcerrors.RpcACT_MALFORMED},
+		{"short string", "r", rpcerrors.RpcACT_MALFORMED},
+		{"empty string", "", rpcerrors.RpcACT_MALFORMED},
+		{"too short address", "rHb9CJAWyB4rj91VRWn96DkukG", rpcerrors.RpcACT_MALFORMED},
+		{"too long address", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyThExtraChars", rpcerrors.RpcACT_MALFORMED},
+		{"invalid characters", "rHb9CJAWyB4rj91VRWn96DkukG4bwdty!@", rpcerrors.RpcACT_MALFORMED},
+		{"lowercase prefix", "rhb9cjAWyB4rj91VRWn96DkukG4bwdtyTh", rpcerrors.RpcACT_MALFORMED},
+		{"zero prefix", "0Hb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", rpcerrors.RpcACT_MALFORMED},
+		{"numeric only", "12345678901234567890123456789012345", rpcerrors.RpcACT_MALFORMED},
+		{"hex string", "0x1234567890ABCDEF1234567890ABCDEF12345678", rpcerrors.RpcACT_MALFORMED},
 	}
 
 	for _, tc := range malformedAddresses {
@@ -1135,7 +1137,7 @@ func TestAccountInfoServiceUnavailable(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 
@@ -1146,7 +1148,7 @@ func TestAccountInfoServiceNilLedger(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: nil},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 	}
 
 	params := map[string]any{
@@ -1159,7 +1161,7 @@ func TestAccountInfoServiceNilLedger(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 

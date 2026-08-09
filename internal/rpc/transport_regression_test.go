@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -17,6 +18,10 @@ import (
 )
 
 const transportRegressionClientIP = "203.0.113.5"
+
+type wrappedURLSubscriptionService struct {
+	types.URLSubscriptionService
+}
 
 func postTransportRegressionRequest(t *testing.T, server *Server, body string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -29,12 +34,19 @@ func postTransportRegressionRequest(t *testing.T, server *Server, body string) *
 
 func newTransportRegressionServer(t *testing.T) *Server {
 	t.Helper()
-	server := newHardeningServer(t, time.Second, "ping", &stubHandler{})
-	server.registry.Register("stop", &stubHandler{role: types.RoleAdmin})
-	server.registry.Register("fail", &stubHandler{
-		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
-		},
+	server := NewServer(ServerOptions{
+		Timeout:  time.Second,
+		Services: types.NewTestServiceGraph(types.NewServiceContainer(nil)),
+		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"ping": &stubHandler{},
+			"stop": &stubHandler{role: types.RoleAdmin},
+			"fail": &stubHandler{
+				handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+					return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
+				},
+			},
+			"gated": &condStubHandler{cond: types.NeedsNetworkConnection},
+		}),
 	})
 	server.resourceManager = resource.NewManager(nil, nil)
 	return server
@@ -61,9 +73,10 @@ func TestTransportConstructorsShareInjectedResourceManager(t *testing.T) {
 }
 
 func TestRPCConstructorsUseExplicitDependencies(t *testing.T) {
-	services := types.NewServiceContainer(nil)
+	container := types.NewServiceContainer(nil)
 	clientLoad := types.NewClientLoadShedder()
-	services.ClientLoad = clientLoad
+	container.ClientLoad = clientLoad
+	services := types.NewTestServiceGraph(container)
 	manager := subscription.NewManager()
 	provider := stubLedgerInfoProvider{ledgerAvailable: true}
 	peerSource := &stubPeerSource{}
@@ -84,11 +97,11 @@ func TestRPCConstructorsUseExplicitDependencies(t *testing.T) {
 		SubscriptionManager: manager,
 	})
 
-	if services.ClientLoad != clientLoad || services.Dispatcher != nil || services.URLSubscriptions != nil {
+	if container.ClientLoad != clientLoad {
 		t.Fatal("RPC constructors mutated the service container")
 	}
 	clientLoad.Begin()
-	if httpServer.services.ClientLoad.InFlight() != 1 || wsServer.services.ClientLoad.InFlight() != 1 {
+	if httpServer.services.ClientLoad().InFlight() != 1 || wsServer.services.ClientLoad().InFlight() != 1 {
 		t.Fatal("HTTP and WebSocket servers did not observe the shared client-load shedder")
 	}
 	if wsServer.SubscriptionManager() != manager {
@@ -102,6 +115,49 @@ func TestRPCConstructorsUseExplicitDependencies(t *testing.T) {
 	}
 	if _, ok := wsServer.methodRegistry.Get("ping"); !ok {
 		t.Fatal("WebSocket method registry was not ready at construction return")
+	}
+
+	registryManager := subscription.NewManager()
+	urlSubscriptions := NewURLSubscriptionService(registryManager, services, provider)
+	sharedWS := NewWebSocketServer(WebSocketServerOptions{
+		Services:            services,
+		SubscriptionManager: subscription.NewManager(),
+		URLSubscriptions:    urlSubscriptions,
+	})
+	require.Same(t, registryManager, sharedWS.SubscriptionManager())
+	require.Same(t, urlSubscriptions, sharedWS.URLSubscriptionService())
+
+	custom := &wrappedURLSubscriptionService{URLSubscriptionService: urlSubscriptions}
+	customManager := subscription.NewManager()
+	customWS := NewWebSocketServer(WebSocketServerOptions{
+		Services:            services,
+		SubscriptionManager: customManager,
+		URLSubscriptions:    custom,
+	})
+	require.Same(t, customManager, customWS.SubscriptionManager())
+	require.Same(t, custom, customWS.URLSubscriptionService())
+
+	var nilRegistry *urlSubscriptionRegistry
+	var nilWrapped *wrappedURLSubscriptionService
+	for name, service := range map[string]types.URLSubscriptionService{
+		"registry": nilRegistry,
+		"wrapped":  nilWrapped,
+	} {
+		t.Run("typed nil "+name, func(t *testing.T) {
+			typedNilHTTP := NewServer(ServerOptions{
+				Services:         services,
+				URLSubscriptions: service,
+			})
+			require.Nil(t, typedNilHTTP.urlSubscriptions)
+
+			typedNilWS := NewWebSocketServer(WebSocketServerOptions{
+				Services:            services,
+				SubscriptionManager: manager,
+				URLSubscriptions:    service,
+			})
+			require.Same(t, manager, typedNilWS.SubscriptionManager())
+			require.NotNil(t, typedNilWS.URLSubscriptionService())
+		})
 	}
 }
 
@@ -164,11 +220,11 @@ func TestHTTPAdmissionOrderingAtTransportBoundary(t *testing.T) {
 			if batch {
 				assert.Equal(t, http.StatusOK, recorder.Code)
 				errorObject := batchRegressionError(t, recorder)
-				assert.Equal(t, float64(types.WrongVersionJSONRPCCode), errorObject["code"])
-				assert.Equal(t, types.InvalidApiVersionToken, errorObject["message"])
+				assert.Equal(t, float64(rpcerrors.WrongVersionJSONRPCCode), errorObject["code"])
+				assert.Equal(t, rpcerrors.InvalidApiVersionToken, errorObject["message"])
 			} else {
 				assert.Equal(t, http.StatusBadRequest, recorder.Code)
-				assert.Equal(t, types.InvalidApiVersionToken+"\r\n", recorder.Body.String())
+				assert.Equal(t, rpcerrors.InvalidApiVersionToken+"\r\n", recorder.Body.String())
 			}
 			assert.Equal(t, uint32(0), transportRegressionLocalBalance(t, server.resourceManager))
 		})
@@ -274,7 +330,7 @@ func TestHTTPEarlyDispatchErrorsChargeReferenceAndWarn(t *testing.T) {
 			method: "ping",
 			token:  "tooBusy",
 			setup: func(server *Server) {
-				server.services.ClientLoad = saturatedShedder()
+				server.services = types.NewTestServiceGraph(&types.ServiceContainer{ClientLoad: saturatedShedder()})
 			},
 		},
 		{name: "unknown", method: "does_not_exist", token: "unknownCmd", setup: func(*Server) {}},
@@ -283,8 +339,7 @@ func TestHTTPEarlyDispatchErrorsChargeReferenceAndWarn(t *testing.T) {
 			method: "gated",
 			token:  "noNetwork",
 			setup: func(server *Server) {
-				server.registry.Register("gated", &condStubHandler{cond: types.NeedsNetworkConnection})
-				server.services.Ledger = newMockLedgerService()
+				server.services = types.NewTestServiceGraph(&types.ServiceContainer{Ledger: newMockLedgerService()})
 			},
 		},
 	}

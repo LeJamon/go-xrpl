@@ -15,7 +15,7 @@ func TestConfigureStandaloneNodeIdentityPersists(t *testing.T) {
 		runtime := &nodeRuntime{
 			appConfig:  &config.Config{DatabasePath: dir},
 			standalone: standalone,
-			services:   &types.ServiceContainer{},
+			services:   types.NewServiceGraphBuilder(nil),
 		}
 		err := runtime.configureStandaloneNodeIdentity()
 		return runtime.services.NodePublicKey, err

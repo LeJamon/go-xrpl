@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -182,8 +184,8 @@ func (m *mockAccountNFTsLedgerService) GetClosedLedgerView() (types.LedgerStateV
 }
 
 // newAccountNFTsTestServices builds a *types.ServiceContainer wrapping the mock.
-func newAccountNFTsTestServices(mock *mockAccountNFTsLedgerService) *types.ServiceContainer {
-	return &types.ServiceContainer{Ledger: mock}
+func newAccountNFTsTestServices(mock *mockAccountNFTsLedgerService) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 }
 
 // TestAccountNFTsErrorValidation tests error handling for invalid inputs
@@ -211,13 +213,13 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 			name:          "Missing account field - empty params",
 			params:        map[string]any{},
 			expectedError: "Missing field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing account field - nil params",
 			params:        nil,
 			expectedError: "Missing field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - integer",
@@ -225,7 +227,7 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 				"account": 12345,
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - boolean",
@@ -233,7 +235,7 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 				"account": true,
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			// Test case from rippled: malformed account using node public key format
@@ -243,7 +245,7 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 				"account": "n9MJkEKHDhy5eTLuHUQeAAjo382frHNbFK4C8hcwN4nwM2SrLdBj",
 			},
 			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_MALFORMED,
+			expectedCode:  rpcerrors.RpcACT_MALFORMED,
 		},
 		{
 			// Test case from rippled: account not found (unfunded account)
@@ -252,7 +254,7 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account not found.",
-			expectedCode:  types.RpcACT_NOT_FOUND,
+			expectedCode:  rpcerrors.RpcACT_NOT_FOUND,
 			setupMock: func() {
 				mock.accountNFTsErr = svcerr.ErrAccountNotFound
 			},
@@ -333,7 +335,7 @@ func TestAccountNFTsInvalidAccountTypes(t *testing.T) {
 			assert.Nil(t, result, "Expected nil result for invalid account type")
 			require.NotNil(t, rpcErr, "Expected RPC error for invalid account type")
 			// Should return invalid params error
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code,
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code,
 				"Expected invalidParams error code for type: %s", tc.name)
 		})
 	}
@@ -918,7 +920,7 @@ func TestAccountNFTsPagination(t *testing.T) {
 			result, rpcErr := method.Handle(ctx, paramsJSON)
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		}
 	})
 
@@ -989,7 +991,7 @@ func TestAccountNFTsMarkerValidation(t *testing.T) {
 			result, rpcErr := method.Handle(ctx, params)
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 			assert.Equal(t, tc.message, rpcErr.Message)
 		})
 	}
@@ -1015,7 +1017,7 @@ func TestAccountNFTsServiceUnavailable(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 

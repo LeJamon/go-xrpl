@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strconv"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
@@ -13,29 +15,29 @@ import (
 // Reference: rippled/src/xrpld/rpc/handlers/NoRippleCheck.cpp
 type NoRippleCheckMethod struct{ baseHandler }
 
-func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	rawFields, fieldsErr := rawJSONFields(params)
 	if fieldsErr != nil {
 		return nil, fieldsErr
 	}
 	accountRaw, hasAccount := rawFields["account"]
 	if !hasAccount {
-		return nil, types.RpcErrorMissingField("account")
+		return nil, rpcerrors.RpcErrorMissingField("account")
 	}
 	roleRaw, hasRole := rawFields["role"]
 	if !hasRole {
-		return nil, types.RpcErrorMissingField("role")
+		return nil, rpcerrors.RpcErrorMissingField("role")
 	}
 	account, validAccount := rawJSONString(accountRaw)
 	if !validAccount {
-		return nil, types.RpcErrorInvalidField("account")
+		return nil, rpcerrors.RpcErrorInvalidField("account")
 	}
 	role, validRole := jsonCppStringRaw(roleRaw)
 	if !validRole || (role != "gateway" && role != "user") {
-		return nil, types.RpcErrorInvalidField("role")
+		return nil, rpcerrors.RpcErrorInvalidField("role")
 	}
 
-	limit, limitErr := readLimitField(params, limitNoRippleCheck, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitNoRippleCheck, ctx.Role.IsUnlimited())
 	if limitErr != nil {
 		return nil, limitErr
 	}
@@ -46,7 +48,7 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 			var valid bool
 			transactions, valid = rawJSONBool(transactionsRaw)
 			if !valid {
-				return nil, types.RpcErrorInvalidField("transactions")
+				return nil, rpcerrors.RpcErrorInvalidField("transactions")
 			}
 		} else {
 			transactions = jsonCppBoolRaw(transactionsRaw)
@@ -73,10 +75,10 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		response["transactions"] = []map[string]any{}
 	}
 	if !types.IsValidClassicAddress(account) {
-		return nil, types.RpcErrorActMalformed("Account malformed.").WithExtra(response)
+		return nil, rpcerrors.RpcErrorActMalformed("Account malformed.").WithExtra(response)
 	}
 
-	result, err := ctx.Services.Ledger.GetNoRippleCheck(
+	result, err := ctx.Services.Ledger().GetNoRippleCheck(
 		ctx.Context,
 		account,
 		role,
@@ -86,10 +88,10 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
-			return nil, types.RpcErrorActMalformed("Account malformed.")
+			return nil, rpcerrors.RpcErrorActMalformed("Account malformed.")
 		}
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
-			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
+			return nil, rpcerrors.RpcErrorLgrNotFound("ledgerNotFound")
 		}
 		return nil, mapAccountQueryErr(err, "noripple_check: ledger query failed")
 	}

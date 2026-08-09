@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -50,7 +52,7 @@ func vaultInfoTestContext(mock *vaultInfoMockLedgerService) (*handlers.VaultInfo
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: mock},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 	}
 }
 
@@ -72,23 +74,23 @@ func TestVaultInfoRawMembershipAndMalformedProjection(t *testing.T) {
 		bare      bool
 		wantError string
 	}{
-		{"no identifying members", `{"ledger_index":"validated"}`, types.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
-		{"null vault_id counts as present", `{"ledger_index":"validated","vault_id":null}`, types.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
-		{"empty vault_id counts as present", `{"ledger_index":"validated","vault_id":""}`, types.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
-		{"owner without seq", `{"ledger_index":"validated","owner":"` + vaultInfoAccount + `"}`, types.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
-		{"seq without owner", `{"ledger_index":"validated","seq":1}`, types.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
-		{"empty owner with seq", `{"ledger_index":"validated","owner":"","seq":1}`, types.RpcACT_MALFORMED, "Account malformed.", false, "malformedRequest"},
-		{"null owner with seq", `{"ledger_index":"validated","owner":null,"seq":1}`, types.RpcACT_MALFORMED, "Account malformed.", false, "malformedRequest"},
-		{"null seq counts as present", `{"ledger_index":"validated","owner":"` + vaultInfoAccount + `","seq":null}`, types.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
-		{"zero seq counts as present", `{"ledger_index":"validated","owner":"` + vaultInfoAccount + `","seq":0}`, types.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
-		{"real seq is not an integer", `{"ledger_index":"validated","owner":"` + vaultInfoAccount + `","seq":1.0}`, types.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
-		{"numeric string seq is not an integer", `{"ledger_index":"validated","owner":"` + vaultInfoAccount + `","seq":"1"}`, types.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
-		{"empty owner conflicts with vault_id", `{"ledger_index":"validated","vault_id":"` + vaultInfoID + `","owner":""}`, types.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
-		{"null seq conflicts with vault_id", `{"ledger_index":"validated","vault_id":"` + vaultInfoID + `","seq":null}`, types.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
-		{"all three identifying members", `{"ledger_index":"validated","vault_id":"` + vaultInfoID + `","owner":"","seq":0}`, types.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
-		{"zero vault key", `{"ledger_index":"validated","vault_id":"0000000000000000000000000000000000000000000000000000000000000000"}`, types.RpcUNKNOWN, "", true, "malformedRequest"},
-		{"valid direct form reaches lookup", `{"ledger_index":"validated","vault_id":"` + vaultInfoID + `"}`, types.RpcUNKNOWN, "", true, "entryNotFound"},
-		{"valid owner seq form reaches lookup", `{"ledger_index":"validated","owner":"` + vaultInfoAccount + `","seq":1}`, types.RpcUNKNOWN, "", true, "entryNotFound"},
+		{"no identifying members", `{"ledger_index":"validated"}`, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
+		{"null vault_id counts as present", `{"ledger_index":"validated","vault_id":null}`, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
+		{"empty vault_id counts as present", `{"ledger_index":"validated","vault_id":""}`, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
+		{"owner without seq", `{"ledger_index":"validated","owner":"` + vaultInfoAccount + `"}`, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
+		{"seq without owner", `{"ledger_index":"validated","seq":1}`, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
+		{"empty owner with seq", `{"ledger_index":"validated","owner":"","seq":1}`, rpcerrors.RpcACT_MALFORMED, "Account malformed.", false, "malformedRequest"},
+		{"null owner with seq", `{"ledger_index":"validated","owner":null,"seq":1}`, rpcerrors.RpcACT_MALFORMED, "Account malformed.", false, "malformedRequest"},
+		{"null seq counts as present", `{"ledger_index":"validated","owner":"` + vaultInfoAccount + `","seq":null}`, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
+		{"zero seq counts as present", `{"ledger_index":"validated","owner":"` + vaultInfoAccount + `","seq":0}`, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
+		{"real seq is not an integer", `{"ledger_index":"validated","owner":"` + vaultInfoAccount + `","seq":1.0}`, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
+		{"numeric string seq is not an integer", `{"ledger_index":"validated","owner":"` + vaultInfoAccount + `","seq":"1"}`, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
+		{"empty owner conflicts with vault_id", `{"ledger_index":"validated","vault_id":"` + vaultInfoID + `","owner":""}`, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
+		{"null seq conflicts with vault_id", `{"ledger_index":"validated","vault_id":"` + vaultInfoID + `","seq":null}`, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
+		{"all three identifying members", `{"ledger_index":"validated","vault_id":"` + vaultInfoID + `","owner":"","seq":0}`, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters.", false, "malformedRequest"},
+		{"zero vault key", `{"ledger_index":"validated","vault_id":"0000000000000000000000000000000000000000000000000000000000000000"}`, rpcerrors.RpcUNKNOWN, "", true, "malformedRequest"},
+		{"valid direct form reaches lookup", `{"ledger_index":"validated","vault_id":"` + vaultInfoID + `"}`, rpcerrors.RpcUNKNOWN, "", true, "entryNotFound"},
+		{"valid owner seq form reaches lookup", `{"ledger_index":"validated","owner":"` + vaultInfoAccount + `","seq":1}`, rpcerrors.RpcUNKNOWN, "", true, "entryNotFound"},
 	}
 
 	for _, tc := range tests {

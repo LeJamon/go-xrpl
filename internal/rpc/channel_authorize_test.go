@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
@@ -20,19 +22,19 @@ import (
 func channelAuthorizeTestContext(apiVersion int) *types.RpcContext {
 	return &types.RpcContext{
 		ApiVersion: apiVersion,
-		Services: &types.ServiceContainer{
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{
 			Capabilities: types.RPCCapabilities{SigningEnabled: true},
-		},
+		}),
 	}
 }
 
 func TestChannelAuthorizeSigningDisabledPrecedesValidation(t *testing.T) {
 	_, rpcErr := (&handlers.ChannelAuthorizeMethod{}).Handle(
-		&types.RpcContext{ApiVersion: types.ApiVersion2, Services: &types.ServiceContainer{}},
+		&types.RpcContext{ApiVersion: types.ApiVersion2, Services: types.NewTestServiceGraph(&types.ServiceContainer{})},
 		json.RawMessage(`{}`),
 	)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcNOT_SUPPORTED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcNOT_SUPPORTED, rpcErr.Code)
 	assert.Equal(t, "Signing is not supported by this server.", rpcErr.Message)
 }
 
@@ -47,7 +49,7 @@ func TestChannelAuthorize_MissingChannelID(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "channel_id")
 }
 
@@ -62,7 +64,7 @@ func TestChannelAuthorize_MissingAmount(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "amount")
 }
 
@@ -77,7 +79,7 @@ func TestChannelAuthorize_MissingSecret(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "secret")
 }
 
@@ -95,12 +97,12 @@ func TestChannelAuthorize_PresentEmptyRequiredFields(t *testing.T) {
 		{
 			name:   "empty channel id is malformed",
 			params: `{"secret":"` + secret + `","channel_id":"","amount":"1"}`,
-			code:   types.RpcCHANNEL_MALFORMED,
+			code:   rpcerrors.RpcCHANNEL_MALFORMED,
 		},
 		{
 			name:   "empty amount is malformed",
 			params: `{"secret":"` + secret + `","channel_id":"` + channelID + `","amount":""}`,
-			code:   types.RpcCHANNEL_AMT_MALFORMED,
+			code:   rpcerrors.RpcCHANNEL_AMT_MALFORMED,
 		},
 	}
 
@@ -126,7 +128,7 @@ func TestChannelAuthorize_MultipleSecrets(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "Exactly one")
 }
 
@@ -143,7 +145,7 @@ func TestChannelAuthorize_SecretNotAllowedWithKeyType(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "secret field is not allowed")
 }
 
@@ -160,7 +162,7 @@ func TestChannelAuthorize_BadKeyType(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcBAD_KEY_TYPE, err.Code)
+	assert.Equal(t, rpcerrors.RpcBAD_KEY_TYPE, err.Code)
 	assert.Equal(t, "badKeyType", err.ErrorString)
 }
 
@@ -176,7 +178,7 @@ func TestChannelAuthorize_ChannelIDTooShort(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcCHANNEL_MALFORMED, err.Code)
+	assert.Equal(t, rpcerrors.RpcCHANNEL_MALFORMED, err.Code)
 	assert.Equal(t, "channelMalformed", err.ErrorString)
 }
 
@@ -192,7 +194,7 @@ func TestChannelAuthorize_ChannelIDTooLong(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcCHANNEL_MALFORMED, err.Code)
+	assert.Equal(t, rpcerrors.RpcCHANNEL_MALFORMED, err.Code)
 }
 
 func TestChannelAuthorize_ChannelIDNotHex(t *testing.T) {
@@ -207,7 +209,7 @@ func TestChannelAuthorize_ChannelIDNotHex(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcCHANNEL_MALFORMED, err.Code)
+	assert.Equal(t, rpcerrors.RpcCHANNEL_MALFORMED, err.Code)
 }
 
 func TestChannelAuthorize_NegativeAmount(t *testing.T) {
@@ -222,7 +224,7 @@ func TestChannelAuthorize_NegativeAmount(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcCHANNEL_AMT_MALFORMED, err.Code)
+	assert.Equal(t, rpcerrors.RpcCHANNEL_AMT_MALFORMED, err.Code)
 	assert.Equal(t, "channelAmtMalformed", err.ErrorString)
 }
 
@@ -238,7 +240,7 @@ func TestChannelAuthorize_AmountOverflow(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcCHANNEL_AMT_MALFORMED, err.Code)
+	assert.Equal(t, rpcerrors.RpcCHANNEL_AMT_MALFORMED, err.Code)
 }
 
 func TestChannelAuthorize_ValidWithSecret(t *testing.T) {
@@ -536,6 +538,6 @@ func TestChannelAuthorize_BadSeed(t *testing.T) {
 
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcBAD_SEED, err.Code)
+	assert.Equal(t, rpcerrors.RpcBAD_SEED, err.Code)
 	assert.Equal(t, "badSeed", err.ErrorString)
 }

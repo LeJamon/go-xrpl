@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
@@ -28,7 +30,7 @@ type amendmentVoteController interface {
 	SetAmendmentVote(ctx context.Context, id [32]byte, vetoed bool) error
 }
 
-func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	var request struct {
 		Feature requestField[string] `json:"feature"`
 		Vetoed  jsonCppBoolField     `json:"vetoed"`
@@ -53,7 +55,7 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		features := make(map[string]any, len(allFeatures))
 		for _, f := range allFeatures {
 			hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
-			features[hexID] = buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.IsAdmin)
+			features[hexID] = buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.Role.IsAdmin())
 		}
 		return map[string]any{
 			"features": features,
@@ -62,29 +64,29 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 
 	f := resolveFeature(request.Feature.value)
 	if f == nil {
-		return nil, types.RpcErrorBadFeature("Feature not found: " + request.Feature.value)
+		return nil, rpcerrors.RpcErrorBadFeature("Feature not found: " + request.Feature.value)
 	}
 
 	// Admin vote mutation: set or clear a veto on a specific amendment.
 	if request.Vetoed.present {
-		if !ctx.IsAdmin {
-			return nil, types.RpcErrorNoPermission("feature")
+		if !ctx.Role.IsAdmin() {
+			return nil, rpcerrors.RpcErrorNoPermission("feature")
 		}
 		if ctrl == nil || tbl == nil {
-			return nil, types.RpcErrorNotSupported("amendment voting is not available on this server")
+			return nil, rpcerrors.RpcErrorNotSupported("amendment voting is not available on this server")
 		}
 		if err := ctrl.SetAmendmentVote(ctx.Context, f.ID, request.Vetoed.value); err != nil {
 			return nil, rpcInternalError("feature: recording amendment vote failed", err)
 		}
 		hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
 		return map[string]any{
-			hexID: buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.IsAdmin),
+			hexID: buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.Role.IsAdmin()),
 		}, nil
 	}
 
 	hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
 	return map[string]any{
-		hexID: buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.IsAdmin),
+		hexID: buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.Role.IsAdmin()),
 	}, nil
 }
 
@@ -103,11 +105,11 @@ func resolveFeature(feature string) *amendment.Feature {
 
 // amendmentController returns the live amendment-vote controller if the wired
 // ledger service exposes one, else nil (e.g. test mocks).
-func amendmentController(services *types.ServiceContainer) amendmentVoteController {
-	if services == nil || services.Ledger == nil {
+func amendmentController(services *types.ServiceGraph) amendmentVoteController {
+	if services == nil || services.Ledger() == nil {
 		return nil
 	}
-	if c, ok := services.Ledger.(amendmentVoteController); ok {
+	if c, ok := services.Ledger().(amendmentVoteController); ok {
 		return c
 	}
 	return nil
@@ -118,12 +120,12 @@ func amendmentController(services *types.ServiceContainer) amendmentVoteControll
 // (amendment hash → close time at which it reached majority, XRPL epoch seconds).
 // Both are nil if the ledger is unavailable, meaning the caller should fall back
 // to deriving enabled status from the registry defaults.
-func (m *FeatureMethod) getAmendmentState(services *types.ServiceContainer) (enabled map[[32]byte]bool, majorities map[[32]byte]uint32) {
-	if services == nil || services.Ledger == nil {
+func (m *FeatureMethod) getAmendmentState(services *types.ServiceGraph) (enabled map[[32]byte]bool, majorities map[[32]byte]uint32) {
+	if services == nil || services.Ledger() == nil {
 		return nil, nil
 	}
 
-	view, err := services.Ledger.GetClosedLedgerView()
+	view, err := services.ClosedLedgerState()
 	if err != nil || view == nil {
 		return nil, nil
 	}

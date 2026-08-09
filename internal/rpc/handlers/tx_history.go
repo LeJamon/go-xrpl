@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
@@ -13,7 +15,7 @@ import (
 // TxHistoryMethod handles the tx_history RPC method
 type TxHistoryMethod struct{ baseHandler }
 
-func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	var request struct {
 		Start uint32 `json:"start,omitempty"`
 	}
@@ -29,10 +31,10 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		return nil, err
 	}
 
-	result, err := ctx.Services.Ledger.GetTransactionHistory(ctx.Context, request.Start)
+	result, err := ctx.Services.Ledger().GetTransactionHistory(ctx.Context, request.Start)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrTxHistoryUnavailable) {
-			return nil, types.RpcErrorNotEnabled("")
+			return nil, rpcerrors.RpcErrorNotEnabled("")
 		}
 		return nil, rpcInternalError("tx_history: transaction query failed", err)
 	}

@@ -10,8 +10,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
 // BookChangesMethod handles the book_changes RPC method.
@@ -150,7 +152,7 @@ func formatBookChanges(l BookChangesHeader, changes map[string]*bookChange) map[
 	}
 }
 
-func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	var request struct {
 	}
 

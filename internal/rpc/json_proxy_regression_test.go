@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -17,26 +19,30 @@ import (
 func TestJSONProxyUsesSingleDispatchAccounting(t *testing.T) {
 	services := types.NewServiceContainer(nil)
 	services.ClientLoad = types.NewClientLoadShedder()
-	server := NewServer(ServerOptions{Timeout: time.Second, Services: services})
-	services.Dispatcher = server
-
+	graph := types.NewTestServiceGraph(services)
+	var targetCalls int
+	server := NewServer(ServerOptions{
+		Timeout:  time.Second,
+		Services: graph,
+		Registry: mustTestMethodRegistryWithOverrides(t, map[string]types.MethodHandler{
+			"json_proxy_target": &stubHandler{
+				handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *rpcerrors.RpcError) {
+					targetCalls++
+					assert.Equal(t, types.MaxJobQueueClients, services.ClientLoad.InFlight())
+					ctx.LoadCost = uint32(resource.FeeHeavyBurdenRPC().Cost())
+					return map[string]any{"proxied": true}, nil
+				},
+			},
+		}),
+	})
+	leases := make([]func(), 0, types.MaxJobQueueClients-1)
 	for range types.MaxJobQueueClients - 1 {
-		services.ClientLoad.Begin()
+		leases = append(leases, services.ClientLoad.Begin())
 	}
 	t.Cleanup(func() {
-		for range types.MaxJobQueueClients - 1 {
-			services.ClientLoad.End()
+		for i := len(leases) - 1; i >= 0; i-- {
+			leases[i]()
 		}
-	})
-
-	var targetCalls int
-	server.registry.Register("json_proxy_target", &stubHandler{
-		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
-			targetCalls++
-			assert.Equal(t, types.MaxJobQueueClients, services.ClientLoad.InFlight())
-			ctx.LoadCost = uint32(resource.FeeHeavyBurdenRPC().Cost())
-			return map[string]any{"proxied": true}, nil
-		},
 	})
 
 	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
@@ -114,17 +120,21 @@ func TestHTTPStructuredIDRedactionAcrossDispatchShapes(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			services := types.NewServiceContainer(nil)
-			server := NewServer(ServerOptions{Timeout: time.Second, Services: services})
-			services.Dispatcher = server
-			server.registry.Register("capture", &stubHandler{
-				handle: func(_ *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-					var received map[string]any
-					require.NoError(t, json.Unmarshal(params, &received))
-					assertMaskedStructuredID(t, received["id"])
-					return map[string]any{"received": received}, nil
-				},
+			graph := types.NewTestServiceGraph(services)
+			server := NewServer(ServerOptions{
+				Timeout:  time.Second,
+				Services: graph,
+				Registry: mustTestMethodRegistryWithOverrides(t, map[string]types.MethodHandler{
+					"capture": &stubHandler{
+						handle: func(_ *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
+							var received map[string]any
+							require.NoError(t, json.Unmarshal(params, &received))
+							assertMaskedStructuredID(t, received["id"])
+							return map[string]any{"received": received}, nil
+						},
+					},
+				}),
 			})
-
 			response := postTransportRegressionRequest(t, server, test.body)
 			require.Equal(t, http.StatusOK, response.Code)
 			for _, secret := range test.secrets {
@@ -144,12 +154,17 @@ func TestURLUserinfoIsRedactedAcrossTransportEchoes(t *testing.T) {
 	const maskedURL = `"url":"<masked>"`
 
 	fail := &stubHandler{
-		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		handle: func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		},
 	}
-	httpServer := NewServer(ServerOptions{Timeout: time.Second, Services: types.NewServiceContainer(nil)})
-	httpServer.registry.Register("userinfo_fail", fail)
+	httpServer := NewServer(ServerOptions{
+		Timeout:  time.Second,
+		Services: types.NewTestServiceGraph(types.NewServiceContainer(nil)),
+		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"userinfo_fail": fail,
+		}),
+	})
 
 	urls := []struct {
 		name  string
@@ -179,8 +194,12 @@ func TestURLUserinfoIsRedactedAcrossTransportEchoes(t *testing.T) {
 			}
 
 			t.Run("WebSocket", func(t *testing.T) {
-				server := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second})
-				server.methodRegistry.Register("userinfo_fail", fail)
+				server := NewWebSocketServer(WebSocketServerOptions{
+					Timeout: time.Second,
+					Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+						"userinfo_fail": fail,
+					}),
+				})
 				body := wsRawRoundTrip(t, server,
 					`{"command":"userinfo_fail","url":"`+testURL.value+`"}`,
 				)

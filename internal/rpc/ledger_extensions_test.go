@@ -29,7 +29,7 @@ func TestLedgerAcceptDoesNotExposeCloseTimeControl(t *testing.T) {
 	ledger := &ledgerExtensionsMock{mockLedgerService: newMockLedgerService()}
 	ctx := &types.RpcContext{
 		Context:  context.Background(),
-		Services: &types.ServiceContainer{Ledger: ledger},
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: ledger}),
 	}
 
 	result, rpcErr := (&handlers.LedgerAcceptMethod{}).Handle(ctx, json.RawMessage(`{"close_time":1}`))
@@ -54,7 +54,7 @@ func TestLedgerRangeSortsLedgersBySequence(t *testing.T) {
 	}
 	ctx := &types.RpcContext{
 		Context:  context.Background(),
-		Services: &types.ServiceContainer{Ledger: ledger},
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: ledger}),
 	}
 
 	for range 20 {

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -18,7 +20,7 @@ import (
 // This submits a multi-signed transaction to the network
 type SubmitMultisignedMethod struct{ baseHandler }
 
-func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	setLoadHeavy(ctx)
 	var request struct {
 		TxJson   json.RawMessage `json:"tx_json"`
@@ -30,7 +32,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	}
 
 	if len(request.TxJson) == 0 {
-		return nil, types.RpcErrorMissingField("tx_json")
+		return nil, rpcerrors.RpcErrorMissingField("tx_json")
 	}
 
 	if err := requireLedgerService(ctx.Services); err != nil {
@@ -42,7 +44,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	decoder := json.NewDecoder(bytes.NewReader(request.TxJson))
 	decoder.UseNumber()
 	if err := decoder.Decode(&txMap); err != nil {
-		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
+		return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
 	}
 
 	// --- checkMultiSignFields (rippled TransactionSign.cpp:1032-1057) ---
@@ -50,7 +52,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	// Sequence must be present.
 	// Matches rippled: missing_field_error("tx_json.Sequence")
 	if _, ok := txMap["Sequence"]; !ok {
-		return nil, types.RpcErrorMissingField("tx_json.Sequence")
+		return nil, rpcerrors.RpcErrorMissingField("tx_json.Sequence")
 	}
 
 	// SigningPubKey must be present and empty.
@@ -58,10 +60,10 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	// "When multi-signing 'tx_json.SigningPubKey' must be empty."
 	signingPubKey, spkPresent := txMap["SigningPubKey"]
 	if !spkPresent {
-		return nil, types.RpcErrorMissingField("tx_json.SigningPubKey")
+		return nil, rpcerrors.RpcErrorMissingField("tx_json.SigningPubKey")
 	}
 	if spkStr, ok := signingPubKey.(string); !ok || spkStr != "" {
-		return nil, types.RpcErrorInvalidParams("When multi-signing 'tx_json.SigningPubKey' must be empty.")
+		return nil, rpcerrors.RpcErrorInvalidParams("When multi-signing 'tx_json.SigningPubKey' must be empty.")
 	}
 
 	// --- checkTxJsonFields (rippled TransactionSign.cpp:315-375) ---
@@ -69,7 +71,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	if rpcErr := validateSigningTxJSONShape(txMap); rpcErr != nil {
 		return nil, rpcErr
 	}
-	if rpcErr := rejectSigningWhenLoaded(ctx.Services, ctx.Unlimited); rpcErr != nil {
+	if rpcErr := rejectSigningWhenLoaded(ctx.Services, ctx.Role.IsUnlimited()); rpcErr != nil {
 		return nil, rpcErr
 	}
 
@@ -81,9 +83,9 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	// existence, signer weights, and quorum are deliberately not checked
 	// here: rippled leaves them to the engine's checkMultiSign
 	// (tefNOT_MULTI_SIGNING / tefBAD_SIGNATURE / tefBAD_QUORUM).
-	if _, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, txAccount, "current"); err != nil {
+	if _, err := ctx.Services.Ledger().GetAccountInfo(ctx.Context, txAccount, "current"); err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RpcErrorSrcActNotFound("Source account not found.")
+			return nil, rpcerrors.RpcErrorSrcActNotFound("Source account not found.")
 		}
 		return nil, rpcInternalError("submit_multisigned: source account lookup failed", err)
 	}
@@ -95,7 +97,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		feeJSON, marshalErr := json.Marshal(feeString)
 		feeAmount, parseErr := state.AmountFromJSON(feeJSON)
 		if marshalErr == nil && parseErr == nil && !feeAmount.IsNative() {
-			return nil, types.RpcErrorInvalidParams("Invalid Fee field.  Fees must be specified in XRP.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid Fee field.  Fees must be specified in XRP.")
 		}
 	}
 	transaction, rpcErr := preprocessTransaction(txMap, transactionPreprocessOptions{
@@ -112,27 +114,27 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	feeVal := txMap["Fee"]
 	feeStr, ok := feeVal.(string)
 	if !ok {
-		return nil, types.RpcErrorInvalidParams("Invalid Fee field.  Fees must be specified in XRP.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid Fee field.  Fees must be specified in XRP.")
 	}
 	feeDrops, err := strconv.ParseInt(feeStr, 10, 64)
 	if err != nil {
-		return nil, types.RpcErrorInvalidParams("Invalid Fee field.  Fees must be specified in XRP.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid Fee field.  Fees must be specified in XRP.")
 	}
 	if feeDrops <= 0 {
-		return nil, types.RpcErrorInvalidParams("Invalid Fee field.  Fees must be greater than zero.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid Fee field.  Fees must be greater than zero.")
 	}
 
 	// Check that Signers array exists and is not empty
 	signersValue, signersPresent := txMap["Signers"]
 	if !signersPresent {
-		return nil, types.RpcErrorMissingField("tx_json.Signers")
+		return nil, rpcerrors.RpcErrorMissingField("tx_json.Signers")
 	}
 	signers, ok := signersValue.([]any)
 	if ok && len(signers) == 0 {
-		return nil, types.RpcErrorInvalidParams("tx_json.Signers array may not be empty.")
+		return nil, rpcerrors.RpcErrorInvalidParams("tx_json.Signers array may not be empty.")
 	}
 	if _, ok := txMap["Fee"].(string); !ok {
-		return nil, types.RpcErrorInvalidParams("Invalid Fee field.  Fees must be specified in XRP.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid Fee field.  Fees must be specified in XRP.")
 	}
 
 	feePayer := transaction.GetCommon().Account
@@ -167,7 +169,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	// Route fail_hard submissions through the optional surface so they
 	// are not held or relayed on non-apply. Mirrors rippled
 	// NetworkOPs.cpp:1685-1689 (`!enforceFailHard`).
-	result, submitErr := submitWithFailHard(ctx.Services.Ledger, txJSON, txBlob, request.FailHard)
+	result, submitErr := submitWithFailHard(ctx.Services.LedgerMutation(), txJSON, txBlob, request.FailHard)
 	if submitErr != nil {
 		return nil, rpcTransactionSubmissionError("submit_multisigned: transaction submission failed", submitErr)
 	}

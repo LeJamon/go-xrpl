@@ -3,6 +3,7 @@ package types
 import (
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -19,7 +20,7 @@ func ValidatedLedgerStale(info LedgerServerInfo) bool {
 
 func CurrentLedgerUnavailable(apiVersion int) *RpcError {
 	if apiVersion == ApiVersion1 {
-		return NewRpcError(RpcNO_CURRENT, "noCurrent", "noCurrent", "Current ledger is unavailable.")
+		return rpcerrors.NewRpcError(rpcerrors.RpcNO_CURRENT, "noCurrent", "noCurrent", "Current ledger is unavailable.")
 	}
-	return RpcErrorNotSynced("")
+	return rpcerrors.RpcErrorNotSynced("")
 }

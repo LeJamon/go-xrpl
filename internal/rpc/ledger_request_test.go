@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -49,7 +51,7 @@ func TestLedgerRequest_ServesLocalLedgerByHash(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: mock},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 	}
 
 	result, rpcErr := (&handlers.LedgerRequestMethod{}).Handle(ctx,
@@ -80,7 +82,7 @@ func TestLedgerRequest_ServesLocalLedgerByIndex(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: mock},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
 	}
 
 	result, rpcErr := (&handlers.LedgerRequestMethod{}).Handle(ctx,
@@ -117,13 +119,13 @@ func TestLedgerRequest_AcquiringTargetReturnsBareSnapshot(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
-		Services: &types.ServiceContainer{
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{
 			Ledger: mock,
 			RequestLedger: func(h [32]byte, seq uint32) (map[string]any, bool, bool) {
 				gotHash = h
 				return acquiring, true, false
 			},
-		},
+		}),
 	}
 
 	result, rpcErr := (&handlers.LedgerRequestMethod{}).Handle(ctx,
@@ -157,12 +159,12 @@ func TestLedgerRequest_AcquiringReferenceReturnsLgrNotFound(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
-		Services: &types.ServiceContainer{
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{
 			Ledger: mock,
 			RequestLedger: func(h [32]byte, seq uint32) (map[string]any, bool, bool) {
 				return acquiring, true, true
 			},
-		},
+		}),
 	}
 
 	result, rpcErr := (&handlers.LedgerRequestMethod{}).Handle(ctx,
@@ -185,12 +187,12 @@ func TestLedgerRequest_NotFoundWithoutSubsystem(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: mock}, // RequestLedger nil
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}), // RequestLedger nil
 	}
 
 	result, rpcErr := (&handlers.LedgerRequestMethod{}).Handle(ctx,
 		json.RawMessage(`{"ledger_hash":"`+hex.EncodeToString(hash[:])+`"}`))
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcLGR_NOT_FOUND, rpcErr.Code)
 }

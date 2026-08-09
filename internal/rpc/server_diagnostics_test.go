@@ -23,7 +23,8 @@ func (d staticRPCDiagnostics) Snapshot() types.RPCDiagnosticsSnapshot {
 }
 
 func TestServerDiagnosticsWireShape(t *testing.T) {
-	services := servicesForServerInfo(newMockLedgerServiceServerInfo())
+	services := types.NewServiceContainer(newMockLedgerServiceServerInfo())
+	services.NodePublicKey = testNodePublicKey()
 	services.RPCDiagnostics = staticRPCDiagnostics{snapshot: types.RPCDiagnosticsSnapshot{
 		Methods: map[string]types.RPCMethodDiagnostics{
 			"account_info": {Started: 3, Finished: 2, Errored: 1, DurationUs: 4500},
@@ -52,7 +53,7 @@ func TestServerDiagnosticsWireShape(t *testing.T) {
 		{name: "server_state", method: &handlers.ServerStateMethod{}, root: "state"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, IsAdmin: true, ApiVersion: 1, Services: services}
+			ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, ApiVersion: 1, Services: types.NewTestServiceGraph(services)}
 			result, rpcErr := test.method.Handle(ctx, json.RawMessage(`{"counters":"yes"}`))
 			if rpcErr != nil {
 				t.Fatalf("Handle: %v", rpcErr)

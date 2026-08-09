@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -66,7 +68,7 @@ func TestAccountInfoQueueData_RealQueue(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
-		Services:   services,
+		Services:   types.NewTestServiceGraph(services),
 	}
 	method := &handlers.AccountInfoMethod{}
 	paramsJSON, err := json.Marshal(map[string]any{
@@ -132,7 +134,7 @@ func TestAccountInfoQueueData_Tickets(t *testing.T) {
 			}
 		},
 	}
-	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: types.NewTestServiceGraph(services)}
 	method := &handlers.AccountInfoMethod{}
 	paramsJSON, _ := json.Marshal(map[string]any{"account": queueTestAccount, "queue": true, "ledger_index": "current"})
 
@@ -189,7 +191,7 @@ func TestLedgerQueueData_RealQueue(t *testing.T) {
 		},
 	}
 
-	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: types.NewTestServiceGraph(services)}
 	method := &handlers.LedgerMethod{}
 	paramsJSON, err := json.Marshal(map[string]any{"ledger_index": "current", "queue": true})
 	require.NoError(t, err)
@@ -237,7 +239,7 @@ func TestLedgerQueueData_RealQueue(t *testing.T) {
 	result, rpcErr = method.Handle(ctx, paramsJSON)
 	require.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 
 	paramsJSON = json.RawMessage(`{"queue":"yes","ledger_hash":"","ledger_index":1}`)
 	result, rpcErr = method.Handle(ctx, paramsJSON)
@@ -265,7 +267,7 @@ func TestLedgerQueueData_RealQueue(t *testing.T) {
 	result, rpcErr = method.Handle(ctx, paramsJSON)
 	require.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcLGR_NOT_FOUND, rpcErr.Code)
 }
 
 func TestLedgerQueueDataRejectsClosedLedger(t *testing.T) {
@@ -284,12 +286,12 @@ func TestLedgerQueueDataRejectsClosedLedger(t *testing.T) {
 	result, rpcErr := (&handlers.LedgerMethod{}).Handle(&types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
-		Services:   services,
+		Services:   types.NewTestServiceGraph(services),
 	}, paramsJSON)
 
 	require.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 }
 
 // TestLedgerQueueData_EmptyOmitted verifies an empty TxQ yields no queue_data
@@ -309,7 +311,7 @@ func TestLedgerQueueData_EmptyOmitted(t *testing.T) {
 		Ledger:      mock,
 		QueueAllTxs: func() []types.QueuedTxInfo { return nil },
 	}
-	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: types.NewTestServiceGraph(services)}
 	method := &handlers.LedgerMethod{}
 	paramsJSON, _ := json.Marshal(map[string]any{"ledger_index": "current", "queue": true})
 

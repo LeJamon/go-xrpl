@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
@@ -85,10 +87,10 @@ func (m *mockLedgerEntryService) GetLedgerByHash(hash [32]byte) (types.LedgerRea
 }
 
 // newLedgerEntryTestServices builds a per-test ServiceContainer wrapping mock.
-func newLedgerEntryTestServices(mock *mockLedgerEntryService) *types.ServiceContainer {
-	return &types.ServiceContainer{
+func newLedgerEntryTestServices(mock *mockLedgerEntryService) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger: mock,
-	}
+	})
 }
 
 // Direct Index Lookup Tests
@@ -700,7 +702,7 @@ func TestLedgerEntryMissingEntryType(t *testing.T) {
 			require.NotNil(t, rpcErr, "Expected RPC error")
 			assert.Equal(t, "invalidParams", rpcErr.ErrorString)
 			assert.Equal(t, "No ledger_entry params provided.", rpcErr.Message)
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		})
 	}
 
@@ -1025,7 +1027,7 @@ func TestLedgerEntryServiceUnavailable(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
@@ -1034,7 +1036,7 @@ func TestLedgerEntryServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		params := map[string]any{
@@ -1047,7 +1049,7 @@ func TestLedgerEntryServiceUnavailable(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 }
@@ -1314,7 +1316,7 @@ func TestLedgerEntryNotFoundErrorCode(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcENTRY_NOT_FOUND, rpcErr.Code, "ledger_entry returns rpcENTRY_NOT_FOUND (98) in rippled 3.0.0")
+	assert.Equal(t, rpcerrors.RpcENTRY_NOT_FOUND, rpcErr.Code, "ledger_entry returns rpcENTRY_NOT_FOUND (98) in rippled 3.0.0")
 	assert.Equal(t, "entryNotFound", rpcErr.ErrorString)
 	assert.Equal(t, "Entry not found.", rpcErr.Message)
 }
@@ -1361,7 +1363,7 @@ func TestLedgerEntryV3IndexShortcuts(t *testing.T) {
 			paramsJSON, _ := json.Marshal(map[string]any{"index": sc.name, "ledger_index": "validated"})
 			_, rpcErr := method.Handle(ctx, paramsJSON)
 			require.NotNil(t, rpcErr, "string shortcut is v3-only; v2 treats it as a bad hex index")
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		})
 	}
 }
@@ -1427,7 +1429,7 @@ func TestLedgerEntryNotFoundReturnsIndex(t *testing.T) {
 	paramsJSON, _ := json.Marshal(map[string]any{"index": idx, "ledger_index": "validated"})
 	_, rpcErr := method.Handle(ctx, paramsJSON)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcENTRY_NOT_FOUND, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcENTRY_NOT_FOUND, rpcErr.Code)
 	require.NotNil(t, rpcErr.Extra, "entryNotFound must carry the computed index")
 	assert.Equal(t, idx, rpcErr.Extra["index"])
 }
@@ -1757,7 +1759,7 @@ func TestLedgerEntryLoan(t *testing.T) {
 			require.NotNil(t, rpcErr)
 			assert.Equal(t, tc.token, rpcErr.ErrorString)
 			assert.Equal(t, tc.message, rpcErr.Message)
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		})
 	}
 
@@ -1863,13 +1865,13 @@ func TestLedgerEntryLoanBroker(t *testing.T) {
 			require.NotNil(t, rpcErr)
 			assert.Equal(t, tc.token, rpcErr.ErrorString)
 			assert.Equal(t, tc.message, rpcErr.Message)
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		})
 	}
 }
 
 // handleLedgerEntry marshals params and dispatches them through the handler.
-func handleLedgerEntry(t *testing.T, method *handlers.LedgerEntryMethod, ctx *types.RpcContext, params map[string]any) (any, *types.RpcError) {
+func handleLedgerEntry(t *testing.T, method *handlers.LedgerEntryMethod, ctx *types.RpcContext, params map[string]any) (any, *rpcerrors.RpcError) {
 	t.Helper()
 	paramsJSON, err := json.Marshal(params)
 	require.NoError(t, err)
@@ -2490,7 +2492,7 @@ func TestLedgerEntryUnexpectedType(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr, "Expected unexpectedLedgerType error")
-		assert.Equal(t, types.RpcUNEXPECTED_LEDGER_TYPE, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcUNEXPECTED_LEDGER_TYPE, rpcErr.Code)
 		assert.Equal(t, "unexpectedLedgerType", rpcErr.ErrorString)
 		assert.Equal(t, "Unexpected ledger type.", rpcErr.Message)
 	})

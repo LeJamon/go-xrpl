@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
@@ -97,8 +99,10 @@ func (m *rpcSubMetrics) recordDeliveryFailure(endpoint, reason string, details .
 // urlSubscriptionRegistry owns URL-based admin subscriptions. Each URL maps
 // to one subscriber in the shared manager and one delivery goroutine.
 type urlSubscriptionRegistry struct {
-	ws     *WebSocketServer
-	client *http.Client
+	manager            *subscription.Manager
+	services           *types.ServiceGraph
+	ledgerInfoProvider types.LedgerInfoProvider
+	client             *http.Client
 	// ctx cancels in-flight deliveries on Close so shutdown isn't held
 	// hostage by a stalled endpoint.
 	ctx    context.Context
@@ -118,10 +122,12 @@ type urlSubscriptionRegistry struct {
 	closeDone        chan struct{}
 }
 
-func newURLSubscriptionRegistry(ws *WebSocketServer) *urlSubscriptionRegistry {
+func newURLSubscriptionRegistry(manager *subscription.Manager, services *types.ServiceGraph, ledgerInfoProvider types.LedgerInfoProvider) *urlSubscriptionRegistry {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &urlSubscriptionRegistry{
-		ws: ws,
+		manager:            manager,
+		services:           services,
+		ledgerInfoProvider: ledgerInfoProvider,
 		client: &http.Client{
 			Timeout: rpcSubRequestTimeout,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
@@ -140,6 +146,16 @@ func newURLSubscriptionRegistry(ws *WebSocketServer) *urlSubscriptionRegistry {
 	}
 }
 
+// NewURLSubscriptionService constructs the transport-neutral RPCSub registry.
+// It is called before HTTP and WebSocket transports are built so neither
+// transport needs to mutate the application graph.
+func NewURLSubscriptionService(manager *subscription.Manager, services *types.ServiceGraph, ledgerInfoProvider types.LedgerInfoProvider) types.URLSubscriptionService {
+	if manager == nil {
+		manager = subscription.NewManager()
+	}
+	return newURLSubscriptionRegistry(manager, services, ledgerInfoProvider)
+}
+
 func (r *urlSubscriptionRegistry) metricsSnapshot() rpcSubMetricsSnapshot {
 	return r.metrics.snapshot()
 }
@@ -149,7 +165,7 @@ func (r *urlSubscriptionRegistry) metricsSnapshot() rpcSubMetricsSnapshot {
 // Mirrors doSubscribe's URL branch for credential reuse: on an existing
 // destination only deprecated username/password members update credentials.
 // The caller has already verified the admin role.
-func (r *urlSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types.SubscriptionRequest) (map[string]any, *types.RpcError) {
+func (r *urlSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types.SubscriptionRequest) (map[string]any, *rpcerrors.RpcError) {
 	if ctx != nil {
 		request.ApiVersion = ctx.ApiVersion
 	}
@@ -159,7 +175,7 @@ func (r *urlSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types
 	if r.closed {
 		r.mu.Unlock()
 		wsLog().Error("rpcsub: subscription requested after registry closed")
-		return nil, types.RpcErrorInternal()
+		return nil, rpcerrors.RpcErrorInternal()
 	}
 	key, rpcErr := canonicalRPCSubURL(request.URL)
 	if rpcErr != nil {
@@ -172,13 +188,13 @@ func (r *urlSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types
 		return nil, rpcErr
 	}
 
-	fail := func(rpcErr *types.RpcError) (map[string]any, *types.RpcError) {
+	fail := func(rpcErr *rpcerrors.RpcError) (map[string]any, *rpcerrors.RpcError) {
 		r.mu.Unlock()
 		return nil, rpcErr
 	}
 	prefix := request.WithoutBooks().WithoutAccountHistory()
-	scope := r.ws.subscriptionManager.NewRequestScope()
-	if rpcErr := r.ws.subscriptionManager.HandleSubscribeScoped(lookup.sub.registration, scope, prefix, true); rpcErr != nil {
+	scope := r.manager.NewRequestScope()
+	if rpcErr := r.manager.HandleSubscribeScoped(lookup.sub.registration, scope, prefix, true); rpcErr != nil {
 		return fail(rpcErr)
 	}
 	history, rpcErr := prepareAccountHistorySubscribe(ctx, request)
@@ -189,9 +205,9 @@ func (r *urlSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types
 		return fail(rpcErr)
 	}
 	history.apply(lookup.sub.conn)
-	if rpcErr := applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *types.RpcError {
+	if rpcErr := applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *rpcerrors.RpcError {
 		bookRequest.ApiVersion = request.ApiVersion
-		if rpcErr := r.ws.subscriptionManager.HandleSubscribeScoped(lookup.sub.registration, scope, bookRequest, true); rpcErr != nil {
+		if rpcErr := r.manager.HandleSubscribeScoped(lookup.sub.registration, scope, bookRequest, true); rpcErr != nil {
 			return rpcErr
 		}
 		setSubscriptionLoadCost(ctx, bookRequest)
@@ -199,7 +215,7 @@ func (r *urlSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types
 	}); rpcErr != nil {
 		return fail(rpcErr)
 	}
-	result := r.ws.buildSubscribeAckSampled(ctx, request, serverState)
+	result := buildSubscribeAckSampled(r.ledgerInfoProvider, ctx, request, serverState)
 	if history != nil {
 		result["warning"] = accountHistoryWarning
 	}
@@ -210,7 +226,7 @@ func (r *urlSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types
 // Unsubscribe removes the listed streams/accounts/books from the url's
 // subscriber and drops the registry entry once no stream subscriptions
 // remain. An unknown URL is a silent success.
-func (r *urlSubscriptionRegistry) Unsubscribe(ctx *types.RpcContext, request types.SubscriptionRequest) (map[string]any, *types.RpcError) {
+func (r *urlSubscriptionRegistry) Unsubscribe(ctx *types.RpcContext, request types.SubscriptionRequest) (map[string]any, *rpcerrors.RpcError) {
 	key, rpcErr := canonicalRPCSubURL(request.URL)
 	if rpcErr != nil {
 		// Unsubscribe has always treated an unknown destination as a no-op.
@@ -226,8 +242,8 @@ func (r *urlSubscriptionRegistry) Unsubscribe(ctx *types.RpcContext, request typ
 		return map[string]any{}, nil
 	}
 	prefix := request.WithoutBooks().WithoutAccountHistory()
-	scope := r.ws.subscriptionManager.NewRequestScope()
-	if rpcErr := r.ws.subscriptionManager.HandleUnsubscribeScoped(sub.registration, scope, prefix); rpcErr != nil {
+	scope := r.manager.NewRequestScope()
+	if rpcErr := r.manager.HandleUnsubscribeScoped(sub.registration, scope, prefix); rpcErr != nil {
 		r.mu.Unlock()
 		return nil, rpcErr
 	}
@@ -237,8 +253,8 @@ func (r *urlSubscriptionRegistry) Unsubscribe(ctx *types.RpcContext, request typ
 		return nil, rpcErr
 	}
 	history.apply(sub.conn)
-	if rpcErr := applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *types.RpcError {
-		return r.ws.subscriptionManager.HandleUnsubscribeScoped(sub.registration, scope, bookRequest)
+	if rpcErr := applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *rpcerrors.RpcError {
+		return r.manager.HandleUnsubscribeScoped(sub.registration, scope, bookRequest)
 	}); rpcErr != nil {
 		r.mu.Unlock()
 		return nil, rpcErr
@@ -253,7 +269,7 @@ type rpcSubLookup struct {
 	sub *rpcSub
 }
 
-func (r *urlSubscriptionRegistry) findOrCreateLocked(request types.SubscriptionRequest, key, principal string) (rpcSubLookup, *types.RpcError) {
+func (r *urlSubscriptionRegistry) findOrCreateLocked(request types.SubscriptionRequest, key, principal string) (rpcSubLookup, *rpcerrors.RpcError) {
 	if r.subs == nil {
 		r.subs = make(map[string]*rpcSub)
 	}
@@ -312,10 +328,10 @@ func (r *urlSubscriptionRegistry) findOrCreateLocked(request types.SubscriptionR
 		}
 	})
 	sub.conn.SetDisconnect(func() { go r.retire(sub) })
-	registration, attached := r.ws.subscriptionManager.Attach(sub.conn)
+	registration, attached := r.manager.Attach(sub.conn)
 	if !attached {
 		subCancel()
-		return rpcSubLookup{}, types.RpcErrorInternal()
+		return rpcSubLookup{}, rpcerrors.RpcErrorInternal()
 	}
 	sub.registration = registration
 	r.subs[key] = sub
@@ -327,12 +343,12 @@ func (r *urlSubscriptionRegistry) findOrCreateLocked(request types.SubscriptionR
 	return rpcSubLookup{sub: sub}, nil
 }
 
-func (r *urlSubscriptionRegistry) capacityError(kind, principal string) *types.RpcError {
+func (r *urlSubscriptionRegistry) capacityError(kind, principal string) *rpcerrors.RpcError {
 	value := r.metrics.capacityRejects.Add(1)
 	if rpcSubMetricMilestone(value) {
 		wsLog().Warn("rpcsub: subscription capacity exhausted", "kind", kind, "principal", principal, "count", value, "entries", len(r.subs), "workers", r.workers)
 	}
-	return types.RpcErrorTooBusy()
+	return rpcerrors.RpcErrorTooBusy()
 }
 
 func (r *urlSubscriptionRegistry) tryRemoveLocked(key string) *rpcSub {
@@ -340,10 +356,10 @@ func (r *urlSubscriptionRegistry) tryRemoveLocked(key string) *rpcSub {
 	if !ok {
 		return nil
 	}
-	if r.ws.subscriptionManager.HasStreamSubscriptions(sub.registration) {
+	if r.manager.HasStreamSubscriptions(sub.registration) {
 		return nil
 	}
-	if hasAccountHistorySubscriptions(r.ws.services, sub.conn) {
+	if hasAccountHistorySubscriptions(r.services, sub.conn) {
 		return nil
 	}
 	return r.removeLocked(key, sub)
@@ -360,8 +376,8 @@ func (r *urlSubscriptionRegistry) removeLocked(key string, sub *rpcSub) *rpcSub 
 			delete(r.principalCounts, sub.principal)
 		}
 	}
-	r.ws.subscriptionManager.Detach(sub.registration)
-	removeAccountHistoryConnection(r.ws.services, sub.conn)
+	r.manager.Detach(sub.registration)
+	removeAccountHistoryConnection(r.services, sub.conn)
 	sub.stop()
 	return sub
 }
@@ -398,8 +414,8 @@ func (r *urlSubscriptionRegistry) Close() {
 
 	r.cancel()
 	for _, sub := range subs {
-		r.ws.subscriptionManager.Detach(sub.registration)
-		removeAccountHistoryConnection(r.ws.services, sub.conn)
+		r.manager.Detach(sub.registration)
+		removeAccountHistoryConnection(r.services, sub.conn)
 		sub.stop()
 	}
 	for _, sub := range subs {
@@ -417,8 +433,8 @@ func (r *urlSubscriptionRegistry) Close() {
 // matching the reuse semantics above; URL userinfo is rejected. Fragments,
 // opaque URLs, whitespace and empty hosts are also rejected because they do
 // not identify an unambiguous HTTP destination.
-func canonicalRPCSubURL(raw string) (string, *types.RpcError) {
-	parseErr := types.RpcErrorInvalidParams("Failed to parse url.")
+func canonicalRPCSubURL(raw string) (string, *rpcerrors.RpcError) {
+	parseErr := rpcerrors.RpcErrorInvalidParams("Failed to parse url.")
 	if raw == "" || raw != strings.TrimSpace(raw) {
 		return "", parseErr
 	}
@@ -428,7 +444,7 @@ func canonicalRPCSubURL(raw string) (string, *types.RpcError) {
 	}
 	scheme := strings.ToLower(u.Scheme)
 	if scheme != "http" && scheme != "https" {
-		return "", types.RpcErrorInvalidParams("Only http and https is supported.")
+		return "", rpcerrors.RpcErrorInvalidParams("Only http and https is supported.")
 	}
 	hostname := strings.ToLower(u.Hostname())
 	if hostname == "" {

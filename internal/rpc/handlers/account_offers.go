@@ -4,15 +4,17 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 )
 
 // AccountOffersMethod handles account_offers: it lists the Offer ledger
 // entries the account currently owns.
 type AccountOffersMethod struct{ baseHandler }
 
-func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	fields, account, parseErr := accountPageParams(params)
 	if parseErr != nil {
 		return nil, parseErr
@@ -25,7 +27,7 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		return nil, selErr
 	}
 
-	limit, limitErr := readLimitField(params, limitAccountOffers, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitAccountOffers, ctx.Role.IsUnlimited())
 	if limitErr != nil {
 		return nil, limitErr
 	}
@@ -35,23 +37,23 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	}
 	if _, present := fields["marker"]; present {
 		if marker == "" {
-			return nil, types.RpcErrorInvalidField("marker")
+			return nil, rpcerrors.RpcErrorInvalidField("marker")
 		}
 	}
 
-	result, err := ctx.Services.Ledger.GetAccountOffers(ctx.Context, account, ledgerIndex, limit, marker)
+	result, err := ctx.Services.Ledger().GetAccountOffers(ctx.Context, account, ledgerIndex, limit, marker)
 	if err != nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RpcErrorActNotFound("Account not found.")
+			return nil, rpcerrors.RpcErrorActNotFound("Account not found.")
 		}
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
-			return nil, types.RpcErrorInvalidField("marker")
+			return nil, rpcerrors.RpcErrorInvalidField("marker")
 		}
 		if errors.Is(err, svcerr.ErrStaleMarker) {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 		return nil, rpcInternalError("account_offers: ledger query failed", err)
 	}

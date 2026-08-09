@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -97,10 +99,10 @@ func (m *mockLedgerServiceSimulate) GetAutofillSequence(account string, hasTicke
 	return m.autofillSeq, nil
 }
 
-func newSimulateTestServices(mock *mockLedgerServiceSimulate) *types.ServiceContainer {
-	return &types.ServiceContainer{
+func newSimulateTestServices(mock *mockLedgerServiceSimulate) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger: mock,
-	}
+	})
 }
 
 // validAccountAddress is a well-known XRPL genesis account used in tests.
@@ -128,7 +130,7 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 			name:         "No params — neither tx_blob nor tx_json",
 			params:       map[string]any{},
 			expectedMsg:  "Neither `tx_blob` nor `tx_json` included.",
-			expectedCode: types.RpcINVALID_PARAMS,
+			expectedCode: rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Both tx_blob and tx_json",
@@ -137,7 +139,7 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 				"tx_json": map[string]any{},
 			},
 			expectedMsg:  "Can only include one of `tx_blob` and `tx_json`.",
-			expectedCode: types.RpcINVALID_PARAMS,
+			expectedCode: rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "binary is not a boolean",
@@ -146,7 +148,7 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 				"binary":  "100",
 			},
 			expectedMsg:  "Invalid field 'binary'.",
-			expectedCode: types.RpcINVALID_PARAMS,
+			expectedCode: rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "binary is an integer",
@@ -155,7 +157,7 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 				"binary":  1,
 			},
 			expectedMsg:  "Invalid field 'binary'.",
-			expectedCode: types.RpcINVALID_PARAMS,
+			expectedCode: rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "secret field included",
@@ -167,7 +169,7 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 				},
 			},
 			expectedMsg:  "Invalid field 'secret'.",
-			expectedCode: types.RpcINVALID_PARAMS,
+			expectedCode: rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "seed field included",
@@ -179,7 +181,7 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 				},
 			},
 			expectedMsg:  "Invalid field 'seed'.",
-			expectedCode: types.RpcINVALID_PARAMS,
+			expectedCode: rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "seed_hex field included",
@@ -191,7 +193,7 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 				},
 			},
 			expectedMsg:  "Invalid field 'seed_hex'.",
-			expectedCode: types.RpcINVALID_PARAMS,
+			expectedCode: rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "passphrase field included",
@@ -203,7 +205,7 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 				},
 			},
 			expectedMsg:  "Invalid field 'passphrase'.",
-			expectedCode: types.RpcINVALID_PARAMS,
+			expectedCode: rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Empty tx_json — missing TransactionType",
@@ -211,7 +213,7 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 				"tx_json": map[string]any{},
 			},
 			expectedMsg:  "Missing field 'tx.TransactionType'.",
-			expectedCode: types.RpcINVALID_PARAMS,
+			expectedCode: rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Missing Account field",
@@ -221,7 +223,7 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 				},
 			},
 			expectedMsg:  "Missing field 'tx.Account'.",
-			expectedCode: types.RpcINVALID_PARAMS,
+			expectedCode: rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Bad Account address",
@@ -232,7 +234,7 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 				},
 			},
 			expectedMsg:  "Invalid field 'tx.Account'.",
-			expectedCode: types.RpcSRC_ACT_MALFORMED,
+			expectedCode: rpcerrors.RpcSRC_ACT_MALFORMED,
 		},
 		{
 			name: "tx_json is not an object (string)",
@@ -240,7 +242,7 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 				"tx_json": "not_an_object",
 			},
 			expectedMsg:  "Invalid field 'tx_json', not object.",
-			expectedCode: types.RpcINVALID_PARAMS,
+			expectedCode: rpcerrors.RpcINVALID_PARAMS,
 		},
 	}
 
@@ -282,7 +284,7 @@ func TestSimulateMethod_TxnSignature(t *testing.T) {
 
 		_, rpcErr := method.Handle(ctx, paramsJSON)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcTX_SIGNED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcTX_SIGNED, rpcErr.Code)
 		assert.Equal(t, "transactionSigned", rpcErr.ErrorString)
 		assert.Equal(t, "Transaction should not be signed.", rpcErr.Message)
 	})
@@ -300,7 +302,7 @@ func TestSimulateMethod_TxnSignature(t *testing.T) {
 
 		_, rpcErr := method.Handle(ctx, paramsJSON)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcTX_SIGNED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcTX_SIGNED, rpcErr.Code)
 		assert.Equal(t, "transactionSigned", rpcErr.ErrorString)
 	})
 
@@ -376,7 +378,7 @@ func TestSimulateMethod_SignedMultisig(t *testing.T) {
 
 		_, rpcErr := method.Handle(ctx, paramsJSON)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcTX_SIGNED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcTX_SIGNED, rpcErr.Code)
 		assert.Equal(t, "Transaction should not be signed.", rpcErr.Message)
 	})
 
@@ -400,7 +402,7 @@ func TestSimulateMethod_SignedMultisig(t *testing.T) {
 
 		_, rpcErr := method.Handle(ctx, paramsJSON)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcTX_SIGNED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcTX_SIGNED, rpcErr.Code)
 		assert.Equal(t, "transactionSigned", rpcErr.ErrorString)
 	})
 
@@ -417,7 +419,7 @@ func TestSimulateMethod_SignedMultisig(t *testing.T) {
 
 		_, rpcErr := method.Handle(ctx, paramsJSON)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid field 'tx.Signers'.", rpcErr.Message)
 	})
 
@@ -434,7 +436,7 @@ func TestSimulateMethod_SignedMultisig(t *testing.T) {
 
 		_, rpcErr := method.Handle(ctx, paramsJSON)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid field 'tx.Signers[0]'.", rpcErr.Message)
 	})
 
@@ -500,7 +502,7 @@ func TestSimulateMethod_BatchRejection(t *testing.T) {
 
 	_, rpcErr := method.Handle(ctx, paramsJSON)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Equal(t, "invalidTransaction", rpcErr.ErrorString)
 	assert.NotEmpty(t, rpcErr.ErrorException)
 
@@ -533,7 +535,7 @@ func TestSimulateMethod_BatchRejection(t *testing.T) {
 			require.NoError(t, err)
 			_, rpcErr := method.Handle(ctx, paramsJSON)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcNOT_IMPL, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcNOT_IMPL, rpcErr.Code)
 			assert.Equal(t, "notImpl", rpcErr.ErrorString)
 			assert.Equal(t, "Not implemented.", rpcErr.Message)
 		})
@@ -756,7 +758,7 @@ func TestSimulateMethod_SrcActMalformed(t *testing.T) {
 
 	_, rpcErr := method.Handle(ctx, paramsJSON)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcSRC_ACT_MALFORMED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcSRC_ACT_MALFORMED, rpcErr.Code)
 	assert.Equal(t, "srcActMalformed", rpcErr.ErrorString)
 	assert.Equal(t, "Invalid field 'tx.Account'.", rpcErr.Message)
 }
@@ -917,7 +919,7 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcSRC_ACT_NOT_FOUND, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcSRC_ACT_NOT_FOUND, rpcErr.Code)
 		assert.Equal(t, "srcActNotFound", rpcErr.ErrorString,
 			"rippled ErrorCodes.cpp:109 maps rpcSRC_ACT_NOT_FOUND to token 'srcActNotFound'")
 		assert.Equal(t, "Source account not found.", rpcErr.Message)
@@ -1087,7 +1089,7 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code,
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code,
 			"bad Account on the Sequence-supplied path surfaces invalid_field, not srcActMalformed")
 		assert.Equal(t, "Invalid field 'tx.Account'.", rpcErr.Message)
 		assert.Equal(t, 0, mock.seqAutofillCallCount,
@@ -1103,7 +1105,7 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Field 'tx_json.Sequence' has bad type.", rpcErr.Message)
 	})
 
@@ -1115,7 +1117,7 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Field 'tx_json.Sequence' has bad type.", rpcErr.Message)
 	})
 
@@ -1460,7 +1462,7 @@ func TestSimulateMethod_UnknownField(t *testing.T) {
 
 			_, rpcErr := method.Handle(ctx, paramsJSON)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 			assert.Equal(t, test.message, rpcErr.Message)
 		})
 	}

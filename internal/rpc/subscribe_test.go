@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -179,7 +181,7 @@ func TestSubscribeInvalidStreamName(t *testing.T) {
 			if tc.expectError {
 				require.NotNil(t, err, "Expected error for invalid stream: %s", tc.streamName)
 				// rippled Subscribe.cpp:171-174 → rpcSTREAM_MALFORMED.
-				assert.Equal(t, types.RpcSTREAM_MALFORMED, err.Code)
+				assert.Equal(t, rpcerrors.RpcSTREAM_MALFORMED, err.Code)
 				assert.Equal(t, "malformedStream", err.ErrorString)
 				assert.Equal(t, "Stream malformed.", err.Message)
 			}
@@ -319,7 +321,7 @@ func TestSubscribeAccountInvalidFormat(t *testing.T) {
 			if tc.expectError {
 				require.NotNil(t, err, "Expected error for invalid account: %s", tc.account)
 				// rippled Subscribe.cpp:197-199 → rpcACT_MALFORMED.
-				assert.Equal(t, types.RpcACT_MALFORMED, err.Code)
+				assert.Equal(t, rpcerrors.RpcACT_MALFORMED, err.Code)
 				assert.Equal(t, "actMalformed", err.ErrorString)
 				assert.Equal(t, tc.errorMsg, err.Message)
 			} else {
@@ -341,7 +343,7 @@ func TestSubscribeAccountsProposedInvalidFormat(t *testing.T) {
 
 	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.NotNil(t, err, "Expected error for invalid accounts_proposed")
-	assert.Equal(t, types.RpcACT_MALFORMED, err.Code)
+	assert.Equal(t, rpcerrors.RpcACT_MALFORMED, err.Code)
 	assert.Equal(t, "actMalformed", err.ErrorString)
 	assert.Equal(t, "Account malformed.", err.Message)
 }
@@ -459,7 +461,7 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 			takerGets: map[string]any{
 				"currency": "XRP",
 			},
-			wantCode:  types.RpcSRC_CUR_MALFORMED,
+			wantCode:  rpcerrors.RpcSRC_CUR_MALFORMED,
 			wantError: "srcCurMalformed",
 			wantMsg:   "Source currency is malformed.",
 		},
@@ -470,7 +472,7 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
 			takerGets: map[string]any{},
-			wantCode:  types.RpcDST_AMT_MALFORMED,
+			wantCode:  rpcerrors.RpcDST_AMT_MALFORMED,
 			wantError: "dstAmtMalformed",
 			wantMsg:   "Destination amount/currency/issuer is malformed.",
 		},
@@ -482,7 +484,7 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 			takerGets: map[string]any{
 				"currency": "XRP",
 			},
-			wantCode:  types.RpcSRC_CUR_MALFORMED,
+			wantCode:  rpcerrors.RpcSRC_CUR_MALFORMED,
 			wantError: "srcCurMalformed",
 			wantMsg:   "Source currency is malformed.",
 		},
@@ -494,7 +496,7 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 			takerGets: map[string]any{
 				"currency": "USDX",
 			},
-			wantCode:  types.RpcDST_AMT_MALFORMED,
+			wantCode:  rpcerrors.RpcDST_AMT_MALFORMED,
 			wantError: "dstAmtMalformed",
 			wantMsg:   "Destination amount/currency/issuer is malformed.",
 		},
@@ -506,7 +508,7 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 			takerGets: map[string]any{
 				"currency": "XRP",
 			},
-			wantCode:  types.RpcSRC_ISR_MALFORMED,
+			wantCode:  rpcerrors.RpcSRC_ISR_MALFORMED,
 			wantError: "srcIsrMalformed",
 			wantMsg:   "Source issuer is malformed.",
 		},
@@ -518,7 +520,7 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 			takerGets: map[string]any{
 				"currency": "USD",
 			},
-			wantCode:  types.RpcDST_ISR_MALFORMED,
+			wantCode:  rpcerrors.RpcDST_ISR_MALFORMED,
 			wantError: "dstIsrMalformed",
 			wantMsg:   "Destination issuer is malformed.",
 		},
@@ -531,7 +533,7 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 			takerGets: map[string]any{
 				"currency": "XRP",
 			},
-			wantCode:  types.RpcSRC_ISR_MALFORMED,
+			wantCode:  rpcerrors.RpcSRC_ISR_MALFORMED,
 			wantError: "srcIsrMalformed",
 			wantMsg:   "Source issuer is malformed.",
 		},
@@ -544,7 +546,7 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 				"currency": "USD",
 				"issuer":   "invalid_issuer",
 			},
-			wantCode:  types.RpcDST_ISR_MALFORMED,
+			wantCode:  rpcerrors.RpcDST_ISR_MALFORMED,
 			wantError: "dstIsrMalformed",
 			wantMsg:   "Destination issuer is malformed.",
 		},
@@ -558,7 +560,7 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 				"currency": "USD",
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
-			wantCode:  types.RpcSRC_ISR_MALFORMED,
+			wantCode:  rpcerrors.RpcSRC_ISR_MALFORMED,
 			wantError: "srcIsrMalformed",
 			wantMsg:   "Source issuer is malformed.",
 		},
@@ -571,7 +573,7 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 			takerGets: map[string]any{
 				"currency": "XRP",
 			},
-			wantCode:  types.RpcSRC_ISR_MALFORMED,
+			wantCode:  rpcerrors.RpcSRC_ISR_MALFORMED,
 			wantError: "srcIsrMalformed",
 			wantMsg:   "Source issuer is malformed.",
 		},
@@ -930,7 +932,7 @@ func TestSubscribeMissingTakerPays(t *testing.T) {
 	// rippled Subscribe.cpp:238-242 → rpcINVALID_PARAMS.
 	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.NotNil(t, err, "Expected error for missing taker_pays")
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "invalidParams", err.ErrorString)
 	assert.Equal(t, "Invalid parameters.", err.Message)
 }
@@ -958,7 +960,7 @@ func TestSubscribeMissingTakerGets(t *testing.T) {
 	// rippled Subscribe.cpp:238-242 → rpcINVALID_PARAMS.
 	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.NotNil(t, err, "Expected error for missing taker_gets")
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "invalidParams", err.ErrorString)
 	assert.Equal(t, "Invalid parameters.", err.Message)
 }
@@ -986,7 +988,7 @@ func TestSubscribeInvalidTakerPaysJSON(t *testing.T) {
 	// (Subscribe.cpp:238-242) → rpcINVALID_PARAMS.
 	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.NotNil(t, err, "Expected error for invalid taker_pays JSON")
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "invalidParams", err.ErrorString)
 	assert.Equal(t, "Invalid parameters.", err.Message)
 }
@@ -1015,7 +1017,7 @@ func TestSubscribeInvalidTakerGetsJSON(t *testing.T) {
 	// (Subscribe.cpp:238-242) → rpcINVALID_PARAMS.
 	err := sm.HandleSubscribe(testRegistration(t, sm, conn), request, true)
 	require.NotNil(t, err, "Expected error for invalid taker_gets JSON")
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "invalidParams", err.ErrorString)
 	assert.Equal(t, "Invalid parameters.", err.Message)
 }
@@ -1173,7 +1175,7 @@ func TestSubscribeMethodRequiresWebSocket(t *testing.T) {
 	result, err := method.Handle(ctx, nil)
 	assert.Nil(t, result)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "invalidParams", err.ErrorString)
 }
 
@@ -1190,7 +1192,7 @@ func TestUnsubscribeMethodRequiresWebSocket(t *testing.T) {
 	result, err := method.Handle(ctx, nil)
 	assert.Nil(t, result)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "invalidParams", err.ErrorString)
 }
 
@@ -1217,7 +1219,7 @@ func TestSubscribeURLGating(t *testing.T) {
 			result, err := method.Handle(ctx, params)
 			assert.Nil(t, result)
 			require.NotNil(t, err)
-			assert.Equal(t, types.RpcNO_PERMISSION, err.Code)
+			assert.Equal(t, rpcerrors.RpcNO_PERMISSION, err.Code)
 			assert.Equal(t, "noPermission", err.ErrorString)
 		})
 
@@ -1229,7 +1231,7 @@ func TestSubscribeURLGating(t *testing.T) {
 			result, err := method.Handle(ctx, params)
 			assert.Nil(t, result)
 			require.NotNil(t, err)
-			assert.Equal(t, types.RpcNOT_SUPPORTED, err.Code)
+			assert.Equal(t, rpcerrors.RpcNOT_SUPPORTED, err.Code)
 			assert.Equal(t, "notSupported", err.ErrorString)
 		})
 	}
@@ -1550,7 +1552,7 @@ func TestWebSocketSnapshot_Single(t *testing.T) {
 			"XRP/": {types.BookOffer{Account: "rOffer1"}, types.BookOffer{Account: "rOffer2"}},
 		},
 	}
-	services := types.NewServiceContainer(mock)
+	services := types.NewTestServiceGraph(types.NewServiceContainer(mock))
 	ws := &WebSocketServer{services: services}
 
 	offers, err := ws.snapshotBook(
@@ -1577,7 +1579,7 @@ func TestWebSocketSnapshot_Both(t *testing.T) {
 			"USD/" + gateway: {types.BookOffer{Account: "rAsk"}},
 		},
 	}
-	services := types.NewServiceContainer(mock)
+	services := types.NewTestServiceGraph(types.NewServiceContainer(mock))
 	ws := &WebSocketServer{services: services}
 	ctx := &types.RpcContext{Context: context.Background(), Services: services}
 
@@ -1596,14 +1598,15 @@ func TestWebSocketSnapshot_Both(t *testing.T) {
 // than constant 256s.
 func TestComputeServerLoad_TracksTxQ(t *testing.T) {
 	mock := newMockLedgerService()
-	services := types.NewServiceContainer(mock)
-	services.TxQMetrics = func() types.TxQServerMetrics {
+	container := types.NewServiceContainer(mock)
+	container.TxQMetrics = func() types.TxQServerMetrics {
 		return types.TxQServerMetrics{
 			ReferenceFeeLevel:     256,
 			MinProcessingFeeLevel: 512,
 			OpenLedgerFeeLevel:    1024,
 		}
 	}
+	services := types.NewTestServiceGraph(container)
 
 	load := handlers.ComputeServerLoad(services)
 	assert.Equal(t, uint64(256), load.LoadBase)
@@ -1618,29 +1621,31 @@ func TestComputeServerLoad_TracksTxQ(t *testing.T) {
 
 func TestComputeServerLoad_UsesServerAndOverallMaxima(t *testing.T) {
 	mock := newMockLedgerService()
-	services := types.NewServiceContainer(mock)
-	services.LoadFactorFees = func() types.LoadFactorFees {
+	container := types.NewServiceContainer(mock)
+	container.LoadFactorFees = func() types.LoadFactorFees {
 		return types.LoadFactorFees{Local: 700, Net: 900, Cluster: 800}
 	}
-	services.TxQMetrics = func() types.TxQServerMetrics {
+	container.TxQMetrics = func() types.TxQServerMetrics {
 		return types.TxQServerMetrics{
 			ReferenceFeeLevel:     256,
 			MinProcessingFeeLevel: 256,
 			OpenLedgerFeeLevel:    600,
 		}
 	}
+	services := types.NewTestServiceGraph(container)
 
 	load := handlers.ComputeServerLoad(services)
 	assert.Equal(t, uint64(900), load.LoadFactorServer)
 	assert.Equal(t, uint64(900), load.LoadFactor)
 
-	services.TxQMetrics = func() types.TxQServerMetrics {
+	container.TxQMetrics = func() types.TxQServerMetrics {
 		return types.TxQServerMetrics{
 			ReferenceFeeLevel:     256,
 			MinProcessingFeeLevel: 256,
 			OpenLedgerFeeLevel:    1200,
 		}
 	}
+	services = types.NewTestServiceGraph(container)
 	load = handlers.ComputeServerLoad(services)
 	assert.Equal(t, uint64(900), load.LoadFactorServer)
 	assert.Equal(t, uint64(1200), load.LoadFactor)

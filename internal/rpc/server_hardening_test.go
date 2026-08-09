@@ -12,12 +12,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 func TestBuildXrplErrorResponseGolden(t *testing.T) {
-	rpcErr := types.RpcErrorEntryNotFound("").WithExtra(map[string]any{"index": "ABC"})
+	rpcErr := rpcerrors.RpcErrorEntryNotFound("").WithExtra(map[string]any{"index": "ABC"})
 	body := buildXrplResponseBody(map[string]any{"command": "ledger_entry"}, nil, rpcErr, nil)
 	encoded, err := json.Marshal(body)
 	if err != nil {
@@ -31,11 +33,11 @@ func TestBuildXrplErrorResponseGolden(t *testing.T) {
 
 type stubHandler struct {
 	role    types.Role
-	handle  func(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError)
+	handle  func(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError)
 	apiVers []int
 }
 
-func (s *stubHandler) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (s *stubHandler) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	if s.handle != nil {
 		return s.handle(ctx, params)
 	}
@@ -48,11 +50,10 @@ func (s *stubHandler) RequiredCondition() types.Condition { return types.NoCondi
 func newHardeningServer(t *testing.T, timeout time.Duration, method string, h types.MethodHandler) *Server {
 	t.Helper()
 	srv := &Server{
-		registry: types.NewMethodRegistry(),
+		registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{method: h}),
 		timeout:  timeout,
-		services: types.NewServiceContainer(nil),
+		services: types.NewTestServiceGraph(types.NewServiceContainer(nil)),
 	}
-	srv.registry.Register(method, h)
 	return srv
 }
 
@@ -96,8 +97,8 @@ func TestPostBodyLimit(t *testing.T) {
 func TestInternalErrorMessageNotLeakedOnWire(t *testing.T) {
 	const secret = "pebble internal key 0xdeadbeef corrupt at offset 4096"
 	srv := newHardeningServer(t, time.Second, "account_info", &stubHandler{
-		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
-			return nil, types.RpcErrorInternal()
+		handle: func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
+			return nil, rpcerrors.RpcErrorInternal()
 		},
 	})
 
@@ -169,7 +170,7 @@ func TestBatchElementCap(t *testing.T) {
 func TestRoleNotElevatableByHeader(t *testing.T) {
 	var observedRole types.Role
 	srv := newHardeningServer(t, time.Second, "ping", &stubHandler{
-		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *rpcerrors.RpcError) {
 			observedRole = ctx.Role
 			return map[string]any{"ok": true}, nil
 		},
@@ -200,7 +201,7 @@ func TestTrustedProxyAttributesClientIPButNotAdmin(t *testing.T) {
 	var observedRole types.Role
 	var observedClientIP string
 	srv := newHardeningServer(t, time.Second, "ping", &stubHandler{
-		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *rpcerrors.RpcError) {
 			observedRole = ctx.Role
 			observedClientIP = ctx.ClientIP
 			return map[string]any{"ok": true}, nil
@@ -231,7 +232,7 @@ func TestTrustedProxyAttributesClientIPButNotAdmin(t *testing.T) {
 func TestTrustedProxyMalformedIdentityFallsBackToPeer(t *testing.T) {
 	var observedClientIP string
 	srv := newHardeningServer(t, time.Second, "ping", &stubHandler{
-		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *rpcerrors.RpcError) {
 			observedClientIP = ctx.ClientIP
 			return map[string]any{"ok": true}, nil
 		},
@@ -256,8 +257,8 @@ func TestTrustedProxyMalformedIdentityFallsBackToPeer(t *testing.T) {
 // original values never appear on the wire.
 func TestCredentialsMaskedInErrorEnvelope(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "submit", &stubHandler{
-		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
-			return nil, types.RpcErrorInvalidParams("bad")
+		handle: func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
+			return nil, rpcerrors.RpcErrorInvalidParams("bad")
 		},
 	})
 
@@ -314,7 +315,7 @@ func TestCredentialsMaskedInErrorEnvelope(t *testing.T) {
 func TestHandlerPanicRecovered(t *testing.T) {
 	const panicCause = "synthetic panic must stay private"
 	srv := newHardeningServer(t, time.Second, "panic", &stubHandler{
-		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+		handle: func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
 			panic(panicCause)
 		},
 	})
@@ -375,7 +376,7 @@ func TestRequestBodyReadErrorIsCanonical(t *testing.T) {
 func TestDispatchHasDeadline(t *testing.T) {
 	var observed context.Context
 	srv := newHardeningServer(t, 250*time.Millisecond, "ping", &stubHandler{
-		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *rpcerrors.RpcError) {
 			observed = ctx.Context
 			return map[string]any{"ok": true}, nil
 		},
@@ -401,7 +402,7 @@ func TestDispatchHasDeadline(t *testing.T) {
 func TestSecureGatewayPromotesToIdentifiedWithUser(t *testing.T) {
 	var observed *types.RpcContext
 	srv := newHardeningServer(t, time.Second, "ping", &stubHandler{
-		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *rpcerrors.RpcError) {
 			observed = ctx
 			return map[string]any{"ok": true}, nil
 		},
@@ -410,7 +411,7 @@ func TestSecureGatewayPromotesToIdentifiedWithUser(t *testing.T) {
 	_, gateway, _ := net.ParseCIDR("203.0.113.0/24")
 	pc := &PortContext{SecureGatewayNets: []net.IPNet{*gateway}}
 
-	// With X-User → Identified, Unlimited=true, IsAdmin=false.
+	// With X-User → Identified, unlimited but not admin.
 	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"ping","params":[{}]}`))
 	req.RemoteAddr = "203.0.113.5:1234"
 	req.Header.Set("X-User", "alice")
@@ -420,12 +421,11 @@ func TestSecureGatewayPromotesToIdentifiedWithUser(t *testing.T) {
 	if observed.Role != types.RoleIdentified {
 		t.Fatalf("with X-User: expected RoleIdentified, got %v", observed.Role)
 	}
-	if observed.IsAdmin || !observed.Unlimited {
-		t.Fatalf("with X-User: expected IsAdmin=false, Unlimited=true; got IsAdmin=%v Unlimited=%v",
-			observed.IsAdmin, observed.Unlimited)
+	if observed.Role.IsAdmin() || !observed.Role.IsUnlimited() {
+		t.Fatalf("with X-User: expected non-admin unlimited role; got role=%v", observed.Role)
 	}
 
-	// Without X-User → Proxy, Unlimited=false.
+	// Without X-User → Proxy, not unlimited.
 	req = httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"ping","params":[{}]}`))
 	req.RemoteAddr = "203.0.113.5:1234"
 	req = req.WithContext(WithPortContext(req.Context(), pc))
@@ -434,14 +434,14 @@ func TestSecureGatewayPromotesToIdentifiedWithUser(t *testing.T) {
 	if observed.Role != types.RoleProxy {
 		t.Fatalf("without X-User: expected RoleProxy, got %v", observed.Role)
 	}
-	if observed.Unlimited {
-		t.Fatalf("RoleProxy must not be Unlimited")
+	if observed.Role.IsUnlimited() {
+		t.Fatalf("RoleProxy must not be unlimited")
 	}
 }
 
 type heavyStub struct{ stubHandler }
 
-func (s *heavyStub) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (s *heavyStub) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	ctx.LoadCost = uint32(resource.FeeHeavyBurdenRPC().Cost())
 	return s.stubHandler.Handle(ctx, params)
 }

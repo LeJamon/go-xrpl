@@ -74,8 +74,12 @@ func TestHTTPBatchAdminCredentialsArePerElement(t *testing.T) {
 }
 
 func TestWebSocketAdminCredentials(t *testing.T) {
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 2 * time.Second})
-	ws.methodRegistry.Register("stop", &stubHandler{role: types.RoleAdmin})
+	ws := NewWebSocketServer(WebSocketServerOptions{
+		Timeout: 2 * time.Second,
+		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"stop": &stubHandler{role: types.RoleAdmin},
+		}),
+	})
 	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ws.ServeHTTP(w, r.WithContext(WithPortContext(r.Context(), credentialedAdminPort())))
 	}))

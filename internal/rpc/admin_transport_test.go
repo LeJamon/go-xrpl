@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
@@ -27,14 +29,14 @@ func transportTestPort() *PortContext {
 
 func transportTestServer(t *testing.T, calls *atomic.Int32) *Server {
 	t.Helper()
-	srv := NewServer(ServerOptions{Timeout: time.Second, Services: types.NewServiceContainer(nil)})
-	srv.registry.Register("stop", &stubHandler{
-		role: types.RoleGuest,
-		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
-			calls.Add(1)
-			return map[string]any{"stopped": true}, nil
-		},
-	})
+	srv := NewServer(ServerOptions{Timeout: time.Second, Services: types.NewTestServiceGraph(types.NewServiceContainer(nil)), Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+		"stop": &stubHandler{
+			role: types.RoleGuest,
+			handle: func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
+				calls.Add(1)
+				return map[string]any{"stopped": true}, nil
+			},
+		}})})
 	return srv
 }
 
@@ -138,8 +140,12 @@ func TestHTTPTransportNoOriginCLI(t *testing.T) {
 
 func wsTransportServer(t *testing.T, pc *PortContext) (*httptest.Server, *WebSocketServer) {
 	t.Helper()
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second})
-	ws.methodRegistry.Register("ping", &stubHandler{role: types.RoleGuest})
+	ws := NewWebSocketServer(WebSocketServerOptions{
+		Timeout: time.Second,
+		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"ping": &stubHandler{role: types.RoleGuest},
+		}),
+	})
 	httpSrv := httptest.NewServer(PortMiddleware(pc, http.HandlerFunc(ws.ServeHTTP)))
 	t.Cleanup(func() {
 		httpSrv.Close()

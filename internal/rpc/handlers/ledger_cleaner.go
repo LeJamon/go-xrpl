@@ -3,6 +3,8 @@ package handlers
 import (
 	"encoding/json"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -24,8 +26,8 @@ func (m *LedgerCleanerMethod) RequiredCondition() types.Condition {
 	return types.NeedsNetworkConnection
 }
 
-func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	if ctx.Services == nil || ctx.Services.LedgerCleanerConfigure == nil {
+func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
+	if ctx.Services == nil || ctx.Services.LedgerCleanerConfigure() == nil {
 		return nil, rpcInternalInvariantError("ledger_cleaner: service unavailable")
 	}
 
@@ -40,7 +42,7 @@ func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	}
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, types.RpcErrorInvalidParams("ledger_cleaner: malformed params")
+			return nil, rpcerrors.RpcErrorInvalidParams("ledger_cleaner: malformed params")
 		}
 	}
 
@@ -48,13 +50,13 @@ func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	hasParams := req.Ledger != nil || req.MinLedger != nil || req.MaxLedger != nil ||
 		req.Full != nil || req.CheckNodes != nil || req.FixTxns != nil || req.Stop != nil
 	if !hasParams {
-		if ctx.Services.LedgerCleanerStatusFn != nil {
-			return statusResponse(ctx.Services.LedgerCleanerStatusFn(), false), nil
+		if ctx.Services.LedgerCleanerStatusFn() != nil {
+			return statusResponse(ctx.Services.LedgerCleanerStatusFn()(), false), nil
 		}
 		return statusResponse(types.LedgerCleanerStatus{State: "idle"}, false), nil
 	}
 
-	st := ctx.Services.LedgerCleanerConfigure(types.LedgerCleanerParams{
+	st := ctx.Services.LedgerCleanerConfigure()(types.LedgerCleanerParams{
 		Ledger:     req.Ledger,
 		MinLedger:  req.MinLedger,
 		MaxLedger:  req.MaxLedger,

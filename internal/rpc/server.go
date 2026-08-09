@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
@@ -33,19 +35,22 @@ func rpcLog() xrpllog.Logger { return xrpllog.Named(xrpllog.PartitionRPC) }
 
 type Server struct {
 	peerSourceHolder
-	registry        *types.MethodRegistry
-	timeout         time.Duration
-	services        *types.ServiceContainer
-	resourceManager *resource.Manager
+	registry         *types.MethodRegistry
+	timeout          time.Duration
+	services         *types.ServiceGraph
+	urlSubscriptions types.URLSubscriptionService
+	resourceManager  *resource.Manager
 }
 
 // ServerOptions controls construction of an HTTP JSON-RPC server.
 // Services may be nil for routing-only tests; constructors never mutate it.
 type ServerOptions struct {
-	Timeout         time.Duration
-	Services        *types.ServiceContainer
-	ResourceManager *resource.Manager
-	PeerSource      types.PeerSource
+	Timeout          time.Duration
+	Services         *types.ServiceGraph
+	ResourceManager  *resource.Manager
+	PeerSource       types.PeerSource
+	Registry         *types.MethodRegistry
+	URLSubscriptions types.URLSubscriptionService
 }
 
 var _ types.MethodDispatcher = (*Server)(nil)
@@ -78,15 +83,20 @@ func NewServer(options ServerOptions) *Server {
 	if manager == nil {
 		manager = resource.NewManager(nil, nil)
 	}
+	if isNilURLSubscriptionService(options.URLSubscriptions) {
+		options.URLSubscriptions = nil
+	}
 	server := &Server{
-		registry:        types.NewMethodRegistry(),
-		timeout:         options.Timeout,
-		services:        options.Services,
-		resourceManager: manager,
+		registry:         options.Registry,
+		timeout:          options.Timeout,
+		services:         options.Services,
+		urlSubscriptions: options.URLSubscriptions,
+		resourceManager:  manager,
+	}
+	if server.registry == nil {
+		server.registry = defaultMethodRegistry()
 	}
 	server.setPeerSource(options.PeerSource)
-
-	server.registerAllMethods()
 
 	return server
 }
@@ -191,6 +201,6 @@ const (
 // role, client IP and api version, and is charged for load under the real
 // client IP, so forwarded calls remain subject to the same per-IP charging
 // and request timeout as their parent request.
-func (s *Server) ExecuteMethod(ctx *types.RpcContext, method string, params []byte) (any, *types.RpcError) {
+func (s *Server) ExecuteMethod(ctx *types.RpcContext, method string, params []byte) (any, *rpcerrors.RpcError) {
 	return dispatchNestedMethod(s.registry, ctx, method, json.RawMessage(params), rpcLog())
 }

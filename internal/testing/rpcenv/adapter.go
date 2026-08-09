@@ -33,6 +33,8 @@ type ledgerAdapter struct {
 }
 
 var _ types.LedgerService = (*ledgerAdapter)(nil)
+var _ types.LedgerReadService = (*ledgerAdapter)(nil)
+var _ types.LedgerMutationService = (*ledgerAdapter)(nil)
 
 func newLedgerAdapter(env *jtx.TestEnv) *ledgerAdapter {
 	a := &ledgerAdapter{env: env, closedLedgers: make(map[uint32]*ledger.Ledger)}

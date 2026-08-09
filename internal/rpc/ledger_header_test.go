@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
@@ -47,7 +49,7 @@ func TestLedgerHeaderBasicRequest(t *testing.T) {
 		}
 		return nil, errors.New("ledger not found")
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerHeaderMethod{}
 	ctx := &types.RpcContext{
@@ -226,7 +228,7 @@ func TestLedgerHeaderBinaryFormat(t *testing.T) {
 	mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
 		return reader, nil
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerHeaderMethod{}
 	ctx := &types.RpcContext{
@@ -310,7 +312,7 @@ func TestLedgerHeaderHashFormat(t *testing.T) {
 	mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
 		return reader, nil
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerHeaderMethod{}
 	ctx := &types.RpcContext{
@@ -353,7 +355,7 @@ func TestLedgerHeaderBadInput(t *testing.T) {
 		}
 		return nil, errors.New("ledger not found")
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerHeaderMethod{}
 	ctx := &types.RpcContext{
@@ -375,7 +377,7 @@ func TestLedgerHeaderBadInput(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, params)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcLGR_NOT_FOUND, rpcErr.Code)
 	})
 
 	t.Run("Invalid ledger_hash - too short", func(t *testing.T) {
@@ -419,7 +421,7 @@ func TestLedgerHeaderOpenLedger(t *testing.T) {
 		}
 		return nil, errors.New("not found")
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerHeaderMethod{}
 	ctx := &types.RpcContext{
@@ -466,7 +468,7 @@ func TestLedgerHeaderProductionOpenRootsAndFlags(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: rpcadapter.NewLedgerServiceAdapter(svc)},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: rpcadapter.NewLedgerServiceAdapter(svc)}),
 	}
 	result, rpcErr := (&handlers.LedgerHeaderMethod{}).Handle(ctx, json.RawMessage(`{"ledger_index":"current"}`))
 	require.Nil(t, rpcErr)
@@ -480,7 +482,6 @@ func TestLedgerHeaderProductionOpenRootsAndFlags(t *testing.T) {
 	require.Zero(t, decoded.CloseFlags)
 
 	ctx.Role = types.RoleAdmin
-	ctx.Unlimited = true
 	result, rpcErr = (&handlers.LedgerMethod{}).Handle(ctx, json.RawMessage(`{"ledger_index":"current","full":true}`))
 	require.Nil(t, rpcErr)
 	ledgerResult := result.(map[string]any)["ledger"].(map[string]any)
@@ -503,7 +504,7 @@ func TestLedgerHeaderCloseTimeEstimated(t *testing.T) {
 	mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
 		return reader, nil
 	}
-	services := &types.ServiceContainer{Ledger: mock}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 
 	method := &handlers.LedgerHeaderMethod{}
 	ctx := &types.RpcContext{
@@ -565,7 +566,7 @@ func TestLedgerHeaderServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)

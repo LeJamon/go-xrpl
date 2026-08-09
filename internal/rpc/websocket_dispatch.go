@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"runtime/debug"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-type wsSpecialHandler func(*websocketConnection, *types.RpcContext, types.WebSocketCommand) (any, *types.RpcError)
+type wsSpecialHandler func(*websocketConnection, *types.RpcContext, types.WebSocketCommand) (any, *rpcerrors.RpcError)
 
 func (ws *WebSocketServer) handleMessage(wsConn *websocketConnection, message []byte) {
 	// Per-message recover so one bad command can't tear down the read
@@ -50,7 +52,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *websocketConnection, message []
 	peerIP := getWebSocketClientIP(wsConn.conn)
 	clientIP := resolveWSClientIP(peerIP, wsConn.forwardedFor, wsConn.portCtx)
 	role := roleForRequest(peerIP, wsConn.user, cmdMap, wsConn.portCtx)
-	loadCtx := newRpcContext(wsConn.Context(), role, types.DefaultApiVersion, clientIP, ws.loadPeerSource(), ws.services)
+	loadCtx := newRpcContext(wsConn.Context(), role, types.DefaultApiVersion, clientIP, ws.loadPeerSource(), ws.services, ws, ws.urlSubscriptions)
 	loadCtx.ResourceConsumer = wsConn.resourceConsumer
 	if rpcErr := gateLoad(ws.resourceManager, loadCtx, "", wsLog()); rpcErr != nil {
 		wsConn.closeWithPolicyViolation("threshold exceeded")
@@ -151,7 +153,7 @@ func (ws *WebSocketServer) handleSpecialCommand(wsConn *websocketConnection, ctx
 	resolution := resolveMethod(ws.methodRegistry, cmd.Command, ctx.ApiVersion)
 	if !resolution.resolved {
 		finalizeLoad(ws.resourceManager, ctx, cmd.Command, resource.FeeReferenceRPC(), wsLog())
-		ws.sendCommandError(wsConn, types.RpcErrorMethodNotFound(), cmd)
+		ws.sendCommandError(wsConn, rpcerrors.RpcErrorMethodNotFound(), cmd)
 		return
 	}
 	if rpcErr := conditionMet(resolution.handler.RequiredCondition(), ctx); rpcErr != nil {
@@ -160,10 +162,10 @@ func (ws *WebSocketServer) handleSpecialCommand(wsConn *websocketConnection, ctx
 		return
 	}
 
-	result, rpcErr, recovered := func() (any, *types.RpcError, bool) {
-		if ws.services != nil && ws.services.ClientLoad != nil {
-			ws.services.ClientLoad.Begin()
-			defer ws.services.ClientLoad.End()
+	result, rpcErr, recovered := func() (any, *rpcerrors.RpcError, bool) {
+		if ws.services != nil && ws.services.ClientLoad() != nil {
+			release := ws.services.ClientLoad().Begin()
+			defer release()
 		}
 		finishDiagnostics := startRPCDiagnostics(ws.services, cmd.Command)
 		result, rpcErr, recovered := invokeWSSpecial(handler, wsConn, ctx, cmd)
@@ -182,7 +184,7 @@ func (ws *WebSocketServer) handleSpecialCommand(wsConn *websocketConnection, ctx
 	}
 	ws.sendCommandResponse(wsConn, result, cmd, wsLoadWarningOpts(ctx))
 }
-func invokeWSSpecial(handler wsSpecialHandler, wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (result any, rpcErr *types.RpcError, recovered bool) {
+func invokeWSSpecial(handler wsSpecialHandler, wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (result any, rpcErr *rpcerrors.RpcError, recovered bool) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			wsLog().Error("rpc handler panic", "err", rec, "stack", string(debug.Stack()), "method", cmd.Command, "client", ctx.ClientIP)
@@ -202,7 +204,7 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *websocketConnection, ctx *typ
 	// Role::FORBID for an admin-required command, rippled writes
 	// rpcError(rpcFORBIDDEN) before doCommand ever runs.
 	resolution := resolveMethod(ws.methodRegistry, cmd.Command, ctx.ApiVersion)
-	if rpcErr := admitMethod(ws.resourceManager, ctx, cmd.Command, resolution, types.RpcErrorForbidden, false, wsLog()); rpcErr != nil {
+	if rpcErr := admitMethod(ws.resourceManager, ctx, cmd.Command, resolution, rpcerrors.RpcErrorForbidden, false, wsLog()); rpcErr != nil {
 		ws.sendErrorResponse(wsConn, rpcErr, cmd.ID, nil, cmd.Request)
 		return
 	}
@@ -327,23 +329,15 @@ func (ws *WebSocketServer) sendJSONInvalid(wsConn *websocketConnection, value an
 	}
 	ws.deliver(wsConn, data)
 }
-func (ws *WebSocketServer) sendCommandError(wsConn *websocketConnection, rpcErr *types.RpcError, cmd types.WebSocketCommand) {
+func (ws *WebSocketServer) sendCommandError(wsConn *websocketConnection, rpcErr *rpcerrors.RpcError, cmd types.WebSocketCommand) {
 	ws.sendErrorResponse(wsConn, rpcErr, cmd.ID, nil, cmd.Request)
 }
-func (ws *WebSocketServer) sendErrorResponse(wsConn *websocketConnection, rpcErr *types.RpcError, id any, opts *types.WebSocketResponseOptions, request map[string]any) {
-	response := map[string]any{
-		"type":   "response",
-		"status": "error",
-		"error":  rpcErr.ErrorString,
-	}
+func (ws *WebSocketServer) sendErrorResponse(wsConn *websocketConnection, rpcErr *rpcerrors.RpcError, id any, opts *types.WebSocketResponseOptions, request map[string]any) {
+	response := rpcErr.ResponseFields()
+	response["type"] = "response"
+	response["status"] = "error"
 	if id != nil {
 		response["id"] = id
-	}
-	if rpcErr.ErrorException != "" {
-		response["error_exception"] = rpcErr.ErrorException
-	} else if !rpcErr.IsBareToken() {
-		response["error_code"] = rpcErr.Code
-		response["error_message"] = rpcErr.Message
 	}
 
 	if opts != nil {
