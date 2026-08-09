@@ -167,12 +167,10 @@ func (r *runner) execFund(stepIdx int, step Step) {
 	}
 	r.accounts[step.Account] = acc
 
-	// Bypass TxQ and mark as setup for two-phase replay.
+	// Bypass TxQ for this setup operation.
 	r.env.SetBypassTxQ(true)
-	r.env.SetInSetupMode(true)
 	defer func() {
 		r.env.SetBypassTxQ(false)
-		r.env.SetInSetupMode(false)
 	}()
 
 	setRipple := step.SetDefaultRipple == nil || *step.SetDefaultRipple
@@ -186,12 +184,10 @@ func (r *runner) execFund(stepIdx int, step Step) {
 // execTrust handles a "trust" step.
 // Trust operations bypass TxQ, matching rippled's apply() for setup operations.
 func (r *runner) execTrust(stepIdx int, step Step) {
-	// Bypass TxQ and mark as setup for two-phase replay.
+	// Bypass TxQ for this setup operation.
 	r.env.SetBypassTxQ(true)
-	r.env.SetInSetupMode(true)
 	defer func() {
 		r.env.SetBypassTxQ(false)
-		r.env.SetInSetupMode(false)
 	}()
 
 	acc, ok := r.accounts[step.Account]
@@ -268,16 +264,19 @@ func (r *runner) execClose(stepIdx int, step Step) {
 		}
 		r.env.SetTime(targetTime.Add(-resolution))
 	}
-	// If the fixture provides a tx_set_hash, pass it to the environment
-	// as the canonical sort salt. This allows closeWithReplay() to sort
-	// transactions in the exact same order as rippled.
+	// If the fixture provides a tx_set_hash, pass it to the environment as the
+	// canonical sort salt so the build uses the same ordering as rippled.
 	if step.TxSetHash != nil {
 		saltBytes, err := hex.DecodeString(*step.TxSetHash)
-		if err == nil && len(saltBytes) == 32 {
-			var salt [32]byte
-			copy(salt[:], saltBytes)
-			r.env.SetNextCloseSalt(salt)
+		if err != nil {
+			r.t.Fatalf("Step %d (close): invalid tx_set_hash: %v", stepIdx, err)
 		}
+		if len(saltBytes) != 32 {
+			r.t.Fatalf("Step %d (close): tx_set_hash must be 32 bytes, got %d", stepIdx, len(saltBytes))
+		}
+		var salt [32]byte
+		copy(salt[:], saltBytes)
+		r.env.SetNextCloseSalt(salt)
 	}
 
 	// Use time-leap close if this step index is in the time-leap set.

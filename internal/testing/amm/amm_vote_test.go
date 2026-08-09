@@ -50,7 +50,7 @@ func TestInvalidFeeVote(t *testing.T) {
 
 		bad := jtx.NewAccount("bad")
 		voteTx := amm.AMMVote(bad, amm.XRP(), env.USD, 1000).Build()
-		result := env.Submit(jtx.WithSeq(voteTx, 1))
+		result := env.SubmitWithOptions(jtx.WithSeq(voteTx, 1), jtx.SubmitOptions{SkipSignature: true})
 
 		if result.Success {
 			t.Fatal("Should not allow vote from non-existent account")

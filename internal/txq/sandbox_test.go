@@ -60,8 +60,8 @@ type mockClearCtx struct {
 func (c *mockClearCtx) GetAccountSequence([20]byte) (uint32, error) {
 	return 0, nil
 }
-func (c *mockClearCtx) AccountExists([20]byte) bool        { return true }
-func (c *mockClearCtx) TicketExists([20]byte, uint32) bool { return true }
+func (c *mockClearCtx) AccountExists([20]byte) (bool, error)        { return true, nil }
+func (c *mockClearCtx) TicketExists([20]byte, uint32) (bool, error) { return true, nil }
 func (c *mockClearCtx) GetAccountBalance([20]byte) (uint64, error) {
 	return 0, nil
 }

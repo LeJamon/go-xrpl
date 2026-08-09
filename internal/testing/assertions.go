@@ -21,14 +21,6 @@ func RequireBalance(t testing.TB, env *TestEnv, acc *Account, expected uint64) {
 		acc.Name, expected, actual)
 }
 
-// RequireBalanceXRP asserts that an account has the expected XRP balance.
-// The expected amount is in whole XRP units (e.g., 100 XRP, not drops).
-func RequireBalanceXRP(t testing.TB, env *TestEnv, acc *Account, expectedXRP int64) {
-	t.Helper()
-	expected := uint64(XRP(expectedXRP))
-	RequireBalance(t, env, acc, expected)
-}
-
 // RequireTxSuccess asserts that a transaction result indicates success.
 func RequireTxSuccess(t testing.TB, result TxResult) {
 	t.Helper()
@@ -208,28 +200,6 @@ const (
 	TemBAD_SEND_XRP_NO_DIRECT TxResultCode = "temBAD_SEND_XRP_NO_DIRECT"
 )
 
-// ResultCodeCategory returns the category of a result code.
-func ResultCodeCategory(code string) string {
-	if len(code) < 3 {
-		return "unknown"
-	}
-	prefix := code[:3]
-	switch prefix {
-	case "tes":
-		return "success"
-	case "tec":
-		return "claimed"
-	case "tef":
-		return "failure"
-	case "ter":
-		return "retry"
-	case "tem":
-		return "malformed"
-	default:
-		return "unknown"
-	}
-}
-
 // requireOwnedEntries asserts that an account's owner directory holds the
 // expected number of entries of the given ledger entry type. The owner
 // directory mixes object types (trust lines, offers, escrows, ...), so
@@ -246,17 +216,19 @@ func requireOwnedEntries(t testing.TB, env *TestEnv, acc *Account, entryType ent
 		require.Fail(t, fmt.Sprintf("Account %s does not exist, expected %d %s", acc.Name, expected, label))
 		return
 	}
-	dirKey := keylet.OwnerDir(acc.ID)
 	var count uint32
-	err := state.DirForEach(env.ledger, dirKey, func(itemKey [32]byte) error {
+	err := ownerDirectoryForEach(env, acc, func(itemKey [32]byte) error {
 		entryKey := keylet.Keylet{Key: itemKey}
 		data, readErr := env.ledger.Read(entryKey)
-		if readErr != nil || len(data) == 0 {
-			return nil
+		if readErr != nil {
+			return fmt.Errorf("read owned entry %x: %w", itemKey, readErr)
+		}
+		if len(data) == 0 {
+			return fmt.Errorf("owned entry %x is missing", itemKey)
 		}
 		itemType, typeErr := state.DecodeType(data)
 		if typeErr != nil {
-			return nil
+			return fmt.Errorf("decode owned entry %x: %w", itemKey, typeErr)
 		}
 		if itemType == entryType {
 			count++
@@ -281,16 +253,6 @@ func RequireLines(t testing.TB, env *TestEnv, acc *Account, expected uint32) {
 func RequireOffers(t testing.TB, env *TestEnv, acc *Account, expected uint32) {
 	t.Helper()
 	requireOwnedEntries(t, env, acc, entry.TypeOffer, "offer", expected)
-}
-
-// RequireFlags asserts that an account has the expected flags set.
-func RequireFlags(t testing.TB, env *TestEnv, acc *Account, expectedFlags uint32) {
-	t.Helper()
-	info := env.AccountInfo(acc)
-	require.NotNil(t, info, "Account %s does not exist", acc.Name)
-	require.Equal(t, expectedFlags, info.Flags,
-		"Account %s flags mismatch: expected 0x%x, got 0x%x",
-		acc.Name, expectedFlags, info.Flags)
 }
 
 // RequireFlagSet asserts that a specific flag is set on an account.
@@ -367,36 +329,46 @@ func RequireOwnerDirectoryContains(
 }
 
 func OwnerDirectoryContains(env *TestEnv, owner *Account, target [32]byte) (bool, error) {
-	visited := make(map[uint64]struct{})
 	found := false
+	err := ownerDirectoryForEach(env, owner, func(item [32]byte) error {
+		if item == target {
+			found = true
+		}
+		return nil
+	})
+	return found, err
+}
+
+func ownerDirectoryForEach(env *TestEnv, owner *Account, callback func([32]byte) error) error {
+	visited := make(map[uint64]struct{})
 	for page := uint64(0); ; {
 		if _, exists := visited[page]; exists {
-			return false, fmt.Errorf("owner directory cycle at page %d", page)
+			return fmt.Errorf("owner directory cycle at page %d", page)
 		}
 		visited[page] = struct{}{}
 
-		data, err := env.Ledger().Read(keylet.OwnerDirPage(owner.ID, page))
+		data, exists, err := readExistingEntry(env.Ledger(), keylet.OwnerDirPage(owner.ID, page))
 		if err != nil {
-			return false, fmt.Errorf("read owner directory page %d: %w", page, err)
+			return fmt.Errorf("read owner directory page %d: %w", page, err)
 		}
-		if data == nil {
+		if !exists {
 			if page == 0 {
-				return false, nil
+				return nil
 			}
-			return false, fmt.Errorf("owner directory continuation page %d is missing", page)
+			return fmt.Errorf("owner directory continuation page %d is missing", page)
 		}
 
 		node, err := state.ParseDirectoryNode(data)
 		if err != nil {
-			return false, fmt.Errorf("parse owner directory page %d: %w", page, err)
+			return fmt.Errorf("parse owner directory page %d: %w", page, err)
 		}
 		for _, item := range node.Indexes {
-			if item == target {
-				found = true
+			if err := callback(item); err != nil {
+				return err
 			}
 		}
 		if node.IndexNext == 0 {
-			return found, nil
+			return nil
 		}
 		page = node.IndexNext
 	}
@@ -406,29 +378,7 @@ func OwnerDirectoryContains(env *TestEnv, owner *Account, target [32]byte) (bool
 // This iterates the owner directory and counts entries of type Ticket (0x0054),
 // matching rippled's owner_count<ltTICKET> behavior.
 func RequireTicketCount(t testing.TB, env *TestEnv, acc *Account, expected uint32) {
-	t.Helper()
-	dirKey := keylet.OwnerDir(acc.ID)
-	var count uint32
-	err := state.DirForEach(env.ledger, dirKey, func(itemKey [32]byte) error {
-		// Read the entry and check its LedgerEntryType
-		entryKey := keylet.Keylet{Key: itemKey}
-		data, readErr := env.ledger.Read(entryKey)
-		if readErr != nil || len(data) == 0 {
-			return nil
-		}
-		entryType, typeErr := state.DecodeType(data)
-		if typeErr != nil {
-			return nil
-		}
-		if entryType == entry.TypeTicket {
-			count++
-		}
-		return nil
-	})
-	require.NoError(t, err, "Account %s: failed to iterate owner directory", acc.Name)
-	require.Equal(t, expected, count,
-		"Account %s ticket count mismatch: expected %d, got %d",
-		acc.Name, expected, count)
+	requireOwnedEntries(t, env, acc, entry.TypeTicket, "ticket", expected)
 }
 
 // RequireSignerListCount asserts that an account has the expected number of signer lists.

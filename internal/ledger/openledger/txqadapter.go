@@ -96,26 +96,18 @@ func (a *TxqAdapter) GetAccountSequence(accountID [20]byte) (uint32, error) {
 	return ar.Sequence, nil
 }
 
-func (a *TxqAdapter) AccountExists(accountID [20]byte) bool {
+func (a *TxqAdapter) AccountExists(accountID [20]byte) (bool, error) {
 	if a.view == nil {
-		return false
+		return false, errors.New("openledger.TxqAdapter: view is nil")
 	}
-	exists, err := a.view.Exists(keylet.Account(accountID))
-	if err != nil {
-		return false
-	}
-	return exists
+	return a.view.Exists(keylet.Account(accountID))
 }
 
-func (a *TxqAdapter) TicketExists(accountID [20]byte, ticketSeq uint32) bool {
+func (a *TxqAdapter) TicketExists(accountID [20]byte, ticketSeq uint32) (bool, error) {
 	if a.view == nil {
-		return false
+		return false, errors.New("openledger.TxqAdapter: view is nil")
 	}
-	exists, err := a.view.Exists(keylet.Ticket(accountID, ticketSeq))
-	if err != nil {
-		return false
-	}
-	return exists
+	return a.view.Exists(keylet.Ticket(accountID, ticketSeq))
 }
 
 func (a *TxqAdapter) GetAccountBalance(accountID [20]byte) (uint64, error) {
@@ -166,6 +158,7 @@ func (a *TxqAdapter) baseFeeConfig() tx.EngineConfig {
 		ParentCloseTime:           a.cfg.ParentCloseTime,
 		Logger:                    a.cfg.Logger,
 		Rules:                     a.cfg.Rules,
+		NumberContextOverride:     a.cfg.NumberContextOverride,
 		ApplyFlags:                a.cfg.ApplyFlags,
 		FeeTrack:                  a.cfg.FeeTrack,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
@@ -218,6 +211,7 @@ func (a *TxqAdapter) applyTransactionWithFlags(txn tx.Transaction, flags tx.Appl
 		Logger:                    a.cfg.Logger,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
 		Rules:                     a.cfg.Rules,
+		NumberContextOverride:     a.cfg.NumberContextOverride,
 		ApplyFlags:                flags,
 		FeeTrack:                  a.cfg.FeeTrack,
 		EnforceLoadFee:            true,
@@ -277,6 +271,7 @@ func (a *TxqAdapter) preflightTransactionWithFlags(txn tx.Transaction, flags tx.
 		Logger:                    a.cfg.Logger,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
 		Rules:                     a.cfg.Rules,
+		NumberContextOverride:     a.cfg.NumberContextOverride,
 		ApplyFlags:                flags,
 		FeeTrack:                  a.cfg.FeeTrack,
 	}
@@ -352,6 +347,7 @@ func (a *TxqAdapter) preclaimTransactionWithFlags(txn tx.Transaction, accountID 
 		Logger:                    a.cfg.Logger,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
 		Rules:                     a.cfg.Rules,
+		NumberContextOverride:     a.cfg.NumberContextOverride,
 		ApplyFlags:                flags,
 		FeeTrack:                  a.cfg.FeeTrack,
 		EnforceLoadFee:            true,

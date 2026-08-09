@@ -1,6 +1,8 @@
 package jtx
 
 import (
+	"math"
+
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/account"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
@@ -22,6 +24,9 @@ func (e *TestEnv) Fund(accounts ...*Account) {
 // only need a balance top-up pass sign=false. what labels failures.
 func (e *TestEnv) masterPayment(acc *Account, amount uint64, sign bool, what string) {
 	e.t.Helper()
+	if amount > math.MaxInt64 {
+		e.t.Fatalf("%s amount exceeds XRPAmount range", what)
+	}
 	master := e.accounts["master"]
 	if master == nil {
 		e.t.Fatal("Master account not found")
@@ -48,9 +53,13 @@ func (e *TestEnv) masterPayment(acc *Account, amount uint64, sign bool, what str
 func (e *TestEnv) FundAmount(acc *Account, amount uint64) {
 	e.t.Helper()
 
-	// Register account
-	e.accounts[acc.Name] = acc
+	if err := e.registerAccount(acc); err != nil {
+		e.t.Fatalf("register account: %v", err)
+	}
 
+	if amount > ^uint64(0)-e.baseFee {
+		e.t.Fatal("fund amount plus setup fee overflows uint64")
+	}
 	// Fund with extra to cover the AccountSet fee (for enabling DefaultRipple)
 	// so the account ends up with the requested amount.
 	e.masterPayment(acc, amount+e.baseFee, true, "fund account")
@@ -106,6 +115,8 @@ func (e *TestEnv) FundNoRipple(accounts ...*Account) {
 // FundAmountNoRipple funds an account with a specific amount but does NOT enable DefaultRipple.
 func (e *TestEnv) FundAmountNoRipple(acc *Account, amount uint64) {
 	e.t.Helper()
-	e.accounts[acc.Name] = acc
+	if err := e.registerAccount(acc); err != nil {
+		e.t.Fatalf("register account: %v", err)
+	}
 	e.masterPayment(acc, amount, true, "fund account (no ripple)")
 }

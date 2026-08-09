@@ -28,10 +28,10 @@ type ApplyContext interface {
 	GetAccountSequence(account [20]byte) (uint32, error)
 
 	// AccountExists returns true if the account exists in the ledger.
-	AccountExists(account [20]byte) bool
+	AccountExists(account [20]byte) (bool, error)
 
 	// TicketExists returns true if the ticket exists for the account.
-	TicketExists(account [20]byte, ticketSeq uint32) bool
+	TicketExists(account [20]byte, ticketSeq uint32) (bool, error)
 
 	// GetAccountBalance returns the XRP balance in drops.
 	// It returns 0 without an error if the account doesn't exist.
@@ -205,18 +205,26 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	}
 
 	var accountExists bool
+	var accountExistsErr error
 	q.withStateUnlocked(func() {
-		accountExists = ctx.AccountExists(account)
+		accountExists, accountExistsErr = ctx.AccountExists(account)
 	})
+	if accountExistsErr != nil {
+		return ApplyResult{Result: ter.TefINTERNAL, Applied: false}
+	}
 	if !accountExists {
 		return ApplyResult{Result: ter.TerNO_ACCOUNT, Applied: false}
 	}
 
 	if seqProxy.IsTicket {
 		var ticketExists bool
+		var ticketExistsErr error
 		q.withStateUnlocked(func() {
-			ticketExists = ctx.TicketExists(account, seqProxy.Value)
+			ticketExists, ticketExistsErr = ctx.TicketExists(account, seqProxy.Value)
 		})
+		if ticketExistsErr != nil {
+			return ApplyResult{Result: ter.TefINTERNAL, Applied: false}
+		}
 		if !ticketExists {
 			if seqProxy.Value < acctSeq {
 				return ApplyResult{Result: ter.TefNO_TICKET, Applied: false}

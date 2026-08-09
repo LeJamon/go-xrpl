@@ -306,9 +306,9 @@ func (s *Service) stageStartupReplayLocked() error {
 	return nil
 }
 
-func (s *Service) applyStartupReplayLocked() (bool, error) {
+func (s *Service) applyStartupReplayLocked() (*ledger.Ledger, bool, error) {
 	if s.startupReplay == nil {
-		return false, nil
+		return nil, false, nil
 	}
 	parent := s.startupReplay.Parent()
 	if parent == nil || s.closedLedger == nil ||
@@ -316,12 +316,11 @@ func (s *Service) applyStartupReplayLocked() (bool, error) {
 		parent.Hash() != s.closedLedger.Hash() {
 		s.logger.Warn("startup replay canceled after closed-ledger change")
 		s.startupReplay = nil
-		return false, nil
+		return nil, false, nil
 	}
 	replayed, err := s.startupReplay.Apply(s.EngineConfigForReplay(s.closedLedger))
 	if err != nil {
-		return true, fmt.Errorf("apply startup replay: %w", err)
+		return nil, true, fmt.Errorf("apply startup replay: %w", err)
 	}
-	s.openLedger = replayed
-	return true, nil
+	return replayed, true, nil
 }

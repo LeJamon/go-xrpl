@@ -15,6 +15,7 @@ func TestCredentialRPCViews(t *testing.T) {
 	subject := jtx.NewAccount("subject")
 	env.Fund(issuer, subject)
 	env.Close()
+	credentialLedgerMin := env.LedgerSeq()
 
 	const credentialType = "rpc"
 	const credentialTypeHex = "727063"
@@ -66,8 +67,9 @@ func TestCredentialRPCViews(t *testing.T) {
 	var expectedHashes []string
 	for _, account := range []*jtx.Account{issuer, subject} {
 		txResult, txErr := env.RPC("account_tx", map[string]any{
-			"account": account.Address,
-			"forward": true,
+			"account":          account.Address,
+			"forward":          true,
+			"ledger_index_min": credentialLedgerMin,
 		})
 		require.Nil(t, txErr)
 		transactions := didJSONMap(t, txResult)["transactions"].([]any)
@@ -87,19 +89,21 @@ func TestCredentialRPCViews(t *testing.T) {
 		}
 	}
 	pageOneResult, pageOneErr := env.RPC("account_tx", map[string]any{
-		"account": issuer.Address,
-		"forward": true,
-		"limit":   1,
+		"account":          issuer.Address,
+		"forward":          true,
+		"ledger_index_min": credentialLedgerMin,
+		"limit":            1,
 	})
 	require.Nil(t, pageOneErr)
 	pageOne := didJSONMap(t, pageOneResult)
 	require.Len(t, pageOne["transactions"].([]any), 1)
 	marker := pageOne["marker"].(map[string]any)
 	pageTwoResult, pageTwoErr := env.RPC("account_tx", map[string]any{
-		"account": issuer.Address,
-		"forward": true,
-		"limit":   1,
-		"marker":  marker,
+		"account":          issuer.Address,
+		"forward":          true,
+		"ledger_index_min": credentialLedgerMin,
+		"limit":            1,
+		"marker":           marker,
 	})
 	require.Nil(t, pageTwoErr)
 	pageTwo := didJSONMap(t, pageTwoResult)

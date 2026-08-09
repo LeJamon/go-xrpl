@@ -1206,10 +1206,11 @@ func TestAMMExtended_Multisign_WithDisabledMaster(t *testing.T) {
 	env.Close()
 
 	// Attach signers to alice (quorum=2, becky weight=1, bogie weight=1)
-	env.SetSignerList(env.Alice, 2, []jtx.TestSigner{
+	signerList := jtx.NewSignerListSetTx(env.Alice, 2, []jtx.TestSigner{
 		{Account: becky, Weight: 1},
 		{Account: bogie, Weight: 1},
 	})
+	jtx.RequireTxSuccess(t, env.SubmitSignedWith(signerList, alie))
 	env.Close()
 
 	// Multisigned AMMCreate

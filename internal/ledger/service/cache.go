@@ -376,32 +376,28 @@ func (s *Service) stashPendingLedgerValidationLocked(seq uint32, expectedHash [3
 	}
 }
 
-// drainPendingLedgerValidationLocked removes any stashed validation at seq and,
-// on hash match within pendingValidationTTL and a successful current-quorum
-// recheck, promotes adopted to validated and returns true. Rejected entries are
-// deleted so a later adopt cannot match a stale notification. Caller must hold
-// s.mu.
-func (s *Service) drainPendingLedgerValidationLocked(seq uint32, adopted *ledger.Ledger) bool {
+type pendingLedgerValidationDecision struct {
+	seq           uint32
+	adopted       *ledger.Ledger
+	found         bool
+	markValidated bool
+	promote       bool
+	signTime      time.Time
+}
+
+func (s *Service) stagePendingLedgerValidationLocked(seq uint32, adopted *ledger.Ledger) pendingLedgerValidationDecision {
+	decision := pendingLedgerValidationDecision{seq: seq, adopted: adopted}
 	entry, ok := s.pendingLedgerValidations[seq]
 	if !ok {
-		return false
+		return decision
 	}
-	delete(s.pendingLedgerValidations, seq)
-	for i, q := range s.pendingLedgerValidationsOrder {
-		if q == seq {
-			s.pendingLedgerValidationsOrder = append(s.pendingLedgerValidationsOrder[:i], s.pendingLedgerValidationsOrder[i+1:]...)
-			break
-		}
-	}
+	decision.found = true
 
 	if time.Since(entry.at) >= pendingValidationTTL {
-		// Expired: too old to trust; a fresh SetValidatedLedger re-stashes
-		// if still current.
-		return false
+		return decision
 	}
 	if adopted.Hash() != entry.expectedHash {
-		// Fork: peers validated a different hash at this seq — don't promote.
-		return false
+		return decision
 	}
 
 	signTime := entry.signTime
@@ -409,7 +405,7 @@ func (s *Service) drainPendingLedgerValidationLocked(seq uint32, adopted *ledger
 		var accepted bool
 		signTime, accepted = s.pendingValidationResolver(seq, entry.expectedHash)
 		if !accepted {
-			return false
+			return decision
 		}
 	}
 
@@ -423,21 +419,55 @@ func (s *Service) drainPendingLedgerValidationLocked(seq uint32, adopted *ledger
 	// must not rewind the pointer. The sole same-height exception replaces a
 	// provisional fast-loaded ledger after the current trusted quorum recheck.
 	if s.validatedLedger != nil && seq <= s.validatedLedger.Sequence() && !replaceProvisional {
-		_ = adopted.SetValidated()
-		return false
+		decision.markValidated = true
+		return decision
 	}
 
 	if signTime.IsZero() {
 		signTime = adopted.CloseTime()
 	}
+	decision.promote = true
+	decision.signTime = signTime
+	return decision
+}
+
+func (s *Service) commitPendingLedgerValidationLocked(decision pendingLedgerValidationDecision) bool {
+	if !decision.found {
+		return false
+	}
+	delete(s.pendingLedgerValidations, decision.seq)
+	for i, q := range s.pendingLedgerValidationsOrder {
+		if q == decision.seq {
+			s.pendingLedgerValidationsOrder = append(s.pendingLedgerValidationsOrder[:i], s.pendingLedgerValidationsOrder[i+1:]...)
+			break
+		}
+	}
+	if decision.markValidated {
+		_ = decision.adopted.SetValidated()
+		return false
+	}
+	if !decision.promote {
+		return false
+	}
+
+	adopted := decision.adopted
 	_ = adopted.SetValidated()
 	s.validatedLedger = adopted
-	s.validatedSignTime = signTime
+	s.validatedSignTime = decision.signTime
 	if s.networkLedgerState == networkLedgerFastLoadProvisional {
 		s.networkLedgerState = networkLedgerReady
 	}
-	s.evictOldHistoryLocked(seq)
+	s.evictOldHistoryLocked(decision.seq)
 	return true
+}
+
+// drainPendingLedgerValidationLocked removes any stashed validation at seq and,
+// on hash match within pendingValidationTTL and a successful current-quorum
+// recheck, promotes adopted to validated and returns true. Rejected entries are
+// deleted so a later adopt cannot match a stale notification. Caller must hold
+// s.mu.
+func (s *Service) drainPendingLedgerValidationLocked(seq uint32, adopted *ledger.Ledger) bool {
+	return s.commitPendingLedgerValidationLocked(s.stagePendingLedgerValidationLocked(seq, adopted))
 }
 
 // pendingAdopt is a held replay-delta adoption awaiting its parent seq, carrying
