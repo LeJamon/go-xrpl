@@ -21,7 +21,7 @@ func TestRouter_MalformedMatchingBaseCannotFallThrough(t *testing.T) {
 	svc := adg_newNonStandaloneService(t)
 	engine := &mockEngine{}
 	a := New(Config{LedgerService: svc})
-	r := NewRouter(engine, a, make(chan *peermanagement.InboundMessage, 1))
+	r := newTestRouter(engine, a, make(chan *peermanagement.InboundMessage, 1))
 	target := [32]byte{0x72}
 	seq := svc.GetClosedLedgerIndex() + 100
 	r.fetchTracker.Track(inbound.New(target, seq, 7, nil))
@@ -34,7 +34,7 @@ func TestRouter_MalformedMatchingBaseCannotFallThrough(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeLedgerData),
+		Type:    message.TypeLedgerData,
 		Payload: encodePayload(t, ld),
 	})
 
@@ -53,7 +53,7 @@ func TestRouter_UnmatchedBaseCannotAdoptHeader(t *testing.T) {
 	svc := adg_newNonStandaloneService(t)
 	engine := &mockEngine{}
 	a := New(Config{LedgerService: svc})
-	r := NewRouter(engine, a, make(chan *peermanagement.InboundMessage, 1))
+	r := newTestRouter(engine, a, make(chan *peermanagement.InboundMessage, 1))
 
 	closed := svc.GetClosedLedger()
 	require.NotNil(t, closed)
@@ -71,7 +71,7 @@ func TestRouter_UnmatchedBaseCannotAdoptHeader(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeLedgerData),
+		Type:    message.TypeLedgerData,
 		Payload: encodePayload(t, ld),
 	})
 

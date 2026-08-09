@@ -1,93 +1,145 @@
 package resource
 
-// Consumer is a handle to a tracked endpoint inside a Manager. Hold
-// one per peer; call Charge as the peer does work. Release once when
-// the peer is torn down so the Manager can age the entry out.
-//
-// Mirrors rippled's ripple::Resource::Consumer. Unlike the C++ type,
-// the handle is not value-semantic — callers pass the *Consumer
-// pointer and call Release exactly once. Charge is safe to call after
-// Release (returns Ok) so race-y teardown paths don't panic.
+import "sync"
+
+type consumerState struct {
+	mu           sync.RWMutex
+	m            *Manager
+	e            *entry
+	disconnected bool
+}
+
 type Consumer struct {
-	m *Manager
-	e *entry
+	state *consumerState
+}
+
+func (c *Consumer) current() (*Manager, *entry) {
+	if c == nil || c.state == nil {
+		return nil, nil
+	}
+	c.state.mu.RLock()
+	defer c.state.mu.RUnlock()
+	return c.state.m, c.state.e
 }
 
 func (c *Consumer) Endpoint() string {
-	if c == nil || c.e == nil {
+	_, e := c.current()
+	if e == nil {
 		return ""
 	}
-	return c.e.k.addr
+	return e.k.addr
 }
 
 func (c *Consumer) Kind() Kind {
-	if c == nil || c.e == nil {
+	_, e := c.current()
+	if e == nil {
 		return KindInbound
 	}
-	return c.e.k.kind
+	return e.k.kind
 }
 
 func (c *Consumer) IsUnlimited() bool {
-	if c == nil || c.e == nil {
-		return false
-	}
-	return c.e.isUnlimited()
+	_, e := c.current()
+	return e != nil && e.isUnlimited()
 }
 
-// Charge applies fee and returns the resulting Disposition. Released
-// or nil consumers return Ok. Unlimited consumers short-circuit at the
-// Consumer boundary, matching rippled's Consumer::charge at
-// Consumer.cpp:106-114.
 func (c *Consumer) Charge(fee Charge, context string) Disposition {
-	if c == nil || c.m == nil || c.e == nil {
+	if c == nil || c.state == nil {
 		return Ok
 	}
-	if c.e.isUnlimited() {
+	c.state.mu.RLock()
+	defer c.state.mu.RUnlock()
+	if c.state.m == nil || c.state.e == nil {
 		return Ok
 	}
-	return c.m.charge(c.e, fee, context)
+	return c.state.m.charge(c.state.e, fee, context)
 }
 
-// Disposition reports the current disposition without changing the balance.
+func (c *Consumer) Admit(reservation Charge) (*Admission, Disposition) {
+	if c == nil || c.state == nil {
+		return nil, Ok
+	}
+	c.state.mu.RLock()
+	defer c.state.mu.RUnlock()
+	if c.state.m == nil || c.state.e == nil {
+		return nil, Ok
+	}
+	return c.state.m.admit(c.state.e, reservation)
+}
+
 func (c *Consumer) Disposition() Disposition {
-	if c == nil || c.m == nil || c.e == nil {
+	if c == nil || c.state == nil {
 		return Ok
 	}
-	return c.m.charge(c.e, Charge{cost: 0}, "")
+	c.state.mu.RLock()
+	defer c.state.mu.RUnlock()
+	if c.state.m == nil || c.state.e == nil {
+		return Ok
+	}
+	return disposition(c.state.m.balance(c.state.e))
 }
 
 func (c *Consumer) Warn() bool {
-	if c == nil || c.m == nil || c.e == nil {
+	if c == nil || c.state == nil {
 		return false
 	}
-	return c.m.warn(c.e)
+	c.state.mu.RLock()
+	defer c.state.mu.RUnlock()
+	return c.state.m != nil && c.state.e != nil && c.state.m.warn(c.state.e)
 }
 
-// Disconnect applies a feeDrop penalty when the balance is over the
-// drop threshold so an immediate reconnect from the same endpoint
-// stays blacklisted; returns whether the caller should drop the
-// connection now.
 func (c *Consumer) Disconnect() bool {
-	if c == nil || c.m == nil || c.e == nil {
+	if c == nil || c.state == nil {
 		return false
 	}
-	return c.m.disconnect(c.e)
+	c.state.mu.Lock()
+	defer c.state.mu.Unlock()
+	if c.state.m == nil || c.state.e == nil {
+		return false
+	}
+	if c.state.disconnected {
+		return true
+	}
+	if !c.state.m.disconnect(c.state.e) {
+		return false
+	}
+	c.state.disconnected = true
+	return true
 }
 
-func (c *Consumer) Balance() int {
-	if c == nil || c.m == nil || c.e == nil {
+func (c *Consumer) Balance() int64 {
+	if c == nil || c.state == nil {
 		return 0
 	}
-	return c.m.balance(c.e)
+	c.state.mu.RLock()
+	defer c.state.mu.RUnlock()
+	if c.state.m == nil || c.state.e == nil {
+		return 0
+	}
+	return c.state.m.balance(c.state.e)
 }
 
-// Release is idempotent — only the first call decrements the
-// Manager's refcount.
-func (c *Consumer) Release() {
-	if c == nil || c.m == nil || c.e == nil {
+func (c *Consumer) SetPublicKey(publicKey string) {
+	if c == nil || c.state == nil || publicKey == "" {
 		return
 	}
-	c.m.release(c.e)
-	c.e = nil
-	c.m = nil
+	c.state.mu.RLock()
+	defer c.state.mu.RUnlock()
+	if c.state.m != nil && c.state.e != nil {
+		c.state.m.setPublicKey(c.state.e, publicKey)
+	}
+}
+
+func (c *Consumer) Release() {
+	if c == nil || c.state == nil {
+		return
+	}
+	c.state.mu.Lock()
+	m, e := c.state.m, c.state.e
+	c.state.m = nil
+	c.state.e = nil
+	c.state.mu.Unlock()
+	if m != nil && e != nil {
+		m.release(e)
+	}
 }

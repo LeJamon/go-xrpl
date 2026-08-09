@@ -1,15 +1,14 @@
 package list
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -20,63 +19,138 @@ import (
 // DefaultRefreshInterval matches rippled's
 // ValidatorSite::default_refresh_interval — 5 minutes between polls of
 // a configured publisher URL.
-const DefaultRefreshInterval = 5 * time.Minute
+const defaultRefreshInterval = 5 * time.Minute
 
 // DefaultMinRefresh is the floor applied to a publisher-supplied
 // refresh interval. One minute matches rippled's clamp at
 // ValidatorSite.cpp:486.
-const DefaultMinRefresh = 1 * time.Minute
+const defaultMinRefresh = 1 * time.Minute
 
 // DefaultMaxRefresh is the ceiling applied to a publisher-supplied
 // refresh interval. 24 hours matches rippled.
-const DefaultMaxRefresh = 24 * time.Hour
+const defaultMaxRefresh = 24 * time.Hour
 
 // DefaultRequestTimeout caps a single HTTP fetch attempt. Mirrors
 // rippled's ValidatorSite constructor default at
 // rippled/src/xrpld/app/misc/ValidatorSite.h:142-145
 // (`std::chrono::seconds timeout = std::chrono::seconds{20}`).
-const DefaultRequestTimeout = 20 * time.Second
+const defaultRequestTimeout = 20 * time.Second
 
 // MaxRedirects caps the number of HTTP redirects followed during a
 // single fetch. Matches rippled ValidatorSite.cpp:36 `max_redirects = 3`.
-const MaxRedirects = 3
+const maxRedirects = 3
 
 // ErrorRetryInterval is the cadence used to retry a failed fetch.
 // Mirrors rippled's error_retry_interval at ValidatorSite.cpp:35.
-const ErrorRetryInterval = 30 * time.Second
+const errorRetryInterval = 30 * time.Second
 
 // missingFieldsMessage mirrors rippled's exception text from
 // ValidatorSite.cpp::parseJsonResponse ("Missing fields in JSON
 // response") so external monitors keyed on the literal string match.
 const missingFieldsMessage = "Missing fields in JSON response"
+const missingFieldsStatusMessage = "missing fields"
 
-// envelope is the JSON shape published at vl.* publisher URLs (and the
-// equivalent file:// payloads), and the on-disk cache format the
-// aggregator writes. Its field names and types match rippled's
-// buildFileData layout (ValidatorList.cpp:304-366) so a cache file is
-// schema-compatible with rippled; field order is not significant because
-// the file is only ever read back via JSON unmarshal, never compared
-// byte-for-byte.
-//
-// public_key and refresh_interval are emitted for that schema
-// compatibility but are not consumed on read: the publisher is identified
-// by the cache file name and the refresh cadence is driven by the site
-// poller. Fields beyond these are tolerated and ignored on read.
 type envelope struct {
-	Manifest       string         `json:"manifest"`
-	PublicKey      string         `json:"public_key,omitempty"`
-	Blob           string         `json:"blob,omitempty"`
-	Signature      string         `json:"signature,omitempty"`
-	Version        uint32         `json:"version"`
-	BlobsV2        []envelopeBlob `json:"blobs_v2,omitempty"`
-	RefreshMinutes float64        `json:"refresh_interval,omitempty"`
+	Object         bool            `json:"-"`
+	Manifest       envelopeString  `json:"manifest"`
+	PublicKey      json.RawMessage `json:"public_key,omitempty"`
+	Blob           envelopeString  `json:"blob"`
+	Signature      envelopeString  `json:"signature"`
+	Version        envelopeUint32  `json:"version"`
+	BlobsV2        envelopeBlobs   `json:"blobs_v2"`
+	RefreshMinutes envelopeNumber  `json:"refresh_interval,omitempty"`
+}
+
+func (e *envelope) UnmarshalJSON(data []byte) error {
+	if trimmed := bytes.TrimSpace(data); len(trimmed) == 0 || trimmed[0] != '{' {
+		*e = envelope{}
+		return nil
+	}
+	type envelopeFields envelope
+	var decoded envelopeFields
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*e = envelope(decoded)
+	e.Object = true
+	return nil
 }
 
 // envelopeBlob is a v2 collection entry inside the envelope.
 type envelopeBlob struct {
-	Manifest  string `json:"manifest,omitempty"`
-	Blob      string `json:"blob"`
-	Signature string `json:"signature"`
+	Manifest  envelopeString `json:"manifest"`
+	Blob      envelopeString `json:"blob"`
+	Signature envelopeString `json:"signature"`
+}
+
+type envelopeString struct {
+	Value   string
+	Present bool
+	Valid   bool
+}
+
+func (s *envelopeString) UnmarshalJSON(data []byte) error {
+	*s = envelopeString{Present: true}
+	if string(data) == "null" {
+		return nil
+	}
+	if err := json.Unmarshal(data, &s.Value); err != nil {
+		return nil
+	}
+	s.Valid = true
+	return nil
+}
+
+type envelopeUint32 struct {
+	Value   uint32
+	Present bool
+	Valid   bool
+}
+
+func (v *envelopeUint32) UnmarshalJSON(data []byte) error {
+	*v = envelopeUint32{Present: true}
+	if string(data) == "null" {
+		return nil
+	}
+	var value int64
+	if err := json.Unmarshal(data, &value); err != nil || value < 0 || value > 2147483647 {
+		return nil
+	}
+	v.Value = uint32(value)
+	v.Valid = true
+	return nil
+}
+
+type envelopeBlobs struct {
+	Values  []envelopeBlob
+	Present bool
+	Valid   bool
+}
+
+type envelopeNumber struct {
+	Value float64
+	Valid bool
+}
+
+func (n *envelopeNumber) UnmarshalJSON(data []byte) error {
+	*n = envelopeNumber{}
+	if err := json.Unmarshal(data, &n.Value); err != nil {
+		return nil
+	}
+	n.Valid = true
+	return nil
+}
+
+func (b *envelopeBlobs) UnmarshalJSON(data []byte) error {
+	*b = envelopeBlobs{Present: true}
+	if string(data) == "null" {
+		return nil
+	}
+	if err := json.Unmarshal(data, &b.Values); err != nil {
+		return nil
+	}
+	b.Valid = true
+	return nil
 }
 
 // toCollection builds the v2 collection view of the envelope for the
@@ -85,23 +159,59 @@ type envelopeBlob struct {
 // shared manifest otherwise.
 func (e *envelope) toCollection() *message.ValidatorListCollection {
 	coll := &message.ValidatorListCollection{
-		Version:  e.Version,
-		Manifest: []byte(e.Manifest),
+		Version:  e.Version.Value,
+		Manifest: []byte(e.Manifest.Value),
 	}
-	for _, b := range e.BlobsV2 {
+	if !e.BlobsV2.Present {
+		return coll
+	}
+	for _, b := range e.BlobsV2.Values {
+		var localManifest []byte
+		if b.Manifest.Present {
+			// Allocate even for an explicitly empty string: message
+			// ValidatorBlobInfo uses nil-vs-present to distinguish an
+			// omitted override from an explicit empty override.
+			localManifest = make([]byte, len(b.Manifest.Value))
+			copy(localManifest, b.Manifest.Value)
+		}
 		coll.Blobs = append(coll.Blobs, message.ValidatorBlobInfo{
-			Manifest:  []byte(b.Manifest),
-			Blob:      []byte(b.Blob),
-			Signature: []byte(b.Signature),
+			Manifest:  localManifest,
+			Blob:      []byte(b.Blob.Value),
+			Signature: []byte(b.Signature.Value),
 		})
 	}
 	return coll
+}
+
+func (e *envelope) validateShape() error {
+	if !e.Object || !e.Version.Present || !e.Version.Valid || !e.Manifest.Present || !e.Manifest.Valid {
+		return errors.New(missingFieldsMessage)
+	}
+	if e.Version.Value == 1 {
+		if !e.Blob.Present || !e.Blob.Valid || !e.Signature.Present || !e.Signature.Valid || e.BlobsV2.Present {
+			return errors.New(missingFieldsMessage)
+		}
+		return nil
+	}
+	if !e.BlobsV2.Present || !e.BlobsV2.Valid || len(e.BlobsV2.Values) == 0 || len(e.BlobsV2.Values) > 5 || e.Blob.Present || e.Signature.Present {
+		return errors.New(missingFieldsMessage)
+	}
+	for _, blob := range e.BlobsV2.Values {
+		if !blob.Blob.Present || !blob.Blob.Valid || !blob.Signature.Present || !blob.Signature.Valid {
+			return errors.New(missingFieldsMessage)
+		}
+		if blob.Manifest.Present && !blob.Manifest.Valid {
+			return errors.New(missingFieldsMessage)
+		}
+	}
+	return nil
 }
 
 // siteState tracks the per-URL scheduling cursor inside the poller.
 // Mirrors the fields rippled's `setTimer` consults to pick the next
 // site to fetch (ValidatorSite.cpp:213-228).
 type siteState struct {
+	occurrence  int
 	uri         string
 	interval    time.Duration
 	nextRefresh time.Time
@@ -120,11 +230,14 @@ type SitePoller struct {
 	logger     *slog.Logger
 	interval   time.Duration
 
-	mu      sync.Mutex
-	started bool
-	sites   []*siteState
-	wg      sync.WaitGroup
-	stop    chan struct{}
+	mu         sync.Mutex
+	sites      []*siteState
+	generation *pollGeneration
+}
+
+type pollGeneration struct {
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 // NewSitePoller constructs a poller for the given URLs. Each URL is
@@ -143,20 +256,22 @@ func NewSitePoller(uris []string, agg *Aggregator, logger *slog.Logger) (*SitePo
 		logger = slog.Default().With("component", "validator-list-site-poller")
 	}
 	sites := make([]*siteState, 0, len(uris))
+	occurrences := make(map[string]int, len(uris))
 	for _, u := range uris {
 		if err := validateSiteURI(u); err != nil {
 			return nil, fmt.Errorf("invalid validator site uri %q: %w", u, err)
 		}
-		sites = append(sites, &siteState{uri: u, interval: DefaultRefreshInterval})
+		sites = append(sites, &siteState{occurrence: occurrences[u], uri: u, interval: defaultRefreshInterval})
+		occurrences[u]++
 	}
 	p := &SitePoller{
 		aggregator: agg,
 		logger:     logger,
-		interval:   DefaultRefreshInterval,
+		interval:   defaultRefreshInterval,
 		sites:      sites,
 	}
 	p.client = &http.Client{
-		Timeout:       DefaultRequestTimeout,
+		Timeout:       defaultRequestTimeout,
 		CheckRedirect: checkRedirect,
 	}
 	return p, nil
@@ -196,15 +311,15 @@ func validateSiteURI(uri string) error {
 }
 
 // checkRedirect is the redirect policy applied to every HTTP fetch.
-// Caps the chain at MaxRedirects and rejects any redirect target whose
+// Caps the chain at maxRedirects and rejects any redirect target whose
 // scheme is not http/https — mirrors rippled's processRedirect at
 // rippled/src/xrpld/app/misc/detail/ValidatorSite.cpp:511-531. Without
 // the scheme gate an attacker controlling the publisher hostname (or
 // any intermediate redirect target) could send the fetcher at a
 // `file:///etc/passwd` URL and read arbitrary local files.
 func checkRedirect(req *http.Request, via []*http.Request) error {
-	if len(via) >= MaxRedirects {
-		return fmt.Errorf("max redirects (%d) exceeded", MaxRedirects)
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("max redirects (%d) exceeded", maxRedirects)
 	}
 	scheme := strings.ToLower(req.URL.Scheme)
 	if scheme != "http" && scheme != "https" {
@@ -218,6 +333,11 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 // callers rarely override. MUST be called before Start.
 func (p *SitePoller) SetInterval(d time.Duration) {
 	if d <= 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.generation != nil {
 		return
 	}
 	p.interval = d
@@ -234,11 +354,17 @@ func (p *SitePoller) SetHTTPClient(c *http.Client) {
 	if c == nil {
 		return
 	}
-	c.CheckRedirect = checkRedirect
-	if c.Timeout == 0 {
-		c.Timeout = DefaultRequestTimeout
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.generation != nil {
+		return
 	}
-	p.client = c
+	clone := *c
+	clone.CheckRedirect = checkRedirect
+	if clone.Timeout <= 0 || clone.Timeout > defaultRequestTimeout {
+		clone.Timeout = defaultRequestTimeout
+	}
+	p.client = &clone
 }
 
 // Start launches the polling goroutine. The goroutine drives all
@@ -257,20 +383,25 @@ func (p *SitePoller) SetHTTPClient(c *http.Client) {
 // rearms after stop (ValidatorSite.cpp:171-172, :198); each run owns a fresh
 // stop channel created here.
 func (p *SitePoller) Start(ctx context.Context) {
-	if len(p.sites) == 0 {
-		return
-	}
 	p.mu.Lock()
-	if p.started {
+	if len(p.sites) == 0 || p.generation != nil {
 		p.mu.Unlock()
 		return
 	}
-	p.started = true
-	p.stop = make(chan struct{})
-	stop := p.stop
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	generation := &pollGeneration{cancel: cancel, done: make(chan struct{})}
+	p.generation = generation
+	for _, site := range p.sites {
+		site.nextRefresh = time.Time{}
+	}
 	p.mu.Unlock()
-	p.wg.Add(1)
-	go p.runLoop(ctx, stop)
+	go func() {
+		defer cancel()
+		p.runLoop(runCtx, generation)
+	}()
 }
 
 // Stop signals the polling goroutine to exit and blocks until it has.
@@ -278,15 +409,14 @@ func (p *SitePoller) Start(ctx context.Context) {
 // polling on a fresh stop channel.
 func (p *SitePoller) Stop() {
 	p.mu.Lock()
-	if !p.started {
+	generation := p.generation
+	if generation == nil {
 		p.mu.Unlock()
 		return
 	}
-	p.started = false
-	stop := p.stop
 	p.mu.Unlock()
-	close(stop)
-	p.wg.Wait()
+	generation.cancel()
+	<-generation.done
 }
 
 // runLoop drives the timer pattern: pick the site with the smallest
@@ -294,8 +424,15 @@ func (p *SitePoller) Stop() {
 // repeat. The single-goroutine design matches rippled's setTimer and
 // avoids parallel BroadcastLatest races when two sites simultaneously
 // deliver the same publisher's list.
-func (p *SitePoller) runLoop(ctx context.Context, stop chan struct{}) {
-	defer p.wg.Done()
+func (p *SitePoller) runLoop(ctx context.Context, generation *pollGeneration) {
+	defer func() {
+		p.mu.Lock()
+		if p.generation == generation {
+			p.generation = nil
+			close(generation.done)
+		}
+		p.mu.Unlock()
+	}()
 
 	timer := time.NewTimer(0)
 	defer timer.Stop()
@@ -318,8 +455,6 @@ func (p *SitePoller) runLoop(ctx context.Context, stop chan struct{}) {
 
 		select {
 		case <-ctx.Done():
-			return
-		case <-stop:
 			return
 		case <-timer.C:
 		}
@@ -358,7 +493,7 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 	// where nextRefresh is set before makeRequest. Without this the
 	// validator_list_sites RPC reports a stale, already-past
 	// next_refresh_time for the duration of an in-flight fetch.
-	p.aggregator.SetNextRefresh(uri, time.Now().UTC().Add(s.interval))
+	p.aggregator.setNextRefreshOccurrence(uri, s.occurrence, time.Now().UTC().Add(s.interval))
 
 	body, err := p.fetch(ctx, uri)
 	if err != nil {
@@ -368,8 +503,7 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 
 	var env envelope
 	if jsonErr := json.Unmarshal(body, &env); jsonErr != nil {
-		msg := fmt.Sprintf("envelope JSON decode: %v", jsonErr)
-		p.recordFailure(s, false, msg, msg, "uri", uri)
+		p.recordFailure(s, false, "bad json", "validator list site JSON decode failed", "uri", uri, "error", jsonErr)
 		return
 	}
 
@@ -377,8 +511,8 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 	// envelope level for both v1 and v2 — see ValidatorList::parseBlobs
 	// and ValidatorSite.cpp:391-410. The literal "Missing fields in
 	// JSON response" message is the rippled-faithful error text.
-	if env.Version == 0 || env.Manifest == "" {
-		p.recordFailure(s, false, missingFieldsMessage, missingFieldsMessage, "uri", uri)
+	if err := env.validateShape(); err != nil {
+		p.recordFailure(s, false, missingFieldsStatusMessage, missingFieldsMessage, "uri", uri)
 		return
 	}
 
@@ -391,28 +525,20 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 	var dispList []Disposition
 	var pubKey PublisherKey
 	switch {
-	case env.Version >= 2:
-		if len(env.BlobsV2) == 0 {
-			p.recordFailure(s, false, missingFieldsMessage, missingFieldsMessage, "uri", uri, "version", env.Version)
-			return
-		}
-		dispList, pubKey, _ = p.aggregator.ApplyCollection(env.toCollection(), uri)
+	case env.Version.Value != 1:
+		dispList, pubKey, _ = p.aggregator.applyCollectionFromSite(env.toCollection(), uri)
 		disp = bestDisposition(dispList)
-	case env.Version == 1:
-		if env.Blob == "" || env.Signature == "" {
-			p.recordFailure(s, false, missingFieldsMessage, missingFieldsMessage, "uri", uri)
-			return
-		}
-		disp, pubKey, _ = p.aggregator.ApplyList(
-			[]byte(env.Manifest),
-			[]byte(env.Blob),
-			[]byte(env.Signature),
-			env.Version,
+	case env.Version.Value == 1:
+		disp, pubKey, _ = p.aggregator.applyListInternal(
+			[]byte(env.Manifest.Value),
+			nil,
+			false,
+			[]byte(env.Blob.Value),
+			[]byte(env.Signature.Value),
+			env.Version.Value,
 			uri,
+			true,
 		)
-	default:
-		p.recordFailure(s, false, missingFieldsMessage, missingFieldsMessage, "uri", uri, "version", env.Version)
-		return
 	}
 
 	// Capture time AFTER apply completes — mirrors rippled
@@ -432,31 +558,25 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 	// (ValidatorSite.cpp:484-489).
 	chosenInterval := p.interval
 	refreshSec := 0
-	if refreshMin := int(env.RefreshMinutes); refreshMin > 0 {
+	if refreshMin := int(env.RefreshMinutes.Value); env.RefreshMinutes.Valid && refreshMin > 0 {
 		d := time.Duration(refreshMin) * time.Minute
-		if d < DefaultMinRefresh {
-			d = DefaultMinRefresh
-		} else if d > DefaultMaxRefresh {
-			d = DefaultMaxRefresh
+		if d < defaultMinRefresh {
+			d = defaultMinRefresh
+		} else if d > defaultMaxRefresh {
+			d = defaultMaxRefresh
 		}
 		chosenInterval = d
 		refreshSec = int(d / time.Second)
 	}
 
-	// rippled emits an empty `last_refresh_message` whenever the parse
-	// succeeded — the disposition itself carries the outcome
-	// (ValidatorSite.cpp:430). Stash the disposition string in the
-	// message only for dispositions that indicate the apply rejected
-	// the list (anything not ShouldRelay-eligible).
+	// A successfully parsed response has an empty status message even
+	// when semantic validation rejects the list.
 	lastSuccess := time.Time{}
-	lastErr := ""
 	if disp.ShouldRelay() {
 		lastSuccess = applyTime
-	} else {
-		lastErr = "disposition=" + disp.String()
 	}
 	nextAt := applyTime.Add(chosenInterval)
-	p.aggregator.UpdateSiteState(uri, applyTime, lastSuccess, lastErr, disp, refreshSec, nextAt)
+	p.aggregator.updateSiteStateOccurrence(uri, s.occurrence, applyTime, lastSuccess, "", disp, refreshSec, nextAt)
 
 	p.mu.Lock()
 	s.interval = chosenInterval
@@ -482,11 +602,11 @@ func (p *SitePoller) recordFailure(s *siteState, retry bool, lastErr, logMsg str
 	p.mu.Lock()
 	nextAt := now.Add(s.interval)
 	if retry {
-		nextAt = now.Add(ErrorRetryInterval)
+		nextAt = now.Add(errorRetryInterval)
 	}
 	s.nextRefresh = nextAt
 	p.mu.Unlock()
-	p.aggregator.UpdateSiteState(s.uri, now, time.Time{}, lastErr, Malformed, 0, nextAt)
+	p.aggregator.updateSiteStateOccurrence(s.uri, s.occurrence, now, time.Time{}, lastErr, Malformed, 0, nextAt)
 }
 
 // fetch retrieves the raw envelope body from the given URI. Scheme
@@ -511,12 +631,11 @@ func (p *SitePoller) fetch(ctx context.Context, uri string) ([]byte, error) {
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			return nil, fmt.Errorf("HTTP %d %s", resp.StatusCode, resp.Status)
 		}
-		const maxBody = 8 << 20
-		return io.ReadAll(io.LimitReader(resp.Body, maxBody))
+		return readBoundedBody(resp.Body)
 	case "file":
 		// Host already rejected at construction (see validateSiteURI);
 		// Path already guaranteed non-empty.
-		return os.ReadFile(parsed.Path)
+		return readBoundedFile(parsed.Path)
 	default:
 		return nil, fmt.Errorf("unsupported URI scheme %q", parsed.Scheme)
 	}

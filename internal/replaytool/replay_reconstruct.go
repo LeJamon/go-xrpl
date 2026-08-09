@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"maps"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/statecompare"
+	ledgerentry "github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -28,10 +30,13 @@ func reconstructMainnetState(
 	ctx context.Context,
 	client *statecompare.Client,
 	preState *shamap.SHAMap,
-	ledgerIndex uint32,
-	expectedAccountHash [32]byte,
+	snapshot *statecompare.LedgerSnapshot,
+	rules *amendment.Rules,
 ) (*shamap.SHAMap, bool, error) {
-	txs, err := client.Transactions(ctx, ledgerIndex)
+	if snapshot == nil {
+		return nil, false, errors.New("nil ledger snapshot")
+	}
+	txs, err := client.Transactions(ctx, snapshot)
 	if err != nil {
 		return nil, false, fmt.Errorf("getting transactions: %w", err)
 	}
@@ -40,7 +45,7 @@ func reconstructMainnetState(
 		metas[i] = metaTx{Blob: t.MetaBlob, TxHash: t.TxHash}
 	}
 
-	corrected, err := reconstructFromMeta(preState, metas, ledgerIndex)
+	corrected, err := reconstructFromMetaWithRules(preState, metas, snapshot.LedgerIndex, rules)
 	if err != nil {
 		return nil, false, err
 	}
@@ -49,7 +54,7 @@ func reconstructMainnetState(
 	if err != nil {
 		return nil, false, fmt.Errorf("computing reconstructed root: %w", err)
 	}
-	return corrected, root == expectedAccountHash, nil
+	return corrected, root == snapshot.AccountHash, nil
 }
 
 // metaTx pairs a transaction's metadata blob with its hash. The hash is threaded
@@ -64,7 +69,10 @@ type metaTx struct {
 // copy of preState and returns the resulting state map. metas are in ledger
 // (tx_index) order. A second pass rebuilds directory page contents (sfIndexes),
 // which metadata never carries.
-func reconstructFromMeta(preState *shamap.SHAMap, metas []metaTx, ledgerIndex uint32) (*shamap.SHAMap, error) {
+func reconstructFromMetaWithRules(preState *shamap.SHAMap, metas []metaTx, ledgerIndex uint32, rules *amendment.Rules) (*shamap.SHAMap, error) {
+	if rules == nil {
+		return nil, errors.New("reconstruction requires parent amendment rules")
+	}
 	corrected, err := preState.SnapshotMutable()
 	if err != nil {
 		return nil, fmt.Errorf("snapshotting pre-state: %w", err)
@@ -75,10 +83,11 @@ func reconstructFromMeta(preState *shamap.SHAMap, metas []metaTx, ledgerIndex ui
 	// collected while applying every affected node, then written in a second pass.
 	deltas := map[[32]byte]*dirDelta{}
 	deletedDirs := map[[32]byte]bool{}
+	pendingDirectories := map[[32]byte]struct{}{}
 
 	for i, m := range metas {
 		if len(m.Blob) == 0 {
-			continue
+			return nil, fmt.Errorf("metadata for tx %d is empty", i)
 		}
 		meta, err := binarycodec.Decode(hex.EncodeToString(m.Blob))
 		if err != nil {
@@ -86,11 +95,11 @@ func reconstructFromMeta(preState *shamap.SHAMap, metas []metaTx, ledgerIndex ui
 		}
 		affected, ok := meta["AffectedNodes"].([]any)
 		if !ok {
-			continue
+			return nil, fmt.Errorf("metadata for tx %d has invalid AffectedNodes", i)
 		}
 		brokerAccounts := loanBrokerAccountsFromMeta(affected)
 		for _, node := range affected {
-			if err := applyAffectedNode(corrected, node, m.TxHash, ledgerIndex, deltas, deletedDirs, brokerAccounts); err != nil {
+			if err := applyAffectedNodeWithRules(corrected, node, m.TxHash, ledgerIndex, rules, deltas, deletedDirs, pendingDirectories, brokerAccounts); err != nil {
 				return nil, fmt.Errorf("applying metadata for tx %d: %w", i, err)
 			}
 		}
@@ -98,6 +107,9 @@ func reconstructFromMeta(preState *shamap.SHAMap, metas []metaTx, ledgerIndex ui
 
 	if err := reconstructDirIndexes(corrected, deltas, deletedDirs); err != nil {
 		return nil, fmt.Errorf("reconstructing directory pages: %w", err)
+	}
+	if err := validatePendingDirectories(corrected, pendingDirectories); err != nil {
+		return nil, err
 	}
 	return corrected, nil
 }
@@ -107,87 +119,144 @@ func reconstructFromMeta(preState *shamap.SHAMap, metas []metaTx, ledgerIndex ui
 // with the soeREQUIRED default-zero fields metadata omits; created and modified
 // objects of threaded types are stamped with PreviousTxnID/PreviousTxnLgrSeq.
 // Directory membership changes are accumulated into deltas for the second pass.
-func applyAffectedNode(
+func applyAffectedNodeWithRules(
 	state *shamap.SHAMap,
 	node any,
 	txHash [32]byte,
 	ledgerSeq uint32,
+	rules *amendment.Rules,
 	deltas map[[32]byte]*dirDelta,
 	deletedDirs map[[32]byte]bool,
+	pendingDirectories map[[32]byte]struct{},
 	brokerAccounts map[[32]byte][20]byte,
 ) error {
-	affectedNode, ok := node.(map[string]any)
-	if !ok {
-		return nil
+	kind, fields, err := affectedNodeFields(node)
+	if err != nil {
+		return err
 	}
-	for kind, body := range affectedNode {
-		fields, ok := body.(map[string]any)
-		if !ok {
-			continue
-		}
-		idxHex, _ := fields["LedgerIndex"].(string)
-		idx, err := protocol.Hash256FromHex(idxHex)
+	idxHex, ok := fields["LedgerIndex"].(string)
+	if !ok {
+		return fmt.Errorf("%s has invalid LedgerIndex", kind)
+	}
+	idx, err := protocol.Hash256FromHex(idxHex)
+	if err != nil {
+		return fmt.Errorf("bad LedgerIndex %q: %w", idxHex, err)
+	}
+	entryType, ok := fields["LedgerEntryType"].(string)
+	if !ok || !ledgerentry.HasTypedName(entryType) {
+		return fmt.Errorf("%s %s has invalid LedgerEntryType %v", kind, idxHex, fields["LedgerEntryType"])
+	}
+
+	switch kind {
+	case "DeletedNode":
+		final, err := metadataObject(fields, "FinalFields")
 		if err != nil {
-			return fmt.Errorf("bad LedgerIndex %q: %w", idxHex, err)
+			return err
 		}
-		entryType, _ := fields["LedgerEntryType"].(string)
+		if err := recordMembership(state, deltas, idx, entryType, final, false, brokerAccounts); err != nil {
+			return fmt.Errorf("recording deleted %s membership: %w", idxHex, err)
+		}
+		if entryType == "DirectoryNode" {
+			deletedDirs[idx] = true
+			delete(pendingDirectories, idx)
+		}
+		if err := state.Delete(idx); err != nil {
+			return fmt.Errorf("deleting %s: %w", idxHex, err)
+		}
 
-		switch kind {
-		case "DeletedNode":
-			if err := recordMembership(state, deltas, idx, entryType, asMap(fields["FinalFields"]), false, brokerAccounts); err != nil {
-				return fmt.Errorf("recording deleted %s membership: %w", idxHex, err)
-			}
-			if entryType == "DirectoryNode" {
-				deletedDirs[idx] = true
-			}
-			if err := state.Delete(idx); err != nil && !errors.Is(err, shamap.ErrItemNotFound) {
-				return fmt.Errorf("deleting %s: %w", idxHex, err)
-			}
+	case "CreatedNode":
+		newFields, err := metadataObject(fields, "NewFields")
+		if err != nil {
+			return err
+		}
+		if item, found, err := state.Get(idx); err != nil {
+			return fmt.Errorf("checking created %s: %w", idxHex, err)
+		} else if found && item != nil {
+			return fmt.Errorf("created %s already exists", idxHex)
+		}
+		obj := copyFields(newFields)
+		if let, ok := fields["LedgerEntryType"]; ok {
+			obj["LedgerEntryType"] = let
+		}
+		if entryType == "DirectoryNode" {
+			delete(deletedDirs, idx)
+			pendingDirectories[idx] = struct{}{}
+		}
+		if err := fillCreatedDefaults(obj, entryType); err != nil {
+			return fmt.Errorf("completing created %s: %w", idxHex, err)
+		}
+		if err := fillBookDirectoryDefaults(obj, entryType); err != nil {
+			return fmt.Errorf("completing created %s: %w", idxHex, err)
+		}
+		threadPreviousTxn(obj, entryType, txHash, ledgerSeq, rules)
+		if err := recordMembership(state, deltas, idx, entryType, obj, true, brokerAccounts); err != nil {
+			return fmt.Errorf("recording created %s membership: %w", idxHex, err)
+		}
+		if err := putEncoded(state, idx, obj); err != nil {
+			return fmt.Errorf("creating %s: %w", idxHex, err)
+		}
 
-		case "CreatedNode":
-			obj := copyFields(fields["NewFields"])
-			if let, ok := fields["LedgerEntryType"]; ok {
-				obj["LedgerEntryType"] = let
+	case "ModifiedNode":
+		obj, err := currentObject(state, idx, fields)
+		if err != nil {
+			return fmt.Errorf("reading %s: %w", idxHex, err)
+		}
+		final, err := metadataObject(fields, "FinalFields")
+		if err != nil {
+			return err
+		}
+		previous, err := metadataObject(fields, "PreviousFields")
+		if err != nil {
+			return err
+		}
+		// A field present in PreviousFields but absent from FinalFields
+		// was removed by the transaction.
+		for k := range previous {
+			if _, kept := final[k]; !kept {
+				delete(obj, k)
 			}
-			if entryType == "DirectoryNode" {
-				delete(deletedDirs, idx)
-			}
-			fillCreatedDefaults(obj, entryType)
-			fillBookDirectoryDefaults(obj, entryType)
-			threadPreviousTxn(obj, entryType, txHash, ledgerSeq)
-			if err := recordMembership(state, deltas, idx, entryType, obj, true, brokerAccounts); err != nil {
-				return fmt.Errorf("recording created %s membership: %w", idxHex, err)
-			}
-			if err := putEncoded(state, idx, obj); err != nil {
-				return fmt.Errorf("creating %s: %w", idxHex, err)
-			}
-
-		case "ModifiedNode":
-			obj, err := currentObject(state, idx, fields)
-			if err != nil {
-				return fmt.Errorf("reading %s: %w", idxHex, err)
-			}
-			final := asMap(fields["FinalFields"])
-			previous := asMap(fields["PreviousFields"])
-			// A field present in PreviousFields but absent from FinalFields
-			// was removed by the transaction.
-			for k := range previous {
-				if _, kept := final[k]; !kept {
-					delete(obj, k)
-				}
-			}
-			maps.Copy(obj, final)
-			threadPreviousTxn(obj, entryType, txHash, ledgerSeq)
-			if err := putEncoded(state, idx, obj); err != nil {
-				return fmt.Errorf("modifying %s: %w", idxHex, err)
-			}
+		}
+		maps.Copy(obj, final)
+		threadPreviousTxn(obj, entryType, txHash, ledgerSeq, rules)
+		if err := putEncoded(state, idx, obj); err != nil {
+			return fmt.Errorf("modifying %s: %w", idxHex, err)
 		}
 	}
 	return nil
 }
 
-// currentObject returns the decoded object at idx, or an empty object carrying
-// the AffectedNode's LedgerEntryType when the entry is not yet present.
+func affectedNodeFields(node any) (string, map[string]any, error) {
+	affectedNode, ok := node.(map[string]any)
+	if !ok || len(affectedNode) != 1 {
+		return "", nil, errors.New("affected node must contain exactly one node wrapper")
+	}
+	for kind, body := range affectedNode {
+		switch kind {
+		case "CreatedNode", "ModifiedNode", "DeletedNode":
+		default:
+			return "", nil, fmt.Errorf("unknown affected node wrapper %q", kind)
+		}
+		fields, ok := body.(map[string]any)
+		if !ok {
+			return "", nil, fmt.Errorf("%s body is not an object", kind)
+		}
+		return kind, fields, nil
+	}
+	panic("unreachable")
+}
+
+func metadataObject(fields map[string]any, name string) (map[string]any, error) {
+	v, present := fields[name]
+	if !present {
+		return map[string]any{}, nil
+	}
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s is not an object", name)
+	}
+	return obj, nil
+}
+
 func currentObject(state *shamap.SHAMap, idx [32]byte, fields map[string]any) (map[string]any, error) {
 	item, found, err := state.Get(idx)
 	if err != nil {
@@ -200,11 +269,7 @@ func currentObject(state *shamap.SHAMap, idx [32]byte, fields map[string]any) (m
 		}
 		return decoded, nil
 	}
-	obj := map[string]any{}
-	if let, ok := fields["LedgerEntryType"]; ok {
-		obj["LedgerEntryType"] = let
-	}
-	return obj, nil
+	return nil, shamap.ErrItemNotFound
 }
 
 // putEncoded encodes obj to canonical SLE bytes and stores it at idx.
@@ -217,31 +282,99 @@ func putEncoded(state *shamap.SHAMap, idx [32]byte, obj map[string]any) error {
 	if err != nil {
 		return fmt.Errorf("decoding encoded hex: %w", err)
 	}
+	if obj["LedgerEntryType"] != "DirectoryNode" || obj["Indexes"] != nil {
+		if err := validateEncodedEntry(obj, raw); err != nil {
+			return err
+		}
+	}
 	return state.Put(idx, raw)
+}
+
+func validateEncodedEntry(obj map[string]any, raw []byte) error {
+	entryType, ok := obj["LedgerEntryType"].(string)
+	if !ok {
+		return errors.New("encoded object has invalid LedgerEntryType")
+	}
+	entry := ledgerentry.NewByName(entryType)
+	if entry == nil {
+		return fmt.Errorf("encoded object has unknown LedgerEntryType %q", entryType)
+	}
+	if err := entry.Decode(raw); err != nil {
+		return fmt.Errorf("validating %s object: %w", entryType, err)
+	}
+	return nil
+}
+
+func validatePendingDirectories(state *shamap.SHAMap, pending map[[32]byte]struct{}) error {
+	for key := range pending {
+		item, found, err := state.Get(key)
+		if err != nil {
+			return fmt.Errorf("reading reconstructed directory %x: %w", key, err)
+		}
+		if !found || item == nil {
+			return fmt.Errorf("reconstructed directory %x is missing", key)
+		}
+		obj, err := binarycodec.DecodeBytes(item.Data())
+		if err != nil {
+			return fmt.Errorf("decoding reconstructed directory %x: %w", key, err)
+		}
+		if err := validateEncodedEntry(obj, item.Data()); err != nil {
+			return fmt.Errorf("reconstructed directory %x: %w", key, err)
+		}
+	}
+	return nil
 }
 
 // divergingObjects returns the objects that differ between goXRPL's post-state
 // and mainnet's reconstructed post-state, with both serialized sides and a
 // decoded view for readability.
+const (
+	maxDiagnosticObjects = 1000
+	maxDiagnosticBytes   = 16 << 20
+)
+
 func divergingObjects(goxrpl, mainnet *shamap.SHAMap) ([]divergingObject, error) {
-	keys, err := goxrpl.FindDifference(mainnet)
+	objects, _, err := divergingObjectsContext(context.Background(), goxrpl, mainnet)
+	return objects, err
+}
+
+func divergingObjectsContext(ctx context.Context, goxrpl, mainnet *shamap.SHAMap) ([]divergingObject, bool, error) {
+	return divergingObjectsContextBounded(ctx, goxrpl, mainnet, maxDiagnosticBytes)
+}
+
+func divergingObjectsContextBounded(ctx context.Context, goxrpl, mainnet *shamap.SHAMap, maxBytes int) ([]divergingObject, bool, error) {
+	differences, err := goxrpl.CompareContext(ctx, mainnet, maxDiagnosticObjects)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	out := make([]divergingObject, 0, len(keys))
-	for _, key := range keys {
-		obj := divergingObject{Index: hex.EncodeToString(key[:])}
-		if item, found, err := goxrpl.Get(key); err == nil && found && item != nil {
-			obj.GoXRPL = hex.EncodeToString(item.Data())
+	out := make([]divergingObject, 0, differences.Len())
+	used := 0
+	for _, difference := range differences.Differences {
+		size := 0
+		if difference.FirstItem != nil {
+			size += difference.FirstItem.DataSize()
+		}
+		if difference.SecondItem != nil {
+			size += difference.SecondItem.DataSize()
+		}
+		if size > maxBytes-used {
+			return out, false, nil
+		}
+		used += size
+		obj := divergingObject{Index: hex.EncodeToString(difference.Key[:])}
+		if difference.FirstItem != nil {
+			data := difference.FirstItem.Data()
+			obj.GoXRPL = hex.EncodeToString(data)
 			obj.GoXRPLDecoded = decodeEntryData(obj.GoXRPL)
 		}
-		if item, found, err := mainnet.Get(key); err == nil && found && item != nil {
-			obj.Mainnet = hex.EncodeToString(item.Data())
+		if difference.SecondItem != nil {
+			data := difference.SecondItem.Data()
+			obj.Mainnet = hex.EncodeToString(data)
 			obj.MainnetDecoded = decodeEntryData(obj.Mainnet)
 		}
 		out = append(out, obj)
 	}
-	return out, nil
+	return out, differences.Complete, nil
 }
 
 // asMap returns v as a map[string]any, or an empty map when v is absent.

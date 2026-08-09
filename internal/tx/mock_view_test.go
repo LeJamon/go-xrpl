@@ -41,9 +41,9 @@ func (m *mockBaseView) Erase(k keylet.Keylet) error {
 	return nil
 }
 
-func (m *mockBaseView) AdjustDropsDestroyed(drops.XRPAmount) {}
+func (m *mockBaseView) AdjustDropsDestroyed(drops.XRPAmount) error { return nil }
 
-func (m *mockBaseView) TxExists([32]byte) bool { return false }
+func (m *mockBaseView) TxExists([32]byte) (bool, error) { return false, nil }
 
 func (m *mockBaseView) Rules() *amendment.Rules { return nil }
 

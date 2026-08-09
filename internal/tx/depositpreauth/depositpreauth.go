@@ -3,6 +3,7 @@ package depositpreauth
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"sort"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -82,7 +83,7 @@ func (d *DepositPreauth) RequiredAmendments() [][32]byte {
 // checkExtraFeatures, before preflight1's common checks and before the
 // temARRAY_EMPTY body check.
 func (d *DepositPreauth) CheckExtraFeatures(rules *amendment.Rules) error {
-	if (d.AuthorizeCredentials != nil || d.UnauthorizeCredentials != nil) &&
+	if (d.hasAuthorizeCredentials() || d.hasUnauthorizeCredentials()) &&
 		!rules.Enabled(amendment.FeatureCredentials) {
 		return ter.Errorf(ter.TemDISABLED, "credentials require the Credentials amendment")
 	}
@@ -105,12 +106,11 @@ func (d *DepositPreauth) Validate() error {
 	}
 
 	// Count which fields are present.
-	// Use nil check (not len>0) because an empty non-nil array means the field
-	// IS present, just empty — which is still a presence for mutual exclusivity.
+	// Empty arrays are still present for mutual exclusivity.
 	hasAuth := d.Authorize != ""
 	hasUnauth := d.Unauthorize != ""
-	hasAuthCreds := d.AuthorizeCredentials != nil
-	hasUnauthCreds := d.UnauthorizeCredentials != nil
+	hasAuthCreds := d.hasAuthorizeCredentials()
+	hasUnauthCreds := d.hasUnauthorizeCredentials()
 
 	authPresent := boolToInt(hasAuth) + boolToInt(hasUnauth)
 	authCredPresent := boolToInt(hasAuthCreds) + boolToInt(hasUnauthCreds)
@@ -198,7 +198,25 @@ func checkCredentialArray(creds []CredentialWrapper) error {
 }
 
 func (d *DepositPreauth) Flatten() (map[string]any, error) {
-	return tx.ReflectFlatten(d)
+	fields, err := tx.ReflectFlatten(d)
+	if err != nil {
+		return nil, err
+	}
+	if len(d.AuthorizeCredentials) == 0 && d.hasAuthorizeCredentials() {
+		fields["AuthorizeCredentials"] = []map[string]any{}
+	}
+	if len(d.UnauthorizeCredentials) == 0 && d.hasUnauthorizeCredentials() {
+		fields["UnauthorizeCredentials"] = []map[string]any{}
+	}
+	return fields, nil
+}
+
+func (d *DepositPreauth) hasAuthorizeCredentials() bool {
+	return d.AuthorizeCredentials != nil || d.Common.HasField("AuthorizeCredentials")
+}
+
+func (d *DepositPreauth) hasUnauthorizeCredentials() bool {
+	return d.UnauthorizeCredentials != nil || d.Common.HasField("UnauthorizeCredentials")
 }
 
 // SetAuthorize sets the account to authorize
@@ -289,10 +307,18 @@ func (d *DepositPreauth) Preclaim(view tx.LedgerView, config tx.EngineConfig) te
 		if derr != nil {
 			return ter.TemINVALID
 		}
-		if exists, _ := view.Exists(keylet.Account(authorizedID)); !exists {
+		exists, err := view.Exists(keylet.Account(authorizedID))
+		if err != nil {
+			return ter.TefEXCEPTION
+		}
+		if !exists {
 			return ter.TecNO_TARGET
 		}
-		if exists, _ := view.Exists(keylet.DepositPreauth(accountID, authorizedID)); exists {
+		exists, err = view.Exists(keylet.DepositPreauth(accountID, authorizedID))
+		if err != nil {
+			return ter.TefEXCEPTION
+		}
+		if exists {
 			return ter.TecDUPLICATE
 		}
 	case d.Unauthorize != "":
@@ -300,7 +326,11 @@ func (d *DepositPreauth) Preclaim(view tx.LedgerView, config tx.EngineConfig) te
 		if derr != nil {
 			return ter.TemINVALID
 		}
-		if exists, _ := view.Exists(keylet.DepositPreauth(accountID, unauthorizedID)); !exists {
+		exists, err := view.Exists(keylet.DepositPreauth(accountID, unauthorizedID))
+		if err != nil {
+			return ter.TefEXCEPTION
+		}
+		if !exists {
 			return ter.TecNO_ENTRY
 		}
 	case len(d.AuthorizeCredentials) > 0:
@@ -309,11 +339,19 @@ func (d *DepositPreauth) Preclaim(view tx.LedgerView, config tx.EngineConfig) te
 			return ter.TefINTERNAL
 		}
 		for _, p := range sorted {
-			if exists, _ := view.Exists(keylet.Account(p.issuer)); !exists {
+			exists, err := view.Exists(keylet.Account(p.issuer))
+			if err != nil {
+				return ter.TefEXCEPTION
+			}
+			if !exists {
 				return ter.TecNO_ISSUER
 			}
 		}
-		if exists, _ := view.Exists(keylet.DepositPreauthCredentials(accountID, toKeyletPairs(sorted))); exists {
+		exists, err := view.Exists(keylet.DepositPreauthCredentials(accountID, toKeyletPairs(sorted)))
+		if err != nil {
+			return ter.TefEXCEPTION
+		}
+		if exists {
 			return ter.TecDUPLICATE
 		}
 	case len(d.UnauthorizeCredentials) > 0:
@@ -321,7 +359,11 @@ func (d *DepositPreauth) Preclaim(view tx.LedgerView, config tx.EngineConfig) te
 		if sorted == nil {
 			return ter.TefINTERNAL
 		}
-		if exists, _ := view.Exists(keylet.DepositPreauthCredentials(accountID, toKeyletPairs(sorted))); !exists {
+		exists, err := view.Exists(keylet.DepositPreauthCredentials(accountID, toKeyletPairs(sorted)))
+		if err != nil {
+			return ter.TefEXCEPTION
+		}
+		if !exists {
 			return ter.TecNO_ENTRY
 		}
 	}
@@ -375,8 +417,10 @@ func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) ter.Result {
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {
-		ctx.Log.Error("deposit preauth authorize: directory full", "error", err)
-		return ter.TecDIR_FULL
+		if errors.Is(err, state.ErrDirFull) {
+			return ter.TecDIR_FULL
+		}
+		return ctx.Internal("DepositPreauth.Authorize.DirInsert", err)
 	}
 
 	// --- doApply: create and insert preauth entry ---
@@ -391,7 +435,7 @@ func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	ctx.Account.OwnerCount++
+	ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, 1)
 	return ter.TesSUCCESS
 }
 
@@ -430,8 +474,10 @@ func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) ter.Res
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {
-		ctx.Log.Error("deposit preauth authorize credentials: directory full", "error", err)
-		return ter.TecDIR_FULL
+		if errors.Is(err, state.ErrDirFull) {
+			return ter.TecDIR_FULL
+		}
+		return ctx.Internal("DepositPreauth.AuthorizeCredentials.DirInsert", err)
 	}
 
 	// --- doApply: create and insert preauth entry with sorted credentials ---
@@ -459,7 +505,7 @@ func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) ter.Res
 		return ter.TefINTERNAL
 	}
 
-	ctx.Account.OwnerCount++
+	ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, 1)
 	return ter.TesSUCCESS
 }
 
@@ -481,21 +527,32 @@ func (d *DepositPreauth) applyUnauthorizeCredentials(ctx *tx.ApplyContext) ter.R
 func removeFromLedger(ctx *tx.ApplyContext, preauthKey keylet.Keylet) ter.Result {
 	// Read the preauth entry to get OwnerNode for directory removal
 	preauthData, err := ctx.View.Read(preauthKey)
-	if err != nil || preauthData == nil {
+	if err != nil {
+		return ctx.Internal("DepositPreauth.Remove.Read", err)
+	}
+	if preauthData == nil {
 		ctx.Log.Warn("deposit preauth remove: entry not found in ledger")
 		return ter.TecNO_ENTRY
 	}
 
-	// Parse OwnerNode from the binary entry
-	var ownerNode uint64
 	entry, err := state.ParseDepositPreauth(preauthData)
-	if err == nil && entry != nil {
-		ownerNode = entry.OwnerNode
+	if err != nil || entry == nil {
+		ctx.Log.Error("deposit preauth remove: malformed ledger entry", "error", err)
+		return ter.TefEXCEPTION
 	}
-	// If parsing fails, default to page 0 which handles the common case
+	if entry.Account != ctx.AccountID {
+		ctx.Log.Error("deposit preauth remove: ledger entry owner mismatch")
+		return ter.TefBAD_LEDGER
+	}
+	if ctx.Account == nil {
+		return ctx.Internal("DepositPreauth.Remove.Owner", errors.New("owner account missing"))
+	}
+	if ctx.Account.OwnerCount == 0 {
+		ctx.Log.Error("deposit preauth remove: owner count underflow")
+	}
 
-	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	res, err := state.DirRemove(ctx.View, ownerDirKey, ownerNode, preauthKey.Key, false)
+	ownerDirKey := keylet.OwnerDir(entry.Account)
+	res, err := state.DirRemove(ctx.View, ownerDirKey, entry.OwnerNode, preauthKey.Key, false)
 	if err != nil || !res.Success {
 		ctx.Log.Error("deposit preauth remove: failed to remove from owner directory", "error", err)
 		return ter.TefBAD_LEDGER
@@ -507,9 +564,7 @@ func removeFromLedger(ctx *tx.ApplyContext, preauthKey keylet.Keylet) ter.Result
 		return ter.TefINTERNAL
 	}
 
-	if ctx.Account.OwnerCount > 0 {
-		ctx.Account.OwnerCount--
-	}
+	ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, -1)
 
 	return ter.TesSUCCESS
 }

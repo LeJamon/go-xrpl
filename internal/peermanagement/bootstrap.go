@@ -4,6 +4,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 const (
@@ -14,7 +16,7 @@ const (
 )
 
 type bootstrapFrameProgress struct {
-	messageType MessageType
+	messageType message.MessageType
 	wireSize    uint32
 	compressed  bool
 	bytesRead   uint64
@@ -105,7 +107,7 @@ func (l *bootstrapLease) release() {
 }
 
 func (l *bootstrapLease) observeProgress(progress bootstrapFrameProgress) bootstrapProgressObservation {
-	if l == nil || progress.messageType != TypeManifests ||
+	if l == nil || progress.messageType != message.TypeManifests ||
 		progress.bytesRead == 0 || progress.elapsed < bootstrapSampleAge {
 		return bootstrapProgressObservation{}
 	}

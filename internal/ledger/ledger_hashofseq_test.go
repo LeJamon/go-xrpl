@@ -17,7 +17,10 @@ func TestLedger_HashOfSeq(t *testing.T) {
 		t.Fatalf("genesis.Create: %v", err)
 	}
 
-	parent := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	parent, err := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("FromGenesis: %v", err)
+	}
 	hashes := map[uint32][32]byte{parent.Sequence(): parent.Hash()}
 
 	const target = uint32(10)
@@ -76,7 +79,10 @@ func TestLedger_HashOfSeq_DeepSkipList(t *testing.T) {
 		t.Fatalf("genesis.Create: %v", err)
 	}
 
-	parent := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	parent, err := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("FromGenesis: %v", err)
+	}
 	hashes := map[uint32][32]byte{parent.Sequence(): parent.Hash()}
 
 	// Build past two 256 boundaries so seqs 256 and 512 are both behind the

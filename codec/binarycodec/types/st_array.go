@@ -4,6 +4,7 @@ package types
 import (
 	"errors"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
@@ -43,9 +44,28 @@ func (t *STArray) FromJSON(json any) ([]byte, error) {
 
 	var sink []byte
 	for _, v := range elems {
+		object, ok := v.(map[string]any)
+		if !ok || len(object) != 1 {
+			return nil, ErrNotSTObjectInSTArray
+		}
+		var fieldName string
+		var fieldValue any
+		for fieldName, fieldValue = range object {
+		}
+		field, err := definitions.Get().FieldInstanceByName(fieldName)
+		if err != nil || field.Type != "STObject" {
+			return nil, ErrNotSTObjectInSTArray
+		}
+		inner, ok := fieldValue.(map[string]any)
+		if fieldValue == nil || (ok && inner == nil) {
+			inner = map[string]any{}
+		} else if !ok {
+			return nil, ErrNotSTObjectInSTArray
+		}
+		object = map[string]any{fieldName: inner}
 		st := NewSTObject(serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()))
 		st.skipJSONArrayLimit = t.skipJSONArrayLimit
-		b, err := st.FromJSON(v)
+		b, err := st.FromJSON(object)
 		if err != nil {
 			return nil, err
 		}
@@ -84,6 +104,9 @@ func (t *STArray) ToJSON(p *serdes.BinaryParser, opts ...int) (any, error) {
 		if fi.FieldName == "ArrayEndMarker" {
 			break
 		}
+		if fi.FieldName == "ObjectEndMarker" {
+			return nil, errIllegalObjectEndMarker
+		}
 
 		// All array elements must be STObjects
 		if fi.Type != "STObject" {
@@ -97,9 +120,12 @@ func (t *STArray) ToJSON(p *serdes.BinaryParser, opts ...int) (any, error) {
 			return nil, errMaxNestingDepth
 		}
 
-		st := SerializedTypeFor(fi.Type)
-		res, err := st.ToJSON(p, childDepth)
+		st := NewSTObject(serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()))
+		res, fieldOrder, _, err := st.toJSON(p, childDepth)
 		if err != nil {
+			return nil, err
+		}
+		if err := validateInnerObject(fi.FieldName, res, fieldOrder); err != nil {
 			return nil, err
 		}
 

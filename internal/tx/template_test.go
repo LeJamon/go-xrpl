@@ -80,6 +80,12 @@ func TestParseFromBinary_DisallowedField(t *testing.T) {
 			disallowedKey: "Destination",
 			disallowedVal: testDestination,
 		},
+		{
+			name:          "Clawback carrying top-level MPTokenIssuanceID",
+			txType:        "Clawback",
+			disallowedKey: "MPTokenIssuanceID",
+			disallowedVal: "000000000000000000000001000000000000000000000001",
+		},
 	}
 
 	for _, tc := range cases {
@@ -101,6 +107,62 @@ func TestParseFromBinary_DisallowedField(t *testing.T) {
 				t.Fatalf("expected TemMALFORMED, got %v: %v", re.Code, err)
 			}
 		})
+	}
+}
+
+func TestParseJSON_ClawbackDisallowedField(t *testing.T) {
+	_, err := ParseJSON([]byte(`{
+		"TransactionType":"Clawback",
+		"Account":"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Amount":{"value":"100","mpt_issuance_id":"000000000000000000000001000000000000000000000001"},
+		"Holder":"rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+		"MPTokenIssuanceID":"000000000000000000000001000000000000000000000001"
+	}`))
+	if err == nil {
+		t.Fatal("expected JSON parse to reject Clawback carrying MPTokenIssuanceID")
+	}
+	re, ok := ter.AsResultError(err)
+	if !ok {
+		t.Fatalf("expected a ResultError, got %T: %v", err, err)
+	}
+	if re.Code != ter.TemMALFORMED {
+		t.Fatalf("expected TemMALFORMED, got %v: %v", re.Code, err)
+	}
+}
+
+func TestParseFromBinary_MissingRequiredField(t *testing.T) {
+	fields := baseCommon("Payment")
+	fields["Amount"] = "1000000"
+
+	_, err := ParseFromBinary(encodeTx(t, fields))
+	if err == nil {
+		t.Fatal("expected parse to reject Payment without Destination")
+	}
+	re, ok := ter.AsResultError(err)
+	if !ok {
+		t.Fatalf("expected a ResultError, got %T: %v", err, err)
+	}
+	if re.Code != ter.TemMALFORMED {
+		t.Fatalf("expected TemMALFORMED, got %v: %v", re.Code, err)
+	}
+}
+
+func TestParseFromBinary_RejectsInvalidLength(t *testing.T) {
+	for _, blob := range [][]byte{
+		make([]byte, 31),
+		make([]byte, (1<<20)+1),
+	} {
+		_, err := ParseFromBinary(blob)
+		if err == nil {
+			t.Fatalf("expected parse to reject %d-byte transaction", len(blob))
+		}
+		re, ok := ter.AsResultError(err)
+		if !ok {
+			t.Fatalf("expected a ResultError, got %T: %v", err, err)
+		}
+		if re.Code != ter.TemMALFORMED {
+			t.Fatalf("expected TemMALFORMED, got %v: %v", re.Code, err)
+		}
 	}
 }
 

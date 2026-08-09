@@ -4,6 +4,7 @@ package rcl
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -14,9 +15,26 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
+var (
+	errLedgerAcceptInProgress = errors.New("rcl: ledger acceptance in progress")
+	errNoLastClosedLedger     = errors.New("rcl: adaptor reported no last closed ledger")
+)
+
+type roundState struct {
+	Round          consensus.RoundID
+	CloseTimes     consensus.CloseTimes
+	OurPosition    *consensus.Proposal
+	StartTime      time.Time
+	PhaseStart     time.Time
+	HaveCorrectLCL bool
+}
+
 // Engine implements the RCL consensus algorithm.
 type Engine struct {
-	mu sync.RWMutex
+	lifecycleMu sync.Mutex
+	started     bool
+	stopped     bool
+	mu          sync.RWMutex
 
 	// Configuration
 	timing     consensus.Timing
@@ -30,8 +48,9 @@ type Engine struct {
 	// validation extensions, resolved once at construction. Nil when the
 	// adaptor doesn't implement them: nothing is listed, only trusted
 	// validations relay.
-	listedOracle consensus.ListedOracle
-	relayPolicy  consensus.ValidationRelayPolicy
+	listedOracle   consensus.ListedOracle
+	relayPolicy    consensus.ValidationRelayPolicy
+	acceptDeferrer consensus.LedgerAcceptDeferrer
 
 	// Current state
 	mode  consensus.Mode
@@ -52,8 +71,14 @@ type Engine struct {
 	// independent of sync state: observing validators may emit partial
 	// validations. Written at round start under e.mu and read lock-free by RPC.
 	validating atomic.Bool
-	state      *consensus.RoundState
+	state      *roundState
 	prevLedger consensus.Ledger
+	// acceptedLCL records the adaptor's accepted ledger while consensus is
+	// intentionally working from a different validation-preferred ledger.
+	acceptedLCL consensus.LedgerID
+	// roundCloseResolution is derived from prevLedger at round start. It must
+	// not follow the adaptor's accepted LCL during a preferred-ledger switch.
+	roundCloseResolution time.Duration
 
 	// buildInProgress is set while acceptLedger applies the LCL off e.mu
 	// (rippled's jtACCEPT job window). While set, round-driving (timerEntry,
@@ -63,8 +88,7 @@ type Engine struct {
 	buildingLedgerSeq     atomic.Uint32
 	pendingRecoveryLedger consensus.Ledger
 
-	ourTxSet  consensus.TxSet
-	converged bool
+	ourTxSet consensus.TxSet
 
 	// censorship tracks txs we propose but that never get included, warning
 	// on persistent exclusion. Observational only; touched solely from the
@@ -72,18 +96,19 @@ type Engine struct {
 	censorship censorshipDetector
 
 	// proposalTracker owns the round-scoped peer-signal maps. Accessed only
-	// under e.mu (see ProposalTracker).
-	proposalTracker *ProposalTracker
+	// under e.mu (see proposalTracker).
+	proposalTracker *proposalTracker
 
 	// validationTracker accumulates trusted validations across ledgers and
 	// fires the fully-validated callback at quorum, driving
 	// server_info.validated_ledger forward.
-	validationTracker *ValidationTracker
+	validationTracker  *ValidationTracker
+	validationConfigMu sync.Mutex
 
 	// disputeTracker owns the per-tx DisputedTx entries and per-peer vote
 	// map. Written by createDisputesAgainst / OnProposal / OnTxSet /
 	// UpdateOurPositions, read during checkConvergence.
-	disputeTracker *DisputeTracker
+	disputeTracker *disputeTracker
 
 	// acquiredTxSets caches peer tx sets in memory by TxSetID, populated by
 	// our BuildTxSet output and OnTxSet. Dispute wiring reads it to learn
@@ -109,9 +134,11 @@ type Engine struct {
 	heartbeat *time.Ticker
 
 	// Lifecycle
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	done     chan error
+	doneOnce sync.Once
 
 	// now is the wall-clock source for round/phase DURATION metrics
 	// (time.Now in prod, a csf virtual clock under simulation). Distinct
@@ -179,7 +206,6 @@ type Engine struct {
 	ourLastValidatedTime time.Time
 
 	// Stats
-	roundCount     uint64
 	consensusCount uint64
 
 	// archive persists stale validations dropped by the tracker (optional;
@@ -228,7 +254,62 @@ type Engine struct {
 	// startup UNL and skips OnUNLChange, so the startup UNL is not reported
 	// as `added`. Mutated under e.mu.
 	previousTrustedSeeded bool
+
+	// trustMu protects the callback-side trust snapshot and deferred proposal
+	// purges. Trust-change callbacks deliberately do not take e.mu because a
+	// refresh can publish while consensus already holds it; the next engine
+	// critical section applies the queued purges before replay/tally use.
+	trustMu            sync.Mutex
+	trustedSnapshot    map[consensus.NodeID]struct{}
+	pendingTrustPurge  map[consensus.NodeID]struct{}
+	trustSnapshotReady bool
 }
+
+type validationConfigProvider interface {
+	GetValidationConfig() ([]consensus.NodeID, int, []consensus.NodeID)
+}
+
+type validationConfigChangeNotifier interface {
+	OnValidationConfigChanged(func())
+}
+
+func validationConfig(adaptor consensus.Adaptor) ([]consensus.NodeID, int, []consensus.NodeID) {
+	if provider, ok := adaptor.(validationConfigProvider); ok {
+		return provider.GetValidationConfig()
+	}
+	trusted, quorum := adaptor.GetTrustedValidatorsAndQuorum()
+	return trusted, quorum, adaptor.GetNegativeUNL()
+}
+
+func (e *Engine) setValidationConfig(trusted []consensus.NodeID, quorum int, negativeUNL []consensus.NodeID) {
+	e.validationConfigMu.Lock()
+	tracker := e.validationTracker
+	if tracker != nil {
+		tracker.updateTrustedQuorumAndNegativeUNL(trusted, quorum, negativeUNL)
+	}
+	e.validationConfigMu.Unlock()
+	if tracker != nil {
+		tracker.drainFinality()
+		tracker.checkAcquired()
+	}
+}
+
+func (e *Engine) refreshValidationConfig() int {
+	e.validationConfigMu.Lock()
+	tracker := e.validationTracker
+	if tracker == nil {
+		e.validationConfigMu.Unlock()
+		return 0
+	}
+	trusted, quorum, negativeUNL := validationConfig(e.adaptor)
+	tracker.updateTrustedQuorumAndNegativeUNL(trusted, quorum, negativeUNL)
+	e.validationConfigMu.Unlock()
+	tracker.drainFinality()
+	tracker.checkAcquired()
+	return quorum
+}
+
+var _ consensus.EngineTerminal = (*Engine)(nil)
 
 // ValidationArchive is the archive API subset the engine consumes,
 // decoupling rcl from the concrete archive type.
@@ -351,29 +432,125 @@ func DefaultConfig() Config {
 
 func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 	e := &Engine{
-		timing:          config.Timing,
-		thresholds:      config.Thresholds,
-		adaptor:         adaptor,
-		eventBus:        consensus.NewEventBus(100),
-		mode:            consensus.ModeObserving,
-		phase:           consensus.PhaseAccepted,
-		proposalTracker: NewProposalTracker(),
-		closeTime:       newCloseTimeTracker(),
-		disputeTracker:  NewDisputeTracker(),
-		acquiredTxSets:  make(map[consensus.TxSetID]consensus.TxSet),
-		comparesTxSets:  make(map[consensus.TxSetID]struct{}),
-		parms:           consensus.DefaultConsensusParms(),
-		now:             config.Clock,
-		manualTick:      config.ManualTick,
-		firstRound:      true,
+		timing:            config.Timing,
+		thresholds:        config.Thresholds,
+		adaptor:           adaptor,
+		eventBus:          consensus.NewEventBus(100),
+		mode:              consensus.ModeObserving,
+		phase:             consensus.PhaseAccepted,
+		proposalTracker:   newProposalTracker(),
+		closeTime:         newCloseTimeTracker(),
+		disputeTracker:    newDisputeTracker(),
+		acquiredTxSets:    make(map[consensus.TxSetID]consensus.TxSet),
+		comparesTxSets:    make(map[consensus.TxSetID]struct{}),
+		parms:             consensus.DefaultConsensusParms(),
+		now:               config.Clock,
+		manualTick:        config.ManualTick,
+		firstRound:        true,
+		trustedSnapshot:   make(map[consensus.NodeID]struct{}),
+		pendingTrustPurge: make(map[consensus.NodeID]struct{}),
 	}
 	if e.now == nil {
 		e.now = time.Now
 	}
 	e.listedOracle, _ = adaptor.(consensus.ListedOracle)
 	e.relayPolicy, _ = adaptor.(consensus.ValidationRelayPolicy)
+	e.acceptDeferrer, _ = adaptor.(consensus.LedgerAcceptDeferrer)
 	e.modeAtomic.Store(int32(e.mode))
 	return e
+}
+
+// recordTrustTransition records validators removed from the live trusted set
+// without taking e.mu. Applying the purge is deferred until an engine critical
+// section so callback delivery cannot deadlock round driving.
+func (e *Engine) recordTrustTransition(trusted []consensus.NodeID) {
+	current := make(map[consensus.NodeID]struct{}, len(trusted))
+	for _, nodeID := range trusted {
+		current[nodeID] = struct{}{}
+	}
+
+	e.trustMu.Lock()
+	for nodeID := range e.trustedSnapshot {
+		if _, stillTrusted := current[nodeID]; !stillTrusted {
+			e.pendingTrustPurge[nodeID] = struct{}{}
+		}
+	}
+	e.trustedSnapshot = current
+	e.trustMu.Unlock()
+}
+
+// purgePendingTrustLocked applies callback-observed trust removals to both
+// proposal buffers and dispute votes. Caller holds e.mu.
+func (e *Engine) purgePendingTrustLocked() {
+	e.trustMu.Lock()
+	pending := make([]consensus.NodeID, 0, len(e.pendingTrustPurge))
+	for nodeID := range e.pendingTrustPurge {
+		pending = append(pending, nodeID)
+	}
+	clear(e.pendingTrustPurge)
+	e.trustMu.Unlock()
+
+	for _, nodeID := range pending {
+		e.proposalTracker.PurgeNode(nodeID)
+		if e.disputeTracker != nil {
+			e.disputeTracker.UnVote(nodeID)
+		}
+	}
+}
+
+// appendReplayCloseTimesLocked records replayed initial votes that still belong
+// to the callback-linearized trusted set. An initial vote remains eligible
+// after a later seqLeave removes the node's final current position. Caller
+// holds e.mu.
+func (e *Engine) appendReplayCloseTimesLocked(votes []ReplayCloseTime) {
+	if e.state == nil {
+		return
+	}
+	e.purgePendingTrustLocked()
+	e.trustMu.Lock()
+	if e.trustSnapshotReady {
+		defer e.trustMu.Unlock()
+		for _, vote := range votes {
+			if _, pending := e.pendingTrustPurge[vote.NodeID]; pending {
+				continue
+			}
+			if _, trusted := e.trustedSnapshot[vote.NodeID]; !trusted {
+				continue
+			}
+			e.state.CloseTimes.Peers[vote.CloseTime]++
+		}
+		return
+	}
+	e.trustMu.Unlock()
+	trusted := e.trustedPredicate()
+	for _, vote := range votes {
+		if !trusted(vote.NodeID) {
+			continue
+		}
+		e.state.CloseTimes.Peers[vote.CloseTime]++
+	}
+}
+
+// trustedPredicate returns one callback-linearized trust view for a
+// multi-node decision. Production adaptors install the immutable snapshot
+// before invoking the callback; copying it here prevents a trust transition
+// between two entries in one tally from producing a mixed-epoch result.
+// Adaptors without TrustChangeNotifier retain their direct predicate.
+func (e *Engine) trustedPredicate() func(consensus.NodeID) bool {
+	e.trustMu.Lock()
+	if !e.trustSnapshotReady {
+		e.trustMu.Unlock()
+		return e.adaptor.IsTrusted
+	}
+	snapshot := make(map[consensus.NodeID]struct{}, len(e.trustedSnapshot))
+	for nodeID := range e.trustedSnapshot {
+		snapshot[nodeID] = struct{}{}
+	}
+	e.trustMu.Unlock()
+	return func(nodeID consensus.NodeID) bool {
+		_, trusted := snapshot[nodeID]
+		return trusted
+	}
 }
 
 // TimerEntry runs one heartbeat dispatch synchronously. For ManualTick
@@ -384,8 +561,8 @@ func (e *Engine) TimerEntry() {
 
 // SetArchive wires (or, with nil, detaches) the validation archive.
 // Detach clears the onStale callback so the archive can be Close()d
-// without a use-after-close send. Safe before/after Start and with Stop,
-// not with Start.
+// without a use-after-close send. Safe before or after Start; callers must
+// not replace the owned archive concurrently with Start or Stop.
 func (e *Engine) SetArchive(a ValidationArchive) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -434,24 +611,44 @@ func (e *Engine) SetStallPing(ping func()) {
 }
 
 func (e *Engine) Start(ctx context.Context) error {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	if e.stopped {
+		return fmt.Errorf("start engine: %w", consensus.ErrEventBusStopped)
+	}
+	if e.started {
+		return fmt.Errorf("start engine: %w", consensus.ErrEventBusStarted)
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
-
-	e.ctx, e.cancel = context.WithCancel(ctx)
-	e.eventBus.Start()
 
 	ledger, err := e.adaptor.GetLastClosedLedger()
 	if err != nil {
 		return fmt.Errorf("failed to get last closed ledger: %w", err)
 	}
+	if err := e.eventBus.Start(); err != nil {
+		return fmt.Errorf("start event bus: %w", err)
+	}
+	e.started = true
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	e.ctx, e.cancel = context.WithCancel(ctx)
+	e.done = make(chan error, 1)
 	e.prevLedger = ledger
 
-	// Wire the validation tracker: trusted set + quorum from the adaptor;
-	// its callback flips the ledger service's validated_ledger pointer.
-	trusted, quorum := e.adaptor.GetTrustedValidatorsAndQuorum()
-	e.validationTracker = NewValidationTracker(quorum, 5*time.Minute)
-	e.validationTracker.SetTrustedAndQuorum(trusted, quorum)
+	trusted, quorum, negativeUNL := validationConfig(e.adaptor)
+	e.validationTracker = NewValidationTracker(quorum)
+	e.setValidationConfig(trusted, quorum, negativeUNL)
 	e.validationTracker.SetQuorumUnavailableFunc(e.adaptor.IsQuorumUnavailable)
+	e.trustMu.Lock()
+	e.trustedSnapshot = make(map[consensus.NodeID]struct{}, len(trusted))
+	for _, nodeID := range trusted {
+		e.trustedSnapshot[nodeID] = struct{}{}
+	}
+	e.pendingTrustPurge = make(map[consensus.NodeID]struct{})
+	e.trustMu.Unlock()
 	if wired, ok := e.adaptor.(consensus.WireableAdaptor); ok {
 		wired.SetValidationHistorian(e.validationTracker)
 	}
@@ -461,7 +658,25 @@ func (e *Engine) Start(ctx context.Context) error {
 	// count what the newly-trusted validator already signed.
 	if notifier, ok := e.adaptor.(consensus.TrustChangeNotifier); ok {
 		tracker := e.validationTracker
-		notifier.OnTrustChanged(tracker.SetTrustedAndQuorum)
+		e.trustMu.Lock()
+		e.trustSnapshotReady = true
+		e.trustMu.Unlock()
+		notifier.OnTrustChanged(func(trusted []consensus.NodeID, quorum int) {
+			if _, ok := e.adaptor.(validationConfigProvider); ok {
+				e.refreshValidationConfig()
+			} else {
+				e.setValidationConfig(trusted, quorum, e.adaptor.GetNegativeUNL())
+			}
+			e.recordTrustTransition(trusted)
+		})
+		if settled, ok := e.adaptor.(consensus.TrustChangeSettledNotifier); ok {
+			settled.OnTrustSettled(tracker.RecheckFinality)
+		}
+	}
+	_, validationConfigNotified := e.adaptor.(validationConfigChangeNotifier)
+	if notifier, ok := e.adaptor.(validationConfigChangeNotifier); ok {
+		notifier.OnValidationConfigChanged(func() { e.refreshValidationConfig() })
+		e.refreshValidationConfig()
 	}
 	if e.ledgerAncestry != nil {
 		e.validationTracker.SetLedgerAncestryProvider(e.ledgerAncestry)
@@ -480,6 +695,9 @@ func (e *Engine) Start(ctx context.Context) error {
 		// e.archive / e.inMemoryLedgers are read via atomics to stay
 		// race-free against SetArchive.
 		e.adaptor.OnLedgerFullyValidated(ledgerID, seq)
+		if !validationConfigNotified {
+			e.refreshValidationConfig()
+		}
 
 		arc := e.loadArchive()
 		inMem := e.inMemoryLedgers.Load()
@@ -503,16 +721,37 @@ func (e *Engine) Start(ctx context.Context) error {
 	// Start the main loop, unless an external driver advances ticks.
 	if !e.manualTick {
 		e.wg.Add(1)
-		go e.run()
+		go func() {
+			e.run()
+			e.finish(context.Cause(e.ctx))
+		}()
 	}
 
 	return nil
 }
 
+func (e *Engine) Done() <-chan error {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	return e.done
+}
+
+func (e *Engine) finish(err error) {
+	e.doneOnce.Do(func() {
+		if e.done != nil {
+			e.done <- err
+			close(e.done)
+		}
+	})
+}
+
 // Stop shuts down the engine. A wired archive is drained and committed
-// before return so no stale validations are lost (modulo SaveBatch
-// failures, which the writer re-queues).
+// before return, and any terminal durability failure is returned.
 func (e *Engine) Stop() error {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	e.stopped = true
+
 	// Guard against Stop before Start: e.cancel is nil until Start runs, and a
 	// defensive doShutdown / error-path stop must not nil-panic (same class as
 	// the fuzz-found doShutdown nil-panic).
@@ -520,27 +759,87 @@ func (e *Engine) Stop() error {
 		e.cancel()
 	}
 	e.wg.Wait()
+	var cause error
+	if e.ctx != nil {
+		cause = context.Cause(e.ctx)
+	}
+	e.finish(cause)
 	e.eventBus.Stop()
 
-	// Flush has no archive interaction, so its ordering relative to the
-	// archive close below is irrelevant.
+	arc := e.loadArchive()
+	if arc != nil {
+		// Stop new stale deliveries, but retain the owned archive so a later
+		// Stop can observe terminal completion after a bounded Close times out.
+		e.mu.Lock()
+		if e.validationTracker != nil {
+			e.validationTracker.SetOnStale(nil)
+		}
+		e.mu.Unlock()
+	}
+
 	if e.validationTracker != nil {
 		e.validationTracker.Flush()
 	}
 
-	if arc := e.loadArchive(); arc != nil {
+	if arc != nil {
 		// Bounded close — a stuck archive must not hang shutdown.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = arc.Close(ctx)
+		err := arc.Close(ctx)
 		cancel()
+		if err != nil {
+			return fmt.Errorf("close validation archive: %w", err)
+		}
 	}
 	return nil
 }
 
 func (e *Engine) StartRound(round consensus.RoundID, proposing bool) error {
 	e.mu.Lock()
+	if e.buildInProgress {
+		e.mu.Unlock()
+		return errLedgerAcceptInProgress
+	}
 	e.deferBroadcasts++
+	e.acceptedLCL = consensus.LedgerID{}
 	err := e.startRoundLocked(round, proposing, false)
+	e.deferBroadcasts--
+	pending := e.takePendingBroadcastsLocked()
+	e.mu.Unlock()
+	flushBroadcasts(pending)
+	return err
+}
+
+// RestartRound starts a fresh round from the adaptor's current LCL after
+// re-evaluating the trusted-validation preference. It is used by externally
+// driven consensus loops that stop their timer between bounded runs.
+func (e *Engine) RestartRound(proposing bool) error {
+	e.mu.Lock()
+	if e.buildInProgress {
+		e.mu.Unlock()
+		return errLedgerAcceptInProgress
+	}
+	e.deferBroadcasts++
+
+	working, err := e.adaptor.GetLastClosedLedger()
+	if err == nil && working == nil {
+		err = errNoLastClosedLedger
+	}
+	if err == nil {
+		preferred := working
+		if id, ok := e.validationPreferredForLedgerLocked(working); ok && id != working.ID() {
+			if cached, getErr := e.adaptor.GetLedger(id); getErr == nil && cached != nil {
+				preferred = cached
+			}
+		}
+		e.acceptedLCL = consensus.LedgerID{}
+		if preferred.ID() != working.ID() {
+			e.acceptedLCL = working.ID()
+		}
+		e.prevLedger = preferred
+		round := consensus.RoundID{Seq: preferred.Seq() + 1, ParentHash: preferred.ID()}
+		err = e.startRoundLocked(round, proposing, false)
+	}
+
 	e.deferBroadcasts--
 	pending := e.takePendingBroadcastsLocked()
 	e.mu.Unlock()
@@ -574,22 +873,27 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 		}
 	}
 
-	// Carry our own observed close time across rounds. The first round seeds
-	// from the seed ledger; afterwards we take the self close time of the round
-	// that just ended, read from e.state before it is replaced below (this runs
-	// for every round-start path).
-	if e.state == nil {
-		if e.prevLedger != nil {
-			e.prevCloseTime = e.prevLedger.CloseTime()
+	// Carry our observed close time across normal round boundaries. A recovery
+	// switch restarts the current round internally and must retain the existing
+	// baseline rather than treating the abandoned round as completed.
+	if !recovering {
+		if e.state == nil {
+			if e.prevLedger != nil {
+				e.prevCloseTime = e.prevLedger.CloseTime()
+			}
+		} else {
+			e.prevCloseTime = e.state.CloseTimes.Self
 		}
-	} else {
-		e.prevCloseTime = e.state.CloseTimes.Self
 	}
 
 	// Kick off a trust-view refresh so the bow-out reacts to an expiring list
 	// within a round or two rather than only on the aggregator's 30s tick
 	// (rippled recomputes via updateTrusted at every ledger close).
 	e.adaptor.RefreshUNLState()
+	// RefreshUNLState may synchronously publish a trust-change callback in
+	// tests and lightweight adaptors. Apply its queued removals before the
+	// round resets or replays any buffered proposal state.
+	e.purgePendingTrustLocked()
 
 	// Voluntary bow-out: an expired validator list means our trust view is
 	// stale, so this round neither proposes nor validates (rippled
@@ -650,16 +954,13 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	default:
 		e.setMode(consensus.ModeObserving)
 	}
+	e.roundCloseResolution = e.nextCloseTimeResolution()
 
 	// Init round state. StartTime uses e.now() (its consumers measure via
 	// e.now().Sub()); PhaseStart uses adaptor.Now() (checkConvergence reads
 	// it via adaptor.Now().Sub()) — each clock paired with its reader.
-	e.state = &consensus.RoundState{
+	e.state = &roundState{
 		Round:          round,
-		Mode:           e.mode,
-		Phase:          consensus.PhaseOpen,
-		Proposals:      make(map[consensus.NodeID]*consensus.Proposal),
-		Disputed:       make(map[consensus.TxID]*consensus.DisputedTx),
 		CloseTimes:     consensus.CloseTimes{Peers: make(map[time.Time]int)},
 		StartTime:      e.now(),
 		PhaseStart:     e.adaptor.Now(),
@@ -669,12 +970,11 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	// Reset tracking maps. Dead-node set is round-scoped, so a validator that
 	// bowed out last round can rejoin.
 	e.proposalTracker.ResetRound()
-	e.disputeTracker = NewDisputeTracker()
+	e.disputeTracker = newDisputeTracker()
 	e.acquiredTxSets = make(map[consensus.TxSetID]consensus.TxSet)
 	e.comparesTxSets = make(map[consensus.TxSetID]struct{})
 	e.peerUnchangedCounter = 0
 	e.establishCounter = 0
-	e.converged = false
 	e.ourTxSet = nil
 	e.lastConvergePercent = 0
 	e.currentRoundTime = 0
@@ -695,14 +995,23 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 
 	// Replay buffered proposals for this round's prevLedger.
 	if e.prevLedger != nil {
-		closeTimes, replayed, relay := e.proposalTracker.Replay(e.prevLedger.ID(), e.adaptor.IsTrusted)
-		for _, ct := range closeTimes {
-			e.state.CloseTimes.Peers[ct]++
-		}
+		replayTrusted := e.trustedPredicate()
+		closeTimes, _, relay := e.proposalTracker.Replay(e.prevLedger.ID(), replayTrusted)
+		e.unvoteDeadProposalsLocked()
+		// Trust can change while replay is running. Remove any positions
+		// that are no longer trusted before deriving close-time votes,
+		// dispute state, or the replay pressure count.
+		e.pruneUntrustedProposalsLocked()
+		replayed := e.proposalTracker.CountTrusted(e.trustedPredicate())
+		e.appendReplayCloseTimesLocked(closeTimes)
 
 		// Re-share replayed positions so peers that missed a proposal on this
 		// prevLedger get re-fed it from us during the recovery window.
+		relayTrusted := e.trustedPredicate()
 		for _, p := range relay {
+			if !relayTrusted(p.NodeID) {
+				continue
+			}
 			e.adaptor.RelayProposal(p, 0)
 		}
 
@@ -718,7 +1027,6 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 		}
 	}
 
-	e.roundCount++
 	return nil
 }
 
@@ -764,12 +1072,6 @@ func (e *Engine) driveNegativeUNLNewValidatorsLocked() {
 	e.previousTrustedSet = next
 }
 
-func (e *Engine) State() *consensus.RoundState {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.state
-}
-
 // Mode returns the current consensus mode via the lock-free atomic mirror
 // (see modeAtomic).
 func (e *Engine) Mode() consensus.Mode {
@@ -780,6 +1082,16 @@ func (e *Engine) Phase() consensus.Phase {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.phase
+}
+
+// CurrentRound returns the selected round without exposing mutable engine state.
+func (e *Engine) CurrentRound() (consensus.RoundID, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.state == nil {
+		return consensus.RoundID{}, false
+	}
+	return e.state.Round, true
 }
 
 // BuildingLedgerSeq returns the ledger sequence being built after the open
@@ -800,9 +1112,6 @@ func (e *Engine) IsProposing() bool {
 func (e *Engine) IsValidating() bool {
 	return e.validating.Load()
 }
-func (e *Engine) Timing() consensus.Timing {
-	return e.timing
-}
 
 // avMinConsensusTime floors the convergePercent divisor so a short prior
 // round can't make the percentage run away.
@@ -815,11 +1124,18 @@ func (e *Engine) GetJSON(full bool) map[string]any {
 	defer e.mu.RUnlock()
 
 	mode := consensus.Mode(e.modeAtomic.Load())
-	closeRes := int64(e.adaptor.CloseTimeResolution() / time.Second)
+	closeRes := int64(e.currentCloseTimeResolution() / time.Second)
 
+	trusted := e.trustedPredicate()
+	proposers := 0
+	for nodeID := range e.proposalTracker.All() {
+		if trusted(nodeID) {
+			proposers++
+		}
+	}
 	ret := map[string]any{
 		"proposing": mode == consensus.ModeProposing,
-		"proposers": e.proposalTracker.Count(),
+		"proposers": proposers,
 	}
 
 	if mode != consensus.ModeWrongLedger {
@@ -871,9 +1187,12 @@ func (e *Engine) GetJSON(full bool) map[string]any {
 		ret["previous_proposers"] = e.prevProposers
 		ret["previous_mseconds"] = e.prevRoundTime.Milliseconds()
 
-		if e.proposalTracker.Count() > 0 {
-			ppj := make(map[string]any, e.proposalTracker.Count())
+		if proposers > 0 {
+			ppj := make(map[string]any, proposers)
 			for nodeID, p := range e.proposalTracker.All() {
+				if !trusted(nodeID) {
+					continue
+				}
 				ppj[fmt.Sprintf("%X", nodeID[:])] = proposalJSON(p)
 			}
 			ret["peer_positions"] = ppj
@@ -978,7 +1297,7 @@ func (e *Engine) GetLastCloseInfo() (proposers int, convergeTime time.Duration) 
 func (e *Engine) recentTrustedProposerCount() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	fresh := e.proposalTracker.LatestFresh(e.adaptor.IsTrusted, e.adaptor.Now(), e.timing.ProposeFreshness)
+	fresh := e.proposalTracker.LatestFresh(e.trustedPredicate(), e.adaptor.Now(), e.timing.ProposeFreshness)
 	return len(fresh)
 }
 
@@ -995,10 +1314,6 @@ func (e *Engine) Subscribe(sub consensus.EventSubscriber) {
 	e.eventBus.Subscribe(sub)
 }
 
-func (e *Engine) Events() <-chan consensus.Event {
-	return e.eventBus.Events()
-}
-
 // setMode changes the consensus mode. Caller must hold e.mu.
 func (e *Engine) setMode(newMode consensus.Mode) {
 	if e.mode == newMode {
@@ -1012,13 +1327,13 @@ func (e *Engine) setMode(newMode consensus.Mode) {
 	// old or new — fine for the snapshot.
 	e.modeAtomic.Store(int32(newMode))
 
+	e.adaptor.OnModeChange(oldMode, newMode)
+
 	e.eventBus.Publish(&consensus.ModeChangedEvent{
 		OldMode:   oldMode,
 		NewMode:   newMode,
 		Timestamp: e.adaptor.Now(),
 	})
-
-	e.adaptor.OnModeChange(oldMode, newMode)
 
 	// Leaving proposing/observing resets censorship tracking: entries recorded
 	// under the old mode no longer reflect a set we keep proposing, so warning
@@ -1049,7 +1364,6 @@ func (e *Engine) setPhase(newPhase consensus.Phase) {
 
 	e.phase = newPhase
 	if e.state != nil {
-		e.state.Phase = newPhase
 		e.state.PhaseStart = e.adaptor.Now()
 	}
 
@@ -1106,6 +1420,48 @@ type closeAgreementReporter interface {
 	CloseAgree() bool
 }
 
+type closeTimingReporter interface {
+	CloseTimeResolution() time.Duration
+	CloseAgree() bool
+}
+
+func (e *Engine) nextCloseTimeResolution() time.Duration {
+	reporter, ok := e.prevLedger.(closeTimingReporter)
+	if !ok {
+		return e.adaptor.CloseTimeResolution()
+	}
+	parent := reporter.CloseTimeResolution()
+	seconds := parent / time.Second
+	if parent <= 0 || parent%time.Second != 0 || seconds > time.Duration(^uint32(0)) {
+		return e.adaptor.CloseTimeResolution()
+	}
+	next := consensus.GetNextLedgerTimeResolution(
+		uint32(seconds),
+		reporter.CloseAgree(),
+		e.prevLedger.Seq()+1,
+	)
+	if next == 0 {
+		return e.adaptor.CloseTimeResolution()
+	}
+	return time.Duration(next) * time.Second
+}
+
+func (e *Engine) currentCloseTimeResolution() time.Duration {
+	if e.roundCloseResolution > 0 {
+		return e.roundCloseResolution
+	}
+	return e.adaptor.CloseTimeResolution()
+}
+
+func (e *Engine) previousCloseTimeResolution() time.Duration {
+	if reporter, ok := e.prevLedger.(interface{ CloseTimeResolution() time.Duration }); ok {
+		if resolution := reporter.CloseTimeResolution(); resolution > 0 {
+			return resolution
+		}
+	}
+	return e.adaptor.PrevCloseTimeResolution()
+}
+
 // lastCloseBaseline returns the reference close time the idle/close timers
 // measure from. When the previous close was reached by consensus it's the
 // previous ledger's stored close time; otherwise it's our own observed close
@@ -1146,7 +1502,8 @@ func (e *Engine) closeTimesOutOfBounds(timeSincePrevClose time.Duration) bool {
 // proposersValidated reads the PERSISTENT tracker, not the round-scoped
 // map (empty early in a round), so early validation pressure is visible.
 func (e *Engine) closedProposerCounts() (proposersClosed, proposersValidated int) {
-	proposersClosed = e.proposalTracker.CountTrusted(e.adaptor.IsTrusted)
+	e.purgePendingTrustLocked()
+	proposersClosed = e.proposalTracker.CountTrusted(e.trustedPredicate())
 	if e.prevLedger != nil && e.validationTracker != nil {
 		proposersValidated = e.validationTracker.ProposersValidated(e.prevLedger.ID())
 	}
@@ -1184,7 +1541,7 @@ func (e *Engine) closeOnTimers(openTime, timeSincePrevClose time.Duration) bool 
 	// let an empty ledger close before a full resolution step has elapsed.
 	if len(e.adaptor.GetPendingTxs()) == 0 {
 		idle := e.timing.LedgerIdleInterval
-		if twoRes := 2 * e.adaptor.PrevCloseTimeResolution(); twoRes > idle {
+		if twoRes := 2 * e.previousCloseTimeResolution(); twoRes > idle {
 			idle = twoRes
 		}
 		return timeSincePrevClose >= idle
@@ -1218,6 +1575,7 @@ func (e *Engine) phaseOpen() {
 
 // closeLedger transitions from open to establish phase.
 func (e *Engine) closeLedger() {
+	e.purgePendingTrustLocked()
 	// #422: log when prior proposers + self can't meet quorum (likely stall);
 	// skipped before the first completed round.
 	if e.consensusCount > 0 {
@@ -1257,7 +1615,11 @@ func (e *Engine) closeLedger() {
 		prev := e.prevLedger
 		switch {
 		case protocol.IsFlagLedger(prev.Seq()):
-			parentVals := e.parentValidations(prev.ParentID())
+			var parentSeq uint32
+			if prev.Seq() > 0 {
+				parentSeq = prev.Seq() - 1
+			}
+			parentVals := e.parentValidations(prev.ParentID(), parentSeq)
 			if extra := e.adaptor.GenerateFlagLedgerPseudoTxs(prev, parentVals); len(extra) > 0 {
 				txs = append(txs, extra...)
 			}
@@ -1345,8 +1707,13 @@ func (e *Engine) closeLedger() {
 	// Seed disputes against every peer position whose tx set we hold, and
 	// acquire the rest — needed because OnProposal isn't re-fired for replayed
 	// proposals.
+	e.pruneUntrustedProposalsLocked()
 	requested := make(map[consensus.TxSetID]struct{})
-	for _, p := range e.proposalTracker.All() {
+	trusted := e.trustedPredicate()
+	for nodeID, p := range e.proposalTracker.All() {
+		if !trusted(nodeID) {
+			continue
+		}
 		if peerSet, ok := e.acquiredTxSets[p.TxSet]; ok {
 			e.createDisputesAgainst(peerSet)
 			continue

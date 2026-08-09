@@ -1,5 +1,7 @@
 package entry
 
+import "github.com/LeJamon/go-xrpl/protocol"
+
 // LedgerSpecificFlags mirrors rippled's LedgerSpecificFlags enum.
 // Reference: rippled/include/xrpl/protocol/LedgerFormats.h (LedgerSpecificFlags).
 // Values are scoped per ledger entry type; identical numeric values are
@@ -90,17 +92,12 @@ const (
 	LsfSponsorshipRequireSignForReserve uint32 = 0x00020000
 )
 
-// MPToken constants
+// Deprecated MPToken protocol-limit aliases.
 const (
-	// MaxMPTokenMetadataLength is the maximum length of MPToken metadata
-	// Reference: rippled Protocol.h
-	MaxMPTokenMetadataLength = 1024
-
-	// MaxTransferFee is the maximum transfer fee in basis points (50000 = 50%)
-	// Reference: rippled Protocol.h
-	MaxTransferFee uint16 = 50000
-
-	// MaxMPTokenAmount is the maximum amount for MPTokens (63-bit unsigned)
-	// Reference: rippled Protocol.h
-	MaxMPTokenAmount uint64 = 0x7FFFFFFFFFFFFFFF
+	// Deprecated: use protocol.MaxMPTokenMetadataLength.
+	MaxMPTokenMetadataLength = protocol.MaxMPTokenMetadataLength
+	// Deprecated: use protocol.MaxMPTokenTransferFee.
+	MaxTransferFee = protocol.MaxMPTokenTransferFee
+	// Deprecated: use protocol.MaxMPTokenAmount.
+	MaxMPTokenAmount = protocol.MaxMPTokenAmount
 )

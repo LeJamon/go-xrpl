@@ -1,12 +1,15 @@
 package peermanagement
 
 import (
-	"bytes"
 	"context"
+	"errors"
+	"os"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/peertls"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -87,7 +90,7 @@ func TestBootstrapGovernorAllowsOneBoundedHedge(t *testing.T) {
 	assert.False(t, ok)
 
 	assert.True(t, first.observeProgress(bootstrapFrameProgress{
-		messageType: TypeManifests,
+		messageType: message.TypeManifests,
 		wireSize:    60_431_740,
 		bytesRead:   1 << 20,
 		elapsed:     19 * time.Second,
@@ -156,7 +159,7 @@ func TestBootstrapGovernorHedgesOnlySlowManifestTransfers(t *testing.T) {
 			bytesRead := tt.rate * uint64(elapsed) / uint64(time.Second)
 
 			observation := lease.observeProgress(bootstrapFrameProgress{
-				messageType: TypeManifests,
+				messageType: message.TypeManifests,
 				wireSize:    60_431_740,
 				bytesRead:   bytesRead,
 				elapsed:     elapsed,
@@ -174,7 +177,7 @@ func TestBootstrapReleasedLeaseCannotEnableHedge(t *testing.T) {
 	lease.release()
 
 	assert.False(t, lease.observeProgress(bootstrapFrameProgress{
-		messageType: TypeManifests,
+		messageType: message.TypeManifests,
 		wireSize:    60_431_740,
 		bytesRead:   1 << 20,
 		elapsed:     30 * time.Second,
@@ -204,7 +207,7 @@ func TestBootstrapFlowRotatesTwoCutoffSourcesAndCompletesFromThird(t *testing.T)
 	require.Len(t, firstCandidates, 1)
 	firstAddress := firstCandidates[0]
 	firstProgress := bootstrapFrameProgress{
-		messageType: TypeManifests,
+		messageType: message.TypeManifests,
 		wireSize:    60_431_740,
 		bytesRead:   444_146 * 19,
 		elapsed:     19 * time.Second,
@@ -221,7 +224,7 @@ func TestBootstrapFlowRotatesTwoCutoffSourcesAndCompletesFromThird(t *testing.T)
 	secondAddress := secondCandidates[0]
 	require.NotEqual(t, firstAddress, secondAddress)
 	secondProgress := bootstrapFrameProgress{
-		messageType: TypeManifests,
+		messageType: message.TypeManifests,
 		wireSize:    60_431_740,
 		bytesRead:   360_735 * 24,
 		elapsed:     24 * time.Second,
@@ -242,7 +245,7 @@ func TestBootstrapFlowRotatesTwoCutoffSourcesAndCompletesFromThird(t *testing.T)
 		{address: secondAddress, lease: second},
 	} {
 		failed.lease.release()
-		discovery.delayBootstrapRetry(failed.address, bootstrapPartialRetry)
+		discovery.delayConnectRetry(failed.address, bootstrapPartialRetry)
 		discovery.finishConnectAttempt(failed.address, connectAttemptReleased)
 		assert.LessOrEqual(t, governor.activeCount(), 2)
 	}
@@ -255,7 +258,7 @@ func TestBootstrapFlowRotatesTwoCutoffSourcesAndCompletesFromThird(t *testing.T)
 	assert.NotEqual(t, firstAddress, thirdAddress)
 	assert.NotEqual(t, secondAddress, thirdAddress)
 	thirdObservation := third.observeProgress(bootstrapFrameProgress{
-		messageType: TypeManifests,
+		messageType: message.TypeManifests,
 		wireSize:    60_431_740,
 		bytesRead:   650_000 * 15,
 		elapsed:     15 * time.Second,
@@ -385,7 +388,7 @@ func TestDiscoveryBootstrapRetryDelayStartsAtDisconnect(t *testing.T) {
 	}, nil)
 	d.AddPeer(address, 0, 0)
 	d.MarkConnected(address, 1)
-	d.delayBootstrapRetry(address, recentConnectAttempt)
+	d.delayConnectRetry(address, recentConnectAttempt)
 	d.MarkDisconnected(1)
 
 	assert.Empty(t, d.selectPeersToConnect(1, true))
@@ -401,12 +404,152 @@ func TestDiscoveryPartialBootstrapFailureIsQuarantined(t *testing.T) {
 		Clock:       func() time.Time { return now },
 	}, nil)
 	d.AddPeer(address, 0, 0)
-	d.delayBootstrapRetry(address, bootstrapPartialRetry)
+	overlay := &Overlay{discovery: d}
+	overlay.delayPeerRetry(address, true, &FrameReadError{
+		MessageType: message.TypeManifests,
+		WireSize:    1024,
+		BytesRead:   1,
+		Err:         errors.New("connection reset"),
+	}, false)
 
 	now = now.Add(recentConnectAttempt)
 	assert.Empty(t, d.selectPeersToConnect(1, true))
 	now = now.Add(bootstrapPartialRetry - recentConnectAttempt)
 	assert.Equal(t, []string{address}, d.selectPeersToConnect(1, true))
+}
+
+func TestOverlayPartialManifestFailurePreservesOrdinarySourceSquelch(t *testing.T) {
+	now := time.Unix(4_500, 0)
+	address := "192.0.2.1:51235"
+	discovery := NewDiscovery(&Config{
+		MaxOutbound: 1,
+		Clock:       func() time.Time { return now },
+	}, nil)
+	discovery.AddPeer(address, 0, 0)
+	require.Equal(t, []string{address}, discovery.SelectPeersToConnect(1))
+	now = now.Add(10 * time.Second)
+	discovery.MarkConnected(address, 1)
+	overlay := &Overlay{discovery: discovery}
+
+	now = now.Add(20 * time.Second)
+	overlay.delayPeerRetry(address, false, &FrameReadError{
+		MessageType: message.TypeManifests,
+		WireSize:    1024,
+		BytesRead:   1,
+		Err:         errors.New("connection reset"),
+	}, false)
+	discovery.MarkDisconnected(1)
+
+	assert.Empty(t, discovery.SelectPeersToConnect(1))
+	now = now.Add(recentConnectAttempt/2 - time.Nanosecond)
+	assert.Empty(t, discovery.SelectPeersToConnect(1))
+	now = now.Add(time.Nanosecond)
+	assert.Equal(t, []string{address}, discovery.SelectPeersToConnect(1))
+}
+
+func TestOverlayLongLivedOrdinaryManifestFailureDoesNotRestartSquelch(t *testing.T) {
+	now := time.Unix(4_600, 0)
+	address := "192.0.2.1:51235"
+	discovery := NewDiscovery(&Config{
+		MaxOutbound: 1,
+		Clock:       func() time.Time { return now },
+	}, nil)
+	discovery.AddPeer(address, 0, 0)
+	require.Equal(t, []string{address}, discovery.SelectPeersToConnect(1))
+	now = now.Add(10 * time.Second)
+	discovery.MarkConnected(address, 1)
+	overlay := &Overlay{discovery: discovery}
+
+	now = now.Add(2 * recentConnectAttempt)
+	overlay.delayPeerRetry(address, false, &FrameReadError{
+		MessageType: message.TypeManifests,
+		WireSize:    1024,
+		BytesRead:   1,
+		Err:         errors.New("connection reset"),
+	}, false)
+	discovery.MarkDisconnected(1)
+
+	assert.Equal(t, []string{address}, discovery.SelectPeersToConnect(1))
+}
+
+func TestOverlayLocalSpoolFailureDoesNotExtendBootstrapQuarantine(t *testing.T) {
+	now := time.Unix(4_750, 0)
+	address := "192.0.2.1:51235"
+	discovery := NewDiscovery(&Config{
+		MaxOutbound: 1,
+		Clock:       func() time.Time { return now },
+	}, nil)
+	discovery.AddPeer(address, 0, 0)
+	overlay := &Overlay{discovery: discovery}
+
+	overlay.delayPeerRetry(address, true, &FrameReadError{
+		MessageType: message.TypeManifests,
+		WireSize:    1024,
+		BytesRead:   1,
+		Err: &manifestSpoolLocalError{
+			operation: "spool manifest payload",
+			err: &os.PathError{
+				Op:   "write",
+				Path: "manifest-spool",
+				Err:  syscall.ETIMEDOUT,
+			},
+		},
+	}, false)
+
+	now = now.Add(recentConnectAttempt - time.Nanosecond)
+	assert.Empty(t, discovery.selectPeersToConnect(1, true))
+	now = now.Add(time.Nanosecond)
+	assert.Equal(t, []string{address}, discovery.selectPeersToConnect(1, true))
+}
+
+func TestOverlayOrdinaryPeerFailuresDoNotTriggerManifestQuarantine(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		stopping bool
+	}{
+		{
+			name: "non-frame failure",
+			err:  errors.New("connection reset"),
+		},
+		{
+			name: "partial non-manifest frame",
+			err: &FrameReadError{
+				MessageType: message.TypePing,
+				BytesRead:   1,
+				Err:         errors.New("connection reset"),
+			},
+		},
+		{
+			name: "zero-byte manifest frame",
+			err: &FrameReadError{
+				MessageType: message.TypeManifests,
+				Err:         errors.New("connection reset"),
+			},
+		},
+		{
+			name: "shutdown",
+			err: &FrameReadError{
+				MessageType: message.TypeManifests,
+				BytesRead:   1,
+				Err:         context.Canceled,
+			},
+			stopping: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			address := "192.0.2.1:51235"
+			discovery := NewDiscovery(&Config{MaxOutbound: 1}, nil)
+			discovery.AddPeer(address, 0, 0)
+			overlay := &Overlay{discovery: discovery}
+
+			overlay.delayPeerRetry(address, false, tt.err, tt.stopping)
+
+			assert.Equal(t, []string{address}, discovery.SelectPeersToConnect(1))
+		})
+	}
 }
 
 func TestPeerBootstrapAcknowledgementFiresOnce(t *testing.T) {
@@ -446,7 +589,7 @@ func TestOverlayMalformedPingDoesNotAcknowledgeBootstrap(t *testing.T) {
 
 	overlay.onMessageReceived(Event{
 		PeerID:      1,
-		MessageType: uint16(message.TypePing),
+		MessageType: message.TypePing,
 		Payload:     []byte("not-a-ping"),
 	})
 
@@ -465,7 +608,7 @@ func TestOverlayPingDoesNotBypassSeenManifest(t *testing.T) {
 
 	overlay.onMessageReceived(Event{
 		PeerID:      1,
-		MessageType: uint16(message.TypePing),
+		MessageType: message.TypePing,
 		Payload:     payload,
 	})
 
@@ -492,7 +635,7 @@ func TestOverlayDroppedManifestDoesNotAcknowledgeBootstrap(t *testing.T) {
 
 	overlay.onMessageReceived(Event{
 		PeerID:      1,
-		MessageType: uint16(message.TypeManifests),
+		MessageType: message.TypeManifests,
 		Payload:     payload,
 	})
 
@@ -505,6 +648,9 @@ func TestOverlayDroppedManifestDoesNotAcknowledgeBootstrap(t *testing.T) {
 }
 
 func TestOverlayConnectsOutboundTargetBeforeStartupFrameCompletes(t *testing.T) {
+	if !peertls.Supported() {
+		t.Skip("peer TLS requires CGO")
+	}
 	connections := make(chan bootstrapConnection, 2)
 	first := startBootstrapTestOverlay(t)
 	second := startBootstrapTestOverlay(t, WithListenAddr("[::1]:0"))
@@ -525,9 +671,9 @@ func TestOverlayConnectsOutboundTargetBeforeStartupFrameCompletes(t *testing.T) 
 			List: []message.Manifest{{STObject: []byte{1}}},
 		})
 		require.NoError(t, err)
-		var frame bytes.Buffer
-		require.NoError(t, message.WriteMessage(&frame, message.TypeManifests, payload))
-		require.NoError(t, connected.overlay.Send(connected.peerID, frame.Bytes()))
+		frame, err := message.BuildWireMessage(message.TypeManifests, payload)
+		require.NoError(t, err)
+		require.NoError(t, connected.overlay.Send(connected.peerID, frame))
 		select {
 		case inbound := <-client.ManifestMessages():
 			_, err := message.Decode(message.TypeManifests, inbound.Payload)

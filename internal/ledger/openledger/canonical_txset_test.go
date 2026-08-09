@@ -168,16 +168,28 @@ func TestComputeSaltOrderIndependent(t *testing.T) {
 		{Blob: mkBlob(0x30), Hash: makeHash(3), Account: [20]byte{0xAA}, Sequence: 3},
 	}
 
-	salt1 := ComputeSalt(txs)
+	salt1, err := ComputeSalt(txs)
+	if err != nil {
+		t.Fatalf("ComputeSalt: %v", err)
+	}
 
 	permuted := []PendingTx{txs[2], txs[0], txs[1]}
-	salt2 := ComputeSalt(permuted)
+	salt2, err := ComputeSalt(permuted)
+	if err != nil {
+		t.Fatalf("ComputeSalt permuted: %v", err)
+	}
 	if salt1 != salt2 {
 		t.Errorf("ComputeSalt is order-dependent: %x vs %x", salt1[:8], salt2[:8])
 	}
 
-	emptySalt1 := ComputeSalt(nil)
-	emptySalt2 := ComputeSalt([]PendingTx{})
+	emptySalt1, err := ComputeSalt(nil)
+	if err != nil {
+		t.Fatalf("ComputeSalt nil: %v", err)
+	}
+	emptySalt2, err := ComputeSalt([]PendingTx{})
+	if err != nil {
+		t.Fatalf("ComputeSalt empty: %v", err)
+	}
 	if emptySalt1 != emptySalt2 {
 		t.Errorf("ComputeSalt diverges on nil vs empty slice: %x vs %x",
 			emptySalt1[:8], emptySalt2[:8])
@@ -186,7 +198,11 @@ func TestComputeSaltOrderIndependent(t *testing.T) {
 	other := []PendingTx{
 		{Blob: mkBlob(0xFF), Hash: makeHash(99), Account: [20]byte{0xAA}, Sequence: 1},
 	}
-	if ComputeSalt(other) == salt1 {
+	otherSalt, err := ComputeSalt(other)
+	if err != nil {
+		t.Fatalf("ComputeSalt other: %v", err)
+	}
+	if otherSalt == salt1 {
 		t.Error("ComputeSalt collapsed two different tx sets to the same salt")
 	}
 }

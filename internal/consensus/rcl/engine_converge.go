@@ -17,13 +17,6 @@ func (e *Engine) phaseEstablish() {
 	e.currentRoundTime = roundTime
 	e.lastConvergePercent = e.convergePercent()
 
-	// Pause before the accept paths if we've run past validated and a
-	// quorum-blocking share of validators lags (#451); bounded inside
-	// shouldPause so a stuck round still abandons via the ceiling below.
-	if e.shouldPause(roundTime) {
-		return
-	}
-
 	e.establishCounter++
 	e.peerUnchangedCounter++
 
@@ -40,13 +33,45 @@ func (e *Engine) phaseEstablish() {
 	// (rippled updateOurPositions prunes unconditionally, Consensus.h:
 	// 1509-1528): a bowed-out observer waiting at the close-time gate must
 	// not have its tally diluted forever by a silent peer's stale vote.
+	e.pruneUntrustedProposalsLocked()
 	e.pruneStaleProposalsLocked()
 
-	if e.mode == consensus.ModeProposing && e.state.OurPosition != nil {
-		e.updatePosition()
-	}
+	e.updatePosition()
 	e.updateCloseTimePosition()
+
+	// Keep positions fresh while a quorum-blocking share of validators
+	// lags. The pause gates acceptance, not proposal maintenance.
+	if e.shouldPause(roundTime) {
+		return
+	}
+
 	e.checkConvergence()
+}
+
+// pruneUntrustedProposalsLocked removes current positions that lost trust
+// since they were received or replayed and revokes their dispute votes.
+// Caller must hold e.mu.
+func (e *Engine) pruneUntrustedProposalsLocked() {
+	e.purgePendingTrustLocked()
+	trusted := e.trustedPredicate()
+	for _, nodeID := range e.proposalTracker.PruneUntrusted(trusted) {
+		if e.disputeTracker != nil {
+			e.disputeTracker.UnVote(nodeID)
+		}
+	}
+	e.purgePendingTrustLocked()
+}
+
+// unvoteDeadProposalsLocked applies replayed bow-outs to the dispute tracker.
+// ProposalTracker owns the dead/current maps; the engine owns dispute votes.
+// Caller must hold e.mu.
+func (e *Engine) unvoteDeadProposalsLocked() {
+	if e.disputeTracker == nil {
+		return
+	}
+	for _, nodeID := range e.proposalTracker.DeadNodeIDs() {
+		e.disputeTracker.UnVote(nodeID)
+	}
 }
 
 // pruneStaleProposalsLocked drops peer proposals older than the freshness
@@ -389,8 +414,8 @@ const (
 )
 
 // checkConvergence drives the accept gate (rippled's
-// phaseEstablish→haveConsensus→checkConsensus flow): maintain the local
-// "converged" observability flag, compute consensusState, then dispatch.
+// phaseEstablish→haveConsensus→checkConsensus flow): compute consensusState,
+// then dispatch.
 // Every accept path — Yes, MovedOn, and Expired — sits behind the
 // close-time gate, exactly as in rippled where haveConsensus returns true
 // for all three and phaseEstablish then returns on !haveCloseTimeConsensus_
@@ -412,13 +437,6 @@ func (e *Engine) checkConvergence() {
 	agree, disagree := e.countAgreement()
 	total := agree + disagree
 
-	// EarlyConvergencePct is a go-xrpl-local observability flag; acceptance
-	// uses MinConsensusPct inside checkConsensusState.
-	if total > 0 && agree*100 >= total*e.thresholds.EarlyConvergencePct {
-		e.converged = true
-		e.state.Converged = true
-	}
-
 	state := e.checkConsensusState(roundTime, agree, total)
 
 	if state == consensusStateNo {
@@ -432,7 +450,7 @@ func (e *Engine) checkConvergence() {
 	// stays in Establish and recovers only via checkLedger resyncing it onto
 	// the network's ledger.
 	if state == consensusStateExpired {
-		minimumCounter := len(e.parms.AvalancheCutoffs) * e.parms.MinRounds
+		minimumCounter := e.parms.AvalancheCutoffCount() * e.parms.MinRounds
 		if e.establishCounter < minimumCounter {
 			slog.Warn("consensus expired but inside retry window — continuing",
 				"t", "consensus",
@@ -554,8 +572,7 @@ func (e *Engine) reproposeCurrentLocked() {
 }
 
 // checkConsensusState mirrors rippled's checkConsensus, returning
-// {No, Yes, MovedOn, Expired}. Args are caller-computed so e.converged
-// stays on a consistent snapshot. Priority order:
+// {No, Yes, MovedOn, Expired}. Priority order:
 //
 //  1. roundTime <= ledgerMIN_CONSENSUS                         → No
 //  2. currentProposers < prevProposers*3/4 AND
@@ -636,6 +653,8 @@ func checkConsensusReached(agreeing, total int, countSelf bool, minPct int, reac
 // currPeerPositions_ tally (Consensus.h:1689-1707); the Yes check adds
 // self via countSelf. Caller must hold e.mu.
 func (e *Engine) countAgreement() (agree, disagree int) {
+	e.purgePendingTrustLocked()
+	trusted := e.trustedPredicate()
 	var ourTxSet consensus.TxSetID
 	haveOurs := false
 	if e.state != nil && e.state.OurPosition != nil {
@@ -650,7 +669,7 @@ func (e *Engine) countAgreement() (agree, disagree int) {
 		// popular tx set so non-proposing nodes still get a convergence signal.
 		counts := make(map[consensus.TxSetID]int)
 		for nodeID, p := range e.proposalTracker.All() {
-			if e.adaptor.IsTrusted(nodeID) {
+			if trusted(nodeID) {
 				counts[p.TxSet]++
 			}
 		}
@@ -670,7 +689,7 @@ func (e *Engine) countAgreement() (agree, disagree int) {
 	}
 
 	for nodeID, p := range e.proposalTracker.All() {
-		if !e.adaptor.IsTrusted(nodeID) {
+		if !trusted(nodeID) {
 			continue
 		}
 		if p.TxSet == ourTxSet {
@@ -686,6 +705,7 @@ func (e *Engine) countAgreement() (agree, disagree int) {
 // rebuilds ourTxSet from the inclusion decisions and rebroadcasts our
 // position. Caller must hold e.mu.
 func (e *Engine) updatePosition() {
+	e.purgePendingTrustLocked()
 	if e.state == nil {
 		return
 	}
@@ -694,8 +714,6 @@ func (e *Engine) updatePosition() {
 		return
 	}
 
-	// Re-vote each dispute at the current converge percent. Observers run the
-	// bookkeeping (avalanche consistency) but only proposers flip positions.
 	proposing := e.mode == consensus.ModeProposing
 	disputeCount := e.disputeTracker.Count()
 	changed := e.disputeTracker.UpdateOurVote(e.convergePercent(), proposing, e.parms)
@@ -722,17 +740,13 @@ func (e *Engine) updatePosition() {
 		)
 	}
 
-	if !proposing {
-		return
-	}
-
 	// Freshness re-proposal (rippled Consensus.h:1636-1642): when nothing
 	// flipped but our position has gone stale (older than ProposeInterval),
 	// re-emit it with a bumped seq and fresh timestamp so peers don't prune
 	// it at ProposeFreshness during a long round — losing it would drop our
 	// vote from every peer's tally exactly when convergence is hardest.
 	if len(changed) == 0 {
-		if e.state.OurPosition != nil && e.prevLedger != nil &&
+		if proposing && e.state.OurPosition != nil && e.prevLedger != nil &&
 			e.adaptor.Now().Sub(e.state.OurPosition.Timestamp) >= e.timing.ProposeInterval {
 			e.reproposeCurrentLocked()
 		}
@@ -805,7 +819,7 @@ func (e *Engine) updatePosition() {
 	// Emitting needs both OurPosition (for the seq bump) and prevLedger; a
 	// test harness without Start() has prevLedger nil — still update ourTxSet,
 	// just don't emit.
-	if e.state.OurPosition != nil && e.prevLedger != nil {
+	if proposing && e.state.OurPosition != nil && e.prevLedger != nil {
 		nodeID, _ := e.adaptor.GetValidatorKey()
 		proposal := &consensus.Proposal{
 			Round:          e.state.Round,
@@ -823,7 +837,11 @@ func (e *Engine) updatePosition() {
 	}
 
 	// Refresh per-peer votes for peers whose position matches the new set.
+	trusted := e.trustedPredicate()
 	for nodeID, p := range e.proposalTracker.All() {
+		if !trusted(nodeID) {
+			continue
+		}
 		if p.TxSet != newTxSet.ID() {
 			continue
 		}

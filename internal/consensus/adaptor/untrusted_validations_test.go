@@ -74,26 +74,36 @@ func TestAdaptor_SetTrustedValidatorsFiresTrustChange(t *testing.T) {
 	var sawTransitionGate bool
 	var callbackTrusted []consensus.NodeID
 	var callbackQuorum int
+	var sawSettledGate bool
 	fired := 0
+	settledFired := 0
 	a.OnTrustChanged(func(trusted []consensus.NodeID, quorum int) {
 		fired++
 		sawTransitionGate = a.IsQuorumUnavailable()
 		callbackTrusted = trusted
 		callbackQuorum = quorum
 	})
+	a.OnTrustSettled(func() {
+		settledFired++
+		sawSettledGate = a.IsQuorumUnavailable()
+	})
 	fired = 0
+	settledFired = 0
 	sawTransitionGate = false
 
 	a.SetTrustedValidators([]consensus.NodeID{n}, [][33]byte{{1}})
 	require.Equal(t, 1, fired, "callback must fire once per swap")
+	require.Equal(t, 1, settledFired, "settled callback must fire once per swap")
 	assert.True(t, sawTransitionGate, "finality gate must remain closed through callback installation")
 	assert.Equal(t, []consensus.NodeID{n}, callbackTrusted)
 	assert.Equal(t, 1, callbackQuorum)
 	assert.False(t, a.IsQuorumUnavailable(), "transition gate must reopen after snapshot installation")
+	assert.False(t, sawSettledGate, "settled callback must observe the reopened transition gate")
 	assert.True(t, a.IsTrusted(n), "trusted readers must observe the installed snapshot")
 
 	a.SetTrustedValidators(nil, nil)
 	assert.Equal(t, 2, fired)
+	assert.Equal(t, 2, settledFired)
 }
 
 // TestRouter_DropUntrustedValidations: under [relay_validations] =
@@ -107,7 +117,7 @@ func TestRouter_DropUntrustedValidations(t *testing.T) {
 	a := newTestAdaptor(t)
 	a.relayValidations = RelayValidationsDropUntrusted
 
-	router := NewRouter(engine, a, make(chan *peermanagement.InboundMessage))
+	router := newTestRouter(engine, a, make(chan *peermanagement.InboundMessage))
 
 	build := func(node consensus.NodeID, signingKey [33]byte) *peermanagement.InboundMessage {
 		v := &consensus.Validation{
@@ -121,7 +131,7 @@ func TestRouter_DropUntrustedValidations(t *testing.T) {
 		v.Signature = make([]byte, 70)
 		return &peermanagement.InboundMessage{
 			PeerID:  2,
-			Type:    uint16(message.TypeValidation),
+			Type:    message.TypeValidation,
 			Payload: encodePayload(t, &message.Validation{Validation: SerializeSTValidation(v)}),
 		}
 	}

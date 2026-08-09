@@ -33,3 +33,44 @@ func TestFullyValidatedLogDistinguishesLocalTipFromQuorum(t *testing.T) {
 	require.False(t, strings.Contains(output.String(), "Ledger fully validated"),
 		"a missing local ledger must not be logged as fully validated")
 }
+
+func TestOnLedgerFullyValidatedIgnoresCurrentTip(t *testing.T) {
+	svc, err := service.New(service.Config{GenesisConfig: genesis.DefaultConfig()})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	svc.SetValidatedLedger(closed.Sequence(), closed.Hash())
+	require.NoError(t, svc.SwitchToPreferredLedger(closed))
+	require.False(t, svc.NeedsInitialSync())
+
+	a := New(Config{LedgerService: svc})
+	calls := 0
+	a.onLedgerFullyValidated = func(uint32, [32]byte) { calls++ }
+	validated := svc.GetValidatedLedger()
+	require.NotNil(t, validated)
+
+	a.OnLedgerFullyValidated(consensus.LedgerID(validated.Hash()), validated.Sequence())
+	require.Zero(t, calls)
+	require.Equal(t, validated.Sequence(), a.networkValidatedSeq.Load())
+}
+
+func TestValidatedLedgerNotifiesValidationConfigChange(t *testing.T) {
+	svc, err := service.New(service.Config{GenesisConfig: genesis.DefaultConfig()})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	svc.SetValidatedLedger(closed.Sequence(), closed.Hash())
+
+	a := New(Config{LedgerService: svc})
+	calls := 0
+	a.OnValidationConfigChanged(func() { calls++ })
+	validated := svc.GetValidatedLedger()
+	require.NotNil(t, validated)
+
+	a.onValidatedLedger(validated.Sequence(), validated.Hash(), validated.ParentHash())
+	require.Equal(t, 1, calls)
+}

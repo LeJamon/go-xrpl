@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // ---------------------------------------------------------------------------
@@ -33,7 +34,7 @@ func checkValidPseudoAccounts(entries []InvariantEntry, rules *amendment.Rules) 
 
 	for _, e := range entries {
 		// Creation and modification are inspected; deletion is ignored.
-		if e.IsDelete || e.EntryType != "AccountRoot" || e.After == nil {
+		if e.IsDelete || e.EntryType != entry.TypeAccountRoot || e.After == nil {
 			continue
 		}
 

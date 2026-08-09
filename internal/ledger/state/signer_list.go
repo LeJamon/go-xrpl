@@ -5,7 +5,6 @@ import (
 	"strconv"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
@@ -48,20 +47,20 @@ func ParseSignerListLegacy(data []byte) (*SignerListInfo, error) {
 }
 
 func parseSignerList(data []byte, legacy bool) (*SignerListInfo, error) {
-	decoded := ledgerfields.New("SignerList")
+	decoded := entry.NewByName("SignerList")
 	if decoded == nil {
 		return nil, fmt.Errorf("failed to decode SignerList: decoder is not registered")
 	}
 	var err error
 	if legacy {
-		err = ledgerfields.DecodeLegacy(decoded, data)
+		err = entry.DecodeLegacy(decoded, data)
 	} else {
 		err = decoded.Decode(data)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode SignerList: %w", err)
 	}
-	wire, ok := decoded.(*ledgerfields.SignerList)
+	wire, ok := decoded.(*entry.SignerList)
 	if !ok {
 		return nil, fmt.Errorf("failed to decode SignerList: decoder has type %T", decoded)
 	}
@@ -128,7 +127,7 @@ func signerEntriesFromGenerated(values []any) ([]AccountSignerEntry, error) {
 // sfOwner (a keylet input) is stored.
 // Reference: rippled SetSignerList.cpp writeSignersToSLE()
 func SerializeSignerList(quorum uint32, entries []SignerEntry, flags uint32, expandedSignerList bool, ownerNode uint64, owner *[20]byte) ([]byte, error) {
-	ledgerEntry := &ledgerfields.SignerList{}
+	ledgerEntry := &entry.SignerList{}
 	ledgerEntry.SetSignerQuorum(quorum)
 	ledgerEntry.SetOwnerNode(strconv.FormatUint(ownerNode, 16))
 	ledgerEntry.SetSignerListID(0)
@@ -165,7 +164,7 @@ func SerializeTicket(ownerID [20]byte, ticketSeq uint32, ownerNode uint64) ([]by
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
 	}
 
-	entry := &ledgerfields.Ticket{}
+	entry := &entry.Ticket{}
 	entry.SetAccount(ownerAddress)
 	entry.SetTicketSequence(ticketSeq)
 	entry.SetOwnerNode(strconv.FormatUint(ownerNode, 16))
@@ -185,7 +184,7 @@ func SerializeDepositPreauth(ownerID, authorizedID [20]byte, ownerNode uint64) (
 		return nil, fmt.Errorf("failed to encode authorized address: %w", err)
 	}
 
-	entry := &ledgerfields.DepositPreauth{}
+	entry := &entry.DepositPreauth{}
 	entry.SetAccount(ownerAddress)
 	entry.SetAuthorize(authorizedAddress)
 	entry.SetOwnerNode(strconv.FormatUint(ownerNode, 16))
@@ -218,7 +217,7 @@ func SerializeDepositPreauthCredentials(ownerID [20]byte, credentials []DepositP
 		}
 	}
 
-	entry := &ledgerfields.DepositPreauth{}
+	entry := &entry.DepositPreauth{}
 	entry.SetAccount(ownerAddress)
 	entry.SetAuthorizeCredentials(credArray)
 	entry.SetOwnerNode(strconv.FormatUint(ownerNode, 16))
@@ -235,32 +234,35 @@ type DepositPreauthEntry struct {
 // ParseDepositPreauth parses a DepositPreauth ledger entry from binary data.
 // Extracts Account and OwnerNode needed for removeFromLedger.
 func ParseDepositPreauth(data []byte) (*DepositPreauthEntry, error) {
-	decoded := ledgerfields.New("DepositPreauth")
+	decoded := entry.NewByName("DepositPreauth")
 	if decoded == nil {
 		return nil, fmt.Errorf("failed to decode DepositPreauth: decoder is not registered")
 	}
 	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("failed to decode DepositPreauth: %w", err)
 	}
-	wire, ok := decoded.(*ledgerfields.DepositPreauth)
+	wire, ok := decoded.(*entry.DepositPreauth)
 	if !ok {
 		return nil, fmt.Errorf("failed to decode DepositPreauth: decoder has type %T", decoded)
 	}
 
-	entry := &DepositPreauthEntry{}
-	var err error
-	if wire.Account != "" {
-		entry.Account, err = DecodeAccountID(wire.Account)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode DepositPreauth: invalid Account: %w", err)
-		}
+	if wire.Account == "" {
+		return nil, fmt.Errorf("failed to decode DepositPreauth: missing Account")
 	}
-	if wire.OwnerNode != "" {
-		entry.OwnerNode, err = strconv.ParseUint(wire.OwnerNode, 16, 64)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode DepositPreauth: invalid OwnerNode: %w", err)
-		}
+	if wire.OwnerNode == "" {
+		return nil, fmt.Errorf("failed to decode DepositPreauth: missing OwnerNode")
 	}
 
-	return entry, nil
+	parsed := &DepositPreauthEntry{}
+	var err error
+	parsed.Account, err = DecodeAccountID(wire.Account)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode DepositPreauth: invalid Account: %w", err)
+	}
+	parsed.OwnerNode, err = strconv.ParseUint(wire.OwnerNode, 16, 64)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode DepositPreauth: invalid OwnerNode: %w", err)
+	}
+
+	return parsed, nil
 }

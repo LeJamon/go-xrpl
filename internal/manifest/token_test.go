@@ -59,7 +59,7 @@ func TestLoadValidatorToken_DecodeManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Deserialize embedded manifest: %v", err)
 	}
-	if m.Sequence == 0 {
+	if m.Sequence() == 0 {
 		t.Errorf("expected non-zero manifest sequence, got 0")
 	}
 }

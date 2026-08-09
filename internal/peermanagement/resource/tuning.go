@@ -2,10 +2,6 @@ package resource
 
 import "time"
 
-// Tuning constants mirror rippled's Resource::detail::Tuning enum
-// (rippled/include/xrpl/resource/detail/Tuning.h). Keeping the same
-// numeric values means an operator familiar with rippled's reputation
-// behavior sees identical thresholds here.
 const (
 	// WarningThreshold is the balance at which a Consumer should be
 	// warned that load is high.
@@ -16,7 +12,7 @@ const (
 	DropThreshold = 25000
 
 	// DecayWindowSeconds is the exponential-decay window for the
-	// per-Consumer balance. A power of two matches rippled's choice.
+	// per-Consumer balance.
 	DecayWindowSeconds = 32
 
 	// MinimumGossipBalance is the threshold at or above which a

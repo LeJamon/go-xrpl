@@ -11,129 +11,9 @@ import (
 
 	binarycodecdefs "github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	binarycodectypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
-
-type innerFieldStyle uint8
-
-const (
-	innerRequired innerFieldStyle = iota
-	innerOptional
-	innerDefault
-)
-
-var innerObjectTemplates = map[string]map[string]innerFieldStyle{
-	"SignerEntry": {
-		"Account":       innerRequired,
-		"SignerWeight":  innerRequired,
-		"WalletLocator": innerOptional,
-	},
-	"Signer": {
-		"Account":       innerRequired,
-		"SigningPubKey": innerRequired,
-		"TxnSignature":  innerRequired,
-	},
-	"Majority": {
-		"Amendment": innerRequired,
-		"CloseTime": innerRequired,
-	},
-	"DisabledValidator": {
-		"PublicKey":           innerRequired,
-		"FirstLedgerSequence": innerRequired,
-	},
-	"NFToken": {
-		"NFTokenID": innerRequired,
-		"URI":       innerOptional,
-	},
-	"VoteEntry": {
-		"Account":    innerRequired,
-		"TradingFee": innerDefault,
-		"VoteWeight": innerRequired,
-	},
-	"AuctionSlot": {
-		"Account":       innerRequired,
-		"Expiration":    innerRequired,
-		"DiscountedFee": innerDefault,
-		"Price":         innerRequired,
-		"AuthAccounts":  innerOptional,
-	},
-	"XChainClaimAttestationCollectionElement": {
-		"AttestationSignerAccount": innerRequired,
-		"PublicKey":                innerRequired,
-		"Signature":                innerRequired,
-		"Amount":                   innerRequired,
-		"Account":                  innerRequired,
-		"AttestationRewardAccount": innerRequired,
-		"WasLockingChainSend":      innerRequired,
-		"XChainClaimID":            innerRequired,
-		"Destination":              innerOptional,
-	},
-	"XChainCreateAccountAttestationCollectionElement": {
-		"AttestationSignerAccount": innerRequired,
-		"PublicKey":                innerRequired,
-		"Signature":                innerRequired,
-		"Amount":                   innerRequired,
-		"Account":                  innerRequired,
-		"AttestationRewardAccount": innerRequired,
-		"WasLockingChainSend":      innerRequired,
-		"XChainAccountCreateCount": innerRequired,
-		"Destination":              innerRequired,
-		"SignatureReward":          innerRequired,
-	},
-	"XChainClaimProofSig": {
-		"AttestationSignerAccount": innerRequired,
-		"PublicKey":                innerRequired,
-		"Amount":                   innerRequired,
-		"AttestationRewardAccount": innerRequired,
-		"WasLockingChainSend":      innerRequired,
-		"Destination":              innerOptional,
-	},
-	"XChainCreateAccountProofSig": {
-		"AttestationSignerAccount": innerRequired,
-		"PublicKey":                innerRequired,
-		"Amount":                   innerRequired,
-		"SignatureReward":          innerRequired,
-		"AttestationRewardAccount": innerRequired,
-		"WasLockingChainSend":      innerRequired,
-		"Destination":              innerRequired,
-	},
-	"AuthAccount": {
-		"Account": innerRequired,
-	},
-	"PriceData": {
-		"BaseAsset":  innerRequired,
-		"QuoteAsset": innerRequired,
-		"AssetPrice": innerOptional,
-		"Scale":      innerDefault,
-	},
-	"Credential": {
-		"Issuer":         innerRequired,
-		"CredentialType": innerRequired,
-	},
-	"Permission": {
-		"PermissionValue": innerRequired,
-	},
-	"BatchSigner": {
-		"Account":       innerRequired,
-		"SigningPubKey": innerOptional,
-		"TxnSignature":  innerOptional,
-		"Signers":       innerOptional,
-	},
-	"Book": {
-		"BookDirectory": innerRequired,
-		"BookNode":      innerRequired,
-	},
-	"CounterpartySignature": {
-		"SigningPubKey": innerOptional,
-		"TxnSignature":  innerOptional,
-		"Signers":       innerOptional,
-	},
-	"SponsorSignature": {
-		"SigningPubKey": innerOptional,
-		"TxnSignature":  innerOptional,
-		"Signers":       innerOptional,
-	},
-}
 
 func serializedFieldParseMessage(value any, path string, defs *binarycodecdefs.Definitions) string {
 	object, ok := value.(map[string]any)
@@ -157,14 +37,15 @@ func serializedFieldParseMessage(value any, path string, defs *binarycodecdefs.D
 		fieldPath := path + "." + name
 		switch field.Type {
 		case "STObject":
-			child, ok := fieldValue.(map[string]any)
+			child, ok := parsedInnerObject(fieldValue)
 			if !ok {
 				return fmt.Sprintf("Field '%s' is not a JSON object.", fieldPath)
 			}
+			object[name] = child
 			if message := serializedFieldParseMessage(child, fieldPath, defs); message != "" {
 				return message
 			}
-			if !meetsInnerObjectTemplate(name, child) {
+			if !binarycodectypes.CanonicalizeInnerObjectTemplate(name, child) {
 				return fmt.Sprintf("Object '%s' contents did not meet requirements for that type.", name)
 			}
 		case "STArray":
@@ -174,6 +55,11 @@ func serializedFieldParseMessage(value any, path string, defs *binarycodecdefs.D
 			items, ok := fieldValue.([]any)
 			if !ok {
 				return fmt.Sprintf("Field '%s' is not a JSON array.", fieldPath)
+			}
+			if len(items) > binarycodectypes.MaxJSONArrayElements {
+				return fmt.Sprintf(
+					"Field '%s' exceeds allowed JSON array size of %d elements per field.",
+					fieldPath, binarycodectypes.MaxJSONArrayElements)
 			}
 			for i, item := range items {
 				itemObject, ok := item.(map[string]any)
@@ -186,20 +72,35 @@ func serializedFieldParseMessage(value any, path string, defs *binarycodecdefs.D
 				var wrapperValue any
 				for wrapperName, wrapperValue = range itemObject {
 				}
-				if _, err := defs.FieldInstanceByName(wrapperName); err != nil {
+				wrapperField, err := defs.FieldInstanceByName(wrapperName)
+				if err != nil {
 					return fmt.Sprintf("Field '%s.%s' is unknown.", fieldPath, wrapperName)
 				}
-				wrapperObject, ok := wrapperValue.(map[string]any)
-				if !ok {
-					return fmt.Sprintf(
-						"Field '%s[%d]' must be an object with a single key/object value.",
-						fieldPath, i)
+				var wrapperObject map[string]any
+				if wrapperValue == nil {
+					wrapperObject = map[string]any{}
+				} else {
+					wrapperObject, ok = wrapperValue.(map[string]any)
+					if !ok {
+						return fmt.Sprintf(
+							"Field '%s[%d]' must be an object with a single key/object value.",
+							fieldPath, i)
+					}
+					if wrapperObject == nil {
+						wrapperObject = map[string]any{}
+					}
 				}
+				itemObject[wrapperName] = wrapperObject
 				itemPath := fmt.Sprintf("%s.[%d].%s", fieldPath, i, wrapperName)
 				if message := serializedFieldParseMessage(wrapperObject, itemPath, defs); message != "" {
 					return fmt.Sprintf("Error at '%s'. %s", itemPath, message)
 				}
-				if !meetsInnerObjectTemplate(wrapperName, wrapperObject) {
+				if wrapperField.Type != "STObject" {
+					return fmt.Sprintf(
+						"Item '%s' at index %d is not an object.  Arrays may only contain objects.",
+						itemPath, i)
+				}
+				if !binarycodectypes.CanonicalizeInnerObjectTemplate(wrapperName, wrapperObject) {
 					return fmt.Sprintf(
 						"Error at '%s'. Object '%s' contents did not meet requirements for that type.",
 						itemPath, wrapperName)
@@ -217,6 +118,11 @@ func serializedFieldParseMessage(value any, path string, defs *binarycodecdefs.D
 	return ""
 }
 
+func parsedInnerObject(value any) (map[string]any, bool) {
+	object, ok := value.(map[string]any)
+	return object, ok && object != nil
+}
+
 func validateSerializedLeaf(
 	name string,
 	fieldType string,
@@ -228,13 +134,40 @@ func validateSerializedLeaf(
 	case "UInt8":
 		return validateUInt8(name, value, path, defs)
 	case "UInt16":
-		return validateUInt16(value, path, defs)
+		return validateUInt16(name, value, path, defs)
 	case "UInt32":
 		return validateUInt32(name, value, path, defs)
 	case "UInt64":
 		return validateUInt64(name, value, path)
 	case "Int32":
 		return validateInt32(value, path)
+	case "Amount":
+		switch value.(type) {
+		case string, json.Number:
+			raw, err := json.Marshal(value)
+			if err != nil {
+				return value, fmt.Sprintf("Field '%s' has invalid data.", path)
+			}
+			amount, err := state.AmountFromJSON(raw)
+			if err != nil {
+				return value, fmt.Sprintf("Field '%s' has invalid data.", path)
+			}
+			switch {
+			case amount.IsNative():
+				value = amount.Value()
+			case amount.IsMPT():
+				value = map[string]any{
+					"value":           amount.Value(),
+					"mpt_issuance_id": amount.MPTIssuanceID(),
+				}
+			default:
+				value = map[string]any{
+					"value":    amount.Value(),
+					"currency": amount.Currency,
+					"issuer":   amount.Issuer,
+				}
+			}
+		}
 	case "Hash128":
 		return validateHash(value, path, 16)
 	case "Hash160":
@@ -297,13 +230,20 @@ func validateUInt8(name string, value any, path string, defs *binarycodecdefs.De
 	return uint8(n), ""
 }
 
-func validateUInt16(value any, path string, defs *binarycodecdefs.Definitions) (any, string) {
+func validateUInt16(name string, value any, path string, defs *binarycodecdefs.Definitions) (any, string) {
 	if text, ok := value.(string); ok {
-		if code, err := defs.TransactionTypeCode(text); err == nil {
-			return uint16(code), ""
+		switch name {
+		case "TransactionType":
+			if code, err := defs.TransactionTypeCode(text); err == nil {
+				return uint16(code), ""
+			}
+		case "LedgerEntryType":
+			if code, err := defs.LedgerEntryTypeCode(text); err == nil {
+				return uint16(code), ""
+			}
 		}
-		if code, err := defs.LedgerEntryTypeCode(text); err == nil {
-			return uint16(code), ""
+		if text == "" || text[0] < '0' || text[0] > '9' {
+			return value, fmt.Sprintf("Field '%s' has invalid data.", path)
 		}
 		n, err := strconv.ParseUint(text, 10, 16)
 		if err != nil {
@@ -490,44 +430,4 @@ func isUnsignedDecimal(value string) bool {
 		}
 	}
 	return true
-}
-
-func meetsInnerObjectTemplate(name string, object map[string]any) bool {
-	template, ok := innerObjectTemplates[name]
-	if !ok {
-		return true
-	}
-	for fieldName, style := range template {
-		value, present := object[fieldName]
-		if style == innerRequired && !present {
-			return false
-		}
-		if style == innerDefault && present && isDefaultSerializedValue(value) {
-			return false
-		}
-	}
-	for fieldName := range object {
-		if _, ok := template[fieldName]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
-func isDefaultSerializedValue(value any) bool {
-	if value == nil {
-		return true
-	}
-	switch typed := value.(type) {
-	case string:
-		return typed == "" || typed == "0"
-	case []any:
-		return len(typed) == 0
-	case map[string]any:
-		return len(typed) == 0
-	}
-	if _, magnitude, ok := integerNumericValue(value); ok {
-		return magnitude == 0
-	}
-	return false
 }

@@ -25,10 +25,16 @@ import (
 func makeProvisionalWarmRouter(t *testing.T) (*Router, *recordingSender, *service.Service) {
 	t.Helper()
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "router-fast-load", 10_000, time.Hour)
-	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
+	db, err := nodestore.NewKVDatabase(memorydb.New(), nodestore.DatabaseConfig{
+		PositiveCache: nodestore.CacheConfig{
+			Enabled:    true,
+			MaxEntries: 10_000,
+			TTL:        time.Hour,
+		},
+	})
 	require.NoError(t, err)
-	require.NoError(t, rm.Open(ctx))
+	rm, err := sqlitedb.NewRepositoryManager(ctx, t.TempDir(), sqlitedb.Settings{})
+	require.NoError(t, err)
 
 	writer, err := service.New(service.Config{
 		Standalone:    true,
@@ -56,13 +62,13 @@ func makeProvisionalWarmRouter(t *testing.T) (*Router, *recordingSender, *servic
 	require.NoError(t, svc.Start())
 	t.Cleanup(func() {
 		svc.Stop()
-		require.NoError(t, rm.Close(ctx))
+		require.NoError(t, rm.Close())
 		require.NoError(t, db.Close())
 	})
 	require.False(t, svc.NeedsInitialSync())
 	require.True(t, svc.IsFastLoadProvisional())
 	a, sender := newRecordingAdaptor(t, svc)
-	return NewRouter(nil, a, make(chan *peermanagement.InboundMessage, 1)), sender, svc
+	return newTestRouter(nil, a, make(chan *peermanagement.InboundMessage, 1)), sender, svc
 }
 
 func statusChangeWithParent(
@@ -81,7 +87,7 @@ func statusChangeWithParent(
 	require.NoError(t, err)
 	return &peermanagement.InboundMessage{
 		PeerID:  peerID,
-		Type:    uint16(message.TypeStatusChange),
+		Type:    message.TypeStatusChange,
 		Payload: encoded,
 	}
 }
@@ -456,7 +462,8 @@ func TestAdaptor_FastLoadedLedgerIsReplacedBySameHeightQuorum(t *testing.T) {
 	require.NoError(t, err)
 	replacementHeader := loaded.Header()
 	replacementHeader.Validated = false
-	replacementHeader.Hash[0] ^= 0xFF
+	replacementHeader.CloseTime = replacementHeader.CloseTime.Add(time.Second)
+	replacementHeader.Hash = header.CalculateHash(replacementHeader)
 	replacementHash := replacementHeader.Hash
 	initialCandidate, err := svc.BootstrapLedgerWithState(
 		context.Background(),
@@ -492,7 +499,9 @@ func TestAdaptor_FastLoadedLedgerIsReplacedBySameHeightQuorum(t *testing.T) {
 	require.Equal(t, replacementHash, svc.GetValidatedLedger().Hash())
 	require.False(t, svc.IsFastLoadProvisional())
 	require.False(t, svc.NeedsInitialSync())
-	require.Equal(t, consensus.OpModeTracking, r.adaptor.GetOperatingMode())
+	require.Eventually(t, func() bool {
+		return r.adaptor.GetOperatingMode() == consensus.OpModeTracking
+	}, time.Second, 10*time.Millisecond)
 	require.Contains(t, engine.getLedgers(), consensus.LedgerID(replacementHash))
 }
 

@@ -24,7 +24,9 @@ func makeGenesisLedger(t *testing.T) *ledger.Ledger {
 	t.Helper()
 	res, err := genesis.Create(genesis.DefaultConfig())
 	require.NoError(t, err)
-	return ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	l, err := ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	require.NoError(t, err)
+	return l
 }
 
 // encodeVL returns the XRPL VL prefix for the given length. Mirrors
@@ -104,7 +106,7 @@ func buildDeltaResponse(
 		ParentHash:          parentHash,
 		ParentCloseTime:     closeTime,
 		CloseTime:           closeTime.Add(10 * time.Second),
-		CloseTimeResolution: parent.CloseTimeResolution(),
+		CloseTimeResolution: uint8(parent.CloseTimeResolution()),
 		CloseFlags:          0,
 		Drops:               parent.TotalDrops(),
 		TxHash:              txRoot,
@@ -154,14 +156,12 @@ func TestInboundReplayDelta_GotResponse_Success(t *testing.T) {
 
 	rd := NewReplayDelta(expectedHash, 42, parent, nil)
 	require.NoError(t, rd.GotResponse(resp))
-	assert.True(t, rd.IsComplete())
+	assert.Equal(t, StateReplayReady, rd.State())
+	assert.False(t, rd.IsComplete())
 	assert.Nil(t, rd.Err())
 
-	out, err := rd.Result()
-	require.NoError(t, err)
-	require.NotNil(t, out)
-	assert.Equal(t, expectedHash, out.Hash())
-	assert.Equal(t, parent.Sequence()+1, out.Sequence())
+	_, err := rd.Result()
+	require.Error(t, err)
 
 	ordered := rd.OrderedTxs()
 	require.Len(t, ordered, 3)
@@ -240,18 +240,30 @@ func TestInboundReplayDelta_MalformedTxBlob(t *testing.T) {
 // TestInboundReplayDelta_ResponseError verifies that a peer-signaled
 // error response is rejected without further parsing.
 func TestInboundReplayDelta_ResponseError(t *testing.T) {
-	t.Parallel()
-	parent := makeGenesisLedger(t)
-	resp := &message.ReplayDeltaResponse{
-		LedgerHash: make([]byte, 32),
-		Error:      message.ReplyErrorNoLedger,
+	tests := []struct {
+		name  string
+		error message.ReplyError
+	}{
+		{name: "explicit zero"},
+		{name: "nonzero", error: message.ReplyErrorNoLedger},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			parent := makeGenesisLedger(t)
+			resp := &message.ReplayDeltaResponse{
+				LedgerHash: make([]byte, 32),
+				Error:      tt.error,
+				ErrorSet:   true,
+			}
 
-	rd := NewReplayDelta([32]byte{}, 42, parent, nil)
-	err := rd.GotResponse(resp)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "peer signaled error")
-	assert.Equal(t, StateFailed, rd.State())
+			rd := NewReplayDelta([32]byte{}, 42, parent, nil)
+			err := rd.GotResponse(resp)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "peer signaled error")
+			assert.Equal(t, StateFailed, rd.State())
+		})
+	}
 }
 
 // TestInboundReplayDelta_EmptyHeader verifies that a response missing

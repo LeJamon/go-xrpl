@@ -19,14 +19,11 @@ import (
 
 func openArchiveDB(t *testing.T) *sqlite.RepositoryManager {
 	t.Helper()
-	rm, err := sqlite.NewRepositoryManager(t.TempDir())
+	rm, err := sqlite.NewRepositoryManager(context.Background(), t.TempDir(), sqlite.Settings{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rm.Open(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { rm.Close(context.Background()) })
+	t.Cleanup(func() { _ = rm.Close() })
 	return rm
 }
 
@@ -63,7 +60,7 @@ func TestValidationArchive_StaleValidationWrittenOnPrune(t *testing.T) {
 	}, nil)
 	defer a.Close(context.Background())
 
-	tracker := rcl.NewValidationTracker(1, 5*time.Minute)
+	tracker := rcl.NewValidationTracker(1)
 	tracker.SetOnStale(a.OnStale)
 
 	v := mkValidation(100, 0x01)
@@ -150,11 +147,15 @@ func TestValidationArchive_BatchedWriter_DoesNotBlockOnReceive(t *testing.T) {
 	if err := a.Flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	count, err := rm.Validation().GetValidationCount(context.Background())
-	if err != nil {
-		t.Fatal(err)
+	count := 0
+	for seq := relationaldb.LedgerIndex(1); seq <= enqueues; seq++ {
+		rows, err := rm.Validation().GetValidationsForLedger(context.Background(), seq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		count += len(rows)
 	}
-	if count != int64(enqueues) {
+	if count != enqueues {
 		t.Fatalf("after Flush, archive has %d rows, want %d", count, enqueues)
 	}
 }
@@ -187,9 +188,13 @@ func TestValidationArchive_RetentionRespected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	count, err := repo.GetValidationCount(context.Background())
-	if err != nil {
-		t.Fatal(err)
+	count := 0
+	for seq := relationaldb.LedgerIndex(1); seq <= 20; seq++ {
+		rows, err := repo.GetValidationsForLedger(context.Background(), seq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		count += len(rows)
 	}
 	// cutoff = 20 - 10 = 10 → DELETE WHERE seq < 10 → seqs 1..9 gone,
 	// seqs 10..20 remain (11 rows).
@@ -228,9 +233,9 @@ func TestValidationArchive_EngineDrivenFlow(t *testing.T) {
 	}, nil)
 	defer a.Close(context.Background())
 
-	tracker := rcl.NewValidationTracker(2, 5*time.Minute)
+	tracker := rcl.NewValidationTracker(2)
 	trustedNodes := []consensus.NodeID{{1}, {2}, {3}}
-	tracker.SetTrusted(trustedNodes)
+	tracker.SetTrustedAndQuorum(trustedNodes, 2)
 	tracker.SetOnStale(a.OnStale)
 
 	// Pretend the engine wired its fully-validated callback to drive

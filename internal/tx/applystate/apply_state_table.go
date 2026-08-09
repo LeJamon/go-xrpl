@@ -2,6 +2,7 @@ package applystate
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -14,8 +15,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // Action represents the type of modification to a ledger entry
@@ -63,7 +64,7 @@ type TrackedEntry struct {
 // emitted AffectedNode carries only {LedgerIndex, LedgerEntryType,
 // PreviousTxnID, PreviousTxnLgrSeq}, no FinalFields / PreviousFields.
 type ThreadedOwner struct {
-	EntryType            string
+	EntryType            entry.Type
 	OldPreviousTxnID     [32]byte
 	OldPreviousTxnLgrSeq uint32
 	Updated              []byte // SLE bytes after threadItem write
@@ -305,8 +306,9 @@ func (t *ApplyStateTable) IsErased(k keylet.Keylet) bool {
 }
 
 // AdjustDropsDestroyed records destroyed XRP
-func (t *ApplyStateTable) AdjustDropsDestroyed(drops drops.XRPAmount) {
+func (t *ApplyStateTable) AdjustDropsDestroyed(drops drops.XRPAmount) error {
 	t.drops = t.drops.Add(drops)
+	return nil
 }
 
 // ForEach iterates over all state entries, reflecting local modifications.
@@ -511,7 +513,7 @@ func (t *ApplyStateTable) applyOrdered(
 			// OLD prev fields per rippled ApplyStateTable.cpp:570-571.
 			node := tx.AffectedNode{
 				NodeType:          "ModifiedNode",
-				LedgerEntryType:   owner.EntryType,
+				LedgerEntryType:   owner.EntryType.String(),
 				LedgerIndex:       strings.ToUpper(hex.EncodeToString(key[:])),
 				PreviousTxnID:     strings.ToUpper(hex.EncodeToString(owner.OldPreviousTxnID[:])),
 				PreviousTxnLgrSeq: owner.OldPreviousTxnLgrSeq,
@@ -551,7 +553,9 @@ func (t *ApplyStateTable) applyOrdered(
 		}
 
 		if t.drops.IsPositive() {
-			base.AdjustDropsDestroyed(t.drops)
+			if err := base.AdjustDropsDestroyed(t.drops); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
@@ -597,9 +601,12 @@ func (t *ApplyStateTable) applyThreading() {
 	fixPreviousTxnID := t.effectiveRules().Enabled(amendment.FeatureFixPreviousTxnID)
 
 	for _, w := range work {
-		entryType := state.EntryType(w.entry.Current)
+		entryType, err := state.DecodeType(w.entry.Current)
 		if w.entry.Current == nil && w.entry.Original != nil {
-			entryType = state.EntryType(w.entry.Original)
+			entryType, err = state.DecodeType(w.entry.Original)
+		}
+		if err != nil {
+			continue
 		}
 
 		switch w.entry.Action {
@@ -659,7 +666,7 @@ func (t *ApplyStateTable) applyThreading() {
 // (NOT promoted to ActionModify), mirroring rippled's mods table at
 // ApplyStateTable.cpp:584-633 — the emitted AffectedNode is bare
 // (no FinalFields / PreviousFields).
-func (t *ApplyStateTable) threadOwners(sourceKey [32]byte, data []byte, entryType string) {
+func (t *ApplyStateTable) threadOwners(sourceKey [32]byte, data []byte, entryType entry.Type) {
 	if data == nil {
 		return
 	}
@@ -700,8 +707,12 @@ func (t *ApplyStateTable) threadOwners(sourceKey [32]byte, data []byte, entryTyp
 					if !changed {
 						continue
 					}
+					ownerType, err := state.DecodeType(entry.Current)
+					if err != nil {
+						continue
+					}
 					t.threadOnlyOwners[ownerKey.Key] = &ThreadedOwner{
-						EntryType:            state.EntryType(entry.Current),
+						EntryType:            ownerType,
 						OldPreviousTxnID:     oldPrev,
 						OldPreviousTxnLgrSeq: oldPrevSeq,
 						Updated:              newData,
@@ -721,8 +732,12 @@ func (t *ApplyStateTable) threadOwners(sourceKey [32]byte, data []byte, entryTyp
 			if !changed {
 				continue
 			}
+			ownerType, err := state.DecodeType(entry.Current)
+			if err != nil {
+				continue
+			}
 			t.threadOnlyOwners[ownerKey.Key] = &ThreadedOwner{
-				EntryType:            state.EntryType(entry.Current),
+				EntryType:            ownerType,
 				OldPreviousTxnID:     oldPrev,
 				OldPreviousTxnLgrSeq: oldPrevSeq,
 				Updated:              newData,
@@ -739,8 +754,12 @@ func (t *ApplyStateTable) threadOwners(sourceKey [32]byte, data []byte, entryTyp
 			if !changed {
 				continue
 			}
+			ownerType, err := state.DecodeType(ownerData)
+			if err != nil {
+				continue
+			}
 			t.threadOnlyOwners[ownerKey.Key] = &ThreadedOwner{
-				EntryType:            state.EntryType(ownerData),
+				EntryType:            ownerType,
 				OldPreviousTxnID:     oldPrev,
 				OldPreviousTxnLgrSeq: oldPrevSeq,
 				Updated:              newData,
@@ -751,7 +770,7 @@ func (t *ApplyStateTable) threadOwners(sourceKey [32]byte, data []byte, entryTyp
 
 // TxExists delegates to the base view to check if a transaction exists.
 // Reference: rippled ReadView::txExists()
-func (t *ApplyStateTable) TxExists(txID [32]byte) bool {
+func (t *ApplyStateTable) TxExists(txID [32]byte) (bool, error) {
 	return t.base.TxExists(txID)
 }
 
@@ -800,12 +819,13 @@ func (t *ApplyStateTable) CollectEntries() []invariants.InvariantEntry {
 		if typeData == nil {
 			typeData = before
 		}
+		entryType, _ := state.DecodeType(typeData)
 		entries = append(entries, invariants.InvariantEntry{
 			Key:       key,
 			IsDelete:  entry.Action == ActionErase,
 			Before:    before,
 			After:     after,
-			EntryType: state.EntryType(typeData),
+			EntryType: entryType,
 		})
 	}
 	return entries
@@ -834,21 +854,33 @@ func (t *ApplyStateTable) GetItems() map[[32]byte]*TrackedEntry {
 
 var errUnregisteredLedgerEntryType = errors.New("applystate: unregistered ledger entry type")
 
-func metadataEntry(entryType string) (ledgerfields.Entry, error) {
-	entry := ledgerfields.New(entryType)
-	if entry == nil {
+func metadataType(data []byte) (entry.Type, error) {
+	entryType, err := state.DecodeType(data)
+	if err != nil && len(data) >= 3 && data[0] == 0x11 {
+		rawType := entry.Type(binary.BigEndian.Uint16(data[1:3]))
+		return 0, fmt.Errorf("%w %q: %v", errUnregisteredLedgerEntryType, rawType, err)
+	}
+	return entryType, err
+}
+
+func metadataEntry(entryType entry.Type) (entry.Entry, error) {
+	model := entry.New(entryType)
+	if model == nil {
 		return nil, fmt.Errorf("%w %q", errUnregisteredLedgerEntryType, entryType)
 	}
-	return entry, nil
+	return model, nil
 }
 
 // buildCreatedNode creates metadata for a newly created entry
 func (t *ApplyStateTable) buildCreatedNode(key [32]byte, data []byte) (tx.AffectedNode, error) {
-	entryType := state.EntryType(data)
+	entryType, err := metadataType(data)
+	if err != nil {
+		return tx.AffectedNode{}, err
+	}
 
 	node := tx.AffectedNode{
 		NodeType:        "CreatedNode",
-		LedgerEntryType: entryType,
+		LedgerEntryType: entryType.String(),
 		LedgerIndex:     strings.ToUpper(hex.EncodeToString(key[:])),
 		NewFields:       make(map[string]any),
 	}
@@ -888,8 +920,8 @@ func (t *ApplyStateTable) buildCreatedNode(key [32]byte, data []byte) (tx.Affect
 // other conditional-threading types (Amendments/FeeSettings/NegativeUNL/AMM) are
 // only ever modified in place and several drop PreviousTxnID from Current, so
 // they must source the pointer from the original node.
-func (t *ApplyStateTable) modifiedNodePrevTxn(key [32]byte, entryType string, origEntry ledgerfields.Entry) (string, uint32) {
-	if e, ok := t.items[key]; ok && (e.reinserted || entryType == "DirectoryNode") {
+func (t *ApplyStateTable) modifiedNodePrevTxn(key [32]byte, entryType entry.Type, origEntry entry.Entry) (string, uint32) {
+	if e, ok := t.items[key]; ok && (e.reinserted || entryType == entry.TypeDirectoryNode) {
 		if !e.hasThreadPrev || e.threadPrevTxnID == ([32]byte{}) {
 			return "", 0
 		}
@@ -900,11 +932,14 @@ func (t *ApplyStateTable) modifiedNodePrevTxn(key [32]byte, entryType string, or
 
 // buildModifiedNode creates metadata for a modified entry
 func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []byte) (tx.AffectedNode, error) {
-	entryType := state.EntryType(current)
+	entryType, err := metadataType(current)
+	if err != nil {
+		return tx.AffectedNode{}, err
+	}
 
 	node := tx.AffectedNode{
 		NodeType:        "ModifiedNode",
-		LedgerEntryType: entryType,
+		LedgerEntryType: entryType.String(),
 		LedgerIndex:     strings.ToUpper(hex.EncodeToString(key[:])),
 		FinalFields:     make(map[string]any),
 		PreviousFields:  make(map[string]any),
@@ -992,11 +1027,14 @@ func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []by
 // original = state when first read, current = state just before deletion
 func (t *ApplyStateTable) buildDeletedNode(key [32]byte, original, current []byte) (tx.AffectedNode, error) {
 	// Use current for entry type (it's the state just before deletion)
-	entryType := state.EntryType(current)
+	entryType, err := metadataType(current)
+	if err != nil {
+		return tx.AffectedNode{}, err
+	}
 
 	node := tx.AffectedNode{
 		NodeType:        "DeletedNode",
-		LedgerEntryType: entryType,
+		LedgerEntryType: entryType.String(),
 		LedgerIndex:     strings.ToUpper(hex.EncodeToString(key[:])),
 		FinalFields:     make(map[string]any),
 		PreviousFields:  make(map[string]any),

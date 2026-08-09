@@ -79,7 +79,8 @@ func makeImmutableLedger(t *testing.T, txCount int) (parent, child *ledger.Ledge
 	t.Helper()
 	res, err := genesis.Create(genesis.DefaultConfig())
 	require.NoError(t, err)
-	parent = ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	parent, err = ledger.FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	require.NoError(t, err)
 
 	open, err := ledger.NewOpen(parent, time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC))
 	require.NoError(t, err)
@@ -102,23 +103,6 @@ type inMemoryLookup struct {
 // in-memory lookup.
 type lookupProvider struct {
 	lookup *inMemoryLookup
-}
-
-func (p *lookupProvider) GetLedgerHeader(hash []byte, _ uint32) ([]byte, error) {
-	if h, ok := to32(hash); ok {
-		if l := p.lookup.byHash[h]; l != nil {
-			return l.SerializeHeader(), nil
-		}
-	}
-	return nil, nil
-}
-
-func (p *lookupProvider) GetAccountStateNode(_ []byte, _ []byte) ([]byte, error) {
-	return nil, nil
-}
-
-func (p *lookupProvider) GetTransactionNode(_ []byte, _ []byte) ([]byte, error) {
-	return nil, nil
 }
 
 func (p *lookupProvider) GetReplayDelta(hash []byte) ([]byte, [][]byte, error) {
@@ -451,7 +435,7 @@ Loop:
 	for {
 		select {
 		case msg := <-b.LedgerDataMessages():
-			if message.MessageType(msg.Type) != message.TypeReplayDeltaResponse {
+			if msg.Type != message.TypeReplayDeltaResponse {
 				continue
 			}
 			decoded, err := message.Decode(message.TypeReplayDeltaResponse, msg.Payload)
@@ -463,14 +447,12 @@ Loop:
 		}
 	}
 
-	// Verify the round-tripped response reconstructs the exact ledger.
 	rd := inbound.NewReplayDelta(hash, uint64(peerAOnB), parent, nil)
 	require.NoError(t, rd.GotResponse(resp))
-	got, err := rd.Result()
-	require.NoError(t, err)
-	assert.Equal(t, child.Hash(), got.Hash(),
-		"the derived ledger hash must byte-match A's source ledger")
-	assert.Equal(t, child.Sequence(), got.Sequence())
+	assert.Equal(t, inbound.StateReplayReady, rd.State())
+	assert.Equal(t, child.Hash(), rd.Hash())
+	assert.Equal(t, child.Sequence(), rd.Seq())
+	assert.Len(t, rd.OrderedTxs(), 3)
 }
 
 // TestTwoOverlay_Squelch_RoundTrip drives a full wire round-trip of
@@ -635,7 +617,7 @@ Loop:
 	for {
 		select {
 		case msg := <-b.LedgerDataMessages():
-			if message.MessageType(msg.Type) != message.TypeProofPathResponse {
+			if msg.Type != message.TypeProofPathResponse {
 				continue
 			}
 			decoded, err := message.Decode(message.TypeProofPathResponse, msg.Payload)
@@ -668,15 +650,6 @@ type proofPathLookupProvider struct {
 	tx   func(hash, key []byte) ([]byte, [][]byte, error)
 }
 
-func (p *proofPathLookupProvider) GetLedgerHeader(hash []byte, seq uint32) ([]byte, error) {
-	return p.base.GetLedgerHeader(hash, seq)
-}
-func (p *proofPathLookupProvider) GetAccountStateNode(h, n []byte) ([]byte, error) {
-	return p.base.GetAccountStateNode(h, n)
-}
-func (p *proofPathLookupProvider) GetTransactionNode(h, n []byte) ([]byte, error) {
-	return p.base.GetTransactionNode(h, n)
-}
 func (p *proofPathLookupProvider) GetReplayDelta(h []byte) ([]byte, [][]byte, error) {
 	return p.base.GetReplayDelta(h)
 }
@@ -753,7 +726,10 @@ func TestSingleOverlay_ReplayDelta_HandlerRoundTrip(t *testing.T) {
 		// protobuf body) so the overlay's onLedgerResponse can hand the
 		// payload straight to the peer's send queue without needing to
 		// know the message type. See LedgerSyncHandler.sendReplayDeltaResponse.
-		hdr, body, err := message.ReadMessage(bytes.NewReader(evt.Payload))
+		reader := bytes.NewReader(evt.Payload)
+		hdr, err := message.ReadHeader(reader)
+		require.NoError(t, err)
+		body, err := message.ReadPayload(reader, *hdr)
 		require.NoError(t, err, "event payload must be a valid wire frame")
 		require.Equal(t, message.TypeReplayDeltaResponse, hdr.MessageType)
 		decoded, err := message.Decode(message.TypeReplayDeltaResponse, body)
@@ -767,9 +743,8 @@ func TestSingleOverlay_ReplayDelta_HandlerRoundTrip(t *testing.T) {
 	require.NoError(t, rd.GotResponse(resp),
 		"the round-tripped response must verify cleanly")
 
-	got, err := rd.Result()
-	require.NoError(t, err)
-	assert.Equal(t, child.Hash(), got.Hash(), "round-trip must reconstruct the same ledger")
-	assert.Equal(t, child.Sequence(), got.Sequence())
+	assert.Equal(t, inbound.StateReplayReady, rd.State())
+	assert.Equal(t, child.Hash(), rd.Hash())
+	assert.Equal(t, child.Sequence(), rd.Seq())
 	assert.Len(t, rd.OrderedTxs(), 3, "all three txs must be preserved through the round-trip")
 }

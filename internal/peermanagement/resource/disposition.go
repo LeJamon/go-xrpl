@@ -1,7 +1,5 @@
 package resource
 
-// Disposition is the result of charging a Consumer. Mirrors rippled's
-// ripple::Resource::Disposition.
 type Disposition int
 
 const (
@@ -19,8 +17,6 @@ const (
 	Drop
 )
 
-// String returns the lowercase disposition name (matches rippled's
-// enum stringification used in logs).
 func (d Disposition) String() string {
 	switch d {
 	case Ok:

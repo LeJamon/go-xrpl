@@ -152,6 +152,124 @@ func TestAdaptorOperatingMode(t *testing.T) {
 	assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode())
 }
 
+func TestOperatingModeChangeCallbackRunsAfterEffectiveTransition(t *testing.T) {
+	a := New(Config{})
+	changed := make(chan consensus.OperatingMode, 1)
+	a.SetOnOperatingModeChange(func(mode consensus.OperatingMode) {
+		if got := a.GetOperatingMode(); got != mode {
+			t.Errorf("callback mode = %v, current mode = %v", mode, got)
+		}
+		changed <- mode
+	})
+
+	a.SetOperatingMode(consensus.OpModeDisconnected)
+	select {
+	case mode := <-changed:
+		t.Fatalf("same-mode update published %v", mode)
+	default:
+	}
+
+	go a.SetOperatingMode(consensus.OpModeConnected)
+	select {
+	case mode := <-changed:
+		if mode != consensus.OpModeConnected {
+			t.Fatalf("callback mode = %v", mode)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("mode callback deadlocked on adaptor re-entry")
+	}
+}
+
+func TestOperatingModeChangeCallbacksPreserveConcurrentTransitionOrder(t *testing.T) {
+	a := New(Config{})
+	callbackEntered := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	callbacks := make(chan consensus.OperatingMode, 2)
+	a.SetOnOperatingModeChange(func(mode consensus.OperatingMode) {
+		if mode == consensus.OpModeConnected {
+			close(callbackEntered)
+			<-releaseCallback
+		}
+		callbacks <- mode
+	})
+
+	firstDone := make(chan struct{})
+	go func() {
+		a.SetOperatingMode(consensus.OpModeConnected)
+		close(firstDone)
+	}()
+	select {
+	case <-callbackEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first mode callback did not start")
+	}
+
+	secondDone := make(chan struct{})
+	go func() {
+		a.SetOperatingMode(consensus.OpModeSyncing)
+		close(secondDone)
+	}()
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("second mode transition blocked behind callback")
+	}
+	select {
+	case mode := <-callbacks:
+		t.Fatalf("later mode callback overtook blocked transition: %v", mode)
+	default:
+	}
+
+	close(releaseCallback)
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("mode callback drain did not complete")
+	}
+	for _, want := range []consensus.OperatingMode{consensus.OpModeConnected, consensus.OpModeSyncing} {
+		select {
+		case got := <-callbacks:
+			if got != want {
+				t.Fatalf("callback mode = %v, want %v", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("missing callback for mode %v", want)
+		}
+	}
+}
+
+func TestOperatingModeChangeCallbackMaySetOperatingMode(t *testing.T) {
+	a := New(Config{})
+	callbacks := make(chan consensus.OperatingMode, 2)
+	a.SetOnOperatingModeChange(func(mode consensus.OperatingMode) {
+		callbacks <- mode
+		if mode == consensus.OpModeConnected {
+			a.SetOperatingMode(consensus.OpModeSyncing)
+		}
+	})
+
+	done := make(chan struct{})
+	go func() {
+		a.SetOperatingMode(consensus.OpModeConnected)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("recursive mode transition deadlocked")
+	}
+	for _, want := range []consensus.OperatingMode{consensus.OpModeConnected, consensus.OpModeSyncing} {
+		select {
+		case got := <-callbacks:
+			if got != want {
+				t.Fatalf("callback mode = %v, want %v", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("missing callback for mode %v", want)
+		}
+	}
+}
+
 func TestAdaptorGetLastClosedLedger(t *testing.T) {
 	a := newTestAdaptor(t)
 
@@ -308,30 +426,6 @@ func TestTxSetContains(t *testing.T) {
 	assert.False(t, ts.Contains(id3))
 }
 
-func TestTxSetAddRemove(t *testing.T) {
-	blob1 := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C}
-	blob2 := []byte{0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C}
-
-	ts, err := NewTxSet([][]byte{blob1})
-	require.NoError(t, err)
-	assert.Equal(t, 1, ts.Size())
-
-	originalID := ts.ID()
-
-	// Add
-	err = ts.Add(blob2)
-	require.NoError(t, err)
-	assert.Equal(t, 2, ts.Size())
-	assert.NotEqual(t, originalID, ts.ID()) // ID should change
-
-	// Remove
-	id1 := computeTxID(blob1)
-	err = ts.Remove(id1)
-	require.NoError(t, err)
-	assert.Equal(t, 1, ts.Size())
-	assert.False(t, ts.Contains(id1))
-}
-
 func TestProposalSignVerify(t *testing.T) {
 	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
 	require.NoError(t, err)
@@ -423,7 +517,7 @@ func TestLedgerWrapper(t *testing.T) {
 	assert.Equal(t, l, wrapper.Unwrap())
 }
 
-func TestNetworkSenderNoopDefault(t *testing.T) {
+func TestAdaptorNetworkNoopDefault(t *testing.T) {
 	svc := newTestLedgerService(t)
 	a := New(Config{
 		LedgerService: svc,
@@ -863,19 +957,18 @@ func TestOnLedgerFullyValidated_DemotesFullWhenNetworkAhead(t *testing.T) {
 func TestNew_SeedsRestartValidationFloor(t *testing.T) {
 	ctx := context.Background()
 
-	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
+	rm, err := sqlitedb.NewRepositoryManager(ctx, t.TempDir(), sqlitedb.Settings{})
 	require.NoError(t, err)
-	require.NoError(t, rm.Open(ctx))
-	t.Cleanup(func() { _ = rm.Close(ctx) })
+	t.Cleanup(func() { require.NoError(t, rm.Close()) })
 
 	// Persist ledgers up to seq 742 as a prior run would have.
 	for _, seq := range []relationaldb.LedgerIndex{740, 742, 741} {
-		info := &relationaldb.LedgerInfo{Sequence: seq}
+		info := relationaldb.LedgerInfo{Sequence: seq}
 		info.Hash[0] = byte(seq)
 		require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, info))
 	}
 
-	cfg := service.DefaultConfig()
+	cfg := service.Config{Standalone: true, GenesisConfig: genesis.DefaultConfig()}
 	cfg.Standalone = true
 	cfg.GenesisConfig = genesis.DefaultConfig()
 	cfg.RelationalDB = rm

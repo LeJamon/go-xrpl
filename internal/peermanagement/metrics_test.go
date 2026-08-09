@@ -2,6 +2,8 @@ package peermanagement
 
 import (
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 func TestTrafficCounterBasic(t *testing.T) {
@@ -38,17 +40,17 @@ func TestTrafficCounterBasic(t *testing.T) {
 
 func TestTrafficCounterCategorize(t *testing.T) {
 	tests := []struct {
-		msgType  uint16
+		msgType  message.MessageType
 		expected TrafficCategory
 	}{
-		{3, CategoryBase},         // TypePing
-		{5, CategoryCluster},      // TypeCluster
-		{15, CategoryOverlay},     // TypeEndpoints
-		{2, CategoryManifests},    // TypeManifests
-		{30, CategoryTransaction}, // TypeTransaction
-		{41, CategoryValidation},  // TypeValidation
-		{55, CategorySquelch},     // TypeSquelch
-		{999, CategoryUnknown},    // Unknown
+		{message.TypePing, CategoryBase},
+		{message.TypeCluster, CategoryCluster},
+		{message.TypeEndpoints, CategoryOverlay},
+		{message.TypeManifests, CategoryManifests},
+		{message.TypeTransaction, CategoryTransaction},
+		{message.TypeValidation, CategoryValidation},
+		{message.TypeSquelch, CategorySquelch},
+		{message.MessageType(999), CategoryUnknown},
 	}
 
 	for _, tc := range tests {

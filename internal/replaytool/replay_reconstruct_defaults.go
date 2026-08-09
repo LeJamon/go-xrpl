@@ -1,14 +1,13 @@
 package replaytool
 
-import "github.com/LeJamon/go-xrpl/protocol"
+import (
+	"fmt"
 
-// fixPreviousTxnIDEnabled reflects that this tool reconstructs recent mainnet
-// ledgers, where fixPreviousTxnID has long been active. It gates whether the
-// directory/singleton types listed in conditionalThreadingTypes carry threaded
-// PreviousTxnID/PreviousTxnLgrSeq fields. Replaying a pre-amendment ledger with
-// this true would over-thread those types; that only degrades the reconstruction
-// (account_hash will not verify), it never masks a real divergence.
-const fixPreviousTxnIDEnabled = true
+	"github.com/LeJamon/go-xrpl/amendment"
+	ledgerentry "github.com/LeJamon/go-xrpl/ledger/entry"
+	entryschema "github.com/LeJamon/go-xrpl/ledger/entry/schema"
+	"github.com/LeJamon/go-xrpl/protocol"
+)
 
 // Types whose threading is conditional on fixPreviousTxnID, mirroring
 // internal/tx/applystate.conditionalThreadingTypes.
@@ -20,24 +19,27 @@ var conditionalThreadingTypes = map[string]bool{
 	"AMM":           true,
 }
 
-// nonThreadedTypes never carry PreviousTxnID, mirroring
-// internal/tx/applystate.nonThreadedTypes. LedgerHashes is the only entry type
-// whose format lacks the field; a new field-less type must be added here.
-var nonThreadedTypes = map[string]bool{
-	"LedgerHashes": true,
-}
+var threadedEntryTypes = func() map[string]bool {
+	result := make(map[string]bool, len(entryschema.Specs))
+	for _, spec := range entryschema.Specs {
+		for _, field := range spec.Fields {
+			if field.Name == "PreviousTxnID" {
+				result[spec.Name] = true
+				break
+			}
+		}
+	}
+	return result
+}()
 
 // isThreadedType reports whether an entry type carries threaded
 // PreviousTxnID/PreviousTxnLgrSeq fields. It mirrors
 // internal/tx/applystate.isThreadedType.
-func isThreadedType(entryType string) bool {
-	if nonThreadedTypes[entryType] {
-		return false
-	}
+func isThreadedType(entryType string, rules *amendment.Rules) bool {
 	if conditionalThreadingTypes[entryType] {
-		return fixPreviousTxnIDEnabled
+		return rules.Enabled(amendment.FeatureFixPreviousTxnID)
 	}
-	return true
+	return threadedEntryTypes[entryType]
 }
 
 // createdField is one ledger-entry field whose STObject default (a
@@ -193,7 +195,6 @@ var requiredDefaults = map[string][]createdField{
 	"Credential": {
 		{Name: "Flags", Value: 0},
 		{Name: "IssuerNode", Value: "0"},
-		{Name: "SubjectNode", Value: "0"},
 	},
 	"PermissionedDomain": {
 		{Name: "Flags", Value: 0},
@@ -218,9 +219,17 @@ var explicitlyCreatedDefaults = map[string][]createdField{
 		{Name: "LowNode", Value: "0"},
 		{Name: "HighNode", Value: "0"},
 	},
+	"Delegate": {
+		{Name: "DestinationNode", Value: "0"},
+	},
 }
 
-func fillCreatedDefaults(obj map[string]any, entryType string) {
+func fillCreatedDefaults(obj map[string]any, entryType string) error {
+	if entryType == "Credential" {
+		if err := fillCredentialDefaults(obj); err != nil {
+			return err
+		}
+	}
 	for _, f := range requiredDefaults[entryType] {
 		if _, present := obj[f.Name]; !present {
 			obj[f.Name] = f.Value
@@ -233,6 +242,51 @@ func fillCreatedDefaults(obj map[string]any, entryType string) {
 	}
 	if entryType == "Escrow" {
 		fillEscrowDirectoryDefaults(obj)
+	}
+	return nil
+}
+
+func fillCredentialDefaults(obj map[string]any) error {
+	issuer, issuerPresent := metaAccountID(obj, "Issuer")
+	if !issuerPresent {
+		return fmt.Errorf("Credential has invalid Issuer")
+	}
+	subject, subjectPresent := metaAccountID(obj, "Subject")
+	if !subjectPresent {
+		return fmt.Errorf("Credential has invalid Subject")
+	}
+	if issuer != subject {
+		if _, present := obj["SubjectNode"]; !present {
+			obj["SubjectNode"] = "0"
+		}
+		return nil
+	}
+	if _, present := obj["SubjectNode"]; present {
+		return fmt.Errorf("self-issued Credential has SubjectNode")
+	}
+	flags, present := metaUint32(obj["Flags"])
+	if !present || flags != ledgerentry.LsfAccepted {
+		return fmt.Errorf("self-issued Credential has invalid Flags")
+	}
+	return nil
+}
+
+func metaUint32(value any) (uint32, bool) {
+	switch v := value.(type) {
+	case float64:
+		if v < 0 || v > float64(^uint32(0)) || v != float64(uint32(v)) {
+			return 0, false
+		}
+		return uint32(v), true
+	case uint32:
+		return v, true
+	case int:
+		if v < 0 || uint64(v) > uint64(^uint32(0)) {
+			return 0, false
+		}
+		return uint32(v), true
+	default:
+		return 0, false
 	}
 }
 
@@ -260,15 +314,6 @@ func fillEscrowDirectoryDefaults(obj map[string]any) {
 // XRP side of an order book, whose Currency and Issuer are both zero.
 const zeroHash160 = "0000000000000000000000000000000000000000"
 
-// bookDirectoryFields are the four Currency/Issuer fields a book DirectoryNode
-// serializes for both sides of the order book.
-var bookDirectoryFields = []string{
-	"TakerPaysCurrency",
-	"TakerPaysIssuer",
-	"TakerGetsCurrency",
-	"TakerGetsIssuer",
-}
-
 // fillBookDirectoryDefaults restores the all-zero XRP-side book fields rippled
 // drops from a created book directory's NewFields. These four fields are
 // soeOPTIONAL, so requiredDefaults cannot carry them, yet rippled still omits
@@ -277,18 +322,36 @@ var bookDirectoryFields = []string{
 // serializes the full pair for both sides. A DirectoryNode is a book (not an
 // owner) directory iff it carries an ExchangeRate; owner directories never have
 // these fields and are left untouched.
-func fillBookDirectoryDefaults(obj map[string]any, entryType string) {
+func fillBookDirectoryDefaults(obj map[string]any, entryType string) error {
 	if entryType != "DirectoryNode" {
-		return
+		return nil
 	}
 	if _, isBook := obj["ExchangeRate"]; !isBook {
-		return
+		return nil
 	}
-	for _, name := range bookDirectoryFields {
-		if _, present := obj[name]; !present {
-			obj[name] = zeroHash160
+	if err := fillBookSideDefaults(obj, "TakerPaysMPT", "TakerPaysCurrency", "TakerPaysIssuer"); err != nil {
+		return err
+	}
+	return fillBookSideDefaults(obj, "TakerGetsMPT", "TakerGetsCurrency", "TakerGetsIssuer")
+}
+
+func fillBookSideDefaults(obj map[string]any, mptField, currencyField, issuerField string) error {
+	_, hasMPT := obj[mptField]
+	_, hasCurrency := obj[currencyField]
+	_, hasIssuer := obj[issuerField]
+	if hasMPT {
+		if hasCurrency || hasIssuer {
+			return fmt.Errorf("book directory side has both %s and Issue fields", mptField)
 		}
+		return nil
 	}
+	if !hasCurrency {
+		obj[currencyField] = zeroHash160
+	}
+	if !hasIssuer {
+		obj[issuerField] = zeroHash160
+	}
+	return nil
 }
 
 // threadPreviousTxn stamps the threaded PreviousTxnID/PreviousTxnLgrSeq onto obj
@@ -296,8 +359,8 @@ func fillBookDirectoryDefaults(obj map[string]any, entryType string) {
 // SLE: the current transaction's hash and ledger sequence. These fields never
 // appear in CreatedNode NewFields or ModifiedNode FinalFields (sMD_DeleteFinal),
 // so they must be supplied here for the reconstructed SLE to match mainnet.
-func threadPreviousTxn(obj map[string]any, entryType string, txHash [32]byte, ledgerSeq uint32) {
-	if !isThreadedType(entryType) {
+func threadPreviousTxn(obj map[string]any, entryType string, txHash [32]byte, ledgerSeq uint32, rules *amendment.Rules) {
+	if !isThreadedType(entryType, rules) {
 		return
 	}
 	obj["PreviousTxnID"] = protocol.Hash256Hex(txHash)

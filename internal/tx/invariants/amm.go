@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // ---------------------------------------------------------------------------
@@ -230,7 +231,7 @@ func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view
 
 		// Check "after" data
 		if e.After != nil {
-			if e.EntryType == "AMM" {
+			if e.EntryType == entry.TypeAMM {
 				// AMM object changed — extract account ID and LPTokenBalance.
 				// A decode failure of an entry we identified as an AMM SLE is a
 				// serialization round-trip bug and fails the invariant outright,
@@ -244,13 +245,13 @@ func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view
 				ammAccount = &id
 				bal := fields.lptBalance
 				lptAfter = &bal
-			} else if e.EntryType == "RippleState" {
+			} else if e.EntryType == entry.TypeRippleState {
 				// Check for lsfAMMNode flag
 				rs, err := state.ParseRippleState(e.After)
 				if err == nil && (rs.Flags&state.LsfAMMNode) != 0 {
 					ammPoolChanged = true
 				}
-			} else if e.EntryType == "AccountRoot" {
+			} else if e.EntryType == entry.TypeAccountRoot {
 				// Check for non-zero AMMID (AMM pseudo-account)
 				acct, err := state.ParseAccountRoot(e.After)
 				if err == nil {
@@ -263,7 +264,7 @@ func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view
 		}
 
 		// Check "before" data for LPTokenBalance
-		if e.Before != nil && e.EntryType == "AMM" {
+		if e.Before != nil && e.EntryType == entry.TypeAMM {
 			fields, err := parseAMMInvariantFields(e.Before)
 			if err != nil {
 				return ammParseViolation(err)

@@ -416,10 +416,3 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	return ter.TesSUCCESS
 }
-
-// ApplyOnTec implements TecApplier for PaymentChannelClaim.
-// When tecEXPIRED is returned, expired credentials must still be deleted from the ledger.
-// Reference: rippled CredentialHelpers.cpp removeExpired() — called from verifyDepositPreauth()
-func (p *PaymentChannelClaim) ApplyOnTec(ctx *tx.ApplyContext) {
-	credential.RemoveExpiredCredentialsOnTec(ctx, p.CredentialIDs)
-}

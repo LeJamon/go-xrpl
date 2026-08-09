@@ -2,7 +2,10 @@ package pebble
 
 import (
 	"math"
+	"runtime"
 	"testing"
+
+	cockroachpebble "github.com/cockroachdb/pebble"
 )
 
 func TestOptionsFromMiB(t *testing.T) {
@@ -63,38 +66,45 @@ func TestOptionsResolve(t *testing.T) {
 	}
 }
 
-func TestNewAppliesOptions(t *testing.T) {
+func TestMakePebbleOptions(t *testing.T) {
 	want := Options{BlockCacheBytes: 32 << 20, MaxOpenFiles: 128}
-	store, err := New(t.TempDir(), want, false)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	cache := cockroachpebble.NewCache(want.BlockCacheBytes)
+	defer cache.Unref()
+	options := makePebbleOptions(want, cache)
 
-	if store.options != want {
-		t.Errorf("effective options = %+v, want %+v", store.options, want)
+	if options.Cache != cache {
+		t.Fatal("configured cache was not retained")
 	}
-	if got := store.cache.MaxSize(); got != want.BlockCacheBytes {
-		t.Errorf("block cache size = %d, want %d", got, want.BlockCacheBytes)
+	if options.MaxOpenFiles != want.MaxOpenFiles {
+		t.Fatalf("MaxOpenFiles = %d, want %d", options.MaxOpenFiles, want.MaxOpenFiles)
 	}
-}
+	if options.MemTableSize != memTableSize ||
+		options.MemTableStopWritesThreshold != memTableStopWritesThreshold ||
+		options.L0CompactionThreshold != l0CompactionThreshold ||
+		options.L0StopWritesThreshold != l0StopWritesThreshold ||
+		options.LBaseMaxBytes != lBaseMaxBytes {
+		t.Fatalf("unexpected database options: %+v", options)
+	}
+	if len(options.Levels) != levelCount {
+		t.Fatalf("levels = %d, want %d", len(options.Levels), levelCount)
+	}
+	for i, level := range options.Levels {
+		wantTarget := int64(initialTargetFileSize) << uint(i)
+		if wantTarget > maxTargetFileSize {
+			wantTarget = maxTargetFileSize
+		}
+		if level.BlockSize != levelBlockSize ||
+			level.IndexBlockSize != levelIndexBlockSize ||
+			level.TargetFileSize != wantTarget ||
+			level.Compression != cockroachpebble.SnappyCompression {
+			t.Fatalf("level %d = %+v", i, level)
+		}
+	}
 
-func TestNewUsesDefaultOptions(t *testing.T) {
-	store, err := New(t.TempDir(), Options{}, false)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-
-	want := Options{
-		BlockCacheBytes: DefaultBlockCacheBytes,
-		MaxOpenFiles:    DefaultMaxOpenFiles,
-	}
-	if store.options != want {
-		t.Errorf("effective options = %+v, want %+v", store.options, want)
-	}
-	if got := store.cache.MaxSize(); got != DefaultBlockCacheBytes {
-		t.Errorf("block cache size = %d, want %d", got, DefaultBlockCacheBytes)
+	previous := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(previous)
+	if got := options.MaxConcurrentCompactions(); got != 2 {
+		t.Fatalf("MaxConcurrentCompactions = %d, want 2", got)
 	}
 }
 
@@ -109,23 +119,9 @@ func TestNewRotatingSharesConfiguredResources(t *testing.T) {
 	if got := store.blockCache.MaxSize(); got != options.BlockCacheBytes {
 		t.Errorf("block cache size = %d, want %d", got, options.BlockCacheBytes)
 	}
-	if store.writable.cache != store.blockCache || store.archive.cache != store.blockCache {
-		t.Fatal("rotating generations do not share the store block cache")
-	}
 	wantPerGeneration := options.MaxOpenFiles / 2
-	if store.writable.options.MaxOpenFiles != wantPerGeneration {
-		t.Errorf(
-			"writable MaxOpenFiles = %d, want %d",
-			store.writable.options.MaxOpenFiles,
-			wantPerGeneration,
-		)
-	}
-	if store.archive.options.MaxOpenFiles != wantPerGeneration {
-		t.Errorf(
-			"archive MaxOpenFiles = %d, want %d",
-			store.archive.options.MaxOpenFiles,
-			wantPerGeneration,
-		)
+	if store.options.MaxOpenFiles != wantPerGeneration {
+		t.Fatalf("per-generation MaxOpenFiles = %d, want %d", store.options.MaxOpenFiles, wantPerGeneration)
 	}
 
 	committed, err := store.Rotate(2, 1)
@@ -135,17 +131,8 @@ func TestNewRotatingSharesConfiguredResources(t *testing.T) {
 	if !committed {
 		t.Fatal("Rotate did not publish the new generation")
 	}
-	if store.writable.cache != store.blockCache || store.archive.cache != store.blockCache {
-		t.Fatal("rotated generations do not share the store block cache")
-	}
-	if store.writable.options.MaxOpenFiles != wantPerGeneration ||
-		store.archive.options.MaxOpenFiles != wantPerGeneration {
-		t.Fatalf(
-			"rotated MaxOpenFiles = writable %d, archive %d; want %d each",
-			store.writable.options.MaxOpenFiles,
-			store.archive.options.MaxOpenFiles,
-			wantPerGeneration,
-		)
+	if store.options.MaxOpenFiles != wantPerGeneration {
+		t.Fatalf("rotated per-generation MaxOpenFiles = %d, want %d", store.options.MaxOpenFiles, wantPerGeneration)
 	}
 }
 
@@ -157,7 +144,7 @@ func TestConstructorsRejectInvalidOptions(t *testing.T) {
 		{
 			name: "store",
 			open: func() error {
-				_, err := New(t.TempDir(), Options{BlockCacheBytes: -1}, false)
+				_, err := New(t.TempDir(), Options{BlockCacheBytes: -1})
 				return err
 			},
 		},

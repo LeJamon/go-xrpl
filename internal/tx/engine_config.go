@@ -187,14 +187,17 @@ func (c EngineConfig) RequireRules() *amendment.Rules {
 // corrected large scale.
 func NumberContextForRules(rules *amendment.Rules) state.NumberContext {
 	if rules == nil {
-		return state.NewNumberContext(state.MantissaScaleForRulesWithFix(false, false, false, false))
+		return state.NewNumberContext(
+			state.MantissaScaleForRulesWithFix(false, false, false, false),
+			true,
+		)
 	}
 	return state.NewNumberContext(state.MantissaScaleForRulesWithFix(
 		true,
 		rules.Enabled(amendment.FeatureSingleAssetVault),
 		rules.Enabled(amendment.FeatureLendingProtocol),
 		rules.FixCleanup3_2_0Enabled(),
-	))
+	), rules.Enabled(amendment.FeatureFixUniversalNumber))
 }
 
 // NumberContext returns the immutable Number context for this transaction.
@@ -234,7 +237,7 @@ type LedgerView interface {
 	Erase(k keylet.Keylet) error
 
 	// AdjustDropsDestroyed records destroyed XRP
-	AdjustDropsDestroyed(drops drops.XRPAmount)
+	AdjustDropsDestroyed(drops drops.XRPAmount) error
 
 	// ForEach iterates over all state entries
 	// If fn returns false, iteration stops early
@@ -249,7 +252,7 @@ type LedgerView interface {
 	// applied to the current open ledger. Used by invariant checkers and duplicate
 	// transaction detection.
 	// Reference: rippled ReadView::txExists()
-	TxExists(txID [32]byte) bool
+	TxExists(txID [32]byte) (bool, error)
 
 	// Rules returns the amendment rules for this view.
 	// Returns nil if rules are not available.
@@ -270,6 +273,15 @@ func ComputeTransactionHash(tx Transaction) ([32]byte, error) {
 // transaction ID and transaction-map leaf.
 func SerializeTransaction(tx Transaction) ([]byte, error) {
 	if rawBytes := tx.GetRawBytes(); len(rawBytes) > 0 {
+		if tx.TxType() == TypeClawback {
+			decoded, err := binarycodec.DecodeBytes(rawBytes)
+			if err != nil {
+				return nil, err
+			}
+			if err := ValidateTemplateFields(tx.TxType(), decoded); err != nil {
+				return nil, err
+			}
+		}
 		return append([]byte(nil), rawBytes...), nil
 	}
 	txMap, err := tx.Flatten()
@@ -277,6 +289,11 @@ func SerializeTransaction(tx Transaction) ([]byte, error) {
 		return nil, err
 	}
 	PopulateRequiredWireFields(txMap, tx.GetCommon())
+	if tx.TxType() == TypeClawback {
+		if err := ValidateTemplateFields(tx.TxType(), txMap); err != nil {
+			return nil, err
+		}
+	}
 	hexStr, err := binarycodec.Encode(txMap)
 	if err != nil {
 		return nil, err
@@ -306,6 +323,15 @@ func computeTransactionHash(tx Transaction) ([32]byte, error) {
 	if rawBytes := tx.GetRawBytes(); len(rawBytes) > 0 {
 		if c != nil && c.txIDCached {
 			return c.cachedTxID, nil
+		}
+		if tx.TxType() == TypeClawback {
+			fields, err := binarycodec.DecodeBytes(rawBytes)
+			if err != nil {
+				return [32]byte{}, err
+			}
+			if err := ValidateTemplateFields(TypeClawback, fields); err != nil {
+				return [32]byte{}, err
+			}
 		}
 		hash := hashWithTxnPrefix(rawBytes)
 		if c != nil {

@@ -21,21 +21,21 @@ type readOnlyView struct {
 	data map[[32]byte][]byte
 }
 
-func (v readOnlyView) Read(k keylet.Keylet) ([]byte, error)      { return v.data[k.Key], nil }
-func (v readOnlyView) Exists(k keylet.Keylet) (bool, error)      { _, ok := v.data[k.Key]; return ok, nil }
-func (v readOnlyView) Insert(k keylet.Keylet, data []byte) error { return nil }
-func (v readOnlyView) Update(k keylet.Keylet, data []byte) error { return nil }
-func (v readOnlyView) Erase(k keylet.Keylet) error               { return nil }
-func (v readOnlyView) AdjustDropsDestroyed(drops.XRPAmount)      {}
+func (v readOnlyView) Read(k keylet.Keylet) ([]byte, error)       { return v.data[k.Key], nil }
+func (v readOnlyView) Exists(k keylet.Keylet) (bool, error)       { _, ok := v.data[k.Key]; return ok, nil }
+func (v readOnlyView) Insert(k keylet.Keylet, data []byte) error  { return nil }
+func (v readOnlyView) Update(k keylet.Keylet, data []byte) error  { return nil }
+func (v readOnlyView) Erase(k keylet.Keylet) error                { return nil }
+func (v readOnlyView) AdjustDropsDestroyed(drops.XRPAmount) error { return nil }
 func (v readOnlyView) ForEach(fn func(key [32]byte, data []byte) bool) error {
 	return nil
 }
 func (v readOnlyView) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 	return [32]byte{}, nil, false, nil
 }
-func (v readOnlyView) TxExists(txID [32]byte) bool { return false }
-func (v readOnlyView) Rules() *amendment.Rules     { return nil }
-func (v readOnlyView) LedgerSeq() uint32           { return 0 }
+func (v readOnlyView) TxExists(txID [32]byte) (bool, error) { return false, nil }
+func (v readOnlyView) Rules() *amendment.Rules              { return nil }
+func (v readOnlyView) LedgerSeq() uint32                    { return 0 }
 
 // TestLoanPay_OverpaymentOnNonOverpaymentLoan asserts the fixCleanup3_1_3 TER
 // change: requesting an overpayment on a loan that does not allow it returns

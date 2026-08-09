@@ -67,11 +67,18 @@ const (
 	PaymentFlagPartialPayment uint32 = 0x00020000
 	// tfLimitQuality limits quality of paths
 	PaymentFlagLimitQuality uint32 = 0x00040000
+	// tfSponsorCreatedAccount makes the payment source fund the new
+	// destination account's base reserve.
+	PaymentFlagSponsorCreatedAccount uint32 = 0x00080000
 )
 
 // Payment invalid-flag masks (rippled tfPaymentMask / tfMPTPaymentMask).
 const (
-	tfPaymentMask    uint32 = ^(tx.TfUniversal | PaymentFlagPartialPayment | PaymentFlagLimitQuality | PaymentFlagNoDirectRipple)
+	tfPaymentMask uint32 = ^(tx.TfUniversal |
+		PaymentFlagPartialPayment |
+		PaymentFlagLimitQuality |
+		PaymentFlagNoDirectRipple |
+		PaymentFlagSponsorCreatedAccount)
 	tfMPTPaymentMask uint32 = ^(tx.TfUniversal | PaymentFlagPartialPayment)
 )
 
@@ -153,9 +160,24 @@ func (p *Payment) validate(rules *amendment.Rules) error {
 	isDstMPT := p.Amount.IsMPT()
 	rulesAware := rules != nil
 	mpTokensV2 := rulesAware && rules.MPTokensV2Enabled()
+	flags := p.GetFlags()
 	hasPaths := len(p.Paths) > 0 || p.HasField("Paths")
 	if rulesAware && isDstMPT && !rules.Enabled(amendment.FeatureMPTokensV1) {
 		return ter.Errorf(ter.TemDISABLED, "MPT payment requires MPTokensV1 amendment")
+	}
+	if flags&PaymentFlagSponsorCreatedAccount != 0 {
+		if rulesAware && !rules.Enabled(amendment.FeatureSponsor) {
+			return ter.Errorf(ter.TemDISABLED, "sponsored account creation requires Sponsor amendment")
+		}
+		if flags&(PaymentFlagNoDirectRipple|PaymentFlagPartialPayment|PaymentFlagLimitQuality) != 0 {
+			return ter.Errorf(ter.TemINVALID_FLAG, "sponsored account creation does not allow payment path flags")
+		}
+		if p.SendMax != nil || p.HasField("SendMax") || hasPaths {
+			return ter.Errorf(ter.TemINVALID, "sponsored account creation requires a direct payment")
+		}
+		if !p.Amount.IsNative() {
+			return ter.Errorf(ter.TemBAD_AMOUNT, "sponsored account creation requires XRP")
+		}
 	}
 	if rulesAware && !mpTokensV2 && isDstMPT && hasPaths {
 		return ter.Errorf(ter.TemMALFORMED, "Paths not allowed for MPT payment")
@@ -166,7 +188,6 @@ func (p *Payment) validate(rules *amendment.Rules) error {
 		}
 	}
 
-	flags := p.GetFlags()
 	srcAmount := p.Amount
 	if p.SendMax != nil {
 		srcAmount = *p.SendMax
@@ -308,8 +329,11 @@ func equalTokens(src, dst tx.Amount) bool {
 func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
 	// Reference: rippled Payment.cpp:296-346
 	if destID, err := state.DecodeAccountID(p.Destination); err == nil {
-		destAccount, destExists := state.ReadAccountRoot(view, destID)
-		if !destExists {
+		destAccount, readErr := state.ReadAccountRoot(view, destID)
+		if readErr != nil {
+			return ter.TefINTERNAL
+		}
+		if destAccount == nil {
 			// A non-native delivered amount cannot create the account.
 			if !p.Amount.IsNative() {
 				return ter.TecNO_DST
@@ -319,9 +343,12 @@ func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 				return ter.TelNO_DST_PARTIAL
 			}
 			// The delivered amount must cover the account reserve.
-			if uint64(p.Amount.Drops()) < config.ReserveBase {
+			if uint64(p.Amount.Drops()) < config.ReserveBase &&
+				p.GetFlags()&PaymentFlagSponsorCreatedAccount == 0 {
 				return ter.TecNO_DST_INSUF_XRP
 			}
+		} else if p.GetFlags()&PaymentFlagSponsorCreatedAccount != 0 {
+			return ter.TecNO_SPONSOR_PERMISSION
 		} else if (destAccount.Flags&state.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
 			// A newly-formed account is exempt — it has no way to set the flag.
 			return ter.TecDST_TAG_NEEDED

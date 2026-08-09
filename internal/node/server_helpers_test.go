@@ -3,21 +3,27 @@ package node
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/config"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/cleaner"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/rpc"
+	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/protocol"
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
+	"github.com/stretchr/testify/require"
 )
 
 func TestConsensusPhaseName(t *testing.T) {
@@ -37,6 +43,179 @@ func TestConsensusPhaseName(t *testing.T) {
 	// An out-of-range phase falls through to Phase.String().
 	if got := consensusPhaseName(consensus.Phase(99)); got == "" {
 		t.Error("default phase name should be non-empty")
+	}
+}
+
+func TestBuildLedgerCloseEventUsesSourceLedgerAndWirePresence(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		xrpFees    bool
+		wantFeeRef bool
+	}{
+		{name: "legacy", wantFeeRef: true},
+		{name: "xrp fees", xrpFees: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			genesisConfig := genesis.DefaultConfig()
+			if test.xrpFees {
+				genesisConfig.Amendments = append(genesisConfig.Amendments, amendment.FeatureXRPFees)
+			}
+			svc, err := service.New(service.Config{
+				Standalone:    true,
+				Startup:       service.StartupConfig{Mode: service.StartupFresh},
+				GenesisConfig: genesisConfig,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := svc.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(svc.Stop)
+			source := svc.GetValidatedLedger()
+			if source == nil {
+				t.Fatal("missing validated source ledger")
+			}
+			hash := source.Hash()
+			event := &service.LedgerAcceptedEvent{
+				Ledger: source,
+				LedgerInfo: &service.LedgerInfo{
+					Sequence:  source.Sequence(),
+					Hash:      hash,
+					CloseTime: source.CloseTime(),
+				},
+				TransactionResults: make([]service.TransactionResultEvent, 2),
+			}
+			got := buildLedgerCloseEvent(event, service.ServerInfo{
+				ServerState:     "full",
+				CompleteLedgers: "1-2,4",
+				NetworkID:       0,
+			})
+			if got == nil {
+				t.Fatal("nil ledger event")
+			}
+			base, reserve, increment := service.FeesFromLedger(source)
+			wantBase := jsonClippedXRPAmount(int64(base))
+			wantReserve := jsonClippedXRPAmount(int64(reserve))
+			wantIncrement := jsonClippedXRPAmount(int64(increment))
+			if got.FeeBase != wantBase || got.ReserveBase != wantReserve || got.ReserveInc != wantIncrement {
+				t.Fatalf("fees = (%d,%d,%d), want source ledger (%d,%d,%d)", got.FeeBase, got.ReserveBase, got.ReserveInc, base, reserve, increment)
+			}
+			if (got.FeeRef != nil) != test.wantFeeRef {
+				t.Fatalf("fee_ref presence = %t, want %t", got.FeeRef != nil, test.wantFeeRef)
+			}
+			if got.FeeRef != nil && *got.FeeRef != deprecatedFeeReferenceUnits {
+				t.Fatalf("fee_ref = %d, want %d", *got.FeeRef, deprecatedFeeReferenceUnits)
+			}
+			if got.NetworkID != 0 || got.ValidatedLedgers != "1-2,4" || !got.ValidatedLedgersPresent || got.TxnCount != 2 {
+				t.Fatalf("event fields = %+v", got)
+			}
+
+			subscribeInfo := (&ledgerInfoAdapter{ledgerService: svc}).GetCurrentLedgerInfo()
+			if subscribeInfo == nil {
+				t.Fatal("nil ledger subscribe info")
+			}
+			if subscribeInfo.FeeBase != wantBase || subscribeInfo.ReserveBase != wantReserve || subscribeInfo.ReserveInc != wantIncrement {
+				t.Fatalf("subscribe fees = (%d,%d,%d), want validated ledger (%d,%d,%d)", subscribeInfo.FeeBase, subscribeInfo.ReserveBase, subscribeInfo.ReserveInc, base, reserve, increment)
+			}
+			if subscribeInfo.FeeRef != deprecatedFeeReferenceUnits || subscribeInfo.XRPFeesEnabled != test.xrpFees {
+				t.Fatalf("subscribe fee gate = ref %d, XRPFees %t", subscribeInfo.FeeRef, subscribeInfo.XRPFeesEnabled)
+			}
+		})
+	}
+}
+
+func TestLedgerClosedWireMatrix(t *testing.T) {
+	states := []string{"", "disconnected", "connected", "syncing", "tracking", "full", "proposing", "validating"}
+	completeLedgers := []string{"", "1-2,4"}
+
+	for _, xrpFees := range []bool{false, true} {
+		t.Run(fmt.Sprintf("xrp_fees_%t", xrpFees), func(t *testing.T) {
+			genesisConfig := genesis.DefaultConfig()
+			if xrpFees {
+				genesisConfig.Amendments = append(genesisConfig.Amendments, amendment.FeatureXRPFees)
+			}
+			svc, err := service.New(service.Config{
+				Standalone:    true,
+				Startup:       service.StartupConfig{Mode: service.StartupFresh},
+				GenesisConfig: genesisConfig,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := svc.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(svc.Stop)
+
+			source := svc.GetValidatedLedger()
+			if source == nil {
+				t.Fatal("missing validated source ledger")
+			}
+			hash := source.Hash()
+			base, reserveBase, reserveInc := service.FeesFromLedger(source)
+			wantBase := jsonClippedXRPAmount(int64(base))
+			wantReserveBase := jsonClippedXRPAmount(int64(reserveBase))
+			wantReserveInc := jsonClippedXRPAmount(int64(reserveInc))
+			for _, state := range states {
+				for _, needsNetworkLedger := range []bool{false, true} {
+					for _, networkID := range []uint32{0, 42} {
+						for _, complete := range completeLedgers {
+							name := fmt.Sprintf("%s/needs_%t/network_%d/complete_%t", state, needsNetworkLedger, networkID, complete != "")
+							t.Run(name, func(t *testing.T) {
+								event := buildLedgerCloseEvent(&service.LedgerAcceptedEvent{
+									Ledger: source,
+									LedgerInfo: &service.LedgerInfo{
+										Sequence:  source.Sequence(),
+										Hash:      hash,
+										CloseTime: source.CloseTime(),
+									},
+									TransactionResults: make([]service.TransactionResultEvent, 2),
+								}, service.ServerInfo{
+									ServerState:        state,
+									NeedsNetworkLedger: needsNetworkLedger,
+									CompleteLedgers:    complete,
+									NetworkID:          networkID,
+								})
+								if event == nil {
+									t.Fatal("nil ledger close event")
+								}
+								got, err := json.Marshal(event)
+								if err != nil {
+									t.Fatal(err)
+								}
+
+								want := fmt.Sprintf(`{"type":"ledgerClosed","fee_base":%d`, wantBase)
+								if !xrpFees {
+									want += `,"fee_ref":10`
+								}
+								want += fmt.Sprintf(`,"ledger_hash":"%s","ledger_index":%d,"ledger_time":%d,"network_id":%d,"reserve_base":%d,"reserve_inc":%d,"txn_count":2`, upperHex(hash[:]), source.Sequence(), protocol.ToRippleTime(source.CloseTime()), networkID, wantReserveBase, wantReserveInc)
+								if serverPublishesValidatedRange(state) {
+									want += fmt.Sprintf(`,"validated_ledgers":"%s"`, complete)
+								}
+								want += `}`
+								if string(got) != want {
+									t.Fatalf("ledgerClosed JSON = %s, want %s", got, want)
+								}
+							})
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestServerPublishesValidatedRange(t *testing.T) {
+	for _, state := range []string{"syncing", "tracking", "full", "proposing", "validating"} {
+		if !serverPublishesValidatedRange(state) {
+			t.Errorf("%s must publish validated range", state)
+		}
+	}
+	for _, state := range []string{"", "disconnected", "connected"} {
+		if serverPublishesValidatedRange(state) {
+			t.Errorf("%s must omit validated range", state)
+		}
 	}
 }
 
@@ -60,92 +239,6 @@ func TestCurrencySpecFromAmount(t *testing.T) {
 	}
 }
 
-func TestParseVLLength(t *testing.T) {
-	cases := []struct {
-		name     string
-		data     []byte
-		wantLen  int
-		wantPfix int
-	}{
-		{"empty", nil, 0, 0},
-		{"single byte", []byte{100}, 100, 1},
-		{"boundary 192", []byte{192}, 192, 1},
-		{"two byte", []byte{193, 0}, 193, 2},
-		{"two byte truncated", []byte{200}, 0, 0},
-		{"three byte", []byte{241, 0, 0}, 12481, 3},
-		{"three byte truncated", []byte{250, 0}, 0, 0},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			gotLen, gotPfix := parseVLLength(tc.data)
-			if gotLen != tc.wantLen || gotPfix != tc.wantPfix {
-				t.Errorf("parseVLLength(%v) = (%d,%d) want (%d,%d)", tc.data, gotLen, gotPfix, tc.wantLen, tc.wantPfix)
-			}
-		})
-	}
-}
-
-func TestMetaTransactionResult(t *testing.T) {
-	if got := metaTransactionResult(nil); got != "tesSUCCESS" {
-		t.Errorf("nil meta = %q, want default tesSUCCESS", got)
-	}
-	if got := metaTransactionResult(json.RawMessage(`{"TransactionResult":"tecUNFUNDED"}`)); got != "tecUNFUNDED" {
-		t.Errorf("explicit result = %q", got)
-	}
-	if got := metaTransactionResult(json.RawMessage(`{"Other":1}`)); got != "tesSUCCESS" {
-		t.Errorf("missing field = %q, want default", got)
-	}
-	if got := metaTransactionResult(json.RawMessage(`not json`)); got != "tesSUCCESS" {
-		t.Errorf("invalid json = %q, want default", got)
-	}
-}
-
-func TestDecodeTxWithMetaToJSON(t *testing.T) {
-	// Empty input yields empty JSON objects.
-	txJSON, metaJSON := decodeTxWithMetaToJSON(nil)
-	if string(txJSON) != "{}" || string(metaJSON) != "{}" {
-		t.Fatalf("empty input = (%s,%s)", txJSON, metaJSON)
-	}
-
-	blob, err := hex.DecodeString(feeSettingsHex(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(blob) > 192 {
-		t.Fatalf("blob too long for single-byte VL framing: %d", len(blob))
-	}
-
-	// Tx field only (single-byte VL prefix == length).
-	data := append([]byte{byte(len(blob))}, blob...)
-	txJSON, metaJSON = decodeTxWithMetaToJSON(data)
-	if !strings.Contains(string(txJSON), "FeeSettings") {
-		t.Errorf("tx not decoded: %s", txJSON)
-	}
-	if string(metaJSON) != "{}" {
-		t.Errorf("expected empty meta, got %s", metaJSON)
-	}
-
-	// Tx + meta fields.
-	withMeta := append(data, byte(len(blob)))
-	withMeta = append(withMeta, blob...)
-	txJSON, metaJSON = decodeTxWithMetaToJSON(withMeta)
-	if !strings.Contains(string(txJSON), "FeeSettings") || !strings.Contains(string(metaJSON), "FeeSettings") {
-		t.Errorf("tx+meta not decoded: tx=%s meta=%s", txJSON, metaJSON)
-	}
-}
-
-func TestExtractBookPairsFromTxData(t *testing.T) {
-	// No data → no pairs; a blob with no Offer-bearing metadata → no pairs.
-	if got := extractBookPairsFromTxData(nil); got != nil {
-		t.Errorf("nil data = %+v, want nil", got)
-	}
-	blob, _ := hex.DecodeString(feeSettingsHex(t))
-	data := append([]byte{byte(len(blob))}, blob...)
-	if got := extractBookPairsFromTxData(data); got != nil {
-		t.Errorf("non-offer meta = %+v, want nil", got)
-	}
-}
-
 func TestExtractBookPairsFromMetadataUsesAffectedNodeFields(t *testing.T) {
 	const (
 		issuer = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -162,14 +255,53 @@ func TestExtractBookPairsFromMetadataUsesAffectedNodeFields(t *testing.T) {
 	if len(books) != 3 {
 		t.Fatalf("got %d books, want 3: %+v", len(books), books)
 	}
-	if books[0].TakerGets.MPTIssuanceID != mptID || books[0].TakerPays.Currency != "XRP" || books[0].Domain != domain {
+	if books[0].TakerPays.MPTIssuanceID != mptID || books[0].TakerGets.Currency != "XRP" || books[0].Domain != domain {
 		t.Errorf("modified book = %+v", books[0])
 	}
-	if books[1].TakerGets.Currency != "USD" || books[1].TakerGets.Issuer != issuer || books[1].TakerPays.Currency != "XRP" {
+	if books[1].TakerPays.Currency != "USD" || books[1].TakerPays.Issuer != issuer || books[1].TakerGets.Currency != "XRP" {
 		t.Errorf("created book = %+v", books[1])
 	}
-	if books[2].TakerGets.Currency != "XRP" || books[2].TakerPays.Currency != "EUR" || books[2].TakerPays.Issuer != issuer {
+	if books[2].TakerPays.Currency != "XRP" || books[2].TakerGets.Currency != "EUR" || books[2].TakerGets.Issuer != issuer {
 		t.Errorf("deleted book = %+v", books[2])
+	}
+}
+
+func TestAffectedOfferMatchesTakerPerspectiveSubscription(t *testing.T) {
+	const issuer = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	meta := []byte(`{"AffectedNodes":[{"CreatedNode":{"LedgerEntryType":"Offer","NewFields":{"TakerGets":{"currency":"USD","issuer":"` + issuer + `","value":"2"},"TakerPays":"3"}}}]}`)
+	books := extractBookPairsFromMetadata(meta)
+	require.Len(t, books, 1)
+
+	manager := subscription.NewManager()
+	matching := subscription.NewConnection("matching", make(chan []byte, 1))
+	matchingRegistration, attached := manager.Attach(matching)
+	require.True(t, attached)
+	t.Cleanup(func() { manager.Detach(matchingRegistration) })
+	require.Nil(t, manager.HandleSubscribe(matchingRegistration, types.SubscriptionRequest{Books: []types.BookRequest{{
+		TakerPays: json.RawMessage(`{"currency":"USD","issuer":"` + issuer + `"}`),
+		TakerGets: json.RawMessage(`{"currency":"XRP"}`),
+	}}}, true))
+
+	inverse := subscription.NewConnection("inverse", make(chan []byte, 1))
+	inverseRegistration, attached := manager.Attach(inverse)
+	require.True(t, attached)
+	t.Cleanup(func() { manager.Detach(inverseRegistration) })
+	require.Nil(t, manager.HandleSubscribe(inverseRegistration, types.SubscriptionRequest{Books: []types.BookRequest{{
+		TakerPays: json.RawMessage(`{"currency":"XRP"}`),
+		TakerGets: json.RawMessage(`{"currency":"USD","issuer":"` + issuer + `"}`),
+	}}}, true))
+
+	manager.BroadcastToOrderBooksVersioned([]byte("accepted"), []byte("accepted"), books)
+	select {
+	case message := <-matching.Outbound():
+		require.Equal(t, []byte("accepted"), message)
+	case <-time.After(time.Second):
+		t.Fatal("taker-perspective book did not receive accepted offer")
+	}
+	select {
+	case message := <-inverse.Outbound():
+		t.Fatalf("inverse book received accepted offer: %s", message)
+	default:
 	}
 }
 
@@ -179,6 +311,7 @@ func TestToCleanerStatus(t *testing.T) {
 		MinLedger:      10,
 		MaxLedger:      20,
 		CheckNodes:     true,
+		FixTxns:        true,
 		Failures:       2,
 		LedgersChecked: 5,
 		NodesChecked:   100,
@@ -191,6 +324,7 @@ func TestToCleanerStatus(t *testing.T) {
 		MinLedger:      10,
 		MaxLedger:      20,
 		CheckNodes:     true,
+		FixTxns:        true,
 		Failures:       2,
 		LedgersChecked: 5,
 		NodesChecked:   100,
@@ -263,6 +397,29 @@ type manifestPublisherSpy struct {
 	events      []*rpc.ManifestEvent
 }
 
+func unverifiedManifest(t testing.TB, sequence uint32) *manifest.Manifest {
+	t.Helper()
+	encoded, err := binarycodec.Encode(map[string]any{
+		"PublicKey":       "ED" + strings.Repeat("00", 32),
+		"SigningPubKey":   "ED" + strings.Repeat("01", 32),
+		"Sequence":        sequence,
+		"MasterSignature": "00",
+		"Signature":       "00",
+	})
+	if err != nil {
+		t.Fatalf("encode manifest: %v", err)
+	}
+	wire, err := hex.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("decode manifest: %v", err)
+	}
+	parsed, err := manifest.Deserialize(wire)
+	if err != nil {
+		t.Fatalf("deserialize manifest: %v", err)
+	}
+	return parsed
+}
+
 func (p *manifestPublisherSpy) PublishManifest(event *rpc.ManifestEvent) {
 	p.events = append(p.events, event)
 }
@@ -273,7 +430,7 @@ func (p *manifestPublisherSpy) GetSubscriberCount(stream types.SubscriptionType)
 }
 
 func TestPublishManifestIfSubscribed(t *testing.T) {
-	m := &manifest.Manifest{Sequence: 7}
+	m := unverifiedManifest(t, 7)
 
 	withoutSubscribers := &manifestPublisherSpy{}
 	publishManifestIfSubscribed(withoutSubscribers, m)
@@ -289,14 +446,14 @@ func TestPublishManifestIfSubscribed(t *testing.T) {
 	if len(withSubscriber.events) != 1 {
 		t.Fatalf("published %d events, want 1", len(withSubscriber.events))
 	}
-	if withSubscriber.events[0] == nil || withSubscriber.events[0].Sequence != m.Sequence {
+	if withSubscriber.events[0] == nil || withSubscriber.events[0].Sequence != m.Sequence() {
 		t.Fatalf("published event = %+v", withSubscriber.events[0])
 	}
 }
 
 func BenchmarkPublishManifestWithoutSubscribers(b *testing.B) {
 	publisher := &manifestPublisherSpy{}
-	m := &manifest.Manifest{Sequence: 7}
+	m := unverifiedManifest(b, 7)
 	b.ReportAllocs()
 	for b.Loop() {
 		publishManifestIfSubscribed(publisher, m)
@@ -315,6 +472,15 @@ func TestUpperHex(t *testing.T) {
 	}
 }
 
+func mustBuildValidationEvent(t *testing.T, v *consensus.Validation, networkID uint32) *rpc.ValidationEvent {
+	t.Helper()
+	event, err := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: v}, nil, networkID)
+	if err != nil {
+		t.Fatalf("build validation event: %v", err)
+	}
+	return event
+}
+
 func TestBuildValidationEvent_UppercaseHexFields(t *testing.T) {
 	// Bytes chosen so every hex field contains A-F digits, exposing any
 	// lowercase formatting in the stream layer (#787).
@@ -324,9 +490,8 @@ func TestBuildValidationEvent_UppercaseHexFields(t *testing.T) {
 		Signature:     []byte{0xde, 0xad, 0xbe, 0xef},
 		Amendments:    [][32]byte{{0xfe, 0xed}, {0xba, 0xbe}},
 		ValidatedHash: [32]byte{0xca, 0xfe},
-		Raw:           []byte{0xfa, 0xce},
 	}
-	ev := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: v}, nil, 0)
+	ev := mustBuildValidationEvent(t, v, 0)
 	if ev == nil {
 		t.Fatal("nil event")
 	}
@@ -353,19 +518,64 @@ func TestBuildValidationEvent_UppercaseHexFields(t *testing.T) {
 	}
 }
 
+func TestBuildValidationEvent_RequiredFieldsAndCloseTimePresence(t *testing.T) {
+	withoutClose := mustBuildValidationEvent(t, &consensus.Validation{LedgerSeq: 42}, 0)
+	encoded, err := json.Marshal(withoutClose)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := fields["network_id"]; !ok || string(got) != "0" {
+		t.Fatalf("network_id = %s, present=%t; want explicit 0", got, ok)
+	}
+	if got, ok := fields["data"]; !ok || string(got) == `""` {
+		t.Fatalf("data = %s, present=%t; want canonical validation bytes", got, ok)
+	}
+	if _, ok := fields["close_time"]; ok {
+		t.Fatalf("close_time must be absent: %s", encoded)
+	}
+
+	withEpochClose := mustBuildValidationEvent(t, &consensus.Validation{
+		LedgerSeq: 42,
+		CloseTime: time.Unix(protocol.RippleEpochUnix, 0).UTC(),
+	}, 0)
+	encoded, err = json.Marshal(withEpochClose)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := fields["close_time"]; !ok || string(got) != "0" {
+		t.Fatalf("close_time = %s, present=%t; want explicit 0", got, ok)
+	}
+}
+
+func TestBuildValidationEventRejectsInvalidRawData(t *testing.T) {
+	_, err := buildValidationEvent(&consensus.ValidationReceivedEvent{
+		Validation: &consensus.Validation{Raw: []byte{0xff}},
+	}, nil, 0)
+	if err == nil {
+		t.Fatal("invalid raw validation must not be published")
+	}
+}
+
 func TestBuildValidationEvent_CookieDecimal(t *testing.T) {
 	// rippled emits cookie as std::to_string(*cookie) — base-10 decimal
 	// (NetworkOPs.cpp:2429), unlike the hash/sig/blob fields which are
 	// hex. 0xAB = 171: "171" (decimal) ≠ "ab"/"AB" (hex).
 	v := &consensus.Validation{Cookie: 0xAB}
-	ev := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: v}, nil, 0)
+	ev := mustBuildValidationEvent(t, v, 0)
 	if ev.Cookie != "171" {
 		t.Errorf("cookie = %q, want decimal \"171\"", ev.Cookie)
 	}
 
 	// Cookie 0 is the absent proxy → field omitted.
 	v0 := &consensus.Validation{}
-	if ev0 := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: v0}, nil, 0); ev0.Cookie != "" {
+	if ev0 := mustBuildValidationEvent(t, v0, 0); ev0.Cookie != "" {
 		t.Errorf("cookie = %q, want empty when absent", ev0.Cookie)
 	}
 }
@@ -375,14 +585,14 @@ func TestBuildValidationEvent_ServerVersionDecimal(t *testing.T) {
 	// decimal (NetworkOPs.cpp:2426). The go-xrpl server version tag
 	// 0x4000_0000_0000_0000 = 4611686018427387904 decimal.
 	v := &consensus.Validation{ServerVersion: 0x4000_0000_0000_0000}
-	ev := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: v}, nil, 0)
+	ev := mustBuildValidationEvent(t, v, 0)
 	if ev.ServerVersion != "4611686018427387904" {
 		t.Errorf("server_version = %q, want decimal \"4611686018427387904\"", ev.ServerVersion)
 	}
 
 	// ServerVersion 0 is the absent proxy → field omitted.
 	v0 := &consensus.Validation{}
-	if ev0 := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: v0}, nil, 0); ev0.ServerVersion != "" {
+	if ev0 := mustBuildValidationEvent(t, v0, 0); ev0.ServerVersion != "" {
 		t.Errorf("server_version = %q, want empty when absent", ev0.ServerVersion)
 	}
 }
@@ -402,7 +612,7 @@ func TestBuildValidationEvent_LoadFeePresence(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			event := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: test.validation}, nil, 0)
+			event := mustBuildValidationEvent(t, test.validation, 0)
 			encoded, err := json.Marshal(event)
 			if err != nil {
 				t.Fatalf("marshal validation event: %v", err)
@@ -429,32 +639,103 @@ func TestBuildValidationEvent_LoadFeePresence(t *testing.T) {
 	}
 }
 
-func TestAcceptedLedgerView_Nil(t *testing.T) {
-	v := newAcceptedLedgerView(nil)
-	if v.Sequence() != 0 || v.Hash() != ([32]byte{}) || v.CloseTime() != 0 || v.IsValidated() {
-		t.Error("nil view should return zero values")
+func TestBuildValidationEvent_FeeVotePresenceAndSign(t *testing.T) {
+	legacyZero := &consensus.Validation{}
+	legacyZero.SetBaseFee(0)
+	legacyZero.SetReserveBase(0)
+	legacyZero.SetReserveIncrement(0)
+
+	modern := &consensus.Validation{}
+	modern.SetBaseFeeDrops(drops.XRPAmount(-15))
+	modern.SetReserveBaseDrops(0)
+	modern.SetReserveIncrementDrops(20)
+
+	nonNative := &consensus.Validation{}
+	nonNative.SetBaseFeeDropsNonNative()
+
+	legacyWithNonNative := &consensus.Validation{}
+	legacyWithNonNative.SetBaseFee(10)
+	legacyWithNonNative.SetBaseFeeDropsNonNative()
+
+	both := &consensus.Validation{}
+	both.SetBaseFee(10)
+	both.SetReserveBase(11)
+	both.SetReserveIncrement(12)
+	both.SetBaseFeeDrops(-15)
+	both.SetReserveBaseDrops(0)
+	both.SetReserveIncrementDrops(20)
+
+	clipped := &consensus.Validation{}
+	clipped.SetBaseFeeDrops(-drops.MaxDrops)
+	clipped.SetReserveBaseDrops(drops.MaxDrops)
+
+	tests := []struct {
+		name       string
+		validation *consensus.Validation
+		want       map[string]string
+	}{
+		{name: "absent", validation: &consensus.Validation{}, want: map[string]string{}},
+		{
+			name:       "legacy explicit zero",
+			validation: legacyZero,
+			want:       map[string]string{"base_fee": "0", "reserve_base": "0", "reserve_inc": "0"},
+		},
+		{
+			name:       "modern signed and zero",
+			validation: modern,
+			want:       map[string]string{"base_fee": "-15", "reserve_base": "0", "reserve_inc": "20"},
+		},
+		{
+			name:       "modern fields override legacy",
+			validation: both,
+			want:       map[string]string{"base_fee": "-15", "reserve_base": "0", "reserve_inc": "20"},
+		},
+		{
+			name:       "modern values are clipped to JSON integers",
+			validation: clipped,
+			want:       map[string]string{"base_fee": "-2147483648", "reserve_base": "2147483647"},
+		},
+		{name: "non native omitted", validation: nonNative, want: map[string]string{}},
+		{
+			name:       "non native modern field does not replace legacy",
+			validation: legacyWithNonNative,
+			want:       map[string]string{"base_fee": "10"},
+		},
 	}
-	// ForEachTransaction must not panic and must visit nothing.
-	if err := v.ForEachTransaction(func([32]byte, []byte) bool { t.Fatal("callback ran on nil view"); return true }); err != nil {
-		t.Errorf("ForEachTransaction on nil view: %v", err)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			event := mustBuildValidationEvent(t, test.validation, 0)
+			encoded, err := json.Marshal(event)
+			if err != nil {
+				t.Fatalf("marshal validation event: %v", err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &fields); err != nil {
+				t.Fatalf("decode validation event: %v", err)
+			}
+			for _, field := range []string{"base_fee", "reserve_base", "reserve_inc"} {
+				got, present := fields[field]
+				want, expected := test.want[field]
+				if present != expected {
+					t.Fatalf("%s presence = %t, want %t: %s", field, present, expected, encoded)
+				}
+				if expected && string(got) != want {
+					t.Fatalf("%s = %s, want %s", field, got, want)
+				}
+			}
+		})
 	}
 }
 
 func TestAcceptedLedgerView_Populated(t *testing.T) {
 	closeTime := time.Unix(protocol.RippleEpochUnix+1000, 0).UTC()
-	event := &service.LedgerAcceptedEvent{
-		LedgerInfo: &service.LedgerInfo{
-			Sequence:  42,
-			Hash:      [32]byte{0xAB},
-			CloseTime: closeTime,
-			Validated: true,
-		},
-		TransactionResults: []service.TransactionResultEvent{
-			{TxHash: [32]byte{0x01}, TxData: []byte{0xDE, 0xAD}},
-			{TxHash: [32]byte{0x02}, TxData: []byte{0xBE, 0xEF}},
-		},
-	}
-	v := newAcceptedLedgerView(event)
+	v := newAcceptedLedgerView(service.LedgerInfo{
+		Sequence:  42,
+		Hash:      [32]byte{0xAB},
+		CloseTime: closeTime,
+		Validated: true,
+	})
 	if v.Sequence() != 42 {
 		t.Errorf("Sequence = %d", v.Sequence())
 	}
@@ -467,20 +748,24 @@ func TestAcceptedLedgerView_Populated(t *testing.T) {
 	if !v.IsValidated() {
 		t.Error("IsValidated = false")
 	}
+}
 
-	var visited int
-	if err := v.ForEachTransaction(func(h [32]byte, d []byte) bool { visited++; return true }); err != nil {
-		t.Fatalf("ForEachTransaction: %v", err)
+func TestAcceptedLedgerViewUsesPublicationHeaderCopy(t *testing.T) {
+	info := service.LedgerInfo{
+		Sequence:  42,
+		Hash:      [32]byte{0xAB},
+		CloseTime: time.Unix(protocol.RippleEpochUnix+1000, 0).UTC(),
+		Validated: true,
 	}
-	if visited != 2 {
-		t.Errorf("visited %d transactions, want 2", visited)
-	}
+	v := newAcceptedLedgerView(info)
+	info.Sequence = 99
+	info.Hash = [32]byte{0xCD}
+	info.CloseTime = time.Unix(protocol.RippleEpochUnix+2000, 0).UTC()
+	info.Validated = false
 
-	// Returning false from the callback stops iteration early.
-	visited = 0
-	_ = v.ForEachTransaction(func(h [32]byte, d []byte) bool { visited++; return false })
-	if visited != 1 {
-		t.Errorf("early-stop visited %d, want 1", visited)
+	if v.Sequence() != 42 || v.Hash() != ([32]byte{0xAB}) || v.CloseTime() != 1000 || !v.IsValidated() {
+		t.Fatalf("publication header changed after source mutation: sequence=%d hash=%x close=%d validated=%t",
+			v.Sequence(), v.Hash(), v.CloseTime(), v.IsValidated())
 	}
 }
 

@@ -1,102 +1,194 @@
 package handlers
 
 import (
+	"encoding/json"
+	"fmt"
+	"reflect"
+	"slices"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// RegisterAll is the single source of truth for RPC method wiring, shared
-// by the HTTP server, the WebSocket server, and the local `xrpld rpc`
-// CLI. Adding a new method here exposes it on every entry point at once.
+// MethodDescriptor is the authoritative registration and dispatch metadata for
+// an RPC method. The generated RPC catalogue is derived from these descriptors.
+type MethodDescriptor struct {
+	Name        string
+	Handler     types.MethodHandler
+	Role        types.Role
+	Condition   types.Condition
+	APIVersions []int
+}
+
+var allAPIVersions = []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
+
+func guest(name string, handler types.MethodHandler) MethodDescriptor {
+	return MethodDescriptor{
+		Name: name, Handler: handler, Role: types.RoleGuest,
+		Condition: types.NoCondition, APIVersions: allAPIVersions,
+	}
+}
+
+func user(name string, handler types.MethodHandler) MethodDescriptor {
+	return MethodDescriptor{
+		Name: name, Handler: handler, Role: types.RoleUser,
+		Condition: types.NoCondition, APIVersions: allAPIVersions,
+	}
+}
+
+func admin(name string, handler types.MethodHandler) MethodDescriptor {
+	return MethodDescriptor{
+		Name: name, Handler: handler, Role: types.RoleAdmin,
+		Condition: types.NoCondition, APIVersions: allAPIVersions,
+	}
+}
+
+func requiring(descriptor MethodDescriptor, condition types.Condition) MethodDescriptor {
+	descriptor.Condition = condition
+	return descriptor
+}
+
+func v1Only(descriptor MethodDescriptor) MethodDescriptor {
+	descriptor.APIVersions = []int{types.ApiVersion1}
+	return descriptor
+}
+
+var methodDescriptors = []MethodDescriptor{
+	guest("server_info", &ServerInfoMethod{}),
+	guest("server_state", &ServerStateMethod{}),
+	guest("ping", &PingMethod{}),
+	guest("random", &randomMethod{}),
+	guest("server_definitions", &ServerDefinitionsMethod{}),
+	guest("feature", &FeatureMethod{}),
+	requiring(guest("fee", &FeeMethod{}), types.NeedsCurrentLedger),
+	guest("version", &VersionMethod{}),
+
+	guest("ledger", &LedgerMethod{}),
+	requiring(guest("ledger_closed", &LedgerClosedMethod{}), types.NeedsClosedLedger),
+	requiring(guest("ledger_current", &ledgerCurrentMethod{}), types.NeedsCurrentLedger),
+	guest("ledger_data", &LedgerDataMethod{}),
+	guest("ledger_entry", &LedgerEntryMethod{}),
+	admin("ledger_range", &LedgerRangeMethod{}),
+	v1Only(guest("ledger_header", &LedgerHeaderMethod{})),
+	admin("ledger_request", &LedgerRequestMethod{}),
+	requiring(admin("ledger_cleaner", &LedgerCleanerMethod{}), types.NeedsNetworkConnection),
+	requiring(admin("ledger_accept", &LedgerAcceptMethod{}), types.NeedsCurrentLedger),
+
+	guest("account_info", &AccountInfoMethod{}),
+	guest("account_channels", &AccountChannelsMethod{}),
+	guest("account_currencies", &AccountCurrenciesMethod{}),
+	guest("account_lines", &AccountLinesMethod{}),
+	guest("account_nfts", &AccountNftsMethod{}),
+	guest("account_objects", &AccountObjectsMethod{}),
+	guest("account_offers", &AccountOffersMethod{}),
+	guest("account_tx", &AccountTxMethod{}),
+	guest("gateway_balances", &GatewayBalancesMethod{}),
+	guest("noripple_check", &NoRippleCheckMethod{}),
+	requiring(guest("owner_info", &OwnerInfoMethod{}), types.NeedsCurrentLedger),
+
+	requiring(user("tx", &TxMethod{}), types.NeedsNetworkConnection),
+	v1Only(user("tx_history", &TxHistoryMethod{})),
+	requiring(user("submit", &SubmitMethod{}), types.NeedsCurrentLedger),
+	requiring(user("submit_multisigned", &SubmitMultisignedMethod{}), types.NeedsCurrentLedger),
+	user("sign", &SignMethod{}),
+	user("sign_for", &SignForMethod{}),
+	user("transaction_entry", &TransactionEntryMethod{}),
+	requiring(guest("simulate", &SimulateMethod{}), types.NeedsCurrentLedger),
+	user("tx_reduce_relay", &TxReduceRelayMethod{}),
+
+	guest("book_changes", &BookChangesMethod{}),
+	guest("book_offers", &BookOffersMethod{}),
+	requiring(guest("path_find", &pathFindMethod{}), types.NeedsCurrentLedger),
+	guest("ripple_path_find", &ripplePathFindMethod{}),
+
+	user("channel_authorize", &ChannelAuthorizeMethod{}),
+	guest("channel_verify", &ChannelVerifyMethod{}),
+	guest("json", &jsonMethod{}),
+	admin("wallet_propose", &WalletProposeMethod{}),
+	requiring(guest("deposit_authorized", &DepositAuthorizedMethod{}), types.NeedsCurrentLedger),
+	guest("nft_buy_offers", &NftBuyOffersMethod{}),
+	guest("nft_sell_offers", &NftSellOffersMethod{}),
+
+	admin("stop", &StopMethod{}),
+	admin("validation_create", &ValidationCreateMethod{}),
+	user("manifest", &ManifestMethod{}),
+	admin("peer_reservations_add", &PeerReservationsAddMethod{}),
+	admin("peer_reservations_del", &PeerReservationsDelMethod{}),
+	admin("peer_reservations_list", &PeerReservationsListMethod{}),
+	admin("peers", &PeersMethod{}),
+	admin("consensus_info", &ConsensusInfoMethod{}),
+	admin("validator_list_sites", &validatorListSitesMethod{}),
+	admin("validators", &ValidatorsMethod{}),
+	admin("validator_info", &ValidatorInfoMethod{}),
+	admin("unl_list", &UnlListMethod{}),
+	admin("can_delete", &CanDeleteMethod{}),
+	admin("get_counts", &GetCountsMethod{}),
+	admin("log_level", &LogLevelMethod{}),
+	admin("logrotate", &LogRotateMethod{}),
+	admin("blacklist", &BlackListMethod{}),
+	admin("fetch_info", &FetchInfoMethod{}),
+	admin("connect", &ConnectMethod{}),
+	admin("print", &PrintMethod{}),
+
+	guest("amm_info", &AMMInfoMethod{}),
+	guest("vault_info", &VaultInfoMethod{}),
+	requiring(guest("get_aggregate_price", &GetAggregatePriceMethod{}), types.NeedsCurrentLedger),
+
+	guest("subscribe", &SubscribeMethod{}),
+	guest("unsubscribe", &UnsubscribeMethod{}),
+}
+
+// MethodDescriptors returns an isolated copy of the live RPC catalogue.
+func MethodDescriptors() []MethodDescriptor {
+	descriptors := make([]MethodDescriptor, len(methodDescriptors))
+	for i, descriptor := range methodDescriptors {
+		descriptor.Handler = newHandlerOfSameType(descriptor.Handler)
+		descriptor.APIVersions = slices.Clone(descriptor.APIVersions)
+		descriptors[i] = descriptor
+	}
+	return descriptors
+}
+
+func newHandlerOfSameType(handler types.MethodHandler) types.MethodHandler {
+	handlerType := reflect.TypeOf(handler)
+	if handlerType == nil || handlerType.Kind() != reflect.Pointer {
+		panic(fmt.Sprintf("RPC method handler prototype has invalid type %T", handler))
+	}
+	clone, ok := reflect.New(handlerType.Elem()).Interface().(types.MethodHandler)
+	if !ok {
+		panic(fmt.Sprintf("RPC method handler prototype %T does not implement MethodHandler", handler))
+	}
+	return clone
+}
+
+type registeredMethod struct {
+	descriptor MethodDescriptor
+}
+
+func (method registeredMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+	return method.descriptor.Handler.Handle(ctx, params)
+}
+
+func (method registeredMethod) RequiredRole() types.Role {
+	return method.descriptor.Role
+}
+
+func (method registeredMethod) SupportedApiVersions() []int {
+	return slices.Clone(method.descriptor.APIVersions)
+}
+
+func (method registeredMethod) RequiredCondition() types.Condition {
+	return method.descriptor.Condition
+}
+
+// RegisterAll wires the same immutable method catalogue into every transport.
 func RegisterAll(registry *types.MethodRegistry) {
-	registry.Register("server_info", &ServerInfoMethod{})
-	registry.Register("server_state", &ServerStateMethod{})
-	registry.Register("ping", &PingMethod{})
-	registry.Register("random", &RandomMethod{})
-	registry.Register("server_definitions", &ServerDefinitionsMethod{})
-	registry.Register("feature", &FeatureMethod{})
-	registry.Register("fee", &FeeMethod{})
-	registry.Register("version", &VersionMethod{})
-
-	registry.Register("ledger", &LedgerMethod{})
-	registry.Register("ledger_closed", &LedgerClosedMethod{})
-	registry.Register("ledger_current", &LedgerCurrentMethod{})
-	registry.Register("ledger_data", &LedgerDataMethod{})
-	registry.Register("ledger_entry", &LedgerEntryMethod{})
-	registry.Register("ledger_range", &LedgerRangeMethod{})
-	registry.Register("ledger_header", &LedgerHeaderMethod{})
-	registry.Register("ledger_request", &LedgerRequestMethod{})
-	registry.Register("ledger_cleaner", &LedgerCleanerMethod{})
-	registry.Register("ledger_accept", &LedgerAcceptMethod{})
-
-	registry.Register("account_info", &AccountInfoMethod{})
-	registry.Register("account_channels", &AccountChannelsMethod{})
-	registry.Register("account_currencies", &AccountCurrenciesMethod{})
-	registry.Register("account_lines", &AccountLinesMethod{})
-	registry.Register("account_nfts", &AccountNftsMethod{})
-	registry.Register("account_objects", &AccountObjectsMethod{})
-	registry.Register("account_offers", &AccountOffersMethod{})
-	registry.Register("account_tx", &AccountTxMethod{})
-	registry.Register("gateway_balances", &GatewayBalancesMethod{})
-	registry.Register("noripple_check", &NoRippleCheckMethod{})
-	registry.Register("owner_info", &OwnerInfoMethod{})
-
-	registry.Register("tx", &TxMethod{})
-	registry.Register("tx_history", &TxHistoryMethod{})
-	registry.Register("submit", &SubmitMethod{})
-	registry.Register("submit_multisigned", &SubmitMultisignedMethod{})
-	registry.Register("sign", &SignMethod{})
-	registry.Register("sign_for", &SignForMethod{})
-	registry.Register("transaction_entry", &TransactionEntryMethod{})
-	registry.Register("simulate", &SimulateMethod{})
-	registry.Register("tx_reduce_relay", &TxReduceRelayMethod{})
-
-	registry.Register("book_changes", &BookChangesMethod{})
-	registry.Register("book_offers", &BookOffersMethod{})
-	registry.Register("path_find", &PathFindMethod{})
-	registry.Register("ripple_path_find", &RipplePathFindMethod{})
-
-	registry.Register("channel_authorize", &ChannelAuthorizeMethod{})
-	registry.Register("channel_verify", &ChannelVerifyMethod{})
-
-	registry.Register("json", &JSONMethod{})
-
-	registry.Register("wallet_propose", &WalletProposeMethod{})
-	registry.Register("deposit_authorized", &DepositAuthorizedMethod{})
-	registry.Register("nft_buy_offers", &NftBuyOffersMethod{})
-	registry.Register("nft_sell_offers", &NftSellOffersMethod{})
-
-	registry.Register("stop", &StopMethod{})
-	registry.Register("validation_create", &ValidationCreateMethod{})
-	registry.Register("manifest", &ManifestMethod{})
-	registry.Register("peer_reservations_add", &PeerReservationsAddMethod{})
-	registry.Register("peer_reservations_del", &PeerReservationsDelMethod{})
-	registry.Register("peer_reservations_list", &PeerReservationsListMethod{})
-	registry.Register("peers", &PeersMethod{})
-	registry.Register("consensus_info", &ConsensusInfoMethod{})
-	registry.Register("validator_list_sites", &ValidatorListSitesMethod{})
-	registry.Register("validators", &ValidatorsMethod{})
-	registry.Register("validator_info", &ValidatorInfoMethod{})
-	registry.Register("unl_list", &UnlListMethod{})
-	registry.Register("download_shard", &DownloadShardMethod{})
-	registry.Register("crawl_shards", &CrawlShardsMethod{})
-	registry.Register("can_delete", &CanDeleteMethod{})
-	registry.Register("get_counts", &GetCountsMethod{})
-	registry.Register("log_level", &LogLevelMethod{})
-	registry.Register("logrotate", &LogRotateMethod{})
-	registry.Register("blacklist", &BlackListMethod{})
-	registry.Register("fetch_info", &FetchInfoMethod{})
-	registry.Register("connect", &ConnectMethod{})
-	registry.Register("print", &PrintMethod{})
-
-	registry.Register("amm_info", &AMMInfoMethod{})
-	registry.Register("vault_info", &VaultInfoMethod{})
-	registry.Register("get_aggregate_price", &GetAggregatePriceMethod{})
-
-	// subscribe/unsubscribe are in the common table like rippled's
-	// Handler.cpp: over plain JSON-RPC they serve the no-infoSub gating
-	// (invalidParams / noPermission / notSupported); the WebSocket
-	// dispatch intercepts both commands before registry lookup and runs
-	// the real subscription implementation.
-	registry.Register("subscribe", &SubscribeMethod{})
-	registry.Register("unsubscribe", &UnsubscribeMethod{})
+	seen := make(map[string]struct{}, len(methodDescriptors))
+	for _, descriptor := range methodDescriptors {
+		if _, duplicate := seen[descriptor.Name]; duplicate {
+			panic(fmt.Sprintf("duplicate RPC method descriptor %q", descriptor.Name))
+		}
+		seen[descriptor.Name] = struct{}{}
+		descriptor.Handler = newHandlerOfSameType(descriptor.Handler)
+		registry.Register(descriptor.Name, registeredMethod{descriptor: descriptor})
+	}
 }

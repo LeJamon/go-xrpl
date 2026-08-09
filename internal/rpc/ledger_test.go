@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -317,7 +318,7 @@ func TestLedgerBasicRequest(t *testing.T) {
 				"account_hash":          handlers.FormatLedgerHash(currentReader.StateMapHash()),
 				"close_flags":           float64(currentReader.CloseFlags()),
 				"close_time":            float64(currentReader.CloseTime()),
-				"close_time_human":      closeTime.Format("2006-Jan-02 15:04:05.000000000 UTC"),
+				"close_time_human":      protocol.FormatCloseTimeHuman(closeTime),
 				"close_time_iso":        closeTime.Format(time.RFC3339),
 				"close_time_resolution": float64(currentReader.CloseTimeResolution()),
 				"ledger_hash":           handlers.FormatLedgerHash(currentReader.Hash()),
@@ -491,12 +492,25 @@ func TestLedgerFullOption(t *testing.T) {
 	var txHash1, txHash2 [32]byte
 	txHash1[0] = 0x01
 	txHash2[0] = 0x02
+	storedTxData, err := json.Marshal(handlers.StoredTransaction{
+		TxJSON: map[string]any{
+			"TransactionType": "Payment",
+			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination":     "rDsbeomae4FXwgQTJp9Rs64Qg9vDiTCdBv",
+			"Amount":          "100",
+			"Fee":             "10",
+			"Sequence":        1,
+			"SigningPubKey":   "",
+		},
+		Meta: map[string]any{"TransactionResult": "tesSUCCESS"},
+	})
+	require.NoError(t, err)
 	reader.transactions = []struct {
 		hash [32]byte
 		data []byte
 	}{
-		{hash: txHash1, data: []byte{0x01, 0x02, 0x03}},
-		{hash: txHash2, data: []byte{0x04, 0x05, 0x06}},
+		{hash: txHash1, data: storedTxData},
+		{hash: txHash2, data: storedTxData},
 	}
 
 	mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
@@ -560,6 +574,51 @@ func TestLedgerFullOption(t *testing.T) {
 		assert.True(t, isMap, "With expand, transactions should be objects")
 		assert.Contains(t, txObj, "hash")
 	})
+}
+
+func TestLedgerExpandedTransactionsStopAtMalformedLeaf(t *testing.T) {
+	storedTxData, err := json.Marshal(handlers.StoredTransaction{
+		TxJSON: map[string]any{
+			"TransactionType": "Payment",
+			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination":     "rDsbeomae4FXwgQTJp9Rs64Qg9vDiTCdBv",
+			"Amount":          "100",
+			"Fee":             "10",
+			"Sequence":        1,
+			"SigningPubKey":   "",
+		},
+		Meta: map[string]any{"TransactionResult": "tesSUCCESS"},
+	})
+	require.NoError(t, err)
+
+	reader := newDefaultLedgerReader(2, true)
+	reader.transactions = []struct {
+		hash [32]byte
+		data []byte
+	}{
+		{hash: [32]byte{1}, data: storedTxData},
+		{hash: [32]byte{2}, data: []byte{0xff}},
+		{hash: [32]byte{3}, data: storedTxData},
+	}
+	mock := &ledgerMock{mockLedgerService: newMockLedgerService()}
+	mock.getLedgerBySequenceFn = func(uint32) (types.LedgerReader, error) {
+		return reader, nil
+	}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   &types.ServiceContainer{Ledger: mock},
+	}
+
+	result, rpcErr := (&handlers.LedgerMethod{}).Handle(ctx, json.RawMessage(`{"ledger_index":2,"transactions":true,"expand":true}`))
+	require.Nil(t, rpcErr)
+	response := result.(map[string]any)
+	ledgerResult := response["ledger"].(map[string]any)
+	txs := ledgerResult["transactions"].([]any)
+	require.Len(t, txs, 1)
+	first := txs[0].(map[string]any)
+	assert.Equal(t, "0100000000000000000000000000000000000000000000000000000000000000", first["hash"])
 }
 
 func TestLedgerExpandedDeliveredAmountHistoricalCloseTime(t *testing.T) {
@@ -924,7 +983,7 @@ func TestLedgerResponseStructure(t *testing.T) {
 			"account_hash":          handlers.FormatLedgerHash(reader.StateMapHash()),
 			"close_flags":           float64(reader.CloseFlags()),
 			"close_time":            float64(reader.CloseTime()),
-			"close_time_human":      closeTime.Format("2006-Jan-02 15:04:05.000000000 UTC"),
+			"close_time_human":      protocol.FormatCloseTimeHuman(closeTime),
 			"close_time_iso":        closeTime.Format(time.RFC3339),
 			"close_time_resolution": float64(reader.CloseTimeResolution()),
 			"closed":                true,

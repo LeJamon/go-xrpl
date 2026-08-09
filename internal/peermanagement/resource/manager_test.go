@@ -1,22 +1,21 @@
 package resource
 
 import (
+	"io"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
-// fakeClock is a deterministic clock for driving decay windows in
-// tests. Mirrors the TestStopwatch pattern used by rippled's
-// Logic_test.cpp — advance one second per ++clock.
 type fakeClock struct {
 	mu  sync.Mutex
 	now time.Time
 }
 
 func newFakeClock() *fakeClock {
-	return &fakeClock{now: time.Unix(0, 0)}
+	return &fakeClock{now: time.Unix(1_700_000_000, 0)}
 }
 
 func (c *fakeClock) Now() time.Time {
@@ -33,7 +32,8 @@ func (c *fakeClock) Advance(d time.Duration) {
 
 func newTestManager() (*Manager, *fakeClock) {
 	clk := newFakeClock()
-	return NewManager(clk.Now, nil), clk
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return NewManager(clk.Now, logger), clk
 }
 
 func TestCharge_WarnThenDrop(t *testing.T) {
@@ -103,7 +103,7 @@ func TestCharge_DecayKeepsHonestPeerBelowDrop(t *testing.T) {
 	// One feeInvalidData (400) per decay window — well below the
 	// drop threshold. Should never escalate to Drop or even Warn.
 	for i := range 200 {
-		if d := c.Charge(FeeInvalidData, "low-freq"); d != Ok {
+		if d := c.Charge(FeeInvalidData(), "low-freq"); d != Ok {
 			t.Fatalf("iter %d: disposition=%v want Ok (balance=%d)", i, d, c.Balance())
 		}
 		clk.Advance(time.Duration(DecayWindowSeconds) * time.Second)
@@ -115,11 +115,6 @@ func TestUnlimited_NeverDrops(t *testing.T) {
 	c := m.NewUnlimitedEndpoint("10.0.0.1")
 	defer c.Release()
 
-	// Even at synthetic over-budget cost, an unlimited consumer
-	// returns Ok and never asks to disconnect. The local balance must
-	// also stay at zero — rippled's Consumer::charge short-circuits
-	// for unlimited consumers (Consumer.cpp:106-114), so the entry's
-	// local_balance is never debited.
 	for range 50 {
 		if d := c.Charge(NewCharge(DropThreshold+1, "huge"), ""); d != Ok {
 			t.Fatalf("unlimited returned %v, want Ok", d)
@@ -175,16 +170,16 @@ func TestOutbound_KeyIncludesPort(t *testing.T) {
 func TestPeriodicActivity_ExpiresInactiveEntries(t *testing.T) {
 	m, clk := newTestManager()
 	c := m.NewInboundEndpoint("192.0.2.40")
-	c.Charge(FeeInvalidData, "")
+	c.Charge(FeeInvalidData(), "")
 	c.Release()
 
-	if m.EntryCount() == 0 {
+	if m.Stats().Entries == 0 {
 		t.Fatalf("entry erased before periodic activity")
 	}
 	clk.Advance(SecondsUntilExpiration + time.Second)
-	m.PeriodicActivity()
-	if m.EntryCount() != 0 {
-		t.Fatalf("entry count after expiry = %d, want 0", m.EntryCount())
+	m.periodicActivity()
+	if got := m.Stats().Entries; got != 0 {
+		t.Fatalf("entry count after expiry = %d, want 0", got)
 	}
 }
 
@@ -224,7 +219,7 @@ func TestConcurrent_ChargesAreSafe(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range 100 {
-				c.Charge(FeeInvalidData, "")
+				c.Charge(FeeInvalidData(), "")
 				charges.Add(1)
 			}
 		}()
@@ -290,11 +285,6 @@ func TestStartAfterStopIsNoop(t *testing.T) {
 	}
 }
 
-// TestDrop_BlacklistAndReadmit mirrors rippled's testDrop second and
-// third blocks (Logic_test.cpp:158-196): after a Consumer is dropped,
-// reacquiring the same endpoint must show a Drop disposition (the
-// blacklist), and after secondsUntilExpiration of periodic activity,
-// the same endpoint must be readmitted (disposition back to Ok).
 func TestDrop_BlacklistAndReadmit(t *testing.T) {
 	m, clk := newTestManager()
 	const addr = "192.0.2.70:51235"
@@ -322,10 +312,10 @@ func TestDrop_BlacklistAndReadmit(t *testing.T) {
 	// have erased the entry yet (we have not advanced clk past
 	// SecondsUntilExpiration), and the prior balance carries forward so
 	// the new Consumer is already Drop-ranked.
-	m.PeriodicActivity()
+	m.periodicActivity()
 	c2 := m.NewInboundEndpoint(addr)
-	if c2.Disposition() != Drop {
-		t.Fatalf("dropped consumer not blacklisted on immediate reconnect: %v", c2.Disposition())
+	if got := disposition(c2.Balance()); got != Drop {
+		t.Fatalf("dropped consumer not blacklisted on immediate reconnect: %v", got)
 	}
 	c2.Release()
 
@@ -336,9 +326,9 @@ func TestDrop_BlacklistAndReadmit(t *testing.T) {
 	readmitted := false
 	for range steps {
 		clk.Advance(time.Second)
-		m.PeriodicActivity()
+		m.periodicActivity()
 		c3 := m.NewInboundEndpoint(addr)
-		d := c3.Disposition()
+		d := disposition(c3.Balance())
 		c3.Release()
 		if d != Drop {
 			readmitted = true
@@ -350,11 +340,6 @@ func TestDrop_BlacklistAndReadmit(t *testing.T) {
 	}
 }
 
-// TestImport_ReplacesPriorContributionFromSameOrigin verifies the
-// add-new-then-subtract-old semantics of ImportConsumers when the same
-// origin re-imports: each entry's remote_balance must reflect only
-// the latest gossip, not the cumulative sum across imports. Mirrors
-// rippled Logic.h:283-336 swap(next, prev) pattern.
 func TestImport_ReplacesPriorContributionFromSameOrigin(t *testing.T) {
 	m, _ := newTestManager()
 	const addr = "192.0.2.80"
@@ -400,7 +385,7 @@ func TestDecay_AgesUnderSubSecondChargeRate(t *testing.T) {
 
 	// Without decay the balance would normalize to charges*cost/window.
 	undecayed := charges * cost / DecayWindowSeconds
-	if bal >= undecayed/2 {
+	if bal >= int64(undecayed/2) {
 		t.Fatalf("balance=%d did not decay (undecayed accumulation=%d): sub-second charges are not aging", bal, undecayed)
 	}
 	if bal <= 0 {
@@ -420,7 +405,7 @@ func TestImport_ExpiryReleasesEntries(t *testing.T) {
 		{Address: "192.0.2.111", Balance: 1800},
 	}}
 	m.ImportConsumers("origin-leak", g)
-	if got := m.EntryCount(); got != 2 {
+	if got := m.Stats().Entries; got != 2 {
 		t.Fatalf("after import EntryCount=%d want 2", got)
 	}
 
@@ -428,16 +413,16 @@ func TestImport_ExpiryReleasesEntries(t *testing.T) {
 	// to refcount 0, but they keep the normal SecondsUntilExpiration
 	// grace window before erasure.
 	clk.Advance(GossipExpiration + time.Second)
-	m.PeriodicActivity()
-	if got := m.EntryCount(); got != 2 {
+	m.periodicActivity()
+	if got := m.Stats().Entries; got != 2 {
 		t.Fatalf("entries erased before grace period: EntryCount=%d want 2", got)
 	}
 
 	// Once the grace window lapses they must be gone — a leaked refcount
 	// would pin them at 1 forever.
 	clk.Advance(SecondsUntilExpiration + time.Second)
-	m.PeriodicActivity()
-	if got := m.EntryCount(); got != 0 {
+	m.periodicActivity()
+	if got := m.Stats().Entries; got != 0 {
 		t.Fatalf("gossip entries leaked: EntryCount=%d want 0", got)
 	}
 }
@@ -453,7 +438,7 @@ func TestImport_ReplacementReleasesDroppedAddress(t *testing.T) {
 		{Address: "192.0.2.120", Balance: 1500},
 		{Address: "192.0.2.121", Balance: 1500},
 	}})
-	if got := m.EntryCount(); got != 2 {
+	if got := m.Stats().Entries; got != 2 {
 		t.Fatalf("after first import EntryCount=%d want 2", got)
 	}
 
@@ -462,8 +447,8 @@ func TestImport_ReplacementReleasesDroppedAddress(t *testing.T) {
 		{Address: "192.0.2.120", Balance: 1500},
 	}})
 	clk.Advance(SecondsUntilExpiration + time.Second)
-	m.PeriodicActivity()
-	if got := m.EntryCount(); got != 1 {
+	m.periodicActivity()
+	if got := m.Stats().Entries; got != 1 {
 		t.Fatalf("dropped gossip address leaked: EntryCount=%d want 1", got)
 	}
 }

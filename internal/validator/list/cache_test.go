@@ -1,6 +1,8 @@
 package list_test
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -9,7 +11,9 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/manifest"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/validator/list"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 func TestAggregator_Cache_WriteThenRoundTripLoad(t *testing.T) {
@@ -21,10 +25,11 @@ func TestAggregator_Cache_WriteThenRoundTripLoad(t *testing.T) {
 
 	// First aggregator: write the cache by applying an accepted list.
 	src, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{pubKey},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{pubKey},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	if err != nil {
 		t.Fatalf("New src: %v", err)
@@ -72,10 +77,11 @@ func TestAggregator_Cache_WriteThenRoundTripLoad(t *testing.T) {
 	// Second aggregator: hydrate from the same directory and check
 	// the publisher reached StatusAvailable at the expected sequence.
 	dst, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{pubKey},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{pubKey},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	if err != nil {
 		t.Fatalf("New dst: %v", err)
@@ -108,10 +114,11 @@ func TestAggregator_Cache_LoadSkipsAlreadyAvailable(t *testing.T) {
 	pubKey := list.PublisherKey(pub.masterPub)
 
 	agg, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{pubKey},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{pubKey},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -155,10 +162,11 @@ func TestAggregator_Cache_DisabledDirNoFile(t *testing.T) {
 	dir := t.TempDir()
 
 	agg, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -177,4 +185,282 @@ func TestAggregator_Cache_DisabledDirNoFile(t *testing.T) {
 	if len(entries) != 0 {
 		t.Fatalf("cache dir written without SetCacheDir: %d entries", len(entries))
 	}
+}
+
+func TestAggregatorLoadCacheRejectsVersionShapeMismatch(t *testing.T) {
+	pub := newPublisher(t, 0x35, 0x36)
+	validator := derivedValidatorKey(0x37)
+	blob, signature := pub.signList(t, 1, 0, fixedClock()().Add(24*time.Hour).Unix(), [][33]byte{validator})
+	tests := map[string]map[string]any{
+		"v1 with blobs_v2": {
+			"manifest": string(pub.manifestB64), "version": 1,
+			"blob": string(blob), "signature": string(signature),
+			"blobs_v2": []map[string]any{{"blob": string(blob), "signature": string(signature)}},
+		},
+		"v2 with v1 fields": {
+			"manifest": string(pub.manifestB64), "version": 2,
+			"blob": string(blob), "signature": string(signature),
+			"blobs_v2": []map[string]any{{"blob": string(blob), "signature": string(signature)}},
+		},
+	}
+	for name, env := range tests {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			agg, err := list.New(list.Config{
+				PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+				Threshold:          1,
+				ValidatorManifests: manifest.NewCache(),
+				PublisherManifests: manifest.NewCache(),
+				Clock:              fixedClock(),
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if err := agg.SetCacheDir(dir); err != nil {
+				t.Fatalf("SetCacheDir: %v", err)
+			}
+			body, err := json.Marshal(env)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			path := filepath.Join(dir, "cache."+hex.EncodeToString(pub.masterPub[:]))
+			if err := os.WriteFile(path, body, 0o600); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+			if loaded := agg.LoadCache(); loaded != 0 {
+				t.Fatalf("LoadCache accepted mismatched envelope: %d", loaded)
+			}
+			if got := agg.PublisherSnapshot()[0].Sequence; got != 0 {
+				t.Fatalf("mismatched envelope mutated publisher: sequence=%d", got)
+			}
+		})
+	}
+}
+
+func TestAggregator_Cache_V2RotationPreservesLocalManifestThroughPromotion(t *testing.T) {
+	pub := newPublisher(t, 0x45, 0x46)
+	validator := derivedValidatorKey(0x51)
+	pubKey := list.PublisherKey(pub.masterPub)
+	var now = fixedClock()()
+	localM2, eph2Priv := rotationManifest(t, pub, 0x47, 2)
+
+	dir := t.TempDir()
+	src, err := list.New(list.Config{
+		PublisherKeys:      []list.PublisherKey{pubKey},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("New src: %v", err)
+	}
+	if err := src.SetCacheDir(dir); err != nil {
+		t.Fatalf("SetCacheDir src: %v", err)
+	}
+	exp := now.Add(48 * time.Hour).Unix()
+	blob1, sig1 := pub.signList(t, 5, 0, exp, [][33]byte{validator})
+	blob2, sig2 := signListWithKey(t, eph2Priv, 10, now.Add(time.Hour).Unix(), exp, [][33]byte{validator})
+	dispositions, _, maxSequence := src.ApplyCollection(&message.ValidatorListCollection{
+		Version:  2,
+		Manifest: pub.manifestB64,
+		Blobs: []message.ValidatorBlobInfo{
+			{Blob: blob1, Signature: sig1},
+			{Manifest: localM2, Blob: blob2, Signature: sig2},
+		},
+	}, "cache://src")
+	if len(dispositions) != 2 || dispositions[0] != list.Accepted || dispositions[1] != list.Pending || maxSequence != 10 {
+		t.Fatalf("ApplyCollection: got %v", dispositions)
+	}
+	path := filepath.Join(dir, "cache."+hex.EncodeToString(pub.masterPub[:]))
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read cache: %v", err)
+	}
+	var env struct {
+		Manifest string `json:"manifest"`
+		Version  uint32 `json:"version"`
+		Blobs    []struct {
+			Manifest *string `json:"manifest"`
+		} `json:"blobs_v2"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("decode cache: %v", err)
+	}
+	if env.Version != 2 || env.Manifest != string(pub.manifestB64) || len(env.Blobs) != 2 {
+		t.Fatalf("unexpected v2 envelope: %+v", env)
+	}
+	if env.Blobs[0].Manifest != nil {
+		t.Fatalf("current blob must omit local manifest: %+v", *env.Blobs[0].Manifest)
+	}
+	if env.Blobs[1].Manifest == nil || *env.Blobs[1].Manifest != string(localM2) {
+		t.Fatalf("pending local manifest lost: %+v", env.Blobs[1].Manifest)
+	}
+
+	dst, err := list.New(list.Config{
+		PublisherKeys:      []list.PublisherKey{pubKey},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("New dst: %v", err)
+	}
+	if err := dst.SetCacheDir(dir); err != nil {
+		t.Fatalf("SetCacheDir dst: %v", err)
+	}
+	if loaded := dst.LoadCache(); loaded != 1 {
+		t.Fatalf("LoadCache: got %d want 1", loaded)
+	}
+	snapshot := dst.PublisherSnapshot()
+	if len(snapshot) != 1 || snapshot[0].Sequence != 5 || snapshot[0].RawLocalManifestSet {
+		t.Fatalf("current state after hydrate: %+v", snapshot)
+	}
+	if len(snapshot[0].Remaining) != 1 {
+		t.Fatalf("pending state after hydrate: %+v", snapshot[0].Remaining)
+	}
+	pending := snapshot[0].Remaining[10]
+	if pending == nil || !pending.RawLocalManifestSet {
+		t.Fatalf("pending local manifest after hydrate: %+v", pending)
+	}
+
+	now = now.Add(2 * time.Hour)
+	dst.Tick()
+	snapshot = dst.PublisherSnapshot()
+	if snapshot[0].Sequence != 10 || !snapshot[0].RawLocalManifestSet {
+		t.Fatalf("promoted rotation lost local manifest: %+v", snapshot[0])
+	}
+}
+
+func TestAggregatorCacheRetainsPendingCollectionManifest(t *testing.T) {
+	pub := newPublisher(t, 0x52, 0x53)
+	pubKey := list.PublisherKey(pub.masterPub)
+	now := fixedClock()()
+	manifest2, signing2 := rotationManifest(t, pub, 0x54, 2)
+	dir := t.TempDir()
+	agg, err := list.New(list.Config{
+		PublisherKeys:      []list.PublisherKey{pubKey},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := agg.SetCacheDir(dir); err != nil {
+		t.Fatalf("SetCacheDir: %v", err)
+	}
+	expiration := now.Add(48 * time.Hour).Unix()
+	blob1, signature1 := pub.signList(t, 5, 0, expiration, [][33]byte{derivedValidatorKey(0x55)})
+	if disposition, _, _ := agg.ApplyList(pub.manifestB64, blob1, signature1, 1, "cache://initial"); disposition != list.Accepted {
+		t.Fatalf("initial disposition: got %s want accepted", disposition)
+	}
+	blob2, signature2 := signListWithKey(t, signing2, 10, now.Add(time.Hour).Unix(), expiration, [][33]byte{derivedValidatorKey(0x56)})
+	dispositions, _, _ := agg.ApplyCollection(&message.ValidatorListCollection{
+		Version:  2,
+		Manifest: manifest2,
+		Blobs:    []message.ValidatorBlobInfo{{Blob: blob2, Signature: signature2}},
+	}, "cache://rotation")
+	if len(dispositions) != 1 || dispositions[0] != list.Pending {
+		t.Fatalf("rotation dispositions: %v", dispositions)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, "cache."+hex.EncodeToString(pub.masterPub[:])))
+	if err != nil {
+		t.Fatalf("read cache: %v", err)
+	}
+	var env struct {
+		Manifest string `json:"manifest"`
+		Blobs    []struct {
+			Manifest *string `json:"manifest"`
+		} `json:"blobs_v2"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("decode cache: %v", err)
+	}
+	if env.Manifest != string(manifest2) || len(env.Blobs) != 2 || env.Blobs[1].Manifest != nil {
+		t.Fatalf("pending collection manifest was not retained: %+v", env)
+	}
+}
+
+func TestAggregatorCacheSerializesNormalizedRemainingLists(t *testing.T) {
+	pub := newPublisher(t, 0x57, 0x58)
+	now := fixedClock()()
+	dir := t.TempDir()
+	agg, err := list.New(list.Config{
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := agg.SetCacheDir(dir); err != nil {
+		t.Fatalf("SetCacheDir: %v", err)
+	}
+	expiration := now.Add(48 * time.Hour).Unix()
+	for _, input := range []struct {
+		sequence  uint32
+		effective int64
+		want      list.Disposition
+	}{
+		{1, 0, list.Accepted},
+		{2, now.Add(time.Hour).Unix(), list.Pending},
+		{3, 0, list.Accepted},
+	} {
+		blob, signature := pub.signList(t, input.sequence, input.effective, expiration, [][33]byte{derivedValidatorKey(byte(0x60 + input.sequence))})
+		if disposition, _, _ := agg.ApplyList(pub.manifestB64, blob, signature, 1, "cache://normalize"); disposition != input.want {
+			t.Fatalf("sequence %d disposition: got %s want %s", input.sequence, disposition, input.want)
+		}
+	}
+	body, err := os.ReadFile(filepath.Join(dir, "cache."+hex.EncodeToString(pub.masterPub[:])))
+	if err != nil {
+		t.Fatalf("read cache: %v", err)
+	}
+	var env struct {
+		Blobs []json.RawMessage `json:"blobs_v2"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("decode cache: %v", err)
+	}
+	if len(env.Blobs) != 1 {
+		t.Fatalf("cache retained superseded pending lists: %d blobs", len(env.Blobs))
+	}
+}
+
+func rotationManifest(t *testing.T, pub *publisherFixture, ephSeed byte, sequence uint32) ([]byte, ed25519.PrivateKey) {
+	t.Helper()
+	ephPub32, ephPriv := deterministicKey(ephSeed)
+	var ephPub [33]byte
+	copy(ephPub[:], append([]byte{0xED}, ephPub32...))
+	raw := buildManifest(t, pub.masterPub, pub.masterPriv, ephPub, ephPriv, sequence)
+	return []byte(base64.StdEncoding.EncodeToString(raw)), ephPriv
+}
+
+func signListWithKey(t *testing.T, privateKey ed25519.PrivateKey, sequence uint32, validFromUnix, validUntilUnix int64, validatorMasters [][33]byte) ([]byte, []byte) {
+	t.Helper()
+	type entry struct {
+		ValidationPublicKey string `json:"validation_public_key"`
+	}
+	type body struct {
+		Sequence   uint32  `json:"sequence"`
+		Expiration uint32  `json:"expiration"`
+		Effective  uint32  `json:"effective,omitempty"`
+		Validators []entry `json:"validators"`
+	}
+	v := body{Sequence: sequence, Expiration: uint32(validUntilUnix - protocol.RippleEpochUnix)}
+	if validFromUnix > 0 {
+		v.Effective = uint32(validFromUnix - protocol.RippleEpochUnix)
+	}
+	for _, master := range validatorMasters {
+		v.Validators = append(v.Validators, entry{ValidationPublicKey: hex.EncodeToString(master[:])})
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("blob JSON marshal: %v", err)
+	}
+	return []byte(base64.StdEncoding.EncodeToString(raw)), []byte(hex.EncodeToString(ed25519.Sign(privateKey, raw)))
 }

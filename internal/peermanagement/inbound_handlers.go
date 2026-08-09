@@ -5,11 +5,15 @@
 package peermanagement
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"math/rand/v2"
 	"net"
+	"net/netip"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -26,13 +30,62 @@ import (
 // ErrSendBufferFull.
 const peerSendQueueDropThreshold = (DefaultSendBufferSize * 3) / 4
 
+const (
+	// These allowances exceed the protobuf tags, lengths, and repeated-message
+	// envelope for one reply item, keeping the pre-marshal budget conservative.
+	serveReplyObjectOverhead      = int64(64)
+	serveReplyTransactionOverhead = int64(32)
+)
+
+type serveReplyBudget struct {
+	remaining int64
+}
+
+func newServeReplyBudget() serveReplyBudget {
+	return serveReplyBudget{remaining: int64(message.MaxMessageSize)}
+}
+
+func (b *serveReplyBudget) reserve(overhead int64, fields ...[]byte) bool {
+	if overhead < 0 || overhead > b.remaining {
+		return false
+	}
+	required := overhead
+	for _, field := range fields {
+		if int64(len(field)) > b.remaining-required {
+			return false
+		}
+		required += int64(len(field))
+	}
+	b.remaining -= required
+	return true
+}
+
+func limitIndexedObjectsToReplyBudget(objects []message.IndexedObject, fixedFields ...[]byte) []message.IndexedObject {
+	budget := newServeReplyBudget()
+	if !budget.reserve(serveReplyObjectOverhead, fixedFields...) {
+		clear(objects)
+		return objects[:0]
+	}
+	kept := 0
+	for i := range objects {
+		object := &objects[i]
+		if !budget.reserve(serveReplyObjectOverhead, object.Hash, object.NodeID, object.Index, object.Data) {
+			break
+		}
+		objects[kept] = *object
+		kept++
+	}
+	clear(objects[kept:])
+	return objects[:kept]
+}
+
 // handleClusterMessage processes mtCLUSTER from a peer. Mirrors rippled
 // PeerImp::onMessage(TMCluster) at PeerImp.cpp:1125-1194.
 //
 // Acceptance rule: the SENDER must be in our [cluster_nodes] registry.
 // Rippled gates this on Peer::cluster() which returns true when the
 // peer's NodePublic was loaded from [cluster_nodes]; we mirror the
-// same boundary via Overlay.cluster.Member(peer.RemotePublicKey()).
+// same boundary via Overlay.cluster.Member(peer.RemotePublicKeyBytes()).
 //
 // Payload effect: each ClusterNode entry refreshes the registry's
 // known load/report-time for that node. After the registry-update
@@ -51,18 +104,19 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 
 	// Sender must be a cluster member. Rippled drops + charges
 	// feeUselessData "unknown cluster" at PeerImp.cpp:1128-1131.
-	pubToken := peer.RemotePublicKey()
-	if pubToken == nil {
+	pubKey := peer.RemotePublicKeyBytes()
+	if len(pubKey) == 0 {
 		o.IncPeerBadData(evt.PeerID, "cluster-no-pubkey")
 		return
 	}
-	member, isMember := o.cluster.Member(pubToken.Bytes())
+	member, isMember := o.cluster.Member(pubKey)
 	if !isMember {
 		slog.Debug("TMCluster from non-cluster peer; dropping",
 			"t", "Overlay", "peer", evt.PeerID)
 		o.IncPeerBadData(evt.PeerID, "cluster-not-member")
 		return
 	}
+	origin := peer.resourceGossipOrigin(member.Name)
 
 	decoded, err := message.Decode(message.TypeCluster, evt.Payload)
 	if err != nil {
@@ -86,22 +140,22 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 			// bad-data charge that rippled would not.
 			continue
 		}
-		reportTime := time.Unix(int64(node.ReportTime), 0)
+		var reportTime time.Time
+		if node.ReportTime != 0 {
+			reportTime = protocol.FromRippleTime(node.ReportTime)
+		}
 		o.cluster.Update(identity, node.NodeName, node.NodeLoad, reportTime)
 	}
 
 	// Recompute the cluster-fee median and forward it through the
-	// LoadFeeTrack sink. Mirrors rippled PeerImp.cpp:1175-1193: take
-	// the median of cluster-member LoadFees reported within the last
-	// clusterFeeWindow, then setClusterFee. An empty set (no fresh
-	// reports) yields no setClusterFee call — rippled also falls
-	// through with clusterFee=0 in that case but we leave the prior
-	// value intact, mirroring the more general "no signal → no
-	// change" pattern.
+	// LoadFeeTrack sink. An empty fresh set publishes zero.
 	if sink := o.clusterFeeSinkSnapshot(); sink != nil {
-		if fee, ok := o.cluster.MedianFee(time.Now().Add(-clusterFeeWindow)); ok {
-			sink(fee)
+		now := time.Now()
+		if o.clock != nil {
+			now = o.clock()
 		}
+		fee, _ := o.cluster.MedianFee(now.Add(-clusterFeeWindow))
+		sink(fee)
 	}
 
 	// LoadSource gossip → resource manager. Mirrors rippled
@@ -118,43 +172,73 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 	if o.resourceManager != nil && len(cm.LoadSources) != 0 {
 		gossip := resource.Gossip{Items: make([]resource.GossipItem, 0, len(cm.LoadSources))}
 		for _, src := range cm.LoadSources {
-			if !validGossipAddress(src.Name) {
+			address, ok := canonicalGossipAddress(src.Name)
+			if !ok {
 				continue
 			}
 			gossip.Items = append(gossip.Items, resource.GossipItem{
-				Address: src.Name,
-				Balance: int(src.Cost),
+				Address: address,
+				Balance: src.Cost,
 			})
 		}
-		o.resourceManager.ImportConsumers(member.Name, gossip)
+		if err := o.resourceManager.ImportConsumers(origin, gossip); err != nil {
+			slog.Warn("Cluster load-source snapshot rejected", "t", "Overlay", "peer", evt.PeerID, "err", err)
+		}
 	}
 }
 
-// validGossipAddress reports whether name parses as the IP endpoint that
-// a TMLoadSource carries. Mirrors rippled's
-// beast::IP::Endpoint::from_string + `!= Endpoint()` guard at
-// PeerImp.cpp:1166-1168, which silently drops a load source whose name
-// is not a valid endpoint. Both the rippled "ip:port" form (its exported
-// keys canonicalise to port 0) and go-xrpl's bare-host form (resource
-// keys strip the inbound port — see resource.normalizeAddr) round-trip.
-// The port is range-checked as a uint16 to match from_string, which
-// parses it into a uint16 and fails on an out-of-range or non-numeric
-// port (IPEndpoint.cpp:179-182); net.ParseIP already rejects anything
-// longer than from_string_checked's 64-char cap, so no separate guard.
 func validGossipAddress(name string) bool {
+	_, ok := canonicalGossipAddress(name)
+	return ok
+}
+
+func canonicalGossipAddress(name string) (string, bool) {
+	if len(name) > 64 {
+		return "", false
+	}
+	name = strings.TrimSpace(name)
 	if name == "" {
-		return false
+		return "", false
 	}
-	host := name
-	if h, port, err := net.SplitHostPort(name); err == nil {
-		if port != "" {
-			if _, err := strconv.ParseUint(port, 10, 16); err != nil {
-				return false
-			}
+
+	if addr, err := netip.ParseAddr(name); err == nil {
+		if addr.Zone() != "" {
+			return "", false
 		}
-		host = h
+		return addr.Unmap().String(), true
 	}
-	return net.ParseIP(host) != nil
+	if strings.HasPrefix(name, "[") && strings.HasSuffix(name, "]") {
+		if addr, err := netip.ParseAddr(name[1 : len(name)-1]); err == nil && addr.Zone() == "" {
+			return addr.Unmap().String(), true
+		}
+	}
+	if endpoint, err := netip.ParseAddrPort(name); err == nil {
+		if endpoint.Addr().Zone() != "" {
+			return "", false
+		}
+		return netip.AddrPortFrom(endpoint.Addr().Unmap(), endpoint.Port()).String(), true
+	}
+
+	fields := strings.Fields(name)
+	if len(fields) != 2 {
+		return "", false
+	}
+	host := fields[0]
+	if strings.HasPrefix(host, "[") || strings.HasSuffix(host, "]") {
+		if !strings.HasPrefix(host, "[") || !strings.HasSuffix(host, "]") || len(host) < 3 {
+			return "", false
+		}
+		host = host[1 : len(host)-1]
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil || addr.Zone() != "" {
+		return "", false
+	}
+	port, err := strconv.ParseUint(fields[1], 10, 16)
+	if err != nil {
+		return "", false
+	}
+	return netip.AddrPortFrom(addr.Unmap(), uint16(port)).String(), true
 }
 
 // handleGetObjectsMessage processes mtGET_OBJECTS from a peer. Mirrors
@@ -201,13 +285,28 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 		}
 		switch gob.ObjType {
 		case message.ObjectTypeFetchPack:
+			if len(gob.LedgerHash) != 32 {
+				if peerOK {
+					peer.Charge(resource.FeeMalformedRequest(), "fetch pack ledger hash")
+				}
+				return
+			}
 			// Rippled at PeerImp.cpp:2458-2462 forwards to doFetchPack.
 			// Build a pack of the predecessor ledger's SHAMap nodes and
 			// reply (serveFetchPack), mirroring makeFetchPack. Offloaded
 			// to the serve-worker pool — building a pack snapshots the
 			// state+tx tree (capped at fetchPackMaxObjects nodes) and
 			// must not run on the event loop.
-			o.submitServe(func() { o.serveFetchPack(evt.PeerID, gob) })
+			receivedAt := time.Now()
+			// The heavy charge is deferred until the worker has passed the
+			// provider's busy/stale guard. Charging at admission would make a
+			// request that was immediately refused for local load look served.
+			o.submitRetainedServe(evt, resource.Charge{},
+				func(ctx context.Context) {
+					deadlineCtx, cancel := context.WithDeadline(ctx, receivedAt.Add(time.Second))
+					defer cancel()
+					o.serveFetchPackContext(deadlineCtx, evt.PeerID, gob)
+				})
 			return
 		case message.ObjectTypeTransactions:
 			// Tx-reduce-relay back-fill request. Rippled gates on
@@ -223,14 +322,26 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 				o.IncPeerBadData(evt.PeerID, "get-objects-txn-unnegotiated")
 				return
 			}
-			o.submitServe(func() { o.serveDoTransactions(evt.PeerID, gob) })
+			o.submitRetainedServe(evt, resource.FeeModerateBurdenPeer(),
+				func(ctx context.Context) { o.serveDoTransactionsContext(ctx, evt.PeerID, gob) })
 			return
 		}
 
 		// Generic node-store object fetch by hash. Mirrors rippled's
 		// fetchNodeObject loop at PeerImp.cpp:2483-2538. Offloaded to the
 		// serve-worker pool — up to N node-store fetches per request.
-		o.submitServe(func() { o.serveGetObjects(evt.PeerID, gob) })
+		if gob.HasLedgerHash() && len(gob.LedgerHash) != 32 {
+			o.IncPeerBadData(evt.PeerID, "get-objects-ledgerhash")
+			return
+		}
+		if len(gob.Objects) > hardMaxReplyNodes {
+			if peer, ok := o.getPeer(evt.PeerID); ok {
+				peer.Charge(resource.FeeInvalidData(), "oversized get object request")
+			}
+			return
+		}
+		o.submitRetainedServe(evt, resource.FeeModerateBurdenPeer(),
+			func(ctx context.Context) { o.serveGetObjectsContext(ctx, evt.PeerID, gob) })
 		return
 	}
 
@@ -244,15 +355,27 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 	// are dropped.
 	switch gob.ObjType {
 	case message.ObjectTypeFetchPack, message.ObjectTypeStateNode, message.ObjectTypeTransactionNode:
-		o.forwardLedgerData(&InboundMessage{
-			PeerID:  evt.PeerID,
-			Type:    evt.MessageType,
-			Payload: evt.Payload,
-		})
+		o.forwardLedgerData(evt.retainedInboundMessage())
 		return
 	}
 	slog.Debug("TMGetObjects reply received without outstanding request; dropping",
 		"t", "Overlay", "peer", evt.PeerID)
+}
+
+func (o *Overlay) submitRetainedServe(
+	evt Event,
+	admission resource.Charge,
+	job func(context.Context),
+) {
+	reservation := evt.reservation.retain()
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(reservation.release) }
+	if !o.submitServeForPeerOwned(evt.PeerID, admission, func(ctx context.Context) {
+		defer release()
+		job(ctx)
+	}, release) {
+		release()
+	}
 }
 
 // serveFetchPack answers an inbound mtGET_OBJECTS{otFETCH_PACK, query=true}.
@@ -262,16 +385,38 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 // query=false TMGetObjectByHash. The requested ledger hash must be 32 bytes; an
 // unknown ledger or unavailable parent yields an empty pack which is dropped.
 // A request below the serving range is dropped with an additional malformed
-// request charge. Every valid-hash request is charged feeHeavyBurdenPeer up
-// front, mirroring rippled's
-// doFetchPack (PeerImp.cpp:2773): building a pack snapshots the want ledger's
+// request charge. The heavy-burden charge is applied after the provider's
+// busy/stale guard, so a locally busy request is dropped without either a
+// heavy or no-reply charge. Building a pack snapshots the want ledger's
 // state+tx tree and walks up to fetchPackMaxObjects nodes — heavier than
 // rippled's diff. go-xrpl builds the pack inline (no jtPACK job queue to bound),
-// so the send-queue back-pressure gate in handleGetObjectsMessage stands in for
-// rippled's isLoadedLocal / jtPACK busy guards (PeerImp.cpp:2758-2762).
+// so the send-queue back-pressure gate in handleGetObjectsMessage handles
+// admission while the provider reports its own busy/stale state at execution.
 func (o *Overlay) serveFetchPack(peerID PeerID, req *message.GetObjectByHash) {
+	o.serveFetchPackContext(context.Background(), peerID, req)
+}
+
+func (o *Overlay) chargeServePeer(peerID PeerID, fee resource.Charge, reason string) {
+	if o.ledgerSync != nil {
+		o.ledgerSync.mu.RLock()
+		charge := o.ledgerSync.chargePeer
+		o.ledgerSync.mu.RUnlock()
+		if charge != nil {
+			charge(peerID, fee, reason)
+			return
+		}
+	}
+	if peer, ok := o.getPeer(peerID); ok {
+		peer.Charge(fee, reason)
+	}
+}
+
+func (o *Overlay) serveFetchPackContext(ctx context.Context, peerID PeerID, req *message.GetObjectByHash) {
+	if err := ctx.Err(); err != nil {
+		return
+	}
 	if len(req.LedgerHash) != 32 {
-		o.IncPeerBadData(peerID, "fetch-pack-bad-hash")
+		o.chargeServePeer(peerID, resource.FeeMalformedRequest(), "fetch pack ledger hash")
 		return
 	}
 
@@ -279,21 +424,34 @@ func (o *Overlay) serveFetchPack(peerID PeerID, req *message.GetObjectByHash) {
 	if !exists {
 		return
 	}
-	peer.Charge(resource.FeeHeavyBurdenPeer, "fetch pack request")
-
 	var haveHash [32]byte
 	copy(haveHash[:], req.LedgerHash)
 
 	// maxObjects=0 lets the provider apply its own per-pack cap.
-	objects, err := o.ledgerSync.MakeFetchPack(haveHash, 0)
+	objects, err := o.ledgerSync.MakeFetchPackContext(ctx, haveHash, 0)
+	if errors.Is(err, ErrFetchPackBusy) {
+		slog.Debug("fetch-pack build busy", "t", "Overlay", "peer", peerID)
+		return
+	}
+	// Charge only after the provider has passed its local busy/stale guard.
+	// Unknown ledgers and other unavailable outcomes still incur the heavy
+	// request cost followed by the protocol's no-reply charge.
+	o.chargeServePeer(peerID, resource.FeeHeavyBurdenPeer(), "fetch pack request")
 	if err != nil {
-		if errors.Is(err, ErrFetchPackTooEarly) {
-			peer.Charge(resource.FeeMalformedRequest, "fetch pack request too early")
+		if errors.Is(err, ErrFetchPackTooEarly) || errors.Is(err, ErrFetchPackOpen) {
+			o.chargeServePeer(peerID, resource.FeeMalformedRequest(), "fetch pack malformed request")
+		} else if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			o.chargeServePeer(peerID, resource.FeeRequestNoReply(), "fetch pack request unavailable")
 		}
 		slog.Debug("fetch-pack build failed",
 			"t", "Overlay", "peer", peerID, "err", err)
 		return
 	}
+	if len(objects) == 0 {
+		o.chargeServePeer(peerID, resource.FeeRequestNoReply(), "fetch pack request unavailable")
+		return
+	}
+	objects = limitIndexedObjectsToReplyBudget(objects, req.LedgerHash)
 	if len(objects) == 0 {
 		return
 	}
@@ -304,7 +462,17 @@ func (o *Overlay) serveFetchPack(peerID PeerID, req *message.GetObjectByHash) {
 		LedgerHash: append([]byte(nil), req.LedgerHash...),
 		Objects:    objects,
 	}
-	encodeAndSend(peer, reply, "fetch-pack reply")
+	if ctx.Err() != nil {
+		return
+	}
+	frame, err := message.EncodeFrame(reply)
+	if err != nil || len(frame) > message.MaxMessageSize {
+		o.chargeServePeer(peerID, resource.FeeRequestNoReply(), "fetch pack response oversized")
+		return
+	}
+	if err := peer.SendPriority(frame); err != nil {
+		slog.Debug("fetch-pack priority send failed", "t", "Overlay", "peer", peerID, "err", err)
+	}
 }
 
 // handleHaveTransactionsMessage processes mtHAVE_TRANSACTIONS from a
@@ -338,8 +506,7 @@ func (o *Overlay) handleHaveTransactionsMessage(evt Event) {
 	// hash would amplify network load for a load-reduction feature.
 	// Drop the announcement silently in that case (the peer that
 	// negotiated tx-reduce-relay isn't malformed).
-	txProvider := o.txProviderSnapshot()
-	if txProvider == nil {
+	if o.txRecordProviderSnapshot() == nil && o.txProviderSnapshot() == nil {
 		return
 	}
 
@@ -351,7 +518,12 @@ func (o *Overlay) handleHaveTransactionsMessage(evt Event) {
 		}
 		var hash [32]byte
 		copy(hash[:], h)
-		if _, present := txProvider(hash); present {
+		if _, present := o.lookupTxRecord(hash); present {
+			// Rippled removes this hash from the peer's deferred queue when the
+			// peer confirms it already has the transaction.
+			if peer, exists := o.getPeer(evt.PeerID); exists {
+				peer.removeTxQueue(hash)
+			}
 			continue
 		}
 		missing = append(missing, message.IndexedObject{
@@ -443,7 +615,11 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 
 	decoded, err := message.Decode(message.TypeEndpoints, evt.Payload)
 	if err != nil {
-		o.IncPeerBadData(evt.PeerID, "endpoints-decode")
+		reason := "endpoints-decode"
+		if errors.Is(err, message.ErrWireLimit) {
+			reason = wirePreflightChargeReason(err)
+		}
+		o.IncPeerBadData(evt.PeerID, reason)
 		return
 	}
 	eps, ok := decoded.(*message.Endpoints)
@@ -539,44 +715,63 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 // type is otTRANSACTIONS. Mirrors rippled PeerImp::doTransactions
 // (PeerImp.cpp:2787-2839): walk the requested hashes, look each up,
 // build a TMTransactions reply containing the blobs we have, and
-// emit it. Hashes we don't have are charged feeMalformedRequest in
-// rippled — we treat them as "skip", matching the more permissive
-// go-xrpl stance that the peer may legitimately be a hop ahead.
+// emit it. Hashes we don't have are charged feeMalformedRequest and
+// abort the reply, matching rippled's doTransactions path.
 func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHash) {
-	const maxQueueSize = 64 // matches rippled reduce_relay::MAX_TX_QUEUE_SIZE
+	o.serveDoTransactionsContext(context.Background(), peerID, req)
+}
+
+func (o *Overlay) serveDoTransactionsContext(ctx context.Context, peerID PeerID, req *message.GetObjectByHash) {
+	if err := ctx.Err(); err != nil {
+		return
+	}
+	const maxQueueSize = peerTxQueueMax
 	if len(req.Objects) == 0 {
 		return
 	}
 	if len(req.Objects) > maxQueueSize {
-		o.IncPeerBadData(peerID, "get-objects-txn-too-big")
+		o.chargeMalformedTransactionRequest(peerID, "get-objects-txn-too-big")
 		return
 	}
-	txProvider := o.txProviderSnapshot()
-	if txProvider == nil {
+	if o.txRecordProviderSnapshot() == nil && o.txProviderSnapshot() == nil {
 		// Negotiated tx-reduce-relay but no lookup wired — silently
 		// drop. An operator who flipped EnableTxReduceRelay but
-		// hasn't wired SetTxProvider would otherwise spam this log.
+		// hasn't wired a transaction provider would otherwise spam this log.
 		return
 	}
 
 	reply := &message.Transactions{
 		Transactions: make([]message.Transaction, 0, len(req.Objects)),
 	}
+	budget := newServeReplyBudget()
 	for _, obj := range req.Objects {
+		if ctx.Err() != nil {
+			return
+		}
 		if len(obj.Hash) != 32 {
-			o.IncPeerBadData(peerID, "get-objects-txn-hashsize")
+			o.chargeMalformedTransactionRequest(peerID, "get-objects-txn-hashsize")
 			return
 		}
 		var hash [32]byte
 		copy(hash[:], obj.Hash)
-		blob, ok := txProvider(hash)
+		record, ok := o.lookupTxRecord(hash)
 		if !ok {
-			continue
+			o.chargeMalformedTransactionRequest(peerID, "get-objects-txn-missing")
+			return
 		}
+		if !budget.reserve(serveReplyTransactionOverhead, record.RawTransaction) {
+			break
+		}
+		status := record.Status
+		if status == 0 {
+			status = message.TxStatusCurrent
+		}
+		receiveTimestamp := uint64(protocol.RippleSeconds(time.Now()))
 		reply.Transactions = append(reply.Transactions, message.Transaction{
-			RawTransaction:   blob,
-			Status:           message.TxStatusCurrent,
-			ReceiveTimestamp: uint64(protocol.RippleSeconds(time.Now())),
+			RawTransaction:   append([]byte(nil), record.RawTransaction...),
+			Status:           status,
+			ReceiveTimestamp: receiveTimestamp,
+			Deferred:         record.Deferred,
 		})
 	}
 	if len(reply.Transactions) == 0 {
@@ -587,7 +782,36 @@ func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHas
 	if !exists {
 		return
 	}
-	encodeAndSend(peer, reply, "TMTransactions reply")
+	encodeAndSendPriority(peer, reply, "TMTransactions reply")
+}
+
+func (o *Overlay) chargeMalformedTransactionRequest(peerID PeerID, reason string) {
+	peer, ok := o.getPeer(peerID)
+	if ok {
+		peer.Charge(resource.FeeMalformedRequest(), reason)
+	}
+}
+
+func (o *Overlay) lookupTxRecord(hash [32]byte) (TxRecord, bool) {
+	if provider := o.txRecordProviderSnapshot(); provider != nil {
+		record, ok := provider(hash)
+		if ok {
+			record.RawTransaction = append([]byte(nil), record.RawTransaction...)
+		}
+		return record, ok
+	}
+	provider := o.txProviderSnapshot()
+	if provider == nil {
+		return TxRecord{}, false
+	}
+	blob, ok := provider(hash)
+	if !ok {
+		return TxRecord{}, false
+	}
+	return TxRecord{
+		RawTransaction: append([]byte(nil), blob...),
+		Status:         message.TxStatusCurrent,
+	}, true
 }
 
 // hardMaxReplyNodes bounds a single generic by-hash request. Mirrors
@@ -659,6 +883,20 @@ func getObjectByHashFee(requested, found int) resource.Charge {
 // PeerImp.cpp:2538 so a requester polling several peers can tell "I
 // don't have these" from a peer that never answered.
 func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
+	if o.nodeObjectProviderSnapshot() != nil &&
+		(len(req.LedgerHash) == 0 || len(req.LedgerHash) == 32) &&
+		len(req.Objects) <= hardMaxReplyNodes {
+		if peer, ok := o.getPeer(peerID); ok {
+			peer.Charge(resource.FeeModerateBurdenPeer(), "get object by hash request")
+		}
+	}
+	o.serveGetObjectsContext(context.Background(), peerID, req)
+}
+
+func (o *Overlay) serveGetObjectsContext(ctx context.Context, peerID PeerID, req *message.GetObjectByHash) {
+	if err := ctx.Err(); err != nil {
+		return
+	}
 	peer, exists := o.getPeer(peerID)
 	if !exists {
 		return
@@ -679,7 +917,7 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 	// charges feeMalformedRequest "ledger hash" on a wrong-sized field
 	// and returns (PeerImp.cpp:2492-2501).
 	if len(req.LedgerHash) != 0 && len(req.LedgerHash) != 32 {
-		o.IncPeerBadData(peerID, "get-objects-ledgerhash")
+		peer.Charge(resource.FeeMalformedRequest(), "get object ledger hash")
 		return
 	}
 
@@ -688,7 +926,7 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 	// is far below this cap; anything past it is non-conforming and is
 	// charged feeInvalidData (PeerImp.cpp:2500-2506).
 	if len(req.Objects) > hardMaxReplyNodes {
-		peer.Charge(resource.FeeInvalidData, "oversized get object request")
+		peer.Charge(resource.FeeInvalidData(), "oversized get object request")
 		return
 	}
 
@@ -696,8 +934,6 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 	// fetch loop; the work-proportional differential is added afterwards.
 	// Rippled charges the base at admission in onMessage and the
 	// differential in the worker (PeerImp.cpp:2544, 2656).
-	peer.Charge(resource.FeeModerateBurdenPeer, "get object by hash request")
-
 	reply := &message.GetObjectByHash{
 		Query:   false,
 		ObjType: req.ObjType,
@@ -705,6 +941,10 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 	}
 	if len(req.LedgerHash) != 0 {
 		reply.LedgerHash = append([]byte(nil), req.LedgerHash...)
+	}
+	budget := newServeReplyBudget()
+	if !budget.reserve(serveReplyObjectOverhead, req.LedgerHash) {
+		return
 	}
 
 	// Defense in depth: the oversize gate above already rejects requests
@@ -717,6 +957,9 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 		iterLimit = hardMaxReplyNodes
 	}
 	for i := 0; i < iterLimit; i++ {
+		if ctx.Err() != nil {
+			return
+		}
 		obj := req.Objects[i]
 		// Rippled only processes objects carrying a uint256-sized hash
 		// (PeerImp.cpp:2511); others are silently skipped.
@@ -728,6 +971,9 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 		blob, ok := fetch(hash)
 		if !ok {
 			continue
+		}
+		if !budget.reserve(serveReplyObjectOverhead, obj.Hash, obj.NodeID, blob) {
+			break
 		}
 		// Rippled echoes the request's nodeid into the reply's index
 		// field and copies the ledger seq back (PeerImp.cpp:2526-2529).
@@ -748,7 +994,7 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 	// (computeGetObjectByHashFee, PeerImp.cpp:2656).
 	peer.Charge(getObjectByHashFee(requested, len(reply.Objects)), "processed get object by hash request")
 
-	encodeAndSend(peer, reply, "TMGetObjectByHash reply")
+	encodeAndSendPriority(peer, reply, "TMGetObjectByHash reply")
 }
 
 // handleTransactionsBatchMessage processes mtTRANSACTIONS (a batched
@@ -761,9 +1007,9 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 // TMTransaction frame. Like rippled, which
 // hands the decoded inner straight to handleTransaction, we never
 // re-serialize: the decode happened once when the batch was parsed.
-// The only behavioural difference rippled draws between batched and
-// unbatched is the eraseTxQueue path on a duplicate hit, which go-xrpl
-// doesn't implement (no tx-reduce-relay outbound queue to erase from).
+// The batched path shares the same per-peer deferred queue as the unbatched
+// path; HAVE_TRANSACTIONS acknowledgements remove queued hashes before this
+// handler forwards the batch to the transaction router.
 func (o *Overlay) handleTransactionsBatchMessage(evt Event) {
 	if !o.cfg.EnableTxReduceRelay || !o.PeerSupports(evt.PeerID, FeatureTxReduceRelay) {
 		slog.Debug("TMTransactions batch without negotiated tx-reduce-relay; dropping",
@@ -792,10 +1038,10 @@ func (o *Overlay) handleTransactionsBatchMessage(evt Event) {
 	// is shared with the wire path, so batch frames are subject to the
 	// same MaxTransactions ceiling and jq_trans_overflow accounting.
 	for i := range batch.Transactions {
-		o.forwardTransaction(&InboundMessage{
-			PeerID: evt.PeerID,
-			Type:   uint16(message.TypeTransaction),
-			Tx:     &batch.Transactions[i],
-		})
+		inbound := evt.retainedInboundMessage()
+		inbound.Type = message.TypeTransaction
+		inbound.Payload = nil
+		inbound.Tx = &batch.Transactions[i]
+		o.forwardTransaction(inbound)
 	}
 }

@@ -17,7 +17,7 @@ type adapterCorpus struct {
 }
 
 func TestGeneratedSerializerAdaptersMatchRippledCorpus(t *testing.T) {
-	raw, err := os.ReadFile("../../tx/ledgerfields/testdata/sle-corpus.json")
+	raw, err := os.ReadFile("../../../ledger/entry/testdata/sle-corpus.json")
 	if err != nil {
 		t.Fatalf("read corpus: %v", err)
 	}

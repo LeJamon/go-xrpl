@@ -81,7 +81,9 @@ ports = ["port_rpc_admin_local", "port_rpc_public", "port_peer", "port_ws_admin_
 #
 # Optional fields:
 #   - limit             → max concurrent connections (0 = unlimited)
-#   - send_queue_limit  → WS send buffer per connection (default 100)
+#   - send_queue_limit  → WS send buffer per connection (0 = default 100; 1–65535 explicit)
+#   - user/password     → HTTP Basic Auth, required together when set
+#   - allowed_origins   → exact http(s) browser origins; omitted denies browser origins
 # =============================================================================
 
 # --- Admin ports (localhost only) ---
@@ -91,6 +93,11 @@ port = 5005
 ip = "127.0.0.1"
 admin = ["127.0.0.1"]
 protocol = "http"
+# To expose this admin port to a browser, configure both an exact origin and
+# Basic Auth credentials. CLI requests without an Origin header remain allowed.
+# allowed_origins = ["https://admin.example"]
+# user = "operator"
+# password = "replace-with-a-secret"
 
 [port_ws_admin_local]
 port = 6006
@@ -146,6 +153,7 @@ cache_age = 5                    # decoded node-object cache age in minutes (0 =
 # Also permits failed explicit --load, --ledger, --ledgerfile, or --replay
 # startup to fall back to genesis (standalone) or network acquisition.
 fast_load = false
+fast_load_workers = 0             # 0 = automatic based on available CPUs; maximum 64
 earliest_seq = 32570
 delete_batch = 100
 back_off_milliseconds = 100
@@ -180,7 +188,6 @@ minimum_escalation_multiplier = 128000
 minimum_txn_in_ledger = 32
 minimum_txn_in_ledger_standalone = 1000
 target_txn_in_ledger = 256
-maximum_txn_in_ledger = 0  # 0 = no maximum
 normal_consensus_increase_percent = 20
 slow_consensus_decrease_percent = 50
 maximum_txn_per_account = 10
@@ -193,23 +200,27 @@ minimum_last_ledger_buffer = 2
 # On-disk validation archive (optional). When enabled, validations
 # pruned from ValidationTracker are persisted to a `validations` table
 # in the relational DB so forensic tooling can query historical
-# validations. Omit the section to disable; uncomment + adjust to tune.
+# validations, including partial validations. This is a go-xrpl extension
+# inspired by rippled's historical validation database. Omit the section
+# to disable; uncomment + adjust to tune.
 #
 # Note: SQLite is the default backend, sharing ledger.db with single-
 # writer concurrency. Sustained ledger-write pressure can therefore
 # back up the archive's writer goroutine; under sustained overload
-# OnStale logs a warning and drops, rather than blocking consensus.
+# OnStale counts and rate-limits warnings for drops rather than blocking
+# consensus. Retention runs independently while idle and catches up through
+# bounded delete batches.
 # [validation_archive]
 # enabled            = true   # default false; set true to turn on
 # retention_ledgers  = 10000  # 0 = keep forever
 # batch_size         = 128    # rows per commit
 # flush_interval_ms  = 1000   # max latency for partial batches
-# delete_batch       = 1000   # max rows per retention sweep
-# in_memory_ledgers  = 256    # tracker eviction window (rippled minimum)
+# delete_batch       = 1000   # rows per retention DELETE batch
+# in_memory_ledgers  = 256    # tracker eviction window
 
 # Stall watchdog (optional). An out-of-band goroutine that detects a wedged
-# event loop (consensus timer or ledger close) and escalates: warn + goroutine
-# dump, fatal log, then process abort so an orchestrator can restart the node.
+# consensus event loop and escalates: warning, fatal log, then process abort
+# with a bounded goroutine dump so an orchestrator can restart the node.
 # Enabled by default with rippled's 10/90/600s thresholds.
 # [watchdog]
 # disabled = false       # set true to turn the watchdog off entirely

@@ -624,12 +624,12 @@ func TestDepositPreauth_Credentials(t *testing.T) {
 	env.Close()
 
 	// issuer creates credential for alice, alice hasn't accepted yet.
-	result := env.Submit(credential.CredentialCreate(issuer, alice, credType).Build())
+	result := env.Submit(credential.CredentialCreateText(issuer, alice, credType).Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Get the credential index.
-	credIdx := dp.CredentialIndex(alice, issuer, credType)
+	credIdx := dp.CredentialIndexHex(alice, issuer, credType)
 
 	// bob requires preauthorization.
 	env.EnableDepositAuth(bob)
@@ -637,7 +637,7 @@ func TestDepositPreauth_Credentials(t *testing.T) {
 
 	// bob accepts payments from accounts with credentials signed by 'issuer'.
 	result = env.Submit(dp.AuthCredentials(bob, []dp.AuthorizeCredentials{
-		{Issuer: issuer, CredType: credType},
+		{Issuer: issuer, CredTypeText: credType},
 	}).Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
@@ -663,7 +663,7 @@ func TestDepositPreauth_Credentials(t *testing.T) {
 	env.Close()
 
 	// alice accepts the credentials.
-	result = env.Submit(credential.CredentialAccept(alice, issuer, credType).Build())
+	result = env.Submit(credential.CredentialAcceptText(alice, issuer, credType).Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
@@ -718,14 +718,14 @@ func TestDepositPreauth_Credentials(t *testing.T) {
 		env2.Close()
 
 		// issuer creates credential for alice, alice accepts.
-		result := env2.Submit(credential.CredentialCreate(issuer2, alice2, credType).Build())
+		result := env2.Submit(credential.CredentialCreateText(issuer2, alice2, credType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env2.Close()
-		result = env2.Submit(credential.CredentialAccept(alice2, issuer2, credType).Build())
+		result = env2.Submit(credential.CredentialAcceptText(alice2, issuer2, credType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env2.Close()
 
-		credIdx := dp.CredentialIndex(alice2, issuer2, credType)
+		credIdx := dp.CredentialIndexHex(alice2, issuer2, credType)
 
 		// Success: destination didn't enable preauthorization, so valid
 		// credentials won't fail.
@@ -750,14 +750,14 @@ func TestDepositPreauth_Credentials(t *testing.T) {
 
 		// bob tries to set up DepositPreauth with duplicates - not allowed.
 		result = env2.Submit(dp.AuthCredentials(bob2, []dp.AuthorizeCredentials{
-			{Issuer: issuer2, CredType: credType},
-			{Issuer: issuer2, CredType: credType},
+			{Issuer: issuer2, CredTypeText: credType},
+			{Issuer: issuer2, CredTypeText: credType},
 		}).Build())
 		require.Equal(t, "temMALFORMED", result.Code)
 
 		// bob sets up DepositPreauth correctly.
 		result = env2.Submit(dp.AuthCredentials(bob2, []dp.AuthorizeCredentials{
-			{Issuer: issuer2, CredType: credType},
+			{Issuer: issuer2, CredTypeText: credType},
 		}).Build())
 		jtx.RequireTxSuccess(t, result)
 		env2.Close()
@@ -781,14 +781,14 @@ func TestDepositPreauth_Credentials(t *testing.T) {
 
 		// Create another valid credential for alice with different type.
 		credType2 := "fghij"
-		result = env2.Submit(credential.CredentialCreate(issuer2, alice2, credType2).Build())
+		result = env2.Submit(credential.CredentialCreateText(issuer2, alice2, credType2).Build())
 		jtx.RequireTxSuccess(t, result)
 		env2.Close()
-		result = env2.Submit(credential.CredentialAccept(alice2, issuer2, credType2).Build())
+		result = env2.Submit(credential.CredentialAcceptText(alice2, issuer2, credType2).Build())
 		jtx.RequireTxSuccess(t, result)
 		env2.Close()
 
-		credIdx2 := dp.CredentialIndex(alice2, issuer2, credType2)
+		credIdx2 := dp.CredentialIndexHex(alice2, issuer2, credType2)
 
 		// alice can't pay with invalid set of valid credentials (wrong combination).
 		result = env2.Submit(
@@ -843,7 +843,7 @@ func TestDepositPreauth_ExpiredCredentials(t *testing.T) {
 	now := env.NowRipple()
 	expiration := now + 60
 	result := env.Submit(
-		credential.CredentialCreate(issuer, alice, credType).
+		credential.CredentialCreateText(issuer, alice, credType).
 			Expiration(expiration).
 			Build(),
 	)
@@ -851,28 +851,28 @@ func TestDepositPreauth_ExpiredCredentials(t *testing.T) {
 	env.Close()
 
 	// alice accepts the credential.
-	result = env.Submit(credential.CredentialAccept(alice, issuer, credType).Build())
+	result = env.Submit(credential.CredentialAcceptText(alice, issuer, credType).Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// issuer creates a second credential for alice with long expiration.
 	now = env.NowRipple()
 	result = env.Submit(
-		credential.CredentialCreate(issuer, alice, credType2).
+		credential.CredentialCreateText(issuer, alice, credType2).
 			Expiration(now + 1000).
 			Build(),
 	)
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
-	result = env.Submit(credential.CredentialAccept(alice, issuer, credType2).Build())
+	result = env.Submit(credential.CredentialAcceptText(alice, issuer, credType2).Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	jtx.RequireOwnerCount(t, env, issuer, 0)
 	jtx.RequireOwnerCount(t, env, alice, 2)
 
-	credIdx := dp.CredentialIndex(alice, issuer, credType)
-	credIdx2 := dp.CredentialIndex(alice, issuer, credType2)
+	credIdx := dp.CredentialIndexHex(alice, issuer, credType)
+	credIdx2 := dp.CredentialIndexHex(alice, issuer, credType2)
 
 	// bob requires preauthorization.
 	env.EnableDepositAuth(bob)
@@ -880,8 +880,8 @@ func TestDepositPreauth_ExpiredCredentials(t *testing.T) {
 
 	// bob sets up credential-based preauth for both credential types.
 	result = env.Submit(dp.AuthCredentials(bob, []dp.AuthorizeCredentials{
-		{Issuer: issuer, CredType: credType},
-		{Issuer: issuer, CredType: credType2},
+		{Issuer: issuer, CredTypeText: credType},
+		{Issuer: issuer, CredTypeText: credType2},
 	}).Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()

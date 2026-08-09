@@ -48,6 +48,11 @@ var (
 	// matching transaction (rippled rpcTXN_NOT_FOUND).
 	ErrTxnNotFound = errors.New("transaction not found")
 
+	// ErrTxnDataCorrupt is returned when a transaction lookup finds malformed
+	// stored/cache data or a blob whose contents do not hash to the requested
+	// transaction ID. RPC handlers map it to dbDeserialization.
+	ErrTxnDataCorrupt = errors.New("transaction data corrupt")
+
 	// ErrAccountMalformed wraps a malformed-address decode failure so
 	// handlers can map it to rpcACT_MALFORMED via errors.Is.
 	ErrAccountMalformed = errors.New("invalid account address")

@@ -1,14 +1,25 @@
 package txq
 
 import (
+	"math"
 	"testing"
 )
+
+func TestTxRequiredFeeAndSeqSaturatesAtMaxXRPAmount(t *testing.T) {
+	queue := mustNew(DefaultConfig())
+
+	result := queue.TxRequiredFeeAndSeq([20]byte{}, 1, math.MaxUint64, 0)
+
+	if result.RequiredFee != math.MaxInt64 {
+		t.Fatalf("RequiredFee = %d, want %d", result.RequiredFee, uint64(math.MaxInt64))
+	}
+}
 
 // TestNew tests TxQ creation with various configurations
 func TestNew(t *testing.T) {
 	t.Run("default config", func(t *testing.T) {
 		cfg := DefaultConfig()
-		q := New(cfg)
+		q := mustNew(cfg)
 
 		if q.config.LedgersInQueue != 20 {
 			t.Errorf("LedgersInQueue = %d, want 20", q.config.LedgersInQueue)
@@ -24,7 +35,7 @@ func TestNew(t *testing.T) {
 
 	t.Run("standalone config", func(t *testing.T) {
 		cfg := StandaloneConfig()
-		q := New(cfg)
+		q := mustNew(cfg)
 
 		if !q.config.Standalone {
 			t.Error("Expected Standalone = true")
@@ -35,7 +46,7 @@ func TestNew(t *testing.T) {
 // TestTxQ_InsertByFee tests the fee-ordered insertion
 func TestTxQ_InsertByFee(t *testing.T) {
 	cfg := DefaultConfig()
-	q := New(cfg)
+	q := mustNew(cfg)
 
 	// Create test candidates with different fee levels
 	c1 := &Candidate{
@@ -78,12 +89,32 @@ func TestTxQ_InsertByFee(t *testing.T) {
 	}
 }
 
+func TestTxQ_GetTxBlobUsesByIDIndex(t *testing.T) {
+	q := mustNew(DefaultConfig())
+	hash := [32]byte{0xA1}
+	candidate := &Candidate{
+		TxID:     hash,
+		Txn:      &mockTx{id: 7},
+		FeeLevel: FeeLevel(BaseLevel),
+	}
+	q.insertByFee(candidate)
+
+	blob, ok := q.GetTxBlob(hash)
+	if !ok || len(blob) != 1 || blob[0] != 7 {
+		t.Fatalf("GetTxBlob() = (%x, %v), want (07, true)", blob, ok)
+	}
+	q.removeByFee(candidate)
+	if _, ok := q.GetTxBlob(hash); ok {
+		t.Fatal("GetTxBlob returned a candidate after removeByFee")
+	}
+}
+
 // TestTxQ_GetMetrics tests metrics retrieval
 func TestTxQ_GetMetrics(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.MinimumTxnInLedgerStandalone = 3
 	cfg.Standalone = true
-	q := New(cfg)
+	q := mustNew(cfg)
 
 	metrics := q.Metrics(0)
 
@@ -102,8 +133,8 @@ func TestTxQ_GetMetrics(t *testing.T) {
 // TestTxQ_IsFull tests queue full detection
 func TestTxQ_IsFull(t *testing.T) {
 	cfg := DefaultConfig()
-	q := New(cfg)
-	ms := uint32(100)
+	q := mustNew(cfg)
+	ms := uint64(100)
 	q.maxSize = &ms // Size for testing percentage math
 
 	// Create test candidates (100 items = 100% full)
@@ -150,7 +181,7 @@ func TestTxQ_XorHash(t *testing.T) {
 // TestTxQ_Size tests the Size method
 func TestTxQ_Size(t *testing.T) {
 	cfg := DefaultConfig()
-	q := New(cfg)
+	q := mustNew(cfg)
 
 	if q.Size() != 0 {
 		t.Errorf("Initial size = %d, want 0", q.Size())
@@ -175,7 +206,7 @@ func TestTxQ_GetRequiredFeeLevel(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.MinimumTxnInLedgerStandalone = 5
 	cfg.Standalone = true
-	q := New(cfg)
+	q := mustNew(cfg)
 
 	// Under threshold - should return base level
 	level := q.RequiredFeeLevel(3)
@@ -187,7 +218,7 @@ func TestTxQ_GetRequiredFeeLevel(t *testing.T) {
 // TestTxQ_Clear tests clearing the queue
 func TestTxQ_Clear(t *testing.T) {
 	cfg := DefaultConfig()
-	q := New(cfg)
+	q := mustNew(cfg)
 
 	// Add some candidates
 	account := [20]byte{1}
@@ -206,7 +237,7 @@ func TestTxQ_Clear(t *testing.T) {
 		t.Fatalf("Size before clear = %d, want 1", q.Size())
 	}
 
-	q.Clear()
+	q.clear()
 
 	if q.Size() != 0 {
 		t.Errorf("Size after clear = %d, want 0", q.Size())
@@ -219,9 +250,9 @@ func TestTxQ_Clear(t *testing.T) {
 // TestTxQ_SetMaxSize tests setting max size
 func TestTxQ_SetMaxSize(t *testing.T) {
 	cfg := DefaultConfig()
-	q := New(cfg)
+	q := mustNew(cfg)
 
-	q.SetMaxSize(100)
+	q.setMaxSize(100)
 	q.mu.Lock()
 	maxSize := q.maxSize
 	q.mu.Unlock()

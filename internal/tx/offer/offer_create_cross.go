@@ -112,7 +112,7 @@ func (o *OfferCreate) takerCross(
 	}
 
 	// Recalculate rate after tick size
-	uRate = state.GetRate(saTakerGets, saTakerPays)
+	uRate = state.GetRateWithNumberContext(saTakerGets, saTakerPays, ctx.NumberContext())
 
 	// If the taker is unfunded before crossing, return tecUNFUNDED_OFFER. This
 	// is checked in preclaim too, but preclaim runs before the fee is charged;
@@ -288,7 +288,14 @@ func (o *OfferCreate) takerCross(
 	}
 
 	remainingGets, remainingPays := computePostCrossAmounts(
-		saTakerPays, saTakerGets, placeOffer.in, placeOffer.out, takerInBalance, bSell, disallowUnfunded,
+		saTakerPays,
+		saTakerGets,
+		placeOffer.in,
+		placeOffer.out,
+		takerInBalance,
+		bSell,
+		disallowUnfunded,
+		ctx.NumberContext(),
 	)
 
 	if outcome, done := evaluatePostCrossTermination(rules, saTakerGets, grossPaid, remainingGets, remainingPays, bFillOrKill); done {
@@ -332,7 +339,11 @@ func evaluatePostCrossTermination(
 	// killed in takerCross before reaching here, so this remains only as the
 	// fully-crossed-but-gross-short safety net for the pre-fixFillOrKill era.
 	if fullyCrossed && bFillOrKill && !rules.Enabled(amendment.FeatureFixFillOrKill) {
-		remainingWithGross := subtractAmounts(saTakerGets, grossPaid)
+		remainingWithGross := subtractAmountsWithNumberContext(
+			saTakerGets,
+			grossPaid,
+			tx.NumberContextForRules(rules),
+		)
 		if !isAmountZeroOrNegative(remainingWithGross) {
 			// FoK not satisfied: TakerGets not fully consumed by GROSS amount.
 			return crossOutcome{terminated: true, result: ter.TecKILLED, applyMain: false}, true
@@ -356,6 +367,7 @@ func computePostCrossAmounts(
 	placeIn, placeOut tx.Amount,
 	takerInBalance tx.Amount,
 	bSell, disallowUnfunded bool,
+	numberContext state.NumberContext,
 ) (remainingGets, remainingPays tx.Amount) {
 	noCrossingHappened := isAmountZeroOrNegative(placeIn) && isAmountZeroOrNegative(placeOut)
 
@@ -375,7 +387,7 @@ func computePostCrossAmounts(
 		//   nonGatewayAmountIn = divideRound(actualAmountIn, gatewayXferRate, ...)
 		//   afterCross.in -= nonGatewayAmountIn
 		//   afterCross.out = divRound(afterCross.in, rate, ...) or divRoundStrict
-		remainingGets = subtractAmounts(saTakerGets, placeIn) // placeIn is NET
+		remainingGets = subtractAmountsWithNumberContext(saTakerGets, placeIn, numberContext) // placeIn is NET
 		if isAmountNegative(remainingGets) {
 			remainingGets = zeroAmount(saTakerGets)
 		}
@@ -383,14 +395,20 @@ func computePostCrossAmounts(
 			payment.ToEitherAmount(saTakerGets),
 			payment.ToEitherAmount(saTakerPays),
 		).Rate()
-		remainingPays = offerDivRoundStrictLike(remainingGets, rate, saTakerPays, false)
+		remainingPays = offerDivRoundStrictLikeWithNumberContext(
+			remainingGets,
+			rate,
+			saTakerPays,
+			false,
+			numberContext,
+		)
 		return remainingGets, remainingPays
 	}
 	// Non-sell offer: subtract output received from TakerPays, compute TakerGets by quality
 	// Reference: rippled CreateOffer.cpp lines 491-503
 	//   afterCross.out -= result.actualAmountOut
 	//   afterCross.in = mulRound(afterCross.out, rate, takerAmount.in.issue(), true)
-	remainingPays = subtractAmounts(saTakerPays, placeOut)
+	remainingPays = subtractAmountsWithNumberContext(saTakerPays, placeOut, numberContext)
 	if isAmountNegative(remainingPays) {
 		remainingPays = zeroAmount(saTakerPays)
 	}
@@ -398,7 +416,13 @@ func computePostCrossAmounts(
 		payment.ToEitherAmount(saTakerGets),
 		payment.ToEitherAmount(saTakerPays),
 	).Rate()
-	remainingGets = offerMulRoundLike(remainingPays, rate, saTakerGets, true)
+	remainingGets = offerMulRoundLikeWithNumberContext(
+		remainingPays,
+		rate,
+		saTakerGets,
+		true,
+		numberContext,
+	)
 	return remainingGets, remainingPays
 }
 

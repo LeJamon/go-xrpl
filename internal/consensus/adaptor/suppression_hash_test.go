@@ -169,8 +169,8 @@ func TestSuppression_ProposalSemanticIdentity_SameHash(t *testing.T) {
 		NodePubKey:     set.NodePubKey,
 		CloseTime:      pb.Uint32(set.CloseTime),
 		Signature:      set.Signature,
-		PreviousLedger: set.PreviousLedger,
-		Hops:           7,
+		Previousledger: set.PreviousLedger,
+		Hops:           pb.Uint32(7),
 	}
 	payloadB, err := pb.Marshal(protoB)
 	require.NoError(t, err)
@@ -249,7 +249,7 @@ func TestSuppression_ValidationInnerBlobDomain_SameHash(t *testing.T) {
 	// so both envelopes round-trip to an identical inner blob.
 	envelopeB, err := pb.Marshal(&proto.TMValidation{
 		Validation: blob,
-		Hops:       3,
+		Hops:       pb.Uint32(3),
 	})
 	require.NoError(t, err)
 

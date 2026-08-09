@@ -4,8 +4,11 @@ package peermanagement
 import (
 	"fmt"
 	"net"
+	"strings"
+	"sync"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 )
 
 // PeerID is a unique identifier for a connected peer.
@@ -28,15 +31,20 @@ func ParseEndpoint(s string) (Endpoint, error) {
 	if err != nil {
 		return Endpoint{}, err
 	}
-	var port uint16
-	_, err = parsePort(portStr, &port)
+	if strings.TrimSpace(host) == "" {
+		return Endpoint{}, ErrInvalidEndpoint
+	}
+	port, err := parsePort(portStr)
 	if err != nil {
 		return Endpoint{}, err
 	}
 	return Endpoint{Host: host, Port: port}, nil
 }
 
-func parsePort(s string, port *uint16) (int, error) {
+func parsePort(s string) (uint16, error) {
+	if s == "" {
+		return 0, ErrInvalidEndpoint
+	}
 	var p int
 	for _, c := range s {
 		if c < '0' || c > '9' {
@@ -47,8 +55,7 @@ func parsePort(s string, port *uint16) (int, error) {
 			return 0, ErrInvalidEndpoint
 		}
 	}
-	*port = uint16(p)
-	return p, nil
+	return uint16(p), nil
 }
 
 // EventType represents the type of peer management event.
@@ -105,7 +112,7 @@ type Event struct {
 	PublicKey []byte
 
 	// MessageType is the type of message (for MessageReceived events).
-	MessageType uint16
+	MessageType message.MessageType
 
 	// Payload is the message payload (for MessageReceived events).
 	Payload []byte
@@ -126,6 +133,60 @@ type Event struct {
 
 	// Error is set for failure events.
 	Error error
+
+	reservation *inboundReservation
+	charge      *messageCharge
+}
+
+func (e *Event) release() {
+	if e == nil {
+		return
+	}
+	if e.ManifestFrame != nil {
+		_ = e.ManifestFrame.Close()
+		e.ManifestFrame = nil
+	}
+	if e.reservation != nil {
+		e.reservation.release()
+		e.reservation = nil
+	}
+	if e.charge != nil {
+		e.charge.finish()
+		e.charge = nil
+	}
+}
+
+func (e *Event) inboundMessage() *InboundMessage {
+	msg := &InboundMessage{
+		PeerID:        e.PeerID,
+		Type:          e.MessageType,
+		Payload:       e.Payload,
+		ManifestFrame: e.ManifestFrame,
+		reservation:   e.reservation,
+		charge:        e.charge,
+	}
+	e.reservation = nil
+	e.charge = nil
+	e.ManifestFrame = nil
+	return msg
+}
+
+func (e *Event) selectCharge(fee resource.Charge, chargeContext string) bool {
+	if e == nil || e.charge == nil {
+		return false
+	}
+	e.charge.update(fee, chargeContext)
+	return true
+}
+
+func (e *Event) retainedInboundMessage() *InboundMessage {
+	return &InboundMessage{
+		PeerID:        e.PeerID,
+		Type:          e.MessageType,
+		Payload:       e.Payload,
+		ManifestFrame: e.ManifestFrame,
+		reservation:   e.reservation.retain(),
+	}
 }
 
 // InboundMessage represents a message received from a peer.
@@ -135,7 +196,7 @@ type InboundMessage struct {
 	PeerID PeerID
 
 	// Type is the message type.
-	Type uint16
+	Type message.MessageType
 
 	// Payload is the raw message payload.
 	Payload []byte
@@ -148,4 +209,41 @@ type InboundMessage struct {
 	// Payload. It is nil for messages read off the wire, whose decoded
 	// form lives in Payload.
 	Tx *message.Transaction
+
+	reservation *inboundReservation
+	charge      *messageCharge
+	closeOnce   sync.Once
+	closeErr    error
+}
+
+// Close releases retained inbound bytes and removes any spool file.
+func (m *InboundMessage) Close() error {
+	if m == nil {
+		return nil
+	}
+	m.closeOnce.Do(func() {
+		if m.ManifestFrame != nil {
+			m.closeErr = m.ManifestFrame.Close()
+		}
+		m.reservation.release()
+		m.reservation = nil
+		m.charge.finish()
+		m.charge = nil
+	})
+	return m.closeErr
+}
+
+func (m *InboundMessage) SelectPeerCharge(fee resource.Charge, chargeContext string) bool {
+	if m == nil || m.charge == nil {
+		return false
+	}
+	m.charge.update(fee, chargeContext)
+	return true
+}
+
+// CompletePeerCharge applies the selected per-message charge exactly once.
+func (m *InboundMessage) CompletePeerCharge() {
+	if m != nil {
+		m.charge.finish()
+	}
 }

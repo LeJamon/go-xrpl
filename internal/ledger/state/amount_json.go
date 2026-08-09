@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // AmountFromJSON parses an RPC-parameter amount (destination_amount,
@@ -180,7 +181,7 @@ func AmountFromJSON(raw json.RawMessage) (amt Amount, err error) {
 // (math.MaxInt64).
 const (
 	maxNativeAmount = uint64(100_000_000_000_000_000)
-	maxMPTAmount    = uint64(math.MaxInt64)
+	maxMPTAmount    = protocol.MaxMPTokenAmount
 )
 
 // nativeExponentLimit / mptExponentLimit mirror the canonicalize guards

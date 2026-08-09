@@ -50,10 +50,10 @@ func (v *offerMPTLedgerView) Erase(k keylet.Keylet) error {
 	return nil
 }
 
-func (*offerMPTLedgerView) AdjustDropsDestroyed(drops.XRPAmount) {}
-func (*offerMPTLedgerView) TxExists([32]byte) bool               { return false }
-func (v *offerMPTLedgerView) Rules() *amendment.Rules            { return v.rules }
-func (*offerMPTLedgerView) LedgerSeq() uint32                    { return 1 }
+func (*offerMPTLedgerView) AdjustDropsDestroyed(drops.XRPAmount) error { return nil }
+func (*offerMPTLedgerView) TxExists([32]byte) (bool, error)            { return false, nil }
+func (v *offerMPTLedgerView) Rules() *amendment.Rules                  { return v.rules }
+func (*offerMPTLedgerView) LedgerSeq() uint32                          { return 1 }
 
 func (v *offerMPTLedgerView) ForEach(fn func([32]byte, []byte) bool) error {
 	for k, data := range v.data {
@@ -241,6 +241,7 @@ func TestOfferMPTIssuerMayPlaceUnfundedOffer(t *testing.T) {
 		offerMPTAmount(id, 0),
 		true,
 		false,
+		state.NewNumberContext(state.MantissaScaleLarge, true),
 	)
 	value, ok := remainingGets.MPTRaw()
 	require.True(t, ok)

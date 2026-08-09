@@ -42,6 +42,22 @@ func newPaymentMockLedgerView() *paymentMockLedgerView {
 	}
 }
 
+func TestPaymentPreclaimPreservesDestinationAccountReadError(t *testing.T) {
+	var destination [20]byte
+	destination[19] = 1
+	payment := NewPayment(
+		"rAlice",
+		state.EncodeAccountIDSafe(destination),
+		tx.NewXRPAmount(20_000_000),
+	)
+	view := &paymentReadErrorView{
+		paymentMockLedgerView: newPaymentMockLedgerView(),
+		err:                   errors.New("storage read failed"),
+	}
+
+	require.Equal(t, ter.TefINTERNAL, payment.Preclaim(view, tx.EngineConfig{}))
+}
+
 func TestFlowCrossPropagatesMPTFundsCorruption(t *testing.T) {
 	view := newPaymentMockLedgerView()
 	var issuer, taker [20]byte
@@ -87,12 +103,13 @@ func (m *paymentMockLedgerView) Erase(key keylet.Keylet) error {
 	return nil
 }
 
-func (m *paymentMockLedgerView) AdjustDropsDestroyed(drops drops.XRPAmount) {
+func (m *paymentMockLedgerView) AdjustDropsDestroyed(drops drops.XRPAmount) error {
 	// No-op for testing
+	return nil
 }
 
-func (m *paymentMockLedgerView) TxExists(txID [32]byte) bool {
-	return false
+func (m *paymentMockLedgerView) TxExists(txID [32]byte) (bool, error) {
+	return false, nil
 }
 
 func (m *paymentMockLedgerView) Rules() *amendment.Rules {

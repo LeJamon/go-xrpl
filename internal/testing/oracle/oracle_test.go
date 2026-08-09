@@ -83,6 +83,7 @@ func TestInvalidSet(t *testing.T) {
 	t.Run("InvalidAccount", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 		bad := jtx.NewAccount("bad")
+		env.Memoize(bad)
 		// bad is not funded (memoized only)
 		lut := defaultLUT(env)
 
@@ -1042,6 +1043,7 @@ func TestInvalidDelete(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("InvalidAccount", func(t *testing.T) {
 		bad := jtx.NewAccount("bad")
+		env.Memoize(bad)
 		// bad is not funded
 		result := env.Submit(oracletest.OracleDelete(bad, 1).
 			Fee(env.BaseFee()).
@@ -1743,11 +1745,13 @@ func TestMultisig(t *testing.T) {
 			jtx.RequireTxSuccess(t, result)
 
 			// Attach signers to alice: becky(1), bogie(1), ed(2), quorum=2
-			env.SetSignerList(alice, 2, []jtx.TestSigner{
+			signers := []jtx.TestSigner{
 				{Account: becky, Weight: 1},
 				{Account: bogie, Weight: 1},
 				{Account: ed, Weight: 2},
-			})
+			}
+			result = env.SubmitSignedWith(jtx.NewSignerListSetTx(alice, 2, signers), alie)
+			jtx.RequireTxSuccess(t, result)
 			env.Close()
 
 			// A signer list costs a flat 1 owner reserve (MultiSignReserve retired).
@@ -1832,15 +1836,17 @@ func TestMultisig(t *testing.T) {
 			// Remove signer list and create new one — rippled lines 799-816
 			t.Run("SignerListRotation", func(t *testing.T) {
 				// Remove old signer list (signed with regular key)
-				env.RemoveSignerList(alice)
+				result = env.SubmitSignedWith(jtx.NewRemoveSignerListTx(alice), alie)
+				jtx.RequireTxSuccess(t, result)
 				env.Close()
 
 				// Create new signer list: zelda(1), bob(1), ed(2)
-				env.SetSignerList(alice, 2, []jtx.TestSigner{
+				result = env.SubmitSignedWith(jtx.NewSignerListSetTx(alice, 2, []jtx.TestSigner{
 					{Account: zelda, Weight: 1},
 					{Account: bob, Weight: 1},
 					{Account: ed, Weight: 2},
-				})
+				}), alie)
+				jtx.RequireTxSuccess(t, result)
 				env.Close()
 
 				lut3 := defaultLUT(env)

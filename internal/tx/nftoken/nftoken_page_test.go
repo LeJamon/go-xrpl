@@ -49,7 +49,7 @@ func (m *mockView) Erase(k keylet.Keylet) error {
 	return nil
 }
 
-func (m *mockView) AdjustDropsDestroyed(drops.XRPAmount) {}
+func (m *mockView) AdjustDropsDestroyed(drops.XRPAmount) error { return nil }
 
 func (m *mockView) ForEach(fn func(key [32]byte, data []byte) bool) error {
 	for k, v := range m.store {
@@ -79,9 +79,9 @@ func (m *mockView) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 	return best, m.store[best], true, nil
 }
 
-func (m *mockView) TxExists([32]byte) bool  { return false }
-func (m *mockView) Rules() *amendment.Rules { return nil }
-func (m *mockView) LedgerSeq() uint32       { return 0 }
+func (m *mockView) TxExists([32]byte) (bool, error) { return false, nil }
+func (m *mockView) Rules() *amendment.Rules         { return nil }
+func (m *mockView) LedgerSeq() uint32               { return 0 }
 
 func pageStats(t *testing.T, view *mockView) (pages, tokens, maxPerPage int) {
 	t.Helper()

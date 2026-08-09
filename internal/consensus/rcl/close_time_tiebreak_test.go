@@ -102,7 +102,7 @@ func TestDetermineCloseTime_ObserverTieBreakDeterministic(t *testing.T) {
 
 	eng := &Engine{
 		adaptor: adaptor,
-		state: &consensus.RoundState{
+		state: &roundState{
 			OurPosition: nil, // observer: forces the fallback path
 			CloseTimes: consensus.CloseTimes{
 				Peers: map[time.Time]int{smaller: 3, larger: 3},
@@ -119,5 +119,48 @@ func TestDetermineCloseTime_ObserverTieBreakDeterministic(t *testing.T) {
 			"observer must deterministically pick the LARGER tied close-time "+
 				"(matches updateCloseTimePosition / rippled's ascending std::map); "+
 				"got %v on iteration %d", got, i)
+	}
+}
+
+func TestUpdateCloseTimePositionProposesDisagreement(t *testing.T) {
+	adaptor := newMockAdaptor()
+	base := adaptor.now.Truncate(time.Second)
+	engine := NewEngine(adaptor, DefaultConfig())
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	engine.mode = consensus.ModeProposing
+	engine.roundStartTime = adaptor.now
+	engine.prevRoundTime = 10 * time.Second
+	engine.state = &roundState{
+		Round: consensus.RoundID{Seq: 2, ParentHash: consensus.LedgerID{1}},
+		OurPosition: &consensus.Proposal{
+			Position:  3,
+			CloseTime: base,
+		},
+		CloseTimes: consensus.CloseTimes{Peers: make(map[time.Time]int)},
+	}
+
+	for i := byte(1); i <= 4; i++ {
+		node := consensus.NodeID{i}
+		adaptor.trusted[node] = true
+		engine.proposalTracker.proposals[node] = &consensus.Proposal{
+			NodeID:    node,
+			CloseTime: base.Add(time.Duration(i) * time.Minute),
+		}
+	}
+
+	engine.updateCloseTimePosition()
+
+	if !engine.state.OurPosition.CloseTime.IsZero() {
+		t.Fatalf("close time = %v, want zero disagreement position", engine.state.OurPosition.CloseTime)
+	}
+	if engine.state.OurPosition.Position != 4 {
+		t.Fatalf("proposal sequence = %d, want 4", engine.state.OurPosition.Position)
+	}
+	if engine.closeTime.haveConsensus {
+		t.Fatal("split close-time votes unexpectedly reached consensus")
+	}
+	if got := engine.determineCloseTime(); !got.IsZero() {
+		t.Fatalf("determineCloseTime() = %v, want proposing disagreement position", got)
 	}
 }

@@ -120,6 +120,20 @@ func btoe(data []byte) string {
 		dictionary[extract(buf, 55, 11)]
 }
 
+// WordFromBlob returns a stable RFC 1751 word for arbitrary binary data.
+func WordFromBlob(data []byte) string {
+	var hash uint32
+	for _, b := range data {
+		hash += uint32(b)
+		hash += hash << 10
+		hash ^= hash >> 6
+	}
+	hash += hash << 3
+	hash ^= hash >> 11
+	hash += hash << 15
+	return dictionary[hash%uint32(len(dictionary))]
+}
+
 // etob converts 6 English words to 8 bytes of binary data. On failure it
 // returns ErrMalformedInput, ErrWordNotInDictionary, or ErrParity.
 func etob(words []string) ([]byte, error) {

@@ -37,25 +37,30 @@ func TestComputeBookChangesCanonicalArithmeticAndRendering(t *testing.T) {
 			amount := func(value string) map[string]any {
 				return map[string]any{"currency": "USD", "issuer": issuer, "value": value}
 			}
-			blob, err := json.Marshal(StoredTransaction{
-				TxJSON: validBookChangesTxJSON(),
-				Meta: map[string]any{"AffectedNodes": []any{
-					map[string]any{"ModifiedNode": map[string]any{
-						"LedgerEntryType": "Offer",
-						"PreviousFields": map[string]any{
-							"TakerGets": test.gets,
-							"TakerPays": amount(test.pays),
-						},
-						"FinalFields": map[string]any{
-							"TakerGets": "0",
-							"TakerPays": amount("0"),
-						},
-					}},
+			transaction := validBookChangesTxJSON()
+			metadata := map[string]any{"AffectedNodes": []any{
+				map[string]any{"ModifiedNode": map[string]any{
+					"LedgerEntryType": "Offer",
+					"PreviousFields": map[string]any{
+						"TakerGets": test.gets,
+						"TakerPays": amount(test.pays),
+					},
+					"FinalFields": map[string]any{
+						"TakerGets": "0",
+						"TakerPays": amount("0"),
+					},
 				}},
-			})
+			}}
+			blob, err := json.Marshal(StoredTransaction{TxJSON: transaction, Meta: metadata})
 			require.NoError(t, err)
 
-			result := ComputeBookChanges(mptBookChangesLedger{blob: blob})
+			ledger := mptBookChangesLedger{blob: blob}
+			result := ComputeBookChanges(ledger)
+			predecoded := computeBookChangesFromTransactions(ledger, []BookChangesTransaction{{
+				Transaction: transaction,
+				Metadata:    metadata,
+			}})
+			require.Equal(t, result, predecoded)
 			changes := result["changes"].([]map[string]any)
 			require.Len(t, changes, 1)
 			change := changes[0]
@@ -64,6 +69,45 @@ func TestComputeBookChangesCanonicalArithmeticAndRendering(t *testing.T) {
 			for _, field := range []string{"high", "low", "open", "close"} {
 				require.Equal(t, test.wantRate, change[field], field)
 			}
+		})
+	}
+}
+
+func TestComputeBookChangesFromTransactionsStrict(t *testing.T) {
+	ledger := mptBookChangesLedger{}
+
+	result, err := ComputeBookChangesFromTransactionsStrict(ledger, nil)
+	require.NoError(t, err)
+	encoded, err := json.Marshal(result)
+	require.NoError(t, err)
+	require.NotEqual(t, "null", string(encoded))
+	require.Equal(t, []map[string]any{}, result["changes"])
+
+	for _, test := range []struct {
+		name         string
+		ledger       BookChangesHeader
+		transactions []BookChangesTransaction
+	}{
+		{name: "nil ledger header"},
+		{
+			name:   "nil transaction projection",
+			ledger: ledger,
+			transactions: []BookChangesTransaction{{
+				Metadata: map[string]any{"AffectedNodes": []any{}},
+			}},
+		},
+		{
+			name:   "nil metadata projection",
+			ledger: ledger,
+			transactions: []BookChangesTransaction{{
+				Transaction: validBookChangesTxJSON(),
+			}},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := ComputeBookChangesFromTransactionsStrict(test.ledger, test.transactions)
+			require.Error(t, err)
+			require.Nil(t, result)
 		})
 	}
 }

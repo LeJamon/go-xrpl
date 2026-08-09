@@ -1,5 +1,7 @@
 package types
 
+import "fmt"
+
 // XRPL RPC error codes.
 //
 // rippled serializes the numeric error_code field over the wire and documents
@@ -352,6 +354,17 @@ func RpcErrorTransactionSubmission() *RpcError {
 	return NewRpcError(RpcINTERNAL, "internal", "internal", "Exception occurred during transaction submission.")
 }
 
+// RpcErrorInvalidTransactionType returns rippled's internal serialization
+// error for an unknown numeric transaction type.
+func RpcErrorInvalidTransactionType(transactionType uint16) *RpcError {
+	return NewRpcError(
+		RpcINTERNAL,
+		"internal",
+		"internal",
+		fmt.Sprintf("Exception while serializing transaction: Invalid transaction type %d", transactionType),
+	)
+}
+
 func RpcErrorDBDeserialization() *RpcError {
 	return NewRpcError(RpcDB_DESERIALIZATION, "dbDeserialization", "dbDeserialization", "Database deserialization error.")
 }
@@ -603,6 +616,18 @@ func RpcErrorTxSigned() *RpcError {
 // (matches rippled rpcSRC_ACT_MALFORMED, code 65, token "srcActMalformed").
 func RpcErrorSrcActMalformed(message string) *RpcError {
 	return NewRpcError(RpcSRC_ACT_MALFORMED, "srcActMalformed", "srcActMalformed", message)
+}
+
+func RpcErrorMasterDisabled() *RpcError {
+	return NewRpcError(RpcMASTER_DISABLED, "masterDisabled", "masterDisabled", "Master key is disabled.")
+}
+
+func RpcErrorBadSecret() *RpcError {
+	return NewRpcError(RpcBAD_SECRET, "badSecret", "badSecret", "Secret does not match account.")
+}
+
+func RpcErrorDelegateActNotFound() *RpcError {
+	return NewRpcError(RpcDELEGATE_ACT_NOT_FOUND, "delegateActNotFound", "delegateActNotFound", "Delegate account not found.")
 }
 
 // RpcErrorNotImpl returns an error for unimplemented features

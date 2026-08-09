@@ -13,17 +13,19 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	ledgerstate "github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // LedgerDataMethod handles the ledger_data RPC method
-type LedgerDataMethod struct{ BaseHandler }
+type LedgerDataMethod struct{ baseHandler }
 
 func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
 	if ledgerSpecErr != nil {
 		return nil, ledgerSpecErr
 	}
-	targetLedger, lookupValidated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
+	targetLedger, lookupValidated, lookupErr := lookupLedger(ctx, parsedLedgerSpec)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
@@ -86,8 +88,11 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	// Build state array based on binary flag
 	state := make([]map[string]any, 0, len(result.State))
 	for _, item := range result.State {
-		if entryType != 0 && ledgerstate.EntryTypeCode(item.Data) != entryType {
-			continue
+		if entryType != 0 {
+			itemType, err := ledgerstate.DecodeType(item.Data)
+			if err != nil || itemType != entryType {
+				continue
+			}
 		}
 		// Ensure index is uppercase hex (matching rippled's to_string(key))
 		upperIndex := strings.ToUpper(item.Index)
@@ -136,7 +141,11 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 
 	// Include ledger header info on first query (when no marker was provided)
 	if !hasMarker {
-		response["ledger"] = buildLedgerJSON(targetLedger, binaryMode, false, ctx.ApiVersion)
+		ledgerJSON, ledgerErr := buildLedgerJSON(targetLedger, binaryMode, false, ctx.ApiVersion)
+		if ledgerErr != nil {
+			return nil, rpcInternalError("ledger_data: map root lookup failed", ledgerErr)
+		}
+		response["ledger"] = ledgerJSON
 	}
 
 	if result.Marker != "" {
@@ -147,9 +156,9 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 }
 
 func ledgerDataLimit(params map[string]json.RawMessage, binary, unlimited bool) (uint32, *types.RpcError) {
-	maxLimit := uint64(LimitLedgerData.Default)
+	maxLimit := uint64(limitLedgerData.Default)
 	if binary {
-		maxLimit = uint64(LimitLedgerDataBinary.Default)
+		maxLimit = uint64(limitLedgerDataBinary.Default)
 	}
 	raw, ok := params["limit"]
 	if !ok {
@@ -179,46 +188,7 @@ func ledgerDataLimit(params map[string]json.RawMessage, binary, unlimited bool) 
 	return uint32(parsed), nil
 }
 
-type ledgerDataType struct {
-	canonical string
-	rpc       string
-	code      uint16
-}
-
-var ledgerDataTypes = [...]ledgerDataType{
-	{"NFTokenOffer", "nft_offer", 0x0037},
-	{"Check", "check", 0x0043},
-	{"DID", "did", 0x0049},
-	{"NegativeUNL", "nunl", 0x004e},
-	{"NFTokenPage", "nft_page", 0x0050},
-	{"SignerList", "signer_list", 0x0053},
-	{"Ticket", "ticket", 0x0054},
-	{"AccountRoot", "account", 0x0061},
-	{"DirectoryNode", "directory", 0x0064},
-	{"Amendments", "amendments", 0x0066},
-	{"LedgerHashes", "hashes", 0x0068},
-	{"Bridge", "bridge", 0x0069},
-	{"Offer", "offer", 0x006f},
-	{"DepositPreauth", "deposit_preauth", 0x0070},
-	{"XChainOwnedClaimID", "xchain_owned_claim_id", 0x0071},
-	{"RippleState", "state", 0x0072},
-	{"FeeSettings", "fee", 0x0073},
-	{"XChainOwnedCreateAccountClaimID", "xchain_owned_create_account_claim_id", 0x0074},
-	{"Escrow", "escrow", 0x0075},
-	{"PayChannel", "payment_channel", 0x0078},
-	{"AMM", "amm", 0x0079},
-	{"MPTokenIssuance", "mpt_issuance", 0x007e},
-	{"MPToken", "mptoken", 0x007f},
-	{"Oracle", "oracle", 0x0080},
-	{"Credential", "credential", 0x0081},
-	{"PermissionedDomain", "permissioned_domain", 0x0082},
-	{"Delegate", "delegate", 0x0083},
-	{"Vault", "vault", 0x0084},
-	{"LoanBroker", "loan_broker", 0x0088},
-	{"Loan", "loan", 0x0089},
-}
-
-func ledgerDataEntryType(params map[string]json.RawMessage) (uint16, *types.RpcError) {
+func ledgerDataEntryType(params map[string]json.RawMessage) (entry.Type, *types.RpcError) {
 	raw, ok := params["type"]
 	if !ok {
 		return 0, nil
@@ -227,9 +197,12 @@ func ledgerDataEntryType(params map[string]json.RawMessage) (uint16, *types.RpcE
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return 0, types.RpcErrorExpectedField("type", "string")
 	}
-	for _, candidate := range ledgerDataTypes {
-		if strings.EqualFold(value, candidate.canonical) || value == candidate.rpc {
-			return candidate.code, nil
+	for _, candidate := range protocol.LedgerEntryTypes() {
+		if candidate.Deprecated || candidate.RPCName == "" {
+			continue
+		}
+		if strings.EqualFold(value, candidate.Name) || value == candidate.RPCName {
+			return candidate.Type, nil
 		}
 	}
 	return 0, types.RpcErrorInvalidField("type")

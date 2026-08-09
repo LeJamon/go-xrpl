@@ -9,19 +9,36 @@ import (
 // LedgerCloseEvent represents a ledger close notification sent to subscribers
 // This matches the rippled ledgerClosed stream message format
 type LedgerCloseEvent struct {
-	Type             string `json:"type"`              // Always "ledgerClosed"
-	FeeBase          uint64 `json:"fee_base"`          // Transaction cost in fee units
-	FeeRef           uint64 `json:"fee_ref"`           // Transaction cost in fee units for reference tx
-	LedgerHash       string `json:"ledger_hash"`       // Hash of the ledger that closed
-	LedgerIndex      uint32 `json:"ledger_index"`      // Sequence number of the ledger
-	LedgerTime       uint32 `json:"ledger_time"`       // Close time in seconds since Ripple epoch
-	ReserveBase      uint64 `json:"reserve_base"`      // Minimum reserve requirement in drops
-	ReserveInc       uint64 `json:"reserve_inc"`       // Owner reserve increment in drops
-	TxnCount         int    `json:"txn_count"`         // Number of transactions in the ledger
-	ValidatedLedgers string `json:"validated_ledgers"` // Range of validated ledgers (e.g., "1-100")
-	// Optional fields for API v2+
-	ValidatedHash string `json:"validated_hash,omitempty"` // Hash of the validated ledger (API v2)
-	Validated     bool   `json:"validated,omitempty"`      // Whether this ledger is validated
+	Type                    string  `json:"type"`                        // Always "ledgerClosed"
+	FeeBase                 int32   `json:"fee_base"`                    // Transaction cost in fee units
+	FeeRef                  *uint64 `json:"fee_ref,omitempty"`           // Deprecated reference fee units, before XRPFees
+	LedgerHash              string  `json:"ledger_hash"`                 // Hash of the ledger that closed
+	LedgerIndex             uint32  `json:"ledger_index"`                // Sequence number of the ledger
+	LedgerTime              uint32  `json:"ledger_time"`                 // Close time in seconds since Ripple epoch
+	NetworkID               uint32  `json:"network_id"`                  // Network identifier, including network 0
+	ReserveBase             int32   `json:"reserve_base"`                // Minimum reserve requirement in drops
+	ReserveInc              int32   `json:"reserve_inc"`                 // Owner reserve increment in drops
+	TxnCount                int     `json:"txn_count"`                   // Number of transactions in the ledger
+	ValidatedLedgers        string  `json:"validated_ledgers,omitempty"` // Range of validated ledgers (e.g., "1-100")
+	ValidatedLedgersPresent bool    `json:"-"`
+}
+
+// MarshalJSON preserves the distinction between an omitted validated range and
+// a gate-enabled range whose value is currently empty.
+func (e LedgerCloseEvent) MarshalJSON() ([]byte, error) {
+	type alias LedgerCloseEvent
+	value := alias(e)
+	var validatedLedgers *string
+	if e.ValidatedLedgersPresent {
+		validatedLedgers = &value.ValidatedLedgers
+	}
+	return json.Marshal(struct {
+		alias
+		ValidatedLedgers *string `json:"validated_ledgers,omitempty"`
+	}{
+		alias:            value,
+		ValidatedLedgers: validatedLedgers,
+	})
 }
 
 // TransactionEvent represents a transaction notification sent to subscribers
@@ -52,18 +69,19 @@ type TransactionEvent struct {
 type ValidationEvent struct {
 	Type                string   `json:"type"`                     // Always "validationReceived"
 	Amendments          []string `json:"amendments,omitempty"`     // Amendments this validator is voting for
-	BaseFee             uint64   `json:"base_fee,omitempty"`       // Unscaled transaction cost
+	BaseFee             any      `json:"base_fee,omitempty"`       // Unscaled transaction cost
 	Cookie              string   `json:"cookie,omitempty"`         // Unique cookie value (if any)
-	Data                string   `json:"data,omitempty"`           // Raw STValidation wire bytes, hex-encoded (NetworkOPs.cpp:2422)
+	Data                string   `json:"data"`                     // Canonical STValidation wire bytes, hex-encoded
 	Flags               uint32   `json:"flags"`                    // Validation flags
 	Full                bool     `json:"full"`                     // Whether this is a full validation
 	LedgerHash          string   `json:"ledger_hash"`              // Hash of proposed ledger
-	LedgerIndex         string   `json:"ledger_index"`             // Index of proposed ledger (as string)
+	LedgerIndex         uint32   `json:"ledger_index"`             // Index of proposed ledger (string in API v1)
+	CloseTime           *uint32  `json:"close_time,omitempty"`     // Optional validation close time
 	LoadFee             *uint32  `json:"load_fee,omitempty"`       // Local load-scaled transaction cost
 	MasterKey           string   `json:"master_key,omitempty"`     // Master public key — emitted only when the manifest cache resolves a master distinct from the signing key (NetworkOPs.cpp:2434-2438)
-	NetworkID           uint32   `json:"network_id,omitempty"`     // Network identifier (NetworkOPs.cpp:2423)
-	ReserveBase         uint64   `json:"reserve_base,omitempty"`   // Minimum reserve
-	ReserveInc          uint64   `json:"reserve_inc,omitempty"`    // Owner reserve increment
+	NetworkID           uint32   `json:"network_id"`               // Network identifier, including network 0
+	ReserveBase         any      `json:"reserve_base,omitempty"`   // Minimum reserve
+	ReserveInc          any      `json:"reserve_inc,omitempty"`    // Owner reserve increment
 	ServerVersion       string   `json:"server_version,omitempty"` // Version of rippled
 	Signature           string   `json:"signature"`                // Signature of the validation
 	SigningTime         uint32   `json:"signing_time"`             // When validation was signed
@@ -74,7 +92,7 @@ type ValidationEvent struct {
 // NewValidationEvent creates a new ValidationEvent
 func NewValidationEvent(
 	ledgerHash string,
-	ledgerIndex string,
+	ledgerIndex uint32,
 	validationPublicKey string,
 	signature string,
 	signingTime uint32,
@@ -98,17 +116,14 @@ func NewValidationEvent(
 // Mirrors rippled NetworkOPs.cpp:2308-2373 (pubServer).
 type ServerStatusEvent struct {
 	Type                    string `json:"type"`                                 // Always "serverStatus"
-	BaseFee                 uint64 `json:"base_fee,omitempty"`                   // Base fee
-	LoadBase                int    `json:"load_base"`                            // Load base (256 = normal)
-	LoadFactor              int    `json:"load_factor"`                          // Current load factor
-	LoadFactorLocal         int    `json:"load_factor_local,omitempty"`          // Local load factor
-	LoadFactorNet           int    `json:"load_factor_net,omitempty"`            // Network load factor
-	LoadFactorCluster       int    `json:"load_factor_cluster,omitempty"`        // Cluster load factor
-	LoadFactorFeeEscalation int    `json:"load_factor_fee_escalation,omitempty"` // Fee escalation load factor
-	LoadFactorFeeQueue      int    `json:"load_factor_fee_queue,omitempty"`      // Fee queue load factor
-	LoadFactorFeeReference  int    `json:"load_factor_fee_reference,omitempty"`  // TxQ reference fee level (NetworkOPs.cpp:2345)
-	LoadFactorServer        int    `json:"load_factor_server,omitempty"`         // Server load factor
-	ServerStatus            string `json:"server_status,omitempty"`              // Operating mode (disconnected/connected/syncing/tracking/full)
+	BaseFee                 int32  `json:"base_fee"`                             // Base fee
+	LoadBase                uint32 `json:"load_base"`                            // Load base (256 = normal)
+	LoadFactor              uint32 `json:"load_factor"`                          // Current load factor
+	LoadFactorFeeEscalation uint32 `json:"load_factor_fee_escalation,omitempty"` // Fee escalation load factor
+	LoadFactorFeeQueue      uint32 `json:"load_factor_fee_queue,omitempty"`      // Fee queue load factor
+	LoadFactorFeeReference  uint32 `json:"load_factor_fee_reference,omitempty"`  // TxQ reference fee level (NetworkOPs.cpp:2345)
+	LoadFactorServer        uint32 `json:"load_factor_server"`                   // Server load factor
+	ServerStatus            string `json:"server_status"`                        // Operating mode (disconnected/connected/syncing/tracking/full)
 }
 
 // ConsensusEvent represents consensus phase changes
@@ -184,23 +199,6 @@ type PeerStatusEvent struct {
 	LedgerIndexMax *uint32 `json:"ledger_index_max,omitempty"` // Max ledger index peer has — nil unless paired with min (PeerImp.cpp:1956-1960)
 	LedgerIndexMin *uint32 `json:"ledger_index_min,omitempty"` // Min ledger index peer has — nil unless paired with max
 }
-
-// Peer status actions — rippled PeerImp.cpp:1921-1932.
-const (
-	PeerActionClosingLedger  = "CLOSING_LEDGER"
-	PeerActionAcceptedLedger = "ACCEPTED_LEDGER"
-	PeerActionSwitchedLedger = "SWITCHED_LEDGER"
-	PeerActionLostSync       = "LOST_SYNC"
-)
-
-// Peer status strings — rippled PeerImp.cpp:1899-1913.
-const (
-	PeerStatusConnecting = "CONNECTING"
-	PeerStatusConnected  = "CONNECTED"
-	PeerStatusMonitoring = "MONITORING"
-	PeerStatusValidating = "VALIDATING"
-	PeerStatusShutting   = "SHUTTING"
-)
 
 // PathFindEvent represents path finding results
 // This is sent in response to path_find create requests

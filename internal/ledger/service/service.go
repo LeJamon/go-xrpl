@@ -17,7 +17,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/ledger/localtxs"
-	"github.com/LeJamon/go-xrpl/internal/ledger/manager"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -43,6 +42,7 @@ var (
 	ErrInvalidLedgerIndex = svcerr.ErrInvalidLedgerIndex
 	ErrInvalidLedgerHash  = svcerr.ErrInvalidLedgerHash
 	ErrTxnNotFound        = svcerr.ErrTxnNotFound
+	ErrTxnDataCorrupt     = svcerr.ErrTxnDataCorrupt
 )
 
 var (
@@ -77,6 +77,9 @@ type Config struct {
 	SHAMapFamily shamap.Family
 	// FastLoad restores the newest complete persisted ledger at startup.
 	FastLoad bool
+	// FastLoadWorkers controls persisted SHAMap verification concurrency.
+	// Zero selects an automatic value.
+	FastLoadWorkers int
 	// RelationalDB is the repository manager for transaction indexing (optional)
 	RelationalDB relationaldb.RepositoryManager
 
@@ -96,17 +99,6 @@ type Config struct {
 	TxQ *txq.Config
 }
 
-// DefaultConfig returns the default service configuration
-func DefaultConfig() Config {
-	return Config{
-		Standalone:    true,
-		GenesisConfig: genesis.DefaultConfig(),
-		NodeStore:     nil,
-		RelationalDB:  nil,
-		Logger:        xrpllog.Discard(),
-	}
-}
-
 type networkLedgerState uint8
 
 const (
@@ -124,10 +116,19 @@ func networkLedgerStateFor(enabled bool, state networkLedgerState) networkLedger
 
 // Service manages the ledger lifecycle
 type Service struct {
-	// mu guards the Service's mutable ledger state. Lock ordering: a path
-	// needing both mu and the TxQ mutex MUST take mu first. TxQ never reaches
-	// back into the Service, so this one rule keeps submit/close deadlock-free.
+	lifecycleMu    sync.Mutex
+	lifecycleState serviceLifecycleState
+	stopDone       chan struct{}
+
+	// mu guards the lifecycle frontier and cross-component state. Lock ordering
+	// is mu, historyComponent.mu, then component-specific locks such as TxQ.
+	// History-only query paths take historyComponent.mu without taking mu.
 	mu sync.RWMutex
+
+	persistenceWorker
+	eventPublisher
+	historyComponent
+	queries queryFacade
 
 	config         Config
 	logger         xrpllog.Logger
@@ -163,34 +164,12 @@ type Service struct {
 	// Genesis ledger
 	genesisLedger *ledger.Ledger
 
-	// Ledger history (sequence -> ledger) - in-memory cache
-	ledgerHistory map[uint32]*ledger.Ledger
-
-	// By-hash index over ledgerHistory (ledger hash -> sequence). Kept in
-	// sync exclusively by putHistoryLocked/deleteHistoryLocked.
-	ledgerByHash map[[32]byte]uint32
-
-	// Persisted ledgers loaded by hash are cached separately because the node
-	// store may contain non-canonical ledgers at a sequence already in history.
-	persistedLedgers    map[[32]byte]*ledger.Ledger
-	persistedLedgerFIFO [][32]byte
-
-	// Transaction index (hash -> ledger sequence) - in-memory cache
-	txIndex map[[32]byte]uint32
-
-	txPositionIndex map[[32]byte]uint32
-
 	// Pending transactions accumulated during the open ledger phase;
 	// re-applied in canonical order at AcceptLedger time.
-	pendingTxs []pendingTx
-
-	// eventCallback fires when a ledger becomes validated — at quorum-gate time
-	// from SetValidatedLedger, not close time, so subscribers stay in lockstep
-	// with server_info.validated_ledger.
-	eventCallback EventCallback
+	pendingTxs []openledger.PendingTx
 
 	// pendingValidation stashes accepted events by hash at close time so
-	// eventCallback can fire at quorum. Bounded — see pendingValidationMaxLen.
+	// eventSink can fire at quorum. Bounded — see pendingValidationMaxLen.
 	pendingValidation map[[32]byte]*LedgerAcceptedEvent
 
 	// pendingValidationOrder tracks insertion order for LRU eviction.
@@ -223,9 +202,6 @@ type Service struct {
 	// recursion. Unlike the two pending* maps, this holds the ledger payload.
 	heldAdoptions map[uint32]*pendingAdopt
 
-	// hooks provides event callbacks for external subscribers
-	hooks *EventHooks
-
 	networkLedgerState networkLedgerState
 
 	// startupReplay is the one-shot replay staged for the first close and is
@@ -241,15 +217,6 @@ type Service struct {
 	// reclaimed ledgers. Nil when online_delete is off.
 	minimumOnlineFunc func() uint32
 
-	// completeMu guards completedLedgers, their canonical hashes, the retention
-	// floor, and active tokens used to reject stale persistence completions.
-	completeMu              sync.RWMutex
-	completedLedgers        *manager.CompleteLedgerSet
-	completeLedgerHashes    map[uint32][32]byte
-	completeLedgerFloor     uint32
-	completeLedgerTokens    map[uint32]uint64
-	nextCompleteLedgerToken uint64
-
 	// openLedgerView is the persistent open-ledger view — source of truth for
 	// the open pool. Built by Start, rebuilt by adopt paths, advanced by Accept.
 	openLedgerView *openledger.OpenLedger
@@ -264,7 +231,7 @@ type Service struct {
 	txQueue *txq.TxQ
 
 	// localTxs is the held pool of locally-submitted transactions. RPC submit
-	// and SubmitOpenLedgerTx(local=true) push each non-permanent result in;
+	// and SubmitOpenLedgerTx(local=true) push each parse-valid transaction in;
 	// Accept replays the pool onto every rebuilt open view until each entry
 	// applies or ages out, with stale entries swept on the validated path.
 	localTxs *localtxs.LocalTxs
@@ -274,10 +241,17 @@ type Service struct {
 	// Nil when overlay broadcast is unwired (tests).
 	txRelay func(blob []byte)
 
-	// submittedTxCallback fires from SubmitTransaction only when the tx applied
-	// to the open ledger, feeding the transactions_proposed/accounts_proposed
-	// WebSocket streams.
-	submittedTxCallback SubmittedTxCallback
+	// relayTxCache retains accepted transaction blobs after they leave the
+	// current open ledger or transaction queue. Reduce-relay announcements may
+	// arrive during that handoff, so the cache spans the request horizon while
+	// remaining explicitly bounded.
+	relayTxCacheMu    sync.Mutex
+	relayTxCache      map[[32]byte]relayTxRecord
+	relayTxCacheOrder []relayTxOrderEntry
+	relayTxCacheHead  int
+	relayTxCacheBytes int64
+	relayTxCacheLimit int64
+	relayTxCacheNext  uint64
 
 	// feeTrack is the local LoadFeeTrack mirror, always non-nil. Drivers:
 	//   - Raise/LowerLocalFee: per ledger close via tickLoadFeeLocked.
@@ -288,32 +262,6 @@ type Service struct {
 	// lastConsensusRoundTime is the most recent consensus round duration, fed to
 	// the TxQ's timeLeap flag by processClosedLedgerLocked. Zero in standalone.
 	lastConsensusRoundTime time.Duration
-
-	persistMu            sync.Mutex
-	persistQueue         []*persistJob
-	validatedPersistJobs map[uint32]*persistJob
-	persistWake          chan struct{}
-	persistStarted       bool
-	persistStopping      bool
-	persistWG            sync.WaitGroup
-	canonicalPersistMu   sync.Mutex
-	sweepMu              sync.Mutex
-	sweepCancel          context.CancelFunc
-	sweepDone            chan struct{}
-	sweepInterval        time.Duration
-
-	// ledgerEventMu guards the publication candidates and lossless FIFO queue.
-	// The single dispatcher runs eventCallback serially and is started by Start.
-	ledgerEventMu           sync.Mutex
-	ledgerEventQueue        []*LedgerAcceptedEvent
-	ledgerEventCandidates   map[uint32]*LedgerAcceptedEvent
-	ledgerEventFrontierSeq  uint32
-	ledgerEventFrontierHash [32]byte
-	ledgerEventHaveFrontier bool
-	ledgerEventWake         chan struct{}
-	ledgerEventStarted      bool
-	ledgerEventStopping     bool
-	ledgerEventWG           sync.WaitGroup
 
 	// configCacheMu guards the memoised open-ledger ApplyConfig below. The config
 	// is a pure function of closedLedger, rebuilt only when it advances, keeping
@@ -326,8 +274,41 @@ type Service struct {
 	configCache       openledger.ApplyConfig
 }
 
+const (
+	relayTxCacheMaxEntries = 20_000
+	relayTxCacheMaxBytes   = 64 * 1024 * 1024
+	relayTxCacheTTL        = 5 * time.Minute
+)
+
+type relayTxRecord struct {
+	blob     []byte
+	deferred bool
+	seenAt   time.Time
+	orderID  uint64
+}
+
+type relayTxOrderEntry struct {
+	hash [32]byte
+	id   uint64
+}
+
+type serviceLifecycleState uint8
+
+const (
+	serviceCreated serviceLifecycleState = iota
+	serviceStarting
+	serviceRunning
+	serviceFailed
+	serviceStopping
+	serviceStopped
+)
+
 // New creates a new LedgerService
 func New(cfg Config) (*Service, error) {
+	if err := cfg.Startup.validateMode(); err != nil {
+		return nil, fmt.Errorf("invalid ledger service configuration: %w", err)
+	}
+
 	logger := cfg.Logger
 	if logger == nil {
 		logger = xrpllog.Discard()
@@ -341,6 +322,10 @@ func New(cfg Config) (*Service, error) {
 	if cfg.TxQ != nil {
 		txqCfg = *cfg.TxQ
 	}
+	txQueue, err := txq.New(txqCfg)
+	if err != nil {
+		return nil, fmt.Errorf("invalid transaction queue configuration: %w", err)
+	}
 	standardFees := genesis.StandardFees()
 	configuredFees := drops.Fees{
 		Base:      standardFees.BaseFee,
@@ -352,33 +337,48 @@ func New(cfg Config) (*Service, error) {
 	}
 
 	s := &Service{
-		config:                   cfg,
-		logger:                   logger.Named(xrpllog.PartitionLedger),
-		configuredFees:           configuredFees,
-		nodeStore:                cfg.NodeStore,
-		shamapFamily:             cfg.SHAMapFamily,
-		relationalDB:             cfg.RelationalDB,
-		amendmentTable:           cfg.Table,
-		ledgerHistory:            make(map[uint32]*ledger.Ledger),
-		ledgerByHash:             make(map[[32]byte]uint32),
-		persistedLedgers:         make(map[[32]byte]*ledger.Ledger),
-		txIndex:                  make(map[[32]byte]uint32),
-		txPositionIndex:          make(map[[32]byte]uint32),
+		config:         cfg,
+		logger:         logger.Named(xrpllog.PartitionLedger),
+		configuredFees: configuredFees,
+		nodeStore:      cfg.NodeStore,
+		shamapFamily:   cfg.SHAMapFamily,
+		relationalDB:   cfg.RelationalDB,
+		amendmentTable: cfg.Table,
+		persistenceWorker: persistenceWorker{
+			validatedPersistJobs: make(map[uint32]*persistJob),
+			persistWake:          make(chan struct{}, 1),
+		},
+		eventPublisher: eventPublisher{
+			ledgerEventCandidates: make(map[uint32]*LedgerAcceptedEvent),
+			publicationErrors:     make(chan error, 1),
+		},
+		historyComponent: historyComponent{
+			ledgerHistory:        make(map[uint32]*ledger.Ledger),
+			ledgerByHash:         make(map[[32]byte]uint32),
+			persistedLedgers:     make(map[[32]byte]*ledger.Ledger),
+			txIndex:              make(map[[32]byte]uint32),
+			txPositionIndex:      make(map[[32]byte]uint32),
+			completedLedgers:     newCompleteLedgerSet(),
+			completeLedgerHashes: make(map[uint32][32]byte),
+			completeLedgerTokens: make(map[uint32]uint64),
+			sweepInterval:        nodeStoreSweepIntervalForSize(cfg.NodeSize),
+		},
 		pendingValidation:        make(map[[32]byte]*LedgerAcceptedEvent),
 		pendingLedgerValidations: make(map[uint32]pendingValidationEntry),
 		heldAdoptions:            make(map[uint32]*pendingAdopt),
-		completedLedgers:         manager.NewCompleteLedgerSet(),
-		completeLedgerHashes:     make(map[uint32][32]byte),
-		completeLedgerTokens:     make(map[uint32]uint64),
-		validatedPersistJobs:     make(map[uint32]*persistJob),
-		txQueue:                  txq.New(txqCfg),
+		txQueue:                  txQueue,
 		localTxs:                 localtxs.New(),
+		relayTxCache:             make(map[[32]byte]relayTxRecord),
+		relayTxCacheLimit:        relayTxCacheMaxBytes,
 		feeTrack:                 feetrack.New(),
 		validatedAgeNow:          time.Now,
-		persistWake:              make(chan struct{}, 1),
-		ledgerEventCandidates:    make(map[uint32]*LedgerAcceptedEvent),
-		sweepInterval:            nodeStoreSweepIntervalForSize(cfg.NodeSize),
 	}
+	s.persistenceWorker.service = s
+	s.eventPublisher.service = s
+	s.eventPublisher.publicationLimit = maxPublicationQueue
+	s.queries.service = s
+	s.queries.history = &s.historyComponent
+	s.queries.relationalDB = s.relationalDB
 	return s, nil
 }
 
@@ -445,7 +445,7 @@ func (s *Service) SetAmendmentVote(ctx context.Context, id [32]byte, vetoed bool
 	if f := amendment.FeatureByID(id); f != nil {
 		name = f.Name
 	}
-	return s.relationalDB.Amendment().SaveAmendmentVote(ctx, &relationaldb.AmendmentVoteRecord{
+	return s.relationalDB.Amendment().SaveAmendmentVote(ctx, relationaldb.AmendmentVoteRecord{
 		Amendment: protocol.Hash256Hex(id),
 		Name:      name,
 		Vetoed:    vetoed,
@@ -472,28 +472,33 @@ func (s *Service) AmendmentFirstUnsupportedExpected() (uint32, bool) {
 	return s.amendmentTable.FirstUnsupportedExpected()
 }
 
-// Start initializes the service with a genesis ledger
-func (s *Service) Start() error {
+// Start initializes the service with a genesis ledger.
+func (s *Service) Start() (err error) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	switch s.lifecycleState {
+	case serviceRunning:
+		return nil
+	case serviceStarting:
+		return errors.New("ledger service is already starting")
+	case serviceFailed:
+		return errors.New("ledger service startup previously failed")
+	case serviceStopping:
+		return errors.New("ledger service is stopping")
+	case serviceStopped:
+		return errors.New("ledger service has been stopped")
+	}
+	s.lifecycleState = serviceStarting
+	defer func() {
+		if err != nil {
+			s.lifecycleState = serviceFailed
+		}
+	}()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	s.persistMu.Lock()
-	startWorkers := !s.persistStarted
-	if startWorkers {
-		s.persistStarted = true
-		s.persistWG.Add(1)
-	}
-	s.persistMu.Unlock()
-	if startWorkers {
-		go s.runPersistWorker()
-
-		s.ledgerEventMu.Lock()
-		s.ledgerEventWake = make(chan struct{}, 1)
-		s.ledgerEventStarted = true
-		s.ledgerEventWG.Add(1)
-		s.ledgerEventMu.Unlock()
-		go s.runLedgerEventDispatcher()
-	}
+	s.historyComponent.mu.Lock()
+	defer s.historyComponent.mu.Unlock()
 
 	genesisConfig := s.config.GenesisConfig
 	switch s.config.Startup.Mode {
@@ -510,12 +515,15 @@ func (s *Service) Start() error {
 	}
 
 	// Fees are read dynamically from the FeeSettings SLE by readFeesFromLedger.
-	genesisLedger := ledger.FromGenesis(
+	genesisLedger, err := ledger.FromGenesis(
 		genesisResult.Header,
 		genesisResult.StateMap,
 		genesisResult.TxMap,
 		drops.Fees{},
 	)
+	if err != nil {
+		return fmt.Errorf("failed to construct genesis ledger: %w", err)
+	}
 	if s.shamapFamily != nil {
 		genesisLedger.SetSHAMapFamily(s.shamapFamily)
 	}
@@ -546,8 +554,24 @@ func (s *Service) Start() error {
 			return fmt.Errorf("validate startup ledger: %w", err)
 		}
 	}
+	if s.config.Startup.Mode == StartupFresh {
+		if err := s.persistValidatedLedger(context.Background(), genesisLedger, false); err != nil {
+			return fmt.Errorf("persist fresh genesis ledger: %w", err)
+		}
+		if selection.ledger.IsValidated() {
+			if err := s.persistValidatedLedger(context.Background(), selection.ledger, true); err != nil {
+				return fmt.Errorf("persist fresh initial ledger: %w", err)
+			}
+		} else if s.nodeStore != nil {
+			if err := s.persistToNodeStore(context.Background(), selection.ledger, selection.ledger.Sequence()); err != nil {
+				return fmt.Errorf("persist fresh initial ledger: %w", err)
+			}
+		}
+	}
 	if selection.loaded {
-		s.installLoadedStartupLocked(selection.ledger, genesisLedger)
+		if err := s.installLoadedStartupLocked(selection.ledger, genesisLedger); err != nil {
+			return err
+		}
 		s.syncTable(selection.ledger)
 	} else {
 		s.closedLedger = selection.ledger
@@ -583,6 +607,9 @@ func (s *Service) Start() error {
 		"fastLoadProvisional", s.networkLedgerState == networkLedgerFastLoadProvisional,
 	)
 	s.startNodeStoreSweeper()
+	s.persistenceWorker.start()
+	s.eventPublisher.start()
+	s.lifecycleState = serviceRunning
 
 	return nil
 }
@@ -668,19 +695,18 @@ func (c *closedLedgerCtx) GetTransactionFeeLevels() []txq.FeeLevel {
 // processClosedLedgerLocked updates the TxQ's fee metrics from the just-closed
 // ledger. timeLeap clamps the metrics window when consensus exceeded the
 // slow-consensus threshold instead of advancing it. Caller must hold s.mu.
-func (s *Service) processClosedLedgerLocked() {
-	if s.txQueue == nil || s.closedLedger == nil {
+func (s *Service) processClosedLedgerLocked(closed *ledger.Ledger) {
+	if s.txQueue == nil || closed == nil {
 		return
 	}
-	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(closed)
 	ctx := &closedLedgerCtx{
-		ledger:           s.closedLedger,
+		ledger:           closed,
 		baseFee:          baseFee,
 		reserveBase:      reserveBase,
 		reserveIncrement: reserveIncrement,
 	}
 	s.txQueue.ProcessClosedLedger(ctx, s.lastConsensusRoundTime > slowConsensusThreshold)
-	s.tickLoadFeeLocked()
 }
 
 // slowConsensusThreshold: past this round time the TxQ treats consensus as slow
@@ -713,25 +739,27 @@ func (s *Service) tickLoadFeeLocked() {
 }
 
 // acceptOpenLedgerViewLocked invokes OpenLedger.Accept on the LCL transition to
-// s.closedLedger. No-op pre-Start. retriableTxs are the disputed we-voted-NO txs
+// closed. No-op pre-Start. retriableTxs are the disputed we-voted-NO txs
 // plus the build pass's retry-state txs, replayed first; anyDisputes is the
 // retriesFirst flag. closedSeq is for log context only. Caller must hold s.mu.
-func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32, retriableTxs []openledger.PendingTx, anyDisputes bool) {
+func (s *Service) acceptOpenLedgerViewLocked(closed *ledger.Ledger, retriableTxs []openledger.PendingTx, anyDisputes bool) error {
 	if s.openLedgerView == nil {
-		return
+		s.processClosedLedgerLocked(closed)
+		return nil
 	}
-	if s.closedLedger == nil {
-		return
+	if closed == nil {
+		return nil
 	}
-	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
+	closedSeq := closed.Sequence()
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(closed)
 	cfg := openledger.ApplyConfig{
 		BaseFee:          baseFee,
 		ReserveBase:      reserveBase,
 		ReserveIncrement: reserveIncrement,
 		NetworkID:        s.config.NetworkID,
-		ParentCloseTime:  parentCloseTimeRippleEpoch(s.closedLedger),
+		ParentCloseTime:  parentCloseTimeRippleEpoch(closed),
 		Logger:           s.config.Logger,
-		Rules:            rulesFromLedger(s.closedLedger, s.logger),
+		Rules:            rulesFromLedger(closed, s.logger),
 		FeeTrack:         s.feeTrack,
 	}
 	// Modifier promotes queued candidates into the new open view after replay.
@@ -753,16 +781,24 @@ func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32, retriableTxs []op
 	// Seed retries with the disputed/build-pass set; Accept drains then re-fills it.
 	retries := append([]openledger.PendingTx(nil), retriableTxs...)
 	relay := s.txRelay
-	relayCB := func(_ [32]byte, blob []byte) {
+	relayCB := func(hash [32]byte, blob []byte) {
+		s.rememberRelayTransaction(hash, blob, false)
 		if relay != nil {
 			relay(blob)
 		}
 	}
-	if relay == nil {
-		relayCB = nil
-	}
-	if err := s.openLedgerView.Accept(s.closedLedger, locals, anyDisputes, &retries, cfg, s.txQueue, modifier, relayCB); err != nil {
-		s.logger.Error("openLedger.Accept failed", "err", err, "seq", closedSeq)
+	if err := s.openLedgerView.AcceptWithPrecommit(
+		closed,
+		locals,
+		anyDisputes,
+		&retries,
+		cfg,
+		s.txQueue,
+		func() { s.processClosedLedgerLocked(closed) },
+		modifier,
+		relayCB,
+	); err != nil {
+		return fmt.Errorf("accept open ledger view at sequence %d: %w", closedSeq, err)
 	}
 	if len(retries) > 0 {
 		s.logger.Info("openLedger.Accept produced retries",
@@ -770,6 +806,7 @@ func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32, retriableTxs []op
 			"seq", closedSeq,
 		)
 	}
+	return nil
 }
 
 // applyConfigLocked returns the ApplyConfig for the current closed ledger,
@@ -837,19 +874,17 @@ func (s *Service) TransactionRules() *amendment.Rules {
 // SubmitOpenLedgerTx routes a tx blob through the persistent OpenLedger view and
 // returns the per-tx classification (ResultFailure before Start).
 //
-// local=true (RPC-originated) pushes any non-Failure result into the LocalTxs
+// local=true (RPC-originated) pushes every parse-valid result into the LocalTxs
 // held pool so it survives LCL transitions until the sender's sequence advances
 // or it ages out. local=false (peer relay) doesn't pin the blob — the peer
 // manages its own resends.
 func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result, error) {
 	s.mu.RLock()
-	ov := s.openLedgerView
-	queue := s.txQueue
-	pool := s.localTxs
 	cfg, cfgErr := s.applyConfigLocked()
+	haveOpenLedger := s.openLedgerView != nil
 	s.mu.RUnlock()
 
-	if ov == nil {
+	if !haveOpenLedger {
 		return openledger.ResultFailure, errors.New("openLedgerView not initialised")
 	}
 	if cfgErr != nil {
@@ -865,12 +900,28 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result
 	if !cfg.SkipSignatureVerification {
 		txengine.PrewarmSignature(ptx.Parsed)
 	}
-	_, res := ov.Submit(ptx, cfg, queue)
-
-	if local && pool != nil && res != openledger.ResultFailure {
-		pool.PushBack(ov.Current().Sequence(), ptx)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.openLedgerView == nil {
+		return openledger.ResultFailure, errors.New("openLedgerView not initialised")
 	}
-	return res, nil
+	cfg, cfgErr = s.applyConfigLocked()
+	if cfgErr != nil {
+		return openledger.ResultFailure, cfgErr
+	}
+	outcome := s.openLedgerView.SubmitDetailed(ptx, cfg, s.txQueue)
+	if outcome.Class == openledger.ResultSuccess {
+		s.rememberRelayTransaction(ptx.Hash, ptx.Blob, outcome.Queued)
+	}
+	current := s.openLedgerView.Current()
+	if local && s.localTxs != nil {
+		s.localTxs.PushBack(current.Sequence(), ptx)
+	}
+	s.dispatchProposedTransaction(ptx, blob, outcome, current)
+	if outcome.Applied {
+		s.eventPublisher.dispatchServerStatusEvent()
+	}
+	return outcome.Class, nil
 }
 
 // PrewarmSignatures verifies the outer signatures of raw tx blobs in parallel
@@ -881,6 +932,12 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result
 // concurrently; unparseable blobs are skipped (the in-strand preflight rejects
 // them authoritatively).
 func (s *Service) PrewarmSignatures(blobs [][]byte) {
+	s.PrewarmSignaturesContext(context.Background(), blobs)
+}
+
+// PrewarmSignaturesContext verifies transaction signatures until ctx is
+// canceled.
+func (s *Service) PrewarmSignaturesContext(ctx context.Context, blobs [][]byte) {
 	if len(blobs) == 0 {
 		return
 	}
@@ -898,15 +955,33 @@ func (s *Service) PrewarmSignatures(blobs [][]byte) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for blob := range work {
-				if ptx, err := openledger.ParsePendingTx(blob); err == nil {
-					txengine.PrewarmSignature(ptx.Parsed)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case blob, ok := <-work:
+					if !ok {
+						return
+					}
+					if ptx, err := openledger.ParsePendingTx(blob); err == nil {
+						txengine.PrewarmSignature(ptx.Parsed)
+					}
 				}
 			}
 		}()
 	}
+feed:
 	for _, blob := range blobs {
-		work <- blob
+		select {
+		case <-ctx.Done():
+			break feed
+		case work <- blob:
+		}
 	}
 	close(work)
 	wg.Wait()
@@ -957,12 +1032,12 @@ func (s *Service) OpenLedgerTxHashes() [][32]byte {
 
 // OpenLedgerHasTx reports whether the persistent open view contains
 // the tx hash. Used by peer-protocol HasTx replies.
-func (s *Service) OpenLedgerHasTx(hash [32]byte) bool {
+func (s *Service) OpenLedgerHasTx(hash [32]byte) (bool, error) {
 	s.mu.RLock()
 	ov := s.openLedgerView
 	s.mu.RUnlock()
 	if ov == nil {
-		return false
+		return false, nil
 	}
 	return ov.Current().TxExists(hash)
 }
@@ -977,6 +1052,9 @@ func (s *Service) OpenLedgerGetTx(hash [32]byte) ([]byte, bool) {
 		return nil, false
 	}
 	view := ov.Current()
+	if view == nil {
+		return nil, false
+	}
 	data, found, err := view.GetTransaction(hash)
 	if err != nil || !found {
 		return nil, false
@@ -986,6 +1064,117 @@ func (s *Service) OpenLedgerGetTx(hash [32]byte) ([]byte, bool) {
 		return nil, false
 	}
 	return raw, true
+}
+
+// TransactionForRelay looks up a transaction in the authoritative local
+// transaction cache used by reduce-relay replies. Only membership in the live
+// open-ledger view is current; TxQ and retained-cache fallbacks are new, with
+// the cache preserving whether a queued transaction is deferred. The returned
+// blob is a private copy.
+func (s *Service) TransactionForRelay(hash [32]byte) (blob []byte, included, deferred, ok bool) {
+	if blob, ok = s.OpenLedgerGetTx(hash); ok {
+		return append([]byte(nil), blob...), true, false, true
+	}
+	s.mu.RLock()
+	queue := s.txQueue
+	s.mu.RUnlock()
+	if queue == nil {
+		return s.relayCacheGet(hash)
+	}
+	blob, ok = queue.GetTxBlob(hash)
+	if ok {
+		return blob, false, true, true
+	}
+	return s.relayCacheGet(hash)
+}
+
+func (s *Service) rememberRelayTransaction(hash [32]byte, blob []byte, deferred bool) {
+	if hash == ([32]byte{}) || len(blob) == 0 {
+		return
+	}
+	now := time.Now()
+	s.relayTxCacheMu.Lock()
+	defer s.relayTxCacheMu.Unlock()
+	limit := s.relayTxCacheLimit
+	if limit <= 0 {
+		limit = relayTxCacheMaxBytes
+	}
+	if int64(len(blob)) > limit {
+		return
+	}
+	if s.relayTxCache == nil {
+		s.relayTxCache = make(map[[32]byte]relayTxRecord)
+	}
+	orderID := uint64(0)
+	if existing, exists := s.relayTxCache[hash]; exists {
+		s.relayTxCacheBytes -= int64(len(existing.blob))
+		orderID = existing.orderID
+	} else {
+		s.relayTxCacheNext++
+		if s.relayTxCacheNext == 0 {
+			s.relayTxCacheNext++
+		}
+		orderID = s.relayTxCacheNext
+		s.relayTxCacheOrder = append(s.relayTxCacheOrder, relayTxOrderEntry{hash: hash, id: orderID})
+	}
+	s.relayTxCache[hash] = relayTxRecord{
+		blob:     append([]byte(nil), blob...),
+		deferred: deferred,
+		seenAt:   now,
+		orderID:  orderID,
+	}
+	s.relayTxCacheBytes += int64(len(blob))
+	for (len(s.relayTxCache) > relayTxCacheMaxEntries || s.relayTxCacheBytes > limit) &&
+		s.relayTxCacheHead < len(s.relayTxCacheOrder) {
+		old := s.relayTxCacheOrder[s.relayTxCacheHead]
+		s.relayTxCacheHead++
+		if record, stillPresent := s.relayTxCache[old.hash]; stillPresent && record.orderID == old.id {
+			s.relayTxCacheBytes -= int64(len(record.blob))
+			delete(s.relayTxCache, old.hash)
+		}
+	}
+	s.compactRelayCacheOrderLocked()
+}
+
+func (s *Service) relayCacheGet(hash [32]byte) (blob []byte, included, deferred, ok bool) {
+	s.relayTxCacheMu.Lock()
+	defer s.relayTxCacheMu.Unlock()
+	record, found := s.relayTxCache[hash]
+	if !found {
+		return nil, false, false, false
+	}
+	if time.Since(record.seenAt) >= relayTxCacheTTL {
+		delete(s.relayTxCache, hash)
+		s.relayTxCacheBytes -= int64(len(record.blob))
+		s.compactRelayCacheOrderLocked()
+		return nil, false, false, false
+	}
+	// The retained blob is no longer guaranteed to be in the current open
+	// ledger. Callers derive tsCURRENT only from the live view above; cache
+	// fallback is always a tsNEW-style record.
+	return append([]byte(nil), record.blob...), false, record.deferred, true
+}
+
+func (s *Service) compactRelayCacheOrderLocked() {
+	if len(s.relayTxCache) == 0 {
+		s.relayTxCacheOrder = nil
+		s.relayTxCacheHead = 0
+		s.relayTxCacheBytes = 0
+		return
+	}
+	activeOrder := len(s.relayTxCacheOrder) - s.relayTxCacheHead
+	if !(s.relayTxCacheHead > 1024 && s.relayTxCacheHead*2 > len(s.relayTxCacheOrder)) &&
+		activeOrder <= 2*relayTxCacheMaxEntries {
+		return
+	}
+	order := make([]relayTxOrderEntry, 0, len(s.relayTxCache))
+	for _, entry := range s.relayTxCacheOrder[s.relayTxCacheHead:] {
+		if record, ok := s.relayTxCache[entry.hash]; ok && record.orderID == entry.id {
+			order = append(order, entry)
+		}
+	}
+	s.relayTxCacheOrder = order
+	s.relayTxCacheHead = 0
 }
 
 // GetOpenLedger returns the current open ledger
@@ -1065,16 +1254,18 @@ func (s *Service) GetLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
 
 func (s *Service) getLedgerBySequence(ctx context.Context, seq uint32) (*ledger.Ledger, error) {
 	s.mu.RLock()
+	s.historyComponent.mu.RLock()
 	history := s.ledgerHistory[seq]
 	var open *ledger.Ledger
 	if s.openLedger != nil && s.openLedger.Sequence() == seq {
 		open = s.openLedger
 	}
+	s.historyComponent.mu.RUnlock()
 	s.mu.RUnlock()
 
 	s.completeMu.RLock()
 	hash, complete := s.completeLedgerHashes[seq]
-	complete = complete && s.completedLedgers != nil && s.completedLedgers.Contains(seq)
+	complete = complete && s.completedLedgers != nil && s.completedLedgers.contains(seq)
 	s.completeMu.RUnlock()
 	if history != nil && (!complete || history.Hash() == hash) {
 		return history, nil
@@ -1086,9 +1277,9 @@ func (s *Service) getLedgerBySequence(ctx context.Context, seq uint32) (*ledger.
 		return nil, ErrLedgerNotFound
 	}
 
-	s.mu.RLock()
+	s.historyComponent.mu.RLock()
 	cached := s.persistedLedgers[hash]
-	s.mu.RUnlock()
+	s.historyComponent.mu.RUnlock()
 	if cached != nil && cached.Sequence() == seq {
 		if cached.IsValidated() {
 			return cached, nil
@@ -1119,16 +1310,16 @@ func (s *Service) getLedgerBySequence(ctx context.Context, seq uint32) (*ledger.
 
 	s.completeMu.RLock()
 	stillComplete := s.completedLedgers != nil &&
-		s.completedLedgers.Contains(seq) &&
+		s.completedLedgers.contains(seq) &&
 		s.completeLedgerHashes[seq] == hash
 	s.completeMu.RUnlock()
 	if !stillComplete {
 		return nil, ErrLedgerNotFound
 	}
 
-	s.mu.Lock()
+	s.historyComponent.mu.Lock()
 	s.cachePersistedLedgerLocked(loaded)
-	s.mu.Unlock()
+	s.historyComponent.mu.Unlock()
 	return loaded, nil
 }
 
@@ -1136,8 +1327,8 @@ func (s *Service) getLedgerBySequence(ctx context.Context, seq uint32) (*ledger.
 // never the mutable open ledger — the consensus catch-up walk needs immutable,
 // parent-hash-chained ledgers.
 func (s *Service) AdoptedLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.historyComponent.mu.RLock()
+	defer s.historyComponent.mu.RUnlock()
 	if l, ok := s.ledgerHistory[seq]; ok {
 		return l, nil
 	}
@@ -1153,20 +1344,20 @@ func (s *Service) GetLedgerByHashContext(ctx context.Context, hash [32]byte) (*l
 }
 
 func (s *Service) getLedgerByHash(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
-	s.mu.RLock()
+	s.historyComponent.mu.RLock()
 	if seq, ok := s.ledgerByHash[hash]; ok {
 		if l, ok := s.ledgerHistory[seq]; ok {
-			s.mu.RUnlock()
+			s.historyComponent.mu.RUnlock()
 			return l, nil
 		}
 	}
 	if l, ok := s.persistedLedgers[hash]; ok {
-		s.mu.RUnlock()
+		s.historyComponent.mu.RUnlock()
 		return s.validatedPersistedLedger(ctx, l)
 	}
 	canLoad := s.nodeStore != nil && s.shamapFamily != nil &&
 		s.relationalDB != nil && s.relationalDB.Ledger() != nil
-	s.mu.RUnlock()
+	s.historyComponent.mu.RUnlock()
 	if !canLoad {
 		return nil, ErrLedgerNotFound
 	}
@@ -1176,19 +1367,19 @@ func (s *Service) getLedgerByHash(ctx context.Context, hash [32]byte) (*ledger.L
 		return nil, err
 	}
 
-	s.mu.Lock()
+	s.historyComponent.mu.Lock()
 	if seq, ok := s.ledgerByHash[hash]; ok {
 		if l, ok := s.ledgerHistory[seq]; ok {
-			s.mu.Unlock()
+			s.historyComponent.mu.Unlock()
 			return l, nil
 		}
 	}
 	if l, ok := s.persistedLedgers[hash]; ok {
-		s.mu.Unlock()
+		s.historyComponent.mu.Unlock()
 		return s.validatedPersistedLedger(ctx, l)
 	}
 	s.cachePersistedLedgerLocked(loaded)
-	s.mu.Unlock()
+	s.historyComponent.mu.Unlock()
 	return s.validatedPersistedLedger(ctx, loaded)
 }
 
@@ -1323,10 +1514,10 @@ func (s *Service) MaxPersistedLedgerSeq(ctx context.Context) uint32 {
 }
 
 // ledgerHistoryRangeLocked returns the inclusive [min, max] span of in-memory
-// history, or ok=false when empty. Caller holds s.mu. NB: the span assumes
+// history, or ok=false when empty. Caller holds historyComponent.mu. NB: the span assumes
 // contiguity — purges/backward-fills can leave gaps, so callers reporting durable
 // availability must layer their own floor (see GetServerInfo's clamp).
-func (s *Service) ledgerHistoryRangeLocked() (min, max uint32, ok bool) {
+func (s *historyComponent) ledgerHistoryRangeLocked() (min, max uint32, ok bool) {
 	first := true
 	for seq := range s.ledgerHistory {
 		if first || seq < min {
@@ -1343,12 +1534,14 @@ func (s *Service) ledgerHistoryRangeLocked() (min, max uint32, ok bool) {
 // AvailableLedgerRange returns the inclusive [min, max] range of locally held
 // ledgers, or ok=false when none. Used to bound a ledger-integrity cleaning run.
 func (s *Service) AvailableLedgerRange() (min, max uint32, ok bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.historyComponent.mu.RLock()
+	defer s.historyComponent.mu.RUnlock()
 	return s.ledgerHistoryRangeLocked()
 }
 
 func (s *Service) contiguousValidatedRangeLocked() (first, last uint32, ok bool) {
+	s.historyComponent.mu.RLock()
+	defer s.historyComponent.mu.RUnlock()
 	if s.validatedLedger == nil {
 		return 0, 0, false
 	}
@@ -1429,11 +1622,6 @@ func (s *Service) GetValidatedLedgerIndex() uint32 {
 		return 0
 	}
 	return s.validatedLedger.Sequence()
-}
-
-// getValidatedLedgersRange returns the actual completed-ledger ranges.
-func (s *Service) getValidatedLedgersRange() string {
-	return s.completeLedgersString()
 }
 
 // SetServerStateFunc sets a function that provides the server state string.

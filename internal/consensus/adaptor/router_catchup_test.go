@@ -5,7 +5,6 @@
 package adaptor
 
 import (
-	"bytes"
 	"context"
 	"testing"
 	"time"
@@ -30,11 +29,9 @@ func statusChangeMessage(t *testing.T, peerID peermanagement.PeerID, seq uint32,
 	}
 	encoded, err := message.Encode(sc)
 	require.NoError(t, err)
-	var buf bytes.Buffer
-	require.NoError(t, message.WriteMessage(&buf, message.TypeStatusChange, encoded))
 	return &peermanagement.InboundMessage{
 		PeerID:  peerID,
-		Type:    uint16(message.TypeStatusChange),
+		Type:    message.TypeStatusChange,
 		Payload: encoded,
 	}
 }
@@ -103,7 +100,7 @@ func TestRouter_StatusWithoutLedgerHashCannotSteerCatchup(t *testing.T) {
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  peerID,
-		Type:    uint16(message.TypeStatusChange),
+		Type:    message.TypeStatusChange,
 		Payload: encoded,
 	})
 
@@ -133,7 +130,7 @@ func TestRouter_LostSyncClearsPeerLedgerWithoutAcquiringAdvertisedHash(t *testin
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  peerID,
-		Type:    uint16(message.TypeStatusChange),
+		Type:    message.TypeStatusChange,
 		Payload: encoded,
 	})
 
@@ -151,7 +148,7 @@ func TestRouter_LostSyncClearsPeerLedgerWithoutAcquiringAdvertisedHash(t *testin
 // TestRouter_CheckBehindArmsAcquisition verifies the checkBehind fix:
 // when a peer is far ahead, the router must arm a real acquisition
 // (via startLedgerAcquisition), not just broadcast an unresponded
-// mtGET_LEDGER. The pre-fix path called RequestLedgerByHashAndSeq
+// mtGET_LEDGER. The pre-fix path used a direct hash-and-sequence broadcast
 // which broadcasts without arming an InboundLedger, so responses
 // arrived with has_inbound=false and got dropped.
 func TestRouter_CheckBehindArmsAcquisition(t *testing.T) {

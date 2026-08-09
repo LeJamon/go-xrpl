@@ -59,7 +59,11 @@ func newStubLedger(t *testing.T) *ledger.Ledger {
 		Accepted:            true,
 	}
 	hdr.Hash = [32]byte{0x7B, 0xAB}
-	return ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{})
+	l, err := ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("ledger.FromGenesis: %v", err)
+	}
+	return l
 }
 
 // TestGRPCServer_RoundTrip boots the gRPC listener on an ephemeral port
@@ -71,13 +75,16 @@ func TestGRPCServer_RoundTrip(t *testing.T) {
 	p := config.PortConfig{Port: 0, IP: "127.0.0.1", Protocol: "grpc"}
 	errCh := make(chan error, 1)
 
-	srv, addr, err := startGRPCServer("port_grpc", p, lookup, xrpllog.Discard(), errCh)
+	bound, err := prepareGRPCServer(
+		context.Background(), "port_grpc", p, lookup, xrpllog.Discard(), systemListen,
+	)
 	if err != nil {
-		t.Fatalf("startGRPCServer: %v", err)
+		t.Fatalf("prepareGRPCServer: %v", err)
 	}
-	defer srv.GracefulStop()
+	bound.serve(xrpllog.Discard(), errCh, nil)
+	defer bound.server.GracefulStop()
 
-	conn, err := googlegrpc.NewClient(addr, googlegrpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := googlegrpc.NewClient(bound.address, googlegrpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -135,9 +142,37 @@ func TestGRPCServer_RejectsUnspecifiedSecureGateway(t *testing.T) {
 		Protocol:      "grpc",
 		SecureGateway: []string{"0.0.0.0"},
 	}
-	_, _, err := startGRPCServer("port_grpc", p, lookup, xrpllog.Discard(), make(chan error, 1))
+	_, err := prepareGRPCServer(
+		context.Background(), "port_grpc", p, lookup, xrpllog.Discard(), systemListen,
+	)
 	if err == nil {
-		t.Fatal("expected startGRPCServer to reject unspecified secure_gateway IP")
+		t.Fatal("expected prepareGRPCServer to reject unspecified secure_gateway IP")
+	}
+}
+
+func TestGRPCServer_StopBeforeServeIsNotFatal(t *testing.T) {
+	lookup := &stubLookup{validated: newStubLedger(t)}
+	p := config.PortConfig{Port: 0, IP: "127.0.0.1", Protocol: "grpc"}
+	bound, err := prepareGRPCServer(
+		context.Background(),
+		"port_grpc",
+		p,
+		lookup,
+		xrpllog.Discard(),
+		systemListen,
+	)
+	if err != nil {
+		t.Fatalf("prepareGRPCServer: %v", err)
+	}
+	defer bound.listener.Close()
+
+	bound.server.Stop()
+	errCh := make(chan error, 1)
+	bound.serve(xrpllog.Discard(), errCh, nil)
+	select {
+	case err := <-errCh:
+		t.Fatalf("stopped gRPC server reported a fatal error: %v", err)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

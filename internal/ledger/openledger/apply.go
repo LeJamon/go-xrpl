@@ -1,11 +1,13 @@
 package openledger
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 
@@ -18,6 +20,10 @@ const (
 	totalPasses = 3
 	retryPasses = 1
 )
+
+func nextRetryState(certainRetry bool, changes, pass int) bool {
+	return certainRetry && changes != 0 && pass < retryPasses
+}
 
 // Mode controls how tec results are classified during apply.
 //
@@ -81,7 +87,8 @@ type ApplyConfig struct {
 	// Reference: rippled Application::buildLedger reads
 	// previousLedger->rules() and threads it through; no equivalent
 	// "all-on" fallback exists there.
-	Rules *amendment.Rules
+	Rules                 *amendment.Rules
+	NumberContextOverride *state.NumberContext
 	// ApplyFlags is the engine ApplyFlags driving this submission.
 	// Mirrors rippled NetworkOPs::apply which threads its flags into
 	// TxQ::canBeHeld (TxQ.cpp:393-399 rejects tapFAIL_HARD).
@@ -123,7 +130,7 @@ type ApplyConfig struct {
 // applyAndClassify runs a single transaction through bp. Applied results are
 // successful regardless of TER; tef/tem/tel results fail; all other non-applied
 // results retry. The engine's apply flags decide whether a tec result is applied.
-func applyAndClassify(bp *txengine.BlockProcessor, transaction tx.Transaction, blob []byte, mode Mode, logger xrpllog.Logger) Result {
+func applyAndClassify(bp *txengine.BlockProcessor, transaction tx.Transaction, blob []byte, mode Mode, logger xrpllog.Logger) (Result, error) {
 	var result txengine.BlockTxResult
 	var applyErr error
 	if mode == BuildLedgerMode {
@@ -136,16 +143,16 @@ func applyAndClassify(bp *txengine.BlockProcessor, transaction tx.Transaction, b
 			"mode", mode,
 			"hash", fmt.Sprintf("%x", result.Hash[:8]),
 			"err", applyErr)
-		return ResultFailure
+		return ResultFailure, applyErr
 	}
 	engineResult := result.ApplyResult.Result
 	switch {
 	case result.ApplyResult.Applied:
-		return ResultSuccess
+		return ResultSuccess, nil
 	case engineResult.IsTef(), engineResult.IsTem(), engineResult.IsTel():
-		return ResultFailure
+		return ResultFailure, nil
 	default:
-		return ResultRetry
+		return ResultRetry, nil
 	}
 }
 
@@ -170,6 +177,8 @@ func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte
 		Logger:                    cfg.Logger,
 		SkipSignatureVerification: cfg.SkipSignatureVerification,
 		Rules:                     cfg.Rules,
+		NumberContextOverride:     cfg.NumberContextOverride,
+		ApplyFlags:                cfg.ApplyFlags,
 		FeeTrack:                  cfg.FeeTrack,
 		ViewOpen:                  cfg.Mode == OpenLedgerMode,
 	}
@@ -188,12 +197,26 @@ func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte
 	if logger == nil {
 		logger = xrpllog.Discard()
 	}
-	return applyAndClassify(bp, transaction, blob, cfg.Mode, logger)
+	result, _ := applyAndClassify(bp, transaction, blob, cfg.Mode, logger)
+	return result
 }
 
 func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg ApplyConfig) error {
-	if view == nil || len(txs) == 0 {
+	return applyTxs(view, txs, retries, cfg, true)
+}
+
+func applyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg ApplyConfig, checkMembership bool) error {
+	if view == nil {
+		return errors.New("openledger.ApplyTxs: view is nil")
+	}
+	if len(txs) == 0 {
 		return nil
+	}
+	if cfg.Rules == nil {
+		return errors.New("openledger.ApplyTxs: amendment rules are required")
+	}
+	if cfg.Mode != OpenLedgerMode && cfg.Mode != BuildLedgerMode {
+		return fmt.Errorf("openledger.ApplyTxs: invalid mode %d", cfg.Mode)
 	}
 
 	logger := cfg.Logger
@@ -202,15 +225,23 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 	}
 
 	parsed := make([]tx.Transaction, len(txs))
+	eligible := make([]bool, len(txs))
 	for i, ptx := range txs {
 		t, err := tx.ParseFromBinary(ptx.Blob)
 		if err != nil {
-			logger.Warn("openledger: dropping malformed tx in replay",
-				"hash", ptx.Hash, "err", err)
-			continue
+			return fmt.Errorf("openledger.ApplyTxs: parse transaction %x: %w", ptx.Hash, err)
 		}
 		t.SetRawBytes(ptx.Blob)
 		parsed[i] = t
+		if checkMembership {
+			exists, err := view.TxExists(ptx.Hash)
+			if err != nil {
+				return fmt.Errorf("openledger.ApplyTxs: check transaction %x: %w", ptx.Hash, err)
+			}
+			eligible[i] = !exists
+		} else {
+			eligible[i] = true
+		}
 	}
 
 	// retrySet tracks the canonical retry queue (rippled's `OrderedTxs
@@ -234,6 +265,8 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 			Logger:                    cfg.Logger,
 			SkipSignatureVerification: skipSig,
 			Rules:                     cfg.Rules,
+			NumberContextOverride:     cfg.NumberContextOverride,
+			ApplyFlags:                cfg.ApplyFlags,
 			FeeTrack:                  cfg.FeeTrack,
 			ViewOpen:                  cfg.Mode == OpenLedgerMode,
 		}
@@ -257,24 +290,32 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 	// Initial single pass over txs (OpenLedger.h:220-238). retry=true on
 	// this pass so tec results stay retriable rather than committing.
 	bp := buildEngine(true, cfg.SkipSignatureVerification)
+	initialChanges := 0
 	for i, ptx := range txs {
-		if parsed[i] == nil {
+		if parsed[i] == nil || !eligible[i] {
 			continue
 		}
-		if view.TxExists(ptx.Hash) {
-			continue
+		class, err := applyAndClassify(bp, parsed[i], ptx.Blob, cfg.Mode, logger)
+		if err != nil {
+			return fmt.Errorf("openledger.ApplyTxs: apply transaction %x on initial pass: %w", ptx.Hash, err)
 		}
-		switch applyAndClassify(bp, parsed[i], ptx.Blob, cfg.Mode, logger) {
+		switch class {
+		case ResultSuccess:
+			initialChanges++
 		case ResultRetry:
 			retrySet = append(retrySet, i)
 		}
 	}
 
-	// Retry passes (OpenLedger.h:240-264). retry stays true while
-	// `certainRetry` and the pass index is below LEDGER_RETRY_PASSES;
-	// thereafter the final pass commits any tec leftover.
+	retryLoopCount := totalPasses
 	certainRetry := true
-	for pass := 0; pass < totalPasses && len(retrySet) > 0; pass++ {
+	passOffset := 0
+	if cfg.Mode == BuildLedgerMode {
+		retryLoopCount--
+		passOffset = 1
+		certainRetry = nextRetryState(certainRetry, initialChanges, 0)
+	}
+	for pass := 0; pass < retryLoopCount && len(retrySet) > 0; pass++ {
 		// Signatures were verified on the initial pass; retry passes
 		// always skip.
 		bp = buildEngine(certainRetry, true)
@@ -288,7 +329,16 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 			if parsed[idx] == nil {
 				continue
 			}
-			switch applyAndClassify(bp, parsed[idx], ptx.Blob, cfg.Mode, logger) {
+			class, err := applyAndClassify(bp, parsed[idx], ptx.Blob, cfg.Mode, logger)
+			if err != nil {
+				return fmt.Errorf(
+					"openledger.ApplyTxs: apply transaction %x on retry pass %d: %w",
+					ptx.Hash,
+					pass+1,
+					err,
+				)
+			}
+			switch class {
 			case ResultSuccess:
 				changes++
 			case ResultRetry:
@@ -302,9 +352,7 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 		if changes == 0 && !certainRetry {
 			break
 		}
-		if changes == 0 || pass >= retryPasses {
-			certainRetry = false
-		}
+		certainRetry = nextRetryState(certainRetry, changes, pass+passOffset)
 	}
 
 	if retries != nil && len(retrySet) > 0 {

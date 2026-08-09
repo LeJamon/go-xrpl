@@ -2,12 +2,13 @@ package handlers
 
 import (
 	"encoding/json"
+	"slices"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // LedgerRangeMethod handles the ledger_range RPC method
-type LedgerRangeMethod struct{ AdminHandler }
+type LedgerRangeMethod struct{ adminHandler }
 
 func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	// Parse parameters
@@ -16,7 +17,7 @@ func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		StopLedger  uint32 `json:"stop_ledger"`
 	}
 
-	if err := ParseParams(params, &request); err != nil {
+	if err := parseParams(params, &request); err != nil {
 		return nil, err
 	}
 
@@ -34,7 +35,7 @@ func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, types.RpcErrorInvalidParams("Ledger range too large (max 1000 ledgers)")
 	}
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -43,12 +44,17 @@ func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, rpcInternalError("ledger_range: ledger query failed", err)
 	}
 
-	// Build ledgers array
-	ledgers := make([]map[string]any, 0, len(result.Hashes))
-	for seq, hash := range result.Hashes {
+	sequences := make([]uint32, 0, len(result.Hashes))
+	for seq := range result.Hashes {
+		sequences = append(sequences, seq)
+	}
+	slices.Sort(sequences)
+
+	ledgers := make([]map[string]any, 0, len(sequences))
+	for _, seq := range sequences {
 		ledgers = append(ledgers, map[string]any{
 			"ledger_index": seq,
-			"ledger_hash":  FormatLedgerHash(hash),
+			"ledger_hash":  FormatLedgerHash(result.Hashes[seq]),
 		})
 	}
 

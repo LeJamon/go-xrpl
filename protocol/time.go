@@ -5,6 +5,7 @@ import (
 )
 
 const closeTimeISOLayout = "2006-01-02T15:04:05Z"
+const closeTimeHumanLayout = "2006-Jan-02 15:04:05 UTC"
 
 // RippleSeconds converts a wall-clock time to seconds since the XRPL epoch.
 // Go's zero time encodes as zero.
@@ -34,4 +35,13 @@ func FormatCloseTimeISO(t time.Time) string {
 		t = FromRippleTime(0)
 	}
 	return t.UTC().Format(closeTimeISOLayout)
+}
+
+// FormatCloseTimeHuman formats a ledger close time in the human-readable
+// whole-second form used by XRPL ledger responses.
+func FormatCloseTimeHuman(t time.Time) string {
+	if t.IsZero() {
+		t = FromRippleTime(0)
+	}
+	return t.UTC().Format(closeTimeHumanLayout)
 }

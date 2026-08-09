@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // Field type code for UInt8 (not defined in account_root.go)
@@ -62,7 +62,7 @@ type MPTokenData struct {
 
 // ParseMPTokenIssuance parses an MPTokenIssuance ledger entry from binary data.
 func ParseMPTokenIssuance(data []byte) (*MPTokenIssuanceData, error) {
-	decoded := ledgerfields.New("MPTokenIssuance")
+	decoded := ledgerfields.NewByName("MPTokenIssuance")
 	if decoded == nil {
 		return nil, fmt.Errorf("ledgerfields: MPTokenIssuance decoder is not registered")
 	}
@@ -175,7 +175,7 @@ func SerializeMPTokenIssuance(issuance *MPTokenIssuanceData) ([]byte, error) {
 
 // ParseMPToken parses an MPToken ledger entry from binary data.
 func ParseMPToken(data []byte) (*MPTokenData, error) {
-	decoded := ledgerfields.New("MPToken")
+	decoded := ledgerfields.NewByName("MPToken")
 	if decoded == nil {
 		return nil, fmt.Errorf("ledgerfields: MPToken decoder is not registered")
 	}

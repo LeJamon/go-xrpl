@@ -6,6 +6,7 @@ package escrow
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -24,7 +25,12 @@ const parityRate uint32 = 1_000_000_000
 
 // escrowCreatePreclaimIOU validates IOU escrow creation preconditions.
 // Reference: rippled Escrow.cpp escrowCreatePreclaimHelper<Issue> lines 204-279
-func escrowCreatePreclaimIOU(view tx.LedgerView, accountID, destID [20]byte, amount tx.Amount) ter.Result {
+func escrowCreatePreclaimIOU(
+	view tx.LedgerView,
+	accountID, destID [20]byte,
+	amount tx.Amount,
+	numberContext state.NumberContext,
+) ter.Result {
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
 		return ter.TefINTERNAL
@@ -37,7 +43,10 @@ func escrowCreatePreclaimIOU(view tx.LedgerView, accountID, destID [20]byte, amo
 
 	// Issuer must exist and have lsfAllowTrustLineLocking
 	sleIssuer, err := tx.ReadAccountRoot(view, issuerID)
-	if err != nil || sleIssuer == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if sleIssuer == nil {
 		return ter.TecNO_ISSUER
 	}
 	if sleIssuer.Flags&state.LsfAllowTrustLineLocking == 0 {
@@ -47,7 +56,10 @@ func escrowCreatePreclaimIOU(view tx.LedgerView, accountID, destID [20]byte, amo
 	// Trust line must exist
 	trustLineKey := keylet.Line(accountID, issuerID, amount.Currency)
 	trustLineData, err := view.Read(trustLineKey)
-	if err != nil || trustLineData == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if trustLineData == nil {
 		return ter.TecNO_LINE
 	}
 
@@ -78,16 +90,26 @@ func escrowCreatePreclaimIOU(view tx.LedgerView, accountID, destID [20]byte, amo
 	}
 
 	// Freeze checks (global freeze + issuer-side individual freeze)
-	asset := tx.Asset{Currency: amount.Currency, Issuer: amount.Issuer}
-	if tx.IsFrozen(view, accountID, asset) {
+	frozen, freezeResult := isIOUFrozen(view, accountID, issuerID, amount.Currency)
+	if freezeResult != ter.TesSUCCESS {
+		return freezeResult
+	}
+	if frozen {
 		return ter.TecFROZEN
 	}
-	if tx.IsFrozen(view, destID, asset) {
+	frozen, freezeResult = isIOUFrozen(view, destID, issuerID, amount.Currency)
+	if freezeResult != ter.TesSUCCESS {
+		return freezeResult
+	}
+	if frozen {
 		return ter.TecFROZEN
 	}
 
 	// Spendable amount check (ignore freeze since we already checked)
-	spendable := accountHoldsIOU(view, accountID, issuerID, amount.Currency)
+	spendable, holdsResult := accountHoldsIOU(view, accountID, issuerID, amount.Currency)
+	if holdsResult != ter.TesSUCCESS {
+		return holdsResult
+	}
 	if spendable.Signum() <= 0 {
 		return ter.TecINSUFFICIENT_FUNDS
 	}
@@ -98,7 +120,7 @@ func escrowCreatePreclaimIOU(view tx.LedgerView, accountID, destID [20]byte, amo
 	// Precision loss check: if the spendable amount and escrow amount differ
 	// so much in magnitude that IOU addition loses the smaller value, reject.
 	// Reference: rippled Escrow.cpp line 275: if (!canAdd(spendableAmount, amount))
-	if !canAddIOUAmounts(spendable, amount) {
+	if !canAddIOUAmounts(spendable, amount, numberContext) {
 		return ter.TecPRECISION_LOSS
 	}
 
@@ -131,7 +153,10 @@ func escrowCreatePreclaimMPT(view tx.LedgerView, rules *amendment.Rules, account
 		return ter.TefINTERNAL
 	}
 	issuanceData, err := view.Read(issuanceKey)
-	if err != nil || issuanceData == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if issuanceData == nil {
 		return ter.TecOBJECT_NOT_FOUND
 	}
 
@@ -152,7 +177,10 @@ func escrowCreatePreclaimMPT(view tx.LedgerView, rules *amendment.Rules, account
 
 	// Sender must hold MPToken
 	tokenKey := keylet.MPToken(issuanceKey.Key, accountID)
-	exists, _ := view.Exists(tokenKey)
+	exists, err := view.Exists(tokenKey)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
 	if !exists {
 		return ter.TecOBJECT_NOT_FOUND
 	}
@@ -168,10 +196,14 @@ func escrowCreatePreclaimMPT(view tx.LedgerView, rules *amendment.Rules, account
 	}
 
 	// Frozen checks (global lock on issuance or individual lock on token)
-	if isMPTFrozen(view, issuance.Flags, issuanceKey, accountID, issuerID) {
+	if frozen, result := isMPTFrozen(view, issuance.Flags, issuanceKey, accountID, issuerID); result != ter.TesSUCCESS {
+		return result
+	} else if frozen {
 		return ter.TecLOCKED
 	}
-	if isMPTFrozen(view, issuance.Flags, issuanceKey, destID, issuerID) {
+	if frozen, result := isMPTFrozen(view, issuance.Flags, issuanceKey, destID, issuerID); result != ter.TesSUCCESS {
+		return result
+	} else if frozen {
 		return ter.TecLOCKED
 	}
 
@@ -181,7 +213,10 @@ func escrowCreatePreclaimMPT(view tx.LedgerView, rules *amendment.Rules, account
 	}
 
 	// Balance check (ignore freeze since we already checked)
-	spendable := accountHoldsMPT(view, issuanceKey, accountID)
+	spendable, holdsResult := accountHoldsMPT(view, issuanceKey, accountID)
+	if holdsResult != ter.TesSUCCESS {
+		return holdsResult
+	}
 	if spendable <= 0 {
 		return ter.TecINSUFFICIENT_FUNDS
 	}
@@ -219,7 +254,11 @@ func escrowFinishPreclaimIOU(view tx.LedgerView, destID [20]byte, amount tx.Amou
 	}
 
 	// Deep freeze check on destination
-	if tx.IsDeepFrozen(view, destID, issuerID, amount.Currency) {
+	deepFrozen, deepFreezeResult := isIOUDeepFrozen(view, destID, issuerID, amount.Currency)
+	if deepFreezeResult != ter.TesSUCCESS {
+		return deepFreezeResult
+	}
+	if deepFrozen {
 		return ter.TecFROZEN
 	}
 
@@ -247,7 +286,10 @@ func escrowFinishPreclaimMPT(view tx.LedgerView, destID [20]byte, amount tx.Amou
 		return ter.TefINTERNAL
 	}
 	issuanceData, err := view.Read(issuanceKey)
-	if err != nil || issuanceData == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if issuanceData == nil {
 		return ter.TecOBJECT_NOT_FOUND
 	}
 
@@ -262,7 +304,9 @@ func escrowFinishPreclaimMPT(view tx.LedgerView, destID [20]byte, amount tx.Amou
 	}
 
 	// Frozen check on destination
-	if isMPTFrozen(view, issuance.Flags, issuanceKey, destID, issuerID) {
+	if frozen, result := isMPTFrozen(view, issuance.Flags, issuanceKey, destID, issuerID); result != ter.TesSUCCESS {
+		return result
+	} else if frozen {
 		return ter.TecLOCKED
 	}
 
@@ -313,7 +357,10 @@ func escrowCancelPreclaimMPT(view tx.LedgerView, accountID [20]byte, amount tx.A
 		return ter.TefINTERNAL
 	}
 	issuanceData, err := view.Read(issuanceKey)
-	if err != nil || issuanceData == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if issuanceData == nil {
 		return ter.TecOBJECT_NOT_FOUND
 	}
 
@@ -342,7 +389,10 @@ func escrowLockMPT(view tx.LedgerView, senderID [20]byte, amount tx.Amount) ter.
 	}
 
 	issuanceData, err := view.Read(issuanceKey)
-	if err != nil || issuanceData == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if issuanceData == nil {
 		return ter.TecOBJECT_NOT_FOUND
 	}
 
@@ -365,7 +415,10 @@ func escrowLockMPT(view tx.LedgerView, senderID [20]byte, amount tx.Amount) ter.
 	// 1. Update sender's MPToken: decrease MPTAmount, increase LockedAmount
 	tokenKey := keylet.MPToken(issuanceKey.Key, senderID)
 	tokenData, err := view.Read(tokenKey)
-	if err != nil || tokenData == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if tokenData == nil {
 		return ter.TecOBJECT_NOT_FOUND
 	}
 
@@ -438,6 +491,7 @@ func escrowUnlockIOU(
 	createAsset bool,
 	bumpDestOwnerCount bool,
 	reserveBase, reserveIncrement uint64,
+	numberContext state.NumberContext,
 ) ter.Result {
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
@@ -461,7 +515,10 @@ func escrowUnlockIOU(
 
 	trustLineKey := keylet.Line(receiverID, issuerID, amount.Currency)
 	trustLineData, err := view.Read(trustLineKey)
-	trustLineExists := err == nil && trustLineData != nil
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	trustLineExists := trustLineData != nil
 
 	if !trustLineExists && createAsset && !receiverIsIssuer {
 		// Post-fixCleanup3_2_0 the reserve check and owner-count bump are scoped to
@@ -482,7 +539,10 @@ func escrowUnlockIOU(
 		}
 		// Re-read after creation
 		trustLineData, err = view.Read(trustLineKey)
-		if err != nil || trustLineData == nil {
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if trustLineData == nil {
 			return ter.TecINTERNAL
 		}
 		trustLineExists = true
@@ -494,7 +554,10 @@ func escrowUnlockIOU(
 
 	// Compute transfer fee
 	// Get current rate from issuer, use min(lockedRate, currentRate)
-	currentRate := tx.GetTransferRateByID(view, issuerID)
+	currentRate, rateResult := getIOUTransferRate(view, issuerID)
+	if rateResult != ter.TesSUCCESS {
+		return rateResult
+	}
 	effectiveRate := lockedRate
 	if currentRate != 0 && currentRate < effectiveRate {
 		effectiveRate = currentRate
@@ -511,20 +574,34 @@ func escrowUnlockIOU(
 	if !senderIsIssuer && !receiverIsIssuer && effectiveRate != parityRate {
 		// fee = amount - divideRound(amount, rate, issue, true)
 		// finalAmt = amount - fee = divideRound(amount, rate, issue, true)
-		finalAmt = divideAmountByRate(amount, effectiveRate)
+		finalAmt = divideAmountByRate(amount, effectiveRate, numberContext)
 	}
 
 	// Validate the line limit if the receiver is not creating a new trust line
 	// (createAsset = false means receiver already submitted the finish tx)
 	if !createAsset {
-		if tr := checkTrustLineLimit(view, receiverID, issuerID, amount.Currency, finalAmt, issuerHigh); tr != ter.TesSUCCESS {
+		if tr := checkTrustLineLimit(
+			view,
+			receiverID,
+			issuerID,
+			amount.Currency,
+			finalAmt,
+			issuerHigh,
+			numberContext,
+		); tr != ter.TesSUCCESS {
 			return tr
 		}
 	}
 
 	// Credit the receiver via rippleCredit (issuer -> receiver)
 	if !receiverIsIssuer {
-		if tr := rippleCreditForEscrow(view, issuerID, receiverID, finalAmt); tr != ter.TesSUCCESS {
+		if tr := rippleCreditForEscrow(
+			view,
+			issuerID,
+			receiverID,
+			finalAmt,
+			numberContext,
+		); tr != ter.TesSUCCESS {
 			return tr
 		}
 	}
@@ -563,7 +640,10 @@ func escrowUnlockMPT(
 	}
 
 	issuanceData, err := view.Read(issuanceKey)
-	if err != nil || issuanceData == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if issuanceData == nil {
 		return ter.TecOBJECT_NOT_FOUND
 	}
 
@@ -578,7 +658,10 @@ func escrowUnlockMPT(
 	// Handle MPToken creation for receiver (from escrowUnlockApplyHelper)
 	if !receiverIsIssuer {
 		receiverTokenKey := keylet.MPToken(issuanceKey.Key, receiverID)
-		receiverExists, _ := view.Exists(receiverTokenKey)
+		receiverExists, existsErr := view.Exists(receiverTokenKey)
+		if existsErr != nil {
+			return ter.TefINTERNAL
+		}
 
 		if !receiverExists && createAsset {
 			// Post-fixCleanup3_2_0 the reserve check and owner-count bump are scoped
@@ -600,7 +683,10 @@ func escrowUnlockMPT(
 		}
 
 		// Re-check existence after potential creation
-		receiverExists, _ = view.Exists(receiverTokenKey)
+		receiverExists, existsErr = view.Exists(receiverTokenKey)
+		if existsErr != nil {
+			return ter.TefINTERNAL
+		}
 		if !receiverExists {
 			return ter.TecNO_PERMISSION
 		}
@@ -634,7 +720,10 @@ func escrowUnlockMPT(
 		// Increase receiver's MPTAmount by the net amount.
 		receiverTokenKey := keylet.MPToken(issuanceKey.Key, receiverID)
 		receiverTokenData, err := view.Read(receiverTokenKey)
-		if err != nil || receiverTokenData == nil {
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if receiverTokenData == nil {
 			return ter.TecOBJECT_NOT_FOUND
 		}
 
@@ -684,7 +773,10 @@ func escrowUnlockMPT(
 
 	senderTokenKey := keylet.MPToken(issuanceKey.Key, senderID)
 	senderTokenData, err := view.Read(senderTokenKey)
-	if err != nil || senderTokenData == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if senderTokenData == nil {
 		return ter.TecOBJECT_NOT_FOUND
 	}
 
@@ -720,6 +812,78 @@ func escrowUnlockMPT(
 
 // 6. Shared Utilities
 
+func getIOUTransferRate(view tx.LedgerView, issuerID [20]byte) (uint32, ter.Result) {
+	issuer, err := tx.ReadAccountRoot(view, issuerID)
+	if err != nil {
+		return 0, ter.TefINTERNAL
+	}
+	if issuer == nil {
+		return 0, ter.TecNO_ISSUER
+	}
+	if issuer.TransferRate == 0 {
+		return parityRate, ter.TesSUCCESS
+	}
+	return issuer.TransferRate, ter.TesSUCCESS
+}
+
+func isIOUFrozen(
+	view tx.LedgerView,
+	accountID, issuerID [20]byte,
+	currency string,
+) (bool, ter.Result) {
+	issuer, err := tx.ReadAccountRoot(view, issuerID)
+	if err != nil {
+		return false, ter.TefINTERNAL
+	}
+	if issuer == nil {
+		return false, ter.TecNO_ISSUER
+	}
+	if issuer.Flags&state.LsfGlobalFreeze != 0 {
+		return true, ter.TesSUCCESS
+	}
+	if accountID == issuerID {
+		return false, ter.TesSUCCESS
+	}
+
+	data, err := view.Read(keylet.Line(accountID, issuerID, currency))
+	if err != nil {
+		return false, ter.TefINTERNAL
+	}
+	if data == nil {
+		return false, ter.TesSUCCESS
+	}
+	line, err := state.ParseRippleState(data)
+	if err != nil {
+		return false, ter.TefINTERNAL
+	}
+	if state.CompareAccountIDs(issuerID, accountID) > 0 {
+		return line.Flags&state.LsfHighFreeze != 0, ter.TesSUCCESS
+	}
+	return line.Flags&state.LsfLowFreeze != 0, ter.TesSUCCESS
+}
+
+func isIOUDeepFrozen(
+	view tx.LedgerView,
+	accountID, issuerID [20]byte,
+	currency string,
+) (bool, ter.Result) {
+	if currency == "" || currency == "XRP" || accountID == issuerID {
+		return false, ter.TesSUCCESS
+	}
+	data, err := view.Read(keylet.Line(accountID, issuerID, currency))
+	if err != nil {
+		return false, ter.TefINTERNAL
+	}
+	if data == nil {
+		return false, ter.TesSUCCESS
+	}
+	line, err := state.ParseRippleState(data)
+	if err != nil {
+		return false, ter.TefINTERNAL
+	}
+	return line.Flags&(state.LsfLowDeepFreeze|state.LsfHighDeepFreeze) != 0, ter.TesSUCCESS
+}
+
 // requireAuthIOU checks if an issuer requires authorization and if the account
 // is authorized on the trust line.
 // Reference: rippled View.cpp requireAuth(view, Issue, account) for IOU
@@ -748,7 +912,10 @@ func requireAuthIOU(view tx.LedgerView, issuerID, accountID [20]byte, currency s
 	// Issuer requires auth — check if the trust line exists and is authorized
 	trustLineKey := keylet.Line(accountID, issuerID, currency)
 	trustLineData, err := view.Read(trustLineKey)
-	if err != nil || trustLineData == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if trustLineData == nil {
 		return ter.TecNO_LINE
 	}
 
@@ -792,7 +959,10 @@ func requireMPTAuthForEscrow(view tx.LedgerView, issuanceFlags uint32, issuanceK
 	// WeakAuth: if MPToken doesn't exist, pass (destination may not hold yet)
 	tokenKey := keylet.MPToken(issuanceKey.Key, accountID)
 	tokenData, err := view.Read(tokenKey)
-	if err != nil || tokenData == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if tokenData == nil {
 		// WeakAuth: no token is OK
 		return ter.TesSUCCESS
 	}
@@ -813,30 +983,33 @@ func requireMPTAuthForEscrow(view tx.LedgerView, issuanceFlags uint32, issuanceK
 // isMPTFrozen checks if an MPT is frozen for a given account.
 // Checks global lock on issuance + individual lock on MPToken.
 // Reference: rippled View.cpp isFrozen(view, account, MPTIssue)
-func isMPTFrozen(view tx.LedgerView, issuanceFlags uint32, issuanceKey keylet.Keylet, accountID, issuerID [20]byte) bool {
+func isMPTFrozen(view tx.LedgerView, issuanceFlags uint32, issuanceKey keylet.Keylet, accountID, issuerID [20]byte) (bool, ter.Result) {
 	// Issuer is never frozen
 	if issuerID == accountID {
-		return false
+		return false, ter.TesSUCCESS
 	}
 
 	// Global lock: issuance has lsfMPTLocked
 	if issuanceFlags&entry.LsfMPTLocked != 0 {
-		return true
+		return true, ter.TesSUCCESS
 	}
 
 	// Individual lock: MPToken has lsfMPTLocked
 	tokenKey := keylet.MPToken(issuanceKey.Key, accountID)
 	tokenData, err := view.Read(tokenKey)
-	if err != nil || tokenData == nil {
-		return false
+	if err != nil {
+		return false, ter.TefINTERNAL
+	}
+	if tokenData == nil {
+		return false, ter.TesSUCCESS
 	}
 
 	token, err := state.ParseMPToken(tokenData)
 	if err != nil {
-		return false
+		return false, ter.TefINTERNAL
 	}
 
-	return token.Flags&entry.LsfMPTLocked != 0
+	return token.Flags&entry.LsfMPTLocked != 0, ter.TesSUCCESS
 }
 
 // canTransferMPT checks if MPT can be transferred between two accounts.
@@ -980,7 +1153,9 @@ func createTrustLineForEscrow(
 	// rippled bumps the soon-erased escrow SLE instead of a real account, so the
 	// caller passes bumpOwnerCount=false and no account is charged for the line.
 	if bumpOwnerCount {
-		adjustOwnerCountViaView(view, destID, 1)
+		if result := adjustOwnerCountViaView(view, destID, 1); result != ter.TesSUCCESS {
+			return result
+		}
 	}
 
 	return ter.TesSUCCESS
@@ -989,8 +1164,20 @@ func createTrustLineForEscrow(
 // rippleCreditForEscrow credits IOU from issuer to receiver by modifying the
 // trust line balance. This is the unlock-side direction of rippleCreditEscrow.
 // Reference: rippled View.cpp rippleCredit(issuer, receiver, amount)
-func rippleCreditForEscrow(view tx.LedgerView, issuerID, receiverID [20]byte, amount tx.Amount) ter.Result {
-	return rippleCreditEscrow(view, issuerID, receiverID, amount, ter.TecNO_LINE, ter.TecNO_LINE)
+func rippleCreditForEscrow(
+	view tx.LedgerView,
+	issuerID, receiverID [20]byte,
+	amount tx.Amount,
+	numberContext state.NumberContext,
+) ter.Result {
+	return rippleCreditEscrow(
+		view,
+		issuerID,
+		receiverID,
+		amount,
+		ter.TecNO_LINE,
+		numberContext,
+	)
 }
 
 // rippleCreditEscrow moves an IOU amount from payerID to payeeID along their
@@ -999,11 +1186,16 @@ func rippleCreditForEscrow(view tx.LedgerView, issuerID, receiverID [20]byte, am
 // low account owes the high account, so the payer subtracts when it is the low
 // account and adds when it is the high account.
 //
-// readErrResult is returned on a genuine view read error and missingResult when
-// the line is absent; the lock and unlock sites differ only in the read-error
-// mapping (tecINTERNAL vs tecNO_LINE), so each passes its own.
+// A genuine view read error is internal; missingResult is returned when the
+// line is absent.
 // Reference: rippled View.cpp rippleCredit(sender, receiver, amount).
-func rippleCreditEscrow(view tx.LedgerView, payerID, payeeID [20]byte, amount tx.Amount, readErrResult, missingResult ter.Result) ter.Result {
+func rippleCreditEscrow(
+	view tx.LedgerView,
+	payerID, payeeID [20]byte,
+	amount tx.Amount,
+	missingResult ter.Result,
+	numberContext state.NumberContext,
+) ter.Result {
 	if amount.IsZero() {
 		return ter.TesSUCCESS
 	}
@@ -1011,7 +1203,7 @@ func rippleCreditEscrow(view tx.LedgerView, payerID, payeeID [20]byte, amount tx
 	trustLineKey := keylet.Line(payerID, payeeID, amount.Currency)
 	trustLineData, err := view.Read(trustLineKey)
 	if err != nil {
-		return readErrResult
+		return ter.TefINTERNAL
 	}
 	if trustLineData == nil {
 		return missingResult
@@ -1024,13 +1216,21 @@ func rippleCreditEscrow(view tx.LedgerView, payerID, payeeID [20]byte, amount tx
 
 	payerIsLow := state.CompareAccountIDs(payerID, payeeID) < 0
 	if payerIsLow {
-		newBalance, err := rs.Balance.Sub(amount)
+		newBalance, err := rs.Balance.SubWithNumberContext(
+			amount,
+			numberContext,
+			state.RoundToNearest,
+		)
 		if err != nil {
 			return ter.TefINTERNAL
 		}
 		rs.Balance = newBalance
 	} else {
-		newBalance, err := rs.Balance.Add(amount)
+		newBalance, err := rs.Balance.AddWithNumberContext(
+			amount,
+			numberContext,
+			state.RoundToNearest,
+		)
 		if err != nil {
 			return ter.TefINTERNAL
 		}
@@ -1050,10 +1250,20 @@ func rippleCreditEscrow(view tx.LedgerView, payerID, payeeID [20]byte, amount tx
 
 // checkTrustLineLimit verifies the trust line limit isn't exceeded by the unlock.
 // Reference: rippled Escrow.cpp lines 908-931
-func checkTrustLineLimit(view tx.LedgerView, receiverID, issuerID [20]byte, currency string, finalAmount tx.Amount, issuerHigh bool) ter.Result {
+func checkTrustLineLimit(
+	view tx.LedgerView,
+	receiverID, issuerID [20]byte,
+	currency string,
+	finalAmount tx.Amount,
+	issuerHigh bool,
+	numberContext state.NumberContext,
+) ter.Result {
 	trustLineKey := keylet.Line(receiverID, issuerID, currency)
 	trustLineData, err := view.Read(trustLineKey)
-	if err != nil || trustLineData == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if trustLineData == nil {
 		return ter.TecINTERNAL
 	}
 
@@ -1077,7 +1287,11 @@ func checkTrustLineLimit(view tx.LedgerView, receiverID, issuerID [20]byte, curr
 		lineBalance = lineBalance.Negate()
 	}
 
-	newBalance, err := lineBalance.Add(finalAmount)
+	newBalance, err := lineBalance.AddWithNumberContext(
+		finalAmount,
+		numberContext,
+		state.RoundToNearest,
+	)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
@@ -1093,13 +1307,24 @@ func checkTrustLineLimit(view tx.LedgerView, receiverID, issuerID [20]byte, curr
 // divideAmountByRate computes amount * QUALITY_ONE / rate for IOU amounts.
 // This implements rippled's divideRound(amount, rate, issue, true) for escrow.
 // Reference: rippled Rate2.cpp divideRound → divRound
-func divideAmountByRate(amount tx.Amount, rate uint32) tx.Amount {
+func divideAmountByRate(
+	amount tx.Amount,
+	rate uint32,
+	numberContext state.NumberContext,
+) tx.Amount {
 	if rate == parityRate {
 		return amount
 	}
 
 	rateAmount := state.NewIssuedAmountFromValue(int64(rate), -9, "", "")
-	return state.DivRound(amount, rateAmount, amount.Currency, amount.Issuer, true)
+	return state.DivRoundWithNumberContext(
+		amount,
+		rateAmount,
+		amount.Currency,
+		amount.Issuer,
+		numberContext,
+		true,
+	)
 }
 
 // createMPTokenForEscrow creates a new MPToken SLE for holderID during escrow unlock.
@@ -1136,7 +1361,7 @@ func createMPTokenForEscrow(
 		dir.Owner = holderID
 	})
 	if err != nil {
-		return ter.TecDIR_FULL
+		return mapDirInsertError(err)
 	}
 	tokenData.OwnerNode = dirResult.Page
 
@@ -1151,7 +1376,9 @@ func createMPTokenForEscrow(
 	// On the cancel path rippled bumps the soon-erased escrow SLE rather than a
 	// real account, so the caller passes bumpOwnerCount=false.
 	if bumpOwnerCount {
-		adjustOwnerCountViaView(view, destID, 1)
+		if result := adjustOwnerCountViaView(view, destID, 1); result != ter.TesSUCCESS {
+			return result
+		}
 	}
 
 	return ter.TesSUCCESS
@@ -1162,21 +1389,24 @@ func createMPTokenForEscrow(
 // accountHoldsIOU returns the IOU balance for an account (ignoring freeze).
 // Positive balance means the account holds tokens.
 // Reference: rippled View.cpp accountHolds with fhIGNORE_FREEZE
-func accountHoldsIOU(view tx.LedgerView, accountID, issuerID [20]byte, currency string) tx.Amount {
+func accountHoldsIOU(view tx.LedgerView, accountID, issuerID [20]byte, currency string) (tx.Amount, ter.Result) {
 	issuerStr, err := state.EncodeAccountID(issuerID)
 	if err != nil {
-		return tx.NewIssuedAmount(0, 0, currency, "")
+		return tx.NewIssuedAmount(0, 0, currency, ""), ter.TefINTERNAL
 	}
 
 	trustLineKey := keylet.Line(accountID, issuerID, currency)
 	trustLineData, err := view.Read(trustLineKey)
-	if err != nil || trustLineData == nil {
-		return tx.NewIssuedAmount(0, 0, currency, issuerStr)
+	if err != nil {
+		return tx.NewIssuedAmount(0, 0, currency, issuerStr), ter.TefINTERNAL
+	}
+	if trustLineData == nil {
+		return tx.NewIssuedAmount(0, 0, currency, issuerStr), ter.TecNO_LINE
 	}
 
 	rs, err := state.ParseRippleState(trustLineData)
 	if err != nil {
-		return tx.NewIssuedAmount(0, 0, currency, issuerStr)
+		return tx.NewIssuedAmount(0, 0, currency, issuerStr), ter.TefINTERNAL
 	}
 
 	// Determine balance based on canonical ordering
@@ -1187,38 +1417,63 @@ func accountHoldsIOU(view tx.LedgerView, accountID, issuerID [20]byte, currency 
 	}
 
 	if balance.Signum() <= 0 {
-		return tx.NewIssuedAmount(0, 0, currency, issuerStr)
+		return tx.NewIssuedAmount(0, 0, currency, issuerStr), ter.TesSUCCESS
 	}
 
-	return state.NewIssuedAmountFromValue(balance.IOU().Mantissa(), balance.IOU().Exponent(), currency, issuerStr)
+	return state.NewIssuedAmountFromValue(balance.IOU().Mantissa(), balance.IOU().Exponent(), currency, issuerStr), ter.TesSUCCESS
 }
 
 // accountHoldsMPT returns the MPT balance for an account (ignoring freeze/auth).
 // Reference: rippled View.cpp accountHolds(view, account, MPTIssue, fhIGNORE_FREEZE, ahIGNORE_AUTH)
-func accountHoldsMPT(view tx.LedgerView, issuanceKey keylet.Keylet, accountID [20]byte) int64 {
+func accountHoldsMPT(view tx.LedgerView, issuanceKey keylet.Keylet, accountID [20]byte) (int64, ter.Result) {
 	tokenKey := keylet.MPToken(issuanceKey.Key, accountID)
 	tokenData, err := view.Read(tokenKey)
-	if err != nil || tokenData == nil {
-		return 0
+	if err != nil {
+		return 0, ter.TefINTERNAL
+	}
+	if tokenData == nil {
+		return 0, ter.TecOBJECT_NOT_FOUND
 	}
 
 	token, err := state.ParseMPToken(tokenData)
 	if err != nil {
-		return 0
+		return 0, ter.TefINTERNAL
 	}
 
-	return int64(token.MPTAmount)
+	return int64(token.MPTAmount), ter.TesSUCCESS
 }
 
-// adjustOwnerCountViaView adjusts an account's OwnerCount by delta, delegating
-// to the canonical tx.AdjustOwnerCount so the write-back goes through the single
-// shared AccountRoot serializer (state.SerializeAccountRoot). A hand-rolled
-// serializer here previously dropped a present-but-zero sfAccountTxnID and
-// mis-encoded sfDomain, diverging from the canonical path on the token-escrow
-// finish owner-count bump and forking account_hash (#741 review). Mirrors how
-// the nftoken package delegates the same operation.
-func adjustOwnerCountViaView(view tx.LedgerView, accountID [20]byte, adj int) {
-	_ = tx.AdjustOwnerCount(view, accountID, adj)
+func adjustOwnerCountViaView(view tx.LedgerView, accountID [20]byte, adj int) ter.Result {
+	data, err := view.Read(keylet.Account(accountID))
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if data == nil {
+		return ter.TefBAD_LEDGER
+	}
+	account, err := state.ParseAccountRoot(data)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if adj < 0 && account.OwnerCount < uint32(-adj) {
+		return ter.TefBAD_LEDGER
+	}
+	account.OwnerCount = tx.ConfineOwnerCount(account.OwnerCount, adj)
+	updated, err := state.SerializeAccountRoot(account)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if err := view.Update(keylet.Account(accountID), updated); err != nil {
+		return ter.TefINTERNAL
+	}
+	return ter.TesSUCCESS
+}
+
+func mapDirInsertError(err error) ter.Result {
+	if errors.Is(err, state.ErrDirFull) {
+		return ter.TecDIR_FULL
+	}
+	return ter.TefINTERNAL
 }
 
 // computeMPTTransferFee computes the final amount after applying MPT transfer fee.
@@ -1231,20 +1486,24 @@ func computeMPTTransferFee(
 	mptHexID string,
 	senderID, receiverID [20]byte,
 	originalAmount uint64,
-) (uint64, uint64) {
+	numberContext state.NumberContext,
+) (uint64, uint64, ter.Result) {
 	issuanceKey, err := mptIssuanceKeyFromHex(mptHexID)
 	if err != nil {
-		return originalAmount, originalAmount
+		return originalAmount, originalAmount, ter.TefINTERNAL
 	}
 
 	issuanceData, err := view.Read(issuanceKey)
-	if err != nil || issuanceData == nil {
-		return originalAmount, originalAmount
+	if err != nil {
+		return originalAmount, originalAmount, ter.TefINTERNAL
+	}
+	if issuanceData == nil {
+		return originalAmount, originalAmount, ter.TecOBJECT_NOT_FOUND
 	}
 
 	issuance, err := state.ParseMPTokenIssuance(issuanceData)
 	if err != nil {
-		return originalAmount, originalAmount
+		return originalAmount, originalAmount, ter.TefINTERNAL
 	}
 
 	issuerID := issuance.Issuer
@@ -1286,11 +1545,16 @@ func computeMPTTransferFee(
 			panic("MPT divRound overflow")
 		}
 
-		finalAmount := uint64(state.DivRoundMPT(amount, rate, true))
-		return originalAmount, finalAmount
+		finalAmount := uint64(state.DivRoundMPTWithNumberContext(
+			amount,
+			rate,
+			numberContext,
+			true,
+		))
+		return originalAmount, finalAmount, ter.TesSUCCESS
 	}
 
-	return originalAmount, originalAmount
+	return originalAmount, originalAmount, ter.TesSUCCESS
 }
 
 // canAddIOUAmounts checks whether adding two IOU amounts would lose unacceptable
@@ -1303,19 +1567,27 @@ func computeMPTTransferFee(
 //	lhs = ((a - b) + b) / a - 1
 //	rhs = ((b - a) + a) / b - 1
 //	return |lhs| + |rhs| <= 1e-4
-func canAddIOUAmounts(a, b tx.Amount) bool {
+func canAddIOUAmounts(a, b tx.Amount, numberContext state.NumberContext) bool {
 	// If either is zero, addition is always safe
 	if a.IsZero() || b.IsZero() {
 		return true
 	}
 
 	// Perform (a - b) + b using IOU precision (this is where precision loss occurs)
-	aMinusB, _ := a.Sub(b)
-	roundTripA, _ := aMinusB.Add(b)
+	aMinusB, _ := a.SubWithNumberContext(b, numberContext, state.RoundToNearest)
+	roundTripA, _ := aMinusB.AddWithNumberContext(
+		b,
+		numberContext,
+		state.RoundToNearest,
+	)
 
 	// Perform (b - a) + a using IOU precision
-	bMinusA, _ := b.Sub(a)
-	roundTripB, _ := bMinusA.Add(a)
+	bMinusA, _ := b.SubWithNumberContext(a, numberContext, state.RoundToNearest)
+	roundTripB, _ := bMinusA.AddWithNumberContext(
+		a,
+		numberContext,
+		state.RoundToNearest,
+	)
 
 	// Convert to big.Rat for exact division and comparison
 	ratA := iouAmountToRat(a)

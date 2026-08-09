@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/peertls"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 )
@@ -24,12 +26,18 @@ import (
 // this matters only for direct external callers driving many parallel
 // Connects.
 func (o *Overlay) Connect(addr string) error {
+	return o.ConnectContext(nil, addr)
+}
+
+// ConnectContext initiates an outbound connection whose handshake is also
+// bounded by ctx. An established peer remains owned by the overlay lifecycle.
+func (o *Overlay) ConnectContext(ctx context.Context, addr string) error {
 	done, ok := o.beginPeerStart()
 	if !ok {
 		return ErrConnectionClosed
 	}
 	defer done()
-	return o.connectReserved(addr, nil)
+	return o.connectReservedContext(ctx, addr, nil)
 }
 
 func (o *Overlay) beginPeerStart() (func(), bool) {
@@ -43,6 +51,10 @@ func (o *Overlay) beginPeerStart() (func(), bool) {
 }
 
 func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) error {
+	return o.connectReservedContext(nil, addr, bootstrapLease)
+}
+
+func (o *Overlay) connectReservedContext(connectCtx context.Context, addr string, bootstrapLease *bootstrapLease) error {
 	endpoint, err := ParseEndpoint(addr)
 	if err != nil {
 		return err
@@ -53,6 +65,24 @@ func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) e
 	o.lifecycleMu.Unlock()
 	if baseCtx == nil {
 		return errors.New("overlay: Connect called before Run")
+	}
+	attemptCtx := baseCtx
+	var cancelAttempt context.CancelFunc
+	var stopOverlayCancel func() bool
+	if connectCtx != nil {
+		attemptCtx, cancelAttempt = context.WithCancel(connectCtx)
+		stopOverlayCancel = context.AfterFunc(baseCtx, cancelAttempt)
+		defer func() {
+			stopOverlayCancel()
+			cancelAttempt()
+		}()
+	}
+	ctx, cancel := context.WithTimeout(attemptCtx, o.cfg.ConnectTimeout)
+	defer cancel()
+
+	endpoint, err = o.resolveOutboundEndpoint(ctx, endpoint)
+	if err != nil {
+		return err
 	}
 
 	// Check if already connected
@@ -65,6 +95,23 @@ func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) e
 		return ErrMaxPeersReached
 	}
 
+	var outboundUsage *resource.Consumer
+	if o.resourceManager != nil {
+		outboundUsage = o.resourceManager.NewOutboundEndpoint(endpoint.String())
+		if outboundUsage == nil {
+			return ErrMaxPeersReached
+		}
+		if outboundUsage.Disconnect() {
+			outboundUsage.Release()
+			return ErrEndpointBanned
+		}
+		defer func() {
+			if outboundUsage != nil {
+				outboundUsage.Release()
+			}
+		}()
+	}
+
 	peerID := PeerID(o.nextID.Add(1))
 	peer := NewPeer(peerID, endpoint, false, o.identity, o.events)
 	peer.SetDroppedEventsCounter(&o.droppedEvents)
@@ -72,15 +119,12 @@ func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) e
 	peer.SetConsensusControlEvents(o.consensusControlEvents)
 	peer.SetAcquisitionEvents(o.acquisitionEvents)
 	peer.SetManifestMessages(o.manifestMessages)
-	peer.SetManifestReadBudget(o.manifestReadBudget)
+	peer.SetInboundReadBudget(o.inboundReadBudget)
 	peer.SetManifestSpoolDir(o.manifestSpoolDir)
 	peer.handshakeCfg = o.handshakeConfigFor()
 	peer.onRedirect = func(peerIPs []string) {
 		o.ingestRedirectEndpoints(peerIPs, peerID)
 	}
-
-	ctx, cancel := context.WithTimeout(baseCtx, o.cfg.ConnectTimeout)
-	defer cancel()
 
 	certPEM, keyPEM, err := o.identity.TLSCertificatePEM()
 	if err != nil {
@@ -136,10 +180,11 @@ func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) e
 		return ErrAlreadyConnected
 	}
 
-	if err := o.addPeer(peer); err != nil {
+	if err := o.addPeerWithUsage(peer, outboundUsage); err != nil {
 		peer.Close()
 		return err
 	}
+	outboundUsage = nil
 	if bootstrapLease != nil {
 		o.trackPeerBootstrap(peerID, bootstrapLease)
 	}
@@ -148,20 +193,9 @@ func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) e
 	go func() {
 		defer o.peerWG.Done()
 		err := peer.Run(baseCtx)
-		if bootstrapLease != nil && baseCtx.Err() == nil {
-			retry := recentConnectAttempt
-			var frameErr *FrameReadError
-			if errors.As(err, &frameErr) && frameErr.MessageType == TypeManifests && frameErr.BytesRead > 0 {
-				retry = bootstrapPartialRetry
-				slog.Info("Bootstrap source quarantined", "t", "Overlay", "addr", addr,
-					"retry_after", retry, "wire_size", frameErr.WireSize,
-					"compressed", frameErr.Compressed, "bytes_read", frameErr.BytesRead,
-					"elapsed", frameErr.Elapsed, "rate", frameReadRate(frameErr.BytesRead, frameErr.Elapsed),
-					"projected", projectedFrameDuration(frameErr.WireSize, frameErr.BytesRead, frameErr.Elapsed))
-			}
-			o.discovery.delayBootstrapRetry(addr, retry)
-		}
-		o.onBootstrapTransportEnd(peerID, bootstrapLease != nil && peer.bootstrapManifestPending.Load(), baseCtx.Err() != nil)
+		stopping := baseCtx.Err() != nil
+		o.delayPeerRetry(addr, bootstrapLease != nil, err, stopping)
+		o.onBootstrapTransportEnd(peerID, bootstrapLease != nil && peer.bootstrapManifestPending.Load(), stopping)
 		if err != nil {
 			slog.Info("Peer run ended", "t", "Overlay", "addr", addr, "err", err)
 			o.notePeerRunEnded(err)
@@ -170,6 +204,57 @@ func (o *Overlay) connectReserved(addr string, bootstrapLease *bootstrapLease) e
 	}()
 
 	return nil
+}
+
+func (o *Overlay) resolveOutboundEndpoint(ctx context.Context, endpoint Endpoint) (Endpoint, error) {
+	if addr, err := netip.ParseAddr(endpoint.Host); err == nil && addr.Zone() == "" {
+		endpoint.Host = addr.Unmap().String()
+		return endpoint, nil
+	}
+	lookupIP := net.DefaultResolver.LookupIPAddr
+	if o.discovery != nil && o.discovery.lookupIP != nil {
+		lookupIP = o.discovery.lookupIP
+	}
+	addresses, err := lookupIP(ctx, endpoint.Host)
+	if err != nil {
+		return Endpoint{}, fmt.Errorf("%w: resolve %q: %v", ErrInvalidEndpoint, endpoint.Host, err)
+	}
+	for _, candidate := range addresses {
+		addr, ok := netip.AddrFromSlice(candidate.IP)
+		if !ok || addr.Zone() != "" {
+			continue
+		}
+		endpoint.Host = addr.Unmap().String()
+		return endpoint, nil
+	}
+	return Endpoint{}, fmt.Errorf("%w: hostname %q has no IP addresses", ErrInvalidEndpoint, endpoint.Host)
+}
+
+func (o *Overlay) delayPeerRetry(addr string, bootstrap bool, err error, stopping bool) {
+	if stopping {
+		return
+	}
+	retry := time.Duration(0)
+	if bootstrap {
+		retry = recentConnectAttempt
+	}
+	var frameErr *FrameReadError
+	var localSpoolErr *manifestSpoolLocalError
+	if bootstrap &&
+		errors.As(err, &frameErr) &&
+		frameErr.MessageType == message.TypeManifests &&
+		frameErr.BytesRead > 0 &&
+		!errors.As(frameErr.Err, &localSpoolErr) {
+		retry = bootstrapPartialRetry
+		slog.Info("Manifest source quarantined", "t", "Overlay", "addr", addr,
+			"retry_after", retry, "wire_size", frameErr.WireSize,
+			"compressed", frameErr.Compressed, "bytes_read", frameErr.BytesRead,
+			"elapsed", frameErr.Elapsed, "rate", frameReadRate(frameErr.BytesRead, frameErr.Elapsed),
+			"projected", projectedFrameDuration(frameErr.WireSize, frameErr.BytesRead, frameErr.Elapsed))
+	}
+	if retry > 0 {
+		o.discovery.delayConnectRetry(addr, retry)
+	}
 }
 
 func (o *Overlay) trackPeerBootstrap(peerID PeerID, lease *bootstrapLease) {
@@ -333,6 +418,7 @@ func (o *Overlay) Cluster() *cluster.Registry { return o.cluster }
 func (o *Overlay) SetTxProvider(fn func(hash [32]byte) ([]byte, bool)) {
 	o.providersMu.Lock()
 	o.txProvider = fn
+	o.txRecordProvider = nil
 	o.providersMu.Unlock()
 }
 
@@ -340,6 +426,22 @@ func (o *Overlay) txProviderSnapshot() func(hash [32]byte) ([]byte, bool) {
 	o.providersMu.RLock()
 	defer o.providersMu.RUnlock()
 	return o.txProvider
+}
+
+// SetTxRecordProvider installs the authoritative transaction-cache lookup for
+// tx-reduce-relay. Unlike SetTxProvider, this provider may return transactions
+// held by the transaction queue and carries their status/deferred state.
+func (o *Overlay) SetTxRecordProvider(fn func(hash [32]byte) (TxRecord, bool)) {
+	o.providersMu.Lock()
+	o.txRecordProvider = fn
+	o.txProvider = nil
+	o.providersMu.Unlock()
+}
+
+func (o *Overlay) txRecordProviderSnapshot() func(hash [32]byte) (TxRecord, bool) {
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
+	return o.txRecordProvider
 }
 
 // SetNodeObjectProvider installs the node-store lookup used by the
@@ -361,11 +463,10 @@ func (o *Overlay) nodeObjectProviderSnapshot() func(hash [32]byte) ([]byte, bool
 	return o.nodeObjectProvider
 }
 
-// SetOpenLedgerHashesProvider installs the tx-hash snapshot reader
-// used by the periodic TMHaveTransactions emission. The provider
-// returns a (possibly empty) slice of 32-byte tx hashes currently in
-// the open-ledger view. The emitter only fires when EnableTxReduceRelay
-// is true AND this provider is wired; nil leaves the gossip dark.
+// SetOpenLedgerHashesProvider installs the legacy open-ledger hash snapshot
+// reader. Per-peer deferred queues now drive periodic TMHaveTransactions
+// emission; this hook remains available to embedded callers that use it for
+// diagnostics.
 func (o *Overlay) SetOpenLedgerHashesProvider(fn func() [][32]byte) {
 	o.providersMu.Lock()
 	o.openLedgerHashesProvider = fn
@@ -397,18 +498,18 @@ func (o *Overlay) clusterFeeSinkSnapshot() func(fee uint32) {
 	return o.clusterFeeSink
 }
 
-// SetLocalLoadFeeProvider installs the reader that supplies our own
-// LoadFee for the outbound TMCluster gossip self-entry. nil-safe —
-// sendClusterUpdate falls back to 0 when unwired. Guarded by providersMu:
-// read concurrently by the maintenance loop's sendClusterUpdate while the
-// server wires it after Run has launched.
-func (o *Overlay) SetLocalLoadFeeProvider(fn func() uint32) {
+// SetLocalLoadFeeProvider installs the reader that supplies our own LoadFee
+// and validated-ledger age for the outbound TMCluster gossip self-entry.
+// nil-safe — sendClusterUpdate falls back to 0 when unwired. Guarded by
+// providersMu: read concurrently by the maintenance loop's sendClusterUpdate
+// while the server wires it after Run has launched.
+func (o *Overlay) SetLocalLoadFeeProvider(fn func() (uint32, time.Duration)) {
 	o.providersMu.Lock()
 	o.localLoadFeeProvider = fn
 	o.providersMu.Unlock()
 }
 
-func (o *Overlay) localLoadFeeProviderSnapshot() func() uint32 {
+func (o *Overlay) localLoadFeeProviderSnapshot() func() (uint32, time.Duration) {
 	o.providersMu.RLock()
 	defer o.providersMu.RUnlock()
 	return o.localLoadFeeProvider
@@ -462,9 +563,12 @@ func (o *Overlay) LedgerDataMessages() <-chan *InboundMessage {
 	return o.ledgerData
 }
 
-// Identity returns the node's identity.
-func (o *Overlay) Identity() *Identity {
-	return o.identity
+// NodePublicKey returns the node's base58-encoded public key.
+func (o *Overlay) NodePublicKey() string {
+	if o == nil || o.identity == nil {
+		return ""
+	}
+	return o.identity.EncodedPublicKey()
 }
 
 // IssueSquelch hand-rolls a TMSquelch frame to the given peer, marking
@@ -498,40 +602,65 @@ func (o *Overlay) IsValidatorSquelchedOnPeer(peerID PeerID, validator []byte) bo
 // reconnects from the same address inherits its prior balance — this
 // is what enables charge-based blacklisting.
 func (o *Overlay) addPeer(peer *Peer) error {
+	return o.addPeerWithUsage(peer, nil)
+}
+
+func (o *Overlay) addPeerWithUsage(peer *Peer, usage *resource.Consumer) error {
+	if o.cluster != nil {
+		if member, ok := o.cluster.Member(peer.RemotePublicKeyBytes()); ok {
+			peer.resourceGossipOrigin(member.Name)
+		}
+	}
+	resourceUsage := usage
+	acquiredUsage := false
+	if o.resourceManager != nil && resourceUsage == nil {
+		addr := postHandshakeEndpoint(peer, peer.Endpoint()).String()
+		switch {
+		case peer.Inbound():
+			resourceUsage = o.resourceManager.NewInboundEndpoint(addr)
+		default:
+			resourceUsage = o.resourceManager.NewOutboundEndpoint(addr)
+		}
+		if resourceUsage == nil {
+			return ErrMaxPeersReached
+		}
+		acquiredUsage = true
+	}
+	releaseAcquiredUsage := func() {
+		if acquiredUsage {
+			resourceUsage.Release()
+		}
+	}
+
 	key, hasKey := remotePeerKey(peer)
 	endpoint := endpointKey(postHandshakeEndpoint(peer, peer.Endpoint()))
 	o.peersMu.Lock()
 	if _, exists := o.peers[peer.ID()]; exists {
 		o.peersMu.Unlock()
+		releaseAcquiredUsage()
 		return ErrAlreadyConnected
 	}
 	if owner, exists := o.peerEndpoints[endpoint]; exists && owner != peer.ID() {
 		o.peersMu.Unlock()
+		releaseAcquiredUsage()
 		return ErrAlreadyConnected
 	}
 	if hasKey {
 		if owner, exists := o.peerKeys[key]; exists && owner != peer.ID() {
 			o.peersMu.Unlock()
+			releaseAcquiredUsage()
 			return ErrAlreadyConnected
 		}
 		o.peerKeys[key] = peer.ID()
 	}
+	o.attachOutboundBudget(peer)
 	o.peerEndpoints[endpoint] = peer.ID()
 	o.peers[peer.ID()] = peer
 	delete(o.pendingInbound, peer.ID())
 	o.peersMu.Unlock()
 
 	if o.resourceManager != nil {
-		addr := peer.Endpoint().String()
-		var c *resource.Consumer
-		if o.isClusterPeer(peer) {
-			c = o.resourceManager.NewUnlimitedEndpoint(addr)
-		} else if peer.Inbound() {
-			c = o.resourceManager.NewInboundEndpoint(addr)
-		} else {
-			c = o.resourceManager.NewOutboundEndpoint(addr)
-		}
-		peer.attachUsage(c, o.bumpPeerDisconnectCharges)
+		peer.attachUsage(resourceUsage, o.bumpPeerDisconnectCharges)
 	}
 	if !peer.Inbound() {
 		o.discovery.MarkConnected(peer.Endpoint().String(), peer.ID())
@@ -583,11 +712,11 @@ func (o *Overlay) removePeer(peerID PeerID) {
 }
 
 func remotePeerKey(peer *Peer) (string, bool) {
-	key := peer.RemotePublicKey()
-	if key == nil {
+	key := peer.RemotePublicKeyBytes()
+	if len(key) == 0 {
 		return "", false
 	}
-	return string(key.Bytes()), true
+	return string(key), true
 }
 
 func (o *Overlay) reservePeerKey(peer *Peer, bypassInboundLimit bool) error {
@@ -729,18 +858,15 @@ func (o *Overlay) ShouldShedLedgerRequest(peerID PeerID, loadedLocal bool) bool 
 	return loadedLocal && !o.isClusterPeer(peer)
 }
 
-// isClusterPeer reports whether peer's node public key matches a
-// cluster registry entry. Cluster members are bound to an unlimited
-// Consumer so charges are no-ops.
 func (o *Overlay) isClusterPeer(peer *Peer) bool {
 	if o.cluster == nil {
 		return false
 	}
-	pk := peer.RemotePublicKey()
-	if pk == nil {
+	pk := peer.RemotePublicKeyBytes()
+	if len(pk) == 0 {
 		return false
 	}
-	_, ok := o.cluster.Member(pk.Bytes())
+	_, ok := o.cluster.Member(pk)
 	return ok
 }
 
@@ -766,31 +892,6 @@ func (o *Overlay) isConnectedTo(endpoint Endpoint) bool {
 
 func endpointKey(endpoint Endpoint) string {
 	return (Endpoint{Host: connectAttemptHost(endpoint.String()), Port: endpoint.Port}).String()
-}
-
-// canAcceptInbound checks if we can accept another inbound connection.
-func (o *Overlay) canAcceptInbound() bool {
-	o.peersMu.RLock()
-	defer o.peersMu.RUnlock()
-
-	count := 0
-	for _, peer := range o.peers {
-		if peer.Inbound() {
-			count++
-		}
-	}
-	return count < o.cfg.MaxInbound
-}
-
-// hasInboundSlot reports whether the just-handshaked inbound peer may be
-// admitted: either a normal slot is free, or the peer is a cluster member or
-// has an operator reservation and is therefore admitted beyond the inbound
-// cap.
-func (o *Overlay) hasInboundSlot(peer *Peer) bool {
-	if o.canAcceptInbound() {
-		return true
-	}
-	return o.isClusterPeer(peer) || o.isReservedPeer(peer)
 }
 
 func (o *Overlay) ordinaryOutboundCount() int {

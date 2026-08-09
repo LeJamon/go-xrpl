@@ -13,10 +13,10 @@ import (
 
 // NftBuyOffersMethod handles the nft_buy_offers RPC method
 // Reference: rippled NFTOffers.cpp doNFTBuyOffers
-type NftBuyOffersMethod struct{ BaseHandler }
+type NftBuyOffersMethod struct{ baseHandler }
 
 func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 	return handleNFTOffers(ctx, params, ctx.Services.Ledger.GetNFTBuyOffers)
@@ -62,7 +62,7 @@ func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(c
 
 	// Apply rippled's readLimitField with nftOffers tuning (NFTOffers.cpp:69):
 	// absent limit -> default, explicit 0 -> invalidParams, else clamp.
-	limit, limitErr := ReadLimitField(params, LimitNFTOffers, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitNFTOffers, ctx.Unlimited)
 	if limitErr != nil {
 		return nil, limitErr
 	}
@@ -74,7 +74,7 @@ func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(c
 	if selErr != nil {
 		return nil, selErr
 	}
-	if _, _, lookupErr := LookupLedger(ctx, parsedLedgerSpec); lookupErr != nil {
+	if _, _, lookupErr := lookupLedger(ctx, parsedLedgerSpec); lookupErr != nil {
 		return nil, lookupErr
 	}
 

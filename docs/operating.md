@@ -92,6 +92,11 @@ ledger from the network in networked mode. With no startup flag on a networked
 node, `fast_load` first attempts the latest local ledger and otherwise acquires
 one from peers.
 
+Fast-load integrity verification uses `[node_db].fast_load_workers` concurrent
+workers. Leave it at `0` to select an automatic value based on available CPUs,
+or set an explicit value from `1` through `64`. More workers can improve
+verification throughput until storage bandwidth is saturated.
+
 Startup replay is separate from the top-level `ledger_replay` setting.
 `ledger_replay` advertises and controls peer replay capability; it does not select
 a startup mode. `--replay` starts from the selected ledger's stored parent and
@@ -144,10 +149,17 @@ loopback requests also receive admin role; other clients receive **guest** role.
 Always set `secure_gateway` on a same-host public proxy backend so loopback does
 not trigger that admin fallback.
 
-`server_info` and `server_state` omit rippled's optional job-queue `load`,
-requested `counters`, and `current_activities` fields. go-xrpl does not yet have
-equivalent job/performance instrumentation, so these fields remain unsupported
-rather than reporting placeholder data.
+The JSON-RPC handler accepts POST requests only. `GET /health` remains available
+as the liveness endpoint, but it is still subject to the configured per-port
+Origin and HTTP Basic Auth policy. Arbitrary GET query parameters are never
+dispatched as RPC commands.
+
+`server_info` and `server_state` accept `counters` and report shared HTTP/WebSocket
+RPC timings, current RPC activity, and the node-store counters available from the
+configured backend. The required `job_queue` and current `jobs` containers are
+empty because go-xrpl has no central rippled-style JobQueue. For the same reason,
+the admin-only `load` field is omitted rather than populated with unrelated
+goroutine or client-admission statistics.
 
 ### TLS and reverse proxies
 
@@ -234,8 +246,14 @@ keys to precede any `[section]` header.
 `[server].ports` lists the named port sections to open. Each named
 `[port_<name>]` requires `port`, `ip`, and `protocol` (`http`, `ws`, `peer`, or
 `grpc`); optional `limit` caps concurrent connections (`0` = unlimited) and
-`send_queue_limit` sizes the per-connection WebSocket send buffer (default 100).
-List IPs in `admin` to grant those clients admin role.
+`send_queue_limit` sizes the per-connection WebSocket send buffer. `0` uses the
+rippled-compatible default of 100; explicit values must be in the range 1–65535.
+List IPs in `admin` to grant those clients admin role. `user` and `password`
+enable HTTP Basic Auth and must be configured together. `allowed_origins` is an
+exact list of HTTP(S) origins shared by HTTP CORS and WebSocket upgrades; an
+empty list rejects browser-originated requests while clients without an Origin
+header (including the CLI) remain usable. An admin-capable port that enables a
+browser origin must also configure Basic Auth.
 
 ### `[node_db]` — content-addressed state store
 
@@ -250,6 +268,7 @@ List IPs in `admin` to grant those clients admin role.
 | `cache_size` | `16384` | Decoded node-object cache entries (`0` = the `node_size` profile). This is independent of `cache_mb`. |
 | `cache_age` | `5` | Decoded node-object cache age in minutes (`0` = the `node_size` profile). |
 | `fast_load` | `false` | On networked startup, try the newest local ledger by default; also permit explicit load/replay failures to fall back to genesis or network acquisition. |
+| `fast_load_workers` | `0` | Concurrent workers for fast-load integrity verification. `0` selects an automatic value based on available CPUs; explicit values may range from `1` to `64`. |
 | `earliest_seq` | `32570` | Lowest ledger sequence to retain. |
 | `delete_batch` / `back_off_milliseconds` / `age_threshold_seconds` / `recovery_wait_seconds` | `100`/`100`/`60`/`5` | Online-delete pacing (batch size, inter-batch pause, minimum age, catch-up wait). |
 
@@ -274,20 +293,23 @@ List IPs in `admin` to grant those clients admin role.
 
 Governs fee escalation and queueing (EXPERIMENTAL). Every key is optional;
 omit one to use rippled's `TxQ::Setup` default, or set it explicitly
-(including `0`). Keys: `ledgers_in_queue`, `minimum_queue_size`,
+(including `0`, where allowed). Keys: `ledgers_in_queue`, `minimum_queue_size`,
 `retry_sequence_percent`, `minimum_escalation_multiplier`,
 `minimum_txn_in_ledger`, `minimum_txn_in_ledger_standalone`, `target_txn_in_ledger`,
-`maximum_txn_in_ledger` (`0` = no maximum), `normal_consensus_increase_percent`,
+`maximum_txn_in_ledger` (omit for no maximum), `normal_consensus_increase_percent`,
 `slow_consensus_decrease_percent`, `maximum_txn_per_account`,
 `minimum_last_ledger_buffer`.
 
 ### Optional sections
 
 - **`[validation_archive]`** — persist pruned validations to a `validations` table
-  for forensic queries. `enabled` (default false), `retention_ledgers`
+  for forensic queries, including partial validations. This go-xrpl extension is
+  inspired by rippled's historical validation database. `enabled` (default false), `retention_ledgers`
   (`0` = forever), `batch_size`, `flush_interval_ms`, `delete_batch`,
   `in_memory_ledgers`. Backed by SQLite (shares `ledger.db`); under sustained
-  write overload the archive drops rather than blocking consensus.
+  write overload the archive counts drops and rate-limits warnings rather than
+  blocking consensus. Independent maintenance drains expired rows in bounded
+  batches even while archive writes are idle.
 - **`[amendments]`** — operator amendment-vote preferences. `upvote` votes *for*
   an amendment (rippled's `[amendments]` stanza); `veto` refuses to vote for it
   (rippled's `[veto_amendments]`). Names match the amendment registry; an amendment

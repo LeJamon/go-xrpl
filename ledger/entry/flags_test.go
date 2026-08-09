@@ -1,6 +1,14 @@
 package entry
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strconv"
+	"strings"
+	"testing"
+)
 
 // TestLedgerSpecificFlags pins every Lsf* constant against rippled. These flags
 // are scoped per ledger entry type, so identical numeric values are reused
@@ -78,17 +86,93 @@ func TestLedgerSpecificFlags(t *testing.T) {
 
 		// ltMPTOKEN
 		{"LsfMPTAuthorized", LsfMPTAuthorized, 0x00000002},
+		{"LsfMPTAMM", LsfMPTAMM, 0x00000004},
 
 		// ltCREDENTIAL
 		{"LsfAccepted", LsfAccepted, 0x00010000},
 
 		// ltVAULT
 		{"LsfVaultPrivate", LsfVaultPrivate, 0x00010000},
+
+		// ltLOAN
+		{"LsfLoanDefault", LsfLoanDefault, 0x00010000},
+		{"LsfLoanImpaired", LsfLoanImpaired, 0x00020000},
+		{"LsfLoanOverpayment", LsfLoanOverpayment, 0x00040000},
+
+		// ltSPONSORSHIP
+		{"LsfSponsorshipRequireSignForFee", LsfSponsorshipRequireSignForFee, 0x00010000},
+		{"LsfSponsorshipRequireSignForReserve", LsfSponsorshipRequireSignForReserve, 0x00020000},
 	}
 
 	for _, tt := range tests {
 		if tt.got != tt.want {
 			t.Errorf("%s = 0x%08X, want 0x%08X", tt.name, tt.got, tt.want)
 		}
+	}
+
+	oracle := readOracleLedgerFlags(t)
+	if len(oracle) != len(tests) {
+		t.Fatalf("rippled has %d ledger flags, Go has %d", len(oracle), len(tests))
+	}
+	for _, tt := range tests {
+		oracleName := strings.ToLower(tt.name[:1]) + tt.name[1:]
+		want, ok := oracle[oracleName]
+		if !ok {
+			t.Errorf("%s is absent from rippled LedgerFormats.h", tt.name)
+			continue
+		}
+		if tt.got != want {
+			t.Errorf("%s = 0x%08X, rippled = 0x%08X", tt.name, tt.got, want)
+		}
+	}
+}
+
+var (
+	oracleLedgerFlag    = regexp.MustCompile(`LSF_FLAG2?\((lsf\w+),\s*(0x[0-9a-fA-F]+)\)`)
+	oracleImmutableFlag = regexp.MustCompile(`inline constexpr std::uint32_t (lsif\w+) = (0x[0-9a-fA-F]+);`)
+)
+
+func readOracleLedgerFlags(t *testing.T) map[string]uint32 {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve flags test source path")
+	}
+	dir := filepath.Dir(file)
+	for range 12 {
+		path := filepath.Join(dir, "rippled-worktrees", "v3.3.0-oracle", "include", "xrpl", "protocol", "LedgerFormats.h")
+		data, err := os.ReadFile(path)
+		if err == nil {
+			flags := make(map[string]uint32)
+			for _, pattern := range []*regexp.Regexp{oracleLedgerFlag, oracleImmutableFlag} {
+				for _, match := range pattern.FindAllStringSubmatch(string(data), -1) {
+					value, err := strconv.ParseUint(match[2], 0, 32)
+					if err != nil {
+						t.Fatalf("parse %s: %v", match[0], err)
+					}
+					flags[match[1]] = uint32(value)
+				}
+			}
+			return flags
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	t.Fatalf("required rippled v3.3.0 LedgerFormats.h not found from %s", file)
+	return nil
+}
+
+func TestMPTokenProtocolLimits(t *testing.T) {
+	if MaxMPTokenMetadataLength != 1024 {
+		t.Errorf("MaxMPTokenMetadataLength = %d, want 1024", MaxMPTokenMetadataLength)
+	}
+	if MaxTransferFee != 50_000 {
+		t.Errorf("MaxTransferFee = %d, want 50000", MaxTransferFee)
+	}
+	if MaxMPTokenAmount != 0x7FFF_FFFF_FFFF_FFFF {
+		t.Errorf("MaxMPTokenAmount = %d, want 2^63-1", MaxMPTokenAmount)
 	}
 }

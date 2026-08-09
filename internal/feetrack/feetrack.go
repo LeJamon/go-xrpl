@@ -9,7 +9,8 @@ package feetrack
 
 import (
 	"errors"
-	"math/big"
+	"math"
+	"math/bits"
 	"sync"
 )
 
@@ -18,19 +19,12 @@ const (
 	// expressed as multiples of this base.
 	LoadBase uint32 = 256
 
-	// FeeIncFraction controls how fast the local fee ramps up on a raise:
-	// fee += fee / FeeIncFraction.
-	FeeIncFraction uint32 = 4
-
-	// FeeDecFraction controls the decay step on a lower:
-	// fee -= fee / FeeDecFraction. Symmetric with FeeIncFraction.
-	FeeDecFraction uint32 = 4
-
-	// FeeMax caps the local fee at LoadBase * 1_000_000.
-	FeeMax uint32 = 256 * 1_000_000
+	feeIncFraction uint32 = 4
+	feeDecFraction uint32 = 4
+	feeMax         uint32 = LoadBase * 1_000_000
 )
 
-// ErrOverflow indicates ScaleFeeLoad multiplication overflowed uint64.
+// ErrOverflow indicates ScaleFeeLoad exceeded the signed XRP amount range.
 var ErrOverflow = errors.New("feetrack: scaleFeeLoad overflow")
 
 // LoadFeeTrack tracks the local-node fee factor and accepts remote / cluster
@@ -41,6 +35,7 @@ type LoadFeeTrack struct {
 	remoteFee  uint32
 	clusterFee uint32
 	raiseCount uint32
+	onChange   func()
 }
 
 // New returns a LoadFeeTrack initialised to the normal fee with no pending
@@ -56,8 +51,13 @@ func New() *LoadFeeTrack {
 // SetRemoteFee records a remote-reported fee factor.
 func (t *LoadFeeTrack) SetRemoteFee(f uint32) {
 	t.mu.Lock()
+	changed := t.remoteFee != f
 	t.remoteFee = f
+	onChange := t.onChange
 	t.mu.Unlock()
+	if changed && onChange != nil {
+		onChange()
+	}
 }
 
 // RemoteFee returns the last remote-reported fee factor.
@@ -70,7 +70,19 @@ func (t *LoadFeeTrack) RemoteFee() uint32 {
 // SetClusterFee records the cluster-aggregated fee factor.
 func (t *LoadFeeTrack) SetClusterFee(f uint32) {
 	t.mu.Lock()
+	changed := t.clusterFee != f
 	t.clusterFee = f
+	onChange := t.onChange
+	t.mu.Unlock()
+	if changed && onChange != nil {
+		onChange()
+	}
+}
+
+// SetOnChange installs a callback for effective fee-factor changes.
+func (t *LoadFeeTrack) SetOnChange(fn func()) {
+	t.mu.Lock()
+	t.onChange = fn
 	t.mu.Unlock()
 }
 
@@ -88,9 +100,6 @@ func (t *LoadFeeTrack) LocalFee() uint32 {
 	return t.localFee
 }
 
-// LoadBase returns the reference (normal) fee factor.
-func (t *LoadFeeTrack) LoadBase() uint32 { return LoadBase }
-
 // LoadFactor returns max(cluster, local, remote).
 func (t *LoadFeeTrack) LoadFactor() uint32 {
 	t.mu.RLock()
@@ -98,9 +107,7 @@ func (t *LoadFeeTrack) LoadFactor() uint32 {
 	return max(t.clusterFee, t.localFee, t.remoteFee)
 }
 
-// ScalingFactors returns (max(local,remote), max(remote,cluster)), the pair
-// consumed by ScaleFeeLoad.
-func (t *LoadFeeTrack) ScalingFactors() (feeFactor, remFee uint32) {
+func (t *LoadFeeTrack) scalingFactors() (feeFactor, remFee uint32) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return max(t.localFee, t.remoteFee), max(t.remoteFee, t.clusterFee)
@@ -113,27 +120,38 @@ func (t *LoadFeeTrack) IsLoadedLocal() bool {
 	return t.raiseCount != 0 || t.localFee != LoadBase
 }
 
+func (t *LoadFeeTrack) IsLoadedCluster() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.raiseCount != 0 || t.localFee != LoadBase || t.clusterFee != LoadBase
+}
+
 // RaiseLocalFee bumps the local fee factor and reports whether the stored
 // factor actually changed. The first call only arms raiseCount; the second and
-// subsequent calls scale the local fee up toward FeeMax, tracking the remote
+// subsequent calls scale the local fee up toward its cap, tracking the remote
 // fee floor.
 func (t *LoadFeeTrack) RaiseLocalFee() bool {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.raiseCount++
 	if t.raiseCount < 2 {
+		t.mu.Unlock()
 		return false
 	}
 
 	orig := t.localFee
-	if t.localFee < t.remoteFee {
-		t.localFee = t.remoteFee
+	base := max(t.localFee, t.remoteFee)
+	raised := uint64(base) + uint64(base)/uint64(feeIncFraction)
+	if raised > uint64(feeMax) {
+		raised = uint64(feeMax)
 	}
-	t.localFee += t.localFee / FeeIncFraction
-	if t.localFee > FeeMax {
-		t.localFee = FeeMax
+	t.localFee = uint32(raised)
+	changed := orig != t.localFee
+	onChange := t.onChange
+	t.mu.Unlock()
+	if changed && onChange != nil {
+		onChange()
 	}
-	return orig != t.localFee
+	return changed
 }
 
 // LowerLocalFee decays the local fee back toward LoadBase and reports whether
@@ -141,14 +159,19 @@ func (t *LoadFeeTrack) RaiseLocalFee() bool {
 // next RaiseLocalFee again needs two ticks to take effect (hysteresis).
 func (t *LoadFeeTrack) LowerLocalFee() bool {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	orig := t.localFee
 	t.raiseCount = 0
-	t.localFee -= t.localFee / FeeDecFraction
+	t.localFee -= t.localFee / feeDecFraction
 	if t.localFee < LoadBase {
 		t.localFee = LoadBase
 	}
-	return orig != t.localFee
+	changed := orig != t.localFee
+	onChange := t.onChange
+	t.mu.Unlock()
+	if changed && onChange != nil {
+		onChange()
+	}
+	return changed
 }
 
 // ScaleFeeLoad scales fee by the current local/remote/cluster load.
@@ -162,20 +185,24 @@ func ScaleFeeLoad(fee uint64, t *LoadFeeTrack, unlimited bool) (uint64, error) {
 	if fee == 0 {
 		return 0, nil
 	}
+	if fee > math.MaxInt64 {
+		return 0, ErrOverflow
+	}
 	if t == nil {
 		return fee, nil
 	}
-	feeFactor, remFee := t.ScalingFactors()
+	feeFactor, remFee := t.scalingFactors()
 	if unlimited && feeFactor > remFee && feeFactor < 4*remFee {
 		feeFactor = remFee
 	}
 
-	// fee * feeFactor / LoadBase in big.Int to avoid uint64 overflow and keep
-	// exact integer truncation.
-	num := new(big.Int).Mul(new(big.Int).SetUint64(fee), new(big.Int).SetUint64(uint64(feeFactor)))
-	num.Quo(num, new(big.Int).SetUint64(uint64(LoadBase)))
-	if !num.IsUint64() {
+	productHi, productLo := bits.Mul64(fee, uint64(feeFactor))
+	if productHi >= uint64(LoadBase) {
 		return 0, ErrOverflow
 	}
-	return num.Uint64(), nil
+	scaled, _ := bits.Div64(productHi, productLo, uint64(LoadBase))
+	if scaled > math.MaxInt64 {
+		return 0, ErrOverflow
+	}
+	return scaled, nil
 }

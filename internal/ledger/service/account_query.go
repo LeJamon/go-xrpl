@@ -18,6 +18,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -198,7 +199,8 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 
 		var lines []TrustLine
 		visit := func(_ [32]byte, data []byte) {
-			if state.EntryType(data) != "RippleState" {
+			entryType, err := state.DecodeType(data)
+			if err != nil || entryType != entry.TypeRippleState {
 				return
 			}
 			rs, perr := state.ParseRippleState(data)
@@ -333,7 +335,8 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 
 		var offers []AccountOffer
 		visit := func(_ [32]byte, data []byte) {
-			if state.EntryType(data) != "Offer" {
+			entryType, err := state.DecodeType(data)
+			if err != nil || entryType != entry.TypeOffer {
 				return
 			}
 			offer, perr := state.ParseLedgerOffer(data)
@@ -418,46 +421,47 @@ type AccountObjectItem struct {
 // type-filter matches, so a filtered page can come back short with a marker.
 func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32, marker string) (*AccountObjectsResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*AccountObjectsResult, error) {
-		// account_objects returns actNotFound for a missing account, not empty.
-		accountKey := keylet.Account(accountID)
-		exists, err := targetLedger.ExistsContext(ctx, accountKey)
-		if err != nil {
-			return nil, fmt.Errorf("failed to check account existence: %w", err)
-		}
-		if !exists {
-			return nil, svcerr.ErrAccountNotFound
-		}
-
-		// Normalize type filter from rippled's snake_case to PascalCase
-		objType = normalizeObjectType(objType)
-
-		// Default an unset limit; the caller (handler ClampLimit) owns the upper bound.
-		if limit == 0 {
-			limit = 200
-		}
-
-		var dirIndex, entryIndex [32]byte
-		if marker != "" {
-			di, ei, ok := parseAccountObjectsMarker(marker)
-			if !ok {
-				return nil, svcerr.ErrInvalidMarker
-			}
-			dirIndex, entryIndex = di, ei
-		}
-
-		result := &AccountObjectsResult{
-			Account:        account,
-			AccountObjects: make([]AccountObjectItem, 0),
-			LedgerIndex:    targetLedger.Sequence(),
-			LedgerHash:     targetLedger.Hash(),
-			Validated:      validated,
-		}
-
-		if err := enumerateAccountObjects(ctx, targetLedger, accountID, objType, dirIndex, entryIndex, limit, result); err != nil {
-			return nil, err
-		}
-		return result, nil
+		return QueryAccountObjects(ctx, targetLedger, account, accountID, validated, objType, limit, marker)
 	})
+}
+
+// QueryAccountObjects executes account_objects against an already selected ledger.
+func QueryAccountObjects(ctx context.Context, targetLedger *ledger.Ledger, account string, accountID [20]byte, validated bool, objType string, limit uint32, marker string) (*AccountObjectsResult, error) {
+	accountKey := keylet.Account(accountID)
+	exists, err := targetLedger.ExistsContext(ctx, accountKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check account existence: %w", err)
+	}
+	if !exists {
+		return nil, svcerr.ErrAccountNotFound
+	}
+
+	objType = normalizeObjectType(objType)
+	if limit == 0 {
+		limit = 200
+	}
+
+	var dirIndex, entryIndex [32]byte
+	if marker != "" {
+		di, ei, ok := parseAccountObjectsMarker(marker)
+		if !ok {
+			return nil, svcerr.ErrInvalidMarker
+		}
+		dirIndex, entryIndex = di, ei
+	}
+
+	result := &AccountObjectsResult{
+		Account:        account,
+		AccountObjects: make([]AccountObjectItem, 0),
+		LedgerIndex:    targetLedger.Sequence(),
+		LedgerHash:     targetLedger.Hash(),
+		Validated:      validated,
+	}
+
+	if err := enumerateAccountObjects(ctx, targetLedger, accountID, objType, dirIndex, entryIndex, limit, result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // parseAccountObjectsMarker splits an account_objects marker into its
@@ -497,7 +501,13 @@ func markerUint256(s string) ([32]byte, bool) {
 // marker.
 func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [20]byte, objType string, dirIndex, entryIndex [32]byte, limit uint32, result *AccountObjectsResult) error {
 	var zero [32]byte
-	wantType := func(t string) bool { return objType == "" || t == objType }
+	var objTypeID entry.Type
+	if objType != "" {
+		if info, ok := protocol.LedgerEntryTypeByName(objType); ok {
+			objTypeID = info.Type
+		}
+	}
+	wantType := func(t entry.Type) bool { return objTypeID == 0 || t == objTypeID }
 
 	if dirIndex != zero {
 		d, err := l.ReadContext(ctx, keylet.Keylet{Key: dirIndex})
@@ -510,7 +520,7 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 	}
 
 	firstNFTPage := keylet.NFTokenPageMin(accountID).Key
-	iterateNFT := (objType == "" || objType == "NFTokenPage") && dirIndex == zero
+	iterateNFT := (objTypeID == 0 || objTypeID == entry.TypeNFTokenPage) && dirIndex == zero
 	if iterateNFT && entryIndex != zero {
 		var maskedHigh [32]byte
 		copy(maskedHigh[:20], entryIndex[:20])
@@ -604,7 +614,7 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 		}
 
 		// NFTokenPages exactly filled the limit; resume at the first dir entry.
-		if i == mlimit && mlimit < limit {
+		if i == mlimit && mlimit < limit && start < len(entries) {
 			result.Marker = protocol.Hash256Hex(dirIndex) + "," + protocol.Hash256Hex(entries[start])
 			return nil
 		}
@@ -616,10 +626,15 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 				return rerr
 			}
 			if data != nil {
-				if t := state.EntryType(data); wantType(t) {
+				t, derr := state.DecodeType(data)
+				if derr != nil {
+					if objTypeID == entry.TypeSignerList {
+						return derr
+					}
+				} else if wantType(t) {
 					result.AccountObjects = append(result.AccountObjects, AccountObjectItem{
 						Index:           protocol.Hash256Hex(itemKey),
-						LedgerEntryType: t,
+						LedgerEntryType: t.String(),
 						Data:            data,
 					})
 				}
@@ -809,18 +824,21 @@ func (s *Service) GetOwnerInfo(ctx context.Context, account string, ledgerIndex 
 			if data == nil {
 				return nil
 			}
-			entryType := state.EntryType(data)
+			entryType, err := state.DecodeType(data)
+			if err != nil {
+				return nil
+			}
 			switch entryType {
-			case "Offer":
+			case entry.TypeOffer:
 				result.Offers = append(result.Offers, AccountObjectItem{
 					Index:           protocol.Hash256Hex(itemKey),
-					LedgerEntryType: entryType,
+					LedgerEntryType: entryType.String(),
 					Data:            data,
 				})
-			case "RippleState":
+			case entry.TypeRippleState:
 				result.RippleLines = append(result.RippleLines, AccountObjectItem{
 					Index:           protocol.Hash256Hex(itemKey),
-					LedgerEntryType: entryType,
+					LedgerEntryType: entryType.String(),
 					Data:            data,
 				})
 			}
@@ -898,7 +916,8 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 
 		var channels []AccountChannel
 		visit := func(key [32]byte, data []byte) {
-			if state.EntryType(data) != "PayChannel" {
+			entryType, err := state.DecodeType(data)
+			if err != nil || entryType != entry.TypePayChannel {
 				return
 			}
 			payChan, perr := state.ParsePayChannel(data)
@@ -1010,7 +1029,8 @@ func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledg
 			if data == nil {
 				return nil
 			}
-			if state.EntryType(data) != "RippleState" {
+			entryType, err := state.DecodeType(data)
+			if err != nil || entryType != entry.TypeRippleState {
 				return nil
 			}
 
@@ -1141,7 +1161,7 @@ func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerInde
 		}
 		pages := make(map[[32]byte]*state.NFTokenPageData)
 		pageKeys := make([][32]byte, 0)
-		if err := targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
+		if err := targetLedger.ForEachContext(ctx, func(key [32]byte, data []byte) bool {
 			if ctx.Err() != nil {
 				return false
 			}
@@ -1273,7 +1293,7 @@ type GatewayBalancesResult struct {
 }
 
 // addEscrowLocked sums an Escrow into locked by currency ("XRP" or the IOU code).
-// MPT escrows are skipped — no currency to sum under (rippled instead errors).
+// MPT escrows are skipped because this response groups obligations by currency.
 func addEscrowLocked(locked map[string]tx.Amount, data []byte) {
 	esc, err := state.ParseEscrow(data)
 	if err != nil {
@@ -1351,12 +1371,15 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 				return nil
 			}
 
-			entryType := state.EntryType(data)
-			if entryType == "Escrow" {
+			entryType, err := state.DecodeType(data)
+			if err != nil {
+				return nil
+			}
+			if entryType == entry.TypeEscrow {
 				addEscrowLocked(locked, data)
 				return nil
 			}
-			if entryType != "RippleState" {
+			if entryType != entry.TypeRippleState {
 				return nil
 			}
 
@@ -1583,7 +1606,8 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 			if entryData == nil {
 				return nil
 			}
-			if state.EntryType(entryData) != "RippleState" {
+			entryType, err := state.DecodeType(entryData)
+			if err != nil || entryType != entry.TypeRippleState {
 				return nil
 			}
 

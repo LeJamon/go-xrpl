@@ -39,17 +39,17 @@ func TestDepositAuth_ExpiredCredentialsReserveExemption(t *testing.T) {
 	// Issuer creates a soon-to-expire credential for alice; alice accepts.
 	expiration := env.NowRipple() + 50
 	result := env.Submit(
-		credential.CredentialCreate(issuer, alice, credType).
+		credential.CredentialCreateText(issuer, alice, credType).
 			Expiration(expiration).
 			Build(),
 	)
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
-	result = env.Submit(credential.CredentialAccept(alice, issuer, credType).Build())
+	result = env.Submit(credential.CredentialAcceptText(alice, issuer, credType).Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	credIdx := dp.CredentialIndex(alice, issuer, credType)
+	credIdx := dp.CredentialIndexHex(alice, issuer, credType)
 	credKey := jtx.CredentialKeylet(alice, issuer, credType)
 
 	// Bring bob's XRP balance down to exactly the base reserve.
@@ -130,17 +130,17 @@ func TestPayment_ExpiredCredentialsNoDepositAuthDestination(t *testing.T) {
 	// Issuer creates a soon-to-expire credential for alice; alice accepts.
 	expiration := env.NowRipple() + 50
 	result = env.Submit(
-		credential.CredentialCreate(issuer, alice, credType).
+		credential.CredentialCreateText(issuer, alice, credType).
 			Expiration(expiration).
 			Build(),
 	)
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
-	result = env.Submit(credential.CredentialAccept(alice, issuer, credType).Build())
+	result = env.Submit(credential.CredentialAcceptText(alice, issuer, credType).Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	credIdx := dp.CredentialIndex(alice, issuer, credType)
+	credIdx := dp.CredentialIndexHex(alice, issuer, credType)
 	credKey := jtx.CredentialKeylet(alice, issuer, credType)
 
 	// Let the credential expire.
@@ -192,17 +192,17 @@ func TestMPTPayment_CanTransferCheckedBeforeDepositPreauth(t *testing.T) {
 	// Issuer creates a soon-to-expire credential for bob; bob accepts.
 	expiration := env.NowRipple() + 50
 	result := env.Submit(
-		credential.CredentialCreate(issuer, bob, credType).
+		credential.CredentialCreateText(issuer, bob, credType).
 			Expiration(expiration).
 			Build(),
 	)
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
-	result = env.Submit(credential.CredentialAccept(bob, issuer, credType).Build())
+	result = env.Submit(credential.CredentialAcceptText(bob, issuer, credType).Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	credIdx := dp.CredentialIndex(bob, issuer, credType)
+	credIdx := dp.CredentialIndexHex(bob, issuer, credType)
 	credKey := jtx.CredentialKeylet(bob, issuer, credType)
 
 	// Let the credential expire.

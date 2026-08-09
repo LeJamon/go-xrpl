@@ -23,6 +23,7 @@ const maxNestingDepth = 10
 type STObject struct {
 	binarySerializer   *serdes.BinarySerializer
 	skipJSONArrayLimit bool
+	innerTemplateField string
 }
 
 // NewSTObject returns a new STObject with the given binary serializer.
@@ -51,6 +52,23 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if t.innerTemplateField != "" {
+		values := make(map[string]any, len(fimap))
+		fieldOrder := make([]string, 0, len(fimap))
+		for field, value := range fimap {
+			if isDiscardableInnerField(field.FieldName) ||
+				isDefaultInnerField(t.innerTemplateField, field.FieldName, value) {
+				delete(fimap, field)
+				continue
+			}
+			values[field.FieldName] = value
+			fieldOrder = append(fieldOrder, field.FieldName)
+		}
+		sort.Strings(fieldOrder)
+		if err := validateInnerObject(t.innerTemplateField, values, fieldOrder); err != nil {
+			return nil, err
+		}
+	}
 
 	sk := getSortedKeys(fimap)
 
@@ -61,12 +79,20 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 
 		st := SerializedTypeFor(v.Type)
 		setSkipJSONArrayLimit(st, t.skipJSONArrayLimit)
+		fieldValue := fimap[v]
+		if v.Type == "STObject" {
+			object, ok := fieldValue.(map[string]any)
+			if !ok || object == nil {
+				return nil, errNotValidJSON
+			}
+			st.(*STObject).innerTemplateField = v.FieldName
+		}
 		if !t.skipJSONArrayLimit {
-			if err := checkJSONArraySize(v.FieldName, v.Type, fimap[v]); err != nil {
+			if err := checkJSONArraySize(v.FieldName, v.Type, fieldValue); err != nil {
 				return nil, err
 			}
 		}
-		b, err := st.FromJSON(fimap[v])
+		b, err := st.FromJSON(fieldValue)
 		if err != nil {
 			return nil, err
 		}
@@ -117,7 +143,7 @@ func (t *STObject) ToJSON(p *serdes.BinaryParser, opts ...int) (any, error) {
 	if len(opts) > 0 {
 		depth = opts[0]
 	}
-	m, _, err := t.toJSON(p, depth)
+	m, _, _, err := t.toJSON(p, depth)
 	return m, err
 }
 
@@ -129,7 +155,7 @@ func (t *STObject) ToJSON(p *serdes.BinaryParser, opts ...int) (any, error) {
 // well-formed serialization carries a top-level terminator, so this never rejects
 // valid input. Nested objects consume their own end marker through ToJSON.
 func (t *STObject) ToJSONStrict(p *serdes.BinaryParser) (map[string]any, error) {
-	m, sawEndMarker, err := t.toJSON(p, 0)
+	m, _, sawEndMarker, err := t.toJSON(p, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -145,20 +171,21 @@ func (t *STObject) ToJSONStrict(p *serdes.BinaryParser) (map[string]any, error) 
 // top-level caller can reject one while nested containers treat it as the normal
 // terminator. An array end marker inside an object is malformed
 // (STObject.cpp:259-263) and errors.
-func (t *STObject) toJSON(p *serdes.BinaryParser, depth int) (map[string]any, bool, error) {
+func (t *STObject) toJSON(p *serdes.BinaryParser, depth int) (map[string]any, []string, bool, error) {
 	m := make(map[string]any)
+	fieldOrder := make([]string, 0)
 
 	for p.HasMore() {
 		fi, err := p.ReadField()
 		if err != nil {
-			return nil, false, fmt.Errorf("ReadField error: %w", err)
+			return nil, nil, false, fmt.Errorf("ReadField error: %w", err)
 		}
 
 		if fi.FieldName == "ObjectEndMarker" {
-			return m, true, nil
+			return m, fieldOrder, true, nil
 		}
 		if fi.FieldName == "ArrayEndMarker" {
-			return nil, false, errIllegalArrayEndMarker
+			return nil, nil, false, errIllegalArrayEndMarker
 		}
 
 		// Each field is constructed one level deeper than its parent. rippled
@@ -166,7 +193,7 @@ func (t *STObject) toJSON(p *serdes.BinaryParser, depth int) (map[string]any, bo
 		// the cap (STVar.cpp:122) — the guard that prevents unbounded recursion.
 		childDepth := depth + 1
 		if childDepth > maxNestingDepth {
-			return nil, false, errMaxNestingDepth
+			return nil, nil, false, errMaxNestingDepth
 		}
 
 		// rippled rejects an object that carries the same field twice — a key
@@ -174,51 +201,57 @@ func (t *STObject) toJSON(p *serdes.BinaryParser, depth int) (map[string]any, bo
 		// duplicates anyway, so detect it before the second value silently
 		// overwrites the first and the re-encoding drops a field.
 		if _, dup := m[fi.FieldName]; dup {
-			return nil, false, fmt.Errorf("duplicate field detected: %q", fi.FieldName)
+			return nil, nil, false, fmt.Errorf("duplicate field detected: %q", fi.FieldName)
 		}
 
 		st := SerializedTypeFor(fi.Type)
 		if st == nil {
-			return nil, false, fmt.Errorf("unknown type %q for field %q", fi.Type, fi.FieldName)
+			return nil, nil, false, fmt.Errorf("unknown type %q for field %q", fi.Type, fi.FieldName)
 		}
 
 		var res any
 		if fi.IsVLEncoded {
 			vlen, err := p.ReadVariableLength()
 			if err != nil {
-				return nil, false, fmt.Errorf("ReadVariableLength error for field %q: %w", fi.FieldName, err)
+				return nil, nil, false, fmt.Errorf("ReadVariableLength error for field %q: %w", fi.FieldName, err)
 			}
 			res, err = st.ToJSON(p, vlen)
 			if err != nil {
-				return nil, false, fmt.Errorf("ToJSON error for VL field %q (type=%s, vlen=%d): %w", fi.FieldName, fi.Type, vlen, err)
+				return nil, nil, false, fmt.Errorf("ToJSON error for VL field %q (type=%s, vlen=%d): %w", fi.FieldName, fi.Type, vlen, err)
 			}
 		} else {
-			// Only containers (STObject/STArray) recurse, so only they receive
-			// the nesting depth; leaf types take no options here.
-			var depthOpt []int
-			if fi.Type == "STObject" || fi.Type == "STArray" {
-				depthOpt = []int{childDepth}
+			switch fi.Type {
+			case "STObject":
+				var childOrder []string
+				res, childOrder, _, err = st.(*STObject).toJSON(p, childDepth)
+				if err == nil {
+					err = validateInnerObject(fi.FieldName, res.(map[string]any), childOrder)
+				}
+			case "STArray":
+				res, err = st.ToJSON(p, childDepth)
+			default:
+				res, err = st.ToJSON(p)
 			}
-			res, err = st.ToJSON(p, depthOpt...)
 			if err != nil {
-				return nil, false, fmt.Errorf("ToJSON error for field %q (type=%s): %w", fi.FieldName, fi.Type, err)
+				return nil, nil, false, fmt.Errorf("ToJSON error for field %q (type=%s): %w", fi.FieldName, fi.Type, err)
 			}
 		}
 		res, err = enumToStr(fi.FieldName, res)
 		if err != nil {
-			return nil, false, err
+			return nil, nil, false, err
 		}
 
 		res = coerceUInt64BaseTen(fi.Type, fi.FieldName, res)
 
 		m[fi.FieldName] = res
+		fieldOrder = append(fieldOrder, fi.FieldName)
 	}
 	// Running out of data before an object end marker is rippled-faithful:
 	// STObject::set loops while the iterator has data and returns the fields it
 	// parsed without requiring the 0xE1 terminator (STObject.cpp:243); the
 	// nested-object constructor discards the end-of-object flag. sawEndMarker
 	// stays false so the top level can still reject a stray terminator.
-	return m, false, nil
+	return m, fieldOrder, false, nil
 }
 
 // coerceUInt64BaseTen converts the lowercase-hex string produced by

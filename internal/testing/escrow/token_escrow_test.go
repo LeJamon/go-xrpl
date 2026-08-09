@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,9 +31,17 @@ import (
 // Returns env, gateway, alice, bob.
 func setupIOUEscrowEnv(t *testing.T) (*jtx.TestEnv, *jtx.Account, *jtx.Account, *jtx.Account) {
 	t.Helper()
+	return setupIOUEscrowEnvWithCleanupFix(t, true)
+}
+
+func setupIOUEscrowEnvWithCleanupFix(t *testing.T, cleanupFixEnabled bool) (*jtx.TestEnv, *jtx.Account, *jtx.Account, *jtx.Account) {
+	t.Helper()
 
 	env := jtx.NewTestEnv(t)
 	env.EnableFeature("TokenEscrow")
+	if !cleanupFixEnabled {
+		env.DisableFeature("fixCleanup3_2_0")
+	}
 
 	gw := jtx.NewAccount("gateway")
 	alice := jtx.NewAccount("alice")
@@ -61,8 +70,8 @@ func setupIOUEscrowEnv(t *testing.T) (*jtx.TestEnv, *jtx.Account, *jtx.Account, 
 }
 
 // usd creates an IOU amount for USD issued by gw.
-func usd(value float64, gw *jtx.Account) tx.Amount {
-	return tx.NewIssuedAmountFromFloat64(value, "USD", gw.Address)
+func usd(value int64, gw *jtx.Account) tx.Amount {
+	return tx.NewIssuedAmount(value, 0, "USD", gw.Address)
 }
 
 // --------------------------------------------------------------------------
@@ -79,7 +88,7 @@ func TestIOUEscrow_Enablement(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				IOUAmount(usd(1000, gw)).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -89,8 +98,8 @@ func TestIOUEscrow_Enablement(t *testing.T) {
 		// Finish escrow: should succeed
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq1).
-				Condition(escrow.TestCondition1).
-				Fulfillment(escrow.TestFulfillment1).
+				Condition(escrow.TestCondition1()).
+				Fulfillment(escrow.TestFulfillment1()).
 				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
@@ -101,7 +110,7 @@ func TestIOUEscrow_Enablement(t *testing.T) {
 		result = env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				IOUAmount(usd(1000, gw)).
-				Condition(escrow.TestCondition2).
+				Condition(escrow.TestCondition2()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				CancelTime(env.Now().Add(2 * time.Second)).
 				Fee(env.BaseFee() * 150).
@@ -152,7 +161,7 @@ func TestIOUEscrow_Enablement(t *testing.T) {
 		result = env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				IOUAmount(usd(1000, gw)).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -168,8 +177,8 @@ func TestIOUEscrow_Enablement(t *testing.T) {
 		seq1 := env.Seq(alice)
 		result := env.Submit(
 			escrow.EscrowFinish(bob, alice, seq1).
-				Condition(escrow.TestCondition1).
-				Fulfillment(escrow.TestFulfillment1).
+				Condition(escrow.TestCondition1()).
+				Fulfillment(escrow.TestFulfillment1()).
 				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, "tecNO_TARGET")
@@ -195,7 +204,7 @@ func TestIOUEscrow_AllowLockingFlag(t *testing.T) {
 	result := env.Submit(
 		escrow.EscrowCreate(alice, bob, 0).
 			IOUAmount(usd(1000, gw)).
-			Condition(escrow.TestCondition1).
+			Condition(escrow.TestCondition1()).
 			FinishTime(env.Now().Add(1 * time.Second)).
 			Fee(env.BaseFee() * 150).
 			Build())
@@ -225,7 +234,7 @@ func TestIOUEscrow_AllowLockingFlag(t *testing.T) {
 	result = env.Submit(
 		escrow.EscrowCreate(alice, bob, 0).
 			IOUAmount(usd(1000, gw)).
-			Condition(escrow.TestCondition1).
+			Condition(escrow.TestCondition1()).
 			FinishTime(env.Now().Add(1 * time.Second)).
 			Fee(env.BaseFee() * 150).
 			Build())
@@ -235,8 +244,8 @@ func TestIOUEscrow_AllowLockingFlag(t *testing.T) {
 	// Can still finish escrow #1 (created before flag was cleared)
 	result = env.Submit(
 		escrow.EscrowFinish(bob, alice, seq1).
-			Condition(escrow.TestCondition1).
-			Fulfillment(escrow.TestFulfillment1).
+			Condition(escrow.TestCondition1()).
+			Fulfillment(escrow.TestFulfillment1()).
 			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxSuccess(t, result)
@@ -268,7 +277,7 @@ func TestIOUEscrow_CreatePreclaim(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(gw, alice, 0).
 				IOUAmount(usd(1, gw)).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -302,7 +311,7 @@ func TestIOUEscrow_CreatePreclaim(t *testing.T) {
 		result = env.Submit(
 			escrow.EscrowCreate(gw, alice, 0).
 				IOUAmount(usd(1, gw)).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -328,7 +337,7 @@ func TestIOUEscrow_CreatePreclaim(t *testing.T) {
 		result = env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				IOUAmount(usd(1, gw)).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -358,7 +367,7 @@ func TestIOUEscrow_CreatePreclaim(t *testing.T) {
 		result = env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				IOUAmount(usd(1, gw)).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -396,7 +405,7 @@ func TestIOUEscrow_CreatePreclaim(t *testing.T) {
 		result = env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				IOUAmount(usd(10001, gw)).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -439,7 +448,7 @@ func TestIOUEscrow_CreatePreclaim(t *testing.T) {
 		result = env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				IOUAmount(usd(1, gw)).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -482,7 +491,7 @@ func TestIOUEscrow_CreatePreclaim(t *testing.T) {
 		result = env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				IOUAmount(usd(1, gw)).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -497,58 +506,89 @@ func TestIOUEscrow_CreatePreclaim(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestIOUEscrow_FinishBasic(t *testing.T) {
-	env, gw, alice, bob := setupIOUEscrowEnv(t)
+	for _, cleanupFixEnabled := range []bool{false, true} {
+		name := "WithoutFixCleanup3_2_0"
+		if cleanupFixEnabled {
+			name = "WithFixCleanup3_2_0"
+		}
+		t.Run(name, func(t *testing.T) {
+			testIOUEscrowFinishBasic(t, cleanupFixEnabled)
+		})
+	}
+}
 
-	// Record pre-escrow balances
-	preAliceUSD := env.BalanceIOU(alice, "USD", gw)
-	preBobUSD := env.BalanceIOU(bob, "USD", gw)
-	require.InDelta(t, 5000.0, preAliceUSD, 0.001)
-	require.InDelta(t, 5000.0, preBobUSD, 0.001)
+func testIOUEscrowFinishBasic(t *testing.T, cleanupFixEnabled bool) {
+	t.Helper()
+	env, gw, alice, bob := setupIOUEscrowEnvWithCleanupFix(t, cleanupFixEnabled)
+
+	require.Equal(t, usd(5000, gw), *env.IOUBalance(alice, gw, "USD"))
+	require.Equal(t, usd(5000, gw), *env.IOUBalance(bob, gw, "USD"))
+	aliceOwnerCount := env.OwnerCount(alice)
+	bobOwnerCount := env.OwnerCount(bob)
+	gwOwnerCount := env.OwnerCount(gw)
+	aliceDirEntries := ownerDirEntryCount(t, env, alice)
+	bobDirEntries := ownerDirEntryCount(t, env, bob)
+	gwDirEntries := ownerDirEntryCount(t, env, gw)
 
 	// Create escrow: alice -> bob, 1000 USD
 	seq1 := env.Seq(alice)
 	result := env.Submit(
 		escrow.EscrowCreate(alice, bob, 0).
 			IOUAmount(usd(1000, gw)).
-			Condition(escrow.TestCondition1).
+			Condition(escrow.TestCondition1()).
 			FinishTime(env.Now().Add(1 * time.Second)).
 			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxSuccess(t, result)
+	escrowKey := keylet.Escrow(alice.ID, seq1)
+	requireEscrowMetaNode(t, result, "CreatedNode", escrowKey)
+	require.True(t, env.LedgerEntryExists(escrowKey))
+	requireOwnerDirContains(t, env, alice, escrowKey.Key, true)
+	requireOwnerDirContains(t, env, bob, escrowKey.Key, true)
+	requireOwnerDirContains(t, env, gw, escrowKey.Key, true)
+	require.Equal(t, aliceDirEntries+1, ownerDirEntryCount(t, env, alice))
+	require.Equal(t, bobDirEntries+1, ownerDirEntryCount(t, env, bob))
+	require.Equal(t, gwDirEntries+1, ownerDirEntryCount(t, env, gw))
+	require.Equal(t, aliceOwnerCount+1, env.OwnerCount(alice))
+	require.Equal(t, bobOwnerCount, env.OwnerCount(bob))
+	require.Equal(t, gwOwnerCount, env.OwnerCount(gw))
 	env.Close()
 
-	// After create: alice loses 1000, bob unchanged
-	postCreateAlice := env.BalanceIOU(alice, "USD", gw)
-	postCreateBob := env.BalanceIOU(bob, "USD", gw)
-	require.InDelta(t, preAliceUSD-1000.0, postCreateAlice, 0.001,
-		"alice balance should decrease by 1000 after escrow create")
-	require.InDelta(t, preBobUSD, postCreateBob, 0.001,
-		"bob balance should not change after escrow create")
+	require.Equal(t, usd(4000, gw), *env.IOUBalance(alice, gw, "USD"))
+	require.Equal(t, usd(5000, gw), *env.IOUBalance(bob, gw, "USD"))
+	requireIOUIssuerAccounting(t, env, gw, alice, bob, escrowKey, usd(9000, gw), usd(1000, gw))
 
 	// Finish escrow: bob -> alice (finishing transfers to bob)
 	result = env.Submit(
 		escrow.EscrowFinish(bob, alice, seq1).
-			Condition(escrow.TestCondition1).
-			Fulfillment(escrow.TestFulfillment1).
+			Condition(escrow.TestCondition1()).
+			Fulfillment(escrow.TestFulfillment1()).
 			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxSuccess(t, result)
+	requireEscrowMetaNode(t, result, "DeletedNode", escrowKey)
 	env.Close()
 
-	// After finish: alice still at post-create level, bob gains 1000
-	postFinishAlice := env.BalanceIOU(alice, "USD", gw)
-	postFinishBob := env.BalanceIOU(bob, "USD", gw)
-	require.InDelta(t, postCreateAlice, postFinishAlice, 0.001,
-		"alice balance should not change after escrow finish")
-	require.InDelta(t, preBobUSD+1000.0, postFinishBob, 0.001,
-		"bob balance should increase by 1000 after escrow finish")
+	require.False(t, env.LedgerEntryExists(escrowKey))
+	requireOwnerDirContains(t, env, alice, escrowKey.Key, false)
+	requireOwnerDirContains(t, env, bob, escrowKey.Key, false)
+	requireOwnerDirContains(t, env, gw, escrowKey.Key, false)
+	require.Equal(t, aliceDirEntries, ownerDirEntryCount(t, env, alice))
+	require.Equal(t, bobDirEntries, ownerDirEntryCount(t, env, bob))
+	require.Equal(t, gwDirEntries, ownerDirEntryCount(t, env, gw))
+	require.Equal(t, aliceOwnerCount, env.OwnerCount(alice))
+	require.Equal(t, bobOwnerCount, env.OwnerCount(bob))
+	require.Equal(t, gwOwnerCount, env.OwnerCount(gw))
+	require.Equal(t, usd(4000, gw), *env.IOUBalance(alice, gw, "USD"))
+	require.Equal(t, usd(6000, gw), *env.IOUBalance(bob, gw, "USD"))
+	requireIOUIssuerAccounting(t, env, gw, alice, bob, escrowKey, usd(10000, gw), usd(0, gw))
 }
 
 func TestIOUEscrow_LockedRate(t *testing.T) {
 	tests := []struct {
 		name        string
 		currentRate uint32
-		wantCredit  float64
+		wantCredit  int64
 	}{
 		{name: "higher current rate uses locked rate", currentRate: 1_260_000_000, wantCredit: 100},
 		{name: "lower current rate uses current rate", currentRate: 0, wantCredit: 125},
@@ -560,12 +600,12 @@ func TestIOUEscrow_LockedRate(t *testing.T) {
 			env.SetTransferRate(gw, 1_250_000_000)
 			env.Close()
 
-			preBobUSD := env.BalanceIOU(bob, "USD", gw)
+			require.Equal(t, usd(5000, gw), *env.IOUBalance(bob, gw, "USD"))
 			seq := env.Seq(alice)
 			result := env.Submit(
 				escrow.EscrowCreate(alice, bob, 0).
 					IOUAmount(usd(125, gw)).
-					Condition(escrow.TestCondition1).
+					Condition(escrow.TestCondition1()).
 					FinishTime(env.Now().Add(time.Second)).
 					Fee(env.BaseFee() * 150).
 					Build())
@@ -577,14 +617,14 @@ func TestIOUEscrow_LockedRate(t *testing.T) {
 
 			result = env.Submit(
 				escrow.EscrowFinish(bob, alice, seq).
-					Condition(escrow.TestCondition1).
-					Fulfillment(escrow.TestFulfillment1).
+					Condition(escrow.TestCondition1()).
+					Fulfillment(escrow.TestFulfillment1()).
 					Fee(env.BaseFee() * 150).
 					Build())
 			jtx.RequireTxSuccess(t, result)
 			env.Close()
 
-			require.InDelta(t, preBobUSD+tt.wantCredit, env.BalanceIOU(bob, "USD", gw), 1e-12)
+			require.Equal(t, usd(5000+tt.wantCredit, gw), *env.IOUBalance(bob, gw, "USD"))
 		})
 	}
 }
@@ -595,46 +635,77 @@ func TestIOUEscrow_LockedRate(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestIOUEscrow_CancelBasic(t *testing.T) {
-	env, gw, alice, bob := setupIOUEscrowEnv(t)
+	for _, cleanupFixEnabled := range []bool{false, true} {
+		name := "WithoutFixCleanup3_2_0"
+		if cleanupFixEnabled {
+			name = "WithFixCleanup3_2_0"
+		}
+		t.Run(name, func(t *testing.T) {
+			testIOUEscrowCancelBasic(t, cleanupFixEnabled)
+		})
+	}
+}
 
-	// Record pre-escrow balances
-	preAliceUSD := env.BalanceIOU(alice, "USD", gw)
-	preBobUSD := env.BalanceIOU(bob, "USD", gw)
+func testIOUEscrowCancelBasic(t *testing.T, cleanupFixEnabled bool) {
+	t.Helper()
+	env, gw, alice, bob := setupIOUEscrowEnvWithCleanupFix(t, cleanupFixEnabled)
+
+	aliceOwnerCount := env.OwnerCount(alice)
+	bobOwnerCount := env.OwnerCount(bob)
+	gwOwnerCount := env.OwnerCount(gw)
+	aliceDirEntries := ownerDirEntryCount(t, env, alice)
+	bobDirEntries := ownerDirEntryCount(t, env, bob)
+	gwDirEntries := ownerDirEntryCount(t, env, gw)
 
 	// Create escrow with cancel time
 	seq2 := env.Seq(alice)
 	result := env.Submit(
 		escrow.EscrowCreate(alice, bob, 0).
 			IOUAmount(usd(1000, gw)).
-			Condition(escrow.TestCondition2).
+			Condition(escrow.TestCondition2()).
 			FinishTime(env.Now().Add(1 * time.Second)).
 			CancelTime(env.Now().Add(2 * time.Second)).
 			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxSuccess(t, result)
+	escrowKey := keylet.Escrow(alice.ID, seq2)
+	requireEscrowMetaNode(t, result, "CreatedNode", escrowKey)
+	require.True(t, env.LedgerEntryExists(escrowKey))
+	requireOwnerDirContains(t, env, alice, escrowKey.Key, true)
+	requireOwnerDirContains(t, env, bob, escrowKey.Key, true)
+	requireOwnerDirContains(t, env, gw, escrowKey.Key, true)
+	require.Equal(t, aliceDirEntries+1, ownerDirEntryCount(t, env, alice))
+	require.Equal(t, bobDirEntries+1, ownerDirEntryCount(t, env, bob))
+	require.Equal(t, gwDirEntries+1, ownerDirEntryCount(t, env, gw))
+	require.Equal(t, aliceOwnerCount+1, env.OwnerCount(alice))
+	require.Equal(t, bobOwnerCount, env.OwnerCount(bob))
+	require.Equal(t, gwOwnerCount, env.OwnerCount(gw))
 	env.Close()
 
-	// After create: alice loses 1000
-	postCreateAlice := env.BalanceIOU(alice, "USD", gw)
-	postCreateBob := env.BalanceIOU(bob, "USD", gw)
-	require.InDelta(t, preAliceUSD-1000.0, postCreateAlice, 0.001,
-		"alice balance should decrease by 1000 after escrow create")
-	require.InDelta(t, preBobUSD, postCreateBob, 0.001,
-		"bob balance should not change after escrow create")
+	require.Equal(t, usd(4000, gw), *env.IOUBalance(alice, gw, "USD"))
+	require.Equal(t, usd(5000, gw), *env.IOUBalance(bob, gw, "USD"))
+	requireIOUIssuerAccounting(t, env, gw, alice, bob, escrowKey, usd(9000, gw), usd(1000, gw))
 
 	// Cancel escrow
 	result = env.Submit(
 		escrow.EscrowCancel(bob, alice, seq2).Build())
 	jtx.RequireTxSuccess(t, result)
+	requireEscrowMetaNode(t, result, "DeletedNode", escrowKey)
 	env.Close()
 
-	// After cancel: alice gets 1000 back, bob unchanged
-	postCancelAlice := env.BalanceIOU(alice, "USD", gw)
-	postCancelBob := env.BalanceIOU(bob, "USD", gw)
-	require.InDelta(t, preAliceUSD, postCancelAlice, 0.001,
-		"alice balance should be restored after escrow cancel")
-	require.InDelta(t, preBobUSD, postCancelBob, 0.001,
-		"bob balance should not change after escrow cancel")
+	require.False(t, env.LedgerEntryExists(escrowKey))
+	requireOwnerDirContains(t, env, alice, escrowKey.Key, false)
+	requireOwnerDirContains(t, env, bob, escrowKey.Key, false)
+	requireOwnerDirContains(t, env, gw, escrowKey.Key, false)
+	require.Equal(t, aliceDirEntries, ownerDirEntryCount(t, env, alice))
+	require.Equal(t, bobDirEntries, ownerDirEntryCount(t, env, bob))
+	require.Equal(t, gwDirEntries, ownerDirEntryCount(t, env, gw))
+	require.Equal(t, aliceOwnerCount, env.OwnerCount(alice))
+	require.Equal(t, bobOwnerCount, env.OwnerCount(bob))
+	require.Equal(t, gwOwnerCount, env.OwnerCount(gw))
+	require.Equal(t, usd(5000, gw), *env.IOUBalance(alice, gw, "USD"))
+	require.Equal(t, usd(5000, gw), *env.IOUBalance(bob, gw, "USD"))
+	requireIOUIssuerAccounting(t, env, gw, alice, bob, escrowKey, usd(10000, gw), usd(0, gw))
 }
 
 // --------------------------------------------------------------------------
@@ -655,8 +726,8 @@ func TestIOUEscrow_CreatePreflight(t *testing.T) {
 
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
-				IOUAmount(tx.NewIssuedAmountFromFloat64(-1, "USD", gw.Address)).
-				Condition(escrow.TestCondition1).
+				IOUAmount(tx.NewIssuedAmount(-1, 0, "USD", gw.Address)).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -677,7 +748,7 @@ func TestIOUEscrow_CreatePreflight(t *testing.T) {
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				IOUAmount(tx.NewIssuedAmountFromFloat64(1, "XRP", gw.Address)).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -694,37 +765,43 @@ func TestIOUEscrow_CreatePreflight(t *testing.T) {
 func TestIOUEscrow_SelfEscrow(t *testing.T) {
 	env, gw, alice, _ := setupIOUEscrowEnv(t)
 
-	preAliceUSD := env.BalanceIOU(alice, "USD", gw)
+	require.Equal(t, usd(5000, gw), *env.IOUBalance(alice, gw, "USD"))
+	aliceOwnerCount := env.OwnerCount(alice)
 
 	// Alice creates escrow to herself
 	seq := env.Seq(alice)
 	result := env.Submit(
 		escrow.EscrowCreate(alice, alice, 0).
 			IOUAmount(usd(100, gw)).
-			Condition(escrow.TestCondition1).
+			Condition(escrow.TestCondition1()).
 			FinishTime(env.Now().Add(1 * time.Second)).
 			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxSuccess(t, result)
+	escrowKey := keylet.Escrow(alice.ID, seq)
+	requireEscrowMetaNode(t, result, "CreatedNode", escrowKey)
+	require.True(t, env.LedgerEntryExists(escrowKey))
+	requireOwnerDirContains(t, env, alice, escrowKey.Key, true)
+	require.Equal(t, aliceOwnerCount+1, env.OwnerCount(alice))
 	env.Close()
 
-	// Balance should decrease
-	postCreate := env.BalanceIOU(alice, "USD", gw)
-	require.InDelta(t, preAliceUSD-100.0, postCreate, 0.001)
+	require.Equal(t, usd(4900, gw), *env.IOUBalance(alice, gw, "USD"))
 
 	// Alice finishes escrow to herself
 	result = env.Submit(
 		escrow.EscrowFinish(alice, alice, seq).
-			Condition(escrow.TestCondition1).
-			Fulfillment(escrow.TestFulfillment1).
+			Condition(escrow.TestCondition1()).
+			Fulfillment(escrow.TestFulfillment1()).
 			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxSuccess(t, result)
+	requireEscrowMetaNode(t, result, "DeletedNode", escrowKey)
 	env.Close()
 
-	// Balance should be restored
-	postFinish := env.BalanceIOU(alice, "USD", gw)
-	require.InDelta(t, preAliceUSD, postFinish, 0.001)
+	require.False(t, env.LedgerEntryExists(escrowKey))
+	requireOwnerDirContains(t, env, alice, escrowKey.Key, false)
+	require.Equal(t, aliceOwnerCount, env.OwnerCount(alice))
+	require.Equal(t, usd(5000, gw), *env.IOUBalance(alice, gw, "USD"))
 }
 
 // --------------------------------------------------------------------------
@@ -735,14 +812,14 @@ func TestIOUEscrow_SelfEscrow(t *testing.T) {
 func TestIOUEscrow_MultipleEscrows(t *testing.T) {
 	env, gw, alice, bob := setupIOUEscrowEnv(t)
 
-	preAliceUSD := env.BalanceIOU(alice, "USD", gw)
+	require.Equal(t, usd(5000, gw), *env.IOUBalance(alice, gw, "USD"))
 
 	// Create escrow #1: 500 USD
 	seq1 := env.Seq(alice)
 	result := env.Submit(
 		escrow.EscrowCreate(alice, bob, 0).
 			IOUAmount(usd(500, gw)).
-			Condition(escrow.TestCondition1).
+			Condition(escrow.TestCondition1()).
 			FinishTime(env.Now().Add(1 * time.Second)).
 			Fee(env.BaseFee() * 150).
 			Build())
@@ -754,7 +831,7 @@ func TestIOUEscrow_MultipleEscrows(t *testing.T) {
 	result = env.Submit(
 		escrow.EscrowCreate(alice, bob, 0).
 			IOUAmount(usd(300, gw)).
-			Condition(escrow.TestCondition2).
+			Condition(escrow.TestCondition2()).
 			FinishTime(env.Now().Add(1 * time.Second)).
 			CancelTime(env.Now().Add(3 * time.Second)).
 			Fee(env.BaseFee() * 150).
@@ -763,14 +840,13 @@ func TestIOUEscrow_MultipleEscrows(t *testing.T) {
 	env.Close()
 
 	// Both escrows locked: alice should have lost 800
-	postCreate := env.BalanceIOU(alice, "USD", gw)
-	require.InDelta(t, preAliceUSD-800.0, postCreate, 0.001)
+	require.Equal(t, usd(4200, gw), *env.IOUBalance(alice, gw, "USD"))
 
 	// Finish escrow #1
 	result = env.Submit(
 		escrow.EscrowFinish(bob, alice, seq1).
-			Condition(escrow.TestCondition1).
-			Fulfillment(escrow.TestFulfillment1).
+			Condition(escrow.TestCondition1()).
+			Fulfillment(escrow.TestFulfillment1()).
 			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxSuccess(t, result)
@@ -783,14 +859,8 @@ func TestIOUEscrow_MultipleEscrows(t *testing.T) {
 	env.Close()
 
 	// After finish + cancel: alice should have preAliceUSD - 500 (sent to bob)
-	postAll := env.BalanceIOU(alice, "USD", gw)
-	require.InDelta(t, preAliceUSD-500.0, postAll, 0.001,
-		"alice should only lose the finished escrow amount, cancelled amount returned")
-
-	// Bob should have gained 500
-	postBobUSD := env.BalanceIOU(bob, "USD", gw)
-	require.InDelta(t, 5500.0, postBobUSD, 0.001,
-		"bob should gain 500 from the finished escrow")
+	require.Equal(t, usd(4500, gw), *env.IOUBalance(alice, gw, "USD"))
+	require.Equal(t, usd(5500, gw), *env.IOUBalance(bob, gw, "USD"))
 }
 
 // --------------------------------------------------------------------------
@@ -811,7 +881,7 @@ func TestIOUEscrow_FinishTrustLine(t *testing.T) {
 	// newFinishEnv funds gw and alice, flags gw with AllowTrustLineLocking,
 	// gives alice an aliceLimit USD trust line fully funded to aliceBalance,
 	// and funds bob with bobDrops XRP and NO USD trust line.
-	newFinishEnv := func(t *testing.T, bobDrops uint64, aliceLimit string, aliceBalance float64) (*jtx.TestEnv, *jtx.Account, *jtx.Account, *jtx.Account) {
+	newFinishEnv := func(t *testing.T, bobDrops uint64, aliceLimit string, aliceBalance int64) (*jtx.TestEnv, *jtx.Account, *jtx.Account, *jtx.Account) {
 		t.Helper()
 		env := jtx.NewTestEnv(t)
 		env.EnableFeature("TokenEscrow")
@@ -843,13 +913,13 @@ func TestIOUEscrow_FinishTrustLine(t *testing.T) {
 		return env, gw, alice, bob
 	}
 
-	createEscrow := func(t *testing.T, env *jtx.TestEnv, alice, bob *jtx.Account, gw *jtx.Account, amount float64) uint32 {
+	createEscrow := func(t *testing.T, env *jtx.TestEnv, alice, bob *jtx.Account, gw *jtx.Account, amount int64) uint32 {
 		t.Helper()
 		seq := env.Seq(alice)
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, 0).
 				IOUAmount(usd(amount, gw)).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Fee(env.BaseFee() * 150).
 				Build())
@@ -861,8 +931,8 @@ func TestIOUEscrow_FinishTrustLine(t *testing.T) {
 	finish := func(env *jtx.TestEnv, submitter, owner *jtx.Account, seq uint32) jtx.TxResult {
 		return env.Submit(
 			escrow.EscrowFinish(submitter, owner, seq).
-				Condition(escrow.TestCondition1).
-				Fulfillment(escrow.TestFulfillment1).
+				Condition(escrow.TestCondition1()).
+				Fulfillment(escrow.TestFulfillment1()).
 				Fee(env.BaseFee() * 150).
 				Build())
 	}
@@ -871,17 +941,20 @@ func TestIOUEscrow_FinishTrustLine(t *testing.T) {
 		// tecNO_LINE_INSUF_RESERVE: bob cannot cover the new line's reserve
 		env, gw, alice, bob := newFinishEnv(t, reserveShortBob, "10000", 10000)
 		seq := createEscrow(t, env, alice, bob, gw, 1)
+		before := captureIOUEscrowSnapshot(t, env, gw, alice, bob, seq)
 
 		jtx.RequireTxFail(t, finish(env, bob, alice, seq), "tecNO_LINE_INSUF_RESERVE")
+		requireIOUEscrowSnapshot(t, env, gw, alice, bob, seq, before)
 	})
 
 	t.Run("ThirdPartyFinishWithoutLine", func(t *testing.T) {
 		// tecNO_LINE: alice submits; the destination line is not created
 		env, gw, alice, bob := newFinishEnv(t, uint64(jtx.XRP(5000)), "10000", 10000)
 		seq := createEscrow(t, env, alice, bob, gw, 1)
+		before := captureIOUEscrowSnapshot(t, env, gw, alice, bob, seq)
 
 		jtx.RequireTxFail(t, finish(env, alice, alice, seq), "tecNO_LINE")
-		require.False(t, env.TrustLineExists(bob, gw, "USD"))
+		requireIOUEscrowSnapshot(t, env, gw, alice, bob, seq, before)
 	})
 
 	t.Run("ThirdPartyFinishLimitExceeded", func(t *testing.T) {
@@ -896,8 +969,10 @@ func TestIOUEscrow_FinishTrustLine(t *testing.T) {
 		result = env.Submit(trustset.TrustLine(bob, "USD", gw, "1").Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
+		before := captureIOUEscrowSnapshot(t, env, gw, alice, bob, seq)
 
 		jtx.RequireTxFail(t, finish(env, alice, alice, seq), "tecLIMIT_EXCEEDED")
+		requireIOUEscrowSnapshot(t, env, gw, alice, bob, seq, before)
 	})
 
 	t.Run("DestinationFinishIgnoresLimit", func(t *testing.T) {
@@ -918,8 +993,8 @@ func TestIOUEscrow_FinishTrustLine(t *testing.T) {
 		jtx.RequireTxSuccess(t, finish(env, bob, alice, seq))
 		env.Close()
 
-		require.InDelta(t, 1.0, env.Limit(bob, gw, "USD"), 0.0001, "bob's limit must not change")
-		require.InDelta(t, 5.0, env.BalanceIOU(bob, "USD", gw), 0.0001)
+		requireTrustLineLimitValue(t, env, bob, gw, "USD", "1")
+		require.Equal(t, usd(5, gw), *env.IOUBalance(bob, gw, "USD"))
 	})
 
 	t.Run("DestinationFinishCreatesLine", func(t *testing.T) {
@@ -933,7 +1008,110 @@ func TestIOUEscrow_FinishTrustLine(t *testing.T) {
 		env.Close()
 
 		require.True(t, env.TrustLineExists(bob, gw, "USD"), "destination trust line must be auto-created")
-		require.InDelta(t, 0.0, env.Limit(bob, gw, "USD"), 0.0001, "auto-created line has a zero limit")
-		require.InDelta(t, 1.0, env.BalanceIOU(bob, "USD", gw), 0.0001)
+		requireTrustLineLimitValue(t, env, bob, gw, "USD", "0")
+		require.Equal(t, usd(1, gw), *env.IOUBalance(bob, gw, "USD"))
 	})
+}
+
+func requireTrustLineLimitValue(
+	t *testing.T,
+	env *jtx.TestEnv,
+	holder, issuer *jtx.Account,
+	currency, want string,
+) {
+	t.Helper()
+	data, err := env.Ledger().Read(keylet.Line(holder.ID, issuer.ID, currency))
+	require.NoError(t, err)
+	require.NotNil(t, data)
+	line, err := state.ParseRippleState(data)
+	require.NoError(t, err)
+	limit := line.HighLimit
+	if keylet.IsLowAccount(holder.ID, issuer.ID) {
+		limit = line.LowLimit
+	}
+	require.Equal(t, want, limit.Value())
+}
+
+func requireIOUIssuerAccounting(
+	t *testing.T,
+	env *jtx.TestEnv,
+	issuer, alice, bob *jtx.Account,
+	escrowKey keylet.Keylet,
+	wantCirculating, wantLocked tx.Amount,
+) {
+	t.Helper()
+	circulating, err := env.IOUBalance(alice, issuer, "USD").Add(*env.IOUBalance(bob, issuer, "USD"))
+	require.NoError(t, err)
+	require.Equal(t, wantCirculating, circulating)
+
+	if wantLocked.IsZero() {
+		require.False(t, env.LedgerEntryExists(escrowKey))
+	} else {
+		data, readErr := env.LedgerEntry(escrowKey)
+		require.NoError(t, readErr)
+		escrowEntry, parseErr := state.ParseEscrow(data)
+		require.NoError(t, parseErr)
+		require.NotNil(t, escrowEntry.IOUAmount)
+		require.Equal(t, wantLocked, *escrowEntry.IOUAmount)
+	}
+
+	outstanding, err := circulating.Add(wantLocked)
+	require.NoError(t, err)
+	require.Equal(t, usd(10000, issuer), outstanding)
+}
+
+type iouEscrowSnapshot struct {
+	escrowData                  []byte
+	aliceBalance, bobBalance    tx.Amount
+	aliceLine, bobLine          bool
+	aliceOwners, bobOwners      uint32
+	issuerOwners                uint32
+	aliceDir, bobDir, issuerDir int
+}
+
+func captureIOUEscrowSnapshot(
+	t *testing.T,
+	env *jtx.TestEnv,
+	issuer, alice, bob *jtx.Account,
+	sequence uint32,
+) iouEscrowSnapshot {
+	t.Helper()
+	data, err := env.LedgerEntry(keylet.Escrow(alice.ID, sequence))
+	require.NoError(t, err)
+	return iouEscrowSnapshot{
+		escrowData:   append([]byte(nil), data...),
+		aliceBalance: *env.IOUBalance(alice, issuer, "USD"),
+		bobBalance:   *env.IOUBalance(bob, issuer, "USD"),
+		aliceLine:    env.TrustLineExists(alice, issuer, "USD"),
+		bobLine:      env.TrustLineExists(bob, issuer, "USD"),
+		aliceOwners:  env.OwnerCount(alice),
+		bobOwners:    env.OwnerCount(bob),
+		issuerOwners: env.OwnerCount(issuer),
+		aliceDir:     ownerDirEntryCount(t, env, alice),
+		bobDir:       ownerDirEntryCount(t, env, bob),
+		issuerDir:    ownerDirEntryCount(t, env, issuer),
+	}
+}
+
+func requireIOUEscrowSnapshot(
+	t *testing.T,
+	env *jtx.TestEnv,
+	issuer, alice, bob *jtx.Account,
+	sequence uint32,
+	want iouEscrowSnapshot,
+) {
+	t.Helper()
+	data, err := env.LedgerEntry(keylet.Escrow(alice.ID, sequence))
+	require.NoError(t, err)
+	require.Equal(t, want.escrowData, data)
+	require.Equal(t, want.aliceBalance, *env.IOUBalance(alice, issuer, "USD"))
+	require.Equal(t, want.bobBalance, *env.IOUBalance(bob, issuer, "USD"))
+	require.Equal(t, want.aliceLine, env.TrustLineExists(alice, issuer, "USD"))
+	require.Equal(t, want.bobLine, env.TrustLineExists(bob, issuer, "USD"))
+	require.Equal(t, want.aliceOwners, env.OwnerCount(alice))
+	require.Equal(t, want.bobOwners, env.OwnerCount(bob))
+	require.Equal(t, want.issuerOwners, env.OwnerCount(issuer))
+	require.Equal(t, want.aliceDir, ownerDirEntryCount(t, env, alice))
+	require.Equal(t, want.bobDir, ownerDirEntryCount(t, env, bob))
+	require.Equal(t, want.issuerDir, ownerDirEntryCount(t, env, issuer))
 }

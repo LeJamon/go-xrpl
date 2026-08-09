@@ -2,7 +2,6 @@ package rcl
 
 import (
 	"bytes"
-	"sync"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
@@ -28,19 +27,18 @@ func mostPopularTxSet(counts map[consensus.TxSetID]int) (consensus.TxSetID, int)
 	return bestID, bestCount
 }
 
-// DisputeTracker tracks disputed transactions and their per-peer
+// disputeTracker tracks disputed transactions and their per-peer
 // votes during a consensus round. Mirrors the role of rippled's
 // Result::disputes map plus the DisputedTx<> mutation API
 // (rippled/src/xrpld/consensus/DisputedTx.h).
-type DisputeTracker struct {
-	mu sync.RWMutex
-
+type disputeTracker struct {
 	disputes map[consensus.TxID]*consensus.DisputedTx
 }
 
-// NewDisputeTracker creates a new dispute tracker.
-func NewDisputeTracker() *DisputeTracker {
-	return &DisputeTracker{
+// The owning Engine protects all access with e.mu; the tracker deliberately
+// has no second lock.
+func newDisputeTracker() *disputeTracker {
+	return &disputeTracker{
 		disputes: make(map[consensus.TxID]*consensus.DisputedTx),
 	}
 }
@@ -52,17 +50,14 @@ func NewDisputeTracker() *DisputeTracker {
 //
 // Matches the construction arm of rippled's createDisputes
 // (Consensus.h:1867-1884).
-func (dt *DisputeTracker) CreateDispute(txID consensus.TxID, tx []byte, ourVote bool) *consensus.DisputedTx {
-	dt.mu.Lock()
-	defer dt.mu.Unlock()
-
+func (dt *disputeTracker) CreateDispute(txID consensus.TxID, tx []byte, ourVote bool) *consensus.DisputedTx {
 	if existing, exists := dt.disputes[txID]; exists {
 		return existing
 	}
 
 	dispute := &consensus.DisputedTx{
 		TxID:           txID,
-		Tx:             tx,
+		Tx:             append([]byte(nil), tx...),
 		OurVote:        ourVote,
 		Votes:          make(map[consensus.NodeID]bool),
 		AvalancheState: consensus.AvalancheInit,
@@ -79,10 +74,7 @@ func (dt *DisputeTracker) CreateDispute(txID consensus.TxID, tx []byte, ourVote 
 // The returned bool matches rippled's DisputedTx::setVote contract:
 // callers use it to reset peerUnchangedCounter_ (Consensus.h:1879,
 // 1906) to detect rounds where some peer is still actively updating.
-func (dt *DisputeTracker) SetVote(txID consensus.TxID, peerID consensus.NodeID, yes bool) bool {
-	dt.mu.Lock()
-	defer dt.mu.Unlock()
-
+func (dt *disputeTracker) SetVote(txID consensus.TxID, peerID consensus.NodeID, yes bool) bool {
 	dispute, exists := dt.disputes[txID]
 	if !exists {
 		return false
@@ -92,7 +84,7 @@ func (dt *DisputeTracker) SetVote(txID consensus.TxID, peerID consensus.NodeID, 
 
 // updateVoteCount records peerID's yes/no vote on dispute, adjusting
 // the Yays/Nays tallies. Returns true iff the vote was newly inserted
-// or changed from a previous value. Caller must hold dt.mu.
+// or changed from a previous value. Caller must hold the owning Engine's e.mu.
 func updateVoteCount(dispute *consensus.DisputedTx, peerID consensus.NodeID, yes bool) bool {
 	prev, had := dispute.Votes[peerID]
 	switch {
@@ -126,10 +118,7 @@ func updateVoteCount(dispute *consensus.DisputedTx, peerID consensus.NodeID, yes
 //
 // Matches rippled's bow-out loop at Consensus.h:807-811 and the
 // stale-proposal loop at Consensus.h:1517-1520.
-func (dt *DisputeTracker) UnVote(peerID consensus.NodeID) {
-	dt.mu.Lock()
-	defer dt.mu.Unlock()
-
+func (dt *disputeTracker) UnVote(peerID consensus.NodeID) {
 	for _, dispute := range dt.disputes {
 		vote, had := dispute.Votes[peerID]
 		if !had {
@@ -149,13 +138,10 @@ func (dt *DisputeTracker) UnVote(peerID consensus.NodeID) {
 // appears in peerTxSet, else NO. Returns true iff any vote changed.
 //
 // Matches rippled's updateDisputes (Consensus.h:1892-1908).
-func (dt *DisputeTracker) UpdateDisputes(peerID consensus.NodeID, peerTxSet consensus.TxSet) bool {
+func (dt *disputeTracker) UpdateDisputes(peerID consensus.NodeID, peerTxSet consensus.TxSet) bool {
 	if peerTxSet == nil {
 		return false
 	}
-	dt.mu.Lock()
-	defer dt.mu.Unlock()
-
 	changed := false
 	for txID, dispute := range dt.disputes {
 		if updateVoteCount(dispute, peerID, peerTxSet.Contains(txID)) {
@@ -182,10 +168,7 @@ func (dt *DisputeTracker) UpdateDisputes(peerID consensus.NodeID, peerTxSet cons
 //
 // Returns the list of TxIDs whose OurVote flipped this call. The
 // engine uses that list to rebuild the proposed tx set.
-func (dt *DisputeTracker) UpdateOurVote(percentTime int, proposing bool, parms consensus.ConsensusParms) []consensus.TxID {
-	dt.mu.Lock()
-	defer dt.mu.Unlock()
-
+func (dt *disputeTracker) UpdateOurVote(percentTime int, proposing bool, parms consensus.ConsensusParms) []consensus.TxID {
 	var changed []consensus.TxID
 	for txID, dispute := range dt.disputes {
 		if dispute.OurVote && dispute.Nays == 0 {
@@ -241,9 +224,7 @@ func (dt *DisputeTracker) UpdateOurVote(percentTime int, proposing bool, parms c
 //
 // Matches rippled's std::ranges::all_of stalled check at
 // Consensus.h:1720-1728.
-func (dt *DisputeTracker) AllStalled(parms consensus.ConsensusParms, proposing bool, peersUnchanged int) bool {
-	dt.mu.RLock()
-	defer dt.mu.RUnlock()
+func (dt *disputeTracker) AllStalled(parms consensus.ConsensusParms, proposing bool, peersUnchanged int) bool {
 	if len(dt.disputes) == 0 {
 		return false
 	}
@@ -267,8 +248,8 @@ func (dt *DisputeTracker) AllStalled(parms consensus.ConsensusParms, proposing b
 //   - the tally is >MinConsensusPct one-sided (overwhelming yes or no
 //     support), so further flipping is unlikely.
 func disputeStalled(d *consensus.DisputedTx, parms consensus.ConsensusParms, proposing bool, peersUnchanged int) bool {
-	currentCutoff := parms.AvalancheCutoffs[d.AvalancheState]
-	nextCutoff := parms.AvalancheCutoffs[currentCutoff.Next]
+	currentCutoff := parms.AvalancheCutoff(d.AvalancheState)
+	nextCutoff := parms.AvalancheCutoff(currentCutoff.Next)
 
 	if nextCutoff.ConsensusTime > currentCutoff.ConsensusTime ||
 		d.AvalancheCounter < parms.MinRounds {
@@ -303,58 +284,51 @@ func disputeStalled(d *consensus.DisputedTx, parms consensus.ConsensusParms, pro
 }
 
 // Dispute returns a disputed transaction.
-func (dt *DisputeTracker) Dispute(txID consensus.TxID) *consensus.DisputedTx {
-	dt.mu.RLock()
-	defer dt.mu.RUnlock()
+func (dt *disputeTracker) Dispute(txID consensus.TxID) *consensus.DisputedTx {
 	return dt.disputes[txID]
 }
 
 // Has reports whether a dispute exists for the given TxID.
-func (dt *DisputeTracker) Has(txID consensus.TxID) bool {
-	dt.mu.RLock()
-	defer dt.mu.RUnlock()
+func (dt *disputeTracker) Has(txID consensus.TxID) bool {
 	_, ok := dt.disputes[txID]
 	return ok
 }
 
-// DisputedNoTxs returns the raw blobs of every dispute we currently vote NO
-// on — txs peers proposed that end up excluded from the consensus set.
-func (dt *DisputeTracker) DisputedNoTxs() [][]byte {
-	dt.mu.RLock()
-	defer dt.mu.RUnlock()
-
+// DisputedNoTxs returns detached raw blobs of every dispute we currently vote
+// NO on — txs peers proposed that end up excluded from the consensus set.
+func (dt *disputeTracker) DisputedNoTxs() [][]byte {
 	var txs [][]byte
 	for _, d := range dt.disputes {
 		if !d.OurVote {
-			txs = append(txs, d.Tx)
+			txs = append(txs, append([]byte(nil), d.Tx...))
 		}
 	}
 	return txs
 }
 
-// All returns all disputed transactions.
-func (dt *DisputeTracker) All() []*consensus.DisputedTx {
-	dt.mu.RLock()
-	defer dt.mu.RUnlock()
-
+// All returns detached snapshots of all disputed transactions.
+func (dt *disputeTracker) All() []*consensus.DisputedTx {
 	result := make([]*consensus.DisputedTx, 0, len(dt.disputes))
 	for _, d := range dt.disputes {
-		result = append(result, d)
+		result = append(result, cloneDisputedTx(d))
 	}
 	return result
 }
 
 // Count returns the number of disputes.
-func (dt *DisputeTracker) Count() int {
-	dt.mu.RLock()
-	defer dt.mu.RUnlock()
+func (dt *disputeTracker) Count() int {
 	return len(dt.disputes)
 }
 
-// Clear removes all disputes.
-func (dt *DisputeTracker) Clear() {
-	dt.mu.Lock()
-	defer dt.mu.Unlock()
-
-	dt.disputes = make(map[consensus.TxID]*consensus.DisputedTx)
+func cloneDisputedTx(d *consensus.DisputedTx) *consensus.DisputedTx {
+	if d == nil {
+		return nil
+	}
+	copy := *d
+	copy.Tx = append([]byte(nil), d.Tx...)
+	copy.Votes = make(map[consensus.NodeID]bool, len(d.Votes))
+	for nodeID, vote := range d.Votes {
+		copy.Votes[nodeID] = vote
+	}
+	return &copy
 }

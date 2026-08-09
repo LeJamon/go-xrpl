@@ -123,6 +123,21 @@ func TestBuildHandshakeResponse(t *testing.T) {
 	assert.Equal(t, cfg.UserAgent, resp.Header.Get(HeaderServer))
 }
 
+func TestBuildHandshakeResponseMirrorsHTTPVersion(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	request := emptyHandshakeRequest()
+	request.Proto = "HTTP/2.0"
+	request.ProtoMajor = 2
+	request.ProtoMinor = 0
+
+	resp := BuildHandshakeResponse(request, id, make([]byte, 32), DefaultHandshakeConfig(), "")
+	assert.Equal(t, request.Proto, resp.Proto)
+	assert.Equal(t, request.ProtoMajor, resp.ProtoMajor)
+	assert.Equal(t, request.ProtoMinor, resp.ProtoMinor)
+}
+
 func TestBuildHandshakeResponseNegotiatesFeatures(t *testing.T) {
 	id, err := NewIdentity()
 	require.NoError(t, err)
@@ -1511,6 +1526,38 @@ func TestHandshake_RemoteIPSelfReported_MatchesTcpConn(t *testing.T) {
 		assert.True(t, errors.Is(err, ErrInvalidHandshake))
 		assert.Contains(t, err.Error(), "invalid Remote-IP")
 	})
+}
+
+func TestValidateServerDomain(t *testing.T) {
+	tests := []struct {
+		name    string
+		present bool
+		value   string
+		want    string
+		wantErr bool
+	}{
+		{name: "absent"},
+		{name: "present empty", present: true, wantErr: true},
+		{name: "valid", present: true, value: "validator.example.com", want: "validator.example.com"},
+		{name: "invalid", present: true, value: "-validator.example.com", wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			headers := make(http.Header)
+			if test.present {
+				headers[HeaderServerDomain] = []string{test.value}
+			}
+			got, err := ValidateServerDomain(headers)
+			if test.wantErr {
+				require.Error(t, err)
+				assert.True(t, errors.Is(err, ErrInvalidHandshake))
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, test.want, got)
+		})
+	}
 }
 
 // Round-trip topology: sender A (public IP pA) → receiver B (public IP pB).

@@ -6,7 +6,6 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
-	"github.com/LeJamon/go-xrpl/internal/ledger/manager"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -16,9 +15,33 @@ const historyWindow = 256
 
 const persistedLedgerCacheSize = historyWindow
 
+func (s *historyComponent) ledgerBySequence(seq uint32) *ledger.Ledger {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ledgerHistory[seq]
+}
+
+func (s *historyComponent) hashesByRange(minSeq, maxSeq uint32) map[uint32][32]byte {
+	hashes := make(map[uint32][32]byte)
+	if minSeq > maxSeq {
+		return hashes
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for seq := minSeq; ; seq++ {
+		if l := s.ledgerHistory[seq]; l != nil {
+			hashes[seq] = l.Hash()
+		}
+		if seq == maxSeq {
+			break
+		}
+	}
+	return hashes
+}
+
 func (s *Service) ensureCompleteLedgerStateLocked() {
 	if s.completedLedgers == nil {
-		s.completedLedgers = manager.NewCompleteLedgerSet()
+		s.completedLedgers = newCompleteLedgerSet()
 	}
 	if s.completeLedgerTokens == nil {
 		s.completeLedgerTokens = make(map[uint32]uint64)
@@ -37,7 +60,7 @@ func (s *Service) beginValidatedPersistence(seq uint32, hash [32]byte) uint64 {
 	s.completeLedgerTokens[seq] = token
 	s.completeLedgerHashes[seq] = hash
 	if seq >= s.completeLedgerFloor {
-		s.completedLedgers.Add(seq)
+		s.completedLedgers.add(seq)
 	}
 	return token
 }
@@ -52,10 +75,10 @@ func (s *Service) recordValidatedPersistence(seq uint32, token uint64, success b
 	delete(s.completeLedgerTokens, seq)
 	if !success || seq < s.completeLedgerFloor {
 		delete(s.completeLedgerHashes, seq)
-		s.completedLedgers.Remove(seq)
+		s.completedLedgers.remove(seq)
 		return
 	}
-	s.completedLedgers.Add(seq)
+	s.completedLedgers.add(seq)
 }
 
 // invalidateCompleteLedger removes seq and prevents already-queued persistence
@@ -70,7 +93,7 @@ func (s *Service) invalidateCompleteLedger(seq uint32) {
 	s.ensureCompleteLedgerStateLocked()
 	delete(s.completeLedgerTokens, seq)
 	delete(s.completeLedgerHashes, seq)
-	s.completedLedgers.Remove(seq)
+	s.completedLedgers.remove(seq)
 	s.completeMu.Unlock()
 	s.persistMu.Unlock()
 	s.invalidatePersistedValidatedTip(seq, seq)
@@ -89,7 +112,7 @@ func (s *Service) invalidateCompleteLedgerHash(seq uint32, hash [32]byte) {
 	if s.completeLedgerHashes[seq] == hash {
 		delete(s.completeLedgerTokens, seq)
 		delete(s.completeLedgerHashes, seq)
-		s.completedLedgers.Remove(seq)
+		s.completedLedgers.remove(seq)
 	}
 	s.completeMu.Unlock()
 	s.persistMu.Unlock()
@@ -119,7 +142,7 @@ func (s *Service) invalidateCompleteLedgerRange(start, end uint32) {
 			delete(s.completeLedgerHashes, seq)
 		}
 	}
-	s.completedLedgers.RemoveRange(start, end)
+	s.completedLedgers.removeRange(start, end)
 	s.completeMu.Unlock()
 	s.persistMu.Unlock()
 	s.invalidatePersistedValidatedTip(start, end)
@@ -154,7 +177,7 @@ func (s *Service) clampCompleteLedgers(floor uint32) {
 			delete(s.completeLedgerHashes, seq)
 		}
 	}
-	s.completedLedgers.RemoveRange(0, floor-1)
+	s.completedLedgers.removeRange(0, floor-1)
 }
 
 func (s *Service) hasCompleteLedger(l *ledger.Ledger) bool {
@@ -163,10 +186,17 @@ func (s *Service) hasCompleteLedger(l *ledger.Ledger) bool {
 	}
 	s.completeMu.RLock()
 	defer s.completeMu.RUnlock()
-	if s.completedLedgers == nil || !s.completedLedgers.Contains(l.Sequence()) {
+	if s.completedLedgers == nil || !s.completedLedgers.contains(l.Sequence()) {
 		return false
 	}
 	return s.completeLedgerHashes[l.Sequence()] == l.Hash()
+}
+
+// HasCompleteLedger reports whether seq belongs to the completed-ledger set.
+func (s *Service) HasCompleteLedger(seq uint32) bool {
+	s.completeMu.RLock()
+	defer s.completeMu.RUnlock()
+	return s.completedLedgers != nil && s.completedLedgers.contains(seq)
 }
 
 func (s *Service) completeLedgersString() string {
@@ -183,7 +213,7 @@ func (s *Service) completeLedgerEvictionStatus(seq uint32) (tracked, durable boo
 	defer s.completeMu.RUnlock()
 	_, hasHash := s.completeLedgerHashes[seq]
 	_, pending := s.completeLedgerTokens[seq]
-	complete := s.completedLedgers != nil && s.completedLedgers.Contains(seq)
+	complete := s.completedLedgers != nil && s.completedLedgers.contains(seq)
 	tracked = complete || hasHash || pending
 	durable = s.nodeStore != nil &&
 		s.shamapFamily != nil &&
@@ -194,7 +224,7 @@ func (s *Service) completeLedgerEvictionStatus(seq uint32) (tracked, durable boo
 }
 
 // evictOldHistoryLocked drops ledgerHistory + tx-index entries older than the
-// historyWindow. Caller must hold s.mu.
+// historyWindow. Caller holds Service.mu and historyComponent.mu.
 func (s *Service) evictOldHistoryLocked(latestValidatedSeq uint32) {
 	if latestValidatedSeq <= historyWindow {
 		return
@@ -217,8 +247,8 @@ func (s *Service) evictOldHistoryLocked(latestValidatedSeq uint32) {
 }
 
 // putHistoryLocked installs l into ledgerHistory, keeping the by-hash index in
-// sync. Caller must hold s.mu.
-func (s *Service) putHistoryLocked(l *ledger.Ledger) {
+// sync. Caller holds historyComponent.mu.
+func (s *historyComponent) putHistoryLocked(l *ledger.Ledger) {
 	seq := l.Sequence()
 	if old, ok := s.ledgerHistory[seq]; ok {
 		delete(s.ledgerByHash, old.Hash())
@@ -227,16 +257,16 @@ func (s *Service) putHistoryLocked(l *ledger.Ledger) {
 	s.ledgerByHash[l.Hash()] = seq
 }
 
-// deleteHistoryLocked removes seq from ledgerHistory and the by-hash
-// index. Caller must hold s.mu.
-func (s *Service) deleteHistoryLocked(seq uint32) {
+// deleteHistoryLocked removes seq from ledgerHistory and the by-hash index.
+// Caller holds historyComponent.mu.
+func (s *historyComponent) deleteHistoryLocked(seq uint32) {
 	if old, ok := s.ledgerHistory[seq]; ok {
 		delete(s.ledgerByHash, old.Hash())
 		delete(s.ledgerHistory, seq)
 	}
 }
 
-func (s *Service) cachePersistedLedgerLocked(l *ledger.Ledger) {
+func (s *historyComponent) cachePersistedLedgerLocked(l *ledger.Ledger) {
 	hash := l.Hash()
 	if _, ok := s.persistedLedgers[hash]; ok {
 		return
@@ -256,7 +286,7 @@ func (s *Service) cachePersistedLedgerLocked(l *ledger.Ledger) {
 const pendingValidationMaxLen = 256
 
 // stashPendingValidationLocked stashes an accepted event by hash for later
-// eventCallback dispatch on full validation, LRU-evicting at the cap.
+// event sink dispatch on full validation, LRU-evicting at the cap.
 // Caller must hold s.mu.
 func (s *Service) stashPendingValidationLocked(hash [32]byte, event *LedgerAcceptedEvent) {
 	if _, exists := s.pendingValidation[hash]; !exists {
@@ -346,32 +376,28 @@ func (s *Service) stashPendingLedgerValidationLocked(seq uint32, expectedHash [3
 	}
 }
 
-// drainPendingLedgerValidationLocked removes any stashed validation at seq and,
-// on hash match within pendingValidationTTL and a successful current-quorum
-// recheck, promotes adopted to validated and returns true. Rejected entries are
-// deleted so a later adopt cannot match a stale notification. Caller must hold
-// s.mu.
-func (s *Service) drainPendingLedgerValidationLocked(seq uint32, adopted *ledger.Ledger) bool {
+type pendingLedgerValidationDecision struct {
+	seq           uint32
+	adopted       *ledger.Ledger
+	found         bool
+	markValidated bool
+	promote       bool
+	signTime      time.Time
+}
+
+func (s *Service) stagePendingLedgerValidationLocked(seq uint32, adopted *ledger.Ledger) pendingLedgerValidationDecision {
+	decision := pendingLedgerValidationDecision{seq: seq, adopted: adopted}
 	entry, ok := s.pendingLedgerValidations[seq]
 	if !ok {
-		return false
+		return decision
 	}
-	delete(s.pendingLedgerValidations, seq)
-	for i, q := range s.pendingLedgerValidationsOrder {
-		if q == seq {
-			s.pendingLedgerValidationsOrder = append(s.pendingLedgerValidationsOrder[:i], s.pendingLedgerValidationsOrder[i+1:]...)
-			break
-		}
-	}
+	decision.found = true
 
 	if time.Since(entry.at) >= pendingValidationTTL {
-		// Expired: too old to trust; a fresh SetValidatedLedger re-stashes
-		// if still current.
-		return false
+		return decision
 	}
 	if adopted.Hash() != entry.expectedHash {
-		// Fork: peers validated a different hash at this seq — don't promote.
-		return false
+		return decision
 	}
 
 	signTime := entry.signTime
@@ -379,7 +405,7 @@ func (s *Service) drainPendingLedgerValidationLocked(seq uint32, adopted *ledger
 		var accepted bool
 		signTime, accepted = s.pendingValidationResolver(seq, entry.expectedHash)
 		if !accepted {
-			return false
+			return decision
 		}
 	}
 
@@ -393,21 +419,55 @@ func (s *Service) drainPendingLedgerValidationLocked(seq uint32, adopted *ledger
 	// must not rewind the pointer. The sole same-height exception replaces a
 	// provisional fast-loaded ledger after the current trusted quorum recheck.
 	if s.validatedLedger != nil && seq <= s.validatedLedger.Sequence() && !replaceProvisional {
-		_ = adopted.SetValidated()
-		return false
+		decision.markValidated = true
+		return decision
 	}
 
 	if signTime.IsZero() {
 		signTime = adopted.CloseTime()
 	}
+	decision.promote = true
+	decision.signTime = signTime
+	return decision
+}
+
+func (s *Service) commitPendingLedgerValidationLocked(decision pendingLedgerValidationDecision) bool {
+	if !decision.found {
+		return false
+	}
+	delete(s.pendingLedgerValidations, decision.seq)
+	for i, q := range s.pendingLedgerValidationsOrder {
+		if q == decision.seq {
+			s.pendingLedgerValidationsOrder = append(s.pendingLedgerValidationsOrder[:i], s.pendingLedgerValidationsOrder[i+1:]...)
+			break
+		}
+	}
+	if decision.markValidated {
+		_ = decision.adopted.SetValidated()
+		return false
+	}
+	if !decision.promote {
+		return false
+	}
+
+	adopted := decision.adopted
 	_ = adopted.SetValidated()
 	s.validatedLedger = adopted
-	s.validatedSignTime = signTime
+	s.validatedSignTime = decision.signTime
 	if s.networkLedgerState == networkLedgerFastLoadProvisional {
 		s.networkLedgerState = networkLedgerReady
 	}
-	s.evictOldHistoryLocked(seq)
+	s.evictOldHistoryLocked(decision.seq)
 	return true
+}
+
+// drainPendingLedgerValidationLocked removes any stashed validation at seq and,
+// on hash match within pendingValidationTTL and a successful current-quorum
+// recheck, promotes adopted to validated and returns true. Rejected entries are
+// deleted so a later adopt cannot match a stale notification. Caller must hold
+// s.mu.
+func (s *Service) drainPendingLedgerValidationLocked(seq uint32, adopted *ledger.Ledger) bool {
+	return s.commitPendingLedgerValidationLocked(s.stagePendingLedgerValidationLocked(seq, adopted))
 }
 
 // pendingAdopt is a held replay-delta adoption awaiting its parent seq, carrying

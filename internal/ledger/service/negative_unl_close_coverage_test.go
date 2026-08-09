@@ -32,7 +32,7 @@ func negUNLValidator() []byte {
 func driveStandaloneToFlagParent(t *testing.T) (*service.Service, []byte) {
 	t.Helper()
 
-	svc, err := service.New(service.DefaultConfig())
+	svc, err := service.New(defaultServiceConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

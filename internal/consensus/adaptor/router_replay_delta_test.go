@@ -23,8 +23,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// recordingSender captures the calls the router makes against the
-// NetworkSender interface. The router is the unit under test, so the
+// recordingSender captures the calls the router makes against its acquisition
+// network. The router is the unit under test, so the
 // sender is the natural seam to inspect for "preferred replay-delta vs
 // fell back to legacy" assertions.
 type recordingSender struct {
@@ -293,7 +293,7 @@ func makeRouter(t *testing.T) (*Router, *Adaptor, *recordingSender, *service.Ser
 	svc := newTestLedgerService(t)
 	a, rs := newRecordingAdaptor(t, svc)
 	inbox := make(chan *peermanagement.InboundMessage, 8)
-	r := NewRouter(nil, a, inbox)
+	r := newTestRouter(nil, a, inbox)
 	return r, a, rs, svc
 }
 
@@ -388,7 +388,7 @@ func TestRouter_ReplayDeltaResponse_Routed(t *testing.T) {
 
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payload,
 	})
 
@@ -421,7 +421,7 @@ func TestRouter_FallsBackToLegacyOnReplayFailure(t *testing.T) {
 
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payload,
 	})
 
@@ -487,7 +487,7 @@ func TestRouter_ReplayDeltaApplyStoresDerivedLedger(t *testing.T) {
 
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payload,
 	})
 
@@ -534,7 +534,7 @@ func TestRouter_ReplayDeltaApply_StateMismatchFallsBack(t *testing.T) {
 
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payload,
 	})
 
@@ -578,7 +578,7 @@ func TestRouter_ConcurrentAcquisitions_RouteCorrectly(t *testing.T) {
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payload,
 	})
 
@@ -608,7 +608,7 @@ func TestRouter_IgnoresUnsolicitedReplayDeltaResponse(t *testing.T) {
 
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payload,
 	})
 
@@ -662,7 +662,7 @@ func TestRouter_ConsensusRecoveryWalkNotifiesOnlyExactTarget(t *testing.T) {
 	payload1, err := message.Encode(resp1)
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
-		PeerID: 7, Type: uint16(message.TypeReplayDeltaResponse), Payload: payload1,
+		PeerID: 7, Type: message.TypeReplayDeltaResponse, Payload: payload1,
 	})
 	require.Empty(t, engine.getLedgers())
 	require.Equal(t, consensusRecovery{
@@ -676,7 +676,7 @@ func TestRouter_ConsensusRecoveryWalkNotifiesOnlyExactTarget(t *testing.T) {
 	payload2, err := message.Encode(resp2)
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
-		PeerID: 7, Type: uint16(message.TypeReplayDeltaResponse), Payload: payload2,
+		PeerID: 7, Type: message.TypeReplayDeltaResponse, Payload: payload2,
 	})
 	require.Equal(t, []consensus.LedgerID{consensus.LedgerID(hash2)}, engine.getLedgers())
 	require.Equal(t, consensusRecovery{anchorHash: hash2, anchorSeq: seq2}, r.consensusRecovery)
@@ -720,7 +720,7 @@ func TestRouter_ConsensusRecoveryTargetChangeKeepsStepStoreOnly(t *testing.T) {
 	payload, err := message.Encode(resp1)
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
-		PeerID: 7, Type: uint16(message.TypeReplayDeltaResponse), Payload: payload,
+		PeerID: 7, Type: message.TypeReplayDeltaResponse, Payload: payload,
 	})
 	require.Empty(t, engine.getLedgers())
 	require.Equal(t, consensusRecovery{
@@ -880,7 +880,7 @@ func TestRouter_ReplayDeltaStoresOutOfOrderArrivalsByHash(t *testing.T) {
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payloadN2,
 	})
 
@@ -896,7 +896,7 @@ func TestRouter_ReplayDeltaStoresOutOfOrderArrivalsByHash(t *testing.T) {
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  9,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payloadN1,
 	})
 
@@ -953,7 +953,7 @@ func TestRouter_ReplayDeltaStoresWithoutParentChase(t *testing.T) {
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payloadN2,
 	})
 
@@ -978,7 +978,7 @@ func TestRouter_InitialReplaySwitchSchedulesHistoryBackfill(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, a.OnLedgerSwitched(selected))
 	}
-	r := NewRouter(engine, a, make(chan *peermanagement.InboundMessage, 1))
+	r := newTestRouter(engine, a, make(chan *peermanagement.InboundMessage, 1))
 
 	closed := svc.GetClosedLedger()
 	require.NotNil(t, closed)
@@ -996,7 +996,7 @@ func TestRouter_InitialReplaySwitchSchedulesHistoryBackfill(t *testing.T) {
 	require.NoError(t, err)
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeReplayDeltaResponse),
+		Type:    message.TypeReplayDeltaResponse,
 		Payload: payload,
 	})
 
@@ -1012,7 +1012,7 @@ func TestRouter_LaterPreferredInitialSwitchSchedulesHistoryBackfill(t *testing.T
 	t.Cleanup(svc.Stop)
 	a, _ := newRecordingAdaptor(t, svc)
 	engine := &mockEngine{switchResult: consensus.LedgerSwitchIrrelevant}
-	r := NewRouter(engine, a, nil)
+	r := newTestRouter(engine, a, nil)
 
 	closed := svc.GetClosedLedger()
 	require.NotNil(t, closed)

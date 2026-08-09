@@ -46,6 +46,7 @@ cache_mb = 2048
 open_files = 1000
 cache_size = 16384
 cache_age = 5
+fast_load_workers = 32
 earliest_seq = 32570
 online_delete = 512
 delete_batch = 100
@@ -65,7 +66,6 @@ minimum_escalation_multiplier = 128000
 minimum_txn_in_ledger = 32
 minimum_txn_in_ledger_standalone = 1000
 target_txn_in_ledger = 256
-maximum_txn_in_ledger = 0
 normal_consensus_increase_percent = 20
 slow_consensus_decrease_percent = 50
 maximum_txn_per_account = 10
@@ -122,6 +122,7 @@ func TestLoadConfig(t *testing.T) {
 	assert.Equal(t, "/tmp/test/db", config.NodeDB.Path)
 	assert.Equal(t, int64(2048), config.NodeDB.CacheMB)
 	assert.Equal(t, 1000, config.NodeDB.OpenFiles)
+	assert.Equal(t, 32, config.NodeDB.FastLoadWorkers)
 	require.NotNil(t, config.FeeDefault)
 	assert.Equal(t, 13, *config.FeeDefault)
 
@@ -169,6 +170,36 @@ func TestNodeDBConfigPebbleResourcesValidation(t *testing.T) {
 	}
 }
 
+func TestNodeDBConfigFastLoadWorkersValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		workers int
+		wantErr string
+	}{
+		{name: "automatic"},
+		{name: "one worker", workers: 1},
+		{name: "maximum", workers: 64},
+		{name: "negative", workers: -1, wantErr: "fast_load_workers must be non-negative"},
+		{name: "over maximum", workers: 65, wantErr: "fast_load_workers must not exceed 64"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := NodeDBConfig{
+				Type:            "pebble",
+				Path:            t.TempDir(),
+				FastLoadWorkers: test.workers,
+			}
+			err := cfg.Validate()
+			if test.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
+}
+
 func TestLoadConfigTracksExplicitZeroVotingValues(t *testing.T) {
 	configPath := writeConfig(t, t.TempDir(), "xrpld.toml", minimalTestConfig()+`
 
@@ -197,6 +228,9 @@ ports = ["port_test"]
 admin = ["127.0.0.1"]
 admin_user = "common-user"
 admin_password = "common-password"
+user = "operator"
+password = "transport-password"
+allowed_origins = ["https://console.example"]
 secure_gateway = ["10.0.0.0/8"]
 
 [port_test]
@@ -218,7 +252,43 @@ path = "/tmp/test/db"
 	assert.Equal(t, []string{"127.0.0.1", "::1"}, port.Admin)
 	assert.Equal(t, "common-user", port.AdminUser)
 	assert.Equal(t, "port-password", port.AdminPassword)
+	assert.Equal(t, "operator", port.User)
+	assert.Equal(t, "transport-password", port.Password)
+	assert.Equal(t, []string{"https://console.example"}, port.AllowedOrigins)
 	assert.Equal(t, []string{"10.0.0.0/8", "192.168.0.0/16"}, port.SecureGateway)
+}
+
+func TestLoadConfig_ServerSSLCipherDefaults(t *testing.T) {
+	tempDir := t.TempDir()
+	mainConfigPath := writeConfig(t, tempDir, "xrpld.toml", `
+database_path = "/tmp/test/db"
+network_id = "main"
+debug_logfile = "/tmp/test/debug.log"
+
+[server]
+ports = ["port_inherited", "port_override"]
+ssl_ciphers = "server-ciphers"
+
+[port_inherited]
+port = 51235
+ip = "127.0.0.1"
+protocol = "peer"
+
+[port_override]
+port = 51236
+ip = "127.0.0.1"
+protocol = "http"
+ssl_ciphers = "port-ciphers"
+
+[node_db]
+type = "pebble"
+path = "/tmp/test/db"
+`)
+
+	cfg, err := LoadConfig(Paths{Main: mainConfigPath})
+	require.NoError(t, err)
+	assert.Equal(t, "server-ciphers", cfg.Ports["port_inherited"].SSLCiphers)
+	assert.Equal(t, "port-ciphers", cfg.Ports["port_override"].SSLCiphers)
 }
 
 // TestLoadConfig_MinimalConfig verifies that the optional tuning sections
@@ -642,6 +712,35 @@ func TestOverlayConfig_VerifyEndpointsValidation(t *testing.T) {
 				assert.NoError(t, err)
 			}
 		})
+	}
+}
+
+func TestOverlayConfig_InboundRetainedBytesValidation(t *testing.T) {
+	o := OverlayConfig{InboundRetainedBytes: 3 * 64 * 1024 * 1024}
+	require.NoError(t, o.Validate())
+
+	o.InboundRetainedBytes--
+	err := o.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inbound_retained_bytes")
+}
+
+func TestOverlayConfig_ResourceLimitsValidation(t *testing.T) {
+	valid := OverlayConfig{ResourceLimits: ResourceLimitsConfig{
+		MaxEntries: 200, MaxImportedEntries: 100, MaxImportOrigins: 10, MaxImportItems: 50,
+	}}
+	require.NoError(t, valid.Validate())
+
+	tests := []ResourceLimitsConfig{
+		{MaxEntries: -1},
+		{MaxEntries: 10, MaxImportedEntries: 11},
+		{MaxImportOrigins: -1},
+		{MaxImportItems: 1025},
+	}
+	for _, limits := range tests {
+		err := (&OverlayConfig{ResourceLimits: limits}).Validate()
+		require.Error(t, err, "limits=%+v", limits)
+		assert.Contains(t, err.Error(), "resource_limits")
 	}
 }
 

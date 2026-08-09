@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"container/list"
 	"encoding/binary"
 	"sync"
 	"time"
@@ -99,29 +100,26 @@ func appendVLPrefix(buf []byte, n int) []byte {
 // duplicates, accelerating selection N-fold and producing squelches
 // earlier and more aggressively than the rest of the network expects.
 type messageSuppression struct {
-	mu sync.Mutex
-	// seen maps a suppression hash to the most recent observation time.
-	// TTL-evicted on observe when at maxSize.
-	seen map[[32]byte]time.Time
-	// peers maps a suppression hash to the set of peer IDs known to
-	// already have the message. Populated both on inbound observe (the
-	// sender now has it because they sent it to us) and on outbound
-	// broadcast (the recipient now has it because we sent it to them).
-	// Used by validator-list broadcast to skip peers known to already have
-	// the same content.
-	peers   map[[32]byte]map[uint64]struct{}
+	mu      sync.Mutex
+	entries map[[32]byte]*suppressionEntry
+	order   list.List
 	ttl     time.Duration
 	maxSize int
 	now     func() time.Time
 }
 
-// newMessageSuppression returns a dedup tracker. ttl bounds how long a
-// hash is remembered; maxSize caps memory for adversarial traffic
-// (when the set is full we trim half the oldest entries).
+type suppressionEntry struct {
+	seenAt time.Time
+	peers  map[uint64]struct{}
+	order  *list.Element
+}
+
 func newMessageSuppression(ttl time.Duration, maxSize int) *messageSuppression {
+	if maxSize < 1 {
+		maxSize = 1
+	}
 	return &messageSuppression{
-		seen:    make(map[[32]byte]time.Time),
-		peers:   make(map[[32]byte]map[uint64]struct{}),
+		entries: make(map[[32]byte]*suppressionEntry),
 		ttl:     ttl,
 		maxSize: maxSize,
 		now:     time.Now,
@@ -141,48 +139,30 @@ func (s *messageSuppression) observe(hash [32]byte) (firstSeen bool, lastSeenAt 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	now := s.now()
+	_, firstSeen, lastSeenAt = s.touchLocked(hash, s.now())
+	return firstSeen, lastSeenAt
+}
 
-	// Evict stale entries if we're at capacity. A cheap scan rather
-	// than a formal LRU — the tracker is a cache, not a hot path.
-	if len(s.seen) >= s.maxSize {
-		cutoff := now.Add(-s.ttl)
-		for h, seenAt := range s.seen {
-			if seenAt.Before(cutoff) {
-				delete(s.seen, h)
-				delete(s.peers, h)
-			}
-		}
-		if len(s.seen) >= s.maxSize {
-			i := 0
-			for h := range s.seen {
-				if i >= s.maxSize/2 {
-					break
-				}
-				delete(s.seen, h)
-				delete(s.peers, h)
-				i++
-			}
-		}
-	}
-
-	if seenAt, ok := s.seen[hash]; ok && now.Sub(seenAt) < s.ttl {
-		s.seen[hash] = now // refresh so a steady stream of duplicates stays live
-		return false, seenAt
-	}
-	s.seen[hash] = now
-	return true, time.Time{}
+func (s *messageSuppression) allowRetry(hash [32]byte) {
+	s.mu.Lock()
+	s.removeLocked(hash)
+	s.mu.Unlock()
 }
 
 func (s *messageSuppression) seenRecently(hash [32]byte) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
-	seenAt, ok := s.seen[hash]
-	if !ok || now.Sub(seenAt) >= s.ttl {
+	entry, ok := s.entries[hash]
+	if !ok {
 		return false
 	}
-	s.seen[hash] = now
+	if s.expired(entry, now) {
+		s.removeLocked(hash)
+		return false
+	}
+	entry.seenAt = now
+	s.order.MoveToBack(entry.order)
 	return true
 }
 
@@ -201,18 +181,14 @@ func (s *messageSuppression) recordPeer(hash [32]byte, peerID uint64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	now := s.now()
-	s.seen[hash] = now
-
-	peers, ok := s.peers[hash]
-	if !ok {
-		peers = make(map[uint64]struct{})
-		s.peers[hash] = peers
+	entry, _, _ := s.touchLocked(hash, s.now())
+	if entry.peers == nil {
+		entry.peers = make(map[uint64]struct{})
 	}
-	if _, present := peers[peerID]; present {
+	if _, present := entry.peers[peerID]; present {
 		return false
 	}
-	peers[peerID] = struct{}{}
+	entry.peers[peerID] = struct{}{}
 	return true
 }
 
@@ -222,10 +198,64 @@ func (s *messageSuppression) recordPeer(hash [32]byte, peerID uint64) bool {
 func (s *messageSuppression) peerHasHash(hash [32]byte, peerID uint64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	peers, ok := s.peers[hash]
+	entry, ok := s.entries[hash]
 	if !ok {
 		return false
 	}
-	_, present := peers[peerID]
+	if s.expired(entry, s.now()) {
+		s.removeLocked(hash)
+		return false
+	}
+	_, present := entry.peers[peerID]
 	return present
+}
+
+func (s *messageSuppression) touchLocked(hash [32]byte, now time.Time) (*suppressionEntry, bool, time.Time) {
+	if entry, ok := s.entries[hash]; ok {
+		if !s.expired(entry, now) {
+			lastSeenAt := entry.seenAt
+			entry.seenAt = now
+			s.order.MoveToBack(entry.order)
+			return entry, false, lastSeenAt
+		}
+		s.removeLocked(hash)
+	}
+
+	s.expireLocked(now)
+	for len(s.entries) >= s.maxSize {
+		oldest := s.order.Front()
+		if oldest == nil {
+			break
+		}
+		s.removeLocked(oldest.Value.([32]byte))
+	}
+
+	entry := &suppressionEntry{seenAt: now}
+	entry.order = s.order.PushBack(hash)
+	s.entries[hash] = entry
+	return entry, true, time.Time{}
+}
+
+func (s *messageSuppression) expireLocked(now time.Time) {
+	for oldest := s.order.Front(); oldest != nil; oldest = s.order.Front() {
+		hash := oldest.Value.([32]byte)
+		entry := s.entries[hash]
+		if entry != nil && !s.expired(entry, now) {
+			return
+		}
+		s.removeLocked(hash)
+	}
+}
+
+func (s *messageSuppression) expired(entry *suppressionEntry, now time.Time) bool {
+	return now.Sub(entry.seenAt) >= s.ttl
+}
+
+func (s *messageSuppression) removeLocked(hash [32]byte) {
+	entry, ok := s.entries[hash]
+	if !ok {
+		return
+	}
+	s.order.Remove(entry.order)
+	delete(s.entries, hash)
 }

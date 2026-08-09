@@ -11,7 +11,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
-	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
 
@@ -25,9 +24,10 @@ type gatedStore struct {
 	release     chan struct{}
 }
 
-func newGatedStore() *gatedStore {
+func newGatedStore(t *testing.T) *gatedStore {
+	t.Helper()
 	return &gatedStore{
-		Database: nodestore.NewKVDatabase(memorydb.New(), "mem", 10000, time.Hour),
+		Database: newTestNodeStore(t, 10000),
 		release:  make(chan struct{}),
 	}
 }
@@ -48,9 +48,20 @@ func buildLedgerWithState(t *testing.T, seq uint32) *ledger.Ledger {
 	if err := stateMap.Put(key, []byte("state-payload")); err != nil {
 		t.Fatalf("state Put: %v", err)
 	}
+	stateRoot, err := stateMap.Hash()
+	if err != nil {
+		t.Fatalf("state Hash: %v", err)
+	}
+	txMap := shamap.New(shamap.TypeTransaction)
+	txRoot, err := txMap.Hash()
+	if err != nil {
+		t.Fatalf("transaction Hash: %v", err)
+	}
 	hdr := header.LedgerHeader{
 		LedgerIndex:         seq,
 		Drops:               100_000_000_000_000,
+		AccountHash:         stateRoot,
+		TxHash:              txRoot,
 		CloseTime:           time.Unix(1_700_000_000+int64(seq), 0).UTC(),
 		ParentCloseTime:     time.Unix(1_699_999_990+int64(seq), 0).UTC(),
 		CloseTimeResolution: 10,
@@ -58,7 +69,11 @@ func buildLedgerWithState(t *testing.T, seq uint32) *ledger.Ledger {
 		Accepted:            true,
 	}
 	hdr.Hash = [32]byte{0xED, byte(seq), byte(seq >> 8)}
-	return ledger.FromGenesis(hdr, stateMap, shamap.New(shamap.TypeTransaction), drops.Fees{})
+	l, err := ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("ledger.FromGenesis: %v", err)
+	}
+	return l
 }
 
 // TestService_Stop_DrainsQueuedPersists proves the shutdown contract: ledgers
@@ -67,7 +82,7 @@ func buildLedgerWithState(t *testing.T, seq uint32) *ledger.Ledger {
 // forces the worker to stall so the ledgers genuinely queue behind an in-flight
 // write, exercising the drain-then-exit path.
 func TestService_Stop_DrainsQueuedPersists(t *testing.T) {
-	store := newGatedStore()
+	store := newGatedStore(t)
 	svc, err := New(Config{Standalone: false, NodeStore: store})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -122,7 +137,7 @@ func TestService_Stop_DrainsQueuedPersists(t *testing.T) {
 }
 
 func TestService_PersistLedgerWritesHeader(t *testing.T) {
-	store := newGatedStore()
+	store := newGatedStore(t)
 	store.open()
 	svc, err := New(Config{Standalone: false, NodeStore: store})
 	if err != nil {
@@ -139,7 +154,7 @@ func TestService_PersistLedgerWritesHeader(t *testing.T) {
 }
 
 func TestService_ValidatedTipDoesNotRegress(t *testing.T) {
-	store := newGatedStore()
+	store := newGatedStore(t)
 	store.open()
 	svc, err := New(Config{Standalone: false, NodeStore: store})
 	if err != nil {
@@ -186,7 +201,7 @@ func TestService_Stop_Idempotent(t *testing.T) {
 // TestService_EnqueuePersist_AfterStop_Dropped confirms the stopped guard keeps
 // a late enqueue from sending on the queue after the worker has been joined.
 func TestService_EnqueuePersist_AfterStop_Dropped(t *testing.T) {
-	store := newGatedStore()
+	store := newGatedStore(t)
 	store.open() // never stall
 	svc, err := New(Config{Standalone: false, NodeStore: store})
 	if err != nil {

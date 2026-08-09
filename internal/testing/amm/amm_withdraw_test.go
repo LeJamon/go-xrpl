@@ -277,7 +277,7 @@ func TestInvalidWithdraw(t *testing.T) {
 			LPTokenIn(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
 			LPToken().
 			Build()
-		result := env.Submit(jtx.WithSeq(withdrawTx, 1))
+		result := env.SubmitWithOptions(jtx.WithSeq(withdrawTx, 1), jtx.SubmitOptions{SkipSignature: true})
 
 		if result.Success {
 			t.Fatal("Should not allow withdraw from non-existent account")

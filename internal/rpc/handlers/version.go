@@ -16,7 +16,7 @@ import (
 //   - api_version >= 2: numeric first (= apiMinimumSupportedVersion, 1) and
 //     last (apiBetaVersion when beta is on, else apiMaximumSupportedVersion),
 //     with NO `good` field.
-type VersionMethod struct{ BaseHandler }
+type VersionMethod struct{ baseHandler }
 
 // semanticVersion1 is the fixed "1.0.0" SemanticVersion rippled prints for
 // first/good/last under api_version 1 (firstVersion/goodVersion/lastVersion,

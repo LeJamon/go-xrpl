@@ -121,7 +121,10 @@ func (e *EscrowFinish) CalculateBaseFee(view tx.LedgerView, config tx.EngineConf
 		}
 	}
 
-	fee := sign.CalculateMultiSigFee(base, len(e.GetCommon().Signers))
+	fee := sign.CalculateMultiSigFee(
+		base,
+		len(e.GetCommon().Signers)+sign.SponsorSignerCount(e),
+	)
 
 	if e.Fulfillment != nil {
 		fulfillmentLen := len(*e.Fulfillment) / 2
@@ -134,15 +137,6 @@ func (e *EscrowFinish) CalculateBaseFee(view tx.LedgerView, config tx.EngineConf
 	return fee
 }
 
-// ApplyOnTec implements TecApplier. When tecEXPIRED is returned, this re-runs
-// credential expiration deletion against the engine's view so the side-effects
-// (credential deletion, owner count adjustment) persist even though the tx
-// sandbox is rolled back for tec results.
-// Reference: rippled Transactor.cpp - tecEXPIRED re-applies removeExpiredCredentials
-func (e *EscrowFinish) ApplyOnTec(ctx *tx.ApplyContext) {
-	credential.RemoveExpiredCredentialsOnTec(ctx, e.CredentialIDs)
-}
-
 // Apply applies an EscrowFinish transaction
 // Reference: rippled Escrow.cpp EscrowFinish::preclaim() + doApply()
 // Preclaim runs EscrowFinish's ledger-aware checks in rippled's preclaim order:
@@ -152,8 +146,8 @@ func (e *EscrowFinish) ApplyOnTec(ctx *tx.ApplyContext) {
 // auth/freeze state. Extracting these from Apply makes them visible to the
 // preclaim-only paths (TxQ admission, simulate). The FinishAfter/CancelAfter time
 // checks, the crypto-condition/fulfillment check, and the tecEXPIRED
-// expired-credential deletion (ApplyOnTec) stay in Apply, mirroring rippled which
-// keeps them in EscrowFinish::doApply. ValidCredentials never returns tecEXPIRED
+// expired-credential deletion stay in Apply, mirroring rippled which keeps them
+// in EscrowFinish::doApply. ValidCredentials never returns tecEXPIRED
 // (expiry is handled separately in Apply), so no tecEXPIRED escapes preclaim here.
 // Reference: rippled EscrowFinish.cpp preclaim().
 func (e *EscrowFinish) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
@@ -175,7 +169,10 @@ func (e *EscrowFinish) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 		return ter.TemINVALID
 	}
 	escrowData, readErr := view.Read(keylet.Escrow(ownerID, e.OfferSequence))
-	if readErr != nil || escrowData == nil {
+	if readErr != nil {
+		return ter.TefINTERNAL
+	}
+	if escrowData == nil {
 		return ter.TecNO_TARGET
 	}
 	escrowEntry, parseErr := state.ParseEscrow(escrowData)
@@ -202,6 +199,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 		"owner", e.Owner,
 		"offerSequence", e.OfferSequence,
 	)
+	rules := ctx.Rules()
 
 	ownerID, err := state.DecodeAccountID(e.Owner)
 	if err != nil {
@@ -211,7 +209,13 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Find the escrow
 	escrowKey := keylet.Escrow(ownerID, e.OfferSequence)
 	escrowData, err := ctx.View.Read(escrowKey)
-	if err != nil || escrowData == nil {
+	if err != nil {
+		return ctx.Internal("read escrow", err)
+	}
+	if escrowData == nil {
+		if rules.Enabled(amendment.FeatureTokenEscrow) {
+			return ter.TecINTERNAL
+		}
 		ctx.Log.Warn("escrow finish: escrow not found",
 			"owner", e.Owner,
 			"offerSequence", e.OfferSequence,
@@ -226,7 +230,6 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	rules := ctx.Rules()
 	isXRP := escrowEntry.IsXRP
 
 	closeTime := ctx.Config.ParentCloseTime
@@ -255,7 +258,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	if escrowEntry.Condition == "" {
 		// Escrow has no condition — tx must NOT provide condition/fulfillment
-		if txCondition != "" || txFulfillment != "" {
+		if e.Condition != nil || e.Fulfillment != nil {
 			ctx.Log.Warn("escrow finish: condition/fulfillment provided but escrow has no condition")
 			return ter.TecCRYPTOCONDITION_ERROR
 		}
@@ -294,7 +297,10 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 		// deleted after the escrow was created. Escrow cannot fund a new
 		// account, so this is tecNO_DST — not a parse-time tefINTERNAL.
 		// Reference: rippled Escrow.cpp:1105-1108
-		if err != nil || destData == nil {
+		if err != nil {
+			return ctx.Internal("read destination account", err)
+		}
+		if destData == nil {
 			return ter.TecNO_DST
 		}
 		destAccount, err = state.ParseAccountRoot(destData)
@@ -374,14 +380,18 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 			}
 
 			// Compute transfer fee
-			_, finalAmount := computeMPTTransferFee(
+			_, finalAmount, feeResult := computeMPTTransferFee(
 				ctx.View,
 				lockedRate,
 				mptHexID,
 				escrowEntry.Account,
 				escrowEntry.DestinationID,
 				originalAmount,
+				ctx.NumberContext(),
 			)
+			if feeResult != ter.TesSUCCESS {
+				return feeResult
+			}
 
 			// fixTokenEscrowV1 clears the gross (originally locked) amount and burns
 			// the fee from supply; before it, only the net amount was accounted.
@@ -423,6 +433,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 				true, // finish bumps the destination account's OwnerCount
 				ctx.Config.ReserveBase,
 				ctx.Config.ReserveIncrement,
+				ctx.NumberContext(),
 			); result != ter.TesSUCCESS {
 				return result
 			}
@@ -432,11 +443,12 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 		// Reference: rippled Escrow.cpp doApply() lines 1174-1183
 		if escrowEntry.HasIssuerNode {
 			issuerID, issuerErr := state.DecodeAccountID(escrowAmount.Issuer)
-			if issuerErr == nil {
-				issuerDirKey := keylet.OwnerDir(issuerID)
-				if result := tx.DirRemoveOrBadLedger(ctx.View, issuerDirKey, escrowEntry.IssuerNode, escrowKey.Key); result != ter.TesSUCCESS {
-					return result
-				}
+			if issuerErr != nil {
+				return ter.TefBAD_LEDGER
+			}
+			issuerDirKey := keylet.OwnerDir(issuerID)
+			if result := tx.DirRemoveOrBadLedger(ctx.View, issuerDirKey, escrowEntry.IssuerNode, escrowKey.Key); result != ter.TesSUCCESS {
+				return result
 			}
 		}
 	}
@@ -448,10 +460,8 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 	// re-synchronize it with the view so that the OwnerCount update is not
 	// lost when the engine writes ctx.Account back.
 	if destIsSelf && !isXRP {
-		if updatedData, readErr := ctx.View.Read(destKey); readErr == nil && updatedData != nil {
-			if updatedAcct, parseErr := state.ParseAccountRoot(updatedData); parseErr == nil {
-				ctx.Account.OwnerCount = updatedAcct.OwnerCount
-			}
+		if result := resyncSelfOwnerCount(ctx); result != ter.TesSUCCESS {
+			return result
 		}
 	}
 
@@ -472,7 +482,9 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Decrement OwnerCount for escrow owner only.
 	// Reference: rippled Escrow.cpp doApply() lines 1188-1191
-	adjustOwnerCount(ctx, ownerID, -1)
+	if result := adjustOwnerCount(ctx, ownerID, -1); result != ter.TesSUCCESS {
+		return result
+	}
 
 	return ter.TesSUCCESS
 }
@@ -481,15 +493,35 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 // When the target account is ctx.Account (the transaction sender), it modifies
 // ctx.Account directly (the engine writes it back). Otherwise it delegates to
 // tx.AdjustOwnerCount which reads/writes through the view.
-func adjustOwnerCount(ctx *tx.ApplyContext, accountID [20]byte, delta int) {
+func adjustOwnerCount(ctx *tx.ApplyContext, accountID [20]byte, delta int) ter.Result {
 	if accountID == ctx.AccountID {
 		if delta > 0 {
 			ctx.Account.OwnerCount += uint32(delta)
-		} else if ctx.Account.OwnerCount > 0 {
-			ctx.Account.OwnerCount--
+		} else {
+			decrement := uint32(-delta)
+			if ctx.Account.OwnerCount < decrement {
+				return ter.TefBAD_LEDGER
+			}
+			ctx.Account.OwnerCount -= decrement
 		}
-		return
+		return ter.TesSUCCESS
 	}
 
-	_ = tx.AdjustOwnerCount(ctx.View, accountID, delta)
+	return adjustOwnerCountViaView(ctx.View, accountID, delta)
+}
+
+func resyncSelfOwnerCount(ctx *tx.ApplyContext) ter.Result {
+	data, err := ctx.View.Read(keylet.Account(ctx.AccountID))
+	if err != nil {
+		return ctx.Internal("resync owner count", err)
+	}
+	if data == nil {
+		return ter.TefBAD_LEDGER
+	}
+	account, err := state.ParseAccountRoot(data)
+	if err != nil {
+		return ctx.Internal("parse resynced owner count", err)
+	}
+	ctx.Account.OwnerCount = account.OwnerCount
+	return ter.TesSUCCESS
 }

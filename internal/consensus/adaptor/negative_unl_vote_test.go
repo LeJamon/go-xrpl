@@ -1,6 +1,9 @@
 package adaptor
 
 import (
+	"bytes"
+	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -63,6 +66,16 @@ func (s *stubHistorian) GetTrustedValidations(id consensus.LedgerID) []*consensu
 	return s.byLedger[id]
 }
 
+func (s *stubHistorian) GetTrustedFullValidations(id consensus.LedgerID, seq uint32) []*consensus.Validation {
+	var out []*consensus.Validation
+	for _, validation := range s.byLedger[id] {
+		if validation != nil && validation.Full && validation.LedgerSeq == seq {
+			out = append(out, validation)
+		}
+	}
+	return out
+}
+
 func (s *stubHistorian) GetPreferred(largestIssued uint32) (consensus.LedgerID, uint32, bool) {
 	return s.preferredID, s.preferredSeq, s.preferredOK
 }
@@ -110,6 +123,18 @@ func TestAdaptor_NegativeUNL_NonWrappedLedgerReturnsNil(t *testing.T) {
 
 	blobs := a.GenerateNegativeUNLPseudoTx(notWrappedLedger{})
 	assert.Nil(t, blobs)
+}
+
+func TestAdaptor_NegativeUNL_ExactThresholdLogsError(t *testing.T) {
+	a := newTestAdaptor(t)
+	var output bytes.Buffer
+	a.logger = slog.New(slog.NewTextHandler(&output, nil))
+
+	a.logNegativeUNLVoteError(1024, fmt.Errorf("wrapped: %w", negativeunlvote.ErrLocalCountAtThreshold))
+
+	assert.Contains(t, output.String(), "level=ERROR")
+	assert.Contains(t, output.String(), "equals strict voting threshold")
+	assert.Contains(t, output.String(), "prev_seq=1024")
 }
 
 func TestNegativeUNLState_ParsesEmptySLE(t *testing.T) {
@@ -161,13 +186,6 @@ func TestBuildScoreTable_RejectsShortSkipList(t *testing.T) {
 	assert.Nil(t, scoreTable)
 }
 
-// TestBuildScoreTable_DoesNotGateOnLocalParticipation pins C2: the
-// local-participation gate ([MinLocalValsToVote, FlagLedgerInterval])
-// now lives solely in DoVoting, not in buildNegativeUNLScoreTable. The
-// builder must return the full tally regardless of the local node's
-// count — even when it is below MinLocalValsToVote — so DoVoting is the
-// single gate authority (and ErrLocalCountExceedsWindow can surface for
-// the impossible above-window case instead of being swallowed here).
 func TestBuildScoreTable_DoesNotGateOnLocalParticipation(t *testing.T) {
 	a := newTestAdaptor(t)
 
@@ -179,25 +197,25 @@ func TestBuildScoreTable_DoesNotGateOnLocalParticipation(t *testing.T) {
 	myID := consensus.NodeID{0x99}
 	otherID := consensus.NodeID{0xAA}
 
-	// Local node validates fewer than MinLocalValsToVote slots. Under the
-	// old duplicated gate this aborted the build; now it must not.
+	const localCount = protocol.FlagLedgerInterval / 2
+	const prevSeq = 2 * protocol.FlagLedgerInterval
 	byLedger := make(map[consensus.LedgerID][]*consensus.Validation, len(ancestors))
 	for i, h := range ancestors {
-		vals := []*consensus.Validation{{NodeID: otherID, LedgerID: consensus.LedgerID(h)}}
-		if uint32(i) < negativeunlvote.MinLocalValsToVote-1 {
-			vals = append(vals, &consensus.Validation{NodeID: myID, LedgerID: consensus.LedgerID(h)})
+		seq := prevSeq - protocol.FlagLedgerInterval + uint32(i)
+		vals := []*consensus.Validation{{NodeID: otherID, LedgerID: consensus.LedgerID(h), LedgerSeq: seq, Full: true}}
+		if uint32(i) < localCount {
+			vals = append(vals, &consensus.Validation{NodeID: myID, LedgerID: consensus.LedgerID(h), LedgerSeq: seq, Full: true})
 		}
 		byLedger[consensus.LedgerID(h)] = vals
 	}
 
 	scoreTable, ok := a.buildNegativeUNLScoreTable(
-		&stubSkipListProvider{seq: 2 * protocol.FlagLedgerInterval, hashes: ancestors},
+		&stubSkipListProvider{seq: prevSeq, hashes: ancestors},
 		&stubHistorian{byLedger: byLedger},
 	)
 	require.True(t, ok, "a full skip-list must build a table regardless of local participation")
 	require.NotNil(t, scoreTable)
-	assert.Less(t, scoreTable[myID], negativeunlvote.MinLocalValsToVote,
-		"local count is intentionally below the threshold; gating is DoVoting's job now")
+	assert.Equal(t, localCount, scoreTable[myID])
 }
 
 func TestBuildScoreTable_TalliesAcrossAncestors(t *testing.T) {
@@ -210,20 +228,21 @@ func TestBuildScoreTable_TalliesAcrossAncestors(t *testing.T) {
 
 	myID := consensus.NodeID{0x11}
 	offline := consensus.NodeID{0x22}
+	const prevSeq = 2 * protocol.FlagLedgerInterval // a flag ledger
 
 	byLedger := make(map[consensus.LedgerID][]*consensus.Validation, len(ancestors))
 	for i, h := range ancestors {
-		vals := []*consensus.Validation{{NodeID: myID, LedgerID: consensus.LedgerID(h)}}
+		seq := prevSeq - protocol.FlagLedgerInterval + uint32(i)
+		vals := []*consensus.Validation{{NodeID: myID, LedgerID: consensus.LedgerID(h), LedgerSeq: seq, Full: true}}
 		// `offline` validates only the first 50 ledgers — below the
 		// low water mark (128) so the producer would consider it a
 		// ToDisable candidate.
 		if i < 50 {
-			vals = append(vals, &consensus.Validation{NodeID: offline, LedgerID: consensus.LedgerID(h)})
+			vals = append(vals, &consensus.Validation{NodeID: offline, LedgerID: consensus.LedgerID(h), LedgerSeq: seq, Full: true})
 		}
 		byLedger[consensus.LedgerID(h)] = vals
 	}
 
-	const prevSeq = 2 * protocol.FlagLedgerInterval // a flag ledger
 	hist := &stubHistorian{byLedger: byLedger}
 	scoreTable, ok := a.buildNegativeUNLScoreTable(
 		&stubSkipListProvider{seq: prevSeq, hashes: ancestors},
@@ -275,34 +294,12 @@ func TestAdaptor_OnUNLChange_NoVoterIsNoOp(t *testing.T) {
 	a.OnUNLChange(0, nil)
 }
 
-// TestAdaptor_OnUNLChange_GracePeriodAndExpiry ports the two cases of
-// rippled's NegativeUNLVoteNewValidator_test::testDoVoting
-// (rippled/src/test/consensus/NegativeUNL_test.cpp:1735):
-//
-//  1. After OnUNLChange registers a new validator with `nowTrusted`,
-//     a bad score within NewValidatorDisableSkip ledgers must NOT
-//     produce a ToDisable pseudo-tx (grace period honored).
-//  2. After NewValidatorDisableSkip+1 ledgers have passed, the voting
-//     path's purge (Voter.PurgeNewValidators, called from
-//     GenerateNegativeUNLPseudoTx — mirrors rippled doVoting at
-//     NegativeUNLVote.cpp:339-355) drops both fresh entries; the same
-//     bad score now becomes a ToDisable candidate.
-//
-// Exercises the wiring: Adaptor.OnUNLChange records via
-// Voter.NewValidators; the existing voting-path purge owns expiry.
-// OnUNLChange intentionally does NOT purge, matching rippled's
-// preStartRound (RCLConsensus.cpp:1041-1043) which only registers.
 func TestAdaptor_OnUNLChange_GracePeriodAndExpiry(t *testing.T) {
 	a := newTestAdaptorWithMasters(t)
 	require.NotNil(t, a.negUNLVoter, "fixture must construct a voter")
 	voter := a.negUNLVoter
 	myKey := a.identity.MasterKey
 
-	// Build a UNL with the local node + two stable peers + two
-	// freshly-added validators. The UNL passed to DoVoting is
-	// independent of the adaptor's configured trustedMasterKeys; we
-	// supply our own multi-member list so MaxListedFraction permits
-	// at least one ToDisable candidate.
 	stable1 := makeRawMasterKey(0xAA)
 	stable2 := makeRawMasterKey(0xBB)
 	fresh1 := makeRawMasterKey(0xCC)
@@ -312,22 +309,16 @@ func TestAdaptor_OnUNLChange_GracePeriodAndExpiry(t *testing.T) {
 	fresh1NodeID := consensus.CalcNodeID(fresh1)
 	fresh2NodeID := consensus.CalcNodeID(fresh2)
 
-	// Score table: local node + stable peers participate at the
-	// HighWaterMark; fresh validators score 0 (the bad-score
-	// condition rippled's test exercises).
 	scoreTable := map[consensus.NodeID]uint32{
-		voter.MyID():                  negativeunlvote.MinLocalValsToVote + 1,
-		consensus.CalcNodeID(stable1): negativeunlvote.HighWaterMark + 1,
-		consensus.CalcNodeID(stable2): negativeunlvote.HighWaterMark + 1,
+		a.identity.NodeID:             protocol.FlagLedgerInterval,
+		consensus.CalcNodeID(stable1): protocol.FlagLedgerInterval,
+		consensus.CalcNodeID(stable2): protocol.FlagLedgerInterval,
 		fresh1NodeID:                  0,
 		fresh2NodeID:                  0,
 	}
 
 	const addedAtSeq uint32 = 256
 
-	// Case 1: register the fresh validators, then run a voting round
-	// within the NewValidatorDisableSkip window. Expect no ToDisable
-	// pseudo-tx.
 	a.OnUNLChange(addedAtSeq, []consensus.NodeID{fresh1NodeID, fresh2NodeID})
 
 	prevHash := [32]byte{0x42}
@@ -335,38 +326,29 @@ func TestAdaptor_OnUNLChange_GracePeriodAndExpiry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, blobs, "fresh validators within the grace window must not be ToDisable candidates")
 
-	// Case 2: advance well past NewValidatorDisableSkip. The voting
-	// path's purge — the same call GenerateNegativeUNLPseudoTx makes
-	// before invoking DoVoting (negative_unl_vote.go:74) — drops both
-	// fresh entries; a follow-up vote at the same seq now sees them
-	// as bad-score candidates. OnUNLChange must NOT be called here:
-	// no UNL change occurred (rippled's preStartRound would see an
-	// empty `nowTrusted` and skip newValidators entirely).
-	purgeSeq := addedAtSeq + negativeunlvote.NewValidatorDisableSkip + 2
-	voter.PurgeNewValidators(purgeSeq)
-
-	blobs, err = voter.DoVoting(purgeSeq, prevHash, unl, negativeunlvote.State{}, scoreTable)
+	expiredPrevSeq := addedAtSeq + 2*protocol.FlagLedgerInterval
+	blobs, err = voter.DoVoting(expiredPrevSeq, prevHash, unl, negativeunlvote.State{}, scoreTable)
 	require.NoError(t, err)
 	require.Len(t, blobs, 1, "after grace expiry, a bad-score new validator is eligible for a single ToDisable pseudo-tx")
 }
 
-// TestAdaptor_OnUNLChange_EmptyTrustedSetIsNoOp covers the
-// nowTrusted-empty short-circuit that mirrors rippled's
-// `!nowTrusted.empty()` gate at RCLConsensus.cpp:1042. The Voter's
-// newValidators map must remain untouched so future bad-score evals
-// still see no registered grace-period entries.
 func TestAdaptor_OnUNLChange_EmptyTrustedSetIsNoOp(t *testing.T) {
 	a := newTestAdaptorWithMasters(t)
 	require.NotNil(t, a.negUNLVoter)
 	a.OnUNLChange(512, nil)
 	a.OnUNLChange(512, []consensus.NodeID{})
-	// Purge a freshly-registered key to prove the map is empty: if
-	// OnUNLChange had inadvertently inserted something, the purge
-	// (using a seq within the grace window) would leave it in place.
-	a.negUNLVoter.NewValidators(512, []consensus.NodeID{{0xEE}})
-	a.negUNLVoter.PurgeNewValidators(512) // within window — keeps {0xEE}
-	// If OnUNLChange had ever modified the map, this single-entry
-	// expectation would fail.
+
+	weak := makeRawMasterKey(0xEE)
+	unl := [][33]byte{a.identity.MasterKey, makeRawMasterKey(0xAA), makeRawMasterKey(0xBB), weak}
+	scores := map[consensus.NodeID]uint32{
+		a.identity.NodeID:            protocol.FlagLedgerInterval,
+		consensus.CalcNodeID(unl[1]): protocol.FlagLedgerInterval,
+		consensus.CalcNodeID(unl[2]): protocol.FlagLedgerInterval,
+		consensus.CalcNodeID(weak):   0,
+	}
+	blobs, err := a.negUNLVoter.DoVoting(512, [32]byte{0x42}, unl, negativeunlvote.State{}, scores)
+	require.NoError(t, err)
+	require.Len(t, blobs, 1)
 }
 
 // makeRawMasterKey builds a deterministic 33-byte master pubkey

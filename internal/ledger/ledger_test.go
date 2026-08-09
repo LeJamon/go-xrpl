@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -12,17 +13,18 @@ import (
 )
 
 func TestHeaderConstructorsPreserveValidationState(t *testing.T) {
-	closed, err := NewClosedFromHeader(
+	closed, err := NewClosedFromHeaderContext(
+		context.Background(),
 		header.LedgerHeader{},
 		shamap.New(shamap.TypeState),
 		shamap.New(shamap.TypeTransaction),
 		drops.Fees{},
 	)
 	if err != nil {
-		t.Fatalf("NewClosedFromHeader: %v", err)
+		t.Fatalf("NewClosedFromHeaderContext: %v", err)
 	}
-	if closed.State() != StateClosed || closed.IsValidated() {
-		t.Fatalf("unvalidated header created state %s", closed.State())
+	if !closed.IsClosed() || closed.IsValidated() {
+		t.Fatal("unvalidated header did not create a closed ledger")
 	}
 	if err = closed.SetValidated(); err != nil {
 		t.Fatalf("promote closed ledger: %v", err)
@@ -40,8 +42,8 @@ func TestHeaderConstructorsPreserveValidationState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFromHeader: %v", err)
 	}
-	if unvalidated.State() != StateClosed || unvalidated.IsValidated() || unvalidated.Header().Validated {
-		t.Fatalf("unvalidated header created state %s", unvalidated.State())
+	if !unvalidated.IsClosed() || unvalidated.IsValidated() || unvalidated.Header().Validated {
+		t.Fatal("unvalidated header did not create a closed ledger")
 	}
 
 	validated, err := NewFromHeader(
@@ -53,8 +55,8 @@ func TestHeaderConstructorsPreserveValidationState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFromHeader validated: %v", err)
 	}
-	if validated.State() != StateValidated || !validated.IsValidated() {
-		t.Fatalf("validated header created state %s", validated.State())
+	if !validated.IsValidated() {
+		t.Fatal("validated header did not create a validated ledger")
 	}
 }
 
@@ -74,7 +76,10 @@ func newParentAt(t *testing.T, parentSeq uint32, resolution uint32, closeAgree b
 	if err != nil {
 		t.Fatalf("genesis.Create: %v", err)
 	}
-	parent := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	parent, err := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("FromGenesis: %v", err)
+	}
 
 	// Walk forward until we hit parentSeq. Genesis is seq 1.
 	for parent.Sequence() < parentSeq {
@@ -93,7 +98,7 @@ func newParentAt(t *testing.T, parentSeq uint32, resolution uint32, closeAgree b
 	// specific resolution + closeAgree pair, and the bin-step
 	// algorithm would otherwise interfere.
 	h := parent.header
-	h.CloseTimeResolution = resolution
+	h.CloseTimeResolution = uint8(resolution)
 	if closeAgree {
 		h.CloseFlags &^= header.LCFNoConsensusTime
 	} else {
@@ -126,6 +131,73 @@ func TestLedger_Close_UsesDynamicResolution(t *testing.T) {
 	}
 	if got, want := child.CloseTimeResolution(), uint32(20); got != want {
 		t.Errorf("child CloseTimeResolution: got %d want %d (expected step 30→20 at seq=8 agree=true)", got, want)
+	}
+}
+
+func TestNewOpenUsesProvisionalSuccessorHeader(t *testing.T) {
+	parent := newParentAt(t, 2, 30, true)
+	parent.header.Hash = [32]byte{0: 0x10, 1: 0xff}
+	parent.header.TxHash = [32]byte{0x20}
+	parent.header.AccountHash = [32]byte{0x30}
+	parent.header.CloseFlags = header.LCFNoConsensusTime
+	parent.header.Validated = true
+	parent.header.Accepted = true
+	closeTime := parent.CloseTime().Add(10 * time.Second)
+
+	child, err := NewOpen(parent, closeTime)
+	if err != nil {
+		t.Fatalf("NewOpen: %v", err)
+	}
+	got := child.Header()
+	wantHash := [32]byte{0: 0x10, 1: 0xff, 31: 0x01}
+	if got.Hash != wantHash {
+		t.Fatalf("provisional hash = %x, want parent hash + 1 = %x", got.Hash, wantHash)
+	}
+	if got.TxHash != ([32]byte{}) || got.AccountHash != ([32]byte{}) {
+		t.Fatalf("open roots = tx %x/account %x, want zero roots", got.TxHash, got.AccountHash)
+	}
+	if got.CloseFlags != 0 || got.Validated || got.Accepted {
+		t.Fatalf("open closed-only flags = close %d validated %t accepted %t", got.CloseFlags, got.Validated, got.Accepted)
+	}
+	if got.LedgerIndex != parent.header.LedgerIndex+1 || got.ParentHash != parent.header.Hash ||
+		!got.ParentCloseTime.Equal(parent.header.CloseTime) || !got.CloseTime.Equal(closeTime) ||
+		got.Drops != parent.header.Drops {
+		t.Fatalf("successor header = %+v", got)
+	}
+}
+
+func TestIncrementHash(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		in   [32]byte
+		want [32]byte
+	}{
+		{
+			name: "ordinary increment",
+			in:   [32]byte{31: 0x2a},
+			want: [32]byte{31: 0x2b},
+		},
+		{
+			name: "trailing byte carry",
+			in:   [32]byte{30: 0x12, 31: 0xff},
+			want: [32]byte{30: 0x13},
+		},
+		{
+			name: "modular wrap",
+			in: [32]byte{
+				0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+				0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+				0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+				0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+			},
+			want: [32]byte{},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := incrementHash(test.in); got != test.want {
+				t.Fatalf("incrementHash(%x) = %x, want %x", test.in, got, test.want)
+			}
+		})
 	}
 }
 
@@ -173,7 +245,10 @@ func TestNewOpenRejectsParentWithoutSuccessor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("genesis.Create: %v", err)
 	}
-	parent := FromGenesis(result.Header, result.StateMap, result.TxMap, drops.Fees{})
+	parent, err := FromGenesis(result.Header, result.StateMap, result.TxMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("FromGenesis: %v", err)
+	}
 	parent.header.LedgerIndex = ^uint32(0)
 
 	if _, err = NewOpen(parent, time.Now()); err == nil {
@@ -263,10 +338,6 @@ func newOpenChild(t *testing.T) *Ledger {
 	return child
 }
 
-// TestLedger_Close_DropsUnderflow_Wrap guards issue #605: when
-// destroyed drops exceed the header total, Close must hard-stop
-// instead of letting the uint64 subtraction wrap to a huge value
-// that silently forks the chain.
 func TestLedger_Close_DropsUnderflow_Wrap(t *testing.T) {
 	child := newOpenChild(t)
 	child.header.Drops = 100

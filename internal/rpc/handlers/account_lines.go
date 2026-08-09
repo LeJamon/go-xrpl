@@ -11,14 +11,14 @@ import (
 // AccountLinesMethod handles account_lines: it returns the account's trust
 // lines, optionally filtered by peer; ignore_default drops lines that are in
 // default state on the account's side.
-type AccountLinesMethod struct{ BaseHandler }
+type AccountLinesMethod struct{ baseHandler }
 
 func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	fields, account, parseErr := accountPageParams(params)
 	if parseErr != nil {
 		return nil, parseErr
 	}
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 	ledgerIndex, ledgerFields, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information", true)
@@ -38,7 +38,7 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		return nil, types.RpcErrorActMalformed("Account malformed.").WithExtra(ledgerFields)
 	}
 
-	limit, limitErr := ReadLimitField(params, LimitAccountLines, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitAccountLines, ctx.Unlimited)
 	if limitErr != nil {
 		return nil, limitErr
 	}

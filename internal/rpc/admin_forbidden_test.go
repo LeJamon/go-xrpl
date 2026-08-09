@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
@@ -78,7 +78,7 @@ func TestHTTPAdminDenialReturns403(t *testing.T) {
 // is not a cheap probe. An admin (unlimited) caller bypasses the charge.
 func TestHTTPAdminDenialChargesFeeMalformed(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "stop", &stubHandler{role: types.RoleAdmin})
-	srv.loadTracker = loadtrack.New()
+	srv.resourceManager = resource.NewManager(nil, nil)
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"stop","params":[{}]}`))
 	req.RemoteAddr = "198.51.100.7:5555"
@@ -87,7 +87,7 @@ func TestHTTPAdminDenialChargesFeeMalformed(t *testing.T) {
 	// The malformed bucket is 100; the reference bucket is 20. Allow for a hair
 	// of decay between the charge and this read, but confirm it is the malformed
 	// charge, not a cheaper one.
-	if got, want := srv.loadTracker.Balance("198.51.100.7"), float64(loadtrack.ChargeMalformed/uint32(loadtrack.DecayWindow/time.Second)); got != want {
+	if got, want := resourceLocalBalance(t, srv.resourceManager, "198.51.100.7"), uint32(resource.FeeMalformedRPC().Cost()/resource.DecayWindowSeconds); got != want {
 		t.Fatalf("forbidden admin denial charged %v, want %v", got, want)
 	}
 
@@ -96,7 +96,7 @@ func TestHTTPAdminDenialChargesFeeMalformed(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:5555"
 	req = withLoopbackAdmin(req)
 	srv.ServeHTTP(httptest.NewRecorder(), req)
-	if got := srv.loadTracker.Balance("127.0.0.1"); got != 0 {
+	if got := resourceLocalBalance(t, srv.resourceManager, "127.0.0.1"); got != 0 {
 		t.Fatalf("admin caller charged %v, want 0 (unlimited)", got)
 	}
 }
@@ -168,7 +168,7 @@ func TestHTTPBatchAdminDenialForbidden(t *testing.T) {
 // i.e. the "forbidden" token with code 3. A non-admin role is forced by
 // configuring AdminNets that exclude the loopback test peer.
 func TestWSAdminDenialForbidden(t *testing.T) {
-	ws := NewWebSocketServer(2*time.Second, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 2 * time.Second})
 	ws.methodRegistry.Register("stop", &stubHandler{role: types.RoleAdmin})
 
 	_, adminNet, _ := net.ParseCIDR("10.0.0.0/8")

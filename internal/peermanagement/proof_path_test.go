@@ -11,9 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeProofPathProvider is a minimal LedgerProvider double used by the
-// proof-path tests. Only GetProofPath is exercised; the rest of the
-// interface is no-op.
 type fakeProofPathProvider struct {
 	header []byte
 	path   [][]byte
@@ -26,15 +23,6 @@ type fakeProofPathProvider struct {
 	gotMapType    message.LedgerMapType
 }
 
-func (f *fakeProofPathProvider) GetLedgerHeader(_ []byte, _ uint32) ([]byte, error) {
-	return nil, nil
-}
-func (f *fakeProofPathProvider) GetAccountStateNode(_ []byte, _ []byte) ([]byte, error) {
-	return nil, nil
-}
-func (f *fakeProofPathProvider) GetTransactionNode(_ []byte, _ []byte) ([]byte, error) {
-	return nil, nil
-}
 func (f *fakeProofPathProvider) GetReplayDelta(_ []byte) ([]byte, [][]byte, error) {
 	return nil, nil, nil
 }
@@ -68,7 +56,7 @@ func drainProofPathResponse(t *testing.T, events chan Event) *message.ProofPathR
 	require.Equal(t, 1, len(events), "expected exactly one event on the channel")
 	evt := <-events
 	require.Equal(t, EventLedgerResponse, evt.Type)
-	header, body, err := message.ReadMessage(bytes.NewReader(evt.Payload))
+	header, body, err := readTestFrame(bytes.NewReader(evt.Payload))
 	require.NoError(t, err, "event payload must be a valid wire frame")
 	require.Equal(t, message.TypeProofPathResponse, header.MessageType)
 	decoded, err := message.Decode(message.TypeProofPathResponse, body)
@@ -122,6 +110,30 @@ func TestProofPathRequest_Success(t *testing.T) {
 	assert.Equal(t, message.LedgerMapAccountState, provider.gotMapType)
 }
 
+func TestProofPathRequest_PrioritySenderBypassesSharedEvents(t *testing.T) {
+	provider := &fakeProofPathProvider{header: []byte("header"), path: [][]byte{[]byte("node")}}
+	events := make(chan Event)
+	h := NewLedgerSyncHandler(events)
+	h.SetProvider(provider)
+	var gotPeer PeerID
+	var gotFrame []byte
+	h.SetPrioritySender(func(_ context.Context, peerID PeerID, frame []byte) error {
+		gotPeer = peerID
+		gotFrame = append([]byte(nil), frame...)
+		return nil
+	})
+	require.NoError(t, h.HandleMessage(context.Background(), PeerID(9), &message.ProofPathRequest{
+		Key: fixedKey(), LedgerHash: fixedHash(), MapType: message.LedgerMapAccountState,
+	}))
+	assert.Equal(t, PeerID(9), gotPeer)
+	require.NotEmpty(t, gotFrame)
+	header, _, err := readTestFrame(bytes.NewReader(gotFrame))
+	require.NoError(t, err)
+	assert.Equal(t, message.TypeProofPathResponse, header.MessageType)
+	assert.Empty(t, events, "completed replies must not depend on the shared event channel")
+	assert.Zero(t, h.DroppedResponses())
+}
+
 // TestProofPathRequest_BadKeyLength verifies the key length precheck:
 // any key whose length is not 32 must yield reBAD_REQUEST without
 // touching the provider. Mirrors rippled's `key().size() !=
@@ -146,13 +158,7 @@ func TestProofPathRequest_BadKeyLength(t *testing.T) {
 	require.ErrorIs(t, err, ErrPeerBadRequest,
 		"malformed request must be signaled as ErrPeerBadRequest so the dispatcher can charge the peer")
 
-	resp := drainProofPathResponse(t, events)
-	assert.Equal(t, message.ReplyErrorBadRequest, resp.Error)
-	assert.Equal(t, shortKey, resp.Key)
-	assert.Equal(t, hash, resp.LedgerHash)
-	assert.Equal(t, message.LedgerMapTransaction, resp.MapType)
-	assert.Empty(t, resp.LedgerHeader)
-	assert.Empty(t, resp.Path)
+	assert.Empty(t, events, "malformed requests are charged and dropped without a reply")
 	assert.Zero(t, provider.calls, "provider must not be called for bad-key-length requests")
 }
 
@@ -178,12 +184,7 @@ func TestProofPathRequest_BadHashLength(t *testing.T) {
 	require.ErrorIs(t, err, ErrPeerBadRequest,
 		"malformed ledger hash must be signaled as ErrPeerBadRequest")
 
-	resp := drainProofPathResponse(t, events)
-	assert.Equal(t, message.ReplyErrorBadRequest, resp.Error)
-	assert.Equal(t, key, resp.Key)
-	assert.Equal(t, shortHash, resp.LedgerHash)
-	assert.Empty(t, resp.LedgerHeader)
-	assert.Empty(t, resp.Path)
+	assert.Empty(t, events, "malformed requests are charged and dropped without a reply")
 	assert.Zero(t, provider.calls, "provider must not be called for bad-hash-length requests")
 }
 
@@ -213,13 +214,7 @@ func TestProofPathRequest_BadType(t *testing.T) {
 			require.ErrorIs(t, err, ErrPeerBadRequest,
 				"invalid map type must be signaled as ErrPeerBadRequest")
 
-			resp := drainProofPathResponse(t, events)
-			assert.Equal(t, message.ReplyErrorBadRequest, resp.Error)
-			assert.Equal(t, key, resp.Key)
-			assert.Equal(t, hash, resp.LedgerHash)
-			assert.Equal(t, badType, resp.MapType)
-			assert.Empty(t, resp.LedgerHeader)
-			assert.Empty(t, resp.Path)
+			assert.Empty(t, events, "malformed requests are charged and dropped without a reply")
 			assert.Zero(t, provider.calls, "provider must not be called for bad-type requests")
 		})
 	}
@@ -261,13 +256,7 @@ func TestProofPathRequest_UnknownLedger(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	resp := drainProofPathResponse(t, events)
-	assert.Equal(t, message.ReplyErrorNoLedger, resp.Error)
-	assert.Equal(t, key, resp.Key)
-	assert.Equal(t, hash, resp.LedgerHash)
-	assert.Equal(t, message.LedgerMapAccountState, resp.MapType)
-	assert.Empty(t, resp.LedgerHeader)
-	assert.Empty(t, resp.Path)
+	assert.Empty(t, events, "unknown ledgers are charged and dropped without a reply")
 	assert.Equal(t, 1, provider.calls)
 }
 
@@ -297,13 +286,7 @@ func TestProofPathRequest_KeyNotFound(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	resp := drainProofPathResponse(t, events)
-	assert.Equal(t, message.ReplyErrorNoNode, resp.Error)
-	assert.Equal(t, key, resp.Key)
-	assert.Equal(t, hash, resp.LedgerHash)
-	assert.Equal(t, message.LedgerMapTransaction, resp.MapType)
-	assert.Empty(t, resp.LedgerHeader, "no-node reply must NOT carry the ledger header (matches rippled)")
-	assert.Empty(t, resp.Path)
+	assert.Empty(t, events, "missing nodes are charged and dropped without a reply")
 	assert.Equal(t, 1, provider.calls)
 }
 
@@ -328,12 +311,7 @@ func TestProofPathRequest_ProviderError(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	resp := drainProofPathResponse(t, events)
-	assert.Equal(t, message.ReplyErrorBadRequest, resp.Error)
-	assert.Equal(t, key, resp.Key)
-	assert.Equal(t, hash, resp.LedgerHash)
-	assert.Empty(t, resp.LedgerHeader)
-	assert.Empty(t, resp.Path)
+	assert.Empty(t, events, "provider errors are charged and dropped without a reply")
 }
 
 // TestProofPathRequest_NoProvider verifies that with no provider wired
@@ -355,4 +333,20 @@ func TestProofPathRequest_NoProvider(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, len(events), "no event should be emitted when provider is nil")
+}
+
+func TestProofPathRequest_ResponseAbove16MiBRejected(t *testing.T) {
+	provider := &fakeProofPathProvider{
+		header: []byte("hdr"),
+		path:   [][]byte{make([]byte, MaxProofPathResponseBytes)},
+	}
+	events := make(chan Event, 1)
+	h := NewLedgerSyncHandler(events)
+	h.SetProvider(provider)
+
+	err := h.HandleMessage(context.Background(), PeerID(10), &message.ProofPathRequest{
+		Key: fixedKey(), LedgerHash: fixedHash(), MapType: message.LedgerMapAccountState,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, events)
 }

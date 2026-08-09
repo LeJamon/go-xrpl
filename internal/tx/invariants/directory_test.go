@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // bookMapView is a ReadView backed by an in-memory key→bytes map, for exercising the
@@ -44,14 +45,14 @@ func TestCheckValidBookDirectory_RootExchangeRate(t *testing.T) {
 
 	// Correct root: exchangeRate == quality.
 	key, data := bookRoot(0x1234_5678, 0x1234_5678)
-	entries := []InvariantEntry{{Key: key, EntryType: "DirectoryNode", After: data}}
+	entries := []InvariantEntry{{Key: key, EntryType: entry.TypeDirectoryNode, After: data}}
 	if v := checkValidBookDirectory(entries, stubView{}, on); v != nil {
 		t.Fatalf("matching exchange rate must pass, got %v", v)
 	}
 
 	// Corrupt root: exchangeRate != quality.
 	badKey, badData := bookRoot(0x1234_5678, 0x9999_9999)
-	badEntries := []InvariantEntry{{Key: badKey, EntryType: "DirectoryNode", After: badData}}
+	badEntries := []InvariantEntry{{Key: badKey, EntryType: entry.TypeDirectoryNode, After: badData}}
 	if v := checkValidBookDirectory(badEntries, stubView{}, on); v == nil {
 		t.Fatalf("mismatched exchange rate must fail")
 	}
@@ -76,7 +77,7 @@ func TestCheckValidBookDirectory_ChildRootMustExist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	childEntry := []InvariantEntry{{Key: childKey, EntryType: "DirectoryNode", After: childData}}
+	childEntry := []InvariantEntry{{Key: childKey, EntryType: entry.TypeDirectoryNode, After: childData}}
 
 	// Root missing from the view → violation.
 	if v := checkValidBookDirectory(childEntry, bookMapView{entries: map[[32]byte][]byte{}}, on); v == nil {

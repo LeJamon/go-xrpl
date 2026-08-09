@@ -14,16 +14,25 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
+type gossipNetwork interface {
+	IncPeerBadData(peerID uint64, reason string)
+	RecordMessageSource(suppressionHash [32]byte, peerID uint64)
+	MessageRelayedRecently(suppressionHash [32]byte) bool
+	UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPeers []uint64)
+	RelayValidation(validation *consensus.Validation, exceptPeer uint64) error
+}
+
+func (r *Router) handleMessage(msg *peermanagement.InboundMessage) (transferred bool) {
 	defer r.recoverFrame(msg, "dispatch")
 
-	msgType := message.MessageType(msg.Type)
+	msgType := msg.Type
 	if r.peerSessions != nil && !r.peerSessions.IsPeerConnected(msg.PeerID) &&
 		msgType != message.TypeManifests {
-		return
+		return false
 	}
 	defer func() {
 		if r.peerSessions != nil && !r.peerSessions.IsPeerConnected(msg.PeerID) {
@@ -43,6 +52,7 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 		// TMTransaction onto its jtTRANSACTION job queue rather than handling
 		// it on the read strand.
 		r.submitTxJob(msg)
+		transferred = true
 	case message.TypeHaveSet:
 		r.handleHaveSet(msg)
 	case message.TypeStatusChange:
@@ -53,8 +63,9 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 		// proposal / validation / acquisition-reply handling on this
 		// goroutine. Inline when the pool isn't running (synchronous tests).
 		r.submitServeJob(msg)
+		transferred = true
 	case message.TypeLedgerData:
-		r.handleLedgerData(msg)
+		transferred = r.handleLedgerData(msg)
 	case message.TypeGetObjects:
 		// Only fetch-pack REPLIES reach the router; the overlay serves
 		// otFETCH_PACK requests inline and forwards replies here (see
@@ -71,6 +82,16 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 		r.handleValidatorListCollection(msg)
 	default:
 	}
+	return transferred
+}
+
+func (r *Router) handleInboundMessage(msg *peermanagement.InboundMessage) {
+	if msg == nil {
+		return
+	}
+	if !r.handleMessage(msg) {
+		_ = msg.Close()
+	}
 }
 
 // handleManifests ingests a TMManifests frame, applies admitted entries, and
@@ -85,23 +106,10 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 		return false
 	}
 
-	count, err := message.WalkManifests(msg.Payload, nil)
-	if err != nil {
-		r.logger.Warn("failed to decode manifests frame", "error", err, "peer", msg.PeerID)
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "manifests-decode")
-		return false
-	}
-	if count == 0 {
-		return true
-	}
-	if count > manifestFrameMaxEntries {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "manifests-oversize")
-	}
-	accepted := make([][]byte, 0, min(count, manifestFrameMaxEntries))
+	accepted := make([][]byte, 0, manifestFrameMaxEntries)
 	valid := false
 	badManifest := false
-	charged := count > manifestFrameMaxEntries
-	_, _ = message.WalkManifests(msg.Payload, func(wire []byte) {
+	count, err := message.WalkManifests(msg.Payload, func(wire []byte) {
 		hash := sha512half.Sum(wire)
 		if r.messageSeen != nil && r.messageSeen.seenRecently(hash) {
 			valid = true
@@ -114,7 +122,7 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 			badManifest = true
 			return
 		}
-		if r.manifestAdmission != nil && !r.manifestAdmission(parsed.MasterKey) {
+		if r.manifestAdmission != nil && !r.manifestAdmission(parsed.MasterKey()) {
 			valid = true
 			return
 		}
@@ -132,12 +140,33 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 			if r.messageSeen != nil {
 				r.messageSeen.observe(hash)
 			}
-			// Expected and harmless: a peer gossiped a manifest we
-			// already have at equal or higher seq. No action.
 		}
 	})
-	if badManifest && !charged {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "manifest-invalid")
+	if err != nil {
+		r.logger.Warn("failed to decode manifests frame", "error", err, "peer", msg.PeerID)
+		reason := "manifests-decode"
+		fee := resource.FeeInvalidData()
+		var limitErr *message.WireLimitError
+		if errors.As(err, &limitErr) && limitErr.Reason == message.WireLimitManifests {
+			reason = "manifests-oversize"
+			fee = resource.FeeModerateBurdenPeer()
+		} else if errors.Is(err, message.ErrWireLimit) {
+			reason = "wire-invalid"
+		}
+		if !msg.SelectPeerCharge(fee, reason) {
+			r.gossip.IncPeerBadData(uint64(msg.PeerID), reason)
+		}
+		return false
+	}
+	if count == 0 {
+		msg.SelectPeerCharge(resource.FeeUselessData(), "empty")
+		return true
+	}
+	if count > manifestFrameMaxEntries {
+		msg.SelectPeerCharge(resource.FeeModerateBurdenPeer(), "oversize")
+	}
+	if badManifest {
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "manifest-invalid")
 	}
 	r.relayManifests(msg.PeerID, accepted)
 	return valid
@@ -165,7 +194,7 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	decoded, err := message.Decode(message.TypeProposeLedger, msg.Payload)
 	if err != nil {
 		r.logger.Warn("failed to decode proposal", "error", err, "peer", msg.PeerID)
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "proposal-decode")
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "proposal-decode")
 		return
 	}
 	proposeSet, ok := decoded.(*message.ProposeSet)
@@ -178,7 +207,7 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	if badField, ok := validateProposeBounds(proposeSet); !ok {
 		r.logger.Debug("dropping malformed proposal",
 			"peer", msg.PeerID, "bad_field", badField)
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "proposal-malformed-"+badField)
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "proposal-malformed-"+badField)
 		return
 	}
 
@@ -186,7 +215,8 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	r.resolveMasterNodeID(&proposal.NodeID, proposal.SigningPubKey)
 	originPeer := uint64(msg.PeerID)
 
-	// Record duplicate-status + last-sighting BEFORE OnProposal.
+	// Check duplicate-status before OnProposal, but do not admit a new hash to
+	// durable suppression until signature verification and engine acceptance.
 	// Hash the DECODED fields via hashProposalSuppression. Hashing
 	// the raw protobuf envelope would desync dedup from peers
 	// that see the same message with different optional-field framing
@@ -197,22 +227,17 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	// can thread it to Overlay's reverse index without recomputing.
 	suppressionHash := hashProposalSuppression(proposal)
 	proposal.SuppressionHash = suppressionHash
-	firstSeen, lastSeen := r.messageSeen.observe(suppressionHash)
-
+	r.gossip.RecordMessageSource(suppressionHash, originPeer)
 	// Drop duplicates before the engine path (re-running OnProposal
 	// just re-verifies ECDSA). Still feed the IDLED-gated relay slot
 	// on dupes for squelch accounting.
 	//
-	// Deliberate deviation: rippled tracks suppression per (hash, peer),
-	// re-running the handler so per-peer slot entries grow on each new
-	// sender. Our dedup is hash-only, so a second peer's copy is dropped
-	// at the gate. Quorum/position tracking unaffected (first arrival
-	// counts the validator); reduce-relay accuracy is partly compensated
-	// via PeersThatHave + UpdateRelaySlot below.
-	if !firstSeen {
-		if time.Since(lastSeen) < peermanagement.Idled {
-			seenPeers := r.adaptor.PeersThatHave(suppressionHash)
-			r.adaptor.UpdateRelaySlot(proposal.SigningPubKey[:], originPeer, seenPeers)
+	// Rippled counts a duplicate for reduce-relay only after the first copy
+	// was relayed. Sources received before that point are accumulated and
+	// counted atomically by RelayFromValidator.
+	if r.messageSeen.seenRecently(suppressionHash) {
+		if r.gossip.MessageRelayedRecently(suppressionHash) {
+			r.gossip.UpdateRelaySlot(proposal.SigningPubKey[:], originPeer, nil)
 		}
 		return
 	}
@@ -221,13 +246,14 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 		r.logger.Debug("engine rejected proposal", "error", err, "peer", msg.PeerID)
 		return
 	}
+	r.messageSeen.observe(suppressionHash)
 }
 
 func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	decoded, err := message.Decode(message.TypeValidation, msg.Payload)
 	if err != nil {
 		r.logger.Warn("failed to decode validation", "error", err, "peer", msg.PeerID)
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "validation-decode")
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "validation-decode")
 		return
 	}
 	val, ok := decoded.(*message.Validation)
@@ -238,7 +264,7 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	validation, err := ValidationFromMessage(val, r.adaptor.Now())
 	if err != nil {
 		r.logger.Warn("failed to parse validation", "error", err, "peer", msg.PeerID)
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "validation-parse")
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "validation-parse")
 		return
 	}
 	r.resolveMasterNodeID(&validation.NodeID, validation.SigningPubKey)
@@ -248,7 +274,7 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	if badField, ok := validateValidationBounds(validation); !ok {
 		r.logger.Debug("dropping malformed validation",
 			"peer", msg.PeerID, "bad_field", badField)
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "validation-malformed-"+badField)
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "validation-malformed-"+badField)
 		return
 	}
 
@@ -262,7 +288,7 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 			"peer", msg.PeerID,
 			"seq", validation.LedgerSeq,
 			"sign_time", validation.SignTime)
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "validation-not-current")
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "validation-not-current")
 		return
 	}
 
@@ -270,7 +296,8 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	// validations signed outside our UNL here, before the engine spends
 	// CPU verifying the signature. rippled's PeerImp does the same under
 	// RELAY_UNTRUSTED_VALIDATIONS == -1.
-	if r.adaptor.DropUntrustedValidations() && !r.adaptor.IsTrusted(validation.NodeID) {
+	trusted := r.adaptor.IsTrusted(validation.NodeID)
+	if r.adaptor.DropUntrustedValidations() && !trusted {
 		return
 	}
 
@@ -287,30 +314,165 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	// path can thread it to Overlay's reverse index without recomputing.
 	suppressionHash := hashValidationSuppression(val.Validation)
 	validation.SuppressionHash = suppressionHash
-	firstSeen, lastSeen := r.messageSeen.observe(suppressionHash)
+	r.gossip.RecordMessageSource(suppressionHash, originPeer)
+	firstSeen, _ := r.messageSeen.observe(suppressionHash)
 
 	// Drop duplicates before the engine path (re-running OnValidation
 	// just re-verifies ECDSA, dominating CPU under gossip fan-out).
 	// Still update the relay slot for squelch accounting.
 	//
-	// Deliberate deviation: rippled's per-(hash, peer) suppression
-	// re-processes new senders; our hash-only dedup drops them at the
-	// gate. See handleProposal for the full rationale.
+	// Sources received before the verified first relay are accumulated by the
+	// overlay. Later duplicates feed only their current origin into the slot.
 	if !firstSeen {
-		if time.Since(lastSeen) < peermanagement.Idled {
-			seenPeers := r.adaptor.PeersThatHave(suppressionHash)
-			r.adaptor.UpdateRelaySlot(validation.SigningPubKey[:], originPeer, seenPeers)
+		if r.gossip.MessageRelayedRecently(suppressionHash) {
+			r.gossip.UpdateRelaySlot(validation.SigningPubKey[:], originPeer, nil)
 		}
 		return
 	}
 
+	origin, tracking := r.validationPeerContext(msg.PeerID)
+	if !trusted && (tracking == peermanagement.PeerTrackingDiverged || r.isLoadedLocal()) {
+		return
+	}
+
+	if _, ok := r.engine.(consensus.VerifiedValidationProcessor); !ok {
+		r.handleLegacyValidation(validation, originPeer, msg.PeerID)
+		return
+	}
+
+	work := validationWork{
+		validation: validation,
+		origin:     origin,
+		trusted:    trusted,
+	}
+	outcome := r.submitValidationWork(work)
+	if outcome != validationWorkQueued && outcome != validationWorkProcessedSynchronously {
+		r.messageSeen.allowRetry(suppressionHash)
+	}
+}
+
+type validationWorkAdmissionOutcome uint8
+
+const (
+	validationWorkQueued validationWorkAdmissionOutcome = iota
+	validationWorkProcessedSynchronously
+	validationWorkShedUntrusted
+	validationWorkShedTrusted
+	validationWorkStopped
+)
+
+const validationSaturationLogInterval = 64
+
+func (r *Router) submitValidationWork(work validationWork) validationWorkAdmissionOutcome {
+	if r.validationWork != nil && r.validationWork.running() {
+		switch r.validationWork.submit(work) {
+		case validationQueueAccepted:
+			return validationWorkQueued
+		case validationQueueStopped:
+			return validationWorkStopped
+		}
+		if !work.trusted {
+			count := r.validationShedUntrusted.Add(1)
+			r.logUntrustedValidationSaturation("job", count)
+			return validationWorkShedUntrusted
+		}
+
+		count := r.validationShedTrusted.Add(1)
+		r.logTrustedValidationSaturation(work.origin.PeerID, count)
+		return validationWorkShedTrusted
+	}
+
+	r.handleValidationWorkResult(validationWorkResult{
+		validation: work.validation,
+		origin:     work.origin,
+		err:        r.adaptor.VerifyValidation(work.validation),
+	})
+	return validationWorkProcessedSynchronously
+}
+
+func (r *Router) logUntrustedValidationSaturation(stage string, count uint64) {
+	if count != 1 && count%validationSaturationLogInterval != 0 {
+		return
+	}
+	r.logger.Warn("untrusted validation verifier saturated",
+		"stage", stage,
+		"dropped", count)
+}
+
+func (r *Router) logTrustedValidationSaturation(peerID, count uint64) {
+	if count != 1 && count%validationSaturationLogInterval != 0 {
+		return
+	}
+	r.logger.Warn("trusted validation verifier saturated",
+		"peer", peerID,
+		"dropped", count)
+}
+
+func (r *Router) handleValidationWorkResult(result validationWorkResult) {
+	if result.err != nil {
+		r.logger.Info("invalid validation signature",
+			"t", "consensus",
+			"event", "validation-invalid-signature",
+			"error", result.err,
+			"peer", result.origin.PeerID)
+		r.gossip.IncPeerBadData(result.origin.PeerID, "validation-invalid-signature")
+		return
+	}
+
+	processor, ok := r.engine.(consensus.VerifiedValidationProcessor)
+	if !ok {
+		return
+	}
+	disposition, err := processor.ProcessVerifiedValidation(result.validation, result.origin)
+	if err != nil {
+		r.logger.Info("engine rejected verified validation",
+			"t", "consensus",
+			"event", "validation-rejected",
+			"error", err,
+			"peer", result.origin.PeerID)
+		return
+	}
+
+	if disposition.Status == consensus.ValidationMultiple ||
+		disposition.Status == consensus.ValidationConflicting {
+		level := slog.LevelError
+		if !disposition.Trusted {
+			level = slog.LevelInfo
+		}
+		r.logger.Log(context.Background(), level, "byzantine validation detected",
+			"t", "consensus",
+			"event", "byzantine-validation",
+			"reason", disposition.Status.String(),
+			"trusted", disposition.Trusted,
+			"peer", result.origin.PeerID)
+	}
+
+	r.logger.Debug("inbound validation processed",
+		"t", "consensus",
+		"event", "validation-recv",
+		"peer", result.origin.PeerID,
+		"seq", result.validation.LedgerSeq,
+		"status", disposition.Status.String(),
+		"hash_short", fmt.Sprintf("%x", result.validation.LedgerID[:8]))
+
+	if disposition.AcquireEligible() {
+		r.maybeAcquireFromValidation(result.validation, result.origin.PeerID)
+	}
+	if disposition.Relay {
+		if err := r.gossip.RelayValidation(result.validation, result.origin.PeerID); err != nil {
+			r.logger.Debug("failed to relay validation",
+				"error", err,
+				"peer", result.origin.PeerID)
+		}
+	}
+}
+
+func (r *Router) handleLegacyValidation(
+	validation *consensus.Validation,
+	originPeer uint64,
+	peerID peermanagement.PeerID,
+) {
 	if err := r.engine.OnValidation(validation, originPeer); err != nil {
-		// A same-seq double-sign (conflicting/multiple) is Byzantine
-		// behaviour, but the validation is well-formed and correctly
-		// signed and the engine has already relayed it. Like rippled
-		// (handleNewValidation logs trusted offenders at error, untrusted
-		// at info, and forwards; no Resource::Charge), log it and do NOT
-		// charge the delivering peer — it is an innocent relay.
 		var bv *consensus.ByzantineValidationError
 		if errors.As(err, &bv) {
 			level := slog.LevelError
@@ -322,33 +484,49 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 				"event", "byzantine-validation",
 				"reason", bv.Reason,
 				"trusted", bv.Trusted,
-				"peer", msg.PeerID)
+				"peer", peerID)
 			return
 		}
 		r.logger.Info("engine rejected validation",
 			"t", "consensus",
 			"event", "validation-rejected",
 			"error", err.Error(),
-			"peer", msg.PeerID)
+			"peer", peerID)
 		return
 	}
-	r.logger.Debug("inbound validation processed",
-		"t", "consensus",
-		"event", "validation-recv",
-		"peer", msg.PeerID,
-		"seq", validation.LedgerSeq,
-		"hash_short", fmt.Sprintf("%x", validation.LedgerID[:8]))
-
-	// Per-validation catch-up acquire on EVERY trusted current
-	// validation, not only at quorum. Under sustained load a node that
-	// falls one ledger behind enters the wrongLedger chase loop holding
-	// no position (our_pos_seq=0); with only 3 of the 4-quorum trusted
-	// validators on the network tip, the quorum-gated stash acquire
-	// (armValidationStashAcquisition) never fires, so the node never
-	// fetches the tip the network is converging on and the chain stalls
-	// below quorum until a slow periodic sweep recovers it. Acquiring on
-	// each trusted validation breaks that loop.
 	r.maybeAcquireFromValidation(validation, originPeer)
+}
+
+func (r *Router) validationPeerContext(
+	peerID peermanagement.PeerID,
+) (consensus.ValidationOrigin, peermanagement.PeerTracking) {
+	origin := consensus.ValidationOrigin{PeerID: uint64(peerID)}
+	tracking := peermanagement.PeerTrackingUnknown
+	view, ok := r.peerSessions.(interface {
+		Peers() []peermanagement.PeerInfo
+	})
+	if !ok {
+		return origin, tracking
+	}
+	for _, peer := range view.Peers() {
+		if peer.ID != peerID {
+			continue
+		}
+		tracking = peer.Tracking
+		if r.overlay != nil && r.overlay.Cluster() != nil && len(peer.PublicKeyBytes) != 0 {
+			_, origin.Cluster = r.overlay.Cluster().Member(peer.PublicKeyBytes)
+		}
+		break
+	}
+	return origin, tracking
+}
+
+func (r *Router) isLoadedLocal() bool {
+	if r.adaptor == nil || r.adaptor.LedgerService() == nil {
+		return false
+	}
+	feeTrack := r.adaptor.LedgerService().FeeTrack()
+	return feeTrack != nil && feeTrack.IsLoadedLocal()
 }
 
 // resolveMasterNodeID looks the inbound signing pubkey up in the
@@ -510,8 +688,9 @@ func (r *Router) relayTransaction(except peermanagement.PeerID, blob []byte) {
 		r.logger.Warn("relay transaction encode failed", "error", err)
 		return
 	}
-	// Reduce-relay peer selection: relays the full frame to a subset of
-	// peers and lets the rest learn via the TMHaveTransactions announce.
+	// Reduce-relay peer selection derives the transaction ID from the wire
+	// frame itself. If the frame cannot be decoded, the overlay falls back to
+	// full relay rather than announcing an unfulfillable hash.
 	r.overlay.RelayTransaction(except, frame)
 }
 
@@ -526,21 +705,19 @@ func (r *Router) handleHaveSet(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	txSetID, status := HaveSetFromMessage(hts)
+	txSetID, status, err := HaveSetFromMessage(hts)
+	if err != nil {
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "have-set-hashsize")
+		return
+	}
 
-	switch status {
-	case message.TxSetStatusHave:
+	if status == message.TxSetStatusHave {
 		// Record the advertisement so an inbound GetLedger we can't satisfy
 		// can be relayed to this peer (rippled getPeerWithTree).
-		r.adaptor.NotePeerHasTxSet(uint64(msg.PeerID), [32]byte(txSetID))
-		r.logger.Debug("peer has txset", "txset", txSetID, "peer", msg.PeerID)
-	case message.TxSetStatusNeed:
-		// Peer needs a tx set we might have — check cache and respond.
-		if ts, ok := r.adaptor.txSetCache.Get(txSetID); ok {
-			// We have it — notify the engine with the tx set data
-			if err := r.engine.OnTxSet(ts.ID(), ts.Txs()); err != nil {
-				r.logger.Debug("engine rejected txset", "error", err)
-			}
+		if !r.txSetNet.NotePeerHasTxSet(uint64(msg.PeerID), [32]byte(txSetID)) {
+			r.gossip.IncPeerBadData(uint64(msg.PeerID), "have-set-duplicate")
+			return
 		}
+		r.logger.Debug("peer has txset", "txset", txSetID, "peer", msg.PeerID)
 	}
 }

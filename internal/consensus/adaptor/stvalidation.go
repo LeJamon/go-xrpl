@@ -4,9 +4,32 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sort"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
+
+// CanonicalSTValidation returns the canonical serialized validation while
+// preserving the presence and values of optional fields received on the wire.
+func CanonicalSTValidation(v *consensus.Validation) ([]byte, error) {
+	if v == nil {
+		return nil, errors.New("nil validation")
+	}
+	if len(v.Raw) == 0 {
+		return SerializeSTValidation(v), nil
+	}
+	fields, err := binarycodec.DecodeBytes(v.Raw)
+	if err != nil {
+		return nil, fmt.Errorf("decode validation: %w", err)
+	}
+	canonical, err := binarycodec.EncodeBytesTrusted(fields)
+	if err != nil {
+		return nil, fmt.Errorf("encode validation: %w", err)
+	}
+	return canonical, nil
+}
 
 // XRPL SField type codes. An off-by-2 for UINT384/UINT512 would be
 // latent (no validation field uses these types) but would break the
@@ -85,10 +108,72 @@ const (
 )
 
 var (
-	errShortData     = errors.New("stvalidation: unexpected end of data")
-	errInvalidVL     = errors.New("stvalidation: invalid VL encoding")
-	errMissingFields = errors.New("stvalidation: missing required fields")
+	errShortData           = errors.New("stvalidation: unexpected end of data")
+	errInvalidVL           = errors.New("stvalidation: invalid VL encoding")
+	errMissingFields       = errors.New("stvalidation: missing required fields")
+	errDuplicateField      = errors.New("stvalidation: duplicate field")
+	errUnexpectedField     = errors.New("stvalidation: unexpected field")
+	errNonCanonicalFieldID = errors.New("stvalidation: non-canonical field id")
+	errInvalidFieldValue   = errors.New("stvalidation: invalid field value")
 )
+
+type validationFieldSpec struct {
+	name        string
+	requiredBit uint32
+	defaultZero bool
+}
+
+const (
+	requiredFlags uint32 = 1 << iota
+	requiredLedgerHash
+	requiredLedgerSequence
+	requiredSigningTime
+	requiredSigningPubKey
+	requiredSignature
+
+	allRequiredValidationFields = requiredFlags |
+		requiredLedgerHash |
+		requiredLedgerSequence |
+		requiredSigningTime |
+		requiredSigningPubKey |
+		requiredSignature
+)
+
+func validationFieldKey(typeCode, fieldCode int) uint32 {
+	return uint32(typeCode)<<16 | uint32(fieldCode)
+}
+
+var validationTemplate = map[uint32]validationFieldSpec{
+	validationFieldKey(typeUINT32, fieldFlags):          {name: "Flags", requiredBit: requiredFlags},
+	validationFieldKey(typeUINT32, fieldLedgerSequence): {name: "LedgerSequence", requiredBit: requiredLedgerSequence},
+	validationFieldKey(typeUINT32, fieldCloseTime):      {name: "CloseTime"},
+	validationFieldKey(typeUINT32, fieldSigningTime):    {name: "SigningTime", requiredBit: requiredSigningTime},
+	validationFieldKey(typeUINT32, fieldLoadFee):        {name: "LoadFee"},
+	validationFieldKey(typeUINT32, fieldReserveBase):    {name: "ReserveBase"},
+	validationFieldKey(typeUINT32, fieldReserveInc):     {name: "ReserveIncrement"},
+
+	validationFieldKey(typeUINT64, fieldBaseFee):       {name: "BaseFee"},
+	validationFieldKey(typeUINT64, fieldCookie):        {name: "Cookie", defaultZero: true},
+	validationFieldKey(typeUINT64, fieldServerVersion): {name: "ServerVersion"},
+
+	validationFieldKey(typeHash256, fieldLedgerHash):    {name: "LedgerHash", requiredBit: requiredLedgerHash},
+	validationFieldKey(typeHash256, fieldConsensusHash): {name: "ConsensusHash"},
+	validationFieldKey(typeHash256, fieldValidatedHash): {name: "ValidatedHash"},
+
+	validationFieldKey(typeAmount, fieldBaseFeeDrops):          {name: "BaseFeeDrops"},
+	validationFieldKey(typeAmount, fieldReserveBaseDrops):      {name: "ReserveBaseDrops"},
+	validationFieldKey(typeAmount, fieldReserveIncrementDrops): {name: "ReserveIncrementDrops"},
+
+	validationFieldKey(typeBlob, fieldSigningPubKey): {name: "SigningPubKey", requiredBit: requiredSigningPubKey},
+	validationFieldKey(typeBlob, fieldSignature):     {name: "Signature", requiredBit: requiredSignature},
+
+	validationFieldKey(typeVector256, fieldAmendments): {name: "Amendments"},
+}
+
+type validationSigningField struct {
+	key  uint32
+	wire []byte
+}
 
 // parseSTValidation parses XRPL-binary-encoded STValidation bytes into a
 // consensus.Validation. It also populates SigningData with the serialized
@@ -100,7 +185,9 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 	}
 
 	v := &consensus.Validation{}
-	var signingBuf []byte
+	var signingFields []validationSigningField
+	var present uint32
+	seen := make(map[uint32]struct{}, len(validationTemplate))
 
 	pos := 0
 	for pos < len(data) {
@@ -111,9 +198,13 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 			return nil, err
 		}
 
-		// End-of-object marker for nested objects — stop at top level.
-		if typeCode == 0 && fieldCode == 0 {
-			break
+		key := validationFieldKey(typeCode, fieldCode)
+		spec, allowed := validationTemplate[key]
+		if !allowed {
+			return nil, fmt.Errorf("%w: type=%d field=%d", errUnexpectedField, typeCode, fieldCode)
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return nil, fmt.Errorf("%w: %s", errDuplicateField, spec.name)
 		}
 
 		// Determine field data length and advance pos past it.
@@ -125,13 +216,35 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 		}
 
 		fieldData := data[pos-dataLen : pos]
+		if spec.defaultZero && binary.BigEndian.Uint64(fieldData) == 0 {
+			return nil, fmt.Errorf("%w: %s may not be explicitly set to default", errInvalidFieldValue, spec.name)
+		}
+		if typeCode == typeAmount {
+			if err := validateAmount(fieldData); err != nil {
+				return nil, fmt.Errorf("%w: %s: %v", errInvalidFieldValue, spec.name, err)
+			}
+		}
+		if typeCode == typeVector256 && len(fieldData)%32 != 0 {
+			return nil, fmt.Errorf("%w: %s length %d", errInvalidFieldValue, spec.name, len(fieldData))
+		}
+		if typeCode == typeBlob && fieldCode == fieldSigningPubKey {
+			if len(fieldData) != 33 || (fieldData[0] != 0x02 && fieldData[0] != 0x03) {
+				return nil, fmt.Errorf("%w: %s", errInvalidFieldValue, spec.name)
+			}
+		}
+
+		seen[key] = struct{}{}
+		present |= spec.requiredBit
 
 		// sfSignature (isSigningField=false) is excluded from the signing hash.
 		// All other fields, including sfSigningPubKey (isSigningField=true), are included.
 		excludeFromSigning := (typeCode == typeBlob && fieldCode == fieldSignature)
 
 		if !excludeFromSigning {
-			signingBuf = append(signingBuf, data[fieldStart:pos]...)
+			signingFields = append(signingFields, validationSigningField{
+				key:  key,
+				wire: data[fieldStart:pos],
+			})
 		}
 
 		// Extract known fields.
@@ -160,13 +273,13 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 			v.SetLoadFee(binary.BigEndian.Uint32(fieldData))
 
 		case typeCode == typeUINT32 && fieldCode == fieldReserveBase:
-			v.ReserveBase = binary.BigEndian.Uint32(fieldData)
+			v.SetReserveBase(binary.BigEndian.Uint32(fieldData))
 
 		case typeCode == typeUINT32 && fieldCode == fieldReserveInc:
-			v.ReserveIncrement = binary.BigEndian.Uint32(fieldData)
+			v.SetReserveIncrement(binary.BigEndian.Uint32(fieldData))
 
 		case typeCode == typeUINT64 && fieldCode == fieldBaseFee:
-			v.BaseFee = binary.BigEndian.Uint64(fieldData)
+			v.SetBaseFee(binary.BigEndian.Uint64(fieldData))
 
 		case typeCode == typeUINT64 && fieldCode == fieldCookie:
 			v.Cookie = binary.BigEndian.Uint64(fieldData)
@@ -176,58 +289,52 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 
 		case typeCode == typeAmount && fieldCode == fieldBaseFeeDrops:
 			if amt, ok := parseXRPAmount(fieldData); ok {
-				v.BaseFeeDrops = amt
+				v.SetBaseFeeDrops(amt)
+			} else {
+				v.SetBaseFeeDropsNonNative()
 			}
 
 		case typeCode == typeAmount && fieldCode == fieldReserveBaseDrops:
 			if amt, ok := parseXRPAmount(fieldData); ok {
-				v.ReserveBaseDrops = amt
+				v.SetReserveBaseDrops(amt)
+			} else {
+				v.SetReserveBaseDropsNonNative()
 			}
 
 		case typeCode == typeAmount && fieldCode == fieldReserveIncrementDrops:
 			if amt, ok := parseXRPAmount(fieldData); ok {
-				v.ReserveIncrementDrops = amt
+				v.SetReserveIncrementDrops(amt)
+			} else {
+				v.SetReserveIncrementDropsNonNative()
 			}
 
 		case typeCode == typeHash256 && fieldCode == fieldLedgerHash:
-			if len(fieldData) == 32 {
-				copy(v.LedgerID[:], fieldData)
-			}
+			copy(v.LedgerID[:], fieldData)
 
 		case typeCode == typeHash256 && fieldCode == fieldConsensusHash:
-			if len(fieldData) == 32 {
-				copy(v.ConsensusHash[:], fieldData)
-			}
+			copy(v.ConsensusHash[:], fieldData)
 
 		case typeCode == typeHash256 && fieldCode == fieldValidatedHash:
-			if len(fieldData) == 32 {
-				copy(v.ValidatedHash[:], fieldData)
-			}
+			copy(v.ValidatedHash[:], fieldData)
 
 		case typeCode == typeVector256 && fieldCode == fieldAmendments:
-			// Vector256 is VL-wrapped concat of 32-byte IDs. fieldData
-			// is the VL payload, so iterate in 32-byte chunks.
-			if len(fieldData)%32 == 0 {
-				n := len(fieldData) / 32
-				v.Amendments = make([][32]byte, 0, n)
-				for i := range n {
-					var id [32]byte
-					copy(id[:], fieldData[i*32:(i+1)*32])
-					v.Amendments = append(v.Amendments, id)
-				}
+			n := len(fieldData) / 32
+			v.Amendments = make([][32]byte, 0, n)
+			for i := range n {
+				var id [32]byte
+				copy(id[:], fieldData[i*32:(i+1)*32])
+				v.Amendments = append(v.Amendments, id)
 			}
 
 		case typeCode == typeBlob && fieldCode == fieldSigningPubKey:
-			if len(fieldData) == 33 {
-				copy(v.SigningPubKey[:], fieldData)
-				// Default NodeID to calcNodeID(signingKey). The
-				// consensus router substitutes the master-derived
-				// NodeID via the manifest cache after parsing when
-				// the validator has rotated keys; absent a manifest
-				// mapping, the signing-key-derived value is the
-				// fallback.
-				v.NodeID = consensus.CalcNodeID(v.SigningPubKey)
-			}
+			copy(v.SigningPubKey[:], fieldData)
+			// Default NodeID to calcNodeID(signingKey). The
+			// consensus router substitutes the master-derived
+			// NodeID via the manifest cache after parsing when
+			// the validator has rotated keys; absent a manifest
+			// mapping, the signing-key-derived value is the
+			// fallback.
+			v.NodeID = consensus.CalcNodeID(v.SigningPubKey)
 
 		case typeCode == typeBlob && fieldCode == fieldSignature:
 			v.Signature = make([]byte, len(fieldData))
@@ -235,15 +342,16 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 		}
 	}
 
-	v.SigningData = signingBuf
+	sort.Slice(signingFields, func(i, j int) bool {
+		return signingFields[i].key < signingFields[j].key
+	})
+	for _, field := range signingFields {
+		v.SigningData = append(v.SigningData, field.wire...)
+	}
 	v.Raw = append([]byte(nil), data...)
 
-	// Validate required fields were present. SigningPubKey doubles as
-	// the presence check for sfSigningPubKey: parseSTValidation only
-	// populates it when the wire field is exactly 33 bytes, so a zero
-	// SigningPubKey means the field was missing or malformed.
-	if v.LedgerSeq == 0 || v.LedgerID == (consensus.LedgerID{}) || v.SigningPubKey == (consensus.SigningPubKey{}) {
-		return nil, errMissingFields
+	if missing := allRequiredValidationFields &^ present; missing != 0 {
+		return nil, fmt.Errorf("%w: mask=0x%x", errMissingFields, missing)
 	}
 
 	return v, nil
@@ -253,9 +361,8 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 // consensus.Validation. Fields are written in canonical order (ascending type
 // code, then ascending field code within each type).
 //
-// Outbound validations set both vfFullValidation and vfFullyCanonicalSig on
-// sfFlags. Optional supplementary fields are emitted when present; fields
-// without explicit presence tracking use a non-zero value as their proxy.
+// Optional supplementary fields are emitted when present; fields without
+// explicit presence tracking use a non-zero value as their proxy.
 //
 // Exported so external packages (the validation archive) can reserialize
 // self-built validations whose Raw field is nil.
@@ -264,26 +371,18 @@ func SerializeSTValidation(v *consensus.Validation) []byte {
 
 	// --- UINT32 fields (type 2) ---
 
-	// sfFlags (field 2). For round-trip fidelity, prefer the original
-	// wire word captured by parseSTValidation (so we re-emit any vendor
-	// bits the validator set). For self-built validations whose Flags
-	// field is zero, synthesize the rippled-canonical pair: stamp
-	// vfFullyCanonicalSig on every outbound validation so canonical-sig-
-	// strict peers don't need to special-case us, plus vfFullValidation
-	// when v.Full.
 	flags := v.Flags
-	if flags == 0 {
-		flags = vfFullyCanonicalSig
-		if v.Full {
-			flags |= vfFullValidation
-		}
-	}
 	buf = appendFieldHeader(buf, typeUINT32, fieldFlags)
 	buf = binary.BigEndian.AppendUint32(buf, flags)
 
 	// sfLedgerSequence (field 6)
 	buf = appendFieldHeader(buf, typeUINT32, fieldLedgerSequence)
 	buf = binary.BigEndian.AppendUint32(buf, v.LedgerSeq)
+
+	if !v.CloseTime.IsZero() {
+		buf = appendFieldHeader(buf, typeUINT32, fieldCloseTime)
+		buf = binary.BigEndian.AppendUint32(buf, timeToXrplEpoch(v.CloseTime))
+	}
 
 	// sfSigningTime (field 9)
 	buf = appendFieldHeader(buf, typeUINT32, fieldSigningTime)
@@ -297,13 +396,13 @@ func SerializeSTValidation(v *consensus.Validation) []byte {
 
 	// sfReserveBase (field 31) — optional flag-ledger fee vote (legacy
 	// pre-XRPFees form).
-	if v.ReserveBase != 0 {
+	if v.HasReserveBase() {
 		buf = appendFieldHeader(buf, typeUINT32, fieldReserveBase)
 		buf = binary.BigEndian.AppendUint32(buf, v.ReserveBase)
 	}
 
 	// sfReserveIncrement (field 32) — optional flag-ledger fee vote.
-	if v.ReserveIncrement != 0 {
+	if v.HasReserveIncrement() {
 		buf = appendFieldHeader(buf, typeUINT32, fieldReserveInc)
 		buf = binary.BigEndian.AppendUint32(buf, v.ReserveIncrement)
 	}
@@ -312,7 +411,7 @@ func SerializeSTValidation(v *consensus.Validation) []byte {
 
 	// sfBaseFee (field 5) — optional flag-ledger fee vote (legacy
 	// pre-XRPFees form).
-	if v.BaseFee != 0 {
+	if v.HasBaseFee() {
 		buf = appendFieldHeader(buf, typeUINT64, fieldBaseFee)
 		buf = binary.BigEndian.AppendUint64(buf, v.BaseFee)
 	}
@@ -362,26 +461,17 @@ func SerializeSTValidation(v *consensus.Validation) []byte {
 	// --- Amount fields (type 6) ---
 	// Emitted AFTER Hash256 per canonical ordering. See note above.
 
-	// Post-featureXRPFees fee-voting fields, used once featureXRPFees is
-	// enabled. Encoded as 8-byte XRP amounts with the native
-	// (high-bit-clear) flag. The adaptor is responsible for populating
-	// these mutually-exclusively with the legacy
-	// sfBaseFee/sfReserveBase/sfReserveIncrement triple based on whether
-	// the parent ledger enables featureXRPFees. The non-zero gate here
-	// is defense-in-depth: a bug in the population layer produces a
-	// MISSING field (rejected by the parser's field presence check),
-	// not a DOUBLE field (which would parse but diverge semantically).
-	if v.BaseFeeDrops != 0 {
+	if amount, ok := v.BaseFeeDropsVote(); ok {
 		buf = appendFieldHeader(buf, typeAmount, fieldBaseFeeDrops)
-		buf = appendXRPAmount(buf, v.BaseFeeDrops)
+		buf = appendXRPAmount(buf, amount)
 	}
-	if v.ReserveBaseDrops != 0 {
+	if amount, ok := v.ReserveBaseDropsVote(); ok {
 		buf = appendFieldHeader(buf, typeAmount, fieldReserveBaseDrops)
-		buf = appendXRPAmount(buf, v.ReserveBaseDrops)
+		buf = appendXRPAmount(buf, amount)
 	}
-	if v.ReserveIncrementDrops != 0 {
+	if amount, ok := v.ReserveIncrementDropsVote(); ok {
 		buf = appendFieldHeader(buf, typeAmount, fieldReserveIncrementDrops)
-		buf = appendXRPAmount(buf, v.ReserveIncrementDrops)
+		buf = appendXRPAmount(buf, amount)
 	}
 
 	// --- Blob/VL fields (type 7) ---
@@ -436,6 +526,9 @@ func readFieldHeader(data []byte, pos *int) (int, int, error) {
 		}
 		typeCode = int(data[*pos])
 		*pos++
+		if typeCode < 16 {
+			return 0, 0, errNonCanonicalFieldID
+		}
 	}
 
 	if fieldCode == 0 {
@@ -444,6 +537,9 @@ func readFieldHeader(data []byte, pos *int) (int, int, error) {
 		}
 		fieldCode = int(data[*pos])
 		*pos++
+		if fieldCode < 16 {
+			return 0, 0, errNonCanonicalFieldID
+		}
 	}
 
 	return typeCode, fieldCode, nil
@@ -498,41 +594,89 @@ func advanceFixed(data []byte, pos *int, n int) (int, error) {
 	return n, nil
 }
 
-// skipAmount determines the length of an Amount field.
-// Bit 63 (0x80 in byte 0) is the "not XRP" flag:
-//   - Clear: XRP amount, always 8 bytes.
-//   - Set:   IOU amount — 48 bytes (8 value + 20 currency + 20 issuer),
-//     UNLESS it's the canonical zero IOU (0x8000000000000000), which is 8 bytes.
 func skipAmount(data []byte, pos *int) (int, error) {
 	if *pos+8 > len(data) {
 		return 0, errShortData
 	}
-	isNotXRP := (data[*pos] & 0x80) != 0
-	if !isNotXRP {
-		// XRP amount: always 8 bytes.
-		*pos += 8
-		return 8, nil
+
+	raw := binary.BigEndian.Uint64(data[*pos : *pos+8])
+	length := 8
+	switch {
+	case raw&(uint64(1)<<63) != 0:
+		length = 48
+	case raw&(uint64(1)<<61) != 0:
+		length = 33
 	}
-	// IOU: check for canonical zero (exactly 0x8000000000000000).
-	isZero := data[*pos] == 0x80
-	if isZero {
-		for i := 1; i < 8; i++ {
-			if data[*pos+i] != 0 {
-				isZero = false
-				break
-			}
-		}
+	if length == 8 && raw == 0 {
+		return 0, fmt.Errorf("%w: negative zero is not canonical", errInvalidFieldValue)
 	}
-	if isZero {
-		*pos += 8
-		return 8, nil
-	}
-	// Non-zero IOU: 8 (value) + 20 (currency) + 20 (issuer).
-	if *pos+48 > len(data) {
+	if *pos+length > len(data) {
 		return 0, errShortData
 	}
-	*pos += 48
-	return 48, nil
+	*pos += length
+	return length, nil
+}
+
+func validateAmount(data []byte) error {
+	if len(data) < 8 {
+		return errShortData
+	}
+
+	raw := binary.BigEndian.Uint64(data[:8])
+	switch {
+	case raw&(uint64(1)<<63) != 0:
+		if len(data) != 48 {
+			return fmt.Errorf("issued amount length %d", len(data))
+		}
+		if isZero160(data[8:28]) {
+			return errors.New("invalid native currency")
+		}
+		if isZero160(data[28:48]) {
+			return errors.New("invalid native account")
+		}
+
+		offset := int(raw >> 54)
+		mantissa := raw & ((uint64(1) << 54) - 1)
+		if mantissa == 0 {
+			if offset != 512 {
+				return errors.New("invalid currency value")
+			}
+			return nil
+		}
+
+		exponent := (offset & 255) - 97
+		if mantissa < 1_000_000_000_000_000 ||
+			mantissa > 9_999_999_999_999_999 ||
+			exponent < -96 ||
+			exponent > 80 {
+			return errors.New("invalid currency value")
+		}
+		return nil
+
+	case raw&(uint64(1)<<61) != 0:
+		if len(data) != 33 {
+			return fmt.Errorf("MPT amount length %d", len(data))
+		}
+		return nil
+
+	default:
+		if len(data) != 8 {
+			return fmt.Errorf("native amount length %d", len(data))
+		}
+		if raw == 0 {
+			return errors.New("negative zero is not canonical")
+		}
+		return nil
+	}
+}
+
+func isZero160(data []byte) bool {
+	for _, b := range data {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // skipVL reads a variable-length prefix and advances past the data.
@@ -613,34 +757,34 @@ func appendFieldHeader(buf []byte, typeCode, fieldCode int) []byte {
 	return append(buf, 0, byte(typeCode), byte(fieldCode))
 }
 
-// parseXRPAmount decodes an 8-byte native XRPL Amount into a drops
-// value. Returns (_, false) if the "not XRP" flag is set (i.e. an IOU)
-// — fee-vote fields are always native, so an IOU here indicates a
-// malformed validation and is dropped silently.
-func parseXRPAmount(data []byte) (uint64, bool) {
+// parseXRPAmount decodes an 8-byte native XRPL Amount.
+func parseXRPAmount(data []byte) (drops.XRPAmount, bool) {
 	if len(data) != 8 {
 		return 0, false
 	}
 	raw := binary.BigEndian.Uint64(data)
-	if raw&(1<<63) != 0 {
-		return 0, false // IOU form — not expected for fee-vote fields.
+	if raw == 0 || raw&(1<<63) != 0 || raw&(1<<61) != 0 {
+		return 0, false
 	}
-	// Strip the positive-sign bit; remaining 62 bits carry drops.
-	return raw &^ (1 << 62), true
+	magnitude := int64(raw &^ (1 << 62))
+	if raw&(1<<62) == 0 {
+		magnitude = -magnitude
+	}
+	return drops.XRPAmount(magnitude), true
 }
 
-// appendXRPAmount appends an XRPL-encoded native Amount (8 bytes).
-// Encoding: bit 63 = "not XRP" flag (clear for XRP), bit 62 = sign bit
-// (always set for positive / non-negative), lower bits carry the drops
-// value. Used to emit the post-featureXRPFees fee-vote fields
-// (sfBaseFeeDrops, sfReserveBaseDrops, sfReserveIncrementDrops) which
-// are AMOUNT-typed.
-func appendXRPAmount(buf []byte, drops uint64) []byte {
-	// High bit clear = XRP; second-highest bit set = positive.
-	// drops must fit in 62 bits, which is enforced by the XRPL total
-	// drops invariant (< 100 billion XRP × 10^6 drops/XRP).
+// appendXRPAmount appends an XRPL-encoded native Amount.
+func appendXRPAmount(buf []byte, amount drops.XRPAmount) []byte {
+	value := amount.Drops()
+	var magnitude uint64
+	if value < 0 {
+		magnitude = uint64(-(value + 1))
+		magnitude++
+	} else {
+		magnitude = uint64(value) | 1<<62
+	}
 	var encoded [8]byte
-	binary.BigEndian.PutUint64(encoded[:], drops|(1<<62))
+	binary.BigEndian.PutUint64(encoded[:], magnitude)
 	return append(buf, encoded[:]...)
 }
 

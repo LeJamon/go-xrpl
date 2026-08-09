@@ -36,7 +36,16 @@ func New(db nodestore.Database) *NodeStore {
 // NewMemory returns a backend backed by an in-memory NodeStore.
 func NewMemory() *NodeStore {
 	store := memorydb.New()
-	db := nodestore.NewKVDatabase(store, "memory", 2000, time.Hour)
+	db, err := nodestore.NewKVDatabase(store, nodestore.DatabaseConfig{
+		PositiveCache: nodestore.CacheConfig{
+			Enabled:    true,
+			MaxEntries: 2000,
+			TTL:        time.Hour,
+		},
+	})
+	if err != nil {
+		panic("construct in-memory nodestore: " + err.Error())
+	}
 	return New(db)
 }
 
@@ -45,22 +54,40 @@ func NewMemory() *NodeStore {
 // blockCacheMB sizes Pebble's block cache in MiB. nodeCacheItems bounds the
 // decoded-node cache by entry count.
 func OpenPebble(path string, blockCacheMB, nodeCacheItems int) (*NodeStore, error) {
+	return openPebble(path, blockCacheMB, nodeCacheItems, false)
+}
+
+// OpenPebbleReadOnly opens an existing persistent Pebble-backed NodeStore for
+// concurrent readers.
+func OpenPebbleReadOnly(path string, blockCacheMB, nodeCacheItems int) (*NodeStore, error) {
+	return openPebble(path, blockCacheMB, nodeCacheItems, true)
+}
+
+func openPebble(path string, blockCacheMB, nodeCacheItems int, readOnly bool) (*NodeStore, error) {
 	options, err := kvpebble.OptionsFromMiB(int64(blockCacheMB), kvpebble.DefaultMaxOpenFiles)
 	if err != nil {
 		return nil, err
 	}
-	store, err := kvpebble.New(path, options, false)
+	var store *kvpebble.Store
+	if readOnly {
+		store, err = kvpebble.NewReadOnly(path, options)
+	} else {
+		store, err = kvpebble.New(path, options)
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	dbConfig := &nodestore.DatabaseConfig{
-		CacheSize:            nodeCacheItems,
-		CacheTTL:             time.Hour,
-		NegativeCacheTTL:     5 * time.Minute,
-		NegativeCacheMaxSize: 100000,
+	dbConfig := nodestore.DefaultDatabaseConfig()
+	if nodeCacheItems > 0 {
+		dbConfig.PositiveCache.MaxEntries = nodeCacheItems
+	} else {
+		dbConfig.PositiveCache = nodestore.CacheConfig{}
 	}
-	db := nodestore.NewKVDatabaseWithConfig(store, "pebble("+path+")", dbConfig)
+	db, err := nodestore.NewKVDatabase(store, dbConfig)
+	if err != nil {
+		return nil, errors.Join(err, store.Close())
+	}
 	return New(db), nil
 }
 
@@ -135,6 +162,11 @@ func (f *NodeStore) StoreBatch(ctx context.Context, entries []shamap.FlushEntry)
 		})
 	}
 	return f.db.StoreBatch(ctx, nodes)
+}
+
+// Sync persists all preceding writes to stable storage.
+func (f *NodeStore) Sync(ctx context.Context) error {
+	return f.db.Sync(ctx)
 }
 
 // SetMinimumLedgerSeq waits for older writes to finish, then rejects new

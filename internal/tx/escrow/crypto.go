@@ -174,6 +174,9 @@ func parseConditionFull(data []byte) (fingerprint []byte, condType uint8, cost u
 	if (tag & 0xE0) != 0xA0 {
 		return nil, 0, 0, 0, errors.New("invalid condition tag")
 	}
+	if tag&0x1F == 0x1F {
+		return nil, 0, 0, 0, errors.New("long-form condition tag not supported")
+	}
 	condType = tag & 0x1F
 
 	// Parse length
@@ -297,6 +300,9 @@ func parseFulfillment(data []byte) (preimage []byte, fulfType uint8, consumed in
 	if (tag & 0xE0) != 0xA0 {
 		return nil, 0, 0, errors.New("invalid fulfillment tag")
 	}
+	if tag&0x1F == 0x1F {
+		return nil, 0, 0, errors.New("long-form fulfillment tag not supported")
+	}
 	fulfType = tag & 0x1F
 
 	// Parse length
@@ -306,18 +312,24 @@ func parseFulfillment(data []byte) (preimage []byte, fulfType uint8, consumed in
 	}
 	offset += bytesRead
 
-	// Total consumed = tag + length bytes + body
-	consumed = offset + length
+	if length > len(data)-offset {
+		return nil, 0, 0, errors.New("fulfillment length exceeds data")
+	}
+	bodyEnd := offset + length
+	if bodyEnd != len(data) {
+		return nil, 0, 0, errors.New("fulfillment has trailing data")
+	}
+	consumed = bodyEnd
 
 	// For PREIMAGE-SHA-256, next is the preimage (tag 0x80)
 	if fulfType == conditionTypePreimageSha256 {
-		if offset >= len(data) || data[offset] != 0x80 {
+		if offset >= bodyEnd || data[offset] != 0x80 {
 			return nil, 0, 0, errors.New("expected preimage tag")
 		}
 		offset++
 
 		// Parse preimage length
-		preimageLength, bytesRead, err := parseASN1Length(data[offset:])
+		preimageLength, bytesRead, err := parseASN1Length(data[offset:bodyEnd])
 		if err != nil {
 			return nil, 0, 0, err
 		}
@@ -327,8 +339,8 @@ func parseFulfillment(data []byte) (preimage []byte, fulfType uint8, consumed in
 			return nil, 0, 0, errors.New("preimage too long")
 		}
 
-		if offset+preimageLength > len(data) {
-			return nil, 0, 0, errors.New("preimage exceeds fulfillment data")
+		if offset+preimageLength != bodyEnd {
+			return nil, 0, 0, errors.New("preimage length does not consume fulfillment body")
 		}
 
 		preimage = make([]byte, preimageLength)
@@ -368,6 +380,9 @@ func parseASN1Length(data []byte) (int, int, error) {
 	length := 0
 	for i := range numBytes {
 		length = (length << 8) | int(data[1+i])
+	}
+	if length == 0 {
+		return 0, 0, errors.New("zero length must use short form")
 	}
 
 	return length, 1 + numBytes, nil

@@ -1,305 +1,105 @@
 package nodestore
 
 import (
-	"fmt"
+	"container/list"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
-// NegativeCache tracks nodes that are known to be missing from the store.
-// This optimization prevents repeated backend lookups for non-existent nodes.
-type NegativeCache struct {
-	mu      sync.RWMutex
-	entries map[Hash256]time.Time // Hash -> expiration time
+type negativeCacheEntry struct {
+	hash      Hash256
+	expiresAt time.Time
+}
+
+type negativeCache struct {
+	mu      sync.Mutex
+	entries map[Hash256]*list.Element
+	order   list.List
 	ttl     time.Duration
-
-	stats struct {
-		hits        int64 // Number of cache hits (confirmed missing)
-		misses      int64 // Number of cache misses (not in negative cache)
-		insertions  int64 // Number of entries added
-		expirations int64 // Number of entries expired
-		evictions   int64 // Number of entries evicted
-	}
-
-	maxSize int // Maximum number of entries (0 = unlimited)
-	closed  atomic.Bool
+	maxSize int
 }
 
-// NegativeCacheConfig holds configuration for the negative cache.
-type NegativeCacheConfig struct {
-	// TTL is the time-to-live for negative cache entries.
-	TTL time.Duration
-
-	// MaxSize is the maximum number of entries to cache (0 = unlimited).
-	MaxSize int
-}
-
-// DefaultNegativeCacheConfig returns a NegativeCacheConfig with sensible defaults.
-func DefaultNegativeCacheConfig() *NegativeCacheConfig {
-	return &NegativeCacheConfig{
-		TTL:     5 * time.Minute,
-		MaxSize: 100000, // 100k entries
+func newNegativeCache(ttl time.Duration, maxSize int) *negativeCache {
+	return &negativeCache{
+		entries: make(map[Hash256]*list.Element),
+		ttl:     ttl,
+		maxSize: maxSize,
 	}
 }
 
-// NewNegativeCache creates a new negative cache with the given TTL.
-func NewNegativeCache(ttl time.Duration) *NegativeCache {
-	return NewNegativeCacheWithConfig(&NegativeCacheConfig{
-		TTL:     ttl,
-		MaxSize: 100000,
-	})
-}
+func (c *negativeCache) MarkMissing(hash Hash256) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-// NewNegativeCacheWithConfig creates a new negative cache with the given configuration.
-func NewNegativeCacheWithConfig(config *NegativeCacheConfig) *NegativeCache {
-	if config == nil {
-		config = DefaultNegativeCacheConfig()
-	}
-
-	nc := &NegativeCache{
-		entries: make(map[Hash256]time.Time),
-		ttl:     config.TTL,
-		maxSize: config.MaxSize,
-	}
-
-	return nc
-}
-
-// MarkMissing records that a node is not present in the store.
-func (nc *NegativeCache) MarkMissing(hash Hash256) {
-	if nc.closed.Load() {
+	now := time.Now()
+	c.sweepExpiredLocked(now)
+	if element, ok := c.entries[hash]; ok {
+		entry := element.Value.(*negativeCacheEntry)
+		entry.expiresAt = now.Add(c.ttl)
+		c.order.MoveToBack(element)
 		return
 	}
-
-	nc.mu.Lock()
-	defer nc.mu.Unlock()
-
-	// Close may have nilled the map between the flag check above and
-	// acquiring the lock.
-	if nc.entries == nil {
-		return
+	if c.maxSize > 0 && len(c.entries) >= c.maxSize {
+		c.removeElementLocked(c.order.Front())
 	}
-
-	// Evict if at capacity
-	if nc.maxSize > 0 && len(nc.entries) >= nc.maxSize {
-		nc.evictOldestLocked()
-	}
-
-	_, exists := nc.entries[hash]
-	nc.entries[hash] = time.Now().Add(nc.ttl)
-
-	if !exists {
-		atomic.AddInt64(&nc.stats.insertions, 1)
-	}
+	entry := &negativeCacheEntry{hash: hash, expiresAt: now.Add(c.ttl)}
+	c.entries[hash] = c.order.PushBack(entry)
 }
 
-// IsMissing checks if a node is known to be missing.
-// Returns true if the node is in the negative cache and not expired.
-func (nc *NegativeCache) IsMissing(hash Hash256) bool {
-	if nc.closed.Load() {
+func (c *negativeCache) IsMissing(hash Hash256) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	element, ok := c.entries[hash]
+	if !ok {
 		return false
 	}
-
-	nc.mu.RLock()
-	expiresAt, found := nc.entries[hash]
-	nc.mu.RUnlock()
-
-	if !found {
-		atomic.AddInt64(&nc.stats.misses, 1)
+	if time.Now().After(element.Value.(*negativeCacheEntry).expiresAt) {
+		c.removeElementLocked(element)
 		return false
 	}
-
-	if time.Now().After(expiresAt) {
-		// Entry expired, remove it
-		nc.mu.Lock()
-		// Double-check under write lock
-		if exp, ok := nc.entries[hash]; ok && time.Now().After(exp) {
-			delete(nc.entries, hash)
-			atomic.AddInt64(&nc.stats.expirations, 1)
-		}
-		nc.mu.Unlock()
-
-		atomic.AddInt64(&nc.stats.misses, 1)
-		return false
-	}
-
-	atomic.AddInt64(&nc.stats.hits, 1)
 	return true
 }
 
-// Remove removes an entry from the negative cache.
-// This should be called when a node is added to the store.
-func (nc *NegativeCache) Remove(hash Hash256) {
-	if nc.closed.Load() {
-		return
+func (c *negativeCache) Remove(hash Hash256) {
+	c.mu.Lock()
+	if element, ok := c.entries[hash]; ok {
+		c.removeElementLocked(element)
 	}
-
-	nc.mu.Lock()
-	delete(nc.entries, hash)
-	nc.mu.Unlock()
+	c.mu.Unlock()
 }
 
-// Clear removes all entries from the negative cache. It is a no-op on a
-// closed cache.
-func (nc *NegativeCache) Clear() {
-	nc.mu.Lock()
-	if nc.entries != nil {
-		nc.entries = make(map[Hash256]time.Time)
-	}
-	nc.mu.Unlock()
+func (c *negativeCache) Clear() {
+	c.mu.Lock()
+	clear(c.entries)
+	c.order.Init()
+	c.mu.Unlock()
 }
 
-// Sweep removes all expired entries from the cache.
-func (nc *NegativeCache) Sweep() int {
-	if nc.closed.Load() {
-		return 0
-	}
-
-	nc.mu.Lock()
-	defer nc.mu.Unlock()
-
-	now := time.Now()
-	removed := 0
-
-	for hash, expiresAt := range nc.entries {
-		if now.After(expiresAt) {
-			delete(nc.entries, hash)
-			removed++
-		}
-	}
-
-	atomic.AddInt64(&nc.stats.expirations, int64(removed))
+func (c *negativeCache) Sweep() int {
+	c.mu.Lock()
+	removed := c.sweepExpiredLocked(time.Now())
+	c.mu.Unlock()
 	return removed
 }
 
-// evictOldestLocked evicts the oldest entries to make room.
-// Must be called with mu held.
-func (nc *NegativeCache) evictOldestLocked() {
-	// Find oldest entries (evict 10% of max size)
-	evictCount := max(nc.maxSize/10, 1)
-
-	// Simple approach: find oldest entries
-	type entry struct {
-		hash      Hash256
-		expiresAt time.Time
-	}
-
-	oldest := make([]entry, 0, evictCount)
-
-	for hash, exp := range nc.entries {
-		if len(oldest) < evictCount {
-			oldest = append(oldest, entry{hash, exp})
-		} else {
-			// Find the newest in our oldest list
-			maxIdx := 0
-			for i := 1; i < len(oldest); i++ {
-				if oldest[i].expiresAt.After(oldest[maxIdx].expiresAt) {
-					maxIdx = i
-				}
-			}
-			// Replace if this entry is older
-			if exp.Before(oldest[maxIdx].expiresAt) {
-				oldest[maxIdx] = entry{hash, exp}
-			}
+func (c *negativeCache) sweepExpiredLocked(now time.Time) int {
+	removed := 0
+	for element := c.order.Front(); element != nil; element = c.order.Front() {
+		entry := element.Value.(*negativeCacheEntry)
+		if now.Before(entry.expiresAt) {
+			break
 		}
+		c.removeElementLocked(element)
+		removed++
 	}
+	return removed
+}
 
-	for _, e := range oldest {
-		delete(nc.entries, e.hash)
-		atomic.AddInt64(&nc.stats.evictions, 1)
+func (c *negativeCache) removeElementLocked(element *list.Element) {
+	if element == nil {
+		return
 	}
-}
-
-// Size returns the current number of entries in the cache.
-func (nc *NegativeCache) Size() int {
-	nc.mu.RLock()
-	size := len(nc.entries)
-	nc.mu.RUnlock()
-	return size
-}
-
-// SetTTL updates the TTL for new entries.
-func (nc *NegativeCache) SetTTL(ttl time.Duration) {
-	nc.mu.Lock()
-	nc.ttl = ttl
-	nc.mu.Unlock()
-}
-
-// SetMaxSize updates the maximum size of the cache.
-func (nc *NegativeCache) SetMaxSize(maxSize int) {
-	nc.mu.Lock()
-	nc.maxSize = maxSize
-	// Evict if we're now over the limit
-	for nc.maxSize > 0 && len(nc.entries) > nc.maxSize {
-		nc.evictOldestLocked()
-	}
-	nc.mu.Unlock()
-}
-
-// Close closes the negative cache.
-func (nc *NegativeCache) Close() error {
-	if !nc.closed.CompareAndSwap(false, true) {
-		return nil // Already closed
-	}
-
-	nc.mu.Lock()
-	nc.entries = nil
-	nc.mu.Unlock()
-
-	return nil
-}
-
-// Stats returns statistics about the negative cache.
-func (nc *NegativeCache) Stats() NegativeCacheStats {
-	nc.mu.RLock()
-	size := len(nc.entries)
-	nc.mu.RUnlock()
-
-	return NegativeCacheStats{
-		Hits:        atomic.LoadInt64(&nc.stats.hits),
-		Misses:      atomic.LoadInt64(&nc.stats.misses),
-		Insertions:  atomic.LoadInt64(&nc.stats.insertions),
-		Expirations: atomic.LoadInt64(&nc.stats.expirations),
-		Evictions:   atomic.LoadInt64(&nc.stats.evictions),
-		Size:        size,
-		MaxSize:     nc.maxSize,
-		TTL:         nc.ttl,
-	}
-}
-
-// NegativeCacheStats holds statistics for the negative cache.
-type NegativeCacheStats struct {
-	Hits        int64         // Number of cache hits
-	Misses      int64         // Number of cache misses
-	Insertions  int64         // Number of entries added
-	Expirations int64         // Number of entries expired
-	Evictions   int64         // Number of entries evicted
-	Size        int           // Current number of entries
-	MaxSize     int           // Maximum number of entries
-	TTL         time.Duration // Time-to-live for entries
-}
-
-// HitRate returns the cache hit rate as a percentage.
-func (s NegativeCacheStats) HitRate() float64 {
-	total := s.Hits + s.Misses
-	if total == 0 {
-		return 0
-	}
-	return float64(s.Hits) / float64(total) * 100
-}
-
-// String returns a formatted string representation of the statistics.
-func (s NegativeCacheStats) String() string {
-	return fmt.Sprintf(`NegativeCache Statistics:
-  Size: %d/%d entries
-  Hits: %d, Misses: %d (%.2f%% hit rate)
-  Insertions: %d
-  Expirations: %d, Evictions: %d
-  TTL: %v`,
-		s.Size, s.MaxSize,
-		s.Hits, s.Misses, s.HitRate(),
-		s.Insertions,
-		s.Expirations, s.Evictions,
-		s.TTL)
+	delete(c.entries, element.Value.(*negativeCacheEntry).hash)
+	c.order.Remove(element)
 }

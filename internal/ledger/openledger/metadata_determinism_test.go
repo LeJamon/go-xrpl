@@ -94,7 +94,11 @@ func TestBuildDeterminism_TransactionHash(t *testing.T) {
 		}
 		pending = append(pending, pt)
 	}
-	openledger.CanonicalSort(pending, openledger.ComputeSalt(pending))
+	salt, err := openledger.ComputeSalt(pending)
+	if err != nil {
+		t.Fatalf("ComputeSalt: %v", err)
+	}
+	openledger.CanonicalSort(pending, salt)
 
 	env.Close()
 	parent := env.LastClosedLedger()

@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrie"
+	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrietest"
 )
 
 type lockProbeAncestryProvider struct {
@@ -28,11 +29,11 @@ func (p *lockProbeAncestryProvider) LedgerByID(id consensus.LedgerID) (ledgertri
 // the ledger is acquired the next GetPreferred poll replays the parked
 // validations and the trie flips — no new validation needed.
 func TestValidationTracker_UnresolvableValidationParksThenReplays(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abc := b.Build("abc")
 	abcd := b.Build("abcd")
 
@@ -79,11 +80,11 @@ func TestValidationTracker_UnresolvableValidationParksThenReplays(t *testing.T) 
 }
 
 func TestValidationTracker_AncestryLookupDoesNotHoldTrackerLock(t *testing.T) {
-	vt := NewValidationTracker(1, 5*time.Minute)
+	vt := NewValidationTracker(1)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	ledger := ledgertrie.NewTestLedgerBuilder().Build("abc")
+	ledger := ledgertrietest.NewTestLedgerBuilder().Build("abc")
 	node := consensus.NodeID{1}
 	provider := &lockProbeAncestryProvider{}
 	vt.SetTrusted([]consensus.NodeID{node})
@@ -119,11 +120,11 @@ func TestValidationTracker_AncestryLookupDoesNotHoldTrackerLock(t *testing.T) {
 // The consensus-island shape: the trie decides even when the majority is
 // parked, and flips to the majority branch once its ledger is acquired.
 func TestValidationTracker_TrieDecidesWithMajorityParked(t *testing.T) {
-	vt := NewValidationTracker(3, 5*time.Minute)
+	vt := NewValidationTracker(3)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abc := b.Build("abc")   // island tip, locally held
 	abde := b.Build("abde") // majority tip, not held yet
 
@@ -168,11 +169,11 @@ func TestValidationTracker_TrieDecidesWithMajorityParked(t *testing.T) {
 // replayed by the read itself — no intervening Add or GetPreferred
 // (rippled testAcquireValidatedLedger, Validations_test.cpp:958-961).
 func TestValidationTracker_ReadPollReplaysParked(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abc := b.Build("abc")
 	abcd := b.Build("abcd")
 
@@ -201,11 +202,11 @@ func TestValidationTracker_ReadPollReplaysParked(t *testing.T) {
 // GetTrustedSupport's read also polls: an acquired-but-unreplayed parked
 // validation counts toward branch support with no intervening call.
 func TestValidationTracker_GetTrustedSupportPollReplaysParked(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abcd := b.Build("abcd")
 
 	provider := newMapAncestryProvider()
@@ -226,11 +227,11 @@ func TestValidationTracker_GetTrustedSupportPollReplaysParked(t *testing.T) {
 // over still-acquiring ledgers: most parked validators first, ties to
 // the greater ledger ID.
 func TestValidationTracker_GetPreferred_AcquiringMajorityFallback(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abcx := b.Build("abcx")
 	abcy := b.Build("abcy")
 
@@ -251,11 +252,11 @@ func TestValidationTracker_GetPreferred_AcquiringMajorityFallback(t *testing.T) 
 }
 
 func TestValidationTracker_GetPreferred_AcquiringTieBreaksOnGreaterID(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abcx := b.Build("abcx")
 	abcy := b.Build("abcy") // same seq, greater ID than abcx
 
@@ -277,11 +278,11 @@ func TestValidationTracker_GetPreferred_AcquiringTieBreaksOnGreaterID(t *testing
 // A superseding validation removes the node from its prior parked entry,
 // so abandoned acquiring entries don't linger.
 func TestValidationTracker_SupersededValidationUnparks(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abcz := b.Build("abcz")   // greater ID: would win the tie-break if it lingered
 	abcwv := b.Build("abcwv") // higher seq, lesser ID at the fork byte
 
@@ -304,11 +305,11 @@ func TestValidationTracker_SupersededValidationUnparks(t *testing.T) {
 // ExpireOld drops parked entries with the validations that reference
 // them — acquiring_ never outlives its validations.
 func TestValidationTracker_ExpireOldUnparks(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abcd := b.Build("abcd")
 
 	n1 := consensus.NodeID{1}
@@ -330,11 +331,11 @@ func TestValidationTracker_ExpireOldUnparks(t *testing.T) {
 // the acquiring fallback, and must not be resurrected into the trie as a
 // phantom tip once its ledger is finally acquired.
 func TestValidationTracker_FlushStaleUnparks(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abcd := b.Build("abcd")
 
 	provider := newMapAncestryProvider()
@@ -370,11 +371,11 @@ func TestValidationTracker_FlushStaleUnparks(t *testing.T) {
 // Validations_test.cpp:1098-1124, "Trusted but not acquired ->
 // untrusted").
 func TestValidationTracker_DetrustedParkedValidationNotReplayed(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abcd := b.Build("abcd")
 
 	provider := newMapAncestryProvider()
@@ -402,11 +403,11 @@ func TestValidationTracker_DetrustedParkedValidationNotReplayed(t *testing.T) {
 // node's parked entry drops, and re-trusting re-parks its latest
 // validation.
 func TestValidationTracker_TrustChangeReparksFromByNode(t *testing.T) {
-	vt := NewValidationTracker(2, 5*time.Minute)
+	vt := NewValidationTracker(2)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
 
-	b := ledgertrie.NewTestLedgerBuilder()
+	b := ledgertrietest.NewTestLedgerBuilder()
 	abcd := b.Build("abcd")
 
 	n1 := consensus.NodeID{1}

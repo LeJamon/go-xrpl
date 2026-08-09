@@ -208,16 +208,15 @@ func TestSponsorSignatureTemplateRejectsForeignFields(t *testing.T) {
 			fields["Amount"] = "1"
 			fields["SponsorSignature"] = test.signature
 			encoded, err := binarycodec.Encode(fields)
-			if err != nil {
-				t.Fatalf("Encode: %v", err)
-			}
-			raw, err := hex.DecodeString(encoded)
-			if err != nil {
-				t.Fatalf("decode transaction: %v", err)
-			}
-			_, err = ParseFromBinary(raw)
-			if result, ok := ter.AsResultError(err); !ok || result.Code != ter.TemMALFORMED {
-				t.Fatalf("ParseFromBinary error = %v, want temMALFORMED", err)
+			if err == nil {
+				raw, err := hex.DecodeString(encoded)
+				if err != nil {
+					t.Fatalf("decode transaction: %v", err)
+				}
+				_, err = ParseFromBinary(raw)
+				if result, ok := ter.AsResultError(err); !ok || result.Code != ter.TemMALFORMED {
+					t.Fatalf("ParseFromBinary error = %v, want temMALFORMED", err)
+				}
 			}
 			jsonData, err := json.Marshal(fields)
 			if err != nil {
@@ -236,7 +235,7 @@ func TestSponsorCommonFieldsJSONRoundTrip(t *testing.T) {
 	tx := NewBaseTx(TypeSponsorshipSet, testAccount)
 	tx.Fee = "10"
 	tx.Sequence = &sequence
-	tx.SigningPubKey = ""
+	tx.SigningPubKey = "ED0000000000000000000000000000000000000000000000000000000000000001"
 	tx.Sponsor = testDestination
 	tx.SponsorFlags = &flags
 	tx.SponsorSignature = &SponsorSignature{

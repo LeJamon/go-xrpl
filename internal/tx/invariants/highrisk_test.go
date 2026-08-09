@@ -15,6 +15,7 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -46,7 +47,7 @@ func acctEntry(t *testing.T, addr string, flags uint32) InvariantEntry {
 	b := mustSerializeAccount(t, &state.AccountRoot{
 		Account: addr, Balance: 1_000_000, Sequence: 1, Flags: flags,
 	})
-	return InvariantEntry{EntryType: "AccountRoot", After: b}
+	return InvariantEntry{EntryType: entry.TypeAccountRoot, After: b}
 }
 
 // frozenLine builds a RippleState InvariantEntry between low and high accounts
@@ -69,7 +70,7 @@ func frozenLine(t *testing.T, low, high, beforeVal, afterVal string, flags uint3
 		}
 		return b
 	}
-	return InvariantEntry{EntryType: "RippleState", Before: mk(beforeVal), After: mk(afterVal)}
+	return InvariantEntry{EntryType: entry.TypeRippleState, Before: mk(beforeVal), After: mk(afterVal)}
 }
 
 // frozenTransferEntries models a USD transfer routed through addrIssuer: holder
@@ -146,7 +147,7 @@ func TestValidAMM_VoteMustNotChangePool(t *testing.T) {
 	tx := stubTx{txType: TypeAMMVote}
 
 	changed := []InvariantEntry{{
-		EntryType: "AMM",
+		EntryType: entry.TypeAMM,
 		Before:    ammSLE(t, addrIssuer, "1000"),
 		After:     ammSLE(t, addrIssuer, "2000"),
 	}}
@@ -157,7 +158,7 @@ func TestValidAMM_VoteMustNotChangePool(t *testing.T) {
 	}
 
 	unchanged := []InvariantEntry{{
-		EntryType: "AMM",
+		EntryType: entry.TypeAMM,
 		Before:    ammSLE(t, addrIssuer, "1000"),
 		After:     ammSLE(t, addrIssuer, "1000"),
 	}}
@@ -191,7 +192,7 @@ func TestValidAMM_VoteRejectsLPTokenIssueChange(t *testing.T) {
 		"OwnerNode": "0",
 		"Flags":     uint32(0),
 	})
-	changed := []InvariantEntry{{EntryType: "AMM", Before: before, After: after}}
+	changed := []InvariantEntry{{EntryType: entry.TypeAMM, Before: before, After: after}}
 	if v := checkValidAMM(tx, TesSUCCESS, changed, stubView{}, rules); v == nil {
 		t.Fatal("expected ValidAMM violation: LP token issue changed at constant value")
 	} else if v.Name != "ValidAMM" {
@@ -206,7 +207,7 @@ func TestValidAMM_DeleteMustRemoveObject(t *testing.T) {
 	rules := amendment.AllSupportedRules()
 	tx := stubTx{txType: TypeAMMDelete}
 
-	stillThere := []InvariantEntry{{EntryType: "AMM", After: ammSLE(t, addrIssuer, "1000")}}
+	stillThere := []InvariantEntry{{EntryType: entry.TypeAMM, After: ammSLE(t, addrIssuer, "1000")}}
 	if v := checkValidAMM(tx, TesSUCCESS, stillThere, stubView{}, rules); v == nil {
 		t.Fatal("expected ValidAMM violation: AMM object not deleted on AMMDelete")
 	} else if v.Name != "ValidAMM" {
@@ -216,7 +217,7 @@ func TestValidAMM_DeleteMustRemoveObject(t *testing.T) {
 	// AMM properly removed: the delete entry is skipped in visitEntry, so no
 	// AMM account is observed and the invariant is satisfied.
 	removed := []InvariantEntry{{
-		EntryType: "AMM",
+		EntryType: entry.TypeAMM,
 		Before:    ammSLE(t, addrIssuer, "1000"),
 		IsDelete:  true,
 	}}
@@ -255,8 +256,8 @@ func TestValidClawback_TooManyEntries(t *testing.T) {
 	tx := stubTx{txType: TypeClawback}
 
 	twoLines := []InvariantEntry{
-		{EntryType: "RippleState", Before: nonNil},
-		{EntryType: "RippleState", Before: nonNil},
+		{EntryType: entry.TypeRippleState, Before: nonNil},
+		{EntryType: entry.TypeRippleState, Before: nonNil},
 	}
 	if v := checkValidClawback(tx, TesSUCCESS, twoLines, stubView{}); v == nil {
 		t.Fatal("expected ValidClawback violation: more than one trustline changed")
@@ -265,8 +266,8 @@ func TestValidClawback_TooManyEntries(t *testing.T) {
 	}
 
 	twoMPTokens := []InvariantEntry{
-		{EntryType: "MPToken", Before: nonNil},
-		{EntryType: "MPToken", Before: nonNil},
+		{EntryType: entry.TypeMPToken, Before: nonNil},
+		{EntryType: entry.TypeMPToken, Before: nonNil},
 	}
 	if v := checkValidClawback(tx, TesSUCCESS, twoMPTokens, stubView{}); v == nil {
 		t.Fatal("expected ValidClawback violation: more than one mptoken changed")
@@ -274,7 +275,7 @@ func TestValidClawback_TooManyEntries(t *testing.T) {
 
 	// Exactly one trust line and no Amount provider: the ==1 branch skips the
 	// balance check and the invariant is satisfied.
-	oneLine := []InvariantEntry{{EntryType: "RippleState", Before: nonNil}}
+	oneLine := []InvariantEntry{{EntryType: entry.TypeRippleState, Before: nonNil}}
 	if v := checkValidClawback(tx, TesSUCCESS, oneLine, stubView{}); v != nil {
 		t.Fatalf("single trustline: unexpected violation %v", v)
 	}
@@ -288,7 +289,7 @@ func TestValidClawback_ChangesOnFailure(t *testing.T) {
 	tx := stubTx{txType: TypeClawback}
 	const failure Result = 100 // any non-tesSUCCESS result
 
-	changed := []InvariantEntry{{EntryType: "RippleState", Before: nonNil}}
+	changed := []InvariantEntry{{EntryType: entry.TypeRippleState, Before: nonNil}}
 	if v := checkValidClawback(tx, failure, changed, stubView{}); v == nil {
 		t.Fatal("expected ValidClawback violation: trustline changed despite failure")
 	}
@@ -340,7 +341,7 @@ func TestValidClawback_HolderBalanceSign(t *testing.T) {
 		amount:  amount,
 	}
 	entries := func(b []byte) []InvariantEntry {
-		return []InvariantEntry{{EntryType: "RippleState", Before: b, After: b}}
+		return []InvariantEntry{{EntryType: entry.TypeRippleState, Before: b, After: b}}
 	}
 
 	neg := line(true)
@@ -380,9 +381,9 @@ func mptIssuanceInvariantEntry(t *testing.T, referenceHolding *string, deleted b
 		t.Fatalf("serialize MPTokenIssuance: %v", err)
 	}
 	if deleted {
-		return InvariantEntry{EntryType: "MPTokenIssuance", Before: data, IsDelete: true}
+		return InvariantEntry{EntryType: entry.TypeMPTokenIssuance, Before: data, IsDelete: true}
 	}
-	return InvariantEntry{EntryType: "MPTokenIssuance", After: data}
+	return InvariantEntry{EntryType: entry.TypeMPTokenIssuance, After: data}
 }
 
 func mptInvariantEntry(t *testing.T, account, issuer string, deleted bool) InvariantEntry {
@@ -406,9 +407,9 @@ func mptInvariantEntry(t *testing.T, account, issuer string, deleted bool) Invar
 		t.Fatalf("serialize MPToken: %v", err)
 	}
 	if deleted {
-		return InvariantEntry{EntryType: "MPToken", Before: data, IsDelete: true}
+		return InvariantEntry{EntryType: entry.TypeMPToken, Before: data, IsDelete: true}
 	}
-	return InvariantEntry{EntryType: "MPToken", After: data}
+	return InvariantEntry{EntryType: entry.TypeMPToken, After: data}
 }
 
 // TestValidMPTIssuance_CreateAndDestroy: a successful MPTokenIssuanceCreate must
@@ -548,7 +549,7 @@ func TestValidMPTIssuance_ReferenceHolding(t *testing.T) {
 
 	before := mptIssuanceInvariantEntry(t, &referenceA, false).After
 	after := mptIssuanceInvariantEntry(t, &referenceB, false).After
-	modified := InvariantEntry{EntryType: "MPTokenIssuance", Before: before, After: after}
+	modified := InvariantEntry{EntryType: entry.TypeMPTokenIssuance, Before: before, After: after}
 	if v := checkValidMPTIssuance(
 		stubTx{txType: TypePayment},
 		TesSUCCESS,
@@ -591,7 +592,7 @@ func TestValidMPTIssuance_VaultPseudoHoldingDeletion(t *testing.T) {
 	}
 
 	line := frozenLine(t, addrHolderA, addrIssuer, "0", "0", 0)
-	deletedLine := InvariantEntry{EntryType: "RippleState", Before: line.After, IsDelete: true}
+	deletedLine := InvariantEntry{EntryType: entry.TypeRippleState, Before: line.After, IsDelete: true}
 	if v := checkValidMPTIssuance(
 		stubTx{txType: TypePayment},
 		TesSUCCESS,
@@ -679,12 +680,12 @@ func TestValidNFTokenPage_Sorting(t *testing.T) {
 	key := nftPageKey()
 	lo, hi := nftToken(0x02), nftToken(0x05)
 
-	sorted := []InvariantEntry{{EntryType: "NFTokenPage", Key: key, After: nftPage(t, lo, hi)}}
+	sorted := []InvariantEntry{{EntryType: entry.TypeNFTokenPage, Key: key, After: nftPage(t, lo, hi)}}
 	if v := checkValidNFTokenPage(sorted, stubView{}, rules); v != nil {
 		t.Fatalf("sorted page: unexpected violation %v", v)
 	}
 
-	unsorted := []InvariantEntry{{EntryType: "NFTokenPage", Key: key, After: nftPage(t, hi, lo)}}
+	unsorted := []InvariantEntry{{EntryType: entry.TypeNFTokenPage, Key: key, After: nftPage(t, hi, lo)}}
 	if v := checkValidNFTokenPage(unsorted, stubView{}, rules); v == nil {
 		t.Fatal("expected ValidNFTokenPage violation: NFTokens not sorted")
 	} else if v.Name != "ValidNFTokenPage" {
@@ -761,12 +762,12 @@ func TestValidPermissionedDEX_WrongDomain(t *testing.T) {
 	tx := domainTx{stubTx: stubTx{txType: TypeOfferCreate}, domain: &d1}
 	view := existsView{exists: true}
 
-	matching := []InvariantEntry{{EntryType: "DirectoryNode", After: dirNodeWithDomain(t, d1)}}
+	matching := []InvariantEntry{{EntryType: entry.TypeDirectoryNode, After: dirNodeWithDomain(t, d1)}}
 	if v := checkValidPermissionedDEX(tx, TesSUCCESS, matching, view, nil); v != nil {
 		t.Fatalf("matching domain directory: unexpected violation %v", v)
 	}
 
-	wrong := []InvariantEntry{{EntryType: "DirectoryNode", After: dirNodeWithDomain(t, d2)}}
+	wrong := []InvariantEntry{{EntryType: entry.TypeDirectoryNode, After: dirNodeWithDomain(t, d2)}}
 	if v := checkValidPermissionedDEX(tx, TesSUCCESS, wrong, view, nil); v == nil {
 		t.Fatal("expected ValidPermissionedDEX violation: consumed wrong domains")
 	} else if v.Name != "ValidPermissionedDEX" {
@@ -785,7 +786,7 @@ func TestValidPermissionedDEX_PresentZeroDomain(t *testing.T) {
 	view := existsView{exists: true}
 
 	var zero [32]byte
-	dir := []InvariantEntry{{EntryType: "DirectoryNode", After: dirNodeWithDomain(t, zero)}}
+	dir := []InvariantEntry{{EntryType: entry.TypeDirectoryNode, After: dirNodeWithDomain(t, zero)}}
 	if v := checkValidPermissionedDEX(tx, TesSUCCESS, dir, view, nil); v == nil {
 		t.Fatal("expected ValidPermissionedDEX violation: present-but-zero domain differs from tx domain")
 	} else if v.Name != "ValidPermissionedDEX" {

@@ -25,7 +25,7 @@ func TestPrecedence_CredentialCreateFlagBeforeField(t *testing.T) {
 	env.Close()
 
 	// Empty CredentialType is temMALFORMED in Validate; the invalid flag must win.
-	create := credentialtest.CredentialCreate(issuer, subject, "").
+	create := credentialtest.CredentialCreateText(issuer, subject, "").
 		Flags(0x00000001).
 		Build()
 	jtx.RequireTxFail(t, env.Submit(create), jtx.TemINVALID_FLAG)
@@ -39,7 +39,7 @@ func TestPrecedence_CredentialAcceptFlagBeforeField(t *testing.T) {
 	env.Close()
 
 	// Empty CredentialType is temMALFORMED in Validate; the invalid flag must win.
-	accept := credentialtest.CredentialAccept(subject, issuer, "").
+	accept := credentialtest.CredentialAcceptText(subject, issuer, "").
 		Flags(0x00000001).
 		Build()
 	jtx.RequireTxFail(t, env.Submit(accept), jtx.TemINVALID_FLAG)
@@ -53,7 +53,7 @@ func TestPrecedence_CredentialDeleteFlagBeforeField(t *testing.T) {
 
 	// Neither Subject nor Issuer present is temMALFORMED in Validate; the invalid
 	// flag must win.
-	del := credentialtest.CredentialDelete(sender, nil, nil, "credType").
+	del := credentialtest.CredentialDeleteText(sender, nil, nil, "credType").
 		Flags(0x00000001).
 		Build()
 	jtx.RequireTxFail(t, env.Submit(del), jtx.TemINVALID_FLAG)

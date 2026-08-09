@@ -21,7 +21,10 @@ func TestUpdateNegativeUNL_StampsFlagLedgerSeq(t *testing.T) {
 	if err != nil {
 		t.Fatalf("genesis.Create: %v", err)
 	}
-	parent := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	parent, err := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("FromGenesis: %v", err)
+	}
 
 	l, err := NewOpen(parent, parent.CloseTime().Add(10*time.Second))
 	if err != nil {

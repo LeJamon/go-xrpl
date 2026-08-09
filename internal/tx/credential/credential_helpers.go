@@ -10,7 +10,6 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -54,7 +53,7 @@ func (c *CredentialEntry) SetAccepted() {
 
 // ParseCredentialEntry parses a Credential ledger entry from binary data
 func ParseCredentialEntry(data []byte) (*CredentialEntry, error) {
-	var decoded ledgerfields.Credential
+	var decoded entry.Credential
 	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("parse credential: %w", err)
 	}
@@ -146,7 +145,7 @@ func serializeCredentialEntry(cred *CredentialEntry) ([]byte, error) {
 		return nil, errors.New("serialize credential: empty credential type")
 	}
 
-	var sle ledgerfields.Credential
+	var sle entry.Credential
 	sle.SetSubject(subjectStr)
 	sle.SetIssuer(issuerStr)
 	sle.SetCredentialType(hex.EncodeToString(cred.CredentialType))
@@ -257,6 +256,121 @@ func ValidCredentials(view tx.LedgerView, subject [20]byte, credentialIDs []stri
 	return ter.TesSUCCESS
 }
 
+// ValidDomain checks whether subject has an accepted, unexpired credential
+// matching a permissioned domain. It is read-only so callers that suppress
+// tecEXPIRED during preclaim must call VerifyValidDomain during apply.
+func ValidDomain(view state.LedgerView, domainID [32]byte, subject [20]byte, closeTime uint32) ter.Result {
+	domain, result := readPermissionedDomain(view, domainID)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+
+	foundExpired := false
+	for _, accepted := range domain.AcceptedCredentials {
+		credentialRaw, err := view.Read(keylet.Credential(subject, accepted.Issuer, accepted.CredentialType))
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if credentialRaw == nil {
+			continue
+		}
+		credentialEntry, err := ParseCredentialEntry(credentialRaw)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if CheckCredentialExpired(credentialEntry, closeTime) {
+			foundExpired = true
+			continue
+		}
+		if credentialEntry.IsAccepted() {
+			return ter.TesSUCCESS
+		}
+	}
+	if foundExpired {
+		return ter.TecEXPIRED
+	}
+	return ter.TecNO_AUTH
+}
+
+func readPermissionedDomain(view state.LedgerView, domainID [32]byte) (*state.PermissionedDomainData, ter.Result) {
+	raw, err := view.Read(keylet.PermissionedDomainByID(domainID))
+	if err != nil {
+		return nil, ter.TefINTERNAL
+	}
+	if raw == nil {
+		return nil, ter.TecOBJECT_NOT_FOUND
+	}
+	domain, err := state.ParsePermissionedDomain(raw)
+	if err != nil {
+		return nil, ter.TefINTERNAL
+	}
+	return domain, ter.TesSUCCESS
+}
+
+func domainCredentialIDs(view state.LedgerView, domainID [32]byte, subject [20]byte) ([]string, ter.Result) {
+	domain, result := readPermissionedDomain(view, domainID)
+	if result != ter.TesSUCCESS {
+		return nil, result
+	}
+
+	ids := make([]string, 0, len(domain.AcceptedCredentials))
+	for _, accepted := range domain.AcceptedCredentials {
+		credentialKey := keylet.Credential(subject, accepted.Issuer, accepted.CredentialType)
+		exists, err := view.Exists(credentialKey)
+		if err != nil {
+			return nil, ter.TefINTERNAL
+		}
+		if exists {
+			ids = append(ids, hex.EncodeToString(credentialKey.Key[:]))
+		}
+	}
+	return ids, ter.TesSUCCESS
+}
+
+// VerifyValidDomain removes expired matching credentials and then verifies that
+// an accepted credential remains. Deletion failures are propagated when
+// fixCleanup3_1_3 is enabled by RemoveExpiredCredentials.
+func VerifyValidDomain(ctx *tx.ApplyContext, subject [20]byte, domainID [32]byte) ter.Result {
+	ids, result := domainCredentialIDs(ctx.View, domainID, subject)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	foundExpired, result := RemoveExpiredCredentials(ctx, ids)
+	if foundExpired && subject == ctx.AccountID {
+		ctx.SyncSenderOwnerCount()
+	}
+	if result != ter.TesSUCCESS {
+		return result
+	}
+
+	for _, idHex := range ids {
+		idBytes, err := hex.DecodeString(idHex)
+		if err != nil || len(idBytes) != 32 {
+			return ter.TefINTERNAL
+		}
+		var id [32]byte
+		copy(id[:], idBytes)
+		raw, err := ctx.View.Read(keylet.CredentialByID(id))
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if raw == nil {
+			continue
+		}
+		credentialEntry, err := ParseCredentialEntry(raw)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if credentialEntry.IsAccepted() {
+			return ter.TesSUCCESS
+		}
+	}
+	if foundExpired {
+		return ter.TecEXPIRED
+	}
+	return ter.TecNO_PERMISSION
+}
+
 // removeExpired is the shared per-credential deletion loop. anyExpired reports
 // whether any credential was expired; failTER is the first failing deletion TER
 // (tesSUCCESS if none failed). When stopOnFailure is true it returns immediately
@@ -311,7 +425,7 @@ func removeExpired(ctx *tx.ApplyContext, credentialIDs []string, stopOnFailure b
 // TER); before the amendment the failure is swallowed (returns tesSUCCESS),
 // matching rippled removeExpired.
 func RemoveExpiredCredentials(ctx *tx.ApplyContext, credentialIDs []string) (bool, ter.Result) {
-	fix313 := ctx.Rules().Enabled(amendment.FeatureID("fixCleanup3_1_3"))
+	fix313 := ctx.Rules().Enabled(amendment.FeatureFixCleanup3_1_3)
 	anyExpired, failTER := removeExpired(ctx, credentialIDs, fix313)
 	if fix313 {
 		return anyExpired, failTER
@@ -319,18 +433,10 @@ func RemoveExpiredCredentials(ctx *tx.ApplyContext, credentialIDs []string) (boo
 	return anyExpired, ter.TesSUCCESS
 }
 
-// RemoveExpiredCredentialsOnTec runs the tec-recovery cleanup: every expired
-// credential is deleted and a deletion failure is only logged, never propagated,
-// matching rippled Transactor::removeExpiredCredentials. This path is unchanged
-// by fixCleanup3_1_3.
-func RemoveExpiredCredentialsOnTec(ctx *tx.ApplyContext, credentialIDs []string) {
-	removeExpired(ctx, credentialIDs, false)
-}
-
 // VerifyDepositPreauth enforces deposit authorization for a transaction
 // moving funds from src to dst. Expired credentials in credentialIDs are
 // deleted first, failing the transaction with tecEXPIRED if any were expired
-// (the deletion is re-applied on the tec path via ApplyOnTec). If dst has
+// (the engine replays the erased credential keys on the tec path). If dst has
 // lsfDepositAuth set and src != dst, the deposit must be preauthorized by
 // dst, either by account or by the supplied credentials.
 // Reference: rippled CredentialHelpers.cpp verifyDepositPreauth()
@@ -422,6 +528,10 @@ func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst 
 // tecINTERNAL and a failed directory removal tefBAD_LEDGER, matching rippled.
 // Reference: rippled CredentialHelpers.cpp credentials::deleteSLE()
 func DeleteSLE(ctx *tx.ApplyContext, credKey keylet.Keylet, cred *CredentialEntry) ter.Result {
+	if cred == nil {
+		return ter.TecNO_ENTRY
+	}
+
 	removeFromDir := func(account [20]byte, page uint64, isOwner bool) ter.Result {
 		if exists, err := ctx.View.Exists(keylet.Account(account)); err != nil || !exists {
 			return ter.TecINTERNAL

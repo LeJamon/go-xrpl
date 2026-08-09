@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"net"
 )
 
@@ -17,11 +18,22 @@ import (
 //     0 skips validation for local dev networks — a security risk on a
 //     public network
 type OverlayConfig struct {
-	PublicIP        string `toml:"public_ip" mapstructure:"public_ip"`
-	IPLimit         int    `toml:"ip_limit" mapstructure:"ip_limit"`
-	MaxUnknownTime  int    `toml:"max_unknown_time" mapstructure:"max_unknown_time"`
-	MaxDivergedTime int    `toml:"max_diverged_time" mapstructure:"max_diverged_time"`
-	VerifyEndpoints *int   `toml:"verify_endpoints" mapstructure:"verify_endpoints"`
+	PublicIP             string               `toml:"public_ip" mapstructure:"public_ip"`
+	IPLimit              int                  `toml:"ip_limit" mapstructure:"ip_limit"`
+	MaxUnknownTime       int                  `toml:"max_unknown_time" mapstructure:"max_unknown_time"`
+	MaxDivergedTime      int                  `toml:"max_diverged_time" mapstructure:"max_diverged_time"`
+	VerifyEndpoints      *int                 `toml:"verify_endpoints" mapstructure:"verify_endpoints"`
+	InboundRetainedBytes int64                `toml:"inbound_retained_bytes" mapstructure:"inbound_retained_bytes"`
+	ResourceLimits       ResourceLimitsConfig `toml:"resource_limits" mapstructure:"resource_limits"`
+}
+
+// ResourceLimitsConfig bounds peer reputation and cluster-gossip state.
+// Zero values retain the built-in limits.
+type ResourceLimitsConfig struct {
+	MaxEntries         int `toml:"max_entries" mapstructure:"max_entries"`
+	MaxImportedEntries int `toml:"max_imported_entries" mapstructure:"max_imported_entries"`
+	MaxImportOrigins   int `toml:"max_import_origins" mapstructure:"max_import_origins"`
+	MaxImportItems     int `toml:"max_import_items" mapstructure:"max_import_items"`
 }
 
 // TransactionQueueConfig represents the [transaction_queue] section (EXPERIMENTAL).
@@ -30,7 +42,8 @@ type OverlayConfig struct {
 // (rippled's TxQ::Setup defaults), while a present key overrides the default
 // with its exact value, including 0. This mirrors rippled's setup_TxQ, which
 // overrides on key presence (BasicConfig::set), not on a non-zero value.
-// maximum_txn_in_ledger keeps its "0 = no maximum" meaning.
+// An absent maximum leaves the limit unset; an explicit zero remains present
+// and fails the minimum cross-check.
 type TransactionQueueConfig struct {
 	LedgersInQueue                 *int `toml:"ledgers_in_queue" mapstructure:"ledgers_in_queue"`
 	MinimumQueueSize               *int `toml:"minimum_queue_size" mapstructure:"minimum_queue_size"`
@@ -69,6 +82,33 @@ func (o *OverlayConfig) Validate() error {
 			return err
 		}
 	}
+	if o.InboundRetainedBytes != 0 && o.InboundRetainedBytes < 3*64*1024*1024 {
+		return fmt.Errorf("inbound_retained_bytes must be at least %d, got %d", 3*64*1024*1024, o.InboundRetainedBytes)
+	}
+	limits := o.ResourceLimits
+	for _, limit := range []struct {
+		name  string
+		value int
+	}{
+		{"resource_limits.max_entries", limits.MaxEntries},
+		{"resource_limits.max_imported_entries", limits.MaxImportedEntries},
+		{"resource_limits.max_import_origins", limits.MaxImportOrigins},
+		{"resource_limits.max_import_items", limits.MaxImportItems},
+	} {
+		if err := validateNonNegative(limit.name, limit.value); err != nil {
+			return err
+		}
+	}
+	effectiveEntries := limits.MaxEntries
+	if effectiveEntries == 0 {
+		effectiveEntries = 32768
+	}
+	if limits.MaxImportedEntries != 0 && limits.MaxImportedEntries > effectiveEntries {
+		return fmt.Errorf("resource_limits.max_imported_entries (%d) exceeds max_entries (%d)", limits.MaxImportedEntries, effectiveEntries)
+	}
+	if limits.MaxImportItems > 1024 {
+		return fmt.Errorf("resource_limits.max_import_items must not exceed 1024, got %d", limits.MaxImportItems)
+	}
 
 	return nil
 }
@@ -86,7 +126,6 @@ func (tq *TransactionQueueConfig) Validate() error {
 		{"ledgers_in_queue", tq.LedgersInQueue},
 		{"minimum_queue_size", tq.MinimumQueueSize},
 		{"retry_sequence_percent", tq.RetrySequencePercent},
-		{"minimum_escalation_multiplier", tq.MinimumEscalationMultiplier},
 		{"minimum_txn_in_ledger", tq.MinimumTxnInLedger},
 		{"minimum_txn_in_ledger_standalone", tq.MinimumTxnInLedgerStandalone},
 		{"target_txn_in_ledger", tq.TargetTxnInLedger},
@@ -102,12 +141,28 @@ func (tq *TransactionQueueConfig) Validate() error {
 		if err := validateNonNegative(knob.name, *knob.value); err != nil {
 			return err
 		}
+		if uint64(*knob.value) > math.MaxUint32 {
+			return fmt.Errorf("%s exceeds uint32 range: %d", knob.name, *knob.value)
+		}
+	}
+	if tq.MinimumEscalationMultiplier != nil {
+		if err := validateNonNegative("minimum_escalation_multiplier", *tq.MinimumEscalationMultiplier); err != nil {
+			return err
+		}
+	}
+	if tq.LedgersInQueue != nil {
+		if *tq.LedgersInQueue == 0 {
+			return fmt.Errorf("ledgers_in_queue must be positive")
+		}
+		if *tq.LedgersInQueue > 1<<20 {
+			return fmt.Errorf("ledgers_in_queue exceeds allocation cap: %d", *tq.LedgersInQueue)
+		}
 	}
 
 	// Cross-check only explicitly-set values; the same invariant is
 	// re-checked against the effective (defaulted) minimums when the queue
 	// is constructed.
-	if tq.MaximumTxnInLedger != nil && *tq.MaximumTxnInLedger > 0 {
+	if tq.MaximumTxnInLedger != nil {
 		max := *tq.MaximumTxnInLedger
 		if tq.MinimumTxnInLedger != nil && *tq.MinimumTxnInLedger > max {
 			return fmt.Errorf("minimum_txn_in_ledger (%d) exceeds maximum_txn_in_ledger (%d)", *tq.MinimumTxnInLedger, max)

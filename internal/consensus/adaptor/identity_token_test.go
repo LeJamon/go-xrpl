@@ -36,11 +36,15 @@ type tokenFixture struct {
 //
 // All randomness is seeded by `seed` so tests stay deterministic.
 func newTokenFixture(t *testing.T, seed byte, sequence uint32) tokenFixture {
+	return newTokenFixtureWithSeeds(t, seed, seed, sequence)
+}
+
+func newTokenFixtureWithSeeds(t *testing.T, masterSeed, signingSeed byte, sequence uint32) tokenFixture {
 	t.Helper()
 
 	// Master: ed25519. Use deterministic-from-seed key material so the
 	// fixture is reproducible across runs.
-	masterSeedBytes := bytes.Repeat([]byte{seed}, ed25519.SeedSize)
+	masterSeedBytes := bytes.Repeat([]byte{masterSeed}, ed25519.SeedSize)
 	masterPriv := ed25519.NewKeyFromSeed(masterSeedBytes)
 	masterPubBytes := masterPriv.Public().(ed25519.PublicKey)
 	master33 := append([]byte{0xED}, masterPubBytes...)
@@ -50,7 +54,7 @@ func newTokenFixture(t *testing.T, seed byte, sequence uint32) tokenFixture {
 	// is, and 0xFF is also fine. Tests use small seeds so this holds.
 	var sec [32]byte
 	for i := range sec {
-		sec[i] = seed ^ byte(i+1)
+		sec[i] = signingSeed ^ byte(i+1)
 	}
 	algo := secp256k1.Algorithm{}
 	signingPubBytes, err := algo.DerivePublicKeyFromSecret(sec[:])
@@ -172,8 +176,8 @@ func TestNewValidatorIdentityFromToken_HappyPath(t *testing.T) {
 	if id.Manifest == nil {
 		t.Fatal("Manifest must be populated")
 	}
-	if id.Manifest.Sequence != fix.sequence {
-		t.Errorf("manifest sequence: got %d want %d", id.Manifest.Sequence, fix.sequence)
+	if id.Manifest.Sequence() != fix.sequence {
+		t.Errorf("manifest sequence: got %d want %d", id.Manifest.Sequence(), fix.sequence)
 	}
 	if len(id.SerializedMfst) == 0 {
 		t.Error("SerializedMfst must be populated for #372 emission")
@@ -211,8 +215,43 @@ func TestNewValidatorIdentityFromToken_SignVerifyValidation(t *testing.T) {
 	if len(v.Signature) == 0 {
 		t.Fatal("expected non-empty signature")
 	}
+	if want := uint32(vfFullyCanonicalSig | vfFullValidation); v.Flags != want {
+		t.Fatalf("signed validation flags = %#x, want %#x", v.Flags, want)
+	}
 	if err := VerifyValidation(v); err != nil {
 		t.Fatalf("VerifyValidation: %v", err)
+	}
+
+	partial := &consensus.Validation{
+		LedgerID:  consensus.LedgerID{0x03, 0x04},
+		LedgerSeq: 43,
+		SignTime:  time.Unix(protocol.RippleEpochUnix+1001, 0),
+	}
+	if err := id.SignValidation(partial); err != nil {
+		t.Fatalf("SignValidation partial: %v", err)
+	}
+	if want := uint32(vfFullyCanonicalSig); partial.Flags != want {
+		t.Fatalf("signed partial validation flags = %#x, want %#x", partial.Flags, want)
+	}
+	if err := VerifyValidation(partial); err != nil {
+		t.Fatalf("VerifyValidation partial: %v", err)
+	}
+
+	conflicting := &consensus.Validation{
+		Full:      true,
+		Flags:     vfFullyCanonicalSig,
+		LedgerID:  consensus.LedgerID{0x05, 0x06},
+		LedgerSeq: 44,
+		SignTime:  time.Unix(protocol.RippleEpochUnix+1002, 0),
+	}
+	if err := id.SignValidation(conflicting); err != nil {
+		t.Fatalf("SignValidation conflicting flags: %v", err)
+	}
+	if want := uint32(vfFullyCanonicalSig | vfFullValidation); conflicting.Flags != want {
+		t.Fatalf("normalized conflicting flags = %#x, want %#x", conflicting.Flags, want)
+	}
+	if err := VerifyValidation(conflicting); err != nil {
+		t.Fatalf("VerifyValidation conflicting flags: %v", err)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
+	"github.com/LeJamon/go-xrpl/internal/tx/delegate"
 	"github.com/LeJamon/go-xrpl/internal/tx/oracle"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -77,15 +78,6 @@ func (a *AccountDelete) CalculateBaseFee(view tx.LedgerView, config tx.EngineCon
 }
 
 func (a *AccountDelete) Flatten() (map[string]any, error) { return tx.ReflectFlatten(a) }
-
-// ApplyOnTec implements TecApplier. When tecEXPIRED is returned, this re-runs
-// credential expiration deletion against the engine's view so the side-effects
-// (credential deletion, owner count adjustment) persist even though the tx
-// sandbox is rolled back for tec results.
-// Reference: rippled Transactor.cpp - tecEXPIRED re-applies removeExpiredCredentials
-func (a *AccountDelete) ApplyOnTec(ctx *tx.ApplyContext) {
-	credential.RemoveExpiredCredentialsOnTec(ctx, a.CredentialIDs)
-}
 
 func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("account delete apply",
@@ -180,15 +172,14 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 		if err != nil || data == nil {
 			return ter.TefBAD_LEDGER
 		}
-		etRaw, err := state.GetLedgerEntryType(data)
+		et, err := state.DecodeType(data)
 		if err != nil {
 			return ter.TecHAS_OBLIGATIONS
 		}
-		et := entry.Type(etRaw)
 		deleter := nonObligationDeleter(et)
 		if deleter == nil {
 			ctx.Log.Error("account delete: undeletable item in owner directory",
-				"entryType", etRaw,
+				"entryType", et,
 			)
 			return ter.TecHAS_OBLIGATIONS
 		}
@@ -295,7 +286,11 @@ func deleteOffer(ctx *tx.ApplyContext, _ keylet.Keylet, ik keylet.Keylet, data [
 }
 
 func deleteTicket(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []byte) ter.Result {
-	if !removeFromDir(ctx, ownerDirKey, state.GetOwnerNode(data), ik.Key, true) {
+	ownerNode, err := state.GetOwnerNode(data)
+	if err != nil {
+		return ter.TefBAD_LEDGER
+	}
+	if !removeFromDir(ctx, ownerDirKey, ownerNode, ik.Key, true) {
 		return ter.TefBAD_LEDGER
 	}
 	if err := ctx.View.Erase(ik); err != nil {
@@ -383,19 +378,8 @@ func deleteSignerList(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data 
 	return ter.TesSUCCESS
 }
 
-func deleteDelegate(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []byte) ter.Result {
-	dd, err := state.ParseDelegate(data)
-	if err != nil {
-		return ter.TefBAD_LEDGER
-	}
-	if !removeFromDir(ctx, ownerDirKey, dd.OwnerNode, ik.Key, false) {
-		return ter.TefBAD_LEDGER
-	}
-	if err := ctx.View.Erase(ik); err != nil {
-		return ter.TefBAD_LEDGER
-	}
-	decrementOwnerCount(ctx)
-	return ter.TesSUCCESS
+func deleteDelegate(ctx *tx.ApplyContext, _ keylet.Keylet, ik keylet.Keylet, data []byte) ter.Result {
+	return delegate.DeleteDelegate(ctx, ik, data)
 }
 
 // deleteCredential and deleteOracle delegate to helpers that own their full

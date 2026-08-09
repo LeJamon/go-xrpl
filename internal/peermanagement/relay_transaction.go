@@ -1,12 +1,17 @@
 package peermanagement
 
 import (
+	"bytes"
 	"math/rand/v2"
+
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // peerTxReduceRelayEnabled reports whether a peer negotiated the
-// tx-reduce-relay feature. Reads the peer's capabilities directly so it is
-// safe to call while holding o.peersMu (unlike PeerSupports, which re-locks).
+// tx-reduce-relay feature. It uses a peer snapshot so it is safe to call
+// while holding o.peersMu (unlike PeerSupports, which re-locks).
 func peerTxReduceRelayEnabled(p *Peer) bool {
 	caps := p.Capabilities()
 	return caps != nil && caps.HasFeature(FeatureTxReduceRelay)
@@ -20,19 +25,44 @@ func peerTxReduceRelayEnabled(p *Peer) bool {
 // minimum (TxReduceRelayMinPeers + peers without the feature), the full frame
 // is sent to every candidate peer. Otherwise it is sent to all peers without
 // the feature plus a TxRelayPercentage share of the enabled peers; the
-// remaining enabled peers learn of the transaction via the periodic
-// TMHaveTransactions announce (sendTxQueueAnnounce) — go-xrpl's analogue of
-// rippled's per-peer addTxQueue, since that announce already gossips the
-// open-ledger tx hashes to every tx-reduce-relay peer each second.
+// remaining enabled peers learn of the transaction via their per-peer
+// TMHaveTransactions queue, drained by the periodic sendTxQueueAnnounce tick.
 //
 // except is the originating peer: go-xrpl's single-element toSkip. rippled also
 // skips peers a HashRouter marks as already holding the tx, which go-xrpl does
 // not track (see router.relayTransaction); suppressed is therefore reported as
 // the single origin peer.
 func (o *Overlay) RelayTransaction(except PeerID, frame []byte) {
-	o.peersMu.RLock()
-	defer o.peersMu.RUnlock()
+	hash, ok := transactionHashFromFrame(frame)
+	o.relayTransaction(except, hash, ok, frame)
+}
 
+// transactionHashFromFrame extracts the canonical transaction blob from a
+// wire TMTransaction frame and derives the XRPL transaction ID. A false
+// result means the caller must not suppress the full transaction: without a
+// usable hash a HAVE_TRANSACTIONS announcement could never be fulfilled.
+func transactionHashFromFrame(frame []byte) ([32]byte, bool) {
+	reader := bytes.NewReader(frame)
+	header, err := message.ReadHeader(reader)
+	if err != nil {
+		return [32]byte{}, false
+	}
+	payload, err := message.ReadPayload(reader, *header)
+	if err != nil || header.MessageType != message.TypeTransaction {
+		return [32]byte{}, false
+	}
+	decoded, err := message.Decode(message.TypeTransaction, payload)
+	if err != nil {
+		return [32]byte{}, false
+	}
+	txn, ok := decoded.(*message.Transaction)
+	if !ok || len(txn.RawTransaction) == 0 {
+		return [32]byte{}, false
+	}
+	return sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), txn.RawTransaction), true
+}
+
+func (o *Overlay) relayTransaction(except PeerID, hash [32]byte, hashOK bool, frame []byte) {
 	// getActivePeers (OverlayImpl.cpp:1062-1094): total counts every active
 	// peer; disabled counts peers without the feature; candidates are the
 	// peers not in toSkip; enabledInSkip counts skipped peers that have the
@@ -43,10 +73,8 @@ func (o *Overlay) RelayTransaction(except PeerID, frame []byte) {
 		enabledInSkip uint64
 		candidates    []*Peer
 	)
-	for id, peer := range o.peers {
-		if peer.State() != PeerStateConnected {
-			continue
-		}
+	for _, target := range o.connectedPeers() {
+		id, peer := target.id, target.peer
 		total++
 		enabled := peerTxReduceRelayEnabled(peer)
 		if !enabled {
@@ -61,8 +89,14 @@ func (o *Overlay) RelayTransaction(except PeerID, frame []byte) {
 		candidates = append(candidates, peer)
 	}
 
-	sendFull := func(p *Peer) {
-		o.sendAndLog(p, frame, "relay-transaction", false)
+	result := fanoutResult{operation: "relay-transaction"}
+	defer func() {
+		o.logFanoutFailure(result.err())
+	}()
+	sendFull := func(p *Peer) bool {
+		err := p.Send(frame)
+		result.record(err)
+		return err == nil
 	}
 
 	const suppressed = 1 // go-xrpl's toSkip is the single originating peer
@@ -102,16 +136,42 @@ func (o *Overlay) RelayTransaction(except PeerID, frame []byte) {
 	}
 
 	enabledAndRelayed := enabledInSkip
+	relayTransactionCandidates(candidates, enabledAndRelayed, enabledTarget, sendFull,
+		func(peer *Peer) bool {
+			return hashOK && peer.addTxQueue(hash)
+		})
+}
+
+func relayTransactionCandidates(
+	candidates []*Peer,
+	enabledAndRelayed uint64,
+	enabledTarget uint64,
+	sendFull func(*Peer) bool,
+	queue ...func(*Peer) bool,
+) {
 	for _, p := range candidates {
 		switch {
 		case !peerTxReduceRelayEnabled(p):
 			sendFull(p) // always relay to peers without the feature
 		case enabledAndRelayed < enabledTarget:
-			enabledAndRelayed++
-			sendFull(p)
+			if sendFull(p) {
+				enabledAndRelayed++
+			}
 		default:
-			// Remaining enabled peers learn of the tx via the periodic
-			// TMHaveTransactions announce (rippled's addTxQueue analogue).
+			// Remaining enabled peers learn of the tx via their per-peer
+			// TMHaveTransactions queue.
+			if len(queue) > 0 && queue[0] != nil {
+				if !queue[0](p) {
+					// A suppressed announcement is only safe when the hash was
+					// retained. Fall back to the full frame if queue admission
+					// fails or the frame did not contain a usable transaction ID.
+					sendFull(p)
+				}
+			} else {
+				// Keep the helper's standalone behaviour lossless for callers that
+				// do not provide a queue implementation.
+				sendFull(p)
+			}
 		}
 	}
 }

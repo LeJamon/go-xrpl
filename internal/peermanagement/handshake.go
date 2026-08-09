@@ -15,12 +15,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
-	"github.com/LeJamon/go-xrpl/internal/stringutil"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -129,6 +127,69 @@ func BuildHandshakeRequest(id *Identity, sharedValue []byte, cfg HandshakeConfig
 	return req, nil
 }
 
+// validateHandshakeRequest checks the HTTP envelope before any XRPL-specific
+// verification. Rippled accepts a GET carrying an Upgrade token over HTTP
+// 1.1 or newer; role admission and peer authentication run afterwards.
+func validateHandshakeRequest(req *http.Request) error {
+	if req == nil {
+		return fmt.Errorf("%w: missing request", ErrInvalidHandshake)
+	}
+	if req.Method != http.MethodGet {
+		return fmt.Errorf("%w: method must be GET, got %q", ErrInvalidHandshake, req.Method)
+	}
+	if !httpVersionAtLeast11(req.ProtoMajor, req.ProtoMinor) {
+		return fmt.Errorf("%w: protocol must be HTTP/1.1 or newer, got %q", ErrInvalidHandshake, req.Proto)
+	}
+	if !headerToken(req.Header, HeaderConnection, "upgrade") {
+		return fmt.Errorf("%w: %s header must include upgrade", ErrInvalidHandshake, HeaderConnection)
+	}
+	upgrade := strings.TrimSpace(req.Header.Get(HeaderUpgrade))
+	if upgrade == "" {
+		return fmt.Errorf("%w: missing %s", ErrInvalidHandshake, HeaderUpgrade)
+	}
+	if len(parseProtocolVersions(upgrade)) == 0 {
+		return fmt.Errorf("%w: %s header contains no valid XRPL protocol version", ErrInvalidHandshake, HeaderUpgrade)
+	}
+	return nil
+}
+
+// validateHandshakeResponse enforces the response half of the same envelope:
+// HTTP/1.1-or-newer 101, Connection: Upgrade, and exactly one supported XRPL
+// version.
+func validateHandshakeResponse(resp *http.Response) error {
+	if resp == nil {
+		return fmt.Errorf("%w: missing response", ErrInvalidHandshake)
+	}
+	if !httpVersionAtLeast11(resp.ProtoMajor, resp.ProtoMinor) {
+		return fmt.Errorf("%w: protocol must be HTTP/1.1 or newer, got %q", ErrInvalidHandshake, resp.Proto)
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		return fmt.Errorf("%w: got status %d", ErrInvalidHandshake, resp.StatusCode)
+	}
+	if !headerToken(resp.Header, HeaderConnection, "upgrade") {
+		return fmt.Errorf("%w: %s header must include upgrade", ErrInvalidHandshake, HeaderConnection)
+	}
+	if VerifyOutboundProtocolVersion(resp.Header.Get(HeaderUpgrade)) == "" {
+		return fmt.Errorf("%w: response must contain exactly one supported %s version", ErrInvalidHandshake, HeaderUpgrade)
+	}
+	return nil
+}
+
+func httpVersionAtLeast11(major, minor int) bool {
+	return major > 1 || (major == 1 && minor >= 1)
+}
+
+func headerToken(h http.Header, key, want string) bool {
+	for _, value := range h.Values(key) {
+		for _, token := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(token), want) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // WriteRawHandshakeRequest writes the request without the extra headers
 // (Host, Content-Length, ...) that http.Request.Write adds — rippled's
 // parser rejects them.
@@ -170,12 +231,19 @@ func BuildHandshakeResponse(request *http.Request, id *Identity, sharedValue []b
 	if negotiated == "" {
 		negotiated = supportedProtocols[len(supportedProtocols)-1].String()
 	}
+	proto, protoMajor, protoMinor := "HTTP/1.1", 1, 1
+	if request != nil && request.ProtoMajor > 0 {
+		proto, protoMajor, protoMinor = request.Proto, request.ProtoMajor, request.ProtoMinor
+		if proto == "" {
+			proto = fmt.Sprintf("HTTP/%d.%d", protoMajor, protoMinor)
+		}
+	}
 	resp := &http.Response{
 		StatusCode: http.StatusSwitchingProtocols,
 		Status:     "101 Switching Protocols",
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
+		Proto:      proto,
+		ProtoMajor: protoMajor,
+		ProtoMinor: protoMinor,
 		Header:     make(http.Header),
 	}
 
@@ -645,97 +713,6 @@ func ParseFeature(s string) (Feature, bool) {
 	}
 }
 
-// FeatureSet represents a set of supported features.
-type FeatureSet struct {
-	mu       sync.RWMutex
-	features map[Feature]bool
-}
-
-func NewFeatureSet() *FeatureSet {
-	return &FeatureSet{
-		features: make(map[Feature]bool),
-	}
-}
-
-func DefaultFeatureSet() *FeatureSet {
-	fs := NewFeatureSet()
-	fs.Enable(FeatureCompression)
-	fs.Enable(FeatureReduceRelay)
-	fs.Enable(FeatureValidatorListPropagation)
-	return fs
-}
-
-func (fs *FeatureSet) Enable(f Feature) {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-	fs.features[f] = true
-}
-
-func (fs *FeatureSet) Disable(f Feature) {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-	delete(fs.features, f)
-}
-
-func (fs *FeatureSet) Has(f Feature) bool {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-	return fs.features[f]
-}
-
-func (fs *FeatureSet) List() []Feature {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-
-	result := make([]Feature, 0, len(fs.features))
-	for f := range fs.features {
-		result = append(result, f)
-	}
-	return result
-}
-
-func (fs *FeatureSet) Intersect(other *FeatureSet) *FeatureSet {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-	other.mu.RLock()
-	defer other.mu.RUnlock()
-
-	result := NewFeatureSet()
-	for f := range fs.features {
-		if other.features[f] {
-			result.features[f] = true
-		}
-	}
-	return result
-}
-
-// PeerCapabilities holds only fields that the handshake actually
-// populates — no protocol metadata stored as zero values.
-type PeerCapabilities struct {
-	mu       sync.RWMutex
-	Features *FeatureSet
-}
-
-func NewPeerCapabilities() *PeerCapabilities {
-	return &PeerCapabilities{
-		Features: NewFeatureSet(),
-	}
-}
-
-func (pc *PeerCapabilities) HasFeature(f Feature) bool {
-	pc.mu.RLock()
-	defer pc.mu.RUnlock()
-	return pc.Features.Has(f)
-}
-
-func (pc *PeerCapabilities) SupportsCompression() bool {
-	return pc.HasFeature(FeatureCompression)
-}
-
-func (pc *PeerCapabilities) SupportsReduceRelay() bool {
-	return pc.HasFeature(FeatureReduceRelay)
-}
-
 // X-Protocol-Ctl: feature1=v1,v2;feature2=v3
 const (
 	HeaderProtocolCtl = "X-Protocol-Ctl"
@@ -848,11 +825,12 @@ type HandshakeExtras struct {
 // Runs first in the verify order
 // (Server-Domain → Network-ID → Network-Time → Public-Key → ...).
 func ValidateServerDomain(headers http.Header) (string, error) {
-	v := headers.Get(HeaderServerDomain)
-	if v == "" {
+	values := headers.Values(HeaderServerDomain)
+	if len(values) == 0 {
 		return "", nil
 	}
-	if !stringutil.IsProperlyFormedTomlDomain(v) {
+	v := values[0]
+	if !protocol.IsProperlyFormedTomlDomain(v) {
 		return "", fmt.Errorf("%w: invalid Server-Domain %q",
 			ErrInvalidHandshake, v)
 	}

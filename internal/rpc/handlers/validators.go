@@ -27,7 +27,7 @@ import (
 // validator_list_keys configured), publisher_lists is empty but the
 // other fields still surface real state pulled from the static config /
 // adaptor.
-type ValidatorsMethod struct{ AdminHandler }
+type ValidatorsMethod struct{ adminHandler }
 
 func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
 	var services *types.ServiceContainer
@@ -215,12 +215,12 @@ func resolveValidatorListSnapshot(services *types.ServiceContainer, now time.Tim
 	return snapshot
 }
 
-// ValidatorListSitesMethod handles the `validator_list_sites` admin
+// validatorListSitesMethod handles the `validator_list_sites` admin
 // RPC. Mirrors rippled's ValidatorSite::getJson at
 // rippled/src/xrpld/app/misc/detail/ValidatorSite.cpp:672-705.
-type ValidatorListSitesMethod struct{ AdminHandler }
+type validatorListSitesMethod struct{ adminHandler }
 
-func (m *ValidatorListSitesMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+func (m *validatorListSitesMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
 	sites := []map[string]any{}
 
 	if ctx != nil && ctx.Services != nil && ctx.Services.ValidatorList != nil {

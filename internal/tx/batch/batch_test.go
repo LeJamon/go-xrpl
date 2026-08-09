@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/clawback"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 )
@@ -141,6 +142,19 @@ const (
 	testSigner1 = "r9cZA1mLK5R5Am25ArfXFmqgNwjZgnfk59"
 	testSigner2 = "rB5Ux4Lv2nRx6eeoAAsZmtctnBQ2LiACnk"
 )
+
+type clawbackWithTopLevelMPTID struct {
+	*clawback.Clawback
+}
+
+func (c *clawbackWithTopLevelMPTID) Flatten() (map[string]any, error) {
+	fields, err := c.Clawback.Flatten()
+	if err != nil {
+		return nil, err
+	}
+	fields["MPTokenIssuanceID"] = "000000000000000000000001000000000000000000000001"
+	return fields, nil
+}
 
 // Auto-incremented so successive inners hash uniquely (Batch.Validate rejects
 // duplicates per rippled Batch.cpp:253-259).
@@ -358,6 +372,22 @@ func TestBatchValidation(t *testing.T) {
 			wantErr: true,
 			errMsg:  "inner transaction cannot be nil",
 		},
+		{
+			name: "invalid - Clawback field outside template",
+			tx: func() *Batch {
+				b := NewBatch(testOuter)
+				b.AddInnerTransaction(&clawbackWithTopLevelMPTID{Clawback: clawback.NewClawback(
+					testOuter,
+					tx.NewIssuedAmount(1, 0, "USD", testSigner1),
+				)})
+				b.AddInnerTransaction(makeTestPayment())
+				flags := BatchFlagAllOrNothing
+				b.Common.Flags = &flags
+				return b
+			}(),
+			wantErr: true,
+			errMsg:  "temINVALID_INNER_BATCH",
+		},
 
 		// Invalid cases - batch signers
 		{
@@ -466,6 +496,17 @@ func TestBatchFlatten(t *testing.T) {
 		signers, ok := flat["BatchSigners"].([]map[string]any)
 		require.True(t, ok)
 		assert.Len(t, signers, 1)
+	})
+
+	t.Run("rejects disallowed Clawback field", func(t *testing.T) {
+		b := NewBatch(testOuter)
+		b.AddInnerTransaction(&clawbackWithTopLevelMPTID{Clawback: clawback.NewClawback(
+			testOuter,
+			tx.NewIssuedAmount(1, 0, "USD", testSigner1),
+		)})
+
+		_, err := b.Flatten()
+		require.EqualError(t, err, "temMALFORMED: invalid inner transaction 0: Field 'MPTokenIssuanceID' found in disallowed location.")
 	})
 }
 
@@ -596,6 +637,26 @@ func TestCalculateMinimumFee_MultiSignBatchSigner(t *testing.T) {
 	}}
 	// batchBase=20 + txnFees=20 + signerFees=3*10 = 70
 	require.Equal(t, uint64(70), b.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10}))
+}
+
+func TestBatchRequiredSignersUseInnerAuthorizers(t *testing.T) {
+	t.Run("delegate authorizes outer account inner", func(t *testing.T) {
+		b := NewBatch(testOuter)
+		inner := makeTestPayment()
+		inner.GetCommon().Delegate = testSigner2
+		b.AddInnerTransaction(inner)
+		b.AddInnerTransaction(makeTestPayment())
+		b.SetFlags(BatchFlagAllOrNothing)
+
+		require.ErrorIs(t, b.Validate(), ErrBatchMissingSigner)
+
+		b.BatchSigners = []BatchSigner{{BatchSigner: BatchSignerData{
+			Account:           testSigner2,
+			SigningPubKey:     "01",
+			BatchTxnSignature: "AA",
+		}}}
+		require.NoError(t, b.Validate())
+	})
 }
 
 // TestCalculateMinimumFee_MultiSignedInner pins

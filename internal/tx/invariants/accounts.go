@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // ---------------------------------------------------------------------------
@@ -47,7 +48,7 @@ func checkAccountRootsDeletedClean(entries []InvariantEntry, view ReadView, rule
 	var deletedAccounts []deletedAccount
 
 	for _, e := range entries {
-		if e.EntryType != "AccountRoot" || !e.IsDelete {
+		if e.EntryType != entry.TypeAccountRoot || !e.IsDelete {
 			continue
 		}
 		if e.Before == nil {

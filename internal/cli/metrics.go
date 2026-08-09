@@ -2,7 +2,6 @@ package cli
 
 import (
 	"net/http"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/observability"
 	"github.com/LeJamon/go-xrpl/version"
@@ -46,27 +45,16 @@ func newMetricsRegistry() *prometheus.Registry {
 		Name:      "io_latency_events_total",
 		Help:      "Scheduler-latency samples that crossed the 10ms reporting threshold.",
 	}, func() float64 {
-		return float64(observability.IOLatencyEventStats().Count)
+		return float64(observability.IOLatencyEventCount())
 	})
 
 	reg.MustRegister(buildInfo, schedLatency, ioLatencyEvents)
 	return reg
 }
 
-// startMetricsServer serves Prometheus metrics at /metrics on addr. It
-// mirrors observability.StartPProf: a standalone auxiliary HTTP server enabled
-// out-of-band (via the GOXRPL_METRICS env var) and never mounted on the
-// public JSON-RPC ports, keeping scrape traffic and internal telemetry off
-// the client-facing API surface.
-func startMetricsServer(addr string) error {
+func newMetricsHandler() http.Handler {
 	reg := newMetricsRegistry()
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{Registry: reg}))
-
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	return srv.ListenAndServe()
+	return mux
 }

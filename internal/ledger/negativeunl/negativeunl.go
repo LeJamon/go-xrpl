@@ -18,7 +18,10 @@ import (
 func Apply(stateMap *shamap.SHAMap, ledgerIndex uint32) error {
 	key := keylet.NegativeUNL().Key
 	item, exists, err := stateMap.Get(key)
-	if err != nil || !exists || item == nil {
+	if err != nil {
+		return fmt.Errorf("read NegativeUNL SLE: %w", err)
+	}
+	if !exists || item == nil {
 		return nil
 	}
 	data := item.Data()

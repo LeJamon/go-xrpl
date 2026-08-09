@@ -316,8 +316,8 @@ func exerciseLopsided(t *testing.T, seeds []string) {
 	// Create accounts from seeds and fund them all in the same ledger
 	// (important: if fixNFTokenRemint is on, different ledgers = different sequences)
 	accounts := make([]*jtx.Account, 0, len(seeds))
-	for i, seed := range seeds {
-		account := jtx.NewAccountFromSeed("acct"+string(rune('A'+i%26)), seed)
+	for _, seed := range seeds {
+		account := jtx.NewAccountFromSeed(seed, seed)
 		accounts = append(accounts, account)
 		env.Fund(account)
 	}
@@ -393,8 +393,8 @@ func TestFixNFTokenDirV1(t *testing.T) {
 
 		// Create accounts from seeds
 		accounts := make([]*jtx.Account, 0, len(seeds))
-		for i, seed := range seeds {
-			account := jtx.NewAccountFromSeed("acct"+string(rune('A'+i%26)), seed)
+		for _, seed := range seeds {
+			account := jtx.NewAccountFromSeed(seed, seed)
 			accounts = append(accounts, account)
 			env.Fund(account)
 		}
@@ -472,8 +472,8 @@ func TestTooManyEquivalent(t *testing.T) {
 
 	// Create 33 accounts with identical low 32-bits
 	accounts := make([]*jtx.Account, 0, len(seedsLow32_9a8ebed3))
-	for i, seed := range seedsLow32_9a8ebed3 {
-		account := jtx.NewAccountFromSeed("acct"+string(rune('A'+i%26)), seed)
+	for _, seed := range seedsLow32_9a8ebed3 {
+		account := jtx.NewAccountFromSeed(seed, seed)
 		accounts = append(accounts, account)
 		env.Fund(account)
 	}
@@ -540,8 +540,8 @@ func TestConsecutivePacking(t *testing.T) {
 
 	// Create 33 accounts with identical low 32-bits
 	accounts := make([]*jtx.Account, 0, len(seedsLow32_115d0525))
-	for i, seed := range seedsLow32_115d0525 {
-		account := jtx.NewAccountFromSeed("acct"+string(rune('A'+i%26)), seed)
+	for _, seed := range seedsLow32_115d0525 {
+		account := jtx.NewAccountFromSeed(seed, seed)
 		accounts = append(accounts, account)
 		env.Fund(account)
 	}

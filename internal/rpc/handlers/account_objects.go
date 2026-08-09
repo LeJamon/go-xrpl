@@ -9,11 +9,12 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // AccountObjectsMethod handles account_objects: it enumerates the raw ledger
 // entries owned by the account, with type and deletion_blockers_only filters.
-type AccountObjectsMethod struct{ BaseHandler }
+type AccountObjectsMethod struct{ baseHandler }
 
 // deletionBlockerTypes lists SLE types that block account deletion.
 // Matches rippled's deletionBlockers[] in doAccountObjects (AccountObjects.cpp).
@@ -34,6 +35,14 @@ var deletionBlockerTypes = map[string]bool{
 	"sponsorship":                          true,
 }
 
+var nonAccountObjectTypes = map[string]bool{
+	"Amendments":    true,
+	"DirectoryNode": true,
+	"FeeSettings":   true,
+	"LedgerHashes":  true,
+	"NegativeUNL":   true,
+}
+
 var sponsorshipSupportedObjectTypes = map[string]bool{
 	"Check":           true,
 	"Credential":      true,
@@ -45,46 +54,6 @@ var sponsorshipSupportedObjectTypes = map[string]bool{
 	"NFTokenPage":     true,
 	"PayChannel":      true,
 	"SignerList":      true,
-}
-
-type accountObjectLedgerType struct {
-	canonical string
-	rpcName   string
-	valid     bool
-}
-
-var accountObjectLedgerTypes = []accountObjectLedgerType{
-	{"NFTokenOffer", "nft_offer", true},
-	{"Check", "check", true},
-	{"DID", "did", true},
-	{"NegativeUNL", "nunl", false},
-	{"NFTokenPage", "nft_page", true},
-	{"SignerList", "signer_list", true},
-	{"Ticket", "ticket", true},
-	{"AccountRoot", "account", true},
-	{"DirectoryNode", "directory", false},
-	{"Amendments", "amendments", false},
-	{"LedgerHashes", "hashes", false},
-	{"Bridge", "bridge", true},
-	{"Offer", "offer", true},
-	{"DepositPreauth", "deposit_preauth", true},
-	{"XChainOwnedClaimID", "xchain_owned_claim_id", true},
-	{"RippleState", "state", true},
-	{"FeeSettings", "fee", false},
-	{"XChainOwnedCreateAccountClaimID", "xchain_owned_create_account_claim_id", true},
-	{"Escrow", "escrow", true},
-	{"PayChannel", "payment_channel", true},
-	{"AMM", "amm", true},
-	{"MPTokenIssuance", "mpt_issuance", true},
-	{"MPToken", "mptoken", true},
-	{"Oracle", "oracle", true},
-	{"Credential", "credential", true},
-	{"PermissionedDomain", "permissioned_domain", true},
-	{"Delegate", "delegate", true},
-	{"Vault", "vault", true},
-	{"LoanBroker", "loan_broker", true},
-	{"Loan", "loan", true},
-	{"Sponsorship", "sponsorship", true},
 }
 
 func chooseAccountObjectType(raw json.RawMessage, present bool) (string, *types.RpcError) {
@@ -101,12 +70,15 @@ func chooseAccountObjectType(raw json.RawMessage, present bool) (string, *types.
 		return "", types.RpcErrorExpectedField("type", "string")
 	}
 
-	for _, ledgerType := range accountObjectLedgerTypes {
-		if strings.EqualFold(ledgerType.canonical, filter) || ledgerType.rpcName == filter {
-			if !ledgerType.valid {
+	for _, ledgerType := range protocol.LedgerEntryTypes() {
+		if ledgerType.Deprecated || ledgerType.RPCName == "" {
+			continue
+		}
+		if strings.EqualFold(ledgerType.Name, filter) || ledgerType.RPCName == filter {
+			if nonAccountObjectTypes[ledgerType.Name] {
 				return "", types.RpcErrorInvalidField("type")
 			}
-			return ledgerType.rpcName, nil
+			return ledgerType.RPCName, nil
 		}
 	}
 	return "", types.RpcErrorInvalidField("type")
@@ -120,7 +92,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	if parseErr != nil {
 		return nil, parseErr
 	}
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 	ledgerIndex, ledgerFields, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information", true)
@@ -153,7 +125,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 			return nil, typeErr
 		}
 	}
-	limit, limitErr := ReadLimitField(params, LimitAccountObjects, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitAccountObjects, ctx.Unlimited)
 	if limitErr != nil {
 		return nil, limitErr
 	}
@@ -263,66 +235,8 @@ func hasAccountField(object map[string]any, name string) bool {
 // sleTypeToRPCName converts a PascalCase SLE type name to the rippled RPC name
 // (lowercase/snake_case) used in the deletionBlockerTypes map.
 func sleTypeToRPCName(sleType string) string {
-	switch sleType {
-	case "AccountRoot":
-		return "account"
-	case "AMM":
-		return "amm"
-	case "Bridge":
-		return "bridge"
-	case "Check":
-		return "check"
-	case "Credential":
-		return "credential"
-	case "Delegate":
-		return "delegate"
-	case "DepositPreauth":
-		return "deposit_preauth"
-	case "DID":
-		return "did"
-	case "DirectoryNode":
-		return "directory"
-	case "Escrow":
-		return "escrow"
-	case "FeeSettings":
-		return "fee"
-	case "LedgerHashes":
-		return "hashes"
-	case "Loan":
-		return "loan"
-	case "LoanBroker":
-		return "loan_broker"
-	case "MPToken":
-		return "mptoken"
-	case "MPTokenIssuance":
-		return "mpt_issuance"
-	case "NFTokenOffer":
-		return "nft_offer"
-	case "NFTokenPage":
-		return "nft_page"
-	case "NegativeUNL":
-		return "nunl"
-	case "Offer":
-		return "offer"
-	case "Oracle":
-		return "oracle"
-	case "PayChannel":
-		return "payment_channel"
-	case "PermissionedDomain":
-		return "permissioned_domain"
-	case "RippleState":
-		return "state"
-	case "SignerList":
-		return "signer_list"
-	case "Ticket":
-		return "ticket"
-	case "Vault":
-		return "vault"
-	case "XChainOwnedClaimID":
-		return "xchain_owned_claim_id"
-	case "XChainOwnedCreateAccountClaimID":
-		return "xchain_owned_create_account_claim_id"
-	default:
-		return strings.ToLower(sleType)
+	if info, ok := protocol.LedgerEntryTypeByName(sleType); ok && !info.Deprecated && info.RPCName != "" {
+		return info.RPCName
 	}
+	return strings.ToLower(sleType)
 }

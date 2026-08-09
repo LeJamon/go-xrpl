@@ -8,11 +8,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protowire"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // TestHandleClusterMessage_DropsNonClusterPeer pins issue #497 audit
@@ -52,7 +54,7 @@ func TestHandleClusterMessage_DropsNonClusterPeer(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeCluster),
+		MessageType: message.TypeCluster,
 		Payload:     payload,
 	})
 
@@ -106,11 +108,11 @@ func TestHandleClusterMessage_FiresClusterFeeSink(t *testing.T) {
 	// Pre-register the other identity so the registry update accepts it.
 	require.NoError(t, clusterReg.Load([]string{otherPub + " other"}))
 
-	now := uint32(time.Now().Unix())
+	now := time.Now().UTC().Truncate(time.Second)
 	cm := &message.Cluster{
 		ClusterNodes: []message.ClusterNode{
-			{PublicKey: peerNodePubEncoded, NodeName: "peer", NodeLoad: 320, ReportTime: now},
-			{PublicKey: otherPub, NodeName: "other", NodeLoad: 400, ReportTime: now},
+			{PublicKey: peerNodePubEncoded, NodeName: "peer", NodeLoad: 320, ReportTime: protocol.ToRippleTime(now)},
+			{PublicKey: otherPub, NodeName: "other", NodeLoad: 400, ReportTime: protocol.ToRippleTime(now)},
 		},
 	}
 	payload, err := message.Encode(cm)
@@ -118,12 +120,96 @@ func TestHandleClusterMessage_FiresClusterFeeSink(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeCluster),
+		MessageType: message.TypeCluster,
 		Payload:     payload,
 	})
 
 	require.Len(t, sinkCalls, 1, "clusterFeeSink must fire exactly once per ingress")
 	assert.Equal(t, uint32(400), sinkCalls[0])
+	member, ok := clusterReg.Member(peerNodePub)
+	require.True(t, ok)
+	assert.Equal(t, now, member.ReportTime)
+}
+
+func TestHandleClusterMessage_ClearsStaleClusterFee(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+	peerIdentity, err := NewIdentity()
+	require.NoError(t, err)
+	peerToken := NewPublicKeyTokenFromBtcec(peerIdentity.BtcecPublicKey())
+	peerNodePubEncoded, err := addresscodec.EncodeNodePublicKey(peerToken.Bytes())
+	require.NoError(t, err)
+
+	clusterReg := cluster.New()
+	require.NoError(t, clusterReg.Load([]string{peerNodePubEncoded + " peer"}))
+	clusterFee := uint32(777)
+	o := &Overlay{
+		peers:   make(map[PeerID]*Peer),
+		events:  make(chan Event, 8),
+		cluster: clusterReg,
+		clusterFeeSink: func(fee uint32) {
+			clusterFee = fee
+		},
+	}
+
+	peer := NewPeer(PeerID(34), Endpoint{Host: "127.0.0.1", Port: 51235}, false, id, make(chan Event, 1))
+	peer.remotePubKey = peerToken
+	o.peers[peer.ID()] = peer
+	payload, err := message.Encode(&message.Cluster{})
+	require.NoError(t, err)
+
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: message.TypeCluster,
+		Payload:     payload,
+	})
+
+	assert.Zero(t, clusterFee)
+}
+
+func TestHandleClusterMessage_ClearsClusterFeeAfterReportAgesOut(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+	peerIdentity, err := NewIdentity()
+	require.NoError(t, err)
+	peerToken := NewPublicKeyTokenFromBtcec(peerIdentity.BtcecPublicKey())
+	peerNodePubEncoded, err := addresscodec.EncodeNodePublicKey(peerToken.Bytes())
+	require.NoError(t, err)
+
+	clusterReg := cluster.New()
+	require.NoError(t, clusterReg.Load([]string{peerNodePubEncoded + " peer"}))
+	clusterFee := uint32(0)
+	now := time.Unix(2_000_000_000, 0)
+	o := &Overlay{
+		peers:   make(map[PeerID]*Peer),
+		events:  make(chan Event, 8),
+		cluster: clusterReg,
+		clock: func() time.Time {
+			return now
+		},
+		clusterFeeSink: func(fee uint32) {
+			clusterFee = fee
+		},
+	}
+
+	peer := NewPeer(PeerID(35), Endpoint{Host: "127.0.0.1", Port: 51235}, false, id, make(chan Event, 1))
+	peer.remotePubKey = peerToken
+	o.peers[peer.ID()] = peer
+
+	payload, err := message.Encode(&message.Cluster{ClusterNodes: []message.ClusterNode{
+		{PublicKey: peerNodePubEncoded, NodeName: "peer", NodeLoad: 512, ReportTime: protocol.ToRippleTime(now)},
+	}})
+	require.NoError(t, err)
+	o.onMessageReceived(Event{PeerID: peer.ID(), MessageType: message.TypeCluster, Payload: payload})
+	assert.Equal(t, uint32(512), clusterFee)
+
+	now = now.Add(clusterFeeWindow + time.Second)
+	// An otherwise valid frame from the trusted peer must recompute the
+	// median, including the empty result, so stale fee state cannot persist.
+	payload, err = message.Encode(&message.Cluster{})
+	require.NoError(t, err)
+	o.onMessageReceived(Event{PeerID: peer.ID(), MessageType: message.TypeCluster, Payload: payload})
+	assert.Zero(t, clusterFee)
 }
 
 // TestHandleClusterMessage_ImportsLoadSourceGossip pins issue #765: a
@@ -170,7 +256,7 @@ func TestHandleClusterMessage_ImportsLoadSourceGossip(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeCluster),
+		MessageType: message.TypeCluster,
 		Payload:     payload,
 	})
 
@@ -179,12 +265,9 @@ func TestHandleClusterMessage_ImportsLoadSourceGossip(t *testing.T) {
 	assert.Equal(t, 2, rm.EntryCount(),
 		"only parseable load-source addresses must be imported")
 
-	// The imported remote balance lands on the matching inbound
-	// consumer — the "ip:port" key is normalised to its bare host by
-	// resource.normalizeAddr, so the port-9999 reconnect inherits it.
 	c := rm.NewInboundEndpoint("203.0.113.7:9999")
 	defer c.Release()
-	assert.Equal(t, int(balance), c.Balance(),
+	assert.Equal(t, int64(balance), c.Balance(),
 		"imported gossip balance must show up on the inbound consumer")
 }
 
@@ -219,33 +302,38 @@ func TestHandleClusterMessage_ReimportReplacesPriorGossip(t *testing.T) {
 	peer.remotePubKey = peerToken
 	o.peers[peer.ID()] = peer
 
-	send := func(cost uint32) {
-		cm := &message.Cluster{LoadSources: []message.LoadSource{{Name: "203.0.113.7", Cost: cost}}}
+	reportTime := time.Now().UTC().Truncate(time.Second)
+	send := func(cost uint32, advertisedName string) {
+		reportTime = reportTime.Add(time.Second)
+		cm := &message.Cluster{
+			ClusterNodes: []message.ClusterNode{{
+				PublicKey:  peerNodePubEncoded,
+				NodeName:   advertisedName,
+				ReportTime: protocol.ToRippleTime(reportTime),
+			}},
+			LoadSources: []message.LoadSource{{Name: "203.0.113.7", Cost: cost}},
+		}
 		payload, err := message.Encode(cm)
 		require.NoError(t, err)
 		o.onMessageReceived(Event{
 			PeerID:      peer.ID(),
-			MessageType: uint16(message.TypeCluster),
+			MessageType: message.TypeCluster,
 			Payload:     payload,
 		})
 	}
 
 	const first = resource.MinimumGossipBalance * 2
 	const second = resource.MinimumGossipBalance * 5
-	send(first)
-	send(second)
+	send(first, "renamed-on-wire-a")
+	send(second, "renamed-on-wire-b")
 
 	c := rm.NewInboundEndpoint("203.0.113.7:9999")
 	defer c.Release()
-	assert.Equal(t, int(second), c.Balance(),
+	assert.Equal(t, int64(second), c.Balance(),
 		"re-import from the same member must replace, not stack, the gossip balance")
+	assert.Equal(t, 1, rm.Stats().Imports, "one peer must retain one stable gossip origin")
 }
 
-// TestValidGossipAddress pins the load-source name filter against rippled's
-// beast::IP::Endpoint::from_string + `!= Endpoint()` guard
-// (PeerImp.cpp:1166-1168, IPEndpoint.cpp:179-182): a non-IP host or an
-// out-of-range / non-numeric port is dropped, while the bare-host and
-// ip:port forms (including the port-0 canonical) are accepted.
 func TestValidGossipAddress(t *testing.T) {
 	cases := []struct {
 		name string
@@ -256,17 +344,39 @@ func TestValidGossipAddress(t *testing.T) {
 		{"bare ipv4", "203.0.113.7", true},
 		{"ipv4 port zero", "203.0.113.7:0", true},
 		{"ipv4 high port", "203.0.113.7:51235", true},
-		{"ipv4 trailing colon", "203.0.113.7:", true},
+		{"ipv4 trailing colon", "203.0.113.7:", false},
+		{"ipv4 surrounding whitespace", " 203.0.113.7 ", true},
 		{"non-ip host", "not-an-address", false},
 		{"out-of-range port", "203.0.113.7:99999", false},
 		{"non-numeric port", "203.0.113.7:abc", false},
 		{"bare ipv6", "2001:db8::1", true},
+		{"bracketed bare ipv6", "[2001:db8::1]", true},
 		{"bracketed ipv6 with port", "[2001:db8::1]:51235", true},
+		{"legacy ipv4 port", "203.0.113.7 51235", true},
+		{"legacy ipv6 port", "2001:db8::1 51235", true},
+		{"trimmed", " 203.0.113.7:51235 ", true},
+		{"zone scoped", "fe80::1%en0", false},
+		{"zone scoped with port", "[fe80::1%en0]:51235", false},
+		{"whitespace before colon", "203.0.113.7 :51235", false},
+		{"too long", "2001:0db8:0000:0000:0000:0000:0000:0001 0000000000000000000051235", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, validGossipAddress(tc.in))
 		})
+	}
+}
+
+func TestCanonicalGossipAddress(t *testing.T) {
+	tests := map[string]string{
+		" 203.0.113.7:51235 ": "203.0.113.7:51235",
+		"2001:0DB8::1 51235":  "[2001:db8::1]:51235",
+		"[2001:0DB8::1]":      "2001:db8::1",
+	}
+	for input, want := range tests {
+		got, ok := canonicalGossipAddress(input)
+		require.True(t, ok)
+		assert.Equal(t, want, got)
 	}
 }
 
@@ -301,7 +411,7 @@ func TestHandleHaveTransactionsMessage_GatedOnFeatureNegotiation(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeHaveTransactions),
+		MessageType: message.TypeHaveTransactions,
 		Payload:     payload,
 	})
 
@@ -340,7 +450,7 @@ func TestHandleTransactionsBatchMessage_GatedOnFeatureNegotiation(t *testing.T) 
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeTransactions),
+		MessageType: message.TypeTransactions,
 		Payload:     payload,
 	})
 
@@ -391,7 +501,7 @@ func TestHandleTransactionsBatchMessage_FansOutDecodedTx(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeTransactions),
+		MessageType: message.TypeTransactions,
 		Payload:     payload,
 	})
 
@@ -399,7 +509,7 @@ func TestHandleTransactionsBatchMessage_FansOutDecodedTx(t *testing.T) {
 		select {
 		case got := <-o.txMessages:
 			require.NotNil(t, got)
-			assert.Equal(t, uint16(message.TypeTransaction), got.Type)
+			assert.Equal(t, message.TypeTransaction, got.Type)
 			assert.Nil(t, got.Payload,
 				"fanned-out frame must carry the decoded tx, not re-encoded bytes")
 			require.NotNil(t, got.Tx,
@@ -456,7 +566,7 @@ func TestHandleTransactionsBatchMessage_OverflowShedsToTxCounter(t *testing.T) {
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeTransactions),
+		MessageType: message.TypeTransactions,
 		Payload:     payload,
 	})
 
@@ -498,7 +608,7 @@ func TestHandleGetObjectsMessage_DropsReplyWithoutOutstandingRequest(t *testing.
 
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeGetObjects),
+		MessageType: message.TypeGetObjects,
 		Payload:     payload,
 	})
 
@@ -614,7 +724,7 @@ func TestHandleEndpoints_IngestsHopsGreaterEntries(t *testing.T) {
 	})
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 
@@ -641,7 +751,7 @@ func TestHandleEndpoints_Hops0RewrittenToSocketIP(t *testing.T) {
 	})
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 
@@ -671,7 +781,7 @@ func TestHandleEndpoints_VerifyOn_DropsNonPublic(t *testing.T) {
 	})
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 
@@ -695,7 +805,7 @@ func TestHandleEndpoints_VerifyOff_AcceptsNonPublic(t *testing.T) {
 	})
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 
@@ -721,7 +831,7 @@ func TestHandleEndpoints_VerifyOn_Hops0Validated(t *testing.T) {
 		})
 		o.onMessageReceived(Event{
 			PeerID:      peer.ID(),
-			MessageType: uint16(message.TypeEndpoints),
+			MessageType: message.TypeEndpoints,
 			Payload:     payload,
 		})
 
@@ -741,7 +851,7 @@ func TestHandleEndpoints_VerifyOn_Hops0Validated(t *testing.T) {
 		})
 		o.onMessageReceived(Event{
 			PeerID:      peer.ID(),
-			MessageType: uint16(message.TypeEndpoints),
+			MessageType: message.TypeEndpoints,
 			Payload:     payload,
 		})
 
@@ -770,7 +880,7 @@ func TestHandleEndpoints_DropsNonConvergedPeer(t *testing.T) {
 	})
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 
@@ -790,7 +900,7 @@ func TestHandleEndpoints_DropsUnsupportedVersion(t *testing.T) {
 	})
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 
@@ -811,7 +921,7 @@ func TestHandleEndpoints_ChargesMalformedEntry(t *testing.T) {
 	})
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 
@@ -823,19 +933,33 @@ func TestHandleEndpoints_ChargesMalformedEntry(t *testing.T) {
 	assert.Contains(t, o.discovery.peers, "10.0.0.9:51235")
 }
 
+func TestHandleEndpoints_AggregatesMalformedEntryFees(t *testing.T) {
+	o, peer := newEndpointsTestOverlay(t, PeerID(115))
+	payload := encodeEndpoints(t, 2, []message.Endpointv2{
+		{Endpoint: "not-an-endpoint", Hops: 1},
+		{Endpoint: "also-invalid", Hops: 1},
+	})
+	o.onMessageReceived(Event{
+		PeerID: peer.ID(), MessageType: message.TypeEndpoints, Payload: payload,
+	})
+
+	want := uint32((2 * resource.FeeInvalidData().Cost()) / resource.DecayWindowSeconds)
+	assert.Equal(t, want, peer.BadDataCount())
+}
+
 // TestHandleEndpoints_RejectsOversizedFrame pins PeerImp.cpp:1206-1210: a
 // frame at or above 1024 entries is rejected wholesale and charged.
 func TestHandleEndpoints_RejectsOversizedFrame(t *testing.T) {
 	o, peer := newEndpointsTestOverlay(t, PeerID(16))
 
-	eps := make([]message.Endpointv2, endpointsIngestMaxEntries)
-	for i := range eps {
-		eps[i] = message.Endpointv2{Endpoint: "10.0.0.1:51235", Hops: 1}
+	payload := make([]byte, 0, 2*endpointsIngestMaxEntries)
+	for range endpointsIngestMaxEntries {
+		payload = protowire.AppendTag(payload, 3, protowire.BytesType)
+		payload = protowire.AppendVarint(payload, 0)
 	}
-	payload := encodeEndpoints(t, 2, eps)
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 
@@ -877,7 +1001,7 @@ func TestHandleEndpoints_RejectsNonIPHost(t *testing.T) {
 	})
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 
@@ -900,7 +1024,7 @@ func TestHandleEndpoints_RateLimitsPerPeer(t *testing.T) {
 	send := func(addr string) {
 		o.onMessageReceived(Event{
 			PeerID:      peer.ID(),
-			MessageType: uint16(message.TypeEndpoints),
+			MessageType: message.TypeEndpoints,
 			Payload:     encodeEndpoints(t, 2, []message.Endpointv2{{Endpoint: addr, Hops: 1}}),
 		})
 	}
@@ -940,7 +1064,7 @@ func TestHandleEndpoints_SamplesOversizedFrame(t *testing.T) {
 	}
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     encodeEndpoints(t, 2, eps),
 	})
 
@@ -964,7 +1088,7 @@ func TestHandleEndpoints_DropsBeyondHorizon(t *testing.T) {
 	})
 	o.onMessageReceived(Event{
 		PeerID:      peer.ID(),
-		MessageType: uint16(message.TypeEndpoints),
+		MessageType: message.TypeEndpoints,
 		Payload:     payload,
 	})
 

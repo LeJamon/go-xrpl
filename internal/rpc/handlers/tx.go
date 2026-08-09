@@ -12,18 +12,19 @@ import (
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/rpc/txprojection"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // TxMethod handles the tx RPC method
-type TxMethod struct{ BaseHandler }
+type TxMethod struct{ baseHandler }
 
 func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	// notEnabled takes precedence over any parameter validation, matching
 	// rippled's useTxTables() gate as the first statement of doTxJson.
-	if err := RequireTxTables(ctx.Services); err != nil {
+	if err := requireTxTables(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -116,12 +117,19 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 		txInfo, err = ctx.Services.Ledger.GetTransaction(txHash)
 	}
 	if err != nil && !errors.Is(err, svcerr.ErrTxnNotFound) {
+		if errors.Is(err, svcerr.ErrTxnDataCorrupt) {
+			return nil, rpcDBDeserializationError("tx: transaction lookup failed", err)
+		}
 		return nil, rpcInternalError("tx: transaction lookup failed", err)
 	}
 	if err != nil || txInfo == nil {
 		return nil, txNotFoundForSearch(hasLedgerRange, searched)
 	}
-	storedTx, err := decodeTxBlobForTx(txInfo.TxData)
+	decode := decodeTxBlobForTx
+	if txInfo.LedgerIndex == 0 {
+		decode = decodeOpenTxBlob
+	}
+	storedTx, err := decode(txInfo.TxData)
 	if err != nil {
 		return nil, rpcDBDeserializationError("tx: transaction deserialization failed", err)
 	}
@@ -213,7 +221,7 @@ func (m *TxMethod) buildResponseV1(
 			}
 		}
 	} else {
-		maps.Copy(response, projectTransactionJSON(storedTx.TxJSON, "", 1))
+		maps.Copy(response, txprojection.ProjectJSON(storedTx.TxJSON, "", 1))
 		if storedTx.Meta != nil {
 			InjectSyntheticFields(storedTx.TxJSON, storedTx.Meta, SyntheticMetadataContext{
 				LedgerSequence: txInfo.LedgerIndex,
@@ -267,7 +275,7 @@ func (m *TxMethod) buildResponseV2(
 			}
 		}
 	} else {
-		txJSON = projectTransactionJSON(storedTx.TxJSON, "", 2)
+		txJSON = txprojection.ProjectJSON(storedTx.TxJSON, "", 2)
 		// date and ledger_index go inside tx_json for v2
 		if txInfo.LedgerIndex > 0 {
 			txJSON["ledger_index"] = txInfo.LedgerIndex

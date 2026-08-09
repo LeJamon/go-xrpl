@@ -10,10 +10,16 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
+
+type operatingModeChange struct {
+	mode     consensus.OperatingMode
+	callback func(consensus.OperatingMode)
+}
 
 func (a *Adaptor) GetOperatingMode() consensus.OperatingMode {
 	a.mu.Lock()
@@ -23,18 +29,86 @@ func (a *Adaptor) GetOperatingMode() consensus.OperatingMode {
 
 func (a *Adaptor) SetOperatingMode(mode consensus.OperatingMode) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 
 	// A blocked node is never more than connected: it cannot safely
 	// participate in consensus, so it must not claim to be synced.
 	if mode > consensus.OpModeConnected && (a.IsAmendmentBlocked() || a.IsUNLBlocked()) {
 		mode = consensus.OpModeConnected
 	}
+	if mode >= consensus.OpModeTracking && consensus.Mode(a.consensusMode.Load()) == consensus.ModeWrongLedger {
+		if a.operatingMode < consensus.OpModeTracking {
+			mode = a.operatingMode
+		} else {
+			mode = consensus.OpModeConnected
+		}
+	}
+	changed := a.setOperatingModeLocked(mode)
+	startDraining := changed && a.enqueueOperatingModeChangeLocked(mode)
+	a.mu.Unlock()
+	if startDraining {
+		a.drainOperatingModeChanges()
+	}
+}
+
+func (a *Adaptor) setOperatingModeLocked(mode consensus.OperatingMode) bool {
+	if a.operatingMode == mode {
+		return false
+	}
 	a.operatingMode = mode
 	if a.stateAcct != nil {
 		// Held under a.mu so the field and the accounting transition share one
 		// serialization order; the tracker's own mutex never re-enters a.mu.
 		a.stateAcct.transition(mode)
+	}
+	return true
+}
+
+// SetOnOperatingModeChange installs a callback for effective mode changes.
+func (a *Adaptor) SetOnOperatingModeChange(fn func(consensus.OperatingMode)) {
+	a.mu.Lock()
+	a.onModeChange = fn
+	a.mu.Unlock()
+}
+
+func (a *Adaptor) enqueueOperatingModeChangeLocked(mode consensus.OperatingMode) bool {
+	if a.onModeChange == nil {
+		return false
+	}
+	a.modeChanges = append(a.modeChanges, operatingModeChange{mode: mode, callback: a.onModeChange})
+	if a.modeDraining {
+		return false
+	}
+	a.modeDraining = true
+	return true
+}
+
+func (a *Adaptor) drainOperatingModeChanges() {
+	for {
+		a.mu.Lock()
+		if len(a.modeChanges) == 0 {
+			a.modeDraining = false
+			a.mu.Unlock()
+			return
+		}
+		change := a.modeChanges[0]
+		a.modeChanges[0] = operatingModeChange{}
+		a.modeChanges = a.modeChanges[1:]
+		a.mu.Unlock()
+
+		change.callback(change.mode)
+	}
+}
+
+func (a *Adaptor) demoteOperatingModeForWrongLedger() {
+	a.mu.Lock()
+	changed := false
+	if a.operatingMode == consensus.OpModeFull || a.operatingMode == consensus.OpModeTracking {
+		changed = a.setOperatingModeLocked(consensus.OpModeConnected)
+	}
+	startDraining := changed && a.enqueueOperatingModeChangeLocked(consensus.OpModeConnected)
+	a.mu.Unlock()
+	if startDraining {
+		a.drainOperatingModeChanges()
 	}
 }
 
@@ -49,8 +123,8 @@ func (a *Adaptor) StateAccounting() StateAccountingSnapshot {
 	return a.stateAcct.snapshot()
 }
 
-// OnConsensusReached logs the close and fires the consensus-phase hook; the
-// open-ledger view is already advanced by AcceptConsensusResult.
+// OnConsensusReached logs the close; the open-ledger view is already advanced
+// by AcceptConsensusResult.
 //
 // Does NOT mark the ledger validated — that only happens at trusted-validation
 // quorum (OnLedgerFullyValidated). Local consensus != network agreement.
@@ -65,76 +139,11 @@ func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*con
 		// Feed round duration to the service so TxQ sees the timeLeap flag when
 		// consensus crossed the 5s slow-consensus threshold.
 		a.ledgerService.SetLastConsensusRoundTime(roundTime)
-
-		a.emitConsensusPhase("accepted")
 	}
 
 	a.maybePromoteAfterConsensus(ledger)
 	if a.onLedgerBuilt != nil {
 		a.onLedgerBuilt(ledger.Seq(), [32]byte(ledger.ID()))
-	}
-}
-
-// emitConsensusPhase delivers a consensus-phase notification through a single
-// ordered dispatcher (started on first use). Enqueue is non-blocking: a slow
-// hook drops the (advisory) notification rather than stalling consensus.
-func (a *Adaptor) emitConsensusPhase(phase string) {
-	if a.ledgerService == nil {
-		return
-	}
-	a.consensusPhaseMu.Lock()
-	if a.consensusPhaseStop {
-		a.consensusPhaseMu.Unlock()
-		return
-	}
-	if a.consensusPhaseCh == nil {
-		a.consensusPhaseCh = make(chan string, 64)
-		a.consensusPhaseQuit = make(chan struct{})
-		a.consensusPhaseWG.Add(1)
-		go a.runConsensusPhaseDispatcher()
-	}
-	ch := a.consensusPhaseCh
-	a.consensusPhaseMu.Unlock()
-	select {
-	case ch <- phase:
-	default:
-		slog.Warn("consensus phase hook buffer full; dropping notification",
-			"t", "adaptor.emitConsensusPhase", "phase", phase)
-	}
-}
-
-// runConsensusPhaseDispatcher drains consensus-phase notifications in order
-// until StopConsensusPhaseDispatcher signals quit. The notifications are
-// advisory, so a shutdown abandons any still buffered rather than draining them.
-func (a *Adaptor) runConsensusPhaseDispatcher() {
-	defer a.consensusPhaseWG.Done()
-	for {
-		select {
-		case p := <-a.consensusPhaseCh:
-			if hooks := a.ledgerService.EventHooks(); hooks != nil && hooks.OnConsensusPhase != nil {
-				hooks.OnConsensusPhase(p)
-			}
-		case <-a.consensusPhaseQuit:
-			return
-		}
-	}
-}
-
-// StopConsensusPhaseDispatcher stops the consensus-phase dispatcher goroutine and
-// joins it, so an in-process restart cycle doesn't leak one per cycle. Idempotent
-// and safe if the dispatcher was never started.
-func (a *Adaptor) StopConsensusPhaseDispatcher() {
-	a.consensusPhaseMu.Lock()
-	if a.consensusPhaseStop {
-		a.consensusPhaseMu.Unlock()
-		return
-	}
-	a.consensusPhaseStop = true
-	quit := a.consensusPhaseQuit
-	a.consensusPhaseMu.Unlock()
-	if quit != nil {
-		close(quit)
-		a.consensusPhaseWG.Wait()
 	}
 }
 
@@ -328,6 +337,14 @@ func (a *Adaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32
 
 	var hash [32]byte
 	copy(hash[:], ledgerID[:])
+	if validated := a.ledgerService.GetValidatedLedger(); validated != nil {
+		tipSeq, tipHash := validated.Sequence(), validated.Hash()
+		startupConfirmation := (a.ledgerService.NeedsInitialSync() || a.ledgerService.IsFastLoadProvisional()) &&
+			seq == tipSeq && hash == tipHash
+		if seq <= tipSeq && (seq < tipSeq || hash == tipHash) && !startupConfirmation {
+			return
+		}
+	}
 	if a.onLedgerFullyValidated != nil {
 		a.onLedgerFullyValidated(seq, hash)
 	}
@@ -358,7 +375,7 @@ func (a *Adaptor) validatedSignTime(ledgerID consensus.LedgerID, seq uint32) tim
 	if a.validationHistorian == nil {
 		return time.Time{}
 	}
-	validations := a.filterNegativeUNL(a.validationHistorian.GetTrustedValidations(ledgerID))
+	validations := a.filterNegativeUNL(a.validationHistorian.GetTrustedFullValidations(ledgerID, seq))
 	signTime, count := sampleValidatedSignTime(validations, seq)
 	if count == 0 || count < a.GetQuorum() {
 		return time.Time{}
@@ -404,10 +421,12 @@ func (a *Adaptor) refreshRemoteFee(seq uint32, ledgerID, parentID consensus.Ledg
 	if ft == nil {
 		return
 	}
-	base := ft.LoadBase()
+	base := feetrack.LoadBase
 
-	fees := collectValidationFees(historian, ledgerID, base)
-	fees = append(fees, collectValidationFees(historian, parentID, base)...)
+	fees := collectValidationFees(historian, ledgerID, seq, base)
+	if seq > 0 {
+		fees = append(fees, collectValidationFees(historian, parentID, seq-1, base)...)
+	}
 	fee := base
 	if len(fees) > 0 {
 		slices.Sort(fees)
@@ -417,11 +436,16 @@ func (a *Adaptor) refreshRemoteFee(seq uint32, ledgerID, parentID consensus.Ledg
 	a.remoteFeeSeq = seq
 }
 
-func collectValidationFees(historian consensus.ValidationHistorian, ledgerID consensus.LedgerID, base uint32) []uint32 {
-	vals := historian.GetTrustedValidations(ledgerID)
+func collectValidationFees(
+	historian consensus.ValidationHistorian,
+	ledgerID consensus.LedgerID,
+	seq uint32,
+	base uint32,
+) []uint32 {
+	vals := historian.GetTrustedFullValidations(ledgerID, seq)
 	fees := make([]uint32, 0, len(vals))
 	for _, v := range vals {
-		if v == nil || !v.Full {
+		if v == nil || !v.Full || v.LedgerSeq != seq {
 			continue
 		}
 		fee := v.LoadFee
@@ -435,6 +459,9 @@ func collectValidationFees(historian consensus.ValidationHistorian, ledgerID con
 
 func (a *Adaptor) OnModeChange(oldMode, newMode consensus.Mode) {
 	a.consensusMode.Store(int32(newMode))
+	if newMode == consensus.ModeWrongLedger {
+		a.demoteOperatingModeForWrongLedger()
+	}
 	a.logger.Info("Consensus mode changed",
 		"from", oldMode.String(),
 		"to", newMode.String(),
@@ -472,10 +499,6 @@ func (a *Adaptor) OnPhaseChange(oldPhase, newPhase consensus.Phase) {
 	case consensus.PhaseAccepted:
 		a.broadcastStatus(message.NodeEventAcceptedLedger)
 	}
-
-	// Notify via the ordered dispatcher for WebSocket subscription
-	// broadcasting.
-	a.emitConsensusPhase(newPhase.String())
 }
 
 // OnLedgerSwitched tells peers we abandoned our previous LCL for ledger.

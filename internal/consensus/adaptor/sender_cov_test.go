@@ -3,6 +3,7 @@ package adaptor
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
@@ -17,7 +18,6 @@ type snd_fakeOverlay struct {
 	broadcasts       [][]byte
 	sends            map[uint64][][]byte
 	relaySlotCalls   []snd_relaySlotCall
-	peersThatHave    map[[32]byte][]uint64
 	replayCaps       map[uint64]bool
 	badDataCounts    map[uint64]int
 	shedResult       bool
@@ -83,13 +83,6 @@ func (f *snd_fakeOverlay) RequestTxSetMissingNodesFromPeer(id consensus.TxSetID,
 }
 
 func (f *snd_fakeOverlay) RequestLedger(id consensus.LedgerID) error {
-	return nil
-}
-
-func (f *snd_fakeOverlay) RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.broadcasts = append(f.broadcasts, []byte("RequestLedgerByHashAndSeq"))
 	return nil
 }
 
@@ -185,11 +178,11 @@ func (f *snd_fakeOverlay) IncPeerBadData(peerID uint64, reason string) {
 	f.badDataCounts[peerID]++
 }
 
-func (f *snd_fakeOverlay) PeersThatHave(suppressionHash [32]byte) []uint64 {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]uint64(nil), f.peersThatHave[suppressionHash]...)
-}
+func (f *snd_fakeOverlay) RecordMessageSource([32]byte, uint64) {}
+
+func (f *snd_fakeOverlay) MessageRelayedRecently([32]byte) bool { return false }
+
+func (f *snd_fakeOverlay) PeerLatency(uint64) (time.Duration, bool) { return 0, false }
 
 func (f *snd_fakeOverlay) ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool {
 	f.mu.Lock()
@@ -202,7 +195,7 @@ func (f *snd_fakeOverlay) SelectLedgerPeers([32]byte, uint32, []uint64, int) []u
 	return nil
 }
 func (f *snd_fakeOverlay) PeerWithTxSet([32]byte, uint64) (uint64, bool) { return 0, false }
-func (f *snd_fakeOverlay) NotePeerHasTxSet(uint64, [32]byte)             {}
+func (f *snd_fakeOverlay) NotePeerHasTxSet(uint64, [32]byte) bool        { return true }
 func (f *snd_fakeOverlay) CheckTracking(uint32)                          {}
 
 func snd_newAdaptorWithFake(t *testing.T, fake *snd_fakeOverlay) *Adaptor {
@@ -230,8 +223,8 @@ func TestSndAdaptor_BroadcastStatusChange_ViaOnPhaseChange(t *testing.T) {
 	// No error to check — the method is fire-and-forget.
 }
 
-func TestSndAdaptor_NetworkSenderBroadcastStatusChange(t *testing.T) {
-	// Exercise the NetworkSender.BroadcastStatusChange path directly
+func TestSndAdaptor_NetworkBroadcastStatusChange(t *testing.T) {
+	// Exercise the consensusNetwork.BroadcastStatusChange path directly
 	// through the noopSender (wired by default when Sender is nil).
 	svc := newTestLedgerService(t)
 	a := New(Config{LedgerService: svc})
@@ -247,95 +240,6 @@ func TestSndAdaptor_UpdateRelaySlot(t *testing.T) {
 	require.Len(t, calls, 1)
 	assert.Equal(t, uint64(7), calls[0].OriginPeer)
 	assert.ElementsMatch(t, []uint64{1, 2, 3}, calls[0].SeenPeers)
-}
-
-func TestSndAdaptor_RequestTxSetMissingNodes(t *testing.T) {
-	fake := &snd_fakeOverlay{}
-	a := snd_newAdaptorWithFake(t, fake)
-	id := consensus.TxSetID{0xAB}
-	nodeIDs := [][]byte{make([]byte, 33)}
-	err := a.RequestTxSetMissingNodes(id, nodeIDs, nil, false)
-	assert.NoError(t, err)
-}
-
-func TestSndAdaptor_RequestLedgerByHashAndSeq(t *testing.T) {
-	fake := &snd_fakeOverlay{}
-	a := snd_newAdaptorWithFake(t, fake)
-	var hash [32]byte
-	hash[0] = 0xDE
-	err := a.RequestLedgerByHashAndSeq(hash, 42)
-	assert.NoError(t, err)
-}
-
-func TestSndAdaptor_RequestStateNodes(t *testing.T) {
-	fake := &snd_fakeOverlay{}
-	a := snd_newAdaptorWithFake(t, fake)
-	var hash [32]byte
-	err := a.RequestStateNodes(99, hash, [][]byte{make([]byte, 33)}, 1, false)
-	assert.NoError(t, err)
-	require.Len(t, fake.sends[99], 1)
-}
-
-func TestSndAdaptor_RequestTransactionNodes(t *testing.T) {
-	fake := &snd_fakeOverlay{}
-	a := snd_newAdaptorWithFake(t, fake)
-	var hash [32]byte
-	err := a.RequestTransactionNodes(77, hash, [][]byte{make([]byte, 33)}, 1, false)
-	assert.NoError(t, err)
-	require.Len(t, fake.sends[77], 1)
-}
-
-func TestSndAdaptor_SendToPeer(t *testing.T) {
-	fake := &snd_fakeOverlay{}
-	a := snd_newAdaptorWithFake(t, fake)
-	frame := []byte{0x01, 0x02, 0x03}
-	err := a.SendToPeer(55, frame)
-	assert.NoError(t, err)
-	require.Len(t, fake.sends[55], 1)
-	assert.Equal(t, frame, fake.sends[55][0])
-}
-
-func TestSndAdaptor_ShouldShedLedgerRequest(t *testing.T) {
-	fake := &snd_fakeOverlay{shedResult: true, shedResultPeerID: 11}
-	a := snd_newAdaptorWithFake(t, fake)
-	assert.True(t, a.ShouldShedLedgerRequest(11, false))
-	assert.False(t, a.ShouldShedLedgerRequest(99, false))
-}
-
-func TestSndAdaptor_ReplayCapablePeersExcluding(t *testing.T) {
-	fake := &snd_fakeOverlay{
-		replayCaps: map[uint64]bool{1: true, 2: true, 3: false},
-	}
-	a := snd_newAdaptorWithFake(t, fake)
-	peers := a.ReplayCapablePeersExcluding([]uint64{1}, 10)
-	assert.Contains(t, peers, uint64(2))
-	assert.NotContains(t, peers, uint64(1))
-	assert.NotContains(t, peers, uint64(3))
-}
-
-func TestSndAdaptor_ReplayCapablePeersExcluding_ZeroMax(t *testing.T) {
-	// The adaptor delegates directly; the max=0 guard lives in OverlaySender.
-	fake := &snd_fakeOverlay{
-		replayCaps: map[uint64]bool{1: true},
-	}
-	a := snd_newAdaptorWithFake(t, fake)
-	peers := a.ReplayCapablePeersExcluding(nil, 1)
-	assert.Len(t, peers, 1)
-}
-
-func TestSndAdaptor_PeersThatHave(t *testing.T) {
-	fake := &snd_fakeOverlay{
-		peersThatHave: map[[32]byte][]uint64{
-			{0x01}: {10, 20},
-		},
-	}
-	a := snd_newAdaptorWithFake(t, fake)
-	var hash [32]byte
-	hash[0] = 0x01
-	got := a.PeersThatHave(hash)
-	assert.ElementsMatch(t, []uint64{10, 20}, got)
-
-	assert.Nil(t, a.PeersThatHave([32]byte{}))
 }
 
 func TestSndOverlaySender_BroadcastProposal_NoPeers(t *testing.T) {
@@ -434,14 +338,6 @@ func TestSndOverlaySender_RequestLedger_NoPeers(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestSndOverlaySender_RequestLedgerByHashAndSeq_NoPeers(t *testing.T) {
-	s := snd_newOverlaySender(t)
-	var hash [32]byte
-	hash[0] = 0xAB
-	err := s.RequestLedgerByHashAndSeq(hash, 5)
-	assert.NoError(t, err)
-}
-
 func TestSndOverlaySender_SendToPeer_UnknownPeer(t *testing.T) {
 	s := snd_newOverlaySender(t)
 	err := s.SendToPeer(999, []byte{0x01})
@@ -481,11 +377,6 @@ func TestSndOverlaySender_ReplayCapablePeersExcluding_ZeroMax(t *testing.T) {
 func TestSndOverlaySender_IncPeerBadData(t *testing.T) {
 	s := snd_newOverlaySender(t)
 	s.IncPeerBadData(999, "test-reason")
-}
-
-func TestSndOverlaySender_PeersThatHave_UnknownHash(t *testing.T) {
-	s := snd_newOverlaySender(t)
-	assert.Nil(t, s.PeersThatHave([32]byte{0xFF}))
 }
 
 func TestSndOverlaySender_RequestReplayDelta_UnknownPeer(t *testing.T) {

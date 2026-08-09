@@ -1,14 +1,20 @@
 package rpc
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
-	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
+	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,6 +33,23 @@ type rpcSubEvent struct {
 	ID            any            `json:"id"`
 	authorization string
 	userAgent     string
+}
+
+type blockingRPCSubTransport struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (t *blockingRPCSubTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.once.Do(func() { close(t.started) })
+	<-t.release
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader("{}")),
+		Request:    req,
+	}, nil
 }
 
 func newRPCSubSink(t *testing.T) *rpcSubSink {
@@ -72,10 +95,15 @@ func (s *rpcSubSink) expectNone(t *testing.T) {
 // carries the url-subscription registry, plus admin/guest contexts for
 // driving the plain JSON-RPC handlers.
 func newRPCSubTestServer(t *testing.T) (*WebSocketServer, *types.ServiceContainer) {
+	return newRPCSubTestServerWithProvider(t, nil)
+}
+
+func newRPCSubTestServerWithProvider(t *testing.T, provider types.LedgerInfoProvider) (*WebSocketServer, *types.ServiceContainer) {
 	t.Helper()
 	services := types.NewServiceContainer(nil)
-	ws := NewWebSocketServer(time.Second, services)
-	require.NotNil(t, services.URLSubscriptions, "NewWebSocketServer must expose the url registry")
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second, Services: services, LedgerInfoProvider: provider})
+	services.URLSubscriptions = ws.URLSubscriptionService()
+	require.NotNil(t, services.URLSubscriptions, "composition must expose the url registry explicitly")
 	return ws, services
 }
 
@@ -115,7 +143,7 @@ func TestRPCSub_DeliversEvents(t *testing.T) {
 	first := map[string]any{"type": "ledgerClosed", "ledger_index": float64(7)}
 	data, err := json.Marshal(first)
 	require.NoError(t, err)
-	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
+	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data)
 
 	ev := sink.next(t)
 	assert.Equal(t, "event", ev.Method)
@@ -128,11 +156,11 @@ func TestRPCSub_DeliversEvents(t *testing.T) {
 	// rippled posts with this fixed User-Agent (createHTTPPost).
 	assert.Equal(t, "ripple-json-rpc/v1", ev.userAgent)
 
-	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
+	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data)
 	assert.Equal(t, float64(2), sink.next(t).Params["seq"], "sequence increments per event")
 
 	// Streams the url is not subscribed to are not delivered.
-	ws.SubscriptionManager().BroadcastToStream(types.SubValidations, data, nil)
+	ws.SubscriptionManager().BroadcastToStream(types.SubValidations, data)
 	sink.expectNone(t)
 }
 
@@ -144,10 +172,8 @@ func TestRPCSub_DeliversEvents(t *testing.T) {
 // deterministic.
 func TestRPCSub_DroppedEventLeavesSeqGap(t *testing.T) {
 	sub := &rpcSub{}
-	conn := &types.Connection{
-		SendChannel:    make(chan []byte, 1),
-		EncodeOutbound: sub.encodeOutbound,
-	}
+	conn := subscription.NewConnection("sequence-gap", make(chan []byte, 1))
+	conn.SetEncodeOutbound(sub.encodeOutbound)
 
 	data, _ := json.Marshal(map[string]any{"type": "ledgerClosed"})
 
@@ -156,12 +182,12 @@ func TestRPCSub_DroppedEventLeavesSeqGap(t *testing.T) {
 	require.False(t, conn.TrySend(data), "still full → dropped (seq 3 consumed)")
 
 	// Drain the one landed event: it carries seq 1.
-	landed := decodeRPCSubEnvelope(t, <-conn.SendChannel)
+	landed := decodeRPCSubEnvelope(t, <-conn.Outbound())
 	assert.Equal(t, float64(1), landed["seq"])
 
 	// The next event that fits now carries seq 4 — the gap (2,3) is visible.
 	require.True(t, conn.TrySend(data))
-	next := decodeRPCSubEnvelope(t, <-conn.SendChannel)
+	next := decodeRPCSubEnvelope(t, <-conn.Outbound())
 	assert.Equal(t, float64(4), next["seq"], "dropped events leave a visible gap")
 }
 
@@ -188,20 +214,20 @@ func TestRPCSub_BasicAuthCredentials(t *testing.T) {
 	require.Nil(t, rpcErr)
 
 	data, _ := json.Marshal(map[string]any{"type": "ledgerClosed"})
-	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
+	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data)
 	// base64("alice:secret")
 	assert.Equal(t, "Basic YWxpY2U6c2VjcmV0", sink.next(t).authorization)
 
 	// url_username on an existing subscription is ignored.
 	_, rpcErr = subscribeURL(t, services, `{`+urlParam+`,"url_username":"mallory"}`)
 	require.Nil(t, rpcErr)
-	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
+	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data)
 	assert.Equal(t, "Basic YWxpY2U6c2VjcmV0", sink.next(t).authorization)
 
 	// The deprecated username/password members do update credentials.
 	_, rpcErr = subscribeURL(t, services, `{`+urlParam+`,"username":"bob","password":"hunter2"}`)
 	require.Nil(t, rpcErr)
-	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
+	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data)
 	// base64("bob:hunter2")
 	assert.Equal(t, "Basic Ym9iOmh1bnRlcjI=", sink.next(t).authorization)
 }
@@ -216,6 +242,10 @@ func TestRPCSub_URLValidation(t *testing.T) {
 	}{
 		{"unsupported scheme", `{"url":"ftp://example.com/events"}`, "Only http and https is supported."},
 		{"empty url member", `{"url":""}`, "Failed to parse url."},
+		{"empty host", `{"url":"http://"}`, "Failed to parse url."},
+		{"embedded credentials", `{"url":"http://alice:secret@example.com/events"}`, "Failed to parse url."},
+		{"fragment", `{"url":"http://example.com/events#fragment"}`, "Failed to parse url."},
+		{"outer whitespace", `{"url":" http://example.com/events"}`, "Failed to parse url."},
 		{"port out of range", `{"url":"http://example.com:99999/x"}`, "Failed to parse url."},
 		{"not a url", `{"url":"::not a url::"}`, "Failed to parse url."},
 	}
@@ -231,7 +261,7 @@ func TestRPCSub_URLValidation(t *testing.T) {
 	}
 }
 
-func TestRPCSubBooksApplyInWireOrder(t *testing.T) {
+func TestRPCSubBooksApplyIncrementally(t *testing.T) {
 	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	ws, services := newRPCSubTestServer(t)
 	sink := newRPCSubSink(t)
@@ -243,16 +273,17 @@ func TestRPCSubBooksApplyInWireOrder(t *testing.T) {
 
 	_, rpcErr := method.Handle(ctx, json.RawMessage(params))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, uint32(loadtrack.LoadMedium), ctx.LoadCost)
+	assert.Equal(t, uint32(resource.FeeMediumBurdenRPC().Cost()), ctx.LoadCost, "the accepted earlier snapshot is charged before a later book fails")
 
 	ws.urlSubs.mu.Lock()
 	sub := ws.urlSubs.subs[sink.srv.URL]
 	ws.urlSubs.mu.Unlock()
-	require.NotNil(t, sub)
-	assert.Len(t, sub.conn.Subscriptions[types.SubBook].Books, 1)
+	require.NotNil(t, sub, "the URL subscriber remains after a later book fails")
+	require.Equal(t, 1, sub.registration.Snapshot().BookCount())
+	assert.Equal(t, uint64(1), ws.SubscriptionManager().Metrics().Connections)
 }
 
-func TestRPCSubBookUnsubscribeAppliesInWireOrder(t *testing.T) {
+func TestRPCSubBookUnsubscribeAppliesIncrementally(t *testing.T) {
 	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	ws, services := newRPCSubTestServer(t)
 	sink := newRPCSubSink(t)
@@ -269,28 +300,59 @@ func TestRPCSubBookUnsubscribeAppliesInWireOrder(t *testing.T) {
 	sub := ws.urlSubs.subs[sink.srv.URL]
 	ws.urlSubs.mu.Unlock()
 	require.NotNil(t, sub)
-	books := sub.conn.Subscriptions[types.SubBook].Books
-	require.Len(t, books, 1)
-	encoded, err := json.Marshal(books[0])
-	require.NoError(t, err)
-	assert.JSONEq(t, second, string(encoded))
+	require.Equal(t, 1, sub.registration.Snapshot().BookCount(), "an earlier book removal remains applied when a later book fails")
 }
 
-// TestRPCSub_EmptyHostAcceptedAtSubscribe mirrors rippled's parseUrl host
-// group matching the empty string: "http://" registers successfully and a
-// delivery only fails (harmlessly) at connect time, fire-and-forget.
-func TestRPCSub_EmptyHostAcceptedAtSubscribe(t *testing.T) {
+func TestRPCSubMPTBookFlow(t *testing.T) {
+	const mptID = "00000001C4F149B6F2A4B6A4C4A01C1570C4A040A3D9B221"
+	ws, services := newRPCSubTestServer(t)
+	sink := newRPCSubSink(t)
+	_, rpcErr := subscribeURL(t, services, `{"url":"`+sink.srv.URL+`","books":[{"taker_pays":{"currency":"XRP"},"taker_gets":{"mpt_issuance_id":"`+mptID+`"}}]}`)
+	require.Nil(t, rpcErr)
+	NewPublisher(ws.SubscriptionManager()).PublishOrderBookChange(publisherTestTransactionEvent(), []types.OrderBookSpec{{
+		TakerPays: types.CurrencySpec{Currency: "XRP"},
+		TakerGets: types.CurrencySpec{MPTIssuanceID: strings.ToLower(mptID)},
+	}})
+	event := sink.next(t)
+	require.Equal(t, "event", event.Method)
+}
+
+func TestRPCSubTypedBookFlow(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	ws, services := newRPCSubTestServer(t)
+	sink := newRPCSubSink(t)
+	request := types.SubscriptionRequest{
+		URL: sink.srv.URL,
+		Books: []types.BookRequest{{
+			TakerPays: json.RawMessage(`{"currency":"XRP"}`),
+			TakerGets: json.RawMessage(`{"currency":"USD","issuer":"` + account + `"}`),
+		}},
+	}
+
+	_, rpcErr := ws.urlSubs.Subscribe(adminCtx(services), request)
+	require.Nil(t, rpcErr)
+	NewPublisher(ws.SubscriptionManager()).PublishOrderBookChange(publisherTestTransactionEvent(), []types.OrderBookSpec{{
+		TakerPays: types.CurrencySpec{Currency: "XRP"},
+		TakerGets: types.CurrencySpec{Currency: "USD", Issuer: account},
+	}})
+	event := sink.next(t)
+	require.Equal(t, "event", event.Method)
+
+	_, rpcErr = ws.urlSubs.Unsubscribe(adminCtx(services), request)
+	require.Nil(t, rpcErr)
+	ws.urlSubs.mu.Lock()
+	require.Empty(t, ws.urlSubs.subs)
+	ws.urlSubs.mu.Unlock()
+}
+
+func TestRPCSub_EmptyHostRejectedAtSubscribe(t *testing.T) {
 	ws, services := newRPCSubTestServer(t)
 
 	result, rpcErr := subscribeURL(t, services, `{"url":"http://","streams":["ledger"]}`)
-	require.Nil(t, rpcErr, "empty-host url must register, like rippled")
-	assert.NotNil(t, result)
-	assert.Equal(t, 1, ws.SubscriptionManager().ConnectionCount())
-
-	// A broadcast to the unconnectable endpoint must not panic or block —
-	// the delivery goroutine logs and drops it.
-	data, _ := json.Marshal(map[string]any{"type": "ledgerClosed"})
-	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Zero(t, ws.SubscriptionManager().Metrics().Connections)
 }
 
 // TestRPCSub_UnsubscribeRemovesEntry verifies the tryRemoveRPCSub
@@ -303,12 +365,12 @@ func TestRPCSub_UnsubscribeRemovesEntry(t *testing.T) {
 
 	_, rpcErr := subscribeURL(t, services, `{`+urlParam+`,"streams":["ledger","transactions"]}`)
 	require.Nil(t, rpcErr)
-	assert.Equal(t, 1, ws.SubscriptionManager().ConnectionCount())
+	assert.Equal(t, uint64(1), ws.SubscriptionManager().Metrics().Connections)
 
 	// A stream remains subscribed → entry kept.
 	_, rpcErr = unsubscribeURL(t, services, `{`+urlParam+`,"streams":["ledger"]}`)
 	require.Nil(t, rpcErr)
-	assert.Equal(t, 1, ws.SubscriptionManager().ConnectionCount())
+	assert.Equal(t, uint64(1), ws.SubscriptionManager().Metrics().Connections)
 	ws.urlSubs.mu.Lock()
 	assert.Len(t, ws.urlSubs.subs, 1)
 	ws.urlSubs.mu.Unlock()
@@ -316,7 +378,7 @@ func TestRPCSub_UnsubscribeRemovesEntry(t *testing.T) {
 	// Last stream gone → entry and manager connection removed.
 	_, rpcErr = unsubscribeURL(t, services, `{`+urlParam+`,"streams":["transactions"]}`)
 	require.Nil(t, rpcErr)
-	assert.Equal(t, 0, ws.SubscriptionManager().ConnectionCount())
+	assert.Zero(t, ws.SubscriptionManager().Metrics().Connections)
 	ws.urlSubs.mu.Lock()
 	assert.Empty(t, ws.urlSubs.subs)
 	ws.urlSubs.mu.Unlock()
@@ -325,6 +387,21 @@ func TestRPCSub_UnsubscribeRemovesEntry(t *testing.T) {
 	result, rpcErr := unsubscribeURL(t, services, `{"url":"http://example.com/none","streams":["ledger"]}`)
 	require.Nil(t, rpcErr)
 	assert.Equal(t, map[string]any{}, result)
+}
+
+func TestRPCSub_UnsubscribeMalformedUnknownURLsAreSilent(t *testing.T) {
+	_, services := newRPCSubTestServer(t)
+	for _, params := range []string{
+		`{"url":""}`,
+		`{"url":"::not a url::"}`,
+		`{"url":"ftp://example.com/events"}`,
+		`{"url":"http://"}`,
+		`{"url":" http://example.com/events"}`,
+	} {
+		result, rpcErr := unsubscribeURL(t, services, params)
+		assert.Nil(t, rpcErr, "params=%s", params)
+		assert.Equal(t, map[string]any{}, result, "params=%s", params)
+	}
 }
 
 // TestRPCSub_AccountsDontBlockRemoval mirrors NetworkOPs::tryRemoveRPCSub
@@ -342,7 +419,7 @@ func TestRPCSub_AccountsDontBlockRemoval(t *testing.T) {
 
 	_, rpcErr = unsubscribeURL(t, services, `{`+urlParam+`,"streams":["ledger"]}`)
 	require.Nil(t, rpcErr)
-	assert.Equal(t, 0, ws.SubscriptionManager().ConnectionCount(),
+	assert.Zero(t, ws.SubscriptionManager().Metrics().Connections,
 		"entry must be removed when only account subscriptions remain")
 }
 
@@ -351,8 +428,7 @@ func TestRPCSub_AccountsDontBlockRemoval(t *testing.T) {
 // field gating: network_id is always present (even 0) and fee_ref appears
 // only while XRPFees is disabled.
 func TestRPCSub_SubscribeAckCarriesLedgerInfo(t *testing.T) {
-	ws, services := newRPCSubTestServer(t)
-	ws.SetLedgerInfoProvider(stubLedgerInfoProvider{})
+	_, services := newRPCSubTestServerWithProvider(t, stubLedgerInfoProvider{ledgerAvailable: true})
 	sink := newRPCSubSink(t)
 
 	result, rpcErr := subscribeURL(t, services, `{"url":"`+sink.srv.URL+`","streams":["ledger"]}`)
@@ -361,7 +437,7 @@ func TestRPCSub_SubscribeAckCarriesLedgerInfo(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, uint32(42), ack["ledger_index"])
 	assert.Equal(t, "ABCD", ack["ledger_hash"])
-	assert.Equal(t, uint64(10), ack["fee_base"])
+	assert.Equal(t, int32(10), ack["fee_base"])
 	// network_id is emitted unconditionally, even when zero.
 	require.Contains(t, ack, "network_id")
 	assert.Equal(t, uint32(0), ack["network_id"])
@@ -373,8 +449,7 @@ func TestRPCSub_SubscribeAckCarriesLedgerInfo(t *testing.T) {
 // from the ack once the XRPFees amendment is enabled, mirroring rippled's
 // subLedger gate.
 func TestRPCSub_SubscribeAckOmitsFeeRefUnderXRPFees(t *testing.T) {
-	ws, services := newRPCSubTestServer(t)
-	ws.SetLedgerInfoProvider(stubLedgerInfoProvider{xrpFees: true})
+	_, services := newRPCSubTestServerWithProvider(t, stubLedgerInfoProvider{ledgerAvailable: true, xrpFees: true})
 	sink := newRPCSubSink(t)
 
 	result, rpcErr := subscribeURL(t, services, `{"url":"`+sink.srv.URL+`","streams":["ledger"]}`)
@@ -385,18 +460,118 @@ func TestRPCSub_SubscribeAckOmitsFeeRefUnderXRPFees(t *testing.T) {
 	require.Contains(t, ack, "network_id")
 }
 
-type stubLedgerInfoProvider struct{ xrpFees bool }
+func TestSubLedgerWireMatrix(t *testing.T) {
+	states := []string{"", "disconnected", "connected", "syncing", "tracking", "full", "proposing", "validating"}
+	for _, xrpFees := range []bool{false, true} {
+		for _, state := range states {
+			for _, needsNetworkLedger := range []bool{false, true} {
+				for _, networkID := range []uint32{0, 42} {
+					for _, complete := range []string{"", "1-2,4"} {
+						name := fmt.Sprintf("xrp_fees_%t/%s/needs_%t/network_%d/complete_%t", xrpFees, state, needsNetworkLedger, networkID, complete != "")
+						t.Run(name, func(t *testing.T) {
+							validatedLedgers := ""
+							validatedLedgersPresent := publishesValidatedLedgers(state) && !needsNetworkLedger
+							if validatedLedgersPresent {
+								validatedLedgers = complete
+							}
+							ws, _ := newRPCSubTestServerWithProvider(t, stubLedgerInfoProvider{
+								ledgerAvailable:         true,
+								xrpFees:                 xrpFees,
+								validatedLedgers:        validatedLedgers,
+								validatedLedgersPresent: validatedLedgersPresent,
+								networkID:               networkID,
+							})
+							ack := ws.buildSubscribeAck(&types.RpcContext{}, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}})
+							got, err := json.Marshal(ack)
+							require.NoError(t, err)
+
+							want := `{"fee_base":10`
+							if !xrpFees {
+								want += `,"fee_ref":10`
+							}
+							want += fmt.Sprintf(`,"ledger_hash":"ABCD","ledger_index":42,"ledger_time":735000000,"network_id":%d,"reserve_base":10000000,"reserve_inc":2000000`, networkID)
+							if validatedLedgersPresent {
+								want += fmt.Sprintf(`,"validated_ledgers":"%s"`, validatedLedgers)
+							}
+							want += `}`
+							if string(got) != want {
+								t.Fatalf("subLedger JSON = %s, want %s", got, want)
+							}
+						})
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestSubLedgerWireMatrixWithoutValidatedLedger(t *testing.T) {
+	states := []string{"", "disconnected", "connected", "syncing", "tracking", "full", "proposing", "validating"}
+	for _, state := range states {
+		for _, needsNetworkLedger := range []bool{false, true} {
+			for _, networkID := range []uint32{0, 42} {
+				for _, complete := range []string{"", "1-2,4"} {
+					name := fmt.Sprintf("%s/needs_%t/network_%d/complete_%t", state, needsNetworkLedger, networkID, complete != "")
+					t.Run(name, func(t *testing.T) {
+						validatedLedgers := ""
+						validatedLedgersPresent := publishesValidatedLedgers(state) && !needsNetworkLedger
+						if validatedLedgersPresent {
+							validatedLedgers = complete
+						}
+						ws, _ := newRPCSubTestServerWithProvider(t, stubLedgerInfoProvider{
+							validatedLedgers:        validatedLedgers,
+							validatedLedgersPresent: validatedLedgersPresent,
+							networkID:               networkID,
+						})
+						ack := ws.buildSubscribeAck(&types.RpcContext{}, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}})
+						got, err := json.Marshal(ack)
+						require.NoError(t, err)
+
+						want := "{}"
+						if validatedLedgersPresent {
+							want = fmt.Sprintf(`{"validated_ledgers":"%s"}`, validatedLedgers)
+						}
+						if string(got) != want {
+							t.Fatalf("subLedger JSON without validated ledger = %s, want %s", got, want)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func publishesValidatedLedgers(state string) bool {
+	switch state {
+	case "syncing", "tracking", "full", "proposing", "validating":
+		return true
+	default:
+		return false
+	}
+}
+
+type stubLedgerInfoProvider struct {
+	ledgerAvailable         bool
+	xrpFees                 bool
+	validatedLedgers        string
+	validatedLedgersPresent bool
+	networkID               uint32
+}
 
 func (s stubLedgerInfoProvider) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 	return &types.LedgerSubscribeInfo{
-		LedgerIndex:    42,
-		LedgerHash:     "ABCD",
-		LedgerTime:     735000000,
-		FeeBase:        10,
-		FeeRef:         10,
-		ReserveBase:    10000000,
-		ReserveInc:     2000000,
-		XRPFeesEnabled: s.xrpFees,
+		LedgerAvailable:         s.ledgerAvailable,
+		LedgerIndex:             42,
+		LedgerHash:              "ABCD",
+		LedgerTime:              735000000,
+		FeeBase:                 10,
+		FeeRef:                  10,
+		ReserveBase:             10000000,
+		ReserveInc:              2000000,
+		ValidatedLedgers:        s.validatedLedgers,
+		ValidatedLedgersPresent: s.validatedLedgersPresent,
+		NetworkID:               s.networkID,
+		XRPFeesEnabled:          s.xrpFees,
 	}
 }
 
@@ -412,26 +587,553 @@ func TestRPCSub_ReuseSharesSubscriber(t *testing.T) {
 	require.Nil(t, rpcErr)
 	_, rpcErr = subscribeURL(t, services, `{`+urlParam+`,"streams":["validations"]}`)
 	require.Nil(t, rpcErr)
-	assert.Equal(t, 1, ws.SubscriptionManager().ConnectionCount())
+	assert.Equal(t, uint64(1), ws.SubscriptionManager().Metrics().Connections)
 
 	data, _ := json.Marshal(map[string]any{"type": "ledgerClosed"})
-	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
+	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data)
 	assert.Equal(t, float64(1), sink.next(t).Params["seq"])
 	sink.expectNone(t)
 }
 
-// TestRPCSub_MalformedStreamKeepsEntry mirrors doSubscribe creating the
-// registry entry before parsing streams: a bad stream name errors but the
-// url remains registered for reuse.
-func TestRPCSub_MalformedStreamKeepsEntry(t *testing.T) {
+func TestRPCSub_ExistingSubscribeKeepsEarlierMutations(t *testing.T) {
+	ws, services := newRPCSubTestServer(t)
+	sink := newRPCSubSink(t)
+	urlParam := `"url":"` + sink.srv.URL + `"`
+
+	_, rpcErr := subscribeURL(t, services, `{`+urlParam+`,"url_username":"before","streams":["ledger"]}`)
+	require.Nil(t, rpcErr)
+	ws.urlSubs.mu.Lock()
+	sub := ws.urlSubs.subs[sink.srv.URL]
+	require.NotNil(t, sub)
+	before := sub.registration.Snapshot()
+	ws.urlSubs.mu.Unlock()
+
+	_, rpcErr = subscribeURL(t, services, `{`+urlParam+`,"username":"after","streams":["transactions","invalid"]}`)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcSTREAM_MALFORMED, rpcErr.Code)
+
+	after := sub.registration.Snapshot()
+	assert.True(t, before.Has(types.SubLedger))
+	assert.True(t, after.Has(types.SubTransactions))
+	username, _ := sub.credentials()
+	assert.Equal(t, "after", username, "credential mutation precedes stream validation")
+}
+
+func TestRPCSub_CanonicalURLReuseAndUnsubscribe(t *testing.T) {
+	ws, services := newRPCSubTestServer(t)
+	sink := newRPCSubSink(t)
+	rawURL := sink.srv.URL
+	canonicalVariant := strings.ToUpper("http") + strings.TrimPrefix(rawURL, "http") + "/"
+
+	_, rpcErr := subscribeURL(t, services, `{"url":"`+rawURL+`","streams":["ledger"]}`)
+	require.Nil(t, rpcErr)
+	_, rpcErr = subscribeURL(t, services, `{"url":"`+canonicalVariant+`","streams":["transactions"]}`)
+	require.Nil(t, rpcErr)
+	assert.Equal(t, uint64(1), ws.SubscriptionManager().Metrics().Connections)
+	ws.urlSubs.mu.Lock()
+	assert.Len(t, ws.urlSubs.subs, 1)
+	ws.urlSubs.mu.Unlock()
+
+	_, rpcErr = unsubscribeURL(t, services, `{"url":"`+canonicalVariant+`","streams":["ledger"]}`)
+	require.Nil(t, rpcErr)
+	_, rpcErr = unsubscribeURL(t, services, `{"url":"`+rawURL+`","streams":["transactions"]}`)
+	require.Nil(t, rpcErr)
+	assert.Zero(t, ws.SubscriptionManager().Metrics().Connections)
+	ws.urlSubs.mu.Lock()
+	assert.Empty(t, ws.urlSubs.subs)
+	ws.urlSubs.mu.Unlock()
+}
+
+func TestRPCSub_IPLiteralCanonicalReuseAndUnsubscribe(t *testing.T) {
+	ws, services := newRPCSubTestServer(t)
+	defer ws.urlSubs.Close()
+	ctx := adminCtx(services)
+	expanded := "http://[0:0:0:0:0:0:0:1]:18080/events?token=one"
+	compressed := "http://[::1]:18080/events?token=one"
+
+	_, rpcErr := ws.urlSubs.Subscribe(ctx, types.SubscriptionRequest{
+		URL: expanded, Streams: []types.SubscriptionType{types.SubLedger},
+	})
+	require.Nil(t, rpcErr)
+	_, rpcErr = ws.urlSubs.Subscribe(ctx, types.SubscriptionRequest{
+		URL: compressed, Streams: []types.SubscriptionType{types.SubTransactions},
+	})
+	require.Nil(t, rpcErr)
+	assert.Equal(t, uint64(1), ws.SubscriptionManager().Metrics().Connections)
+
+	_, rpcErr = ws.urlSubs.Unsubscribe(ctx, types.SubscriptionRequest{
+		URL: expanded, Streams: []types.SubscriptionType{types.SubLedger},
+	})
+	require.Nil(t, rpcErr)
+	_, rpcErr = ws.urlSubs.Unsubscribe(ctx, types.SubscriptionRequest{
+		URL: compressed, Streams: []types.SubscriptionType{types.SubTransactions},
+	})
+	require.Nil(t, rpcErr)
+	assert.Zero(t, ws.SubscriptionManager().Metrics().Connections)
+}
+
+func TestRPCSub_SubscribeAfterClosePrecedesURLValidation(t *testing.T) {
+	ws, services := newRPCSubTestServer(t)
+	ws.urlSubs.Close()
+
+	for _, params := range []string{
+		`{"url":"not a url"}`,
+		`{"url":"ftp://example.com/events"}`,
+	} {
+		result, rpcErr := subscribeURL(t, services, params)
+		assert.Nil(t, result, "params=%s", params)
+		require.NotNil(t, rpcErr, "params=%s", params)
+		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code, "params=%s", params)
+	}
+}
+
+func TestRPCSub_BoundsGlobalAndPerPrincipal(t *testing.T) {
+	ws, services := newRPCSubTestServer(t)
+	first := newRPCSubSink(t)
+	second := newRPCSubSink(t)
+	third := newRPCSubSink(t)
+	ws.urlSubs.maxEntries = 1
+	ws.urlSubs.maxWorkers = 1
+	ws.urlSubs.maxPerPrincipal = 100
+
+	_, rpcErr := subscribeURL(t, services, `{"url":"`+first.srv.URL+`","streams":["ledger"]}`)
+	require.Nil(t, rpcErr)
+	_, rpcErr = subscribeURL(t, services, `{"url":"`+second.srv.URL+`","streams":["ledger"]}`)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+	assert.Equal(t, uint64(1), ws.SubscriptionManager().Metrics().Connections)
+	ws.urlSubs.mu.Lock()
+	assert.Len(t, ws.urlSubs.subs, 1)
+	ws.urlSubs.mu.Unlock()
+	assert.Equal(t, uint64(1), ws.urlSubs.metricsSnapshot().CapacityRejects)
+
+	_, rpcErr = unsubscribeURL(t, services, `{"url":"`+first.srv.URL+`","streams":["ledger"]}`)
+	require.Nil(t, rpcErr)
+	assert.Eventually(t, func() bool {
+		ws.urlSubs.mu.Lock()
+		defer ws.urlSubs.mu.Unlock()
+		return ws.urlSubs.workers == 0
+	}, time.Second, time.Millisecond)
+	_, rpcErr = subscribeURL(t, services, `{"url":"`+second.srv.URL+`","streams":["ledger"]}`)
+	require.Nil(t, rpcErr)
+
+	ws.urlSubs.maxEntries = 0
+	ws.urlSubs.maxWorkers = 0
+	ws.urlSubs.maxPerPrincipal = 1
+	ctx := adminCtx(services)
+	ctx.ClientIP = "principal-a"
+	_, rpcErr = ws.urlSubs.Subscribe(ctx, types.SubscriptionRequest{URL: third.srv.URL, Streams: []types.SubscriptionType{types.SubLedger}})
+	require.Nil(t, rpcErr)
+	fourth := newRPCSubSink(t)
+	_, rpcErr = ws.urlSubs.Subscribe(ctx, types.SubscriptionRequest{URL: fourth.srv.URL, Streams: []types.SubscriptionType{types.SubLedger}})
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+	ctx.ClientIP = "principal-b"
+	_, rpcErr = ws.urlSubs.Subscribe(ctx, types.SubscriptionRequest{URL: fourth.srv.URL, Streams: []types.SubscriptionType{types.SubLedger}})
+	require.Nil(t, rpcErr)
+}
+
+func TestRPCSub_EquivalentIPv6PrincipalsShareCapacity(t *testing.T) {
+	ws, services := newRPCSubTestServer(t)
+	first := newRPCSubSink(t)
+	second := newRPCSubSink(t)
+	ws.urlSubs.maxEntries = 4
+	ws.urlSubs.maxWorkers = 4
+	ws.urlSubs.maxPerPrincipal = 1
+
+	firstCtx := adminCtx(services)
+	firstCtx.ClientIP = "2001:0db8:0:0:0:0:0:1"
+	_, rpcErr := ws.urlSubs.Subscribe(firstCtx, types.SubscriptionRequest{
+		URL: first.srv.URL, Streams: []types.SubscriptionType{types.SubLedger},
+	})
+	require.Nil(t, rpcErr)
+
+	secondCtx := adminCtx(services)
+	secondCtx.ClientIP = "2001:db8::1"
+	_, rpcErr = ws.urlSubs.Subscribe(secondCtx, types.SubscriptionRequest{
+		URL: second.srv.URL, Streams: []types.SubscriptionType{types.SubLedger},
+	})
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+
+	ws.urlSubs.mu.Lock()
+	defer ws.urlSubs.mu.Unlock()
+	assert.Equal(t, 1, ws.urlSubs.principalCounts["2001:db8::1"])
+	assert.Equal(t, 1, ws.urlSubs.principalWorkers["2001:db8::1"])
+	assert.Len(t, ws.urlSubs.principalCounts, 1)
+	assert.Len(t, ws.urlSubs.principalWorkers, 1)
+}
+
+func TestRPCSub_WorkerCapacityReclaimedBeforeUnsubscribeReturns(t *testing.T) {
+	ws, services := newRPCSubTestServer(t)
+	first := newRPCSubSink(t)
+	second := newRPCSubSink(t)
+	ws.urlSubs.maxWorkers = 1
+
+	_, rpcErr := subscribeURL(t, services, `{"url":"`+first.srv.URL+`","streams":["ledger"]}`)
+	require.Nil(t, rpcErr)
+	_, rpcErr = unsubscribeURL(t, services, `{"url":"`+first.srv.URL+`","streams":["ledger"]}`)
+	require.Nil(t, rpcErr)
+
+	ws.urlSubs.mu.Lock()
+	workers := ws.urlSubs.workers
+	ws.urlSubs.mu.Unlock()
+	assert.Zero(t, workers, "unsubscribe must not return before worker-cap accounting is released")
+
+	_, rpcErr = subscribeURL(t, services, `{"url":"`+second.srv.URL+`","streams":["ledger"]}`)
+	require.Nil(t, rpcErr, "an immediate replacement must fit the reclaimed worker slot")
+}
+
+func TestRPCSub_UnsubscribeCancelsConnection(t *testing.T) {
+	ws, services := newRPCSubTestServer(t)
+	sink := newRPCSubSink(t)
+
+	_, rpcErr := subscribeURL(t, services, `{"url":"`+sink.srv.URL+`","streams":["ledger"]}`)
+	require.Nil(t, rpcErr)
+	ws.urlSubs.mu.Lock()
+	sub := ws.urlSubs.subs[sink.srv.URL]
+	ws.urlSubs.mu.Unlock()
+	require.NotNil(t, sub)
+
+	_, rpcErr = unsubscribeURL(t, services, `{"url":"`+sink.srv.URL+`","streams":["ledger"]}`)
+	require.Nil(t, rpcErr)
+
+	select {
+	case <-sub.conn.Done():
+	default:
+		t.Fatal("unsubscribed connection remains active")
+	}
+	require.False(t, sub.conn.TrySend([]byte(`{}`)))
+}
+
+func TestRPCSub_AttachRejectionRollsBackRegistryState(t *testing.T) {
+	ws, services := newRPCSubTestServer(t)
+	sink := newRPCSubSink(t)
+	key, rpcErr := canonicalRPCSubURL(sink.srv.URL)
+	require.Nil(t, rpcErr)
+	occupied := subscription.NewConnection("rpcsub:"+key, make(chan []byte, 1))
+	registration, attached := ws.subscriptionManager.Attach(occupied)
+	require.True(t, attached)
+	t.Cleanup(func() { ws.subscriptionManager.Detach(registration) })
+
+	_, rpcErr = ws.urlSubs.Subscribe(adminCtx(services), types.SubscriptionRequest{
+		URL: sink.srv.URL, Streams: []types.SubscriptionType{types.SubLedger},
+	})
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	ws.urlSubs.mu.Lock()
+	defer ws.urlSubs.mu.Unlock()
+	assert.Empty(t, ws.urlSubs.subs)
+	assert.Empty(t, ws.urlSubs.principalCounts)
+	assert.Empty(t, ws.urlSubs.principalWorkers)
+	assert.Zero(t, ws.urlSubs.workers)
+}
+
+func TestRPCSub_SlowConsumerRetiresAllOwnership(t *testing.T) {
+	ws, services := newRPCSubTestServer(t)
+	transport := &blockingRPCSubTransport{started: make(chan struct{}), release: make(chan struct{})}
+	ws.urlSubs.client.Transport = transport
+	ctx := adminCtx(services)
+	ctx.ClientIP = "slow-owner"
+	request := types.SubscriptionRequest{
+		URL: "http://127.0.0.1:18085/slow", Streams: []types.SubscriptionType{types.SubLedger},
+	}
+	_, rpcErr := ws.urlSubs.Subscribe(ctx, request)
+	require.Nil(t, rpcErr)
+	ws.urlSubs.mu.Lock()
+	sub := ws.urlSubs.subs[request.URL]
+	ws.urlSubs.mu.Unlock()
+	require.NotNil(t, sub)
+
+	data := []byte(`{"type":"ledgerClosed"}`)
+	ws.subscriptionManager.BroadcastToStream(types.SubLedger, data)
+	<-transport.started
+	for range rpcSubQueueLimit + subscription.MaxConsecutiveDrops {
+		ws.subscriptionManager.BroadcastToStream(types.SubLedger, data)
+	}
+	close(transport.release)
+	select {
+	case <-sub.finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("terminal URL subscriber was not retired")
+	}
+
+	ws.urlSubs.mu.Lock()
+	defer ws.urlSubs.mu.Unlock()
+	assert.Empty(t, ws.urlSubs.subs)
+	assert.Empty(t, ws.urlSubs.principalCounts)
+	assert.Empty(t, ws.urlSubs.principalWorkers)
+	assert.Zero(t, ws.urlSubs.workers)
+	assert.Zero(t, ws.subscriptionManager.Metrics().Connections)
+	assert.True(t, sub.conn.Stats().Terminal)
+	assert.Equal(t, uint64(1), sub.conn.Stats().Disconnects)
+}
+
+func TestRPCSub_TerminalEntryCannotBeReusedBeforeAsyncRetirement(t *testing.T) {
+	ws, services := newRPCSubTestServer(t)
+	sink := newRPCSubSink(t)
+	ctx := adminCtx(services)
+	ctx.ClientIP = "terminal-owner"
+	request := types.SubscriptionRequest{
+		URL: sink.srv.URL, Streams: []types.SubscriptionType{types.SubLedger},
+	}
+	_, rpcErr := ws.urlSubs.Subscribe(ctx, request)
+	require.Nil(t, rpcErr)
+	key, rpcErr := canonicalRPCSubURL(request.URL)
+	require.Nil(t, rpcErr)
+
+	ws.urlSubs.mu.Lock()
+	sub := ws.urlSubs.subs[key]
+	if sub == nil {
+		ws.urlSubs.mu.Unlock()
+		t.Fatal("URL subscription was not registered")
+	}
+	sub.conn.Cancel()
+	retireStarted := make(chan struct{})
+	retireDone := make(chan struct{})
+	go func() {
+		close(retireStarted)
+		ws.urlSubs.retire(sub)
+		close(retireDone)
+	}()
+	<-retireStarted
+	lookup, reuseErr := ws.urlSubs.findOrCreateLocked(request, key, ctx.ClientIP)
+	entryUnchanged := ws.urlSubs.subs[key] == sub
+	entries := len(ws.urlSubs.subs)
+	workers := ws.urlSubs.workers
+	ws.urlSubs.mu.Unlock()
+
+	require.NotNil(t, reuseErr)
+	assert.Equal(t, types.RpcTOO_BUSY, reuseErr.Code)
+	assert.Nil(t, lookup.sub)
+	assert.True(t, entryUnchanged)
+	assert.Equal(t, 1, entries)
+	assert.Equal(t, 1, workers)
+
+	select {
+	case <-retireDone:
+	case <-time.After(time.Second):
+		t.Fatal("async retirement did not complete")
+	}
+	ws.urlSubs.mu.Lock()
+	defer ws.urlSubs.mu.Unlock()
+	assert.Empty(t, ws.urlSubs.subs)
+	assert.Empty(t, ws.urlSubs.principalCounts)
+	assert.Empty(t, ws.urlSubs.principalWorkers)
+	assert.Zero(t, ws.urlSubs.workers)
+	assert.Zero(t, ws.subscriptionManager.Metrics().Connections)
+	assert.Equal(t, uint64(1), ws.urlSubs.metricsSnapshot().CapacityRejects)
+}
+
+func TestRPCSub_PrincipalWorkerCapDuringRetirement(t *testing.T) {
+	ws, services := newRPCSubTestServer(t)
+	defer ws.urlSubs.Close()
+	ws.urlSubs.maxEntries = 8
+	ws.urlSubs.maxWorkers = 8
+	ws.urlSubs.maxPerPrincipal = 1
+
+	transport := &blockingRPCSubTransport{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	ws.urlSubs.client.Transport = transport
+	ctx := adminCtx(services)
+	ctx.ClientIP = "principal-retiring"
+	first := types.SubscriptionRequest{
+		URL: "http://127.0.0.1:18081/blocked", Streams: []types.SubscriptionType{types.SubLedger},
+	}
+	replacement := types.SubscriptionRequest{
+		URL: "http://127.0.0.1:18082/replacement", Streams: []types.SubscriptionType{types.SubLedger},
+	}
+	_, rpcErr := ws.urlSubs.Subscribe(ctx, first)
+	require.Nil(t, rpcErr)
+
+	data, err := json.Marshal(map[string]any{"type": "ledgerClosed"})
+	require.NoError(t, err)
+	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data)
+	select {
+	case <-transport.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for blocked delivery")
+	}
+
+	unsubDone := make(chan *types.RpcError, 1)
+	go func() {
+		_, unsubErr := ws.urlSubs.Unsubscribe(ctx, first)
+		unsubDone <- unsubErr
+	}()
+
+	assert.Eventually(t, func() bool {
+		ws.urlSubs.mu.Lock()
+		defer ws.urlSubs.mu.Unlock()
+		return len(ws.urlSubs.subs) == 0 && ws.urlSubs.principalCounts[ctx.ClientIP] == 0 && ws.urlSubs.principalWorkers[ctx.ClientIP] == 1
+	}, time.Second, time.Millisecond, "retiring worker must retain the principal charge")
+
+	maxLive := 0
+	for i := 0; i < 100; i++ {
+		_, rpcErr = ws.urlSubs.Subscribe(ctx, replacement)
+		require.NotNil(t, rpcErr, "replacement %d should remain blocked while the old worker is retiring", i)
+		assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+		ws.urlSubs.mu.Lock()
+		live := ws.urlSubs.principalWorkers[ctx.ClientIP]
+		ws.urlSubs.mu.Unlock()
+		if live > maxLive {
+			maxLive = live
+		}
+	}
+	assert.LessOrEqual(t, maxLive, ws.urlSubs.maxPerPrincipal)
+
+	close(transport.release)
+	select {
+	case unsubErr := <-unsubDone:
+		require.Nil(t, unsubErr)
+	case <-time.After(2 * time.Second):
+		t.Fatal("unsubscribe did not join the retiring worker")
+	}
+
+	ws.urlSubs.mu.Lock()
+	live := ws.urlSubs.principalWorkers[ctx.ClientIP]
+	ws.urlSubs.mu.Unlock()
+	assert.Zero(t, live)
+	_, rpcErr = ws.urlSubs.Subscribe(ctx, replacement)
+	require.Nil(t, rpcErr, "replacement should fit once the old worker exits")
+	_, rpcErr = ws.urlSubs.Unsubscribe(ctx, replacement)
+	require.Nil(t, rpcErr)
+}
+
+func TestRPCSub_ConcurrentSubscribeUnsubscribeWorkerAccounting(t *testing.T) {
+	ws, services := newRPCSubTestServer(t)
+	const (
+		goroutines = 8
+		iterations = 20
+	)
+	ws.urlSubs.maxEntries = goroutines
+	ws.urlSubs.maxWorkers = goroutines
+	ws.urlSubs.maxPerPrincipal = goroutines
+
+	sinks := make([]*rpcSubSink, goroutines)
+	for i := range sinks {
+		sinks[i] = newRPCSubSink(t)
+	}
+
+	var wg sync.WaitGroup
+	for _, sink := range sinks {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx := adminCtx(services)
+			ctx.ClientIP = sink.srv.URL
+			request := types.SubscriptionRequest{URL: sink.srv.URL, Streams: []types.SubscriptionType{types.SubLedger}}
+			for i := 0; i < iterations; i++ {
+				if _, rpcErr := ws.urlSubs.Subscribe(ctx, request); rpcErr != nil {
+					t.Errorf("subscribe iteration %d: %v", i, rpcErr)
+					return
+				}
+				if _, rpcErr := ws.urlSubs.Unsubscribe(ctx, request); rpcErr != nil {
+					t.Errorf("unsubscribe iteration %d: %v", i, rpcErr)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	ws.urlSubs.mu.Lock()
+	workers, entries := ws.urlSubs.workers, len(ws.urlSubs.subs)
+	ws.urlSubs.mu.Unlock()
+	assert.Zero(t, workers)
+	assert.Zero(t, entries)
+}
+
+func TestRPCSub_DeliveryObservability(t *testing.T) {
+	metrics := &rpcSubMetrics{}
+	conn := subscription.NewConnection("observability", make(chan []byte, rpcSubQueueLimit))
+	conn.SetSendObserver(func(queued bool) {
+		if queued {
+			metrics.recordQueued("observability")
+		} else {
+			metrics.recordDropped("observability")
+		}
+	})
+	data, _ := json.Marshal(map[string]any{"type": "ledgerClosed"})
+	for i := 0; i < rpcSubQueueLimit+4; i++ {
+		conn.TrySend(data)
+	}
+	snapshot := metrics.snapshot()
+	assert.Equal(t, uint64(rpcSubQueueLimit), snapshot.Queued)
+	assert.Equal(t, uint64(4), snapshot.Dropped)
+
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer failing.Close()
+	failed := &rpcSub{endpoint: failing.URL, client: failing.Client(), ctx: context.Background(), metrics: &rpcSubMetrics{}}
+	failed.deliver([]byte(`{"method":"event"}`))
+	assert.Equal(t, uint64(1), failed.metrics.snapshot().DeliveryFailures)
+
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", failing.URL)
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+	redirectClient := redirect.Client()
+	redirectClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	redirected := &rpcSub{endpoint: redirect.URL, client: redirectClient, ctx: context.Background(), metrics: &rpcSubMetrics{}}
+	redirected.deliver([]byte(`{"method":"event"}`))
+	assert.Equal(t, uint64(1), redirected.metrics.snapshot().DeliveryFailures)
+}
+
+func TestRPCSub_ProductionClientTreatsRedirectAsFailure(t *testing.T) {
+	ws, services := newRPCSubTestServer(t)
+	defer ws.urlSubs.Close()
+	redirectHits := make(chan struct{}, 1)
+	targetHits := make(chan struct{}, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetHits <- struct{}{}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case redirectHits <- struct{}{}:
+		default:
+		}
+		w.Header().Set("Location", target.URL)
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+
+	_, rpcErr := subscribeURL(t, services, `{"url":"`+redirect.URL+`","streams":["ledger"]}`)
+	require.Nil(t, rpcErr)
+	data, err := json.Marshal(map[string]any{"type": "ledgerClosed"})
+	require.NoError(t, err)
+	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data)
+	select {
+	case <-redirectHits:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for production URL client request")
+	}
+	assert.Eventually(t, func() bool {
+		return ws.urlSubs.metricsSnapshot().DeliveryFailures == 1
+	}, time.Second, time.Millisecond)
+	select {
+	case <-targetHits:
+		t.Fatal("redirect target must not receive a request")
+	default:
+	}
+}
+
+func TestRPCSub_MalformedStreamKeepsCreatedEntry(t *testing.T) {
 	ws, services := newRPCSubTestServer(t)
 	sink := newRPCSubSink(t)
 
 	_, rpcErr := subscribeURL(t, services, `{"url":"`+sink.srv.URL+`","streams":["nonsense"]}`)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcSTREAM_MALFORMED, rpcErr.Code)
-	assert.Equal(t, 1, ws.SubscriptionManager().ConnectionCount(),
-		"failed stream parse leaves the freshly created url entry, like rippled")
+	assert.Equal(t, uint64(1), ws.SubscriptionManager().Metrics().Connections,
+		"URL registration precedes stream validation")
 }
 
 // TestRPCSub_CloseStopsDelivery verifies registry shutdown through
@@ -444,49 +1146,145 @@ func TestRPCSub_CloseStopsDelivery(t *testing.T) {
 	require.Nil(t, rpcErr)
 
 	require.NoError(t, ws.Close(t.Context()))
-	assert.Equal(t, 0, ws.SubscriptionManager().ConnectionCount())
+	assert.Zero(t, ws.SubscriptionManager().Metrics().Connections)
 
 	data, _ := json.Marshal(map[string]any{"type": "ledgerClosed"})
-	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
+	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data)
 	sink.expectNone(t)
 }
 
-func TestRPCSub_ConcurrentCloseWaitsForDeliveryLoops(t *testing.T) {
-	ws, _ := newRPCSubTestServer(t)
-	sub := &rpcSub{
-		conn:     &types.Connection{ID: "blocked-rpcsub"},
-		done:     make(chan struct{}),
-		finished: make(chan struct{}),
+func TestRPCSub_CloseCancelsInFlightDelivery(t *testing.T) {
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		close(started)
+		<-r.Context().Done()
+		close(canceled)
+	}))
+	t.Cleanup(sink.Close)
+
+	ws, services := newRPCSubTestServer(t)
+	_, rpcErr := subscribeURL(t, services, `{"url":"`+sink.URL+`","streams":["ledger"]}`)
+	require.Nil(t, rpcErr)
+	ws.urlSubs.mu.Lock()
+	sub := ws.urlSubs.subs[sink.URL]
+	ws.urlSubs.mu.Unlock()
+	require.NotNil(t, sub)
+	data, err := json.Marshal(map[string]any{"type": "ledgerClosed"})
+	require.NoError(t, err)
+	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data)
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for in-flight delivery")
 	}
-	ws.urlSubs.subs["blocked"] = sub
 
-	firstDone := make(chan struct{})
+	closeDone := make(chan error, 1)
 	go func() {
-		ws.urlSubs.Close()
-		close(firstDone)
-	}()
-	<-sub.done
-
-	secondDone := make(chan struct{})
-	go func() {
-		ws.urlSubs.Close()
-		close(secondDone)
+		closeDone <- ws.Close(t.Context())
 	}()
 	select {
-	case <-secondDone:
-		t.Error("concurrent Close returned before the delivery loop finished")
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not cancel and join in-flight delivery")
+	}
+	assert.Error(t, sub.ctx.Err())
+	select {
+	case <-canceled:
+	case <-time.After(2 * time.Second):
+		sink.CloseClientConnections()
+		t.Fatal("in-flight request context was not canceled")
+	}
+}
+
+func TestRPCSub_CloseJoinsRetiringWorker(t *testing.T) {
+	ws, services := newRPCSubTestServer(t)
+	ws.urlSubs.maxEntries = 4
+	ws.urlSubs.maxWorkers = 4
+	ws.urlSubs.maxPerPrincipal = 1
+	transport := &blockingRPCSubTransport{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	ws.urlSubs.client.Transport = transport
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			close(transport.release)
+		}
+		ws.urlSubs.Close()
+	})
+
+	ctx := adminCtx(services)
+	ctx.ClientIP = "principal-close"
+	request := types.SubscriptionRequest{
+		URL: "http://127.0.0.1:18084/blocked", Streams: []types.SubscriptionType{types.SubLedger},
+	}
+	_, rpcErr := ws.urlSubs.Subscribe(ctx, request)
+	require.Nil(t, rpcErr)
+	ws.urlSubs.mu.Lock()
+	sub := ws.urlSubs.subs[request.URL]
+	ws.urlSubs.mu.Unlock()
+	require.NotNil(t, sub)
+	data, err := json.Marshal(map[string]any{"type": "ledgerClosed"})
+	require.NoError(t, err)
+	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data)
+	select {
+	case <-transport.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for blocked delivery")
+	}
+
+	unsubDone := make(chan *types.RpcError, 1)
+	go func() {
+		_, unsubErr := ws.urlSubs.Unsubscribe(ctx, request)
+		unsubDone <- unsubErr
+	}()
+	assert.Eventually(t, func() bool {
+		ws.urlSubs.mu.Lock()
+		defer ws.urlSubs.mu.Unlock()
+		return len(ws.urlSubs.subs) == 0 && ws.urlSubs.principalWorkers[ctx.ClientIP] == 1
+	}, time.Second, time.Millisecond)
+
+	closeDone := make(chan struct{})
+	go func() {
+		ws.urlSubs.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+		t.Fatal("Close returned while a removed worker was still retiring")
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	close(sub.finished)
+	close(transport.release)
+	released = true
 	select {
-	case <-firstDone:
-	case <-time.After(time.Second):
-		t.Fatal("first Close did not return after the delivery loop finished")
+	case unsubErr := <-unsubDone:
+		require.Nil(t, unsubErr)
+	case <-time.After(2 * time.Second):
+		t.Fatal("unsubscribe did not join the retiring worker")
 	}
 	select {
-	case <-secondDone:
-	case <-time.After(time.Second):
-		t.Fatal("concurrent Close did not join the delivery loop")
+	case <-closeDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not join the retiring worker")
+	}
+
+	ws.urlSubs.mu.Lock()
+	workers := ws.urlSubs.workers
+	principalWorkers := ws.urlSubs.principalWorkers[ctx.ClientIP]
+	ws.urlSubs.mu.Unlock()
+	assert.Zero(t, workers)
+	assert.Zero(t, principalWorkers)
+	select {
+	case <-sub.finished:
+	default:
+		t.Fatal("Close returned before the worker signaled finished")
 	}
 }

@@ -401,7 +401,7 @@ func TestGetAccountObjects_TypeFilterAndErrors(t *testing.T) {
 	svc := newOfferTestService(t)
 	issuerAddr, _ := addressFromBytes(t, 0x10)
 	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 0)
-	ownerAddr, _ := addressFromBytes(t, 0x20)
+	ownerAddr, ownerID := addressFromBytes(t, 0x20)
 	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
 
 	insertOffer(t, svc, ownerAddr, 1,
@@ -500,6 +500,25 @@ func TestGetAccountObjects_TypeFilterAndErrors(t *testing.T) {
 		_, err := svc.GetAccountObjects(context.Background(), stranger, "current", "", 0, "")
 		if !errors.Is(err, svcerr.ErrAccountNotFound) {
 			t.Fatalf("want ErrAccountNotFound, got %v", err)
+		}
+	})
+
+	t.Run("malformed signer list type is returned as an error", func(t *testing.T) {
+		signerKey := keylet.SignerList(ownerID)
+		malformed := make([]byte, 12)
+		malformed[0] = 0x11
+		malformed[1] = 0xff
+		malformed[2] = 0xff
+		if err := svc.openLedger.Insert(signerKey, malformed); err != nil {
+			t.Fatalf("insert malformed signer list: %v", err)
+		}
+		if _, err := state.DirInsert(svc.openLedger, keylet.OwnerDir(ownerID), signerKey.Key, false, nil); err != nil {
+			t.Fatalf("owner-dir insert malformed signer list: %v", err)
+		}
+
+		_, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "SignerList", 0, "")
+		if err == nil {
+			t.Fatal("malformed signer list type must not be silently skipped")
 		}
 	})
 }

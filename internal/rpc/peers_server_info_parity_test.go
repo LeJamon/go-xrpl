@@ -12,13 +12,18 @@ import (
 )
 
 type stubPeerSource struct {
-	peers   []map[string]any
-	cluster map[string]any
+	peers                  []map[string]any
+	cluster                map[string]any
+	criticalFailuresLocal  uint64
+	criticalFailuresShared uint64
 }
 
 func (s *stubPeerSource) PeersJSON() []map[string]any { return s.peers }
 func (s *stubPeerSource) ClusterJSON() map[string]any { return s.cluster }
 func (s *stubPeerSource) PeerCount() int              { return len(s.peers) }
+func (s *stubPeerSource) OutboundCriticalQueueFailures() (uint64, uint64) {
+	return s.criticalFailuresLocal, s.criticalFailuresShared
+}
 
 func TestPeersAndServerInfoShareSource(t *testing.T) {
 	src := &stubPeerSource{

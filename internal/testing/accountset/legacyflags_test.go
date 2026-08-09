@@ -12,10 +12,6 @@ import (
 // bits (tfRequireDestTag/tfOptionalDestTag, tfDisallowXRP/tfAllowXRP,
 // tfOptionalAuth) drive the corresponding ledger flags, with no asf
 // SetFlag/ClearFlag field present.
-//
-// Reference: rippled SetAccount.cpp doApply() lines 326-339 — bSetRequireDest,
-// bClearRequireDest, bSetDisallowXRP, bClearDisallowXRP, bClearRequireAuth all
-// OR the legacy tx Flags bit with the asf form.
 func TestAccountSet_LegacyTxFlags(t *testing.T) {
 	t.Run("RequireDestTag", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
@@ -88,9 +84,6 @@ func TestAccountSet_LegacyTxFlags(t *testing.T) {
 // TestAccountSet_ZeroFlagsNoOp verifies that an AccountSet carrying explicit
 // SetFlag:0 and ClearFlag:0 is a valid no-op (tesSUCCESS), not a temINVALID_FLAG
 // "set and clear same flag" rejection.
-//
-// Reference: rippled SetAccount.cpp preflight() lines 80-84 — the contradiction
-// check only fires when uSetFlag != 0.
 func TestAccountSet_ZeroFlagsNoOp(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	alice := jtx.NewAccount("alice")

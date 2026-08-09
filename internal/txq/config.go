@@ -1,5 +1,9 @@
 package txq
 
+import "fmt"
+
+const maxLedgersInQueue = 1 << 20
+
 // Config holds configuration for the transaction queue.
 // These values control queue behavior and fee escalation.
 type Config struct {
@@ -35,8 +39,11 @@ type Config struct {
 	TargetTxnInLedger uint32
 
 	// MaximumTxnInLedger is an optional maximum for transactions per ledger
-	// before fee escalation kicks in. If zero, there's no explicit maximum.
+	// before fee escalation kicks in.
 	MaximumTxnInLedger uint32
+	// MaximumTxnInLedgerSet distinguishes absence from an explicitly configured
+	// zero. A nonzero value also implies presence for direct Config literals.
+	MaximumTxnInLedgerSet bool
 
 	// NormalConsensusIncreasePercent is the percentage to increase expected
 	// ledger size when ledgers close normally with more transactions than expected.
@@ -57,6 +64,56 @@ type Config struct {
 
 	// Standalone indicates if running in standalone mode (relaxes some validation).
 	Standalone bool
+}
+
+// normalize validates the queue configuration once at construction and
+// returns the effective values used by both admission and fee metrics.  A
+// zero ledger history cannot support the circular fee history and is rejected
+// rather than silently replaced with a default.
+func (c Config) normalize() (Config, error) {
+	if c.LedgersInQueue == 0 {
+		return Config{}, fmt.Errorf("transaction queue: ledgers in queue must be positive")
+	}
+	if c.LedgersInQueue > maxLedgersInQueue {
+		return Config{}, fmt.Errorf("transaction queue: ledgers in queue exceeds allocation cap (%d)", maxLedgersInQueue)
+	}
+	// The active mode selects the effective minimum used by fee escalation.
+	effectiveMin := c.MinimumTxnInLedger
+	if c.Standalone {
+		effectiveMin = c.MinimumTxnInLedgerStandalone
+	}
+	if c.TargetTxnInLedger < effectiveMin {
+		c.TargetTxnInLedger = effectiveMin
+	}
+	if c.MaximumTxnInLedger != 0 {
+		c.MaximumTxnInLedgerSet = true
+	}
+	if c.MaximumTxnInLedgerSet {
+		if c.MaximumTxnInLedger < c.MinimumTxnInLedger {
+			return Config{}, fmt.Errorf("transaction queue: minimum transactions in ledger (%d) exceeds maximum (%d)", c.MinimumTxnInLedger, c.MaximumTxnInLedger)
+		}
+		if c.MaximumTxnInLedger < c.MinimumTxnInLedgerStandalone {
+			return Config{}, fmt.Errorf("transaction queue: standalone minimum transactions in ledger (%d) exceeds maximum (%d)", c.MinimumTxnInLedgerStandalone, c.MaximumTxnInLedger)
+		}
+		if c.MaximumTxnInLedger < c.TargetTxnInLedger {
+			c.MaximumTxnInLedger = c.TargetTxnInLedger
+		}
+	}
+	// Consensus adjustment percentages use rippled's bounded ranges to avoid
+	// arithmetic wrap. RetrySequencePercent is an operator-supplied fee bump
+	// and is intentionally preserved verbatim.
+	if c.NormalConsensusIncreasePercent > 1000 {
+		c.NormalConsensusIncreasePercent = 1000
+	}
+	if c.SlowConsensusDecreasePercent > 100 {
+		c.SlowConsensusDecreasePercent = 100
+	}
+	return c, nil
+}
+
+func (c Config) Validate() error {
+	_, err := c.normalize()
+	return err
 }
 
 // DefaultConfig returns the default TxQ configuration matching rippled defaults.

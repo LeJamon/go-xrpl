@@ -2,10 +2,45 @@ package message
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
+	"testing/iotest"
 )
+
+var _ interface{ HeaderSize() int } = Header{}
+
+func readTestMessage(r io.Reader) (*Header, []byte, error) {
+	header, err := ReadHeader(r)
+	if err != nil {
+		return nil, nil, err
+	}
+	payload, err := ReadPayload(r, *header)
+	if err != nil {
+		return nil, nil, err
+	}
+	return header, payload, nil
+}
+
+func rawTestHeader(payloadSize uint32, msgType MessageType, algorithm CompressionAlgorithm, uncompressedSize uint32) []byte {
+	size := HeaderSizeUncompressed
+	if algorithm != AlgorithmNone {
+		size = HeaderSizeCompressed
+	}
+	buf := make([]byte, size)
+	firstFour := payloadSize
+	if algorithm != AlgorithmNone {
+		firstFour |= uint32(algorithm) << 24
+	}
+	binary.BigEndian.PutUint32(buf[:4], firstFour)
+	binary.BigEndian.PutUint16(buf[4:6], uint16(msgType))
+	if algorithm != AlgorithmNone {
+		binary.BigEndian.PutUint32(buf[6:10], uncompressedSize)
+	}
+	return buf
+}
 
 func TestHeaderEncodeDecodeUncompressed(t *testing.T) {
 	tests := []struct {
@@ -96,8 +131,177 @@ func TestHeaderEncodeDecodeCompressed(t *testing.T) {
 func TestHeaderTooLarge(t *testing.T) {
 	buf := make([]byte, HeaderSizeUncompressed)
 	err := EncodeHeader(buf, MaxPayloadSize+1, TypePing, AlgorithmNone, 0)
-	if err != ErrMessageTooLarge {
+	if !errors.Is(err, ErrMessageTooLarge) {
 		t.Errorf("Expected ErrMessageTooLarge, got %v", err)
+	}
+}
+
+func TestEncodeHeaderRejectsUnknownAlgorithmsWithoutMutation(t *testing.T) {
+	for _, raw := range []CompressionAlgorithm{0x01, 0x10, 0x80, 0x94, 0xA0, 0xF0} {
+		t.Run(fmt.Sprintf("%#02x", raw), func(t *testing.T) {
+			buf := bytes.Repeat([]byte{0x5a}, HeaderSizeCompressed)
+			before := append([]byte(nil), buf...)
+			err := EncodeHeader(buf, 1, TypePing, raw, 1)
+			if !errors.Is(err, ErrUnknownCompression) {
+				t.Fatalf("EncodeHeader error = %v, want ErrUnknownCompression", err)
+			}
+			if !bytes.Equal(buf, before) {
+				t.Fatal("EncodeHeader mutated destination")
+			}
+		})
+	}
+}
+
+func TestHeaderClaimBoundariesAreSymmetric(t *testing.T) {
+	tests := []struct {
+		name             string
+		payloadSize      uint32
+		msgType          MessageType
+		algorithm        CompressionAlgorithm
+		uncompressedSize uint32
+		wantErr          bool
+	}{
+		{"ping exact", 2048, TypePing, AlgorithmNone, 0, false},
+		{"ping over", 2049, TypePing, AlgorithmNone, 0, true},
+		{"ping compressed wire over", 2049, TypePing, AlgorithmLZ4, 100, true},
+		{"ping compressed claim over", 100, TypePing, AlgorithmLZ4, 2049, true},
+		{"proof exact", largeMsgMax, TypeProofPathResponse, AlgorithmLZ4, largeMsgMax, false},
+		{"proof over", 100, TypeProofPathResponse, AlgorithmLZ4, largeMsgMax + 1, true},
+		{"replay above proof", 100, TypeReplayDeltaResponse, AlgorithmLZ4, largeMsgMax + 1, false},
+		{"replay universal exact", 100, TypeReplayDeltaResponse, AlgorithmLZ4, MaxMessageSize, false},
+		{"replay universal over", 100, TypeReplayDeltaResponse, AlgorithmLZ4, MaxMessageSize + 1, true},
+		{"wire representable exact", MaxPayloadSize, TypeReplayDeltaResponse, AlgorithmLZ4, MaxMessageSize, false},
+		{"wire unrepresentable", MaxPayloadSize + 1, TypeReplayDeltaResponse, AlgorithmLZ4, MaxMessageSize, true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			buf := bytes.Repeat([]byte{0x5a}, HeaderSizeCompressed)
+			before := append([]byte(nil), buf...)
+			err := EncodeHeader(buf, test.payloadSize, test.msgType, test.algorithm, test.uncompressedSize)
+			if test.wantErr {
+				if !errors.Is(err, ErrMessageTooLarge) {
+					t.Fatalf("EncodeHeader error = %v, want ErrMessageTooLarge", err)
+				}
+				if !bytes.Equal(buf, before) {
+					t.Fatal("EncodeHeader mutated destination")
+				}
+			} else if err != nil {
+				t.Fatalf("EncodeHeader error = %v", err)
+			}
+
+			raw := rawTestHeader(test.payloadSize, test.msgType, test.algorithm, test.uncompressedSize)
+			_, readErr := ReadHeader(bytes.NewReader(raw))
+			if test.payloadSize > MaxPayloadSize {
+				if !errors.Is(readErr, ErrInvalidHeader) {
+					t.Fatalf("ReadHeader error = %v, want ErrInvalidHeader", readErr)
+				}
+				return
+			}
+			if test.wantErr && !errors.Is(readErr, ErrMessageTooLarge) {
+				t.Fatalf("ReadHeader error = %v, want ErrMessageTooLarge", readErr)
+			}
+			if !test.wantErr && readErr != nil {
+				t.Fatalf("ReadHeader error = %v", readErr)
+			}
+		})
+	}
+}
+
+func TestBuildWireMessagePingBoundary(t *testing.T) {
+	frame, err := BuildWireMessage(TypePing, make([]byte, 2048))
+	if err != nil {
+		t.Fatalf("BuildWireMessage exact boundary: %v", err)
+	}
+	if _, err := ReadHeader(bytes.NewReader(frame)); err != nil {
+		t.Fatalf("ReadHeader exact boundary: %v", err)
+	}
+	if _, err := BuildWireMessage(TypePing, make([]byte, 2049)); !errors.Is(err, ErrMessageTooLarge) {
+		t.Fatalf("BuildWireMessage over boundary error = %v, want ErrMessageTooLarge", err)
+	}
+}
+
+func TestReplayAndProofOutboundBoundaries(t *testing.T) {
+	payload := make([]byte, largeMsgMax+1)
+	replayFrame, err := BuildWireMessage(TypeReplayDeltaResponse, payload)
+	if err != nil {
+		t.Fatalf("BuildWireMessage replay above proof limit: %v", err)
+	}
+	if _, err := ReadHeader(bytes.NewReader(replayFrame)); err != nil {
+		t.Fatalf("ReadHeader replay above proof limit: %v", err)
+	}
+	if _, err := BuildWireMessage(TypeProofPathResponse, payload); !errors.Is(err, ErrMessageTooLarge) {
+		t.Fatalf("BuildWireMessage proof above limit error = %v, want ErrMessageTooLarge", err)
+	}
+
+	replayFrame, err = EncodeFrame(&ReplayDeltaResponse{Transactions: [][]byte{payload}})
+	if err != nil {
+		t.Fatalf("EncodeFrame replay above proof limit: %v", err)
+	}
+	replayHeader, err := ReadHeader(bytes.NewReader(replayFrame))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayHeader.PayloadSize <= largeMsgMax {
+		t.Fatalf("replay protobuf payload = %d, want above %d", replayHeader.PayloadSize, largeMsgMax)
+	}
+
+	if _, err := EncodeFrame(&ProofPathResponse{MapType: LedgerMapTransaction, Path: [][]byte{payload}}); !errors.Is(err, ErrMessageTooLarge) {
+		t.Fatalf("EncodeFrame proof above limit error = %v, want ErrMessageTooLarge", err)
+	}
+}
+
+func TestPartialReadsPreserveTruncationAndCause(t *testing.T) {
+	cause := errors.New("reader failed")
+	compressed := rawTestHeader(1, TypeTransaction, AlgorithmLZ4, 100)
+	payloadHeader, err := BuildWireMessage(TypePing, []byte{1, 2, 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name      string
+		read      func() error
+		wantCause error
+	}{
+		{
+			name: "base header EOF",
+			read: func() error {
+				_, err := ReadHeader(bytes.NewReader(nil))
+				return err
+			},
+			wantCause: io.EOF,
+		},
+		{
+			name: "compressed suffix unexpected EOF",
+			read: func() error {
+				_, err := ReadHeader(bytes.NewReader(compressed[:HeaderSizeUncompressed+2]))
+				return err
+			},
+			wantCause: io.ErrUnexpectedEOF,
+		},
+		{
+			name: "payload custom cause",
+			read: func() error {
+				reader := io.MultiReader(bytes.NewReader(payloadHeader[:HeaderSizeUncompressed+1]), iotest.ErrReader(cause))
+				header, err := ReadHeader(reader)
+				if err != nil {
+					return err
+				}
+				_, err = ReadPayload(reader, *header)
+				return err
+			},
+			wantCause: cause,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.read()
+			if !errors.Is(err, ErrTruncatedMessage) || !errors.Is(err, test.wantCause) {
+				t.Fatalf("error = %v, want ErrTruncatedMessage and %v", err, test.wantCause)
+			}
+		})
 	}
 }
 
@@ -156,7 +360,7 @@ func TestDecodeHeaderFramingMarker(t *testing.T) {
 			buf[0] = tt.firstByte
 
 			header, err := DecodeHeader(buf)
-			if err != tt.wantErr {
+			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("DecodeHeader(first byte %#02x) error = %v, want %v", tt.firstByte, err, tt.wantErr)
 			}
 			if tt.wantErr != nil {
@@ -170,7 +374,7 @@ func TestDecodeHeaderFramingMarker(t *testing.T) {
 	}
 }
 
-func TestReadWriteMessage(t *testing.T) {
+func TestBuildAndReadFrame(t *testing.T) {
 	tests := []struct {
 		name    string
 		msgType MessageType
@@ -183,18 +387,14 @@ func TestReadWriteMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var buf bytes.Buffer
-
-			// Write message
-			err := WriteMessage(&buf, tt.msgType, tt.payload)
+			frame, err := BuildWireMessage(tt.msgType, tt.payload)
 			if err != nil {
-				t.Fatalf("WriteMessage failed: %v", err)
+				t.Fatalf("BuildWireMessage failed: %v", err)
 			}
 
-			// Read message
-			header, payload, err := ReadMessage(&buf)
+			header, payload, err := readTestMessage(bytes.NewReader(frame))
 			if err != nil {
-				t.Fatalf("ReadMessage failed: %v", err)
+				t.Fatalf("readTestMessage failed: %v", err)
 			}
 
 			if header.MessageType != tt.msgType {
@@ -207,19 +407,13 @@ func TestReadWriteMessage(t *testing.T) {
 	}
 }
 
-func TestReadWriteMessageCompressed(t *testing.T) {
-	var buf bytes.Buffer
+func TestReadCompressedMessage(t *testing.T) {
 	payload := bytes.Repeat([]byte{0x42}, 100)
 	compressed := []byte{0x01, 0x02, 0x03} // Fake compressed data for test
-
-	err := WriteMessageCompressed(&buf, TypeTransaction, compressed, AlgorithmLZ4, uint32(len(payload)))
+	frame := append(rawTestHeader(uint32(len(compressed)), TypeTransaction, AlgorithmLZ4, uint32(len(payload))), compressed...)
+	header, readPayload, err := readTestMessage(bytes.NewReader(frame))
 	if err != nil {
-		t.Fatalf("WriteMessageCompressed failed: %v", err)
-	}
-
-	header, readPayload, err := ReadMessage(&buf)
-	if err != nil {
-		t.Fatalf("ReadMessage failed: %v", err)
+		t.Fatalf("readTestMessage failed: %v", err)
 	}
 
 	if header.MessageType != TypeTransaction {
@@ -238,23 +432,18 @@ func TestReadWriteMessageCompressed(t *testing.T) {
 
 // compressedFrame builds a complete LZ4-flagged wire frame: a small
 // on-wire payload with an arbitrary uncompressed-size claim. It lets the
-// cap tests exercise ReadMessage's size gates without materializing a
+// cap tests exercise header size gates without materializing a
 // large payload.
 func compressedFrame(t *testing.T, msgType MessageType, wirePayload []byte, uncompressedSize uint32) []byte {
 	t.Helper()
-	buf := make([]byte, HeaderSizeCompressed+len(wirePayload))
-	if err := EncodeHeader(buf, uint32(len(wirePayload)), msgType, AlgorithmLZ4, uncompressedSize); err != nil {
-		t.Fatalf("EncodeHeader: %v", err)
-	}
-	copy(buf[HeaderSizeCompressed:], wirePayload)
-	return buf
+	return append(rawTestHeader(uint32(len(wirePayload)), msgType, AlgorithmLZ4, uncompressedSize), wirePayload...)
 }
 
-// TestReadMessageCaps covers the per-type cap table and the hard 64 MB
+// TestReadFrameCaps covers the per-type cap table and the hard 64 MB
 // protocol ceiling. Bulk response types may approach the ceiling;
 // request-shaped types keep stricter hardening; nothing may exceed the
 // ceiling.
-func TestReadMessageCaps(t *testing.T) {
+func TestReadFrameCaps(t *testing.T) {
 	const mib = 1024 * 1024
 	wire := []byte{0x01, 0x02, 0x03}
 
@@ -285,53 +474,17 @@ func TestReadMessageCaps(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			frame := compressedFrame(t, tt.msgType, wire, tt.uncompSize)
-			_, _, err := ReadMessage(bytes.NewReader(frame))
+			_, _, err := readTestMessage(bytes.NewReader(frame))
 			if tt.wantTooBig {
 				if !errors.Is(err, ErrMessageTooLarge) {
-					t.Fatalf("ReadMessage err = %v, want ErrMessageTooLarge", err)
+					t.Fatalf("readTestMessage err = %v, want ErrMessageTooLarge", err)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("ReadMessage err = %v, want nil (cap should permit)", err)
+				t.Fatalf("readTestMessage err = %v, want nil (cap should permit)", err)
 			}
 		})
-	}
-}
-
-func TestReadMessageWithHeaderRunsCallbackAfterSizeValidation(t *testing.T) {
-	frame := compressedFrame(t, TypeManifests, []byte{1}, MaxMessageSize+1)
-	called := false
-
-	_, _, err := ReadMessageWithHeader(bytes.NewReader(frame), func(Header) error {
-		called = true
-		return nil
-	})
-
-	if !errors.Is(err, ErrMessageTooLarge) {
-		t.Fatalf("ReadMessageWithHeader err = %v, want ErrMessageTooLarge", err)
-	}
-	if called {
-		t.Fatal("header callback ran before rejecting an oversized payload claim")
-	}
-}
-
-func TestReadMessageWithHeaderRunsCallbackBeforePayloadRead(t *testing.T) {
-	header := make([]byte, HeaderSizeUncompressed)
-	if err := EncodeHeader(header, 10, TypeManifests, AlgorithmNone, 0); err != nil {
-		t.Fatalf("EncodeHeader: %v", err)
-	}
-	want := errors.New("stop before payload")
-
-	_, _, err := ReadMessageWithHeader(bytes.NewReader(header), func(got Header) error {
-		if got.PayloadSize != 10 || got.MessageType != TypeManifests {
-			t.Fatalf("callback header = %+v", got)
-		}
-		return want
-	})
-
-	if !errors.Is(err, want) {
-		t.Fatalf("ReadMessageWithHeader err = %v, want callback error", err)
 	}
 }
 
@@ -368,10 +521,7 @@ func TestReadHeaderDoesNotConsumePayload(t *testing.T) {
 }
 
 func TestReadHeaderAndPayloadRejectClaimsBeforeAllocation(t *testing.T) {
-	headerBytes := make([]byte, HeaderSizeUncompressed, HeaderSizeUncompressed+1)
-	if err := EncodeHeader(headerBytes, mediumMsgMax+1, TypePing, AlgorithmNone, 0); err != nil {
-		t.Fatalf("EncodeHeader: %v", err)
-	}
+	headerBytes := rawTestHeader(mediumMsgMax+1, TypePing, AlgorithmNone, 0)
 	reader := bytes.NewReader(append(headerBytes, 0x7f))
 
 	if _, err := ReadHeader(reader); !errors.Is(err, ErrMessageTooLarge) {
@@ -392,19 +542,17 @@ func TestReadHeaderAndPayloadRejectClaimsBeforeAllocation(t *testing.T) {
 }
 
 func TestHeaderSize(t *testing.T) {
-	uncompressed := &Header{Compressed: false}
-	if uncompressed.HeaderSize() != HeaderSizeUncompressed {
-		t.Errorf("Uncompressed HeaderSize = %d, want %d", uncompressed.HeaderSize(), HeaderSizeUncompressed)
+	if got := (Header{Compressed: false}).HeaderSize(); got != HeaderSizeUncompressed {
+		t.Errorf("Uncompressed HeaderSize = %d, want %d", got, HeaderSizeUncompressed)
 	}
 
-	compressed := &Header{Compressed: true}
-	if compressed.HeaderSize() != HeaderSizeCompressed {
-		t.Errorf("Compressed HeaderSize = %d, want %d", compressed.HeaderSize(), HeaderSizeCompressed)
+	if got := (Header{Compressed: true}).HeaderSize(); got != HeaderSizeCompressed {
+		t.Errorf("Compressed HeaderSize = %d, want %d", got, HeaderSizeCompressed)
 	}
 }
 
 func TestHeaderTotalSize(t *testing.T) {
-	header := &Header{
+	header := Header{
 		PayloadSize: 1000,
 		Compressed:  false,
 	}
@@ -479,14 +627,6 @@ func TestBuildWireMessage(t *testing.T) {
 	if !bytes.Equal(frame[HeaderSizeUncompressed:], payload) {
 		t.Fatalf("payload = %x, want %x", frame[HeaderSizeUncompressed:], payload)
 	}
-	var viaWriter bytes.Buffer
-	if err := WriteMessage(&viaWriter, TypeManifests, payload); err != nil {
-		t.Fatalf("WriteMessage: %v", err)
-	}
-	if !bytes.Equal(frame, viaWriter.Bytes()) {
-		t.Fatalf("frame = %x, WriteMessage = %x", frame, viaWriter.Bytes())
-	}
-
 	payload[0] = 0
 	if frame[HeaderSizeUncompressed] != 0xde {
 		t.Fatal("wire message aliases input payload")

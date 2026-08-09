@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // assetMPTID decodes an MPT asset's 24-byte issuance ID.
@@ -565,7 +566,7 @@ func spendableAsset(view tx.LedgerView, config tx.EngineConfig, accountID [20]by
 			if iss == nil {
 				return zero(), nil
 			}
-			maxAmt := entry.MaxMPTokenAmount
+			maxAmt := protocol.MaxMPTokenAmount
 			if iss.MaximumAmount != nil {
 				maxAmt = *iss.MaximumAmount
 			}
@@ -991,7 +992,7 @@ func mintShares(ctx *tx.ApplyContext, shareMPTID [24]byte, holderID [20]byte, sh
 	if perr != nil {
 		return ter.TefINTERNAL
 	}
-	maximum := entry.MaxMPTokenAmount
+	maximum := protocol.MaxMPTokenAmount
 	if issuance.MaximumAmount != nil {
 		maximum = *issuance.MaximumAmount
 	}

@@ -6,103 +6,74 @@ import (
 	"errors"
 
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
-	_ "github.com/lib/pq" // PostgreSQL driver
+	"github.com/LeJamon/go-xrpl/storage/relationaldb/internal/sqlutil"
+	_ "github.com/lib/pq"
 )
 
-// RepositoryManager implements the RepositoryManager interface for PostgreSQL
+// RepositoryManager owns PostgreSQL relational repositories and their lifecycle.
 type RepositoryManager struct {
-	db     *sql.DB
-	config *relationaldb.Config
+	db   *sqlutil.DB
+	gate sqlutil.OperationGate
 
-	// Repository instances
 	ledgerRepo             *ledgerRepository
 	transactionRepo        *transactionRepository
 	accountTransactionRepo *accountTransactionRepository
-	systemRepo             *systemRepository
-	validationRepo         *validationRepository
+	validationRepo         relationaldb.ValidationRepository
 	amendmentVoteRepo      *amendmentVoteRepository
+
+	persistHook func(stage string, index int) error
 }
 
-// NewRepositoryManager creates a new PostgreSQL repository manager
-func NewRepositoryManager(config *relationaldb.Config) (*RepositoryManager, error) {
+const persistLedgerLockNamespace int64 = 0x5852504c // XRPL
+
+var _ relationaldb.RepositoryManager = (*RepositoryManager)(nil)
+
+// NewRepositoryManager opens and migrates a PostgreSQL repository.
+func NewRepositoryManager(ctx context.Context, config *relationaldb.Config) (*RepositoryManager, error) {
+	if config == nil {
+		return nil, relationaldb.NewConfigurationError("new_repository_manager", "configuration is required", nil)
+	}
 	if err := config.Validate(); err != nil {
 		return nil, relationaldb.NewConfigurationError("new_repository_manager", "invalid configuration", err)
 	}
-
-	return &RepositoryManager{
-		config: config,
-	}, nil
-}
-
-// Open connects to PostgreSQL, configures the connection pool, and initializes
-// the repositories.
-func (rm *RepositoryManager) Open(ctx context.Context) error {
-	connStr, err := rm.config.BuildConnectionString()
+	connStr, err := config.BuildConnectionString()
 	if err != nil {
-		return relationaldb.NewConfigurationError("open", "failed to build connection string", err)
+		return nil, relationaldb.NewConfigurationError("new_repository_manager", "build connection string", err)
 	}
-
-	sqlDB, err := sql.Open(rm.config.Driver, connStr)
+	raw, err := sql.Open("postgres", connStr)
 	if err != nil {
-		return relationaldb.NewConnectionError("open", "failed to open database connection", err)
+		return nil, relationaldb.NewConnectionError("new_repository_manager", "open database", err)
 	}
-
-	// Configure connection pool
-	sqlDB.SetMaxOpenConns(rm.config.MaxOpenConns)
-	sqlDB.SetMaxIdleConns(rm.config.MaxIdleConns)
-	sqlDB.SetConnMaxLifetime(rm.config.ConnMaxLifetime)
-	sqlDB.SetConnMaxIdleTime(rm.config.ConnMaxIdleTime)
-
-	// Test connection
-	ctxTimeout, cancel := context.WithTimeout(ctx, rm.config.DefaultTimeout)
+	raw.SetMaxOpenConns(config.MaxOpenConns)
+	raw.SetMaxIdleConns(config.MaxIdleConns)
+	raw.SetConnMaxLifetime(config.ConnMaxLifetime)
+	raw.SetConnMaxIdleTime(config.ConnMaxIdleTime)
+	timeoutCtx, cancel := context.WithTimeout(ctx, config.DefaultTimeout)
 	defer cancel()
-
-	if err := sqlDB.PingContext(ctxTimeout); err != nil {
-		sqlDB.Close()
-		return relationaldb.NewConnectionError("open", "failed to ping database", err)
+	if err := raw.PingContext(timeoutCtx); err != nil {
+		_ = raw.Close()
+		return nil, relationaldb.NewConnectionError("new_repository_manager", "ping database", err)
+	}
+	if err := migrate(ctx, raw); err != nil {
+		_ = raw.Close()
+		return nil, relationaldb.NewSchemaError("new_repository_manager", "migrate database", err)
 	}
 
-	rm.db = sqlDB
-
-	// Initialize schema (matches rippled's table structure)
-	if err := rm.initSchema(ctx); err != nil {
-		rm.db.Close()
-		rm.db = nil
-		return relationaldb.NewSchemaError("open", "failed to initialize schema", err)
-	}
-
+	rm := &RepositoryManager{db: sqlutil.NewDB(raw)}
 	rm.ledgerRepo = newLedgerRepository(rm.db)
 	rm.transactionRepo = newTransactionRepository(rm.db)
 	rm.accountTransactionRepo = newAccountTransactionRepository(rm.db)
-	rm.systemRepo = newSystemRepository(rm.db)
-	rm.validationRepo = newValidationRepository(rm.db)
+	rm.validationRepo = sqlutil.NewGatedValidationRepository(&rm.gate, newValidationRepository(rm.db))
 	rm.amendmentVoteRepo = newAmendmentVoteRepository(rm.db)
-
-	return nil
+	return rm, nil
 }
 
-// Close closes the database connection and clears the repository instances.
-func (rm *RepositoryManager) Close(ctx context.Context) error {
-	if rm.db == nil {
+// Close waits for active operations and closes the database.
+func (rm *RepositoryManager) Close() error {
+	if rm == nil {
 		return nil
 	}
-
-	err := rm.db.Close()
-	rm.db = nil
-
-	// Clear repository instances
-	rm.ledgerRepo = nil
-	rm.transactionRepo = nil
-	rm.accountTransactionRepo = nil
-	rm.systemRepo = nil
-	rm.validationRepo = nil
-	rm.amendmentVoteRepo = nil
-
-	if err != nil {
-		return relationaldb.NewConnectionError("close", "failed to close database connection", err)
-	}
-
-	return nil
+	return rm.gate.Close(rm.db.Close)
 }
 
 // Ledger returns the ledger repository.
@@ -115,131 +86,124 @@ func (rm *RepositoryManager) Transaction() relationaldb.TransactionRepository {
 	return rm.transactionRepo
 }
 
-// AccountTransaction returns the account-transaction repository.
+// AccountTransaction returns the account transaction repository.
 func (rm *RepositoryManager) AccountTransaction() relationaldb.AccountTransactionRepository {
 	return rm.accountTransactionRepo
 }
 
-// System returns the system repository.
-func (rm *RepositoryManager) System() relationaldb.SystemRepository {
-	return rm.systemRepo
-}
-
-// Validation returns the validation repository.
+// Validation returns the validation archive repository.
 func (rm *RepositoryManager) Validation() relationaldb.ValidationRepository {
 	return rm.validationRepo
 }
 
-// Amendment returns the amendment-vote repository.
+// Amendment returns the amendment vote repository.
 func (rm *RepositoryManager) Amendment() relationaldb.AmendmentVoteRepository {
 	return rm.amendmentVoteRepo
 }
 
-// WithTransaction runs fn inside a database transaction, committing on success
-// and rolling back on error.
-func (rm *RepositoryManager) WithTransaction(ctx context.Context, fn func(relationaldb.TransactionContext) error) error {
-	tx, err := rm.systemRepo.Begin(ctx)
+// WithTransaction invokes fn with transaction-bound repositories.
+func (rm *RepositoryManager) WithTransaction(ctx context.Context, fn func(relationaldb.TransactionRepositories) error) (err error) {
+	end, err := rm.gate.Begin()
 	if err != nil {
 		return err
 	}
-
-	defer func() {
-		if p := recover(); p != nil {
-			tx.Rollback(ctx)
-			panic(p)
-		}
-	}()
-
-	if err := fn(tx); err != nil {
-		if rbErr := tx.Rollback(ctx); rbErr != nil {
-			return errors.Join(err, rbErr)
-		}
-		return err
-	}
-
-	return tx.Commit(ctx)
+	defer end()
+	return rm.withTransaction(ctx, fn)
 }
 
-// initSchema initializes the database schema matching rippled's structure
-func (rm *RepositoryManager) initSchema(ctx context.Context) error {
-	// Schema based on rippled's SQLite tables but adapted for PostgreSQL
-	queries := []string{
-		// Ledgers table - matches rippled's Ledgers table structure
-		`CREATE TABLE IF NOT EXISTS ledgers (
-			ledger_hash BYTEA PRIMARY KEY,
-			ledger_seq BIGINT UNIQUE NOT NULL,
-			prev_hash BYTEA NOT NULL,
-			total_coins DECIMAL(20,0) NOT NULL,
-			closing_time BIGINT NOT NULL,
-			prev_closing_time BIGINT NOT NULL,
-			close_time_res INTEGER NOT NULL,
-			close_flags INTEGER NOT NULL,
-			account_set_hash BYTEA NOT NULL,
-			trans_set_hash BYTEA NOT NULL,
-			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-		)`,
-
-		// Transactions table - matches rippled's Transactions table
-		`CREATE TABLE IF NOT EXISTS transactions (
-			trans_id BYTEA PRIMARY KEY,
-			ledger_seq BIGINT NOT NULL,
-			status VARCHAR(50) NOT NULL,
-			raw_txn BYTEA NOT NULL,
-			txn_meta BYTEA,
-			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-		)`,
-
-		// AccountTransactions table - matches rippled's AccountTransactions table
-		`CREATE TABLE IF NOT EXISTS account_transactions (
-			trans_id BYTEA NOT NULL,
-			account VARCHAR(40) NOT NULL,
-			ledger_seq BIGINT NOT NULL,
-			txn_seq INTEGER NOT NULL,
-			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-			PRIMARY KEY (trans_id, account)
-		)`,
-
-		// Validations table — rippled's pre-May-2019 historical schema,
-		// augmented with seen_time + flags for receive-side forensics.
-		`CREATE TABLE IF NOT EXISTS validations (
-			ledger_seq   BIGINT NOT NULL,
-			initial_seq  BIGINT NOT NULL,
-			ledger_hash  BYTEA NOT NULL,
-			node_pubkey  BYTEA NOT NULL,
-			sign_time    BIGINT NOT NULL,
-			seen_time    BIGINT NOT NULL,
-			flags        BIGINT NOT NULL,
-			raw          BYTEA NOT NULL,
-			created_at   TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-			PRIMARY KEY (ledger_hash, node_pubkey)
-		)`,
-
-		// Operator amendment-vote preferences (one row per upvoted/vetoed
-		// amendment). Mirrors rippled's wallet.db FeatureVotes.
-		`CREATE TABLE IF NOT EXISTS feature_votes (
-			amendment VARCHAR(64) PRIMARY KEY,
-			name      TEXT NOT NULL,
-			vetoed    BOOLEAN NOT NULL
-		)`,
-
-		// Indexes matching rippled's performance optimizations
-		`CREATE INDEX IF NOT EXISTS idx_ledgers_seq ON ledgers(ledger_seq)`,
-		`CREATE INDEX IF NOT EXISTS idx_ledgers_closing_time ON ledgers(closing_time)`,
-		`CREATE INDEX IF NOT EXISTS idx_transactions_ledger_seq ON transactions(ledger_seq)`,
-		`CREATE INDEX IF NOT EXISTS idx_account_transactions_account ON account_transactions(account)`,
-		`CREATE INDEX IF NOT EXISTS idx_account_transactions_ledger_seq ON account_transactions(ledger_seq)`,
-		`CREATE INDEX IF NOT EXISTS idx_account_transactions_account_ledger_txn ON account_transactions(account, ledger_seq, txn_seq)`,
-		`CREATE INDEX IF NOT EXISTS idx_validations_seq       ON validations(ledger_seq)`,
-		`CREATE INDEX IF NOT EXISTS idx_validations_node      ON validations(node_pubkey, ledger_seq)`,
-		`CREATE INDEX IF NOT EXISTS idx_validations_sign_time ON validations(sign_time)`,
-		`CREATE INDEX IF NOT EXISTS idx_validations_initial   ON validations(initial_seq, ledger_seq)`,
+func (rm *RepositoryManager) withTransaction(ctx context.Context, fn func(relationaldb.TransactionRepositories) error) (err error) {
+	tx, err := rm.db.BeginTx(ctx, nil)
+	if err != nil {
+		return relationaldb.NewTransactionError("begin", "begin transaction", err)
 	}
+	scoped := newTransactionRepositories(tx)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			_ = tx.Rollback()
+			panic(recovered)
+		}
+	}()
+	if err := fn(scoped); err != nil {
+		return errors.Join(err, tx.Rollback())
+	}
+	if err := tx.Commit(); err != nil {
+		return relationaldb.NewTransactionError("commit", "commit transaction", err)
+	}
+	return nil
+}
 
-	for _, query := range queries {
-		if _, err := rm.db.ExecContext(ctx, query); err != nil {
-			return relationaldb.NewSchemaError("init_schema", "failed to execute schema query", err)
+// PersistValidatedLedger atomically stores a validated ledger and its indexes.
+func (rm *RepositoryManager) PersistValidatedLedger(ctx context.Context, value relationaldb.ValidatedLedger) (err error) {
+	if err := value.Validate(); err != nil {
+		return err
+	}
+	end, err := rm.gate.Begin()
+	if err != nil {
+		return err
+	}
+	defer end()
+	tx, err := rm.db.BeginTx(ctx, nil)
+	if err != nil {
+		return relationaldb.NewTransactionError("persist_validated_ledger", "begin transaction", err)
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			_ = tx.Rollback()
+			panic(recovered)
+		}
+	}()
+	lockKey := persistLedgerLockNamespace<<32 | int64(value.Ledger.Sequence)
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, lockKey); err != nil {
+		return errors.Join(
+			relationaldb.NewTransactionError("persist_validated_ledger", "acquire ledger persistence lock", err),
+			tx.Rollback(),
+		)
+	}
+	transactionRepo := newTransactionRepository(tx)
+	accountRepo := newAccountTransactionRepository(tx)
+	ledgerRepo := newLedgerRepository(tx)
+	if err := accountRepo.deleteByLedgerSequence(ctx, value.Ledger.Sequence); err != nil {
+		return errors.Join(err, tx.Rollback())
+	}
+	if err := transactionRepo.DeleteTransactionsByLedgerSeq(ctx, value.Ledger.Sequence); err != nil {
+		return errors.Join(err, tx.Rollback())
+	}
+	index := 0
+	for _, indexed := range value.Transactions {
+		if err := accountRepo.deleteByTransactionID(ctx, indexed.Transaction.Hash); err != nil {
+			return errors.Join(err, tx.Rollback())
+		}
+		if err := transactionRepo.SaveTransaction(ctx, indexed.Transaction); err != nil {
+			return errors.Join(err, tx.Rollback())
+		}
+		index++
+		if rm.persistHook != nil {
+			if err := rm.persistHook("index", index); err != nil {
+				return errors.Join(err, tx.Rollback())
+			}
+		}
+		for _, account := range indexed.Accounts {
+			if err := accountRepo.SaveAccountTransaction(ctx, account, indexed.Transaction); err != nil {
+				return errors.Join(err, tx.Rollback())
+			}
+			index++
+			if rm.persistHook != nil {
+				if err := rm.persistHook("index", index); err != nil {
+					return errors.Join(err, tx.Rollback())
+				}
+			}
 		}
 	}
-
+	if err := ledgerRepo.SaveValidatedLedger(ctx, value.Ledger); err != nil {
+		return errors.Join(err, tx.Rollback())
+	}
+	if rm.persistHook != nil {
+		if err := rm.persistHook("ledger", len(value.Transactions)); err != nil {
+			return errors.Join(err, tx.Rollback())
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return relationaldb.NewTransactionError("persist_validated_ledger", "commit transaction", err)
+	}
 	return nil
 }

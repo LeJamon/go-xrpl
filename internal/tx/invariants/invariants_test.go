@@ -10,6 +10,7 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 type stubView struct {
@@ -60,7 +61,7 @@ func TestXRPNotCreated_StrictEquality(t *testing.T) {
 	after := mustSerializeAccount(t, &state.AccountRoot{
 		Account: "rrrrrrrrrrrrrrrrrrrrrhoLvTp", Balance: 999_000, Sequence: 6,
 	})
-	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: before, After: after}}
+	entries := []InvariantEntry{{EntryType: entry.TypeAccountRoot, Before: before, After: after}}
 
 	if v := checkXRPNotCreated(TesSUCCESS, 10, entries); v == nil {
 		t.Fatalf("expected XRPNotCreated violation (net change -1000 doesn't match fee 10)")
@@ -71,7 +72,7 @@ func TestXRPNotCreated_StrictEquality(t *testing.T) {
 }
 
 func TestLedgerEntryTypesMatchAcceptsSponsorship(t *testing.T) {
-	entry := mustEncode(t, map[string]any{
+	encoded := mustEncode(t, map[string]any{
 		"LedgerEntryType":   "Sponsorship",
 		"PreviousTxnID":     strings.Repeat("0", 64),
 		"PreviousTxnLgrSeq": uint32(0),
@@ -81,7 +82,7 @@ func TestLedgerEntryTypesMatchAcceptsSponsorship(t *testing.T) {
 		"SponseeNode":       "0",
 		"Flags":             uint32(0),
 	})
-	if violation := checkLedgerEntryTypesMatch([]InvariantEntry{{EntryType: "Sponsorship", After: entry}}); violation != nil {
+	if violation := checkLedgerEntryTypesMatch([]InvariantEntry{{EntryType: entry.TypeSponsorship, After: encoded}}); violation != nil {
 		t.Fatalf("well-formed Sponsorship rejected by ledger type invariant: %v", violation)
 	}
 }
@@ -99,7 +100,7 @@ func TestValidNewAccountRoot_PermittedTypes(t *testing.T) {
 		Balance:  1_000_000,
 		Sequence: 100,
 	})
-	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: nil, After: newAcct}}
+	entries := []InvariantEntry{{EntryType: entry.TypeAccountRoot, Before: nil, After: newAcct}}
 
 	for _, txType := range []string{"Payment", "AMMCreate", "VaultCreate", "XChainAddClaimAttestation", "XChainAddAccountCreateAttestation"} {
 		if v := checkValidNewAccountRoot(txType, TesSUCCESS, entries, view, rules); v != nil {
@@ -126,7 +127,7 @@ func TestValidNewAccountRoot_XChainTypeCodesReachable(t *testing.T) {
 		Balance:  1_000_000,
 		Sequence: 100,
 	})
-	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: nil, After: newAcct}}
+	entries := []InvariantEntry{{EntryType: entry.TypeAccountRoot, Before: nil, After: newAcct}}
 
 	for _, code := range []TxType{45, 46} {
 		name := code.String()
@@ -150,7 +151,7 @@ func TestValidNewAccountRoot_WrongStartingSeq(t *testing.T) {
 		Balance:  1_000_000,
 		Sequence: 1, // should be view.seq() = 100
 	})
-	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: nil, After: bad}}
+	entries := []InvariantEntry{{EntryType: entry.TypeAccountRoot, Before: nil, After: bad}}
 	if v := checkValidNewAccountRoot("Payment", TesSUCCESS, entries, view, rules); v == nil {
 		t.Fatal("expected violation for wrong starting sequence")
 	}
@@ -163,7 +164,7 @@ func TestAccountRootsNotDeleted_VaultDelete(t *testing.T) {
 	before := mustSerializeAccount(t, &state.AccountRoot{
 		Account: "rrrrrrrrrrrrrrrrrrrrrhoLvTp", Balance: 0, Sequence: 0,
 	})
-	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: before, After: nil, IsDelete: true}}
+	entries := []InvariantEntry{{EntryType: entry.TypeAccountRoot, Before: before, After: nil, IsDelete: true}}
 	if v := checkAccountRootsNotDeleted("VaultDelete", TesSUCCESS, entries); v != nil {
 		t.Fatalf("VaultDelete: unexpected violation %v", v)
 	}
@@ -194,7 +195,7 @@ func TestValidNewAccountRoot_PseudoAccountWrongTxType(t *testing.T) {
 		Flags:    LsfDisableMaster | LsfDefaultRipple | LsfDepositAuth,
 		AMMID:    [32]byte{1},
 	})
-	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: nil, After: pseudo}}
+	entries := []InvariantEntry{{EntryType: entry.TypeAccountRoot, Before: nil, After: pseudo}}
 
 	// Payment is in the general allow-list but must be rejected for pseudo accounts.
 	if v := checkValidNewAccountRoot("Payment", TesSUCCESS, entries, view, rules); v == nil {
@@ -223,7 +224,7 @@ func TestValidNewAccountRoot_PseudoAccountWrongFlags(t *testing.T) {
 		Flags:    wrongFlags,
 		AMMID:    [32]byte{1},
 	})
-	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: nil, After: bad}}
+	entries := []InvariantEntry{{EntryType: entry.TypeAccountRoot, Before: nil, After: bad}}
 	if v := checkValidNewAccountRoot("AMMCreate", TesSUCCESS, entries, view, rules); v == nil {
 		t.Fatal("expected violation for pseudo-account with wrong flag mask")
 	}
@@ -235,7 +236,7 @@ func TestValidNewAccountRoot_PseudoAccountWrongFlags(t *testing.T) {
 		Flags:    expected,
 		AMMID:    [32]byte{1},
 	})
-	if v := checkValidNewAccountRoot("AMMCreate", TesSUCCESS, []InvariantEntry{{EntryType: "AccountRoot", Before: nil, After: good}}, view, rules); v != nil {
+	if v := checkValidNewAccountRoot("AMMCreate", TesSUCCESS, []InvariantEntry{{EntryType: entry.TypeAccountRoot, Before: nil, After: good}}, view, rules); v != nil {
 		t.Fatalf("canonical pseudo-account flags: unexpected violation %v", v)
 	}
 }
@@ -258,7 +259,7 @@ func TestValidNewAccountRoot_CrossGatingPreSingleAssetVault(t *testing.T) {
 		Flags:    LsfDisableMaster | LsfDefaultRipple | LsfDepositAuth | 0x02000000,
 		AMMID:    [32]byte{1},
 	})
-	if v := checkValidNewAccountRoot("AMMCreate", TesSUCCESS, []InvariantEntry{{EntryType: "AccountRoot", Before: nil, After: ammNew}}, view, rules); v != nil {
+	if v := checkValidNewAccountRoot("AMMCreate", TesSUCCESS, []InvariantEntry{{EntryType: entry.TypeAccountRoot, Before: nil, After: ammNew}}, view, rules); v != nil {
 		t.Fatalf("pre-singleAssetVault: unexpected violation %v", v)
 	}
 
@@ -271,7 +272,7 @@ func TestValidNewAccountRoot_CrossGatingPreSingleAssetVault(t *testing.T) {
 		Flags:    LsfDisableMaster | LsfDefaultRipple | LsfDepositAuth,
 		AMMID:    [32]byte{1},
 	})
-	if v := checkValidNewAccountRoot("AMMCreate", TesSUCCESS, []InvariantEntry{{EntryType: "AccountRoot", Before: nil, After: zeroSeq}}, view, rules); v == nil {
+	if v := checkValidNewAccountRoot("AMMCreate", TesSUCCESS, []InvariantEntry{{EntryType: entry.TypeAccountRoot, Before: nil, After: zeroSeq}}, view, rules); v == nil {
 		t.Fatal("pre-singleAssetVault: expected violation when Sequence != view.seq()")
 	}
 }
@@ -308,7 +309,7 @@ func TestNoZeroEscrow_IOUBadCurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hex.DecodeString: %v", err)
 	}
-	if v := checkNoZeroEscrow([]InvariantEntry{{EntryType: "Escrow", After: good}}); v != nil {
+	if v := checkNoZeroEscrow([]InvariantEntry{{EntryType: entry.TypeEscrow, After: good}}); v != nil {
 		t.Fatalf("good IOU escrow: unexpected violation %v", v)
 	}
 
@@ -321,7 +322,7 @@ func TestNoZeroEscrow_IOUBadCurrency(t *testing.T) {
 	copy(bad, good)
 	copy(bad[idx:idx+3], []byte{'X', 'R', 'P'})
 
-	if v := checkNoZeroEscrow([]InvariantEntry{{EntryType: "Escrow", After: bad}}); v == nil {
+	if v := checkNoZeroEscrow([]InvariantEntry{{EntryType: entry.TypeEscrow, After: bad}}); v == nil {
 		t.Fatal("expected violation: IOU escrow with bad (XRP) currency")
 	}
 }
@@ -334,14 +335,14 @@ func TestNoZeroEscrow_MPTokenIssuanceBounds(t *testing.T) {
 	good := mustSerializeMPTIssuance(t, &state.MPTokenIssuanceData{
 		Sequence: 1, OutstandingAmount: 100, LockedAmount: &locked,
 	})
-	if v := checkNoZeroEscrow([]InvariantEntry{{EntryType: "MPTokenIssuance", After: good}}); v != nil {
+	if v := checkNoZeroEscrow([]InvariantEntry{{EntryType: entry.TypeMPTokenIssuance, After: good}}); v != nil {
 		t.Fatalf("balanced issuance: unexpected violation %v", v)
 	}
 	overLocked := uint64(150)
 	bad := mustSerializeMPTIssuance(t, &state.MPTokenIssuanceData{
 		Sequence: 1, OutstandingAmount: 100, LockedAmount: &overLocked,
 	})
-	if v := checkNoZeroEscrow([]InvariantEntry{{EntryType: "MPTokenIssuance", After: bad}}); v == nil {
+	if v := checkNoZeroEscrow([]InvariantEntry{{EntryType: entry.TypeMPTokenIssuance, After: bad}}); v == nil {
 		t.Fatal("expected violation: LockedAmount > OutstandingAmount")
 	}
 }
@@ -352,7 +353,7 @@ func TestNoZeroEscrow_MPTokenIssuanceBounds(t *testing.T) {
 // would catch as tecINVARIANT_FAILED. Reference: issue #597.
 func TestXRPBalanceChecks_ParseFailure(t *testing.T) {
 	garbage := []byte{0xde, 0xad, 0xbe, 0xef}
-	entries := []InvariantEntry{{EntryType: "AccountRoot", After: garbage}}
+	entries := []InvariantEntry{{EntryType: entry.TypeAccountRoot, After: garbage}}
 	if v := checkXRPBalances(entries); v == nil {
 		t.Fatal("expected XRPBalanceChecks violation for unparseable AccountRoot SLE")
 	}
@@ -363,7 +364,7 @@ func TestXRPBalanceChecks_ParseFailure(t *testing.T) {
 // XRP-creation bug). Reference: issue #597.
 func TestXRPNotCreated_ParseFailure(t *testing.T) {
 	garbage := []byte{0xde, 0xad, 0xbe, 0xef}
-	for _, entryType := range []string{"AccountRoot", "Escrow", "PayChannel", "Sponsorship"} {
+	for _, entryType := range []entry.Type{entry.TypeAccountRoot, entry.TypeEscrow, entry.TypePayChannel, entry.TypeSponsorship} {
 		entries := []InvariantEntry{{EntryType: entryType, After: garbage}}
 		if v := checkXRPNotCreated(TesSUCCESS, 10, entries); v == nil {
 			t.Fatalf("%s: expected XRPNotCreated violation for unparseable SLE", entryType)
@@ -380,12 +381,12 @@ func TestValidAMM_ParseFailure(t *testing.T) {
 	rules := amendment.AllSupportedRules()
 	view := stubView{seq: 100}
 
-	after := []InvariantEntry{{EntryType: "AMM", After: garbage}}
+	after := []InvariantEntry{{EntryType: entry.TypeAMM, After: garbage}}
 	if v := checkValidAMM(stubTx{txType: TypeAMMDeposit}, TesSUCCESS, after, view, rules); v == nil {
 		t.Fatal("expected ValidAMM violation for unparseable AMM SLE (after)")
 	}
 
-	before := []InvariantEntry{{EntryType: "AMM", Before: garbage}}
+	before := []InvariantEntry{{EntryType: entry.TypeAMM, Before: garbage}}
 	if v := checkValidAMM(stubTx{txType: TypeAMMDeposit}, TesSUCCESS, before, view, rules); v == nil {
 		t.Fatal("expected ValidAMM violation for unparseable AMM SLE (before)")
 	}
@@ -421,13 +422,13 @@ func TestValidAMM_MissingRequiredField(t *testing.T) {
 
 	noAccount := encode(map[string]any{"LedgerEntryType": "AMM", "LPTokenBalance": lpt})
 	if v := checkValidAMM(stubTx{txType: TypeAMMDeposit}, TesSUCCESS,
-		[]InvariantEntry{{EntryType: "AMM", After: noAccount}}, view, rules); v == nil {
+		[]InvariantEntry{{EntryType: entry.TypeAMM, After: noAccount}}, view, rules); v == nil {
 		t.Fatal("expected ValidAMM violation for AMM SLE missing required Account")
 	}
 
 	noBalance := encode(map[string]any{"LedgerEntryType": "AMM", "Account": acct})
 	if v := checkValidAMM(stubTx{txType: TypeAMMDeposit}, TesSUCCESS,
-		[]InvariantEntry{{EntryType: "AMM", After: noBalance}}, view, rules); v == nil {
+		[]InvariantEntry{{EntryType: entry.TypeAMM, After: noBalance}}, view, rules); v == nil {
 		t.Fatal("expected ValidAMM violation for AMM SLE missing required LPTokenBalance")
 	}
 }

@@ -41,7 +41,7 @@ func InjectSyntheticFields(txJSON, meta map[string]any, ctx SyntheticMetadataCon
 
 	InjectDeliveredAmount(txJSON, meta, ctx)
 	insertNFTSynthetic(meta, txJSON, txType)
-	InjectMPTokenIssuanceID(txJSON, meta)
+	injectMPTokenIssuanceID(txJSON, meta)
 }
 
 func enrichSimulateMeta(meta, txJSON map[string]any, ctx SyntheticMetadataContext) {
@@ -79,9 +79,9 @@ func insertNFTSynthetic(meta, txJSON map[string]any, txType string) {
 	}
 }
 
-// InjectMPTokenIssuanceID adds the id of the MPTokenIssuance created by an
+// injectMPTokenIssuanceID adds the id of the MPTokenIssuance created by an
 // MPTokenIssuanceCreate transaction.
-func InjectMPTokenIssuanceID(txJSON, meta map[string]any) {
+func injectMPTokenIssuanceID(txJSON, meta map[string]any) {
 	if meta == nil {
 		return
 	}

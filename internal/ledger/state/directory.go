@@ -12,8 +12,8 @@ import (
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/keylet"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // DirNodeMaxPages is the maximum number of directory pages allowed
@@ -121,6 +121,19 @@ var tenTo17 = new(big.Int).Exp(big.NewInt(10), big.NewInt(17), nil)
 // Amount.Div) on roughly half of non-terminating ratios, shifting the
 // ExchangeRate baked into BookDirectory keys.
 func GetRate(offerOut, offerIn Amount) (rate uint64) {
+	return GetRateWithNumberContext(
+		offerOut,
+		offerIn,
+		NewNumberContext(MantissaScaleSmall, false),
+	)
+}
+
+// GetRateWithNumberContext calculates the encoded quality under the selected
+// ledger arithmetic semantics.
+func GetRateWithNumberContext(
+	offerOut, offerIn Amount,
+	ctx NumberContext,
+) (rate uint64) {
 	// rippled wraps getRate's divide in try/catch and returns 0 on overflow.
 	// divideIOU normalizes through the IOU/Number path, which panics on
 	// exponent overflow, so recover here to reproduce the "very bad offer" 0.
@@ -140,7 +153,16 @@ func GetRate(offerOut, offerIn Amount) (rate uint64) {
 		return 0
 	}
 
-	r := divideIOU(numVal, numOffset, denVal, denOffset, false, "", "")
+	r := divideIOUWithNumberContext(
+		numVal,
+		numOffset,
+		denVal,
+		denOffset,
+		false,
+		"",
+		"",
+		ctx,
+	)
 	if r.IsZero() {
 		return 0
 	}

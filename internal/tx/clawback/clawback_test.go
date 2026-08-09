@@ -1,9 +1,13 @@
 package clawback
 
 import (
+	"encoding/hex"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -15,6 +19,19 @@ const testMPTIssuanceID = "000000000000000000000001000000000000000000000001"
 
 func newTestMPTAmount(value int64, issuer string) state.Amount {
 	return state.NewMPTAmountWithIssuanceID(value, issuer, testMPTIssuanceID)
+}
+
+type clawbackWithTopLevelMPTID struct {
+	*Clawback
+}
+
+func (c *clawbackWithTopLevelMPTID) Flatten() (map[string]any, error) {
+	values, err := c.Clawback.Flatten()
+	if err != nil {
+		return nil, err
+	}
+	values["MPTokenIssuanceID"] = testMPTIssuanceID
+	return values, nil
 }
 
 // preflightClawback runs Clawback's preflight body in engine order: the
@@ -223,7 +240,7 @@ func TestClawbackFlatten(t *testing.T) {
 	t.Run("MPToken clawback", func(t *testing.T) {
 		clawbackTx := &Clawback{
 			BaseTx: *tx.NewBaseTx(tx.TypeClawback, "rIssuer"),
-			Amount: tx.NewIssuedAmountFromFloat64(100.0, "MPT", "rIssuer"),
+			Amount: newTestMPTAmount(100, "rIssuer"),
 			Holder: "rHolder",
 		}
 
@@ -232,6 +249,11 @@ func TestClawbackFlatten(t *testing.T) {
 
 		assert.Equal(t, "rIssuer", flat["Account"])
 		assert.Equal(t, "rHolder", flat["Holder"])
+		assert.NotContains(t, flat, "MPTokenIssuanceID")
+		amtMap, ok := flat["Amount"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "100", amtMap["value"])
+		assert.Equal(t, testMPTIssuanceID, amtMap["mpt_issuance_id"])
 	})
 }
 
@@ -249,12 +271,91 @@ func TestClawbackConstructors(t *testing.T) {
 	})
 
 	t.Run("NewMPTokenClawback", func(t *testing.T) {
-		clawbackTx := NewMPTokenClawback("rIssuer", "rHolder", "000000000000000000000001", tx.NewIssuedAmountFromFloat64(100.0, "MPT", "rIssuer"))
+		clawbackTx := NewMPTokenClawback("rIssuer", "rHolder", newTestMPTAmount(100, "rIssuer"))
 		require.NotNil(t, clawbackTx)
 		assert.Equal(t, "rIssuer", clawbackTx.Account)
 		assert.Equal(t, "rHolder", clawbackTx.Holder)
+		assert.Equal(t, testMPTIssuanceID, clawbackTx.Amount.MPTIssuanceID())
 		assert.Equal(t, tx.TypeClawback, clawbackTx.TxType())
 	})
+}
+
+func TestMPTokenClawbackWireGolden(t *testing.T) {
+	clawbackTx := NewMPTokenClawback(
+		"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"r3kmLJN5D28dHuH8vZNUZpMC43pEHpaocV",
+		newTestMPTAmount(100, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"),
+	)
+	seq := uint32(1)
+	clawbackTx.Sequence = &seq
+	clawbackTx.Fee = "10"
+
+	jsonBytes, err := json.Marshal(clawbackTx)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"Account":"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Amount":{"value":"100","mpt_issuance_id":"000000000000000000000001000000000000000000000001"},
+		"Fee":"10",
+		"Holder":"r3kmLJN5D28dHuH8vZNUZpMC43pEHpaocV",
+		"Sequence":1,
+		"TransactionType":"Clawback"
+	}`, string(jsonBytes))
+	assert.NotContains(t, string(jsonBytes), "MPTokenIssuanceID")
+
+	wire, err := tx.SerializeTransaction(clawbackTx)
+	require.NoError(t, err)
+	assert.Equal(t,
+		"12001E24000000016160000000000000006400000000000000000000000100000000000000000000000168400000000000000A73008114B5F762798A53D543A014CAF8B297CFF8F2F937E88B14550FC62003E785DC231A1058A05E56E3F09CF4E6",
+		strings.ToUpper(hex.EncodeToString(wire)),
+	)
+	hash, err := tx.ComputeTransactionHash(clawbackTx)
+	require.NoError(t, err)
+	assert.Equal(t, "5C251B4B59260C9A86355912E7767860BAFF08E6E9FD93202B305202A4ECE3A1", strings.ToUpper(hex.EncodeToString(hash[:])))
+
+	_, err = tx.ParseFromBinary(wire)
+	require.NoError(t, err)
+	flat, err := binarycodec.DecodeBytes(wire)
+	require.NoError(t, err)
+	assert.NotContains(t, flat, "MPTokenIssuanceID")
+	amountJSON, err := json.Marshal(flat["Amount"])
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"value":"100","mpt_issuance_id":"000000000000000000000001000000000000000000000001"}`, string(amountJSON))
+}
+
+func TestMPTokenClawbackTypedSerializationRejectsTopLevelIssuanceID(t *testing.T) {
+	transaction := &clawbackWithTopLevelMPTID{Clawback: NewMPTokenClawback(
+		"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"r3kmLJN5D28dHuH8vZNUZpMC43pEHpaocV",
+		newTestMPTAmount(100, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"),
+	)}
+	seq := uint32(1)
+	transaction.Sequence = &seq
+	transaction.Fee = "10"
+
+	_, err := tx.SerializeTransaction(transaction)
+	require.EqualError(t, err, "Field 'MPTokenIssuanceID' found in disallowed location.")
+}
+
+func TestMPTokenClawbackRawHashRejectsTopLevelIssuanceID(t *testing.T) {
+	transaction := NewMPTokenClawback(
+		"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"r3kmLJN5D28dHuH8vZNUZpMC43pEHpaocV",
+		newTestMPTAmount(100, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"),
+	)
+	seq := uint32(1)
+	transaction.Sequence = &seq
+	transaction.Fee = "10"
+
+	fields, err := transaction.Flatten()
+	require.NoError(t, err)
+	tx.PopulateRequiredWireFields(fields, transaction.GetCommon())
+	fields["MPTokenIssuanceID"] = testMPTIssuanceID
+	wire, err := binarycodec.EncodeBytes(fields)
+	require.NoError(t, err)
+	transaction.SetRawBytes(wire)
+
+	_, err = tx.ComputeTransactionHash(transaction)
+	require.EqualError(t, err, "Field 'MPTokenIssuanceID' found in disallowed location.")
 }
 
 // Amendment Tests
@@ -268,7 +369,7 @@ func TestClawbackRequiredAmendments(t *testing.T) {
 	})
 
 	t.Run("MPToken clawback gates on Clawback only; MPTokensV1 is a preflight-arm gate", func(t *testing.T) {
-		clawbackTx := NewMPTokenClawback("rIssuer", "rHolder", testMPTIssuanceID, newTestMPTAmount(100, "rIssuer"))
+		clawbackTx := NewMPTokenClawback("rIssuer", "rHolder", newTestMPTAmount(100, "rIssuer"))
 		amendments := clawbackTx.RequiredAmendments()
 		assert.Equal(t, [][32]byte{amendment.FeatureClawback}, amendments)
 		// MPTokensV1 is enforced inside the MPT preflight arm (temDISABLED), not

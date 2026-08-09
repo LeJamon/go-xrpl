@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
@@ -122,6 +123,20 @@ func TestRvl_CollectionSemanticHash_EmptyBlobs(t *testing.T) {
 	assert.Equal(t, []byte{0, 0, 0, 2}, h[:4])
 }
 
+func TestRvl_CollectionSemanticHashDistinguishesManifestPresence(t *testing.T) {
+	omitted := &message.ValidatorListCollection{
+		Version:  2,
+		Manifest: []byte("m"),
+		Blobs:    []message.ValidatorBlobInfo{{Blob: []byte("b"), Signature: []byte("s")}},
+	}
+	presentEmpty := &message.ValidatorListCollection{
+		Version:  2,
+		Manifest: []byte("m"),
+		Blobs:    []message.ValidatorBlobInfo{{Manifest: []byte{}, Blob: []byte("b"), Signature: []byte("s")}},
+	}
+	assert.NotEqual(t, validatorListCollectionSemanticHash(omitted), validatorListCollectionSemanticHash(presentEmpty))
+}
+
 func TestRvl_ChargePeer_None(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
 	chargePeerForDisposition(r, 1, "vl", validatorlist.Accepted)
@@ -221,7 +236,7 @@ func TestRvl_HandleVL_NilAgg(t *testing.T) {
 	vl := &message.ValidatorList{Version: 1, Manifest: []byte("m"), Blob: []byte("b"), Signature: []byte("s")}
 	r.handleValidatorList(&peermanagement.InboundMessage{
 		PeerID:  1,
-		Type:    uint16(message.TypeValidatorList),
+		Type:    message.TypeValidatorList,
 		Payload: encodePayload(t, vl),
 	})
 	assert.Empty(t, rs.getBadDataCalls())
@@ -231,7 +246,7 @@ func TestRvl_HandleVL_DecodeError(t *testing.T) {
 	r, rs := rvl_newRouterWithVL(t)
 	r.handleValidatorList(&peermanagement.InboundMessage{
 		PeerID:  5,
-		Type:    uint16(message.TypeValidatorList),
+		Type:    message.TypeValidatorList,
 		Payload: []byte{0xFF, 0xFE, 0xFD},
 	})
 	calls := rs.getBadDataCalls()
@@ -240,34 +255,32 @@ func TestRvl_HandleVL_DecodeError(t *testing.T) {
 	assert.Equal(t, "vl-decode", calls[0].reason)
 }
 
-// TestRvl_HandleVL_Untrusted charges the peer with useless-untrusted when publisher
-// is unknown (no publishers configured → Untrusted result).
-func TestRvl_HandleVL_Untrusted(t *testing.T) {
+func TestRvl_HandleVL_MalformedPublisherManifest(t *testing.T) {
 	r, rs := rvl_newRouterWithVL(t)
 	vl := &message.ValidatorList{Version: 1, Manifest: []byte("m"), Blob: []byte("b"), Signature: []byte("s")}
 	r.handleValidatorList(&peermanagement.InboundMessage{
 		PeerID:  3,
-		Type:    uint16(message.TypeValidatorList),
+		Type:    message.TypeValidatorList,
 		Payload: encodePayload(t, vl),
 	})
 	calls := rs.getBadDataCalls()
 	require.Len(t, calls, 1)
 	assert.Equal(t, uint64(3), calls[0].peerID)
-	assert.Equal(t, "vl-useless-untrusted", calls[0].reason)
+	assert.Equal(t, "vl-badsig-invalid", calls[0].reason)
 }
 
-func TestRvl_HandleVL_Duplicate(t *testing.T) {
+func TestRvl_HandleVL_MalformedPublisherManifestDuplicate(t *testing.T) {
 	r, rs := rvl_newRouterWithVL(t)
 	vl := &message.ValidatorList{Version: 1, Manifest: []byte("m2"), Blob: []byte("b2"), Signature: []byte("s2")}
 	payload := encodePayload(t, vl)
 
-	r.handleValidatorList(&peermanagement.InboundMessage{PeerID: 10, Type: uint16(message.TypeValidatorList), Payload: payload})
+	r.handleValidatorList(&peermanagement.InboundMessage{PeerID: 10, Type: message.TypeValidatorList, Payload: payload})
 	calls1 := rs.getBadDataCalls()
 	require.Len(t, calls1, 1)
-	assert.Equal(t, "vl-useless-untrusted", calls1[0].reason)
+	assert.Equal(t, "vl-badsig-invalid", calls1[0].reason)
 
 	// Second delivery from different peer — same content → dedup fires.
-	r.handleValidatorList(&peermanagement.InboundMessage{PeerID: 11, Type: uint16(message.TypeValidatorList), Payload: payload})
+	r.handleValidatorList(&peermanagement.InboundMessage{PeerID: 11, Type: message.TypeValidatorList, Payload: payload})
 	calls2 := rs.getBadDataCalls()
 	require.Len(t, calls2, 2)
 	assert.Equal(t, uint64(11), calls2[1].peerID)
@@ -281,14 +294,13 @@ func TestRvl_HandleVL_NilMsgSeen(t *testing.T) {
 	vl := &message.ValidatorList{Version: 1, Manifest: []byte("nms"), Blob: []byte("nmsb"), Signature: []byte("nmss")}
 	payload := encodePayload(t, vl)
 
-	r.handleValidatorList(&peermanagement.InboundMessage{PeerID: 50, Type: uint16(message.TypeValidatorList), Payload: payload})
-	r.handleValidatorList(&peermanagement.InboundMessage{PeerID: 51, Type: uint16(message.TypeValidatorList), Payload: payload})
+	r.handleValidatorList(&peermanagement.InboundMessage{PeerID: 50, Type: message.TypeValidatorList, Payload: payload})
+	r.handleValidatorList(&peermanagement.InboundMessage{PeerID: 51, Type: message.TypeValidatorList, Payload: payload})
 
-	// Both processed independently — two Untrusted charges, no duplicate charge.
 	calls := rs.getBadDataCalls()
 	assert.Len(t, calls, 2)
 	for _, c := range calls {
-		assert.Equal(t, "vl-useless-untrusted", c.reason)
+		assert.Equal(t, "vl-badsig-invalid", c.reason)
 	}
 }
 
@@ -297,7 +309,7 @@ func TestRvl_HandleVLC_NilAgg(t *testing.T) {
 	coll := &message.ValidatorListCollection{Version: 2, Blobs: []message.ValidatorBlobInfo{{Blob: []byte("b")}}}
 	r.handleValidatorListCollection(&peermanagement.InboundMessage{
 		PeerID:  1,
-		Type:    uint16(message.TypeValidatorListCollection),
+		Type:    message.TypeValidatorListCollection,
 		Payload: encodePayload(t, coll),
 	})
 	assert.Empty(t, rs.getBadDataCalls())
@@ -307,7 +319,7 @@ func TestRvl_HandleVLC_DecodeError(t *testing.T) {
 	r, rs := rvl_newRouterWithVL(t)
 	r.handleValidatorListCollection(&peermanagement.InboundMessage{
 		PeerID:  6,
-		Type:    uint16(message.TypeValidatorListCollection),
+		Type:    message.TypeValidatorListCollection,
 		Payload: []byte{0xFF, 0xFE, 0xFD},
 	})
 	calls := rs.getBadDataCalls()
@@ -324,7 +336,7 @@ func TestRvl_HandleVLC_WrongVersion(t *testing.T) {
 	}
 	r.handleValidatorListCollection(&peermanagement.InboundMessage{
 		PeerID:  8,
-		Type:    uint16(message.TypeValidatorListCollection),
+		Type:    message.TypeValidatorListCollection,
 		Payload: encodePayload(t, coll),
 	})
 	calls := rs.getBadDataCalls()
@@ -340,7 +352,7 @@ func TestRvl_HandleVLC_NoBlobs(t *testing.T) {
 	}
 	r.handleValidatorListCollection(&peermanagement.InboundMessage{
 		PeerID:  9,
-		Type:    uint16(message.TypeValidatorListCollection),
+		Type:    message.TypeValidatorListCollection,
 		Payload: encodePayload(t, coll),
 	})
 	calls := rs.getBadDataCalls()
@@ -353,7 +365,7 @@ func TestRvl_HandleVLC_NoBlobs(t *testing.T) {
 	assert.True(t, reasons["vl-coll-no-blobs"])
 }
 
-func TestRvl_HandleVLC_Untrusted(t *testing.T) {
+func TestRvl_HandleVLC_MalformedPublisherManifest(t *testing.T) {
 	r, rs := rvl_newRouterWithVL(t)
 	coll := &message.ValidatorListCollection{
 		Version:  2,
@@ -362,13 +374,13 @@ func TestRvl_HandleVLC_Untrusted(t *testing.T) {
 	}
 	r.handleValidatorListCollection(&peermanagement.InboundMessage{
 		PeerID:  16,
-		Type:    uint16(message.TypeValidatorListCollection),
+		Type:    message.TypeValidatorListCollection,
 		Payload: encodePayload(t, coll),
 	})
 	calls := rs.getBadDataCalls()
 	require.Len(t, calls, 1)
 	assert.Equal(t, uint64(16), calls[0].peerID)
-	assert.Equal(t, "vl-coll-useless-untrusted", calls[0].reason)
+	assert.Equal(t, "vl-coll-badsig-invalid", calls[0].reason)
 }
 
 func TestRvl_HandleVLC_Duplicate(t *testing.T) {
@@ -380,12 +392,12 @@ func TestRvl_HandleVLC_Duplicate(t *testing.T) {
 	}
 	payload := encodePayload(t, coll)
 
-	r.handleValidatorListCollection(&peermanagement.InboundMessage{PeerID: 20, Type: uint16(message.TypeValidatorListCollection), Payload: payload})
+	r.handleValidatorListCollection(&peermanagement.InboundMessage{PeerID: 20, Type: message.TypeValidatorListCollection, Payload: payload})
 	calls1 := rs.getBadDataCalls()
 	require.Len(t, calls1, 1)
 
 	// Second delivery from different peer → duplicate charge.
-	r.handleValidatorListCollection(&peermanagement.InboundMessage{PeerID: 21, Type: uint16(message.TypeValidatorListCollection), Payload: payload})
+	r.handleValidatorListCollection(&peermanagement.InboundMessage{PeerID: 21, Type: message.TypeValidatorListCollection, Payload: payload})
 	calls2 := rs.getBadDataCalls()
 	require.Len(t, calls2, 2)
 	assert.Equal(t, uint64(21), calls2[1].peerID)
@@ -403,8 +415,8 @@ func TestRvl_HandleVLC_NilMsgSeen(t *testing.T) {
 	}
 	payload := encodePayload(t, coll)
 
-	r.handleValidatorListCollection(&peermanagement.InboundMessage{PeerID: 60, Type: uint16(message.TypeValidatorListCollection), Payload: payload})
-	r.handleValidatorListCollection(&peermanagement.InboundMessage{PeerID: 61, Type: uint16(message.TypeValidatorListCollection), Payload: payload})
+	r.handleValidatorListCollection(&peermanagement.InboundMessage{PeerID: 60, Type: message.TypeValidatorListCollection, Payload: payload})
+	r.handleValidatorListCollection(&peermanagement.InboundMessage{PeerID: 61, Type: message.TypeValidatorListCollection, Payload: payload})
 
 	calls := rs.getBadDataCalls()
 	assert.Len(t, calls, 2)
@@ -485,6 +497,8 @@ func TestRvl_SendList_SuppressionDedup(t *testing.T) {
 	ts := &rvl_trackingSender{}
 	r, _ := makeRouterWithBadDataRecorder(t)
 	b := r.NewValidatorListBroadcaster(nil, ts)
+	now := time.Unix(1_700_000_000, 0)
+	r.messageSeen.now = func() time.Time { return now }
 
 	manifest := []byte("manifest")
 	blob := []byte("blob")
@@ -496,6 +510,10 @@ func TestRvl_SendList_SuppressionDedup(t *testing.T) {
 
 	require.NoError(t, b.SendList(10, manifest, blob, sig, version))
 	assert.Len(t, ts.getCalls(), 1, "second send to already-seen peer must be suppressed")
+
+	now = now.Add(messageDedupTTL)
+	require.NoError(t, b.SendList(10, manifest, blob, sig, version))
+	assert.Len(t, ts.getCalls(), 2, "expired peer association must not suppress a send")
 }
 
 func TestRvl_SendList_DifferentPeers(t *testing.T) {
@@ -544,16 +562,31 @@ func TestRvl_SendCollection_EmptyBlobs(t *testing.T) {
 	assert.Len(t, ts.getCalls(), 1)
 }
 
+func TestRvl_SendCollection_OversizeEmptyBlobs(t *testing.T) {
+	ts := &rvl_trackingSender{}
+	b := NewRouterBroadcaster(nil, ts)
+	b.maxCollectionFrameSize = 1
+	err := b.SendCollection(33, []byte("manifest"), nil, 2)
+	require.Error(t, err)
+	assert.Empty(t, ts.getCalls())
+}
+
 func TestRvl_SendCollection_SuppressionDedup(t *testing.T) {
 	ts := &rvl_trackingSender{}
 	r, _ := makeRouterWithBadDataRecorder(t)
 	b := r.NewValidatorListBroadcaster(nil, ts)
+	now := time.Unix(1_700_000_000, 0)
+	r.messageSeen.now = func() time.Time { return now }
 
 	blobs := []validatorlist.BroadcastBlob{{Blob: []byte("b"), Signature: []byte("s")}}
 	require.NoError(t, b.SendCollection(77, []byte("m"), blobs, 2))
 	require.NoError(t, b.SendCollection(77, []byte("m"), blobs, 2))
 
 	assert.Len(t, ts.getCalls(), 1, "second send to same peer must be suppressed")
+
+	now = now.Add(messageDedupTTL)
+	require.NoError(t, b.SendCollection(77, []byte("m"), blobs, 2))
+	assert.Len(t, ts.getCalls(), 2, "expired peer association must not suppress a send")
 }
 
 func TestRvl_SendCollection_SendError(t *testing.T) {
@@ -575,6 +608,52 @@ func TestRvl_SendCollection_MultipleBlobs(t *testing.T) {
 	err := b.SendCollection(88, []byte("pub-manifest"), blobs, 3)
 	require.NoError(t, err)
 	require.Len(t, ts.getCalls(), 1)
+}
+
+func TestRvl_SendCollection_SplitsOversizeLikeRippled(t *testing.T) {
+	ts := &rvl_trackingSender{}
+	b := NewRouterBroadcaster(nil, ts)
+	b.maxCollectionFrameSize = 40
+	blobs := []validatorlist.BroadcastBlob{
+		{Manifest: []byte("local-1"), Blob: []byte("blob-1"), Signature: []byte("sig-1")},
+		{Manifest: []byte("local-2"), Blob: []byte("blob-2"), Signature: []byte("sig-2")},
+		{Blob: []byte("blob-3"), Signature: []byte("sig-3")},
+	}
+	require.NoError(t, b.SendCollection(88, []byte("publisher"), blobs, 2))
+	calls := ts.getCalls()
+	require.Len(t, calls, 3)
+	wantManifests := [][]byte{[]byte("local-1"), []byte("local-2"), []byte("publisher")}
+	for i, call := range calls {
+		header, err := message.DecodeHeader(call.frame)
+		require.NoError(t, err)
+		require.Equal(t, message.TypeValidatorList, header.MessageType)
+		decoded, err := message.Decode(header.MessageType, call.frame[header.HeaderSize():])
+		require.NoError(t, err)
+		vl, ok := decoded.(*message.ValidatorList)
+		require.True(t, ok)
+		require.Equal(t, uint32(1), vl.Version)
+		require.Equal(t, wantManifests[i], vl.Manifest)
+		require.Equal(t, blobs[i].Blob, vl.Blob)
+	}
+}
+
+func TestRvl_SendCollection_SplitsOversizeSingleton(t *testing.T) {
+	ts := &rvl_trackingSender{}
+	b := NewRouterBroadcaster(nil, ts)
+	b.maxCollectionFrameSize = 1
+	blob := validatorlist.BroadcastBlob{Manifest: []byte("local"), Blob: []byte("blob"), Signature: []byte("sig")}
+	require.NoError(t, b.SendCollection(88, []byte("publisher"), []validatorlist.BroadcastBlob{blob}, 2))
+
+	calls := ts.getCalls()
+	require.Len(t, calls, 1)
+	header, err := message.DecodeHeader(calls[0].frame)
+	require.NoError(t, err)
+	require.Equal(t, message.TypeValidatorList, header.MessageType)
+	decoded, err := message.Decode(header.MessageType, calls[0].frame[header.HeaderSize():])
+	require.NoError(t, err)
+	vl := decoded.(*message.ValidatorList)
+	require.Equal(t, uint32(1), vl.Version)
+	require.Equal(t, blob.Manifest, vl.Manifest)
 }
 
 func TestRvl_SendList_NoSuppression(t *testing.T) {

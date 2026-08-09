@@ -3,73 +3,72 @@ package entry
 import (
 	"fmt"
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/ledger/entry/schema"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-// ledgerTypes is the golden table of every ledger entry type code, pinned
-// against rippled. A wrong type code corrupts ledger-object serialization and
-// keylet derivation network-wide and is otherwise invisible until a hash
-// divergence in production.
-// Reference: rippled/include/xrpl/protocol/detail/ledger_entries.macro
-var ledgerTypes = []struct {
-	typ  Type
-	code uint16
-	name string
-}{
-	{TypeNFTokenOffer, 0x0037, "NFTokenOffer"},
-	{TypeCheck, 0x0043, "Check"},
-	{TypeDID, 0x0049, "DID"},
-	{TypeNegativeUNL, 0x004e, "NegativeUNL"},
-	{TypeNFTokenPage, 0x0050, "NFTokenPage"},
-	{TypeSignerList, 0x0053, "SignerList"},
-	{TypeTicket, 0x0054, "Ticket"},
-	{TypeAccountRoot, 0x0061, "AccountRoot"},
-	{TypeDirectoryNode, 0x0064, "DirectoryNode"},
-	{TypeAmendments, 0x0066, "Amendments"},
-	{TypeLedgerHashes, 0x0068, "LedgerHashes"},
-	{TypeBridge, 0x0069, "Bridge"},
-	{TypeOffer, 0x006f, "Offer"},
-	{TypeDepositPreauth, 0x0070, "DepositPreauth"},
-	{TypeXChainOwnedClaimID, 0x0071, "XChainOwnedClaimID"},
-	{TypeRippleState, 0x0072, "RippleState"},
-	{TypeFeeSettings, 0x0073, "FeeSettings"},
-	{TypeXChainOwnedCreateAccountClaimID, 0x0074, "XChainOwnedCreateAccountClaimID"},
-	{TypeEscrow, 0x0075, "Escrow"},
-	{TypePayChannel, 0x0078, "PayChannel"},
-	{TypeAMM, 0x0079, "AMM"},
-	{TypeMPTokenIssuance, 0x007e, "MPTokenIssuance"},
-	{TypeMPToken, 0x007f, "MPToken"},
-	{TypeOracle, 0x0080, "Oracle"},
-	{TypeCredential, 0x0081, "Credential"},
-	{TypePermissionedDomain, 0x0082, "PermissionedDomain"},
-	{TypeDelegate, 0x0083, "Delegate"},
-	{TypeVault, 0x0084, "Vault"},
-	{TypeLoanBroker, 0x0088, "LoanBroker"},
-	{TypeLoan, 0x0089, "Loan"},
-	{TypeSponsorship, 0x0090, "Sponsorship"},
-}
+func TestTypeRegistryIsBidirectionalAndGenerated(t *testing.T) {
+	infos := protocol.LedgerEntryTypes()
+	embedded := definitions.Get().LedgerEntryTypes()
+	seenCodes := make(map[Type]string, len(infos))
+	seenNames := make(map[string]Type, len(infos))
+	seenRPCNames := make(map[string]Type, len(infos))
+	canonical := 0
 
-func TestTypeCodes(t *testing.T) {
-	if got, want := len(ledgerTypes), 31; got != want {
-		t.Fatalf("ledgerTypes covers %d types, want %d — update the golden table when ledger_entries.macro changes", got, want)
+	for _, info := range infos {
+		if previous, ok := seenCodes[info.Type]; ok {
+			t.Errorf("type code 0x%04X is shared by %s and %s", uint16(info.Type), previous, info.Name)
+		}
+		if previous, ok := seenNames[info.Name]; ok {
+			t.Errorf("type name %s is shared by 0x%04X and 0x%04X", info.Name, uint16(previous), uint16(info.Type))
+		}
+		seenCodes[info.Type] = info.Name
+		seenNames[info.Name] = info.Type
+
+		byCode, ok := protocol.LedgerEntryTypeByCode(info.Type)
+		if !ok || byCode != info {
+			t.Errorf("code lookup for %s did not round-trip", info.Name)
+		}
+		byName, ok := protocol.LedgerEntryTypeByName(info.Name)
+		if !ok || byName != info {
+			t.Errorf("name lookup for %s did not round-trip", info.Name)
+		}
+		if got := info.Type.String(); got != info.Name {
+			t.Errorf("Type(0x%04X).String() = %q, want %q", uint16(info.Type), got, info.Name)
+		}
+
+		if info.Deprecated {
+			if New(info.Type) != nil {
+				t.Errorf("deprecated type %s has a generated constructor", info.Name)
+			}
+			continue
+		}
+		canonical++
+		if info.RPCName == "" {
+			t.Errorf("canonical type %s has no RPC name", info.Name)
+		} else if previous, ok := seenRPCNames[info.RPCName]; ok {
+			t.Errorf("RPC name %s is shared by %s and %s", info.RPCName, previous, info.Type)
+		} else {
+			seenRPCNames[info.RPCName] = info.Type
+		}
+		model := New(info.Type)
+		if model == nil {
+			t.Errorf("canonical type %s has no generated constructor", info.Name)
+		} else if model.Type() != info.Type {
+			t.Errorf("%s constructor reports type 0x%04X", info.Name, uint16(model.Type()))
+		}
+		if got := embedded[info.Name]; got != int32(info.Type) {
+			t.Errorf("embedded definition %s = %d, want %d", info.Name, got, info.Type)
+		}
 	}
 
-	seen := make(map[uint16]string, len(ledgerTypes))
-	for _, tc := range ledgerTypes {
-		if uint16(tc.typ) != tc.code {
-			t.Errorf("%s = 0x%04X, want 0x%04X", tc.name, uint16(tc.typ), tc.code)
-		}
-		if prev, ok := seen[tc.code]; ok {
-			t.Errorf("type code 0x%04X is shared by %s and %s", tc.code, prev, tc.name)
-		}
-		seen[tc.code] = tc.name
+	if canonical != len(schema.Specs) {
+		t.Fatalf("registry has %d canonical types, generated schema has %d", canonical, len(schema.Specs))
 	}
-}
-
-func TestTypeString(t *testing.T) {
-	for _, tc := range ledgerTypes {
-		if got := tc.typ.String(); got != tc.name {
-			t.Errorf("Type(0x%04X).String() = %q, want %q", uint16(tc.typ), got, tc.name)
-		}
+	if canonical+1 != len(embedded) || embedded["Invalid"] != -1 {
+		t.Fatalf("registry has %d canonical types, embedded definitions have %d entries including Invalid", canonical, len(embedded))
 	}
 }
 

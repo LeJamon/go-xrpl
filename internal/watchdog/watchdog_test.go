@@ -3,16 +3,20 @@ package watchdog
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
 
-// fakeClock is a manually-advanced clock for deterministic stall tests.
 type fakeClock struct {
 	mu sync.Mutex
 	t  time.Time
@@ -28,269 +32,766 @@ func (c *fakeClock) now() time.Time {
 
 func (c *fakeClock) advance(d time.Duration) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.t = c.t.Add(d)
+	c.mu.Unlock()
 }
 
-// newTestWatchdog builds a watchdog with second-scale thresholds, a fake clock,
-// a recording exit func, and a recording stack func, all wired through the same
-// injection points production uses.
+type recordHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *recordHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *recordHandler) Handle(_ context.Context, record slog.Record) error {
+	h.mu.Lock()
+	h.records = append(h.records, record.Clone())
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *recordHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h *recordHandler) snapshot() []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]slog.Record(nil), h.records...)
+}
+
 func newTestWatchdog(t *testing.T) (*Watchdog, *fakeClock, *bytes.Buffer, *atomic.Int32, *atomic.Int32) {
 	t.Helper()
-	clk := newFakeClock()
-	var logBuf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
+	clock := newFakeClock()
+	var logBuffer bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	w, err := New(10*time.Second, 90*time.Second, 600*time.Second, logger)
+	if err != nil {
+		t.Fatalf("new watchdog: %v", err)
+	}
 	var exits, stacks atomic.Int32
-	w := New(Config{Warn: 10 * time.Second, Fatal: 90 * time.Second, Abort: 600 * time.Second}, logger)
-	w.now = clk.now
+	w.now = clock.now
 	w.exit = func() { exits.Add(1) }
 	w.sync = func() {}
-	w.stack = func() string { stacks.Add(1); return "STACKDUMP" }
-	// Default the full-dump sink to discard so tests don't spam stderr; tests
-	// that assert on the dump override it with a buffer.
+	w.stack = func(buffer []byte) int {
+		stacks.Add(1)
+		return copy(buffer, "STACKDUMP")
+	}
 	w.stackSink = io.Discard
-	return w, clk, &logBuf, &exits, &stacks
+	w.report = w.logStall
+	return w, clock, &logBuffer, &exits, &stacks
 }
 
-func TestNew_DefaultsFillNonPositiveThresholds(t *testing.T) {
-	w := New(Config{}, nil)
-	if w.cfg.Warn != DefaultWarn || w.cfg.Fatal != DefaultFatal || w.cfg.Abort != DefaultAbort {
-		t.Fatalf("zero Config not defaulted: %+v", w.cfg)
+func mustRegister(t *testing.T, w *Watchdog, loop string) *Registration {
+	t.Helper()
+	registration, err := w.Register(loop)
+	if err != nil {
+		t.Fatalf("register %q: %v", loop, err)
 	}
+	return registration
 }
 
-func TestConfigFromSeconds(t *testing.T) {
-	c := ConfigFromSeconds(5, 30, 120)
-	if c.Warn != 5*time.Second || c.Fatal != 30*time.Second || c.Abort != 120*time.Second {
-		t.Fatalf("unexpected: %+v", c)
+func TestNewValidatesThresholds(t *testing.T) {
+	tests := []struct {
+		name               string
+		warn, fatal, abort time.Duration
+	}{
+		{name: "zero", warn: 0, fatal: time.Second, abort: 2 * time.Second},
+		{name: "negative", warn: -time.Second, fatal: time.Second, abort: 2 * time.Second},
+		{name: "warn equals fatal", warn: time.Second, fatal: time.Second, abort: 2 * time.Second},
+		{name: "fatal after abort", warn: time.Second, fatal: 3 * time.Second, abort: 2 * time.Second},
 	}
-}
-
-// A loop that keeps pinging never trips any threshold.
-func TestWatchdog_HealthyHeartbeatStaysQuiet(t *testing.T) {
-	w, clk, logBuf, exits, stacks := newTestWatchdog(t)
-	ping := w.Register("consensus")
-
-	// Advance well past the abort threshold, but ping every tick.
-	for i := 0; i < 700; i++ {
-		ping()
-		clk.advance(time.Second)
-		w.check(time.Second)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := New(test.warn, test.fatal, test.abort, nil); err == nil {
+				t.Fatal("invalid thresholds accepted")
+			}
+		})
 	}
-	if exits.Load() != 0 {
-		t.Fatalf("healthy loop aborted")
-	}
-	if stacks.Load() != 0 {
-		t.Fatalf("healthy loop dumped stacks")
-	}
-	if bytes.Contains(logBuf.Bytes(), []byte("stalled")) {
-		t.Fatalf("healthy loop logged a stall: %s", logBuf.String())
+	if _, err := New(time.Second, 2*time.Second, 3*time.Second, nil); err != nil {
+		t.Fatalf("valid thresholds rejected: %v", err)
 	}
 }
 
-// An unregistered (empty) watchdog reports no stall.
-func TestWatchdog_NoLoopsNeverTrips(t *testing.T) {
-	w, clk, _, exits, _ := newTestWatchdog(t)
-	for i := 0; i < 700; i++ {
-		clk.advance(time.Second)
-		w.check(time.Second)
-	}
-	if exits.Load() != 0 {
-		t.Fatalf("empty watchdog aborted")
+func TestRegisterRejectsEmptyName(t *testing.T) {
+	w, _, _, _, _ := newTestWatchdog(t)
+	if _, err := w.Register(""); err == nil {
+		t.Fatal("empty loop name accepted")
 	}
 }
 
-// A silent loop escalates warn → fatal → abort at the right thresholds,
-// dumping goroutine stacks exactly once — right before the abort — to the sink.
-func TestWatchdog_StallEscalatesWarnFatalAbort(t *testing.T) {
-	w, clk, logBuf, exits, stacks := newTestWatchdog(t)
+func TestWatchdogHealthyHeartbeatStaysQuiet(t *testing.T) {
+	w, clock, logBuffer, exits, stacks := newTestWatchdog(t)
+	registration := mustRegister(t, w, "consensus")
+	for range 700 {
+		registration.Ping()
+		clock.advance(time.Second)
+		w.check()
+	}
+	if exits.Load() != 0 || stacks.Load() != 0 {
+		t.Fatalf("healthy loop exited %d times and dumped %d stacks", exits.Load(), stacks.Load())
+	}
+	if strings.Contains(logBuffer.String(), "stalled") {
+		t.Fatalf("healthy loop logged a stall: %s", logBuffer.String())
+	}
+}
+
+func TestWatchdogStallEscalatesWarnFatalAbort(t *testing.T) {
+	w, clock, logBuffer, exits, stacks := newTestWatchdog(t)
 	var sink bytes.Buffer
 	w.stackSink = &sink
-	w.Register("ledger") // registered, then never pinged again.
+	mustRegister(t, w, "ledger")
 
 	var firstWarnAt, fatalAt, abortAt int
-	for sec := 1; sec <= 600; sec++ {
-		clk.advance(time.Second)
-		before := logBuf.Len()
-		exitsBefore := exits.Load()
-		w.check(time.Second)
-		line := logBuf.String()[before:]
-
-		if firstWarnAt == 0 && strings.Contains(line, "server loop stalled") &&
-			!strings.Contains(line, "level=fatal") {
-			firstWarnAt = sec
+	for second := 1; second <= 600; second++ {
+		clock.advance(time.Second)
+		before := logBuffer.Len()
+		terminal := w.check()
+		line := logBuffer.String()[before:]
+		if firstWarnAt == 0 && strings.Contains(line, "level=WARN") {
+			firstWarnAt = second
 		}
-		if fatalAt == 0 && strings.Contains(line, "level=fatal") {
-			fatalAt = sec
+		if fatalAt == 0 && strings.Contains(line, "level=ERROR+4") {
+			fatalAt = second
 		}
-		if exits.Load() > exitsBefore {
-			abortAt = sec
+		if terminal {
+			abortAt = second
 			break
 		}
 	}
-
-	if firstWarnAt != 10 {
-		t.Errorf("first warn at %ds, want 10s", firstWarnAt)
+	if firstWarnAt != 10 || fatalAt != 90 || abortAt != 600 {
+		t.Fatalf("escalation = warn %d, fatal %d, abort %d", firstWarnAt, fatalAt, abortAt)
 	}
-	if fatalAt != 90 {
-		t.Errorf("fatal log at %ds, want 90s", fatalAt)
+	if exits.Load() != 1 || stacks.Load() != 1 {
+		t.Fatalf("terminal actions = exits %d, stacks %d", exits.Load(), stacks.Load())
 	}
-	if abortAt != 600 {
-		t.Errorf("abort at %ds, want 600s", abortAt)
-	}
-	// Exactly one dump, at abort only — the warn path must not stop the world.
-	if got := stacks.Load(); got != 1 {
-		t.Errorf("goroutine dump fired %d times, want exactly 1 (abort only)", got)
-	}
-	if !bytes.Contains(sink.Bytes(), []byte("fatal-stall goroutine dump")) {
-		t.Errorf("fatal-stall dump not written to sink")
-	}
-	if !bytes.Contains(sink.Bytes(), []byte("STACKDUMP")) {
-		t.Errorf("sink missing the goroutine dump body")
+	if !strings.Contains(sink.String(), "fatal-stall goroutine dump") || !strings.Contains(sink.String(), "STACKDUMP") {
+		t.Fatalf("missing framed stack dump: %q", sink.String())
 	}
 }
 
-// The abort path flushes the log descriptors before terminating, and does so in
-// that order, so the final fatal record survives os.Exit.
-func TestWatchdog_AbortFlushesBeforeExit(t *testing.T) {
-	w, clk, _, exits, _ := newTestWatchdog(t)
-	w.Register("ledger") // registered, then never pinged again.
+func TestWatchdogUsesRealFatalLevel(t *testing.T) {
+	handler := &recordHandler{}
+	w, err := New(10*time.Second, 90*time.Second, 600*time.Second, slog.New(handler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := newFakeClock()
+	w.now = clock.now
+	w.report = w.logStall
+	w.exit = func() {}
+	w.sync = func() {}
+	w.stack = func([]byte) int { return 0 }
+	w.stackSink = io.Discard
+	mustRegister(t, w, "consensus")
 
-	var seq []string
-	w.sync = func() { seq = append(seq, "sync") }
-	w.exit = func() { seq = append(seq, "exit"); exits.Add(1) }
+	clock.advance(90 * time.Second)
+	w.check()
+	clock.advance(510 * time.Second)
+	w.check()
 
-	for sec := 1; sec <= 600; sec++ {
-		clk.advance(time.Second)
-		w.check(time.Second)
-		if exits.Load() > 0 {
-			break
+	var periodicFatal, terminalFatal bool
+	for _, record := range handler.snapshot() {
+		if record.Level != xrpllog.LevelFatal {
+			continue
+		}
+		switch record.Message {
+		case "server loop stalled":
+			periodicFatal = true
+		case "fatal server stall detected — aborting":
+			terminalFatal = true
 		}
 	}
-
-	if exits.Load() != 1 {
-		t.Fatalf("abort fired %d times, want 1", exits.Load())
-	}
-	if len(seq) != 2 || seq[0] != "sync" || seq[1] != "exit" {
-		t.Fatalf("abort order = %v, want [sync exit]", seq)
+	if !periodicFatal || !terminalFatal {
+		t.Fatalf("fatal records missing: periodic=%v terminal=%v", periodicFatal, terminalFatal)
 	}
 }
 
-// The default (non-injected) sync hook is a real flush that runs without panic,
-// proving the production abort path has a live flush rather than a no-op.
-func TestWatchdog_DefaultSyncIsLive(t *testing.T) {
-	w := New(Config{}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
-	if w.sync == nil {
-		t.Fatal("default watchdog has a nil sync hook")
+func TestWatchdogReportsFirstCheckAfterBoundary(t *testing.T) {
+	tests := []struct {
+		name          string
+		steps         []time.Duration
+		wantLevels    []slog.Level
+		wantLogCounts []int
+	}{
+		{
+			name:          "warn 9 to 11",
+			steps:         []time.Duration{9 * time.Second, 2 * time.Second},
+			wantLevels:    []slog.Level{0, slog.LevelWarn},
+			wantLogCounts: []int{0, 1},
+		},
+		{
+			name:          "fatal 89 to 95",
+			steps:         []time.Duration{89 * time.Second, 6 * time.Second},
+			wantLevels:    []slog.Level{slog.LevelWarn, xrpllog.LevelFatal},
+			wantLogCounts: []int{1, 2},
+		},
+		{
+			name:          "multi interval jump",
+			steps:         []time.Duration{95 * time.Second},
+			wantLevels:    []slog.Level{xrpllog.LevelFatal},
+			wantLogCounts: []int{1},
+		},
 	}
-	// Best-effort fsync of stdout/stderr/file; must not panic or block.
-	w.sync()
-}
-
-// The periodic report fires on every warn-interval boundary, not every tick.
-func TestWatchdog_ReportsOnWarnIntervalBoundaries(t *testing.T) {
-	w, clk, logBuf, _, _ := newTestWatchdog(t)
-	w.Register("ledger")
-
-	warnLines := 0
-	for sec := 1; sec <= 80; sec++ {
-		clk.advance(time.Second)
-		before := logBuf.Len()
-		w.check(time.Second)
-		if strings.Contains(logBuf.String()[before:], "server loop stalled") {
-			warnLines++
-		}
-	}
-	// Boundaries at 10,20,30,40,50,60,70,80 → 8 reports.
-	if warnLines != 8 {
-		t.Fatalf("got %d warn reports over 80s, want 8", warnLines)
-	}
-}
-
-// A warn-level stall never dumps stacks: runtime.Stack(all) stops the world,
-// so the dump is reserved for the abort path.
-func TestWatchdog_WarnDoesNotDumpStacks(t *testing.T) {
-	w, clk, _, _, stacks := newTestWatchdog(t)
-	w.Register("ledger")
-
-	// Stall well past warn and fatal, but short of abort.
-	for sec := 1; sec <= 599; sec++ {
-		clk.advance(time.Second)
-		w.check(time.Second)
-	}
-	if stacks.Load() != 0 {
-		t.Fatalf("pre-abort stall dumped stacks %d times, want 0", stacks.Load())
-	}
-}
-
-// The slowest of several registered loops drives the report, and the report
-// names that loop.
-func TestWatchdog_NamesSlowestLoop(t *testing.T) {
-	w, clk, logBuf, _, _ := newTestWatchdog(t)
-	fast := w.Register("consensus")
-	w.Register("ledger") // never pinged → slowest.
-
-	for sec := 1; sec <= 10; sec++ {
-		fast() // keep consensus healthy
-		clk.advance(time.Second)
-		w.check(time.Second)
-	}
-	if !bytes.Contains(logBuf.Bytes(), []byte("loop=ledger")) {
-		t.Fatalf("report did not name the slowest loop: %s", logBuf.String())
-	}
-	if bytes.Contains(logBuf.Bytes(), []byte("loop=consensus")) {
-		t.Fatalf("report named the healthy loop: %s", logBuf.String())
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			handler := &recordHandler{}
+			w, err := New(10*time.Second, 90*time.Second, 600*time.Second, slog.New(handler))
+			if err != nil {
+				t.Fatal(err)
+			}
+			clock := newFakeClock()
+			w.now = clock.now
+			w.report = w.logStall
+			mustRegister(t, w, "ledger")
+			for index, step := range test.steps {
+				clock.advance(step)
+				w.check()
+				records := handler.snapshot()
+				if len(records) != test.wantLogCounts[index] {
+					t.Fatalf("step %d logged %d records, want %d", index, len(records), test.wantLogCounts[index])
+				}
+				if len(records) > 0 && test.wantLevels[index] != 0 && records[len(records)-1].Level != test.wantLevels[index] {
+					t.Fatalf("step %d level = %v, want %v", index, records[len(records)-1].Level, test.wantLevels[index])
+				}
+			}
+		})
 	}
 }
 
-// Run exits promptly on context cancellation and never aborts a healthy node.
-func TestWatchdog_RunStopsOnContextCancel(t *testing.T) {
-	w, _, _, exits, _ := newTestWatchdog(t)
-	ping := w.Register("ledger")
-	ping()
+func TestWatchdogReportsFatalCrossingBetweenWarnBuckets(t *testing.T) {
+	handler := &recordHandler{}
+	w, err := New(7*time.Second, 10*time.Second, 30*time.Second, slog.New(handler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := newFakeClock()
+	w.now = clock.now
+	w.report = w.logStall
+	mustRegister(t, w, "ledger")
+	clock.advance(7 * time.Second)
+	w.check()
+	clock.advance(3 * time.Second)
+	w.check()
+	records := handler.snapshot()
+	if len(records) != 2 || records[1].Level != xrpllog.LevelFatal {
+		t.Fatalf("records = %+v, want warn then fatal", records)
+	}
+}
 
+func TestWatchdogPingStartsNewReportingEpisode(t *testing.T) {
+	handler := &recordHandler{}
+	w, err := New(10*time.Second, 90*time.Second, 600*time.Second, slog.New(handler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := newFakeClock()
+	w.now = clock.now
+	w.report = w.logStall
+	registration := mustRegister(t, w, "ledger")
+	clock.advance(11 * time.Second)
+	w.check()
+	registration.Ping()
+	clock.advance(9 * time.Second)
+	w.check()
+	clock.advance(2 * time.Second)
+	w.check()
+	if got := len(handler.snapshot()); got != 2 {
+		t.Fatalf("reported %d episodes, want 2", got)
+	}
+}
+
+func TestRegistrationGenerationOwnership(t *testing.T) {
+	w, clock, logBuffer, _, _ := newTestWatchdog(t)
+	old := mustRegister(t, w, "ledger")
+	clock.advance(5 * time.Second)
+	current := mustRegister(t, w, "ledger")
+	clock.advance(5 * time.Second)
+	old.Ping()
+	old.Close()
+	clock.advance(6 * time.Second)
+	w.check()
+	if !strings.Contains(logBuffer.String(), "loop=ledger") {
+		t.Fatal("stale registration masked the current generation")
+	}
+	current.Ping()
+	current.Close()
+	clock.advance(600 * time.Second)
+	if w.check() {
+		t.Fatal("closed registration remained active")
+	}
+}
+
+func TestReplacementBeforeAbortObservationWins(t *testing.T) {
+	w, clock, _, exits, _ := newTestWatchdog(t)
+	mustRegister(t, w, "ledger")
+	clock.advance(600 * time.Second)
+	current := mustRegister(t, w, "ledger")
+
+	if w.check() {
+		t.Fatal("stale generation triggered terminal recovery")
+	}
+	if exits.Load() != 0 {
+		t.Fatalf("exit called %d times", exits.Load())
+	}
+	current.Close()
+}
+
+func TestWatchdogDeterministicTiedStall(t *testing.T) {
+	w, clock, logBuffer, _, _ := newTestWatchdog(t)
+	mustRegister(t, w, "zeta")
+	mustRegister(t, w, "alpha")
+	clock.advance(10 * time.Second)
+	w.check()
+	if !strings.Contains(logBuffer.String(), "loop=alpha") || strings.Contains(logBuffer.String(), "loop=zeta") {
+		t.Fatalf("tied stall selection was not lexical: %s", logBuffer.String())
+	}
+}
+
+func TestWatchdogLifecycle(t *testing.T) {
+	w, _, _, _, _ := newTestWatchdog(t)
+	w.Stop()
+	if err := w.Start(t.Context()); !errors.Is(err, errNoRegistrations) {
+		t.Fatalf("empty start error = %v", err)
+	}
+	mustRegister(t, w, "ledger")
+	if err := w.Start(t.Context()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := w.Start(t.Context()); !errors.Is(err, errAlreadyStarted) {
+		t.Fatalf("second start error = %v", err)
+	}
+	w.Stop()
+	w.Stop()
+	if err := w.Start(t.Context()); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	w.Stop()
+}
+
+func TestWatchdogStartRejectsCanceledContext(t *testing.T) {
+	w, _, _, _, _ := newTestWatchdog(t)
+	mustRegister(t, w, "ledger")
 	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := w.Start(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("start error = %v, want context canceled", err)
+	}
+	if w.done != nil {
+		t.Fatal("canceled start published lifecycle state")
+	}
+}
+
+func TestWatchdogStartRebasesHeartbeats(t *testing.T) {
+	w, clock, _, _, _ := newTestWatchdog(t)
+	mustRegister(t, w, "ledger")
+	clock.advance(600 * time.Second)
+	if err := w.Start(t.Context()); err != nil {
+		t.Fatalf("start after pre-arm delay: %v", err)
+	}
+	if w.check() {
+		t.Fatal("pre-arm delay counted as a stall")
+	}
+	w.Stop()
+
+	clock.advance(600 * time.Second)
+	if err := w.Start(t.Context()); err != nil {
+		t.Fatalf("restart after stopped interval: %v", err)
+	}
+	if w.check() {
+		t.Fatal("stopped interval counted as a stall")
+	}
+	w.Stop()
+}
+
+func TestWatchdogStartRebaseCannotBeUndoneByDelayedPing(t *testing.T) {
+	w, clock, _, _, _ := newTestWatchdog(t)
+	registration := mustRegister(t, w, "ledger")
+	oldNow := clock.now()
+	pingCaptured := make(chan struct{})
+	releasePing := make(chan struct{})
+	var calls atomic.Int32
+	w.now = func() time.Time {
+		if calls.Add(1) == 1 {
+			close(pingCaptured)
+			<-releasePing
+			return oldNow
+		}
+		return clock.now()
+	}
+	pingDone := make(chan struct{})
+	go func() {
+		registration.Ping()
+		close(pingDone)
+	}()
+	<-pingCaptured
+	clock.advance(600 * time.Second)
+	if err := w.Start(t.Context()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	clock.advance(95 * time.Second)
+	first := w.observe()
+	if !first.shouldLog || !first.fatalLevel || first.silence != 95*time.Second {
+		t.Fatalf("unexpected first observation: %+v", first)
+	}
+	close(releasePing)
+	<-pingDone
+	second := w.observe()
+	if second.shouldLog || !second.fatalLevel || second.silence != 95*time.Second {
+		t.Fatalf("delayed ping changed the active stall episode: %+v", second)
+	}
+	w.Stop()
+}
+
+func TestWatchdogTerminalRecoveryIsSingleShot(t *testing.T) {
+	w, clock, _, exits, stacks := newTestWatchdog(t)
+	mustRegister(t, w, "ledger")
+	clock.advance(600 * time.Second)
+	if !w.check() || !w.check() {
+		t.Fatal("terminal state was not latched")
+	}
+	if exits.Load() != 1 || stacks.Load() != 1 {
+		t.Fatalf("terminal recovery repeated: exits=%d stacks=%d", exits.Load(), stacks.Load())
+	}
+}
+
+func TestAbortObservationClaimsTerminal(t *testing.T) {
+	w, clock, _, _, _ := newTestWatchdog(t)
+	mustRegister(t, w, "ledger")
+	clock.advance(600 * time.Second)
+
+	result := w.observe()
+	if !result.terminalOwner || !w.terminal.Load() {
+		t.Fatalf("abort observation did not claim terminal recovery: %+v", result)
+	}
+}
+
+func TestWatchdogTerminalDiagnosticPanicStillExits(t *testing.T) {
+	w, clock, _, exits, _ := newTestWatchdog(t)
+	w.stack = func([]byte) int { panic("stack capture failed") }
+	mustRegister(t, w, "ledger")
+	clock.advance(600 * time.Second)
+	if !w.check() {
+		t.Fatal("terminal recovery did not start")
+	}
+	if exits.Load() != 1 {
+		t.Fatalf("exit called %d times", exits.Load())
+	}
+}
+
+type blockingWriter struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (w *blockingWriter) Write(p []byte) (int, error) {
+	w.once.Do(func() { close(w.started) })
+	<-w.release
+	return len(p), nil
+}
+
+type blockingHandler struct {
+	started chan struct{}
+	release chan struct{}
+	blocked atomic.Bool
+	records chan slog.Record
+}
+
+func (h *blockingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *blockingHandler) Handle(_ context.Context, record slog.Record) error {
+	if h.blocked.CompareAndSwap(false, true) {
+		close(h.started)
+		<-h.release
+	}
+	if h.records != nil {
+		h.records <- record.Clone()
+	}
+	return nil
+}
+
+func (h *blockingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *blockingHandler) WithGroup(string) slog.Handler      { return h }
+
+type allBlockingHandler struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (h *allBlockingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *allBlockingHandler) Handle(context.Context, slog.Record) error {
+	h.once.Do(func() { close(h.started) })
+	<-h.release
+	return nil
+}
+
+func (h *allBlockingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *allBlockingHandler) WithGroup(string) slog.Handler      { return h }
+
+func TestBlockedWarningLoggerCannotPreventTerminalRecovery(t *testing.T) {
+	w, clock, _, exits, _ := newTestWatchdog(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	w.logger = slog.New(&allBlockingHandler{started: started, release: release})
+	w.report = w.logStallAsync
+	scheduled := make(chan func(), 1)
+	w.schedule = func(_ time.Duration, callback func()) func() {
+		scheduled <- callback
+		return func() {}
+	}
+	mustRegister(t, w, "ledger")
+	clock.advance(10 * time.Second)
+	w.check()
+	<-started
+
+	clock.advance(590 * time.Second)
 	done := make(chan struct{})
 	go func() {
-		w.run(ctx, time.Millisecond)
+		w.check()
 		close(done)
 	}()
-
-	// Let a few real ticks fire; the clock is frozen at the registration time
-	// so silence stays zero and nothing trips.
-	time.Sleep(20 * time.Millisecond)
-	cancel()
-
+	callback := <-scheduled
+	callback()
+	if exits.Load() != 1 {
+		t.Fatalf("fallback exits = %d, want 1", exits.Load())
+	}
+	close(release)
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("Run did not return after cancel")
-	}
-	if exits.Load() != 0 {
-		t.Fatalf("healthy run aborted")
+		t.Fatal("terminal recovery did not finish after logger release")
 	}
 }
 
-// SetStallPing-style Register returns a working, concurrency-safe pinger.
-func TestWatchdog_ConcurrentPing(t *testing.T) {
-	w, clk, _, _, _ := newTestWatchdog(t)
-	ping := w.Register("ledger")
+func TestBlockedWarningDoesNotSuppressFirstFatalReport(t *testing.T) {
+	w, clock, _, _, _ := newTestWatchdog(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	records := make(chan slog.Record, 2)
+	defer close(release)
+	w.logger = slog.New(&blockingHandler{started: started, release: release, records: records})
+	w.report = w.logStallAsync
+	mustRegister(t, w, "ledger")
 
-	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
+	clock.advance(10 * time.Second)
+	w.check()
+	<-started
+	clock.advance(80 * time.Second)
+	w.check()
+
+	select {
+	case record := <-records:
+		if record.Level != xrpllog.LevelFatal {
+			t.Fatalf("level = %v, want %v", record.Level, xrpllog.LevelFatal)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fatal report was suppressed by blocked warning")
+	}
+}
+
+func TestResetReportSlotsAllowsNewWarningWhileOldLoggerBlocked(t *testing.T) {
+	w, clock, _, _, _ := newTestWatchdog(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	records := make(chan slog.Record, 2)
+	defer close(release)
+	w.logger = slog.New(&blockingHandler{started: started, release: release, records: records})
+	w.report = w.logStallAsync
+	mustRegister(t, w, "ledger")
+
+	clock.advance(10 * time.Second)
+	w.check()
+	<-started
+	w.resetReportSlots()
+	clock.advance(10 * time.Second)
+	w.check()
+
+	select {
+	case record := <-records:
+		if record.Level != slog.LevelWarn {
+			t.Fatalf("level = %v, want %v", record.Level, slog.LevelWarn)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("new warning was suppressed by an old blocked report")
+	}
+}
+
+func TestWatchdogTerminalFallbackSurvivesBlockedDiagnostics(t *testing.T) {
+	for _, stage := range []string{"logger", "stack", "sink", "sync"} {
+		t.Run(stage, func(t *testing.T) {
+			w, clock, _, exits, _ := newTestWatchdog(t)
+			started := make(chan struct{})
+			release := make(chan struct{})
+			switch stage {
+			case "logger":
+				w.logger = slog.New(&blockingHandler{started: started, release: release})
+			case "stack":
+				w.stack = func([]byte) int {
+					close(started)
+					<-release
+					return 0
+				}
+			case "sink":
+				w.stackSink = &blockingWriter{started: started, release: release}
+			case "sync":
+				w.sync = func() {
+					close(started)
+					<-release
+				}
+			}
+
+			scheduled := make(chan func(), 1)
+			var fallbackCanceled atomic.Bool
+			w.schedule = func(_ time.Duration, callback func()) func() {
+				scheduled <- callback
+				return func() { fallbackCanceled.Store(true) }
+			}
+			mustRegister(t, w, "ledger")
+			clock.advance(600 * time.Second)
+			done := make(chan struct{})
+			go func() {
+				w.check()
+				close(done)
+			}()
+
+			callback := <-scheduled
+			<-started
+			callback()
+			if exits.Load() != 1 {
+				t.Fatalf("fallback exits = %d, want 1", exits.Load())
+			}
+			close(release)
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("terminal check did not finish after diagnostic release")
+			}
+			if !fallbackCanceled.Load() {
+				t.Fatal("fallback timer was not canceled after diagnostics")
+			}
+			if exits.Load() != 1 {
+				t.Fatalf("exit called %d times", exits.Load())
+			}
+		})
+	}
+}
+
+func TestWatchdogStackDumpIsBoundedAndMarked(t *testing.T) {
+	w, clock, _, _, _ := newTestWatchdog(t)
+	var stackBufferSize int
+	w.stack = func(buffer []byte) int {
+		stackBufferSize = len(buffer)
+		for index := range buffer {
+			buffer[index] = 'x'
+		}
+		return len(buffer)
+	}
+	var sink bytes.Buffer
+	w.stackSink = &sink
+	mustRegister(t, w, "ledger")
+	clock.advance(600 * time.Second)
+	w.check()
+	if stackBufferSize != maxStackDumpBytes {
+		t.Fatalf("stack buffer = %d, want %d", stackBufferSize, maxStackDumpBytes)
+	}
+	if !strings.Contains(sink.String(), "watchdog dump truncated") {
+		t.Fatal("truncated dump was not marked")
+	}
+}
+
+func TestWatchdogConcurrentRegistrationPingAndCheck(t *testing.T) {
+	w, _, _, _, _ := newTestWatchdog(t)
+	var current atomic.Pointer[Registration]
+	current.Store(mustRegister(t, w, "ledger"))
+	var group sync.WaitGroup
+	for range 4 {
+		group.Add(1)
 		go func() {
-			defer wg.Done()
-			for j := 0; j < 100; j++ {
-				ping()
+			defer group.Done()
+			for range 200 {
+				current.Load().Ping()
+				w.check()
 			}
 		}()
 	}
-	wg.Wait()
-	// After concurrent pings the loop is at the current (frozen) clock time.
-	clk.advance(5 * time.Second)
-	if _, silence := w.stalled(); silence != 5*time.Second {
-		t.Fatalf("silence = %v, want 5s", silence)
+	group.Add(1)
+	go func() {
+		defer group.Done()
+		for range 100 {
+			next, err := w.Register("ledger")
+			if err != nil {
+				t.Errorf("register: %v", err)
+				return
+			}
+			previous := current.Swap(next)
+			previous.Ping()
+			previous.Close()
+		}
+	}()
+	group.Wait()
+}
+
+func TestWatchdogTerminalFallbackSubprocess(t *testing.T) {
+	mode := os.Getenv("GOXRPL_WATCHDOG_BLOCK_STAGE")
+	if mode != "" {
+		w, err := New(time.Second, 2*time.Second, 3*time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		if err != nil {
+			os.Exit(2)
+		}
+		clock := newFakeClock()
+		w.now = clock.now
+		w.terminalGrace = 50 * time.Millisecond
+		started := make(chan struct{})
+		switch mode {
+		case "stack":
+			w.stack = func([]byte) int { close(started); select {} }
+		case "sink":
+			w.stack = func([]byte) int { return 0 }
+			w.stackSink = &blockingWriter{started: started, release: make(chan struct{})}
+		case "sync":
+			w.stack = func([]byte) int { return 0 }
+			w.stackSink = io.Discard
+			w.sync = func() { close(started); select {} }
+		case "logger":
+			w.logger = slog.New(&allBlockingHandler{started: started, release: make(chan struct{})})
+		default:
+			os.Exit(2)
+		}
+		if _, err := w.Register("ledger"); err != nil {
+			os.Exit(2)
+		}
+		clock.advance(3 * time.Second)
+		w.check()
+		os.Exit(2)
+	}
+
+	for _, stage := range []string{"logger", "stack", "sink", "sync"} {
+		t.Run(stage, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestWatchdogTerminalFallbackSubprocess$")
+			command.Env = append(os.Environ(), "GOXRPL_WATCHDOG_BLOCK_STAGE="+stage)
+			err := command.Run()
+			if ctx.Err() != nil {
+				t.Fatalf("child exceeded terminal deadline: %v", ctx.Err())
+			}
+			var exitError *exec.ExitError
+			if !errors.As(err, &exitError) || exitError.ExitCode() != 1 {
+				t.Fatalf("child exit = %v, want status 1", err)
+			}
+		})
+	}
+}
+
+func TestAllGoroutineStacksUsesCallerBound(t *testing.T) {
+	buffer := make([]byte, 1<<20)
+	n := allGoroutineStacks(buffer)
+	if n <= 0 || n > len(buffer) {
+		t.Fatalf("stack length = %d, buffer = %d", n, len(buffer))
+	}
+	if !bytes.Contains(buffer[:n], []byte("goroutine")) {
+		t.Fatal("real stack capture missing goroutine framing")
 	}
 }

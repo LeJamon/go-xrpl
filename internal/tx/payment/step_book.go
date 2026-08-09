@@ -207,13 +207,16 @@ func (m *amountMultiset) erase(a EitherAmount) {
 // sum folds the elements smallest-first, matching rippled's
 // std::accumulate(begin()+1, end(), *begin()) over the sorted flat_multiset.
 // zero is returned for an empty set (the currency-tagged zero the caller wants).
-func (m *amountMultiset) sum(zero EitherAmount) EitherAmount {
+func (m *amountMultiset) sum(
+	zero EitherAmount,
+	numberContext state.NumberContext,
+) EitherAmount {
 	if len(m.elems) == 0 {
 		return zero
 	}
 	total := m.elems[0]
 	for _, e := range m.elems[1:] {
-		total = total.Add(e)
+		total = total.AddWithNumberContext(e, numberContext)
 	}
 	return total
 }
@@ -372,9 +375,9 @@ func (s *BookStep) forEachOffer(
 		}
 
 		// stpAmt.in = mulRatio(ofrAmt.in, ofrInRate, QUALITY_ONE, true)
-		stpIn := MulRatio(ofrIn, ofrTrIn, QualityOne, true)
+		stpIn := MulRatioWithNumberContext(ofrIn, ofrTrIn, QualityOne, true, sb.NumberContext())
 		stpOut := ofrOut
-		ownerGives := MulRatio(ofrOut, ofrTrOut, QualityOne, false)
+		ownerGives := MulRatioWithNumberContext(ofrOut, ofrTrOut, QualityOne, false, sb.NumberContext())
 
 		// Funding cap (CLOB only — AMM is always funded)
 		// Reference: rippled OfferStream reads ownerFunds from view_ (sb),
@@ -384,9 +387,9 @@ func (s *BookStep) forEachOffer(
 			isFundedByIssuer := !s.book.Out.IsMPT && offerOwner == s.book.Out.Issuer
 			if !isFundedByIssuer && funds.Compare(ownerGives) < 0 {
 				ownerGives = funds
-				stpOut = MulRatio(ownerGives, QualityOne, ofrTrOut, false)
+				stpOut = MulRatioWithNumberContext(ownerGives, QualityOne, ofrTrOut, false, sb.NumberContext())
 				ofrIn, ofrOut = offerQuality.CeilOutStrict(ofrIn, ofrOut, stpOut, false)
-				stpIn = MulRatio(ofrIn, ofrTrIn, QualityOne, true)
+				stpIn = MulRatioWithNumberContext(ofrIn, ofrTrIn, QualityOne, true, sb.NumberContext())
 			}
 		}
 
@@ -396,18 +399,29 @@ func (s *BookStep) forEachOffer(
 				limit := NewMPTEitherAmount(available, s.book.In.MPTID)
 				if stpIn.Compare(limit) > 0 {
 					stpIn = limit
-					inLimit := MulRatio(stpIn, QualityOne, ofrTrIn, false)
+					inLimit := MulRatioWithNumberContext(stpIn, QualityOne, ofrTrIn, false, sb.NumberContext())
 					if isAMM {
 						ofrIn, ofrOut = ammOffer.LimitIn(
 							ofrIn, ofrOut, inLimit, false, s.fixReducedOffersV2,
 						)
 					} else if s.fixReducedOffersV2 {
-						ofrIn, ofrOut = offerQuality.CeilInStrict(ofrIn, ofrOut, inLimit, false)
+						ofrIn, ofrOut = offerQuality.CeilInStrictWithNumberContext(
+							ofrIn,
+							ofrOut,
+							inLimit,
+							false,
+							sb.NumberContext(),
+						)
 					} else {
-						ofrIn, ofrOut = offerQuality.CeilIn(ofrIn, ofrOut, inLimit)
+						ofrIn, ofrOut = offerQuality.CeilInWithNumberContext(
+							ofrIn,
+							ofrOut,
+							inLimit,
+							sb.NumberContext(),
+						)
 					}
 					stpOut = ofrOut
-					ownerGives = MulRatio(ofrOut, ofrTrOut, QualityOne, false)
+					ownerGives = MulRatioWithNumberContext(ofrOut, ofrTrOut, QualityOne, false, sb.NumberContext())
 				}
 			}
 		}
@@ -680,9 +694,9 @@ func (s *BookStep) Rev(
 			// Full take
 			savedIns.insert(e.stpIn)
 			savedOuts.insert(e.stpOut)
-			totalIn = savedIns.sum(s.zeroIn())
-			totalOut = savedOuts.sum(s.zeroOut())
-			remainingOut = out.Sub(totalOut)
+			totalIn = savedIns.sum(s.zeroIn(), sb.NumberContext())
+			totalOut = savedOuts.sum(s.zeroOut(), sb.NumberContext())
+			remainingOut = out.SubWithNumberContext(totalOut, sb.NumberContext())
 
 			if e.isAMM {
 				if err := s.consumeAMMOffer(sb, e.ammOffer, e.stpIn, e.ofrIn, e.stpOut, e.ownerGives); err != nil {
@@ -706,14 +720,14 @@ func (s *BookStep) Rev(
 			} else {
 				ofrAdjIn, ofrAdjOut = e.offerQuality.CeilOutStrict(e.ofrIn, e.ofrOut, stpAdjOut, true)
 			}
-			stpAdjIn := MulRatio(ofrAdjIn, e.ofrTrIn, QualityOne, true)
-			ownerGivesAdj := MulRatio(stpAdjOut, e.ofrTrOut, QualityOne, false)
+			stpAdjIn := MulRatioWithNumberContext(ofrAdjIn, e.ofrTrIn, QualityOne, true, sb.NumberContext())
+			ownerGivesAdj := MulRatioWithNumberContext(stpAdjOut, e.ofrTrOut, QualityOne, false, sb.NumberContext())
 			_ = ofrAdjOut
 
 			// rippled inserts stpAdjAmt.in into savedIns and sets result.in =
 			// sum(savedIns); result.out = out (BookStep.cpp:1069-1072).
 			savedIns.insert(stpAdjIn)
-			totalIn = savedIns.sum(s.zeroIn())
+			totalIn = savedIns.sum(s.zeroIn(), sb.NumberContext())
 			totalOut = out
 			remainingOut = s.zeroOut()
 
@@ -804,13 +818,16 @@ func (s *BookStep) Fwd(
 			savedIns.insert(e.stpIn)
 			lastOut := e.stpOut
 			savedOuts.insert(lastOut)
-			totalIn = savedIns.sum(s.zeroIn())
-			totalOut = savedOuts.sum(s.zeroOut())
+			totalIn = savedIns.sum(s.zeroIn(), sb.NumberContext())
+			totalOut = savedOuts.sum(s.zeroOut(), sb.NumberContext())
 
 			// Forward > reverse cache check
 			if prevCache != nil && totalOut.Compare(prevCache.out) > 0 && totalIn.Compare(prevCache.in) <= 0 {
 				savedOuts.erase(lastOut)
-				remainingCacheOut := prevCache.out.Sub(savedOuts.sum(s.zeroOut()))
+				remainingCacheOut := prevCache.out.SubWithNumberContext(
+					savedOuts.sum(s.zeroOut(), sb.NumberContext()),
+					sb.NumberContext(),
+				)
 				adjOfrIn, adjOfrOut := e.ofrIn, e.ofrOut
 				adjStpOut := remainingCacheOut
 				if e.isAMM {
@@ -818,13 +835,25 @@ func (s *BookStep) Fwd(
 				} else {
 					adjOfrIn, adjOfrOut = e.offerQuality.CeilOutStrict(adjOfrIn, adjOfrOut, adjStpOut, true)
 				}
-				adjStpIn := MulRatio(adjOfrIn, e.ofrTrIn, QualityOne, true)
+				adjStpIn := MulRatioWithNumberContext(
+					adjOfrIn,
+					e.ofrTrIn,
+					QualityOne,
+					true,
+					sb.NumberContext(),
+				)
 				_ = adjOfrOut
 
 				if adjStpIn.Compare(remainingIn) == 0 {
 					totalIn = in
 					totalOut = prevCache.out
-					ownerGivesAdj := MulRatio(adjStpOut, e.ofrTrOut, QualityOne, false)
+					ownerGivesAdj := MulRatioWithNumberContext(
+						adjStpOut,
+						e.ofrTrOut,
+						QualityOne,
+						false,
+						sb.NumberContext(),
+					)
 					if e.isAMM {
 						if err := s.consumeAMMOffer(sb, e.ammOffer, adjStpIn, adjOfrIn, adjStpOut, ownerGivesAdj); err != nil {
 							throwConsumeFailure(err)
@@ -842,7 +871,7 @@ func (s *BookStep) Fwd(
 				savedOuts.insert(lastOut)
 			}
 
-			remainingIn = in.Sub(totalIn)
+			remainingIn = in.SubWithNumberContext(totalIn, sb.NumberContext())
 			if e.isAMM {
 				if err := s.consumeAMMOffer(sb, e.ammOffer, e.stpIn, e.ofrIn, e.stpOut, e.ownerGives); err != nil {
 					throwConsumeFailure(err)
@@ -855,32 +884,52 @@ func (s *BookStep) Fwd(
 		} else {
 			// Partial take: limitStepIn
 			stpAdjIn := remainingIn
-			inLmt := MulRatio(stpAdjIn, QualityOne, e.ofrTrIn, false)
+			inLmt := MulRatioWithNumberContext(stpAdjIn, QualityOne, e.ofrTrIn, false, sb.NumberContext())
 			var ofrAdjIn, ofrAdjOut EitherAmount
 			if e.isAMM {
 				ofrAdjIn, ofrAdjOut = e.ammOffer.LimitIn(e.ofrIn, e.ofrOut, inLmt, false, s.fixReducedOffersV2)
 			} else {
 				if s.fixReducedOffersV2 {
-					ofrAdjIn, ofrAdjOut = e.offerQuality.CeilInStrict(e.ofrIn, e.ofrOut, inLmt, false)
+					ofrAdjIn, ofrAdjOut = e.offerQuality.CeilInStrictWithNumberContext(
+						e.ofrIn,
+						e.ofrOut,
+						inLmt,
+						false,
+						sb.NumberContext(),
+					)
 				} else {
-					ofrAdjIn, ofrAdjOut = e.offerQuality.CeilIn(e.ofrIn, e.ofrOut, inLmt)
+					ofrAdjIn, ofrAdjOut = e.offerQuality.CeilInWithNumberContext(
+						e.ofrIn,
+						e.ofrOut,
+						inLmt,
+						sb.NumberContext(),
+					)
 				}
 			}
 			stpAdjOut := ofrAdjOut
-			ownerGivesAdj := MulRatio(ofrAdjOut, e.ofrTrOut, QualityOne, false)
+			ownerGivesAdj := MulRatioWithNumberContext(
+				ofrAdjOut,
+				e.ofrTrOut,
+				QualityOne,
+				false,
+				sb.NumberContext(),
+			)
 
 			// rippled inserts remainingIn into savedIns and stpAdjAmt.out into
 			// savedOuts, then sets result.out = sum(savedOuts); result.in = in
 			// (BookStep.cpp:1190-1193).
 			savedIns.insert(stpAdjIn)
 			savedOuts.insert(stpAdjOut)
-			totalOut = savedOuts.sum(s.zeroOut())
+			totalOut = savedOuts.sum(s.zeroOut(), sb.NumberContext())
 			totalIn = in
 
 			// Forward > reverse cache check
 			if prevCache != nil && totalOut.Compare(prevCache.out) > 0 && totalIn.Compare(prevCache.in) <= 0 {
 				savedOuts.erase(stpAdjOut)
-				remainingCacheOut := prevCache.out.Sub(savedOuts.sum(s.zeroOut()))
+				remainingCacheOut := prevCache.out.SubWithNumberContext(
+					savedOuts.sum(s.zeroOut(), sb.NumberContext()),
+					sb.NumberContext(),
+				)
 				revOfrIn, revOfrOut := e.ofrIn, e.ofrOut
 				revStpOut := remainingCacheOut
 				if e.isAMM {
@@ -888,8 +937,20 @@ func (s *BookStep) Fwd(
 				} else {
 					revOfrIn, revOfrOut = e.offerQuality.CeilOutStrict(revOfrIn, revOfrOut, revStpOut, true)
 				}
-				revStpIn := MulRatio(revOfrIn, e.ofrTrIn, QualityOne, true)
-				revOwnerGives := MulRatio(revStpOut, e.ofrTrOut, QualityOne, false)
+				revStpIn := MulRatioWithNumberContext(
+					revOfrIn,
+					e.ofrTrIn,
+					QualityOne,
+					true,
+					sb.NumberContext(),
+				)
+				revOwnerGives := MulRatioWithNumberContext(
+					revStpOut,
+					e.ofrTrOut,
+					QualityOne,
+					false,
+					sb.NumberContext(),
+				)
 				_ = revOfrOut
 
 				if revStpIn.Compare(remainingIn) == 0 {

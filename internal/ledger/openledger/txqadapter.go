@@ -3,6 +3,7 @@ package openledger
 import (
 	"errors"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -53,6 +54,13 @@ func (a *TxqAdapter) GetApplyFlags() tx.ApplyFlags {
 	return a.cfg.ApplyFlags
 }
 
+func (a *TxqAdapter) RulesIdentity() *amendment.Rules {
+	if a == nil {
+		return nil
+	}
+	return a.cfg.Rules
+}
+
 func (a *TxqAdapter) GetLedgerSequence() uint32 {
 	if a.view == nil {
 		return 0
@@ -80,47 +88,34 @@ func (a *TxqAdapter) GetTxInLedger() uint32 {
 	return a.view.TxCount()
 }
 
-// GetAccountSequence reads the AccountRoot.Sequence for accountID. Returns
-// 0 when the account does not exist (matching rippled's behavior:
-// unknown account → caller will then hit AccountExists=false and bail).
-func (a *TxqAdapter) GetAccountSequence(accountID [20]byte) uint32 {
-	ar, ok := a.readAccountRoot(accountID)
-	if !ok {
-		return 0
+func (a *TxqAdapter) GetAccountSequence(accountID [20]byte) (uint32, error) {
+	ar, err := a.readAccountRoot(accountID)
+	if err != nil || ar == nil {
+		return 0, err
 	}
-	return ar.Sequence
+	return ar.Sequence, nil
 }
 
-func (a *TxqAdapter) AccountExists(accountID [20]byte) bool {
+func (a *TxqAdapter) AccountExists(accountID [20]byte) (bool, error) {
 	if a.view == nil {
-		return false
+		return false, errors.New("openledger.TxqAdapter: view is nil")
 	}
-	exists, err := a.view.Exists(keylet.Account(accountID))
-	if err != nil {
-		return false
-	}
-	return exists
+	return a.view.Exists(keylet.Account(accountID))
 }
 
-func (a *TxqAdapter) TicketExists(accountID [20]byte, ticketSeq uint32) bool {
+func (a *TxqAdapter) TicketExists(accountID [20]byte, ticketSeq uint32) (bool, error) {
 	if a.view == nil {
-		return false
+		return false, errors.New("openledger.TxqAdapter: view is nil")
 	}
-	exists, err := a.view.Exists(keylet.Ticket(accountID, ticketSeq))
-	if err != nil {
-		return false
-	}
-	return exists
+	return a.view.Exists(keylet.Ticket(accountID, ticketSeq))
 }
 
-// GetAccountBalance returns the account's XRP balance in drops. Returns 0
-// when the account does not exist.
-func (a *TxqAdapter) GetAccountBalance(accountID [20]byte) uint64 {
-	ar, ok := a.readAccountRoot(accountID)
-	if !ok {
-		return 0
+func (a *TxqAdapter) GetAccountBalance(accountID [20]byte) (uint64, error) {
+	ar, err := a.readAccountRoot(accountID)
+	if err != nil || ar == nil {
+		return 0, err
 	}
-	return ar.Balance
+	return ar.Balance, nil
 }
 
 // GetAccountReserve returns the reserve requirement for an account at the
@@ -163,6 +158,8 @@ func (a *TxqAdapter) baseFeeConfig() tx.EngineConfig {
 		ParentCloseTime:           a.cfg.ParentCloseTime,
 		Logger:                    a.cfg.Logger,
 		Rules:                     a.cfg.Rules,
+		NumberContextOverride:     a.cfg.NumberContextOverride,
+		ApplyFlags:                a.cfg.ApplyFlags,
 		FeeTrack:                  a.cfg.FeeTrack,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
 	}
@@ -180,6 +177,14 @@ func (a *TxqAdapter) baseFeeConfig() tx.EngineConfig {
 // Transactor.cpp:1108-1218). On applied=true the tx+meta is written to
 // the view's tx map so subsequent GetTxInLedger / TxExists reflect it.
 func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
+	return a.applyTransactionWithFlags(txn, a.cfg.ApplyFlags)
+}
+
+func (a *TxqAdapter) ApplyTransactionWithFlags(txn tx.Transaction, flags tx.ApplyFlags) (ter.Result, bool) {
+	return a.applyTransactionWithFlags(txn, flags)
+}
+
+func (a *TxqAdapter) applyTransactionWithFlags(txn tx.Transaction, flags tx.ApplyFlags) (ter.Result, bool) {
 	if a.view == nil || txn == nil {
 		return ter.TefINTERNAL, false
 	}
@@ -206,6 +211,8 @@ func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
 		Logger:                    a.cfg.Logger,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
 		Rules:                     a.cfg.Rules,
+		NumberContextOverride:     a.cfg.NumberContextOverride,
+		ApplyFlags:                flags,
 		FeeTrack:                  a.cfg.FeeTrack,
 		EnforceLoadFee:            true,
 	}
@@ -242,6 +249,14 @@ func (a *TxqAdapter) LastApplyResult() *tx.ApplyResult {
 // malformed or badly-signed submission is rejected with its preflight code
 // instead of terQUEUED (rippled TxQ.cpp:743-745).
 func (a *TxqAdapter) PreflightTransaction(txn tx.Transaction) ter.Result {
+	return a.preflightTransactionWithFlags(txn, a.cfg.ApplyFlags)
+}
+
+func (a *TxqAdapter) PreflightTransactionWithFlags(txn tx.Transaction, flags tx.ApplyFlags) ter.Result {
+	return a.preflightTransactionWithFlags(txn, flags)
+}
+
+func (a *TxqAdapter) preflightTransactionWithFlags(txn tx.Transaction, flags tx.ApplyFlags) ter.Result {
 	if a.view == nil || txn == nil {
 		return ter.TefINTERNAL
 	}
@@ -256,6 +271,8 @@ func (a *TxqAdapter) PreflightTransaction(txn tx.Transaction) ter.Result {
 		Logger:                    a.cfg.Logger,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
 		Rules:                     a.cfg.Rules,
+		NumberContextOverride:     a.cfg.NumberContextOverride,
+		ApplyFlags:                flags,
 		FeeTrack:                  a.cfg.FeeTrack,
 	}
 	return txengine.NewEngine(a.view, engineCfg).Preflight(txn)
@@ -268,6 +285,14 @@ func (a *TxqAdapter) PreflightTransaction(txn tx.Transaction) ter.Result {
 // codes here indicate the tx would fail once the queued chain lands —
 // surfaced to the caller so the tx is rejected rather than queued.
 func (a *TxqAdapter) PreclaimTransaction(txn tx.Transaction, accountID [20]byte, adjustedBalance uint64, adjustedSeq uint32) ter.Result {
+	return a.preclaimTransactionWithFlags(txn, accountID, adjustedBalance, adjustedSeq, a.cfg.ApplyFlags)
+}
+
+func (a *TxqAdapter) PreclaimTransactionWithFlags(txn tx.Transaction, accountID [20]byte, adjustedBalance uint64, adjustedSeq uint32, flags tx.ApplyFlags) ter.Result {
+	return a.preclaimTransactionWithFlags(txn, accountID, adjustedBalance, adjustedSeq, flags)
+}
+
+func (a *TxqAdapter) preclaimTransactionWithFlags(txn tx.Transaction, accountID [20]byte, adjustedBalance uint64, adjustedSeq uint32, flags tx.ApplyFlags) ter.Result {
 	if a.view == nil || txn == nil {
 		return ter.TefINTERNAL
 	}
@@ -287,7 +312,10 @@ func (a *TxqAdapter) PreclaimTransaction(txn tx.Transaction, accountID [20]byte,
 
 	key := keylet.Account(accountID)
 	data, err := clone.Read(key)
-	if err != nil || data == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if data == nil {
 		return ter.TerNO_ACCOUNT
 	}
 	ar, err := state.ParseAccountRoot(data)
@@ -322,6 +350,8 @@ func (a *TxqAdapter) PreclaimTransaction(txn tx.Transaction, accountID [20]byte,
 		Logger:                    a.cfg.Logger,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
 		Rules:                     a.cfg.Rules,
+		NumberContextOverride:     a.cfg.NumberContextOverride,
+		ApplyFlags:                flags,
 		FeeTrack:                  a.cfg.FeeTrack,
 		EnforceLoadFee:            true,
 	}
@@ -356,6 +386,10 @@ func (s *txqSandbox) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
 	return s.child.ApplyTransaction(txn)
 }
 
+func (s *txqSandbox) ApplyTransactionWithFlags(txn tx.Transaction, flags tx.ApplyFlags) (ter.Result, bool) {
+	return s.child.ApplyTransactionWithFlags(txn, flags)
+}
+
 // Commit folds the sandbox's accumulated state back into the parent view and
 // propagates the last engine ApplyResult so the RPC submit path still reads
 // the submitted tx's Fee/Metadata/Message after a successful queue clear.
@@ -367,9 +401,9 @@ func (s *txqSandbox) Commit() error {
 	return nil
 }
 
-func (a *TxqAdapter) readAccountRoot(accountID [20]byte) (*state.AccountRoot, bool) {
+func (a *TxqAdapter) readAccountRoot(accountID [20]byte) (*state.AccountRoot, error) {
 	if a.view == nil {
-		return nil, false
+		return nil, nil
 	}
 	return state.ReadAccountRoot(a.view, accountID)
 }

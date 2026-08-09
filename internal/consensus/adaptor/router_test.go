@@ -31,15 +31,20 @@ type mockEngine struct {
 	buildingSeq   uint32
 }
 
+func adaptorHasTx(t *testing.T, a *Adaptor, id consensus.TxID) bool {
+	t.Helper()
+	exists, err := a.HasTx(id)
+	require.NoError(t, err)
+	return exists
+}
+
 func (m *mockEngine) Start(context.Context) error              { return nil }
 func (m *mockEngine) Stop() error                              { return nil }
 func (m *mockEngine) StartRound(consensus.RoundID, bool) error { return nil }
-func (m *mockEngine) State() *consensus.RoundState             { return nil }
 func (m *mockEngine) Mode() consensus.Mode                     { return consensus.ModeObserving }
 func (m *mockEngine) Phase() consensus.Phase                   { return consensus.PhaseOpen }
 func (m *mockEngine) BuildingLedgerSeq() uint32                { return m.buildingSeq }
 func (m *mockEngine) IsProposing() bool                        { return false }
-func (m *mockEngine) Timing() consensus.Timing                 { return consensus.DefaultTiming() }
 func (m *mockEngine) GetLastCloseInfo() (int, time.Duration)   { return 0, 0 }
 func (m *mockEngine) GetJSON(bool) map[string]any              { return map[string]any{} }
 func (m *mockEngine) Subscribe(consensus.EventSubscriber)      {}
@@ -126,7 +131,7 @@ func TestRouterDispatchesProposal(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, adaptor, inbox)
+	router := newTestRouter(engine, adaptor, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
@@ -146,7 +151,7 @@ func TestRouterDispatchesProposal(t *testing.T) {
 
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  1,
-		Type:    uint16(message.TypeProposeLedger),
+		Type:    message.TypeProposeLedger,
 		Payload: encodePayload(t, proposeSet),
 	}
 
@@ -163,7 +168,7 @@ func TestRouterDispatchesValidation(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, adaptor, inbox)
+	router := newTestRouter(engine, adaptor, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
@@ -185,7 +190,7 @@ func TestRouterDispatchesValidation(t *testing.T) {
 
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  2,
-		Type:    uint16(message.TypeValidation),
+		Type:    message.TypeValidation,
 		Payload: encodePayload(t, val),
 	}
 
@@ -200,7 +205,7 @@ func TestRouterDispatchesTransaction(t *testing.T) {
 	a := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, a, inbox)
+	router := newTestRouter(engine, a, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
@@ -231,7 +236,7 @@ func TestRouterDispatchesTransaction(t *testing.T) {
 
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  3,
-		Type:    uint16(message.TypeTransaction),
+		Type:    message.TypeTransaction,
 		Payload: encodePayload(t, txMsg),
 	}
 
@@ -240,7 +245,7 @@ func TestRouterDispatchesTransaction(t *testing.T) {
 	// Transaction should be visible via HasTx now that AddPendingTx
 	// routed it through service.SubmitOpenLedgerTx into the persistent
 	// open view.
-	assert.True(t, a.HasTx(consensus.TxID(txHash)))
+	assert.True(t, adaptorHasTx(t, a, consensus.TxID(txHash)))
 }
 
 // TestRouterDispatchesPreDecodedTransaction covers the path taken by
@@ -253,7 +258,7 @@ func TestRouterDispatchesPreDecodedTransaction(t *testing.T) {
 	a := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, a, inbox)
+	router := newTestRouter(engine, a, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
@@ -275,7 +280,7 @@ func TestRouterDispatchesPreDecodedTransaction(t *testing.T) {
 
 	inbox <- &peermanagement.InboundMessage{
 		PeerID: 3,
-		Type:   uint16(message.TypeTransaction),
+		Type:   message.TypeTransaction,
 		Tx: &message.Transaction{
 			RawTransaction:   blob,
 			Status:           message.TxStatusNew,
@@ -285,7 +290,7 @@ func TestRouterDispatchesPreDecodedTransaction(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	assert.True(t, a.HasTx(consensus.TxID(txHash)),
+	assert.True(t, adaptorHasTx(t, a, consensus.TxID(txHash)),
 		"router must accept a pre-decoded (batch-fanned) transaction")
 }
 
@@ -294,7 +299,7 @@ func TestRouterIgnoresUnknownMessages(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, adaptor, inbox)
+	router := newTestRouter(engine, adaptor, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
@@ -302,7 +307,7 @@ func TestRouterIgnoresUnknownMessages(t *testing.T) {
 	// Send a Ping message — should be silently ignored
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  4,
-		Type:    uint16(message.TypePing),
+		Type:    message.TypePing,
 		Payload: []byte{0x01},
 	}
 
@@ -317,7 +322,7 @@ func TestRouterHandlesMalformedMessage(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, adaptor, inbox)
+	router := newTestRouter(engine, adaptor, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
@@ -325,7 +330,7 @@ func TestRouterHandlesMalformedMessage(t *testing.T) {
 	// Send garbage as a proposal — should not panic
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  5,
-		Type:    uint16(message.TypeProposeLedger),
+		Type:    message.TypeProposeLedger,
 		Payload: []byte{0xFF, 0xFF, 0xFF},
 	}
 
@@ -339,7 +344,7 @@ func TestRouterStopsOnContextCancel(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, adaptor, inbox)
+	router := newTestRouter(engine, adaptor, inbox)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -358,16 +363,11 @@ func TestRouterStopsOnContextCancel(t *testing.T) {
 	}
 }
 
-// countingSender wraps noopSender with a counter on UpdateRelaySlot
-// so router tests can assert how many times the reduce-relay slot
-// was fed. B3: also captures the seenPeers argument so tests can
-// verify the slot is fed with the full known-haver set from the
-// overlay's reverse index, not just the duplicate's originator.
 type countingSender struct {
 	noopSender
-	mu            sync.Mutex
-	calls         []countingRelaySlotCall
-	peersThatHave map[[32]byte][]uint64
+	mu      sync.Mutex
+	calls   []countingRelaySlotCall
+	relayed map[[32]byte]bool
 }
 
 type countingRelaySlotCall struct {
@@ -385,25 +385,19 @@ func (s *countingSender) UpdateRelaySlot(validator []byte, originPeer uint64, se
 	s.calls = append(s.calls, countingRelaySlotCall{Validator: cp, OriginPeer: originPeer, SeenPeers: seenCp})
 }
 
-// PeersThatHave returns the preconfigured set for suppressionHash.
-// Router tests seed this to simulate the overlay having already
-// relayed a message to a known peer set.
-func (s *countingSender) PeersThatHave(suppressionHash [32]byte) []uint64 {
+func (s *countingSender) MessageRelayedRecently(suppressionHash [32]byte) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.peersThatHave == nil {
-		return nil
-	}
-	return append([]uint64(nil), s.peersThatHave[suppressionHash]...)
+	return s.relayed[suppressionHash]
 }
 
-func (s *countingSender) setPeersThatHave(suppressionHash [32]byte, peers []uint64) {
+func (s *countingSender) setRelayed(suppressionHash [32]byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.peersThatHave == nil {
-		s.peersThatHave = make(map[[32]byte][]uint64)
+	if s.relayed == nil {
+		s.relayed = make(map[[32]byte]bool)
 	}
-	s.peersThatHave[suppressionHash] = append([]uint64(nil), peers...)
+	s.relayed[suppressionHash] = true
 }
 
 func (s *countingSender) getCalls() []countingRelaySlotCall {
@@ -443,7 +437,7 @@ func TestRouter_UpdateRelaySlot_DuplicatesOnly(t *testing.T) {
 	})
 
 	inbox := make(chan *peermanagement.InboundMessage, 10)
-	router := NewRouter(engine, adaptor, inbox)
+	router := newTestRouter(engine, adaptor, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
@@ -463,7 +457,7 @@ func TestRouter_UpdateRelaySlot_DuplicatesOnly(t *testing.T) {
 	// Peer A delivers it first: first-seen, must NOT fire UpdateRelaySlot.
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  1,
-		Type:    uint16(message.TypeProposeLedger),
+		Type:    message.TypeProposeLedger,
 		Payload: payload,
 	}
 	time.Sleep(30 * time.Millisecond)
@@ -471,11 +465,12 @@ func TestRouter_UpdateRelaySlot_DuplicatesOnly(t *testing.T) {
 	firstRound := sender.getCalls()
 	assert.Empty(t, firstRound,
 		"first-seen proposal must NOT feed UpdateRelaySlot (rippled fires only on duplicates)")
+	sender.setRelayed(hashProposalSuppression(ProposalFromMessage(proposeSet)))
 
 	// Peer B delivers the same bytes: duplicate, MUST fire UpdateRelaySlot.
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  2,
-		Type:    uint16(message.TypeProposeLedger),
+		Type:    message.TypeProposeLedger,
 		Payload: payload,
 	}
 	time.Sleep(30 * time.Millisecond)
@@ -509,7 +504,7 @@ func TestRouter_UpdateRelaySlot_UntrustedValidator(t *testing.T) {
 	})
 
 	inbox := make(chan *peermanagement.InboundMessage, 10)
-	router := NewRouter(engine, adaptor, inbox)
+	router := newTestRouter(engine, adaptor, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
@@ -530,9 +525,10 @@ func TestRouter_UpdateRelaySlot_UntrustedValidator(t *testing.T) {
 	}
 	payload := encodePayload(t, proposeSet)
 
-	inbox <- &peermanagement.InboundMessage{PeerID: 1, Type: uint16(message.TypeProposeLedger), Payload: payload}
+	inbox <- &peermanagement.InboundMessage{PeerID: 1, Type: message.TypeProposeLedger, Payload: payload}
 	time.Sleep(30 * time.Millisecond)
-	inbox <- &peermanagement.InboundMessage{PeerID: 2, Type: uint16(message.TypeProposeLedger), Payload: payload}
+	sender.setRelayed(hashProposalSuppression(ProposalFromMessage(proposeSet)))
+	inbox <- &peermanagement.InboundMessage{PeerID: 2, Type: message.TypeProposeLedger, Payload: payload}
 	time.Sleep(30 * time.Millisecond)
 
 	calls := sender.getCalls()
@@ -541,19 +537,7 @@ func TestRouter_UpdateRelaySlot_UntrustedValidator(t *testing.T) {
 	assert.Equal(t, uint64(2), calls[0].OriginPeer)
 }
 
-// TestRelay_DuplicateArrivalFeedsAllKnownRelayers pins B3: when a
-// duplicate proposal arrives from peer C, and the overlay's reverse
-// index already maps the proposal's suppression hash to peers {A, B}
-// (from a prior outbound relay), UpdateRelaySlot must be fed with
-// the full set {A, B, C} — not just C. Matches rippled's
-// overlay_.relay returning haveMessage and PeerImp passing it whole
-// to updateSlotAndSquelch (PeerImp.cpp:3010-3017 for proposals).
-//
-// Regression guard: a mutation that feeds only originPeer — the
-// pre-B3 behavior — would register exactly one peer in the seenPeers
-// slice (C), under-counting multi-path delivery evidence and slowing
-// selection convergence vs. rippled.
-func TestRelay_DuplicateArrivalFeedsAllKnownRelayers(t *testing.T) {
+func TestRelay_DuplicateAfterRelayFeedsOnlyCurrentSource(t *testing.T) {
 	engine := &mockEngine{}
 	svc := newTestLedgerService(t)
 
@@ -573,7 +557,7 @@ func TestRelay_DuplicateArrivalFeedsAllKnownRelayers(t *testing.T) {
 	})
 
 	inbox := make(chan *peermanagement.InboundMessage, 10)
-	router := NewRouter(engine, adaptor, inbox)
+	router := newTestRouter(engine, adaptor, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
@@ -592,29 +576,19 @@ func TestRelay_DuplicateArrivalFeedsAllKnownRelayers(t *testing.T) {
 	// slot-feeding yet (first-seen gate).
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  1,
-		Type:    uint16(message.TypeProposeLedger),
+		Type:    message.TypeProposeLedger,
 		Payload: payload,
 	}
 	time.Sleep(30 * time.Millisecond)
 	require.Empty(t, sender.getCalls(), "first-seen proposal must not feed the slot")
 
-	// Seed the overlay reverse index: the proposal's suppression key
-	// maps to peers {A=1, B=2} — as if we had already relayed it to
-	// them after the first-seen arrival. The proposal's suppression
-	// hash is computed from its decoded fields via
-	// hashProposalSuppression, so we reconstruct a matching Proposal
-	// to produce the same key the router will compute on the
-	// duplicate arrival below.
 	seedProposal := ProposalFromMessage(proposeSet)
 	seedHash := hashProposalSuppression(seedProposal)
-	sender.setPeersThatHave(seedHash, []uint64{1, 2})
+	sender.setRelayed(seedHash)
 
-	// Duplicate delivery from peer C=3: UpdateRelaySlot must fire
-	// with originPeer=3 AND seenPeers containing 1 and 2 — the full
-	// set of peers the network believes already have this message.
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  3,
-		Type:    uint16(message.TypeProposeLedger),
+		Type:    message.TypeProposeLedger,
 		Payload: payload,
 	}
 	time.Sleep(30 * time.Millisecond)
@@ -624,15 +598,8 @@ func TestRelay_DuplicateArrivalFeedsAllKnownRelayers(t *testing.T) {
 	call := calls[0]
 	assert.Equal(t, uint64(3), call.OriginPeer,
 		"UpdateRelaySlot must be fed with the DUPLICATE peer's ID as originPeer")
-
-	// seenPeers must contain peers 1 and 2 (the known-havers from
-	// the reverse index). Order is not fixed (it's a set walk).
-	seenSet := make(map[uint64]struct{}, len(call.SeenPeers))
-	for _, p := range call.SeenPeers {
-		seenSet[p] = struct{}{}
-	}
-	assert.Contains(t, seenSet, uint64(1), "seenPeers must include peer A (prior known-haver)")
-	assert.Contains(t, seenSet, uint64(2), "seenPeers must include peer B (prior known-haver)")
+	assert.Empty(t, call.SeenPeers,
+		"the verified first-source set was counted when relay completed")
 }
 
 // TestRelay_FirstSeenMessageDoesNotFeedSlot pins the other half of
@@ -665,16 +632,11 @@ func TestRelay_FirstSeenMessageDoesNotFeedSlot(t *testing.T) {
 	})
 
 	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := NewRouter(engine, adaptor, inbox)
+	router := newTestRouter(engine, adaptor, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
 
-	// Construct a proposal and PRE-SEED the overlay's reverse index
-	// with a non-empty known-haver set for its suppression hash. If
-	// the gate were inverted, this test would exercise a code path
-	// that feeds seenPeers into the slot even on a first-seen
-	// arrival — exactly the regression we're pinning against.
 	proposeSet := &message.ProposeSet{
 		ProposeSeq:     7,
 		CurrentTxHash:  make([]byte, 32),
@@ -687,7 +649,7 @@ func TestRelay_FirstSeenMessageDoesNotFeedSlot(t *testing.T) {
 
 	seedProposal := ProposalFromMessage(proposeSet)
 	seedHash := hashProposalSuppression(seedProposal)
-	sender.setPeersThatHave(seedHash, []uint64{11, 22, 33})
+	sender.setRelayed(seedHash)
 
 	// Deliver the message exactly once — from a fresh peer, no prior
 	// observation. This is the rippled `!added == false` branch in
@@ -695,7 +657,7 @@ func TestRelay_FirstSeenMessageDoesNotFeedSlot(t *testing.T) {
 	// Slot must NOT fire.
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  99,
-		Type:    uint16(message.TypeProposeLedger),
+		Type:    message.TypeProposeLedger,
 		Payload: payload,
 	}
 	time.Sleep(30 * time.Millisecond)
@@ -710,7 +672,7 @@ func TestRouterStopsOnChannelClose(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, adaptor, inbox)
+	router := newTestRouter(engine, adaptor, inbox)
 
 	done := make(chan struct{})
 	go func() {
@@ -767,7 +729,8 @@ func TestConverterTransactionRoundTrip(t *testing.T) {
 func TestConverterHaveSetRoundTrip(t *testing.T) {
 	id := consensus.TxSetID{0x01, 0x02, 0x03}
 	msg := HaveSetToMessage(id, message.TxSetStatusNeed)
-	restoredID, restoredStatus := HaveSetFromMessage(msg)
+	restoredID, restoredStatus, err := HaveSetFromMessage(msg)
+	require.NoError(t, err)
 	assert.Equal(t, id, restoredID)
 	assert.Equal(t, message.TxSetStatusNeed, restoredStatus)
 }

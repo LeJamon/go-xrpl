@@ -10,16 +10,14 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // Pathfinding search levels mirror rippled's config defaults
 // (Config.h: PATH_SEARCH_FAST=2, PATH_SEARCH=2, PATH_SEARCH_MAX=3).
 // A fast update runs at SearchLevelFast and a full update at
-// SearchLevelDefault; repeated updates never exceed SearchLevelMax
-// (PathRequest::doUpdate). Tests ported from rippled's Path_test raise
-// the level to 7, matching that suite's pathTestEnv configuration.
+// SearchLevelDefault. SearchLevelMax is the default ceiling for repeated
+// updates.
 const (
 	SearchLevelFast    = 2
 	SearchLevelDefault = 2
@@ -59,7 +57,10 @@ type PathRequest struct {
 	convertAll       bool
 	maxPaths         int
 	searchLevel      int
+	searchLevelMax   int
 	domainID         *[32]byte
+	lastSuccess      bool
+	context          map[payment.Issue][][]payment.PathStep
 }
 
 // IsValidAsset reports whether an amount carries an asset that path finding
@@ -98,6 +99,8 @@ func NewPathRequest(
 		convertAll:       convertAll,
 		maxPaths:         maxReturnedPaths,
 		searchLevel:      SearchLevelDefault,
+		searchLevelMax:   SearchLevelMax,
+		context:          make(map[payment.Issue][][]payment.PathStep),
 	}
 }
 
@@ -108,10 +111,48 @@ func (pr *PathRequest) SetSearchLevel(level int) {
 	pr.searchLevel = level
 }
 
+// SetSearchLevelMax sets the ceiling for adaptive persistent searches.
+func (pr *PathRequest) SetSearchLevelMax(level int) {
+	pr.searchLevelMax = level
+}
+
 // SetDomainID restricts pathfinding and liquidity calculation to one
 // permissioned domain.
 func (pr *PathRequest) SetDomainID(domainID *[32]byte) {
 	pr.domainID = domainID
+}
+
+// ExecuteUpdate adapts the search depth and retains paths found by earlier
+// updates of the same persistent request.
+func (pr *PathRequest) ExecuteUpdate(ledger tx.LedgerView, fast, loaded bool) *PathRequestResult {
+	pr.adjustSearchLevel(fast, loaded)
+	result := pr.Execute(ledger)
+	pr.lastSuccess = result != nil && len(result.Alternatives) != 0
+	return result
+}
+
+func (pr *PathRequest) adjustSearchLevel(fast, loaded bool) {
+	switch {
+	case pr.searchLevel == 0:
+		if loaded || fast {
+			pr.searchLevel = SearchLevelFast
+		} else {
+			pr.searchLevel = SearchLevelDefault
+		}
+	case pr.searchLevel == SearchLevelFast && !fast:
+		pr.searchLevel = SearchLevelDefault
+		if loaded && SearchLevelDefault > SearchLevelFast {
+			pr.searchLevel--
+		}
+	case pr.lastSuccess:
+		if pr.searchLevel > SearchLevelDefault || loaded && pr.searchLevel > SearchLevelFast {
+			pr.searchLevel--
+		}
+	case !loaded && pr.searchLevel < pr.searchLevelMax:
+		pr.searchLevel++
+	case loaded && pr.searchLevel > SearchLevelFast:
+		pr.searchLevel--
+	}
 }
 
 // Execute runs the pathfinding algorithm and returns the result.
@@ -189,8 +230,9 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 		result.DestinationCurrencies = append(result.DestinationCurrencies, currency)
 	}
 
-	// Track previously found paths per source currency (mContext in rippled)
-	context := make(map[payment.Issue][][]payment.PathStep)
+	if pr.context == nil {
+		pr.context = make(map[payment.Issue][][]payment.PathStep)
+	}
 
 	// When convertAll is true, replace destination amount with largest possible.
 	// Reference: rippled convertAmount(saDstAmount, convert_all_) in PathRequest::findPaths()
@@ -209,7 +251,7 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 			srcAmount = state.NewXRPAmountFromInt(int64(99999999999)) // Max XRP
 		} else if srcIssue.IsMPT {
 			srcAmount = state.NewMPTAmountWithIssuanceID(
-				int64(entry.MaxMPTokenAmount),
+				int64(protocol.MaxMPTokenAmount),
 				state.EncodeAccountIDSafe(srcIssue.Issuer),
 				mptutil.EncodeID(srcIssue.MPTID),
 			)
@@ -235,9 +277,9 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 
 		pf.ComputePathRanks(pr.maxPaths)
 
-		extraPaths := context[srcIssue]
+		extraPaths := pr.context[srcIssue]
 		bestPaths, fullLiquidityPath := pf.GetBestPaths(pr.maxPaths, extraPaths, srcIssue.Issuer)
-		context[srcIssue] = bestPaths
+		pr.context[srcIssue] = bestPaths
 
 		// An empty path set is still tried: rippled runs rippleCalc with
 		// default paths allowed, so a working default path yields an

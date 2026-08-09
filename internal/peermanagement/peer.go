@@ -3,11 +3,11 @@ package peermanagement
 import (
 	"bufio"
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"slices"
@@ -94,16 +94,18 @@ type Peer struct {
 	bootstrapManifest        atomic.Bool
 	bootstrapManifestPending atomic.Bool
 
-	sendMu                 sync.Mutex
-	send                   chan []byte
-	prioritySend           chan []byte
-	manifestSend           chan [][]byte
+	outbound               *outboundQueue
+	sendMu                 sync.RWMutex
+	gracefulClosing        bool
+	outboundProgress       chan struct{}
+	outboundErrMu          sync.Mutex
+	outboundErr            error
 	events                 chan<- Event
 	consensusEvents        chan<- Event
 	consensusControlEvents chan<- Event
 	acquisitionEvents      chan<- Event
 	manifestMessages       chan<- *InboundMessage
-	manifestReadBudget     *readBudget
+	inboundReadBudget      *readBudget
 	manifestSpoolDir       string
 
 	// droppedEvents counts non-blocking event sends that fell through
@@ -136,7 +138,10 @@ type Peer struct {
 	// (PeerImp.cpp:358) and is wired by Overlay.attachUsage.
 	usage            *resource.Consumer
 	usageMu          sync.RWMutex
+	usageReleased    bool
 	onDropDisconnect func()
+	clusterOrigin    string
+	clusterOriginSet bool
 	// chargeDropFired CAS-gates the once-per-peer onDropDisconnect
 	// callback and disconnect log line. Rippled serialises this via
 	// the peer strand (PeerImp.cpp:355); goxrpl has no strand, so
@@ -169,9 +174,10 @@ type Peer struct {
 	// sendDrops counts frames dropped because the bounded send queue was
 	// full. go-xrpl drops the frame and returns ErrSendBufferFull rather
 	// than queueing unboundedly like rippled; this per-peer counter is
-	// surfaced via the `peers` RPC metrics so operators can see which
-	// peers are shedding outbound frames.
-	sendDrops atomic.Uint64
+	// surfaced via the `peers` RPC outbound_queue diagnostics so operators
+	// can see which peers are shedding outbound frames.
+	sendDrops        atomic.Uint64
+	sendDropsByClass [outboundClassCount]atomic.Uint64
 
 	// consecutiveDecompressFailures: back-to-back LZ4 errors; closed
 	// at maxConsecutiveDecompressFailures.
@@ -200,6 +206,13 @@ type Peer struct {
 	// past the cap, and the ring is never cleared (not even on LostSync).
 	recentLedgers [][32]byte
 
+	// txQueue holds transaction hashes deferred by reduce-relay. It mirrors
+	// rippled PeerImp::txQueue_: hashes remain queued until a HaveTransactions
+	// frame is successfully admitted to this peer's outbound queue.
+	txQueueMu  sync.Mutex
+	txQueue    [][32]byte
+	txQueueSet map[[32]byte]struct{}
+
 	// protocolVersion: negotiated peer-protocol token (e.g. "XRPL/2.2").
 	// Mirrors rippled PeerImp::protocol_, surfaced via `protocol` in the
 	// peers RPC (PeerImp.cpp:419). Rippled constructs PeerImp only after
@@ -215,7 +228,8 @@ type Peer struct {
 	firstLedgerSeq uint32
 	lastLedgerSeq  uint32
 
-	lastStatus message.NodeStatus
+	lastStatus    message.NodeStatus
+	lastStatusSet bool
 
 	latencyMu     sync.RWMutex
 	pingsInFlight map[uint32]pingInFlight
@@ -249,26 +263,26 @@ type PeerConfig struct {
 }
 
 // DefaultPeerConfig returns defaults; callers must set PeerTLSConfig
-// before Connect. The per-peer send queue is a fixed DefaultSendBufferSize.
+// before Connect.
 func DefaultPeerConfig() PeerConfig {
 	return PeerConfig{}
 }
 
 func NewPeer(id PeerID, endpoint Endpoint, inbound bool, identity *Identity, events chan<- Event) *Peer {
 	return &Peer{
-		id:            id,
-		endpoint:      endpoint,
-		inbound:       inbound,
-		identity:      identity,
-		state:         PeerStateDisconnected,
-		send:          make(chan []byte, DefaultSendBufferSize),
-		prioritySend:  make(chan []byte, acquisitionSendBufferSize),
-		manifestSend:  make(chan [][]byte, manifestSendBufferSize),
-		events:        events,
-		traffic:       NewTrafficCounter(),
-		metrics:       newPeerMetrics(nil),
-		squelchMap:    make(map[string]time.Time),
-		pingsInFlight: make(map[uint32]pingInFlight),
+		id:               id,
+		endpoint:         endpoint,
+		inbound:          inbound,
+		identity:         identity,
+		state:            PeerStateDisconnected,
+		outbound:         newOutboundQueue(),
+		outboundProgress: make(chan struct{}, 1),
+		events:           events,
+		traffic:          NewTrafficCounter(),
+		metrics:          newPeerMetrics(nil),
+		squelchMap:       make(map[string]time.Time),
+		txQueueSet:       make(map[[32]byte]struct{}),
+		pingsInFlight:    make(map[uint32]pingInFlight),
 		readPolicy: peerReadPolicy{
 			now:               time.Now,
 			idleTimeout:       readIdleDeadline,
@@ -302,15 +316,22 @@ func (p *Peer) SetManifestMessages(messages chan<- *InboundMessage) {
 	p.manifestMessages = messages
 }
 
-func (p *Peer) SetManifestReadBudget(budget *readBudget) {
-	p.manifestReadBudget = budget
+func (p *Peer) SetInboundReadBudget(budget *readBudget) {
+	p.inboundReadBudget = budget
 }
 
 func (p *Peer) SetManifestSpoolDir(dir string) {
 	p.manifestSpoolDir = dir
 }
 
-func manifestReadReservation(header MessageHeader) int64 {
+func isInboundBulkMessageType(msgType message.MessageType) bool {
+	return !message.IsKnownMessageType(msgType) || message.MaxPayloadSizeForType(msgType) > 64*1024
+}
+
+func inboundFrameReservation(header message.Header) int64 {
+	if !isInboundBulkMessageType(header.MessageType) {
+		return 0
+	}
 	size := int64(header.PayloadSize)
 	if header.Compressed {
 		size += int64(header.UncompressedSize)
@@ -322,50 +343,52 @@ func manifestReadReservation(header MessageHeader) int64 {
 // traffic and uses the best-effort event lane for other traffic. Closing the
 // peer releases a read loop waiting for capacity.
 func (p *Peer) dispatchEvent(evt Event) bool {
-	if evt.Type == EventMessageReceived && message.MessageType(evt.MessageType) == message.TypeManifests && p.manifestMessages != nil {
+	if evt.Type == EventMessageReceived && evt.MessageType == message.TypeManifests && p.manifestMessages != nil {
+		msg := evt.inboundMessage()
 		select {
-		case p.manifestMessages <- &InboundMessage{
-			PeerID:        evt.PeerID,
-			Type:          evt.MessageType,
-			Payload:       evt.Payload,
-			ManifestFrame: evt.ManifestFrame,
-		}:
+		case p.manifestMessages <- msg:
 			return true
 		case <-p.closeCh:
+			_ = msg.Close()
 			return false
 		}
 	}
-	if evt.Type == EventMessageReceived && isConsensusPriorityMessageType(message.MessageType(evt.MessageType)) && p.consensusEvents != nil {
+	if evt.Type == EventMessageReceived && isConsensusPriorityMessageType(evt.MessageType) && p.consensusEvents != nil {
 		select {
 		case p.consensusEvents <- evt:
 			return true
 		case <-p.closeCh:
+			evt.release()
 			return false
 		}
 	}
-	if evt.Type == EventMessageReceived && isConsensusControlMessageType(message.MessageType(evt.MessageType)) && p.consensusControlEvents != nil {
+	if evt.Type == EventMessageReceived && isConsensusControlMessageType(evt.MessageType) && p.consensusControlEvents != nil {
 		select {
 		case p.consensusControlEvents <- evt:
 			return true
 		case <-p.closeCh:
+			evt.release()
 			return false
 		}
 	}
-	if evt.Type == EventMessageReceived && isAcquisitionMessageType(message.MessageType(evt.MessageType)) && p.acquisitionEvents != nil {
+	if evt.Type == EventMessageReceived && isAcquisitionMessageType(evt.MessageType) && p.acquisitionEvents != nil {
 		select {
 		case p.acquisitionEvents <- evt:
 			return true
 		case <-p.closeCh:
+			evt.release()
 			return false
 		}
 	}
 	if p.events == nil {
+		evt.release()
 		return false
 	}
 	select {
 	case p.events <- evt:
 		return true
 	default:
+		evt.release()
 		if p.droppedEvents != nil {
 			p.droppedEvents.Add(1)
 		}
@@ -459,13 +482,41 @@ func (p *Peer) State() PeerState {
 func (p *Peer) RemotePublicKey() *PublicKeyToken {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.remotePubKey
+	if p.remotePubKey == nil {
+		return nil
+	}
+	key, err := NewPublicKeyToken(p.remotePubKey.Bytes())
+	if err != nil {
+		return nil
+	}
+	return key
+}
+
+// RemotePublicKeyBytes returns a copy of the peer's compressed node key.
+func (p *Peer) RemotePublicKeyBytes() []byte {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.remotePubKey == nil {
+		return nil
+	}
+	return p.remotePubKey.Bytes()
+}
+
+// RemotePublicKeyEncoded returns the peer's node public key in its canonical
+// base58 representation.
+func (p *Peer) RemotePublicKeyEncoded() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.remotePubKey == nil {
+		return ""
+	}
+	return p.remotePubKey.Encode()
 }
 
 func (p *Peer) Capabilities() *PeerCapabilities {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.capabilities
+	return p.capabilities.clone()
 }
 
 // compressionNegotiated reports whether this connection agreed to use
@@ -513,18 +564,9 @@ func (p *Peer) applyHandshakeExtras(x HandshakeExtras) {
 // ledger only; the (firstSeq, lastSeq) range is updated only when both
 // fields are present, then clamped to (0,0) if either is zero or inverted.
 //
-// newStatus mirrors rippled PeerImp.cpp:1799-1810. Read carefully: rippled's
-// branches both end with `last_status_ = *m;`, which copy-assigns the
-// inbound proto verbatim — so the stored last_status_.newstatus() is
-// dropped whenever the wire message has no newstatus. The else-branch
-// additionally mutates the local `m` to carry the prior enum, so the
-// pubPeerStatus callback (which reads `m`, not last_status_) still sees
-// the inherited value once. We model the same split:
-//   - lastStatus is overwritten verbatim with the wire's NewStatus (zero
-//     argument drops the prior value, matching rippled's `peers` RPC).
-//   - The returned effective status is the wire value when set, or the
-//     prior lastStatus otherwise — consumed by handleStatusChange's
-//     pubPeerStatus emit so subscribers receive the inherited enum.
+// newStatus mirrors rippled's lastStatus copy and one-message inheritance:
+// an absent status inherits the prior present value for publishing, while the
+// stored message is replaced by the original absence.
 //
 // The lostSync early-return runs after the lastStatus write, so a
 // lostSync update carrying a NewStatus still records it — but
@@ -535,12 +577,20 @@ func (p *Peer) applyStatusChange(sc *message.StatusChange) message.NodeStatus {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	wireHadStatus := sc.HasNewStatus()
 	effective := sc.NewStatus
-	if sc.NewStatus == 0 {
+	if !wireHadStatus && p.lastStatusSet {
 		effective = p.lastStatus
+		sc.NewStatus = effective
+		sc.NewStatusSet = true
 	}
-	p.lastStatus = sc.NewStatus
-	if sc.NewEvent == message.NodeEventLostSync {
+	if wireHadStatus {
+		p.lastStatus = effective
+	} else {
+		p.lastStatus = 0
+	}
+	p.lastStatusSet = wireHadStatus
+	if sc.HasNewEvent() && sc.NewEvent == message.NodeEventLostSync {
 		p.hasClosedLedger = false
 		p.hasPreviousLedger = false
 		p.closedLedger = [32]byte{}
@@ -690,18 +740,19 @@ func (p *Peer) PreviousLedger() ([32]byte, bool) {
 const maxRecentTxSets = 128
 
 // AddTxSet records that the peer advertised tx-set root hash (tsHAVE).
-// Duplicates are ignored; once the ring is full the oldest entry is
-// evicted. Mirrors rippled PeerImp::onMessage(TMHaveTransactionSet).
-func (p *Peer) AddTxSet(hash [32]byte) {
+// It reports whether the hash was inserted. Once the ring is full the
+// oldest entry is evicted. Mirrors rippled PeerImp::onMessage(TMHaveTransactionSet).
+func (p *Peer) AddTxSet(hash [32]byte) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if slices.Contains(p.recentTxSets, hash) {
-		return
+		return false
 	}
 	if len(p.recentTxSets) >= maxRecentTxSets {
 		p.recentTxSets = p.recentTxSets[1:]
 	}
 	p.recentTxSets = append(p.recentTxSets, hash)
+	return true
 }
 
 // HasTxSet reports whether the peer has advertised tx-set root hash.
@@ -883,6 +934,10 @@ func (p *Peer) performHandshake(ctx context.Context, tlsConn peertls.PeerConn) e
 			fmt.Errorf("%w: got status %d, headers: %v, body: %s",
 				ErrInvalidHandshake, resp.StatusCode, resp.Header, string(body)))
 	}
+	if err := validateHandshakeResponse(resp); err != nil {
+		resp.Body.Close()
+		return NewHandshakeError(p.endpoint, "validate_envelope", err)
+	}
 	resp.Body.Close()
 
 	// Server-Domain check runs first (rippled verify order).
@@ -947,6 +1002,19 @@ func tcpRemoteIP(conn net.Conn) net.IP {
 // conn and closeCh; runWG.Wait ensures a fully-quiesced peer before
 // return so a slow OS-level close cannot leak goroutines past the
 // caller's cleanup.
+type peerRunLoop uint8
+
+const (
+	peerReadLoop peerRunLoop = iota
+	peerWriteLoop
+	peerPingLoop
+)
+
+type peerRunResult struct {
+	loop peerRunLoop
+	err  error
+}
+
 func (p *Peer) Run(ctx context.Context) error {
 	p.mu.RLock()
 	if p.state != PeerStateConnected {
@@ -955,182 +1023,55 @@ func (p *Peer) Run(ctx context.Context) error {
 	}
 	p.mu.RUnlock()
 
-	errCh := make(chan error, 3)
+	errCh := make(chan peerRunResult, 3)
 
 	p.runWG.Add(3)
 	go func() {
 		defer p.runWG.Done()
-		errCh <- p.readLoop(ctx)
+		errCh <- peerRunResult{loop: peerReadLoop, err: p.readLoop(ctx)}
 	}()
 
 	go func() {
 		defer p.runWG.Done()
-		errCh <- p.writeLoop(ctx)
+		errCh <- peerRunResult{loop: peerWriteLoop, err: p.writeLoop(ctx)}
 	}()
 
 	go func() {
 		defer p.runWG.Done()
-		errCh <- p.pingLoop(ctx)
+		errCh <- peerRunResult{loop: peerPingLoop, err: p.pingLoop(ctx)}
 	}()
 
 	var runErr error
 	select {
 	case <-ctx.Done():
 		runErr = ctx.Err()
-	case err := <-errCh:
+	case err := <-p.outbound.fatalSignal():
 		runErr = err
+	case result := <-errCh:
+		runErr = result.err
+	}
+	if errors.Is(runErr, io.EOF) && p.beginGracefulClose() {
+		p.mu.RLock()
+		conn := p.conn
+		p.mu.RUnlock()
+		if tlsConn, ok := conn.(peertls.GracefulConn); ok {
+			// The queue is bounded and writeLoop applies a size-aware deadline to
+			// every accepted frame; a shorter aggregate cap can discard valid data.
+			drainErr := p.waitOutboundDrain(ctx, context.Background(), errCh)
+			if drainErr != nil {
+				runErr = fmt.Errorf("peer graceful drain: %w", drainErr)
+			} else {
+				shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
+				if err := tlsConn.ShutdownContext(shutdownCtx); err != nil {
+					runErr = fmt.Errorf("peer TLS shutdown: %w", err)
+				}
+				cancelShutdown()
+			}
+		}
 	}
 	p.Close()
 	p.runWG.Wait()
 	return runErr
-}
-
-type frameProgressReader struct {
-	peer                *Peer
-	reader              io.Reader
-	conn                net.Conn
-	frameID             uint64
-	startedAt           time.Time
-	deadline            time.Time
-	budgetDeadlineArmed bool
-	header              MessageHeader
-	headerSet           bool
-	bytesRead           uint64
-	payloadStart        uint64
-	payloadStartedAt    time.Time
-}
-
-func (p *Peer) newFrameProgressReader(reader io.Reader, conn net.Conn) *frameProgressReader {
-	now := p.readPolicy.now()
-	p.readProgressMu.Lock()
-	p.readProgress.id++
-	p.readProgress.active = true
-	p.readProgress.deadline = time.Time{}
-	p.readProgress.lastProgress = time.Time{}
-	id := p.readProgress.id
-	p.readProgressMu.Unlock()
-	return &frameProgressReader{
-		peer:      p,
-		reader:    reader,
-		conn:      conn,
-		frameID:   id,
-		startedAt: now,
-	}
-}
-
-func (r *frameProgressReader) setHeader(header MessageHeader) error {
-	r.header = header
-	r.headerSet = true
-	r.payloadStart = r.bytesRead
-	r.payloadStartedAt = r.peer.readPolicy.now()
-	r.deadline = r.startedAt.Add(r.peer.frameReadBudget(header.PayloadSize))
-
-	r.peer.readProgressMu.Lock()
-	if r.peer.readProgress.id == r.frameID && r.peer.readProgress.active {
-		r.peer.readProgress.deadline = r.deadline
-	}
-	r.peer.readProgressMu.Unlock()
-	return nil
-}
-
-func (p *Peer) frameReadBudget(payloadSize uint32) time.Duration {
-	return p.readPolicy.idleTimeout + time.Duration(
-		(int64(payloadSize)*int64(time.Second)+p.readPolicy.minimumFrameRate-1)/
-			p.readPolicy.minimumFrameRate,
-	)
-}
-
-func (r *frameProgressReader) Read(dst []byte) (int, error) {
-	now := r.peer.readPolicy.now()
-	if !r.deadline.IsZero() && !now.Before(r.deadline) {
-		return 0, ErrFrameReadTooSlow
-	}
-	if r.conn != nil {
-		deadline := now.Add(r.peer.readPolicy.idleTimeout)
-		r.budgetDeadlineArmed = false
-		if !r.deadline.IsZero() && !deadline.Before(r.deadline) {
-			deadline = r.deadline
-			r.budgetDeadlineArmed = true
-		}
-		if err := r.conn.SetReadDeadline(deadline); err != nil {
-			return 0, err
-		}
-	}
-
-	n, err := r.reader.Read(dst)
-	if n > 0 {
-		r.bytesRead += uint64(n)
-		now = r.peer.readPolicy.now()
-		r.peer.readProgressMu.Lock()
-		if r.peer.readProgress.id == r.frameID && r.peer.readProgress.active {
-			r.peer.readProgress.lastProgress = now
-		}
-		r.peer.readProgressMu.Unlock()
-		if r.headerSet && r.peer.onBootstrapProgress != nil {
-			r.peer.onBootstrapProgress(bootstrapFrameProgress{
-				messageType: r.header.MessageType,
-				wireSize:    r.header.PayloadSize,
-				compressed:  r.header.Compressed,
-				bytesRead:   r.bytesRead - r.payloadStart,
-				elapsed:     now.Sub(r.payloadStartedAt),
-			})
-		}
-		if !r.deadline.IsZero() && !now.Before(r.deadline) {
-			return n, ErrFrameReadTooSlow
-		}
-	}
-	return n, err
-}
-
-func (r *frameProgressReader) failure(err error, now time.Time) error {
-	if !r.headerSet {
-		return err
-	}
-	bytesRead := r.bytesRead - r.payloadStart
-	elapsed := now.Sub(r.payloadStartedAt)
-	if elapsed < 0 {
-		elapsed = 0
-	}
-	return &FrameReadError{
-		MessageType: r.header.MessageType,
-		WireSize:    r.header.PayloadSize,
-		Compressed:  r.header.Compressed,
-		BytesRead:   bytesRead,
-		Elapsed:     elapsed,
-		Err:         err,
-	}
-}
-
-func (r *frameProgressReader) finish(success bool, now time.Time) {
-	r.peer.readProgressMu.Lock()
-	if r.peer.readProgress.id != r.frameID {
-		r.peer.readProgressMu.Unlock()
-		return
-	}
-	lastProgress := r.peer.readProgress.lastProgress
-	r.peer.readProgress.active = false
-	if success {
-		r.peer.latencyMu.Lock()
-		for seq, ping := range r.peer.pingsInFlight {
-			if lastProgress.After(ping.sentAt) && now.Before(ping.progressDeadline) {
-				ping.deferUntil = now.Add(r.peer.readPolicy.pingDispatchGrace)
-				if ping.progressDeadline.Before(ping.deferUntil) {
-					ping.deferUntil = ping.progressDeadline
-				}
-				r.peer.pingsInFlight[seq] = ping
-			}
-		}
-		r.peer.latencyMu.Unlock()
-	}
-	r.peer.readProgressMu.Unlock()
-}
-
-func (p *Peer) frameProgressBlocksPing(progress inboundFrameProgress, ping pingInFlight, now time.Time) bool {
-	return progress.active &&
-		now.Before(ping.progressDeadline) &&
-		!progress.deadline.IsZero() && now.Before(progress.deadline) &&
-		progress.lastProgress.After(ping.sentAt) &&
-		now.Sub(progress.lastProgress) < p.readPolicy.idleTimeout
 }
 
 func (p *Peer) readLoop(ctx context.Context) error {
@@ -1154,12 +1095,16 @@ func (p *Peer) readLoop(ctx context.Context) error {
 		}
 
 		frameReader := p.newFrameProgressReader(reader, conn)
-		header, err := readMessageHeader(frameReader)
+		header, err := message.ReadHeader(frameReader)
+		if err == nil && header.Compressed && !p.compressionNegotiated() {
+			p.IncBadData("compression-unnegotiated")
+			frameReader.finish(false, p.readPolicy.now())
+			return errCompressionUnnegotiated
+		}
 		if err == nil &&
-			header.MessageType == TypeManifests &&
-			!header.Compressed &&
+			header.MessageType == message.TypeManifests &&
 			p.manifestSpoolDir != "" &&
-			header.PayloadSize > manifestSpoolThreshold {
+			(header.PayloadSize > manifestSpoolThreshold || header.UncompressedSize > manifestSpoolThreshold) {
 			if outstandingManifest != nil {
 				select {
 				case <-outstandingManifest:
@@ -1176,9 +1121,11 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			frameReader.startedAt = p.readPolicy.now()
 			_ = frameReader.setHeader(*header)
 			manifestFrame, spoolErr := spoolManifestFrame(
+				ctx,
+				p.closeCh,
 				frameReader,
 				*header,
-				p.manifestReadBudget,
+				p.inboundReadBudget,
 				p.manifestSpoolDir,
 			)
 			now := p.readPolicy.now()
@@ -1190,28 +1137,25 @@ func (p *Peer) readLoop(ctx context.Context) error {
 				if p.closed.Load() {
 					return nil
 				}
-				if errors.Is(spoolErr, ErrFrameReadTooSlow) {
-					return frameReader.failure(ErrFrameReadTooSlow, now)
-				}
-				var ne net.Error
-				if errors.As(spoolErr, &ne) && ne.Timeout() {
-					if frameReader.budgetDeadlineArmed {
-						return frameReader.failure(ErrFrameReadTooSlow, now)
-					}
-					return frameReader.failure(ErrReadIdle, now)
-				}
-				return frameReader.failure(spoolErr, now)
+				return frameReader.failure(
+					normalizeManifestSpoolReadError(spoolErr, frameReader.budgetDeadlineArmed),
+					now,
+				)
 			}
 
 			payloadWireSize := uint64(header.PayloadSize)
-			p.metrics.recv.addMessage(payloadWireSize + HeaderSizeUncompressed)
+			headerSize := uint64(message.HeaderSizeUncompressed)
+			if header.Compressed {
+				headerSize = message.HeaderSizeCompressed
+			}
+			p.metrics.recv.addMessage(payloadWireSize + headerSize)
 			p.bootstrapManifest.Store(true)
-			p.traffic.AddCount(CategorizeMessage(uint16(header.MessageType)), true, int(header.PayloadSize))
+			p.traffic.AddCount(CategorizeMessage(header.MessageType), true, int(header.PayloadSize))
 
 			delivered := p.dispatchEvent(Event{
 				Type:          EventMessageReceived,
 				PeerID:        p.id,
-				MessageType:   uint16(header.MessageType),
+				MessageType:   header.MessageType,
 				ManifestFrame: manifestFrame,
 				WireSize:      payloadWireSize,
 			})
@@ -1229,14 +1173,14 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			continue
 		}
 
-		var manifestReservation int64
+		var retainedReservation int64
 		if err == nil {
-			if header.MessageType == TypeManifests && p.manifestReadBudget != nil {
-				reservation := manifestReadReservation(*header)
-				if acquireErr := p.manifestReadBudget.acquire(ctx, p.closeCh, reservation); acquireErr != nil {
+			if p.inboundReadBudget != nil {
+				reservation := inboundFrameReservation(*header)
+				if acquireErr := p.inboundReadBudget.acquire(ctx, p.closeCh, reservation); acquireErr != nil {
 					err = acquireErr
 				} else {
-					manifestReservation = reservation
+					retainedReservation = reservation
 					frameReader.startedAt = p.readPolicy.now()
 				}
 			}
@@ -1244,15 +1188,15 @@ func (p *Peer) readLoop(ctx context.Context) error {
 				_ = frameReader.setHeader(*header)
 			}
 		}
-		releaseManifestReservation := func() {
-			if manifestReservation > 0 {
-				p.manifestReadBudget.release(manifestReservation)
-				manifestReservation = 0
+		releaseRetainedReservation := func() {
+			if retainedReservation > 0 {
+				p.inboundReadBudget.release(retainedReservation)
+				retainedReservation = 0
 			}
 		}
 		var payload []byte
 		if err == nil {
-			payload, err = readMessagePayload(frameReader, *header)
+			payload, err = message.ReadPayload(frameReader, *header)
 		}
 		now := p.readPolicy.now()
 		if err == nil && !frameReader.deadline.IsZero() && !now.Before(frameReader.deadline) {
@@ -1260,7 +1204,7 @@ func (p *Peer) readLoop(ctx context.Context) error {
 		}
 		frameReader.finish(err == nil, now)
 		if err != nil {
-			releaseManifestReservation()
+			releaseRetainedReservation()
 			if p.closed.Load() {
 				return nil
 			}
@@ -1291,64 +1235,66 @@ func (p *Peer) readLoop(ctx context.Context) error {
 		payloadWireSize := uint64(len(payload))
 		wireBytes := payloadWireSize
 		if header.Compressed {
-			wireBytes += HeaderSizeCompressed
+			wireBytes += message.HeaderSizeCompressed
 		} else {
-			wireBytes += HeaderSizeUncompressed
+			wireBytes += message.HeaderSizeUncompressed
 		}
 		p.metrics.recv.addMessage(wireBytes)
 
-		if header.Compressed {
-			// rippled rejects a compressed frame outright when compression
-			// was not negotiated for the connection (ProtocolMessage.h:369-
-			// 375). A peer shipping LZ4 frames we never agreed to is a
-			// protocol violation — charge and tear the connection down.
-			if !p.compressionNegotiated() {
-				p.IncBadData("compression-unnegotiated")
-				releaseManifestReservation()
-				return fmt.Errorf("peer sent a compressed frame without negotiating compression")
-			}
-		}
-
 		if !message.IsKnownMessageType(header.MessageType) {
-			releaseManifestReservation()
+			releaseRetainedReservation()
 			continue
 		}
-		if header.MessageType == TypeManifests {
+		if header.MessageType == message.TypeManifests {
 			p.bootstrapManifest.Store(true)
 		}
 
 		if header.Compressed {
-			payload, err = DecompressLZ4(payload, int(header.UncompressedSize))
+			payload, err = message.DecompressLZ4(payload, int(header.UncompressedSize))
 			if err != nil {
 				p.IncBadData("decompress-lz4-failed")
-				if header.MessageType == TypeManifests && p.onBootstrapReady != nil {
-					releaseManifestReservation()
+				if header.MessageType == message.TypeManifests && p.onBootstrapReady != nil {
+					releaseRetainedReservation()
 					return fmt.Errorf("bootstrap manifests decompression failed: %w", err)
 				}
 				if p.consecutiveDecompressFailures.Add(1) >= maxConsecutiveDecompressFailures {
-					releaseManifestReservation()
+					releaseRetainedReservation()
 					return fmt.Errorf("decompress-lz4 failed %d times in a row: %w",
 						maxConsecutiveDecompressFailures, err)
 				}
-				releaseManifestReservation()
+				releaseRetainedReservation()
 				continue
 			}
 			p.consecutiveDecompressFailures.Store(0)
+			if retainedReservation > 0 {
+				p.inboundReadBudget.release(int64(header.PayloadSize))
+				retainedReservation -= int64(header.PayloadSize)
+			}
 		}
-		p.traffic.AddCount(CategorizeMessage(uint16(header.MessageType)), true, len(payload))
+		if err := message.Preflight(header.MessageType, payload); err != nil {
+			reason := wirePreflightChargeReason(err)
+			p.IncBadData(reason)
+			releaseRetainedReservation()
+			if header.MessageType == message.TypeManifests && p.onBootstrapReady != nil {
+				return fmt.Errorf("bootstrap manifests wire preflight failed: %w", err)
+			}
+			continue
+		}
+		p.traffic.AddCount(CategorizeMessage(header.MessageType), true, len(payload))
 
 		delivered := p.dispatchEvent(Event{
 			Type:        EventMessageReceived,
 			PeerID:      p.id,
-			MessageType: uint16(header.MessageType),
+			MessageType: header.MessageType,
 			Payload:     payload,
 			WireSize:    payloadWireSize,
+			reservation: newInboundReservation(p.inboundReadBudget, retainedReservation),
 		})
-		releaseManifestReservation()
-		if !delivered && header.MessageType == TypeManifests && p.onBootstrapReady != nil {
+		retainedReservation = 0
+		if !delivered && header.MessageType == message.TypeManifests && p.onBootstrapReady != nil {
 			return errBootstrapManifestDropped
 		}
-		if delivered && header.MessageType == TypeManifests && p.onBootstrapReady != nil {
+		if delivered && header.MessageType == message.TypeManifests && p.onBootstrapReady != nil {
 			p.bootstrapManifestPending.Store(true)
 		}
 	}
@@ -1362,20 +1308,18 @@ func (p *Peer) acknowledgeBootstrap() {
 }
 
 func (p *Peer) writeLoop(ctx context.Context) error {
-	schedule := outboundSchedule{}
 	for {
-		data, err := p.nextOutbound(ctx, &schedule)
+		token, err := p.outbound.next(ctx)
 		if err != nil {
 			return err
 		}
-		if data == nil {
-			return nil
-		}
+		data := token.data
 		p.mu.RLock()
 		conn := p.conn
 		p.mu.RUnlock()
 
 		if conn == nil {
+			p.completeOutbound(token, ErrConnectionClosed)
 			return ErrConnectionClosed
 		}
 
@@ -1383,6 +1327,7 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 		compressionEnabled := p.compressionNegotiated()
 		if header, err := message.DecodeHeader(data); err == nil && header.Compressed {
 			if !compressionEnabled {
+				p.completeOutbound(token, errCompressionUnnegotiated)
 				return errCompressionUnnegotiated
 			}
 		} else if compressionEnabled {
@@ -1390,9 +1335,11 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 		}
 
 		if err := conn.SetWriteDeadline(time.Now().Add(p.frameReadBudget(uint32(len(wire))))); err != nil {
+			p.completeOutbound(token, err)
 			return err
 		}
-		n, err := conn.Write(wire)
+		n, err := writeComplete(conn, wire)
+		p.completeOutbound(token, err)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				return ErrWriteIdle
@@ -1401,61 +1348,85 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 		}
 		p.metrics.sent.addMessage(uint64(n))
 		if hdr, derr := message.DecodeHeader(wire); derr == nil {
-			p.traffic.AddCount(CategorizeMessage(uint16(hdr.MessageType)), false, n)
+			p.traffic.AddCount(CategorizeMessage(hdr.MessageType), false, n)
 		}
 	}
 }
 
-const ordinaryFramesPerManifestChunk = 16
-
-type outboundSchedule struct {
-	manifests         [][]byte
-	ordinaryRemaining int
-}
-
-func (p *Peer) nextOutbound(ctx context.Context, schedule *outboundSchedule) ([]byte, error) {
+func (p *Peer) completeOutbound(token outboundToken, writeErr error) {
+	if writeErr != nil {
+		p.outboundErrMu.Lock()
+		if p.outboundErr == nil {
+			p.outboundErr = writeErr
+		}
+		p.outboundErrMu.Unlock()
+	}
+	p.outbound.complete(token)
 	select {
-	case data := <-p.prioritySend:
-		return data, nil
+	case p.outboundProgress <- struct{}{}:
 	default:
 	}
-	if schedule.ordinaryRemaining > 0 {
+}
+
+func (p *Peer) beginGracefulClose() bool {
+	p.sendMu.Lock()
+	defer p.sendMu.Unlock()
+	if p.closed.Load() {
+		return false
+	}
+	p.setState(PeerStateClosing)
+	p.gracefulClosing = true
+	return true
+}
+
+func (p *Peer) waitOutboundDrain(
+	runCtx, shutdownCtx context.Context,
+	runResults <-chan peerRunResult,
+) error {
+	for {
+		p.outboundErrMu.Lock()
+		writeErr := p.outboundErr
+		p.outboundErrMu.Unlock()
+		if writeErr != nil {
+			return writeErr
+		}
+		if p.outbound.snapshot().TotalFrames == 0 {
+			return nil
+		}
 		select {
-		case data := <-p.send:
-			schedule.ordinaryRemaining--
-			return data, nil
-		default:
+		case <-runCtx.Done():
+			return runCtx.Err()
+		case <-shutdownCtx.Done():
+			return shutdownCtx.Err()
+		case <-p.closeCh:
+			return ErrConnectionClosed
+		case result := <-runResults:
+			if result.loop == peerPingLoop && errors.Is(result.err, ErrConnectionClosed) {
+				continue
+			}
+			if result.err != nil {
+				return result.err
+			}
+		case <-p.outboundProgress:
 		}
 	}
-	if len(schedule.manifests) > 0 {
-		data := schedule.manifests[0]
-		schedule.manifests = schedule.manifests[1:]
-		schedule.ordinaryRemaining = ordinaryFramesPerManifestChunk
-		return data, nil
+}
+
+func writeComplete(conn net.Conn, data []byte) (int, error) {
+	written := 0
+	for written < len(data) {
+		n, err := conn.Write(data[written:])
+		if n > 0 {
+			written += n
+		}
+		if err != nil {
+			return written, err
+		}
+		if n == 0 {
+			return written, io.ErrNoProgress
+		}
 	}
-	select {
-	case batch := <-p.manifestSend:
-		data := batch[0]
-		schedule.manifests = batch[1:]
-		schedule.ordinaryRemaining = ordinaryFramesPerManifestChunk
-		return data, nil
-	default:
-	}
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-p.closeCh:
-		return nil, nil
-	case data := <-p.prioritySend:
-		return data, nil
-	case batch := <-p.manifestSend:
-		data := batch[0]
-		schedule.manifests = batch[1:]
-		schedule.ordinaryRemaining = ordinaryFramesPerManifestChunk
-		return data, nil
-	case data := <-p.send:
-		return data, nil
-	}
+	return written, nil
 }
 
 func (p *Peer) pingLoop(ctx context.Context) error {
@@ -1545,7 +1516,8 @@ const (
 	// this age, and the cold-start delay before pingLoop's first
 	// probe. Mirrors rippled's peerTimerInterval (PeerImp.cpp:61) and
 	// the fail("Ping Timeout") branch at PeerImp.cpp:731-736.
-	pingTimeout = 60 * time.Second
+	pingTimeout             = 60 * time.Second
+	gracefulShutdownTimeout = pingTimeout
 	// pingProbeInterval: cadence after the first probe. Finer than
 	// rippled's 60s peerTimerInterval; OnPong's sweep coalesces
 	// concurrent in-flight pings so the disconnect criterion stays
@@ -1563,14 +1535,8 @@ const (
 	pingsInFlightCap = 16
 	// Tuning::sendqIntervals (PeerImp.cpp:705 + Tuning.h).
 	sendqIntervals = 4
-	// targetSendQueue is the depth the send queue must drain back below
-	// before the large-send-queue strike count is cleared. Mirrors
-	// rippled's reset against Tuning::targetSendQueue (PeerImp.cpp:270-276)
-	// but scaled to go-xrpl's shallower DefaultSendBufferSize=64 queue. A
-	// queue oscillating at-or-above this depth keeps accumulating strikes
-	// toward the sendqIntervals disconnect instead of resetting on each
-	// transient success.
-	targetSendQueue = DefaultSendBufferSize / 2
+	// targetSendQueue is rippled's retained-frame pressure threshold.
+	targetSendQueue = 128
 	// maxConsecutiveDecompressFailures: close after this many
 	// back-to-back LZ4 errors. A single bad frame still charges
 	// bad-data but resets on the next successful decompress.
@@ -1654,7 +1620,7 @@ func (p *Peer) recordPingSent(seq uint32, sentAt time.Time) {
 	}
 	p.pingsInFlight[seq] = pingInFlight{
 		sentAt:           sentAt,
-		progressDeadline: sentAt.Add(p.frameReadBudget(MaxMessageSize)),
+		progressDeadline: sentAt.Add(p.frameReadBudget(message.MaxMessageSize)),
 	}
 }
 
@@ -1727,10 +1693,17 @@ const maxSquelchesPerPeer = 128
 // removes any prior entry) on out-of-range duration or when the cap is
 // hit by a NEW validator key. Both rejections charge bad-data fee.
 func (p *Peer) AddSquelch(validator []byte, duration time.Duration) bool {
+	ok, reason := p.addSquelch(validator, duration)
+	if !ok {
+		p.IncBadData(reason)
+	}
+	return ok
+}
+
+func (p *Peer) addSquelch(validator []byte, duration time.Duration) (bool, string) {
 	if duration < MinUnsquelchExpire || duration > MaxUnsquelchExpirePeers {
 		p.RemoveSquelch(validator)
-		p.IncBadData("squelch-duration")
-		return false
+		return false, "squelch-duration"
 	}
 	key := string(validator)
 	p.squelchMu.Lock()
@@ -1741,10 +1714,9 @@ func (p *Peer) AddSquelch(validator []byte, duration time.Duration) bool {
 	}
 	p.squelchMu.Unlock()
 	if full {
-		p.IncBadData("squelch-map-full")
-		return false
+		return false, "squelch-map-full"
 	}
-	return true
+	return true, ""
 }
 
 // attachUsage wires this peer's resource.Consumer and the
@@ -1756,8 +1728,13 @@ func (p *Peer) attachUsage(c *resource.Consumer, onDrop func()) {
 	if p.usage != nil {
 		p.usage.Release()
 	}
+	if c != nil {
+		c.SetPublicKey(p.RemotePublicKeyEncoded())
+	}
 	p.usage = c
+	p.usageReleased = false
 	p.onDropDisconnect = onDrop
+	p.chargeDropFired.Store(false)
 }
 
 func (p *Peer) releaseUsage() {
@@ -1767,14 +1744,30 @@ func (p *Peer) releaseUsage() {
 		p.usage.Release()
 		p.usage = nil
 	}
+	p.onDropDisconnect = nil
+	p.usageReleased = true
+}
+
+func (p *Peer) resourceGossipOrigin(name string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.clusterOriginSet {
+		p.clusterOrigin = name
+		p.clusterOriginSet = true
+	}
+	return p.clusterOrigin
 }
 
 func (p *Peer) usageHandle() *resource.Consumer {
 	p.usageMu.RLock()
 	c := p.usage
+	released := p.usageReleased
 	p.usageMu.RUnlock()
 	if c != nil {
 		return c
+	}
+	if released {
+		return nil
 	}
 	// Tests and embedded usages that construct a Peer outside the
 	// addPeer path still need IncBadData / Charge to work. Lazily
@@ -1789,6 +1782,9 @@ func (p *Peer) usageHandle() *resource.Consumer {
 	// fallback must not be relied on for production paths.
 	p.usageMu.Lock()
 	defer p.usageMu.Unlock()
+	if p.usageReleased {
+		return nil
+	}
 	if p.usage != nil {
 		return p.usage
 	}
@@ -1800,8 +1796,7 @@ func (p *Peer) usageHandle() *resource.Consumer {
 	return p.usage
 }
 
-// Charge applies fee to this peer's Consumer and tears the peer down
-// on Drop. Mirrors rippled PeerImp::charge at PeerImp.cpp:351-361.
+// Charge applies fee to this peer's Consumer and tears the peer down on Drop.
 func (p *Peer) Charge(fee resource.Charge, context string) resource.Disposition {
 	c := p.usageHandle()
 	if c == nil {
@@ -1814,7 +1809,8 @@ func (p *Peer) Charge(fee resource.Charge, context string) resource.Disposition 
 		if p.chargeDropFired.CompareAndSwap(false, true) {
 			slog.Warn("peer disconnect by resource charge",
 				"t", "Peer", "peer", p.id,
-				"endpoint", p.endpoint.String(), "fee", fee.String(), "context", context)
+				"endpoint", p.endpoint.String(), "public_key", p.RemotePublicKeyEncoded(),
+				"fee", fee.String(), "context", context)
 			p.usageMu.RLock()
 			hook := p.onDropDisconnect
 			p.usageMu.RUnlock()
@@ -1835,8 +1831,10 @@ func chargeForReason(reason string) resource.Charge {
 	switch reason {
 	case "proposal-malformed-sig-size",
 		"proposal-malformed-pubkey-size",
+		"proposal-malformed-pubkey-type",
+		"validation-invalid-signature",
 		"validation-malformed-sig-size":
-		return resource.FeeInvalidSignature
+		return resource.FeeInvalidSignature()
 	case "replay-delta-verify",
 		"ledger-data-base",
 		"ledger-data-state",
@@ -1844,12 +1842,15 @@ func chargeForReason(reason string) resource.Charge {
 		"squelch-map-full",
 		"squelch-malformed-pubkey",
 		"decompress-lz4-failed",
-		"message-too-large":
-		return resource.FeeInvalidData
-	case "endpoints-too-large":
-		return resource.FeeUselessData
+		"message-too-large",
+		"wire-invalid":
+		return resource.FeeInvalidData()
+	case "endpoints-too-large",
+		"cluster-no-pubkey",
+		"cluster-not-member":
+		return resource.FeeUselessData()
 	case "manifests-oversize":
-		return resource.FeeModerateBurdenPeer
+		return resource.FeeModerateBurdenPeer()
 	case "proposal-malformed-prev-ledger-size",
 		"proposal-malformed-txset-size",
 		"validation-malformed-ledger-hash-zero",
@@ -1867,32 +1868,55 @@ func chargeForReason(reason string) resource.Charge {
 		"replay-delta-resp-unnegotiated",
 		"proof-path-resp-unnegotiated",
 		"compression-unnegotiated",
+		"get-objects-txn-unnegotiated",
+		"get-objects-transactions-oversize",
 		"get-objects-ledgerhash",
+		"have-transactions-unnegotiated",
+		"have-transactions-hashsize",
+		"transactions-batch-unnegotiated",
+		"have-set-hashsize",
 		"proposal-decode",
 		"validation-decode",
 		"validation-parse",
 		"ledger-data-decode",
 		"squelch-ignored":
-		return resource.FeeMalformedRequest
+		return resource.FeeMalformedRequest()
 	case "no-reply":
-		return resource.FeeRequestNoReply
+		return resource.FeeRequestNoReply()
 	}
 	switch {
 	case reason == "vl-coll-no-blobs",
-		strings.HasSuffix(reason, "-heavy-no-blobs"):
-		return resource.FeeHeavyBurdenPeer
+		strings.Contains(reason, "-heavy-"):
+		return resource.FeeHeavyBurdenPeer()
 	case strings.Contains(reason, "-badsig-"):
-		return resource.FeeInvalidSignature
+		return resource.FeeInvalidSignature()
 	case strings.Contains(reason, "-baddata-"),
 		strings.HasSuffix(reason, "-wrong-version"),
 		strings.HasSuffix(reason, "-decode"):
-		return resource.FeeInvalidData
+		return resource.FeeInvalidData()
 	case strings.Contains(reason, "-useless-"),
 		strings.HasSuffix(reason, "-duplicate"),
 		strings.HasSuffix(reason, "-unsupported-peer"):
-		return resource.FeeUselessData
+		return resource.FeeUselessData()
 	}
-	return resource.FeeInvalidData
+	return resource.FeeInvalidData()
+}
+
+func wirePreflightChargeReason(err error) string {
+	var limitErr *message.WireLimitError
+	if errors.As(err, &limitErr) {
+		switch limitErr.Reason {
+		case message.WireLimitEndpoints:
+			return "endpoints-too-large"
+		case message.WireLimitManifests:
+			return "manifests-oversize"
+		case message.WireLimitGetObjectTransactions:
+			return "get-objects-transactions-oversize"
+		case message.WireLimitValidatorBlobs:
+			return "vl-coll-heavy-too-many-blobs"
+		}
+	}
+	return "wire-invalid"
 }
 
 // IncBadData routes a reason-keyed charge through the resource
@@ -1903,11 +1927,7 @@ func (p *Peer) IncBadData(reason string) uint32 {
 		return 0
 	}
 	p.Charge(chargeForReason(reason), reason)
-	bal := c.Balance()
-	if bal < 0 {
-		return 0
-	}
-	return uint32(bal)
+	return clampResourceBalance(c.Balance())
 }
 
 // BadDataCount returns the consumer's current normalized balance,
@@ -1917,11 +1937,17 @@ func (p *Peer) BadDataCount() uint32 {
 	if c == nil {
 		return 0
 	}
-	bal := c.Balance()
-	if bal < 0 {
+	return clampResourceBalance(c.Balance())
+}
+
+func clampResourceBalance(balance int64) uint32 {
+	if balance <= 0 {
 		return 0
 	}
-	return uint32(bal)
+	if balance > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(balance)
 }
 
 // Load returns the consumer's normalized balance as int64 — signed so
@@ -1931,7 +1957,7 @@ func (p *Peer) Load() int64 {
 	if c == nil {
 		return 0
 	}
-	return int64(c.Balance())
+	return c.Balance()
 }
 
 func (p *Peer) RemoveSquelch(validator []byte) {
@@ -1964,77 +1990,91 @@ func (p *Peer) ExpireSquelch(validator []byte) bool {
 	return true
 }
 
-// Send enqueues a wire frame for transmission. Drop policy (a deliberate
-// divergence from rippled): the per-peer send queue is bounded
-// (DefaultSendBufferSize) and a full queue DROPS the frame and returns
-// ErrSendBufferFull rather than queueing unboundedly. rippled queues
-// without bound and disconnects only after sendqIntervals timer ticks
-// above targetSendQueue; go-xrpl's goroutine-per-peer writer makes a
-// bounded queue reasonable, and the largeSendQ strike count below
-// approximates rippled's disconnect. Callers must treat the returned error
-// as "frame not delivered" — request/response paths that discard it (e.g.
-// a TMLedgerData reply) leave the requester to time out and retry. Dropped
-// frames are counted per peer (sendDrops) and surfaced via the `peers` RPC.
+// Send admits a frame to the reliable FIFO. Control and consensus traffic
+// have protected capacity; exhausting either class signals the peer lifecycle
+// to close a connection that cannot keep up with protocol-critical traffic.
 func (p *Peer) Send(data []byte) error {
-	if p.closed.Load() {
+	p.sendMu.RLock()
+	defer p.sendMu.RUnlock()
+	if p.closed.Load() || p.gracefulClosing {
 		return ErrConnectionClosed
 	}
 	if p.SendQueueLen() < targetSendQueue {
 		p.largeSendQ.Store(0)
 	}
-
-	p.sendMu.Lock()
-	defer p.sendMu.Unlock()
-	if len(p.send) >= DefaultSendBufferSize {
-		p.sendDrops.Add(1)
-		return ErrSendBufferFull
+	class := outboundClassForFrame(data)
+	if err := p.outbound.enqueueReliable(class, data); err != nil {
+		p.recordSendDrop(class, err)
+		return err
 	}
-	p.send <- data
 	return nil
 }
 
-// SendPriority admits acquisition and control traffic independently from
-// best-effort gossip. The writer drains this lane first between wire frames.
+func outboundClassForFrame(data []byte) OutboundSendClass {
+	header, err := message.DecodeHeader(data)
+	if err != nil {
+		return OutboundClassOrdinary
+	}
+	switch {
+	case isConsensusPriorityMessageType(header.MessageType):
+		return OutboundClassConsensus
+	case header.MessageType == message.TypePing,
+		header.MessageType == message.TypeSquelch,
+		isConsensusControlMessageType(header.MessageType):
+		return OutboundClassControl
+	default:
+		return OutboundClassOrdinary
+	}
+}
+
+// SendPriority admits acquisition traffic to the same reliable FIFO while
+// protecting its share of the bounded queue.
 func (p *Peer) SendPriority(data []byte) error {
-	if p.closed.Load() {
+	p.sendMu.RLock()
+	defer p.sendMu.RUnlock()
+	if p.closed.Load() || p.gracefulClosing {
 		return ErrConnectionClosed
 	}
 	if p.SendQueueLen() < targetSendQueue {
 		p.largeSendQ.Store(0)
 	}
-	p.sendMu.Lock()
-	defer p.sendMu.Unlock()
-	if len(p.prioritySend) >= cap(p.prioritySend) {
-		p.sendDrops.Add(1)
-		return ErrSendBufferFull
+	if err := p.outbound.enqueueReliable(OutboundClassAcquisition, data); err != nil {
+		p.recordSendDrop(OutboundClassAcquisition, err)
+		return err
 	}
-	p.prioritySend <- data
 	return nil
 }
 
-// SendManifestFrames schedules a complete manifest snapshot as one bounded
-// writer item. The writer pulls one frame at a time and checks the priority
-// lane between frames, so large snapshots neither fill the ordinary send
-// queue nor block acquisition traffic behind the whole snapshot.
+// SendManifestFrames schedules a complete manifest snapshot in the bounded
+// bulk lane. The writer emits at most one bulk frame per 16 reliable frames.
 func (p *Peer) SendManifestFrames(frames [][]byte) error {
-	if p.closed.Load() {
+	p.sendMu.RLock()
+	defer p.sendMu.RUnlock()
+	if p.closed.Load() || p.gracefulClosing {
 		return ErrConnectionClosed
 	}
-	batch := make([][]byte, 0, len(frames))
-	for _, frame := range frames {
-		if len(frame) != 0 {
-			batch = append(batch, frame)
+	if err := p.outbound.enqueueBulk(frames); err != nil {
+		p.recordSendDrop(OutboundClassBulk, err)
+		return err
+	}
+	return nil
+}
+
+func (p *Peer) recordSendDrop(class OutboundSendClass, err error) {
+	frames := uint64(1)
+	var queueErr *SendQueueError
+	if errors.As(err, &queueErr) {
+		if queueErr.Reason == SendQueueClosed {
+			return
+		}
+		class = queueErr.Class
+		if queueErr.AttemptedFrames > 0 {
+			frames = uint64(queueErr.AttemptedFrames)
 		}
 	}
-	if len(batch) == 0 {
-		return nil
-	}
-	select {
-	case p.manifestSend <- batch:
-		return nil
-	default:
-		p.sendDrops.Add(1)
-		return ErrSendBufferFull
+	p.sendDrops.Add(frames)
+	if class < outboundClassCount {
+		p.sendDropsByClass[class].Add(frames)
 	}
 }
 
@@ -2044,26 +2084,42 @@ func (p *Peer) SendDrops() uint64 {
 	return p.sendDrops.Load()
 }
 
+func (p *Peer) SendDropsByClass(class OutboundSendClass) uint64 {
+	if class >= outboundClassCount {
+		return 0
+	}
+	return p.sendDropsByClass[class].Load()
+}
+
 // SendQueueLen returns the number of frames currently buffered for
 // transmission to this peer. Used by handlers that should refuse new
 // outbound work when the pipe is already saturated — mirrors the
 // rippled gate at PeerImp.cpp:2452 (`send_queue_.size() >=
 // Tuning::dropSendQueue`).
 func (p *Peer) SendQueueLen() int {
-	return len(p.send) + len(p.prioritySend)
+	if p.outbound == nil {
+		return 0
+	}
+	return p.outbound.snapshot().TotalFrames
 }
 
 func (p *Peer) Close() error {
+	p.sendMu.Lock()
 	if p.closed.Swap(true) {
+		p.sendMu.Unlock()
 		return nil
 	}
 
 	p.mu.Lock()
 	p.state = PeerStateClosing
 	close(p.closeCh)
+	if p.outbound != nil {
+		p.outbound.close()
+	}
 	conn := p.conn
 	p.conn = nil
 	p.mu.Unlock()
+	p.sendMu.Unlock()
 
 	var err error
 	if conn != nil {
@@ -2087,101 +2143,4 @@ func (p *Peer) setState(state PeerState) {
 	p.mu.Lock()
 	p.state = state
 	p.mu.Unlock()
-}
-
-// PeerInfo is a read-only snapshot of peer state.
-type PeerInfo struct {
-	ID             PeerID
-	Endpoint       Endpoint
-	Inbound        bool
-	State          PeerState
-	PublicKey      string
-	PublicKeyBytes []byte
-	ConnectedAt    time.Time
-	MessagesIn     uint64
-	MessagesOut    uint64
-
-	ServerDomain    string
-	NetworkID       string
-	Version         string
-	ClosedLedger    string
-	CompleteLedgers string
-	Tracking        PeerTracking
-	Load            int64
-
-	Latency    time.Duration
-	HasLatency bool
-
-	Protocol string
-
-	Status message.NodeStatus
-
-	// Per-peer wire byte counters and rolling-window throughput.
-	// Mirrors rippled PeerImp::metrics_ (PeerImp.h:226-230). Emitted
-	// under the `metrics` object in `peers` RPC.
-	TotalBytesRecv uint64
-	TotalBytesSent uint64
-	AvgBpsRecv     uint64
-	AvgBpsSent     uint64
-
-	// SendDrops is the count of outbound frames dropped because the peer's
-	// bounded send queue was full. go-xrpl-specific (rippled queues
-	// unboundedly); surfaced under the `metrics` object in `peers` RPC.
-	SendDrops uint64
-}
-
-func (p *Peer) Info() PeerInfo {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
-	var (
-		pubKey      string
-		pubKeyBytes []byte
-	)
-	if p.remotePubKey != nil {
-		pubKey = p.remotePubKey.Encode()
-		pubKeyBytes = p.remotePubKey.Bytes()
-	}
-
-	stats := p.traffic.TotalStats()
-
-	var closedLedger string
-	if p.hasClosedLedger {
-		closedLedger = strings.ToUpper(hex.EncodeToString(p.closedLedger[:]))
-	}
-
-	var completeLedgers string
-	if p.firstLedgerSeq != 0 || p.lastLedgerSeq != 0 {
-		completeLedgers = fmt.Sprintf("%d - %d", p.firstLedgerSeq, p.lastLedgerSeq)
-	}
-
-	latency, hasLatency := p.Latency()
-
-	return PeerInfo{
-		ID:              p.id,
-		Endpoint:        p.endpoint,
-		Inbound:         p.inbound,
-		State:           p.state,
-		PublicKey:       pubKey,
-		PublicKeyBytes:  pubKeyBytes,
-		ConnectedAt:     p.createdAt,
-		MessagesIn:      stats.MessagesIn,
-		MessagesOut:     stats.MessagesOut,
-		ServerDomain:    p.serverDomain,
-		NetworkID:       p.networkID,
-		Version:         p.userAgent,
-		ClosedLedger:    closedLedger,
-		CompleteLedgers: completeLedgers,
-		Tracking:        PeerTracking(p.tracking.Load()),
-		Load:            p.Load(),
-		Latency:         latency,
-		HasLatency:      hasLatency,
-		Protocol:        p.protocolVersion,
-		Status:          p.lastStatus,
-		TotalBytesRecv:  p.metrics.recv.totalBytesSnapshot(),
-		TotalBytesSent:  p.metrics.sent.totalBytesSnapshot(),
-		AvgBpsRecv:      p.metrics.recv.averageBytes(),
-		AvgBpsSent:      p.metrics.sent.averageBytes(),
-		SendDrops:       p.sendDrops.Load(),
-	}
 }

@@ -20,7 +20,10 @@ func ledgerWithAmendments(t *testing.T, enabled [][32]byte) *Ledger {
 	if err != nil {
 		t.Fatalf("create genesis: %v", err)
 	}
-	parent := FromGenesis(result.Header, result.StateMap, result.TxMap, drops.Fees{})
+	parent, err := FromGenesis(result.Header, result.StateMap, result.TxMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("FromGenesis: %v", err)
+	}
 	l, err := NewOpen(parent, parent.CloseTime().Add(10*time.Second))
 	if err != nil {
 		t.Fatalf("create open ledger: %v", err)
@@ -100,19 +103,48 @@ func TestCloseRejectsMalformedAmendmentsEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create genesis: %v", err)
 	}
-	parent := FromGenesis(result.Header, result.StateMap, result.TxMap, drops.Fees{})
+	parent, err := FromGenesis(result.Header, result.StateMap, result.TxMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("FromGenesis: %v", err)
+	}
 	l, err := NewOpen(parent, parent.CloseTime().Add(10*time.Second))
 	if err != nil {
 		t.Fatalf("create open ledger: %v", err)
 	}
+	original, err := l.Read(keylet.Amendments())
+	if err != nil || original == nil {
+		t.Fatalf("read original amendments: %x, %v", original, err)
+	}
 	if err := l.Update(keylet.Amendments(), bytes.Repeat([]byte{0xff}, 16)); err != nil {
 		t.Fatalf("update amendments: %v", err)
 	}
+	beforeHeader := l.Header()
+	beforeStateRoot, err := l.StateMapHash()
+	if err != nil {
+		t.Fatalf("state root before close: %v", err)
+	}
+	beforeTxRoot, err := l.TxMapHash()
+	if err != nil {
+		t.Fatalf("transaction root before close: %v", err)
+	}
+	beforeRules := l.Rules()
 	if err := l.Close(l.CloseTime(), 0); err == nil {
 		t.Fatal("close accepted malformed Amendments entry")
 	}
-	if l.State() != StateOpen {
-		t.Fatalf("failed close changed state to %v", l.State())
+	if l.Header() != beforeHeader || l.Rules() != beforeRules || !l.IsOpen() || l.IsImmutable() {
+		t.Fatal("failed close changed header, rules, lifecycle, or writability")
+	}
+	if got, err := l.StateMapHash(); err != nil || got != beforeStateRoot {
+		t.Fatalf("state root after failed close = %x, %v; want %x", got, err, beforeStateRoot)
+	}
+	if got, err := l.TxMapHash(); err != nil || got != beforeTxRoot {
+		t.Fatalf("transaction root after failed close = %x, %v; want %x", got, err, beforeTxRoot)
+	}
+	if err := l.Update(keylet.Amendments(), original); err != nil {
+		t.Fatalf("restore amendments: %v", err)
+	}
+	if err := l.Close(l.CloseTime(), 0); err != nil {
+		t.Fatalf("retry close: %v", err)
 	}
 }
 
@@ -183,9 +215,9 @@ func TestAdoptStateRejectsImmutableLedger(t *testing.T) {
 		t.Fatal("PriceOracle not registered")
 	}
 	target := ledgerWithAmendments(t, [][32]byte{priceOracle.ID})
-	source, err := target.MutableSnapshot()
+	source, err := NewOpen(target, target.CloseTime().Add(time.Second))
 	if err != nil {
-		t.Fatalf("create source snapshot: %v", err)
+		t.Fatalf("create source ledger: %v", err)
 	}
 	if err := target.AdoptState(source); !errors.Is(err, ErrLedgerImmutable) {
 		t.Fatalf("AdoptState error = %v, want ErrLedgerImmutable", err)

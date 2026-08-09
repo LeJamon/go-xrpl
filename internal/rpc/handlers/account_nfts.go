@@ -11,7 +11,7 @@ import (
 
 // AccountNftsMethod handles account_nfts: it enumerates the NFTs the account
 // owns, read from its NFTokenPage entries.
-type AccountNftsMethod struct{ BaseHandler }
+type AccountNftsMethod struct{ baseHandler }
 
 func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	fields, account, parseErr := accountPageParams(params)
@@ -21,7 +21,7 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	if !types.IsValidClassicAddress(account) {
 		return nil, types.RpcErrorActMalformed("Account malformed.")
 	}
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -30,7 +30,7 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, selErr
 	}
 
-	limit, limitErr := ReadLimitField(params, LimitAccountNFTokens, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitAccountNFTokens, ctx.Unlimited)
 	if limitErr != nil {
 		return nil, limitErr
 	}

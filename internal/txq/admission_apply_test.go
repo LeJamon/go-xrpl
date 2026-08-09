@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -12,73 +13,163 @@ import (
 
 // seqTx is a minimal sequence-based tx.Transaction for driving TxQ.Apply.
 type seqTx struct {
-	seq          uint32
-	fee          string
-	delegate     string
-	sponsorFlags *uint32
+	seq           uint32
+	ticket        uint32
+	fee           string
+	accountTxnID  string
+	previousTxnID bool
+	lastLedger    *uint32
+	delegate      string
+	sponsor       string
+	sponsorFlags  *uint32
 }
 
 func (m *seqTx) TxType() tx.Type { return tx.TypeAccountSet }
 func (m *seqTx) GetCommon() *tx.Common {
 	s := m.seq
-	return &tx.Common{
-		Account:      "rTest",
-		Sequence:     &s,
-		Fee:          m.fee,
-		Delegate:     m.delegate,
-		SponsorFlags: m.sponsorFlags,
+	common := &tx.Common{
+		Account:            "rTest",
+		Sequence:           &s,
+		Fee:                m.fee,
+		AccountTxnID:       m.accountTxnID,
+		LastLedgerSequence: m.lastLedger,
+		Delegate:           m.delegate,
+		Sponsor:            m.sponsor,
+		SponsorFlags:       m.sponsorFlags,
 	}
+	if m.previousTxnID {
+		common.SetPresentFields(map[string]bool{"PreviousTxnID": true})
+	}
+	if m.ticket != 0 {
+		zero := uint32(0)
+		ticket := m.ticket
+		common.Sequence = &zero
+		common.TicketSequence = &ticket
+	}
+	return common
 }
 func (m *seqTx) Validate() error                  { return nil }
 func (m *seqTx) Flatten() (map[string]any, error) { return map[string]any{}, nil }
 func (m *seqTx) GetRawBytes() []byte              { return []byte{byte(m.seq)} }
 func (m *seqTx) SetRawBytes([]byte)               {}
 func (m *seqTx) RequiredAmendments() [][32]byte   { return nil }
+func (*seqTx) txqSynthetic()                      {}
+
+type batchSeqTx struct{ *seqTx }
+
+func (m *batchSeqTx) TxType() tx.Type { return tx.TypeBatch }
 
 // stubApplyCtx is a configurable txq.ApplyContext for admission tests. The
 // preflight/preclaim/apply results are dialled in per test so we can pin which
 // admission path rejects (or queues) a submission.
 type stubApplyCtx struct {
-	seq        uint32
-	balance    uint64
-	reserve    uint64
-	exists     bool
-	tickets    map[uint32]bool
-	baseFee    uint64
-	txInLedger uint32
-	ledgerSeq  uint32
-	flags      tx.ApplyFlags
+	seq         uint32
+	sequenceErr error
+	balance     uint64
+	balanceErr  error
+	reserve     uint64
+	exists      bool
+	existsErr   error
+	tickets     map[uint32]bool
+	ticketErr   error
+	baseFee     uint64
+	txInLedger  uint32
+	ledgerSeq   uint32
+	flags       tx.ApplyFlags
 
 	preflight ter.Result
 	preclaim  ter.Result
 	applyRes  ter.Result
 	applied   bool
 	applyFn   func(tx.Transaction) (ter.Result, bool)
+	readFn    func()
 }
 
-func (c *stubApplyCtx) GetAccountSequence([20]byte) uint32             { return c.seq }
-func (c *stubApplyCtx) AccountExists([20]byte) bool                    { return c.exists }
-func (c *stubApplyCtx) TicketExists(_ [20]byte, t uint32) bool         { return c.tickets[t] }
-func (c *stubApplyCtx) GetAccountBalance([20]byte) uint64              { return c.balance }
-func (c *stubApplyCtx) GetAccountReserve(uint32) uint64                { return c.reserve }
-func (c *stubApplyCtx) GetBaseFees(tx.Transaction) (uint64, uint64)    { return c.baseFee, c.baseFee }
-func (c *stubApplyCtx) GetReferenceFee() uint64                        { return c.baseFee }
-func (c *stubApplyCtx) GetTxInLedger() uint32                          { return c.txInLedger }
-func (c *stubApplyCtx) GetLedgerSequence() uint32                      { return c.ledgerSeq }
-func (c *stubApplyCtx) GetApplyFlags() tx.ApplyFlags                   { return c.flags }
-func (c *stubApplyCtx) GetParentHash() [32]byte                        { return [32]byte{} }
-func (c *stubApplyCtx) PreflightTransaction(tx.Transaction) ter.Result { return c.preflight }
+func (c *stubApplyCtx) observeRead() {
+	if c.readFn != nil {
+		c.readFn()
+	}
+}
+
+func (c *stubApplyCtx) GetAccountSequence([20]byte) (uint32, error) {
+	c.observeRead()
+	return c.seq, c.sequenceErr
+}
+func (c *stubApplyCtx) AccountExists([20]byte) (bool, error) {
+	c.observeRead()
+	return c.exists, c.existsErr
+}
+func (c *stubApplyCtx) TicketExists(_ [20]byte, t uint32) (bool, error) {
+	c.observeRead()
+	return c.tickets[t], c.ticketErr
+}
+func (c *stubApplyCtx) GetAccountBalance([20]byte) (uint64, error) {
+	c.observeRead()
+	return c.balance, c.balanceErr
+}
+func (c *stubApplyCtx) GetAccountReserve(uint32) uint64 {
+	c.observeRead()
+	return c.reserve
+}
+func (c *stubApplyCtx) GetBaseFees(tx.Transaction) (uint64, uint64) {
+	c.observeRead()
+	return c.baseFee, c.baseFee
+}
+func (c *stubApplyCtx) GetReferenceFee() uint64 {
+	c.observeRead()
+	return c.baseFee
+}
+func (c *stubApplyCtx) GetTxInLedger() uint32 {
+	c.observeRead()
+	return c.txInLedger
+}
+func (c *stubApplyCtx) GetLedgerSequence() uint32 {
+	c.observeRead()
+	return c.ledgerSeq
+}
+func (c *stubApplyCtx) GetApplyFlags() tx.ApplyFlags {
+	c.observeRead()
+	return c.flags
+}
+func (c *stubApplyCtx) GetParentHash() [32]byte {
+	c.observeRead()
+	return [32]byte{}
+}
+func (c *stubApplyCtx) PreflightTransaction(tx.Transaction) ter.Result {
+	c.observeRead()
+	return c.preflight
+}
 func (c *stubApplyCtx) PreclaimTransaction(tx.Transaction, [20]byte, uint64, uint32) ter.Result {
+	c.observeRead()
 	return c.preclaim
 }
 
 func (c *stubApplyCtx) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
+	c.observeRead()
 	if c.applyFn != nil {
 		return c.applyFn(txn)
 	}
 	return c.applyRes, c.applied
 }
+
+func (c *stubApplyCtx) ApplyTransactionWithFlags(txn tx.Transaction, _ tx.ApplyFlags) (ter.Result, bool) {
+	return c.ApplyTransaction(txn)
+}
+
+func (c *stubApplyCtx) PreflightTransactionWithFlags(txn tx.Transaction, _ tx.ApplyFlags) ter.Result {
+	return c.PreflightTransaction(txn)
+}
+
+func (c *stubApplyCtx) PreclaimTransactionWithFlags(txn tx.Transaction, account [20]byte, balance uint64, seq uint32, _ tx.ApplyFlags) ter.Result {
+	return c.PreclaimTransaction(txn, account, balance, seq)
+}
+
+func (c *stubApplyCtx) RulesIdentity() *amendment.Rules {
+	c.observeRead()
+	return nil
+}
 func (c *stubApplyCtx) NewSandbox() (SandboxContext, error) {
+	c.observeRead()
 	return nil, errors.New("stubApplyCtx: no sandbox")
 }
 
@@ -119,7 +210,7 @@ func TestAcceptDropsTefCategory(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			q := New(makeAdmissionConfig())
+			q := mustNew(makeAdmissionConfig())
 			acct := [20]byte{9}
 			aq := NewAccountQueue(acct)
 			q.byAccount[acct] = aq
@@ -143,42 +234,130 @@ func TestAcceptDropsTefCategory(t *testing.T) {
 	}
 }
 
-func TestApplyRejectsDelegatedAndFeeSponsoredTransactionsFromQueue(t *testing.T) {
-	feeSponsorFlags := tx.SpfSponsorFee
-	tests := []struct {
-		name string
-		txn  *seqTx
-	}{
-		{
-			name: "delegated",
-			txn:  &seqTx{seq: 6, fee: "10", delegate: "rDelegate"},
-		},
-		{
-			name: "fee sponsored",
-			txn:  &seqTx{seq: 6, fee: "10", sponsorFlags: &feeSponsorFlags},
+func TestApplyQueueConstraintValidationPrecedence(t *testing.T) {
+	accountID := [20]byte{9}
+	newContext := func() *stubApplyCtx {
+		return &stubApplyCtx{
+			seq:        1,
+			balance:    1_000_000_000,
+			exists:     true,
+			baseFee:    10,
+			txInLedger: 100,
+			flags:      tx.TapFAIL_HARD,
+			preflight:  ter.TesSUCCESS,
+			preclaim:   ter.TesSUCCESS,
+		}
+	}
+
+	t.Run("account existence before hold constraints", func(t *testing.T) {
+		q := mustNew(makeAdmissionConfig())
+		ctx := newContext()
+		ctx.exists = false
+
+		result := q.Apply(ctx, &seqTx{seq: 1, fee: "10"}, [32]byte{1}, accountID)
+		require.Equal(t, ter.TerNO_ACCOUNT, result.Result)
+	})
+
+	t.Run("ticket existence before hold constraints", func(t *testing.T) {
+		q := mustNew(makeAdmissionConfig())
+		ctx := newContext()
+
+		result := q.Apply(ctx, &seqTx{ticket: 2, fee: "10"}, [32]byte{2}, accountID)
+		require.Equal(t, ter.TerPRE_TICKET, result.Result)
+	})
+
+	t.Run("previous transaction id cannot be held", func(t *testing.T) {
+		q := mustNew(makeAdmissionConfig())
+		ctx := newContext()
+		ctx.flags = tx.TapNONE
+
+		result := q.Apply(ctx, &seqTx{seq: 1, fee: "10", previousTxnID: true}, [32]byte{6}, accountID)
+		require.Equal(t, ter.TelCAN_NOT_QUEUE, result.Result)
+		require.False(t, result.Queued)
+	})
+
+	t.Run("queued blocker before hold constraints", func(t *testing.T) {
+		q := mustNew(makeAdmissionConfig())
+		aq := NewAccountQueue(accountID)
+		q.byAccount[accountID] = aq
+		blocker := addQueued(q, aq, 1, 2)
+		blocker.Consequences.IsBlocker = true
+
+		result := q.Apply(newContext(), &seqTx{seq: 2, fee: "10"}, [32]byte{3}, accountID)
+		require.Equal(t, ter.TelCAN_NOT_QUEUE_BLOCKED, result.Result)
+	})
+
+	t.Run("replacement fee before hold constraints", func(t *testing.T) {
+		q := mustNew(makeAdmissionConfig())
+		aq := NewAccountQueue(accountID)
+		q.byAccount[accountID] = aq
+		addQueued(q, aq, 1, 2)
+
+		result := q.Apply(newContext(), &seqTx{seq: 1, fee: "10"}, [32]byte{4}, accountID)
+		require.Equal(t, ter.TelCAN_NOT_QUEUE_FEE, result.Result)
+	})
+
+	t.Run("explicit zero last ledger before multi-path preclaim", func(t *testing.T) {
+		q := mustNew(makeAdmissionConfig())
+		aq := NewAccountQueue(accountID)
+		q.byAccount[accountID] = aq
+		addQueued(q, aq, 1, 2)
+		ctx := newContext()
+		ctx.flags = 0
+		ctx.ledgerSeq = 10
+		ctx.preclaim = ter.TefMAX_LEDGER
+		zero := uint32(0)
+
+		result := q.Apply(ctx, &seqTx{seq: 2, fee: "10", lastLedger: &zero}, [32]byte{5}, accountID)
+		require.Equal(t, ter.TelCAN_NOT_QUEUE, result.Result)
+	})
+}
+
+func TestAcceptPreflightFailureMarksDropPenalty(t *testing.T) {
+	q := mustNew(makeAdmissionConfig())
+	accountID := [20]byte{9}
+	aq := NewAccountQueue(accountID)
+	q.byAccount[accountID] = aq
+	candidate := addQueued(q, aq, 1, 2)
+	candidate.PreflightResult = ter.TesSUCCESS
+	candidate.PreflightFlags = tx.TapUNLIMITED
+
+	applyCalled := false
+	ctx := &stubApplyCtx{
+		preflight: ter.TemMALFORMED,
+		applyFn: func(tx.Transaction) (ter.Result, bool) {
+			applyCalled = true
+			return ter.TesSUCCESS, true
 		},
 	}
 
-	for i, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			q := New(makeAdmissionConfig())
-			ctx := &stubApplyCtx{
-				seq:      5,
-				balance:  1_000_000,
-				exists:   true,
-				baseFee:  10,
-				preclaim: ter.TesSUCCESS,
-			}
-			result := q.Apply(ctx, test.txn, [32]byte{byte(i + 1)}, [20]byte{1})
-			require.Equal(t, ter.TelCAN_NOT_QUEUE, result.Result)
-			require.False(t, result.Applied)
-			require.Zero(t, q.Size())
-		})
+	require.False(t, q.Accept(ctx))
+	require.False(t, applyCalled)
+	require.True(t, aq.DropPenalty)
+	require.True(t, aq.Empty())
+	require.Equal(t, ter.TemMALFORMED, candidate.LastResult)
+}
+
+func TestApplyRejectsDelegatedTransactionFromQueue(t *testing.T) {
+	q := mustNew(makeAdmissionConfig())
+	ctx := &stubApplyCtx{
+		seq:        5,
+		balance:    1_000_000,
+		exists:     true,
+		baseFee:    10,
+		txInLedger: 100,
+		preclaim:   ter.TesSUCCESS,
 	}
+	transaction := &seqTx{seq: 5, fee: "10", delegate: "rDelegate"}
+
+	result := q.Apply(ctx, transaction, [32]byte{1}, [20]byte{1})
+	require.Equal(t, ter.TelCAN_NOT_QUEUE, result.Result)
+	require.False(t, result.Applied)
+	require.Zero(t, q.Size())
 }
 
 func TestAcceptRevisitsNextAccountCandidateAcrossGap(t *testing.T) {
-	q := New(makeAdmissionConfig())
+	q := mustNew(makeAdmissionConfig())
 	acct := [20]byte{9}
 	aq := NewAccountQueue(acct)
 	q.byAccount[acct] = aq
@@ -208,7 +387,7 @@ func TestAcceptRevisitsNextAccountCandidateAcrossGap(t *testing.T) {
 }
 
 func TestAcceptRevisitsNextTicketCandidate(t *testing.T) {
-	q := New(makeAdmissionConfig())
+	q := mustNew(makeAdmissionConfig())
 	acct := [20]byte{9}
 	aq := NewAccountQueue(acct)
 	q.byAccount[acct] = aq
@@ -241,7 +420,7 @@ func TestAcceptRevisitsNextTicketCandidate(t *testing.T) {
 }
 
 func TestAcceptDropsQueuedPastSequence(t *testing.T) {
-	q := New(makeAdmissionConfig())
+	q := mustNew(makeAdmissionConfig())
 	acct := [20]byte{9}
 	aq := NewAccountQueue(acct)
 	q.byAccount[acct] = aq
@@ -261,7 +440,7 @@ func TestAcceptDropsQueuedPastSequence(t *testing.T) {
 }
 
 func TestAcceptRetainedRetryPenaltyAffectsNextCandidate(t *testing.T) {
-	q := New(makeAdmissionConfig())
+	q := mustNew(makeAdmissionConfig())
 	acct := [20]byte{9}
 	aq := NewAccountQueue(acct)
 	q.byAccount[acct] = aq
@@ -281,7 +460,7 @@ func TestAcceptRetainedRetryPenaltyAffectsNextCandidate(t *testing.T) {
 }
 
 func TestAcceptRetainedDropPenaltyDropsLastCandidate(t *testing.T) {
-	q := New(makeAdmissionConfig())
+	q := mustNew(makeAdmissionConfig())
 	acct := [20]byte{9}
 	aq := NewAccountQueue(acct)
 	q.byAccount[acct] = aq
@@ -296,7 +475,7 @@ func TestAcceptRetainedDropPenaltyDropsLastCandidate(t *testing.T) {
 	aq.Add(last)
 	q.insertByFee(first)
 	q.insertByFee(last)
-	q.SetMaxSize(2)
+	q.setMaxSize(2)
 
 	require.False(t, q.Accept(&stubApplyCtx{applyRes: ter.TerPRE_SEQ}))
 	require.Equal(t, RetriesAllowed-1, first.RetriesRemaining)
@@ -306,7 +485,7 @@ func TestAcceptRetainedDropPenaltyDropsLastCandidate(t *testing.T) {
 }
 
 func TestAcceptCleansRetainedPenaltyOnNextClosedLedger(t *testing.T) {
-	q := New(makeAdmissionConfig())
+	q := mustNew(makeAdmissionConfig())
 	acct := [20]byte{9}
 	aq := NewAccountQueue(acct)
 	q.byAccount[acct] = aq
@@ -325,7 +504,7 @@ func TestAcceptCleansRetainedPenaltyOnNextClosedLedger(t *testing.T) {
 }
 
 func TestEraseRetainsAccountQueueUntilNextClosedLedger(t *testing.T) {
-	q := New(makeAdmissionConfig())
+	q := mustNew(makeAdmissionConfig())
 	acct := [20]byte{9}
 	aq := NewAccountQueue(acct)
 	aq.DropPenalty = true
@@ -348,7 +527,7 @@ func TestEraseRetainsAccountQueueUntilNextClosedLedger(t *testing.T) {
 }
 
 func TestApplyReusesRetainedEmptyAccountQueue(t *testing.T) {
-	q := New(makeAdmissionConfig())
+	q := mustNew(makeAdmissionConfig())
 	acct := [20]byte{9}
 	aq := NewAccountQueue(acct)
 	aq.DropPenalty = true
@@ -380,7 +559,7 @@ func TestApplyReusesRetainedEmptyAccountQueue(t *testing.T) {
 }
 
 func TestApplyFullQueueEvictionRetainsAccountQueue(t *testing.T) {
-	q := New(makeAdmissionConfig())
+	q := mustNew(makeAdmissionConfig())
 	evictedAccount := [20]byte{8}
 	evictedQueue := NewAccountQueue(evictedAccount)
 	evictedQueue.DropPenalty = true
@@ -388,7 +567,7 @@ func TestApplyFullQueueEvictionRetainsAccountQueue(t *testing.T) {
 	q.byAccount[evictedAccount] = evictedQueue
 	evicted := addQueued(q, evictedQueue, 1, 2)
 	evicted.FeeLevel = FeeLevel(BaseLevel)
-	q.SetMaxSize(1)
+	q.setMaxSize(1)
 
 	newAccount := [20]byte{9}
 	ctx := &stubApplyCtx{
@@ -438,14 +617,14 @@ func TestApplyReplacementPreservesAccountPenalties(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := makeAdmissionConfig()
 			cfg.RetrySequencePercent = 25
-			q := New(cfg)
+			q := mustNew(cfg)
 			acct := [20]byte{9}
 			aq := NewAccountQueue(acct)
 			aq.DropPenalty = true
 			aq.RetryPenalty = true
 			q.byAccount[acct] = aq
 			original := addQueued(q, aq, 1, 2)
-			q.SetMaxSize(1)
+			q.setMaxSize(1)
 
 			replacement := &seqTx{seq: 1, fee: "130"}
 			ctx := &stubApplyCtx{
@@ -487,7 +666,7 @@ func TestApplyReplacementPreservesAccountPenalties(t *testing.T) {
 // Account seq 5 with queued {5,6,9} (7,8 expired out) and a new seq 10 is
 // telCAN_NOT_QUEUE because the first gap is 7 — not terQUEUED.
 func TestApply_H2_ExpirationGap(t *testing.T) {
-	q := New(makeAdmissionConfig())
+	q := mustNew(makeAdmissionConfig())
 	acct := [20]byte{9}
 	aq := NewAccountQueue(acct)
 	q.byAccount[acct] = aq
@@ -507,7 +686,7 @@ func TestApply_H2_ExpirationGap(t *testing.T) {
 // chain to seq 8; a new seq 6 (inside the hole) is telCAN_NOT_QUEUE, where the
 // pre-fix code returned tefPAST_SEQ.
 func TestApply_H2_TicketCreateHole(t *testing.T) {
-	q := New(makeAdmissionConfig())
+	q := mustNew(makeAdmissionConfig())
 	acct := [20]byte{9}
 	aq := NewAccountQueue(acct)
 	q.byAccount[acct] = aq
@@ -528,7 +707,7 @@ func TestApply_H2_TicketCreateHole(t *testing.T) {
 // keyed only on seqProxy < prevSeqProxy, so this lands in the after-entries
 // branch where getNextQueuableSeq is 5 != 6.
 func TestApply_H2_StalePredecessorGap(t *testing.T) {
-	q := New(makeAdmissionConfig())
+	q := mustNew(makeAdmissionConfig())
 	acct := [20]byte{9}
 	aq := NewAccountQueue(acct)
 	q.byAccount[acct] = aq
@@ -545,7 +724,7 @@ func TestApply_H2_StalePredecessorGap(t *testing.T) {
 // TestApply_H1_PreflightRejects pins rippled TxQ.cpp:743-745: a submission that
 // fails preflight is rejected with the preflight TER, never held as terQUEUED.
 func TestApply_H1_PreflightRejects(t *testing.T) {
-	q := New(makeAdmissionConfig())
+	q := mustNew(makeAdmissionConfig())
 	acct := [20]byte{9}
 	ctx := &stubApplyCtx{seq: 5, balance: 1_000_000_000, exists: true, baseFee: 10, preflight: ter.TemMALFORMED}
 
@@ -562,7 +741,7 @@ func TestApply_H1_PreflightRejects(t *testing.T) {
 // high txInLedger forces the escalated fee level above the paid level so the
 // submission takes the queue path rather than direct apply.
 func TestApply_H1_PreclaimRejectsFirstQueued(t *testing.T) {
-	q := New(makeAdmissionConfig())
+	q := mustNew(makeAdmissionConfig())
 	acct := [20]byte{9}
 	ctx := &stubApplyCtx{
 		seq: 5, balance: 1_000_000_000, exists: true, baseFee: 10,
@@ -578,7 +757,7 @@ func TestApply_H1_PreclaimRejectsFirstQueued(t *testing.T) {
 // TestApply_H1_PreclaimPassesQueues is the positive control: with preflight and
 // preclaim passing, the same first-queued submission is held (terQUEUED).
 func TestApply_H1_PreclaimPassesQueues(t *testing.T) {
-	q := New(makeAdmissionConfig())
+	q := mustNew(makeAdmissionConfig())
 	acct := [20]byte{9}
 	ctx := &stubApplyCtx{
 		seq: 5, balance: 1_000_000_000, exists: true, baseFee: 10, txInLedger: 100,
@@ -590,10 +769,179 @@ func TestApply_H1_PreclaimPassesQueues(t *testing.T) {
 	require.True(t, res.Queued)
 }
 
+func TestApplyAccountRootReadErrorsAreFatal(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  *stubApplyCtx
+	}{
+		{
+			name: "sequence",
+			ctx: &stubApplyCtx{
+				sequenceErr: errors.New("sequence read failed"),
+				baseFee:     10,
+			},
+		},
+		{
+			name: "balance",
+			ctx: &stubApplyCtx{
+				seq:        4,
+				balanceErr: errors.New("balance read failed"),
+				exists:     true,
+				baseFee:    10,
+			},
+		},
+		{
+			name: "existence",
+			ctx: &stubApplyCtx{
+				seq:       4,
+				existsErr: errors.New("existence read failed"),
+				baseFee:   10,
+			},
+		},
+		{
+			name: "ticket existence",
+			ctx: &stubApplyCtx{
+				seq:        4,
+				exists:     true,
+				ticketErr:  errors.New("ticket read failed"),
+				baseFee:    10,
+				txInLedger: 100,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q := mustNew(makeAdmissionConfig())
+			transaction := &seqTx{seq: 5, fee: "10"}
+			if tt.name == "ticket existence" {
+				transaction.ticket = 5
+			}
+			res := q.Apply(tt.ctx, transaction, [32]byte{0xEF}, [20]byte{9})
+			require.Equal(t, ter.TefINTERNAL, res.Result)
+			require.False(t, res.Applied)
+			require.False(t, res.Queued)
+			require.Zero(t, q.Size())
+		})
+	}
+}
+
+func TestApplyFeeSponsoredTransactionCannotQueueButMayApplyDirectly(t *testing.T) {
+	account := [20]byte{9}
+	feeFlag := tx.SpfSponsorFee
+	sponsor := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+
+	t.Run("cannot queue", func(t *testing.T) {
+		q := mustNew(makeAdmissionConfig())
+		ctx := &stubApplyCtx{
+			seq:        5,
+			balance:    1_000_000_000,
+			exists:     true,
+			baseFee:    10,
+			txInLedger: 100,
+		}
+		transaction := &seqTx{
+			seq:          5,
+			fee:          "10",
+			sponsor:      sponsor,
+			sponsorFlags: &feeFlag,
+		}
+
+		result := q.Apply(ctx, transaction, [32]byte{0xEF}, account)
+		require.Equal(t, ter.TelCAN_NOT_QUEUE, result.Result)
+		require.False(t, result.Applied)
+		require.False(t, result.Queued)
+		require.Zero(t, q.Size())
+	})
+
+	t.Run("may apply directly", func(t *testing.T) {
+		q := mustNew(makeAdmissionConfig())
+		ctx := &stubApplyCtx{
+			seq:      5,
+			balance:  1_000_000_000,
+			exists:   true,
+			baseFee:  10,
+			applyRes: ter.TesSUCCESS,
+			applied:  true,
+		}
+		transaction := &seqTx{
+			seq:          5,
+			fee:          "10",
+			sponsor:      sponsor,
+			sponsorFlags: &feeFlag,
+		}
+
+		result := q.Apply(ctx, transaction, [32]byte{0xF0}, account)
+		require.Equal(t, ter.TesSUCCESS, result.Result)
+		require.True(t, result.Applied)
+		require.False(t, result.Queued)
+	})
+
+	t.Run("reserve only remains queueable", func(t *testing.T) {
+		q := mustNew(makeAdmissionConfig())
+		ctx := &stubApplyCtx{
+			seq:        5,
+			balance:    1_000_000_000,
+			exists:     true,
+			baseFee:    10,
+			txInLedger: 100,
+		}
+		reserveFlag := tx.SpfSponsorReserve
+		transaction := &seqTx{
+			seq:          5,
+			fee:          "10",
+			sponsor:      sponsor,
+			sponsorFlags: &reserveFlag,
+		}
+
+		result := q.Apply(ctx, transaction, [32]byte{0xF1}, account)
+		require.Equal(t, ter.TerQUEUED, result.Result)
+		require.True(t, result.Queued)
+	})
+}
+
+func TestApplyBatchCannotQueueButMayApplyDirectly(t *testing.T) {
+	account := [20]byte{9}
+
+	t.Run("cannot queue", func(t *testing.T) {
+		q := mustNew(makeAdmissionConfig())
+		ctx := &stubApplyCtx{
+			seq:        5,
+			balance:    1_000_000_000,
+			exists:     true,
+			baseFee:    10,
+			txInLedger: 100,
+		}
+
+		result := q.Apply(ctx, &batchSeqTx{seqTx: &seqTx{seq: 5, fee: "10"}}, [32]byte{0xF2}, account)
+		require.Equal(t, ter.TelCAN_NOT_QUEUE, result.Result)
+		require.False(t, result.Applied)
+		require.False(t, result.Queued)
+		require.Zero(t, q.Size())
+	})
+
+	t.Run("may apply directly", func(t *testing.T) {
+		q := mustNew(makeAdmissionConfig())
+		ctx := &stubApplyCtx{
+			seq:      5,
+			balance:  1_000_000_000,
+			exists:   true,
+			baseFee:  10,
+			applyRes: ter.TesSUCCESS,
+			applied:  true,
+		}
+
+		result := q.Apply(ctx, &batchSeqTx{seqTx: &seqTx{seq: 5, fee: "10"}}, [32]byte{0xF3}, account)
+		require.Equal(t, ter.TesSUCCESS, result.Result)
+		require.True(t, result.Applied)
+		require.False(t, result.Queued)
+	})
+}
+
 // TestApply_BadFeeRejected pins that a malformed Fee string is rejected with
 // temBAD_FEE rather than being silently treated as fee level 0.
 func TestApply_BadFeeRejected(t *testing.T) {
-	q := New(makeAdmissionConfig())
+	q := mustNew(makeAdmissionConfig())
 	acct := [20]byte{9}
 	ctx := &stubApplyCtx{seq: 5, balance: 1_000_000_000, exists: true, baseFee: 10}
 
@@ -619,7 +967,7 @@ func mkCandidate(acct [20]byte, sp SeqProxy, feeLevel FeeLevel) *Candidate {
 // which is a ticket when one is queued after the sequences (tickets sort after
 // sequences). The pre-fix code only ever considered sequence-based entries.
 func TestDropLastForAccount_DropsHighestSeqProxyInclTickets(t *testing.T) {
-	q := New(DefaultConfig())
+	q := mustNew(DefaultConfig())
 	acct := [20]byte{1}
 	aq := NewAccountQueue(acct)
 	q.byAccount[acct] = aq
@@ -644,7 +992,7 @@ func TestDropLastForAccount_DropsHighestSeqProxyInclTickets(t *testing.T) {
 // `if (endIter != candidateIter)` guard (TxQ.cpp:1552-1554): when the current
 // candidate is itself the highest-SeqProxy entry, nothing is dropped.
 func TestDropLastForAccount_NeverDropsCurrent(t *testing.T) {
-	q := New(DefaultConfig())
+	q := mustNew(DefaultConfig())
 	acct := [20]byte{1}
 	aq := NewAccountQueue(acct)
 	q.byAccount[acct] = aq
@@ -666,7 +1014,7 @@ func TestDropLastForAccount_NeverDropsCurrent(t *testing.T) {
 // fixup: dropping an element that sits before the current candidate shifts the
 // current one down, so idx is decremented to keep the caller's i++ aligned.
 func TestDropLastForAccount_AdjustsIndexWhenDropPrecedes(t *testing.T) {
-	q := New(DefaultConfig())
+	q := mustNew(DefaultConfig())
 	acct := [20]byte{1}
 	aq := NewAccountQueue(acct)
 	q.byAccount[acct] = aq

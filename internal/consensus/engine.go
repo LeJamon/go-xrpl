@@ -5,15 +5,22 @@ import (
 	"time"
 )
 
-// Engine is the consensus algorithm interface that node implementations plug into.
-type Engine interface {
+type EngineLifecycle interface {
 	Start(ctx context.Context) error
 
 	Stop() error
+}
 
+type EngineTerminal interface {
+	Done() <-chan error
+}
+
+type EngineRoundDriver interface {
 	// StartRound begins a round; proposing enables this node's proposal.
 	StartRound(round RoundID, proposing bool) error
+}
 
+type EngineInbound interface {
 	// OnProposal handles an incoming proposal. originPeer is the overlay peer
 	// ID that delivered it (0 for self-originated); passed to the relay path
 	// so gossip forwards exclude the originator.
@@ -24,38 +31,113 @@ type Engine interface {
 	OnValidation(validation *Validation, originPeer uint64) error
 
 	OnTxSet(id TxSetID, txs [][]byte) error
+}
 
+type EngineLedgerReceiver interface {
 	OnLedger(id LedgerID, ledger []byte) error
+}
 
+type EngineLedgerSwitch interface {
 	// TrySwitchToLedger synchronously attempts to make a locally-held ledger
 	// the consensus parent. The candidate must be the exact wrong-ledger
 	// recovery target, the validated tip, or the current network preference.
 	TrySwitchToLedger(id LedgerID) (LedgerSwitchResult, error)
 
-	// OnLedgerAcquireFailed reports a clean inbound-acquire failure after the
-	// retry budget. Lets a node pinned in wrongLedger un-pin and drop to
-	// degraded resync rather than starving the stall watchdog into os.Exit.
+	// OnLedgerAcquireFailed reports that an in-flight acquisition was invalidated
+	// by a topology change, allowing wrong-ledger recovery to re-resolve its target.
 	OnLedgerAcquireFailed(id LedgerID)
+}
 
-	State() *RoundState
-
+type EngineObservability interface {
 	Mode() Mode
 
 	Phase() Phase
 
 	IsProposing() bool
 
-	Timing() Timing
-
 	GetLastCloseInfo() (proposers int, convergeTime time.Duration)
 
 	// GetJSON returns the consensus-round state as a JSON map backing the
 	// consensus_info RPC; full requests the detailed view.
 	GetJSON(full bool) map[string]any
+}
 
+type EngineEvents interface {
 	// Subscribe registers a sink for the engine's typed event bus. The engine
 	// fires events on its own goroutine, so OnEvent must not block.
 	Subscribe(sub EventSubscriber)
+}
+
+type RouterEngine interface {
+	EngineInbound
+	EngineLedgerSwitch
+}
+
+type Engine interface {
+	EngineLifecycle
+	EngineRoundDriver
+	RouterEngine
+	EngineLedgerReceiver
+	EngineObservability
+	EngineEvents
+}
+
+// VerifiedValidationProcessor is implemented by engines that separate
+// signature verification from stateful validation processing. The router uses
+// this seam to verify on bounded worker queues, then serializes processing on
+// its own goroutine.
+type VerifiedValidationProcessor interface {
+	ProcessVerifiedValidation(validation *Validation, origin ValidationOrigin) (ValidationDisposition, error)
+}
+
+type ValidationOrigin struct {
+	PeerID  uint64
+	Cluster bool
+}
+
+// ValidationStatus describes how the validation tracker classified a verified
+// validation. Untracked means the signer was neither trusted nor listed.
+type ValidationStatus uint8
+
+const (
+	ValidationUntracked ValidationStatus = iota
+	ValidationCurrent
+	ValidationStale
+	ValidationBadSeq
+	ValidationMultiple
+	ValidationConflicting
+)
+
+func (s ValidationStatus) String() string {
+	switch s {
+	case ValidationUntracked:
+		return "untracked"
+	case ValidationCurrent:
+		return "current"
+	case ValidationStale:
+		return "stale"
+	case ValidationBadSeq:
+		return "badSeq"
+	case ValidationMultiple:
+		return "multiple"
+	case ValidationConflicting:
+		return "conflicting"
+	default:
+		return "unknown"
+	}
+}
+
+type ValidationDisposition struct {
+	Status  ValidationStatus
+	Tracked bool
+	Trusted bool
+	Relay   bool
+}
+
+// AcquireEligible reports whether the validation can drive ledger catch-up.
+// Only trusted validations accepted as current participate.
+func (d ValidationDisposition) AcquireEligible() bool {
+	return d.Tracked && d.Trusted && d.Status == ValidationCurrent
 }
 
 // LedgerSwitchResult describes the outcome of a synchronous ledger switch.
@@ -72,7 +154,12 @@ const (
 // per-ledger trusted-validation lookups and trie-based preferred-LCL
 // selection. Implemented by rcl.ValidationTracker, wired via WireableAdaptor.
 type ValidationHistorian interface {
-	GetTrustedValidations(ledgerID LedgerID) []*Validation
+	// GetTrustedFullValidations returns trusted full validations for the exact
+	// ledger hash and sequence. The sequence check is part of the lookup so
+	// protocol voting cannot accidentally consume mixed-sequence evidence that
+	// happens to share a ledger hash.
+	GetTrustedFullValidations(ledgerID LedgerID, ledgerSeq uint32) []*Validation
+
 	GetPreferred(largestIssued uint32) (LedgerID, uint32, bool)
 	PreferredFromValidations(minSeq uint32) (LedgerID, uint32, bool)
 
@@ -129,6 +216,24 @@ type TrustChangeNotifier interface {
 	OnTrustChanged(fn func(trusted []NodeID, quorum int))
 }
 
+// TrustChangeSettledNotifier is an optional Adaptor extension. It registers a
+// callback invoked after a trust snapshot callback has returned and the
+// adaptor's transition gate has reopened. Consumers use it to recheck state
+// that deliberately stayed closed while the matching snapshot was installed.
+type TrustChangeSettledNotifier interface {
+	OnTrustSettled(fn func())
+}
+
+// LedgerAcceptDeferrer is an optional Adaptor extension for environments that
+// must schedule ledger application on their own serialized driver. Returning
+// true transfers completion to the adaptor, which must invoke complete exactly
+// once and never inline, including when the scheduled work is canceled or the
+// environment shuts down. Returning false leaves acceptance synchronous and
+// must not retain complete.
+type LedgerAcceptDeferrer interface {
+	DeferLedgerAccept(complete func()) bool
+}
+
 // Adaptor is composed of the narrower per-subsystem interfaces below; depend
 // on the narrowest one that satisfies your needs.
 
@@ -145,8 +250,7 @@ type NetworkBroadcaster interface {
 
 	// RelayProposal forwards a peer's proposal to others, honoring per-peer
 	// squelch and excluding exceptPeer (0 = all). SuppressionHash must be set:
-	// the overlay records each recipient in its reverse index for duplicate-
-	// arrival lookups.
+	// the overlay uses it to exclude known inbound sources and record relay time.
 	RelayProposal(proposal *Proposal, exceptPeer uint64) error
 
 	// RelayValidation forwards a peer's validation to others; same semantics
@@ -157,12 +261,10 @@ type NetworkBroadcaster interface {
 	// validator message from originPeer and every known-haver in seenPeers.
 	UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPeers []uint64)
 
-	// PeersThatHave returns peer IDs known to hold suppressionHash, or nil if
-	// unknown or aged out.
-	PeersThatHave(suppressionHash [32]byte) []uint64
-
 	RequestTxSet(id TxSetID) error
 
+	// RequestLedger may be called repeatedly while a ledger remains unavailable;
+	// implementations must suppress duplicate work within their retry window.
 	RequestLedger(id LedgerID) error
 }
 
@@ -224,7 +326,7 @@ type TxPool interface {
 
 	BuildTxSet(txs [][]byte) (TxSet, error)
 
-	HasTx(id TxID) bool
+	HasTx(id TxID) (bool, error)
 
 	GetTx(id TxID) ([]byte, error)
 }
@@ -250,14 +352,31 @@ type ValidatorIdentity interface {
 	VerifyValidation(validation *Validation) error
 }
 
-// FeeVoteResult is a validator's fee-vote stance emitted on every validation.
-// PostXRPFees selects the AMOUNT triple over the legacy UINT triple; zero
-// values mean "no vote" and are omitted.
+// FeeVoteResult is a validator's fee-vote stance emitted on flag-ledger
+// validations. The Set fields distinguish explicit zero from omission.
 type FeeVoteResult struct {
-	BaseFee          uint64
-	ReserveBase      uint64
-	ReserveIncrement uint64
-	PostXRPFees      bool
+	BaseFee             uint64
+	ReserveBase         uint64
+	ReserveIncrement    uint64
+	BaseFeeSet          bool
+	ReserveBaseSet      bool
+	ReserveIncrementSet bool
+	PostXRPFees         bool
+}
+
+// HasBaseFee reports whether the base-fee vote is present.
+func (f FeeVoteResult) HasBaseFee() bool {
+	return f.BaseFeeSet || f.BaseFee != 0
+}
+
+// HasReserveBase reports whether the reserve-base vote is present.
+func (f FeeVoteResult) HasReserveBase() bool {
+	return f.ReserveBaseSet || f.ReserveBase != 0
+}
+
+// HasReserveIncrement reports whether the reserve-increment vote is present.
+func (f FeeVoteResult) HasReserveIncrement() bool {
+	return f.ReserveIncrementSet || f.ReserveIncrement != 0
 }
 
 // TrustOracle exposes the UNL / negative-UNL / quorum state and the
@@ -315,7 +434,7 @@ type TrustOracle interface {
 	// GetLoadFee returns the advertised sfLoadFee; zero omits the field.
 	GetLoadFee() uint32
 
-	GetFeeVote() FeeVoteResult
+	GetFeeVote(Ledger) FeeVoteResult
 
 	// GetAmendmentVote returns the amendment IDs to vote for on the next flag ledger.
 	GetAmendmentVote() [][32]byte
@@ -408,13 +527,7 @@ type TxSet interface {
 
 	Contains(id TxID) bool
 
-	Add(tx []byte) error
-
-	Remove(id TxID) error
-
 	Size() int
-
-	Bytes() []byte
 }
 
 // OperatingMode represents the node's overall operating state.

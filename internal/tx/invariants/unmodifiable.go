@@ -37,8 +37,9 @@ func checkNoModifiedUnmodifiableFields(entries []InvariantEntry, rules *amendmen
 			continue
 		}
 
-		if state.EntryTypeCode(e.Before) != state.EntryTypeCode(e.After) ||
-			ledgerIndexChanged(e.Before, e.After) {
+		beforeType, beforeErr := state.DecodeType(e.Before)
+		afterType, afterErr := state.DecodeType(e.After)
+		if beforeErr != nil || afterErr != nil || beforeType != afterType || ledgerIndexChanged(e.Before, e.After) {
 			return &InvariantViolation{
 				Name:    "NoModifiedUnmodifiableFields",
 				Message: "changed an unmodifiable field",

@@ -3,9 +3,12 @@ package replaytool
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
+	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -78,6 +81,13 @@ func recordMembership(state *shamap.SHAMap, deltas map[[32]byte]*dirDelta, objKe
 // filled) NewFields or a DeletedNode's FinalFields, both of which carry the
 // node-pointer and owner fields needed to locate each page.
 func directoryPlacements(state *shamap.SHAMap, entryType string, fields map[string]any, brokerAccounts map[[32]byte][20]byte) ([]dirPlacement, error) {
+	for name, value := range fields {
+		if name == "Flags" || strings.HasSuffix(name, "Node") {
+			if _, err := parseMetaUint64(value); err != nil {
+				return nil, fmt.Errorf("%s has invalid %s: %w", entryType, name, err)
+			}
+		}
+	}
 	var out []dirPlacement
 	add := func(k keylet.Keylet, s dirStrategy) { out = append(out, dirPlacement{Key: k.Key, Strategy: s}) }
 
@@ -120,6 +130,19 @@ func directoryPlacements(state *shamap.SHAMap, entryType string, fields map[stri
 				add(keylet.OwnerDirPage(sub, metaUint64(fields["SubjectNode"])), dirSorted)
 			}
 		}
+		return out, nil
+
+	case "Delegate":
+		delegator, ok := metaAccountID(fields, "Account")
+		if !ok {
+			return nil, fmt.Errorf("Delegate has invalid Account")
+		}
+		authorized, ok := metaAccountID(fields, "Authorize")
+		if !ok {
+			return nil, fmt.Errorf("Delegate has invalid Authorize")
+		}
+		add(keylet.OwnerDirPage(delegator, metaUint64(fields["OwnerNode"])), dirSorted)
+		add(keylet.OwnerDirPage(authorized, metaUint64(fields["DestinationNode"])), dirSorted)
 		return out, nil
 
 	case "Vault":
@@ -183,6 +206,31 @@ func directoryPlacements(state *shamap.SHAMap, entryType string, fields map[stri
 		// append-ordered.
 		if book, ok := metaHash256(fields, "BookDirectory"); ok {
 			add(keylet.DirPage(book, metaUint64(fields["BookNode"])), dirAppend)
+		}
+		if raw, present := fields["AdditionalBooks"]; present {
+			books, ok := raw.([]any)
+			if !ok {
+				return nil, fmt.Errorf("Offer has invalid AdditionalBooks type %T", raw)
+			}
+			for i, rawBook := range books {
+				wrapper, ok := rawBook.(map[string]any)
+				if !ok {
+					return nil, fmt.Errorf("Offer AdditionalBooks[%d] has invalid type %T", i, rawBook)
+				}
+				bookFields, ok := wrapper["Book"].(map[string]any)
+				if !ok {
+					return nil, fmt.Errorf("Offer AdditionalBooks[%d] has invalid Book", i)
+				}
+				book, ok := metaHash256(bookFields, "BookDirectory")
+				if !ok {
+					return nil, fmt.Errorf("Offer AdditionalBooks[%d] has invalid BookDirectory", i)
+				}
+				node, err := parseMetaUint64(bookFields["BookNode"])
+				if err != nil {
+					return nil, fmt.Errorf("Offer AdditionalBooks[%d] has invalid BookNode: %w", i, err)
+				}
+				add(keylet.DirPage(book, node), dirAppend)
+			}
 		}
 
 	case "NFTokenOffer":
@@ -322,7 +370,11 @@ func reconstructDirIndexes(state *shamap.SHAMap, deltas map[[32]byte]*dirDelta, 
 		if err != nil {
 			return fmt.Errorf("decoding directory page %x: %w", pageKey[:4], err)
 		}
-		members := applyDirDelta(decodeIndexes(obj["Indexes"]), d)
+		members, err := decodeIndexes(obj["Indexes"], true)
+		if err != nil {
+			return fmt.Errorf("decoding directory page %x indexes: %w", pageKey[:4], err)
+		}
+		members = applyDirDelta(members, d)
 		obj["Indexes"] = encodeIndexes(members)
 		if err := putEncoded(state, pageKey, obj); err != nil {
 			return fmt.Errorf("re-encoding directory page %x: %w", pageKey[:4], err)
@@ -332,9 +384,8 @@ func reconstructDirIndexes(state *shamap.SHAMap, deltas map[[32]byte]*dirDelta, 
 }
 
 // applyDirDelta applies one page's membership operations in transaction order.
-// Removals preserve relative order and additions append, then the whole page is
-// sorted when the directory is sorted (dirInsert) rather than append-ordered
-// (dirAppend).
+// Removals preserve relative order. Sorted-directory additions sort the page
+// before insertion; append-ordered additions go to the tail.
 func applyDirDelta(members [][32]byte, d *dirDelta) [][32]byte {
 	present := make(map[[32]byte]bool, len(members))
 	for _, k := range members {
@@ -343,7 +394,19 @@ func applyDirDelta(members [][32]byte, d *dirDelta) [][32]byte {
 	for _, op := range d.operations {
 		if op.add {
 			if !present[op.key] {
-				members = append(members, op.key)
+				if d.strategy == dirSorted {
+					sort.Slice(members, func(i, j int) bool {
+						return bytes.Compare(members[i][:], members[j][:]) < 0
+					})
+					at := sort.Search(len(members), func(i int) bool {
+						return bytes.Compare(members[i][:], op.key[:]) >= 0
+					})
+					members = append(members, [32]byte{})
+					copy(members[at+1:], members[at:])
+					members[at] = op.key
+				} else {
+					members = append(members, op.key)
+				}
 				present[op.key] = true
 			}
 			continue
@@ -360,35 +423,45 @@ func applyDirDelta(members [][32]byte, d *dirDelta) [][32]byte {
 		delete(present, op.key)
 	}
 
-	if d.strategy == dirSorted {
-		sort.Slice(members, func(i, j int) bool {
-			return bytes.Compare(members[i][:], members[j][:]) < 0
-		})
-	}
 	return members
 }
 
 // decodeIndexes parses a directory page's sfIndexes value into 32-byte keys.
-func decodeIndexes(v any) [][32]byte {
+func decodeIndexes(v any, allowMissing bool) ([][32]byte, error) {
 	var out [][32]byte
-	appendHex := func(s string) {
-		if k, err := protocol.Hash256FromHex(s); err == nil {
-			out = append(out, k)
+	appendHex := func(s string) error {
+		k, err := protocol.Hash256FromHex(s)
+		if err != nil {
+			return err
 		}
+		out = append(out, k)
+		return nil
 	}
 	switch t := v.(type) {
 	case []any:
-		for _, e := range t {
-			if s, ok := e.(string); ok {
-				appendHex(s)
+		for i, e := range t {
+			s, ok := e.(string)
+			if !ok {
+				return nil, fmt.Errorf("index %d has type %T", i, e)
+			}
+			if err := appendHex(s); err != nil {
+				return nil, fmt.Errorf("index %d: %w", i, err)
 			}
 		}
 	case []string:
-		for _, s := range t {
-			appendHex(s)
+		for i, s := range t {
+			if err := appendHex(s); err != nil {
+				return nil, fmt.Errorf("index %d: %w", i, err)
+			}
 		}
+	case nil:
+		if !allowMissing {
+			return nil, errors.New("missing Indexes")
+		}
+	default:
+		return nil, fmt.Errorf("unexpected type %T", v)
 	}
-	return out
+	return out, nil
 }
 
 // encodeIndexes renders 32-byte keys as the uppercase-hex string array the
@@ -401,27 +474,43 @@ func encodeIndexes(members [][32]byte) []string {
 	return out
 }
 
-// metaUint64 reads a UInt64 (hex string) or UInt32 (numeric) metadata field as a
-// uint64, returning 0 when the field is absent or unparseable. Callers establish
-// whether an optional node-pointer applies before interpreting an absent value
-// as page zero.
 func metaUint64(v any) uint64 {
+	if v == nil {
+		return 0
+	}
+	n, _ := parseMetaUint64(v)
+	return n
+}
+
+func parseMetaUint64(v any) (uint64, error) {
 	switch t := v.(type) {
 	case string:
-		n, _ := strconv.ParseUint(t, 16, 64)
-		return n
+		n, err := strconv.ParseUint(t, 16, 64)
+		return n, err
 	case float64:
-		return uint64(t)
+		if t < 0 || t >= math.Exp2(64) || math.Trunc(t) != t {
+			return 0, fmt.Errorf("%v is outside uint64", t)
+		}
+		return uint64(t), nil
 	case uint32:
-		return uint64(t)
+		return uint64(t), nil
 	case uint64:
-		return t
+		return t, nil
 	case int:
-		return uint64(t)
+		if t < 0 {
+			return 0, fmt.Errorf("%d is outside uint64", t)
+		}
+		return uint64(t), nil
 	case int64:
-		return uint64(t)
+		if t < 0 {
+			return 0, fmt.Errorf("%d is outside uint64", t)
+		}
+		return uint64(t), nil
+	case nil:
+		return 0, errors.New("missing value")
+	default:
+		return 0, fmt.Errorf("unexpected type %T", v)
 	}
-	return 0
 }
 
 // metaAccountID decodes a classic-address metadata field into an account ID.

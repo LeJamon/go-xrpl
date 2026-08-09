@@ -3,6 +3,8 @@ package rcl
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -11,7 +13,15 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+type testEventSubscriberFunc func(consensus.Event)
+
+func (f testEventSubscriberFunc) OnEvent(event consensus.Event) {
+	f(event)
+}
 
 // mockLedger implements consensus.Ledger for testing
 type mockLedger struct {
@@ -69,14 +79,6 @@ func (ts *mockTxSet) Contains(id consensus.TxID) bool {
 	}
 	return false
 }
-func (ts *mockTxSet) Add(tx []byte) error { ts.txs = append(ts.txs, tx); return nil }
-func (ts *mockTxSet) Remove(id consensus.TxID) error {
-	if ts.containsTxs != nil {
-		delete(ts.containsTxs, id)
-	}
-	return nil
-}
-func (ts *mockTxSet) Bytes() []byte { return nil }
 
 // mockAdaptor implements consensus.Adaptor for testing
 type mockAdaptor struct {
@@ -88,9 +90,13 @@ type mockAdaptor struct {
 	amendmentBlocked bool
 
 	// Validator info
-	nodeID  consensus.NodeID
-	trusted map[consensus.NodeID]bool
-	quorum  int
+	nodeID                    consensus.NodeID
+	trusted                   map[consensus.NodeID]bool
+	quorum                    int
+	negativeUNL               []consensus.NodeID
+	fullyValidatedCalls       []finalityKey
+	onFullyValidated          func(consensus.LedgerID, uint32)
+	onValidationConfigChanged func()
 
 	// listed backs the optional ListedOracle; nil/empty = nothing listed.
 	listed map[consensus.NodeID]bool
@@ -106,9 +112,12 @@ type mockAdaptor struct {
 	quorumUnavailable bool
 
 	// Data stores
-	ledgers map[consensus.LedgerID]consensus.Ledger
-	txSets  map[consensus.TxSetID]consensus.TxSet
-	lastLCL consensus.Ledger
+	ledgers    map[consensus.LedgerID]consensus.Ledger
+	txSets     map[consensus.TxSetID]consensus.TxSet
+	lastLCL    consensus.Ledger
+	lastLCLErr error
+	lclStarted chan struct{}
+	lclRelease chan struct{}
 
 	// Peer-reported LCLs served by PeerReportedLedgers.
 	peerLCLs []consensus.LedgerID
@@ -142,10 +151,13 @@ type mockAdaptor struct {
 	// FeeVote stance for the R4.3 test. voteBaseFee/voteReserveBase/
 	// voteReserveIncrement are the triple values; votePostXRPFees
 	// controls which triple the engine emits (AMOUNT vs legacy UINT).
-	voteBaseFee          uint64
-	voteReserveBase      uint64
-	voteReserveIncrement uint64
-	votePostXRPFees      bool
+	voteBaseFee             uint64
+	voteReserveBase         uint64
+	voteReserveIncrement    uint64
+	voteBaseFeeSet          bool
+	voteReserveBaseSet      bool
+	voteReserveIncrementSet bool
+	votePostXRPFees         bool
 
 	// Override for GetValidatedLedgerHash. Zero by default; the
 	// R4.10 test sets this to a non-zero LedgerID to exercise the
@@ -247,10 +259,6 @@ func (a *mockAdaptor) RelayValidation(validation *consensus.Validation, _ uint64
 
 func (a *mockAdaptor) UpdateRelaySlot(_ []byte, _ uint64, _ []uint64) {}
 
-// PeersThatHave returns nil — the rcl engine tests never query the
-// overlay's reverse index since they go through a mockAdaptor.
-func (a *mockAdaptor) PeersThatHave(_ [32]byte) []uint64 { return nil }
-
 func (a *mockAdaptor) GetMaxDisallowedLedgerSeq() uint32 {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -300,8 +308,16 @@ func (a *mockAdaptor) GetLedgerBySeq(seq uint32) (consensus.Ledger, error) {
 
 func (a *mockAdaptor) GetLastClosedLedger() (consensus.Ledger, error) {
 	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.lastLCL, nil
+	ledger, err := a.lastLCL, a.lastLCLErr
+	started, release := a.lclStarted, a.lclRelease
+	a.mu.RUnlock()
+	if started != nil {
+		close(started)
+	}
+	if release != nil {
+		<-release
+	}
+	return ledger, err
 }
 
 func (a *mockAdaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, _ bool, _ [][]byte) (consensus.Ledger, error) {
@@ -433,8 +449,8 @@ func (a *mockAdaptor) OnUNLChange(upcomingSeq uint32, nowTrusted []consensus.Nod
 	})
 }
 
-func (a *mockAdaptor) HasTx(id consensus.TxID) bool {
-	return false
+func (a *mockAdaptor) HasTx(id consensus.TxID) (bool, error) {
+	return false, nil
 }
 
 func (a *mockAdaptor) GetTx(id consensus.TxID) ([]byte, error) {
@@ -495,11 +511,9 @@ func (a *mockAdaptor) IsQuorumUnavailable() bool {
 }
 
 func (a *mockAdaptor) GetNegativeUNL() []consensus.NodeID {
-	// Test mock: no negative-UNL tracking. Returning nil makes the
-	// tracker treat all trusted validators as contributors to quorum,
-	// which matches the pre-P2.5 behavior and keeps existing tests
-	// unaffected by the new interface.
-	return nil
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return append([]consensus.NodeID(nil), a.negativeUNL...)
 }
 
 func (a *mockAdaptor) PeerReportedLedgers() []consensus.LedgerID {
@@ -581,14 +595,17 @@ func (a *mockAdaptor) GetLoadFee() uint32 {
 	return a.loadFee
 }
 
-func (a *mockAdaptor) GetFeeVote() consensus.FeeVoteResult {
+func (a *mockAdaptor) GetFeeVote(consensus.Ledger) consensus.FeeVoteResult {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return consensus.FeeVoteResult{
-		BaseFee:          a.voteBaseFee,
-		ReserveBase:      a.voteReserveBase,
-		ReserveIncrement: a.voteReserveIncrement,
-		PostXRPFees:      a.votePostXRPFees,
+		BaseFee:             a.voteBaseFee,
+		ReserveBase:         a.voteReserveBase,
+		ReserveIncrement:    a.voteReserveIncrement,
+		BaseFeeSet:          a.voteBaseFeeSet,
+		ReserveBaseSet:      a.voteReserveBaseSet,
+		ReserveIncrementSet: a.voteReserveIncrementSet,
+		PostXRPFees:         a.votePostXRPFees,
 	}
 }
 
@@ -651,6 +668,25 @@ func (a *mockAdaptor) OnConsensusReached(ledger consensus.Ledger, validations []
 }
 
 func (a *mockAdaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32) {
+	a.mu.Lock()
+	a.fullyValidatedCalls = append(a.fullyValidatedCalls, finalityKey{ledgerID: ledgerID, ledgerSeq: seq})
+	hook := a.onFullyValidated
+	a.mu.Unlock()
+	if hook != nil {
+		hook(ledgerID, seq)
+	}
+	a.mu.RLock()
+	configChanged := a.onValidationConfigChanged
+	a.mu.RUnlock()
+	if configChanged != nil {
+		configChanged()
+	}
+}
+
+func (a *mockAdaptor) OnValidationConfigChanged(fn func()) {
+	a.mu.Lock()
+	a.onValidationConfigChanged = fn
+	a.mu.Unlock()
 }
 
 func (a *mockAdaptor) OnModeChange(oldMode, newMode consensus.Mode) {
@@ -771,6 +807,173 @@ func TestEngine_StartStop(t *testing.T) {
 	}
 }
 
+func TestEngine_StartSeedsNegativeUNL(t *testing.T) {
+	adaptor := newMockAdaptor()
+	nodes := []consensus.NodeID{{2}, {3}, {4}, {5}, {6}}
+	adaptor.setTrusted(nodes)
+	adaptor.quorum = 4
+	adaptor.negativeUNL = []consensus.NodeID{nodes[0]}
+	adaptor.now = time.Now()
+	config := DefaultConfig()
+	config.ManualTick = true
+	engine := NewEngine(adaptor, config)
+
+	if err := engine.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	for _, node := range nodes[:4] {
+		if status := engine.validationTracker.AddStatus(&consensus.Validation{
+			LedgerID:  consensus.LedgerID{0xA1},
+			LedgerSeq: 101,
+			NodeID:    node,
+			SignTime:  adaptor.now,
+			SeenTime:  adaptor.now,
+			Full:      true,
+		}); status != ValStatusCurrent {
+			t.Fatalf("validation status=%s, want current", status)
+		}
+	}
+	engine.validationTracker.mu.RLock()
+	fired := len(engine.validationTracker.fired)
+	engine.validationTracker.mu.RUnlock()
+	if fired != 0 {
+		t.Fatalf("startup negative-UNL validator finalized %d ledgers", fired)
+	}
+}
+
+func TestEngine_FullyValidatedLedgerRefreshesNegativeUNL(t *testing.T) {
+	adaptor := newMockAdaptor()
+	nodes := []consensus.NodeID{{2}, {3}, {4}, {5}, {6}}
+	adaptor.setTrusted(nodes)
+	adaptor.quorum = 4
+	adaptor.now = time.Now()
+	adaptor.onFullyValidated = func(consensus.LedgerID, uint32) {
+		adaptor.mu.Lock()
+		adaptor.negativeUNL = []consensus.NodeID{nodes[0]}
+		adaptor.mu.Unlock()
+	}
+	config := DefaultConfig()
+	config.ManualTick = true
+	engine := NewEngine(adaptor, config)
+	if err := engine.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	add := func(ledgerID consensus.LedgerID, seq uint32) {
+		t.Helper()
+		now := adaptor.Now()
+		for _, node := range nodes[:4] {
+			if status := engine.validationTracker.AddStatus(&consensus.Validation{
+				LedgerID: ledgerID, LedgerSeq: seq, NodeID: node,
+				SignTime: now, SeenTime: now, Full: true,
+			}); status != ValStatusCurrent {
+				t.Fatalf("validation status=%s, want current", status)
+			}
+		}
+	}
+	add(consensus.LedgerID{0xA2}, 101)
+	adaptor.mu.Lock()
+	adaptor.now = adaptor.now.Add(time.Second)
+	adaptor.mu.Unlock()
+	add(consensus.LedgerID{0xA3}, 102)
+
+	adaptor.mu.RLock()
+	calls := len(adaptor.fullyValidatedCalls)
+	adaptor.mu.RUnlock()
+	if calls != 1 {
+		t.Fatalf("fully validated callbacks=%d, want 1 after negative-UNL refresh", calls)
+	}
+}
+
+func TestEngine_StartFailureCanRetry(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.lastLCLErr = errors.New("load failed")
+	config := DefaultConfig()
+	config.ManualTick = true
+	engine := NewEngine(adaptor, config)
+
+	if err := engine.Start(t.Context()); err == nil {
+		t.Fatal("Start succeeded with a failed LCL lookup")
+	}
+	if engine.ctx != nil || engine.cancel != nil {
+		t.Fatal("failed Start retained context state")
+	}
+
+	adaptor.lastLCLErr = nil
+	if err := engine.Start(t.Context()); err != nil {
+		t.Fatalf("retry Start: %v", err)
+	}
+	if err := engine.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+}
+
+func TestEngine_StartTwicePreservesContext(t *testing.T) {
+	config := DefaultConfig()
+	config.ManualTick = true
+	adaptor := newMockAdaptor()
+	engine := NewEngine(adaptor, config)
+	if err := engine.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	firstCtx := engine.ctx
+	adaptor.lastLCLErr = errors.New("last closed ledger should not be read")
+	if err := engine.Start(t.Context()); !errors.Is(err, consensus.ErrEventBusStarted) {
+		t.Fatalf("second Start error = %v, want %v", err, consensus.ErrEventBusStarted)
+	}
+	if engine.ctx != firstCtx {
+		t.Fatal("second Start replaced the running context")
+	}
+	if err := engine.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+}
+
+func TestEngine_StopWaitsForConcurrentStart(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.lclStarted = make(chan struct{})
+	adaptor.lclRelease = make(chan struct{})
+	config := DefaultConfig()
+	config.ManualTick = true
+	engine := NewEngine(adaptor, config)
+
+	startResult := make(chan error, 1)
+	go func() {
+		startResult <- engine.Start(t.Context())
+	}()
+	<-adaptor.lclStarted
+
+	stopCalled := make(chan struct{})
+	stopResult := make(chan error, 1)
+	go func() {
+		close(stopCalled)
+		stopResult <- engine.Stop()
+	}()
+	<-stopCalled
+	select {
+	case err := <-stopResult:
+		t.Fatalf("Stop returned before Start completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(adaptor.lclRelease)
+	if err := <-startResult; err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := <-stopResult; err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if engine.ctx == nil || engine.ctx.Err() == nil {
+		t.Fatal("engine context remained live after Stop")
+	}
+	if engine.eventBus.Publish(&consensus.TimerFiredEvent{}) {
+		t.Fatal("event bus accepted publication after Stop")
+	}
+}
+
 func TestEngine_StartRound_Proposing(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.validator = true
@@ -792,13 +995,12 @@ func TestEngine_StartRound_Proposing(t *testing.T) {
 		t.Errorf("Expected Open phase, got %v", engine.Phase())
 	}
 
-	state := engine.State()
-	if state == nil {
+	if engine.state == nil {
 		t.Fatal("Expected state to be set")
 	}
 
-	if state.Round != round {
-		t.Errorf("Expected round %v, got %v", round, state.Round)
+	if engine.state.Round != round {
+		t.Errorf("Expected round %v, got %v", round, engine.state.Round)
 	}
 }
 
@@ -1485,28 +1687,6 @@ func TestEngine_IsValidating(t *testing.T) {
 	}
 }
 
-func TestEngine_Timing(t *testing.T) {
-	adaptor := newMockAdaptor()
-	config := DefaultConfig()
-	engine := NewEngine(adaptor, config)
-
-	timing := engine.Timing()
-	if timing.LedgerMinClose != config.Timing.LedgerMinClose {
-		t.Error("Timing mismatch")
-	}
-}
-
-func TestEngine_Events(t *testing.T) {
-	adaptor := newMockAdaptor()
-	config := DefaultConfig()
-	engine := NewEngine(adaptor, config)
-
-	events := engine.Events()
-	if events == nil {
-		t.Error("Expected events channel to be non-nil")
-	}
-}
-
 func TestEngine_ModeTransitions(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.validator = true
@@ -1529,6 +1709,47 @@ func TestEngine_ModeTransitions(t *testing.T) {
 
 	if engine.Mode() != consensus.ModeProposing {
 		t.Errorf("Expected Proposing mode, got %v", engine.Mode())
+	}
+}
+
+func TestEngine_ModeChangeBypassesSaturatedEventBus(t *testing.T) {
+	adaptor := newMockAdaptor()
+	engine := NewEngine(adaptor, DefaultConfig())
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var blockOnce sync.Once
+	engine.eventBus.Subscribe(testEventSubscriberFunc(func(consensus.Event) {
+		blockOnce.Do(func() {
+			close(entered)
+			<-release
+		})
+	}))
+	if err := engine.eventBus.Start(); err != nil {
+		t.Fatalf("Start event bus: %v", err)
+	}
+	if !engine.eventBus.Publish(&consensus.TimerFiredEvent{}) {
+		t.Fatal("initial event was rejected")
+	}
+	<-entered
+	for range 100 {
+		if !engine.eventBus.Publish(&consensus.TimerFiredEvent{}) {
+			t.Fatal("event bus filled before its configured capacity")
+		}
+	}
+
+	engine.mu.Lock()
+	engine.setMode(consensus.ModeWrongLedger)
+	engine.mu.Unlock()
+	close(release)
+	engine.eventBus.Stop()
+
+	if got := engine.eventBus.DroppedEvents(); got != 1 {
+		t.Fatalf("DroppedEvents = %d, want 1", got)
+	}
+	adaptor.mu.RLock()
+	defer adaptor.mu.RUnlock()
+	if got := adaptor.modeChanges[len(adaptor.modeChanges)-1]; got != consensus.ModeWrongLedger {
+		t.Fatalf("reliable mode callback = %v, want %v", got, consensus.ModeWrongLedger)
 	}
 }
 
@@ -1626,10 +1847,6 @@ func TestDefaultConfig(t *testing.T) {
 
 	if config.Timing.LedgerMaxConsensus == 0 {
 		t.Error("LedgerMaxConsensus should not be zero")
-	}
-
-	if config.Thresholds.EarlyConvergencePct == 0 {
-		t.Error("EarlyConvergencePct should not be zero")
 	}
 
 	if config.Thresholds.MinConsensusPct == 0 {
@@ -1780,9 +1997,7 @@ func TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch(t *testing.T) {
 	targetID := consensus.LedgerID{0xAA}
 
 	// run wedges an engine in ModeWrongLedger targeting targetID: two
-	// trusted peers proposing targetID make getNetworkLedger() return it,
-	// and two trusted validations clear the support gate (targetID has
-	// strictly more support than our stale fork). available controls
+	// trusted validations make getNetworkLedger() prefer it. available controls
 	// whether the target ledger is held locally. The mutation, the
 	// checkLedger() call, and the result capture all happen under a single
 	// e.mu hold so a background round tick cannot race the assertion.
@@ -1827,17 +2042,17 @@ func TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch(t *testing.T) {
 		engine.prevLedger = staleLedger
 		engine.wrongLedgerID = targetID
 		engine.setMode(consensus.ModeWrongLedger)
-		if engine.state != nil {
-			engine.state.OurPosition = nil // no self-vote — let the peer majority decide
-		}
-		engine.proposalTracker.recentProposals = map[consensus.NodeID][]*consensus.Proposal{
-			peerA: {{NodeID: peerA, PreviousLedger: targetID, Timestamp: now}},
-			peerB: {{NodeID: peerB, PreviousLedger: targetID, Timestamp: now}},
-		}
 		if engine.validationTracker != nil {
 			engine.validationTracker.SetTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
-			engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: targetID, LedgerSeq: 101, Full: true, SignTime: now, SeenTime: now})
-			engine.validationTracker.Add(&consensus.Validation{NodeID: peerB, LedgerID: targetID, LedgerSeq: 101, Full: true, SignTime: now, SeenTime: now})
+			for _, nodeID := range []consensus.NodeID{peerA, peerB} {
+				if !engine.validationTracker.Add(&consensus.Validation{
+					NodeID: nodeID, LedgerID: targetID, LedgerSeq: 101,
+					Full: true, SignTime: now, SeenTime: now,
+				}) {
+					engine.mu.Unlock()
+					t.Fatalf("trusted validation from %x was rejected", nodeID[:4])
+				}
+			}
 		}
 		engine.checkLedger()
 		gotMode := engine.mode
@@ -1863,7 +2078,7 @@ func TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch(t *testing.T) {
 		}
 	})
 
-	t.Run("unavailable_stays_without_respam", func(t *testing.T) {
+	t.Run("unavailable_retries_through_adaptor_window", func(t *testing.T) {
 		gotMode, gotWrongID, reqs := run(t, false)
 		if gotMode != consensus.ModeWrongLedger {
 			t.Fatalf("unavailable target: checkLedger must stay in WrongLedger, got %v", gotMode)
@@ -1871,9 +2086,9 @@ func TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch(t *testing.T) {
 		if gotWrongID != targetID {
 			t.Fatalf("unavailable target: wrongLedgerID must remain the target, got %x want %x", gotWrongID[:8], targetID[:8])
 		}
-		if reqs != 0 {
-			t.Fatalf("unavailable target: checkLedger must not re-request the acquire "+
-				"while already targeting it (no-spam guard), got %d requests", reqs)
+		if reqs != 1 {
+			t.Fatalf("unavailable target: checkLedger must retry through the adaptor's "+
+				"duplicate-suppression window, got %d requests", reqs)
 		}
 	})
 }
@@ -2098,7 +2313,7 @@ func TestSendValidation_PopulatesCookieServerVersionFeeVote(t *testing.T) {
 	// AMOUNT triple populated, legacy UINT triple NOT populated.
 	if v.BaseFeeDrops != 10 || v.ReserveBaseDrops != 1_000_000 || v.ReserveIncrementDrops != 200_000 {
 		t.Errorf("AMOUNT fee-vote triple not populated correctly: got %+v",
-			[3]uint64{v.BaseFeeDrops, v.ReserveBaseDrops, v.ReserveIncrementDrops})
+			[3]int64{v.BaseFeeDrops.Drops(), v.ReserveBaseDrops.Drops(), v.ReserveIncrementDrops.Drops()})
 	}
 	if v.BaseFee != 0 || v.ReserveBase != 0 || v.ReserveIncrement != 0 {
 		t.Errorf("legacy UINT triple must stay zero under postXRPFees=true: got (%d, %d, %d)",
@@ -2196,7 +2411,51 @@ func TestSendValidation_LegacyFeeTriple(t *testing.T) {
 	}
 	if v.BaseFeeDrops != 0 || v.ReserveBaseDrops != 0 || v.ReserveIncrementDrops != 0 {
 		t.Errorf("AMOUNT triple must stay zero under postXRPFees=false: got %+v",
-			[3]uint64{v.BaseFeeDrops, v.ReserveBaseDrops, v.ReserveIncrementDrops})
+			[3]int64{v.BaseFeeDrops.Drops(), v.ReserveBaseDrops.Drops(), v.ReserveIncrementDrops.Drops()})
+	}
+}
+
+func TestSendValidation_ExplicitZeroFeeVotes(t *testing.T) {
+	for _, postXRPFees := range []bool{false, true} {
+		t.Run(fmt.Sprintf("post_xrp_fees_%t", postXRPFees), func(t *testing.T) {
+			adaptor := newMockAdaptor()
+			adaptor.validator = true
+			adaptor.opMode = consensus.OpModeFull
+			adaptor.voteBaseFeeSet = true
+			adaptor.voteReserveBaseSet = true
+			adaptor.voteReserveIncrementSet = true
+			adaptor.votePostXRPFees = postXRPFees
+
+			engine := NewEngine(adaptor, DefaultConfig())
+			require.NoError(t, engine.Start(t.Context()))
+			defer engine.Stop()
+			engine.StartRound(consensus.RoundID{Seq: 100, ParentHash: consensus.LedgerID{1}}, true)
+
+			engine.mu.Lock()
+			engine.sendValidation(&mockLedger{id: consensus.LedgerID{0x89}, seq: 255})
+			engine.mu.Unlock()
+
+			adaptor.mu.RLock()
+			require.Len(t, adaptor.validationsBroadcast, 1)
+			validation := adaptor.validationsBroadcast[0]
+			adaptor.mu.RUnlock()
+
+			if postXRPFees {
+				assert.True(t, validation.HasBaseFeeDrops())
+				assert.True(t, validation.HasReserveBaseDrops())
+				assert.True(t, validation.HasReserveIncrementDrops())
+				assert.False(t, validation.HasBaseFee())
+				assert.False(t, validation.HasReserveBase())
+				assert.False(t, validation.HasReserveIncrement())
+				return
+			}
+			assert.True(t, validation.HasBaseFee())
+			assert.True(t, validation.HasReserveBase())
+			assert.True(t, validation.HasReserveIncrement())
+			assert.False(t, validation.HasBaseFeeDrops())
+			assert.False(t, validation.HasReserveBaseDrops())
+			assert.False(t, validation.HasReserveIncrementDrops())
+		})
 	}
 }
 
@@ -2247,7 +2506,7 @@ func TestSendValidation_FeeVoteOnlyOnFlagLedger(t *testing.T) {
 
 	if nonFlag.BaseFeeDrops != 0 || nonFlag.ReserveBaseDrops != 0 || nonFlag.ReserveIncrementDrops != 0 {
 		t.Errorf("non-flag ledger must omit AMOUNT fee-vote triple: got %+v",
-			[3]uint64{nonFlag.BaseFeeDrops, nonFlag.ReserveBaseDrops, nonFlag.ReserveIncrementDrops})
+			[3]int64{nonFlag.BaseFeeDrops.Drops(), nonFlag.ReserveBaseDrops.Drops(), nonFlag.ReserveIncrementDrops.Drops()})
 	}
 	if len(nonFlag.Amendments) != 0 {
 		t.Errorf("non-flag ledger must omit Amendments: got %d IDs", len(nonFlag.Amendments))
@@ -2757,7 +3016,7 @@ func TestConsensus_AbandonHardTimeout(t *testing.T) {
 	// abandon only fires once each avalanche level has had its minimum
 	// dwell. The +1 covers the increment phaseEstablish performs on
 	// entry.
-	engine.establishCounter = len(engine.parms.AvalancheCutoffs)*engine.parms.MinRounds + 1
+	engine.establishCounter = engine.parms.AvalancheCutoffCount()*engine.parms.MinRounds + 1
 	// Inject disagreeing trusted peers so we don't hit the
 	// alone-too-long carve-out (which would resolve to Yes via
 	// checkConsensusReached(_, 0, ..., reachedMax=true, ...)).
@@ -2780,6 +3039,7 @@ func TestConsensus_AbandonHardTimeout(t *testing.T) {
 			TxSet:    consensus.TxSetID{byte(0xB0 + i)},
 		}
 	}
+	adaptor.notifyTrustChanged()
 	engine.phaseEstablish()
 	phaseAfter := engine.phase
 	modeAfter := engine.mode
@@ -2894,6 +3154,7 @@ func TestConsensus_AbandonRetryGate(t *testing.T) {
 			TxSet:    consensus.TxSetID{byte(0xC0 + i)},
 		}
 	}
+	adaptor.notifyTrustChanged()
 	engine.phaseEstablish()
 	phaseAfter := engine.phase
 	modeAfter := engine.mode
@@ -3045,7 +3306,7 @@ func TestCheckConsensusState(t *testing.T) {
 		// past prevSeq so ProposersFinished returns 4 ≥ 80% of 4.
 		prev := &mockLedger{id: consensus.LedgerID{0x10}, seq: 100}
 		e.prevLedger = prev
-		vt := NewValidationTracker(3, e.timing.ValidationFreshness)
+		vt := NewValidationTracker(3)
 		for i := range 4 {
 			nodeID := consensus.NodeID{byte(0xA0 + i)}
 			vt.trusted[nodeID] = true
@@ -4405,8 +4666,8 @@ func TestPhaseEstablish_PauseAndRecover(t *testing.T) {
 	// validations via Add with the higher seq — strict-less-than
 	// rule (seq < prev) means seq==12 makes them non-laggards.
 	if engine.validationTracker != nil {
-		engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: consensus.LedgerID{0x0c}, LedgerSeq: 12, Full: true, SignTime: now, SeenTime: now})
-		engine.validationTracker.Add(&consensus.Validation{NodeID: peerB, LedgerID: consensus.LedgerID{0x0c}, LedgerSeq: 12, Full: true, SignTime: now, SeenTime: now})
+		engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: consensus.LedgerID{0x0c}, LedgerSeq: 12, Full: true, SignTime: now.Add(time.Nanosecond), SeenTime: now})
+		engine.validationTracker.Add(&consensus.Validation{NodeID: peerB, LedgerID: consensus.LedgerID{0x0c}, LedgerSeq: 12, Full: true, SignTime: now.Add(time.Nanosecond), SeenTime: now})
 	}
 
 	// shouldPause now returns false — the round is free to progress.

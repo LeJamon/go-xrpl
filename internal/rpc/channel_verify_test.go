@@ -356,9 +356,7 @@ func TestChannelVerify_ZeroAmount(t *testing.T) {
 func TestChannelVerify_WrongSignatureForAmount(t *testing.T) {
 	// First create a valid signature for amount "1000000"
 	authorizeHandler := &handlers.ChannelAuthorizeMethod{}
-	authorizeCtx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	authorizeCtx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	authorizeParams := json.RawMessage(`{
 		"passphrase": "masterpassphrase",
@@ -399,9 +397,7 @@ func TestChannelVerify_WrongSignatureForAmount(t *testing.T) {
 func TestChannelVerify_WrongChannelID(t *testing.T) {
 	// First create a valid signature for channel_id
 	authorizeHandler := &handlers.ChannelAuthorizeMethod{}
-	authorizeCtx := &types.RpcContext{
-		ApiVersion: types.ApiVersion1,
-	}
+	authorizeCtx := channelAuthorizeTestContext(types.ApiVersion1)
 
 	authorizeParams := json.RawMessage(`{
 		"passphrase": "masterpassphrase",

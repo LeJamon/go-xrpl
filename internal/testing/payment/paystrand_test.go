@@ -1363,7 +1363,10 @@ func TestNoAccount_NoSrc(t *testing.T) {
 
 	// Payment from unfunded account should fail
 	// Set sequence manually since auto-fill can't read non-existent account
-	result := env.Submit(Pay(unfunded, bob, uint64(jtx.XRP(100))).Sequence(1).Build())
+	result := env.SubmitWithOptions(
+		Pay(unfunded, bob, uint64(jtx.XRP(100))).Sequence(1).Build(),
+		jtx.SubmitOptions{SkipSignature: true},
+	)
 	// In rippled, this is terNO_ACCOUNT (account not found during apply)
 	if result.Success {
 		t.Error("Payment from unfunded account should fail")

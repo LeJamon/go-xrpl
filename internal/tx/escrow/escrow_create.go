@@ -184,7 +184,13 @@ func (e *EscrowCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 				return result
 			}
 		} else {
-			if result := escrowCreatePreclaimIOU(view, accountID, destID, e.Amount); result != ter.TesSUCCESS {
+			if result := escrowCreatePreclaimIOU(
+				view,
+				accountID,
+				destID,
+				e.Amount,
+				config.NumberContext(),
+			); result != ter.TesSUCCESS {
 				return result
 			}
 		}
@@ -208,7 +214,10 @@ func (e *EscrowCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 // is no ApplyContext.
 func readDestinationForEscrow(view tx.LedgerView, destID [20]byte) (*state.AccountRoot, ter.Result) {
 	data, err := view.Read(keylet.Account(destID))
-	if err != nil || data == nil {
+	if err != nil {
+		return nil, ter.TefINTERNAL
+	}
+	if data == nil {
 		return nil, ter.TecNO_DST
 	}
 	acct, err := state.ParseAccountRoot(data)
@@ -319,7 +328,10 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecDST_TAG_NEEDED
 	}
 
-	accountID, _ := state.DecodeAccountID(e.Account)
+	accountID, err := state.DecodeAccountID(e.Account)
+	if err != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
 	sequence := e.GetCommon().SeqProxy()
 
 	escrowKey := keylet.Escrow(accountID, sequence)
@@ -332,21 +344,38 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	var capturedTransferRate uint32
 	if rules.Enabled(amendment.FeatureTokenEscrow) && !isNative {
 		if e.Amount.IsMPT() {
-			// MPT: get rate from issuance TransferFee
 			mptKey, mptErr := mptIssuanceKeyFromHex(e.Amount.MPTIssuanceID())
-			if mptErr == nil {
-				issuanceData, _ := ctx.View.Read(mptKey)
-				if issuanceData != nil {
-					issuance, _ := state.ParseMPTokenIssuance(issuanceData)
-					if issuance != nil {
-						capturedTransferRate = getMPTTransferRate(issuance.TransferFee)
-					}
-				}
+			if mptErr != nil {
+				return ctx.Internal("decode MPT issuance ID", mptErr)
 			}
+			issuanceData, readErr := ctx.View.Read(mptKey)
+			if readErr != nil {
+				return ctx.Internal("read MPT issuance", readErr)
+			}
+			if issuanceData == nil {
+				return ter.TecOBJECT_NOT_FOUND
+			}
+			issuance, parseErr := state.ParseMPTokenIssuance(issuanceData)
+			if parseErr != nil {
+				return ctx.Internal("parse MPT issuance", parseErr)
+			}
+			capturedTransferRate = getMPTTransferRate(issuance.TransferFee)
 		} else {
-			// IOU: get rate from issuer account
-			issuerID, _ := state.DecodeAccountID(e.Amount.Issuer)
-			capturedTransferRate = tx.GetTransferRateByID(ctx.View, issuerID)
+			issuerID, issuerErr := state.DecodeAccountID(e.Amount.Issuer)
+			if issuerErr != nil {
+				return ctx.Internal("decode IOU issuer", issuerErr)
+			}
+			issuer, readErr := tx.ReadAccountRoot(ctx.View, issuerID)
+			if readErr != nil {
+				return ctx.Internal("read IOU issuer", readErr)
+			}
+			if issuer == nil {
+				return ter.TecNO_ISSUER
+			}
+			capturedTransferRate = issuer.TransferRate
+			if capturedTransferRate == 0 {
+				capturedTransferRate = parityRate
+			}
 		}
 	}
 
@@ -364,8 +393,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		dir.Owner = accountID
 	})
 	if err != nil {
-		ctx.Log.Error("escrow create: owner directory full", "error", err)
-		return ter.TecDIR_FULL
+		return mapDirInsertError(err)
 	}
 	ownerNode := ownerResult.Page
 
@@ -382,8 +410,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			dir.Owner = destID
 		})
 		if derr != nil {
-			ctx.Log.Error("escrow create: destination directory full", "error", derr)
-			return ter.TecDIR_FULL
+			return mapDirInsertError(derr)
 		}
 		destNode = destResult.Page
 		hasDestNode = true
@@ -396,14 +423,16 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	var hasIssuerNode bool
 	if !isNative && !e.Amount.IsMPT() {
 		issuerID, issuerErr := state.DecodeAccountID(e.Amount.Issuer)
-		if issuerErr == nil && issuerID != accountID && issuerID != destID {
+		if issuerErr != nil {
+			return ctx.Internal("decode IOU issuer", issuerErr)
+		}
+		if issuerID != accountID && issuerID != destID {
 			issuerDirKey := keylet.OwnerDir(issuerID)
 			issuerResult, ierr := state.DirInsert(ctx.View, issuerDirKey, escrowKey.Key, false, func(dir *state.DirectoryNode) {
 				dir.Owner = issuerID
 			})
 			if ierr != nil {
-				ctx.Log.Error("escrow create: issuer directory full", "error", ierr)
-				return ter.TecDIR_FULL
+				return mapDirInsertError(ierr)
 			}
 			issuerNode = issuerResult.Page
 			hasIssuerNode = true
@@ -453,13 +482,19 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		if issuerID == accountID {
 			return ter.TecINTERNAL
 		}
-		if lockResult := escrowLockIOU(ctx.View, accountID, issuerID, e.Amount); lockResult != ter.TesSUCCESS {
+		if lockResult := escrowLockIOU(
+			ctx.View,
+			accountID,
+			issuerID,
+			e.Amount,
+			ctx.NumberContext(),
+		); lockResult != ter.TesSUCCESS {
 			return lockResult
 		}
 	}
 
 	// Increase owner count for the escrow creator
-	ctx.Account.OwnerCount++
+	ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, 1)
 
 	return ter.TesSUCCESS
 }
@@ -473,6 +508,18 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 // missing line means there is no balance to escrow (tecNO_LINE). A genuine view
 // read error is the corrupt-ledger case (tecINTERNAL).
 // Reference: rippled Escrow.cpp:408-431
-func escrowLockIOU(view tx.LedgerView, senderID, issuerID [20]byte, amount tx.Amount) ter.Result {
-	return rippleCreditEscrow(view, senderID, issuerID, amount, ter.TecINTERNAL, ter.TecNO_LINE)
+func escrowLockIOU(
+	view tx.LedgerView,
+	senderID, issuerID [20]byte,
+	amount tx.Amount,
+	numberContext state.NumberContext,
+) ter.Result {
+	return rippleCreditEscrow(
+		view,
+		senderID,
+		issuerID,
+		amount,
+		ter.TecNO_LINE,
+		numberContext,
+	)
 }

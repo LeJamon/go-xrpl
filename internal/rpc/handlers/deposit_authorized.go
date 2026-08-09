@@ -15,7 +15,7 @@ import (
 const maxCredentialsArraySize = 8
 
 // DepositAuthorizedMethod handles the deposit_authorized RPC method
-type DepositAuthorizedMethod struct{ BaseHandler }
+type DepositAuthorizedMethod struct{ baseHandler }
 
 func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	rawFields, fieldsErr := rawJSONFields(params)
@@ -45,7 +45,7 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, types.RpcErrorActMalformed("Account malformed.")
 	}
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -59,7 +59,7 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	if selErr != nil {
 		return nil, selErr
 	}
-	ledger, validated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
+	ledger, validated, lookupErr := lookupLedger(ctx, parsedLedgerSpec)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}

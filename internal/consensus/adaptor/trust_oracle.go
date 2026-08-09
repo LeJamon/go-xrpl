@@ -8,7 +8,9 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/amendmentvote"
+	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -97,17 +99,45 @@ func (a *Adaptor) DropUntrustedValidations() bool {
 }
 
 func (a *Adaptor) OnTrustChanged(fn func([]consensus.NodeID, int)) {
-	a.trustUpdateMu.Lock()
-	defer a.trustUpdateMu.Unlock()
+	a.trustTransitionMu.Lock()
+	defer a.trustTransitionMu.Unlock()
 
+	a.trustUpdateMu.Lock()
 	a.mu.Lock()
 	a.onTrustChanged = fn
 	a.mu.Unlock()
+	a.trustUpdateMu.Unlock()
 
 	if fn != nil {
 		trusted, quorum := a.trustedValidatorsAndQuorum()
 		fn(trusted, quorum)
 	}
+}
+
+// OnTrustSettled registers a callback for the point after a trust transition
+// callback has returned and the transition gate has reopened. If registration
+// observes an already-settled snapshot, it invokes the callback once so a
+// concurrent reload cannot leave stored evidence unexamined.
+func (a *Adaptor) OnTrustSettled(fn func()) {
+	a.trustTransitionMu.Lock()
+	a.trustUpdateMu.Lock()
+	a.mu.Lock()
+	a.onTrustSettled = fn
+	a.mu.Unlock()
+	a.trustUpdateMu.Unlock()
+	settled := fn != nil && !a.trustTransitioning.Load()
+	a.trustTransitionMu.Unlock()
+	if settled {
+		fn()
+	}
+}
+
+// OnValidationConfigChanged registers the callback fired after validated-ledger
+// advancement changes the negative-UNL source.
+func (a *Adaptor) OnValidationConfigChanged(fn func()) {
+	a.mu.Lock()
+	a.onValidationConfigChanged = fn
+	a.mu.Unlock()
 }
 
 func (a *Adaptor) GetTrustedValidators() []consensus.NodeID {
@@ -124,6 +154,13 @@ func (a *Adaptor) GetTrustedValidatorsAndQuorum() ([]consensus.NodeID, int) {
 	a.trustUpdateMu.Lock()
 	defer a.trustUpdateMu.Unlock()
 	return a.trustedValidatorsAndQuorum()
+}
+
+// GetValidationConfig returns one consistent finality configuration snapshot.
+func (a *Adaptor) GetValidationConfig() ([]consensus.NodeID, int, []consensus.NodeID) {
+	a.trustUpdateMu.Lock()
+	defer a.trustUpdateMu.Unlock()
+	return a.validationConfig()
 }
 
 func (a *Adaptor) GetTrustedMasterKeys() [][33]byte {
@@ -166,11 +203,17 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 		copy(mkCopy, masterKeys)
 	}
 
+	a.trustTransitionMu.Lock()
+	defer a.trustTransitionMu.Unlock()
+
 	a.trustUpdateMu.Lock()
 	a.trustTransitioning.Store(true)
+	trustLocked := true
 	defer func() {
+		if trustLocked {
+			a.trustUpdateMu.Unlock()
+		}
 		a.trustTransitioning.Store(false)
-		a.trustUpdateMu.Unlock()
 	}()
 
 	negUNL := a.GetNegativeUNL()
@@ -184,6 +227,7 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 	a.trustedSet = newSet
 	a.trustedMasterKeys = mkCopy
 	onTrustChanged := a.onTrustChanged
+	onTrustSettled := a.onTrustSettled
 	a.mu.Unlock()
 
 	// trustedVotes is assigned once in New and never reassigned, so the
@@ -195,8 +239,22 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 	if a.IsUNLBlocked() && a.GetOperatingMode() > consensus.OpModeConnected {
 		a.SetOperatingMode(consensus.OpModeConnected)
 	}
+	// The tracker callback may synchronously call back into adaptor trust
+	// readers. Release trustUpdateMu before dispatching it; the outer
+	// transition mutex keeps a later setter from publishing out of order, and
+	// the transition bit stays set until the matching tracker snapshot has been
+	// installed.
+	a.trustUpdateMu.Unlock()
+	trustLocked = false
 	if onTrustChanged != nil {
 		onTrustChanged(vCopy, quorum)
+	}
+	// The tracker callback is intentionally run while the transition gate is
+	// closed. Recheck once the matching snapshot is installed and the gate is
+	// open so evidence collected during the transition can be promoted.
+	a.trustTransitioning.Store(false)
+	if onTrustSettled != nil {
+		onTrustSettled()
 	}
 }
 
@@ -224,6 +282,11 @@ func (a *Adaptor) IsQuorumUnavailable() bool {
 }
 
 func (a *Adaptor) trustedValidatorsAndQuorum() ([]consensus.NodeID, int) {
+	trusted, quorum, _ := a.validationConfig()
+	return trusted, quorum
+}
+
+func (a *Adaptor) validationConfig() ([]consensus.NodeID, int, []consensus.NodeID) {
 	negUNL := a.GetNegativeUNL()
 	unavailable := a.publisherQuorumUnavailable()
 
@@ -236,7 +299,7 @@ func (a *Adaptor) trustedValidatorsAndQuorum() ([]consensus.NodeID, int) {
 	if unavailable {
 		quorum = math.MaxInt
 	}
-	return trusted, quorum
+	return trusted, quorum, negUNL
 }
 
 func quorumForTrustedSet(trustedSet map[consensus.NodeID]struct{}, trusted int, negUNL []consensus.NodeID) int {
@@ -357,21 +420,51 @@ func (a *Adaptor) GetLoadFee() uint32 {
 	if c := ft.ClusterFee(); c > fee {
 		fee = c
 	}
-	if fee <= ft.LoadBase() {
+	if fee <= feetrack.LoadBase {
 		return 0
 	}
 	return fee
 }
 
-// GetFeeVote returns this validator's fee-vote stance and whether the
-// post-XRPFees rules apply (featureXRPFees enabled).
-func (a *Adaptor) GetFeeVote() consensus.FeeVoteResult {
-	return consensus.FeeVoteResult{
-		BaseFee:          a.feeVote.BaseFee,
-		ReserveBase:      uint64(a.feeVote.ReserveBase),
-		ReserveIncrement: uint64(a.feeVote.ReserveIncrement),
-		PostXRPFees:      a.IsFeatureEnabled("XRPFees"),
+// GetFeeVote returns the fee fields this validator should emit for ledger.
+func (a *Adaptor) GetFeeVote(current consensus.Ledger) consensus.FeeVoteResult {
+	result := consensus.FeeVoteResult{
+		BaseFee:             a.feeVote.BaseFee,
+		ReserveBase:         uint64(a.feeVote.ReserveBase),
+		ReserveIncrement:    uint64(a.feeVote.ReserveIncrement),
+		BaseFeeSet:          a.feeVote.BaseFeeSet,
+		ReserveBaseSet:      a.feeVote.ReserveBaseSet,
+		ReserveIncrementSet: a.feeVote.ReserveIncrementSet,
+		PostXRPFees:         a.IsFeatureEnabled("XRPFees"),
 	}
+
+	wrapped, ok := current.(*LedgerWrapper)
+	if !ok {
+		return result
+	}
+	result.PostXRPFees = a.IsFeatureEnabledOnLedger(current, "XRPFees")
+
+	data, err := wrapped.Unwrap().Read(keylet.Fees())
+	if err != nil || len(data) == 0 {
+		return result
+	}
+	fees, err := state.ParseFeeSettings(data)
+	if err != nil {
+		return result
+	}
+	result.BaseFeeSet = result.BaseFee != fees.GetBaseFee()
+	result.ReserveBaseSet = result.ReserveBase != fees.GetReserveBase()
+	result.ReserveIncrementSet = result.ReserveIncrement != fees.GetReserveIncrement()
+	if !result.BaseFeeSet {
+		result.BaseFee = 0
+	}
+	if !result.ReserveBaseSet {
+		result.ReserveBase = 0
+	}
+	if !result.ReserveIncrementSet {
+		result.ReserveIncrement = 0
+	}
+	return result
 }
 
 // currentAmendmentStances returns the validator's live per-amendment vote

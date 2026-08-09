@@ -9,7 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,37 +36,97 @@ func newTransportRegressionServer(t *testing.T) *Server {
 			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		},
 	})
-	server.loadTracker = loadtrack.New()
+	server.resourceManager = resource.NewManager(nil, nil)
 	return server
 }
 
-func TestTransportConstructorsShareInjectedLoadTracker(t *testing.T) {
-	tracker := loadtrack.New()
-	httpServer := NewServerWithLoadTracker(time.Second, nil, tracker)
-	wsServer := NewWebSocketServerWithLoadTracker(time.Second, nil, tracker)
+func TestTransportConstructorsShareInjectedResourceManager(t *testing.T) {
+	manager := resource.NewManager(nil, nil)
+	httpServer := NewServer(ServerOptions{Timeout: time.Second, Services: nil, ResourceManager: manager})
+	wsServer := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second, Services: nil, ResourceManager: manager})
 
-	require.Same(t, tracker, httpServer.loadTracker)
-	require.Same(t, tracker, wsServer.loadTracker)
-	tracker.Charge("shared-client", loadtrack.LoadMalformed)
-	assert.Greater(t, wsServer.loadTracker.Balance("shared-client"), float64(0))
+	require.Same(t, manager, httpServer.resourceManager)
+	require.Same(t, manager, wsServer.resourceManager)
+	consumer := manager.NewInboundEndpoint("192.0.2.1")
+	require.NotNil(t, consumer)
+	consumer.Charge(resource.FeeMalformedRPC(), "shared-client")
+	assert.Greater(t, consumer.Balance(), int64(0))
+	consumer.Release()
 
-	defaultHTTP := NewServer(time.Second, nil)
-	defaultWS := NewWebSocketServer(time.Second, nil)
-	require.NotNil(t, defaultHTTP.loadTracker)
-	require.NotNil(t, defaultWS.loadTracker)
-	require.NotSame(t, defaultHTTP.loadTracker, defaultWS.loadTracker)
+	defaultHTTP := NewServer(ServerOptions{Timeout: time.Second})
+	defaultWS := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second})
+	require.NotNil(t, defaultHTTP.resourceManager)
+	require.NotNil(t, defaultWS.resourceManager)
+	require.NotSame(t, defaultHTTP.resourceManager, defaultWS.resourceManager)
 }
 
-func seedTransportRegressionLoad(tracker *loadtrack.Tracker, balance int) {
-	tracker.Import("transport-regression", loadtrack.Gossip{Items: []loadtrack.GossipItem{{
-		Key:     transportRegressionClientIP,
-		Balance: balance,
+func TestRPCConstructorsUseExplicitDependencies(t *testing.T) {
+	services := types.NewServiceContainer(nil)
+	clientLoad := types.NewClientLoadShedder()
+	services.ClientLoad = clientLoad
+	manager := subscription.NewManager()
+	provider := stubLedgerInfoProvider{ledgerAvailable: true}
+	peerSource := &stubPeerSource{}
+
+	httpServer := NewServer(ServerOptions{
+		Timeout:         time.Second,
+		Services:        services,
+		ResourceManager: resource.NewManager(nil, nil),
+		PeerSource:      peerSource,
+	})
+	wsServer := NewWebSocketServer(WebSocketServerOptions{
+		Timeout:             time.Second,
+		Services:            services,
+		ResourceManager:     httpServer.resourceManager,
+		PeerSource:          peerSource,
+		PingInterval:        5 * time.Second,
+		LedgerInfoProvider:  provider,
+		SubscriptionManager: manager,
+	})
+
+	if services.ClientLoad != clientLoad || services.Dispatcher != nil || services.URLSubscriptions != nil {
+		t.Fatal("RPC constructors mutated the service container")
+	}
+	clientLoad.Begin()
+	if httpServer.services.ClientLoad.InFlight() != 1 || wsServer.services.ClientLoad.InFlight() != 1 {
+		t.Fatal("HTTP and WebSocket servers did not observe the shared client-load shedder")
+	}
+	if wsServer.SubscriptionManager() != manager {
+		t.Fatal("WebSocket server did not retain the explicitly supplied subscription manager")
+	}
+	if wsServer.pingInterval != 5*time.Second || wsServer.ledgerInfoProvider != provider {
+		t.Fatal("WebSocket options were not applied")
+	}
+	if _, ok := httpServer.registry.Get("ping"); !ok {
+		t.Fatal("HTTP method registry was not ready at construction return")
+	}
+	if _, ok := wsServer.methodRegistry.Get("ping"); !ok {
+		t.Fatal("WebSocket method registry was not ready at construction return")
+	}
+}
+
+func seedTransportRegressionLoad(manager *resource.Manager, balance int) {
+	_ = manager.ImportConsumers("transport-regression", resource.Gossip{Items: []resource.GossipItem{{
+		Address: transportRegressionClientIP,
+		Balance: uint32(balance),
 	}}})
 }
 
-func transportRegressionLocalBalance(t *testing.T, tracker *loadtrack.Tracker) uint32 {
+func transportRegressionLocalBalance(t *testing.T, manager *resource.Manager) uint32 {
+	return resourceLocalBalance(t, manager, transportRegressionClientIP)
+}
+
+func resourceLocalBalance(t *testing.T, manager *resource.Manager, address string) uint32 {
 	t.Helper()
-	return uint32(tracker.LocalBalance(transportRegressionClientIP))
+	consumer := manager.NewInboundEndpoint(address)
+	require.NotNil(t, consumer)
+	defer consumer.Release()
+	for _, entry := range manager.Snapshot(0) {
+		if entry.Address == "IP Address: "+address && entry.Type == resource.KindInbound.String() {
+			return uint32(entry.Local)
+		}
+	}
+	return 0
 }
 
 func batchRegressionResult(t *testing.T, recorder *httptest.ResponseRecorder) map[string]any {
@@ -96,7 +157,7 @@ func TestHTTPAdmissionOrderingAtTransportBoundary(t *testing.T) {
 		}
 		t.Run("invalid API precedes overload/"+name, func(t *testing.T) {
 			server := newTransportRegressionServer(t)
-			seedTransportRegressionLoad(server.loadTracker, loadtrack.DropThreshold)
+			seedTransportRegressionLoad(server.resourceManager, resource.DropThreshold)
 
 			recorder := postTransportRegressionRequest(t, server, body)
 
@@ -109,7 +170,7 @@ func TestHTTPAdmissionOrderingAtTransportBoundary(t *testing.T) {
 				assert.Equal(t, http.StatusBadRequest, recorder.Code)
 				assert.Equal(t, types.InvalidApiVersionToken+"\r\n", recorder.Body.String())
 			}
-			assert.Equal(t, uint32(0), transportRegressionLocalBalance(t, server.loadTracker))
+			assert.Equal(t, uint32(0), transportRegressionLocalBalance(t, server.resourceManager))
 		})
 	}
 
@@ -129,7 +190,7 @@ func TestHTTPAdmissionOrderingAtTransportBoundary(t *testing.T) {
 	for _, test := range overloadCases {
 		t.Run("overload precedes "+test.name, func(t *testing.T) {
 			server := newTransportRegressionServer(t)
-			seedTransportRegressionLoad(server.loadTracker, loadtrack.DropThreshold)
+			seedTransportRegressionLoad(server.resourceManager, resource.DropThreshold)
 
 			recorder := postTransportRegressionRequest(t, server, test.body)
 
@@ -142,7 +203,7 @@ func TestHTTPAdmissionOrderingAtTransportBoundary(t *testing.T) {
 				assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 				assert.Equal(t, "Server is overloaded\r\n", recorder.Body.String())
 			}
-			assert.Equal(t, loadtrack.ChargeDrop/uint32(loadtrack.DecayWindow/time.Second), transportRegressionLocalBalance(t, server.loadTracker))
+			assert.Equal(t, uint32(resource.FeeDrop().Cost()/resource.DecayWindowSeconds), transportRegressionLocalBalance(t, server.resourceManager))
 		})
 	}
 }
@@ -172,7 +233,7 @@ func TestHTTPForbiddenPrecedesMalformedTransportFields(t *testing.T) {
 				assert.Equal(t, http.StatusForbidden, recorder.Code)
 				assert.Equal(t, "Forbidden\r\n", recorder.Body.String())
 			}
-			assert.Equal(t, loadtrack.ChargeMalformed/uint32(loadtrack.DecayWindow/time.Second), transportRegressionLocalBalance(t, server.loadTracker))
+			assert.Equal(t, uint32(resource.FeeMalformedRPC().Cost()/resource.DecayWindowSeconds), transportRegressionLocalBalance(t, server.resourceManager))
 		})
 	}
 }
@@ -196,7 +257,7 @@ func TestHTTPMalformedAndForbiddenExactLoadCharge(t *testing.T) {
 
 			postTransportRegressionRequest(t, server, test.body)
 
-			assert.Equal(t, loadtrack.ChargeMalformed/uint32(loadtrack.DecayWindow/time.Second), transportRegressionLocalBalance(t, server.loadTracker))
+			assert.Equal(t, uint32(resource.FeeMalformedRPC().Cost()/resource.DecayWindowSeconds), transportRegressionLocalBalance(t, server.resourceManager))
 		})
 	}
 }
@@ -238,7 +299,7 @@ func TestHTTPEarlyDispatchErrorsChargeReferenceAndWarn(t *testing.T) {
 			t.Run(test.name+"/"+name, func(t *testing.T) {
 				server := newTransportRegressionServer(t)
 				test.setup(server)
-				seedTransportRegressionLoad(server.loadTracker, loadtrack.WarningThreshold)
+				seedTransportRegressionLoad(server.resourceManager, resource.WarningThreshold)
 
 				recorder := postTransportRegressionRequest(t, server, body)
 
@@ -251,7 +312,7 @@ func TestHTTPEarlyDispatchErrorsChargeReferenceAndWarn(t *testing.T) {
 				}
 				assert.Equal(t, test.token, result["error"])
 				assert.Equal(t, "load", result["warning"])
-				assert.Equal(t, (loadtrack.ChargeReference+loadtrack.ChargeWarning)/uint32(loadtrack.DecayWindow/time.Second), transportRegressionLocalBalance(t, server.loadTracker))
+				assert.Equal(t, uint32((resource.FeeReferenceRPC().Cost()+resource.FeeWarning().Cost())/resource.DecayWindowSeconds), transportRegressionLocalBalance(t, server.resourceManager))
 			})
 		}
 	}
@@ -328,7 +389,7 @@ func TestBatchAllErrorEchoesRecursivelyRedactCredentials(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			server := newTransportRegressionServer(t)
 			if test.overloaded {
-				seedTransportRegressionLoad(server.loadTracker, loadtrack.DropThreshold)
+				seedTransportRegressionLoad(server.resourceManager, resource.DropThreshold)
 			}
 			body := `{"method":"batch","params":[` + test.element + `]}`
 
@@ -350,7 +411,7 @@ func TestBuildXrplResponseBodyDoesNotMutateHandlerResult(t *testing.T) {
 		"nested": map[string]any{"ok": true},
 	}
 
-	response := buildXrplResponseBody(nil, result, nil, &JsonRpcResponseOptions{Warning: "load"})
+	response := buildXrplResponseBody(nil, result, nil, &jsonRPCResponseOptions{Warning: "load"})
 
 	assert.True(t, reflect.DeepEqual(want, result), "handler result mutated: %v", result)
 	assert.NotContains(t, result, "status")
@@ -463,19 +524,19 @@ func TestHTTPParseBoundaryUsesFixedResponse(t *testing.T) {
 		{name: "integer above range", body: `{"method":"ping","params":[{"id":4294967296}]}`},
 		{name: "real out of range", body: `{"method":"ping","params":[{"id":1e999}]}`},
 		{name: "too deeply nested", body: nestedJSONObject(26)},
-		{name: "oversized", body: strings.Repeat(" ", MaxRequestBytes+1)},
+		{name: "oversized", body: strings.Repeat(" ", maxRequestBytes+1)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			server := newTransportRegressionServer(t)
-			seedTransportRegressionLoad(server.loadTracker, loadtrack.DropThreshold)
+			seedTransportRegressionLoad(server.resourceManager, resource.DropThreshold)
 
 			recorder := postTransportRegressionRequest(t, server, test.body)
 
 			assert.Equal(t, http.StatusBadRequest, recorder.Code)
 			assert.Equal(t, jsonContentType, recorder.Header().Get("Content-Type"))
 			assert.Equal(t, unableToParseRequest+"\r\n", recorder.Body.String())
-			assert.Equal(t, uint32(0), transportRegressionLocalBalance(t, server.loadTracker))
+			assert.Equal(t, uint32(0), transportRegressionLocalBalance(t, server.resourceManager))
 		})
 	}
 }

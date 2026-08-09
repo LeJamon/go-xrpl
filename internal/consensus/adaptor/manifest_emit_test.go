@@ -132,9 +132,11 @@ func (f *fakeManifestSender) Peers() []peermanagement.PeerInfo {
 func frameToManifestBytes(t *testing.T, frame []byte) [][]byte {
 	t.Helper()
 	r := bytes.NewReader(frame)
-	hdr, payload, err := message.ReadMessage(r)
+	hdr, err := message.ReadHeader(r)
+	require.NoError(t, err)
+	payload, err := message.ReadPayload(r, *hdr)
 	if err != nil {
-		t.Fatalf("ReadMessage: %v", err)
+		t.Fatalf("ReadPayload: %v", err)
 	}
 	if hdr.MessageType != message.TypeManifests {
 		t.Fatalf("frame type: got %v want TypeManifests", hdr.MessageType)
@@ -180,7 +182,7 @@ func routerWithCache(t *testing.T, sender manifestSender, seedKey byte, seq uint
 		}
 	}
 
-	router := NewRouter(&mockEngine{}, ad, nil)
+	router := newTestRouter(&mockEngine{}, ad, nil)
 	router.manifests = cache
 	router.overrideManifestSender = sender
 	return router, cache, id
@@ -264,11 +266,11 @@ func TestRouter_SendLocalManifestTo_EmitsExpectedFrame(t *testing.T) {
 	if err != nil {
 		t.Fatalf("emitted manifest fails Deserialize: %v", err)
 	}
-	if parsed.MasterKey != id.MasterKey {
+	if parsed.MasterKey() != id.MasterKey {
 		t.Errorf("emitted manifest master key mismatch")
 	}
-	if parsed.Sequence != id.Manifest.Sequence {
-		t.Errorf("emitted manifest sequence: got %d want %d", parsed.Sequence, id.Manifest.Sequence)
+	if parsed.Sequence() != id.Manifest.Sequence() {
+		t.Errorf("emitted manifest sequence: got %d want %d", parsed.Sequence(), id.Manifest.Sequence())
 	}
 }
 
@@ -431,7 +433,7 @@ func TestRouter_HandlePeerConnect_DelegatesToSendLocalManifest(t *testing.T) {
 
 func TestRouterHandlePeerConnectSeedsHandshakeLedgerHint(t *testing.T) {
 	ad := newTestAdaptor(t)
-	router := NewRouter(&mockEngine{}, ad, nil)
+	router := newTestRouter(&mockEngine{}, ad, nil)
 	closed := [32]byte{0xAA, 0xBB}
 	router.setPeerSessionView(peerLedgerHints{closed: closed})
 
@@ -485,7 +487,7 @@ func TestRouterAcknowledgesBootstrapOnlyAfterValidManifest(t *testing.T) {
 
 	router.processManifestJob(&peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeManifests),
+		Type:    message.TypeManifests,
 		Payload: []byte("malformed"),
 	})
 	if sessions.acknowledged != 0 {
@@ -516,7 +518,7 @@ func TestRouterAcknowledgesBootstrapOnlyAfterValidManifest(t *testing.T) {
 	}
 	sessions.acknowledged = 0
 	sessions.rejected = 0
-	router.processManifestJob(&peermanagement.InboundMessage{PeerID: 7, Type: uint16(message.TypeManifests), Payload: payload})
+	router.processManifestJob(&peermanagement.InboundMessage{PeerID: 7, Type: message.TypeManifests, Payload: payload})
 	if sessions.acknowledged != 7 || sessions.rejected != 0 {
 		t.Fatalf("empty manifests ack=%d reject=%d, want ack=7 reject=0", sessions.acknowledged, sessions.rejected)
 	}
@@ -530,7 +532,7 @@ func TestRouterAcknowledgesBootstrapOnlyAfterValidManifest(t *testing.T) {
 			}
 			router.processManifestJob(&peermanagement.InboundMessage{
 				PeerID:  7,
-				Type:    uint16(message.TypeManifests),
+				Type:    message.TypeManifests,
 				Payload: payload,
 			})
 			if sessions.acknowledged != 0 {
@@ -554,7 +556,7 @@ func TestRouterAcknowledgesBootstrapOnlyAfterValidManifest(t *testing.T) {
 			}
 			router.processManifestJob(&peermanagement.InboundMessage{
 				PeerID:  7,
-				Type:    uint16(message.TypeManifests),
+				Type:    message.TypeManifests,
 				Payload: payload,
 			})
 			if sessions.acknowledged != 7 {
@@ -620,13 +622,9 @@ func TestRouter_CachedManifestFrame_RebuiltOnSequenceAdvance(t *testing.T) {
 	router.SendLocalManifestTo(peermanagement.PeerID(1))
 	first := router.manifestFrames[0]
 
-	// Mint a higher-sequence manifest under the SAME master+ephemeral
-	// keypair (newTokenFixture is seed-deterministic — same seed byte
-	// = same keys; only the sequence differs). This hits the update
-	// branch in cache.ApplyManifest. Every accept bumps Sequence in
-	// rippled 3.2.0 (#6059), so after the setup first-insert (=1) this
-	// update takes it to 2.
-	rotated := newTokenFixture(t, 0xC2, 7)
+	// Mint a higher-sequence manifest under the same master with a new
+	// ephemeral key. Reusing the current ephemeral is a cache collision.
+	rotated := newTokenFixtureWithSeeds(t, 0xC2, 0xC3, 7)
 	rotatedID, err := NewValidatorIdentityFromToken(rotated.tokenBlock)
 	if err != nil {
 		t.Fatalf("rotated identity: %v", err)

@@ -126,6 +126,9 @@ func TestParseLedgerOffer_RejectsUnknownArray(t *testing.T) {
 	blob = append(blob, 0xF0, 0x14)
 	//   Inner Book object (type 14, nth=36).
 	blob = append(blob, 0xE0, 0x24)
+	//     Required BookNode UInt64 (type 3, nth=3) = 0.
+	blob = append(blob, 0x33)
+	blob = append(blob, make([]byte, 8)...)
 	//     BookDirectory Hash256 (type 5, nth=16) whose 32 payload bytes are
 	//     all array/object end markers — the trap for a byte-scan skipper.
 	blob = append(blob, 0x50, 0x10)

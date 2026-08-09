@@ -42,7 +42,7 @@ func TestFillTxDisplay(t *testing.T) {
 	}
 
 	t.Run("hot path skips the decode", func(t *testing.T) {
-		var info TxApplyInfo
+		var info txApplyInfo
 		fillTxDisplay(&info, blob, parsed.Transaction, false)
 		if info.TxType != common.TransactionType {
 			t.Errorf("TxType = %q, want %q", info.TxType, common.TransactionType)
@@ -62,12 +62,12 @@ func TestFillTxDisplay(t *testing.T) {
 	// --dump-dir / -v). materializeDecoded must backfill DecodedTx from the
 	// retained blob so tx_results.json is never silently missing it.
 	t.Run("dump materializes the decode on demand", func(t *testing.T) {
-		var info TxApplyInfo
+		var info txApplyInfo
 		fillTxDisplay(&info, blob, parsed.Transaction, false)
 		if info.DecodedTx != nil {
 			t.Fatal("precondition: DecodedTx should be nil before materialize")
 		}
-		results := []TxApplyInfo{info}
+		results := []txApplyInfo{info}
 		materializeDecoded(results)
 		if results[0].DecodedTx == nil {
 			t.Fatal("materializeDecoded did not backfill DecodedTx")
@@ -81,7 +81,7 @@ func TestFillTxDisplay(t *testing.T) {
 	})
 
 	t.Run("detail path materializes the decode", func(t *testing.T) {
-		var info TxApplyInfo
+		var info txApplyInfo
 		fillTxDisplay(&info, blob, parsed.Transaction, true)
 		if info.DecodedTx == nil {
 			t.Errorf("DecodedTx nil when detail requested")
@@ -92,7 +92,7 @@ func TestFillTxDisplay(t *testing.T) {
 	})
 
 	t.Run("parse failure still labels the tx", func(t *testing.T) {
-		var info TxApplyInfo
+		var info txApplyInfo
 		fillTxDisplay(&info, blob, nil, false)
 		if info.DecodedTx == nil {
 			t.Errorf("expected best-effort decode on parse failure")

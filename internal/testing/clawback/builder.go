@@ -1,77 +1,37 @@
 package clawback
 
 import (
-	"fmt"
-
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/clawback"
 )
 
-// ClawbackBuilder provides a fluent interface for building Clawback transactions.
-type ClawbackBuilder struct {
-	issuer   *jtx.Account
-	holder   *jtx.Account
-	currency string
-	amount   float64
-	fee      uint64
-	sequence *uint32
-	flags    uint32
+type clawbackBuilder struct {
+	issuer *jtx.Account
+	amount tx.Amount
+	flags  uint32
 }
 
-// Claw creates a new ClawbackBuilder.
-// issuer is the token issuer performing the clawback.
-// holder is the token holder from whom tokens are clawed back.
-// currency is the currency code (e.g. "USD").
-// amount is the amount to claw back (positive).
-// Matches rippled's claw(alice, bob["USD"](200)).
-func Claw(issuer, holder *jtx.Account, currency string, amount float64) *ClawbackBuilder {
-	return &ClawbackBuilder{
-		issuer:   issuer,
-		holder:   holder,
-		currency: currency,
-		amount:   amount,
-		fee:      10, // Default fee: 10 drops
-	}
+// Claw creates an IOU clawback with an exact integer amount.
+func Claw(issuer, holder *jtx.Account, currency string, amount int64) *clawbackBuilder {
+	return ClawAmount(issuer, holder, tx.NewIssuedAmount(amount, 0, currency, holder.Address))
 }
 
-// Fee sets the transaction fee in drops.
-func (b *ClawbackBuilder) Fee(f uint64) *ClawbackBuilder {
-	b.fee = f
-	return b
-}
-
-// Sequence sets the sequence number explicitly.
-func (b *ClawbackBuilder) Sequence(seq uint32) *ClawbackBuilder {
-	b.sequence = &seq
-	return b
+func ClawAmount(issuer, holder *jtx.Account, amount tx.Amount) *clawbackBuilder {
+	amount.Issuer = holder.Address
+	return &clawbackBuilder{issuer: issuer, amount: amount}
 }
 
 // Flags sets the transaction flags.
-func (b *ClawbackBuilder) Flags(flags uint32) *ClawbackBuilder {
+func (b *clawbackBuilder) Flags(flags uint32) *clawbackBuilder {
 	b.flags = flags
 	return b
 }
 
-// Build constructs the Clawback transaction.
-func (b *ClawbackBuilder) Build() tx.Transaction {
-	// For IOU clawback, the Amount.Issuer field is the holder (not the issuer).
-	// The transaction Account is the issuer.
-	amount := tx.NewIssuedAmountFromFloat64(b.amount, b.currency, b.holder.Address)
-	cb := clawback.NewClawback(b.issuer.Address, amount)
-	cb.Fee = fmt.Sprintf("%d", b.fee)
-
-	if b.sequence != nil {
-		cb.SetSequence(*b.sequence)
-	}
+func (b *clawbackBuilder) Build() *clawback.Clawback {
+	cb := clawback.NewClawback(b.issuer.Address, b.amount)
 	if b.flags != 0 {
 		cb.SetFlags(b.flags)
 	}
-
 	return cb
-}
-
-// BuildClawback is a convenience method that returns the concrete *clawback.Clawback type.
-func (b *ClawbackBuilder) BuildClawback() *clawback.Clawback {
-	return b.Build().(*clawback.Clawback)
 }

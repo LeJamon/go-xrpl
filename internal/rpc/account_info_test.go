@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -18,6 +18,10 @@ import (
 type mockLedgerService struct {
 	accountInfo          *types.AccountInfo
 	accountInfoErr       error
+	accountObjects       *types.AccountObjectsResult
+	accountObjectsErr    error
+	accountObjectsSet    bool
+	accountObjectPages   map[string]*types.AccountObjectsResult
 	currentLedgerIndex   uint32
 	closedLedgerIndex    uint32
 	validatedLedgerIndex uint32
@@ -46,9 +50,6 @@ func (m *mockLedgerService) GetCurrentLedgerIndex() uint32   { return m.currentL
 func (m *mockLedgerService) GetClosedLedgerIndex() uint32    { return m.closedLedgerIndex }
 func (m *mockLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
 func (m *mockLedgerService) AcceptLedger(context.Context) (uint32, error) {
-	return m.closedLedgerIndex + 1, nil
-}
-func (m *mockLedgerService) AcceptLedgerAt(context.Context, time.Time) (uint32, error) {
 	return m.closedLedgerIndex + 1, nil
 }
 func (m *mockLedgerService) IsStandalone() bool                    { return m.standalone }
@@ -85,7 +86,7 @@ func accountQueryLedgerByHash(hash [32]byte, validated uint32) (types.LedgerRead
 		validated: true,
 	}, nil
 }
-func (m *mockLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
+func (m *mockLedgerService) SubmitTransaction(txJSON []byte, txBlobHex string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
@@ -140,8 +141,27 @@ func (m *mockLedgerService) GetLedgerEntry(_ context.Context, entryKey [32]byte,
 func (m *mockLedgerService) GetLedgerData(_ context.Context, ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockLedgerService) GetAccountObjects(_ context.Context, account string, ledgerIndex string, objType string, limit uint32, _ string) (*types.AccountObjectsResult, error) {
-	return nil, errors.New("not implemented")
+func (m *mockLedgerService) GetAccountObjects(_ context.Context, account string, ledgerIndex string, objType string, limit uint32, marker string) (*types.AccountObjectsResult, error) {
+	if m.accountObjectPages != nil {
+		result, ok := m.accountObjectPages[marker]
+		if !ok {
+			return nil, errors.New("unexpected account objects marker")
+		}
+		return result, nil
+	}
+	if m.accountObjectsSet {
+		return m.accountObjects, m.accountObjectsErr
+	}
+	if m.accountObjectsErr != nil {
+		return nil, m.accountObjectsErr
+	}
+	if m.accountObjects != nil {
+		return m.accountObjects, nil
+	}
+	return &types.AccountObjectsResult{
+		Account:        account,
+		AccountObjects: []types.AccountObjectItem{},
+	}, nil
 }
 func (m *mockLedgerService) GetAccountChannels(_ context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32, _ string) (*types.AccountChannelsResult, error) {
 	return nil, errors.New("not implemented")
@@ -746,6 +766,251 @@ func TestAccountInfoResponseFields(t *testing.T) {
 		signerLists := accountData["signer_lists"].([]any)
 		assert.NotNil(t, signerLists)
 	})
+}
+
+func TestAccountInfoSignerListsFailClosed(t *testing.T) {
+	const validAccount = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+
+	validSignerList, err := binarycodec.EncodeBytes(map[string]any{
+		"LedgerEntryType": "SignerList",
+		"Flags":           uint32(0),
+		"OwnerNode":       "0",
+		"SignerQuorum":    uint32(1),
+		"SignerEntries": []any{
+			map[string]any{
+				"SignerEntry": map[string]any{
+					"Account":      validAccount,
+					"SignerWeight": uint32(1),
+				},
+			},
+		},
+		"SignerListID":      uint32(0),
+		"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
+		"PreviousTxnLgrSeq": uint32(1),
+	})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		apiVersion int
+		setup      func(*mockLedgerService)
+		check      func(*testing.T, map[string]any)
+	}{
+		{
+			name:       "empty signer list is an array under API v1 account_data",
+			apiVersion: types.ApiVersion1,
+			setup: func(mock *mockLedgerService) {
+				mock.accountObjectsSet = true
+				mock.accountObjects = &types.AccountObjectsResult{AccountObjects: []types.AccountObjectItem{}}
+			},
+			check: func(t *testing.T, response map[string]any) {
+				accountData := response["account_data"].(map[string]any)
+				lists, ok := accountData["signer_lists"].([]any)
+				require.True(t, ok)
+				assert.Empty(t, lists)
+				assert.NotContains(t, response, "signer_lists")
+			},
+		},
+		{
+			name:       "empty signer list is an array at API v2 top level",
+			apiVersion: types.ApiVersion2,
+			setup: func(mock *mockLedgerService) {
+				mock.accountObjectsSet = true
+				mock.accountObjects = &types.AccountObjectsResult{AccountObjects: []types.AccountObjectItem{}}
+			},
+			check: func(t *testing.T, response map[string]any) {
+				lists, ok := response["signer_lists"].([]any)
+				require.True(t, ok)
+				assert.Empty(t, lists)
+				accountData := response["account_data"].(map[string]any)
+				assert.NotContains(t, accountData, "signer_lists")
+			},
+		},
+		{
+			name:       "decoded signer list keeps API v1 nesting",
+			apiVersion: types.ApiVersion1,
+			setup: func(mock *mockLedgerService) {
+				mock.accountObjectsSet = true
+				mock.accountObjects = &types.AccountObjectsResult{AccountObjects: []types.AccountObjectItem{{
+					Index: "aabb",
+					Data:  validSignerList,
+				}}}
+			},
+			check: func(t *testing.T, response map[string]any) {
+				accountData := response["account_data"].(map[string]any)
+				lists := accountData["signer_lists"].([]any)
+				require.Len(t, lists, 1)
+				assert.NotContains(t, response, "signer_lists")
+				assert.Equal(t, "AABB", lists[0].(map[string]any)["index"])
+			},
+		},
+		{
+			name:       "decoded signer list keeps API v2 top-level placement",
+			apiVersion: types.ApiVersion2,
+			setup: func(mock *mockLedgerService) {
+				mock.accountObjectsSet = true
+				mock.accountObjects = &types.AccountObjectsResult{AccountObjects: []types.AccountObjectItem{{
+					Index: "aabb",
+					Data:  validSignerList,
+				}}}
+			},
+			check: func(t *testing.T, response map[string]any) {
+				lists := response["signer_lists"].([]any)
+				require.Len(t, lists, 1)
+				accountData := response["account_data"].(map[string]any)
+				assert.NotContains(t, accountData, "signer_lists")
+				assert.Equal(t, "AABB", lists[0].(map[string]any)["index"])
+			},
+		},
+		{
+			name:       "signer list after a full owner directory page is returned",
+			apiVersion: types.ApiVersion2,
+			setup: func(mock *mockLedgerService) {
+				mock.accountObjectPages = map[string]*types.AccountObjectsResult{
+					"": {AccountObjects: []types.AccountObjectItem{}, Marker: "next"},
+					"next": {AccountObjects: []types.AccountObjectItem{{
+						Index: "aabb",
+						Data:  validSignerList,
+					}}},
+				}
+			},
+			check: func(t *testing.T, response map[string]any) {
+				lists := response["signer_lists"].([]any)
+				require.Len(t, lists, 1)
+				assert.Equal(t, "AABB", lists[0].(map[string]any)["index"])
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := newMockLedgerService()
+			mock.accountInfo = &types.AccountInfo{
+				Account:     validAccount,
+				Balance:     "100000000",
+				Sequence:    1,
+				LedgerIndex: 2,
+				Validated:   true,
+			}
+			test.setup(mock)
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: test.apiVersion,
+				Services:   newTestServices(mock),
+			}
+			paramsJSON, marshalErr := json.Marshal(map[string]any{
+				"account":      validAccount,
+				"signer_lists": true,
+			})
+			require.NoError(t, marshalErr)
+
+			result, rpcErr := (&handlers.AccountInfoMethod{}).Handle(ctx, paramsJSON)
+			require.Nil(t, rpcErr)
+			response := result.(map[string]any)
+			test.check(t, response)
+		})
+	}
+
+	for _, test := range []struct {
+		name     string
+		setup    func(*mockLedgerService)
+		wantCode int
+		wantMsg  string
+	}{
+		{
+			name:     "GetAccountObjects error",
+			wantCode: types.RpcINTERNAL,
+			wantMsg:  "Internal error.",
+			setup: func(mock *mockLedgerService) {
+				mock.accountObjectsSet = true
+				mock.accountObjectsErr = errors.New("owner directory unavailable")
+			},
+		},
+		{
+			name:     "nil GetAccountObjects result",
+			wantCode: types.RpcINTERNAL,
+			wantMsg:  "Internal error.",
+			setup: func(mock *mockLedgerService) {
+				mock.accountObjectsSet = true
+				mock.accountObjects = nil
+				mock.accountObjectsErr = nil
+			},
+		},
+		{
+			name:     "corrupt signer list aborts response",
+			wantCode: types.RpcINTERNAL,
+			wantMsg:  "Internal error.",
+			setup: func(mock *mockLedgerService) {
+				mock.accountObjectsSet = true
+				mock.accountObjects = &types.AccountObjectsResult{AccountObjects: []types.AccountObjectItem{
+					{Index: "aabb", Data: validSignerList},
+					{Index: "ccdd", Data: []byte{0x11, 0x00}},
+				}}
+			},
+		},
+		{
+			name:     "signer list ledger not found",
+			wantCode: types.RpcLGR_NOT_FOUND,
+			wantMsg:  "Ledger not found.",
+			setup: func(mock *mockLedgerService) {
+				mock.accountObjectsSet = true
+				mock.accountObjectsErr = svcerr.ErrLedgerNotFound
+			},
+		},
+		{
+			name:     "signer list repeated marker",
+			wantCode: types.RpcINTERNAL,
+			wantMsg:  "Internal error.",
+			setup: func(mock *mockLedgerService) {
+				mock.accountObjectPages = map[string]*types.AccountObjectsResult{
+					"":  {Marker: "a"},
+					"a": {Marker: "a"},
+				}
+			},
+		},
+		{
+			name:     "signer list marker cycle",
+			wantCode: types.RpcINTERNAL,
+			wantMsg:  "Internal error.",
+			setup: func(mock *mockLedgerService) {
+				mock.accountObjectPages = map[string]*types.AccountObjectsResult{
+					"":  {Marker: "a"},
+					"a": {Marker: "b"},
+					"b": {Marker: "a"},
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := newMockLedgerService()
+			mock.accountInfo = &types.AccountInfo{
+				Account:     validAccount,
+				Balance:     "100000000",
+				Sequence:    1,
+				LedgerIndex: 2,
+				Validated:   true,
+			}
+			test.setup(mock)
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: types.ApiVersion2,
+				Services:   newTestServices(mock),
+			}
+			paramsJSON, marshalErr := json.Marshal(map[string]any{
+				"account":      validAccount,
+				"signer_lists": true,
+			})
+			require.NoError(t, marshalErr)
+
+			result, rpcErr := (&handlers.AccountInfoMethod{}).Handle(ctx, paramsJSON)
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, test.wantCode, rpcErr.Code)
+			assert.Equal(t, test.wantMsg, rpcErr.Message)
+		})
+	}
 }
 
 // TestAccountInfoInvalidAccountTypes tests various invalid account parameter types

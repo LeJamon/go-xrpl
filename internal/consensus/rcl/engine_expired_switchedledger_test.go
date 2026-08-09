@@ -18,7 +18,7 @@ func expireRoundSetup(t *testing.T, adaptor *mockAdaptor, engine *Engine, round 
 	engine.setPhase(consensus.PhaseEstablish)
 	engine.roundStartTime = time.Now().Add(-121 * time.Second)
 	engine.prevRoundTime = 60 * time.Second
-	engine.establishCounter = len(engine.parms.AvalancheCutoffs)*engine.parms.MinRounds + 1
+	engine.establishCounter = engine.parms.AvalancheCutoffCount()*engine.parms.MinRounds + 1
 	base := time.Now().Truncate(time.Second)
 	engine.state.OurPosition = &consensus.Proposal{
 		Round: round, Position: 1, TxSet: consensus.TxSetID{0xAA}, CloseTime: base.Add(200 * time.Second),
@@ -35,6 +35,7 @@ func expireRoundSetup(t *testing.T, adaptor *mockAdaptor, engine *Engine, round 
 			TxSet: consensus.TxSetID{nidBase + 0x10 + byte(i)}, CloseTime: ct,
 		}
 	}
+	adaptor.notifyTrustChanged()
 }
 
 // An Expired round WITHOUT close-time consensus must not accept: rippled's

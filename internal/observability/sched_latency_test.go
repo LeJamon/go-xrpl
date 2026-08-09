@@ -2,239 +2,499 @@ package observability
 
 import (
 	"context"
-	"math"
-	"runtime"
+	"errors"
+	"io"
+	"log/slog"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
-func TestSchedLatencyMs_ZeroBeforeFirstSample(t *testing.T) {
-	resetForTest()
-	if got := SchedLatencyMs(); got != 0 {
-		t.Errorf("expected 0 before first sample, got %d", got)
+func resetSchedLatencyMetricsForTest() {
+	latestSchedLatencyMs.Store(0)
+	ioLatencyEventCount.Store(0)
+}
+
+func newTestSampler(t *testing.T, interval time.Duration, sample func() time.Duration) *SchedLatencySampler {
+	t.Helper()
+	sampler := &SchedLatencySampler{
+		interval: interval,
+		sample:   sample,
+		wait:     waitForNextSample,
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	t.Cleanup(sampler.Stop)
+	return sampler
+}
+
+func waitForSample(t *testing.T, sampled <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-sampled:
+	case <-time.After(time.Second):
+		t.Fatal("sampler did not run")
 	}
 }
 
-func TestSchedLatencyMs_HealthyServerReportsNearZero(t *testing.T) {
-	resetForTest()
-	ctx := t.Context()
+func TestSchedLatencySamplerStartStop(t *testing.T) {
+	resetSchedLatencyMetricsForTest()
+	t.Cleanup(resetSchedLatencyMetricsForTest)
 
-	StartSchedLatencySampler(ctx)
+	var calls atomic.Int64
+	recorded := make(chan struct{}, 1)
+	sampler := newTestSampler(t, time.Hour, func() time.Duration {
+		calls.Add(1)
+		return 12 * time.Millisecond
+	})
+	sampler.wait = func(ctx context.Context, _ time.Duration) bool {
+		recorded <- struct{}{}
+		<-ctx.Done()
+		return false
+	}
 
-	deadline := time.Now().Add(2 * SamplerInterval)
-	for time.Now().Before(deadline) {
-		if publishedNs.Load() > 0 {
-			break
+	sampler.Stop()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := sampler.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	waitForSample(t, recorded)
+	if got := SchedLatencyMs(); got != 12 {
+		t.Fatalf("SchedLatencyMs() = %d, want 12", got)
+	}
+	if got := IOLatencyEventCount(); got != 1 {
+		t.Fatalf("IOLatencyEventCount() = %d, want 1", got)
+	}
+
+	sampler.Stop()
+	sampler.Stop()
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("samples after Stop() = %d, want 1", got)
+	}
+	select {
+	case <-recorded:
+		t.Fatal("sampler completed another cadence after Stop()")
+	default:
+	}
+}
+
+func TestSchedLatencySamplerRejectsCanceledContext(t *testing.T) {
+	var calls atomic.Int64
+	sampler := newTestSampler(t, time.Hour, func() time.Duration {
+		calls.Add(1)
+		return 0
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := sampler.Start(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Start(canceled context) error = %v, want context.Canceled", err)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("sample calls = %d, want 0", got)
+	}
+	sampler.Stop()
+}
+
+func TestSchedLatencySamplerRejectsNilContext(t *testing.T) {
+	sampler := NewSchedLatencySampler()
+	if err := sampler.Start(nil); err == nil {
+		t.Fatal("Start(nil) succeeded")
+	}
+	sampler.Stop()
+}
+
+func TestSchedLatencySamplerConcurrentStartIsObservable(t *testing.T) {
+	sampled := make(chan struct{}, 1)
+	sampler := newTestSampler(t, time.Hour, func() time.Duration {
+		select {
+		case sampled <- struct{}{}:
+		default:
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	got := SchedLatencyMs()
-	if got < 0 {
-		t.Errorf("SchedLatencyMs() = %d, want >= 0", got)
-	}
-	if got > 100 {
-		t.Errorf("SchedLatencyMs() = %d, want <= 100 on a healthy runner", got)
-	}
-}
+		return 0
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-// TestSchedLatencyMs_RisesUnderCPUContention verifies the metric
-// actually catches load. Under a saturating CPU storm (8x GOMAXPROCS
-// busy goroutines), the sampler's elapsed should jump above the idle
-// baseline because runtime.Gosched lands the sampler back in a
-// crowded runqueue. This is the load case the previous spawn-and-wait
-// approach silently missed.
-//
-// The magnitude of the rise is non-deterministic — it depends on the
-// Go runtime version, GOMAXPROCS, OS scheduler quantum, and (most
-// notably) whether -race is enabled, which alters scheduler heuristics
-// enough to make Gosched return without a measurable wait. Skip under
-// -race; the property is covered by non-race CI runs.
-func TestSchedLatencyMs_RisesUnderCPUContention(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping CPU-contention test in short mode")
-	}
-	if raceEnabled {
-		t.Skip("scheduler-latency magnitude is non-deterministic under -race; non-race CI covers this")
-	}
-	resetForTest()
-	ctx := t.Context()
-	StartSchedLatencySampler(ctx)
-
-	stop := make(chan struct{})
-	workers := 8 * runtime.GOMAXPROCS(0)
-	for range workers {
+	const starters = 32
+	start := make(chan struct{})
+	errs := make(chan error, starters)
+	var wg sync.WaitGroup
+	wg.Add(starters)
+	for range starters {
 		go func() {
-			x := 0.0
-			for {
-				select {
-				case <-stop:
-					return
-				default:
-				}
-				for j := range 1000 {
-					x += math.Sqrt(float64(j))
-				}
-				_ = x
-			}
+			defer wg.Done()
+			<-start
+			errs <- sampler.Start(ctx)
 		}()
 	}
-	defer close(stop)
+	close(start)
+	wg.Wait()
+	close(errs)
 
-	deadline := time.Now().Add(2 * time.Second)
-	var observedMax int
-	for time.Now().Before(deadline) {
-		if v := SchedLatencyMs(); v > observedMax {
-			observedMax = v
+	started := 0
+	alreadyRunning := 0
+	for err := range errs {
+		switch {
+		case err == nil:
+			started++
+		case errors.Is(err, ErrSamplerRunning):
+			alreadyRunning++
+		default:
+			t.Fatalf("Start() error = %v", err)
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
+	if started != 1 || alreadyRunning != starters-1 {
+		t.Fatalf("Start results = %d started, %d already running", started, alreadyRunning)
+	}
+	waitForSample(t, sampled)
+	sampler.Stop()
+}
 
-	const minLoadedMs = 5
-	if observedMax < minLoadedMs {
-		t.Errorf("expected SchedLatencyMs > %d under CPU storm, got max %d", minLoadedMs, observedMax)
+func TestSchedLatencySamplerCancelAndImmediateRestart(t *testing.T) {
+	var calls atomic.Int64
+	sampled := make(chan struct{}, 2)
+	sampler := newTestSampler(t, time.Hour, func() time.Duration {
+		calls.Add(1)
+		sampled <- struct{}{}
+		return time.Millisecond
+	})
+
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	if err := sampler.Start(firstCtx); err != nil {
+		t.Fatalf("first Start() error = %v", err)
+	}
+	waitForSample(t, sampled)
+	cancelFirst()
+
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	defer cancelSecond()
+	if err := sampler.Start(secondCtx); err != nil {
+		t.Fatalf("restart error = %v", err)
+	}
+	waitForSample(t, sampled)
+	sampler.Stop()
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("sample calls = %d, want 2", got)
 	}
 }
 
-// TestSchedLatencyMs_SamplesContinuously verifies the sampler loops
-// at the configured cadence over a window. Mirrors rippled's
-// testSampleOngoing (rippled/src/test/beast/beast_io_latency_probe_test.cpp:178-217)
-// which asserts a 99ms-period probe runs ~10 times in 1 second.
-func TestSchedLatencyMs_SamplesContinuously(t *testing.T) {
-	resetForTest()
-	ctx := t.Context()
+func TestSchedLatencySamplerRestartRechecksContextAfterJoin(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int64
+	sampler := newTestSampler(t, time.Hour, func() time.Duration {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
+		return time.Millisecond
+	})
 
-	StartSchedLatencySampler(ctx)
-
-	time.Sleep(1 * time.Second)
-
-	n := samplesCountForTest()
-	// At 100ms cadence over 1s, expect ~10 samples. Use a generous
-	// window because timer resolution and CI VM scheduling can stretch
-	// the interval, and a heavily-loaded run can shorten it.
-	if n < 5 {
-		t.Errorf("expected >= 5 samples in 1s at 100ms cadence, got %d", n)
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	if err := sampler.Start(firstCtx); err != nil {
+		t.Fatalf("first Start() error = %v", err)
 	}
-	if n > 50 {
-		t.Errorf("expected <= 50 samples in 1s at 100ms cadence, got %d", n)
+	<-entered
+	cancelFirst()
+
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	restarted := make(chan error, 1)
+	go func() { restarted <- sampler.Start(secondCtx) }()
+	cancelSecond()
+	close(release)
+
+	if err := <-restarted; !errors.Is(err, context.Canceled) {
+		t.Fatalf("restart error = %v, want context.Canceled", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("sample calls = %d, want 1", got)
+	}
+	sampler.Stop()
+}
+
+func TestSchedLatencySamplerStopJoinsActiveSample(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	sampler := newTestSampler(t, time.Hour, func() time.Duration {
+		close(entered)
+		<-release
+		return time.Millisecond
+	})
+	if err := sampler.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	<-entered
+
+	stopped := make(chan struct{})
+	go func() {
+		sampler.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("Stop() returned before the active sample completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("Stop() did not join the completed sample")
 	}
 }
 
-func TestSampleOnce_PublishesElapsed(t *testing.T) {
-	resetForTest()
-	elapsed := sampleOnce()
-	if elapsed <= 0 {
-		t.Errorf("elapsed = %v, want > 0", elapsed)
+func TestSchedLatencySamplerCanRestartAfterStop(t *testing.T) {
+	sampled := make(chan struct{}, 2)
+	sampler := newTestSampler(t, time.Hour, func() time.Duration {
+		sampled <- struct{}{}
+		return time.Millisecond
+	})
+	ctx := context.Background()
+
+	if err := sampler.Start(ctx); err != nil {
+		t.Fatalf("first Start() error = %v", err)
 	}
-	if got := publishedNs.Load(); got <= 0 {
-		t.Errorf("publishedNs = %d, want > 0 after sampleOnce", got)
+	waitForSample(t, sampled)
+	sampler.Stop()
+	if err := sampler.Start(ctx); err != nil {
+		t.Fatalf("second Start() error = %v", err)
+	}
+	waitForSample(t, sampled)
+	sampler.Stop()
+}
+
+func TestSchedLatencySamplerConcurrentStop(t *testing.T) {
+	sampled := make(chan struct{}, 1)
+	sampler := newTestSampler(t, time.Hour, func() time.Duration {
+		sampled <- struct{}{}
+		return 0
+	})
+	if err := sampler.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	waitForSample(t, sampled)
+
+	const stoppers = 32
+	var wg sync.WaitGroup
+	wg.Add(stoppers)
+	for range stoppers {
+		go func() {
+			defer wg.Done()
+			sampler.Stop()
+		}()
+	}
+	wg.Wait()
+
+	if err := sampler.Start(context.Background()); err != nil {
+		t.Fatalf("Start() after concurrent Stop() error = %v", err)
+	}
+	waitForSample(t, sampled)
+	sampler.Stop()
+}
+
+func TestSchedLatencySamplerCadence(t *testing.T) {
+	const wantSamples = 5
+	sampled := make(chan struct{}, wantSamples)
+	waits := make(chan time.Duration, wantSamples)
+	advance := make(chan struct{}, wantSamples)
+	sampler := newTestSampler(t, samplerInterval, func() time.Duration {
+		sampled <- struct{}{}
+		return 0
+	})
+	sampler.wait = func(ctx context.Context, delay time.Duration) bool {
+		waits <- delay
+		select {
+		case <-ctx.Done():
+			return false
+		case <-advance:
+			return true
+		}
+	}
+	if err := sampler.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer sampler.Stop()
+
+	for i := range wantSamples {
+		waitForSample(t, sampled)
+		if i == wantSamples-1 {
+			break
+		}
+		select {
+		case got := <-waits:
+			if got != samplerInterval {
+				t.Fatalf("wait = %v, want %v", got, samplerInterval)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("sampler did not request its next wait")
+		}
+		advance <- struct{}{}
 	}
 }
 
-func TestSampleOnce_OverwritesPreviousValue(t *testing.T) {
-	resetForTest()
-	publishedNs.Store(int64(50 * time.Millisecond))
+func TestRecordSchedLatencyThresholds(t *testing.T) {
+	resetSchedLatencyMetricsForTest()
+	t.Cleanup(resetSchedLatencyMetricsForTest)
+	handler := &recordingHandler{}
+	logger := slog.New(handler)
 
-	sampleOnce()
-	got := publishedNs.Load()
-	if got == int64(50*time.Millisecond) {
-		t.Error("publishedNs was not overwritten by sampleOnce")
+	recordSchedLatency(9*time.Millisecond, logger)
+	if got := IOLatencyEventCount(); got != 0 {
+		t.Fatalf("count below event threshold = %d, want 0", got)
 	}
-	if got <= 0 {
-		t.Errorf("publishedNs = %d, want > 0 after overwrite", got)
+	recordSchedLatency(9*time.Millisecond+time.Nanosecond, logger)
+	if got := IOLatencyEventCount(); got != 1 {
+		t.Fatalf("count at rounded event threshold = %d, want 1", got)
+	}
+	recordSchedLatency(499*time.Millisecond, logger)
+	if got := handler.warnCount(); got != 0 {
+		t.Fatalf("warnings below threshold = %d, want 0", got)
+	}
+	recordSchedLatency(499*time.Millisecond+time.Nanosecond, logger)
+	if got := handler.warnCount(); got != 1 {
+		t.Fatalf("warnings at rounded threshold = %d, want 1", got)
+	}
+	if got := SchedLatencyMs(); got != 500 {
+		t.Fatalf("SchedLatencyMs() = %d, want 500", got)
 	}
 }
 
-func TestNextWait_HealthyServer(t *testing.T) {
-	if got := nextWait(0); got != SamplerInterval {
-		t.Errorf("nextWait(0) = %v, want %v", got, SamplerInterval)
+func TestIOLatencyEventCountConcurrentAndSaturating(t *testing.T) {
+	resetSchedLatencyMetricsForTest()
+	t.Cleanup(resetSchedLatencyMetricsForTest)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	const writers = 64
+	var wg sync.WaitGroup
+	wg.Add(writers)
+	for range writers {
+		go func() {
+			defer wg.Done()
+			recordSchedLatency(10*time.Millisecond, logger)
+		}()
 	}
-	if got := nextWait(time.Microsecond); got >= SamplerInterval {
-		t.Errorf("nextWait(1us) = %v, want < %v", got, SamplerInterval)
+	wg.Wait()
+	if got := IOLatencyEventCount(); got != writers {
+		t.Fatalf("concurrent count = %d, want %d", got, writers)
+	}
+
+	ioLatencyEventCount.Store(^uint64(0) - 1)
+	recordSchedLatency(10*time.Millisecond, logger)
+	recordSchedLatency(10*time.Millisecond, logger)
+	if got := IOLatencyEventCount(); got != ^uint64(0) {
+		t.Fatalf("saturated count = %d, want %d", got, ^uint64(0))
 	}
 }
 
-func TestNextWait_AdaptsUnderLoad(t *testing.T) {
+func TestSchedLatencyMetricsRetainedAcrossStops(t *testing.T) {
+	resetSchedLatencyMetricsForTest()
+	t.Cleanup(resetSchedLatencyMetricsForTest)
+	recorded := make(chan struct{}, 1)
+	sampler := newTestSampler(t, time.Hour, func() time.Duration {
+		return 42 * time.Millisecond
+	})
+	sampler.wait = func(ctx context.Context, _ time.Duration) bool {
+		recorded <- struct{}{}
+		<-ctx.Done()
+		return false
+	}
+	if err := sampler.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	waitForSample(t, recorded)
+	sampler.Stop()
+
+	if got := SchedLatencyMs(); got != 42 {
+		t.Fatalf("retained latency = %d, want 42", got)
+	}
+	if got := IOLatencyEventCount(); got != 1 {
+		t.Fatalf("retained event count = %d, want 1", got)
+	}
+}
+
+func TestSchedLatencyMetricsZeroBeforeFirstSample(t *testing.T) {
+	resetSchedLatencyMetricsForTest()
+	t.Cleanup(resetSchedLatencyMetricsForTest)
+	if got := SchedLatencyMs(); got != 0 {
+		t.Fatalf("SchedLatencyMs() = %d, want 0", got)
+	}
+	if got := IOLatencyEventCount(); got != 0 {
+		t.Fatalf("IOLatencyEventCount() = %d, want 0", got)
+	}
+}
+
+func TestCeilMsExactAndPortable(t *testing.T) {
 	tests := []struct {
-		name    string
-		elapsed time.Duration
-		want    time.Duration
+		name string
+		d    time.Duration
+		want int64
 	}{
-		{"healthy idle", 0, 100 * time.Millisecond},
-		{"5us elapsed", 5 * time.Microsecond, 100*time.Millisecond - 10*time.Microsecond},
-		{"25ms elapsed (mild load)", 25 * time.Millisecond, 50 * time.Millisecond},
-		{"49ms elapsed", 49 * time.Millisecond, 2 * time.Millisecond},
-		{"50ms elapsed (clamp boundary)", 50 * time.Millisecond, 0},
-		{"75ms elapsed (heavy load)", 75 * time.Millisecond, 0},
-		{"200ms elapsed (severe stall)", 200 * time.Millisecond, 0},
+		{name: "negative", d: -time.Nanosecond, want: 0},
+		{name: "zero", d: 0, want: 0},
+		{name: "one nanosecond", d: time.Nanosecond, want: 1},
+		{name: "sub millisecond", d: 500 * time.Microsecond, want: 1},
+		{name: "last nanosecond below millisecond", d: time.Millisecond - time.Nanosecond, want: 1},
+		{name: "exact millisecond", d: time.Millisecond, want: 1},
+		{name: "past millisecond", d: time.Millisecond + time.Nanosecond, want: 2},
+		{name: "float precision boundary", d: 9_007_199_255_000_001, want: 9_007_199_256},
+		{name: "maximum duration", d: time.Duration(1<<63 - 1), want: 9_223_372_036_855},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := nextWait(tt.elapsed); got != tt.want {
-				t.Errorf("nextWait(%v) = %v, want %v", tt.elapsed, got, tt.want)
+			if got := ceilMs(tt.d); got != tt.want {
+				t.Fatalf("ceilMs(%d) = %d, want %d", tt.d, got, tt.want)
 			}
 		})
 	}
 }
 
-func TestStartSchedLatencySampler_IdempotentStart(t *testing.T) {
-	resetForTest()
-	ctx := t.Context()
-
-	StartSchedLatencySampler(ctx)
-	StartSchedLatencySampler(ctx)
-	StartSchedLatencySampler(ctx)
-}
-
-// TestStartSchedLatencySampler_StopsOnCancel asserts the sampler
-// goroutine actually exits after its context is cancelled. Mirrors
-// rippled's testCanceled (beast_io_latency_probe_test.cpp:219-227)
-// which verifies post-cancel behavior; here we verify the goroutine's
-// done channel closes within a deterministic window.
-func TestStartSchedLatencySampler_StopsOnCancel(t *testing.T) {
-	resetForTest()
-	ctx, cancel := context.WithCancel(context.Background())
-
-	StartSchedLatencySampler(ctx)
-	done := samplerDoneForTest()
-	if done == nil {
-		t.Fatal("samplerDoneForTest returned nil after Start")
-	}
-
-	time.Sleep(2 * SamplerInterval)
-	cancel()
-
-	select {
-	case <-done:
-	case <-time.After(2 * SamplerInterval):
-		t.Fatal("sampler did not exit within 2*SamplerInterval after cancel")
-	}
-}
-
-func TestSchedLatencyMs_CeilSemantics(t *testing.T) {
-	resetForTest()
+func TestNextWait(t *testing.T) {
 	tests := []struct {
-		ns   int64
-		want int
+		name    string
+		elapsed time.Duration
+		want    time.Duration
 	}{
-		{0, 0},
-		{500_000, 1},               // 500us → ceil to 1ms
-		{1_000_000, 1},             // exactly 1ms
-		{1_100_000, 2},             // 1.1ms → ceil to 2ms
-		{int64(time.Second), 1000}, // 1s → 1000ms
-
-		// Boundary cases that the warn-threshold check piggybacks on.
-		// Rippled's `if (lastSample >= 500ms)` warn at
-		// Application.cpp:136 fires whenever ceil-ms reaches 500, so
-		// 499ms + 1ns must round to 500 here. Regression-guards the
-		// shared ceilMs helper used by both SchedLatencyMs and
-		// runSampler's threshold comparison.
-		{499*int64(time.Millisecond) + 1, 500}, // just past 499ms → 500
-		{500 * int64(time.Millisecond), 500},   // exactly 500ms → 500
+		{name: "zero", elapsed: 0, want: samplerInterval},
+		{name: "negative", elapsed: -time.Second, want: samplerInterval},
+		{name: "healthy", elapsed: 5 * time.Microsecond, want: samplerInterval - 10*time.Microsecond},
+		{name: "mild load", elapsed: 25 * time.Millisecond, want: 50 * time.Millisecond},
+		{name: "clamp boundary", elapsed: 50 * time.Millisecond, want: 0},
+		{name: "heavy load", elapsed: 75 * time.Millisecond, want: 0},
+		{name: "maximum duration", elapsed: time.Duration(1<<63 - 1), want: 0},
 	}
 	for _, tt := range tests {
-		publishedNs.Store(tt.ns)
-		if got := SchedLatencyMs(); got != tt.want {
-			t.Errorf("ns=%d: SchedLatencyMs()=%d want %d", tt.ns, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			if got := nextWait(samplerInterval, tt.elapsed); got != tt.want {
+				t.Fatalf("nextWait(%v) = %v, want %v", tt.elapsed, got, tt.want)
+			}
+		})
 	}
+}
+
+type recordingHandler struct {
+	mu       sync.Mutex
+	warnings int
+}
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *recordingHandler) Handle(_ context.Context, record slog.Record) error {
+	if record.Level >= slog.LevelWarn {
+		h.mu.Lock()
+		h.warnings++
+		h.mu.Unlock()
+	}
+	return nil
+}
+
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h *recordingHandler) WithGroup(string) slog.Handler { return h }
+
+func (h *recordingHandler) warnCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.warnings
 }

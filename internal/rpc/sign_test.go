@@ -12,6 +12,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func signingEnabledContext(ctx *types.RpcContext) *types.RpcContext {
+	if ctx.Services == nil {
+		ctx.Services = &types.ServiceContainer{}
+	}
+	ctx.Services.Capabilities.SigningEnabled = true
+	return ctx
+}
+
 // WalletPropose Tests
 
 func TestWalletPropose_RandomGeneration(t *testing.T) {
@@ -264,7 +272,7 @@ func TestSign_MissingTxJson(t *testing.T) {
 	}
 
 	params := json.RawMessage(`{"secret": "sn3nxiW7v8KXzPzAqzyHXbSSKNuN9"}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "tx_json")
@@ -289,7 +297,7 @@ func TestSign_MissingCredentials(t *testing.T) {
 			"Amount": "1000000"
 		}
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "Missing field 'secret'.")
@@ -394,7 +402,7 @@ func TestSign_CredentialFieldPresence(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			params := json.RawMessage(`{"tx_json":{},"offline":true,` + tc.credentials + `}`)
-			_, rpcErr := handler.Handle(&types.RpcContext{ApiVersion: tc.apiVersion}, params)
+			_, rpcErr := handler.Handle(signingEnabledContext(&types.RpcContext{ApiVersion: tc.apiVersion}), params)
 			require.NotNil(t, rpcErr)
 			assert.Equal(t, tc.code, rpcErr.Code)
 			assert.Equal(t, tc.message, rpcErr.Message)
@@ -412,7 +420,7 @@ func TestSign_LegacySecretRejectsKeyTokens(t *testing.T) {
 	} {
 		t.Run(secret[:1], func(t *testing.T) {
 			params := json.RawMessage(`{"tx_json":{},"offline":true,"secret":"` + secret + `"}`)
-			_, rpcErr := (&handlers.SignMethod{}).Handle(&types.RpcContext{ApiVersion: types.ApiVersion1}, params)
+			_, rpcErr := (&handlers.SignMethod{}).Handle(signingEnabledContext(&types.RpcContext{ApiVersion: types.ApiVersion1}), params)
 			require.NotNil(t, rpcErr)
 			assert.Equal(t, types.RpcBAD_SEED, rpcErr.Code)
 			assert.Equal(t, "Invalid field 'secret'.", rpcErr.Message)
@@ -441,7 +449,7 @@ func TestSign_InvalidKeyType(t *testing.T) {
 		"seed_hex": "DEDCE9CE67B451D852FD4E846FCDE31C",
 		"key_type": "invalid"
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	// API v1: rippled returns invalidParams for bad key_type
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
@@ -467,7 +475,7 @@ func TestSign_InvalidSeed(t *testing.T) {
 		},
 		"secret": "invalid_seed"
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	// The shared credential helper treats "invalid_seed" as a passphrase
 	// (fallback after base58 and hex parsing fail), so it succeeds in
@@ -499,10 +507,11 @@ func TestSign_AccountMismatch(t *testing.T) {
 		"seed_hex": "DEDCE9CE67B451D852FD4E846FCDE31C",
 		"key_type": "secp256k1"
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
-	assert.Contains(t, err.Message, "does not match")
+	assert.Equal(t, types.RpcBAD_SECRET, err.Code)
+	assert.Equal(t, "badSecret", err.ErrorString)
+	assert.Equal(t, "Secret does not match account.", err.Message)
 }
 
 func TestSign_LedgerServiceUnavailable(t *testing.T) {
@@ -523,7 +532,7 @@ func TestSign_LedgerServiceUnavailable(t *testing.T) {
 		"seed_hex": "DEDCE9CE67B451D852FD4E846FCDE31C",
 		"key_type": "secp256k1"
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcINTERNAL, err.Code)
 	assert.Equal(t, "Internal error.", err.Message)
@@ -553,7 +562,7 @@ func TestSign_OfflineMode(t *testing.T) {
 		"key_type": "secp256k1",
 		"offline": true
 	}`)
-	result, err := handler.Handle(ctx, params)
+	result, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.Nil(t, err)
 	require.NotNil(t, result)
 
@@ -596,7 +605,7 @@ func TestSign_SrcActNotFound(t *testing.T) {
 		"passphrase": "masterpassphrase",
 		"key_type": "secp256k1"
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcSRC_ACT_NOT_FOUND, err.Code)
 	assert.Equal(t, "srcActNotFound", err.ErrorString)
@@ -626,7 +635,7 @@ func TestSign_AutofillSequence(t *testing.T) {
 		"passphrase": "masterpassphrase",
 		"key_type": "secp256k1"
 	}`)
-	result, err := handler.Handle(ctx, params)
+	result, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.Nil(t, err)
 	require.NotNil(t, result)
 
@@ -657,7 +666,7 @@ func TestSign_Offline_MissingSequence(t *testing.T) {
 		"key_type": "secp256k1",
 		"offline": true
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "Missing field 'tx_json.Sequence'.", err.Message)
@@ -684,7 +693,7 @@ func TestSign_Offline_MissingFee(t *testing.T) {
 		"key_type": "secp256k1",
 		"offline": true
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "Missing field 'tx_json.Fee'.", err.Message)
@@ -715,7 +724,7 @@ func TestSign_TicketSequence_AutofillsSequenceZero(t *testing.T) {
 		"passphrase": "masterpassphrase",
 		"key_type": "secp256k1"
 	}`)
-	result, err := handler.Handle(ctx, params)
+	result, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.Nil(t, err)
 	require.NotNil(t, result)
 
@@ -766,7 +775,7 @@ func TestSign_FeeMultMax_DefaultAccepted(t *testing.T) {
 		"key_type": "secp256k1",
 		"offline": false
 	}`)
-	result, err := handler.Handle(ctx, params)
+	result, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.Nil(t, err)
 	require.NotNil(t, result)
 
@@ -800,7 +809,7 @@ func TestSign_FeeMultMax_ZeroRejects(t *testing.T) {
 		"key_type": "secp256k1",
 		"fee_mult_max": 0
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcHIGH_FEE, err.Code)
 	assert.Contains(t, err.Message, "exceeds the requested tx limit")
@@ -830,7 +839,7 @@ func TestSign_FeeDivMax_LargeRejects(t *testing.T) {
 		"key_type": "secp256k1",
 		"fee_div_max": 100
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcHIGH_FEE, err.Code)
 	assert.Contains(t, err.Message, "exceeds the requested tx limit")
@@ -861,7 +870,7 @@ func TestSign_FeeMultMax_NegativeRejectsInvalidParams(t *testing.T) {
 		"key_type": "secp256k1",
 		"fee_mult_max": -1
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "fee_mult_max")
@@ -893,7 +902,7 @@ func TestSign_FeeDivMax_ZeroRejectsInvalidParams(t *testing.T) {
 		"key_type": "secp256k1",
 		"fee_div_max": 0
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "fee_div_max")
@@ -925,7 +934,7 @@ func TestSign_FeeDivMax_NegativeRejectsInvalidParams(t *testing.T) {
 		"key_type": "secp256k1",
 		"fee_div_max": -5
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Contains(t, err.Message, "fee_div_max")
@@ -956,7 +965,7 @@ func TestSign_FeeMultMax_FloatRejectsHighFee(t *testing.T) {
 		"key_type": "secp256k1",
 		"fee_mult_max": 1.5
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcHIGH_FEE, err.Code)
 	assert.Contains(t, err.Message, "fee_mult_max")
@@ -987,7 +996,7 @@ func TestSign_FeeMultMax_StringRejectsHighFee(t *testing.T) {
 		"key_type": "secp256k1",
 		"fee_mult_max": "ten"
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcHIGH_FEE, err.Code)
 	assert.Contains(t, err.Message, "fee_mult_max")
@@ -1020,7 +1029,7 @@ func TestSign_FeeAlreadySet_IgnoresFeeMultMax(t *testing.T) {
 		"offline": true,
 		"fee_mult_max": "garbage"
 	}`)
-	result, err := handler.Handle(ctx, params)
+	result, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.Nil(t, err, "fee_mult_max must not be read when Fee is in tx_json")
 	require.NotNil(t, result)
 }
@@ -1049,7 +1058,7 @@ func TestSign_DeliverMax_APIv1(t *testing.T) {
 		"key_type": "secp256k1",
 		"offline": true
 	}`)
-	result, err := handler.Handle(ctx, params)
+	result, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.Nil(t, err)
 
 	resultMap := result.(map[string]any)
@@ -1082,7 +1091,7 @@ func TestSign_DeliverMax_APIv2(t *testing.T) {
 		"key_type": "secp256k1",
 		"offline": true
 	}`)
-	result, err := handler.Handle(ctx, params)
+	result, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.Nil(t, err)
 
 	resultMap := result.(map[string]any)
@@ -1117,7 +1126,7 @@ func TestSign_NoDeliverMax_NonPayment(t *testing.T) {
 		"key_type": "secp256k1",
 		"offline": true
 	}`)
-	result, err := handler.Handle(ctx, params)
+	result, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.Nil(t, err)
 
 	resultMap := result.(map[string]any)
@@ -1144,7 +1153,7 @@ func TestSignFor_MissingAccount(t *testing.T) {
 		},
 		"secret": "sn3nxiW7v8KXzPzAqzyHXbSSKNuN9"
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Contains(t, err.Message, "account")
 }
@@ -1160,7 +1169,7 @@ func TestSignFor_MissingTxJson(t *testing.T) {
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"secret": "sn3nxiW7v8KXzPzAqzyHXbSSKNuN9"
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Contains(t, err.Message, "tx_json")
 }
@@ -1178,10 +1187,12 @@ func TestSignFor_MissingCredentials(t *testing.T) {
 			"TransactionType": "Payment",
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-			"Amount": "1000000"
+			"Amount": "1000000",
+			"Fee": "10",
+			"Sequence": 1
 		}
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Contains(t, err.Message, "Missing field 'secret'.")
 }
@@ -1203,7 +1214,7 @@ func TestSignFor_InvalidAccountAddress(t *testing.T) {
 		},
 		"secret": "sn3nxiW7v8KXzPzAqzyHXbSSKNuN9"
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	// rippled's transactionSignFor emits srcActMalformed with
 	// "Invalid field 'account'." for an unparseable signer account.
@@ -1226,7 +1237,7 @@ func TestSignFor_InvalidAccountPrecedesMissingTxJson(t *testing.T) {
 		"account": "invalid_address",
 		"secret": "sn3nxiW7v8KXzPzAqzyHXbSSKNuN9"
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcSRC_ACT_MALFORMED, err.Code)
 	assert.Equal(t, "srcActMalformed", err.ErrorString)
@@ -1251,7 +1262,7 @@ func TestSignFor_InvalidKeyType(t *testing.T) {
 		"seed_hex": "DEDCE9CE67B451D852FD4E846FCDE31C",
 		"key_type": "invalid"
 	}`)
-	_, err := handler.Handle(ctx, params)
+	_, err := handler.Handle(signingEnabledContext(ctx), params)
 	require.NotNil(t, err)
 	// API v1: rippled returns invalidParams for bad key_type
 	// API v2+: returns RpcBAD_KEY_TYPE
@@ -1290,7 +1301,7 @@ func TestSignFor_ValidMultiSign(t *testing.T) {
 	}
 	paramsJSON, _ := json.Marshal(paramsMap)
 
-	result, err := handler.Handle(ctx, paramsJSON)
+	result, err := handler.Handle(signingEnabledContext(ctx), paramsJSON)
 	require.Nil(t, err, "sign_for should succeed: %v", err)
 	require.NotNil(t, result)
 
@@ -1454,7 +1465,7 @@ func TestSubmitMultisigned_InvalidSignerFormat(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Contains(t, err.Message, "Signer entr")
+	assert.Equal(t, "Field 'tx_json.Signers.InvalidField' is unknown.", err.Message)
 }
 
 func TestSubmitMultisigned_MissingSignerAccount(t *testing.T) {
@@ -1489,7 +1500,7 @@ func TestSubmitMultisigned_MissingSignerAccount(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, "Signers array may only contain Signer entries.", err.Message)
+	assert.Equal(t, "Error at 'tx_json.Signers.[0].Signer'. Object 'Signer' contents did not meet requirements for that type.", err.Message)
 }
 
 func TestSubmitMultisigned_MissingSigningPubKey(t *testing.T) {
@@ -1524,7 +1535,7 @@ func TestSubmitMultisigned_MissingSigningPubKey(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, "Signers array may only contain Signer entries.", err.Message)
+	assert.Equal(t, "Error at 'tx_json.Signers.[0].Signer'. Object 'Signer' contents did not meet requirements for that type.", err.Message)
 }
 
 func TestSubmitMultisigned_MissingTxnSignature(t *testing.T) {
@@ -1559,10 +1570,10 @@ func TestSubmitMultisigned_MissingTxnSignature(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, "Signers array may only contain Signer entries.", err.Message)
+	assert.Equal(t, "Error at 'tx_json.Signers.[0].Signer'. Object 'Signer' contents did not meet requirements for that type.", err.Message)
 }
 
-func TestSubmitMultisigned_SignersNotSorted(t *testing.T) {
+func TestSubmitMultisigned_SortsSigners(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
 	services := newSubmitTestServices(mock)
 
@@ -1573,7 +1584,6 @@ func TestSubmitMultisigned_SignersNotSorted(t *testing.T) {
 		Services:   services,
 	}
 
-	// Signers not sorted by account (rP... < rH... is false alphabetically)
 	params := json.RawMessage(`{
 		"tx_json": {
 			"TransactionType": "Payment",
@@ -1601,9 +1611,14 @@ func TestSubmitMultisigned_SignersNotSorted(t *testing.T) {
 			]
 		}
 	}`)
-	_, err := handler.Handle(ctx, params)
-	require.NotNil(t, err)
-	assert.Contains(t, err.Message, "sorted")
+	result, err := handler.Handle(ctx, params)
+	require.Nil(t, err)
+	signers := result.(map[string]any)["tx_json"].(map[string]any)["Signers"].([]any)
+	require.Len(t, signers, 2)
+	first := signers[0].(map[string]any)["Signer"].(map[string]any)["Account"]
+	second := signers[1].(map[string]any)["Signer"].(map[string]any)["Account"]
+	assert.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", first)
+	assert.Equal(t, "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK", second)
 }
 
 func TestSubmitMultisigned_LedgerServiceUnavailable(t *testing.T) {

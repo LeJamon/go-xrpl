@@ -5,13 +5,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	ledgerservice "github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -27,13 +28,37 @@ var errNotImplemented = errors.New("rpcenv: LedgerService method not implemented
 // applied. Methods not yet exercised by a consumer test return
 // errNotImplemented so the gap is obvious.
 type ledgerAdapter struct {
-	env *jtx.TestEnv
+	env           *jtx.TestEnv
+	closedLedgers map[uint32]*ledger.Ledger
 }
 
 var _ types.LedgerService = (*ledgerAdapter)(nil)
 
 func newLedgerAdapter(env *jtx.TestEnv) *ledgerAdapter {
-	return &ledgerAdapter{env: env}
+	a := &ledgerAdapter{env: env, closedLedgers: make(map[uint32]*ledger.Ledger)}
+	a.recordClosedLedger()
+	return a
+}
+
+func (a *ledgerAdapter) recordClosedLedger() {
+	if closed := a.env.LastClosedLedger(); closed != nil {
+		a.closedLedgers[closed.Sequence()] = closed
+	}
+}
+
+func (a *ledgerAdapter) closedLedger(seq uint32) *ledger.Ledger {
+	return a.closedLedgers[seq]
+}
+
+func (a *ledgerAdapter) completeLedgerRange(max uint32) string {
+	min := max
+	for min > 0 && a.closedLedger(min-1) != nil {
+		min--
+	}
+	if min == max {
+		return strconv.FormatUint(uint64(max), 10)
+	}
+	return fmt.Sprintf("%d-%d", min, max)
 }
 
 // resolveLedger maps a ledgerIndex specifier to a ledger. In standalone
@@ -59,8 +84,8 @@ func (a *ledgerAdapter) resolveLedger(ledgerIndex string) (*ledger.Ledger, bool,
 		return nil, false, fmt.Errorf("rpcenv: unsupported ledger_index %q", ledgerIndex)
 	}
 	want := uint32(seq)
-	if closed != nil && closed.Sequence() == want {
-		return closed, validated, nil
+	if historical := a.closedLedger(want); historical != nil {
+		return historical, validated, nil
 	}
 	if open != nil && open.Sequence() == want {
 		return open, false, nil
@@ -101,18 +126,14 @@ func (a *ledgerAdapter) GetValidatedLedgerIndex() uint32 {
 
 func (a *ledgerAdapter) AcceptLedger(ctx context.Context) (uint32, error) {
 	a.env.Close()
+	a.recordClosedLedger()
 	return a.GetClosedLedgerIndex(), nil
-}
-
-func (a *ledgerAdapter) AcceptLedgerAt(ctx context.Context, _ time.Time) (uint32, error) {
-	return a.AcceptLedger(ctx)
 }
 
 func (a *ledgerAdapter) IsStandalone() bool { return true }
 
 func (a *ledgerAdapter) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
-	closed := a.env.LastClosedLedger()
-	if closed != nil && closed.Sequence() == seq {
+	if closed := a.closedLedger(seq); closed != nil {
 		return &ledgerReaderAdapter{l: closed}, nil
 	}
 	if open := a.env.Ledger(); open != nil && open.Sequence() == seq {
@@ -122,8 +143,10 @@ func (a *ledgerAdapter) GetLedgerBySequence(seq uint32) (types.LedgerReader, err
 }
 
 func (a *ledgerAdapter) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
-	if closed := a.env.LastClosedLedger(); closed != nil && closed.Hash() == hash {
-		return &ledgerReaderAdapter{l: closed}, nil
+	for _, closed := range a.closedLedgers {
+		if closed.Hash() == hash {
+			return &ledgerReaderAdapter{l: closed}, nil
+		}
 	}
 	if open := a.env.Ledger(); open != nil && open.Hash() == hash {
 		return &ledgerReaderAdapter{l: open}, nil
@@ -141,6 +164,7 @@ func (a *ledgerAdapter) GetServerInfo() types.LedgerServerInfo {
 	if closed != nil {
 		info.ClosedLedgerSeq = closed.Sequence()
 		info.ClosedLedgerHash = closed.Hash()
+		info.CompleteLedgers = a.completeLedgerRange(closed.Sequence())
 	}
 	if a.haveValidated() {
 		info.HaveValidated = true
@@ -191,8 +215,69 @@ func (a *ledgerAdapter) GetLedgerEntry(ctx context.Context, entryKey [32]byte, l
 	}, nil
 }
 
-func (a *ledgerAdapter) GetLedgerData(_ context.Context, _ string, _ uint32, _ string) (*types.LedgerDataResult, error) {
-	return nil, errNotImplemented
+func (a *ledgerAdapter) GetLedgerData(ctx context.Context, ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	target, validated, err := a.resolveLedger(ledgerIndex)
+	if err != nil {
+		return nil, err
+	}
+	if limit == 0 {
+		limit = 200
+	}
+
+	var startKey [32]byte
+	if marker != "" {
+		decoded, decodeErr := hex.DecodeString(marker)
+		if len(marker) != 64 || decodeErr != nil {
+			return nil, svcerr.ErrInvalidMarker
+		}
+		copy(startKey[:], decoded)
+	}
+
+	result := &types.LedgerDataResult{
+		LedgerIndex: target.Sequence(),
+		LedgerHash:  target.Hash(),
+		State:       make([]types.LedgerDataItem, 0, limit),
+		Validated:   validated,
+	}
+	if marker == "" {
+		header := target.Header()
+		result.LedgerHeader = &types.LedgerHeaderInfo{
+			AccountHash:         header.AccountHash,
+			CloseFlags:          header.CloseFlags,
+			CloseTime:           protocol.RippleSeconds(header.CloseTime),
+			CloseTimeHuman:      header.CloseTime.UTC().Format("2006-Jan-02 15:04:05.000000000 UTC"),
+			CloseTimeISO:        protocol.FormatCloseTimeISO(header.CloseTime),
+			CloseTimeResolution: uint32(header.CloseTimeResolution),
+			Closed:              target.IsClosed(),
+			LedgerHash:          header.Hash,
+			LedgerIndex:         header.LedgerIndex,
+			ParentCloseTime:     protocol.RippleSeconds(header.ParentCloseTime),
+			ParentHash:          header.ParentHash,
+			TotalCoins:          header.Drops,
+			TransactionHash:     header.TxHash,
+		}
+	}
+
+	count := uint32(0)
+	err = target.IterateStateFrom(ctx, startKey, func(key [32]byte, data []byte) bool {
+		if count >= limit {
+			result.Marker = protocol.Hash256Hex(ledger.DecrementKey(key))
+			return false
+		}
+		result.State = append(result.State, types.LedgerDataItem{
+			Index: protocol.Hash256Hex(key),
+			Data:  data,
+		})
+		count++
+		return true
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (a *ledgerAdapter) GetClosedLedgerView() (types.LedgerStateView, error) {
@@ -204,7 +289,7 @@ func (a *ledgerAdapter) GetClosedLedgerView() (types.LedgerStateView, error) {
 }
 
 func (a *ledgerAdapter) GetLedgerViewBySeq(seq uint32) (types.LedgerStateView, types.LedgerReader, error) {
-	if closed := a.env.LastClosedLedger(); closed != nil && closed.Sequence() == seq {
+	if closed := a.closedLedger(seq); closed != nil {
 		return closed, &ledgerReaderAdapter{l: closed}, nil
 	}
 	if open := a.env.Ledger(); open != nil && open.Sequence() == seq {
@@ -214,8 +299,10 @@ func (a *ledgerAdapter) GetLedgerViewBySeq(seq uint32) (types.LedgerStateView, t
 }
 
 func (a *ledgerAdapter) GetLedgerViewByHash(hash [32]byte) (types.LedgerStateView, types.LedgerReader, error) {
-	if closed := a.env.LastClosedLedger(); closed != nil && closed.Hash() == hash {
-		return closed, &ledgerReaderAdapter{l: closed}, nil
+	for _, closed := range a.closedLedgers {
+		if closed.Hash() == hash {
+			return closed, &ledgerReaderAdapter{l: closed}, nil
+		}
 	}
 	if open := a.env.Ledger(); open != nil && open.Hash() == hash {
 		return open, &ledgerReaderAdapter{l: open}, nil
@@ -225,7 +312,7 @@ func (a *ledgerAdapter) GetLedgerViewByHash(hash [32]byte) (types.LedgerStateVie
 
 func (a *ledgerAdapter) IsAmendmentBlocked() bool { return false }
 
-func (a *ledgerAdapter) SubmitTransaction(_ []byte, _ ...string) (*types.SubmitResult, error) {
+func (a *ledgerAdapter) SubmitTransaction(_ []byte, _ string) (*types.SubmitResult, error) {
 	return nil, errNotImplemented
 }
 
@@ -256,7 +343,7 @@ func (a *ledgerAdapter) GetAutofillSequence(_ string, _ bool) (uint32, error) {
 // GetAccountInfo serves as the worked example for extending this adapter:
 // decode address → keylet.Account → Exists/Read → parse SLE → fill
 // types.AccountInfo with hex-formatted hashes and decimal-formatted balance.
-// Matches the conversion done by internal/rpc/ledger_adapter.go so
+// Matches the conversion done by internal/rpc/adapter so
 // handlers see identical shapes whether they run against production or the
 // harness.
 func (a *ledgerAdapter) GetAccountInfo(ctx context.Context, account string, ledgerIndex string) (*types.AccountInfo, error) {
@@ -319,8 +406,8 @@ func (a *ledgerAdapter) GetAccountInfo(ctx context.Context, account string, ledg
 
 // Methods below return errNotImplemented. To wire one up, follow the
 // GetAccountInfo pattern above: derive the keylet, read the SLE, parse
-// it, and convert to the result type. internal/rpc/ledger_adapter.go has
-// the canonical service→types conversions for reference.
+// it, and convert to the result type. The production adapter package has the
+// canonical service-to-types conversions for reference.
 
 func (a *ledgerAdapter) GetAccountLines(_ context.Context, _ string, _ string, _ string, _ uint32, _ string) (*types.AccountLinesResult, error) {
 	return nil, errNotImplemented
@@ -330,8 +417,113 @@ func (a *ledgerAdapter) GetAccountOffers(_ context.Context, _ string, _ string, 
 	return nil, errNotImplemented
 }
 
-func (a *ledgerAdapter) GetAccountTransactions(_ context.Context, _ string, _, _ int64, _ uint32, _ *types.AccountTxMarker, _ bool) (*types.AccountTxResult, error) {
-	return nil, errNotImplemented
+func (a *ledgerAdapter) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	closed := a.env.LastClosedLedger()
+	if closed == nil {
+		return nil, errors.New("rpcenv: no closed ledger available")
+	}
+	if _, _, err := addresscodec.DecodeClassicAddressToAccountID(account); err != nil {
+		return nil, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
+	}
+	if limit == 0 {
+		limit = 200
+	}
+
+	minSequence := uint32(1)
+	if ledgerMin > 0 {
+		minSequence = uint32(ledgerMin)
+	}
+	maxSequence := closed.Sequence()
+	if ledgerMax > 0 && uint32(ledgerMax) < maxSequence {
+		maxSequence = uint32(ledgerMax)
+	}
+	result := &types.AccountTxResult{
+		Account:   account,
+		LedgerMin: minSequence,
+		LedgerMax: maxSequence,
+		Limit:     limit,
+		Validated: true,
+	}
+	transactions := make([]types.AccountTransaction, 0)
+	for sequence := minSequence; sequence <= maxSequence; sequence++ {
+		closed := a.closedLedger(sequence)
+		if closed == nil {
+			continue
+		}
+		var iterationErr error
+		err := closed.ForEachTransactionContext(ctx, func(hash [32]byte, data []byte) bool {
+			accepted := ledgerservice.ParseAcceptedTransaction(data)
+			if err := accepted.ParseError(); err != nil {
+				iterationErr = fmt.Errorf("rpcenv: parse accepted transaction %x: %w", hash, err)
+				return false
+			}
+			for _, affected := range accepted.AffectedAccounts() {
+				if affected != account {
+					continue
+				}
+				transactionIndex, ok := accepted.TransactionIndex()
+				if !ok {
+					iterationErr = fmt.Errorf("rpcenv: transaction %x has no transaction index", hash)
+					return false
+				}
+				transactions = append(transactions, types.AccountTransaction{
+					Hash:        hash,
+					LedgerIndex: closed.Sequence(),
+					TxnSeq:      transactionIndex,
+					TxBlob:      accepted.TransactionBlob(),
+					Meta:        accepted.MetadataBlob(),
+				})
+				break
+			}
+			return true
+		})
+		if err != nil {
+			return nil, err
+		}
+		if iterationErr != nil {
+			return nil, iterationErr
+		}
+		if sequence == maxSequence {
+			break
+		}
+	}
+
+	sort.Slice(transactions, func(i, j int) bool {
+		if transactions[i].LedgerIndex != transactions[j].LedgerIndex {
+			if forward {
+				return transactions[i].LedgerIndex < transactions[j].LedgerIndex
+			}
+			return transactions[i].LedgerIndex > transactions[j].LedgerIndex
+		}
+		if forward {
+			return transactions[i].TxnSeq < transactions[j].TxnSeq
+		}
+		return transactions[i].TxnSeq > transactions[j].TxnSeq
+	})
+	start := 0
+	if marker != nil {
+		found := false
+		for i := range transactions {
+			if transactions[i].LedgerIndex == marker.LedgerSeq && transactions[i].TxnSeq == marker.TxnSeq {
+				start = i + 1
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, errors.New("rpcenv: account_tx marker not found")
+		}
+	}
+	end := min(start+int(limit), len(transactions))
+	result.Transactions = transactions[start:end]
+	if end < len(transactions) && end > start {
+		last := transactions[end-1]
+		result.Marker = &types.AccountTxMarker{LedgerSeq: last.LedgerIndex, TxnSeq: last.TxnSeq}
+	}
+	return result, nil
 }
 
 func (a *ledgerAdapter) GetAccountChannels(_ context.Context, _ string, _ string, _ string, _ uint32, _ string) (*types.AccountChannelsResult, error) {
@@ -342,8 +534,40 @@ func (a *ledgerAdapter) GetAccountCurrencies(_ context.Context, _ string, _ stri
 	return nil, errNotImplemented
 }
 
-func (a *ledgerAdapter) GetAccountObjects(_ context.Context, _ string, _ string, _ string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
-	return nil, errNotImplemented
+func (a *ledgerAdapter) GetAccountObjects(ctx context.Context, account, ledgerIndex, objectType string, limit uint32, marker string) (*types.AccountObjectsResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	target, validated, err := a.resolveLedger(ledgerIndex)
+	if err != nil {
+		return nil, err
+	}
+	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
+	}
+	var accountID [20]byte
+	copy(accountID[:], accountIDBytes)
+	result, err := ledgerservice.QueryAccountObjects(ctx, target, account, accountID, validated, objectType, limit, marker)
+	if err != nil {
+		return nil, err
+	}
+	objects := make([]types.AccountObjectItem, len(result.AccountObjects))
+	for index, object := range result.AccountObjects {
+		objects[index] = types.AccountObjectItem{
+			Index:           object.Index,
+			LedgerEntryType: object.LedgerEntryType,
+			Data:            object.Data,
+		}
+	}
+	return &types.AccountObjectsResult{
+		Account:        result.Account,
+		AccountObjects: objects,
+		LedgerIndex:    result.LedgerIndex,
+		LedgerHash:     result.LedgerHash,
+		Validated:      result.Validated,
+		Marker:         result.Marker,
+	}, nil
 }
 
 func (a *ledgerAdapter) GetAccountNFTs(_ context.Context, _ string, _ string, _ uint32, _ string) (*types.AccountNFTsResult, error) {
@@ -396,8 +620,10 @@ func (r *ledgerReaderAdapter) CloseTime() int64 {
 	return protocol.RippleSeconds(r.l.CloseTime())
 }
 
-func (r *ledgerReaderAdapter) CloseTimeResolution() uint32 { return r.l.Header().CloseTimeResolution }
-func (r *ledgerReaderAdapter) CloseFlags() uint8           { return r.l.Header().CloseFlags }
+func (r *ledgerReaderAdapter) CloseTimeResolution() uint32 {
+	return uint32(r.l.Header().CloseTimeResolution)
+}
+func (r *ledgerReaderAdapter) CloseFlags() uint8 { return r.l.Header().CloseFlags }
 
 func (r *ledgerReaderAdapter) ParentCloseTime() int64 {
 	return protocol.RippleSeconds(r.l.ParentCloseTime())

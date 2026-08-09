@@ -15,7 +15,7 @@ import (
 // acqRecordingSender captures the indirect flag passed to the legacy
 // inbound-ledger node-fetch builders (RequestStateNodes / RequestTransactionNodes)
 // so the requester-side query_type escalation can be pinned. Other
-// NetworkSender methods inherit from noopSender.
+// Other acquisition methods inherit from noopSender.
 type acqRecordingSender struct {
 	noopSender
 	mu       sync.Mutex
@@ -68,7 +68,7 @@ func (s *acqRecordingSender) baseIndirects() []bool {
 func TestRequestAcquisitionBase_QueryTypeEscalation(t *testing.T) {
 	svc := newTestLedgerService(t)
 	rs := &acqRecordingSender{}
-	router := NewRouter(&mockEngine{}, New(Config{LedgerService: svc, Sender: rs}), nil)
+	router := newTestRouter(&mockEngine{}, New(Config{LedgerService: svc, Sender: rs}), nil)
 	il := inbound.New([32]byte{0xAB}, 42, 7, serveTestLogger())
 
 	router.requestAcquisitionBase(il)
@@ -132,7 +132,7 @@ func TestRequestMissingAcquisitionNodes_QueryTypeEscalation(t *testing.T) {
 		Identity:      identity,
 		Validators:    []consensus.NodeID{identity.NodeID},
 	})
-	router := NewRouter(&mockEngine{}, a, nil)
+	router := newTestRouter(&mockEngine{}, a, nil)
 
 	// Serve the closed ledger's base (header + state root) into a fresh
 	// acquisition so it has outstanding state nodes but an incomplete tree.
@@ -171,7 +171,7 @@ func TestRequestMissingAcquisitionNodes_ReplyUsesOneLevelFatNodes(t *testing.T) 
 	require.NoError(t, err)
 	rs := &acqRecordingSender{}
 	a := New(Config{LedgerService: svc, Sender: rs, Identity: identity, Validators: []consensus.NodeID{identity.NodeID}})
-	router := NewRouter(&mockEngine{}, a, nil)
+	router := newTestRouter(&mockEngine{}, a, nil)
 	l := svc.GetClosedLedger()
 	il := inbound.New(l.Hash(), l.Sequence(), 7, serveTestLogger())
 	require.NoError(t, il.GotBase(router.buildLedgerBaseNodes(l)))

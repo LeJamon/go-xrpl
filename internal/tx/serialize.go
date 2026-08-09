@@ -307,6 +307,47 @@ func SplitTxWithMetaBlob(blob []byte) (txData []byte, metaData []byte, err error
 	return txData, metaData, nil
 }
 
+// SplitTxWithMetaBlobStrict splits an accepted transaction-tree leaf. Unlike
+// SplitTxWithMetaBlob, accepted leaves must contain exactly one transaction
+// field and one non-empty metadata field with no trailing bytes.
+func SplitTxWithMetaBlobStrict(blob []byte) (txData []byte, metaData []byte, err error) {
+	if len(blob) == 0 {
+		return nil, nil, errors.New("empty blob")
+	}
+
+	parser := serdes.NewBinaryParser(blob, nil)
+	txLen, err := parser.ReadVariableLength()
+	if err != nil {
+		return nil, nil, fmt.Errorf("read transaction length: %w", err)
+	}
+	if txLen == 0 {
+		return nil, nil, errors.New("empty transaction")
+	}
+	txData, err = parser.ReadBytes(txLen)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read transaction: %w", err)
+	}
+	if !parser.HasMore() {
+		return nil, nil, errors.New("missing metadata")
+	}
+
+	metaLen, err := parser.ReadVariableLength()
+	if err != nil {
+		return nil, nil, fmt.Errorf("read metadata length: %w", err)
+	}
+	if metaLen == 0 {
+		return nil, nil, errors.New("empty metadata")
+	}
+	metaData, err = parser.ReadBytes(metaLen)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read metadata: %w", err)
+	}
+	if parser.HasMore() {
+		return nil, nil, fmt.Errorf("trailing transaction leaf data: %d bytes", parser.Remaining())
+	}
+	return txData, metaData, nil
+}
+
 // TransactionIndexFromTxWithMetaBlob returns sfTransactionIndex from a
 // transaction-tree leaf. The JSON fallback is retained for transactions stored
 // by the submit RPC before the open ledger is rebuilt.
@@ -334,7 +375,7 @@ func TransactionIndexFromMetadata(metaData []byte) (uint32, bool) {
 	if len(metaData) == 0 {
 		return 0, false
 	}
-	meta, err := binarycodec.Decode(hex.EncodeToString(metaData))
+	meta, err := binarycodec.DecodeBytes(metaData)
 	if err != nil {
 		return 0, false
 	}

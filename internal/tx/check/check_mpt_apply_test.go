@@ -24,12 +24,12 @@ type checkMPTView struct {
 
 func newCheckMPTView() *checkMPTView { return &checkMPTView{data: make(map[[32]byte][]byte)} }
 
-func (v *checkMPTView) Read(k keylet.Keylet) ([]byte, error)      { return v.data[k.Key], nil }
-func (v *checkMPTView) Exists(k keylet.Keylet) (bool, error)      { _, ok := v.data[k.Key]; return ok, nil }
-func (v *checkMPTView) Insert(k keylet.Keylet, data []byte) error { v.data[k.Key] = data; return nil }
-func (v *checkMPTView) Update(k keylet.Keylet, data []byte) error { v.data[k.Key] = data; return nil }
-func (v *checkMPTView) Erase(k keylet.Keylet) error               { delete(v.data, k.Key); return nil }
-func (v *checkMPTView) AdjustDropsDestroyed(drops.XRPAmount)      {}
+func (v *checkMPTView) Read(k keylet.Keylet) ([]byte, error)       { return v.data[k.Key], nil }
+func (v *checkMPTView) Exists(k keylet.Keylet) (bool, error)       { _, ok := v.data[k.Key]; return ok, nil }
+func (v *checkMPTView) Insert(k keylet.Keylet, data []byte) error  { v.data[k.Key] = data; return nil }
+func (v *checkMPTView) Update(k keylet.Keylet, data []byte) error  { v.data[k.Key] = data; return nil }
+func (v *checkMPTView) Erase(k keylet.Keylet) error                { delete(v.data, k.Key); return nil }
+func (v *checkMPTView) AdjustDropsDestroyed(drops.XRPAmount) error { return nil }
 func (v *checkMPTView) ForEach(fn func([32]byte, []byte) bool) error {
 	for k, data := range v.data {
 		if !fn(k, data) {
@@ -41,9 +41,9 @@ func (v *checkMPTView) ForEach(fn func([32]byte, []byte) bool) error {
 func (v *checkMPTView) Succ([32]byte) ([32]byte, []byte, bool, error) {
 	return [32]byte{}, nil, false, nil
 }
-func (v *checkMPTView) TxExists([32]byte) bool  { return false }
-func (v *checkMPTView) Rules() *amendment.Rules { return amendment.AllSupportedRules() }
-func (v *checkMPTView) LedgerSeq() uint32       { return 1 }
+func (v *checkMPTView) TxExists([32]byte) (bool, error) { return false, nil }
+func (v *checkMPTView) Rules() *amendment.Rules         { return amendment.AllSupportedRules() }
+func (v *checkMPTView) LedgerSeq() uint32               { return 1 }
 
 func checkMPTAccountID(seed byte) [20]byte {
 	var id [20]byte

@@ -1,6 +1,7 @@
 package list_test
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/validator/list"
 )
@@ -65,10 +67,11 @@ func TestSitePoller_DoubleStartSingleLoop(t *testing.T) {
 	defer srv.Close()
 
 	agg, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		SiteURIs:      []string{srv.URL},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		SiteURIs:           []string{srv.URL},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -121,10 +124,11 @@ func TestSitePoller_RefreshesNextRefreshBeforeFetch(t *testing.T) {
 	defer srv.Close()
 
 	a, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		SiteURIs:      []string{srv.URL},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		SiteURIs:           []string{srv.URL},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -169,10 +173,11 @@ func TestAggregator_CacheWriteFailureDoesNotBlockIngest(t *testing.T) {
 	}
 
 	agg, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -219,10 +224,11 @@ func TestSitePoller_RestartAfterStop(t *testing.T) {
 	defer srv.Close()
 
 	agg, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		SiteURIs:      []string{srv.URL},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		SiteURIs:           []string{srv.URL},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -257,5 +263,88 @@ func TestSitePoller_RestartAfterStop(t *testing.T) {
 	case <-served:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Start after Stop did not resume polling")
+	}
+}
+
+func TestSitePoller_OnChangeMayStopPoller(t *testing.T) {
+	pub := newPublisher(t, 0x69, 0x6a)
+	body := validV1Envelope(t, pub, [][33]byte{derivedValidatorKey(0x74)})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+	agg, err := list.New(list.Config{
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		SiteURIs:           []string{srv.URL},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	poller, err := list.NewSitePoller([]string{srv.URL}, agg, nil)
+	if err != nil {
+		t.Fatalf("NewSitePoller: %v", err)
+	}
+	poller.SetInterval(time.Hour)
+	stopped := make(chan struct{})
+	agg.OnChange(func(_ []consensus.NodeID, _ [][33]byte) {
+		poller.Stop()
+		close(stopped)
+	})
+	poller.Start(t.Context())
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("OnChange -> Stop deadlocked")
+	}
+}
+
+func TestSitePoller_RevocationOnChangeMayStopPoller(t *testing.T) {
+	pub := newPublisher(t, 0x75, 0x76)
+	blob, signature := pub.signList(t, 1, 0, time.Now().Add(24*time.Hour).Unix(), [][33]byte{derivedValidatorKey(0x77)})
+	revocation := buildRevocation(t, pub.masterPub, pub.masterPriv)
+	body, err := json.Marshal(map[string]any{
+		"manifest":  base64.StdEncoding.EncodeToString(revocation),
+		"blob":      "",
+		"signature": "",
+		"version":   1,
+	})
+	if err != nil {
+		t.Fatalf("marshal revocation envelope: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+	agg, err := list.New(list.Config{
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		SiteURIs:           []string{srv.URL},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if disposition, _, _ := agg.ApplyList(pub.manifestB64, blob, signature, 1, "test://initial"); disposition != list.Accepted {
+		t.Fatalf("initial disposition: got %s want accepted", disposition)
+	}
+	poller, err := list.NewSitePoller([]string{srv.URL}, agg, nil)
+	if err != nil {
+		t.Fatalf("NewSitePoller: %v", err)
+	}
+	poller.SetInterval(time.Hour)
+	stopped := make(chan struct{})
+	agg.OnChange(func(_ []consensus.NodeID, _ [][33]byte) {
+		poller.Stop()
+		close(stopped)
+	})
+	poller.Start(t.Context())
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("revocation OnChange -> Stop deadlocked")
 	}
 }

@@ -1,17 +1,15 @@
 // Package entry holds protocol-level definitions for XRPL ledger entries
 // (Serializable Ledger Entries, "SLE").
 //
-// At present the package exposes:
+// The package exposes:
 //
 //   - Type: the ledger-entry type-id enum mirroring
 //     rippled/include/xrpl/protocol/detail/ledger_entries.macro.
-//   - LedgerSpecificFlags: the per-entry-type flag constants mirroring
+//   - Lsf* and Lsif* per-entry-type flag constants mirroring
 //     rippled/include/xrpl/protocol/LedgerFormats.h (Lsf* prefix).
-//   - MPToken-related protocol limits (metadata length, transfer fee, and
-//     maximum amount) used by MPT transaction handlers.
+//   - Generated typed SLE models with Decode, Encode, ToMap, metadata emission,
+//     and Hash methods.
 //
-// Typed SLE structs (with Encode / Hash methods) are not yet defined here.
-// Decode-only typed views currently live under internal/tx/ledgerfields/
-// and SLE serialization goes through binarycodec against generic
-// map[string]any payloads.
+// MPToken protocol limits live in protocol; deprecated aliases remain here for
+// source compatibility.
 package entry

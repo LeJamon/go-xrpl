@@ -11,10 +11,10 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 const RateOne uint32 = 1_000_000_000
@@ -112,7 +112,7 @@ func MaximumAmount(issuance *state.MPTokenIssuanceData) uint64 {
 	if issuance.MaximumAmount != nil {
 		return *issuance.MaximumAmount
 	}
-	return entry.MaxMPTokenAmount
+	return protocol.MaxMPTokenAmount
 }
 
 func AvailableAmount(issuance *state.MPTokenIssuanceData) uint64 {
@@ -423,52 +423,35 @@ func isIOUFrozen(view state.LedgerView, account [20]byte, asset tx.Asset) bool {
 }
 
 func ValidDomain(view state.LedgerView, domainIDHex string, account [20]byte, parentCloseTime uint32) ter.Result {
-	domainBytes, err := hex.DecodeString(domainIDHex)
-	if err != nil || len(domainBytes) != 32 {
+	domainID, ok := decodeDomainID(domainIDHex)
+	if !ok {
 		return ter.TefINTERNAL
 	}
-	var domainID [32]byte
-	copy(domainID[:], domainBytes)
-	raw, err := view.Read(keylet.PermissionedDomainByID(domainID))
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if raw == nil {
-		return ter.TecOBJECT_NOT_FOUND
-	}
-	domain, err := state.ParsePermissionedDomain(raw)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	foundExpired := false
-	for _, accepted := range domain.AcceptedCredentials {
-		credentialRaw, err := view.Read(keylet.Credential(account, accepted.Issuer, accepted.CredentialType))
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if credentialRaw == nil {
-			continue
-		}
-		credentialEntry, err := credential.ParseCredentialEntry(credentialRaw)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if credential.CheckCredentialExpired(credentialEntry, parentCloseTime) {
-			foundExpired = true
-			continue
-		}
-		if credentialEntry.IsAccepted() {
-			return ter.TesSUCCESS
-		}
-	}
-	if foundExpired {
-		return ter.TecEXPIRED
-	}
-	return ter.TecNO_AUTH
+	return credential.ValidDomain(view, domainID, account, parentCloseTime)
 }
 
 func validDomain(view state.LedgerView, domainIDHex string, account [20]byte, parentCloseTime uint32) ter.Result {
 	return ValidDomain(view, domainIDHex, account, parentCloseTime)
+}
+
+// VerifyValidDomain is the apply-time counterpart to ValidDomain. It deletes
+// expired credentials before deciding whether the account remains authorized.
+func VerifyValidDomain(ctx *tx.ApplyContext, domainIDHex string, account [20]byte) ter.Result {
+	domainID, ok := decodeDomainID(domainIDHex)
+	if !ok {
+		return ter.TefINTERNAL
+	}
+	return credential.VerifyValidDomain(ctx, account, domainID)
+}
+
+func decodeDomainID(domainIDHex string) ([32]byte, bool) {
+	var domainID [32]byte
+	domainBytes, err := hex.DecodeString(domainIDHex)
+	if err != nil || len(domainBytes) != len(domainID) {
+		return domainID, false
+	}
+	copy(domainID[:], domainBytes)
+	return domainID, true
 }
 
 func CanTrade(view state.LedgerView, id [24]byte) ter.Result {
@@ -618,11 +601,11 @@ func referencedAsset(view state.LedgerView, issuance *state.MPTokenIssuanceData)
 	if err != nil || raw == nil {
 		return tx.Asset{}, ter.TefINTERNAL
 	}
-	typeCode, err := state.GetLedgerEntryType(raw)
+	entryType, err := state.DecodeType(raw)
 	if err != nil {
 		return tx.Asset{}, ter.TefINTERNAL
 	}
-	switch entry.Type(typeCode) {
+	switch entryType {
 	case entry.TypeMPToken:
 		holding, err := state.ParseMPToken(raw)
 		if err != nil {
@@ -650,7 +633,7 @@ func vaultAsset(view state.LedgerView, vaultID [32]byte) (tx.Asset, ter.Result) 
 	if err != nil || raw == nil {
 		return tx.Asset{}, ter.TefINTERNAL
 	}
-	decoded := new(ledgerfields.Vault)
+	decoded := new(entry.Vault)
 	if err := decoded.Decode(raw); err != nil {
 		return tx.Asset{}, ter.TefINTERNAL
 	}

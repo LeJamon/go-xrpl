@@ -18,20 +18,20 @@ import (
 // Reference: rippled/src/xrpld/rpc/handlers/LedgerHeader.cpp
 // doLedgerHeader calls lookupLedger, serializes the header via addRaw,
 // and returns both ledger_data (binary hex) and a ledger JSON object.
-type LedgerHeaderMethod struct{ BaseHandler }
+type LedgerHeaderMethod struct{ baseHandler }
 
 func (m *LedgerHeaderMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 	}
 
-	if err := ParseParams(params, &request); err != nil {
+	if err := parseParams(params, &request); err != nil {
 		return nil, err
 	}
 
 	// Resolve the target ledger through the shared lookup (rippled
 	// RPC::lookupLedger): defaults to current, threads ledger_hash, and emits
 	// rippled's ledgerHashMalformed / ledgerIndexMalformed / ledgerNotFound.
-	targetLedger, validated, lerr := LookupLedger(ctx, params)
+	targetLedger, validated, lerr := lookupLedger(ctx, params)
 	if lerr != nil {
 		return nil, lerr
 	}
@@ -56,23 +56,23 @@ func (m *LedgerHeaderMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	//   uint32 seq, uint64 drops, hash256 parentHash, hash256 txHash,
 	//   hash256 accountHash, uint32 parentCloseTime, uint32 closeTime,
 	//   uint8 closeTimeResolution, uint8 closeFlags
+	txHash, stateHash := ledgerMapHashes(targetLedger)
 	ledgerData := ledgerheader.AddRaw(ledgerheader.LedgerHeader{
 		LedgerIndex:         targetLedger.Sequence(),
 		ParentCloseTime:     protocol.FromRippleTime(uint32(max(targetLedger.ParentCloseTime(), 0))),
 		ParentHash:          targetLedger.ParentHash(),
-		TxHash:              targetLedger.TxMapHash(),
-		AccountHash:         targetLedger.StateMapHash(),
+		TxHash:              txHash,
+		AccountHash:         stateHash,
 		Drops:               targetLedger.TotalDrops(),
 		CloseFlags:          targetLedger.CloseFlags(),
-		CloseTimeResolution: targetLedger.CloseTimeResolution(),
+		CloseTimeResolution: uint8(targetLedger.CloseTimeResolution()),
 		CloseTime:           protocol.FromRippleTime(uint32(max(targetLedger.CloseTime(), 0))),
 	}, false)
 	response["ledger_data"] = strings.ToUpper(hex.EncodeToString(ledgerData))
 
 	// Build the nested "ledger" JSON object (equivalent to addJson with options=0).
 	// Reference: rippled LedgerToJson.cpp fillJson()
-	ledgerObj := buildLedgerHeaderJSON(targetLedger, closed)
-	response["ledger"] = ledgerObj
+	response["ledger"] = buildLedgerHeaderJSON(targetLedger, closed)
 
 	return response, nil
 }
@@ -106,8 +106,7 @@ func buildLedgerSummaryJSON(lr types.LedgerReader, closed bool, apiVersion int) 
 	ledgerObj["closed"] = true
 
 	hash := lr.Hash()
-	txHash := lr.TxMapHash()
-	stateHash := lr.StateMapHash()
+	txHash, stateHash := ledgerMapHashes(lr)
 
 	ledgerObj["ledger_hash"] = FormatLedgerHash(hash)
 	ledgerObj["transaction_hash"] = FormatLedgerHash(txHash)
@@ -126,7 +125,7 @@ func buildLedgerSummaryJSON(lr types.LedgerReader, closed bool, apiVersion int) 
 	// close_time_human and close_time_iso only when closeTime > 0
 	if ct > 0 {
 		closeTimeUTC := protocol.FromRippleTime(uint32(ct))
-		ledgerObj["close_time_human"] = closeTimeUTC.Format("2006-Jan-02 15:04:05.000000000 UTC")
+		ledgerObj["close_time_human"] = protocol.FormatCloseTimeHuman(closeTimeUTC)
 		ledgerObj["close_time_iso"] = protocol.FormatCloseTimeISO(closeTimeUTC)
 
 		// close_time_estimated only when there was no consensus on close time

@@ -10,49 +10,65 @@
 package cluster
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/crypto"
 )
 
-// Member is one entry in the cluster registry. Identity is the raw
-// 33-byte node public key (post-addresscodec decode).
+// Identity is a fixed-width raw NodePublic key.
+type Identity [addresscodec.NodePublicKeyLength]byte
+
+// Member is one entry in the cluster registry.
 type Member struct {
-	Identity   []byte
+	Identity   Identity
 	Name       string
 	LoadFee    uint32
 	ReportTime time.Time
 }
 
-// Registry is a thread-safe set of cluster members keyed by raw
-// NodePublic bytes.
+// Registry is a thread-safe set of cluster members. Its zero value is ready to
+// use. Nil receivers behave as empty registries; mutating them fails.
 type Registry struct {
 	mu    sync.RWMutex
-	nodes map[string]Member
+	nodes map[Identity]Member
 }
 
 // New returns an empty registry.
 func New() *Registry {
-	return &Registry{nodes: make(map[string]Member)}
+	return new(Registry)
 }
 
-// Member looks up an entry by raw NodePublic bytes. A nil receiver and
-// an empty key both yield (zero, false). A member with an empty Name
-// still returns ok=true.
+func identityFromBytes(raw []byte) (Identity, bool) {
+	if crypto.PublicKeyType(raw) == crypto.KeyTypeUnknown {
+		return Identity{}, false
+	}
+	var identity Identity
+	copy(identity[:], raw)
+	return identity, true
+}
+
+// Member looks up an entry by raw NodePublic bytes. Invalid identities and nil
+// receivers yield (zero, false). A member with an empty Name still returns
+// ok=true.
 func (r *Registry) Member(identity []byte) (Member, bool) {
-	if r == nil || len(identity) == 0 {
+	if r == nil {
+		return Member{}, false
+	}
+	key, valid := identityFromBytes(identity)
+	if !valid {
 		return Member{}, false
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	m, ok := r.nodes[string(identity)]
+	m, ok := r.nodes[key]
 	return m, ok
 }
 
@@ -66,22 +82,25 @@ func (r *Registry) Size() int {
 	return len(r.nodes)
 }
 
-// ForEach invokes fn once per member, in deterministic order (sorted
-// by raw identity bytes). The read lock is held for the whole walk so
-// fn must not call back into Update/Load.
+// ForEach invokes fn once per member from a stable snapshot, in raw identity
+// byte order. Callbacks run without the registry lock and may call back into r;
+// their updates are visible to later walks, not the current one.
 func (r *Registry) ForEach(fn func(Member)) {
 	if r == nil || fn == nil {
 		return
 	}
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	keys := make([]string, 0, len(r.nodes))
-	for k := range r.nodes {
-		keys = append(keys, k)
+	members := make([]Member, 0, len(r.nodes))
+	for _, member := range r.nodes {
+		members = append(members, member)
 	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		fn(r.nodes[k])
+	r.mu.RUnlock()
+
+	slices.SortFunc(members, func(a, b Member) int {
+		return bytes.Compare(a.Identity[:], b.Identity[:])
+	})
+	for _, member := range members {
+		fn(member)
 	}
 }
 
@@ -92,13 +111,16 @@ func (r *Registry) ForEach(fn func(Member)) {
 //   - a freshly-empty name preserves the previously-recorded name;
 //   - the first insert always succeeds.
 func (r *Registry) Update(identity []byte, name string, loadFee uint32, reportTime time.Time) bool {
-	if len(identity) == 0 {
+	if r == nil {
+		return false
+	}
+	key, valid := identityFromBytes(identity)
+	if !valid {
 		return false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	key := string(identity)
 	if prev, exists := r.nodes[key]; exists {
 		if !reportTime.After(prev.ReportTime) {
 			return false
@@ -107,8 +129,11 @@ func (r *Registry) Update(identity []byte, name string, loadFee uint32, reportTi
 			name = prev.Name
 		}
 	}
+	if r.nodes == nil {
+		r.nodes = make(map[Identity]Member)
+	}
 	r.nodes[key] = Member{
-		Identity:   append([]byte(nil), identity...),
+		Identity:   key,
 		Name:       name,
 		LoadFee:    loadFee,
 		ReportTime: reportTime,
@@ -165,6 +190,12 @@ func (r *Registry) Load(entries []string) error {
 		idBytes, err := addresscodec.DecodeNodePublicKey(groups[1])
 		if err != nil {
 			return fmt.Errorf("cluster_nodes[%d]: invalid node identity %q: %w", i, groups[1], err)
+		}
+		if _, valid := identityFromBytes(idBytes); !valid {
+			return fmt.Errorf(
+				"cluster_nodes[%d]: invalid node identity %q: expected a %d-byte public key",
+				i, groups[1], addresscodec.NodePublicKeyLength,
+			)
 		}
 		if _, dup := r.Member(idBytes); dup {
 			continue

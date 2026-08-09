@@ -6,30 +6,22 @@ import (
 	"errors"
 
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb/internal/sqlutil"
 )
 
 // transactionRepository implements the transactionRepository interface for PostgreSQL
 type transactionRepository struct {
-	db *sql.DB
-	tx *sql.Tx // Optional transaction context
+	executor executor
 }
 
 // newTransactionRepository creates a new PostgreSQL transaction repository
-func newTransactionRepository(db *sql.DB) *transactionRepository {
-	return &transactionRepository{db: db}
-}
-
-// newTransactionRepositoryWithTx creates a new PostgreSQL transaction repository within a transaction
-func newTransactionRepositoryWithTx(tx *sql.Tx) *transactionRepository {
-	return &transactionRepository{tx: tx}
+func newTransactionRepository(executor executor) *transactionRepository {
+	return &transactionRepository{executor: executor}
 }
 
 // getExecutor returns the appropriate executor (db or tx)
 func (r *transactionRepository) getExecutor() executor {
-	if r.tx != nil {
-		return r.tx
-	}
-	return r.db
+	return r.executor
 }
 
 // GetTransactionsMinLedgerSeq returns the lowest ledger sequence present in the
@@ -47,17 +39,6 @@ func (r *transactionRepository) GetTransactionsMinLedgerSeq(ctx context.Context)
 
 	result := relationaldb.LedgerIndex(seq.Int64)
 	return &result, nil
-}
-
-// GetTransactionCount returns the number of rows in the transactions table.
-func (r *transactionRepository) GetTransactionCount(ctx context.Context) (int64, error) {
-	var count int64
-	err := r.getExecutor().QueryRowContext(ctx, "SELECT COUNT(*) FROM transactions").Scan(&count)
-	if err != nil {
-		return 0, relationaldb.NewQueryError("get_transaction_count", "failed to count transactions", err)
-	}
-
-	return count, nil
 }
 
 // GetTransaction returns the transaction with the given hash. When ledgerRange is
@@ -98,7 +79,9 @@ func (r *transactionRepository) GetTransaction(ctx context.Context, hash relatio
 		return nil, relationaldb.TxSearchUnknown, relationaldb.NewQueryError("get_transaction", "failed to query transaction", err)
 	}
 
-	copy(info.Hash[:], hashBytes)
+	if err := sqlutil.CopyExact(info.Hash[:], hashBytes, "trans_id"); err != nil {
+		return nil, relationaldb.TxSearchUnknown, relationaldb.NewDataError("get_transaction", "malformed transaction hash", err)
+	}
 	if txnMeta.Valid {
 		info.TxnMeta = []byte(txnMeta.String)
 	}
@@ -132,7 +115,9 @@ func (r *transactionRepository) GetTxHistory(ctx context.Context, startIndex rel
 			return nil, relationaldb.NewQueryError("get_tx_history", "failed to scan row", err)
 		}
 
-		copy(info.Hash[:], hashBytes)
+		if err := sqlutil.CopyExact(info.Hash[:], hashBytes, "trans_id"); err != nil {
+			return nil, relationaldb.NewDataError("get_tx_history", "malformed transaction hash", err)
+		}
 		if txnMeta.Valid {
 			info.TxnMeta = []byte(txnMeta.String)
 		}
@@ -147,7 +132,7 @@ func (r *transactionRepository) GetTxHistory(ctx context.Context, startIndex rel
 }
 
 // SaveTransaction inserts or updates a transaction row (upsert on trans_id).
-func (r *transactionRepository) SaveTransaction(ctx context.Context, txInfo *relationaldb.TransactionInfo) error {
+func (r *transactionRepository) SaveTransaction(ctx context.Context, txInfo relationaldb.TransactionInfo) error {
 	query := `INSERT INTO transactions (trans_id, ledger_seq, status, raw_txn, txn_meta)
 			  VALUES ($1, $2, $3, $4, $5)
 			  ON CONFLICT (trans_id) DO UPDATE SET
@@ -195,17 +180,4 @@ func (r *transactionRepository) DeleteTransactionsBeforeLedgerSeq(ctx context.Co
 	}
 
 	return nil
-}
-
-// GetKBUsedTransaction returns the on-disk size of the transactions table in KB.
-func (r *transactionRepository) GetKBUsedTransaction(ctx context.Context) (uint32, error) {
-	var size int64
-	err := r.getExecutor().QueryRowContext(ctx,
-		"SELECT pg_total_relation_size('transactions') + pg_total_relation_size('account_transactions')").Scan(&size)
-
-	if err != nil {
-		return 0, relationaldb.NewQueryError("get_kb_used_transaction", "failed to get transaction tables size", err)
-	}
-
-	return uint32(size / 1024), nil
 }

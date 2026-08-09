@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,7 +33,7 @@ func observeBootstrapRate(t *testing.T, d *Discovery, address string, rate uint6
 	elapsed := bootstrapSampleAge
 	bytesRead := rate * uint64(elapsed) / uint64(time.Second)
 	return observeBootstrapProgress(t, d, address, bootstrapFrameProgress{
-		messageType: TypeManifests,
+		messageType: message.TypeManifests,
 		wireSize:    bootstrapSourceTestWireSize,
 		bytesRead:   bytesRead,
 		elapsed:     elapsed,
@@ -102,7 +103,7 @@ func TestDiscoveryBootstrapPartialFailureExtendsCooldown(t *testing.T) {
 	observeBootstrapRate(t, d, address, 360_735)
 
 	now = now.Add(9 * time.Minute)
-	d.delayBootstrapRetry(address, bootstrapPartialRetry)
+	d.delayConnectRetry(address, bootstrapPartialRetry)
 	now = now.Add(time.Minute)
 	assert.Empty(t, d.selectPeersToConnect(1, true), "the original cooldown expired but the partial failure extended it")
 	assert.True(t, d.bootstrapSourceSummary().allUnviable())
@@ -124,7 +125,7 @@ func TestDiscoveryBootstrapSlightlySlowProjectionIsNotPermanent(t *testing.T) {
 	elapsed := 20 * time.Second
 	bytesRead := uint64(float64(bootstrapSourceTestWireSize) * float64(elapsed) / float64(111*time.Second))
 	observation := observeBootstrapProgress(t, d, address, bootstrapFrameProgress{
-		messageType: TypeManifests,
+		messageType: message.TypeManifests,
 		wireSize:    bootstrapSourceTestWireSize,
 		bytesRead:   bytesRead,
 		elapsed:     elapsed,

@@ -18,7 +18,7 @@ func validMultisignedTxJSON() map[string]any {
 	return map[string]any{
 		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"TransactionType": "Payment",
-		"Destination":     "rPMh7Pi9ct699iZUTWzJaUOVnFNaREiPik",
+		"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 		"Amount":          "1000000",
 		"Fee":             "12",
 		"Sequence":        float64(1),
@@ -26,7 +26,7 @@ func validMultisignedTxJSON() map[string]any {
 		"Signers": []any{
 			map[string]any{
 				"Signer": map[string]any{
-					"Account":       "rPMh7Pi9ct699iZUTWzJaUOVnFNaREiPik",
+					"Account":       "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 					"SigningPubKey": "0379F17CFA0FFD7518181594BE69FE9A10C2089E0FF0C4AE1DEF230657210000ED",
 					"TxnSignature":  "3045022100DEADBEEF",
 				},
@@ -81,8 +81,6 @@ func TestSubmitMultisigned_InvalidSequenceType(t *testing.T) {
 	assert.Contains(t, rpcErr.Message, "tx_json.Sequence")
 }
 
-// TestSubmitMultisigned_FeeNotPresent verifies that missing Fee is rejected.
-// Matches rippled: "Invalid Fee field.  Fees must be specified in XRP."
 func TestSubmitMultisigned_FeeNotPresent(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
 	services := newSubmitTestServices(mock)
@@ -96,12 +94,10 @@ func TestSubmitMultisigned_FeeNotPresent(t *testing.T) {
 	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
-	assert.Equal(t, "Invalid Fee field.  Fees must be specified in XRP.", rpcErr.Message)
+	assert.Equal(t, "Missing field 'tx_json.Fee'.", rpcErr.Message)
 }
 
-// TestSubmitMultisigned_FeeNotString verifies that a non-string Fee is rejected.
-// Fee must be a string of drops.
-func TestSubmitMultisigned_FeeNotString(t *testing.T) {
+func TestSubmitMultisigned_FeeNumeric(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
 	services := newSubmitTestServices(mock)
 
@@ -109,12 +105,13 @@ func TestSubmitMultisigned_FeeNotString(t *testing.T) {
 	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
 
 	txJSON := validMultisignedTxJSON()
-	txJSON["Fee"] = 12 // numeric, not string
+	txJSON["Fee"] = 12
 
-	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
-	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
-	assert.Equal(t, "Invalid Fee field.  Fees must be specified in XRP.", rpcErr.Message)
+	result, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
+	require.Nil(t, rpcErr)
+	require.NotNil(t, result)
+	response := result.(map[string]any)
+	assert.Equal(t, "12", response["tx_json"].(map[string]any)["Fee"])
 }
 
 // TestSubmitMultisigned_FeeZero verifies that Fee "0" is rejected.
@@ -166,7 +163,7 @@ func TestSubmitMultisigned_FeeNotNumericString(t *testing.T) {
 	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
-	assert.Equal(t, "Invalid Fee field.  Fees must be specified in XRP.", rpcErr.Message)
+	assert.Equal(t, "Field 'tx_json.Fee' has invalid data.", rpcErr.Message)
 }
 
 // TestSubmitMultisigned_TxnSignaturePresent verifies that a TxnSignature field on the
@@ -226,7 +223,7 @@ func TestSubmitMultisigned_DuplicateSigners(t *testing.T) {
 	handler := &handlers.SubmitMultisignedMethod{}
 	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
 
-	dupAccount := "rPMh7Pi9ct699iZUTWzJaUOVnFNaREiPik"
+	dupAccount := "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
 	txJSON := validMultisignedTxJSON()
 	txJSON["Signers"] = []any{
 		map[string]any{

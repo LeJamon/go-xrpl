@@ -2,6 +2,7 @@ package adaptor
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -49,6 +50,13 @@ func TestAdg_GetValidatedLedgerHash(t *testing.T) {
 	a2 := newTestAdaptor(t)
 	h := a2.GetValidatedLedgerHash()
 	assert.NotEqual(t, consensus.LedgerID{}, h)
+}
+
+func TestAdaptorHasTxWithoutLedgerService(t *testing.T) {
+	a := New(Config{})
+	exists, err := a.HasTx(consensus.TxID{0x01})
+	require.NoError(t, err)
+	assert.False(t, exists)
 }
 
 func TestAdg_BuildLedger(t *testing.T) {
@@ -125,14 +133,14 @@ func TestAdg_GetPendingTxs(t *testing.T) {
 	_ = txs
 }
 
-func TestAdg_SetOnTxSetBuilt(t *testing.T) {
-	a := newTestAdaptor(t)
-
+func TestAdg_OnTxSetBuilt(t *testing.T) {
 	var calls int
 	var calledID consensus.TxSetID
-	a.SetOnTxSetBuilt(func(id consensus.TxSetID) {
-		calls++
-		calledID = id
+	a := New(Config{
+		OnTxSetBuilt: func(id consensus.TxSetID) {
+			calls++
+			calledID = id
+		},
 	})
 
 	// The empty set (all-zero ID) is never announced — it recurs every
@@ -151,10 +159,44 @@ func TestAdg_SetOnTxSetBuilt(t *testing.T) {
 	_, err = a.BuildTxSet([][]byte{blob})
 	require.NoError(t, err)
 	assert.Equal(t, 1, calls, "same set hash must be announced at most once")
+}
 
-	a.SetOnTxSetBuilt(nil)
-	_, err = a.BuildTxSet(nil)
-	assert.NoError(t, err)
+func TestAdg_OnTxSetBuiltConcurrentUniqueSets(t *testing.T) {
+	const setCount = 64
+
+	announced := make(chan consensus.TxSetID, setCount)
+	a := New(Config{
+		OnTxSetBuilt: func(id consensus.TxSetID) {
+			announced <- id
+		},
+	})
+
+	var wg sync.WaitGroup
+	errs := make(chan error, setCount)
+	for i := range setCount {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			blob := []byte{
+				0x12, 0x00, 0x34, 0x01, 0x02, 0x03,
+				0x04, 0x05, 0x06, 0x07, byte(i >> 8), byte(i),
+			}
+			_, err := a.BuildTxSet([][]byte{blob})
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	close(announced)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	ids := make(map[consensus.TxSetID]struct{}, setCount)
+	for id := range announced {
+		ids[id] = struct{}{}
+	}
+	assert.Len(t, ids, setCount)
 }
 
 func TestAdg_GetValidatorSigningKey(t *testing.T) {
@@ -194,18 +236,38 @@ func TestAdg_GetFeeVote(t *testing.T) {
 		ReserveIncrement: 500_000,
 	}, nil)
 
-	fv := a.GetFeeVote()
+	fv := a.GetFeeVote(nil)
 	assert.Equal(t, uint64(42), fv.BaseFee)
 	assert.Equal(t, uint64(1_000_000), fv.ReserveBase)
 	assert.Equal(t, uint64(500_000), fv.ReserveIncrement)
+	assert.True(t, fv.HasBaseFee())
+	assert.True(t, fv.HasReserveBase())
+	assert.True(t, fv.HasReserveIncrement())
 
 	// Default zero config falls back to rippled defaults.
 	a2 := newTestAdaptorWithConfig(t, FeeVoteStance{}, nil)
-	fv2 := a2.GetFeeVote()
+	fv2 := a2.GetFeeVote(nil)
 	d := defaultFeeVote()
 	assert.Equal(t, d.BaseFee, fv2.BaseFee)
 	assert.Equal(t, uint64(d.ReserveBase), fv2.ReserveBase)
 	assert.Equal(t, uint64(d.ReserveIncrement), fv2.ReserveIncrement)
+
+	explicitZero := newTestAdaptorWithConfig(t, FeeVoteStance{
+		BaseFeeSet:          true,
+		ReserveBaseSet:      true,
+		ReserveIncrementSet: true,
+	}, nil).GetFeeVote(nil)
+	assert.Zero(t, explicitZero.BaseFee)
+	assert.Zero(t, explicitZero.ReserveBase)
+	assert.Zero(t, explicitZero.ReserveIncrement)
+	assert.True(t, explicitZero.HasBaseFee())
+	assert.True(t, explicitZero.HasReserveBase())
+	assert.True(t, explicitZero.HasReserveIncrement())
+
+	current := a2.GetFeeVote(WrapLedger(a2.ledgerService.GetClosedLedger()))
+	assert.False(t, current.HasBaseFee())
+	assert.False(t, current.HasReserveBase())
+	assert.False(t, current.HasReserveIncrement())
 }
 
 func TestAdg_GetAmendmentVote(t *testing.T) {

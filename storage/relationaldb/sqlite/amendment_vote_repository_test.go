@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
@@ -11,6 +12,8 @@ func TestAmendmentVoteRepository_RoundTrip(t *testing.T) {
 	rm := setupTestDB(t)
 	repo := rm.Amendment()
 	ctx := context.Background()
+	alpha := strings.Repeat("A", 64)
+	beta := strings.Repeat("B", 64)
 
 	// Empty to start.
 	got, err := repo.LoadAmendmentVotes(ctx)
@@ -22,10 +25,10 @@ func TestAmendmentVoteRepository_RoundTrip(t *testing.T) {
 	}
 
 	// Save an upvote and a veto.
-	if err := repo.SaveAmendmentVote(ctx, &relationaldb.AmendmentVoteRecord{Amendment: "AA", Name: "Alpha", Vetoed: false}); err != nil {
+	if err := repo.SaveAmendmentVote(ctx, relationaldb.AmendmentVoteRecord{Amendment: alpha, Name: "Alpha", Vetoed: false}); err != nil {
 		t.Fatalf("save upvote: %v", err)
 	}
-	if err := repo.SaveAmendmentVote(ctx, &relationaldb.AmendmentVoteRecord{Amendment: "BB", Name: "Beta", Vetoed: true}); err != nil {
+	if err := repo.SaveAmendmentVote(ctx, relationaldb.AmendmentVoteRecord{Amendment: beta, Name: "Beta", Vetoed: true}); err != nil {
 		t.Fatalf("save veto: %v", err)
 	}
 
@@ -40,15 +43,14 @@ func TestAmendmentVoteRepository_RoundTrip(t *testing.T) {
 	for _, r := range got {
 		byID[r.Amendment] = r
 	}
-	if byID["AA"].Vetoed || byID["AA"].Name != "Alpha" {
-		t.Fatalf("AA roundtrip wrong: %+v", byID["AA"])
+	if byID[alpha].Vetoed || byID[alpha].Name != "Alpha" {
+		t.Fatalf("alpha roundtrip wrong: %+v", byID[alpha])
 	}
-	if !byID["BB"].Vetoed {
-		t.Fatalf("BB should be vetoed: %+v", byID["BB"])
+	if !byID[beta].Vetoed {
+		t.Fatalf("beta should be vetoed: %+v", byID[beta])
 	}
 
-	// Upsert: flip AA to vetoed.
-	if err := repo.SaveAmendmentVote(ctx, &relationaldb.AmendmentVoteRecord{Amendment: "AA", Name: "Alpha", Vetoed: true}); err != nil {
+	if err := repo.SaveAmendmentVote(ctx, relationaldb.AmendmentVoteRecord{Amendment: alpha, Name: "Alpha", Vetoed: true}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	got, _ = repo.LoadAmendmentVotes(ctx)
@@ -56,12 +58,11 @@ func TestAmendmentVoteRepository_RoundTrip(t *testing.T) {
 		t.Fatalf("upsert must not duplicate; got %d rows", len(got))
 	}
 
-	// Delete BB.
-	if err := repo.DeleteAmendmentVote(ctx, "BB"); err != nil {
+	if err := repo.DeleteAmendmentVote(ctx, beta); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	got, _ = repo.LoadAmendmentVotes(ctx)
-	if len(got) != 1 || got[0].Amendment != "AA" {
-		t.Fatalf("after delete expected only AA, got %+v", got)
+	if len(got) != 1 || got[0].Amendment != alpha {
+		t.Fatalf("after delete expected only alpha, got %+v", got)
 	}
 }

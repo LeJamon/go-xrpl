@@ -54,60 +54,20 @@ type chunkedLivenessConn struct {
 	writes       [][]byte
 }
 
-type pacedManifestConn struct {
-	permit   chan struct{}
-	observed chan []byte
-	resume   chan struct{}
+type partialWriteConn struct {
+	chunkedLivenessConn
+	limit int
+	wire  []byte
 }
 
-func newPacedManifestConn() *pacedManifestConn {
-	return &pacedManifestConn{
-		permit:   make(chan struct{}),
-		observed: make(chan []byte),
-		resume:   make(chan struct{}),
-	}
+func (c *partialWriteConn) Write(src []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.writeCalls++
+	n := min(c.limit, len(src))
+	c.wire = append(c.wire, src[:n]...)
+	return n, nil
 }
-
-func (*pacedManifestConn) Read([]byte) (int, error) { return 0, io.EOF }
-
-func (c *pacedManifestConn) Write(src []byte) (int, error) {
-	<-c.permit
-	c.observed <- append([]byte(nil), src...)
-	<-c.resume
-	return len(src), nil
-}
-
-func (c *pacedManifestConn) nextWrite(t *testing.T) []byte {
-	t.Helper()
-	select {
-	case c.permit <- struct{}{}:
-	case <-time.After(time.Second):
-		t.Fatal("writer did not request the next frame")
-	}
-	select {
-	case data := <-c.observed:
-		return data
-	case <-time.After(time.Second):
-		t.Fatal("writer did not emit the permitted frame")
-		return nil
-	}
-}
-
-func (c *pacedManifestConn) resumeWrite(t *testing.T) {
-	t.Helper()
-	select {
-	case c.resume <- struct{}{}:
-	case <-time.After(time.Second):
-		t.Fatal("writer did not finish the current frame")
-	}
-}
-
-func (*pacedManifestConn) Close() error                     { return nil }
-func (*pacedManifestConn) LocalAddr() net.Addr              { return livenessAddr("local") }
-func (*pacedManifestConn) RemoteAddr() net.Addr             { return livenessAddr("remote") }
-func (*pacedManifestConn) SetDeadline(time.Time) error      { return nil }
-func (*pacedManifestConn) SetReadDeadline(time.Time) error  { return nil }
-func (*pacedManifestConn) SetWriteDeadline(time.Time) error { return nil }
 
 func (c *chunkedLivenessConn) Read(dst []byte) (int, error) {
 	c.mu.Lock()
@@ -145,7 +105,7 @@ func (c *chunkedLivenessConn) Write(src []byte) (int, error) {
 	return len(src), nil
 }
 
-func TestPeerWriteLoopPrioritizesAcquisitionTraffic(t *testing.T) {
+func TestPeerWriteLoopPreservesReliableAdmissionOrder(t *testing.T) {
 	clock := &livenessClock{now: time.Unix(5_900, 0)}
 	conn := &chunkedLivenessConn{clock: clock}
 	peer, _ := newFrameLivenessPeer(t, clock, conn)
@@ -163,113 +123,48 @@ func TestPeerWriteLoopPrioritizesAcquisitionTraffic(t *testing.T) {
 	require.ErrorIs(t, <-done, context.Canceled)
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
-	require.Equal(t, []byte("acquisition"), conn.writes[0])
-	require.Equal(t, []byte("gossip"), conn.writes[1])
+	require.Equal(t, []byte("gossip"), conn.writes[0])
+	require.Equal(t, []byte("acquisition"), conn.writes[1])
 }
 
-func TestPeerWriteLoopPacesManifestSequenceBeyondOrdinaryQueueCapacity(t *testing.T) {
+func TestPeerWriteLoopBoundsReliableBurstBeforeBulk(t *testing.T) {
 	clock := &livenessClock{now: time.Unix(5_950, 0)}
-	conn := newPacedManifestConn()
+	conn := &chunkedLivenessConn{clock: clock}
 	peer, _ := newFrameLivenessPeer(t, clock, conn)
-	frames := make([][]byte, DefaultSendBufferSize+17)
-	for i := range frames {
-		frames[i] = []byte{0x4d, byte(i)}
+	for i := range reliableFramesPerBulkFrame + 1 {
+		require.NoError(t, peer.Send([]byte{0x52, byte(i)}))
 	}
-	require.NoError(t, peer.SendManifestFrames(frames))
-	require.NoError(t, peer.Send([]byte{0x4f, 0}))
+	require.NoError(t, peer.SendManifestFrames([][]byte{{0x42, 0}, {0x42, 1}}))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- peer.writeLoop(ctx) }()
-
-	require.Equal(t, frames[0], conn.nextWrite(t), "a queued manifest batch must start despite ordinary traffic")
-	require.NoError(t, peer.SendPriority([]byte{0x50}))
-	conn.resumeWrite(t)
-	require.Equal(t, []byte{0x50}, conn.nextWrite(t), "priority traffic must preempt an active manifest batch")
-	conn.resumeWrite(t)
-
-	manifestIndex := 1
-	ordinaryObserved := 0
-	maxOrdinaryQueue := len(peer.send)
-	for manifestIndex < len(frames) {
-		ordinarySinceManifest := 0
-	manifestBurst:
-		for {
-			data := conn.nextWrite(t)
-			require.NotEmpty(t, data)
-			switch data[0] {
-			case 0x4f:
-				require.Equal(t, byte(ordinaryObserved), data[1])
-				ordinaryObserved++
-				ordinarySinceManifest++
-				require.NoError(t, peer.Send([]byte{0x4f, byte(ordinaryObserved)}))
-				if queued := len(peer.send); queued > maxOrdinaryQueue {
-					maxOrdinaryQueue = queued
-				}
-				conn.resumeWrite(t)
-			case 0x4d:
-				require.Equal(t, frames[manifestIndex], data)
-				require.Equal(t, ordinaryFramesPerManifestChunk, ordinarySinceManifest)
-				manifestIndex++
-				conn.resumeWrite(t)
-				break manifestBurst
-			default:
-				t.Fatalf("unexpected outbound frame: %x", data)
-			}
-		}
-	}
-
-	require.Equal(t, DefaultSendBufferSize+17, manifestIndex)
-	require.Equal(t, (len(frames)-1)*ordinaryFramesPerManifestChunk, ordinaryObserved)
-	require.Less(t, maxOrdinaryQueue, DefaultSendBufferSize)
-	require.Equal(t, []byte{0x4f, byte(ordinaryObserved)}, conn.nextWrite(t))
-	conn.resumeWrite(t)
-	require.Empty(t, peer.send)
+	require.Eventually(t, func() bool {
+		conn.mu.Lock()
+		defer conn.mu.Unlock()
+		return len(conn.writes) == reliableFramesPerBulkFrame+3
+	}, time.Second, time.Millisecond)
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
-}
-
-func TestPeerWriteLoopPacesBackToBackSingleFrameManifestBatches(t *testing.T) {
-	clock := &livenessClock{now: time.Unix(5_975, 0)}
-	conn := newPacedManifestConn()
-	peer, _ := newFrameLivenessPeer(t, clock, conn)
-	firstManifest := []byte{0x4d, 0x01}
-	secondManifest := []byte{0x4d, 0x02}
-	require.NoError(t, peer.SendManifestFrames([][]byte{firstManifest}))
-	require.NoError(t, peer.SendManifestFrames([][]byte{secondManifest}))
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- peer.writeLoop(ctx) }()
-
-	require.Equal(t, firstManifest, conn.nextWrite(t))
-	require.NoError(t, peer.Send([]byte{0x4f, 0}))
-	conn.resumeWrite(t)
-
-	for i := 0; i < ordinaryFramesPerManifestChunk; i++ {
-		require.Equal(t, []byte{0x4f, byte(i)}, conn.nextWrite(t))
-		require.NoError(t, peer.Send([]byte{0x4f, byte(i + 1)}))
-		require.Len(t, peer.send, 1)
-		conn.resumeWrite(t)
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	for i := range reliableFramesPerBulkFrame {
+		require.Equal(t, []byte{0x52, byte(i)}, conn.writes[i])
 	}
-
-	require.Equal(t, secondManifest, conn.nextWrite(t))
-	conn.resumeWrite(t)
-	require.Equal(t, []byte{0x4f, ordinaryFramesPerManifestChunk}, conn.nextWrite(t))
-	conn.resumeWrite(t)
-	require.Empty(t, peer.send)
-	cancel()
-	require.ErrorIs(t, <-done, context.Canceled)
+	require.Equal(t, []byte{0x42, 0}, conn.writes[reliableFramesPerBulkFrame])
+	require.Equal(t, []byte{0x52, reliableFramesPerBulkFrame}, conn.writes[reliableFramesPerBulkFrame+1])
+	require.Equal(t, []byte{0x42, 1}, conn.writes[reliableFramesPerBulkFrame+2])
 }
 
-func TestPeerManifestQueueIsBounded(t *testing.T) {
+func TestPeerBulkSequenceQueueIsBounded(t *testing.T) {
 	peer := newLatencyTestPeer(t)
-	for i := range manifestSendBufferSize {
+	for i := range bulkSequenceBufferSize {
 		require.NoError(t, peer.SendManifestFrames([][]byte{{0x4d, byte(i)}}))
 	}
-	require.Len(t, peer.manifestSend, manifestSendBufferSize)
+	require.Equal(t, bulkSequenceBufferSize, peer.outbound.snapshot().BulkSequences)
 	require.ErrorIs(t, peer.SendManifestFrames([][]byte{{0x4d, 0xff}}), ErrSendBufferFull)
 	require.Equal(t, uint64(1), peer.SendDrops())
+	require.Equal(t, uint64(1), peer.SendDropsByClass(OutboundClassBulk))
 }
 
 func TestPeerManifestDispatchBackpressuresUntilCapacity(t *testing.T) {
@@ -281,7 +176,7 @@ func TestPeerManifestDispatchBackpressuresUntilCapacity(t *testing.T) {
 	delivered := make(chan bool, 1)
 	go func() {
 		delivered <- peer.dispatchEvent(Event{
-			Type: EventMessageReceived, PeerID: peer.ID(), MessageType: uint16(message.TypeManifests), Payload: []byte("manifest"),
+			Type: EventMessageReceived, PeerID: peer.ID(), MessageType: message.TypeManifests, Payload: []byte("manifest"),
 		})
 	}()
 	select {
@@ -294,7 +189,7 @@ func TestPeerManifestDispatchBackpressuresUntilCapacity(t *testing.T) {
 	require.True(t, <-delivered)
 	inbound := <-manifestMessages
 	assert.Equal(t, peer.ID(), inbound.PeerID)
-	assert.Equal(t, uint16(message.TypeManifests), inbound.Type)
+	assert.Equal(t, message.TypeManifests, inbound.Type)
 	assert.Equal(t, []byte("manifest"), inbound.Payload)
 }
 
@@ -311,21 +206,22 @@ func (r *countingReader) Read(dst []byte) (int, error) {
 
 func TestPeerManifestReadBudgetBoundsPayloadAllocation(t *testing.T) {
 	payload := bytes.Repeat([]byte{0x4d}, 32*1024)
+	wirePayload := opaqueTestPayload(payload)
 	frame := manifestFrame(t, payload)
-	budget := newReadBudget(int64(len(payload)))
+	budget := newReadBudget(int64(len(wirePayload)))
 
 	firstQueue := make(chan *InboundMessage, 1)
 	firstQueue <- &InboundMessage{}
 	first := newLatencyTestPeer(t)
 	first.bufReader = bufio.NewReader(bytes.NewReader(frame))
 	first.SetManifestMessages(firstQueue)
-	first.SetManifestReadBudget(budget)
+	first.SetInboundReadBudget(budget)
 	firstDone := make(chan error, 1)
 	go func() { firstDone <- first.readLoop(context.Background()) }()
 	require.Eventually(t, func() bool {
 		budget.mu.Lock()
 		defer budget.mu.Unlock()
-		return budget.used == int64(len(payload))
+		return budget.used == int64(len(wirePayload))
 	}, time.Second, time.Millisecond)
 
 	secondReader := &countingReader{reader: bytes.NewReader(frame)}
@@ -333,7 +229,7 @@ func TestPeerManifestReadBudgetBoundsPayloadAllocation(t *testing.T) {
 	second := newLatencyTestPeer(t)
 	second.bufReader = bufio.NewReader(secondReader)
 	second.SetManifestMessages(secondQueue)
-	second.SetManifestReadBudget(budget)
+	second.SetInboundReadBudget(budget)
 	secondDone := make(chan error, 1)
 	go func() { secondDone <- second.readLoop(context.Background()) }()
 
@@ -341,9 +237,14 @@ func TestPeerManifestReadBudgetBoundsPayloadAllocation(t *testing.T) {
 	time.Sleep(25 * time.Millisecond)
 	require.Less(t, secondReader.read.Load(), int64(len(frame)))
 
-	<-firstQueue
+	queued := <-firstQueue
+	require.NoError(t, queued.Close())
+	firstInbound := <-firstQueue
+	require.NoError(t, firstInbound.Close())
 	require.Eventually(t, func() bool { return secondReader.read.Load() == int64(len(frame)) }, time.Second, time.Millisecond)
-	require.Equal(t, payload, (<-secondQueue).Payload)
+	secondInbound := <-secondQueue
+	require.Equal(t, wirePayload, secondInbound.Payload)
+	require.NoError(t, secondInbound.Close())
 	require.ErrorIs(t, <-firstDone, io.EOF)
 	require.ErrorIs(t, <-secondDone, io.EOF)
 }
@@ -391,9 +292,9 @@ func newFrameLivenessPeer(t *testing.T, clock *livenessClock, conn net.Conn) (*P
 
 func manifestFrame(t *testing.T, payload []byte) []byte {
 	t.Helper()
-	var frame bytes.Buffer
-	require.NoError(t, message.WriteMessage(&frame, message.TypeManifests, payload))
-	return frame.Bytes()
+	frame, err := message.BuildWireMessage(message.TypeManifests, opaqueTestPayload(payload))
+	require.NoError(t, err)
+	return frame
 }
 
 func TestPeerReadLoopAllowsProgressBeyondIdleInterval(t *testing.T) {
@@ -418,8 +319,8 @@ func TestPeerReadLoopAllowsProgressBeyondIdleInterval(t *testing.T) {
 	assert.True(t, errors.Is(err, io.EOF))
 	require.Len(t, events, 1)
 	event := <-events
-	assert.Equal(t, uint16(message.TypeManifests), event.MessageType)
-	assert.Equal(t, []byte("manifest"), event.Payload)
+	assert.Equal(t, message.TypeManifests, event.MessageType)
+	assert.Equal(t, opaqueTestPayload([]byte("manifest")), event.Payload)
 	assert.Equal(t, 12*time.Second, clock.current().Sub(time.Unix(1_000, 0)))
 	require.GreaterOrEqual(t, len(conn.deadlines), 4)
 	for i := 1; i < 4; i++ {
@@ -453,8 +354,8 @@ func TestPeerReadLoopReportsPartialFrameProgress(t *testing.T) {
 	conn := &chunkedLivenessConn{
 		clock: clock,
 		steps: []connReadStep{
-			{data: frame[:HeaderSizeUncompressed]},
-			{after: 2 * time.Second, data: frame[HeaderSizeUncompressed : HeaderSizeUncompressed+3], err: io.ErrUnexpectedEOF},
+			{data: frame[:message.HeaderSizeUncompressed]},
+			{after: 2 * time.Second, data: frame[message.HeaderSizeUncompressed : message.HeaderSizeUncompressed+3], err: io.ErrUnexpectedEOF},
 		},
 	}
 	peer, _ := newFrameLivenessPeer(t, clock, conn)
@@ -466,8 +367,9 @@ func TestPeerReadLoopReportsPartialFrameProgress(t *testing.T) {
 	var frameErr *FrameReadError
 	require.ErrorAs(t, err, &frameErr)
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
-	assert.Equal(t, TypeManifests, frameErr.MessageType)
-	assert.Equal(t, uint32(len(payload)), frameErr.WireSize)
+	require.ErrorIs(t, err, message.ErrTruncatedMessage)
+	assert.Equal(t, message.TypeManifests, frameErr.MessageType)
+	assert.Equal(t, uint32(len(opaqueTestPayload(payload))), frameErr.WireSize)
 	assert.False(t, frameErr.Compressed)
 	assert.Equal(t, uint64(3), frameErr.BytesRead)
 	assert.Equal(t, 2*time.Second, frameErr.Elapsed)
@@ -504,7 +406,10 @@ func TestPeerReadLoopRejectsTricklePastFrameBudget(t *testing.T) {
 			{after: time.Second, data: frame[6:7]},
 			{after: time.Second, data: frame[7:8]},
 			{after: time.Second, data: frame[8:9]},
-			{after: time.Second, data: frame[9:]},
+			{after: time.Second, data: frame[9:10]},
+			{after: time.Second, data: frame[10:11]},
+			{after: time.Second, data: frame[11:12]},
+			{after: time.Second, data: frame[12:]},
 		},
 	}
 	peer, events := newFrameLivenessPeer(t, clock, conn)
@@ -523,7 +428,7 @@ func TestPeerPingTimeoutDefersOnlyForBlockingFrame(t *testing.T) {
 	peer.readPolicy.idleTimeout = readIdleDeadline
 	peer.readPolicy.minimumFrameRate = 1
 	reader := peer.newFrameProgressReader(bytes.NewReader([]byte{1, 2}), nil)
-	require.NoError(t, reader.setHeader(MessageHeader{PayloadSize: 100}))
+	require.NoError(t, reader.setHeader(message.Header{PayloadSize: 100}))
 
 	clock.advance(time.Second)
 	buf := make([]byte, 1)
@@ -538,7 +443,7 @@ func TestPeerPingTimeoutDefersOnlyForBlockingFrame(t *testing.T) {
 	clock.advance(pingTimeout - time.Second)
 
 	require.NoError(t, peer.runPingTick(clock.current()))
-	assert.Empty(t, peer.send)
+	assert.Zero(t, peer.SendQueueLen())
 	reader.finish(true, clock.current())
 	require.NoError(t, peer.runPingTick(clock.current()))
 
@@ -557,7 +462,7 @@ func TestPeerPingSentBeforeFrameUsesNextFrameProgress(t *testing.T) {
 	peer.recordPingSent(8, sentAt)
 
 	reader := peer.newFrameProgressReader(bytes.NewReader([]byte{1}), nil)
-	require.NoError(t, reader.setHeader(MessageHeader{PayloadSize: 100}))
+	require.NoError(t, reader.setHeader(message.Header{PayloadSize: 100}))
 	clock.advance(time.Second)
 	_, err := reader.Read(make([]byte, 1))
 	require.NoError(t, err)
@@ -578,7 +483,7 @@ func TestPeerStoppedFrameProgressNoLongerDefersPing(t *testing.T) {
 	peer.recordPingSent(8, sentAt)
 
 	reader := peer.newFrameProgressReader(bytes.NewReader([]byte{1}), nil)
-	require.NoError(t, reader.setHeader(MessageHeader{PayloadSize: 100}))
+	require.NoError(t, reader.setHeader(message.Header{PayloadSize: 100}))
 	clock.advance(time.Second)
 	_, err := reader.Read(make([]byte, 1))
 	require.NoError(t, err)
@@ -599,7 +504,7 @@ func TestPeerCompletedFrameGraceExpiresWithoutPong(t *testing.T) {
 	peer.recordPingSent(8, sentAt)
 
 	reader := peer.newFrameProgressReader(bytes.NewReader([]byte{1}), nil)
-	require.NoError(t, reader.setHeader(MessageHeader{PayloadSize: 100}))
+	require.NoError(t, reader.setHeader(message.Header{PayloadSize: 100}))
 	clock.advance(time.Second)
 	_, err := reader.Read(make([]byte, 1))
 	require.NoError(t, err)
@@ -639,8 +544,8 @@ func TestPeerReadLoopDispatchesPongBehindSlowFrame(t *testing.T) {
 	require.Len(t, events, 2)
 	manifestEvent := <-events
 	pongEvent := <-events
-	assert.Equal(t, uint16(message.TypeManifests), manifestEvent.MessageType)
-	assert.Equal(t, uint16(message.TypePing), pongEvent.MessageType)
+	assert.Equal(t, message.TypeManifests, manifestEvent.MessageType)
+	assert.Equal(t, message.TypePing, pongEvent.MessageType)
 	decoded, err := message.Decode(message.TypePing, pongEvent.Payload)
 	require.NoError(t, err)
 	peer.OnPong(decoded.(*message.Ping).Seq, clock.current())
@@ -656,7 +561,7 @@ func TestPeerConsecutiveFramesDeferPingWithinProgressBudget(t *testing.T) {
 	peer.readPolicy.minimumFrameRate = 1
 
 	first := peer.newFrameProgressReader(bytes.NewReader([]byte{1}), nil)
-	require.NoError(t, first.setHeader(MessageHeader{PayloadSize: 1}))
+	require.NoError(t, first.setHeader(message.Header{PayloadSize: 1}))
 	sentAt := clock.current()
 	peer.recordPingSent(9, sentAt)
 	clock.advance(time.Second)
@@ -665,7 +570,7 @@ func TestPeerConsecutiveFramesDeferPingWithinProgressBudget(t *testing.T) {
 	first.finish(true, clock.current())
 
 	second := peer.newFrameProgressReader(bytes.NewReader([]byte{2}), nil)
-	require.NoError(t, second.setHeader(MessageHeader{PayloadSize: 100}))
+	require.NoError(t, second.setHeader(message.Header{PayloadSize: 100}))
 	clock.advance(pingTimeout)
 	_, err = second.Read(make([]byte, 1))
 	require.NoError(t, err)
@@ -684,10 +589,10 @@ func TestPeerConsecutiveFramesCannotExtendPingPastProgressBudget(t *testing.T) {
 	sentAt := clock.current()
 	peer.recordPingSent(10, sentAt)
 
-	budget := peer.frameReadBudget(MaxMessageSize)
+	budget := peer.frameReadBudget(message.MaxMessageSize)
 	clock.advance(budget - time.Second)
 	reader := peer.newFrameProgressReader(bytes.NewReader([]byte{1}), nil)
-	require.NoError(t, reader.setHeader(MessageHeader{PayloadSize: MaxMessageSize}))
+	require.NoError(t, reader.setHeader(message.Header{PayloadSize: message.MaxMessageSize}))
 	_, err := reader.Read(make([]byte, 1))
 	require.NoError(t, err)
 	clock.advance(time.Second)
@@ -730,4 +635,35 @@ func TestPeerWriteLoopMapsWriteTimeout(t *testing.T) {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 	assert.Equal(t, 1, conn.writeLimits)
+}
+
+func TestPeerWriteLoopCompletesPartialWritesAndReleasesInFlight(t *testing.T) {
+	clock := &livenessClock{now: time.Unix(6_200, 0)}
+	conn := &partialWriteConn{
+		chunkedLivenessConn: chunkedLivenessConn{clock: clock},
+		limit:               3,
+	}
+	peer, _ := newFrameLivenessPeer(t, clock, conn)
+	frame := []byte("frame requiring complete writes")
+	require.NoError(t, peer.Send(frame))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- peer.writeLoop(ctx) }()
+	require.Eventually(t, func() bool {
+		conn.mu.Lock()
+		defer conn.mu.Unlock()
+		return len(conn.wire) == len(frame)
+	}, time.Second, time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+
+	conn.mu.Lock()
+	assert.Equal(t, frame, conn.wire)
+	assert.Greater(t, conn.writeCalls, 1)
+	conn.mu.Unlock()
+	snapshot := peer.outbound.snapshot()
+	assert.Zero(t, snapshot.TotalFrames)
+	assert.Zero(t, snapshot.TotalBytes)
+	assert.Zero(t, snapshot.InFlight)
 }

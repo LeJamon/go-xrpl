@@ -7,7 +7,7 @@ import (
 	"io"
 )
 
-// Per-MessageType payload-size caps applied by ReadMessage BEFORE
+// Per-MessageType payload-size caps applied during header validation before
 // allocating. Without these, a peer can claim MaxPayloadSize for any
 // type and force a 64MB allocation per claim — trivial OOM vector.
 // Values are ~10× typical observed traffic per known type.
@@ -47,9 +47,10 @@ func payloadSizeLimit(t MessageType) uint32 {
 		TypeReplayDeltaReq,
 		TypeTransaction:
 		return mediumMsgMax
-	case TypeProofPathResponse,
-		TypeReplayDeltaResponse:
+	case TypeProofPathResponse:
 		return largeMsgMax
+	case TypeReplayDeltaResponse:
+		return MaxMessageSize
 	case TypeManifests,
 		TypeValidatorList,
 		TypeValidatorListCollection,
@@ -65,7 +66,7 @@ func payloadSizeLimit(t MessageType) uint32 {
 		// TMValidatorList / TMValidatorListCollection blob is bounded only
 		// by the ceiling. A tighter local cap would tear down a peer
 		// mid-sync, so these rely on the protocol ceiling (enforced in
-		// ReadMessage) rather than a stricter limit.
+		// framing validation) rather than a stricter limit.
 		return MaxMessageSize
 	default:
 		return MaxMessageSize
@@ -82,7 +83,7 @@ const (
 	HeaderSizeCompressed = 10
 
 	// MaxMessageSize is the hard protocol ceiling (rippled's single 64 MB
-	// cap). ReadMessage rejects any message whose on-wire or uncompressed
+	// cap). Header validation rejects any message whose on-wire or uncompressed
 	// claim exceeds it; the per-type caps above add stricter, type-aware
 	// hardening on top.
 	MaxMessageSize = 64 * 1024 * 1024
@@ -147,7 +148,7 @@ const (
 )
 
 // HeaderSize returns the size of the header based on compression.
-func (h *Header) HeaderSize() int {
+func (h Header) HeaderSize() int {
 	if h.Compressed {
 		return HeaderSizeCompressed
 	}
@@ -155,7 +156,7 @@ func (h *Header) HeaderSize() int {
 }
 
 // TotalSize returns the total size of the message (header + payload).
-func (h *Header) TotalSize() int {
+func (h Header) TotalSize() int {
 	return h.HeaderSize() + int(h.PayloadSize)
 }
 
@@ -163,46 +164,28 @@ func (h *Header) TotalSize() int {
 // For uncompressed messages, buf must be at least 6 bytes.
 // For compressed messages, buf must be at least 10 bytes.
 func EncodeHeader(buf []byte, payloadSize uint32, msgType MessageType, algorithm CompressionAlgorithm, uncompressedSize uint32) error {
-	if payloadSize > MaxPayloadSize {
-		return ErrMessageTooLarge
+	header, err := newHeader(payloadSize, msgType, algorithm, uncompressedSize)
+	if err != nil {
+		return err
 	}
 
-	compressed := algorithm != AlgorithmNone
-	requiredSize := HeaderSizeUncompressed
-	if compressed {
-		requiredSize = HeaderSizeCompressed
+	if len(buf) < header.HeaderSize() {
+		return fmt.Errorf("buffer too small: need %d, got %d", header.HeaderSize(), len(buf))
 	}
-
-	if len(buf) < requiredSize {
-		return fmt.Errorf("buffer too small: need %d, got %d", requiredSize, len(buf))
-	}
-
-	// First 4 bytes: the top byte holds the algorithm nibble, the low 26 bits
-	// hold the payload size. The algorithm value already carries the
-	// compression flag in its high bit.
-	sizeWithFlags := payloadSize
-	if compressed {
-		sizeWithFlags |= uint32(algorithm) << 24
-	}
-
-	buf[0] = byte((sizeWithFlags >> 24) & 0xFF)
-	buf[1] = byte((sizeWithFlags >> 16) & 0xFF)
-	buf[2] = byte((sizeWithFlags >> 8) & 0xFF)
-	buf[3] = byte(sizeWithFlags & 0xFF)
-
-	// Pack message type (2 bytes, big endian)
-	buf[4] = byte((msgType >> 8) & 0xFF)
-	buf[5] = byte(msgType & 0xFF)
-
-	// For compressed messages, add uncompressed size
-	if compressed {
-		buf[6] = byte((uncompressedSize >> 24) & 0xFF)
-		buf[7] = byte((uncompressedSize >> 16) & 0xFF)
-		buf[8] = byte((uncompressedSize >> 8) & 0xFF)
-		buf[9] = byte(uncompressedSize & 0xFF)
-	}
-
+	encodeHeader(buf, header)
 	return nil
+}
+
+func encodeHeader(buf []byte, header Header) {
+	sizeWithFlags := header.PayloadSize
+	if header.Compressed {
+		sizeWithFlags |= uint32(header.Algorithm) << 24
+	}
+	binary.BigEndian.PutUint32(buf[:4], sizeWithFlags)
+	binary.BigEndian.PutUint16(buf[4:6], uint16(header.MessageType))
+	if header.Compressed {
+		binary.BigEndian.PutUint32(buf[6:10], header.UncompressedSize)
+	}
 }
 
 // DecodeHeader decodes a message header from the provided buffer.
@@ -213,71 +196,48 @@ func DecodeHeader(buf []byte) (*Header, error) {
 		return nil, ErrTruncatedMessage
 	}
 
-	h := &Header{}
-
-	// Parse first 4 bytes
 	firstFour := binary.BigEndian.Uint32(buf[0:4])
-
-	// Validate the framing marker.
+	algorithm := AlgorithmNone
 	if buf[0]&0x80 != 0 {
 		if buf[0]&CompressionReservedMask != 0 {
 			return nil, ErrInvalidHeader
 		}
-		if buf[0]&CompressionFlagMask != byte(AlgorithmLZ4) {
-			return nil, ErrUnknownCompression
-		}
-		h.Compressed = true
-		h.Algorithm = AlgorithmLZ4
+		algorithm = CompressionAlgorithm(buf[0] & CompressionFlagMask)
 	} else if buf[0]&UncompressedFlagMask != 0 {
 		return nil, ErrInvalidHeader
 	}
 
-	// Extract payload size (26 bits); the mask strips the flag/algorithm bits.
-	h.PayloadSize = firstFour & MaxPayloadSize
-
-	// Extract message type (2 bytes)
-	h.MessageType = MessageType(binary.BigEndian.Uint16(buf[4:6]))
-
-	// For compressed messages, read the uncompressed size from the wire;
-	// for uncompressed frames the original size is the on-wire payload
-	// size, mirroring rippled (ProtocolMessage.h:247) so the 64 MB
-	// protocol-ceiling check sees the same value on both fields.
-	if h.Compressed {
+	payloadSize := firstFour & MaxPayloadSize
+	msgType := MessageType(binary.BigEndian.Uint16(buf[4:6]))
+	uncompressedSize := payloadSize
+	if algorithm != AlgorithmNone {
 		if len(buf) < HeaderSizeCompressed {
 			return nil, ErrTruncatedMessage
 		}
-		h.UncompressedSize = binary.BigEndian.Uint32(buf[6:10])
-	} else {
-		h.UncompressedSize = h.PayloadSize
+		uncompressedSize = binary.BigEndian.Uint32(buf[6:10])
 	}
-
-	return h, nil
-}
-
-// ReadMessage reads a complete message from the reader.
-// Returns the header and the payload.
-func ReadMessage(r io.Reader) (*Header, []byte, error) {
-	return readMessage(r, nil)
+	header, err := newHeader(payloadSize, msgType, algorithm, uncompressedSize)
+	if err != nil {
+		return nil, err
+	}
+	return &header, nil
 }
 
 // ReadHeader reads and validates exactly one message header.
 func ReadHeader(r io.Reader) (*Header, error) {
 	headerBuf := make([]byte, HeaderSizeCompressed)
 	if _, err := io.ReadFull(r, headerBuf[:HeaderSizeUncompressed]); err != nil {
-		return nil, fmt.Errorf("failed to read header: %w", err)
+		return nil, fmt.Errorf("failed to read header: %w: %w", ErrTruncatedMessage, err)
 	}
 
 	if headerBuf[0]&0x80 != 0 {
 		if _, err := io.ReadFull(r, headerBuf[HeaderSizeUncompressed:HeaderSizeCompressed]); err != nil {
-			return nil, fmt.Errorf("failed to read compressed header: %w", err)
+			return nil, fmt.Errorf("failed to read compressed header: %w: %w", ErrTruncatedMessage, err)
 		}
 	}
 
 	header, err := DecodeHeader(headerBuf)
 	if err != nil {
-		return nil, err
-	}
-	if err := validateHeaderClaims(*header); err != nil {
 		return nil, err
 	}
 	return header, nil
@@ -291,39 +251,54 @@ func ReadPayload(r io.Reader, header Header) ([]byte, error) {
 	payload := make([]byte, header.PayloadSize)
 	if header.PayloadSize > 0 {
 		if _, err := io.ReadFull(r, payload); err != nil {
-			return nil, fmt.Errorf("failed to read payload: %w", err)
+			return nil, fmt.Errorf("failed to read payload: %w: %w", ErrTruncatedMessage, err)
 		}
 	}
 	return payload, nil
 }
 
-// ReadMessageWithHeader reads a complete message and calls onHeader after the
-// header and size claims have been validated but before the payload is
-// allocated.
-func ReadMessageWithHeader(r io.Reader, onHeader func(Header) error) (*Header, []byte, error) {
-	return readMessage(r, onHeader)
-}
-
-func readMessage(r io.Reader, onHeader func(Header) error) (*Header, []byte, error) {
-	header, err := ReadHeader(r)
-	if err != nil {
-		return nil, nil, err
+func newHeader(
+	payloadSize uint32,
+	msgType MessageType,
+	algorithm CompressionAlgorithm,
+	uncompressedSize uint32,
+) (Header, error) {
+	header := Header{
+		PayloadSize: payloadSize,
+		MessageType: msgType,
+		Algorithm:   algorithm,
 	}
-
-	if onHeader != nil {
-		if err := onHeader(*header); err != nil {
-			return nil, nil, err
-		}
+	switch algorithm {
+	case AlgorithmNone:
+		header.UncompressedSize = payloadSize
+	case AlgorithmLZ4:
+		header.Compressed = true
+		header.UncompressedSize = uncompressedSize
+	default:
+		return Header{}, fmt.Errorf("%w: %#02x", ErrUnknownCompression, uint8(algorithm))
 	}
-
-	payload, err := ReadPayload(r, *header)
-	if err != nil {
-		return nil, nil, err
+	if err := validateHeaderClaims(header); err != nil {
+		return Header{}, err
 	}
-	return header, payload, nil
+	return header, nil
 }
 
 func validateHeaderClaims(header Header) error {
+	switch header.Algorithm {
+	case AlgorithmNone:
+		if header.Compressed || header.UncompressedSize != header.PayloadSize {
+			return ErrInvalidHeader
+		}
+	case AlgorithmLZ4:
+		if !header.Compressed {
+			return ErrInvalidHeader
+		}
+	default:
+		return fmt.Errorf("%w: %#02x", ErrUnknownCompression, uint8(header.Algorithm))
+	}
+	if header.PayloadSize > MaxPayloadSize {
+		return fmt.Errorf("%w: payload exceeds 26-bit wire limit %d bytes", ErrMessageTooLarge, MaxPayloadSize)
+	}
 	// Hard protocol ceiling: rippled drops any message whose on-wire or
 	// uncompressed claim exceeds a single 64 MB cap, on both fields
 	// (ProtocolMessage.h:362-367). This is the absolute upper bound; the
@@ -348,48 +323,30 @@ func validateHeaderClaims(header Header) error {
 	return nil
 }
 
-// WriteMessage writes a message with header to the writer.
-func WriteMessage(w io.Writer, msgType MessageType, payload []byte) error {
-	return WriteMessageCompressed(w, msgType, payload, AlgorithmNone, 0)
-}
-
-// WriteMessageCompressed writes a potentially compressed message.
-func WriteMessageCompressed(w io.Writer, msgType MessageType, payload []byte, algorithm CompressionAlgorithm, uncompressedSize uint32) error {
-	headerSize := HeaderSizeUncompressed
-	if algorithm != AlgorithmNone {
-		headerSize = HeaderSizeCompressed
-	}
-
-	buf := make([]byte, headerSize+len(payload))
-
-	if err := EncodeHeader(buf, uint32(len(payload)), msgType, algorithm, uncompressedSize); err != nil {
-		return err
-	}
-
-	copy(buf[headerSize:], payload)
-
-	_, err := w.Write(buf)
-	return err
-}
-
 // BuildWireMessage creates a complete wire-protocol message (header + payload) as bytes.
 func BuildWireMessage(msgType MessageType, payload []byte) ([]byte, error) {
-	if len(payload) > MaxPayloadSize {
+	if uint64(len(payload)) > uint64(MaxPayloadSize) {
 		return nil, ErrMessageTooLarge
 	}
-	buf := make([]byte, HeaderSizeUncompressed+len(payload))
-	if err := EncodeHeader(buf, uint32(len(payload)), msgType, AlgorithmNone, 0); err != nil {
+	header, err := newHeader(uint32(len(payload)), msgType, AlgorithmNone, 0)
+	if err != nil {
 		return nil, err
 	}
+	buf := make([]byte, header.TotalSize())
+	encodeHeader(buf, header)
 	copy(buf[HeaderSizeUncompressed:], payload)
 	return buf, nil
 }
 
 // EncodeFrame serializes a message and wraps it in its wire-protocol header.
 func EncodeFrame(msg Message) ([]byte, error) {
-	payload, err := Encode(msg)
+	msgType, err := typeOfMessage(msg)
 	if err != nil {
 		return nil, err
 	}
-	return BuildWireMessage(msg.Type(), payload)
+	payload, err := encode(msg, msgType)
+	if err != nil {
+		return nil, err
+	}
+	return BuildWireMessage(msgType, payload)
 }

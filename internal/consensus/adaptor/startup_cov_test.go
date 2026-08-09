@@ -2,6 +2,7 @@ package adaptor
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"math"
 	"testing"
@@ -58,10 +59,7 @@ func TestStartupIncludeLocalValidator(t *testing.T) {
 	require.Empty(t, configuredIDs)
 	require.Empty(t, configuredMasters)
 
-	c := &Components{Adaptor: &Adaptor{identity: identity}}
-	effectiveIDs, effectiveMasters := c.snapshotEffectiveStatic()
-	require.Equal(t, []consensus.NodeID{identity.NodeID}, effectiveIDs)
-	require.Equal(t, [][33]byte{master}, effectiveMasters)
+	c := &Components{}
 	require.Empty(t, c.StaticTrustedMasterKeys())
 }
 
@@ -399,10 +397,11 @@ func stup_newAggregator(t *testing.T) *validatorlist.Aggregator {
 	t.Helper()
 	pk := validatorlist.PublisherKey{0xED, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01}
 	agg, err := validatorlist.New(validatorlist.Config{
-		PublisherKeys: []validatorlist.PublisherKey{pk},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Logger:        slog.Default(),
+		PublisherKeys:      []validatorlist.PublisherKey{pk},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Logger:             slog.Default(),
 	})
 	require.NoError(t, err)
 	return agg
@@ -472,28 +471,6 @@ func TestStup_ComponentsStop_NilSafe(t *testing.T) {
 	assert.NotPanics(t, func() { c.Stop() })
 }
 
-func TestStup_ComponentsStop_CancelsAllFunctions(t *testing.T) {
-	var called [4]bool
-	c := &Components{
-		vlTickCancel: func() {
-			called[0] = true
-		},
-		sitePollerCancel: func() {
-			called[1] = true
-		},
-		routerCancel: func() {
-			called[2] = true
-		},
-		overlayCancel: func() {
-			called[3] = true
-		},
-	}
-	c.Stop()
-	for i, v := range called {
-		assert.True(t, v, "cancel[%d] was not called", i)
-	}
-}
-
 func TestStup_ComponentsStop_NilEngineAndOverlaySafe(t *testing.T) {
 	c := &Components{
 		Engine:  nil,
@@ -509,36 +486,47 @@ func TestStup_ComponentsStop_WithMockEngine(t *testing.T) {
 	assert.NotPanics(t, func() { c.Stop() })
 }
 
+type stupStopErrorEngine struct {
+	mockEngine
+	err error
+}
+
+func (e *stupStopErrorEngine) Stop() error { return e.err }
+
+func TestStup_ComponentsStop_ReturnsEngineError(t *testing.T) {
+	stopErr := errors.New("engine stop failed")
+	c := &Components{Engine: &stupStopErrorEngine{err: stopErr}}
+	require.ErrorIs(t, c.Stop(), stopErr)
+}
+
 func TestStup_ComponentsStart_AndStop(t *testing.T) {
 	svc := newTestLedgerService(t)
 	ad := newTestAdaptor(t)
-	mm := NewModeManager(ad)
 
 	overlay, err := peermanagement.New(peermanagement.WithListenAddr("127.0.0.1:0"))
 	require.NoError(t, err)
 
 	eng := &mockEngine{}
 	inbox := overlay.Messages()
-	router := NewRouter(eng, ad, inbox)
+	router := newTestRouter(eng, ad, inbox)
 
 	c := &Components{
 		Overlay:             overlay,
 		Engine:              eng,
 		Adaptor:             ad,
 		Router:              router,
-		ModeManager:         mm,
 		ValidatorList:       nil,
 		ValidatorListPoller: nil,
 	}
 	_ = svc
 
-	err = c.Start()
+	err = c.Start(t.Context())
 	require.NoError(t, err)
 
-	assert.NotNil(t, c.overlayCancel)
-	assert.NotNil(t, c.routerCancel)
-	assert.Nil(t, c.sitePollerCancel, "no poller configured")
-	assert.Nil(t, c.vlTickCancel, "no ValidatorList configured")
+	assert.NotNil(t, c.runCancel)
+	assert.NotNil(t, c.overlayDone)
+	assert.NotNil(t, c.routerDone)
+	assert.Nil(t, c.vlTickDone, "no ValidatorList configured")
 
 	assert.NotPanics(t, func() { c.Stop() })
 }
@@ -551,13 +539,17 @@ func TestStup_ComponentsStart_ListenerBindFailure(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = overlay.Stop() })
 
+	eng := &mockEngine{}
+	ad := newTestAdaptor(t)
 	c := &Components{
 		Overlay: overlay,
-		Engine:  &mockEngine{},
+		Engine:  eng,
+		Adaptor: ad,
+		Router:  NewRouter(eng, ad, overlay.ConsensusMessages()),
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- c.Start() }()
+	go func() { done <- c.Start(t.Context()) }()
 	select {
 	case startErr := <-done:
 		require.Error(t, startErr, "a listener bind failure must fail boot")
@@ -574,11 +566,14 @@ func TestStup_ComponentsStart_EngineStartError(t *testing.T) {
 	t.Cleanup(func() { _ = overlay.Stop() })
 
 	eng := &stup_errStartEngine{err: assert.AnError}
+	ad := newTestAdaptor(t)
 	c := &Components{
 		Overlay: overlay,
 		Engine:  eng,
+		Adaptor: ad,
+		Router:  NewRouter(eng, ad, overlay.ConsensusMessages()),
 	}
-	startErr := c.Start()
+	startErr := c.Start(t.Context())
 	assert.Error(t, startErr)
 }
 
@@ -604,7 +599,10 @@ func TestStup_OverlayOptionsFromConfig_NetworkID(t *testing.T) {
 func TestStup_OverlayOptionsFromConfig_PeerPort(t *testing.T) {
 	cfg := &config.Config{
 		Ports: map[string]config.PortConfig{
-			"peer": {Port: 51235, IP: "0.0.0.0", Protocol: "peer"},
+			"peer": {
+				Port: 51235, IP: "0.0.0.0", Protocol: "peer",
+				SSLCiphers: "DHE-RSA-AES128-GCM-SHA256",
+			},
 		},
 	}
 	pcfg := peermanagement.DefaultConfig()
@@ -612,6 +610,7 @@ func TestStup_OverlayOptionsFromConfig_PeerPort(t *testing.T) {
 		opt(&pcfg)
 	}
 	assert.Contains(t, pcfg.ListenAddr, "51235")
+	assert.Equal(t, "DHE-RSA-AES128-GCM-SHA256", pcfg.SSLCiphers)
 }
 
 func TestStup_OverlayOptionsFromConfig_BootstrapAndFixed(t *testing.T) {
@@ -646,6 +645,7 @@ func TestStup_OverlayOptionsFromConfig_PeerLimits(t *testing.T) {
 		{name: "twenty peers", peersMax: 20, ports: peerPort, wantMax: 20, wantInbound: 10, wantOutbound: 10, wantIPLimit: 2},
 		{name: "rippled default", peersMax: 21, ports: peerPort, wantMax: 21, wantInbound: 11, wantOutbound: 10, wantIPLimit: 2},
 		{name: "large limit", peersMax: 100, ports: peerPort, wantMax: 100, wantInbound: 85, wantOutbound: 15, wantIPLimit: 6},
+		{name: "limit beyond default outbound budget", peersMax: 225, ports: peerPort, wantMax: 225, wantInbound: 191, wantOutbound: 34, wantIPLimit: 7},
 		{name: "private", peersMax: 20, peerPrivate: 1, ports: peerPort, wantMax: 20, wantInbound: 0, wantOutbound: 20, wantIPLimit: 1},
 		{name: "no peer listener", peersMax: 20, wantMax: 20, wantInbound: 0, wantOutbound: 20, wantIPLimit: 1},
 	}
@@ -673,6 +673,8 @@ func TestStup_OverlayOptionsFromConfig_PeerLimits(t *testing.T) {
 			}
 			require.NoError(t, pcfg.Validate())
 			assert.Equal(t, tt.wantIPLimit, pcfg.IPLimit)
+			assert.GreaterOrEqual(t, pcfg.OutboundRetainedBytes,
+				peermanagement.MinimumOutboundRetainedBytes(tt.wantMax))
 		})
 	}
 }

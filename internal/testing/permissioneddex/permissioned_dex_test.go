@@ -219,7 +219,7 @@ func TestPermissionedDEX_OfferCreate(t *testing.T) {
 		env.Close()
 
 		// domainOwner issues credential for devin
-		result = env.Submit(cred.CredentialCreate(dex.DomainOwner, devin, dex.CredType).Build())
+		result = env.Submit(cred.CredentialCreateHex(dex.DomainOwner, devin, dex.CredType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
@@ -232,7 +232,7 @@ func TestPermissionedDEX_OfferCreate(t *testing.T) {
 		env.Close()
 
 		// devin accepts credential
-		result = env.Submit(cred.CredentialAccept(devin, dex.DomainOwner, dex.CredType).Build())
+		result = env.Submit(cred.CredentialAcceptHex(devin, dex.DomainOwner, dex.CredType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
@@ -261,13 +261,13 @@ func TestPermissionedDEX_OfferCreate(t *testing.T) {
 		// Issue credential with 20s expiry
 		expiration := env.NowRipple() + 20
 		result := env.Submit(
-			cred.CredentialCreate(dex.DomainOwner, devin, dex.CredType).
+			cred.CredentialCreateHex(dex.DomainOwner, devin, dex.CredType).
 				Expiration(expiration).Build(),
 		)
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		result = env.Submit(cred.CredentialAccept(devin, dex.DomainOwner, dex.CredType).Build())
+		result = env.Submit(cred.CredentialAcceptHex(devin, dex.DomainOwner, dex.CredType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
@@ -315,7 +315,7 @@ func TestPermissionedDEX_OfferCreate(t *testing.T) {
 
 		// remove gw from domain
 		result := env.Submit(
-			cred.CredentialDelete(dex.DomainOwner, dex.GW, dex.DomainOwner, dex.CredType).Build(),
+			cred.CredentialDeleteHex(dex.DomainOwner, dex.GW, dex.DomainOwner, dex.CredType).Build(),
 		)
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -338,7 +338,7 @@ func TestPermissionedDEX_OfferCreate(t *testing.T) {
 
 		// remove gw from domain
 		result := env.Submit(
-			cred.CredentialDelete(dex.DomainOwner, dex.GW, dex.DomainOwner, dex.CredType).Build(),
+			cred.CredentialDeleteHex(dex.DomainOwner, dex.GW, dex.DomainOwner, dex.CredType).Build(),
 		)
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -506,7 +506,7 @@ func TestPermissionedDEX_Payment(t *testing.T) {
 		env.Close()
 
 		// Issue credential for devin
-		result = env.Submit(cred.CredentialCreate(dex.DomainOwner, devin, dex.CredType).Build())
+		result = env.Submit(cred.CredentialCreateHex(dex.DomainOwner, devin, dex.CredType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
@@ -521,7 +521,7 @@ func TestPermissionedDEX_Payment(t *testing.T) {
 		env.Close()
 
 		// devin accepts credential
-		result = env.Submit(cred.CredentialAccept(devin, dex.DomainOwner, dex.CredType).Build())
+		result = env.Submit(cred.CredentialAcceptHex(devin, dex.DomainOwner, dex.CredType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
@@ -567,7 +567,7 @@ func TestPermissionedDEX_Payment(t *testing.T) {
 		env.Close()
 
 		// Issue credential for devin
-		result = env.Submit(cred.CredentialCreate(dex.DomainOwner, devin, dex.CredType).Build())
+		result = env.Submit(cred.CredentialCreateHex(dex.DomainOwner, devin, dex.CredType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
@@ -581,7 +581,7 @@ func TestPermissionedDEX_Payment(t *testing.T) {
 		jtx.RequireTxClaimed(t, result, "tecNO_PERMISSION")
 		env.Close()
 
-		result = env.Submit(cred.CredentialAccept(devin, dex.DomainOwner, dex.CredType).Build())
+		result = env.Submit(cred.CredentialAcceptHex(devin, dex.DomainOwner, dex.CredType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
@@ -815,10 +815,10 @@ func TestPermissionedDEX_BookStep(t *testing.T) {
 		badDomainID := keylet.PermissionedDomain(badDomainOwner.ID, badDomainSeq).Key
 
 		// devin gets credential for bad domain
-		result = env.Submit(cred.CredentialCreate(badDomainOwner, devin, badCredType).Build())
+		result = env.Submit(cred.CredentialCreateHex(badDomainOwner, devin, badCredType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		result = env.Submit(cred.CredentialAccept(devin, badDomainOwner, badCredType).Build())
+		result = env.Submit(cred.CredentialAcceptHex(devin, badDomainOwner, badCredType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
@@ -884,12 +884,12 @@ func TestPermissionedDEX_BookStep(t *testing.T) {
 		// first payment instead of 3 (which would exceed the 20s expiration).
 		expiration := env.NowRipple() + 20
 		result := env.Submit(
-			cred.CredentialCreate(dex.DomainOwner, devin, dex.CredType).
+			cred.CredentialCreateHex(dex.DomainOwner, devin, dex.CredType).
 				Expiration(expiration).Build(),
 		)
 		jtx.RequireTxSuccess(t, result)
 
-		result = env.Submit(cred.CredentialAccept(devin, dex.DomainOwner, dex.CredType).Build())
+		result = env.Submit(cred.CredentialAcceptHex(devin, dex.DomainOwner, dex.CredType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
@@ -957,7 +957,7 @@ func TestPermissionedDEX_BookStep(t *testing.T) {
 
 		// Remove bob's credential
 		result = env.Submit(
-			cred.CredentialDelete(dex.DomainOwner, dex.Bob, dex.DomainOwner, dex.CredType).Build(),
+			cred.CredentialDeleteHex(dex.DomainOwner, dex.Bob, dex.DomainOwner, dex.CredType).Build(),
 		)
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -993,11 +993,11 @@ func TestPermissionedDEX_BookStep(t *testing.T) {
 		env.Close()
 
 		// domain owner issues credential for devin
-		result = env.Submit(cred.CredentialCreate(dex.DomainOwner, devin, dex.CredType).Build())
+		result = env.Submit(cred.CredentialCreateHex(dex.DomainOwner, devin, dex.CredType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		result = env.Submit(cred.CredentialAccept(devin, dex.DomainOwner, dex.CredType).Build())
+		result = env.Submit(cred.CredentialAcceptHex(devin, dex.DomainOwner, dex.CredType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
@@ -1030,7 +1030,7 @@ func TestPermissionedDEX_Rippling(t *testing.T) {
 
 	// Remove bob from domain
 	result = env.Submit(
-		cred.CredentialDelete(dex.DomainOwner, dex.Bob, dex.DomainOwner, dex.CredType).Build(),
+		cred.CredentialDeleteHex(dex.DomainOwner, dex.Bob, dex.DomainOwner, dex.CredType).Build(),
 	)
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
@@ -1098,7 +1098,7 @@ func TestPermissionedDEX_OfferTokenIssuerInDomain(t *testing.T) {
 
 	// Remove gateway from domain
 	result = env.Submit(
-		cred.CredentialDelete(dex.DomainOwner, dex.GW, dex.DomainOwner, dex.CredType).Build(),
+		cred.CredentialDeleteHex(dex.DomainOwner, dex.GW, dex.DomainOwner, dex.CredType).Build(),
 	)
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
@@ -1155,7 +1155,7 @@ func TestPermissionedDEX_RemoveUnfundedOffer(t *testing.T) {
 
 	// Remove alice from domain - her offer becomes unfunded
 	result = env.Submit(
-		cred.CredentialDelete(dex.DomainOwner, dex.Alice, dex.DomainOwner, dex.CredType).Build(),
+		cred.CredentialDeleteHex(dex.DomainOwner, dex.Alice, dex.DomainOwner, dex.CredType).Build(),
 	)
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
@@ -1499,10 +1499,10 @@ func TestPermissionedDEX_HybridBookStep(t *testing.T) {
 
 		badDomainIDKey := keylet.PermissionedDomain(badDomainOwner.ID, badDomainSeq).Key
 
-		result = env.Submit(cred.CredentialCreate(badDomainOwner, devin, badCredType).Build())
+		result = env.Submit(cred.CredentialCreateHex(badDomainOwner, devin, badCredType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		result = env.Submit(cred.CredentialAccept(devin, badDomainOwner, badCredType).Build())
+		result = env.Submit(cred.CredentialAcceptHex(devin, badDomainOwner, badCredType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
@@ -1671,7 +1671,7 @@ func TestPermissionedDEX_HybridInvalidOffer(t *testing.T) {
 
 	// Remove bob from domain
 	result = env.Submit(
-		cred.CredentialDelete(dex.DomainOwner, dex.Bob, dex.DomainOwner, dex.CredType).Build(),
+		cred.CredentialDeleteHex(dex.DomainOwner, dex.Bob, dex.DomainOwner, dex.CredType).Build(),
 	)
 	jtx.RequireTxSuccess(t, result)
 	env.Close()

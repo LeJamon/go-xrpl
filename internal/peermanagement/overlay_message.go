@@ -2,6 +2,7 @@ package peermanagement
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"errors"
 	"log/slog"
@@ -37,6 +38,7 @@ func (o *Overlay) onPeerConnected(evt Event) {
 
 func (o *Overlay) onPeerDisconnected(evt Event) {
 	o.peerDisconnects.Add(1)
+	o.cancelServePeer(evt.PeerID)
 	o.relay.RemovePeer(evt.PeerID)
 	// Fire the higher-layer disconnect callback so per-peer state in
 	// consumers (router peerStates, adaptor peerLCLs) gets cleaned.
@@ -96,7 +98,13 @@ func (o *Overlay) onPeerFailed(evt Event) {
 }
 
 func (o *Overlay) onMessageReceived(evt Event) {
-	msgType := message.MessageType(evt.MessageType)
+	if evt.charge == nil {
+		if peer, ok := o.getPeer(evt.PeerID); ok {
+			evt.charge = newMessageCharge(peer, evt.MessageType.String())
+		}
+	}
+	defer evt.release()
+	msgType := evt.MessageType
 
 	// Record reduce-relay traffic metrics before dispatch: counted on
 	// the inbound path, by message type and on-wire payload size, gated
@@ -155,7 +163,7 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		if !o.peerNegotiatedLedgerReplay(evt.PeerID) {
 			slog.Debug("ReplayDeltaRequest from peer without ledgerreplay feature; dropping",
 				"t", "Overlay", "peer", evt.PeerID)
-			o.IncPeerBadData(evt.PeerID, "replay-delta-req-unnegotiated")
+			o.selectMessageCharge(&evt, resource.FeeMalformedRequest(), "replay delta request disabled")
 			return
 		}
 		o.dispatchReplayDeltaRequest(evt)
@@ -169,7 +177,7 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		if !o.peerNegotiatedLedgerReplay(evt.PeerID) {
 			slog.Debug("ProofPathRequest from peer without ledgerreplay feature; dropping",
 				"t", "Overlay", "peer", evt.PeerID)
-			o.IncPeerBadData(evt.PeerID, "proof-path-req-unnegotiated")
+			o.selectMessageCharge(&evt, resource.FeeMalformedRequest(), "proof path request disabled")
 			return
 		}
 		o.dispatchProofPathRequest(evt)
@@ -185,7 +193,7 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		if !o.peerNegotiatedLedgerReplay(evt.PeerID) {
 			slog.Debug("TMReplayDeltaResponse from peer without ledgerreplay feature; dropping",
 				"t", "Overlay", "peer", evt.PeerID)
-			o.IncPeerBadData(evt.PeerID, "replay-delta-resp-unnegotiated")
+			o.selectMessageCharge(&evt, resource.FeeMalformedRequest(), "replay delta response disabled")
 			return
 		}
 	}
@@ -193,7 +201,7 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		if !o.peerNegotiatedLedgerReplay(evt.PeerID) {
 			slog.Debug("TMProofPathResponse from peer without ledgerreplay feature; dropping",
 				"t", "Overlay", "peer", evt.PeerID)
-			o.IncPeerBadData(evt.PeerID, "proof-path-resp-unnegotiated")
+			o.selectMessageCharge(&evt, resource.FeeMalformedRequest(), "proof path response disabled")
 			return
 		}
 	}
@@ -221,48 +229,30 @@ func (o *Overlay) onMessageReceived(evt Event) {
 	slog.Debug("Message received", "t", "Overlay", "type", msgType.String(), "peer", evt.PeerID, "size", len(evt.Payload))
 
 	if msgType == message.TypeTransaction {
-		o.forwardTransaction(&InboundMessage{
-			PeerID:  evt.PeerID,
-			Type:    evt.MessageType,
-			Payload: evt.Payload,
-		})
+		o.forwardTransaction(evt.inboundMessage())
 		return
 	}
 
 	switch msgType {
 	case message.TypeLedgerData, message.TypeReplayDeltaResponse, message.TypeProofPathResponse:
-		o.forwardLedgerData(&InboundMessage{
-			PeerID:  evt.PeerID,
-			Type:    evt.MessageType,
-			Payload: evt.Payload,
-		})
+		o.forwardLedgerData(evt.inboundMessage())
 		return
 	}
 
 	if isConsensusPriorityMessageType(msgType) {
-		o.forwardConsensus(&InboundMessage{
-			PeerID:  evt.PeerID,
-			Type:    evt.MessageType,
-			Payload: evt.Payload,
-		})
+		o.forwardConsensus(evt.inboundMessage())
 		return
 	}
 	if isConsensusControlMessageType(msgType) {
-		o.forwardConsensusControl(&InboundMessage{
-			PeerID:  evt.PeerID,
-			Type:    evt.MessageType,
-			Payload: evt.Payload,
-		})
+		o.forwardConsensusControl(evt.inboundMessage())
 		return
 	}
 
+	msg := evt.inboundMessage()
 	select {
-	case o.messages <- &InboundMessage{
-		PeerID:  evt.PeerID,
-		Type:    evt.MessageType,
-		Payload: evt.Payload,
-	}:
+	case o.messages <- msg:
 	default:
+		_ = msg.Close()
 		o.droppedMessages.Add(1)
 		slog.Warn("Message dropped: channel full", "t", "Overlay", "type", msgType.String())
 		if msgType == message.TypeManifests {
@@ -273,23 +263,29 @@ func (o *Overlay) onMessageReceived(evt Event) {
 
 func (o *Overlay) forwardConsensus(msg *InboundMessage) {
 	if o.consensusMessages == nil {
+		_ = msg.Close()
 		return
 	}
 	select {
 	case o.consensusMessages <- msg:
 	case <-o.stopCh:
+		_ = msg.Close()
 	case <-o.runDone:
+		_ = msg.Close()
 	}
 }
 
 func (o *Overlay) forwardConsensusControl(msg *InboundMessage) {
 	if o.consensusControlMessages == nil {
+		_ = msg.Close()
 		return
 	}
 	select {
 	case o.consensusControlMessages <- msg:
 	case <-o.stopCh:
+		_ = msg.Close()
 	case <-o.runDone:
+		_ = msg.Close()
 	}
 }
 
@@ -303,6 +299,7 @@ func (o *Overlay) forwardTransaction(msg *InboundMessage) {
 	select {
 	case o.txMessages <- msg:
 	default:
+		_ = msg.Close()
 		// Counted via droppedTransactions (jq_trans_overflow); log at Debug so a
 		// shed storm under load cannot itself flood the single log writer.
 		o.droppedTransactions.Add(1)
@@ -323,12 +320,15 @@ func (o *Overlay) DroppedTransactions() uint64 {
 // of discarding a reply needed to complete catch-up.
 func (o *Overlay) forwardLedgerData(msg *InboundMessage) {
 	if o.ledgerData == nil {
+		_ = msg.Close()
 		return
 	}
 	select {
 	case o.ledgerData <- msg:
 	case <-o.stopCh:
+		_ = msg.Close()
 	case <-o.runDone:
+		_ = msg.Close()
 	}
 }
 
@@ -359,8 +359,11 @@ func (o *Overlay) PeerDisconnectsResources() uint64 {
 	return o.peerDisconnectsCharges.Load()
 }
 
-func (o *Overlay) ResourceManager() *resource.Manager {
-	return o.resourceManager
+func (o *Overlay) ResourceStats() resource.Stats {
+	if o.resourceManager == nil {
+		return resource.Stats{}
+	}
+	return o.resourceManager.Stats()
 }
 
 // DroppedEvents returns the cumulative count of events dropped
@@ -416,19 +419,20 @@ func (o *Overlay) dispatchReplayDeltaRequest(evt Event) {
 	decoded, err := message.Decode(message.TypeReplayDeltaReq, evt.Payload)
 	if err != nil {
 		slog.Debug("ReplayDeltaRequest decode failed", "t", "Overlay", "peer", evt.PeerID, "err", err)
-		o.IncPeerBadData(evt.PeerID, "replay-delta-req-decode")
+		o.selectMessageChargeReason(&evt, "replay-delta-req-decode")
 		return
 	}
 	req, ok := decoded.(*message.ReplayDeltaRequest)
 	if !ok {
 		return
 	}
-	if err := o.ledgerSync.HandleMessage(o.ctx, evt.PeerID, req); err != nil {
-		slog.Debug("ReplayDeltaRequest handler error", "t", "Overlay", "peer", evt.PeerID, "err", err)
-		if errors.Is(err, ErrPeerBadRequest) {
-			o.IncPeerBadData(evt.PeerID, "replay-delta-req-bad")
-		}
-	}
+	o.submitRetainedServe(evt, resource.FeeModerateBurdenPeer(),
+		func(ctx context.Context) {
+			if err := o.ledgerSync.HandleMessage(ctx, evt.PeerID, req); err != nil &&
+				!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				slog.Debug("ReplayDeltaRequest handler error", "t", "Overlay", "peer", evt.PeerID, "err", err)
+			}
+		})
 }
 
 // dispatchProofPathRequest decodes an inbound mtPROOF_PATH_REQ frame and
@@ -442,19 +446,20 @@ func (o *Overlay) dispatchProofPathRequest(evt Event) {
 	decoded, err := message.Decode(message.TypeProofPathReq, evt.Payload)
 	if err != nil {
 		slog.Debug("ProofPathRequest decode failed", "t", "Overlay", "peer", evt.PeerID, "err", err)
-		o.IncPeerBadData(evt.PeerID, "proof-path-req-decode")
+		o.selectMessageChargeReason(&evt, "proof-path-req-decode")
 		return
 	}
 	req, ok := decoded.(*message.ProofPathRequest)
 	if !ok {
 		return
 	}
-	if err := o.ledgerSync.HandleMessage(o.ctx, evt.PeerID, req); err != nil {
-		slog.Debug("ProofPathRequest handler error", "t", "Overlay", "peer", evt.PeerID, "err", err)
-		if errors.Is(err, ErrPeerBadRequest) {
-			o.IncPeerBadData(evt.PeerID, "proof-path-req-bad")
-		}
-	}
+	o.submitRetainedServe(evt, resource.FeeModerateBurdenPeer(),
+		func(ctx context.Context) {
+			if err := o.ledgerSync.HandleMessage(ctx, evt.PeerID, req); err != nil &&
+				!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				slog.Debug("ProofPathRequest handler error", "t", "Overlay", "peer", evt.PeerID, "err", err)
+			}
+		})
 }
 
 func (o *Overlay) handleStatusChange(evt Event) {
@@ -471,12 +476,9 @@ func (o *Overlay) handleStatusChange(evt Event) {
 	if !exists {
 		return
 	}
-	// Stamp the wire's networktime with the local clock when the peer
-	// didn't include it, so the peer_status emit always carries a
-	// `date`. Mutate sc so the auto-filled value is observable to
-	// subscribers.
-	if sc.NetworkTime == 0 {
+	if !sc.HasNetworkTime() {
 		sc.NetworkTime = uint64(protocol.RippleSeconds(time.Now()))
+		sc.NetworkTimeSet = true
 	}
 
 	effectiveStatus := peer.applyStatusChange(sc)
@@ -484,14 +486,14 @@ func (o *Overlay) handleStatusChange(evt Event) {
 	// lostSync returns before either the tracking check or the
 	// publish runs, so a lostSync update never surfaces as a
 	// peer_status WebSocket event.
-	if sc.NewEvent == message.NodeEventLostSync {
+	if sc.HasNewEvent() && sc.NewEvent == message.NodeEventLostSync {
 		return
 	}
 
 	// The tracking check is gated on a fresh (<2 min) validated
 	// ledger. The gate must NOT short-circuit the publish below,
 	// which runs unconditionally for non-lostSync messages.
-	if sc.LedgerSeq != 0 {
+	if sc.HasLedgerSeq() {
 		if provider := o.validLedgerProviderSnapshot(); provider != nil {
 			if validSeq, age, ok := provider(); ok && validSeq != 0 && age < 2*time.Minute {
 				peer.CheckTracking(sc.LedgerSeq, validSeq)
@@ -507,7 +509,7 @@ func (o *Overlay) handleStatusChange(evt Event) {
 		// clears that storage and the all-zeros 64-char hex string is
 		// emitted.
 		var ledgerHash string
-		if len(sc.LedgerHash) > 0 {
+		if sc.HasLedgerHash() {
 			if h, ok := peer.ClosedLedger(); ok {
 				ledgerHash = strings.ToUpper(hex.EncodeToString(h[:]))
 			} else {
@@ -522,24 +524,29 @@ func (o *Overlay) handleStatusChange(evt Event) {
 			f, l := *sc.FirstSeq, *sc.LastSeq
 			minSeq, maxSeq = &f, &l
 		}
-		// The decoder loses proto-presence for ledger_seq (see
-		// internal/peermanagement/proto/ripple.pb.go), so use 0 as
-		// the absence proxy — XRPL ledger sequences start at the
-		// genesis ledger 1, no real peer broadcasts has_ledgerseq=0.
 		var ledgerIndex *uint32
-		if sc.LedgerSeq != 0 {
+		if sc.HasLedgerSeq() {
 			ls := sc.LedgerSeq
 			ledgerIndex = &ls
 		}
-		// Date is always set thanks to the auto-fill above. Truncate
-		// uint64 → uint32 to match the uint32 date rippled emits.
-		dateVal := uint32(sc.NetworkTime)
+		var status, action string
+		if sc.HasNewStatus() {
+			status = peerStatusUpperName(effectiveStatus)
+		}
+		if sc.HasNewEvent() {
+			action = peerStatusActionName(sc.NewEvent)
+		}
+		var date *uint32
+		if sc.HasNetworkTime() {
+			value := uint32(sc.NetworkTime)
+			date = &value
+		}
 		pub(PeerStatusUpdate{
-			Status:         peerStatusUpperName(effectiveStatus),
-			Action:         peerStatusActionName(sc.NewEvent),
+			Status:         status,
+			Action:         action,
 			LedgerIndex:    ledgerIndex,
 			LedgerHash:     ledgerHash,
-			Date:           &dateVal,
+			Date:           date,
 			LedgerIndexMin: minSeq,
 			LedgerIndexMax: maxSeq,
 		})
@@ -552,7 +559,7 @@ func (o *Overlay) handleSquelchMessage(evt Event) {
 	decoded, err := message.Decode(message.TypeSquelch, evt.Payload)
 	if err != nil {
 		slog.Debug("Squelch decode failed", "t", "Overlay", "peer", evt.PeerID, "err", err)
-		o.IncPeerBadData(evt.PeerID, "squelch-malformed-pubkey")
+		o.selectMessageChargeReason(&evt, "squelch-malformed-pubkey")
 		return
 	}
 	sq, ok := decoded.(*message.Squelch)
@@ -565,20 +572,16 @@ func (o *Overlay) handleSquelchMessage(evt Event) {
 	if len(sq.ValidatorPubKey) != 33 {
 		slog.Debug("Squelch malformed pubkey",
 			"t", "Overlay", "peer", evt.PeerID, "len", len(sq.ValidatorPubKey))
-		o.IncPeerBadData(evt.PeerID, "squelch-malformed-pubkey")
+		o.selectMessageChargeReason(&evt, "squelch-malformed-pubkey")
 		return
 	}
 
 	// Drop any inbound squelch whose target pubkey is our own
 	// validator — otherwise a peer could silence our own traffic on
-	// the RelayFromValidator path (self-silencing DoS). go-xrpl
-	// additionally charges the sending peer a bad-data event so
-	// repeated attempts feed the eviction threshold; rippled just
-	// logs-and-returns there.
+	// the RelayFromValidator path (self-silencing DoS).
 	if ownPubKey := o.localValidatorPubKey(); len(ownPubKey) == 33 && bytes.Equal(sq.ValidatorPubKey, ownPubKey) {
 		slog.Debug("Squelch dropped: targets local validator",
 			"t", "Overlay", "peer", evt.PeerID)
-		o.IncPeerBadData(evt.PeerID, "squelch-targets-self")
 		return
 	}
 
@@ -592,7 +595,8 @@ func (o *Overlay) handleSquelchMessage(evt Event) {
 		return
 	}
 	duration := time.Duration(sq.SquelchDuration) * time.Second
-	if !peer.AddSquelch(sq.ValidatorPubKey, duration) {
+	if ok, reason := peer.addSquelch(sq.ValidatorPubKey, duration); !ok {
+		o.selectMessageChargeReason(&evt, reason)
 		slog.Debug("Squelch ignored: invalid duration", "t", "Overlay", "peer", evt.PeerID, "duration", sq.SquelchDuration)
 	}
 }
@@ -609,18 +613,16 @@ func (o *Overlay) handlePing(evt Event) bool {
 
 	switch ping.PType {
 	case message.PingTypePing:
-		pong := &message.Ping{
-			PType:    message.PingTypePong,
-			Seq:      ping.Seq,
-			PingTime: ping.PingTime,
-		}
-		wireMsg, err := message.EncodeFrame(pong)
+		o.selectMessageCharge(&evt, resource.FeeModerateBurdenPeer(), "ping request")
+		pong := *ping
+		pong.PType = message.PingTypePong
+		wireMsg, err := message.EncodeFrame(&pong)
 		if err != nil {
 			return false
 		}
 		o.Send(evt.PeerID, wireMsg)
 	case message.PingTypePong:
-		if peer, exists := o.getPeer(evt.PeerID); exists {
+		if peer, exists := o.getPeer(evt.PeerID); exists && ping.HasSeq() {
 			peer.OnPong(ping.Seq, time.Now())
 		}
 	default:
@@ -637,5 +639,5 @@ func (o *Overlay) handlePing(evt Event) bool {
 // wire header and stall for the phantom payload, which was the
 // post-handshake I/O regression fixed alongside this comment.
 func (o *Overlay) onLedgerResponse(evt Event) {
-	o.Send(evt.PeerID, evt.Payload)
+	o.SendPriority(evt.PeerID, evt.Payload)
 }

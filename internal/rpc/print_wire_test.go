@@ -32,16 +32,13 @@ func printTestServer(t *testing.T) *Server {
 		}
 	}
 
-	srv := &Server{
-		registry: types.NewMethodRegistry(),
-		timeout:  time.Second,
-		services: svc,
-	}
+	srv := NewServer(ServerOptions{Timeout: time.Second, Services: svc, PeerSource: &stubPeerSource{
+		peers:                  []map[string]any{{"address": "192.0.2.1:51235"}},
+		cluster:                map[string]any{},
+		criticalFailuresLocal:  4,
+		criticalFailuresShared: 2,
+	}})
 	srv.registry.Register("print", &handlers.PrintMethod{})
-	srv.SetPeerSource(&stubPeerSource{
-		peers:   []map[string]any{{"address": "192.0.2.1:51235"}},
-		cluster: map[string]any{},
-	})
 	return srv
 }
 
@@ -84,7 +81,11 @@ func TestPrintMethod_WireShape(t *testing.T) {
 		assert.Equal(t, "1000", full["duration_us"])
 
 		assert.IsType(t, float64(0), res["last_close"].(map[string]any)["proposers"])
-		assert.IsType(t, float64(0), res["overlay"].(map[string]any)["count"])
+		overlay := res["overlay"].(map[string]any)
+		assert.IsType(t, float64(0), overlay["count"])
+		outbound := overlay["outbound_queue"].(map[string]any)
+		assert.Equal(t, "4", outbound["critical_failures_local"])
+		assert.Equal(t, "2", outbound["critical_failures_shared"])
 	})
 
 	t.Run("subtree selector narrows output over the wire", func(t *testing.T) {

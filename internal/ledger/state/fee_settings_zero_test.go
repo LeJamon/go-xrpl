@@ -81,7 +81,7 @@ func TestParseFeeSettingsRejectsNonNativeModernFee(t *testing.T) {
 	}
 
 	_, err = ParseFeeSettings(data)
-	if err == nil || !strings.Contains(err.Error(), "non-native XRP fee") {
+	if err == nil || !strings.Contains(err.Error(), "expected native XRP amount") {
 		t.Fatalf("ParseFeeSettings error = %v, want non-native fee rejection", err)
 	}
 	if !errors.Is(err, ErrInvalidFeeSettings) {

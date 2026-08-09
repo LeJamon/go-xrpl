@@ -1,7 +1,9 @@
 package openledger
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -134,6 +136,36 @@ func (o *OpenLedger) Accept(
 	modifier func(*ledger.Ledger),
 	relay func(hash [32]byte, blob []byte),
 ) error {
+	return o.accept(newLCL, locals, retriesFirst, retries, cfg, queue, nil, modifier, relay)
+}
+
+// AcceptWithPrecommit runs precommit after every fallible rebuild step has
+// succeeded and immediately before TxQ mutation and open-view publication.
+func (o *OpenLedger) AcceptWithPrecommit(
+	newLCL *ledger.Ledger,
+	locals []PendingTx,
+	retriesFirst bool,
+	retries *[]PendingTx,
+	cfg ApplyConfig,
+	queue *txq.TxQ,
+	precommit func(),
+	modifier func(*ledger.Ledger),
+	relay func(hash [32]byte, blob []byte),
+) error {
+	return o.accept(newLCL, locals, retriesFirst, retries, cfg, queue, precommit, modifier, relay)
+}
+
+func (o *OpenLedger) accept(
+	newLCL *ledger.Ledger,
+	locals []PendingTx,
+	retriesFirst bool,
+	retries *[]PendingTx,
+	cfg ApplyConfig,
+	queue *txq.TxQ,
+	precommit func(),
+	modifier func(*ledger.Ledger),
+	relay func(hash [32]byte, blob []byte),
+) error {
 	if newLCL == nil {
 		return errors.New("openledger.Accept: newLCL is nil")
 	}
@@ -151,12 +183,18 @@ func (o *OpenLedger) Accept(
 	}
 	// Force OpenLedger mode so we don't inherit a stray BuildLedgerMode from cfg.
 	applyCfg.Mode = OpenLedgerMode
+	var stagedRetries []PendingTx
+	retryTarget := retries
+	if retries != nil {
+		stagedRetries = append([]PendingTx(nil), (*retries)...)
+		retryTarget = &stagedRetries
+	}
 
 	// 1. retriesFirst — replay disputed/held txs first, OUTSIDE modifyMu.
-	if retriesFirst && retries != nil && len(*retries) > 0 {
-		held := append([]PendingTx(nil), (*retries)...)
-		*retries = (*retries)[:0]
-		if err := ApplyTxs(next, held, retries, applyCfg); err != nil {
+	if retriesFirst && retryTarget != nil && len(*retryTarget) > 0 {
+		held := append([]PendingTx(nil), (*retryTarget)...)
+		*retryTarget = (*retryTarget)[:0]
+		if err := ApplyTxs(next, held, retryTarget, applyCfg); err != nil {
 			return err
 		}
 	}
@@ -167,12 +205,54 @@ func (o *OpenLedger) Accept(
 
 	// 2. Replay prior current's txs.
 	o.currentMu.RLock()
-	curTxs := collectTxs(o.current, o.logger)
+	curTxs, err := collectTxs(o.current)
 	o.currentMu.RUnlock()
+	if err != nil {
+		return err
+	}
 	if len(curTxs) > 0 {
-		if err := ApplyTxs(next, curTxs, retries, applyCfg); err != nil {
+		if err := ApplyTxs(next, curTxs, retryTarget, applyCfg); err != nil {
 			return err
 		}
+	}
+	eligibleLocals := locals
+	if len(locals) > 0 {
+		eligibleLocals = make([]PendingTx, 0, len(locals))
+		for _, lt := range locals {
+			exists, err := next.TxExists(lt.Hash)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				eligibleLocals = append(eligibleLocals, lt)
+			}
+		}
+	}
+	type parsedLocal struct {
+		pending PendingTx
+		parsed  tx.Transaction
+	}
+	var parsedLocals []parsedLocal
+	if queue != nil && len(eligibleLocals) > 0 {
+		parsedLocals = make([]parsedLocal, 0, len(eligibleLocals))
+		for _, local := range eligibleLocals {
+			prepared, parseErr := ParsePendingTx(local.Blob)
+			if parseErr != nil {
+				return fmt.Errorf("openledger.Accept: parse local transaction %x: %w", local.Hash, parseErr)
+			}
+			if prepared.Hash != local.Hash || prepared.Account != local.Account {
+				return fmt.Errorf("openledger.Accept: local transaction identity does not match blob %x", local.Hash)
+			}
+			parsedLocals = append(parsedLocals, parsedLocal{pending: prepared, parsed: prepared.Parsed})
+		}
+	} else if len(eligibleLocals) > 0 {
+		if err := applyTxs(next, eligibleLocals, retryTarget, applyCfg, false); err != nil {
+			return err
+		}
+	}
+
+	if precommit != nil {
+		precommit()
 	}
 
 	// 3. Modifier hook (TxQ promotion) — runs before locals so they see the
@@ -182,26 +262,13 @@ func (o *OpenLedger) Accept(
 	}
 
 	// 4. Replay locals via TxQ.Apply so an under-fee local lands in the queue.
-	if len(locals) > 0 {
+	if len(eligibleLocals) > 0 {
 		if queue != nil {
 			viewCfg := applyCfg
 			adapter := NewTxqAdapter(next, viewCfg)
-			for _, lt := range locals {
-				if next.TxExists(lt.Hash) {
-					continue
-				}
-				parsed, perr := tx.ParseFromBinary(lt.Blob)
-				if perr != nil {
-					if o.logger != nil {
-						o.logger.Debug("openledger.Accept: dropping malformed local tx", "hash", lt.Hash, "err", perr)
-					}
-					continue
-				}
-				parsed.SetRawBytes(lt.Blob)
-				_ = queue.Apply(adapter, parsed, lt.Hash, lt.Account)
+			for _, local := range parsedLocals {
+				_ = queue.Apply(adapter, local.parsed, local.pending.Hash, local.pending.Account)
 			}
-		} else if err := ApplyTxs(next, locals, retries, applyCfg); err != nil {
-			return err
 		}
 	}
 
@@ -213,11 +280,13 @@ func (o *OpenLedger) Accept(
 			if splitErr != nil {
 				return true
 			}
-			if parsed, perr := tx.ParseFromBinary(rawBlob); perr == nil {
-				if common := parsed.GetCommon(); common != nil && common.Flags != nil {
-					if *common.Flags&tx.TfInnerBatchTxn != 0 {
-						return true
-					}
+			parsed, parseErr := tx.ParseFromBinary(rawBlob)
+			if parseErr != nil {
+				return true
+			}
+			if common := parsed.GetCommon(); common != nil && common.Flags != nil {
+				if *common.Flags&tx.TfInnerBatchTxn != 0 {
+					return true
 				}
 			}
 			relay(hash, rawBlob)
@@ -230,6 +299,9 @@ func (o *OpenLedger) Accept(
 	o.current = next
 	o.cachedTxs = nil
 	o.currentMu.Unlock()
+	if retries != nil {
+		*retries = stagedRetries
+	}
 	return nil
 }
 
@@ -281,28 +353,37 @@ func (o *OpenLedger) CurrentTxs() [][]byte {
 	return out
 }
 
-// collectTxs parses each tx blob in view into a PendingTx, skipping (and logging)
-// malformed entries so one bad record doesn't poison the replay.
-func collectTxs(v *ledger.Ledger, logger xrpllog.Logger) []PendingTx {
+func collectTxs(v *ledger.Ledger) ([]PendingTx, error) {
 	if v == nil {
-		return nil
-	}
-	if logger == nil {
-		logger = xrpllog.Discard()
+		return nil, nil
 	}
 	var out []PendingTx
-	_ = v.ForEachTransaction(func(itemKey [32]byte, data []byte) bool {
-		raw, _, err := tx.SplitTxWithMetaBlob(data)
-		if err != nil {
-			logger.Warn("openledger: skipping unsplittable tx item in replay",
-				"item", itemKey, "err", err)
-			return true
+	var visitErr error
+	err := v.ForEachTransaction(func(itemKey [32]byte, data []byte) bool {
+		raw, _, splitErr := tx.SplitTxWithMetaBlobStrict(data)
+		if splitErr != nil {
+			raw = data
 		}
-		ptx, err := ParsePendingTx(raw)
-		if err != nil {
-			logger.Warn("openledger: skipping unparseable tx in replay",
-				"item", itemKey, "err", err)
-			return true
+		ptx, parseErr := ParsePendingTx(raw)
+		if parseErr != nil {
+			visitErr = fmt.Errorf("openledger: parse replay transaction %x: %w", itemKey, parseErr)
+			return false
+		}
+		if splitErr != nil {
+			ptx.Parsed.SetRawBytes(nil)
+			canonical, serializeErr := tx.SerializeTransaction(ptx.Parsed)
+			if serializeErr != nil {
+				visitErr = fmt.Errorf("openledger: serialize replay transaction %x: %w", itemKey, serializeErr)
+				return false
+			}
+			if !bytes.Equal(canonical, data) {
+				visitErr = fmt.Errorf("openledger: replay transaction %x is not canonical raw data", itemKey)
+				return false
+			}
+		}
+		if ptx.Hash != itemKey {
+			visitErr = fmt.Errorf("openledger: replay transaction key %x does not match hash %x", itemKey, ptx.Hash)
+			return false
 		}
 		if ptx.Parsed.GetCommon().GetFlags()&tx.TfInnerBatchTxn != 0 {
 			return true
@@ -310,7 +391,13 @@ func collectTxs(v *ledger.Ledger, logger xrpllog.Logger) []PendingTx {
 		out = append(out, ptx)
 		return true
 	})
-	return out
+	if err != nil {
+		return nil, err
+	}
+	if visitErr != nil {
+		return nil, visitErr
+	}
+	return out, nil
 }
 
 // Submit is the convenience entry point for tx ingress, wrapping Modify with a
@@ -366,15 +453,21 @@ func (o *OpenLedger) SubmitDetailed(ptx PendingTx, cfg ApplyConfig, queue *txq.T
 	out.Changed = o.Modify(func(view *ledger.Ledger) bool {
 		// Pre-filter: tx already in view → tefALREADY, so callers can report
 		// the duplicate distinctly from a generic failure.
-		if view.TxExists(ptx.Hash) {
+		exists, err := view.TxExists(ptx.Hash)
+		if err != nil {
+			out.Result = ter.TefEXCEPTION
+			out.Message = ter.TefEXCEPTION.Message()
+			return false
+		}
+		if exists {
 			out.Class = ResultFailure
 			out.Result = ter.TefALREADY
 			out.Message = ter.TefALREADY.Message()
 			return false
 		}
-		// Reuse the parse from ingress when present: it avoids re-decoding the
-		// blob under the apply mutex and carries any off-strand signature verdict
-		// (PrewarmSignature) through to the in-strand check. Fall back to parsing
+		// Reuse the parse from ingress when present. The direct path carries its
+		// off-strand signature verdict into the in-strand check; TxQ canonicalizes
+		// the serialized submission before it can be held. Fall back to parsing
 		// for PendingTx values built without ParsePendingTx.
 		parsed := ptx.Parsed
 		if parsed == nil {

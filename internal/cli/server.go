@@ -1,75 +1,141 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 
+	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/node"
-	"github.com/LeJamon/go-xrpl/internal/observability"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/version"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
 
-var (
+type serverOptions struct {
 	standalone bool
-)
+	start      bool
+	load       bool
+	network    bool
+	replay     bool
+	ledger     string
+	ledgerFile string
+}
 
-// serverCmd represents the server command (default action)
-var serverCmd = &cobra.Command{
-	Use:   "server",
-	Short: "Start the XRPL daemon server",
-	Long: `Start the go-xrpl server which provides:
+type nodeRunFunc func(
+	context.Context,
+	*config.Config,
+	string,
+	bool,
+	service.StartupConfig,
+	xrpllog.Logger,
+	xrpllog.Logger,
+	func(),
+	func(),
+	<-chan os.Signal,
+) error
+
+func runNode(
+	ctx context.Context,
+	cfg *config.Config,
+	configPath string,
+	standalone bool,
+	startup service.StartupConfig,
+	rootLogger,
+	serverLog xrpllog.Logger,
+	ready func(),
+	stopping func(),
+	reload <-chan os.Signal,
+) error {
+	return node.RunWithOptions(ctx, cfg, configPath, standalone, startup, rootLogger, serverLog, node.RunOptions{
+		Ready:    ready,
+		Stopping: stopping,
+		Reload:   reload,
+	})
+}
+
+func (a *application) newServerCommand(options *serverOptions) *cobra.Command {
+	command := &cobra.Command{
+		Use:   "server",
+		Short: "Start the XRPL daemon server",
+		Long: `Start the go-xrpl server which provides:
 - HTTP JSON-RPC API endpoints
 - WebSocket server for real-time subscriptions
 - Health check endpoint
 - All XRPL protocol methods
 
 Requires --conf flag to specify the configuration file.
-Use 'xrpld generate-config' to create an initial configuration file.`,
-	RunE: runServer,
+Use 'xrpld generate-config' to create an initial configuration file.
+
+GOXRPL_PPROF and GOXRPL_METRICS enable loopback diagnostic listeners. A
+configured listener that cannot bind aborts startup. Exposing pprof on a
+non-loopback address additionally requires GOXRPL_PPROF_ALLOW_UNSAFE=true.`,
+		Args: cobra.NoArgs,
+		RunE: a.serverRunner(options),
+	}
+	bindServerFlags(command.Flags(), options)
+	return command
 }
 
-func init() {
-	rootCmd.AddCommand(serverCmd)
-
-	// Set server as the default command
-	rootCmd.RunE = runServer
-
-	bindServerFlags(rootCmd.Flags())
-	bindServerFlags(serverCmd.Flags())
+func bindServerFlags(flags *pflag.FlagSet, options *serverOptions) {
+	flags.BoolVarP(&options.standalone, "standalone", "a", false, "run in standalone mode (no peers)")
+	bindStartupFlags(flags, options)
 }
 
-func bindServerFlags(flags *pflag.FlagSet) {
-	flags.BoolVarP(&standalone, "standalone", "a", false, "run in standalone mode (no peers)")
-	bindStartupFlags(flags)
+func (a *application) serverRunner(options *serverOptions) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		return a.runServer(cmd, options)
+	}
 }
 
-func runServer(cmd *cobra.Command, args []string) error {
-	if _, err := requireConfig(); err != nil {
+func (a *application) runServer(cmd *cobra.Command, options *serverOptions) (resultErr error) {
+	runCtx, cancel := context.WithCancelCause(cmd.Context())
+	defer cancel(nil)
+	defer func() {
+		cause := context.Cause(runCtx)
+		if isProcessSignal(cause) && wrapsOnly(resultErr, cause) {
+			resultErr = nil
+		}
+	}()
+	if cause := context.Cause(runCtx); cause != nil {
+		return cause
+	}
+
+	cfg, err := a.requireConfig(options.standalone)
+	if err != nil {
 		// Fold the guidance into the error so Execute() prints it once. A bare
 		// pre-print here would duplicate the message Execute() emits.
 		return fmt.Errorf("%w\n  Use 'xrpld generate-config' to create an initial configuration file."+
 			"\n  Example: xrpld server --conf /path/to/xrpld.toml", err)
 	}
+	if cause := context.Cause(runCtx); cause != nil {
+		return cause
+	}
 
-	startup, err := startupConfigFromFlags(cmd.Flags())
+	startup, err := startupConfig(
+		options,
+		commandFlagChanged(cmd, "ledger"),
+		commandFlagChanged(cmd, "ledgerfile"),
+		cfg.NodeDB.FastLoad,
+	)
 	if err != nil {
 		return err
 	}
 
 	// Initialize structured logger from config + CLI flag overrides.
-	logCfg, err := globalConfig.Logging.ToLogConfig(globalConfig.DebugLogfile)
+	logCfg, err := cfg.Logging.ToLogConfig(cfg.DebugLogfile)
 	if err != nil {
 		return fmt.Errorf("configure logging: %w", err)
 	}
-	if debug {
+	if a.options.debug {
 		logCfg.Level = xrpllog.LevelDebug
 	}
-	if verbose {
+	if a.options.verbose {
 		logCfg.Level = xrpllog.LevelTrace
 	}
 	rootLogger, logHandler := xrpllog.Init(logCfg)
@@ -81,107 +147,80 @@ func runServer(cmd *cobra.Command, args []string) error {
 
 	serverLog.Info("Starting go-xrpl", "version", version.Version)
 
-	// Set GOXRPL_PPROF=:6060 (or any addr:port) to enable pprof. Off by default.
-	if addr := os.Getenv("GOXRPL_PPROF"); addr != "" {
-		go func() {
-			if err := observability.StartPProf(addr); err != nil {
-				serverLog.Warn("pprof server failed", "addr", addr, "err", err)
-			}
-		}()
-		serverLog.Info("pprof enabled", "addr", addr)
-	}
-
-	// Set GOXRPL_METRICS=:9100 (or any addr:port) to expose Prometheus
-	// metrics at /metrics. Off by default.
-	if addr := os.Getenv("GOXRPL_METRICS"); addr != "" {
-		go func() {
-			if err := startMetricsServer(addr); err != nil {
-				serverLog.Warn("metrics server failed", "addr", addr, "err", err)
-			}
-		}()
-		serverLog.Info("prometheus metrics enabled", "addr", addr)
-	}
-
-	return node.Run(globalConfig, configFile, standalone, startup, rootLogger, serverLog)
-}
-
-func bindStartupFlags(flags *pflag.FlagSet) {
-	flags.Bool("start", false, "start from a fresh ledger")
-	flags.Bool("load", false, "load the latest ledger from local storage")
-	flags.Bool("net", false, "acquire the initial ledger from the network")
-	flags.Bool("replay", false, "replay the ledger close selected by --ledger")
-	flags.String("ledger", "", "load the ledger identified by a hash, sequence, or shortcut")
-	flags.String("ledgerfile", "", "load a ledger from a JSON file")
-}
-
-func startupConfigFromFlags(flags *pflag.FlagSet) (service.StartupConfig, error) {
-	start, err := flags.GetBool("start")
+	auxiliary, err := bindAuxiliaryServers(os.Getenv, net.Listen)
 	if err != nil {
-		return service.StartupConfig{}, err
+		return err
 	}
-	load, err := flags.GetBool("load")
-	if err != nil {
-		return service.StartupConfig{}, err
-	}
-	network, err := flags.GetBool("net")
-	if err != nil {
-		return service.StartupConfig{}, err
-	}
-	replay, err := flags.GetBool("replay")
-	if err != nil {
-		return service.StartupConfig{}, err
-	}
-	ledger, err := flags.GetString("ledger")
-	if err != nil {
-		return service.StartupConfig{}, err
-	}
-	ledgerFile, err := flags.GetString("ledgerfile")
-	if err != nil {
-		return service.StartupConfig{}, err
-	}
-
-	ledgerSet := flags.Changed("ledger")
-	ledgerFileSet := flags.Changed("ledgerfile")
-	if replay && !ledgerSet {
-		return service.StartupConfig{}, fmt.Errorf("--replay requires --ledger")
-	}
-	if ledgerFileSet && ledgerFile == "" {
-		return service.StartupConfig{}, fmt.Errorf("--ledgerfile requires a non-empty path")
-	}
-
-	selected := 0
-	for _, active := range []bool{
-		start,
-		load,
-		network,
-		replay,
-		ledgerFileSet,
-		ledgerSet && !replay,
-	} {
-		if active {
-			selected++
+	ready := func() {
+		auxiliary.Start(runCtx, cancel)
+		for name, address := range auxiliary.Addresses() {
+			serverLog.Info(name+" enabled", "addr", address)
 		}
 	}
-	if selected > 1 {
-		return service.StartupConfig{}, fmt.Errorf(
-			"startup modes are mutually exclusive: choose only one of --start, --load, --net, --replay, --ledger, or --ledgerfile",
-		)
+	nodeErr := a.deps.runNode(
+		runCtx,
+		cfg,
+		a.options.configFile,
+		options.standalone,
+		startup,
+		rootLogger,
+		serverLog,
+		ready,
+		func() { cancel(nil) },
+		a.deps.reload,
+	)
+	cancel(nil)
+	return errors.Join(nodeErr, auxiliary.Shutdown())
+}
+
+func bindStartupFlags(flags *pflag.FlagSet, options *serverOptions) {
+	flags.BoolVar(&options.start, "start", false, "start from a fresh ledger")
+	flags.BoolVar(&options.load, "load", false, "load the latest ledger from local storage")
+	flags.BoolVar(&options.network, "net", false, "acquire the initial ledger from the network")
+	flags.BoolVar(&options.replay, "replay", false, "replay the ledger close selected by --ledger")
+	flags.StringVar(&options.ledger, "ledger", "", "load the ledger identified by a hash, sequence, or shortcut")
+	flags.StringVar(&options.ledgerFile, "ledgerfile", "", "load a ledger from a JSON file")
+}
+
+func commandFlagChanged(command *cobra.Command, name string) bool {
+	for current := command; current != nil; current = current.Parent() {
+		if current.Flags().Changed(name) {
+			return true
+		}
+	}
+	return false
+}
+
+func startupConfig(options *serverOptions, ledgerSet, ledgerFileSet, fastLoad bool) (service.StartupConfig, error) {
+	startup := service.StartupConfig{Mode: service.StartupNormal}
+	if options.start {
+		startup.Mode = service.StartupFresh
 	}
 
 	switch {
-	case start:
-		return service.StartupConfig{Mode: service.StartupFresh}, nil
-	case load:
-		return service.StartupConfig{Mode: service.StartupLoad}, nil
-	case network:
-		return service.StartupConfig{Mode: service.StartupNetwork}, nil
-	case replay:
-		return service.StartupConfig{Mode: service.StartupReplay, Ledger: ledger}, nil
-	case ledgerFileSet:
-		return service.StartupConfig{Mode: service.StartupLoadFile, Ledger: ledgerFile}, nil
 	case ledgerSet:
-		return service.StartupConfig{Mode: service.StartupLoad, Ledger: ledger}, nil
-	default:
-		return service.StartupConfig{Mode: service.StartupNormal}, nil
+		startup.Ledger = options.ledger
+		if options.replay {
+			startup.Mode = service.StartupReplay
+		} else {
+			startup.Mode = service.StartupLoad
+		}
+	case ledgerFileSet:
+		startup = service.StartupConfig{Mode: service.StartupLoadFile, Ledger: options.ledgerFile}
+	case options.load:
+		startup = service.StartupConfig{Mode: service.StartupLoad}
+	case fastLoad:
+		startup = service.StartupConfig{Mode: service.StartupNormal}
 	}
+
+	if options.network && !fastLoad {
+		if startup.Mode == service.StartupLoad || startup.Mode == service.StartupReplay {
+			return service.StartupConfig{}, fmt.Errorf("--net is incompatible with --load or --ledger")
+		}
+		startup = service.StartupConfig{Mode: service.StartupNetwork}
+	}
+	if startup.Mode == service.StartupLoadFile && startup.Ledger == "" && !fastLoad {
+		return service.StartupConfig{}, fmt.Errorf("--ledgerfile requires a non-empty path")
+	}
+	return startup, nil
 }

@@ -1,6 +1,68 @@
 package peermanagement
 
-import "testing"
+import (
+	"net"
+	"testing"
+
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+)
+
+func TestWithPublicIPCopiesCallerValue(t *testing.T) {
+	ip := net.ParseIP("198.51.100.7")
+	cfg := DefaultConfig()
+	WithPublicIP(ip)(&cfg)
+	ip[0] ^= 0xff
+	assert := cfg.PublicIP.String()
+	if assert != "198.51.100.7" {
+		t.Fatalf("PublicIP changed through caller alias: got %s", assert)
+	}
+}
+
+func TestConfigValidateServerDomain(t *testing.T) {
+	tests := []struct {
+		name    string
+		domain  string
+		wantErr bool
+	}{
+		{name: "empty"},
+		{name: "valid", domain: "validator.example.com"},
+		{name: "invalid", domain: "-validator.example.com", wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.ServerDomain = test.domain
+			err := cfg.Validate()
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("Validate returned nil, want an invalid ServerDomain error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Validate returned error: %v", err)
+			}
+		})
+	}
+}
+
+func TestConfigResourceLimits(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.ResourceLimits != resource.DefaultLimits() {
+		t.Fatalf("resource limits = %+v, want defaults %+v", cfg.ResourceLimits, resource.DefaultLimits())
+	}
+
+	WithResourceLimits(resource.Limits{
+		MaxEntries:         10,
+		MaxImportedEntries: 11,
+		MaxImports:         1,
+		MaxGossipItems:     1,
+	})(&cfg)
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate accepted more imported entries than total entries")
+	}
+}
 
 // TestDefaultConfig_ReduceRelayOptIn pins Task 4.4 (G5): rippled ships
 // with reduce-relay disabled by default — `Config.h:248` sets

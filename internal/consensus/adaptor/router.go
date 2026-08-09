@@ -14,6 +14,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -55,8 +57,12 @@ type peerBootstrapAcknowledger interface {
 // Router reads inbound messages from the P2P overlay and dispatches
 // them to the consensus engine and adaptor.
 type Router struct {
-	engine  consensus.Engine
-	adaptor *Adaptor
+	engine      consensus.RouterEngine
+	adaptor     *Adaptor
+	gossip      gossipNetwork
+	txSetNet    txSetNetwork
+	acquisition ledgerAcquisitionNetwork
+	serve       ledgerServeNetwork
 	// inbox is the overlay's bounded, backpressured consensus lane.
 	inbox <-chan *peermanagement.InboundMessage
 	// serviceInbox carries best-effort, recoverable peer traffic. Keeping it
@@ -131,6 +137,12 @@ type Router struct {
 	// messages would accelerate selection and produce earlier squelches for
 	// the same traffic pattern.
 	messageSeen *messageSuppression
+	// validationWork verifies signatures outside the router goroutine. Trusted
+	// and untrusted work use separate bounded queues so untrusted traffic cannot
+	// occupy the trusted capacity.
+	validationWork          *validationWorkLane
+	validationShedTrusted   atomic.Uint64
+	validationShedUntrusted atomic.Uint64
 
 	// manifests is the validator manifest cache. Wired by the
 	// Components bootstrap so the router can apply inbound TMManifests
@@ -180,7 +192,7 @@ type Router struct {
 	txSetAcquire   map[consensus.TxSetID]*txSetAcquireState
 
 	// Retry-loop knobs for tx-set acquisition. Set to production defaults by
-	// NewRouter; tests inject smaller values via SetTxSetRetryKnobsForTest so
+	// newRouter; tests inject smaller values via setTxSetRetryKnobsForTest so
 	// they don't sleep for the production 250ms throttle window. See
 	// txSetRetryKnobs for the meaning of each field.
 	txSetRetryKnobs txSetRetryKnobs
@@ -192,11 +204,18 @@ type Router struct {
 	// Nil when online-delete is off, leaving acquisition/serving unrestricted.
 	floor MinimumOnlineFloor
 
+	lifecycleMu     sync.RWMutex
+	lifecycleState  routerLifecycleState
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
+	lifecycleWG     sync.WaitGroup
+	lifecycleReady  chan struct{}
+
+	prewarmSignatures func(context.Context, [][]byte)
+
 	// txJobs is the bounded queue draining inbound peer transactions off the
-	// Run message loop, mirroring rippled's jtTRANSACTION job queue. Created
-	// and drained by startTxWorkers from Run; nil until then, in which case
-	// submitTxJob runs the handler inline (tests that drive handleMessage
-	// synchronously). Only written on the Run goroutine.
+	// Run message loop, mirroring rippled's jtTRANSACTION job queue. It is nil
+	// before Run and after shutdown.
 	txJobs chan *peermanagement.InboundMessage
 
 	// droppedTxJobs counts inbound transactions shed because the worker pool
@@ -207,10 +226,7 @@ type Router struct {
 	// serveJobs is the bounded queue draining inbound mtGET_LEDGER serve work
 	// (handleGetLedger / serveTxSet, which builds the largest map — the
 	// 15k-tx tx-set — inline) off the Run message loop onto a small worker
-	// pool. Created and drained by startServeWorkers from Run; nil until
-	// then, in which case submitServeJob runs handleGetLedger inline (tests
-	// that drive handleMessage synchronously). Only written on the Run
-	// goroutine.
+	// pool. It is nil before Run and after shutdown.
 	serveJobs chan *peermanagement.InboundMessage
 
 	// droppedServeJobs counts inbound get_ledger requests shed because the
@@ -254,6 +270,13 @@ type Router struct {
 	seqHashMu  sync.Mutex
 	seqHash    map[uint32]ledgerHashEntry
 	seqHashMax uint32
+}
+
+type routerNetworkConfig struct {
+	gossip      gossipNetwork
+	txSet       txSetNetwork
+	acquisition ledgerAcquisitionNetwork
+	serve       ledgerServeNetwork
 }
 
 // catchupTarget is the highest (seq,hash) the router is driving a bounded
@@ -333,24 +356,45 @@ var serveWorkerCount = max(2, runtime.GOMAXPROCS(0)/2)
 
 const serveQueueDepth = 256
 
-// messageDedupTTL is how long a proposal/validation hash is
-// remembered for duplicate-detection purposes. 30s comfortably covers a
-// consensus round while aging out cross-round stragglers so the dedup
-// table doesn't grow unbounded under sustained gossip.
-const messageDedupTTL = 30 * time.Second
+// messageDedupTTL matches rippled's five-minute suppression hold.
+const messageDedupTTL = 300 * time.Second
 
-// messageDedupMaxEntries caps the dedup table size. One entry per
-// unique (validator, position, txSet, closeTime) tuple in a healthy
-// 100-validator round; 4096 gives ~40x headroom before the trim
-// fires. Cheap memory — 32-byte key + 24-byte time.
 const messageDedupMaxEntries = 4096
 
 // NewRouter creates a new Router.
-func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermanagement.InboundMessage) *Router {
+func NewRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *peermanagement.InboundMessage) *Router {
+	network := routerNetworkConfig{}
+	if adaptor != nil {
+		network.gossip, _ = adaptor.sender.(gossipNetwork)
+		network.txSet, _ = adaptor.sender.(txSetNetwork)
+		network.acquisition, _ = adaptor.sender.(ledgerAcquisitionNetwork)
+		network.serve, _ = adaptor.sender.(ledgerServeNetwork)
+	}
+	return newRouter(engine, adaptor, inbox, network)
+}
+
+func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *peermanagement.InboundMessage, network routerNetworkConfig) *Router {
 	logger := slog.Default().With("component", "consensus-router")
+	noop := &noopSender{}
+	if network.gossip == nil {
+		network.gossip = noop
+	}
+	if network.txSet == nil {
+		network.txSet = noop
+	}
+	if network.acquisition == nil {
+		network.acquisition = noop
+	}
+	if network.serve == nil {
+		network.serve = noop
+	}
 	r := &Router{
 		engine:             engine,
 		adaptor:            adaptor,
+		gossip:             network.gossip,
+		txSetNet:           network.txSet,
+		acquisition:        network.acquisition,
+		serve:              network.serve,
 		inbox:              inbox,
 		logger:             logger,
 		peerStates:         make(map[peermanagement.PeerID]*peerLedgerState),
@@ -363,12 +407,29 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermana
 		txSetAcquire:       make(map[consensus.TxSetID]*txSetAcquireState),
 		txSetRetryKnobs:    defaultTxSetRetryKnobs(),
 		seqHash:            make(map[uint32]ledgerHashEntry),
+		lifecycleCtx:       context.Background(),
 	}
 	// Wire the stash → acquisition hook so quorum decisions on unknown
 	// ledgers don't sit silently in pendingLedgerValidations.
 	if adaptor != nil {
+		if _, ok := engine.(consensus.VerifiedValidationProcessor); ok {
+			r.validationWork = newValidationWorkLane(
+				adaptor.VerifyValidation,
+				func(peerID peermanagement.PeerID) bool {
+					return r.peerSessions == nil || r.peerSessions.IsPeerConnected(peerID)
+				},
+				adaptor.IsTrusted,
+			)
+			r.validationWork.onUntrustedResultShed = func(result validationWorkResult, count uint64) {
+				if result.validation != nil {
+					r.messageSeen.allowRetry(result.validation.SuppressionHash)
+				}
+				r.logUntrustedValidationSaturation("result", count)
+			}
+		}
 		if svc := adaptor.LedgerService(); svc != nil {
 			svc.SetOnPendingValidationStashed(r.armValidationStashAcquisition)
+			r.prewarmSignatures = svc.PrewarmSignaturesContext
 		}
 		// Wire the still-needed re-arm so every consensus re-ask of an
 		// in-flight tx-set clears the per-acquisition throttle and
@@ -639,8 +700,12 @@ func (r *Router) removePeerFromAcquisitions(peerID uint64) {
 // also runs in this loop to time out stuck inbound replay-delta
 // acquisitions and fall back to the legacy mtGET_LEDGER path.
 func (r *Router) Run(ctx context.Context) {
+	runCtx, ok := r.startLifecycle(ctx)
+	if !ok {
+		return
+	}
 	if r.acquisitionStore != nil {
-		r.acquisitionStore.start(ctx)
+		r.acquisitionStore.start(runCtx)
 		defer r.acquisitionStore.stopDrain()
 	}
 	r.acquisitionWorkMu.Lock()
@@ -651,7 +716,7 @@ func (r *Router) Run(ctx context.Context) {
 	}
 	r.acquisitionWorkMu.Unlock()
 	workLane.flush = r.flushAcquisitionStore
-	workLane.start(ctx)
+	workLane.start(runCtx)
 	defer func() {
 		workLane.stop()
 		r.acquisitionWorkMu.Lock()
@@ -661,7 +726,7 @@ func (r *Router) Run(ctx context.Context) {
 		r.acquisitionWorkMu.Unlock()
 	}()
 
-	disconnectCtx, stopDisconnectCleanup := context.WithCancel(ctx)
+	disconnectCtx, stopDisconnectCleanup := context.WithCancel(runCtx)
 	disconnectCleanupDone := make(chan struct{})
 	go func() {
 		defer close(disconnectCleanupDone)
@@ -672,15 +737,21 @@ func (r *Router) Run(ctx context.Context) {
 		<-disconnectCleanupDone
 	}()
 
-	r.startTxWorkers(ctx)
-	r.startServeWorkers(ctx)
-	r.startManifestWorker(ctx)
+	r.startManifestWorker(runCtx)
 	defer r.stopManifestWorker()
+	if r.validationWork != nil {
+		r.validationWork.start(runCtx)
+		defer r.validationWork.stop()
+	}
 	ticker := time.NewTicker(inboundReplayDeltaTickInterval)
 	defer ticker.Stop()
+	defer r.stopLifecycle()
 	r.drainPeerConnects()
 	for {
-		if !r.drainConsensusInbox(ctx) {
+		if !r.drainTrustedValidationResults(runCtx) {
+			return
+		}
+		if !r.drainConsensusInbox(runCtx) {
 			return
 		}
 		acqInbox := r.acqInbox
@@ -688,25 +759,25 @@ func (r *Router) Run(ctx context.Context) {
 			acqInbox = nil
 		}
 		select {
-		case <-ctx.Done():
+		case <-runCtx.Done():
 			return
 		case msg, ok := <-r.inbox:
 			if !ok {
 				return
 			}
-			r.handleMessage(msg)
+			r.handleInboundMessage(msg)
 		case msg, ok := <-r.serviceInbox:
 			if !ok {
 				r.serviceInbox = nil
 				continue
 			}
-			r.handleMessage(msg)
+			r.handleInboundMessage(msg)
 		case msg, ok := <-r.consensusControlInbox:
 			if !ok {
 				r.consensusControlInbox = nil
 				continue
 			}
-			r.handleMessage(msg)
+			r.handleInboundMessage(msg)
 		case msg, ok := <-acqInbox:
 			// Dedicated acquisition-reply lane (liBASE and the replay-delta /
 			// proof-path responses). Its own buffered lane keeps a flood on
@@ -719,7 +790,7 @@ func (r *Router) Run(ctx context.Context) {
 				r.acqInbox = nil
 				continue
 			}
-			r.handleMessage(msg)
+			r.handleInboundMessage(msg)
 		case msg, ok := <-r.txInbox:
 			if !ok {
 				// Lane closed (or never wired): stop selecting it so we
@@ -731,6 +802,13 @@ func (r *Router) Run(ctx context.Context) {
 			r.submitTxJob(msg)
 		case result := <-workLane.results():
 			r.handleAcquisitionWorkResult(result)
+		case result := <-r.trustedValidationWorkResults():
+			r.handleValidationWorkResult(result)
+		case result := <-r.untrustedValidationWorkResults():
+			if !r.drainTrustedValidationResults(runCtx) {
+				return
+			}
+			r.handleValidationWorkResult(result)
 		case <-r.peerConnectWake:
 			r.drainPeerConnects()
 		case <-ticker.C:
@@ -742,6 +820,19 @@ func (r *Router) Run(ctx context.Context) {
 
 const consensusDrainBatch = 32
 
+func (r *Router) drainTrustedValidationResults(ctx context.Context) bool {
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case result := <-r.trustedValidationWorkResults():
+			r.handleValidationWorkResult(result)
+		default:
+			return true
+		}
+	}
+}
+
 func (r *Router) drainConsensusInbox(ctx context.Context) bool {
 	for range consensusDrainBatch {
 		select {
@@ -751,7 +842,7 @@ func (r *Router) drainConsensusInbox(ctx context.Context) bool {
 			if !ok {
 				return false
 			}
-			r.handleMessage(msg)
+			r.handleInboundMessage(msg)
 		default:
 			return true
 		}
@@ -768,7 +859,7 @@ func (r *Router) drainAcquisitionInboxBeforeMaintenance(workLane *acquisitionWor
 				r.acqInbox = nil
 				return drained
 			}
-			r.handleMessage(msg)
+			r.handleInboundMessage(msg)
 			drained++
 		default:
 			return drained
@@ -777,45 +868,37 @@ func (r *Router) drainAcquisitionInboxBeforeMaintenance(workLane *acquisitionWor
 	return drained
 }
 
-// startTxWorkers builds the bounded inbound-transaction queue and launches its
-// drainers. Called once at the top of Run, before the message loop, so the
-// first dispatched transaction sees a live pool. Workers exit on ctx.Done.
-func (r *Router) startTxWorkers(ctx context.Context) {
-	r.txJobs = make(chan *peermanagement.InboundMessage, txQueueDepth)
-	jobs := r.txJobs
-	for range txWorkerCount {
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case msg := <-jobs:
-					r.handleTransaction(msg)
-				}
-			}
-		}()
-	}
-}
-
 // submitTxJob hands an inbound transaction to the worker pool, off the Run
-// message loop. When the pool isn't running (tests that drive handleMessage
-// synchronously without Run), it runs the handler inline to preserve the
-// synchronous contract. On a saturated queue it sheds the frame and bumps
-// droppedTxJobs — the originating peer resends and reduce-relay means other
-// peers relay it too, so a dropped relay frame is recoverable. Mirrors
-// rippled's "Transaction queue is full" overflow drop.
+// message loop. Before the first Run it handles synchronously for direct
+// dispatch tests. Once shutdown begins, admission remains closed.
 func (r *Router) submitTxJob(msg *peermanagement.InboundMessage) {
-	if r.txJobs == nil {
+	if msg == nil {
+		return
+	}
+	r.lifecycleMu.RLock()
+	state := r.lifecycleState
+	jobs := r.txJobs
+	if state == routerLifecycleInitial {
+		r.lifecycleMu.RUnlock()
+		defer func() { _ = msg.Close() }()
 		r.handleTransaction(msg)
 		return
 	}
+	if state != routerLifecycleRunning || jobs == nil {
+		r.lifecycleMu.RUnlock()
+		r.droppedTxJobs.Add(1)
+		_ = msg.Close()
+		return
+	}
 	select {
-	case r.txJobs <- msg:
+	case jobs <- msg:
 	default:
 		r.droppedTxJobs.Add(1)
+		_ = msg.Close()
 		r.logger.Debug("inbound tx dropped: worker pool saturated",
 			"t", "consensus", "event", "tx-shed", "peer", msg.PeerID)
 	}
+	r.lifecycleMu.RUnlock()
 }
 
 // DroppedTxJobs returns the cumulative count of inbound transactions shed
@@ -824,44 +907,37 @@ func (r *Router) DroppedTxJobs() uint64 {
 	return r.droppedTxJobs.Load()
 }
 
-// startServeWorkers builds the bounded get_ledger serve queue and launches
-// its drainers. Called once at the top of Run, before the message loop, so
-// the first dispatched request sees a live pool. Workers exit on ctx.Done.
-func (r *Router) startServeWorkers(ctx context.Context) {
-	r.serveJobs = make(chan *peermanagement.InboundMessage, serveQueueDepth)
-	jobs := r.serveJobs
-	for range serveWorkerCount {
-		go func() {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case msg := <-jobs:
-					r.handleGetLedger(msg)
-				}
-			}
-		}()
-	}
-}
-
 // submitServeJob hands an inbound get_ledger request to the serve pool, off
-// the Run message loop. When the pool isn't running (tests that drive
-// handleMessage synchronously without Run), it runs the handler inline to
-// preserve the synchronous contract. On a saturated queue it sheds the
-// request and bumps droppedServeJobs — the requesting peer retries elsewhere,
-// so a dropped serve is recoverable load-shedding.
+// the Run message loop. Before the first Run it handles synchronously for
+// direct dispatch tests. Once shutdown begins, admission remains closed.
 func (r *Router) submitServeJob(msg *peermanagement.InboundMessage) {
-	if r.serveJobs == nil {
+	if msg == nil {
+		return
+	}
+	r.lifecycleMu.RLock()
+	state := r.lifecycleState
+	jobs := r.serveJobs
+	if state == routerLifecycleInitial {
+		r.lifecycleMu.RUnlock()
+		defer func() { _ = msg.Close() }()
 		r.handleGetLedger(msg)
 		return
 	}
+	if state != routerLifecycleRunning || jobs == nil {
+		r.lifecycleMu.RUnlock()
+		r.droppedServeJobs.Add(1)
+		_ = msg.Close()
+		return
+	}
 	select {
-	case r.serveJobs <- msg:
+	case jobs <- msg:
 	default:
 		r.droppedServeJobs.Add(1)
+		_ = msg.Close()
 		r.logger.Debug("inbound get_ledger dropped: serve pool saturated",
 			"t", "consensus", "event", "serve-shed", "peer", msg.PeerID)
 	}
+	r.lifecycleMu.RUnlock()
 }
 
 // DroppedServeJobs returns the cumulative count of inbound get_ledger
@@ -915,6 +991,7 @@ func (r *Router) processManifestJob(msg *peermanagement.InboundMessage) {
 }
 
 func (r *Router) processManifestJobContext(ctx context.Context, msg *peermanagement.InboundMessage) {
+	defer func() { _ = msg.Close() }()
 	processed := false
 	defer func() {
 		if !processed {
@@ -932,12 +1009,17 @@ func (r *Router) processManifestJobContext(ctx context.Context, msg *peermanagem
 		}()
 		payload, err := msg.ManifestFrame.Materialize(ctx)
 		if err != nil {
+			if errors.Is(err, message.ErrDecompressFailed) && r.gossip != nil &&
+				!msg.SelectPeerCharge(resource.FeeInvalidData(), "decompress-lz4-failed") {
+				r.gossip.IncPeerBadData(uint64(msg.PeerID), "decompress-lz4-failed")
+			}
 			r.logger.Warn("failed to materialize manifest spool", "error", err, "peer", msg.PeerID)
 			return
 		}
 		msg.Payload = payload
 	}
 	processed = r.handleManifests(msg)
+	msg.CompletePeerCharge()
 	if processed {
 		if acknowledger, ok := r.peerSessions.(peerBootstrapAcknowledger); ok {
 			acknowledger.AcknowledgePeerBootstrap(msg.PeerID)
@@ -968,7 +1050,7 @@ func (r *Router) maintenanceTick() {
 		tried := rd.TriedPeers()
 		// Ask the overlay for a fresh replay-capable peer, excluding
 		// every peer we've already tried for this hash.
-		candidates := r.adaptor.ReplayCapablePeersExcluding(tried, 1)
+		candidates := r.acquisition.ReplayCapablePeersExcluding(tried, 1)
 		if len(candidates) == 0 {
 			// No fresh peer available — can't rotate; the outer
 			// budget below will eventually time this out and fall
@@ -992,8 +1074,8 @@ func (r *Router) maintenanceTick() {
 		// continues to run).
 		seq := rd.Seq()
 		hash := rd.Hash()
-		go func() {
-			if err := r.adaptor.RequestReplayDelta(newPeer, hash); err != nil {
+		r.runLifecycleTask(func(context.Context) {
+			if err := r.acquisition.RequestReplayDelta(newPeer, hash); err != nil {
 				r.logger.Debug("replay-delta retry request failed",
 					"seq", seq,
 					"hash", fmt.Sprintf("%x", hash),
@@ -1001,7 +1083,7 @@ func (r *Router) maintenanceTick() {
 					"err", err,
 				)
 			}
-		}()
+		})
 	}
 
 	// Reap acquisitions that exceeded the OUTER budget. At this point

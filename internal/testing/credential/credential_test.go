@@ -14,169 +14,95 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/credential"
 	acctx "github.com/LeJamon/go-xrpl/internal/tx/account"
 	credtx "github.com/LeJamon/go-xrpl/internal/tx/credential"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
-
-// xrpAccount is the XRPL zero account address (20 bytes of zero).
-// This matches rippled's xrpAccount() / noAccount().
-const xrpAccount = "rrrrrrrrrrrrrrrrrrrrrhoLvTp"
 
 // TestSuccessful tests the basic credential lifecycle: create, accept, delete.
 // Reference: rippled Credentials_test.cpp testSuccessful
 func TestSuccessful(t *testing.T) {
 	credType := "abcde"
-	uri := "uri"
-
 	issuer := jtx.NewAccount("issuer")
 	subject := jtx.NewAccount("subject")
-
 	env := jtx.NewTestEnv(t)
 	env.Fund(issuer, subject)
 	env.Close()
-
 	credKey := jtx.CredentialKeylet(subject, issuer, credType)
 
-	// Test: Create credential for subject
-	t.Run("CreateForSubject", func(t *testing.T) {
-		tx := credential.CredentialCreate(issuer, subject, credType).URI(uri).Build()
-		result := env.Submit(tx)
-		if !result.Success {
-			t.Fatalf("Expected success, got %s: %s", result.Code, result.Message)
-		}
-		env.Close()
+	result := env.Submit(credential.CredentialCreateText(issuer, subject, credType).URI("uri").Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	jtx.RequireLedgerEntryExists(t, env, credKey)
+	jtx.RequireOwnerCount(t, env, issuer, 1)
+	jtx.RequireOwnerCount(t, env, subject, 0)
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, credKey.Key, true)
+	jtx.RequireOwnerDirectoryContains(t, env, subject, credKey.Key, true)
 
-		// Verify credential exists in ledger
-		if !env.LedgerEntryExists(credKey) {
-			t.Error("Expected credential ledger entry to exist")
-		}
+	result = env.Submit(credential.CredentialAcceptText(subject, issuer, credType).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	jtx.RequireLedgerEntryExists(t, env, credKey)
+	jtx.RequireOwnerCount(t, env, issuer, 0)
+	jtx.RequireOwnerCount(t, env, subject, 1)
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, credKey.Key, true)
+	jtx.RequireOwnerDirectoryContains(t, env, subject, credKey.Key, true)
 
-		// Verify issuer owner count increased, subject still 0
-		if env.OwnerCount(issuer) != 1 {
-			t.Errorf("Expected issuer owner count 1, got %d", env.OwnerCount(issuer))
-		}
-		if env.OwnerCount(subject) != 0 {
-			t.Errorf("Expected subject owner count 0, got %d", env.OwnerCount(subject))
-		}
-	})
-
-	// Test: Accept credential
-	t.Run("AcceptCredential", func(t *testing.T) {
-		tx := credential.CredentialAccept(subject, issuer, credType).Build()
-		result := env.Submit(tx)
-		if !result.Success {
-			t.Fatalf("Expected success, got %s: %s", result.Code, result.Message)
-		}
-		env.Close()
-
-		// Credential should still exist
-		if !env.LedgerEntryExists(credKey) {
-			t.Error("Expected credential ledger entry to exist after accept")
-		}
-
-		// After accept, ownership transfers from issuer to subject
-		if env.OwnerCount(issuer) != 0 {
-			t.Errorf("Expected issuer owner count 0, got %d", env.OwnerCount(issuer))
-		}
-		if env.OwnerCount(subject) != 1 {
-			t.Errorf("Expected subject owner count 1, got %d", env.OwnerCount(subject))
-		}
-	})
-
-	// Test: Delete credential by subject
-	t.Run("DeleteCredential", func(t *testing.T) {
-		tx := credential.CredentialDelete(subject, subject, issuer, credType).Build()
-		result := env.Submit(tx)
-		if !result.Success {
-			t.Fatalf("Expected success, got %s: %s", result.Code, result.Message)
-		}
-		env.Close()
-
-		// Credential should no longer exist
-		if env.LedgerEntryExists(credKey) {
-			t.Error("Expected credential ledger entry to NOT exist after delete")
-		}
-
-		// Verify owner counts reset to 0
-		if env.OwnerCount(issuer) != 0 {
-			t.Errorf("Expected issuer owner count 0, got %d", env.OwnerCount(issuer))
-		}
-		if env.OwnerCount(subject) != 0 {
-			t.Errorf("Expected subject owner count 0, got %d", env.OwnerCount(subject))
-		}
-	})
+	result = env.Submit(credential.CredentialDeleteText(subject, subject, issuer, credType).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	jtx.RequireLedgerEntryNotExists(t, env, credKey)
+	jtx.RequireOwnerCount(t, env, issuer, 0)
+	jtx.RequireOwnerCount(t, env, subject, 0)
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, credKey.Key, false)
+	jtx.RequireOwnerDirectoryContains(t, env, subject, credKey.Key, false)
 }
 
 // TestCreateForSelf tests issuing a credential to yourself.
 // Reference: rippled Credentials_test.cpp testSuccessful (Create for themself)
 func TestCreateForSelf(t *testing.T) {
 	credType := "abcde"
-	uri := "uri"
-
 	issuer := jtx.NewAccount("issuer")
-
 	env := jtx.NewTestEnv(t)
 	env.Fund(issuer)
 	env.Close()
-
 	credKey := jtx.CredentialKeylet(issuer, issuer, credType)
 
-	// Test: Create credential for self (issuer == subject)
-	t.Run("CreateForSelf", func(t *testing.T) {
-		tx := credential.CredentialCreate(issuer, issuer, credType).URI(uri).Build()
-		result := env.Submit(tx)
-		if !result.Success {
-			t.Fatalf("Expected success, got %s: %s", result.Code, result.Message)
-		}
-		env.Close()
+	result := env.Submit(credential.CredentialCreateText(issuer, issuer, credType).URI("uri").Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	jtx.RequireLedgerEntryExists(t, env, credKey)
+	jtx.RequireOwnerCount(t, env, issuer, 1)
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, credKey.Key, true)
 
-		// Credential should exist
-		if !env.LedgerEntryExists(credKey) {
-			t.Error("Expected credential ledger entry to exist")
-		}
-
-		// Self-issued credentials are auto-accepted, owner count = 1
-		if env.OwnerCount(issuer) != 1 {
-			t.Errorf("Expected issuer owner count 1, got %d", env.OwnerCount(issuer))
-		}
-	})
-
-	// Test: Delete self-issued credential
-	t.Run("DeleteSelfCredential", func(t *testing.T) {
-		tx := credential.CredentialDelete(issuer, issuer, issuer, credType).Build()
-		result := env.Submit(tx)
-		if !result.Success {
-			t.Fatalf("Expected success, got %s: %s", result.Code, result.Message)
-		}
-		env.Close()
-
-		// Credential should no longer exist
-		if env.LedgerEntryExists(credKey) {
-			t.Error("Expected credential ledger entry to NOT exist after delete")
-		}
-
-		if env.OwnerCount(issuer) != 0 {
-			t.Errorf("Expected issuer owner count 0, got %d", env.OwnerCount(issuer))
-		}
-	})
+	result = env.Submit(credential.CredentialDeleteText(issuer, issuer, issuer, credType).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	jtx.RequireLedgerEntryNotExists(t, env, credKey)
+	jtx.RequireOwnerCount(t, env, issuer, 0)
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, credKey.Key, false)
 }
 
 // TestCredentialsDelete tests various credential deletion scenarios.
 // Reference: rippled Credentials_test.cpp testCredentialsDelete
 func TestCredentialsDelete(t *testing.T) {
-	issuer := jtx.NewAccount("issuer")
-	subject := jtx.NewAccount("subject")
-	other := jtx.NewAccount("other")
-
-	env := jtx.NewTestEnv(t)
-	env.Fund(issuer, subject, other)
-	env.Close()
+	newEnv := func(t *testing.T) (*jtx.TestEnv, *jtx.Account, *jtx.Account, *jtx.Account) {
+		t.Helper()
+		issuer := jtx.NewAccount("issuer")
+		subject := jtx.NewAccount("subject")
+		other := jtx.NewAccount("other")
+		env := jtx.NewTestEnv(t)
+		env.Fund(issuer, subject, other)
+		env.Close()
+		return env, issuer, subject, other
+	}
 
 	// Reference: rippled testCredentialsDelete "Delete by other"
 	// Third party can delete expired credentials.
 	t.Run("DeleteByOther", func(t *testing.T) {
+		env, issuer, subject, other := newEnv(t)
 		ct := "delother"
 		// Create credential with near-future expiration
 		now := env.NowRipple()
-		tx := credential.CredentialCreate(issuer, subject, ct).
+		tx := credential.CredentialCreateText(issuer, subject, ct).
 			Expiration(now + 20).Build()
 		result := env.Submit(tx)
 		if !result.Success {
@@ -190,7 +116,7 @@ func TestCredentialsDelete(t *testing.T) {
 		env.Close()
 
 		// Other account can delete expired credentials
-		deleteTx := credential.CredentialDelete(other, subject, issuer, ct).Build()
+		deleteTx := credential.CredentialDeleteText(other, subject, issuer, ct).Build()
 		result = env.Submit(deleteTx)
 		if !result.Success {
 			t.Errorf("Expected success, got %s: %s", result.Code, result.Message)
@@ -212,15 +138,16 @@ func TestCredentialsDelete(t *testing.T) {
 
 	// Reference: rippled testCredentialsDelete "Delete by subject"
 	t.Run("DeleteBySubject", func(t *testing.T) {
+		env, issuer, subject, _ := newEnv(t)
 		ct := "delsubj"
-		createTx := credential.CredentialCreate(issuer, subject, ct).Build()
+		createTx := credential.CredentialCreateText(issuer, subject, ct).Build()
 		result := env.Submit(createTx)
 		if !result.Success {
 			t.Fatalf("Create expected success, got %s", result.Code)
 		}
 		env.Close()
 
-		deleteTx := credential.CredentialDelete(subject, subject, issuer, ct).Build()
+		deleteTx := credential.CredentialDeleteText(subject, subject, issuer, ct).Build()
 		result = env.Submit(deleteTx)
 		if !result.Success {
 			t.Errorf("Expected success, got %s: %s", result.Code, result.Message)
@@ -241,15 +168,16 @@ func TestCredentialsDelete(t *testing.T) {
 
 	// Reference: rippled testCredentialsDelete "Delete by issuer"
 	t.Run("DeleteByIssuer", func(t *testing.T) {
+		env, issuer, subject, _ := newEnv(t)
 		ct := "deliss"
-		createTx := credential.CredentialCreate(issuer, subject, ct).Build()
+		createTx := credential.CredentialCreateText(issuer, subject, ct).Build()
 		result := env.Submit(createTx)
 		if !result.Success {
 			t.Fatalf("Create expected success, got %s", result.Code)
 		}
 		env.Close()
 
-		deleteTx := credential.CredentialDelete(issuer, subject, issuer, ct).Build()
+		deleteTx := credential.CredentialDeleteText(issuer, subject, issuer, ct).Build()
 		result = env.Submit(deleteTx)
 		if !result.Success {
 			t.Errorf("Expected success, got %s: %s", result.Code, result.Message)
@@ -269,12 +197,10 @@ func TestCredentialsDelete(t *testing.T) {
 	})
 
 	// Reference: rippled testCredentialsDelete "Delete issuer before accept"
-	// AccountDelete must cascade-delete owned objects (credentials).
-	// In rippled, deleting the issuer before accept removes the credential and
-	// resets owner counts. Go's AccountDelete does not cascade-delete directory entries.
 	t.Run("DeleteIssuerBeforeAccept", func(t *testing.T) {
+		env, issuer, subject, other := newEnv(t)
 		ct := "delibacc"
-		createTx := credential.CredentialCreate(issuer, subject, ct).Build()
+		createTx := credential.CredentialCreateText(issuer, subject, ct).Build()
 		result := env.Submit(createTx)
 		if !result.Success {
 			t.Fatalf("Create expected success, got %s", result.Code)
@@ -309,15 +235,16 @@ func TestCredentialsDelete(t *testing.T) {
 	// Create credential, accept it, then delete the issuer account.
 	// Rippled cascade-deletes the credential (now owned by subject) and resets subject's owner count.
 	t.Run("DeleteIssuerAfterAccept", func(t *testing.T) {
+		env, issuer, subject, other := newEnv(t)
 		ct := "deliaaft"
-		createTx := credential.CredentialCreate(issuer, subject, ct).Build()
+		createTx := credential.CredentialCreateText(issuer, subject, ct).Build()
 		result := env.Submit(createTx)
 		if !result.Success {
 			t.Fatalf("Create expected success, got %s", result.Code)
 		}
 		env.Close()
 
-		acceptTx := credential.CredentialAccept(subject, issuer, ct).Build()
+		acceptTx := credential.CredentialAcceptText(subject, issuer, ct).Build()
 		result = env.Submit(acceptTx)
 		if !result.Success {
 			t.Fatalf("Accept expected success, got %s: %s", result.Code, result.Message)
@@ -351,8 +278,9 @@ func TestCredentialsDelete(t *testing.T) {
 	// Create credential, then delete the subject account before accepting.
 	// Rippled cascade-deletes the credential and resets issuer's owner count.
 	t.Run("DeleteSubjectBeforeAccept", func(t *testing.T) {
+		env, issuer, subject, other := newEnv(t)
 		ct := "delsbfr"
-		createTx := credential.CredentialCreate(issuer, subject, ct).Build()
+		createTx := credential.CredentialCreateText(issuer, subject, ct).Build()
 		result := env.Submit(createTx)
 		if !result.Success {
 			t.Fatalf("Create expected success, got %s", result.Code)
@@ -386,15 +314,16 @@ func TestCredentialsDelete(t *testing.T) {
 	// Create credential, accept it, then delete the subject account.
 	// Rippled cascade-deletes the credential (now owned by subject) and resets issuer's owner count.
 	t.Run("DeleteSubjectAfterAccept", func(t *testing.T) {
+		env, issuer, subject, other := newEnv(t)
 		ct := "delsaft"
-		createTx := credential.CredentialCreate(issuer, subject, ct).Build()
+		createTx := credential.CredentialCreateText(issuer, subject, ct).Build()
 		result := env.Submit(createTx)
 		if !result.Success {
 			t.Fatalf("Create expected success, got %s", result.Code)
 		}
 		env.Close()
 
-		acceptTx := credential.CredentialAccept(subject, issuer, ct).Build()
+		acceptTx := credential.CredentialAcceptText(subject, issuer, ct).Build()
 		result = env.Submit(acceptTx)
 		if !result.Success {
 			t.Fatalf("Accept expected success, got %s: %s", result.Code, result.Message)
@@ -429,17 +358,20 @@ func TestCredentialsDelete(t *testing.T) {
 // Reference: rippled Credentials_test.cpp testCreateFailed
 func TestCreateFailed(t *testing.T) {
 	credType := "abcde"
-
-	issuer := jtx.NewAccount("issuer")
-	subject := jtx.NewAccount("subject")
-
-	env := jtx.NewTestEnv(t)
-	env.Fund(issuer, subject)
-	env.Close()
+	newEnv := func(t *testing.T) (*jtx.TestEnv, *jtx.Account, *jtx.Account) {
+		t.Helper()
+		issuer := jtx.NewAccount("issuer")
+		subject := jtx.NewAccount("subject")
+		env := jtx.NewTestEnv(t)
+		env.Fund(issuer, subject)
+		env.Close()
+		return env, issuer, subject
+	}
 
 	// Reference: rippled "Credentials fail, no subject param."
 	// Removing Subject field maps to empty string in Go.
 	t.Run("MissingSubject", func(t *testing.T) {
+		env, issuer, _ := newEnv(t)
 		credTypeHex := hex.EncodeToString([]byte(credType))
 		cc := credtx.NewCredentialCreate(issuer.Address, "", credTypeHex)
 		cc.Fee = "10"
@@ -450,8 +382,9 @@ func TestCreateFailed(t *testing.T) {
 	// Reference: rippled "Subject set to xrpAccount()"
 	// In rippled this returns temMALFORMED from preflight.
 	t.Run("InvalidSubjectZeroAccount", func(t *testing.T) {
+		env, issuer, _ := newEnv(t)
 		credTypeHex := hex.EncodeToString([]byte(credType))
-		cc := credtx.NewCredentialCreate(issuer.Address, xrpAccount, credTypeHex)
+		cc := credtx.NewCredentialCreate(issuer.Address, protocol.ZeroAccount, credTypeHex)
 		cc.Fee = "10"
 		result := env.Submit(cc)
 		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
@@ -459,6 +392,7 @@ func TestCreateFailed(t *testing.T) {
 
 	// Reference: rippled "Credentials fail, no credentialType param."
 	t.Run("MissingCredentialType", func(t *testing.T) {
+		env, issuer, subject := newEnv(t)
 		cc := credtx.NewCredentialCreate(issuer.Address, subject.Address, "")
 		cc.Fee = "10"
 		result := env.Submit(cc)
@@ -467,56 +401,43 @@ func TestCreateFailed(t *testing.T) {
 
 	// Reference: rippled "Credentials fail, empty credentialType param."
 	t.Run("EmptyCredentialType", func(t *testing.T) {
-		tx := credential.CredentialCreate(issuer, subject, "").Build()
+		env, issuer, subject := newEnv(t)
+		tx := credential.CredentialCreateText(issuer, subject, "").Build()
 		result := env.Submit(tx)
 		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
 
 	// Reference: rippled "Credentials fail, credentialType length > maxCredentialTypeLength."
 	t.Run("CredentialTypeTooLong", func(t *testing.T) {
+		env, issuer, subject := newEnv(t)
 		longCredType := strings.Repeat("a", 65)
-		tx := credential.CredentialCreate(issuer, subject, longCredType).Build()
+		tx := credential.CredentialCreateText(issuer, subject, longCredType).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
 
 	// Reference: rippled "Credentials fail, URI length > 256."
 	t.Run("URITooLong", func(t *testing.T) {
+		env, issuer, subject := newEnv(t)
 		longURI := strings.Repeat("a", 257)
-		tx := credential.CredentialCreate(issuer, subject, credType).URI(longURI).Build()
+		tx := credential.CredentialCreateText(issuer, subject, credType).URI(longURI).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
 
 	// Reference: rippled "Credentials fail, URI empty."
-	// An explicitly present but zero-length URI should fail with temMALFORMED.
 	t.Run("EmptyURI", func(t *testing.T) {
-		// Construct directly to set a present-but-empty URI field
-		credTypeHex := hex.EncodeToString([]byte(credType))
-		cc := credtx.NewCredentialCreate(issuer.Address, subject.Address, credTypeHex)
-		cc.Fee = "10"
-		// Set URI to a valid hex string that decodes to empty bytes
-		// The builder's URIHex("") results in no URI field; we need an explicitly empty VL.
-		// In rippled, credentials::uri("") sets the field to an empty blob.
-		// In Go, an empty string URI is treated as absent. We need to test the
-		// case where the URI hex is set but decodes to zero-length.
-		// Setting URI to "" won't trigger the check since omitempty skips it.
-		// This matches the Go behavior where absent URI is valid.
-		// When URI field IS present but empty, it should fail.
-		cc.URI = "00" // A 1-byte URI is valid, but truly empty ("") is absent
-		// For the actual empty-URI case, we need the hex to decode to empty
-		// The Go validation checks: len(decoded) == 0 → ErrCredentialURIEmpty
-		// But cc.URI = "" would skip the check due to `if c.URI != ""`
-		// This is a difference from rippled where the field can be present-but-empty.
-		// Test what we can: a present but 0-decoded URI
-		t.Log("Go treats empty URI string as absent (not present), which is valid. " +
-			"Rippled can have a present-but-empty VL field which fails with temMALFORMED.")
+		env, issuer, subject := newEnv(t)
+		tx := credential.CredentialCreateText(issuer, subject, credType).URI("").Build()
+		result := env.Submit(tx)
+		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
 
 	// Reference: rippled "Credentials fail, expiration in the past."
 	t.Run("ExpirationInPast", func(t *testing.T) {
+		env, issuer, subject := newEnv(t)
 		now := env.NowRipple()
-		tx := credential.CredentialCreate(issuer, subject, credType).
+		tx := credential.CredentialCreateText(issuer, subject, credType).
 			Expiration(now - 1).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxClaimed(t, result, jtx.TecEXPIRED)
@@ -527,6 +448,7 @@ func TestCreateFailed(t *testing.T) {
 	// In rippled, fee=-1 triggers temBAD_FEE. Go uses string fee field;
 	// a negative fee string should be rejected during validation.
 	t.Run("InvalidFee", func(t *testing.T) {
+		env, issuer, subject := newEnv(t)
 		credTypeHex := hex.EncodeToString([]byte(credType))
 		cc := credtx.NewCredentialCreate(issuer.Address, subject.Address, credTypeHex)
 		cc.Fee = "-1"
@@ -536,8 +458,9 @@ func TestCreateFailed(t *testing.T) {
 
 	// Reference: rippled "Credentials fail, duplicate."
 	t.Run("Duplicate", func(t *testing.T) {
+		env, issuer, subject := newEnv(t)
 		// First create should succeed
-		tx1 := credential.CredentialCreate(issuer, subject, credType).Build()
+		tx1 := credential.CredentialCreateText(issuer, subject, credType).Build()
 		result1 := env.Submit(tx1)
 		if !result1.Success {
 			t.Fatalf("First create expected success, got %s", result1.Code)
@@ -545,7 +468,7 @@ func TestCreateFailed(t *testing.T) {
 		env.Close()
 
 		// Second create should fail with tecDUPLICATE
-		tx2 := credential.CredentialCreate(issuer, subject, credType).Build()
+		tx2 := credential.CredentialCreateText(issuer, subject, credType).Build()
 		result2 := env.Submit(tx2)
 		jtx.RequireTxClaimed(t, result2, jtx.TecDUPLICATE)
 		env.Close()
@@ -557,16 +480,17 @@ func TestCreateFailed(t *testing.T) {
 		}
 
 		// Cleanup
-		deleteTx := credential.CredentialDelete(issuer, subject, issuer, credType).Build()
-		env.Submit(deleteTx)
+		deleteTx := credential.CredentialDeleteText(issuer, subject, issuer, credType).Build()
+		jtx.RequireTxSuccess(t, env.Submit(deleteTx))
 		env.Close()
 	})
 
 	// Reference: rippled "Credentials fail, subject doesn't exist."
 	t.Run("SubjectDoesNotExist", func(t *testing.T) {
+		env, issuer, _ := newEnv(t)
 		nonExistent := jtx.NewAccount("nonexistent")
 		// Do NOT fund nonExistent — it should not exist in the ledger
-		tx := credential.CredentialCreate(issuer, nonExistent, credType).Build()
+		tx := credential.CredentialCreateText(issuer, nonExistent, credType).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxClaimed(t, result, jtx.TecNO_TARGET)
 		env.Close()
@@ -575,7 +499,8 @@ func TestCreateFailed(t *testing.T) {
 	// Test: Invalid flags
 	// Reference: rippled testFlags with fixInvalidTxFlags enabled
 	t.Run("InvalidFlags", func(t *testing.T) {
-		tx := credential.CredentialCreate(issuer, subject, credType).Flags(0x00010000).Build()
+		env, issuer, subject := newEnv(t)
+		tx := credential.CredentialCreateText(issuer, subject, credType).Flags(0x00010000).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxFail(t, result, jtx.TemINVALID_FLAG)
 	})
@@ -596,29 +521,46 @@ func TestCreateReserve(t *testing.T) {
 	env.FundAmount(issuer, acctReserve)
 	env.FundAmount(subject, acctReserve)
 	env.Close()
+	issuerBalance := env.Balance(issuer)
+	issuerSequence := env.Seq(issuer)
+	subjectBalance := env.Balance(subject)
+	subjectSequence := env.Seq(subject)
+	credentialKey := jtx.CredentialKeylet(subject, issuer, credType)
 
 	// Create should fail with insufficient reserve
-	tx := credential.CredentialCreate(issuer, subject, credType).Build()
+	tx := credential.CredentialCreateText(issuer, subject, credType).Build()
 	result := env.Submit(tx)
 	jtx.RequireTxClaimed(t, result, jtx.TecINSUFFICIENT_RESERVE)
 	env.Close()
+	jtx.RequireLedgerEntryNotExists(t, env, credentialKey)
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, credentialKey.Key, false)
+	jtx.RequireOwnerDirectoryContains(t, env, subject, credentialKey.Key, false)
+	jtx.RequireOwnerCount(t, env, issuer, 0)
+	jtx.RequireOwnerCount(t, env, subject, 0)
+	jtx.RequireBalance(t, env, issuer, issuerBalance-env.BaseFee())
+	jtx.RequireBalance(t, env, subject, subjectBalance)
+	jtx.RequireSequence(t, env, issuer, issuerSequence+1)
+	jtx.RequireSequence(t, env, subject, subjectSequence)
 }
 
 // TestAcceptFailed tests CredentialAccept validation failures.
 // Reference: rippled Credentials_test.cpp testAcceptFailed
 func TestAcceptFailed(t *testing.T) {
 	credType := "abcde"
-
-	issuer := jtx.NewAccount("issuer")
-	subject := jtx.NewAccount("subject")
-
-	env := jtx.NewTestEnv(t)
-	env.Fund(issuer, subject)
-	env.Close()
+	newEnv := func(t *testing.T) (*jtx.TestEnv, *jtx.Account, *jtx.Account) {
+		t.Helper()
+		issuer := jtx.NewAccount("issuer")
+		subject := jtx.NewAccount("subject")
+		env := jtx.NewTestEnv(t)
+		env.Fund(issuer, subject)
+		env.Close()
+		return env, issuer, subject
+	}
 
 	// Reference: rippled "CredentialsAccept fail, Credential doesn't exist."
 	t.Run("CredentialNotExist", func(t *testing.T) {
-		tx := credential.CredentialAccept(subject, issuer, credType).Build()
+		env, issuer, subject := newEnv(t)
+		tx := credential.CredentialAcceptText(subject, issuer, credType).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxClaimed(t, result, jtx.TecNO_ENTRY)
 		env.Close()
@@ -626,8 +568,9 @@ func TestAcceptFailed(t *testing.T) {
 
 	// Reference: rippled "CredentialsAccept fail, invalid Issuer account."
 	t.Run("InvalidIssuerZeroAccount", func(t *testing.T) {
+		env, _, subject := newEnv(t)
 		credTypeHex := hex.EncodeToString([]byte(credType))
-		ca := credtx.NewCredentialAccept(subject.Address, xrpAccount, credTypeHex)
+		ca := credtx.NewCredentialAccept(subject.Address, protocol.ZeroAccount, credTypeHex)
 		ca.Fee = "10"
 		result := env.Submit(ca)
 		jtx.RequireTxFail(t, result, jtx.TemINVALID_ACCOUNT_ID)
@@ -635,14 +578,16 @@ func TestAcceptFailed(t *testing.T) {
 
 	// Reference: rippled "CredentialsAccept fail, invalid credentialType param."
 	t.Run("EmptyCredentialType", func(t *testing.T) {
-		tx := credential.CredentialAccept(subject, issuer, "").Build()
+		env, issuer, subject := newEnv(t)
+		tx := credential.CredentialAcceptText(subject, issuer, "").Build()
 		result := env.Submit(tx)
 		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
 
 	// Test: Invalid flags
 	t.Run("InvalidFlags", func(t *testing.T) {
-		tx := credential.CredentialAccept(subject, issuer, credType).Flags(0x00010000).Build()
+		env, issuer, subject := newEnv(t)
+		tx := credential.CredentialAcceptText(subject, issuer, credType).Flags(0x00010000).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxFail(t, result, jtx.TemINVALID_FLAG)
 	})
@@ -650,6 +595,7 @@ func TestAcceptFailed(t *testing.T) {
 	// Reference: rippled "CredentialsAccept fail, invalid fee."
 	// In rippled, fee=-1 triggers temBAD_FEE.
 	t.Run("InvalidFee", func(t *testing.T) {
+		env, issuer, subject := newEnv(t)
 		credTypeHex := hex.EncodeToString([]byte(credType))
 		ca := credtx.NewCredentialAccept(subject.Address, issuer.Address, credTypeHex)
 		ca.Fee = "-1"
@@ -659,12 +605,13 @@ func TestAcceptFailed(t *testing.T) {
 
 	// Reference: rippled "CredentialsAccept fail, lsfAccepted already set."
 	t.Run("AlreadyAccepted", func(t *testing.T) {
+		env, issuer, subject := newEnv(t)
 		// Create and accept
-		createTx := credential.CredentialCreate(issuer, subject, credType).Build()
-		env.Submit(createTx)
+		createTx := credential.CredentialCreateText(issuer, subject, credType).Build()
+		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
 
-		acceptTx := credential.CredentialAccept(subject, issuer, credType).Build()
+		acceptTx := credential.CredentialAcceptText(subject, issuer, credType).Build()
 		result1 := env.Submit(acceptTx)
 		if !result1.Success {
 			t.Fatalf("First accept expected success, got %s", result1.Code)
@@ -672,7 +619,7 @@ func TestAcceptFailed(t *testing.T) {
 		env.Close()
 
 		// Try to accept again - should fail with tecDUPLICATE
-		acceptTx2 := credential.CredentialAccept(subject, issuer, credType).Build()
+		acceptTx2 := credential.CredentialAcceptText(subject, issuer, credType).Build()
 		result2 := env.Submit(acceptTx2)
 		jtx.RequireTxClaimed(t, result2, jtx.TecDUPLICATE)
 		env.Close()
@@ -684,21 +631,22 @@ func TestAcceptFailed(t *testing.T) {
 		}
 
 		// Cleanup
-		deleteTx := credential.CredentialDelete(subject, subject, issuer, credType).Build()
-		env.Submit(deleteTx)
+		deleteTx := credential.CredentialDeleteText(subject, subject, issuer, credType).Build()
+		jtx.RequireTxSuccess(t, env.Submit(deleteTx))
 		env.Close()
 	})
 
 	// Reference: rippled "CredentialsAccept fail, expired credentials."
 	// When accepting expired credentials, the credential is auto-deleted and tecEXPIRED returned.
 	t.Run("ExpiredCredentials", func(t *testing.T) {
+		env, issuer, subject := newEnv(t)
 		credType2 := "efghi"
 
 		// Create credential with expiration at current time.
 		// In rippled, setting expiration to parentCloseTime and then closing one ledger
 		// makes the credential expired on the next operation.
 		now := env.NowRipple()
-		tx := credential.CredentialCreate(issuer, subject, credType2).
+		tx := credential.CredentialCreateText(issuer, subject, credType2).
 			Expiration(now).Build()
 		result := env.Submit(tx)
 		if !result.Success {
@@ -708,7 +656,7 @@ func TestAcceptFailed(t *testing.T) {
 		env.Close()
 
 		// Credentials are now expired
-		acceptTx := credential.CredentialAccept(subject, issuer, credType2).Build()
+		acceptTx := credential.CredentialAcceptText(subject, issuer, credType2).Build()
 		result = env.Submit(acceptTx)
 		jtx.RequireTxClaimed(t, result, jtx.TecEXPIRED)
 		env.Close()
@@ -730,8 +678,9 @@ func TestAcceptFailed(t *testing.T) {
 	// Rippled cascade-deletes the credential on account deletion, so the accept
 	// should fail. In rippled this returns tecNO_ISSUER.
 	t.Run("IssuerDoesNotExist", func(t *testing.T) {
+		env, issuer, subject := newEnv(t)
 		ct := "noiss"
-		createTx := credential.CredentialCreate(issuer, subject, ct).Build()
+		createTx := credential.CredentialCreateText(issuer, subject, ct).Build()
 		result := env.Submit(createTx)
 		if !result.Success {
 			t.Fatalf("Create expected success, got %s", result.Code)
@@ -749,7 +698,7 @@ func TestAcceptFailed(t *testing.T) {
 		env.Close()
 
 		// Try to accept — issuer no longer exists
-		acceptTx := credential.CredentialAccept(subject, issuer, ct).Build()
+		acceptTx := credential.CredentialAcceptText(subject, issuer, ct).Build()
 		result = env.Submit(acceptTx)
 		jtx.RequireTxClaimed(t, result, jtx.TecNO_ISSUER)
 		env.Close()
@@ -784,28 +733,35 @@ func TestAcceptReserve(t *testing.T) {
 	env.Close()
 
 	// Create credential should succeed (issuer has reserve)
-	createTx := credential.CredentialCreate(issuer, subject, credType).Build()
+	createTx := credential.CredentialCreateText(issuer, subject, credType).Build()
 	result := env.Submit(createTx)
-	if !result.Success {
-		t.Fatalf("Create expected success, got %s", result.Code)
-	}
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Accept should fail - subject doesn't have reserve
-	acceptTx := credential.CredentialAccept(subject, issuer, credType).Build()
+	issuerBalance := env.Balance(issuer)
+	issuerSequence := env.Seq(issuer)
+	subjectBalance := env.Balance(subject)
+	subjectSequence := env.Seq(subject)
+	acceptTx := credential.CredentialAcceptText(subject, issuer, credType).Build()
 	result = env.Submit(acceptTx)
 	jtx.RequireTxClaimed(t, result, jtx.TecINSUFFICIENT_RESERVE)
 	env.Close()
 
-	// Verify credential still present after failed accept
 	credKey := jtx.CredentialKeylet(subject, issuer, credType)
-	if !env.LedgerEntryExists(credKey) {
-		t.Error("Expected credential to still exist after failed accept")
-	}
+	jtx.RequireLedgerEntryExists(t, env, credKey)
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, credKey.Key, true)
+	jtx.RequireOwnerDirectoryContains(t, env, subject, credKey.Key, true)
+	jtx.RequireOwnerCount(t, env, issuer, 1)
+	jtx.RequireOwnerCount(t, env, subject, 0)
+	jtx.RequireBalance(t, env, issuer, issuerBalance)
+	jtx.RequireBalance(t, env, subject, subjectBalance-env.BaseFee())
+	jtx.RequireSequence(t, env, issuer, issuerSequence)
+	jtx.RequireSequence(t, env, subject, subjectSequence+1)
 
 	// Cleanup by issuer
-	deleteTx := credential.CredentialDelete(issuer, subject, issuer, credType).Build()
-	env.Submit(deleteTx)
+	deleteTx := credential.CredentialDeleteText(issuer, subject, issuer, credType).Build()
+	jtx.RequireTxSuccess(t, env.Submit(deleteTx))
 	env.Close()
 }
 
@@ -813,18 +769,21 @@ func TestAcceptReserve(t *testing.T) {
 // Reference: rippled Credentials_test.cpp testDeleteFailed
 func TestDeleteFailed(t *testing.T) {
 	credType := "abcde"
-
-	issuer := jtx.NewAccount("issuer")
-	subject := jtx.NewAccount("subject")
-	other := jtx.NewAccount("other")
-
-	env := jtx.NewTestEnv(t)
-	env.Fund(issuer, subject, other)
-	env.Close()
+	newEnv := func(t *testing.T) (*jtx.TestEnv, *jtx.Account, *jtx.Account, *jtx.Account) {
+		t.Helper()
+		issuer := jtx.NewAccount("issuer")
+		subject := jtx.NewAccount("subject")
+		other := jtx.NewAccount("other")
+		env := jtx.NewTestEnv(t)
+		env.Fund(issuer, subject, other)
+		env.Close()
+		return env, issuer, subject, other
+	}
 
 	// Reference: rippled "CredentialsDelete fail, no Credentials."
 	t.Run("CredentialNotExist", func(t *testing.T) {
-		tx := credential.CredentialDelete(subject, subject, issuer, credType).Build()
+		env, issuer, subject, _ := newEnv(t)
+		tx := credential.CredentialDeleteText(subject, subject, issuer, credType).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxClaimed(t, result, jtx.TecNO_ENTRY)
 		env.Close()
@@ -832,9 +791,10 @@ func TestDeleteFailed(t *testing.T) {
 
 	// Reference: rippled "CredentialsDelete fail, invalid Subject account."
 	t.Run("InvalidSubjectZeroAccount", func(t *testing.T) {
+		env, issuer, subject, _ := newEnv(t)
 		credTypeHex := hex.EncodeToString([]byte(credType))
 		cd := credtx.NewCredentialDelete(subject.Address, credTypeHex)
-		cd.Subject = xrpAccount
+		cd.Subject = protocol.ZeroAccount
 		cd.Issuer = issuer.Address
 		cd.Fee = "10"
 		result := env.Submit(cd)
@@ -844,10 +804,11 @@ func TestDeleteFailed(t *testing.T) {
 
 	// Reference: rippled "CredentialsDelete fail, invalid Issuer account."
 	t.Run("InvalidIssuerZeroAccount", func(t *testing.T) {
+		env, _, subject, _ := newEnv(t)
 		credTypeHex := hex.EncodeToString([]byte(credType))
 		cd := credtx.NewCredentialDelete(subject.Address, credTypeHex)
 		cd.Subject = subject.Address
-		cd.Issuer = xrpAccount
+		cd.Issuer = protocol.ZeroAccount
 		cd.Fee = "10"
 		result := env.Submit(cd)
 		jtx.RequireTxFail(t, result, jtx.TemINVALID_ACCOUNT_ID)
@@ -856,29 +817,32 @@ func TestDeleteFailed(t *testing.T) {
 
 	// Reference: rippled "CredentialsDelete fail, invalid credentialType param."
 	t.Run("EmptyCredentialType", func(t *testing.T) {
-		tx := credential.CredentialDelete(subject, subject, issuer, "").Build()
+		env, issuer, subject, _ := newEnv(t)
+		tx := credential.CredentialDeleteText(subject, subject, issuer, "").Build()
 		result := env.Submit(tx)
 		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
 
 	// Test: Invalid flags
 	t.Run("InvalidFlags", func(t *testing.T) {
-		tx := credential.CredentialDelete(subject, subject, issuer, credType).Flags(0x00010000).Build()
+		env, issuer, subject, _ := newEnv(t)
+		tx := credential.CredentialDeleteText(subject, subject, issuer, credType).Flags(0x00010000).Build()
 		result := env.Submit(tx)
 		jtx.RequireTxFail(t, result, jtx.TemINVALID_FLAG)
 	})
 
 	// Reference: rippled "Other account can't delete credentials without expiration"
 	t.Run("NoPermission", func(t *testing.T) {
+		env, issuer, subject, other := newEnv(t)
 		credType2 := "fghij"
 
 		// Create credential without expiration
-		createTx := credential.CredentialCreate(issuer, subject, credType2).Build()
-		env.Submit(createTx)
+		createTx := credential.CredentialCreateText(issuer, subject, credType2).Build()
+		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
 
 		// Other account tries to delete - should fail
-		deleteTx := credential.CredentialDelete(other, subject, issuer, credType2).Build()
+		deleteTx := credential.CredentialDeleteText(other, subject, issuer, credType2).Build()
 		result := env.Submit(deleteTx)
 		jtx.RequireTxClaimed(t, result, jtx.TecNO_PERMISSION)
 		env.Close()
@@ -890,17 +854,18 @@ func TestDeleteFailed(t *testing.T) {
 		}
 
 		// Cleanup by issuer
-		cleanupTx := credential.CredentialDelete(issuer, subject, issuer, credType2).Build()
-		env.Submit(cleanupTx)
+		cleanupTx := credential.CredentialDeleteText(issuer, subject, issuer, credType2).Build()
+		jtx.RequireTxSuccess(t, env.Submit(cleanupTx))
 		env.Close()
 	})
 
 	// Reference: rippled "CredentialsDelete fail, time not expired yet."
 	// Credential has an expiration but it hasn't passed yet — other can't delete.
 	t.Run("TimeNotExpiredYet", func(t *testing.T) {
+		env, issuer, subject, other := newEnv(t)
 		now := env.NowRipple()
 		// Create credential with expiration far in the future
-		tx := credential.CredentialCreate(issuer, subject, credType).
+		tx := credential.CredentialCreateText(issuer, subject, credType).
 			Expiration(now + 1000).Build()
 		result := env.Submit(tx)
 		if !result.Success {
@@ -909,7 +874,7 @@ func TestDeleteFailed(t *testing.T) {
 		env.Close()
 
 		// Other account can't delete credentials that are not yet expired
-		deleteTx := credential.CredentialDelete(other, subject, issuer, credType).Build()
+		deleteTx := credential.CredentialDeleteText(other, subject, issuer, credType).Build()
 		result = env.Submit(deleteTx)
 		jtx.RequireTxClaimed(t, result, jtx.TecNO_PERMISSION)
 		env.Close()
@@ -921,13 +886,14 @@ func TestDeleteFailed(t *testing.T) {
 		}
 
 		// Cleanup by issuer
-		cleanupTx := credential.CredentialDelete(issuer, subject, issuer, credType).Build()
-		env.Submit(cleanupTx)
+		cleanupTx := credential.CredentialDeleteText(issuer, subject, issuer, credType).Build()
+		jtx.RequireTxSuccess(t, env.Submit(cleanupTx))
 		env.Close()
 	})
 
 	// Reference: rippled "CredentialsDelete fail, no Issuer and Subject."
 	t.Run("MissingBothSubjectAndIssuer", func(t *testing.T) {
+		env, _, subject, _ := newEnv(t)
 		credTypeHex := hex.EncodeToString([]byte(credType))
 		cd := credtx.NewCredentialDelete(subject.Address, credTypeHex)
 		// Leave both Subject and Issuer empty
@@ -942,6 +908,7 @@ func TestDeleteFailed(t *testing.T) {
 	// Reference: rippled "CredentialsDelete fail, invalid fee."
 	// In rippled, fee=-1 triggers temBAD_FEE.
 	t.Run("InvalidFee", func(t *testing.T) {
+		env, issuer, subject, _ := newEnv(t)
 		credTypeHex := hex.EncodeToString([]byte(credType))
 		cd := credtx.NewCredentialDelete(subject.Address, credTypeHex)
 		cd.Subject = subject.Address
@@ -952,165 +919,31 @@ func TestDeleteFailed(t *testing.T) {
 	})
 }
 
-// TestDeleteBySubject tests that the subject can delete a credential.
-// Reference: rippled Credentials_test.cpp testCredentialsDelete (Delete by subject)
-func TestDeleteBySubject(t *testing.T) {
-	credType := "abcde"
-
-	issuer := jtx.NewAccount("issuer")
-	subject := jtx.NewAccount("subject")
-
-	env := jtx.NewTestEnv(t)
-	env.Fund(issuer, subject)
-	env.Close()
-
-	// Create credential
-	createTx := credential.CredentialCreate(issuer, subject, credType).Build()
-	result := env.Submit(createTx)
-	if !result.Success {
-		t.Fatalf("Create expected success, got %s", result.Code)
-	}
-	env.Close()
-
-	// Subject can delete (even before accepting)
-	deleteTx := credential.CredentialDelete(subject, subject, issuer, credType).Build()
-	result = env.Submit(deleteTx)
-	if !result.Success {
-		t.Errorf("Expected success, got %s: %s", result.Code, result.Message)
-	}
-	env.Close()
-
-	// Verify credential gone and owner counts zero
-	credKey := jtx.CredentialKeylet(subject, issuer, credType)
-	if env.LedgerEntryExists(credKey) {
-		t.Error("Expected credential to be deleted")
-	}
-	if env.OwnerCount(issuer) != 0 {
-		t.Errorf("Expected issuer owner count 0, got %d", env.OwnerCount(issuer))
-	}
-	if env.OwnerCount(subject) != 0 {
-		t.Errorf("Expected subject owner count 0, got %d", env.OwnerCount(subject))
-	}
-}
-
-// TestDeleteByIssuer tests that the issuer can delete a credential.
-// Reference: rippled Credentials_test.cpp testCredentialsDelete (Delete by issuer)
-func TestDeleteByIssuer(t *testing.T) {
-	credType := "abcde"
-
-	issuer := jtx.NewAccount("issuer")
-	subject := jtx.NewAccount("subject")
-
-	env := jtx.NewTestEnv(t)
-	env.Fund(issuer, subject)
-	env.Close()
-
-	// Create credential
-	createTx := credential.CredentialCreate(issuer, subject, credType).Build()
-	result := env.Submit(createTx)
-	if !result.Success {
-		t.Fatalf("Create expected success, got %s", result.Code)
-	}
-	env.Close()
-
-	// Issuer can delete
-	deleteTx := credential.CredentialDelete(issuer, subject, issuer, credType).Build()
-	result = env.Submit(deleteTx)
-	if !result.Success {
-		t.Errorf("Expected success, got %s: %s", result.Code, result.Message)
-	}
-	env.Close()
-
-	// Verify credential gone and owner counts zero
-	credKey := jtx.CredentialKeylet(subject, issuer, credType)
-	if env.LedgerEntryExists(credKey) {
-		t.Error("Expected credential to be deleted")
-	}
-	if env.OwnerCount(issuer) != 0 {
-		t.Errorf("Expected issuer owner count 0, got %d", env.OwnerCount(issuer))
-	}
-	if env.OwnerCount(subject) != 0 {
-		t.Errorf("Expected subject owner count 0, got %d", env.OwnerCount(subject))
-	}
-}
-
-// TestCredentialTypeLimits tests the exact limits of CredentialType.
-func TestCredentialTypeLimits(t *testing.T) {
-	issuer := jtx.NewAccount("issuer")
-	subject := jtx.NewAccount("subject")
-
-	env := jtx.NewTestEnv(t)
-	env.Fund(issuer, subject)
-	env.Close()
-
-	// Test: CredentialType at exactly 64 bytes should succeed
-	t.Run("CredentialTypeAtLimit", func(t *testing.T) {
-		credType64 := strings.Repeat("a", 64)
-		tx := credential.CredentialCreate(issuer, subject, credType64).Build()
-		result := env.Submit(tx)
-		if !result.Success {
-			t.Errorf("Expected success with 64-byte CredentialType, got %s", result.Code)
-		}
-		env.Close()
-
-		// Cleanup
-		deleteTx := credential.CredentialDelete(issuer, subject, issuer, credType64).Build()
-		env.Submit(deleteTx)
-		env.Close()
-	})
-
-	// Test: URI at exactly 256 bytes should succeed
-	t.Run("URIAtLimit", func(t *testing.T) {
-		credType := "testcred"
-		uri256 := strings.Repeat("b", 256)
-		tx := credential.CredentialCreate(issuer, subject, credType).URI(uri256).Build()
-		result := env.Submit(tx)
-		if !result.Success {
-			t.Errorf("Expected success with 256-byte URI, got %s", result.Code)
-		}
-		env.Close()
-
-		// Cleanup
-		deleteTx := credential.CredentialDelete(issuer, subject, issuer, credType).Build()
-		env.Submit(deleteTx)
-		env.Close()
-	})
-}
-
 // TestEnabled tests that credential transactions are disabled without the amendment.
 // Reference: rippled Credentials_test.cpp testFeatureFailed
 func TestEnabled(t *testing.T) {
-	credType := "abcde"
+	for _, operation := range []string{"create", "accept", "delete"} {
+		t.Run(operation, func(t *testing.T) {
+			issuer := jtx.NewAccount("issuer")
+			subject := jtx.NewAccount("subject")
+			env := jtx.NewTestEnv(t)
+			env.Fund(issuer, subject)
+			env.Close()
+			env.DisableFeature("Credentials")
+			env.Close()
 
-	issuer := jtx.NewAccount("issuer")
-	subject := jtx.NewAccount("subject")
-
-	env := jtx.NewTestEnv(t)
-	env.Fund(issuer, subject)
-	env.Close()
-
-	// Disable the Credentials amendment
-	env.DisableFeature("Credentials")
-	env.Close()
-
-	// Without the featureCredentials amendment, all credential transactions should fail
-	t.Run("CreateDisabled", func(t *testing.T) {
-		tx := credential.CredentialCreate(issuer, subject, credType).Build()
-		result := env.Submit(tx)
-		jtx.RequireTxFail(t, result, jtx.TemDISABLED)
-	})
-
-	t.Run("AcceptDisabled", func(t *testing.T) {
-		tx := credential.CredentialAccept(subject, issuer, credType).Build()
-		result := env.Submit(tx)
-		jtx.RequireTxFail(t, result, jtx.TemDISABLED)
-	})
-
-	t.Run("DeleteDisabled", func(t *testing.T) {
-		tx := credential.CredentialDelete(subject, subject, issuer, credType).Build()
-		result := env.Submit(tx)
-		jtx.RequireTxFail(t, result, jtx.TemDISABLED)
-	})
+			var result jtx.TxResult
+			switch operation {
+			case "create":
+				result = env.Submit(credential.CredentialCreateText(issuer, subject, "abcde").Build())
+			case "accept":
+				result = env.Submit(credential.CredentialAcceptText(subject, issuer, "abcde").Build())
+			case "delete":
+				result = env.Submit(credential.CredentialDeleteText(subject, subject, issuer, "abcde").Build())
+			}
+			jtx.RequireTxFail(t, result, jtx.TemDISABLED)
+		})
+	}
 }
 
 // TestMultipleCredentials tests that accounts can have multiple credentials.
@@ -1126,7 +959,7 @@ func TestMultipleCredentials(t *testing.T) {
 
 	// Create multiple credentials
 	for _, ct := range credTypes {
-		tx := credential.CredentialCreate(issuer, subject, ct).Build()
+		tx := credential.CredentialCreateText(issuer, subject, ct).Build()
 		result := env.Submit(tx)
 		if !result.Success {
 			t.Fatalf("Create %s expected success, got %s", ct, result.Code)
@@ -1141,7 +974,7 @@ func TestMultipleCredentials(t *testing.T) {
 
 	// Accept all
 	for _, ct := range credTypes {
-		tx := credential.CredentialAccept(subject, issuer, ct).Build()
+		tx := credential.CredentialAcceptText(subject, issuer, ct).Build()
 		result := env.Submit(tx)
 		if !result.Success {
 			t.Fatalf("Accept %s expected success, got %s", ct, result.Code)
@@ -1159,7 +992,7 @@ func TestMultipleCredentials(t *testing.T) {
 
 	// Delete all
 	for _, ct := range credTypes {
-		tx := credential.CredentialDelete(subject, subject, issuer, ct).Build()
+		tx := credential.CredentialDeleteText(subject, subject, issuer, ct).Build()
 		result := env.Submit(tx)
 		if !result.Success {
 			t.Fatalf("Delete %s expected success, got %s", ct, result.Code)

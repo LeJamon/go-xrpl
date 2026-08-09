@@ -1,62 +1,12 @@
 package credential_test
 
-// Tests for the credential deletion / DeleteSLE consolidation and the
-// prior-balance reserve check.
-
 import (
-	"encoding/hex"
 	"testing"
 
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/credential"
-	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
-
-// dirContains reports whether an owner directory contains the given key on any
-// of its pages. It walks pages until a page is missing.
-func dirContains(t *testing.T, env *jtx.TestEnv, owner *jtx.Account, key keylet.Keylet) bool {
-	t.Helper()
-	wantHex := hex.EncodeToString(key.Key[:])
-	for page := uint64(0); ; page++ {
-		data, err := env.LedgerEntry(keylet.OwnerDirPage(owner.ID, page))
-		if err != nil || data == nil {
-			return false
-		}
-		fields, err := binarycodec.Decode(hex.EncodeToString(data))
-		require.NoError(t, err)
-		if idxs, ok := fields["Indexes"].([]string); ok {
-			for _, s := range idxs {
-				if hexEqualFold(s, wantHex) {
-					return true
-				}
-			}
-		}
-		if page > 64 {
-			return false
-		}
-	}
-}
-
-func hexEqualFold(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		ca, cb := a[i], b[i]
-		if ca >= 'A' && ca <= 'F' {
-			ca += 'a' - 'A'
-		}
-		if cb >= 'A' && cb <= 'F' {
-			cb += 'a' - 'A'
-		}
-		if ca != cb {
-			return false
-		}
-	}
-	return true
-}
 
 // TestCredentialAccept_ExpiredRemovesFromBothDirectories verifies that when
 // CredentialAccept hits an expired (un-accepted) credential, the credential is
@@ -77,16 +27,14 @@ func TestCredentialAccept_ExpiredRemovesFromBothDirectories(t *testing.T) {
 
 	// Issuer creates a credential for subject with a short expiration.
 	now := env.NowRipple()
-	r := env.Submit(credential.CredentialCreate(issuer, subject, credType).
+	r := env.Submit(credential.CredentialCreateText(issuer, subject, credType).
 		Expiration(now + 20).Build())
 	jtx.RequireTxSuccess(t, r)
 	env.Close()
 
 	// Before expiry: credential listed in both owner directories.
-	require.True(t, dirContains(t, env, issuer, credKey),
-		"credential must be in issuer directory after create")
-	require.True(t, dirContains(t, env, subject, credKey),
-		"un-accepted credential must be in subject directory after create")
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, credKey.Key, true)
+	jtx.RequireOwnerDirectoryContains(t, env, subject, credKey.Key, true)
 	require.Equal(t, uint32(1), env.OwnerCount(issuer), "issuer owns un-accepted credential")
 	require.Equal(t, uint32(0), env.OwnerCount(subject), "subject does not own un-accepted credential")
 
@@ -95,16 +43,14 @@ func TestCredentialAccept_ExpiredRemovesFromBothDirectories(t *testing.T) {
 		env.Close()
 	}
 
-	r = env.Submit(credential.CredentialAccept(subject, issuer, credType).Build())
+	r = env.Submit(credential.CredentialAcceptText(subject, issuer, credType).Build())
 	jtx.RequireTxClaimed(t, r, jtx.TecEXPIRED)
 	env.Close()
 
 	// After: credential erased and removed from BOTH directories; issuer count back to 0.
 	require.False(t, env.LedgerEntryExists(credKey), "expired credential must be erased")
-	require.False(t, dirContains(t, env, issuer, credKey),
-		"expired credential must be removed from issuer directory")
-	require.False(t, dirContains(t, env, subject, credKey),
-		"expired credential must be removed from subject directory")
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, credKey.Key, false)
+	jtx.RequireOwnerDirectoryContains(t, env, subject, credKey.Key, false)
 	require.Equal(t, uint32(0), env.OwnerCount(issuer), "issuer owner count must drop to 0")
 	require.Equal(t, uint32(0), env.OwnerCount(subject), "subject owner count stays 0")
 }
@@ -124,29 +70,27 @@ func TestCredentialDelete_ViaDeleteSLE_AcceptedBySubject(t *testing.T) {
 
 	credKey := jtx.CredentialKeylet(subject, issuer, credType)
 
-	r := env.Submit(credential.CredentialCreate(issuer, subject, credType).Build())
+	r := env.Submit(credential.CredentialCreateText(issuer, subject, credType).Build())
 	jtx.RequireTxSuccess(t, r)
 	env.Close()
-	r = env.Submit(credential.CredentialAccept(subject, issuer, credType).Build())
+	r = env.Submit(credential.CredentialAcceptText(subject, issuer, credType).Build())
 	jtx.RequireTxSuccess(t, r)
 	env.Close()
 
 	// Accepted: subject owns it, listed in both directories.
 	require.Equal(t, uint32(0), env.OwnerCount(issuer))
 	require.Equal(t, uint32(1), env.OwnerCount(subject))
-	require.True(t, dirContains(t, env, issuer, credKey))
-	require.True(t, dirContains(t, env, subject, credKey))
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, credKey.Key, true)
+	jtx.RequireOwnerDirectoryContains(t, env, subject, credKey.Key, true)
 
 	// Subject (the owner) deletes the credential.
-	r = env.Submit(credential.CredentialDelete(subject, subject, issuer, credType).Build())
+	r = env.Submit(credential.CredentialDeleteText(subject, subject, issuer, credType).Build())
 	jtx.RequireTxSuccess(t, r)
 	env.Close()
 
 	require.False(t, env.LedgerEntryExists(credKey), "credential must be erased")
-	require.False(t, dirContains(t, env, issuer, credKey),
-		"credential must be removed from issuer directory")
-	require.False(t, dirContains(t, env, subject, credKey),
-		"credential must be removed from subject directory")
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, credKey.Key, false)
+	jtx.RequireOwnerDirectoryContains(t, env, subject, credKey.Key, false)
 	require.Equal(t, uint32(0), env.OwnerCount(subject), "subject owner count must drop to 0")
 	require.Equal(t, uint32(0), env.OwnerCount(issuer))
 }
@@ -166,26 +110,24 @@ func TestCredentialDelete_ViaDeleteSLE_UnacceptedByIssuer(t *testing.T) {
 
 	credKey := jtx.CredentialKeylet(subject, issuer, credType)
 
-	r := env.Submit(credential.CredentialCreate(issuer, subject, credType).Build())
+	r := env.Submit(credential.CredentialCreateText(issuer, subject, credType).Build())
 	jtx.RequireTxSuccess(t, r)
 	env.Close()
 
 	// Un-accepted: issuer owns it, listed in both directories.
 	require.Equal(t, uint32(1), env.OwnerCount(issuer))
 	require.Equal(t, uint32(0), env.OwnerCount(subject))
-	require.True(t, dirContains(t, env, issuer, credKey))
-	require.True(t, dirContains(t, env, subject, credKey))
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, credKey.Key, true)
+	jtx.RequireOwnerDirectoryContains(t, env, subject, credKey.Key, true)
 
 	// Issuer (the owner) deletes the un-accepted credential.
-	r = env.Submit(credential.CredentialDelete(issuer, subject, issuer, credType).Build())
+	r = env.Submit(credential.CredentialDeleteText(issuer, subject, issuer, credType).Build())
 	jtx.RequireTxSuccess(t, r)
 	env.Close()
 
 	require.False(t, env.LedgerEntryExists(credKey), "credential must be erased")
-	require.False(t, dirContains(t, env, issuer, credKey),
-		"credential must be removed from issuer directory")
-	require.False(t, dirContains(t, env, subject, credKey),
-		"credential must be removed from subject directory")
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, credKey.Key, false)
+	jtx.RequireOwnerDirectoryContains(t, env, subject, credKey.Key, false)
 	require.Equal(t, uint32(0), env.OwnerCount(issuer), "issuer owner count must drop to 0")
 	require.Equal(t, uint32(0), env.OwnerCount(subject))
 }
@@ -216,19 +158,40 @@ func TestCredentialCreate_ReserveUsesActualFee(t *testing.T) {
 	env.FundAmount(issuer, reserve)
 	env.Close()
 
-	// FundAmount may leave the issuer slightly under `reserve` after its internal
-	// AccountSet fee; top up to land exactly on the boundary.
-	if bal := env.Balance(issuer); bal < reserve {
-		env.Pay(issuer, reserve-bal)
-		env.Close()
-	}
-	require.GreaterOrEqual(t, env.Balance(issuer), reserve, "issuer must hold at least the reserve")
+	require.Equal(t, reserve, env.Balance(issuer))
 
-	r := env.Submit(credential.CredentialCreate(issuer, subject, credType).
+	r := env.Submit(credential.CredentialCreateText(issuer, subject, credType).
 		Fee(bigFee).Build())
 	jtx.RequireTxSuccess(t, r)
 	env.Close()
 
 	require.Equal(t, uint32(1), env.OwnerCount(issuer),
 		"credential create must succeed when prior balance (incl. actual fee) covers the reserve")
+}
+
+func TestCredentialAccept_ReserveUsesActualFee(t *testing.T) {
+	issuer := jtx.NewAccount("issuer")
+	subject := jtx.NewAccount("subject")
+	env := jtx.NewTestEnv(t)
+	env.Fund(issuer)
+	env.FundAmount(subject, env.ReserveBase()+env.ReserveIncrement())
+	env.Close()
+
+	const credentialType = "accept-reserve"
+	jtx.RequireTxSuccess(t, env.Submit(
+		credential.CredentialCreateText(issuer, subject, credentialType).Build(),
+	))
+	env.Close()
+
+	requiredReserve := env.ReserveBase() + env.ReserveIncrement()
+	require.Equal(t, requiredReserve, env.Balance(subject))
+	const highFee = uint64(5_000_000)
+	jtx.RequireTxSuccess(t, env.Submit(
+		credential.CredentialAcceptText(subject, issuer, credentialType).Fee(highFee).Build(),
+	))
+	env.Close()
+
+	jtx.RequireOwnerCount(t, env, issuer, 0)
+	jtx.RequireOwnerCount(t, env, subject, 1)
+	jtx.RequireBalance(t, env, subject, requiredReserve-highFee)
 }

@@ -28,6 +28,18 @@ func TestBlob_FromJson(t *testing.T) {
 			expectedErr: nil,
 		},
 		{
+			name:        "Odd single nibble",
+			input:       "A",
+			expected:    []byte{0x0a},
+			expectedErr: nil,
+		},
+		{
+			name:        "Odd multiple nibbles",
+			input:       "D0A",
+			expected:    []byte{0x0d, 0x0a},
+			expectedErr: nil,
+		},
+		{
 			name:        "Invalid hex string",
 			input:       "000102030405060708090A0B0C0D0E0G",
 			expected:    nil,

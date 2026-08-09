@@ -92,23 +92,11 @@ func (e *TestEnv) EnableRequireAuth(acc *Account) {
 	e.setAccountFlag(acc, account.AccountSetFlagRequireAuth)
 }
 
-// DisableRequireAuth disables the RequireAuth flag on an account.
-func (e *TestEnv) DisableRequireAuth(acc *Account) {
-	e.t.Helper()
-	e.clearAccountFlag(acc, account.AccountSetFlagRequireAuth)
-}
-
 // EnableRequireDest enables the RequireDest flag on an account.
 // When enabled, the account requires a destination tag on incoming payments.
 func (e *TestEnv) EnableRequireDest(acc *Account) {
 	e.t.Helper()
 	e.setAccountFlag(acc, account.AccountSetFlagRequireDest)
-}
-
-// DisableRequireDest disables the RequireDest flag on an account.
-func (e *TestEnv) DisableRequireDest(acc *Account) {
-	e.t.Helper()
-	e.clearAccountFlag(acc, account.AccountSetFlagRequireDest)
 }
 
 // EnableDisallowXRP enables the DisallowXRP flag on an account.

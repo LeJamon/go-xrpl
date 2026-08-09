@@ -11,7 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // MPTokenIssuanceCreate creates a new multi-purpose token issuance.
@@ -128,7 +128,7 @@ func (m *MPTokenIssuanceCreate) Validate() error {
 
 	// Validate TransferFee
 	if m.TransferFee != nil {
-		if *m.TransferFee > entry.MaxTransferFee {
+		if *m.TransferFee > protocol.MaxMPTokenTransferFee {
 			return ter.Errorf(ter.TemBAD_TRANSFER_FEE, "TransferFee cannot exceed 50000")
 		}
 		// If a non-zero TransferFee is set, tfMPTCanTransfer must also be set
@@ -157,7 +157,7 @@ func (m *MPTokenIssuanceCreate) Validate() error {
 		if err != nil {
 			return ter.Errorf(ter.TemMALFORMED, "MPTokenMetadata must be valid hex")
 		}
-		if len(metadataBytes) == 0 || len(metadataBytes) > entry.MaxMPTokenMetadataLength {
+		if len(metadataBytes) == 0 || len(metadataBytes) > protocol.MaxMPTokenMetadataLength {
 			return ter.Errorf(ter.TemMALFORMED, "MPTokenMetadata length must be 1-1024 bytes")
 		}
 	}
@@ -167,7 +167,7 @@ func (m *MPTokenIssuanceCreate) Validate() error {
 		if *m.MaximumAmount == 0 {
 			return ter.Errorf(ter.TemMALFORMED, "MaximumAmount cannot be zero")
 		}
-		if *m.MaximumAmount > entry.MaxMPTokenAmount {
+		if *m.MaximumAmount > protocol.MaxMPTokenAmount {
 			return ter.Errorf(ter.TemMALFORMED, "MaximumAmount exceeds maximum allowed")
 		}
 	}

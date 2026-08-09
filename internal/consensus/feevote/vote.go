@@ -1,28 +1,22 @@
 // Package feevote decides whether to inject a SetFee pseudo-tx into the
 // consensus tx set at a flag-ledger boundary, tallying trusted validators'
-// fee votes from the prior voting ledger. Mirrors rippled FeeVoteImpl.cpp.
+// fee votes from the prior voting ledger.
 package feevote
 
 import (
 	"fmt"
 	"math"
-	"slices"
 	"strconv"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus/common"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 )
 
-// MaxLegalDrops is the upper bound on a legal XRPAmount (INITIAL_XRP, 1e17
-// drops); values above it count as "no vote". The negative bound is
-// unreachable here (Vote fields are *uint64) but extractors MUST clamp
-// negative XRPAmounts to noVote upstream.
-const MaxLegalDrops uint64 = 100_000_000_000 * 1_000_000
-
-// ReferenceFeeUnitsDeprecated is the legacy sfReferenceFeeUnits stamped on
+// referenceFeeUnitsDeprecated is the legacy sfReferenceFeeUnits stamped on
 // every pre-XRPFees SetFee (== 10).
-const ReferenceFeeUnitsDeprecated uint32 = 10
+const referenceFeeUnitsDeprecated uint32 = 10
 
 // Stance is the three vote-able fee parameters (in drops), shared by
 // "current" and "target". Pre-XRPFees ReserveBase/ReserveIncrement are
@@ -33,70 +27,83 @@ type Stance struct {
 	ReserveIncrement uint64
 }
 
-// Vote is one trusted validator's per-field fee preference. Each field is
-// independent; a missing or out-of-range value is "noVote" (a vote for
-// current). applyVote enforces only the MaxLegalDrops upper bound — the
-// extractor MUST set a field to nil for the cases unrepresentable in
-// *uint64: post-XRPFees non-native (IOU) amounts, pre-XRPFees values above
-// INT64_MAX, and negative XRPAmounts (either mode).
+// Vote is one trusted validator's per-field fee preference. A nil or illegal
+// amount is a vote for the current value.
 type Vote struct {
-	BaseFee          *uint64
-	ReserveBase      *uint64
-	ReserveIncrement *uint64
+	BaseFee          *drops.XRPAmount
+	ReserveBase      *drops.XRPAmount
+	ReserveIncrement *drops.XRPAmount
 }
 
 // votableValue is the per-field tallying state.
 type votableValue struct {
 	current uint64
 	target  uint64
-	votes   map[uint64]int
+	votes   map[drops.XRPAmount]int
+	noVotes int
 }
 
 func newVotableValue(current, target uint64) *votableValue {
-	v := &votableValue{
+	return &votableValue{
 		current: current,
 		target:  target,
-		votes:   map[uint64]int{},
+		votes:   map[drops.XRPAmount]int{},
 	}
-	v.votes[target]++
-	return v
 }
 
-func (v *votableValue) addVote(value uint64) {
+func (v *votableValue) addVote(value drops.XRPAmount) {
 	v.votes[value]++
 }
 
 func (v *votableValue) noVote() {
-	v.votes[v.current]++
+	v.noVotes++
 }
 
 // getVotes returns the most-voted value within [min,max](current,target)
-// (out-of-window votes clamped; ties pick the lowest key) and whether it
-// differs from current.
+// (out-of-window votes are ignored; ties pick the lowest value) and whether
+// it differs from current.
 func (v *votableValue) getVotes() (uint64, bool) {
 	lo, hi := v.current, v.target
 	if lo > hi {
 		lo, hi = hi, lo
 	}
 
-	keys := make([]uint64, 0, len(v.votes))
-	for k := range v.votes {
-		keys = append(keys, k)
+	chosen := v.target
+	weight := 1
+	if target, ok := signedAmount(v.target); ok {
+		weight += v.votes[target]
 	}
-	slices.Sort(keys)
 
-	chosen := v.current
-	weight := 0
-	for _, value := range keys {
-		if value < lo || value > hi {
+	currentWeight := v.noVotes
+	if current, ok := signedAmount(v.current); ok {
+		currentWeight += v.votes[current]
+	}
+	if currentWeight > weight || (currentWeight == weight && v.current < chosen) {
+		chosen = v.current
+		weight = currentWeight
+	}
+
+	for value, count := range v.votes {
+		if value < 0 {
 			continue
 		}
-		if v.votes[value] > weight {
-			chosen = value
-			weight = v.votes[value]
+		candidate := uint64(value)
+		if candidate == v.current || candidate == v.target || candidate < lo || candidate > hi {
+			continue
+		}
+		if count > weight || (count == weight && candidate < chosen) {
+			chosen = candidate
+			weight = count
 		}
 	}
 	return chosen, chosen != v.current
+}
+
+func signedAmount(value uint64) (drops.XRPAmount, bool) {
+	if value > math.MaxInt64 {
+		return 0, false
+	}
+	return drops.XRPAmount(value), true
 }
 
 // DoVoting tallies trusted validators' fee votes and returns a SetFee
@@ -139,8 +146,8 @@ func DoVoting(
 
 // applyVote routes a field vote into the tally; missing or overflow values
 // count as a vote for current (noVote) so one bad field doesn't poison the rest.
-func applyVote(v *votableValue, field *uint64) {
-	if field == nil || *field > MaxLegalDrops {
+func applyVote(v *votableValue, field *drops.XRPAmount) {
+	if field == nil || *field < -drops.MaxDrops || *field > drops.MaxDrops {
 		v.noVote()
 		return
 	}
@@ -150,6 +157,19 @@ func applyVote(v *votableValue, field *uint64) {
 // buildSetFeeTx serializes a SetFee pseudo-tx; the field set differs
 // between pre- and post-XRPFees wire formats.
 func buildSetFeeTx(seq uint32, current, chosen Stance, xrpFeesEnabled bool) ([]byte, error) {
+	var reserveBase, reserveIncrement uint32
+	if !xrpFeesEnabled {
+		var err error
+		reserveBase, err = narrowToUint32(chosen.ReserveBase, current.ReserveBase)
+		if err != nil {
+			return nil, fmt.Errorf("reserve base: %w", err)
+		}
+		reserveIncrement, err = narrowToUint32(chosen.ReserveIncrement, current.ReserveIncrement)
+		if err != nil {
+			return nil, fmt.Errorf("reserve increment: %w", err)
+		}
+	}
+
 	return common.BuildPseudoTx(tx.TypeFee, func(base tx.BaseTx) tx.Transaction {
 		stx := &pseudo.SetFee{
 			BaseTx:         base,
@@ -162,11 +182,9 @@ func buildSetFeeTx(seq uint32, current, chosen Stance, xrpFeesEnabled bool) ([]b
 			stx.ReserveIncrementDrops = strconv.FormatUint(chosen.ReserveIncrement, 10)
 		} else {
 			stx.BaseFee = fmt.Sprintf("%X", chosen.BaseFee)
-			rb := narrowToUint32(chosen.ReserveBase, current.ReserveBase)
-			stx.ReserveBase = &rb
-			ri := narrowToUint32(chosen.ReserveIncrement, current.ReserveIncrement)
-			stx.ReserveIncrement = &ri
-			ref := ReferenceFeeUnitsDeprecated
+			stx.ReserveBase = &reserveBase
+			stx.ReserveIncrement = &reserveIncrement
+			ref := referenceFeeUnitsDeprecated
 			stx.ReferenceFeeUnits = &ref
 		}
 
@@ -174,12 +192,13 @@ func buildSetFeeTx(seq uint32, current, chosen Stance, xrpFeesEnabled bool) ([]b
 	})
 }
 
-// narrowToUint32 returns chosen as uint32, or fallback if it exceeds
-// UINT32_MAX (fall back to current rather than truncate). A fallback above
-// UINT32_MAX is unreachable — on-chain FeeSettings uint32 fields can't exceed it.
-func narrowToUint32(chosen, fallback uint64) uint32 {
-	if chosen > math.MaxUint32 {
-		return uint32(fallback)
+// narrowToUint32 returns chosen as uint32, or fallback if chosen does not fit.
+func narrowToUint32(chosen, fallback uint64) (uint32, error) {
+	if chosen <= math.MaxUint32 {
+		return uint32(chosen), nil
 	}
-	return uint32(chosen)
+	if fallback > math.MaxUint32 {
+		return 0, fmt.Errorf("current value %d exceeds uint32", fallback)
+	}
+	return uint32(fallback), nil
 }

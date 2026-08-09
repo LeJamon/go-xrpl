@@ -163,7 +163,6 @@ This document provides a comprehensive comparison between go-xrpl and the ripple
   - Channels: channel_authorize, channel_verify
   - Utilities: wallet_propose, deposit_authorized, nft_*, subscribe, unsubscribe
   - Admin: stop, validation_create, manifest, peer_reservations_*, peers, consensus_info, validators, validator_list_sites
-  - Reporting: download_shard, crawl_shards
   - Clio: nft_info, ledger_index
 
 ### rippled Has:

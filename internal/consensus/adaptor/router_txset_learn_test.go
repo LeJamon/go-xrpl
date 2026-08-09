@@ -2,6 +2,7 @@ package adaptor
 
 import (
 	"encoding/hex"
+	"errors"
 	"testing"
 	"time"
 
@@ -16,6 +17,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type failingOpenLedgerTxLookup struct {
+	err error
+}
+
+func (f failingOpenLedgerTxLookup) OpenLedgerHasTx([32]byte) (bool, error) {
+	return false, f.err
+}
+
 // TestRouter_TxSetAcquire_LearnsTransaction pins the gotNode-equivalent
 // added for issue #724: when a tx-set acquisition pulls in a leaf for a
 // transaction the node had never seen, that transaction is submitted into
@@ -28,7 +37,7 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 	a := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, a, inbox)
+	router := newTestRouter(engine, a, inbox)
 	ctx := t.Context()
 	go router.Run(ctx)
 
@@ -50,7 +59,7 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 	txHash, err := tx.ComputeTransactionHash(txn)
 	require.NoError(t, err)
 
-	require.False(t, a.HasTx(consensus.TxID(txHash)),
+	require.False(t, adaptorHasTx(t, a, consensus.TxID(txHash)),
 		"precondition: the tx must be unknown before acquisition")
 
 	// Build a complete tx-set SHAMap carrying the tx, keyed by its real
@@ -72,14 +81,48 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 		InfoType:   message.LedgerInfoTsCandidate,
 		Nodes:      ldNodes,
 	}
+	router.MarkTxSetStillNeeded(consensus.TxSetID(setID))
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  5,
-		Type:    uint16(message.TypeLedgerData),
+		Type:    message.TypeLedgerData,
 		Payload: encodePayload(t, resp),
 	}
 
 	require.Eventually(t, func() bool {
-		return a.HasTx(consensus.TxID(txHash))
+		return adaptorHasTx(t, a, consensus.TxID(txHash))
 	}, time.Second, 10*time.Millisecond,
 		"tx-set acquisition must learn the carried transaction into the open ledger")
+}
+
+func TestRouterLearnTxFromLeafStopsOnMembershipError(t *testing.T) {
+	a := newTestAdaptor(t)
+	a.txLookup = failingOpenLedgerTxLookup{err: errors.New("injected transaction membership failure")}
+	router := NewRouter(&mockEngine{}, a, make(chan *peermanagement.InboundMessage))
+
+	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+	master := jtx.MasterAccount()
+	alice := jtx.NewAccount("alice")
+	txn := payment.Pay(master, alice, 100_000_000).Sequence(1).Build()
+	env.SignWith(txn, master)
+	txMap, err := txn.Flatten()
+	require.NoError(t, err)
+	hexStr, err := binarycodec.Encode(txMap)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(hexStr)
+	require.NoError(t, err)
+	txHash, err := tx.ComputeTransactionHash(txn)
+	require.NoError(t, err)
+
+	sm := shamap.New(shamap.TypeTransaction)
+	require.NoError(t, sm.PutWithNodeType(txHash, blob, shamap.NodeTypeTransactionNoMeta))
+	wireNodes, err := sm.WalkWireNodes()
+	require.NoError(t, err)
+	for _, node := range wireNodes {
+		router.learnTxFromLeaf(5, node.Data)
+	}
+
+	exists, err := a.ledgerService.OpenLedgerHasTx(txHash)
+	require.NoError(t, err)
+	require.False(t, exists, "membership lookup failure must stop before resubmission")
 }

@@ -113,7 +113,10 @@ func TestTicket_CreatePreclaimFail(t *testing.T) {
 		alice := jtx.NewAccount("alice")
 		// Don't fund alice — she doesn't exist in the ledger.
 		// Manually set sequence to 1 (rippled's json(jss::Sequence, 1)).
-		result := env.Submit(ticket.TicketCreate(alice, 1).Sequence(1).Build())
+		result := env.SubmitWithOptions(
+			ticket.TicketCreate(alice, 1).Sequence(1).Build(),
+			jtx.SubmitOptions{SkipSignature: true},
+		)
 		jtx.RequireTxFail(t, result, "terNO_ACCOUNT")
 	})
 

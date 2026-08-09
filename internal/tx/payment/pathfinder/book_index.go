@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // BookIndex provides an index of existing order books in the ledger.
@@ -66,13 +67,17 @@ func (bi *BookIndex) Build() {
 			}
 		}()
 
-		switch state.EntryType(data) {
-		case "Offer":
+		entryType, err := state.DecodeType(data)
+		if err != nil {
+			return true
+		}
+		switch entryType {
+		case entry.TypeOffer:
 			offer, err := state.ParseLedgerOffer(data)
 			if err == nil && bi.includesOffer(offer) {
 				addPair(issueFromAmount(offer.TakerPays), issueFromAmount(offer.TakerGets))
 			}
-		case "AMM":
+		case entry.TypeAMM:
 			if bi.domainID != nil {
 				break
 			}

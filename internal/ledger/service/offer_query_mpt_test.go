@@ -134,10 +134,7 @@ func TestGetBookOffersIssuerOwnedMPTIsFullyFunded(t *testing.T) {
 	require.Nil(t, result.Offers[0].TakerPaysFunded)
 }
 
-func TestMultiplyByDirRateIgnoresGlobalNumberSwitchover(t *testing.T) {
-	previous := state.GetNumberSwitchover()
-	t.Cleanup(func() { state.SetNumberSwitchover(previous) })
-
+func TestMultiplyByDirRateUsesRPCNumberSemantics(t *testing.T) {
 	prototype := state.NewMPTAmountWithIssuanceID(
 		100,
 		"",
@@ -155,57 +152,35 @@ func TestMultiplyByDirRateIgnoresGlobalNumberSwitchover(t *testing.T) {
 		{name: "above half", getsFunded: 3, rate: 6, want: 2},
 	}
 
-	for _, switchover := range []bool{false, true} {
-		state.SetNumberSwitchover(switchover)
-		for _, test := range tests {
-			dirRate := tx.NewIssuedAmount(test.rate, -1, "", "")
-			got, ok := multiplyByDirRate(tx.NewXRPAmount(test.getsFunded), dirRate, prototype).MPTRaw()
-			require.True(t, ok)
-			require.Equalf(t, test.want, got, "%s with global switchover=%t", test.name, switchover)
-		}
+	for _, test := range tests {
+		dirRate := tx.NewIssuedAmount(test.rate, -1, "", "")
+		got, ok := multiplyByDirRate(tx.NewXRPAmount(test.getsFunded), dirRate, prototype).MPTRaw()
+		require.True(t, ok)
+		require.Equalf(t, test.want, got, "%s", test.name)
 	}
 }
 
 func TestMultiplyByDirRatePreservesLargeMPTPrecision(t *testing.T) {
-	previous := state.GetNumberSwitchover()
-	t.Cleanup(func() { state.SetNumberSwitchover(previous) })
-
 	issuanceID := "00000004AE123A8556F3CF91154711376AFB0F894F832B3D"
 	amount := state.NewMPTAmountWithIssuanceID(math.MaxInt64, "", issuanceID)
 	prototype := state.NewMPTAmountWithIssuanceID(0, "", issuanceID)
 	dirRate := tx.NewIssuedAmount(1, 0, "", "")
 
-	for _, switchover := range []bool{false, true} {
-		state.SetNumberSwitchover(switchover)
-		got, ok := multiplyByDirRate(amount, dirRate, prototype).MPTRaw()
-		require.True(t, ok)
-		require.Equalf(t, int64(math.MaxInt64), got, "global switchover=%t", switchover)
-	}
+	got, ok := multiplyByDirRate(amount, dirRate, prototype).MPTRaw()
+	require.True(t, ok)
+	require.Equal(t, int64(math.MaxInt64), got)
 }
 
-func TestNewDirRateIgnoresGlobalNumberSwitchover(t *testing.T) {
-	previous := state.GetNumberSwitchover()
-	t.Cleanup(func() { state.SetNumberSwitchover(previous) })
-
+func TestNewDirRateUsesRPCNumberSemantics(t *testing.T) {
 	const mantissa = uint64(10_000_000_000_000_015)
 	quality := uint64(84)<<56 | mantissa // exponent -16
-	var got [2]tx.Amount
-	for i, switchover := range []bool{false, true} {
-		state.SetNumberSwitchover(switchover)
-		got[i] = newDirRate(quality, tx.NewXRPAmount(0))
-	}
+	got := newDirRate(quality, tx.NewXRPAmount(0))
 
-	require.Equal(t, got[0].Mantissa(), got[1].Mantissa())
-	require.Equal(t, got[0].Exponent(), got[1].Exponent())
-	require.Equal(t, int64(1_000_000_000_000_002), got[0].Mantissa())
-	require.Equal(t, -15, got[0].Exponent())
+	require.Equal(t, int64(1_000_000_000_000_002), got.Mantissa())
+	require.Equal(t, -15, got.Exponent())
 }
 
 func TestGetBookOffersMPTFundedPaysNearestEven(t *testing.T) {
-	previous := state.GetNumberSwitchover()
-	t.Cleanup(func() { state.SetNumberSwitchover(previous) })
-	state.SetNumberSwitchover(false)
-
 	svc := newOfferTestService(t)
 	issuerAddr, issuer := addressFromBytes(t, 0x64)
 	ownerAddr, _ := addressFromBytes(t, 0x74)
@@ -219,25 +194,14 @@ func TestGetBookOffersMPTFundedPaysNearestEven(t *testing.T) {
 		tx.NewXRPAmount(6),
 	)
 
-	for _, test := range []struct {
-		name       string
-		switchover bool
-	}{
-		{name: "global disabled", switchover: false},
-		{name: "global enabled", switchover: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			state.SetNumberSwitchover(test.switchover)
-			result, err := svc.GetBookOffers(
-				context.Background(), tx.NewXRPAmount(0), mptModel, "", "", "current", 10, "", false,
-			)
-			require.NoError(t, err)
-			require.Len(t, result.Offers, 1)
-			require.Equal(t, "3", result.Offers[0].TakerGetsFunded)
-			require.Equal(t, map[string]string{
-				"mpt_issuance_id": idString,
-				"value":           "2",
-			}, result.Offers[0].TakerPaysFunded)
-		})
-	}
+	result, err := svc.GetBookOffers(
+		context.Background(), tx.NewXRPAmount(0), mptModel, "", "", "current", 10, "", false,
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Offers, 1)
+	require.Equal(t, "3", result.Offers[0].TakerGetsFunded)
+	require.Equal(t, map[string]string{
+		"mpt_issuance_id": idString,
+		"value":           "2",
+	}, result.Offers[0].TakerPaysFunded)
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
-	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/did"
 )
 
@@ -32,7 +31,8 @@ func DIDSet(account *jtx.Account) *DIDSetBuilder {
 // The URI will be hex-encoded when building the transaction.
 // Pass an empty string to explicitly clear the URI field.
 func (b *DIDSetBuilder) URI(uri string) *DIDSetBuilder {
-	b.uri = &uri
+	encoded := hex.EncodeToString([]byte(uri))
+	b.uri = &encoded
 	return b
 }
 
@@ -46,7 +46,8 @@ func (b *DIDSetBuilder) URIHex(uriHex string) *DIDSetBuilder {
 // The document will be hex-encoded when building the transaction.
 // Pass an empty string to explicitly clear the DIDDocument field.
 func (b *DIDSetBuilder) Document(doc string) *DIDSetBuilder {
-	b.didDocument = &doc
+	encoded := hex.EncodeToString([]byte(doc))
+	b.didDocument = &encoded
 	return b
 }
 
@@ -60,7 +61,8 @@ func (b *DIDSetBuilder) DocumentHex(docHex string) *DIDSetBuilder {
 // The data will be hex-encoded when building the transaction.
 // Pass an empty string to explicitly clear the Data field.
 func (b *DIDSetBuilder) Data(data string) *DIDSetBuilder {
-	b.data = &data
+	encoded := hex.EncodeToString([]byte(data))
+	b.data = &encoded
 	return b
 }
 
@@ -89,45 +91,23 @@ func (b *DIDSetBuilder) Flags(flags uint32) *DIDSetBuilder {
 }
 
 // Build constructs the DIDSet transaction.
-func (b *DIDSetBuilder) Build() tx.Transaction {
+func (b *DIDSetBuilder) Build() *did.DIDSet {
 	d := did.NewDIDSet(b.account.Address)
 	d.Fee = fmt.Sprintf("%d", b.fee)
 
-	// Initialize PresentFields map if needed
-	if d.Common.PresentFields == nil {
+	if b.uri != nil || b.didDocument != nil || b.data != nil {
 		d.Common.PresentFields = make(map[string]bool)
 	}
-
 	if b.uri != nil {
-		if *b.uri != "" {
-			// If URI is not already hex-encoded, encode it
-			if !isHexEncoded(*b.uri) {
-				d.URI = hex.EncodeToString([]byte(*b.uri))
-			} else {
-				d.URI = *b.uri
-			}
-		}
-		// Mark field as present (even if empty) for clearing
+		d.URI = *b.uri
 		d.Common.PresentFields["URI"] = true
 	}
 	if b.didDocument != nil {
-		if *b.didDocument != "" {
-			if !isHexEncoded(*b.didDocument) {
-				d.DIDDocument = hex.EncodeToString([]byte(*b.didDocument))
-			} else {
-				d.DIDDocument = *b.didDocument
-			}
-		}
+		d.DIDDocument = *b.didDocument
 		d.Common.PresentFields["DIDDocument"] = true
 	}
 	if b.data != nil {
-		if *b.data != "" {
-			if !isHexEncoded(*b.data) {
-				d.Data = hex.EncodeToString([]byte(*b.data))
-			} else {
-				d.Data = *b.data
-			}
-		}
+		d.Data = *b.data
 		d.Common.PresentFields["Data"] = true
 	}
 	if b.sequence != nil {
@@ -138,11 +118,6 @@ func (b *DIDSetBuilder) Build() tx.Transaction {
 	}
 
 	return d
-}
-
-// BuildDIDSet is a convenience method that returns the concrete *did.DIDSet type.
-func (b *DIDSetBuilder) BuildDIDSet() *did.DIDSet {
-	return b.Build().(*did.DIDSet)
 }
 
 // DIDDeleteBuilder provides a fluent interface for building DIDDelete transactions.
@@ -180,7 +155,7 @@ func (b *DIDDeleteBuilder) Flags(flags uint32) *DIDDeleteBuilder {
 }
 
 // Build constructs the DIDDelete transaction.
-func (b *DIDDeleteBuilder) Build() tx.Transaction {
+func (b *DIDDeleteBuilder) Build() *did.DIDDelete {
 	d := did.NewDIDDelete(b.account.Address)
 	d.Fee = fmt.Sprintf("%d", b.fee)
 
@@ -192,23 +167,4 @@ func (b *DIDDeleteBuilder) Build() tx.Transaction {
 	}
 
 	return d
-}
-
-// BuildDIDDelete is a convenience method that returns the concrete *did.DIDDelete type.
-func (b *DIDDeleteBuilder) BuildDIDDelete() *did.DIDDelete {
-	return b.Build().(*did.DIDDelete)
-}
-
-// isHexEncoded checks if a string appears to be hex-encoded.
-// Returns true if the string has even length and contains only hex characters.
-func isHexEncoded(s string) bool {
-	if len(s)%2 != 0 {
-		return false
-	}
-	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return false
-		}
-	}
-	return len(s) > 0
 }

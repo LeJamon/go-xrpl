@@ -123,7 +123,7 @@ func TestEnabled(t *testing.T) {
 		p.Fee = fmt.Sprintf("%d", env.BaseFee())
 		p.SigningPubKey = "" // inner batch format, but submitted directly
 
-		result := env.Submit(p)
+		result := env.SubmitWithOptions(p, jtx.SubmitOptions{SkipSignature: true})
 		jtx.RequireTxFail(t, result, "temINVALID_FLAG")
 	})
 
@@ -143,7 +143,7 @@ func TestEnabled(t *testing.T) {
 		p.Fee = fmt.Sprintf("%d", env.BaseFee())
 		p.SigningPubKey = ""
 
-		result := env.Submit(p)
+		result := env.SubmitWithOptions(p, jtx.SubmitOptions{SkipSignature: true})
 		jtx.RequireTxFail(t, result, "temINVALID")
 	})
 
@@ -160,7 +160,7 @@ func TestEnabled(t *testing.T) {
 		p.Fee = fmt.Sprintf("%d", env.BaseFee())
 		p.SigningPubKey = ""
 
-		result := env.Submit(p)
+		result := env.SubmitWithOptions(p, jtx.SubmitOptions{SkipSignature: true})
 		jtx.RequireTxFail(t, result, "temINVALID_FLAG")
 	})
 }
@@ -1377,7 +1377,6 @@ func TestBadOuterFee(t *testing.T) {
 // =============================================================================
 // Test 12: testBatchDelegate
 // Reference: rippled Batch_test.cpp testBatchDelegate()
-// Skipped: Requires Delegate transaction type which is not yet implemented
 // =============================================================================
 
 func TestBatchDelegate(t *testing.T) {
@@ -1402,7 +1401,7 @@ func TestBatchDelegate(t *testing.T) {
 		preAlice := env.Balance(alice)
 		preBob := env.Balance(bob)
 
-		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
 		seq := env.Seq(alice)
 
 		// Inner tx[0]: payment from alice to bob, delegated to bob
@@ -1413,6 +1412,7 @@ func TestBatchDelegate(t *testing.T) {
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(innerTx0).
 			AddInnerTx(innerTx1).
+			AddSigner(bob, "").
 			Build()
 
 		result := env.Submit(batch)
@@ -1462,7 +1462,7 @@ func TestBatchDelegate(t *testing.T) {
 		batch := NewBatchBuilder(alice, aliceSeq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(innerTx0).
 			AddInnerTx(innerTx1).
-			AddSigner(bob, "DEADBEEF").
+			AddSigner(carol, "").
 			Build()
 
 		result := env.Submit(batch)
@@ -1726,9 +1726,7 @@ func TestTicketsOpenLedger(t *testing.T) {
 // =============================================================================
 
 func TestBatchTxQueue(t *testing.T) {
-	t.Run("outer batch txns count towards queue size", func(t *testing.T) {
-		// Reference: rippled Batch_test.cpp testBatchTxQueue() first sub-test
-		// "only outer batch transactions are counter towards the queue size"
+	t.Run("batch cannot queue", func(t *testing.T) {
 		cfg := makeSmallQueueConfig(2)
 		env := jtx.NewTestEnvWithTxQ(t, cfg)
 		env.EnableFeatureNow("Batch")
@@ -1760,17 +1758,18 @@ func TestBatchTxQueue(t *testing.T) {
 		bobSeq := env.Seq(bob)
 		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
 
-		// Queue Batch: regular batch fee is too low to bypass escalation.
+		// A Batch paying only its base fee cannot bypass escalation and is rejected
+		// instead of entering the queue.
 		batch := NewBatchBuilder(alice, aliceSeq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, aliceSeq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, bobSeq)).
 			AddSigner(bob, "").
 			Build()
 		result = env.Submit(batch)
-		jtx.RequireTxFail(t, result, "terQUEUED")
-		checkMetrics(t, env, 2, nil, 3, 2)
+		jtx.RequireTxFail(t, result, "telCAN_NOT_QUEUE")
+		checkMetrics(t, env, 1, nil, 3, 2)
 
-		// Replace Queued Batch with open ledger fee.
+		// Paying the open-ledger fee allows direct application.
 		olFee := env.OpenLedgerFee(batchFee)
 		batch2 := NewBatchBuilder(alice, aliceSeq, olFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, aliceSeq+1)).
@@ -1786,8 +1785,14 @@ func TestBatchTxQueue(t *testing.T) {
 		// Closed ledger had: 3 noops + 1 batch outer + 2 inner = 6 txns.
 		// With NormalConsensusIncreasePercent=0, txnsExpected = 6.
 		// maxSize = 6 * 2 = 12. txInLedger = 1 (carol's noop from queue).
-		maxSize := uint32(12)
+		maxSize := uint64(12)
 		checkMetrics(t, env, 0, &maxSize, 1, 6)
+		closed := env.LastClosedLedger()
+		require.Equal(t, uint32(6), closed.TxCount())
+		root, err := closed.TxMapHash()
+		require.NoError(t, err)
+		require.NotEqual(t, [32]byte{}, root)
+		require.Equal(t, root, closed.Header().TxHash)
 	})
 
 	t.Run("inner batch txns count towards ledger tx count", func(t *testing.T) {
@@ -1868,7 +1873,7 @@ func makeNoopWithFee(acc *jtx.Account, fee uint64) *accounttx.AccountSet {
 // checkMetrics asserts TxQ metrics match expected values.
 // maxSize nil means skip that assertion (matches rippled's std::nullopt).
 // Reference: rippled test/jtx/TestHelpers.h checkMetrics()
-func checkMetrics(t *testing.T, env *jtx.TestEnv, expectedQueueSize uint32, expectedMaxSize *uint32, expectedTxInLedger uint32, expectedTxPerLedger uint32) {
+func checkMetrics(t *testing.T, env *jtx.TestEnv, expectedQueueSize uint64, expectedMaxSize *uint64, expectedTxInLedger uint64, expectedTxPerLedger uint64) {
 	t.Helper()
 	metrics := env.TxQMetrics()
 

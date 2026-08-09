@@ -18,7 +18,7 @@ import (
 // cached manifest and returns the stored manifest's details plus the
 // raw serialized manifest as base64. Keys with no recorded manifest
 // return only the `requested` field.
-type ManifestMethod struct{ BaseHandler }
+type ManifestMethod struct{ baseHandler }
 
 // manifestResponse mirrors rippled's DoManifest response shape.
 type manifestResponse struct {

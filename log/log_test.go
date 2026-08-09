@@ -201,6 +201,9 @@ func TestFatal_LogsAndCallsExit(t *testing.T) {
 	if !strings.Contains(buf.String(), "fatal-msg") {
 		t.Errorf("Fatal() did not log the message: %q", buf.String())
 	}
+	if !strings.Contains(buf.String(), "level=FATAL") {
+		t.Errorf("Fatal() did not use the fatal level: %q", buf.String())
+	}
 }
 
 // TestDefaultConfig verifies DefaultConfig() returns sensible defaults.

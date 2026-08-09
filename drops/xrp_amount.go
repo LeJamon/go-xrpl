@@ -1,6 +1,7 @@
 package drops
 
 import (
+	"math"
 	"strconv"
 )
 
@@ -23,6 +24,17 @@ func NewXRPAmount(drops int64) XRPAmount {
 // Drops returns the amount as an integer number of drops.
 func (x XRPAmount) Drops() int64 {
 	return int64(x)
+}
+
+// JSONClipped returns the signed 32-bit value used by rippled's JSON API.
+func (x XRPAmount) JSONClipped() int32 {
+	if x < math.MinInt32 {
+		return math.MinInt32
+	}
+	if x > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int32(x)
 }
 
 // DecimalXRP returns the amount expressed in XRP (drops divided by 1e6).

@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // MPTokenIssuanceSet modifies a multi-purpose token issuance.
@@ -178,7 +179,7 @@ func (m *MPTokenIssuanceSet) PreflightRules(rules *amendment.Rules) error {
 	if isMutate && m.GetFlags()&(MPTokenIssuanceSetFlagLock|MPTokenIssuanceSetFlagUnlock) != 0 {
 		return ter.Errorf(ter.TemMALFORMED, "lock or unlock cannot be combined with an issuance mutation")
 	}
-	if m.TransferFee != nil && *m.TransferFee > entry.MaxTransferFee {
+	if m.TransferFee != nil && *m.TransferFee > protocol.MaxMPTokenTransferFee {
 		return ter.Errorf(ter.TemBAD_TRANSFER_FEE, "TransferFee cannot exceed 50000")
 	}
 	if m.TransferFee != nil && *m.TransferFee > 0 && enableFlags&MPTokenIssuanceSetFlagSetCanHoldConfidentialBalance != 0 {
@@ -189,7 +190,7 @@ func (m *MPTokenIssuanceSet) PreflightRules(rules *amendment.Rules) error {
 		if err != nil {
 			return ter.Errorf(ter.TemMALFORMED, "MPTokenMetadata must be valid hex")
 		}
-		if len(metadataBytes) > entry.MaxMPTokenMetadataLength {
+		if len(metadataBytes) > protocol.MaxMPTokenMetadataLength {
 			return ter.Errorf(ter.TemMALFORMED, "MPTokenMetadata exceeds maximum length")
 		}
 	}

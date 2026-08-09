@@ -16,7 +16,7 @@ import (
 // the entry into ledgerHistory[seq] but MUST NOT regress
 // s.closedLedger.Sequence(). Without the gate, goxrpl's
 // closed_ledger.seq oscillates downward each time a parent acquires,
-// the ModeManager's Tracking → Full check (which compares ourSeq vs
+// the catch-up Tracking → Full check (which compares ourSeq vs
 // peerSeq) wedges on the regressing tip, and the engine never gets
 // promoted to OpModeFull — the structural bootstrap deadlock that
 // blocked the all-5-UNL soak rerun in the second-pass review.
@@ -36,17 +36,19 @@ func TestAdoptLedgerWithState_BackwardFillDoesNotRegressClosed(t *testing.T) {
 	require.NoError(t, svc.Start())
 
 	mkHeader := func(seq uint32, salt byte) (*header.LedgerHeader, *shamap.SHAMap) {
-		var h, parent [32]byte
-		h[0] = salt
-		h[1] = byte(seq)
+		var parent [32]byte
 		parent[0] = salt
 		parent[1] = byte(seq - 1)
 		stateMap := shamap.New(shamap.TypeState)
-		return &header.LedgerHeader{
+		stateRoot, err := stateMap.Hash()
+		require.NoError(t, err)
+		h := &header.LedgerHeader{
 			LedgerIndex: seq,
-			Hash:        h,
 			ParentHash:  parent,
-		}, stateMap
+			AccountHash: stateRoot,
+		}
+		h.Hash = header.CalculateHash(*h)
+		return h, stateMap
 	}
 
 	// Pre-condition: closed at genesis (seq 2 in goxrpl).

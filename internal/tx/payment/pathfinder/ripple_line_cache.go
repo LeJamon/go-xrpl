@@ -7,6 +7,7 @@ import (
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // LineDirection indicates whether to include all trust lines or only those
@@ -193,8 +194,12 @@ func (c *RippleLineCache) buildMPTs(account [20]byte) []PathFindMPT {
 			return nil
 		}
 
-		switch state.EntryType(data) {
-		case "MPTokenIssuance":
+		entryType, err := state.DecodeType(data)
+		if err != nil {
+			return nil
+		}
+		switch entryType {
+		case entry.TypeMPTokenIssuance:
 			issuance, err := state.ParseMPTokenIssuance(data)
 			if err != nil || issuance.Issuer != account {
 				return nil
@@ -205,7 +210,7 @@ func (c *RippleLineCache) buildMPTs(account [20]byte) []PathFindMPT {
 				MaxedOut: issuance.OutstandingAmount == mptutil.MaximumAmount(issuance),
 			})
 			return nil
-		case "MPToken":
+		case entry.TypeMPToken:
 			holding, err := state.ParseMPToken(data)
 			if err != nil || holding.Account != account {
 				return nil

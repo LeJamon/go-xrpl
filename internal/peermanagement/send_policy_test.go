@@ -1,7 +1,6 @@
 package peermanagement
 
 import (
-	"sync"
 	"testing"
 	"time"
 
@@ -9,95 +8,91 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestPeer_Send_DropPolicy pins finding 9: a full bounded send queue drops
-// the frame (returning ErrSendBufferFull) and counts it per peer, and the
-// large-send-queue intervals reset as soon as a new send observes recovery.
-func TestPeer_Send_DropPolicy(t *testing.T) {
+func TestPeerSendOrdinaryHardLimitReturnsTypedOutcome(t *testing.T) {
 	id, err := NewIdentity()
 	require.NoError(t, err)
-	// nil events channel: Send never touches it. No writer drains p.send,
-	// so the buffer fills deterministically.
 	peer := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
 
-	// Fill the bounded send buffer.
-	for i := range DefaultSendBufferSize {
+	for i := range ordinarySendMaximum {
 		require.NoError(t, peer.Send([]byte{byte(i)}), "enqueue %d should succeed", i)
 	}
 	require.Zero(t, peer.SendDrops(), "no drops while the queue has room")
 
-	// Queue full: further sends drop and count without accelerating the
-	// timer-based disconnect policy.
-	require.ErrorIs(t, peer.Send([]byte{0xFF}), ErrSendBufferFull)
-	require.ErrorIs(t, peer.Send([]byte{0xFE}), ErrSendBufferFull)
-	assert.Equal(t, uint64(2), peer.SendDrops(), "each dropped frame must be counted")
+	err = peer.Send([]byte{0xFF})
+	require.ErrorIs(t, err, ErrSendBufferFull)
+	var queueErr *SendQueueError
+	require.ErrorAs(t, err, &queueErr)
+	assert.Equal(t, OutboundClassOrdinary, queueErr.Class)
+	assert.Equal(t, SendQueueFrameLimit, queueErr.Reason)
+	assert.Equal(t, ordinarySendMaximum, queueErr.RetainedFrames)
+	assert.Equal(t, uint64(1), peer.SendDrops())
+	assert.Equal(t, uint64(1), peer.SendDropsByClass(OutboundClassOrdinary))
 	assert.Zero(t, peer.largeSendQ.Load())
 
-	// Drain a single frame (queue still well above target) and re-enqueue.
-	<-peer.send
+	requireOutboundFrame(t, peer)
 	require.NoError(t, peer.Send([]byte{0x01}))
-	assert.Zero(t, peer.largeSendQ.Load())
 
 	peer.largeSendQ.Store(3)
-	// A send after the queue drains below target clears prior timer strikes.
-	for len(peer.send) > 0 {
-		<-peer.send
+	for peer.SendQueueLen() > 0 {
+		requireOutboundFrame(t, peer)
 	}
 	require.NoError(t, peer.Send([]byte{0x02}))
 	assert.Zero(t, peer.largeSendQ.Load())
 }
 
-func TestPeerPrioritySendHasIndependentCapacity(t *testing.T) {
+func TestPeerAcquisitionAdmissionCannotConsumeCriticalMinima(t *testing.T) {
 	id, err := NewIdentity()
 	require.NoError(t, err)
 	peer := NewPeer(1, Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
 
-	results := make(chan error, DefaultSendBufferSize*2)
-	var wg sync.WaitGroup
-	for range DefaultSendBufferSize * 2 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			results <- peer.Send([]byte("gossip"))
-		}()
+	for range ordinarySendMaximum {
+		require.NoError(t, peer.Send([]byte("gossip")))
 	}
-	wg.Wait()
-	close(results)
-
-	succeeded := 0
-	for err := range results {
-		if err == nil {
-			succeeded++
-		} else {
-			require.ErrorIs(t, err, ErrSendBufferFull)
+	acquisitionAccepted := 0
+	for {
+		err = peer.SendPriority([]byte("acquisition"))
+		if err != nil {
+			break
 		}
+		acquisitionAccepted++
 	}
-	require.Equal(t, DefaultSendBufferSize, succeeded)
-	require.Len(t, peer.send, DefaultSendBufferSize)
+	require.ErrorIs(t, err, ErrSendBufferFull)
+	assert.Equal(t, 120, acquisitionAccepted)
+	snapshot := peer.outbound.snapshot()
+	assert.Equal(t, ordinarySendMaximum, snapshot.ClassFrames[OutboundClassOrdinary])
+	assert.Equal(t, acquisitionAccepted, snapshot.ClassFrames[OutboundClassAcquisition])
 
-	for range acquisitionSendBufferSize {
-		require.NoError(t, peer.SendPriority([]byte("acquisition")))
+	for range consensusSendMinimum {
+		require.NoError(t, peer.outbound.enqueueReliable(OutboundClassConsensus, []byte("validation")))
 	}
-	require.ErrorIs(t, peer.SendPriority([]byte("acquisition")), ErrSendBufferFull)
-	assert.Len(t, peer.send, DefaultSendBufferSize)
-	assert.Len(t, peer.prioritySend, acquisitionSendBufferSize)
-	assert.Equal(t, DefaultSendBufferSize+acquisitionSendBufferSize, peer.SendQueueLen())
+	for range controlSendMinimum {
+		require.NoError(t, peer.outbound.enqueueReliable(OutboundClassControl, []byte("control")))
+	}
+	assert.Equal(t, reliableSendBufferSize, peer.SendQueueLen())
 }
 
-func TestPeerPingQueuePressureIsNotFatal(t *testing.T) {
+func TestPeerPingUsesProtectedControlAdmission(t *testing.T) {
 	id, err := NewIdentity()
 	require.NoError(t, err)
 	peer := NewPeer(1, Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
-	for range DefaultSendBufferSize {
+	for range ordinarySendMaximum {
 		require.NoError(t, peer.Send([]byte{1}))
+	}
+	for range 120 {
+		require.NoError(t, peer.SendPriority([]byte("acquisition")))
+	}
+	for range consensusSendMinimum {
+		require.NoError(t, peer.outbound.enqueueReliable(OutboundClassConsensus, []byte("validation")))
 	}
 
 	now := time.Unix(1_000, 0)
 	require.NoError(t, peer.runPingTick(now))
-	assert.Equal(t, uint64(1), peer.SendDrops())
 	peer.latencyMu.RLock()
 	inFlight := len(peer.pingsInFlight)
 	peer.latencyMu.RUnlock()
-	assert.Zero(t, inFlight, "a ping that was not queued must not start its timeout")
+	assert.Equal(t, 1, inFlight)
+	assert.Equal(t, controlSendMinimum-1, reliableSendBufferSize-peer.SendQueueLen())
+	assert.Zero(t, peer.SendDrops())
 	assert.Equal(t, uint32(1), peer.largeSendQ.Load())
 }
 
@@ -162,12 +157,12 @@ func TestPeerSendRecoveryResetsTimerStrikesBeforeQueueRegrows(t *testing.T) {
 	clearPeerPings(peer)
 	assert.Equal(t, uint32(2), peer.largeSendQ.Load())
 
-	for len(peer.send) >= targetSendQueue {
-		<-peer.send
+	for peer.SendQueueLen() >= targetSendQueue {
+		requireOutboundFrame(t, peer)
 	}
 	require.NoError(t, peer.Send([]byte{1}))
 	assert.Zero(t, peer.largeSendQ.Load())
-	for len(peer.send) < targetSendQueue {
+	for peer.SendQueueLen() < targetSendQueue {
 		require.NoError(t, peer.Send([]byte{1}))
 	}
 

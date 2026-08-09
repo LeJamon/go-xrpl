@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // checkNoXRPTrustLines verifies that no RippleState (trust line) entry has XRP as
@@ -13,7 +14,7 @@ import (
 // Reference: rippled InvariantCheck.cpp — NoXRPTrustLines (lines 581-610).
 func checkNoXRPTrustLines(entries []InvariantEntry) *InvariantViolation {
 	for _, e := range entries {
-		if e.EntryType != "RippleState" {
+		if e.EntryType != entry.TypeRippleState {
 			continue
 		}
 		// rippled uses the "after" image, which for a delete is the erased SLE;
@@ -43,14 +44,15 @@ func checkNoXRPTrustLines(entries []InvariantEntry) *InvariantViolation {
 }
 
 func rippleStateHasXRPTrustLimit(data []byte) (bool, error) {
-	if state.EntryType(data) != "RippleState" {
+	entryType, err := state.DecodeType(data)
+	if err != nil || entryType != entry.TypeRippleState {
 		return false, fmt.Errorf("not a RippleState entry")
 	}
 
 	// Inspect the asset bytes directly: badCurrency is a deserializable IOU
 	// sentinel in rippled, but the JSON-oriented amount decoder rejects it.
 	var lowFound, highFound, hasXRP bool
-	err := state.WalkFields(data, func(field state.Field) error {
+	err = state.WalkFields(data, func(field state.Field) error {
 		if field.TypeCode != 6 || (field.FieldCode != 6 && field.FieldCode != 7) {
 			return nil
 		}
@@ -103,8 +105,8 @@ func checkNoDeepFreezeTrustLinesWithoutFreeze(entries []InvariantEntry) *Invaria
 		// Only check RippleState entries (created or modified, not deleted).
 		// Confirm the type from the after data, matching rippled which checks
 		// after->getType() == ltRIPPLE_STATE.
-		afterType := state.EntryType(e.After)
-		if afterType != "RippleState" {
+		afterType, err := state.DecodeType(e.After)
+		if err != nil || afterType != entry.TypeRippleState {
 			continue
 		}
 

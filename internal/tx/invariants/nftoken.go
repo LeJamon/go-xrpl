@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // A type-confirmed SLE that fails to parse is bytes go-xrpl serialized moments
@@ -88,7 +89,7 @@ func checkNFTokenCountTracking(txType string, result Result, entries []Invariant
 	var afterMintedTotal, afterBurnedTotal uint32
 
 	for _, e := range entries {
-		if e.EntryType != "AccountRoot" {
+		if e.EntryType != entry.TypeAccountRoot {
 			continue
 		}
 
@@ -301,7 +302,7 @@ func checkValidNFTokenPage(entries []InvariantEntry, view ReadView, rules *amend
 		// Only process NFTokenPage entries.
 		// rippled checks: if before and before->getType() != ltNFTOKEN_PAGE, skip
 		//                 if after and after->getType() != ltNFTOKEN_PAGE, skip
-		if e.EntryType != "NFTokenPage" {
+		if e.EntryType != entry.TypeNFTokenPage {
 			continue
 		}
 

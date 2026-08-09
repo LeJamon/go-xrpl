@@ -4,23 +4,75 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protowire"
 )
+
+func opaqueTestPayload(value []byte) []byte {
+	payload := protowire.AppendTag(nil, 100, protowire.BytesType)
+	return protowire.AppendBytes(payload, value)
+}
 
 func manifestAndLedgerFrames(t *testing.T, manifest, ledger []byte) []byte {
 	t.Helper()
-	var wire bytes.Buffer
-	require.NoError(t, message.WriteMessage(&wire, message.TypeManifests, manifest))
-	require.NoError(t, message.WriteMessage(&wire, message.TypeLedgerData, ledger))
-	return wire.Bytes()
+	manifestFrame, err := message.BuildWireMessage(message.TypeManifests, manifest)
+	require.NoError(t, err)
+	ledgerFrame, err := message.BuildWireMessage(message.TypeLedgerData, opaqueTestPayload(ledger))
+	require.NoError(t, err)
+	return append(manifestFrame, ledgerFrame...)
+}
+
+type failingManifestSpoolWriter struct {
+	err error
+}
+
+func (w failingManifestSpoolWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
+type failingManifestSpoolReader struct {
+	err error
+}
+
+func (r failingManifestSpoolReader) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
+func TestCopyManifestPayloadClassifiesLocalTimeoutWriteFailure(t *testing.T) {
+	writeErr := &os.PathError{Op: "write", Path: "manifest-spool", Err: syscall.ETIMEDOUT}
+	err := copyManifestPayload(
+		failingManifestSpoolWriter{err: writeErr},
+		bytes.NewReader([]byte("manifest")),
+		uint32(len("manifest")),
+	)
+
+	var localErr *manifestSpoolLocalError
+	require.ErrorAs(t, err, &localErr)
+	require.ErrorIs(t, err, writeErr)
+	require.Equal(t, err, normalizeManifestSpoolReadError(err, true))
+}
+
+func TestCopyManifestPayloadKeepsSourceFailuresRemote(t *testing.T) {
+	readErr := errors.New("connection reset")
+	err := copyManifestPayload(
+		&bytes.Buffer{},
+		failingManifestSpoolReader{err: readErr},
+		1,
+	)
+
+	var localErr *manifestSpoolLocalError
+	require.NotErrorAs(t, err, &localErr)
+	require.ErrorIs(t, err, readErr)
 }
 
 func TestOversizedManifestPeersDoNotBlockLedgerFrames(t *testing.T) {
@@ -28,9 +80,10 @@ func TestOversizedManifestPeersDoNotBlockLedgerFrames(t *testing.T) {
 	require.NoError(t, err)
 
 	manifestPayload := bytes.Repeat([]byte{0x4d}, manifestSpoolThreshold+1)
+	ledgerPayloadSize := len(opaqueTestPayload([]byte{1}))
 	manifestMessages := make(chan *InboundMessage, 2)
 	acquisitionEvents := make(chan Event, 2)
-	budget := newReadBudget(int64(2 * len(manifestPayload)))
+	budget := newReadBudget(int64(4*len(manifestPayload) + 2*ledgerPayloadSize))
 	done := make(chan error, 2)
 
 	for i := 1; i <= 2; i++ {
@@ -40,7 +93,7 @@ func TestOversizedManifestPeersDoNotBlockLedgerFrames(t *testing.T) {
 			manifestAndLedgerFrames(t, manifestPayload, []byte{byte(i)}),
 		))
 		peer.SetManifestMessages(manifestMessages)
-		peer.SetManifestReadBudget(budget)
+		peer.SetInboundReadBudget(budget)
 		peer.SetManifestSpoolDir(spoolDir)
 		peer.SetAcquisitionEvents(acquisitionEvents)
 		go func() {
@@ -61,11 +114,12 @@ func TestOversizedManifestPeersDoNotBlockLedgerFrames(t *testing.T) {
 	for range 2 {
 		event := <-acquisitionEvents
 		ledgers[event.PeerID] = event.Payload
+		event.release()
 	}
-	require.Equal(t, []byte{1}, ledgers[1])
-	require.Equal(t, []byte{2}, ledgers[2])
+	require.Equal(t, opaqueTestPayload([]byte{1}), ledgers[1])
+	require.Equal(t, opaqueTestPayload([]byte{2}), ledgers[2])
 	budget.mu.Lock()
-	require.Zero(t, budget.used)
+	require.Equal(t, int64(4*len(manifestPayload)), budget.used)
 	budget.mu.Unlock()
 
 	for range 2 {
@@ -84,18 +138,29 @@ func TestSecondOversizedManifestBlocksOnlyItsPeer(t *testing.T) {
 	require.NoError(t, err)
 
 	manifestPayload := bytes.Repeat([]byte{0x4d}, manifestSpoolThreshold+1)
+	firstPayload := opaqueTestPayload([]byte("first"))
+	secondPayload := opaqueTestPayload([]byte("second"))
 	var wire bytes.Buffer
-	require.NoError(t, message.WriteMessage(&wire, message.TypeManifests, manifestPayload))
-	require.NoError(t, message.WriteMessage(&wire, message.TypeLedgerData, []byte("first")))
-	require.NoError(t, message.WriteMessage(&wire, message.TypeManifests, manifestPayload))
-	require.NoError(t, message.WriteMessage(&wire, message.TypeLedgerData, []byte("second")))
+	for _, candidate := range []struct {
+		msgType message.MessageType
+		payload []byte
+	}{
+		{message.TypeManifests, manifestPayload},
+		{message.TypeLedgerData, firstPayload},
+		{message.TypeManifests, manifestPayload},
+		{message.TypeLedgerData, secondPayload},
+	} {
+		frame, err := message.BuildWireMessage(candidate.msgType, candidate.payload)
+		require.NoError(t, err)
+		wire.Write(frame)
+	}
 
 	peer := newLatencyTestPeer(t)
 	peer.bufReader = bufio.NewReader(bytes.NewReader(wire.Bytes()))
 	manifestMessages := make(chan *InboundMessage, 2)
 	acquisitionEvents := make(chan Event, 2)
 	peer.SetManifestMessages(manifestMessages)
-	peer.SetManifestReadBudget(newReadBudget(int64(2 * len(manifestPayload))))
+	peer.SetInboundReadBudget(newReadBudget(int64(2*len(manifestPayload) + len(firstPayload) + len(secondPayload))))
 	peer.SetManifestSpoolDir(spoolDir)
 	peer.SetAcquisitionEvents(acquisitionEvents)
 	var bootstrapReady atomic.Int32
@@ -110,7 +175,9 @@ func TestSecondOversizedManifestBlocksOnlyItsPeer(t *testing.T) {
 
 	first := <-manifestMessages
 	require.NotNil(t, first.ManifestFrame)
-	require.Equal(t, []byte("first"), (<-acquisitionEvents).Payload)
+	firstLedger := <-acquisitionEvents
+	require.Equal(t, firstPayload, firstLedger.Payload)
+	firstLedger.release()
 	require.True(t, peer.bootstrapManifestPending.Load())
 	require.Zero(t, bootstrapReady.Load())
 
@@ -124,7 +191,9 @@ func TestSecondOversizedManifestBlocksOnlyItsPeer(t *testing.T) {
 	require.NoError(t, first.ManifestFrame.Close())
 	second := <-manifestMessages
 	require.NotNil(t, second.ManifestFrame)
-	require.Equal(t, []byte("second"), (<-acquisitionEvents).Payload)
+	secondLedger := <-acquisitionEvents
+	require.Equal(t, secondPayload, secondLedger.Payload)
+	secondLedger.release()
 	require.ErrorIs(t, <-done, io.EOF)
 	require.NoError(t, second.ManifestFrame.Close())
 	require.Zero(t, bootstrapReady.Load())
@@ -148,12 +217,12 @@ func TestManifestFrameCleanupIsPrivateExactAndIdempotent(t *testing.T) {
 	_, err = os.Stat(keepPath)
 	require.NoError(t, err)
 
-	header := MessageHeader{
+	header := message.Header{
 		PayloadSize:      8,
-		MessageType:      TypeManifests,
+		MessageType:      message.TypeManifests,
 		UncompressedSize: 8,
 	}
-	_, err = spoolManifestFrame(bytes.NewReader([]byte("short")), header, nil, spoolDir)
+	_, err = spoolManifestFrame(context.Background(), nil, bytes.NewReader([]byte("short")), header, nil, spoolDir)
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	entries, err := os.ReadDir(spoolDir)
 	require.NoError(t, err)
@@ -163,9 +232,10 @@ func TestManifestFrameCleanupIsPrivateExactAndIdempotent(t *testing.T) {
 	payload := []byte("manifest")
 	header.PayloadSize = uint32(len(payload))
 	header.UncompressedSize = uint32(len(payload))
-	budget := newReadBudget(int64(len(payload)))
-	frame, err := spoolManifestFrame(bytes.NewReader(payload), header, budget, spoolDir)
+	budget := newReadBudget(int64(2 * len(payload)))
+	frame, err := spoolManifestFrame(context.Background(), nil, bytes.NewReader(payload), header, budget, spoolDir)
 	require.NoError(t, err)
+	require.Equal(t, int64(2*len(payload)), readBudgetUsed(budget))
 	fileInfo, err := os.Stat(frame.path)
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o600), fileInfo.Mode().Perm())
@@ -174,7 +244,7 @@ func TestManifestFrameCleanupIsPrivateExactAndIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, payload, got)
 	budget.mu.Lock()
-	require.Equal(t, int64(len(payload)), budget.used)
+	require.Equal(t, int64(2*len(payload)), budget.used)
 	budget.mu.Unlock()
 
 	require.NoError(t, frame.Close())
@@ -195,4 +265,41 @@ func TestManifestFrameCleanupIsPrivateExactAndIdempotent(t *testing.T) {
 	budget.mu.Lock()
 	require.Zero(t, budget.used)
 	budget.mu.Unlock()
+}
+
+func TestEventReleaseClosesOwnedManifestFrame(t *testing.T) {
+	payload := []byte("manifest")
+	spoolDir := t.TempDir()
+	budget := newReadBudget(int64(2 * len(payload)))
+	header := message.Header{
+		PayloadSize:      uint32(len(payload)),
+		MessageType:      message.TypeManifests,
+		UncompressedSize: uint32(len(payload)),
+	}
+	frame, err := spoolManifestFrame(context.Background(), nil, bytes.NewReader(payload), header, budget, spoolDir)
+	require.NoError(t, err)
+	path := frame.path
+
+	event := Event{ManifestFrame: frame}
+	event.release()
+	require.Nil(t, event.ManifestFrame)
+	require.Zero(t, readBudgetUsed(budget))
+	_, err = os.Stat(path)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestInboundMessageTakesManifestFrameOwnership(t *testing.T) {
+	payload := []byte("manifest")
+	path := filepath.Join(t.TempDir(), "manifest")
+	require.NoError(t, os.WriteFile(path, payload, 0o600))
+	frame := newManifestFrame(path, message.Header{PayloadSize: uint32(len(payload))}, nil, 0)
+	event := Event{ManifestFrame: frame}
+
+	msg := event.inboundMessage()
+	require.Nil(t, event.ManifestFrame)
+	event.release()
+	got, err := msg.ManifestFrame.Materialize(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, payload, got)
+	require.NoError(t, msg.Close())
 }

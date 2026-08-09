@@ -8,35 +8,46 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/stretchr/testify/require"
 )
 
-func newSpecialDispatchHarness(t *testing.T) (*WebSocketServer, *WebSocketConnection, *types.RpcContext) {
+func newSpecialDispatchHarness(t *testing.T) (*WebSocketServer, *websocketConnection, *types.RpcContext) {
 	t.Helper()
-	services := &types.ServiceContainer{ClientLoad: types.NewClientLoadShedder()}
-	ws := NewWebSocketServerWithLoadTracker(time.Second, services, loadtrack.New())
+	services := &types.ServiceContainer{
+		ClientLoad:     types.NewClientLoadShedder(),
+		RPCDiagnostics: NewRPCDiagnostics(),
+		Capabilities:   types.RPCCapabilities{PathSearchMax: 3},
+	}
+	manager := resource.NewManager(nil, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second, Services: services, ResourceManager: manager})
 	ws.methodRegistry.Register("subscribe", &stubHandler{})
 	ws.methodRegistry.Register("path_find", &stubHandler{})
 	send := make(chan []byte, 1)
-	conn := &WebSocketConnection{
-		ID:          "special-dispatch",
-		sendChannel: send,
-		ctx:         context.Background(),
-		legacy: &types.Connection{
-			ID:            "special-dispatch",
-			Subscriptions: make(map[types.SubscriptionType]types.SubscriptionConfig),
-			SendChannel:   send,
-		},
+	conn := &websocketConnection{
+		Connection: subscription.NewConnectionWithContext(context.Background(), "special-dispatch", send),
 	}
+	registration, attached := ws.subscriptionManager.Attach(conn.Connection)
+	require.True(t, attached)
+	conn.registration = registration
+	t.Cleanup(func() { ws.subscriptionManager.Detach(registration) })
 	ctx := newRpcContext(context.Background(), types.RoleGuest, types.DefaultApiVersion, "192.0.2.1", nil, services)
+	consumer := manager.NewInboundEndpoint(ctx.ClientIP)
+	require.NotNil(t, consumer)
+	t.Cleanup(consumer.Release)
+	conn.resourceConsumer = consumer
+	ctx.ResourceConsumer = consumer
+	ctx.ResourceAdmission, _ = consumer.Admit(resource.FeeReferenceRPC())
+	require.NotNil(t, ctx.ResourceAdmission)
 	return ws, conn, ctx
 }
 
-func specialDispatchResponse(t *testing.T, conn *WebSocketConnection) map[string]any {
+func specialDispatchResponse(t *testing.T, conn *websocketConnection) map[string]any {
 	t.Helper()
 	select {
-	case body := <-conn.sendChannel:
+	case body := <-conn.Outbound():
 		var response map[string]any
 		if err := json.Unmarshal(body, &response); err != nil {
 			t.Fatalf("decode response %s: %v", body, err)
@@ -72,13 +83,13 @@ func TestWebSocketSpecialDispatchBusyBoundary(t *testing.T) {
 				ws.services.ClientLoad.Begin()
 			}
 			if !test.wantCalled {
-				ws.loadTracker.Import("peer", loadtrack.Gossip{Items: []loadtrack.GossipItem{{
-					Key:     ctx.ClientIP,
-					Balance: loadtrack.WarningThreshold,
-				}}})
+				require.NoError(t, ws.resourceManager.ImportConsumers("peer", resource.Gossip{Items: []resource.GossipItem{{
+					Address: ctx.ClientIP,
+					Balance: resource.WarningThreshold,
+				}}}))
 			}
 			called := false
-			ws.handleSpecialCommand(conn, ctx, specialDispatchCommand("subscribe"), func(_ *WebSocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
+			ws.handleSpecialCommand(conn, ctx, specialDispatchCommand("subscribe"), func(_ *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
 				called = true
 				if got := ws.services.ClientLoad.InFlight(); got != int64(test.inFlight+1) {
 					t.Fatalf("in-flight inside handler = %d, want %d", got, test.inFlight+1)
@@ -111,24 +122,24 @@ func TestWebSocketSpecialDispatchWarningVisibility(t *testing.T) {
 	}{
 		{
 			name: "success exposes warning",
-			handler: func(_ *WebSocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
+			handler: func(_ *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
 				return map[string]any{}, nil
 			},
 			wantWarning: true,
 		},
 		{
 			name: "error suppresses warning",
-			handler: func(_ *WebSocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
+			handler: func(_ *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
 				return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 			},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ws, conn, ctx := newSpecialDispatchHarness(t)
-			ws.loadTracker.Import("peer", loadtrack.Gossip{Items: []loadtrack.GossipItem{{
-				Key:     ctx.ClientIP,
-				Balance: loadtrack.WarningThreshold,
-			}}})
+			require.NoError(t, ws.resourceManager.ImportConsumers("peer", resource.Gossip{Items: []resource.GossipItem{{
+				Address: ctx.ClientIP,
+				Balance: resource.WarningThreshold,
+			}}}))
 
 			ws.handleSpecialCommand(conn, ctx, specialDispatchCommand("subscribe"), test.handler)
 			response := specialDispatchResponse(t, conn)
@@ -144,7 +155,7 @@ func TestWebSocketSpecialDispatchWarningVisibility(t *testing.T) {
 
 func TestWebSocketSpecialDispatchRecoversPanic(t *testing.T) {
 	ws, conn, ctx := newSpecialDispatchHarness(t)
-	ws.handleSpecialCommand(conn, ctx, specialDispatchCommand("subscribe"), func(_ *WebSocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
+	ws.handleSpecialCommand(conn, ctx, specialDispatchCommand("subscribe"), func(_ *websocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
 		panic("private panic detail")
 	})
 
@@ -168,11 +179,14 @@ func TestWebSocketSpecialDispatchRecoversPanic(t *testing.T) {
 	if strings.Contains(string(encoded), "private panic detail") {
 		t.Fatalf("panic response leaked private detail: %s", encoded)
 	}
-	if got, want := ws.loadTracker.LocalBalance(ctx.ClientIP), float64(loadtrack.ChargeException/uint32(loadtrack.DecayWindow/time.Second)); got != want {
+	if got, want := resourceLocalBalance(t, ws.resourceManager, ctx.ClientIP), uint32(resource.FeeExceptionRPC().Cost()/resource.DecayWindowSeconds); got != want {
 		t.Fatalf("panic charge = %v, want %v", got, want)
 	}
 	if got := ws.services.ClientLoad.InFlight(); got != 0 {
 		t.Fatalf("in-flight leaked after panic: %d", got)
+	}
+	if stats := ws.services.RPCDiagnostics.Snapshot().Methods["subscribe"]; stats.Started != 1 || stats.Finished != 0 || stats.Errored != 1 {
+		t.Fatalf("diagnostics = %#v", stats)
 	}
 }
 
@@ -180,19 +194,51 @@ func TestWebSocketPathFindDynamicLoadCost(t *testing.T) {
 	ws, conn, ctx := newSpecialDispatchHarness(t)
 	for _, test := range []struct {
 		subcommand string
-		want       loadtrack.LoadKind
+		want       int
 	}{
-		{subcommand: "create", want: loadtrack.LoadHeavy},
-		{subcommand: "close", want: loadtrack.LoadReference},
-		{subcommand: "status", want: loadtrack.LoadReference},
+		{subcommand: "create", want: resource.FeeHeavyBurdenRPC().Cost()},
+		{subcommand: "close", want: resource.FeeReferenceRPC().Cost()},
+		{subcommand: "status", want: resource.FeeReferenceRPC().Cost()},
 	} {
 		t.Run(test.subcommand, func(t *testing.T) {
-			ctx.LoadCost = uint32(loadtrack.LoadReference)
+			ctx.LoadCost = uint32(resource.FeeReferenceRPC().Cost())
 			cmd := specialDispatchCommand("path_find")
 			cmd.Params = json.RawMessage(`{"subcommand":"` + test.subcommand + `"}`)
 			_, _ = ws.executePathFind(conn, ctx, cmd)
-			if got := loadtrack.LoadKind(ctx.LoadCost); got != test.want {
+			if got := int(ctx.LoadCost); got != test.want {
 				t.Fatalf("load kind = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestWebSocketPathFindCapabilityPrecedesSubcommandValidation(t *testing.T) {
+	ws, conn, ctx := newSpecialDispatchHarness(t)
+	ctx.Services.Capabilities.PathSearchMax = 0
+	_, rpcErr := ws.executePathFind(conn, ctx, types.WebSocketCommand{Params: json.RawMessage(`{not json`)})
+	if rpcErr == nil || rpcErr.ErrorString != "notSupported" {
+		t.Fatalf("disabled path_find error = %v, want notSupported", rpcErr)
+	}
+}
+
+func TestWebSocketPathFindCreateDoesNotUseLegacyBusyGate(t *testing.T) {
+	ws, conn, ctx := newSpecialDispatchHarness(t)
+	ctx.Services.IsLoadedLocal = func() bool { return true }
+	_, rpcErr := ws.executePathFind(conn, ctx, types.WebSocketCommand{
+		Params: json.RawMessage(`{"subcommand":"create"}`),
+	})
+	if rpcErr == nil || rpcErr.ErrorString != "invalidParams" || rpcErr.Message != "Missing field 'source_account'." {
+		t.Fatalf("path_find create error = %v, want field validation after admission", rpcErr)
+	}
+}
+
+func TestWebSocketPathFindSubcommandValidationUsesCanonicalParams(t *testing.T) {
+	for _, params := range []string{`{}`, `{"subcommand":7}`, `{"subcommand":"future"}`, `{not json`} {
+		t.Run(params, func(t *testing.T) {
+			ws, conn, ctx := newSpecialDispatchHarness(t)
+			_, rpcErr := ws.executePathFind(conn, ctx, types.WebSocketCommand{Params: json.RawMessage(params)})
+			if rpcErr == nil || rpcErr.ErrorString != "invalidParams" || rpcErr.Message != "Invalid parameters." {
+				t.Fatalf("path_find error = %v, want canonical invalidParams", rpcErr)
 			}
 		})
 	}
@@ -206,25 +252,25 @@ func TestWebSocketSubscribeSnapshotLoadCostAfterValidation(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		params    string
-		want      loadtrack.LoadKind
+		want      int
 		wantError bool
 	}{
-		{name: "validated snapshot", params: validSnapshot, want: loadtrack.LoadMedium},
-		{name: "validated state_now", params: validStateNow, want: loadtrack.LoadMedium},
-		{name: "invalid snapshot", params: invalidSnapshot, want: loadtrack.LoadReference, wantError: true},
-		{name: "later invalid book retains snapshot load", params: validThenInvalidSnapshot, want: loadtrack.LoadMedium, wantError: true},
-		{name: "no snapshot", params: `{}`, want: loadtrack.LoadReference},
+		{name: "validated snapshot", params: validSnapshot, want: resource.FeeMediumBurdenRPC().Cost()},
+		{name: "validated state_now", params: validStateNow, want: resource.FeeMediumBurdenRPC().Cost()},
+		{name: "invalid snapshot", params: invalidSnapshot, want: resource.FeeReferenceRPC().Cost(), wantError: true},
+		{name: "later invalid book retains snapshot load", params: validThenInvalidSnapshot, want: resource.FeeMediumBurdenRPC().Cost(), wantError: true},
+		{name: "no snapshot", params: `{}`, want: resource.FeeReferenceRPC().Cost()},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ws, conn, ctx := newSpecialDispatchHarness(t)
-			ctx.LoadCost = uint32(loadtrack.LoadReference)
+			ctx.LoadCost = uint32(resource.FeeReferenceRPC().Cost())
 			cmd := specialDispatchCommand("subscribe")
 			cmd.Params = json.RawMessage(test.params)
 			_, rpcErr := ws.executeSubscribe(conn, ctx, cmd)
 			if (rpcErr != nil) != test.wantError {
 				t.Fatalf("error = %v, wantError %t", rpcErr, test.wantError)
 			}
-			if got := loadtrack.LoadKind(ctx.LoadCost); got != test.want {
+			if got := int(ctx.LoadCost); got != test.want {
 				t.Fatalf("load kind = %d, want %d", got, test.want)
 			}
 		})
@@ -239,8 +285,8 @@ func TestWebSocketSubscribeBothSidesAlias(t *testing.T) {
 	if rpcErr != nil {
 		t.Fatalf("subscribe error = %v", rpcErr)
 	}
-	books := conn.legacy.Subscriptions[types.SubBook].Books
-	if len(books) != 2 {
-		t.Fatalf("book subscriptions = %d, want 2", len(books))
+	books := conn.registration.Snapshot().BookCount()
+	if books != 2 {
+		t.Fatalf("book subscriptions = %d, want 2", books)
 	}
 }

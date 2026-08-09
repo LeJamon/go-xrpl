@@ -824,6 +824,28 @@ func TestDiscoveryConnectedHostSuppressesOtherPorts(t *testing.T) {
 	assert.Empty(t, d.SelectPeersToConnect(2))
 }
 
+func TestDiscoveryAutoconnectTouchesActiveHostSquelch(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	active := "192.0.2.20:51235"
+	candidate := "192.0.2.30:51235"
+	d := NewDiscovery(&Config{
+		MaxPeers:    50,
+		MaxInbound:  25,
+		MaxOutbound: 25,
+		Clock:       func() time.Time { return now },
+	}, make(chan Event, 1))
+	d.MarkConnected(active, PeerID(1))
+	d.AddPeer(candidate, 0, 0)
+
+	now = now.Add(2 * recentConnectAttempt)
+	require.Equal(t, []string{candidate}, d.SelectPeersToConnect(1))
+	d.MarkDisconnected(PeerID(1))
+	assert.Empty(t, d.SelectPeersToConnect(1))
+
+	now = now.Add(recentConnectAttempt)
+	assert.Equal(t, []string{active}, d.SelectPeersToConnect(1))
+}
+
 func TestDiscoveryInFlightHostSuppressionOutlivesCooldown(t *testing.T) {
 	now := time.Unix(10_000, 0)
 	d := NewDiscovery(&Config{MaxOutbound: 25, Clock: func() time.Time { return now }}, make(chan Event, 1))

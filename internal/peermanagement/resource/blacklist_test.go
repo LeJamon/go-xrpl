@@ -19,8 +19,8 @@ func TestSnapshot_FiltersByThreshold(t *testing.T) {
 		t.Fatalf("expected 1 entry at threshold 0, got %d", len(low))
 	}
 	got := low[0]
-	if got.Address != "192.0.2.50" {
-		t.Errorf("address = %q, want host without port", got.Address)
+	if got.Address != "IP Address: 192.0.2.50" {
+		t.Errorf("address = %q, want canonical fingerprint", got.Address)
 	}
 	if got.Type != "inbound" {
 		t.Errorf("type = %q, want inbound", got.Type)
@@ -46,9 +46,7 @@ func TestSnapshot_ExcludesReleasedEntries(t *testing.T) {
 		t.Fatalf("active endpoint: expected 1 entry, got %d", len(got))
 	}
 
-	// Releasing the last Consumer drops the refcount to 0. The entry stays
-	// resident (so a reconnect inherits its balance) but, like rippled moving
-	// it into inactive_, it must no longer appear in the black_list snapshot.
+	// Retained reputation survives reconnects but is not an active snapshot item.
 	c.Release()
 	if got := m.Snapshot(0); len(got) != 0 {
 		t.Errorf("released endpoint should be excluded, got %d entries", len(got))
@@ -58,9 +56,7 @@ func TestSnapshot_ExcludesReleasedEntries(t *testing.T) {
 func TestSnapshot_AdminEndpointKeyedWithPortOne(t *testing.T) {
 	m, _ := newTestManager()
 
-	// An unlimited (admin/cluster) endpoint is keyed at port 1, matching
-	// rippled's at_port(1), so it never collides with the port-0 inbound key
-	// for the same host. It surfaces at threshold 0 even with a zero balance.
+	// Port 1 keeps the administrative key distinct from inbound port 0.
 	c := m.NewUnlimitedEndpoint("198.51.100.7:51235")
 	defer c.Release()
 
@@ -68,8 +64,8 @@ func TestSnapshot_AdminEndpointKeyedWithPortOne(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("expected 1 admin entry, got %d", len(got))
 	}
-	if got[0].Address != "198.51.100.7:1" {
-		t.Errorf("address = %q, want host with admin port :1", got[0].Address)
+	if got[0].Address != "IP Address: 198.51.100.7:1" {
+		t.Errorf("address = %q, want admin fingerprint", got[0].Address)
 	}
 	if got[0].Type != "admin" {
 		t.Errorf("type = %q, want admin", got[0].Type)

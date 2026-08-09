@@ -14,7 +14,7 @@ import (
 // Parameters (all optional, mirroring rippled): ledger (single sequence,
 // forces a deep check), min_ledger, max_ledger, full (bool, deep check),
 // check_nodes (bool, walk every node), stop (bool, halt an in-progress run).
-type LedgerCleanerMethod struct{ AdminHandler }
+type LedgerCleanerMethod struct{ adminHandler }
 
 // RequiredCondition mirrors rippled's handler-table entry
 // {"ledger_cleaner", …, NEEDS_NETWORK_CONNECTION} (Handler.cpp:121-124): the
@@ -35,6 +35,7 @@ func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		MaxLedger  *uint32 `json:"max_ledger,omitempty"`
 		Full       *bool   `json:"full,omitempty"`
 		CheckNodes *bool   `json:"check_nodes,omitempty"`
+		FixTxns    *bool   `json:"fix_txns,omitempty"`
 		Stop       *bool   `json:"stop,omitempty"`
 	}
 	if len(params) > 0 {
@@ -45,7 +46,7 @@ func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 
 	// No parameters at all → non-destructive status query.
 	hasParams := req.Ledger != nil || req.MinLedger != nil || req.MaxLedger != nil ||
-		req.Full != nil || req.CheckNodes != nil || req.Stop != nil
+		req.Full != nil || req.CheckNodes != nil || req.FixTxns != nil || req.Stop != nil
 	if !hasParams {
 		if ctx.Services.LedgerCleanerStatusFn != nil {
 			return statusResponse(ctx.Services.LedgerCleanerStatusFn(), false), nil
@@ -57,8 +58,9 @@ func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		Ledger:     req.Ledger,
 		MinLedger:  req.MinLedger,
 		MaxLedger:  req.MaxLedger,
-		Full:       req.Full != nil && *req.Full,
-		CheckNodes: req.CheckNodes != nil && *req.CheckNodes,
+		Full:       req.Full,
+		CheckNodes: req.CheckNodes,
+		FixTxns:    req.FixTxns,
 		Stop:       req.Stop != nil && *req.Stop,
 	})
 	return statusResponse(st, true), nil
@@ -73,6 +75,7 @@ func statusResponse(st types.LedgerCleanerStatus, configured bool) map[string]an
 	resp := map[string]any{
 		"status":          st.State,
 		"check_nodes":     st.CheckNodes,
+		"fix_txns":        st.FixTxns,
 		"ledgers_checked": st.LedgersChecked,
 		"nodes_checked":   st.NodesChecked,
 		"missing_nodes":   st.MissingNodes,

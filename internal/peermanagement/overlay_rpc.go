@@ -87,7 +87,16 @@ func (o *Overlay) PeersJSON() []map[string]any {
 			"total_bytes_sent": strconv.FormatUint(p.TotalBytesSent, 10),
 			"avg_bps_recv":     strconv.FormatUint(p.AvgBpsRecv, 10),
 			"avg_bps_sent":     strconv.FormatUint(p.AvgBpsSent, 10),
-			"send_drops":       strconv.FormatUint(p.SendDrops, 10),
+		}
+		entry["outbound_queue"] = map[string]any{
+			"send_drops": strconv.FormatUint(p.SendDrops, 10),
+			"send_drops_by_class": map[string]any{
+				"control":     strconv.FormatUint(p.SendDropsControl, 10),
+				"consensus":   strconv.FormatUint(p.SendDropsConsensus, 10),
+				"acquisition": strconv.FormatUint(p.SendDropsAcquisition, 10),
+				"ordinary":    strconv.FormatUint(p.SendDropsOrdinary, 10),
+				"bulk":        strconv.FormatUint(p.SendDropsBulk, 10),
+			},
 		}
 		out = append(out, entry)
 	}
@@ -134,10 +143,10 @@ func (o *Overlay) ClusterJSON() map[string]any {
 	now := o.cfg.Clock()
 
 	o.cluster.ForEach(func(m cluster.Member) {
-		if len(selfKey) > 0 && bytes.Equal(selfKey, m.Identity) {
+		if len(selfKey) > 0 && bytes.Equal(selfKey, m.Identity[:]) {
 			return
 		}
-		encoded, err := addresscodec.EncodeNodePublicKey(m.Identity)
+		encoded, err := addresscodec.EncodeNodePublicKey(m.Identity[:])
 		if err != nil || encoded == "" {
 			return
 		}

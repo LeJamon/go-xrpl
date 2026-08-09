@@ -4,10 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
-	"sync/atomic"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 )
 
 // XRPL API Version constants
@@ -94,6 +93,7 @@ type RpcContext struct {
 	// isUnlimited() in Role.cpp.
 	Unlimited  bool
 	ClientIP   string
+	ResourceIP string
 	PeerSource PeerSource
 	// Services is the per-request service container handlers read to
 	// reach the ledger service, dispatcher, manifest cache, etc. The
@@ -106,6 +106,11 @@ type RpcContext struct {
 	// Dispatch initializes it to the reference cost; handlers raise it only
 	// after reaching the equivalent rippled work boundary.
 	LoadCost uint32
+	// ResourceConsumer is the connection-scoped consumer used by WebSocket
+	// requests. HTTP requests leave it nil and acquire a short-lived consumer.
+	ResourceConsumer *resource.Consumer
+	// ResourceAdmission owns the request's atomic in-flight reservation.
+	ResourceAdmission *resource.Admission
 	// LoadWarning is set by the post-dispatch load charge when the caller
 	// crosses the resource warn threshold. Transport writers surface it as
 	// the top-level warning:"load" field, mirroring rippled's
@@ -267,13 +272,15 @@ const (
 
 // Subscription request structure
 type SubscriptionRequest struct {
-	Streams          []SubscriptionType `json:"streams,omitempty"`
-	Accounts         []string           `json:"accounts,omitempty"`
-	AccountsProposed []string           `json:"accounts_proposed,omitempty"`
-	Books            []BookRequest      `json:"books,omitempty"`
-	URL              string             `json:"url,omitempty"`
-	URLUsername      string             `json:"url_username,omitempty"`
-	URLPassword      string             `json:"url_password,omitempty"`
+	Streams          []SubscriptionType                 `json:"streams,omitempty"`
+	Accounts         []string                           `json:"accounts,omitempty"`
+	AccountsProposed []string                           `json:"accounts_proposed,omitempty"`
+	RTAccounts       []string                           `json:"rt_accounts,omitempty"`
+	AccountHistory   *AccountHistorySubscriptionRequest `json:"account_history_tx_stream,omitempty"`
+	Books            []BookRequest                      `json:"books,omitempty"`
+	URL              string                             `json:"url,omitempty"`
+	URLUsername      string                             `json:"url_username,omitempty"`
+	URLPassword      string                             `json:"url_password,omitempty"`
 	// Username / Password are the deprecated aliases rippled still accepts
 	// for url_username / url_password. When present they take precedence,
 	// and they alone trigger credential updates on an already-registered
@@ -284,8 +291,8 @@ type SubscriptionRequest struct {
 	// subscription payload. A zero value uses DefaultApiVersion.
 	ApiVersion int `json:"-"`
 
-	// wire holds the as-received JSON of the array-valued fields, captured at
-	// decode time. The typed slices above collapse the four shapes rippled
+	// wire holds the as-received JSON of shape-sensitive fields, captured at
+	// decode time. Typed values collapse the shapes rippled
 	// distinguishes via isMember/isArray — absent, null, non-array, and empty
 	// array — into a single nil-or-empty slice, so the subscription manager
 	// reads wire to reproduce rippled's per-shape error codes. nil when the
@@ -299,6 +306,8 @@ type wireSubscriptionArrays struct {
 	streams          json.RawMessage
 	accounts         json.RawMessage
 	accountsProposed json.RawMessage
+	rtAccounts       json.RawMessage
+	accountHistory   json.RawMessage
 	books            json.RawMessage
 	url              json.RawMessage
 	username         json.RawMessage
@@ -306,13 +315,15 @@ type wireSubscriptionArrays struct {
 }
 
 // WireSubscriptionArrays exposes the raw JSON the wire carried for the
-// array-valued subscription fields. Present is false when the request was not
+// shape-sensitive subscription fields. Present is false when the request was not
 // decoded from JSON, in which case the manager falls back to the typed slices.
 type WireSubscriptionArrays struct {
 	Present          bool
 	Streams          json.RawMessage
 	Accounts         json.RawMessage
 	AccountsProposed json.RawMessage
+	RTAccounts       json.RawMessage
+	AccountHistory   json.RawMessage
 	Books            json.RawMessage
 }
 
@@ -326,8 +337,23 @@ func (r *SubscriptionRequest) WireArrays() WireSubscriptionArrays {
 		Streams:          r.wire.streams,
 		Accounts:         r.wire.accounts,
 		AccountsProposed: r.wire.accountsProposed,
+		RTAccounts:       r.wire.rtAccounts,
+		AccountHistory:   r.wire.accountHistory,
 		Books:            r.wire.books,
 	}
+}
+
+// WithoutAccountHistory returns a copy that preserves every wire field except
+// account_history_tx_stream. The transport handles that field through the
+// optional history-stream capability rather than the ordinary stream manager.
+func (r SubscriptionRequest) WithoutAccountHistory() SubscriptionRequest {
+	r.AccountHistory = nil
+	if r.wire != nil {
+		wire := *r.wire
+		wire.accountHistory = nil
+		r.wire = &wire
+	}
+	return r
 }
 
 // WithoutBooks returns a copy that preserves every wire field except books.
@@ -341,7 +367,7 @@ func (r SubscriptionRequest) WithoutBooks() SubscriptionRequest {
 	return r
 }
 
-// UnmarshalJSON captures the raw JSON of the array-valued fields before
+// UnmarshalJSON captures the raw JSON of shape-sensitive fields before
 // decoding the typed fields, so the subscription manager can apply rippled's
 // per-field, per-shape error codes — a typed slice cannot tell an absent field
 // from a null, an empty array, or a non-array value. Shape mismatches on the
@@ -356,6 +382,8 @@ func (r *SubscriptionRequest) UnmarshalJSON(data []byte) error {
 		streams:          m["streams"],
 		accounts:         m["accounts"],
 		accountsProposed: m["accounts_proposed"],
+		rtAccounts:       m["rt_accounts"],
+		accountHistory:   m["account_history_tx_stream"],
 		books:            m["books"],
 		url:              m["url"],
 		username:         m["username"],
@@ -364,6 +392,8 @@ func (r *SubscriptionRequest) UnmarshalJSON(data []byte) error {
 	_ = json.Unmarshal(m["streams"], &r.Streams)
 	_ = json.Unmarshal(m["accounts"], &r.Accounts)
 	_ = json.Unmarshal(m["accounts_proposed"], &r.AccountsProposed)
+	_ = json.Unmarshal(m["rt_accounts"], &r.RTAccounts)
+	_ = json.Unmarshal(m["account_history_tx_stream"], &r.AccountHistory)
 	_ = json.Unmarshal(m["books"], &r.Books)
 	_ = json.Unmarshal(m["url"], &r.URL)
 	_ = json.Unmarshal(m["url_username"], &r.URLUsername)
@@ -371,6 +401,14 @@ func (r *SubscriptionRequest) UnmarshalJSON(data []byte) error {
 	_ = json.Unmarshal(m["username"], &r.Username)
 	_ = json.Unmarshal(m["password"], &r.Password)
 	return nil
+}
+
+// AccountHistorySubscriptionRequest is the nested request carried by
+// account_history_tx_stream. StopHistoryTxOnly is meaningful only for
+// unsubscribe; its exact wire type and presence are validated from WireArrays.
+type AccountHistorySubscriptionRequest struct {
+	Account           string `json:"account"`
+	StopHistoryTxOnly bool   `json:"stop_history_tx_only,omitempty"`
 }
 
 // HasURL reports whether the request selects rippled's url (RPCSub) branch.
@@ -407,7 +445,6 @@ func (r *SubscriptionRequest) URLCredentials() (username, password string, usern
 	return username, password, usernameSet, passwordSet
 }
 
-// Book request for order book subscriptions
 type BookRequest struct {
 	TakerPays json.RawMessage `json:"taker_pays"`
 	TakerGets json.RawMessage `json:"taker_gets"`
@@ -415,16 +452,77 @@ type BookRequest struct {
 	StateNow  bool            `json:"state_now,omitempty"`
 	Both      bool            `json:"both,omitempty"`
 	BothSides bool            `json:"both_sides,omitempty"`
-	// Taker is the perspective account used when computing snapshot
-	// quality (sfTaker on rippled Subscribe.cpp:282-299). Optional; an
-	// empty value means "anonymous" — the same default rippled uses
-	// when the field is absent. Validated against XRPL-address format
-	// in subscription.HandleSubscribe.
-	Taker string `json:"taker,omitempty"`
-	// Domain optionally scopes the book to a permissioned domain
-	// (Subscribe.cpp:308-320). Carried as the uint256 hex string the
-	// client sent; parse-validated in subscription.HandleSubscribe.
-	Domain string `json:"domain,omitempty"`
+	Taker     string          `json:"taker,omitempty"`
+	Domain    string          `json:"domain,omitempty"`
+	wire      *BookRequestWire
+}
+
+type BookRequestWire struct {
+	Taker     json.RawMessage
+	Domain    json.RawMessage
+	Both      json.RawMessage
+	BothSides json.RawMessage
+	Snapshot  json.RawMessage
+	StateNow  json.RawMessage
+}
+
+func (b *BookRequest) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	b.TakerPays = append(json.RawMessage(nil), raw["taker_pays"]...)
+	b.TakerGets = append(json.RawMessage(nil), raw["taker_gets"]...)
+	b.Taker = ""
+	b.Domain = ""
+	b.wire = &BookRequestWire{
+		Taker:     append(json.RawMessage(nil), raw["taker"]...),
+		Domain:    append(json.RawMessage(nil), raw["domain"]...),
+		Both:      append(json.RawMessage(nil), raw["both"]...),
+		BothSides: append(json.RawMessage(nil), raw["both_sides"]...),
+		Snapshot:  append(json.RawMessage(nil), raw["snapshot"]...),
+		StateNow:  append(json.RawMessage(nil), raw["state_now"]...),
+	}
+	_ = json.Unmarshal(raw["taker"], &b.Taker)
+	_ = json.Unmarshal(raw["domain"], &b.Domain)
+	b.Both = jsonCppBool(raw["both"])
+	b.BothSides = jsonCppBool(raw["both_sides"])
+	b.Snapshot = jsonCppBool(raw["snapshot"])
+	b.StateNow = jsonCppBool(raw["state_now"])
+	return nil
+}
+
+func (b BookRequest) Wire() (BookRequestWire, bool) {
+	if b.wire == nil {
+		return BookRequestWire{}, false
+	}
+	return *b.wire, true
+}
+
+func jsonCppBool(raw json.RawMessage) bool {
+	if raw == nil {
+		return false
+	}
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return false
+	}
+	switch v := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return v
+	case float64:
+		return v != 0
+	case string:
+		return v != ""
+	case []any:
+		return len(v) != 0
+	case map[string]any:
+		return len(v) != 0
+	default:
+		return false
+	}
 }
 
 // Common parameter structures
@@ -499,121 +597,11 @@ type OrderBookSpec struct {
 	Domain    string
 }
 
-// SubscriptionConfig holds configuration for a specific subscription
-type SubscriptionConfig struct {
-	// For account subscriptions
-	Accounts []string `json:"accounts,omitempty"`
-	// For book subscriptions (multiple books)
-	Books []BookRequest `json:"books,omitempty"`
-	// For single book subscription (legacy)
-	TakerGets *CurrencySpec `json:"taker_gets,omitempty"`
-	TakerPays *CurrencySpec `json:"taker_pays,omitempty"`
-	Snapshot  bool          `json:"snapshot,omitempty"`
-	Both      bool          `json:"both,omitempty"`
-	Taker     string        `json:"taker,omitempty"`
-	// For URL subscriptions
-	URL      string `json:"url,omitempty"`
-	Username string `json:"url_username,omitempty"`
-	Password string `json:"url_password,omitempty"`
-}
-
-// MaxConsecutiveDrops is the number of back-to-back send failures
-// after which a subscriber is considered terminally slow and is
-// disconnected via Connection.Disconnect. Mirrors rippled's
-// approach in Resource::Manager: warn-then-drop, but applied per
-// outbound queue rather than per inbound charge balance.
-const MaxConsecutiveDrops = 8
-
-// Connection represents a WebSocket connection for subscription
-// management. The struct is shared between subscription.Manager and
-// the WebSocket server so both observe the same drop counter and
-// disconnect callback — eliminates the double-bookkeeping pattern
-// flagged in the #428 audit.
-type Connection struct {
-	ID            string
-	Subscriptions map[SubscriptionType]SubscriptionConfig
-	SendChannel   chan []byte
-	CloseChannel  chan struct{}
-	// Disconnect is invoked when MaxConsecutiveDrops is reached. The
-	// WS layer populates this with its per-conn cancel func so a
-	// persistently slow client gets torn down once, in one place.
-	Disconnect func()
-
-	// EncodeOutbound, when set, transforms each event at the single
-	// enqueue point before it is queued. url (RPCSub) subscriptions use
-	// it to stamp the per-url sequence number at enqueue, mirroring
-	// rippled's mSeq++ in send(): a number is consumed even when the
-	// bounded queue then drops the event, so the remote sees a gap.
-	EncodeOutbound func([]byte) []byte
-
-	// consecutiveDrops counts back-to-back send failures. Reset to 0
-	// on every successful TrySend.
-	consecutiveDrops atomic.Int32
-	apiVersion       atomic.Int32
-}
-
-// SetAPIVersion updates the representation used for subsequent subscription
-// events on this connection.
-func (c *Connection) SetAPIVersion(version int) {
-	if version == 0 {
-		version = DefaultApiVersion
-	}
-	c.apiVersion.Store(int32(version))
-}
-
-// APIVersion returns the representation selected by the latest subscribe
-// request on this connection.
-func (c *Connection) APIVersion() int {
-	version := int(c.apiVersion.Load())
-	if version == 0 {
-		return DefaultApiVersion
-	}
-	return version
-}
-
-// TrySend pushes data onto SendChannel without blocking. Returns true
-// when delivered; on failure increments the consecutive-drop counter
-// and, if the counter reaches MaxConsecutiveDrops, invokes Disconnect
-// exactly once. Same policy is used by every outbound path (broadcasts,
-// per-request responses) so HTTP and WebSocket no longer have
-// inconsistent slow-consumer handling.
-func (c *Connection) TrySend(data []byte) bool {
-	if c == nil || c.SendChannel == nil {
-		return false
-	}
-	if c.EncodeOutbound != nil {
-		data = c.EncodeOutbound(data)
-	}
-	select {
-	case c.SendChannel <- data:
-		c.consecutiveDrops.Store(0)
-		return true
-	default:
-		if c.consecutiveDrops.Add(1) >= MaxConsecutiveDrops {
-			if c.Disconnect != nil {
-				c.Disconnect()
-			}
-		}
-		return false
-	}
-}
-
 // WebSocketResponseOptions contains optional fields for WebSocket responses
 type WebSocketResponseOptions struct {
 	Warning   string          // "load" when approaching rate limit
 	Warnings  []WarningObject // Array of warning objects
 	Forwarded bool            // True if forwarded from Clio to P2P server
-}
-
-// SubscribeResponse represents the response to a subscribe request
-type SubscribeResponse struct {
-	Status      string `json:"status"`
-	LedgerIndex uint32 `json:"ledger_index"`
-	LedgerHash  string `json:"ledger_hash"`
-	LedgerTime  uint32 `json:"ledger_time"`
-	FeeBase     uint64 `json:"fee_base"`
-	ReserveBase uint64 `json:"reserve_base"`
-	ReserveInc  uint64 `json:"reserve_inc"`
 }
 
 // IsValidXRPLAddress validates an XRPL address using the address codec
@@ -628,47 +616,6 @@ func IsValidClassicAddress(address string) bool {
 	return addresscodec.IsValidClassicAddress(address)
 }
 
-func BookMatches(book BookRequest, spec OrderBookSpec) bool {
-	var bookGets, bookPays struct {
-		Currency      string `json:"currency"`
-		Issuer        string `json:"issuer"`
-		MPTIssuanceID string `json:"mpt_issuance_id"`
-	}
-	if err := json.Unmarshal(book.TakerGets, &bookGets); err != nil {
-		return false
-	}
-	if err := json.Unmarshal(book.TakerPays, &bookPays); err != nil {
-		return false
-	}
-
-	if bookGets.Currency != spec.TakerGets.Currency ||
-		bookGets.Issuer != spec.TakerGets.Issuer ||
-		!strings.EqualFold(bookGets.MPTIssuanceID, spec.TakerGets.MPTIssuanceID) {
-		return false
-	}
-	if bookPays.Currency != spec.TakerPays.Currency ||
-		bookPays.Issuer != spec.TakerPays.Issuer ||
-		!strings.EqualFold(bookPays.MPTIssuanceID, spec.TakerPays.MPTIssuanceID) {
-		return false
-	}
-	return canonicalBookDomain(book.Domain) == canonicalBookDomain(spec.Domain)
-}
-
-// BookMatchesCurrency checks an unscoped IOU/XRP order book.
-func BookMatchesCurrency(book BookRequest, specGets, specPays CurrencySpec) bool {
-	return BookMatches(book, OrderBookSpec{TakerGets: specGets, TakerPays: specPays})
-}
-
-func canonicalBookDomain(domain string) string {
-	if domain == "" {
-		return ""
-	}
-	if strings.TrimLeft(domain, "0") == "" {
-		return "0"
-	}
-	return strings.ToUpper(domain)
-}
-
 // LedgerInfoProvider provides current ledger info for subscribe responses
 type LedgerInfoProvider interface {
 	GetCurrentLedgerInfo() *LedgerSubscribeInfo
@@ -677,19 +624,26 @@ type LedgerInfoProvider interface {
 // LedgerSubscribeInfo contains ledger info returned in the subscribe
 // response for the `ledger` stream. Field set mirrors rippled's
 // subLedger ack (NetworkOPs::subLedger): fee_ref is emitted only when
-// the XRPFees amendment is disabled, and network_id is always present.
+// the XRPFees amendment is disabled, and network_id is present when a
+// validated ledger is available.
 // The per-ledger streamed event uses LedgerCloseEvent and carries
 // additional fields (txn_count, etc.).
 type LedgerSubscribeInfo struct {
-	LedgerIndex      uint32 `json:"ledger_index"`
-	LedgerHash       string `json:"ledger_hash"`
-	LedgerTime       uint32 `json:"ledger_time"`
-	FeeBase          uint64 `json:"fee_base"`
-	FeeRef           uint64 `json:"fee_ref"`
-	ReserveBase      uint64 `json:"reserve_base"`
-	ReserveInc       uint64 `json:"reserve_inc"`
-	ValidatedLedgers string `json:"validated_ledgers,omitempty"`
-	NetworkID        uint32 `json:"network_id"`
+	// LedgerAvailable is false while the server has no validated ledger. In
+	// that state subLedger still emits validated_ledgers when its independent
+	// operating-mode gate allows it, but must omit all fields derived from a
+	// particular validated ledger.
+	LedgerAvailable         bool   `json:"-"`
+	LedgerIndex             uint32 `json:"ledger_index"`
+	LedgerHash              string `json:"ledger_hash"`
+	LedgerTime              uint32 `json:"ledger_time"`
+	FeeBase                 int32  `json:"fee_base"`
+	FeeRef                  uint64 `json:"fee_ref"`
+	ReserveBase             int32  `json:"reserve_base"`
+	ReserveInc              int32  `json:"reserve_inc"`
+	ValidatedLedgers        string `json:"validated_ledgers,omitempty"`
+	ValidatedLedgersPresent bool   `json:"-"`
+	NetworkID               uint32 `json:"network_id"`
 	// XRPFeesEnabled gates fee_ref: rippled emits the deprecated fee_ref
 	// only while the XRPFees amendment is disabled.
 	XRPFeesEnabled bool `json:"-"`

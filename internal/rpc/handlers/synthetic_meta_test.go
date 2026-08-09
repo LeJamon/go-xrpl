@@ -222,17 +222,18 @@ func TestExpandStoredTransactionSyntheticMetadata(t *testing.T) {
 		{name: "api v2", apiVersion: 2, metaKey: "meta"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			response := expandStoredTransaction(StoredTransaction{
+			response, err := expandStoredTransaction(StoredTransaction{
 				TxJSON: map[string]any{"TransactionType": "MPTokenIssuanceCreate"},
 				Meta:   newMPTMeta(),
 			}, strings.Repeat("0", 64), false, tc.apiVersion, modernSyntheticMetadataContext())
+			require.NoError(t, err)
 			meta := response[tc.metaKey].(map[string]any)
 			assert.Equal(t, want, meta["mpt_issuance_id"])
 		})
 	}
 
 	offerID := strings.Repeat("A", 64)
-	response := expandStoredTransaction(StoredTransaction{
+	response, err := expandStoredTransaction(StoredTransaction{
 		TxJSON: map[string]any{"TransactionType": "NFTokenCreateOffer"},
 		Meta: map[string]any{
 			"TransactionResult": "tesSUCCESS",
@@ -244,6 +245,7 @@ func TestExpandStoredTransactionSyntheticMetadata(t *testing.T) {
 			},
 		},
 	}, strings.Repeat("0", 64), false, 2, modernSyntheticMetadataContext())
+	require.NoError(t, err)
 	assert.NotContains(t, response["meta"].(map[string]any), "offer_id")
 }
 
@@ -256,32 +258,37 @@ func TestExpandStoredTransactionProjection(t *testing.T) {
 		}
 	}
 
-	v1 := expandStoredTransaction(newPayment(), hash, false, 1, modernSyntheticMetadataContext())
+	v1, err := expandStoredTransaction(newPayment(), hash, false, 1, modernSyntheticMetadataContext())
+	require.NoError(t, err)
 	assert.Equal(t, "100", v1["Amount"])
 	assert.Equal(t, "100", v1["DeliverMax"])
 	assert.Equal(t, hash, v1["hash"])
 	assert.Equal(t, "100", v1["metaData"].(map[string]any)["delivered_amount"])
 
-	v2 := expandStoredTransaction(newPayment(), hash, false, 2, modernSyntheticMetadataContext())
+	v2, err := expandStoredTransaction(newPayment(), hash, false, 2, modernSyntheticMetadataContext())
+	require.NoError(t, err)
 	v2Tx := v2["tx_json"].(map[string]any)
 	assert.NotContains(t, v2Tx, "Amount")
 	assert.Equal(t, "100", v2Tx["DeliverMax"])
 	assert.Equal(t, hash, v2["hash"])
 	assert.Equal(t, "100", v2["meta"].(map[string]any)["delivered_amount"])
 
-	v1Binary := expandStoredTransaction(newPayment(), hash, true, 1, modernSyntheticMetadataContext())
+	v1Binary, err := expandStoredTransaction(newPayment(), hash, true, 1, modernSyntheticMetadataContext())
+	require.NoError(t, err)
 	assert.NotContains(t, v1Binary, "hash")
-	v2Binary := expandStoredTransaction(newPayment(), hash, true, 2, modernSyntheticMetadataContext())
+	v2Binary, err := expandStoredTransaction(newPayment(), hash, true, 2, modernSyntheticMetadataContext())
+	require.NoError(t, err)
 	assert.Equal(t, hash, v2Binary["hash"])
 
-	v1Malformed := expandTransaction([]byte{0xFF}, hash, true, 1, modernSyntheticMetadataContext())
-	assert.NotContains(t, v1Malformed, "hash")
-	v2Malformed := expandTransaction([]byte{0xFF}, hash, true, 2, modernSyntheticMetadataContext())
-	assert.Equal(t, hash, v2Malformed["hash"])
+	_, err = expandTransaction([]byte{0xFF}, hash, true, 1, modernSyntheticMetadataContext())
+	assert.Error(t, err)
+	_, err = expandTransaction([]byte{0xFF}, hash, true, 2, modernSyntheticMetadataContext())
+	assert.Error(t, err)
 
-	accountDelete := expandStoredTransaction(StoredTransaction{
+	accountDelete, err := expandStoredTransaction(StoredTransaction{
 		TxJSON: map[string]any{"TransactionType": "AccountDelete"},
 		Meta:   map[string]any{"TransactionResult": "tesSUCCESS"},
 	}, hash, false, 2, modernSyntheticMetadataContext())
+	require.NoError(t, err)
 	assert.NotContains(t, accountDelete["meta"].(map[string]any), "delivered_amount")
 }

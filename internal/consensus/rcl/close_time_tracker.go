@@ -27,6 +27,9 @@ type closeTimeTracker struct {
 	// close-time consensus reached this round
 	haveConsensus bool
 
+	consensusCloseTime    time.Time
+	consensusCloseTimeSet bool
+
 	// threshold level, escalated by neededWeight as converge percent rises
 	avalancheState avalancheState
 }
@@ -37,6 +40,8 @@ func newCloseTimeTracker() *closeTimeTracker {
 
 func (c *closeTimeTracker) reset() {
 	c.haveConsensus = false
+	c.consensusCloseTime = time.Time{}
+	c.consensusCloseTimeSet = false
 	c.avalancheState = avalancheInit
 }
 

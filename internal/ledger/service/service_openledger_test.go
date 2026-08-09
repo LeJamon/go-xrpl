@@ -17,7 +17,17 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
+
+func openLedgerHasTx(t *testing.T, svc *service.Service, hash [32]byte) bool {
+	t.Helper()
+	exists, err := svc.OpenLedgerHasTx(hash)
+	if err != nil {
+		t.Fatalf("OpenLedgerHasTx(%x): %v", hash, err)
+	}
+	return exists
+}
 
 // buildSignedPaymentBlob constructs a signed Payment binary blob from sender
 // to receiver for the given drops amount. The sender's sequence is fixed at
@@ -56,7 +66,7 @@ func buildSignedPaymentBlob(t *testing.T, env *jtx.TestEnv, sender, receiver *jt
 // TestService_* cases.
 func newServiceForOpenLedgerTest(t *testing.T) *service.Service {
 	t.Helper()
-	cfg := service.DefaultConfig()
+	cfg := defaultServiceConfig()
 	svc, err := service.New(cfg)
 	if err != nil {
 		t.Fatalf("service.New: %v", err)
@@ -95,7 +105,7 @@ func TestService_OpenLedgerSubmit_Roundtrip(t *testing.T) {
 		t.Errorf("OpenLedgerTxs[0] != original blob")
 	}
 
-	if !svc.OpenLedgerHasTx(hash) {
+	if !openLedgerHasTx(t, svc, hash) {
 		t.Errorf("OpenLedgerHasTx(hash) = false, want true")
 	}
 
@@ -105,6 +115,102 @@ func TestService_OpenLedgerSubmit_Roundtrip(t *testing.T) {
 	}
 	if !bytes.Equal(got, blob) {
 		t.Errorf("OpenLedgerGetTx returned mismatched blob")
+	}
+}
+
+func TestService_GetTransaction_OpenThenClosedLifecycle(t *testing.T) {
+	svc := newServiceForOpenLedgerTest(t)
+	t.Cleanup(svc.Stop)
+
+	env := jtx.NewTestEnv(t)
+	blob, hash := buildSignedPaymentBlob(t, env, jtx.MasterAccount(), jtx.NewAccount("lookup-destination"), 50_000_000, 1)
+	if result, err := svc.SubmitOpenLedgerTx(blob, true); err != nil || result != openledger.ResultSuccess {
+		t.Fatalf("SubmitOpenLedgerTx = (%v, %v), want success", result, err)
+	}
+
+	openResult, err := svc.GetTransaction(hash)
+	if err != nil {
+		t.Fatalf("GetTransaction(open): %v", err)
+	}
+	if openResult.LedgerIndex != 0 || openResult.LedgerHash != ([32]byte{}) || openResult.Validated || openResult.CloseTime != 0 {
+		t.Fatalf("open transaction advertised closed-ledger state: %+v", openResult)
+	}
+	if openResult.TxIndex != ^uint32(0) {
+		t.Fatalf("open transaction index = %d, want invalid", openResult.TxIndex)
+	}
+	txBlob, metaBlob, err := tx.SplitTxWithMetaBlob(openResult.TxData)
+	if err != nil {
+		t.Fatalf("split open transaction: %v", err)
+	}
+	if !bytes.Equal(txBlob, blob) || metaBlob != nil {
+		t.Fatalf("open transaction payload = (%x, %x), want tx-only input", txBlob, metaBlob)
+	}
+	ranged, searched, err := svc.GetTransactionWithRange(context.Background(), hash, 999, 1000)
+	if err != nil || ranged == nil || searched != relationaldb.TxSearchAll || ranged.LedgerIndex != 0 {
+		t.Fatalf("GetTransactionWithRange(open) = (%+v, %v, %v), want cache-first open result", ranged, searched, err)
+	}
+
+	parent := svc.GetClosedLedger()
+	if parent == nil {
+		t.Fatal("GetClosedLedger returned nil before close")
+	}
+	closedSeq, err := svc.AcceptConsensusResult(context.Background(), parent, [][]byte{blob}, nil, time.Now(), true)
+	if err != nil {
+		t.Fatalf("AcceptConsensusResult: %v", err)
+	}
+	closedResult, err := svc.GetTransaction(hash)
+	if err != nil {
+		t.Fatalf("GetTransaction(closed): %v", err)
+	}
+	if closedResult.LedgerIndex != closedSeq || closedResult.LedgerHash == ([32]byte{}) || closedResult.TxIndex == ^uint32(0) {
+		t.Fatalf("closed transaction state = %+v, want closed ledger metadata", closedResult)
+	}
+	closedTx, closedMeta, err := tx.SplitTxWithMetaBlobStrict(closedResult.TxData)
+	if err != nil || len(closedMeta) == 0 {
+		t.Fatalf("closed transaction payload = (%x, %v), want strict tx+metadata: %v", closedTx, closedMeta, err)
+	}
+	metadata, err := binarycodec.DecodeBytes(closedMeta)
+	if err != nil {
+		t.Fatalf("decode closed transaction metadata: %v", err)
+	}
+	if metadata["TransactionResult"] != "tesSUCCESS" || metadata["TransactionIndex"] != closedResult.TxIndex {
+		t.Fatalf("closed transaction metadata = %+v, want canonical result/index", metadata)
+	}
+	if nodes, ok := metadata["AffectedNodes"].([]any); !ok || len(nodes) == 0 {
+		t.Fatalf("closed transaction AffectedNodes = %#v, want real ledger changes", metadata["AffectedNodes"])
+	}
+}
+
+func TestService_OpenLedgerPeerSubmitPublishesProposal(t *testing.T) {
+	svc := newServiceForOpenLedgerTest(t)
+	t.Cleanup(svc.Stop)
+
+	env := jtx.NewTestEnv(t)
+	blob, hash := buildSignedPaymentBlob(
+		t,
+		env,
+		jtx.MasterAccount(),
+		jtx.NewAccount("peer-proposal-destination"),
+		100_000_000,
+		1,
+	)
+	published := make(chan service.SubmittedTxEvent, 1)
+	svc.SetSubmittedTxCallback(func(event service.SubmittedTxEvent) { published <- event })
+
+	res, err := svc.SubmitOpenLedgerTx(blob, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res != openledger.ResultSuccess {
+		t.Fatalf("SubmitOpenLedgerTx result = %v, want ResultSuccess", res)
+	}
+	select {
+	case event := <-published:
+		if event.TxHash != hash || !bytes.Equal(event.RawBlob, blob) || !event.Result.Applied {
+			t.Fatalf("published proposal = %+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("peer-applied transaction was not published")
 	}
 }
 
@@ -145,10 +251,10 @@ func TestService_AcceptConsensusResult_RebuildsOpenView(t *testing.T) {
 		t.Fatalf("AcceptConsensusResult: %v", err)
 	}
 
-	if !svc.OpenLedgerHasTx(hash1) {
+	if !openLedgerHasTx(t, svc, hash1) {
 		t.Errorf("post-Accept OpenLedgerHasTx(hash1) = false; replay dropped tx1")
 	}
-	if !svc.OpenLedgerHasTx(hash2) {
+	if !openLedgerHasTx(t, svc, hash2) {
 		t.Errorf("post-Accept OpenLedgerHasTx(hash2) = false; replay dropped tx2")
 	}
 }
@@ -187,7 +293,7 @@ func TestService_SwitchToPreferredLedgerReplaysOpenTransactions(t *testing.T) {
 	if got := svc.GetClosedLedger(); got.Hash() != preferred.Hash() {
 		t.Fatalf("closed ledger = %x, want %x", got.Hash(), preferred.Hash())
 	}
-	if !svc.OpenLedgerHasTx(hash) {
+	if !openLedgerHasTx(t, svc, hash) {
 		t.Fatal("preferred-ledger switch dropped a transaction from the open view")
 	}
 }
@@ -213,6 +319,9 @@ func TestService_AcceptConsensusResult_IncludedTxsNotDuplicated(t *testing.T) {
 	if res != openledger.ResultSuccess {
 		t.Fatalf("SubmitOpenLedgerTx result = %v, want ResultSuccess", res)
 	}
+	if got, included, deferred, ok := svc.TransactionForRelay(hash1); !ok || !bytes.Equal(got, blob1) || !included || deferred {
+		t.Fatalf("TransactionForRelay before close = (%x, %v, %v, %v), want live current tx", got, included, deferred, ok)
+	}
 
 	parent := svc.GetClosedLedger()
 	if parent == nil {
@@ -226,14 +335,21 @@ func TestService_AcceptConsensusResult_IncludedTxsNotDuplicated(t *testing.T) {
 	if closed == nil {
 		t.Fatal("GetClosedLedger nil after AcceptConsensusResult")
 	}
-	if !closed.TxExists(hash1) {
+	closedHasHash1, err := closed.TxExists(hash1)
+	if err != nil {
+		t.Fatalf("closed.TxExists(hash1): %v", err)
+	}
+	if !closedHasHash1 {
 		t.Errorf("closed ledger missing tx1 after consensus close")
 	}
-	if svc.OpenLedgerHasTx(hash1) {
+	if openLedgerHasTx(t, svc, hash1) {
 		t.Errorf("post-Accept open view still contains tx1 (already in closed ledger)")
 	}
 	if got := svc.OpenLedgerTxs(); len(got) != 0 {
 		t.Errorf("post-Accept OpenLedgerTxs len = %d, want 0", len(got))
+	}
+	if got, included, deferred, ok := svc.TransactionForRelay(hash1); !ok || !bytes.Equal(got, blob1) || included || deferred {
+		t.Fatalf("TransactionForRelay after close = (%x, %v, %v, %v), want cached tsNEW record", got, included, deferred, ok)
 	}
 }
 
@@ -262,10 +378,14 @@ func TestService_AcceptConsensusResult_DisputedTxsFirstCrack(t *testing.T) {
 	if closed == nil {
 		t.Fatal("GetClosedLedger nil after AcceptConsensusResult")
 	}
-	if closed.TxExists(disputedHash) {
+	closedHasDisputed, err := closed.TxExists(disputedHash)
+	if err != nil {
+		t.Fatalf("closed.TxExists(disputedHash): %v", err)
+	}
+	if closedHasDisputed {
 		t.Errorf("disputed tx landed in the closed ledger; must only reach the open view")
 	}
-	if !svc.OpenLedgerHasTx(disputedHash) {
+	if !openLedgerHasTx(t, svc, disputedHash) {
 		t.Errorf("post-Accept open view missing the disputed we-voted-NO tx")
 	}
 }
@@ -300,7 +420,7 @@ func TestService_AcceptConsensusResult_DisputedPseudoTxSkipped(t *testing.T) {
 		t.Fatalf("AcceptConsensusResult: %v", err)
 	}
 
-	if svc.OpenLedgerHasTx(pseudoTx.Hash) {
+	if openLedgerHasTx(t, svc, pseudoTx.Hash) {
 		t.Errorf("post-Accept open view contains a disputed pseudo-tx; pseudo-txs must be skipped")
 	}
 	if got := svc.OpenLedgerTxs(); len(got) != 0 {

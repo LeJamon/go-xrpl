@@ -71,6 +71,14 @@ func ValidateBetaRPCAPI(betaAPI int) error {
 	return validateZeroOrOne("beta_rpc_api", betaAPI)
 }
 
+// ValidatePathSearchMax validates the maximum path-search level.
+func ValidatePathSearchMax(pathSearchMax *int) error {
+	if pathSearchMax == nil {
+		return nil
+	}
+	return validateNonNegative("path_search_max", *pathSearchMax)
+}
+
 // ValidateWebsocketPingFrequency validates the websocket ping frequency
 func ValidateWebsocketPingFrequency(frequency int) error {
 	return validateNonNegative("websocket_ping_frequency", frequency)

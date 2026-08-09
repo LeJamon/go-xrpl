@@ -147,7 +147,11 @@ func newTestLedger(t *testing.T, seq uint32, state map[[32]byte][]byte, txs map[
 		hdr.ParentHash = [32]byte{byte(seq - 1), 0xAB}
 	}
 	hdr.Hash = [32]byte{byte(seq), 0xAB}
-	return ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{})
+	l, err := ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("ledger.FromGenesis: %v", err)
+	}
+	return l
 }
 
 func newClosedTestLedger(t *testing.T, parent *ledger.Ledger) *ledger.Ledger {
@@ -163,14 +167,15 @@ func newClosedTestLedger(t *testing.T, parent *ledger.Ledger) *ledger.Ledger {
 		CloseTimeResolution: 10,
 		Accepted:            true,
 	}
-	l, err := ledger.NewClosedFromHeader(
+	l, err := ledger.NewClosedFromHeaderContext(
+		context.Background(),
 		hdr,
 		shamap.New(shamap.TypeState),
 		shamap.New(shamap.TypeTransaction),
 		drops.Fees{},
 	)
 	if err != nil {
-		t.Fatalf("NewClosedFromHeader: %v", err)
+		t.Fatalf("NewClosedFromHeaderContext: %v", err)
 	}
 	return l
 }

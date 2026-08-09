@@ -158,7 +158,7 @@ func (e *Engine) applyWithContext(
 		// Otherwise the fee must still be deducted and sequence consumed, but
 		// doApply() is NOT called — the transaction has no side effects. We share
 		// the same recovery helpers used by doApply's own tec path
-		// (consumeTicketForRecovery, writeRecoveryAccount, payDelegatedFeeOnTable);
+		// (consumeTicketForRecovery, writeRecoveryAccount, payExternalFeeOnTable);
 		// the only difference is that the sandbox here is empty, so we skip
 		// the "discard sandbox + replay deletions" steps.
 		// Reference: rippled applySteps.cpp — preclaim tec with likelyToClaimFee=true
@@ -499,7 +499,7 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transa
 // rejected by preclaim with a tec code, doApply() never ran, but the fee and
 // sequence still need to be charged. Reuses the same recovery helpers that
 // doApply's own tec path uses (consumeTicketForRecovery, writeRecoveryAccount,
-// payDelegatedFeeOnTable) so the fee/seq commit semantics stay in lockstep.
+// payExternalFeeOnTable) so the fee/seq commit semantics stay in lockstep.
 // Reference: rippled applySteps.cpp — likelyToClaimFee tec still enters
 // Transactor::operator() which calls reset(fee) before returning.
 func (e *Engine) commitPreclaimTec(ctx context.Context, tx txcore.Transaction, txHash [32]byte, fee uint64, origResult ter.Result, metadata *txcore.Metadata) (ter.Result, uint64) {
@@ -515,6 +515,10 @@ func (e *Engine) commitPreclaimTec(ctx context.Context, tx txcore.Transaction, t
 	if parseErr != nil {
 		return ter.TefINTERNAL, 0
 	}
+	payer, payerResult := e.getFeePayer(common)
+	if payerResult != ter.TesSUCCESS {
+		return payerResult, 0
+	}
 
 	st := &applyState{
 		tx:                  tx,
@@ -526,6 +530,7 @@ func (e *Engine) commitPreclaimTec(ctx context.Context, tx txcore.Transaction, t
 		fee:                 fee,
 		chargedFee:          fee,
 		isDelegated:         common.Delegate != "",
+		feePayer:            payer,
 		isTicket:            common.TicketSequence != nil,
 		txHash:              txHash,
 		metadata:            metadata,
@@ -542,34 +547,8 @@ func (e *Engine) commitPreclaimTec(ctx context.Context, tx txcore.Transaction, t
 	if r := e.writeRecoveryAccount(st, tecTable, recoveredAccount); r != ter.TesSUCCESS {
 		return r, 0
 	}
-	if r := e.payDelegatedFeeOnTable(st, tecTable); r != ter.TesSUCCESS {
+	if r := e.payExternalFeeOnTable(st, tecTable, true); r != ter.TesSUCCESS {
 		return r, 0
-	}
-
-	// tecEXPIRED from preclaim: run the transactor's tec hook so its work-on-tec
-	// side effects (the expired-credential deletion) still persist, exactly as the
-	// doApply tec path does. rippled routes every tecEXPIRED — preclaim- or
-	// doApply-originated — through the same reset + removeExpiredCredentials step
-	// (Transactor.cpp operator()), so this keeps the two engine tec paths
-	// symmetric. There is no doApply sandbox here, so the offer/NFToken removals
-	// that path collects are naturally empty; only the re-derived ApplyOnTec hook
-	// is applicable.
-	if origResult == ter.TecEXPIRED {
-		if tecApplier, ok := st.tx.(txcore.TecApplier); ok {
-			tecCtx := &txcore.ApplyContext{
-				View:             tecTable,
-				Account:          recoveredAccount,
-				AccountID:        st.accountID,
-				SourceFeeCharged: st.sourceFeeCharged(),
-				Config:           e.config,
-				TxHash:           st.txHash,
-				Metadata:         st.metadata,
-				InnerInvariants:  e,
-				Log:              e.logger,
-				Ctx:              st.ctx,
-			}
-			tecApplier.ApplyOnTec(tecCtx)
-		}
 	}
 
 	// Invariant check on the fee-only delta before committing. rippled runs
@@ -582,7 +561,9 @@ func (e *Engine) commitPreclaimTec(ctx context.Context, tx txcore.Transaction, t
 		return r, st.chargedFee
 	}
 
-	tecTable.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee))
+	if err := tecTable.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee)); err != nil {
+		return ter.TefINTERNAL, 0
+	}
 	generatedMeta, applyErr := tecTable.Apply()
 	if applyErr != nil {
 		return ter.TefINTERNAL, 0

@@ -1,5 +1,7 @@
 package txq
 
+import "math"
+
 // ClosedLedgerContext provides the context from a closed ledger for updating fee metrics.
 type ClosedLedgerContext interface {
 	// GetLedgerSequence returns the closed ledger's sequence number.
@@ -19,24 +21,32 @@ type ClosedLedgerContext interface {
 //
 // The timeLeap parameter indicates if consensus was slow (ledger close took longer
 // than expected). When true, the queue will be more conservative about capacity.
-func (q *TxQ) ProcessClosedLedger(ctx ClosedLedgerContext, timeLeap bool) uint32 {
+func (q *TxQ) ProcessClosedLedger(ctx ClosedLedgerContext, timeLeap bool) uint64 {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	ledgerSeq := ctx.GetLedgerSequence()
 	feeLevels := ctx.GetTransactionFeeLevels()
+	q.stateMu.Lock()
+	defer q.stateMu.Unlock()
 
-	txCount := q.feeMetrics.Update(feeLevels, timeLeap, q.config)
+	txCount := q.feeMetrics.update(feeLevels, timeLeap, q.config)
 
 	// Reference: rippled sets maxSize_ = max(txnsExpected * ledgersInQueue, queueSizeMin)
 	if !timeLeap {
-		snapshot := q.feeMetrics.Snapshot()
-		newMaxSize := max(snapshot.TxnsExpected*q.config.LedgersInQueue, q.config.QueueSizeMin)
+		snapshot := q.feeMetrics.snapshot()
+		product := snapshot.TxnsExpected
+		if product > ^uint64(0)/uint64(q.config.LedgersInQueue) {
+			product = ^uint64(0)
+		} else {
+			product *= uint64(q.config.LedgersInQueue)
+		}
+		newMaxSize := max(product, uint64(q.config.QueueSizeMin))
 		q.maxSize = &newMaxSize
 	}
 
 	// Remove expired transactions (where LastLedgerSequence <= ledgerSeq)
-	toRemove := make([]*Candidate, 0)
+	toRemove := make([]*candidate, 0)
 	for _, c := range q.byFee {
 		if c.LastValid != 0 && c.LastValid <= ledgerSeq {
 			// Mark the account as having dropped transactions
@@ -61,38 +71,30 @@ func (q *TxQ) ProcessClosedLedger(ctx ClosedLedgerContext, timeLeap bool) uint32
 	return txCount
 }
 
-// Clear removes all transactions from the queue.
-// This is primarily useful for testing.
-func (q *TxQ) Clear() {
+func (q *TxQ) clear() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.stateMu.Lock()
+	defer q.stateMu.Unlock()
 
-	q.byFee = make([]*Candidate, 0)
-	q.byAccount = make(map[[20]byte]*AccountQueue)
+	q.byFee = make([]*candidate, 0)
+	q.byID = make(map[[32]byte]*candidate)
+	q.byAccount = make(map[[20]byte]*accountQueue)
 }
 
-// SetMaxSize sets the maximum queue size.
-// This is primarily useful for testing.
-func (q *TxQ) SetMaxSize(maxSize uint32) {
+func (q *TxQ) setMaxSize(maxSize uint64) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.stateMu.Lock()
+	defer q.stateMu.Unlock()
 	q.maxSize = &maxSize
-}
-
-// ResetMaxSize resets the maximum queue size to nil (no limit).
-// This matches rippled's initial state where maxSize_ is std::nullopt
-// before the first processClosedLedger call.
-func (q *TxQ) ResetMaxSize() {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.maxSize = nil
 }
 
 // NextQueuableSeq returns the next sequence number that can be queued for an account.
 // This is useful for clients to know what sequence to use for their next transaction.
 func (q *TxQ) NextQueuableSeq(account [20]byte, acctSeq uint32) uint32 {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	q.stateMu.RLock()
+	defer q.stateMu.RUnlock()
 
 	aq, exists := q.byAccount[account]
 	if !exists || aq.Empty() {
@@ -117,12 +119,15 @@ type FeeAndSeq struct {
 
 // TxRequiredFeeAndSeq returns fee and sequence information for constructing transactions.
 func (q *TxQ) TxRequiredFeeAndSeq(account [20]byte, acctSeq uint32, baseFee uint64, txInLedger uint32) FeeAndSeq {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	q.stateMu.RLock()
+	defer q.stateMu.RUnlock()
 
-	snapshot := q.feeMetrics.Snapshot()
-	feeLevel := ScaleFeeLevel(snapshot, txInLedger)
+	snapshot := q.feeMetrics.snapshot()
+	feeLevel := scaleFeeLevel(snapshot, txInLedger)
 	requiredFee := feeLevel.ToDrops(baseFee)
+	if requiredFee > math.MaxInt64 {
+		requiredFee = math.MaxInt64
+	}
 
 	availableSeq := acctSeq
 	if aq, exists := q.byAccount[account]; exists {

@@ -1,6 +1,7 @@
 package rcl
 
 import (
+	"bytes"
 	"fmt"
 	"log/slog"
 	"time"
@@ -56,17 +57,12 @@ func (e *Engine) run() {
 	}
 }
 
-// MissedHeartbeats returns the count of dropped heartbeat ticks since
-// start.
-func (e *Engine) MissedHeartbeats() uint64 {
-	return e.missedHeartbeats.Load()
-}
-
 // timerEntry is the single heartbeat dispatch; runs each
 // ledgerGRANULARITY and dispatches on current phase.
 func (e *Engine) timerEntry() {
 	tickStart := time.Now()
 	e.mu.Lock()
+	e.purgePendingTrustLocked()
 	e.deferBroadcasts++
 	var pending []func()
 	defer func() {
@@ -188,17 +184,24 @@ func (e *Engine) checkLedger() {
 		return
 	}
 	ourID := e.prevLedger.ID()
-	if closed, err := e.adaptor.GetLastClosedLedger(); err == nil && closed != nil && closed.ID() != ourID {
-		closedID := closed.ID()
-		slog.Warn("Closed ledger changed during consensus",
-			"t", "consensus",
-			"event", "closed-ledger-changed",
-			"our", fmt.Sprintf("%x", ourID[:8]),
-			"closed", fmt.Sprintf("%x", closedID[:8]),
-		)
-		e.demoteForLedgerChange()
-		e.handleWrongLedger(closedID, closed)
-		return
+	// A recovery switch changes consensus' previous ledger before the
+	// adaptor accepts a replacement LCL. Do not interpret that expected gap
+	// as an external ledger change and undo the switch.
+	if e.mode != consensus.ModeSwitchedLedger {
+		if closed, err := e.adaptor.GetLastClosedLedger(); err == nil && closed != nil && closed.ID() != ourID {
+			if e.acceptedLCL == (consensus.LedgerID{}) || closed.ID() != e.acceptedLCL {
+				closedID := closed.ID()
+				slog.Warn("Closed ledger changed during consensus",
+					"t", "consensus",
+					"event", "closed-ledger-changed",
+					"our", fmt.Sprintf("%x", ourID[:8]),
+					"closed", fmt.Sprintf("%x", closedID[:8]),
+				)
+				e.demoteForLedgerChange()
+				e.handleWrongLedger(closedID, closed)
+				return
+			}
+		}
 	}
 	if e.mode == consensus.ModeWrongLedger {
 		validatedID := e.adaptor.GetValidatedLedgerHash()
@@ -227,11 +230,12 @@ func (e *Engine) checkLedger() {
 
 		// Already targeting this hash: re-resolve once in case it became
 		// locally available (held adoption that didn't fire OnLedger) and
-		// complete the switch; otherwise we'd spin in wrongLedger forever
-		// (#724). Still missing → don't spam the acquire.
+		// complete the switch. Still missing, retry the adaptor request; its
+		// acquisition deadline suppresses duplicates until the retry window opens.
 		var target consensus.Ledger
 		if e.mode == consensus.ModeWrongLedger && e.wrongLedgerID == netLgr {
 			if target = e.resolveTargetLedger(netLgr); target == nil {
+				e.adaptor.RequestLedger(netLgr)
 				return
 			}
 		}
@@ -254,96 +258,40 @@ func (e *Engine) demoteForLedgerChange() {
 }
 
 // getNetworkLedger returns the network-preferred prevLedger. Trusted
-// validations decide first, like rippled's getPrevLedger (pure
-// vals.getPreferred, RCLConsensus.cpp:301-303) — only validations break a
-// proposal-count tie between two self-agreeing islands. The proposal+peer-LCL
-// majority is the fallback for validation-less phases (boot).
+// validations decide first. Without a validation preference, every connected
+// peer's reported LCL is counted independently, with the larger ledger ID
+// breaking equal-count ties.
 func (e *Engine) getNetworkLedger() consensus.LedgerID {
 	if e.prevLedger == nil {
 		return consensus.LedgerID{}
 	}
 	ourID := e.prevLedger.ID()
+	if e.prevLedger.Seq() == 0 {
+		return ourID
+	}
 
 	if id, ok := e.validationPreferredLocked(); ok {
 		return id
 	}
 
-	freshness := e.timing.ProposeFreshness
-	now := e.adaptor.Now()
-
-	// For each trusted node, take the most recent fresh proposal.
-	type vote struct {
-		prevLedger consensus.LedgerID
+	counts := map[consensus.LedgerID]uint32{ourID: 0}
+	if e.adaptor.GetOperatingMode() >= consensus.OpModeTracking {
+		counts[ourID]++
 	}
-	votes := make(map[consensus.NodeID]vote)
-	for nodeID, p := range e.proposalTracker.LatestFresh(e.adaptor.IsTrusted, now, freshness) {
-		votes[nodeID] = vote{prevLedger: p.PreviousLedger}
-	}
-
-	// Include our own position as a vote: otherwise the >len/2 majority is
-	// computed over peers only, so two disagreeing peers flip our LCL where a
-	// fair vote (with us) would tie.
-	if e.state != nil && e.state.OurPosition != nil {
-		pos := e.state.OurPosition
-		if now.Sub(pos.Timestamp) <= freshness {
-			if key, err := e.adaptor.GetValidatorKey(); err == nil {
-				votes[key] = vote{prevLedger: pos.PreviousLedger}
-			}
+	for _, id := range e.adaptor.PeerReportedLedgers() {
+		if id != (consensus.LedgerID{}) {
+			counts[id]++
 		}
 	}
 
-	// Hashes already voted via trusted proposals. Skip peer-LCL votes for
-	// these so a validator that's also a peer isn't double-counted.
-	proposalHashes := make(map[consensus.LedgerID]struct{}, len(votes))
-	for _, v := range votes {
-		proposalHashes[v.prevLedger] = struct{}{}
-	}
-
-	// Fold in peer-reported LCLs from statusChange (a peer that advanced its
-	// LCL but hasn't gossiped a proposal yet). Keyed on a synthetic NodeID so
-	// one peer counts once; deduped against trusted-proposer votes. Votes are
-	// counted ungated, like rippled's checkLastClosedLedger peer tally
-	// (NetworkOPs.cpp:1915-1921); safety against adopting a bogus gossiped
-	// hash lives in the acquire-then-verify checks at the switch site
-	// (canSwitchToLedgerLocked), not in vote suppression.
-	for i, h := range e.adaptor.PeerReportedLedgers() {
-		if _, already := proposalHashes[h]; already {
-			continue
-		}
-		var synthKey consensus.NodeID
-		// 0xFF is unused by XRPL pubkey encoding, so synthetic keys can't
-		// collide with a real validator key.
-		synthKey[0] = 0xFF
-		synthKey[1] = byte(i >> 8)
-		synthKey[2] = byte(i)
-		// Fill the rest with the ledger hash so different reported LCLs from
-		// the same ordinal slot stay distinguishable.
-		copy(synthKey[3:], h[:30])
-		votes[synthKey] = vote{prevLedger: h}
-	}
-
-	if len(votes) == 0 {
-		return ourID
-	}
-
-	counts := make(map[consensus.LedgerID]int)
-	for _, v := range votes {
-		counts[v.prevLedger]++
-	}
-
-	var bestID consensus.LedgerID
-	bestCount := 0
+	bestID := ourID
 	for id, count := range counts {
-		if count > bestCount {
+		if count > counts[bestID] ||
+			(count == counts[bestID] && bytes.Compare(id[:], bestID[:]) > 0) {
 			bestID = id
-			bestCount = count
 		}
 	}
-
-	if bestID != ourID && bestCount > len(votes)/2 {
-		return bestID
-	}
-	return ourID
+	return bestID
 }
 
 // validationPreferredLocked derives the network-preferred prevLedger from
@@ -469,6 +417,7 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 	}
 
 	// Stop proposing.
+	e.purgePendingTrustLocked()
 	if e.mode == consensus.ModeProposing {
 		e.setMode(consensus.ModeObserving)
 	}
@@ -476,12 +425,11 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 	// Clear consensus state and replay (only for a new target ledger).
 	if e.prevLedger == nil || netLedgerID != e.prevLedger.ID() {
 		e.proposalTracker.ResetProposals()
-		e.disputeTracker = NewDisputeTracker()
+		e.disputeTracker = newDisputeTracker()
 		e.acquiredTxSets = make(map[consensus.TxSetID]consensus.TxSet)
 		e.comparesTxSets = make(map[consensus.TxSetID]struct{})
 		e.peerUnchangedCounter = 0
 		e.establishCounter = 0
-		e.converged = false
 		e.closeTime.haveConsensus = false
 		if e.state != nil {
 			e.state.CloseTimes.Peers = make(map[time.Time]int)
@@ -489,14 +437,17 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 
 		// Replay proposals for the new ledger; close-time votes only if a
 		// round state exists.
-		closeTimes, _, relay := e.proposalTracker.Replay(netLedgerID, e.adaptor.IsTrusted)
-		if e.state != nil {
-			for _, ct := range closeTimes {
-				e.state.CloseTimes.Peers[ct]++
-			}
-		}
+		replayTrusted := e.trustedPredicate()
+		closeTimes, _, relay := e.proposalTracker.Replay(netLedgerID, replayTrusted)
+		e.unvoteDeadProposalsLocked()
+		e.pruneUntrustedProposalsLocked()
+		e.appendReplayCloseTimesLocked(closeTimes)
 
+		relayTrusted := e.trustedPredicate()
 		for _, p := range relay {
+			if !relayTrusted(p.NodeID) {
+				continue
+			}
 			e.adaptor.RelayProposal(p, 0)
 		}
 	}
@@ -525,7 +476,7 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 		e.startRoundLocked(nextRound, proposing, true)
 	} else {
 		// Not found — request from peers and remain pinned until the preferred
-		// ledger is acquired or the router reports terminal acquisition failure.
+		// ledger is acquired or a topology change invalidates the request.
 		e.adaptor.RequestLedger(netLedgerID)
 		slog.Info("Cannot acquire network ledger, entering wrongLedger mode",
 			"t", "consensus",
@@ -540,9 +491,9 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 	}
 }
 
-// OnLedgerAcquireFailed reports a clean acquisition failure for id. If
-// pinned in wrongLedger on id, un-pin so the router can re-resolve and retry
-// the latest preferred ledger without resuming consensus on the stale LCL.
+// OnLedgerAcquireFailed reports that an acquisition was invalidated by a
+// topology change. If pinned in wrongLedger on id, un-pin so the router can
+// re-resolve and retry without resuming consensus on the stale LCL.
 func (e *Engine) OnLedgerAcquireFailed(id consensus.LedgerID) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

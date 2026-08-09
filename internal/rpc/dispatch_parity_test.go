@@ -122,7 +122,7 @@ func TestSingleRequestParseFailuresReturn400(t *testing.T) {
 // warning:"load" INSIDE result (rippled ServerHandler.cpp:919-920 → :938/:971),
 // not at the top level (which is the WS placement, :519).
 func TestLoadWarningNestedInResultOnHTTP(t *testing.T) {
-	body := buildXrplResponseBody(nil, map[string]any{"foo": "bar"}, nil, &JsonRpcResponseOptions{Warning: "load"})
+	body := buildXrplResponseBody(nil, map[string]any{"foo": "bar"}, nil, &jsonRPCResponseOptions{Warning: "load"})
 	result, ok := body["result"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "load", result["warning"], "HTTP load warning belongs inside result")
@@ -134,7 +134,7 @@ func TestLoadWarningNestedInResultOnHTTP(t *testing.T) {
 // alias for `command`, and an unresolvable command yields a bare missingCommand
 // token that echoes the request and id (ServerHandler.cpp:446-468).
 func TestWSCommandAliasAndMissingCommand(t *testing.T) {
-	ws := NewWebSocketServer(2*time.Second, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 2 * time.Second})
 	ws.methodRegistry.Register("ping", &stubHandler{})
 
 	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))

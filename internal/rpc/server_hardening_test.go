@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -69,13 +69,13 @@ func decodeEnvelope(t *testing.T, body []byte) map[string]any {
 	return result
 }
 
-// TestPostBodyLimit ensures POSTs larger than MaxRequestBytes are rejected
+// TestPostBodyLimit ensures POSTs larger than maxRequestBytes are rejected
 // with HTTP 400, matching rippled's ServerHandler.cpp:625-633 behaviour for
 // oversized requests rather than being buffered into memory.
 func TestPostBodyLimit(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "ping", &stubHandler{})
 
-	pad := strings.Repeat("a", MaxRequestBytes+1)
+	pad := strings.Repeat("a", maxRequestBytes+1)
 	body := `{"method":"ping","params":[{"x":"` + pad + `"}]}`
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
@@ -118,7 +118,7 @@ func TestInternalErrorMessageNotLeakedOnWire(t *testing.T) {
 	}
 }
 
-// TestBatchElementCap rejects a batch envelope past MaxBatchElements with a
+// TestBatchElementCap rejects a batch envelope past maxBatchElements with a
 // 400, while a batch at the cap is accepted — bounding request amplification on
 // the public endpoint without breaking legitimate batching.
 func TestBatchElementCap(t *testing.T) {
@@ -133,16 +133,22 @@ func TestBatchElementCap(t *testing.T) {
 	}
 
 	// Over the cap → 400.
-	req := httptest.NewRequest("POST", "/", strings.NewReader(buildBatch(MaxBatchElements+1)))
+	req := httptest.NewRequest("POST", "/", strings.NewReader(buildBatch(maxBatchElements+1)))
 	req.RemoteAddr = "10.0.0.1:1234"
 	rr := httptest.NewRecorder()
 	srv.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("over-cap batch: expected 400, got %d\nbody: %s", rr.Code, rr.Body.String())
 	}
+	if got := rr.Header().Get("Content-Type"); got != jsonContentType {
+		t.Fatalf("over-cap Content-Type = %q, want %q", got, jsonContentType)
+	}
+	if got := rr.Body.String(); got != "Malformed batch request\r\n" {
+		t.Fatalf("over-cap body = %q, want exact plain HTTP error", got)
+	}
 
 	// At the cap → 200 with one reply per element.
-	req = httptest.NewRequest("POST", "/", strings.NewReader(buildBatch(MaxBatchElements)))
+	req = httptest.NewRequest("POST", "/", strings.NewReader(buildBatch(maxBatchElements)))
 	req.RemoteAddr = "10.0.0.1:1234"
 	rr = httptest.NewRecorder()
 	srv.ServeHTTP(rr, req)
@@ -153,8 +159,8 @@ func TestBatchElementCap(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &replies); err != nil {
 		t.Fatalf("batch reply not a JSON array: %v\nbody: %s", err, rr.Body.String())
 	}
-	if len(replies) != MaxBatchElements {
-		t.Errorf("reply count = %d, want %d", len(replies), MaxBatchElements)
+	if len(replies) != maxBatchElements {
+		t.Errorf("reply count = %d, want %d", len(replies), maxBatchElements)
 	}
 }
 
@@ -219,6 +225,28 @@ func TestTrustedProxyAttributesClientIPButNotAdmin(t *testing.T) {
 	}
 	if observedRole == types.RoleAdmin {
 		t.Fatalf("trusted proxy must not promote to admin; role=%v", observedRole)
+	}
+}
+
+func TestTrustedProxyMalformedIdentityFallsBackToPeer(t *testing.T) {
+	var observedClientIP string
+	srv := newHardeningServer(t, time.Second, "ping", &stubHandler{
+		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+			observedClientIP = ctx.ClientIP
+			return map[string]any{"ok": true}, nil
+		},
+	})
+	_, gateway, _ := net.ParseCIDR("203.0.113.0/24")
+	pc := &PortContext{SecureGatewayNets: []net.IPNet{*gateway}}
+	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"ping","params":[{}]}`))
+	req.RemoteAddr = "203.0.113.5:1234"
+	req.Header.Set("X-Real-IP", "not-an-ip")
+	req = req.WithContext(WithPortContext(req.Context(), pc))
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK || observedClientIP != "203.0.113.5" {
+		t.Fatalf("status=%d client=%q body=%s", rr.Code, observedClientIP, rr.Body.String())
 	}
 }
 
@@ -290,7 +318,7 @@ func TestHandlerPanicRecovered(t *testing.T) {
 			panic(panicCause)
 		},
 	})
-	srv.loadTracker = loadtrack.New()
+	srv.resourceManager = resource.NewManager(nil, nil)
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"panic","params":[{"secret":"private seed"}]}`))
 	req.RemoteAddr = "203.0.113.5:1234"
@@ -308,7 +336,7 @@ func TestHandlerPanicRecovered(t *testing.T) {
 	if strings.Contains(rr.Body.String(), panicCause) || strings.Contains(rr.Body.String(), "private seed") {
 		t.Fatalf("panic response leaked private details: %s", rr.Body.String())
 	}
-	if got, want := srv.loadTracker.Balance("203.0.113.5"), float64(loadtrack.ChargeException/uint32(loadtrack.DecayWindow/time.Second)); got != want {
+	if got, want := transportRegressionLocalBalance(t, srv.resourceManager), uint32(resource.FeeExceptionRPC().Cost()/resource.DecayWindowSeconds); got != want {
 		t.Fatalf("panic charged %v, want %v", got, want)
 	}
 }
@@ -414,16 +442,16 @@ func TestSecureGatewayPromotesToIdentifiedWithUser(t *testing.T) {
 type heavyStub struct{ stubHandler }
 
 func (s *heavyStub) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	ctx.LoadCost = loadtrack.ChargeHeavy
+	ctx.LoadCost = uint32(resource.FeeHeavyBurdenRPC().Cost())
 	return s.stubHandler.Handle(ctx, params)
 }
 
 // Once the per-IP balance crosses DropThreshold, the overload-admission gate
 // (gateLoad) rejects with rippled's canonical HTTP 503 "Server is overloaded"
 // bare-string body (ServerHandler.cpp:739), not the slowDown result envelope.
-func TestLoadTracker_RejectsAfterDropThreshold(t *testing.T) {
+func TestResourceManagerRejectsAfterDropThreshold(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "path_find", &heavyStub{stubHandler{}})
-	srv.loadTracker = loadtrack.New()
+	srv.resourceManager = resource.NewManager(nil, nil)
 
 	var lastBody string
 	for range 400 {
@@ -436,7 +464,7 @@ func TestLoadTracker_RejectsAfterDropThreshold(t *testing.T) {
 			if got := strings.TrimSpace(rr.Body.String()); got != "Server is overloaded" {
 				t.Fatalf("503 body = %q, want \"Server is overloaded\"", got)
 			}
-			// The denial must not ride the result envelope (the old slowDown-on-200 shape).
+			// The denial is a plain HTTP response, never a JSON-RPC result envelope.
 			if strings.Contains(rr.Body.String(), "result") || strings.Contains(rr.Body.String(), "slowDown") {
 				t.Fatalf("overload denial leaked the result envelope: %s", rr.Body.String())
 			}
@@ -446,9 +474,9 @@ func TestLoadTracker_RejectsAfterDropThreshold(t *testing.T) {
 	t.Fatalf("never received HTTP 503 after 400 heavy invocations; last body %s", lastBody)
 }
 
-func TestLoadTracker_AdminBypassesCharge(t *testing.T) {
+func TestResourceManagerAdminBypassesCharge(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "path_find", &heavyStub{stubHandler{}})
-	srv.loadTracker = loadtrack.New()
+	srv.resourceManager = resource.NewManager(nil, nil)
 
 	for i := range 50 {
 		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"path_find","params":[{}]}`))
@@ -476,6 +504,10 @@ func TestForwardedForParser(t *testing.T) {
 		{"forwarded for token semicolon", "Forwarded", `for=198.51.100.7;proto=https`, "198.51.100.7"},
 		{"forwarded for ipv6 quoted bracketed", "Forwarded", `for="[2001:db8::1]:9000"`, "2001:db8::1"},
 		{"forwarded prefers Forwarded over xff", "Forwarded", `for=198.51.100.7`, "198.51.100.7"},
+		{"forwarded directive boundary", "Forwarded", `notfor=192.0.2.1; for=198.51.100.7`, "198.51.100.7"},
+		{"forwarded rejects embedded token", "Forwarded", `notfor=192.0.2.1`, ""},
+		{"forwarded rejects invalid IP", "Forwarded", `for=not-an-ip`, ""},
+		{"xff rejects invalid IP", "X-Forwarded-For", `not-an-ip`, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

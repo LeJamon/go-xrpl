@@ -46,11 +46,11 @@ func TestHandleNodeReply_AcceptsByHashStateNodes(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	r := NewRouter(nil, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
+	r := newTestRouter(nil, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
 	armFetchAcquisition(r) // a reply is only processed while an acquisition is in flight
 	r.handleFetchPackReply(&peermanagement.InboundMessage{
 		PeerID:  peermanagement.PeerID(5),
-		Type:    uint16(message.TypeGetObjects),
+		Type:    message.TypeGetObjects,
 		Payload: payload,
 	})
 
@@ -69,7 +69,7 @@ func TestHandleNodeReply_AcceptsByHashStateNodes(t *testing.T) {
 func TestFailInboundAcquisition_NotifiesEngineForConsensus(t *testing.T) {
 	t.Parallel()
 	eng := &mockEngine{}
-	r := NewRouter(eng, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
+	r := newTestRouter(eng, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
 	hash := [32]byte{0xDE, 0xAD, 0xBE, 0xEF}
 	il := inbound.New(hash, 50, 7, serveTestLogger())
 	r.fetchTracker.Track(il)
@@ -87,7 +87,7 @@ func TestFailInboundAcquisition_NotifiesEngineForConsensus(t *testing.T) {
 func TestFailInboundAcquisition_SkipsEngineForGeneric(t *testing.T) {
 	t.Parallel()
 	eng := &mockEngine{}
-	r := NewRouter(eng, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
+	r := newTestRouter(eng, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
 	hash := [32]byte{0x0B, 0x0E}
 	il := inbound.NewGeneric(hash, 50, 7, serveTestLogger())
 	r.fetchTracker.Track(il)

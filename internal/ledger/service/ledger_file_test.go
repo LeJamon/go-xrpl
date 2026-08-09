@@ -101,7 +101,7 @@ func TestLoadLedgerJSONWrappersAndDefaults(t *testing.T) {
 			if !gotHeader.CloseTime.Equal(test.wantCloseTime) {
 				t.Errorf("CloseTime = %v, want %v", gotHeader.CloseTime, test.wantCloseTime)
 			}
-			if gotHeader.CloseTimeResolution != test.wantResolution {
+			if uint32(gotHeader.CloseTimeResolution) != test.wantResolution {
 				t.Errorf("CloseTimeResolution = %d, want %d", gotHeader.CloseTimeResolution, test.wantResolution)
 			}
 			if gotHeader.Drops != test.wantDrops {

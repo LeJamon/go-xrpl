@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/require"
 )
@@ -12,15 +13,12 @@ import (
 func TestPathFindCreateInvalidReplacementClearsOldSession(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	conn := &WebSocketConnection{
-		ctx:         ctx,
-		sendChannel: make(chan []byte, 1),
-	}
+	conn := &websocketConnection{Connection: subscription.NewConnectionWithContext(ctx, "", make(chan []byte, 1))}
 	old := &PathFindSession{}
 	conn.installPathFindSession(old)
 	before := conn.pathFindGeneration
 
-	ws := NewWebSocketServer(0, nil)
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 0})
 	_, rpcErr := ws.executePathFindCreate(conn, &types.RpcContext{Context: ctx}, types.WebSocketCommand{
 		ID:     1,
 		Params: json.RawMessage(`{"subcommand":"create"}`),
@@ -35,17 +33,17 @@ func TestPathFindCreateInvalidReplacementClearsOldSession(t *testing.T) {
 func TestPathFindInFlightUpdateDiscardedAfterSessionChange(t *testing.T) {
 	for _, test := range []struct {
 		name   string
-		mutate func(*WebSocketConnection, *PathFindSession)
+		mutate func(*websocketConnection, *PathFindSession)
 	}{
 		{
 			name: "close",
-			mutate: func(conn *WebSocketConnection, _ *PathFindSession) {
+			mutate: func(conn *websocketConnection, _ *PathFindSession) {
 				require.NotNil(t, conn.clearPathFindSession())
 			},
 		},
 		{
 			name: "replacement",
-			mutate: func(conn *WebSocketConnection, replacement *PathFindSession) {
+			mutate: func(conn *websocketConnection, replacement *PathFindSession) {
 				require.NotNil(t, conn.clearPathFindSession())
 				conn.installPathFindSession(replacement)
 			},
@@ -53,9 +51,7 @@ func TestPathFindInFlightUpdateDiscardedAfterSessionChange(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			outbound := make(chan []byte, 1)
-			conn := &WebSocketConnection{
-				legacy: &types.Connection{SendChannel: outbound},
-			}
+			conn := &websocketConnection{Connection: subscription.NewConnection("", outbound)}
 			old := &PathFindSession{}
 			replacement := &PathFindSession{}
 			conn.installPathFindSession(old)
@@ -92,7 +88,7 @@ func TestPathFindInFlightUpdateDiscardedAfterSessionChange(t *testing.T) {
 
 func TestPathFindCurrentUpdateEnqueues(t *testing.T) {
 	outbound := make(chan []byte, 1)
-	conn := &WebSocketConnection{legacy: &types.Connection{SendChannel: outbound}}
+	conn := &websocketConnection{Connection: subscription.NewConnection("", outbound)}
 	conn.installPathFindSession(&PathFindSession{})
 	target, ok := conn.snapshotPathFindUpdate()
 	require.True(t, ok)

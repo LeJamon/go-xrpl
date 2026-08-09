@@ -551,9 +551,7 @@ func FuzzIOUArithmetic(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, mA int64, eA int32, mB int64, eB int32, op uint8) {
-		prev := GetNumberSwitchover()
-		defer SetNumberSwitchover(prev)
-		SetNumberSwitchover(true)
+		ctx := NewNumberContext(MantissaScaleSmall, true)
 
 		if mA == math.MinInt64 {
 			mA++
@@ -593,11 +591,11 @@ func FuzzIOUArithmetic(f *testing.F) {
 		var got IOUAmountValue
 		panicked := orcRun(func() {
 			if add {
-				got = addIOUValues(a, b)
+				got = addIOUValuesRoundedWithContext(a, b, RoundToNearest, ctx)
 			} else {
 				ca := NewIssuedAmountFromValue(mA, expA, "USD", "rIssuer")
 				cb := NewIssuedAmountFromValue(mB, expB, "USD", "rIssuer")
-				got = ca.Mul(cb, false).IOU()
+				got = ca.MulWithNumberContext(cb, ctx, false, RoundToNearest).IOU()
 			}
 		})
 
@@ -658,16 +656,14 @@ func TestArithmeticBoundaries(t *testing.T) {
 
 	// IOU arithmetic with the Number switchover enabled (the production default)
 	// clamps to the narrower [-96, 80] range.
-	prev := GetNumberSwitchover()
-	defer SetNumberSwitchover(prev)
-	SetNumberSwitchover(true)
+	ctx := NewNumberContext(MantissaScaleSmall, true)
 
 	hi := NewIssuedAmountFromValue(9_999_999_999_999_999, 70, "USD", "rIssuer")
 	lo := NewIssuedAmountFromValue(1_000_000_000_000_000, -90, "USD", "rIssuer")
-	if !orcRun(func() { hi.Mul(hi, false) }) {
+	if !orcRun(func() { hi.MulWithNumberContext(hi, ctx, false, RoundToNearest) }) {
 		t.Fatal("IOU Mul overflow did not panic")
 	}
-	if got := lo.Mul(lo, false).IOU(); !got.IsZero() {
+	if got := lo.MulWithNumberContext(lo, ctx, false, RoundToNearest).IOU(); !got.IsZero() {
 		t.Fatalf("IOU Mul underflow = {%d,%d}, want zero", got.Mantissa(), got.Exponent())
 	}
 }

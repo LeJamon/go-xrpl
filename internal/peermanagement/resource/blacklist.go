@@ -1,11 +1,13 @@
 package resource
 
+import "sort"
+
 // BlacklistEntry is one endpoint's resource reputation, mirroring an entry in
 // rippled's Resource::Logic::getJson output (Logic.h:208-254).
 type BlacklistEntry struct {
 	Address string
-	Local   int
-	Remote  int
+	Local   int64
+	Remote  int64
 	Type    string
 }
 
@@ -14,33 +16,50 @@ type BlacklistEntry struct {
 // Resource::Logic::getJson(threshold). Higher balances indicate heavier
 // accrued load; the black_list RPC's default threshold is WarningThreshold.
 //
-// Released endpoints (refcount 0) are skipped: rippled's release() moves an
+// Released endpoints with no active references are skipped: rippled's release() moves an
 // entry out of the inbound_/outbound_/admin_ lists into inactive_ the moment
 // its last Consumer drops (Logic.h:420-447), and getJson only iterates the
 // active lists, so a disconnected endpoint disappears immediately rather than
-// lingering until expiry. Imported entries carry a refcount and so remain.
-func (m *Manager) Snapshot(threshold int) []BlacklistEntry {
+// lingering until expiry. Imported entries remain active until their snapshot expires.
+func (m *Manager) Snapshot(threshold int64) []BlacklistEntry {
 	now := m.clock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	out := make([]BlacklistEntry, 0, len(m.entries))
 	for _, e := range m.entries {
-		if e.refcount == 0 {
+		if e.localRefs == 0 && e.importRefs == 0 {
 			continue
 		}
 		local := e.localBalance.valueAt(now)
-		if local+e.remoteBalance < threshold {
+		if saturatingAdd(local, e.remoteBalance) < threshold {
 			continue
 		}
 		out = append(out, BlacklistEntry{
-			Address: e.k.addr,
+			Address: e.fingerprint(),
 			Local:   local,
 			Remote:  e.remoteBalance,
 			Type:    blacklistType(e.k.kind),
 		})
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Address < out[j].Address })
 	return out
+}
+
+func (m *Manager) BlacklistJSON(threshold *int) map[string]any {
+	t := int64(WarningThreshold)
+	if threshold != nil {
+		t = int64(*threshold)
+	}
+	result := make(map[string]any)
+	for _, entry := range m.Snapshot(t) {
+		result[entry.Address] = map[string]any{
+			"local":  entry.Local,
+			"remote": entry.Remote,
+			"type":   entry.Type,
+		}
+	}
+	return result
 }
 
 // blacklistType maps a Kind to rippled's getJson "type" label. KindUnlimited

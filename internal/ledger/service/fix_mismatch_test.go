@@ -18,12 +18,16 @@ import (
 // parent-hash chain check, which consumes the *stored* header values.
 func makeStubLedger(t *testing.T, seq uint32, hash, parentHash [32]byte) *ledger.Ledger {
 	t.Helper()
-	stateMap := shamap.New(shamap.TypeState)
+	stateMap, stateRoot := makeStubStateMap(t, seq)
 	txMap := shamap.New(shamap.TypeTransaction)
+	txRoot, err := txMap.Hash()
+	require.NoError(t, err)
 	hdr := header.LedgerHeader{
 		LedgerIndex: seq,
 		Hash:        hash,
 		ParentHash:  parentHash,
+		AccountHash: stateRoot,
+		TxHash:      txRoot,
 		Validated:   true,
 	}
 	l, err := ledger.NewFromHeader(hdr, stateMap, txMap, drops.Fees{})
@@ -31,6 +35,16 @@ func makeStubLedger(t *testing.T, seq uint32, hash, parentHash [32]byte) *ledger
 		t.Fatalf("NewFromHeader: %v", err)
 	}
 	return l
+}
+
+func makeStubStateMap(t *testing.T, seq uint32) (*shamap.SHAMap, [32]byte) {
+	t.Helper()
+	stateMap := shamap.New(shamap.TypeState)
+	key := [32]byte{0x53, byte(seq), byte(seq >> 8), byte(seq >> 16), byte(seq >> 24)}
+	require.NoError(t, stateMap.Put(key, []byte("stub-state-data")))
+	root, err := stateMap.Hash()
+	require.NoError(t, err)
+	return stateMap, root
 }
 
 // TestAdoptLedgerWithState_FixMismatchInvalidatesDivergedTail pins F5:
@@ -102,11 +116,12 @@ func TestAdoptLedgerWithState_FixMismatchInvalidatesDivergedTail(t *testing.T) {
 
 	hdrD := &header.LedgerHeader{
 		LedgerIndex: baseSeq + 1,
-		Hash:        hashD,
 		ParentHash:  divergentParent,
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
+	hdrD.Hash = header.CalculateHash(*hdrD)
+	hashD = hdrD.Hash
 
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdrD, stateMap, txMap))
 
@@ -174,11 +189,12 @@ func TestAdoptLedgerWithState_NoMismatchNoOp(t *testing.T) {
 
 	hdrD := &header.LedgerHeader{
 		LedgerIndex: baseSeq + 2,
-		Hash:        hashD,
 		ParentHash:  hashB, // chains correctly to B
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
+	hdrD.Hash = header.CalculateHash(*hdrD)
+	hashD = hdrD.Hash
 
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdrD, stateMap, txMap))
 
@@ -221,15 +237,6 @@ func TestAdoptLedgerWithState_BackfillAtForkBoundaryKeepsCanonicalChain(t *testi
 
 	var zero [32]byte
 	fork := makeStubLedger(t, baseSeq, hashFork, zero)
-	c4 := makeStubLedger(t, baseSeq+2, hashC4, hashC3)
-	c5 := makeStubLedger(t, baseSeq+3, hashC5, hashC4)
-
-	svc.mu.Lock()
-	svc.ledgerHistory[fork.Sequence()] = fork
-	svc.ledgerHistory[c4.Sequence()] = c4
-	svc.ledgerHistory[c5.Sequence()] = c5
-	svc.closedLedger = c5
-	svc.mu.Unlock()
 
 	stateMap := shamap.New(shamap.TypeState)
 	stateRoot, err := stateMap.Hash()
@@ -242,11 +249,22 @@ func TestAdoptLedgerWithState_BackfillAtForkBoundaryKeepsCanonicalChain(t *testi
 	// C4.ParentHash == C3.Hash (canonical above).
 	hdrC3 := &header.LedgerHeader{
 		LedgerIndex: baseSeq + 1,
-		Hash:        hashC3,
 		ParentHash:  hashC2,
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
+	hdrC3.Hash = header.CalculateHash(*hdrC3)
+	hashC3 = hdrC3.Hash
+	c4 := makeStubLedger(t, baseSeq+2, hashC4, hashC3)
+	c5 := makeStubLedger(t, baseSeq+3, hashC5, hashC4)
+
+	svc.mu.Lock()
+	svc.ledgerHistory[fork.Sequence()] = fork
+	svc.ledgerHistory[c4.Sequence()] = c4
+	svc.ledgerHistory[c5.Sequence()] = c5
+	svc.closedLedger = c5
+	svc.mu.Unlock()
+
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdrC3, stateMap, txMap))
 
 	svc.mu.RLock()
@@ -309,8 +327,6 @@ func TestAdoptLedgerWithState_FixMismatchValidatedLedgerInvalidationLogsError(t 
 	prevValidated := svc.validatedLedger
 	svc.mu.Unlock()
 
-	var hashD [32]byte
-	hashD[0] = 0xD4
 	var divergentParent [32]byte
 	divergentParent[0] = 0xAB
 
@@ -323,11 +339,11 @@ func TestAdoptLedgerWithState_FixMismatchValidatedLedgerInvalidationLogsError(t 
 
 	hdrD := &header.LedgerHeader{
 		LedgerIndex: baseSeq + 1,
-		Hash:        hashD,
 		ParentHash:  divergentParent,
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
+	hdrD.Hash = header.CalculateHash(*hdrD)
 
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdrD, stateMap, txMap))
 
@@ -377,8 +393,6 @@ func TestAdoptLedgerWithState_FixMismatchPurgesTxIndex(t *testing.T) {
 	svc.mu.Unlock()
 
 	// Divergent D at seq S+1.
-	var hashD [32]byte
-	hashD[0] = 0x1D
 	var divergentParent [32]byte
 	divergentParent[0] = 0xEE
 
@@ -391,11 +405,11 @@ func TestAdoptLedgerWithState_FixMismatchPurgesTxIndex(t *testing.T) {
 
 	hdrD := &header.LedgerHeader{
 		LedgerIndex: baseSeq + 1,
-		Hash:        hashD,
 		ParentHash:  divergentParent,
 		TxHash:      txRoot,
 		AccountHash: stateRoot,
 	}
+	hdrD.Hash = header.CalculateHash(*hdrD)
 
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdrD, stateMap, txMap))
 

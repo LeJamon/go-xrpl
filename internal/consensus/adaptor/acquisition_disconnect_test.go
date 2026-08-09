@@ -107,7 +107,7 @@ func newMissingNodeChurnRouter(t *testing.T, sender *missingNodeChurnSender) *Ro
 	t.Helper()
 	adaptor := newTestAdaptor(t)
 	adaptor.sender = sender
-	return NewRouter(nil, adaptor, nil)
+	return newTestRouter(nil, adaptor, nil)
 }
 
 func newDisconnectFrontier(
@@ -299,6 +299,67 @@ func TestMissingReplyRequest_DisconnectErrorsReleaseAndRetarget(t *testing.T) {
 			assert.Equal(t, 1, ledger.Snapshot().RequestPeers)
 		})
 	}
+}
+
+func TestMissingReplyRequest_StaleSessionSkipsSendAndRetargets(t *testing.T) {
+	for _, transaction := range []bool{false, true} {
+		name := "state"
+		if transaction {
+			name = "transaction"
+		}
+		t.Run(name, func(t *testing.T) {
+			sender := &missingNodeChurnSender{replacements: []uint64{2}}
+			router := newMissingNodeChurnRouter(t, sender)
+			router.setPeerSessionView(&testPeerSessions{
+				connected: map[peermanagement.PeerID]bool{2: true},
+			})
+			ledger, _ := newDisconnectFrontier(t, transaction)
+			router.fetchTracker.Track(ledger)
+			trackCatchupPeer(router, 1, ledger.Seq())
+			requests, complete, err := ledger.CollectMissingReplyRequestsContext(t.Context(), []uint64{1})
+			require.NoError(t, err)
+			require.False(t, complete)
+			require.Len(t, requests, 1)
+
+			router.handleAcquisitionWorkResult(acquisitionWorkResult{
+				ledger:   ledger,
+				requests: requests,
+			})
+
+			calls := sender.snapshotCalls()
+			require.Len(t, calls, 1)
+			assert.Equal(t, uint64(2), calls[0].peerID)
+			assert.Equal(t, transaction, calls[0].transaction)
+			assert.NotContains(t, ledger.Peers(), uint64(1))
+			assert.Contains(t, ledger.Peers(), uint64(2))
+		})
+	}
+}
+
+func TestAcquisitionWorkResult_StaleTimerSessionSkipsSendAndRetargets(t *testing.T) {
+	sender := &missingNodeChurnSender{replacements: []uint64{2}}
+	router := newMissingNodeChurnRouter(t, sender)
+	router.setPeerSessionView(&testPeerSessions{
+		connected: map[peermanagement.PeerID]bool{2: true},
+	})
+	ledger, _ := newDisconnectFrontier(t, false)
+	router.fetchTracker.Track(ledger)
+	stateIDs, _, complete, err := ledger.CollectMissingRequestContext(t.Context(), false)
+	require.NoError(t, err)
+	require.False(t, complete)
+	require.NotEmpty(t, stateIDs)
+
+	router.handleAcquisitionWorkResult(acquisitionWorkResult{
+		ledger:   ledger,
+		targets:  []uint64{1},
+		stateIDs: stateIDs,
+	})
+
+	calls := sender.snapshotCalls()
+	require.Len(t, calls, 1)
+	assert.Equal(t, uint64(2), calls[0].peerID)
+	assert.NotContains(t, ledger.Peers(), uint64(1))
+	assert.Contains(t, ledger.Peers(), uint64(2))
 }
 
 func TestRequestMissingAcquisitionNodes_MixedStaleLiveFanout(t *testing.T) {

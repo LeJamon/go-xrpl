@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"os"
 	"testing"
 	"time"
 
@@ -110,6 +111,39 @@ func TestServerInfoRoleAliasesAreAdminOnly(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestServerInfoHostIDPrivacy(t *testing.T) {
+	mock := newMockLedgerServiceServerInfo()
+	services := servicesForServerInfo(mock)
+
+	guest := callServerStatus(t, &types.RpcContext{
+		Context:  t.Context(),
+		Services: services,
+	}, true)
+	assert.Equal(t, "LANG", guest["hostid"])
+
+	admin := callServerStatus(t, &types.RpcContext{
+		Context:  t.Context(),
+		Services: services,
+		IsAdmin:  true,
+	}, true)
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		hostname = "go-xrpl"
+	}
+	assert.Equal(t, hostname, admin["hostid"])
+
+	state := callServerStatus(t, &types.RpcContext{
+		Context:  t.Context(),
+		Services: services,
+		IsAdmin:  true,
+	}, false)
+	assert.NotContains(t, state, "hostid")
+
+	services.NodePublicKey = "invalid"
+	guest = callServerStatus(t, &types.RpcContext{Context: t.Context(), Services: services}, true)
+	assert.Equal(t, "go-xrpl", guest["hostid"])
 }
 
 func TestServerInfoNetworkLedgerWaiting(t *testing.T) {
@@ -997,8 +1031,9 @@ func TestServerInfoStateAccounting(t *testing.T) {
 func TestServerInfoTimeField(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
 	services := servicesForServerInfo(mock)
-
-	method := &handlers.ServerInfoMethod{}
+	services.SystemTime = func() time.Time {
+		return time.Date(2026, time.August, 3, 14, 5, 6, 789012345, time.FixedZone("test", 2*60*60))
+	}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
@@ -1006,22 +1041,8 @@ func TestServerInfoTimeField(t *testing.T) {
 		Services:   services,
 	}
 
-	t.Run("time field present and formatted", func(t *testing.T) {
-		result, rpcErr := method.Handle(ctx, nil)
-		require.Nil(t, rpcErr)
-
-		resultJSON, _ := json.Marshal(result)
-		var resp map[string]any
-		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]any)
-
-		assert.Contains(t, info, "time")
-		timeStr, ok := info["time"].(string)
-		assert.True(t, ok)
-		assert.NotEmpty(t, timeStr)
-		// Time format should include UTC
-		assert.Contains(t, timeStr, "UTC")
-	})
+	assert.Equal(t, "2026-Aug-03 12:05:06.789012 UTC", callServerStatus(t, ctx, true)["time"])
+	assert.Equal(t, "2026-Aug-03 12:05:06.789012 UTC", callServerStatus(t, ctx, false)["time"])
 }
 
 // Fee Calculation Tests
@@ -1436,6 +1457,29 @@ func TestServerInfo_MachineMode_LoadFactorFees(t *testing.T) {
 	assert.EqualValues(t, 256, state["load_factor_fee_reference"])
 	assert.EqualValues(t, 2048, state["load_factor"])
 	assert.EqualValues(t, 256, state["load_base"])
+}
+
+func TestServerInfo_LoadFactorEscalationAvoidsIntermediateOverflow(t *testing.T) {
+	mock := newMockLedgerServiceServerInfo()
+	services := servicesForServerInfo(mock)
+	services.TxQMetrics = func() types.TxQServerMetrics {
+		return types.TxQServerMetrics{
+			ReferenceFeeLevel:  256,
+			OpenLedgerFeeLevel: 1 << 56,
+		}
+	}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	machine := callServerStatus(t, ctx, false)
+	assert.EqualValues(t, math.MaxUint32, machine["load_factor"])
+
+	human := callServerStatus(t, ctx, true)
+	assert.Equal(t, float64(uint64(1)<<48), human["load_factor"])
 }
 
 // TestServerInfo_ValidatedLedgerAge_HighAgeThreshold guards against

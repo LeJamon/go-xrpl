@@ -14,7 +14,6 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 	shamapbackend "github.com/LeJamon/go-xrpl/shamap/backend"
-	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/stretchr/testify/require"
@@ -81,7 +80,7 @@ func (d *countingGenerationDatabase) GenerationState() (uint32, uint32) {
 
 func TestService_RefreshValidatedStateSurvivesPruning(t *testing.T) {
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "refresh", 10_000, time.Hour)
+	db := newTestNodeStore(t, 10_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	family := shamapbackend.New(db)
 	svc, err := New(Config{
@@ -119,10 +118,7 @@ func TestService_RefreshValidatedStatePromotesWithoutRestamping(t *testing.T) {
 		kvpebble.Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200},
 	)
 	require.NoError(t, err)
-	base := nodestore.NewRotatingKVDatabase(backend, "refresh-generation", &nodestore.DatabaseConfig{
-		CacheSize: 64,
-		CacheTTL:  time.Hour,
-	})
+	base := newTestRotatingNodeStore(t, backend, 64)
 	db := &countingGenerationDatabase{Database: base, generation: base}
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	svc, err := New(Config{
@@ -178,10 +174,7 @@ func TestService_RefreshSnapshotsValidatedLedgerBeforePersistenceBarrier(t *test
 		kvpebble.Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200},
 	)
 	require.NoError(t, err)
-	base := nodestore.NewRotatingKVDatabase(backend, "refresh-generation", &nodestore.DatabaseConfig{
-		CacheSize: 64,
-		CacheTTL:  time.Hour,
-	})
+	base := newTestRotatingNodeStore(t, backend, 64)
 	storeBatchStart := make(chan struct{})
 	storeBatchResume := make(chan struct{})
 	var releaseOnce sync.Once
@@ -272,7 +265,7 @@ func TestService_RefreshSnapshotsValidatedLedgerBeforePersistenceBarrier(t *test
 
 func TestService_RefreshValidatedStateRunsInWalkCheckpoint(t *testing.T) {
 	ctx := context.Background()
-	db := nodestore.NewKVDatabase(memorydb.New(), "refresh-checkpoint", 10_000, time.Hour)
+	db := newTestNodeStore(t, 10_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	svc, err := New(Config{
 		Standalone:    true,
@@ -367,10 +360,7 @@ func TestService_RefreshValidatedStateChecksHealthByElapsedWork(t *testing.T) {
 		kvpebble.Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200},
 	)
 	require.NoError(t, err)
-	base := nodestore.NewRotatingKVDatabase(backend, "refresh-generation", &nodestore.DatabaseConfig{
-		CacheSize: 64,
-		CacheTTL:  time.Hour,
-	})
+	base := newTestRotatingNodeStore(t, backend, 64)
 	db := &countingGenerationDatabase{Database: base, generation: base}
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	svc, err := New(Config{

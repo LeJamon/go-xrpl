@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"testing"
 
-	"time"
-
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -55,9 +53,6 @@ func (m *mockGatewayBalancesLedgerService) GetValidatedLedgerIndex() uint32 {
 func (m *mockGatewayBalancesLedgerService) AcceptLedger(context.Context) (uint32, error) {
 	return m.closedLedgerIndex + 1, nil
 }
-func (m *mockGatewayBalancesLedgerService) AcceptLedgerAt(context.Context, time.Time) (uint32, error) {
-	return m.closedLedgerIndex + 1, nil
-}
 func (m *mockGatewayBalancesLedgerService) IsStandalone() bool { return m.standalone }
 func (m *mockGatewayBalancesLedgerService) GetServerInfo() types.LedgerServerInfo {
 	return m.serverInfo
@@ -71,7 +66,7 @@ func (m *mockGatewayBalancesLedgerService) GetLedgerBySequence(seq uint32) (type
 func (m *mockGatewayBalancesLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	return accountQueryLedgerByHash(hash, m.validatedLedgerIndex)
 }
-func (m *mockGatewayBalancesLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
+func (m *mockGatewayBalancesLedgerService) SubmitTransaction(txJSON []byte, txBlobHex string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockGatewayBalancesLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {

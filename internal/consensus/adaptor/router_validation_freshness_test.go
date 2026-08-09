@@ -25,7 +25,7 @@ func buildValidationAt(t *testing.T, peerID peermanagement.PeerID, signTime time
 	v.Signature = make([]byte, 70)
 	return &peermanagement.InboundMessage{
 		PeerID:  peerID,
-		Type:    uint16(message.TypeValidation),
+		Type:    message.TypeValidation,
 		Payload: encodePayload(t, &message.Validation{Validation: SerializeSTValidation(v)}),
 	}
 }
@@ -55,7 +55,7 @@ func TestRouter_ValidationFreshnessGate(t *testing.T) {
 				Sender:        rs,
 				Identity:      identity,
 			})
-			router := NewRouter(engine, a, make(chan *peermanagement.InboundMessage, 1))
+			router := newTestRouter(engine, a, make(chan *peermanagement.InboundMessage, 1))
 
 			router.handleValidation(buildValidationAt(t, 7, tc.signTime))
 

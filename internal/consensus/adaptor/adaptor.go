@@ -37,6 +37,11 @@ var _ consensus.Adaptor = (*Adaptor)(nil)
 // to the ledger service, transaction queue, and P2P network.
 type Adaptor struct {
 	trustUpdateMu sync.Mutex
+	// trustTransitionMu serializes a complete trust snapshot publication and
+	// its callback. Readers still use trustUpdateMu and may re-enter from the
+	// callback; the callback itself must not synchronously start another trust
+	// transition.
+	trustTransitionMu sync.Mutex
 	// trustTransitioning closes the finality window between publishing a new
 	// trust set and installing its matching tracker snapshot.
 	trustTransitioning atomic.Bool
@@ -47,7 +52,8 @@ type Adaptor struct {
 	mu sync.Mutex
 
 	ledgerService *service.Service
-	sender        NetworkSender
+	txLookup      openLedgerTxLookup
+	sender        consensusNetwork
 	identity      *ValidatorIdentity
 
 	// UNL: trusted validator public keys
@@ -59,6 +65,9 @@ type Adaptor struct {
 	trustedMasterKeys [][33]byte
 
 	operatingMode consensus.OperatingMode
+	onModeChange  func(consensus.OperatingMode)
+	modeChanges   []operatingModeChange
+	modeDraining  bool
 
 	// stateAcct tracks transition counts and cumulative durations per
 	// operating mode for server_info.state_accounting.
@@ -73,19 +82,6 @@ type Adaptor struct {
 	// broadcastStatus reads it to substitute LOST_SYNC while building on
 	// the wrong LCL.
 	consensusMode atomic.Int32
-
-	// consensusPhaseCh serializes consensus-phase notifications to the ledger
-	// service's OnConsensusPhase hook: a single dispatcher goroutine drains it
-	// in order (preventing out-of-order delivery). Enqueue is non-blocking, so
-	// a slow hook can't stall the consensus path. The dispatcher is started
-	// lazily on first emit and stopped by StopConsensusPhaseDispatcher; the
-	// channel is never closed, so a concurrent emit can't send on a closed
-	// channel. consensusPhaseMu guards the lazy-start / stopped transition.
-	consensusPhaseMu   sync.Mutex
-	consensusPhaseCh   chan string
-	consensusPhaseQuit chan struct{}
-	consensusPhaseWG   sync.WaitGroup
-	consensusPhaseStop bool
 
 	// negUNLVoter produces the UNLModify pseudo-tx each voting ledger (at most
 	// one ToDisable + one ToReEnable). nil for non-validating adaptors.
@@ -113,8 +109,7 @@ type Adaptor struct {
 	// (one-shot per boot), emitted via sfCookie on every validation.
 	cookie uint64
 
-	// feeVote is this validator's fee-vote stance, copied from Config
-	// at construction. Zero values mean "no vote".
+	// feeVote is this validator's fee-vote stance, copied from Config at construction.
 	feeVote FeeVoteStance
 
 	// amendmentStances is this validator's per-amendment voting stance,
@@ -141,9 +136,9 @@ type Adaptor struct {
 	// by standalone adaptors and focused tests.
 	onLedgerRequested func(consensus.LedgerID) error
 
-	// Set once by NewRouter before the engine starts.
+	// Set once by newRouter before the engine starts.
 	onLedgerSwitched func(seq uint32, hash, parentHash [32]byte, historyFloor uint32)
-	// Set once by NewRouter before validation processing starts.
+	// Set once by newRouter before validation processing starts.
 	onLedgerFullyValidated func(seq uint32, hash [32]byte)
 	onLedgerBuilt          func(seq uint32, hash [32]byte)
 
@@ -185,6 +180,11 @@ type Adaptor struct {
 	// onTrustChanged publishes the matching trusted/quorum snapshot after
 	// every SetTrustedValidators swap. nil-safe.
 	onTrustChanged func([]consensus.NodeID, int)
+	// onTrustSettled runs after the trust-change callback returns and the
+	// transition gate reopens. nil-safe.
+	onTrustSettled func()
+	// onValidationConfigChanged runs after the validated ledger advances.
+	onValidationConfigChanged func()
 
 	// lastIssuedValidationSeq is the highest ledger seq this node has
 	// broadcast a validation for — rippled's localSeqEnforcer_.largest(),
@@ -213,30 +213,36 @@ type Adaptor struct {
 	logger *slog.Logger
 }
 
+type openLedgerTxLookup interface {
+	OpenLedgerHasTx([32]byte) (bool, error)
+}
+
 // goxrplServerVersionTag identifies go-xrpl in the sfServerVersion field.
 // rippled uses the top bit (0x8000...); we must NOT set it or this node
 // would be counted as a rippled instance in peer version statistics.
 const goxrplServerVersionTag uint64 = 0x4000_0000_0000_0000
 
-// FeeVoteStance is this validator's desired fee structure for the next flag
-// ledger, emitted on every validation (legacy UINT triple, or the post-XRPFees
-// AMOUNT triple under featureXRPFees). A zero field means "operator did not
-// set this field"; New() substitutes the default so an unconfigured validator
-// votes toward defaults rather than abstaining.
+// FeeVoteStance is this validator's desired fee structure. The Set fields
+// distinguish an explicit zero from an omitted configuration value.
 type FeeVoteStance struct {
-	BaseFee          uint64
-	ReserveBase      uint32
-	ReserveIncrement uint32
+	BaseFee             uint64
+	ReserveBase         uint32
+	ReserveIncrement    uint32
+	BaseFeeSet          bool
+	ReserveBaseSet      bool
+	ReserveIncrementSet bool
 }
 
 // defaultFeeVote returns the fee setup a validator votes toward with no
-// [voting] config (reference_fee=10, account_reserve=1 XRP, owner_reserve=0.2 XRP).
-// rippled 3.2.0 (#6382) lowered the default voted reserves from 10/2 XRP.
+// [voting] config.
 func defaultFeeVote() FeeVoteStance {
 	return FeeVoteStance{
-		BaseFee:          10,
-		ReserveBase:      1_000_000,
-		ReserveIncrement: 200_000,
+		BaseFee:             10,
+		ReserveBase:         10_000_000,
+		ReserveIncrement:    2_000_000,
+		BaseFeeSet:          true,
+		ReserveBaseSet:      true,
+		ReserveIncrementSet: true,
 	}
 }
 
@@ -275,14 +281,15 @@ func ParseRelayValidationsPolicy(s string) RelayValidationsPolicy {
 
 type Config struct {
 	LedgerService *service.Service
-	Sender        NetworkSender
+	Sender        consensusNetwork
+	OnTxSetBuilt  func(consensus.TxSetID)
 	Identity      *ValidatorIdentity
 	Validators    []consensus.NodeID // UNL
 	// ValidatorMasterKeys are the 33-byte master pubkeys index-aligned with
 	// Validators. Optional — required for NegativeUNL voting (which emits raw
 	// master pubkeys); nil skips NegativeUNL votes (bare-NodeID test fixtures).
 	ValidatorMasterKeys [][33]byte
-	// FeeVote is the validator's fee-vote stance; zero means no vote.
+	// FeeVote is the validator's fee-vote stance.
 	FeeVote FeeVoteStance
 	// AmendmentVote lists amendments (by registry name) to vote FOR on the next
 	// flag ledger. Unknown names are dropped at construction; already-enabled
@@ -368,19 +375,20 @@ func New(cfg Config) *Adaptor {
 	trustedVotes := NewTrustedVotes()
 	trustedVotes.TrustChanged(cfg.Validators)
 
-	// Substitute fee defaults per-field: an unset field falls back to the
-	// default rather than "abstain".
 	feeVote := cfg.FeeVote
 	defaults := defaultFeeVote()
-	if feeVote.BaseFee == 0 {
+	if !feeVote.BaseFeeSet && feeVote.BaseFee == 0 {
 		feeVote.BaseFee = defaults.BaseFee
 	}
-	if feeVote.ReserveBase == 0 {
+	if !feeVote.ReserveBaseSet && feeVote.ReserveBase == 0 {
 		feeVote.ReserveBase = defaults.ReserveBase
 	}
-	if feeVote.ReserveIncrement == 0 {
+	if !feeVote.ReserveIncrementSet && feeVote.ReserveIncrement == 0 {
 		feeVote.ReserveIncrement = defaults.ReserveIncrement
 	}
+	feeVote.BaseFeeSet = true
+	feeVote.ReserveBaseSet = true
+	feeVote.ReserveIncrementSet = true
 
 	// Non-validators never emit, so skip the floor read (see maxDisallowedSeq).
 	var maxDisallowedSeq uint32
@@ -403,9 +411,14 @@ func New(cfg Config) *Adaptor {
 	if cfg.Identity != nil && len(trustedMasterKeys) > 0 {
 		negUNLVoter = negativeunlvote.NewVoter(cfg.Identity.NodeID)
 	}
+	var txLookup openLedgerTxLookup
+	if cfg.LedgerService != nil {
+		txLookup = cfg.LedgerService
+	}
 
 	a := &Adaptor{
 		ledgerService:     cfg.LedgerService,
+		txLookup:          txLookup,
 		sender:            sender,
 		identity:          cfg.Identity,
 		trustedValidators: cfg.Validators,
@@ -418,6 +431,7 @@ func New(cfg Config) *Adaptor {
 		peerLCLs:          make(map[uint64]consensus.LedgerID),
 		reqLedgerLast:     make(map[consensus.LedgerID]time.Time),
 		announcedSets:     make(map[consensus.TxSetID]struct{}),
+		onTxSetBuilt:      cfg.OnTxSetBuilt,
 		maxDisallowedSeq:  maxDisallowedSeq,
 		cookie:            cookie,
 		feeVote:           feeVote,
@@ -435,6 +449,12 @@ func New(cfg Config) *Adaptor {
 }
 
 func (a *Adaptor) onValidatedLedger(seq uint32, hash, parentHash [32]byte) {
+	a.mu.Lock()
+	onValidationConfigChanged := a.onValidationConfigChanged
+	a.mu.Unlock()
+	if onValidationConfigChanged != nil {
+		onValidationConfigChanged()
+	}
 	a.refreshRemoteFee(seq, consensus.LedgerID(hash), consensus.LedgerID(parentHash))
 	a.logger.Info("Ledger fully validated",
 		"seq", seq,
@@ -516,14 +536,8 @@ func (a *Adaptor) BroadcastValidation(validation *consensus.Validation) error {
 	return a.sender.BroadcastValidation(validation)
 }
 
-// PeersThatHave delegates to NetworkSender so higher layers can query without
-// importing the overlay. See NetworkSender.PeersThatHave.
-func (a *Adaptor) PeersThatHave(suppressionHash [32]byte) []uint64 {
-	return a.sender.PeersThatHave(suppressionHash)
-}
-
 // RelayProposal forwards a peer-originated proposal, excluding exceptPeer
-// (0 = everyone). See NetworkSender.RelayProposal.
+// (0 = everyone).
 func (a *Adaptor) RelayProposal(proposal *consensus.Proposal, exceptPeer uint64) error {
 	return a.sender.RelayProposal(proposal, exceptPeer)
 }
@@ -535,7 +549,7 @@ func (a *Adaptor) RelayValidation(validation *consensus.Validation, exceptPeer u
 }
 
 // UpdateRelaySlot feeds the reduce-relay slot for validatorKey with originPeer
-// and seenPeers (known-havers). See NetworkSender.UpdateRelaySlot.
+// and seenPeers (known-havers).
 func (a *Adaptor) UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPeers []uint64) {
 	a.sender.UpdateRelaySlot(validatorKey, originPeer, seenPeers)
 }
@@ -564,18 +578,13 @@ func (a *Adaptor) setOnLedgerBuilt(cb func(uint32, [32]byte)) {
 }
 
 func (a *Adaptor) RequestTxSet(id consensus.TxSetID) error {
+	if id == (consensus.TxSetID{}) {
+		return nil
+	}
 	if a.onTxSetRequested != nil {
 		a.onTxSetRequested(id)
 	}
 	return a.sender.RequestTxSet(id)
-}
-
-func (a *Adaptor) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool, indirect bool) error {
-	return a.sender.RequestTxSetMissingNodes(id, nodeIDs, excluded, indirect)
-}
-
-func (a *Adaptor) RequestTxSetMissingNodesFromPeer(id consensus.TxSetID, nodeIDs [][]byte, peerID uint64, indirect bool) error {
-	return a.sender.RequestTxSetMissingNodesFromPeer(id, nodeIDs, peerID, indirect)
 }
 
 func (a *Adaptor) RequestLedger(id consensus.LedgerID) error {
@@ -600,38 +609,6 @@ func (a *Adaptor) RequestLedger(id consensus.LedgerID) error {
 	return a.sender.RequestLedger(id)
 }
 
-func (a *Adaptor) RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error {
-	return a.sender.RequestLedgerByHashAndSeq(hash, seq)
-}
-
-func (a *Adaptor) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32, indirect bool) error {
-	return a.sender.RequestLedgerBaseFromPeer(peerID, hash, seq, indirect)
-}
-
-// RequestReplayDelta delegates to the network sender, sending a single
-// TMReplayDeltaRequest and awaiting one TMReplayDeltaResponse.
-func (a *Adaptor) RequestReplayDelta(peerID uint64, hash [32]byte) error {
-	return a.sender.RequestReplayDelta(peerID, hash)
-}
-
-func (a *Adaptor) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, queryDepth uint32, indirect bool) error {
-	return a.sender.RequestStateNodes(peerID, ledgerHash, nodeIDs, queryDepth, indirect)
-}
-
-func (a *Adaptor) RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, queryDepth uint32, indirect bool) error {
-	return a.sender.RequestTransactionNodes(peerID, ledgerHash, nodeIDs, queryDepth, indirect)
-}
-
-func (a *Adaptor) PeerLatency(peerID uint64) (time.Duration, bool) {
-	sender, ok := a.sender.(interface {
-		PeerLatency(uint64) (time.Duration, bool)
-	})
-	if !ok {
-		return 0, false
-	}
-	return sender.PeerLatency(peerID)
-}
-
 // EngineConfigForReplay returns the shared (non-per-ledger) tx.EngineConfig
 // for replaying a ledger anchored on parent (fees from parent's FeeSettings
 // SLE). The caller overrides the per-ledger fields from the target header.
@@ -640,24 +617,6 @@ func (a *Adaptor) EngineConfigForReplay(parent *ledger.Ledger) tx.EngineConfig {
 		return tx.EngineConfig{}
 	}
 	return a.ledgerService.EngineConfigForReplay(parent)
-}
-
-// PeerSupportsReplay reports whether the peer advertised ledger-replay during
-// handshake. Delegates to NetworkSender.
-func (a *Adaptor) PeerSupportsReplay(peerID uint64) bool {
-	return a.sender.PeerSupportsReplay(peerID)
-}
-
-// ReplayCapablePeersExcluding returns up to max ledger-replay peers, omitting
-// excluded. See NetworkSender.ReplayCapablePeersExcluding.
-func (a *Adaptor) ReplayCapablePeersExcluding(excluded []uint64, max int) []uint64 {
-	return a.sender.ReplayCapablePeersExcluding(excluded, max)
-}
-
-// IncPeerBadData delegates to NetworkSender so Router can charge a peer through
-// the adaptor. See NetworkSender.IncPeerBadData.
-func (a *Adaptor) IncPeerBadData(peerID uint64, reason string) {
-	a.sender.IncPeerBadData(peerID, reason)
 }
 
 // GetParentLedgerForReplay returns the closed ledger at seq-1 (the anchor for
@@ -676,44 +635,6 @@ func (a *Adaptor) GetParentLedgerForReplay(seq uint32) *ledger.Ledger {
 		return nil
 	}
 	return parent
-}
-
-func (a *Adaptor) SendToPeer(peerID uint64, frame []byte) error {
-	return a.sender.SendToPeer(peerID, frame)
-}
-
-func (a *Adaptor) SendPriorityToPeer(peerID uint64, frame []byte) error {
-	return a.sender.SendPriorityToPeer(peerID, frame)
-}
-
-// ShouldShedLedgerRequest delegates to NetworkSender so Router can gate
-// ledger-body serving through the adaptor.
-func (a *Adaptor) ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool {
-	return a.sender.ShouldShedLedgerRequest(peerID, loadedLocal)
-}
-
-// PeerWithLedger delegates to NetworkSender; the Router uses it to relay an
-// unsatisfiable GetLedger to a peer that can serve the ledger.
-func (a *Adaptor) PeerWithLedger(target [32]byte, seq uint32, exclude uint64) (uint64, bool) {
-	return a.sender.PeerWithLedger(target, seq, exclude)
-}
-
-func (a *Adaptor) SelectLedgerPeers(target [32]byte, seq uint32, excluded []uint64, max int) []uint64 {
-	return a.sender.SelectLedgerPeers(target, seq, excluded, max)
-}
-
-// PeerWithTxSet delegates to NetworkSender; the Router uses it to relay an
-// unsatisfiable liTS_CANDIDATE GetLedger to a peer that advertised the
-// tx-set.
-func (a *Adaptor) PeerWithTxSet(target [32]byte, exclude uint64) (uint64, bool) {
-	return a.sender.PeerWithTxSet(target, exclude)
-}
-
-// NotePeerHasTxSet delegates to NetworkSender; the Router calls it on
-// inbound mtHAVE_TRANSACTION_SET{tsHAVE} so PeerWithTxSet can later find
-// the advertising peer.
-func (a *Adaptor) NotePeerHasTxSet(peerID uint64, hash [32]byte) {
-	a.sender.NotePeerHasTxSet(peerID, hash)
 }
 
 // LedgerService returns the underlying ledger service for direct queries.
@@ -838,7 +759,18 @@ func (a *Adaptor) GenerateFlagLedgerPseudoTxs(prevLedger consensus.Ledger, paren
 	}
 	upcomingSeq := prev.Sequence() + 1
 
-	filtered := a.filterNegativeUNL(parentValidations)
+	// The producer boundary is intentionally defensive: only full validations
+	// for the exact parent hash/sequence may influence fee or amendment votes.
+	// The engine normally supplies this already-filtered snapshot from the
+	// tracker, but callers such as replay tools and tests can invoke the
+	// adaptor directly.
+	parentID := consensus.LedgerID(prev.ParentHash())
+	var parentSeq uint32
+	if prev.Sequence() > 0 {
+		parentSeq = prev.Sequence() - 1
+	}
+	filtered := filterFullValidations(parentValidations, parentID, parentSeq, a.IsTrusted)
+	filtered = a.filterNegativeUNL(filtered)
 
 	// Quorum gate. Standalone reports quorum 0.
 	if len(filtered) < a.GetQuorum() {
@@ -858,6 +790,26 @@ func (a *Adaptor) GenerateFlagLedgerPseudoTxs(prevLedger consensus.Ledger, paren
 		blobs = append(blobs, extra...)
 	}
 	return blobs
+}
+
+func filterFullValidations(
+	vals []*consensus.Validation,
+	ledgerID consensus.LedgerID,
+	ledgerSeq uint32,
+	isTrusted func(consensus.NodeID) bool,
+) []*consensus.Validation {
+	if len(vals) == 0 {
+		return vals
+	}
+	out := make([]*consensus.Validation, 0, len(vals))
+	for _, validation := range vals {
+		if validation == nil || !validation.Full || validation.LedgerID != ledgerID ||
+			validation.LedgerSeq != ledgerSeq || (isTrusted != nil && !isTrusted(validation.NodeID)) {
+			continue
+		}
+		out = append(out, validation)
+	}
+	return out
 }
 
 // filterNegativeUNL returns vals minus any validations signed by
@@ -921,19 +873,13 @@ func (a *Adaptor) BuildTxSet(txs [][]byte) (consensus.TxSet, error) {
 	return ts, nil
 }
 
-// SetOnTxSetBuilt installs a callback invoked once per BuildTxSet (after
-// caching); the CLI wires it to Overlay.BroadcastHaveTxSet. nil clears.
-func (a *Adaptor) SetOnTxSetBuilt(cb func(consensus.TxSetID)) {
-	a.onTxSetBuilt = cb
-}
-
 // HasTx reports whether the persistent open view contains this tx.
 // Used by the peer protocol for HaveSet / txSet-acquire negotiation.
-func (a *Adaptor) HasTx(id consensus.TxID) bool {
-	if a.ledgerService == nil {
-		return false
+func (a *Adaptor) HasTx(id consensus.TxID) (bool, error) {
+	if a.txLookup == nil {
+		return false, nil
 	}
-	return a.ledgerService.OpenLedgerHasTx([32]byte(id))
+	return a.txLookup.OpenLedgerHasTx([32]byte(id))
 }
 
 // GetTx returns the raw tx blob if it is in the persistent open view.
@@ -992,7 +938,7 @@ func (a *Adaptor) CloseTimeResolution() time.Duration {
 	if l != nil {
 		hdr := l.Header()
 		res := consensus.GetNextLedgerTimeResolution(
-			hdr.CloseTimeResolution,
+			uint32(hdr.CloseTimeResolution),
 			hdr.GetCloseAgree(),
 			hdr.LedgerIndex+1,
 		)

@@ -17,7 +17,7 @@ import (
 // ChannelVerifyMethod handles channel_verify: it checks a payment-channel
 // claim signature against the channel ID, amount, and public key, without
 // touching ledger state.
-type ChannelVerifyMethod struct{ BaseHandler }
+type ChannelVerifyMethod struct{ baseHandler }
 
 // channelVerifyRequest represents the request parameters
 type channelVerifyRequest struct {

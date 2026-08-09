@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
-	"github.com/LeJamon/go-xrpl/internal/tx"
 	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
 )
 
@@ -24,17 +23,14 @@ type AccountSetBuilder struct {
 	transferRate         *uint32
 	tickSize             *uint8
 	nfTokenMinter        string
-	fee                  uint64
+	fee                  *uint64
 	sequence             *uint32
 	flags                uint32
 }
 
 // AccountSet creates a new AccountSetBuilder.
 func AccountSet(account *jtx.Account) *AccountSetBuilder {
-	return &AccountSetBuilder{
-		account: account,
-		fee:     10, // Default fee: 10 drops
-	}
+	return &AccountSetBuilder{account: account}
 }
 
 // SetFlag sets a flag to enable on the account.
@@ -94,7 +90,7 @@ func (b *AccountSetBuilder) TransferRate(rate uint32) *AccountSetBuilder {
 	return b
 }
 
-// TickSize sets the tick size for offers (0, 3-15).
+// TickSize sets the tick size for offers (0, 3-16).
 func (b *AccountSetBuilder) TickSize(size uint8) *AccountSetBuilder {
 	b.tickSize = &size
 	return b
@@ -102,7 +98,7 @@ func (b *AccountSetBuilder) TickSize(size uint8) *AccountSetBuilder {
 
 // Fee sets the transaction fee in drops.
 func (b *AccountSetBuilder) Fee(f uint64) *AccountSetBuilder {
-	b.fee = f
+	b.fee = &f
 	return b
 }
 
@@ -177,7 +173,6 @@ func (b *AccountSetBuilder) AllowTrustLineLocking() *AccountSetBuilder {
 }
 
 // AuthorizedMinter sets the account as an authorized NFToken minter.
-// Reference: rippled's token::setMinter(account, minter).
 func (b *AccountSetBuilder) AuthorizedMinter(minter *jtx.Account) *AccountSetBuilder {
 	flag := accounttx.AccountSetFlagAuthorizedNFTokenMinter
 	b.setFlag = &flag
@@ -185,18 +180,12 @@ func (b *AccountSetBuilder) AuthorizedMinter(minter *jtx.Account) *AccountSetBui
 	return b
 }
 
-// ClearMinter clears the authorized NFToken minter.
-func (b *AccountSetBuilder) ClearMinter() *AccountSetBuilder {
-	flag := accounttx.AccountSetFlagAuthorizedNFTokenMinter
-	b.clearFlag = &flag
-	b.nfTokenMinter = ""
-	return b
-}
-
 // Build constructs the AccountSet transaction.
-func (b *AccountSetBuilder) Build() tx.Transaction {
+func (b *AccountSetBuilder) Build() *accounttx.AccountSet {
 	as := accounttx.NewAccountSet(b.account.Address)
-	as.Fee = fmt.Sprintf("%d", b.fee)
+	if b.fee != nil {
+		as.Fee = fmt.Sprintf("%d", *b.fee)
+	}
 
 	if b.setFlag != nil {
 		as.SetFlag = b.setFlag
@@ -245,9 +234,4 @@ func (b *AccountSetBuilder) Build() tx.Transaction {
 	}
 
 	return as
-}
-
-// BuildAccountSet is a convenience method that returns the concrete *accounttx.AccountSet type.
-func (b *AccountSetBuilder) BuildAccountSet() *accounttx.AccountSet {
-	return b.Build().(*accounttx.AccountSet)
 }

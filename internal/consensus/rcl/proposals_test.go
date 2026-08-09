@@ -7,7 +7,7 @@ import (
 )
 
 func TestDisputeTracker_CreateAndVote(t *testing.T) {
-	dt := NewDisputeTracker()
+	dt := newDisputeTracker()
 
 	txID := consensus.TxID{1}
 	tx := []byte("test tx")
@@ -65,7 +65,7 @@ func TestDisputeTracker_CreateAndVote(t *testing.T) {
 }
 
 func TestDisputeTracker_UnVote(t *testing.T) {
-	dt := NewDisputeTracker()
+	dt := newDisputeTracker()
 
 	tx1 := consensus.TxID{1}
 	tx2 := consensus.TxID{2}
@@ -114,7 +114,7 @@ func TestDisputeTracker_UnVote(t *testing.T) {
 }
 
 func TestDisputeTracker_UpdateDisputes(t *testing.T) {
-	dt := NewDisputeTracker()
+	dt := newDisputeTracker()
 
 	tx1 := consensus.TxID{1}
 	tx2 := consensus.TxID{2}
@@ -147,7 +147,7 @@ func TestDisputeTracker_UpdateDisputes(t *testing.T) {
 }
 
 func TestDisputeTracker_UpdateOurVote_AvalancheRamp(t *testing.T) {
-	dt := NewDisputeTracker()
+	dt := newDisputeTracker()
 	parms := consensus.DefaultConsensusParms()
 
 	txID := consensus.TxID{1}
@@ -233,5 +233,24 @@ func TestDisputeTracker_UpdateOurVote_AvalancheRamp(t *testing.T) {
 	dt.UpdateOurVote(210, true, parms)
 	if ramp.AvalancheState != consensus.AvalancheStuck {
 		t.Errorf("after 210%% time, state = %v, want Stuck", ramp.AvalancheState)
+	}
+}
+
+func TestDisputeTracker_AllReturnsDetachedSnapshots(t *testing.T) {
+	dt := newDisputeTracker()
+	txID := consensus.TxID{1}
+	peer := consensus.NodeID{2}
+	dt.CreateDispute(txID, []byte{1, 2}, true)
+	dt.SetVote(txID, peer, true)
+
+	snapshot := dt.All()[0]
+	snapshot.OurVote = false
+	snapshot.Tx[0] = 9
+	snapshot.Votes[peer] = false
+	snapshot.Votes[consensus.NodeID{3}] = true
+
+	stored := dt.Dispute(txID)
+	if !stored.OurVote || stored.Tx[0] != 1 || !stored.Votes[peer] || len(stored.Votes) != 1 {
+		t.Fatalf("mutating dispute snapshot changed tracker state: %#v", stored)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // ---------------------------------------------------------------------------
@@ -35,7 +36,7 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 		(rules.Enabled(amendment.FeatureSingleAssetVault) || rules.Enabled(amendment.FeatureLendingProtocol))
 
 	for _, e := range entries {
-		if e.EntryType == "MPTokenIssuance" {
+		if e.EntryType == entry.TypeMPTokenIssuance {
 			if e.IsDelete {
 				mptIssuancesDeleted++
 			} else if e.Before == nil {
@@ -60,7 +61,7 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 					!sameOptionalString(before.ReferenceHolding, after.ReferenceHolding)
 			}
 		}
-		if e.EntryType == "MPToken" {
+		if e.EntryType == entry.TypeMPToken {
 			if e.IsDelete {
 				mptokensDeleted++
 				if fixCleanup {
@@ -81,7 +82,7 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 				}
 			}
 		}
-		if fixCleanup && e.IsDelete && e.EntryType == "RippleState" {
+		if fixCleanup && e.IsDelete && e.EntryType == entry.TypeRippleState {
 			line, err := state.ParseRippleState(e.Before)
 			if err != nil {
 				return invalidMPTEntry("deleted RippleState", err)

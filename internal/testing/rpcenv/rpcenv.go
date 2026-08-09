@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // Env pairs a live testing.TestEnv with the production RPC handler
@@ -21,6 +22,7 @@ type Env struct {
 	*jtx.TestEnv
 
 	t        testing.TB
+	adapter  *ledgerAdapter
 	services *types.ServiceContainer
 	registry *types.MethodRegistry
 }
@@ -37,12 +39,25 @@ func Wrap(t testing.TB, env *jtx.TestEnv) *Env {
 	registry := types.NewMethodRegistry()
 	handlers.RegisterAll(registry)
 	adapter := newLedgerAdapter(env)
+	services := types.NewServiceContainer(adapter)
+	services.Capabilities.PathSearchMax = 3
 	return &Env{
 		TestEnv:  env,
 		t:        t,
-		services: types.NewServiceContainer(adapter),
+		adapter:  adapter,
+		services: services,
 		registry: registry,
 	}
+}
+
+func (e *Env) Close() {
+	e.TestEnv.Close()
+	e.adapter.recordClosedLedger()
+}
+
+func (e *Env) Submit(transaction txcore.Transaction) jtx.TxResult {
+	e.t.Helper()
+	return e.TestEnv.Submit(transaction)
 }
 
 // Services exposes the container so callers can attach additional facets

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"sort"
@@ -11,12 +12,13 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-type GetAggregatePriceMethod struct{ BaseHandler }
+type GetAggregatePriceMethod struct{ baseHandler }
 
 type aggregatePriceAmount struct {
 	number state.XRPLNumber
@@ -92,7 +94,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 	ledgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
@@ -103,7 +105,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 	if selectorErr != nil {
 		return nil, selectorErr
 	}
-	targetLedger, lookupValidated, lookupErr := LookupLedger(ctx, ledgerSpec)
+	targetLedger, lookupValidated, lookupErr := lookupLedger(ctx, ledgerSpec)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
@@ -140,21 +142,32 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 		}
 
 		entry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, keylet.Oracle(accountID, documentID).Key, ledgerIndex)
-		if err != nil || entry == nil {
-			continue
+		if err != nil {
+			if errors.Is(err, svcerr.ErrLedgerEntryNotFound) {
+				continue
+			}
+			return nil, rpcInternalError("get_aggregate_price: oracle lookup failed", err).WithExtra(lookupFields)
+		}
+		if entry == nil {
+			return nil, rpcInternalError("get_aggregate_price: oracle lookup returned no result", nil).WithExtra(lookupFields)
+		}
+		if _, err := state.ParseOracle(entry.Node); err != nil {
+			return nil, rpcInternalError("get_aggregate_price: oracle decoding failed", err).WithExtra(lookupFields)
 		}
 		decoded, err := binarycodec.Decode(hex.EncodeToString(entry.Node))
 		if err != nil {
-			continue
+			return nil, rpcInternalError("get_aggregate_price: oracle decoding failed", err).WithExtra(lookupFields)
 		}
 
-		iterateAggregatePriceData(ctx, decoded, func(node map[string]any) bool {
+		if err := iterateAggregatePriceData(ctx, decoded, func(node map[string]any) bool {
 			point, found := aggregatePriceFromNode(node, baseAsset, quoteAsset)
 			if found {
 				prices = append(prices, point)
 			}
 			return found
-		})
+		}); err != nil {
+			return nil, rpcInternalError("get_aggregate_price: transaction decoding failed", err).WithExtra(lookupFields)
+		}
 	}
 
 	if len(prices) == 0 {
@@ -257,30 +270,36 @@ func parseCurrencyParam(raw json.RawMessage) (string, error) {
 	return value, nil
 }
 
-func iterateAggregatePriceData(ctx *types.RpcContext, initial map[string]any, visit func(map[string]any) bool) {
+func iterateAggregatePriceData(ctx *types.RpcContext, initial map[string]any, visit func(map[string]any) bool) error {
 	oracle := initial
 	chain := initial
 	isNew := false
 	for history := uint8(0); ; {
 		if oracle == nil || visit(oracle) || isNew {
-			return
+			return nil
 		}
 		history++
 		if history > 3 {
-			return
+			return nil
 		}
 
 		previousID, previousSequence, ok := aggregatePreviousTransaction(chain)
 		if !ok {
-			return
+			return nil
 		}
 		transaction, err := ctx.Services.Ledger.GetTransaction(previousID)
-		if err != nil || transaction == nil || transaction.LedgerIndex != previousSequence {
-			return
+		if err != nil {
+			if errors.Is(err, svcerr.ErrTxnNotFound) || errors.Is(err, svcerr.ErrLedgerNotFound) {
+				return nil
+			}
+			return err
+		}
+		if transaction == nil || transaction.LedgerIndex != previousSequence {
+			return nil
 		}
 		stored, err := decodeTxBlob(transaction.TxData)
 		if err != nil {
-			return
+			return err
 		}
 
 		found := false
@@ -292,7 +311,7 @@ func iterateAggregatePriceData(ctx *types.RpcContext, initial map[string]any, vi
 			chain = inner
 			oracle, isNew = inner["NewFields"].(map[string]any)
 			if isNew && history == 1 {
-				return
+				return nil
 			}
 			if !isNew {
 				oracle, _ = inner["FinalFields"].(map[string]any)
@@ -301,7 +320,7 @@ func iterateAggregatePriceData(ctx *types.RpcContext, initial map[string]any, vi
 			break
 		}
 		if !found {
-			return
+			return nil
 		}
 	}
 }
@@ -355,7 +374,7 @@ func aggregatePriceFromNode(node map[string]any, baseAsset, quoteAsset string) (
 			}
 		}
 		return aggregatePricePoint{
-			price:          newAggregatePriceAmount(int64(assetPrice), -int(scale)),
+			price:          newAggregatePriceAmountUnsigned(assetPrice, -int(scale)),
 			lastUpdateTime: lastUpdateTime,
 		}, true
 	}
@@ -406,6 +425,10 @@ func aggregateUint32(value any) (uint32, bool) {
 
 func newAggregatePriceAmount(mantissa int64, exponent int) aggregatePriceAmount {
 	return aggregatePriceAmountFromNumber(state.NewXRPLNumber(mantissa, exponent))
+}
+
+func newAggregatePriceAmountUnsigned(mantissa uint64, exponent int) aggregatePriceAmount {
+	return aggregatePriceAmountFromNumber(state.NewXRPLNumberFromUint(mantissa, exponent))
 }
 
 func aggregatePriceAmountFromNumber(number state.XRPLNumber) aggregatePriceAmount {
@@ -491,15 +514,25 @@ func aggregatePriceStats(prices []aggregatePricePoint) (aggregatePriceAmount, st
 	}
 	mean = mean.divide(newAggregatePriceAmount(int64(len(prices)), 0))
 
-	standardDeviation := state.NewXRPLNumber(0, 0)
+	standardDeviation := state.NewXRPLNumberScaled(0, 0, state.MantissaScaleLarge, state.RoundToNearest)
 	if len(prices) > 1 {
 		for _, point := range prices {
-			difference := point.price.subtract(mean).number
+			amountDifference := point.price.subtract(mean).number
+			difference := state.NewXRPLNumberScaled(
+				amountDifference.Mantissa(),
+				amountDifference.Exponent(),
+				state.MantissaScaleLarge,
+				state.RoundToNearest,
+			)
 			standardDeviation = standardDeviation.Add(difference.Mul(difference))
 		}
-		standardDeviation = aggregatePriceRoot2(
-			standardDeviation.Div(state.NewXRPLNumberFromInt(int64(len(prices) - 1))),
+		divisor := state.NewXRPLNumberScaled(
+			int64(len(prices)-1),
+			0,
+			state.MantissaScaleLarge,
+			state.RoundToNearest,
 		)
+		standardDeviation = standardDeviation.Div(divisor).Root2()
 	}
 	return mean, standardDeviation
 }
@@ -510,38 +543,6 @@ func aggregatePriceMedian(prices []aggregatePricePoint) aggregatePriceAmount {
 		return prices[middle].price
 	}
 	return prices[middle-1].price.add(prices[middle].price).divide(newAggregatePriceAmount(2, 0))
-}
-
-func aggregatePriceRoot2(value state.XRPLNumber) state.XRPLNumber {
-	one := state.NewXRPLNumberFromInt(1)
-	if value.Equal(one) || value.IsZero() {
-		return value
-	}
-	if value.Signum() < 0 {
-		panic("aggregate price Number root of negative value")
-	}
-
-	exponent := value.Exponent() + 16
-	if exponent%2 != 0 {
-		exponent++
-	}
-	scaled := state.NewXRPLNumber(value.Mantissa(), value.Exponent()-exponent)
-	a0 := state.NewXRPLNumberFromInt(18)
-	a1 := state.NewXRPLNumberFromInt(144)
-	a2 := state.NewXRPLNumberFromInt(-60)
-	denominator := state.NewXRPLNumberFromInt(105)
-	result := a2.Mul(scaled).Add(a1).Mul(scaled).Add(a0).Div(denominator)
-	two := state.NewXRPLNumberFromInt(2)
-	var previous, previousPrevious state.XRPLNumber
-	for {
-		previousPrevious = previous
-		previous = result
-		result = result.Add(scaled.Div(result)).Div(two)
-		if result.Equal(previous) || result.Equal(previousPrevious) {
-			break
-		}
-	}
-	return state.NewXRPLNumber(result.Mantissa(), result.Exponent()+exponent/2)
 }
 
 func (m *GetAggregatePriceMethod) RequiredCondition() types.Condition {

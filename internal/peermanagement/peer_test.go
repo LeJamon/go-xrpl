@@ -110,6 +110,43 @@ func TestPeer_Accessors(t *testing.T) {
 	assert.Nil(t, peer.Capabilities())
 }
 
+func TestPeerCapabilitiesSnapshotCannotMutateNegotiatedState(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+	peer := NewPeer(PeerID(1), Endpoint{Host: "192.0.2.1", Port: 51235}, true, id, make(chan Event, 1))
+	peer.capabilities = NewPeerCapabilities()
+	peer.capabilities.Features.Enable(FeatureCompression)
+
+	snapshot := peer.Capabilities()
+	require.NotNil(t, snapshot)
+	snapshot.Features.Disable(FeatureCompression)
+	snapshot.Features.Enable(FeatureTxReduceRelay)
+
+	assert.True(t, peer.Capabilities().HasFeature(FeatureCompression))
+	assert.False(t, peer.Capabilities().HasFeature(FeatureTxReduceRelay))
+}
+
+func TestPeerRemotePublicKeyAccessorsReturnOwnedValues(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+	peer := NewPeer(PeerID(1), Endpoint{Host: "192.0.2.1", Port: 51235}, true, id, make(chan Event, 1))
+	peer.remotePubKey, err = NewPublicKeyToken(id.PublicKey())
+	require.NoError(t, err)
+
+	bytes := peer.RemotePublicKeyBytes()
+	require.Len(t, bytes, CompressedPubKeyLen)
+	original := append([]byte(nil), bytes...)
+	bytes[0] ^= 0xff
+	assert.Equal(t, original, peer.RemotePublicKeyBytes())
+
+	token := peer.RemotePublicKey()
+	require.NotNil(t, token)
+	tokenBytes := token.Bytes()
+	tokenBytes[0] ^= 0xff
+	assert.Equal(t, original, peer.RemotePublicKeyBytes())
+	assert.Equal(t, token.Encode(), peer.RemotePublicKeyEncoded())
+}
+
 // TestPeer_Info tests the Info method
 func TestPeer_Info(t *testing.T) {
 	id, err := NewIdentity()
@@ -160,14 +197,8 @@ func TestPeer_SendBufferFull(t *testing.T) {
 	peer.setState(PeerStateConnected)
 	peer.closed.Store(false)
 
-	// Fill the send buffer
-	for range DefaultSendBufferSize {
-		select {
-		case peer.send <- []byte("data"):
-		default:
-			// Buffer full
-			break
-		}
+	for range ordinarySendMaximum {
+		require.NoError(t, peer.Send([]byte("data")))
 	}
 
 	// Next send should fail with buffer full
@@ -221,16 +252,19 @@ func TestPeerReadLoopSkipsUnknownMessage(t *testing.T) {
 	malformedCompressed := []byte{0xff}
 
 	var frames bytes.Buffer
-	require.NoError(t, message.WriteMessageCompressed(
-		&frames,
+	frames.Write(rawTestWireMessage(
 		message.MessageType(9999),
 		malformedCompressed,
 		message.AlgorithmLZ4,
 		message.MaxMessageSize,
 	))
-	require.NoError(t, message.WriteMessage(&frames, message.MessageType(9998), unknownPayload))
+	unknownFrame, err := message.BuildWireMessage(message.MessageType(9998), unknownPayload)
+	require.NoError(t, err)
+	frames.Write(unknownFrame)
 	knownPayload := []byte{0x08, 0x00}
-	require.NoError(t, message.WriteMessage(&frames, message.TypePing, knownPayload))
+	knownFrame, err := message.BuildWireMessage(message.TypePing, knownPayload)
+	require.NoError(t, err)
+	frames.Write(knownFrame)
 	peer.bufReader = bufio.NewReader(bytes.NewReader(frames.Bytes()))
 
 	err = peer.readLoop(context.Background())
@@ -238,7 +272,7 @@ func TestPeerReadLoopSkipsUnknownMessage(t *testing.T) {
 	assert.True(t, errors.Is(err, io.EOF))
 	require.Len(t, events, 1)
 	evt := <-events
-	assert.Equal(t, uint16(message.TypePing), evt.MessageType)
+	assert.Equal(t, message.TypePing, evt.MessageType)
 	assert.Equal(t, knownPayload, evt.Payload)
 	assert.Zero(t, peer.BadDataCount())
 	assert.Zero(t, peer.consecutiveDecompressFailures.Load())

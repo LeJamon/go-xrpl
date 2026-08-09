@@ -3,6 +3,7 @@ package types
 import (
 	"context"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -169,6 +170,12 @@ type ServerInfoConfigSnapshot struct {
 	GitHash      string
 }
 
+// RPCCapabilities is the immutable startup policy used by RPC handlers.
+type RPCCapabilities struct {
+	SigningEnabled bool
+	PathSearchMax  int
+}
+
 // ManifestLookup is the read-only facet of the validator-manifest cache
 // that the `manifest` RPC needs. Expressed as an interface (not a
 // concrete type) so internal/rpc/types doesn't import
@@ -203,10 +210,15 @@ type ServiceContainer struct {
 
 	// NodePublicKey is the base58-encoded node identity public key (e.g. "n9...")
 	NodePublicKey string
+	// SystemTime supplies the wall clock used in time-bearing RPC projections.
+	SystemTime func() time.Time
 
 	// ServerInfoConfig is the immutable startup configuration and build
 	// metadata surfaced by server_info and server_state.
 	ServerInfoConfig ServerInfoConfigSnapshot
+
+	// Capabilities freezes operator-controlled RPC policy before listeners serve.
+	Capabilities RPCCapabilities
 
 	// LastCloseInfo returns proposer count and convergence time (ms) from the last consensus round
 	LastCloseInfo func() (proposers int, convergeTimeMs int)
@@ -313,20 +325,18 @@ type ServiceContainer struct {
 	// (standalone / RPC-only) — handlers then report empty results.
 	PeerReservationList func() []PeerReservationEntry
 
-	// PeerConnect initiates an outbound peer connection to a host:port,
-	// backing the admin `connect` RPC (rippled Connect.cpp →
-	// overlay().connect()). The attempt runs in the background, mirroring
-	// rippled's non-blocking connect. Nil in standalone / RPC-only
-	// configurations (no overlay) — the handler falls back to reporting
-	// that peers are unavailable.
+	// PeerConnect admits an outbound peer connection to a host:port for the
+	// runtime-owned bounded scheduler backing the admin `connect` RPC. The
+	// function is non-blocking and returns admission errors synchronously;
+	// duplicate queued/running addresses are idempotent. Nil in standalone /
+	// RPC-only configurations (no live overlay).
 	PeerConnect func(addr string) error
 
 	// ResourceBlacklist returns the overlay resource manager's per-endpoint
 	// reputation table filtered by an optional threshold (nil applies the
 	// WarningThreshold default), backing the admin `black_list` RPC
 	// (rippled BlackList.cpp → ResourceManager::getJson). Keyed by endpoint
-	// address with {local, remote, type} values. Nil when the overlay isn't
-	// wired — the handler returns an empty object.
+	// address with {local, remote, type} values.
 	ResourceBlacklist func(threshold *int) map[string]any
 
 	// StateAccounting returns the operating-mode state-machine
@@ -351,6 +361,13 @@ type ServiceContainer struct {
 	// subsystem lands — handler suppresses the fields when nil.
 	LoadFactorFees func() LoadFactorFees
 
+	// Nil in RPC-only test contexts, which handlers treat as unloaded.
+	IsLoadedCluster func() bool
+
+	// IsLoadedLocal reports whether local fee pressure is elevated. Nil in
+	// RPC-only test contexts, which handlers treat as unloaded.
+	IsLoadedLocal func() bool
+
 	// ClientLoad is the shared in-flight client-RPC counter that drives
 	// the rpcTOO_BUSY load-shedding gates. Approximates rippled's
 	// jtCLIENT backpressure via in-flight RPC count: rippled measures
@@ -364,6 +381,12 @@ type ServiceContainer struct {
 	// Nil in standalone / RPC-only test contexts — every gate treats
 	// nil as "never shed".
 	ClientLoad *ClientLoadShedder
+
+	// RPCDiagnostics records completed and currently-running RPC handlers for
+	// server_info/server_state. It is shared by every transport so the snapshot
+	// represents the node rather than one listener.
+	RPCDiagnostics      RPCDiagnostics
+	SubscriptionMetrics func() SubscriptionMetrics
 
 	// GetCounts returns the runtime counters surfaced by the get_counts RPC
 	// (node-store I/O counters and locally-held transactions). Nil until the
@@ -446,6 +469,11 @@ type ServiceContainer struct {
 	// WebSocket server is wired — the handlers then report notSupported.
 	URLSubscriptions URLSubscriptionService
 
+	// AccountHistorySubscriptions is the optional provider for rippled's
+	// experimental account_history_tx_stream. Nil means the node cannot perform
+	// the historical replay/live handoff and subscribe requests return notEnabled.
+	AccountHistorySubscriptions AccountHistorySubscriptionService
+
 	// QueueAccountTxs returns the transactions currently queued in the TxQ
 	// for one account, sorted by SeqProxy. Backs account_info's queue_data
 	// (rippled TxQ::getAccountTxs → AccountInfo.cpp:193-283). Nil in
@@ -474,6 +502,26 @@ type URLSubscriptionService interface {
 	// subscription and drops the registry entry once no stream
 	// subscriptions remain. An unknown url is silent success.
 	Unsubscribe(ctx *RpcContext, request SubscriptionRequest) (map[string]any, *RpcError)
+}
+
+// AccountHistorySubscriptionService owns the historical replay and its live
+// continuation for account_history_tx_stream. Subscribe is called only after
+// request, transaction-table, and provider validation; implementations derive
+// asynchronous work from conn.Context(). Unsubscribe is an idempotent no-op for
+// unknown accounts.
+type AccountHistorySubscriptionService interface {
+	ValidateSubscribe(conn AccountHistorySubscriptionSink, account string) *RpcError
+	Subscribe(conn AccountHistorySubscriptionSink, account string)
+	Unsubscribe(conn AccountHistorySubscriptionSink, account string, historyOnly bool)
+	RemoveConnection(conn AccountHistorySubscriptionSink)
+	HasSubscriptions(conn AccountHistorySubscriptionSink) bool
+}
+
+type AccountHistorySubscriptionSink interface {
+	ID() string
+	Context() context.Context
+	Done() <-chan struct{}
+	TrySend([]byte) bool
 }
 
 // QueuedTxInfo is the per-transaction view of a TxQ candidate surfaced by
@@ -519,18 +567,20 @@ type LedgerCleanerParams struct {
 	Ledger     *uint32
 	MinLedger  *uint32
 	MaxLedger  *uint32
-	Full       bool
-	CheckNodes bool
+	Full       *bool
+	CheckNodes *bool
+	FixTxns    *bool
 	Stop       bool
 }
 
 // LedgerCleanerStatus mirrors internal/ledger/cleaner.Status (layering
-// boundary). State is "idle" or "running".
+// boundary). State is "idle", "running", or "stopped".
 type LedgerCleanerStatus struct {
 	State          string
 	MinLedger      uint32
 	MaxLedger      uint32
 	CheckNodes     bool
+	FixTxns        bool
 	Failures       int
 	LedgersChecked uint64
 	NodesChecked   uint64
@@ -555,6 +605,42 @@ type NodeStoreCounts struct {
 	Writes     uint64 // node_writes
 	ReadBytes  uint64 // node_read_bytes
 	WriteBytes uint64 // node_written_bytes
+}
+
+// RPCDiagnostics records handler execution after admission and exposes an
+// immutable point-in-time snapshot. The finish callback receives true only
+// when the handler panicked; ordinary RPC error results are completed calls.
+type RPCDiagnostics interface {
+	Start(method string) (finish func(panicked bool))
+	Snapshot() RPCDiagnosticsSnapshot
+}
+
+type RPCDiagnosticsSnapshot struct {
+	Methods map[string]RPCMethodDiagnostics
+	Current []RPCActivity
+}
+
+type SubscriptionMetrics struct {
+	Connections               uint64
+	Items                     uint64
+	RequestLimitRejections    uint64
+	ConnectionLimitRejections uint64
+	GlobalLimitRejections     uint64
+	DeliveriesQueued          uint64
+	DeliveriesDropped         uint64
+	DeliveryDisconnects       uint64
+}
+
+type RPCMethodDiagnostics struct {
+	Started    uint64
+	Finished   uint64
+	Errored    uint64
+	DurationUs uint64
+}
+
+type RPCActivity struct {
+	Method     string
+	DurationUs uint64
 }
 
 // FullBelowCounts holds the shared SHAMap completeness-cache metrics.
@@ -651,10 +737,19 @@ const (
 type ClientLoadShedder struct {
 	inFlight       atomic.Int64
 	pathfindActive atomic.Int64
+	pathfindOnce   sync.Once
+	pathfindReady  chan struct{}
 }
 
 func NewClientLoadShedder() *ClientLoadShedder {
 	return &ClientLoadShedder{}
+}
+
+func (s *ClientLoadShedder) pathfindSignal() chan struct{} {
+	s.pathfindOnce.Do(func() {
+		s.pathfindReady = make(chan struct{}, int(MaxPathfindsInProgress))
+	})
+	return s.pathfindReady
 }
 
 // Begin records the start of a client-RPC dispatch.
@@ -702,11 +797,43 @@ func (s *ClientLoadShedder) AcquirePathfind() bool {
 	}
 }
 
+// WaitPathfind blocks until a bounded path-finding slot is available or the
+// request is canceled.
+func (s *ClientLoadShedder) WaitPathfind(ctx context.Context) bool {
+	if s == nil {
+		return true
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for !s.AcquirePathfind() {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-s.pathfindSignal():
+		}
+	}
+	return true
+}
+
+// AcquirePathfindUnlimited enters the path-finding critical section without
+// enforcing the non-admin concurrency cap.
+func (s *ClientLoadShedder) AcquirePathfindUnlimited() {
+	if s == nil {
+		return
+	}
+	s.pathfindActive.Add(1)
+}
+
 func (s *ClientLoadShedder) ReleasePathfind() {
 	if s == nil {
 		return
 	}
 	s.pathfindActive.Add(-1)
+	select {
+	case s.pathfindSignal() <- struct{}{}:
+	default:
+	}
 }
 
 // PathfindActive returns the current concurrent-path-find count.
@@ -723,7 +850,6 @@ type LedgerNavigator interface {
 	GetClosedLedgerIndex() uint32
 	GetValidatedLedgerIndex() uint32
 	AcceptLedger(ctx context.Context) (uint32, error)
-	AcceptLedgerAt(ctx context.Context, closeTime time.Time) (uint32, error)
 	IsStandalone() bool
 }
 
@@ -782,10 +908,11 @@ type FailHardSubmitter interface {
 }
 
 type TransactionSubmitter interface {
-	SubmitTransaction(txJSON []byte, txBlobHex ...string) (*SubmitResult, error)
+	// txBlobHex is the signed transaction blob, or an empty string when the
+	// caller has only transaction JSON.
+	SubmitTransaction(txJSON []byte, txBlobHex string) (*SubmitResult, error)
 	SimulateTransaction(txJSON []byte) (*SubmitResult, error)
 	GetTransaction(txHash [32]byte) (*TransactionInfo, error)
-	StoreTransaction(txHash [32]byte, txData []byte) error
 	GetTransactionHistory(ctx context.Context, startIndex uint32) (*TxHistoryResult, error)
 
 	// GetAutofillFee returns the Fee a transaction should carry to enter
@@ -898,6 +1025,13 @@ type LedgerViewSource interface {
 	GetLedgerViewByHash(hash [32]byte) (LedgerStateView, LedgerReader, error)
 }
 
+// OpenLedgerViewSource provides an immutable snapshot of the current
+// open-ledger state for operations such as transaction path construction.
+// It is optional so lightweight RPC mocks can continue to omit the view.
+type OpenLedgerViewSource interface {
+	GetOpenLedgerView() (LedgerStateView, error)
+}
+
 // LedgerStateView provides low-level read access to ledger state.
 // This interface matches tx.LedgerView for pathfinding and other operations
 // that need direct state access. Any *ledger.Ledger satisfies this.
@@ -909,8 +1043,8 @@ type LedgerStateView interface {
 	Erase(k keylet.Keylet) error
 	ForEach(fn func(key [32]byte, data []byte) bool) error
 	Succ(key [32]byte) ([32]byte, []byte, bool, error)
-	AdjustDropsDestroyed(d drops.XRPAmount)
-	TxExists(txID [32]byte) bool
+	AdjustDropsDestroyed(d drops.XRPAmount) error
+	TxExists(txID [32]byte) (bool, error)
 	Rules() *amendment.Rules
 	LedgerSeq() uint32
 }
@@ -981,6 +1115,13 @@ type LedgerAmendmentRulesSource interface {
 	LedgerAmendmentRules() *amendment.Rules
 }
 
+// LedgerAmendmentRulesErrorSource is the error-aware amendment-rules facet.
+// It is optional to preserve the existing LedgerReader mock contract while
+// allowing production adapters to surface rules-loading failures.
+type LedgerAmendmentRulesErrorSource interface {
+	LedgerAmendmentRulesWithError() (*amendment.Rules, error)
+}
+
 // LedgerServerInfo contains server status information from the ledger service
 type LedgerServerInfo struct {
 	Standalone            bool
@@ -1030,10 +1171,10 @@ type TxQServerMetrics struct {
 // `fee` handler needs txCount / txPerLedger / txInLedger / median /
 // queue-max in addition to the load_factor levels.
 type TxQFeeMetrics struct {
-	TxCount               uint32
-	TxQMaxSize            *uint32 // nil → no limit, omits max_queue_size
-	TxInLedger            uint32
-	TxPerLedger           uint32
+	TxCount               uint64
+	TxQMaxSize            *uint64 // nil → no limit, omits max_queue_size
+	TxInLedger            uint64
+	TxPerLedger           uint64
 	ReferenceFeeLevel     uint64
 	MinProcessingFeeLevel uint64
 	MedFeeLevel           uint64
@@ -1102,8 +1243,23 @@ type SubmitResult struct {
 	// ValidatedLedger is the highest validated ledger sequence
 	ValidatedLedger uint32
 
+	// CurrentLedgerState is the immutable state snapshot captured at submit
+	// time. It is nil when no validated ledger exists or the authoritative
+	// account/fee state could not be derived.
+	CurrentLedgerState *SubmitLedgerState
+
 	// Metadata is nil when the transaction produced no metadata.
 	Metadata *SubmitMetadata
+}
+
+// SubmitLedgerState contains the four current-ledger values returned by
+// submit. The pointer on SubmitResult distinguishes an unavailable snapshot
+// from valid zero-valued fields.
+type SubmitLedgerState struct {
+	ValidatedLedgerIndex     uint32
+	OpenLedgerCost           uint64
+	AccountSequenceNext      uint32
+	AccountSequenceAvailable uint32
 }
 
 // SubmitMetadata carries simulation metadata in JSON and binary form
@@ -1500,20 +1656,10 @@ type NFTOffersResult struct {
 }
 
 // NewServiceContainer constructs a ServiceContainer wired to the given
-// ledger service. Callers attach the dispatcher, peer hooks, manifest
-// cache, etc. afterwards as components come online.
+// ledger service. Callers attach the runtime services as components come
+// online.
 func NewServiceContainer(ledger LedgerService) *ServiceContainer {
 	return &ServiceContainer{
 		Ledger: ledger,
 	}
-}
-
-// SetDispatcher sets the method dispatcher on the service container.
-func (sc *ServiceContainer) SetDispatcher(d MethodDispatcher) {
-	sc.Dispatcher = d
-}
-
-// SetShutdownFunc sets the shutdown function on the service container.
-func (sc *ServiceContainer) SetShutdownFunc(f func()) {
-	sc.ShutdownFunc = f
 }

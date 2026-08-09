@@ -86,11 +86,11 @@ func TestArraySizeRpcError(t *testing.T) {
 // default, explicit 0 -> invalidParams for every role, malformed ->
 // expected_field, and non-admin clamping. Reference: rippled RPCHelpers.cpp.
 func TestReadLimitField(t *testing.T) {
-	r := LimitRange{Min: 10, Default: 200, Max: 400}
+	r := limitRange{Min: 10, Default: 200, Max: 400}
 
 	check := func(t *testing.T, params string, unlimited bool) (uint32, *types.RpcError) {
 		t.Helper()
-		return ReadLimitField(json.RawMessage(params), r, unlimited)
+		return readLimitField(json.RawMessage(params), r, unlimited)
 	}
 
 	t.Run("absent -> default", func(t *testing.T) {

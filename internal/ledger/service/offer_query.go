@@ -109,6 +109,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		return nil, err
 	}
 	view := contextLedgerView{Ledger: targetLedger, ctx: ctx}
+	numberContext := tx.NumberContextForRules(nil)
 
 	bookBase, err := computeBookBase(takerPays, takerGets, domainHex)
 	if err != nil {
@@ -265,7 +266,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 				bookOffer, berr := s.buildBookOffer(
 					view, parentCloseTime, offer, offerKey, dirQuality, saDirRate,
 					takerGets, taker, getsIssuer, rate, bGlobalFreeze,
-					reserveBase, reserveIncrement, balances,
+					reserveBase, reserveIncrement, balances, numberContext,
 				)
 				if berr != nil {
 					return berr
@@ -334,6 +335,7 @@ func (s *Service) buildBookOffer(
 	bGlobalFreeze bool,
 	reserveBase, reserveIncrement uint64,
 	balances map[string]tx.Amount,
+	numberContext state.NumberContext,
 ) (BookOffer, error) {
 	bookOffer := BookOffer{
 		Account:           offer.Account,
@@ -415,7 +417,12 @@ func (s *Service) buildBookOffer(
 	ownerFundsLimit := ownerFunds
 	if rate != tx.TransferRateParity && !ownerOwnsIssue && taker != getsIssuer {
 		offerRate = rate
-		ownerFundsLimit = ownerFunds.MulRatio(tx.TransferRateParity, rate, false)
+		ownerFundsLimit = ownerFunds.MulRatioWithNumberContext(
+			tx.TransferRateParity,
+			rate,
+			false,
+			numberContext,
+		)
 	}
 
 	var takerGetsFunded tx.Amount
@@ -446,14 +453,23 @@ func (s *Service) buildBookOffer(
 	// holds in both branches; surface a programming error if it isn't.
 	ownerPays := takerGetsFunded
 	if offerRate != tx.TransferRateParity {
-		scaled := takerGetsFunded.MulRatio(offerRate, tx.TransferRateParity, false)
+		scaled := takerGetsFunded.MulRatioWithNumberContext(
+			offerRate,
+			tx.TransferRateParity,
+			false,
+			numberContext,
+		)
 		if scaled.Compare(ownerFunds) > 0 {
 			ownerPays = ownerFunds
 		} else {
 			ownerPays = scaled
 		}
 	}
-	remaining, subErr := ownerFunds.Sub(ownerPays)
+	remaining, subErr := ownerFunds.SubWithNumberContext(
+		ownerPays,
+		numberContext,
+		state.RoundToNearest,
+	)
 	if subErr != nil {
 		return BookOffer{}, fmt.Errorf("book_offers running balance: %w", subErr)
 	}

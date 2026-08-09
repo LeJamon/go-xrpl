@@ -9,9 +9,10 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
-// relayRecorder is a NetworkSender that records SendToPeer / NotePeerHasTxSet
+// relayRecorder records SendToPeer / NotePeerHasTxSet
 // and serves configurable PeerWithLedger / PeerWithTxSet answers, so the
 // GetLedger relay path can be exercised without a real overlay.
 type relayRecorder struct {
@@ -54,10 +55,16 @@ func (s *relayRecorder) PeerWithTxSet(_ [32]byte, exclude uint64) (uint64, bool)
 	return s.txsetPeer, s.txsetOK
 }
 
-func (s *relayRecorder) NotePeerHasTxSet(peerID uint64, hash [32]byte) {
+func (s *relayRecorder) NotePeerHasTxSet(peerID uint64, hash [32]byte) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for _, noted := range s.noted {
+		if noted.peerID == peerID && noted.hash == hash {
+			return false
+		}
+	}
 	s.noted = append(s.noted, notedTxSet{peerID: peerID, hash: hash})
+	return true
 }
 
 func (s *relayRecorder) IncPeerBadData(peerID uint64, reason string) {
@@ -102,7 +109,7 @@ func makeRouterWithRelayRecorder(t *testing.T) (*Router, *relayRecorder) {
 		Identity:      identity,
 	})
 	inbox := make(chan *peermanagement.InboundMessage, 8)
-	r := NewRouter(nil, a, inbox)
+	r := newTestRouter(nil, a, inbox)
 	return r, rs
 }
 
@@ -124,7 +131,7 @@ func TestRouter_GetLedger_RelayOnMiss_Ledger(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  42,
-		Type:    uint16(message.TypeGetLedger),
+		Type:    message.TypeGetLedger,
 		Payload: encodePayload(t, req),
 	})
 
@@ -158,7 +165,7 @@ func TestRouter_GetLedger_NoRelayWhenSeqOnly(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  42,
-		Type:    uint16(message.TypeGetLedger),
+		Type:    message.TypeGetLedger,
 		Payload: encodePayload(t, req),
 	})
 
@@ -182,7 +189,7 @@ func TestRouter_GetLedger_RelayOnMiss_TxSet(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  21,
-		Type:    uint16(message.TypeGetLedger),
+		Type:    message.TypeGetLedger,
 		Payload: encodePayload(t, req),
 	})
 
@@ -215,7 +222,7 @@ func TestRouter_GetLedger_NoRelayWhenCookieSet(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  21,
-		Type:    uint16(message.TypeGetLedger),
+		Type:    message.TypeGetLedger,
 		Payload: encodePayload(t, req),
 	})
 
@@ -237,7 +244,7 @@ func TestRouter_GetLedger_NoRelayWhenZeroCookiePresent(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  21,
-		Type:    uint16(message.TypeGetLedger),
+		Type:    message.TypeGetLedger,
 		Payload: encodePayload(t, req),
 	})
 
@@ -258,7 +265,7 @@ func TestRouter_GetLedger_NoRelayWhenQueryTypeAbsent(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  21,
-		Type:    uint16(message.TypeGetLedger),
+		Type:    message.TypeGetLedger,
 		Payload: encodePayload(t, req),
 	})
 
@@ -281,7 +288,7 @@ func TestRouter_GetLedger_NoRelayWhenNoCandidate(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  21,
-		Type:    uint16(message.TypeGetLedger),
+		Type:    message.TypeGetLedger,
 		Payload: encodePayload(t, req),
 	})
 
@@ -304,7 +311,7 @@ func TestRouter_LedgerData_RoutedBackByCookie(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  5, // the peer that served the relayed request
-		Type:    uint16(message.TypeLedgerData),
+		Type:    message.TypeLedgerData,
 		Payload: encodePayload(t, ld),
 	})
 
@@ -337,28 +344,12 @@ func TestRouter_LedgerData_ValidatesBeforeCookieRelay(t *testing.T) {
 			reason: "ledger-data-hash",
 		},
 		{
-			name: "info type",
-			data: &message.LedgerData{
-				LedgerHash: validHash, InfoType: message.LedgerInfoType(99),
-				Nodes: []message.LedgerNode{{NodeData: []byte{1}}},
-			},
-			reason: "ledger-data-type",
-		},
-		{
 			name: "candidate sequence",
 			data: &message.LedgerData{
 				LedgerHash: validHash, LedgerSeq: 1, InfoType: message.LedgerInfoTsCandidate,
 				Nodes: []message.LedgerNode{{NodeData: []byte{1}}},
 			},
 			reason: "ledger-data-sequence",
-		},
-		{
-			name: "reply error",
-			data: &message.LedgerData{
-				LedgerHash: validHash, InfoType: message.LedgerInfoBase, Error: message.ReplyError(99),
-				Nodes: []message.LedgerNode{{NodeData: []byte{1}}},
-			},
-			reason: "ledger-data-error",
 		},
 		{
 			name: "node count",
@@ -401,6 +392,22 @@ func TestRouter_LedgerData_ValidatesBeforeCookieRelay(t *testing.T) {
 		},
 	}
 
+	t.Run("unknown required info type", func(t *testing.T) {
+		payload := append([]byte{0x0a, 0x20}, validHash...)
+		payload = append(payload, 0x10, 0x00, 0x18, 0x63, 0x28, 0x4d)
+		_, err := message.Decode(message.TypeLedgerData, payload)
+		require.Error(t, err)
+
+		r, rs := makeRouterWithRelayRecorder(t)
+		r.handleMessage(&peermanagement.InboundMessage{
+			PeerID:  5,
+			Type:    message.TypeLedgerData,
+			Payload: payload,
+		})
+		assert.Empty(t, rs.sentFrames())
+		assert.Equal(t, []badDataCall{{peerID: 5, reason: "ledger-data-decode"}}, rs.badDataCalls())
+	})
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r, rs := makeRouterWithRelayRecorder(t)
@@ -408,7 +415,7 @@ func TestRouter_LedgerData_ValidatesBeforeCookieRelay(t *testing.T) {
 			tt.data.RequestCookieSet = true
 			r.handleMessage(&peermanagement.InboundMessage{
 				PeerID:  5,
-				Type:    uint16(message.TypeLedgerData),
+				Type:    message.TypeLedgerData,
 				Payload: encodePayload(t, tt.data),
 			})
 
@@ -416,6 +423,33 @@ func TestRouter_LedgerData_ValidatesBeforeCookieRelay(t *testing.T) {
 			assert.Equal(t, []badDataCall{{peerID: 5, reason: tt.reason}}, rs.badDataCalls())
 		})
 	}
+}
+
+func TestRouter_LedgerData_RawZeroErrorNormalizesToAbsent(t *testing.T) {
+	r, rs := makeRouterWithRelayRecorder(t)
+	data := &message.LedgerData{
+		LedgerHash:       bytes.Repeat([]byte{0xEE}, 32),
+		InfoType:         message.LedgerInfoBase,
+		Nodes:            []message.LedgerNode{{NodeData: []byte{1}}},
+		RequestCookie:    77,
+		RequestCookieSet: true,
+	}
+	payload := encodePayload(t, data)
+	payload = protowire.AppendTag(payload, 6, protowire.VarintType)
+	payload = protowire.AppendVarint(payload, 0)
+	decoded, err := message.Decode(message.TypeLedgerData, payload)
+	require.NoError(t, err)
+	require.False(t, decoded.(*message.LedgerData).HasError())
+
+	r.handleMessage(&peermanagement.InboundMessage{
+		PeerID:  5,
+		Type:    message.TypeLedgerData,
+		Payload: payload,
+	})
+
+	assert.Empty(t, rs.badDataCalls())
+	require.Len(t, rs.sentFrames(), 1)
+	assert.Equal(t, uint64(77), rs.sentFrames()[0].peerID)
 }
 
 // TestRouter_HaveSet_RecordsTxSetAdvertisement pins that an inbound
@@ -431,7 +465,7 @@ func TestRouter_HaveSet_RecordsTxSetAdvertisement(t *testing.T) {
 	}
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  88,
-		Type:    uint16(message.TypeHaveSet),
+		Type:    message.TypeHaveSet,
 		Payload: encodePayload(t, have),
 	})
 

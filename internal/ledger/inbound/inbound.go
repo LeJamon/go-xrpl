@@ -81,10 +81,11 @@ const (
 type State int
 
 const (
-	StateWantBase  State = iota // Waiting for header + root nodes
-	StateWantState              // Have header, fetching state tree nodes
-	StateComplete               // Fully acquired
-	StateFailed                 // Unrecoverable error
+	StateWantBase    State = iota // Waiting for header + root nodes
+	StateWantState                // Have header, fetching state tree nodes
+	StateComplete                 // Fully acquired
+	StateFailed                   // Unrecoverable error
+	StateReplayReady              // Replay response verified; apply pending
 )
 
 // TimerAction tells the router what to do after an OnTimer evaluation,
@@ -143,14 +144,15 @@ type Ledger struct {
 
 	// Retry-loop bookkeeping ported from rippled's TimeoutCounter. lastTimer
 	// is when OnTimer last evaluated; progress records a fresh node attach
-	// since then; timeouts is the cumulative no-progress count used for both
-	// escalation and terminal failure.
+	// since then; timeouts is the cumulative no-progress count used for
+	// diagnostics and escalation; consecutiveTimeouts bounds terminal stalls.
 	// byHash latches eligibility for a by-hash escalation on the next aggressive
 	// request. All guarded by mu.
-	lastTimer time.Time
-	progress  bool
-	timeouts  int
-	byHash    bool
+	lastTimer           time.Time
+	progress            bool
+	timeouts            int
+	consecutiveTimeouts int
+	byHash              bool
 
 	// recentNodes keeps request frontiers disjoint within a timer interval.
 	// requestPeers caps the acquisition at one active request per peer and six
@@ -392,14 +394,16 @@ func (l *Ledger) OnTimer(now time.Time) TimerAction {
 	}
 
 	l.timeouts++
-	if l.timeouts > ledgerTimeoutRetriesMax {
+	l.consecutiveTimeouts++
+	if l.consecutiveTimeouts > ledgerTimeoutRetriesMax {
 		l.state = StateFailed
-		l.err = fmt.Errorf("inbound ledger %d: acquisition failed after %d timeouts (have_state=%t have_tx=%t last_reject=%q)",
-			l.seq, l.timeouts, l.haveState, l.haveTx, l.lastRejectErr)
+		l.err = fmt.Errorf("inbound ledger %d: acquisition failed after %d consecutive timeouts (%d total; have_state=%t have_tx=%t last_reject=%q)",
+			l.seq, l.consecutiveTimeouts, l.timeouts, l.haveState, l.haveTx, l.lastRejectErr)
 		l.logger.Warn("inbound ledger: acquisition failed, retry budget exhausted",
 			"seq", l.seq,
 			"hash", fmt.Sprintf("%x", l.hash[:8]),
 			"timeouts", l.timeouts,
+			"consecutive_timeouts", l.consecutiveTimeouts,
 			"phase", l.snapshotLocked().Phase(),
 			"have_state", l.haveState,
 			"have_tx", l.haveTx,
@@ -420,7 +424,7 @@ func (l *Ledger) OnTimer(now time.Time) TimerAction {
 	// No progress, budget remains: arm a by-hash escalation and surface the
 	// diagnostic that the swallowed Debug-level rejections used to hide.
 	l.byHash = true
-	l.logger.Warn("inbound ledger: no acquisition progress",
+	l.logger.Warn("inbound ledger: no progress in current interval",
 		"seq", l.seq,
 		"hash", fmt.Sprintf("%x", l.hash[:8]),
 		"timeouts", l.timeouts,
@@ -458,6 +462,7 @@ func (l *Ledger) RearmTimer(now time.Time) {
 // timing out (rippled sets progress_ on a useful received node). Caller holds mu.
 func (l *Ledger) markProgressLocked() {
 	l.progress = true
+	l.consecutiveTimeouts = 0
 }
 
 // TakeByHashRequest returns the content hashes of up to max still-missing nodes
@@ -1403,50 +1408,6 @@ func (l *Ledger) Snapshot() Snapshot {
 		return *snapshotCopy(*cached)
 	}
 	return Snapshot{}
-}
-
-// SnapshotContext returns the acquisition fields under its mutex, then gathers
-// diagnostic missing hashes without holding that mutex across node-store reads.
-func (l *Ledger) SnapshotContext(ctx context.Context) (Snapshot, error) {
-	l.mu.Lock()
-	s := l.snapshotLocked()
-	var stateMap, txMap *shamap.SHAMap
-	if !l.haveState && l.stateMap != nil {
-		stateMap = l.stateMap
-	}
-	if !l.haveTx && l.txMap != nil {
-		txMap = l.txMap
-	}
-	l.mu.Unlock()
-
-	var stateMissing, txMissing []shamap.MissingNode
-	if stateMap != nil {
-		missing, err := stateMap.GetMissingNodesContext(ctx, missingNodeBatch, nil)
-		if err != nil {
-			return s, err
-		}
-		stateMissing = missing
-		s.NeededState = missingHashes(missing)
-	}
-	if txMap != nil {
-		missing, err := txMap.GetMissingNodesContext(ctx, missingNodeBatch, nil)
-		if err != nil {
-			return s, err
-		}
-		txMissing = missing
-		s.NeededTx = missingHashes(missing)
-	}
-
-	l.mu.Lock()
-	if stateMap != nil && l.state == StateWantState && l.stateMap == stateMap && !l.haveState {
-		l.cacheMissingLocked(false, stateMissing)
-	}
-	if txMap != nil && l.state == StateWantState && l.txMap == txMap && !l.haveTx {
-		l.cacheMissingLocked(true, txMissing)
-	}
-	l.mu.Unlock()
-
-	return s, nil
 }
 
 func (l *Ledger) snapshotLocked() Snapshot {

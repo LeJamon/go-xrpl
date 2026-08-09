@@ -125,7 +125,7 @@ func TestBusyInitialCandidateRetainsTargetForRetry(t *testing.T) {
 		require.NoError(t, a.OnLedgerSwitched(selected))
 	}
 	engine.switchResult = consensus.LedgerSwitchBusy
-	r := NewRouter(engine, a, nil)
+	r := newTestRouter(engine, a, nil)
 
 	local := svc.GetClosedLedger()
 	require.NotNil(t, local)
@@ -198,7 +198,7 @@ func TestStoredConsensusCandidateRetriesUntilEngineAccepts(t *testing.T) {
 				require.NoError(t, err)
 				require.NoError(t, a.OnLedgerSwitched(selected))
 			}
-			r := NewRouter(engine, a, nil)
+			r := newTestRouter(engine, a, nil)
 
 			stateMap, err := local.StateMapSnapshot()
 			require.NoError(t, err)

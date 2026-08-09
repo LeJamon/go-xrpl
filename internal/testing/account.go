@@ -3,11 +3,11 @@ package jtx
 import (
 	"crypto/sha512"
 	"encoding/hex"
+	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	ed25519 "github.com/LeJamon/go-xrpl/crypto/ed25519"
 	secp256k1 "github.com/LeJamon/go-xrpl/crypto/secp256k1"
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
@@ -39,9 +39,6 @@ type Account struct {
 
 	// ID is the 20-byte account ID derived from the public key.
 	ID [20]byte
-
-	// Sequence tracks the account's sequence number (for test convenience).
-	Sequence uint32
 }
 
 // NewAccount creates a new test account with a deterministic keypair derived from the name.
@@ -56,7 +53,10 @@ func NewAccount(name string) *Account {
 // (to create/fund an account at that specific address) in test environments with
 // signature verification disabled.
 func NewAccountWithAddress(name string, address string) *Account {
-	_, idBytes, _ := addresscodec.DecodeClassicAddressToAccountID(address)
+	_, idBytes, err := addresscodec.DecodeClassicAddressToAccountID(address)
+	if err != nil || len(idBytes) != 20 {
+		panic("invalid classic address for account " + name + ": " + address)
+	}
 	var id [20]byte
 	copy(id[:], idBytes)
 	return &Account{
@@ -129,7 +129,6 @@ func buildAccount(name string, seed []byte, keyType, privKeyHex, pubKeyHex strin
 		PublicKey:  pubKey,
 		PrivateKey: privKey,
 		ID:         accountID,
-		Sequence:   1, // Default starting sequence
 	}
 }
 
@@ -165,17 +164,12 @@ func NewAccountFromPassphraseWithKeyType(name, passphrase, keyType string) *Acco
 
 // PublicKeyHex returns the public key as a hex string (uppercase).
 func (a *Account) PublicKeyHex() string {
-	return hex.EncodeToString(a.PublicKey)
+	return strings.ToUpper(hex.EncodeToString(a.PublicKey))
 }
 
 // PrivateKeyHex returns the private key as a hex string (uppercase).
 func (a *Account) PrivateKeyHex() string {
-	return hex.EncodeToString(a.PrivateKey)
-}
-
-// AccountIDHex returns the account ID as a hex string.
-func (a *Account) AccountIDHex() string {
-	return hex.EncodeToString(a.ID[:])
+	return strings.ToUpper(hex.EncodeToString(a.PrivateKey))
 }
 
 // AccountID returns the 20-byte account ID.
@@ -209,7 +203,7 @@ func (a *Account) String() string {
 // Usage: gw.IOU("USD", 100) returns an issued amount of 100 USD from gw.
 // Reference: rippled's Account::operator[]("USD")(100)
 func (a *Account) IOU(currency string, value float64) tx.Amount {
-	return state.NewIssuedAmountFromFloat64(value, currency, a.Address)
+	return issuedCurrency(a, currency, value)
 }
 
 // NewAccountFromSeed creates a test account from a base58-encoded seed string.

@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // DIDData represents a DID ledger entry.

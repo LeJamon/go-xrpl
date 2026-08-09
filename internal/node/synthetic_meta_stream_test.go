@@ -9,14 +9,16 @@ import (
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
 )
 
-func TestDecodeTxWithMetaToJSONInjectsSyntheticFields(t *testing.T) {
+func TestProjectAcceptedTransactionInjectsSyntheticFields(t *testing.T) {
 	const issuer = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	const sequence = uint32(42)
 	txJSON := map[string]any{
@@ -55,9 +57,12 @@ func TestDecodeTxWithMetaToJSONInjectsSyntheticFields(t *testing.T) {
 	data = append(data, byte(len(metaBlob)))
 	data = append(data, metaBlob...)
 
-	_, metaRaw := decodeTxWithMetaToJSONAt(data, handlers.SyntheticMetadataContext{LedgerSequence: 4_594_095})
-	var decodedMeta map[string]any
-	require.NoError(t, json.Unmarshal(metaRaw, &decodedMeta))
+	projection, err := projectAcceptedTransaction(
+		service.ParseAcceptedTransaction(data),
+		handlers.SyntheticMetadataContext{LedgerSequence: 4_594_095},
+	)
+	require.NoError(t, err)
+	decodedMeta := projection.metadata
 
 	_, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(issuer)
 	require.NoError(t, err)
@@ -87,15 +92,16 @@ func TestBuildValidatedTransactionEventProjection(t *testing.T) {
 
 	t.Run("validated failure projects result time and checked CTID", func(t *testing.T) {
 		txData := validatedPaymentData(t, 2_048, transactionIndex)
-		event, result := buildValidatedTransactionEvent(service.TransactionResultEvent{
+		event, result, err := buildValidatedTransactionEvent(service.TransactionResultEvent{
 			TxHash:      txHash,
 			TxData:      txData,
 			Validated:   true,
 			LedgerIndex: ledgerSequence,
 			LedgerHash:  ledgerHash,
 		}, ledgerEvent, 9)
+		require.NoError(t, err)
 
-		require.Equal(t, "tecUNFUNDED_PAYMENT", result)
+		require.Equal(t, ter.TecUNFUNDED_PAYMENT, result)
 		require.Equal(t, "tecUNFUNDED_PAYMENT", event.EngineResult)
 		require.Equal(t, 104, event.EngineResultCode)
 		require.Equal(t, "Insufficient XRP balance to send.", event.EngineResultMessage)
@@ -113,13 +119,165 @@ func TestBuildValidatedTransactionEventProjection(t *testing.T) {
 
 	t.Run("network ID overflow omits CTID", func(t *testing.T) {
 		txData := validatedPaymentData(t, 65_536, transactionIndex)
-		event, _ := buildValidatedTransactionEvent(service.TransactionResultEvent{
+		event, _, err := buildValidatedTransactionEvent(service.TransactionResultEvent{
 			TxData:      txData,
 			Validated:   true,
 			LedgerIndex: ledgerSequence,
 		}, ledgerEvent, 9)
+		require.NoError(t, err)
 		require.Empty(t, event.CTID)
 	})
+}
+
+func TestBuildValidatedTransactionEventRejectsCorruptLeaf(t *testing.T) {
+	ledgerEvent := &service.LedgerAcceptedEvent{LedgerInfo: &service.LedgerInfo{
+		Sequence:  1,
+		Validated: true,
+		Closed:    true,
+	}}
+	valid := validatedPaymentData(t, 0, 0)
+	tests := [][]byte{
+		nil,
+		{0xff},
+		valid[:len(valid)-1],
+		append(append([]byte(nil), valid...), 0),
+	}
+	for _, data := range tests {
+		event, _, err := buildValidatedTransactionEvent(service.TransactionResultEvent{
+			TxData:      data,
+			Validated:   true,
+			LedgerIndex: 1,
+		}, ledgerEvent, 0)
+		require.Error(t, err)
+		require.Nil(t, event)
+	}
+}
+
+func TestPrepareAcceptedPublicationsRejectsWholeLedger(t *testing.T) {
+	ledgerHash := [32]byte{0xAB}
+	goodAccepted := service.ParseAcceptedTransaction(validatedPaymentData(t, 0, 4))
+	require.NoError(t, goodAccepted.ParseError())
+	corruptAccepted := service.ParseAcceptedTransaction([]byte("corrupt"))
+	require.Error(t, corruptAccepted.ParseError())
+
+	event := &service.LedgerAcceptedEvent{
+		LedgerInfo: &service.LedgerInfo{
+			Sequence:  9,
+			Hash:      ledgerHash,
+			Validated: true,
+			Closed:    true,
+		},
+		TransactionResults: []service.TransactionResultEvent{
+			{
+				TxHash:      [32]byte{1},
+				TxData:      []byte("must not be decoded again"),
+				Accepted:    goodAccepted,
+				Validated:   true,
+				LedgerIndex: 9,
+				LedgerHash:  ledgerHash,
+			},
+			{
+				TxHash:      [32]byte{2},
+				Accepted:    corruptAccepted,
+				Validated:   true,
+				LedgerIndex: 9,
+				LedgerHash:  ledgerHash,
+			},
+		},
+	}
+
+	publications, bookTransactions, err := prepareAcceptedPublications(event, 0)
+	require.Error(t, err)
+	require.Nil(t, publications)
+	require.Nil(t, bookTransactions)
+}
+
+func TestPrepareAcceptedPublicationsRejectsCorruptOwnerFundsState(t *testing.T) {
+	svc, err := service.New(service.Config{
+		Standalone:    true,
+		Startup:       service.StartupConfig{Mode: service.StartupFresh},
+		GenesisConfig: genesis.DefaultConfig(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	view := svc.GetOpenLedger()
+	require.NotNil(t, view)
+	require.NoError(t, view.Update(keylet.Fees(), []byte{
+		0x11, 0x00, 0x73, 0xff, 0, 0, 0, 0, 0, 0, 0, 0,
+	}))
+
+	accepted := service.ParseAcceptedTransaction(validatedOfferData(t, 0, 0))
+	require.NoError(t, accepted.ParseError())
+	event := &service.LedgerAcceptedEvent{
+		Ledger: view,
+		LedgerInfo: &service.LedgerInfo{
+			Sequence:  view.Sequence(),
+			Validated: true,
+			Closed:    true,
+		},
+		TransactionResults: []service.TransactionResultEvent{{
+			TxHash:      [32]byte{1},
+			Accepted:    accepted,
+			Validated:   true,
+			LedgerIndex: view.Sequence(),
+		}},
+	}
+
+	publications, bookTransactions, err := prepareAcceptedPublications(event, 0)
+	require.Error(t, err)
+	require.Nil(t, publications)
+	require.Nil(t, bookTransactions)
+}
+
+func TestPrepareAcceptedPublicationsReadsFeesOnlyForXRPOffers(t *testing.T) {
+	svc, err := service.New(service.Config{
+		Standalone:    true,
+		Startup:       service.StartupConfig{Mode: service.StartupFresh},
+		GenesisConfig: genesis.DefaultConfig(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	view := svc.GetOpenLedger()
+	require.NotNil(t, view)
+	require.NoError(t, view.Update(keylet.Fees(), []byte{
+		0x11, 0x00, 0x73, 0xff, 0, 0, 0, 0, 0, 0, 0, 0,
+	}))
+
+	for _, test := range []struct {
+		name string
+		data []byte
+	}{
+		{name: "Payment", data: validatedPaymentData(t, 0, 0)},
+		{name: "IOU OfferCreate", data: validatedIOUOfferData(t, 0, 0)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			accepted := service.ParseAcceptedTransaction(test.data)
+			require.NoError(t, accepted.ParseError())
+			event := &service.LedgerAcceptedEvent{
+				Ledger: view,
+				LedgerInfo: &service.LedgerInfo{
+					Sequence:  view.Sequence(),
+					Validated: true,
+					Closed:    true,
+				},
+				TransactionResults: []service.TransactionResultEvent{{
+					TxHash:      [32]byte{1},
+					Accepted:    accepted,
+					Validated:   true,
+					LedgerIndex: view.Sequence(),
+				}},
+			}
+
+			publications, bookTransactions, err := prepareAcceptedPublications(event, 0)
+			require.NoError(t, err)
+			require.Len(t, publications, 1)
+			require.Len(t, bookTransactions, 1)
+		})
+	}
 }
 
 func validatedPaymentData(t *testing.T, networkID, transactionIndex uint32) []byte {
@@ -134,6 +292,45 @@ func validatedPaymentData(t *testing.T, networkID, transactionIndex uint32) []by
 		"SigningPubKey":   "",
 		"TransactionType": "Payment",
 	}
+	return validatedTransactionData(t, txJSON, transactionIndex)
+}
+
+func validatedOfferData(t *testing.T, networkID, transactionIndex uint32) []byte {
+	t.Helper()
+	txJSON := map[string]any{
+		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Fee":             "10",
+		"NetworkID":       networkID,
+		"Sequence":        uint32(1),
+		"SigningPubKey":   "",
+		"TakerGets":       "100",
+		"TakerPays":       "200",
+		"TransactionType": "OfferCreate",
+	}
+	return validatedTransactionData(t, txJSON, transactionIndex)
+}
+
+func validatedIOUOfferData(t *testing.T, networkID, transactionIndex uint32) []byte {
+	t.Helper()
+	txJSON := map[string]any{
+		"Account":       "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Fee":           "10",
+		"NetworkID":     networkID,
+		"Sequence":      uint32(1),
+		"SigningPubKey": "",
+		"TakerGets": map[string]any{
+			"currency": "USD",
+			"issuer":   "rDsbeomae4FXwgQTJp9Rs64Qg9vDiTCdBv",
+			"value":    "1",
+		},
+		"TakerPays":       "200",
+		"TransactionType": "OfferCreate",
+	}
+	return validatedTransactionData(t, txJSON, transactionIndex)
+}
+
+func validatedTransactionData(t *testing.T, txJSON map[string]any, transactionIndex uint32) []byte {
+	t.Helper()
 	meta := map[string]any{
 		"AffectedNodes":     []any{},
 		"TransactionIndex":  transactionIndex,

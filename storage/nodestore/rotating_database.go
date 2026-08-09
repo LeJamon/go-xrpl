@@ -9,10 +9,10 @@ import (
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
 )
 
-// RotatingKVDatabaseImpl keeps the decoded-node caches above a two-generation
+// RotatingKVDatabase keeps the decoded-node caches above a two-generation
 // key-value store, so promotion never duplicates decoded nodes in memory.
-type RotatingKVDatabaseImpl struct {
-	*KVDatabaseImpl
+type RotatingKVDatabase struct {
+	*KVDatabase
 	rotating kvstore.RotatingStore
 }
 
@@ -20,27 +20,30 @@ type RotatingKVDatabaseImpl struct {
 // key-value backend.
 func NewRotatingKVDatabase(
 	store kvstore.RotatingStore,
-	name string,
-	config *DatabaseConfig,
-) *RotatingKVDatabaseImpl {
-	return &RotatingKVDatabaseImpl{
-		KVDatabaseImpl: NewKVDatabaseWithConfig(store, name, config),
-		rotating:       store,
+	config DatabaseConfig,
+) (*RotatingKVDatabase, error) {
+	database, err := NewKVDatabase(store, config)
+	if err != nil {
+		return nil, err
 	}
+	return &RotatingKVDatabase{
+		KVDatabase: database,
+		rotating:   store,
+	}, nil
 }
 
 // FetchForPromotion bypasses the positive cache. RotatingStore.Get promotes an
 // archive hit before returning, and decodeNodeData takes ownership of the
 // returned bytes without an additional payload copy.
-func (d *RotatingKVDatabaseImpl) FetchForPromotion(ctx context.Context, hash Hash256) (*Node, error) {
-	if err := ctx.Err(); err != nil {
+func (d *RotatingKVDatabase) FetchForPromotion(ctx context.Context, hash Hash256) (*Node, error) {
+	if err := d.begin(ctx); err != nil {
 		return nil, err
 	}
+	defer d.lifecycleMu.RUnlock()
 	atomic.AddUint64(&d.stats.reads, 1)
 	var storeGeneration uint64
 	if d.negativeCache != nil {
 		if d.negativeCache.IsMissing(hash) {
-			atomic.AddUint64(&d.stats.negativeCacheHits, 1)
 			return nil, nil
 		}
 		storeGeneration = d.storeGeneration.Load()
@@ -68,22 +71,24 @@ func (d *RotatingKVDatabaseImpl) FetchForPromotion(ctx context.Context, hash Has
 }
 
 // CanRotateWithoutRefresh reports whether the archive generation is empty.
-func (d *RotatingKVDatabaseImpl) CanRotateWithoutRefresh(ctx context.Context) (bool, error) {
-	if err := ctx.Err(); err != nil {
+func (d *RotatingKVDatabase) CanRotateWithoutRefresh(ctx context.Context) (bool, error) {
+	if err := d.begin(ctx); err != nil {
 		return false, err
 	}
+	defer d.lifecycleMu.RUnlock()
 	return d.rotating.CanRotateWithoutRefresh()
 }
 
 // RotateGeneration serializes the backend swap with stores and clears cache
 // entries that may name records retired with the former archive.
-func (d *RotatingKVDatabaseImpl) RotateGeneration(
+func (d *RotatingKVDatabase) RotateGeneration(
 	ctx context.Context,
 	lastRotated, minimumOnline uint32,
 ) (bool, error) {
-	if err := ctx.Err(); err != nil {
+	if err := d.begin(ctx); err != nil {
 		return false, err
 	}
+	defer d.lifecycleMu.RUnlock()
 	d.pruneMu.Lock()
 	committed, err := d.rotating.Rotate(lastRotated, minimumOnline)
 	if committed {
@@ -105,8 +110,8 @@ func (d *RotatingKVDatabaseImpl) RotateGeneration(
 
 // GenerationState returns the boundary committed with the backend generation
 // manifest.
-func (d *RotatingKVDatabaseImpl) GenerationState() (uint32, uint32) {
+func (d *RotatingKVDatabase) GenerationState() (uint32, uint32) {
 	return d.rotating.RotationState()
 }
 
-var _ GenerationDatabase = (*RotatingKVDatabaseImpl)(nil)
+var _ GenerationDatabase = (*RotatingKVDatabase)(nil)

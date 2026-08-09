@@ -3,9 +3,11 @@ package adaptor
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
+	"sync"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -89,29 +91,16 @@ func TestTxSet_IDStableAcrossInsertionOrder(t *testing.T) {
 		"tx-set ID must be insertion-order independent")
 }
 
-// TestTxSet_IDChangesOnMutation pins that ID() refreshes after
-// Add/Remove — the SHAMap's incremental dirty propagation must
-// have updated the root hash by the time ID() returns.
-func TestTxSet_IDChangesOnMutation(t *testing.T) {
-	blob1 := makeBlob(1)
-	blob2 := makeBlob(2)
-
-	ts, err := NewTxSet([][]byte{blob1})
+func TestTxSet_DuplicateInputIsDeduplicated(t *testing.T) {
+	blob := makeBlob(1)
+	single, err := NewTxSet([][]byte{blob})
 	require.NoError(t, err)
-	id0 := ts.ID()
-	require.NotEqual(t, consensus.TxSetID{}, id0)
+	duplicates, err := NewTxSet([][]byte{blob, blob, blob})
+	require.NoError(t, err)
 
-	require.NoError(t, ts.Add(blob2))
-	id1 := ts.ID()
-	assert.NotEqual(t, id0, id1, "Add must change the tx-set ID")
-
-	// Adding the same blob a second time is a no-op.
-	require.NoError(t, ts.Add(blob2))
-	assert.Equal(t, id1, ts.ID(), "duplicate Add must not change ID")
-
-	require.NoError(t, ts.Remove(computeTxID(blob2)))
-	assert.Equal(t, id0, ts.ID(),
-		"Remove of a just-added tx must restore the prior ID")
+	assert.Equal(t, single.ID(), duplicates.ID())
+	assert.Equal(t, 1, duplicates.Size())
+	assert.Equal(t, single.Txs(), duplicates.Txs())
 }
 
 // TestTxSet_RejectsInvalidBlobs pins that NewTxSet surfaces SHAMap
@@ -128,119 +117,48 @@ func TestTxSet_RejectsInvalidBlobs(t *testing.T) {
 	assert.Nil(t, ts, "failed construction must not return a partial tx-set")
 }
 
-// TestTxSet_ConcurrentSizeReader pins that Size() is safe to call
-// while a single writer goroutine drives Add/Remove. The shadow
-// `count` field is shielded by an internal mutex; without it the
-// race detector would flag the increment vs. read. Run with
-// `go test -race`.
-func TestTxSet_ConcurrentSizeReader(t *testing.T) {
-	const ops = 200
-	blobs := make([][]byte, ops)
+func TestTxSet_ConcurrentReaders(t *testing.T) {
+	const count = 200
+	blobs := make([][]byte, count)
 	for i := range blobs {
 		blobs[i] = makeBlob(uint32(i + 1))
 	}
 
-	ts, err := NewTxSet(nil)
+	ts, err := NewTxSet(blobs)
 	require.NoError(t, err)
 
-	stop := make(chan struct{})
-	done := make(chan struct{})
-
-	go func() {
-		defer close(done)
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-				_ = ts.Size()
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 100 {
+				assert.Equal(t, count, ts.Size())
+				assert.NotZero(t, ts.ID())
+				assert.True(t, ts.Contains(computeTxID(blobs[0])))
+				assert.Len(t, ts.Txs(), count)
+				assert.Len(t, ts.TxIDs(), count)
 			}
-		}
-	}()
-
-	for _, blob := range blobs {
-		require.NoError(t, ts.Add(blob))
+		}()
 	}
-	for i := range ops / 2 {
-		require.NoError(t, ts.Remove(computeTxID(blobs[i])))
-	}
-	close(stop)
-	<-done
-
-	assert.Equal(t, ops-ops/2, ts.Size())
+	wg.Wait()
 }
 
-// TestTxSet_BytesIsCanonical pins that the Bytes() framing walks
-// leaves in canonical order so the serialized form is independent
-// of insertion order.
-func TestTxSet_BytesIsCanonical(t *testing.T) {
-	blobs := make([][]byte, 6)
-	for i := range blobs {
-		blobs[i] = makeBlob(uint32(i + 1))
-	}
-
-	forwardTs, err := NewTxSet(blobs)
+func TestTxSet_BackingMapIsImmutable(t *testing.T) {
+	blob := makeBlob(1)
+	ts, err := NewTxSet([][]byte{blob})
 	require.NoError(t, err)
-	forward := forwardTs.Bytes()
-	reversed := make([][]byte, len(blobs))
-	for i, b := range blobs {
-		reversed[len(blobs)-1-i] = b
-	}
-	backwardTs, err := NewTxSet(reversed)
-	require.NoError(t, err)
-	backward := backwardTs.Bytes()
-	assert.Equal(t, forward, backward,
-		"Bytes() output must be insertion-order independent")
-}
+	originalID := ts.ID()
 
-// BenchmarkTxSetAdd_Incremental measures the per-Add cost on
-// successively larger sets. Each Add does O(log N) work, so
-// growth from N=128 → N=8192 should be ~6x (log2 of 64), not 64x.
-func BenchmarkTxSetAdd_Incremental(b *testing.B) {
-	for _, n := range []int{128, 512, 2048, 8192} {
-		b.Run(sizeLabel(n), func(b *testing.B) {
-			// Pre-seed the set so each timed Add lands at depth ~log2(n).
-			seed := make([][]byte, n)
-			for i := range seed {
-				seed[i] = makeBlob(uint32(i + 1))
-			}
-
-			// Pre-build the candidate blobs the timed loop will Add.
-			adds := make([][]byte, b.N)
-			for i := 0; i < b.N; i++ {
-				adds[i] = makeBlob(uint32(n + i + 1))
-			}
-
-			b.ReportAllocs()
-			b.ResetTimer()
-			b.StopTimer()
-			for i := 0; i < b.N; i++ {
-				// Re-seed a fresh tx-set every iteration so the timed
-				// Add always lands on a set of size ~n. Otherwise the
-				// loop just grows N unbounded and the per-Add cost
-				// shifts as N doubles.
-				ts, err := NewTxSet(seed)
-				if err != nil {
-					b.Fatal(err)
-				}
-				b.StartTimer()
-				_ = ts.Add(adds[i])
-				b.StopTimer()
-			}
-		})
-	}
-}
-
-func sizeLabel(n int) string {
-	switch n {
-	case 128:
-		return "N=128"
-	case 512:
-		return "N=512"
-	case 2048:
-		return "N=2048"
-	case 8192:
-		return "N=8192"
-	}
-	return "N=?"
+	newBlob := makeBlob(2)
+	err = ts.shamap().PutWithNodeType(
+		[32]byte(computeTxID(newBlob)),
+		newBlob,
+		shamap.NodeTypeTransactionNoMeta,
+	)
+	require.True(t, errors.Is(err, shamap.ErrImmutable))
+	require.True(t, errors.Is(ts.shamap().Delete([32]byte(computeTxID(blob))), shamap.ErrImmutable))
+	assert.Equal(t, originalID, ts.ID())
+	assert.Equal(t, 1, ts.Size())
+	assert.Equal(t, [][]byte{blob}, ts.Txs())
 }

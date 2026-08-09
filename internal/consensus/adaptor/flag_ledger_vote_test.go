@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/amendmentvote"
+	"github.com/LeJamon/go-xrpl/internal/consensus/feevote"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -80,6 +81,7 @@ func TestGenerateFlagLedgerPseudoTxs_FeeVoteSeedsSetFee(t *testing.T) {
 		LedgerSeq:             wrapped.Seq() - 1,
 		NodeID:                a.identity.NodeID,
 		SignTime:              time.Now(),
+		Full:                  true,
 		BaseFee:               100,
 		ReserveBase:           50_000_000,
 		ReserveIncrement:      5_000_000,
@@ -96,6 +98,165 @@ func TestGenerateFlagLedgerPseudoTxs_FeeVoteSeedsSetFee(t *testing.T) {
 		"emitted blob must be a SetFee pseudo-tx")
 	assert.EqualValues(t, prev.Sequence()+1, asUint(stx["LedgerSequence"]),
 		"LedgerSequence carries upcoming seq = parent + 1")
+}
+
+func TestGenerateFlagLedgerPseudoTxs_ExcludesPartialAndWrongSequence(t *testing.T) {
+	a := newTestAdaptorWithConfig(t, FeeVoteStance{BaseFee: 100}, nil)
+	prev := a.ledgerService.GetClosedLedger()
+	require.NotNil(t, prev)
+	wrapped := WrapLedger(prev)
+	parentSeq := wrapped.Seq() - 1
+	parentID := wrapped.ParentID()
+	vote := func(node consensus.NodeID, seq uint32, full bool) *consensus.Validation {
+		return &consensus.Validation{
+			LedgerID: parentID, LedgerSeq: seq, NodeID: node, SignTime: time.Now(), Full: full,
+			BaseFee: 100, ReserveBase: 50_000_000, ReserveIncrement: 5_000_000,
+			BaseFeeDrops: 100, ReserveBaseDrops: 50_000_000, ReserveIncrementDrops: 5_000_000,
+		}
+	}
+
+	vals := []*consensus.Validation{
+		vote(a.identity.NodeID, parentSeq, false),
+		vote(a.identity.NodeID, parentSeq+1, true),
+		vote(consensus.NodeID{3}, parentSeq, true),
+	}
+	if blobs := a.GenerateFlagLedgerPseudoTxs(wrapped, vals); len(blobs) != 0 {
+		t.Fatalf("partial/wrong-sequence validations influenced flag-ledger votes: %d blobs", len(blobs))
+	}
+}
+
+func TestExtractFeeVote_NonNativeAndAbsentUseCurrent(t *testing.T) {
+	absent, err := parseSTValidation(SerializeSTValidation(buildTestValidation()))
+	require.NoError(t, err)
+	nonNative := parseValidationWithBaseFeeDropsIOU(t)
+
+	current := feevote.Stance{BaseFee: 10}
+	target := feevote.Stance{BaseFee: 20}
+	for _, test := range []struct {
+		name       string
+		validation *consensus.Validation
+		wantHas    bool
+	}{
+		{name: "absent", validation: absent},
+		{name: "non-native", validation: nonNative, wantHas: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.wantHas, test.validation.HasBaseFeeDrops())
+			vote := extractFeeVote(test.validation, true)
+			assert.Nil(t, vote.BaseFee)
+
+			blob, err := feevote.DoVoting(256, current, target, []feevote.Vote{vote}, true)
+			require.NoError(t, err)
+			assert.Nil(t, blob)
+		})
+	}
+}
+
+func TestFeeVote_ModernNegativeWireRoundTrip(t *testing.T) {
+	validation := buildTestValidation()
+	validation.SetBaseFeeDrops(-15)
+
+	parsed, err := parseSTValidation(SerializeSTValidation(validation))
+	require.NoError(t, err)
+	vote := extractFeeVote(parsed, true)
+	require.NotNil(t, vote.BaseFee)
+	assert.Equal(t, drops.XRPAmount(-15), *vote.BaseFee)
+
+	blob, err := feevote.DoVoting(
+		256,
+		feevote.Stance{BaseFee: 10},
+		feevote.Stance{BaseFee: 20},
+		[]feevote.Vote{vote},
+		true,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, blob)
+	assert.Equal(t, "20", decodeTx(t, blob)["BaseFeeDrops"])
+}
+
+func TestFeeVote_ExplicitZeroSurvivesVotingPipeline(t *testing.T) {
+	tests := []struct {
+		name      string
+		modern    bool
+		set       func(*consensus.Validation)
+		target    func(*feevote.Stance)
+		extracted func(feevote.Vote) *drops.XRPAmount
+	}{
+		{
+			name:      "legacy base fee",
+			set:       func(v *consensus.Validation) { v.SetBaseFee(0) },
+			target:    func(s *feevote.Stance) { s.BaseFee = 20 },
+			extracted: func(v feevote.Vote) *drops.XRPAmount { return v.BaseFee },
+		},
+		{
+			name:      "legacy reserve base",
+			set:       func(v *consensus.Validation) { v.SetReserveBase(0) },
+			target:    func(s *feevote.Stance) { s.ReserveBase = 20 },
+			extracted: func(v feevote.Vote) *drops.XRPAmount { return v.ReserveBase },
+		},
+		{
+			name:      "legacy reserve increment",
+			set:       func(v *consensus.Validation) { v.SetReserveIncrement(0) },
+			target:    func(s *feevote.Stance) { s.ReserveIncrement = 20 },
+			extracted: func(v feevote.Vote) *drops.XRPAmount { return v.ReserveIncrement },
+		},
+		{
+			name:      "modern base fee",
+			modern:    true,
+			set:       func(v *consensus.Validation) { v.SetBaseFeeDrops(0) },
+			target:    func(s *feevote.Stance) { s.BaseFee = 20 },
+			extracted: func(v feevote.Vote) *drops.XRPAmount { return v.BaseFee },
+		},
+		{
+			name:      "modern reserve base",
+			modern:    true,
+			set:       func(v *consensus.Validation) { v.SetReserveBaseDrops(0) },
+			target:    func(s *feevote.Stance) { s.ReserveBase = 20 },
+			extracted: func(v feevote.Vote) *drops.XRPAmount { return v.ReserveBase },
+		},
+		{
+			name:      "modern reserve increment",
+			modern:    true,
+			set:       func(v *consensus.Validation) { v.SetReserveIncrementDrops(0) },
+			target:    func(s *feevote.Stance) { s.ReserveIncrement = 20 },
+			extracted: func(v feevote.Vote) *drops.XRPAmount { return v.ReserveIncrement },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			validation := buildTestValidation()
+			test.set(validation)
+			parsed, err := parseSTValidation(SerializeSTValidation(validation))
+			require.NoError(t, err)
+
+			vote := extractFeeVote(parsed, test.modern)
+			value := test.extracted(vote)
+			require.NotNil(t, value)
+			assert.Zero(t, *value)
+
+			current := feevote.Stance{BaseFee: 10, ReserveBase: 10, ReserveIncrement: 10}
+			target := current
+			test.target(&target)
+
+			blob, err := feevote.DoVoting(256, current, target, []feevote.Vote{vote}, test.modern)
+			require.NoError(t, err)
+			require.NotNil(t, blob)
+			assert.Equal(t, "SetFee", decodeTx(t, blob)["TransactionType"])
+
+			absent, err := parseSTValidation(SerializeSTValidation(buildTestValidation()))
+			require.NoError(t, err)
+			blob, err = feevote.DoVoting(
+				256,
+				current,
+				target,
+				[]feevote.Vote{extractFeeVote(absent, test.modern)},
+				test.modern,
+			)
+			require.NoError(t, err)
+			assert.Nil(t, blob)
+		})
+	}
 }
 
 // TestExcludeNegativeUNL_DropsBannedValidators is a pure-helper
@@ -171,10 +332,11 @@ func TestGenerateFlagLedgerPseudoTxs_AmendmentVoteSeedsGotMajority(t *testing.T)
 	a.amendmentStances = map[[32]byte]amendmentvote.Stance{target: amendmentvote.VoteUp}
 
 	val := &consensus.Validation{
-		LedgerID:   wrapped.ID(),
-		LedgerSeq:  wrapped.Seq(),
+		LedgerID:   wrapped.ParentID(),
+		LedgerSeq:  wrapped.Seq() - 1,
 		NodeID:     a.identity.NodeID,
 		SignTime:   time.Now(),
+		Full:       true,
 		Amendments: [][32]byte{target},
 	}
 
@@ -246,10 +408,11 @@ func TestGenerateFlagLedgerPseudoTxs_UnsupportedAmendmentNotWalked(t *testing.T)
 	// keep it out of the pseudo-tx set.
 	a.amendmentStances = map[[32]byte]amendmentvote.Stance{target: amendmentvote.VoteUp}
 	val := &consensus.Validation{
-		LedgerID:   wrapped.ID(),
-		LedgerSeq:  wrapped.Seq(),
+		LedgerID:   wrapped.ParentID(),
+		LedgerSeq:  wrapped.Seq() - 1,
 		NodeID:     a.identity.NodeID,
 		SignTime:   time.Now(),
+		Full:       true,
 		Amendments: [][32]byte{target},
 	}
 
@@ -376,10 +539,10 @@ func TestFeeVote_EmptyConfigUsesRippledDefaults(t *testing.T) {
 	})
 	assert.EqualValues(t, 10, a.feeVote.BaseFee,
 		"empty BaseFee → rippled FeeSetup default reference_fee=10")
-	assert.EqualValues(t, 1_000_000, a.feeVote.ReserveBase,
-		"empty ReserveBase → rippled 3.2.0 default account_reserve=1 XRP (#6382)")
-	assert.EqualValues(t, 200_000, a.feeVote.ReserveIncrement,
-		"empty ReserveIncrement → rippled 3.2.0 default owner_reserve=0.2 XRP (#6382)")
+	assert.EqualValues(t, 10_000_000, a.feeVote.ReserveBase,
+		"empty ReserveBase → rippled 3.2.0 default account_reserve=10 XRP")
+	assert.EqualValues(t, 2_000_000, a.feeVote.ReserveIncrement,
+		"empty ReserveIncrement → rippled 3.2.0 default owner_reserve=2 XRP")
 }
 
 // TestFeeVote_PartialConfigKeepsExplicitFields verifies the
@@ -396,9 +559,9 @@ func TestFeeVote_PartialConfigKeepsExplicitFields(t *testing.T) {
 		FeeVote:       FeeVoteStance{BaseFee: 25}, // reserves left zero
 	})
 	assert.EqualValues(t, 25, a.feeVote.BaseFee, "explicit BaseFee preserved")
-	assert.EqualValues(t, 1_000_000, a.feeVote.ReserveBase,
+	assert.EqualValues(t, 10_000_000, a.feeVote.ReserveBase,
 		"unset ReserveBase → rippled 3.2.0 default")
-	assert.EqualValues(t, 200_000, a.feeVote.ReserveIncrement,
+	assert.EqualValues(t, 2_000_000, a.feeVote.ReserveIncrement,
 		"unset ReserveIncrement → rippled 3.2.0 default")
 }
 

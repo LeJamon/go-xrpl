@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
@@ -142,7 +143,7 @@ func TestRouter_HandleGetLedger_Floor_DeclinesBelowBoundary(t *testing.T) {
 	engine := &mockEngine{}
 	adaptor, rs := newTxSetWireAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := NewRouter(engine, adaptor, inbox)
+	router := newTestRouter(engine, adaptor, inbox)
 
 	l := adaptor.LedgerService().GetClosedLedger()
 	require.NotNil(t, l)
@@ -161,7 +162,7 @@ func TestRouter_HandleGetLedger_Floor_DeclinesBelowBoundary(t *testing.T) {
 	}
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeGetLedger),
+		Type:    message.TypeGetLedger,
 		Payload: encodePayload(t, req),
 	}
 
@@ -178,7 +179,7 @@ func TestRouter_HandleGetLedger_Floor_ServesAtOrAboveBoundary(t *testing.T) {
 	engine := &mockEngine{}
 	adaptor, rs := newTxSetWireAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := NewRouter(engine, adaptor, inbox)
+	router := newTestRouter(engine, adaptor, inbox)
 
 	l := adaptor.LedgerService().GetClosedLedger()
 	require.NotNil(t, l)
@@ -197,7 +198,7 @@ func TestRouter_HandleGetLedger_Floor_ServesAtOrAboveBoundary(t *testing.T) {
 	}
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeGetLedger),
+		Type:    message.TypeGetLedger,
 		Payload: encodePayload(t, req),
 	}
 
@@ -209,7 +210,7 @@ func TestRouter_HandleGetLedger_Floor_ServesAtOrAboveBoundary(t *testing.T) {
 
 func newFetchDepthServeRouter(t *testing.T) (*Router, *querytypeRecorder, *service.Service) {
 	t.Helper()
-	cfg := service.DefaultConfig()
+	cfg := service.Config{Standalone: true, GenesisConfig: genesis.DefaultConfig()}
 	cfg.FetchDepth = 2
 	svc, err := service.New(cfg)
 	require.NoError(t, err)
@@ -228,7 +229,7 @@ func newFetchDepthServeRouter(t *testing.T) (*Router, *querytypeRecorder, *servi
 		Identity:      identity,
 		Validators:    []consensus.NodeID{identity.NodeID},
 	})
-	return NewRouter(&mockEngine{}, a, nil), sender, svc
+	return newTestRouter(&mockEngine{}, a, nil), sender, svc
 }
 
 func TestRouter_HandleGetLedger_RespectsConfiguredFetchDepth(t *testing.T) {
@@ -320,7 +321,7 @@ func TestRouter_HandleGetLedger_RespectsConfiguredFetchDepth(t *testing.T) {
 			req := tc.make(belowHash[:], earliest-1, earliest)
 			router.handleMessage(&peermanagement.InboundMessage{
 				PeerID:  7,
-				Type:    uint16(message.TypeGetLedger),
+				Type:    message.TypeGetLedger,
 				Payload: encodePayload(t, req),
 			})
 

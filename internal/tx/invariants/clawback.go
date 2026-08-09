@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // ---------------------------------------------------------------------------
@@ -34,10 +35,10 @@ func checkValidClawback(tx Transaction, result Result, entries []InvariantEntry,
 		if e.Before == nil {
 			continue
 		}
-		if e.EntryType == "RippleState" {
+		if e.EntryType == entry.TypeRippleState {
 			trustlinesChanged++
 		}
-		if e.EntryType == "MPToken" {
+		if e.EntryType == entry.TypeMPToken {
 			mptokensChanged++
 		}
 	}

@@ -4,17 +4,16 @@
 package escrow_test
 
 import (
-	"encoding/hex"
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
 	"github.com/LeJamon/go-xrpl/internal/testing/credential"
 	dp "github.com/LeJamon/go-xrpl/internal/testing/depositpreauth"
 	"github.com/LeJamon/go-xrpl/internal/testing/escrow"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	escrowtx "github.com/LeJamon/go-xrpl/internal/tx/escrow"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
@@ -42,7 +41,25 @@ func fund5000(env *jtx.TestEnv, accounts ...*jtx.Account) {
 // --------------------------------------------------------------------------
 
 func TestEscrow_Enablement(t *testing.T) {
+	for _, tokenEscrowEnabled := range []bool{false, true} {
+		name := "WithoutTokenEscrow"
+		if tokenEscrowEnabled {
+			name = "WithTokenEscrow"
+		}
+		t.Run(name, func(t *testing.T) {
+			testXRPEscrowLifecycle(t, tokenEscrowEnabled)
+		})
+	}
+}
+
+func testXRPEscrowLifecycle(t *testing.T, tokenEscrowEnabled bool) {
+	t.Helper()
 	env := jtx.NewTestEnv(t)
+	if tokenEscrowEnabled {
+		env.EnableFeature("TokenEscrow")
+	} else {
+		env.DisableFeature("TokenEscrow")
+	}
 	alice := jtx.NewAccount("alice")
 	bob := jtx.NewAccount("bob")
 	fund5000(env, alice, bob)
@@ -57,34 +74,64 @@ func TestEscrow_Enablement(t *testing.T) {
 
 	// Create an escrow with a condition
 	seq1 := env.Seq(alice)
+	aliceOwnerCount := env.OwnerCount(alice)
+	bobOwnerCount := env.OwnerCount(bob)
+	aliceDirEntries := ownerDirEntryCount(t, env, alice)
+	bobDirEntries := ownerDirEntryCount(t, env, bob)
 	result = env.Submit(
 		escrow.EscrowCreate(alice, bob, xrp(1000)).
-			Condition(escrow.TestCondition1).
+			Condition(escrow.TestCondition1()).
 			FinishTime(env.Now().Add(1 * time.Second)).
 			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxSuccess(t, result)
+	escrowKey := keylet.Escrow(alice.ID, seq1)
+	requireEscrowMetaNode(t, result, "CreatedNode", escrowKey)
+	require.True(t, env.LedgerEntryExists(escrowKey))
+	requireOwnerDirContains(t, env, alice, escrowKey.Key, true)
+	requireOwnerDirContains(t, env, bob, escrowKey.Key, true)
+	require.Equal(t, aliceOwnerCount+1, env.OwnerCount(alice))
+	require.Equal(t, bobOwnerCount, env.OwnerCount(bob))
+	require.Equal(t, aliceDirEntries+1, ownerDirEntryCount(t, env, alice))
+	require.Equal(t, bobDirEntries+1, ownerDirEntryCount(t, env, bob))
 	env.Close()
 
 	// Finish the conditional escrow
 	result = env.Submit(
 		escrow.EscrowFinish(bob, alice, seq1).
-			Condition(escrow.TestCondition1).
-			Fulfillment(escrow.TestFulfillment1).
+			Condition(escrow.TestCondition1()).
+			Fulfillment(escrow.TestFulfillment1()).
 			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxSuccess(t, result)
+	requireEscrowMetaNode(t, result, "DeletedNode", escrowKey)
+	require.False(t, env.LedgerEntryExists(escrowKey))
+	requireOwnerDirContains(t, env, alice, escrowKey.Key, false)
+	requireOwnerDirContains(t, env, bob, escrowKey.Key, false)
+	require.Equal(t, aliceOwnerCount, env.OwnerCount(alice))
+	require.Equal(t, bobOwnerCount, env.OwnerCount(bob))
+	require.Equal(t, aliceDirEntries, ownerDirEntryCount(t, env, alice))
+	require.Equal(t, bobDirEntries, ownerDirEntryCount(t, env, bob))
 
 	// Create an escrow with condition, finish time and cancel time
 	seq2 := env.Seq(alice)
 	result = env.Submit(
 		escrow.EscrowCreate(alice, bob, xrp(1000)).
-			Condition(escrow.TestCondition2).
+			Condition(escrow.TestCondition2()).
 			FinishTime(env.Now().Add(1 * time.Second)).
 			CancelTime(env.Now().Add(2 * time.Second)).
 			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxSuccess(t, result)
+	escrowKey = keylet.Escrow(alice.ID, seq2)
+	requireEscrowMetaNode(t, result, "CreatedNode", escrowKey)
+	require.True(t, env.LedgerEntryExists(escrowKey))
+	requireOwnerDirContains(t, env, alice, escrowKey.Key, true)
+	requireOwnerDirContains(t, env, bob, escrowKey.Key, true)
+	require.Equal(t, aliceOwnerCount+1, env.OwnerCount(alice))
+	require.Equal(t, bobOwnerCount, env.OwnerCount(bob))
+	require.Equal(t, aliceDirEntries+1, ownerDirEntryCount(t, env, alice))
+	require.Equal(t, bobDirEntries+1, ownerDirEntryCount(t, env, bob))
 	env.Close()
 
 	// Cancel the escrow
@@ -93,6 +140,14 @@ func TestEscrow_Enablement(t *testing.T) {
 			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxSuccess(t, result)
+	requireEscrowMetaNode(t, result, "DeletedNode", escrowKey)
+	require.False(t, env.LedgerEntryExists(escrowKey))
+	requireOwnerDirContains(t, env, alice, escrowKey.Key, false)
+	requireOwnerDirContains(t, env, bob, escrowKey.Key, false)
+	require.Equal(t, aliceOwnerCount, env.OwnerCount(alice))
+	require.Equal(t, bobOwnerCount, env.OwnerCount(bob))
+	require.Equal(t, aliceDirEntries, ownerDirEntryCount(t, env, alice))
+	require.Equal(t, bobDirEntries, ownerDirEntryCount(t, env, bob))
 }
 
 // --------------------------------------------------------------------------
@@ -149,7 +204,7 @@ func TestEscrow_Timing(t *testing.T) {
 		seq := env.Seq(alice)
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, xrp(1000)).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				CancelTime(ts).
 				Build())
 		jtx.RequireTxSuccess(t, result)
@@ -167,8 +222,8 @@ func TestEscrow_Timing(t *testing.T) {
 		// Verify that a finish won't work anymore (past cancel time).
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(escrow.TestCondition1).
-				Fulfillment(escrow.TestFulfillment1).
+				Condition(escrow.TestCondition1()).
+				Fulfillment(escrow.TestFulfillment1()).
 				Fee(env.BaseFee() * 150).
 				Build())
 		require.Equal(t, "tecNO_PERMISSION", result.Code)
@@ -289,6 +344,47 @@ func TestEscrow_Timing(t *testing.T) {
 				Build())
 		jtx.RequireTxSuccess(t, result)
 	})
+
+	t.Run("ExactFinishAfterBoundary", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		fund5000(env, alice, bob)
+		env.Close()
+
+		finishAfter := env.NowRipple() + 100
+		sequence := env.Seq(alice)
+		jtx.RequireTxSuccess(t, env.Submit(
+			escrow.EscrowCreate(alice, bob, xrp(1000)).FinishAfter(finishAfter).Build()))
+		env.CloseToParentCloseTime(finishAfter)
+		require.Equal(t, "tecNO_PERMISSION", env.Submit(
+			escrow.EscrowFinish(bob, alice, sequence).Fee(env.BaseFee()*150).Build()).Code)
+		env.CloseToParentCloseTime(finishAfter + 1)
+		jtx.RequireTxSuccess(t, env.Submit(
+			escrow.EscrowFinish(bob, alice, sequence).Fee(env.BaseFee()*150).Build()))
+	})
+
+	t.Run("ExactCancelAfterBoundary", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		fund5000(env, alice, bob)
+		env.Close()
+
+		cancelAfter := env.NowRipple() + 100
+		sequence := env.Seq(alice)
+		jtx.RequireTxSuccess(t, env.Submit(
+			escrow.EscrowCreate(alice, bob, xrp(1000)).
+				Condition(escrow.TestCondition1()).
+				CancelAfter(cancelAfter).
+				Build()))
+		env.CloseToParentCloseTime(cancelAfter)
+		require.Equal(t, "tecNO_PERMISSION", env.Submit(
+			escrow.EscrowCancel(bob, alice, sequence).Build()).Code)
+		env.CloseToParentCloseTime(cancelAfter + 1)
+		jtx.RequireTxSuccess(t, env.Submit(
+			escrow.EscrowCancel(bob, alice, sequence).Build()))
+	})
 }
 
 // --------------------------------------------------------------------------
@@ -329,15 +425,12 @@ func TestEscrow_Tags(t *testing.T) {
 	// Verify tags stored in the escrow SLE
 	escrowData, err := env.LedgerEntry(escrowKey)
 	require.NoError(t, err)
-	escrowHex := hex.EncodeToString(escrowData)
-	decoded, err := decodeLedgerEntry(escrowHex)
+	entry, err := state.ParseEscrow(escrowData)
 	require.NoError(t, err)
-	if sourceTag, ok := decoded["SourceTag"]; ok {
-		require.Equal(t, uint32(1), toUint32(sourceTag))
-	}
-	if destTag, ok := decoded["DestinationTag"]; ok {
-		require.Equal(t, uint32(2), toUint32(destTag))
-	}
+	require.True(t, entry.HasSourceTag)
+	require.Equal(t, uint32(1), entry.SourceTag)
+	require.True(t, entry.HasDestTag)
+	require.Equal(t, uint32(2), entry.DestinationTag)
 }
 
 // --------------------------------------------------------------------------
@@ -392,7 +485,7 @@ func TestEscrow_Fix1571(t *testing.T) {
 	result = env.Submit(
 		escrow.EscrowCreate(alice, bob, xrp(100)).
 			CancelTime(env.Now().Add(90 * time.Second)).
-			Condition(escrow.TestCondition1).
+			Condition(escrow.TestCondition1()).
 			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxSuccess(t, result)
@@ -400,8 +493,8 @@ func TestEscrow_Fix1571(t *testing.T) {
 
 	result = env.Submit(
 		escrow.EscrowFinish(carol, alice, seq).
-			Condition(escrow.TestCondition1).
-			Fulfillment(escrow.TestFulfillment1).
+			Condition(escrow.TestCondition1()).
+			Fulfillment(escrow.TestFulfillment1()).
 			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxSuccess(t, result)
@@ -439,7 +532,7 @@ func TestEscrow_FailureCases(t *testing.T) {
 	// Cancel time is in the past
 	result = env.Submit(
 		escrow.EscrowCreate(alice, bob, xrp(1000)).
-			Condition(escrow.TestCondition1).
+			Condition(escrow.TestCondition1()).
 			CancelTime(env.Now().Add(-5 * time.Second)).
 			Build())
 	require.Equal(t, "tecNO_PERMISSION", result.Code)
@@ -499,7 +592,7 @@ func TestEscrow_FailureCases(t *testing.T) {
 	// be strictly later than FinishAfter.
 	result = env.Submit(
 		escrow.EscrowCreate(alice, carol, xrp(1)).
-			Condition(escrow.TestCondition1).
+			Condition(escrow.TestCondition1()).
 			FinishTime(env.Now().Add(10 * time.Second)).
 			CancelTime(env.Now().Add(10 * time.Second)).
 			Build())
@@ -507,7 +600,7 @@ func TestEscrow_FailureCases(t *testing.T) {
 
 	result = env.Submit(
 		escrow.EscrowCreate(alice, carol, xrp(1)).
-			Condition(escrow.TestCondition1).
+			Condition(escrow.TestCondition1()).
 			FinishTime(env.Now().Add(10 * time.Second)).
 			CancelTime(env.Now().Add(5 * time.Second)).
 			Build())
@@ -520,7 +613,7 @@ func TestEscrow_FailureCases(t *testing.T) {
 	// Missing destination tag
 	result = env.Submit(
 		escrow.EscrowCreate(alice, carol, xrp(1)).
-			Condition(escrow.TestCondition1).
+			Condition(escrow.TestCondition1()).
 			CancelTime(env.Now().Add(1 * time.Second)).
 			Build())
 	require.Equal(t, "tecDST_TAG_NEEDED", result.Code)
@@ -528,7 +621,7 @@ func TestEscrow_FailureCases(t *testing.T) {
 	// Success with destination tag
 	result = env.Submit(
 		escrow.EscrowCreate(alice, carol, xrp(1)).
-			Condition(escrow.TestCondition1).
+			Condition(escrow.TestCondition1()).
 			CancelTime(env.Now().Add(1 * time.Second)).
 			DestTag(1).
 			Build())
@@ -596,8 +689,8 @@ func TestEscrow_FailureCases(t *testing.T) {
 
 		result = env.Submit(
 			escrow.EscrowFinish(ivan, ivan, seq).
-				Condition(escrow.TestCondition1).
-				Fulfillment(escrow.TestFulfillment1).
+				Condition(escrow.TestCondition1()).
+				Fulfillment(escrow.TestFulfillment1()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
@@ -791,7 +884,7 @@ func TestEscrow_Lockup(t *testing.T) {
 		seq := env.Seq(alice)
 		result := env.Submit(
 			escrow.EscrowCreate(alice, alice, xrp(1000)).
-				Condition(escrow.TestCondition2).
+				Condition(escrow.TestCondition2()).
 				FinishTime(env.Now().Add(5 * time.Second)).
 				Build())
 		jtx.RequireTxSuccess(t, result)
@@ -806,8 +899,8 @@ func TestEscrow_Lockup(t *testing.T) {
 		require.Equal(t, "tecNO_PERMISSION", result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(alice, alice, seq).
-				Condition(escrow.TestCondition2).
-				Fulfillment(escrow.TestFulfillment2).
+				Condition(escrow.TestCondition2()).
+				Fulfillment(escrow.TestFulfillment2()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		require.Equal(t, "tecNO_PERMISSION", result.Code)
@@ -815,8 +908,8 @@ func TestEscrow_Lockup(t *testing.T) {
 		require.Equal(t, "tecNO_PERMISSION", result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(escrow.TestCondition2).
-				Fulfillment(escrow.TestFulfillment2).
+				Condition(escrow.TestCondition2()).
+				Fulfillment(escrow.TestFulfillment2()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		require.Equal(t, "tecNO_PERMISSION", result.Code)
@@ -836,8 +929,8 @@ func TestEscrow_Lockup(t *testing.T) {
 
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(escrow.TestCondition2).
-				Fulfillment(escrow.TestFulfillment2).
+				Condition(escrow.TestCondition2()).
+				Fulfillment(escrow.TestFulfillment2()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		jtx.RequireTxSuccess(t, result)
@@ -854,7 +947,7 @@ func TestEscrow_Lockup(t *testing.T) {
 		seq := env.Seq(alice)
 		result := env.Submit(
 			escrow.EscrowCreate(alice, alice, xrp(1000)).
-				Condition(escrow.TestCondition3).
+				Condition(escrow.TestCondition3()).
 				FinishTime(env.Now().Add(5 * time.Second)).
 				Build())
 		jtx.RequireTxSuccess(t, result)
@@ -873,22 +966,22 @@ func TestEscrow_Lockup(t *testing.T) {
 
 		result = env.Submit(
 			escrow.EscrowFinish(alice, alice, seq).
-				Condition(escrow.TestCondition2).
-				Fulfillment(escrow.TestFulfillment2).
+				Condition(escrow.TestCondition2()).
+				Fulfillment(escrow.TestFulfillment2()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(escrow.TestCondition3).
-				Fulfillment(escrow.TestFulfillment3).
+				Condition(escrow.TestCondition3()).
+				Fulfillment(escrow.TestFulfillment3()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		require.Equal(t, "tecNO_PERMISSION", result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(alice, alice, seq).
-				Condition(escrow.TestCondition3).
-				Fulfillment(escrow.TestFulfillment3).
+				Condition(escrow.TestCondition3()).
+				Fulfillment(escrow.TestFulfillment3()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		jtx.RequireTxSuccess(t, result)
@@ -906,7 +999,7 @@ func TestEscrow_Lockup(t *testing.T) {
 		seq := env.Seq(alice)
 		result := env.Submit(
 			escrow.EscrowCreate(alice, alice, xrp(1000)).
-				Condition(escrow.TestCondition3).
+				Condition(escrow.TestCondition3()).
 				FinishTime(env.Now().Add(5 * time.Second)).
 				Build())
 		jtx.RequireTxSuccess(t, result)
@@ -933,22 +1026,22 @@ func TestEscrow_Lockup(t *testing.T) {
 
 		result = env.Submit(
 			escrow.EscrowFinish(alice, alice, seq).
-				Condition(escrow.TestCondition2).
-				Fulfillment(escrow.TestFulfillment2).
+				Condition(escrow.TestCondition2()).
+				Fulfillment(escrow.TestFulfillment2()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(escrow.TestCondition3).
-				Fulfillment(escrow.TestFulfillment3).
+				Condition(escrow.TestCondition3()).
+				Fulfillment(escrow.TestFulfillment3()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		require.Equal(t, "tecNO_PERMISSION", result.Code)
 		result = env.Submit(
 			escrow.EscrowFinish(zelda, alice, seq).
-				Condition(escrow.TestCondition3).
-				Fulfillment(escrow.TestFulfillment3).
+				Condition(escrow.TestCondition3()).
+				Fulfillment(escrow.TestFulfillment3()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		jtx.RequireTxSuccess(t, result)
@@ -974,7 +1067,7 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 
 		result := env.Submit(
 			escrow.EscrowCreate(alice, carol, xrp(1000)).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				CancelTime(env.Now().Add(1 * time.Second)).
 				Build())
 		jtx.RequireTxSuccess(t, result)
@@ -994,8 +1087,8 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		// Attempt to finish with a condition instead of a fulfillment
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(escrow.TestCondition1).
-				Fulfillment(escrow.TestCondition1). // condition passed as fulfillment
+				Condition(escrow.TestCondition1()).
+				Fulfillment(escrow.TestCondition1()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
@@ -1004,8 +1097,8 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		// Wrong fulfillment (fb2 instead of fb1)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(escrow.TestCondition1).
-				Fulfillment(escrow.TestFulfillment2).
+				Condition(escrow.TestCondition1()).
+				Fulfillment(escrow.TestFulfillment2()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
@@ -1014,18 +1107,33 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		// Wrong fulfillment (fb3 instead of fb1)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(escrow.TestCondition1).
-				Fulfillment(escrow.TestFulfillment3).
+				Condition(escrow.TestCondition1()).
+				Fulfillment(escrow.TestFulfillment3()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
 		require.Equal(t, uint32(1), env.OwnerCount(alice))
+
+		for _, fulfillment := range [][]byte{
+			{0xA0, 0x03, 0x80, 0x00, 0xFF},
+			{0xA0, 0x03, 0x80, 0x81, 0x00},
+		} {
+			result = env.Submit(
+				escrow.EscrowFinish(bob, alice, seq).
+					Condition(escrow.TestCondition1()).
+					Fulfillment(fulfillment).
+					Fee(150 * env.BaseFee()).
+					Build())
+			require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
+			require.True(t, env.LedgerEntryExists(keylet.Escrow(alice.ID, seq)))
+			require.Equal(t, uint32(1), env.OwnerCount(alice))
+		}
 
 		// Incorrect condition with various fulfillments
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(escrow.TestCondition2).
-				Fulfillment(escrow.TestFulfillment1).
+				Condition(escrow.TestCondition2()).
+				Fulfillment(escrow.TestFulfillment1()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
@@ -1033,8 +1141,8 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(escrow.TestCondition2).
-				Fulfillment(escrow.TestFulfillment2).
+				Condition(escrow.TestCondition2()).
+				Fulfillment(escrow.TestFulfillment2()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
@@ -1042,8 +1150,8 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(escrow.TestCondition2).
-				Fulfillment(escrow.TestFulfillment3).
+				Condition(escrow.TestCondition2()).
+				Fulfillment(escrow.TestFulfillment3()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
@@ -1052,8 +1160,8 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		// Correct condition & fulfillment
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(escrow.TestCondition1).
-				Fulfillment(escrow.TestFulfillment1).
+				Condition(escrow.TestCondition1()).
+				Fulfillment(escrow.TestFulfillment1()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		jtx.RequireTxSuccess(t, result)
@@ -1084,7 +1192,7 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 
 		result := env.Submit(
 			escrow.EscrowCreate(alice, carol, xrp(1000)).
-				Condition(escrow.TestCondition2).
+				Condition(escrow.TestCondition2()).
 				CancelTime(env.Now().Add(1 * time.Second)).
 				Build())
 		jtx.RequireTxSuccess(t, result)
@@ -1113,7 +1221,7 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		seq := env.Seq(alice)
 		result := env.Submit(
 			escrow.EscrowCreate(alice, carol, xrp(1000)).
-				Condition(escrow.TestCondition3).
+				Condition(escrow.TestCondition3()).
 				CancelTime(env.Now().Add(1 * time.Second)).
 				Build())
 		jtx.RequireTxSuccess(t, result)
@@ -1129,8 +1237,8 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		// Finish fails after expiration
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(escrow.TestCondition3).
-				Fulfillment(escrow.TestFulfillment3).
+				Condition(escrow.TestCondition3()).
+				Fulfillment(escrow.TestFulfillment3()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		require.Equal(t, "tecNO_PERMISSION", result.Code)
@@ -1148,7 +1256,7 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		fund5000(env, alice, bob, carol)
 
 		// Build a padded condition buffer: [0x78, cb1..., 0x78]
-		cb1 := escrow.TestCondition1
+		cb1 := escrow.TestCondition1()
 		v := make([]byte, len(cb1)+2)
 		for i := range v {
 			v[i] = 0x78
@@ -1227,8 +1335,8 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(escrow.TestCondition1).
-				Fulfillment(escrow.TestFulfillment1).
+				Condition(escrow.TestCondition1()).
+				Fulfillment(escrow.TestFulfillment1()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		jtx.RequireTxSuccess(t, result)
@@ -1248,7 +1356,7 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		fund5000(env, alice, bob, carol)
 
 		// Build padded condition buffer
-		cb2 := escrow.TestCondition2
+		cb2 := escrow.TestCondition2()
 		cv := make([]byte, len(cb2)+2)
 		for i := range cv {
 			cv[i] = 0x78
@@ -1257,7 +1365,7 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		cs := len(cv)
 
 		// Build padded fulfillment buffer
-		fb2 := escrow.TestFulfillment2
+		fb2 := escrow.TestFulfillment2()
 		fv := make([]byte, len(fb2)+2)
 		for i := range fv {
 			fv[i] = 0x13
@@ -1374,8 +1482,8 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		// Now try the correct one
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(escrow.TestCondition2).
-				Fulfillment(escrow.TestFulfillment2).
+				Condition(escrow.TestCondition2()).
+				Fulfillment(escrow.TestFulfillment2()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		jtx.RequireTxSuccess(t, result)
@@ -1402,7 +1510,7 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		seq := env.Seq(alice)
 		result = env.Submit(
 			escrow.EscrowCreate(alice, carol, xrp(1000)).
-				Condition(escrow.TestCondition3).
+				Condition(escrow.TestCondition3()).
 				CancelTime(env.Now().Add(1 * time.Second)).
 				Build())
 		jtx.RequireTxSuccess(t, result)
@@ -1417,7 +1525,7 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(escrow.TestCondition3).
+				Condition(escrow.TestCondition3()).
 				Fulfillment([]byte{}).
 				Fee(150 * env.BaseFee()).
 				Build())
@@ -1426,7 +1534,7 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
 				Condition([]byte{}).
-				Fulfillment(escrow.TestFulfillment3).
+				Fulfillment(escrow.TestFulfillment3()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
@@ -1434,26 +1542,55 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 		// Missing Condition or Fulfillment (must both be present or absent)
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(escrow.TestCondition3).
+				Condition(escrow.TestCondition3()).
 				Build())
 		require.Equal(t, "temMALFORMED", result.Code)
 
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Fulfillment(escrow.TestFulfillment3).
+				Fulfillment(escrow.TestFulfillment3()).
 				Build())
 		require.Equal(t, "temMALFORMED", result.Code)
 
 		// Now finish it correctly
 		result = env.Submit(
 			escrow.EscrowFinish(bob, alice, seq).
-				Condition(escrow.TestCondition3).
-				Fulfillment(escrow.TestFulfillment3).
+				Condition(escrow.TestCondition3()).
+				Fulfillment(escrow.TestFulfillment3()).
 				Fee(150 * env.BaseFee()).
 				Build())
 		jtx.RequireTxSuccess(t, result)
 		jtx.RequireBalance(t, env, carol, uint64(xrp(6000)))
 		jtx.RequireBalance(t, env, alice, uint64(xrp(4000))-drops(env.BaseFee()))
+	})
+
+	t.Run("EmptyFieldsOnUnconditionalEscrow", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		fund5000(env, alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		result := env.Submit(
+			escrow.EscrowCreate(alice, bob, xrp(1000)).
+				FinishTime(env.Now().Add(1 * time.Second)).
+				Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		escrowKey := keylet.Escrow(alice.ID, seq)
+		result = env.Submit(
+			escrow.EscrowFinish(bob, alice, seq).
+				Condition([]byte{}).
+				Fulfillment([]byte{}).
+				Fee(150 * env.BaseFee()).
+				Build())
+		require.Equal(t, "tecCRYPTOCONDITION_ERROR", result.Code)
+		require.True(t, env.LedgerEntryExists(escrowKey))
+
+		jtx.RequireTxSuccess(t, env.Submit(escrow.EscrowFinish(bob, alice, seq).Build()))
+		require.False(t, env.LedgerEntryExists(escrowKey))
 	})
 
 	t.Run("NonPreimageSha256Condition", func(t *testing.T) {
@@ -1473,8 +1610,6 @@ func TestEscrow_CryptoConditions(t *testing.T) {
 			0x81, 0x03, 0x06, 0x34, 0xD2, 0x82, 0x02, 0x03, 0xC8,
 		}
 
-		// FIXME: this transaction should, eventually, return temDISABLED
-		// instead of temMALFORMED.
 		result := env.Submit(
 			escrow.EscrowCreate(alice, bob, xrp(1000)).
 				Condition(cb).
@@ -1507,10 +1642,12 @@ func TestEscrow_MetaAndOwnership(t *testing.T) {
 				CancelTime(env.Now().Add(500 * time.Second)).
 				Build())
 		jtx.RequireTxSuccess(t, result)
+		requireEscrowMetaNode(t, result, "CreatedNode", keylet.Escrow(alice.ID, aseq))
 		env.Close()
 
 		aa := keylet.Escrow(alice.ID, aseq)
 		require.True(t, env.LedgerEntryExists(aa))
+		requireOwnerDirContains(t, env, alice, aa.Key, true)
 
 		// Alice's owner directory should have 1 entry
 		require.Equal(t, uint32(1), env.OwnerCount(alice))
@@ -1521,10 +1658,12 @@ func TestEscrow_MetaAndOwnership(t *testing.T) {
 				CancelTime(env.Now().Add(2 * time.Second)).
 				Build())
 		jtx.RequireTxSuccess(t, result)
+		requireEscrowMetaNode(t, result, "CreatedNode", keylet.Escrow(bruce.ID, bseq))
 		env.Close()
 
 		bb := keylet.Escrow(bruce.ID, bseq)
 		require.True(t, env.LedgerEntryExists(bb))
+		requireOwnerDirContains(t, env, bruce, bb.Key, true)
 		require.Equal(t, uint32(1), env.OwnerCount(bruce))
 
 		env.Close()
@@ -1533,8 +1672,10 @@ func TestEscrow_MetaAndOwnership(t *testing.T) {
 		result = env.Submit(
 			escrow.EscrowFinish(alice, alice, aseq).Build())
 		jtx.RequireTxSuccess(t, result)
+		requireEscrowMetaNode(t, result, "DeletedNode", aa)
 
 		require.False(t, env.LedgerEntryExists(aa))
+		requireOwnerDirContains(t, env, alice, aa.Key, false)
 		require.Equal(t, uint32(0), env.OwnerCount(alice))
 		require.Equal(t, uint32(1), env.OwnerCount(bruce))
 
@@ -1544,8 +1685,10 @@ func TestEscrow_MetaAndOwnership(t *testing.T) {
 		result = env.Submit(
 			escrow.EscrowCancel(bruce, bruce, bseq).Build())
 		jtx.RequireTxSuccess(t, result)
+		requireEscrowMetaNode(t, result, "DeletedNode", bb)
 
 		require.False(t, env.LedgerEntryExists(bb))
+		requireOwnerDirContains(t, env, bruce, bb.Key, false)
 		require.Equal(t, uint32(0), env.OwnerCount(bruce))
 	})
 
@@ -1565,6 +1708,7 @@ func TestEscrow_MetaAndOwnership(t *testing.T) {
 				FinishTime(env.Now().Add(1 * time.Second)).
 				Build())
 		jtx.RequireTxSuccess(t, result)
+		requireEscrowMetaNode(t, result, "CreatedNode", keylet.Escrow(alice.ID, aseq))
 		env.Close()
 
 		result = env.Submit(
@@ -1573,13 +1717,18 @@ func TestEscrow_MetaAndOwnership(t *testing.T) {
 				CancelTime(env.Now().Add(2 * time.Second)).
 				Build())
 		jtx.RequireTxSuccess(t, result)
+		requireEscrowMetaNode(t, result, "CreatedNode", keylet.Escrow(bruce.ID, bseq))
 		env.Close()
 
 		ab := keylet.Escrow(alice.ID, aseq)
 		require.True(t, env.LedgerEntryExists(ab))
+		requireOwnerDirContains(t, env, alice, ab.Key, true)
+		requireOwnerDirContains(t, env, bruce, ab.Key, true)
 
 		bc := keylet.Escrow(bruce.ID, bseq)
 		require.True(t, env.LedgerEntryExists(bc))
+		requireOwnerDirContains(t, env, bruce, bc.Key, true)
+		requireOwnerDirContains(t, env, carol, bc.Key, true)
 
 		// Only the source's OwnerCount is incremented for an escrow; the
 		// destination's directory tracks the entry but does not bump its
@@ -1595,9 +1744,14 @@ func TestEscrow_MetaAndOwnership(t *testing.T) {
 		result = env.Submit(
 			escrow.EscrowFinish(alice, alice, aseq).Build())
 		jtx.RequireTxSuccess(t, result)
+		requireEscrowMetaNode(t, result, "DeletedNode", ab)
 
 		require.False(t, env.LedgerEntryExists(ab))
 		require.True(t, env.LedgerEntryExists(bc))
+		requireOwnerDirContains(t, env, alice, ab.Key, false)
+		requireOwnerDirContains(t, env, bruce, ab.Key, false)
+		requireOwnerDirContains(t, env, bruce, bc.Key, true)
+		requireOwnerDirContains(t, env, carol, bc.Key, true)
 
 		require.Equal(t, uint32(0), env.OwnerCount(alice))
 		require.Equal(t, uint32(1), env.OwnerCount(bruce))
@@ -1609,9 +1763,12 @@ func TestEscrow_MetaAndOwnership(t *testing.T) {
 		result = env.Submit(
 			escrow.EscrowCancel(bruce, bruce, bseq).Build())
 		jtx.RequireTxSuccess(t, result)
+		requireEscrowMetaNode(t, result, "DeletedNode", bc)
 
 		require.False(t, env.LedgerEntryExists(ab))
 		require.False(t, env.LedgerEntryExists(bc))
+		requireOwnerDirContains(t, env, bruce, bc.Key, false)
+		requireOwnerDirContains(t, env, carol, bc.Key, false)
 
 		require.Equal(t, uint32(0), env.OwnerCount(alice))
 		require.Equal(t, uint32(0), env.OwnerCount(bruce))
@@ -1651,8 +1808,7 @@ func TestEscrow_Consequences(t *testing.T) {
 		require.Equal(t, "10", txn.GetCommon().Fee)
 
 		// Verify amount (potential spend) is 1000 XRP
-		ec := txn.(*escrowtx.EscrowCreate)
-		require.Equal(t, xrp(1000), ec.Amount.Drops())
+		require.Equal(t, xrp(1000), txn.Amount.Drops())
 	})
 
 	t.Run("EscrowCancelConsequences", func(t *testing.T) {
@@ -1790,7 +1946,7 @@ func TestEscrow_WithTickets(t *testing.T) {
 
 		escrowSeq := aliceTicket
 		createTx := escrow.EscrowCreate(alice, bob, xrp(1000)).
-			Condition(escrow.TestCondition1).
+			Condition(escrow.TestCondition1()).
 			CancelTime(ts).
 			Build()
 		jtx.WithTicketSeq(createTx, aliceTicket)
@@ -1815,8 +1971,8 @@ func TestEscrow_WithTickets(t *testing.T) {
 
 		// Verify that a finish won't work anymore.
 		finishTx := escrow.EscrowFinish(bob, alice, escrowSeq).
-			Condition(escrow.TestCondition1).
-			Fulfillment(escrow.TestFulfillment1).
+			Condition(escrow.TestCondition1()).
+			Fulfillment(escrow.TestFulfillment1()).
 			Fee(150 * env.BaseFee()).
 			Build()
 		jtx.WithTicketSeq(finishTx, bobTicket)
@@ -1890,11 +2046,11 @@ func TestEscrow_Credentials(t *testing.T) {
 		credType := "abcde"
 
 		// Create credential: zelda issues to carol
-		result := env.Submit(credential.CredentialCreate(zelda, carol, credType).Build())
+		result := env.Submit(credential.CredentialCreateText(zelda, carol, credType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		credIdx := dp.CredentialIndex(carol, zelda, credType)
+		credIdx := dp.CredentialIndexHex(carol, zelda, credType)
 
 		seq := env.Seq(alice)
 		result = env.Submit(
@@ -1917,7 +2073,7 @@ func TestEscrow_Credentials(t *testing.T) {
 		env.Close()
 
 		// Accept the credential
-		result = env.Submit(credential.CredentialAccept(carol, zelda, credType).Build())
+		result = env.Submit(credential.CredentialAcceptText(carol, zelda, credType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
@@ -1938,7 +2094,7 @@ func TestEscrow_Credentials(t *testing.T) {
 		// Bob authorizes credentials from zelda with this credType
 		result = env.Submit(
 			dp.AuthCredentials(bob, []dp.AuthorizeCredentials{
-				{Issuer: zelda, CredType: credType},
+				{Issuer: zelda, CredTypeText: credType},
 			}).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -1967,14 +2123,14 @@ func TestEscrow_Credentials(t *testing.T) {
 
 		credType := "abcde"
 
-		result := env.Submit(credential.CredentialCreate(zelda, carol, credType).Build())
+		result := env.Submit(credential.CredentialCreateText(zelda, carol, credType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		result = env.Submit(credential.CredentialAccept(carol, zelda, credType).Build())
+		result = env.Submit(credential.CredentialAcceptText(carol, zelda, credType).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		credIdx := dp.CredentialIndex(carol, zelda, credType)
+		credIdx := dp.CredentialIndexHex(carol, zelda, credType)
 
 		seq := env.Seq(alice)
 		result = env.Submit(
@@ -2000,14 +2156,14 @@ func TestEscrow_Credentials(t *testing.T) {
 
 		// Test: use any valid credentials if account == dst
 		credType2 := "fghijk"
-		result = env.Submit(credential.CredentialCreate(zelda, bob, credType2).Build())
+		result = env.Submit(credential.CredentialCreateText(zelda, bob, credType2).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		result = env.Submit(credential.CredentialAccept(bob, zelda, credType2).Build())
+		result = env.Submit(credential.CredentialAcceptText(bob, zelda, credType2).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		credIdxBob := dp.CredentialIndex(bob, zelda, credType2)
+		credIdxBob := dp.CredentialIndexHex(bob, zelda, credType2)
 
 		seq2 := env.Seq(alice)
 		result = env.Submit(
@@ -2022,7 +2178,7 @@ func TestEscrow_Credentials(t *testing.T) {
 		env.Close()
 		result = env.Submit(
 			dp.AuthCredentials(bob, []dp.AuthorizeCredentials{
-				{Issuer: zelda, CredType: credType},
+				{Issuer: zelda, CredTypeText: credType},
 			}).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -2035,46 +2191,6 @@ func TestEscrow_Credentials(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 	})
-}
-
-// --------------------------------------------------------------------------
-// Helper functions
-// --------------------------------------------------------------------------
-
-// decodeLedgerEntry decodes a hex-encoded binary ledger entry into a map.
-func decodeLedgerEntry(hexStr string) (map[string]any, error) {
-	// Use the binary codec to decode
-	binarycodec, err := getBinaryCodecDecoder()
-	if err != nil {
-		return nil, err
-	}
-	return binarycodec(hexStr)
-}
-
-// getBinaryCodecDecoder returns the binary codec Decode function.
-// This is a lazy import to avoid circular dependencies.
-func getBinaryCodecDecoder() (func(string) (map[string]any, error), error) {
-	// Import dynamically to avoid potential circular dependencies
-	return func(hexStr string) (map[string]any, error) {
-		// For now, return nil - the binary codec decode will be used when available
-		return nil, nil
-	}, nil
-}
-
-// toUint32 converts an interface{} to uint32 for field comparisons.
-func toUint32(v any) uint32 {
-	switch val := v.(type) {
-	case float64:
-		return uint32(val)
-	case int:
-		return uint32(val)
-	case uint32:
-		return val
-	case int64:
-		return uint32(val)
-	default:
-		return 0
-	}
 }
 
 // TestEscrow_Fix1543FlagGate verifies the tfUniversalMask checks of
@@ -2131,7 +2247,7 @@ func TestEscrow_Fix1543FlagGate(t *testing.T) {
 		seq := env.Seq(alice)
 		jtx.RequireTxSuccess(t, env.Submit(
 			escrow.EscrowCreate(alice, bob, xrp(1000)).
-				Condition(escrow.TestCondition1).
+				Condition(escrow.TestCondition1()).
 				CancelTime(env.Now().Add(100*time.Second)).
 				FinishTime(env.Now().Add(5*time.Second)).
 				Fee(env.BaseFee()*150).

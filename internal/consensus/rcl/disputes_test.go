@@ -2,6 +2,7 @@ package rcl
 
 import (
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
@@ -76,14 +77,14 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 	parms := consensus.DefaultConsensusParms()
 
 	t.Run("empty set is not stalled", func(t *testing.T) {
-		dt := NewDisputeTracker()
+		dt := newDisputeTracker()
 		if dt.AllStalled(parms, true, parms.StalledRounds+1) {
 			t.Fatalf("empty dispute set must not be stalled")
 		}
 	})
 
 	t.Run("non-terminal avalanche state is not stalled", func(t *testing.T) {
-		dt := NewDisputeTracker()
+		dt := newDisputeTracker()
 		txID := makeTxID(1)
 		dt.CreateDispute(txID, nil, true)
 		d := dt.Dispute(txID)
@@ -99,7 +100,7 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 	})
 
 	t.Run("active flipping suppresses stall", func(t *testing.T) {
-		dt := NewDisputeTracker()
+		dt := newDisputeTracker()
 		txID := makeTxID(2)
 		dt.CreateDispute(txID, nil, true)
 		d := dt.Dispute(txID)
@@ -114,7 +115,7 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 	})
 
 	t.Run("frozen + one-sided tally stalls", func(t *testing.T) {
-		dt := NewDisputeTracker()
+		dt := newDisputeTracker()
 		txID := makeTxID(3)
 		dt.CreateDispute(txID, nil, true)
 		d := dt.Dispute(txID)
@@ -139,7 +140,7 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 	// always false, so the gate is bypassed and the predicate falls
 	// through to the avMIN_ROUNDS dwell + tally checks. Pin both arms.
 	t.Run("observer mode falls through to tally", func(t *testing.T) {
-		dt := NewDisputeTracker()
+		dt := newDisputeTracker()
 		txID := makeTxID(4)
 		dt.CreateDispute(txID, nil, false)
 		d := dt.Dispute(txID)
@@ -160,7 +161,7 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 	// non-stalled dispute in the set must short-circuit the aggregate
 	// to false, regardless of how many siblings are stalled.
 	t.Run("mixed disputes — one not stalled — aggregate false", func(t *testing.T) {
-		dt := NewDisputeTracker()
+		dt := newDisputeTracker()
 		stalledID := makeTxID(5)
 		dt.CreateDispute(stalledID, nil, true)
 		ds := dt.Dispute(stalledID)
@@ -182,6 +183,19 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 		if dt.AllStalled(parms, true, parms.StalledRounds+1) {
 			t.Fatalf("AllStalled must be false when any dispute is not stalled")
 		}
+	})
+
+	t.Run("invalid avalanche state panics", func(t *testing.T) {
+		dt := newDisputeTracker()
+		txID := makeTxID(7)
+		dt.CreateDispute(txID, nil, true)
+		dt.Dispute(txID).AvalancheState = consensus.AvalancheStuck + 1
+		defer func() {
+			if recover() == nil {
+				t.Fatal("AllStalled did not panic")
+			}
+		}()
+		dt.AllStalled(parms, true, parms.StalledRounds+1)
 	})
 }
 
@@ -321,6 +335,94 @@ func TestConsensus_OverlappingDisjointProposals_Converges(t *testing.T) {
 	}
 }
 
+func TestEngine_UpdatePosition_ObserverAdoptsPeerMajority(t *testing.T) {
+	adaptor := newMockAdaptor()
+	engine := NewEngine(adaptor, DefaultConfig())
+	txID := makeTxID(0xC)
+	empty := buildMockTxSet(makeTxSetID(0x30))
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+
+	engine.mu.Lock()
+	engine.setMode(consensus.ModeObserving)
+	engine.ourTxSet = empty
+	engine.disputeTracker.CreateDispute(txID, txID[:], false)
+	for i := byte(1); i <= 3; i++ {
+		engine.disputeTracker.SetVote(txID, consensus.NodeID{i}, true)
+	}
+	engine.disputeTracker.SetVote(txID, consensus.NodeID{4}, false)
+	engine.updatePosition()
+	got := engine.ourTxSet
+	engine.mu.Unlock()
+
+	if !got.Contains(txID) {
+		t.Fatal("observing node did not adopt the peer-majority transaction")
+	}
+	adaptor.mu.RLock()
+	broadcasts := len(adaptor.proposalsBroadcast)
+	adaptor.mu.RUnlock()
+	if broadcasts != 0 {
+		t.Fatalf("observing node broadcast %d proposals, want 0", broadcasts)
+	}
+}
+
+func TestEngine_OnProposalRefreshesDisputeVoteWhenPeerMatchesOurSet(t *testing.T) {
+	adaptor := newMockAdaptor()
+	peerNode := consensus.NodeID{0xA1}
+	adaptor.setTrusted([]consensus.NodeID{adaptor.nodeID, peerNode})
+
+	txID := makeTxID(0xC)
+	ourSet := buildMockTxSet(makeTxSetID(0x31), txID)
+	emptySet := buildMockTxSet(makeTxSetID(0x32))
+	adaptor.txSets[ourSet.ID()] = ourSet
+	adaptor.txSets[emptySet.ID()] = emptySet
+
+	engine := NewEngine(adaptor, DefaultConfig())
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round, true); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+
+	engine.mu.Lock()
+	engine.ourTxSet = ourSet
+	engine.acquiredTxSets[ourSet.ID()] = ourSet
+	engine.acquiredTxSets[emptySet.ID()] = emptySet
+	engine.state.OurPosition = &consensus.Proposal{
+		Round: round, NodeID: adaptor.nodeID, TxSet: ourSet.ID(),
+	}
+	engine.setPhase(consensus.PhaseEstablish)
+	engine.mu.Unlock()
+
+	now := adaptor.Now()
+	proposal := &consensus.Proposal{
+		Round: round, NodeID: peerNode, Position: 0,
+		TxSet: emptySet.ID(), CloseTime: now,
+		PreviousLedger: round.ParentHash, Timestamp: now,
+	}
+	if err := engine.OnProposal(proposal, 1); err != nil {
+		t.Fatalf("OnProposal(empty): %v", err)
+	}
+	dispute := engine.disputeTracker.Dispute(txID)
+	if dispute == nil || dispute.Yays != 0 || dispute.Nays != 1 {
+		t.Fatalf("empty-set vote = %#v, want 0 yes/1 no", dispute)
+	}
+
+	matching := &consensus.Proposal{
+		Round: round, NodeID: peerNode, Position: 1,
+		TxSet: ourSet.ID(), CloseTime: now,
+		PreviousLedger: round.ParentHash, Timestamp: now.Add(time.Second),
+	}
+	if err := engine.OnProposal(matching, 1); err != nil {
+		t.Fatalf("OnProposal(matching): %v", err)
+	}
+	if dispute.Yays != 1 || dispute.Nays != 0 || !dispute.Votes[peerNode] {
+		t.Fatalf("matching-set vote = %d yes/%d no (%v), want 1 yes/0 no",
+			dispute.Yays, dispute.Nays, dispute.Votes[peerNode])
+	}
+}
+
 // TestConsensus_BowOut_UnVotesDisputes seeds a dispute that peer X
 // has voted YES on, then drives a bow-out proposal from X. The
 // dispute's Yay count must drop by one and X must be gone from the
@@ -457,7 +559,7 @@ func TestConsensus_BowOut_UnVotesDisputes(t *testing.T) {
 // Acceptance criterion: issue #266 — "threshold rises 50 → 65 → 70 → 95
 // as avalanche state advances."
 func TestConsensus_AvalancheThresholdRamp(t *testing.T) {
-	dt := NewDisputeTracker()
+	dt := newDisputeTracker()
 	parms := consensus.DefaultConsensusParms()
 
 	txID := makeTxID(0xC)

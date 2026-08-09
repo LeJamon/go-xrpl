@@ -25,8 +25,8 @@ jobs:
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.11.3
-      # The postgres conformance suite is gated behind a build tag, so plain
-      # vet/lint never compiles it; keep it compiling.
+      # Tagged integration tests run against PostgreSQL below; keep the tagged
+      # package in the static-analysis path as well.
       - name: Vet tag-gated postgres backend
         run: go vet -tags postgres ./storage/relationaldb/postgres/
 
@@ -48,24 +48,26 @@ jobs:
           args: --config .golangci-warnings.yml
 
   generate:
-    name: Generate (ledgerfields drift check)
+    name: Generate (drift check)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
         with:
           cgo: "false"
-      # Re-run the ledgerfields generator and fail if any *_gen.go file
-      # changes — a spec edit without `go generate` would otherwise silently
-      # ship a stale typed decoder.
+      - uses: arduino/setup-protoc@v3
+        with:
+          version: "34.1"
+      - name: Install protoc-gen-go
+        run: go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
       - name: Re-run go generate
-        run: go generate ./internal/tx/ledgerfields/...
+        run: go generate ./ledger/entry/... ./internal/peermanagement/proto
       - name: Fail on tree diff
         run: |
-          if ! git diff --exit-code -- internal/tx/ledgerfields; then
-            echo "::error::ledgerfields generated files are out of date."
-            echo "Run: go generate ./internal/tx/ledgerfields/..."
-            echo "Then commit the regenerated *_gen.go files."
+          if ! git diff --exit-code -- ledger/entry internal/peermanagement/proto/xrpl.pb.go; then
+            echo "::error::generated files are out of date."
+            echo "Run: go generate ./ledger/entry/... ./internal/peermanagement/proto"
+            echo "Then commit the regenerated files."
             exit 1
           fi
 
@@ -106,6 +108,31 @@ jobs:
       - run: go build ./...
       - run: go test -count=1 -timeout 5m ./storage/relationaldb/sqlite/...
 
+  postgres:
+    name: Test (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: xrpl
+          POSTGRES_PASSWORD: xrpl
+          POSTGRES_DB: xrpl_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U xrpl -d xrpl_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - name: Run PostgreSQL repository contract tests
+        run: go test -race -tags postgres -count=1 -timeout 10m ./storage/relationaldb/postgres/...
+        env:
+          XRPLD_TEST_POSTGRES_DSN: postgres://xrpl:xrpl@localhost:5432/xrpl_test?sslmode=disable
+
   test:
     name: Test (${{ matrix.group }})
     runs-on: ubuntu-latest
@@ -130,13 +157,20 @@ jobs:
             packages: ./internal/tx/...
             race: "-race"
           - group: core
-            packages: ./internal/ledger/... ./internal/txq/... ./internal/rpc/... ./internal/consensus/... ./internal/peermanagement/...
+            packages: ./internal/ledger/... ./internal/txq/... ./internal/rpc/... ./internal/consensus/... ./internal/peermanagement/... ./internal/observability/... ./internal/node/... ./internal/cli/... ./internal/replaytool/...
             race: "-race"
           - group: libs
             packages: ./codec/... ./crypto/... ./shamap/... ./storage/... ./keylet/... ./ledger/... ./amendment/... ./drops/... ./protocol/... ./config/...
             race: "-race"
     steps:
       - uses: actions/checkout@v5
+      - name: Check out rippled v3.2.0 oracle
+        if: matrix.group == 'libs'
+        uses: actions/checkout@v5
+        with:
+          repository: XRPLF/rippled
+          ref: 3c43f4614f87965298773279ff5b85d4c56c637b
+          path: rippled-worktrees/v3.2.0-oracle
       - uses: ./.github/actions/setup
       - run: go test ${{ matrix.race }} -count=1 -timeout 15m ${{ matrix.packages }}
 

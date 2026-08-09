@@ -96,7 +96,7 @@ func (s *fixedLatencySender) PeerLatency(peerID uint64) (time.Duration, bool) {
 func TestAcquisitionWork_DoesNotBlockRouter(t *testing.T) {
 	engine := &mockEngine{}
 	inbox := make(chan *peermanagement.InboundMessage, 2)
-	router := NewRouter(engine, newTestAdaptor(t), inbox)
+	router := newTestRouter(engine, newTestAdaptor(t), inbox)
 	router.adaptor.LedgerService().SetValidatedLedgerAgeClock(func() time.Time {
 		return time.Now().Add(time.Minute)
 	})
@@ -125,7 +125,6 @@ func TestAcquisitionWork_DoesNotBlockRouter(t *testing.T) {
 		defer close(done)
 		router.Run(ctx)
 	}()
-	<-lane.started
 
 	data := &message.LedgerData{
 		LedgerHash: hash[:], LedgerSeq: 42, InfoType: message.LedgerInfoAsNode,
@@ -133,7 +132,7 @@ func TestAcquisitionWork_DoesNotBlockRouter(t *testing.T) {
 	}
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  7,
-		Type:    uint16(message.TypeLedgerData),
+		Type:    message.TypeLedgerData,
 		Payload: encodePayload(t, data),
 	}
 	select {
@@ -154,7 +153,7 @@ func TestAcquisitionWork_DoesNotBlockRouter(t *testing.T) {
 	proposal.NodePubKey[0] = 0x02
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  8,
-		Type:    uint16(message.TypeProposeLedger),
+		Type:    message.TypeProposeLedger,
 		Payload: encodePayload(t, proposal),
 	}
 	require.Eventually(t, func() bool { return len(engine.getProposals()) == 1 }, time.Second, time.Millisecond)
@@ -172,7 +171,7 @@ func TestAcquisitionWork_DropsRetiredResult(t *testing.T) {
 	sender := &acqRecordingSender{}
 	adaptor := newTestAdaptor(t)
 	adaptor.sender = sender
-	router := NewRouter(nil, adaptor, nil)
+	router := newTestRouter(nil, adaptor, nil)
 	hash := [32]byte{0xB2}
 	old := inbound.New(hash, 50, 7, serveTestLogger())
 	router.fetchTracker.Track(old)
@@ -396,7 +395,7 @@ func TestHandlePeerConnect_EmitsManifestBeforeAcquisitionTraversalCompletes(t *t
 	router.engine = engine
 	router.inbox = inbox
 	acquisitionSender := &orderedAcquisitionSender{events: events}
-	router.adaptor.sender = acquisitionSender
+	router.acquisition = acquisitionSender
 	ledger, _ := newWideWorkLedger(t)
 	router.fetchTracker.Track(ledger)
 
@@ -419,7 +418,6 @@ func TestHandlePeerConnect_EmitsManifestBeforeAcquisitionTraversalCompletes(t *t
 		defer close(done)
 		router.Run(ctx)
 	}()
-	<-lane.started
 
 	proposal := &message.ProposeSet{
 		ProposeSeq:     1,
@@ -432,7 +430,7 @@ func TestHandlePeerConnect_EmitsManifestBeforeAcquisitionTraversalCompletes(t *t
 	proposal.NodePubKey[0] = 0x02
 	inbox <- &peermanagement.InboundMessage{
 		PeerID:  8,
-		Type:    uint16(message.TypeProposeLedger),
+		Type:    message.TypeProposeLedger,
 		Payload: encodePayload(t, proposal),
 	}
 	select {
@@ -481,7 +479,7 @@ func TestHandlePeerConnect_RollsBackAdmissionWhenWorkSubmissionFails(t *testing.
 	manifestSender := &fakeManifestSender{}
 	router, _, _ := routerWithCache(t, manifestSender, 0x79, 11)
 	recorder := &acqRecordingSender{}
-	router.adaptor.sender = recorder
+	router.acquisition = recorder
 	ledger, _ := newWideWorkLedger(t)
 	router.fetchTracker.Track(ledger)
 	router.acquisitionWork = newAcquisitionWorkLane(1)
@@ -498,7 +496,7 @@ func TestHandlePeerConnect_AdmitsPeerToActiveAcquisition(t *testing.T) {
 	recorder := &acqRecordingSender{}
 	adaptor := newTestAdaptor(t)
 	adaptor.sender = recorder
-	router := NewRouter(nil, adaptor, nil)
+	router := newTestRouter(nil, adaptor, nil)
 	ledger, _ := newWideWorkLedger(t)
 	router.fetchTracker.Track(ledger)
 
@@ -574,7 +572,7 @@ func newWantBaseWorkLedger(t *testing.T, source *shamap.SHAMap, peers []uint64) 
 func TestApplyAcquisitionData_DuplicateBaseIsNotUseful(t *testing.T) {
 	service := newTestLedgerService(t)
 	closed := service.GetClosedLedger()
-	router := NewRouter(nil, newTestAdaptor(t), nil)
+	router := newTestRouter(nil, newTestAdaptor(t), nil)
 	ledger := inbound.New(closed.Hash(), closed.Sequence(), 1, serveTestLogger())
 	data := &message.LedgerData{InfoType: message.LedgerInfoBase, Nodes: router.buildLedgerBaseNodes(closed)}
 	first, _, _, _, err := applyAcquisitionData(t.Context(), ledger, data)
@@ -588,7 +586,7 @@ func TestApplyAcquisitionData_DuplicateBaseIsNotUseful(t *testing.T) {
 func TestProcessAcquisitionWork_BaseReplyCannotPoisonSharedAcquisition(t *testing.T) {
 	service := newTestLedgerService(t)
 	closed := service.GetClosedLedger()
-	router := NewRouter(nil, newTestAdaptor(t), nil)
+	router := newTestRouter(nil, newTestAdaptor(t), nil)
 	valid := router.buildLedgerBaseNodes(closed)
 	require.NotEmpty(t, valid)
 
@@ -664,7 +662,7 @@ func TestProcessAcquisitionWork_DuplicatePartialBaseDoesNotRetry(t *testing.T) {
 
 func TestLedgerQueryDepthPresence(t *testing.T) {
 	recorder := &acqRecordingSender{}
-	router := NewRouter(nil, New(Config{Sender: &fixedLatencySender{
+	router := newTestRouter(nil, New(Config{Sender: &fixedLatencySender{
 		acqRecordingSender: recorder,
 		latencies:          map[uint64]time.Duration{2: 300 * time.Millisecond},
 	}}), nil)
@@ -680,7 +678,7 @@ func TestSendMissingReplyRequest_UsesPeerLatencyDepth(t *testing.T) {
 		acqRecordingSender: recorder,
 		latencies:          map[uint64]time.Duration{1: 299 * time.Millisecond, 2: 300 * time.Millisecond},
 	}
-	router := NewRouter(nil, New(Config{Sender: sender}), nil)
+	router := newTestRouter(nil, New(Config{Sender: sender}), nil)
 	ledger := inbound.New([32]byte{1}, 1, 1, serveTestLogger())
 	router.sendMissingReplyRequest(ledger, inbound.MissingRequest{PeerID: 1, NodeIDs: [][]byte{make([]byte, 33)}})
 	router.sendMissingReplyRequest(ledger, inbound.MissingRequest{PeerID: 2, NodeIDs: [][]byte{make([]byte, 33)}})
@@ -688,7 +686,7 @@ func TestSendMissingReplyRequest_UsesPeerLatencyDepth(t *testing.T) {
 }
 
 func TestAcquisitionWork_PersistenceFailureDoesNotAdoptOrRecordPeerFailure(t *testing.T) {
-	router := NewRouter(&mockEngine{}, newTestAdaptor(t), nil)
+	router := newTestRouter(&mockEngine{}, newTestAdaptor(t), nil)
 	ledger := inbound.New([32]byte{0xB3}, 51, 7, serveTestLogger())
 	router.fetchTracker.Track(ledger)
 
@@ -931,7 +929,7 @@ func TestProcessAcquisitionWork_UsefulDataPreventsTimerFailure(t *testing.T) {
 }
 
 func TestRouter_PendingAcquisitionStillReceivesTimerCheck(t *testing.T) {
-	router := NewRouter(nil, newTestAdaptor(t), nil)
+	router := newTestRouter(nil, newTestAdaptor(t), nil)
 	lane := newAcquisitionWorkLane(1)
 	ledger := inbound.New([32]byte{0xA1}, 12, 7, serveTestLogger())
 	clock := time.Now()
@@ -1112,24 +1110,14 @@ func TestAcquisitionWorkLane_ShutdownCancelsAndJoins(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	lane.start(ctx)
 	a := inbound.New([32]byte{1}, 1, 1, serveTestLogger())
-	b := inbound.New([32]byte{2}, 2, 2, serveTestLogger())
-	callbackCalled := make(chan struct{})
 	require.True(t, lane.submit(a, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
 	<-entered
-	require.True(t, lane.submit(b, acquisitionWorkEvent{kind: acquisitionWorkLocal, after: func() {
-		close(callbackCalled)
-	}}))
 	cancel()
 	lane.stop()
 	select {
 	case <-exited:
 	default:
 		t.Fatal("active traversal did not observe cancellation before stop returned")
-	}
-	select {
-	case <-callbackCalled:
-		t.Fatal("shutdown ran a router-owned callback from canceled work")
-	default:
 	}
 }
 
@@ -1174,7 +1162,7 @@ func TestAcquisitionWorkLane_CancelLedgerPreemptsObsoleteTraversal(t *testing.T)
 }
 
 func TestRouterClearFetchInfoCancelsActiveAcquisitionWork(t *testing.T) {
-	router := NewRouter(&mockEngine{}, newTestAdaptor(t), nil)
+	router := newTestRouter(&mockEngine{}, newTestAdaptor(t), nil)
 	lane := newAcquisitionWorkLane(1)
 	router.acquisitionWork = lane
 
@@ -1200,52 +1188,8 @@ func TestRouterClearFetchInfoCancelsActiveAcquisitionWork(t *testing.T) {
 	require.Eventually(t, func() bool { return !lane.has(ledger) }, time.Second, time.Millisecond)
 }
 
-func TestAcquisitionWorkLane_TerminalResultPreservesTrailingCallback(t *testing.T) {
-	lane := newAcquisitionWorkLane(1)
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	callbackCalled := make(chan struct{})
-	lane.process = func(ctx context.Context, ledger *inbound.Ledger, _ []acquisitionWorkEvent) acquisitionWorkResult {
-		close(entered)
-		select {
-		case <-ctx.Done():
-			return acquisitionWorkResult{ledger: ledger, err: ctx.Err()}
-		case <-release:
-			return acquisitionWorkResult{ledger: ledger, remove: true}
-		}
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	lane.start(ctx)
-	ledger := inbound.New([32]byte{0xF3}, 44, 7, serveTestLogger())
-	require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
-	<-entered
-	require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkAdded, peerID: 8, after: func() {
-		close(callbackCalled)
-	}}))
-	close(release)
-
-	terminal := <-lane.results()
-	assert.True(t, terminal.remove)
-	close(terminal.ack)
-	followup := <-lane.results()
-	require.Len(t, followup.after, 1)
-	for _, after := range followup.after {
-		after()
-	}
-	close(followup.ack)
-	select {
-	case <-callbackCalled:
-	case <-time.After(time.Second):
-		t.Fatal("terminal batch dropped a trailing completion callback")
-	}
-
-	cancel()
-	lane.stop()
-}
-
 func TestAcquisitionWork_PendingReservesTimerEvent(t *testing.T) {
-	router := NewRouter(nil, newTestAdaptor(t), nil)
+	router := newTestRouter(nil, newTestAdaptor(t), nil)
 	lane := newAcquisitionWorkLane(1)
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -1312,7 +1256,7 @@ func TestAcquisitionWork_UsefulLargeReplyPrecedesTerminalTimerCheck(t *testing.T
 
 	timerAt := primeAcquisitionForTerminalTimer(t, ledger)
 
-	router := NewRouter(nil, newTestAdaptor(t), nil)
+	router := newTestRouter(nil, newTestAdaptor(t), nil)
 	router.fetchTracker.Track(ledger)
 	lane := newAcquisitionWorkLane(1)
 	blocker := inbound.New([32]byte{0xB7}, 201, 8, serveTestLogger())
@@ -1384,7 +1328,7 @@ func TestAcquisitionWork_UsefulLargeReplyPrecedesTerminalTimerCheck(t *testing.T
 func TestRouter_MaintenanceDrainsBufferedReplyBeforeTerminalTimer(t *testing.T) {
 	ledger, replies := newWideWorkLedger(t)
 	timerAt := primeAcquisitionForTerminalTimer(t, ledger)
-	router := NewRouter(nil, newTestAdaptor(t), nil)
+	router := newTestRouter(nil, newTestAdaptor(t), nil)
 	router.fetchTracker.Track(ledger)
 	inbox := make(chan *peermanagement.InboundMessage, 1)
 	router.SetAcqInbox(inbox)
@@ -1412,7 +1356,7 @@ func TestRouter_MaintenanceDrainsBufferedReplyBeforeTerminalTimer(t *testing.T) 
 	ledgerHash := ledger.Hash()
 	inbox <- &peermanagement.InboundMessage{
 		PeerID: 7,
-		Type:   uint16(message.TypeLedgerData),
+		Type:   message.TypeLedgerData,
 		Payload: encodePayload(t, &message.LedgerData{
 			LedgerHash: ledgerHash[:],
 			InfoType:   message.LedgerInfoAsNode,
@@ -1441,7 +1385,7 @@ func TestRouter_MaintenanceRunsUnderSustainedAcquisitionInput(t *testing.T) {
 	recorder := &acqRecordingSender{}
 	adaptor := newTestAdaptor(t)
 	adaptor.sender = recorder
-	router := NewRouter(nil, adaptor, nil)
+	router := newTestRouter(nil, adaptor, nil)
 	ledger := inbound.New([32]byte{0xB9}, 203, 7, serveTestLogger())
 	ledger.RearmTimer(time.Now().Add(-time.Hour))
 	router.fetchTracker.Track(ledger)
@@ -1491,7 +1435,7 @@ func primeAcquisitionForTerminalTimer(t *testing.T, ledger *inbound.Ledger) time
 }
 
 func TestAcquisitionWorkLane_RearmsAfterResultHandling(t *testing.T) {
-	router := NewRouter(nil, newTestAdaptor(t), nil)
+	router := newTestRouter(nil, newTestAdaptor(t), nil)
 	lane := newAcquisitionWorkLane(1)
 	lane.process = func(_ context.Context, ledger *inbound.Ledger, _ []acquisitionWorkEvent) acquisitionWorkResult {
 		return acquisitionWorkResult{ledger: ledger}
@@ -1513,7 +1457,7 @@ func TestAcquisitionWorkLane_RearmsAfterResultHandling(t *testing.T) {
 }
 
 func TestAcquisitionWorkLane_BaseTimerCheckRearmsAfterRequest(t *testing.T) {
-	router := NewRouter(nil, newTestAdaptor(t), nil)
+	router := newTestRouter(nil, newTestAdaptor(t), nil)
 	lane := newAcquisitionWorkLane(1)
 	ctx, cancel := context.WithCancel(t.Context())
 	lane.start(ctx)
@@ -1534,7 +1478,7 @@ func TestAcquisitionWorkLane_BaseTimerCheckRearmsAfterRequest(t *testing.T) {
 }
 
 func TestAcquisitionWorkLane_UselessDataDoesNotRearmTimer(t *testing.T) {
-	router := NewRouter(nil, newTestAdaptor(t), nil)
+	router := newTestRouter(nil, newTestAdaptor(t), nil)
 	lane := newAcquisitionWorkLane(1)
 	lane.process = func(_ context.Context, ledger *inbound.Ledger, _ []acquisitionWorkEvent) acquisitionWorkResult {
 		return acquisitionWorkResult{ledger: ledger}
@@ -1557,7 +1501,7 @@ func TestAcquisitionWorkLane_UselessDataDoesNotRearmTimer(t *testing.T) {
 }
 
 func TestAcquisitionWorkLane_UselessLocalWorkDoesNotRearmTimer(t *testing.T) {
-	router := NewRouter(nil, newTestAdaptor(t), nil)
+	router := newTestRouter(nil, newTestAdaptor(t), nil)
 	lane := newAcquisitionWorkLane(1)
 	lane.process = func(_ context.Context, ledger *inbound.Ledger, _ []acquisitionWorkEvent) acquisitionWorkResult {
 		return acquisitionWorkResult{ledger: ledger}
@@ -1580,7 +1524,7 @@ func TestAcquisitionWorkLane_UselessLocalWorkDoesNotRearmTimer(t *testing.T) {
 }
 
 func TestAcquisitionWork_SaturationDefersTimer(t *testing.T) {
-	router := NewRouter(nil, newTestAdaptor(t), nil)
+	router := newTestRouter(nil, newTestAdaptor(t), nil)
 	lane := newAcquisitionWorkLane(1)
 	entered := make(chan struct{})
 	release := make(chan struct{})

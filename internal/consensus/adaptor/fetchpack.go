@@ -17,6 +17,8 @@ const (
 	// fetchPackCacheTargetSize is the soft target for the fetch-pack node
 	// cache.
 	fetchPackCacheTargetSize = 65536
+	fetchPackCacheMaxBytes   = int64(message.MaxMessageSize)
+	fetchPackCacheMaxNode    = message.MaxMessageSize
 	// fetchPackCacheTTL bounds how long an inbound fetch-pack node lingers
 	// while the cache is within its target size.
 	fetchPackCacheTTL = 45 * time.Second
@@ -32,32 +34,95 @@ type fetchPackCache struct {
 	mu         sync.Mutex
 	nodes      map[[32]byte]fetchPackEntry
 	targetSize int
+	maxEntries int
+	bytes      int64
+	maxBytes   int64
+	maxNode    int
 	ttl        time.Duration
+	sequence   uint64
+	order      []fetchPackOrderEntry
+	orderHead  int
 }
 
 type fetchPackEntry struct {
-	data []byte
-	at   time.Time
+	data     []byte
+	at       time.Time
+	sequence uint64
+}
+
+type fetchPackOrderEntry struct {
+	hash     [32]byte
+	sequence uint64
 }
 
 func newFetchPackCache() *fetchPackCache {
 	return &fetchPackCache{
 		nodes:      make(map[[32]byte]fetchPackEntry),
 		targetSize: fetchPackCacheTargetSize,
+		maxEntries: fetchPackCacheTargetSize,
+		maxBytes:   fetchPackCacheMaxBytes,
+		maxNode:    fetchPackCacheMaxNode,
 		ttl:        fetchPackCacheTTL,
 	}
 }
 
-// add stores a node blob keyed by its hash, stamping it with now. A newcomer is
-// always accepted, even past the target size, so a fresh, immediately-useful
-// node is never refused; the cache is bounded by sweep, not at insert.
-func (c *fetchPackCache) add(hash [32]byte, data []byte, now time.Time) {
-	if c == nil {
-		return
+// add stores a node blob keyed by its hash, evicting the oldest entries when
+// necessary to keep the cache within its byte budget.
+func (c *fetchPackCache) add(hash [32]byte, data []byte, now time.Time) bool {
+	if c == nil || c.maxEntries <= 0 || len(data) == 0 || len(data) > c.maxNode || int64(len(data)) > c.maxBytes {
+		return false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.nodes[hash] = fetchPackEntry{data: append([]byte(nil), data...), at: now}
+	if previous, ok := c.nodes[hash]; ok {
+		delete(c.nodes, hash)
+		c.bytes -= int64(len(previous.data))
+	}
+	for len(c.nodes) >= c.maxEntries || c.bytes+int64(len(data)) > c.maxBytes {
+		if !c.evictOldestLocked() {
+			return false
+		}
+	}
+	c.sequence++
+	c.nodes[hash] = fetchPackEntry{data: append([]byte(nil), data...), at: now, sequence: c.sequence}
+	c.order = append(c.order, fetchPackOrderEntry{hash: hash, sequence: c.sequence})
+	c.bytes += int64(len(data))
+	c.compactOrderLocked()
+	return true
+}
+
+func (c *fetchPackCache) evictOldestLocked() bool {
+	for c.orderHead < len(c.order) {
+		candidate := c.order[c.orderHead]
+		c.orderHead++
+		entry, ok := c.nodes[candidate.hash]
+		if !ok || entry.sequence != candidate.sequence {
+			continue
+		}
+		delete(c.nodes, candidate.hash)
+		c.bytes -= int64(len(entry.data))
+		c.compactOrderLocked()
+		return true
+	}
+	c.compactOrderLocked()
+	return false
+}
+
+func (c *fetchPackCache) compactOrderLocked() {
+	if c.orderHead < len(c.order)/2 && len(c.order) <= 2*c.maxEntries {
+		return
+	}
+	kept := c.order[:0]
+	for i := c.orderHead; i < len(c.order); i++ {
+		candidate := c.order[i]
+		entry, ok := c.nodes[candidate.hash]
+		if ok && entry.sequence == candidate.sequence {
+			kept = append(kept, candidate)
+		}
+	}
+	clear(c.order[len(kept):])
+	c.order = kept
+	c.orderHead = 0
 }
 
 // get returns the cached blob for hash when present and unexpired, consuming the
@@ -74,6 +139,8 @@ func (c *fetchPackCache) get(hash [32]byte, now time.Time) ([]byte, bool) {
 		return nil, false
 	}
 	delete(c.nodes, hash)
+	c.bytes -= int64(len(e.data))
+	c.compactOrderLocked()
 	if now.Sub(e.at) >= c.ttl {
 		return nil, false
 	}
@@ -88,6 +155,15 @@ func (c *fetchPackCache) Size() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.nodes)
+}
+
+func (c *fetchPackCache) Bytes() int64 {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.bytes
 }
 
 // FetchPackCacheSize returns the current inbound fetch-pack cache size.
@@ -111,9 +187,11 @@ func (c *fetchPackCache) sweep(now time.Time) {
 	maxAge := c.effectiveMaxAge(len(c.nodes))
 	for h, e := range c.nodes {
 		if now.Sub(e.at) >= maxAge {
+			c.bytes -= int64(len(e.data))
 			delete(c.nodes, h)
 		}
 	}
+	c.compactOrderLocked()
 }
 
 // effectiveMaxAge is how long an entry may linger before the next sweep drops
@@ -135,18 +213,19 @@ func (c *fetchPackCache) effectiveMaxAge(size int) time.Duration {
 // locally from the cache via CheckLocal. A pack's leading ledger-header object
 // and any node that fails hash verification are dropped.
 //
-// The handler runs on the consensus router goroutine, so it bounds the work an
-// inbound reply can impose: replies are ignored unless an acquisition is in
-// flight (an unsolicited pack can complete nothing), at most the serve cap of
-// objects is hashed no matter how large the reply, and a peer that ships
-// poisoned blobs is charged.
+// The handler runs on the consensus router goroutine. Replies are ignored
+// unless an acquisition is in flight (an unsolicited pack can complete
+// nothing), and a peer that ships poisoned blobs is charged. The wire decoder
+// already bounds a reply by message.MaxMessageSize, so every object in a
+// valid frame is processed; the sender's serving cap applies only to locally
+// built packs and must not truncate a legal inbound pack.
 func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
 	if r.fetchPacks == nil {
 		return
 	}
 	decoded, err := message.Decode(message.TypeGetObjects, msg.Payload)
 	if err != nil {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "fetch-pack-decode")
+		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "fetch-pack-decode")
 		return
 	}
 	gob, ok := decoded.(*message.GetObjectByHash)
@@ -170,17 +249,12 @@ func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
 	now := time.Now()
 	stored := 0
 	poisoned := 0
-	// Hash-verify at most the serve cap of objects per reply: a peer can
-	// legitimately serve a heavy-delta ledger above our own serve cap, so an
-	// over-large reply is truncated rather than charged, while the work it
-	// imposes on the consensus goroutine stays bounded.
-	limit := min(len(gob.Objects), fetchPackMaxObjects)
 	// Per-ledgerseq "late pack" short-circuit: skip caching nodes for a
 	// ledger we already hold. go-xrpl packs are single-ledger, but track
 	// per-object so a multi-seq pack is handled too.
 	var pLSeq uint32
 	pLDo := true
-	for i := range limit {
+	for i := range gob.Objects {
 		obj := &gob.Objects[i]
 		if len(obj.Hash) != 32 || len(obj.Data) == 0 {
 			continue
@@ -206,11 +280,12 @@ func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
 			poisoned++
 			continue
 		}
-		r.fetchPacks.add(hash, obj.Data, now)
-		stored++
+		if r.fetchPacks.add(hash, obj.Data, now) {
+			stored++
+		}
 	}
 	if poisoned > 0 {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "fetch-pack-poison")
+		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "fetch-pack-poison")
 	}
 	if stored == 0 {
 		return
@@ -237,8 +312,7 @@ func (r *Router) haveLedgerSeq(seq uint32) bool {
 	if svc == nil {
 		return false
 	}
-	l, err := svc.GetLedgerBySequence(seq)
-	return err == nil && l != nil
+	return svc.HasCompleteLedger(seq)
 }
 
 // tryCompleteFromFetchPack runs CheckLocal against the fetch-pack cache for
@@ -304,7 +378,7 @@ func (r *Router) tryFetchPackEscalation(il *inbound.Ledger) bool {
 	if err != nil {
 		return false
 	}
-	if err := r.adaptor.SendToPeer(peerID, frame); err != nil {
+	if err := r.acquisition.SendPriorityToPeer(peerID, frame); err != nil {
 		r.logger.Debug("fetch-pack request send failed",
 			"seq", il.Seq(), "err", err)
 		return false
