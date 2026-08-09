@@ -42,7 +42,7 @@ type MPTokenIssuanceSet struct {
 
 	// ImmutableFlags permanently prevents later changes to selected capabilities
 	// and fields.
-	ImmutableFlags *uint32 `json:"ImmutableFlags,omitempty" xrpl:"ImmutableFlags,omitempty"`
+	ImmutableFlags       *uint32 `json:"ImmutableFlags,omitempty" xrpl:"ImmutableFlags,omitempty"`
 	IssuerEncryptionKey  *string `json:"IssuerEncryptionKey,omitempty" xrpl:"IssuerEncryptionKey,omitempty"`
 	AuditorEncryptionKey *string `json:"AuditorEncryptionKey,omitempty" xrpl:"AuditorEncryptionKey,omitempty"`
 

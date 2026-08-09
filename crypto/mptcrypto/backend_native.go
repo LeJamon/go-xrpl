@@ -15,12 +15,15 @@ import (
 
 func bytePtr(value []byte) *C.uint8_t { return (*C.uint8_t)(unsafe.Pointer(&value[0])) }
 
+// Available reports whether the native mpt-crypto context initialized.
 func Available() bool { return C.go_mpt_available() == 1 }
 
+// ValidPublicKey reports whether value is a valid compressed secp256k1 public key.
 func ValidPublicKey(value []byte) bool {
 	return len(value) == PublicKeySize && C.go_mpt_valid_pubkey(bytePtr(value)) == 1
 }
 
+// ValidCiphertext reports whether value contains two valid compressed ciphertext points.
 func ValidCiphertext(value []byte) bool {
 	return len(value) == CiphertextSize && C.go_mpt_valid_ciphertext(bytePtr(value)) == 1
 }
@@ -42,6 +45,7 @@ func combine(a, b []byte, subtract bool) ([]byte, bool) {
 func AddCiphertexts(a, b []byte) ([]byte, bool)      { return combine(a, b, false) }
 func SubtractCiphertexts(a, b []byte) ([]byte, bool) { return combine(a, b, true) }
 
+// CanonicalZero returns the deterministic encryption of zero for an account and issuance.
 func CanonicalZero(pub []byte, account [20]byte, issuance [24]byte) ([]byte, bool) {
 	if len(pub) != PublicKeySize {
 		return nil, false
@@ -51,12 +55,14 @@ func CanonicalZero(pub []byte, account [20]byte, issuance [24]byte) ([]byte, boo
 	return out, ok
 }
 
+// ConvertContext returns the proof context for a confidential convert transaction.
 func ConvertContext(account [20]byte, issuance [24]byte, sequence uint32) ([32]byte, bool) {
 	var out [32]byte
 	ok := C.go_mpt_convert_context(bytePtr(account[:]), bytePtr(issuance[:]), C.uint32_t(sequence), bytePtr(out[:])) == 1
 	return out, ok
 }
 
+// ConvertBackContext returns the proof context for a confidential convert-back transaction.
 func ConvertBackContext(account [20]byte, issuance [24]byte, sequence, version uint32) ([32]byte, bool) {
 	var out [32]byte
 	ok := C.go_mpt_convert_back_context(bytePtr(account[:]), bytePtr(issuance[:]), C.uint32_t(sequence), C.uint32_t(version), bytePtr(out[:])) == 1
@@ -67,6 +73,7 @@ func validParticipant(p Participant) bool {
 	return len(p.PublicKey) == PublicKeySize && len(p.Ciphertext) == CiphertextSize
 }
 
+// VerifyRevealed verifies that encrypted amounts reveal the claimed amount.
 func VerifyRevealed(amount uint64, blind [32]byte, holder, issuer Participant, auditor *Participant) bool {
 	if !validParticipant(holder) || !validParticipant(issuer) {
 		return false
@@ -83,10 +90,12 @@ func VerifyRevealed(amount uint64, blind [32]byte, holder, issuer Participant, a
 	return C.go_mpt_verify_revealed(C.uint64_t(amount), bytePtr(blind[:]), bytePtr(holder.PublicKey), bytePtr(holder.Ciphertext), bytePtr(issuer.PublicKey), bytePtr(issuer.Ciphertext), hasAuditor, bytePtr(auditorPub), bytePtr(auditorCT)) == 1
 }
 
+// VerifyConvert verifies a confidential convert proof.
 func VerifyConvert(proof, pub []byte, context [32]byte) bool {
 	return len(proof) == ConvertProofSize && len(pub) == PublicKeySize && C.go_mpt_verify_convert(bytePtr(proof), bytePtr(pub), bytePtr(context[:])) == 1
 }
 
+// VerifyConvertBack verifies a confidential convert-back proof.
 func VerifyConvertBack(proof, pub, spending, commitment []byte, amount uint64, context [32]byte) bool {
 	return len(proof) == ConvertBackProofSize && len(pub) == PublicKeySize && len(spending) == CiphertextSize && len(commitment) == CommitmentSize && C.go_mpt_verify_convert_back(bytePtr(proof), bytePtr(pub), bytePtr(spending), bytePtr(commitment), C.uint64_t(amount), bytePtr(context[:])) == 1
 }

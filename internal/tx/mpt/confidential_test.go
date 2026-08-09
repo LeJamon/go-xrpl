@@ -140,7 +140,7 @@ func TestMPTokenIssuanceSetConfidentialPreflight(t *testing.T) {
 
 	t.Run("Dynamic checks precede encryption key validation", func(t *testing.T) {
 		badKey := "00"
-		fee := uint16(protocol.MaxMPTokenTransferFee + 1)
+		fee := protocol.MaxMPTokenTransferFee + 1
 		transaction := NewMPTokenIssuanceSet("rAlice", issuanceID)
 		transaction.TransferFee = &fee
 		transaction.IssuerEncryptionKey = &badKey
