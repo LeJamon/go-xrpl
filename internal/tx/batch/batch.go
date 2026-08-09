@@ -563,7 +563,7 @@ func (b *Batch) CalculateMinimumFee(view tx.LedgerView, config tx.EngineConfig) 
 }
 
 func (b *Batch) calculateMinimumFee(view tx.LedgerView, config tx.EngineConfig) (uint64, bool) {
-	const maxAmount = uint64(^uint64(0) >> 1)
+	const maxAmount = ^uint64(0) >> 1
 
 	if len(b.RawTransactions) > MaxBatchTransactions || len(b.BatchSigners) > MaxBatchSigners {
 		return 0, false
