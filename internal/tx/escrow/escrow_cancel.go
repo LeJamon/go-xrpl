@@ -285,7 +285,6 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 				return result
 			}
 		}
-
 	}
 
 	ownerAccount, err := tx.ReadAccountRoot(ctx.View, ownerID)
