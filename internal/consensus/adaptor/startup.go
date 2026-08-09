@@ -127,7 +127,7 @@ func (c *Components) Start() error {
 	}
 
 	// Start message router
-	routerCtx, routerCancel := context.WithCancel(context.Background())
+	routerCtx, routerCancel := context.WithCancel(context.Background()) //nolint:gosec // Components.Stop owns cancellation.
 	c.routerCancel = routerCancel
 	c.routerDone = make(chan struct{})
 	go func() {
@@ -138,7 +138,7 @@ func (c *Components) Start() error {
 	// Start the publisher-list HTTP poller. Cancellation propagates to
 	// per-URL goroutines via the poller's own stop channel.
 	if c.ValidatorListPoller != nil {
-		pollerCtx, pollerCancel := context.WithCancel(context.Background())
+		pollerCtx, pollerCancel := context.WithCancel(context.Background()) //nolint:gosec // Components.Stop owns cancellation.
 		c.sitePollerCancel = pollerCancel
 		c.ValidatorListPoller.Start(pollerCtx)
 	}
@@ -149,7 +149,7 @@ func (c *Components) Start() error {
 	// peer gossip, no site polls) would only land when the next
 	// ingest happens.
 	if c.ValidatorList != nil {
-		tickCtx, tickCancel := context.WithCancel(context.Background())
+		tickCtx, tickCancel := context.WithCancel(context.Background()) //nolint:gosec // Components.Stop owns cancellation.
 		c.vlTickCancel = tickCancel
 		go c.runValidatorListTick(tickCtx, validatorListTickInterval)
 	}
