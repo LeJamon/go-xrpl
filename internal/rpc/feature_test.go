@@ -24,7 +24,6 @@ func TestFeatureNoParams(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
-		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
@@ -90,7 +89,6 @@ func TestFeatureNoParamsEmptyObject(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
-		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
@@ -124,7 +122,6 @@ func TestFeatureSingleLookupByName(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
-		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
@@ -179,7 +176,6 @@ func TestFeatureSingleLookupByHexID(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
-		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
@@ -234,7 +230,6 @@ func TestFeatureInvalidName(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
-		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
@@ -277,7 +272,6 @@ func TestFeatureResponseStructure(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
-		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}

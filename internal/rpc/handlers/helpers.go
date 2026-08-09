@@ -104,7 +104,7 @@ func RequirePathSearch(ctx *types.RpcContext) *types.RpcError {
 // unlimited (admin/identified) — mirroring rippled's isUnlimited(role)
 // carve-out at RPCHandler.cpp:132 and LegacyPathFind.cpp:32-37.
 func shedCheck(ctx *types.RpcContext) *types.ClientLoadShedder {
-	if ctx == nil || ctx.Unlimited || ctx.Services == nil {
+	if ctx == nil || ctx.Role.IsUnlimited() || ctx.Services == nil {
 		return nil
 	}
 	return ctx.Services.ClientLoad
@@ -154,7 +154,7 @@ func acquirePathfind(ctx *types.RpcContext) (release func(), rpcErr *types.RpcEr
 	}
 	services := ctx.Services
 	s := services.ClientLoad
-	if ctx.Unlimited {
+	if ctx.Role.IsUnlimited() {
 		if s == nil {
 			return func() {}, nil
 		}

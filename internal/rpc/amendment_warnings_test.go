@@ -62,10 +62,13 @@ func serverInfoWarnings(t *testing.T, mock *mockServerInfoWarnings, isAdmin bool
 	t.Helper()
 	services := &types.ServiceContainer{Ledger: mock, NodePublicKey: testNodePublicKey()}
 	method := &handlers.ServerInfoMethod{}
+	role := types.RoleGuest
+	if isAdmin {
+		role = types.RoleAdmin
+	}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
-		Role:       types.RoleGuest,
-		IsAdmin:    isAdmin,
+		Role:       role,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}

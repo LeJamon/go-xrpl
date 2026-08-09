@@ -53,7 +53,7 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		features := make(map[string]any, len(allFeatures))
 		for _, f := range allFeatures {
 			hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
-			features[hexID] = buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.IsAdmin)
+			features[hexID] = buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.Role.IsAdmin())
 		}
 		return map[string]any{
 			"features": features,
@@ -67,7 +67,7 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 
 	// Admin vote mutation: set or clear a veto on a specific amendment.
 	if request.Vetoed.present {
-		if !ctx.IsAdmin {
+		if !ctx.Role.IsAdmin() {
 			return nil, types.RpcErrorNoPermission("feature")
 		}
 		if ctrl == nil || tbl == nil {
@@ -78,13 +78,13 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		}
 		hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
 		return map[string]any{
-			hexID: buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.IsAdmin),
+			hexID: buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.Role.IsAdmin()),
 		}, nil
 	}
 
 	hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
 	return map[string]any{
-		hexID: buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.IsAdmin),
+		hexID: buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.Role.IsAdmin()),
 	}, nil
 }
 

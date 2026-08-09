@@ -49,7 +49,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		}
 	}
 
-	limit, limitErr := readLimitField(params, limitAccountTx, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitAccountTx, ctx.Role.IsUnlimited())
 	if limitErr != nil {
 		return nil, limitErr
 	}

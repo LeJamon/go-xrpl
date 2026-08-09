@@ -38,7 +38,7 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		return nil, types.RpcErrorActMalformed("Account malformed.").WithExtra(ledgerFields)
 	}
 
-	limit, limitErr := readLimitField(params, limitAccountLines, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitAccountLines, ctx.Role.IsUnlimited())
 	if limitErr != nil {
 		return nil, limitErr
 	}

@@ -184,7 +184,7 @@ func formatSignResult(result signResult, apiVersion int) map[string]any {
 }
 
 func rejectDisabledSigning(ctx *types.RpcContext) *types.RpcError {
-	if ctx != nil && ctx.Role == types.RoleAdmin {
+	if ctx != nil && ctx.Role.IsAdmin() {
 		return nil
 	}
 	if ctx != nil && ctx.Services != nil && ctx.Services.Capabilities.SigningEnabled {
@@ -483,7 +483,7 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 	if rpcErr := rejectOnlineSigningWithoutCurrentLedger(services, offline, apiVersion); rpcErr != nil {
 		return nil, rpcErr
 	}
-	if rpcErr := rejectSigningWhenLoaded(services, rpcCtx.Unlimited); rpcErr != nil {
+	if rpcErr := rejectSigningWhenLoaded(services, rpcCtx.Role.IsUnlimited()); rpcErr != nil {
 		return nil, rpcErr
 	}
 	srcAddress := txAccount
@@ -548,7 +548,7 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 			if mErr != nil {
 				return nil, rpcInternalError("sign: fee probe marshaling failed", mErr)
 			}
-			fee, feeErr := services.Ledger.GetAutofillFee(probe, rpcCtx.Unlimited, feeOpts.Mult, feeOpts.Div)
+			fee, feeErr := services.Ledger.GetAutofillFee(probe, rpcCtx.Role.IsUnlimited(), feeOpts.Mult, feeOpts.Div)
 			if feeErr != nil {
 				var hfe *svcerr.HighFeeError
 				if errors.As(feeErr, &hfe) {

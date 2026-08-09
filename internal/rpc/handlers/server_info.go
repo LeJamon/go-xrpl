@@ -152,7 +152,7 @@ func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	if serverCountersRequested(params) {
 		addServerDiagnostics(info, ctx.Services)
 	}
-	if warnings := buildServerWarnings(ctx.Services, ctx.IsAdmin); len(warnings) > 0 {
+	if warnings := buildServerWarnings(ctx.Services, ctx.Role.IsAdmin()); len(warnings) > 0 {
 		info["warnings"] = warnings
 	}
 	return map[string]any{"info": info}, nil
@@ -315,7 +315,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	}
 	if serverInfo.Standalone {
 		serverState = "standalone"
-	} else if !ctx.IsAdmin && (serverState == "proposing" || serverState == "validating") {
+	} else if !ctx.Role.IsAdmin() && (serverState == "proposing" || serverState == "validating") {
 		serverState = "full"
 	}
 
@@ -347,11 +347,11 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 		"state_accounting":         accounting.modes,
 	}
 
-	info["ports"] = buildServerInfoPorts(configSnapshot.Ports, ctx.IsAdmin)
+	info["ports"] = buildServerInfoPorts(configSnapshot.Ports, ctx.Role.IsAdmin())
 	if configSnapshot.ServerDomain != "" {
 		info["server_domain"] = configSnapshot.ServerDomain
 	}
-	if ctx.IsAdmin {
+	if ctx.Role.IsAdmin() {
 		nodeSize := configSnapshot.NodeSize
 		if nodeSize == "" {
 			nodeSize = "medium"
@@ -380,7 +380,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	// Emits the configured validator's MASTER public key (base58 NodePublic),
 	// or "none" when the node is not a validator. Present in both server_info
 	// (human) and server_state (machine) like rippled's shared getServerInfo.
-	if ctx.IsAdmin {
+	if ctx.Role.IsAdmin() {
 		info["pubkey_validator"] = resolveValidatorPubKey(services)
 		validatorList := resolveValidatorListSnapshot(services, now)
 		if human {
@@ -392,7 +392,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 
 	// hostid: only in human mode (server_info), matching rippled
 	if human {
-		info["hostid"] = serverHostID(services, ctx.IsAdmin)
+		info["hostid"] = serverHostID(services, ctx.Role.IsAdmin())
 	}
 
 	info["time"] = formatServerTime(now)
@@ -446,7 +446,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 		// Mirror rippled NetworkOPs.cpp:2887-2901: admin-only emission
 		// of load_factor_{local,net,cluster}, each gated on the fee
 		// differing from loadBase.
-		if ctx.IsAdmin {
+		if ctx.Role.IsAdmin() {
 			if uint64(loadFactorFees.Local) != loadBase {
 				info["load_factor_local"] = float64(loadFactorFees.Local) / float64(loadBase)
 			}
@@ -463,7 +463,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 		//     && (admin || loadFactorFeeEscalation != loadFactor)
 		// and the queue field on
 		//   minProcessingFeeLevel != referenceFeeLevel.
-		if feeEscalation != feeReference && (ctx.IsAdmin || loadFactorFeeEscalation != loadFactor) {
+		if feeEscalation != feeReference && (ctx.Role.IsAdmin() || loadFactorFeeEscalation != loadFactor) {
 			info["load_factor_fee_escalation"] = float64(feeEscalation) / float64(feeReference)
 		}
 		if feeQueue != feeReference {

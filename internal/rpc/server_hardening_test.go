@@ -409,7 +409,7 @@ func TestSecureGatewayPromotesToIdentifiedWithUser(t *testing.T) {
 	_, gateway, _ := net.ParseCIDR("203.0.113.0/24")
 	pc := &PortContext{SecureGatewayNets: []net.IPNet{*gateway}}
 
-	// With X-User → Identified, Unlimited=true, IsAdmin=false.
+	// With X-User → Identified, unlimited but not admin.
 	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"ping","params":[{}]}`))
 	req.RemoteAddr = "203.0.113.5:1234"
 	req.Header.Set("X-User", "alice")
@@ -419,12 +419,11 @@ func TestSecureGatewayPromotesToIdentifiedWithUser(t *testing.T) {
 	if observed.Role != types.RoleIdentified {
 		t.Fatalf("with X-User: expected RoleIdentified, got %v", observed.Role)
 	}
-	if observed.IsAdmin || !observed.Unlimited {
-		t.Fatalf("with X-User: expected IsAdmin=false, Unlimited=true; got IsAdmin=%v Unlimited=%v",
-			observed.IsAdmin, observed.Unlimited)
+	if observed.Role.IsAdmin() || !observed.Role.IsUnlimited() {
+		t.Fatalf("with X-User: expected non-admin unlimited role; got role=%v", observed.Role)
 	}
 
-	// Without X-User → Proxy, Unlimited=false.
+	// Without X-User → Proxy, not unlimited.
 	req = httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"ping","params":[{}]}`))
 	req.RemoteAddr = "203.0.113.5:1234"
 	req = req.WithContext(WithPortContext(req.Context(), pc))
@@ -433,8 +432,8 @@ func TestSecureGatewayPromotesToIdentifiedWithUser(t *testing.T) {
 	if observed.Role != types.RoleProxy {
 		t.Fatalf("without X-User: expected RoleProxy, got %v", observed.Role)
 	}
-	if observed.Unlimited {
-		t.Fatalf("RoleProxy must not be Unlimited")
+	if observed.Role.IsUnlimited() {
+		t.Fatalf("RoleProxy must not be unlimited")
 	}
 }
 

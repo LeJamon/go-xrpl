@@ -67,7 +67,7 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	}
 
 	if request.Full || request.Accounts {
-		if !ctx.Unlimited {
+		if !ctx.Role.IsUnlimited() {
 			return nil, types.RpcErrorNoPermission("ledger")
 		}
 		if request.Binary {

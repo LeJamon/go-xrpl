@@ -30,7 +30,7 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, selErr
 	}
 
-	limit, limitErr := readLimitField(params, limitAccountNFTokens, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitAccountNFTokens, ctx.Role.IsUnlimited())
 	if limitErr != nil {
 		return nil, limitErr
 	}

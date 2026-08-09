@@ -111,7 +111,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 			return nil, typeErr
 		}
 	}
-	limit, limitErr := readLimitField(params, limitAccountObjects, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitAccountObjects, ctx.Role.IsUnlimited())
 	if limitErr != nil {
 		return nil, limitErr
 	}

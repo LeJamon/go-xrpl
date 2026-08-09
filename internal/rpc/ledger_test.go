@@ -308,7 +308,6 @@ func TestLedgerBasicRequest(t *testing.T) {
 
 	t.Run("Open full response omits closed", func(t *testing.T) {
 		ctx.Role = types.RoleAdmin
-		ctx.Unlimited = true
 		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"current","full":true}`))
 		require.Nil(t, rpcErr)
 		closeTime := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(currentReader.CloseTime()) * time.Second)
@@ -333,7 +332,6 @@ func TestLedgerBasicRequest(t *testing.T) {
 			"validated":            false,
 		}, resultToMap(t, result))
 		ctx.Role = types.RoleGuest
-		ctx.Unlimited = false
 	})
 
 	t.Run("Deprecated type field emits warning", func(t *testing.T) {
@@ -756,7 +754,6 @@ func TestLedgerAccountsOption(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
-		Unlimited:  true,
 		Services:   services,
 	}
 	result, rpcErr := method.Handle(adminCtx, paramsJSON)

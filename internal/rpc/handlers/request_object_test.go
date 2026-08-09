@@ -60,7 +60,7 @@ func TestStrictRequestObjects(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := &types.RpcContext{Context: context.Background(), IsAdmin: true}
+			ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin}
 			result, rpcErr := test.handler.Handle(ctx, test.params)
 			require.Nil(t, result)
 			require.NotNil(t, rpcErr)
@@ -74,7 +74,7 @@ func TestStrictRequestObjects(t *testing.T) {
 func TestDecodeRejectionDoesNotInvokeCallbacks(t *testing.T) {
 	controller := &requestRejectAmendmentController{table: amendment.NewTable()}
 	_, rpcErr := (&FeatureMethod{}).Handle(
-		&types.RpcContext{Context: context.Background(), IsAdmin: true, Services: &types.ServiceContainer{Ledger: controller}},
+		&types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: &types.ServiceContainer{Ledger: controller}},
 		json.RawMessage(`{"feature":1,"vetoed":true}`),
 	)
 	require.NotNil(t, rpcErr)
@@ -123,7 +123,7 @@ func TestRequestObjectJsonCppCoercions(t *testing.T) {
 
 	controller := &requestRejectAmendmentController{table: amendment.NewTable()}
 	_, rpcErr = (&FeatureMethod{}).Handle(
-		&types.RpcContext{Context: context.Background(), IsAdmin: true, Services: &types.ServiceContainer{Ledger: controller}},
+		&types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: &types.ServiceContainer{Ledger: controller}},
 		json.RawMessage(`{"feature":"fixMasterKeyAsRegularKey","vetoed":"true"}`),
 	)
 	require.Nil(t, rpcErr)
@@ -131,7 +131,7 @@ func TestRequestObjectJsonCppCoercions(t *testing.T) {
 
 	controller = &requestRejectAmendmentController{table: amendment.NewTable()}
 	result, rpcErr = (&FeatureMethod{}).Handle(
-		&types.RpcContext{Context: context.Background(), IsAdmin: true, Services: &types.ServiceContainer{Ledger: controller}},
+		&types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: &types.ServiceContainer{Ledger: controller}},
 		json.RawMessage(`{"vetoed":true}`),
 	)
 	require.Nil(t, rpcErr)

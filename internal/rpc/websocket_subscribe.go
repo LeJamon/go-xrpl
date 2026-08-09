@@ -25,7 +25,7 @@ func (ws *WebSocketServer) executeSubscribe(wsConn *websocketConnection, ctx *ty
 	// url requests are server-to-server (RPCSub) subscriptions: events go
 	// to the url's subscriber, not to this WebSocket connection.
 	if request.HasURL() {
-		if !ctx.IsAdmin {
+		if !ctx.Role.IsAdmin() {
 			return nil, types.RpcErrorNoPermission("subscribe")
 		}
 		result, rpcErr := ws.urlSubs.Subscribe(ctx, request)
@@ -43,7 +43,7 @@ func (ws *WebSocketServer) executeSubscribe(wsConn *websocketConnection, ctx *ty
 	}
 	prefix.ApiVersion = ctx.ApiVersion
 	scope := ws.subscriptionManager.NewRequestScope()
-	if rpcErr := ws.subscriptionManager.HandleSubscribeScoped(wsConn.registration, scope, prefix, ctx.IsAdmin); rpcErr != nil {
+	if rpcErr := ws.subscriptionManager.HandleSubscribeScoped(wsConn.registration, scope, prefix, ctx.Role.IsAdmin()); rpcErr != nil {
 		return nil, rpcErr
 	}
 	historyWarning, rpcErr := applyAccountHistorySubscribe(ctx, wsConn.Connection, request)
@@ -52,7 +52,7 @@ func (ws *WebSocketServer) executeSubscribe(wsConn *websocketConnection, ctx *ty
 	}
 	if rpcErr := applyRequestBooks(request, func(bookRequest types.SubscriptionRequest) *types.RpcError {
 		bookRequest.ApiVersion = ctx.ApiVersion
-		if rpcErr := ws.subscriptionManager.HandleSubscribeScoped(wsConn.registration, scope, bookRequest, ctx.IsAdmin); rpcErr != nil {
+		if rpcErr := ws.subscriptionManager.HandleSubscribeScoped(wsConn.registration, scope, bookRequest, ctx.Role.IsAdmin()); rpcErr != nil {
 			return rpcErr
 		}
 		setSubscriptionLoadCost(ctx, bookRequest)
@@ -180,7 +180,7 @@ func (ws *WebSocketServer) executeUnsubscribe(wsConn *websocketConnection, ctx *
 	}
 	// See handleSubscribe: url requests target the RPCSub registry.
 	if request.HasURL() {
-		if !ctx.IsAdmin {
+		if !ctx.Role.IsAdmin() {
 			return nil, types.RpcErrorNoPermission("unsubscribe")
 		}
 		result, rpcErr := ws.urlSubs.Unsubscribe(ctx, request)
@@ -215,7 +215,7 @@ func sampleServerSubscriptionState(ctx *types.RpcContext, request types.Subscrip
 	if !slices.Contains(request.Streams, types.SubServer) {
 		return nil
 	}
-	return handlers.ServerSubscriptionState(ctx.Services, ctx.IsAdmin)
+	return handlers.ServerSubscriptionState(ctx.Services, ctx.Role.IsAdmin())
 }
 
 func (ws *WebSocketServer) buildSubscribeAck(ctx *types.RpcContext, request types.SubscriptionRequest) map[string]any {

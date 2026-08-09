@@ -278,8 +278,9 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 	}
 
 	t.Run("Limit above signed 32-bit range is rejected", func(t *testing.T) {
-		ctx.Unlimited = true
-		t.Cleanup(func() { ctx.Unlimited = false })
+		originalRole := ctx.Role
+		ctx.Role = types.RoleAdmin
+		t.Cleanup(func() { ctx.Role = originalRole })
 		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"current","limit":2147483648}`))
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)

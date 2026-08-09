@@ -38,7 +38,7 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		return nil, types.RpcErrorActMalformed("Account malformed.")
 	}
 
-	limit, limitErr := readLimitField(params, limitAccountChannels, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitAccountChannels, ctx.Role.IsUnlimited())
 	if limitErr != nil {
 		return nil, limitErr
 	}

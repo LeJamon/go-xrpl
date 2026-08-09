@@ -42,7 +42,7 @@ func TestServerSubscriptionInitialAcknowledgement(t *testing.T) {
 	require.Equal(t, testNodePublicKey(), guest["pubkey_node"])
 	require.NotContains(t, guest, "stand_alone")
 
-	admin := ws.buildSubscribeAck(&types.RpcContext{Services: services, IsAdmin: true}, request)
+	admin := ws.buildSubscribeAck(&types.RpcContext{Services: services, Role: types.RoleAdmin}, request)
 	require.Equal(t, "validating", admin["server_status"])
 	require.NotEmpty(t, admin["hostid"])
 	require.NotEqual(t, guest["random"], admin["random"])
@@ -82,7 +82,7 @@ func TestServerSubscriptionStateIsSampledBeforeRegistration(t *testing.T) {
 				return types.LoadFactorFees{Local: factor, Net: factor, Cluster: factor}
 			}
 			ws = NewWebSocketServer(WebSocketServerOptions{Services: services})
-			ctx := &types.RpcContext{Services: services, IsAdmin: true}
+			ctx := &types.RpcContext{Services: services, Role: types.RoleAdmin}
 			var ack map[string]any
 			if transport == "websocket" {
 				connection := subscription.NewConnection("ack-order", make(chan []byte, 1))

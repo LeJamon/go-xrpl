@@ -110,7 +110,6 @@ func newRPCSubTestServerWithProvider(t *testing.T, provider types.LedgerInfoProv
 func adminCtx(services *types.ServiceContainer) *types.RpcContext {
 	return &types.RpcContext{
 		Role:       types.RoleAdmin,
-		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}

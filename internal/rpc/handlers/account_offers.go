@@ -25,7 +25,7 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		return nil, selErr
 	}
 
-	limit, limitErr := readLimitField(params, limitAccountOffers, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitAccountOffers, ctx.Role.IsUnlimited())
 	if limitErr != nil {
 		return nil, limitErr
 	}

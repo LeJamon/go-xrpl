@@ -10,9 +10,8 @@ import (
 
 func unlimitedCtx(s *types.ClientLoadShedder) *types.RpcContext {
 	return &types.RpcContext{
-		Role:      types.RoleAdmin,
-		Unlimited: true,
-		Services:  &types.ServiceContainer{ClientLoad: s},
+		Role:     types.RoleAdmin,
+		Services: &types.ServiceContainer{ClientLoad: s},
 	}
 }
 
@@ -142,7 +141,7 @@ func TestAcquirePathfind_LocalLoadGateWithoutClientCounter(t *testing.T) {
 func TestAcquirePathfind_UnlimitedBypassesLocalLoad(t *testing.T) {
 	s := types.NewClientLoadShedder()
 	ctx := &types.RpcContext{
-		Unlimited: true,
+		Role: types.RoleAdmin,
 		Services: &types.ServiceContainer{
 			ClientLoad:    s,
 			IsLoadedLocal: func() bool { return true },

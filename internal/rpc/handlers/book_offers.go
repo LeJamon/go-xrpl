@@ -153,7 +153,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		return nil, types.RpcErrorBadMarket()
 	}
 
-	limit, limitErr := readLimitField(params, limitBookOffers, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitBookOffers, ctx.Role.IsUnlimited())
 	if limitErr != nil {
 		return nil, limitErr
 	}

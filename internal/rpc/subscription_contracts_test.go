@@ -315,7 +315,6 @@ func TestAccountHistoryURLSubscriptionRetention(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    requestContext,
 		Role:       types.RoleAdmin,
-		IsAdmin:    true,
 		ApiVersion: types.DefaultApiVersion,
 		Services:   services,
 	}
@@ -366,7 +365,6 @@ func TestAccountHistoryURLValidationIsOrderedAndAtomic(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
-		IsAdmin:    true,
 		ApiVersion: types.DefaultApiVersion,
 		Services:   services,
 	}
@@ -440,7 +438,6 @@ func TestAccountHistoryHTTPURLMethods(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
-		IsAdmin:    true,
 		ApiVersion: types.DefaultApiVersion,
 		Services:   services,
 	}

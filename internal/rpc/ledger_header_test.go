@@ -480,7 +480,6 @@ func TestLedgerHeaderProductionOpenRootsAndFlags(t *testing.T) {
 	require.Zero(t, decoded.CloseFlags)
 
 	ctx.Role = types.RoleAdmin
-	ctx.Unlimited = true
 	result, rpcErr = (&handlers.LedgerMethod{}).Handle(ctx, json.RawMessage(`{"ledger_index":"current","full":true}`))
 	require.Nil(t, rpcErr)
 	ledgerResult := result.(map[string]any)["ledger"].(map[string]any)

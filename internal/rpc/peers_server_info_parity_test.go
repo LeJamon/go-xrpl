@@ -40,7 +40,6 @@ func TestPeersAndServerInfoShareSource(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.DefaultApiVersion,
-		IsAdmin:    true,
 		PeerSource: src,
 		Services:   services,
 	}
@@ -66,7 +65,6 @@ func TestPeersAndServerInfoBothEmptyWithoutSource(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.DefaultApiVersion,
-		IsAdmin:    true,
 		Services:   services,
 	}
 

@@ -128,8 +128,6 @@ func (e *Env) RPCAs(method string, params any, role types.Role, apiVersion int) 
 		Context:    context.Background(),
 		Role:       role,
 		ApiVersion: apiVersion,
-		IsAdmin:    role == types.RoleAdmin,
-		Unlimited:  role.IsUnlimited(),
 		Services:   e.services,
 	}
 	return handler.Handle(ctx, raw)

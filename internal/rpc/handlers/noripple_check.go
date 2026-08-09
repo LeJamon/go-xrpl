@@ -35,7 +35,7 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		return nil, types.RpcErrorInvalidField("role")
 	}
 
-	limit, limitErr := readLimitField(params, limitNoRippleCheck, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitNoRippleCheck, ctx.Role.IsUnlimited())
 	if limitErr != nil {
 		return nil, limitErr
 	}

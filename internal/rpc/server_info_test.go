@@ -99,7 +99,11 @@ func TestServerInfoRoleAliasesAreAdminOnly(t *testing.T) {
 				{name: "admin", admin: true, want: state},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
-					ctx := &types.RpcContext{Context: t.Context(), Services: services, IsAdmin: tc.admin}
+					role := types.RoleGuest
+					if tc.admin {
+						role = types.RoleAdmin
+					}
+					ctx := &types.RpcContext{Context: t.Context(), Role: role, Services: services}
 					infoResult, rpcErr := (&handlers.ServerInfoMethod{}).Handle(ctx, nil)
 					require.Nil(t, rpcErr)
 					assert.Equal(t, tc.want, infoResult.(map[string]any)["info"].(map[string]any)["server_state"])
@@ -125,8 +129,8 @@ func TestServerInfoHostIDPrivacy(t *testing.T) {
 
 	admin := callServerStatus(t, &types.RpcContext{
 		Context:  t.Context(),
+		Role:     types.RoleAdmin,
 		Services: services,
-		IsAdmin:  true,
 	}, true)
 	hostname, err := os.Hostname()
 	if err != nil || hostname == "" {
@@ -136,8 +140,8 @@ func TestServerInfoHostIDPrivacy(t *testing.T) {
 
 	state := callServerStatus(t, &types.RpcContext{
 		Context:  t.Context(),
+		Role:     types.RoleAdmin,
 		Services: services,
-		IsAdmin:  true,
 	}, false)
 	assert.NotContains(t, state, "hostid")
 
@@ -233,7 +237,6 @@ func TestServerStatusRuntimeFields(t *testing.T) {
 					ctx := &types.RpcContext{
 						Context:  t.Context(),
 						Role:     role,
-						IsAdmin:  tc.admin,
 						Services: services,
 					}
 					info := callServerStatus(t, ctx, human)
@@ -265,7 +268,6 @@ func TestServerStatusRuntimeFieldOmissions(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:  t.Context(),
 			Role:     types.RoleAdmin,
-			IsAdmin:  true,
 			Services: services,
 		}
 		info := callServerStatus(t, ctx, human)
@@ -1373,13 +1375,12 @@ func TestServerInfo_DynamicMetrics_FromHooks(t *testing.T) {
 	}
 
 	method := &handlers.ServerInfoMethod{}
-	// IsAdmin=true so load_factor_fee_escalation is emitted even when
+	// An Admin role makes load_factor_fee_escalation emit even when
 	// loadFactorFeeEscalation == loadFactor; mirrors rippled's
 	// NetworkOPs.cpp:2902-2907 (admin || loadFactorFeeEscalation != loadFactor).
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
-		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
@@ -1708,12 +1709,15 @@ func TestServerInfo_HumanMode_LoadFactorLocalNetCluster_AdminGate(t *testing.T) 
 		if withHook {
 			services.LoadFactorFees = feesHook
 		}
+		role := types.RoleGuest
+		if admin {
+			role = types.RoleAdmin
+		}
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
-			Role:       types.RoleGuest,
+			Role:       role,
 			ApiVersion: types.ApiVersion1,
 			Services:   services,
-			IsAdmin:    admin,
 		}
 		result, rpcErr := method.Handle(ctx, nil)
 		require.Nil(t, rpcErr)
@@ -1848,12 +1852,15 @@ func TestServerInfoPubkeyValidator(t *testing.T) {
 		services := servicesForServerInfo(mock)
 		services.ValidatorPublicKey = pk
 		services.Manifests = manifests
+		role := types.RoleGuest
+		if admin {
+			role = types.RoleAdmin
+		}
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
-			Role:       types.RoleGuest,
+			Role:       role,
 			ApiVersion: types.ApiVersion1,
 			Services:   services,
-			IsAdmin:    admin,
 		}
 		result, rpcErr := infoMethod.Handle(ctx, nil)
 		require.Nil(t, rpcErr)
@@ -1912,10 +1919,9 @@ func TestServerInfoPubkeyValidator(t *testing.T) {
 		services.ValidatorPublicKey = signing
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
-			Role:       types.RoleGuest,
+			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
 			Services:   services,
-			IsAdmin:    true,
 		}
 		result, rpcErr := (&handlers.ServerStateMethod{}).Handle(ctx, nil)
 		require.Nil(t, rpcErr)
@@ -1943,12 +1949,15 @@ func TestServerInfoValidatorListVisibility(t *testing.T) {
 
 	infoFor := func(t *testing.T, admin bool) map[string]any {
 		t.Helper()
+		role := types.RoleGuest
+		if admin {
+			role = types.RoleAdmin
+		}
 		result, rpcErr := (&handlers.ServerInfoMethod{}).Handle(&types.RpcContext{
 			Context:    context.Background(),
-			Role:       types.RoleGuest,
+			Role:       role,
 			ApiVersion: types.ApiVersion1,
 			Services:   services,
-			IsAdmin:    admin,
 		}, nil)
 		require.Nil(t, rpcErr)
 		return result.(map[string]any)["info"].(map[string]any)
@@ -1964,12 +1973,15 @@ func TestServerInfoValidatorListVisibility(t *testing.T) {
 
 	stateFor := func(t *testing.T, admin bool) map[string]any {
 		t.Helper()
+		role := types.RoleGuest
+		if admin {
+			role = types.RoleAdmin
+		}
 		result, rpcErr := (&handlers.ServerStateMethod{}).Handle(&types.RpcContext{
 			Context:    context.Background(),
-			Role:       types.RoleGuest,
+			Role:       role,
 			ApiVersion: types.ApiVersion1,
 			Services:   services,
-			IsAdmin:    admin,
 		}, nil)
 		require.Nil(t, rpcErr)
 		return result.(map[string]any)["state"].(map[string]any)

@@ -62,7 +62,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		}
 	}
 
-	limit, limitErr := ledgerDataLimit(fields, binaryMode, ctx.Unlimited)
+	limit, limitErr := ledgerDataLimit(fields, binaryMode, ctx.Role.IsUnlimited())
 	if limitErr != nil {
 		return nil, limitErr
 	}

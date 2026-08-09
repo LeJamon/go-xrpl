@@ -289,8 +289,8 @@ func TestSigningLoadAdmissionUnlimitedExemption(t *testing.T) {
 	t.Run("sign", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
+			Role:       types.RoleAdmin,
 			ApiVersion: 2,
-			Unlimited:  true,
 			Services:   &types.ServiceContainer{IsLoadedCluster: loaded},
 		}
 		result, rpcErr := (&SignMethod{}).Handle(signingEnabledHandlerContext(ctx), signingLoadParams(true))
@@ -306,8 +306,8 @@ func TestSigningLoadAdmissionUnlimitedExemption(t *testing.T) {
 		params := json.RawMessage(`{"account":"` + loadAdmissionSigningAccount + `","seed_hex":"` + loadAdmissionSeedHex + `","key_type":"ed25519","tx_json":{"TransactionType":"AccountSet","Account":"` + loadAdmissionAccount + `","Sequence":1,"Fee":"10","SigningPubKey":""}}`)
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
+			Role:       types.RoleAdmin,
 			ApiVersion: 2,
-			Unlimited:  true,
 			Services:   &types.ServiceContainer{IsLoadedCluster: loaded},
 		}
 		_, rpcErr := (&SignForMethod{}).Handle(signingEnabledHandlerContext(ctx), params)
@@ -320,8 +320,8 @@ func TestSigningLoadAdmissionUnlimitedExemption(t *testing.T) {
 		params := json.RawMessage(`{"tx_json":{"TransactionType":"AccountSet","Account":"` + loadAdmissionAccount + `","Sequence":1,"Fee":"10","SigningPubKey":""}}`)
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
+			Role:       types.RoleAdmin,
 			ApiVersion: 2,
-			Unlimited:  true,
 			Services: &types.ServiceContainer{
 				Ledger:          &loadAdmissionLedger{},
 				IsLoadedCluster: loaded,

@@ -56,6 +56,11 @@ func (r Role) IsUnlimited() bool {
 	return r == RoleAdmin || r == RoleIdentified
 }
 
+// IsAdmin reports whether the role has administrator privileges.
+func (r Role) IsAdmin() bool {
+	return r == RoleAdmin
+}
+
 // Condition represents the preconditions required by an RPC method.
 // Matches rippled's Condition enum in Handler.h.
 // When the server is amendment-blocked, methods with any condition
@@ -89,12 +94,6 @@ type RpcContext struct {
 	Context    context.Context
 	Role       Role
 	ApiVersion int
-	// IsAdmin gates admin-only commands. True iff Role == RoleAdmin.
-	IsAdmin bool
-	// Unlimited skips per-request resource limits (page sizes, etc.).
-	// True for RoleAdmin and RoleIdentified, matching rippled
-	// isUnlimited() in Role.cpp.
-	Unlimited  bool
 	ClientIP   string
 	ResourceIP string
 	PeerSource PeerSource

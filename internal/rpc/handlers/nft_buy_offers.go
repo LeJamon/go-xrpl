@@ -62,7 +62,7 @@ func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(c
 
 	// Apply rippled's readLimitField with nftOffers tuning (NFTOffers.cpp:69):
 	// absent limit -> default, explicit 0 -> invalidParams, else clamp.
-	limit, limitErr := readLimitField(params, limitNFTOffers, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitNFTOffers, ctx.Role.IsUnlimited())
 	if limitErr != nil {
 		return nil, limitErr
 	}

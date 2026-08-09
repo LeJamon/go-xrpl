@@ -22,15 +22,12 @@ func (s *Server) withTimeout(parent context.Context) (context.Context, context.C
 	return context.WithTimeout(parent, s.timeout)
 }
 
-// newRpcContext assembles an RpcContext, deriving IsAdmin / Unlimited from the
-// role so every HTTP/WS dispatch site computes them identically.
+// newRpcContext assembles an RpcContext with the request's authorization role.
 func newRpcContext(ctx context.Context, role types.Role, apiVersion int, clientIP string, peers types.PeerSource, services *types.ServiceContainer) *types.RpcContext {
 	return &types.RpcContext{
 		Context:    ctx,
 		Role:       role,
 		ApiVersion: apiVersion,
-		IsAdmin:    role == types.RoleAdmin,
-		Unlimited:  role.IsUnlimited(),
 		ClientIP:   clientIP,
 		ResourceIP: clientIP,
 		PeerSource: peers,
@@ -413,7 +410,7 @@ func gateLoad(manager *resource.Manager, ctx *types.RpcContext, method string, l
 	var result resource.Disposition
 	if ctx.ResourceConsumer != nil {
 		admission, result = ctx.ResourceConsumer.Admit(resource.FeeReferenceRPC())
-	} else if ctx.Unlimited {
+	} else if ctx.Role.IsUnlimited() {
 		admission, result = manager.AdmitUnlimited(ctx.ResourceIP)
 	} else {
 		admission, result = manager.AdmitInbound(ctx.ClientIP, resource.FeeReferenceRPC())

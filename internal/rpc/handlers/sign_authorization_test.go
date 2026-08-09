@@ -94,7 +94,6 @@ func TestSigningCapabilityGuardPrecedesParsingAndLoad(t *testing.T) {
 			loadedCalled := false
 			ctx := &types.RpcContext{
 				Role:       types.RoleIdentified,
-				Unlimited:  true,
 				ApiVersion: types.ApiVersion2,
 				Services: &types.ServiceContainer{IsLoadedCluster: func() bool {
 					loadedCalled = true

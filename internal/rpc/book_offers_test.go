@@ -1616,8 +1616,8 @@ func TestBookOffersNilOffersArray(t *testing.T) {
 // TestBookOffersLimitClampingConformance pins the rippled
 // `readLimitField(rmin=0, rdefault=60, rmax=100)` semantics from
 // RPCHelpers.cpp:703-712, exercised by Book_test.cpp testBookOfferLimits.
-// Non-admin (Unlimited=false) callers see the value clamped into [0, 100];
-// admin/unlimited callers (Unlimited=true) bypass the upper bound entirely.
+// Non-admin callers see the value clamped into [0, 100]; admin/unlimited
+// callers bypass the upper bound entirely.
 // The existing TestBookOffersLimitParameter covers the lower end (0 / default
 // / small values); this case nails down the upper-bound clamp and the
 // asAdmin=true bypass — the part of testBookOfferLimits that varies behaviour
@@ -1636,7 +1636,6 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 	tests := []struct {
 		name          string
 		role          types.Role
-		unlimited     bool
 		limit         any
 		expectedLimit uint32
 	}{
@@ -1645,7 +1644,6 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 			// for non-admin callers (asAdmin=false branch).
 			name:          "rmax+1 clamps to rmax for guest",
 			role:          types.RoleGuest,
-			unlimited:     false,
 			limit:         101,
 			expectedLimit: 100,
 		},
@@ -1654,7 +1652,6 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 			// (asAdmin=true branch).
 			name:          "rmax+1 passes through for admin",
 			role:          types.RoleAdmin,
-			unlimited:     true,
 			limit:         101,
 			expectedLimit: 101,
 		},
@@ -1663,7 +1660,6 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 			// is unconditional, not a "soft" hint.
 			name:          "large limit clamps to rmax for guest",
 			role:          types.RoleGuest,
-			unlimited:     false,
 			limit:         100000,
 			expectedLimit: 100,
 		},
@@ -1672,7 +1668,6 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 			// for either role.
 			name:          "omitted limit yields default for admin",
 			role:          types.RoleAdmin,
-			unlimited:     true,
 			limit:         nil,
 			expectedLimit: 60,
 		},
@@ -1684,7 +1679,6 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				Role:       tc.role,
-				Unlimited:  tc.unlimited,
 				ApiVersion: types.ApiVersion1,
 				Services:   services,
 			}
@@ -1715,7 +1709,6 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
-			Unlimited:  true,
 			ApiVersion: types.ApiVersion1,
 			Services:   services,
 		}

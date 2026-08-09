@@ -589,7 +589,6 @@ func TestAccountOffersMarkerPagination(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
-		IsAdmin:    true,
 		Services:   services,
 	}
 
