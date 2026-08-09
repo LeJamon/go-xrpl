@@ -754,7 +754,7 @@ func TestAllOrNothing(t *testing.T) {
 		preAlice := env.Balance(alice)
 		preBob := env.Balance(bob)
 
-		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
 		seq := env.Seq(alice)
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
@@ -1401,7 +1401,7 @@ func TestBatchDelegate(t *testing.T) {
 		preAlice := env.Balance(alice)
 		preBob := env.Balance(bob)
 
-		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
 		seq := env.Seq(alice)
 
 		// Inner tx[0]: payment from alice to bob, delegated to bob
