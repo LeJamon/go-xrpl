@@ -3,7 +3,6 @@ package tx_test
 import (
 	"bytes"
 	"encoding/hex"
-	"errors"
 	"strings"
 	"testing"
 
@@ -11,20 +10,47 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 )
 
-func TestConfidentialTypesRemainUnregistered(t *testing.T) {
+func TestConfidentialTypeRegistration(t *testing.T) {
 	all.RegisterAll()
 	for _, txType := range []tx.Type{
 		tx.TypeConfidentialMPTConvert,
 		tx.TypeConfidentialMPTMergeInbox,
 		tx.TypeConfidentialMPTConvertBack,
+	} {
+		if _, err := tx.NewFromType(txType); err != nil {
+			t.Fatalf("NewFromType(%s) error = %v", txType, err)
+		}
+	}
+	for _, txType := range []tx.Type{
 		tx.TypeConfidentialMPTSend,
 		tx.TypeConfidentialMPTClawback,
 	} {
-		if _, err := tx.NewFromType(txType); !errors.Is(err, tx.ErrUnknownTransactionType) {
+		if _, err := tx.NewFromType(txType); err != tx.ErrUnknownTransactionType {
 			t.Fatalf("NewFromType(%s) error = %v, want ErrUnknownTransactionType", txType, err)
+		}
+	}
+}
+
+func TestConfidentialRequiredWireFields(t *testing.T) {
+	all.RegisterAll()
+	tests := []string{
+		`{"Account":"rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK","TransactionType":"ConfidentialMPTConvert","MPTokenIssuanceID":"00000001ABCDEF0123456789ABCDEF0123456789ABCDEF12","HolderEncryptedAmount":"00","IssuerEncryptedAmount":"00","BlindingFactor":"00"}`,
+		`{"Account":"rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK","TransactionType":"ConfidentialMPTConvert","MPTokenIssuanceID":"00000001ABCDEF0123456789ABCDEF0123456789ABCDEF12","MPTAmount":"0","HolderEncryptedAmount":"00","IssuerEncryptedAmount":"00"}`,
+		`{"Account":"rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK","TransactionType":"ConfidentialMPTConvertBack","MPTokenIssuanceID":"00000001ABCDEF0123456789ABCDEF0123456789ABCDEF12","HolderEncryptedAmount":"00","IssuerEncryptedAmount":"00","BlindingFactor":"00","ZKProof":"00","BalanceCommitment":"00"}`,
+	}
+	for i, data := range tests {
+		transaction, err := tx.ParseJSON([]byte(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = transaction.Validate()
+		result, ok := ter.AsResultError(err)
+		if !ok || result.Code != ter.TemMALFORMED {
+			t.Fatalf("case %d %T Validate() = %v, want temMALFORMED", i, transaction, err)
 		}
 	}
 }

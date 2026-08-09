@@ -19,11 +19,10 @@ import (
 // Mirrors rippled's invoke_preclaim pipeline (applySteps.cpp, PR #6192):
 //
 //	checkSeqProxy → checkPriorTxAndLastLedger → checkSponsor →
-//	checkSign (+ checkBatchSign) → checkFee → checkPermission →
+//	checkPermission → checkSign (+ checkBatchSign) → checkFee →
 //	tx-type preclaim.
 //
-// The signature stage precedes the fee and permission checks so that no
-// fee-charging TER is ever returned before the signature has been verified.
+// Delegated permission is established before signature and fee validation.
 func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) (result ter.Result) {
 	// Any panic reachable from adversarial ledger state — most commonly an
 	// IOUAmount / XRPLNumber arithmetic overflow while reading a crafted balance
@@ -60,12 +59,10 @@ func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) (result ter.Re
 		return result
 	}
 
-	// The signature is verified before the fee and permission checks so that a
-	// transaction that fails both signature verification and a fee/permission
-	// check reports the signature failure. No fee-charging TER (terINSUF_FEE_B,
-	// ...) may precede the signature check, which would risk charging a fee on
-	// an unauthorized transaction.
-	// Reference: rippled applySteps.cpp invoke_preclaim (PR #6192).
+	if result := e.checkPermission(tx, common, accountID); result != ter.TesSUCCESS {
+		return result
+	}
+
 	if result := e.checkSign(tx, common); result != ter.TesSUCCESS {
 		return result
 	}
@@ -82,9 +79,6 @@ func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) (result ter.Re
 	}
 
 	if result := e.checkFee(tx, common, account); result != ter.TesSUCCESS {
-		return result
-	}
-	if result := e.checkPermission(tx, common, accountID); result != ter.TesSUCCESS {
 		return result
 	}
 

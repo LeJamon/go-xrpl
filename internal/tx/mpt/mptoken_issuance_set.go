@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/crypto/mptcrypto"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -42,6 +43,9 @@ type MPTokenIssuanceSet struct {
 	// ImmutableFlags permanently prevents later changes to selected capabilities
 	// and fields.
 	ImmutableFlags *uint32 `json:"ImmutableFlags,omitempty" xrpl:"ImmutableFlags,omitempty"`
+
+	IssuerEncryptionKey  *string `json:"IssuerEncryptionKey,omitempty" xrpl:"IssuerEncryptionKey,omitempty"`
+	AuditorEncryptionKey *string `json:"AuditorEncryptionKey,omitempty" xrpl:"AuditorEncryptionKey,omitempty"`
 
 	// hasDomainID tracks whether the DomainID field was present in the parsed JSON.
 	// This is needed because DomainID can be the zero hash (clearing the domain).
@@ -132,12 +136,14 @@ func (m *MPTokenIssuanceSet) PreflightRules(rules *amendment.Rules) error {
 	isMutate := m.isMutate()
 	dynamicMPT := rules.Enabled(amendment.FeatureDynamicMPT)
 	enableFlags := m.GetFlags() & tfMPTokenIssuanceSetEnableFlagMask
+	hasIssuerKey := m.IssuerEncryptionKey != nil
+	hasAuditorKey := m.AuditorEncryptionKey != nil
 
 	// Mutation fields require DynamicMPT — first check of the preflight body.
 	if isMutate && !dynamicMPT {
 		return ter.Errorf(ter.TemDISABLED, "mutation fields require DynamicMPT")
 	}
-	if (enableFlags&MPTokenIssuanceSetFlagSetCanHoldConfidentialBalance != 0 ||
+	if (hasIssuerKey || hasAuditorKey || enableFlags&MPTokenIssuanceSetFlagSetCanHoldConfidentialBalance != 0 ||
 		(m.ImmutableFlags != nil && *m.ImmutableFlags&TifMPTCanHoldConfidentialBalance != 0)) &&
 		!rules.Enabled(amendment.FeatureConfidentialTransfer) {
 		return ter.Errorf(ter.TemDISABLED, "confidential balance capability requires ConfidentialTransfer")
@@ -164,40 +170,57 @@ func (m *MPTokenIssuanceSet) PreflightRules(rules *amendment.Rules) error {
 	// Under the amendments that extend this transaction, it must change something.
 	if rules.Enabled(amendment.FeatureSingleAssetVault) || dynamicMPT ||
 		rules.Enabled(amendment.FeatureConfidentialTransfer) {
-		if m.GetFlags() == 0 && !m.hasDomainID && !isMutate {
+		if m.GetFlags() == 0 && !m.hasDomainID && !hasIssuerKey && !hasAuditorKey && !isMutate {
 			return ter.Errorf(ter.TemMALFORMED, "MPTokenIssuanceSet changes nothing")
 		}
 	}
 
-	if !dynamicMPT {
-		return nil
+	if dynamicMPT {
+		if isMutate && m.Holder != "" {
+			return ter.Errorf(ter.TemMALFORMED, "Holder not allowed when mutating issuance")
+		}
+		if isMutate && m.GetFlags()&(MPTokenIssuanceSetFlagLock|MPTokenIssuanceSetFlagUnlock) != 0 {
+			return ter.Errorf(ter.TemMALFORMED, "lock or unlock cannot be combined with an issuance mutation")
+		}
+		if m.TransferFee != nil && *m.TransferFee > protocol.MaxMPTokenTransferFee {
+			return ter.Errorf(ter.TemBAD_TRANSFER_FEE, "TransferFee cannot exceed 50000")
+		}
+		if m.TransferFee != nil && *m.TransferFee > 0 && enableFlags&MPTokenIssuanceSetFlagSetCanHoldConfidentialBalance != 0 {
+			return ter.Errorf(ter.TemBAD_TRANSFER_FEE, "TransferFee is incompatible with confidential balances")
+		}
+		if m.MPTokenMetadata != nil {
+			metadataBytes, err := hex.DecodeString(*m.MPTokenMetadata)
+			if err != nil {
+				return ter.Errorf(ter.TemMALFORMED, "MPTokenMetadata must be valid hex")
+			}
+			if len(metadataBytes) > protocol.MaxMPTokenMetadataLength {
+				return ter.Errorf(ter.TemMALFORMED, "MPTokenMetadata exceeds maximum length")
+			}
+		}
+		if m.ImmutableFlags != nil {
+			immutableFlags := *m.ImmutableFlags
+			if immutableFlags == 0 || immutableFlags&tifMPTokenIssuanceImmutableMask != 0 {
+				return ter.Errorf(ter.TemINVALID_FLAG, "invalid ImmutableFlags for MPTokenIssuanceSet")
+			}
+		}
 	}
 
-	if isMutate && m.Holder != "" {
-		return ter.Errorf(ter.TemMALFORMED, "Holder not allowed when mutating issuance")
+	if m.Holder != "" && (hasIssuerKey || hasAuditorKey) {
+		return ter.Errorf(ter.TemMALFORMED, "encryption keys cannot target a holder")
 	}
-	if isMutate && m.GetFlags()&(MPTokenIssuanceSetFlagLock|MPTokenIssuanceSetFlagUnlock) != 0 {
-		return ter.Errorf(ter.TemMALFORMED, "lock or unlock cannot be combined with an issuance mutation")
+	if hasAuditorKey && !hasIssuerKey {
+		return ter.Errorf(ter.TemMALFORMED, "AuditorEncryptionKey requires IssuerEncryptionKey")
 	}
-	if m.TransferFee != nil && *m.TransferFee > protocol.MaxMPTokenTransferFee {
-		return ter.Errorf(ter.TemBAD_TRANSFER_FEE, "TransferFee cannot exceed 50000")
-	}
-	if m.TransferFee != nil && *m.TransferFee > 0 && enableFlags&MPTokenIssuanceSetFlagSetCanHoldConfidentialBalance != 0 {
-		return ter.Errorf(ter.TemBAD_TRANSFER_FEE, "TransferFee is incompatible with confidential balances")
-	}
-	if m.MPTokenMetadata != nil {
-		metadataBytes, err := hex.DecodeString(*m.MPTokenMetadata)
-		if err != nil {
-			return ter.Errorf(ter.TemMALFORMED, "MPTokenMetadata must be valid hex")
-		}
-		if len(metadataBytes) > protocol.MaxMPTokenMetadataLength {
-			return ter.Errorf(ter.TemMALFORMED, "MPTokenMetadata exceeds maximum length")
+	if hasIssuerKey {
+		key, valid := decodeConfidentialField(*m.IssuerEncryptionKey, mptcrypto.PublicKeySize)
+		if !valid || !mptcrypto.ValidPublicKey(key) {
+			return ter.Errorf(ter.TemMALFORMED, "invalid IssuerEncryptionKey")
 		}
 	}
-	if m.ImmutableFlags != nil {
-		immutableFlags := *m.ImmutableFlags
-		if immutableFlags == 0 || immutableFlags&tifMPTokenIssuanceImmutableMask != 0 {
-			return ter.Errorf(ter.TemINVALID_FLAG, "invalid ImmutableFlags for MPTokenIssuanceSet")
+	if hasAuditorKey {
+		key, valid := decodeConfidentialField(*m.AuditorEncryptionKey, mptcrypto.PublicKeySize)
+		if !valid || !mptcrypto.ValidPublicKey(key) {
+			return ter.Errorf(ter.TemMALFORMED, "invalid AuditorEncryptionKey")
 		}
 	}
 
@@ -293,7 +316,27 @@ func (m *MPTokenIssuanceSet) Preclaim(view tx.LedgerView, config tx.EngineConfig
 		}
 	}
 
-	return m.checkImmutablePermissions(issuance, txFlags)
+	if result := m.checkImmutablePermissions(issuance, txFlags); result != ter.TesSUCCESS {
+		return result
+	}
+	if m.IssuerEncryptionKey != nil && len(issuance.IssuerEncryptionKey) != 0 {
+		return ter.TecNO_PERMISSION
+	}
+	if m.AuditorEncryptionKey != nil && len(issuance.AuditorEncryptionKey) != 0 {
+		return ter.TecNO_PERMISSION
+	}
+	enablesConfidential := txFlags&MPTokenIssuanceSetFlagSetCanHoldConfidentialBalance != 0
+	if m.IssuerEncryptionKey != nil && issuance.Flags&entry.LsfMPTCanHoldConfidentialBalance == 0 && !enablesConfidential {
+		return ter.TecNO_PERMISSION
+	}
+	if m.AuditorEncryptionKey != nil && issuance.Flags&entry.LsfMPTCanHoldConfidentialBalance == 0 && !enablesConfidential {
+		return ter.TecNO_PERMISSION
+	}
+	if (m.IssuerEncryptionKey != nil || m.AuditorEncryptionKey != nil || enablesConfidential) &&
+		issuance.ConfidentialOutstandingAmount > 0 {
+		return ter.TecNO_PERMISSION
+	}
+	return ter.TesSUCCESS
 }
 
 // Reference: rippled MPTokenIssuanceSet.cpp doApply(); the ledger-aware gates
@@ -424,6 +467,13 @@ func (m *MPTokenIssuanceSet) setIssuance(ctx *tx.ApplyContext, issuanceKey keyle
 	// Reference: rippled MPTokenIssuanceSet.cpp:328-334.
 	if m.MPTokenMetadata != nil {
 		issuance.MPTokenMetadata = *m.MPTokenMetadata
+	}
+
+	if m.IssuerEncryptionKey != nil {
+		issuance.IssuerEncryptionKey, _ = decodeConfidentialField(*m.IssuerEncryptionKey, mptcrypto.PublicKeySize)
+	}
+	if m.AuditorEncryptionKey != nil {
+		issuance.AuditorEncryptionKey, _ = decodeConfidentialField(*m.AuditorEncryptionKey, mptcrypto.PublicKeySize)
 	}
 
 	// Handle DomainID update
