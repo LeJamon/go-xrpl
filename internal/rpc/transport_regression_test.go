@@ -135,6 +135,23 @@ func TestRPCConstructorsUseExplicitDependencies(t *testing.T) {
 	})
 	require.Same(t, customManager, customWS.SubscriptionManager())
 	require.Same(t, custom, customWS.URLSubscriptionService())
+
+	var nilRegistry *urlSubscriptionRegistry
+	var nilWrapped *wrappedURLSubscriptionService
+	for name, service := range map[string]types.URLSubscriptionService{
+		"registry": nilRegistry,
+		"wrapped":  nilWrapped,
+	} {
+		t.Run("typed nil "+name, func(t *testing.T) {
+			typedNilWS := NewWebSocketServer(WebSocketServerOptions{
+				Services:            services,
+				SubscriptionManager: manager,
+				URLSubscriptions:    service,
+			})
+			require.Same(t, manager, typedNilWS.SubscriptionManager())
+			require.NotNil(t, typedNilWS.URLSubscriptionService())
+		})
+	}
 }
 
 func seedTransportRegressionLoad(manager *resource.Manager, balance int) {

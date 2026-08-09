@@ -3,6 +3,7 @@ package rpc
 import (
 	"fmt"
 	"net/http"
+	"reflect"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -121,6 +122,9 @@ func NewWebSocketServer(options WebSocketServerOptions) *WebSocketServer {
 	if resourceManager == nil {
 		resourceManager = resource.NewManager(nil, nil)
 	}
+	if isNilURLSubscriptionService(options.URLSubscriptions) {
+		options.URLSubscriptions = nil
+	}
 	manager := options.SubscriptionManager
 	if registry, ok := options.URLSubscriptions.(*urlSubscriptionRegistry); ok && registry.manager != nil {
 		manager = registry.manager
@@ -165,6 +169,19 @@ func NewWebSocketServer(options WebSocketServerOptions) *WebSocketServer {
 	}
 	ws.setPeerSource(options.PeerSource)
 	return ws
+}
+
+func isNilURLSubscriptionService(service types.URLSubscriptionService) bool {
+	if service == nil {
+		return true
+	}
+	value := reflect.ValueOf(service)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
