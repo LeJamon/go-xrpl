@@ -325,14 +325,14 @@ func TestDivergingObjectsAreByteBounded(t *testing.T) {
 	for i := byte(1); i <= 2; i++ {
 		var key [32]byte
 		key[31] = i
-		if err := left.Put(key, []byte{1, 2, 3}); err != nil {
+		if err := left.Put(key, append([]byte{1}, make([]byte, 11)...)); err != nil {
 			t.Fatal(err)
 		}
-		if err := right.Put(key, []byte{4, 5, 6}); err != nil {
+		if err := right.Put(key, append([]byte{2}, make([]byte, 11)...)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	objects, complete, err := divergingObjectsContextBounded(context.Background(), left, right, 6)
+	objects, complete, err := divergingObjectsContextBounded(context.Background(), left, right, 24)
 	if err != nil {
 		t.Fatal(err)
 	}
