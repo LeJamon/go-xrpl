@@ -442,6 +442,9 @@ func (a *Aggregator) applyPendingLocked(s *publisherState, blob *blobJSON, signi
 	if version > s.Version {
 		s.Version = version
 	}
+	if s.Version < 2 {
+		s.Version = 2
+	}
 	s.RawManifest = append([]byte(nil), rawManifest...)
 	a.recordMaxSequenceLocked(s, blob.Sequence)
 	return Pending
