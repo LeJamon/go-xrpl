@@ -38,16 +38,16 @@ func sponsorEnv(t *testing.T) (*jtx.TestEnv, *jtx.Account, *jtx.Account, *jtx.Ac
 func setSponsorship(
 	env *jtx.TestEnv,
 	sponsor, sponsee *jtx.Account,
-	feeDrops uint64,
-	remaining *uint32,
+	feeDeltaDrops int64,
+	remainingDelta *int32,
 ) jtx.TxResult {
 	txn := sponsortx.NewSponsorshipSet(sponsor.Address)
 	txn.Sponsee = sponsee.Address
-	if feeDrops > 0 {
-		amount := tx.NewXRPAmount(int64(feeDrops))
-		txn.FeeAmount = &amount
+	if feeDeltaDrops != 0 {
+		amount := tx.NewXRPAmount(feeDeltaDrops)
+		txn.FeeAmountDelta = &amount
 	}
-	txn.RemainingOwnerCount = remaining
+	txn.RemainingOwnerCountDelta = remainingDelta
 	return env.Submit(txn)
 }
 
@@ -59,7 +59,7 @@ func setFeeSponsorship(
 	txn := sponsortx.NewSponsorshipSet(sponsor.Address)
 	txn.Sponsee = sponsee.Address
 	feeAmount := tx.NewXRPAmount(int64(feeDrops))
-	txn.FeeAmount = &feeAmount
+	txn.FeeAmountDelta = &feeAmount
 	if maxFeeDrops != 0 {
 		maxFee := tx.NewXRPAmount(int64(maxFeeDrops))
 		txn.MaxFee = &maxFee
@@ -258,7 +258,7 @@ func TestSponsorshipSetCreateUpdateDelete(t *testing.T) {
 	env, sponsee, _, sponsor, _ := sponsorEnv(t)
 
 	initialBalance := env.Balance(sponsor)
-	remaining := uint32(3)
+	remaining := int32(3)
 	created := setSponsorship(env, sponsor, sponsee, 1_000, &remaining)
 	require.Equal(t, "tesSUCCESS", created.Code)
 	requireAffectedNodes(t, created,
@@ -278,12 +278,12 @@ func TestSponsorshipSetCreateUpdateDelete(t *testing.T) {
 	require.Equal(t, uint32(1), env.OwnerCount(sponsor))
 	require.Equal(t, initialBalance-1_000-10, env.Balance(sponsor))
 
-	updatedFee := tx.NewXRPAmount(400)
-	updatedRemaining := uint32(2)
+	updatedFee := tx.NewXRPAmount(-600)
+	updatedRemaining := int32(-1)
 	update := sponsortx.NewSponsorshipSet(sponsor.Address)
 	update.Sponsee = sponsee.Address
-	update.FeeAmount = &updatedFee
-	update.RemainingOwnerCount = &updatedRemaining
+	update.FeeAmountDelta = &updatedFee
+	update.RemainingOwnerCountDelta = &updatedRemaining
 	update.SetFlags(sponsortx.SponsorshipSetFlagRequireSignForReserve)
 	updated := env.Submit(update)
 	require.Equal(t, "tesSUCCESS", updated.Code)
@@ -317,10 +317,51 @@ func TestSponsorshipSetCreateUpdateDelete(t *testing.T) {
 	require.Equal(t, initialBalance-20, env.Balance(sponsor), "sponsee pays the delete fee; prefund is refunded")
 }
 
+func TestSponsorshipSetDeltaBounds(t *testing.T) {
+	const maxInt32 = int32(1<<31 - 1)
+
+	t.Run("count overflow is rejected", func(t *testing.T) {
+		env, sponsee, _, sponsor, _ := sponsorEnv(t)
+		max := maxInt32
+		require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, sponsee, 0, &max).Code)
+		require.Equal(t, uint32(maxInt32), sponsorshipEntry(t, env, sponsor, sponsee).RemainingOwnerCount)
+
+		require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, sponsee, 0, &max).Code)
+		require.Equal(t, uint32(maxInt32)*2, sponsorshipEntry(t, env, sponsor, sponsee).RemainingOwnerCount)
+
+		overflow := int32(2)
+		require.Equal(t, "tecLIMIT_EXCEEDED", setSponsorship(env, sponsor, sponsee, 0, &overflow).Code)
+		require.Equal(t, uint32(maxInt32)*2, sponsorshipEntry(t, env, sponsor, sponsee).RemainingOwnerCount)
+	})
+
+	t.Run("count underflow clamps when fee budget remains", func(t *testing.T) {
+		env, sponsee, _, sponsor, _ := sponsorEnv(t)
+		remaining := int32(10)
+		require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, sponsee, 100, &remaining).Code)
+
+		underflow := int32(-20)
+		require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, sponsee, 0, &underflow).Code)
+		entry := sponsorshipEntry(t, env, sponsor, sponsee)
+		require.Equal(t, uint32(0), entry.RemainingOwnerCount)
+		require.True(t, entry.HasFeeAmount)
+		require.Equal(t, uint64(100), entry.FeeAmount)
+	})
+
+	t.Run("count underflow is rejected when budget empties", func(t *testing.T) {
+		env, sponsee, _, sponsor, _ := sponsorEnv(t)
+		remaining := int32(10)
+		require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, sponsee, 0, &remaining).Code)
+
+		underflow := int32(-20)
+		require.Equal(t, "tecNO_PERMISSION", setSponsorship(env, sponsor, sponsee, 0, &underflow).Code)
+		require.Equal(t, uint32(10), sponsorshipEntry(t, env, sponsor, sponsee).RemainingOwnerCount)
+	})
+}
+
 func TestSponsorshipSetPreclaimMatrix(t *testing.T) {
 	env, sponsee, _, sponsor, _ := sponsorEnv(t)
 	missing := jtx.NewAccount("missing-sponsor-party")
-	remaining := uint32(1)
+	remaining := int32(1)
 
 	require.Equal(t, "tecNO_DST", setSponsorship(env, sponsor, missing, 0, &remaining).Code)
 
@@ -334,11 +375,11 @@ func TestSponsorshipSetPreclaimMatrix(t *testing.T) {
 	missingObject.SetFlags(sponsortx.SponsorshipSetFlagDelete)
 	require.Equal(t, "tecNO_ENTRY", env.Submit(missingObject).Code)
 
-	require.Equal(t, "tecNO_PERMISSION", setSponsorship(env, sponsor, sponsee, 0, nil).Code)
+	require.Equal(t, "temREDUNDANT", setSponsorship(env, sponsor, sponsee, 0, nil).Code)
 	require.False(t, env.LedgerEntryExists(keylet.Sponsorship(sponsor.ID, sponsee.ID)))
 
 	setPseudoAccount(t, env, sponsee)
-	require.Equal(t, "tecNO_PERMISSION", setSponsorship(env, sponsor, sponsee, 0, &remaining).Code)
+	require.Equal(t, "tecPSEUDO_ACCOUNT", setSponsorship(env, sponsor, sponsee, 0, &remaining).Code)
 	require.False(t, env.LedgerEntryExists(keylet.Sponsorship(sponsor.ID, sponsee.ID)))
 
 	pseudoSponsorEnv, ordinarySponsee, _, pseudoSponsor, _ := sponsorEnv(t)
@@ -346,7 +387,7 @@ func TestSponsorshipSetPreclaimMatrix(t *testing.T) {
 	deleteFromSponsee := sponsortx.NewSponsorshipSet(ordinarySponsee.Address)
 	deleteFromSponsee.CounterpartySponsor = pseudoSponsor.Address
 	deleteFromSponsee.SetFlags(sponsortx.SponsorshipSetFlagDelete)
-	require.Equal(t, "tecNO_PERMISSION", pseudoSponsorEnv.Submit(deleteFromSponsee).Code)
+	require.Equal(t, "tecPSEUDO_ACCOUNT", pseudoSponsorEnv.Submit(deleteFromSponsee).Code)
 	require.False(t, pseudoSponsorEnv.LedgerEntryExists(keylet.Sponsorship(pseudoSponsor.ID, ordinarySponsee.ID)))
 }
 
@@ -358,8 +399,8 @@ func TestSponsorshipTransferObjectCreateReassignEnd(t *testing.T) {
 	require.Equal(t, "tesSUCCESS", env.Submit(createCheck).Code)
 	checkKey := keylet.Check(sponsee.ID, checkSequence)
 
-	remaining1 := uint32(2)
-	remaining2 := uint32(2)
+	remaining1 := int32(2)
+	remaining2 := int32(2)
 	require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor1, sponsee, 0, &remaining1).Code)
 	require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor2, sponsee, 0, &remaining2).Code)
 
@@ -569,10 +610,10 @@ func TestSponsorshipTransferAuthorizationLimitAndRollback(t *testing.T) {
 	require.Equal(t, sponsorBefore.SponsoringOwnerCount, accountState(t, env, sponsor).SponsoringOwnerCount)
 	require.Equal(t, uint32(0), sponsorshipEntry(t, env, sponsor, sponsee).RemainingOwnerCount)
 
-	remaining := uint32(1)
+	remaining := int32(1)
 	requireSignature := sponsortx.NewSponsorshipSet(sponsor.Address)
 	requireSignature.Sponsee = sponsee.Address
-	requireSignature.RemainingOwnerCount = &remaining
+	requireSignature.RemainingOwnerCountDelta = &remaining
 	requireSignature.SetFlags(sponsortx.SponsorshipSetFlagRequireSignForReserve)
 	require.Equal(t, "tesSUCCESS", env.Submit(requireSignature).Code)
 
@@ -1068,7 +1109,7 @@ func TestDelegatedTransactionRejectsReserveSponsor(t *testing.T) {
 			env, source, destination, sponsor, delegate := sponsorEnv(t)
 			grantDelegatePermission(t, env, source, delegate, "CheckCreate")
 			if testCase.prefunded {
-				remaining := uint32(1)
+				remaining := int32(1)
 				require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, delegate, 0, &remaining).Code)
 			}
 			env.Close()
@@ -1234,7 +1275,7 @@ func TestSponsorshipSetDirectoryFailureRollsBackFirstInsert(t *testing.T) {
 	}
 	require.NoError(t, env.Ledger().Insert(keylet.OwnerDir(sponsee.ID), malformedDirectory))
 
-	remaining := uint32(1)
+	remaining := int32(1)
 	result := setSponsorship(env, sponsor, sponsee, 0, &remaining)
 	require.Equal(t, "tefINTERNAL", result.Code)
 	require.False(t, env.LedgerEntryExists(keylet.Sponsorship(sponsor.ID, sponsee.ID)))
@@ -1249,7 +1290,7 @@ func TestSponsorAmendmentGate(t *testing.T) {
 	sponsee := jtx.NewAccount("gate-sponsee")
 	destination := jtx.NewAccount("gate-destination")
 	env.Fund(sponsor, sponsee)
-	remaining := uint32(1)
+	remaining := int32(1)
 	require.Equal(t, "temDISABLED", setSponsorship(env, sponsor, sponsee, 0, &remaining).Code)
 
 	payment := paymenttx.NewPayment(sponsee.Address, destination.Address, tx.NewXRPAmount(1))

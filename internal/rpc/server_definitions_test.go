@@ -322,7 +322,7 @@ func TestServerDefinitions_3_2_0_Sections(t *testing.T) {
 			},
 			{
 				name:   "SponsorshipSet",
-				fields: []string{"CounterpartySponsor", "Sponsee", "FeeAmount", "MaxFee", "RemainingOwnerCount"},
+				fields: []string{"CounterpartySponsor", "Sponsee", "FeeAmountDelta", "MaxFee", "RemainingOwnerCountDelta"},
 				styles: []int{1, 1, 1, 1, 1},
 			},
 		} {

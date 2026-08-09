@@ -891,6 +891,16 @@
       }
     ],
     [
+      "RemainingOwnerCountDelta",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": false,
+        "nth": 2,
+        "type": "Int32"
+      }
+    ],
+    [
       "SponsorFlags",
       {
         "isSerialized": true,
@@ -1867,6 +1877,16 @@
         "isSigningField": true,
         "isVLEncoded": false,
         "nth": 32,
+        "type": "Amount"
+      }
+    ],
+    [
+      "FeeAmountDelta",
+      {
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": false,
+        "nth": 34,
         "type": "Amount"
       }
     ],

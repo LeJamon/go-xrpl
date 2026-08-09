@@ -477,9 +477,9 @@ var txTemplates = map[Type][]templateField{
 	TypeSponsorshipSet: {
 		{name: "CounterpartySponsor", style: soeOPTIONAL},
 		{name: "Sponsee", style: soeOPTIONAL},
-		{name: "FeeAmount", style: soeOPTIONAL},
+		{name: "FeeAmountDelta", style: soeOPTIONAL},
 		{name: "MaxFee", style: soeOPTIONAL},
-		{name: "RemainingOwnerCount", style: soeOPTIONAL},
+		{name: "RemainingOwnerCountDelta", style: soeOPTIONAL},
 	},
 	TypeAmendment: {
 		{name: "LedgerSequence", style: soeREQUIRED},

@@ -2,6 +2,7 @@ package sponsor
 
 import (
 	"errors"
+	"math"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -17,11 +18,65 @@ import (
 type SponsorshipSet struct {
 	tx.BaseTx
 
-	CounterpartySponsor string     `json:"CounterpartySponsor,omitempty" xrpl:"CounterpartySponsor,omitempty"`
-	Sponsee             string     `json:"Sponsee,omitempty" xrpl:"Sponsee,omitempty"`
-	FeeAmount           *tx.Amount `json:"FeeAmount,omitempty" xrpl:"FeeAmount,omitempty,amount"`
-	MaxFee              *tx.Amount `json:"MaxFee,omitempty" xrpl:"MaxFee,omitempty,amount"`
-	RemainingOwnerCount *uint32    `json:"RemainingOwnerCount,omitempty" xrpl:"RemainingOwnerCount,omitempty"`
+	CounterpartySponsor      string     `json:"CounterpartySponsor,omitempty" xrpl:"CounterpartySponsor,omitempty"`
+	Sponsee                  string     `json:"Sponsee,omitempty" xrpl:"Sponsee,omitempty"`
+	FeeAmountDelta           *tx.Amount `json:"FeeAmountDelta,omitempty" xrpl:"FeeAmountDelta,omitempty,amount"`
+	MaxFee                   *tx.Amount `json:"MaxFee,omitempty" xrpl:"MaxFee,omitempty,amount"`
+	RemainingOwnerCountDelta *int32     `json:"RemainingOwnerCountDelta,omitempty" xrpl:"RemainingOwnerCountDelta,omitempty"`
+}
+
+func totalRemainingOwnerCount(object *state.SponsorshipData, delta *int32) int64 {
+	current := int64(0)
+	if object != nil {
+		current = int64(object.RemainingOwnerCount)
+	}
+	if delta != nil {
+		current += int64(*delta)
+	}
+	return current
+}
+
+func applyFeeAmountDelta(current uint64, delta int64) (uint64, bool) {
+	if delta >= 0 {
+		increase := uint64(delta)
+		if increase > math.MaxUint64-current {
+			return 0, false
+		}
+		return current + increase, true
+	}
+	decrease := uint64(-(delta + 1)) + 1
+	if decrease >= current {
+		return 0, true
+	}
+	return current - decrease, true
+}
+
+func hasSponsorshipBudget(
+	object *state.SponsorshipData,
+	feeAmountDelta *tx.Amount,
+	remainingOwnerCountDelta *int32,
+) bool {
+	if object == nil {
+		if feeAmountDelta != nil && feeAmountDelta.Signum() <= 0 {
+			return false
+		}
+		if remainingOwnerCountDelta != nil && *remainingOwnerCountDelta <= 0 {
+			return false
+		}
+	}
+
+	feeAmount := uint64(0)
+	if object != nil && object.HasFeeAmount {
+		feeAmount = object.FeeAmount
+	}
+	if feeAmountDelta != nil {
+		var ok bool
+		feeAmount, ok = applyFeeAmountDelta(feeAmount, feeAmountDelta.Drops())
+		if !ok {
+			return false
+		}
+	}
+	return feeAmount > 0 || totalRemainingOwnerCount(object, remainingOwnerCountDelta) > 0
 }
 
 func NewSponsorshipSet(account string) *SponsorshipSet {
@@ -52,8 +107,8 @@ func (s *SponsorshipSet) Validate() error {
 		return ter.Errorf(ter.TemINVALID_FLAG, "cannot set and clear reserve-signature requirement")
 	}
 
-	hasSponsor := s.CounterpartySponsor != ""
-	hasSponsee := s.Sponsee != ""
+	hasSponsor := s.CounterpartySponsor != "" || s.GetCommon().HasField("CounterpartySponsor")
+	hasSponsee := s.Sponsee != "" || s.GetCommon().HasField("Sponsee")
 	if hasSponsor == hasSponsee {
 		return ter.Errorf(ter.TemMALFORMED, "exactly one of CounterpartySponsor and Sponsee is required")
 	}
@@ -75,7 +130,7 @@ func (s *SponsorshipSet) Validate() error {
 		if flags&modifyFlags != 0 {
 			return ter.Errorf(ter.TemINVALID_FLAG, "delete cannot modify sponsorship flags")
 		}
-		if s.FeeAmount != nil || s.MaxFee != nil || s.RemainingOwnerCount != nil {
+		if s.FeeAmountDelta != nil || s.MaxFee != nil || s.RemainingOwnerCountDelta != nil {
 			return ter.Errorf(ter.TemMALFORMED, "delete cannot modify sponsorship budget")
 		}
 		return nil
@@ -84,10 +139,17 @@ func (s *SponsorshipSet) Validate() error {
 	if s.Account != sponsor {
 		return ter.Errorf(ter.TemMALFORMED, "only the sponsor may create or update")
 	}
-	for name, amount := range map[string]*tx.Amount{"FeeAmount": s.FeeAmount, "MaxFee": s.MaxFee} {
-		if amount != nil && (!amount.IsNative() || amount.IsNegative()) {
-			return ter.Errorf(ter.TemBAD_AMOUNT, "%s must be non-negative XRP", name)
-		}
+	if s.FeeAmountDelta != nil && (!s.FeeAmountDelta.IsNative() || s.FeeAmountDelta.IsZero()) {
+		return ter.Errorf(ter.TemBAD_AMOUNT, "FeeAmountDelta must be a non-zero XRP amount")
+	}
+	if s.MaxFee != nil && (!s.MaxFee.IsNative() || s.MaxFee.IsNegative()) {
+		return ter.Errorf(ter.TemBAD_AMOUNT, "MaxFee must be a non-negative XRP amount")
+	}
+	if s.RemainingOwnerCountDelta != nil && *s.RemainingOwnerCountDelta == 0 {
+		return ter.Errorf(ter.TemINVALID, "RemainingOwnerCountDelta must be non-zero")
+	}
+	if s.FeeAmountDelta == nil && s.MaxFee == nil && s.RemainingOwnerCountDelta == nil && flags&tx.TfUniversalMask == 0 {
+		return ter.Errorf(ter.TemREDUNDANT, "no sponsorship changes specified")
 	}
 	return nil
 }
@@ -95,7 +157,7 @@ func (s *SponsorshipSet) Validate() error {
 func (s *SponsorshipSet) parties() (sponsorID, sponseeID [20]byte, result ter.Result) {
 	sponsor := s.CounterpartySponsor
 	sponsee := s.Account
-	if s.Sponsee != "" {
+	if s.Sponsee != "" || s.GetCommon().HasField("Sponsee") {
 		sponsor = s.Account
 		sponsee = s.Sponsee
 	}
@@ -131,7 +193,7 @@ func (s *SponsorshipSet) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Res
 		return result
 	}
 	if sponsor.IsPseudoAccount() || sponsee.IsPseudoAccount() {
-		return ter.TecNO_PERMISSION
+		return ter.TecPSEUDO_ACCOUNT
 	}
 
 	existing, exists, result := loadSponsorship(view, sponsorID, sponseeID)
@@ -145,15 +207,10 @@ func (s *SponsorshipSet) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Res
 		return ter.TesSUCCESS
 	}
 
-	hasFeeBudget := s.FeeAmount != nil && s.FeeAmount.Signum() > 0
-	if s.FeeAmount == nil && exists {
-		hasFeeBudget = existing.HasFeeAmount && existing.FeeAmount > 0
+	if totalRemainingOwnerCount(existing, s.RemainingOwnerCountDelta) > math.MaxUint32 {
+		return ter.TecLIMIT_EXCEEDED
 	}
-	hasReserveBudget := s.RemainingOwnerCount != nil && *s.RemainingOwnerCount > 0
-	if s.RemainingOwnerCount == nil && exists {
-		hasReserveBudget = existing.RemainingOwnerCount > 0
-	}
-	if !hasFeeBudget && !hasReserveBudget {
+	if !hasSponsorshipBudget(existing, s.FeeAmountDelta, s.RemainingOwnerCountDelta) {
 		return ter.TecNO_PERMISSION
 	}
 	return ter.TesSUCCESS
@@ -196,8 +253,8 @@ func (s *SponsorshipSet) create(
 	sponsor *state.AccountRoot,
 ) ter.Result {
 	feeAmount := uint64(0)
-	if s.FeeAmount != nil && s.FeeAmount.Signum() > 0 {
-		feeAmount = uint64(s.FeeAmount.Drops())
+	if s.FeeAmountDelta != nil && s.FeeAmountDelta.Signum() > 0 {
+		feeAmount = uint64(s.FeeAmountDelta.Drops())
 	}
 	if feeAmount > sponsor.Balance {
 		return ter.TecUNFUNDED
@@ -221,8 +278,8 @@ func (s *SponsorshipSet) create(
 		object.MaxFee = uint64(s.MaxFee.Drops())
 		object.HasMaxFee = true
 	}
-	if s.RemainingOwnerCount != nil {
-		object.RemainingOwnerCount = *s.RemainingOwnerCount
+	if s.RemainingOwnerCountDelta != nil && *s.RemainingOwnerCountDelta > 0 {
+		object.RemainingOwnerCount = uint32(*s.RemainingOwnerCountDelta)
 	}
 
 	ownerInsert, err := state.DirInsert(ctx.View, keylet.OwnerDir(sponsorID), objectKey.Key, false, func(dir *state.DirectoryNode) {
@@ -265,11 +322,14 @@ func (s *SponsorshipSet) update(
 	sponsor *state.AccountRoot,
 	object *state.SponsorshipData,
 ) ter.Result {
-	if s.FeeAmount != nil {
-		newAmount := uint64(s.FeeAmount.Drops())
+	if s.FeeAmountDelta != nil {
 		oldAmount := uint64(0)
 		if object.HasFeeAmount {
 			oldAmount = object.FeeAmount
+		}
+		newAmount, ok := applyFeeAmountDelta(oldAmount, s.FeeAmountDelta.Drops())
+		if !ok {
+			return ter.TecLIMIT_EXCEEDED
 		}
 		if newAmount != oldAmount {
 			balanceAfter := sponsor.Balance
@@ -280,7 +340,11 @@ func (s *SponsorshipSet) update(
 				}
 				balanceAfter -= delta
 			} else {
-				balanceAfter += oldAmount - newAmount
+				refund := oldAmount - newAmount
+				if refund > math.MaxUint64-balanceAfter {
+					return ter.TecLIMIT_EXCEEDED
+				}
+				balanceAfter += refund
 			}
 			if result := checkAccountReserve(ctx.Config, sponsor, balanceAfter, 0, 0, ter.TecUNFUNDED); result != ter.TesSUCCESS {
 				return result
@@ -294,8 +358,16 @@ func (s *SponsorshipSet) update(
 		object.MaxFee = uint64(s.MaxFee.Drops())
 		object.HasMaxFee = object.MaxFee > 0
 	}
-	if s.RemainingOwnerCount != nil {
-		object.RemainingOwnerCount = *s.RemainingOwnerCount
+	if s.RemainingOwnerCountDelta != nil {
+		newCount := totalRemainingOwnerCount(object, s.RemainingOwnerCountDelta)
+		if newCount > math.MaxUint32 {
+			return ter.TecLIMIT_EXCEEDED
+		}
+		if newCount <= 0 {
+			object.RemainingOwnerCount = 0
+		} else {
+			object.RemainingOwnerCount = uint32(newCount)
+		}
 	}
 
 	flags := s.GetCommon().GetFlags()
