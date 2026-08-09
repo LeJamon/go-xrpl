@@ -456,7 +456,7 @@ func (e *Engine) checkPseudoAccountSign(common *txcore.Common) ter.Result {
 
 func (e *Engine) checkPseudoAccount(idAccount string) ter.Result {
 	if !e.rules().Enabled(amendment.FeatureLendingProtocol) &&
-		!e.rules().Enabled(amendment.FeatureBatch) {
+		!e.rules().Enabled(amendment.FeatureBatchV1_1) {
 		return ter.TesSUCCESS
 	}
 	return e.rejectPseudoAccount(idAccount)

@@ -209,7 +209,7 @@ func TestService_SubmitTransaction_BatchSignerFailureRemainsQueryable(t *testing
 	cfg := defaultServiceConfig()
 	cfg.Standalone = false
 	cfg.Startup.Mode = service.StartupFresh
-	cfg.GenesisConfig.Amendments = append(cfg.GenesisConfig.Amendments, amendment.FeatureBatch)
+	cfg.GenesisConfig.Amendments = append(cfg.GenesisConfig.Amendments, amendment.FeatureBatchV1_1)
 	svc, err := service.New(cfg)
 	if err != nil {
 		t.Fatalf("service.New: %v", err)
@@ -218,12 +218,12 @@ func TestService_SubmitTransaction_BatchSignerFailureRemainsQueryable(t *testing
 		t.Fatalf("service.Start: %v", err)
 	}
 	t.Cleanup(svc.Stop)
-	if !svc.TransactionRules().Enabled(amendment.FeatureBatch) {
+	if !svc.TransactionRules().Enabled(amendment.FeatureBatchV1_1) {
 		t.Fatal("Batch amendment not enabled in service rules")
 	}
 
 	env := jtx.NewTestEnv(t)
-	env.EnableFeatureNow("Batch")
+	env.EnableFeatureNow("BatchV1_1")
 	env.SetVerifySignatures(true)
 	outer := jtx.MasterAccount()
 	innerSigner := jtx.NewAccount("batch-signer")
@@ -264,8 +264,8 @@ func TestService_SubmitTransaction_BatchSignerFailureRemainsQueryable(t *testing
 	if err != nil {
 		t.Fatalf("SubmitTransaction: %v", err)
 	}
-	if result.Result != ter.TemBAD_SIGNATURE {
-		t.Fatalf("Result = %s, want temBAD_SIGNATURE", result.Result)
+	if result.Result != ter.TemINVALID {
+		t.Fatalf("Result = %s, want temINVALID", result.Result)
 	}
 	if result.Applied {
 		t.Fatal("invalid BatchSigner signature must not apply")

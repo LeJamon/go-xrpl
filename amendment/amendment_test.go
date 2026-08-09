@@ -475,7 +475,7 @@ func TestAllExpectedFeaturesExist(t *testing.T) {
 		"DeepFreeze",
 		"DynamicNFT",
 		"PermissionedDomains",
-		"Batch",
+		"BatchV1_1",
 		"PermissionedDEX",
 		"TokenEscrow",
 		"fixTokenEscrowV1",

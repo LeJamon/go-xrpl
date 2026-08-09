@@ -394,15 +394,15 @@ func TestBatchValidation(t *testing.T) {
 			name: "invalid - too many batch signers",
 			tx: func() *Batch {
 				b := makeValidBatch()
-				for i := range 9 {
+				for range MaxBatchSigners + 1 {
 					b.BatchSigners = append(b.BatchSigners, BatchSigner{
-						BatchSigner: BatchSignerData{Account: "rSigner" + string(rune('0'+i))},
+						BatchSigner: BatchSignerData{Account: testSigner1, SigningPubKey: "ABC"},
 					})
 				}
 				return b
 			}(),
 			wantErr: true,
-			errMsg:  "exceeds 8",
+			errMsg:  "exceeds 24",
 		},
 		{
 			// rSigner1's inner makes it a required signer, so the first signer entry
@@ -415,8 +415,8 @@ func TestBatchValidation(t *testing.T) {
 				flags := BatchFlagAllOrNothing
 				b.Common.Flags = &flags
 				b.BatchSigners = []BatchSigner{
-					{BatchSigner: BatchSignerData{Account: testSigner1}},
-					{BatchSigner: BatchSignerData{Account: testSigner1}}, // duplicate
+					{BatchSigner: BatchSignerData{Account: testSigner1, SigningPubKey: "ABC"}},
+					{BatchSigner: BatchSignerData{Account: testSigner1, SigningPubKey: "ABC"}}, // duplicate
 				}
 				return b
 			}(),
@@ -428,7 +428,7 @@ func TestBatchValidation(t *testing.T) {
 			tx: func() *Batch {
 				b := makeValidBatch()
 				b.BatchSigners = []BatchSigner{
-					{BatchSigner: BatchSignerData{Account: testOuter}}, // same as outer
+					{BatchSigner: BatchSignerData{Account: testOuter, SigningPubKey: "ABC"}}, // same as outer
 				}
 				return b
 			}(),
@@ -444,6 +444,9 @@ func TestBatchValidation(t *testing.T) {
 			tt.tx.Common.Sequence = &seq
 
 			err := tt.tx.Validate()
+			if err == nil {
+				err = tt.tx.PreflightSigValidated()
+			}
 			if tt.wantErr {
 				require.Error(t, err)
 				if tt.errMsg != "" {
@@ -543,7 +546,7 @@ func TestBatchAddInnerTransaction(t *testing.T) {
 func TestBatchRequiredAmendments(t *testing.T) {
 	b := NewBatch(testOuter)
 	amendments := b.RequiredAmendments()
-	assert.Contains(t, amendments, amendment.FeatureBatch)
+	assert.Contains(t, amendments, amendment.FeatureBatchV1_1)
 }
 
 // Constants Tests
@@ -648,7 +651,8 @@ func TestBatchRequiredSignersUseInnerAuthorizers(t *testing.T) {
 		b.AddInnerTransaction(makeTestPayment())
 		b.SetFlags(BatchFlagAllOrNothing)
 
-		require.ErrorIs(t, b.Validate(), ErrBatchMissingSigner)
+		require.NoError(t, b.Validate())
+		require.ErrorIs(t, b.PreflightSigValidated(), ErrBatchMissingSigner)
 
 		b.BatchSigners = []BatchSigner{{BatchSigner: BatchSignerData{
 			Account:           testSigner2,
@@ -656,7 +660,22 @@ func TestBatchRequiredSignersUseInnerAuthorizers(t *testing.T) {
 			BatchTxnSignature: "AA",
 		}}}
 		require.NoError(t, b.Validate())
+		require.NoError(t, b.PreflightSigValidated())
 	})
+}
+
+func TestBatchSignersMustBeStrictlyOrdered(t *testing.T) {
+	b := NewBatch(testOuter)
+	b.AddInnerTransaction(makeTestPaymentFrom(testSigner1))
+	b.AddInnerTransaction(makeTestPaymentFrom(testSigner2))
+	b.SetFlags(BatchFlagAllOrNothing)
+	b.BatchSigners = []BatchSigner{
+		{BatchSigner: BatchSignerData{Account: testSigner2, SigningPubKey: "01"}},
+		{BatchSigner: BatchSignerData{Account: testSigner1, SigningPubKey: "02"}},
+	}
+
+	require.NoError(t, b.Validate())
+	require.ErrorIs(t, b.PreflightSigValidated(), ErrBatchUnsortedSigner)
 }
 
 // TestCalculateMinimumFee_MultiSignedInner pins

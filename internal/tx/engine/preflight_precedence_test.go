@@ -329,10 +329,13 @@ func TestPreflightPrecedence_InnerBatchFlagLast(t *testing.T) {
 // transactions.macro amendment gate (RequiredAmendments) is the first
 // invokePreflight check, ahead of preflight0's NetworkID checks.
 func TestPreflightPrecedence_MacroGateBeforeNetworkID(t *testing.T) {
-	e := preflightEngine(allRules()) // Batch disabled
+	rules := amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported).
+		Disable(amendment.FeatureBatchV1_1).
+		Build()
+	e := preflightEngine(rules)
 	tx := &reqAmendmentTx{
 		BaseTx:     newAccountSet(precedenceSourceAddr),
-		amendments: [][32]byte{amendment.FeatureBatch},
+		amendments: [][32]byte{amendment.FeatureBatchV1_1},
 	}
 	tx.NetworkID = u32(99) // legacy node forbids the field → tel* if reached
 	if got := e.preflight(tx); got != ter.TemDISABLED {

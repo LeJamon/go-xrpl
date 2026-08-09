@@ -8,11 +8,9 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
-// batchRules builds a rules set from the all-supported preset with the named
-// amendments additionally enabled. Batch and fixBatchInnerSigs are Supported::no
-// upstream, so they are absent from the preset and must be enabled explicitly.
+// batchRules builds a rules set containing exactly the named amendments.
 func batchRules(names ...string) *amendment.Rules {
-	b := amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported)
+	b := amendment.NewRulesBuilder()
 	for _, n := range names {
 		b.EnableByName(n)
 	}
@@ -27,9 +25,7 @@ func innerFlaggedTx() *txcore.Common {
 }
 
 // TestPreflightInnerBatchFlag exercises the tfInnerBatchTxn rejection on a
-// directly-submitted transaction across the Batch and fixBatchInnerSigs gates,
-// mirroring rippled's Transactor::preflight1 (temINVALID_FLAG when Batch is
-// disabled) and apply.cpp checkValidity (fixBatchInnerSigs, PR #6069).
+// directly-submitted transaction across the BatchV1_1 gate.
 func TestPreflightInnerBatchFlag(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -45,16 +41,9 @@ func TestPreflightInnerBatchFlag(t *testing.T) {
 		{
 			// Pre-fix: the transaction reached the engine and failed with
 			// temINVALID_FLAG (checkValidity short-circuited it to Valid).
-			name:  "batch enabled, fix disabled",
-			rules: batchRules("Batch"),
-			want:  ter.TemINVALID_FLAG,
-		},
-		{
-			// Post-fix: an inner-flagged transaction never has a valid
-			// signature, so it is rejected as invalid before applying.
-			name:  "batch enabled, fix enabled",
-			rules: batchRules("Batch", "fixBatchInnerSigs"),
-			want:  ter.TemINVALID,
+			name:  "batch enabled",
+			rules: batchRules("BatchV1_1"),
+			want:  ter.TemINVALID_INNER_BATCH,
 		},
 	}
 	for _, tt := range tests {
@@ -70,7 +59,7 @@ func TestPreflightInnerBatchFlag(t *testing.T) {
 // tfInnerBatchTxn) is unaffected by the gate regardless of the amendments.
 func TestPreflightInnerBatchFlag_AbsentFlag(t *testing.T) {
 	tx := txcore.NewBaseTx(txcore.TypePayment, precedenceSourceAddr)
-	rules := batchRules("Batch", "fixBatchInnerSigs")
+	rules := batchRules("BatchV1_1")
 	if got := preflightInnerBatchFlag(tx.GetCommon(), rules); got != ter.TesSUCCESS {
 		t.Fatalf("preflightInnerBatchFlag(no flag) = %v, want TesSUCCESS", got)
 	}

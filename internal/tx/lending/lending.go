@@ -306,6 +306,8 @@ func NewLoanSet(account, loanBrokerID, principalRequested string) *LoanSet {
 
 func (l *LoanSet) TxType() tx.Type { return tx.TypeLoanSet }
 
+func (l *LoanSet) GetCounterparty() string { return l.Counterparty }
+
 // GetFlagsMask adopts the engine FlagsMasker seam with the LoanSet invalid-flags
 // mask (rippled LoanSet::getFlagsMask = tfLoanSetMask), checked at preflight0.
 func (l *LoanSet) GetFlagsMask(rules *amendment.Rules) uint32 {

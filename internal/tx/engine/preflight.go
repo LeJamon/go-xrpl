@@ -70,18 +70,6 @@ func (e *Engine) preflight(tx txcore.Transaction) (result ter.Result) {
 		}
 	}
 
-	// Reference: rippled Batch.cpp:303-312.
-	if outer, ok := tx.(BatchOuter); ok {
-		for _, inner := range outer.InnerTransactions() {
-			if inner == nil {
-				return ter.TemINVALID_INNER_BATCH
-			}
-			if r := e.preflightInner(inner); r != ter.TesSUCCESS {
-				return ter.TemINVALID_INNER_BATCH
-			}
-		}
-	}
-
 	return ter.TesSUCCESS
 }
 
@@ -131,6 +119,19 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 	// T::preflight — the tx-type-specific body.
 	if result := runTypePreflight(tx, rules); result != ter.TesSUCCESS {
 		return result
+	}
+	// Batch runs each inner transaction's full structural preflight before
+	// preflight2 verifies any signature.
+	// Reference: rippled Batch.cpp:303-312.
+	if outer, ok := tx.(BatchOuter); ok {
+		for _, inner := range outer.InnerTransactions() {
+			if inner == nil {
+				return ter.TemINVALID_INNER_BATCH
+			}
+			if r := e.preflightInner(inner); r != ter.TesSUCCESS {
+				return ter.TemINVALID_INNER_BATCH
+			}
+		}
 	}
 
 	// preflight2 structural stage — the multi-sign structural rules run after
@@ -316,26 +317,17 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 // follows fee and sequence validation, so a transaction that is both
 // inner-flagged and malformed there surfaces the earlier code.
 //
-// The rejection code mirrors rippled across the two amendment gates:
-//   - Batch disabled: the flag itself is undefined → temINVALID_FLAG
-//     (rippled Transactor::preflight1, unchanged by fixBatchInnerSigs).
-//   - Batch enabled: such a transaction still has no valid signature (its
-//     SigningPubKey is empty). With fixBatchInnerSigs it is rejected as a bad
-//     signature before reaching the engine (rippled apply.cpp checkValidity
-//     falls through to checkSign → SigBad → temINVALID). Before the fix it
-//     reached the transaction engine and failed with temINVALID_FLAG. Either
-//     way it can never apply.
+// Without BatchV1_1 the flag is undefined. With BatchV1_1 it is valid only on
+// an inner transaction carrying a parent batch ID, so the standalone path is
+// rejected as temINVALID_INNER_BATCH.
 func preflightInnerBatchFlag(common *txcore.Common, rules *amendment.Rules) ter.Result {
 	if common.Flags == nil || *common.Flags&txcore.TfInnerBatchTxn == 0 {
 		return ter.TesSUCCESS
 	}
-	if !rules.Enabled(amendment.FeatureBatch) {
+	if !rules.Enabled(amendment.FeatureBatchV1_1) {
 		return ter.TemINVALID_FLAG
 	}
-	if rules.Enabled(amendment.FeatureFixBatchInnerSigs) {
-		return ter.TemINVALID
-	}
-	return ter.TemINVALID_FLAG
+	return ter.TemINVALID_INNER_BATCH
 }
 
 // checkDelegate validates the sfDelegate field.
@@ -565,7 +557,7 @@ func (e *Engine) preflightSponsorSignStructure(common *txcore.Common) ter.Result
 // preflightBatchSignerStructure enforces the rules-gated upper bound on each
 // multi-signed BatchSigner's nested Signers array. rippled checks this inside
 // multiSignHelper (called from Batch::preflight with ctx.rules); an out-of-range
-// array there surfaces as temBAD_SIGNATURE at the checkBatchSign call site. The
+// array there is a bad-signature validity result and surfaces as temINVALID. The
 // crypto verification of those signers lives in Batch.Validate(), which has no
 // rules access, so the rules-dependent size bound is enforced here in preflight.
 func (e *Engine) preflightBatchSignerStructure(tx txcore.Transaction) ter.Result {
@@ -581,7 +573,7 @@ func (e *Engine) preflightBatchSignerStructure(tx txcore.Transaction) ter.Result
 			continue
 		}
 		if n := len(signer.Signers); n < sign.MinMultiSigners || n > maxSigners {
-			return ter.TemBAD_SIGNATURE
+			return ter.TemINVALID
 		}
 	}
 	return ter.TesSUCCESS
@@ -618,12 +610,12 @@ func (e *Engine) verifySignatures(tx txcore.Transaction) ter.Result {
 	}
 	// Batch-signer signatures are verified over the batch signing digest, the same
 	// stage rippled runs STTx::checkBatchSign (always RequireFullyCanonicalSig::yes).
-	// The structural/coverage checks on BatchSigners run unconditionally in Validate;
-	// only the cryptographic verification is gated here so it honours
+	// Structural bounds run before hashing; coverage/order runs in
+	// PreflightSigValidated. Only cryptographic verification is gated here so it honours
 	// SkipSignatureVerification like every other signature.
 	if bsv, ok := tx.(txcore.BatchSignatureVerifier); ok {
 		if err := bsv.VerifyBatchSignatures(); err != nil {
-			return ter.TemBAD_SIGNATURE
+			return ter.TemINVALID
 		}
 	}
 	return ter.TesSUCCESS

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/stretchr/testify/require"
 )
@@ -875,7 +876,7 @@ func TestEncodeForSigningBatch(t *testing.T) {
 					"795AAC88B59E95C3497609749127E69F12958BC016C600C770AEEB1474C840B4",
 				},
 			},
-			output:      "424348000000000100000002ABE4871E9083DF66727045D49DEEDD3A6F166EB7F8D1E92FE868F02E76B2C5CA795AAC88B59E95C3497609749127E69F12958BC016C600C770AEEB1474C840B4",
+			output:      "424348000000000000000000000000000000000000000000000000070000000100000002ABE4871E9083DF66727045D49DEEDD3A6F166EB7F8D1E92FE868F02E76B2C5CA795AAC88B59E95C3497609749127E69F12958BC016C600C770AEEB1474C840B4",
 			expectedErr: nil,
 		},
 		{
@@ -886,8 +887,72 @@ func TestEncodeForSigningBatch(t *testing.T) {
 					"1111111111111111111111111111111111111111111111111111111111111111",
 				},
 			},
-			output:      "4243480000000000000000011111111111111111111111111111111111111111111111111111111111111111",
+			output:      "4243480000000000000000000000000000000000000000000000000700000000000000011111111111111111111111111111111111111111111111111111111111111111",
 			expectedErr: nil,
+		},
+		{
+			description: "fail - batch missing account field",
+			input: map[string]any{
+				"sequence": uint32(7),
+				"flags":    uint32(1),
+				"txIDs":    []string{},
+			},
+			expectedErr: ErrBatchAccountFieldNotFound,
+		},
+		{
+			description: "fail - batch account has wrong type",
+			input: map[string]any{
+				"account":  7,
+				"sequence": uint32(7),
+				"flags":    uint32(1),
+				"txIDs":    []string{},
+			},
+			expectedErr: ErrBatchAccountNotString,
+		},
+		{
+			description: "fail - batch account is not a classic address",
+			input: map[string]any{
+				"account":  "not-a-classic-address",
+				"sequence": uint32(7),
+				"flags":    uint32(1),
+				"txIDs":    []string{},
+			},
+			expectedErr: addresscodec.ErrInvalidClassicAddress,
+		},
+		{
+			description: "fail - batch missing sequence field",
+			input: map[string]any{
+				"account": "rrrrrrrrrrrrrrrrrrrrrhoLvTp",
+				"flags":   uint32(1),
+				"txIDs":   []string{},
+			},
+			expectedErr: ErrBatchSequenceFieldNotFound,
+		},
+		{
+			description: "fail - batch sequence has wrong type",
+			input: map[string]any{
+				"account":  "rrrrrrrrrrrrrrrrrrrrrhoLvTp",
+				"sequence": 7,
+				"flags":    uint32(1),
+				"txIDs":    []string{},
+			},
+			expectedErr: ErrBatchSequenceNotUInt32,
+		},
+		{
+			description: "fail - batch exceeds maximum txIDs",
+			input: map[string]any{
+				"flags": uint32(1),
+				"txIDs": make([]string, 9),
+			},
+			expectedErr: ErrBatchTooManyTxIDs,
+		},
+		{
+			description: "fail - batch has malformed txID",
+			input: map[string]any{
+				"flags": uint32(1),
+				"txIDs": []string{"00"},
+			},
+			expectedErr: &types.InvalidHashLengthError{Expected: 32},
 		},
 		{
 			description: "fail - batch missing flags field",
@@ -954,6 +1019,12 @@ func TestEncodeForSigningBatch(t *testing.T) {
 	for _, tc := range tt {
 		t.Run(tc.description, func(t *testing.T) {
 			t.Parallel()
+			if _, present := tc.input["account"]; !present && tc.expectedErr != ErrBatchAccountFieldNotFound {
+				tc.input["account"] = "rrrrrrrrrrrrrrrrrrrrrhoLvTp"
+			}
+			if _, present := tc.input["sequence"]; !present && tc.expectedErr != ErrBatchSequenceFieldNotFound {
+				tc.input["sequence"] = uint32(7)
+			}
 			got, err := EncodeForSigningBatch(tc.input)
 
 			if tc.expectedErr != nil {

@@ -98,14 +98,6 @@ func IsMultiSigned(tx txcore.Transaction) bool {
 // optional counterparty signatures are valid.
 func CheckSTTxSignature(transaction txcore.Transaction, rules *amendment.Rules, checkSigs bool) string {
 	common := transaction.GetCommon()
-	if common.GetFlags()&txcore.TfInnerBatchTxn != 0 && rules != nil && rules.Enabled(amendment.FeatureBatch) {
-		if common.HasField("TxnSignature") || common.SigningPubKey != "" || common.HasField("Signers") {
-			return "Malformed: Invalid inner batch transaction."
-		}
-		if !rules.Enabled(amendment.FeatureFixBatchInnerSigs) {
-			return ""
-		}
-	}
 	if !checkSigs {
 		return ""
 	}
