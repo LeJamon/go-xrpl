@@ -145,15 +145,10 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 	if err != nil {
 		r.logger.Warn("failed to decode manifests frame", "error", err, "peer", msg.PeerID)
 		reason := "manifests-decode"
-		fee := resource.FeeInvalidData()
-		var limitErr *message.WireLimitError
-		if errors.As(err, &limitErr) && limitErr.Reason == message.WireLimitManifests {
-			reason = "manifests-oversize"
-			fee = resource.FeeModerateBurdenPeer()
-		} else if errors.Is(err, message.ErrWireLimit) {
+		if errors.Is(err, message.ErrWireLimit) {
 			reason = "wire-invalid"
 		}
-		if !msg.SelectPeerCharge(fee, reason) {
+		if !msg.SelectPeerCharge(resource.FeeInvalidData(), reason) {
 			r.gossip.IncPeerBadData(uint64(msg.PeerID), reason)
 		}
 		return false
@@ -161,9 +156,6 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 	if count == 0 {
 		msg.SelectPeerCharge(resource.FeeUselessData(), "empty")
 		return true
-	}
-	if count > manifestFrameMaxEntries {
-		msg.SelectPeerCharge(resource.FeeModerateBurdenPeer(), "oversize")
 	}
 	if badManifest {
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), "manifest-invalid")

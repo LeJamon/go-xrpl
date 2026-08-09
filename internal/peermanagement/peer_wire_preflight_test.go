@@ -47,13 +47,6 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 			compress: true,
 		},
 		{
-			name:    "manifests",
-			msgType: message.TypeManifests,
-			payload: peerRepeatedMessageField(1, 101),
-			reason:  "manifests-oversize",
-			charge:  resource.FeeModerateBurdenPeer(),
-		},
-		{
 			name:    "transactions",
 			msgType: message.TypeTransactions,
 			payload: peerRepeatedMessageField(1, 10_001),

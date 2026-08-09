@@ -82,6 +82,7 @@ func TestCompressedManifestSpoolSharesInboundBudget(t *testing.T) {
 	budget := newReadBudget(int64(3 * len(payload)))
 	manifests := make(chan *InboundMessage, 1)
 	peer := newLatencyTestPeer(t)
+	peer.SetManifestPayloadLimit(uint32(len(payload)))
 	peer.bufReader = bufio.NewReader(bytes.NewReader(wire))
 	peer.handshakeCfg.EnableCompression = true
 	peer.capabilities = NewPeerCapabilities()
@@ -442,6 +443,7 @@ func TestOverlayShutdownReleasesQueuedManifestSpool(t *testing.T) {
 	budget := newReadBudget(int64(2 * len(payload)))
 	manifests := make(chan *InboundMessage, 1)
 	peer := newLatencyTestPeer(t)
+	peer.SetManifestPayloadLimit(uint32(len(payload)))
 	peer.bufReader = bufio.NewReader(bytes.NewReader(wire))
 	peer.SetManifestMessages(manifests)
 	peer.SetInboundReadBudget(budget)
