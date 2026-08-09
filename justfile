@@ -35,7 +35,7 @@ mpt-crypto-env:
     @./scripts/setup-mpt-crypto.sh env
 
 # Build mpt-crypto from its lockfile and run the native backend tests.
-test-mpt-crypto package="./crypto/mptcrypto/...":
+test-mpt-crypto package="./amendment/... ./crypto/mptcrypto/... ./internal/tx/mpt/... ./internal/testing/mpt/...":
     ./scripts/setup-mpt-crypto.sh test {{package}}
 
 # Run every test in the module.

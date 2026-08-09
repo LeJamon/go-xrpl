@@ -211,10 +211,14 @@ func CheckFields(ids []string, present bool, dupDetail string) error {
 	}
 	seen := make(map[string]bool, len(ids))
 	for _, id := range ids {
-		if seen[id] {
+		canonical := id
+		if decoded, err := hex.DecodeString(id); err == nil && len(decoded) == 32 {
+			canonical = hex.EncodeToString(decoded)
+		}
+		if seen[canonical] {
 			return ter.Errorf(ter.TemMALFORMED, "%s", dupDetail)
 		}
-		seen[id] = true
+		seen[canonical] = true
 	}
 	return nil
 }
@@ -463,11 +467,28 @@ func VerifyDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, src, dst
 			if !credentialsPresent {
 				return ter.TecNO_PERMISSION
 			}
-			return authorizedDepositPreauth(ctx, credentialIDs, dst)
+			return authorizedDepositPreauth(ctx.View, credentialIDs, dst)
 		}
 	}
 
 	return ter.TesSUCCESS
+}
+
+func CheckDepositPreauth(view tx.LedgerView, credentialIDs []string, credentialsPresent bool, src, dst [20]byte, dstAccount *state.AccountRoot) ter.Result {
+	if dstAccount == nil || dstAccount.Flags&state.LsfDepositAuth == 0 || src == dst {
+		return ter.TesSUCCESS
+	}
+	exists, err := view.Exists(keylet.DepositPreauth(dst, src))
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if exists {
+		return ter.TesSUCCESS
+	}
+	if !credentialsPresent {
+		return ter.TecNO_PERMISSION
+	}
+	return authorizedDepositPreauth(view, credentialIDs, dst)
 }
 
 // authorizedDepositPreauth checks whether the (Issuer, CredentialType) pairs
@@ -476,7 +497,7 @@ func VerifyDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, src, dst
 // credentials that passed preflight and preclaim, since credential IDs are
 // deduplicated there and all credentials share the sender as Subject.
 // Reference: rippled CredentialHelpers.cpp credentials::authorizedDepositPreauth()
-func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst [20]byte) ter.Result {
+func authorizedDepositPreauth(view tx.LedgerView, credentialIDs []string, dst [20]byte) ter.Result {
 	pairs := make([]keylet.CredentialPair, 0, len(credentialIDs))
 	seen := make(map[string]bool, len(credentialIDs))
 
@@ -489,7 +510,7 @@ func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst 
 		copy(credID[:], credIDBytes)
 
 		// Credential existence was already checked in preclaim.
-		credData, err := ctx.View.Read(keylet.CredentialByID(credID))
+		credData, err := view.Read(keylet.CredentialByID(credID))
 		if err != nil || credData == nil {
 			return ter.TefINTERNAL
 		}
@@ -517,7 +538,9 @@ func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst 
 		return bytes.Compare(pairs[i].CredentialType, pairs[j].CredentialType) < 0
 	})
 
-	if exists, _ := ctx.View.Exists(keylet.DepositPreauthCredentials(dst, pairs)); !exists {
+	if exists, err := view.Exists(keylet.DepositPreauthCredentials(dst, pairs)); err != nil {
+		return ter.TefINTERNAL
+	} else if !exists {
 		return ter.TecNO_PERMISSION
 	}
 

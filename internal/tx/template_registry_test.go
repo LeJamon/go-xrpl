@@ -20,17 +20,11 @@ func TestConfidentialTypeRegistration(t *testing.T) {
 		tx.TypeConfidentialMPTConvert,
 		tx.TypeConfidentialMPTMergeInbox,
 		tx.TypeConfidentialMPTConvertBack,
-	} {
-		if _, err := tx.NewFromType(txType); err != nil {
-			t.Fatalf("NewFromType(%s) error = %v", txType, err)
-		}
-	}
-	for _, txType := range []tx.Type{
 		tx.TypeConfidentialMPTSend,
 		tx.TypeConfidentialMPTClawback,
 	} {
-		if _, err := tx.NewFromType(txType); err != tx.ErrUnknownTransactionType {
-			t.Fatalf("NewFromType(%s) error = %v, want ErrUnknownTransactionType", txType, err)
+		if _, err := tx.NewFromType(txType); err != nil {
+			t.Fatalf("NewFromType(%s) error = %v", txType, err)
 		}
 	}
 }

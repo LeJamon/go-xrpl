@@ -195,6 +195,7 @@ jobs:
       # path on signature accept/reject. No -race here: the detector needs
       # cgo, and no CGO dev headers are installed for this leg.
       - run: CGO_ENABLED=0 go test -count=1 -timeout 15m ./crypto/...
+      - run: CGO_ENABLED=0 go test -tags mptcrypto -count=1 -timeout 15m ./amendment/... ./crypto/mptcrypto/...
 
   test-mpt-crypto:
     name: Test (Confidential MPT native backend, ${{ matrix.os }})
@@ -209,7 +210,7 @@ jobs:
       - name: Install Conan
         run: pipx install conan==2.18.1
       - name: Build and test native backend
-        run: ./scripts/setup-mpt-crypto.sh test ./crypto/mptcrypto/...
+        run: ./scripts/setup-mpt-crypto.sh test ./amendment/... ./crypto/mptcrypto/... ./internal/tx/mpt/... ./internal/testing/mpt/...
 
   consensus-smoke:
     name: Consensus smoke (2 rippled + 1 goxrpl)

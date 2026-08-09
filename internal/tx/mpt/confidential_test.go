@@ -2,10 +2,14 @@ package mpt
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/crypto/mptcrypto"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 func TestConfidentialMPTWireAmountAndOptionalPresence(t *testing.T) {
@@ -67,6 +71,18 @@ func TestConfidentialMPTUnmarshalClearsReusedReceiver(t *testing.T) {
 		convertBack.HolderEncryptedAmount != "" || convertBack.ZKProof != "" || convertBack.BalanceCommitment != "" {
 		t.Fatalf("reused ConvertBack retained stale fields: %+v", convertBack)
 	}
+
+	clawback := ConfidentialMPTClawback{MPTokenIssuanceID: "stale", Holder: "stale", MPTAmount: 9, ZKProof: "stale"}
+	if err := json.Unmarshal([]byte(`{"MPTAmount":"9223372036854775807"}`), &clawback); err != nil {
+		t.Fatal(err)
+	}
+	if clawback.MPTAmount != protocol.MaxMPTokenAmount || clawback.MPTokenIssuanceID != "" || clawback.Holder != "" || clawback.ZKProof != "" {
+		t.Fatalf("reused Clawback retained stale fields: %+v", clawback)
+	}
+	flat, err := clawback.Flatten()
+	if err != nil || flat["MPTAmount"] != "9223372036854775807" {
+		t.Fatalf("clawback flatten = %#v, %v", flat, err)
+	}
 }
 
 func TestConfidentialMPTProtocolShape(t *testing.T) {
@@ -82,6 +98,8 @@ func TestConfidentialMPTProtocolShape(t *testing.T) {
 		{&ConfidentialMPTConvert{}, tx.TypeConfidentialMPTConvert},
 		{&ConfidentialMPTMergeInbox{}, tx.TypeConfidentialMPTMergeInbox},
 		{&ConfidentialMPTConvertBack{}, tx.TypeConfidentialMPTConvertBack},
+		{&ConfidentialMPTSend{}, tx.TypeConfidentialMPTSend},
+		{&ConfidentialMPTClawback{}, tx.TypeConfidentialMPTClawback},
 	}
 	for _, test := range tests {
 		if got := test.transaction.TxType(); got != test.want {
@@ -95,4 +113,100 @@ func TestConfidentialMPTProtocolShape(t *testing.T) {
 			t.Fatalf("RequiredAmendments() = %x", features)
 		}
 	}
+}
+
+func TestConfidentialMPTRegisteredJSONRejectsMissingRequiredFields(t *testing.T) {
+	Register()
+	for _, test := range []struct {
+		name string
+		data string
+	}{
+		{
+			name: "send",
+			data: `{"TransactionType":"ConfidentialMPTSend","Account":"rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"}`,
+		},
+		{
+			name: "clawback",
+			data: `{"TransactionType":"ConfidentialMPTClawback","Account":"rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			transaction, err := tx.FromJSON([]byte(test.data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = transaction.Validate()
+			if err == nil || !strings.HasPrefix(err.Error(), "temMALFORMED: required confidential") {
+				t.Fatalf("Validate() = %v, want missing required-field temMALFORMED", err)
+			}
+		})
+	}
+}
+
+func TestConfidentialMPTSendCodecRoundTrip(t *testing.T) {
+	input := map[string]any{
+		"TransactionType":            "ConfidentialMPTSend",
+		"Account":                    "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+		"Sequence":                   uint32(1),
+		"Fee":                        "100",
+		"SigningPubKey":              "",
+		"MPTokenIssuanceID":          "00000001ABCDEF0123456789ABCDEF0123456789ABCDEF12",
+		"Destination":                "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"DestinationTag":             uint32(7),
+		"SenderEncryptedAmount":      makeHex(66, 0x11),
+		"DestinationEncryptedAmount": makeHex(66, 0x22),
+		"IssuerEncryptedAmount":      makeHex(66, 0x33),
+		"AuditorEncryptedAmount":     makeHex(66, 0x44),
+		"ZKProof":                    makeHex(mptcrypto.SendProofSize, 0x55),
+		"AmountCommitment":           makeHex(33, 0x66),
+		"BalanceCommitment":          makeHex(33, 0x77),
+		"CredentialIDs":              []any{makeHex(32, 0x88)},
+	}
+	encoded, err := binarycodec.EncodeBytes(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := binarycodec.DecodeBytes(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"SenderEncryptedAmount", "DestinationEncryptedAmount", "IssuerEncryptedAmount", "AuditorEncryptedAmount", "ZKProof", "AmountCommitment", "BalanceCommitment", "CredentialIDs"} {
+		if _, ok := decoded[field]; !ok {
+			t.Fatalf("decoded send omitted %s", field)
+		}
+	}
+}
+
+func TestConfidentialMPTClawbackCodecRoundTrip(t *testing.T) {
+	input := map[string]any{
+		"TransactionType":   "ConfidentialMPTClawback",
+		"Account":           "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+		"Sequence":          uint32(1),
+		"Fee":               "100",
+		"SigningPubKey":     "",
+		"MPTokenIssuanceID": "00000001ABCDEF0123456789ABCDEF0123456789ABCDEF12",
+		"Holder":            "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"MPTAmount":         "9223372036854775807",
+		"ZKProof":           makeHex(mptcrypto.ClawbackProofSize, 0x11),
+	}
+	encoded, err := binarycodec.EncodeBytes(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := binarycodec.DecodeBytes(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded["MPTAmount"] != "9223372036854775807" {
+		t.Fatalf("MPTAmount = %#v", decoded["MPTAmount"])
+	}
+}
+
+func makeHex(size int, value byte) string {
+	digits := "0123456789ABCDEF"
+	result := make([]byte, size*2)
+	for i := 0; i < size; i++ {
+		result[2*i], result[2*i+1] = digits[value>>4], digits[value&15]
+	}
+	return string(result)
 }

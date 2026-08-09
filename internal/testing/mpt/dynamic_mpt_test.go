@@ -20,6 +20,7 @@ func dynamicMPTDisabledEnv(t *testing.T) *jtx.TestEnv {
 func dynamicMPTEnv(t *testing.T) *jtx.TestEnv {
 	t.Helper()
 	env := jtx.NewTestEnv(t)
+	env.DisableFeature("ConfidentialTransfer")
 	env.EnableFeature("DynamicMPT")
 	env.Close()
 	return env
