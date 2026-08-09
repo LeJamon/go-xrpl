@@ -114,7 +114,7 @@ func TestParseFromBinaryDynamicMPTFields(t *testing.T) {
 				"Sequence":        uint32(1),
 				"Fee":             "10",
 				"SigningPubKey":   "",
-				"ImmutableFlags":  uint32(1),
+				"ImmutableFlags":  uint32(2),
 			},
 		},
 		{
@@ -128,7 +128,7 @@ func TestParseFromBinaryDynamicMPTFields(t *testing.T) {
 				"MPTokenIssuanceID": "000000000000000000000000000000000000000000000001",
 				"MPTokenMetadata":   "AA",
 				"TransferFee":       uint16(1),
-				"ImmutableFlags":    uint32(1),
+				"ImmutableFlags":    uint32(2),
 			},
 		},
 	}
@@ -145,6 +145,9 @@ func TestParseFromBinaryDynamicMPTFields(t *testing.T) {
 			}
 			if _, err := tx.ParseFromBinary(blob); err != nil {
 				t.Fatalf("ParseFromBinary: %v", err)
+			}
+			if !strings.Contains(hexStr, "203500000002") {
+				t.Fatalf("ImmutableFlags field encoding missing from %s", hexStr)
 			}
 		})
 	}

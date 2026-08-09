@@ -131,6 +131,22 @@ func (m *MPTokenAuthorize) Preclaim(view tx.LedgerView, config tx.EngineConfig) 
 				token.Flags&entry.LsfMPTLocked != 0 {
 				return ter.TecNO_PERMISSION
 			}
+			if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureConfidentialTransfer) &&
+				(len(token.ConfidentialBalanceInbox) != 0 || len(token.ConfidentialBalanceSpending) != 0) {
+				issuanceRaw, rerr := view.Read(issuanceKey)
+				if rerr != nil {
+					return ter.TefINTERNAL
+				}
+				if issuanceRaw != nil {
+					issuance, perr := state.ParseMPTokenIssuance(issuanceRaw)
+					if perr != nil {
+						return ter.TefINTERNAL
+					}
+					if issuance.ConfidentialOutstandingAmount != 0 {
+						return ter.TecHAS_OBLIGATIONS
+					}
+				}
+			}
 			return ter.TesSUCCESS
 		}
 		issuanceRaw, rerr := view.Read(issuanceKey)

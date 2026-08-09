@@ -85,6 +85,11 @@ const (
 	TxTypeLoanDelete                   TxType = 81 // ttLOAN_DELETE
 	TxTypeLoanManage                   TxType = 82 // ttLOAN_MANAGE
 	TxTypeLoanPay                      TxType = 84 // ttLOAN_PAY
+	TxTypeConfidentialMPTConvert       TxType = 85 // ttCONFIDENTIAL_MPT_CONVERT
+	TxTypeConfidentialMPTMergeInbox    TxType = 86 // ttCONFIDENTIAL_MPT_MERGE_INBOX
+	TxTypeConfidentialMPTConvertBack   TxType = 87 // ttCONFIDENTIAL_MPT_CONVERT_BACK
+	TxTypeConfidentialMPTSend          TxType = 88 // ttCONFIDENTIAL_MPT_SEND
+	TxTypeConfidentialMPTClawback      TxType = 89 // ttCONFIDENTIAL_MPT_CLAWBACK
 	TxTypeSponsorshipTransfer          TxType = 90 // ttSPONSORSHIP_TRANSFER
 	TxTypeSponsorshipSet               TxType = 91 // ttSPONSORSHIP_SET
 
@@ -241,6 +246,16 @@ func (t TxType) String() string {
 		return "LoanManage"
 	case TxTypeLoanPay:
 		return "LoanPay"
+	case TxTypeConfidentialMPTConvert:
+		return "ConfidentialMPTConvert"
+	case TxTypeConfidentialMPTMergeInbox:
+		return "ConfidentialMPTMergeInbox"
+	case TxTypeConfidentialMPTConvertBack:
+		return "ConfidentialMPTConvertBack"
+	case TxTypeConfidentialMPTSend:
+		return "ConfidentialMPTSend"
+	case TxTypeConfidentialMPTClawback:
+		return "ConfidentialMPTClawback"
 	case TxTypeSponsorshipTransfer:
 		return "SponsorshipTransfer"
 	case TxTypeSponsorshipSet:
@@ -330,6 +345,11 @@ var txTypeNameMap = map[string]TxType{
 	"LoanDelete":                        TxTypeLoanDelete,
 	"LoanManage":                        TxTypeLoanManage,
 	"LoanPay":                           TxTypeLoanPay,
+	"ConfidentialMPTConvert":            TxTypeConfidentialMPTConvert,
+	"ConfidentialMPTMergeInbox":         TxTypeConfidentialMPTMergeInbox,
+	"ConfidentialMPTConvertBack":        TxTypeConfidentialMPTConvertBack,
+	"ConfidentialMPTSend":               TxTypeConfidentialMPTSend,
+	"ConfidentialMPTClawback":           TxTypeConfidentialMPTClawback,
 	"SponsorshipTransfer":               TxTypeSponsorshipTransfer,
 	"SponsorshipSet":                    TxTypeSponsorshipSet,
 	"EnableAmendment":                   TxTypeAmendment,

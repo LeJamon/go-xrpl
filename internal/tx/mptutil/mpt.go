@@ -794,6 +794,12 @@ func RemoveHolding(view state.LedgerView, id [24]byte, holder [20]byte, adjustOw
 	if token.MPTAmount != 0 || lockedObligation {
 		return ter.TecHAS_OBLIGATIONS
 	}
+	if len(token.ConfidentialBalanceInbox) != 0 ||
+		len(token.ConfidentialBalanceSpending) != 0 ||
+		len(token.IssuerEncryptedBalance) != 0 ||
+		len(token.AuditorEncryptedBalance) != 0 {
+		return ter.TecHAS_OBLIGATIONS
+	}
 	removed, err := state.DirRemove(view, keylet.OwnerDir(holder), token.OwnerNode, tokenKey.Key, false)
 	if err != nil {
 		return ter.TefINTERNAL

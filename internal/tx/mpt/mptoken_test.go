@@ -415,6 +415,17 @@ func TestMPTokenIssuanceSetPreflightOrder(t *testing.T) {
 		}
 	})
 
+	t.Run("flags mask beats confidential amendment gate", func(t *testing.T) {
+		m := NewMPTokenIssuanceSet("rAlice", validID)
+		m.SetFlags(0x00000200)
+		issuerKey := "00"
+		m.IssuerEncryptionKey = &issuerKey
+		rules := amendment.NewRulesBuilder().Enable(amendment.FeatureDynamicMPT).Build()
+		if err := preflightMPTSet(m, rules); err == nil || err.Error() != "temINVALID_FLAG: invalid flags" {
+			t.Fatalf("expected temINVALID_FLAG, got %v", err)
+		}
+	})
+
 	// Finding: the "changes nothing" no-op check is enforced in preflight (under
 	// SingleAssetVault), before signature verification.
 	t.Run("no-op is a preflight temMALFORMED", func(t *testing.T) {

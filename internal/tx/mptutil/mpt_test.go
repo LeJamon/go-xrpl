@@ -244,6 +244,37 @@ func TestEnsureAndRemoveHolding(t *testing.T) {
 	require.Equal(t, [][3]uint32{{2, 3}, {3, 2}}, view.adjustments)
 }
 
+func TestVaultRemoveHoldingPreservesConfidentialBalances(t *testing.T) {
+	issuer := [20]byte{1}
+	holder := [20]byte{2}
+	id := keylet.MakeMPTID(1, issuer)
+	tokenKey := keylet.MPTokenByID(id, holder)
+	tests := []struct {
+		name  string
+		apply func(*state.MPTokenData)
+	}{
+		{"inbox", func(token *state.MPTokenData) { token.ConfidentialBalanceInbox = []byte{1} }},
+		{"spending", func(token *state.MPTokenData) { token.ConfidentialBalanceSpending = []byte{1} }},
+		{"issuer", func(token *state.MPTokenData) { token.IssuerEncryptedBalance = []byte{1} }},
+		{"auditor", func(token *state.MPTokenData) { token.AuditorEncryptedBalance = []byte{1} }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			view := newMPTTestView()
+			view.rules = amendment.NewRules(nil)
+			token := &state.MPTokenData{Account: holder, MPTokenIssuanceID: id}
+			test.apply(token)
+			raw, err := state.SerializeMPToken(token)
+			require.NoError(t, err)
+			view.data[tokenKey.Key] = raw
+
+			require.Equal(t, ter.TecHAS_OBLIGATIONS, RemoveHolding(view, id, holder, false))
+			_, exists := view.data[tokenKey.Key]
+			require.True(t, exists)
+		})
+	}
+}
+
 func TestRemoveHoldingOwnerDirectoryFailureTER(t *testing.T) {
 	view := newMPTTestView()
 	var issuer, holder [20]byte

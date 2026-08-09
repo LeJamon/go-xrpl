@@ -36,3 +36,7 @@ main
 .worktrees/
 worktrees/
 tasks/
+
+# Project-local Conan cache and generated PkgConfigDeps metadata.
+.conan-home/
+.mpt-crypto/

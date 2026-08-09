@@ -312,8 +312,23 @@ func TestServerDefinitions_3_2_0_Sections(t *testing.T) {
 			},
 			{
 				name:   "MPTokenIssuanceSet",
-				fields: []string{"MPTokenIssuanceID", "Holder", "DomainID", "MPTokenMetadata", "TransferFee", "ImmutableFlags"},
-				styles: []int{0, 1, 1, 1, 1, 1},
+				fields: []string{"MPTokenIssuanceID", "Holder", "DomainID", "MPTokenMetadata", "TransferFee", "ImmutableFlags", "IssuerEncryptionKey", "AuditorEncryptionKey"},
+				styles: []int{0, 1, 1, 1, 1, 1, 1, 1},
+			},
+			{
+				name:   "ConfidentialMPTConvert",
+				fields: []string{"MPTokenIssuanceID", "MPTAmount", "HolderEncryptionKey", "HolderEncryptedAmount", "IssuerEncryptedAmount", "AuditorEncryptedAmount", "BlindingFactor", "ZKProof"},
+				styles: []int{0, 0, 1, 0, 0, 1, 0, 1},
+			},
+			{
+				name:   "ConfidentialMPTMergeInbox",
+				fields: []string{"MPTokenIssuanceID"},
+				styles: []int{0},
+			},
+			{
+				name:   "ConfidentialMPTConvertBack",
+				fields: []string{"MPTokenIssuanceID", "MPTAmount", "HolderEncryptedAmount", "IssuerEncryptedAmount", "AuditorEncryptedAmount", "BlindingFactor", "ZKProof", "BalanceCommitment"},
+				styles: []int{0, 0, 0, 0, 1, 0, 0, 0},
 			},
 			{
 				name:   "SponsorshipTransfer",
@@ -401,10 +416,13 @@ func TestServerDefinitions_3_2_0_Sections(t *testing.T) {
 		set, ok := flags["SponsorshipSet"].(map[string]any)
 		require.True(t, ok)
 		assert.EqualValues(t, 0x00100000, num(set["tfDeleteObject"]))
-		mptSet, ok := flags["MPTokenIssuanceSet"].(map[string]any)
+		createMPT, ok := flags["MPTokenIssuanceCreate"].(map[string]any)
 		require.True(t, ok)
-		assert.EqualValues(t, 0x00000004, num(mptSet["tfMPTSetCanLock"]))
-		assert.EqualValues(t, 0x00000100, num(mptSet["tfMPTSetCanHoldConfidentialBalance"]))
+		assert.EqualValues(t, 0x00000080, num(createMPT["tfMPTCanHoldConfidentialBalance"]))
+		setMPT, ok := flags["MPTokenIssuanceSet"].(map[string]any)
+		require.True(t, ok)
+		assert.EqualValues(t, 0x00000004, num(setMPT["tfMPTSetCanLock"]))
+		assert.EqualValues(t, 0x00000100, num(setMPT["tfMPTSetCanHoldConfidentialBalance"]))
 	})
 
 	t.Run("LEDGER_ENTRY_FLAGS", func(t *testing.T) {
@@ -416,9 +434,9 @@ func TestServerDefinitions_3_2_0_Sections(t *testing.T) {
 		mpt, ok := flags["MPToken"].(map[string]any)
 		require.True(t, ok)
 		assert.EqualValues(t, 0x00000004, num(mpt["lsfMPTAMM"]), "3.2.0 lsfMPTAMM")
-		mptIssuance, ok := flags["MPTokenIssuance"].(map[string]any)
+		issuance, ok := flags["MPTokenIssuance"].(map[string]any)
 		require.True(t, ok)
-		assert.EqualValues(t, 0x00000080, num(mptIssuance["lsfMPTCanHoldConfidentialBalance"]))
+		assert.EqualValues(t, 0x00000080, num(issuance["lsfMPTCanHoldConfidentialBalance"]))
 		assert.NotContains(t, flags, "MPTokenIssuanceMutable")
 		sponsorship, ok := flags["Sponsorship"].(map[string]any)
 		require.True(t, ok)

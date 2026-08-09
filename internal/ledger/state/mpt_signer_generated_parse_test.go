@@ -1,9 +1,11 @@
 package state
 
 import (
+	"encoding/hex"
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
@@ -54,6 +56,51 @@ func TestParseMPTokenIssuanceGeneratedDecoder(t *testing.T) {
 	if got.MPTokenMetadata != want.MPTokenMetadata || got.DomainID == nil || *got.DomainID != domainID ||
 		got.ReferenceHolding == nil || *got.ReferenceHolding != referenceHolding {
 		t.Fatalf("hex fields differ: got metadata=%q domain=%v reference=%v", got.MPTokenMetadata, got.DomainID, got.ReferenceHolding)
+	}
+}
+
+func TestMPTokenIssuanceOmitsDefaultFields(t *testing.T) {
+	data, err := SerializeMPTokenIssuance(&MPTokenIssuanceData{
+		Issuer:   [20]byte{1},
+		Sequence: 1,
+	})
+	if err != nil {
+		t.Fatalf("SerializeMPTokenIssuance: %v", err)
+	}
+	decoded, err := binarycodec.Decode(hex.EncodeToString(data))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	for _, field := range []string{"TransferFee", "AssetScale", "ImmutableFlags", "ConfidentialOutstandingAmount"} {
+		if _, present := decoded[field]; present {
+			t.Fatalf("zero %s was serialized", field)
+		}
+	}
+	parsed, err := ParseMPTokenIssuance(data)
+	if err != nil {
+		t.Fatalf("ParseMPTokenIssuance: %v", err)
+	}
+	if parsed.ImmutableFlags != 0 {
+		t.Fatalf("ImmutableFlags = %#x, want zero default", parsed.ImmutableFlags)
+	}
+}
+
+func TestMPTokenOmitsDefaultFields(t *testing.T) {
+	data, err := SerializeMPToken(&MPTokenData{
+		Account:           [20]byte{2},
+		MPTokenIssuanceID: [24]byte{3},
+	})
+	if err != nil {
+		t.Fatalf("SerializeMPToken: %v", err)
+	}
+	decoded, err := binarycodec.Decode(hex.EncodeToString(data))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	for _, field := range []string{"MPTAmount", "ConfidentialBalanceVersion"} {
+		if _, present := decoded[field]; present {
+			t.Fatalf("zero %s was serialized", field)
+		}
 	}
 }
 

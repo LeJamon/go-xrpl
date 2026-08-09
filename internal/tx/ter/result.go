@@ -233,6 +233,7 @@ const (
 	TemBAD_TRANSFER_FEE                            Result = -251
 	TemINVALID_INNER_BATCH                         Result = -250
 	TemBAD_MPT                                     Result = -249
+	TemBAD_CIPHERTEXT                              Result = -248
 
 	// terRETRY and related codes (-99 to -1)
 	// Retry later
@@ -439,6 +440,7 @@ var resultNames = map[Result]string{ //nolint:gosec // G101: TER result-code nam
 	TemBAD_TRANSFER_FEE:                            "temBAD_TRANSFER_FEE",
 	TemINVALID_INNER_BATCH:                         "temINVALID_INNER_BATCH",
 	TemBAD_MPT:                                     "temBAD_MPT",
+	TemBAD_CIPHERTEXT:                              "temBAD_CIPHERTEXT",
 	TerRETRY:                                       "terRETRY",
 	TerFUNDS_SPENT:                                 "terFUNDS_SPENT",
 	TerINSUF_FEE_B:                                 "terINSUF_FEE_B",
@@ -702,6 +704,7 @@ var resultMessages = map[Result]string{ //nolint:gosec // G101: TER result-code 
 	TemBAD_TRANSFER_FEE:                            "Malformed: Transfer fee is outside valid range.",
 	TemINVALID_INNER_BATCH:                         "Malformed: Invalid inner batch transaction.",
 	TemBAD_MPT:                                     "Malformed: Bad MPT.",
+	TemBAD_CIPHERTEXT:                              "Malformed: Invalid ciphertext.",
 	TerRETRY:                                       "Retry transaction.",
 	TerFUNDS_SPENT:                                 "DEPRECATED.",
 	TerINSUF_FEE_B:                                 "Account balance can't pay fee.",

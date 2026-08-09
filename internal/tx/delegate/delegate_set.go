@@ -37,6 +37,7 @@ var notDelegatableTxTypes = map[uint16]bool{
 	81:  true, // ttLOAN_DELETE
 	82:  true, // ttLOAN_MANAGE
 	84:  true, // ttLOAN_PAY
+	85:  true, // ttCONFIDENTIAL_MPT_CONVERT
 	90:  true, // ttSPONSORSHIP_TRANSFER
 	100: true, // ttAMENDMENT (EnableAmendment)
 	101: true, // ttFEE (SetFee)

@@ -26,6 +26,22 @@ build-all:
 build-nocgo:
     CGO_ENABLED=0 go build ./...
 
+# Resolve mpt-crypto/1.0.2 and its locked XRPLF dependency graph into the
+# project-local Conan cache. This is opt-in; ordinary build/test recipes keep
+# their existing system/Homebrew dependency behavior.
+setup-mpt-crypto:
+    ./scripts/setup-mpt-crypto.sh setup
+
+# Print shell exports for the generated PkgConfigDeps metadata and C++ runtime.
+# Use `eval "$(just mpt-crypto-env)"` in the shell that will run tagged cgo.
+mpt-crypto-env:
+    @./scripts/setup-mpt-crypto.sh env
+
+# Validate pkg-config and run the tagged cgo test environment. Pass a package
+# path to test another native consumer.
+test-mpt-crypto package="./crypto/mptcrypto/...":
+    ./scripts/setup-mpt-crypto.sh test {{package}}
+
 # Run every test in the module.
 test:
     go test ./...
