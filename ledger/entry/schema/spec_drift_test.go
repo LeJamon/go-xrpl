@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -22,24 +21,17 @@ import (
 func TestSpecCoversRippledMacro(t *testing.T) {
 	macroPath := requireRippledMacro(t)
 
-	rippled, err := parseRippledMacro(macroPath, v32SchemaFieldName)
+	rippled, err := parseRippledMacro(macroPath)
 	if err != nil {
 		t.Fatalf("parse %s: %v", macroPath, err)
 	}
 
-	if len(rippled)+1 != len(Specs) {
-		t.Fatalf("rippled v3.2.0 has %d ledger templates, schema has %d (want the Sponsorship delta only)", len(rippled), len(Specs))
+	if len(rippled) != len(Specs) {
+		t.Fatalf("rippled v3.3.0 has %d ledger templates, schema has %d", len(rippled), len(Specs))
 	}
 	haveEntries := make(map[string]bool, len(Specs))
 	for _, entry := range Specs {
 		haveEntries[entry.Name] = true
-		if entry.Name == "Sponsorship" {
-			info, found := protocol.LedgerEntryTypeByName(entry.Name)
-			if !found || info.Type != protocol.LedgerEntryTypeSponsorship || info.RPCName != "sponsorship" || info.Deprecated {
-				t.Errorf("Sponsorship registry entry is missing or invalid")
-			}
-			continue
-		}
 		rEntry, found := rippled[entry.Name]
 		if !found {
 			t.Errorf("entry %q is absent from rippled", entry.Name)
@@ -79,9 +71,6 @@ func TestSpecCoversRippledMacro(t *testing.T) {
 			continue
 		}
 		canonical++
-		if info.Name == "Sponsorship" {
-			continue
-		}
 		rEntry, found := rippled[info.Name]
 		if !found {
 			t.Errorf("registry entry %q is absent from rippled", info.Name)
@@ -91,66 +80,12 @@ func TestSpecCoversRippledMacro(t *testing.T) {
 			t.Errorf("registry entry %q does not match rippled", info.Name)
 		}
 	}
-	if canonical != len(rippled)+1 {
-		t.Errorf("registry has %d canonical entries, rippled v3.2.0 has %d plus Sponsorship", canonical, len(rippled))
+	if canonical != len(rippled) {
+		t.Errorf("registry has %d canonical entries, rippled v3.3.0 has %d", canonical, len(rippled))
 	}
-}
-
-func TestDynamicMPTSchemaMatchesRippledV3_3(t *testing.T) {
-	macroPath := requireRippledMacroVersion(t, "v3.3.0-oracle")
-	rippled, err := parseRippledMacro(macroPath, nil)
-	if err != nil {
-		t.Fatalf("parse %s: %v", macroPath, err)
-	}
-	issuance, ok := rippled["MPTokenIssuance"]
-	if !ok {
-		t.Fatal("rippled v3.3.0 has no MPTokenIssuance template")
-	}
-	wantSequence := []string{"DomainID", "ImmutableFlags", "ReferenceHolding"}
-	containsSequence := func(fields []string) bool {
-		for i := 0; i+len(wantSequence) <= len(fields); i++ {
-			if slices.Equal(fields[i:i+len(wantSequence)], wantSequence) {
-				return true
-			}
-		}
-		return false
-	}
-	if !containsSequence(issuance.Fields) {
-		t.Fatalf("rippled v3.3.0 MPTokenIssuance fields do not contain %v in order", wantSequence)
-	}
-	macro, err := os.ReadFile(macroPath)
-	if err != nil {
-		t.Fatalf("read %s: %v", macroPath, err)
-	}
-	styles := parseTaggedStyles(t, macro)
-	if got := styles["MPTokenIssuance"]["ImmutableFlags"]; got != StyleDefault {
-		t.Fatalf("rippled v3.3.0 ImmutableFlags style = %d, want default", got)
-	}
-
-	for _, entry := range Specs {
-		if entry.Name != "MPTokenIssuance" {
-			continue
-		}
-		fields := make([]string, len(entry.Fields))
-		for i, field := range entry.Fields {
-			fields[i] = field.Name
-			if field.Name == "ImmutableFlags" && field.Style != StyleDefault {
-				t.Fatalf("Go ImmutableFlags style = %d, want default", field.Style)
-			}
-		}
-		if !containsSequence(fields) {
-			t.Fatalf("Go MPTokenIssuance fields do not contain %v in order", wantSequence)
-		}
-		return
-	}
-	t.Fatal("Go schema has no MPTokenIssuance template")
 }
 
 func requireRippledMacro(t *testing.T) string {
-	return requireRippledMacroVersion(t, "v3.2.0-oracle")
-}
-
-func requireRippledMacroVersion(t *testing.T, oracle string) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
@@ -158,7 +93,7 @@ func requireRippledMacroVersion(t *testing.T, oracle string) string {
 	}
 	dir := filepath.Dir(file)
 	for range 12 {
-		candidate := filepath.Join(dir, "rippled-worktrees", oracle, "include", "xrpl", "protocol", "detail", "ledger_entries.macro")
+		candidate := filepath.Join(dir, "rippled-worktrees", "v3.3.0-oracle", "include", "xrpl", "protocol", "detail", "ledger_entries.macro")
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
@@ -168,7 +103,7 @@ func requireRippledMacroVersion(t *testing.T, oracle string) string {
 		}
 		dir = parent
 	}
-	t.Fatalf("required rippled %s not found from %s", oracle, file)
+	t.Fatalf("required rippled v3.3.0 oracle not found from %s", file)
 	return ""
 }
 
@@ -176,13 +111,6 @@ var (
 	macroEntryStart = regexp.MustCompile(`^LEDGER_ENTRY(?:_DUPLICATE)?\(\s*lt\w+\s*,\s*(0x[0-9a-fA-F]+)\s*,\s*(\w+)\s*,\s*(\w+)\s*,`)
 	macroFieldLine  = regexp.MustCompile(`^\s*\{\s*sf(\w+)\s*,`)
 )
-
-func v32SchemaFieldName(name string) string {
-	if name == "MutableFlags" {
-		return "ImmutableFlags"
-	}
-	return name
-}
 
 type rippledEntry struct {
 	Type    protocol.LedgerEntryType
@@ -192,7 +120,7 @@ type rippledEntry struct {
 
 // parseRippledMacro returns the canonical identity and fields for every
 // ledger-entry type in rippled's macro.
-func parseRippledMacro(path string, normalizeFieldName func(string) string) (map[string]rippledEntry, error) {
+func parseRippledMacro(path string) (map[string]rippledEntry, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -224,11 +152,7 @@ func parseRippledMacro(path string, normalizeFieldName func(string) string) (map
 			continue
 		}
 		if m := macroFieldLine.FindStringSubmatch(line); m != nil {
-			name := m[1]
-			if normalizeFieldName != nil {
-				name = normalizeFieldName(name)
-			}
-			currentFields = append(currentFields, name)
+			currentFields = append(currentFields, m[1])
 			continue
 		}
 		if strings.Contains(line, "}))") {

@@ -97,6 +97,62 @@ func TestImmutableFlagsDefinition(t *testing.T) {
 	require.NotContains(t, definitions.fields, "MutableFlags")
 }
 
+func TestConfidentialTransferDefinitions(t *testing.T) {
+	loadDefinitions()
+	require.True(t, IsBaseTenUInt64FieldName("ConfidentialOutstandingAmount"))
+	for name, code := range map[string]int32{
+		"ConfidentialMPTConvert":     85,
+		"ConfidentialMPTMergeInbox":  86,
+		"ConfidentialMPTConvertBack": 87,
+		"ConfidentialMPTSend":        88,
+		"ConfidentialMPTClawback":    89,
+	} {
+		require.Equal(t, code, definitions.transactionTypes[name], name)
+	}
+
+	tests := []struct {
+		name      string
+		typeName  string
+		typeCode  int32
+		fieldCode int32
+		variable  bool
+	}{
+		{"ConfidentialBalanceVersion", "UInt32", 2, 69, false},
+		{"ConfidentialOutstandingAmount", "UInt64", 3, 32, false},
+		{"BlindingFactor", "Hash256", 5, 40, false},
+		{"ConfidentialBalanceInbox", "Blob", 7, 32, true},
+		{"ConfidentialBalanceSpending", "Blob", 7, 33, true},
+		{"IssuerEncryptedBalance", "Blob", 7, 34, true},
+		{"IssuerEncryptionKey", "Blob", 7, 35, true},
+		{"HolderEncryptionKey", "Blob", 7, 36, true},
+		{"ZKProof", "Blob", 7, 37, true},
+		{"HolderEncryptedAmount", "Blob", 7, 38, true},
+		{"IssuerEncryptedAmount", "Blob", 7, 39, true},
+		{"SenderEncryptedAmount", "Blob", 7, 40, true},
+		{"DestinationEncryptedAmount", "Blob", 7, 41, true},
+		{"AuditorEncryptedBalance", "Blob", 7, 42, true},
+		{"AuditorEncryptedAmount", "Blob", 7, 43, true},
+		{"AuditorEncryptionKey", "Blob", 7, 44, true},
+		{"AmountCommitment", "Blob", 7, 45, true},
+		{"BalanceCommitment", "Blob", 7, 46, true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			field, ok := definitions.fields[test.name]
+			require.True(t, ok)
+			require.Equal(t, &FieldInfo{
+				Nth:            test.fieldCode,
+				IsVLEncoded:    test.variable,
+				IsSerialized:   true,
+				IsSigningField: true,
+				Type:           test.typeName,
+			}, field.FieldInfo)
+			require.Equal(t, &FieldHeader{TypeCode: test.typeCode, FieldCode: test.fieldCode}, field.FieldHeader)
+			require.Equal(t, test.name, definitions.fieldIDNameMap[*field.FieldHeader])
+		})
+	}
+}
+
 // Helper functions to create and test ordinals.
 // func CreateOrdinal(fh FieldHeader) int32 {
 // 	return fh.TypeCode<<16 | fh.FieldCode

@@ -287,6 +287,9 @@ var formats = map[string][]FormatField{
 		{"DomainID", 1},
 		{"ImmutableFlags", 2},
 		{"ReferenceHolding", 1},
+		{"IssuerEncryptionKey", 1},
+		{"AuditorEncryptionKey", 1},
+		{"ConfidentialOutstandingAmount", 2},
 	},
 	"MPToken": {
 		{"Account", 0},
@@ -296,6 +299,12 @@ var formats = map[string][]FormatField{
 		{"OwnerNode", 0},
 		{"PreviousTxnID", 0},
 		{"PreviousTxnLgrSeq", 0},
+		{"ConfidentialBalanceInbox", 1},
+		{"ConfidentialBalanceSpending", 1},
+		{"ConfidentialBalanceVersion", 2},
+		{"IssuerEncryptedBalance", 1},
+		{"AuditorEncryptedBalance", 1},
+		{"HolderEncryptionKey", 1},
 	},
 	"Oracle": {
 		{"Owner", 0},

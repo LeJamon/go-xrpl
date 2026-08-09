@@ -257,7 +257,7 @@ func TestServerDefinitionsInvalidSentinel(t *testing.T) {
 	}
 }
 
-func TestServerDefinitions_3_2_0_Sections(t *testing.T) {
+func TestServerDefinitions_3_3_0_Sections(t *testing.T) {
 	method := &handlers.ServerDefinitionsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
@@ -312,8 +312,33 @@ func TestServerDefinitions_3_2_0_Sections(t *testing.T) {
 			},
 			{
 				name:   "MPTokenIssuanceSet",
-				fields: []string{"MPTokenIssuanceID", "Holder", "DomainID", "MPTokenMetadata", "TransferFee", "ImmutableFlags"},
-				styles: []int{0, 1, 1, 1, 1, 1},
+				fields: []string{"MPTokenIssuanceID", "Holder", "DomainID", "MPTokenMetadata", "TransferFee", "ImmutableFlags", "IssuerEncryptionKey", "AuditorEncryptionKey"},
+				styles: []int{0, 1, 1, 1, 1, 1, 1, 1},
+			},
+			{
+				name:   "ConfidentialMPTConvert",
+				fields: []string{"MPTokenIssuanceID", "MPTAmount", "HolderEncryptionKey", "HolderEncryptedAmount", "IssuerEncryptedAmount", "AuditorEncryptedAmount", "BlindingFactor", "ZKProof"},
+				styles: []int{0, 0, 1, 0, 0, 1, 0, 1},
+			},
+			{
+				name:   "ConfidentialMPTMergeInbox",
+				fields: []string{"MPTokenIssuanceID"},
+				styles: []int{0},
+			},
+			{
+				name:   "ConfidentialMPTConvertBack",
+				fields: []string{"MPTokenIssuanceID", "MPTAmount", "HolderEncryptedAmount", "IssuerEncryptedAmount", "AuditorEncryptedAmount", "BlindingFactor", "ZKProof", "BalanceCommitment"},
+				styles: []int{0, 0, 0, 0, 1, 0, 0, 0},
+			},
+			{
+				name:   "ConfidentialMPTSend",
+				fields: []string{"MPTokenIssuanceID", "Destination", "DestinationTag", "SenderEncryptedAmount", "DestinationEncryptedAmount", "IssuerEncryptedAmount", "AuditorEncryptedAmount", "ZKProof", "AmountCommitment", "BalanceCommitment", "CredentialIDs"},
+				styles: []int{0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1},
+			},
+			{
+				name:   "ConfidentialMPTClawback",
+				fields: []string{"MPTokenIssuanceID", "Holder", "MPTAmount", "ZKProof"},
+				styles: []int{0, 0, 0, 0},
 			},
 			{
 				name:   "SponsorshipTransfer",
@@ -401,6 +426,9 @@ func TestServerDefinitions_3_2_0_Sections(t *testing.T) {
 		set, ok := flags["SponsorshipSet"].(map[string]any)
 		require.True(t, ok)
 		assert.EqualValues(t, 0x00100000, num(set["tfDeleteObject"]))
+		createMPT, ok := flags["MPTokenIssuanceCreate"].(map[string]any)
+		require.True(t, ok)
+		assert.EqualValues(t, 0x00000080, num(createMPT["tfMPTCanHoldConfidentialBalance"]))
 		mptSet, ok := flags["MPTokenIssuanceSet"].(map[string]any)
 		require.True(t, ok)
 		assert.EqualValues(t, 0x00000004, num(mptSet["tfMPTSetCanLock"]))
@@ -415,7 +443,7 @@ func TestServerDefinitions_3_2_0_Sections(t *testing.T) {
 		assert.EqualValues(t, 0x00040000, num(ar["lsfRequireAuth"]))
 		mpt, ok := flags["MPToken"].(map[string]any)
 		require.True(t, ok)
-		assert.EqualValues(t, 0x00000004, num(mpt["lsfMPTAMM"]), "3.2.0 lsfMPTAMM")
+		assert.EqualValues(t, 0x00000004, num(mpt["lsfMPTAMM"]), "3.3.0 lsfMPTAMM")
 		mptIssuance, ok := flags["MPTokenIssuance"].(map[string]any)
 		require.True(t, ok)
 		assert.EqualValues(t, 0x00000080, num(mptIssuance["lsfMPTCanHoldConfidentialBalance"]))

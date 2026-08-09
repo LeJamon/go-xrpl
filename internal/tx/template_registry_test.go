@@ -3,6 +3,7 @@ package tx_test
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 
@@ -12,6 +13,21 @@ import (
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 )
+
+func TestConfidentialTypesRemainUnregistered(t *testing.T) {
+	all.RegisterAll()
+	for _, txType := range []tx.Type{
+		tx.TypeConfidentialMPTConvert,
+		tx.TypeConfidentialMPTMergeInbox,
+		tx.TypeConfidentialMPTConvertBack,
+		tx.TypeConfidentialMPTSend,
+		tx.TypeConfidentialMPTClawback,
+	} {
+		if _, err := tx.NewFromType(txType); !errors.Is(err, tx.ErrUnknownTransactionType) {
+			t.Fatalf("NewFromType(%s) error = %v, want ErrUnknownTransactionType", txType, err)
+		}
+	}
+}
 
 // TestParseFromBinary_EveryRegisteredTypeAcceptsCommonFields verifies that the
 // per-type field allowlist never rejects a transaction carrying only common
