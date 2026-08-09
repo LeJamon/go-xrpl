@@ -15,7 +15,7 @@ func TestNewRPCServiceContainerFreezesCapabilities(t *testing.T) {
 		BetaRPCAPI:     1,
 	}
 
-	services := newRPCServiceContainer(nil, cfg)
+	services := newRPCServiceGraphBuilder(nil, cfg)
 	require.True(t, services.Capabilities.SigningEnabled)
 	require.Zero(t, services.Capabilities.PathSearchMax)
 	require.True(t, services.BetaRPCAPI)
@@ -29,7 +29,7 @@ func TestNewRPCServiceContainerFreezesCapabilities(t *testing.T) {
 }
 
 func TestRPCCapabilitiesDefaults(t *testing.T) {
-	services := newRPCServiceContainer(nil, &config.Config{})
+	services := newRPCServiceGraphBuilder(nil, &config.Config{})
 	require.False(t, services.Capabilities.SigningEnabled)
 	require.Equal(t, 3, services.Capabilities.PathSearchMax)
 }

@@ -50,7 +50,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *websocketConnection, message []
 	peerIP := getWebSocketClientIP(wsConn.conn)
 	clientIP := resolveWSClientIP(peerIP, wsConn.forwardedFor, wsConn.portCtx)
 	role := roleForRequest(peerIP, wsConn.user, cmdMap, wsConn.portCtx)
-	loadCtx := newRpcContext(wsConn.Context(), role, types.DefaultApiVersion, clientIP, ws.loadPeerSource(), ws.services, nil, ws.urlSubscriptions)
+	loadCtx := newRpcContext(wsConn.Context(), role, types.DefaultApiVersion, clientIP, ws.loadPeerSource(), ws.services, ws, ws.urlSubscriptions)
 	loadCtx.ResourceConsumer = wsConn.resourceConsumer
 	if rpcErr := gateLoad(ws.resourceManager, loadCtx, "", wsLog()); rpcErr != nil {
 		wsConn.closeWithPolicyViolation("threshold exceeded")

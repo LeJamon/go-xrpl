@@ -123,7 +123,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		// rippled's simulate autofill uses the default fee_mult_max /
 		// fee_div_max (getCurrentNetworkFee default arguments).
 		feeOpts := defaultFeeOptions()
-		fee, feeErr := ctx.Services.Ledger().GetAutofillFee(probe, ctx.Role.IsUnlimited(), feeOpts.Mult, feeOpts.Div)
+		fee, feeErr := ctx.Services.LedgerMutation().GetAutofillFee(probe, ctx.Role.IsUnlimited(), feeOpts.Mult, feeOpts.Div)
 		if feeErr != nil {
 			var hfe *svcerr.HighFeeError
 			if errors.As(feeErr, &hfe) {
@@ -166,7 +166,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 			return nil, types.RpcErrorInvalidField("tx.Account")
 		}
 		_, hasTicket := txJsonMap["TicketSequence"]
-		seq, seqErr := ctx.Services.Ledger().GetAutofillSequence(accountStr, hasTicket)
+		seq, seqErr := ctx.Services.LedgerMutation().GetAutofillSequence(accountStr, hasTicket)
 		if seqErr != nil {
 			switch {
 			case errors.Is(seqErr, svcerr.ErrAccountMalformed):
@@ -231,7 +231,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		return nil, rpcInternalError("simulate: transaction marshaling failed", err)
 	}
 
-	result, err := ctx.Services.Ledger().SimulateTransaction(txJSON)
+	result, err := ctx.Services.LedgerMutation().SimulateTransaction(txJSON)
 	if err != nil {
 		return nil, rpcInternalError("simulate: transaction simulation failed", err)
 	}

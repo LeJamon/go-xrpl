@@ -640,10 +640,8 @@ func lookupLedger(ctx *types.RpcContext, input any) (types.LedgerReader, bool, *
 	return resolved.Value, resolved.Validated, nil
 }
 
-func getLedgerByHashContext(ctx context.Context, svc types.LedgerService, hash [32]byte) (types.LedgerReader, error) {
-	if contextual, ok := svc.(interface {
-		GetLedgerByHashContext(context.Context, [32]byte) (types.LedgerReader, error)
-	}); ok {
+func getLedgerByHashContext(ctx context.Context, svc types.LedgerReadService, hash [32]byte) (types.LedgerReader, error) {
+	if contextual, ok := svc.(types.ContextLedgerHashReader); ok {
 		return contextual.GetLedgerByHashContext(ctx, hash)
 	}
 	return svc.GetLedgerByHash(hash)

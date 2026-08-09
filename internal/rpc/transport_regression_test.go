@@ -18,6 +18,10 @@ import (
 
 const transportRegressionClientIP = "203.0.113.5"
 
+type wrappedURLSubscriptionService struct {
+	types.URLSubscriptionService
+}
+
 func postTransportRegressionRequest(t *testing.T, server *Server, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
@@ -111,6 +115,26 @@ func TestRPCConstructorsUseExplicitDependencies(t *testing.T) {
 	if _, ok := wsServer.methodRegistry.Get("ping"); !ok {
 		t.Fatal("WebSocket method registry was not ready at construction return")
 	}
+
+	registryManager := subscription.NewManager()
+	urlSubscriptions := NewURLSubscriptionService(registryManager, services, provider)
+	sharedWS := NewWebSocketServer(WebSocketServerOptions{
+		Services:            services,
+		SubscriptionManager: subscription.NewManager(),
+		URLSubscriptions:    urlSubscriptions,
+	})
+	require.Same(t, registryManager, sharedWS.SubscriptionManager())
+	require.Same(t, urlSubscriptions, sharedWS.URLSubscriptionService())
+
+	custom := &wrappedURLSubscriptionService{URLSubscriptionService: urlSubscriptions}
+	customManager := subscription.NewManager()
+	customWS := NewWebSocketServer(WebSocketServerOptions{
+		Services:            services,
+		SubscriptionManager: customManager,
+		URLSubscriptions:    custom,
+	})
+	require.Same(t, customManager, customWS.SubscriptionManager())
+	require.Same(t, custom, customWS.URLSubscriptionService())
 }
 
 func seedTransportRegressionLoad(manager *resource.Manager, balance int) {

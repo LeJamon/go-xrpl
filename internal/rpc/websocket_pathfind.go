@@ -61,7 +61,7 @@ func (ws *WebSocketServer) executePathFindCreate(wsConn *websocketConnection, ct
 			"No closed ledger available")
 	}
 	session.setSearchLevelMax(ctx.Services.Capabilities().PathSearchMax)
-	view, err := ctx.Services.Ledger().GetClosedLedgerView()
+	view, err := ctx.Services.LedgerViews().GetClosedLedgerView()
 	if err != nil {
 		return nil, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
 			"No closed ledger available")
@@ -70,7 +70,7 @@ func (ws *WebSocketServer) executePathFindCreate(wsConn *websocketConnection, ct
 	event := session.Execute(view, false)
 
 	wsConn.installPathFindSession(session)
-	ws.queuePathFindSessions(currentPathFindView(ctx.Services.Ledger()), wsConn)
+	ws.queuePathFindSessions(currentPathFindView(ctx.Services), wsConn)
 
 	return event, nil
 }
@@ -129,13 +129,14 @@ func (ws *WebSocketServer) queuePathFindSessions(getView func() (types.LedgerSta
 	manager.enqueue(getView, targets)
 }
 
-func currentPathFindView(ledger types.LedgerService) func() (types.LedgerStateView, error) {
+func currentPathFindView(services *types.ServiceGraph) func() (types.LedgerStateView, error) {
 	return func() (types.LedgerStateView, error) {
+		ledger := services.Ledger()
 		if source, ok := ledger.(types.LedgerViewSource); ok {
 			view, _, err := source.GetLedgerViewBySeq(ledger.GetCurrentLedgerIndex())
 			return view, err
 		}
-		return ledger.GetClosedLedgerView()
+		return services.LedgerViews().GetClosedLedgerView()
 	}
 }
 func (c *websocketConnection) clearPathFindSession() *PathFindSession {

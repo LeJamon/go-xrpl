@@ -28,7 +28,7 @@ import (
 func TestBindRPCWiresExplicitSharedServices(t *testing.T) {
 	runtime := &nodeRuntime{
 		appConfig:  &config.Config{},
-		services:   newRPCServiceContainer(rpcadapter.NewLedgerServiceAdapter(nil), &config.Config{}),
+		services:   newRPCServiceGraphBuilder(rpcadapter.NewLedgerServiceAdapter(nil), &config.Config{}),
 		serverLog:  xrpllog.Discard(),
 		shutdownCh: make(chan struct{}, 1),
 		shutdowner: types.ShutdownFunc(func() {}),

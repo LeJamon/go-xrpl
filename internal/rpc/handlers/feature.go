@@ -123,7 +123,7 @@ func (m *FeatureMethod) getAmendmentState(services *types.ServiceGraph) (enabled
 		return nil, nil
 	}
 
-	view, err := services.Ledger().GetClosedLedgerView()
+	view, err := services.ClosedLedgerState()
 	if err != nil || view == nil {
 		return nil, nil
 	}

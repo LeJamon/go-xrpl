@@ -949,6 +949,19 @@ func TestWebSocketRejectsTrailingJSON(t *testing.T) {
 	}
 }
 
+func TestWebSocketJSONDispatchUsesServerRegistry(t *testing.T) {
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
+	body := wsRawRoundTrip(t, ws, `{"command":"json","params":{"method":"ping"},"id":7}`)
+
+	var response map[string]any
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatalf("decode response %s: %v", body, err)
+	}
+	if response["status"] != "success" || response["error"] != nil {
+		t.Fatalf("json dispatch response = %v", response)
+	}
+}
+
 func TestWebSocketJSONInvalidWireEnvelope(t *testing.T) {
 	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
 	tests := []struct {

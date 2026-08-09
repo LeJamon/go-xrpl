@@ -167,7 +167,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	// Route fail_hard submissions through the optional surface so they
 	// are not held or relayed on non-apply. Mirrors rippled
 	// NetworkOPs.cpp:1685-1689 (`!enforceFailHard`).
-	result, submitErr := submitWithFailHard(ctx.Services.Ledger(), txJSON, txBlob, request.FailHard)
+	result, submitErr := submitWithFailHard(ctx.Services.LedgerMutation(), txJSON, txBlob, request.FailHard)
 	if submitErr != nil {
 		return nil, rpcTransactionSubmissionError("submit_multisigned: transaction submission failed", submitErr)
 	}

@@ -11,6 +11,34 @@ type serviceGraphLedger struct{ LedgerService }
 
 type serviceGraphDiagnostics struct{}
 
+type serviceGraphOptionalCapabilities struct {
+	ManifestLookup
+	ValidatorListReader
+	AdvisoryDeleteStore
+	AccountHistorySubscriptionService
+}
+
+type readOnlyLedgerCapability struct {
+	LedgerSelectionReader
+	LedgerDataReader
+	TransactionQuerier
+	AccountQuerier
+	BookReader
+	GatewayReader
+	NFTReader
+}
+
+type ledgerMutationCapability struct {
+	LedgerAcceptor
+	TransactionSubmission
+}
+
+type readOnlyLedgerState struct{ LedgerStateReader }
+
+var _ LedgerReadService = (*readOnlyLedgerCapability)(nil)
+var _ LedgerMutationService = (*ledgerMutationCapability)(nil)
+var _ LedgerStateReader = (*readOnlyLedgerState)(nil)
+
 func (serviceGraphDiagnostics) Start(string) func(bool) { return func(bool) {} }
 func (serviceGraphDiagnostics) Snapshot() RPCDiagnosticsSnapshot {
 	return RPCDiagnosticsSnapshot{}
@@ -85,6 +113,41 @@ func TestServiceGraphBuildCopiesTopologyAndSnapshots(t *testing.T) {
 	config.Ports[0].Port = 7007
 	if graph.ValidatorPublicKey()[0] != 1 || graph.ServerInfoConfig().Ports[0].Port != 5005 {
 		t.Fatal("accessors exposed mutable snapshot storage")
+	}
+}
+
+func TestServiceGraphBuildNormalizesTypedNilOptionalCapabilities(t *testing.T) {
+	builder := completeServiceGraphBuilder()
+	var optional *serviceGraphOptionalCapabilities
+	builder.Manifests = optional
+	builder.ValidatorList = optional
+	builder.AdvisoryDeleteState = optional
+	builder.AccountHistorySubscriptions = optional
+
+	graph, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if graph.Manifests() != nil || graph.ValidatorList() != nil || graph.AdvisoryDeleteState() != nil || graph.AccountHistorySubscriptions() != nil {
+		t.Fatal("typed-nil optional capability escaped the graph build")
+	}
+}
+
+func TestServiceGraphPublishesSeparateLedgerCapabilities(t *testing.T) {
+	graphType := reflect.TypeOf((*ServiceGraph)(nil))
+	readMethod, ok := graphType.MethodByName("Ledger")
+	if !ok {
+		t.Fatal("ServiceGraph.Ledger is missing")
+	}
+	if readMethod.Type.Out(0) != reflect.TypeOf((*LedgerReadService)(nil)).Elem() {
+		t.Fatalf("Ledger return type = %v", readMethod.Type.Out(0))
+	}
+	mutationMethod, ok := graphType.MethodByName("LedgerMutation")
+	if !ok {
+		t.Fatal("ServiceGraph.LedgerMutation is missing")
+	}
+	if mutationMethod.Type.Out(0) != reflect.TypeOf((*LedgerMutationService)(nil)).Elem() {
+		t.Fatalf("LedgerMutation return type = %v", mutationMethod.Type.Out(0))
 	}
 }
 

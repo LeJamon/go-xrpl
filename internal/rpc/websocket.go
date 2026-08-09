@@ -69,6 +69,8 @@ type WebSocketServer struct {
 	forceDone chan struct{}
 }
 
+var _ types.MethodDispatcher = (*WebSocketServer)(nil)
+
 // WebSocketServerOptions controls construction of a WebSocket RPC server.
 // A nil subscription manager selects a new manager for the standalone server.
 type WebSocketServerOptions struct {
@@ -80,7 +82,10 @@ type WebSocketServerOptions struct {
 	PingInterval        time.Duration
 	LedgerInfoProvider  types.LedgerInfoProvider
 	SubscriptionManager *subscription.Manager
-	URLSubscriptions    types.URLSubscriptionService
+	// URLSubscriptions shares URL subscribers with other RPC transports. A
+	// registry returned by NewURLSubscriptionService transfers ownership to
+	// the server and is closed with it; other implementations remain caller-owned.
+	URLSubscriptions types.URLSubscriptionService
 }
 
 // websocketConnection owns the transport-specific state for one logical
@@ -117,6 +122,9 @@ func NewWebSocketServer(options WebSocketServerOptions) *WebSocketServer {
 		resourceManager = resource.NewManager(nil, nil)
 	}
 	manager := options.SubscriptionManager
+	if registry, ok := options.URLSubscriptions.(*urlSubscriptionRegistry); ok && registry.manager != nil {
+		manager = registry.manager
+	}
 	if manager == nil {
 		manager = subscription.NewManager()
 	}
@@ -255,4 +263,10 @@ func (ws *WebSocketServer) SubscriptionManager() *subscription.Manager {
 
 func (ws *WebSocketServer) URLSubscriptionService() types.URLSubscriptionService {
 	return ws.urlSubscriptions
+}
+
+// ExecuteMethod lets the json RPC forward through the same immutable registry
+// and request context as a direct WebSocket command.
+func (ws *WebSocketServer) ExecuteMethod(ctx *types.RpcContext, method string, params []byte) (any, *types.RpcError) {
+	return dispatchNestedMethod(ws.methodRegistry, ctx, method, params, wsLog())
 }

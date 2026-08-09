@@ -14,6 +14,8 @@ type LedgerServiceAdapter struct {
 }
 
 var _ types.LedgerService = (*LedgerServiceAdapter)(nil)
+var _ types.LedgerReadService = (*LedgerServiceAdapter)(nil)
+var _ types.LedgerMutationService = (*LedgerServiceAdapter)(nil)
 var _ types.LedgerNavigator = (*LedgerServiceAdapter)(nil)
 var _ types.LedgerAccessor = (*LedgerServiceAdapter)(nil)
 var _ types.TransactionSubmitter = (*LedgerServiceAdapter)(nil)

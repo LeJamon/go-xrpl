@@ -859,17 +859,26 @@ func (s *ClientLoadShedder) PathfindActive() int64 {
 	return s.pathfindActive.Load()
 }
 
-// LedgerNavigator provides ledger index navigation and mode queries.
-type LedgerNavigator interface {
+// LedgerSelectionReader provides read-only ledger index and mode queries.
+type LedgerSelectionReader interface {
 	GetCurrentLedgerIndex() uint32
 	GetClosedLedgerIndex() uint32
 	GetValidatedLedgerIndex() uint32
-	AcceptLedger(ctx context.Context) (uint32, error)
 	IsStandalone() bool
 }
 
-// LedgerAccessor provides ledger retrieval and server metadata.
-type LedgerAccessor interface {
+type LedgerAcceptor interface {
+	AcceptLedger(ctx context.Context) (uint32, error)
+}
+
+// LedgerNavigator is the construction compatibility aggregate.
+type LedgerNavigator interface {
+	LedgerSelectionReader
+	LedgerAcceptor
+}
+
+// LedgerDataReader provides ledger retrieval and server metadata.
+type LedgerDataReader interface {
 	GetLedgerBySequence(seq uint32) (LedgerReader, error)
 	GetLedgerByHash(hash [32]byte) (LedgerReader, error)
 	GetServerInfo() LedgerServerInfo
@@ -878,8 +887,17 @@ type LedgerAccessor interface {
 	GetLedgerRange(ctx context.Context, minSeq, maxSeq uint32) (*LedgerRangeResult, error)
 	GetLedgerEntry(ctx context.Context, entryKey [32]byte, ledgerIndex string) (*LedgerEntryResult, error)
 	GetLedgerData(ctx context.Context, ledgerIndex string, limit uint32, marker string) (*LedgerDataResult, error)
-	GetClosedLedgerView() (LedgerStateView, error)
 	IsAmendmentBlocked() bool
+}
+
+type ClosedLedgerViewSource interface {
+	GetClosedLedgerView() (LedgerStateView, error)
+}
+
+// LedgerAccessor is the construction compatibility aggregate.
+type LedgerAccessor interface {
+	LedgerDataReader
+	ClosedLedgerViewSource
 }
 
 // TxTablesProvider reports whether the node maintains the transaction
@@ -922,13 +940,16 @@ type FailHardSubmitter interface {
 	SubmitTransactionFailHard(txJSON []byte, txBlobHex string) (*SubmitResult, error)
 }
 
-type TransactionSubmitter interface {
+type TransactionQuerier interface {
+	GetTransaction(txHash [32]byte) (*TransactionInfo, error)
+	GetTransactionHistory(ctx context.Context, startIndex uint32) (*TxHistoryResult, error)
+}
+
+type TransactionSubmission interface {
 	// txBlobHex is the signed transaction blob, or an empty string when the
 	// caller has only transaction JSON.
 	SubmitTransaction(txJSON []byte, txBlobHex string) (*SubmitResult, error)
 	SimulateTransaction(txJSON []byte) (*SubmitResult, error)
-	GetTransaction(txHash [32]byte) (*TransactionInfo, error)
-	GetTransactionHistory(ctx context.Context, startIndex uint32) (*TxHistoryResult, error)
 
 	// GetAutofillFee returns the Fee a transaction should carry to enter
 	// the open ledger. Mirrors rippled getCurrentNetworkFee
@@ -955,6 +976,12 @@ type TransactionSubmitter interface {
 	GetAutofillSequence(account string, hasTicketSequence bool) (sequence uint32, err error)
 }
 
+// TransactionSubmitter is the construction compatibility aggregate.
+type TransactionSubmitter interface {
+	TransactionQuerier
+	TransactionSubmission
+}
+
 // LedgerContext contains the durable ledger fields needed to decorate
 // historical transaction rows.
 type LedgerContext struct {
@@ -966,6 +993,10 @@ type LedgerContext struct {
 // ledger to remain in the in-memory history window.
 type LedgerContextReader interface {
 	GetLedgerContext(ctx context.Context, sequence uint32) (*LedgerContext, error)
+}
+
+type ContextLedgerHashReader interface {
+	GetLedgerByHashContext(ctx context.Context, hash [32]byte) (LedgerReader, error)
 }
 
 // TransactionRulesSource provides the amendment rules used to admit a
@@ -987,25 +1018,46 @@ type AccountQuerier interface {
 	GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32, marker string) (*AccountNFTsResult, error)
 }
 
-// LedgerService is the full interface for ledger operations.
-// It composes the sub-interfaces and includes remaining methods.
-type LedgerService interface {
-	LedgerNavigator
-	LedgerAccessor
-	TransactionSubmitter
-	AccountQuerier
-
-	// Book and market data
+type BookReader interface {
 	GetBookOffers(ctx context.Context, takerGets, takerPays Amount, taker, domain string, ledgerIndex string, limit uint32, marker string, withProofs bool) (*BookOffersResult, error)
+}
 
-	// Gateway operations
+type GatewayReader interface {
 	GetGatewayBalances(ctx context.Context, account string, hotWallets []string, ledgerIndex string) (*GatewayBalancesResult, error)
 	GetNoRippleCheck(ctx context.Context, account string, role string, ledgerIndex string, limit uint32, transactions bool) (*NoRippleCheckResult, error)
 	GetDepositAuthorized(ctx context.Context, sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*DepositAuthorizedResult, error)
+}
 
-	// NFT operations
+type NFTReader interface {
 	GetNFTBuyOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error)
 	GetNFTSellOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error)
+}
+
+// LedgerReadService is the read-only ledger capability published to ordinary
+// RPC consumers.
+type LedgerReadService interface {
+	LedgerSelectionReader
+	LedgerDataReader
+	TransactionQuerier
+	AccountQuerier
+	BookReader
+	GatewayReader
+	NFTReader
+}
+
+// LedgerMutationService is reserved for RPCs that close ledgers or submit and
+// simulate transactions.
+type LedgerMutationService interface {
+	LedgerAcceptor
+	TransactionSubmission
+}
+
+// LedgerService is the construction-time aggregate implemented by the ledger
+// adapter. ServiceGraph publishes its read and mutation facets separately.
+type LedgerService interface {
+	LedgerReadService
+	LedgerMutationService
+	ClosedLedgerViewSource
 }
 
 // LedgerViewSource is an optional LedgerService facet for handlers that need
@@ -1026,21 +1078,28 @@ type OpenLedgerViewSource interface {
 	GetOpenLedgerView() (LedgerStateView, error)
 }
 
-// LedgerStateView provides low-level read access to ledger state.
-// This interface matches tx.LedgerView for pathfinding and other operations
-// that need direct state access. Any *ledger.Ledger satisfies this.
-type LedgerStateView interface {
+// LedgerStateReader provides low-level read access to ledger state.
+type LedgerStateReader interface {
 	Read(k keylet.Keylet) ([]byte, error)
 	Exists(k keylet.Keylet) (bool, error)
-	Insert(k keylet.Keylet, data []byte) error
-	Update(k keylet.Keylet, data []byte) error
-	Erase(k keylet.Keylet) error
 	ForEach(fn func(key [32]byte, data []byte) bool) error
 	Succ(key [32]byte) ([32]byte, []byte, bool, error)
-	AdjustDropsDestroyed(d drops.XRPAmount) error
 	TxExists(txID [32]byte) (bool, error)
 	Rules() *amendment.Rules
 	LedgerSeq() uint32
+}
+
+type LedgerStateWriter interface {
+	Insert(k keylet.Keylet, data []byte) error
+	Update(k keylet.Keylet, data []byte) error
+	Erase(k keylet.Keylet) error
+	AdjustDropsDestroyed(d drops.XRPAmount) error
+}
+
+// LedgerStateView is the full engine-facing state interface.
+type LedgerStateView interface {
+	LedgerStateReader
+	LedgerStateWriter
 }
 
 // DepositAuthorizedResult contains the result of deposit_authorized RPC
@@ -1746,6 +1805,19 @@ func NewTestServiceGraph(services *ServiceContainer) *ServiceGraph {
 	return graph
 }
 
+// NewTestServiceGraphFrom copies a published graph and applies fixture-only
+// overrides before publishing a new snapshot.
+func NewTestServiceGraphFrom(graph *ServiceGraph, configure func(*ServiceContainer)) *ServiceGraph {
+	services := ServiceContainer{}
+	if graph != nil && graph.services() != nil {
+		services = cloneServiceContainer(*graph.services())
+	}
+	if configure != nil {
+		configure(&services)
+	}
+	return NewTestServiceGraph(&services)
+}
+
 // ServiceGraph is the immutable application capability graph published to
 // RPC contexts and transports. Its state is private; live capabilities may
 // expose their own synchronized operations, but the graph topology cannot be
@@ -1761,11 +1833,33 @@ func (g *ServiceGraph) services() *ServiceContainer {
 	return &g.snapshot
 }
 
-func (g *ServiceGraph) Ledger() LedgerService {
+func (g *ServiceGraph) Ledger() LedgerReadService {
 	if s := g.services(); s != nil {
 		return s.Ledger
 	}
 	return nil
+}
+
+func (g *ServiceGraph) LedgerMutation() LedgerMutationService {
+	if s := g.services(); s != nil {
+		return s.Ledger
+	}
+	return nil
+}
+
+func (g *ServiceGraph) LedgerViews() ClosedLedgerViewSource {
+	if s := g.services(); s != nil {
+		return s.Ledger
+	}
+	return nil
+}
+
+func (g *ServiceGraph) ClosedLedgerState() (LedgerStateReader, error) {
+	views := g.LedgerViews()
+	if views == nil {
+		return nil, fmt.Errorf("closed ledger view is unavailable")
+	}
+	return views.GetClosedLedgerView()
 }
 
 func (g *ServiceGraph) Shutdowner() Shutdowner {
@@ -2091,6 +2185,18 @@ func (g *ServiceGraph) QueueAllTxs() func() []QueuedTxInfo {
 }
 
 func cloneServiceContainer(input ServiceContainer) ServiceContainer {
+	if serviceCapabilityNil(input.Manifests) {
+		input.Manifests = nil
+	}
+	if serviceCapabilityNil(input.ValidatorList) {
+		input.ValidatorList = nil
+	}
+	if serviceCapabilityNil(input.AdvisoryDeleteState) {
+		input.AdvisoryDeleteState = nil
+	}
+	if serviceCapabilityNil(input.AccountHistorySubscriptions) {
+		input.AccountHistorySubscriptions = nil
+	}
 	input.ValidatorPublicKey = append([]byte(nil), input.ValidatorPublicKey...)
 	input.ServerInfoConfig = cloneServerInfoConfig(input.ServerInfoConfig)
 	return input

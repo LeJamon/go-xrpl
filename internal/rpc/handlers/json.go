@@ -23,6 +23,16 @@ func (m *jsonMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any,
 			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
+	if request.Method == "" && len(request.Params) > 0 {
+		var nested struct {
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params,omitempty"`
+		}
+		if json.Unmarshal(request.Params, &nested) == nil && nested.Method != "" {
+			request.Method = nested.Method
+			request.Params = nested.Params
+		}
+	}
 
 	if request.Method == "" {
 		return nil, types.RpcErrorInvalidParams("Missing required parameter: method")

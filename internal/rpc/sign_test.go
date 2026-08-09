@@ -14,15 +14,8 @@ import (
 
 func signingEnabledContext(ctx *types.RpcContext) *types.RpcContext {
 	clone := *ctx
-	var ledger types.LedgerService
-	if ctx.Services != nil {
-		ledger = ctx.Services.Ledger()
-	}
-	clone.Services = types.NewTestServiceGraph(&types.ServiceContainer{
-		Ledger: ledger,
-		Capabilities: types.RPCCapabilities{
-			SigningEnabled: true,
-		},
+	clone.Services = types.NewTestServiceGraphFrom(ctx.Services, func(services *types.ServiceContainer) {
+		services.Capabilities.SigningEnabled = true
 	})
 	return &clone
 }

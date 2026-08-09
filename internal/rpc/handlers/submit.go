@@ -144,7 +144,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (re
 	// When the client passed fail_hard:true and the ledger service
 	// implements the FailHardSubmitter surface, route through it so
 	// non-applying submissions are not held or relayed.
-	submitResult, submitErr := submitWithFailHard(ctx.Services.Ledger(), txJSON, txBlobHex, failHard)
+	submitResult, submitErr := submitWithFailHard(ctx.Services.LedgerMutation(), txJSON, txBlobHex, failHard)
 	if submitErr != nil {
 		return nil, rpcTransactionSubmissionError("submit: transaction submission failed", submitErr)
 	}

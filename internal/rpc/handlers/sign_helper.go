@@ -395,7 +395,7 @@ func rpcErrorAlreadySingleSigned() *types.RpcError {
 		types.RpcALREADY_SINGLE_SIG, "alreadySingleSig", "alreadySingleSig", "Already single-signed.")
 }
 
-func submitWithFailHard(ledger types.LedgerService, txJSON []byte, txBlob string, failHard bool) (*types.SubmitResult, error) {
+func submitWithFailHard(ledger types.TransactionSubmission, txJSON []byte, txBlob string, failHard bool) (*types.SubmitResult, error) {
 	if failHard {
 		if submitter, ok := ledger.(types.FailHardSubmitter); ok {
 			return submitter.SubmitTransactionFailHard(txJSON, txBlob)
@@ -508,7 +508,7 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 		// TicketSequence supplies the sequence instead (Sequence = 0).
 		if _, ok := txMap["Sequence"]; !ok {
 			_, hasTicket := txMap["TicketSequence"]
-			seq, err := services.Ledger().GetAutofillSequence(srcAddress, hasTicket)
+			seq, err := services.LedgerMutation().GetAutofillSequence(srcAddress, hasTicket)
 			if err != nil {
 				if errors.Is(err, svcerr.ErrAccountNotFound) {
 					return nil, types.RpcErrorSrcActNotFound("Source account not found.")
@@ -548,7 +548,7 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 			if mErr != nil {
 				return nil, rpcInternalError("sign: fee probe marshaling failed", mErr)
 			}
-			fee, feeErr := services.Ledger().GetAutofillFee(probe, rpcCtx.Role.IsUnlimited(), feeOpts.Mult, feeOpts.Div)
+			fee, feeErr := services.LedgerMutation().GetAutofillFee(probe, rpcCtx.Role.IsUnlimited(), feeOpts.Mult, feeOpts.Div)
 			if feeErr != nil {
 				var hfe *svcerr.HighFeeError
 				if errors.As(feeErr, &hfe) {

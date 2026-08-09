@@ -432,7 +432,7 @@ func resolvePathFindLedger(
 	hasSelector bool,
 ) (types.LedgerStateView, *pathFindLedgerMeta, *types.RpcError) {
 	if !hasSelector {
-		view, err := ctx.Services.Ledger().GetClosedLedgerView()
+		view, err := ctx.Services.LedgerViews().GetClosedLedgerView()
 		if err != nil {
 			return nil, nil, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent", "Current ledger is unavailable.")
 		}

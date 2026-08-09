@@ -276,7 +276,7 @@ func (r *nodeRuntime) configureMaintenance() error {
 	r.stopSampler = sampler.Stop
 
 	r.ledgerAdapter = rpcadapter.NewLedgerServiceAdapter(r.ledger)
-	r.services = newRPCServiceContainer(r.ledgerAdapter, r.appConfig)
+	r.services = newRPCServiceGraphBuilder(r.ledgerAdapter, r.appConfig)
 	if err := r.configureStandaloneNodeIdentity(); err != nil {
 		return err
 	}
@@ -1043,7 +1043,7 @@ func (r *nodeRuntime) bindStreams() error {
 		serverStatus.publish(nil)
 
 		r.wsServer.UpdatePathFindSessions(func() (types.LedgerStateView, error) {
-			return r.serviceGraph.Ledger().GetClosedLedgerView()
+			return r.serviceGraph.LedgerViews().GetClosedLedgerView()
 		})
 
 		r.serverLog.Debug("Broadcasted ledger",
