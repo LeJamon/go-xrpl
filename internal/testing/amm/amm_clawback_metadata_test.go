@@ -86,7 +86,7 @@ func TestAMMClawbackIOUPoolEmitsBareThreadedAMMAccount(t *testing.T) {
 	require.Len(t, metadataBlob, 2_248)
 	metadataHash := sha512half.Sum(metadataBlob)
 	require.Equal(t,
-		"5BAB776D2BE53B806FA36CEB802C2E20331D1784855EB7506EFDF1C8622B8058",
+		"E782CE98482594DB434733D52B76F9D0B4CF0FC42263E27F9F34AABB7C97BB37",
 		strings.ToUpper(hex.EncodeToString(metadataHash[:])))
 	txBlob, err := tx.SerializeTransaction(clawbackTx)
 	require.NoError(t, err)
@@ -99,7 +99,7 @@ func TestAMMClawbackIOUPoolEmitsBareThreadedAMMAccount(t *testing.T) {
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
 	require.Equal(t,
-		"E1BDF44F57FC43AE2CD9609009B80613FEF0430B0D03F71D3A4B433F5197FDEC",
+		"270502EE21CFD7B562D35FD85AC7B39845512126D386AFC26B8208B276F37E76",
 		strings.ToUpper(hex.EncodeToString(txRoot[:])))
 }
 

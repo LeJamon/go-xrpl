@@ -167,12 +167,9 @@ func (r *runner) execFund(stepIdx int, step Step) {
 	}
 	r.accounts[step.Account] = acc
 
-	// Bypass TxQ and mark as setup for two-phase replay.
 	r.env.SetBypassTxQ(true)
-	r.env.SetInSetupMode(true)
 	defer func() {
 		r.env.SetBypassTxQ(false)
-		r.env.SetInSetupMode(false)
 	}()
 
 	setRipple := step.SetDefaultRipple == nil || *step.SetDefaultRipple
@@ -186,12 +183,9 @@ func (r *runner) execFund(stepIdx int, step Step) {
 // execTrust handles a "trust" step.
 // Trust operations bypass TxQ, matching rippled's apply() for setup operations.
 func (r *runner) execTrust(stepIdx int, step Step) {
-	// Bypass TxQ and mark as setup for two-phase replay.
 	r.env.SetBypassTxQ(true)
-	r.env.SetInSetupMode(true)
 	defer func() {
 		r.env.SetBypassTxQ(false)
-		r.env.SetInSetupMode(false)
 	}()
 
 	acc, ok := r.accounts[step.Account]
@@ -268,16 +262,17 @@ func (r *runner) execClose(stepIdx int, step Step) {
 		}
 		r.env.SetTime(targetTime.Add(-resolution))
 	}
-	// If the fixture provides a tx_set_hash, pass it to the environment
-	// as the canonical sort salt. This allows closeWithReplay() to sort
-	// transactions in the exact same order as rippled.
 	if step.TxSetHash != nil {
 		saltBytes, err := hex.DecodeString(*step.TxSetHash)
-		if err == nil && len(saltBytes) == 32 {
-			var salt [32]byte
-			copy(salt[:], saltBytes)
-			r.env.SetNextCloseSalt(salt)
+		if err != nil {
+			r.t.Fatalf("Step %d (close): invalid tx_set_hash: %v", stepIdx, err)
 		}
+		if len(saltBytes) != 32 {
+			r.t.Fatalf("Step %d (close): tx_set_hash must be 32 bytes, got %d", stepIdx, len(saltBytes))
+		}
+		var salt [32]byte
+		copy(salt[:], saltBytes)
+		r.env.SetNextCloseSalt(salt)
 	}
 
 	// Use time-leap close if this step index is in the time-leap set.
@@ -425,7 +420,15 @@ func (r *runner) execTx(stepIdx int, step Step) {
 		defer r.env.SetBypassTxQ(false)
 	}
 
-	result := r.env.Submit(parsed)
+	submitParsed := func(transaction tx.Transaction) jtx.TxResult {
+		return r.env.SubmitWithOptions(transaction, jtx.SubmitOptions{
+			SkipFee:       true,
+			SkipSequence:  true,
+			SkipNetworkID: true,
+			SkipSignature: true,
+		})
+	}
+	result := submitParsed(parsed)
 
 	// When go-xrpl returns terPRE_SEQ but the fixture expects a different result,
 	// the account's ledger sequence is behind the fixture's baked-in sequence.
@@ -467,13 +470,13 @@ func (r *runner) execTx(stepIdx int, step Step) {
 						key := fmt.Sprintf("%s:%d", common.Account, currentSeq)
 						if disabledTx, ok := r.disabledTxBySeq[key]; ok {
 							delete(r.disabledTxBySeq, key)
-							r.env.Submit(disabledTx)
+							submitParsed(disabledTx)
 						} else {
 							r.env.BumpSequenceAndDeductAmount(acc, bumpFee)
 						}
 						currentSeq++
 					}
-					result = r.env.Submit(parsed)
+					result = submitParsed(parsed)
 				}
 			}
 		}

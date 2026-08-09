@@ -2,15 +2,23 @@ package jtx
 
 import (
 	"encoding/hex"
+	"fmt"
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/keylet"
 )
+
+// SubmitOptions selects explicit autofill opt-outs for malformed and specialized
+// transaction tests. Ordinary submissions should use Submit.
+type SubmitOptions struct {
+	SkipFee       bool
+	SkipSequence  bool
+	SkipNetworkID bool
+	SkipSignature bool
+}
 
 // WithSeq sets the sequence number on a transaction manually.
 // This bypasses autofill and allows testing transactions from non-existent accounts.
@@ -45,7 +53,7 @@ func (e *TestEnv) SignWith(txn tx.Transaction, signer *Account) tx.Transaction {
 	e.t.Helper()
 
 	common := txn.GetCommon()
-	common.SigningPubKey = hex.EncodeToString(signer.PublicKey)
+	common.SigningPubKey = signer.PublicKeyHex()
 
 	if !e.VerifySignatures {
 		// When signature verification is disabled, use a dummy signature
@@ -70,7 +78,7 @@ func (e *TestEnv) SignWith(txn tx.Transaction, signer *Account) tx.Transaction {
 func (e *TestEnv) signReal(txn tx.Transaction, signer *Account) {
 	e.t.Helper()
 	common := txn.GetCommon()
-	common.SigningPubKey = hex.EncodeToString(signer.PublicKey)
+	common.SigningPubKey = signer.PublicKeyHex()
 	sig, err := sign.SignTransaction(txn, privateKeyHex(signer))
 	if err != nil {
 		e.t.Fatalf("Failed to sign transaction: %v", err)
@@ -81,12 +89,13 @@ func (e *TestEnv) signReal(txn tx.Transaction, signer *Account) {
 // SubmitSigned signs the transaction with the account's own key and submits
 // with signature verification enabled.
 // The signing account is inferred from the transaction's Account field.
-func (e *TestEnv) SubmitSigned(transaction any) TxResult {
+func (e *TestEnv) SubmitSigned(txn tx.Transaction) TxResult {
 	e.t.Helper()
-
-	txn, ok := transaction.(tx.Transaction)
-	if !ok {
-		e.t.Fatalf("Transaction does not implement tx.Transaction interface")
+	previousVerify := e.VerifySignatures
+	e.VerifySignatures = true
+	defer func() { e.VerifySignatures = previousVerify }()
+	if txn == nil || txn.GetCommon() == nil {
+		e.t.Fatal("SubmitSigned: nil transaction")
 	}
 
 	// Look up the account by address
@@ -104,13 +113,11 @@ func (e *TestEnv) SubmitSigned(transaction any) TxResult {
 // SubmitSignedWith signs the transaction with a different key (e.g. a regular key)
 // and submits with signature verification enabled.
 // Reference: rippled's sig(account) -- sign with regular key.
-func (e *TestEnv) SubmitSignedWith(transaction any, signer *Account) TxResult {
+func (e *TestEnv) SubmitSignedWith(txn tx.Transaction, signer *Account) TxResult {
 	e.t.Helper()
-
-	txn, ok := transaction.(tx.Transaction)
-	if !ok {
-		e.t.Fatalf("Transaction does not implement tx.Transaction interface")
-	}
+	previousVerify := e.VerifySignatures
+	e.VerifySignatures = true
+	defer func() { e.VerifySignatures = previousVerify }()
 
 	// Auto-fill BEFORE signing, since sequence/fee are part of the signed payload.
 	e.autoFillForSigning(txn)
@@ -122,13 +129,11 @@ func (e *TestEnv) SubmitSignedWith(transaction any, signer *Account) TxResult {
 // with signature verification enabled.
 // Each signer signs the transaction with their key, sorted by account ID.
 // Reference: rippled's msig(signers...) funclet.
-func (e *TestEnv) SubmitMultiSigned(transaction any, signers []*Account) TxResult {
+func (e *TestEnv) SubmitMultiSigned(txn tx.Transaction, signers []*Account) TxResult {
 	e.t.Helper()
-
-	txn, ok := transaction.(tx.Transaction)
-	if !ok {
-		e.t.Fatalf("Transaction does not implement tx.Transaction interface")
-	}
+	previousVerify := e.VerifySignatures
+	e.VerifySignatures = true
+	defer func() { e.VerifySignatures = previousVerify }()
 
 	// Auto-fill BEFORE signing, since sequence/fee are part of the signed payload.
 	e.autoFillForSigning(txn)
@@ -142,11 +147,11 @@ func (e *TestEnv) SubmitMultiSigned(transaction any, signers []*Account) TxResul
 	// Calculate multi-sign fee: (numSigners + 1) * baseFee.
 	// Only override if the fee isn't already set higher (e.g., AccountDelete
 	// requires a higher fee than the standard multi-sign minimum).
-	multisigFee := uint64(len(signers)+1) * e.baseFee
-	existingFee, _ := strconv.ParseUint(common.Fee, 10, 64)
-	if existingFee < multisigFee {
-		common.Fee = formatUint64(multisigFee)
+	fee, err := multiSignFee(common.Fee, len(signers), e.baseFee)
+	if err != nil {
+		e.t.Fatalf("invalid multi-sign fee: %v", err)
 	}
+	common.Fee = fee
 
 	// Each signer signs and is added (AddMultiSigner maintains sorted order)
 	for _, signer := range signers {
@@ -155,7 +160,7 @@ func (e *TestEnv) SubmitMultiSigned(transaction any, signers []*Account) TxResul
 			e.t.Fatalf("Failed to multi-sign for %s: %v", signer.Name, err)
 		}
 
-		err = sign.AddMultiSigner(txn, signer.Address, hex.EncodeToString(signer.PublicKey), sig)
+		err = sign.AddMultiSigner(txn, signer.Address, signer.PublicKeyHex(), sig)
 		if err != nil {
 			e.t.Fatalf("Failed to add multi-signer %s: %v", signer.Name, err)
 		}
@@ -168,80 +173,112 @@ func (e *TestEnv) SubmitMultiSigned(transaction any, signers []*Account) TxResul
 // This must be called before signing, since these fields are part of the signed payload.
 func (e *TestEnv) autoFillForSigning(txn tx.Transaction) {
 	e.t.Helper()
+	e.autoFill(txn, SubmitOptions{SkipSignature: true})
+}
 
+func (e *TestEnv) autoFill(txn tx.Transaction, options SubmitOptions) {
+	e.t.Helper()
+	if txn == nil || txn.GetCommon() == nil {
+		e.t.Fatal("cannot autofill nil transaction")
+	}
 	common := txn.GetCommon()
-
-	// Auto-fill sequence if not set
-	if common.Sequence == nil && common.TicketSequence == nil {
+	if !options.SkipFee && common.Fee == "" {
+		common.Fee = formatUint64(e.baseFee)
+	}
+	if !options.SkipSequence && common.Sequence == nil {
 		_, accountID, err := addresscodec.DecodeClassicAddressToAccountID(common.Account)
-		if err != nil {
+		if err != nil || len(accountID) != 20 {
 			e.t.Fatalf("autoFillForSigning: failed to decode account address: %v", err)
 		}
 
 		var id [20]byte
 		copy(id[:], accountID)
-		accountKey := keylet.Account(id)
-
-		data, err := e.ledger.Read(accountKey)
-		if err != nil || data == nil {
+		accountRoot, exists, err := readAccountRoot(e.ledger, id)
+		if err != nil {
 			e.t.Fatalf("autoFillForSigning: failed to read account: %v", err)
 		}
-
-		accountRoot, err := state.ParseAccountRoot(data)
-		if err != nil {
-			e.t.Fatalf("autoFillForSigning: failed to parse account root: %v", err)
+		if !exists {
+			e.t.Fatalf("autoFillForSigning: account %s does not exist", common.Account)
 		}
 
 		seq := accountRoot.Sequence
 		common.Sequence = &seq
 	}
-
-	// Auto-fill fee if not set
-	if common.Fee == "" {
-		common.Fee = formatUint64(e.baseFee)
+	if !options.SkipNetworkID && common.NetworkID == nil && e.networkID > tx.LegacyNetworkIDThreshold {
+		networkID := e.networkID
+		common.NetworkID = &networkID
 	}
+	if options.SkipSignature {
+		return
+	}
+	signerAddress := common.Account
+	if common.Delegate != "" {
+		signerAddress = common.Delegate
+	}
+	signer := e.findAccountByAddress(signerAddress)
+	if signer == nil {
+		e.t.Fatalf("autofill signature: account %s is not registered", signerAddress)
+	}
+	if e.VerifySignatures {
+		signingAccount := signer
+		accountRoot, exists, err := readAccountRoot(e.ledger, signer.ID)
+		if err != nil {
+			e.t.Fatalf("autofill signature: read account %s: %v", signerAddress, err)
+		}
+		if exists && accountRoot.RegularKey != "" {
+			signingAccount = e.findAccountByAddress(accountRoot.RegularKey)
+			if signingAccount == nil {
+				e.t.Fatalf("autofill signature: regular key %s is not registered", accountRoot.RegularKey)
+			}
+		}
+		if len(signingAccount.PublicKey) == 0 || len(signingAccount.PrivateKey) == 0 {
+			e.t.Fatalf("autofill signature: account %s has no signing key", signingAccount.Address)
+		}
+		e.signReal(txn, signingAccount)
+	} else {
+		if len(signer.PublicKey) == 0 {
+			e.t.Fatalf("autofill signature: account %s has no signing key", signerAddress)
+		}
+		e.SignWith(txn, signer)
+	}
+}
+
+func multiSignFee(current string, signerCount int, baseFee uint64) (string, error) {
+	if signerCount < 0 {
+		return "", fmt.Errorf("signer count cannot be negative")
+	}
+	multiplier := uint64(signerCount) + 1
+	if baseFee != 0 && multiplier > ^uint64(0)/baseFee {
+		return "", fmt.Errorf("minimum fee overflows uint64")
+	}
+	minimum := multiplier * baseFee
+	parsed, err := strconv.ParseUint(current, 10, 64)
+	if err != nil {
+		return "", err
+	}
+	if parsed < minimum {
+		parsed = minimum
+	}
+	return formatUint64(parsed), nil
 }
 
 // submitWithSigVerification is the internal submit path with signature
 // verification enabled. Callers must auto-fill and sign BEFORE calling this.
 //
-// It mirrors applyDirect: it seeds and bumps the per-ledger transaction counters
-// (txInLedger / closingTxTotal / fee levels) and derives ParentCloseTime from
-// the ledger header, so a test mixing Submit and SubmitSigned in one close
-// window gets consistent metadata.TransactionIndex and TxQ fee metrics.
+// It mirrors applyDirect so mixed signed and ordinary submissions share the
+// same metadata indexes and TxQ fee accounting.
 func (e *TestEnv) submitWithSigVerification(txn tx.Transaction) TxResult {
 	e.t.Helper()
-
-	engineConfig := e.engineConfig(e.ledger, engineConfigOpts{
-		openLedger:       e.openLedger,
-		feeTrack:         true,
-		verifySignatures: true,
-	})
-
-	// Seed txCount so metadata.TransactionIndex matches rippled — see applyDirect.
-	applyResult := e.applyStaged(txn, engineConfig, e.txInLedger, true)
-
-	if applyResult.Result.IsApplied() {
-		e.txInLedger += 1 + uint32(len(applyResult.AppliedInnerTransactions))
-		e.closingTxTotal += e.recordFeeMetricTransactions(txn, applyResult.AppliedInnerTransactions)
+	previousVerify := e.VerifySignatures
+	e.VerifySignatures = true
+	defer func() { e.VerifySignatures = previousVerify }()
+	if e.txQueue != nil && !e.bypassTxQ {
+		return e.submitViaTxQ(txn)
 	}
-	e.trackDirectTransaction(txn, applyResult)
-
-	return TxResult{
-		Code:                     applyResult.Result.String(),
-		Success:                  applyResult.Result.IsSuccess(),
-		Message:                  applyResult.Message,
-		Metadata:                 applyResult.Metadata,
-		AppliedInnerTransactions: applyResult.AppliedInnerTransactions,
-	}
+	return e.applyDirect(txn)
 }
 
 // findAccountByAddress looks up a registered account by its XRPL address.
 func (e *TestEnv) findAccountByAddress(address string) *Account {
-	for _, acc := range e.accounts {
-		if acc.Address == address {
-			return acc
-		}
-	}
-	return nil
+	return e.accountsByAddress[address]
 }

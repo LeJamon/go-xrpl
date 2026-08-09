@@ -93,6 +93,7 @@ func (b *ChannelCreateBuilder) Build() tx.Transaction {
 		c.SetSequence(*b.sequence)
 	}
 	if b.ticketSeq != nil {
+		c.SetSequence(0)
 		c.GetCommon().TicketSequence = b.ticketSeq
 	}
 
@@ -156,6 +157,7 @@ func (b *ChannelFundBuilder) Build() tx.Transaction {
 		f.SetSequence(*b.sequence)
 	}
 	if b.ticketSeq != nil {
+		f.SetSequence(0)
 		f.GetCommon().TicketSequence = b.ticketSeq
 	}
 
@@ -263,6 +265,7 @@ func (b *ChannelClaimBuilder) Build() tx.Transaction {
 		c.SetSequence(*b.sequence)
 	}
 	if b.ticketSeq != nil {
+		c.SetSequence(0)
 		c.GetCommon().TicketSequence = b.ticketSeq
 	}
 	if b.credentialIDs != nil {

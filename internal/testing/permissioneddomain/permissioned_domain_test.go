@@ -523,9 +523,8 @@ func TestSet(t *testing.T) {
 	// Reference: rippled testSet account deletion block at end of function
 	t.Run("account deletion blocked then succeeds", func(t *testing.T) {
 		carol := jtx.NewAccount("carol")
-		master := env.MasterAccount()
 		// Fund carol with enough for base reserve + 1 domain + fees
-		env.Submit(payment.Pay(master, carol, env.ReserveBase()+env.ReserveIncrement()+100*env.BaseFee()).Build())
+		env.FundAmount(carol, env.ReserveBase()+env.ReserveIncrement()+100*env.BaseFee())
 		env.Close()
 
 		seq := env.Seq(carol)
@@ -714,7 +713,7 @@ func TestAccountReserve(t *testing.T) {
 	master := env.MasterAccount()
 
 	// Fund alice with exactly the base reserve (not enough for a domain)
-	env.Submit(payment.Pay(master, alice, acctReserve).Build())
+	env.FundAmount(alice, acctReserve)
 	env.Close()
 
 	// alice does not have enough for the domain reserve

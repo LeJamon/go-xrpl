@@ -162,7 +162,8 @@ func TestSetRegularKey_NoAlternativeKey(t *testing.T) {
 
 	// Attempt to clear the regular key — should fail with tecNO_ALTERNATIVE_KEY
 	// because master is disabled and no signer list exists
-	env.DisableRegularKeyExpect(alice, jtx.TecNO_ALTERNATIVE_KEY)
+	result := env.SubmitSignedWith(jtx.NewDisableRegularKeyTx(alice), rk)
+	jtx.RequireTxClaimed(t, result, jtx.TecNO_ALTERNATIVE_KEY)
 }
 
 // TestSetRegularKey_WithSignerList tests interaction between regular key and signer list.

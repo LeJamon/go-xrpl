@@ -34,18 +34,6 @@ func (e *TestEnv) Trust(acc *Account, amount tx.Amount) {
 	e.ReimburseWithPayment(acc)
 }
 
-// EnableDisallowIncomingCheck enables the DisallowIncomingCheck flag on an account.
-func (e *TestEnv) EnableDisallowIncomingCheck(acc *Account) {
-	e.t.Helper()
-	e.setAccountFlag(acc, account.AccountSetFlagDisallowIncomingCheck)
-}
-
-// DisableDisallowIncomingCheck disables the DisallowIncomingCheck flag on an account.
-func (e *TestEnv) DisableDisallowIncomingCheck(acc *Account) {
-	e.t.Helper()
-	e.clearAccountFlag(acc, account.AccountSetFlagDisallowIncomingCheck)
-}
-
 // EnableDisallowIncomingPayChan enables the DisallowIncomingPayChan flag on an account.
 func (e *TestEnv) EnableDisallowIncomingPayChan(acc *Account) {
 	e.t.Helper()
@@ -298,16 +286,6 @@ func (e *TestEnv) SetFirstNFTokenSequenceDirect(acc *Account, seq uint32) {
 	}
 }
 
-// BumpSequenceAndDeductFee increments an account's sequence and deducts the
-// base fee directly in the ledger. Used by the conformance runner to match
-// rippled's behavior where tem* results from type-specific preflight (inside
-// doApply) still consume the sequence and fee because the engine's generic
-// preclaim already passed.
-func (e *TestEnv) BumpSequenceAndDeductFee(acc *Account) {
-	e.t.Helper()
-	e.BumpSequenceAndDeductAmount(acc, e.baseFee)
-}
-
 // BumpSequenceAndDeductAmount increments an account's sequence and deducts the
 // specified fee amount directly in the ledger. This is used when the fee to
 // deduct differs from the base fee, e.g., for multi-signed transactions where
@@ -368,7 +346,7 @@ func (e *TestEnv) SetAmendments(names []string) {
 	for _, name := range names {
 		e.requireKnownAmendment(name)
 	}
-	e.pendingAmendments = names
+	e.pendingAmendments = append([]string{}, names...)
 }
 
 // ReimburseWithPayment submits a real Payment from master to reimburse

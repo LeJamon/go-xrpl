@@ -2,6 +2,7 @@ package jtx
 
 import (
 	"encoding/hex"
+	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -9,34 +10,62 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// Balance returns the XRP balance of an account in drops.
-func (e *TestEnv) Balance(acc *Account) uint64 {
-	e.t.Helper()
+type ledgerEntryReader interface {
+	Exists(keylet.Keylet) (bool, error)
+	Read(keylet.Keylet) ([]byte, error)
+}
 
-	// Get account keylet
-	accountKey := keylet.Account(acc.ID)
-
-	// Check if account exists
-	exists, err := e.ledger.Exists(accountKey)
+func readExistingEntry(reader ledgerEntryReader, entryKey keylet.Keylet) ([]byte, bool, error) {
+	exists, err := reader.Exists(entryKey)
 	if err != nil {
-		e.t.Fatalf("Failed to check account existence: %v", err)
+		return nil, false, fmt.Errorf("check ledger entry existence: %w", err)
 	}
 	if !exists {
-		return 0 // Account doesn't exist
+		return nil, false, nil
 	}
+	data, err := reader.Read(entryKey)
+	if err != nil {
+		return nil, false, fmt.Errorf("read ledger entry: %w", err)
+	}
+	if data == nil {
+		return nil, false, fmt.Errorf("ledger entry exists but cannot be read")
+	}
+	return data, true, nil
+}
 
-	// Read account data
-	data, err := e.ledger.Read(accountKey)
+func readAccountRoot(reader ledgerEntryReader, accountID [20]byte) (*state.AccountRoot, bool, error) {
+	data, exists, err := readExistingEntry(reader, keylet.Account(accountID))
+	if err != nil || !exists {
+		return nil, exists, err
+	}
+	accountRoot, err := state.ParseAccountRoot(data)
+	if err != nil {
+		return nil, false, fmt.Errorf("parse account root: %w", err)
+	}
+	return accountRoot, true, nil
+}
+
+func readRippleState(reader ledgerEntryReader, lineKey keylet.Keylet) (*state.RippleState, bool, error) {
+	data, exists, err := readExistingEntry(reader, lineKey)
+	if err != nil || !exists {
+		return nil, exists, err
+	}
+	rippleState, err := state.ParseRippleState(data)
+	if err != nil {
+		return nil, false, fmt.Errorf("parse ripple state: %w", err)
+	}
+	return rippleState, true, nil
+}
+
+func (e *TestEnv) Balance(acc *Account) uint64 {
+	e.t.Helper()
+	accountRoot, exists, err := readAccountRoot(e.ledger, acc.ID)
 	if err != nil {
 		e.t.Fatalf("Failed to read account: %v", err)
 	}
-
-	// Parse account root to get balance
-	accountRoot, err := state.ParseAccountRoot(data)
-	if err != nil {
-		e.t.Fatalf("Failed to parse account data: %v", err)
+	if !exists {
+		return 0
 	}
-
 	return accountRoot.Balance
 }
 
@@ -46,30 +75,14 @@ func (e *TestEnv) Balance(acc *Account) uint64 {
 func (e *TestEnv) IOUBalance(holder, issuer *Account, currency string) *state.Amount {
 	e.t.Helper()
 
-	// Get trust line keylet
 	lineKey := keylet.Line(holder.ID, issuer.ID, currency)
-
-	// Check if trust line exists
-	exists, err := e.ledger.Exists(lineKey)
-	if err != nil {
-		e.t.Fatalf("Failed to check trust line existence: %v", err)
-	}
-	if !exists {
-		// No trust line = zero balance
-		zero := state.NewIssuedAmountFromFloat64(0, currency, issuer.Address)
-		return &zero
-	}
-
-	// Read trust line data
-	data, err := e.ledger.Read(lineKey)
+	rs, exists, err := readRippleState(e.ledger, lineKey)
 	if err != nil {
 		e.t.Fatalf("Failed to read trust line: %v", err)
 	}
-
-	// Parse RippleState
-	rs, err := state.ParseRippleState(data)
-	if err != nil {
-		e.t.Fatalf("Failed to parse trust line: %v", err)
+	if !exists {
+		zero := state.NewIssuedAmountFromFloat64(0, currency, issuer.Address)
+		return &zero
 	}
 
 	// Determine if holder is low or high account
@@ -150,18 +163,11 @@ func (e *TestEnv) TrustLineFlags(account, counterparty *Account, currency string
 	e.t.Helper()
 
 	lineKey := keylet.Line(account.ID, counterparty.ID, currency)
-	exists, err := e.ledger.Exists(lineKey)
-	if err != nil || !exists {
-		return 0
-	}
-
-	data, err := e.ledger.Read(lineKey)
+	rs, exists, err := readRippleState(e.ledger, lineKey)
 	if err != nil {
-		return 0
+		e.t.Fatalf("Failed to read trust line: %v", err)
 	}
-
-	rs, err := state.ParseRippleState(data)
-	if err != nil {
+	if !exists {
 		return 0
 	}
 
@@ -173,18 +179,11 @@ func (e *TestEnv) HasNoRipple(account, counterparty *Account, currency string) b
 	e.t.Helper()
 
 	lineKey := keylet.Line(account.ID, counterparty.ID, currency)
-	exists, err := e.ledger.Exists(lineKey)
-	if err != nil || !exists {
-		return false
-	}
-
-	data, err := e.ledger.Read(lineKey)
+	rs, exists, err := readRippleState(e.ledger, lineKey)
 	if err != nil {
-		return false
+		e.t.Fatalf("Failed to read trust line: %v", err)
 	}
-
-	rs, err := state.ParseRippleState(data)
-	if err != nil {
+	if !exists {
 		return false
 	}
 
@@ -202,31 +201,13 @@ func (e *TestEnv) HasNoRipple(account, counterparty *Account, currency string) b
 // when querying a non-existent account.
 func (e *TestEnv) Seq(acc *Account) uint32 {
 	e.t.Helper()
-
-	// Get account keylet
-	accountKey := keylet.Account(acc.ID)
-
-	// Check if account exists
-	exists, err := e.ledger.Exists(accountKey)
+	accountRoot, exists, err := readAccountRoot(e.ledger, acc.ID)
 	if err != nil {
-		e.t.Fatalf("Failed to check account existence: %v", err)
+		e.t.Fatalf("Failed to read account: %v", err)
 	}
 	if !exists {
 		e.t.Fatalf("Seq: account %s does not exist", acc.Name)
 	}
-
-	// Read account data
-	data, err := e.ledger.Read(accountKey)
-	if err != nil {
-		e.t.Fatalf("Failed to read account: %v", err)
-	}
-
-	// Parse account root to get sequence
-	accountRoot, err := state.ParseAccountRoot(data)
-	if err != nil {
-		e.t.Fatalf("Failed to parse account data: %v", err)
-	}
-
 	return accountRoot.Sequence
 }
 
@@ -263,21 +244,11 @@ func CredentialKeylet(subject, issuer *Account, credType string) keylet.Keylet {
 // AccountInfo returns detailed account information.
 func (e *TestEnv) AccountInfo(acc *Account) *AccountInfo {
 	e.t.Helper()
-
-	accountKey := keylet.Account(acc.ID)
-
-	exists, err := e.ledger.Exists(accountKey)
-	if err != nil || !exists {
-		return nil
-	}
-
-	data, err := e.ledger.Read(accountKey)
+	accountRoot, exists, err := readAccountRoot(e.ledger, acc.ID)
 	if err != nil {
-		return nil
+		e.t.Fatalf("Failed to read account: %v", err)
 	}
-
-	accountRoot, err := state.ParseAccountRoot(data)
-	if err != nil {
+	if !exists {
 		return nil
 	}
 
@@ -447,18 +418,11 @@ func (e *TestEnv) Limit(holder, issuer *Account, currency string) float64 {
 	e.t.Helper()
 
 	lineKey := keylet.Line(holder.ID, issuer.ID, currency)
-	exists, err := e.ledger.Exists(lineKey)
-	if err != nil || !exists {
-		return 0
-	}
-
-	data, err := e.ledger.Read(lineKey)
+	rs, exists, err := readRippleState(e.ledger, lineKey)
 	if err != nil {
-		return 0
+		e.t.Fatalf("Failed to read trust line: %v", err)
 	}
-
-	rs, err := state.ParseRippleState(data)
-	if err != nil {
+	if !exists {
 		return 0
 	}
 
@@ -482,11 +446,6 @@ func (e *TestEnv) IncLedgerSeqForAccDel(acc *Account) {
 	for e.Seq(acc)+255 > e.LedgerSeq() {
 		e.Close()
 	}
-}
-
-// GetTxQ returns the test environment's transaction queue, or nil if not configured.
-func (e *TestEnv) GetTxQ() *txq.TxQ {
-	return e.txQueue
 }
 
 // TxQMetrics returns the current TxQ metrics. Fatals the test if TxQ is not

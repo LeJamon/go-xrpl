@@ -55,32 +55,9 @@ func (e *Env) Close() {
 	e.adapter.recordClosedLedger()
 }
 
-func (e *Env) Submit(transaction any) jtx.TxResult {
+func (e *Env) Submit(transaction txcore.Transaction) jtx.TxResult {
 	e.t.Helper()
-	result := e.TestEnv.Submit(transaction)
-	if result.Metadata == nil || (!result.Success && !result.IsClaimed()) {
-		return result
-	}
-	txn, ok := transaction.(txcore.Transaction)
-	if !ok {
-		e.t.Fatalf("rpcenv: transaction does not implement tx.Transaction")
-	}
-	txBlob, err := txcore.SerializeTransaction(txn)
-	if err != nil {
-		e.t.Fatalf("rpcenv: serialize transaction: %v", err)
-	}
-	hash, err := txcore.ComputeTransactionHash(txn)
-	if err != nil {
-		e.t.Fatalf("rpcenv: hash transaction: %v", err)
-	}
-	txWithMeta, err := txcore.CreateTxWithMetaBlob(txBlob, result.Metadata)
-	if err != nil {
-		e.t.Fatalf("rpcenv: serialize transaction metadata: %v", err)
-	}
-	if err := e.Ledger().AddTransactionWithMeta(hash, txWithMeta); err != nil {
-		e.t.Fatalf("rpcenv: record transaction: %v", err)
-	}
-	return result
+	return e.TestEnv.Submit(transaction)
 }
 
 // Services exposes the container so callers can attach additional facets

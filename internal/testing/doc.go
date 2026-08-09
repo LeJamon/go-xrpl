@@ -87,7 +87,6 @@
 // Helper functions for common test assertions:
 //
 //	jtx.RequireBalance(t, env, alice, jtx.XRP(900))
-//	jtx.RequireBalanceXRP(t, env, alice, 900)
 //	jtx.RequireTxSuccess(t, result)
 //	jtx.RequireTxFail(t, result, jtx.TecUNFUNDED_PAYMENT)
 //	jtx.RequireAccountExists(t, env, alice)

@@ -231,7 +231,7 @@ type Service struct {
 	txQueue *txq.TxQ
 
 	// localTxs is the held pool of locally-submitted transactions. RPC submit
-	// and SubmitOpenLedgerTx(local=true) push each non-permanent result in;
+	// and SubmitOpenLedgerTx(local=true) push each parse-valid transaction in;
 	// Accept replays the pool onto every rebuilt open view until each entry
 	// applies or ages out, with stale entries swept on the validated path.
 	localTxs *localtxs.LocalTxs
@@ -695,19 +695,18 @@ func (c *closedLedgerCtx) GetTransactionFeeLevels() []txq.FeeLevel {
 // processClosedLedgerLocked updates the TxQ's fee metrics from the just-closed
 // ledger. timeLeap clamps the metrics window when consensus exceeded the
 // slow-consensus threshold instead of advancing it. Caller must hold s.mu.
-func (s *Service) processClosedLedgerLocked() {
-	if s.txQueue == nil || s.closedLedger == nil {
+func (s *Service) processClosedLedgerLocked(closed *ledger.Ledger) {
+	if s.txQueue == nil || closed == nil {
 		return
 	}
-	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(closed)
 	ctx := &closedLedgerCtx{
-		ledger:           s.closedLedger,
+		ledger:           closed,
 		baseFee:          baseFee,
 		reserveBase:      reserveBase,
 		reserveIncrement: reserveIncrement,
 	}
 	s.txQueue.ProcessClosedLedger(ctx, s.lastConsensusRoundTime > slowConsensusThreshold)
-	s.tickLoadFeeLocked()
 }
 
 // slowConsensusThreshold: past this round time the TxQ treats consensus as slow
@@ -740,25 +739,27 @@ func (s *Service) tickLoadFeeLocked() {
 }
 
 // acceptOpenLedgerViewLocked invokes OpenLedger.Accept on the LCL transition to
-// s.closedLedger. No-op pre-Start. retriableTxs are the disputed we-voted-NO txs
+// closed. No-op pre-Start. retriableTxs are the disputed we-voted-NO txs
 // plus the build pass's retry-state txs, replayed first; anyDisputes is the
 // retriesFirst flag. closedSeq is for log context only. Caller must hold s.mu.
-func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32, retriableTxs []openledger.PendingTx, anyDisputes bool) {
+func (s *Service) acceptOpenLedgerViewLocked(closed *ledger.Ledger, retriableTxs []openledger.PendingTx, anyDisputes bool) error {
 	if s.openLedgerView == nil {
-		return
+		s.processClosedLedgerLocked(closed)
+		return nil
 	}
-	if s.closedLedger == nil {
-		return
+	if closed == nil {
+		return nil
 	}
-	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
+	closedSeq := closed.Sequence()
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(closed)
 	cfg := openledger.ApplyConfig{
 		BaseFee:          baseFee,
 		ReserveBase:      reserveBase,
 		ReserveIncrement: reserveIncrement,
 		NetworkID:        s.config.NetworkID,
-		ParentCloseTime:  parentCloseTimeRippleEpoch(s.closedLedger),
+		ParentCloseTime:  parentCloseTimeRippleEpoch(closed),
 		Logger:           s.config.Logger,
-		Rules:            rulesFromLedger(s.closedLedger, s.logger),
+		Rules:            rulesFromLedger(closed, s.logger),
 		FeeTrack:         s.feeTrack,
 	}
 	// Modifier promotes queued candidates into the new open view after replay.
@@ -786,8 +787,18 @@ func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32, retriableTxs []op
 			relay(blob)
 		}
 	}
-	if err := s.openLedgerView.Accept(s.closedLedger, locals, anyDisputes, &retries, cfg, s.txQueue, modifier, relayCB); err != nil {
-		s.logger.Error("openLedger.Accept failed", "err", err, "seq", closedSeq)
+	if err := s.openLedgerView.AcceptWithPrecommit(
+		closed,
+		locals,
+		anyDisputes,
+		&retries,
+		cfg,
+		s.txQueue,
+		func() { s.processClosedLedgerLocked(closed) },
+		modifier,
+		relayCB,
+	); err != nil {
+		return fmt.Errorf("accept open ledger view at sequence %d: %w", closedSeq, err)
 	}
 	if len(retries) > 0 {
 		s.logger.Info("openLedger.Accept produced retries",
@@ -795,6 +806,7 @@ func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32, retriableTxs []op
 			"seq", closedSeq,
 		)
 	}
+	return nil
 }
 
 // applyConfigLocked returns the ApplyConfig for the current closed ledger,
@@ -862,7 +874,7 @@ func (s *Service) TransactionRules() *amendment.Rules {
 // SubmitOpenLedgerTx routes a tx blob through the persistent OpenLedger view and
 // returns the per-tx classification (ResultFailure before Start).
 //
-// local=true (RPC-originated) pushes any non-Failure result into the LocalTxs
+// local=true (RPC-originated) pushes every parse-valid result into the LocalTxs
 // held pool so it survives LCL transitions until the sender's sequence advances
 // or it ages out. local=false (peer relay) doesn't pin the blob — the peer
 // manages its own resends.
@@ -902,7 +914,7 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result
 		s.rememberRelayTransaction(ptx.Hash, ptx.Blob, outcome.Queued)
 	}
 	current := s.openLedgerView.Current()
-	if local && s.localTxs != nil && outcome.Class != openledger.ResultFailure {
+	if local && s.localTxs != nil {
 		s.localTxs.PushBack(current.Sequence(), ptx)
 	}
 	s.dispatchProposedTransaction(ptx, blob, outcome, current)
@@ -1610,11 +1622,6 @@ func (s *Service) GetValidatedLedgerIndex() uint32 {
 		return 0
 	}
 	return s.validatedLedger.Sequence()
-}
-
-// getValidatedLedgersRange returns the actual completed-ledger ranges.
-func (s *Service) getValidatedLedgersRange() string {
-	return s.completeLedgersString()
 }
 
 // SetServerStateFunc sets a function that provides the server state string.

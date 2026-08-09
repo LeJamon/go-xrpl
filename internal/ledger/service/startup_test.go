@@ -15,6 +15,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/localtxs"
+	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -387,6 +389,82 @@ func TestService_StartupReplayOverridesFirstConsensusBuildOnly(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, target.Sequence()+1, seq)
 	require.NotEqual(t, targetHash, svc.GetClosedLedger().Hash())
+}
+
+func TestService_StartupReplayStandaloneRetriesAfterOpenViewFailure(t *testing.T) {
+	ctx := context.Background()
+	db, rm := newStartupTestStorage(t, ctx)
+	_, target, _ := persistStartupReplayChain(t, ctx, db, rm)
+	targetHash := target.Hash()
+
+	svc, err := New(Config{
+		Standalone:    true,
+		Startup:       StartupConfig{Mode: StartupReplay, Ledger: fmt.Sprintf("%X", targetHash)},
+		GenesisConfig: genesis.DefaultConfig(),
+		NodeStore:     db,
+		SHAMapFamily:  backend.New(db),
+		RelationalDB:  rm,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	closed := svc.closedLedger
+	legacyOpen := svc.openLedger
+	current := svc.openLedgerView.Current()
+	svc.localTxs.PushBack(current.Sequence(), openledger.PendingTx{Blob: []byte{0xff}, Hash: [32]byte{1}})
+
+	_, err = svc.acceptLedgerAt(ctx, time.Unix(1, 0))
+	require.Error(t, err)
+	require.NotNil(t, svc.startupReplay)
+	require.Same(t, closed, svc.closedLedger)
+	require.Same(t, legacyOpen, svc.openLedger)
+	require.Same(t, current, svc.openLedgerView.Current())
+
+	svc.localTxs = localtxs.New()
+	seq, err := svc.acceptLedgerAt(ctx, time.Unix(1, 0))
+	require.NoError(t, err)
+	require.Equal(t, target.Sequence(), seq)
+	require.Equal(t, targetHash, svc.closedLedger.Hash())
+	require.Nil(t, svc.startupReplay)
+}
+
+func TestService_StartupReplayConsensusRetriesAfterOpenViewFailure(t *testing.T) {
+	ctx := context.Background()
+	db, rm := newStartupTestStorage(t, ctx)
+	_, target, _ := persistStartupReplayChain(t, ctx, db, rm)
+	targetHash := target.Hash()
+
+	svc, err := New(Config{
+		Standalone:    false,
+		Startup:       StartupConfig{Mode: StartupReplay, Ledger: fmt.Sprintf("%X", targetHash)},
+		GenesisConfig: genesis.DefaultConfig(),
+		NodeStore:     db,
+		SHAMapFamily:  backend.New(db),
+		RelationalDB:  rm,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	closed := svc.closedLedger
+	legacyOpen := svc.openLedger
+	current := svc.openLedgerView.Current()
+	svc.localTxs.PushBack(current.Sequence(), openledger.PendingTx{Blob: []byte{0xff}, Hash: [32]byte{1}})
+
+	_, err = svc.AcceptConsensusResult(ctx, closed, nil, nil, time.Unix(1, 0), true)
+	require.Error(t, err)
+	require.NotNil(t, svc.startupReplay)
+	require.Same(t, closed, svc.closedLedger)
+	require.Same(t, legacyOpen, svc.openLedger)
+	require.Same(t, current, svc.openLedgerView.Current())
+
+	svc.localTxs = localtxs.New()
+	seq, err := svc.AcceptConsensusResult(ctx, closed, nil, nil, time.Unix(1, 0), true)
+	require.NoError(t, err)
+	require.Equal(t, target.Sequence(), seq)
+	require.Equal(t, targetHash, svc.closedLedger.Hash())
+	require.Nil(t, svc.startupReplay)
 }
 
 func TestService_StartupReplayCancelsAfterPreferredLedgerSwitch(t *testing.T) {
