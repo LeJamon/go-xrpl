@@ -159,9 +159,9 @@ type CreateOpts struct {
 	HolderCount *uint32
 	// Flags are the transaction flags
 	Flags uint32
-	// MutableFlags marks which capabilities can later be mutated (DynamicMPT).
+	// ImmutableFlags permanently freezes selected capabilities and fields (DynamicMPT).
 	// Use a pointer so a value of 0 is still transmitted (an error case).
-	MutableFlags *uint32
+	ImmutableFlags *uint32
 	// Err is the expected error code (nil means expect success)
 	Err string
 }
@@ -217,8 +217,8 @@ type SetOpts struct {
 	// TransferFee replaces the transfer fee (DynamicMPT). Pointer so 0 (remove)
 	// differs from nil (absent).
 	TransferFee *uint16
-	// MutableFlags sets/clears the mutable capability flags (DynamicMPT).
-	MutableFlags *uint32
+	// ImmutableFlags permanently freezes selected capabilities and fields (DynamicMPT).
+	ImmutableFlags *uint32
 	// Err is the expected error code (empty means expect success)
 	Err string
 }
@@ -251,8 +251,8 @@ func (m *MPTTester) Create(opts CreateOpts) {
 	if opts.Metadata != nil {
 		create.MPTokenMetadata = opts.Metadata
 	}
-	if opts.MutableFlags != nil {
-		create.MutableFlags = opts.MutableFlags
+	if opts.ImmutableFlags != nil {
+		create.ImmutableFlags = opts.ImmutableFlags
 	}
 	if opts.Flags != 0 {
 		create.SetFlags(opts.Flags)
@@ -394,8 +394,8 @@ func (m *MPTTester) Set(opts SetOpts) {
 	if opts.TransferFee != nil {
 		set.TransferFee = opts.TransferFee
 	}
-	if opts.MutableFlags != nil {
-		set.MutableFlags = opts.MutableFlags
+	if opts.ImmutableFlags != nil {
+		set.ImmutableFlags = opts.ImmutableFlags
 	}
 	if opts.Flags != 0 {
 		set.SetFlags(opts.Flags)
@@ -614,10 +614,10 @@ func (m *MPTTester) CheckIssuanceFlags(expected uint32) {
 	require.Equal(m.t, expected, m.issuance().Flags, "issuance flags mismatch")
 }
 
-// CheckMutableFlags asserts the issuance's sfMutableFlags value.
-func (m *MPTTester) CheckMutableFlags(expected uint32) {
+// CheckImmutableFlags asserts the issuance's sfImmutableFlags value.
+func (m *MPTTester) CheckImmutableFlags(expected uint32) {
 	m.t.Helper()
-	require.Equal(m.t, expected, m.issuance().MutableFlags, "issuance MutableFlags mismatch")
+	require.Equal(m.t, expected, m.issuance().ImmutableFlags, "issuance ImmutableFlags mismatch")
 }
 
 // CheckMetadata asserts the issuance metadata equals hexMetadata.
@@ -765,43 +765,37 @@ func PtrString(v string) *string { return &v }
 
 const (
 	// MPTokenIssuanceCreate flags
-	TfMPTCanLock     = mpttx.MPTokenIssuanceCreateFlagCanLock
-	TfMPTRequireAuth = mpttx.MPTokenIssuanceCreateFlagRequireAuth
-	TfMPTCanEscrow   = mpttx.MPTokenIssuanceCreateFlagCanEscrow
-	TfMPTCanTrade    = mpttx.MPTokenIssuanceCreateFlagCanTrade
-	TfMPTCanTransfer = mpttx.MPTokenIssuanceCreateFlagCanTransfer
-	TfMPTCanClawback = mpttx.MPTokenIssuanceCreateFlagCanClawback
+	TfMPTCanLock                    = mpttx.MPTokenIssuanceCreateFlagCanLock
+	TfMPTRequireAuth                = mpttx.MPTokenIssuanceCreateFlagRequireAuth
+	TfMPTCanEscrow                  = mpttx.MPTokenIssuanceCreateFlagCanEscrow
+	TfMPTCanTrade                   = mpttx.MPTokenIssuanceCreateFlagCanTrade
+	TfMPTCanTransfer                = mpttx.MPTokenIssuanceCreateFlagCanTransfer
+	TfMPTCanClawback                = mpttx.MPTokenIssuanceCreateFlagCanClawback
+	TfMPTCanHoldConfidentialBalance = mpttx.MPTokenIssuanceCreateFlagCanHoldConfidentialBalance
 
 	// MPTokenIssuanceSet flags
-	TfMPTLock   = mpttx.MPTokenIssuanceSetFlagLock
-	TfMPTUnlock = mpttx.MPTokenIssuanceSetFlagUnlock
+	TfMPTLock                          = mpttx.MPTokenIssuanceSetFlagLock
+	TfMPTUnlock                        = mpttx.MPTokenIssuanceSetFlagUnlock
+	TfMPTSetCanLock                    = mpttx.MPTokenIssuanceSetFlagSetCanLock
+	TfMPTSetRequireAuth                = mpttx.MPTokenIssuanceSetFlagSetRequireAuth
+	TfMPTSetCanEscrow                  = mpttx.MPTokenIssuanceSetFlagSetCanEscrow
+	TfMPTSetCanTrade                   = mpttx.MPTokenIssuanceSetFlagSetCanTrade
+	TfMPTSetCanTransfer                = mpttx.MPTokenIssuanceSetFlagSetCanTransfer
+	TfMPTSetCanClawback                = mpttx.MPTokenIssuanceSetFlagSetCanClawback
+	TfMPTSetCanHoldConfidentialBalance = mpttx.MPTokenIssuanceSetFlagSetCanHoldConfidentialBalance
 
 	// MPTokenAuthorize flags
 	TfMPTUnauthorize = mpttx.MPTokenAuthorizeFlagUnauthorize
 
-	// MPTokenIssuanceCreate MutableFlags (DynamicMPT)
-	TmfMPTCanMutateCanLock     = mpttx.TmfMPTCanMutateCanLock
-	TmfMPTCanMutateRequireAuth = mpttx.TmfMPTCanMutateRequireAuth
-	TmfMPTCanMutateCanEscrow   = mpttx.TmfMPTCanMutateCanEscrow
-	TmfMPTCanMutateCanTrade    = mpttx.TmfMPTCanMutateCanTrade
-	TmfMPTCanMutateCanTransfer = mpttx.TmfMPTCanMutateCanTransfer
-	TmfMPTCanMutateCanClawback = mpttx.TmfMPTCanMutateCanClawback
-	TmfMPTCanMutateMetadata    = mpttx.TmfMPTCanMutateMetadata
-	TmfMPTCanMutateTransferFee = mpttx.TmfMPTCanMutateTransferFee
-
-	// MPTokenIssuanceSet MutableFlags (DynamicMPT)
-	TmfMPTSetCanLock       = mpttx.TmfMPTSetCanLock
-	TmfMPTClearCanLock     = mpttx.TmfMPTClearCanLock
-	TmfMPTSetRequireAuth   = mpttx.TmfMPTSetRequireAuth
-	TmfMPTClearRequireAuth = mpttx.TmfMPTClearRequireAuth
-	TmfMPTSetCanEscrow     = mpttx.TmfMPTSetCanEscrow
-	TmfMPTClearCanEscrow   = mpttx.TmfMPTClearCanEscrow
-	TmfMPTSetCanTrade      = mpttx.TmfMPTSetCanTrade
-	TmfMPTClearCanTrade    = mpttx.TmfMPTClearCanTrade
-	TmfMPTSetCanTransfer   = mpttx.TmfMPTSetCanTransfer
-	TmfMPTClearCanTransfer = mpttx.TmfMPTClearCanTransfer
-	TmfMPTSetCanClawback   = mpttx.TmfMPTSetCanClawback
-	TmfMPTClearCanClawback = mpttx.TmfMPTClearCanClawback
+	TifMPTCanLock                    = mpttx.TifMPTCanLock
+	TifMPTRequireAuth                = mpttx.TifMPTRequireAuth
+	TifMPTCanEscrow                  = mpttx.TifMPTCanEscrow
+	TifMPTCanTrade                   = mpttx.TifMPTCanTrade
+	TifMPTCanTransfer                = mpttx.TifMPTCanTransfer
+	TifMPTCanClawback                = mpttx.TifMPTCanClawback
+	TifMPTCanHoldConfidentialBalance = mpttx.TifMPTCanHoldConfidentialBalance
+	TifMPTMetadata                   = mpttx.TifMPTMetadata
+	TifMPTTransferFee                = mpttx.TifMPTTransferFee
 
 	// Payment flags for MPT payment tests
 	TfNoRippleDirect = payment.PaymentFlagNoDirectRipple

@@ -330,7 +330,7 @@ var txTemplates = map[Type][]templateField{
 		{name: "MaximumAmount", style: soeOPTIONAL},
 		{name: "MPTokenMetadata", style: soeOPTIONAL},
 		{name: "DomainID", style: soeOPTIONAL},
-		{name: "MutableFlags", style: soeOPTIONAL},
+		{name: "ImmutableFlags", style: soeOPTIONAL},
 	},
 	TypeMPTokenIssuanceDestroy: {
 		{name: "MPTokenIssuanceID", style: soeREQUIRED},
@@ -341,7 +341,7 @@ var txTemplates = map[Type][]templateField{
 		{name: "DomainID", style: soeOPTIONAL},
 		{name: "MPTokenMetadata", style: soeOPTIONAL},
 		{name: "TransferFee", style: soeOPTIONAL},
-		{name: "MutableFlags", style: soeOPTIONAL},
+		{name: "ImmutableFlags", style: soeOPTIONAL},
 	},
 	TypeMPTokenAuthorize: {
 		{name: "MPTokenIssuanceID", style: soeREQUIRED},

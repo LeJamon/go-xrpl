@@ -140,6 +140,7 @@ func parseTaggedStyles(t *testing.T, data []byte) map[string]map[string]Style {
 			continue
 		}
 		if match := taggedStyleField.FindStringSubmatch(line); match != nil {
+			fieldName := v32SchemaFieldName(match[1])
 			var style Style
 			switch strings.ToLower(match[2]) {
 			case "required":
@@ -151,7 +152,7 @@ func parseTaggedStyles(t *testing.T, data []byte) map[string]map[string]Style {
 			default:
 				t.Fatalf("unknown style %q", match[2])
 			}
-			out[entryName][match[1]] = style
+			out[entryName][fieldName] = style
 			continue
 		}
 		if strings.Contains(line, "}))") {

@@ -337,7 +337,7 @@ func TestMPTokenIssuanceSetValidation(t *testing.T) {
 			name: "invalid flags - temINVALID_FLAG",
 			tx: func() *MPTokenIssuanceSet {
 				tx := NewMPTokenIssuanceSet("rAlice", "000000000000000000000000000000000000000000000001")
-				tx.Flags = ptrUint32AccountSet(0x00000004) // Invalid flag
+				tx.Flags = ptrUint32AccountSet(0x00000200) // Invalid flag
 				return tx
 			}(),
 			expectError: true,
@@ -359,8 +359,8 @@ func TestMPTokenIssuanceSetValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Run the full preflight body: the flags mask and IssuanceID checks
 			// live in Validate(), the DomainID/Holder and lock/unlock shape checks
-			// in PreflightRules(). allRules() excludes SingleAssetVault (and
-			// DynamicMPT is unsupported), so the no-op check does not disturb
+			// in PreflightRules(). allRules() excludes SingleAssetVault and
+			// DynamicMPT, so the no-op check does not disturb
 			// these cases.
 			err := preflightMPTSet(tt.tx, allRules())
 			if tt.expectError {
@@ -391,7 +391,7 @@ func TestMPTokenIssuanceSetPreflightOrder(t *testing.T) {
 	// Finding: isMutate temDISABLED (DynamicMPT off) wins over DomainID+Holder.
 	t.Run("mutation temDISABLED beats DomainID+Holder", func(t *testing.T) {
 		m := NewMPTokenIssuanceSet("rAlice", validID)
-		m.MutableFlags = ptrUint32AccountSet(TmfMPTSetCanLock) // mutation → isMutate
+		m.SetFlags(MPTokenIssuanceSetFlagSetCanLock)
 		dom := someDomain
 		m.DomainID = &dom
 		m.hasDomainID = true
@@ -405,7 +405,7 @@ func TestMPTokenIssuanceSetPreflightOrder(t *testing.T) {
 	// (PreflightRules), so an undefined flag bit wins over temMALFORMED.
 	t.Run("flags mask beats DomainID+Holder", func(t *testing.T) {
 		m := NewMPTokenIssuanceSet("rAlice", validID)
-		m.SetFlags(0x00000004) // undefined bit → temINVALID_FLAG
+		m.SetFlags(0x00000200) // undefined bit → temINVALID_FLAG
 		dom := someDomain
 		m.DomainID = &dom
 		m.hasDomainID = true
@@ -427,7 +427,7 @@ func TestMPTokenIssuanceSetPreflightOrder(t *testing.T) {
 }
 
 // allRules mirrors rippled's testSetValidation(all - featureSingleAssetVault):
-// every supported amendment except SingleAssetVault, so the SAV/DynamicMPT
+// every supported amendment except SingleAssetVault and DynamicMPT, so their
 // "changes nothing" no-op rejection does not fire and the legacy Set-validation
 // shape checks are exercised in isolation. The SAV-on no-op behaviour has its
 // own coverage via a rules set that enables SingleAssetVault.
@@ -435,6 +435,7 @@ func allRules() *amendment.Rules {
 	return amendment.NewRulesBuilder().
 		FromPreset(amendment.PresetAllSupported).
 		DisableByName("SingleAssetVault").
+		DisableByName("DynamicMPT").
 		Build()
 }
 

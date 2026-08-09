@@ -78,6 +78,23 @@ func TestSponsorDefinitions(t *testing.T) {
 	}
 }
 
+func TestImmutableFlagsDefinition(t *testing.T) {
+	loadDefinitions()
+	field, ok := definitions.fields["ImmutableFlags"]
+	require.True(t, ok)
+	require.Equal(t, &FieldInfo{
+		Nth:            53,
+		IsVLEncoded:    false,
+		IsSerialized:   true,
+		IsSigningField: true,
+		Type:           "UInt32",
+	}, field.FieldInfo)
+	require.Equal(t, &FieldHeader{TypeCode: 2, FieldCode: 53}, field.FieldHeader)
+	require.Equal(t, int32(131125), field.Ordinal)
+	require.Equal(t, "ImmutableFlags", definitions.fieldIDNameMap[*field.FieldHeader])
+	require.NotContains(t, definitions.fields, "MutableFlags")
+}
+
 // Helper functions to create and test ordinals.
 // func CreateOrdinal(fh FieldHeader) int32 {
 // 	return fh.TypeCode<<16 | fh.FieldCode

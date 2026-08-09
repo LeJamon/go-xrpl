@@ -285,7 +285,7 @@ var formats = map[string][]FormatField{
 		{"PreviousTxnID", 0},
 		{"PreviousTxnLgrSeq", 0},
 		{"DomainID", 1},
-		{"MutableFlags", 2},
+		{"ImmutableFlags", 2},
 		{"ReferenceHolding", 1},
 	},
 	"MPToken": {
