@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
@@ -144,6 +145,16 @@ func TestManifest_RejectsFieldsOutsideManifestFormat(t *testing.T) {
 			require.ErrorContains(t, err, "unexpected field "+field)
 		})
 	}
+}
+
+func TestManifest_HashUsesManifestDomain(t *testing.T) {
+	wire, _, _ := buildManifest(t, 1, false, 0x15, 0x16)
+	parsed, err := manifest.Deserialize(wire)
+	require.NoError(t, err)
+
+	want := sha512half.Sum(protocol.HashPrefixManifest().Bytes(), wire)
+	require.Equal(t, want, parsed.Hash())
+	require.NotEqual(t, sha512half.Sum(wire), parsed.Hash())
 }
 
 func TestManifest_RejectsOversizedPayloadBeforeDecode(t *testing.T) {

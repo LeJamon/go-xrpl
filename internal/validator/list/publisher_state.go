@@ -318,6 +318,11 @@ func (a *Aggregator) applyAcceptedLocked(s *publisherState, blob *blobJSON, sign
 
 	keys := a.extractValidatorKeys(blob, "validator list: skipping invalid validator entry")
 	s.Validators = keys
+	if a.validatorManifests != nil {
+		for _, key := range keys {
+			a.validatorManifests.PromoteToTrusted(key)
+		}
+	}
 	a.applyEmbeddedManifestsLocked(s, blob.Validators)
 }
 
@@ -536,6 +541,11 @@ func (a *Aggregator) promotePendingSequenceLocked(s *publisherState, sequence ui
 		s.Status = StatusExpired
 		s.Validators = nil
 	} else {
+		if a.validatorManifests != nil {
+			for _, key := range s.Validators {
+				a.validatorManifests.PromoteToTrusted(key)
+			}
+		}
 		a.applyEmbeddedPendingManifestsLocked(s, chosen.EmbeddedManifests)
 	}
 	delete(s.Remaining, sequence)

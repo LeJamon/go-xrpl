@@ -525,9 +525,13 @@ func NewFromConfig(
 	router.SetAcqInbox(overlay.LedgerDataMessages())
 	router.SetManifestInbox(overlay.ManifestMessages())
 	router.SetManifestCache(validatorManifests, overlay)
-	router.SetManifestAdmission(func(master [33]byte) bool {
+	router.SetManifestUntrustedLimit(appCfg.Overlay.EffectiveMaxUntrustedCount())
+	router.SetManifestClassifier(func(master [33]byte) manifest.ManifestRateLimitCapPolicy {
 		nodeID := consensus.CalcNodeID(master)
-		return adaptor.IsTrusted(nodeID) || adaptor.IsListed(nodeID)
+		if adaptor.IsTrusted(nodeID) || adaptor.IsListed(nodeID) {
+			return manifest.Uncapped
+		}
+		return manifest.Capped
 	})
 	router.setPeerSessionView(overlay)
 	router.SetMinimumOnlineFloor(floor)

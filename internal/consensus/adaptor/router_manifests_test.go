@@ -284,34 +284,6 @@ func TestRouter_HandleManifests_InvalidDoesNotStore(t *testing.T) {
 	}
 }
 
-func TestRouter_HandleManifests_AdmissionBoundsDurableCache(t *testing.T) {
-	sender := &fakeManifestSender{}
-	router, cache, _ := routerWithCache(t, sender, 0, 0)
-	wire := buildWireManifest(t, 1, 0x41, 0x42)
-	parsed, err := manifest.Deserialize(wire)
-	require.NoError(t, err)
-	msg := &peermanagement.InboundMessage{
-		PeerID: 7,
-		Type:   message.TypeManifests,
-		Payload: encodePayload(t, &message.Manifests{List: []message.Manifest{{
-			STObject: wire,
-		}}}),
-	}
-
-	router.SetManifestAdmission(func([33]byte) bool { return false })
-	require.True(t, router.handleManifests(msg))
-	_, stored := cache.GetManifest(parsed.MasterKey())
-	require.False(t, stored)
-	require.Empty(t, sender.bcastsExcept)
-
-	router.SetManifestAdmission(func(master [33]byte) bool { return master == parsed.MasterKey() })
-	require.True(t, router.handleManifests(msg))
-	storedWire, stored := cache.GetManifest(parsed.MasterKey())
-	require.True(t, stored)
-	require.Equal(t, wire, storedWire)
-	require.Len(t, sender.bcastsExcept, 1)
-}
-
 func TestRouter_HandleManifests_ChargesInvalidEntriesOncePerFrame(t *testing.T) {
 	router, sender := makeRouterWithBadDataRecorder(t)
 	router.SetManifestCache(manifest.NewCache(), nil)
@@ -411,6 +383,49 @@ func TestRouter_ManifestAcceptedAfterPeerRemovalCompletesBootstrap(t *testing.T)
 	case <-time.After(5 * time.Second):
 		t.Fatal("bootstrap did not continue after disconnected manifest was accepted")
 	}
+}
+
+func TestRouter_HandleManifests_RelaysAcceptedEntriesToAllPeers(t *testing.T) {
+	sender := &fakeManifestSender{}
+	router, _, _ := routerWithCache(t, sender, 0, 0)
+	badData := &badDataRecordingSender{}
+	router.gossip = badData
+
+	const acceptedCount = 101
+	wires := make([][]byte, 0, acceptedCount)
+	list := make([]message.Manifest, 0, acceptedCount+2)
+	for i := range acceptedCount {
+		wire := buildWireManifest(t, 1, byte(i), byte(i+acceptedCount))
+		wires = append(wires, wire)
+		list = append(list, message.Manifest{STObject: wire})
+	}
+	list = append(list,
+		message.Manifest{STObject: wires[0]},
+		message.Manifest{STObject: []byte{0x01}},
+	)
+
+	router.handleMessage(&peermanagement.InboundMessage{
+		PeerID:  7,
+		Type:    message.TypeManifests,
+		Payload: encodePayload(t, &message.Manifests{List: list}),
+	})
+
+	sender.mu.Lock()
+	broadcasts := append([][]byte(nil), sender.bcasts...)
+	broadcastsExcept := append([]broadcastExceptCall(nil), sender.bcastsExcept...)
+	sender.mu.Unlock()
+	require.Len(t, broadcasts, 2, "collections above the internal frame cap must relay as one bounded sequence")
+	require.Empty(t, broadcastsExcept)
+
+	var got [][]byte
+	for _, frame := range broadcasts {
+		got = append(got, frameToManifestBytes(t, frame)...)
+	}
+	require.Len(t, got, acceptedCount)
+	for i := range wires {
+		require.Equal(t, wires[i], got[i], "accepted manifests must retain input order and bytes")
+	}
+	require.Equal(t, []badDataCall{{peerID: 7, reason: "manifest-invalid"}}, badData.getBadDataCalls())
 }
 
 func TestRouter_ManifestWorkerDoesNotBlockDispatch(t *testing.T) {
@@ -562,7 +577,7 @@ func TestRouter_ManifestWorkerJoinsOnShutdown(t *testing.T) {
 	_, ok := cache.GetSigningKey(queuedManifest.MasterKey())
 	require.True(t, ok, "shutdown must drain queued manifest jobs")
 	sender.mu.Lock()
-	broadcasts := len(sender.bcastsExcept)
+	broadcasts := len(sender.bcasts)
 	sender.mu.Unlock()
 	require.Equal(t, 2, broadcasts, "shutdown must relay active and queued accepted manifests")
 }

@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/rcl"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
@@ -106,42 +105,7 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 		return false
 	}
 
-	accepted := make([][]byte, 0, manifestFrameMaxEntries)
-	valid := false
-	badManifest := false
-	count, err := message.WalkManifests(msg.Payload, func(wire []byte) {
-		hash := sha512half.Sum(wire)
-		if r.messageSeen != nil && r.messageSeen.seenRecently(hash) {
-			valid = true
-			return
-		}
-		parsed, err := manifest.Deserialize(wire)
-		if err != nil {
-			r.logger.Debug("manifest parse failed",
-				"error", err, "peer", msg.PeerID)
-			badManifest = true
-			return
-		}
-		if r.manifestAdmission != nil && !r.manifestAdmission(parsed.MasterKey()) {
-			valid = true
-			return
-		}
-		switch d := r.manifests.ApplyManifest(parsed, manifest.Uncapped); d {
-		case manifest.Accepted:
-			valid = true
-			accepted = append(accepted, wire)
-			if r.messageSeen != nil {
-				r.messageSeen.observe(hash)
-			}
-		case manifest.Invalid, manifest.BadMasterKey, manifest.BadEphemeralKey:
-			badManifest = true
-		case manifest.Stale:
-			valid = true
-			if r.messageSeen != nil {
-				r.messageSeen.observe(hash)
-			}
-		}
-	})
+	count, err := message.WalkManifests(msg.Payload, nil)
 	if err != nil {
 		r.logger.Warn("failed to decode manifests frame", "error", err, "peer", msg.PeerID)
 		reason := "manifests-decode"
@@ -160,14 +124,63 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 	if count > manifestFrameMaxEntries && !msg.SelectPeerCharge(resource.FeeModerateBurdenPeer(), "manifests-oversize") {
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), "manifests-oversize")
 	}
+
+	accepted := make([][]byte, 0, min(count, manifestFrameMaxEntries))
+	valid := false
+	badManifest := false
+	untrusted := 0
+	skippedUntrusted := false
+	_, _ = message.WalkManifests(msg.Payload, func(wire []byte) {
+		parsed, err := manifest.Deserialize(wire)
+		if err != nil {
+			r.logger.Debug("manifest parse failed",
+				"error", err, "peer", msg.PeerID)
+			badManifest = true
+			return
+		}
+		hash := parsed.Hash()
+		policy := manifest.Uncapped
+		if r.manifestClassify != nil {
+			policy = r.manifestClassify(parsed.MasterKey())
+		}
+		if policy != manifest.Uncapped {
+			if untrusted >= r.manifestUntrustedLimit {
+				skippedUntrusted = true
+				valid = true
+				return
+			}
+			untrusted++
+			policy = manifest.Capped
+		}
+		switch d := r.manifests.ApplyManifest(parsed, policy); d {
+		case manifest.Accepted:
+			valid = true
+			accepted = append(accepted, wire)
+			if r.messageSeen != nil {
+				r.messageSeen.observe(hash)
+			}
+		case manifest.Invalid, manifest.BadMasterKey, manifest.BadEphemeralKey:
+			badManifest = true
+		case manifest.Stale:
+			valid = true
+			if r.messageSeen != nil {
+				r.messageSeen.observe(hash)
+			}
+		case manifest.UntrustedCapacity:
+			valid = true
+		}
+	})
+	if skippedUntrusted && !msg.SelectPeerCharge(resource.FeeMalformedRequest(), "manifests-untrusted-limit") {
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "manifests-untrusted-limit")
+	}
 	if badManifest {
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), "manifest-invalid")
 	}
-	r.relayManifests(msg.PeerID, accepted)
+	r.relayManifests(accepted)
 	return valid
 }
 
-func (r *Router) relayManifests(source peermanagement.PeerID, serialized [][]byte) {
+func (r *Router) relayManifests(serialized [][]byte) {
 	if len(serialized) == 0 {
 		return
 	}
@@ -180,7 +193,7 @@ func (r *Router) relayManifests(source peermanagement.PeerID, serialized [][]byt
 	if sender == nil {
 		return
 	}
-	if err := sender.BroadcastManifestFramesExcept(source, frames); err != nil {
+	if err := sender.BroadcastManifestFrames(frames); err != nil {
 		r.logger.Warn("failed to broadcast manifest relay frame", "error", err)
 	}
 }

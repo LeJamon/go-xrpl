@@ -148,8 +148,16 @@ type Router struct {
 	// Components bootstrap so the router can apply inbound TMManifests
 	// frames and — on Accepted — relay them to other peers.
 	// May be nil in tests that don't exercise the manifest path.
-	manifests            *manifest.Cache
-	manifestAdmission    func([33]byte) bool
+	manifests *manifest.Cache
+	// manifestClassify resolves a parsed master key to the cache admission
+	// policy. Production classifies listed/trusted keys as Uncapped and all
+	// others as Capped before applying a manifest.
+	manifestClassify       func([33]byte) manifest.ManifestRateLimitCapPolicy
+	manifestUntrustedLimit int
+	manifestLimitSet       bool
+	// manifestShuffle is injectable so snapshot tests can assert selection
+	// deterministically. A nil function uses the production random shuffle.
+	manifestShuffle      func([][]byte)
 	manifestWorkerCancel context.CancelFunc
 	manifestWorkerDone   chan struct{}
 
@@ -179,10 +187,13 @@ type Router struct {
 	// manifestFrameSeq is a valid cursor (a fresh cache starts at 0),
 	// so we need an explicit "have we ever built?" flag rather than
 	// using the zero value as the sentinel.
-	manifestFrameMu    sync.Mutex
-	manifestFrames     [][]byte
-	manifestFrameSeq   uint64
-	manifestFrameBuilt bool
+	manifestFrameMu     sync.Mutex
+	manifestFrames      [][]byte
+	manifestFrameHashes [][32]byte
+	manifestFrameSeq    uint64
+	manifestFrameTrust  [32]byte
+	manifestFrameLimit  int
+	manifestFrameBuilt  bool
 
 	// In-flight tx-set acquisition state keyed by tx-set ID.
 	// Each entry's SHAMap accumulates across multiple TMLedgerData
@@ -389,25 +400,26 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 		network.serve = noop
 	}
 	r := &Router{
-		engine:             engine,
-		adaptor:            adaptor,
-		gossip:             network.gossip,
-		txSetNet:           network.txSet,
-		acquisition:        network.acquisition,
-		serve:              network.serve,
-		inbox:              inbox,
-		logger:             logger,
-		peerStates:         make(map[peermanagement.PeerID]*peerLedgerState),
-		peerDisconnectWake: make(chan struct{}, 1),
-		peerConnectWake:    make(chan struct{}, 1),
-		replayer:           inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
-		fetchTracker:       inbound.NewTracker(),
-		fetchPacks:         newFetchPackCache(),
-		messageSeen:        newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
-		txSetAcquire:       make(map[consensus.TxSetID]*txSetAcquireState),
-		txSetRetryKnobs:    defaultTxSetRetryKnobs(),
-		seqHash:            make(map[uint32]ledgerHashEntry),
-		lifecycleCtx:       context.Background(),
+		engine:                 engine,
+		adaptor:                adaptor,
+		gossip:                 network.gossip,
+		txSetNet:               network.txSet,
+		acquisition:            network.acquisition,
+		serve:                  network.serve,
+		inbox:                  inbox,
+		logger:                 logger,
+		peerStates:             make(map[peermanagement.PeerID]*peerLedgerState),
+		peerDisconnectWake:     make(chan struct{}, 1),
+		peerConnectWake:        make(chan struct{}, 1),
+		replayer:               inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
+		fetchTracker:           inbound.NewTracker(),
+		fetchPacks:             newFetchPackCache(),
+		messageSeen:            newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
+		manifestUntrustedLimit: manifest.DefaultMaxUntrustedCount,
+		txSetAcquire:           make(map[consensus.TxSetID]*txSetAcquireState),
+		txSetRetryKnobs:        defaultTxSetRetryKnobs(),
+		seqHash:                make(map[uint32]ledgerHashEntry),
+		lifecycleCtx:           context.Background(),
 	}
 	// Wire the stash → acquisition hook so quorum decisions on unknown
 	// ledgers don't sit silently in pendingLedgerValidations.
@@ -556,10 +568,33 @@ func (r *Router) belowFloor(seq uint32) bool {
 func (r *Router) SetManifestCache(cache *manifest.Cache, overlay *peermanagement.Overlay) {
 	r.manifests = cache
 	r.overlay = overlay
+	if cache != nil && !r.manifestLimitSet {
+		r.manifestUntrustedLimit = cache.MaxUntrustedCount()
+	}
 }
 
-func (r *Router) SetManifestAdmission(admit func([33]byte) bool) {
-	r.manifestAdmission = admit
+// SetManifestClassifier installs the listed/trusted resolver used for
+// inbound admission and outbound snapshot selection. A nil classifier keeps
+// the standalone/test default of treating every manifest as uncapped.
+func (r *Router) SetManifestClassifier(classify func([33]byte) manifest.ManifestRateLimitCapPolicy) {
+	r.manifestClassify = classify
+}
+
+// SetManifestUntrustedLimit sets the per-message unlisted-manifest budget and
+// the outbound snapshot's unlisted selection limit. It is independent of the
+// wire frame's entry-count/byte batching limits.
+func (r *Router) SetManifestUntrustedLimit(limit int) {
+	if limit < 0 {
+		limit = 0
+	}
+	r.manifestUntrustedLimit = limit
+	r.manifestLimitSet = true
+}
+
+// SetManifestShuffle overrides snapshot shuffling. Passing nil restores the
+// production random shuffle.
+func (r *Router) SetManifestShuffle(shuffle func([][]byte)) {
+	r.manifestShuffle = shuffle
 }
 
 func (r *Router) setPeerSessionView(view peerSessionView) {

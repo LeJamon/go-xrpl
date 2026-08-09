@@ -173,6 +173,75 @@ func TestAggregator_ApplyList_Accepted_SinglePublisher_SingleValidator(t *testin
 	changeMu.Unlock()
 }
 
+func TestAggregator_PromotesListedValidatorManifest(t *testing.T) {
+	pub := newPublisher(t, 0x06, 0x07)
+	otherPublisher := newPublisher(t, 0x08, 0x09)
+	validatorMaster := derivedValidatorKey(0x18)
+	_, validatorMasterPriv := deterministicKey(0x18)
+	validatorEphemeral32, validatorEphemeralPriv := deterministicKey(0x19)
+	var validatorEphemeral [33]byte
+	copy(validatorEphemeral[:], append([]byte{0xed}, validatorEphemeral32...))
+
+	validatorManifests := manifest.NewCache(1)
+	validatorRaw := buildManifest(t, validatorMaster, validatorMasterPriv, validatorEphemeral, validatorEphemeralPriv, 1)
+	validator, err := manifest.Deserialize(validatorRaw)
+	require.NoError(t, err)
+	require.Equal(t, manifest.Accepted, validatorManifests.ApplyManifest(validator, manifest.Capped))
+	require.Equal(t, 1, validatorManifests.UntrustedCount())
+
+	agg, err := list.New(list.Config{
+		PublisherKeys: []list.PublisherKey{
+			list.PublisherKey(pub.masterPub),
+			list.PublisherKey(otherPublisher.masterPub),
+		},
+		Threshold:          2,
+		ValidatorManifests: validatorManifests,
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
+	})
+	require.NoError(t, err)
+
+	now := fixedClock()()
+	blob, sig := pub.signList(t, 1, 0, now.Add(24*time.Hour).Unix(), [][33]byte{validatorMaster})
+	disposition, _, _ := agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://")
+	require.Equal(t, list.Accepted, disposition)
+	require.True(t, agg.IsMasterListed(validatorMaster))
+	require.False(t, validatorManifests.IsUntrusted(validatorMaster))
+	require.Equal(t, 0, validatorManifests.UntrustedCount())
+}
+
+func TestAggregator_ExpiredListPromotesValidatorManifest(t *testing.T) {
+	pub := newPublisher(t, 0x06, 0x07)
+	validatorMaster := derivedValidatorKey(0x18)
+	_, validatorMasterPriv := deterministicKey(0x18)
+	validatorEphemeral32, validatorEphemeralPriv := deterministicKey(0x19)
+	var validatorEphemeral [33]byte
+	copy(validatorEphemeral[:], append([]byte{0xed}, validatorEphemeral32...))
+
+	validatorManifests := manifest.NewCache(1)
+	validatorRaw := buildManifest(t, validatorMaster, validatorMasterPriv, validatorEphemeral, validatorEphemeralPriv, 1)
+	validator, err := manifest.Deserialize(validatorRaw)
+	require.NoError(t, err)
+	require.Equal(t, manifest.Accepted, validatorManifests.ApplyManifest(validator, manifest.Capped))
+	require.Equal(t, 1, validatorManifests.UntrustedCount())
+
+	agg, err := list.New(list.Config{
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: validatorManifests,
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
+	})
+	require.NoError(t, err)
+
+	now := fixedClock()()
+	blob, sig := pub.signList(t, 1, 0, now.Add(-time.Hour).Unix(), [][33]byte{validatorMaster})
+	disposition, _, _ := agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://")
+	require.Equal(t, list.Expired, disposition)
+	require.False(t, validatorManifests.IsUntrusted(validatorMaster))
+	require.Equal(t, 0, validatorManifests.UntrustedCount())
+}
+
 func TestAggregator_ApplyList_Threshold_TwoOfThree(t *testing.T) {
 	pub1 := newPublisher(t, 0x01, 0x02)
 	pub2 := newPublisher(t, 0x03, 0x04)
