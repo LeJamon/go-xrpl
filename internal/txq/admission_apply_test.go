@@ -37,6 +37,10 @@ func (m *seqTx) GetRawBytes() []byte              { return []byte{byte(m.seq)} }
 func (m *seqTx) SetRawBytes([]byte)               {}
 func (m *seqTx) RequiredAmendments() [][32]byte   { return nil }
 
+type batchSeqTx struct{ *seqTx }
+
+func (m *batchSeqTx) TxType() tx.Type { return tx.TypeBatch }
+
 // stubApplyCtx is a configurable txq.ApplyContext for admission tests. The
 // preflight/preclaim/apply results are dialled in per test so we can pin which
 // admission path rejects (or queues) a submission.
@@ -646,6 +650,44 @@ func TestApplyFeeSponsoredTransactionCannotQueueButMayApplyDirectly(t *testing.T
 		result := q.Apply(ctx, transaction, [32]byte{0xF1}, account)
 		require.Equal(t, ter.TerQUEUED, result.Result)
 		require.True(t, result.Queued)
+	})
+}
+
+func TestApplyBatchCannotQueueButMayApplyDirectly(t *testing.T) {
+	account := [20]byte{9}
+
+	t.Run("cannot queue", func(t *testing.T) {
+		q := New(makeAdmissionConfig())
+		ctx := &stubApplyCtx{
+			seq:        5,
+			balance:    1_000_000_000,
+			exists:     true,
+			baseFee:    10,
+			txInLedger: 100,
+		}
+
+		result := q.Apply(ctx, &batchSeqTx{seqTx: &seqTx{seq: 5, fee: "10"}}, [32]byte{0xF2}, account)
+		require.Equal(t, ter.TelCAN_NOT_QUEUE, result.Result)
+		require.False(t, result.Applied)
+		require.False(t, result.Queued)
+		require.Zero(t, q.Size())
+	})
+
+	t.Run("may apply directly", func(t *testing.T) {
+		q := New(makeAdmissionConfig())
+		ctx := &stubApplyCtx{
+			seq:      5,
+			balance:  1_000_000_000,
+			exists:   true,
+			baseFee:  10,
+			applyRes: ter.TesSUCCESS,
+			applied:  true,
+		}
+
+		result := q.Apply(ctx, &batchSeqTx{seqTx: &seqTx{seq: 5, fee: "10"}}, [32]byte{0xF3}, account)
+		require.Equal(t, ter.TesSUCCESS, result.Result)
+		require.True(t, result.Applied)
+		require.False(t, result.Queued)
 	})
 }
 

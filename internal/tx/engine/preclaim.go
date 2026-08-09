@@ -346,6 +346,9 @@ func (e *Engine) checkPermission(tx txcore.Transaction, common *txcore.Common, a
 // SLE, but never the sponsor-account existence check.
 func (e *Engine) checkSponsor(common *txcore.Common) ter.Result {
 	if common.Sponsor == "" {
+		if common.HasField("Sponsor") {
+			return ter.TerNO_ACCOUNT
+		}
 		return ter.TesSUCCESS
 	}
 	if common.Delegate != "" && common.SponsorFlags != nil &&
@@ -415,7 +418,7 @@ func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common) ter.Res
 		// have already failed crypto verification in preflight.
 		if !(e.config.SkipSignatureVerification &&
 			sponsor.SigningPubKey == "" && len(sponsor.Signers) == 0) {
-			if result := e.checkPseudoAccount(common.Sponsor); result != ter.TesSUCCESS {
+			if result := e.rejectPseudoAccount(common.Sponsor); result != ter.TesSUCCESS {
 				return result
 			}
 			if len(sponsor.Signers) > 0 {
@@ -448,15 +451,18 @@ func (e *Engine) checkPseudoAccountSign(common *txcore.Common) ter.Result {
 }
 
 func (e *Engine) checkPseudoAccount(idAccount string) ter.Result {
-	// Under LendingProtocol a pseudo-account (AMM / Vault / LoanBroker) can never
-	// authorize a transaction: rippled Transactor::checkSign returns tefBAD_AUTH
-	// for any tx signed by a pseudo-account, at the top of the signature stage.
-	if e.rules().Enabled(amendment.FeatureLendingProtocol) {
-		if idAccountID, err := state.DecodeAccountID(idAccount); err == nil {
-			if data, rerr := e.view.Read(keylet.Account(idAccountID)); rerr == nil && data != nil {
-				if ar, perr := state.ParseAccountRoot(data); perr == nil && ar.IsPseudoAccount() {
-					return ter.TefBAD_AUTH
-				}
+	if !e.rules().Enabled(amendment.FeatureLendingProtocol) &&
+		!e.rules().Enabled(amendment.FeatureBatch) {
+		return ter.TesSUCCESS
+	}
+	return e.rejectPseudoAccount(idAccount)
+}
+
+func (e *Engine) rejectPseudoAccount(idAccount string) ter.Result {
+	if idAccountID, err := state.DecodeAccountID(idAccount); err == nil {
+		if data, rerr := e.view.Read(keylet.Account(idAccountID)); rerr == nil && data != nil {
+			if ar, perr := state.ParseAccountRoot(data); perr == nil && ar.IsPseudoAccount() {
+				return ter.TefBAD_AUTH
 			}
 		}
 	}

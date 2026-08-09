@@ -598,6 +598,22 @@ func TestCalculateMinimumFee_MultiSignBatchSigner(t *testing.T) {
 	require.Equal(t, uint64(70), b.CalculateMinimumFee(nil, tx.EngineConfig{BaseFee: 10}))
 }
 
+func TestBatchRequiredSignersUseInnerAuthorizers(t *testing.T) {
+	t.Run("delegate authorizes outer account inner", func(t *testing.T) {
+		b := NewBatch(testOuter)
+		inner := makeTestPayment()
+		inner.GetCommon().Delegate = testSigner2
+		b.AddInnerTransaction(inner)
+		b.AddInnerTransaction(makeTestPayment())
+		b.SetFlags(BatchFlagAllOrNothing)
+
+		require.ErrorIs(t, b.Validate(), ErrBatchMissingSigner)
+
+		b.BatchSigners = []BatchSigner{{BatchSigner: BatchSignerData{Account: testSigner2}}}
+		require.NoError(t, b.Validate())
+	})
+}
+
 // TestCalculateMinimumFee_MultiSignedInner pins
 // Batch.cpp:87-100 — inner transactions count their own per-tx
 // calculateBaseFee, so a multi-signed inner pays (1+n) * baseFee

@@ -781,6 +781,33 @@ func TestSponsorSignatureStructuralFailures(t *testing.T) {
 	}
 }
 
+func TestSponsorSignatureRejectsPseudoAccount(t *testing.T) {
+	env, source, _, sponsor, _ := sponsorEnv(t)
+	setPseudoAccount(t, env, sponsor)
+
+	transaction := accounttx.NewAccountSet(source.Address)
+	transaction.Fee = "10"
+	transaction.Sponsor = sponsor.Address
+	flags := tx.SpfSponsorFee
+	transaction.SponsorFlags = &flags
+	attachSponsorSignature(t, env, transaction, source, sponsor)
+
+	require.Equal(t, "tefBAD_AUTH", env.SubmitSigned(transaction).Code)
+}
+
+func TestPresentEmptySponsorIsNotIgnored(t *testing.T) {
+	env, source, _, _, _ := sponsorEnv(t)
+	transaction := accounttx.NewAccountSet(source.Address)
+	flags := tx.SpfSponsorFee
+	transaction.SponsorFlags = &flags
+	transaction.SetPresentFields(map[string]bool{
+		"Sponsor":      true,
+		"SponsorFlags": true,
+	})
+
+	require.Equal(t, "terNO_ACCOUNT", env.Submit(transaction).Code)
+}
+
 func TestSponsorMultisignAuthorizationAndFeeUnits(t *testing.T) {
 	env, source, _, sponsor, _ := sponsorEnv(t)
 	signer1 := jtx.NewAccount("sponsor-multisigner-1")

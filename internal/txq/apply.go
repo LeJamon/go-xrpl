@@ -190,6 +190,9 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	if ctx.GetApplyFlags()&tx.TapFAIL_HARD != 0 {
 		return ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
 	}
+	if txn.TxType() == tx.TypeBatch {
+		return ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
+	}
 	if common.Delegate != "" {
 		return ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
 	}
