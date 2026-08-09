@@ -129,19 +129,19 @@ func TestRouter_HandleManifests_AppliesAccepted(t *testing.T) {
 	// can't assume immediate visibility.
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		if _, ok := cache.GetSigningKey(parsed.MasterKey); ok {
+		if _, ok := cache.GetSigningKey(parsed.MasterKey()); ok {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if _, ok := cache.GetSigningKey(parsed.MasterKey); !ok {
+	if _, ok := cache.GetSigningKey(parsed.MasterKey()); !ok {
 		t.Fatal("router did not apply manifest to cache")
 	}
-	stored, ok := cache.GetManifest(parsed.MasterKey)
+	stored, ok := cache.GetManifest(parsed.MasterKey())
 	if !ok || !bytes.Equal(stored, serialized) {
 		t.Fatalf("stored manifest bytes mismatch: ok=%v", ok)
 	}
-	if got, _ := cache.GetSequence(parsed.MasterKey); got != 3 {
+	if got, _ := cache.GetSequence(parsed.MasterKey()); got != 3 {
 		t.Fatalf("stored sequence: got %d want 3", got)
 	}
 }
@@ -190,7 +190,7 @@ func TestRouter_ProcessManifestSpoolAppliesAndReleasesPeer(t *testing.T) {
 
 	parsed, err := manifest.Deserialize(wire)
 	require.NoError(t, err)
-	stored, ok := cache.GetManifest(parsed.MasterKey)
+	stored, ok := cache.GetManifest(parsed.MasterKey())
 	require.True(t, ok)
 	require.Equal(t, wire, stored)
 	_, err = inbound.ManifestFrame.Materialize(context.Background())
@@ -240,7 +240,7 @@ func TestRouter_HandleManifests_InvalidDoesNotStore(t *testing.T) {
 	// Give the router a moment to process the frame.
 	time.Sleep(50 * time.Millisecond)
 
-	if _, ok := cache.GetSigningKey(parsed.MasterKey); ok {
+	if _, ok := cache.GetSigningKey(parsed.MasterKey()); ok {
 		t.Fatal("cache stored a manifest whose master signature was corrupted")
 	}
 }
@@ -261,13 +261,13 @@ func TestRouter_HandleManifests_AdmissionBoundsDurableCache(t *testing.T) {
 
 	router.SetManifestAdmission(func([33]byte) bool { return false })
 	require.True(t, router.handleManifests(msg))
-	_, stored := cache.GetManifest(parsed.MasterKey)
+	_, stored := cache.GetManifest(parsed.MasterKey())
 	require.False(t, stored)
 	require.Empty(t, sender.bcastsExcept)
 
-	router.SetManifestAdmission(func(master [33]byte) bool { return master == parsed.MasterKey })
+	router.SetManifestAdmission(func(master [33]byte) bool { return master == parsed.MasterKey() })
 	require.True(t, router.handleManifests(msg))
-	storedWire, stored := cache.GetManifest(parsed.MasterKey)
+	storedWire, stored := cache.GetManifest(parsed.MasterKey())
 	require.True(t, stored)
 	require.Equal(t, wire, storedWire)
 	require.Len(t, sender.bcastsExcept, 1)
@@ -347,7 +347,7 @@ func TestRouter_ManifestAcceptedAfterPeerRemovalCompletesBootstrap(t *testing.T)
 
 	parsed, err := manifest.Deserialize(wire)
 	require.NoError(t, err)
-	stored, ok := cache.GetManifest(parsed.MasterKey)
+	stored, ok := cache.GetManifest(parsed.MasterKey())
 	require.True(t, ok)
 	require.Equal(t, wire, stored)
 	select {
@@ -412,7 +412,7 @@ func TestRouter_ManifestWorkerDoesNotBlockDispatch(t *testing.T) {
 	var blockOnce sync.Once
 	releaseWorker := func() { releaseOnce.Do(func() { close(release) }) }
 	defer releaseWorker()
-	cache.SetOnAccepted(func(*manifest.Manifest) {
+	cache.SubscribeAccepted(func(*manifest.Manifest) {
 		blockOnce.Do(func() {
 			close(entered)
 			<-release
@@ -459,7 +459,7 @@ func TestRouter_ManifestWorkerDoesNotBlockDispatch(t *testing.T) {
 	releaseWorker()
 	require.Eventually(t, func() bool {
 		for _, parsed := range queued {
-			if _, ok := cache.GetSigningKey(parsed.MasterKey); !ok {
+			if _, ok := cache.GetSigningKey(parsed.MasterKey()); !ok {
 				return false
 			}
 		}
@@ -483,7 +483,7 @@ func TestRouter_ManifestWorkerJoinsOnShutdown(t *testing.T) {
 	var blockOnce sync.Once
 	releaseWorker := func() { releaseOnce.Do(func() { close(release) }) }
 	defer releaseWorker()
-	cache.SetOnAccepted(func(*manifest.Manifest) {
+	cache.SubscribeAccepted(func(*manifest.Manifest) {
 		blockOnce.Do(func() {
 			close(entered)
 			<-release
@@ -543,7 +543,7 @@ func TestRouter_ManifestWorkerJoinsOnShutdown(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("router did not join its manifest worker")
 	}
-	_, ok := cache.GetSigningKey(queuedManifest.MasterKey)
+	_, ok := cache.GetSigningKey(queuedManifest.MasterKey())
 	require.True(t, ok, "shutdown must drain queued manifest jobs")
 	sender.mu.Lock()
 	broadcasts := len(sender.bcastsExcept)

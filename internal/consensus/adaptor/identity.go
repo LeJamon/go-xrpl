@@ -147,15 +147,15 @@ func NewValidatorIdentityFromToken(block string) (*ValidatorIdentity, error) {
 	}
 	var derived [33]byte
 	copy(derived[:], pub)
-	if derived != m.SigningKey {
+	if derived != m.SigningKey() {
 		return nil, ErrTokenManifestKeyMismatch
 	}
 
 	vi := &ValidatorIdentity{
-		MasterKey:      m.MasterKey,
-		SigningKey:     m.SigningKey,
+		MasterKey:      m.MasterKey(),
+		SigningKey:     m.SigningKey(),
 		Manifest:       m,
-		SerializedMfst: append([]byte(nil), m.Serialized...),
+		SerializedMfst: m.Serialized(),
 		signingPriv:    hex.EncodeToString(tok.ValidationSecret[:]),
 	}
 	vi.NodeID = consensus.CalcNodeID(vi.MasterKey)

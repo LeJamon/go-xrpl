@@ -36,11 +36,15 @@ type tokenFixture struct {
 //
 // All randomness is seeded by `seed` so tests stay deterministic.
 func newTokenFixture(t *testing.T, seed byte, sequence uint32) tokenFixture {
+	return newTokenFixtureWithSeeds(t, seed, seed, sequence)
+}
+
+func newTokenFixtureWithSeeds(t *testing.T, masterSeed, signingSeed byte, sequence uint32) tokenFixture {
 	t.Helper()
 
 	// Master: ed25519. Use deterministic-from-seed key material so the
 	// fixture is reproducible across runs.
-	masterSeedBytes := bytes.Repeat([]byte{seed}, ed25519.SeedSize)
+	masterSeedBytes := bytes.Repeat([]byte{masterSeed}, ed25519.SeedSize)
 	masterPriv := ed25519.NewKeyFromSeed(masterSeedBytes)
 	masterPubBytes := masterPriv.Public().(ed25519.PublicKey)
 	master33 := append([]byte{0xED}, masterPubBytes...)
@@ -50,7 +54,7 @@ func newTokenFixture(t *testing.T, seed byte, sequence uint32) tokenFixture {
 	// is, and 0xFF is also fine. Tests use small seeds so this holds.
 	var sec [32]byte
 	for i := range sec {
-		sec[i] = seed ^ byte(i+1)
+		sec[i] = signingSeed ^ byte(i+1)
 	}
 	algo := secp256k1.Algorithm{}
 	signingPubBytes, err := algo.DerivePublicKeyFromSecret(sec[:])
@@ -172,8 +176,8 @@ func TestNewValidatorIdentityFromToken_HappyPath(t *testing.T) {
 	if id.Manifest == nil {
 		t.Fatal("Manifest must be populated")
 	}
-	if id.Manifest.Sequence != fix.sequence {
-		t.Errorf("manifest sequence: got %d want %d", id.Manifest.Sequence, fix.sequence)
+	if id.Manifest.Sequence() != fix.sequence {
+		t.Errorf("manifest sequence: got %d want %d", id.Manifest.Sequence(), fix.sequence)
 	}
 	if len(id.SerializedMfst) == 0 {
 		t.Error("SerializedMfst must be populated for #372 emission")

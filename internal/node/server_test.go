@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,8 +11,11 @@ import (
 
 	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
+	"github.com/LeJamon/go-xrpl/storage/nodestore"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -33,6 +37,27 @@ type recordingSinkCall struct {
 	validators []consensus.NodeID
 	masterKeys [][33]byte
 }
+
+type shutdownErrorEngine struct {
+	consensus.Engine
+	err error
+}
+
+func (e *shutdownErrorEngine) Stop() error { return e.err }
+
+type shutdownErrorNodeStore struct {
+	nodestore.Database
+	err error
+}
+
+func (s *shutdownErrorNodeStore) Close() error { return s.err }
+
+type shutdownErrorRepositoryManager struct {
+	relationaldb.RepositoryManager
+	err error
+}
+
+func (m *shutdownErrorRepositoryManager) Close(context.Context) error { return m.err }
 
 func TestEffectivePeerFetchDepth(t *testing.T) {
 	tests := []struct {
@@ -260,5 +285,40 @@ func TestDoShutdown_ToleratesNilComponents(t *testing.T) {
 	// criterion is "doesn't crash": WebSocketServer.Close dereferences its
 	// receiver on the first line (connectionsMutex.Lock), so a nil wsServer
 	// would panic without the guard this test pins.
-	doShutdown(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, xrpllog.Discard())
+	if err := doShutdown(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, xrpllog.Discard()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDoShutdownReturnsConsensusPersistenceFailure(t *testing.T) {
+	want := errors.New("manifest persistence failed")
+	components := &adaptor.Components{Engine: &shutdownErrorEngine{err: want}}
+	err := doShutdown(nil, nil, nil, nil, nil, nil, components, nil, nil, nil, xrpllog.Discard())
+	if !errors.Is(err, want) {
+		t.Fatalf("doShutdown error = %v, want %v", err, want)
+	}
+}
+
+func TestDoShutdownReturnsStorageCloseFailures(t *testing.T) {
+	nodeStoreErr := errors.New("node store close failed")
+	repositoryErr := errors.New("repository close failed")
+	err := doShutdown(
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		&shutdownErrorNodeStore{err: nodeStoreErr},
+		&shutdownErrorRepositoryManager{err: repositoryErr},
+		xrpllog.Discard(),
+	)
+	if !errors.Is(err, nodeStoreErr) {
+		t.Fatalf("doShutdown error = %v, want %v", err, nodeStoreErr)
+	}
+	if !errors.Is(err, repositoryErr) {
+		t.Fatalf("doShutdown error = %v, want %v", err, repositoryErr)
+	}
 }

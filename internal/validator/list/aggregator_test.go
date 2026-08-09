@@ -17,6 +17,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/validator/list"
 	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/stretchr/testify/require"
 )
 
 // fixedClock yields a deterministic "now" so test expectations don't
@@ -56,6 +57,26 @@ func newPublisher(t *testing.T, masterSeed, ephSeed byte) *publisherFixture {
 		ephPriv:     ephPriv,
 		manifestB64: b64,
 	}
+}
+
+func TestAggregator_NewRestoresPublisherRevocationStatus(t *testing.T) {
+	pub := newPublisher(t, 0x03, 0x04)
+	publisherManifests := manifest.NewCache()
+	revocationRaw := buildRevocation(t, pub.masterPub, pub.masterPriv)
+	revocation, err := manifest.Deserialize(revocationRaw)
+	require.NoError(t, err)
+	require.Equal(t, manifest.Accepted, publisherManifests.ApplyManifest(revocation))
+
+	agg, err := list.New(list.Config{
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: publisherManifests,
+		Clock:              fixedClock(),
+	})
+	require.NoError(t, err)
+	snapshot := agg.PublisherSnapshot()
+	require.Len(t, snapshot, 1)
+	require.Equal(t, list.StatusRevoked, snapshot[0].Status)
 }
 
 // signList produces the (blob, signature) pair the aggregator expects:
@@ -101,10 +122,11 @@ func TestAggregator_ApplyList_Accepted_SinglePublisher_SingleValidator(t *testin
 	val1 := derivedValidatorKey(0x10)
 
 	agg, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -165,9 +187,10 @@ func TestAggregator_ApplyList_Threshold_TwoOfThree(t *testing.T) {
 			list.PublisherKey(pub2.masterPub),
 			list.PublisherKey(pub3.masterPub),
 		},
-		Threshold: 2,
-		Manifests: manifest.NewCache(),
-		Clock:     fixedClock(),
+		Threshold:          2,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -219,10 +242,11 @@ func TestAggregator_ApplyList_Stale(t *testing.T) {
 	v1 := derivedValidatorKey(0x10)
 
 	agg, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -249,10 +273,11 @@ func TestAggregator_ApplyList_UntrustedPublisher(t *testing.T) {
 	v1 := derivedValidatorKey(0x10)
 
 	agg, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pubInTrust.masterPub)},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pubInTrust.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -274,10 +299,11 @@ func TestAggregator_ApplyList_BadSignature(t *testing.T) {
 	v1 := derivedValidatorKey(0x10)
 
 	agg, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -298,10 +324,11 @@ func TestAggregator_ApplyList_Expired(t *testing.T) {
 	v1 := derivedValidatorKey(0x10)
 
 	agg, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -323,10 +350,11 @@ func TestAggregator_ApplyList_Expired(t *testing.T) {
 func TestAggregator_ApplyList_UnsupportedVersion(t *testing.T) {
 	pub := newPublisher(t, 0x01, 0x02)
 	agg, _ := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	d, _, _ := agg.ApplyList(pub.manifestB64, []byte("garbage"), []byte("00"), 99, "test://")
 	if d != list.UnsupportedVersion {
@@ -362,10 +390,11 @@ func TestAggregator_ApplyList_BadManifest(t *testing.T) {
 func TestAggregator_ApplyList_MissingRequiredField(t *testing.T) {
 	pub := newPublisher(t, 0x01, 0x02)
 	agg, _ := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	// Blob with only `sequence` and `expiration`, no `validators` array.
 	now := fixedClock()()
@@ -387,10 +416,11 @@ func TestAggregator_ApplyCollection_AcceptedAndStale(t *testing.T) {
 	v1 := derivedValidatorKey(0x10)
 
 	agg, _ := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 
 	now := fixedClock()()
@@ -462,6 +492,20 @@ func buildManifest(t *testing.T, masterPub [33]byte, masterPriv ed25519.PrivateK
 	return raw
 }
 
+func buildRevocation(t *testing.T, masterPub [33]byte, masterPriv ed25519.PrivateKey) []byte {
+	t.Helper()
+	obj := map[string]any{
+		"PublicKey": hex.EncodeToString(masterPub[:]),
+		"Sequence":  manifest.RevokedSequence,
+	}
+	obj["MasterSignature"] = hex.EncodeToString(ed25519.Sign(masterPriv, manifestSigningPreimage(t, obj)))
+	encoded, err := binarycodec.Encode(obj)
+	require.NoError(t, err)
+	wire, err := hex.DecodeString(encoded)
+	require.NoError(t, err)
+	return wire
+}
+
 func manifestSigningPreimage(t *testing.T, src map[string]any) []byte {
 	t.Helper()
 	filtered := make(map[string]any, len(src))
@@ -507,10 +551,11 @@ func TestAggregator_ApplyList_PendingThenKnownSequence(t *testing.T) {
 	clk := func() time.Time { return mutableNow }
 
 	agg, err := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         clk,
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              clk,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -528,6 +573,9 @@ func TestAggregator_ApplyList_PendingThenKnownSequence(t *testing.T) {
 	if _, m := agg.TrustedValidators(); len(m) != 0 {
 		t.Fatalf("trusted before promotion: want 0, got %d", len(m))
 	}
+	if agg.IsMasterListed(v1) {
+		t.Fatal("validator reported listed before promotion")
+	}
 
 	// Same sequence again — KnownSequence (re-arrival at a queued seq).
 	d, _, _ = agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://")
@@ -543,6 +591,9 @@ func TestAggregator_ApplyList_PendingThenKnownSequence(t *testing.T) {
 	if len(masters) != 1 || masters[0] != v1 {
 		t.Fatalf("post-Tick trusted: want [v1] got %d entries", len(masters))
 	}
+	if !agg.IsMasterListed(v1) {
+		t.Fatal("validator not reported listed after promotion tick")
+	}
 }
 
 // TestAggregator_ApplyList_EffectiveSet_Sentinel pins the rippled
@@ -555,10 +606,11 @@ func TestAggregator_ApplyList_EffectiveSet_Sentinel(t *testing.T) {
 	v1 := derivedValidatorKey(0x10)
 
 	agg, _ := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	now := fixedClock()()
 	// signList passes validFromUnix=0 which means we OMIT `effective`.
@@ -584,10 +636,11 @@ func TestAggregator_ApplyList_Expired_ClearsValidators(t *testing.T) {
 	v1 := derivedValidatorKey(0x10)
 
 	agg, _ := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
 	})
 	now := fixedClock()()
 	exp := now.Add(-1 * time.Hour).Unix() // expired
@@ -654,17 +707,28 @@ func TestAggregator_ApplyList_Expired_SeedsEmbeddedManifests(t *testing.T) {
 	sigBytes := ed25519.Sign(pub.ephPriv, jsonBytes)
 	sig := []byte(hex.EncodeToString(sigBytes))
 
-	cache := manifest.NewCache()
+	validatorCache := manifest.NewCache()
+	publisherCache := manifest.NewCache()
 	agg, _ := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
-		Threshold:     1,
-		Manifests:     cache,
-		Clock:         fixedClock(),
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: validatorCache,
+		PublisherManifests: publisherCache,
+		Clock:              fixedClock(),
 	})
 	if d, _, _ := agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://"); d != list.Expired {
 		t.Fatalf("disposition: %s", d)
 	}
-	if _, ok := cache.GetSigningKey(valMaster); !ok {
+	if _, ok := validatorCache.GetSigningKey(valMaster); !ok {
 		t.Fatalf("expired ingest must seed embedded validator manifests into the cache (rippled ValidatorList.cpp:1117-1133, reached via updatePublisherList at line 1294)")
+	}
+	if _, ok := publisherCache.GetSigningKey(valMaster); ok {
+		t.Fatal("embedded validator manifest contaminated the publisher cache")
+	}
+	if _, ok := publisherCache.GetSigningKey(pub.masterPub); !ok {
+		t.Fatal("publisher manifest was not applied to the publisher cache")
+	}
+	if _, ok := validatorCache.GetSigningKey(pub.masterPub); ok {
+		t.Fatal("publisher manifest contaminated the validator cache")
 	}
 }

@@ -3,6 +3,7 @@ package adaptor
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -32,11 +33,8 @@ type Components struct {
 	Router      *Router
 	ModeManager *ModeManager
 
-	// Manifests is the validator-manifest cache shared by the router
-	// (wire ingest), the consensus engine (ephemeral→master
-	// translation), and the RPC layer (manifest method). Always
-	// non-nil — starts empty and fills as peers gossip manifests.
-	Manifests *manifest.Cache
+	ValidatorManifests *manifest.Cache
+	PublisherManifests *manifest.Cache
 
 	// ValidatorList is the publisher-trust subsystem. Nil when no
 	// validator_list_keys are configured. When non-nil, peer-gossiped
@@ -73,6 +71,9 @@ type Components struct {
 	routerCancel     context.CancelFunc
 	sitePollerCancel context.CancelFunc
 	vlTickCancel     context.CancelFunc
+	stopOnce         sync.Once
+	stopErr          error
+	manifestStore    manifest.Store
 
 	// routerDone is closed when the Router.Run loop returns, so Stop can join it
 	// rather than fire-and-forgetting: an in-process restart cycle would
@@ -173,56 +174,94 @@ func (c *Components) runValidatorListTick(ctx context.Context, interval time.Dur
 }
 
 // Stop gracefully shuts down all components.
-func (c *Components) Stop() {
-	if c.vlTickCancel != nil {
-		c.vlTickCancel()
-	}
-	if c.sitePollerCancel != nil {
-		c.sitePollerCancel()
-	}
-	if c.ValidatorListPoller != nil {
-		c.ValidatorListPoller.Stop()
-	}
-	if c.routerCancel != nil {
-		c.routerCancel()
-	}
-	// Join the router loop before tearing down the engine, so it can't be
-	// mid-handleMessage touching an already-stopped engine. Bounded so a wedged
-	// handler can't hang shutdown.
-	if c.routerDone != nil {
-		select {
-		case <-c.routerDone:
-		case <-time.After(5 * time.Second):
-			slog.Warn("router loop did not exit within shutdown budget", "t", "Components.Stop")
+func (c *Components) Stop() error {
+	c.stopOnce.Do(func() {
+		if c.vlTickCancel != nil {
+			c.vlTickCancel()
 		}
-	}
-	if c.Adaptor != nil {
-		c.Adaptor.StopConsensusPhaseDispatcher()
-	}
-	if c.Engine != nil {
-		_ = c.Engine.Stop()
-	}
-	// Drain both acquisition paths after the router loop has stopped. Components
-	// are one-shot; a process restart constructs a fresh Router.
-	if c.Router != nil {
-		legacy, replay := c.Router.StopAcquisitions()
-		if legacy > 0 || replay > 0 {
-			slog.Info("ledger acquisitions drained at shutdown",
-				"t", "Components.Stop",
-				"legacy_in_flight_at_stop", legacy,
-				"replay_in_flight_at_stop", replay)
+		if c.sitePollerCancel != nil {
+			c.sitePollerCancel()
 		}
+		if c.ValidatorListPoller != nil {
+			c.ValidatorListPoller.Stop()
+		}
+		if c.routerCancel != nil {
+			c.routerCancel()
+		}
+		if c.overlayCancel != nil {
+			c.overlayCancel()
+		}
+		if c.Overlay != nil {
+			c.stopErr = errors.Join(c.stopErr, c.Overlay.Stop())
+		}
+		// Join the router loop before tearing down the engine, so it can't be
+		// mid-handleMessage touching an already-stopped engine. Bounded so a wedged
+		// handler can't hang shutdown.
+		if c.routerDone != nil {
+			select {
+			case <-c.routerDone:
+			case <-time.After(5 * time.Second):
+				slog.Warn("router loop did not exit within shutdown budget", "t", "Components.Stop")
+			}
+		}
+		if c.ValidatorList != nil {
+			c.ValidatorList.Tick()
+		}
+		if c.Adaptor != nil {
+			c.Adaptor.StopConsensusPhaseDispatcher()
+		}
+		if c.Engine != nil {
+			c.stopErr = errors.Join(c.stopErr, c.Engine.Stop())
+		}
+		// Drain both acquisition paths after the router loop has stopped.
+		if c.Router != nil {
+			legacy, replay := c.Router.StopAcquisitions()
+			if legacy > 0 || replay > 0 {
+				slog.Info("ledger acquisitions drained at shutdown",
+					"t", "Components.Stop",
+					"legacy_in_flight_at_stop", legacy,
+					"replay_in_flight_at_stop", replay)
+			}
+		}
+		if c.manifestStore != nil {
+			stored := manifest.StoredManifests{
+				Validators: persistedManifests(c.ValidatorManifests, func(master [33]byte) bool {
+					if c.Adaptor != nil && c.Adaptor.IsTrusted(consensus.CalcNodeID(master)) {
+						return true
+					}
+					return c.ValidatorList != nil && c.ValidatorList.IsMasterListed(master)
+				}),
+				Publishers: persistedManifests(c.PublisherManifests, func(master [33]byte) bool {
+					for _, configured := range c.configuredPublisherKeys {
+						if configured == master {
+							return true
+						}
+					}
+					return false
+				}),
+			}
+			c.stopErr = errors.Join(c.stopErr, c.manifestStore.Replace(context.Background(), stored))
+			c.stopErr = errors.Join(c.stopErr, c.manifestStore.Close())
+		}
+	})
+	return c.stopErr
+}
+
+func persistedManifests(cache *manifest.Cache, keep func([33]byte) bool) [][]byte {
+	if cache == nil {
+		return nil
 	}
-	if c.overlayCancel != nil {
-		c.overlayCancel()
+	var out [][]byte
+	for _, entry := range cache.Snapshot() {
+		if !entry.Revoked() && (keep == nil || !keep(entry.MasterKey())) {
+			continue
+		}
+		out = append(out, entry.Serialized())
 	}
-	if c.Overlay != nil {
-		_ = c.Overlay.Stop()
-	}
+	return out
 }
 
 // NewFromConfig creates and wires all consensus/networking components from the app config.
-// Returns nil Components if the node is in standalone mode.
 //
 // validationRepo is optional — pass nil to disable the on-disk validation
 // archive. When non-nil and [validation_archive] is enabled in config,
@@ -231,11 +270,12 @@ func (c *Components) Stop() {
 // production). Pass nil when online_delete is off: acquisition and serving are
 // then unrestricted, leaving the standalone / feature-disabled path unchanged.
 func NewFromConfig(
+	ctx context.Context,
 	appCfg *config.Config,
 	ledgerSvc *service.Service,
 	validationRepo relationaldb.ValidationRepository,
 	floor MinimumOnlineFloor,
-) (*Components, error) {
+) (_ *Components, err error) {
 	// Create validator identity first (nil if not a validator) so we can
 	// pass its pubkey into the overlay for the self-target TMSquelch
 	// filter: without this a peer could silence our own validator's
@@ -244,6 +284,28 @@ func NewFromConfig(
 	if err != nil {
 		return nil, fmt.Errorf("create validator identity: %w", err)
 	}
+	publisherKeys, err := ParseValidatorListPublisherKeys(appCfg)
+	if err != nil {
+		return nil, fmt.Errorf("parse validator_list_keys: %w", err)
+	}
+
+	validatorManifests := manifest.NewCache()
+	publisherManifests := manifest.NewCache()
+	manifestStore, err := manifest.OpenSQLiteStore(ctx, appCfg.LocalStateDir())
+	if err != nil {
+		return nil, fmt.Errorf("open manifest store: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, manifestStore.Close())
+		}
+	}()
+	stored, err := manifestStore.Load(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load manifest store: %w", err)
+	}
+	restoreManifests("validator", validatorManifests, stored.Validators)
+	restoreManifests("publisher", publisherManifests, stored.Publishers)
 
 	// Build overlay options from app config
 	overlayOpts := OverlayOptionsFromConfig(appCfg)
@@ -299,25 +361,17 @@ func NewFromConfig(
 
 	modeManager := NewModeManager(adaptor)
 
-	// Validator manifest cache. Shared across the engine (for
-	// ephemeral→master translation in ValidationTracker), the router
-	// (for ingesting + relaying TMManifests), and the RPC layer (for
-	// the `manifest` method). Peers gossip manifests; until one
-	// arrives the cache is empty and every ephemeral key round-trips
-	// as itself.
-	manifestCache := manifest.NewCache()
-
-	// Seed the local validator's manifest into the cache when running
-	// in token mode so the post-handshake TMManifests emission walks
-	// every cached entry — local + aggregated remote. In observer /
-	// seed-only mode there is nothing to seed and the cache stays cold
-	// until peers gossip something.
+	// The validator manifest cache is shared across the engine (for
+	// ephemeral→master translation), router (for ingesting and relaying
+	// TMManifests), and RPC layer. Publisher manifests remain isolated in
+	// the validator-list aggregator.
+	// Seed the local token manifest after durable validator state has loaded.
 	if identity != nil && identity.Manifest != nil {
-		if d := manifestCache.ApplyManifest(identity.Manifest); d != manifest.Accepted {
-			return nil, fmt.Errorf("seed local manifest into cache: disposition=%s", d)
+		if err := seedLocalManifest(validatorManifests, identity.Manifest); err != nil {
+			return nil, err
 		}
 	} else {
-		slog.Info("local validator manifest not configured; TMManifests emission limited to peer-gossiped entries",
+		slog.Info("local validator manifest not configured",
 			"t", "adaptor.NewFromConfig")
 	}
 
@@ -353,7 +407,7 @@ func NewFromConfig(
 	router.SetTxInbox(overlay.TxMessages())
 	router.SetAcqInbox(overlay.LedgerDataMessages())
 	router.SetManifestInbox(overlay.ManifestMessages())
-	router.SetManifestCache(manifestCache, overlay)
+	router.SetManifestCache(validatorManifests, overlay)
 	router.SetManifestAdmission(func(master [33]byte) bool {
 		nodeID := consensus.CalcNodeID(master)
 		return adaptor.IsTrusted(nodeID) || adaptor.IsListed(nodeID)
@@ -367,10 +421,6 @@ func NewFromConfig(
 	// validator_list_sites. The aggregator pushes its recomputed
 	// trusted UNL into adaptor.SetTrustedValidators on every change —
 	// the same write path SIGHUP reload uses.
-	publisherKeys, err := ParseValidatorListPublisherKeys(appCfg)
-	if err != nil {
-		return nil, fmt.Errorf("parse validator_list_keys: %w", err)
-	}
 	var vlAgg *validatorlist.Aggregator
 	var vlPoller *validatorlist.SitePoller
 	if len(publisherKeys) > 0 {
@@ -383,7 +433,8 @@ func NewFromConfig(
 			SiteURIs:             append([]string(nil), appCfg.Validators.ValidatorListSites...),
 			Threshold:            appCfg.Validators.EffectiveListThreshold(),
 			StaticValidatorCount: len(masterKeys),
-			Manifests:            manifestCache,
+			ValidatorManifests:   validatorManifests,
+			PublisherManifests:   publisherManifests,
 			Logger:               slog.Default().With("component", "validator-list-aggregator"),
 		})
 		if err != nil {
@@ -460,7 +511,8 @@ func NewFromConfig(
 		Adaptor:                      adaptor,
 		Router:                       router,
 		ModeManager:                  modeManager,
-		Manifests:                    manifestCache,
+		ValidatorManifests:           validatorManifests,
+		PublisherManifests:           publisherManifests,
 		ValidatorList:                vlAgg,
 		ValidatorListPoller:          vlPoller,
 		staticValidators:             append([]consensus.NodeID(nil), staticValidators...),
@@ -469,6 +521,7 @@ func NewFromConfig(
 		configuredPublisherSites:     append([]string(nil), appCfg.Validators.ValidatorListSites...),
 		configuredPublisherThreshold: appCfg.Validators.EffectiveListThreshold(),
 		Archive:                      validationArchive,
+		manifestStore:                manifestStore,
 	}
 
 	// Capturing the boot values directly here would let a SIGHUP removal
@@ -476,6 +529,29 @@ func NewFromConfig(
 	wireValidatorListTrust(c)
 
 	return c, nil
+}
+
+func seedLocalManifest(cache *manifest.Cache, local *manifest.Manifest) error {
+	disposition := cache.ApplyManifest(local)
+	if disposition == manifest.Invalid {
+		return fmt.Errorf("seed local manifest into cache: disposition=%s", disposition)
+	}
+	return nil
+}
+
+func restoreManifests(role string, cache *manifest.Cache, rows [][]byte) {
+	for i, raw := range rows {
+		parsed, err := manifest.Deserialize(raw)
+		if err != nil {
+			slog.Warn("stored manifest rejected", "role", role, "row", i, "error", err)
+			continue
+		}
+		switch disposition := cache.ApplyManifest(parsed); disposition {
+		case manifest.Accepted, manifest.Stale:
+		default:
+			slog.Warn("stored manifest rejected", "role", role, "row", i, "disposition", disposition.String())
+		}
+	}
 }
 
 func wireValidatorListTrust(c *Components) {

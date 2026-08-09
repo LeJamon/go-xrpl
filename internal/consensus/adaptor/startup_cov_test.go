@@ -399,10 +399,11 @@ func stup_newAggregator(t *testing.T) *validatorlist.Aggregator {
 	t.Helper()
 	pk := validatorlist.PublisherKey{0xED, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01}
 	agg, err := validatorlist.New(validatorlist.Config{
-		PublisherKeys: []validatorlist.PublisherKey{pk},
-		Threshold:     1,
-		Manifests:     manifest.NewCache(),
-		Logger:        slog.Default(),
+		PublisherKeys:      []validatorlist.PublisherKey{pk},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Logger:             slog.Default(),
 	})
 	require.NoError(t, err)
 	return agg

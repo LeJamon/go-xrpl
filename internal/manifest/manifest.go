@@ -1,5 +1,5 @@
-// Package manifest implements validator manifest parsing, verification, and
-// caching — the equivalent of rippled's ValidatorManifests service.
+// Package manifest implements validator manifest parsing, verification, caching,
+// and persistence.
 //
 // A manifest binds a validator's long-term master key to a rotatable
 // ephemeral signing key. Peers gossip manifests so every node on the
@@ -8,7 +8,7 @@
 // this translation a validator that rotates its ephemeral key appears as
 // a new untrusted node and breaks mainnet quorum arithmetic.
 //
-// Wire format (rippled Manifest.cpp:53-164):
+// Wire format:
 //
 //	STObject with fields
 //	  PublicKey        (required) — master public key
@@ -43,7 +43,6 @@ import (
 )
 
 // RevokedSequence marks a manifest as a master-key revocation.
-// Rippled: Manifest::revoked returns sequence == numeric_limits::max.
 const RevokedSequence uint32 = math.MaxUint32
 
 const maxSerializedSize = 1024
@@ -52,56 +51,76 @@ const maxSerializedSize = 1024
 // Signature verification is separate — callers invoke Verify before
 // trusting the struct's key bindings.
 type Manifest struct {
-	// MasterKey is the 33-byte master public key (ed25519 0xED prefix or
-	// secp256k1 0x02/0x03 prefix).
-	MasterKey [33]byte
+	masterKey       [33]byte
+	signingKey      [33]byte
+	sequence        uint32
+	domain          string
+	serialized      []byte
+	masterSignature string
+	signature       string
+	signingPreimage []byte
+}
 
-	// SigningKey is the 33-byte ephemeral signing key. Zero when Revoked.
-	SigningKey [33]byte
+// MasterKey returns the manifest's long-term public key.
+func (m *Manifest) MasterKey() [33]byte {
+	if m == nil {
+		return [33]byte{}
+	}
+	return m.masterKey
+}
 
-	// Sequence is the manifest's monotonic counter. RevokedSequence
-	// (MaxUint32) indicates master-key revocation; in that case
-	// SigningKey is zero and both Signature and MasterSignature are
-	// present only on the master side.
-	Sequence uint32
+// SigningKey returns the current ephemeral public key, or zero for a revocation.
+func (m *Manifest) SigningKey() [33]byte {
+	if m == nil {
+		return [33]byte{}
+	}
+	return m.signingKey
+}
 
-	// Domain is the optional TOML domain string.
-	Domain string
+func (m *Manifest) Sequence() uint32 {
+	if m == nil {
+		return 0
+	}
+	return m.sequence
+}
 
-	// Serialized is the original wire bytes — kept so the cache can
-	// relay the exact payload peers gossiped and the RPC can return it.
-	Serialized []byte
+// Domain returns the optional validator domain.
+func (m *Manifest) Domain() string {
+	if m == nil {
+		return ""
+	}
+	return m.domain
+}
+
+// Serialized returns an owned copy of the original wire bytes.
+func (m *Manifest) Serialized() []byte {
+	if m == nil {
+		return nil
+	}
+	return append([]byte(nil), m.serialized...)
 }
 
 // Revoked reports whether the manifest revokes its master key.
 func (m *Manifest) Revoked() bool {
-	return m.Sequence == RevokedSequence
+	return m != nil && m.sequence == RevokedSequence
 }
 
-// Signatures extracts the master signature (always present) and the
-// ephemeral-key signature (empty on revocations) from the manifest's
-// serialized wire form. Used by the WebSocket manifests stream to emit
-// the rippled-shape pubManifest payload (NetworkOPs.cpp:2229-2265)
-// without requiring callers to re-decode the blob themselves. Returns
-// empty strings when the blob cannot be decoded — the caller should
-// treat that as "fields absent" rather than an error.
+func cloneManifest(m *Manifest) *Manifest {
+	if m == nil {
+		return nil
+	}
+	cloned := *m
+	cloned.serialized = append([]byte(nil), m.serialized...)
+	cloned.signingPreimage = append([]byte(nil), m.signingPreimage...)
+	return &cloned
+}
+
+// Signatures returns the wire signatures captured during parsing.
 func (m *Manifest) Signatures() (masterSigHex, signatureHex string) {
-	if m == nil || len(m.Serialized) == 0 {
+	if m == nil {
 		return "", ""
 	}
-	decoded, err := binarycodec.DecodeBytes(m.Serialized)
-	if err != nil {
-		return "", ""
-	}
-	if v, ok := decoded["MasterSignature"].(string); ok {
-		masterSigHex = v
-	}
-	if !m.Revoked() {
-		if v, ok := decoded["Signature"].(string); ok {
-			signatureHex = v
-		}
-	}
-	return masterSigHex, signatureHex
+	return m.masterSignature, m.signature
 }
 
 // Deserialize parses a wire-format manifest. Returns a non-nil error if
@@ -131,10 +150,9 @@ func Deserialize(data []byte) (*Manifest, error) {
 		}
 	}
 
-	// Version default is 0; anything else is an unsupported manifest
-	// format per rippled Manifest.cpp:92-93.
+	// Version defaults to 0; any other value is unsupported.
 	if raw, ok := decoded["Version"]; ok {
-		v, ok := toUint32(raw)
+		v, ok := raw.(int)
 		if !ok {
 			return nil, errors.New("manifest: Version is not numeric")
 		}
@@ -156,19 +174,21 @@ func Deserialize(data []byte) (*Manifest, error) {
 	if !ok {
 		return nil, errors.New("manifest: missing required Sequence")
 	}
-	seq, ok := toUint32(seqRaw)
+	seq, ok := seqRaw.(uint32)
 	if !ok {
 		return nil, errors.New("manifest: Sequence is not numeric")
 	}
 
-	if _, err := requireHexField(decoded, "MasterSignature"); err != nil {
+	masterSignature, err := requireHexField(decoded, "MasterSignature")
+	if err != nil {
 		return nil, err
 	}
 
 	m := &Manifest{
-		MasterKey:  master,
-		Sequence:   seq,
-		Serialized: append([]byte(nil), data...),
+		masterKey:       master,
+		sequence:        seq,
+		serialized:      append([]byte(nil), data...),
+		masterSignature: masterSignature,
 	}
 
 	if dom, ok := decoded["Domain"]; ok {
@@ -182,8 +202,8 @@ func Deserialize(data []byte) (*Manifest, error) {
 		if err != nil {
 			return nil, fmt.Errorf("manifest: Domain not hex: %w", err)
 		}
-		m.Domain = string(b)
-		if !stringutil.IsProperlyFormedTomlDomain(m.Domain) {
+		m.domain = string(b)
+		if !stringutil.IsProperlyFormedTomlDomain(m.domain) {
 			return nil, errors.New("manifest: Domain is not a properly formed TOML domain")
 		}
 	}
@@ -194,6 +214,10 @@ func Deserialize(data []byte) (*Manifest, error) {
 	if m.Revoked() {
 		if hasSigningKey || hasSignature {
 			return nil, errors.New("manifest: revoked manifest must not carry ephemeral fields")
+		}
+		m.signingPreimage, err = signingPreimageFromDecoded(decoded)
+		if err != nil {
+			return nil, fmt.Errorf("manifest: build signing preimage: %w", err)
 		}
 		return m, nil
 	}
@@ -210,39 +234,38 @@ func Deserialize(data []byte) (*Manifest, error) {
 	if signing == master {
 		return nil, errors.New("manifest: signing key equals master key")
 	}
-	m.SigningKey = signing
+	signature, err := requireHexField(decoded, "Signature")
+	if err != nil {
+		return nil, err
+	}
+	m.signingKey = signing
+	m.signature = signature
+	m.signingPreimage, err = signingPreimageFromDecoded(decoded)
+	if err != nil {
+		return nil, fmt.Errorf("manifest: build signing preimage: %w", err)
+	}
 	return m, nil
 }
 
 // Verify checks both the master signature and (for non-revoked
 // manifests) the ephemeral-key signature against the canonical signing
 // preimage: HashPrefix("MAN\0") || STObject(manifest without Signature
-// and MasterSignature). Mirrors Manifest::verify at Manifest.cpp:195-214.
+// and MasterSignature).
 func (m *Manifest) Verify() error {
-	decoded, err := binarycodec.DecodeBytes(m.Serialized)
-	if err != nil {
-		return fmt.Errorf("manifest: decode for verify: %w", err)
+	if m == nil {
+		return errors.New("manifest: nil manifest")
 	}
-	masterSigHex, _ := decoded["MasterSignature"].(string)
-	if masterSigHex == "" {
+	if m.masterSignature == "" {
 		return errors.New("manifest: MasterSignature missing on verify")
 	}
-	var sigHex string
-	if !m.Revoked() {
-		sigHex, _ = decoded["Signature"].(string)
-		if sigHex == "" {
-			return errors.New("manifest: Signature missing on verify")
-		}
+	if !m.Revoked() && m.signature == "" {
+		return errors.New("manifest: Signature missing on verify")
 	}
-	preimage, err := signingPreimageFromDecoded(decoded)
-	if err != nil {
-		return fmt.Errorf("manifest: build signing preimage: %w", err)
-	}
-	if !VerifyKeyTypeSignature(m.MasterKey, preimage, masterSigHex) {
+	if !VerifyKeyTypeSignature(m.masterKey, m.signingPreimage, m.masterSignature) {
 		return errors.New("manifest: master signature invalid")
 	}
 	if !m.Revoked() {
-		if !VerifyKeyTypeSignature(m.SigningKey, preimage, sigHex) {
+		if !VerifyKeyTypeSignature(m.signingKey, m.signingPreimage, m.signature) {
 			return errors.New("manifest: ephemeral signature invalid")
 		}
 	}
@@ -252,9 +275,7 @@ func (m *Manifest) Verify() error {
 // signingPreimageFromDecoded returns HashPrefix("MAN\0") || STObject
 // (manifest without signing fields). The caller owns `decoded`; this
 // function mutates it (deletes non-signing fields), so callers that
-// still need the original map must pass a clone. Mirrors rippled's
-// ripple::verify pattern (Sign.cpp:47-62) where ss.add32(prefix)
-// precedes st.addWithoutSigningFields(ss).
+// still need the original map must pass a clone.
 func signingPreimageFromDecoded(decoded map[string]any) ([]byte, error) {
 	for k := range decoded {
 		fi, _ := definitions.Get().FieldInstanceByName(k)
@@ -277,19 +298,14 @@ func signingPreimageFromDecoded(decoded map[string]any) ([]byte, error) {
 // pubKey, dispatching on the 33-byte key's type prefix (ed25519 vs
 // secp256k1). The raw message bytes are passed as a Go string (the crypto
 // packages treat string as an opaque byte sequence). secp256k1 requires a
-// fully-canonical (low-S) signature, matching rippled's PublicKey::verify
-// default. Returns false for an unrecognized key type or malformed
-// signature.
+// fully-canonical (low-S) signature. Returns false for an unrecognized key
+// type or malformed signature.
 func VerifyKeyTypeSignature(pubKey [33]byte, message []byte, sigHex string) bool {
 	pubHex := hex.EncodeToString(pubKey[:])
 	switch crypto.PublicKeyType(pubKey[:]) {
 	case crypto.KeyTypeEd25519:
 		return ed25519.Algorithm{}.Validate(string(message), pubHex, sigHex)
 	case crypto.KeyTypeSecp256k1:
-		// rippled's manifest verify path Sign.cpp:47-62 → PublicKey::verify
-		// uses the header-default mustBeFullyCanonical=true
-		// (PublicKey.h:256), so non-low-S manifest signatures must be
-		// rejected.
 		return secp256k1.Algorithm{}.Validate(string(message), pubHex, sigHex)
 	default:
 		return false
@@ -325,44 +341,6 @@ func requireHexField(m map[string]any, name string) (string, error) {
 }
 
 func hasField(m map[string]any, name string) bool {
-	v, ok := m[name]
-	if !ok {
-		return false
-	}
-	s, ok := v.(string)
-	if !ok {
-		// Non-string fields (numeric) are always "present" if the key
-		// is in the map.
-		return true
-	}
-	return s != ""
-}
-
-// toUint32 accepts the several numeric shapes the JSON map may contain
-// for a UInt32 field (float64 from json.Unmarshal, int / int64 from
-// some codec paths, uint32/uint64 direct).
-func toUint32(v any) (uint32, bool) {
-	switch t := v.(type) {
-	case uint32:
-		return t, true
-	case uint64:
-		return uint32(t), true
-	case int:
-		if t < 0 {
-			return 0, false
-		}
-		return uint32(t), true
-	case int64:
-		if t < 0 {
-			return 0, false
-		}
-		return uint32(t), true
-	case float64:
-		if t < 0 {
-			return 0, false
-		}
-		return uint32(t), true
-	default:
-		return 0, false
-	}
+	_, ok := m[name]
+	return ok
 }

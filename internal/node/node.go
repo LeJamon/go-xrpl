@@ -133,7 +133,7 @@ func isFullGitHash(value string) bool {
 // Run assembles and starts every node subsystem from the parsed config, then
 // blocks until a terminating signal or fatal error. It is the composition root
 // extracted from the CLI so flag parsing and node wiring stay separable.
-func Run(appConfig *config.Config, configPath string, standalone bool, startup service.StartupConfig, rootLogger, serverLog xrpllog.Logger) error {
+func Run(appConfig *config.Config, configPath string, standalone bool, startup service.StartupConfig, rootLogger, serverLog xrpllog.Logger) (runErr error) {
 	if err := validateTrustedValidatorConfig(appConfig, standalone); err != nil {
 		return err
 	}
@@ -155,7 +155,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 		grpcSrv             *googlegrpc.Server
 	)
 	defer func() {
-		doShutdown(httpSrvs, wsSrvs, wsServer, grpcSrv, ledgerService, ledgerCleaner, consensusComponents, rotator, db, repoManager, serverLog)
+		runErr = errors.Join(runErr, doShutdown(httpSrvs, wsSrvs, wsServer, grpcSrv, ledgerService, ledgerCleaner, consensusComponents, rotator, db, repoManager, serverLog))
 	}()
 
 	db, repoManager, err = setupStorage(appConfig, serverLog)
@@ -480,7 +480,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 		if appConfig.NodeDB.EarliestSeq > 0 || rotator != nil {
 			floor = minimumOnlineFloorFunc(retentionFloor)
 		}
-		consensusComponents, compErr = adaptor.NewFromConfig(appConfig, ledgerService, validationRepo, floor)
+		consensusComponents, compErr = adaptor.NewFromConfig(context.Background(), appConfig, ledgerService, validationRepo, floor)
 		if compErr != nil {
 			return fmt.Errorf("create consensus components: %w", compErr)
 		}
@@ -702,10 +702,10 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 		}
 
 		// Expose the validator-manifest cache to the `manifest` RPC.
-		// The cache is shared — the router writes inbound manifests,
-		// the engine reads for ephemeral→master translation, and this
-		// RPC reads for external queries.
-		services.Manifests = consensusComponents.Manifests
+		// The validator cache is shared by the router, consensus, and
+		// RPC paths; publisher manifests stay isolated in the validator-list
+		// aggregator.
+		services.Manifests = consensusComponents.ValidatorManifests
 
 		// Expose the publisher-list aggregator (when configured) to
 		// the `validators` and `validator_list_sites` RPC methods.
@@ -749,7 +749,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 			}
 			return out
 		}
-		if mc := consensusComponents.Manifests; mc != nil {
+		if mc := consensusComponents.ValidatorManifests; mc != nil {
 			// Mirrors rippled getJson at ValidatorList.cpp:1726-1734 —
 			// `signing_keys` only surfaces master→signing pairs for
 			// masters present in keyListings_, i.e. validators listed
@@ -883,8 +883,8 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 		// installed on the cache, fed by every accepted manifest
 		// regardless of source (overlay relay, startup, validator-list
 		// aggregator, local-manifest emit).
-		if consensusComponents.Manifests != nil {
-			consensusComponents.Manifests.SetOnAccepted(func(m *manifest.Manifest) {
+		if consensusComponents.ValidatorManifests != nil {
+			consensusComponents.ValidatorManifests.SubscribeAccepted(func(m *manifest.Manifest) {
 				publishManifestIfSubscribed(publisher, m)
 			})
 		}
@@ -897,7 +897,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, startup s
 		if consensusComponents.Engine != nil {
 			consensusComponents.Engine.Subscribe(&rpcEventBridge{
 				publisher: publisher,
-				manifests: consensusComponents.Manifests,
+				manifests: consensusComponents.ValidatorManifests,
 				networkID: uint32(networkID),
 			})
 		}
@@ -1569,7 +1569,8 @@ func doShutdown(
 	kvDB nodestore.Database,
 	repoManager relationaldb.RepositoryManager,
 	logger xrpllog.Logger,
-) {
+) error {
+	var shutdownErr error
 	const drainTimeout = 30 * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer cancel()
@@ -1614,7 +1615,11 @@ func doShutdown(
 	}
 
 	if consensusComponents != nil {
-		consensusComponents.Stop()
+		stopErr := consensusComponents.Stop()
+		if stopErr != nil {
+			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("stop consensus components: %w", stopErr))
+			logger.Warn("Consensus component shutdown failed", "err", stopErr)
+		}
 		logger.Info("Consensus components stopped")
 	}
 
@@ -1628,16 +1633,19 @@ func doShutdown(
 	}
 	if kvDB != nil {
 		if err := kvDB.Close(); err != nil {
+			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close node store: %w", err))
 			logger.Warn("Node store close failed", "err", err)
 		}
 	}
 	if repoManager != nil {
 		if err := repoManager.Close(context.Background()); err != nil {
+			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close relational DB: %w", err))
 			logger.Warn("Relational DB close failed", "err", err)
 		}
 	}
 
 	logger.Info("Shutdown complete")
+	return shutdownErr
 }
 
 // ledgerCleanerSource adapts the ledger service + node store to the

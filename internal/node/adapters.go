@@ -433,10 +433,12 @@ func buildManifestEvent(m *manifest.Manifest) *rpc.ManifestEvent {
 	if m == nil {
 		return nil
 	}
-	masterEnc, _ := addresscodec.EncodeNodePublicKey(m.MasterKey[:])
+	master := m.MasterKey()
+	masterEnc, _ := addresscodec.EncodeNodePublicKey(master[:])
 	var signingEnc string
 	if !m.Revoked() {
-		signingEnc, _ = addresscodec.EncodeNodePublicKey(m.SigningKey[:])
+		signing := m.SigningKey()
+		signingEnc, _ = addresscodec.EncodeNodePublicKey(signing[:])
 	}
 	masterSig, sig := m.Signatures()
 	return rpc.NewManifestEvent(
@@ -444,9 +446,9 @@ func buildManifestEvent(m *manifest.Manifest) *rpc.ManifestEvent {
 		signingEnc,
 		masterSig,
 		sig,
-		m.Domain,
-		upperHex(m.Serialized),
-		m.Sequence,
+		m.Domain(),
+		upperHex(m.Serialized()),
+		m.Sequence(),
 	)
 }
 
