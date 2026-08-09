@@ -29,12 +29,19 @@ func postTransportRegressionRequest(t *testing.T, server *Server, body string) *
 
 func newTransportRegressionServer(t *testing.T) *Server {
 	t.Helper()
-	server := newHardeningServer(t, time.Second, "ping", &stubHandler{})
-	server.registry.Register("stop", &stubHandler{role: types.RoleAdmin})
-	server.registry.Register("fail", &stubHandler{
-		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
-		},
+	server := NewServer(ServerOptions{
+		Timeout:  time.Second,
+		Services: types.NewServiceContainer(nil),
+		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"ping": &stubHandler{},
+			"stop": &stubHandler{role: types.RoleAdmin},
+			"fail": &stubHandler{
+				handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+					return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+				},
+			},
+			"gated": &condStubHandler{cond: types.NeedsNetworkConnection},
+		}),
 	})
 	server.resourceManager = resource.NewManager(nil, nil)
 	return server
@@ -283,7 +290,6 @@ func TestHTTPEarlyDispatchErrorsChargeReferenceAndWarn(t *testing.T) {
 			method: "gated",
 			token:  "noNetwork",
 			setup: func(server *Server) {
-				server.registry.Register("gated", &condStubHandler{cond: types.NeedsNetworkConnection})
 				server.services.Ledger = newMockLedgerService()
 			},
 		},

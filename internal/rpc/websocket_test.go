@@ -751,12 +751,12 @@ func TestWebSocketErrorProjectorPreservesExtrasAndCanonicalFields(t *testing.T) 
 
 func TestWebSocketHandlerPanicWireEnvelope(t *testing.T) {
 	const panicCause = "websocket panic must stay private"
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
-	ws.methodRegistry.Register("panic", &stubHandler{
-		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
-			panic(panicCause)
-		},
-	})
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+		"panic": &stubHandler{
+			handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+				panic(panicCause)
+			},
+		}})})
 
 	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
 	defer httpSrv.Close()
@@ -797,12 +797,12 @@ func TestWebSocketHandlerPanicWireEnvelope(t *testing.T) {
 }
 
 func TestWebSocketOrdinaryErrorWireEnvelope(t *testing.T) {
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
-	ws.methodRegistry.Register("fail", &stubHandler{
-		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
-			return nil, rpcInternalError()
-		},
-	})
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+		"fail": &stubHandler{
+			handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+				return nil, rpcInternalError()
+			},
+		}})})
 
 	body := wsRawRoundTrip(t, ws, `{"command":"fail","id":7,"jsonrpc":"2.0","ripplerpc":"1.0","api_version":2,"secret":"private seed"}`)
 	const want = `{"api_version":2,"error":"internal","error_code":73,"error_message":"Internal error.","id":7,"jsonrpc":"2.0","request":{"api_version":2,"command":"fail","id":7,"jsonrpc":"2.0","ripplerpc":"1.0","secret":"<masked>"},"ripplerpc":"1.0","status":"error","type":"response"}`
@@ -813,13 +813,13 @@ func TestWebSocketOrdinaryErrorWireEnvelope(t *testing.T) {
 
 func TestWebSocketRedactsIDAndPreservesItInHandlerParams(t *testing.T) {
 	received := make(chan json.RawMessage, 1)
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
-	ws.methodRegistry.Register("capture", &stubHandler{
-		handle: func(_ *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-			received <- append(json.RawMessage(nil), params...)
-			return map[string]any{"ok": true}, nil
-		},
-	})
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+		"capture": &stubHandler{
+			handle: func(_ *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+				received <- append(json.RawMessage(nil), params...)
+				return map[string]any{"ok": true}, nil
+			},
+		}})})
 
 	body := wsRawRoundTrip(t, ws, `{"command":"capture","method":"capture","api_version":1,"id":{"SeCrEt":"private-id"},"payload":"kept"}`)
 	const want = `{"api_version":1,"id":{"SeCrEt":"<masked>"},"result":{"ok":true},"status":"success","type":"response"}`
@@ -938,8 +938,9 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 }
 
 func TestWebSocketRejectsTrailingJSON(t *testing.T) {
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
-	ws.methodRegistry.Register("ping", &stubHandler{})
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+		"ping": &stubHandler{},
+	})})
 
 	body := wsRawRoundTrip(t, ws, `{"command":"ping","id":7}{"command":"ping","id":8}`)
 	const want = `{"error":"jsonInvalid","type":"error","value":"<redacted>"}`
@@ -975,8 +976,9 @@ func TestWebSocketJSONInvalidWireEnvelope(t *testing.T) {
 }
 
 func TestWebSocketJSONIntegerBounds(t *testing.T) {
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
-	ws.methodRegistry.Register("ping", &stubHandler{})
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+		"ping": &stubHandler{},
+	})})
 
 	for _, request := range []string{
 		`{"command":"ping","id":4294967296}`,
@@ -1015,12 +1017,12 @@ func TestWebSocketJSONIntegerBounds(t *testing.T) {
 }
 
 func TestWebSocketErrorExceptionWireEnvelope(t *testing.T) {
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second})
-	ws.methodRegistry.Register("simulate", &stubHandler{
-		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
-			return nil, types.RpcErrorInvalidTransaction("invalid transaction detail")
-		},
-	})
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+		"simulate": &stubHandler{
+			handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+				return nil, types.RpcErrorInvalidTransaction("invalid transaction detail")
+			},
+		}})})
 
 	body := wsRawRoundTrip(t, ws, `{"command":"simulate","id":9}`)
 	const want = `{"error":"invalidTransaction","error_exception":"invalid transaction detail","id":9,"request":{"command":"simulate","id":9},"status":"error","type":"response"}`

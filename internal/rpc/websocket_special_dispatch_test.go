@@ -22,9 +22,15 @@ func newSpecialDispatchHarness(t *testing.T) (*WebSocketServer, *websocketConnec
 		Capabilities:   types.RPCCapabilities{PathSearchMax: 3},
 	}
 	manager := resource.NewManager(nil, nil)
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second, Services: services, ResourceManager: manager})
-	ws.methodRegistry.Register("subscribe", &stubHandler{})
-	ws.methodRegistry.Register("path_find", &stubHandler{})
+	ws := NewWebSocketServer(WebSocketServerOptions{
+		Timeout:         time.Second,
+		Services:        services,
+		ResourceManager: manager,
+		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"subscribe": &stubHandler{},
+			"path_find": &stubHandler{},
+		}),
+	})
 	send := make(chan []byte, 1)
 	conn := &websocketConnection{
 		Connection: subscription.NewConnectionWithContext(context.Background(), "special-dispatch", send),

@@ -29,12 +29,13 @@ func echoHandler() *stubHandler {
 func newBatchServer(t *testing.T) *Server {
 	t.Helper()
 	srv := &Server{
-		registry: types.NewMethodRegistry(),
+		registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"ping":         echoHandler(),
+			"account_info": echoHandler(),
+		}),
 		timeout:  time.Second,
 		services: types.NewServiceContainer(nil),
 	}
-	srv.registry.Register("ping", echoHandler())
-	srv.registry.Register("account_info", echoHandler())
 	return srv
 }
 

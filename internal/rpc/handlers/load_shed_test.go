@@ -227,9 +227,14 @@ func TestWaitPathfindWaitsForRelease(t *testing.T) {
 		t.Fatalf("second acquire should succeed: %v", err2)
 	}
 
-	acquired := make(chan bool, 1)
+	type waitResult struct {
+		release func()
+		ok      bool
+	}
+	acquired := make(chan waitResult, 1)
 	go func() {
-		acquired <- s.WaitPathfind(context.Background())
+		release, ok := s.WaitPathfind(context.Background())
+		acquired <- waitResult{release: release, ok: ok}
 	}()
 
 	select {
@@ -240,15 +245,15 @@ func TestWaitPathfindWaitsForRelease(t *testing.T) {
 
 	r1()
 	select {
-	case ok := <-acquired:
-		if !ok {
+	case result := <-acquired:
+		if !result.ok {
 			t.Fatal("waiting pathfind should acquire the released slot")
 		}
+		result.release()
 	case <-time.After(time.Second):
 		t.Fatal("waiting pathfind did not acquire the released slot")
 	}
 
-	s.ReleasePathfind()
 	r2()
 	if got := s.PathfindActive(); got != 0 {
 		t.Fatalf("PathfindActive leaked after wait: %d", got)
@@ -257,14 +262,14 @@ func TestWaitPathfindWaitsForRelease(t *testing.T) {
 
 func TestWaitPathfindHonorsCancellation(t *testing.T) {
 	s := types.NewClientLoadShedder()
-	s.AcquirePathfindUnlimited()
-	s.AcquirePathfindUnlimited()
+	r1 := s.AcquirePathfindUnlimited()
+	r2 := s.AcquirePathfindUnlimited()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if s.WaitPathfind(ctx) {
+	if _, ok := s.WaitPathfind(ctx); ok {
 		t.Fatal("canceled pathfind wait should fail")
 	}
-	s.ReleasePathfind()
-	s.ReleasePathfind()
+	r1()
+	r2()
 }

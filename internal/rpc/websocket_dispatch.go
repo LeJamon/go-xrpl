@@ -162,8 +162,8 @@ func (ws *WebSocketServer) handleSpecialCommand(wsConn *websocketConnection, ctx
 
 	result, rpcErr, recovered := func() (any, *types.RpcError, bool) {
 		if ws.services != nil && ws.services.ClientLoad != nil {
-			ws.services.ClientLoad.Begin()
-			defer ws.services.ClientLoad.End()
+			release := ws.services.ClientLoad.Begin()
+			defer release()
 		}
 		finishDiagnostics := startRPCDiagnostics(ws.services, cmd.Command)
 		result, rpcErr, recovered := invokeWSSpecial(handler, wsConn, ctx, cmd)

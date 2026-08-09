@@ -24,8 +24,13 @@ func TestNewServerLeavesServiceContainerUntouched(t *testing.T) {
 func TestRpcTooBusyUsesLegacyHTTP200(t *testing.T) {
 	services := types.NewServiceContainer(nil)
 	services.ClientLoad = types.NewClientLoadShedder()
-	srv := NewServer(ServerOptions{Timeout: time.Second, Services: services})
-	srv.registry.Register("book_offers", &handlers.BookOffersMethod{})
+	srv := NewServer(ServerOptions{
+		Timeout:  time.Second,
+		Services: services,
+		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"book_offers": &handlers.BookOffersMethod{},
+		}),
+	})
 
 	for i := int64(0); i <= types.MaxJobQueueClients; i++ {
 		services.ClientLoad.Begin()
@@ -67,8 +72,13 @@ func TestRpcTooBusyUsesLegacyHTTP200(t *testing.T) {
 func TestRequestUnderThresholdReturnsHTTP200(t *testing.T) {
 	services := types.NewServiceContainer(nil)
 	services.ClientLoad = types.NewClientLoadShedder()
-	srv := NewServer(ServerOptions{Timeout: time.Second, Services: services})
-	srv.registry.Register("book_offers", &handlers.BookOffersMethod{})
+	srv := NewServer(ServerOptions{
+		Timeout:  time.Second,
+		Services: services,
+		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"book_offers": &handlers.BookOffersMethod{},
+		}),
+	})
 
 	body := `{"method":"book_offers","params":[{}]}`
 	req := httptest.NewRequest("POST", "/", strings.NewReader(body))

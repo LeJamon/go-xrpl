@@ -341,8 +341,8 @@ func (m *pathFindRefreshManager) waitForPathfindAdmission(job pathFindRefreshJob
 		if !m.jobCurrent(job) {
 			return nil, false
 		}
-		if shedder.AcquirePathfind() {
-			return shedder.ReleasePathfind, true
+		if release, acquired := shedder.AcquirePathfind(); acquired {
+			return release, true
 		}
 		timer := time.NewTimer(pathFindRefreshRetryInterval)
 		select {

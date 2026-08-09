@@ -191,8 +191,8 @@ func dispatchResolvedMethod(
 	}
 
 	if services != nil && services.ClientLoad != nil {
-		services.ClientLoad.Begin()
-		defer services.ClientLoad.End()
+		release := services.ClientLoad.Begin()
+		defer release()
 	}
 	finishDiagnostics := startRPCDiagnostics(services, method)
 	result, rpcErr, recovered := invokeHandler(resolution.handler, ctx, params, method, log)

@@ -108,12 +108,13 @@ func TestHTTPAdminDenialChargesFeeMalformed(t *testing.T) {
 // elements are unaffected.
 func TestHTTPBatchAdminDenialForbidden(t *testing.T) {
 	srv := &Server{
-		registry: types.NewMethodRegistry(),
+		registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"stop": &stubHandler{role: types.RoleAdmin},
+			"ping": echoHandler(),
+		}),
 		timeout:  time.Second,
 		services: types.NewServiceContainer(nil),
 	}
-	srv.registry.Register("stop", &stubHandler{role: types.RoleAdmin})
-	srv.registry.Register("ping", echoHandler())
 
 	body := `{"method":"batch","params":[
 		{"method":"stop","value":7},
@@ -168,8 +169,12 @@ func TestHTTPBatchAdminDenialForbidden(t *testing.T) {
 // i.e. the "forbidden" token with code 3. A non-admin role is forced by
 // configuring AdminNets that exclude the loopback test peer.
 func TestWSAdminDenialForbidden(t *testing.T) {
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 2 * time.Second})
-	ws.methodRegistry.Register("stop", &stubHandler{role: types.RoleAdmin})
+	ws := NewWebSocketServer(WebSocketServerOptions{
+		Timeout: 2 * time.Second,
+		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"stop": &stubHandler{role: types.RoleAdmin},
+		}),
+	})
 
 	_, adminNet, _ := net.ParseCIDR("10.0.0.0/8")
 	pc := &PortContext{AdminNets: []net.IPNet{*adminNet}}

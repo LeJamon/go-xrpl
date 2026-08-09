@@ -32,10 +32,11 @@ func saturatedShedder() *types.ClientLoadShedder {
 // does not serve the requested (in-range) api_version resolves to unknown-
 // command — matching rippled's getHandler returning null — not invalid_API_version.
 func TestDispatchGateOrder(t *testing.T) {
-	reg := types.NewMethodRegistry()
-	reg.Register("stop", &stubHandler{role: types.RoleAdmin})                                      // admin-only
-	reg.Register("ping", &stubHandler{role: types.RoleGuest})                                      // open
-	reg.Register("v1only", &stubHandler{role: types.RoleGuest, apiVers: []int{types.ApiVersion1}}) // known, v1-only
+	reg := mustTestMethodRegistry(t, map[string]types.MethodHandler{
+		"stop":   &stubHandler{role: types.RoleAdmin},                                    // admin-only
+		"ping":   &stubHandler{role: types.RoleGuest},                                    // open
+		"v1only": &stubHandler{role: types.RoleGuest, apiVers: []int{types.ApiVersion1}}, // known, v1-only
+	})
 
 	cases := []struct {
 		name       string
@@ -103,8 +104,13 @@ func TestDispatchGateOrder(t *testing.T) {
 func TestHTTPForbiddenBeatsBusy(t *testing.T) {
 	services := types.NewServiceContainer(nil)
 	services.ClientLoad = types.NewClientLoadShedder()
-	srv := NewServer(ServerOptions{Timeout: time.Second, Services: services})
-	srv.registry.Register("stop", &stubHandler{role: types.RoleAdmin})
+	srv := NewServer(ServerOptions{
+		Timeout:  time.Second,
+		Services: services,
+		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"stop": &stubHandler{role: types.RoleAdmin},
+		}),
+	})
 
 	for i := int64(0); i <= types.MaxJobQueueClients; i++ {
 		services.ClientLoad.Begin()
@@ -147,8 +153,13 @@ func TestHTTPForbiddenBeatsBusy(t *testing.T) {
 // invalid_API_version bare token.
 func TestHTTPKnownMethodUnsupportedVersionIsUnknownCommand(t *testing.T) {
 	services := types.NewServiceContainer(nil)
-	srv := NewServer(ServerOptions{Timeout: time.Second, Services: services})
-	srv.registry.Register("v1only", &stubHandler{role: types.RoleGuest, apiVers: []int{types.ApiVersion1}})
+	srv := NewServer(ServerOptions{
+		Timeout:  time.Second,
+		Services: services,
+		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"v1only": &stubHandler{role: types.RoleGuest, apiVers: []int{types.ApiVersion1}},
+		}),
+	})
 
 	post := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("POST", "/", strings.NewReader(body))

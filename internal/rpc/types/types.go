@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"sort"
+	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
@@ -126,31 +129,100 @@ type MethodHandler interface {
 	RequiredCondition() Condition
 }
 
-// Method registry for dynamic method registration
+// MethodRegistry is the immutable, published RPC method catalogue. Use a
+// MethodRegistryBuilder to construct one before handing it to a transport.
 type MethodRegistry struct {
 	methods map[string]MethodHandler
+	names   []string
 }
 
-func NewMethodRegistry() *MethodRegistry {
-	return &MethodRegistry{
-		methods: make(map[string]MethodHandler),
+// MethodRegistryBuilder collects RPC methods before publication. Its zero
+// value is ready for use.
+type MethodRegistryBuilder struct {
+	methods map[string]MethodHandler
+	built   bool
+}
+
+// NewMethodRegistryBuilder returns an empty method registry builder.
+func NewMethodRegistryBuilder() *MethodRegistryBuilder {
+	return &MethodRegistryBuilder{}
+}
+
+// Register adds a method to the builder. Names must be non-empty and have no
+// surrounding whitespace. Handlers must be non-nil, including when an
+// interface contains a typed nil value. Registration is rejected after Build.
+func (b *MethodRegistryBuilder) Register(name string, handler MethodHandler) error {
+	if b == nil {
+		return fmt.Errorf("method registry builder is nil")
+	}
+	if b.built {
+		return fmt.Errorf("method registry is already built")
+	}
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" || trimmed != name {
+		return fmt.Errorf("invalid RPC method name %q", name)
+	}
+	if methodHandlerIsNil(handler) {
+		return fmt.Errorf("RPC method %q has a nil handler", name)
+	}
+	if b.methods == nil {
+		b.methods = make(map[string]MethodHandler)
+	}
+	if _, exists := b.methods[name]; exists {
+		return fmt.Errorf("RPC method %q is already registered", name)
+	}
+	b.methods[name] = handler
+	return nil
+}
+
+// Build publishes an immutable method registry. The builder cannot be reused
+// for further registration after publication.
+func (b *MethodRegistryBuilder) Build() (*MethodRegistry, error) {
+	if b == nil {
+		return nil, fmt.Errorf("method registry builder is nil")
+	}
+	if b.built {
+		return nil, fmt.Errorf("method registry is already built")
+	}
+	methods := make(map[string]MethodHandler, len(b.methods))
+	names := make([]string, 0, len(b.methods))
+	for name, handler := range b.methods {
+		methods[name] = handler
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	registry := &MethodRegistry{methods: methods, names: names}
+	b.built = true
+	return registry, nil
+}
+
+func methodHandlerIsNil(handler MethodHandler) bool {
+	if handler == nil {
+		return true
+	}
+	value := reflect.ValueOf(handler)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
 	}
 }
 
-func (r *MethodRegistry) Register(name string, handler MethodHandler) {
-	r.methods[name] = handler
-}
-
 func (r *MethodRegistry) Get(name string) (MethodHandler, bool) {
+	if r == nil {
+		return nil, false
+	}
 	handler, exists := r.methods[name]
 	return handler, exists
 }
 
 func (r *MethodRegistry) List() []string {
-	methods := make([]string, 0, len(r.methods))
-	for name := range r.methods {
-		methods = append(methods, name)
+	if r == nil {
+		return nil
 	}
+	methods := make([]string, len(r.names))
+	copy(methods, r.names)
 	return methods
 }
 

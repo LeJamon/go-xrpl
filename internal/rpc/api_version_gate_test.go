@@ -19,17 +19,18 @@ import (
 func versionEchoServer(t *testing.T, beta bool) *Server {
 	t.Helper()
 	srv := &Server{
-		registry: types.NewMethodRegistry(),
+		registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"ping": &stubHandler{
+				apiVers: []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3},
+				handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+					return map[string]any{"api_version": ctx.ApiVersion}, nil
+				},
+			},
+		}),
 		timeout:  time.Second,
 		services: types.NewServiceContainer(nil),
 	}
 	srv.services.BetaRPCAPI = beta
-	srv.registry.Register("ping", &stubHandler{
-		apiVers: []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3},
-		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
-			return map[string]any{"api_version": ctx.ApiVersion}, nil
-		},
-	})
 	return srv
 }
 
@@ -178,14 +179,19 @@ func TestApiVersion_BatchV3RejectedWithoutBeta(t *testing.T) {
 // given beta flag.
 func versionEchoWSServer(t *testing.T, beta bool) *WebSocketServer {
 	t.Helper()
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Services: types.NewServiceContainer(nil)})
-	ws.services.BetaRPCAPI = beta
-	ws.methodRegistry.Register("ping", &stubHandler{
-		apiVers: []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3},
-		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
-			return map[string]any{"api_version": ctx.ApiVersion}, nil
-		},
+	ws := NewWebSocketServer(WebSocketServerOptions{
+		Timeout:  30 * time.Second,
+		Services: types.NewServiceContainer(nil),
+		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"ping": &stubHandler{
+				apiVers: []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3},
+				handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+					return map[string]any{"api_version": ctx.ApiVersion}, nil
+				},
+			},
+		}),
 	})
+	ws.services.BetaRPCAPI = beta
 	return ws
 }
 

@@ -48,11 +48,10 @@ func (s *stubHandler) RequiredCondition() types.Condition { return types.NoCondi
 func newHardeningServer(t *testing.T, timeout time.Duration, method string, h types.MethodHandler) *Server {
 	t.Helper()
 	srv := &Server{
-		registry: types.NewMethodRegistry(),
+		registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{method: h}),
 		timeout:  timeout,
 		services: types.NewServiceContainer(nil),
 	}
-	srv.registry.Register(method, h)
 	return srv
 }
 

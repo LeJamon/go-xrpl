@@ -77,9 +77,8 @@ var unblockedMethods = []string{
 // newTestServer creates a Server with all methods registered for testing
 func newTestServer() *Server {
 	server := &Server{
-		registry: types.NewMethodRegistry(),
+		registry: defaultMethodRegistry(),
 	}
-	server.registerAllMethods()
 	return server
 }
 

@@ -37,8 +37,10 @@ func specByMethod(t *testing.T, method string) rpcCommandSpec {
 }
 
 func TestRPCCommandSpecsAreRegisteredHandlers(t *testing.T) {
-	registry := rpctypes.NewMethodRegistry()
-	handlers.RegisterAll(registry)
+	registry, err := handlers.BuildRegistry()
+	if err != nil {
+		t.Fatalf("build registry: %v", err)
+	}
 
 	seen := make(map[string]struct{}, len(rpcCommandSpecs))
 	for _, spec := range rpcCommandSpecs {

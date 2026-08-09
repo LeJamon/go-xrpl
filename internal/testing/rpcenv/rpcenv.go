@@ -36,8 +36,10 @@ func New(t testing.TB) *Env {
 // with custom genesis, TxQ, etc.
 func Wrap(t testing.TB, env *jtx.TestEnv) *Env {
 	t.Helper()
-	registry := types.NewMethodRegistry()
-	handlers.RegisterAll(registry)
+	registry, err := handlers.BuildRegistry()
+	if err != nil {
+		t.Fatalf("build RPC registry: %v", err)
+	}
 	adapter := newLedgerAdapter(env)
 	services := types.NewServiceContainer(adapter)
 	services.Capabilities.PathSearchMax = 3

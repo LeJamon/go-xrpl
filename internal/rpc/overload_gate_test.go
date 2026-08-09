@@ -185,13 +185,14 @@ func TestHTTPApiVersionPrecedesOverload(t *testing.T) {
 // element and an ordinary element — never the forbidden (-32605) object.
 func TestHTTPBatchOverloadElement(t *testing.T) {
 	srv := &Server{
-		registry:        types.NewMethodRegistry(),
+		registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"stop": &stubHandler{role: types.RoleAdmin},
+			"ping": echoHandler(),
+		}),
 		timeout:         time.Second,
 		services:        types.NewServiceContainer(nil),
 		resourceManager: resource.NewManager(nil, nil),
 	}
-	srv.registry.Register("stop", &stubHandler{role: types.RoleAdmin})
-	srv.registry.Register("ping", echoHandler())
 	pushOverDropThreshold(t, srv.resourceManager, "10.0.0.1") // postBatch posts from 10.0.0.1
 
 	body := `{"method":"batch","params":[
@@ -247,8 +248,13 @@ func TestWSOverloadClosesBeforeRequestValidation(t *testing.T) {
 	for _, request := range tests {
 		t.Run(request, func(t *testing.T) {
 			manager := resource.NewManager(nil, nil)
-			ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 2 * time.Second, ResourceManager: manager})
-			ws.methodRegistry.Register("stop", &stubHandler{role: types.RoleAdmin})
+			ws := NewWebSocketServer(WebSocketServerOptions{
+				Timeout:         2 * time.Second,
+				ResourceManager: manager,
+				Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+					"stop": &stubHandler{role: types.RoleAdmin},
+				}),
+			})
 			pushOverDropThreshold(t, manager, "127.0.0.1")
 
 			_, adminNet, _ := net.ParseCIDR("10.0.0.0/8")

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
-	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
@@ -76,6 +75,7 @@ type WebSocketServerOptions struct {
 	Services            *types.ServiceContainer
 	ResourceManager     *resource.Manager
 	PeerSource          types.PeerSource
+	Registry            *types.MethodRegistry
 	PingInterval        time.Duration
 	LedgerInfoProvider  types.LedgerInfoProvider
 	SubscriptionManager *subscription.Manager
@@ -130,7 +130,7 @@ func NewWebSocketServer(options WebSocketServerOptions) *WebSocketServer {
 			// Don't require specific subprotocol - xrpl.js doesn't use one
 		},
 		subscriptionManager: manager,
-		methodRegistry:      types.NewMethodRegistry(),
+		methodRegistry:      options.Registry,
 		connections:         make(map[string]*websocketConnection),
 		timeout:             options.Timeout,
 		services:            options.Services,
@@ -139,6 +139,9 @@ func NewWebSocketServer(options WebSocketServerOptions) *WebSocketServer {
 		ledgerInfoProvider:  options.LedgerInfoProvider,
 		closeDone:           make(chan struct{}),
 		forceDone:           make(chan struct{}),
+	}
+	if ws.methodRegistry == nil {
+		ws.methodRegistry = defaultMethodRegistry()
 	}
 	ws.pathFindRefresh = newPathFindRefreshManager(ws)
 	if ws.services != nil {
@@ -149,7 +152,6 @@ func NewWebSocketServer(options WebSocketServerOptions) *WebSocketServer {
 	// composition installs the returned service on the shared container.
 	ws.urlSubs = newURLSubscriptionRegistry(ws)
 	ws.setPeerSource(options.PeerSource)
-	ws.registerAllMethods()
 	return ws
 }
 
@@ -240,10 +242,6 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer ws.wg.Done()
 		ws.pingLoop(wsConn)
 	}()
-}
-
-func (ws *WebSocketServer) registerAllMethods() {
-	handlers.RegisterAll(ws.methodRegistry)
 }
 
 // SubscriptionManager returns the subscription manager for event publishing

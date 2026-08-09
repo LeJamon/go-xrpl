@@ -46,6 +46,7 @@ type ServerOptions struct {
 	Services        *types.ServiceContainer
 	ResourceManager *resource.Manager
 	PeerSource      types.PeerSource
+	Registry        *types.MethodRegistry
 }
 
 var _ types.MethodDispatcher = (*Server)(nil)
@@ -79,14 +80,15 @@ func NewServer(options ServerOptions) *Server {
 		manager = resource.NewManager(nil, nil)
 	}
 	server := &Server{
-		registry:        types.NewMethodRegistry(),
+		registry:        options.Registry,
 		timeout:         options.Timeout,
 		services:        options.Services,
 		resourceManager: manager,
 	}
+	if server.registry == nil {
+		server.registry = defaultMethodRegistry()
+	}
 	server.setPeerSource(options.PeerSource)
-
-	server.registerAllMethods()
 
 	return server
 }

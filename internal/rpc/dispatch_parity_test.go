@@ -31,8 +31,9 @@ func (h *condStubHandler) RequiredCondition() types.Condition { return h.cond }
 // (used by BOTH the HTTP and WebSocket transports) runs conditionMet, so a
 // not-synced node refuses a condition-requiring method on either transport.
 func TestDispatchMethodEnforcesConditionMet(t *testing.T) {
-	reg := types.NewMethodRegistry()
-	reg.Register("gated", &condStubHandler{cond: types.NeedsNetworkConnection})
+	reg := mustTestMethodRegistry(t, map[string]types.MethodHandler{
+		"gated": &condStubHandler{cond: types.NeedsNetworkConnection},
+	})
 
 	t.Run("not synced is refused", func(t *testing.T) {
 		ctx := &types.RpcContext{
@@ -134,8 +135,12 @@ func TestLoadWarningNestedInResultOnHTTP(t *testing.T) {
 // alias for `command`, and an unresolvable command yields a bare missingCommand
 // token that echoes the request and id (ServerHandler.cpp:446-468).
 func TestWSCommandAliasAndMissingCommand(t *testing.T) {
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 2 * time.Second})
-	ws.methodRegistry.Register("ping", &stubHandler{})
+	ws := NewWebSocketServer(WebSocketServerOptions{
+		Timeout: 2 * time.Second,
+		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"ping": &stubHandler{},
+		}),
+	})
 
 	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
 	defer httpSrv.Close()

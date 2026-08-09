@@ -158,8 +158,7 @@ func acquirePathfind(ctx *types.RpcContext) (release func(), rpcErr *types.RpcEr
 		if s == nil {
 			return func() {}, nil
 		}
-		s.AcquirePathfindUnlimited()
-		return s.ReleasePathfind, nil
+		return s.AcquirePathfindUnlimited(), nil
 	}
 	if services.IsLoadedLocal != nil && services.IsLoadedLocal() {
 		return nil, types.RpcErrorTooBusy()
@@ -170,10 +169,11 @@ func acquirePathfind(ctx *types.RpcContext) (release func(), rpcErr *types.RpcEr
 	if s.InFlight() > types.MaxPathfindClients {
 		return nil, types.RpcErrorTooBusy()
 	}
-	if !s.AcquirePathfind() {
+	release, acquired := s.AcquirePathfind()
+	if !acquired {
 		return nil, types.RpcErrorTooBusy()
 	}
-	return s.ReleasePathfind, nil
+	return release, nil
 }
 
 // waitPathfind queues a default-ledger request behind the bounded path-finding
@@ -182,10 +182,11 @@ func waitPathfind(ctx *types.RpcContext) (release func(), rpcErr *types.RpcError
 	if ctx == nil || ctx.Services == nil || ctx.Services.ClientLoad == nil {
 		return func() {}, nil
 	}
-	if !ctx.Services.ClientLoad.WaitPathfind(ctx.Context) {
+	release, acquired := ctx.Services.ClientLoad.WaitPathfind(ctx.Context)
+	if !acquired {
 		return nil, types.RpcErrorTooBusy()
 	}
-	return ctx.Services.ClientLoad.ReleasePathfind, nil
+	return release, nil
 }
 
 // parseParams unmarshals JSON params into dest, returning an RpcError on failure.

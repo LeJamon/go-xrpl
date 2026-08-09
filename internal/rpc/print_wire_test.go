@@ -37,8 +37,9 @@ func printTestServer(t *testing.T) *Server {
 		cluster:                map[string]any{},
 		criticalFailuresLocal:  4,
 		criticalFailuresShared: 2,
-	}})
-	srv.registry.Register("print", &handlers.PrintMethod{})
+	}, Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+		"print": &handlers.PrintMethod{},
+	})})
 	return srv
 }
 

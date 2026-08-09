@@ -727,13 +727,15 @@ const (
 // ClientLoadShedder is the shared in-flight RPC counter plus a
 // dedicated concurrent-path-find counter. See ServiceContainer.ClientLoad.
 //
-// Begin()/End() bracket each RPC dispatch (HTTP and WebSocket). Handlers
+// Begin returns an ownership-bound release function for each RPC dispatch
+// (HTTP and WebSocket). Handlers
 // consult InFlight() against the rippled-faithful tier constants
 // (MaxJobQueueClients, MaxBookOffersClients, MaxPathfindClients).
 //
-// AcquirePathfind/ReleasePathfind manage the second counter, capped at
-// MaxPathfindsInProgress to mirror rippled's LegacyPathFind ctor
-// (LegacyPathFind.cpp:30-60).
+// AcquirePathfind and AcquirePathfindUnlimited return ownership-bound
+// release functions for the second counter, which is capped at
+// MaxPathfindsInProgress for bounded callers. A release function is safe to
+// invoke more than once.
 type ClientLoadShedder struct {
 	inFlight       atomic.Int64
 	pathfindActive atomic.Int64
@@ -752,21 +754,34 @@ func (s *ClientLoadShedder) pathfindSignal() chan struct{} {
 	return s.pathfindReady
 }
 
-// Begin records the start of a client-RPC dispatch.
-func (s *ClientLoadShedder) Begin() {
+func noOpLoadShedRelease() {}
+
+func (s *ClientLoadShedder) release(counter *atomic.Int64, signal bool) func() {
 	if s == nil {
-		return
+		return noOpLoadShedRelease
 	}
-	s.inFlight.Add(1)
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			counter.Add(-1)
+			if signal {
+				select {
+				case s.pathfindSignal() <- struct{}{}:
+				default:
+				}
+			}
+		})
+	}
 }
 
-// End records completion of a client-RPC dispatch. Safe to call from a
-// defer alongside Begin().
-func (s *ClientLoadShedder) End() {
+// Begin records the start of a client-RPC dispatch and returns its release
+// function.
+func (s *ClientLoadShedder) Begin() func() {
 	if s == nil {
-		return
+		return noOpLoadShedRelease
 	}
-	s.inFlight.Add(-1)
+	s.inFlight.Add(1)
+	return s.release(&s.inFlight, false)
 }
 
 // InFlight returns the current in-flight RPC count. Gates compare it
@@ -779,61 +794,55 @@ func (s *ClientLoadShedder) InFlight() int64 {
 }
 
 // AcquirePathfind attempts to enter the path-finding critical section.
-// Returns true on success (caller MUST pair with ReleasePathfind), false
-// when already at MaxPathfindsInProgress. CAS-loop matches rippled's
-// LegacyPathFind ctor at LegacyPathFind.cpp:44-58.
-func (s *ClientLoadShedder) AcquirePathfind() bool {
+// It returns an ownership-bound release function and true on success, or a
+// nil release function and false when already at MaxPathfindsInProgress.
+// CAS-loop matches rippled's LegacyPathFind ctor at LegacyPathFind.cpp:44-58.
+func (s *ClientLoadShedder) AcquirePathfind() (func(), bool) {
 	if s == nil {
-		return true
+		return noOpLoadShedRelease, true
 	}
 	for {
 		prev := s.pathfindActive.Load()
 		if prev >= MaxPathfindsInProgress {
-			return false
+			return nil, false
 		}
 		if s.pathfindActive.CompareAndSwap(prev, prev+1) {
-			return true
+			return s.release(&s.pathfindActive, true), true
 		}
 	}
 }
 
 // WaitPathfind blocks until a bounded path-finding slot is available or the
-// request is canceled.
-func (s *ClientLoadShedder) WaitPathfind(ctx context.Context) bool {
+// request is canceled. It returns the acquired slot's release function and
+// true on success, or a nil release function and false on cancellation.
+func (s *ClientLoadShedder) WaitPathfind(ctx context.Context) (func(), bool) {
 	if s == nil {
-		return true
+		return noOpLoadShedRelease, true
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	for !s.AcquirePathfind() {
+	for {
+		release, acquired := s.AcquirePathfind()
+		if acquired {
+			return release, true
+		}
 		select {
 		case <-ctx.Done():
-			return false
+			return nil, false
 		case <-s.pathfindSignal():
 		}
 	}
-	return true
 }
 
 // AcquirePathfindUnlimited enters the path-finding critical section without
-// enforcing the non-admin concurrency cap.
-func (s *ClientLoadShedder) AcquirePathfindUnlimited() {
+// enforcing the non-admin concurrency cap and returns its release function.
+func (s *ClientLoadShedder) AcquirePathfindUnlimited() func() {
 	if s == nil {
-		return
+		return noOpLoadShedRelease
 	}
 	s.pathfindActive.Add(1)
-}
-
-func (s *ClientLoadShedder) ReleasePathfind() {
-	if s == nil {
-		return
-	}
-	s.pathfindActive.Add(-1)
-	select {
-	case s.pathfindSignal() <- struct{}{}:
-	default:
-	}
+	return s.release(&s.pathfindActive, true)
 }
 
 // PathfindActive returns the current concurrent-path-find count.
