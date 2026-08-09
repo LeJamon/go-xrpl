@@ -6,6 +6,44 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
+const (
+	// MaxManifestBytes is the largest serialized manifest accepted by the
+	// protocol's manifest cache.
+	MaxManifestBytes = 358
+
+	// ManifestFramingBytes bounds the protobuf field and length framing around
+	// each manifest in a TMManifests payload.
+	ManifestFramingBytes = 8
+
+	// DefaultMaxTrustedManifestCount is the default trusted-manifest allowance
+	// used when sizing an inbound TMManifests payload.
+	DefaultMaxTrustedManifestCount = 300
+
+	// DefaultMaxUntrustedManifestCount is the default untrusted-manifest
+	// allowance used when sizing an inbound TMManifests payload.
+	DefaultMaxUntrustedManifestCount = 300
+
+	// MaxConfiguredManifestCount is the largest legal configured allowance for
+	// either trusted or untrusted manifests.
+	MaxConfiguredManifestCount = 1000
+
+	// DefaultMaxManifestPayload is the wire and uncompressed payload limit
+	// implied by the default manifest allowances.
+	DefaultMaxManifestPayload = (DefaultMaxTrustedManifestCount + DefaultMaxUntrustedManifestCount) *
+		(MaxManifestBytes + ManifestFramingBytes)
+
+	// MaxConfiguredManifestPayload is the largest wire and uncompressed payload
+	// limit implied by legal manifest-count configuration.
+	MaxConfiguredManifestPayload = 2 * MaxConfiguredManifestCount *
+		(MaxManifestBytes + ManifestFramingBytes)
+)
+
+// MaximumManifestsMessageSize returns the largest TMManifests payload implied
+// by trusted and untrusted manifest allowances.
+func MaximumManifestsMessageSize(trustedCount, untrustedCount int) int {
+	return (trustedCount + untrustedCount) * (MaxManifestBytes + ManifestFramingBytes)
+}
+
 // WalkManifests validates a TMManifests payload before visiting its entries.
 // The returned byte slices alias payload and are only valid during the call.
 func WalkManifests(payload []byte, visit func([]byte)) (int, error) {
