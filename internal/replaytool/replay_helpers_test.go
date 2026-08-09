@@ -76,7 +76,6 @@ func TestBuildRulesFromAmendments(t *testing.T) {
 		t.Error("Flow should be enabled by name")
 	}
 
-	// By 64-char hex id.
 	idHex := hex.EncodeToString(flowID[:])
 	byID, err := buildRulesFromAmendments([]string{idHex})
 	if err != nil {

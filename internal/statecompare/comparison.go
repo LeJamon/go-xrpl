@@ -7,14 +7,12 @@ import (
 	"strings"
 )
 
-// ComparableStateEntry is one decoded ledger-state entry used for comparison.
 type ComparableStateEntry struct {
 	Index   string
 	DataHex string
 	Decoded map[string]any
 }
 
-// StateModification describes one state entry whose serialized data changed.
 type StateModification struct {
 	Index       string
 	OldDataHex  string

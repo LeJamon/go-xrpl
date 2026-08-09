@@ -13,10 +13,6 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
-// stateSource loads the seed account-state SHAMap for a ledger. It exists so
-// the SHAMap's backing — fully in-memory versus nodestore-lazy — is swappable
-// without touching the replay loop, as the mainnet-replay design requires
-// ("load state behind an interface, not loadInitialState's Put loop").
 type stateSource interface {
 	// Load returns the verified seed state map for the ledger, its snapshot,
 	// and the fee schedule extracted from the state.

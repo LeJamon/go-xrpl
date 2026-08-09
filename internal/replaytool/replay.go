@@ -26,20 +26,17 @@ import (
 
 // Fixture file structures matching xrpl-state-compare export format
 
-// stateFixture represents state.json - the pre-state at ledger N
 type stateFixture struct {
 	LedgerIndex uint32              `json:"ledger_index"`
 	AccountHash string              `json:"account_hash"`
 	Entries     []fixtureStateEntry `json:"entries"`
 }
 
-// fixtureStateEntry represents a single state entry
 type fixtureStateEntry struct {
 	Index string `json:"index"` // 32-byte hex key
 	Data  string `json:"data"`  // Binary data as hex
 }
 
-// envFixture represents env.json - the execution context
 type envFixture struct {
 	LedgerIndex         uint32     `json:"ledger_index"`
 	ParentHash          string     `json:"parent_hash"`
@@ -52,26 +49,22 @@ type envFixture struct {
 	Amendments          []string   `json:"amendments"`
 }
 
-// feesConfig represents fee settings
 type feesConfig struct {
 	BaseFee          uint64 `json:"base_fee"`
 	ReserveBase      uint64 `json:"reserve_base"`
 	ReserveIncrement uint64 `json:"reserve_increment"`
 }
 
-// txsFixture represents txs.json - transactions to execute
 type txsFixture struct {
 	Transactions []fixtureTxEntry `json:"transactions"`
 }
 
-// fixtureTxEntry represents a single transaction
 type fixtureTxEntry struct {
 	Index  int    `json:"index"`
 	Hash   string `json:"hash"`
 	TxBlob string `json:"tx_blob"` // Binary transaction as hex
 }
 
-// expectedFixture represents expected.json - expected results
 type expectedFixture struct {
 	LedgerIndex     uint32            `json:"ledger_index"`
 	LedgerHash      string            `json:"ledger_hash"`
@@ -81,14 +74,12 @@ type expectedFixture struct {
 	Transactions    []expectedTxEntry `json:"transactions"`
 }
 
-// expectedTxEntry represents expected transaction result
 type expectedTxEntry struct {
 	Index int    `json:"index"`
 	Hash  string `json:"hash"`
 	Meta  string `json:"meta"`
 }
 
-// txApplyInfo stores detailed transaction application info
 type txApplyInfo struct {
 	Index      int            `json:"index"`
 	Hash       string         `json:"hash"`
@@ -104,7 +95,6 @@ type txApplyInfo struct {
 	RawBlob    []byte         `json:"-"`
 }
 
-// replayResult contains the results of the replay
 type replayResult struct {
 	Success         bool
 	LedgerHash      [32]byte

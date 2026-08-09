@@ -462,7 +462,6 @@ func encodeIndexes(members [][32]byte) []string {
 	return out
 }
 
-// metaUint64 reads a previously validated UInt64 or UInt32 metadata field.
 func metaUint64(v any) uint64 {
 	if v == nil {
 		return 0

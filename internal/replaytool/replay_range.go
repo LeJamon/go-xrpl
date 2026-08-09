@@ -160,7 +160,6 @@ Example:
 	return cmd
 }
 
-// rangeReplayStats holds statistics for the replay run
 type rangeReplayStats struct {
 	BlocksProcessed   int
 	BlocksSuccessful  int
@@ -521,7 +520,6 @@ func recordDivergenceAndReset(
 	return corrected, nil
 }
 
-// blockResult holds the result of processing a single block
 type blockResult struct {
 	Success                 bool
 	TxCount                 int

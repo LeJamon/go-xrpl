@@ -255,7 +255,6 @@ func metadataObject(fields map[string]any, name string) (map[string]any, error) 
 	return obj, nil
 }
 
-// currentObject returns the decoded object at idx.
 func currentObject(state *shamap.SHAMap, idx [32]byte, fields map[string]any) (map[string]any, error) {
 	item, found, err := state.Get(idx)
 	if err != nil {

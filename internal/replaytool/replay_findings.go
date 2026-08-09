@@ -15,9 +15,6 @@ import (
 // findingSchema versions the findings record so the lab can evolve the format.
 const findingSchema = "goxrpl.replay.finding/v1"
 
-// finding is one replay divergence, recorded in a structured, commit-tagged
-// form so the parallel fleet can survey every divergence in a single pass and
-// dedup by root cause downstream.
 type finding struct {
 	Schema                   string             `json:"schema"`
 	GoXRPLCommit             string             `json:"goxrpl_commit"`
