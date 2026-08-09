@@ -253,8 +253,6 @@ func (ws *WebSocketServer) SubscriptionManager() *subscription.Manager {
 	return ws.subscriptionManager
 }
 
-// URLSubscriptionService returns the transport-owned URL subscription
-// registry.
 func (ws *WebSocketServer) URLSubscriptionService() types.URLSubscriptionService {
 	return ws.urlSubscriptions
 }

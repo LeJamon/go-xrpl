@@ -96,8 +96,6 @@ type rpcSubTestServices struct {
 	url   types.URLSubscriptionService
 }
 
-// newRPCSubTestServer builds a WebSocket server and the explicit request
-// dependencies used by the plain JSON-RPC handlers.
 func newRPCSubTestServer(t *testing.T) (*WebSocketServer, *rpcSubTestServices) {
 	return newRPCSubTestServerWithProvider(t, nil)
 }
