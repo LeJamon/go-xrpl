@@ -8,7 +8,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
-// batchRules builds a rules set containing exactly the named amendments.
 func batchRules(names ...string) *amendment.Rules {
 	b := amendment.NewRulesBuilder()
 	for _, n := range names {
