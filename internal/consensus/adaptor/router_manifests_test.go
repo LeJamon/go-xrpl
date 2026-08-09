@@ -332,6 +332,23 @@ func TestRouter_HandleManifests_ChargesInvalidEntriesOncePerFrame(t *testing.T) 
 	require.Equal(t, badDataCall{peerID: 9, reason: "manifest-invalid"}, calls[0])
 }
 
+func TestRouter_HandleManifests_ChargesLargeFrame(t *testing.T) {
+	router, sender := makeRouterWithBadDataRecorder(t)
+	router.SetManifestCache(manifest.NewCache(), nil)
+	list := make([]message.Manifest, manifestFrameMaxEntries+1)
+	for i := range list {
+		list[i].STObject = []byte{0x01}
+	}
+
+	router.handleManifests(&peermanagement.InboundMessage{
+		PeerID:  9,
+		Type:    message.TypeManifests,
+		Payload: encodePayload(t, &message.Manifests{List: list}),
+	})
+
+	require.Contains(t, sender.getBadDataCalls(), badDataCall{peerID: 9, reason: "manifests-oversize"})
+}
+
 func TestRouter_ManifestAcceptedAfterPeerRemovalCompletesBootstrap(t *testing.T) {
 	connections := make(chan manifestOverlayConnection, 2)
 	first := startRunningManifestOverlay(t)

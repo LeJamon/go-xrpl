@@ -157,6 +157,9 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 		msg.SelectPeerCharge(resource.FeeUselessData(), "empty")
 		return true
 	}
+	if count > manifestFrameMaxEntries && !msg.SelectPeerCharge(resource.FeeModerateBurdenPeer(), "manifests-oversize") {
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "manifests-oversize")
+	}
 	if badManifest {
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), "manifest-invalid")
 	}
