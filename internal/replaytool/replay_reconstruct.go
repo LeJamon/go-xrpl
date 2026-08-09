@@ -28,10 +28,12 @@ func reconstructMainnetState(
 	ctx context.Context,
 	client *statecompare.Client,
 	preState *shamap.SHAMap,
-	ledgerIndex uint32,
-	expectedAccountHash [32]byte,
+	snapshot *statecompare.LedgerSnapshot,
 ) (*shamap.SHAMap, bool, error) {
-	txs, err := client.Transactions(ctx, ledgerIndex)
+	if snapshot == nil {
+		return nil, false, errors.New("nil ledger snapshot")
+	}
+	txs, err := client.Transactions(ctx, snapshot)
 	if err != nil {
 		return nil, false, fmt.Errorf("getting transactions: %w", err)
 	}
@@ -40,7 +42,7 @@ func reconstructMainnetState(
 		metas[i] = metaTx{Blob: t.MetaBlob, TxHash: t.TxHash}
 	}
 
-	corrected, err := reconstructFromMeta(preState, metas, ledgerIndex)
+	corrected, err := reconstructFromMeta(preState, metas, snapshot.LedgerIndex)
 	if err != nil {
 		return nil, false, err
 	}
@@ -49,7 +51,7 @@ func reconstructMainnetState(
 	if err != nil {
 		return nil, false, fmt.Errorf("computing reconstructed root: %w", err)
 	}
-	return corrected, root == expectedAccountHash, nil
+	return corrected, root == snapshot.AccountHash, nil
 }
 
 // metaTx pairs a transaction's metadata blob with its hash. The hash is threaded

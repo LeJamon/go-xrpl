@@ -2,52 +2,70 @@ package statecompare
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"sort"
+
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 )
 
-// XSCP is the deterministic, length-prefixed binary format the
-// xrpl-state-compare lab writes into object storage. Two kinds of pack hold
-// raw mainnet bytes only, so they survive any goXRPL rebuild:
-//
-//	STATE  — every SLE of a checkpoint ledger (state/ckpt-<seq>.pack).
-//	LEDGER — header + per-tx (hash, tx_blob, meta_blob) for a batch of
-//	         ledgers, ~1000 per object (ledger/<batch>.pack).
-//
-// Every integer is big-endian. The LEDGER pack records each ledger's absolute
-// byte offset in the manifest so a reader can seek straight to one ledger
-// without scanning the whole batch.
 const (
 	packMagic   = "XSCP"
 	packVersion = 1
 	kindState   = 1
 	kindLedger  = 2
 
-	packHeaderLen = 6 // 4-byte magic + version (u8) + kind (u8)
-	indexLen      = 32
-	hashLen       = 32
+	packHeaderLen       = 6
+	packEnvelopeLen     = packHeaderLen + 8 + 4
+	indexLen            = 32
+	hashLen             = 32
+	minStateRecordLen   = indexLen + 4
+	minLedgerRecordLen  = 8 + 4 + header.SizeBase + 4
+	minTransactionEntry = hashLen + 4 + minTransactionBytes + 4 + 1
+
+	maxStatePackBytes   int64  = 4 << 30
+	maxLedgerPackBytes  int64  = 512 << 20
+	maxStateEntryBytes  uint32 = 16 << 20
+	minTransactionBytes        = 32
+	maxTransactionBytes        = 1 << 20
+	maxMetadataBytes           = 918744
 )
 
-// errPack signals a malformed or truncated pack; callers wrap it with context.
 var errPack = errors.New("statecompare: malformed pack")
 
-// txRecord is one transaction's raw bytes within a LEDGER pack.
+type statePackExpectation struct {
+	seq   uint32
+	count uint32
+	size  int64
+}
+
 type txRecord struct {
 	txHash   [32]byte
 	txBlob   []byte
 	metaBlob []byte
 }
 
-// ledgerBlob is one ledger's raw bytes as bundled into a LEDGER pack.
 type ledgerBlob struct {
-	seq        uint64
+	seq        uint32
 	headerBlob []byte
 	txs        []txRecord
 }
 
-// checkHeader validates the magic/version/kind and returns the body offset.
+type ledgerPack struct {
+	batchStart uint32
+	data       []byte
+	records    []recordBoundary
+}
+
+type recordBoundary struct {
+	start int
+	end   int
+}
+
 func checkHeader(blob []byte, expectedKind byte) (int, error) {
 	if len(blob) < packHeaderLen {
 		return 0, fmt.Errorf("%w: blob too short for header", errPack)
@@ -64,138 +82,289 @@ func checkHeader(blob []byte, expectedKind byte) (int, error) {
 	return packHeaderLen, nil
 }
 
-// getBytes reads a u32-length-prefixed byte run, returning a sub-slice of blob
-// (no copy) and the offset just past it.
-func getBytes(blob []byte, off int) ([]byte, int, error) {
-	if off+4 > len(blob) {
-		return nil, 0, fmt.Errorf("%w: length prefix overruns buffer", errPack)
+func take(blob []byte, off, n int, field string) ([]byte, int, error) {
+	if off < 0 || n < 0 || off > len(blob) || n > len(blob)-off {
+		return nil, 0, fmt.Errorf("%w: truncated %s", errPack, field)
 	}
-	n := int(binary.BigEndian.Uint32(blob[off:]))
-	off += 4
-	end := off + n
-	if end > len(blob) {
-		return nil, 0, fmt.Errorf("%w: truncated blob (length prefix overruns buffer)", errPack)
-	}
-	return blob[off:end], end, nil
+	return blob[off : off+n], off + n, nil
 }
 
-// unpackState decodes a STATE pack into its checkpoint seq and SLE entries.
-func unpackState(blob []byte) (uint64, []StateEntry, error) {
-	off, err := checkHeader(blob, kindState)
+func readUint32(blob []byte, off int, field string) (uint32, int, error) {
+	b, next, err := take(blob, off, 4, field)
 	if err != nil {
-		return 0, nil, err
-	}
-	if off+12 > len(blob) {
-		return 0, nil, fmt.Errorf("%w: truncated state header", errPack)
-	}
-	seq := binary.BigEndian.Uint64(blob[off:])
-	off += 8
-	count := binary.BigEndian.Uint32(blob[off:])
-	off += 4
-
-	entries := make([]StateEntry, 0, count)
-	for range count {
-		if off+indexLen > len(blob) {
-			return 0, nil, fmt.Errorf("%w: truncated state index", errPack)
-		}
-		var e StateEntry
-		copy(e.Index[:], blob[off:off+indexLen])
-		off += indexLen
-		if e.Data, off, err = getBytes(blob, off); err != nil {
-			return 0, nil, err
-		}
-		entries = append(entries, e)
-	}
-	return seq, entries, nil
-}
-
-// unpackStateStream decodes a STATE pack from r, invoking fn for each SLE as it
-// is read so peak memory stays O(one entry) regardless of state size. A STATE
-// pack is strictly sequential, so it decodes from a stream without ever holding
-// the whole pack or the full entry slice in memory. It returns the checkpoint
-// seq and entry count from the header.
-func unpackStateStream(r io.Reader, fn func(index [32]byte, data []byte) error) (uint64, uint32, error) {
-	br := bufio.NewReaderSize(r, 1<<20)
-
-	var head [packHeaderLen]byte
-	if _, err := io.ReadFull(br, head[:]); err != nil {
-		return 0, 0, fmt.Errorf("%w: truncated header", errPack)
-	}
-	if _, err := checkHeader(head[:], kindState); err != nil {
 		return 0, 0, err
 	}
+	return binary.BigEndian.Uint32(b), next, nil
+}
 
-	var meta [12]byte // u64 seq + u32 count
-	if _, err := io.ReadFull(br, meta[:]); err != nil {
-		return 0, 0, fmt.Errorf("%w: truncated state header", errPack)
+func readUint64(blob []byte, off int, field string) (uint64, int, error) {
+	b, next, err := take(blob, off, 8, field)
+	if err != nil {
+		return 0, 0, err
 	}
-	seq := binary.BigEndian.Uint64(meta[:8])
-	count := binary.BigEndian.Uint32(meta[8:])
+	return binary.BigEndian.Uint64(b), next, nil
+}
 
-	var index [32]byte
+func readBytes(blob []byte, off int, limit uint32, field string) ([]byte, int, error) {
+	n, next, err := readUint32(blob, off, field+" length")
+	if err != nil {
+		return nil, 0, err
+	}
+	if n > limit {
+		return nil, 0, fmt.Errorf("%w: %s length %d exceeds limit %d", errPack, field, n, limit)
+	}
+	b, next, err := take(blob, next, int(n), field)
+	if err != nil {
+		return nil, 0, err
+	}
+	return b, next, nil
+}
+
+func unpackStateStream(
+	ctx context.Context,
+	r io.Reader,
+	expected statePackExpectation,
+	fn func(index [32]byte, data []byte) error,
+) error {
+	if fn == nil {
+		return errors.New("statecompare: state callback is nil")
+	}
+	if expected.size < packEnvelopeLen || expected.size > maxStatePackBytes {
+		return fmt.Errorf("%w: state pack size %d outside [%d,%d]", errPack, expected.size, packEnvelopeLen, maxStatePackBytes)
+	}
+	if int64(expected.count) > (expected.size-packEnvelopeLen)/minStateRecordLen {
+		return fmt.Errorf("%w: state count %d cannot fit in %d bytes", errPack, expected.count, expected.size)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	br := bufio.NewReaderSize(r, 1<<20)
+	var envelope [packEnvelopeLen]byte
+	if _, err := io.ReadFull(br, envelope[:]); err != nil {
+		return packReadError(ctx, "truncated state envelope", err)
+	}
+	if _, err := checkHeader(envelope[:], kindState); err != nil {
+		return err
+	}
+	packSeq := binary.BigEndian.Uint64(envelope[packHeaderLen : packHeaderLen+8])
+	if packSeq != uint64(expected.seq) {
+		return fmt.Errorf("%w: state checkpoint %d, want %d", errPack, packSeq, expected.seq)
+	}
+	packCount := binary.BigEndian.Uint32(envelope[packHeaderLen+8:])
+	if packCount != expected.count {
+		return fmt.Errorf("%w: state count %d, manifest says %d", errPack, packCount, expected.count)
+	}
+
+	remaining := expected.size - packEnvelopeLen
+	var index [indexLen]byte
 	var lenBuf [4]byte
-	for range count {
+	for i := uint32(0); i < packCount; i++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if remaining < minStateRecordLen {
+			return fmt.Errorf("%w: state entry %d cannot fit in remaining %d bytes", errPack, i, remaining)
+		}
 		if _, err := io.ReadFull(br, index[:]); err != nil {
-			return 0, 0, fmt.Errorf("%w: truncated state index", errPack)
+			return packReadError(ctx, fmt.Sprintf("truncated state index %d", i), err)
 		}
 		if _, err := io.ReadFull(br, lenBuf[:]); err != nil {
-			return 0, 0, fmt.Errorf("%w: truncated data length", errPack)
+			return packReadError(ctx, fmt.Sprintf("truncated state data length %d", i), err)
 		}
-		data := make([]byte, binary.BigEndian.Uint32(lenBuf[:]))
+		remaining -= minStateRecordLen
+		dataLen := binary.BigEndian.Uint32(lenBuf[:])
+		if dataLen > maxStateEntryBytes {
+			return fmt.Errorf("%w: state entry %d length %d exceeds limit %d", errPack, i, dataLen, maxStateEntryBytes)
+		}
+		if int64(dataLen) > remaining {
+			return fmt.Errorf("%w: state entry %d length %d exceeds remaining %d bytes", errPack, i, dataLen, remaining)
+		}
+		data := make([]byte, int(dataLen))
 		if _, err := io.ReadFull(br, data); err != nil {
-			return 0, 0, fmt.Errorf("%w: truncated data", errPack)
+			return packReadError(ctx, fmt.Sprintf("truncated state data %d", i), err)
+		}
+		remaining -= int64(dataLen)
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		if err := fn(index, data); err != nil {
-			return 0, 0, err
+			return err
 		}
 	}
-	return seq, count, nil
+	if remaining != 0 {
+		return fmt.Errorf("%w: %d trailing state pack bytes", errPack, remaining)
+	}
+	if _, err := br.ReadByte(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return fmt.Errorf("%w: state pack exceeds manifest size", errPack)
+		}
+		return packReadError(ctx, "checking state pack EOF", err)
+	}
+	return nil
 }
 
-// readOneLedger decodes the ledger record starting at off and returns the
-// offset just past it.
-func readOneLedger(blob []byte, off int) (ledgerBlob, int, error) {
-	if off+8 > len(blob) {
-		return ledgerBlob{}, 0, fmt.Errorf("%w: truncated ledger seq", errPack)
+func packReadError(ctx context.Context, message string, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
 	}
-	lb := ledgerBlob{seq: binary.BigEndian.Uint64(blob[off:])}
-	off += 8
-
-	var err error
-	if lb.headerBlob, off, err = getBytes(blob, off); err != nil {
-		return ledgerBlob{}, 0, err
-	}
-	if off+4 > len(blob) {
-		return ledgerBlob{}, 0, fmt.Errorf("%w: truncated tx count", errPack)
-	}
-	txCount := binary.BigEndian.Uint32(blob[off:])
-	off += 4
-
-	lb.txs = make([]txRecord, 0, txCount)
-	for range txCount {
-		if off+hashLen > len(blob) {
-			return ledgerBlob{}, 0, fmt.Errorf("%w: truncated tx hash", errPack)
-		}
-		var tr txRecord
-		copy(tr.txHash[:], blob[off:off+hashLen])
-		off += hashLen
-		if tr.txBlob, off, err = getBytes(blob, off); err != nil {
-			return ledgerBlob{}, 0, err
-		}
-		if tr.metaBlob, off, err = getBytes(blob, off); err != nil {
-			return ledgerBlob{}, 0, err
-		}
-		lb.txs = append(lb.txs, tr)
-	}
-	return lb, off, nil
+	return fmt.Errorf("%w: %s: %v", errPack, message, err)
 }
 
-// readLedgerAt decodes a single ledger from a LEDGER pack at a
-// manifest-recorded absolute byte offset.
-func readLedgerAt(blob []byte, offset int) (ledgerBlob, error) {
-	if offset < packHeaderLen || offset >= len(blob) {
-		return ledgerBlob{}, fmt.Errorf("%w: ledger offset %d out of range", errPack, offset)
+func indexLedgerPack(blob []byte) (*ledgerPack, error) {
+	return indexLedgerPackContext(context.Background(), blob)
+}
+
+func indexLedgerPackContext(ctx context.Context, blob []byte) (*ledgerPack, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	lb, _, err := readOneLedger(blob, offset)
-	return lb, err
+	if int64(len(blob)) > maxLedgerPackBytes {
+		return nil, fmt.Errorf("%w: ledger pack size %d exceeds limit %d", errPack, len(blob), maxLedgerPackBytes)
+	}
+	off, err := checkHeader(blob, kindLedger)
+	if err != nil {
+		return nil, err
+	}
+	batchStart, off, err := readUint64(blob, off, "ledger batch start")
+	if err != nil {
+		return nil, err
+	}
+	if batchStart > math.MaxUint32 {
+		return nil, fmt.Errorf("%w: ledger batch start %d exceeds uint32", errPack, batchStart)
+	}
+	count, off, err := readUint32(blob, off, "ledger count")
+	if err != nil {
+		return nil, err
+	}
+	if uint64(count) > uint64((len(blob)-off)/minLedgerRecordLen) {
+		return nil, fmt.Errorf("%w: ledger count %d cannot fit in %d bytes", errPack, count, len(blob)-off)
+	}
+
+	pack := &ledgerPack{
+		batchStart: uint32(batchStart),
+		data:       blob,
+		records:    make([]recordBoundary, 0, int(count)),
+	}
+	for i := uint32(0); i < count; i++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		start := off
+		seq, next, err := readUint64(blob, off, fmt.Sprintf("ledger %d sequence", i))
+		if err != nil {
+			return nil, err
+		}
+		expectedSeq := batchStart + uint64(i)
+		if expectedSeq > math.MaxUint32 || seq != expectedSeq {
+			return nil, fmt.Errorf("%w: ledger record %d has sequence %d, want %d", errPack, i, seq, expectedSeq)
+		}
+		off, err = skipLedgerRecord(ctx, blob, next, i)
+		if err != nil {
+			return nil, err
+		}
+		pack.records = append(pack.records, recordBoundary{start: start, end: off})
+	}
+	if off != len(blob) {
+		return nil, fmt.Errorf("%w: %d trailing ledger pack bytes", errPack, len(blob)-off)
+	}
+	return pack, nil
+}
+
+func skipLedgerRecord(ctx context.Context, blob []byte, off int, record uint32) (int, error) {
+	headerBlob, off, err := readBytes(blob, off, header.SizeBase, fmt.Sprintf("ledger %d header", record))
+	if err != nil {
+		return 0, err
+	}
+	if len(headerBlob) != header.SizeBase {
+		return 0, fmt.Errorf("%w: ledger %d header length %d, want %d", errPack, record, len(headerBlob), header.SizeBase)
+	}
+	txCount, off, err := readUint32(blob, off, fmt.Sprintf("ledger %d transaction count", record))
+	if err != nil {
+		return 0, err
+	}
+	if uint64(txCount) > uint64((len(blob)-off)/minTransactionEntry) {
+		return 0, fmt.Errorf("%w: ledger %d transaction count %d cannot fit in %d bytes", errPack, record, txCount, len(blob)-off)
+	}
+	for i := uint32(0); i < txCount; i++ {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		if _, next, err := take(blob, off, hashLen, fmt.Sprintf("ledger %d transaction %d hash", record, i)); err != nil {
+			return 0, err
+		} else {
+			off = next
+		}
+		txBlob, next, err := readBytes(blob, off, maxTransactionBytes, fmt.Sprintf("ledger %d transaction %d", record, i))
+		if err != nil {
+			return 0, err
+		}
+		if len(txBlob) < minTransactionBytes {
+			return 0, fmt.Errorf("%w: ledger %d transaction %d length %d below minimum %d", errPack, record, i, len(txBlob), minTransactionBytes)
+		}
+		off = next
+		metaBlob, next, err := readBytes(blob, off, maxMetadataBytes, fmt.Sprintf("ledger %d transaction %d metadata", record, i))
+		if err != nil {
+			return 0, err
+		}
+		if len(metaBlob) == 0 {
+			return 0, fmt.Errorf("%w: ledger %d transaction %d has empty metadata", errPack, record, i)
+		}
+		off = next
+	}
+	return off, nil
+}
+
+func (p *ledgerPack) readLedgerAt(offset int, expectedTxCount uint32) (ledgerBlob, error) {
+	return p.readLedgerAtContext(context.Background(), offset, expectedTxCount)
+}
+
+func (p *ledgerPack) readLedgerAtContext(ctx context.Context, offset int, expectedTxCount uint32) (ledgerBlob, error) {
+	if err := ctx.Err(); err != nil {
+		return ledgerBlob{}, err
+	}
+	i := sort.Search(len(p.records), func(i int) bool { return p.records[i].start >= offset })
+	if i == len(p.records) || p.records[i].start != offset {
+		return ledgerBlob{}, fmt.Errorf("%w: ledger offset %d is not a record boundary", errPack, offset)
+	}
+	end := p.records[i].end
+	seq, off, err := readUint64(p.data, offset, "ledger sequence")
+	if err != nil {
+		return ledgerBlob{}, err
+	}
+	headerBlob, off, err := readBytes(p.data, off, header.SizeBase, "ledger header")
+	if err != nil {
+		return ledgerBlob{}, err
+	}
+	txCount, off, err := readUint32(p.data, off, "transaction count")
+	if err != nil {
+		return ledgerBlob{}, err
+	}
+	if txCount != expectedTxCount {
+		return ledgerBlob{}, fmt.Errorf("%w: ledger transaction count %d, manifest says %d", errPack, txCount, expectedTxCount)
+	}
+	lb := ledgerBlob{seq: uint32(seq), headerBlob: headerBlob, txs: make([]txRecord, 0, int(txCount))}
+	for i := uint32(0); i < txCount; i++ {
+		if err := ctx.Err(); err != nil {
+			return ledgerBlob{}, err
+		}
+		hashBytes, next, err := take(p.data, off, hashLen, fmt.Sprintf("transaction %d hash", i))
+		if err != nil {
+			return ledgerBlob{}, err
+		}
+		off = next
+		var record txRecord
+		copy(record.txHash[:], hashBytes)
+		if record.txBlob, off, err = readBytes(p.data, off, maxTransactionBytes, fmt.Sprintf("transaction %d", i)); err != nil {
+			return ledgerBlob{}, err
+		}
+		if record.metaBlob, off, err = readBytes(p.data, off, maxMetadataBytes, fmt.Sprintf("transaction %d metadata", i)); err != nil {
+			return ledgerBlob{}, err
+		}
+		lb.txs = append(lb.txs, record)
+	}
+	if off != end {
+		return ledgerBlob{}, fmt.Errorf("%w: ledger record ends at %d, indexed end is %d", errPack, off, end)
+	}
+	return lb, nil
 }

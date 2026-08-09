@@ -375,7 +375,7 @@ func TransactionIndexFromMetadata(metaData []byte) (uint32, bool) {
 	if len(metaData) == 0 {
 		return 0, false
 	}
-	meta, err := binarycodec.Decode(hex.EncodeToString(metaData))
+	meta, err := binarycodec.DecodeBytes(metaData)
 	if err != nil {
 		return 0, false
 	}
