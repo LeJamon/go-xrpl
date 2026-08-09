@@ -63,8 +63,6 @@ func (e *Engine) getFeePayer(common *txcore.Common) (feePayer, ter.Result) {
 	}
 
 	if common.Delegate == "" {
-		// The source AccountRoot is already loaded and passed through every fee
-		// path, so no second decode/read is needed for the ordinary payer.
 		return feePayer{payerTy: feePayerAccount}, ter.TesSUCCESS
 	}
 	payerID, err := state.DecodeAccountID(common.Delegate)
