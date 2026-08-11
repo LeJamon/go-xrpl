@@ -65,6 +65,7 @@ type AccountTxMarker struct {
 // queried account occupies.
 type AccountTxDelegateRole uint8
 
+// Account transaction delegate roles.
 const (
 	AccountTxDelegateActor AccountTxDelegateRole = iota
 	AccountTxDelegateAuthorizer
