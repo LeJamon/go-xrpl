@@ -75,7 +75,7 @@ func confidentialBatchHex(value []byte) string { return hex.EncodeToString(value
 
 func TestConfidentialMPTBatchAllOrNothingRollsBackStaleProof(t *testing.T) {
 	env := jtx.NewTestEnv(t)
-	env.EnableFeatureNow("Batch")
+	env.EnableFeatureNow("BatchV1_1")
 	env.EnableFeatureNow("ConfidentialTransfer")
 	holder := jtx.NewAccount("confidential-holder")
 	issuer := jtx.NewAccount("confidential-issuer")
@@ -172,7 +172,7 @@ func newConfidentialBatchFixture(t *testing.T) *confidentialBatchFixture {
 	t.Helper()
 	env := jtx.NewTestEnv(t)
 	env.EnableFeatureNow("ConfidentialTransfer")
-	env.EnableFeatureNow("Batch")
+	env.EnableFeatureNow("BatchV1_1")
 	issuer := jtx.NewAccount("confidential-batch-issuer")
 	sender := jtx.NewAccount("confidential-batch-sender")
 	destination := jtx.NewAccount("confidential-batch-destination")
