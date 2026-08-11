@@ -523,9 +523,7 @@ func (b *Batch) Flatten() (map[string]any, error) {
 					nestedMap := map[string]any{
 						"Account":       nested.Signer.Account,
 						"SigningPubKey": nested.Signer.SigningPubKey,
-					}
-					if nested.Signer.TxnSignature != "" {
-						nestedMap["TxnSignature"] = nested.Signer.TxnSignature
+						"TxnSignature":  nested.Signer.TxnSignature,
 					}
 					nestedSigners[j] = map[string]any{
 						"Signer": nestedMap,

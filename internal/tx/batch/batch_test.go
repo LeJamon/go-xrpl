@@ -75,6 +75,41 @@ func TestBatchBinaryRoundTripPreservesInnerTransactions(t *testing.T) {
 	}
 }
 
+func TestBatchBinaryRoundTripPreservesEmptyNestedSignature(t *testing.T) {
+	outer := NewBatch(testOuter)
+	outer.Fee = "50"
+	outer.SetSequence(1)
+	outer.SetFlags(BatchFlagAllOrNothing)
+	outer.AddInnerTransaction(makeTestPayment())
+	outer.AddInnerTransaction(makeTestPayment())
+	outer.BatchSigners = []BatchSigner{{BatchSigner: BatchSignerData{
+		Account:       testSigner1,
+		SigningPubKey: "",
+		Signers: []tx.SignerWrapper{{Signer: tx.Signer{
+			Account:       testSigner2,
+			SigningPubKey: "",
+			TxnSignature:  "",
+		}}},
+	}}}
+
+	flat, err := outer.Flatten()
+	require.NoError(t, err)
+	encoded, err := binarycodec.Encode(flat)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(encoded)
+	require.NoError(t, err)
+
+	parsed, err := tx.ParseFromBinary(blob)
+	require.NoError(t, err)
+	parsedBatch := parsed.(*Batch)
+	require.Equal(t, "", parsedBatch.BatchSigners[0].BatchSigner.Signers[0].Signer.TxnSignature)
+	flattened, err := parsedBatch.Flatten()
+	require.NoError(t, err)
+	batchSigner := flattened["BatchSigners"].([]map[string]any)[0]["BatchSigner"].(map[string]any)
+	nestedSigner := batchSigner["Signers"].([]map[string]any)[0]["Signer"].(map[string]any)
+	require.Contains(t, nestedSigner, "TxnSignature")
+}
+
 func TestBatchBinaryParseRejectsStructuralAbuseBeforeInnerConstruction(t *testing.T) {
 	outer := NewBatch(testOuter)
 	outer.Fee = "40"
