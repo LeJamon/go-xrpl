@@ -470,7 +470,6 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		if result != ter.TesSUCCESS {
 			return result
 		}
-
 	} else {
 		// Modify existing trust line
 		trustLineData, err := ctx.View.Read(trustLineKey)
