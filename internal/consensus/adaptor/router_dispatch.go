@@ -742,16 +742,6 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 	return dispatch
 }
 
-// relayTransaction rebroadcasts an accepted peer-originated TMTransaction,
-// excluding peers known to already hold it.
-//
-// The outbound wire shape: status normalized to tsCURRENT (the inbound
-// peer's claimed status is informational only) and receivetimestamp
-// freshly stamped from the local Ripple clock.
-//
-// Overlay.RelayTransaction applies reduce-relay peer selection: the full
-// frame goes to a subset of peers and the rest learn of the tx via the
-// TMHaveTransactions announce.
 func (r *Router) transactionRelaySkip(
 	hash [32]byte,
 	origin peermanagement.PeerID,
@@ -766,6 +756,16 @@ func (r *Router) transactionRelaySkip(
 	return toSkip
 }
 
+// relayTransaction rebroadcasts an accepted peer-originated TMTransaction,
+// excluding peers known to already hold it.
+//
+// The outbound wire shape: status normalized to tsCURRENT (the inbound
+// peer's claimed status is informational only) and receivetimestamp
+// freshly stamped from the local Ripple clock.
+//
+// Overlay.RelayTransactionSkipping applies reduce-relay peer selection: the
+// full frame goes to a subset of peers and the rest learn of the tx via the
+// TMHaveTransactions announce.
 func (r *Router) relayTransaction(toSkip map[peermanagement.PeerID]struct{}, blob []byte, deferred bool) {
 	if r.overlay == nil {
 		return
