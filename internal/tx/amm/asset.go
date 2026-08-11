@@ -54,12 +54,6 @@ func matchesAsset(amt *tx.Amount, asset tx.Asset) bool {
 	return amt.Currency == asset.Currency && amt.Issuer == asset.Issuer
 }
 
-// accountReserve returns the total XRP reserve for an account owning
-// ownerCount objects: ReserveBase + ownerCount * ReserveIncrement.
-func accountReserve(config tx.EngineConfig, ownerCount uint32) uint64 {
-	return config.ReserveBase + uint64(ownerCount)*config.ReserveIncrement
-}
-
 // insufficientLPTokenReserve reports whether the account lacks the XRP reserve
 // for one additional owned object (the LP token trust line). It mirrors
 // rippled's xrpLiquid(view, account, 1) <= 0 guard: the liquid balance, after
@@ -67,8 +61,11 @@ func accountReserve(config tx.EngineConfig, ownerCount uint32) uint64 {
 // fails. The account balance read from the unmodified Preclaim view is already
 // the pre-fee balance, matching rippled's preclaim.
 // Reference: rippled AMMCreate.cpp:145-159, AMMDeposit.cpp:353-362
-func insufficientLPTokenReserve(account *state.AccountRoot, config tx.EngineConfig) bool {
-	reserve := accountReserve(config, account.OwnerCount+1)
+func insufficientLPTokenReserve(view tx.LedgerView, account *state.AccountRoot, config tx.EngineConfig) bool {
+	reserve, ok := tx.AccountReserveForView(view, config, account, tx.ConfineOwnerCount(account.OwnerCount, 1))
+	if !ok {
+		return true
+	}
 	return int64(account.Balance)-int64(reserve) <= 0
 }
 

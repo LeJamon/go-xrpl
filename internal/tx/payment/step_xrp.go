@@ -291,20 +291,30 @@ func (s *XRPEndpointStep) xrpLiquid(sb *PaymentSandbox) int64 {
 		return 0
 	}
 
-	ownerCount := sb.OwnerCountHook(s.account, accountRoot.OwnerCount)
+	counts := sb.OwnerCountsHook(s.account, tx.OwnerCounts{
+		Owner: accountRoot.OwnerCount, Sponsored: accountRoot.SponsoredOwnerCount,
+		Sponsoring: accountRoot.SponsoringOwnerCount,
+	})
+	ownerCount := counts.Owner
 
 	// Apply reserveReduction (for offer crossing when trust line doesn't exist yet).
 	// This is rippled's confineOwnerCount: adjusted = ownerCount + reserveReduction,
 	// clamped to 0 on underflow.
 	// Reference: rippled View.cpp confineOwnerCount() + xrpLiquid()
-	adjustedOwnerCount := max(int32(ownerCount)+s.reserveReduction, 0)
+	adjustedOwnerCount := tx.ConfineOwnerCount(ownerCount, int(s.reserveReduction))
 
 	// AMM pseudo-accounts (sfAMMID present) have no reserve requirement.
 	// Reference: rippled View.cpp xrpLiquid() lines 631-633.
 	var reserve uint64
 	if !accountRoot.HasAMMID() {
 		baseReserve, ownerReserve := GetLedgerReserves(sb)
-		reserve = uint64(baseReserve) + uint64(adjustedOwnerCount)*uint64(ownerReserve)
+		accountWithHook := *accountRoot
+		accountWithHook.OwnerCount = counts.Owner
+		accountWithHook.SponsoredOwnerCount = counts.Sponsored
+		accountWithHook.SponsoringOwnerCount = counts.Sponsoring
+		reserve, _ = tx.AccountReserveForView(sb, tx.EngineConfig{
+			ReserveBase: uint64(baseReserve), ReserveIncrement: uint64(ownerReserve),
+		}, &accountWithHook, adjustedOwnerCount)
 	}
 
 	// Apply the deferred-credit balance hook to the full balance. XRP credited to

@@ -438,6 +438,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	accountKey := keylet.Account(issuerID)
+	ctx.SyncSenderOwnerCount()
 	accountBytes, err := state.SerializeAccountRoot(ctx.Account)
 	if err != nil {
 		return ter.TefINTERNAL

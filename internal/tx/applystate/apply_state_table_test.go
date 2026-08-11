@@ -246,6 +246,38 @@ func TestForEach_ErasedEntry(t *testing.T) {
 	}
 }
 
+func TestCollectEntries_RetainsDeleteFinalImage(t *testing.T) {
+	base := newMockBaseView()
+	original := typedEntryData(entry.TypeAccountRoot, 1)
+	final := typedEntryData(entry.TypeAccountRoot, 2)
+	base.data[key(1)] = original
+
+	table := NewApplyStateTable(base, [32]byte{}, 0, nil)
+	if _, err := table.Read(kl(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := table.Update(kl(1), final); err != nil {
+		t.Fatal(err)
+	}
+	if err := table.Erase(kl(1)); err != nil {
+		t.Fatal(err)
+	}
+
+	entries := table.CollectEntries()
+	if len(entries) != 1 {
+		t.Fatalf("expected one collected entry, got %d", len(entries))
+	}
+	if !bytes.Equal(entries[0].Before, original) {
+		t.Fatalf("Before = %X, want original %X", entries[0].Before, original)
+	}
+	if entries[0].After != nil {
+		t.Fatalf("After = %X, want nil for a delete", entries[0].After)
+	}
+	if !bytes.Equal(entries[0].DeleteFinal, final) {
+		t.Fatalf("DeleteFinal = %X, want final image %X", entries[0].DeleteFinal, final)
+	}
+}
+
 func TestForEach_CombinedOperations(t *testing.T) {
 	base := newMockBaseView()
 	base.data[key(1)] = []byte("base1")

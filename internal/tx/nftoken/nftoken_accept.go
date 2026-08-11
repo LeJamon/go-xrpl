@@ -26,7 +26,9 @@ func checkBuyerReserve(ctx *tx.ApplyContext, buyerID [20]byte, pagesCreated int)
 	// Read buyer's current state to check balance vs reserve
 	var buyerBalance uint64
 	var buyerOwnerCount uint32
+	var buyerAccount *state.AccountRoot
 	if buyerID == ctx.AccountID {
+		buyerAccount = ctx.Account
 		buyerBalance = ctx.Account.Balance
 		buyerOwnerCount = ctx.Account.OwnerCount
 	} else {
@@ -35,7 +37,7 @@ func checkBuyerReserve(ctx *tx.ApplyContext, buyerID [20]byte, pagesCreated int)
 		if err != nil || buyerData == nil {
 			return ter.TefINTERNAL
 		}
-		buyerAccount, err := state.ParseAccountRoot(buyerData)
+		buyerAccount, err = state.ParseAccountRoot(buyerData)
 		if err != nil {
 			return ter.TefINTERNAL
 		}
@@ -43,7 +45,7 @@ func checkBuyerReserve(ctx *tx.ApplyContext, buyerID [20]byte, pagesCreated int)
 		buyerOwnerCount = buyerAccount.OwnerCount
 	}
 
-	if buyerBalance < ctx.AccountReserve(buyerOwnerCount) {
+	if buyerBalance < ctx.AccountReserveFor(buyerAccount, buyerOwnerCount) {
 		return ter.TecINSUFFICIENT_RESERVE
 	}
 	return ter.TesSUCCESS

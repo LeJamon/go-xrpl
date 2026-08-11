@@ -573,16 +573,6 @@ func offerDeleteInSandbox(sb *PaymentSandbox, offerKey [32]byte) {
 // Records the change via AdjustOwnerCount hook so OwnerCountHook returns the maximum.
 // This is a standalone version used by offerDeleteInSandbox.
 func adjustOwnerCountInSandbox(sb *PaymentSandbox, account [20]byte, delta int) {
-	// Read current owner count and record via hook before modifying.
-	accountKey := keylet.Account(account)
-	data, err := sb.Read(accountKey)
-	if err == nil && data != nil {
-		if acct, pErr := state.ParseAccountRoot(data); pErr == nil {
-			curOC := acct.OwnerCount
-			newOC := max(int(curOC)+delta, 0)
-			sb.AdjustOwnerCount(account, curOC, uint32(newOC))
-		}
-	}
 	_ = tx.AdjustOwnerCount(sb, account, delta)
 }
 

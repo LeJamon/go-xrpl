@@ -120,7 +120,7 @@ func addEmptyMPTHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset
 			return 0, ter.TefINTERNAL
 		}
 	}
-	if priorBalance < ctx.AccountReserve(tx.ConfineOwnerCount(holder.OwnerCount, 1)) {
+	if priorBalance < ctx.AccountReserveFor(holder, tx.ConfineOwnerCount(holder.OwnerCount, 1)) {
 		return 0, ter.TecINSUFFICIENT_RESERVE
 	}
 	token := &state.MPTokenData{Account: accountID, MPTokenIssuanceID: id}
@@ -284,7 +284,7 @@ func addEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset, p
 			return 0, ter.TefINTERNAL
 		}
 	}
-	if priorBalance < ctx.AccountReserve(tx.ConfineOwnerCount(holder.OwnerCount, 1)) {
+	if priorBalance < ctx.AccountReserveFor(holder, tx.ConfineOwnerCount(holder.OwnerCount, 1)) {
 		return 0, ter.TecNO_LINE_INSUF_RESERVE
 	}
 
@@ -357,17 +357,37 @@ func ensureHolderMPToken(ctx *tx.ApplyContext, holderID [20]byte, shareMPTID [24
 	}
 
 	isSubmitter := holderID == ctx.AccountID
-	var ownerCount uint32
+	var account *state.AccountRoot
 	if isSubmitter {
-		ownerCount = ctx.Account.OwnerCount
+		account = ctx.Account
 	} else {
-		ar, err := tx.ReadAccountRoot(ctx.View, holderID)
-		if err != nil || ar == nil {
+		var err error
+		account, err = tx.ReadAccountRoot(ctx.View, holderID)
+		if err != nil || account == nil {
 			return ter.TefINTERNAL
 		}
-		ownerCount = ar.OwnerCount
 	}
-	if ctx.PriorBalance() < ctx.ReserveForNewObject(ownerCount) {
+	effectiveOwners := account.OwnerCount
+	if ctx.Rules().Enabled(amendment.FeatureSponsor) {
+		var ok bool
+		effectiveOwners, ok = tx.EffectiveOwnerCount(account, 0)
+		if !ok {
+			return ter.TefINTERNAL
+		}
+	}
+	reserve := uint64(0)
+	if effectiveOwners >= 2 {
+		var ok bool
+		reserve, ok = tx.AccountReserveForView(ctx.View, ctx.Config, account, tx.ConfineOwnerCount(account.OwnerCount, 1))
+		if !ok {
+			return ter.TefINTERNAL
+		}
+	}
+	balance := account.Balance
+	if isSubmitter {
+		balance = ctx.PriorBalance()
+	}
+	if balance < reserve {
 		return ter.TecINSUFFICIENT_RESERVE
 	}
 
@@ -544,7 +564,11 @@ func spendableAsset(view tx.LedgerView, config tx.EngineConfig, accountID [20]by
 		}
 		reserve := uint64(0)
 		if !ar.IsPseudoAccount() {
-			reserve = config.AccountReserve(ar.OwnerCount)
+			var ok bool
+			reserve, ok = tx.AccountReserveForView(view, config, ar, ar.OwnerCount)
+			if !ok {
+				return zero(), fmt.Errorf("invalid reserve counters")
+			}
 		}
 		liquid := int64(ar.Balance) - int64(reserve)
 		if liquid < 0 {
@@ -840,13 +864,19 @@ func removeVaultAssetHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.
 			return 0, ter.TefINTERNAL
 		}
 		tokenKey := keylet.MPTokenByID(id, accountID)
-		existed, err := ctx.View.Exists(tokenKey)
+		token, err := readMPToken(ctx.View, tokenKey)
 		if err != nil {
 			return 0, ter.TefINTERNAL
 		}
 		result := mptutil.RemoveHolding(ctx.View, id, accountID, false)
-		if result != ter.TesSUCCESS || !existed {
+		if result != ter.TesSUCCESS || token == nil {
 			return 0, result
+		}
+		if token.Sponsor != "" {
+			if result := tx.DecreaseOwnerCountFor(ctx, accountID, token.Sponsor, 1); result != ter.TesSUCCESS {
+				return 0, result
+			}
+			return 0, ter.TesSUCCESS
 		}
 		return -1, ter.TesSUCCESS
 	}
@@ -883,38 +913,26 @@ func removeVaultAssetHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.
 		return 0, ter.TefINTERNAL
 	}
 	delta := int32(0)
-	adjust := func(owner [20]byte) ter.Result {
-		if owner == accountID {
+	adjust := func(owner [20]byte, sponsorAddress string) ter.Result {
+		if owner == accountID && sponsorAddress == "" {
 			delta--
 			return ter.TesSUCCESS
 		}
-		if owner == ctx.AccountID {
-			ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, -1)
-			return ter.TesSUCCESS
-		}
-		exists, err := ctx.View.Exists(keylet.Account(owner))
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if !exists {
-			return ter.TecINTERNAL
-		}
-		if err := tx.AdjustOwnerCount(ctx.View, owner, -1); err != nil {
-			return ter.TefINTERNAL
-		}
-		return ter.TesSUCCESS
+		return tx.DecreaseOwnerCountFor(ctx, owner, sponsorAddress, 1)
 	}
 	if rs.Flags&state.LsfLowReserve != 0 {
-		if result := adjust(lowID); result != ter.TesSUCCESS {
+		if result := adjust(lowID, rs.LowSponsor); result != ter.TesSUCCESS {
 			return 0, result
 		}
 		rs.Flags &^= state.LsfLowReserve
+		rs.LowSponsor = ""
 	}
 	if rs.Flags&state.LsfHighReserve != 0 {
-		if result := adjust(highID); result != ter.TesSUCCESS {
+		if result := adjust(highID, rs.HighSponsor); result != ter.TesSUCCESS {
 			return 0, result
 		}
 		rs.Flags &^= state.LsfHighReserve
+		rs.HighSponsor = ""
 	}
 	updated, serr := state.SerializeRippleState(rs)
 	if serr != nil {
@@ -970,12 +988,8 @@ func removeEmptyShareMPToken(ctx *tx.ApplyContext, holderID [20]byte, shareMPTID
 	if eerr := ctx.View.Erase(tokenKey); eerr != nil {
 		return ter.TefINTERNAL
 	}
-	if holderID == ctx.AccountID {
-		if ctx.Account.OwnerCount > 0 {
-			ctx.Account.OwnerCount--
-		}
-	} else if derr := tx.AdjustOwnerCount(ctx.View, holderID, -1); derr != nil {
-		return ter.TefINTERNAL
+	if result := tx.DecreaseOwnerCountFor(ctx, holderID, token.Sponsor, 1); result != ter.TesSUCCESS {
+		return result
 	}
 	return ter.TesSUCCESS
 }

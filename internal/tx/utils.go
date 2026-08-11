@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
-	"math/bits"
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -461,6 +460,23 @@ type ownerCountReadHookView interface {
 	OwnerCountHook(account [20]byte, count uint32) uint32
 }
 
+type ownerCountsReadHookView interface {
+	OwnerCountsHook(account [20]byte, counts OwnerCounts) OwnerCounts
+}
+
+func accountWithOwnerCountHook(view LedgerView, accountID [20]byte, account *state.AccountRoot) state.AccountRoot {
+	result := *account
+	if hook, ok := view.(ownerCountsReadHookView); ok {
+		counts := hook.OwnerCountsHook(accountID, ownerCounts(account))
+		result.OwnerCount = counts.Owner
+		result.SponsoredOwnerCount = counts.Sponsored
+		result.SponsoringOwnerCount = counts.Sponsoring
+	} else if hook, ok := view.(ownerCountReadHookView); ok {
+		result.OwnerCount = hook.OwnerCountHook(accountID, account.OwnerCount)
+	}
+	return result
+}
+
 // XRPLiquid returns the amount of XRP an account can spend (balance minus reserve).
 // Reference: rippled ledger/View.cpp xrpLiquid()
 // ownerCountAdj allows adjusting the owner count (e.g., +1 to account for a pending new object).
@@ -470,13 +486,21 @@ func XRPLiquid(view LedgerView, accountID [20]byte, ownerCountAdj int64, reserve
 		return NewXRPAmount(0)
 	}
 
-	ownerCount := account.OwnerCount
-	if h, ok := view.(ownerCountReadHookView); ok {
-		ownerCount = h.OwnerCountHook(accountID, ownerCount)
+	accountWithHook := accountWithOwnerCountHook(view, accountID, account)
+	ownerCount := accountWithHook.OwnerCount
+	if account.IsPseudoAccount() {
+		return NewXRPAmount(int64(account.Balance))
 	}
-
-	confinedOwnerCount := max(int64(ownerCount)+ownerCountAdj, 0)
-	reserve := reserveBase + uint64(confinedOwnerCount)*reserveIncrement
+	if ownerCountAdj > math.MaxInt || ownerCountAdj < math.MinInt {
+		return NewXRPAmount(0)
+	}
+	ownerCount = ConfineOwnerCount(ownerCount, int(ownerCountAdj))
+	reserve, ok := AccountReserveForView(view, EngineConfig{
+		ReserveBase: reserveBase, ReserveIncrement: reserveIncrement,
+	}, &accountWithHook, ownerCount)
+	if !ok {
+		return NewXRPAmount(0)
+	}
 	if account.Balance > reserve {
 		return NewXRPAmount(int64(account.Balance - reserve))
 	}
@@ -573,17 +597,16 @@ func AccountFundsNoFreezeStrict(view LedgerView, accountID [20]byte, amount Amou
 		if account == nil {
 			return NewXRPAmount(0), nil
 		}
-		ownerCount := account.OwnerCount
-		if hook, ok := view.(ownerCountReadHookView); ok {
-			ownerCount = hook.OwnerCountHook(accountID, ownerCount)
+		accountWithHook := accountWithOwnerCountHook(view, accountID, account)
+		ownerCount := accountWithHook.OwnerCount
+		if account.IsPseudoAccount() {
+			return NewXRPAmount(int64(account.Balance)), nil
 		}
-		high, reserveProduct := bits.Mul64(uint64(ownerCount), reserveIncrement)
-		if high != 0 {
-			return Amount{}, fmt.Errorf("account funds: reserve multiplication overflow")
-		}
-		reserve, carry := bits.Add64(reserveBase, reserveProduct, 0)
-		if carry != 0 {
-			return Amount{}, fmt.Errorf("account funds: reserve addition overflow")
+		reserve, ok := AccountReserveForView(view, EngineConfig{
+			ReserveBase: reserveBase, ReserveIncrement: reserveIncrement,
+		}, &accountWithHook, ownerCount)
+		if !ok {
+			return Amount{}, fmt.Errorf("account funds: invalid reserve counters")
 		}
 		if account.Balance <= reserve {
 			return NewXRPAmount(0), nil

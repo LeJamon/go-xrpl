@@ -174,15 +174,11 @@ func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Reserve check
 	// Reference: rippled PayChan.cpp doApply() lines 383-387
 	amount := uint64(p.Amount.Drops())
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount)
-	if ctx.Account.Balance < reserve {
-		ctx.Log.Warn("payment channel fund: insufficient reserve",
-			"balance", ctx.Account.Balance,
-			"reserve", reserve,
-		)
-		return ter.TecINSUFFICIENT_RESERVE
+	if result := ctx.CheckReserveFor(ctx.AccountID, ctx.Account, ctx.Account.Balance, 0, 0, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
+		return result
 	}
-	if ctx.Account.Balance-reserve < amount {
+	reserve := ctx.AccountReserve(ctx.Account.OwnerCount)
+	if ctx.Account.Balance < reserve || ctx.Account.Balance-reserve < amount {
 		ctx.Log.Warn("payment channel fund: unfunded",
 			"balance", ctx.Account.Balance,
 			"needed", reserve+amount,

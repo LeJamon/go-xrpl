@@ -8,6 +8,55 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
+// OwnerCounts is the reserve-bearing owner-count state tracked by payment
+// sandboxes while ledger entries are created or removed.
+type OwnerCounts struct {
+	Owner      uint32
+	Sponsored  uint32
+	Sponsoring uint32
+}
+
+func ownerCounts(account *state.AccountRoot) OwnerCounts {
+	return OwnerCounts{
+		Owner: account.OwnerCount, Sponsored: account.SponsoredOwnerCount,
+		Sponsoring: account.SponsoringOwnerCount,
+	}
+}
+
+func (c OwnerCounts) effective() uint32 {
+	count := int64(c.Owner) - int64(c.Sponsored) + int64(c.Sponsoring)
+	if count < 0 {
+		return 0
+	}
+	if count > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(count)
+}
+
+// MoreRestrictiveThan reports whether c carries more reserve than other,
+// matching rippled's OwnerCounts ordering.
+func (c OwnerCounts) MoreRestrictiveThan(other OwnerCounts) bool {
+	if c.effective() != other.effective() {
+		return c.effective() > other.effective()
+	}
+	if c.Owner != other.Owner {
+		return c.Owner > other.Owner
+	}
+	if c.Sponsored != other.Sponsored {
+		return c.Sponsored > other.Sponsored
+	}
+	return c.Sponsoring > other.Sponsoring
+}
+
+type ownerCountsAdjuster interface {
+	AdjustOwnerCounts(account [20]byte, current, next OwnerCounts)
+}
+
+type ownerCountAdjuster interface {
+	AdjustOwnerCount(account [20]byte, current, next uint32)
+}
+
 // confineOwnerCount applies adjustment to current, saturating to math.MaxUint32
 // on positive overflow and clamping to 0 on negative underflow. Mirrors
 // rippled's confineOwnerCount (src/xrpld/ledger/detail/View.cpp).
@@ -51,7 +100,13 @@ func AdjustOwnerCount(view LedgerView, accountID [20]byte, delta int) error {
 		return fmt.Errorf("failed to parse account root: %w", err)
 	}
 
+	current := ownerCounts(account)
 	account.OwnerCount = confineOwnerCount(account.OwnerCount, delta)
+	if hook, ok := view.(ownerCountsAdjuster); ok {
+		hook.AdjustOwnerCounts(accountID, current, ownerCounts(account))
+	} else if hook, ok := view.(ownerCountAdjuster); ok {
+		hook.AdjustOwnerCount(accountID, current.Owner, account.OwnerCount)
+	}
 
 	updated, err := state.SerializeAccountRoot(account)
 	if err != nil {

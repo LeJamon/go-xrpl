@@ -177,7 +177,7 @@ func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Check reserve for issuer (ctx.Account) using the prior balance (before the
 	// actual fee was deducted), matching rippled's mPriorBalance comparison.
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
+	if result := ctx.CheckReserveFor(ctx.AccountID, ctx.Account, ctx.PriorBalance(), 1, 0, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -232,6 +232,12 @@ func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		cred.HasSubjectNode = true
 	}
 
+	sponsorAddress, result := tx.IncreaseOwnerCount(ctx, ctx.AccountID, ctx.Account, 1)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	cred.Sponsor = sponsorAddress
+
 	// Serialize the credential entry
 	credData, err := serializeCredentialEntry(cred)
 	if err != nil {
@@ -242,9 +248,6 @@ func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	if err := ctx.View.Insert(credKeylet, credData); err != nil {
 		return ter.TefINTERNAL
 	}
-
-	// Increase issuer's owner count
-	ctx.Account.OwnerCount++
 
 	return ter.TesSUCCESS
 }

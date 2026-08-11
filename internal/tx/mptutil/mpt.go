@@ -53,6 +53,10 @@ type issuerSelfDebitHookMPT interface {
 }
 
 type ownerCountHook interface {
+	AdjustOwnerCounts(account [20]byte, current, next tx.OwnerCounts)
+}
+
+type legacyOwnerCountHook interface {
 	AdjustOwnerCount(account [20]byte, current, next uint32)
 }
 
@@ -759,15 +763,55 @@ func EnsureHolding(view state.LedgerView, id [24]byte, holder [20]byte, flags ui
 		return ter.TefINTERNAL
 	}
 	if adjustOwnerCount {
-		current := account.OwnerCount
+		current := tx.OwnerCounts{
+			Owner: account.OwnerCount, Sponsored: account.SponsoredOwnerCount,
+			Sponsoring: account.SponsoringOwnerCount,
+		}
 		account.OwnerCount++
 		if hook, ok := view.(ownerCountHook); ok {
-			hook.AdjustOwnerCount(holder, current, account.OwnerCount)
+			hook.AdjustOwnerCounts(holder, current, tx.OwnerCounts{
+				Owner: account.OwnerCount, Sponsored: account.SponsoredOwnerCount,
+				Sponsoring: account.SponsoringOwnerCount,
+			})
+		} else if hook, ok := view.(legacyOwnerCountHook); ok {
+			hook.AdjustOwnerCount(holder, current.Owner, account.OwnerCount)
 		}
 		data, err = state.SerializeAccountRoot(account)
 		if err != nil || view.Update(accountKey, data) != nil {
 			return ter.TefINTERNAL
 		}
+	}
+	return ter.TesSUCCESS
+}
+
+// EnsureHoldingForContext creates a holding owned by the transaction source
+// and attributes its reserve to the effective transaction sponsor.
+func EnsureHoldingForContext(ctx *tx.ApplyContext, id [24]byte, holder [20]byte, flags uint32) ter.Result {
+	if ctx == nil || holder != ctx.AccountID {
+		return ter.TefINTERNAL
+	}
+	tokenKey := keylet.MPTokenByID(id, holder)
+	exists, err := ctx.View.Exists(tokenKey)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if exists || holder == Issuer(id) {
+		return ter.TesSUCCESS
+	}
+	if result := EnsureHolding(ctx.View, id, holder, flags, false); result != ter.TesSUCCESS {
+		return result
+	}
+	sponsorAddress, result := tx.IncreaseOwnerCount(ctx, holder, ctx.Account, 1)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	raw, err := ctx.View.Read(tokenKey)
+	if err != nil || raw == nil {
+		return ter.TefINTERNAL
+	}
+	raw, err = tx.SetLedgerEntrySponsor(raw, "Sponsor", sponsorAddress)
+	if err != nil || ctx.View.Update(tokenKey, raw) != nil {
+		return ter.TefINTERNAL
 	}
 	return ter.TesSUCCESS
 }
@@ -808,24 +852,7 @@ func RemoveHolding(view state.LedgerView, id [24]byte, holder [20]byte, adjustOw
 		return ter.TesSUCCESS
 	}
 
-	accountKey := keylet.Account(holder)
-	accountRaw, err := view.Read(accountKey)
-	if err != nil || accountRaw == nil {
-		return ter.TefINTERNAL
-	}
-	account, err := state.ParseAccountRoot(accountRaw)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	current := account.OwnerCount
-	if account.OwnerCount > 0 {
-		account.OwnerCount--
-	}
-	if hook, ok := view.(ownerCountHook); ok {
-		hook.AdjustOwnerCount(holder, current, account.OwnerCount)
-	}
-	data, err := state.SerializeAccountRoot(account)
-	if err != nil || view.Update(accountKey, data) != nil {
+	if err := tx.DecreaseOwnerCountOnView(view, holder, token.Sponsor, 1); err != nil {
 		return ter.TefINTERNAL
 	}
 	return ter.TesSUCCESS

@@ -428,28 +428,71 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) ter.Result {
 			return ter.TefINTERNAL
 		}
 
-		// Decrement OwnerCount for both sides
-		if ctx.Account.OwnerCount > 0 {
-			ctx.Account.OwnerCount--
+		issuerSponsor, holderSponsor := rs.HighSponsor, rs.LowSponsor
+		issuerReserved, holderReserved := rs.Flags&state.LsfHighReserve != 0, rs.Flags&state.LsfLowReserve != 0
+		if issuerIsLow {
+			issuerSponsor, holderSponsor = rs.LowSponsor, rs.HighSponsor
+			issuerReserved, holderReserved = rs.Flags&state.LsfLowReserve != 0, rs.Flags&state.LsfHighReserve != 0
 		}
-		if holderAccount.OwnerCount > 0 {
-			holderAccount.OwnerCount--
+		if issuerReserved {
+			if err := tx.DecreaseOwnerCount(ctx.View, ctx.Account, issuerSponsor, 1); err != nil {
+				return ctx.Internal("Clawback.IssuerOwnerCount", err)
+			}
+		}
+		if latest, readErr := tx.ReadAccountRoot(ctx.View, holderID); readErr != nil || latest == nil {
+			return ter.TefINTERNAL
+		} else {
+			holderAccount.SponsoringOwnerCount = latest.SponsoringOwnerCount
+		}
+		if holderReserved {
+			if err := tx.DecreaseOwnerCount(ctx.View, holderAccount, holderSponsor, 1); err != nil {
+				return ctx.Internal("Clawback.HolderOwnerCount", err)
+			}
+			ctx.SyncSenderSponsorCounts(holderSponsor)
 		}
 
 		if result := ctx.UpdateAccountRoot(holderID, holderAccount); result != ter.TesSUCCESS {
 			return result
 		}
 	} else {
-		// Update reserve flags
-		if bLowReserveSet && (rs.Flags&state.LsfLowReserve) == 0 {
-			rs.Flags |= state.LsfLowReserve
-		} else if !bLowReserveSet && (rs.Flags&state.LsfLowReserve) != 0 {
-			rs.Flags &^= state.LsfLowReserve
+		lowID, highID := holderID, ctx.AccountID
+		if issuerIsLow {
+			lowID, highID = ctx.AccountID, holderID
 		}
-		if bHighReserveSet && (rs.Flags&state.LsfHighReserve) == 0 {
-			rs.Flags |= state.LsfHighReserve
-		} else if !bHighReserveSet && (rs.Flags&state.LsfHighReserve) != 0 {
-			rs.Flags &^= state.LsfHighReserve
+		updateReserve := func(ownerID [20]byte, flag uint32, desired bool, sponsorAddress string) (string, ter.Result) {
+			reserved := rs.Flags&flag != 0
+			if reserved == desired {
+				return sponsorAddress, ter.TesSUCCESS
+			}
+			if !desired {
+				if result := tx.DecreaseOwnerCountFor(ctx, ownerID, sponsorAddress, 1); result != ter.TesSUCCESS {
+					return sponsorAddress, result
+				}
+				rs.Flags &^= flag
+				return "", ter.TesSUCCESS
+			}
+
+			if ownerID == ctx.AccountID {
+				newSponsor, result := tx.IncreaseOwnerCount(ctx, ownerID, ctx.Account, 1)
+				if result != ter.TesSUCCESS {
+					return sponsorAddress, result
+				}
+				sponsorAddress = newSponsor
+			} else if err := tx.AdjustOwnerCount(ctx.View, ownerID, 1); err != nil {
+				return sponsorAddress, ter.TefINTERNAL
+			}
+			rs.Flags |= flag
+			return sponsorAddress, ter.TesSUCCESS
+		}
+
+		var result ter.Result
+		rs.LowSponsor, result = updateReserve(lowID, state.LsfLowReserve, bLowReserveSet, rs.LowSponsor)
+		if result != ter.TesSUCCESS {
+			return result
+		}
+		rs.HighSponsor, result = updateReserve(highID, state.LsfHighReserve, bHighReserveSet, rs.HighSponsor)
+		if result != ter.TesSUCCESS {
+			return result
 		}
 
 		updatedData, serErr := state.SerializeRippleState(rs)

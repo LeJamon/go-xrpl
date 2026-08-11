@@ -2,7 +2,6 @@ package check
 
 import (
 	"encoding/hex"
-	"strconv"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -46,17 +45,4 @@ func newCheckData(checkTx *CheckCreate, ownerID, destID [20]byte, sequence uint3
 	}
 
 	return cd
-}
-
-// parseFee parses the fee string (in drops) to uint64.
-// Returns 0 if the fee is empty or invalid.
-func parseFee(fee string) uint64 {
-	if fee == "" {
-		return 0
-	}
-	v, err := strconv.ParseUint(fee, 10, 64)
-	if err != nil {
-		return 0
-	}
-	return v
 }

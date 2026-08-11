@@ -2,6 +2,7 @@ package tx
 
 import (
 	"context"
+	"math"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -21,6 +22,9 @@ type ApplyContext struct {
 
 	// AccountID is the decoded source account ID
 	AccountID [20]byte
+
+	// Common is the common field set of the transaction being applied.
+	Common *Common
 
 	// SourceFeeCharged is the fee (in drops) actually deducted from Account for
 	// this transaction: the transaction fee for a normal tx, or 0 when a
@@ -88,7 +92,18 @@ type InnerTransactionEngine interface {
 // AccountReserve calculates the total reserve required for an account with the given owner count.
 // Reserve = ReserveBase + (ownerCount * ReserveIncrement)
 func (ctx *ApplyContext) AccountReserve(ownerCount uint32) uint64 {
-	return ctx.Config.AccountReserve(ownerCount)
+	return ctx.AccountReserveFor(ctx.Account, ownerCount)
+}
+
+// AccountReserveFor returns the reserve carried by account at the supplied raw
+// OwnerCount. Under Sponsor, sponsored objects are removed and sponsored
+// obligations are added to the reserve-bearing count.
+func (ctx *ApplyContext) AccountReserveFor(account *state.AccountRoot, ownerCount uint32) uint64 {
+	reserve, ok := AccountReserveForView(ctx.View, ctx.Config, account, ownerCount)
+	if !ok {
+		return math.MaxUint64
+	}
+	return reserve
 }
 
 // ReserveForNewObject calculates the reserve required for creating a new ledger object.
@@ -220,4 +235,32 @@ func (ctx *ApplyContext) SyncSenderOwnerCount() {
 		return
 	}
 	ctx.Account.OwnerCount = account.OwnerCount
+	ctx.Account.SponsoredOwnerCount = account.SponsoredOwnerCount
+	ctx.Account.SponsoringOwnerCount = account.SponsoringOwnerCount
+	ctx.Account.SponsoringAccountCount = account.SponsoringAccountCount
+}
+
+// SyncSenderSponsorCounts refreshes the source's counters when it was the
+// persisted sponsor of an object owned by another account.
+func (ctx *ApplyContext) SyncSenderSponsorCounts(sponsorAddress string) {
+	if sponsorAddress == "" {
+		return
+	}
+	sponsorID, err := state.DecodeAccountID(sponsorAddress)
+	if err == nil && sponsorID == ctx.AccountID {
+		ctx.SyncSenderSponsoringOwnerCount()
+	}
+}
+
+// SyncSenderSponsoringOwnerCount merges a view-based change made while the
+// transaction source acted as another object's persisted reserve sponsor.
+func (ctx *ApplyContext) SyncSenderSponsoringOwnerCount() {
+	data, err := ctx.View.Read(keylet.Account(ctx.AccountID))
+	if err != nil || data == nil {
+		return
+	}
+	account, err := state.ParseAccountRoot(data)
+	if err == nil {
+		ctx.Account.SponsoringOwnerCount = account.SponsoringOwnerCount
+	}
 }

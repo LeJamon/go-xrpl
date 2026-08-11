@@ -260,6 +260,10 @@ func removeSignersFromLedger(ctx *tx.ApplyContext, signerListKey, ownerDirKey ke
 	if err != nil {
 		return ter.TefINTERNAL
 	}
+	sponsorAddress, err := tx.LedgerEntrySponsor(signerListData, "Sponsor")
+	if err != nil {
+		return ctx.Internal("SignerListSet.Remove.Sponsor", err)
+	}
 
 	// There are two different ways that the OwnerCount could be managed.
 	// If lsfOneOwnerCount is set, remove just one owner count.
@@ -277,13 +281,14 @@ func removeSignersFromLedger(ctx *tx.ApplyContext, signerListKey, ownerDirKey ke
 	// when the signer list was the account's last owned object).
 	// Reference: rippled SetSignerList.cpp:226-228
 	//   hint = (*signers)[sfOwnerNode]; dirRemove(ownerDirKeylet, hint, key, false).
-	state.DirRemove(ctx.View, ownerDirKey, signerList.OwnerNode, signerListKey.Key, false)
+	removed, err := state.DirRemove(ctx.View, ownerDirKey, signerList.OwnerNode, signerListKey.Key, false)
+	if err != nil || removed == nil || !removed.Success {
+		return ter.TefBAD_LEDGER
+	}
 
 	// Adjust owner count.
-	if ctx.Account.OwnerCount >= removeFromOwnerCount {
-		ctx.Account.OwnerCount -= removeFromOwnerCount
-	} else {
-		ctx.Account.OwnerCount = 0
+	if result := tx.DecreaseOwnerCountFor(ctx, ctx.AccountID, sponsorAddress, removeFromOwnerCount); result != ter.TesSUCCESS {
+		return result
 	}
 
 	// Erase the signer list.
@@ -337,25 +342,20 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	// Compute new reserve. Verify the account has funds to meet the reserve.
-	oldOwnerCount := ctx.Account.OwnerCount
-
 	// A signer list costs a flat one owner-reserve unit and carries
 	// lsfOneOwnerCount.
 	addedOwnerCount := 1
 	flags := state.LsfOneOwnerCount
 
-	newReserve := ctx.AccountReserve(oldOwnerCount + uint32(addedOwnerCount))
-
 	// We check the reserve against the starting balance because we want to
 	// allow dipping into the reserve to pay fees. This behavior is consistent
 	// with CreateTicket.
 	priorBalance := ctx.PriorBalance()
-	if priorBalance < newReserve {
+	if result := ctx.CheckReserveFor(ctx.AccountID, ctx.Account, priorBalance, addedOwnerCount, 0, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
 		ctx.Log.Warn("signer list set: insufficient reserve",
 			"balance", priorBalance,
-			"reserve", newReserve,
 		)
-		return ter.TecINSUFFICIENT_RESERVE
+		return result
 	}
 
 	// Build the signer entries for serialization.
@@ -399,14 +399,19 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		ctx.Log.Error("signer list set: failed to serialize signer list", "error", err)
 		return ter.TefINTERNAL
 	}
+	sponsorAddress, result := tx.IncreaseOwnerCount(ctx, ctx.AccountID, ctx.Account, uint32(addedOwnerCount))
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	signerListData, err = tx.SetLedgerEntrySponsor(signerListData, "Sponsor", sponsorAddress)
+	if err != nil {
+		return ctx.Internal("SignerListSet.SetSponsor", err)
+	}
 
 	if err := ctx.View.Insert(signerListKey, signerListData); err != nil {
 		ctx.Log.Error("signer list set: failed to insert signer list", "error", err)
 		return ter.TefINTERNAL
 	}
-
-	// Adjust owner count.
-	ctx.Account.OwnerCount += uint32(addedOwnerCount)
 
 	return ter.TesSUCCESS
 }

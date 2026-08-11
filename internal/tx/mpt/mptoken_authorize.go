@@ -238,14 +238,14 @@ func (m *MPTokenAuthorize) holderUnauthorize(ctx *tx.ApplyContext, tokenKey keyl
 		return ter.TecINTERNAL
 	}
 
+	if result := tx.DecreaseOwnerCountFor(ctx, ctx.AccountID, token.Sponsor, 1); result != ter.TesSUCCESS {
+		return result
+	}
+
 	// Erase the MPToken
 	if err := ctx.View.Erase(tokenKey); err != nil {
 		ctx.Log.Error("mptoken authorize: failed to erase token", "error", err)
 		return ter.TefINTERNAL
-	}
-
-	if ctx.Account.OwnerCount > 0 {
-		ctx.Account.OwnerCount--
 	}
 
 	return ter.TesSUCCESS
@@ -257,13 +257,22 @@ func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, mptID [24]byte,
 	// Reserve check against the prior balance (before fee deduction).
 	// The first 2 MPT objects are free, like trust lines, so
 	// ReserveForNewObject returns 0 when fewer than 2 objects are owned.
-	reserveNeeded := ctx.ReserveForNewObject(ctx.Account.OwnerCount)
-	if ctx.PriorBalance() < reserveNeeded {
+	usesSponsor, result := ctx.UsesReserveSponsorFor(ctx.AccountID, ctx.Account)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	effectiveOwners, ok := tx.EffectiveOwnerCount(ctx.Account, 0)
+	if !ok {
+		return ter.TefINTERNAL
+	}
+	if usesSponsor || effectiveOwners >= 2 {
+		result = ctx.CheckReserveFor(ctx.AccountID, ctx.Account, ctx.PriorBalance(), 1, 0, ter.TecINSUFFICIENT_RESERVE)
+	}
+	if result != ter.TesSUCCESS {
 		ctx.Log.Warn("mptoken authorize: insufficient reserve",
 			"priorBalance", ctx.PriorBalance(),
-			"reserve", reserveNeeded,
 		)
-		return ter.TecINSUFFICIENT_RESERVE
+		return result
 	}
 
 	// Build MPToken entry
@@ -285,6 +294,11 @@ func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, mptID [24]byte,
 		return ter.TecDIR_FULL
 	}
 	tokenData.OwnerNode = dirResult.Page
+	sponsorAddress, result := tx.IncreaseOwnerCount(ctx, ctx.AccountID, ctx.Account, 1)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	tokenData.Sponsor = sponsorAddress
 
 	// Serialize and insert
 	data, err := state.SerializeMPToken(tokenData)
@@ -297,7 +311,6 @@ func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, mptID [24]byte,
 		return ter.TefINTERNAL
 	}
 
-	ctx.Account.OwnerCount++
 	return ter.TesSUCCESS
 }
 

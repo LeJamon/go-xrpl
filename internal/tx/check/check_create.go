@@ -213,7 +213,7 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Reserve check: account must afford owner count + 1
 	// Reference: CreateCheck.cpp L181-186
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
+	if result := ctx.CheckReserveFor(ctx.AccountID, ctx.Account, ctx.PriorBalance(), 1, 0, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -263,17 +263,25 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 	checkSLE.OwnerNode = ownerResult.Page
 
+	sponsorAddress, result := tx.IncreaseOwnerCount(ctx, accountID, ctx.Account, 1)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+
 	// Re-serialize check with updated OwnerNode/DestinationNode
 	updatedData, err := state.SerializeCheckFromData(checkSLE)
 	if err != nil {
 		return ctx.Internal("SerializeCheckFromData", err)
 	}
+	if sponsorAddress != "" {
+		updatedData, err = tx.SetLedgerEntrySponsor(updatedData, "Sponsor", sponsorAddress)
+		if err != nil {
+			return ctx.Internal("set check sponsor", err)
+		}
+	}
 	if err := ctx.View.Update(checkKey, updatedData); err != nil {
 		return ctx.Internal("update check", err)
 	}
-
-	// Increase owner count
-	ctx.Account.OwnerCount++
 
 	return ter.TesSUCCESS
 }

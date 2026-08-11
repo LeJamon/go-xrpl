@@ -896,8 +896,8 @@ func computeConsequences(txn tx.Transaction, seqProxy SeqProxy) txConsequences {
 			cons.PotentialSpend = uint64(t.Amount.Drops())
 		}
 	case *sponsor.SponsorshipSet:
-		if t.FeeAmount != nil && t.FeeAmount.IsNative() && t.FeeAmount.Signum() > 0 {
-			cons.PotentialSpend = uint64(t.FeeAmount.Drops())
+		if t.FeeAmountDelta != nil && t.FeeAmountDelta.IsNative() && t.FeeAmountDelta.Signum() > 0 {
+			cons.PotentialSpend = uint64(t.FeeAmountDelta.Drops())
 		}
 	}
 

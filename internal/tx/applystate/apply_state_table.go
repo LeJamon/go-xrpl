@@ -37,7 +37,7 @@ const (
 type TrackedEntry struct {
 	Action   Action
 	Original []byte // Original state (nil for inserts)
-	Current  []byte // Current state (nil for deletes after erase)
+	Current  []byte // Current state (the final pre-erase image for deletes)
 
 	// reinserted marks a modify produced by erase-then-insert of the same key
 	// (rippled ApplyStateTable::insert after erase → Action::modify,
@@ -798,7 +798,7 @@ func (t *ApplyStateTable) CollectEntries() []invariants.InvariantEntry {
 		if entry.Action == ActionCache {
 			continue
 		}
-		var before, after []byte
+		var before, after, deleteFinal []byte
 		switch entry.Action {
 		case ActionInsert:
 			before = nil
@@ -808,11 +808,13 @@ func (t *ApplyStateTable) CollectEntries() []invariants.InvariantEntry {
 			after = entry.Current
 		case ActionErase:
 			// Original holds the state when first read; Current holds state just before deletion.
-			// Use Original as the canonical "before" state.
+			// Use Original as the canonical "before" state and retain Current as
+			// InvariantEntry.DeleteFinal for checks that need the final image.
 			before = entry.Original
 			if before == nil {
 				before = entry.Current // direct erase without prior read sets Current = Original
 			}
+			deleteFinal = bytes.Clone(entry.Current)
 			after = nil
 		}
 		typeData := after
@@ -821,11 +823,12 @@ func (t *ApplyStateTable) CollectEntries() []invariants.InvariantEntry {
 		}
 		entryType, _ := state.DecodeType(typeData)
 		entries = append(entries, invariants.InvariantEntry{
-			Key:       key,
-			IsDelete:  entry.Action == ActionErase,
-			Before:    before,
-			After:     after,
-			EntryType: entryType,
+			Key:         key,
+			IsDelete:    entry.Action == ActionErase,
+			Before:      before,
+			After:       after,
+			DeleteFinal: deleteFinal,
+			EntryType:   entryType,
 		})
 	}
 	return entries

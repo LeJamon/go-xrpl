@@ -37,6 +37,7 @@ func TestSponsorshipSetPreflightMatrix(t *testing.T) {
 	sponsee, _ := sponsorTestAccount(t, 2)
 	other, _ := sponsorTestAccount(t, 3)
 	xrp := tx.NewXRPAmount(1)
+	zero := tx.NewXRPAmount(0)
 	negative := tx.NewXRPAmount(-1)
 	iou := tx.NewIssuedAmountFromFloat64(1, "USD", other)
 
@@ -48,7 +49,7 @@ func TestSponsorshipSetPreflightMatrix(t *testing.T) {
 		{"create", func() *SponsorshipSet {
 			txn := NewSponsorshipSet(sponsor)
 			txn.Sponsee = sponsee
-			txn.FeeAmount = &xrp
+			txn.FeeAmountDelta = &xrp
 			return txn
 		}, ter.TesSUCCESS},
 		{"neither party", func() *SponsorshipSet { return NewSponsorshipSet(sponsor) }, ter.TemMALFORMED},
@@ -66,7 +67,7 @@ func TestSponsorshipSetPreflightMatrix(t *testing.T) {
 		{"sponsee cannot update", func() *SponsorshipSet {
 			txn := NewSponsorshipSet(sponsee)
 			txn.CounterpartySponsor = sponsor
-			txn.FeeAmount = &xrp
+			txn.FeeAmountDelta = &xrp
 			return txn
 		}, ter.TemMALFORMED},
 		{"contradictory fee flags", func() *SponsorshipSet {
@@ -78,16 +79,40 @@ func TestSponsorshipSetPreflightMatrix(t *testing.T) {
 		{"delete with budget", func() *SponsorshipSet {
 			txn := NewSponsorshipSet(sponsor)
 			txn.Sponsee = sponsee
-			txn.FeeAmount = &xrp
+			txn.FeeAmountDelta = &xrp
 			txn.SetFlags(SponsorshipSetFlagDelete)
 			return txn
 		}, ter.TemMALFORMED},
-		{"negative XRP", func() *SponsorshipSet {
+		{"negative XRP delta", func() *SponsorshipSet {
 			txn := NewSponsorshipSet(sponsor)
 			txn.Sponsee = sponsee
-			txn.FeeAmount = &negative
+			txn.FeeAmountDelta = &negative
+			return txn
+		}, ter.TesSUCCESS},
+		{"zero XRP delta", func() *SponsorshipSet {
+			txn := NewSponsorshipSet(sponsor)
+			txn.Sponsee = sponsee
+			txn.FeeAmountDelta = &zero
 			return txn
 		}, ter.TemBAD_AMOUNT},
+		{"zero owner count delta", func() *SponsorshipSet {
+			txn := NewSponsorshipSet(sponsor)
+			txn.Sponsee = sponsee
+			zero := int32(0)
+			txn.RemainingOwnerCountDelta = &zero
+			return txn
+		}, ter.TemINVALID},
+		{"redundant", func() *SponsorshipSet {
+			txn := NewSponsorshipSet(sponsor)
+			txn.Sponsee = sponsee
+			return txn
+		}, ter.TemREDUNDANT},
+		{"flag-only update", func() *SponsorshipSet {
+			txn := NewSponsorshipSet(sponsor)
+			txn.Sponsee = sponsee
+			txn.SetFlags(SponsorshipSetFlagRequireSignForFee)
+			return txn
+		}, ter.TesSUCCESS},
 		{"issued amount", func() *SponsorshipSet {
 			txn := NewSponsorshipSet(sponsor)
 			txn.Sponsee = sponsee

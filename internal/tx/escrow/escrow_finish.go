@@ -231,6 +231,10 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	isXRP := escrowEntry.IsXRP
+	sponsorAddress, err := tx.LedgerEntrySponsor(escrowData, "Sponsor")
+	if err != nil {
+		return ctx.Internal("EscrowFinish.Sponsor", err)
+	}
 
 	closeTime := ctx.Config.ParentCloseTime
 
@@ -331,6 +335,23 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
+	sponsorEnabled := rules.Enabled(amendment.FeatureSponsor)
+	if sponsorEnabled {
+		if ownerID == escrowEntry.DestinationID && !destIsSelf {
+			if err := tx.DecreaseOwnerCount(ctx.View, destAccount, sponsorAddress, 1); err != nil {
+				return ctx.Internal("EscrowFinish.OwnerCount", err)
+			}
+			ctx.SyncSenderSponsorCounts(sponsorAddress)
+		} else if result := tx.DecreaseOwnerCountFor(ctx, ownerID, sponsorAddress, 1); result != ter.TesSUCCESS {
+			return result
+		}
+		if destIsSelf {
+			if result := ctx.UpdateAccountRoot(ctx.AccountID, ctx.Account); result != ter.TesSUCCESS {
+				return result
+			}
+		}
+	}
+
 	// Transfer the escrowed amount to destination
 	// Reference: rippled Escrow.cpp doApply() lines 1142-1184
 	if isXRP {
@@ -402,6 +423,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 
 			if result := escrowUnlockMPT(
 				ctx.View,
+				ctx,
 				escrowEntry.Account,
 				escrowEntry.DestinationID,
 				finalAmount,
@@ -422,6 +444,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 			// Reference: rippled Escrow.cpp escrowUnlockApplyHelper<Issue> lines 809-942
 			if result := escrowUnlockIOU(
 				ctx.View,
+				ctx,
 				lockedRate,
 				destReserveBalance,
 				destAccount.OwnerCount,
@@ -480,34 +503,13 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	// Decrement OwnerCount for escrow owner only.
-	// Reference: rippled Escrow.cpp doApply() lines 1188-1191
-	if result := adjustOwnerCount(ctx, ownerID, -1); result != ter.TesSUCCESS {
-		return result
+	if !sponsorEnabled {
+		if result := tx.DecreaseOwnerCountFor(ctx, ownerID, "", 1); result != ter.TesSUCCESS {
+			return result
+		}
 	}
 
 	return ter.TesSUCCESS
-}
-
-// adjustOwnerCount adjusts the OwnerCount of the given account by delta.
-// When the target account is ctx.Account (the transaction sender), it modifies
-// ctx.Account directly (the engine writes it back). Otherwise it delegates to
-// tx.AdjustOwnerCount which reads/writes through the view.
-func adjustOwnerCount(ctx *tx.ApplyContext, accountID [20]byte, delta int) ter.Result {
-	if accountID == ctx.AccountID {
-		if delta > 0 {
-			ctx.Account.OwnerCount += uint32(delta)
-		} else {
-			decrement := uint32(-delta)
-			if ctx.Account.OwnerCount < decrement {
-				return ter.TefBAD_LEDGER
-			}
-			ctx.Account.OwnerCount -= decrement
-		}
-		return ter.TesSUCCESS
-	}
-
-	return adjustOwnerCountViaView(ctx.View, accountID, delta)
 }
 
 func resyncSelfOwnerCount(ctx *tx.ApplyContext) ter.Result {

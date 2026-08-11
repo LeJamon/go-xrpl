@@ -77,8 +77,8 @@ type DeferredCredits struct {
 	credits map[deferredKey]*deferredValue
 	mpt     map[[24]byte]*deferredMPTValue
 
-	// ownerCounts tracks maximum owner count seen for each account
-	ownerCounts map[[20]byte]uint32
+	// ownerCounts tracks the maximum reserve-bearing count state seen for each account.
+	ownerCounts map[[20]byte]tx.OwnerCounts
 }
 
 // deferredKey is the key for deferred credits lookup
@@ -232,7 +232,7 @@ func newDeferredCredits() *DeferredCredits {
 	return &DeferredCredits{
 		credits:     make(map[deferredKey]*deferredValue),
 		mpt:         make(map[[24]byte]*deferredMPTValue),
-		ownerCounts: make(map[[20]byte]uint32),
+		ownerCounts: make(map[[20]byte]tx.OwnerCounts),
 	}
 }
 
@@ -758,19 +758,21 @@ func (dc *DeferredCredits) adjustments(main, other [20]byte, currency string) *A
 }
 
 // ownerCount records the owner count for an account
-func (dc *DeferredCredits) ownerCount(id [20]byte, cur, next uint32) {
-	v := max(next, cur)
-
+func (dc *DeferredCredits) ownerCount(id [20]byte, current, next tx.OwnerCounts) {
+	v := current
+	if next.MoreRestrictiveThan(v) {
+		v = next
+	}
 	existing, exists := dc.ownerCounts[id]
 	if !exists {
 		dc.ownerCounts[id] = v
-	} else if v > existing {
+	} else if v.MoreRestrictiveThan(existing) {
 		dc.ownerCounts[id] = v
 	}
 }
 
 // getOwnerCount returns the recorded owner count for an account
-func (dc *DeferredCredits) getOwnerCount(id [20]byte) (uint32, bool) {
+func (dc *DeferredCredits) getOwnerCount(id [20]byte) (tx.OwnerCounts, bool) {
 	v, ok := dc.ownerCounts[id]
 	return v, ok
 }
@@ -827,7 +829,7 @@ func (dc *DeferredCredits) apply(to *DeferredCredits, numberContext state.Number
 		toCount, exists := to.ownerCounts[id]
 		if !exists {
 			to.ownerCounts[id] = fromCount
-		} else if fromCount > toCount {
+		} else if fromCount.MoreRestrictiveThan(toCount) {
 			to.ownerCounts[id] = fromCount
 		}
 	}
@@ -942,10 +944,16 @@ func addMPTDeferred(current, amount uint64) uint64 {
 // OwnerCountHook returns the maximum owner count seen for an account
 // during payment processing.
 func (s *PaymentSandbox) OwnerCountHook(account [20]byte, count uint32) uint32 {
-	result := count
+	return s.OwnerCountsHook(account, tx.OwnerCounts{Owner: count}).Owner
+}
+
+// OwnerCountsHook returns the maximum reserve-bearing count state seen for an
+// account during payment processing.
+func (s *PaymentSandbox) OwnerCountsHook(account [20]byte, counts tx.OwnerCounts) tx.OwnerCounts {
+	result := counts
 	for curSB := s; curSB != nil; curSB = curSB.parent {
 		if adj, ok := curSB.tab.getOwnerCount(account); ok {
-			if adj > result {
+			if adj.MoreRestrictiveThan(result) {
 				result = adj
 			}
 		}
@@ -955,7 +963,12 @@ func (s *PaymentSandbox) OwnerCountHook(account [20]byte, count uint32) uint32 {
 
 // AdjustOwnerCount records an owner count change for an account
 func (s *PaymentSandbox) AdjustOwnerCount(account [20]byte, cur, next uint32) {
-	s.tab.ownerCount(account, cur, next)
+	s.AdjustOwnerCounts(account, tx.OwnerCounts{Owner: cur}, tx.OwnerCounts{Owner: next})
+}
+
+// AdjustOwnerCounts records a reserve-bearing count change for an account.
+func (s *PaymentSandbox) AdjustOwnerCounts(account [20]byte, current, next tx.OwnerCounts) {
+	s.tab.ownerCount(account, current, next)
 }
 
 // Apply merges this sandbox's changes into a parent PaymentSandbox.
