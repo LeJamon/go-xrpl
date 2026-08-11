@@ -219,14 +219,14 @@ func (s *SponsorshipSet) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Res
 func (s *SponsorshipSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	sponsorID, sponseeID, result := s.parties()
 	if result != ter.TesSUCCESS {
-		return ter.TefINTERNAL
+		return ter.TecINTERNAL
 	}
 	sponsor, result := accountForApply(ctx, sponsorID)
 	if result != ter.TesSUCCESS {
-		return ter.TefINTERNAL
+		return ter.TecINTERNAL
 	}
 	if sponsee, result := accountForApply(ctx, sponseeID); result != ter.TesSUCCESS || sponsee == nil {
-		return ter.TefINTERNAL
+		return ter.TecINTERNAL
 	}
 
 	objectKey := keylet.Sponsorship(sponsorID, sponseeID)
@@ -260,7 +260,7 @@ func (s *SponsorshipSet) create(
 		return ter.TecUNFUNDED
 	}
 	balanceAfterFee := sponsor.Balance - feeAmount
-	if result := checkAccountReserve(ctx.Config, sponsor, balanceAfterFee, 1, 0, ter.TecUNFUNDED); result != ter.TesSUCCESS {
+	if result := ctx.CheckReserveFor(sponsorID, sponsor, balanceAfterFee, 1, 0, ter.TecUNFUNDED); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -280,6 +280,18 @@ func (s *SponsorshipSet) create(
 	}
 	if s.RemainingOwnerCountDelta != nil && *s.RemainingOwnerCountDelta > 0 {
 		object.RemainingOwnerCount = uint32(*s.RemainingOwnerCountDelta)
+	}
+	reserveSponsor, result := tx.IncreaseOwnerCount(ctx, sponsorID, sponsor, 1)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	if reserveSponsor != "" {
+		reserveSponsorID, err := state.DecodeAccountID(reserveSponsor)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		object.Sponsor = reserveSponsorID
+		object.HasSponsor = true
 	}
 
 	ownerInsert, err := state.DirInsert(ctx.View, keylet.OwnerDir(sponsorID), objectKey.Key, false, func(dir *state.DirectoryNode) {
@@ -311,7 +323,6 @@ func (s *SponsorshipSet) create(
 		return ctx.Internal("insert Sponsorship", err)
 	}
 	sponsor.Balance = balanceAfterFee
-	sponsor.OwnerCount = tx.ConfineOwnerCount(sponsor.OwnerCount, 1)
 	return writeAccount(ctx, sponsorID, sponsor)
 }
 
@@ -346,12 +357,12 @@ func (s *SponsorshipSet) update(
 				}
 				balanceAfter += refund
 			}
-			if result := checkAccountReserve(ctx.Config, sponsor, balanceAfter, 0, 0, ter.TecUNFUNDED); result != ter.TesSUCCESS {
-				return result
-			}
 			sponsor.Balance = balanceAfter
 			object.FeeAmount = newAmount
 			object.HasFeeAmount = newAmount > 0
+		}
+		if result := ctx.CheckReserveFor(sponsorID, sponsor, sponsor.Balance, 0, 0, ter.TecUNFUNDED); result != ter.TesSUCCESS {
+			return result
 		}
 	}
 	if s.MaxFee != nil {
@@ -409,9 +420,17 @@ func (s *SponsorshipSet) delete(
 	if err != nil || sponseeRemoved == nil || !sponseeRemoved.Success {
 		return ter.TefBAD_LEDGER
 	}
-	if sponsor.OwnerCount > 0 {
-		sponsor.OwnerCount--
+	reserveSponsor := ""
+	if object.HasSponsor {
+		reserveSponsor, err = state.EncodeAccountID(object.Sponsor)
+		if err != nil {
+			return ctx.Internal("encode Sponsorship reserve sponsor", err)
+		}
 	}
+	if err := tx.DecreaseOwnerCount(ctx.View, sponsor, reserveSponsor, 1); err != nil {
+		return ctx.Internal("SponsorshipSet.Delete.OwnerCount", err)
+	}
+	ctx.SyncSenderSponsorCounts(reserveSponsor)
 	if object.HasFeeAmount {
 		sponsor.Balance += object.FeeAmount
 	}

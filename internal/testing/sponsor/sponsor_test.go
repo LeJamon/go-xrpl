@@ -12,6 +12,7 @@ import (
 	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
 	checktx "github.com/LeJamon/go-xrpl/internal/tx/check"
 	delegatetx "github.com/LeJamon/go-xrpl/internal/tx/delegate"
+	paychantx "github.com/LeJamon/go-xrpl/internal/tx/paychan"
 	paymenttx "github.com/LeJamon/go-xrpl/internal/tx/payment"
 	signtx "github.com/LeJamon/go-xrpl/internal/tx/sign"
 	sponsortx "github.com/LeJamon/go-xrpl/internal/tx/sponsor"
@@ -316,6 +317,45 @@ func TestSponsorshipSetCreateUpdateDelete(t *testing.T) {
 	require.False(t, ownerDirectoryContains(t, env, sponsee, sponsorshipKey.Key))
 	require.Equal(t, uint32(0), env.OwnerCount(sponsor))
 	require.Equal(t, initialBalance-20, env.Balance(sponsor), "sponsee pays the delete fee; prefund is refunded")
+}
+
+func TestSponsorshipSetNoopFeeWithdrawalChecksReserve(t *testing.T) {
+	env, sponsee, _, sponsor, _ := sponsorEnv(t)
+	remaining := int32(1)
+	require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, sponsee, 0, &remaining).Code)
+
+	setAccountBalance(t, env, sponsor, env.ReserveBase()+10)
+	negative := tx.NewXRPAmount(-1)
+	update := sponsortx.NewSponsorshipSet(sponsor.Address)
+	update.Sponsee = sponsee.Address
+	update.FeeAmountDelta = &negative
+	require.Equal(t, "tecUNFUNDED", env.Submit(update).Code)
+}
+
+func TestPaymentChannelFundChecksReserveSponsor(t *testing.T) {
+	env, source, destination, sponsor, _ := sponsorEnv(t)
+	sequence := env.Seq(source)
+	create := paychantx.NewPaymentChannelCreate(
+		source.Address,
+		destination.Address,
+		tx.NewXRPAmount(1_000),
+		100,
+		source.PublicKeyHex(),
+	)
+	require.Equal(t, "tesSUCCESS", env.Submit(create).Code)
+
+	setAccountBalance(t, env, sponsor, env.ReserveBase()-1)
+	channel := keylet.PayChannel(source.ID, destination.ID, sequence)
+	fund := paychantx.NewPaymentChannelFund(
+		source.Address,
+		hex.EncodeToString(channel.Key[:]),
+		tx.NewXRPAmount(1),
+	)
+	fund.Sponsor = sponsor.Address
+	reserve := tx.SpfSponsorReserve
+	fund.SponsorFlags = &reserve
+	attachSponsorSignature(t, env, fund, source, sponsor)
+	require.Equal(t, "tecINSUFFICIENT_RESERVE", env.SubmitSigned(fund).Code)
 }
 
 func TestSponsorshipSetDeltaBounds(t *testing.T) {
