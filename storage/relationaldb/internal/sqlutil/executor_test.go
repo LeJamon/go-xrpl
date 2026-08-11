@@ -64,20 +64,19 @@ func TestGatedValidationRepositoryPinsBatchUntilClose(t *testing.T) {
 	go func() {
 		closeDone <- gate.Close(func() error { return nil })
 	}()
-	deadline := time.After(time.Second)
-	for {
-		err := repository.Save(context.Background(), nil)
-		if errors.Is(err, relationaldb.ErrDatabaseClosed) {
-			break
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for !gate.closing.Load() {
 		select {
-		case <-deadline:
-			t.Fatal("validation operations were not rejected while Close was pending")
-		default:
+		case <-deadline.C:
+			t.Fatal("Close did not enter closing state")
+		case <-ticker.C:
 		}
+	}
+	if err := repository.Save(context.Background(), nil); !errors.Is(err, relationaldb.ErrDatabaseClosed) {
+		t.Fatalf("Save while Close was pending returned %v, want %v", err, relationaldb.ErrDatabaseClosed)
 	}
 	select {
 	case err := <-closeDone:
