@@ -1574,6 +1574,9 @@ func (r *Router) completeStoredConsensusRecovery(seq uint32, hash, parentHash [3
 	r.recordSeqHash(seq, hash, parentHash, true)
 	_, result := r.adaptor.recheckFullyValidated(seq, hash)
 	r.recordCompletionRecheck(result)
+	if result == validationRecheckAccepted {
+		r.promoteCompletedLedger(seq, hash)
+	}
 	if r.isObsoleteRecoveryCompletion(seq, hash) {
 		r.obsoleteAcquisitionCompleted.Add(1)
 		r.armConsensusCatchup()
@@ -1618,12 +1621,23 @@ func (r *Router) isObsoleteRecoveryCompletion(seq uint32, hash [32]byte) bool {
 }
 
 func (r *Router) promoteCompletedLedger(seq uint32, hash [32]byte) {
+	if r.engine == nil {
+		return
+	}
+	acceptable, err := r.engine.CanAcceptLedger(consensus.LedgerID(hash))
+	if err != nil {
+		r.logger.Debug("validated ledger acceptance check failed", "error", err, "seq", seq)
+		return
+	}
+	if !acceptable {
+		return
+	}
 	signTime, result := r.adaptor.recheckFullyValidated(seq, hash)
 	if result != validationRecheckAccepted {
 		return
 	}
 	if svc := r.adaptor.LedgerService(); svc != nil {
-		svc.SetValidatedLedgerAt(seq, hash, signTime)
+		svc.PromoteStoredValidatedLedgerAt(seq, hash, signTime)
 	}
 }
 
@@ -1654,7 +1668,6 @@ func (r *Router) tryConsensusLedgerSwitch(seq uint32, hash [32]byte) (accepted, 
 		r.retainConsensusLedgerSwitch(hash)
 		return false, false
 	}
-	r.promoteCompletedLedger(seq, hash)
 
 	_, rearm = r.finishConsensusRecoveryStep(seq, hash)
 	if r.adaptor.GetOperatingMode() < consensus.OpModeTracking {
@@ -1728,7 +1741,6 @@ func (r *Router) tryInitialLedgerSwitch(seq uint32, hash [32]byte) (accepted, re
 
 	rearm = r.finishInitialLedgerSwitch(seq, hash, result)
 	if result == consensus.LedgerSwitchAccepted {
-		r.promoteCompletedLedger(seq, hash)
 		if r.adaptor.GetOperatingMode() < consensus.OpModeTracking {
 			r.adaptor.SetOperatingMode(consensus.OpModeTracking)
 		}
@@ -1911,7 +1923,9 @@ func (r *Router) armValidatedLedgerAcquisition(seq uint32, hash [32]byte) {
 		r.acquisitionMu.Lock()
 		r.consensusRecovery.targetHash = hash
 		r.acquisitionMu.Unlock()
-		r.armConsensusCatchup()
+		r.runLifecycleTask(func(context.Context) {
+			r.armConsensusCatchup()
+		})
 		return
 	}
 

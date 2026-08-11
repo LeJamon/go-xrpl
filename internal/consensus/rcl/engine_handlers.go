@@ -445,6 +445,17 @@ func (e *Engine) TrySwitchToLedger(id consensus.LedgerID) (consensus.LedgerSwitc
 	return consensus.LedgerSwitchAccepted, nil
 }
 
+func (e *Engine) CanAcceptLedger(id consensus.LedgerID) (bool, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	l, err := e.adaptor.GetLedger(id)
+	if err != nil || l == nil {
+		return false, err
+	}
+	return e.canBeCurrentLocked(l), nil
+}
+
 func (e *Engine) switchToAcquiredLedgerLocked(id consensus.LedgerID, l consensus.Ledger) bool {
 	exactRecoveryTarget := e.mode == consensus.ModeWrongLedger && id == e.wrongLedgerID
 	validatedCandidate := e.adaptor.GetValidatedLedgerHash() == id ||

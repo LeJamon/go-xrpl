@@ -24,6 +24,45 @@ func (t *countingValidationTracker) RecheckFullyValidated(
 	return t.ValidationTracker.RecheckFullyValidated(id, seq)
 }
 
+func TestFullyValidatedHeldLedgerDoesNotReenterEngineLock(t *testing.T) {
+	a := newTestAdaptor(t)
+	engine := &mockEngine{switchResult: consensus.LedgerSwitchAccepted}
+	r := newTestRouter(engine, a, nil)
+
+	completed := completedCatchUpAcquisitionWithHeader(t, header.LedgerHeader{
+		LedgerIndex: a.ledgerService.GetClosedLedgerIndex() + 5,
+		ParentHash:  [32]byte{0xEE},
+		CloseTime:   time.Now(),
+	})
+	h, stateMap, txMap, err := completed.Result()
+	require.NoError(t, err)
+	require.NoError(t, a.ledgerService.StoreLedgerWithState(t.Context(), h, stateMap, txMap))
+
+	_, started := r.startLifecycle(t.Context())
+	require.True(t, started)
+	t.Cleanup(r.stopLifecycle)
+
+	engine.mu.Lock()
+	returned := make(chan struct{})
+	go func() {
+		r.onLedgerFullyValidated(h.LedgerIndex, h.Hash)
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		engine.mu.Unlock()
+		<-returned
+		t.Fatal("fully validated callback re-entered the engine lock")
+	}
+	engine.mu.Unlock()
+
+	require.Eventually(t, func() bool {
+		ledgers := engine.getLedgers()
+		return len(ledgers) == 1 && ledgers[0] == consensus.LedgerID(h.Hash)
+	}, time.Second, time.Millisecond)
+}
+
 func TestFastSyncFinalityMoreThan256TargetsUseLiveEvidence(t *testing.T) {
 	a := newTestAdaptor(t)
 	engine := &mockEngine{switchResult: consensus.LedgerSwitchAccepted}
@@ -89,7 +128,7 @@ func TestFastSyncFinalityMoreThan256TargetsUseLiveEvidence(t *testing.T) {
 		return current
 	}())
 	require.Equal(t, uint64(1), r.FastSyncMetrics().ObsoleteAcquisitionCompleted)
-	require.Equal(t, 1, tracker.rechecks[consensus.LedgerID(hashes[0])])
+	require.Equal(t, 2, tracker.rechecks[consensus.LedgerID(hashes[0])])
 
 	r.fetchTracker.Track(final)
 	r.completeInboundLedger(final)
@@ -97,6 +136,44 @@ func TestFastSyncFinalityMoreThan256TargetsUseLiveEvidence(t *testing.T) {
 	require.Equal(t, final.Hash(), a.ledgerService.GetValidatedLedger().Hash())
 	require.Equal(t, uint64(2), r.FastSyncMetrics().CompletionRecheckAccepted)
 	require.Equal(t, 2, tracker.rechecks[consensus.LedgerID(final.Hash())])
+}
+
+func TestFastSyncCompletionPromotesValidatedLedgerWhenWorkingSwitchIsRejected(t *testing.T) {
+	a := newTestAdaptor(t)
+	engine := &mockEngine{switchResult: consensus.LedgerSwitchRejected}
+	r := newTestRouter(engine, a, nil)
+	tracker := &countingValidationTracker{
+		ValidationTracker: rcl.NewValidationTracker(2),
+		rechecks:          make(map[consensus.LedgerID]int),
+	}
+	nodes := []consensus.NodeID{{1}, {2}}
+	tracker.SetTrustedAndQuorum(nodes, 2)
+	a.SetValidationHistorian(tracker)
+
+	now := time.Now()
+	completed := completedCatchUpAcquisitionWithHeader(t, header.LedgerHeader{
+		LedgerIndex: a.ledgerService.GetClosedLedgerIndex() + 20,
+		ParentHash:  [32]byte{0xAB},
+		CloseTime:   now,
+	})
+	for _, node := range nodes {
+		require.True(t, tracker.Add(&consensus.Validation{
+			LedgerID:  consensus.LedgerID(completed.Hash()),
+			LedgerSeq: completed.Seq(),
+			NodeID:    node,
+			SignTime:  now,
+			SeenTime:  now,
+			Full:      true,
+		}))
+	}
+
+	closed := a.ledgerService.GetClosedLedger()
+	r.fetchTracker.Track(completed)
+	r.completeInboundLedger(completed)
+
+	require.Equal(t, closed.Hash(), a.ledgerService.GetClosedLedger().Hash())
+	require.Equal(t, completed.Hash(), a.ledgerService.GetValidatedLedger().Hash())
+	require.Equal(t, 2, tracker.rechecks[consensus.LedgerID(completed.Hash())])
 }
 
 func TestFastSyncCompletionRecheckUsesCurrentTrustAndExpiry(t *testing.T) {
@@ -178,7 +255,7 @@ func TestFastSyncCompletionRecheckUsesCurrentTrustAndExpiry(t *testing.T) {
 			require.Zero(t, metrics.CompletionRecheckAccepted)
 			require.Equal(t, hash, a.ledgerService.GetClosedLedger().Hash())
 			require.Equal(t, previousValidated.Hash(), a.ledgerService.GetValidatedLedger().Hash())
-			require.Equal(t, 2, historian.rechecks[consensus.LedgerID(hash)])
+			require.Equal(t, 1, historian.rechecks[consensus.LedgerID(hash)])
 		})
 	}
 }

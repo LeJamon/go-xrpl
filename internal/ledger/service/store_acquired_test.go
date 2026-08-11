@@ -84,41 +84,104 @@ func TestBootstrapLedgerWithStateStagesUntilConsensusSwitch(t *testing.T) {
 	require.Equal(t, second.LedgerIndex, stored.Sequence())
 }
 
-func TestStoredLedgerDefersValidationUntilConsensusSwitch(t *testing.T) {
-	for _, validationFirst := range []bool{true, false} {
-		t.Run(map[bool]string{true: "validation-before-store", false: "validation-after-store"}[validationFirst], func(t *testing.T) {
-			svc, err := New(DefaultConfig())
-			require.NoError(t, err)
-			require.NoError(t, svc.Start())
-			t.Cleanup(svc.Stop)
+func TestStoredLedgerValidationAdvancesIndependentlyOfConsensusSwitch(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
 
-			closedSeq := svc.GetClosedLedgerIndex()
-			startValidated := svc.GetValidatedLedger()
-			require.NotNil(t, startValidated)
-			h, stateMap, txMap := acquiredLedgerFixture(t, closedSeq+4, 0xC1)
-			if validationFirst {
-				svc.SetValidatedLedger(h.LedgerIndex, h.Hash)
-			}
-			require.NoError(t, svc.StoreLedgerWithState(context.Background(), h, stateMap, txMap))
-			if !validationFirst {
-				svc.SetValidatedLedger(h.LedgerIndex, h.Hash)
-			}
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	h, stateMap, txMap := acquiredLedgerFixture(t, closed.Sequence()+1, 0xC1)
+	h.ParentHash = closed.Hash()
+	txBlob, txHash := makeTxMetaBlobForTest(t, []byte("stored-validation-tx-padding-pad"), 3)
+	require.NoError(t, txMap.PutWithNodeType(txHash, txBlob, shamap.NodeTypeTransactionWithMeta))
+	txRoot, err := txMap.Hash()
+	require.NoError(t, err)
+	h.TxHash = txRoot
+	h.Hash = header.CalculateHash(*h)
+	events := make(chan *LedgerAcceptedEvent, 1)
+	svc.SetEventSink(EventSinkFunc(func(event *LedgerAcceptedEvent) error {
+		events <- event
+		return nil
+	}))
 
-			require.Equal(t, closedSeq, svc.GetClosedLedgerIndex())
-			require.Equal(t, startValidated.Hash(), svc.GetValidatedLedger().Hash())
-			stored, err := svc.GetLedgerByHash(h.Hash)
-			require.NoError(t, err)
-			require.False(t, stored.IsValidated())
-			require.NoError(t, svc.SwitchToPreferredLedger(stored))
-			require.Equal(t, startValidated.Hash(), svc.GetValidatedLedger().Hash())
-			svc.SetValidatedLedger(h.LedgerIndex, h.Hash)
-			validated := svc.GetValidatedLedger()
-			require.NotNil(t, validated)
-			require.Equal(t, h.LedgerIndex, validated.Sequence())
-			require.Equal(t, h.Hash, validated.Hash())
-			require.True(t, validated.IsValidated())
-			require.Equal(t, h.LedgerIndex, svc.GetClosedLedgerIndex())
-		})
+	svc.SetValidatedLedger(h.LedgerIndex, h.Hash)
+	require.Equal(t, closed.Hash(), svc.GetValidatedLedger().Hash())
+	require.NoError(t, svc.StoreLedgerWithState(context.Background(), h, stateMap, txMap))
+	require.Equal(t, closed.Hash(), svc.GetValidatedLedger().Hash())
+
+	svc.PromoteStoredValidatedLedgerAt(h.LedgerIndex, h.Hash, time.Time{})
+	validated := svc.GetValidatedLedger()
+	require.NotNil(t, validated)
+	require.Equal(t, h.LedgerIndex, validated.Sequence())
+	require.Equal(t, h.Hash, validated.Hash())
+	require.True(t, validated.IsValidated())
+	require.Equal(t, closed.Hash(), svc.GetClosedLedger().Hash())
+	select {
+	case event := <-events:
+		require.Len(t, event.TransactionResults, 1)
+		require.Equal(t, txHash, event.TransactionResults[0].TxHash)
+		require.True(t, event.TransactionResults[0].Validated)
+	case <-time.After(time.Second):
+		t.Fatal("stored validated ledger event was not published")
+	}
+	svc.mu.RLock()
+	indexedSeq, indexed := svc.txIndex[txHash]
+	indexedPosition := svc.txPositionIndex[txHash]
+	svc.mu.RUnlock()
+	require.True(t, indexed)
+	require.Equal(t, h.LedgerIndex, indexedSeq)
+	require.Equal(t, uint32(3), indexedPosition)
+	adopted, err := svc.AdoptedLedgerBySequence(h.LedgerIndex)
+	require.NoError(t, err)
+	require.Equal(t, h.Hash, adopted.Hash())
+
+	svc.PromoteStoredValidatedLedgerAt(h.LedgerIndex, h.Hash, time.Time{})
+	select {
+	case <-events:
+		t.Fatal("stored validated ledger event was published more than once")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	require.NoError(t, svc.SwitchToPreferredLedger(validated))
+	require.Equal(t, h.Hash, svc.GetClosedLedger().Hash())
+}
+
+func TestStoredLedgerValidationPublishesTransactionResultsAfterConsensusSwitch(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	events := make(chan *LedgerAcceptedEvent, 1)
+	svc.SetEventSink(EventSinkFunc(func(event *LedgerAcceptedEvent) error {
+		events <- event
+		return nil
+	}))
+
+	h, stateMap, txMap := acquiredLedgerFixture(t, svc.GetClosedLedgerIndex()+4, 0xC2)
+	txBlob, txHash := makeTxMetaBlobForTest(t, []byte("stored-ledger-event-tx-padding"), 0)
+	require.NoError(t, txMap.PutWithNodeType(txHash, txBlob, shamap.NodeTypeTransactionWithMeta))
+	txRoot, err := txMap.Hash()
+	require.NoError(t, err)
+	h.TxHash = txRoot
+	h.Hash = header.CalculateHash(*h)
+
+	require.NoError(t, svc.StoreLedgerWithState(t.Context(), h, stateMap, txMap))
+	stored, err := svc.GetLedgerByHash(h.Hash)
+	require.NoError(t, err)
+	require.NoError(t, svc.SwitchToPreferredLedger(stored))
+	svc.SetValidatedLedgerAt(h.LedgerIndex, h.Hash, time.Now())
+
+	select {
+	case event := <-events:
+		require.Equal(t, h.Hash, event.LedgerInfo.Hash)
+		require.Len(t, event.TransactionResults, 1)
+		require.Equal(t, txHash, event.TransactionResults[0].TxHash)
+		require.True(t, event.TransactionResults[0].Validated)
+	case <-time.After(time.Second):
+		t.Fatal("validated ledger event was not published")
 	}
 }
 

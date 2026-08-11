@@ -418,7 +418,8 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 	}
 
 	parentHash := parent.Hash()
-	replacingProvisional := false
+	replacingProvisional := s.networkLedgerState == networkLedgerFastLoadProvisional &&
+		parent.Sequence() == s.closedLedger.Sequence() && parentHash != s.closedLedger.Hash()
 	if s.validatedLedger != nil {
 		validatedSeq := s.validatedLedger.Sequence()
 		if parent.Sequence() < validatedSeq {
@@ -450,7 +451,7 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 	}
 
 	s.fixMismatchLocked(parent)
-	s.purgeHistoryAfterPreferredSwitchLocked(parent)
+	s.purgeConflictingHistoryLocked(parent)
 	s.putHistoryLocked(parent)
 	s.cachePersistedLedgerLocked(parent)
 	s.closedLedger = parent
@@ -469,10 +470,19 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 		s.ledgerEventMu.Unlock()
 	}
 	s.completeInitialSyncLocked()
+	if parent.IsValidated() {
+		s.confirmFastLoadLocked(parent.Sequence(), parentHash)
+	}
 	s.commitTransactionResultsLocked(stagedResults)
 	if parent.IsValidated() {
 		s.evictOldHistoryLocked(parent.Sequence())
 		s.enqueuePersist(parent)
+	} else if s.hasEventSink() {
+		s.stashPendingValidationLocked(parentHash, &LedgerAcceptedEvent{
+			LedgerInfo:         ledgerInfo(parent),
+			Ledger:             parent,
+			TransactionResults: stagedResults.results,
+		})
 	}
 
 	s.logger.Warn("Switched canonical closed ledger",
@@ -482,9 +492,12 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 	return nil
 }
 
-func (s *Service) purgeHistoryAfterPreferredSwitchLocked(parent *ledger.Ledger) {
+func (s *Service) purgeConflictingHistoryLocked(parent *ledger.Ledger) {
 	parentSeq := parent.Sequence()
 	parentHash := parent.Hash()
+	if s.closedLedger != nil && s.closedLedger.Sequence() >= parentSeq && s.closedLedger.Hash() != parentHash {
+		s.cachePersistedLedgerLocked(s.closedLedger)
+	}
 	if parentSeq != ^uint32(0) {
 		s.invalidateCompleteLedgerRange(parentSeq+1, ^uint32(0))
 	}
@@ -750,33 +763,84 @@ func (s *Service) validatedLedgerEventLocked(l *ledger.Ledger) *LedgerAcceptedEv
 // SetValidatedLedgerAt marks a ledger validated using the trusted-validation
 // signing-time median. A zero signing time falls back to the ledger close time.
 func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTime time.Time) {
+	s.setValidatedLedgerAt(seq, expectedHash, signTime, false)
+}
+
+// PromoteStoredValidatedLedgerAt installs and validates a hash-stored acquired
+// ledger without changing the closed or open ledger frontiers. The caller must
+// establish live trusted-validation quorum before invoking it.
+func (s *Service) PromoteStoredValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTime time.Time) {
+	s.setValidatedLedgerAt(seq, expectedHash, signTime, true)
+}
+
+func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTime time.Time, allowStored bool) {
 	s.mu.Lock()
 	s.historyComponent.mu.Lock()
 	previousValidated := s.validatedLedger
-	l, ok := s.ledgerHistory[seq]
-	if !ok || l.Hash() != expectedHash {
-		s.historyComponent.mu.Unlock()
-		s.mu.Unlock()
-		return
+	l, inHistory := s.ledgerHistory[seq]
+	fromStored := !inHistory || l.Hash() != expectedHash
+	if fromStored {
+		if !allowStored {
+			s.historyComponent.mu.Unlock()
+			s.mu.Unlock()
+			return
+		}
+		var ok bool
+		l, ok = s.persistedLedgers[expectedHash]
+		if !ok || l.Sequence() != seq {
+			s.historyComponent.mu.Unlock()
+			s.mu.Unlock()
+			return
+		}
 	}
-	_ = l.SetValidated()
-	s.confirmFastLoadLocked(seq, expectedHash)
 	replaceProvisional := s.networkLedgerState == networkLedgerFastLoadProvisional &&
 		s.validatedLedger != nil && seq == s.validatedLedger.Sequence() &&
 		expectedHash != s.validatedLedger.Hash()
 	if s.validatedLedger != nil && seq <= s.validatedLedger.Sequence() && !replaceProvisional {
-		s.enqueueValidatedHistoryPersist(l)
-		s.dispatchLedgerEvent(s.validatedLedgerEventLocked(l))
+		if allowStored {
+			s.historyComponent.mu.Unlock()
+			s.mu.Unlock()
+			return
+		}
+		if !fromStored {
+			_ = l.SetValidated()
+			s.confirmFastLoadLocked(seq, expectedHash)
+			s.enqueueValidatedHistoryPersist(l)
+			s.dispatchLedgerEvent(s.validatedLedgerEventLocked(l))
+		}
 		s.historyComponent.mu.Unlock()
 		s.mu.Unlock()
 		return
+	}
+	var stagedResults *stagedTransactionResults
+	if fromStored {
+		var err error
+		stagedResults, err = stageTransactionResults(l, seq, expectedHash)
+		if err != nil {
+			s.logger.Error("failed to collect acquired validated ledger transaction results",
+				"seq", seq,
+				"hash", fmt.Sprintf("%x", expectedHash[:8]),
+				"error", err,
+			)
+			s.historyComponent.mu.Unlock()
+			s.mu.Unlock()
+			return
+		}
+	}
+	_ = l.SetValidated()
+	if fromStored {
+		s.purgeConflictingHistoryLocked(l)
+		s.putHistoryLocked(l)
+		s.commitTransactionResultsLocked(stagedResults)
+	} else {
+		s.confirmFastLoadLocked(seq, expectedHash)
 	}
 	s.validatedLedger = l
 	if signTime.IsZero() {
 		signTime = l.CloseTime()
 	}
 	s.validatedSignTime = signTime
-	if s.networkLedgerState == networkLedgerFastLoadProvisional {
+	if !fromStored && s.networkLedgerState == networkLedgerFastLoadProvisional {
 		s.networkLedgerState = networkLedgerReady
 	}
 	s.evictOldHistoryLocked(seq)
@@ -785,6 +849,12 @@ func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 	// close — consensus may abandon a closed ledger).
 	pool := s.localTxs
 	event := s.validatedLedgerEventLocked(l)
+	if fromStored {
+		event.TransactionResults = stagedResults.results
+		for i := range event.TransactionResults {
+			event.TransactionResults[i].Validated = true
+		}
+	}
 	s.enqueuePersist(l)
 	notification := s.validatedLedgerNotificationLocked(previousValidated)
 	s.dispatchLedgerEvent(event)
