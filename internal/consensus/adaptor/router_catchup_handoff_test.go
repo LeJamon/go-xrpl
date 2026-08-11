@@ -214,6 +214,9 @@ func TestStoredConsensusCandidateRetriesUntilEngineAccepts(t *testing.T) {
 
 			r.onLedgerFullyValidated(hdr.LedgerIndex, hdr.Hash)
 			require.Eventually(t, func() bool {
+				if len(engine.getLedgers()) != 1 {
+					return false
+				}
 				r.acquisitionMu.Lock()
 				defer r.acquisitionMu.Unlock()
 				return r.consensusRecovery.targetHash == hdr.Hash

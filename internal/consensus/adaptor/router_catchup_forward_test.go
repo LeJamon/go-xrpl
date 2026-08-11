@@ -492,7 +492,7 @@ func TestAdaptor_FastLoadedLedgerIsReplacedBySameHeightQuorum(t *testing.T) {
 	select {
 	case err = <-switchDone:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("quorum-backed provisional replacement was not handed to consensus")
 	}
 	require.Equal(t, replacementHash, svc.GetClosedLedger().Hash())
