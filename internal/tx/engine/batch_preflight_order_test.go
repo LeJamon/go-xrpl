@@ -150,7 +150,7 @@ func TestBatchInnerRunsSigValidatedPreflight(t *testing.T) {
 	}
 }
 
-func TestBatchInnerRunsUniversalPreflight(t *testing.T) {
+func TestPreflightInnerRunsUniversalPreflight(t *testing.T) {
 	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 
 	oversized := check.NewCheckCreate(
@@ -163,22 +163,8 @@ func TestBatchInnerRunsUniversalPreflight(t *testing.T) {
 	oversized.SetSequence(2)
 	oversized.SetFlags(txcore.TfInnerBatchTxn)
 
-	second := payment.NewPayment(account, account, txcore.NewXRPAmount(1))
-	second.Fee = "0"
-	second.SigningPubKey = ""
-	second.SetSequence(3)
-	second.SetFlags(txcore.TfInnerBatchTxn)
-
-	outer := batch.NewBatch(account)
-	outer.Fee = "40"
-	outer.SetSequence(1)
-	outer.SigningPubKey = ""
-	outer.SetFlags(batch.BatchFlagAllOrNothing)
-	outer.AddInnerTransaction(oversized)
-	outer.AddInnerTransaction(second)
-
 	engine := dedupEngine(amendment.AllSupportedRules())
-	if got := engine.preflight(outer); got != ter.TemINVALID_INNER_BATCH {
-		t.Fatalf("preflight = %v, want TemINVALID_INNER_BATCH", got)
+	if got := engine.preflightInner(oversized); got != ter.TemBAD_AMOUNT {
+		t.Fatalf("preflightInner = %v, want TemBAD_AMOUNT", got)
 	}
 }
