@@ -15,7 +15,7 @@ import (
 func confidentialPreflightRules(enabled bool) *amendment.Rules {
 	builder := amendment.NewRulesBuilder().
 		FromPreset(amendment.PresetAllSupported).
-		Enable(amendment.FeatureBatch).
+		Enable(amendment.FeatureBatchV1_1).
 		Enable(amendment.FeaturePermissionDelegationV1_1)
 	if enabled {
 		builder.Enable(amendment.FeatureConfidentialTransfer)
