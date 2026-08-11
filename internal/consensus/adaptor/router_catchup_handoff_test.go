@@ -199,6 +199,9 @@ func TestStoredConsensusCandidateRetriesUntilEngineAccepts(t *testing.T) {
 				require.NoError(t, a.OnLedgerSwitched(selected))
 			}
 			r := newTestRouter(engine, a, nil)
+			_, started := r.startLifecycle(t.Context())
+			require.True(t, started)
+			t.Cleanup(r.stopLifecycle)
 
 			stateMap, err := local.StateMapSnapshot()
 			require.NoError(t, err)

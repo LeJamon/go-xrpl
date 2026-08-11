@@ -453,6 +453,9 @@ func TestRouter_ProvisionalWarmStartMaintenanceFallsBackAfterGrace(t *testing.T)
 
 func TestAdaptor_FastLoadedLedgerIsReplacedBySameHeightQuorum(t *testing.T) {
 	r, _, svc := makeProvisionalWarmRouter(t)
+	_, started := r.startLifecycle(t.Context())
+	require.True(t, started)
+	t.Cleanup(r.stopLifecycle)
 	loaded := svc.GetValidatedLedger()
 	require.NotNil(t, loaded)
 
@@ -492,7 +495,7 @@ func TestAdaptor_FastLoadedLedgerIsReplacedBySameHeightQuorum(t *testing.T) {
 	select {
 	case err = <-switchDone:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Second):
 		t.Fatal("quorum-backed provisional replacement was not handed to consensus")
 	}
 	require.Equal(t, replacementHash, svc.GetClosedLedger().Hash())
