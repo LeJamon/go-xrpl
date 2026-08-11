@@ -529,7 +529,13 @@ func computeBaseFeeForTx(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.Eng
 	}
 	_, batchFee := parsedTx.(tx.BatchFeeCalculator)
 	_, customFee := parsedTx.(tx.CustomBaseFeeCalculator)
-	if batchFee || customFee || parsedTx.TxType() == tx.TypeRegularKeySet {
+	txType := parsedTx.TxType()
+	confidentialFee := txType == tx.TypeConfidentialMPTConvert ||
+		txType == tx.TypeConfidentialMPTMergeInbox ||
+		txType == tx.TypeConfidentialMPTConvertBack ||
+		txType == tx.TypeConfidentialMPTSend ||
+		txType == tx.TypeConfidentialMPTClawback
+	if batchFee || customFee || confidentialFee || txType == tx.TypeRegularKeySet {
 		defer func() {
 			if r := recover(); r != nil {
 				fee = cfg.BaseFee

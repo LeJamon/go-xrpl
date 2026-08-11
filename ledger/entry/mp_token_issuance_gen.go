@@ -20,25 +20,28 @@ import (
 // every canonical field declared in the spec — including those excluded from
 // metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type MPTokenIssuance struct {
-	present           uint64
-	decoded           bool
-	dirty             bool
-	Issuer            string // AccountID (base58)
-	Sequence          uint32
-	TransferFee       int
-	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
-	AssetScale        int
-	MaximumAmount     string // UInt64 (decimal string, sMD_BaseTen)
-	OutstandingAmount string // UInt64 (decimal string, sMD_BaseTen)
-	LockedAmount      string // UInt64 (decimal string, sMD_BaseTen)
-	MPTokenMetadata   string // Blob (uppercase hex)
-	DomainID          string // Hash256 (uppercase hex)
-	ImmutableFlags    uint32
-	ReferenceHolding  string // Hash256 (uppercase hex)
-	Flags             uint32
-	PreviousTxnID     string // Hash256 (uppercase hex)
-	PreviousTxnLgrSeq uint32
-	Sponsor           string // AccountID (base58)
+	present                       uint64
+	decoded                       bool
+	dirty                         bool
+	Issuer                        string // AccountID (base58)
+	Sequence                      uint32
+	TransferFee                   int
+	OwnerNode                     string // UInt64 (lowercase hex, no leading zeros)
+	AssetScale                    int
+	MaximumAmount                 string // UInt64 (decimal string, sMD_BaseTen)
+	OutstandingAmount             string // UInt64 (decimal string, sMD_BaseTen)
+	LockedAmount                  string // UInt64 (decimal string, sMD_BaseTen)
+	MPTokenMetadata               string // Blob (uppercase hex)
+	DomainID                      string // Hash256 (uppercase hex)
+	ImmutableFlags                uint32
+	ReferenceHolding              string // Hash256 (uppercase hex)
+	IssuerEncryptionKey           string // Blob (uppercase hex)
+	AuditorEncryptionKey          string // Blob (uppercase hex)
+	ConfidentialOutstandingAmount string // UInt64 (decimal string, sMD_BaseTen)
+	Flags                         uint32
+	PreviousTxnID                 string // Hash256 (uppercase hex)
+	PreviousTxnLgrSeq             uint32
+	Sponsor                       string // AccountID (base58)
 }
 
 // Type returns the concrete ledger-entry type.
@@ -59,6 +62,9 @@ const (
 	mptokenissuanceBitDomainID
 	mptokenissuanceBitImmutableFlags
 	mptokenissuanceBitReferenceHolding
+	mptokenissuanceBitIssuerEncryptionKey
+	mptokenissuanceBitAuditorEncryptionKey
+	mptokenissuanceBitConfidentialOutstandingAmount
 	mptokenissuanceBitFlags
 	mptokenissuanceBitPreviousTxnID
 	mptokenissuanceBitPreviousTxnLgrSeq
@@ -161,6 +167,31 @@ func (m *MPTokenIssuance) SetReferenceHolding(value string) {
 	m.present |= mptokenissuanceBitReferenceHolding
 }
 
+// SetIssuerEncryptionKey assigns IssuerEncryptionKey and updates its serialized presence.
+func (m *MPTokenIssuance) SetIssuerEncryptionKey(value string) {
+	m.IssuerEncryptionKey = value
+	m.dirty = true
+	m.present |= mptokenissuanceBitIssuerEncryptionKey
+}
+
+// SetAuditorEncryptionKey assigns AuditorEncryptionKey and updates its serialized presence.
+func (m *MPTokenIssuance) SetAuditorEncryptionKey(value string) {
+	m.AuditorEncryptionKey = value
+	m.dirty = true
+	m.present |= mptokenissuanceBitAuditorEncryptionKey
+}
+
+// SetConfidentialOutstandingAmount assigns ConfidentialOutstandingAmount and updates its serialized presence.
+func (m *MPTokenIssuance) SetConfidentialOutstandingAmount(value string) {
+	m.ConfidentialOutstandingAmount = value
+	m.dirty = true
+	if value == "" || (isZeroHexString(value)) {
+		m.present &^= mptokenissuanceBitConfidentialOutstandingAmount
+		return
+	}
+	m.present |= mptokenissuanceBitConfidentialOutstandingAmount
+}
+
 // SetFlags assigns Flags and updates its serialized presence.
 func (m *MPTokenIssuance) SetFlags(value uint32) {
 	m.Flags = value
@@ -232,6 +263,9 @@ func (m *MPTokenIssuance) validateDecoded() error {
 	}
 	if m.present&mptokenissuanceBitImmutableFlags != 0 && m.ImmutableFlags == 0 {
 		return errors.New("ledgerfields: MPTokenIssuance: default field ImmutableFlags is explicitly set")
+	}
+	if m.present&mptokenissuanceBitConfidentialOutstandingAmount != 0 && isZeroHexString(m.ConfidentialOutstandingAmount) {
+		return errors.New("ledgerfields: MPTokenIssuance: default field ConfidentialOutstandingAmount is explicitly set")
 	}
 	if m.present&mptokenissuanceBitFlags == 0 {
 		return errors.New("ledgerfields: MPTokenIssuance: required field Flags is missing")
@@ -340,6 +374,13 @@ func (m *MPTokenIssuance) decode(data []byte, legacy bool) error {
 				}
 				m.LockedAmount = val
 				m.present |= mptokenissuanceBitLockedAmount
+			case 32:
+				val, err := sr.readUint64Decimal()
+				if err != nil {
+					return err
+				}
+				m.ConfidentialOutstandingAmount = val
+				m.present |= mptokenissuanceBitConfidentialOutstandingAmount
 			default:
 				return newErrUnknownField("MPTokenIssuance", typeCode, fieldCode)
 			}
@@ -370,6 +411,12 @@ func (m *MPTokenIssuance) decode(data []byte, legacy bool) error {
 			case 30:
 				m.MPTokenMetadata = val
 				m.present |= mptokenissuanceBitMPTokenMetadata
+			case 35:
+				m.IssuerEncryptionKey = val
+				m.present |= mptokenissuanceBitIssuerEncryptionKey
+			case 44:
+				m.AuditorEncryptionKey = val
+				m.present |= mptokenissuanceBitAuditorEncryptionKey
 			default:
 				return newErrUnknownField("MPTokenIssuance", typeCode, fieldCode)
 			}
@@ -455,6 +502,15 @@ func (m *MPTokenIssuance) emitAll(out map[string]any, skipDefault bool) {
 	if m.present&mptokenissuanceBitReferenceHolding != 0 && !(skipDefault && isZeroHexString(m.ReferenceHolding)) {
 		out["ReferenceHolding"] = m.ReferenceHolding
 	}
+	if m.present&mptokenissuanceBitIssuerEncryptionKey != 0 && !(skipDefault && m.IssuerEncryptionKey == "") {
+		out["IssuerEncryptionKey"] = m.IssuerEncryptionKey
+	}
+	if m.present&mptokenissuanceBitAuditorEncryptionKey != 0 && !(skipDefault && m.AuditorEncryptionKey == "") {
+		out["AuditorEncryptionKey"] = m.AuditorEncryptionKey
+	}
+	if m.present&mptokenissuanceBitConfidentialOutstandingAmount != 0 && !(skipDefault && isZeroHexString(m.ConfidentialOutstandingAmount)) {
+		out["ConfidentialOutstandingAmount"] = m.ConfidentialOutstandingAmount
+	}
 	if m.present&mptokenissuanceBitFlags != 0 && !(skipDefault && m.Flags == 0) {
 		out["Flags"] = m.Flags
 	}
@@ -494,6 +550,9 @@ func (m *MPTokenIssuance) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "DomainID", prv.DomainID, m.DomainID, prv.present&mptokenissuanceBitDomainID, m.present&mptokenissuanceBitDomainID)
 	emitIfChangedUint32(out, "ImmutableFlags", prv.ImmutableFlags, m.ImmutableFlags, prv.present&mptokenissuanceBitImmutableFlags, m.present&mptokenissuanceBitImmutableFlags)
 	emitIfChangedString(out, "ReferenceHolding", prv.ReferenceHolding, m.ReferenceHolding, prv.present&mptokenissuanceBitReferenceHolding, m.present&mptokenissuanceBitReferenceHolding)
+	emitIfChangedString(out, "IssuerEncryptionKey", prv.IssuerEncryptionKey, m.IssuerEncryptionKey, prv.present&mptokenissuanceBitIssuerEncryptionKey, m.present&mptokenissuanceBitIssuerEncryptionKey)
+	emitIfChangedString(out, "AuditorEncryptionKey", prv.AuditorEncryptionKey, m.AuditorEncryptionKey, prv.present&mptokenissuanceBitAuditorEncryptionKey, m.present&mptokenissuanceBitAuditorEncryptionKey)
+	emitIfChangedString(out, "ConfidentialOutstandingAmount", prv.ConfidentialOutstandingAmount, m.ConfidentialOutstandingAmount, prv.present&mptokenissuanceBitConfidentialOutstandingAmount, m.present&mptokenissuanceBitConfidentialOutstandingAmount)
 	emitIfChangedUint32(out, "Flags", prv.Flags, m.Flags, prv.present&mptokenissuanceBitFlags, m.present&mptokenissuanceBitFlags)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, m.Sponsor, prv.present&mptokenissuanceBitSponsor, m.present&mptokenissuanceBitSponsor)
 }
@@ -539,6 +598,15 @@ func (m *MPTokenIssuance) EmitChangeOrigFields(out map[string]any) {
 	}
 	if m.present&mptokenissuanceBitReferenceHolding != 0 {
 		out["ReferenceHolding"] = m.ReferenceHolding
+	}
+	if m.present&mptokenissuanceBitIssuerEncryptionKey != 0 {
+		out["IssuerEncryptionKey"] = m.IssuerEncryptionKey
+	}
+	if m.present&mptokenissuanceBitAuditorEncryptionKey != 0 {
+		out["AuditorEncryptionKey"] = m.AuditorEncryptionKey
+	}
+	if m.present&mptokenissuanceBitConfidentialOutstandingAmount != 0 {
+		out["ConfidentialOutstandingAmount"] = m.ConfidentialOutstandingAmount
 	}
 	if m.present&mptokenissuanceBitFlags != 0 {
 		out["Flags"] = m.Flags
@@ -622,6 +690,15 @@ func (m *MPTokenIssuance) ToMap() map[string]any {
 	}
 	if m.present&mptokenissuanceBitReferenceHolding != 0 {
 		out["ReferenceHolding"] = m.ReferenceHolding
+	}
+	if m.present&mptokenissuanceBitIssuerEncryptionKey != 0 {
+		out["IssuerEncryptionKey"] = m.IssuerEncryptionKey
+	}
+	if m.present&mptokenissuanceBitAuditorEncryptionKey != 0 {
+		out["AuditorEncryptionKey"] = m.AuditorEncryptionKey
+	}
+	if m.present&mptokenissuanceBitConfidentialOutstandingAmount != 0 {
+		out["ConfidentialOutstandingAmount"] = m.ConfidentialOutstandingAmount
 	}
 	if m.present&mptokenissuanceBitFlags != 0 {
 		out["Flags"] = m.Flags

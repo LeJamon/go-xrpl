@@ -1,11 +1,16 @@
 package state
 
 import (
+	"bytes"
+	"encoding/hex"
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
+
+const testMPTSponsor = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 
 func TestParseMPTokenIssuanceGeneratedDecoder(t *testing.T) {
 	zero := uint64(0)
@@ -13,21 +18,25 @@ func TestParseMPTokenIssuanceGeneratedDecoder(t *testing.T) {
 	referenceHolding := strings.Repeat("22", 32)
 	previousTxnID := [32]byte{1, 2, 3}
 	want := &MPTokenIssuanceData{
-		Issuer:            [20]byte{1, 2, 3},
-		Sequence:          17,
-		OwnerNode:         0x1234,
-		OutstandingAmount: 99,
-		TransferFee:       42,
-		AssetScale:        6,
-		MaximumAmount:     &zero,
-		LockedAmount:      &zero,
-		MPTokenMetadata:   "abcdef",
-		DomainID:          &domainID,
-		ReferenceHolding:  &referenceHolding,
-		Flags:             7,
-		ImmutableFlags:    9,
-		PreviousTxnID:     previousTxnID,
-		PreviousTxnLgrSeq: 23,
+		Issuer:                        [20]byte{1, 2, 3},
+		Sequence:                      17,
+		OwnerNode:                     0x1234,
+		OutstandingAmount:             99,
+		TransferFee:                   42,
+		AssetScale:                    6,
+		MaximumAmount:                 &zero,
+		LockedAmount:                  &zero,
+		MPTokenMetadata:               "abcdef",
+		DomainID:                      &domainID,
+		ReferenceHolding:              &referenceHolding,
+		Flags:                         7,
+		ImmutableFlags:                9,
+		Sponsor:                       testMPTSponsor,
+		IssuerEncryptionKey:           []byte{0x02, 0x03},
+		AuditorEncryptionKey:          []byte{0x04, 0x05},
+		ConfidentialOutstandingAmount: 77,
+		PreviousTxnID:                 previousTxnID,
+		PreviousTxnLgrSeq:             23,
 	}
 
 	data, err := SerializeMPTokenIssuance(want)
@@ -40,7 +49,8 @@ func TestParseMPTokenIssuanceGeneratedDecoder(t *testing.T) {
 	}
 	if got.Issuer != want.Issuer || got.Sequence != want.Sequence || got.OwnerNode != want.OwnerNode ||
 		got.OutstandingAmount != want.OutstandingAmount || got.TransferFee != want.TransferFee ||
-		got.AssetScale != want.AssetScale || got.Flags != want.Flags || got.ImmutableFlags != want.ImmutableFlags ||
+		got.AssetScale != want.AssetScale || got.Flags != want.Flags || got.ImmutableFlags != want.ImmutableFlags || got.Sponsor != want.Sponsor ||
+		got.ConfidentialOutstandingAmount != want.ConfidentialOutstandingAmount ||
 		got.PreviousTxnID != want.PreviousTxnID || got.PreviousTxnLgrSeq != want.PreviousTxnLgrSeq {
 		t.Fatalf("fixed fields differ:\n got  %+v\n want %+v", got, want)
 	}
@@ -51,7 +61,9 @@ func TestParseMPTokenIssuanceGeneratedDecoder(t *testing.T) {
 		t.Fatalf("LockedAmount = %v, want present zero", got.LockedAmount)
 	}
 	if got.MPTokenMetadata != want.MPTokenMetadata || got.DomainID == nil || *got.DomainID != domainID ||
-		got.ReferenceHolding == nil || *got.ReferenceHolding != referenceHolding {
+		got.ReferenceHolding == nil || *got.ReferenceHolding != referenceHolding ||
+		!bytes.Equal(got.IssuerEncryptionKey, want.IssuerEncryptionKey) ||
+		!bytes.Equal(got.AuditorEncryptionKey, want.AuditorEncryptionKey) {
 		t.Fatalf("hex fields differ: got metadata=%q domain=%v reference=%v", got.MPTokenMetadata, got.DomainID, got.ReferenceHolding)
 	}
 }
@@ -59,14 +71,21 @@ func TestParseMPTokenIssuanceGeneratedDecoder(t *testing.T) {
 func TestParseMPTokenGeneratedDecoder(t *testing.T) {
 	zero := uint64(0)
 	want := &MPTokenData{
-		Account:           [20]byte{4, 5, 6},
-		MPTokenIssuanceID: [24]byte{7, 8, 9},
-		OwnerNode:         0x9876,
-		MPTAmount:         123,
-		LockedAmount:      &zero,
-		Flags:             3,
-		PreviousTxnID:     [32]byte{10, 11, 12},
-		PreviousTxnLgrSeq: 29,
+		Account:                     [20]byte{4, 5, 6},
+		MPTokenIssuanceID:           [24]byte{7, 8, 9},
+		OwnerNode:                   0x9876,
+		MPTAmount:                   123,
+		LockedAmount:                &zero,
+		Flags:                       3,
+		Sponsor:                     testMPTSponsor,
+		ConfidentialBalanceInbox:    []byte{0x11, 0x12},
+		ConfidentialBalanceSpending: []byte{0x21, 0x22},
+		ConfidentialBalanceVersion:  31,
+		IssuerEncryptedBalance:      []byte{0x31, 0x32},
+		AuditorEncryptedBalance:     []byte{0x41, 0x42},
+		HolderEncryptionKey:         []byte{0x51, 0x52},
+		PreviousTxnID:               [32]byte{10, 11, 12},
+		PreviousTxnLgrSeq:           29,
 	}
 
 	data, err := SerializeMPToken(want)
@@ -78,12 +97,60 @@ func TestParseMPTokenGeneratedDecoder(t *testing.T) {
 		t.Fatalf("ParseMPToken: %v", err)
 	}
 	if got.Account != want.Account || got.MPTokenIssuanceID != want.MPTokenIssuanceID ||
-		got.OwnerNode != want.OwnerNode || got.MPTAmount != want.MPTAmount || got.Flags != want.Flags ||
+		got.OwnerNode != want.OwnerNode || got.MPTAmount != want.MPTAmount || got.Flags != want.Flags || got.Sponsor != want.Sponsor ||
+		got.ConfidentialBalanceVersion != want.ConfidentialBalanceVersion ||
 		got.PreviousTxnID != want.PreviousTxnID || got.PreviousTxnLgrSeq != want.PreviousTxnLgrSeq {
 		t.Fatalf("fixed fields differ:\n got  %+v\n want %+v", got, want)
 	}
 	if got.LockedAmount == nil || *got.LockedAmount != 0 {
 		t.Fatalf("LockedAmount = %v, want present zero", got.LockedAmount)
+	}
+	if !bytes.Equal(got.ConfidentialBalanceInbox, want.ConfidentialBalanceInbox) ||
+		!bytes.Equal(got.ConfidentialBalanceSpending, want.ConfidentialBalanceSpending) ||
+		!bytes.Equal(got.IssuerEncryptedBalance, want.IssuerEncryptedBalance) ||
+		!bytes.Equal(got.AuditorEncryptedBalance, want.AuditorEncryptedBalance) ||
+		!bytes.Equal(got.HolderEncryptionKey, want.HolderEncryptionKey) {
+		t.Fatalf("confidential fields differ:\n got  %+v\n want %+v", got, want)
+	}
+}
+
+func TestMPTokenConfidentialDefaultsAreOmitted(t *testing.T) {
+	tests := []struct {
+		name   string
+		data   func() ([]byte, error)
+		fields []string
+	}{
+		{
+			name: "issuance",
+			data: func() ([]byte, error) {
+				return SerializeMPTokenIssuance(&MPTokenIssuanceData{Issuer: [20]byte{1}, Sequence: 1})
+			},
+			fields: []string{"ConfidentialOutstandingAmount"},
+		},
+		{
+			name: "holder",
+			data: func() ([]byte, error) {
+				return SerializeMPToken(&MPTokenData{Account: [20]byte{2}, MPTokenIssuanceID: [24]byte{3}})
+			},
+			fields: []string{"ConfidentialBalanceVersion"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data, err := test.data()
+			if err != nil {
+				t.Fatalf("serialize: %v", err)
+			}
+			decoded, err := binarycodec.Decode(hex.EncodeToString(data))
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			for _, field := range test.fields {
+				if _, present := decoded[field]; present {
+					t.Fatalf("zero %s was serialized", field)
+				}
+			}
+		})
 	}
 }
 

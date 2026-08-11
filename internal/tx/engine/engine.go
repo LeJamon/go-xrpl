@@ -58,6 +58,15 @@ type rulesView struct {
 
 func (v rulesView) Rules() *amendment.Rules { return v.rules }
 
+func (v rulesView) BalanceHookMPT(account [20]byte, id [24]byte, amount int64) int64 {
+	if hook, ok := v.LedgerView.(interface {
+		BalanceHookMPT([20]byte, [24]byte, int64) int64
+	}); ok {
+		return hook.BalanceHookMPT(account, id, amount)
+	}
+	return amount
+}
+
 // NewEngine creates a new transaction engine
 func NewEngine(view applystate.AtomicLedgerView, config txcore.EngineConfig) *Engine {
 	logger := config.Logger

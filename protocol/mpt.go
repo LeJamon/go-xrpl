@@ -10,4 +10,8 @@ const (
 
 	// MaxMPTokenAmount is the maximum representable MPToken amount.
 	MaxMPTokenAmount uint64 = 0x7FFF_FFFF_FFFF_FFFF
+
+	// ConfidentialMPTFeeMultiplier is the number of additional ledger base fees
+	// charged for a confidential MPT transaction.
+	ConfidentialMPTFeeMultiplier uint64 = 9
 )

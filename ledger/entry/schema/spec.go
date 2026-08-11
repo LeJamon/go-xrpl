@@ -61,7 +61,7 @@ type Field struct {
 	Meta Meta
 
 	// Style controls serialization presence and fresh-entry validation. Every
-	// field is annotated explicitly from rippled's 3.2.0 ledger template.
+	// field is annotated explicitly from rippled's ledger template.
 	Style Style
 
 	// DeferredRequired marks a required threading field whose default is
@@ -510,6 +510,9 @@ var Specs = []Entry{
 			{Name: "DomainID", Style: StyleOptional},
 			{Name: "ImmutableFlags", Style: StyleDefault},
 			{Name: "ReferenceHolding", Style: StyleOptional},
+			{Name: "IssuerEncryptionKey", Style: StyleOptional},
+			{Name: "AuditorEncryptionKey", Style: StyleOptional},
+			{Name: "ConfidentialOutstandingAmount", Style: StyleDefault},
 			{Name: "Flags", Style: StyleRequired},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal, Style: StyleRequired, DeferredRequired: true},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal, Style: StyleRequired, DeferredRequired: true},
@@ -526,6 +529,12 @@ var Specs = []Entry{
 			{Name: "Flags", Style: StyleRequired},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal, Style: StyleRequired, DeferredRequired: true},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal, Style: StyleRequired, DeferredRequired: true},
+			{Name: "ConfidentialBalanceInbox", Style: StyleOptional},
+			{Name: "ConfidentialBalanceSpending", Style: StyleOptional},
+			{Name: "ConfidentialBalanceVersion", Style: StyleDefault},
+			{Name: "IssuerEncryptedBalance", Style: StyleOptional},
+			{Name: "AuditorEncryptedBalance", Style: StyleOptional},
+			{Name: "HolderEncryptionKey", Style: StyleOptional},
 		},
 	},
 	{

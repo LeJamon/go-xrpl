@@ -9,6 +9,8 @@ import (
 	"encoding/hex"
 	"slices"
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/crypto/mptcrypto"
 )
 
 func TestFeatureID(t *testing.T) {
@@ -126,16 +128,55 @@ func TestDynamicMPTFeatureRegistration(t *testing.T) {
 	if !AllSupportedRules().Enabled(FeatureDynamicMPT) {
 		t.Error("supported DynamicMPT amendment must be enabled by the all-supported preset")
 	}
+}
 
+func TestConfidentialTransferFeatureRegistration(t *testing.T) {
 	confidential := FeatureByName("ConfidentialTransfer")
 	if confidential == nil {
 		t.Fatal("ConfidentialTransfer feature not found")
 	}
-	if confidential.Supported != SupportedNo || confidential.Vote != VoteDefaultNo {
-		t.Errorf("ConfidentialTransfer support/vote = (%v, %v), want (SupportedNo, VoteDefaultNo)", confidential.Supported, confidential.Vote)
+	wantSupported := mptcrypto.Available()
+	wantSupport := SupportedNo
+	if wantSupported {
+		wantSupport = SupportedYes
 	}
-	if AllSupportedRules().Enabled(FeatureConfidentialTransfer) {
-		t.Error("unsupported ConfidentialTransfer amendment must not be enabled by the all-supported preset")
+	if confidential.Supported != wantSupport || confidential.Vote != VoteDefaultNo {
+		t.Errorf("ConfidentialTransfer support/vote = (%v, %v), want (%v, VoteDefaultNo)", confidential.Supported, confidential.Vote, wantSupport)
+	}
+	if got := AllSupportedRules().Enabled(FeatureConfidentialTransfer); got != wantSupported {
+		t.Errorf("ConfidentialTransfer all-supported state = %v, want %v", got, wantSupported)
+	}
+	foundSupported := false
+	for _, supported := range SupportedFeatures() {
+		if supported.ID == FeatureConfidentialTransfer {
+			foundSupported = true
+			break
+		}
+	}
+	if foundSupported != wantSupported {
+		t.Errorf("ConfidentialTransfer SupportedFeatures membership = %v, want %v", foundSupported, wantSupported)
+	}
+	table := NewTable()
+	if table.IsSupported(FeatureConfidentialTransfer) != wantSupported {
+		t.Errorf("ConfidentialTransfer table support = %v, want %v", table.IsSupported(FeatureConfidentialTransfer), wantSupported)
+	}
+	if slices.Contains(table.Desired(), FeatureConfidentialTransfer) {
+		t.Error("default-no ConfidentialTransfer was desired without an explicit upvote")
+	}
+	table.UpVote(FeatureConfidentialTransfer)
+	if got := slices.Contains(table.Desired(), FeatureConfidentialTransfer); got != wantSupported {
+		t.Errorf("upvoted ConfidentialTransfer desired state = %v, want %v", got, wantSupported)
+	}
+	table.Enable(FeatureConfidentialTransfer)
+	if got := table.HasUnsupportedEnabled(); got != !wantSupported {
+		t.Errorf("ConfidentialTransfer enabled table unsupported state = %v, want %v", got, !wantSupported)
+	}
+	if got := slices.Contains(table.UnsupportedEnabledIDs(), FeatureConfidentialTransfer); got != !wantSupported {
+		t.Errorf("ConfidentialTransfer unsupported-enabled state = %v, want %v", got, !wantSupported)
+	}
+	table.DoValidatedLedger(1, map[[32]byte]bool{FeatureConfidentialTransfer: true}, nil)
+	if got := table.IsBlocked(); got != !wantSupported {
+		t.Errorf("ConfidentialTransfer validated table blocked state = %v, want %v", got, !wantSupported)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	rdebug "runtime/debug" // aliased: the cli package has a `debug` flag variable
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/crypto/mptcrypto"
 	"github.com/spf13/cobra"
 )
 
@@ -16,7 +17,7 @@ func newVersionCommand() *cobra.Command {
 		Long:  `Display version information for go-xrpl including build details and Go version.`,
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Fprint(cmd.OutOrStdout(), versionText(cmd.Root().Version))
+			fmt.Fprint(cmd.OutOrStdout(), versionText(cmd.Root().Version, mptcrypto.Available()))
 		},
 	}
 }
@@ -25,11 +26,16 @@ func newVersionCommand() *cobra.Command {
 // commit time, dirty marker) come from the binary's embedded build info
 // and are omitted when absent (e.g. `go run` or non-VCS builds), keeping
 // the base output stable.
-func versionText(version string) string {
+func versionText(version string, mptCryptoAvailable bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "go-xrpl version %s\n", version)
 	fmt.Fprintf(&b, "Go version: %s\n", runtime.Version())
 	fmt.Fprintf(&b, "OS/Arch: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	mptCryptoStatus := "unavailable"
+	if mptCryptoAvailable {
+		mptCryptoStatus = "available"
+	}
+	fmt.Fprintf(&b, "Confidential MPT crypto: %s\n", mptCryptoStatus)
 	if info, ok := rdebug.ReadBuildInfo(); ok {
 		b.WriteString(vcsText(info.Settings))
 	}

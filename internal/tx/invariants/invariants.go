@@ -80,31 +80,36 @@ type TxType = protocol.TxType
 // Transaction type constants used by invariant checks, aliased from the
 // protocol package.
 const (
-	TypePayment                  = protocol.TxTypePayment
-	TypeEscrowFinish             = protocol.TxTypeEscrowFinish
-	TypeOfferCreate              = protocol.TxTypeOfferCreate
-	TypeCheckCash                = protocol.TxTypeCheckCash
-	TypeAccountDelete            = protocol.TxTypeAccountDelete
-	TypeNFTokenMint              = protocol.TxTypeNFTokenMint
-	TypeNFTokenBurn              = protocol.TxTypeNFTokenBurn
-	TypeClawback                 = protocol.TxTypeClawback
-	TypeAMMClawback              = protocol.TxTypeAMMClawback
-	TypeAMMCreate                = protocol.TxTypeAMMCreate
-	TypeAMMDeposit               = protocol.TxTypeAMMDeposit
-	TypeAMMWithdraw              = protocol.TxTypeAMMWithdraw
-	TypeAMMVote                  = protocol.TxTypeAMMVote
-	TypeAMMBid                   = protocol.TxTypeAMMBid
-	TypeAMMDelete                = protocol.TxTypeAMMDelete
-	TypeMPTokenIssuanceCreate    = protocol.TxTypeMPTokenIssuanceCreate
-	TypeMPTokenIssuanceDestroy   = protocol.TxTypeMPTokenIssuanceDestroy
-	TypeMPTokenIssuanceSet       = protocol.TxTypeMPTokenIssuanceSet
-	TypeMPTokenAuthorize         = protocol.TxTypeMPTokenAuthorize
-	TypePermissionedDomainSet    = protocol.TxTypePermissionedDomainSet
-	TypePermissionedDomainDelete = protocol.TxTypePermissionedDomainDelete
-	TypeVaultCreate              = protocol.TxTypeVaultCreate
-	TypeVaultDelete              = protocol.TxTypeVaultDelete
-	TypeVaultDeposit             = protocol.TxTypeVaultDeposit
-	TypeBatch                    = protocol.TxTypeBatch
+	TypePayment                    = protocol.TxTypePayment
+	TypeEscrowFinish               = protocol.TxTypeEscrowFinish
+	TypeOfferCreate                = protocol.TxTypeOfferCreate
+	TypeCheckCash                  = protocol.TxTypeCheckCash
+	TypeAccountDelete              = protocol.TxTypeAccountDelete
+	TypeNFTokenMint                = protocol.TxTypeNFTokenMint
+	TypeNFTokenBurn                = protocol.TxTypeNFTokenBurn
+	TypeClawback                   = protocol.TxTypeClawback
+	TypeAMMClawback                = protocol.TxTypeAMMClawback
+	TypeAMMCreate                  = protocol.TxTypeAMMCreate
+	TypeAMMDeposit                 = protocol.TxTypeAMMDeposit
+	TypeAMMWithdraw                = protocol.TxTypeAMMWithdraw
+	TypeAMMVote                    = protocol.TxTypeAMMVote
+	TypeAMMBid                     = protocol.TxTypeAMMBid
+	TypeAMMDelete                  = protocol.TxTypeAMMDelete
+	TypeMPTokenIssuanceCreate      = protocol.TxTypeMPTokenIssuanceCreate
+	TypeMPTokenIssuanceDestroy     = protocol.TxTypeMPTokenIssuanceDestroy
+	TypeMPTokenIssuanceSet         = protocol.TxTypeMPTokenIssuanceSet
+	TypeMPTokenAuthorize           = protocol.TxTypeMPTokenAuthorize
+	TypeConfidentialMPTConvert     = protocol.TxTypeConfidentialMPTConvert
+	TypeConfidentialMPTMergeInbox  = protocol.TxTypeConfidentialMPTMergeInbox
+	TypeConfidentialMPTConvertBack = protocol.TxTypeConfidentialMPTConvertBack
+	TypeConfidentialMPTSend        = protocol.TxTypeConfidentialMPTSend
+	TypeConfidentialMPTClawback    = protocol.TxTypeConfidentialMPTClawback
+	TypePermissionedDomainSet      = protocol.TxTypePermissionedDomainSet
+	TypePermissionedDomainDelete   = protocol.TxTypePermissionedDomainDelete
+	TypeVaultCreate                = protocol.TxTypeVaultCreate
+	TypeVaultDelete                = protocol.TxTypeVaultDelete
+	TypeVaultDeposit               = protocol.TxTypeVaultDeposit
+	TypeBatch                      = protocol.TxTypeBatch
 )
 
 // Result represents a transaction result code.
@@ -192,6 +197,9 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 		},
 		func() *InvariantViolation {
 			return checkValidMPTIssuance(tx, result, entries, view, rules)
+		},
+		func() *InvariantViolation {
+			return checkValidConfidentialMPToken(tx, result, entries, view, rules)
 		},
 		func() *InvariantViolation {
 			return checkValidPermissionedDomain(tx, result, entries, rules)

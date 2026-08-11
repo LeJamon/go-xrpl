@@ -106,8 +106,8 @@ func (r *streamReader) readUint64Hex() (string, error) {
 // readUint64Decimal reads 8 bytes and returns the decimal string — see
 // rippled STUInt64::getJson base-10 branch
 // (src/libxrpl/protocol/STInteger.cpp:248), used for SFields flagged
-// sMD_BaseTen (sfMaximumAmount, sfOutstandingAmount, sfMPTAmount,
-// sfLockedAmount).
+// sMD_BaseTen (sfMaximumAmount, sfOutstandingAmount,
+// sfConfidentialOutstandingAmount, sfMPTAmount, sfLockedAmount).
 func (r *streamReader) readUint64Decimal() (string, error) {
 	v, err := r.readUint64Raw()
 	if err != nil {

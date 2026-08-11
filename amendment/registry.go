@@ -33,7 +33,7 @@ var (
 	FeatureFixCleanup3_1_3               = registerFix("fixCleanup3_1_3", SupportedYes, VoteDefaultYes)
 	FeatureMPTokensV2                    = registerFeature("MPTokensV2", SupportedNo, VoteDefaultNo)
 	FeatureFixBatchInnerSigs             = registerFix("fixBatchInnerSigs", SupportedNo, VoteDefaultNo)
-	FeatureConfidentialTransfer          = registerFeature("ConfidentialTransfer", SupportedNo, VoteDefaultNo)
+	FeatureConfidentialTransfer          = registerFeature("ConfidentialTransfer", confidentialTransferSupport(), VoteDefaultNo)
 	FeatureFixDirectoryLimit             = registerFix("fixDirectoryLimit", SupportedYes, VoteDefaultNo)
 	FeatureFixIncludeKeyletFields        = registerFix("fixIncludeKeyletFields", SupportedYes, VoteDefaultNo)
 	FeatureDynamicMPT                    = registerFeature("DynamicMPT", SupportedYes, VoteDefaultNo)

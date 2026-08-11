@@ -19,6 +19,7 @@ import (
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // Bounds on the size of a multi-signer array, mirroring rippled
@@ -819,6 +820,11 @@ func CalculateDefaultBaseFee(transaction txcore.Transaction, config txcore.Engin
 	)
 }
 
+func calculateConfidentialBaseFee(transaction txcore.Transaction, config txcore.EngineConfig) uint64 {
+	return CalculateDefaultBaseFee(transaction, config) +
+		protocol.ConfidentialMPTFeeMultiplier*config.BaseFee
+}
+
 // SponsorSignerCount returns the number of signatures in a sponsor's nested
 // multisignature. A direct sponsor signature adds no extra fee unit; each
 // nested Signer adds one base-fee unit.
@@ -847,6 +853,14 @@ func CalculateBaseFee(transaction txcore.Transaction, view txcore.LedgerView, co
 	}
 	if calculator, ok := transaction.(txcore.BatchFeeCalculator); ok {
 		return calculator.CalculateMinimumFee(view, config)
+	}
+	switch transaction.TxType() {
+	case txcore.TypeConfidentialMPTConvert,
+		txcore.TypeConfidentialMPTMergeInbox,
+		txcore.TypeConfidentialMPTConvertBack,
+		txcore.TypeConfidentialMPTSend,
+		txcore.TypeConfidentialMPTClawback:
+		return calculateConfidentialBaseFee(transaction, config)
 	}
 	if calculator, ok := transaction.(txcore.CustomBaseFeeCalculator); ok {
 		return calculator.CalculateBaseFee(view, config)

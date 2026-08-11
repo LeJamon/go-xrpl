@@ -53,6 +53,27 @@ func TestSponsorTransactionTypes(t *testing.T) {
 	}
 }
 
+func TestConfidentialTransactionTypes(t *testing.T) {
+	tests := []struct {
+		code TxType
+		name string
+	}{
+		{code: 85, name: "ConfidentialMPTConvert"},
+		{code: 86, name: "ConfidentialMPTMergeInbox"},
+		{code: 87, name: "ConfidentialMPTConvertBack"},
+		{code: 88, name: "ConfidentialMPTSend"},
+		{code: 89, name: "ConfidentialMPTClawback"},
+	}
+	for _, test := range tests {
+		if got := test.code.String(); got != test.name {
+			t.Errorf("TxType(%d).String() = %q, want %q", test.code, got, test.name)
+		}
+		if got, ok := TxTypeFromName(test.name); !ok || got != test.code {
+			t.Errorf("TxTypeFromName(%q) = (%d, %v), want (%d, true)", test.name, got, ok, test.code)
+		}
+	}
+}
+
 func TestTxTypeClassification(t *testing.T) {
 	if !TxTypeAmendment.IsPseudoTransaction() {
 		t.Error("EnableAmendment must be a pseudo-transaction")

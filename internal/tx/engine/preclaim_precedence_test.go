@@ -105,11 +105,9 @@ func TestPreclaimPrecedence_SignBeforeFee(t *testing.T) {
 	})
 }
 
-// TestPreclaimPrecedence_SignBeforePermission pins the same reorder for the
-// delegate permission check (go-xrpl's checkPermission, PR #1257): a
-// delegated transaction that fails both signature verification and the delegate
-// permission check surfaces the signature failure, not terNO_DELEGATE_PERMISSION.
-func TestPreclaimPrecedence_SignBeforePermission(t *testing.T) {
+// TestPreclaimPrecedence_PermissionBeforeSign pins the delegated permission
+// check before signature and fee validation.
+func TestPreclaimPrecedence_PermissionBeforeSign(t *testing.T) {
 	// Source delegates to the genesis account. No Delegate SLE exists, so
 	// checkPermission yields terNO_DELEGATE_PERMISSION. Signature is verified
 	// against the delegate (genesis); disabling its master key makes checkSign
@@ -124,7 +122,7 @@ func TestPreclaimPrecedence_SignBeforePermission(t *testing.T) {
 	}
 	source := &state.AccountRoot{Account: precedenceSourceAddr, Balance: 1_000_000, Sequence: 5}
 
-	t.Run("bad sign + no delegate permission returns sign error", func(t *testing.T) {
+	t.Run("bad sign + no delegate permission returns permission error", func(t *testing.T) {
 		e := precedenceEngine(t, map[string]*state.AccountRoot{
 			precedenceSourceAddr: source,
 			precedenceGenesisAddr: {
@@ -134,8 +132,8 @@ func TestPreclaimPrecedence_SignBeforePermission(t *testing.T) {
 				Flags:    state.LsfDisableMaster,
 			},
 		})
-		if got := e.preclaim(makeTx(), [32]byte{}); got != ter.TefMASTER_DISABLED {
-			t.Fatalf("combined sign+permission failure = %v, want TefMASTER_DISABLED", got)
+		if got := e.preclaim(makeTx(), [32]byte{}); got != ter.TerNO_DELEGATE_PERMISSION {
+			t.Fatalf("combined sign+permission failure = %v, want TerNO_DELEGATE_PERMISSION", got)
 		}
 	})
 

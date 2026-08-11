@@ -26,6 +26,18 @@ build-all:
 build-nocgo:
     CGO_ENABLED=0 go build ./...
 
+# Install the locked optional mpt-crypto dependency into a project-local cache.
+setup-mpt-crypto:
+    ./scripts/setup-mpt-crypto.sh setup
+
+# Print the environment needed by an mptcrypto-tagged build.
+mpt-crypto-env:
+    @./scripts/setup-mpt-crypto.sh env
+
+# Build mpt-crypto from its lockfile and run the native backend tests.
+test-mpt-crypto package="./amendment/... ./crypto/mptcrypto/... ./internal/tx/mpt/... ./internal/testing/mpt/...":
+    ./scripts/setup-mpt-crypto.sh test {{package}}
+
 # Run every test in the module.
 test:
     go test ./...

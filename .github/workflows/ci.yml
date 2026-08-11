@@ -195,6 +195,22 @@ jobs:
       # path on signature accept/reject. No -race here: the detector needs
       # cgo, and no CGO dev headers are installed for this leg.
       - run: CGO_ENABLED=0 go test -count=1 -timeout 15m ./crypto/...
+      - run: CGO_ENABLED=0 go test -tags mptcrypto -count=1 -timeout 15m ./amendment/... ./crypto/mptcrypto/...
+
+  test-mpt-crypto:
+    name: Test (Confidential MPT native backend, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - name: Install Conan
+        run: pipx install conan==2.18.1
+      - name: Build and test native backend
+        run: ./scripts/setup-mpt-crypto.sh test ./amendment/... ./crypto/mptcrypto/... ./internal/tx/mpt/... ./internal/testing/mpt/...
 
   consensus-smoke:
     name: Consensus smoke (2 rippled + 1 goxrpl)
@@ -205,11 +221,12 @@ jobs:
       - name: Build goxrpl docker image
         run: docker build --build-arg "VERSION=${{ github.sha }}" -t goxrpl:latest .
 
-      - name: Verify goxrpl image version
+      - name: Verify goxrpl image
         run: |
-          set -o pipefail
-          docker run --rm goxrpl:latest version |
-            grep --fixed-strings --line-regexp "go-xrpl version ${{ github.sha }}"
+          set -euo pipefail
+          output="$(docker run --rm goxrpl:latest version)"
+          grep --fixed-strings --line-regexp "go-xrpl version ${{ github.sha }}" <<<"$output"
+          grep --fixed-strings --line-regexp "Confidential MPT crypto: available" <<<"$output"
 
       - name: Run consensus smoke
         run: bash scripts/consensus-smoke/smoke.sh
