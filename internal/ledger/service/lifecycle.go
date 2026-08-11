@@ -796,8 +796,17 @@ func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 	replaceProvisional := s.networkLedgerState == networkLedgerFastLoadProvisional &&
 		s.validatedLedger != nil && seq == s.validatedLedger.Sequence() &&
 		expectedHash != s.validatedLedger.Hash()
+	sameValidatedTip := s.validatedLedger != nil && seq == s.validatedLedger.Sequence() &&
+		expectedHash == s.validatedLedger.Hash()
+	provisionalWorkingTip := s.networkLedgerState == networkLedgerFastLoadProvisional &&
+		s.closedLedger != nil && seq == s.closedLedger.Sequence() && expectedHash == s.closedLedger.Hash()
+	if sameValidatedTip && !provisionalWorkingTip {
+		s.historyComponent.mu.Unlock()
+		s.mu.Unlock()
+		return
+	}
 	if s.validatedLedger != nil && seq <= s.validatedLedger.Sequence() && !replaceProvisional {
-		if allowStored {
+		if allowStored && !sameValidatedTip {
 			s.historyComponent.mu.Unlock()
 			s.mu.Unlock()
 			return

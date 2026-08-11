@@ -138,6 +138,7 @@ func TestStoredLedgerValidationAdvancesIndependentlyOfConsensusSwitch(t *testing
 	require.Equal(t, h.Hash, adopted.Hash())
 
 	svc.PromoteStoredValidatedLedgerAt(h.LedgerIndex, h.Hash, time.Time{})
+	svc.SetValidatedLedgerAt(h.LedgerIndex, h.Hash, time.Time{})
 	select {
 	case <-events:
 		t.Fatal("stored validated ledger event was published more than once")
