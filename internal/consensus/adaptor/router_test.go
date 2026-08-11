@@ -301,6 +301,45 @@ func TestRouterDispatchesPreDecodedTransaction(t *testing.T) {
 		"router must accept a pre-decoded (batch-fanned) transaction")
 }
 
+func TestRouterRelaysQueuedTransactionAsDeferred(t *testing.T) {
+	a := newTestAdaptor(t)
+	router := newTestRouter(&mockEngine{}, a, nil)
+
+	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+	master := jtx.MasterAccount()
+	alice := jtx.NewAccount("queued-relay-destination")
+	txn := payment.Pay(master, alice, 100_000_000).Fee(1).Sequence(1).Build()
+	env.SignWith(txn, master)
+	txMap, err := txn.Flatten()
+	require.NoError(t, err)
+	hexStr, err := binarycodec.Encode(txMap)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(hexStr)
+	require.NoError(t, err)
+
+	dispatch := router.handleTransaction(&peermanagement.InboundMessage{
+		PeerID: 3,
+		Type:   message.TypeTransaction,
+		Tx: &message.Transaction{
+			RawTransaction: blob,
+			Status:         message.TxStatusNew,
+		},
+	})
+	require.NoError(t, dispatch.submitError)
+	require.Equal(t, openledger.ResultSuccess, dispatch.submitResult)
+	require.True(t, dispatch.deferred)
+	require.True(t, dispatch.relayed)
+
+	frame, err := message.EncodeFrame(relayTransactionMessage(blob, dispatch.deferred))
+	require.NoError(t, err)
+	msgType, decoded := decodeFrame(t, frame)
+	require.Equal(t, message.TypeTransaction, msgType)
+	relayed := decoded.(*message.Transaction)
+	require.Equal(t, message.TxStatusCurrent, relayed.Status)
+	require.True(t, relayed.Deferred)
+}
+
 func TestRouterDropsStandaloneBatchInnerTransaction(t *testing.T) {
 	engine := &mockEngine{}
 	a := newTestAdaptor(t)

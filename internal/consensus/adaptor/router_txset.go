@@ -303,8 +303,8 @@ func (r *Router) learnTxFromLeaf(originPeer uint64, wire []byte) {
 	if err != nil || exists {
 		return
 	}
-	if res, err := r.adaptor.SubmitPendingTx(item.Data(), false); err == nil && res == openledger.ResultSuccess {
-		r.relayTransaction(peermanagement.PeerID(originPeer), item.Data())
+	if outcome, err := r.adaptor.SubmitPendingTx(item.Data(), false); err == nil && outcome.Class == openledger.ResultSuccess {
+		r.relayTransaction(peermanagement.PeerID(originPeer), item.Data(), outcome.Queued)
 	}
 }
 
