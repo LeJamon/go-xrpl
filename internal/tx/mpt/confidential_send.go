@@ -235,6 +235,9 @@ func (c *ConfidentialMPTSend) Apply(ctx *tx.ApplyContext) ter.Result {
 	if result != ter.TesSUCCESS {
 		return ter.TecINTERNAL
 	}
+	if destinationAccount, err := tx.ReadAccountRoot(ctx.View, destinationID); err != nil || destinationAccount == nil {
+		return ter.TecINTERNAL
+	}
 	if len(c.CredentialIDs) > 0 {
 		expired, cleanupResult := credential.RemoveExpiredCredentials(ctx, c.CredentialIDs)
 		if cleanupResult != ter.TesSUCCESS {

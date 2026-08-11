@@ -211,10 +211,11 @@ func CheckFields(ids []string, present bool, dupDetail string) error {
 	}
 	seen := make(map[string]bool, len(ids))
 	for _, id := range ids {
-		canonical := id
-		if decoded, err := hex.DecodeString(id); err == nil && len(decoded) == 32 {
-			canonical = hex.EncodeToString(decoded)
+		decoded, err := hex.DecodeString(id)
+		if err != nil || len(decoded) != 32 {
+			return ter.Errorf(ter.TemMALFORMED, "CredentialID must be a 256-bit hex value")
 		}
+		canonical := hex.EncodeToString(decoded)
 		if seen[canonical] {
 			return ter.Errorf(ter.TemMALFORMED, "%s", dupDetail)
 		}

@@ -5,6 +5,7 @@ package mpt
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -621,6 +622,34 @@ func TestConfidentialMPTSendNativePreflight(t *testing.T) {
 	}
 }
 
+func TestConfidentialMPTSendJSONRejectsMalformedCredentialIDs(t *testing.T) {
+	tests := []struct {
+		name string
+		id   string
+	}{
+		{name: "not hex", id: strings.Repeat("z", 64)},
+		{name: "too short", id: strings.Repeat("01", 31)},
+		{name: "too long", id: strings.Repeat("01", 33)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := validNativeSend(t)
+			candidate.CredentialIDs = []string{test.id}
+			data, err := json.Marshal(candidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded ConfidentialMPTSend
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if got := nativeValidationCode(t, decoded.Validate()); got != ter.TemMALFORMED {
+				t.Fatalf("Validate = %v, want %v", got, ter.TemMALFORMED)
+			}
+		})
+	}
+}
+
 func TestConfidentialMPTClawbackNativePreflight(t *testing.T) {
 	issuer := [20]byte{1}
 	holder := [20]byte{2}
@@ -773,6 +802,16 @@ func TestConfidentialMPTSendNativePreclaimAndApply(t *testing.T) {
 			if got := transaction.Preclaim(view, tx.EngineConfig{ParentCloseTime: 101}); got != ter.TecNO_AUTH {
 				t.Fatalf("Preclaim after domain credential expiration = %v, want %v", got, ter.TecNO_AUTH)
 			}
+			t.Run("missing destination account", func(t *testing.T) {
+				missingDestinationView := cloneConfidentialView(view)
+				delete(missingDestinationView.entries, keylet.Account(destination).Key)
+				if got := transaction.Apply(nativeApplyContext(missingDestinationView, sender, senderRoot)); got != ter.TecINTERNAL {
+					t.Fatalf("Apply = %v, want %v", got, ter.TecINTERNAL)
+				}
+				if missingDestinationView.mutations != 0 {
+					t.Fatalf("Apply performed %d mutations", missingDestinationView.mutations)
+				}
+			})
 			if got := transaction.Apply(nativeApplyContext(view, sender, senderRoot)); got != ter.TesSUCCESS {
 				t.Fatalf("Apply = %v", got)
 			}
