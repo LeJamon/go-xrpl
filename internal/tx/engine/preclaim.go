@@ -573,7 +573,7 @@ func (e *Engine) checkBatchSign(signers []txcore.BatchSignerInfo) ter.Result {
 		if err != nil {
 			return ter.TefBAD_AUTH
 		}
-		if result := e.checkPseudoAccount(signer.Account); result != ter.TesSUCCESS {
+		if result := e.rejectPseudoAccount(signer.Account); result != ter.TesSUCCESS {
 			return result
 		}
 
