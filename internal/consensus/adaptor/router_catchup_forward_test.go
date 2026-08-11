@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/rcl"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
@@ -487,6 +488,19 @@ func TestAdaptor_FastLoadedLedgerIsReplacedBySameHeightQuorum(t *testing.T) {
 		switchDone <- err
 	}
 	r.engine = engine
+	tracker := rcl.NewValidationTracker(1)
+	node := consensus.NodeID{1}
+	tracker.SetTrustedAndQuorum([]consensus.NodeID{node}, 1)
+	now := time.Now()
+	require.True(t, tracker.Add(&consensus.Validation{
+		LedgerID:  consensus.LedgerID(replacementHash),
+		LedgerSeq: replacementHeader.LedgerIndex,
+		NodeID:    node,
+		SignTime:  now,
+		SeenTime:  now,
+		Full:      true,
+	}))
+	r.adaptor.SetValidationHistorian(tracker)
 	r.adaptor.OnLedgerFullyValidated(
 		consensus.LedgerID(replacementHash),
 		replacementHeader.LedgerIndex,
