@@ -1890,9 +1890,6 @@ func (r *Router) maybeAcquireFromValidation(v *consensus.Validation, originPeer 
 	r.ensureValidationCatchupAcquisition(v.LedgerSeq, hash, originPeer)
 }
 
-// armValidatedLedgerAcquisition arms inbound acquisition for a validated
-// (seq, hash) that is not available locally. Prefers a peer advertising LCL >= seq,
-// falls back to any tracked peer.
 func (r *Router) armValidatedLedgerAcquisition(seq uint32, hash [32]byte) {
 	defer func() {
 		if rv := recover(); rv != nil {

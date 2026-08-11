@@ -1126,8 +1126,6 @@ func TestRouter_ValidatedTargetArmsAcquisition(t *testing.T) {
 	}
 }
 
-// TestRouter_ValidatedTargetDoesNotAcquireWithoutPeers verifies that a
-// validated target cannot start network work until a peer is available.
 // Dispatching to peerID=0 would race against the wire layer's per-peer
 // routing; peer-status-change handlers drive acquisition once peers
 // reconnect.
