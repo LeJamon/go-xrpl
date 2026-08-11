@@ -264,7 +264,6 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ctx.Internal("update pay channel", err)
 	}
 
-	// Deduct amount from account.
 	ctx.Account.Balance -= amount
 
 	return ter.TesSUCCESS
