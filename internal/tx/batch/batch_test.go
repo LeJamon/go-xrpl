@@ -111,6 +111,19 @@ func TestBatchBinaryRoundTripPreservesEmptyNestedSignature(t *testing.T) {
 	require.NotContains(t, batchSigner, "SigningPubKey")
 	nestedSigner := batchSigner["Signers"].([]map[string]any)[0]["Signer"].(map[string]any)
 	require.Contains(t, nestedSigner, "TxnSignature")
+
+	flatBatchSigner["SigningPubKey"] = ""
+	encoded, err = binarycodec.Encode(flat)
+	require.NoError(t, err)
+	blob, err = hex.DecodeString(encoded)
+	require.NoError(t, err)
+	parsed, err = tx.ParseFromBinary(blob)
+	require.NoError(t, err)
+	flattened, err = parsed.(*Batch).Flatten()
+	require.NoError(t, err)
+	batchSigner = flattened["BatchSigners"].([]map[string]any)[0]["BatchSigner"].(map[string]any)
+	require.Contains(t, batchSigner, "SigningPubKey")
+	require.Equal(t, "", batchSigner["SigningPubKey"])
 }
 
 func TestBatchBinaryParseRejectsStructuralAbuseBeforeInnerConstruction(t *testing.T) {
