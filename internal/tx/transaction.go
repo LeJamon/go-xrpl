@@ -575,6 +575,9 @@ func (c *Common) ToMap() map[string]any {
 // For normal transactions, returns the Sequence value.
 // Reference: rippled STTx::getSeqProxy()
 func (c *Common) SeqProxy() uint32 {
+	if c.Sequence != nil && *c.Sequence != 0 {
+		return *c.Sequence
+	}
 	if c.TicketSequence != nil {
 		return *c.TicketSequence
 	}
