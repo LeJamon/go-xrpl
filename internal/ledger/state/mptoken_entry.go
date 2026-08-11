@@ -31,7 +31,7 @@ type MPTokenIssuanceData struct {
 	DomainID          *string // hex-encoded 32-byte hash, nil if not set
 	ReferenceHolding  *string // hex-encoded 32-byte hash (vault share underlying), nil if not set
 	Flags             uint32
-	MutableFlags      uint32 // soeDEFAULT: CanMutate permission bits, 0 when absent
+	ImmutableFlags    uint32 // soeDEFAULT: immutable capability and field bits, 0 when absent
 	Sponsor           string
 
 	// Threading fields. MPTokenIssuance is a threaded type, so these must
@@ -82,7 +82,7 @@ func ParseMPTokenIssuance(data []byte) (*MPTokenIssuanceData, error) {
 		AssetScale:        uint8(wire.AssetScale),
 		MPTokenMetadata:   strings.ToLower(wire.MPTokenMetadata),
 		Flags:             wire.Flags,
-		MutableFlags:      wire.MutableFlags,
+		ImmutableFlags:    wire.ImmutableFlags,
 		Sponsor:           wire.Sponsor,
 		PreviousTxnLgrSeq: wire.PreviousTxnLgrSeq,
 	}
@@ -165,7 +165,7 @@ func SerializeMPTokenIssuance(issuance *MPTokenIssuanceData) ([]byte, error) {
 		entry.SetReferenceHolding(strings.ToUpper(*issuance.ReferenceHolding))
 	}
 
-	entry.SetMutableFlags(issuance.MutableFlags)
+	entry.SetImmutableFlags(issuance.ImmutableFlags)
 	if issuance.Sponsor != "" {
 		entry.SetSponsor(issuance.Sponsor)
 	}

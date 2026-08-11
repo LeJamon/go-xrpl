@@ -66,19 +66,27 @@ var txFlagsTable = map[string]map[string]uint32{
 		"tfMutable":      0x00000010,
 	},
 	"MPTokenIssuanceCreate": {
-		"tfMPTCanLock":     0x00000002,
-		"tfMPTRequireAuth": 0x00000004,
-		"tfMPTCanEscrow":   0x00000008,
-		"tfMPTCanTrade":    0x00000010,
-		"tfMPTCanTransfer": 0x00000020,
-		"tfMPTCanClawback": 0x00000040,
+		"tfMPTCanLock":                    0x00000002,
+		"tfMPTRequireAuth":                0x00000004,
+		"tfMPTCanEscrow":                  0x00000008,
+		"tfMPTCanTrade":                   0x00000010,
+		"tfMPTCanTransfer":                0x00000020,
+		"tfMPTCanClawback":                0x00000040,
+		"tfMPTCanHoldConfidentialBalance": 0x00000080,
 	},
 	"MPTokenAuthorize": {
 		"tfMPTUnauthorize": 0x00000001,
 	},
 	"MPTokenIssuanceSet": {
-		"tfMPTLock":   0x00000001,
-		"tfMPTUnlock": 0x00000002,
+		"tfMPTLock":                          0x00000001,
+		"tfMPTUnlock":                        0x00000002,
+		"tfMPTSetCanLock":                    0x00000004,
+		"tfMPTSetRequireAuth":                0x00000008,
+		"tfMPTSetCanEscrow":                  0x00000010,
+		"tfMPTSetCanTrade":                   0x00000020,
+		"tfMPTSetCanTransfer":                0x00000040,
+		"tfMPTSetCanClawback":                0x00000080,
+		"tfMPTSetCanHoldConfidentialBalance": 0x00000100,
 	},
 	"NFTokenCreateOffer": {
 		"tfSellNFToken": 0x00000001,
@@ -143,10 +151,9 @@ var txFlagsTable = map[string]map[string]uint32{
 	},
 }
 
-// ledgerFlagsTable maps a ledger-object group name to its lsf*/lsmf* flag map.
+// ledgerFlagsTable maps a ledger-object group name to its lsf* flag map.
 // Keys are the LEDGER_OBJECT macro names from rippled getAllLedgerFlags()
-// (note "DirNode", and the synthetic "MPTokenIssuanceMutable" group for the
-// MPTokenIssuance mutable-flag set).
+// (note "DirNode").
 var ledgerFlagsTable = map[string]map[string]uint32{
 	"AccountRoot": {
 		"lsfPasswordSpent":                entry.LsfPasswordSpent,
@@ -194,23 +201,14 @@ var ledgerFlagsTable = map[string]map[string]uint32{
 		"lsfSellNFToken": entry.LsfSellNFToken,
 	},
 	"MPTokenIssuance": {
-		"lsfMPTLocked":      entry.LsfMPTLocked,
-		"lsfMPTCanLock":     entry.LsfMPTCanLock,
-		"lsfMPTRequireAuth": entry.LsfMPTRequireAuth,
-		"lsfMPTCanEscrow":   entry.LsfMPTCanEscrow,
-		"lsfMPTCanTrade":    entry.LsfMPTCanTrade,
-		"lsfMPTCanTransfer": entry.LsfMPTCanTransfer,
-		"lsfMPTCanClawback": entry.LsfMPTCanClawback,
-	},
-	"MPTokenIssuanceMutable": {
-		"lsmfMPTCanMutateCanLock":     entry.LsmfMPTCanMutateCanLock,
-		"lsmfMPTCanMutateRequireAuth": entry.LsmfMPTCanMutateRequireAuth,
-		"lsmfMPTCanMutateCanEscrow":   entry.LsmfMPTCanMutateCanEscrow,
-		"lsmfMPTCanMutateCanTrade":    entry.LsmfMPTCanMutateCanTrade,
-		"lsmfMPTCanMutateCanTransfer": entry.LsmfMPTCanMutateCanTransfer,
-		"lsmfMPTCanMutateCanClawback": entry.LsmfMPTCanMutateCanClawback,
-		"lsmfMPTCanMutateMetadata":    entry.LsmfMPTCanMutateMetadata,
-		"lsmfMPTCanMutateTransferFee": entry.LsmfMPTCanMutateTransferFee,
+		"lsfMPTLocked":                     entry.LsfMPTLocked,
+		"lsfMPTCanLock":                    entry.LsfMPTCanLock,
+		"lsfMPTRequireAuth":                entry.LsfMPTRequireAuth,
+		"lsfMPTCanEscrow":                  entry.LsfMPTCanEscrow,
+		"lsfMPTCanTrade":                   entry.LsfMPTCanTrade,
+		"lsfMPTCanTransfer":                entry.LsfMPTCanTransfer,
+		"lsfMPTCanClawback":                entry.LsfMPTCanClawback,
+		"lsfMPTCanHoldConfidentialBalance": entry.LsfMPTCanHoldConfidentialBalance,
 	},
 	"MPToken": {
 		"lsfMPTLocked":     entry.LsfMPTLocked,

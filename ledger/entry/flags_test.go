@@ -73,14 +73,16 @@ func TestLedgerSpecificFlags(t *testing.T) {
 		{"LsfMPTCanTrade", LsfMPTCanTrade, 0x00000010},
 		{"LsfMPTCanTransfer", LsfMPTCanTransfer, 0x00000020},
 		{"LsfMPTCanClawback", LsfMPTCanClawback, 0x00000040},
-		{"LsmfMPTCanMutateCanLock", LsmfMPTCanMutateCanLock, 0x00000002},
-		{"LsmfMPTCanMutateRequireAuth", LsmfMPTCanMutateRequireAuth, 0x00000004},
-		{"LsmfMPTCanMutateCanEscrow", LsmfMPTCanMutateCanEscrow, 0x00000008},
-		{"LsmfMPTCanMutateCanTrade", LsmfMPTCanMutateCanTrade, 0x00000010},
-		{"LsmfMPTCanMutateCanTransfer", LsmfMPTCanMutateCanTransfer, 0x00000020},
-		{"LsmfMPTCanMutateCanClawback", LsmfMPTCanMutateCanClawback, 0x00000040},
-		{"LsmfMPTCanMutateMetadata", LsmfMPTCanMutateMetadata, 0x00010000},
-		{"LsmfMPTCanMutateTransferFee", LsmfMPTCanMutateTransferFee, 0x00020000},
+		{"LsfMPTCanHoldConfidentialBalance", LsfMPTCanHoldConfidentialBalance, 0x00000080},
+		{"LsifMPTCanLock", LsifMPTCanLock, 0x00000002},
+		{"LsifMPTRequireAuth", LsifMPTRequireAuth, 0x00000004},
+		{"LsifMPTCanEscrow", LsifMPTCanEscrow, 0x00000008},
+		{"LsifMPTCanTrade", LsifMPTCanTrade, 0x00000010},
+		{"LsifMPTCanTransfer", LsifMPTCanTransfer, 0x00000020},
+		{"LsifMPTCanClawback", LsifMPTCanClawback, 0x00000040},
+		{"LsifMPTCanHoldConfidentialBalance", LsifMPTCanHoldConfidentialBalance, 0x00000080},
+		{"LsifMPTMetadata", LsifMPTMetadata, 0x00010000},
+		{"LsifMPTTransferFee", LsifMPTTransferFee, 0x00020000},
 
 		// ltMPTOKEN
 		{"LsfMPTAuthorized", LsfMPTAuthorized, 0x00000002},
@@ -96,6 +98,10 @@ func TestLedgerSpecificFlags(t *testing.T) {
 		{"LsfLoanDefault", LsfLoanDefault, 0x00010000},
 		{"LsfLoanImpaired", LsfLoanImpaired, 0x00020000},
 		{"LsfLoanOverpayment", LsfLoanOverpayment, 0x00040000},
+
+		// ltSPONSORSHIP
+		{"LsfSponsorshipRequireSignForFee", LsfSponsorshipRequireSignForFee, 0x00010000},
+		{"LsfSponsorshipRequireSignForReserve", LsfSponsorshipRequireSignForReserve, 0x00020000},
 	}
 
 	for _, tt := range tests {
@@ -121,7 +127,10 @@ func TestLedgerSpecificFlags(t *testing.T) {
 	}
 }
 
-var oracleLedgerFlag = regexp.MustCompile(`LSF_FLAG2?\((ls(?:m)?f\w+),\s*(0x[0-9a-fA-F]+)\)`)
+var (
+	oracleLedgerFlag    = regexp.MustCompile(`LSF_FLAG2?\((lsf\w+),\s*(0x[0-9a-fA-F]+)\)`)
+	oracleImmutableFlag = regexp.MustCompile(`inline constexpr std::uint32_t (lsif\w+) = (0x[0-9a-fA-F]+);`)
+)
 
 func readOracleLedgerFlags(t *testing.T) map[string]uint32 {
 	t.Helper()
@@ -131,16 +140,18 @@ func readOracleLedgerFlags(t *testing.T) map[string]uint32 {
 	}
 	dir := filepath.Dir(file)
 	for range 12 {
-		path := filepath.Join(dir, "rippled-worktrees", "v3.2.0-oracle", "include", "xrpl", "protocol", "LedgerFormats.h")
+		path := filepath.Join(dir, "rippled-worktrees", "v3.3.0-oracle", "include", "xrpl", "protocol", "LedgerFormats.h")
 		data, err := os.ReadFile(path)
 		if err == nil {
 			flags := make(map[string]uint32)
-			for _, match := range oracleLedgerFlag.FindAllStringSubmatch(string(data), -1) {
-				value, err := strconv.ParseUint(match[2], 0, 32)
-				if err != nil {
-					t.Fatalf("parse %s: %v", match[0], err)
+			for _, pattern := range []*regexp.Regexp{oracleLedgerFlag, oracleImmutableFlag} {
+				for _, match := range pattern.FindAllStringSubmatch(string(data), -1) {
+					value, err := strconv.ParseUint(match[2], 0, 32)
+					if err != nil {
+						t.Fatalf("parse %s: %v", match[0], err)
+					}
+					flags[match[1]] = uint32(value)
 				}
-				flags[match[1]] = uint32(value)
 			}
 			return flags
 		}
@@ -150,7 +161,7 @@ func readOracleLedgerFlags(t *testing.T) map[string]uint32 {
 		}
 		dir = parent
 	}
-	t.Fatalf("required rippled v3.2.0 LedgerFormats.h not found from %s", file)
+	t.Fatalf("required rippled v3.3.0 LedgerFormats.h not found from %s", file)
 	return nil
 }
 

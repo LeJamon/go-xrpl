@@ -33,7 +33,7 @@ type MPTokenIssuance struct {
 	LockedAmount      string // UInt64 (decimal string, sMD_BaseTen)
 	MPTokenMetadata   string // Blob (uppercase hex)
 	DomainID          string // Hash256 (uppercase hex)
-	MutableFlags      uint32
+	ImmutableFlags    uint32
 	ReferenceHolding  string // Hash256 (uppercase hex)
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
@@ -57,7 +57,7 @@ const (
 	mptokenissuanceBitLockedAmount
 	mptokenissuanceBitMPTokenMetadata
 	mptokenissuanceBitDomainID
-	mptokenissuanceBitMutableFlags
+	mptokenissuanceBitImmutableFlags
 	mptokenissuanceBitReferenceHolding
 	mptokenissuanceBitFlags
 	mptokenissuanceBitPreviousTxnID
@@ -143,15 +143,15 @@ func (m *MPTokenIssuance) SetDomainID(value string) {
 	m.present |= mptokenissuanceBitDomainID
 }
 
-// SetMutableFlags assigns MutableFlags and updates its serialized presence.
-func (m *MPTokenIssuance) SetMutableFlags(value uint32) {
-	m.MutableFlags = value
+// SetImmutableFlags assigns ImmutableFlags and updates its serialized presence.
+func (m *MPTokenIssuance) SetImmutableFlags(value uint32) {
+	m.ImmutableFlags = value
 	m.dirty = true
 	if value == 0 {
-		m.present &^= mptokenissuanceBitMutableFlags
+		m.present &^= mptokenissuanceBitImmutableFlags
 		return
 	}
-	m.present |= mptokenissuanceBitMutableFlags
+	m.present |= mptokenissuanceBitImmutableFlags
 }
 
 // SetReferenceHolding assigns ReferenceHolding and updates its serialized presence.
@@ -230,8 +230,8 @@ func (m *MPTokenIssuance) validateDecoded() error {
 	if m.present&mptokenissuanceBitOutstandingAmount == 0 {
 		return errors.New("ledgerfields: MPTokenIssuance: required field OutstandingAmount is missing")
 	}
-	if m.present&mptokenissuanceBitMutableFlags != 0 && m.MutableFlags == 0 {
-		return errors.New("ledgerfields: MPTokenIssuance: default field MutableFlags is explicitly set")
+	if m.present&mptokenissuanceBitImmutableFlags != 0 && m.ImmutableFlags == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: default field ImmutableFlags is explicitly set")
 	}
 	if m.present&mptokenissuanceBitFlags == 0 {
 		return errors.New("ledgerfields: MPTokenIssuance: required field Flags is missing")
@@ -305,8 +305,8 @@ func (m *MPTokenIssuance) decode(data []byte, legacy bool) error {
 				m.PreviousTxnLgrSeq = val
 				m.present |= mptokenissuanceBitPreviousTxnLgrSeq
 			case 53:
-				m.MutableFlags = val
-				m.present |= mptokenissuanceBitMutableFlags
+				m.ImmutableFlags = val
+				m.present |= mptokenissuanceBitImmutableFlags
 			default:
 				return newErrUnknownField("MPTokenIssuance", typeCode, fieldCode)
 			}
@@ -449,8 +449,8 @@ func (m *MPTokenIssuance) emitAll(out map[string]any, skipDefault bool) {
 	if m.present&mptokenissuanceBitDomainID != 0 && !(skipDefault && isZeroHexString(m.DomainID)) {
 		out["DomainID"] = m.DomainID
 	}
-	if m.present&mptokenissuanceBitMutableFlags != 0 && !(skipDefault && m.MutableFlags == 0) {
-		out["MutableFlags"] = m.MutableFlags
+	if m.present&mptokenissuanceBitImmutableFlags != 0 && !(skipDefault && m.ImmutableFlags == 0) {
+		out["ImmutableFlags"] = m.ImmutableFlags
 	}
 	if m.present&mptokenissuanceBitReferenceHolding != 0 && !(skipDefault && isZeroHexString(m.ReferenceHolding)) {
 		out["ReferenceHolding"] = m.ReferenceHolding
@@ -492,7 +492,7 @@ func (m *MPTokenIssuance) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "LockedAmount", prv.LockedAmount, m.LockedAmount, prv.present&mptokenissuanceBitLockedAmount, m.present&mptokenissuanceBitLockedAmount)
 	emitIfChangedString(out, "MPTokenMetadata", prv.MPTokenMetadata, m.MPTokenMetadata, prv.present&mptokenissuanceBitMPTokenMetadata, m.present&mptokenissuanceBitMPTokenMetadata)
 	emitIfChangedString(out, "DomainID", prv.DomainID, m.DomainID, prv.present&mptokenissuanceBitDomainID, m.present&mptokenissuanceBitDomainID)
-	emitIfChangedUint32(out, "MutableFlags", prv.MutableFlags, m.MutableFlags, prv.present&mptokenissuanceBitMutableFlags, m.present&mptokenissuanceBitMutableFlags)
+	emitIfChangedUint32(out, "ImmutableFlags", prv.ImmutableFlags, m.ImmutableFlags, prv.present&mptokenissuanceBitImmutableFlags, m.present&mptokenissuanceBitImmutableFlags)
 	emitIfChangedString(out, "ReferenceHolding", prv.ReferenceHolding, m.ReferenceHolding, prv.present&mptokenissuanceBitReferenceHolding, m.present&mptokenissuanceBitReferenceHolding)
 	emitIfChangedUint32(out, "Flags", prv.Flags, m.Flags, prv.present&mptokenissuanceBitFlags, m.present&mptokenissuanceBitFlags)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, m.Sponsor, prv.present&mptokenissuanceBitSponsor, m.present&mptokenissuanceBitSponsor)
@@ -534,8 +534,8 @@ func (m *MPTokenIssuance) EmitChangeOrigFields(out map[string]any) {
 	if m.present&mptokenissuanceBitDomainID != 0 {
 		out["DomainID"] = m.DomainID
 	}
-	if m.present&mptokenissuanceBitMutableFlags != 0 {
-		out["MutableFlags"] = m.MutableFlags
+	if m.present&mptokenissuanceBitImmutableFlags != 0 {
+		out["ImmutableFlags"] = m.ImmutableFlags
 	}
 	if m.present&mptokenissuanceBitReferenceHolding != 0 {
 		out["ReferenceHolding"] = m.ReferenceHolding
@@ -617,8 +617,8 @@ func (m *MPTokenIssuance) ToMap() map[string]any {
 	if m.present&mptokenissuanceBitDomainID != 0 {
 		out["DomainID"] = m.DomainID
 	}
-	if m.present&mptokenissuanceBitMutableFlags != 0 {
-		out["MutableFlags"] = m.MutableFlags
+	if m.present&mptokenissuanceBitImmutableFlags != 0 {
+		out["ImmutableFlags"] = m.ImmutableFlags
 	}
 	if m.present&mptokenissuanceBitReferenceHolding != 0 {
 		out["ReferenceHolding"] = m.ReferenceHolding

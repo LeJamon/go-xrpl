@@ -115,6 +115,30 @@ func TestFeatureIDMatches(t *testing.T) {
 	}
 }
 
+func TestDynamicMPTFeatureRegistration(t *testing.T) {
+	dynamic := FeatureByName("DynamicMPT")
+	if dynamic == nil {
+		t.Fatal("DynamicMPT feature not found")
+	}
+	if dynamic.Supported != SupportedYes || dynamic.Vote != VoteDefaultNo {
+		t.Errorf("DynamicMPT support/vote = (%v, %v), want (SupportedYes, VoteDefaultNo)", dynamic.Supported, dynamic.Vote)
+	}
+	if !AllSupportedRules().Enabled(FeatureDynamicMPT) {
+		t.Error("supported DynamicMPT amendment must be enabled by the all-supported preset")
+	}
+
+	confidential := FeatureByName("ConfidentialTransfer")
+	if confidential == nil {
+		t.Fatal("ConfidentialTransfer feature not found")
+	}
+	if confidential.Supported != SupportedNo || confidential.Vote != VoteDefaultNo {
+		t.Errorf("ConfidentialTransfer support/vote = (%v, %v), want (SupportedNo, VoteDefaultNo)", confidential.Supported, confidential.Vote)
+	}
+	if AllSupportedRules().Enabled(FeatureConfidentialTransfer) {
+		t.Error("unsupported ConfidentialTransfer amendment must not be enabled by the all-supported preset")
+	}
+}
+
 func TestTable(t *testing.T) {
 	table := NewTable()
 
@@ -445,6 +469,8 @@ func TestAllExpectedFeaturesExist(t *testing.T) {
 		"AMMClawback",
 		"MPTokensV1",
 		"MPTokensV2",
+		"DynamicMPT",
+		"ConfidentialTransfer",
 		"Sponsor",
 		"DeepFreeze",
 		"DynamicNFT",

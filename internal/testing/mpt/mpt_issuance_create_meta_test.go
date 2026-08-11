@@ -40,3 +40,28 @@ func TestMPTokenIssuanceCreate_Meta_NewFields(t *testing.T) {
 	require.NotContains(t, nf, "OwnerNode", "OwnerNode=0 (page 0) is default; excluded from NewFields")
 	require.NotContains(t, nf, "Flags", "Flags=0 is default; excluded from NewFields")
 }
+
+func TestMPTokenIssuanceCreate_Meta_ImmutableFlags(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	env.EnableFeature("DynamicMPT")
+	env.Close()
+	alice := jtx.NewAccount("alice")
+	env.FundAmount(alice, uint64(jtx.XRP(100000)))
+	env.Close()
+
+	immutable := mpttx.TifMPTCanTrade | mpttx.TifMPTMetadata
+	create := mpttx.NewMPTokenIssuanceCreate(alice.Address)
+	create.Fee = "10"
+	create.ImmutableFlags = &immutable
+	result := env.Submit(create)
+	jtx.RequireTxSuccess(t, result)
+
+	var newFields map[string]any
+	for _, node := range result.Metadata.AffectedNodes {
+		if node.NodeType == "CreatedNode" && node.LedgerEntryType == "MPTokenIssuance" {
+			newFields = node.NewFields
+		}
+	}
+	require.NotNil(t, newFields)
+	require.EqualValues(t, immutable, newFields["ImmutableFlags"])
+}

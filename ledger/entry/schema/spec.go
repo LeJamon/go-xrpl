@@ -508,7 +508,7 @@ var Specs = []Entry{
 			{Name: "LockedAmount", Style: StyleOptional},
 			{Name: "MPTokenMetadata", Style: StyleOptional},
 			{Name: "DomainID", Style: StyleOptional},
-			{Name: "MutableFlags", Style: StyleDefault},
+			{Name: "ImmutableFlags", Style: StyleDefault},
 			{Name: "ReferenceHolding", Style: StyleOptional},
 			{Name: "Flags", Style: StyleRequired},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal, Style: StyleRequired, DeferredRequired: true},

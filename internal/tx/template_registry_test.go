@@ -107,14 +107,14 @@ func TestParseFromBinaryDynamicMPTFields(t *testing.T) {
 		fields map[string]any
 	}{
 		{
-			name: "MPTokenIssuanceCreate MutableFlags",
+			name: "MPTokenIssuanceCreate ImmutableFlags",
 			fields: map[string]any{
 				"TransactionType": "MPTokenIssuanceCreate",
 				"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"Sequence":        uint32(1),
 				"Fee":             "10",
 				"SigningPubKey":   "",
-				"MutableFlags":    uint32(1),
+				"ImmutableFlags":  uint32(1),
 			},
 		},
 		{
@@ -128,7 +128,7 @@ func TestParseFromBinaryDynamicMPTFields(t *testing.T) {
 				"MPTokenIssuanceID": "000000000000000000000000000000000000000000000001",
 				"MPTokenMetadata":   "AA",
 				"TransferFee":       uint16(1),
-				"MutableFlags":      uint32(1),
+				"ImmutableFlags":    uint32(1),
 			},
 		},
 	}

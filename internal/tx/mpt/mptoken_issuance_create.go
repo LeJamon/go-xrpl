@@ -38,9 +38,9 @@ type MPTokenIssuanceCreate struct {
 	// Reference: rippled MPTokenIssuanceCreate.cpp sfDomainID
 	DomainID *string `json:"DomainID,omitempty" xrpl:"DomainID,omitempty"`
 
-	// MutableFlags marks which capabilities the issuer may later change via
-	// MPTokenIssuanceSet (tmfMPTCanMutate* bits). Requires featureDynamicMPT.
-	MutableFlags *uint32 `json:"MutableFlags,omitempty" xrpl:"MutableFlags,omitempty"`
+	// ImmutableFlags permanently prevents later changes to selected capabilities
+	// and fields. Requires featureDynamicMPT.
+	ImmutableFlags *uint32 `json:"ImmutableFlags,omitempty" xrpl:"ImmutableFlags,omitempty"`
 
 	// hasDomainID tracks whether the DomainID field was present in the parsed JSON.
 	hasDomainID bool
@@ -103,7 +103,7 @@ func (m *MPTokenIssuanceCreate) TxType() tx.Type {
 // GetFlagsMask adopts the engine FlagsMasker seam with the MPTokenIssuanceCreate
 // invalid-flags mask (rippled MPTokenIssuanceCreate::getFlagsMask =
 // tfMPTokenIssuanceCreateMask), checked at preflight0. The mask covers only
-// sfFlags; the sfMutableFlags shape check stays in Validate.
+// sfFlags; the sfImmutableFlags shape check stays in Validate.
 func (m *MPTokenIssuanceCreate) GetFlagsMask(rules *amendment.Rules) uint32 {
 	return ^tfMPTokenIssuanceCreateValidMask
 }
@@ -116,13 +116,13 @@ func (m *MPTokenIssuanceCreate) Validate() error {
 
 	flags := m.GetFlags()
 
-	// If MutableFlags is present it must name at least one valid mutable
-	// capability. Reachable only once DynamicMPT is enabled — RequiredAmendments
+	// If ImmutableFlags is present it must name at least one valid immutable
+	// capability or field. Reachable only once DynamicMPT is enabled — RequiredAmendments
 	// rejects the field with temDISABLED before this when the amendment is off.
 	// Reference: rippled MPTokenIssuanceCreate.cpp preflight.
-	if m.MutableFlags != nil {
-		if *m.MutableFlags == 0 || *m.MutableFlags&tmfMPTokenIssuanceCreateMutableMask != 0 {
-			return ter.Errorf(ter.TemINVALID_FLAG, "invalid MutableFlags for MPTokenIssuanceCreate")
+	if m.ImmutableFlags != nil {
+		if *m.ImmutableFlags == 0 || *m.ImmutableFlags&tifMPTokenIssuanceImmutableMask != 0 {
+			return ter.Errorf(ter.TemINVALID_FLAG, "invalid ImmutableFlags for MPTokenIssuanceCreate")
 		}
 	}
 
@@ -134,6 +134,9 @@ func (m *MPTokenIssuanceCreate) Validate() error {
 		// If a non-zero TransferFee is set, tfMPTCanTransfer must also be set
 		if *m.TransferFee > 0 && (flags&MPTokenIssuanceCreateFlagCanTransfer) == 0 {
 			return ter.Errorf(ter.TemMALFORMED, "TransferFee requires tfMPTCanTransfer flag")
+		}
+		if *m.TransferFee > 0 && flags&MPTokenIssuanceCreateFlagCanHoldConfidentialBalance != 0 {
+			return ter.Errorf(ter.TemBAD_TRANSFER_FEE, "TransferFee is incompatible with confidential balances")
 		}
 	}
 
@@ -183,10 +186,14 @@ func (m *MPTokenIssuanceCreate) RequiredAmendments() [][32]byte {
 	if m.hasDomainID {
 		amendments = append(amendments, amendment.FeaturePermissionedDomains, amendment.FeatureSingleAssetVault)
 	}
-	// MutableFlags requires DynamicMPT. rippled rejects the field with
+	// ImmutableFlags requires DynamicMPT. rippled rejects the field with
 	// temDISABLED (checkExtraFeatures) before any other preflight check.
-	if m.MutableFlags != nil {
+	if m.ImmutableFlags != nil {
 		amendments = append(amendments, amendment.FeatureDynamicMPT)
+	}
+	if m.GetFlags()&MPTokenIssuanceCreateFlagCanHoldConfidentialBalance != 0 ||
+		(m.ImmutableFlags != nil && *m.ImmutableFlags&TifMPTCanHoldConfidentialBalance != 0) {
+		amendments = append(amendments, amendment.FeatureConfidentialTransfer)
 	}
 	return amendments
 }
@@ -237,8 +244,8 @@ func (m *MPTokenIssuanceCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	if m.hasDomainID && m.DomainID != nil {
 		issuanceData.DomainID = m.DomainID
 	}
-	if m.MutableFlags != nil {
-		issuanceData.MutableFlags = *m.MutableFlags
+	if m.ImmutableFlags != nil {
+		issuanceData.ImmutableFlags = *m.ImmutableFlags
 	}
 
 	// Insert into owner directory first so sfOwnerNode records the actual page.

@@ -271,6 +271,17 @@ func TestMPTEscrow_CanEscrowFlag(t *testing.T) {
 			Build())
 	jtx.RequireTxFail(t, result, jtx.TecNO_PERMISSION)
 	env.Close()
+
+	mptGw.Set(mpt.SetOpts{Account: gw, Flags: mpt.TfMPTSetCanEscrow})
+	result = env.Submit(
+		escrow.EscrowCreate(alice, bob, 0).
+			MPTAmount(amt).
+			Condition(escrow.TestCondition1()).
+			FinishTime(env.Now().Add(1 * time.Second)).
+			Fee(env.BaseFee() * 150).
+			Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
 }
 
 // --------------------------------------------------------------------------

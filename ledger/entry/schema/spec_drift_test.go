@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ import (
 func TestSpecCoversRippledMacro(t *testing.T) {
 	macroPath := requireRippledMacro(t)
 
-	rippled, err := parseRippledMacro(macroPath)
+	rippled, err := parseRippledMacro(macroPath, v32SchemaFieldName)
 	if err != nil {
 		t.Fatalf("parse %s: %v", macroPath, err)
 	}
@@ -95,7 +96,61 @@ func TestSpecCoversRippledMacro(t *testing.T) {
 	}
 }
 
+func TestDynamicMPTSchemaMatchesRippledV3_3(t *testing.T) {
+	macroPath := requireRippledMacroVersion(t, "v3.3.0-oracle")
+	rippled, err := parseRippledMacro(macroPath, nil)
+	if err != nil {
+		t.Fatalf("parse %s: %v", macroPath, err)
+	}
+	issuance, ok := rippled["MPTokenIssuance"]
+	if !ok {
+		t.Fatal("rippled v3.3.0 has no MPTokenIssuance template")
+	}
+	wantSequence := []string{"DomainID", "ImmutableFlags", "ReferenceHolding"}
+	containsSequence := func(fields []string) bool {
+		for i := 0; i+len(wantSequence) <= len(fields); i++ {
+			if slices.Equal(fields[i:i+len(wantSequence)], wantSequence) {
+				return true
+			}
+		}
+		return false
+	}
+	if !containsSequence(issuance.Fields) {
+		t.Fatalf("rippled v3.3.0 MPTokenIssuance fields do not contain %v in order", wantSequence)
+	}
+	macro, err := os.ReadFile(macroPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", macroPath, err)
+	}
+	styles := parseTaggedStyles(t, macro)
+	if got := styles["MPTokenIssuance"]["ImmutableFlags"]; got != StyleDefault {
+		t.Fatalf("rippled v3.3.0 ImmutableFlags style = %d, want default", got)
+	}
+
+	for _, entry := range Specs {
+		if entry.Name != "MPTokenIssuance" {
+			continue
+		}
+		fields := make([]string, len(entry.Fields))
+		for i, field := range entry.Fields {
+			fields[i] = field.Name
+			if field.Name == "ImmutableFlags" && field.Style != StyleDefault {
+				t.Fatalf("Go ImmutableFlags style = %d, want default", field.Style)
+			}
+		}
+		if !containsSequence(fields) {
+			t.Fatalf("Go MPTokenIssuance fields do not contain %v in order", wantSequence)
+		}
+		return
+	}
+	t.Fatal("Go schema has no MPTokenIssuance template")
+}
+
 func requireRippledMacro(t *testing.T) string {
+	return requireRippledMacroVersion(t, "v3.2.0-oracle")
+}
+
+func requireRippledMacroVersion(t *testing.T, oracle string) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
@@ -103,7 +158,7 @@ func requireRippledMacro(t *testing.T) string {
 	}
 	dir := filepath.Dir(file)
 	for range 12 {
-		candidate := filepath.Join(dir, "rippled-worktrees", "v3.2.0-oracle", "include", "xrpl", "protocol", "detail", "ledger_entries.macro")
+		candidate := filepath.Join(dir, "rippled-worktrees", oracle, "include", "xrpl", "protocol", "detail", "ledger_entries.macro")
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
@@ -113,7 +168,7 @@ func requireRippledMacro(t *testing.T) string {
 		}
 		dir = parent
 	}
-	t.Fatalf("required rippled v3.2.0 oracle not found from %s", file)
+	t.Fatalf("required rippled %s not found from %s", oracle, file)
 	return ""
 }
 
@@ -121,6 +176,13 @@ var (
 	macroEntryStart = regexp.MustCompile(`^LEDGER_ENTRY(?:_DUPLICATE)?\(\s*lt\w+\s*,\s*(0x[0-9a-fA-F]+)\s*,\s*(\w+)\s*,\s*(\w+)\s*,`)
 	macroFieldLine  = regexp.MustCompile(`^\s*\{\s*sf(\w+)\s*,`)
 )
+
+func v32SchemaFieldName(name string) string {
+	if name == "MutableFlags" {
+		return "ImmutableFlags"
+	}
+	return name
+}
 
 type rippledEntry struct {
 	Type    protocol.LedgerEntryType
@@ -130,7 +192,7 @@ type rippledEntry struct {
 
 // parseRippledMacro returns the canonical identity and fields for every
 // ledger-entry type in rippled's macro.
-func parseRippledMacro(path string) (map[string]rippledEntry, error) {
+func parseRippledMacro(path string, normalizeFieldName func(string) string) (map[string]rippledEntry, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -162,7 +224,11 @@ func parseRippledMacro(path string) (map[string]rippledEntry, error) {
 			continue
 		}
 		if m := macroFieldLine.FindStringSubmatch(line); m != nil {
-			currentFields = append(currentFields, m[1])
+			name := m[1]
+			if normalizeFieldName != nil {
+				name = normalizeFieldName(name)
+			}
+			currentFields = append(currentFields, name)
 			continue
 		}
 		if strings.Contains(line, "}))") {
