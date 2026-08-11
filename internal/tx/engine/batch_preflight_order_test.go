@@ -152,10 +152,11 @@ func TestBatchInnerRunsSigValidatedPreflight(t *testing.T) {
 
 func TestPreflightInnerRunsUniversalPreflight(t *testing.T) {
 	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	const destination = "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn"
 
 	oversized := check.NewCheckCreate(
 		account,
-		account,
+		destination,
 		txcore.NewXRPAmount(int64(drops.MaxDrops)+1),
 	)
 	oversized.Fee = "0"
