@@ -90,11 +90,12 @@ jobs:
       - name: Build goxrpl docker image
         run: docker build --build-arg "VERSION=${{ github.sha }}" -t goxrpl:latest .
 
-      - name: Verify goxrpl image version
+      - name: Verify goxrpl image
         run: |
-          set -o pipefail
-          docker run --rm goxrpl:latest version |
-            grep --fixed-strings --line-regexp "go-xrpl version ${{ github.sha }}"
+          set -euo pipefail
+          output="$(docker run --rm goxrpl:latest version)"
+          grep --fixed-strings --line-regexp "go-xrpl version ${{ github.sha }}" <<<"$output"
+          grep --fixed-strings --line-regexp "Confidential MPT crypto: available" <<<"$output"
 
       - name: Run extended consensus soak
         run: bash scripts/consensus-smoke/smoke.sh

@@ -8,15 +8,23 @@ import (
 )
 
 func TestVersionText_BaseLines(t *testing.T) {
-	out := versionText("1.2.3")
+	out := versionText("1.2.3", true)
 	for _, want := range []string{
 		"go-xrpl version 1.2.3\n",
 		"Go version: " + runtime.Version() + "\n",
 		"OS/Arch: " + runtime.GOOS + "/" + runtime.GOARCH + "\n",
+		"Confidential MPT crypto: available\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("versionText missing %q in:\n%s", want, out)
 		}
+	}
+}
+
+func TestVersionText_MPTCryptoUnavailable(t *testing.T) {
+	out := versionText("1.2.3", false)
+	if !strings.Contains(out, "Confidential MPT crypto: unavailable\n") {
+		t.Fatalf("versionText missing unavailable MPT crypto status:\n%s", out)
 	}
 }
 
