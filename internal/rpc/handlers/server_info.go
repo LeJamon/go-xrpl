@@ -229,6 +229,17 @@ func addServerDiagnostics(info map[string]any, services *types.ServiceGraph) {
 			"delivery_disconnects":        strconv.FormatUint(metrics.DeliveryDisconnects, 10),
 		}
 	}
+	if services != nil && services.FastSyncMetrics() != nil {
+		metrics := services.FastSyncMetrics()()
+		counters["fast_sync"] = map[string]any{
+			"completion_recheck_accepted":                    strconv.FormatUint(metrics.CompletionRecheckAccepted, 10),
+			"completion_recheck_rejected_no_evidence":        strconv.FormatUint(metrics.CompletionRecheckRejectedNoEvidence, 10),
+			"completion_recheck_rejected_below_quorum":       strconv.FormatUint(metrics.CompletionRecheckRejectedBelowQuorum, 10),
+			"completion_recheck_rejected_quorum_unavailable": strconv.FormatUint(metrics.CompletionRecheckRejectedUnavailable, 10),
+			"target_superseded":                              strconv.FormatUint(metrics.TargetSuperseded, 10),
+			"obsolete_acquisition_completed":                 strconv.FormatUint(metrics.ObsoleteAcquisitionCompleted, 10),
+		}
+	}
 	info["counters"] = counters
 	info["current_activities"] = map[string]any{
 		"jobs":    []map[string]any{},

@@ -361,6 +361,8 @@ type ServiceContainer struct {
 	// map is empty until consensus is wired.
 	StateAccounting func() StateAccountingSnapshot
 
+	FastSyncMetrics func() FastSyncMetrics
+
 	// CloseTimeOffset returns the consensus-derived close-time offset
 	// from the adaptor. Surfaced as close_time_offset on the ledger
 	// object in human mode when |offset| >= 60s
@@ -1259,6 +1261,16 @@ type StateAccountingSnapshot struct {
 	InitialSyncUs uint64
 }
 
+// FastSyncMetrics is the server_info representation of fast-sync outcomes.
+type FastSyncMetrics struct {
+	CompletionRecheckAccepted            uint64
+	CompletionRecheckRejectedNoEvidence  uint64
+	CompletionRecheckRejectedBelowQuorum uint64
+	CompletionRecheckRejectedUnavailable uint64
+	TargetSuperseded                     uint64
+	ObsoleteAcquisitionCompleted         uint64
+}
+
 // SubmitResult contains the result of submitting a transaction.
 // The boolean fields match rippled's Transaction::SubmitResult struct:
 // applied, broadcast, queued, kept are independent pipeline states.
@@ -2040,6 +2052,13 @@ func (g *ServiceGraph) ResourceBlacklist() func(*int) map[string]any {
 func (g *ServiceGraph) StateAccounting() func() StateAccountingSnapshot {
 	if s := g.services(); s != nil {
 		return s.StateAccounting
+	}
+	return nil
+}
+
+func (g *ServiceGraph) FastSyncMetrics() func() FastSyncMetrics {
+	if s := g.services(); s != nil {
+		return s.FastSyncMetrics
 	}
 	return nil
 }

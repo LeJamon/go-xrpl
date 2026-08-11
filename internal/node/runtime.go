@@ -765,6 +765,17 @@ func (r *nodeRuntime) configureConsensus() error {
 			r.services.FetchInfoClear = router.ClearFetchInfo
 			r.services.RequestLedger = router.RequestLedger
 			r.services.FetchPackCacheSize = router.FetchPackCacheSize
+			r.services.FastSyncMetrics = func() types.FastSyncMetrics {
+				snapshot := router.FastSyncMetrics()
+				return types.FastSyncMetrics{
+					CompletionRecheckAccepted:            snapshot.CompletionRecheckAccepted,
+					CompletionRecheckRejectedNoEvidence:  snapshot.CompletionRecheckRejectedNoEvidence,
+					CompletionRecheckRejectedBelowQuorum: snapshot.CompletionRecheckRejectedBelowQuorum,
+					CompletionRecheckRejectedUnavailable: snapshot.CompletionRecheckRejectedUnavailable,
+					TargetSuperseded:                     snapshot.TargetSuperseded,
+					ObsoleteAcquisitionCompleted:         snapshot.ObsoleteAcquisitionCompleted,
+				}
+			}
 		}
 
 		// Expose the validator-manifest cache to the `manifest` RPC.

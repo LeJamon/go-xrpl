@@ -68,6 +68,10 @@ func (m *mockEngine) TrySwitchToLedger(id consensus.LedgerID) (consensus.LedgerS
 	return result, nil
 }
 
+func (m *mockEngine) CanAcceptLedger(consensus.LedgerID) (bool, error) {
+	return true, nil
+}
+
 func (m *mockEngine) OnLedgerAcquireFailed(id consensus.LedgerID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

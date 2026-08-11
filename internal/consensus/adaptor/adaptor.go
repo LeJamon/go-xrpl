@@ -469,27 +469,40 @@ func (a *Adaptor) SetValidationHistorian(h consensus.ValidationHistorian) {
 	a.mu.Lock()
 	a.validationHistorian = h
 	a.mu.Unlock()
-
-	if a.ledgerService == nil {
-		return
-	}
-	rechecker, ok := h.(consensus.ValidationQuorumRechecker)
-	if !ok {
-		a.ledgerService.SetPendingValidationResolver(nil)
-		return
-	}
-	a.ledgerService.SetPendingValidationResolver(newPendingValidationResolver(rechecker))
 }
 
-func newPendingValidationResolver(rechecker consensus.ValidationQuorumRechecker) service.PendingValidationResolver {
-	return func(seq uint32, hash [32]byte) (time.Time, bool) {
-		validations, _, accepted := rechecker.RecheckFullyValidated(consensus.LedgerID(hash), seq)
-		if !accepted {
-			return time.Time{}, false
-		}
-		signTime, count := sampleValidatedSignTime(validations, seq)
-		return signTime, count > 0
+type validationRecheckResult uint8
+
+const (
+	validationRecheckAccepted validationRecheckResult = iota
+	validationRecheckNoEvidence
+	validationRecheckBelowQuorum
+	validationRecheckUnavailable
+)
+
+func (a *Adaptor) recheckFullyValidated(seq uint32, hash [32]byte) (time.Time, validationRecheckResult) {
+	a.mu.Lock()
+	historian := a.validationHistorian
+	a.mu.Unlock()
+	rechecker, ok := historian.(consensus.ValidationQuorumRechecker)
+	if !ok {
+		return time.Time{}, validationRecheckUnavailable
 	}
+	validations, quorum, accepted := rechecker.RecheckFullyValidated(consensus.LedgerID(hash), seq)
+	if a.IsQuorumUnavailable() {
+		return time.Time{}, validationRecheckUnavailable
+	}
+	if len(validations) == 0 {
+		return time.Time{}, validationRecheckNoEvidence
+	}
+	if !accepted || len(validations) < quorum {
+		return time.Time{}, validationRecheckBelowQuorum
+	}
+	signTime, count := sampleValidatedSignTime(validations, seq)
+	if count < quorum {
+		return time.Time{}, validationRecheckBelowQuorum
+	}
+	return signTime, validationRecheckAccepted
 }
 
 // UpdatePeerLCL records a peer's last-closed-ledger hash so getNetworkLedger
@@ -699,6 +712,9 @@ func (a *Adaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, cl
 	l, err := a.ledgerService.GetLedgerBySequence(seq)
 	if err != nil {
 		return nil, err
+	}
+	if signTime, result := a.recheckFullyValidated(seq, l.Hash()); result == validationRecheckAccepted {
+		a.ledgerService.SetValidatedLedgerAt(seq, l.Hash(), signTime)
 	}
 	return WrapLedger(l), nil
 }
