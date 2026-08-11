@@ -19,6 +19,7 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 var errNotImplemented = errors.New("rpcenv: LedgerService method not implemented — extend the adapter when adding a consumer test")
@@ -33,6 +34,7 @@ type ledgerAdapter struct {
 }
 
 var _ types.LedgerService = (*ledgerAdapter)(nil)
+var _ types.AccountTxDelegateQuerier = (*ledgerAdapter)(nil)
 
 func newLedgerAdapter(env *jtx.TestEnv) *ledgerAdapter {
 	a := &ledgerAdapter{env: env, closedLedgers: make(map[uint32]*ledger.Ledger)}
@@ -418,6 +420,14 @@ func (a *ledgerAdapter) GetAccountOffers(_ context.Context, _ string, _ string, 
 }
 
 func (a *ledgerAdapter) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+	return a.getAccountTransactions(ctx, account, ledgerMin, ledgerMax, limit, marker, forward, nil)
+}
+
+func (a *ledgerAdapter) GetAccountTransactionsWithDelegate(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool, delegate *types.AccountTxDelegateFilter) (*types.AccountTxResult, error) {
+	return a.getAccountTransactions(ctx, account, ledgerMin, ledgerMax, limit, marker, forward, delegate)
+}
+
+func (a *ledgerAdapter) getAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool, delegate *types.AccountTxDelegateFilter) (*types.AccountTxResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -425,9 +435,12 @@ func (a *ledgerAdapter) GetAccountTransactions(ctx context.Context, account stri
 	if closed == nil {
 		return nil, errors.New("rpcenv: no closed ledger available")
 	}
-	if _, _, err := addresscodec.DecodeClassicAddressToAccountID(account); err != nil {
+	_, rawAccount, err := addresscodec.DecodeClassicAddressToAccountID(account)
+	if err != nil || len(rawAccount) != len(relationaldb.AccountID{}) {
 		return nil, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
 	}
+	var accountID relationaldb.AccountID
+	copy(accountID[:], rawAccount)
 	if limit == 0 {
 		limit = 200
 	}
@@ -508,7 +521,10 @@ func (a *ledgerAdapter) GetAccountTransactions(ctx context.Context, account stri
 		found := false
 		for i := range transactions {
 			if transactions[i].LedgerIndex == marker.LedgerSeq && transactions[i].TxnSeq == marker.TxnSeq {
-				start = i + 1
+				start = i
+				if delegate == nil {
+					start++
+				}
 				found = true
 				break
 			}
@@ -517,12 +533,78 @@ func (a *ledgerAdapter) GetAccountTransactions(ctx context.Context, account stri
 			return nil, errors.New("rpcenv: account_tx marker not found")
 		}
 	}
+	if delegate != nil {
+		return filterRPCEnvAccountTransactions(account, accountID, result, transactions[start:], limit, marker, delegate)
+	}
+
 	end := min(start+int(limit), len(transactions))
 	result.Transactions = transactions[start:end]
 	if end < len(transactions) && end > start {
 		last := transactions[end-1]
 		result.Marker = &types.AccountTxMarker{LedgerSeq: last.LedgerIndex, TxnSeq: last.TxnSeq}
 	}
+	return result, nil
+}
+
+func filterRPCEnvAccountTransactions(account string, accountID relationaldb.AccountID, result *types.AccountTxResult, transactions []types.AccountTransaction, limit uint32, marker *types.AccountTxMarker, delegate *types.AccountTxDelegateFilter) (*types.AccountTxResult, error) {
+	filter := &relationaldb.AccountTxDelegateFilter{Role: relationaldb.AccountTxDelegateActor}
+	if delegate.Role == types.AccountTxDelegateAuthorizer {
+		filter.Role = relationaldb.AccountTxDelegateAuthorizer
+	}
+	if delegate.Counterparty != "" {
+		_, rawCounterparty, err := addresscodec.DecodeClassicAddressToAccountID(delegate.Counterparty)
+		if err != nil || len(rawCounterparty) != len(relationaldb.AccountID{}) {
+			return nil, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
+		}
+		var counterparty relationaldb.AccountID
+		copy(counterparty[:], rawCounterparty)
+		filter.Counterparty = &counterparty
+	}
+
+	scanEnd := min(int(limit)+1, len(transactions))
+	scanned := make([]relationaldb.TransactionInfo, scanEnd)
+	for index, transaction := range transactions[:scanEnd] {
+		scanned[index] = relationaldb.TransactionInfo{
+			Hash:      relationaldb.Hash(transaction.Hash),
+			LedgerSeq: relationaldb.LedgerIndex(transaction.LedgerIndex),
+			TxnSeq:    transaction.TxnSeq,
+			RawTxn:    transaction.TxBlob,
+			TxnMeta:   transaction.Meta,
+		}
+	}
+	var relationalMarker *relationaldb.AccountTxMarker
+	if marker != nil {
+		relationalMarker = &relationaldb.AccountTxMarker{
+			LedgerSeq: relationaldb.LedgerIndex(marker.LedgerSeq),
+			TxnSeq:    marker.TxnSeq,
+		}
+	}
+	page, err := relationaldb.BuildAccountTxPage("rpcenv_account_tx", relationaldb.AccountTxPageOptions{
+		Account:  accountID,
+		Marker:   relationalMarker,
+		Limit:    limit,
+		Delegate: filter,
+	}, scanned)
+	if err != nil {
+		return nil, err
+	}
+	result.Transactions = make([]types.AccountTransaction, len(page.Transactions))
+	for index, transaction := range page.Transactions {
+		result.Transactions[index] = types.AccountTransaction{
+			Hash:        [32]byte(transaction.Hash),
+			LedgerIndex: uint32(transaction.LedgerSeq),
+			TxnSeq:      transaction.TxnSeq,
+			TxBlob:      transaction.RawTxn,
+			Meta:        transaction.TxnMeta,
+		}
+	}
+	if page.Marker != nil {
+		result.Marker = &types.AccountTxMarker{
+			LedgerSeq: uint32(page.Marker.LedgerSeq),
+			TxnSeq:    page.Marker.TxnSeq,
+		}
+	}
+	result.Account = account
 	return result, nil
 }
 

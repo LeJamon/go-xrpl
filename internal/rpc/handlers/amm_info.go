@@ -12,7 +12,6 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -86,10 +85,14 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 
 	var ammKey [32]byte
 	if hasAMMAccount {
+		ammAccount, ok := accountIdent(request.AMMAccount)
+		if !ok {
+			return nil, types.RpcErrorActMalformed("Account malformed.")
+		}
 		// rippled AMMInfo returns actMalformed (not invalidParams or
 		// actNotFound) both when the amm_account does not parse and when it
 		// does not exist in the ledger.
-		_, accountEntry, rpcErr := readAccountRoot(ctx, ledgerIndex, accountIdent(request.AMMAccount))
+		_, accountEntry, rpcErr := readAccountRoot(ctx, ledgerIndex, ammAccount)
 		if rpcErr != nil {
 			return nil, rpcErr
 		}
@@ -120,8 +123,12 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 
 	var lpAccountID [20]byte
 	if hasLPAccount {
+		account, ok := accountIdent(request.Account)
+		if !ok {
+			return nil, types.RpcErrorActMalformed("Account malformed.")
+		}
 		var rpcErr *types.RpcError
-		lpAccountID, _, rpcErr = readAccountRoot(ctx, ledgerIndex, accountIdent(request.Account))
+		lpAccountID, _, rpcErr = readAccountRoot(ctx, ledgerIndex, account)
 		if rpcErr != nil {
 			return nil, rpcErr
 		}
@@ -473,45 +480,21 @@ func extractIssue(raw any) (ammIssue, bool) {
 	return issue, true
 }
 
-// accountIdent extracts the string form of an account parameter; any
-// non-string value yields "", which never resolves to an account.
-func accountIdent(raw json.RawMessage) string {
+func accountIdent(raw json.RawMessage) (string, bool) {
 	var ident string
 	if err := json.Unmarshal(raw, &ident); err != nil {
-		return ""
+		return "", false
 	}
-	return ident
+	return ident, true
 }
 
-// accountFromString resolves an account identifier the way rippled's
-// RPC::accountFromString does in non-strict mode (RPCHelpers.cpp:43-85): a
-// base58 account public key, a classic address, or — as a debugging
-// convenience — anything that parses as a generic seed, whose secp256k1
-// keypair identifies the account.
 func accountFromString(ident string) ([20]byte, bool) {
 	var accountID [20]byte
-	if pubKey, err := addresscodec.DecodeAccountPublicKey(ident); err == nil {
-		copy(accountID[:], addresscodec.SHA256RIPEMD160(pubKey))
-		return accountID, true
-	}
-	if _, raw, err := addresscodec.DecodeClassicAddressToAccountID(ident); err == nil {
-		copy(accountID[:], raw)
-		return accountID, true
-	}
-
-	seed, ok := parseGenericSeed(ident)
-	if !ok {
+	_, raw, err := addresscodec.DecodeClassicAddressToAccountID(ident)
+	if err != nil || len(raw) != len(accountID) {
 		return accountID, false
 	}
-	_, pubKeyHex, err := secp256k1.Algorithm{}.DeriveKeypair(seed, false)
-	if err != nil {
-		return accountID, false
-	}
-	pubKey, err := hex.DecodeString(pubKeyHex)
-	if err != nil {
-		return accountID, false
-	}
-	copy(accountID[:], addresscodec.SHA256RIPEMD160(pubKey))
+	copy(accountID[:], raw)
 	return accountID, true
 }
 

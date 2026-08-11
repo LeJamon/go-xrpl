@@ -2,8 +2,10 @@ package adapter
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
@@ -114,6 +116,41 @@ func (a *LedgerServiceAdapter) GetAccountOffers(ctx context.Context, account str
 }
 
 func (a *LedgerServiceAdapter) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
+	return a.getAccountTransactions(ctx, account, ledgerMin, ledgerMax, limit, marker, forward, nil)
+}
+
+// GetAccountTransactionsWithDelegate retrieves account transaction history
+// using a delegation filter.
+func (a *LedgerServiceAdapter) GetAccountTransactionsWithDelegate(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool, delegate *types.AccountTxDelegateFilter) (*types.AccountTxResult, error) {
+	var relationalDelegate *relationaldb.AccountTxDelegateFilter
+	if delegate != nil {
+		var role relationaldb.AccountTxDelegateRole
+		switch delegate.Role {
+		case types.AccountTxDelegateActor:
+			role = relationaldb.AccountTxDelegateActor
+		case types.AccountTxDelegateAuthorizer:
+			role = relationaldb.AccountTxDelegateAuthorizer
+		default:
+			return nil, fmt.Errorf("invalid account_tx delegate role %d", delegate.Role)
+		}
+		relationalDelegate = &relationaldb.AccountTxDelegateFilter{Role: role}
+		if delegate.Counterparty != "" {
+			_, raw, err := addresscodec.DecodeClassicAddressToAccountID(delegate.Counterparty)
+			if err != nil {
+				return nil, err
+			}
+			if len(raw) != len(relationaldb.AccountID{}) {
+				return nil, fmt.Errorf("counterparty account ID has length %d", len(raw))
+			}
+			var counterparty relationaldb.AccountID
+			copy(counterparty[:], raw)
+			relationalDelegate.Counterparty = &counterparty
+		}
+	}
+	return a.getAccountTransactions(ctx, account, ledgerMin, ledgerMax, limit, marker, forward, relationalDelegate)
+}
+
+func (a *LedgerServiceAdapter) getAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool, delegate *relationaldb.AccountTxDelegateFilter) (*types.AccountTxResult, error) {
 	// Convert RPC marker to service marker
 	var svcMarker *relationaldb.AccountTxMarker
 	if marker != nil {
@@ -123,7 +160,7 @@ func (a *LedgerServiceAdapter) GetAccountTransactions(ctx context.Context, accou
 		}
 	}
 
-	result, err := a.svc.GetAccountTransactions(ctx, account, ledgerMin, ledgerMax, limit, svcMarker, forward)
+	result, err := a.svc.GetAccountTransactionsWithDelegate(ctx, account, ledgerMin, ledgerMax, limit, svcMarker, forward, delegate)
 	if err != nil {
 		return nil, err
 	}
