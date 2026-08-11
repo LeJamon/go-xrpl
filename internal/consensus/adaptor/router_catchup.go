@@ -1924,6 +1924,7 @@ func (r *Router) armValidatedLedgerAcquisition(seq uint32, hash [32]byte) {
 		r.consensusRecovery.targetHash = hash
 		r.acquisitionMu.Unlock()
 		r.runLifecycleTask(func(context.Context) {
+			r.promoteCompletedLedger(seq, hash)
 			r.armConsensusCatchup()
 		})
 		return

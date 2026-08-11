@@ -37,6 +37,19 @@ func TestFullyValidatedHeldLedgerDoesNotReenterEngineLock(t *testing.T) {
 	h, stateMap, txMap, err := completed.Result()
 	require.NoError(t, err)
 	require.NoError(t, a.ledgerService.StoreLedgerWithState(t.Context(), h, stateMap, txMap))
+	tracker := rcl.NewValidationTracker(1)
+	node := consensus.NodeID{1}
+	tracker.SetTrustedAndQuorum([]consensus.NodeID{node}, 1)
+	now := time.Now()
+	require.True(t, tracker.Add(&consensus.Validation{
+		LedgerID:  consensus.LedgerID(h.Hash),
+		LedgerSeq: h.LedgerIndex,
+		NodeID:    node,
+		SignTime:  now,
+		SeenTime:  now,
+		Full:      true,
+	}))
+	a.SetValidationHistorian(tracker)
 
 	_, started := r.startLifecycle(t.Context())
 	require.True(t, started)
@@ -59,7 +72,9 @@ func TestFullyValidatedHeldLedgerDoesNotReenterEngineLock(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		ledgers := engine.getLedgers()
-		return len(ledgers) == 1 && ledgers[0] == consensus.LedgerID(h.Hash)
+		validated := a.ledgerService.GetValidatedLedger()
+		return len(ledgers) == 1 && ledgers[0] == consensus.LedgerID(h.Hash) &&
+			validated != nil && validated.Hash() == h.Hash
 	}, time.Second, time.Millisecond)
 }
 
