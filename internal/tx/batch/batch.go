@@ -80,6 +80,7 @@ type BatchSignerData struct {
 	SigningPubKey     string             `json:"SigningPubKey"`
 	BatchTxnSignature string             `json:"TxnSignature,omitempty"`
 	Signers           []tx.SignerWrapper `json:"Signers,omitempty"`
+	signingPubKeySet  bool
 	txnSignatureSet   bool
 	signersSet        bool
 }
@@ -95,6 +96,7 @@ func (s *BatchSignerData) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*s = BatchSignerData(decoded)
+	_, s.signingPubKeySet = fields["SigningPubKey"]
 	_, s.txnSignatureSet = fields["TxnSignature"]
 	_, s.signersSet = fields["Signers"]
 	return nil
@@ -296,8 +298,8 @@ func (b *Batch) PreflightInnerTransactions(preflight func(tx.Transaction) ter.Re
 			hasTxnSignature, hasSigners := nestedSignatureFieldPresence(wireFields, "CounterpartySignature")
 			if err := checkInnerSignatureFields(
 				cp.SigningPubKey,
-				hasTxnSignature || cp.TxnSignature != "",
-				hasSigners || len(cp.Signers) > 0,
+				hasTxnSignature || cp.HasField("TxnSignature") || cp.TxnSignature != "",
+				hasSigners || cp.HasField("Signers") || len(cp.Signers) > 0,
 			); err != nil {
 				return err
 			}
@@ -306,8 +308,8 @@ func (b *Batch) PreflightInnerTransactions(preflight func(tx.Transaction) ter.Re
 			hasTxnSignature, hasSigners := nestedSignatureFieldPresence(wireFields, "SponsorSignature")
 			if err := checkInnerSignatureFields(
 				sponsor.SigningPubKey,
-				hasTxnSignature || sponsor.TxnSignature != "",
-				hasSigners || len(sponsor.Signers) > 0,
+				hasTxnSignature || sponsor.HasField("TxnSignature") || sponsor.TxnSignature != "",
+				hasSigners || sponsor.HasField("Signers") || len(sponsor.Signers) > 0,
 			); err != nil {
 				return err
 			}
@@ -510,8 +512,10 @@ func (b *Batch) Flatten() (map[string]any, error) {
 		signers := make([]map[string]any, len(b.BatchSigners))
 		for i, s := range b.BatchSigners {
 			signerMap := map[string]any{
-				"Account":       s.BatchSigner.Account,
-				"SigningPubKey": s.BatchSigner.SigningPubKey,
+				"Account": s.BatchSigner.Account,
+			}
+			if s.BatchSigner.SigningPubKey != "" || s.BatchSigner.signingPubKeySet {
+				signerMap["SigningPubKey"] = s.BatchSigner.SigningPubKey
 			}
 			if s.BatchSigner.hasTxnSignature() {
 				signerMap["TxnSignature"] = s.BatchSigner.BatchTxnSignature

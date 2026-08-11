@@ -94,6 +94,8 @@ func TestBatchBinaryRoundTripPreservesEmptyNestedSignature(t *testing.T) {
 
 	flat, err := outer.Flatten()
 	require.NoError(t, err)
+	flatBatchSigner := flat["BatchSigners"].([]map[string]any)[0]["BatchSigner"].(map[string]any)
+	require.NotContains(t, flatBatchSigner, "SigningPubKey")
 	encoded, err := binarycodec.Encode(flat)
 	require.NoError(t, err)
 	blob, err := hex.DecodeString(encoded)
@@ -106,6 +108,7 @@ func TestBatchBinaryRoundTripPreservesEmptyNestedSignature(t *testing.T) {
 	flattened, err := parsedBatch.Flatten()
 	require.NoError(t, err)
 	batchSigner := flattened["BatchSigners"].([]map[string]any)[0]["BatchSigner"].(map[string]any)
+	require.NotContains(t, batchSigner, "SigningPubKey")
 	nestedSigner := batchSigner["Signers"].([]map[string]any)[0]["Signer"].(map[string]any)
 	require.Contains(t, nestedSigner, "TxnSignature")
 }
@@ -895,6 +898,35 @@ func TestInnerExplicitEmptySignatureFieldsAreRejected(t *testing.T) {
 			require.NoError(t, err)
 			require.ErrorIs(t, parsed.(*Batch).Validate(), test.wantErr)
 		})
+	}
+}
+
+func TestInnerProgrammaticEmptyNestedSignatureFieldsAreRejected(t *testing.T) {
+	for _, container := range []string{"CounterpartySignature", "SponsorSignature"} {
+		for _, test := range []struct {
+			field   string
+			wantErr error
+		}{
+			{field: "TxnSignature", wantErr: ErrBatchInnerHasTxnSignature},
+			{field: "Signers", wantErr: ErrBatchInnerHasSigners},
+		} {
+			t.Run(container+"/"+test.field, func(t *testing.T) {
+				outer := NewBatch(testOuter)
+				outer.SetFlags(BatchFlagAllOrNothing)
+				outer.AddInnerTransaction(makeTestPayment())
+				outer.AddInnerTransaction(makeTestPayment())
+				common := outer.RawTransactions[0].RawTransaction.InnerTx.GetCommon()
+				switch container {
+				case "CounterpartySignature":
+					common.CounterpartySignature = &tx.CounterpartySignature{}
+					common.CounterpartySignature.MarkFieldPresent(test.field)
+				case "SponsorSignature":
+					common.SponsorSignature = &tx.SponsorSignature{}
+					common.SponsorSignature.MarkFieldPresent(test.field)
+				}
+				require.ErrorIs(t, outer.Validate(), test.wantErr)
+			})
+		}
 	}
 }
 
