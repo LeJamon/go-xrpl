@@ -6,7 +6,7 @@ import (
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 )
 
-func TestInnerBaseFeeConfidentialMPT(t *testing.T) {
+func TestCalculateMinimumFeeConfidentialMPT(t *testing.T) {
 	for _, transactionType := range []txcore.Type{
 		txcore.TypeConfidentialMPTConvert,
 		txcore.TypeConfidentialMPTMergeInbox,
@@ -16,8 +16,10 @@ func TestInnerBaseFeeConfidentialMPT(t *testing.T) {
 	} {
 		t.Run(transactionType.String(), func(t *testing.T) {
 			txn := txcore.NewBaseTx(transactionType, "account")
-			if got := innerBaseFee(txn, nil, txcore.EngineConfig{BaseFee: 10}); got != 100 {
-				t.Fatalf("innerBaseFee() = %d, want 100", got)
+			batch := NewBatch("account")
+			batch.AddInnerTransaction(txn)
+			if got := batch.CalculateMinimumFee(nil, txcore.EngineConfig{BaseFee: 10}); got != 120 {
+				t.Fatalf("CalculateMinimumFee() = %d, want 120", got)
 			}
 		})
 	}
