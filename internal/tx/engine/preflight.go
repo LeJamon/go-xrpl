@@ -305,6 +305,9 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	if result := checkSponsorFields(innerTx, common, rules); result != ter.TesSUCCESS {
 		return result
 	}
+	if rules.FixCleanup3_2_0Enabled() && hasInvalidAmount(innerTx) {
+		return ter.TemBAD_AMOUNT
+	}
 	if result := runTypePreflight(innerTx, rules); result != ter.TesSUCCESS {
 		return result
 	}

@@ -4,8 +4,10 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/batch"
+	"github.com/LeJamon/go-xrpl/internal/tx/check"
 	"github.com/LeJamon/go-xrpl/internal/tx/escrow"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -140,6 +142,39 @@ func TestBatchInnerRunsSigValidatedPreflight(t *testing.T) {
 	outer.SigningPubKey = ""
 	outer.SetFlags(batch.BatchFlagAllOrNothing)
 	outer.AddInnerTransaction(credentialIDsPresent)
+	outer.AddInnerTransaction(second)
+
+	engine := dedupEngine(amendment.AllSupportedRules())
+	if got := engine.preflight(outer); got != ter.TemINVALID_INNER_BATCH {
+		t.Fatalf("preflight = %v, want TemINVALID_INNER_BATCH", got)
+	}
+}
+
+func TestBatchInnerRunsUniversalPreflight(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+
+	oversized := check.NewCheckCreate(
+		account,
+		account,
+		txcore.NewXRPAmount(int64(drops.MaxDrops)+1),
+	)
+	oversized.Fee = "0"
+	oversized.SigningPubKey = ""
+	oversized.SetSequence(2)
+	oversized.SetFlags(txcore.TfInnerBatchTxn)
+
+	second := payment.NewPayment(account, account, txcore.NewXRPAmount(1))
+	second.Fee = "0"
+	second.SigningPubKey = ""
+	second.SetSequence(3)
+	second.SetFlags(txcore.TfInnerBatchTxn)
+
+	outer := batch.NewBatch(account)
+	outer.Fee = "40"
+	outer.SetSequence(1)
+	outer.SigningPubKey = ""
+	outer.SetFlags(batch.BatchFlagAllOrNothing)
+	outer.AddInnerTransaction(oversized)
 	outer.AddInnerTransaction(second)
 
 	engine := dedupEngine(amendment.AllSupportedRules())
