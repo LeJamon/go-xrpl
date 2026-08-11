@@ -79,12 +79,25 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	}
 
 	var marker *types.AccountTxMarker
+	markerFromDelegate := false
 	if raw, ok := fields["marker"]; ok {
 		var markerErr *types.RpcError
-		marker, markerErr = parseAccountTxMarker(raw)
+		marker, markerFromDelegate, markerErr = parseAccountTxMarker(raw)
 		if markerErr != nil {
 			return nil, markerErr
 		}
+	}
+
+	var delegate *types.AccountTxDelegateFilter
+	if raw, ok := fields["delegate"]; ok {
+		var delegateErr *types.RpcError
+		delegate, delegateErr = parseAccountTxDelegate(raw)
+		if delegateErr != nil {
+			return nil, delegateErr
+		}
+	}
+	if marker != nil && markerFromDelegate != (delegate != nil) {
+		return nil, types.RpcErrorInvalidParams("Do not mix delegate and non-delegate pagination markers in account_tx; repeat the same `delegate` object when using a delegate marker.")
 	}
 
 	ledgerIndexMin, ledgerIndexMax, ledgerErr := resolveAccountTxLedgerSelection(ctx, ledgerSelection)
@@ -93,15 +106,34 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	}
 
 	setLoadMedium(ctx)
-	result, err := ctx.Services.Ledger.GetAccountTransactions(
-		ctx.Context,
-		account,
-		ledgerIndexMin,
-		ledgerIndexMax,
-		limit,
-		marker,
-		forward,
-	)
+	var result *types.AccountTxResult
+	var err error
+	if delegate == nil {
+		result, err = ctx.Services.Ledger.GetAccountTransactions(
+			ctx.Context,
+			account,
+			ledgerIndexMin,
+			ledgerIndexMax,
+			limit,
+			marker,
+			forward,
+		)
+	} else {
+		querier, ok := ctx.Services.Ledger.(types.AccountTxDelegateQuerier)
+		if !ok {
+			return nil, types.RpcErrorInternal()
+		}
+		result, err = querier.GetAccountTransactionsWithDelegate(
+			ctx.Context,
+			account,
+			ledgerIndexMin,
+			ledgerIndexMax,
+			limit,
+			marker,
+			forward,
+			delegate,
+		)
+	}
 	if err != nil {
 		if errors.Is(err, svcerr.ErrTxHistoryUnavailable) {
 			return nil, types.RpcErrorNotEnabled("")
@@ -253,10 +285,14 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	}
 
 	if result.Marker != nil {
-		response["marker"] = map[string]any{
+		responseMarker := map[string]any{
 			"ledger": result.Marker.LedgerSeq,
 			"seq":    result.Marker.TxnSeq,
 		}
+		if delegate != nil {
+			responseMarker["delegate"] = true
+		}
+		response["marker"] = responseMarker
 	}
 
 	return response, nil
@@ -491,32 +527,70 @@ func accountTxLedgerIndex(raw json.RawMessage) (types.LedgerIndex, *types.RpcErr
 	}
 }
 
-func parseAccountTxMarker(raw json.RawMessage) (*types.AccountTxMarker, *types.RpcError) {
+func parseAccountTxMarker(raw json.RawMessage) (*types.AccountTxMarker, bool, *types.RpcError) {
 	invalid := func() *types.RpcError {
 		return types.RpcErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
 	}
 	value, err := decodeAccountTxValue(raw)
 	if err != nil {
-		return nil, invalid()
+		return nil, false, invalid()
 	}
 	markerMap, ok := value.(map[string]any)
 	if !ok {
-		return nil, invalid()
+		return nil, false, invalid()
 	}
 	ledgerValue, hasLedger := markerMap["ledger"]
 	seqValue, hasSeq := markerMap["seq"]
 	if !hasLedger || !hasSeq {
-		return nil, invalid()
+		return nil, false, invalid()
 	}
 	ledger, ok := accountTxUint32(ledgerValue)
 	if !ok {
-		return nil, invalid()
+		return nil, false, invalid()
 	}
 	seq, ok := accountTxUint32(seqValue)
 	if !ok {
-		return nil, invalid()
+		return nil, false, invalid()
 	}
-	return &types.AccountTxMarker{LedgerSeq: ledger, TxnSeq: seq}, nil
+	fromDelegate, _ := markerMap["delegate"].(bool)
+	return &types.AccountTxMarker{LedgerSeq: ledger, TxnSeq: seq}, fromDelegate, nil
+}
+
+func parseAccountTxDelegate(raw json.RawMessage) (*types.AccountTxDelegateFilter, *types.RpcError) {
+	value, err := decodeAccountTxValue(raw)
+	if err != nil {
+		return nil, types.RpcErrorInvalidField("delegate")
+	}
+	delegate, ok := value.(map[string]any)
+	if !ok {
+		return nil, types.RpcErrorInvalidField("delegate")
+	}
+	filterValue, ok := delegate["delegate_filter"].(string)
+	if !ok {
+		return nil, types.RpcErrorInvalidField("delegate_filter")
+	}
+
+	result := &types.AccountTxDelegateFilter{}
+	switch filterValue {
+	case "actor":
+		result.Role = types.AccountTxDelegateActor
+	case "authorizer":
+		result.Role = types.AccountTxDelegateAuthorizer
+	default:
+		return nil, types.RpcErrorInvalidField("delegate_filter")
+	}
+
+	if counterpartyValue, present := delegate["counter_party"]; present {
+		counterparty, ok := counterpartyValue.(string)
+		if !ok {
+			return nil, types.RpcErrorInvalidField("counter_party")
+		}
+		if !types.IsValidClassicAddress(counterparty) {
+			return nil, types.RpcErrorActMalformed("Account malformed.")
+		}
+		result.Counterparty = counterparty
+	}
+	return result, nil
 }
 
 func accountTxUint32(value any) (uint32, bool) {

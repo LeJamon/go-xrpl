@@ -95,8 +95,12 @@ func (r *accountTransactionRepository) queryAccountTxsPage(ctx context.Context, 
 	if options.Marker != nil {
 		args = append(args, options.Marker.LedgerSeq, options.Marker.TxnSeq)
 		seqArg, txnArg := len(args)-1, len(args)
+		sequenceCmp := markerCmp
+		if options.Delegate != nil {
+			sequenceCmp += "="
+		}
 		query += fmt.Sprintf(" AND (at.ledger_seq %s $%d OR (at.ledger_seq = $%d AND at.txn_seq %s $%d))",
-			markerCmp, seqArg, seqArg, markerCmp, txnArg)
+			markerCmp, seqArg, seqArg, sequenceCmp, txnArg)
 	}
 
 	query += " ORDER BY at.ledger_seq " + orderDir + ", at.txn_seq " + orderDir
@@ -116,28 +120,7 @@ func (r *accountTransactionRepository) queryAccountTxsPage(ctx context.Context, 
 		return nil, err
 	}
 
-	result := &relationaldb.AccountTxResult{
-		LedgerRange: relationaldb.LedgerRange{
-			Min: options.MinLedger,
-			Max: options.MaxLedger,
-		},
-		Limit: options.Limit,
-	}
-
-	// Check if there are more results
-	if uint64(len(transactions)) > uint64(options.Limit) {
-		transactions = transactions[:len(transactions)-1]
-		if len(transactions) > 0 {
-			lastTx := transactions[len(transactions)-1]
-			result.Marker = &relationaldb.AccountTxMarker{
-				LedgerSeq: lastTx.LedgerSeq,
-				TxnSeq:    lastTx.TxnSeq,
-			}
-		}
-	}
-
-	result.Transactions = transactions
-	return result, nil
+	return relationaldb.BuildAccountTxPage(opName, options, transactions)
 }
 
 // GetOldestAccountTxsPage returns a marker-paginated page of an account's

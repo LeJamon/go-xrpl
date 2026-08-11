@@ -1001,6 +1001,16 @@ func (s *Service) UseTxTables() bool {
 // GetAccountTransactions retrieves transaction history for an account.
 // The supplied ctx is forwarded to the relational DB query.
 func (s *Service) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *relationaldb.AccountTxMarker, forward bool) (*AccountTxResult, error) {
+	return s.getAccountTransactions(ctx, account, ledgerMin, ledgerMax, limit, marker, forward, nil)
+}
+
+// GetAccountTransactionsWithDelegate retrieves delegated transaction history
+// for an account.
+func (s *Service) GetAccountTransactionsWithDelegate(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *relationaldb.AccountTxMarker, forward bool, delegate *relationaldb.AccountTxDelegateFilter) (*AccountTxResult, error) {
+	return s.getAccountTransactions(ctx, account, ledgerMin, ledgerMax, limit, marker, forward, delegate)
+}
+
+func (s *Service) getAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *relationaldb.AccountTxMarker, forward bool, delegate *relationaldb.AccountTxDelegateFilter) (*AccountTxResult, error) {
 	// Snapshot the validated-seq bound under the lock, then release it before
 	// the DB pages: relationalDB is immutable and the query needs no other
 	// service state, so holding s.mu across the I/O would block consensus close
@@ -1059,6 +1069,7 @@ func (s *Service) GetAccountTransactions(ctx context.Context, account string, le
 		MaxLedger: maxLedger,
 		Marker:    marker,
 		Limit:     limit,
+		Delegate:  delegate,
 	}
 
 	var txResult *relationaldb.AccountTxResult

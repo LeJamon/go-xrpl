@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
@@ -258,6 +260,9 @@ func Run(t *testing.T, factory Factory) {
 	})
 	t.Run("account transaction repository", func(t *testing.T) {
 		runAccountTransactionRepository(t, factory)
+	})
+	t.Run("delegate account transaction repository", func(t *testing.T) {
+		runDelegateAccountTransactionRepository(t, factory)
 	})
 	t.Run("validation repository", func(t *testing.T) {
 		runValidationRepository(t, factory)
@@ -581,6 +586,148 @@ func runAccountTransactionRepository(t *testing.T, factory Factory) {
 	}
 }
 
+func runDelegateAccountTransactionRepository(t *testing.T, factory Factory) {
+	t.Helper()
+	ctx := context.Background()
+	manager := factory(t)
+	repository := manager.AccountTransaction()
+	transactionRepository := manager.Transaction()
+
+	ownerAddress, owner := encodedAccount(t, 1)
+	delegateAddress, delegate := encodedAccount(t, 2)
+	otherDelegateAddress, otherDelegate := encodedAccount(t, 3)
+	transactions := []relationaldb.TransactionInfo{
+		accountTransaction(t, 60, 20, 1, ownerAddress, ""),
+		accountTransaction(t, 61, 21, 1, ownerAddress, delegateAddress),
+		accountTransaction(t, 62, 22, 1, ownerAddress, ""),
+		accountTransaction(t, 63, 23, 1, ownerAddress, delegateAddress),
+		accountTransaction(t, 64, 24, 1, ownerAddress, otherDelegateAddress),
+	}
+	for index, transaction := range transactions {
+		if err := transactionRepository.SaveTransaction(ctx, transaction); err != nil {
+			t.Fatal(err)
+		}
+		if err := repository.SaveAccountTransaction(ctx, owner, transaction); err != nil {
+			t.Fatal(err)
+		}
+		if index == 1 || index == 3 {
+			if err := repository.SaveAccountTransaction(ctx, delegate, transaction); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if index == 4 {
+			if err := repository.SaveAccountTransaction(ctx, otherDelegate, transaction); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	actorOptions := relationaldb.AccountTxPageOptions{
+		Account: owner,
+		Limit:   2,
+		Delegate: &relationaldb.AccountTxDelegateFilter{
+			Role:         relationaldb.AccountTxDelegateActor,
+			Counterparty: &delegate,
+		},
+	}
+	first, err := repository.GetOldestAccountTxsPage(ctx, actorOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAccountPage(t, first, actorOptions, transactions[1])
+	assertMarker(t, first.Marker, 22, 1)
+	actorOptions.Marker = first.Marker
+	second, err := repository.GetOldestAccountTxsPage(ctx, actorOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAccountPage(t, second, actorOptions, transactions[3])
+	assertMarker(t, second.Marker, 24, 1)
+	actorOptions.Marker = second.Marker
+	third, err := repository.GetOldestAccountTxsPage(ctx, actorOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAccountPage(t, third, actorOptions)
+	if third.Marker != nil {
+		t.Fatalf("last filtered page marker = %+v, want nil", third.Marker)
+	}
+
+	authorizerOptions := relationaldb.AccountTxPageOptions{
+		Account:  delegate,
+		Limit:    1,
+		Delegate: &relationaldb.AccountTxDelegateFilter{Role: relationaldb.AccountTxDelegateAuthorizer},
+	}
+	first, err = repository.GetOldestAccountTxsPage(ctx, authorizerOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAccountPage(t, first, authorizerOptions, transactions[1])
+	assertMarker(t, first.Marker, 21, 1)
+	authorizerOptions.Marker = first.Marker
+	second, err = repository.GetOldestAccountTxsPage(ctx, authorizerOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAccountPage(t, second, authorizerOptions, transactions[3])
+	assertMarker(t, second.Marker, 23, 1)
+	authorizerOptions.Marker = second.Marker
+	third, err = repository.GetOldestAccountTxsPage(ctx, authorizerOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAccountPage(t, third, authorizerOptions)
+	if third.Marker != nil {
+		t.Fatalf("last authorizer page marker = %+v, want nil", third.Marker)
+	}
+
+	reverseOptions := relationaldb.AccountTxPageOptions{
+		Account:  owner,
+		Limit:    2,
+		Delegate: &relationaldb.AccountTxDelegateFilter{Role: relationaldb.AccountTxDelegateActor},
+	}
+	reverse, err := repository.GetNewestAccountTxsPage(ctx, reverseOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAccountPage(t, reverse, reverseOptions, transactions[4], transactions[3])
+	assertMarker(t, reverse.Marker, 22, 1)
+	reverseOptions.Marker = reverse.Marker
+	reverse, err = repository.GetNewestAccountTxsPage(ctx, reverseOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAccountPage(t, reverse, reverseOptions, transactions[1])
+	assertMarker(t, reverse.Marker, 20, 1)
+	reverseOptions.Marker = reverse.Marker
+	reverse, err = repository.GetNewestAccountTxsPage(ctx, reverseOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAccountPage(t, reverse, reverseOptions)
+	if reverse.Marker != nil {
+		t.Fatalf("last reverse page marker = %+v, want nil", reverse.Marker)
+	}
+
+	corrupt := transactionAt(65, 25, 1)
+	if err := transactionRepository.SaveTransaction(ctx, corrupt); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SaveAccountTransaction(ctx, owner, corrupt); err != nil {
+		t.Fatal(err)
+	}
+	_, err = repository.GetOldestAccountTxsPage(ctx, relationaldb.AccountTxPageOptions{
+		Account:   owner,
+		MinLedger: 25,
+		MaxLedger: 25,
+		Limit:     1,
+		Delegate:  &relationaldb.AccountTxDelegateFilter{Role: relationaldb.AccountTxDelegateActor},
+	})
+	if !errors.Is(err, relationaldb.ErrInvalidData) {
+		t.Fatalf("corrupt delegated transaction error = %v, want ErrInvalidData", err)
+	}
+}
+
 func runValidationRepository(t *testing.T, factory Factory) {
 	t.Helper()
 	ctx := context.Background()
@@ -835,6 +982,37 @@ func accountID(value byte) relationaldb.AccountID {
 	var result relationaldb.AccountID
 	result[0] = value
 	result[len(result)-1] = value
+	return result
+}
+
+func encodedAccount(t *testing.T, value byte) (string, relationaldb.AccountID) {
+	t.Helper()
+	account := accountID(value)
+	address, err := addresscodec.EncodeAccountIDToClassicAddress(account[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return address, account
+}
+
+func accountTransaction(t *testing.T, hashByte byte, ledgerSeq relationaldb.LedgerIndex, txnSeq uint32, account, delegate string) relationaldb.TransactionInfo {
+	t.Helper()
+	transaction := map[string]any{
+		"TransactionType": "AccountSet",
+		"Account":         account,
+		"Fee":             "10",
+		"Sequence":        uint32(hashByte),
+		"SigningPubKey":   "",
+	}
+	if delegate != "" {
+		transaction["Delegate"] = delegate
+	}
+	raw, err := binarycodec.EncodeBytes(transaction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := transactionAt(hashByte, ledgerSeq, txnSeq)
+	result.RawTxn = raw
 	return result
 }
 

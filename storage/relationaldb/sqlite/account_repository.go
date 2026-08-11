@@ -55,8 +55,11 @@ func (r *accountTransactionRepository) queryAccountTxsPage(ctx context.Context, 
 	}
 
 	if options.Marker != nil {
-		// For ASC: > marker; for DESC: < marker
-		query += " AND (at.ledger_seq " + markerCmp + " ? OR (at.ledger_seq = ? AND at.txn_seq " + markerCmp + " ?))"
+		sequenceCmp := markerCmp
+		if options.Delegate != nil {
+			sequenceCmp += "="
+		}
+		query += " AND (at.ledger_seq " + markerCmp + " ? OR (at.ledger_seq = ? AND at.txn_seq " + sequenceCmp + " ?))"
 		args = append(args, options.Marker.LedgerSeq, options.Marker.LedgerSeq, options.Marker.TxnSeq)
 	}
 
@@ -92,27 +95,7 @@ func (r *accountTransactionRepository) queryAccountTxsPage(ctx context.Context, 
 		return nil, relationaldb.NewQueryError(opName, "error iterating rows", err)
 	}
 
-	result := &relationaldb.AccountTxResult{
-		LedgerRange: relationaldb.LedgerRange{
-			Min: options.MinLedger,
-			Max: options.MaxLedger,
-		},
-		Limit: options.Limit,
-	}
-
-	if uint64(len(transactions)) > uint64(options.Limit) {
-		transactions = transactions[:len(transactions)-1]
-		if len(transactions) > 0 {
-			lastTx := transactions[len(transactions)-1]
-			result.Marker = &relationaldb.AccountTxMarker{
-				LedgerSeq: lastTx.LedgerSeq,
-				TxnSeq:    lastTx.TxnSeq,
-			}
-		}
-	}
-
-	result.Transactions = transactions
-	return result, nil
+	return relationaldb.BuildAccountTxPage(opName, options, transactions)
 }
 
 // GetOldestAccountTxsPage returns a marker-paginated page of an account's
