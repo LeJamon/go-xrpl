@@ -229,8 +229,8 @@ func addServerDiagnostics(info map[string]any, services *types.ServiceGraph) {
 			"delivery_disconnects":        strconv.FormatUint(metrics.DeliveryDisconnects, 10),
 		}
 	}
-	if services != nil && services.FastSyncMetrics != nil {
-		metrics := services.FastSyncMetrics()
+	if services != nil && services.FastSyncMetrics() != nil {
+		metrics := services.FastSyncMetrics()()
 		counters["fast_sync"] = map[string]any{
 			"completion_recheck_accepted":                    strconv.FormatUint(metrics.CompletionRecheckAccepted, 10),
 			"completion_recheck_rejected_no_evidence":        strconv.FormatUint(metrics.CompletionRecheckRejectedNoEvidence, 10),

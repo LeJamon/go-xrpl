@@ -2056,6 +2056,13 @@ func (g *ServiceGraph) StateAccounting() func() StateAccountingSnapshot {
 	return nil
 }
 
+func (g *ServiceGraph) FastSyncMetrics() func() FastSyncMetrics {
+	if s := g.services(); s != nil {
+		return s.FastSyncMetrics
+	}
+	return nil
+}
+
 func (g *ServiceGraph) CloseTimeOffset() func() time.Duration {
 	if s := g.services(); s != nil {
 		return s.CloseTimeOffset
