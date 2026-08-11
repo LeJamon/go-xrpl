@@ -181,7 +181,6 @@ type ParsedTx struct {
 	// Transaction is the parsed transaction
 	Transaction txcore.Transaction
 
-	// RawBlob is the canonical binary blob.
 	RawBlob []byte
 }
 
