@@ -23,7 +23,7 @@ func CommonFields() []FormatField {
 // formats maps each ledger-entry type NAME (as in definitions
 // LedgerEntryTypes, e.g. "AccountRoot","DirectoryNode") to its UNIQUE fields
 // (common fields excluded), in ledger_entries.macro order.
-// Transcribed from rippled 3.2.0 ledger_entries.macro.
+// Transcribed from rippled's ledger_entries.macro.
 var formats = map[string][]FormatField{
 	"NFTokenOffer": {
 		{"Owner", 0},

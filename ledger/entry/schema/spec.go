@@ -61,7 +61,7 @@ type Field struct {
 	Meta Meta
 
 	// Style controls serialization presence and fresh-entry validation. Every
-	// field is annotated explicitly from rippled's 3.2.0 ledger template.
+	// field is annotated explicitly from rippled's ledger template.
 	Style Style
 
 	// DeferredRequired marks a required threading field whose default is
