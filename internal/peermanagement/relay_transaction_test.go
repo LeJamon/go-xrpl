@@ -87,6 +87,29 @@ func TestRelayTransaction_BelowMinRelaysToAll(t *testing.T) {
 	assert.Equal(t, uint64(0), o.txm.notEnabled.accum)
 }
 
+func TestRelayTransactionSkippingMultiplePeers(t *testing.T) {
+	ident, err := NewIdentity()
+	require.NoError(t, err)
+
+	o := &Overlay{
+		cfg:   Config{EnableTxReduceRelay: true, TxReduceRelayMinPeers: 20, TxRelayPercentage: 25},
+		peers: make(map[PeerID]*Peer),
+	}
+	for id := PeerID(1); id <= 4; id++ {
+		o.peers[id] = relayTestPeer(t, ident, id, true)
+	}
+
+	o.RelayTransactionSkipping(map[PeerID]struct{}{1: {}, 3: {}}, relayTestFrame(t))
+
+	assert.False(t, gotFrame(o.peers[1]))
+	assert.True(t, gotFrame(o.peers[2]))
+	assert.False(t, gotFrame(o.peers[3]))
+	assert.True(t, gotFrame(o.peers[4]))
+	assert.Equal(t, uint64(4), o.txm.selected.accum)
+	assert.Equal(t, uint64(2), o.txm.suppressed.accum)
+	assert.Equal(t, uint64(0), o.txm.notEnabled.accum)
+}
+
 // TestRelayTransaction_ReducePathSelectsSubset pins the reduce-relay
 // selection (OverlayImpl.cpp:1261-1293): every disabled peer is relayed to in
 // full, plus enabledTarget enabled peers; the rest are left for the

@@ -390,7 +390,7 @@ func TestRouterDropsStandaloneBatchInnerTransaction(t *testing.T) {
 	require.Equal(t, "inner batch txn", dispatch.chargeContext)
 	require.False(t, dispatch.relayed)
 	assert.False(t, adaptorHasTx(t, a, consensus.TxID(txHash)))
-	shouldProcess, bad := router.txSeen.claim(txHash)
+	shouldProcess, bad := router.txSeen.claim(txHash, 0)
 	require.True(t, shouldProcess)
 	require.False(t, bad)
 }

@@ -658,7 +658,7 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 	}
 	admittedBad := false
 	if pendingErr == nil && r.txSeen != nil {
-		shouldProcess, bad := r.txSeen.claim(pending.Hash)
+		shouldProcess, bad := r.txSeen.claim(pending.Hash, uint64(msg.PeerID))
 		if !shouldProcess {
 			if bad {
 				dispatch.charge = resource.FeeUselessData()
@@ -726,7 +726,7 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 			"blob_size", len(canonicalBlob),
 			"status", txMsg.Status,
 		)
-		r.relayTransaction(msg.PeerID, canonicalBlob, outcome.Queued)
+		r.relayTransaction(r.transactionRelaySkip(pending.Hash, msg.PeerID), canonicalBlob, outcome.Queued)
 		dispatch.relayed = true
 	} else {
 		r.logger.Debug("inbound tx rejected by pending pool",
@@ -743,7 +743,7 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 }
 
 // relayTransaction rebroadcasts an accepted peer-originated TMTransaction,
-// excluding the originating peer.
+// excluding peers known to already hold it.
 //
 // The outbound wire shape: status normalized to tsCURRENT (the inbound
 // peer's claimed status is informational only) and receivetimestamp
@@ -751,14 +751,22 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 //
 // Overlay.RelayTransaction applies reduce-relay peer selection: the full
 // frame goes to a subset of peers and the rest learn of the tx via the
-// TMHaveTransactions announce. We don't consult a separate suppression
-// set for the multi-hop case because de-dup happens implicitly via
-// openledger.Submit's view.TxExists pre-filter: a duplicate arrival from
-// another peer classifies as ResultFailure and the relay gate above never
-// fires. Excluding the origin is the minimum correctness boundary —
-// without it the originator would receive its own packet back and either
-// re-charge us bandwidth or, in a 2-peer cycle, oscillate indefinitely.
-func (r *Router) relayTransaction(except peermanagement.PeerID, blob []byte, deferred bool) {
+// TMHaveTransactions announce.
+func (r *Router) transactionRelaySkip(
+	hash [32]byte,
+	origin peermanagement.PeerID,
+) map[peermanagement.PeerID]struct{} {
+	toSkip := map[peermanagement.PeerID]struct{}{origin: {}}
+	if r.txSeen == nil {
+		return toSkip
+	}
+	for peerID := range r.txSeen.releasePeers(hash) {
+		toSkip[peermanagement.PeerID(peerID)] = struct{}{}
+	}
+	return toSkip
+}
+
+func (r *Router) relayTransaction(toSkip map[peermanagement.PeerID]struct{}, blob []byte, deferred bool) {
 	if r.overlay == nil {
 		return
 	}
@@ -771,7 +779,7 @@ func (r *Router) relayTransaction(except peermanagement.PeerID, blob []byte, def
 	// Reduce-relay peer selection derives the transaction ID from the wire
 	// frame itself. If the frame cannot be decoded, the overlay falls back to
 	// full relay rather than announcing an unfulfillable hash.
-	r.overlay.RelayTransaction(except, frame)
+	r.overlay.RelayTransactionSkipping(toSkip, frame)
 }
 
 func relayTransactionMessage(blob []byte, deferred bool) *message.Transaction {

@@ -27,14 +27,15 @@ func peerTxReduceRelayEnabled(p *Peer) bool {
 // the feature plus a TxRelayPercentage share of the enabled peers; the
 // remaining enabled peers learn of the transaction via their per-peer
 // TMHaveTransactions queue, drained by the periodic sendTxQueueAnnounce tick.
-//
-// except is the originating peer: go-xrpl's single-element toSkip. rippled also
-// skips peers a HashRouter marks as already holding the tx, which go-xrpl does
-// not track (see router.relayTransaction); suppressed is therefore reported as
-// the single origin peer.
 func (o *Overlay) RelayTransaction(except PeerID, frame []byte) {
+	o.RelayTransactionSkipping(map[PeerID]struct{}{except: {}}, frame)
+}
+
+// RelayTransactionSkipping relays a transaction while excluding every peer
+// known to already hold it.
+func (o *Overlay) RelayTransactionSkipping(toSkip map[PeerID]struct{}, frame []byte) {
 	hash, ok := transactionHashFromFrame(frame)
-	o.relayTransaction(except, hash, ok, frame)
+	o.relayTransaction(toSkip, hash, ok, frame)
 }
 
 // transactionHashFromFrame extracts the canonical transaction blob from a
@@ -62,7 +63,7 @@ func transactionHashFromFrame(frame []byte) ([32]byte, bool) {
 	return sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), txn.RawTransaction), true
 }
 
-func (o *Overlay) relayTransaction(except PeerID, hash [32]byte, hashOK bool, frame []byte) {
+func (o *Overlay) relayTransaction(toSkip map[PeerID]struct{}, hash [32]byte, hashOK bool, frame []byte) {
 	// getActivePeers (OverlayImpl.cpp:1062-1094): total counts every active
 	// peer; disabled counts peers without the feature; candidates are the
 	// peers not in toSkip; enabledInSkip counts skipped peers that have the
@@ -80,7 +81,7 @@ func (o *Overlay) relayTransaction(except PeerID, hash [32]byte, hashOK bool, fr
 		if !enabled {
 			disabled++
 		}
-		if id == except {
+		if _, skipped := toSkip[id]; skipped {
 			if enabled {
 				enabledInSkip++
 			}
@@ -99,7 +100,7 @@ func (o *Overlay) relayTransaction(except PeerID, hash [32]byte, hashOK bool, fr
 		return err == nil
 	}
 
-	const suppressed = 1 // go-xrpl's toSkip is the single originating peer
+	suppressed := uint64(len(toSkip))
 
 	minPeers := uint64(o.cfg.TxReduceRelayMinPeers)
 	if minPeers == 0 {

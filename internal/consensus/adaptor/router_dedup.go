@@ -123,6 +123,7 @@ type transactionSuppressionEntry struct {
 	processedAt time.Time
 	touchedAt   time.Time
 	bad         bool
+	peers       map[uint64]struct{}
 	order       *list.Element
 }
 
@@ -140,12 +141,13 @@ func newTransactionSuppression(ttl time.Duration, maxSize int) *transactionSuppr
 
 // claim atomically reserves the expensive ingress processing for one worker.
 // Duplicates refresh cache retention but do not extend the process interval.
-func (s *transactionSuppression) claim(hash [32]byte) (shouldProcess, bad bool) {
+func (s *transactionSuppression) claim(hash [32]byte, peerID uint64) (shouldProcess, bad bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
 	s.evictExpiredLocked(now)
 	if entry, ok := s.entries[hash]; ok {
+		addTransactionPeer(entry, peerID)
 		entry.touchedAt = now
 		s.order.MoveToBack(entry.order)
 		if now.Sub(entry.processedAt) < transactionProcessInterval {
@@ -155,12 +157,35 @@ func (s *transactionSuppression) claim(hash [32]byte) (shouldProcess, bad bool) 
 		return true, entry.bad
 	}
 	entry := &transactionSuppressionEntry{processedAt: now, touchedAt: now}
+	addTransactionPeer(entry, peerID)
 	entry.order = s.order.PushBack(hash)
 	s.entries[hash] = entry
 	for len(s.entries) > s.maxSize {
 		s.removeOldestLocked()
 	}
 	return true, false
+}
+
+func addTransactionPeer(entry *transactionSuppressionEntry, peerID uint64) {
+	if peerID == 0 {
+		return
+	}
+	if entry.peers == nil {
+		entry.peers = make(map[uint64]struct{})
+	}
+	entry.peers[peerID] = struct{}{}
+}
+
+func (s *transactionSuppression) releasePeers(hash [32]byte) map[uint64]struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry := s.entries[hash]
+	if entry == nil {
+		return nil
+	}
+	peers := entry.peers
+	entry.peers = nil
+	return peers
 }
 
 func (s *transactionSuppression) markBad(hash [32]byte) {
