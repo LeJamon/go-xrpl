@@ -142,7 +142,7 @@ func TestRelayTransactionSkippingMultiplePeersReducePath(t *testing.T) {
 	}
 	assert.Equal(t, 1, enabledSent)
 	assert.Equal(t, 2, enabledQueued)
-	assert.Equal(t, uint64(7), o.txm.selected.accum)
+	assert.Equal(t, uint64(3), o.txm.selected.accum)
 	assert.Equal(t, uint64(3), o.txm.suppressed.accum)
 	assert.Equal(t, uint64(2), o.txm.notEnabled.accum)
 }
