@@ -121,6 +121,7 @@ func (o *Overlay) connectReservedContext(connectCtx context.Context, addr string
 	peer.SetManifestMessages(o.manifestMessages)
 	peer.SetInboundReadBudget(o.inboundReadBudget)
 	peer.SetManifestSpoolDir(o.manifestSpoolDir)
+	peer.SetManifestPayloadLimit(o.cfg.MaxManifestPayload)
 	peer.handshakeCfg = o.handshakeConfigFor()
 	peer.onRedirect = func(peerIPs []string) {
 		o.ingestRedirectEndpoints(peerIPs, peerID)

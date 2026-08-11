@@ -6,6 +6,28 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
+const (
+	MaxManifestBytes = 358
+
+	ManifestFramingBytes = 8
+
+	DefaultMaxTrustedManifestCount = 300
+
+	DefaultMaxUntrustedManifestCount = 300
+
+	MaxConfiguredManifestCount = 1000
+
+	DefaultMaxManifestPayload = (DefaultMaxTrustedManifestCount + DefaultMaxUntrustedManifestCount) *
+		(MaxManifestBytes + ManifestFramingBytes)
+
+	MaxConfiguredManifestPayload = 2 * MaxConfiguredManifestCount *
+		(MaxManifestBytes + ManifestFramingBytes)
+)
+
+func MaximumManifestsMessageSize(trustedCount, untrustedCount int) int {
+	return (trustedCount + untrustedCount) * (MaxManifestBytes + ManifestFramingBytes)
+}
+
 // WalkManifests validates a TMManifests payload before visiting its entries.
 // The returned byte slices alias payload and are only valid during the call.
 func WalkManifests(payload []byte, visit func([]byte)) (int, error) {

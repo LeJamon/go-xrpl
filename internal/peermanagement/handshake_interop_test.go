@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	rippledInteropImage  = "xrpllabsofficial/xrpld:3.2.0"
-	rippledInteropConfig = `[server]
+	rippledInteropVersion = "3.3.0"
+	rippledInteropImage   = "xrpllabsofficial/xrpld:" + rippledInteropVersion
+	rippledInteropConfig  = `[server]
 port_rpc_admin_local
 port_peer
 
@@ -67,10 +68,13 @@ tiny
 `
 )
 
-func TestHandshake_Interop_RippledDocker(t *testing.T) {
-	if os.Getenv("PEERTLS_DOCKER_INTEROP") == "" {
-		t.Skip("PEERTLS_DOCKER_INTEROP not set")
-	}
+type rippledInteropNode struct {
+	cid  string
+	addr string
+}
+
+func startRippledInterop(t *testing.T) *rippledInteropNode {
+	t.Helper()
 
 	cid := startRippledInteropContainer(t, rippledInteropConfig, "-p", "0:51235")
 
@@ -79,12 +83,21 @@ func TestHandshake_Interop_RippledDocker(t *testing.T) {
 	host, port := parseDockerPort(t, string(portOutput))
 	addr := net.JoinHostPort(host, port)
 	waitForRippledPeerPort(t, cid, addr)
+	return &rippledInteropNode{cid: cid, addr: addr}
+}
+
+func TestHandshake_Interop_RippledDocker(t *testing.T) {
+	if os.Getenv("PEERTLS_DOCKER_INTEROP") == "" {
+		t.Skip("PEERTLS_DOCKER_INTEROP not set")
+	}
+
+	node := startRippledInterop(t)
 
 	id, err := NewIdentity()
 	require.NoError(t, err)
 	certPEM, keyPEM, err := id.TLSCertificatePEM()
 	require.NoError(t, err)
-	endpoint, err := ParseEndpoint(addr)
+	endpoint, err := ParseEndpoint(node.addr)
 	require.NoError(t, err)
 
 	peer := NewPeer(1, endpoint, false, id, make(chan Event, 1))
@@ -101,7 +114,7 @@ func TestHandshake_Interop_RippledDocker(t *testing.T) {
 	assert.Equal(t, PeerStateConnected, peer.State())
 	assert.NotNil(t, peer.RemotePublicKey())
 	assert.Equal(t, "1", peer.Info().NetworkID)
-	assert.Contains(t, peer.Info().Version, "3.2.0")
+	assert.Contains(t, peer.Info().Version, rippledInteropVersion)
 }
 
 func TestHandshake_Interop_RippledDocker_RippledClient(t *testing.T) {
@@ -170,7 +183,7 @@ func TestHandshake_Interop_RippledDocker_RippledClient(t *testing.T) {
 		info := peer.Info()
 		assert.True(t, info.Inbound)
 		assert.Equal(t, "1", info.NetworkID)
-		assert.Contains(t, info.Version, "3.2.0")
+		assert.Contains(t, info.Version, rippledInteropVersion)
 		assert.NotEmpty(t, info.PublicKey)
 	case err := <-runDone:
 		runDone <- err

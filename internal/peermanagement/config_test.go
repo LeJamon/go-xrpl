@@ -116,3 +116,30 @@ func TestDefaultConfig_ReduceRelayCascadePreservedForExplicitOptIn(t *testing.T)
 		t.Errorf("legacy EnableReduceRelay=true did not cascade to EnableTxReduceRelay")
 	}
 }
+
+func TestManifestPayloadConfigDefaultsAndBounds(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.MaxManifestPayload != DefaultMaxManifestPayload {
+		t.Fatalf("MaxManifestPayload default = %d, want %d", cfg.MaxManifestPayload, DefaultMaxManifestPayload)
+	}
+
+	WithMaxManifestPayload(MaxConfiguredManifestPayload)(&cfg)
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("maximum configured payload rejected: %v", err)
+	}
+
+	cfg = DefaultConfig()
+	WithMaxManifestPayload(MaxConfiguredManifestPayload + 1)(&cfg)
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("payload above legal configured maximum was accepted")
+	}
+
+	cfg = DefaultConfig()
+	WithMaxManifestPayload(0)(&cfg)
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("zero payload did not restore default: %v", err)
+	}
+	if cfg.MaxManifestPayload != DefaultMaxManifestPayload {
+		t.Fatalf("zero payload normalized to %d, want %d", cfg.MaxManifestPayload, DefaultMaxManifestPayload)
+	}
+}

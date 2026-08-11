@@ -762,9 +762,6 @@ func (a *Aggregator) Tick() {
 		if sequence := a.promoteRemainingLocked(s, now); sequence != 0 {
 			promoted = append(promoted, promotion{publisher: pubKey, sequence: sequence})
 		}
-		if s.Status == StatusExpired {
-			s.Validators = nil
-		}
 	}
 	a.recomputeAndEmitLocked()
 	a.mu.Unlock()
@@ -844,6 +841,11 @@ func (a *Aggregator) computeValidatorCountsLocked(now time.Time) map[[33]byte]in
 	}
 	a.listed.Store(&listed)
 	a.listedMasters.Store(&listedMasters)
+	if a.validatorManifests != nil {
+		for master := range listedMasters {
+			a.validatorManifests.PromoteToTrusted(master)
+		}
+	}
 	return counts
 }
 

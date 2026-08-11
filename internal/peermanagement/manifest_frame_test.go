@@ -89,6 +89,7 @@ func TestOversizedManifestPeersDoNotBlockLedgerFrames(t *testing.T) {
 	for i := 1; i <= 2; i++ {
 		peer := newLatencyTestPeer(t)
 		peer.id = PeerID(i)
+		peer.SetManifestPayloadLimit(uint32(len(manifestPayload)))
 		peer.bufReader = bufio.NewReader(bytes.NewReader(
 			manifestAndLedgerFrames(t, manifestPayload, []byte{byte(i)}),
 		))
@@ -156,6 +157,7 @@ func TestSecondOversizedManifestBlocksOnlyItsPeer(t *testing.T) {
 	}
 
 	peer := newLatencyTestPeer(t)
+	peer.SetManifestPayloadLimit(uint32(len(manifestPayload)))
 	peer.bufReader = bufio.NewReader(bytes.NewReader(wire.Bytes()))
 	manifestMessages := make(chan *InboundMessage, 2)
 	acquisitionEvents := make(chan Event, 2)

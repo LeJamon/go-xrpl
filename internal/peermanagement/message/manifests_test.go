@@ -22,6 +22,28 @@ func TestWalkManifestsValidatesBeforeVisiting(t *testing.T) {
 	require.Zero(t, visits)
 }
 
+func TestManifestPayloadSizeFormula(t *testing.T) {
+	require.Equal(t, 358, MaxManifestBytes)
+	require.Equal(t, 8, ManifestFramingBytes)
+	require.Equal(t, 219600, MaximumManifestsMessageSize(300, 300))
+	require.Equal(t, 732000, MaximumManifestsMessageSize(1000, 1000))
+	require.Equal(t, 219600, DefaultMaxManifestPayload)
+	require.Equal(t, 732000, MaxConfiguredManifestPayload)
+}
+
+func TestManifestsAcceptMoreThanFormer100EntryBoundary(t *testing.T) {
+	original := &Manifests{List: make([]Manifest, 101)}
+	for i := range original.List {
+		original.List[i].STObject = []byte{byte(i)}
+	}
+
+	payload, err := Encode(original)
+	require.NoError(t, err)
+	decoded, err := Decode(TypeManifests, payload)
+	require.NoError(t, err)
+	require.Len(t, decoded.(*Manifests).List, 101)
+}
+
 func TestWalkManifestsRejectsMissingRequiredSTObjectBeforeVisiting(t *testing.T) {
 	validEntry := protowire.AppendTag(nil, 1, protowire.BytesType)
 	validEntry = protowire.AppendBytes(validEntry, []byte("manifest"))
@@ -96,23 +118,4 @@ func TestWalkManifestsMatchesDecoderKnownFieldWireErrors(t *testing.T) {
 			require.NoError(t, walkErr)
 		})
 	}
-}
-
-func TestWalkManifestsEnforcesCollectionLimitBeforeVisiting(t *testing.T) {
-	entry := protowire.AppendTag(nil, 1, protowire.BytesType)
-	entry = protowire.AppendBytes(entry, []byte("manifest"))
-	atLimit := repeatedMessageField(1, maxManifests, entry)
-
-	visits := 0
-	count, err := WalkManifests(atLimit, func([]byte) { visits++ })
-	require.NoError(t, err)
-	require.Equal(t, maxManifests, count)
-	require.Equal(t, maxManifests, visits)
-
-	overLimit := append(atLimit, repeatedMessageField(1, 1, entry)...)
-	visits = 0
-	count, err = WalkManifests(overLimit, func([]byte) { visits++ })
-	require.Zero(t, count)
-	requireWireLimit(t, err, WireLimitManifests, maxManifests, maxManifests+1)
-	require.Zero(t, visits)
 }

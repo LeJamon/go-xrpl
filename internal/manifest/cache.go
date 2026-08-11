@@ -31,6 +31,26 @@ const (
 	// BadEphemeralKey: the incoming manifest's ephemeral key is already
 	// known as either an ephemeral or master key in this cache.
 	BadEphemeralKey
+
+	// UntrustedCapacity: the incoming manifest belongs to a brand-new
+	// untrusted master and the cache's untrusted capacity is full.
+	UntrustedCapacity
+)
+
+const (
+	DefaultMaxUntrustedCount = 300
+
+	DefaultMaxTrustedCount = 300
+)
+
+// ManifestRateLimitCapPolicy controls whether ApplyManifest enforces the
+// untrusted-master capacity. Capped is intended for untrusted peer gossip;
+// configured, persisted, and already-listed manifests use Uncapped.
+type ManifestRateLimitCapPolicy uint8
+
+const (
+	Capped ManifestRateLimitCapPolicy = iota
+	Uncapped
 )
 
 // String returns a debug-friendly label for the disposition.
@@ -46,6 +66,8 @@ func (d Disposition) String() string {
 		return "bad_master_key"
 	case BadEphemeralKey:
 		return "bad_ephemeral_key"
+	case UntrustedCapacity:
+		return "untrusted_capacity"
 	default:
 		return "unknown"
 	}
@@ -73,6 +95,14 @@ type Cache struct {
 	// trusted.
 	byMaster map[[33]byte]Manifest
 
+	// untrustedMasters contains masters first accepted through a Capped
+	// application. Membership is independent of byMaster: promotion and
+	// uncapped updates free a slot without evicting the cached manifest.
+	untrustedMasters map[[33]byte]struct{}
+
+	// maxUntrustedCount is immutable for the lifetime of the cache.
+	maxUntrustedCount int
+
 	// signingToMaster maps ephemeral signing key → master key. Cleared
 	// when the master rotates (old ephemeral removed) or revokes
 	// (entry removed so lookups no longer resolve).
@@ -95,29 +125,61 @@ type acceptedEvent struct {
 	subscribers []uint64
 }
 
-// NewCache returns an empty Cache.
-func NewCache() *Cache {
+// NewCache returns an empty Cache. The optional argument is retained for
+// compatibility with callers that use the persistence-foundation constructor;
+// omission selects DefaultMaxUntrustedCount.
+func NewCache(maxUntrusted ...int) *Cache {
+	capacity := DefaultMaxUntrustedCount
+	if len(maxUntrusted) > 0 {
+		capacity = maxUntrusted[0]
+		if capacity < 0 {
+			capacity = 0
+		}
+	}
 	return &Cache{
-		byMaster:        make(map[[33]byte]Manifest),
-		signingToMaster: make(map[[33]byte][33]byte),
-		subscribers:     make(map[uint64]func(*Manifest)),
+		byMaster:          make(map[[33]byte]Manifest),
+		untrustedMasters:  make(map[[33]byte]struct{}),
+		maxUntrustedCount: capacity,
+		signingToMaster:   make(map[[33]byte][33]byte),
+		subscribers:       make(map[uint64]func(*Manifest)),
 	}
 }
 
 // ApplyManifest ingests a parsed manifest, verifies it, and — if the
 // checks pass — stores it atomically. Returns the disposition so the
 // caller can decide whether to relay (Accepted) or charge the sender
-// (Invalid / BadMasterKey / BadEphemeralKey). Stale is a no-op.
-func (c *Cache) ApplyManifest(m *Manifest) Disposition {
+// (Invalid / BadMasterKey / BadEphemeralKey). Stale and UntrustedCapacity are
+// no-ops. A call without a policy defaults to Capped for compatibility; all
+// production callers pass Capped or Uncapped explicitly.
+func (c *Cache) ApplyManifest(m *Manifest, policies ...ManifestRateLimitCapPolicy) Disposition {
 	if m == nil {
 		return Invalid
 	}
-	owned, err := Deserialize(m.serialized)
-	if err != nil {
-		return Invalid
+	policy := Capped
+	if len(policies) > 0 {
+		policy = policies[0]
 	}
+	capped := policy != Uncapped
 
 	c.applyMu.Lock()
+
+	// Check capacity using the parsed master key before deserializing or
+	// verifying a brand-new capped manifest. The write-locked path repeats this
+	// check because another writer may have filled the final slot in between.
+	c.mu.RLock()
+	_, existing := c.byMaster[m.masterKey]
+	if capped && !existing && len(c.untrustedMasters) >= c.maxUntrustedCount {
+		c.mu.RUnlock()
+		c.applyMu.Unlock()
+		return UntrustedCapacity
+	}
+	c.mu.RUnlock()
+
+	owned, err := Deserialize(m.serialized)
+	if err != nil {
+		c.applyMu.Unlock()
+		return Invalid
+	}
 
 	c.mu.RLock()
 	if existing, ok := c.byMaster[owned.masterKey]; ok && owned.sequence <= existing.sequence {
@@ -135,7 +197,7 @@ func (c *Cache) ApplyManifest(m *Manifest) Disposition {
 		return Invalid
 	}
 
-	disp := c.applyLocked(owned)
+	disp := c.applyLocked(owned, capped)
 	drain := false
 	if disp == Accepted {
 		drain = c.enqueueAccepted(owned)
@@ -147,9 +209,15 @@ func (c *Cache) ApplyManifest(m *Manifest) Disposition {
 	return disp
 }
 
-func (c *Cache) applyLocked(m *Manifest) Disposition {
+func (c *Cache) applyLocked(m *Manifest, capped bool) Disposition {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if capped {
+		if _, ok := c.byMaster[m.masterKey]; !ok && len(c.untrustedMasters) >= c.maxUntrustedCount {
+			return UntrustedCapacity
+		}
+	}
 
 	// Re-check Stale under the write lock against any direct map
 	// writer that bypassed applyMu.
@@ -182,12 +250,52 @@ func (c *Cache) applyLocked(m *Manifest) Disposition {
 	}
 
 	c.byMaster[m.masterKey] = *cloneManifest(m)
+	if !isUpdate && capped {
+		c.untrustedMasters[m.masterKey] = struct{}{}
+	} else if isUpdate && !capped {
+		delete(c.untrustedMasters, m.masterKey)
+	}
 	if !m.Revoked() {
 		c.signingToMaster[m.signingKey] = m.masterKey
 	}
 	// Advance on insert, rotation, and revocation so emitters re-encode.
 	c.seq++
 	return Accepted
+}
+
+// PromoteToTrusted removes masterKey from the untrusted capacity accounting.
+// It does not alter or evict the cached manifest and is idempotent; a later
+// de-listing never re-adds the key automatically.
+func (c *Cache) PromoteToTrusted(masterKey [33]byte) {
+	c.mu.Lock()
+	delete(c.untrustedMasters, masterKey)
+	c.mu.Unlock()
+}
+
+func (c *Cache) MaxUntrustedCount() int {
+	if c == nil {
+		return 0
+	}
+	return c.maxUntrustedCount
+}
+
+func (c *Cache) UntrustedCount() int {
+	if c == nil {
+		return 0
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.untrustedMasters)
+}
+
+func (c *Cache) IsUntrusted(masterKey [33]byte) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	_, ok := c.untrustedMasters[masterKey]
+	return ok
 }
 
 // SubscribeAccepted registers a subscriber for newly accepted manifests and

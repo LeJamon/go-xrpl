@@ -136,6 +136,9 @@ type Config struct {
 	// [max_transactions] in rippled.cfg. Non-positive falls back to
 	// DefaultMaxTransactions — the lane is always bounded.
 	MaxTransactions int
+	// MaxManifestPayload is the largest TMManifests wire or declared
+	// uncompressed payload accepted from a peer.
+	MaxManifestPayload uint32
 
 	// Features — advertised via X-Protocol-Ctl during handshake so
 	// peers know which optional protocol extensions we speak (the
@@ -230,6 +233,7 @@ func DefaultConfig() Config {
 		EventBufferSize:       DefaultEventBufferSize,
 		MessageBufferSize:     DefaultMessageBufferSize,
 		MaxTransactions:       DefaultMaxTransactions,
+		MaxManifestPayload:    DefaultMaxManifestPayload,
 		InboundRetainedBytes:  DefaultInboundRetainedBytes,
 		OutboundRetainedBytes: DefaultOutboundRetainedBytes,
 
@@ -481,6 +485,12 @@ func WithMaxTransactions(n int) Option {
 	}
 }
 
+func WithMaxManifestPayload(size uint32) Option {
+	return func(c *Config) {
+		c.MaxManifestPayload = size
+	}
+}
+
 // Validate checks the configuration for invalid values.
 func (c *Config) Validate() error {
 	if c.MaxPeers <= 0 {
@@ -531,6 +541,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Clock == nil {
 		return errors.New("Clock function cannot be nil")
+	}
+	if c.MaxManifestPayload == 0 {
+		c.MaxManifestPayload = DefaultMaxManifestPayload
+	}
+	if c.MaxManifestPayload > MaxConfiguredManifestPayload {
+		return fmt.Errorf("MaxManifestPayload cannot exceed %d bytes", MaxConfiguredManifestPayload)
 	}
 	limits := c.ResourceLimits
 	if limits.MaxEntries < 0 || limits.MaxImportedEntries < 0 ||

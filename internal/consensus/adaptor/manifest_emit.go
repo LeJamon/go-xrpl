@@ -3,8 +3,11 @@ package adaptor
 import (
 	"errors"
 	"fmt"
+	"math/rand/v2"
 
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -88,13 +91,13 @@ func encodeManifestFrames(serialized ...[]byte) ([][]byte, error) {
 	return frames, nil
 }
 
-// SendLocalManifestTo sends the aggregated TMManifests frames (every
-// cached validator manifest) to a single peer. Returns nil and emits
-// nothing when the cache is empty or no sender is wired (test-only
+// SendLocalManifestTo sends the selected, aggregated TMManifests frames
+// (all listed manifests plus the bounded unlisted subset) to a single peer.
+// It emits nothing when the cache is empty or no sender is wired (test-only
 // construction). Any encode error is logged and swallowed: emission is
 // best-effort, the next reconnect will retry on its own.
 func (r *Router) SendLocalManifestTo(peerID peermanagement.PeerID) {
-	frames := r.cachedManifestFrames()
+	frames, hashes := r.cachedManifestSnapshot()
 	if len(frames) == 0 {
 		return
 	}
@@ -108,7 +111,9 @@ func (r *Router) SendLocalManifestTo(peerID peermanagement.PeerID) {
 		// surface at debug to aid diagnosis without spamming logs on a
 		// flapping peer.
 		r.logger.Debug("send local manifest to peer failed", "error", err, "peer", peerID)
+		return
 	}
+	r.recordManifestSuppression(peerID, hashes)
 }
 
 // BroadcastLocalManifest gossips the aggregated TMManifests frames to
@@ -116,7 +121,7 @@ func (r *Router) SendLocalManifestTo(peerID peermanagement.PeerID) {
 // were queued for (0 when there's nothing to broadcast or no peers are
 // connected) so callers can decide whether to log the emission.
 func (r *Router) BroadcastLocalManifest() int {
-	frames := r.cachedManifestFrames()
+	frames, hashes := r.cachedManifestSnapshot()
 	if len(frames) == 0 {
 		return 0
 	}
@@ -135,6 +140,9 @@ func (r *Router) BroadcastLocalManifest() int {
 			return fanoutErr.Attempted - fanoutErr.Failed
 		}
 		return 0
+	}
+	for _, peer := range peers {
+		r.recordManifestSuppression(peer.ID, hashes)
 	}
 	return len(peers)
 }
@@ -215,41 +223,121 @@ func (r *Router) addPeerToActiveAcquisitions(peerID uint64) {
 // Encode failures are NOT cached so a transient error doesn't pin a
 // stale frame; the next caller re-attempts.
 func (r *Router) cachedManifestFrames() [][]byte {
+	frames, _ := r.cachedManifestSnapshot()
+	return frames
+}
+
+func (r *Router) cachedManifestSnapshot() ([][]byte, [][32]byte) {
 	if r.manifests == nil {
-		return nil
+		return nil, nil
 	}
 
-	// Read sequence outside the frame lock so we never nest the cache's
-	// RLock under our own mutex. A racing increment between this read
-	// and the lock acquisition just causes the next caller to rebuild —
-	// not a correctness issue.
+	// Snapshot and trust classification happen before taking the frame lock.
+	// This keeps cache/list locks out of the frame-cache critical section and
+	// avoids the lock ordering inversion between validator-list trust and the
+	// manifest cache.
 	seq := r.manifests.Sequence()
+	wires, hashes, trustHash := r.selectManifestSnapshot()
+	if current := r.manifests.Sequence(); current != seq {
+		seq = current
+		wires, hashes, trustHash = r.selectManifestSnapshot()
+	}
 
 	r.manifestFrameMu.Lock()
 	defer r.manifestFrameMu.Unlock()
 
-	if r.manifestFrameBuilt && r.manifestFrameSeq == seq {
-		return r.manifestFrames
+	if r.manifestFrameBuilt && r.manifestFrameSeq == seq &&
+		r.manifestFrameTrust == trustHash &&
+		r.manifestFrameLimit == r.manifestUntrustedLimit {
+		return r.manifestFrames, append([][32]byte(nil), r.manifestFrameHashes...)
 	}
 
-	wires := r.manifests.SerializedAll()
 	if len(wires) == 0 {
 		// Empty cache — cache that fact too so the next call doesn't
 		// re-walk byMaster only to find it still empty.
 		r.manifestFrames = nil
+		r.manifestFrameHashes = nil
 		r.manifestFrameSeq = seq
+		r.manifestFrameTrust = trustHash
+		r.manifestFrameLimit = r.manifestUntrustedLimit
 		r.manifestFrameBuilt = true
-		return nil
+		return nil, nil
 	}
 
 	frames, err := encodeManifestFrames(wires...)
 	if err != nil {
 		r.logger.Warn("failed to encode local manifest frame", "error", err)
-		return nil
+		return nil, nil
 	}
 
 	r.manifestFrames = frames
+	r.manifestFrameHashes = hashes
 	r.manifestFrameSeq = seq
+	r.manifestFrameTrust = trustHash
+	r.manifestFrameLimit = r.manifestUntrustedLimit
 	r.manifestFrameBuilt = true
-	return frames
+	return frames, append([][32]byte(nil), hashes...)
+}
+
+// selectManifestSnapshot returns all currently listed/trusted manifests and
+// only the configured number of unlisted entries. Selection precedes the
+// shuffle so listed entries cannot be displaced by random ordering.
+func (r *Router) selectManifestSnapshot() ([][]byte, [][32]byte, [32]byte) {
+	entries := r.manifests.Snapshot()
+	if len(entries) == 0 {
+		return nil, nil, [32]byte{}
+	}
+
+	trustInput := make([]byte, 0, len(entries)*34)
+	selected := make([]*manifest.Manifest, 0, len(entries))
+	untrusted := make([]*manifest.Manifest, 0, len(entries))
+	for _, entry := range entries {
+		policy := manifest.Uncapped
+		if r.manifestClassify != nil {
+			policy = r.manifestClassify(entry.MasterKey())
+		}
+		master := entry.MasterKey()
+		trustInput = append(trustInput, master[:]...)
+		trustInput = append(trustInput, byte(policy))
+		if policy == manifest.Uncapped {
+			selected = append(selected, entry)
+		} else {
+			untrusted = append(untrusted, entry)
+		}
+	}
+	limit := r.manifestUntrustedLimit
+	if limit < 0 {
+		limit = 0
+	}
+	if limit > len(untrusted) {
+		limit = len(untrusted)
+	}
+	selected = append(selected, untrusted[:limit]...)
+
+	wires := make([][]byte, len(selected))
+	hashesByWire := make(map[string][32]byte, len(selected))
+	for i, entry := range selected {
+		wire := entry.Serialized()
+		wires[i] = wire
+		hashesByWire[string(wire)] = entry.Hash()
+	}
+	if r.manifestShuffle != nil {
+		r.manifestShuffle(wires)
+	} else {
+		rand.Shuffle(len(wires), func(i, j int) { wires[i], wires[j] = wires[j], wires[i] })
+	}
+	hashes := make([][32]byte, len(wires))
+	for i, wire := range wires {
+		hashes[i] = hashesByWire[string(wire)]
+	}
+	return wires, hashes, sha512half.Sum(trustInput)
+}
+
+func (r *Router) recordManifestSuppression(peerID peermanagement.PeerID, hashes [][32]byte) {
+	if r.messageSeen == nil {
+		return
+	}
+	for _, hash := range hashes {
+		r.messageSeen.recordPeer(hash, uint64(peerID))
+	}
 }

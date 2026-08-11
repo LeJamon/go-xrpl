@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+// MaxManifestBase64 is the largest base64 representation of a serialized
+// manifest accepted by token/config paths. It is the encoded size of
+// MaxSerializedSize bytes.
+const MaxManifestBase64 = ((MaxSerializedSize + 2) / 3) * 4
+
 // ValidatorToken is the parsed payload of a rippled-format
 // `[validator_token]` config block, as produced by `validator-keys-tool`.
 //
@@ -66,6 +71,9 @@ func LoadValidatorToken(block string) (*ValidatorToken, error) {
 	if raw.Manifest == "" {
 		return nil, errors.New("validator_token: missing manifest")
 	}
+	if len(raw.Manifest) > MaxManifestBase64 {
+		return nil, fmt.Errorf("validator_token: manifest exceeds %d base64 characters", MaxManifestBase64)
+	}
 	if raw.ValidationSecretKey == "" {
 		return nil, errors.New("validator_token: missing validation_secret_key")
 	}
@@ -89,6 +97,9 @@ func LoadValidatorToken(block string) (*ValidatorToken, error) {
 func (t *ValidatorToken) DecodeManifest() ([]byte, error) {
 	if t == nil || t.ManifestB64 == "" {
 		return nil, errors.New("validator_token: nil or empty manifest")
+	}
+	if len(t.ManifestB64) > MaxManifestBase64 {
+		return nil, fmt.Errorf("validator_token: manifest exceeds %d base64 characters", MaxManifestBase64)
 	}
 	b, err := base64.StdEncoding.DecodeString(t.ManifestB64)
 	if err != nil {

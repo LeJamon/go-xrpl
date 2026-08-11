@@ -35,6 +35,10 @@ func (a *Aggregator) applyListInternal(globalManifest, localManifest []byte, loc
 		manifestBytes = localManifest
 	}
 
+	if len(manifestBytes) > manifest.MaxManifestBase64 {
+		a.logger.Debug("validator list: manifest exceeds maximum base64 size", "site", siteURI)
+		return Invalid, PublisherKey{}, 0
+	}
 	manifestRaw, err := decodeBase64Tolerant(manifestBytes)
 	if err != nil {
 		a.logger.Debug("validator list: manifest base64 decode failed", "error", err, "site", siteURI)
@@ -69,7 +73,7 @@ func (a *Aggregator) applyListInternal(globalManifest, localManifest []byte, loc
 	var manifestSequence uint32
 	manifestSequenceSet := false
 	if a.publisherManifests != nil {
-		switch d := a.publisherManifests.ApplyManifest(parsed); d {
+		switch d := a.publisherManifests.ApplyManifest(parsed, manifest.Uncapped); d {
 		case manifest.Accepted:
 			manifestAccepted = true
 		case manifest.Stale:
@@ -314,6 +318,11 @@ func (a *Aggregator) applyAcceptedLocked(s *publisherState, blob *blobJSON, sign
 
 	keys := a.extractValidatorKeys(blob, "validator list: skipping invalid validator entry")
 	s.Validators = keys
+	if a.validatorManifests != nil {
+		for _, key := range keys {
+			a.validatorManifests.PromoteToTrusted(key)
+		}
+	}
 	a.applyEmbeddedManifestsLocked(s, blob.Validators)
 }
 
@@ -340,6 +349,9 @@ func (a *Aggregator) applyEmbeddedManifestsLocked(s *publisherState, entries []b
 		if v.Manifest == "" {
 			continue
 		}
+		if len(v.Manifest) > manifest.MaxManifestBase64 {
+			continue
+		}
 		raw, err := decodeBase64Tolerant([]byte(v.Manifest))
 		if err != nil {
 			continue
@@ -359,7 +371,7 @@ func (a *Aggregator) applyEmbeddedManifestRawLocked(listed map[[33]byte]struct{}
 			"master", hex.EncodeToString(masterKey[:]))
 		return
 	}
-	_ = a.validatorManifests.ApplyManifest(parsed)
+	_ = a.validatorManifests.ApplyManifest(parsed, manifest.Uncapped)
 }
 
 func (a *Aggregator) applyEmbeddedPendingManifestsLocked(s *publisherState, entries []pendingEmbeddedManifest) {
@@ -435,6 +447,9 @@ func (a *Aggregator) applyPendingLocked(s *publisherState, blob *blobJSON, signi
 	if version > s.Version {
 		s.Version = version
 	}
+	if s.Version < 2 {
+		s.Version = 2
+	}
 	s.RawManifest = append([]byte(nil), rawManifest...)
 	a.recordMaxSequenceLocked(s, blob.Sequence)
 	return Pending
@@ -444,6 +459,9 @@ func (a *Aggregator) pendingEmbeddedManifests(blob *blobJSON) []pendingEmbeddedM
 	var out []pendingEmbeddedManifest
 	for _, entry := range blob.Validators {
 		if entry.Manifest == "" {
+			continue
+		}
+		if len(entry.Manifest) > manifest.MaxManifestBase64 {
 			continue
 		}
 		raw, err := decodeBase64Tolerant([]byte(entry.Manifest))
@@ -523,8 +541,13 @@ func (a *Aggregator) promotePendingSequenceLocked(s *publisherState, sequence ui
 		s.Status = StatusExpired
 		s.Validators = nil
 	} else {
-		a.applyEmbeddedPendingManifestsLocked(s, chosen.EmbeddedManifests)
+		if a.validatorManifests != nil {
+			for _, key := range s.Validators {
+				a.validatorManifests.PromoteToTrusted(key)
+			}
+		}
 	}
+	a.applyEmbeddedPendingManifestsLocked(s, chosen.EmbeddedManifests)
 	delete(s.Remaining, sequence)
 	a.recordMaxSequenceLocked(s, sequence)
 	a.normalizeRemainingLocked(s)

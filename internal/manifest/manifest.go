@@ -38,13 +38,19 @@ import (
 	"github.com/LeJamon/go-xrpl/crypto"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // RevokedSequence marks a manifest as a master-key revocation.
 const RevokedSequence uint32 = math.MaxUint32
 
-const maxSerializedSize = 1024
+// MaxSerializedSize is the largest serialized manifest accepted by the
+// protocol. The bound is checked before STObject decoding so oversized input
+// cannot trigger parser allocations.
+const MaxSerializedSize = 358
+
+const maxSerializedSize = MaxSerializedSize
 
 // Manifest is a parsed, syntactically-valid validator manifest.
 // Signature verification is separate — callers invoke Verify before
@@ -55,6 +61,7 @@ type Manifest struct {
 	sequence        uint32
 	domain          string
 	serialized      []byte
+	hash            [32]byte
 	masterSignature string
 	signature       string
 	signingPreimage []byte
@@ -97,6 +104,16 @@ func (m *Manifest) Serialized() []byte {
 		return nil
 	}
 	return append([]byte(nil), m.serialized...)
+}
+
+// Hash returns the Manifest::hash suppression identity for this manifest.
+// Rippled hashes the canonical STObject under the MAN\0 domain, rather than
+// hashing the raw serialized bytes without a domain prefix.
+func (m *Manifest) Hash() [32]byte {
+	if m == nil {
+		return [32]byte{}
+	}
+	return m.hash
 }
 
 // Revoked reports whether the manifest revokes its master key.
@@ -189,6 +206,11 @@ func Deserialize(data []byte) (*Manifest, error) {
 		serialized:      append([]byte(nil), data...),
 		masterSignature: masterSignature,
 	}
+	canonical, err := binarycodec.EncodeBytes(decoded)
+	if err != nil {
+		return nil, fmt.Errorf("manifest: canonical encoding: %w", err)
+	}
+	m.hash = sha512half.Sum(protocol.HashPrefixManifest().Bytes(), canonical)
 
 	if dom, ok := decoded["Domain"]; ok {
 		s, ok := dom.(string)
