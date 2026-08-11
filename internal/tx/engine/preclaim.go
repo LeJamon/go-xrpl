@@ -573,6 +573,9 @@ func (e *Engine) checkBatchSign(signers []txcore.BatchSignerInfo) ter.Result {
 		if err != nil {
 			return ter.TefBAD_AUTH
 		}
+		if result := e.checkPseudoAccount(signer.Account); result != ter.TesSUCCESS {
+			return result
+		}
 
 		if signer.SigningPubKey == "" {
 			// Multi-sign batch signer: check nested Signers against the account's SignerList.

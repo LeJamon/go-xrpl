@@ -236,3 +236,23 @@ func TestPreclaimInnerPrecedence_PermissionBeforePseudoAccountAuthorization(t *t
 		t.Fatalf("combined pseudo delegate+permission failure = %v, want TerNO_DELEGATE_PERMISSION", got)
 	}
 }
+
+func TestBatchSignerPseudoAccountAuthorizationRejected(t *testing.T) {
+	pseudoID := [32]byte{1}
+	e := precedenceEngine(t, map[string]*state.AccountRoot{
+		precedenceGenesisAddr: {
+			Account:  precedenceGenesisAddr,
+			Balance:  1_000_000,
+			Sequence: 1,
+			AMMID:    pseudoID,
+		},
+	})
+
+	got := e.checkBatchSign([]txcore.BatchSignerInfo{{
+		Account:       precedenceGenesisAddr,
+		SigningPubKey: precedenceGenesisPubKey,
+	}})
+	if got != ter.TefBAD_AUTH {
+		t.Fatalf("pseudo-account Batch signer = %v, want TefBAD_AUTH", got)
+	}
+}
