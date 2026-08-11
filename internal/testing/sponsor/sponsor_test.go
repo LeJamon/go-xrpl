@@ -333,29 +333,42 @@ func TestSponsorshipSetNoopFeeWithdrawalChecksReserve(t *testing.T) {
 }
 
 func TestPaymentChannelFundChecksReserveSponsor(t *testing.T) {
-	env, source, destination, sponsor, _ := sponsorEnv(t)
-	sequence := env.Seq(source)
-	create := paychantx.NewPaymentChannelCreate(
-		source.Address,
-		destination.Address,
-		tx.NewXRPAmount(1_000),
-		100,
-		source.PublicKeyHex(),
-	)
-	require.Equal(t, "tesSUCCESS", env.Submit(create).Code)
+	setup := func(t *testing.T) (*jtx.TestEnv, *jtx.Account, *jtx.Account, string) {
+		t.Helper()
+		env, source, destination, sponsor, _ := sponsorEnv(t)
+		sequence := env.Seq(source)
+		create := paychantx.NewPaymentChannelCreate(
+			source.Address,
+			destination.Address,
+			tx.NewXRPAmount(1_000),
+			100,
+			source.PublicKeyHex(),
+		)
+		require.Equal(t, "tesSUCCESS", env.Submit(create).Code)
+		channel := keylet.PayChannel(source.ID, destination.ID, sequence)
+		return env, source, sponsor, hex.EncodeToString(channel.Key[:])
+	}
+	fund := func(t *testing.T, env *jtx.TestEnv, source, sponsor *jtx.Account, channel string) jtx.TxResult {
+		t.Helper()
+		transaction := paychantx.NewPaymentChannelFund(source.Address, channel, tx.NewXRPAmount(1))
+		transaction.Sponsor = sponsor.Address
+		reserve := tx.SpfSponsorReserve
+		transaction.SponsorFlags = &reserve
+		attachSponsorSignature(t, env, transaction, source, sponsor)
+		return env.SubmitSigned(transaction)
+	}
 
-	setAccountBalance(t, env, sponsor, env.ReserveBase()-1)
-	channel := keylet.PayChannel(source.ID, destination.ID, sequence)
-	fund := paychantx.NewPaymentChannelFund(
-		source.Address,
-		hex.EncodeToString(channel.Key[:]),
-		tx.NewXRPAmount(1),
-	)
-	fund.Sponsor = sponsor.Address
-	reserve := tx.SpfSponsorReserve
-	fund.SponsorFlags = &reserve
-	attachSponsorSignature(t, env, fund, source, sponsor)
-	require.Equal(t, "tecINSUFFICIENT_RESERVE", env.SubmitSigned(fund).Code)
+	t.Run("sponsor below reserve", func(t *testing.T) {
+		env, source, sponsor, channel := setup(t)
+		setAccountBalance(t, env, sponsor, env.ReserveBase()-1)
+		require.Equal(t, "tecINSUFFICIENT_RESERVE", fund(t, env, source, sponsor, channel).Code)
+	})
+
+	t.Run("source below reserve", func(t *testing.T) {
+		env, source, sponsor, channel := setup(t)
+		setAccountBalance(t, env, source, env.ReserveBase()+10)
+		require.Equal(t, "tecUNFUNDED", fund(t, env, source, sponsor, channel).Code)
+	})
 }
 
 func TestSponsorshipSetDeltaBounds(t *testing.T) {
