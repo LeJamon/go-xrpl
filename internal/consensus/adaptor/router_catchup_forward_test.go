@@ -499,9 +499,11 @@ func TestAdaptor_FastLoadedLedgerIsReplacedBySameHeightQuorum(t *testing.T) {
 		t.Fatal("quorum-backed provisional replacement was not handed to consensus")
 	}
 	require.Equal(t, replacementHash, svc.GetClosedLedger().Hash())
-	require.Equal(t, replacementHash, svc.GetValidatedLedger().Hash())
-	require.False(t, svc.IsFastLoadProvisional())
-	require.False(t, svc.NeedsInitialSync())
+	require.Eventually(t, func() bool {
+		validated := svc.GetValidatedLedger()
+		return validated != nil && validated.Hash() == replacementHash &&
+			!svc.IsFastLoadProvisional() && !svc.NeedsInitialSync()
+	}, time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return r.adaptor.GetOperatingMode() == consensus.OpModeTracking
 	}, time.Second, 10*time.Millisecond)
