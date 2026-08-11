@@ -287,6 +287,7 @@ check_static_link() {
     local cgo_cxxflags
     cgo_cxxflags="$(append_flag_string "${CGO_CXXFLAGS:-}" "$(cxx_compile_flags)")"
     PKG_CONFIG_PATH="$pkg_config_path" \
+        CGO_ENABLED=1 \
         CGO_LDFLAGS="$cgo_ldflags" \
         CGO_CXXFLAGS="$cgo_cxxflags" \
         go test -tags mptcrypto -run '^$' ./crypto/mptcrypto >/dev/null
@@ -329,6 +330,7 @@ run_tests() {
     check_pkg_config
     check_static_link
     PKG_CONFIG_PATH="$pkg_config_path" \
+        CGO_ENABLED=1 \
         CGO_LDFLAGS="$cgo_ldflags" \
         CGO_CXXFLAGS="$cgo_cxxflags" \
         go test -tags "$test_tags" "$package" "$@"
