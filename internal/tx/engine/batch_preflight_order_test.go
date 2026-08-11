@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/batch"
+	"github.com/LeJamon/go-xrpl/internal/tx/escrow"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
@@ -114,5 +115,35 @@ func TestBatchPreflightInterleavesChecksPerInner(t *testing.T) {
 				t.Fatalf("preflight = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestBatchInnerRunsSigValidatedPreflight(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+
+	credentialIDsPresent := escrow.NewEscrowFinish(account, account, 1)
+	credentialIDsPresent.Fee = "0"
+	credentialIDsPresent.SigningPubKey = ""
+	credentialIDsPresent.SetSequence(2)
+	credentialIDsPresent.SetFlags(txcore.TfInnerBatchTxn)
+	credentialIDsPresent.SetPresentFields(map[string]bool{"CredentialIDs": true})
+
+	second := payment.NewPayment(account, account, txcore.NewXRPAmount(1))
+	second.Fee = "0"
+	second.SigningPubKey = ""
+	second.SetSequence(3)
+	second.SetFlags(txcore.TfInnerBatchTxn)
+
+	outer := batch.NewBatch(account)
+	outer.Fee = "40"
+	outer.SetSequence(1)
+	outer.SigningPubKey = ""
+	outer.SetFlags(batch.BatchFlagAllOrNothing)
+	outer.AddInnerTransaction(credentialIDsPresent)
+	outer.AddInnerTransaction(second)
+
+	engine := dedupEngine(amendment.AllSupportedRules())
+	if got := engine.preflight(outer); got != ter.TemINVALID_INNER_BATCH {
+		t.Fatalf("preflight = %v, want TemINVALID_INNER_BATCH", got)
 	}
 }

@@ -305,7 +305,15 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	if result := checkSponsorFields(innerTx, common, rules); result != ter.TesSUCCESS {
 		return result
 	}
-	return runTypePreflight(innerTx, rules)
+	if result := runTypePreflight(innerTx, rules); result != ter.TesSUCCESS {
+		return result
+	}
+	if svp, ok := innerTx.(txcore.SigValidatedPreflighter); ok {
+		if err := svp.PreflightSigValidated(); err != nil {
+			return parseValidationError(err)
+		}
+	}
+	return ter.TesSUCCESS
 }
 
 // preflightInnerBatchFlag rejects a transaction reaching the outer preflight
