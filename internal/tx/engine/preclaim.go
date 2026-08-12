@@ -428,7 +428,7 @@ func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common) ter.Res
 		// have already failed crypto verification in preflight.
 		if !(e.config.SkipSignatureVerification &&
 			sponsor.SigningPubKey == "" && len(sponsor.Signers) == 0) {
-			if result := e.rejectPseudoAccount(common.Sponsor); result != ter.TesSUCCESS {
+			if result := e.checkPseudoAccount(common.Sponsor); result != ter.TesSUCCESS {
 				return result
 			}
 			if len(sponsor.Signers) > 0 {
@@ -462,7 +462,8 @@ func (e *Engine) checkPseudoAccountSign(common *txcore.Common) ter.Result {
 
 func (e *Engine) checkPseudoAccount(idAccount string) ter.Result {
 	if !e.rules().Enabled(amendment.FeatureLendingProtocol) &&
-		!e.rules().Enabled(amendment.FeatureBatchV1_1) {
+		!e.rules().Enabled(amendment.FeatureBatchV1_1) &&
+		!e.rules().Enabled(amendment.FeatureFixCleanup3_3_0) {
 		return ter.TesSUCCESS
 	}
 	return e.rejectPseudoAccount(idAccount)
@@ -579,7 +580,7 @@ func (e *Engine) checkBatchSign(signers []txcore.BatchSignerInfo) ter.Result {
 		if err != nil {
 			return ter.TefBAD_AUTH
 		}
-		if result := e.rejectPseudoAccount(signer.Account); result != ter.TesSUCCESS {
+		if result := e.checkPseudoAccount(signer.Account); result != ter.TesSUCCESS {
 			return result
 		}
 

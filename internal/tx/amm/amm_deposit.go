@@ -1060,6 +1060,19 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 	if err != nil {
 		return ter.TefINTERNAL
 	}
+	postAsset1, err := addAMMPoolAmount(assetBalance1, depositAmount1, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	postAsset2, err := addAMMPoolAmount(assetBalance2, depositAmount2, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_3_0) && fixV1_3 {
+		if result := checkAMMPrecisionLoss(postAsset1, postAsset2, newLPBalance, math.ctx); result != ter.TesSUCCESS {
+			return result
+		}
+	}
 	amm.LPTokenBalance = newLPBalance
 
 	// NOTE: Asset balances are NOT stored in AMM entry

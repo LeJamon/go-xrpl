@@ -505,12 +505,13 @@ func TestAMMDepositWithFrozenAssets(t *testing.T) {
 		amm.ExpectTER(t, result, amm.TecFROZEN)
 	})
 
-	// Without AMMClawback: deposit the non-frozen asset (XRP) when the other
-	// asset is frozen -> tesSUCCESS.
+	// Without AMMClawback or fixCleanup3_3_0: deposit the non-frozen asset
+	// (XRP) when the other asset is frozen -> tesSUCCESS.
 	// Reference: lines 7414-7429
 	t.Run("SingleAsset_NonFrozen_WithoutAMMClawback", func(t *testing.T) {
 		env := setupFrozenAMM(t)
 		env.DisableFeature("AMMClawback")
+		env.DisableFeature("fixCleanup3_3_0")
 		env.Close()
 
 		depositTx := amm.AMMDeposit(env.Alice, amm.XRP(), env.USD).
