@@ -46,9 +46,19 @@ func requireBatchLedgerData(
 	require.NoError(t, err)
 	closed := env.LastClosedLedger()
 	require.Equal(t, uint32(1+len(expectedResults)), closed.TxCount())
-	outerExists, err := closed.TxExists(batchID)
+	outerStored, outerExists, err := closed.GetTransaction(batchID)
 	require.NoError(t, err)
 	require.True(t, outerExists)
+	outerTxn, outerMeta, err := tx.SplitTxWithMetaBlobStrict(outerStored)
+	require.NoError(t, err)
+	decodedOuterTxn, err := binarycodec.DecodeBytes(outerTxn)
+	require.NoError(t, err)
+	require.Equal(t, tx.TypeBatch.String(), decodedOuterTxn["TransactionType"])
+	decodedOuterMeta, err := binarycodec.DecodeBytes(outerMeta)
+	require.NoError(t, err)
+	require.Equal(t, ter.TesSUCCESS.String(), decodedOuterMeta["TransactionResult"])
+	outerIndex, ok := decodedOuterMeta["TransactionIndex"].(uint32)
+	require.True(t, ok)
 
 	for i, expectedResult := range expectedResults {
 		expectedTxn := batch.RawTransactions[i].RawTransaction.InnerTx
@@ -66,7 +76,7 @@ func requireBatchLedgerData(
 		decodedMeta, decodeErr := binarycodec.DecodeBytes(storedMeta)
 		require.NoError(t, decodeErr)
 		require.Equal(t, expectedResult.String(), decodedMeta["TransactionResult"])
-		require.EqualValues(t, result.Metadata.TransactionIndex+uint32(i)+1, decodedMeta["TransactionIndex"])
+		require.EqualValues(t, outerIndex+uint32(i)+1, decodedMeta["TransactionIndex"])
 		require.Equal(t, fmt.Sprintf("%X", batchID), decodedMeta["ParentBatchID"])
 	}
 
