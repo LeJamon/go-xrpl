@@ -401,37 +401,14 @@ func multiplyByQuality(amount tx.Amount, quality uint64, currency, issuer string
 		return tx.NewIssuedAmount(0, -100, currency, issuer)
 	}
 
-	if rules != nil && rules.Enabled(amendment.FeatureFixUniversalNumber) {
-		rate := rateAmountFromQuality(quality)
-		prod := numberContext.FromAmount(amount, state.RoundToNearest).
-			Mul(numberContext.FromAmount(rate, state.RoundToNearest))
-		prototype := tx.NewIssuedAmount(0, -100, currency, issuer)
-		if native {
-			prototype = tx.NewXRPAmount(0)
-		}
-		return numberContext.ToAmount(prod, prototype, state.RoundToNearest)
-	}
-
 	rate := rateAmountFromQuality(quality)
-	value1, offset1 := state.PrepareMulDivOperand(amount)
-	value2, offset2 := state.PrepareMulDivOperand(rate)
-	resultNegative := amount.IsNegative() != rate.IsNegative()
-	mantissa := state.MulMantissas(value1, value2, false) + 7
-	offset := offset1 + offset2 + 14
+	prod := numberContext.FromAmount(amount, state.RoundToNearest).
+		Mul(numberContext.FromAmount(rate, state.RoundToNearest))
+	prototype := tx.NewIssuedAmount(0, -100, currency, issuer)
 	if native {
-		return offerNativeDropsWithNumberContext(mantissa, offset, resultNegative, false, false, false, numberContext)
+		prototype = tx.NewXRPAmount(0)
 	}
-	return state.FinalizeRoundIOUWithNumberContext(
-		mantissa,
-		offset,
-		resultNegative,
-		false,
-		currency,
-		issuer,
-		state.RoundToNearest,
-		true,
-		numberContext,
-	)
+	return numberContext.ToAmount(prod, prototype, state.RoundToNearest)
 }
 
 // divideByQuality divides an amount by a quality rate, reproducing rippled's

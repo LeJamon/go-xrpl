@@ -67,17 +67,17 @@ func (t *numberIsolationTx) Apply(ctx *txcore.ApplyContext) ter.Result {
 	return ter.TesSUCCESS
 }
 
-func TestConcurrentEnginesKeepNumberSemanticsApplyLocal(t *testing.T) {
+func TestConcurrentEnginesUseUniversalNumberForRetiredAmendment(t *testing.T) {
 	preclaimBarrier := newNumberPhaseBarrier()
 	applyBarrier := newNumberPhaseBarrier()
 
 	universalView := newRecordingBaseView()
-	legacyView := newRecordingBaseView()
+	omittedView := newRecordingBaseView()
 	fundRecoveryAccount(t, universalView, 1_000_000, 1)
-	fundRecoveryAccount(t, legacyView, 1_000_000, 1)
+	fundRecoveryAccount(t, omittedView, 1_000_000, 1)
 
 	universalRules := amendment.AllSupportedRules()
-	legacyRules := amendment.NewRulesBuilder().
+	omittedRules := amendment.NewRulesBuilder().
 		FromPreset(amendment.PresetAllSupported).
 		Disable(amendment.FeatureFixUniversalNumber).
 		Build()
@@ -96,13 +96,13 @@ func TestConcurrentEnginesKeepNumberSemanticsApplyLocal(t *testing.T) {
 		preclaimBarrier: preclaimBarrier,
 		applyBarrier:    applyBarrier,
 	}
-	legacyTx := &numberIsolationTx{
+	omittedTx := &numberIsolationTx{
 		BaseTx:          recoveryTx(10, 1),
 		preclaimBarrier: preclaimBarrier,
 		applyBarrier:    applyBarrier,
 	}
 
-	var universalResult, legacyResult txcore.ApplyResult
+	var universalResult, omittedResult txcore.ApplyResult
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -111,7 +111,7 @@ func TestConcurrentEnginesKeepNumberSemanticsApplyLocal(t *testing.T) {
 	}()
 	go func() {
 		defer wg.Done()
-		legacyResult = newEngine(legacyView, legacyRules).Apply(legacyTx)
+		omittedResult = newEngine(omittedView, omittedRules).Apply(omittedTx)
 	}()
 
 	<-preclaimBarrier.arrived
@@ -129,16 +129,15 @@ func TestConcurrentEnginesKeepNumberSemanticsApplyLocal(t *testing.T) {
 			universalResult.Applied,
 		)
 	}
-	if legacyResult.Result != ter.TesSUCCESS || !legacyResult.Applied {
+	if omittedResult.Result != ter.TesSUCCESS || !omittedResult.Applied {
 		t.Fatalf(
-			"legacy engine result/applied = %s/%t",
-			legacyResult.Result,
-			legacyResult.Applied,
+			"omitted engine result/applied = %s/%t",
+			omittedResult.Result,
+			omittedResult.Applied,
 		)
 	}
 
 	const universalWant = "1.000000000000001"
-	const legacyWant = "1"
 	if universalTx.preclaimValue != universalWant || universalTx.applyValue != universalWant {
 		t.Fatalf(
 			"universal preclaim/apply = %s/%s, want %s/%s",
@@ -148,13 +147,13 @@ func TestConcurrentEnginesKeepNumberSemanticsApplyLocal(t *testing.T) {
 			universalWant,
 		)
 	}
-	if legacyTx.preclaimValue != legacyWant || legacyTx.applyValue != legacyWant {
+	if omittedTx.preclaimValue != universalWant || omittedTx.applyValue != universalWant {
 		t.Fatalf(
-			"legacy preclaim/apply = %s/%s, want %s/%s",
-			legacyTx.preclaimValue,
-			legacyTx.applyValue,
-			legacyWant,
-			legacyWant,
+			"omitted preclaim/apply = %s/%s, want %s/%s",
+			omittedTx.preclaimValue,
+			omittedTx.applyValue,
+			universalWant,
+			universalWant,
 		)
 	}
 }

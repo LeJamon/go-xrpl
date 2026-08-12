@@ -115,7 +115,7 @@ func (a *AMMClawback) Flatten() (map[string]any, error) {
 
 // RequiredAmendments gates AMMClawback on featureAMMClawback alone. rippled
 // declares no checkExtraFeatures override for this transactor (only getFlagsMask),
-// so ammEnabled (featureAMM && fixUniversalNumber) is NOT a preflight requirement:
+// so featureAMM is NOT a preflight requirement:
 // with AMMClawback enabled but AMM disabled the tx passes preflight and fails in
 // preclaim (terNO_AMM, since no AMM can exist).
 // Reference: rippled transactions.macro ttAMM_CLAWBACK + AMMClawback.h.

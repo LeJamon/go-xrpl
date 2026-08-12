@@ -189,7 +189,7 @@ func (a *AMMDeposit) Flatten() (map[string]any, error) {
 }
 
 func (a *AMMDeposit) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber}
+	return [][32]byte{amendment.FeatureAMM}
 }
 
 // CheckExtraFeatures gates MPT pool assets/amounts on the MPTokensV2 amendment.

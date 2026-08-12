@@ -290,6 +290,53 @@ func TestRetiredFeaturesVoteObsolete(t *testing.T) {
 	}
 }
 
+func TestV330RetiredFeatures(t *testing.T) {
+	tests := []struct {
+		name  string
+		id    [32]byte
+		hexID string
+	}{
+		{"fixDisallowIncomingV1", FeatureFixDisallowIncomingV1, "15D61F0C6DB6A2F86BCF96F1E2444FEC54E705923339EC175BD3E517C8B3FF91"},
+		{"fixInnerObjTemplate", FeatureFixInnerObjTemplate, "C393B3AEEBF575E475F0C60D5E4241B2070CC4D0EB6C4846B1A07508FAEFC485"},
+		{"fixNFTokenReserve", FeatureFixNFTokenReserve, "03BDC0099C4E14163ADA272C1B6F6FABB448CC3E51F522F978041E4B57D9158C"},
+		{"fixUniversalNumber", FeatureFixUniversalNumber, "2E2FB9CF8A44EB80F4694D38AADAE9B8B7ADAFD2F092E10068E61C98C4F092B0"},
+		{"Clawback", FeatureClawback, "56B241D7A43D40354D02A9DC4C8DF5C7A1F930D92A9035C4E12291B3CA3E1C2B"},
+	}
+
+	permanent := PermanentlyEnabledIDs()
+	genesis := GenesisRules()
+	defaultYes := DefaultYesFeatures()
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			feature := FeatureByName(test.name)
+			if feature == nil {
+				t.Fatal("feature is not registered")
+			}
+
+			decoded, err := hex.DecodeString(test.hexID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var expectedID [32]byte
+			copy(expectedID[:], decoded)
+			if feature.ID != expectedID || test.id != expectedID {
+				t.Fatalf("feature ID = %X, exported ID = %X, want %s", feature.ID, test.id, test.hexID)
+			}
+			if feature.Supported != SupportedYes || feature.Vote != VoteObsolete || !feature.Retired {
+				t.Fatalf("feature status = supported:%v vote:%v retired:%t", feature.Supported, feature.Vote, feature.Retired)
+			}
+			if !slices.Contains(permanent, expectedID) || !genesis.Enabled(expectedID) {
+				t.Fatal("retired feature is not permanently enabled")
+			}
+			for _, candidate := range defaultYes {
+				if candidate.ID == expectedID {
+					t.Fatal("retired feature is included in default-yes voting")
+				}
+			}
+		})
+	}
+}
+
 func TestTableClone(t *testing.T) {
 	table := NewTable()
 	table.Enable(FeatureFlow)

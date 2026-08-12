@@ -25,12 +25,6 @@ var skipTests = map[string]string{
 	// tested via unit tests instead.
 	"app/AMM/Failed_pseudo-account_allocation_tecDUPLICATE":         "parentHash-dependent pseudo-account collision",
 	"app/AMM/Failed_pseudo-account_allocation_terADDRESS_COLLISION": "parentHash-dependent pseudo-account collision",
-	// C++ STObject template caching bug: when fixInnerObjTemplate is disabled and
-	// TradingFee=0, rippled's inner object deserialization throws tefEXCEPTION due
-	// to soeDEFAULT field validation in STObject::applyTemplate(). Go uses plain
-	// structs with no template system, so this bug cannot occur. No Go equivalent
-	// exists to emulate.
-	"app/AMM/Fix_Default_Inner_Object": "C++ STObject template caching bug, no Go equivalent",
 	// These NFTokenAuth cases rely on rippled injecting a transient *unauthorized*
 	// trustline that carries a balance directly into the open ledger
 	// (env.app().openLedger().modify() + rawInsert in NFTokenAuth_test.cpp),

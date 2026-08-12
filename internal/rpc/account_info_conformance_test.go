@@ -78,7 +78,7 @@ func accountInfoConformanceParams(t *testing.T, extra map[string]any) json.RawMe
 	return raw
 }
 
-func TestAccountInfoAmendmentGatedFlags(t *testing.T) {
+func TestAccountInfoRetiredAndAmendmentGatedFlags(t *testing.T) {
 	tests := []struct {
 		name            string
 		rules           *amendment.Rules
@@ -88,24 +88,26 @@ func TestAccountInfoAmendmentGatedFlags(t *testing.T) {
 		wantLocking     bool
 		wantLockingSet  bool
 	}{
-		{name: "both amendments disabled", rules: amendment.EmptyRules(), flags: entry.LsfAllowTrustLineClawback | entry.LsfAllowTrustLineLocking},
+		{name: "retired clawback flag is always emitted when false", rules: amendment.EmptyRules(), wantClawbackSet: true},
 		{
-			name:            "only Clawback enabled",
-			rules:           amendment.NewRules([][32]byte{amendment.FeatureClawback}),
+			name:            "retired clawback flag is always emitted when true",
+			rules:           amendment.EmptyRules(),
 			flags:           entry.LsfAllowTrustLineClawback | entry.LsfAllowTrustLineLocking,
 			wantClawback:    true,
 			wantClawbackSet: true,
 		},
 		{
-			name:           "only TokenEscrow enabled",
-			rules:          amendment.NewRules([][32]byte{amendment.FeatureTokenEscrow}),
-			flags:          entry.LsfAllowTrustLineClawback | entry.LsfAllowTrustLineLocking,
-			wantLocking:    true,
-			wantLockingSet: true,
+			name:            "TokenEscrow additionally emits locking when true",
+			rules:           amendment.NewRules([][32]byte{amendment.FeatureTokenEscrow}),
+			flags:           entry.LsfAllowTrustLineClawback | entry.LsfAllowTrustLineLocking,
+			wantClawback:    true,
+			wantClawbackSet: true,
+			wantLocking:     true,
+			wantLockingSet:  true,
 		},
 		{
-			name:            "enabled fields are emitted when false",
-			rules:           amendment.NewRules([][32]byte{amendment.FeatureClawback, amendment.FeatureTokenEscrow}),
+			name:            "TokenEscrow emits locking when false",
+			rules:           amendment.NewRules([][32]byte{amendment.FeatureTokenEscrow}),
 			wantClawbackSet: true,
 			wantLockingSet:  true,
 		},

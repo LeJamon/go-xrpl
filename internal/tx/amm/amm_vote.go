@@ -64,7 +64,7 @@ func (a *AMMVote) Flatten() (map[string]any, error) {
 }
 
 func (a *AMMVote) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber}
+	return [][32]byte{amendment.FeatureAMM}
 }
 
 // CheckExtraFeatures gates MPT pool assets on the MPTokensV2 amendment.
@@ -118,12 +118,6 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) ter.Result {
 	if lpTokensNew.IsZero() {
 		ctx.Log.Debug("amm vote: account is not LP", "account", a.Account)
 		return ter.TecAMM_INVALID_TOKENS
-	}
-
-	// Check fixInnerObjTemplate: AuctionSlot must exist when amendment is enabled
-	// Reference: rippled AMMVote.cpp lines 202-205
-	if amm.AuctionSlot == nil && ctx.Rules().Enabled(amendment.FeatureFixInnerObjTemplate) {
-		return ter.TefEXCEPTION
 	}
 
 	feeNew := a.TradingFee

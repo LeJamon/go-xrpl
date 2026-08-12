@@ -133,9 +133,7 @@ func TestClawback_AllowTrustLineClawbackFlag(t *testing.T) {
 		jtx.RequireOwnerCount(t, env, bob, 0)
 	})
 
-	// Test that one cannot enable asfAllowTrustLineClawback when
-	// featureClawback amendment is disabled
-	t.Run("AmendmentDisabled", func(t *testing.T) {
+	t.Run("RetiredAmendmentRemainsActive", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 		env.DisableFeature("Clawback")
 
@@ -146,20 +144,7 @@ func TestClawback_AllowTrustLineClawbackFlag(t *testing.T) {
 
 		jtx.RequireFlagNotSet(t, env, alice, state.LsfAllowTrustLineClawback)
 
-		// alice attempts to set asfAllowTrustLineClawback flag while
-		// amendment is disabled. no error is returned, but the flag remains
-		// to be unset.
 		result := env.Submit(accountset.AccountSet(alice).AllowClawback().Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-		jtx.RequireFlagNotSet(t, env, alice, state.LsfAllowTrustLineClawback)
-
-		// now enable clawback amendment
-		env.EnableFeature("Clawback")
-		env.Close()
-
-		// asfAllowTrustLineClawback can be set
-		result = env.Submit(accountset.AccountSet(alice).AllowClawback().Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 		jtx.RequireFlagSet(t, env, alice, state.LsfAllowTrustLineClawback)
@@ -169,8 +154,7 @@ func TestClawback_AllowTrustLineClawbackFlag(t *testing.T) {
 // TestClawback_Validation tests Clawback transaction validation (preflight + preclaim).
 // Reference: rippled Clawback_test.cpp testValidation (lines 194-320)
 func TestClawback_Validation(t *testing.T) {
-	// Test that Clawback tx fails when amendment is disabled and when flag is not set
-	t.Run("AmendmentDisabledAndFlagNotSet", func(t *testing.T) {
+	t.Run("RetiredAmendmentAndFlagNotSet", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 		env.DisableFeature("Clawback")
 
@@ -191,16 +175,7 @@ func TestClawback_Validation(t *testing.T) {
 		jtx.RequireIOUBalance(t, env, bob, alice, "USD", 10)
 		jtx.RequireIOUBalance(t, env, alice, bob, "USD", -10)
 
-		// clawback fails because amendment is disabled
-		result = env.Submit(clawback.Claw(alice, bob, "USD", 5).Build())
-		require.Equal(t, "temDISABLED", result.Code)
-		env.Close()
-
-		// now enable clawback amendment
-		env.EnableFeature("Clawback")
-		env.Close()
-
-		// clawback fails because asfAllowTrustLineClawback has not been set
+		// Clawback remains enabled, but the issuer has not opted in.
 		result = env.Submit(clawback.Claw(alice, bob, "USD", 5).Build())
 		jtx.RequireTxFail(t, result, "tecNO_PERMISSION")
 		env.Close()

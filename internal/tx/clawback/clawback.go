@@ -521,11 +521,8 @@ func (c *Clawback) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(c)
 }
 
-// RequiredAmendments gates Clawback on featureClawback alone (the only
-// transactions.macro gate). featureMPTokensV1 is NOT a macro gate: rippled places
-// it as the first line of the MPT preflight arm, so it runs after preflight0's
-// flags mask and preflight1's fee/sequence checks — see PreflightRules.
-// Reference: rippled transactions.macro ttCLAWBACK + Clawback.cpp preflight arm.
+// RequiredAmendments leaves Clawback unconditional. MPTokensV1 remains a
+// preflight-arm gate for MPT clawbacks.
 func (c *Clawback) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureClawback}
+	return nil
 }

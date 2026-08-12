@@ -179,6 +179,23 @@ func TestAMMCreateMPTApplyAndDelete(t *testing.T) {
 	require.NoError(t, err)
 	amm, err := parseAMMData(ammRaw)
 	require.NoError(t, err)
+	auctionSlot := amm.AuctionSlot
+	amm.AuctionSlot = nil
+	raw, err = serializeAMMData(amm)
+	require.NoError(t, err)
+	require.NoError(t, view.Update(ammKey, raw))
+	require.Equal(t, ter.TecINTERNAL, NewAMMBid(creatorAddr, mptAsset, xrpAsset).Apply(ctx))
+	require.Equal(t, ter.TesSUCCESS, NewAMMVote(creatorAddr, mptAsset, xrpAsset, 300).Apply(ctx))
+	ammRaw, err = view.Read(ammKey)
+	require.NoError(t, err)
+	amm, err = parseAMMData(ammRaw)
+	require.NoError(t, err)
+	require.Nil(t, amm.AuctionSlot)
+	amm.AuctionSlot = auctionSlot
+	raw, err = serializeAMMData(amm)
+	require.NoError(t, err)
+	require.NoError(t, view.Update(ammKey, raw))
+
 	holding, _, result := mptutil.ReadHolding(view, id, amm.Account)
 	require.Equal(t, ter.TesSUCCESS, result)
 	require.Equal(t, uint64(1_000), holding.MPTAmount)

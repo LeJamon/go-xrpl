@@ -8,17 +8,8 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// ---------------------------------------------------------------------------
-// Buyer reserve check (fixNFTokenReserve)
-// ---------------------------------------------------------------------------
-
-// checkBuyerReserve checks if the buyer has sufficient reserve after receiving
-// an NFToken. Only applies when fixNFTokenReserve amendment is enabled.
 // Reference: rippled NFTokenAcceptOffer.cpp transferNFToken() lines 457-474
 func checkBuyerReserve(ctx *tx.ApplyContext, buyerID [20]byte, pagesCreated int) ter.Result {
-	if !ctx.Rules().Enabled(amendment.FeatureFixNFTokenReserve) {
-		return ter.TesSUCCESS
-	}
 	if pagesCreated <= 0 {
 		return ter.TesSUCCESS
 	}
@@ -263,7 +254,6 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 	adjustOwnerCountViaView(ctx.View, sellerID, -xferResult.FromPagesRemoved)
 	adjustOwnerCountViaView(ctx.View, buyerID, xferResult.ToPagesCreated)
 
-	// Check buyer reserve (fixNFTokenReserve)
 	if r := checkBuyerReserve(ctx, buyerID, xferResult.ToPagesCreated); r != ter.TesSUCCESS {
 		return r
 	}
@@ -397,7 +387,6 @@ func (n *NFTokenAcceptOffer) acceptNFTokenSellOfferDirect(ctx *tx.ApplyContext, 
 	adjustOwnerCountViaView(ctx.View, sellerID, -xferResult.FromPagesRemoved)
 	ctx.Account.OwnerCount += uint32(xferResult.ToPagesCreated)
 
-	// Check buyer reserve (fixNFTokenReserve) — buyer is ctx.Account
 	if r := checkBuyerReserve(ctx, accountID, xferResult.ToPagesCreated); r != ter.TesSUCCESS {
 		return r
 	}
@@ -530,7 +519,6 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 	ctx.Account.OwnerCount = clampedSub(ctx.Account.OwnerCount, xferResult.FromPagesRemoved)
 	adjustOwnerCountViaView(ctx.View, buyerID, xferResult.ToPagesCreated)
 
-	// Check buyer reserve (fixNFTokenReserve)
 	if r := checkBuyerReserve(ctx, buyerID, xferResult.ToPagesCreated); r != ter.TesSUCCESS {
 		return r
 	}

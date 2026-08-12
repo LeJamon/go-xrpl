@@ -69,13 +69,10 @@ func accountSeq(t *testing.T, svc *service.Service, address string) uint32 {
 // the fix, SimulateTransaction's EngineConfig left ParentHash unset, so simulating
 // an AMMCreate reported a different AMM account than the network would produce.
 func TestService_SimulateTransaction_AMMCreateUsesParentHash(t *testing.T) {
-	// AMMCreate requires AMM + fixUniversalNumber, both VoteDefaultNo and so
-	// absent from the default genesis set — enable them explicitly, else the
-	// AMMCreate is temDISABLED.
+	// AMM is VoteDefaultNo and absent from the default genesis set.
 	cfg := defaultServiceConfig()
 	cfg.Startup = service.StartupConfig{Mode: service.StartupFresh}
-	cfg.GenesisConfig.Amendments = append(cfg.GenesisConfig.Amendments,
-		amendment.FeatureAMM, amendment.FeatureFixUniversalNumber)
+	cfg.GenesisConfig.Amendments = append(cfg.GenesisConfig.Amendments, amendment.FeatureAMM)
 	svc, err := service.New(cfg)
 	if err != nil {
 		t.Fatalf("service.New: %v", err)

@@ -143,9 +143,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	if rulesErr != nil {
 		return nil, rpcInternalError("account_info: amendment rules lookup failed", rulesErr)
 	}
-	if rules.Enabled(amendment.FeatureClawback) {
-		accountFlags["allowTrustLineClawback"] = flags&lsfAllowTrustLineClawback != 0
-	}
+	accountFlags["allowTrustLineClawback"] = flags&lsfAllowTrustLineClawback != 0
 	if rules.Enabled(amendment.FeatureTokenEscrow) {
 		accountFlags["allowTrustLineLocking"] = flags&lsfAllowTrustLineLocking != 0
 	}

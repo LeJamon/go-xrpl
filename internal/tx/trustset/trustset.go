@@ -297,13 +297,8 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	bHigh := state.CompareAccountIDs(accountID, issuerAccountID) > 0
 
 	// If the destination has opted to disallow incoming trustlines, honour that flag.
-	if issuerAccount.Flags&state.LsfDisallowIncomingTrustline != 0 {
-		// fixDisallowIncomingV1: if the trust line already exists, allow the TrustSet
-		if ctx.Rules().Enabled(amendment.FeatureFixDisallowIncomingV1) && trustLineExists {
-			// pass — existing trust lines are allowed
-		} else {
-			return ter.TecNO_PERMISSION
-		}
+	if issuerAccount.Flags&state.LsfDisallowIncomingTrustline != 0 && !trustLineExists {
+		return ter.TecNO_PERMISSION
 	}
 
 	// In general, trust lines to pseudo-accounts (AMM) are not permitted
