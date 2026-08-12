@@ -83,7 +83,7 @@ func statusResponse(st types.LedgerCleanerStatus, configured bool) map[string]an
 		"missing_nodes":   st.MissingNodes,
 	}
 	if configured {
-		resp["message"] = "Ledger cleaner configured"
+		resp["message"] = "Cleaner configured"
 	}
 	if st.State == "running" {
 		resp["min_ledger"] = st.MinLedger

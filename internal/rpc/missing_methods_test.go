@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
@@ -440,11 +441,63 @@ func TestLedgerCleanerMethod(t *testing.T) {
 		assert.Equal(t, true, resp["fix_txns"])
 		assert.Equal(t, uint64(2), resp["missing_nodes"])
 		assert.Equal(t, 1, resp["fail_counts"])
-		assert.Equal(t, "Ledger cleaner configured", resp["message"])
+		assert.Equal(t, "Cleaner configured", resp["message"])
 		require.NotNil(t, gotParams.Full)
 		assert.True(t, *gotParams.Full)
 		require.NotNil(t, gotParams.MinLedger)
 		assert.Equal(t, uint32(5), *gotParams.MinLedger)
+	})
+
+	t.Run("Empty and unknown-only requests are status queries", func(t *testing.T) {
+		var configurations atomic.Int32
+		services.LedgerCleanerConfigure = func(types.LedgerCleanerParams) types.LedgerCleanerStatus {
+			configurations.Add(1)
+			return types.LedgerCleanerStatus{State: "running"}
+		}
+		services.LedgerCleanerStatusFn = func() types.LedgerCleanerStatus {
+			return types.LedgerCleanerStatus{State: "idle", LedgersChecked: 3}
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services:   types.NewTestServiceGraph(services),
+		}
+
+		for _, params := range []json.RawMessage{nil, {}, json.RawMessage(`{}`), json.RawMessage(`{"unknown":1}`)} {
+			result, rpcErr := method.Handle(ctx, params)
+			require.Nil(t, rpcErr)
+			resp := result.(map[string]any)
+			assert.Equal(t, "idle", resp["status"])
+			assert.Equal(t, uint64(3), resp["ledgers_checked"])
+			assert.NotContains(t, resp, "message")
+		}
+		assert.Zero(t, configurations.Load())
+	})
+
+	t.Run("Rejects malformed and out-of-range fields", func(t *testing.T) {
+		services.LedgerCleanerConfigure = func(types.LedgerCleanerParams) types.LedgerCleanerStatus {
+			t.Fatal("invalid input reached cleaner configuration")
+			return types.LedgerCleanerStatus{}
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services:   types.NewTestServiceGraph(services),
+		}
+
+		for _, params := range []json.RawMessage{
+			json.RawMessage(`{"ledger":-1}`),
+			json.RawMessage(`{"ledger":4294967296}`),
+			json.RawMessage(`{"full":"true"}`),
+			json.RawMessage(`{"min_ledger":1`),
+		} {
+			result, rpcErr := method.Handle(ctx, params)
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+		}
 	})
 
 	t.Run("Preserves explicit false overrides", func(t *testing.T) {
