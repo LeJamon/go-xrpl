@@ -230,6 +230,7 @@ func TestValidAMM_DeleteMustRemoveObject(t *testing.T) {
 // holder-balance branch of ValidClawback can run.
 type clawbackTx struct {
 	account string
+	holder  string
 	amount  Amount
 }
 
@@ -238,6 +239,7 @@ func (t clawbackTx) TxAccount() string                { return t.account }
 func (t clawbackTx) TxHasField(string) bool           { return false }
 func (t clawbackTx) Flatten() (map[string]any, error) { return map[string]any{}, nil }
 func (t clawbackTx) ClawbackAmount() Amount           { return t.amount }
+func (t clawbackTx) ClawbackHolder() string           { return t.holder }
 
 // lineView returns the same trust-line bytes for every Read, enough for the
 // single accountHolds() lookup ValidClawback performs.
@@ -259,7 +261,7 @@ func TestValidClawback_TooManyEntries(t *testing.T) {
 		{EntryType: entry.TypeRippleState, Before: nonNil},
 		{EntryType: entry.TypeRippleState, Before: nonNil},
 	}
-	if v := checkValidClawback(tx, TesSUCCESS, twoLines, stubView{}); v == nil {
+	if v := checkValidClawback(tx, TesSUCCESS, twoLines, stubView{}, nil); v == nil {
 		t.Fatal("expected ValidClawback violation: more than one trustline changed")
 	} else if v.Name != "ValidClawback" {
 		t.Fatalf("unexpected violation name %q", v.Name)
@@ -269,14 +271,14 @@ func TestValidClawback_TooManyEntries(t *testing.T) {
 		{EntryType: entry.TypeMPToken, Before: nonNil},
 		{EntryType: entry.TypeMPToken, Before: nonNil},
 	}
-	if v := checkValidClawback(tx, TesSUCCESS, twoMPTokens, stubView{}); v == nil {
+	if v := checkValidClawback(tx, TesSUCCESS, twoMPTokens, stubView{}, nil); v == nil {
 		t.Fatal("expected ValidClawback violation: more than one mptoken changed")
 	}
 
 	// Exactly one trust line and no Amount provider: the ==1 branch skips the
 	// balance check and the invariant is satisfied.
 	oneLine := []InvariantEntry{{EntryType: entry.TypeRippleState, Before: nonNil}}
-	if v := checkValidClawback(tx, TesSUCCESS, oneLine, stubView{}); v != nil {
+	if v := checkValidClawback(tx, TesSUCCESS, oneLine, stubView{}, nil); v != nil {
 		t.Fatalf("single trustline: unexpected violation %v", v)
 	}
 }
@@ -290,11 +292,11 @@ func TestValidClawback_ChangesOnFailure(t *testing.T) {
 	const failure Result = 100 // any non-tesSUCCESS result
 
 	changed := []InvariantEntry{{EntryType: entry.TypeRippleState, Before: nonNil}}
-	if v := checkValidClawback(tx, failure, changed, stubView{}); v == nil {
+	if v := checkValidClawback(tx, failure, changed, stubView{}, nil); v == nil {
 		t.Fatal("expected ValidClawback violation: trustline changed despite failure")
 	}
 
-	if v := checkValidClawback(tx, failure, nil, stubView{}); v != nil {
+	if v := checkValidClawback(tx, failure, nil, stubView{}, nil); v != nil {
 		t.Fatalf("failed clawback with no changes: unexpected violation %v", v)
 	}
 }
@@ -345,14 +347,14 @@ func TestValidClawback_HolderBalanceSign(t *testing.T) {
 	}
 
 	neg := line(true)
-	if v := checkValidClawback(tx, TesSUCCESS, entries(neg), lineView{line: neg}); v == nil {
+	if v := checkValidClawback(tx, TesSUCCESS, entries(neg), lineView{line: neg}, nil); v == nil {
 		t.Fatal("expected ValidClawback violation: negative holder balance")
 	} else if v.Name != "ValidClawback" {
 		t.Fatalf("unexpected violation name %q", v.Name)
 	}
 
 	pos := line(false)
-	if v := checkValidClawback(tx, TesSUCCESS, entries(pos), lineView{line: pos}); v != nil {
+	if v := checkValidClawback(tx, TesSUCCESS, entries(pos), lineView{line: pos}, nil); v != nil {
 		t.Fatalf("non-negative holder balance: unexpected violation %v", v)
 	}
 }

@@ -3,7 +3,9 @@ package engine
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/clawback"
 )
 
 // TestToInvariantsAsset_PreservesMPTIssuanceID guards the fix for the adapter
@@ -28,5 +30,25 @@ func TestToInvariantsAsset_PreservesMPTIssuanceID(t *testing.T) {
 	xrp := toInvariantsAsset(txcore.Asset{Currency: "XRP"})
 	if !xrp.IsNative() || xrp.IsMPT() {
 		t.Fatalf("XRP conversion wrong: %+v", xrp)
+	}
+}
+
+func TestInvariantsAdapterClawbackHolder(t *testing.T) {
+	transaction := clawback.NewMPTokenClawback(
+		"rIssuer",
+		"rHolder",
+		state.NewMPTAmountWithIssuanceID(
+			10,
+			"rIssuer",
+			"00000001C35BFC42B69F7A19B7C4C5B5D5E7F9A1B3C5D7E9",
+		),
+	)
+	adapted := wrapTxForInvariants(transaction)
+	provider, ok := adapted.(interface{ ClawbackHolder() string })
+	if !ok {
+		t.Fatal("Clawback holder provider is missing")
+	}
+	if got := provider.ClawbackHolder(); got != "rHolder" {
+		t.Fatalf("ClawbackHolder = %q, want rHolder", got)
 	}
 }
