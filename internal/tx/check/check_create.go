@@ -191,14 +191,22 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		// freeze of the source side blocks the source from sending. This is the
 		// shared issuer-side individual freeze check.
 		// Reference: CreateCheck.cpp L131-145
-		if tx.IsTrustlineFrozen(ctx.View, accountID, issuerID, c.SendMax.Currency) {
+		frozen, err := isTrustLineFrozenByIssuer(ctx.View, accountID, issuerID, c.SendMax.Currency)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if frozen {
 			return ter.TecFROZEN
 		}
 
 		// Check destination trust line freeze (if dest is not issuer): check if
 		// the destination froze their own side (not issuer freeze).
 		// Reference: CreateCheck.cpp L146-159
-		if isTrustLineFrozenBySelf(ctx.View, destID, issuerID, c.SendMax.Currency) {
+		frozen, err = isTrustLineFrozenBySelf(ctx.View, destID, issuerID, c.SendMax.Currency)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if frozen {
 			return ter.TecFROZEN
 		}
 	}
@@ -281,17 +289,32 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 // isTrustLineFrozenBySelf reports whether the trust line between account and
 // issuer is frozen on the account's own side. Returns false when account ==
 // issuer, the line does not exist, or the line cannot be read or parsed.
-func isTrustLineFrozenBySelf(view tx.LedgerView, accountID, issuerID [20]byte, currency string) bool {
+func isTrustLineFrozenByIssuer(view tx.LedgerView, accountID, issuerID [20]byte, currency string) (bool, error) {
 	if accountID == issuerID {
-		return false
+		return false, nil
 	}
 	tl, err := tx.ReadRippleState(view, accountID, issuerID, currency)
 	if err != nil || tl == nil {
-		return false
+		return false, err
+	}
+	freezeFlag := state.LsfLowFreeze
+	if keylet.IsLowAccount(accountID, issuerID) {
+		freezeFlag = state.LsfHighFreeze
+	}
+	return tl.Flags&freezeFlag != 0, nil
+}
+
+func isTrustLineFrozenBySelf(view tx.LedgerView, accountID, issuerID [20]byte, currency string) (bool, error) {
+	if accountID == issuerID {
+		return false, nil
+	}
+	tl, err := tx.ReadRippleState(view, accountID, issuerID, currency)
+	if err != nil || tl == nil {
+		return false, err
 	}
 	freezeFlag := state.LsfLowFreeze
 	if !keylet.IsLowAccount(accountID, issuerID) {
 		freezeFlag = state.LsfHighFreeze
 	}
-	return tl.Flags&freezeFlag != 0
+	return tl.Flags&freezeFlag != 0, nil
 }

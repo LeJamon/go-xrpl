@@ -458,6 +458,27 @@ func TestValidMPTIssuance_AuthorizeByActor(t *testing.T) {
 	}
 }
 
+func TestValidMPTIssuance_MayCreatePrivilege(t *testing.T) {
+	created := mptInvariantEntry(t, addrHolderA, addrIssuer, false)
+	deleted := mptInvariantEntry(t, addrHolderA, addrIssuer, true)
+	checkCash := stubTx{txType: protocol.TxTypeCheckCash}
+	rules := amendment.AllSupportedRules()
+
+	if v := checkValidMPTIssuance(checkCash, TesSUCCESS, []InvariantEntry{created}, stubView{}, rules); v != nil {
+		t.Fatalf("CheckCash creating one MPToken: unexpected violation %v", v)
+	}
+	if v := checkValidMPTIssuance(checkCash, TesSUCCESS, []InvariantEntry{created, created}, stubView{}, rules); v == nil {
+		t.Fatal("expected CheckCash creating two MPToken entries to violate ValidMPTIssuance")
+	}
+	if v := checkValidMPTIssuance(checkCash, TesSUCCESS, []InvariantEntry{deleted}, stubView{}, rules); v == nil {
+		t.Fatal("expected CheckCash deleting an MPToken to violate ValidMPTIssuance")
+	}
+	issuance := mptIssuanceInvariantEntry(t, nil, false)
+	if v := checkValidMPTIssuance(checkCash, TesSUCCESS, []InvariantEntry{issuance}, stubView{}, rules); v == nil {
+		t.Fatal("expected CheckCash creating an issuance to violate ValidMPTIssuance")
+	}
+}
+
 func TestValidMPTIssuance_MayAuthorizePrivilege(t *testing.T) {
 	created := mptInvariantEntry(t, addrHolderA, addrIssuer, false)
 	deleted := mptInvariantEntry(t, addrHolderA, addrIssuer, true)

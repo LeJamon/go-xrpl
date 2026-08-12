@@ -5,7 +5,7 @@ package invariants
 // Each transaction type declares which privileged operations it is permitted to
 // perform. Invariant checks consult hasPrivilege instead of hardcoding
 // transaction-type lists, mirroring rippled's Privilege enum and the privileges
-// column of transactions.macro (tag 3.0.0). A transaction type absent from the
+// column of transactions.macro. A transaction type absent from the
 // table carries noPriv, matching rippled's `default: return false` in
 // hasPrivilege (InvariantCheck.cpp).
 
@@ -29,20 +29,21 @@ const (
 	mayDeleteMPT       Privilege = 0x0400 // may delete (not create) an MPToken
 	mustModifyVault    Privilege = 0x0800 // must modify, delete, or create a vault
 	mayModifyVault     Privilege = 0x1000 // may modify, delete, or create a vault
+	mayCreateMPT       Privilege = 0x2000 // may create, but not delete, an MPToken
 )
 
-// txPrivileges maps each transaction type to its declared privilege bitfield,
-// transcribed from rippled's transactions.macro at tag 3.0.0. Transaction types
+// txPrivileges maps each transaction type to its declared privilege bitfield.
+// Transaction types
 // with noPriv are omitted (the zero value); hasPrivilege treats them, and any
 // deprecated/pseudo type, as privilege-less. The Loan* types (74-84) are keyed
 // by numeric tt code because go-xrpl does not yet name them (tracked in #1245).
 var txPrivileges = map[TxType]Privilege{
-	protocol.TxTypePayment:                      createAcct,
+	protocol.TxTypePayment:                      createAcct | mayCreateMPT,
 	protocol.TxTypeAccountDelete:                mustDeleteAcct,
 	protocol.TxTypeNFTokenMint:                  changeNFTCounts,
 	protocol.TxTypeNFTokenBurn:                  changeNFTCounts,
 	protocol.TxTypeAMMClawback:                  mayDeleteAcct | overrideFreeze,
-	protocol.TxTypeAMMCreate:                    createPseudoAcct,
+	protocol.TxTypeAMMCreate:                    createPseudoAcct | mayCreateMPT,
 	protocol.TxTypeAMMWithdraw:                  mayDeleteAcct,
 	protocol.TxTypeAMMDelete:                    mustDeleteAcct,
 	protocol.TxTypeXChainAddClaimAttestation:    createAcct,
@@ -50,6 +51,8 @@ var txPrivileges = map[TxType]Privilege{
 	protocol.TxTypeMPTokenIssuanceCreate:        createMPTIssuance,
 	protocol.TxTypeMPTokenIssuanceDestroy:       destroyMPTIssuance,
 	protocol.TxTypeMPTokenAuthorize:             mustAuthorizeMPT,
+	protocol.TxTypeCheckCash:                    mayCreateMPT,
+	protocol.TxTypeOfferCreate:                  mayCreateMPT,
 	protocol.TxTypeVaultCreate:                  createPseudoAcct | createMPTIssuance | mustModifyVault,
 	protocol.TxTypeVaultSet:                     mustModifyVault,
 	protocol.TxTypeVaultDelete:                  mustDeleteAcct | destroyMPTIssuance | mustModifyVault,

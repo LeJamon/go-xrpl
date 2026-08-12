@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // ---------------------------------------------------------------------------
@@ -205,6 +206,29 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 				return &InvariantViolation{
 					Name:    "ValidMPTIssuance",
 					Message: "MPT authorize submitted by holder succeeded but created/deleted bad number of mptokens",
+				}
+			}
+			return nil
+		}
+
+		if hasPrivilege(txType, mayCreateMPT) {
+			if mptIssuancesCreated > 0 || mptIssuancesDeleted > 0 || mptokensDeleted > 0 {
+				return &InvariantViolation{
+					Name:    "ValidMPTIssuance",
+					Message: "MPT creation transaction changed an issuance or deleted an MPToken",
+				}
+			}
+			if txType == TypeAMMCreate && mptokensCreated > 2 ||
+				txType == protocol.TxTypeCheckCash && mptokensCreated > 1 {
+				return &InvariantViolation{
+					Name:    "ValidMPTIssuance",
+					Message: "MPT creation transaction created too many MPToken entries",
+				}
+			}
+			if tx.TxHasField("Holder") && mptokensCreated > 0 {
+				return &InvariantViolation{
+					Name:    "ValidMPTIssuance",
+					Message: "issuer-submitted transaction created an MPToken",
 				}
 			}
 			return nil
