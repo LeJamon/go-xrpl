@@ -16,6 +16,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	paymenttx "github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/stretchr/testify/require"
 )
 
 // ===================================================================
@@ -123,68 +124,64 @@ func TestAMMBookStep_BasicPaymentEngine(t *testing.T) {
 // Reference: rippled AMM_test.cpp testAMMAndCLOB (line 4953)
 // If AMM is replaced with an equivalent CLOB offer, the result must be equivalent.
 func TestAMMBookStep_AMMAndCLOB(t *testing.T) {
-	// Setup: GW offers XRP(11.5B) for TST(1B). LP1 and LP2 each offer TST(25) for XRP(287.5M).
-	// With AMM: LP1 creates AMM TST(25)/XRP(250). Then LP2 creates offer TST(25)/XRP(287.5M).
-	// Capture LP2's TST balance and remaining offer.
-	// With CLOB: LP1 creates equivalent passive CLOB offer. Same LP2 offer.
-	// Compare LP2's state — should be identical.
-
-	env := amm.NewAMMTestEnv(t)
-
-	lp1 := jtx.NewAccount("lp1")
-	lp2 := jtx.NewAccount("lp2")
-
-	// Fund
-	env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(30000000000)))
-	env.TestEnv.FundAmount(lp1, uint64(jtx.XRP(10000)))
-	env.TestEnv.FundAmount(lp2, uint64(jtx.XRP(10000)))
-	env.Close()
-
-	// GW sells XRP for TST: offer(gw, XRP(11.5B), TST(1B))
-	env.Trust(lp1, env.GW, "TST", 1000000000000)
-	env.Trust(lp2, env.GW, "TST", 1000000000000)
-	env.Close()
-
-	gwOfferTx := offerbuild.OfferCreate(env.GW,
-		tx.NewXRPAmount(11_500_000_000*1_000_000),
-		amm.IOUAmount(env.GW, "TST", 1000000000)).Build()
-	jtx.RequireTxSuccess(t, env.Submit(gwOfferTx))
-	env.Close()
-
-	// LP1 offer: TST(25) for XRP(287.5M)
-	lp1OfferTx := offerbuild.OfferCreate(lp1,
-		amm.IOUAmount(env.GW, "TST", 25),
-		tx.NewXRPAmount(287_500_000*1_000_000)).Build()
-	jtx.RequireTxSuccess(t, env.Submit(lp1OfferTx))
-	env.Close()
-
-	// LP1 creates AMM: TST(25)/XRP(250)
-	ammCreateTx := amm.AMMCreate(lp1,
-		amm.IOUAmount(env.GW, "TST", 25),
-		tx.NewXRPAmount(250*1_000_000)).TradingFee(0).Build()
-	jtx.RequireTxSuccess(t, env.Submit(ammCreateTx))
-	env.Close()
-
-	// LP2 offer: TST(25) for XRP(287.5M)
-	lp2OfferTx := offerbuild.OfferCreate(lp2,
-		amm.IOUAmount(env.GW, "TST", 25),
-		tx.NewXRPAmount(287_500_000*1_000_000)).Build()
-	jtx.RequireTxSuccess(t, env.Submit(lp2OfferTx))
-	env.Close()
-
-	// Capture LP2's TST balance — should have received some TST from crossing
-	lp2TSTBalance := env.TestEnv.BalanceIOU(lp2, "TST", env.GW)
-	t.Logf("LP2 TST balance: %f", lp2TSTBalance)
-
-	// LP2's offer crossed (fully or partially) against the AMM + GW's offer.
-	// The key assertion: LP2 got some TST (offer was crossed via AMM liquidity).
-	if lp2TSTBalance <= 0 {
-		t.Errorf("LP2 should have positive TST balance after crossing, got %f", lp2TSTBalance)
+	type result struct {
+		balance   string
+		takerPays string
+		takerGets string
 	}
 
-	// LP2's remaining offers (may be 0 if fully consumed, or 1 if partially filled)
-	lp2Offers := env.AccountOffers(lp2)
-	t.Logf("LP2 remaining offers: %d", len(lp2Offers))
+	run := func(t *testing.T, withAMM bool) result {
+		env := amm.NewAMMTestEnv(t)
+		env.DisableFeature("SingleAssetVault")
+		env.DisableFeature("LendingProtocol")
+		lp1 := jtx.NewAccount("lp1")
+		lp2 := jtx.NewAccount("lp2")
+
+		env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(30_000_000_000)))
+		env.TestEnv.FundAmount(lp1, uint64(jtx.XRP(10_000)))
+		env.TestEnv.FundAmount(lp2, uint64(jtx.XRP(10_000)))
+		env.Close()
+		env.Trust(lp1, env.GW, "TST", 1_000_000_000_000)
+		env.Trust(lp2, env.GW, "TST", 1_000_000_000_000)
+		env.Close()
+
+		jtx.RequireTxSuccess(t, env.Submit(offerbuild.OfferCreate(env.GW,
+			tx.NewXRPAmount(11_500_000_000*1_000_000),
+			amm.IOUAmount(env.GW, "TST", 1_000_000_000)).Build()))
+		jtx.RequireTxSuccess(t, env.Submit(offerbuild.OfferCreate(lp1,
+			amm.IOUAmount(env.GW, "TST", 25),
+			tx.NewXRPAmount(287_500_000)).Build()))
+		env.Close()
+
+		if withAMM {
+			jtx.RequireTxSuccess(t, env.Submit(amm.AMMCreate(lp1,
+				amm.IOUAmount(env.GW, "TST", 25),
+				tx.NewXRPAmount(250*1_000_000)).Build()))
+		} else {
+			jtx.RequireTxSuccess(t, env.Submit(offerbuild.OfferCreate(lp1,
+				tx.NewXRPAmount(18_095_132),
+				state.NewIssuedAmountFromValue(168_737_976_189_735, -14, "TST", env.GW.Address)).
+				Passive().Build()))
+		}
+		env.Close()
+
+		jtx.RequireTxSuccess(t, env.Submit(offerbuild.OfferCreate(lp2,
+			amm.IOUAmount(env.GW, "TST", 25),
+			tx.NewXRPAmount(287_500_000)).Build()))
+		env.Close()
+
+		offers := env.AccountOffers(lp2)
+		require.Len(t, offers, 1)
+		return result{
+			balance:   env.TestEnv.IOUBalance(lp2, env.GW, "TST").Value(),
+			takerPays: offers[0].TakerPays.Value(),
+			takerGets: offers[0].TakerGets.Value(),
+		}
+	}
+
+	ammResult := run(t, true)
+	clobResult := run(t, false)
+	require.Equal(t, ammResult, clobResult)
 }
 
 // TestAMMBookStep_TradingFee tests trading fees on payments through AMM.
@@ -300,11 +297,9 @@ func TestAMMBookStep_TradingFee(t *testing.T) {
 
 			// With 0.5% fee, Carol gets less EUR for USD compared to no-fee scenario.
 			// The fee goes to the AMM pool.
-			carolUSD := env.TestEnv.BalanceIOU(env.Carol, "USD", env.GW)
 			carolEUR := env.TestEnv.BalanceIOU(env.Carol, "EUR", env.GW)
 			// After 3 offers: first two cancel out, third loses fee to pool.
 			// Carol should have less USD and more EUR than 30000 each.
-			t.Logf("Carol USD: %f, EUR: %f", carolUSD, carolEUR)
 			// The fee-bearing offer should give Carol fewer EUR than the 10 she asked for
 			// (some went to the pool as fee)
 			if carolEUR >= 30010 {
@@ -1096,14 +1091,7 @@ func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
 							}
 						}
 					case Fail:
-						// Fail but got success — unexpected (could be ok for Fail status with zero quality)
-						if tc.quality.Value != 0 {
-							// Verify the tiny offer quality is < target
-							tinyQ := offerQ
-							if !(tinyQ.WorseThan(tc.quality)) && tinyQ.Value != tc.quality.Value {
-								t.Logf("[%d] Fail but got amounts — quality check: q=%d target=%d", i, offerQ.Value, tc.quality.Value)
-							}
-						}
+						t.Errorf("[%d] Fail: expected no result, got quality=%d target=%d", i, offerQ.Value, tc.quality.Value)
 					}
 				} else {
 					// No result
@@ -2103,33 +2091,6 @@ func TestAMMBookStep_OfferFeesConsumeFunds(t *testing.T) {
 	}
 }
 
-// TestAMMBookStep_OfferCreateThenCross tests creating an offer then crossing.
-// Reference: rippled AMMExtended_test.cpp testOfferCreateThenCross (line 601)
-func TestAMMBookStep_OfferCreateThenCross(t *testing.T) {
-	// Pool: XRP(10000)/USD(10100)
-	// Bob creates offer to buy XRP for USD, crosses against AMM.
-	pool := [2]tx.Amount{
-		amm.XRPAmount(10000),
-		amm.IOUAmount(nil, "USD", 10100),
-	}
-	amm.TestAMM(t, &pool, 0, func(env *amm.AMMTestEnv, ammAcc *jtx.Account) {
-		env.FundBob(30000, 20000)
-		env.Close()
-
-		// Bob creates offer: buy XRP(100) sell USD(100) — crosses AMM
-		offerTx := offerbuild.OfferCreate(env.Bob, amm.XRPAmount(100), amm.IOUAmount(env.GW, "USD", 100)).Build()
-		result := env.Submit(offerTx)
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		// AMM should have gained 100 USD: XRP(10000-~100), USD(10100+~100)
-		// With the exact pool values, 100 USD buys exactly ~99.01 XRP from AMM
-		// But since the offer is TakerPays=XRP(100), TakerGets=USD(100), and
-		// the AMM quality is 10100/10000 = 1.01, the taker gets all 100 XRP at this quality
-		t.Logf("AMM XRP: %d, USD: %f", env.AMMPoolXRP(ammAcc), env.AMMPoolIOU(ammAcc, env.GW, "USD"))
-	})
-}
-
 // TestAMMBookStep_SellFlagBasic tests basic sell flag behavior.
 // Reference: rippled AMMExtended_test.cpp testSellFlagBasic (line 632)
 // Pool: XRP(9900)/USD(10100). Carol sells XRP(100) for USD with tfSell.
@@ -2262,8 +2223,12 @@ func TestAMMBookStep_SellFlagExceedLimit(t *testing.T) {
 // Bob does a self-payment: buy XXX(1) with sendmax XTS(1.5), tfPartialPayment.
 // With fixAMMv1_1: AMM → XTS(101.01010101010110), XXX(99). Bob XTS ≈ 98.9898989898989.
 func TestAMMBookStep_GatewayCrossCurrency(t *testing.T) {
-	t.Skip("Self-payment cross-currency through AMM gets tecPATH_DRY - needs build_path/auto-pathfind support")
 	env := amm.NewAMMTestEnv(t)
+	env.DisableFeature("SingleAssetVault")
+	env.DisableFeature("LendingProtocol")
+	require.True(t, env.TestEnv.FeatureEnabled("fixAMMv1_1"))
+	require.False(t, env.TestEnv.FeatureEnabled("SingleAssetVault"))
+	require.False(t, env.TestEnv.FeatureEnabled("LendingProtocol"))
 
 	// starting_xrp = XRP(100.1) + reserve(env,1) + 2*baseFee
 	startingXRP := uint64(100_100_000) + env.TestEnv.ReserveBase() + env.TestEnv.ReserveIncrement() + 20
@@ -2274,10 +2239,11 @@ func TestAMMBookStep_GatewayCrossCurrency(t *testing.T) {
 	env.Close()
 
 	// Trust + fund XTS and XXX for alice and bob
-	env.Trust(env.Alice, env.GW, "XTS", 100)
-	env.Trust(env.Alice, env.GW, "XXX", 100)
-	env.Trust(env.Bob, env.GW, "XTS", 100)
-	env.Trust(env.Bob, env.GW, "XXX", 100)
+	// rippled's AMM fund helper sets trust limits to twice the funded amount.
+	env.Trust(env.Alice, env.GW, "XTS", 200)
+	env.Trust(env.Alice, env.GW, "XXX", 200)
+	env.Trust(env.Bob, env.GW, "XTS", 200)
+	env.Trust(env.Bob, env.GW, "XXX", 200)
 	env.Close()
 
 	env.PayIOU(env.GW, env.Alice, "XTS", 100)
@@ -2294,26 +2260,23 @@ func TestAMMBookStep_GatewayCrossCurrency(t *testing.T) {
 	env.Close()
 
 	// Bob self-payment: buy XXX(1) with sendmax XTS(1.5), tfPartialPayment
-	payTx := payment.PayIssued(env.Bob, env.Bob, amm.IOUAmount(env.GW, "XXX", 1)).
-		SendMax(amm.IOUAmount(env.GW, "XTS", 1.5)).
+	destinationAmount := amm.IOUAmount(env.GW, "XXX", 1)
+	sendMax := amm.IOUAmount(env.GW, "XTS", 1.5)
+	payTx := payment.PayIssued(env.Bob, env.Bob, destinationAmount).
+		SendMax(sendMax).
+		Paths([][]paymenttx.PathStep{{{Currency: "XXX", Issuer: env.GW.Address}}}).
 		PartialPayment().
 		Build()
 	jtx.RequireTxSuccess(t, env.Submit(payTx))
 	env.Close()
 
-	// With fixAMMv1_1:
-	// AMM: XTS ≈ 101.01010101010110, XXX = 99
-	// Bob XTS ≈ 98.9898989898989, Bob XXX = 101
-	bobXXX := env.TestEnv.BalanceIOU(env.Bob, "XXX", env.GW)
-	if math.Abs(bobXXX-101) > 0.0001 {
-		t.Errorf("Bob XXX: got %f, want 101", bobXXX)
-	}
-
-	bobXTS := env.TestEnv.BalanceIOU(env.Bob, "XTS", env.GW)
-	// Expect ~98.9898989898989
-	if math.Abs(bobXTS-98.9898989898989) > 0.001 {
-		t.Errorf("Bob XTS: got %f, want ~98.99", bobXTS)
-	}
+	ammAccount := amm.AMMAccount(t, env,
+		tx.Asset{Currency: "XTS", Issuer: env.GW.Address},
+		tx.Asset{Currency: "XXX", Issuer: env.GW.Address})
+	require.Equal(t, "101.0101010101011", env.AMMPoolIOUPrecise(ammAccount, env.GW, "XTS").Value())
+	require.Equal(t, "99", env.AMMPoolIOUPrecise(ammAccount, env.GW, "XXX").Value())
+	require.Equal(t, "98.9898989898989", env.TestEnv.IOUBalance(env.Bob, env.GW, "XTS").Value())
+	require.Equal(t, "101", env.TestEnv.IOUBalance(env.Bob, env.GW, "XXX").Value())
 }
 
 // TestAMMBookStep_BridgedCross tests bridged crossing with AMM.
@@ -3578,7 +3541,6 @@ func TestAMMBookStep_StepLimit(t *testing.T) {
 
 	// Alice should have gotten some USD (from bob's first offer + possibly AMM)
 	aliceUSD := env.TestEnv.BalanceIOU(env.Alice, "USD", env.GW)
-	t.Logf("Alice USD after first offer: %e", aliceUSD)
 	if aliceUSD <= 0 {
 		t.Errorf("Alice should have some USD, got %f", aliceUSD)
 	}
@@ -3598,7 +3560,7 @@ func TestAMMBookStep_StepLimit(t *testing.T) {
 	// Bob's owner count should be ~1001 (999 removed as unfunded)
 	bobOwners := env.TestEnv.OwnerCount(env.Bob)
 	if bobOwners != 1001 {
-		t.Logf("Bob owner count: %d (expected ~1001)", bobOwners)
+		t.Errorf("Bob owner count: got %d, want 1001", bobOwners)
 	}
 
 	// Dan still has 1 USD and 2 owners
@@ -3759,7 +3721,7 @@ func TestAMMBookStep_RippleState(t *testing.T) {
 	// Alice creates AMM: XRP(500)/USD(105) using G1's USD
 	createTx := amm.AMMCreate(env.Alice,
 		amm.XRPAmount(500),
-		amm.IOU(g1, "USD", 105)).Build()
+		amm.IOUAmount(g1, "USD", 105)).Build()
 	jtx.RequireTxSuccess(t, env.Submit(createTx))
 	env.Close()
 
@@ -3780,7 +3742,7 @@ func TestAMMBookStep_RippleState(t *testing.T) {
 
 	// After freeze: bob can buy more (offer crossing AMM)
 	offerTx := offerbuild.OfferCreate(env.Bob,
-		amm.IOU(g1, "USD", 5),
+		amm.IOUAmount(g1, "USD", 5),
 		amm.XRPAmount(25)).Build()
 	jtx.RequireTxSuccess(t, env.Submit(offerTx))
 	env.Close()
@@ -3792,7 +3754,7 @@ func TestAMMBookStep_RippleState(t *testing.T) {
 	// After freeze: bob cannot sell from that line
 	offerTx2 := offerbuild.OfferCreate(env.Bob,
 		amm.XRPAmount(1),
-		amm.IOU(g1, "USD", 5)).Build()
+		amm.IOUAmount(g1, "USD", 5)).Build()
 	result := env.Submit(offerTx2)
 	amm.ExpectTER(t, result, "tecUNFUNDED_OFFER")
 

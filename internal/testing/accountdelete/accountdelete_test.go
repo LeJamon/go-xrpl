@@ -448,8 +448,11 @@ func TestAccountDelete_FeeAndFlags(t *testing.T) {
 			edit: func(d *acctx.AccountDelete, _ *jtx.TestEnv) { d.SetFlags(0x00020000) },
 		},
 		{
-			name: "default fee",
+			name: "base fee",
 			code: "telINSUF_FEE_P",
+			edit: func(d *acctx.AccountDelete, env *jtx.TestEnv) {
+				d.Fee = fmt.Sprintf("%d", env.BaseFee())
+			},
 		},
 		{
 			name: "one drop below reserve increment",

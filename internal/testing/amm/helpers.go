@@ -221,11 +221,6 @@ func IOUAmount(issuer *jtx.Account, currency string, amount float64) tx.Amount {
 	return tx.NewIssuedAmountFromFloat64(amount, currency, issuer.Address)
 }
 
-// IOU creates an IOU amount (alias for IOUAmount).
-func IOU(issuer *jtx.Account, currency string, amount float64) tx.Amount {
-	return IOUAmount(issuer, currency, amount)
-}
-
 // LPTokenAmount creates an LP token amount for the given AMM asset pair.
 // It generates the proper LP token currency (starting with 03) and resolves
 // the AMM pseudo-account issuer from env's ledger when the AMM exists.
@@ -496,14 +491,6 @@ func (e *AMMTestEnv) ExpectAMMBalances(t *testing.T, ammAcc *jtx.Account, xrpDro
 	}
 }
 
-// WithAMM sets up an AMM and calls the test callback.
-// This matches rippled's testAMM helper function.
-func WithAMM(t *testing.T, amount1, amount2 tx.Amount, tradingFee uint16, callback TestAMMCallback) {
-	t.Helper()
-	pool := [2]tx.Amount{amount1, amount2}
-	TestAMM(t, &pool, tradingFee, callback)
-}
-
 // WithDefaultAMM sets up an AMM with XRP(10000)/USD(10000) and no trading fee.
 func WithDefaultAMM(t *testing.T, callback TestAMMCallback) {
 	t.Helper()
@@ -723,28 +710,5 @@ func (e *AMMTestEnv) ExpectLPTokens(account *jtx.Account, asset1, asset2 tx.Asse
 	}
 	if diff > tolerance {
 		e.T.Errorf("ExpectLPTokens(%s): got %f, want %f (diff=%f)", account.Name, actual, expected, diff)
-	}
-}
-
-// ExpectLPTokensPrecise checks LP token balance with precise Amount comparison.
-func (e *AMMTestEnv) ExpectLPTokensPrecise(account *jtx.Account, asset1, asset2 tx.Asset, expected tx.Amount) {
-	e.T.Helper()
-
-	ammAcc := e.ReadAMMAccount(asset1, asset2)
-	if ammAcc == nil {
-		e.T.Errorf("ExpectLPTokensPrecise(%s): AMM not found", account.Name)
-		return
-	}
-	lptCurrency := coreAmm.GenerateAMMLPTCurrency(asset1.Currency, asset2.Currency)
-
-	balance := e.TestEnv.IOUBalance(account, ammAcc, lptCurrency)
-	if balance == nil {
-		e.T.Errorf("ExpectLPTokensPrecise(%s): no trust line", account.Name)
-		return
-	}
-
-	if balance.Mantissa() != expected.Mantissa() || balance.Exponent() != expected.Exponent() {
-		e.T.Errorf("ExpectLPTokensPrecise(%s): got %de%d, want %de%d",
-			account.Name, balance.Mantissa(), balance.Exponent(), expected.Mantissa(), expected.Exponent())
 	}
 }

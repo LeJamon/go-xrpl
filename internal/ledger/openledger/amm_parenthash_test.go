@@ -55,7 +55,7 @@ func TestApplyTxs_BuildLedgerMode_AMMCreateUsesParentHash(t *testing.T) {
 	}
 
 	aliceSeq := env.Seq(alice)
-	ammTx := ammtest.AMMCreate(alice, amount1, amount2).Build()
+	ammTx := ammtest.AMMCreate(alice, amount1, amount2).Fee("50000000").Build()
 	ammTx.GetCommon().Sequence = &aliceSeq
 
 	blob := buildSignedBlob(t, env, ammTx, alice)
@@ -127,7 +127,7 @@ func TestTxqAdapter_ApplyTransaction_AMMCreateUsesParentHash(t *testing.T) {
 	}
 
 	aliceSeq := env.Seq(alice)
-	ammTx := ammtest.AMMCreate(alice, amount1, amount2).Build()
+	ammTx := ammtest.AMMCreate(alice, amount1, amount2).Fee("50000000").Build()
 	ammTx.GetCommon().Sequence = &aliceSeq
 
 	blob := buildSignedBlob(t, env, ammTx, alice)

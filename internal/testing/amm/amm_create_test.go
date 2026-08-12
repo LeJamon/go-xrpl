@@ -29,7 +29,6 @@ func TestInstanceCreate(t *testing.T) {
 		env.Close()
 
 		// Verify AMM exists (would check balances in full implementation)
-		t.Log("XRP to IOU AMM creation passed")
 	})
 
 	// IOU to IOU
@@ -46,8 +45,6 @@ func TestInstanceCreate(t *testing.T) {
 			t.Fatalf("Failed to create IOU/IOU AMM: %s - %s", result.Code, result.Message)
 		}
 		env.Close()
-
-		t.Log("IOU to IOU AMM creation passed")
 	})
 
 	// Trading fee
@@ -66,8 +63,6 @@ func TestInstanceCreate(t *testing.T) {
 			t.Fatalf("Failed to create AMM with trading fee: %s - %s", result.Code, result.Message)
 		}
 		env.Close()
-
-		t.Log("AMM creation with trading fee passed")
 	})
 }
 
