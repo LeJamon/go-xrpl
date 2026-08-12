@@ -16,6 +16,7 @@ import (
 	pd "github.com/LeJamon/go-xrpl/internal/testing/permissioneddomain"
 	trustsetBuilder "github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	coreAmm "github.com/LeJamon/go-xrpl/internal/tx/amm"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -1211,6 +1212,128 @@ func TestPermissionedDEX_AmmNotUsed(t *testing.T) {
 	jtx.RequireIOUBalance(t, env, dex.Carol, dex.GW, "USD", 105)
 }
 
+// TestPermissionedDEX_AmmQualityNotLeaked verifies that an AMM which cannot be
+// crossed from a permissioned domain book does not influence path ranking once
+// fixCleanup3_3_0 is enabled. The disabled case preserves the legacy ranking.
+// Reference: rippled PermissionedDEX_test::testAmmQualityNotLeaked.
+func TestPermissionedDEX_AmmQualityNotLeaked(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		fixEnabled bool
+		wantUSD    float64
+		wantDirect bool
+	}{
+		{name: "amendment_off", wantUSD: 10, wantDirect: false},
+		{name: "amendment_on", fixEnabled: true, wantUSD: 20, wantDirect: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			env := jtx.NewTestEnv(t)
+			dex := SetupPermissionedDEX(t, env)
+			if test.fixEnabled {
+				env.EnableFeature("fixCleanup3_3_0")
+			} else {
+				env.DisableFeature("fixCleanup3_3_0")
+			}
+			env.Close()
+
+			EUR := func(amount float64) tx.Amount {
+				return jtx.IssuedCurrency(dex.GW, "EUR", amount)
+			}
+			result := env.Submit(trustsetBuilder.TrustLine(dex.Bob, "EUR", dex.GW, "1000").Build())
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+			result = env.Submit(paymentBuilder.PayIssued(dex.GW, dex.Bob, EUR(100)).Build())
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+
+			// The AMM makes the direct XRP/USD book look better than it is for
+			// domain payments, while the two-book path returns twice as much USD.
+			result = env.Submit(paymentBuilder.PayIssued(dex.GW, dex.Alice, dex.USD(500)).Build())
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+			result = env.Submit(ammBuilder.AMMCreate(dex.Alice, jtx.XRPTxAmount(10_000_000), dex.USD(500)).Build())
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+			ammData, err := env.Ledger().Read(coreAmm.ComputeAMMKeylet(
+				tx.Asset{Currency: "XRP"},
+				tx.Asset{Currency: "USD", Issuer: dex.GW.Address},
+			))
+			if err != nil || ammData == nil {
+				t.Fatalf("read AMM entry: %v", err)
+			}
+			pool, err := coreAmm.ParseAMMData(ammData)
+			if err != nil {
+				t.Fatalf("parse AMM entry: %v", err)
+			}
+			ammAccount := &jtx.Account{ID: pool.Account}
+			xrpBefore := env.Balance(ammAccount)
+			usdBefore := env.BalanceIOU(ammAccount, "USD", dex.GW)
+			if xrpBefore != uint64(jtx.XRP(10)) || usdBefore != 500 {
+				t.Fatalf("AMM balances before payment = XRP %d/USD %v, want XRP %d/USD 500", xrpBefore, usdBefore, jtx.XRP(10))
+			}
+
+			directSeq := env.Seq(dex.Bob)
+			result = env.Submit(
+				offerBuilder.OfferCreate(dex.Bob, jtx.XRPTxAmount(10_000_000), dex.USD(10)).
+					DomainID(dex.DomainID).Build(),
+			)
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+
+			xrpEURSeq := env.Seq(dex.Bob)
+			result = env.Submit(
+				offerBuilder.OfferCreate(dex.Bob, jtx.XRPTxAmount(10_000_000), EUR(20)).
+					DomainID(dex.DomainID).Build(),
+			)
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+
+			eurUSDSeq := env.Seq(dex.Bob)
+			result = env.Submit(
+				offerBuilder.OfferCreate(dex.Bob, EUR(20), dex.USD(20)).
+					DomainID(dex.DomainID).Build(),
+			)
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+
+			carolBalanceBefore := env.IOUBalance(dex.Carol, dex.GW, "USD").Float64()
+			result = env.Submit(
+				paymentBuilder.PayIssued(dex.Alice, dex.Carol, dex.USD(100)).
+					SendMax(jtx.XRPTxAmount(10_000_000)).
+					Paths([][]payment.PathStep{
+						{{Currency: "USD", Issuer: dex.GW.Address}},
+						{{Currency: "EUR", Issuer: dex.GW.Address}, {Currency: "USD", Issuer: dex.GW.Address}},
+					}).
+					PartialPayment().
+					NoDirectRipple().
+					DomainID(dex.DomainIDHex).Build(),
+			)
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+
+			carolBalanceAfter := env.IOUBalance(dex.Carol, dex.GW, "USD").Float64()
+			if got := carolBalanceAfter - carolBalanceBefore; got != test.wantUSD {
+				t.Fatalf("delivered USD = %v, want %v", got, test.wantUSD)
+			}
+			if got := env.Balance(ammAccount); got != xrpBefore {
+				t.Fatalf("AMM XRP balance after payment = %d, want %d", got, xrpBefore)
+			}
+			if got := env.BalanceIOU(ammAccount, "USD", dex.GW); got != usdBefore {
+				t.Fatalf("AMM USD balance after payment = %v, want %v", got, usdBefore)
+			}
+			if test.wantDirect {
+				offerBuilder.RequireOfferInLedger(t, env, dex.Bob, directSeq)
+				offerBuilder.RequireNoOfferInLedger(t, env, dex.Bob, xrpEURSeq)
+				offerBuilder.RequireNoOfferInLedger(t, env, dex.Bob, eurUSDSeq)
+			} else {
+				offerBuilder.RequireNoOfferInLedger(t, env, dex.Bob, directSeq)
+				offerBuilder.RequireOfferInLedger(t, env, dex.Bob, xrpEURSeq)
+				offerBuilder.RequireOfferInLedger(t, env, dex.Bob, eurUSDSeq)
+			}
+		})
+	}
+}
+
 // TestPermissionedDEX_AutoBridge tests that domain offers can be auto-bridged.
 // Reference: rippled PermissionedDEX_test::testAutoBridge
 func TestPermissionedDEX_AutoBridge(t *testing.T) {
@@ -1659,6 +1782,8 @@ func TestPermissionedDEX_HybridBookStep(t *testing.T) {
 func TestPermissionedDEX_HybridInvalidOffer(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	dex := SetupPermissionedDEX(t, env)
+	env.DisableFeature("fixCleanup3_3_0")
+	env.Close()
 
 	// bob creates a hybrid offer
 	hybridSeq := env.Seq(dex.Bob)
@@ -1719,6 +1844,248 @@ func TestPermissionedDEX_HybridInvalidOffer(t *testing.T) {
 	// Hybrid offer removed, regular offer partially consumed
 	offerBuilder.RequireNoOfferInLedger(t, env, dex.Bob, hybridSeq)
 	offerBuilder.RequireOfferInLedger(t, env, dex.Bob, regularSeq)
+}
+
+// TestPermissionedDEX_HybridInvalidOfferFixCleanup330 verifies that losing a
+// domain credential removes hybrid liquidity only from domain-book walks. The
+// open-book directory, metadata, and owner entry survive both a failed domain
+// payment (rollback) and subsequent open-book crossings.
+// Reference: rippled PermissionedDEX_test::testHybridInvalidOffer with
+// fixCleanup3_3_0 enabled.
+func TestPermissionedDEX_HybridInvalidOfferFixCleanup330(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	dex := SetupPermissionedDEX(t, env)
+	env.EnableFeature("fixCleanup3_3_0")
+	env.Close()
+
+	hybridSeq := env.Seq(dex.Bob)
+	result := env.Submit(
+		offerBuilder.OfferCreate(dex.Bob, jtx.XRPTxAmount(50_000_000), dex.USD(50)).
+			DomainID(dex.DomainID).Hybrid().Build(),
+	)
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	hybrid := offerBuilder.GetOffer(env, dex.Bob, hybridSeq)
+	if hybrid == nil {
+		t.Fatal("hybrid offer missing after creation")
+	}
+	offerKey := keylet.Offer(dex.Bob.ID, hybridSeq).Key
+	domainDir := keylet.Keylet{Key: hybrid.BookDirectory}
+	openDir := keylet.Keylet{Key: hybrid.AdditionalBookDirectory}
+	requireDirectoryMembership(t, env, domainDir, offerKey, true)
+	requireDirectoryMembership(t, env, openDir, offerKey, true)
+
+	// Remove bob's domain credential, then verify a domain payment fails and
+	// rolls back the attempted domain-book removal.
+	result = env.Submit(
+		cred.CredentialDeleteHex(dex.DomainOwner, dex.Bob, dex.DomainOwner, dex.CredType).Build(),
+	)
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	ownerCountAfterCredential := env.OwnerCount(dex.Bob)
+	result = env.Submit(
+		paymentBuilder.PayIssued(dex.Alice, dex.Carol, dex.USD(5)).
+			SendMax(jtx.XRPTxAmount(5_000_000)).
+			Paths(usdPath(dex.GW)).
+			DomainID(dex.DomainIDHex).Build(),
+	)
+	jtx.RequireTxClaimed(t, result, "tecPATH_PARTIAL")
+	env.Close()
+	offerBuilder.RequireOfferInLedger(t, env, dex.Bob, hybridSeq)
+	requireDirectoryMembership(t, env, domainDir, offerKey, true)
+	requireDirectoryMembership(t, env, openDir, offerKey, true)
+	jtx.RequireOwnerCount(t, env, dex.Bob, ownerCountAfterCredential)
+
+	// The amendment allows the same invalid hybrid offer to remain usable from
+	// the open book, where it is partially consumed rather than evicted.
+	result = env.Submit(
+		paymentBuilder.PayIssued(dex.Alice, dex.Carol, dex.USD(5)).
+			SendMax(jtx.XRPTxAmount(5_000_000)).
+			Paths(usdPath(dex.GW)).Build(),
+	)
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	hybrid = offerBuilder.GetOffer(env, dex.Bob, hybridSeq)
+	if hybrid == nil || hybrid.TakerPays.Drops() != 45_000_000 || hybrid.TakerGets.Float64() != 45 {
+		t.Fatalf("hybrid offer after open crossing = %+v, want 45 XRP/45 USD", hybrid)
+	}
+	requireDirectoryMembership(t, env, domainDir, offerKey, true)
+	requireDirectoryMembership(t, env, openDir, offerKey, true)
+	jtx.RequireOwnerCount(t, env, dex.Bob, ownerCountAfterCredential)
+
+	// A newer regular offer shares the open directory. FIFO crossing must keep
+	// the older hybrid offer first and leave both directory links intact.
+	regularSeq := env.Seq(dex.Bob)
+	result = env.Submit(
+		offerBuilder.OfferCreate(dex.Bob, jtx.XRPTxAmount(10_000_000), dex.USD(10)).Build(),
+	)
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	regular := offerBuilder.GetOffer(env, dex.Bob, regularSeq)
+	if regular == nil {
+		t.Fatal("regular offer missing after creation")
+	}
+	regularKey := keylet.Offer(dex.Bob.ID, regularSeq).Key
+	requireDirectoryMembership(t, env, openDir, regularKey, true)
+
+	result = env.Submit(
+		paymentBuilder.PayIssued(dex.Alice, dex.Carol, dex.USD(5)).
+			SendMax(jtx.XRPTxAmount(5_000_000)).
+			Paths(usdPath(dex.GW)).Build(),
+	)
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	hybrid = offerBuilder.GetOffer(env, dex.Bob, hybridSeq)
+	regular = offerBuilder.GetOffer(env, dex.Bob, regularSeq)
+	if hybrid == nil || hybrid.TakerPays.Drops() != 40_000_000 || hybrid.TakerGets.Float64() != 40 {
+		t.Fatalf("hybrid offer after second open crossing = %+v, want 40 XRP/40 USD", hybrid)
+	}
+	if regular == nil || regular.TakerPays.Drops() != 10_000_000 || regular.TakerGets.Float64() != 10 {
+		t.Fatalf("regular offer after second open crossing = %+v, want 10 XRP/10 USD", regular)
+	}
+	requireDirectoryMembership(t, env, domainDir, offerKey, true)
+	requireDirectoryMembership(t, env, openDir, offerKey, true)
+	requireDirectoryMembership(t, env, openDir, regularKey, true)
+	jtx.RequireOwnerCount(t, env, dex.Bob, ownerCountAfterCredential+1)
+}
+
+// TestPermissionedDEX_HybridOpenBookAfterCredentialExpiry verifies that an
+// expired credential invalidates a hybrid offer for domain payments without
+// removing its open-book liquidity. A failed domain payment must roll back the
+// attempted domain-book removal, leaving the offer available for later open
+// payments.
+// Reference: rippled PermissionedDEX_test::testHybridOpenBookAfterCredentialExpiry.
+func TestPermissionedDEX_HybridOpenBookAfterCredentialExpiry(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	dex := SetupPermissionedDEX(t, env)
+	env.EnableFeature("fixCleanup3_3_0")
+	env.Close()
+
+	devin := jtx.NewAccount("devin")
+	env.FundAmount(devin, uint64(jtx.XRP(1000)))
+	env.Close()
+	env.Trust(devin, dex.USD(1000))
+	env.Close()
+	result := env.Submit(paymentBuilder.PayIssued(dex.GW, devin, dex.USD(100)).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Create and accept an expiring credential in one open ledger, matching the
+	// rippled fixture and leaving enough time for the hybrid setup/payment.
+	expiration := env.NowRipple() + 100
+	result = env.Submit(
+		cred.CredentialCreateHex(dex.DomainOwner, devin, dex.CredType).
+			Expiration(expiration).Build(),
+	)
+	jtx.RequireTxSuccess(t, result)
+	result = env.Submit(cred.CredentialAcceptHex(devin, dex.DomainOwner, dex.CredType).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	hybridSeq := env.Seq(devin)
+	result = env.Submit(
+		offerBuilder.OfferCreate(devin, jtx.XRPTxAmount(10_000_000), dex.USD(10)).
+			DomainID(dex.DomainID).Hybrid().Build(),
+	)
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	hybrid := offerBuilder.GetOffer(env, devin, hybridSeq)
+	if hybrid == nil {
+		t.Fatal("hybrid offer missing after creation")
+	}
+	offerKey := keylet.Offer(devin.ID, hybridSeq).Key
+	domainDir := keylet.Keylet{Key: hybrid.BookDirectory}
+	openDir := keylet.Keylet{Key: hybrid.AdditionalBookDirectory}
+	requireDirectoryMembership(t, env, domainDir, offerKey, true)
+	requireDirectoryMembership(t, env, openDir, offerKey, true)
+	ownerCount := env.OwnerCount(devin)
+
+	// The open book can cross the hybrid offer while its credential is valid.
+	carolBalance := env.BalanceIOU(dex.Carol, "USD", dex.GW)
+	result = env.Submit(
+		paymentBuilder.PayIssued(dex.Alice, dex.Carol, dex.USD(5)).
+			SendMax(jtx.XRPTxAmount(5_000_000)).
+			Paths(usdPath(dex.GW)).Build(),
+	)
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	if got := env.BalanceIOU(dex.Carol, "USD", dex.GW) - carolBalance; got != 5 {
+		t.Fatalf("USD delivered before expiry = %v, want 5", got)
+	}
+	hybrid = offerBuilder.GetOffer(env, devin, hybridSeq)
+	if hybrid == nil || hybrid.TakerPays.Drops() != 5_000_000 || hybrid.TakerGets.Compare(dex.USD(5)) != 0 {
+		t.Fatalf("hybrid offer before expiry = %+v, want 5 XRP/5 USD", hybrid)
+	}
+	requireDirectoryMembership(t, env, domainDir, offerKey, true)
+	requireDirectoryMembership(t, env, openDir, offerKey, true)
+	jtx.RequireOwnerCount(t, env, devin, ownerCount)
+
+	// Expire the credential and confirm new domain offers are rejected.
+	env.AdvanceTime(100 * time.Second)
+	env.Close()
+	result = env.Submit(
+		offerBuilder.OfferCreate(devin, jtx.XRPTxAmount(1_000_000), dex.USD(1)).
+			DomainID(dex.DomainID).Build(),
+	)
+	jtx.RequireTxClaimed(t, result, "tecNO_PERMISSION")
+	env.Close()
+	offerBuilder.RequireOfferInLedger(t, env, devin, hybridSeq)
+
+	// The expired hybrid remains usable from the open book.
+	carolBalance = env.BalanceIOU(dex.Carol, "USD", dex.GW)
+	result = env.Submit(
+		paymentBuilder.PayIssued(dex.Alice, dex.Carol, dex.USD(2)).
+			SendMax(jtx.XRPTxAmount(2_000_000)).
+			Paths(usdPath(dex.GW)).Build(),
+	)
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	if got := env.BalanceIOU(dex.Carol, "USD", dex.GW) - carolBalance; got != 2 {
+		t.Fatalf("USD delivered after expiry = %v, want 2", got)
+	}
+	hybrid = offerBuilder.GetOffer(env, devin, hybridSeq)
+	if hybrid == nil || hybrid.TakerPays.Drops() != 3_000_000 || hybrid.TakerGets.Compare(dex.USD(3)) != 0 {
+		t.Fatalf("hybrid offer after expired open crossing = %+v, want 3 XRP/3 USD", hybrid)
+	}
+	requireDirectoryMembership(t, env, domainDir, offerKey, true)
+	requireDirectoryMembership(t, env, openDir, offerKey, true)
+	jtx.RequireOwnerCount(t, env, devin, ownerCount)
+
+	// A domain payment now fails while the sandboxed domain removal is rolled
+	// back, preserving the offer and both directory links.
+	result = env.Submit(
+		paymentBuilder.PayIssued(dex.Alice, dex.Carol, dex.USD(1)).
+			SendMax(jtx.XRPTxAmount(1_000_000)).
+			Paths(usdPath(dex.GW)).
+			DomainID(dex.DomainIDHex).Build(),
+	)
+	jtx.RequireTxClaimed(t, result, "tecPATH_PARTIAL")
+	env.Close()
+	hybrid = offerBuilder.GetOffer(env, devin, hybridSeq)
+	if hybrid == nil || hybrid.TakerPays.Drops() != 3_000_000 || hybrid.TakerGets.Compare(dex.USD(3)) != 0 {
+		t.Fatalf("hybrid offer after failed domain payment = %+v, want 3 XRP/3 USD", hybrid)
+	}
+	requireDirectoryMembership(t, env, domainDir, offerKey, true)
+	requireDirectoryMembership(t, env, openDir, offerKey, true)
+	jtx.RequireOwnerCount(t, env, devin, ownerCount)
+
+	// The remaining offer can be fully consumed from the open book.
+	carolBalance = env.BalanceIOU(dex.Carol, "USD", dex.GW)
+	result = env.Submit(
+		paymentBuilder.PayIssued(dex.Alice, dex.Carol, dex.USD(3)).
+			SendMax(jtx.XRPTxAmount(3_000_000)).
+			Paths(usdPath(dex.GW)).Build(),
+	)
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	if got := env.BalanceIOU(dex.Carol, "USD", dex.GW) - carolBalance; got != 3 {
+		t.Fatalf("USD delivered on final open crossing = %v, want 3", got)
+	}
+	offerBuilder.RequireNoOfferInLedger(t, env, devin, hybridSeq)
+	requireDirectoryMembership(t, env, domainDir, offerKey, false)
+	requireDirectoryMembership(t, env, openDir, offerKey, false)
+	jtx.RequireOwnerCount(t, env, devin, ownerCount-1)
 }
 
 // TestPermissionedDEX_HybridOfferDirectories tests that hybrid offers appear in

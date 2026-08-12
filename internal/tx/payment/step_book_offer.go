@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"math"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
@@ -199,9 +200,9 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 				// Domain membership check: if the offer has a DomainID (domain or
 				// hybrid offer), verify the owner is still in that domain. Owners
 				// who have left the domain (or whose credential has expired) have
-				// their offers treated as unfunded and removed.
-				// This applies to ALL payment streams, not just domain payments —
-				// hybrid offers in the open book must also be validated.
+				// their offers treated as unfunded and removed. With
+				// fixCleanup3_3_0 enabled, this check is limited to domain books so
+				// expired hybrid offers remain usable in the open book.
 				// Reference: rippled OfferStream.cpp lines 294-303
 				if s.offerOutOfDomain(sb, offer) {
 					ofrsToRm[offerKey] = true
@@ -370,8 +371,15 @@ func (s *BookStep) offerExpired(offer *state.LedgerOffer) bool {
 // offerOutOfDomain reports whether a domain/hybrid offer's owner has left the
 // offer's DomainID (or lost the gating credential), which rippled treats as
 // unfunded and grooms quality-blind, ahead of the crossing quality threshold.
+// With fixCleanup3_3_0 enabled, open-book walks skip this check for hybrid
+// offers because those offers remain valid open-book liquidity.
 // Reference: rippled OfferStream.cpp lines 294-303.
 func (s *BookStep) offerOutOfDomain(sb *PaymentSandbox, offer *state.LedgerOffer) bool {
+	if s.domainID == nil {
+		if rules := sb.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_3_0) {
+			return false
+		}
+	}
 	var zeroDomainID [32]byte
 	if offer.DomainID == zeroDomainID {
 		return false

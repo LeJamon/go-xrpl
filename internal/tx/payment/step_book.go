@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/amm"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
@@ -1395,6 +1396,14 @@ func (s *BookStep) initAMMLiquidity(
 func (s *BookStep) getAMMOffer(view *PaymentSandbox, clobQuality *Quality) *AMMOffer {
 	if s.ammLiquidity == nil {
 		return nil
+	}
+	// AMM liquidity cannot be consumed from a permissioned domain book. Once
+	// fixCleanup3_3_0 is enabled, exclude it from quality estimation as well so
+	// path ranking reflects only liquidity the domain payment can execute.
+	if s.domainID != nil {
+		if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_3_0) {
+			return nil
+		}
 	}
 	return s.ammLiquidity.GetOffer(view, clobQuality)
 }
