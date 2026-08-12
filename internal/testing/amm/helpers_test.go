@@ -44,4 +44,18 @@ func TestLookupAMMDataFailsClosed(t *testing.T) {
 	require.Error(t, err)
 	_, _, err = lookupAMMData(stubAMMReader{}, xrp, tx.Asset{MPTIssuanceID: "invalid"})
 	require.Error(t, err)
+
+	for name, asset := range map[string]tx.Asset{
+		"XRP with issuer":       {Currency: "XRP", Issuer: usd.Issuer},
+		"malformed currency":    {Currency: "US D", Issuer: usd.Issuer},
+		"zero currency":         {Currency: "0000000000000000000000000000000000000000", Issuer: usd.Issuer},
+		"zero issuer":           {Currency: "USD", Issuer: "rrrrrrrrrrrrrrrrrrrrrhoLvTp"},
+		"MPT with zero issuer":  {MPTIssuanceID: "000000000000000000000000000000000000000000000000"},
+		"MPT with issue fields": {Currency: "USD", Issuer: usd.Issuer, MPTIssuanceID: "00000001BAA9375DB1D7557B5E9E47D91098911DAF5CA558"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := lookupAMMData(stubAMMReader{}, xrp, asset)
+			require.Error(t, err)
+		})
+	}
 }

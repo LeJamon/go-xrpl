@@ -620,8 +620,12 @@ func validateAMMAsset(asset tx.Asset) error {
 		if asset.Currency != "" || asset.Issuer != "" {
 			return fmt.Errorf("MPT asset cannot include currency or issuer")
 		}
-		if _, err := mptutil.DecodeID(asset.MPTIssuanceID); err != nil {
+		id, err := mptutil.DecodeID(asset.MPTIssuanceID)
+		if err != nil {
 			return fmt.Errorf("invalid MPT issuance ID: %w", err)
+		}
+		if mptutil.Issuer(id) == ([20]byte{}) {
+			return fmt.Errorf("MPT issuance ID has zero issuer")
 		}
 		return nil
 	}
@@ -631,8 +635,16 @@ func validateAMMAsset(asset tx.Asset) error {
 	if asset.Currency == "" || asset.Issuer == "" {
 		return fmt.Errorf("issued asset requires currency and issuer")
 	}
-	if _, err := state.DecodeAccountID(asset.Issuer); err != nil {
+	currency, err := keylet.ParseCurrency(asset.Currency)
+	if err != nil || currency == ([20]byte{}) {
+		return fmt.Errorf("invalid asset currency: %q", asset.Currency)
+	}
+	issuer, err := state.DecodeAccountID(asset.Issuer)
+	if err != nil {
 		return fmt.Errorf("invalid asset issuer: %w", err)
+	}
+	if issuer == ([20]byte{}) {
+		return fmt.Errorf("asset issuer cannot be the zero account")
 	}
 	return nil
 }
