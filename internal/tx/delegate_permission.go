@@ -121,8 +121,6 @@ var nonDelegatableTxTypes = map[Type]bool{
 	TypeUNLModify:               true,
 }
 
-// HasGranularPermissions reports whether a transaction type has at least one
-// granular permission template.
 func HasGranularPermissions(txType Type) bool {
 	for _, permission := range granularPermissions {
 		if permission.txType == txType {
@@ -132,8 +130,6 @@ func HasGranularPermissions(txType Type) bool {
 	return false
 }
 
-// IsTransactionDelegable reports whether a transaction type supports a
-// transaction-level permission.
 func IsTransactionDelegable(txType Type) bool {
 	return !nonDelegatableTxTypes[txType]
 }
@@ -152,8 +148,6 @@ func GranularPermissionsFor(txType Type, held []uint32) []uint32 {
 	return permissions
 }
 
-// GranularPermissionTxType returns the transaction type governed by a known
-// granular permission value.
 func GranularPermissionTxType(value uint32) (Type, bool) {
 	permission, ok := granularPermissions[value]
 	return permission.txType, ok
