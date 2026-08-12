@@ -1212,9 +1212,6 @@ func TestPermissionedDEX_AmmNotUsed(t *testing.T) {
 	jtx.RequireIOUBalance(t, env, dex.Carol, dex.GW, "USD", 105)
 }
 
-// TestPermissionedDEX_AmmQualityNotLeaked verifies that an AMM which cannot be
-// crossed from a permissioned domain book does not influence path ranking once
-// fixCleanup3_3_0 is enabled. The disabled case preserves the legacy ranking.
 // Reference: rippled PermissionedDEX_test::testAmmQualityNotLeaked.
 func TestPermissionedDEX_AmmQualityNotLeaked(t *testing.T) {
 	for _, test := range []struct {
@@ -1846,10 +1843,6 @@ func TestPermissionedDEX_HybridInvalidOffer(t *testing.T) {
 	offerBuilder.RequireOfferInLedger(t, env, dex.Bob, regularSeq)
 }
 
-// TestPermissionedDEX_HybridInvalidOfferFixCleanup330 verifies that losing a
-// domain credential removes hybrid liquidity only from domain-book walks. The
-// open-book directory, metadata, and owner entry survive both a failed domain
-// payment (rollback) and subsequent open-book crossings.
 // Reference: rippled PermissionedDEX_test::testHybridInvalidOffer with
 // fixCleanup3_3_0 enabled.
 func TestPermissionedDEX_HybridInvalidOfferFixCleanup330(t *testing.T) {
@@ -1876,8 +1869,6 @@ func TestPermissionedDEX_HybridInvalidOfferFixCleanup330(t *testing.T) {
 	requireDirectoryMembership(t, env, domainDir, offerKey, true)
 	requireDirectoryMembership(t, env, openDir, offerKey, true)
 
-	// Remove bob's domain credential, then verify a domain payment fails and
-	// rolls back the attempted domain-book removal.
 	result = env.Submit(
 		cred.CredentialDeleteHex(dex.DomainOwner, dex.Bob, dex.DomainOwner, dex.CredType).Build(),
 	)
@@ -1897,8 +1888,6 @@ func TestPermissionedDEX_HybridInvalidOfferFixCleanup330(t *testing.T) {
 	requireDirectoryMembership(t, env, openDir, offerKey, true)
 	jtx.RequireOwnerCount(t, env, dex.Bob, ownerCountAfterCredential)
 
-	// The amendment allows the same invalid hybrid offer to remain usable from
-	// the open book, where it is partially consumed rather than evicted.
 	result = env.Submit(
 		paymentBuilder.PayIssued(dex.Alice, dex.Carol, dex.USD(5)).
 			SendMax(jtx.XRPTxAmount(5_000_000)).
@@ -1950,11 +1939,6 @@ func TestPermissionedDEX_HybridInvalidOfferFixCleanup330(t *testing.T) {
 	jtx.RequireOwnerCount(t, env, dex.Bob, ownerCountAfterCredential+1)
 }
 
-// TestPermissionedDEX_HybridOpenBookAfterCredentialExpiry verifies that an
-// expired credential invalidates a hybrid offer for domain payments without
-// removing its open-book liquidity. A failed domain payment must roll back the
-// attempted domain-book removal, leaving the offer available for later open
-// payments.
 // Reference: rippled PermissionedDEX_test::testHybridOpenBookAfterCredentialExpiry.
 func TestPermissionedDEX_HybridOpenBookAfterCredentialExpiry(t *testing.T) {
 	env := jtx.NewTestEnv(t)
@@ -2001,7 +1985,6 @@ func TestPermissionedDEX_HybridOpenBookAfterCredentialExpiry(t *testing.T) {
 	requireDirectoryMembership(t, env, openDir, offerKey, true)
 	ownerCount := env.OwnerCount(devin)
 
-	// The open book can cross the hybrid offer while its credential is valid.
 	carolBalance := env.BalanceIOU(dex.Carol, "USD", dex.GW)
 	result = env.Submit(
 		paymentBuilder.PayIssued(dex.Alice, dex.Carol, dex.USD(5)).
@@ -2021,7 +2004,6 @@ func TestPermissionedDEX_HybridOpenBookAfterCredentialExpiry(t *testing.T) {
 	requireDirectoryMembership(t, env, openDir, offerKey, true)
 	jtx.RequireOwnerCount(t, env, devin, ownerCount)
 
-	// Expire the credential and confirm new domain offers are rejected.
 	env.AdvanceTime(100 * time.Second)
 	env.Close()
 	result = env.Submit(
@@ -2032,7 +2014,6 @@ func TestPermissionedDEX_HybridOpenBookAfterCredentialExpiry(t *testing.T) {
 	env.Close()
 	offerBuilder.RequireOfferInLedger(t, env, devin, hybridSeq)
 
-	// The expired hybrid remains usable from the open book.
 	carolBalance = env.BalanceIOU(dex.Carol, "USD", dex.GW)
 	result = env.Submit(
 		paymentBuilder.PayIssued(dex.Alice, dex.Carol, dex.USD(2)).
@@ -2052,8 +2033,6 @@ func TestPermissionedDEX_HybridOpenBookAfterCredentialExpiry(t *testing.T) {
 	requireDirectoryMembership(t, env, openDir, offerKey, true)
 	jtx.RequireOwnerCount(t, env, devin, ownerCount)
 
-	// A domain payment now fails while the sandboxed domain removal is rolled
-	// back, preserving the offer and both directory links.
 	result = env.Submit(
 		paymentBuilder.PayIssued(dex.Alice, dex.Carol, dex.USD(1)).
 			SendMax(jtx.XRPTxAmount(1_000_000)).
@@ -2070,7 +2049,6 @@ func TestPermissionedDEX_HybridOpenBookAfterCredentialExpiry(t *testing.T) {
 	requireDirectoryMembership(t, env, openDir, offerKey, true)
 	jtx.RequireOwnerCount(t, env, devin, ownerCount)
 
-	// The remaining offer can be fully consumed from the open book.
 	carolBalance = env.BalanceIOU(dex.Carol, "USD", dex.GW)
 	result = env.Submit(
 		paymentBuilder.PayIssued(dex.Alice, dex.Carol, dex.USD(3)).
