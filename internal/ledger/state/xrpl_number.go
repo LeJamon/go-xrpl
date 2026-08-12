@@ -98,7 +98,6 @@ func MantissaScaleForRulesWithFix(hasRules, singleAssetVault, lendingProtocol, f
 	return MantissaScaleForRulesWithFixes(hasRules, singleAssetVault, lendingProtocol, fixCleanup320, false)
 }
 
-// MantissaScaleForRulesWithFixes selects the Number range for v3.3 rules.
 func MantissaScaleForRulesWithFixes(hasRules, singleAssetVault, lendingProtocol, fixCleanup320, fixCleanup330 bool) MantissaScale {
 	if !hasRules {
 		return MantissaScaleLarge330
