@@ -16,7 +16,7 @@ func TestSchemaProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const expected = "d52b004814cbe9d243fd132166c18da7923ddf5608827277bf5928457ee4bbe5"
+	const expected = "f920a631f343959b5a582e7089d06c678001d2c5a5ccd07acc6c7d2a994ddbcf"
 	if actual := fmt.Sprintf("%x", sha256.Sum256(schema)); actual != expected {
 		t.Fatalf("xrpl.proto SHA256 = %s, want %s", actual, expected)
 	}
@@ -42,8 +42,8 @@ func TestSchemaDescriptorShape(t *testing.T) {
 	}
 
 	messages, required, optional, repeated := descriptorCounts(file.Messages())
-	if messages != 30 || required != 48 || optional != 43 || repeated != 14 {
-		t.Fatalf("descriptor counts = messages:%d required:%d optional:%d repeated:%d, want 30/48/43/14", messages, required, optional, repeated)
+	if messages != 30 || required != 48 || optional != 41 || repeated != 14 {
+		t.Fatalf("descriptor counts = messages:%d required:%d optional:%d repeated:%d, want 30/48/41/14", messages, required, optional, repeated)
 	}
 
 	endpoints := file.Messages().ByName("TMEndpoints")
@@ -53,6 +53,10 @@ func TestSchemaDescriptorShape(t *testing.T) {
 	objects := file.Messages().ByName("TMGetObjectByHash")
 	if objects == nil || !objects.ReservedRanges().Has(3) {
 		t.Fatal("TMGetObjectByHash must reserve field 3")
+	}
+	ping := file.Messages().ByName("TMPing")
+	if ping == nil || !ping.ReservedRanges().Has(3) || !ping.ReservedRanges().Has(4) {
+		t.Fatal("TMPing must reserve fields 3 and 4")
 	}
 	if file.Messages().ByName("TMLink") == nil {
 		t.Fatal("TMLink descriptor is missing")

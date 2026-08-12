@@ -46,7 +46,7 @@ containers up after a failure for inspection.
 | env var          | default                            | meaning                                       |
 |------------------|------------------------------------|-----------------------------------------------|
 | `GOXRPL_IMAGE`   | `goxrpl:latest`                    | image for goxrpl-0                            |
-| `RIPPLED_IMAGE`  | `xrpllabsofficial/xrpld:3.2.0`    | image for rippled-0,1                         |
+| `RIPPLED_IMAGE`  | `xrpllabsofficial/xrpld:3.3.0`    | image for rippled-0,1                         |
 | `MIN_SEQ_EMPTY`  | `15`                               | seq target for phase 1 (empty ledger)         |
 | `PAYMENT_COUNT`  | `5`                                | number of payments to submit in phase 2       |
 | `BOOT_TIMEOUT`   | `180`                              | seconds to wait for phase 1 to validate       |

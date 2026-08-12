@@ -12,9 +12,9 @@ import (
 
 func TestPingRoundtrip(t *testing.T) {
 	tests := []*Ping{
-		{PType: PingTypePing, Seq: 1, PingTime: 1000},
-		{PType: PingTypePong, Seq: 2, PingTime: 2000, NetTime: 3000},
-		{PType: PingTypePing, Seq: 0, PingTime: 0},
+		{PType: PingTypePing, Seq: 1},
+		{PType: PingTypePong, Seq: 2},
+		{PType: PingTypePing},
 	}
 
 	for i, original := range tests {
@@ -35,12 +35,6 @@ func TestPingRoundtrip(t *testing.T) {
 		}
 		if decoded.Seq != original.Seq {
 			t.Errorf("Test %d: Seq = %d, want %d", i, decoded.Seq, original.Seq)
-		}
-		if decoded.PingTime != original.PingTime {
-			t.Errorf("Test %d: PingTime = %d, want %d", i, decoded.PingTime, original.PingTime)
-		}
-		if decoded.NetTime != original.NetTime {
-			t.Errorf("Test %d: NetTime = %d, want %d", i, decoded.NetTime, original.NetTime)
 		}
 	}
 }
@@ -932,8 +926,8 @@ func TestPingOptionalScalarPresence(t *testing.T) {
 		set  bool
 	}{
 		{name: "absent", ping: &Ping{PType: PingTypePing}},
-		{name: "explicit zero", ping: &Ping{PType: PingTypePing, SeqSet: true, PingTimeSet: true, NetTimeSet: true}, set: true},
-		{name: "nonzero", ping: &Ping{PType: PingTypePong, Seq: 1, PingTime: 2, NetTime: 3}, set: true},
+		{name: "explicit zero", ping: &Ping{PType: PingTypePing, SeqSet: true}, set: true},
+		{name: "nonzero", ping: &Ping{PType: PingTypePong, Seq: 1}, set: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -946,8 +940,8 @@ func TestPingOptionalScalarPresence(t *testing.T) {
 				t.Fatal(err)
 			}
 			ping := decoded.(*Ping)
-			if ping.SeqSet != test.set || ping.PingTimeSet != test.set || ping.NetTimeSet != test.set {
-				t.Fatalf("scalar presence = %v/%v/%v, want %v", ping.SeqSet, ping.PingTimeSet, ping.NetTimeSet, test.set)
+			if ping.SeqSet != test.set {
+				t.Fatalf("seq presence = %v, want %v", ping.SeqSet, test.set)
 			}
 		})
 	}

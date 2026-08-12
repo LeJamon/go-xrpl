@@ -67,3 +67,34 @@ func TestConfidentialMPTConvertPreflightPrecedence(t *testing.T) {
 		t.Fatalf("Batch delegated Convert preflight = %v, want temINVALID_INNER_BATCH", got)
 	}
 }
+
+func TestConfidentialMPTPreflightAmendmentGate(t *testing.T) {
+	newBase := func(transactionType txcore.Type) txcore.BaseTx {
+		base := *txcore.NewBaseTx(transactionType, precedenceSourceAddr)
+		base.Fee = "100"
+		base.Sequence = u32(5)
+		return base
+	}
+
+	tests := []struct {
+		name        string
+		transaction txcore.Transaction
+	}{
+		{"Convert", &mpt.ConfidentialMPTConvert{BaseTx: newBase(txcore.TypeConfidentialMPTConvert)}},
+		{"MergeInbox", &mpt.ConfidentialMPTMergeInbox{BaseTx: newBase(txcore.TypeConfidentialMPTMergeInbox)}},
+		{"ConvertBack", &mpt.ConfidentialMPTConvertBack{BaseTx: newBase(txcore.TypeConfidentialMPTConvertBack)}},
+		{"Send", &mpt.ConfidentialMPTSend{BaseTx: newBase(txcore.TypeConfidentialMPTSend)}},
+		{"Clawback", &mpt.ConfidentialMPTClawback{BaseTx: newBase(txcore.TypeConfidentialMPTClawback)}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := preflightEngine(confidentialPreflightRules(false)).preflight(test.transaction); got != ter.TemDISABLED {
+				t.Fatalf("disabled preflight = %v, want temDISABLED", got)
+			}
+			if got := preflightEngine(confidentialPreflightRules(true)).preflight(test.transaction); got != ter.TemINVALID {
+				t.Fatalf("enabled preflight = %v, want temINVALID", got)
+			}
+		})
+	}
+}

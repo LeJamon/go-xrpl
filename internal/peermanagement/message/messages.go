@@ -272,27 +272,15 @@ func (l *LedgerData) HasError() bool {
 
 // Ping represents a ping/pong message for keepalive and latency measurement.
 type Ping struct {
-	PType       PingType `json:"type"`
-	Seq         uint32   `json:"seq,omitempty"`
-	SeqSet      bool     `json:"-"`
-	PingTime    uint64   `json:"ping_time,omitempty"`
-	PingTimeSet bool     `json:"-"`
-	NetTime     uint64   `json:"net_time,omitempty"`
-	NetTimeSet  bool     `json:"-"`
+	PType  PingType `json:"type"`
+	Seq    uint32   `json:"seq,omitempty"`
+	SeqSet bool     `json:"-"`
 }
 
 func (p *Ping) Type() MessageType { return TypePing }
 
 func (p *Ping) HasSeq() bool {
 	return p != nil && (p.SeqSet || p.Seq != 0)
-}
-
-func (p *Ping) HasPingTime() bool {
-	return p != nil && (p.PingTimeSet || p.PingTime != 0)
-}
-
-func (p *Ping) HasNetTime() bool {
-	return p != nil && (p.NetTimeSet || p.NetTime != 0)
 }
 
 // Squelch represents a squelch message for reduce-relay.

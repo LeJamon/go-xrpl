@@ -213,7 +213,11 @@ jobs:
         run: ./scripts/setup-mpt-crypto.sh test ./amendment/... ./crypto/mptcrypto/... ./internal/tx/mpt/... ./internal/testing/mpt/...
 
   consensus-smoke:
-    name: Consensus smoke (2 rippled + 1 goxrpl)
+    name: Consensus smoke (rippled ${{ matrix.rippled-version }})
+    strategy:
+      fail-fast: false
+      matrix:
+        rippled-version: ["3.3.0", "3.2.0"]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -232,7 +236,7 @@ jobs:
         run: bash scripts/consensus-smoke/smoke.sh
         env:
           GOXRPL_IMAGE: goxrpl:latest
-          RIPPLED_IMAGE: xrpllabsofficial/xrpld:3.2.0
+          RIPPLED_IMAGE: xrpllabsofficial/xrpld:${{ matrix.rippled-version }}
           PAYMENT_COUNT: "3"
           MIN_SEQ_EMPTY: "15"
           BOOT_TIMEOUT: "240"

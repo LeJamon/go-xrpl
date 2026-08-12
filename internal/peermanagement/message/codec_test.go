@@ -161,10 +161,11 @@ func TestHeaderClaimBoundariesAreSymmetric(t *testing.T) {
 		uncompressedSize uint32
 		wantErr          bool
 	}{
-		{"ping exact", 2048, TypePing, AlgorithmNone, 0, false},
-		{"ping over", 2049, TypePing, AlgorithmNone, 0, true},
-		{"ping compressed wire over", 2049, TypePing, AlgorithmLZ4, 100, true},
-		{"ping compressed claim over", 100, TypePing, AlgorithmLZ4, 2049, true},
+		{"ping exact", maxPingSize - HeaderSizeUncompressed, TypePing, AlgorithmNone, 0, false},
+		{"ping over", maxPingSize - HeaderSizeUncompressed + 1, TypePing, AlgorithmNone, 0, true},
+		{"ping compressed exact", 100, TypePing, AlgorithmLZ4, maxPingSize - HeaderSizeCompressed, false},
+		{"ping compressed claim over", 100, TypePing, AlgorithmLZ4, maxPingSize - HeaderSizeCompressed + 1, true},
+		{"ping compressed wire above limit", maxPingSize + 1, TypePing, AlgorithmLZ4, 1, false},
 		{"proof exact", largeMsgMax, TypeProofPathResponse, AlgorithmLZ4, largeMsgMax, false},
 		{"proof over", 100, TypeProofPathResponse, AlgorithmLZ4, largeMsgMax + 1, true},
 		{"replay above proof", 100, TypeReplayDeltaResponse, AlgorithmLZ4, largeMsgMax + 1, false},
@@ -209,14 +210,14 @@ func TestHeaderClaimBoundariesAreSymmetric(t *testing.T) {
 }
 
 func TestBuildWireMessagePingBoundary(t *testing.T) {
-	frame, err := BuildWireMessage(TypePing, make([]byte, 2048))
+	frame, err := BuildWireMessage(TypePing, make([]byte, maxPingSize-HeaderSizeUncompressed))
 	if err != nil {
 		t.Fatalf("BuildWireMessage exact boundary: %v", err)
 	}
 	if _, err := ReadHeader(bytes.NewReader(frame)); err != nil {
 		t.Fatalf("ReadHeader exact boundary: %v", err)
 	}
-	if _, err := BuildWireMessage(TypePing, make([]byte, 2049)); !errors.Is(err, ErrMessageTooLarge) {
+	if _, err := BuildWireMessage(TypePing, make([]byte, maxPingSize-HeaderSizeUncompressed+1)); !errors.Is(err, ErrMessageTooLarge) {
 		t.Fatalf("BuildWireMessage over boundary error = %v, want ErrMessageTooLarge", err)
 	}
 }
@@ -464,7 +465,7 @@ func TestReadFrameCaps(t *testing.T) {
 		{"validatorlist_20mib_ok", TypeValidatorList, 20 * mib, false},
 		{"unknown_20mib_ok", MessageType(9999), 20 * mib, false},
 		// Request-shaped types keep their stricter hardening caps.
-		{"ping_20mib_rejected", TypePing, 20 * mib, true},
+		{"ping_20mib_claim_rejected", TypePing, 20 * mib, true},
 		{"getledger_20mib_rejected", TypeGetLedger, 20 * mib, true},
 		// The protocol ceiling is hard even for the most permissive type.
 		{"ledgerdata_over_ceiling_rejected", TypeLedgerData, MaxMessageSize + 1, true},

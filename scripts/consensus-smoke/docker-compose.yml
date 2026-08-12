@@ -11,7 +11,7 @@ name: goxrpl-consensus-smoke
 
 services:
   rippled-0:
-    image: ${RIPPLED_IMAGE:-xrpllabsofficial/xrpld:3.2.0}
+    image: ${RIPPLED_IMAGE:-xrpllabsofficial/xrpld:3.3.0}
     hostname: rippled-0
     ports:
       - "5005"
@@ -28,7 +28,7 @@ services:
       start_period: 5s
 
   rippled-1:
-    image: ${RIPPLED_IMAGE:-xrpllabsofficial/xrpld:3.2.0}
+    image: ${RIPPLED_IMAGE:-xrpllabsofficial/xrpld:3.3.0}
     hostname: rippled-1
     ports:
       - "5005"

@@ -70,11 +70,13 @@ removing a line brings that suite back into scope.
 
 As of this writing the out-of-scope suites fall into two groups:
 
-- **Not implemented yet** — `Vault`, `Batch`, `EscrowToken`, `XChain`, `XChainSim`,
-  `Delegate`, `Credentials`. **Vault** and the **XChain** bridge ship as
-  *registered stubs by design*: they parse and register but are not active
-  (the `XChainBridge` amendment is `SupportedNo`). This is an intentional scope
-  boundary for the current release, not a regression.
+- **Not implemented yet** — `EscrowToken`, `XChain`, and `XChainSim`. The
+  **XChain** bridge ships as a registered fail-closed stub: it parses and
+  registers but is not active (`XChainBridge` is `SupportedNo`).
+- **Implemented features with incomplete legacy-fixture coverage** — `Vault`,
+  `Batch`, `Delegate`, and `Credentials`. Their production implementations and
+  focused suites are active, but the imported conformance corpus and runner do
+  not yet represent all released variants.
 - **Partially implemented / known gaps** — several `NFTokenBurn*` and `NFToken*`
   variants, `Regression`, `ThinBook`, `Transaction_ordering`, and `ledger/BookDirs`.
 

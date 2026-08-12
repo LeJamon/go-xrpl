@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -959,23 +960,44 @@ func (a *Adaptor) PrevCloseTimeResolution() time.Duration {
 	return 30 * time.Second // protocol default
 }
 
-// AdjustCloseTime weight-averages raw close times and applies quarter-step
-// damping toward the network's view of time. Arithmetic is in whole seconds:
-// NetClock is second-granular and a ns replace would never decay toward zero.
+// AdjustCloseTime selects the weighted lower median of raw close times and
+// applies quarter-step damping toward the network's view of time.
 func (a *Adaptor) AdjustCloseTime(rawCloseTimes consensus.CloseTimes) {
 	if rawCloseTimes.Self.IsZero() {
 		return
 	}
 
 	selfSecs := rawCloseTimes.Self.Unix()
-	totalSecs := selfSecs
-	count := int64(1)
-	for t, v := range rawCloseTimes.Peers {
-		count += int64(v)
-		totalSecs += t.Unix() * int64(v)
+	weights := make(map[int64]int64, len(rawCloseTimes.Peers)+1)
+	times := make([]int64, 0, len(rawCloseTimes.Peers)+1)
+	for peerTime, weight := range rawCloseTimes.Peers {
+		peerSecs := peerTime.Unix()
+		if _, present := weights[peerSecs]; !present {
+			times = append(times, peerSecs)
+		}
+		weights[peerSecs] += int64(weight)
 	}
-	avgSecs := (totalSecs + count/2) / count
-	bySecs := avgSecs - selfSecs
+	if _, present := weights[selfSecs]; !present {
+		times = append(times, selfSecs)
+	}
+	weights[selfSecs]++
+	sort.Slice(times, func(i, j int) bool { return times[i] < times[j] })
+
+	totalWeight := int64(0)
+	for _, weight := range weights {
+		totalWeight += weight
+	}
+	halfWeight := (totalWeight + 1) / 2
+	var tally int64
+	medianSecs := selfSecs
+	for _, closeTime := range times {
+		tally += weights[closeTime]
+		if tally >= halfWeight {
+			medianSecs = closeTime
+			break
+		}
+	}
+	bySecs := medianSecs - selfSecs
 
 	currentSecs := int64(time.Duration(a.closeOffsetNs.Load()) / time.Second)
 	if bySecs == 0 && currentSecs == 0 {
