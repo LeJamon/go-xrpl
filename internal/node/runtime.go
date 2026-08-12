@@ -476,9 +476,6 @@ func (r *nodeRuntime) configureMaintenance() error {
 				Stop:       p.Stop,
 			}))
 		}
-		r.services.LedgerCleanerStatusFn = func() types.LedgerCleanerStatus {
-			return toCleanerStatus(cleanerRef.Status())
-		}
 	}
 	return nil
 }
@@ -552,11 +549,11 @@ func (r *nodeRuntime) configureConsensus() error {
 		}
 
 		if router := r.consensus.Router; router != nil && r.cleanerSource != nil {
-			r.cleanerSource.SetReacquire(func(ctx context.Context, seq uint32) error {
+			r.cleanerSource.SetReacquire(func(ctx context.Context, hash [32]byte, seq uint32) error {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				_, started, _ := router.RequestLedger([32]byte{}, seq)
+				_, started, _ := router.RequestLedger(hash, seq)
 				if !started {
 					return fmt.Errorf("ledger_cleaner: unable to acquire ledger %d", seq)
 				}

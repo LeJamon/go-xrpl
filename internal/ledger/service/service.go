@@ -1494,30 +1494,26 @@ func (s *Service) MaxPersistedLedgerSeq(ctx context.Context) uint32 {
 	return uint32(*seq)
 }
 
-// ledgerHistoryRangeLocked returns the inclusive [min, max] span of in-memory
-// history, or ok=false when empty. Caller holds historyComponent.mu. NB: the span assumes
-// contiguity — purges/backward-fills can leave gaps, so callers reporting durable
-// availability must layer their own floor (see GetServerInfo's clamp).
-func (s *historyComponent) ledgerHistoryRangeLocked() (min, max uint32, ok bool) {
-	first := true
-	for seq := range s.ledgerHistory {
-		if first || seq < min {
-			min = seq
-		}
-		if first || seq > max {
-			max = seq
-		}
-		first = false
-	}
-	return min, max, !first
-}
-
-// AvailableLedgerRange returns the inclusive [min, max] range of locally held
-// ledgers, or ok=false when none. Used to bound a ledger-integrity cleaning run.
+// AvailableLedgerRange returns the complete contiguous range ending at the
+// published ledger, or ok=false before any ledger has been published.
 func (s *Service) AvailableLedgerRange() (min, max uint32, ok bool) {
-	s.historyComponent.mu.RLock()
-	defer s.historyComponent.mu.RUnlock()
-	return s.ledgerHistoryRangeLocked()
+	s.mu.RLock()
+	max = s.publishedLedgerSeq
+	ok = s.havePublished && max != 0
+	s.mu.RUnlock()
+	if !ok {
+		return 0, 0, false
+	}
+
+	min = max
+	s.completeMu.RLock()
+	if s.completedLedgers != nil {
+		if current, found := s.completedLedgers.rangeContaining(max); found && current.start > 0 {
+			min = current.start
+		}
+	}
+	s.completeMu.RUnlock()
+	return min, max, true
 }
 
 func (s *Service) contiguousValidatedRangeLocked() (first, last uint32, ok bool) {

@@ -3,6 +3,7 @@ package cleaner
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,22 +15,28 @@ import (
 // fakeFamily is a controllable in-memory Family the test can mutate to induce
 // missing/corrupt nodes.
 type fakeFamily struct {
-	mu    sync.RWMutex
-	store map[[32]byte][]byte
+	mu          sync.RWMutex
+	store       map[[32]byte][]byte
+	beforeFetch func(context.Context, [32]byte) error
 }
 
 func newFakeFamily() *fakeFamily { return &fakeFamily{store: map[[32]byte][]byte{}} }
 
-func (f *fakeFamily) Fetch(_ context.Context, hash [32]byte) ([]byte, error) {
+func (f *fakeFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
 	f.mu.RLock()
-	defer f.mu.RUnlock()
+	hook := f.beforeFetch
 	data, ok := f.store[hash]
+	data = append([]byte(nil), data...)
+	f.mu.RUnlock()
+	if hook != nil {
+		if err := hook(ctx, hash); err != nil {
+			return nil, err
+		}
+	}
 	if !ok {
 		return nil, nil
 	}
-	cp := make([]byte, len(data))
-	copy(cp, data)
-	return cp, nil
+	return data, nil
 }
 
 func (f *fakeFamily) StoreBatch(_ context.Context, entries []shamap.FlushEntry) error {
@@ -49,16 +56,33 @@ func (f *fakeFamily) delete(h [32]byte) {
 	delete(f.store, h)
 }
 
-func (f *fakeFamily) deleteOneNonRoot(root [32]byte) (deleted [32]byte) {
+func (f *fakeFamily) restore(h [32]byte, data []byte) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.store[h] = append([]byte(nil), data...)
+}
+
+func (f *fakeFamily) replace(h [32]byte, data []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.store[h] = append([]byte(nil), data...)
+}
+
+func (f *fakeFamily) firstNonRoot(root [32]byte) (selected [32]byte) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	for h := range f.store {
-		if h != root {
-			delete(f.store, h)
-			return h
+		if h != root && (selected == ([32]byte{}) || string(h[:]) < string(selected[:])) {
+			selected = h
 		}
 	}
-	return [32]byte{}
+	return selected
+}
+
+func (f *fakeFamily) deleteOneNonRoot(root [32]byte) (deleted [32]byte) {
+	deleted = f.firstNonRoot(root)
+	f.delete(deleted)
+	return deleted
 }
 
 // fakeSource implements LedgerSource over a fakeFamily and a per-seq root table.
@@ -124,8 +148,12 @@ func (s *fakeSource) RepairTransactions(ctx context.Context, seq uint32) error {
 // putStateTree builds a state map from keys, flushes it into family, and
 // returns the root hash.
 func putStateTree(t *testing.T, family *fakeFamily, keys []string) [32]byte {
+	return putTree(t, family, shamap.TypeState, keys)
+}
+
+func putTree(t *testing.T, family *fakeFamily, mapType shamap.Type, keys []string) [32]byte {
 	t.Helper()
-	sm := shamap.New(shamap.TypeState)
+	sm := shamap.New(mapType)
 	for i, k := range keys {
 		var key [32]byte
 		copy(key[:], mustHex(t, k))
@@ -202,6 +230,13 @@ func TestCleaner_ZeroRangeStopsWithoutLedgerAccess(t *testing.T) {
 		{name: "ledger", params: Params{Ledger: uint32Ptr(0)}},
 		{name: "minimum", params: Params{MinLedger: uint32Ptr(0)}},
 		{name: "maximum", params: Params{MaxLedger: uint32Ptr(0)}},
+		{
+			name: "inverted",
+			params: Params{
+				MinLedger: uint32Ptr(9),
+				MaxLedger: uint32Ptr(8),
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -779,6 +814,387 @@ func TestCleaner_IndexRepairForcesTransactionRewrite(t *testing.T) {
 	}
 	if final.Failures != 0 {
 		t.Fatalf("unexpected failures: %+v", final)
+	}
+}
+
+func TestCleaner_IndexRepairRewriteIntentSurvivesRetry(t *testing.T) {
+	family := newFakeFamily()
+	root := putStateTree(t, family, sampleKeys)
+	var indexRepairs, transactionRepairs atomic.Int32
+	src := &fakeSource{
+		family:   family,
+		roots:    map[uint32][2][32]byte{10: {root, {}}},
+		min:      10,
+		max:      10,
+		hasRange: true,
+		repairIndex: func(context.Context, LedgerData) (bool, error) {
+			return indexRepairs.Add(1) == 1, nil
+		},
+		repair: func(context.Context, uint32) error {
+			if transactionRepairs.Add(1) == 1 {
+				return errors.New("transaction rewrite failed")
+			}
+			return nil
+		},
+	}
+	c := New(src, nil)
+	c.retryDelay = time.Millisecond
+	c.Start()
+	defer c.Stop()
+
+	c.Clean(Params{})
+	final := waitIdle(t, c)
+	if got := indexRepairs.Load(); got != 2 {
+		t.Fatalf("index checks = %d, want 2", got)
+	}
+	if got := transactionRepairs.Load(); got != 2 {
+		t.Fatalf("transaction rewrite attempts = %d, want 2", got)
+	}
+	if final.LedgersChecked != 1 || final.Failures != 0 {
+		t.Fatalf("unexpected final status: %+v", final)
+	}
+}
+
+func TestCleaner_IndexRepairRewriteIntentSurvivesTreeReacquisition(t *testing.T) {
+	family := newFakeFamily()
+	root := putStateTree(t, family, sampleKeys)
+	rootData, err := family.Fetch(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	family.delete(root)
+
+	var indexRepairs, transactionRepairs, reacquires atomic.Int32
+	src := &fakeSource{
+		family:   family,
+		roots:    map[uint32][2][32]byte{10: {root, {}}},
+		min:      10,
+		max:      10,
+		hasRange: true,
+		repairIndex: func(context.Context, LedgerData) (bool, error) {
+			return indexRepairs.Add(1) == 1, nil
+		},
+		repair: func(context.Context, uint32) error {
+			transactionRepairs.Add(1)
+			return nil
+		},
+		reacquire: func(context.Context, uint32) error {
+			reacquires.Add(1)
+			family.restore(root, rootData)
+			return nil
+		},
+	}
+	c := New(src, nil)
+	c.retryDelay = time.Millisecond
+	c.Start()
+	defer c.Stop()
+
+	c.Clean(Params{})
+	final := waitIdle(t, c)
+	if got := indexRepairs.Load(); got != 2 {
+		t.Fatalf("index checks = %d, want 2", got)
+	}
+	if got := reacquires.Load(); got != 1 {
+		t.Fatalf("reacquisitions = %d, want 1", got)
+	}
+	if got := transactionRepairs.Load(); got != 1 {
+		t.Fatalf("transaction rewrites = %d, want 1", got)
+	}
+	if final.LedgersChecked != 1 || final.Failures != 0 || final.MissingNodes == 0 {
+		t.Fatalf("unexpected final status: %+v", final)
+	}
+}
+
+func TestCleaner_ParameterPrecedenceAndExplicitRanges(t *testing.T) {
+	tests := []struct {
+		name      string
+		available bool
+		params    Params
+		wantMin   uint32
+		wantMax   uint32
+		wantCheck bool
+		wantFix   bool
+	}{
+		{
+			name:      "available defaults",
+			available: true,
+			wantMin:   10,
+			wantMax:   20,
+		},
+		{
+			name:      "later parameters override earlier ones",
+			available: true,
+			params: Params{
+				Ledger:     uint32Ptr(15),
+				MaxLedger:  uint32Ptr(18),
+				MinLedger:  uint32Ptr(12),
+				Full:       boolPtr(false),
+				FixTxns:    boolPtr(true),
+				CheckNodes: boolPtr(true),
+			},
+			wantMin:   12,
+			wantMax:   18,
+			wantCheck: true,
+			wantFix:   true,
+		},
+		{
+			name:      "explicit range outside available defaults",
+			available: true,
+			params: Params{
+				MinLedger: uint32Ptr(1),
+				MaxLedger: uint32Ptr(30),
+			},
+			wantMin: 1,
+			wantMax: 30,
+		},
+		{
+			name:      "explicit ledger without available defaults",
+			params:    Params{Ledger: uint32Ptr(25)},
+			wantMin:   25,
+			wantMax:   25,
+			wantCheck: true,
+			wantFix:   true,
+		},
+		{
+			name: "explicit range without available defaults",
+			params: Params{
+				MinLedger: uint32Ptr(25),
+				MaxLedger: uint32Ptr(30),
+			},
+			wantMin: 25,
+			wantMax: 30,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			src := &fakeSource{
+				family:   newFakeFamily(),
+				roots:    map[uint32][2][32]byte{},
+				min:      10,
+				max:      20,
+				hasRange: test.available,
+			}
+			c := New(src, nil)
+			status := c.Clean(test.params)
+			defer c.Stop()
+
+			if status.State != "running" || status.MinLedger != test.wantMin || status.MaxLedger != test.wantMax {
+				t.Fatalf("configured status = %+v, want running range %d-%d", status, test.wantMin, test.wantMax)
+			}
+			if status.CheckNodes != test.wantCheck || status.FixTxns != test.wantFix {
+				t.Fatalf("configured flags = check:%t fix:%t, want check:%t fix:%t",
+					status.CheckNodes, status.FixTxns, test.wantCheck, test.wantFix)
+			}
+		})
+	}
+}
+
+func TestCleaner_MaxUint32TerminalLedger(t *testing.T) {
+	const seq = ^uint32(0)
+	family := newFakeFamily()
+	root := putStateTree(t, family, sampleKeys)
+	src := &fakeSource{
+		family:   family,
+		roots:    map[uint32][2][32]byte{seq: {root, {}}},
+		min:      seq,
+		max:      seq,
+		hasRange: true,
+	}
+	c := New(src, nil)
+	c.Start()
+	defer c.Stop()
+
+	c.Clean(Params{Ledger: uint32Ptr(seq)})
+	final := waitIdle(t, c)
+	if final.MinLedger != 0 || final.MaxLedger != 0 {
+		t.Fatalf("terminal bounds wrapped: %+v", final)
+	}
+	if final.LedgersChecked != 1 || final.Failures != 0 {
+		t.Fatalf("unexpected final status: %+v", final)
+	}
+}
+
+func TestCleaner_RootFetchObservesRunCancellation(t *testing.T) {
+	for _, mapType := range []shamap.Type{shamap.TypeState, shamap.TypeTransaction} {
+		t.Run(mapType.String(), func(t *testing.T) {
+			for _, action := range []string{"stop", "reconfigure"} {
+				t.Run(action, func(t *testing.T) {
+					family := newFakeFamily()
+					blockedRoot := putTree(t, family, mapType, sampleKeys)
+					replacementRoot := putStateTree(t, family, sampleKeys[:2])
+					entered := make(chan struct{})
+					canceled := make(chan struct{})
+					var once sync.Once
+					family.beforeFetch = func(ctx context.Context, hash [32]byte) error {
+						if hash != blockedRoot {
+							return nil
+						}
+						once.Do(func() { close(entered) })
+						<-ctx.Done()
+						close(canceled)
+						return ctx.Err()
+					}
+					roots := [2][32]byte{}
+					if mapType == shamap.TypeState {
+						roots[0] = blockedRoot
+					} else {
+						roots[1] = blockedRoot
+					}
+					src := &fakeSource{
+						family: family,
+						roots: map[uint32][2][32]byte{
+							10: roots,
+							20: {replacementRoot, {}},
+						},
+						min:      10,
+						max:      20,
+						hasRange: true,
+					}
+					c := New(src, nil)
+					c.Start()
+					defer c.Stop()
+					c.Clean(Params{Ledger: uint32Ptr(10)})
+
+					select {
+					case <-entered:
+					case <-time.After(time.Second):
+						t.Fatal("root fetch did not start")
+					}
+					if action == "stop" {
+						c.Clean(Params{Stop: true})
+					} else {
+						c.Clean(Params{Ledger: uint32Ptr(20)})
+					}
+					select {
+					case <-canceled:
+					case <-time.After(time.Second):
+						t.Fatal("root fetch did not observe cancellation")
+					}
+					if action == "reconfigure" {
+						final := waitIdle(t, c)
+						if final.LedgersChecked != 1 || final.Failures != 0 {
+							t.Fatalf("replacement run failed: %+v", final)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestCleaner_ReconfigureResetsRunCounters(t *testing.T) {
+	family := newFakeFamily()
+	root := putStateTree(t, family, sampleKeys)
+	missingRoot := [32]byte{0xFF, 0xEE}
+	src := &fakeSource{
+		family: family,
+		roots: map[uint32][2][32]byte{
+			10: {missingRoot, {}},
+			20: {root, {}},
+		},
+		min:      10,
+		max:      20,
+		hasRange: true,
+	}
+	c := New(src, nil)
+	c.retryDelay = time.Millisecond
+	c.Start()
+	defer c.Stop()
+
+	c.Clean(Params{Ledger: uint32Ptr(10)})
+	failed := waitFailure(t, c)
+	if failed.MissingNodes == 0 {
+		t.Fatalf("first run did not record missing nodes: %+v", failed)
+	}
+	reconfigured := c.Clean(Params{Ledger: uint32Ptr(20)})
+	if reconfigured.Failures != 0 || reconfigured.LedgersChecked != 0 ||
+		reconfigured.NodesChecked != 0 || reconfigured.MissingNodes != 0 || reconfigured.LastError != "" {
+		t.Fatalf("reconfigured run retained prior counters: %+v", reconfigured)
+	}
+	final := waitIdle(t, c)
+	if final.LedgersChecked != 1 || final.Failures != 0 || final.MissingNodes != 0 {
+		t.Fatalf("unexpected replacement status: %+v", final)
+	}
+}
+
+func TestCleaner_ClassifiesStateAndTransactionTreeFaults(t *testing.T) {
+	storageErr := errors.New("injected storage read error")
+	for _, mapType := range []shamap.Type{shamap.TypeState, shamap.TypeTransaction} {
+		for _, fault := range []struct {
+			name       string
+			descendant bool
+			storage    bool
+			apply      func(*fakeFamily, [32]byte)
+		}{
+			{name: "missing root", apply: func(f *fakeFamily, h [32]byte) { f.delete(h) }},
+			{name: "corrupt root", apply: func(f *fakeFamily, h [32]byte) { f.replace(h, []byte{0xFF}) }},
+			{name: "missing descendant", descendant: true, apply: func(f *fakeFamily, h [32]byte) { f.delete(h) }},
+			{name: "corrupt descendant", descendant: true, apply: func(f *fakeFamily, h [32]byte) { f.replace(h, []byte{0xFF}) }},
+			{name: "root storage error", storage: true},
+			{name: "descendant storage error", descendant: true, storage: true},
+		} {
+			t.Run(mapType.String()+"/"+fault.name, func(t *testing.T) {
+				family := newFakeFamily()
+				root := putTree(t, family, mapType, sampleKeys)
+				target := root
+				if fault.descendant {
+					target = family.firstNonRoot(root)
+					if target == ([32]byte{}) {
+						t.Fatal("tree has no non-root node")
+					}
+				}
+				if fault.storage {
+					family.beforeFetch = func(_ context.Context, hash [32]byte) error {
+						if hash == target {
+							return storageErr
+						}
+						return nil
+					}
+				} else {
+					fault.apply(family, target)
+				}
+				roots := [2][32]byte{}
+				if mapType == shamap.TypeState {
+					roots[0] = root
+				} else {
+					roots[1] = root
+				}
+				var reacquires atomic.Int32
+				src := &fakeSource{
+					family:   family,
+					roots:    map[uint32][2][32]byte{10: roots},
+					min:      10,
+					max:      10,
+					hasRange: true,
+					reacquire: func(context.Context, uint32) error {
+						reacquires.Add(1)
+						return nil
+					},
+				}
+				cleaner := New(src, nil)
+				cleaner.retryDelay = time.Millisecond
+				cleaner.Start()
+				defer cleaner.Stop()
+				cleaner.Clean(Params{Full: boolPtr(true)})
+				status := waitFailure(t, cleaner)
+				cleaner.Clean(Params{Stop: true})
+
+				if reacquires.Load() == 0 {
+					t.Fatal("fault did not trigger reacquisition")
+				}
+				if status.MinLedger != 10 || status.MaxLedger != 10 {
+					t.Fatalf("failed ledger advanced: %+v", status)
+				}
+				if fault.storage {
+					if status.MissingNodes != 0 || !strings.Contains(status.LastError, storageErr.Error()) {
+						t.Fatalf("storage error was not distinguished: %+v", status)
+					}
+				} else if status.MissingNodes == 0 {
+					t.Fatalf("missing/corrupt node was not counted: %+v", status)
+				}
+			})
+		}
 	}
 }
 

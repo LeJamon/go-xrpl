@@ -268,7 +268,11 @@ func (s *historyComponent) deleteHistoryLocked(seq uint32) {
 
 func (s *historyComponent) cachePersistedLedgerLocked(l *ledger.Ledger) {
 	hash := l.Hash()
-	if _, ok := s.persistedLedgers[hash]; ok {
+	if existing, ok := s.persistedLedgers[hash]; ok {
+		if existing.IsValidated() && !l.IsValidated() {
+			return
+		}
+		s.persistedLedgers[hash] = l
 		return
 	}
 	s.persistedLedgers[hash] = l

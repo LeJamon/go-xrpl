@@ -52,8 +52,8 @@ func TestHistoryQueriesRaceWithLedgerClose(t *testing.T) {
 				if _, err := svc.GetLedgerRange(context.Background(), seq, seq); err != nil {
 					report(err)
 				}
-				if _, _, ok := svc.AvailableLedgerRange(); !ok {
-					report(errors.New("history range disappeared"))
+				if first, last, ok := svc.AvailableLedgerRange(); ok && first > last {
+					report(errors.New("invalid available ledger range"))
 				}
 				if _, _, err := svc.resolveLedgerForQuery(
 					context.Background(),

@@ -462,10 +462,6 @@ type ServiceContainer struct {
 	// the cleaner, so the wiring in cmd/server translates between the two.
 	LedgerCleanerConfigure func(LedgerCleanerParams) LedgerCleanerStatus
 
-	// LedgerCleanerStatusFn returns the verifier's current status without
-	// reconfiguring it, backing a parameterless ledger_cleaner status query.
-	LedgerCleanerStatusFn func() LedgerCleanerStatus
-
 	// UNLBlocked reports whether the node's UNL is blocked (the configured
 	// validator list has expired), driving the rpcEXPIRED_VALIDATOR_LIST
 	// branch of conditionMet (mirrors rippled NetworkOPs::isUNLBlocked).
@@ -2157,13 +2153,6 @@ func (g *ServiceGraph) RequestLedger() func([32]byte, uint32) (map[string]any, b
 func (g *ServiceGraph) LedgerCleanerConfigure() func(LedgerCleanerParams) LedgerCleanerStatus {
 	if s := g.services(); s != nil {
 		return s.LedgerCleanerConfigure
-	}
-	return nil
-}
-
-func (g *ServiceGraph) LedgerCleanerStatusFn() func() LedgerCleanerStatus {
-	if s := g.services(); s != nil {
-		return s.LedgerCleanerStatusFn
 	}
 	return nil
 }
