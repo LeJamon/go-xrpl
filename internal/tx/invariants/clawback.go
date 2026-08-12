@@ -1,8 +1,10 @@
 package invariants
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
+	"slices"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -11,9 +13,10 @@ import (
 )
 
 type clawbackEntry struct {
-	key    [32]byte
-	before []byte
-	after  []byte
+	beforeKey [32]byte
+	afterKey  [32]byte
+	before    []byte
+	after     []byte
 }
 
 func checkValidClawback(tx Transaction, result Result, entries []InvariantEntry, view ReadView, rules *amendment.Rules, numberContext ...state.NumberContext) *InvariantViolation {
@@ -23,14 +26,30 @@ func checkValidClawback(tx Transaction, result Result, entries []InvariantEntry,
 
 	var trustlinesChanged, mptokensChanged int
 	var iou, mpt clawbackEntry
-	for _, e := range entries {
-		if e.Before != nil && e.EntryType == entry.TypeRippleState {
+	orderedEntries := slices.Clone(entries)
+	slices.SortFunc(orderedEntries, func(a, b InvariantEntry) int {
+		return bytes.Compare(a.Key[:], b.Key[:])
+	})
+	for _, e := range orderedEntries {
+		beforeType, _ := state.DecodeType(e.Before)
+		afterType, _ := state.DecodeType(e.After)
+		if e.Before != nil && beforeType == entry.TypeRippleState {
 			trustlinesChanged++
-			iou = clawbackEntry{key: e.Key, before: e.Before, after: e.After}
+			iou.beforeKey = e.Key
+			iou.before = e.Before
 		}
-		if e.Before != nil && e.EntryType == entry.TypeMPToken {
+		if !e.IsDelete && e.After != nil && afterType == entry.TypeRippleState {
+			iou.afterKey = e.Key
+			iou.after = e.After
+		}
+		if e.Before != nil && beforeType == entry.TypeMPToken {
 			mptokensChanged++
-			mpt = clawbackEntry{key: e.Key, before: e.Before, after: e.After}
+			mpt.beforeKey = e.Key
+			mpt.before = e.Before
+		}
+		if !e.IsDelete && e.After != nil && afterType == entry.TypeMPToken {
+			mpt.afterKey = e.Key
+			mpt.after = e.After
 		}
 	}
 
@@ -65,8 +84,8 @@ func checkValidClawback(tx Transaction, result Result, entries []InvariantEntry,
 	}
 	amount := provider.ClawbackAmount()
 	if !mptV2Enabled {
-		if trustlinesChanged == 1 && !amount.IsMPT() && view != nil {
-			return checkClawbackHolderBalance(tx, view)
+		if trustlinesChanged == 1 && !amount.IsMPT() {
+			return checkLegacyIOUClawback(tx, amount, iou, view)
 		}
 		return nil
 	}
@@ -91,7 +110,8 @@ func checkIOUClawbackDelta(tx Transaction, amount Amount, changed clawbackEntry,
 			return violation
 		}
 	}
-	if changed.before == nil || changed.key != keylet.Line(holder, issuer, amount.Currency).Key {
+	expectedKey := keylet.Line(holder, issuer, amount.Currency).Key
+	if changed.before == nil || changed.beforeKey != expectedKey || changed.after != nil && changed.afterKey != expectedKey {
 		return clawbackViolation("trustline clawback changed the wrong line")
 	}
 
@@ -166,10 +186,6 @@ func checkMPTClawbackDelta(tx Transaction, amount Amount, changed clawbackEntry)
 	if changed.before == nil || changed.after == nil {
 		return clawbackViolation("MPT clawback token is missing")
 	}
-	if changed.key != keylet.MPToken(keylet.MPTIssuance(issuanceID).Key, holder).Key {
-		return clawbackViolation("MPT clawback changed the wrong token")
-	}
-
 	before, err := state.ParseMPToken(changed.before)
 	if err != nil {
 		return clawbackViolation(fmt.Sprintf("could not parse MPToken SLE: %v", err))
@@ -191,6 +207,38 @@ func checkMPTClawbackDelta(tx Transaction, amount Amount, changed clawbackEntry)
 	expected := min(before.MPTAmount, uint64(clawAmount))
 	if before.MPTAmount-after.MPTAmount != expected {
 		return clawbackViolation("MPT clawback balance change is invalid")
+	}
+	return nil
+}
+
+func checkLegacyIOUClawback(tx Transaction, amount Amount, changed clawbackEntry, view ReadView) *InvariantViolation {
+	if view != nil {
+		if violation := checkClawbackHolderBalance(tx, view); violation != nil {
+			return violation
+		}
+	}
+	issuer, err := state.DecodeAccountID(tx.TxAccount())
+	if err != nil {
+		return nil
+	}
+	holder, err := state.DecodeAccountID(amount.Issuer)
+	if err != nil {
+		return nil
+	}
+	expectedKey := keylet.Line(holder, issuer, amount.Currency).Key
+	if changed.before == nil || changed.beforeKey != expectedKey || changed.after != nil && changed.afterKey != expectedKey {
+		return nil
+	}
+	before, err := clawbackTrustLineBalance(changed.before, holder, issuer, amount.Currency, tx.TxAccount())
+	if err != nil {
+		return clawbackViolation("trustline clawback balance change is invalid")
+	}
+	after, err := clawbackTrustLineBalance(changed.after, holder, issuer, amount.Currency, tx.TxAccount())
+	if err != nil {
+		return clawbackViolation("trustline clawback balance change is invalid")
+	}
+	if before.Currency != amount.Currency || after.Currency != amount.Currency {
+		return clawbackViolation("trustline clawback balance change is invalid")
 	}
 	return nil
 }

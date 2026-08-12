@@ -146,9 +146,18 @@ func TestValidClawbackIOUBalanceDelta(t *testing.T) {
 
 	invalid := clawbackLineEntry(t, ptr(100), ptr(80))
 	require.Nil(t, checkValidClawback(tx(10), TesSUCCESS, []InvariantEntry{invalid}, stubView{}, clawbackRules(false)))
+	legacyCurrency := clawbackLineEntry(t, ptr(100), ptr(90))
+	legacyAfter, err := state.ParseRippleState(legacyCurrency.After)
+	require.NoError(t, err)
+	legacyAfter.Balance.Currency = "EUR"
+	legacyCurrency.After, err = state.SerializeRippleState(legacyAfter)
+	require.NoError(t, err)
+	violation := checkValidClawback(tx(10), TesSUCCESS, []InvariantEntry{legacyCurrency}, stubView{}, clawbackRules(false))
+	require.NotNil(t, violation)
+	require.Equal(t, "trustline clawback balance change is invalid", violation.Message)
 
 	negative := clawbackLineEntry(t, ptr(100), ptr(-10))
-	violation := checkValidClawback(tx(10), TesSUCCESS, []InvariantEntry{negative}, lineView{line: negative.After}, clawbackRules(true))
+	violation = checkValidClawback(tx(10), TesSUCCESS, []InvariantEntry{negative}, lineView{line: negative.After}, clawbackRules(true))
 	require.NotNil(t, violation)
 	require.Equal(t, "trustline or MPT balance is negative", violation.Message)
 }
@@ -182,13 +191,36 @@ func TestValidClawbackMPTBalanceDelta(t *testing.T) {
 		{name: "zero amount", before: ptr(100), after: ptr(90), amount: 0, want: "MPT clawback amount is invalid"},
 		{name: "deleted token", before: ptr(100), amount: 100, want: "MPT clawback token is missing"},
 		{name: "missing holder", before: ptr(100), after: ptr(90), amount: 10, mutate: func(tx *clawbackTx, _ *InvariantEntry) { tx.holder = "" }, want: "MPT clawback missing holder"},
-		{name: "wrong token", before: ptr(100), after: ptr(90), amount: 10, mutate: func(_ *clawbackTx, e *InvariantEntry) { e.Key[0] ^= 1 }, want: "MPT clawback changed the wrong token"},
-		{name: "wrong token contents", before: ptr(100), after: ptr(90), amount: 10, mutate: func(_ *clawbackTx, e *InvariantEntry) {
+		{name: "ledger key does not define token identity", before: ptr(100), after: ptr(90), amount: 10, mutate: func(_ *clawbackTx, e *InvariantEntry) { e.Key[0] ^= 1 }},
+		{name: "wrong before holder", before: ptr(100), after: ptr(90), amount: 10, mutate: func(_ *clawbackTx, e *InvariantEntry) {
+			other, err := state.DecodeAccountID(addrHolderB)
+			require.NoError(t, err)
+			token, err := state.ParseMPToken(e.Before)
+			require.NoError(t, err)
+			token.Account = other
+			e.Before, err = state.SerializeMPToken(token)
+			require.NoError(t, err)
+		}, want: "MPT clawback changed the wrong token"},
+		{name: "wrong after holder", before: ptr(100), after: ptr(90), amount: 10, mutate: func(_ *clawbackTx, e *InvariantEntry) {
 			other, err := state.DecodeAccountID(addrHolderB)
 			require.NoError(t, err)
 			token, err := state.ParseMPToken(e.After)
 			require.NoError(t, err)
 			token.Account = other
+			e.After, err = state.SerializeMPToken(token)
+			require.NoError(t, err)
+		}, want: "MPT clawback changed the wrong token"},
+		{name: "wrong before issuance", before: ptr(100), after: ptr(90), amount: 10, mutate: func(_ *clawbackTx, e *InvariantEntry) {
+			token, err := state.ParseMPToken(e.Before)
+			require.NoError(t, err)
+			token.MPTokenIssuanceID[0] ^= 1
+			e.Before, err = state.SerializeMPToken(token)
+			require.NoError(t, err)
+		}, want: "MPT clawback changed the wrong token"},
+		{name: "wrong after issuance", before: ptr(100), after: ptr(90), amount: 10, mutate: func(_ *clawbackTx, e *InvariantEntry) {
+			token, err := state.ParseMPToken(e.After)
+			require.NoError(t, err)
+			token.MPTokenIssuanceID[0] ^= 1
 			e.After, err = state.SerializeMPToken(token)
 			require.NoError(t, err)
 		}, want: "MPT clawback changed the wrong token"},
@@ -213,6 +245,44 @@ func TestValidClawbackMPTBalanceDelta(t *testing.T) {
 
 	invalid := clawbackMPTEntry(t, addrHolderA, id, ptr(100), ptr(80))
 	require.Nil(t, checkValidClawback(tx(10), TesSUCCESS, []InvariantEntry{invalid}, stubView{}, clawbackRules(false)))
+}
+
+func TestValidClawbackCapturesAfterEntriesInLedgerKeyOrder(t *testing.T) {
+	lineBefore, lineAfter := int64(100), int64(90)
+	line := clawbackLineEntry(t, &lineBefore, &lineAfter)
+	insertedLine := clawbackLineEntry(t, nil, &lineAfter)
+	var highKey [32]byte
+	for i := range highKey {
+		highKey[i] = 0xff
+	}
+	insertedLine.Key = highKey
+	iouTx := clawbackTx{
+		account: addrIssuer,
+		amount:  state.NewIssuedAmountFromValue(10, 0, "USD", addrHolderA),
+	}
+	violation := checkValidClawback(iouTx, TesSUCCESS, []InvariantEntry{insertedLine, line}, stubView{}, clawbackRules(true))
+	require.NotNil(t, violation)
+	require.Equal(t, "trustline clawback changed the wrong line", violation.Message)
+	insertedLine.Key = [32]byte{}
+	require.Nil(t, checkValidClawback(iouTx, TesSUCCESS, []InvariantEntry{line, insertedLine}, stubView{}, clawbackRules(true)))
+
+	issuer, err := state.DecodeAccountID(addrIssuer)
+	require.NoError(t, err)
+	id := keylet.MakeMPTID(1, issuer)
+	mptBefore, mptAfter := uint64(100), uint64(90)
+	token := clawbackMPTEntry(t, addrHolderA, id, &mptBefore, &mptAfter)
+	insertedToken := clawbackMPTEntry(t, addrHolderB, id, nil, &mptAfter)
+	insertedToken.Key = highKey
+	mptTx := clawbackTx{
+		account: addrIssuer,
+		holder:  addrHolderA,
+		amount:  state.NewMPTAmountWithIssuanceID(10, addrIssuer, hex.EncodeToString(id[:])),
+	}
+	violation = checkValidClawback(mptTx, TesSUCCESS, []InvariantEntry{insertedToken, token}, stubView{}, clawbackRules(true))
+	require.NotNil(t, violation)
+	require.Equal(t, "MPT clawback changed the wrong token", violation.Message)
+	insertedToken.Key = [32]byte{}
+	require.Nil(t, checkValidClawback(mptTx, TesSUCCESS, []InvariantEntry{token, insertedToken}, stubView{}, clawbackRules(true)))
 }
 
 func TestValidClawbackRejectsAssetArmMismatch(t *testing.T) {
