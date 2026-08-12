@@ -9,11 +9,12 @@ import (
 )
 
 func TestMantissaScaleForRulesWithFix(t *testing.T) {
-	require.Equal(t, MantissaScaleLarge, MantissaScaleForRulesWithFix(false, false, false, false))
+	require.Equal(t, MantissaScaleLarge330, MantissaScaleForRulesWithFixes(false, false, false, false, false))
 	require.Equal(t, MantissaScaleSmall, MantissaScaleForRulesWithFix(true, false, false, true))
 	require.Equal(t, MantissaScaleLargeLegacy, MantissaScaleForRulesWithFix(true, true, false, false))
 	require.Equal(t, MantissaScaleLargeLegacy, MantissaScaleForRulesWithFix(true, false, true, false))
-	require.Equal(t, MantissaScaleLarge, MantissaScaleForRulesWithFix(true, true, false, true))
+	require.Equal(t, MantissaScaleLarge320, MantissaScaleForRulesWithFix(true, true, false, true))
+	require.Equal(t, MantissaScaleLarge330, MantissaScaleForRulesWithFixes(true, true, false, true, true))
 }
 
 func TestLargeLegacyPreservesCuspRounding(t *testing.T) {

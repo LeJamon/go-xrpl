@@ -132,16 +132,14 @@ func TestXRPLNumber_ToString_LargeScale(t *testing.T) {
 	require.Equal(t, "-9223372036854775807",
 		NewXRPLNumberScaled(math.MaxInt64, 0, l, RoundTowardsZero).Negate().String())
 
-	// |MinInt64| exceeds max, so it scales down; towards zero drops the 8.
-	require.Equal(t, "-9223372036854775800",
+	require.Equal(t, "-9223372036854775807",
 		NewXRPLNumberScaled(math.MinInt64, 0, l, RoundTowardsZero).String())
-	require.Equal(t, "9223372036854775800",
+	require.Equal(t, "9223372036854775807",
 		NewXRPLNumberScaled(math.MinInt64, 0, l, RoundTowardsZero).Negate().String())
 
-	// int64max + 1 is exactly representable at large scale.
 	maxPlus1 := NewXRPLNumberScaled(math.MaxInt64, 0, l, RoundToNearest).Add(NewXRPLNumberScaled(1, 0, l, RoundToNearest))
-	require.Equal(t, "9223372036854775810", maxPlus1.String())
-	require.Equal(t, "-9223372036854775810", maxPlus1.Negate().String())
+	require.Equal(t, "9223372036854775807", maxPlus1.String())
+	require.Equal(t, "-9223372036854775807", maxPlus1.Negate().String())
 }
 
 func TestXRPLNumber_ToInt64_Rounding(t *testing.T) {

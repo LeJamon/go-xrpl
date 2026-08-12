@@ -50,6 +50,13 @@ func (c *CheckCancel) Validate() error {
 	return nil
 }
 
+func (c *CheckCancel) PreflightWithRules(rules *amendment.Rules) error {
+	if rules.FixCleanup3_3_0Enabled() && isZeroCheckID(c.CheckID) {
+		return ter.Errorf(ter.TemMALFORMED, "CheckID must not be zero")
+	}
+	return c.Validate()
+}
+
 func (c *CheckCancel) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(c)
 }

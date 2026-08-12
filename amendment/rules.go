@@ -207,6 +207,11 @@ func (r *Rules) FixCleanup3_2_0Enabled() bool {
 	return r.Enabled(FeatureFixCleanup3_2_0)
 }
 
+// FixCleanup3_3_0Enabled returns true if the fixCleanup3_3_0 amendment is enabled.
+func (r *Rules) FixCleanup3_3_0Enabled() bool {
+	return r.Enabled(FeatureFixCleanup3_3_0)
+}
+
 // MPTokensV2Enabled returns true if the MPTokensV2 amendment is enabled — MPT
 // support in the DEX, AMM and Checks.
 func (r *Rules) MPTokensV2Enabled() bool {

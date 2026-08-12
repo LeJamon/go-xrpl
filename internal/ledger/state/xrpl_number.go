@@ -59,6 +59,8 @@ const (
 	xrplNumZeroExponent = -2147483648
 	// xrplNumMaxRep is the largest signed 63-bit mantissa, std::int64_t max.
 	xrplNumMaxRep uint64 = 9223372036854775807
+	// xrplNumMaxRepUp is the first multiple of ten above xrplNumMaxRep.
+	xrplNumMaxRepUp uint64 = 9223372036854775810
 )
 
 // MantissaScale selects the normalized mantissa range for an XRPLNumber.
@@ -71,9 +73,12 @@ const (
 	// MantissaScaleLargeLegacy uses the large range while preserving the
 	// historical rounding behavior at math.MaxInt64.
 	MantissaScaleLargeLegacy
-	// MantissaScaleLarge is the [10^18, 10^19-1] range that represents every
-	// int64 value exactly, with the cusp-rounding fix enabled.
-	MantissaScaleLarge
+	// MantissaScaleLarge320 enables the fixCleanup3_2_0 rounding behavior.
+	MantissaScaleLarge320
+	// MantissaScaleLarge330 enables the fixCleanup3_3_0 rounding behavior.
+	MantissaScaleLarge330
+	// MantissaScaleLarge is the latest large-number behavior.
+	MantissaScaleLarge = MantissaScaleLarge330
 )
 
 // params returns the (min, max) normalized mantissa and the rangeLog (log10 of
@@ -90,14 +95,22 @@ func (s MantissaScale) params() (minM, maxM uint64, rangeLog int) {
 // LargeLegacy until fixCleanup3_2_0 is enabled. With no Rules context rippled
 // uses the corrected Large range.
 func MantissaScaleForRulesWithFix(hasRules, singleAssetVault, lendingProtocol, fixCleanup320 bool) MantissaScale {
+	return MantissaScaleForRulesWithFixes(hasRules, singleAssetVault, lendingProtocol, fixCleanup320, false)
+}
+
+// MantissaScaleForRulesWithFixes selects the Number range for v3.3 rules.
+func MantissaScaleForRulesWithFixes(hasRules, singleAssetVault, lendingProtocol, fixCleanup320, fixCleanup330 bool) MantissaScale {
 	if !hasRules {
-		return MantissaScaleLarge
+		return MantissaScaleLarge330
 	}
 	if !singleAssetVault && !lendingProtocol {
 		return MantissaScaleSmall
 	}
+	if fixCleanup330 {
+		return MantissaScaleLarge330
+	}
 	if fixCleanup320 {
-		return MantissaScaleLarge
+		return MantissaScaleLarge320
 	}
 	return MantissaScaleLargeLegacy
 }
@@ -214,8 +227,23 @@ func (c NumberContext) IssuedAmount(
 	}
 }
 
-func (s MantissaScale) cuspRoundingFixEnabled() bool {
-	return s == MantissaScaleLarge
+type cuspRoundingFix uint8
+
+const (
+	cuspRoundingDisabled cuspRoundingFix = iota
+	cuspRounding320
+	cuspRounding330
+)
+
+func (s MantissaScale) cuspRoundingFix() cuspRoundingFix {
+	switch s {
+	case MantissaScaleLarge320:
+		return cuspRounding320
+	case MantissaScaleLarge330:
+		return cuspRounding330
+	default:
+		return cuspRoundingDisabled
+	}
 }
 
 // RoundingMode controls how XRPLNumber rounds during normalization. rippled
@@ -266,13 +294,31 @@ func (g *xrplGuard) pop() uint {
 
 func (g *xrplGuard) setDropped() { g.xbit = true }
 
-// round returns the rounding direction: 1 up, -1 down, 0 exactly half.
-func (g *xrplGuard) round(mode RoundingMode) int {
+func (g *xrplGuard) empty() bool { return g.digits == 0 && !g.xbit }
+
+func (g *xrplGuard) pushOverflow(m uint64, fix cuspRoundingFix, mode RoundingMode) {
+	if fix < cuspRounding330 || m < xrplNumMaxRep || m >= xrplNumMaxRepUp {
+		return
+	}
+	if m%10 < 9 {
+		r := g.round(mode, fix)
+		if r == 1 || (r == 0 && m == xrplNumMaxRep+1) {
+			m++
+		}
+	}
+	g.push(uint(((m - xrplNumMaxRep) * 10) / (xrplNumMaxRepUp - xrplNumMaxRep)))
+}
+
+// round returns -2 for exact, -1 down, 0 exactly half, and 1 up.
+func (g *xrplGuard) round(mode RoundingMode, fix cuspRoundingFix) int {
+	if fix >= cuspRounding330 && g.empty() {
+		return -2
+	}
 	if mode == RoundTowardsZero {
 		return -1
 	}
 	if mode == RoundDownward {
-		if g.sbit && (g.digits > 0 || g.xbit) {
+		if g.sbit && !g.empty() {
 			return 1
 		}
 		return -1
@@ -281,7 +327,7 @@ func (g *xrplGuard) round(mode RoundingMode) int {
 		if g.sbit {
 			return -1
 		}
-		if g.digits > 0 || g.xbit {
+		if !g.empty() {
 			return 1
 		}
 		return -1
@@ -434,7 +480,35 @@ func (n XRPLNumber) Signum() int {
 
 // Cmp compares n and y, returning -1, 0, or +1.
 func (n XRPLNumber) Cmp(y XRPLNumber) int {
-	return n.Sub(y).Signum()
+	if n.negative != y.negative {
+		if n.negative {
+			return -1
+		}
+		return 1
+	}
+	if n.mantissa == 0 {
+		if y.mantissa == 0 {
+			return 0
+		}
+		return -1
+	}
+	if y.mantissa == 0 {
+		return 1
+	}
+	cmp := 0
+	if n.exponent < y.exponent {
+		cmp = -1
+	} else if n.exponent > y.exponent {
+		cmp = 1
+	} else if n.mantissa < y.mantissa {
+		cmp = -1
+	} else if n.mantissa > y.mantissa {
+		cmp = 1
+	}
+	if n.negative {
+		return -cmp
+	}
+	return cmp
 }
 
 // Truncate drops the fractional part of n toward zero, mirroring rippled's
@@ -489,12 +563,12 @@ func (n XRPLNumber) MantissaScale() MantissaScale { return n.scale }
 
 // bringIntoRange restores a rounded mantissa to the normalized range or clamps
 // to zero on exponent underflow (rippled Guard::bringIntoRange).
-func bringIntoRange(negative *bool, m *uint64, e *int, minM uint64) {
-	if *m < minM {
+func bringIntoRange(negative *bool, m *uint64, e *int, minM uint64, fix cuspRoundingFix) {
+	if *m < minM && (fix < cuspRounding330 || *m != 0) {
 		*m *= 10
 		*e--
 	}
-	if *e < xrplNumMinExponent {
+	if *e < xrplNumMinExponent || (fix >= cuspRounding330 && *m == 0) {
 		*negative = false
 		*m = 0
 		*e = xrplNumZeroExponent
@@ -503,22 +577,34 @@ func bringIntoRange(negative *bool, m *uint64, e *int, minM uint64) {
 
 // doRoundUp applies the guard's round-up decision and re-ranges (rippled
 // Guard::doRoundUp). It panics on exponent overflow.
-func (g *xrplGuard) doRoundUp(negative *bool, m *uint64, e *int, minM, maxM uint64, fixCusp bool, mode RoundingMode, loc string) {
-	if r := g.round(mode); r == 1 || (r == 0 && (*m&1) == 1) {
-		if fixCusp && (*m >= maxM || *m >= xrplNumMaxRep) {
-			g.push(uint(*m % 10))
-			*m /= 10
-			*e++
-			g.doRoundUp(negative, m, e, minM, maxM, fixCusp, mode, loc)
-			return
+func (g *xrplGuard) doRoundUp(negative *bool, m *uint64, e *int, minM, maxM uint64, fix cuspRoundingFix, mode RoundingMode, loc string) {
+	g.pushOverflow(*m, fix, mode)
+	r := g.round(mode, fix)
+	if r == 1 || (r == 0 && (*m&1) == 1) {
+		safeToIncrement := *m < maxM && *m < xrplNumMaxRep
+		if fix != cuspRoundingDisabled {
+			if safeToIncrement {
+				*m++
+			} else if fix >= cuspRounding330 && *m > xrplNumMaxRep && *m < xrplNumMaxRepUp {
+				*m = xrplNumMaxRepUp
+			} else {
+				g.push(uint(*m % 10))
+				*m /= 10
+				*e++
+				g.doRoundUp(negative, m, e, minM, maxM, fix, mode, loc)
+				return
+			}
+		} else {
+			*m++
+			if *m > maxM || *m > xrplNumMaxRep {
+				*m /= 10
+				*e++
+			}
 		}
-		*m++
-		if !fixCusp && (*m > maxM || *m > xrplNumMaxRep) {
-			*m /= 10
-			*e++
-		}
+	} else if fix >= cuspRounding330 && *m > xrplNumMaxRep && *m < xrplNumMaxRepUp {
+		*m = xrplNumMaxRep
 	}
-	bringIntoRange(negative, m, e, minM)
+	bringIntoRange(negative, m, e, minM, fix)
 	if *e > xrplNumMaxExponent {
 		panic(loc)
 	}
@@ -526,15 +612,20 @@ func (g *xrplGuard) doRoundUp(negative *bool, m *uint64, e *int, minM, maxM uint
 
 // doRoundDown applies the guard's round-down decision and re-ranges (rippled
 // Guard::doRoundDown).
-func (g *xrplGuard) doRoundDown(negative *bool, m *uint64, e *int, minM uint64, mode RoundingMode) {
-	if r := g.round(mode); r == 1 || (r == 0 && (*m&1) == 1) {
+func (g *xrplGuard) doRoundDown(negative *bool, m *uint64, e *int, minM uint64, fix cuspRoundingFix, mode RoundingMode) {
+	r := g.round(mode, fix)
+	if fix >= cuspRounding330 {
+		if r != -2 {
+			*m--
+		}
+	} else if r == 1 || (r == 0 && (*m&1) == 1) {
 		*m--
 		if *m < minM {
 			*m *= 10
 			*e--
 		}
 	}
-	bringIntoRange(negative, m, e, minM)
+	bringIntoRange(negative, m, e, minM, fix)
 }
 
 // normalize brings the (uint64) mantissa into the scale's range with Guard
@@ -569,9 +660,11 @@ func (n *XRPLNumber) normalize(mode RoundingMode) {
 		*n = n.zero()
 		return
 	}
-	// Cut m down to fit int64 so rounding happens in that range; doRoundUp can
-	// grow the mantissa back up to maxM to fill the range.
-	if m > xrplNumMaxRep {
+	repLimit := xrplNumMaxRep
+	if n.scale.cuspRoundingFix() >= cuspRounding330 {
+		repLimit = xrplNumMaxRepUp
+	}
+	if m > repLimit {
 		if e >= xrplNumMaxExponent {
 			panic("XRPLNumber::normalize overflow")
 		}
@@ -579,7 +672,7 @@ func (n *XRPLNumber) normalize(mode RoundingMode) {
 		m /= 10
 		e++
 	}
-	g.doRoundUp(&neg, &m, &e, minM, maxM, n.scale.cuspRoundingFixEnabled(), mode, "XRPLNumber::normalize overflow")
+	g.doRoundUp(&neg, &m, &e, minM, maxM, n.scale.cuspRoundingFix(), mode, "XRPLNumber::normalize overflow")
 	n.negative = neg
 	n.mantissa = m
 	n.exponent = e
@@ -590,6 +683,13 @@ func (n XRPLNumber) Add(y XRPLNumber) XRPLNumber { return n.AddRounded(y, RoundT
 
 // AddRounded returns n + y rounded under mode (rippled operator+=).
 func (n XRPLNumber) AddRounded(y XRPLNumber, mode RoundingMode) XRPLNumber {
+	if n.scale == MantissaScaleLarge330 {
+		return n.addRounded330(y, mode)
+	}
+	return n.addRoundedLegacy(y, mode)
+}
+
+func (n XRPLNumber) addRoundedLegacy(y XRPLNumber, mode RoundingMode) XRPLNumber {
 	if y.IsZero() {
 		return n
 	}
@@ -640,7 +740,7 @@ func (n XRPLNumber) AddRounded(y XRPLNumber, mode RoundingMode) XRPLNumber {
 		} else {
 			xm = lo
 		}
-		g.doRoundUp(&xn, &xm, &xe, minM, maxM, n.scale.cuspRoundingFixEnabled(), mode, "XRPLNumber::addition overflow")
+		g.doRoundUp(&xn, &xm, &xe, minM, maxM, n.scale.cuspRoundingFix(), mode, "XRPLNumber::addition overflow")
 	} else {
 		// Different sign: subtract magnitudes.
 		if xm > ym {
@@ -654,12 +754,89 @@ func (n XRPLNumber) AddRounded(y XRPLNumber, mode RoundingMode) XRPLNumber {
 			xm = xm*10 - uint64(g.pop())
 			xe--
 		}
-		g.doRoundDown(&xn, &xm, &xe, minM, mode)
+		g.doRoundDown(&xn, &xm, &xe, minM, n.scale.cuspRoundingFix(), mode)
 	}
 
 	r := XRPLNumber{negative: xn, mantissa: xm, exponent: xe, scale: n.scale}
 	r.normalize(mode)
 	return r
+}
+
+func (n XRPLNumber) addRounded330(y XRPLNumber, mode RoundingMode) XRPLNumber {
+	if y.IsZero() {
+		return n
+	}
+	if n.IsZero() {
+		return y
+	}
+	if n.Equal(y.Negate()) {
+		return n.zero()
+	}
+
+	xn, xe := n.negative, n.exponent
+	yn, ye := y.negative, y.exponent
+	xm := new(big.Int).SetUint64(n.mantissa)
+	ym := new(big.Int).SetUint64(y.mantissa)
+	upperLimit := new(big.Int).SetUint64(1_000_000_000_000_000_000)
+	upperLimit.Mul(upperLimit, big.NewInt(1000))
+	ten := big.NewInt(10)
+	var g xrplGuard
+
+	drop := func(m *big.Int, e *int) {
+		q, r := new(big.Int), new(big.Int)
+		q.QuoRem(m, ten, r)
+		m.Set(q)
+		*e++
+		g.push(uint(r.Uint64()))
+	}
+	adjust := func(expandM *big.Int, expandE *int, shrinkM *big.Int, shrinkE *int) {
+		for *shrinkE < *expandE && new(big.Int).Rem(shrinkM, ten).Sign() == 0 {
+			drop(shrinkM, shrinkE)
+		}
+		for *shrinkE < *expandE && *expandE > xrplNumMinExponent && expandM.Cmp(upperLimit) < 0 {
+			expandM.Mul(expandM, ten)
+			*expandE--
+		}
+		for *shrinkE < *expandE {
+			drop(shrinkM, shrinkE)
+		}
+	}
+
+	if xe < ye {
+		if xn {
+			g.setNegative()
+		}
+		adjust(ym, &ye, xm, &xe)
+	} else if xe > ye {
+		if yn {
+			g.setNegative()
+		}
+		adjust(xm, &xe, ym, &ye)
+	} else if (xm.Cmp(ym) < 0 && xn) || (ym.Cmp(xm) < 0 && yn) {
+		g.setNegative()
+	}
+
+	if xn == yn {
+		xm.Add(xm, ym)
+		return normalizeFromBigDropped(xn, xm, xe, n.scale, mode, !g.empty())
+	}
+
+	if xm.Cmp(ym) > 0 {
+		xm.Sub(xm, ym)
+	} else {
+		xm.Sub(ym, xm)
+		xe = ye
+		xn = yn
+	}
+	for xm.Cmp(upperLimit) < 0 && !g.empty() {
+		xm.Mul(xm, ten)
+		xm.Sub(xm, new(big.Int).SetUint64(uint64(g.pop())))
+		xe--
+	}
+	if g.round(mode, cuspRounding330) != -2 {
+		xm.Sub(xm, big.NewInt(1))
+	}
+	return normalizeFromBigDropped(xn, xm, xe, n.scale, mode, !g.empty())
 }
 
 // Sub returns n - y.
@@ -683,7 +860,11 @@ func (n XRPLNumber) MulRounded(y XRPLNumber, mode RoundingMode) XRPLNumber {
 
 	zm := new(big.Int).Mul(new(big.Int).SetUint64(n.mantissa), new(big.Int).SetUint64(y.mantissa))
 	bigMaxM := new(big.Int).SetUint64(maxM)
-	bigMaxRep := new(big.Int).SetUint64(xrplNumMaxRep)
+	repLimit := xrplNumMaxRep
+	if n.scale.cuspRoundingFix() >= cuspRounding330 {
+		repLimit = xrplNumMaxRepUp
+	}
+	bigMaxRep := new(big.Int).SetUint64(repLimit)
 	ten := big.NewInt(10)
 	rem := new(big.Int)
 
@@ -697,7 +878,7 @@ func (n XRPLNumber) MulRounded(y XRPLNumber, mode RoundingMode) XRPLNumber {
 		ze++
 	}
 	xm := zm.Uint64()
-	g.doRoundUp(&zn, &xm, &ze, minM, maxM, n.scale.cuspRoundingFixEnabled(), mode, "XRPLNumber::multiplication overflow")
+	g.doRoundUp(&zn, &xm, &ze, minM, maxM, n.scale.cuspRoundingFix(), mode, "XRPLNumber::multiplication overflow")
 
 	r := XRPLNumber{negative: zn, mantissa: xm, exponent: ze, scale: n.scale}
 	r.normalize(mode)
@@ -738,7 +919,7 @@ func (n XRPLNumber) DivRounded(y XRPLNumber, mode RoundingMode) XRPLNumber {
 			zm.Add(zm, correction)
 			ze -= 5
 		}
-		if n.scale.cuspRoundingFixEnabled() {
+		if n.scale.cuspRoundingFix() != cuspRoundingDisabled {
 			dropped = new(big.Int).Rem(partialNumerator, dmu).Sign() != 0
 		}
 	}
@@ -760,7 +941,11 @@ func normalizeFromBigDropped(negative bool, m *big.Int, e int, scale MantissaSca
 	minM, maxM, _ := scale.params()
 	bigMinM := new(big.Int).SetUint64(minM)
 	bigMaxM := new(big.Int).SetUint64(maxM)
-	bigMaxRep := new(big.Int).SetUint64(xrplNumMaxRep)
+	repLimit := xrplNumMaxRep
+	if scale.cuspRoundingFix() >= cuspRounding330 {
+		repLimit = xrplNumMaxRepUp
+	}
+	bigMaxRep := new(big.Int).SetUint64(repLimit)
 	ten := big.NewInt(10)
 	rem := new(big.Int)
 	mm := new(big.Int).Set(m)
@@ -796,7 +981,7 @@ func normalizeFromBigDropped(negative bool, m *big.Int, e int, scale MantissaSca
 		e++
 	}
 	mu := mm.Uint64()
-	g.doRoundUp(&negative, &mu, &e, minM, maxM, scale.cuspRoundingFixEnabled(), mode, "XRPLNumber::normalize overflow")
+	g.doRoundUp(&negative, &mu, &e, minM, maxM, scale.cuspRoundingFix(), mode, "XRPLNumber::normalize overflow")
 	return XRPLNumber{negative: negative, mantissa: mu, exponent: e, scale: scale}
 }
 
@@ -853,7 +1038,7 @@ func normalizeInRange(negative *bool, m *uint64, e *int, minM, maxM uint64) {
 		*m /= 10
 		*e++
 	}
-	g.doRoundUp(negative, m, e, minM, maxM, false, RoundToNearest, "XRPLNumber::normalize overflow")
+	g.doRoundUp(negative, m, e, minM, maxM, cuspRoundingDisabled, RoundToNearest, "XRPLNumber::normalize overflow")
 }
 
 // ToIOUAmountValue converts to IOUAmountValue using banker's rounding.
@@ -905,7 +1090,7 @@ func (n XRPLNumber) ToInt64WithMode(mode RoundingMode) int64 {
 		drops *= 10
 		offset--
 	}
-	if r := g.round(mode); r == 1 || (r == 0 && (drops&1) == 1) {
+	if r := g.round(mode, n.scale.cuspRoundingFix()); r == 1 || (r == 0 && (drops&1) == 1) {
 		if uint64(drops) >= xrplNumMaxRep {
 			panic("XRPLNumber::operator rep() rounding overflow")
 		}

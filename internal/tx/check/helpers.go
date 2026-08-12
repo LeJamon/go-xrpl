@@ -2,10 +2,15 @@ package check
 
 import (
 	"encoding/hex"
+	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 )
+
+func isZeroCheckID(checkID string) bool {
+	return len(checkID) == 64 && strings.Trim(checkID, "0") == ""
+}
 
 // newCheckData builds the state.CheckData for a Check ledger entry from a
 // CheckCreate transaction. The directory page fields (OwnerNode/DestinationNode)

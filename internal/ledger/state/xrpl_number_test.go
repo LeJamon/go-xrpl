@@ -52,7 +52,7 @@ func TestXRPLGuard_Round(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var g xrplGuard
 			tt.setup(&g)
-			require.Equal(t, tt.want, g.round(RoundToNearest))
+			require.Equal(t, tt.want, g.round(RoundToNearest, cuspRoundingDisabled))
 		})
 	}
 }

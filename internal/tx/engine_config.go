@@ -190,15 +190,16 @@ func (c EngineConfig) RequireRules() *amendment.Rules {
 func NumberContextForRules(rules *amendment.Rules) state.NumberContext {
 	if rules == nil {
 		return state.NewNumberContext(
-			state.MantissaScaleForRulesWithFix(false, false, false, false),
+			state.MantissaScaleForRulesWithFixes(false, false, false, false, false),
 			true,
 		)
 	}
-	return state.NewNumberContext(state.MantissaScaleForRulesWithFix(
+	return state.NewNumberContext(state.MantissaScaleForRulesWithFixes(
 		true,
 		rules.Enabled(amendment.FeatureSingleAssetVault),
 		rules.Enabled(amendment.FeatureLendingProtocol),
 		rules.FixCleanup3_2_0Enabled(),
+		rules.FixCleanup3_3_0Enabled(),
 	), rules.Enabled(amendment.FeatureFixUniversalNumber))
 }
 
