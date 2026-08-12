@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	codecTypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -417,7 +418,7 @@ func (v *VaultCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 
 // decodeBlob decodes a hex-encoded Blob field to its raw bytes.
 func decodeBlob(s string) ([]byte, error) {
-	return hex.DecodeString(s)
+	return (&codecTypes.Blob{}).FromJSON(s)
 }
 
 // isZeroHash reports whether s is a valid 64-char hex string decoding to the

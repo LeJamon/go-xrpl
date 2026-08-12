@@ -127,6 +127,9 @@ type EngineConfig struct {
 	// Reference: rippled Transactor.cpp / BuildLedger.cpp
 	ApplyFlags ApplyFlags
 
+	// ParentBatchID is set while applying an inner Batch transaction.
+	ParentBatchID *[32]byte
+
 	// Logger is the logger to use for this engine instance.
 	// If nil, xrpllog.Discard() is used — safe for tests and zero-value construction.
 	Logger xrpllog.Logger
