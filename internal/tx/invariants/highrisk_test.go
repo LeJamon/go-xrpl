@@ -254,12 +254,12 @@ func (v lineView) Read(k keylet.Keylet) ([]byte, error) { return v.line, nil }
 // trust line and one MPToken; more than one of either trips ValidClawback.
 // Reference: rippled InvariantCheck.cpp ValidClawback (lines 1288-1362).
 func TestValidClawback_TooManyEntries(t *testing.T) {
-	nonNil := []byte{0x01}
 	tx := stubTx{txType: TypeClawback}
+	line := clawbackLine(t, 1)
 
 	twoLines := []InvariantEntry{
-		{EntryType: entry.TypeRippleState, Before: nonNil},
-		{EntryType: entry.TypeRippleState, Before: nonNil},
+		{Key: [32]byte{1}, EntryType: entry.TypeRippleState, Before: line},
+		{Key: [32]byte{2}, EntryType: entry.TypeRippleState, Before: line},
 	}
 	if v := checkValidClawback(tx, TesSUCCESS, twoLines, stubView{}, nil); v == nil {
 		t.Fatal("expected ValidClawback violation: more than one trustline changed")
@@ -267,9 +267,15 @@ func TestValidClawback_TooManyEntries(t *testing.T) {
 		t.Fatalf("unexpected violation name %q", v.Name)
 	}
 
+	issuer, err := state.DecodeAccountID(addrIssuer)
+	if err != nil {
+		t.Fatalf("DecodeAccountID: %v", err)
+	}
+	id := keylet.MakeMPTID(1, issuer)
+	value := uint64(1)
 	twoMPTokens := []InvariantEntry{
-		{EntryType: entry.TypeMPToken, Before: nonNil},
-		{EntryType: entry.TypeMPToken, Before: nonNil},
+		clawbackMPTEntry(t, addrHolderA, id, &value, nil),
+		clawbackMPTEntry(t, addrHolderB, id, &value, nil),
 	}
 	if v := checkValidClawback(tx, TesSUCCESS, twoMPTokens, stubView{}, nil); v == nil {
 		t.Fatal("expected ValidClawback violation: more than one mptoken changed")
@@ -277,7 +283,7 @@ func TestValidClawback_TooManyEntries(t *testing.T) {
 
 	// Exactly one trust line and no Amount provider: the ==1 branch skips the
 	// balance check and the invariant is satisfied.
-	oneLine := []InvariantEntry{{EntryType: entry.TypeRippleState, Before: nonNil}}
+	oneLine := []InvariantEntry{{EntryType: entry.TypeRippleState, Before: line}}
 	if v := checkValidClawback(tx, TesSUCCESS, oneLine, stubView{}, nil); v != nil {
 		t.Fatalf("single trustline: unexpected violation %v", v)
 	}
@@ -287,11 +293,10 @@ func TestValidClawback_TooManyEntries(t *testing.T) {
 // any trust line or MPToken.
 // Reference: rippled InvariantCheck.cpp lines 1344-1361.
 func TestValidClawback_ChangesOnFailure(t *testing.T) {
-	nonNil := []byte{0x01}
 	tx := stubTx{txType: TypeClawback}
 	const failure Result = 100 // any non-tesSUCCESS result
 
-	changed := []InvariantEntry{{EntryType: entry.TypeRippleState, Before: nonNil}}
+	changed := []InvariantEntry{{EntryType: entry.TypeRippleState, Before: clawbackLine(t, 1)}}
 	if v := checkValidClawback(tx, failure, changed, stubView{}, nil); v == nil {
 		t.Fatal("expected ValidClawback violation: trustline changed despite failure")
 	}
