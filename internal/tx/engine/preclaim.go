@@ -333,13 +333,19 @@ func (e *Engine) checkPermission(tx txcore.Transaction, common *txcore.Common, a
 		return ter.TesSUCCESS
 	}
 	// Otherwise a granular permission may still authorize a specific slice of
-	// the transaction's behaviour. Transaction types that support granular
-	// delegation evaluate their own rules here.
+	// the transaction's behaviour. Only permissions for this transaction type
+	// contribute to the union of allowed flags and fields.
+	heldPermissions := txcore.GranularPermissionsFor(tx.TxType(), delegateEntry.Permissions)
+	if !txcore.CheckGranularPermissionTemplate(tx, heldPermissions) {
+		return ter.TerNO_DELEGATE_PERMISSION
+	}
+	// Transaction types with extra granular semantics evaluate them only after
+	// the shared permission template succeeds.
 	if checker, ok := tx.(txcore.DelegatePermissionChecker); ok {
 		return checker.CheckDelegatePermission(txcore.DelegatePermissionContext{
 			View:        e.view,
 			Rules:       e.config.RequireRules(),
-			Permissions: delegateEntry.Permissions,
+			Permissions: heldPermissions,
 		})
 	}
 	return ter.TerNO_DELEGATE_PERMISSION

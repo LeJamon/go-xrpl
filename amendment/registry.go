@@ -49,7 +49,7 @@ var (
 	FeaturePermissionedDEX               = registerFeature("PermissionedDEX", SupportedYes, VoteDefaultNo)
 	FeatureLendingProtocol               = registerFeature("LendingProtocol", SupportedYes, VoteDefaultNo)
 	FeatureSingleAssetVault              = registerFeature("SingleAssetVault", SupportedYes, VoteDefaultNo)
-	FeaturePermissionDelegationV1_1      = registerFeature("PermissionDelegationV1_1", SupportedNo, VoteDefaultNo)
+	FeaturePermissionDelegationV1_1      = registerFeature("PermissionDelegationV1_1", SupportedYes, VoteDefaultNo)
 	FeatureFixPayChanCancelAfter         = registerFix("fixPayChanCancelAfter", SupportedYes, VoteDefaultNo)
 	FeatureFixInvalidTxFlags             = registerFix("fixInvalidTxFlags", SupportedYes, VoteDefaultNo)
 	FeatureFixFrozenLPTokenTransfer      = registerFix("fixFrozenLPTokenTransfer", SupportedYes, VoteDefaultNo)

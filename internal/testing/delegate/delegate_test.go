@@ -10,11 +10,13 @@ package delegate_test
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	mpttester "github.com/LeJamon/go-xrpl/internal/testing/mpt"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	delegatetx "github.com/LeJamon/go-xrpl/internal/tx/delegate"
 	paymenttx "github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -52,6 +54,8 @@ func TestDelegate_FeatureDisabled(t *testing.T) {
 			env := jtx.NewTestEnv(t)
 			if enabled {
 				env.EnableFeature("PermissionDelegationV1_1")
+			} else {
+				env.DisableFeature("PermissionDelegationV1_1")
 			}
 			gw := jtx.NewAccount("gw")
 			alice := jtx.NewAccount("alice")
@@ -238,17 +242,156 @@ func TestDelegate_PaymentCrossCurrency(t *testing.T) {
 	bob := jtx.NewAccount("bob")
 	env.Fund(gw, alice, bob)
 	env.Close()
+	env.Trust(alice, tx.NewIssuedAmountFromFloat64(1000, "USD", gw.Address))
+	env.Close()
 
 	require.Equal(t, "tesSUCCESS", grantPermissions(env, gw, bob, "PaymentMint").Code)
 	env.Close()
 
+	amount := tx.NewIssuedAmountFromFloat64(50, "USD", gw.Address)
+	sameAsset := paymenttx.NewPayment(gw.Address, alice.Address, amount)
+	sendMax := tx.NewIssuedAmountFromFloat64(50, "USD", gw.Address)
+	sameAsset.SendMax = &sendMax
+	sameAsset.GetCommon().Delegate = bob.Address
+	require.Equal(t, "tesSUCCESS", env.SubmitSignedWith(sameAsset, bob).Code)
+	env.Close()
+
 	// Deliver USD but source EUR: cross-currency is forbidden under the granular
 	// mint permission.
-	p := paymenttx.NewPayment(gw.Address, alice.Address, tx.NewIssuedAmountFromFloat64(50, "USD", gw.Address))
-	sendMax := tx.NewIssuedAmountFromFloat64(50, "EUR", gw.Address)
+	p := paymenttx.NewPayment(gw.Address, alice.Address, amount)
+	sendMax = tx.NewIssuedAmountFromFloat64(50, "EUR", gw.Address)
 	p.SendMax = &sendMax
 	p.GetCommon().Delegate = bob.Address
 	require.Equal(t, "terNO_DELEGATE_PERMISSION", env.SubmitSignedWith(p, bob).Code)
+}
+
+func TestDelegate_PaymentIOURequiresEndpointIssuerAndTrustline(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	env.EnableFeature("PermissionDelegationV1_1")
+	gw := jtx.NewAccount("gw")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	other := jtx.NewAccount("other")
+	env.Fund(gw, alice, bob, other)
+	env.Close()
+	require.Equal(t, "tesSUCCESS", grantPermissions(env, gw, bob, "PaymentMint").Code)
+	env.Close()
+
+	require.Equal(t, "terNO_DELEGATE_PERMISSION",
+		payDelegated(env, gw, bob, alice, tx.NewIssuedAmountFromFloat64(10, "USD", other.Address)).Code)
+	env.Close()
+	require.Equal(t, "terNO_DELEGATE_PERMISSION",
+		payDelegated(env, gw, bob, alice, tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)).Code)
+}
+
+func TestDelegate_PaymentGranularTemplateRejectsForeignFields(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	env.EnableFeature("PermissionDelegationV1_1")
+	gw := jtx.NewAccount("gw")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	env.Fund(gw, alice, bob)
+	env.Close()
+	env.Trust(alice, tx.NewIssuedAmountFromFloat64(1000, "USD", gw.Address))
+	env.Close()
+	require.Equal(t, "tesSUCCESS", grantPermissions(env, gw, bob, "PaymentMint").Code)
+	env.Close()
+
+	amount := tx.NewIssuedAmountFromFloat64(50, "USD", gw.Address)
+	payment := paymenttx.NewPayment(gw.Address, alice.Address, amount)
+	domainID := "0101010101010101010101010101010101010101010101010101010101010101"
+	payment.DomainID = &domainID
+	payment.Delegate = bob.Address
+	require.Equal(t, "terNO_DELEGATE_PERMISSION", env.SubmitSignedWith(payment, bob).Code)
+}
+
+func TestDelegate_PaymentIOUDirectionIgnoresIssuerAliases(t *testing.T) {
+	t.Run("mint", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		env.EnableFeature("PermissionDelegationV1_1")
+		gw := jtx.NewAccount("gw")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		env.Fund(gw, alice, bob)
+		env.Close()
+		env.Trust(alice, tx.NewIssuedAmountFromFloat64(1000, "USD", gw.Address))
+		env.Close()
+
+		aliasAmount := tx.NewIssuedAmountFromFloat64(50, "USD", alice.Address)
+		require.Equal(t, "tesSUCCESS", grantPermissions(env, gw, bob, "PaymentBurn").Code)
+		env.Close()
+		require.Equal(t, "terNO_DELEGATE_PERMISSION", payDelegated(env, gw, bob, alice, aliasAmount).Code)
+		env.Close()
+
+		require.Equal(t, "tesSUCCESS", grantPermissions(env, gw, bob, "PaymentMint").Code)
+		env.Close()
+		require.Equal(t, "tesSUCCESS", payDelegated(env, gw, bob, alice, aliasAmount).Code)
+	})
+
+	t.Run("burn", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		env.EnableFeature("PermissionDelegationV1_1")
+		gw := jtx.NewAccount("gw")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		env.Fund(gw, alice, bob)
+		env.Close()
+		env.Trust(alice, tx.NewIssuedAmountFromFloat64(1000, "USD", gw.Address))
+		env.Close()
+		env.PayIOU(gw, alice, gw, "USD", 100)
+		env.Close()
+
+		aliasAmount := tx.NewIssuedAmountFromFloat64(30, "USD", alice.Address)
+		require.Equal(t, "tesSUCCESS", grantPermissions(env, alice, bob, "PaymentMint").Code)
+		env.Close()
+		require.Equal(t, "terNO_DELEGATE_PERMISSION", payDelegated(env, alice, bob, gw, aliasAmount).Code)
+		env.Close()
+
+		require.Equal(t, "tesSUCCESS", grantPermissions(env, alice, bob, "PaymentBurn").Code)
+		env.Close()
+		require.Equal(t, "tesSUCCESS", payDelegated(env, alice, bob, gw, aliasAmount).Code)
+	})
+}
+
+func TestDelegateSetRejectsPseudoAccountTarget(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	env.EnableFeature("PermissionDelegationV1_1")
+	owner := jtx.NewAccount("owner")
+	pseudo := jtx.NewAccount("pseudo")
+	env.Fund(owner, pseudo)
+	env.Close()
+
+	data, err := env.LedgerEntry(keylet.Account(pseudo.ID))
+	require.NoError(t, err)
+	root, err := state.ParseAccountRoot(data)
+	require.NoError(t, err)
+	root.AMMID[0] = 1
+	data, err = state.SerializeAccountRoot(root)
+	require.NoError(t, err)
+	require.NoError(t, env.Ledger().Update(keylet.Account(pseudo.ID), data))
+
+	require.Equal(t, "tecPSEUDO_ACCOUNT", grantPermissions(env, owner, pseudo, "Payment").Code)
+}
+
+func TestDelegateSetConfidentialPermissionRegistry(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	env.EnableFeature("PermissionDelegationV1_1")
+	env.EnableFeature("ConfidentialTransfer")
+	owner := jtx.NewAccount("owner")
+	delegate := jtx.NewAccount("delegate")
+	env.Fund(owner, delegate)
+	env.Close()
+
+	require.Equal(t, "temMALFORMED", grantPermissions(env, owner, delegate, "ConfidentialMPTConvert").Code)
+	for _, permission := range []string{
+		"ConfidentialMPTMergeInbox",
+		"ConfidentialMPTSend",
+		"ConfidentialMPTConvertBack",
+		"ConfidentialMPTClawback",
+	} {
+		require.Equalf(t, "tesSUCCESS", grantPermissions(env, owner, delegate, permission).Code, permission)
+		env.Close()
+	}
 }
 
 // TestDelegate_PaymentMPT covers granular PaymentMint for an MPT: the mint/burn

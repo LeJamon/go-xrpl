@@ -128,10 +128,12 @@ func TestDelegateSet_UnknownGranularNotDelegatable(t *testing.T) {
 	env.Fund(gw, alice)
 	env.Close()
 
-	ds := delegatetx.NewDelegateSet(gw.Address)
-	ds.Authorize = alice.Address
-	ds.Permissions = []delegatetx.Permission{delegatetx.NewPermission("70000")}
-	jtx.RequireTxFail(t, env.SubmitSignedWith(ds, gw), "temMALFORMED")
+	for _, value := range []string{"65536", "70000", "131073"} {
+		ds := delegatetx.NewDelegateSet(gw.Address)
+		ds.Authorize = alice.Address
+		ds.Permissions = []delegatetx.Permission{delegatetx.NewPermission(value)}
+		jtx.RequireTxFail(t, env.SubmitSignedWith(ds, gw), "temMALFORMED")
+	}
 }
 
 // TestDelegateSet_UnknownPermissionValueRoundTrips verifies that a permission
