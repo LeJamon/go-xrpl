@@ -23,6 +23,19 @@ func TestLarge330MantissaBoundary(t *testing.T) {
 	require.Equal(t, "9223372036854775807", normalizeFromBig(false, boundary, 0, MantissaScaleLarge330, RoundDownward).String())
 }
 
+func TestLarge330MaximumExponentCusp(t *testing.T) {
+	for _, scale := range []MantissaScale{MantissaScaleSmall, MantissaScaleLargeLegacy, MantissaScaleLarge320} {
+		require.Panics(t, func() {
+			newNumberInternal(false, xrplNumMaxRepUp, xrplNumMaxExponent, scale, RoundToNearest)
+		}, "scale=%d", scale)
+	}
+
+	maximum := newNumberInternal(false, xrplNumMaxRep, xrplNumMaxExponent, MantissaScaleLarge330, RoundToNearest)
+	cusp := newNumberInternal(false, xrplNumMaxRepUp, xrplNumMaxExponent, MantissaScaleLarge330, RoundToNearest)
+	require.Equal(t, "9223372036854775810e32768", cusp.String())
+	require.Equal(t, cusp, maximum.Add(NewXRPLNumberScaled(3, xrplNumMaxExponent, MantissaScaleLarge330, RoundToNearest)))
+}
+
 func TestLarge330CuspAdditionAndSubtraction(t *testing.T) {
 	below330 := NewXRPLNumberScaled(math.MaxInt64, 0, MantissaScaleLarge330, RoundToNearest)
 	above330 := newNumberInternal(false, xrplNumMaxRepUp, 0, MantissaScaleLarge330, RoundToNearest)
@@ -50,6 +63,52 @@ func TestLarge330CuspAdditionAndSubtraction(t *testing.T) {
 	below320 := NewXRPLNumberScaled(math.MaxInt64, 0, MantissaScaleLarge320, RoundToNearest)
 	pointSix320 := NewXRPLNumberScaled(6, -1, MantissaScaleLarge320, RoundToNearest)
 	require.Equal(t, "9223372036854775810", below320.Add(pointSix320).String())
+}
+
+func TestLegacyLargeCuspAdditionAndSubtraction(t *testing.T) {
+	operands := []int64{4, 5, 6, 14, 15, 16, 24, 25, 26}
+	modes := []RoundingMode{RoundToNearest, RoundTowardsZero, RoundDownward, RoundUpward}
+	scales := []MantissaScale{MantissaScaleLargeLegacy, MantissaScaleLarge320}
+
+	for _, scale := range scales {
+		below := NewXRPLNumberScaled(math.MaxInt64, 0, scale, RoundToNearest)
+		above := newNumberInternal(false, xrplNumMaxRepUp, 0, scale, RoundToNearest)
+		for _, mode := range modes {
+			for _, raw := range operands {
+				operand := NewXRPLNumberScaled(raw, -1, scale, RoundToNearest)
+				wantAdd := "9223372036854775810"
+				switch scale {
+				case MantissaScaleLarge320:
+					if (mode == RoundToNearest && raw < 5) || ((mode == RoundTowardsZero || mode == RoundDownward) && raw < 14) {
+						wantAdd = "9223372036854775807"
+					} else if (mode == RoundTowardsZero || mode == RoundDownward) && raw >= 14 {
+						wantAdd = "9223372036854775800"
+					}
+				case MantissaScaleLargeLegacy:
+					if (mode == RoundToNearest && raw < 5) || ((mode == RoundTowardsZero || mode == RoundDownward) && raw < 14) {
+						wantAdd = "9223372036854775807"
+					} else if (mode == RoundToNearest && raw <= 6) || ((mode == RoundTowardsZero || mode == RoundDownward) && raw >= 14) || (mode == RoundUpward && raw <= 6) {
+						wantAdd = "9223372036854775800"
+					}
+				}
+				require.Equal(t, wantAdd, below.AddRounded(operand, mode).String(), "add scale=%d mode=%d operand=%d", scale, mode, raw)
+
+				wantSub := "9223372036854775810"
+				if mode == RoundToNearest && raw >= 26 {
+					wantSub = "9223372036854775807"
+				} else if mode == RoundTowardsZero && raw >= 14 {
+					wantSub = "9223372036854775800"
+				} else if mode == RoundDownward {
+					if raw <= 16 {
+						wantSub = "9223372036854775800"
+					} else {
+						wantSub = "9223372036854775807"
+					}
+				}
+				require.Equal(t, wantSub, above.AddRounded(operand.Negate(), mode).String(), "subtract scale=%d mode=%d operand=%d", scale, mode, raw)
+			}
+		}
+	}
 }
 
 func TestLarge330AddRecoversDiscardedDigits(t *testing.T) {
