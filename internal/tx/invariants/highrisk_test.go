@@ -200,6 +200,22 @@ func TestValidAMM_VoteRejectsLPTokenIssueChange(t *testing.T) {
 	}
 }
 
+func TestValidAMM_MPTPoolChange(t *testing.T) {
+	entries := []InvariantEntry{
+		mptInvariantEntry(t, addrHolderA, addrIssuer, false, entry.LsfMPTAMM),
+	}
+	for _, txType := range []TxType{TypeAMMBid, TypeAMMVote} {
+		t.Run(txType.String(), func(t *testing.T) {
+			transaction := stubTx{txType: txType}
+			if v := checkValidAMM(transaction, TesSUCCESS, entries, stubView{}, amendment.AllSupportedRules()); v == nil {
+				t.Fatalf("expected ValidAMM violation: %s changed an MPT pool holding", txType)
+			} else if v.Name != "ValidAMM" {
+				t.Fatalf("unexpected violation name %q", v.Name)
+			}
+		})
+	}
+}
+
 // TestValidAMM_DeleteMustRemoveObject: a successful AMMDelete that leaves the
 // AMM object behind must trip ValidAMM; a delete that removes it satisfies.
 // Reference: rippled InvariantCheck.cpp finalizeDelete (lines 1864-1880).
@@ -390,7 +406,7 @@ func mptIssuanceInvariantEntry(t *testing.T, referenceHolding *string, deleted b
 	return InvariantEntry{EntryType: entry.TypeMPTokenIssuance, After: data}
 }
 
-func mptInvariantEntry(t *testing.T, account, issuer string, deleted bool) InvariantEntry {
+func mptInvariantEntry(t *testing.T, account, issuer string, deleted bool, flags ...uint32) InvariantEntry {
 	t.Helper()
 	accountID, err := state.DecodeAccountID(account)
 	if err != nil {
@@ -403,9 +419,14 @@ func mptInvariantEntry(t *testing.T, account, issuer string, deleted bool) Invar
 	var issuanceID [24]byte
 	issuanceID[3] = 1
 	copy(issuanceID[4:], issuerID[:])
+	var tokenFlags uint32
+	for _, flag := range flags {
+		tokenFlags |= flag
+	}
 	data, err := state.SerializeMPToken(&state.MPTokenData{
 		Account:           accountID,
 		MPTokenIssuanceID: issuanceID,
+		Flags:             tokenFlags,
 	})
 	if err != nil {
 		t.Fatalf("serialize MPToken: %v", err)
@@ -585,6 +606,46 @@ func TestValidMPTIssuance_MayAuthorizePrivilege(t *testing.T) {
 	selfHolding := []InvariantEntry{mptInvariantEntry(t, addrIssuer, addrIssuer, false)}
 	if v := checkValidMPTIssuance(loanBrokerSet, TesSUCCESS, selfHolding, stubView{}, lendingRules); v == nil {
 		t.Fatal("expected ValidMPTIssuance violation for an issuer self-holding")
+	}
+}
+
+func TestValidMPTIssuance_AMMCreateAndReconciliation(t *testing.T) {
+	created := mptInvariantEntry(t, addrHolderA, addrIssuer, false)
+	deleted := mptInvariantEntry(t, addrHolderA, addrIssuer, true)
+	rules := amendment.NewRulesBuilder().Enable(amendment.FeatureMPTokensV2).Build()
+
+	for _, count := range []int{0, 1, 2} {
+		entries := make([]InvariantEntry, count)
+		for i := range entries {
+			entries[i] = created
+		}
+		if v := checkValidMPTIssuance(stubTx{txType: TypeAMMCreate}, TesSUCCESS, entries, stubView{}, rules); v != nil {
+			t.Fatalf("AMMCreate with %d MPToken creations: %v", count, v)
+		}
+	}
+	if v := checkValidMPTIssuance(stubTx{txType: TypeAMMCreate}, TesSUCCESS,
+		[]InvariantEntry{created, created, created}, stubView{}, rules); v == nil {
+		t.Fatal("expected AMMCreate with three MPToken creations to violate ValidMPTIssuance")
+	}
+
+	for _, txType := range []TxType{TypeAMMWithdraw, TypeAMMClawback} {
+		if v := checkValidMPTIssuance(stubTx{txType: txType}, TesSUCCESS,
+			[]InvariantEntry{created, deleted, deleted}, stubView{}, rules); v != nil {
+			t.Fatalf("%s valid holding reconciliation: %v", txType, v)
+		}
+		if v := checkValidMPTIssuance(stubTx{txType: txType}, TesSUCCESS,
+			[]InvariantEntry{created, created}, stubView{}, rules); v == nil {
+			t.Fatalf("expected %s with two MPToken creations to violate ValidMPTIssuance", txType)
+		}
+	}
+
+	if v := checkValidMPTIssuance(stubTx{txType: TypeAMMDelete}, TesSUCCESS,
+		[]InvariantEntry{deleted, deleted}, stubView{}, rules); v != nil {
+		t.Fatalf("AMMDelete with two MPToken deletions: %v", v)
+	}
+	if v := checkValidMPTIssuance(stubTx{txType: TypeAMMDelete}, TesSUCCESS,
+		[]InvariantEntry{deleted, deleted, deleted}, stubView{}, rules); v == nil {
+		t.Fatal("expected AMMDelete with three MPToken deletions to violate ValidMPTIssuance")
 	}
 }
 
