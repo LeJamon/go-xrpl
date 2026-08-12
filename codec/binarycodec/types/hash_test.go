@@ -56,6 +56,8 @@ func TestHash_FromJson(t *testing.T) {
 			require.Equal(t, tc.expected, actual)
 			if tc.expectedErr != nil {
 				require.Equal(t, tc.expectedErr.Error(), err.Error())
+			} else {
+				require.NoError(t, err)
 			}
 		})
 	}
