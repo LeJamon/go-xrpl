@@ -153,6 +153,14 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		accountID := ctx.AccountID
 		issuerID := mptutil.Issuer(mptID)
 
+		for _, holderID := range [][20]byte{accountID, destID} {
+			if holderID == issuerID {
+				continue
+			}
+			if _, _, result := mptutil.ReadHolding(ctx.View, mptID, holderID); result != ter.TesSUCCESS && result != ter.TecNO_AUTH {
+				return result
+			}
+		}
 		if mptutil.IsGlobalFrozen(ctx.View, mptID) ||
 			(accountID != issuerID && mptutil.IsFrozen(ctx.View, mptID, accountID)) ||
 			(destID != issuerID && mptutil.IsFrozen(ctx.View, mptID, destID)) {

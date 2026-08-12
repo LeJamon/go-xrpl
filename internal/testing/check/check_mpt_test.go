@@ -90,16 +90,34 @@ func TestCheck_MPTLifecycle(t *testing.T) {
 		env.Close()
 		requireCheckMPTExists(t, env, checkID, true)
 		jtx.RequireTxSuccess(t, env.Submit(checkbuilder.CheckCancel(alice, checkID).Build()))
+		env.Close()
+		requireCheckMPTExists(t, env, checkID, false)
 	})
 }
 
 func TestCheck_MPTokensV2Disabled(t *testing.T) {
-	env, token, alice, bob := newCheckMPTFixture(t, 0, 0)
-	env.DisableFeature("MPTokensV2")
-	env.Close()
+	t.Run("Create", func(t *testing.T) {
+		env, token, alice, bob := newCheckMPTFixture(t, 0, 0)
+		env.DisableFeature("MPTokensV2")
+		env.Close()
 
-	result := env.Submit(checkbuilder.CheckCreate(alice, bob, token.MPTAmount(1)).Build())
-	jtx.RequireTxFail(t, result, jtx.TemDISABLED)
+		result := env.Submit(checkbuilder.CheckCreate(alice, bob, token.MPTAmount(1)).Build())
+		jtx.RequireTxFail(t, result, jtx.TemDISABLED)
+	})
+
+	t.Run("Cash", func(t *testing.T) {
+		env, token, alice, bob := newCheckMPTFixture(t, 0, 0)
+		token.Pay(token.Issuer(), alice, 1)
+		checkID := checkbuilder.GetCheckID(alice, env.Seq(alice))
+		jtx.RequireTxSuccess(t, env.Submit(checkbuilder.CheckCreate(alice, bob, token.MPTAmount(1)).Build()))
+		env.Close()
+		env.DisableFeature("MPTokensV2")
+		env.Close()
+
+		result := env.Submit(checkbuilder.CheckCashAmount(bob, checkID, token.MPTAmount(1)).Build())
+		jtx.RequireTxFail(t, result, jtx.TemDISABLED)
+		requireCheckMPTExists(t, env, checkID, true)
+	})
 }
 
 func TestCheck_MPTWithTickets(t *testing.T) {

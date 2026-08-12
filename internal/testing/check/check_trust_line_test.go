@@ -25,6 +25,8 @@ func TestCheck_NonIssuerTrustLineCreation(t *testing.T) {
 		jtx.RequireIOUBalance(t, env, alice, gateway, "USD", 50)
 		jtx.RequireIOUBalance(t, env, bob, gateway, "USD", 0)
 		jtx.RequireTxSuccess(t, env.Submit(checkbuilder.CheckCancel(alice, checkID).Build()))
+		env.Close()
+		requireCheckMPTExists(t, env, checkID, false)
 	})
 
 	t.Run("DefaultRipple", func(t *testing.T) {
@@ -52,9 +54,16 @@ func TestCheck_NonIssuerTrustLineCreation(t *testing.T) {
 		env.Close()
 		checkID := submitNonIssuerCheck(t, env, alice, bob, USD(25))
 
-		jtx.RequireTxSuccess(t, env.Submit(checkbuilder.CheckCashAmount(bob, checkID, USD(25)).Build()))
+		result := env.Submit(checkbuilder.CheckCashAmount(bob, checkID, USD(25)).Build())
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
+		requireCheckMPTExists(t, env, checkID, false)
 		requireTrustLineInBothDirs(t, env, bob, gateway, "USD")
+		jtx.RequireIOUBalance(t, env, alice, gateway, "USD", 25)
+		jtx.RequireIOUBalance(t, env, bob, gateway, "USD", 25)
+		jtx.RequireOwnerCount(t, env, alice, 1)
+		jtx.RequireOwnerCount(t, env, bob, 1)
+		requireDeliveredAmount(t, result, USD(25))
 	})
 
 	t.Run("GlobalFreeze", func(t *testing.T) {
@@ -93,6 +102,8 @@ func TestCheck_NonIssuerTrustLineCreation(t *testing.T) {
 			t.Fatal("RequireAuth failure created a destination trust line")
 		}
 		jtx.RequireTxSuccess(t, env.Submit(checkbuilder.CheckCancel(bob, checkID).Build()))
+		env.Close()
+		requireCheckMPTExists(t, env, checkID, false)
 	})
 }
 

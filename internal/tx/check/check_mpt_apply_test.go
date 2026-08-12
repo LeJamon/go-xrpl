@@ -3,6 +3,7 @@ package check
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -172,6 +173,14 @@ func TestCheckCreateStoresMPTSendMaxAndChecksLock(t *testing.T) {
 	_, lockedCtx, lockedCreate := build(entry.LsfMPTCanTransfer | entry.LsfMPTLocked)
 	if result := lockedCreate.Apply(lockedCtx); result != ter.TecLOCKED {
 		t.Fatalf("locked MPT: got %v, want tecLOCKED", result)
+	}
+
+	for _, holderID := range [][20]byte{srcID, dstID} {
+		failedView, failedCtx, failedCreate := build(entry.LsfMPTCanTransfer)
+		failedView.readErrors[keylet.MPTokenByID(mptID, holderID).Key] = errors.New("storage failure")
+		if result := failedCreate.Apply(failedCtx); result != ter.TefINTERNAL {
+			t.Fatalf("MPT holding read failure for %x: got %v, want tefINTERNAL", holderID, result)
+		}
 	}
 }
 
