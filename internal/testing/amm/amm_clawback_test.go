@@ -795,7 +795,7 @@ func TestAMMClawback_All(t *testing.T) {
 		env.Close()
 
 		aliceXrpAfter := env.TestEnv.Balance(env.Alice)
-		require.Equal(t, int64(jtx.XRP(200))-1, int64(aliceXrpAfter)-int64(aliceXrpBefore))
+		require.Equal(t, jtx.XRP(200)-1, int64(aliceXrpAfter)-int64(aliceXrpBefore))
 
 		// gw clawback all bob's USD in amm
 		bobXrpBefore := env.TestEnv.Balance(env.Bob)
@@ -805,7 +805,7 @@ func TestAMMClawback_All(t *testing.T) {
 		env.Close()
 
 		bobXrpAfter := env.TestEnv.Balance(env.Bob)
-		require.Equal(t, int64(jtx.XRP(400)), int64(bobXrpAfter)-int64(bobXrpBefore))
+		require.Equal(t, jtx.XRP(400), int64(bobXrpAfter)-int64(bobXrpBefore))
 	})
 }
 
