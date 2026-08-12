@@ -83,7 +83,6 @@ func TestEnabled(t *testing.T) {
 		}
 		env.Close()
 	})
-
 }
 
 // TestFixUniversalNumberDisabled tests that AMM requires fixUniversalNumber amendment.

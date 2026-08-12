@@ -19,12 +19,15 @@ type AMMCreateBuilder struct {
 }
 
 // AMMCreate creates a new AMMCreateBuilder.
+// AMMCreate charges one owner reserve increment, which is 50 XRP under the
+// default test ledger settings.
 func AMMCreate(account *jtx.Account, amount1, amount2 tx.Amount) *AMMCreateBuilder {
 	return &AMMCreateBuilder{
 		account:    account,
 		amount1:    amount1,
 		amount2:    amount2,
 		tradingFee: 0,
+		fee:        "50000000",
 	}
 }
 

@@ -301,7 +301,6 @@ func TestBid(t *testing.T) {
 			t.Fatalf("Bid with bidMin should succeed: %s - %s", result.Code, result.Message)
 		}
 		env.Close()
-
 	})
 
 	// Bid with exact min/max
@@ -330,7 +329,6 @@ func TestBid(t *testing.T) {
 			t.Fatalf("Bid with exact min/max should succeed: %s - %s", result.Code, result.Message)
 		}
 		env.Close()
-
 	})
 
 	// Bid with min/max range
@@ -348,7 +346,6 @@ func TestBid(t *testing.T) {
 			t.Fatalf("Bid with min/max range should succeed: %s - %s", result.Code, result.Message)
 		}
 		env.Close()
-
 	})
 
 	// Bid with just bidMax
@@ -376,7 +373,6 @@ func TestBid(t *testing.T) {
 			t.Fatalf("Bid with bidMax only should succeed: %s - %s", result.Code, result.Message)
 		}
 		env.Close()
-
 	})
 
 	// Bid without price (auto-calculate)
@@ -418,7 +414,6 @@ func TestBid(t *testing.T) {
 			t.Fatalf("Bid with auth accounts should succeed: %s - %s", result.Code, result.Message)
 		}
 		env.Close()
-
 	})
 
 	// Outbid previous slot owner
@@ -456,7 +451,6 @@ func TestBid(t *testing.T) {
 			t.Fatalf("Alice's outbid should succeed: %s - %s", result.Code, result.Message)
 		}
 		env.Close()
-
 	})
 }
 

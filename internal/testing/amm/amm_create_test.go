@@ -45,7 +45,6 @@ func TestInstanceCreate(t *testing.T) {
 			t.Fatalf("Failed to create IOU/IOU AMM: %s - %s", result.Code, result.Message)
 		}
 		env.Close()
-
 	})
 
 	// Trading fee
@@ -64,7 +63,6 @@ func TestInstanceCreate(t *testing.T) {
 			t.Fatalf("Failed to create AMM with trading fee: %s - %s", result.Code, result.Message)
 		}
 		env.Close()
-
 	})
 }
 

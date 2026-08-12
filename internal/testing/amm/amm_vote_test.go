@@ -128,7 +128,6 @@ func TestFeeVote(t *testing.T) {
 			t.Fatalf("Vote should succeed: %s - %s", result.Code, result.Message)
 		}
 		env.Close()
-
 	})
 
 	// Vote with zero fee
@@ -142,7 +141,6 @@ func TestFeeVote(t *testing.T) {
 			t.Fatalf("Vote for zero fee should succeed: %s - %s", result.Code, result.Message)
 		}
 		env.Close()
-
 	})
 
 	// Multiple LPs voting
@@ -208,7 +206,6 @@ func TestFeeVote(t *testing.T) {
 			t.Fatalf("Vote change should succeed: %s", result.Code)
 		}
 		env.Close()
-
 	})
 
 	// Vote after deposit
@@ -234,7 +231,6 @@ func TestFeeVote(t *testing.T) {
 			t.Fatalf("Carol vote should succeed: %s", result.Code)
 		}
 		env.Close()
-
 	})
 
 	// Vote at maximum fee (1000 basis points = 1%)
@@ -248,7 +244,6 @@ func TestFeeVote(t *testing.T) {
 			t.Fatalf("Vote for maximum fee should succeed: %s - %s", result.Code, result.Message)
 		}
 		env.Close()
-
 	})
 }
 
