@@ -190,12 +190,12 @@ func CheckCredentialExpired(cred *CredentialEntry, closeTime uint32) bool {
 
 // CheckFields validates a transaction's CredentialIDs field shape, matching
 // rippled's credentials::checkFields(): when the field is present it must hold
-// between 1 and maxCredentialsArraySize (8) entries with no duplicates. present
-// must reflect whether the field was supplied (callers compute it from the
-// slice plus HasField, since an empty array parses back to a nil slice under
-// omitempty). dupDetail is the detail string used for the duplicate error so
-// each call site keeps its existing message. A malformed field returns
-// temMALFORMED.
+// between 1 and maxCredentialsArraySize (8) valid 256-bit entries with no
+// duplicates. present must reflect whether the field was supplied (callers
+// compute it from the slice plus HasField, since an empty array parses back to
+// a nil slice under omitempty). dupDetail is the detail string used for the
+// duplicate error so each call site keeps its existing message. A malformed
+// field returns temMALFORMED.
 // Reference: rippled CredentialHelpers.cpp credentials::checkFields().
 func CheckFields(ids []string, present bool, dupDetail string) error {
 	if !present {
@@ -204,12 +204,18 @@ func CheckFields(ids []string, present bool, dupDetail string) error {
 	if len(ids) == 0 || len(ids) > 8 {
 		return ter.Errorf(ter.TemMALFORMED, "CredentialIDs array size is invalid")
 	}
-	seen := make(map[string]bool, len(ids))
+	seen := make(map[[32]byte]struct{}, len(ids))
 	for _, id := range ids {
-		if seen[id] {
+		decoded, err := hex.DecodeString(id)
+		if err != nil || len(decoded) != 32 {
+			return ter.Errorf(ter.TemMALFORMED, "CredentialID is invalid")
+		}
+		var credentialID [32]byte
+		copy(credentialID[:], decoded)
+		if _, exists := seen[credentialID]; exists {
 			return ter.Errorf(ter.TemMALFORMED, "%s", dupDetail)
 		}
-		seen[id] = true
+		seen[credentialID] = struct{}{}
 	}
 	return nil
 }

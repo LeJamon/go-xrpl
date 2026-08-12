@@ -105,8 +105,8 @@ func (o *OracleDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 func DeleteOracleFromView(view tx.LedgerView, oracleKey keylet.Keylet, oracle *state.OracleData, accountID [20]byte, ownerCount *uint32) ter.Result {
 	// DirRemove from owner directory
 	ownerDirKey := keylet.OwnerDir(accountID)
-	_, err := state.DirRemove(view, ownerDirKey, oracle.OwnerNode, oracleKey.Key, true)
-	if err != nil {
+	removed, err := state.DirRemove(view, ownerDirKey, oracle.OwnerNode, oracleKey.Key, true)
+	if err != nil || !removed.Success {
 		return ter.TefBAD_LEDGER
 	}
 
