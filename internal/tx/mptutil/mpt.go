@@ -196,6 +196,177 @@ func IsAssetFrozen(view state.LedgerView, asset tx.Asset, account [20]byte) bool
 	return isIOUFrozen(view, account, asset)
 }
 
+// CheckDepositFreeze applies the freeze rules for sending an asset from a
+// regular account into a pseudo-account. A regular freeze on the source is
+// bypassed when the source is the issuer; pseudo-accounts must always be able
+// to withdraw what they receive, so their individual freeze is checked too.
+func CheckDepositFreeze(view state.LedgerView, srcAcct, pseudoAcct [20]byte, asset tx.Asset) ter.Result {
+	if asset.IsNative() {
+		return ter.TesSUCCESS
+	}
+
+	if result := checkGlobalFrozen(view, asset); result != ter.TesSUCCESS {
+		return result
+	}
+	issuer, result := assetIssuer(asset)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	if srcAcct != issuer {
+		if result := checkIndividualFrozen(view, srcAcct, asset); result != ter.TesSUCCESS {
+			return result
+		}
+	}
+	return checkIndividualFrozen(view, pseudoAcct, asset)
+}
+
+// CheckWithdrawFreeze applies the freeze rules for sending an asset from a
+// pseudo-account through the submitting account to the destination. Issuer
+// redemption is always allowed; a regular freeze on a self-withdrawing
+// submitter is allowed, while a deep freeze still prevents the withdrawal.
+func CheckWithdrawFreeze(view state.LedgerView, pseudoAcct, submitterAcct, dstAcct [20]byte, asset tx.Asset) ter.Result {
+	if asset.IsNative() {
+		return ter.TesSUCCESS
+	}
+
+	issuer, result := assetIssuer(asset)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	if dstAcct == issuer {
+		return ter.TesSUCCESS
+	}
+	if result := checkGlobalFrozen(view, asset); result != ter.TesSUCCESS {
+		return result
+	}
+	if result := checkIndividualFrozen(view, pseudoAcct, asset); result != ter.TesSUCCESS {
+		return result
+	}
+	if submitterAcct != dstAcct {
+		if result := checkIndividualFrozen(view, submitterAcct, asset); result != ter.TesSUCCESS {
+			return result
+		}
+	}
+	return checkDeepFrozen(view, dstAcct, asset)
+}
+
+func assetIssuer(asset tx.Asset) ([20]byte, ter.Result) {
+	if asset.IsMPT() {
+		id, err := DecodeID(asset.MPTIssuanceID)
+		if err != nil {
+			return [20]byte{}, ter.TefINTERNAL
+		}
+		return Issuer(id), ter.TesSUCCESS
+	}
+	issuer, err := state.DecodeAccountID(asset.Issuer)
+	if err != nil {
+		return [20]byte{}, ter.TefINTERNAL
+	}
+	return issuer, ter.TesSUCCESS
+}
+
+func checkGlobalFrozen(view state.LedgerView, asset tx.Asset) ter.Result {
+	if asset.IsMPT() {
+		id, err := DecodeID(asset.MPTIssuanceID)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if IsGlobalFrozen(view, id) {
+			return ter.TecLOCKED
+		}
+		return ter.TesSUCCESS
+	}
+	if isIOUGlobalFrozen(view, asset.Issuer) {
+		return ter.TecFROZEN
+	}
+	return ter.TesSUCCESS
+}
+
+func checkIndividualFrozen(view state.LedgerView, account [20]byte, asset tx.Asset) ter.Result {
+	if asset.IsMPT() {
+		id, err := DecodeID(asset.MPTIssuanceID)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if IsIndividualFrozen(view, id, account) {
+			return ter.TecLOCKED
+		}
+		return ter.TesSUCCESS
+	}
+	if isIOUIndividualFrozen(view, account, asset) {
+		return ter.TecFROZEN
+	}
+	return ter.TesSUCCESS
+}
+
+func checkDeepFrozen(view state.LedgerView, account [20]byte, asset tx.Asset) ter.Result {
+	if asset.IsMPT() {
+		id, err := DecodeID(asset.MPTIssuanceID)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if IsFrozen(view, id, account) {
+			return ter.TecLOCKED
+		}
+		return ter.TesSUCCESS
+	}
+	issuer, err := state.DecodeAccountID(asset.Issuer)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if isIOUDeepFrozen(view, account, issuer, asset.Currency) {
+		return ter.TecFROZEN
+	}
+	return ter.TesSUCCESS
+}
+
+func isIOUGlobalFrozen(view state.LedgerView, issuerAddress string) bool {
+	issuer, err := state.DecodeAccountID(issuerAddress)
+	if err != nil {
+		return false
+	}
+	raw, err := view.Read(keylet.Account(issuer))
+	if err != nil || raw == nil {
+		return false
+	}
+	account, err := state.ParseAccountRoot(raw)
+	return err == nil && account.Flags&state.LsfGlobalFreeze != 0
+}
+
+func isIOUIndividualFrozen(view state.LedgerView, account [20]byte, asset tx.Asset) bool {
+	if asset.IsNative() || asset.Currency == "XRP" {
+		return false
+	}
+	issuer, err := state.DecodeAccountID(asset.Issuer)
+	if err != nil || account == issuer {
+		return false
+	}
+	raw, err := view.Read(keylet.Line(account, issuer, asset.Currency))
+	if err != nil || raw == nil {
+		return false
+	}
+	line, err := state.ParseRippleState(raw)
+	if err != nil {
+		return false
+	}
+	if state.CompareAccountIDs(issuer, account) > 0 {
+		return line.Flags&state.LsfHighFreeze != 0
+	}
+	return line.Flags&state.LsfLowFreeze != 0
+}
+
+func isIOUDeepFrozen(view state.LedgerView, account, issuer [20]byte, currency string) bool {
+	if currency == "" || currency == "XRP" || account == issuer {
+		return false
+	}
+	raw, err := view.Read(keylet.Line(account, issuer, currency))
+	if err != nil || raw == nil {
+		return false
+	}
+	line, err := state.ParseRippleState(raw)
+	return err == nil && line.Flags&(state.LsfLowDeepFreeze|state.LsfHighDeepFreeze) != 0
+}
+
 func isAnyAssetFrozen(view state.LedgerView, asset tx.Asset, accounts [][20]byte, depth uint8) bool {
 	if asset.IsMPT() {
 		id, err := DecodeID(asset.MPTIssuanceID)

@@ -545,6 +545,118 @@ func TestSendTransferRateOverflowReturnsTefException(t *testing.T) {
 	require.Zero(t, gross)
 }
 
+func TestPseudoFreezeChecksIOU(t *testing.T) {
+	issuer := [20]byte{1}
+	source := [20]byte{2}
+	pseudo := [20]byte{3}
+	destination := [20]byte{4}
+	asset := tx.Asset{Currency: "USD", Issuer: state.EncodeAccountIDSafe(issuer)}
+
+	newView := func() *mptTestView {
+		view := newMPTTestView()
+		putTestAccount(t, view, issuer, 0, [32]byte{})
+		return view
+	}
+	putLine := func(t *testing.T, view *mptTestView, account [20]byte, flags uint32) {
+		t.Helper()
+		raw, err := state.SerializeRippleState(&state.RippleState{
+			Balance:   state.NewIssuedAmountFromValue(1, 0, "USD", asset.Issuer),
+			LowLimit:  state.NewIssuedAmountFromValue(100, 0, "USD", asset.Issuer),
+			HighLimit: state.NewIssuedAmountFromValue(100, 0, "USD", state.EncodeAccountIDSafe(account)),
+			Flags:     flags,
+		})
+		require.NoError(t, err)
+		require.NoError(t, view.Insert(keylet.Line(account, issuer, "USD"), raw))
+	}
+
+	t.Run("deposit global freeze", func(t *testing.T) {
+		view := newView()
+		putTestAccount(t, view, issuer, state.LsfGlobalFreeze, [32]byte{})
+		require.Equal(t, ter.TecFROZEN, CheckDepositFreeze(view, source, pseudo, asset))
+	})
+	t.Run("issuer deposit bypasses source freeze", func(t *testing.T) {
+		view := newView()
+		putLine(t, view, source, state.LsfLowFreeze)
+		require.Equal(t, ter.TesSUCCESS, CheckDepositFreeze(view, issuer, pseudo, asset))
+	})
+	t.Run("deposit checks source and pseudo", func(t *testing.T) {
+		view := newView()
+		putLine(t, view, source, state.LsfLowFreeze)
+		require.Equal(t, ter.TecFROZEN, CheckDepositFreeze(view, source, pseudo, asset))
+		view = newView()
+		putLine(t, view, pseudo, state.LsfLowFreeze)
+		require.Equal(t, ter.TecFROZEN, CheckDepositFreeze(view, source, pseudo, asset))
+	})
+	t.Run("withdraw matrix", func(t *testing.T) {
+		view := newView()
+		putLine(t, view, pseudo, state.LsfLowFreeze)
+		require.Equal(t, ter.TecFROZEN, CheckWithdrawFreeze(view, pseudo, source, source, asset))
+
+		view = newView()
+		putLine(t, view, source, state.LsfLowFreeze)
+		require.Equal(t, ter.TesSUCCESS, CheckWithdrawFreeze(view, pseudo, source, source, asset))
+		require.Equal(t, ter.TecFROZEN, CheckWithdrawFreeze(view, pseudo, source, destination, asset))
+
+		view = newView()
+		putLine(t, view, destination, state.LsfLowDeepFreeze)
+		require.Equal(t, ter.TecFROZEN, CheckWithdrawFreeze(view, pseudo, source, destination, asset))
+
+		view = newView()
+		putTestAccount(t, view, issuer, state.LsfGlobalFreeze, [32]byte{})
+		require.Equal(t, ter.TecFROZEN, CheckWithdrawFreeze(view, pseudo, source, source, asset))
+		require.Equal(t, ter.TesSUCCESS, CheckWithdrawFreeze(view, pseudo, source, issuer, asset))
+	})
+}
+
+func TestPseudoFreezeChecksMPT(t *testing.T) {
+	issuer := [20]byte{1}
+	source := [20]byte{2}
+	pseudo := [20]byte{3}
+	destination := [20]byte{4}
+	id := keylet.MakeMPTID(1, issuer)
+	asset := tx.Asset{MPTIssuanceID: EncodeID(id)}
+
+	newView := func() *mptTestView {
+		view := newMPTTestView()
+		putTestAccount(t, view, issuer, 0, [32]byte{})
+		putTestIssuance(t, view, id, 0, nil)
+		return view
+	}
+	putLock := func(t *testing.T, view *mptTestView, account [20]byte) {
+		t.Helper()
+		putTestHolding(t, view, id, account, entry.LsfMPTLocked)
+	}
+
+	view := newView()
+	putTestIssuance(t, view, id, entry.LsfMPTLocked, nil)
+	require.Equal(t, ter.TecLOCKED, CheckDepositFreeze(view, source, pseudo, asset))
+
+	view = newView()
+	putLock(t, view, source)
+	require.Equal(t, ter.TecLOCKED, CheckDepositFreeze(view, source, pseudo, asset))
+
+	view = newView()
+	putLock(t, view, pseudo)
+	require.Equal(t, ter.TecLOCKED, CheckDepositFreeze(view, source, pseudo, asset))
+
+	view = newView()
+	putLock(t, view, pseudo)
+	require.Equal(t, ter.TecLOCKED, CheckWithdrawFreeze(view, pseudo, source, source, asset))
+
+	view = newView()
+	putLock(t, view, source)
+	require.Equal(t, ter.TecLOCKED, CheckWithdrawFreeze(view, pseudo, source, source, asset))
+	require.Equal(t, ter.TecLOCKED, CheckWithdrawFreeze(view, pseudo, source, destination, asset))
+
+	view = newView()
+	putLock(t, view, destination)
+	require.Equal(t, ter.TecLOCKED, CheckWithdrawFreeze(view, pseudo, source, destination, asset))
+
+	view = newView()
+	putTestIssuance(t, view, id, entry.LsfMPTLocked, nil)
+	require.Equal(t, ter.TesSUCCESS, CheckWithdrawFreeze(view, pseudo, source, issuer, asset))
+}
+
 func putTestAccount(t *testing.T, view *mptTestView, account [20]byte, flags uint32, vaultID [32]byte) {
 	t.Helper()
 	raw, err := state.SerializeAccountRoot(&state.AccountRoot{

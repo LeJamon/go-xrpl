@@ -234,11 +234,17 @@ func (a *AMMWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 		if result := requireAssetAuth(view, amtAsset, accountID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
 			return result
 		}
-		if assetFrozen(view, ammAccountID, amtAsset) {
-			return frozenAssetResult(amtAsset)
-		}
-		if assetIndividuallyFrozen(view, accountID, amtAsset) {
-			return frozenAssetResult(amtAsset)
+		if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
+			if result := mptutil.CheckWithdrawFreeze(view, ammAccountID, accountID, accountID, amtAsset); result != ter.TesSUCCESS {
+				return result
+			}
+		} else {
+			if assetFrozen(view, ammAccountID, amtAsset) {
+				return frozenAssetResult(amtAsset)
+			}
+			if assetIndividuallyFrozen(view, accountID, amtAsset) {
+				return frozenAssetResult(amtAsset)
+			}
 		}
 		return ter.TesSUCCESS
 	}

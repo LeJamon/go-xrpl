@@ -314,6 +314,9 @@ func (d *DepositPreauth) Preclaim(view tx.LedgerView, config tx.EngineConfig) te
 		if !exists {
 			return ter.TecNO_TARGET
 		}
+		if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) && tx.IsPseudoAccountID(view, authorizedID) {
+			return ter.TecPSEUDO_ACCOUNT
+		}
 		exists, err = view.Exists(keylet.DepositPreauth(accountID, authorizedID))
 		if err != nil {
 			return ter.TefEXCEPTION

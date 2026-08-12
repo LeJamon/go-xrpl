@@ -190,11 +190,17 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 	if res := requireAuth(view, asset, dstID, authType, config.ParentCloseTime); res != ter.TesSUCCESS {
 		return res
 	}
-	if res := checkFrozen(view, asset, dstID); res != ter.TesSUCCESS {
-		return res
-	}
-	if res := checkVaultShareFrozen(view, accountID, vd); res != ter.TesSUCCESS {
-		return res
+	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
+		if res := mptutil.CheckWithdrawFreeze(view, vd.Account, accountID, dstID, asset); res != ter.TesSUCCESS {
+			return res
+		}
+	} else {
+		if res := checkFrozen(view, asset, dstID); res != ter.TesSUCCESS {
+			return res
+		}
+		if res := checkVaultShareFrozen(view, accountID, vd); res != ter.TesSUCCESS {
+			return res
+		}
 	}
 
 	return ter.TesSUCCESS
