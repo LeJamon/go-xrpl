@@ -36,13 +36,17 @@ func (a *AccountDelete) GetFlagsMask(rules *amendment.Rules) uint32 {
 	return tx.TfUniversalMask
 }
 
+func (a *AccountDelete) credentialIDsPresent() bool {
+	return a.CredentialIDs != nil || a.GetCommon().HasField("CredentialIDs")
+}
+
 // CheckExtraFeatures gates CredentialIDs behind featureCredentials. rippled runs
 // this in checkExtraFeatures — before preflight1 and DeleteAccount::preflight —
 // so the temDISABLED wins over temDST_IS_SRC, the credential shape check, and
 // every ledger-state TER.
 // Reference: rippled DeleteAccount.cpp checkExtraFeatures().
 func (a *AccountDelete) CheckExtraFeatures(rules *amendment.Rules) error {
-	if len(a.CredentialIDs) > 0 && !rules.Enabled(amendment.FeatureCredentials) {
+	if a.credentialIDsPresent() && !rules.Enabled(amendment.FeatureCredentials) {
 		return ter.Errorf(ter.TemDISABLED, "CredentialIDs requires the Credentials amendment")
 	}
 	return nil
@@ -58,8 +62,7 @@ func (a *AccountDelete) Validate() error {
 	if a.Account == a.Destination {
 		return ter.Errorf(ter.TemDST_IS_SRC, "cannot delete account to self")
 	}
-	present := a.CredentialIDs != nil || a.GetCommon().HasField("CredentialIDs")
-	if err := credential.CheckFields(a.CredentialIDs, present, "Duplicate credential ID"); err != nil {
+	if err := credential.CheckFields(a.CredentialIDs, a.credentialIDsPresent(), "Duplicate credential ID"); err != nil {
 		return err
 	}
 	return nil
@@ -94,12 +97,12 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && a.DestinationTag == nil {
 		return ter.TecDST_TAG_NEEDED
 	}
-	if len(a.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
+	if a.credentialIDsPresent() && rules.Enabled(amendment.FeatureCredentials) {
 		if result := credential.ValidateCredentialIDs(ctx, a.CredentialIDs); result != ter.TesSUCCESS {
 			return result
 		}
 	}
-	if len(a.CredentialIDs) == 0 {
+	if !a.credentialIDsPresent() {
 		if (destAccount.Flags & state.LsfDepositAuth) != 0 {
 			preauthKey := keylet.DepositPreauth(destID, ctx.AccountID)
 			if exists, _ := ctx.View.Exists(preauthKey); !exists {
@@ -151,7 +154,7 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	// check must happen first.
 	// Reference: rippled DeleteAccount.cpp doApply() — verifyDepositPreauth
 	// is called before cleanupOnAccountDelete.
-	if len(a.CredentialIDs) > 0 {
+	if a.credentialIDsPresent() {
 		if r := credential.VerifyDepositPreauth(ctx, a.CredentialIDs, ctx.AccountID, destID, destAccount); r != ter.TesSUCCESS {
 			return r
 		}
