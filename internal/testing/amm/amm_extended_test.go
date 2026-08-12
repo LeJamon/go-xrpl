@@ -1022,7 +1022,7 @@ func TestAMMExtended_MissingAuth(t *testing.T) {
 		// Alice has no USD trust line, so no funds
 		createTx := amm.AMMCreate(env.Alice, amm.IOUAmount(env.GW, "USD", 1000), amm.XRPAmount(1000)).Build()
 		result := env.Submit(createTx)
-		amm.ExpectTER(t, result, amm.TecUNFUNDED_AMM, "tecNO_LINE")
+		amm.ExpectTER(t, result, amm.TecUNFUNDED_AMM)
 	})
 
 	// GW sets RequireAuth, authorizes bob but not alice
@@ -1048,7 +1048,7 @@ func TestAMMExtended_MissingAuth(t *testing.T) {
 		// Alice has no trust line at all -> tecNO_LINE
 		createTx := amm.AMMCreate(env.Alice, amm.IOUAmount(env.GW, "USD", 1000), amm.XRPAmount(1000)).Build()
 		result := env.Submit(createTx)
-		amm.ExpectTER(t, result, "tecNO_LINE", amm.TecUNFUNDED_AMM)
+		amm.ExpectTER(t, result, "tecNO_LINE")
 	})
 
 	// GW has trust line for alice but NOT authorized -> tecNO_AUTH
@@ -1070,7 +1070,7 @@ func TestAMMExtended_MissingAuth(t *testing.T) {
 		// Alice tries to create AMM -> tecNO_AUTH (trust line exists but not authorized)
 		createTx := amm.AMMCreate(env.Alice, amm.IOUAmount(env.GW, "USD", 1000), amm.XRPAmount(1000)).Build()
 		result := env.Submit(createTx)
-		amm.ExpectTER(t, result, amm.TecNO_AUTH, amm.TecUNFUNDED_AMM)
+		amm.ExpectTER(t, result, amm.TecNO_AUTH)
 	})
 
 	// Finally authorize alice -> AMM creation succeeds

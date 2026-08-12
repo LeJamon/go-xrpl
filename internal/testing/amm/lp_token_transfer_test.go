@@ -16,6 +16,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	coreAmm "github.com/LeJamon/go-xrpl/internal/tx/amm"
+	"github.com/stretchr/testify/require"
 )
 
 // setupLPTokenEnv creates an AMM with two liquidity providers holding LP tokens.
@@ -567,7 +569,7 @@ func TestAMMTokens_LPTokenXRPOfferCrossing(t *testing.T) {
 
 			// Pool should have only alice's LP tokens remaining
 			env.ExpectLPTokens(env.Alice, xrpAsset, usdAsset, 5_000_000)
-			env.ExpectLPTokens(env.Carol, xrpAsset, usdAsset, 0)
+			jtx.RequireTrustLineNotExists(t, env.TestEnv, env.Carol, ammAcc, coreAmm.GenerateAMMLPTCurrencyForAssets(xrpAsset, usdAsset))
 
 			// Verify pool USD is unchanged (OneAssetWithdrawAll takes only XRP)
 			actualUSD := env.AMMPoolIOU(ammAcc, env.GW, "USD")
@@ -578,7 +580,7 @@ func TestAMMTokens_LPTokenXRPOfferCrossing(t *testing.T) {
 			// Verify pool XRP decreased by priceXRP2
 			actualPoolXRP := env.AMMPoolXRP(ammAcc)
 			expectedPoolXRP := 10_000_000_000 - uint64(priceXRP2.Drops())
-			t.Logf("Pool XRP: actual=%d, expected≈%d", actualPoolXRP, expectedPoolXRP)
+			require.Equal(t, expectedPoolXRP, actualPoolXRP)
 		})
 	})
 }
