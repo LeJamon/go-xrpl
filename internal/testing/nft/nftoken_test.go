@@ -2939,7 +2939,6 @@ func TestNFTokenMintOffer(t *testing.T) {
 // ===========================================================================
 func TestBuyerReserve(t *testing.T) {
 	// Reference: rippled NFToken_test.cpp testFixNFTokenBuyerReserve
-	// The buyer must have enough reserve for a newly created NFT page.
 
 	t.Run("InsufficientReserve", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)

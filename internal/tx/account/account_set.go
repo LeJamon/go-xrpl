@@ -354,7 +354,6 @@ func (a *AccountSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Re
 		}
 	}
 
-	// Clawback / NoFreeze mutual exclusion.
 	if uSetFlag == AccountSetFlagAllowTrustLineClawback {
 		if sle.Flags&state.LsfNoFreeze != 0 {
 			return ter.TecNO_PERMISSION

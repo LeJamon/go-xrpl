@@ -113,7 +113,6 @@ func TestAMMClawbackEnabled(t *testing.T) {
 		env.DisableFeature("AMMClawback")
 		env.Close()
 
-		// AMMClawback requires the AMMClawback amendment.
 		clawbackTx := amm.AMMClawback(env.GW, env.Alice.Address, env.USD, amm.XRP()).Build()
 		result := env.Submit(clawbackTx)
 		if result.Code != "temDISABLED" {

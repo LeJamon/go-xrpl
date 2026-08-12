@@ -806,9 +806,7 @@ func TestAMMBookStep_Selection(t *testing.T) {
 	}
 }
 
-// TestAMMBookStep_FixDefaultInnerObj tests the post-fix inner-object behavior.
 // Reference: rippled AMM_test.cpp testFixDefaultInnerObj (line 6305)
-// All cases succeed regardless of close/no-close and fee.
 func TestAMMBookStep_FixDefaultInnerObj(t *testing.T) {
 	cases := []struct {
 		name        string

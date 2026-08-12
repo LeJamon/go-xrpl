@@ -109,7 +109,6 @@ func testOfferCreateThenCross(t *testing.T, disabledFeatures []string) {
 			require.Equal(t, "49.96666666666667", aliceBalance,
 				"Alice's raw trust line balance mismatch")
 
-			// Universal Number arithmetic is unconditional.
 			bobBalance := ledgerEntryStateBalance(t, env, bob, gw, "USD")
 			require.Equal(t, "-0.9665000000333333", bobBalance,
 				"Bob's raw trust line balance mismatch")

@@ -8,8 +8,6 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// checkBuyerReserve checks if the buyer has sufficient reserve after receiving
-// an NFToken on a newly created token page.
 // Reference: rippled NFTokenAcceptOffer.cpp transferNFToken() lines 457-474
 func checkBuyerReserve(ctx *tx.ApplyContext, buyerID [20]byte, pagesCreated int) ter.Result {
 	if pagesCreated <= 0 {
@@ -256,7 +254,6 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 	adjustOwnerCountViaView(ctx.View, sellerID, -xferResult.FromPagesRemoved)
 	adjustOwnerCountViaView(ctx.View, buyerID, xferResult.ToPagesCreated)
 
-	// Check buyer reserve.
 	if r := checkBuyerReserve(ctx, buyerID, xferResult.ToPagesCreated); r != ter.TesSUCCESS {
 		return r
 	}
@@ -390,7 +387,6 @@ func (n *NFTokenAcceptOffer) acceptNFTokenSellOfferDirect(ctx *tx.ApplyContext, 
 	adjustOwnerCountViaView(ctx.View, sellerID, -xferResult.FromPagesRemoved)
 	ctx.Account.OwnerCount += uint32(xferResult.ToPagesCreated)
 
-	// Check buyer reserve; the buyer is ctx.Account.
 	if r := checkBuyerReserve(ctx, accountID, xferResult.ToPagesCreated); r != ter.TesSUCCESS {
 		return r
 	}
@@ -523,7 +519,6 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 	ctx.Account.OwnerCount = clampedSub(ctx.Account.OwnerCount, xferResult.FromPagesRemoved)
 	adjustOwnerCountViaView(ctx.View, buyerID, xferResult.ToPagesCreated)
 
-	// Check buyer reserve.
 	if r := checkBuyerReserve(ctx, buyerID, xferResult.ToPagesCreated); r != ter.TesSUCCESS {
 		return r
 	}
