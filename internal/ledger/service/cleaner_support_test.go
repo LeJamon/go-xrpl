@@ -38,7 +38,24 @@ func TestCleanerLedgerUsesReacquiredCanonicalLedger(t *testing.T) {
 	t.Cleanup(svc.Stop)
 	const seq uint32 = 10
 	parent := [32]byte{0x99}
-	canonical := makeStubLedger(t, seq, [32]byte{0xAA}, parent)
+	stateMap, stateRoot := makeStubStateMap(t, seq)
+	txMap := shamap.New(shamap.TypeTransaction)
+	txRoot, err := txMap.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalHeader := header.LedgerHeader{
+		LedgerIndex: seq,
+		ParentHash:  parent,
+		AccountHash: stateRoot,
+		TxHash:      txRoot,
+		Validated:   true,
+	}
+	canonicalHeader.Hash = header.CalculateHash(canonicalHeader)
+	canonical, err := ledger.NewFromHeader(canonicalHeader, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	wrong := makeStubLedger(t, seq, [32]byte{0xBB}, parent)
 
 	svc.mu.Lock()
@@ -48,16 +65,7 @@ func TestCleanerLedgerUsesReacquiredCanonicalLedger(t *testing.T) {
 	svc.historyComponent.mu.Unlock()
 	svc.mu.Unlock()
 
-	stateMap, err := canonical.StateMapSnapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	txMap, err := canonical.TxMapSnapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	header := canonical.Header()
-	if err := svc.StoreLedgerWithState(context.Background(), &header, stateMap, txMap); err != nil {
+	if err := svc.StoreLedgerWithState(context.Background(), &canonicalHeader, stateMap, txMap); err != nil {
 		t.Fatal(err)
 	}
 
