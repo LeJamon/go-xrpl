@@ -24,6 +24,7 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/stretchr/testify/require"
 )
 
 // setupGBPEURPoolWithBob creates a GBP/EUR AMM and funds Bob with
@@ -541,8 +542,7 @@ func TestWithdrawRounding(t *testing.T) {
 			jtx.RequireTxSuccess(t, env.Submit(wdTx))
 			env.Close()
 
-			// After withdraw-all, invariant holds trivially (balances go to zero)
-			env.CheckInvariant(env.GBP, env.EUR, fixV1_3, false, "with2")
+			require.Nil(t, env.ReadAMMData(env.GBP, env.EUR))
 		})
 
 		// tfTwoAsset withdraw mode

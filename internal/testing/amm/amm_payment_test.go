@@ -100,7 +100,7 @@ func TestInvalidAMMPayment(t *testing.T) {
 		t.Run("PayIOU", func(t *testing.T) {
 			payTx := payment.PayIssued(env.Carol, ammAcc, amm.IOUAmount(env.GW, "USD", 10)).Build()
 			result := env.Submit(payTx)
-			amm.ExpectTER(t, result, amm.TecNO_PERMISSION, "tecPATH_DRY")
+			amm.ExpectTER(t, result, amm.TecNO_PERMISSION)
 		})
 	})
 

@@ -74,6 +74,17 @@ func (e *TestEnv) Balance(acc *Account) uint64 {
 // Positive means the holder has tokens, negative means they owe tokens.
 func (e *TestEnv) IOUBalance(holder, issuer *Account, currency string) *state.Amount {
 	e.t.Helper()
+	balance, found := e.LookupIOUBalance(holder, issuer, currency)
+	if found {
+		return balance
+	}
+	zero := state.NewIssuedAmountFromFloat64(0, currency, issuer.Address)
+	return &zero
+}
+
+// LookupIOUBalance returns the holder's balance and whether the trust line exists.
+func (e *TestEnv) LookupIOUBalance(holder, issuer *Account, currency string) (*state.Amount, bool) {
+	e.t.Helper()
 
 	lineKey := keylet.Line(holder.ID, issuer.ID, currency)
 	rs, exists, err := readRippleState(e.ledger, lineKey)
@@ -81,8 +92,7 @@ func (e *TestEnv) IOUBalance(holder, issuer *Account, currency string) *state.Am
 		e.t.Fatalf("Failed to read trust line: %v", err)
 	}
 	if !exists {
-		zero := state.NewIssuedAmountFromFloat64(0, currency, issuer.Address)
-		return &zero
+		return nil, false
 	}
 
 	// Determine if holder is low or high account
@@ -100,7 +110,7 @@ func (e *TestEnv) IOUBalance(holder, issuer *Account, currency string) *state.Am
 	// This ensures amounts returned here can be used directly in payments.
 	balance.Issuer = issuer.Address
 
-	return &balance
+	return &balance, true
 }
 
 // BalanceIOU returns the IOU balance of an account for a specific currency and issuer as float64.
