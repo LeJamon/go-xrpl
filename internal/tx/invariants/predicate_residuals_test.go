@@ -360,7 +360,7 @@ func TestParseError_HardFails(t *testing.T) {
 			amount:  amount,
 		}
 		entries := []InvariantEntry{{EntryType: entry.TypeRippleState, Before: rsBad, After: rsBad}}
-		if v := checkValidClawback(tx, TesSUCCESS, entries, lineView{line: rsBad}); v == nil {
+		if v := checkValidClawback(tx, TesSUCCESS, entries, lineView{line: rsBad}, nil); v == nil {
 			t.Fatal("expected ValidClawback violation for unparseable trust line")
 		}
 	})

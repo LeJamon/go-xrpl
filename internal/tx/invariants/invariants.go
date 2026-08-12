@@ -193,7 +193,7 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 			return checkNFTokenCountTracking(txType, result, entries)
 		},
 		func() *InvariantViolation {
-			return checkValidClawback(tx, result, entries, view)
+			return checkValidClawback(tx, result, entries, view, rules, numberContext...)
 		},
 		func() *InvariantViolation {
 			return checkValidMPTIssuance(tx, result, entries, view, rules)
@@ -254,6 +254,10 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 // clawback subpackage.
 type ClawbackAmountProvider interface {
 	ClawbackAmount() Amount
+}
+
+type ClawbackHolderProvider interface {
+	ClawbackHolder() string
 }
 
 // HolderFieldProvider is optionally implemented by transactions that have a

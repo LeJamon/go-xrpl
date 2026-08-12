@@ -513,6 +513,10 @@ func (c *Clawback) ClawbackAmount() tx.Amount {
 	return c.Amount
 }
 
+func (c *Clawback) ClawbackHolder() string {
+	return c.Holder
+}
+
 func (c *Clawback) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(c)
 }
