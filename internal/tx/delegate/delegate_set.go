@@ -200,7 +200,10 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	delegateKey := keylet.Delegate(ctx.AccountID, authorizeID)
 
 	existingData, readErr := ctx.View.Read(delegateKey)
-	delegateExists := readErr == nil && existingData != nil
+	if readErr != nil {
+		return ter.TefINTERNAL
+	}
+	delegateExists := existingData != nil
 
 	if delegateExists {
 		// Empty permissions -- delete the delegate entry.

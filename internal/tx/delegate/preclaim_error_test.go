@@ -1,6 +1,7 @@
 package delegate_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	delegatetx "github.com/LeJamon/go-xrpl/internal/tx/delegate"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/stretchr/testify/require"
 )
 
@@ -52,4 +54,29 @@ func TestDelegateSetPreclaimPropagatesDelegateReadError(t *testing.T) {
 	transaction := delegatetx.NewDelegateSet(account)
 	transaction.Authorize = authorize
 	require.Equal(t, ter.TefINTERNAL, transaction.Preclaim(view, tx.EngineConfig{}))
+}
+
+func TestDelegateSetApplyPropagatesDelegateReadError(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	const authorize = "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn"
+	accountID, err := state.DecodeAccountID(account)
+	require.NoError(t, err)
+	authorizeID, err := state.DecodeAccountID(authorize)
+	require.NoError(t, err)
+
+	view := &delegatePreclaimErrorView{
+		delegateKey: keylet.Delegate(accountID, authorizeID).Key,
+	}
+	transaction := delegatetx.NewDelegateSet(account)
+	transaction.Authorize = authorize
+	transaction.Permissions = []delegatetx.Permission{delegatetx.NewPermission("Payment")}
+	ctx := &tx.ApplyContext{
+		View:      view,
+		Account:   &state.AccountRoot{Account: account, Balance: 1},
+		AccountID: accountID,
+		Log:       xrpllog.Discard(),
+		Ctx:       context.Background(),
+	}
+
+	require.Equal(t, ter.TefINTERNAL, transaction.Apply(ctx))
 }

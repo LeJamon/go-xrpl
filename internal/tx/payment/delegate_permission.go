@@ -52,7 +52,10 @@ func paymentMintBurn(pc tx.DelegatePermissionContext, amt state.Amount, account,
 		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	line, err := tx.ReadRippleState(pc.View, accountID, destinationID, amt.Currency)
-	if err != nil || line == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if line == nil {
 		return ter.TerNO_DELEGATE_PERMISSION
 	}
 
