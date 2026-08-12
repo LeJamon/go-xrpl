@@ -588,7 +588,7 @@ func TestValidMPTIssuance_MayAuthorizePrivilege(t *testing.T) {
 	}
 }
 
-func TestValidMPTIssuance_AMMPrivileges(t *testing.T) {
+func TestValidMPTIssuance_AMMCreateAndReconciliation(t *testing.T) {
 	created := mptInvariantEntry(t, addrHolderA, addrIssuer, false)
 	deleted := mptInvariantEntry(t, addrHolderA, addrIssuer, true)
 	rules := amendment.NewRulesBuilder().Enable(amendment.FeatureMPTokensV2).Build()
