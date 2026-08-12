@@ -119,6 +119,26 @@ func TestPseudoAccountImplicitAuthorizationRequiresAmendment(t *testing.T) {
 	require.Equal(t, ter.TesSUCCESS, RequireAuth(view, id, pseudo, false))
 }
 
+func TestFixCleanup330AuthorizesPseudoAccountBeforeHoldingCheck(t *testing.T) {
+	view := newMPTTestView()
+	var issuer, pseudo [20]byte
+	issuer[19] = 1
+	pseudo[19] = 2
+	id := keylet.MakeMPTID(1, issuer)
+	putTestIssuance(t, view, id, entry.LsfMPTRequireAuth, nil)
+	putTestAccount(t, view, issuer, 0, [32]byte{})
+	putTestAccount(t, view, pseudo, 0, [32]byte{1})
+
+	view.rules = amendment.NewRules([][32]byte{amendment.FeatureSingleAssetVault})
+	require.Equal(t, ter.TecNO_AUTH, RequireAuthAt(view, id, pseudo, true, 0))
+
+	view.rules = amendment.NewRules([][32]byte{
+		amendment.FeatureSingleAssetVault,
+		amendment.FeatureFixCleanup3_3_0,
+	})
+	require.Equal(t, ter.TesSUCCESS, RequireAuthAt(view, id, pseudo, true, 0))
+}
+
 func TestIOUTransferCheckPropagatesTrustLineReadError(t *testing.T) {
 	view := newMPTTestView()
 	var issuer, from, to [20]byte
@@ -655,6 +675,20 @@ func TestPseudoFreezeChecksMPT(t *testing.T) {
 	view = newView()
 	putTestIssuance(t, view, id, entry.LsfMPTLocked, nil)
 	require.Equal(t, ter.TesSUCCESS, CheckWithdrawFreeze(view, pseudo, source, issuer, asset))
+
+	view = newView()
+	vaultPseudo := [20]byte{5}
+	underlyingIssuer := [20]byte{6}
+	underlyingID := keylet.MakeMPTID(2, underlyingIssuer)
+	shareID := keylet.MakeMPTID(3, vaultPseudo)
+	vaultID := [32]byte{7}
+	putTestAccount(t, view, vaultPseudo, 0, vaultID)
+	putTestAccount(t, view, underlyingIssuer, 0, [32]byte{})
+	putTestIssuance(t, view, underlyingID, entry.LsfMPTLocked, nil)
+	putTestIssuance(t, view, shareID, 0, nil)
+	putTestVault(t, view, vaultID, issuer, vaultPseudo, shareID, underlyingID)
+	shareAsset := tx.Asset{MPTIssuanceID: EncodeID(shareID)}
+	require.Equal(t, ter.TecINTERNAL, CheckDepositFreeze(view, source, pseudo, shareAsset))
 }
 
 func putTestAccount(t *testing.T, view *mptTestView, account [20]byte, flags uint32, vaultID [32]byte) {

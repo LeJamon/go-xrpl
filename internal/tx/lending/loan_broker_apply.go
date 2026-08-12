@@ -334,6 +334,9 @@ func (l *LoanBrokerCoverDeposit) Preclaim(view tx.LedgerView, config tx.EngineCo
 	if !amountAssetMatches(l.Amount, asset) {
 		return ter.TecWRONG_ASSET
 	}
+	if res := mptutil.CanTransferAsset(view, asset, accountID, b.Account, false); res != ter.TesSUCCESS {
+		return res
+	}
 	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
 		if res := mptutil.CheckDepositFreeze(view, accountID, b.Account, asset); res != ter.TesSUCCESS {
 			return res
@@ -438,6 +441,9 @@ func (l *LoanBrokerCoverWithdraw) Preclaim(view tx.LedgerView, config tx.EngineC
 	fix320 := config.RequireRules().FixCleanup3_2_0Enabled()
 	integral := assetIntegral(asset)
 	if res := canApplyToBrokerCover(fix320, lendNumForRules(b.CoverAvailable, config.RequireRules()), amountToLendNumForRules(l.Amount, config.RequireRules()), integral); res != ter.TesSUCCESS {
+		return res
+	}
+	if res := mptutil.CanTransferAsset(view, asset, b.Account, dstID, fix320); res != ter.TesSUCCESS {
 		return res
 	}
 	if accountID != dstID {

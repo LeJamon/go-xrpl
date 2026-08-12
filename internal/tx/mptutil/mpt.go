@@ -217,7 +217,10 @@ func CheckDepositFreeze(view state.LedgerView, srcAcct, pseudoAcct [20]byte, ass
 			return result
 		}
 	}
-	return checkIndividualFrozen(view, pseudoAcct, asset)
+	if result := checkIndividualFrozen(view, pseudoAcct, asset); result != ter.TesSUCCESS {
+		return result
+	}
+	return checkPseudoAccountBackingFreeze(view, pseudoAcct, asset)
 }
 
 // CheckWithdrawFreeze applies the freeze rules for sending an asset from a
@@ -247,7 +250,24 @@ func CheckWithdrawFreeze(view state.LedgerView, pseudoAcct, submitterAcct, dstAc
 			return result
 		}
 	}
-	return checkDeepFrozen(view, dstAcct, asset)
+	if result := checkDeepFrozen(view, dstAcct, asset); result != ter.TesSUCCESS {
+		return result
+	}
+	return checkPseudoAccountBackingFreeze(view, pseudoAcct, asset)
+}
+
+func checkPseudoAccountBackingFreeze(view state.LedgerView, pseudoAcct [20]byte, asset tx.Asset) ter.Result {
+	if !asset.IsMPT() {
+		return ter.TesSUCCESS
+	}
+	id, err := DecodeID(asset.MPTIssuanceID)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if isVaultPseudoAccountFrozen(view, id, pseudoAcct, 0) {
+		return ter.TecINTERNAL
+	}
+	return ter.TesSUCCESS
 }
 
 func assetIssuer(asset tx.Asset) ([20]byte, ter.Result) {
@@ -428,6 +448,17 @@ func requireAuthAt(view state.LedgerView, id [24]byte, account [20]byte, authTyp
 	if issuance.Issuer == account {
 		return ter.TesSUCCESS
 	}
+	rules := view.Rules()
+	fix330 := rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_3_0)
+	if fix330 {
+		exempt, result := pseudoAccountAuthExempt(view, account, rules)
+		if result != ter.TesSUCCESS {
+			return result
+		}
+		if exempt {
+			return ter.TesSUCCESS
+		}
+	}
 	if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureSingleAssetVault) {
 		if depth >= maxAssetCheckDepth {
 			return ter.TecINTERNAL
@@ -476,25 +507,35 @@ func requireAuthAt(view state.LedgerView, id [24]byte, account [20]byte, authTyp
 		return ter.TesSUCCESS
 	}
 
-	rules := view.Rules()
-	if rules == nil || (!rules.Enabled(amendment.FeatureSingleAssetVault) && !rules.Enabled(amendment.FeatureMPTokensV2)) {
+	if fix330 {
 		return ter.TecNO_AUTH
 	}
-	accountRaw, err := view.Read(keylet.Account(account))
-	if err != nil {
-		return ter.TefINTERNAL
+	exempt, result := pseudoAccountAuthExempt(view, account, rules)
+	if result != ter.TesSUCCESS {
+		return result
 	}
-	if accountRaw == nil {
-		return ter.TecNO_AUTH
-	}
-	accountRoot, err := state.ParseAccountRoot(accountRaw)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if accountRoot.IsPseudoAccount() {
+	if exempt {
 		return ter.TesSUCCESS
 	}
 	return ter.TecNO_AUTH
+}
+
+func pseudoAccountAuthExempt(view state.LedgerView, account [20]byte, rules *amendment.Rules) (bool, ter.Result) {
+	if rules == nil || (!rules.Enabled(amendment.FeatureSingleAssetVault) && !rules.Enabled(amendment.FeatureMPTokensV2)) {
+		return false, ter.TesSUCCESS
+	}
+	accountRaw, err := view.Read(keylet.Account(account))
+	if err != nil {
+		return false, ter.TefINTERNAL
+	}
+	if accountRaw == nil {
+		return false, ter.TesSUCCESS
+	}
+	accountRoot, err := state.ParseAccountRoot(accountRaw)
+	if err != nil {
+		return false, ter.TefINTERNAL
+	}
+	return accountRoot.IsPseudoAccount(), ter.TesSUCCESS
 }
 
 func RequireAssetAuthAt(view state.LedgerView, asset tx.Asset, account [20]byte, authType AuthType, parentCloseTime uint32) ter.Result {
