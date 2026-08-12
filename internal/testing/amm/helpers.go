@@ -3,6 +3,7 @@
 package amm
 
 import (
+	"fmt"
 	"testing"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -13,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	coreAmm "github.com/LeJamon/go-xrpl/internal/tx/amm"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -515,31 +517,38 @@ func (e *AMMTestEnv) AccountOffers(acc *jtx.Account) []*state.LedgerOffer {
 
 	var offers []*state.LedgerOffer
 	dirKey := keylet.OwnerDir(acc.ID)
-	_ = state.DirForEach(e.Ledger(), dirKey, func(itemKey [32]byte) error {
-		// Read the raw entry (Read doesn't check type)
-		k := keylet.Keylet{Key: itemKey, Type: entry.TypeOffer}
+	err := state.DirForEach(e.Ledger(), dirKey, func(itemKey [32]byte) error {
+		k := keylet.Keylet{Key: itemKey}
 		data, err := e.Ledger().Read(k)
-		if err != nil || data == nil {
+		if err != nil {
+			return fmt.Errorf("read owned entry: %w", err)
+		}
+		if data == nil {
+			return fmt.Errorf("owned entry %x has no data", itemKey)
+		}
+		typ, err := state.DecodeType(data)
+		if err != nil {
+			return fmt.Errorf("decode owned entry type: %w", err)
+		}
+		if typ != entry.TypeOffer {
 			return nil
 		}
-		// Check if the first bytes indicate an offer SLE.
-		// Offer entries have LedgerEntryType = 0x006F.
-		// The binary codec prefix starts with type/field codes; check for offer signature.
 		offer, err := state.ParseLedgerOffer(data)
 		if err != nil {
-			return nil
+			return fmt.Errorf("parse owned offer: %w", err)
 		}
-		// Only include if the offer has a valid account and non-zero amounts
-		if offer.Account == "" || (offer.TakerPays.IsZero() && offer.TakerGets.IsZero()) {
-			return nil // Not a valid offer entry
+		if offer.Account == "" || offer.TakerPays.IsZero() || offer.TakerGets.IsZero() {
+			return fmt.Errorf("owned offer %x is malformed", itemKey)
 		}
-		// Verify it belongs to the account we're querying
 		if offer.Account != acc.Address {
-			return nil
+			return fmt.Errorf("owned offer %x belongs to %s, want %s", itemKey, offer.Account, acc.Address)
 		}
 		offers = append(offers, offer)
 		return nil
 	})
+	if err != nil {
+		e.T.Fatalf("AccountOffers(%s): %v", acc.Name, err)
+	}
 
 	return offers
 }
@@ -591,26 +600,89 @@ func (e *AMMTestEnv) AMMTradingFee(asset1, asset2 tx.Asset) uint16 {
 // ReadAMMData reads and parses the AMM SLE for the given asset pair.
 func (e *AMMTestEnv) ReadAMMData(asset1, asset2 tx.Asset) *coreAmm.AMMData {
 	e.T.Helper()
-	ammKey := coreAmm.ComputeAMMKeylet(asset1, asset2)
-	exists, err := e.Ledger().Exists(ammKey)
+	ammData, found, err := lookupAMMData(e.Ledger(), asset1, asset2)
 	if err != nil {
-		e.T.Fatalf("ReadAMMData: existence check failed: %v", err)
+		e.T.Fatalf("ReadAMMData: %v", err)
 	}
-	if !exists {
+	if !found {
 		return nil
 	}
-	data, err := e.Ledger().Read(ammKey)
+	return ammData
+}
+
+type ammLedgerReader interface {
+	Exists(keylet.Keylet) (bool, error)
+	Read(keylet.Keylet) ([]byte, error)
+}
+
+func validateAMMAsset(asset tx.Asset) error {
+	if asset.IsMPT() {
+		if asset.Currency != "" || asset.Issuer != "" {
+			return fmt.Errorf("MPT asset cannot include currency or issuer")
+		}
+		id, err := mptutil.DecodeID(asset.MPTIssuanceID)
+		if err != nil {
+			return fmt.Errorf("invalid MPT issuance ID: %w", err)
+		}
+		if mptutil.Issuer(id) == ([20]byte{}) {
+			return fmt.Errorf("MPT issuance ID has zero issuer")
+		}
+		return nil
+	}
+	if asset.IsNative() {
+		return nil
+	}
+	if asset.Currency == "" || asset.Issuer == "" {
+		return fmt.Errorf("issued asset requires currency and issuer")
+	}
+	currency, err := keylet.ParseCurrency(asset.Currency)
+	if err != nil || currency == ([20]byte{}) {
+		return fmt.Errorf("invalid asset currency: %q", asset.Currency)
+	}
+	issuer, err := state.DecodeAccountID(asset.Issuer)
 	if err != nil {
-		e.T.Fatalf("ReadAMMData: read failed: %v", err)
+		return fmt.Errorf("invalid asset issuer: %w", err)
+	}
+	if issuer == ([20]byte{}) {
+		return fmt.Errorf("asset issuer cannot be the zero account")
+	}
+	return nil
+}
+
+func lookupAMMData(reader ammLedgerReader, asset1, asset2 tx.Asset) (*coreAmm.AMMData, bool, error) {
+	if err := validateAMMAsset(asset1); err != nil {
+		return nil, false, err
+	}
+	if err := validateAMMAsset(asset2); err != nil {
+		return nil, false, err
+	}
+	ammKey := coreAmm.ComputeAMMKeylet(asset1, asset2)
+	exists, err := reader.Exists(ammKey)
+	if err != nil {
+		return nil, false, fmt.Errorf("existence check failed: %w", err)
+	}
+	if !exists {
+		return nil, false, nil
+	}
+	data, err := reader.Read(ammKey)
+	if err != nil {
+		return nil, false, fmt.Errorf("read failed: %w", err)
 	}
 	if data == nil {
-		e.T.Fatal("ReadAMMData: ledger reported an AMM without data")
+		return nil, false, fmt.Errorf("ledger reported an AMM without data")
+	}
+	typ, err := state.DecodeType(data)
+	if err != nil {
+		return nil, false, fmt.Errorf("decode ledger entry type: %w", err)
+	}
+	if typ != entry.TypeAMM {
+		return nil, false, fmt.Errorf("ledger entry has type %v, want AMM", typ)
 	}
 	ammData, err := coreAmm.ParseAMMData(data)
 	if err != nil {
-		e.T.Fatalf("ReadAMMData: parse error: %v", err)
+		return nil, false, fmt.Errorf("parse AMM: %w", err)
 	}
-	return ammData
+	return ammData, true, nil
 }
 
 // AMMAssetOut computes the asset amount received for burning LP tokens.
