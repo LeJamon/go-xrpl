@@ -78,8 +78,11 @@ func TestBatchInnerSponsorRules(t *testing.T) {
 			tx.SpfSponsorReserve,
 			false,
 		)
-		if err := batch.Validate(); !errors.Is(err, ErrBatchMissingSigner) {
-			t.Fatalf("Validate() error = %v, want %v", err, ErrBatchMissingSigner)
+		if err := batch.Validate(); err != nil {
+			t.Fatalf("Validate() error = %v", err)
+		}
+		if err := batch.PreflightSigValidated(); !errors.Is(err, ErrBatchMissingSigner) {
+			t.Fatalf("PreflightSigValidated() error = %v, want %v", err, ErrBatchMissingSigner)
 		}
 
 		batch.BatchSigners = []BatchSigner{{
@@ -90,6 +93,9 @@ func TestBatchInnerSponsorRules(t *testing.T) {
 			},
 		}}
 		if err := batch.Validate(); err != nil {
+			t.Fatalf("empty inner SponsorSignature with BatchSigner rejected: %v", err)
+		}
+		if err := batch.PreflightSigValidated(); err != nil {
 			t.Fatalf("empty inner SponsorSignature with BatchSigner rejected: %v", err)
 		}
 	})

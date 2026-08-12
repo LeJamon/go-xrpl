@@ -137,6 +137,7 @@ type Router struct {
 	// messages would accelerate selection and produce earlier squelches for
 	// the same traffic pattern.
 	messageSeen *messageSuppression
+	txSeen      *transactionSuppression
 	// validationWork verifies signatures outside the router goroutine. Trusted
 	// and untrusted work use separate bounded queues so untrusted traffic cannot
 	// occupy the trusted capacity.
@@ -414,6 +415,7 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 		fetchPacks:             newFetchPackCache(),
 		messageSeen:            newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
 		manifestUntrustedLimit: manifest.DefaultMaxUntrustedCount,
+		txSeen:                 newTransactionSuppression(5*time.Minute, 1<<17),
 		txSetAcquire:           make(map[consensus.TxSetID]*txSetAcquireState),
 		txSetRetryKnobs:        defaultTxSetRetryKnobs(),
 		seqHash:                make(map[uint32]ledgerHashEntry),

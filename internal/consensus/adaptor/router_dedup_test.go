@@ -2,6 +2,8 @@ package adaptor
 
 import (
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -216,4 +218,129 @@ func TestProposalSuppression_AdmitsOnlyAfterEngineAcceptance(t *testing.T) {
 
 	router.handleProposal(inbound)
 	assert.Equal(t, 2, engine.calls, "accepted duplicate must bypass the engine")
+}
+
+func TestTransactionSuppressionClaimIsAtomic(t *testing.T) {
+	cache := newTransactionSuppression(5*time.Minute, 64)
+	var hash [32]byte
+	hash[0] = 1
+
+	var processed atomic.Int32
+	var workers sync.WaitGroup
+	start := make(chan struct{})
+	for peerID := uint64(1); peerID <= 64; peerID++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			if shouldProcess, _ := cache.claim(hash, peerID); shouldProcess {
+				processed.Add(1)
+			}
+		}()
+	}
+	close(start)
+	workers.Wait()
+	require.Equal(t, int32(1), processed.Load())
+	require.Len(t, cache.releasePeers(hash), 64)
+}
+
+func TestTransactionSuppressionReleasePeersMovesSet(t *testing.T) {
+	cache := newTransactionSuppression(5*time.Minute, 64)
+	var hash [32]byte
+	hash[0] = 1
+
+	cache.claim(hash, 11)
+	cache.claim(hash, 12)
+	first := cache.releasePeers(hash)
+	require.Equal(t, map[uint64]struct{}{11: {}, 12: {}}, first)
+	require.Empty(t, cache.releasePeers(hash))
+
+	cache.claim(hash, 13)
+	second := cache.releasePeers(hash)
+	require.Equal(t, map[uint64]struct{}{13: {}}, second)
+	require.Equal(t, map[uint64]struct{}{11: {}, 12: {}}, first)
+}
+
+func TestTransactionRelaySkipIncludesDuplicateSources(t *testing.T) {
+	cache := newTransactionSuppression(5*time.Minute, 64)
+	router := &Router{txSeen: cache}
+	var hash [32]byte
+	hash[0] = 1
+
+	cache.claim(hash, 3)
+	cache.claim(hash, 4)
+	require.Equal(t,
+		map[peermanagement.PeerID]struct{}{3: {}, 4: {}},
+		router.transactionRelaySkip(hash, 3),
+	)
+
+	var missing [32]byte
+	missing[0] = 2
+	require.Equal(t,
+		map[peermanagement.PeerID]struct{}{3: {}},
+		router.transactionRelaySkip(missing, 3),
+	)
+}
+
+func TestTransactionSuppressionVerdictAndIntervals(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	cache := newTransactionSuppression(5*time.Minute, 64)
+	cache.now = func() time.Time { return now }
+	var hash [32]byte
+	hash[0] = 1
+
+	shouldProcess, bad := cache.claim(hash, 0)
+	require.True(t, shouldProcess)
+	require.False(t, bad)
+	cache.markBad(hash)
+
+	shouldProcess, bad = cache.claim(hash, 0)
+	require.False(t, shouldProcess)
+	require.True(t, bad)
+
+	now = now.Add(transactionProcessInterval)
+	shouldProcess, bad = cache.claim(hash, 0)
+	require.True(t, shouldProcess)
+	require.True(t, bad)
+
+	now = now.Add(5 * time.Minute)
+	shouldProcess, bad = cache.claim(hash, 0)
+	require.True(t, shouldProcess)
+	require.False(t, bad)
+}
+
+func TestTransactionSuppressionValidDuplicateIsSilent(t *testing.T) {
+	cache := newTransactionSuppression(5*time.Minute, 64)
+	var hash [32]byte
+	hash[0] = 1
+
+	shouldProcess, bad := cache.claim(hash, 0)
+	require.True(t, shouldProcess)
+	require.False(t, bad)
+
+	shouldProcess, bad = cache.claim(hash, 0)
+	require.False(t, shouldProcess)
+	require.False(t, bad)
+}
+
+func TestTransactionSuppressionDuplicateRefreshesRetention(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	cache := newTransactionSuppression(5*time.Minute, 64)
+	cache.now = func() time.Time { return now }
+	var hash [32]byte
+	hash[0] = 1
+
+	shouldProcess, _ := cache.claim(hash, 0)
+	require.True(t, shouldProcess)
+	cache.markBad(hash)
+
+	now = now.Add(9 * time.Second)
+	shouldProcess, bad := cache.claim(hash, 0)
+	require.False(t, shouldProcess)
+	require.True(t, bad)
+
+	now = now.Add(5*time.Minute - 5*time.Second)
+	shouldProcess, bad = cache.claim(hash, 0)
+	require.True(t, shouldProcess)
+	require.True(t, bad)
 }

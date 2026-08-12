@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // ErrUnknownTransactionType is returned when a transaction type is unknown
@@ -52,6 +54,15 @@ func FromJSON(data []byte) (Transaction, error) {
 	txType, ok := TypeFromName(raw.TransactionType)
 	if !ok {
 		return nil, ErrUnknownTransactionType
+	}
+	if txType == TypeBatch {
+		var fields map[string]any
+		if err := json.Unmarshal(data, &fields); err != nil {
+			return nil, err
+		}
+		if reason := batchMapConstructionChecksFailureReason(fields); reason != "" {
+			return nil, ter.Errorf(ter.TemMALFORMED, "%s", reason)
+		}
 	}
 	presentFields, err := jsonPresentFields(data)
 	if err != nil {

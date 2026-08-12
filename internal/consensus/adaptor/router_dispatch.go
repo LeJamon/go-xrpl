@@ -10,10 +10,13 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/rcl"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	ledgerservice "github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -604,7 +607,16 @@ func validateValidationBounds(v *consensus.Validation) (string, bool) {
 	return "", true
 }
 
-func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
+type transactionDispatchResult struct {
+	charge        resource.Charge
+	chargeContext string
+	submitResult  openledger.Result
+	submitError   error
+	deferred      bool
+	relayed       bool
+}
+
+func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch transactionDispatchResult) {
 	defer r.recoverFrame(msg, "transaction")
 
 	// Frames fanned out from a TMTransactions batch arrive already
@@ -614,7 +626,7 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
 		decoded, err := message.Decode(message.TypeTransaction, msg.Payload)
 		if err != nil {
 			r.logger.Warn("failed to decode transaction", "error", err, "peer", msg.PeerID)
-			return
+			return dispatch
 		}
 		var ok bool
 		txMsg, ok = decoded.(*message.Transaction)
@@ -622,7 +634,7 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
 			r.logger.Warn("decoded transaction has unexpected type",
 				"peer", msg.PeerID,
 				"got", fmt.Sprintf("%T", decoded))
-			return
+			return dispatch
 		}
 	}
 
@@ -631,22 +643,71 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
 		r.logger.Warn("inbound transaction has empty blob",
 			"peer", msg.PeerID,
 			"status", txMsg.Status)
-		return
+		return dispatch
+	}
+	pending, pendingErr := openledger.ParsePendingTx(blob)
+	canonicalBlob := blob
+	if pendingErr == nil {
+		canonicalBlob = pending.Blob
+	}
+	if pendingErr == nil && pending.Parsed.GetCommon().GetFlags()&tx.TfInnerBatchTxn != 0 {
+		dispatch.charge = resource.FeeModerateBurdenPeer()
+		dispatch.chargeContext = "inner batch txn"
+		msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
+		return dispatch
+	}
+	admittedBad := false
+	if pendingErr == nil && r.txSeen != nil {
+		shouldProcess, bad := r.txSeen.claim(pending.Hash, uint64(msg.PeerID))
+		if !shouldProcess {
+			if bad {
+				dispatch.charge = resource.FeeUselessData()
+				dispatch.chargeContext = "transaction-known-bad"
+				msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
+			}
+			return dispatch
+		}
+		admittedBad = bad
+	}
+	if pendingErr == nil && pending.Parsed.GetCommon().LastLedgerSequence != nil &&
+		r.adaptor != nil && r.adaptor.ledgerService != nil &&
+		*pending.Parsed.GetCommon().LastLedgerSequence < r.adaptor.ledgerService.GetValidatedLedgerIndex() {
+		if r.txSeen != nil {
+			r.txSeen.markBad(pending.Hash)
+		}
+		dispatch.charge = resource.FeeUselessData()
+		dispatch.chargeContext = "transaction-expired"
+		msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
+		return dispatch
+	}
+	if admittedBad {
+		dispatch.charge = resource.FeeInvalidSignature()
+		dispatch.chargeContext = "transaction-known-bad-signature"
+		msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
+		return dispatch
 	}
 
 	// Peer-relay path — the originating peer manages its own resends,
 	// so we don't pin the blob in our LocalTxs held pool.
-	res, err := r.adaptor.SubmitPendingTx(blob, false)
-	// Debug, not Info: at thousands of tx/s an unconditional Info write here
-	// is a per-transaction blocking syscall on the submit hot path.
-	r.logger.Debug("inbound tx accepted into pending pool",
-		"t", "consensus",
-		"event", "tx-inbound",
-		"peer", msg.PeerID,
-		"blob_size", len(blob),
-		"status", txMsg.Status,
-	)
-
+	outcome, err := r.adaptor.SubmitPendingTx(canonicalBlob, false)
+	dispatch.submitResult = outcome.Class
+	dispatch.submitError = err
+	dispatch.deferred = outcome.Queued
+	if errors.Is(err, txengine.ErrInvalidSignature) {
+		if pendingErr == nil && r.txSeen != nil {
+			r.txSeen.markBad(pending.Hash)
+		}
+		dispatch.charge = resource.FeeInvalidSignature()
+		dispatch.chargeContext = "transaction-invalid-signature"
+		msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
+	} else if errors.Is(err, ledgerservice.ErrInvalidLocalTransaction) {
+		if pendingErr == nil && r.txSeen != nil {
+			r.txSeen.markBad(pending.Hash)
+		}
+		dispatch.charge = resource.FeeInvalidSignature()
+		dispatch.chargeContext = "transaction-local-checks"
+		msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
+	}
 	// Relay immediately on the inbound job, not one ledger later via
 	// OpenLedger.Accept's once-per-LCL callback; that one-ledger lag is a
 	// direct contributor to tx-propagation latency.
@@ -655,36 +716,61 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
 	// folds both terQUEUED and tec into ResultSuccess, so ResultSuccess is
 	// the exact superset that should relay. ResultRetry (non-queued ter*)
 	// and ResultFailure (tef/tem/tel) do NOT relay.
-	if err == nil && res == openledger.ResultSuccess {
-		r.relayTransaction(msg.PeerID, blob)
+	if err == nil && outcome.Class == openledger.ResultSuccess {
+		// Debug, not Info: at thousands of tx/s an unconditional Info write here
+		// is a per-transaction blocking syscall on the submit hot path.
+		r.logger.Debug("inbound tx accepted into pending pool",
+			"t", "consensus",
+			"event", "tx-inbound",
+			"peer", msg.PeerID,
+			"blob_size", len(canonicalBlob),
+			"status", txMsg.Status,
+		)
+		r.relayTransaction(r.transactionRelaySkip(pending.Hash, msg.PeerID), canonicalBlob, outcome.Queued)
+		dispatch.relayed = true
+	} else {
+		r.logger.Debug("inbound tx rejected by pending pool",
+			"t", "consensus",
+			"event", "tx-inbound-rejected",
+			"peer", msg.PeerID,
+			"blob_size", len(canonicalBlob),
+			"status", txMsg.Status,
+			"result", outcome.Class,
+			"error", err,
+		)
 	}
+	return dispatch
+}
+
+func (r *Router) transactionRelaySkip(
+	hash [32]byte,
+	origin peermanagement.PeerID,
+) map[peermanagement.PeerID]struct{} {
+	toSkip := map[peermanagement.PeerID]struct{}{origin: {}}
+	if r.txSeen == nil {
+		return toSkip
+	}
+	for peerID := range r.txSeen.releasePeers(hash) {
+		toSkip[peermanagement.PeerID(peerID)] = struct{}{}
+	}
+	return toSkip
 }
 
 // relayTransaction rebroadcasts an accepted peer-originated TMTransaction,
-// excluding the originating peer.
+// excluding peers known to already hold it.
 //
 // The outbound wire shape: status normalized to tsCURRENT (the inbound
 // peer's claimed status is informational only) and receivetimestamp
 // freshly stamped from the local Ripple clock.
 //
-// Overlay.RelayTransaction applies reduce-relay peer selection: the full
-// frame goes to a subset of peers and the rest learn of the tx via the
-// TMHaveTransactions announce. We don't consult a separate suppression
-// set for the multi-hop case because de-dup happens implicitly via
-// openledger.Submit's view.TxExists pre-filter: a duplicate arrival from
-// another peer classifies as ResultFailure and the relay gate above never
-// fires. Excluding the origin is the minimum correctness boundary —
-// without it the originator would receive its own packet back and either
-// re-charge us bandwidth or, in a 2-peer cycle, oscillate indefinitely.
-func (r *Router) relayTransaction(except peermanagement.PeerID, blob []byte) {
+// Overlay.RelayTransactionSkipping applies reduce-relay peer selection: the
+// full frame goes to a subset of peers and the rest learn of the tx via the
+// TMHaveTransactions announce.
+func (r *Router) relayTransaction(toSkip map[peermanagement.PeerID]struct{}, blob []byte, deferred bool) {
 	if r.overlay == nil {
 		return
 	}
-	out := &message.Transaction{
-		RawTransaction:   blob,
-		Status:           message.TxStatusCurrent,
-		ReceiveTimestamp: uint64(protocol.RippleSeconds(time.Now())),
-	}
+	out := relayTransactionMessage(blob, deferred)
 	frame, err := message.EncodeFrame(out)
 	if err != nil {
 		r.logger.Warn("relay transaction encode failed", "error", err)
@@ -693,7 +779,16 @@ func (r *Router) relayTransaction(except peermanagement.PeerID, blob []byte) {
 	// Reduce-relay peer selection derives the transaction ID from the wire
 	// frame itself. If the frame cannot be decoded, the overlay falls back to
 	// full relay rather than announcing an unfulfillable hash.
-	r.overlay.RelayTransaction(except, frame)
+	r.overlay.RelayTransactionSkipping(toSkip, frame)
+}
+
+func relayTransactionMessage(blob []byte, deferred bool) *message.Transaction {
+	return &message.Transaction{
+		RawTransaction:   blob,
+		Status:           message.TxStatusCurrent,
+		ReceiveTimestamp: uint64(protocol.RippleSeconds(time.Now())),
+		Deferred:         deferred,
+	}
 }
 
 func (r *Router) handleHaveSet(msg *peermanagement.InboundMessage) {

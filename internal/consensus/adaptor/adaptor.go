@@ -901,13 +901,11 @@ func (a *Adaptor) AddPendingTx(blob []byte, local bool) {
 	_, _ = a.SubmitPendingTx(blob, local)
 }
 
-// SubmitPendingTx is AddPendingTx with the classification result surfaced, so
-// the peer-relay path can gate re-broadcast on a non-Failure result.
-func (a *Adaptor) SubmitPendingTx(blob []byte, local bool) (openledger.Result, error) {
+func (a *Adaptor) SubmitPendingTx(blob []byte, local bool) (openledger.SubmitOutcome, error) {
 	if a.ledgerService == nil {
-		return openledger.ResultFailure, errors.New("ledger service unavailable")
+		return openledger.SubmitOutcome{Class: openledger.ResultFailure}, errors.New("ledger service unavailable")
 	}
-	res, err := a.ledgerService.SubmitOpenLedgerTx(blob, local)
+	res, err := a.ledgerService.SubmitOpenLedgerTxDetailed(blob, local)
 	if err != nil {
 		a.logger.Warn("openLedger submit failed",
 			"err", err,

@@ -48,6 +48,7 @@ var (
 var (
 	ErrConsensusParentMismatch = errors.New("consensus parent does not match the closed ledger")
 	ErrPreferredChainSwitch    = errors.New("invalid preferred chain switch")
+	ErrInvalidLocalTransaction = errors.New("transaction failed local checks")
 )
 
 // Config holds configuration for the LedgerService
@@ -879,35 +880,54 @@ func (s *Service) TransactionRules() *amendment.Rules {
 // or it ages out. local=false (peer relay) doesn't pin the blob — the peer
 // manages its own resends.
 func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result, error) {
+	outcome, err := s.SubmitOpenLedgerTxDetailed(blob, local)
+	return outcome.Class, err
+}
+
+// SubmitOpenLedgerTxDetailed is SubmitOpenLedgerTx with the queue disposition
+// retained for callers that must distinguish applied from deferred transactions.
+func (s *Service) SubmitOpenLedgerTxDetailed(blob []byte, local bool) (openledger.SubmitOutcome, error) {
+	failure := openledger.SubmitOutcome{Class: openledger.ResultFailure}
 	s.mu.RLock()
 	cfg, cfgErr := s.applyConfigLocked()
 	haveOpenLedger := s.openLedgerView != nil
 	s.mu.RUnlock()
 
 	if !haveOpenLedger {
-		return openledger.ResultFailure, errors.New("openLedgerView not initialised")
+		return failure, errors.New("openLedgerView not initialised")
 	}
 	if cfgErr != nil {
-		return openledger.ResultFailure, cfgErr
+		return failure, cfgErr
 	}
 	ptx, err := openledger.ParsePendingTx(blob)
 	if err != nil {
-		return openledger.ResultFailure, err
+		return failure, err
+	}
+	if ptx.Parsed.GetCommon().GetFlags()&tx.TfInnerBatchTxn != 0 {
+		return failure, fmt.Errorf(
+			"%w: Batch inner transactions are never considered validly signed.",
+			txengine.ErrInvalidSignature,
+		)
 	}
 	// Verify the signature off the open-ledger apply mutex so the dominant
 	// per-tx cost runs concurrently across ingress workers instead of serialising
 	// under modifyMu; the in-strand check then reuses the cached verdict (#1105).
 	if !cfg.SkipSignatureVerification {
-		txengine.PrewarmSignature(ptx.Parsed)
+		if err := txengine.PrewarmSignature(ptx.Parsed); err != nil {
+			return failure, err
+		}
+	}
+	if reason := tx.TransactionLocalChecksFailureReason(ptx.Parsed); reason != "" {
+		return failure, fmt.Errorf("%w: %s", ErrInvalidLocalTransaction, reason)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.openLedgerView == nil {
-		return openledger.ResultFailure, errors.New("openLedgerView not initialised")
+		return failure, errors.New("openLedgerView not initialised")
 	}
 	cfg, cfgErr = s.applyConfigLocked()
 	if cfgErr != nil {
-		return openledger.ResultFailure, cfgErr
+		return failure, cfgErr
 	}
 	outcome := s.openLedgerView.SubmitDetailed(ptx, cfg, s.txQueue)
 	if outcome.Class == openledger.ResultSuccess {
@@ -917,14 +937,14 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result
 	if local && s.localTxs != nil {
 		s.localTxs.PushBack(current.Sequence(), ptx)
 	}
-	s.dispatchProposedTransaction(ptx, blob, outcome, current)
+	s.dispatchProposedTransaction(ptx, ptx.Blob, outcome, current)
 	if outcome.Applied {
 		s.eventPublisher.dispatchServerStatusEvent()
 	}
-	return outcome.Class, nil
+	return outcome, nil
 }
 
-// PrewarmSignatures verifies the outer signatures of raw tx blobs in parallel
+// PrewarmSignatures verifies all signatures on raw tx blobs in parallel
 // and caches the verdicts, so a consensus build over an acquired tx set hits the
 // sig-cache instead of paying cold checks in-strand under the apply mutex. The
 // per-relayed-tx prewarm in SubmitOpenLedgerTx (#1105) covers only individually-

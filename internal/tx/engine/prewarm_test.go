@@ -45,11 +45,9 @@ func verifyingEngine(rules *amendment.Rules) *Engine {
 	})
 }
 
-// TestPrewarmSignature_SkipsRepeatVerify proves the off-strand verdict is
-// honoured: once PrewarmSignature has cached a positive verdict, the in-strand
-// signature check trusts it and does not re-verify — demonstrated by corrupting
-// the signature after prewarming and observing the check still passes.
-func TestPrewarmSignature_SkipsRepeatVerify(t *testing.T) {
+// TestPrewarmSignature_MutationInvalidatesVerdict proves the off-strand verdict
+// is bound to the exact transaction contents that were verified.
+func TestPrewarmSignature_MutationInvalidatesVerdict(t *testing.T) {
 	rules := amendment.AllSupportedRules()
 	txn := newSignedSingleSignTx(t)
 
@@ -61,10 +59,10 @@ func TestPrewarmSignature_SkipsRepeatVerify(t *testing.T) {
 		t.Fatal("PrewarmSignature must cache a positive verdict for a valid single-signed tx")
 	}
 
-	// Corrupt the signature; the cached verdict must short-circuit the verify.
+	// Corrupt the signature; the changed transaction identity must force a verify.
 	txn.GetCommon().TxnSignature = "00"
-	if res := verifyingEngine(rules).verifySignatures(txn); res != ter.TesSUCCESS {
-		t.Fatalf("cached-good signature must skip re-verify; got %s", res)
+	if res := verifyingEngine(rules).verifySignatures(txn); res != ter.TemINVALID {
+		t.Fatalf("mutated signature must invalidate cached verdict; got %s", res)
 	}
 }
 

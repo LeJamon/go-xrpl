@@ -7,13 +7,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	ledgerservice "github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	batchtest "github.com/LeJamon/go-xrpl/internal/testing/batch"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -292,6 +299,267 @@ func TestRouterDispatchesPreDecodedTransaction(t *testing.T) {
 
 	assert.True(t, adaptorHasTx(t, a, consensus.TxID(txHash)),
 		"router must accept a pre-decoded (batch-fanned) transaction")
+}
+
+func TestRouterRelaysQueuedTransactionAsDeferred(t *testing.T) {
+	a := newTestAdaptor(t)
+	router := newTestRouter(&mockEngine{}, a, nil)
+
+	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+	master := jtx.MasterAccount()
+	alice := jtx.NewAccount("queued-relay-destination")
+	txn := payment.Pay(master, alice, 100_000_000).Fee(1).Sequence(1).Build()
+	env.SignWith(txn, master)
+	txMap, err := txn.Flatten()
+	require.NoError(t, err)
+	hexStr, err := binarycodec.Encode(txMap)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(hexStr)
+	require.NoError(t, err)
+
+	dispatch := router.handleTransaction(&peermanagement.InboundMessage{
+		PeerID: 3,
+		Type:   message.TypeTransaction,
+		Tx: &message.Transaction{
+			RawTransaction: blob,
+			Status:         message.TxStatusNew,
+		},
+	})
+	require.NoError(t, dispatch.submitError)
+	require.Equal(t, openledger.ResultSuccess, dispatch.submitResult)
+	require.True(t, dispatch.deferred)
+	require.True(t, dispatch.relayed)
+
+	frame, err := message.EncodeFrame(relayTransactionMessage(blob, dispatch.deferred))
+	require.NoError(t, err)
+	msgType, decoded := decodeFrame(t, frame)
+	require.Equal(t, message.TypeTransaction, msgType)
+	relayed := decoded.(*message.Transaction)
+	require.Equal(t, message.TxStatusCurrent, relayed.Status)
+	require.True(t, relayed.Deferred)
+}
+
+func TestRouterDropsStandaloneBatchInnerTransaction(t *testing.T) {
+	engine := &mockEngine{}
+	a := newTestAdaptor(t)
+	router := newTestRouter(engine, a, nil)
+
+	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+	master := jtx.MasterAccount()
+	alice := jtx.NewAccount("batch-inner-destination")
+	txn := payment.Pay(master, alice, 100_000_000).Sequence(1).Build()
+	env.SignWith(txn, master)
+	txn.GetCommon().SetFlags(tx.TfInnerBatchTxn)
+	txMap, err := txn.Flatten()
+	require.NoError(t, err)
+	hexStr, err := binarycodec.Encode(txMap)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(hexStr)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(blob), 8)
+	require.Equal(t, byte(0x12), blob[0])
+	require.Equal(t, byte(0x22), blob[3])
+	reorderedBlob := make([]byte, 0, len(blob))
+	reorderedBlob = append(reorderedBlob, blob[3:8]...)
+	reorderedBlob = append(reorderedBlob, blob[:3]...)
+	reorderedBlob = append(reorderedBlob, blob[8:]...)
+	require.NotEqual(t, blob, reorderedBlob)
+	_, err = binarycodec.DecodeBytes(reorderedBlob)
+	require.NoError(t, err)
+	parsed, err := tx.ParseFromBinary(blob)
+	require.NoError(t, err)
+	txHash, err := tx.ComputeTransactionHash(parsed)
+	require.NoError(t, err)
+
+	msg := &peermanagement.InboundMessage{
+		PeerID: 3,
+		Type:   message.TypeTransaction,
+		Tx: &message.Transaction{
+			RawTransaction: reorderedBlob,
+			Status:         message.TxStatusNew,
+		},
+	}
+	dispatch := router.handleTransaction(msg)
+	require.Equal(t, resource.FeeModerateBurdenPeer(), dispatch.charge)
+	require.Equal(t, "inner batch txn", dispatch.chargeContext)
+	require.False(t, dispatch.relayed)
+	dispatch = router.handleTransaction(msg)
+	require.Equal(t, resource.FeeModerateBurdenPeer(), dispatch.charge)
+	require.Equal(t, "inner batch txn", dispatch.chargeContext)
+	require.False(t, dispatch.relayed)
+	assert.False(t, adaptorHasTx(t, a, consensus.TxID(txHash)))
+	shouldProcess, bad := router.txSeen.claim(txHash, 0)
+	require.True(t, shouldProcess)
+	require.False(t, bad)
+}
+
+func TestRouterRelaysSignedDirectBatchSignerOuterOnly(t *testing.T) {
+	master := jtx.MasterAccount()
+	bob := jtx.NewAccount("batch-relay-bob")
+	genesisConfig := genesis.DefaultConfig()
+	genesisConfig.Amendments = append(genesisConfig.Amendments, amendment.FeatureBatchV1_1)
+	genesisConfig.InitialAccounts = append(genesisConfig.InitialAccounts, genesis.InitialAccount{
+		Address:  bob.Address,
+		Balance:  uint64(jtx.XRP(1_000)),
+		Sequence: 1,
+	})
+	svc, err := ledgerservice.New(ledgerservice.Config{
+		Standalone:    true,
+		Startup:       ledgerservice.StartupConfig{Mode: ledgerservice.StartupFresh},
+		GenesisConfig: genesisConfig,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	require.True(t, svc.TransactionRules().Enabled(amendment.FeatureBatchV1_1))
+	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
+	require.NoError(t, err)
+	a := New(Config{LedgerService: svc, Identity: identity})
+	router := newTestRouter(&mockEngine{}, a, nil)
+
+	batch := batchtest.NewBatchBuilder(master, 1, 50, batchtx.BatchFlagAllOrNothing).
+		AddInnerTx(batchtest.MakeInnerPaymentXRP(master, bob, 1, 2)).
+		AddInnerTx(batchtest.MakeInnerPaymentXRP(bob, master, 1, 1)).
+		AddSigner(bob, "DEADBEEF").
+		Build()
+	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+	env.SignWith(batch, master)
+	txMap, err := batch.Flatten()
+	require.NoError(t, err)
+	hexStr, err := binarycodec.Encode(txMap)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(hexStr)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(blob), 8)
+	require.Equal(t, byte(0x12), blob[0])
+	require.Equal(t, byte(0x22), blob[3])
+	reorderedBlob := make([]byte, 0, len(blob))
+	reorderedBlob = append(reorderedBlob, blob[3:8]...)
+	reorderedBlob = append(reorderedBlob, blob[:3]...)
+	reorderedBlob = append(reorderedBlob, blob[8:]...)
+	require.NotEqual(t, blob, reorderedBlob)
+	_, err = binarycodec.DecodeBytes(reorderedBlob)
+	require.NoError(t, err)
+	parsed, err := tx.ParseFromBinary(blob)
+	require.NoError(t, err)
+	parsedBatch, ok := parsed.(*batchtx.Batch)
+	require.True(t, ok)
+	require.Len(t, parsedBatch.BatchSigners, 1)
+	require.NotEmpty(t, parsedBatch.BatchSigners[0].BatchSigner.BatchTxnSignature)
+	outerHash, err := tx.ComputeTransactionHash(parsedBatch)
+	require.NoError(t, err)
+	innerHashes := make([][32]byte, len(parsedBatch.RawTransactions))
+	for i := range parsedBatch.RawTransactions {
+		innerHashes[i], err = tx.ComputeTransactionHash(parsedBatch.RawTransactions[i].RawTransaction.InnerTx)
+		require.NoError(t, err)
+	}
+
+	dispatch := router.handleTransaction(&peermanagement.InboundMessage{
+		PeerID: 3,
+		Type:   message.TypeTransaction,
+		Tx: &message.Transaction{
+			RawTransaction: reorderedBlob,
+			Status:         message.TxStatusNew,
+		},
+	})
+	require.Zero(t, dispatch.charge.Cost())
+	require.Empty(t, dispatch.chargeContext)
+	require.NoError(t, dispatch.submitError)
+	if dispatch.submitResult != openledger.ResultSuccess {
+		simulated, simErr := svc.SimulateTransaction(parsedBatch)
+		require.NoError(t, simErr)
+		t.Fatalf("submit result %v, simulated TER %s (%s)", dispatch.submitResult, simulated.Result, simulated.Message)
+	}
+	require.Equal(t, openledger.ResultSuccess, dispatch.submitResult)
+	require.True(t, dispatch.relayed)
+	relayBlob, _, _, ok := svc.TransactionForRelay(outerHash)
+	require.True(t, ok)
+	require.Equal(t, blob, relayBlob)
+	require.True(t, adaptorHasTx(t, a, consensus.TxID(outerHash)))
+	for _, innerHash := range innerHashes {
+		require.False(t, adaptorHasTx(t, a, consensus.TxID(innerHash)))
+	}
+
+	duplicate := router.handleTransaction(&peermanagement.InboundMessage{
+		PeerID: 4,
+		Type:   message.TypeTransaction,
+		Tx: &message.Transaction{
+			RawTransaction: blob,
+			Status:         message.TxStatusNew,
+		},
+	})
+	require.Zero(t, duplicate.charge.Cost())
+	require.Empty(t, duplicate.chargeContext)
+	require.NoError(t, duplicate.submitError)
+	require.False(t, duplicate.relayed)
+
+	parsedBatch.BatchSigners[0].BatchSigner.BatchTxnSignature = "DEADBEEF"
+	badMap, err := parsedBatch.Flatten()
+	require.NoError(t, err)
+	badHex, err := binarycodec.Encode(badMap)
+	require.NoError(t, err)
+	badBlob, err := hex.DecodeString(badHex)
+	require.NoError(t, err)
+	badMessage := &peermanagement.InboundMessage{
+		PeerID: 5,
+		Type:   message.TypeTransaction,
+		Tx: &message.Transaction{
+			RawTransaction: badBlob,
+			Status:         message.TxStatusNew,
+		},
+	}
+	badDispatch := router.handleTransaction(badMessage)
+	require.Error(t, badDispatch.submitError)
+	require.Equal(t, resource.FeeInvalidSignature(), badDispatch.charge)
+	require.Equal(t, "transaction-invalid-signature", badDispatch.chargeContext)
+	require.False(t, badDispatch.relayed)
+
+	knownBad := router.handleTransaction(badMessage)
+	require.NoError(t, knownBad.submitError)
+	require.Equal(t, resource.FeeUselessData(), knownBad.charge)
+	require.Equal(t, "transaction-known-bad", knownBad.chargeContext)
+	require.False(t, knownBad.relayed)
+	router.txSeen.now = func() time.Time {
+		return time.Now().Add(transactionProcessInterval)
+	}
+	admittedKnownBad := router.handleTransaction(badMessage)
+	require.NoError(t, admittedKnownBad.submitError)
+	require.Equal(t, resource.FeeInvalidSignature(), admittedKnownBad.charge)
+	require.Equal(t, "transaction-known-bad-signature", admittedKnownBad.chargeContext)
+	require.False(t, admittedKnownBad.relayed)
+	router.txSeen.now = time.Now
+
+	validatedIndex := svc.GetValidatedLedgerIndex()
+	require.NotZero(t, validatedIndex)
+	expired := uint32(0)
+	parsedBatch.LastLedgerSequence = &expired
+	expiredMap, err := parsedBatch.Flatten()
+	require.NoError(t, err)
+	expiredHex, err := binarycodec.Encode(expiredMap)
+	require.NoError(t, err)
+	expiredBlob, err := hex.DecodeString(expiredHex)
+	require.NoError(t, err)
+	expiredMessage := &peermanagement.InboundMessage{
+		PeerID: 6,
+		Type:   message.TypeTransaction,
+		Tx: &message.Transaction{
+			RawTransaction: expiredBlob,
+			Status:         message.TxStatusNew,
+		},
+	}
+	expiredDispatch := router.handleTransaction(expiredMessage)
+	require.NoError(t, expiredDispatch.submitError)
+	require.Equal(t, resource.FeeUselessData(), expiredDispatch.charge)
+	require.Equal(t, "transaction-expired", expiredDispatch.chargeContext)
+	require.False(t, expiredDispatch.relayed)
+
+	expiredRepeat := router.handleTransaction(expiredMessage)
+	require.NoError(t, expiredRepeat.submitError)
+	require.Equal(t, resource.FeeUselessData(), expiredRepeat.charge)
+	require.Equal(t, "transaction-known-bad", expiredRepeat.chargeContext)
+	require.False(t, expiredRepeat.relayed)
 }
 
 func TestRouterIgnoresUnknownMessages(t *testing.T) {

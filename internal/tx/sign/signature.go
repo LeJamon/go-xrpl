@@ -95,17 +95,12 @@ func IsMultiSigned(tx txcore.Transaction) bool {
 }
 
 // CheckSTTxSignature mirrors the signature portion of rippled's checkValidity.
-// It returns rippled's failure reason, or an empty string when the outer and
-// optional counterparty signatures are valid.
+// It returns rippled's failure reason, or an empty string when every signature
+// carried by the transaction is valid.
 func CheckSTTxSignature(transaction txcore.Transaction, rules *amendment.Rules, checkSigs bool) string {
 	common := transaction.GetCommon()
-	if common.GetFlags()&txcore.TfInnerBatchTxn != 0 && rules != nil && rules.Enabled(amendment.FeatureBatch) {
-		if common.HasField("TxnSignature") || common.SigningPubKey != "" || common.HasField("Signers") {
-			return "Malformed: Invalid inner batch transaction."
-		}
-		if !rules.Enabled(amendment.FeatureFixBatchInnerSigs) {
-			return ""
-		}
+	if common.GetFlags()&txcore.TfInnerBatchTxn != 0 {
+		return "Batch inner transactions are never considered validly signed."
 	}
 	if !checkSigs {
 		return ""
@@ -131,12 +126,22 @@ func CheckSTTxSignature(transaction txcore.Transaction, rules *amendment.Rules, 
 			return reason
 		}
 	}
+	if common.SponsorSignature != nil {
+		if reason := checkSTTxSponsorSignature(transaction, common.SponsorSignature); reason != "" {
+			return reason
+		}
+	}
+	if verifier, ok := transaction.(txcore.BatchSignatureVerifier); ok {
+		if err := verifier.VerifyBatchSignatures(); err != nil {
+			return err.Error()
+		}
+	}
 	return ""
 }
 
 func checkSTTxCounterpartySignature(transaction txcore.Transaction, cp *txcore.CounterpartySignature) string {
-	hasSigners := len(cp.Signers) > 0
-	hasTxnSignature := cp.TxnSignature != ""
+	hasSigners := len(cp.Signers) > 0 || cp.HasField("Signers")
+	hasTxnSignature := cp.TxnSignature != "" || cp.HasField("TxnSignature")
 	if raw := transaction.GetRawBytes(); len(raw) > 0 {
 		if fields, err := binarycodec.DecodeBytes(raw); err == nil {
 			if object, ok := fields["CounterpartySignature"].(map[string]any); ok {
@@ -165,6 +170,42 @@ func checkSTTxCounterpartySignature(transaction txcore.Transaction, cp *txcore.C
 		return counterpartyPrefix + "Invalid Signers array size."
 	}
 	if err := VerifyCounterpartySignature(transaction, cp, true); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+func checkSTTxSponsorSignature(transaction txcore.Transaction, sponsor *txcore.SponsorSignature) string {
+	hasSigners := len(sponsor.Signers) > 0 || sponsor.HasField("Signers")
+	hasTxnSignature := sponsor.TxnSignature != "" || sponsor.HasField("TxnSignature")
+	if raw := transaction.GetRawBytes(); len(raw) > 0 {
+		if fields, err := binarycodec.DecodeBytes(raw); err == nil {
+			if object, ok := fields["SponsorSignature"].(map[string]any); ok {
+				_, hasSigners = object["Signers"]
+				_, hasTxnSignature = object["TxnSignature"]
+			}
+		}
+	}
+
+	if sponsor.SigningPubKey != "" {
+		if hasSigners {
+			return sponsorPrefix + "Cannot both single- and multi-sign."
+		}
+		if err := VerifySponsorSignature(transaction, sponsor, true); err != nil {
+			return err.Error()
+		}
+		return ""
+	}
+	if !hasSigners {
+		return sponsorPrefix + "Empty SigningPubKey."
+	}
+	if hasTxnSignature {
+		return sponsorPrefix + "Cannot both single- and multi-sign."
+	}
+	if len(sponsor.Signers) < MinMultiSigners || len(sponsor.Signers) > MaxMultiSigners {
+		return sponsorPrefix + "Invalid Signers array size."
+	}
+	if err := VerifySponsorSignature(transaction, sponsor, true); err != nil {
 		return err.Error()
 	}
 	return ""
@@ -672,6 +713,10 @@ func copyMap(m map[string]any) map[string]any {
 
 func flattenForSigning(tx txcore.Transaction) (map[string]any, error) {
 	if raw := tx.GetRawBytes(); len(raw) > 0 {
+		matches, err := txcore.CurrentFieldsMatchRaw(tx)
+		if err != nil || !matches {
+			return nil, errors.New("transaction fields do not match retained wire transaction")
+		}
 		txMap, err := binarycodec.DecodeBytes(raw)
 		if err != nil {
 			return nil, err

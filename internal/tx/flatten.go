@@ -288,7 +288,11 @@ func flattenAsset(a Asset) map[string]any {
 }
 
 func flattenMemos(memos []MemoWrapper) []map[string]any {
-	return flattenStructSlice(reflect.ValueOf(memos))
+	result := make([]map[string]any, len(memos))
+	for i, wrapper := range memos {
+		result[i] = map[string]any{"Memo": wrapper.Memo.toMap()}
+	}
+	return result
 }
 
 // flattenStructSlice converts a slice of structs to []map[string]any for STArray serialization.

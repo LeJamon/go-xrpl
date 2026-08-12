@@ -29,10 +29,10 @@ var (
 // observing FeatureXxx never see a zero ID.
 var (
 	FeatureSponsor                       = registerFeature("Sponsor", SupportedYes, VoteDefaultNo)
+	FeatureBatchV1_1                     = registerFeature("BatchV1_1", SupportedYes, VoteDefaultNo)
 	FeatureFixCleanup3_2_0               = registerFix("fixCleanup3_2_0", SupportedYes, VoteDefaultNo)
 	FeatureFixCleanup3_1_3               = registerFix("fixCleanup3_1_3", SupportedYes, VoteDefaultYes)
 	FeatureMPTokensV2                    = registerFeature("MPTokensV2", SupportedNo, VoteDefaultNo)
-	FeatureFixBatchInnerSigs             = registerFix("fixBatchInnerSigs", SupportedNo, VoteDefaultNo)
 	FeatureConfidentialTransfer          = registerFeature("ConfidentialTransfer", confidentialTransferSupport(), VoteDefaultNo)
 	FeatureFixDirectoryLimit             = registerFix("fixDirectoryLimit", SupportedYes, VoteDefaultNo)
 	FeatureFixIncludeKeyletFields        = registerFix("fixIncludeKeyletFields", SupportedYes, VoteDefaultNo)
@@ -45,7 +45,6 @@ var (
 	FeatureFixEnforceNFTokenTrustlineV2  = registerFix("fixEnforceNFTokenTrustlineV2", SupportedYes, VoteDefaultNo)
 	FeatureFixAMMv1_3                    = registerFix("fixAMMv1_3", SupportedYes, VoteDefaultNo)
 	FeaturePermissionedDEX               = registerFeature("PermissionedDEX", SupportedYes, VoteDefaultNo)
-	FeatureBatch                         = registerFeature("Batch", SupportedNo, VoteDefaultNo)
 	FeatureLendingProtocol               = registerFeature("LendingProtocol", SupportedYes, VoteDefaultNo)
 	FeatureSingleAssetVault              = registerFeature("SingleAssetVault", SupportedYes, VoteDefaultNo)
 	FeaturePermissionDelegationV1_1      = registerFeature("PermissionDelegationV1_1", SupportedNo, VoteDefaultNo)

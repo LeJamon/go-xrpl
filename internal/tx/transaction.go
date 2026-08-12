@@ -1,6 +1,8 @@
 package tx
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -33,11 +35,11 @@ type Transaction interface {
 	// Flatten returns a flat map of all transaction fields for serialization
 	Flatten() (map[string]any, error)
 
-	// GetRawBytes returns the original serialized bytes (for hash computation)
-	// Returns nil if transaction was not parsed from bytes
+	// GetRawBytes returns the canonical serialized bytes retained for hashing.
+	// It returns nil if the transaction has not been parsed or bound to bytes.
 	GetRawBytes() []byte
 
-	// SetRawBytes stores the original serialized bytes
+	// SetRawBytes stores canonical serialized bytes retained by the transaction.
 	SetRawBytes([]byte)
 
 	// RequiredAmendments returns the list of amendment feature IDs that must be enabled
@@ -125,6 +127,14 @@ type SigValidatedPreflighter interface {
 	PreflightSigValidated() error
 }
 
+// BatchInnerPreflightRunner owns the ordered validation of a Batch's inner
+// transactions. The callback runs the engine's common and type-specific
+// preflight for exactly one inner transaction.
+type BatchInnerPreflightRunner interface {
+	ValidateBatchOuter() error
+	PreflightInnerTransactions(func(Transaction) ter.Result) error
+}
+
 // Preclaimer is implemented by transaction types that need additional
 // stateful validation beyond the engine's common preclaim checks.
 // Preclaim runs AFTER the engine's sequence/fee/signature checks and
@@ -187,6 +197,12 @@ type BatchSignatureVerifier interface {
 	VerifyBatchSignatures() error
 }
 
+// CounterpartyProvider is implemented by transactions that name an account
+// whose consent is required in addition to the initiator's authorization.
+type CounterpartyProvider interface {
+	GetCounterparty() string
+}
+
 // Amount is an alias for state.Amount — represents either XRP (as drops int64) or an issued currency amount
 type Amount = state.Amount
 
@@ -208,9 +224,46 @@ func NewIssuedAmountFromFloat64(value float64, currency, issuer string) Amount {
 
 // Memo represents a memo attached to a transaction
 type Memo struct {
-	MemoType   string `json:"MemoType,omitempty"`
-	MemoData   string `json:"MemoData,omitempty"`
-	MemoFormat string `json:"MemoFormat,omitempty"`
+	MemoType      string `json:"MemoType,omitempty"`
+	MemoData      string `json:"MemoData,omitempty"`
+	MemoFormat    string `json:"MemoFormat,omitempty"`
+	presentFields map[string]bool
+}
+
+func (m *Memo) UnmarshalJSON(data []byte) error {
+	type memoAlias Memo
+	var decoded memoAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*m = Memo(decoded)
+	m.presentFields = make(map[string]bool, len(fields))
+	for name := range fields {
+		m.presentFields[name] = true
+	}
+	return nil
+}
+
+func (m Memo) MarshalJSON() ([]byte, error) {
+	return json.Marshal(m.toMap())
+}
+
+func (m Memo) toMap() map[string]any {
+	fields := make(map[string]any, len(m.presentFields))
+	if m.MemoType != "" || m.presentFields["MemoType"] {
+		fields["MemoType"] = m.MemoType
+	}
+	if m.MemoData != "" || m.presentFields["MemoData"] {
+		fields["MemoData"] = m.MemoData
+	}
+	if m.MemoFormat != "" || m.presentFields["MemoFormat"] {
+		fields["MemoFormat"] = m.MemoFormat
+	}
+	return fields
 }
 
 // MemoWrapper wraps a Memo for JSON serialization
@@ -240,6 +293,7 @@ type CounterpartySignature struct {
 	SigningPubKey string          `json:"SigningPubKey,omitempty"`
 	TxnSignature  string          `json:"TxnSignature,omitempty"`
 	Signers       []SignerWrapper `json:"Signers,omitempty"`
+	presentFields map[string]bool
 }
 
 // SponsorSignature is the nested signature object attached by a transaction's
@@ -250,6 +304,60 @@ type SponsorSignature struct {
 	SigningPubKey string          `json:"SigningPubKey,omitempty"`
 	TxnSignature  string          `json:"TxnSignature,omitempty"`
 	Signers       []SignerWrapper `json:"Signers,omitempty"`
+	presentFields map[string]bool
+}
+
+func (cs *CounterpartySignature) UnmarshalJSON(data []byte) error {
+	type signatureAlias CounterpartySignature
+	var decoded signatureAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*cs = CounterpartySignature(decoded)
+	cs.presentFields = make(map[string]bool, len(fields))
+	for name := range fields {
+		cs.presentFields[name] = true
+	}
+	return nil
+}
+
+func (ss *SponsorSignature) UnmarshalJSON(data []byte) error {
+	type signatureAlias SponsorSignature
+	var decoded signatureAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*ss = SponsorSignature(decoded)
+	ss.presentFields = make(map[string]bool, len(fields))
+	for name := range fields {
+		ss.presentFields[name] = true
+	}
+	return nil
+}
+
+func (cs *CounterpartySignature) HasField(name string) bool { return cs.presentFields[name] }
+func (ss *SponsorSignature) HasField(name string) bool      { return ss.presentFields[name] }
+
+func (cs *CounterpartySignature) MarkFieldPresent(name string) {
+	if cs.presentFields == nil {
+		cs.presentFields = make(map[string]bool)
+	}
+	cs.presentFields[name] = true
+}
+
+func (ss *SponsorSignature) MarkFieldPresent(name string) {
+	if ss.presentFields == nil {
+		ss.presentFields = make(map[string]bool)
+	}
+	ss.presentFields[name] = true
 }
 
 // ToMap serializes the counterparty object for the binary codec. SigningPubKey
@@ -258,10 +366,10 @@ type SponsorSignature struct {
 // reproduces the original wire bytes.
 func (cs *CounterpartySignature) ToMap() map[string]any {
 	m := map[string]any{"SigningPubKey": cs.SigningPubKey}
-	if cs.TxnSignature != "" {
+	if cs.TxnSignature != "" || cs.HasField("TxnSignature") {
 		m["TxnSignature"] = cs.TxnSignature
 	}
-	if len(cs.Signers) > 0 {
+	if len(cs.Signers) > 0 || cs.HasField("Signers") {
 		signers := make([]map[string]any, len(cs.Signers))
 		for i, sw := range cs.Signers {
 			signers[i] = map[string]any{
@@ -279,10 +387,10 @@ func (cs *CounterpartySignature) ToMap() map[string]any {
 
 func (ss *SponsorSignature) ToMap() map[string]any {
 	m := map[string]any{"SigningPubKey": ss.SigningPubKey}
-	if ss.TxnSignature != "" {
+	if ss.TxnSignature != "" || ss.HasField("TxnSignature") {
 		m["TxnSignature"] = ss.TxnSignature
 	}
-	if len(ss.Signers) > 0 {
+	if len(ss.Signers) > 0 || ss.HasField("Signers") {
 		signers := make([]map[string]any, len(ss.Signers))
 		for i, sw := range ss.Signers {
 			signers[i] = map[string]any{
@@ -337,8 +445,7 @@ type Common struct {
 	SponsorFlags     *uint32           `json:"SponsorFlags,omitempty"`
 	SponsorSignature *SponsorSignature `json:"SponsorSignature,omitempty"`
 
-	// RawBytes stores the original serialized bytes for hash computation
-	RawBytes []byte `json:"-"`
+	rawBytes []byte
 
 	// PresentFields tracks which fields were present in the original parsed data.
 	// This is used to distinguish between a field being absent vs explicitly set to empty.
@@ -351,7 +458,8 @@ type Common struct {
 	// guards it: ingress writes the verdict (PrewarmSignature) and then submits
 	// on the same goroutine, so the write happens-before the in-strand read and
 	// before the parsed transaction is shared with any other goroutine.
-	sigVerified bool
+	sigVerified     bool
+	sigVerifiedTxID [32]byte
 
 	// cachedTxID memoises this transaction's id. The id is a pure function of
 	// RawBytes, so the cache stays valid until SetRawBytes replaces them (which
@@ -374,6 +482,9 @@ type Common struct {
 	// amendment change. Same single-goroutine, unsynchronised contract as
 	// cachedTxID.
 	preflightedRules *amendment.Rules
+	preflightedTxID  [32]byte
+	rawFieldsID      [32]byte
+	rawFieldsIDSet   bool
 }
 
 // Validate validates the common fields. preflightCommonFields catches these
@@ -404,16 +515,37 @@ func (c *Common) SetPresentFields(fields map[string]bool) {
 	c.PresentFields = fields
 }
 
-// GetRawBytes returns the original serialized bytes
+// GetRawBytes returns the retained canonical serialized bytes.
 func (c *Common) GetRawBytes() []byte {
-	return c.RawBytes
+	return append([]byte(nil), c.rawBytes...)
 }
 
-// SetRawBytes stores the original serialized bytes, invalidating any memoised
-// transaction id since the id is derived from these bytes.
+// SetRawBytes stores canonical serialized bytes and invalidates every
+// verdict derived from the prior transaction contents.
 func (c *Common) SetRawBytes(data []byte) {
-	c.RawBytes = data
+	sameRaw := bytes.Equal(c.rawBytes, data)
+	c.rawBytes = append([]byte(nil), data...)
+	c.sigVerified = false
+	c.sigVerifiedTxID = [32]byte{}
 	c.txIDCached = false
+	c.cachedTxID = [32]byte{}
+	c.preflightedRules = nil
+	c.preflightedTxID = [32]byte{}
+	if !sameRaw {
+		c.rawFieldsID = [32]byte{}
+		c.rawFieldsIDSet = false
+	}
+}
+
+// MarkRawFieldsIdentity records the current-field identity associated with RawBytes.
+func (c *Common) MarkRawFieldsIdentity(txID [32]byte) {
+	c.rawFieldsID = txID
+	c.rawFieldsIDSet = true
+}
+
+// RawFieldsIdentity returns the current-field identity bound to RawBytes.
+func (c *Common) RawFieldsIdentity() ([32]byte, bool) {
+	return c.rawFieldsID, c.rawFieldsIDSet
 }
 
 // SetFlags sets the flags field
@@ -431,27 +563,35 @@ func (c *Common) GetFlags() uint32 {
 
 // MarkSignatureVerified records that the transaction's cryptographic signature
 // has been verified, so a later in-strand check can skip re-verifying it.
-func (c *Common) MarkSignatureVerified() {
+func (c *Common) MarkSignatureVerified(txID [32]byte) {
 	c.sigVerified = true
+	c.sigVerifiedTxID = txID
 }
 
 // SignatureVerified reports whether the transaction's signature was already
 // verified off-strand (see MarkSignatureVerified).
-func (c *Common) SignatureVerified() bool {
-	return c.sigVerified
+func (c *Common) SignatureVerified(txID ...[32]byte) bool {
+	if !c.sigVerified {
+		return false
+	}
+	return len(txID) == 0 || c.sigVerifiedTxID == txID[0]
 }
 
 // PreflightVerified reports whether this transaction's structural preflight
 // already succeeded under the given rules (see preflightedRules). A nil rules
 // never matches, so the cache is a no-op on paths that do not supply rules.
-func (c *Common) PreflightVerified(rules *amendment.Rules) bool {
-	return c.preflightedRules != nil && c.preflightedRules == rules
+func (c *Common) PreflightVerified(rules *amendment.Rules, txID ...[32]byte) bool {
+	if c.preflightedRules == nil || c.preflightedRules != rules {
+		return false
+	}
+	return len(txID) == 0 || c.preflightedTxID == txID[0]
 }
 
 // MarkPreflightVerified records that the structural preflight succeeded under
 // the given rules so a later in-strand preflight can skip the repeat.
-func (c *Common) MarkPreflightVerified(rules *amendment.Rules) {
+func (c *Common) MarkPreflightVerified(rules *amendment.Rules, txID [32]byte) {
 	c.preflightedRules = rules
+	c.preflightedTxID = txID
 }
 
 // SetSequence sets the sequence number
@@ -514,13 +654,13 @@ func (c *Common) ToMap() map[string]any {
 	if c.LastLedgerSequence != nil {
 		m["LastLedgerSequence"] = *c.LastLedgerSequence
 	}
-	if len(c.Memos) > 0 {
+	if len(c.Memos) > 0 || c.HasField("Memos") {
 		m["Memos"] = flattenMemos(c.Memos)
 	}
 	if c.NetworkID != nil {
 		m["NetworkID"] = *c.NetworkID
 	}
-	if len(c.Signers) > 0 {
+	if len(c.Signers) > 0 || c.HasField("Signers") {
 		signers := make([]map[string]any, len(c.Signers))
 		for i, sw := range c.Signers {
 			signers[i] = map[string]any{
@@ -542,7 +682,7 @@ func (c *Common) ToMap() map[string]any {
 	if c.TicketSequence != nil {
 		m["TicketSequence"] = *c.TicketSequence
 	}
-	if c.TxnSignature != "" {
+	if c.TxnSignature != "" || c.HasField("TxnSignature") {
 		m["TxnSignature"] = c.TxnSignature
 	}
 	if c.CounterpartySignature != nil {
@@ -597,7 +737,8 @@ func (c *Common) SeqProxyKey() uint64 {
 // BaseTx provides a base implementation for transactions
 type BaseTx struct {
 	Common
-	txType Type
+	txType         Type
+	fallbackFields map[string]any
 }
 
 func (b *BaseTx) TxType() Type {
@@ -614,7 +755,49 @@ func (b *BaseTx) Validate() error {
 }
 
 func (b *BaseTx) Flatten() (map[string]any, error) {
-	return b.Common.ToMap(), nil
+	fields := make(map[string]any, len(b.fallbackFields)+len(commonFields))
+	for name, value := range b.fallbackFields {
+		fields[name] = cloneTransactionFieldValue(value)
+	}
+	for name, value := range b.Common.ToMap() {
+		fields[name] = value
+	}
+	return fields, nil
+}
+
+func (b *BaseTx) setFallbackFields(fields map[string]any) {
+	b.fallbackFields = make(map[string]any)
+	for name, value := range fields {
+		if _, common := commonFieldStyles[name]; common {
+			continue
+		}
+		b.fallbackFields[name] = cloneTransactionFieldValue(value)
+	}
+}
+
+func cloneTransactionFieldValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		copy := make(map[string]any, len(typed))
+		for name, nested := range typed {
+			copy[name] = cloneTransactionFieldValue(nested)
+		}
+		return copy
+	case []any:
+		copy := make([]any, len(typed))
+		for i, nested := range typed {
+			copy[i] = cloneTransactionFieldValue(nested)
+		}
+		return copy
+	case []map[string]any:
+		copy := make([]map[string]any, len(typed))
+		for i, nested := range typed {
+			copy[i] = cloneTransactionFieldValue(nested).(map[string]any)
+		}
+		return copy
+	default:
+		return value
+	}
 }
 
 // RequiredAmendments returns no required amendments by default.

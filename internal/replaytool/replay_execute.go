@@ -116,6 +116,7 @@ func executeBlock(ctx context.Context, input blockExecution) (*executedBlock, er
 		TxResults: make([]txApplyInfo, 0, len(input.Transactions)),
 		Errors:    make([]string, 0),
 	}
+	var expectedBatchInners []tx.AppliedInnerTransaction
 	for _, transaction := range input.Transactions {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -125,6 +126,21 @@ func executeBlock(ctx context.Context, input blockExecution) (*executedBlock, er
 			Hash:  hex.EncodeToString(transaction.Hash[:]),
 		}
 		fillTxDisplay(&txInfo, transaction.Blob, transaction.Transaction, input.WantTxDetail)
+		isBatchInner := transaction.Transaction.GetCommon().GetFlags()&tx.TfInnerBatchTxn != 0
+		if isBatchInner {
+			if len(expectedBatchInners) == 0 {
+				return nil, fmt.Errorf("tx %d is an unexpected batch inner transaction", transaction.Index)
+			}
+			if err := fillExpectedBatchInner(&txInfo, transaction, expectedBatchInners[0]); err != nil {
+				return nil, err
+			}
+			result.TxResults = append(result.TxResults, txInfo)
+			expectedBatchInners = expectedBatchInners[1:]
+			continue
+		}
+		if len(expectedBatchInners) != 0 {
+			return nil, fmt.Errorf("tx %d appears before all batch inner transactions", transaction.Index)
+		}
 		blockTxResult, err := processor.ApplyLedgerTransaction(transaction.Transaction, transaction.Blob)
 		if err != nil {
 			return nil, fmt.Errorf("tx %d apply: %w", transaction.Index, err)
@@ -145,6 +161,10 @@ func executeBlock(ctx context.Context, input blockExecution) (*executedBlock, er
 			txInfo.MetaBlob = metadata
 		}
 		result.TxResults = append(result.TxResults, txInfo)
+		expectedBatchInners = append(expectedBatchInners, applyResult.AppliedInnerTransactions...)
+	}
+	if len(expectedBatchInners) != 0 {
+		return nil, fmt.Errorf("replay ended before all batch inner transactions")
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -176,6 +196,24 @@ func executeBlock(ctx context.Context, input blockExecution) (*executedBlock, er
 		}
 	}
 	return result, nil
+}
+
+func fillExpectedBatchInner(info *txApplyInfo, input blockTransaction, expected tx.AppliedInnerTransaction) error {
+	expectedHash, hashErr := tx.ComputeTransactionHash(expected.Transaction)
+	if hashErr != nil || expectedHash != input.Hash || expected.Metadata == nil ||
+		expected.Metadata.TransactionIndex != uint32(input.Index) ||
+		expected.Metadata.ParentBatchID == nil {
+		return fmt.Errorf("tx %d batch inner does not match outer execution", input.Index)
+	}
+	metadata, err := tx.SerializeMetadata(expected.Metadata)
+	if err != nil {
+		return fmt.Errorf("tx %d serializing batch inner metadata: %w", input.Index, err)
+	}
+	info.Result = expected.Metadata.TransactionResult.String()
+	info.ResultCode = int(expected.Metadata.TransactionResult)
+	info.Applied = true
+	info.MetaBlob = metadata
+	return nil
 }
 
 func (r *replayRangeRunner) processBlockShared(

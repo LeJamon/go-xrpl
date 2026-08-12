@@ -20,7 +20,7 @@ import (
 // canonical-sorted slices into ApplyTxs (rippled RCLConsensus.cpp:512
 // uses the SHAMap root of the agreed tx set as the salt).
 type PendingTx struct {
-	// Blob is the raw signed binary transaction.
+	// Blob is the canonical signed binary transaction.
 	Blob []byte
 	// Hash is SHA-512Half of the TXN prefix concatenated with Blob.
 	Hash [32]byte
@@ -61,14 +61,14 @@ const (
 	ResultRetry
 )
 
-// ParsePendingTx creates a PendingTx from a raw transaction blob,
-// extracting the account ID, sequence proxy, and tx hash.
+// ParsePendingTx creates a PendingTx from a transaction blob, canonicalizing
+// its field order before extracting the account ID, sequence proxy, and hash.
 func ParsePendingTx(blob []byte) (PendingTx, error) {
 	transaction, err := tx.ParseFromBinary(blob)
 	if err != nil {
 		return PendingTx{}, err
 	}
-	transaction.SetRawBytes(blob)
+	canonicalBlob := transaction.GetRawBytes()
 
 	common := transaction.GetCommon()
 
@@ -92,7 +92,7 @@ func ParsePendingTx(blob []byte) (PendingTx, error) {
 	}
 
 	return PendingTx{
-		Blob:                  blob,
+		Blob:                  canonicalBlob,
 		Hash:                  txHash,
 		Account:               accountID,
 		Sequence:              common.SeqProxy(),
