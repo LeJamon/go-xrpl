@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
@@ -409,7 +408,7 @@ func TestLedgerCleanerMethod(t *testing.T) {
 		require.NotNil(t, rpcErr)
 	})
 
-	t.Run("Configures and reports status when wired", func(t *testing.T) {
+	t.Run("Configures and returns the rippled response", func(t *testing.T) {
 		// The network/sync gate is enforced by the dispatcher (conditionMet);
 		// calling Handle directly here exercises the handler in isolation.
 		var gotParams types.LedgerCleanerParams
@@ -434,28 +433,25 @@ func TestLedgerCleanerMethod(t *testing.T) {
 
 		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"min_ledger":5,"max_ledger":9,"full":true}`))
 		require.Nil(t, rpcErr)
-		resp, ok := result.(map[string]any)
-		require.True(t, ok)
-		assert.Equal(t, "running", resp["status"])
-		assert.Equal(t, true, resp["check_nodes"])
-		assert.Equal(t, true, resp["fix_txns"])
-		assert.Equal(t, uint64(2), resp["missing_nodes"])
-		assert.Equal(t, 1, resp["fail_counts"])
-		assert.Equal(t, "Cleaner configured", resp["message"])
+		assert.Equal(t, map[string]any{"message": "Cleaner configured"}, result)
 		require.NotNil(t, gotParams.Full)
 		assert.True(t, *gotParams.Full)
 		require.NotNil(t, gotParams.MinLedger)
 		assert.Equal(t, uint32(5), *gotParams.MinLedger)
 	})
 
-	t.Run("Empty and unknown-only requests are status queries", func(t *testing.T) {
-		var configurations atomic.Int32
-		services.LedgerCleanerConfigure = func(types.LedgerCleanerParams) types.LedgerCleanerStatus {
-			configurations.Add(1)
+	t.Run("Empty and unknown-only requests configure the cleaner", func(t *testing.T) {
+		var configurations int
+		services.LedgerCleanerConfigure = func(p types.LedgerCleanerParams) types.LedgerCleanerStatus {
+			configurations++
+			assert.Nil(t, p.Ledger)
+			assert.Nil(t, p.MinLedger)
+			assert.Nil(t, p.MaxLedger)
+			assert.Nil(t, p.Full)
+			assert.Nil(t, p.CheckNodes)
+			assert.Nil(t, p.FixTxns)
+			assert.False(t, p.Stop)
 			return types.LedgerCleanerStatus{State: "running"}
-		}
-		services.LedgerCleanerStatusFn = func() types.LedgerCleanerStatus {
-			return types.LedgerCleanerStatus{State: "idle", LedgersChecked: 3}
 		}
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
@@ -467,15 +463,30 @@ func TestLedgerCleanerMethod(t *testing.T) {
 		for _, params := range []json.RawMessage{nil, {}, json.RawMessage(`{}`), json.RawMessage(`{"unknown":1}`)} {
 			result, rpcErr := method.Handle(ctx, params)
 			require.Nil(t, rpcErr)
-			resp := result.(map[string]any)
-			assert.Equal(t, "idle", resp["status"])
-			assert.Equal(t, uint64(3), resp["ledgers_checked"])
-			assert.NotContains(t, resp, "message")
+			assert.Equal(t, map[string]any{"message": "Cleaner configured"}, result)
 		}
-		assert.Zero(t, configurations.Load())
+		assert.Equal(t, 4, configurations)
 	})
 
-	t.Run("Rejects malformed and out-of-range fields", func(t *testing.T) {
+	t.Run("Rejects malformed input", func(t *testing.T) {
+		services.LedgerCleanerConfigure = func(types.LedgerCleanerParams) types.LedgerCleanerStatus {
+			t.Fatal("invalid input reached cleaner configuration")
+			return types.LedgerCleanerStatus{}
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services:   types.NewTestServiceGraph(services),
+		}
+
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"min_ledger":1`))
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+	})
+
+	t.Run("Returns internal for JsonCpp uint conversion failures", func(t *testing.T) {
 		services.LedgerCleanerConfigure = func(types.LedgerCleanerParams) types.LedgerCleanerStatus {
 			t.Fatal("invalid input reached cleaner configuration")
 			return types.LedgerCleanerStatus{}
@@ -490,14 +501,73 @@ func TestLedgerCleanerMethod(t *testing.T) {
 		for _, params := range []json.RawMessage{
 			json.RawMessage(`{"ledger":-1}`),
 			json.RawMessage(`{"ledger":4294967296}`),
-			json.RawMessage(`{"full":"true"}`),
-			json.RawMessage(`{"min_ledger":1`),
+			json.RawMessage(`{"ledger":[]}`),
+			json.RawMessage(`{"ledger":"not-a-number"}`),
 		} {
 			result, rpcErr := method.Handle(ctx, params)
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		}
+	})
+
+	t.Run("Uses JsonCpp parameter coercion", func(t *testing.T) {
+		var gotParams types.LedgerCleanerParams
+		services.LedgerCleanerConfigure = func(p types.LedgerCleanerParams) types.LedgerCleanerStatus {
+			gotParams = p
+			return types.LedgerCleanerStatus{}
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services:   types.NewTestServiceGraph(services),
+		}
+
+		result, rpcErr := method.Handle(ctx, json.RawMessage(
+			`{"ledger":"+7","min_ledger":null,"max_ledger":true,"full":"true","fix_txns":0,"check_nodes":[],"stop":{}}`,
+		))
+		require.Nil(t, rpcErr)
+		assert.Equal(t, map[string]any{"message": "Cleaner configured"}, result)
+		require.NotNil(t, gotParams.Ledger)
+		assert.Equal(t, uint32(7), *gotParams.Ledger)
+		require.NotNil(t, gotParams.MinLedger)
+		assert.Zero(t, *gotParams.MinLedger)
+		require.NotNil(t, gotParams.MaxLedger)
+		assert.Equal(t, uint32(1), *gotParams.MaxLedger)
+		require.NotNil(t, gotParams.Full)
+		assert.True(t, *gotParams.Full)
+		require.NotNil(t, gotParams.FixTxns)
+		assert.False(t, *gotParams.FixTxns)
+		require.NotNil(t, gotParams.CheckNodes)
+		assert.False(t, *gotParams.CheckNodes)
+		assert.False(t, gotParams.Stop)
+	})
+
+	t.Run("Accepts one optional leading plus on uint strings", func(t *testing.T) {
+		var gotParams types.LedgerCleanerParams
+		services.LedgerCleanerConfigure = func(p types.LedgerCleanerParams) types.LedgerCleanerStatus {
+			gotParams = p
+			return types.LedgerCleanerStatus{}
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services:   types.NewTestServiceGraph(services),
+		}
+
+		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"min_ledger":"+0","max_ledger":"+7"}`))
+		require.Nil(t, rpcErr)
+		require.NotNil(t, gotParams.MinLedger)
+		assert.Zero(t, *gotParams.MinLedger)
+		require.NotNil(t, gotParams.MaxLedger)
+		assert.Equal(t, uint32(7), *gotParams.MaxLedger)
+
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger":"++7"}`))
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	})
 
 	t.Run("Preserves explicit false overrides", func(t *testing.T) {

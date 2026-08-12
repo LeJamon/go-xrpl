@@ -137,10 +137,11 @@ func TestLedgerCleanerProductionBoundaryRepairsDurableTransactionRoot(t *testing
 
 	reacquired := make(chan uint32, 1)
 	var restoreOnce sync.Once
-	source.SetReacquire(func(ctx context.Context, seq uint32) error {
+	source.SetReacquire(func(ctx context.Context, hash [32]byte, seq uint32) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		require.Equal(t, hdr.Hash, hash)
 		var restoreErr error
 		restoreOnce.Do(func() {
 			restoreErr = store.Put(hdr.TxHash[:], encodedTxRoot)
@@ -168,9 +169,6 @@ func TestLedgerCleanerProductionBoundaryRepairsDurableTransactionRoot(t *testing
 				Stop:       p.Stop,
 			}))
 		},
-		LedgerCleanerStatusFn: func() types.LedgerCleanerStatus {
-			return toCleanerStatus(cleaner.Status())
-		},
 	})
 	rpcCtx := &types.RpcContext{
 		Context:    ctx,
@@ -183,11 +181,7 @@ func TestLedgerCleanerProductionBoundaryRepairsDurableTransactionRoot(t *testing
 	require.NoError(t, err)
 	result, rpcErr := method.Handle(rpcCtx, params)
 	require.Nil(t, rpcErr)
-	configured := result.(map[string]any)
-	require.Equal(t, "running", configured["status"])
-	require.Equal(t, true, configured["check_nodes"])
-	require.Equal(t, true, configured["fix_txns"])
-	require.Equal(t, "Cleaner configured", configured["message"])
+	require.Equal(t, map[string]any{"message": "Cleaner configured"}, result)
 
 	select {
 	case seq := <-reacquired:
@@ -211,10 +205,6 @@ func TestLedgerCleanerProductionBoundaryRepairsDurableTransactionRoot(t *testing
 	}
 	require.Equal(t, "idle", cleaner.Status().State, "status=%+v", cleaner.Status())
 
-	result, rpcErr = method.Handle(rpcCtx, nil)
-	require.Nil(t, rpcErr)
-	status := result.(map[string]any)
-	require.Equal(t, "idle", status["status"])
 	require.Equal(t, int32(1), configurations.Load())
 	root, err := family.FetchDurable(ctx, hdr.TxHash)
 	require.NoError(t, err)

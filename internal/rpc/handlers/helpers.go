@@ -248,6 +248,21 @@ func (f *jsonCppBoolField) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type jsonCppUInt32Field struct {
+	value   uint32
+	present bool
+}
+
+func (f *jsonCppUInt32Field) UnmarshalJSON(data []byte) error {
+	value, ok := jsonCppUInt32Raw(data)
+	if !ok {
+		return errors.New("request field is not uint32-convertible")
+	}
+	f.value = value
+	f.present = true
+	return nil
+}
+
 type jsonCppStringField struct {
 	value   string
 	present bool

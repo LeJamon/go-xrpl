@@ -90,8 +90,8 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 	hasLedgerRange := false
 	if minRaw, hasMin := fields["min_ledger"]; hasMin {
 		if maxRaw, hasMax := fields["max_ledger"]; hasMax {
-			minLedger, minOK := txUint32Raw(minRaw)
-			maxLedger, maxOK := txUint32Raw(maxRaw)
+			minLedger, minOK := jsonCppUInt32Raw(minRaw)
+			maxLedger, maxOK := jsonCppUInt32Raw(maxRaw)
 			if !minOK || !maxOK || maxLedger < minLedger {
 				return nil, rpcerrors.RpcErrorInvalidLgrRange()
 			}
@@ -157,7 +157,7 @@ func txNotFoundForSearch(hasRange bool, searched types.TxSearchResult) *rpcerror
 	})
 }
 
-func txUint32Raw(raw json.RawMessage) (uint32, bool) {
+func jsonCppUInt32Raw(raw json.RawMessage) (uint32, bool) {
 	value, err := decodeRawJSONValue(raw)
 	if err != nil {
 		return 0, false
@@ -177,6 +177,9 @@ func txUint32Raw(raw json.RawMessage) (uint32, bool) {
 		}
 		return uint32(number), true
 	case string:
+		if strings.HasPrefix(value, "+") {
+			value = strings.TrimPrefix(value, "+")
+		}
 		number, err := strconv.ParseUint(value, 10, 32)
 		return uint32(number), err == nil
 	default:
