@@ -9,6 +9,8 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	ledgerentry "github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,6 +48,7 @@ func testFillModes(t *testing.T, disabledFeatures []string) {
 		env.Close()
 
 		// bob creates an offer that expires before the next ledger close.
+		expiredOfferSequence := env.Seq(bob)
 		result := env.Submit(
 			OfferCreate(bob, USD(500), jtx.XRPTxAmountFromXRP(500)).
 				Expiration(LastClose(env) + 1).Build())
@@ -55,6 +58,7 @@ func testFillModes(t *testing.T, disabledFeatures []string) {
 		RequireOfferCount(t, env, bob, 1)
 
 		// bob creates the offer that will be crossed.
+		fundedOfferSequence := env.Seq(bob)
 		result = env.Submit(
 			OfferCreate(bob, USD(500), jtx.XRPTxAmountFromXRP(500)).Build())
 		jtx.RequireTxSuccess(t, result)
@@ -82,6 +86,8 @@ func testFillModes(t *testing.T, disabledFeatures []string) {
 		jtx.RequireIOUBalance(t, env, bob, gw, "USD", 0)
 		jtx.RequireOwnerCount(t, env, bob, 1)
 		RequireOfferCount(t, env, bob, 1)
+		RequireNoOfferInLedger(t, env, bob, expiredOfferSequence)
+		RequireOfferInLedger(t, env, bob, fundedOfferSequence)
 
 		// Order that can be filled
 		result = env.Submit(
@@ -321,6 +327,68 @@ func TestOffer_FillOrKill(t *testing.T) {
 	for _, fs := range offerFeatureSets {
 		t.Run(fs.name, func(t *testing.T) {
 			testFillOrKill(t, fs.disabled)
+		})
+	}
+}
+
+func TestOffer_FillOrKillPreservesTentativelyConsumedFundedOffer(t *testing.T) {
+	for _, tc := range offerFeatureSets {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newEnvWithFeatures(t, tc.disabled)
+			issuer := jtx.NewAccount("issuer")
+			maker := jtx.NewAccount("maker")
+			taker := jtx.NewAccount("taker")
+			USD := func(amount float64) tx.Amount { return jtx.USD(issuer, amount) }
+
+			for _, account := range []*jtx.Account{issuer, maker, taker} {
+				env.FundAmount(account, uint64(jtx.XRP(10_000)))
+			}
+			env.Close()
+
+			makerSequence := env.Seq(maker)
+			result := env.Submit(OfferCreate(maker, USD(500), jtx.XRPTxAmountFromXRP(500)).Build())
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+			original := GetOffer(env, maker, makerSequence)
+			if original == nil {
+				t.Fatal("maker offer was not created")
+			}
+
+			env.Trust(taker, USD(1_000))
+			result = env.Submit(payment.PayIssued(issuer, taker, USD(1_000)).Build())
+			jtx.RequireTxSuccess(t, result)
+
+			takerBalance := env.Balance(taker)
+			takerSequence := env.Seq(taker)
+			result = env.Submit(OfferCreate(taker, jtx.XRPTxAmountFromXRP(1_000), USD(1_000)).FillOrKill().Build())
+			jtx.RequireTxClaimed(t, result, jtx.TecKILLED)
+			if !result.Applied || result.Fee != env.BaseFee() {
+				t.Fatalf("applied/fee = %v/%d, want true/%d", result.Applied, result.Fee, env.BaseFee())
+			}
+			if env.Seq(taker) != takerSequence+1 {
+				t.Fatalf("taker sequence = %d, want %d", env.Seq(taker), takerSequence+1)
+			}
+
+			got := GetOffer(env, maker, makerSequence)
+			if got == nil {
+				t.Fatal("failed Fill-or-Kill deleted a funded maker offer")
+			}
+			if got.TakerPays.Compare(original.TakerPays) != 0 || got.TakerGets.Compare(original.TakerGets) != 0 {
+				t.Fatalf("maker offer changed: got pays/gets %s/%s, want %s/%s",
+					got.TakerPays.Value(), got.TakerGets.Value(), original.TakerPays.Value(), original.TakerGets.Value())
+			}
+			RequireOfferCount(t, env, maker, 1)
+			RequireOfferCount(t, env, taker, 0)
+			jtx.RequireIOUBalance(t, env, taker, issuer, "USD", 1_000)
+			jtx.RequireBalance(t, env, taker, takerBalance-env.BaseFee())
+			if result.Metadata == nil || result.Metadata.TransactionResult != ter.TecKILLED {
+				t.Fatalf("metadata result = %v, want tecKILLED", result.Metadata)
+			}
+			for _, node := range result.Metadata.AffectedNodes {
+				if node.LedgerEntryType == ledgerentry.TypeOffer.String() {
+					t.Fatal("rolled-back maker offer appeared in tecKILLED metadata")
+				}
+			}
 		})
 	}
 }

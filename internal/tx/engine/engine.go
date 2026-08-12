@@ -175,7 +175,10 @@ func deleteNFTokenOfferOnView(view txcore.LedgerView, offerKL keylet.Keylet) {
 	}
 
 	ownerDirKey := keylet.OwnerDir(offer.Owner)
-	state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false)
+	ownerResult, err := state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false)
+	if err != nil || !ownerResult.Success {
+		return
+	}
 
 	// Remove from NFTBuys or NFTSells directory
 	isSellOffer := offer.Flags&entry.LsfSellNFToken != 0
@@ -185,8 +188,13 @@ func deleteNFTokenOfferOnView(view txcore.LedgerView, offerKL keylet.Keylet) {
 	} else {
 		tokenDirKey = keylet.NFTBuys(offer.NFTokenID)
 	}
-	state.DirRemove(view, tokenDirKey, offer.NFTokenOfferNode, offerKL.Key, false)
+	tokenResult, err := state.DirRemove(view, tokenDirKey, offer.NFTokenOfferNode, offerKL.Key, false)
+	if err != nil || !tokenResult.Success {
+		return
+	}
 
-	_ = view.Erase(offerKL)
+	if err := view.Erase(offerKL); err != nil {
+		return
+	}
 	adjustOwnerCountOnView(view, offer.Owner, -1)
 }
