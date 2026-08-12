@@ -338,9 +338,11 @@ func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 			if !p.Amount.IsNative() {
 				return ter.TecNO_DST
 			}
-			// A partial payment may not fund a new account on an open ledger.
-			if config.OpenLedger && (p.GetFlags()&PaymentFlagPartialPayment) != 0 {
-				return ter.TelNO_DST_PARTIAL
+			// A partial payment may not fund a new account.
+			if (p.GetFlags() & PaymentFlagPartialPayment) != 0 {
+				if result := partialNewDestinationResult(config); result != ter.TesSUCCESS {
+					return result
+				}
 			}
 			// The delivered amount must cover the account reserve.
 			if uint64(p.Amount.Drops()) < config.ReserveBase &&
@@ -355,20 +357,15 @@ func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 		}
 	}
 
-	// Path count/length limits — only on an open ledger and only for "ripple"
-	// payments (those that use transitive balances).
+	// Path count/length limits for payments that use transitive balances.
 	// Reference: rippled Payment.cpp:348-360
-	if config.OpenLedger {
-		ripple := len(p.Paths) > 0 || p.HasField("Paths") || p.SendMax != nil || !p.Amount.IsNative()
-		if ripple {
-			if len(p.Paths) > MaxPathSize {
-				return ter.TelBAD_PATH_COUNT
-			}
-			for _, path := range p.Paths {
-				if len(path) > MaxPathLength {
-					return ter.TelBAD_PATH_COUNT
-				}
-			}
+	ripple := len(p.Paths) > 0 || p.HasField("Paths") || p.SendMax != nil || !p.Amount.IsNative()
+	if ripple && pathCountExceeded(p.Paths) {
+		if config.IsViewOpen() {
+			return ter.TelBAD_PATH_COUNT
+		}
+		if config.ParentBatchID != nil && config.RequireRules().Enabled(amendment.FeatureBatchV1_1) {
+			return ter.TefBAD_PATH_COUNT
 		}
 	}
 
@@ -411,6 +408,28 @@ func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 		}
 	}
 
+	return ter.TesSUCCESS
+}
+
+func pathCountExceeded(paths [][]PathStep) bool {
+	if len(paths) > MaxPathSize {
+		return true
+	}
+	for _, path := range paths {
+		if len(path) > MaxPathLength {
+			return true
+		}
+	}
+	return false
+}
+
+func partialNewDestinationResult(config tx.EngineConfig) ter.Result {
+	if config.IsViewOpen() {
+		return ter.TelNO_DST_PARTIAL
+	}
+	if config.ParentBatchID != nil && config.RequireRules().Enabled(amendment.FeatureBatchV1_1) {
+		return ter.TefNO_DST_PARTIAL
+	}
 	return ter.TesSUCCESS
 }
 

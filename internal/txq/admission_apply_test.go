@@ -204,6 +204,8 @@ func TestAcceptDropsTefCategory(t *testing.T) {
 		{name: "category lower boundary", result: ter.TefFAILURE},
 		{name: "nftoken not transferable", result: ter.TefNFTOKEN_IS_NOT_TRANSFERABLE},
 		{name: "invalid ledger fix type", result: ter.TefINVALID_LEDGER_FIX_TYPE},
+		{name: "partial payment to new destination", result: ter.TefNO_DST_PARTIAL},
+		{name: "bad payment path count", result: ter.TefBAD_PATH_COUNT},
 		{name: "category upper boundary", result: ter.Result(-100)},
 		{name: "retry category", result: ter.TerRETRY, wantSize: 1},
 	}
