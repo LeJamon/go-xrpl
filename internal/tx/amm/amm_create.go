@@ -97,7 +97,7 @@ func (a *AMMCreate) CalculateBaseFee(_ tx.LedgerView, config tx.EngineConfig) ui
 }
 
 func (a *AMMCreate) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber}
+	return [][32]byte{amendment.FeatureAMM}
 }
 
 // CheckExtraFeatures gates MPT pool assets on the MPTokensV2 amendment.

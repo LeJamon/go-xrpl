@@ -203,7 +203,7 @@ func NumberContextForRules(rules *amendment.Rules) state.NumberContext {
 		rules.Enabled(amendment.FeatureLendingProtocol),
 		rules.FixCleanup3_2_0Enabled(),
 		rules.FixCleanup3_3_0Enabled(),
-	), rules.Enabled(amendment.FeatureFixUniversalNumber))
+	), true)
 }
 
 // NumberContext returns the immutable Number context for this transaction.

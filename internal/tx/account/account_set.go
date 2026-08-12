@@ -354,19 +354,16 @@ func (a *AccountSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Re
 		}
 	}
 
-	// Clawback / NoFreeze mutual exclusion (gated on the Clawback amendment).
-	rules := view.Rules()
-	if rules != nil && rules.Enabled(amendment.FeatureClawback) {
-		if uSetFlag == AccountSetFlagAllowTrustLineClawback {
-			if sle.Flags&state.LsfNoFreeze != 0 {
-				return ter.TecNO_PERMISSION
-			}
-			if !ownerDirIsEmpty(view, accountID) {
-				return ter.TecOWNERS
-			}
-		} else if uSetFlag == AccountSetFlagNoFreeze && sle.Flags&state.LsfAllowTrustLineClawback != 0 {
+	// Clawback / NoFreeze mutual exclusion.
+	if uSetFlag == AccountSetFlagAllowTrustLineClawback {
+		if sle.Flags&state.LsfNoFreeze != 0 {
 			return ter.TecNO_PERMISSION
 		}
+		if !ownerDirIsEmpty(view, accountID) {
+			return ter.TecOWNERS
+		}
+	} else if uSetFlag == AccountSetFlagNoFreeze && sle.Flags&state.LsfAllowTrustLineClawback != 0 {
+		return ter.TecNO_PERMISSION
 	}
 	return ter.TesSUCCESS
 }
@@ -530,9 +527,9 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		uFlagsOut &^= state.LsfDisallowIncomingTrustline
 	}
 
-	// AllowTrustLineClawback (cannot be cleared once set, gated by amendment)
+	// AllowTrustLineClawback cannot be cleared once set.
 	// Reference: rippled SetAccount.cpp doApply() lines 663-668
-	if ctx.Rules().Enabled(amendment.FeatureClawback) && uSetFlag == AccountSetFlagAllowTrustLineClawback {
+	if uSetFlag == AccountSetFlagAllowTrustLineClawback {
 		uFlagsOut |= state.LsfAllowTrustLineClawback
 	}
 

@@ -2939,9 +2939,7 @@ func TestNFTokenMintOffer(t *testing.T) {
 // ===========================================================================
 func TestBuyerReserve(t *testing.T) {
 	// Reference: rippled NFToken_test.cpp testFixNFTokenBuyerReserve
-	// fixNFTokenReserve checks that the buyer has enough reserve for the NFT page
-	// when accepting a sell offer. Without the amendment, the accept succeeds
-	// even if the buyer doesn't have enough reserve.
+	// The buyer must have enough reserve for a newly created NFT page.
 
 	t.Run("InsufficientReserve", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
@@ -2967,13 +2965,7 @@ func TestBuyerReserve(t *testing.T) {
 		env.Close()
 
 		result := env.Submit(nft.NFTokenAcceptSellOffer(bob, offerIndex).Build())
-		// With fixNFTokenReserve: should fail with tecINSUFFICIENT_RESERVE
-		// Without the fix: succeeds (the bug)
-		if result.Code == "tecINSUFFICIENT_RESERVE" {
-			t.Log("fixNFTokenReserve correctly prevents acceptance without reserve")
-		} else if result.Success {
-			t.Log("fixNFTokenReserve not enabled - buyer accepted without reserve (pre-fix behaviour)")
-		}
+		jtx.RequireTxClaimed(t, result, "tecINSUFFICIENT_RESERVE")
 
 		_ = nftID
 	})

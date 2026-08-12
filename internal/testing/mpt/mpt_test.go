@@ -1465,7 +1465,7 @@ func TestMPT_Payment(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestMPT_ClawbackValidation(t *testing.T) {
-	t.Run("ClawbackFeatureDisabledPrecedesFlags", func(t *testing.T) {
+	t.Run("RetiredClawbackDoesNotPrecedeFlags", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 		env.DisableFeature("Clawback")
 		env.Close()
@@ -1475,7 +1475,7 @@ func TestMPT_ClawbackValidation(t *testing.T) {
 		tester := mpt.NewMPTTesterNoFund(t, env, alice)
 		transaction := clawbacktx.NewMPTokenClawback(alice.Address, bob.Address, tester.MPTAmount(1))
 		transaction.SetFlags(tx.TfUniversalMask)
-		jtx.RequireTxFail(t, env.Submit(transaction), jtx.TemDISABLED)
+		jtx.RequireTxFail(t, env.Submit(transaction), jtx.TemINVALID_FLAG)
 	})
 
 	t.Run("InvalidFlagsPrecedeMPTokensFeatureGate", func(t *testing.T) {

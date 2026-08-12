@@ -109,7 +109,7 @@ func (a *AMMBid) Flatten() (map[string]any, error) {
 }
 
 func (a *AMMBid) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber}
+	return [][32]byte{amendment.FeatureAMM}
 }
 
 // CheckExtraFeatures gates MPT pool assets on the MPTokensV2 amendment.
@@ -236,15 +236,8 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Reference: rippled AMMBid.cpp:192 — view.info().parentCloseTime
 	currentTime := ctx.Config.ParentCloseTime
 
-	// Reference: rippled AMMBid.cpp lines 192-203 — fixInnerObjTemplate enforcement
 	if amm.AuctionSlot == nil {
-		if ctx.Rules().Enabled(amendment.FeatureFixInnerObjTemplate) {
-			return ter.TefEXCEPTION
-		}
-		amm.AuctionSlot = &AuctionSlotData{
-			AuthAccounts: make([][20]byte, 0),
-			Price:        zeroAmount(tx.Asset{}),
-		}
+		return ter.TecINTERNAL
 	}
 
 	// Calculate time slot (0-19). rippled's ammAuctionTimeSlot only computes a

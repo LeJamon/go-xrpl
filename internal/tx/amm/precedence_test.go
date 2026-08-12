@@ -32,6 +32,26 @@ func TestAMMClawbackRequiredAmendments(t *testing.T) {
 	require.Equal(t, [][32]byte{amendment.FeatureAMMClawback}, cb.RequiredAmendments())
 }
 
+func TestAMMRequiredAmendmentsExcludeRetiredUniversalNumber(t *testing.T) {
+	tests := []struct {
+		name        string
+		transaction interface{ RequiredAmendments() [][32]byte }
+	}{
+		{"AMMCreate", &AMMCreate{}},
+		{"AMMDeposit", &AMMDeposit{}},
+		{"AMMWithdraw", &AMMWithdraw{}},
+		{"AMMVote", &AMMVote{}},
+		{"AMMBid", &AMMBid{}},
+		{"AMMDelete", &AMMDelete{}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, [][32]byte{amendment.FeatureAMM}, test.transaction.RequiredAmendments())
+		})
+	}
+}
+
 // TestAMMBidAuthAccountsPreflightRules pins that the fixAMMv1_3-gated
 // duplicate/self AuthAccounts check lives in PreflightRules (preflight), so it
 // runs before any preclaim state check. rippled evaluates it in preflight, gated

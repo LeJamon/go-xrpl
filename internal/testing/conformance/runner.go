@@ -472,10 +472,10 @@ func RunFixture(t *testing.T, fixturePath string) {
 	// env or in any mid-fixture env_reset scope — tests a protocol configuration
 	// that no longer exists. Retired amendments are permanently enabled, so the
 	// engine forces them on and the recording cannot be reproduced. Mirrors
-	// rippled 3.2.0 deleting these FeatureBitset variations; the fixtures should
-	// be re-recorded from a 3.2.0 corpus.
+	// rippled deleting these FeatureBitset variations; the fixtures should be
+	// re-recorded from the current protocol oracle.
 	if missing := fixtureDisablesRetiredAmendments(&fixture); len(missing) > 0 {
-		t.Skipf("Skipped: fixture disables retired amendment(s) %s — unreachable post-3.2.0 retirement; re-record from rippled 3.2.0", strings.Join(missing, ", "))
+		t.Skipf("Skipped: fixture disables retired amendment(s) %s — unreachable after retirement; re-record from rippled 3.3.0", strings.Join(missing, ", "))
 	}
 
 	// Detect TxQ suites by fixture path.

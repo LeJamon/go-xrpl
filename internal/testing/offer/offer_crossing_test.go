@@ -33,11 +33,9 @@ func ledgerEntryStateBalance(t *testing.T, env *jtx.TestEnv, acc1, acc2 *jtx.Acc
 	return rs.Balance.Value()
 }
 
-// TestOffer_CreateThenCross tests creating an offer and then crossing it,
-// with transfer rates and NumberSwitchOver (fixUniversalNumber) feature.
-// The transfer rate of 1.005 causes small differences in the final balances,
-// and the fixUniversalNumber amendment changes the precision of the calculation
-// for bob's final balance.
+// TestOffer_CreateThenCross tests creating an offer and then crossing it with a
+// transfer rate. Universal Number arithmetic remains active whether its retired
+// amendment is explicitly declared or omitted.
 // Reference: rippled Offer_test.cpp testOfferCreateThenCross (lines 2098-2151)
 func TestOffer_CreateThenCross(t *testing.T) {
 	for _, fs := range offerFeatureSets {
@@ -48,15 +46,15 @@ func TestOffer_CreateThenCross(t *testing.T) {
 }
 
 func testOfferCreateThenCross(t *testing.T, disabledFeatures []string) {
-	for _, numberSwitchOver := range []bool{false, true} {
-		name := "NumberSwitchOver_false"
-		if numberSwitchOver {
-			name = "NumberSwitchOver_true"
+	for _, featureDeclared := range []bool{false, true} {
+		name := "retired_feature_omitted"
+		if featureDeclared {
+			name = "retired_feature_declared"
 		}
 		t.Run(name, func(t *testing.T) {
 			env := newEnvWithFeatures(t, disabledFeatures)
 
-			if numberSwitchOver {
+			if featureDeclared {
 				env.EnableFeature("fixUniversalNumber")
 			} else {
 				env.DisableFeature("fixUniversalNumber")
@@ -111,15 +109,10 @@ func testOfferCreateThenCross(t *testing.T, disabledFeatures []string) {
 			require.Equal(t, "49.96666666666667", aliceBalance,
 				"Alice's raw trust line balance mismatch")
 
-			// Check bob's balance: depends on NumberSwitchOver
+			// Universal Number arithmetic is unconditional.
 			bobBalance := ledgerEntryStateBalance(t, env, bob, gw, "USD")
-			if !numberSwitchOver {
-				require.Equal(t, "-0.966500000033334", bobBalance,
-					"Bob's raw trust line balance mismatch (NumberSwitchOver=false)")
-			} else {
-				require.Equal(t, "-0.9665000000333333", bobBalance,
-					"Bob's raw trust line balance mismatch (NumberSwitchOver=true)")
-			}
+			require.Equal(t, "-0.9665000000333333", bobBalance,
+				"Bob's raw trust line balance mismatch")
 		})
 	}
 }

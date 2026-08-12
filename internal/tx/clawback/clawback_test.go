@@ -373,17 +373,14 @@ func TestMPTokenClawbackRawHashRejectsTopLevelIssuanceID(t *testing.T) {
 // Amendment Tests
 
 func TestClawbackRequiredAmendments(t *testing.T) {
-	t.Run("IOU clawback requires Clawback amendment", func(t *testing.T) {
+	t.Run("IOU clawback has no amendment gate", func(t *testing.T) {
 		clawbackTx := NewClawback("rIssuer", tx.NewIssuedAmountFromFloat64(100.0, "USD", "rHolder"))
-		amendments := clawbackTx.RequiredAmendments()
-		assert.Contains(t, amendments, amendment.FeatureClawback)
-		assert.NotContains(t, amendments, amendment.FeatureMPTokensV1)
+		assert.Empty(t, clawbackTx.RequiredAmendments())
 	})
 
-	t.Run("MPToken clawback gates on Clawback only; MPTokensV1 is a preflight-arm gate", func(t *testing.T) {
+	t.Run("MPToken clawback uses only the MPTokensV1 preflight-arm gate", func(t *testing.T) {
 		clawbackTx := NewMPTokenClawback("rIssuer", "rHolder", newTestMPTAmount(100, "rIssuer"))
-		amendments := clawbackTx.RequiredAmendments()
-		assert.Equal(t, [][32]byte{amendment.FeatureClawback}, amendments)
+		assert.Empty(t, clawbackTx.RequiredAmendments())
 		// MPTokensV1 is enforced inside the MPT preflight arm (temDISABLED), not
 		// as a macro gate — so a bad flag/fee is not masked by temDISABLED.
 		rules := amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported).DisableByName("MPTokensV1").Build()

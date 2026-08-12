@@ -87,21 +87,18 @@ func TestEnabled(t *testing.T) {
 	t.Log("testEnabled passed")
 }
 
-// TestFixUniversalNumberDisabled tests that AMM requires fixUniversalNumber amendment.
-func TestFixUniversalNumberDisabled(t *testing.T) {
+func TestRetiredUniversalNumberDoesNotDisableAMM(t *testing.T) {
 	env := amm.NewAMMTestEnv(t)
 	env.FundWithIOUs(30000, 0)
 	env.Close()
 
-	// Disable fixUniversalNumber (AMM requires both AMM and fixUniversalNumber).
 	env.DisableFeature("fixUniversalNumber")
 	env.Close()
 
-	// AMMCreate should fail
 	createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
 	result := env.Submit(createTx)
-	if result.Code != "temDISABLED" {
-		t.Errorf("AMMCreate without fixUniversalNumber: expected temDISABLED, got %s", result.Code)
+	if !result.Success {
+		t.Fatalf("AMMCreate with retired fixUniversalNumber omitted: %s - %s", result.Code, result.Message)
 	}
 }
 
@@ -116,7 +113,7 @@ func TestAMMClawbackEnabled(t *testing.T) {
 		env.DisableFeature("AMMClawback")
 		env.Close()
 
-		// AMMClawback requires: AMM, fixUniversalNumber, and AMMClawback
+		// AMMClawback requires the AMMClawback amendment.
 		clawbackTx := amm.AMMClawback(env.GW, env.Alice.Address, env.USD, amm.XRP()).Build()
 		result := env.Submit(clawbackTx)
 		if result.Code != "temDISABLED" {

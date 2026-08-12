@@ -40,7 +40,7 @@ func TestMultiplyByQualityRetainsTransactionNumberScaleUntilIOUBoundary(t *testi
 	)
 	quality := uint64(85)<<56 | 8_548_903_771_245_460
 	amount := tx.NewIssuedAmount(9_711_095_847_925_376, -15, "EUR", "rOtherIssuer")
-	rules := amendment.NewRules([][32]byte{amendment.FeatureFixUniversalNumber})
+	rules := amendment.EmptyRules()
 
 	for _, scale := range []state.MantissaScale{state.MantissaScaleLargeLegacy, state.MantissaScaleLarge} {
 		result := multiplyByQuality(
