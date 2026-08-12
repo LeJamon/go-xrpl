@@ -172,7 +172,11 @@ func (d *DelegateSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 		return ter.TecPSEUDO_ACCOUNT
 	}
 	if len(d.permissionValues()) == 0 {
-		if exists, _ := view.Exists(keylet.Delegate(accountID, authorizeID)); !exists {
+		data, delegateErr := view.Read(keylet.Delegate(accountID, authorizeID))
+		if delegateErr != nil {
+			return ter.TefINTERNAL
+		}
+		if data == nil {
 			return ter.TecNO_ENTRY
 		}
 	}
