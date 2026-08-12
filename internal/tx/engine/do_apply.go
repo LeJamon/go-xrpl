@@ -645,7 +645,7 @@ func (e *Engine) removeDeletedTrustLines(tecTable *applystate.ApplyStateTable, k
 		}
 
 		nonAMMID := lowID
-		reserveFlag := uint32(state.LsfLowReserve)
+		reserveFlag := state.LsfLowReserve
 		sponsor := rs.LowSponsor
 		if ammLow {
 			nonAMMID = highID
