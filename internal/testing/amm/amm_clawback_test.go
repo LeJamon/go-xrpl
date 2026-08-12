@@ -440,7 +440,7 @@ func TestAMMClawback_SpecificAmount(t *testing.T) {
 		// Alice should get ~500 XRP back
 		aliceXrpAfter := env.TestEnv.Balance(env.Alice)
 		xrpDelta := int64(aliceXrpAfter) - int64(aliceXrpBefore)
-		require.Equal(t, int64(jtx.XRP(500)), xrpDelta)
+		require.Equal(t, jtx.XRP(500), xrpDelta)
 
 		// gw clawback another 1000 USD
 		aliceXrpBefore = env.TestEnv.Balance(env.Alice)
@@ -455,7 +455,7 @@ func TestAMMClawback_SpecificAmount(t *testing.T) {
 
 		aliceXrpAfter = env.TestEnv.Balance(env.Alice)
 		xrpDelta = int64(aliceXrpAfter) - int64(aliceXrpBefore)
-		require.Equal(t, int64(jtx.XRP(500)), xrpDelta)
+		require.Equal(t, jtx.XRP(500), xrpDelta)
 		require.True(t, ammIsDeleted(t, env, env.USD, amm.XRP()))
 	})
 }
