@@ -29,6 +29,27 @@ func TestFeatureID(t *testing.T) {
 	}
 }
 
+func TestFixCleanup330Registration(t *testing.T) {
+	f := FeatureByName("fixCleanup3_3_0")
+	if f == nil {
+		t.Fatal("fixCleanup3_3_0 is not registered")
+	}
+	const amendmentID = "3298D47E1F3A8A24FECAA30F699B8FE1DD234E072834BA099AD8180FFCE0FEC4"
+	want, err := hex.DecodeString(amendmentID)
+	if err != nil {
+		t.Fatalf("decode fixCleanup3_3_0 amendment ID: %v", err)
+	}
+	if got := f.ID[:]; !bytes.Equal(got, want) {
+		t.Fatalf("fixCleanup3_3_0 ID = %X, want %s", got, amendmentID)
+	}
+	if f.Supported != SupportedNo || f.Vote != VoteDefaultNo {
+		t.Fatalf("fixCleanup3_3_0 status = (%v, %v), want (SupportedNo, VoteDefaultNo)", f.Supported, f.Vote)
+	}
+	if AllSupportedRules().Enabled(FeatureFixCleanup3_3_0) {
+		t.Fatal("fixCleanup3_3_0 must remain disabled until all cleanup work is complete")
+	}
+}
+
 func TestFeatureRegistry(t *testing.T) {
 	count := len(AllFeatures())
 	if count < 80 {
@@ -520,6 +541,7 @@ func TestAllExpectedFeaturesExist(t *testing.T) {
 		"PermissionedDEX",
 		"TokenEscrow",
 		"fixTokenEscrowV1",
+		"fixCleanup3_3_0",
 		"fixCleanup3_2_0",
 		// Retired
 		"MultiSign",

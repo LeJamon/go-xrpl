@@ -95,6 +95,13 @@ func (c *CheckCash) Validate() error {
 	return nil
 }
 
+func (c *CheckCash) PreflightWithRules(rules *amendment.Rules) error {
+	if rules.FixCleanup3_3_0Enabled() && isZeroCheckID(c.CheckID) {
+		return ter.Errorf(ter.TemMALFORMED, "CheckID must not be zero")
+	}
+	return c.Validate()
+}
+
 func (c *CheckCash) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(c)
 }

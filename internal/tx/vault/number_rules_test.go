@@ -17,7 +17,7 @@ func TestVaultNumberRulesSelectLegacyAndFixedLargeModes(t *testing.T) {
 	})
 
 	require.Equal(t, state.MantissaScaleLargeLegacy, vaultNumberScale(legacyRules))
-	require.Equal(t, state.MantissaScaleLarge, vaultNumberScale(fixedRules))
+	require.Equal(t, state.MantissaScaleLarge320, vaultNumberScale(fixedRules))
 }
 
 func TestAssociateVaultAssetRoundsAndRemovesDefaultFields(t *testing.T) {
@@ -41,8 +41,8 @@ func TestAssociateVaultAssetRoundsAndRemovesDefaultFields(t *testing.T) {
 
 	total, err := vaultNumberForRules(vd.AssetsTotal, rules)
 	require.NoError(t, err)
-	require.True(t, total.Equal(state.NewXRPLNumberScaled(2, 0, state.MantissaScaleLarge, state.RoundToNearest)))
+	require.True(t, total.Equal(state.NewXRPLNumberScaled(2, 0, state.MantissaScaleLarge320, state.RoundToNearest)))
 	maximum, err := vaultNumberForRules(vd.AssetsMaximum, rules)
 	require.NoError(t, err)
-	require.True(t, maximum.Equal(state.NewXRPLNumberScaled(8, 0, state.MantissaScaleLarge, state.RoundToNearest)))
+	require.True(t, maximum.Equal(state.NewXRPLNumberScaled(8, 0, state.MantissaScaleLarge320, state.RoundToNearest)))
 }

@@ -31,6 +31,7 @@ var (
 	FeatureSponsor                       = registerFeature("Sponsor", SupportedYes, VoteDefaultNo)
 	FeatureBatchV1_1                     = registerFeature("BatchV1_1", SupportedYes, VoteDefaultNo)
 	FeatureLendingProtocolV1_1           = registerFeature("LendingProtocolV1_1", SupportedNo, VoteDefaultNo)
+	FeatureFixCleanup3_3_0               = registerFix("fixCleanup3_3_0", SupportedNo, VoteDefaultNo)
 	FeatureFixCleanup3_2_0               = registerFix("fixCleanup3_2_0", SupportedYes, VoteDefaultNo)
 	FeatureFixCleanup3_1_3               = registerFix("fixCleanup3_1_3", SupportedYes, VoteDefaultYes)
 	FeatureMPTokensV2                    = registerFeature("MPTokensV2", SupportedNo, VoteDefaultNo)
