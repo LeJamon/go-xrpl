@@ -397,6 +397,7 @@ var txTemplates = map[Type][]templateField{
 	},
 	TypeVaultDelete: {
 		{name: "VaultID", style: soeREQUIRED},
+		{name: "MemoData", style: soeOPTIONAL},
 	},
 	TypeVaultDeposit: {
 		{name: "VaultID", style: soeREQUIRED},
