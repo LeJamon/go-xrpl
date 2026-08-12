@@ -1,5 +1,4 @@
 // Package batch provides integration tests for Batch transactions.
-// Test structure mirrors rippled's Batch_test.cpp 1:1.
 // Reference: rippled/src/test/app/Batch_test.cpp
 package batch
 
@@ -128,7 +127,6 @@ func TestEnabled(t *testing.T) {
 		env.Fund(alice, bob)
 		env.Close()
 
-		// Submit a valid batch with feature enabled - should succeed
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
@@ -149,7 +147,6 @@ func TestEnabled(t *testing.T) {
 		env.Fund(alice, bob)
 		env.Close()
 
-		// Submit a batch with feature disabled - should fail with temDISABLED
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
@@ -209,7 +206,6 @@ func TestEnabled(t *testing.T) {
 		env.Fund(alice, bob)
 		env.Close()
 
-		// A regular payment with tfInnerBatchTxn should fail with temINVALID_FLAG
 		p := MakeInnerPayment(alice, bob, jtx.XRP(1), env.Seq(alice))
 		p.Fee = fmt.Sprintf("%d", env.BaseFee())
 		p.SigningPubKey = ""
@@ -227,7 +223,6 @@ func TestPreflight(t *testing.T) {
 		env.Fund(alice, bob)
 		env.Close()
 
-		// Negative fee should fail
 		batch := batchtx.NewBatch(alice.Address)
 		batch.Fee = "-10"
 		seq := env.Seq(alice)
@@ -269,7 +264,6 @@ func TestPreflight(t *testing.T) {
 
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
-		// Two mode flags set simultaneously
 		batch := NewBatchBuilder(alice, seq, batchFee,
 			batchtx.BatchFlagAllOrNothing|batchtx.BatchFlagOnlyOne).
 			AddInnerTx(MakeFakeInnerTx(1)).
@@ -347,7 +341,7 @@ func TestPreflight(t *testing.T) {
 			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 1, env.Seq(bob))).
 			AddInnerTx(MakeFakeInnerTx(2)).
 			AddSigner(bob).
-			AddSigner(bob). // duplicate
+			AddSigner(bob).
 			MustBuild()
 
 		result := env.Submit(batch)
@@ -367,7 +361,7 @@ func TestPreflight(t *testing.T) {
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeFakeInnerTx(1)).
 			AddInnerTx(MakeFakeInnerTx(2)).
-			AddSigner(alice). // signer is outer account
+			AddSigner(alice).
 			MustBuild()
 
 		result := env.Submit(batch)
@@ -704,7 +698,6 @@ func TestPreflight(t *testing.T) {
 
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
-		// Two identical inner txns → identical hashes → temREDUNDANT.
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
@@ -723,7 +716,6 @@ func TestPreflight(t *testing.T) {
 
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
-		// Two distinct inner txns with the SAME Sequence for alice → temREDUNDANT.
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 2, seq+1)).
@@ -762,25 +754,19 @@ func TestPreflight(t *testing.T) {
 
 func TestCalculateBaseFee(t *testing.T) {
 	t.Run("fee formula correct", func(t *testing.T) {
-		// (numSigners + 2) * baseFee + baseFee * txns
 		baseFee := uint64(10)
 
-		// 0 signers, 2 txns -> (0+2)*10 + 10*2 = 40
 		require.Equal(t, uint64(40), CalcBatchFee(baseFee, 0, 2))
 
-		// 1 signer, 2 txns -> (1+2)*10 + 10*2 = 50
 		require.Equal(t, uint64(50), CalcBatchFee(baseFee, 1, 2))
 
-		// 2 signers, 3 txns -> (2+2)*10 + 10*3 = 70
 		require.Equal(t, uint64(70), CalcBatchFee(baseFee, 2, 3))
 
-		// 0 signers, 8 txns -> (0+2)*10 + 10*8 = 100
 		require.Equal(t, uint64(100), CalcBatchFee(baseFee, 0, 8))
 	})
 
 	t.Run("calculateBaseFee from env", func(t *testing.T) {
 		env := newBatchEnv(t)
-		// Default base fee is 10
 		require.Equal(t, uint64(40), CalcBatchFeeFromEnv(env, 0, 2))
 		require.Equal(t, uint64(50), CalcBatchFeeFromEnv(env, 1, 2))
 	})

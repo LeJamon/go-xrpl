@@ -209,8 +209,6 @@ func TestService_SubmitTransaction_AppliesAtOrAboveFeeLevel(t *testing.T) {
 	master := jtx.MasterAccount()
 	alice := jtx.NewAccount("alice")
 
-	// Fee 10 == base fee → fee level == base level == required level at an
-	// empty open ledger, so the tx applies directly.
 	blob, hash := signedPaymentWithFee(t, env, master, alice, 100_000_000, 10, 1)
 
 	res := submitBlob(t, svc, blob, false)
@@ -388,8 +386,6 @@ func TestService_SubmitTransaction_QueuesBelowFeeLevel(t *testing.T) {
 	master := jtx.MasterAccount()
 	alice := jtx.NewAccount("alice")
 
-	// Fee 1 < base fee 10 → fee level 25 < required base level 256 at an
-	// empty open ledger, so TxQ holds the tx rather than applying it.
 	blob, hash := signedPaymentWithFee(t, env, master, alice, 100_000_000, 1, 1)
 
 	res := submitBlob(t, svc, blob, false)

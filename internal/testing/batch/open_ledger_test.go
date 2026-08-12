@@ -17,7 +17,6 @@ import (
 
 func TestTickets(t *testing.T) {
 	t.Run("tickets outer", func(t *testing.T) {
-		// Outer batch uses a ticket; inner transactions use regular sequences.
 		// Reference: rippled Batch_test.cpp testTickets() - "tickets outer"
 		env := newBatchEnv(t)
 
@@ -27,7 +26,6 @@ func TestTickets(t *testing.T) {
 		env.FundAmount(bob, uint64(jtx.XRP(10000)))
 		env.Close()
 
-		// Create 10 tickets for alice
 		aliceTicketSeq := env.CreateTickets(alice, 10)
 		env.Close()
 
@@ -35,7 +33,6 @@ func TestTickets(t *testing.T) {
 		preAlice := env.Balance(alice)
 		preBob := env.Balance(bob)
 
-		// Submit batch with outer using ticket, inner using sequences
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
 		batch := NewBatchBuilderWithTicket(alice, aliceTicketSeq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, aliceSeq+0)).
@@ -46,20 +43,16 @@ func TestTickets(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Verify owner count: started with 10 tickets, consumed 1 (outer ticket) = 9
 		require.Equal(t, uint32(9), env.OwnerCount(alice), "alice should have 9 owner objects")
 		require.Equal(t, uint32(9), env.TicketCount(alice), "alice should have 9 tickets remaining")
 
-		// Alice's sequence advances by 2 (inner txns use sequences)
 		jtx.RequireSequence(t, env, alice, aliceSeq+2)
 
-		// Alice pays XRP(3) + batchFee; Bob receives XRP(3)
 		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(3))-batchFee)
 		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(3)))
 	})
 
 	t.Run("tickets inner", func(t *testing.T) {
-		// Outer batch uses regular sequence; inner transactions use tickets.
 		// Reference: rippled Batch_test.cpp testTickets() - "tickets inner"
 		env := newBatchEnv(t)
 
@@ -69,7 +62,6 @@ func TestTickets(t *testing.T) {
 		env.FundAmount(bob, uint64(jtx.XRP(10000)))
 		env.Close()
 
-		// Create 10 tickets for alice
 		aliceTicketSeq := env.CreateTickets(alice, 10)
 		env.Close()
 
@@ -77,7 +69,6 @@ func TestTickets(t *testing.T) {
 		preAlice := env.Balance(alice)
 		preBob := env.Balance(bob)
 
-		// Submit batch with outer using sequence, inner using tickets
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
 		batch := NewBatchBuilder(alice, aliceSeq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRPWithTicket(alice, bob, 1, aliceTicketSeq)).
@@ -88,20 +79,16 @@ func TestTickets(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Verify owner count: started with 10 tickets, consumed 2 (inner tickets) = 8
 		require.Equal(t, uint32(8), env.OwnerCount(alice), "alice should have 8 owner objects")
 		require.Equal(t, uint32(8), env.TicketCount(alice), "alice should have 8 tickets remaining")
 
-		// Alice's sequence advances by 1 (only outer seq increment, inner use tickets)
 		jtx.RequireSequence(t, env, alice, aliceSeq+1)
 
-		// Alice pays XRP(3) + batchFee; Bob receives XRP(3)
 		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(3))-batchFee)
 		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(3)))
 	})
 
 	t.Run("tickets outer inner", func(t *testing.T) {
-		// Outer batch uses a ticket; one inner tx uses a ticket, the other uses a sequence.
 		// Reference: rippled Batch_test.cpp testTickets() - "tickets outer inner"
 		env := newBatchEnv(t)
 
@@ -111,7 +98,6 @@ func TestTickets(t *testing.T) {
 		env.FundAmount(bob, uint64(jtx.XRP(10000)))
 		env.Close()
 
-		// Create 10 tickets for alice
 		aliceTicketSeq := env.CreateTickets(alice, 10)
 		env.Close()
 
@@ -119,10 +105,6 @@ func TestTickets(t *testing.T) {
 		preAlice := env.Balance(alice)
 		preBob := env.Balance(bob)
 
-		// Submit batch:
-		// - outer uses ticket aliceTicketSeq
-		// - inner[0] uses ticket aliceTicketSeq+1
-		// - inner[1] uses sequence aliceSeq
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
 		batch := NewBatchBuilderWithTicket(alice, aliceTicketSeq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRPWithTicket(alice, bob, 1, aliceTicketSeq+1)).
@@ -133,14 +115,11 @@ func TestTickets(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Verify owner count: started with 10 tickets, consumed 2 (outer + inner[0]) = 8
 		require.Equal(t, uint32(8), env.OwnerCount(alice), "alice should have 8 owner objects")
 		require.Equal(t, uint32(8), env.TicketCount(alice), "alice should have 8 tickets remaining")
 
-		// Alice's sequence advances by 1 (only inner[1] uses a sequence)
 		jtx.RequireSequence(t, env, alice, aliceSeq+1)
 
-		// Alice pays XRP(3) + batchFee; Bob receives XRP(3)
 		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(3))-batchFee)
 		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(3)))
 	})
@@ -148,8 +127,6 @@ func TestTickets(t *testing.T) {
 
 func TestTicketsOpenLedger(t *testing.T) {
 	// Reference: rippled Batch_test.cpp testTicketsOpenLedger()
-	// Tests that batch transactions using tickets interact correctly with
-	// standalone transactions using tickets from the same set.
 
 	t.Run("before batch txn with same ticket", func(t *testing.T) {
 		// Reference: rippled testTicketsOpenLedger() "Before Batch Txn w/ same ticket"
@@ -169,7 +146,6 @@ func TestTicketsOpenLedger(t *testing.T) {
 
 		aliceSeq := env.Seq(alice)
 
-		// AccountSet Txn using ticket+1
 		noopTxn := accounttx.NewAccountSet(alice.Address)
 		noopTxn.Fee = fmt.Sprintf("%d", env.BaseFee())
 		noopTxn.SigningPubKey = alice.PublicKeyHex()
@@ -180,7 +156,6 @@ func TestTicketsOpenLedger(t *testing.T) {
 		result := env.Submit(noopTxn)
 		jtx.RequireTxSuccess(t, result)
 
-		// Batch Txn using ticket for outer, ticket+1 for inner payment
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
 		batch := NewBatchBuilderWithTicket(alice, aliceTicketSeq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRPWithTicket(alice, bob, 1, aliceTicketSeq+1)).
@@ -195,8 +170,6 @@ func TestTicketsOpenLedger(t *testing.T) {
 		closed := env.LastClosedLedger()
 		require.Zero(t, closed.TxCount())
 
-		// Verify final state: alice consumed aliceSeq (inner payment #2),
-		// ticket (batch outer), ticket+1 (inner payment #1)
 		require.Equal(t, aliceSeq+1, env.Seq(alice))
 	})
 
@@ -215,7 +188,6 @@ func TestTicketsOpenLedger(t *testing.T) {
 
 		aliceSeq := env.Seq(alice)
 
-		// Batch Txn first
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
 		batch := NewBatchBuilderWithTicket(alice, aliceTicketSeq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRPWithTicket(alice, bob, 1, aliceTicketSeq+1)).
@@ -224,7 +196,6 @@ func TestTicketsOpenLedger(t *testing.T) {
 		batchResult := env.Submit(batch)
 		jtx.RequireTxSuccess(t, batchResult)
 
-		// AccountSet Txn using ticket+1 (already consumed by batch inner)
 		noopTxn := accounttx.NewAccountSet(alice.Address)
 		noopTxn.Fee = fmt.Sprintf("%d", env.BaseFee())
 		noopTxn.SigningPubKey = alice.PublicKeyHex()
@@ -240,7 +211,6 @@ func TestTicketsOpenLedger(t *testing.T) {
 		env.Close()
 		require.Zero(t, env.LastClosedLedger().TxCount())
 
-		// Verify final state
 		require.Equal(t, aliceSeq+1, env.Seq(alice))
 	})
 }
@@ -265,13 +235,11 @@ func TestBatchTxQueue(t *testing.T) {
 		env.FundAmountNoRipple(carol, uint64(jtx.XRP(10000)))
 		env.Close()
 
-		// Fill the ledger: 3 noops above the threshold of 2.
 		env.Noop(alice)
 		env.Noop(alice)
 		env.Noop(alice)
 		checkMetrics(t, env, 0, nil, 3, 2)
 
-		// Carol's noop gets queued because fee escalation requires more than base fee.
 		result := env.Submit(makeNoopWithFee(carol, env.BaseFee()))
 		jtx.RequireTxFail(t, result, "terQUEUED")
 		checkMetrics(t, env, 1, nil, 3, 2)
@@ -280,7 +248,6 @@ func TestBatchTxQueue(t *testing.T) {
 		bobSeq := env.Seq(bob)
 		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
 
-		// Queue Batch: regular batch fee is too low to bypass escalation.
 		batch := NewBatchBuilder(alice, aliceSeq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, aliceSeq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, bobSeq)).
@@ -290,7 +257,6 @@ func TestBatchTxQueue(t *testing.T) {
 		jtx.RequireTxFail(t, result, "terQUEUED")
 		checkMetrics(t, env, 2, nil, 3, 2)
 
-		// Replace Queued Batch with open ledger fee.
 		olFee := env.OpenLedgerFee(batchFee)
 		batch2 := NewBatchBuilder(alice, aliceSeq, olFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, aliceSeq+1)).
@@ -334,7 +300,6 @@ func TestBatchTxQueue(t *testing.T) {
 		env.FundAmountNoRipple(carol, uint64(jtx.XRP(10000)))
 		env.Close()
 
-		// Fill the ledger leaving room for 1 more transaction at base fee.
 		env.Noop(alice)
 		env.Noop(alice)
 		checkMetrics(t, env, 0, nil, 2, 2)
@@ -343,7 +308,6 @@ func TestBatchTxQueue(t *testing.T) {
 		bobSeq := env.Seq(bob)
 		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
 
-		// Batch Successful: at txInLedger=2 (equal to threshold), batch gets in.
 		batch := NewBatchBuilder(alice, aliceSeq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, aliceSeq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, bobSeq)).
@@ -351,11 +315,8 @@ func TestBatchTxQueue(t *testing.T) {
 			MustBuild()
 		result := env.Submit(batch)
 		jtx.RequireTxSuccess(t, result)
-		// txInLedger = 3 (2 noops + 1 batch outer).
-		// The batch counts as 1 for open ledger txInLedger.
 		checkMetrics(t, env, 0, nil, 3, 2)
 
-		// Carol's noop gets queued because txInLedger=3 > txnsExpected=2.
 		result = env.Submit(makeNoopWithFee(carol, env.BaseFee()))
 		jtx.RequireTxFail(t, result, "terQUEUED")
 		checkMetrics(t, env, 1, nil, 3, 2)
@@ -370,7 +331,7 @@ func makeSmallQueueConfig(minTxnStandalone uint32) txq.Config {
 		LedgersInQueue:                 2,
 		QueueSizeMin:                   2,
 		RetrySequencePercent:           25,
-		MinimumEscalationMultiplier:    txq.BaseLevel * 500, // 128000
+		MinimumEscalationMultiplier:    txq.BaseLevel * 500,
 		MinimumTxnInLedger:             32,
 		MinimumTxnInLedgerStandalone:   minTxnStandalone,
 		TargetTxnInLedger:              256,
@@ -438,7 +399,6 @@ func TestSequenceOpenLedger(t *testing.T) {
 		preAlice := env.Balance(alice)
 		preBob := env.Balance(bob)
 
-		// AccountSet Txn at aliceSeq+2 -> terPRE_SEQ (future sequence)
 		noopTxn := accounttx.NewAccountSet(alice.Address)
 		noopTxn.Fee = fmt.Sprintf("%d", env.BaseFee())
 		noopTxn.SigningPubKey = alice.PublicKeyHex()
@@ -447,7 +407,6 @@ func TestSequenceOpenLedger(t *testing.T) {
 		result := env.Submit(noopTxn)
 		jtx.RequireTxFail(t, result, "terPRE_SEQ")
 
-		// Batch Txn: carol outer, alice inner signer
 		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
 		batch := NewBatchBuilder(carol, carolSeq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, aliceSeq)).
@@ -469,17 +428,12 @@ func TestSequenceOpenLedger(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, noopExists)
 
-		// Final state verification:
-		// - alice's seq should be aliceSeq+3 (aliceSeq consumed by inner pay#1,
-		//   aliceSeq+1 by inner pay#2, aliceSeq+2 by noop)
 		require.Equal(t, aliceSeq+3, env.Seq(alice),
 			"alice seq should have advanced by 3 (2 inner payments + 1 noop)")
 
-		// Carol consumed carolSeq for the batch outer
 		require.Equal(t, carolSeq+1, env.Seq(carol),
 			"carol seq should have advanced by 1 (batch outer)")
 
-		// alice paid XRP(1) + XRP(2) = XRP(3) to bob, plus baseFee for noop
 		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(3))-env.BaseFee())
 		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(3)))
 	})
@@ -501,7 +455,6 @@ func TestSequenceOpenLedger(t *testing.T) {
 		preAlice := env.Balance(alice)
 		preBob := env.Balance(bob)
 
-		// AccountSet Txn at aliceSeq+1 -> terPRE_SEQ
 		noopTxn := accounttx.NewAccountSet(alice.Address)
 		noopTxn.Fee = fmt.Sprintf("%d", env.BaseFee())
 		noopTxn.SigningPubKey = alice.PublicKeyHex()
@@ -510,7 +463,6 @@ func TestSequenceOpenLedger(t *testing.T) {
 		result := env.Submit(noopTxn)
 		jtx.RequireTxFail(t, result, "terPRE_SEQ")
 
-		// Batch Txn: alice outer
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
 		batch := NewBatchBuilder(alice, aliceSeq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, aliceSeq+1)).
@@ -520,18 +472,11 @@ func TestSequenceOpenLedger(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// After first close: batch applied. The noop at aliceSeq+1 is
-		// overwritten by the batch's inner payment at the same sequence.
-		// Close again to flush held transactions.
 		env.Close()
 
-		// Final state: batch consumed aliceSeq (outer), aliceSeq+1 (inner#1),
-		// aliceSeq+2 (inner#2). The noop at aliceSeq+1 failed (sequence
-		// already consumed by inner payment). alice seq = aliceSeq+3.
 		require.Equal(t, aliceSeq+3, env.Seq(alice),
 			"alice seq should have advanced by 3 (outer + 2 inner payments)")
 
-		// alice paid XRP(1) + XRP(2) + batchFee to bob
 		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(3))-batchFee)
 		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(3)))
 	})
@@ -552,7 +497,6 @@ func TestSequenceOpenLedger(t *testing.T) {
 		preAlice := env.Balance(alice)
 		preBob := env.Balance(bob)
 
-		// Batch Txn: alice outer
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
 		batch := NewBatchBuilder(alice, aliceSeq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, aliceSeq+1)).
@@ -561,7 +505,6 @@ func TestSequenceOpenLedger(t *testing.T) {
 		result := env.Submit(batch)
 		jtx.RequireTxSuccess(t, result)
 
-		// AccountSet Txn at aliceSeq+1 (same as inner payment #1's seq).
 		noopTxn := accounttx.NewAccountSet(alice.Address)
 		noopTxn.Fee = fmt.Sprintf("%d", env.BaseFee())
 		noopTxn.SigningPubKey = alice.PublicKeyHex()
@@ -571,11 +514,8 @@ func TestSequenceOpenLedger(t *testing.T) {
 		jtx.RequireTxSuccess(t, noopResult)
 		env.Close()
 
-		// After close: batch consumed aliceSeq (outer), aliceSeq+1 (inner#1),
-		// aliceSeq+2 (inner#2). The noop at aliceSeq+1 was overwritten.
 		env.Close()
 
-		// Final state: alice seq = aliceSeq+3
 		require.Equal(t, aliceSeq+3, env.Seq(alice),
 			"alice seq should have advanced by 3 (outer + 2 inner payments)")
 
@@ -601,7 +541,6 @@ func TestSequenceOpenLedger(t *testing.T) {
 		preAlice := env.Balance(alice)
 		preBob := env.Balance(bob)
 
-		// Batch Txn with future carolSeq -> terPRE_SEQ
 		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
 		batch := NewBatchBuilder(carol, carolSeq+1, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, aliceSeq)).
@@ -611,7 +550,6 @@ func TestSequenceOpenLedger(t *testing.T) {
 		result := env.Submit(batch)
 		jtx.RequireTxFail(t, result, "terPRE_SEQ")
 
-		// AccountSet noop at carolSeq -> tesSUCCESS (advances carol's seq)
 		noopTxn := accounttx.NewAccountSet(carol.Address)
 		noopTxn.Fee = fmt.Sprintf("%d", env.BaseFee())
 		noopTxn.SigningPubKey = carol.PublicKeyHex()
@@ -620,20 +558,14 @@ func TestSequenceOpenLedger(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// After close: noop advances carol's seq, then batch succeeds.
-		// Close again to flush held transactions.
 		env.Close()
 
-		// Final state:
-		// - alice consumed aliceSeq and aliceSeq+1 (inner payments)
 		require.Equal(t, aliceSeq+2, env.Seq(alice),
 			"alice seq should advance by 2 (inner payments)")
 
-		// - carol consumed carolSeq (noop) and carolSeq+1 (batch outer)
 		require.Equal(t, carolSeq+2, env.Seq(carol),
 			"carol seq should advance by 2 (noop + batch outer)")
 
-		// alice paid XRP(3) total to bob
 		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(3)))
 		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(3)))
 	})
@@ -669,7 +601,6 @@ func TestObjectsOpenLedger(t *testing.T) {
 		preAlice := env.Balance(alice)
 		preBob := env.Balance(bob)
 
-		// CheckCash Txn for a check that doesn't exist yet
 		chkID := GetCheckIndex(alice, aliceSeq)
 		cashTxn := check.NewCheckCash(bob.Address, chkID)
 		cashTxn.SetExactAmount(tx.NewXRPAmount(jtx.XRP(10)))
@@ -679,7 +610,6 @@ func TestObjectsOpenLedger(t *testing.T) {
 		cashResult := env.Submit(cashTxn)
 		jtx.RequireTxClaimed(t, cashResult, "tecNO_ENTRY")
 
-		// Batch Txn: creates the check and pays XRP(1)
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
 		batch := NewBatchBuilderWithTicket(alice, aliceTicketSeq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerCheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(10)), aliceSeq)).
@@ -689,22 +619,14 @@ func TestObjectsOpenLedger(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// After close (replay): batch creates check, then CheckCash succeeds.
 		env.Close()
 
-		// Final state verification:
-		// bob should have cashed XRP(10) check + received XRP(1) payment
-		// alice should have lost XRP(10) (check) + XRP(1) (payment) + batchFee + baseFee (for CheckCash on bob)
-		// bob consumes bobSeq for CheckCash
 		require.Equal(t, bobSeq+1, env.Seq(bob),
 			"bob seq should advance by 1 (CheckCash)")
-		// alice consumes aliceSeq (inner CheckCreate), aliceTicketSeq (outer), aliceTicketSeq+1 (inner payment)
 		require.Equal(t, aliceSeq+1, env.Seq(alice),
 			"alice seq should advance by 1 (inner CheckCreate)")
 
-		// Balance check: alice paid XRP(10) check + XRP(1) + batchFee
 		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(11))-batchFee)
-		// bob gained XRP(10) check + XRP(1), paid baseFee for CheckCash
 		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(11))-env.BaseFee())
 	})
 
@@ -729,7 +651,6 @@ func TestObjectsOpenLedger(t *testing.T) {
 		preAlice := env.Balance(alice)
 		preBob := env.Balance(bob)
 
-		// CheckCreate Txn (standalone) — alice creates a check payable to bob
 		chkID := GetCheckIndex(alice, aliceSeq)
 		createTxn := check.NewCheckCreate(alice.Address, bob.Address, tx.NewXRPAmount(jtx.XRP(10)))
 		createTxn.Fee = fmt.Sprintf("%d", env.BaseFee())
@@ -738,7 +659,6 @@ func TestObjectsOpenLedger(t *testing.T) {
 		result := env.Submit(createTxn)
 		jtx.RequireTxSuccess(t, result)
 
-		// Batch Txn: inner CheckCash (bob cashes the check) + inner Payment
 		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
 		batch := NewBatchBuilderWithTicket(alice, aliceTicketSeq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerCheckCash(bob, chkID, tx.NewXRPAmount(jtx.XRP(10)), bobSeq)).
@@ -749,16 +669,12 @@ func TestObjectsOpenLedger(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Final state verification:
-		// bob cashed check XRP(10) + received XRP(1) payment
 		require.Equal(t, bobSeq+1, env.Seq(bob),
 			"bob seq should advance by 1 (inner CheckCash)")
 		require.Equal(t, aliceSeq+1, env.Seq(alice),
 			"alice seq should advance by 1 (standalone CheckCreate)")
 
-		// alice paid: XRP(10) check + XRP(1) payment + batchFee + baseFee for CheckCreate
 		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(11))-batchFee-env.BaseFee())
-		// bob gained: XRP(10) check + XRP(1) payment
 		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(11)))
 	})
 
@@ -783,7 +699,6 @@ func TestObjectsOpenLedger(t *testing.T) {
 		preAlice := env.Balance(alice)
 		preBob := env.Balance(bob)
 
-		// Batch Txn: creates check + payment
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
 		chkID := GetCheckIndex(alice, aliceSeq)
 		batch := NewBatchBuilderWithTicket(alice, aliceTicketSeq, batchFee, batchtx.BatchFlagAllOrNothing).
@@ -793,7 +708,6 @@ func TestObjectsOpenLedger(t *testing.T) {
 		result := env.Submit(batch)
 		jtx.RequireTxSuccess(t, result)
 
-		// CheckCash Txn (standalone) — the open view has not executed Batch inners.
 		cashTxn := check.NewCheckCash(bob.Address, chkID)
 		cashTxn.SetExactAmount(tx.NewXRPAmount(jtx.XRP(10)))
 		cashTxn.Fee = fmt.Sprintf("%d", env.BaseFee())
@@ -803,18 +717,14 @@ func TestObjectsOpenLedger(t *testing.T) {
 		jtx.RequireTxClaimed(t, cashResult, "tecNO_ENTRY")
 		env.Close()
 
-		// After close (replay): batch creates check, then CheckCash succeeds.
 		env.Close()
 
-		// Final state verification:
 		require.Equal(t, bobSeq+1, env.Seq(bob),
 			"bob seq should advance by 1 (CheckCash)")
 		require.Equal(t, aliceSeq+1, env.Seq(alice),
 			"alice seq should advance by 1 (inner CheckCreate)")
 
-		// alice lost XRP(10) check + XRP(1) payment + batchFee
 		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(11))-batchFee)
-		// bob gained XRP(10) check + XRP(1) payment, paid baseFee for CheckCash
 		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(11))-env.BaseFee())
 	})
 }
@@ -838,7 +748,6 @@ func TestOpenLedger(t *testing.T) {
 	env.Fund(alice, bob)
 	env.Close()
 
-	// Extra noop to advance bob's seq (matching rippled: env(noop(bob)))
 	noopBob := accounttx.NewAccountSet(bob.Address)
 	noopBob.Fee = fmt.Sprintf("%d", env.BaseFee())
 	noopBob.SigningPubKey = bob.PublicKeyHex()
@@ -853,7 +762,6 @@ func TestOpenLedger(t *testing.T) {
 	preBob := env.Balance(bob)
 	bobSeq := env.Seq(bob)
 
-	// Alice Pays Bob (Open Ledger)
 	payTxn1 := payment.NewPayment(alice.Address, bob.Address, tx.NewXRPAmount(jtx.XRP(10)))
 	payTxn1.Fee = fmt.Sprintf("%d", env.BaseFee())
 	payTxn1.SigningPubKey = alice.PublicKeyHex()
@@ -861,7 +769,6 @@ func TestOpenLedger(t *testing.T) {
 	result = env.Submit(payTxn1)
 	jtx.RequireTxSuccess(t, result)
 
-	// Alice & Bob Atomic Batch
 	batchFee := CalcBatchFeeFromEnv(env, 1, 2)
 	batch := NewBatchBuilder(alice, aliceSeq+1, batchFee, batchtx.BatchFlagAllOrNothing).
 		AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, aliceSeq+2)).
@@ -882,28 +789,16 @@ func TestOpenLedger(t *testing.T) {
 	jtx.RequireTxFail(t, payResult2, "terPRE_SEQ")
 	env.Close()
 
-	// Close again to ensure any held transactions are retried
 	env.Close()
 
-	// Final state verification (matches rippled):
-	// alice: aliceSeq (pay#1) + aliceSeq+1 (batch outer) + aliceSeq+2 (inner pay) = 3 txns
 	require.Equal(t, aliceSeq+3, env.Seq(alice),
 		"alice seq should have advanced by 3")
 
-	// bob: bobSeq (inner pay to alice) + bobSeq+1 (standalone pay to alice) = 2 txns
 	require.Equal(t, bobSeq+2, env.Seq(bob),
 		"bob seq should have advanced by 2")
 
-	// Balance verification:
-	// alice: -XRP(10) pay1 - baseFee pay1 - XRP(10) inner pay - batchFee + XRP(5) inner bob->alice
-	// but also bob pays alice XRP(5) standalone
-	// Net alice: preAlice - XRP(10) - XRP(10) + XRP(5) + XRP(5) - baseFee - batchFee
-	//          = preAlice - XRP(10) - baseFee - batchFee
 	jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(10))-batchFee-env.BaseFee())
 
-	// bob: +XRP(10) pay1 + XRP(10) inner alice->bob - XRP(5) inner bob->alice
-	//      - XRP(5) standalone - baseFee for standalone
-	// Net bob: preBob + XRP(10) - baseFee
 	jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(10))-env.BaseFee())
 }
 
@@ -918,13 +813,12 @@ func TestBadRawTxn(t *testing.T) {
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
 
-		// Manually build a batch with a nil inner tx
 		batch := batchtx.NewBatch(alice.Address)
 		batch.Fee = fmt.Sprintf("%d", batchFee)
 		batch.SetSequence(seq)
 		batch.SetFlags(batchtx.BatchFlagAllOrNothing)
 		batch.RawTransactions = []batchtx.RawTransaction{
-			{RawTransaction: batchtx.RawTransactionData{InnerTx: nil}}, // nil
+			{RawTransaction: batchtx.RawTransactionData{InnerTx: nil}},
 			{RawTransaction: batchtx.RawTransactionData{InnerTx: MakeInnerPaymentXRP(alice, bob, 1, seq+2)}},
 		}
 

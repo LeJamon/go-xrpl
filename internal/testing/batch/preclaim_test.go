@@ -61,7 +61,7 @@ func TestPreclaim(t *testing.T) {
 	dave := jtx.NewAccount("dave")
 	elsa := jtx.NewAccount("elsa")
 	frank := jtx.NewAccount("frank")
-	phantom := jtx.NewAccount("phantom") // not funded — phantom account
+	phantom := jtx.NewAccount("phantom")
 
 	env.FundAmount(alice, uint64(jtx.XRP(10000)))
 	env.FundAmount(bob, uint64(jtx.XRP(10000)))
@@ -71,7 +71,6 @@ func TestPreclaim(t *testing.T) {
 	env.FundAmount(frank, uint64(jtx.XRP(10000)))
 	env.Close()
 
-	// tefNOT_MULTI_SIGNING: SignersList not enabled for bob
 	t.Run("checkBatchSign.checkMultiSign/tefNOT_MULTI_SIGNING", func(t *testing.T) {
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 3, 2)
@@ -85,15 +84,12 @@ func TestPreclaim(t *testing.T) {
 		env.Close()
 	})
 
-	// Set up signer lists for alice and bob
-	// alice: quorum=2, signers={bob:1, carol:1}
 	env.SetSignerList(alice, 2, []jtx.TestSigner{
 		{Account: bob, Weight: 1},
 		{Account: carol, Weight: 1},
 	})
 	env.Close()
 
-	// bob: quorum=2, signers={carol:1, dave:1, elsa:1}
 	env.SetSignerList(bob, 2, []jtx.TestSigner{
 		{Account: carol, Weight: 1},
 		{Account: dave, Weight: 1},
@@ -101,7 +97,6 @@ func TestPreclaim(t *testing.T) {
 	})
 	env.Close()
 
-	// tefBAD_SIGNATURE: Account not in SignersList (frank not in bob's list)
 	t.Run("checkBatchSign.checkMultiSign/tefBAD_SIGNATURE_not_in_list", func(t *testing.T) {
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 3, 2)
@@ -115,7 +110,6 @@ func TestPreclaim(t *testing.T) {
 		env.Close()
 	})
 
-	// tefBAD_SIGNATURE: Wrong publicKey type (ed25519 dave not in signer list)
 	t.Run("checkBatchSign.checkMultiSign/tefBAD_SIGNATURE_wrong_key_type", func(t *testing.T) {
 		daveEd := jtx.NewAccountWithKeyType("dave", jtx.KeyTypeEd25519)
 		seq := env.Seq(alice)
@@ -130,7 +124,6 @@ func TestPreclaim(t *testing.T) {
 		env.Close()
 	})
 
-	// tefMASTER_DISABLED: elsa has master disabled
 	env.SetRegularKey(elsa, frank)
 	env.DisableMasterKey(elsa)
 	t.Run("checkBatchSign.checkMultiSign/tefMASTER_DISABLED", func(t *testing.T) {
@@ -146,7 +139,6 @@ func TestPreclaim(t *testing.T) {
 		env.Close()
 	})
 
-	// tefBAD_SIGNATURE: Signer does not exist (phantom not in ledger, not in signer list)
 	t.Run("checkBatchSign.checkMultiSign/tefBAD_SIGNATURE_phantom", func(t *testing.T) {
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 3, 2)
@@ -160,8 +152,6 @@ func TestPreclaim(t *testing.T) {
 		env.Close()
 	})
 
-	// tefBAD_SIGNATURE: Signer has not enabled RegularKey
-	// dave signs with davo (ed25519) key, but dave has no regular key set
 	t.Run("checkBatchSign.checkMultiSign/tefBAD_SIGNATURE_no_regkey", func(t *testing.T) {
 		davo := jtx.NewAccountWithKeyType("davo", jtx.KeyTypeEd25519)
 		seq := env.Seq(alice)
@@ -170,8 +160,8 @@ func TestPreclaim(t *testing.T) {
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
 			AddMultiSignBatchSignerWithRegKeys(bob, []RegKeySigner{
-				{Account: carol, SigningKey: carol}, // carol signs with own key
-				{Account: dave, SigningKey: davo},   // dave signs with davo's key (no regkey set)
+				{Account: carol, SigningKey: carol},
+				{Account: dave, SigningKey: davo},
 			}).
 			MustBuild()
 		result := env.Submit(batch)
@@ -179,8 +169,6 @@ func TestPreclaim(t *testing.T) {
 		env.Close()
 	})
 
-	// tefBAD_SIGNATURE: Wrong RegularKey Set
-	// dave's regular key is frank, but trying to sign with davo
 	env.SetRegularKey(dave, frank)
 	t.Run("checkBatchSign.checkMultiSign/tefBAD_SIGNATURE_wrong_regkey", func(t *testing.T) {
 		davo := jtx.NewAccountWithKeyType("davo", jtx.KeyTypeEd25519)
@@ -191,7 +179,7 @@ func TestPreclaim(t *testing.T) {
 			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
 			AddMultiSignBatchSignerWithRegKeys(bob, []RegKeySigner{
 				{Account: carol, SigningKey: carol},
-				{Account: dave, SigningKey: davo}, // davo != frank (dave's regular key)
+				{Account: dave, SigningKey: davo},
 			}).
 			MustBuild()
 		result := env.Submit(batch)
@@ -199,7 +187,6 @@ func TestPreclaim(t *testing.T) {
 		env.Close()
 	})
 
-	// tefBAD_QUORUM: Only carol signs (weight 1), quorum is 2
 	t.Run("checkBatchSign.checkMultiSign/tefBAD_QUORUM", func(t *testing.T) {
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 2, 2)
@@ -213,7 +200,6 @@ func TestPreclaim(t *testing.T) {
 		env.Close()
 	})
 
-	// tesSUCCESS: BatchSigners.Signers with carol + dave (weight 2, quorum 2)
 	t.Run("checkBatchSign.checkMultiSign/tesSUCCESS", func(t *testing.T) {
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 3, 2)
@@ -227,8 +213,6 @@ func TestPreclaim(t *testing.T) {
 		env.Close()
 	})
 
-	// tefBAD_AUTH: Inner Account (phantom) is not a signer — phantom doesn't exist and
-	// carol's pubkey doesn't derive to phantom's address
 	t.Run("checkBatchSign.checkSingleSign/tefBAD_AUTH_phantom", func(t *testing.T) {
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
@@ -242,7 +226,6 @@ func TestPreclaim(t *testing.T) {
 		env.Close()
 	})
 
-	// Bob has not authorized carol as a regular key.
 	t.Run("checkBatchSign.checkSingleSign/tefBAD_AUTH_not_signer", func(t *testing.T) {
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
@@ -256,7 +239,6 @@ func TestPreclaim(t *testing.T) {
 		env.Close()
 	})
 
-	// tesSUCCESS: Signed With Regular Key
 	env.SetRegularKey(bob, carol)
 	t.Run("checkBatchSign.checkSingleSign/tesSUCCESS_regular_key", func(t *testing.T) {
 		seq := env.Seq(alice)
@@ -271,7 +253,6 @@ func TestPreclaim(t *testing.T) {
 		env.Close()
 	})
 
-	// tesSUCCESS: Signed With Master Key
 	t.Run("checkBatchSign.checkSingleSign/tesSUCCESS_master_key", func(t *testing.T) {
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
@@ -285,7 +266,6 @@ func TestPreclaim(t *testing.T) {
 		env.Close()
 	})
 
-	// tefMASTER_DISABLED: Signed With Master Key Disabled
 	env.SetRegularKey(bob, carol)
 	env.DisableMasterKey(bob)
 	t.Run("checkBatchSign.checkSingleSign/tefMASTER_DISABLED", func(t *testing.T) {

@@ -10,8 +10,6 @@ import (
 )
 
 func TestBatchSigningVectors(t *testing.T) {
-	// temBAD_SIGNER: bob's inner makes bob a required signer, but no BatchSigners
-	// are provided at all, so the required set is never emptied (Batch.cpp:448-453).
 	t.Run("temBAD_SIGNER - foreign inner with no batch signers", func(t *testing.T) {
 		env := newBatchEnv(t)
 		alice := jtx.NewAccount("alice")
@@ -30,8 +28,6 @@ func TestBatchSigningVectors(t *testing.T) {
 		jtx.RequireTxFail(t, result, "temBAD_SIGNER")
 	})
 
-	// temBAD_SIGNER: a presented signer is not required because both inner txns
-	// belong to the outer account, so requiredSigners is empty (Batch.cpp:530-541).
 	t.Run("temBAD_SIGNER - stray signer, no inner requires it", func(t *testing.T) {
 		env := newBatchEnv(t)
 		alice := jtx.NewAccount("alice")
@@ -51,8 +47,6 @@ func TestBatchSigningVectors(t *testing.T) {
 		jtx.RequireTxFail(t, result, "temBAD_SIGNER")
 	})
 
-	// temBAD_SIGNER: bob's inner requires bob, but the presented signer is carol
-	// (Batch.cpp:543-552).
 	t.Run("temBAD_SIGNER - wrong signer for required inner account", func(t *testing.T) {
 		env := newBatchEnv(t)
 		alice := jtx.NewAccount("alice")
@@ -73,8 +67,6 @@ func TestBatchSigningVectors(t *testing.T) {
 		jtx.RequireTxFail(t, result, "temBAD_SIGNER")
 	})
 
-	// temBAD_SIGNER: a required inner account (carol) is left uncovered after all
-	// presented signers are consumed (Batch.cpp:581-592).
 	t.Run("temBAD_SIGNER - required inner account uncovered", func(t *testing.T) {
 		env := newBatchEnv(t)
 		alice := jtx.NewAccount("alice")
@@ -123,8 +115,6 @@ func TestBatchSigningVectors(t *testing.T) {
 		jtx.RequireTxFail(t, result, "temBAD_SIGNATURE")
 	})
 
-	// temBAD_SIGNATURE: bob is the required signer with his own public key but a
-	// corrupted signature that does not verify over the batch digest.
 	t.Run("temBAD_SIGNATURE - garbage signature", func(t *testing.T) {
 		env := newBatchEnv(t)
 		env.VerifySignatures = true
@@ -145,8 +135,6 @@ func TestBatchSigningVectors(t *testing.T) {
 		jtx.RequireTxFail(t, result, "temBAD_SIGNATURE")
 	})
 
-	// tesSUCCESS: a single required signer (bob) signs the batch digest with his
-	// master key — a valid single-signed BatchSigner.
 	t.Run("tesSUCCESS - valid single-signed batch signer", func(t *testing.T) {
 		env := newBatchEnv(t)
 		alice := jtx.NewAccount("alice")
@@ -166,9 +154,6 @@ func TestBatchSigningVectors(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 	})
 
-	// tesSUCCESS: same valid single-signed BatchSigner, with full signature
-	// verification enabled so bob's BatchTxnSignature is checked cryptographically
-	// over the batch digest, exercising the engine's batch single-sign crypto path.
 	t.Run("tesSUCCESS - valid single-signed batch signer (verified)", func(t *testing.T) {
 		env := newBatchEnv(t)
 		env.VerifySignatures = true
@@ -189,9 +174,6 @@ func TestBatchSigningVectors(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 	})
 
-	// tesSUCCESS: bob's required signature is satisfied by a nested multi-sign
-	// BatchSigner (carol + dave on bob's signer list) — a valid multi-signed
-	// BatchSigner.
 	t.Run("tesSUCCESS - valid multi-signed batch signer", func(t *testing.T) {
 		env := newBatchEnv(t)
 		alice := jtx.NewAccount("alice")
@@ -219,10 +201,6 @@ func TestBatchSigningVectors(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 	})
 
-	// tesSUCCESS: same valid multi-signed BatchSigner, but with full signature
-	// verification enabled so the nested BatchSigner signatures are checked
-	// cryptographically over the digest-plus-accountID message, exercising the
-	// engine's batch multi-sign crypto path end-to-end.
 	t.Run("tesSUCCESS - valid multi-signed batch signer (verified)", func(t *testing.T) {
 		env := newBatchEnv(t)
 		alice := jtx.NewAccount("alice")
@@ -253,8 +231,6 @@ func TestBatchSigningVectors(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 	})
 
-	// tesSUCCESS: a single-account batch (both inners from the outer account)
-	// needs no BatchSigners at all.
 	t.Run("tesSUCCESS - single-account batch needs no signers", func(t *testing.T) {
 		env := newBatchEnv(t)
 		alice := jtx.NewAccount("alice")

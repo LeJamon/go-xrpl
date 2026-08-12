@@ -28,7 +28,6 @@ func CalcBatchFee(baseFee uint64, numSigners uint32, numInnerTxns uint32) uint64
 	return (uint64(numSigners)+2)*baseFee + baseFee*uint64(numInnerTxns)
 }
 
-// CalcBatchFeeFromEnv calculates the expected batch fee using the env's base fee.
 func CalcBatchFeeFromEnv(env *jtx.TestEnv, numSigners uint32, numInnerTxns uint32) uint64 {
 	return CalcBatchFee(env.BaseFee(), numSigners, numInnerTxns)
 }
@@ -377,7 +376,6 @@ func MakeInnerPaymentXRPWithDelegate(from, to *jtx.Account, xrp int64, seq uint3
 	return p
 }
 
-// MakeInnerPaymentXRP creates an inner Payment for an XRP amount in whole XRP units.
 func MakeInnerPaymentXRP(from, to *jtx.Account, xrp int64, seq uint32) *payment.Payment {
 	return MakeInnerPayment(from, to, jtx.XRP(xrp), seq)
 }
