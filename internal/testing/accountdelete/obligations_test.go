@@ -49,7 +49,7 @@ func TestAccountDelete_BlockingBacklinks(t *testing.T) {
 
 		checkKey := keylet.Check(alice.ID, env.Seq(alice))
 		jtx.RequireTxSuccess(t, env.Submit(
-			check.CheckCreate(alice, bob, tx.NewXRPAmount(int64(jtx.XRP(1)))).Build()))
+			check.CheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(1))).Build()))
 		env.Close()
 		jtx.RequireOwnerDirectoryContains(t, env, alice, checkKey.Key, true)
 		jtx.RequireOwnerDirectoryContains(t, env, bob, checkKey.Key, true)
@@ -70,7 +70,7 @@ func TestAccountDelete_BlockingBacklinks(t *testing.T) {
 
 		channelKey := keylet.PayChannel(alice.ID, bob.ID, env.Seq(alice))
 		jtx.RequireTxSuccess(t, env.Submit(
-			paychan.ChannelCreate(alice, bob, int64(jtx.XRP(1)), 100, alice.PublicKeyHex()).Build()))
+			paychan.ChannelCreate(alice, bob, jtx.XRP(1), 100, alice.PublicKeyHex()).Build()))
 		env.Close()
 		jtx.RequireOwnerDirectoryContains(t, env, alice, channelKey.Key, true)
 		jtx.RequireOwnerDirectoryContains(t, env, bob, channelKey.Key, true)

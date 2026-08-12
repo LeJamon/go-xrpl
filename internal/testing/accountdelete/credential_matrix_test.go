@@ -124,4 +124,17 @@ func TestAccountDelete_CredentialAuthorization(t *testing.T) {
 		d.CredentialIDs = []string{credID}
 		jtx.RequireTxFail(t, env.Submit(d), "tecBAD_CREDENTIALS")
 	})
+
+	t.Run("zero credential id reaches ledger validation", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		destination := jtx.NewAccount("destination")
+		env.Fund(alice, destination)
+		env.Close()
+		env.IncLedgerSeqForAccDel(alice)
+
+		d := newAccountDelete(env, alice, destination)
+		d.CredentialIDs = []string{"0"}
+		jtx.RequireTxFail(t, env.Submit(d), "tecBAD_CREDENTIALS")
+	})
 }
