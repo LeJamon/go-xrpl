@@ -6,27 +6,29 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-// TestPrivilegeTable pins the transcription of transactions.macro's privileges
-// column (rippled tag 3.0.0). If a mapping drifts, the invariant checks that
+// TestPrivilegeTable pins the transaction privilege table. If a mapping drifts,
+// the invariant checks that
 // consult hasPrivilege silently change behaviour, so lock the key entries down.
 func TestPrivilegeTable(t *testing.T) {
 	cases := []struct {
 		txType TxType
 		priv   Privilege
 	}{
-		{protocol.TxTypePayment, createAcct},
+		{protocol.TxTypePayment, createAcct | mayCreateMPT},
 		{protocol.TxTypeAccountDelete, mustDeleteAcct},
 		{protocol.TxTypeNFTokenMint, changeNFTCounts},
 		{protocol.TxTypeNFTokenBurn, changeNFTCounts},
-		{protocol.TxTypeAMMClawback, mayDeleteAcct | overrideFreeze},
-		{protocol.TxTypeAMMCreate, createPseudoAcct},
-		{protocol.TxTypeAMMWithdraw, mayDeleteAcct},
-		{protocol.TxTypeAMMDelete, mustDeleteAcct},
+		{protocol.TxTypeAMMClawback, mayDeleteAcct | overrideFreeze | mayAuthorizeMPT},
+		{protocol.TxTypeAMMCreate, createPseudoAcct | mayCreateMPT},
+		{protocol.TxTypeAMMWithdraw, mayDeleteAcct | mayAuthorizeMPT},
+		{protocol.TxTypeAMMDelete, mustDeleteAcct | mayDeleteMPT},
 		{protocol.TxTypeXChainAddClaimAttestation, createAcct},
 		{protocol.TxTypeXChainAddAccountCreateAttest, createAcct},
 		{protocol.TxTypeMPTokenIssuanceCreate, createMPTIssuance},
 		{protocol.TxTypeMPTokenIssuanceDestroy, destroyMPTIssuance},
 		{protocol.TxTypeMPTokenAuthorize, mustAuthorizeMPT},
+		{protocol.TxTypeCheckCash, mayCreateMPT},
+		{protocol.TxTypeOfferCreate, mayCreateMPT},
 		{protocol.TxTypeVaultCreate, createPseudoAcct | createMPTIssuance | mustModifyVault},
 		{protocol.TxTypeVaultDelete, mustDeleteAcct | destroyMPTIssuance | mustModifyVault},
 		{protocol.TxTypeVaultDeposit, mayAuthorizeMPT | mustModifyVault},
@@ -52,7 +54,6 @@ func TestPrivilegeTable(t *testing.T) {
 
 	// Transaction types with no declared privileges must report none.
 	for _, tt := range []TxType{
-		protocol.TxTypeOfferCreate,
 		protocol.TxTypeTrustSet,
 		protocol.TxTypeBatch,
 		protocol.TxTypeEscrowFinish,

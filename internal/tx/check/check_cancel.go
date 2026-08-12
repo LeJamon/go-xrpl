@@ -74,11 +74,17 @@ func (c *CheckCancel) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 	checkKey := keylet.Keylet{Key: checkKeyBytes}
 
 	checkData, readErr := view.Read(checkKey)
-	if readErr != nil || checkData == nil {
+	if readErr != nil {
+		return ter.TefINTERNAL
+	}
+	if checkData == nil {
 		return ter.TecNO_ENTRY
 	}
 	checkType, err := state.DecodeType(checkData)
-	if err != nil || checkType != entry.TypeCheck {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if checkType != entry.TypeCheck {
 		return ter.TecNO_ENTRY
 	}
 	check, parseErr := state.ParseCheck(checkData)
@@ -117,7 +123,10 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Read check
 	// Reference: CancelCheck.cpp L55-60
 	checkData, err := ctx.View.Read(checkKey)
-	if err != nil || checkData == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if checkData == nil {
 		ctx.Log.Warn("check cancel: check does not exist", "checkID", c.CheckID)
 		return ter.TecNO_ENTRY
 	}
@@ -125,7 +134,10 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 	// View.Read is untyped, so reject a CheckID that resolves to a non-Check
 	// object, matching rippled's tecNO_ENTRY.
 	checkType, err := state.DecodeType(checkData)
-	if err != nil || checkType != entry.TypeCheck {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if checkType != entry.TypeCheck {
 		return ter.TecNO_ENTRY
 	}
 
@@ -137,6 +149,19 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	accountID := ctx.AccountID
 	isCreator := check.Account == accountID
+	var creatorAccount *state.AccountRoot
+	if !isCreator {
+		creatorData, err := ctx.View.Read(keylet.Account(check.Account))
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if creatorData != nil {
+			creatorAccount, err = state.ParseAccountRoot(creatorData)
+			if err != nil {
+				return ter.TefINTERNAL
+			}
+		}
+	}
 
 	// --- doApply ---
 
@@ -170,13 +195,7 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 		// Update the creator's owner count. A missing creator account is
 		// tolerated, matching rippled's adjustOwnerCount no-op on a null SLE;
 		// a corrupt one is an internal error.
-		creatorKey := keylet.Account(check.Account)
-		creatorData, err := ctx.View.Read(creatorKey)
-		if err == nil && creatorData != nil {
-			creatorAccount, err := state.ParseAccountRoot(creatorData)
-			if err != nil {
-				return ter.TefINTERNAL
-			}
+		if creatorAccount != nil {
 			if creatorAccount.OwnerCount > 0 {
 				creatorAccount.OwnerCount--
 			}

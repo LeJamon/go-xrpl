@@ -366,6 +366,10 @@ type holderTx struct {
 
 func (t holderTx) HasHolder() bool { return t.hasHolder }
 
+type holderFieldTx struct{ stubTx }
+
+func (t holderFieldTx) TxHasField(name string) bool { return name == "Holder" }
+
 func mptIssuanceInvariantEntry(t *testing.T, referenceHolding *string, deleted bool) InvariantEntry {
 	t.Helper()
 	issuer, err := state.DecodeAccountID(addrIssuer)
@@ -455,6 +459,81 @@ func TestValidMPTIssuance_AuthorizeByActor(t *testing.T) {
 		t.Fatal("expected ValidMPTIssuance violation: issuer authorize created an mptoken")
 	} else if v.Name != "ValidMPTIssuance" {
 		t.Fatalf("unexpected violation name %q", v.Name)
+	}
+}
+
+func TestValidMPTIssuance_MayCreatePrivilege(t *testing.T) {
+	created := mptInvariantEntry(t, addrHolderA, addrIssuer, false)
+	deleted := mptInvariantEntry(t, addrHolderA, addrIssuer, true)
+	checkCash := stubTx{txType: protocol.TxTypeCheckCash}
+	rules := amendment.AllSupportedRules()
+
+	if v := checkValidMPTIssuance(checkCash, TesSUCCESS, []InvariantEntry{created}, stubView{}, rules); v != nil {
+		t.Fatalf("CheckCash creating one MPToken: unexpected violation %v", v)
+	}
+	if v := checkValidMPTIssuance(checkCash, TesSUCCESS, []InvariantEntry{created, created}, stubView{}, rules); v == nil {
+		t.Fatal("expected CheckCash creating two MPToken entries to violate ValidMPTIssuance")
+	}
+	if v := checkValidMPTIssuance(checkCash, TesSUCCESS, []InvariantEntry{deleted}, stubView{}, rules); v == nil {
+		t.Fatal("expected CheckCash deleting an MPToken to violate ValidMPTIssuance")
+	}
+	issuance := mptIssuanceInvariantEntry(t, nil, false)
+	if v := checkValidMPTIssuance(checkCash, TesSUCCESS, []InvariantEntry{issuance}, stubView{}, rules); v == nil {
+		t.Fatal("expected CheckCash creating an issuance to violate ValidMPTIssuance")
+	}
+	issuerCheckCash := holderFieldTx{stubTx: checkCash}
+	if v := checkValidMPTIssuance(issuerCheckCash, TesSUCCESS, nil, stubView{}, rules); v == nil {
+		t.Fatal("expected issuer-submitted CheckCash to violate ValidMPTIssuance")
+	}
+}
+
+func TestValidMPTIssuance_AMMPrivileges(t *testing.T) {
+	created := mptInvariantEntry(t, addrHolderA, addrIssuer, false)
+	deleted := mptInvariantEntry(t, addrHolderA, addrIssuer, true)
+	rules := amendment.NewRulesBuilder().Enable(amendment.FeatureMPTokensV2).Build()
+
+	for _, txType := range []TxType{protocol.TxTypeAMMWithdraw, protocol.TxTypeAMMClawback} {
+		transaction := stubTx{txType: txType}
+		for name, entries := range map[string][]InvariantEntry{
+			"create one": {created},
+			"delete two": {deleted, deleted},
+		} {
+			t.Run(txType.String()+"/"+name, func(t *testing.T) {
+				if v := checkValidMPTIssuance(transaction, TesSUCCESS, entries, stubView{}, rules); v != nil {
+					t.Fatalf("unexpected violation: %v", v)
+				}
+			})
+		}
+		if v := checkValidMPTIssuance(transaction, TesSUCCESS, []InvariantEntry{created, created}, stubView{}, rules); v == nil {
+			t.Fatalf("expected %s creating two MPToken entries to violate ValidMPTIssuance", txType)
+		}
+		if v := checkValidMPTIssuance(transaction, TesSUCCESS, []InvariantEntry{deleted, deleted, deleted}, stubView{}, rules); v == nil {
+			t.Fatalf("expected %s deleting three MPToken entries to violate ValidMPTIssuance", txType)
+		}
+	}
+
+	issuerWithdraw := holderTx{stubTx: stubTx{txType: protocol.TxTypeAMMWithdraw}, hasHolder: true}
+	if v := checkValidMPTIssuance(issuerWithdraw, TesSUCCESS, []InvariantEntry{created}, stubView{}, rules); v == nil {
+		t.Fatal("expected issuer-submitted AMMWithdraw creating an MPToken to violate ValidMPTIssuance")
+	}
+
+	ammDelete := stubTx{txType: TypeAMMDelete}
+	for _, result := range []Result{TesSUCCESS, TecINCOMPLETE} {
+		for count := 0; count <= 2; count++ {
+			entries := make([]InvariantEntry, count)
+			for i := range entries {
+				entries[i] = deleted
+			}
+			if v := checkValidMPTIssuance(ammDelete, result, entries, stubView{}, rules); v != nil {
+				t.Fatalf("AMMDelete result %d deleting %d MPToken entries: unexpected violation %v", result, count, v)
+			}
+		}
+	}
+	if v := checkValidMPTIssuance(ammDelete, TesSUCCESS, []InvariantEntry{deleted, deleted, deleted}, stubView{}, rules); v == nil {
+		t.Fatal("expected AMMDelete deleting three MPToken entries to violate ValidMPTIssuance")
+	}
+	if v := checkValidMPTIssuance(ammDelete, TecINCOMPLETE, []InvariantEntry{deleted}, stubView{}, amendment.EmptyRules()); v == nil {
+		t.Fatal("expected pre-MPTokensV2 tecINCOMPLETE deletion to violate ValidMPTIssuance")
 	}
 }
 

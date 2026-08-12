@@ -4,7 +4,6 @@ package batch
 
 import (
 	"bytes"
-	"encoding/hex"
 	"fmt"
 	"sort"
 
@@ -18,7 +17,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ticket"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
-	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // CalcBatchFee calculates the expected batch fee.
@@ -498,6 +496,5 @@ func MakeInnerAccountSet(acc *jtx.Account, seq uint32) *account.AccountSet {
 // GetCheckIndex returns the hex-encoded check keylet key for an account and sequence.
 // This mirrors rippled's getCheckIndex(account, sequence) helper in Batch_test.cpp.
 func GetCheckIndex(account *jtx.Account, seq uint32) string {
-	chk := keylet.Check(account.ID, seq)
-	return hex.EncodeToString(chk.Key[:])
+	return jtx.CheckID(account, seq)
 }
