@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
@@ -90,6 +91,32 @@ func TestCollectPersistentDeletionsResultMatrix(t *testing.T) {
 	}
 }
 
+func TestIsUnfundedOfferDeletionIgnoresIOUIssuer(t *testing.T) {
+	issuerA := recoveryTestAccount
+	issuerB := state.EncodeAccountIDSafe([20]byte{1})
+	serialize := func(issuer string) []byte {
+		data, err := state.SerializeLedgerOffer(&state.LedgerOffer{
+			Account:   recoveryTestAccount,
+			Sequence:  1,
+			TakerPays: state.NewIssuedAmountFromValue(100, 0, "USD", issuer),
+			TakerGets: state.NewXRPAmountFromInt(100),
+		})
+		if err != nil {
+			t.Fatalf("SerializeLedgerOffer: %v", err)
+		}
+		return data
+	}
+
+	tracked := &applystate.TrackedEntry{
+		Action:   applystate.ActionErase,
+		Original: serialize(issuerA),
+		Current:  serialize(issuerB),
+	}
+	if !isUnfundedOfferDeletion(tracked) {
+		t.Fatal("equal IOU TakerPays values with different issuers must compare unchanged")
+	}
+}
+
 func TestCollectPersistentDeletionsSortsAllReplayCandidates(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -168,6 +195,36 @@ func TestReplayExistingWithLimit(t *testing.T) {
 				t.Fatalf("replay attempts = %d, want %d", len(replayed), tc.limit+1)
 			}
 		})
+	}
+}
+
+func TestRemoveDeletedTrustLinesPreservesLineWhenAccountMissing(t *testing.T) {
+	view := newRecordingBaseView()
+	lowID := [20]byte{1}
+	highID := [20]byte{2}
+	lineKey := keylet.Keylet{Key: [32]byte{9}}
+	lineData, err := state.SerializeRippleState(&state.RippleState{
+		Balance:   state.NewIssuedAmountFromValue(0, 0, "USD", state.AccountOneAddress),
+		LowLimit:  state.NewIssuedAmountFromValue(0, 0, "USD", state.EncodeAccountIDSafe(lowID)),
+		HighLimit: state.NewIssuedAmountFromValue(0, 0, "USD", state.EncodeAccountIDSafe(highID)),
+		LowNode:   0,
+		HighNode:  0,
+	})
+	if err != nil {
+		t.Fatalf("SerializeRippleState: %v", err)
+	}
+	if err := view.Insert(lineKey, lineData); err != nil {
+		t.Fatalf("Insert RippleState: %v", err)
+	}
+
+	table := applystate.NewApplyStateTable(view, [32]byte{}, 1, amendment.AllSupportedRules())
+	recoveryEngine(view, txcore.TapNONE).removeDeletedTrustLines(table, [][32]byte{lineKey.Key})
+	got, err := table.Read(lineKey)
+	if err != nil {
+		t.Fatalf("Read RippleState: %v", err)
+	}
+	if !bytes.Equal(got, lineData) {
+		t.Fatalf("RippleState changed when an endpoint account was missing: got %x, want %x", got, lineData)
 	}
 }
 

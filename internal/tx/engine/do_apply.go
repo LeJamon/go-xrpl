@@ -529,13 +529,6 @@ func isUnfundedOfferDeletion(tracked *applystate.TrackedEntry) bool {
 	if err != nil {
 		return false
 	}
-	if before.TakerPays.IsNative() != after.TakerPays.IsNative() ||
-		before.TakerPays.IsMPT() != after.TakerPays.IsMPT() ||
-		before.TakerPays.Currency != after.TakerPays.Currency ||
-		before.TakerPays.Issuer != after.TakerPays.Issuer ||
-		before.TakerPays.MPTIssuanceID() != after.TakerPays.MPTIssuanceID() {
-		return false
-	}
 	cmp, err := before.TakerPays.CompareChecked(after.TakerPays)
 	return err == nil && cmp == 0
 }
@@ -617,28 +610,54 @@ func (e *Engine) removeDeletedTrustLines(tecTable *applystate.ApplyStateTable, k
 		if decodeErr != nil {
 			continue
 		}
-		lowDirKey := keylet.OwnerDir(lowID)
-		state.DirRemove(tecTable, lowDirKey, rs.LowNode, lineKey, false)
-		highDirKey := keylet.OwnerDir(highID)
-		state.DirRemove(tecTable, highDirKey, rs.HighNode, lineKey, false)
-		// Erase the trust line
-		_ = tecTable.Erase(lineKL)
-		// Decrement OwnerCount for the non-AMM side that has a reserve.
-		// Reference: rippled View.cpp deleteAMMTrustLine lines 2759-2763
-		lowAcctData, _ := tecTable.Read(keylet.Account(lowID))
-		highAcctData, _ := tecTable.Read(keylet.Account(highID))
-		if lowAcctData != nil && highAcctData != nil {
-			lowAcct, _ := state.ParseAccountRoot(lowAcctData)
-			highAcct, _ := state.ParseAccountRoot(highAcctData)
-			zeroHash := [32]byte{}
-			ammLow := lowAcct.AMMID != zeroHash
-			ammHigh := highAcct.AMMID != zeroHash
-			if rs.Flags&state.LsfLowReserve != 0 && !ammLow {
-				_ = txcore.DecreaseOwnerCountOnView(tecTable, lowID, rs.LowSponsor, 1)
-			}
-			if rs.Flags&state.LsfHighReserve != 0 && !ammHigh {
-				_ = txcore.DecreaseOwnerCountOnView(tecTable, highID, rs.HighSponsor, 1)
-			}
+		lowAcctData, readErr := tecTable.Read(keylet.Account(lowID))
+		if readErr != nil || lowAcctData == nil {
+			e.logger.Error("failed to re-delete AMM trust line", "reason", "missing low account")
+			continue
+		}
+		lowAcct, parseErr := state.ParseAccountRoot(lowAcctData)
+		if parseErr != nil {
+			e.logger.Error("failed to re-delete AMM trust line", "reason", "invalid low account")
+			continue
+		}
+		highAcctData, readErr := tecTable.Read(keylet.Account(highID))
+		if readErr != nil || highAcctData == nil {
+			e.logger.Error("failed to re-delete AMM trust line", "reason", "missing high account")
+			continue
+		}
+		highAcct, parseErr := state.ParseAccountRoot(highAcctData)
+		if parseErr != nil {
+			e.logger.Error("failed to re-delete AMM trust line", "reason", "invalid high account")
+			continue
+		}
+
+		zeroHash := [32]byte{}
+		ammLow := lowAcct.AMMID != zeroHash
+		ammHigh := highAcct.AMMID != zeroHash
+		if ammLow == ammHigh {
+			e.logger.Error("failed to re-delete AMM trust line", "reason", "invalid AMM ownership")
+			continue
+		}
+
+		if result := txcore.TrustDelete(tecTable, lineKL, lowID, highID, rs.LowNode, rs.HighNode); result != ter.TesSUCCESS {
+			e.logger.Error("failed to re-delete AMM trust line", "result", result)
+			continue
+		}
+
+		nonAMMID := lowID
+		reserveFlag := uint32(state.LsfLowReserve)
+		sponsor := rs.LowSponsor
+		if ammLow {
+			nonAMMID = highID
+			reserveFlag = state.LsfHighReserve
+			sponsor = rs.HighSponsor
+		}
+		if rs.Flags&reserveFlag == 0 {
+			e.logger.Error("failed to re-delete AMM trust line", "reason", "missing reserve flag")
+			continue
+		}
+		if err := txcore.DecreaseOwnerCountOnView(tecTable, nonAMMID, sponsor, 1); err != nil {
+			e.logger.Error("failed to re-delete AMM trust line owner count", "err", err)
 		}
 	}
 }

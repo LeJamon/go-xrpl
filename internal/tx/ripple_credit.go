@@ -301,6 +301,14 @@ func rippleCreditCreate(view LedgerView, sender, receiver [20]byte, amount Amoun
 // erases it, mirroring rippled's trustDelete (View.cpp lines 1532-1570). Owner
 // count adjustments are the caller's responsibility.
 func TrustDelete(view LedgerView, lineKey keylet.Keylet, lowID, highID [20]byte, lowNode, highNode uint64) ter.Result {
+	lineData, err := view.Read(lineKey)
+	if err != nil || lineData == nil {
+		return ter.TefBAD_LEDGER
+	}
+	line, err := state.ParseRippleState(lineData)
+	if err != nil {
+		return ter.TefBAD_LEDGER
+	}
 	lowResult, err := state.DirRemove(view, keylet.OwnerDir(lowID), lowNode, lineKey.Key, false)
 	if err != nil || !lowResult.Success {
 		return ter.TefBAD_LEDGER
@@ -308,6 +316,15 @@ func TrustDelete(view LedgerView, lineKey keylet.Keylet, lowID, highID [20]byte,
 	highResult, err := state.DirRemove(view, keylet.OwnerDir(highID), highNode, lineKey.Key, false)
 	if err != nil || !highResult.Success {
 		return ter.TefBAD_LEDGER
+	}
+	line.LowSponsor = ""
+	line.HighSponsor = ""
+	updated, err := state.SerializeRippleState(line)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if err := view.Update(lineKey, updated); err != nil {
+		return ter.TefINTERNAL
 	}
 	if err := view.Erase(lineKey); err != nil {
 		return ter.TefINTERNAL

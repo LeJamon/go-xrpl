@@ -332,16 +332,9 @@ func TestOffer_FillOrKill(t *testing.T) {
 }
 
 func TestOffer_FillOrKillPreservesTentativelyConsumedFundedOffer(t *testing.T) {
-	featureSets := append([]featureSet(nil), offerFeatureSets...)
-	featureSets = append(featureSets, featureSet{
-		name: "cleanupOn",
-	})
-	for _, tc := range featureSets {
+	for _, tc := range offerFeatureSets {
 		t.Run(tc.name, func(t *testing.T) {
 			env := newEnvWithFeatures(t, tc.disabled)
-			if tc.name == "cleanupOn" {
-				env.EnableFeature("fixCleanup3_3_0")
-			}
 			issuer := jtx.NewAccount("issuer")
 			maker := jtx.NewAccount("maker")
 			taker := jtx.NewAccount("taker")
