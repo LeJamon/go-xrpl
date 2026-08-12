@@ -576,7 +576,6 @@ func finalizeAMMWithdraw(
 	ctx state.NumberContext,
 ) *InvariantViolation {
 	if ammDeleted && enforceAMMDelete {
-		// Last Withdraw or Clawback deleted AMM — allowed.
 		return nil
 	}
 	if ammAccount == nil {
