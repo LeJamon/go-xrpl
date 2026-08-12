@@ -303,6 +303,7 @@ func (e *Engine) ApplyInnerTransaction(
 	innerConfig.ApplyFlags = txcore.TapNONE
 	innerConfig.OpenLedger = false
 	innerConfig.EnforceLoadFee = false
+	innerConfig.ParentBatchID = &parentBatchID
 	innerEngine := NewEngine(atomicView, innerConfig)
 	innerEngine.invariantViolationHook = e.invariantViolationHook
 	innerEngine.SetBaseTxCount(transactionIndex)

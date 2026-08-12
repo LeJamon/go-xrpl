@@ -110,6 +110,44 @@ func TestResultStringUnknown(t *testing.T) {
 	}
 }
 
+func TestPaymentStructuralTefResults(t *testing.T) {
+	tests := []struct {
+		result  Result
+		value   Result
+		name    string
+		message string
+	}{
+		{TefNO_DST_PARTIAL, -177, "tefNO_DST_PARTIAL", "Partial payment to create account not allowed."},
+		{TefBAD_PATH_COUNT, -176, "tefBAD_PATH_COUNT", "Malformed: Too many paths."},
+	}
+
+	defs := definitions.Get()
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.result != test.value {
+				t.Fatalf("numeric value = %d, want %d", test.result, test.value)
+			}
+			if got := test.result.String(); got != test.name {
+				t.Fatalf("String() = %q, want %q", got, test.name)
+			}
+			if got := test.result.Message(); got != test.message {
+				t.Fatalf("Message() = %q, want %q", got, test.message)
+			}
+			code, err := defs.TransactionResultCode(test.name)
+			if err != nil || code != int32(test.value) {
+				t.Fatalf("TransactionResultCode(%q) = %d, %v; want %d", test.name, code, err, test.value)
+			}
+			name, err := defs.TransactionResultName(int32(test.value))
+			if err != nil || name != test.name {
+				t.Fatalf("TransactionResultName(%d) = %q, %v; want %q", test.value, name, err, test.name)
+			}
+			if !test.result.IsTef() || test.result.IsApplied() || test.result.ShouldRetry() {
+				t.Fatalf("classification mismatch for %s", test.name)
+			}
+		})
+	}
+}
+
 func TestTecRangeIncludesSponsorCodes(t *testing.T) {
 	for _, code := range []Result{
 		TecNO_DELEGATE_PERMISSION,

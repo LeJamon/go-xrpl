@@ -159,6 +159,8 @@ const (
 	TefNO_TICKET                   Result = -180
 	TefNFTOKEN_IS_NOT_TRANSFERABLE Result = -179
 	TefINVALID_LEDGER_FIX_TYPE     Result = -178
+	TefNO_DST_PARTIAL              Result = -177
+	TefBAD_PATH_COUNT              Result = -176
 
 	// telLOCAL_ERROR and related codes (-399 to -300)
 	// Local error, transaction not sent to network
@@ -372,6 +374,8 @@ var resultNames = map[Result]string{ //nolint:gosec // G101: TER result-code nam
 	TefNO_TICKET:                          "tefNO_TICKET",
 	TefNFTOKEN_IS_NOT_TRANSFERABLE:        "tefNFTOKEN_IS_NOT_TRANSFERABLE",
 	TefINVALID_LEDGER_FIX_TYPE:            "tefINVALID_LEDGER_FIX_TYPE",
+	TefNO_DST_PARTIAL:                     "tefNO_DST_PARTIAL",
+	TefBAD_PATH_COUNT:                     "tefBAD_PATH_COUNT",
 	TelLOCAL_ERROR:                        "telLOCAL_ERROR",
 	TelBAD_DOMAIN:                         "telBAD_DOMAIN",
 	TelBAD_PATH_COUNT:                     "telBAD_PATH_COUNT",
@@ -636,6 +640,8 @@ var resultMessages = map[Result]string{ //nolint:gosec // G101: TER result-code 
 	TefNO_TICKET:                          "Ticket is not in ledger.",
 	TefNFTOKEN_IS_NOT_TRANSFERABLE:        "The specified NFToken is not transferable.",
 	TefINVALID_LEDGER_FIX_TYPE:            "The LedgerFixType field has an invalid value.",
+	TefNO_DST_PARTIAL:                     "Partial payment to create account not allowed.",
+	TefBAD_PATH_COUNT:                     "Malformed: Too many paths.",
 	TelLOCAL_ERROR:                        "Local failure.",
 	TelBAD_DOMAIN:                         "Domain too long.",
 	TelBAD_PATH_COUNT:                     "Malformed: Too many paths.",

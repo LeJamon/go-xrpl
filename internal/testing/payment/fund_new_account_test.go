@@ -27,11 +27,18 @@ func TestRipplePayment_NewDest(t *testing.T) {
 		env.Close()
 
 		usd := tx.NewIssuedAmountFromFloat64(300, "USD", gw.Address)
+		preBalance := env.Balance(alice)
+		preSequence := env.Seq(alice)
 		result := env.Submit(Pay(alice, carol, uint64(jtx.XRP(250))).
 			SendMax(usd).
 			PartialPayment().
 			Build())
 		jtx.RequireTxFail(t, result, "telNO_DST_PARTIAL")
+		require.False(t, result.Applied)
+		require.Zero(t, result.Fee)
+		require.Nil(t, result.Metadata)
+		require.Equal(t, preBalance, env.Balance(alice))
+		require.Equal(t, preSequence, env.Seq(alice))
 		require.False(t, env.Exists(carol), "carol must not be created")
 	})
 

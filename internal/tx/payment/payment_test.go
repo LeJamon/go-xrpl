@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 func ptrUint32(v uint32) *uint32       { return &v }
@@ -1428,11 +1429,8 @@ func TestPartialPaymentXRPRestriction(t *testing.T) {
 }
 
 // TestPaymentPathLimits tests path array size limits.
-// rippled enforces these in preclaim (gated on an open ledger) returning
-// telBAD_PATH_COUNT — not in preflight. Validate() therefore accepts
-// oversized path sets; Preclaim() rejects them.
-// Reference: rippled Payment.h (MaxPathSize = 6, MaxPathLength = 8) +
-// Payment.cpp:348-360.
+// rippled enforces these in preclaim, returning telBAD_PATH_COUNT on an open
+// view and tefBAD_PATH_COUNT for an inner Batch transaction on a closed view.
 func TestPaymentPathLimits(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1453,6 +1451,8 @@ func TestPaymentPathLimits(t *testing.T) {
 	copy(destID[:], "path-limit-dest-acct")
 	view.createAccount(destID, 1_000_000_000, 0)
 	destAddr := state.EncodeAccountIDSafe(destID)
+	parentBatchID := [32]byte{1}
+	batchRules := amendment.NewRules([][32]byte{amendment.FeatureBatchV1_1})
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1489,11 +1489,96 @@ func TestPaymentPathLimits(t *testing.T) {
 				t.Errorf("open-ledger Preclaim: expected tesSUCCESS, got %v", openResult)
 			}
 
-			// On a closed ledger the path-count check is skipped (tesSUCCESS).
-			if closedResult := payment.Preclaim(view, tx.EngineConfig{OpenLedger: false}); closedResult != ter.TesSUCCESS {
-				t.Errorf("closed-ledger Preclaim: expected tesSUCCESS, got %v", closedResult)
+			closedResult := payment.Preclaim(view, tx.EngineConfig{
+				ParentBatchID: &parentBatchID,
+				Rules:         batchRules,
+			})
+			if tt.expectFail {
+				if closedResult != ter.TefBAD_PATH_COUNT {
+					t.Errorf("closed inner Preclaim: expected tefBAD_PATH_COUNT, got %v", closedResult)
+				}
+				viewOpen := tx.EngineConfig{ViewOpen: true}
+				if got := payment.Preclaim(view, viewOpen); got != ter.TelBAD_PATH_COUNT {
+					t.Errorf("ViewOpen Preclaim: expected telBAD_PATH_COUNT, got %v", got)
+				}
+				txqOpen := tx.EngineConfig{EnforceLoadFee: true}
+				if got := payment.Preclaim(view, txqOpen); got != ter.TelBAD_PATH_COUNT {
+					t.Errorf("TxQ open-view Preclaim: expected telBAD_PATH_COUNT, got %v", got)
+				}
+				if got := payment.Preclaim(view, tx.EngineConfig{Rules: batchRules}); got != ter.TesSUCCESS {
+					t.Errorf("ordinary closed Preclaim: expected tesSUCCESS, got %v", got)
+				}
+				if got := payment.Preclaim(view, tx.EngineConfig{
+					ParentBatchID: &parentBatchID,
+					Rules:         amendment.EmptyRules(),
+				}); got != ter.TesSUCCESS {
+					t.Errorf("amendment-off inner Preclaim: expected tesSUCCESS, got %v", got)
+				}
+			} else if closedResult != ter.TesSUCCESS {
+				t.Errorf("closed inner Preclaim: expected tesSUCCESS, got %v", closedResult)
 			}
 		})
+	}
+}
+
+func TestPaymentStructuralFailurePrecedence(t *testing.T) {
+	var destID [20]byte
+	copy(destID[:], "missing-payment-dest")
+	destAddr := state.EncodeAccountIDSafe(destID)
+	parentBatchID := [32]byte{1}
+	batchRules := amendment.NewRules([][32]byte{amendment.FeatureBatchV1_1})
+	closedInner := tx.EngineConfig{
+		ReserveBase:   200_000_000,
+		ParentBatchID: &parentBatchID,
+		Rules:         batchRules,
+	}
+
+	partial := &Payment{
+		BaseTx:      *tx.NewBaseTx(tx.TypePayment, "rAlice"),
+		Amount:      xrpAmount("1"),
+		Destination: destAddr,
+		SendMax:     ptrAmount(iouAmount("10", "USD", "rGateway")),
+		Paths:       make([][]PathStep, MaxPathSize+1),
+	}
+	partial.SetPartialPayment()
+
+	if got := partial.Preclaim(newPaymentMockLedgerView(), closedInner); got != ter.TefNO_DST_PARTIAL {
+		t.Fatalf("closed inner partial payment = %v, want tefNO_DST_PARTIAL", got)
+	}
+	openInner := closedInner
+	openInner.ViewOpen = true
+	if got := partial.Preclaim(newPaymentMockLedgerView(), openInner); got != ter.TelNO_DST_PARTIAL {
+		t.Fatalf("open inner partial payment = %v, want telNO_DST_PARTIAL", got)
+	}
+	amendmentOff := closedInner
+	amendmentOff.Rules = amendment.EmptyRules()
+	if got := partial.Preclaim(newPaymentMockLedgerView(), amendmentOff); got != ter.TecNO_DST_INSUF_XRP {
+		t.Fatalf("amendment-off partial payment = %v, want tecNO_DST_INSUF_XRP", got)
+	}
+
+	nonNative := *partial
+	nonNative.Amount = iouAmount("1", "USD", "rGateway")
+	if got := nonNative.Preclaim(newPaymentMockLedgerView(), closedInner); got != ter.TecNO_DST {
+		t.Fatalf("non-native missing destination = %v, want tecNO_DST", got)
+	}
+
+	existingView := newPaymentMockLedgerView()
+	destData, err := state.SerializeAccountRoot(&state.AccountRoot{
+		Account:  destAddr,
+		Balance:  1_000_000_000,
+		Sequence: 1,
+		Flags:    state.LsfRequireDestTag,
+	})
+	if err != nil {
+		t.Fatalf("serialize destination: %v", err)
+	}
+	if err := existingView.Insert(keylet.Account(destID), destData); err != nil {
+		t.Fatalf("insert destination: %v", err)
+	}
+	nonPartial := *partial
+	nonPartial.SetFlags(0)
+	if got := nonPartial.Preclaim(existingView, closedInner); got != ter.TecDST_TAG_NEEDED {
+		t.Fatalf("required destination tag with oversized paths = %v, want tecDST_TAG_NEEDED", got)
 	}
 }
 
