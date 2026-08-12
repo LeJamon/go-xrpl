@@ -56,7 +56,6 @@ func setupClawbackEnvWithUSD(t *testing.T, gwFund, aliceFund int64, usdFund floa
 	return env
 }
 
-// ammIsDeleted checks whether the AMM ledger entry has been deleted.
 func ammIsDeleted(t *testing.T, env *amm.AMMTestEnv, asset, asset2 tx.Asset) bool {
 	t.Helper()
 	return !env.LedgerEntryExists(coreAmm.ComputeAMMKeylet(asset, asset2))
