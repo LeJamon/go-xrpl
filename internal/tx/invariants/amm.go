@@ -95,11 +95,30 @@ func ammPoolHoldsForInvariant(view ReadView, ammAccountID [20]byte, asset1, asse
 	return balance1, balance2
 }
 
-// ammAccountHoldsForInvariant returns the amount held by the AMM account for a specific issue.
-// For XRP: reads from the AMM account's AccountRoot.Balance
-// For IOU: reads from the trustline between AMM account and issuer
 func ammAccountHoldsForInvariant(view ReadView, ammAccountID [20]byte, asset Asset) Amount {
-	if asset.Currency == "" || asset.Currency == "XRP" {
+	if asset.IsMPT() {
+		idBytes, err := hex.DecodeString(asset.MPTIssuanceID)
+		if err != nil || len(idBytes) != 24 {
+			return state.NewMPTAmountWithIssuanceID(0, "", asset.MPTIssuanceID)
+		}
+		var id [24]byte
+		copy(id[:], idBytes)
+		var issuerID [20]byte
+		copy(issuerID[:], id[4:])
+		issuer := state.EncodeAccountIDSafe(issuerID)
+		zero := state.NewMPTAmountWithIssuanceID(0, issuer, asset.MPTIssuanceID)
+		data, err := view.Read(keylet.MPTokenByID(id, ammAccountID))
+		if err != nil || data == nil {
+			return zero
+		}
+		holding, err := state.ParseMPToken(data)
+		if err != nil {
+			return zero
+		}
+		return state.NewMPTAmountWithIssuanceID(int64(holding.MPTAmount), issuer, asset.MPTIssuanceID)
+	}
+
+	if asset.IsNative() {
 		// XRP: read from AccountRoot
 		accountKey := keylet.Account(ammAccountID)
 		data, err := view.Read(accountKey)

@@ -213,6 +213,39 @@ type ammPoolView struct {
 
 func (v ammPoolView) Read(k keylet.Keylet) ([]byte, error) { return v.entries[k.Key], nil }
 
+func TestAMMAccountHoldsForInvariantReadsMPTBalance(t *testing.T) {
+	ammID, err := state.DecodeAccountID(addrHolderA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuerID, err := state.DecodeAccountID(addrIssuer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := keylet.MakeMPTID(7, issuerID)
+	holding, err := state.SerializeMPToken(&state.MPTokenData{
+		Account:           ammID,
+		MPTokenIssuanceID: id,
+		MPTAmount:         125,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := ammPoolView{entries: map[[32]byte][]byte{
+		keylet.Account(ammID).Key: mustSerializeAccount(t, &state.AccountRoot{
+			Account: addrHolderA,
+			Balance: 999,
+		}),
+		keylet.MPTokenByID(id, ammID).Key: holding,
+	}}
+
+	got := ammAccountHoldsForInvariant(view, ammID, Asset{MPTIssuanceID: hex.EncodeToString(id[:])})
+	raw, ok := got.MPTRaw()
+	if !ok || raw != 125 {
+		t.Fatalf("MPT AMM holding = (%d, %t), want (125, true)", raw, ok)
+	}
+}
+
 // ammCreateTx supplies the two pool assets for finalizeAMMCreate (XRP + USD).
 type ammCreateTx struct {
 	stubTx
