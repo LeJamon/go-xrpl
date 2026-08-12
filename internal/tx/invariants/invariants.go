@@ -211,6 +211,9 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 			return checkAccountRootsDeletedClean(entries, view, rules)
 		},
 		func() *InvariantViolation {
+			return checkObjectsHavePseudoAccounts(entries, view, rules)
+		},
+		func() *InvariantViolation {
 			return checkValidPermissionedDEX(tx, result, entries, view, rules)
 		},
 		func() *InvariantViolation {

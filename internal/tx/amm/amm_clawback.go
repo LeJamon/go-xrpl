@@ -430,6 +430,19 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	if err != nil {
 		return ter.TefINTERNAL
 	}
+	postAsset1, err := subtractAMMPoolAmount(assetBalance1, withdrawAmount1, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	postAsset2, err := subtractAMMPoolAmount(assetBalance2, withdrawAmount2, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_3_0) && fixV1_3 {
+		if result := checkAMMPrecisionLoss(postAsset1, postAsset2, newLPBalance, math.ctx); result != ter.TesSUCCESS {
+			return result
+		}
+	}
 
 	deleteResult := deleteAMMAccountIfEmpty(ctx.View, ammKey, ammAccountKey,
 		newLPBalance, a.Asset, a.Asset2, amm, ammAccount)

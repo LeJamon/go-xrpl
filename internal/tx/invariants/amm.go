@@ -95,11 +95,30 @@ func ammPoolHoldsForInvariant(view ReadView, ammAccountID [20]byte, asset1, asse
 	return balance1, balance2
 }
 
-// ammAccountHoldsForInvariant returns the amount held by the AMM account for a specific issue.
-// For XRP: reads from the AMM account's AccountRoot.Balance
-// For IOU: reads from the trustline between AMM account and issuer
 func ammAccountHoldsForInvariant(view ReadView, ammAccountID [20]byte, asset Asset) Amount {
-	if asset.Currency == "" || asset.Currency == "XRP" {
+	if asset.IsMPT() {
+		idBytes, err := hex.DecodeString(asset.MPTIssuanceID)
+		if err != nil || len(idBytes) != 24 {
+			return state.NewMPTAmountWithIssuanceID(0, "", asset.MPTIssuanceID)
+		}
+		var id [24]byte
+		copy(id[:], idBytes)
+		var issuerID [20]byte
+		copy(issuerID[:], id[4:])
+		issuer := state.EncodeAccountIDSafe(issuerID)
+		zero := state.NewMPTAmountWithIssuanceID(0, issuer, asset.MPTIssuanceID)
+		data, err := view.Read(keylet.MPTokenByID(id, ammAccountID))
+		if err != nil || data == nil {
+			return zero
+		}
+		holding, err := state.ParseMPToken(data)
+		if err != nil {
+			return zero
+		}
+		return state.NewMPTAmountWithIssuanceID(int64(holding.MPTAmount), issuer, asset.MPTIssuanceID)
+	}
+
+	if asset.IsNative() {
 		// XRP: read from AccountRoot
 		accountKey := keylet.Account(ammAccountID)
 		data, err := view.Read(accountKey)
@@ -216,16 +235,35 @@ func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view
 
 	// --- visitEntry phase ---
 	// Track AMM entries: extract account ID and LPTokenBalance from before/after.
-	// Track pool changes: RippleState with lsfAMMNode flag, or AccountRoot with non-zero AMMID.
+	// Track pool changes: RippleState with lsfAMMNode, MPToken with lsfMPTAMM,
+	// or AccountRoot with a non-zero AMMID.
 	var (
-		ammAccount     *[20]byte
-		lptAfter       *Amount
-		lptBefore      *Amount
-		ammPoolChanged bool
+		ammAccount        *[20]byte
+		lptAfter          *Amount
+		lptBefore         *Amount
+		lptBeforeDeletion *Amount
+		ammDeleted        bool
+		ammPoolChanged    bool
 	)
 
 	for _, e := range entries {
 		if e.IsDelete {
+			if e.EntryType == entry.TypeAMM {
+				ammDeleted = true
+				before := e.Before
+				if before == nil {
+					before = e.DeleteFinal
+				}
+				if before == nil {
+					return ammParseViolation(fmt.Errorf("deleted AMM SLE missing before state"))
+				}
+				fields, err := parseAMMInvariantFields(before)
+				if err != nil {
+					return ammParseViolation(err)
+				}
+				bal := fields.lptBalance
+				lptBeforeDeletion = &bal
+			}
 			continue
 		}
 
@@ -249,6 +287,11 @@ func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view
 				// Check for lsfAMMNode flag
 				rs, err := state.ParseRippleState(e.After)
 				if err == nil && (rs.Flags&state.LsfAMMNode) != 0 {
+					ammPoolChanged = true
+				}
+			} else if e.EntryType == entry.TypeMPToken {
+				token, err := state.ParseMPToken(e.After)
+				if err == nil && token.Flags&entry.LsfMPTAMM != 0 {
 					ammPoolChanged = true
 				}
 			} else if e.EntryType == entry.TypeAccountRoot {
@@ -276,25 +319,36 @@ func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view
 
 	// --- finalize phase ---
 	enforce := rules != nil && rules.Enabled(amendment.FeatureFixAMMv1_3)
+	enforceAMMDelete := rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_3_0)
 	numberContext := txcore.NumberContextForRules(rules)
 	if len(numberContexts) > 0 {
 		numberContext = numberContexts[0]
 	}
 
 	txType := tx.TxType()
+	if enforceAMMDelete && ammDeleted {
+		switch txType {
+		case TypeAMMWithdraw, TypeAMMClawback, TypeAMMDelete:
+		default:
+			return &InvariantViolation{
+				Name:    "ValidAMM",
+				Message: fmt.Sprintf("AMM invariant failed: unexpected deletion by %s", txType),
+			}
+		}
+	}
 	switch txType {
 	case TypeAMMCreate:
 		return finalizeAMMCreate(tx, view, ammAccount, lptAfter, enforce, numberContext)
 	case TypeAMMDeposit:
 		return finalizeAMMDeposit(tx, view, ammAccount, lptAfter, enforce, numberContext)
 	case TypeAMMClawback, TypeAMMWithdraw:
-		return finalizeAMMWithdraw(tx, view, ammAccount, lptAfter, enforce, numberContext)
+		return finalizeAMMWithdraw(tx, view, ammAccount, lptAfter, ammDeleted, enforce, enforceAMMDelete, numberContext)
 	case TypeAMMBid:
 		return finalizeAMMBid(ammPoolChanged, lptBefore, lptAfter, enforce)
 	case TypeAMMVote:
 		return finalizeAMMVote(ammPoolChanged, lptBefore, lptAfter, enforce)
 	case TypeAMMDelete:
-		return finalizeAMMDelete(ammAccount, result, enforce)
+		return finalizeAMMDelete(ammAccount, ammDeleted, lptBeforeDeletion, result, enforce, enforceAMMDelete)
 	case TypeCheckCash, TypeOfferCreate, TypePayment:
 		return finalizeAMMDEX(ammAccount, enforce)
 	}
@@ -434,7 +488,14 @@ func finalizeAMMCreate(tx Transaction, view ReadView, ammAccount *[20]byte, lptA
 
 // finalizeAMMDelete checks that the AMM object is properly deleted.
 // Reference: rippled InvariantCheck.cpp finalizeDelete (lines 1864-1880)
-func finalizeAMMDelete(ammAccount *[20]byte, result Result, enforce bool) *InvariantViolation {
+func finalizeAMMDelete(
+	ammAccount *[20]byte,
+	ammDeleted bool,
+	lptBeforeDeletion *Amount,
+	result Result,
+	enforce bool,
+	enforceAMMDelete bool,
+) *InvariantViolation {
 	if ammAccount != nil {
 		// AMM object still exists after delete
 		if enforce {
@@ -445,6 +506,33 @@ func finalizeAMMDelete(ammAccount *[20]byte, result Result, enforce bool) *Invar
 			return &InvariantViolation{
 				Name:    "ValidAMM",
 				Message: fmt.Sprintf("AMMDelete invariant failed: %s", msg),
+			}
+		}
+	}
+	if enforceAMMDelete {
+		if result == TesSUCCESS {
+			if !ammDeleted {
+				return &InvariantViolation{
+					Name:    "ValidAMM",
+					Message: "AMMDelete invariant failed: AMM object remained on tesSUCCESS",
+				}
+			}
+			if lptBeforeDeletion == nil {
+				return &InvariantViolation{
+					Name:    "ValidAMM",
+					Message: "AMMDelete invariant failed: AMM object deleted without LP balance",
+				}
+			}
+			if !lptBeforeDeletion.IsZero() {
+				return &InvariantViolation{
+					Name:    "ValidAMM",
+					Message: "AMMDelete invariant failed: AMM object deleted with non-zero LP balance",
+				}
+			}
+		} else if ammDeleted {
+			return &InvariantViolation{
+				Name:    "ValidAMM",
+				Message: "AMMDelete invariant failed: AMM object deleted when result is not tesSUCCESS",
 			}
 		}
 	}
@@ -477,9 +565,20 @@ func finalizeAMMDeposit(tx Transaction, view ReadView, ammAccount *[20]byte, lpt
 // finalizeAMMWithdraw checks the general AMM invariant on withdraw/clawback.
 // AMM may be deleted (last withdraw), so ammAccount == nil is allowed.
 // Reference: rippled InvariantCheck.cpp finalizeWithdraw (lines 1964-1982)
-func finalizeAMMWithdraw(tx Transaction, view ReadView, ammAccount *[20]byte, lptAfter *Amount, enforce bool, ctx state.NumberContext) *InvariantViolation {
+func finalizeAMMWithdraw(
+	tx Transaction,
+	view ReadView,
+	ammAccount *[20]byte,
+	lptAfter *Amount,
+	ammDeleted bool,
+	enforce bool,
+	enforceAMMDelete bool,
+	ctx state.NumberContext,
+) *InvariantViolation {
+	if ammDeleted && enforceAMMDelete {
+		return nil
+	}
 	if ammAccount == nil {
-		// Last Withdraw or Clawback deleted AMM — allowed
 		return nil
 	}
 

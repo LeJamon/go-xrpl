@@ -467,8 +467,8 @@ func TestVaultWithdraw_ShareInheritsVaultHoldingFreeze(t *testing.T) {
 	if err != nil {
 		t.Fatalf("serialize frozen line: %v", err)
 	}
-	rules := amendment.NewRules([][32]byte{amendment.FeatureSingleAssetVault})
-	view := roView{rules: rules, data: map[[32]byte][]byte{
+	baseRules := amendment.NewRules([][32]byte{amendment.FeatureSingleAssetVault})
+	view := roView{rules: baseRules, data: map[[32]byte][]byte{
 		keylet.VaultByID(vaultID).Key: mustVault(t, &vaultData{
 			WithdrawalPolicy: VaultStrategyFirstComeFirstServe,
 			Owner:            submitterID,
@@ -498,8 +498,16 @@ func TestVaultWithdraw_ShareInheritsVaultHoldingFreeze(t *testing.T) {
 		strings.ToUpper(hex.EncodeToString(vaultID[:])),
 		state.NewIssuedAmountFromValue(1, 0, "USD", issuerAddr),
 	)
-	if got := withdraw.Preclaim(view, tx.EngineConfig{Rules: rules}); got != ter.TecLOCKED {
-		t.Fatalf("got %v, want tecLOCKED", got)
+	if got := withdraw.Preclaim(view, tx.EngineConfig{Rules: baseRules}); got != ter.TecLOCKED {
+		t.Fatalf("pre-fix got %v, want tecLOCKED", got)
+	}
+	fixRules := amendment.NewRules([][32]byte{
+		amendment.FeatureSingleAssetVault,
+		amendment.FeatureFixCleanup3_3_0,
+	})
+	view.rules = fixRules
+	if got := withdraw.Preclaim(view, tx.EngineConfig{Rules: fixRules}); got != ter.TecFROZEN {
+		t.Fatalf("fixCleanup3_3_0 got %v, want tecFROZEN", got)
 	}
 }
 

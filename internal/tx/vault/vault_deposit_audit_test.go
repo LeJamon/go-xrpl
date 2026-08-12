@@ -185,6 +185,43 @@ func TestVaultDepositPreclaim_DispatchesMPTRequireAuth(t *testing.T) {
 	}
 }
 
+func TestVaultDepositPreclaim_FixCleanup330ChecksPseudoMPTFreeze(t *testing.T) {
+	view, deposit, mptID, depositor := vaultDepositFixture(t, entry.LsfMPTCanTransfer, true)
+	var pseudo [20]byte
+	copy(pseudo[:], vaultDepositTestID(0x44, 20))
+
+	putToken := func(account [20]byte, flags uint32) {
+		t.Helper()
+		data, err := state.SerializeMPToken(&state.MPTokenData{
+			Account:           account,
+			MPTokenIssuanceID: mptID,
+			MPTAmount:         1_000,
+			Flags:             flags,
+		})
+		vaultDepositPut(t, view, keylet.MPTokenByID(mptID, account), vaultDepositEncoded(t, data, err))
+	}
+	putToken(depositor, 0)
+	putToken(pseudo, entry.LsfMPTLocked)
+
+	fixOff := amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		Disable(amendment.FeatureFixCleanup3_3_0).
+		Build()
+	view.rules = fixOff
+	if result := deposit.Preclaim(view, tx.EngineConfig{Rules: fixOff}); result != ter.TesSUCCESS {
+		t.Fatalf("fixCleanup3_3_0 OFF: got %v, want tesSUCCESS", result)
+	}
+
+	fixOn := amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		Enable(amendment.FeatureFixCleanup3_3_0).
+		Build()
+	view.rules = fixOn
+	if result := deposit.Preclaim(view, tx.EngineConfig{Rules: fixOn}); result != ter.TecLOCKED {
+		t.Fatalf("fixCleanup3_3_0 ON: got %v, want tecLOCKED", result)
+	}
+}
+
 func TestVaultDepositPreclaim_IOUUsesFullBalance(t *testing.T) {
 	view := newVaultDepositView()
 	var issuer, depositor, owner, pseudo [20]byte

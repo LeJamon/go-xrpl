@@ -138,6 +138,9 @@ func (c *CredentialCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) 
 	if exists, _ := view.Exists(keylet.Credential(subjectID, issuerID, credTypeBytes)); exists {
 		return ter.TecDUPLICATE
 	}
+	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) && tx.IsPseudoAccountID(view, subjectID) {
+		return ter.TecPSEUDO_ACCOUNT
+	}
 	return ter.TesSUCCESS
 }
 

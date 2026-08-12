@@ -22,6 +22,10 @@ const (
 // precedenceEngine builds an engine over a mock view with all supported
 // amendments enabled and an open ledger (so the fee floor is active).
 func precedenceEngine(t *testing.T, accounts map[string]*state.AccountRoot) *Engine {
+	return precedenceEngineWithRules(t, accounts, amendment.AllSupportedRules())
+}
+
+func precedenceEngineWithRules(t *testing.T, accounts map[string]*state.AccountRoot, rules *amendment.Rules) *Engine {
 	t.Helper()
 	base := newMockBaseView()
 	for addr, root := range accounts {
@@ -39,7 +43,7 @@ func precedenceEngine(t *testing.T, accounts map[string]*state.AccountRoot) *Eng
 		BaseFee:        10,
 		OpenLedger:     true,
 		LedgerSequence: 100,
-		Rules:          amendment.AllSupportedRules(),
+		Rules:          rules,
 	})
 }
 
@@ -254,5 +258,84 @@ func TestBatchSignerPseudoAccountAuthorizationRejected(t *testing.T) {
 	}})
 	if got != ter.TefBAD_AUTH {
 		t.Fatalf("pseudo-account Batch signer = %v, want TefBAD_AUTH", got)
+	}
+}
+
+func TestPseudoAccountSigningAmendmentGates(t *testing.T) {
+	pseudoID := [32]byte{1}
+	accounts := map[string]*state.AccountRoot{
+		precedenceGenesisAddr: {
+			Account:  precedenceGenesisAddr,
+			Balance:  1_000_000,
+			Sequence: 1,
+			AMMID:    pseudoID,
+		},
+	}
+
+	tests := []struct {
+		name  string
+		rules *amendment.Rules
+		want  ter.Result
+	}{
+		{name: "legacy", rules: amendment.NewRules([][32]byte{amendment.FeatureSponsor}), want: ter.TesSUCCESS},
+		{name: "lending", rules: amendment.NewRules([][32]byte{amendment.FeatureSponsor, amendment.FeatureLendingProtocol}), want: ter.TefBAD_AUTH},
+		{name: "batch v1.1", rules: amendment.NewRules([][32]byte{amendment.FeatureSponsor, amendment.FeatureBatchV1_1}), want: ter.TefBAD_AUTH},
+		{name: "cleanup", rules: amendment.NewRules([][32]byte{amendment.FeatureSponsor, amendment.FeatureFixCleanup3_3_0}), want: ter.TefBAD_AUTH},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			e := precedenceEngineWithRules(t, accounts, test.rules)
+			if got := e.checkPseudoAccount(precedenceGenesisAddr); got != test.want {
+				t.Fatalf("direct pseudo-account signing gate = %v, want %v", got, test.want)
+			}
+
+			got := e.checkBatchSign([]txcore.BatchSignerInfo{{
+				Account:       precedenceGenesisAddr,
+				SigningPubKey: precedenceGenesisPubKey,
+			}})
+			if got != test.want {
+				t.Fatalf("Batch signer pseudo-account gate = %v, want %v", got, test.want)
+			}
+
+			txn := newAccountSet(precedenceSourceAddr)
+			common := txn.GetCommon()
+			common.Sponsor = precedenceGenesisAddr
+			common.SponsorSignature = &txcore.SponsorSignature{SigningPubKey: precedenceGenesisPubKey}
+			if got := e.checkSign(txn, common); got != test.want {
+				t.Fatalf("Sponsor signer pseudo-account gate = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestPseudoSponsorRejectedBeforeDryRunSignatureBypass(t *testing.T) {
+	pseudoID := [32]byte{1}
+	e := precedenceEngineWithRules(t, map[string]*state.AccountRoot{
+		precedenceGenesisAddr: {
+			Account:  precedenceGenesisAddr,
+			Balance:  1_000_000,
+			Sequence: 5,
+		},
+		precedenceSourceAddr: {
+			Account:  precedenceSourceAddr,
+			Balance:  1_000_000,
+			Sequence: 1,
+			AMMID:    pseudoID,
+		},
+	}, amendment.NewRules([][32]byte{
+		amendment.FeatureSponsor,
+		amendment.FeatureFixCleanup3_3_0,
+	}))
+	e.config.SkipSignatureVerification = true
+
+	txn := newAccountSet(precedenceGenesisAddr)
+	common := txn.GetCommon()
+	common.SigningPubKey = precedenceGenesisPubKey
+	common.Sponsor = precedenceSourceAddr
+	common.SponsorSignature = &txcore.SponsorSignature{}
+
+	if got := e.checkSign(txn, common); got != ter.TefBAD_AUTH {
+		t.Fatalf("dry-run pseudo-account Sponsor = %v, want TefBAD_AUTH", got)
 	}
 }

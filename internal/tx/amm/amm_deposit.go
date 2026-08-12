@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -247,10 +248,24 @@ func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Re
 	lptKey := keylet.Line(accountID, ammAccountID, lptCurrency)
 	lptExists, _ := view.Exists(lptKey)
 
-	// Check authorization and freeze status for BOTH pool assets — only when
-	// AMMClawback is enabled.
+	// Check authorization and freeze status for BOTH pool assets. fixCleanup3_3_0
+	// uses the unified pseudo-account deposit rules; the legacy path remains
+	// unchanged when the amendment is disabled.
 	// Reference: rippled AMMDeposit.cpp lines 244-273
-	if config.RequireRules().Enabled(amendment.FeatureAMMClawback) {
+	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
+		checkAsset := func(asset tx.Asset) ter.Result {
+			if result := requireAssetAuth(view, asset, accountID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
+				return result
+			}
+			return mptutil.CheckDepositFreeze(view, accountID, ammAccountID, asset)
+		}
+		if result := checkAsset(a.Asset); result != ter.TesSUCCESS {
+			return result
+		}
+		if result := checkAsset(a.Asset2); result != ter.TesSUCCESS {
+			return result
+		}
+	} else if config.RequireRules().Enabled(amendment.FeatureAMMClawback) {
 		if result := requireAssetAuth(view, a.Asset, accountID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
 			return result
 		}
@@ -273,11 +288,13 @@ func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Re
 		if result := requireAssetAuth(view, amtAsset, accountID, true, config.ParentCloseTime); result != ter.TesSUCCESS {
 			return result
 		}
-		if assetFrozen(view, ammAccountID, amtAsset) {
-			return frozenAssetResult(amtAsset)
-		}
-		if assetIndividuallyFrozen(view, accountID, amtAsset) {
-			return frozenAssetResult(amtAsset)
+		if !config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
+			if assetFrozen(view, ammAccountID, amtAsset) {
+				return frozenAssetResult(amtAsset)
+			}
+			if assetIndividuallyFrozen(view, accountID, amtAsset) {
+				return frozenAssetResult(amtAsset)
+			}
 		}
 		if checkBalance {
 			if isXRPAsset(amtAsset) {
@@ -1042,6 +1059,19 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 	newLPBalance, err := amm.LPTokenBalance.AddWithNumberContext(lpTokensToIssue, math.ctx, state.RoundToNearest)
 	if err != nil {
 		return ter.TefINTERNAL
+	}
+	postAsset1, err := addAMMPoolAmount(assetBalance1, depositAmount1, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	postAsset2, err := addAMMPoolAmount(assetBalance2, depositAmount2, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_3_0) && fixV1_3 {
+		if result := checkAMMPrecisionLoss(postAsset1, postAsset2, newLPBalance, math.ctx); result != ter.TesSUCCESS {
+			return result
+		}
 	}
 	amm.LPTokenBalance = newLPBalance
 

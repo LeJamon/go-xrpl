@@ -200,6 +200,25 @@ func TestValidAMM_VoteRejectsLPTokenIssueChange(t *testing.T) {
 	}
 }
 
+func TestValidAMM_VoteDetectsMPTPoolChange(t *testing.T) {
+	rules := amendment.NewRules([][32]byte{amendment.FeatureFixAMMv1_3})
+	accountID, err := state.DecodeAccountID(addrHolderA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := state.SerializeMPToken(&state.MPTokenData{
+		Account: accountID,
+		Flags:   entry.LsfMPTAMM,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes := []InvariantEntry{{EntryType: entry.TypeMPToken, After: token}}
+	if v := checkValidAMM(stubTx{txType: TypeAMMVote}, TesSUCCESS, changes, stubView{}, rules); v == nil {
+		t.Fatal("expected ValidAMM violation: AMMVote changed MPT pool holding")
+	}
+}
+
 // TestValidAMM_DeleteMustRemoveObject: a successful AMMDelete that leaves the
 // AMM object behind must trip ValidAMM; a delete that removes it satisfies.
 // Reference: rippled InvariantCheck.cpp finalizeDelete (lines 1864-1880).
@@ -214,15 +233,26 @@ func TestValidAMM_DeleteMustRemoveObject(t *testing.T) {
 		t.Fatalf("unexpected violation name %q", v.Name)
 	}
 
-	// AMM properly removed: the delete entry is skipped in visitEntry, so no
-	// AMM account is observed and the invariant is satisfied.
+	// A cleanup-gated AMMDelete may only erase an AMM whose LP balance was zero.
 	removed := []InvariantEntry{{
 		EntryType: entry.TypeAMM,
-		Before:    ammSLE(t, addrIssuer, "1000"),
+		Before:    ammSLE(t, addrIssuer, "0"),
 		IsDelete:  true,
 	}}
 	if v := checkValidAMM(tx, TesSUCCESS, removed, stubView{}, rules); v != nil {
 		t.Fatalf("AMM deleted cleanly: unexpected violation %v", v)
+	}
+}
+
+func TestValidAMM_LastWithdrawDeletionBeforeCleanup(t *testing.T) {
+	rules := amendment.NewRules([][32]byte{amendment.FeatureFixAMMv1_3})
+	removed := []InvariantEntry{{
+		EntryType: entry.TypeAMM,
+		Before:    ammSLE(t, addrIssuer, "0"),
+		IsDelete:  true,
+	}}
+	if v := checkValidAMM(stubTx{txType: TypeAMMWithdraw}, TesSUCCESS, removed, stubView{}, rules); v != nil {
+		t.Fatalf("last withdraw with cleanup disabled: unexpected violation %v", v)
 	}
 }
 

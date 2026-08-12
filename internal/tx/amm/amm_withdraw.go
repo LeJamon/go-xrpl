@@ -234,11 +234,17 @@ func (a *AMMWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 		if result := requireAssetAuth(view, amtAsset, accountID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
 			return result
 		}
-		if assetFrozen(view, ammAccountID, amtAsset) {
-			return frozenAssetResult(amtAsset)
-		}
-		if assetIndividuallyFrozen(view, accountID, amtAsset) {
-			return frozenAssetResult(amtAsset)
+		if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
+			if result := mptutil.CheckWithdrawFreeze(view, ammAccountID, accountID, accountID, amtAsset); result != ter.TesSUCCESS {
+				return result
+			}
+		} else {
+			if assetFrozen(view, ammAccountID, amtAsset) {
+				return frozenAssetResult(amtAsset)
+			}
+			if assetIndividuallyFrozen(view, accountID, amtAsset) {
+				return frozenAssetResult(amtAsset)
+			}
 		}
 		return ter.TesSUCCESS
 	}
@@ -616,6 +622,12 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 		tPlusAE := lptBalanceNumber.AddRounded(aeFMinus2, state.RoundToNearest)
 		tfMinusAE := lptBalanceNumber.MulRounded(f, state.RoundToNearest).
 			AddRounded(ae.Negate(), state.RoundToNearest)
+		if tfMinusAE.IsZero() {
+			if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_3_0) {
+				return ter.TecAMM_FAILED
+			}
+			return ter.TefEXCEPTION
+		}
 
 		tokensAdj := getRoundedLPTokensCb(math, fixV1_3,
 			func() state.XRPLNumber {
@@ -801,6 +813,19 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 	newLPBalance, err := amm.LPTokenBalance.SubWithNumberContext(lpTokensToRedeem, math.ctx, state.RoundToNearest)
 	if err != nil {
 		return ter.TefINTERNAL
+	}
+	postAsset1, err := subtractAMMPoolAmount(assetBalance1, withdrawAmount1, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	postAsset2, err := subtractAMMPoolAmount(assetBalance2, withdrawAmount2, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_3_0) && fixV1_3 {
+		if result := checkAMMPrecisionLoss(postAsset1, postAsset2, newLPBalance, math.ctx); result != ter.TesSUCCESS {
+			return result
+		}
 	}
 	// NOTE: Asset balances are NOT stored in AMM entry
 	// They are updated by the balance transfers above:

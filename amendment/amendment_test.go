@@ -42,11 +42,11 @@ func TestFixCleanup330Registration(t *testing.T) {
 	if got := f.ID[:]; !bytes.Equal(got, want) {
 		t.Fatalf("fixCleanup3_3_0 ID = %X, want %s", got, amendmentID)
 	}
-	if f.Supported != SupportedNo || f.Vote != VoteDefaultNo {
-		t.Fatalf("fixCleanup3_3_0 status = (%v, %v), want (SupportedNo, VoteDefaultNo)", f.Supported, f.Vote)
+	if f.Supported != SupportedYes || f.Vote != VoteDefaultNo {
+		t.Fatalf("fixCleanup3_3_0 status = (%v, %v), want (SupportedYes, VoteDefaultNo)", f.Supported, f.Vote)
 	}
-	if AllSupportedRules().Enabled(FeatureFixCleanup3_3_0) {
-		t.Fatal("fixCleanup3_3_0 must remain disabled until all cleanup work is complete")
+	if !AllSupportedRules().Enabled(FeatureFixCleanup3_3_0) {
+		t.Fatal("fixCleanup3_3_0 must be enabled once all cleanup work is complete")
 	}
 }
 
