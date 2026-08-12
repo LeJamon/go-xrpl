@@ -342,7 +342,6 @@ func (e *TestEnv) applyStaged(
 	txn tx.Transaction,
 	config tx.EngineConfig,
 	transactionCount uint32,
-	applyBatchInners bool,
 ) tx.ApplyResult {
 	blob, err := tx.SerializeTransaction(txn)
 	if err != nil {
@@ -368,12 +367,7 @@ func (e *TestEnv) applyStaged(
 		engine.SetInvariantViolationHookForTest(e.invariantViolationHook)
 	}
 	processor := txengine.NewBlockProcessor(engine)
-	var blockResult txengine.BlockTxResult
-	if applyBatchInners {
-		blockResult, err = processor.ApplyLedgerTransaction(txn, blob)
-	} else {
-		blockResult, err = processor.ApplyTransaction(txn, blob)
-	}
+	blockResult, err := processor.ApplyTransaction(txn, blob)
 	if err != nil {
 		e.t.Fatalf("apply transaction atomically: %v", err)
 	}
@@ -394,7 +388,7 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 
 	// Open-ledger admission commits only the outer Batch. Consensus replay at
 	// close applies the inner transactions in canonical order.
-	applyResult := e.applyStaged(txn, engineConfig, e.txInLedger, false)
+	applyResult := e.applyStaged(txn, engineConfig, e.txInLedger)
 
 	if applyResult.Result.IsApplied() {
 		e.txInLedger++

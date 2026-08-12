@@ -10,6 +10,7 @@ import (
 	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
 	"github.com/LeJamon/go-xrpl/internal/tx/check"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/stretchr/testify/require"
 )
@@ -185,14 +186,14 @@ func TestTicketsOpenLedger(t *testing.T) {
 			AddInnerTx(MakeInnerPaymentXRPWithTicket(alice, bob, 1, aliceTicketSeq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 2, aliceSeq)).
 			MustBuild()
-		result = env.Submit(batch)
-		jtx.RequireTxSuccess(t, result)
+		batchResult := env.Submit(batch)
+		jtx.RequireTxSuccess(t, batchResult)
 		env.Close()
+		requireBatchLedgerData(t, env, batch, batchResult, ter.TesSUCCESS, ter.TesSUCCESS)
 
-		// After close: batch succeeds. The inner tx consumed ticket+1, so
-		// the standalone noop that used ticket+1 fails during replay
-		// (ticket already consumed). alice seq should advance.
 		env.Close()
+		closed := env.LastClosedLedger()
+		require.Zero(t, closed.TxCount())
 
 		// Verify final state: alice consumed aliceSeq (inner payment #2),
 		// ticket (batch outer), ticket+1 (inner payment #1)
@@ -220,8 +221,8 @@ func TestTicketsOpenLedger(t *testing.T) {
 			AddInnerTx(MakeInnerPaymentXRPWithTicket(alice, bob, 1, aliceTicketSeq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 2, aliceSeq)).
 			MustBuild()
-		result := env.Submit(batch)
-		jtx.RequireTxSuccess(t, result)
+		batchResult := env.Submit(batch)
+		jtx.RequireTxSuccess(t, batchResult)
 
 		// AccountSet Txn using ticket+1 (already consumed by batch inner)
 		noopTxn := accounttx.NewAccountSet(alice.Address)
@@ -234,8 +235,10 @@ func TestTicketsOpenLedger(t *testing.T) {
 		noopResult := env.Submit(noopTxn)
 		jtx.RequireTxSuccess(t, noopResult)
 		env.Close()
+		requireBatchLedgerData(t, env, batch, batchResult, ter.TesSUCCESS, ter.TesSUCCESS)
 
 		env.Close()
+		require.Zero(t, env.LastClosedLedger().TxCount())
 
 		// Verify final state
 		require.Equal(t, aliceSeq+1, env.Seq(alice))
@@ -455,11 +458,16 @@ func TestSequenceOpenLedger(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// After first close: batch applied (alice seq -> aliceSeq+2).
-		// Noop at aliceSeq+2 may or may not be in first closed ledger
-		// (depends on canonical ordering and replay behavior).
-		// Close again to ensure the noop is retried if held.
+		requireBatchLedgerData(t, env, batch, result, ter.TesSUCCESS, ter.TesSUCCESS)
+
 		env.Close()
+		closed := env.LastClosedLedger()
+		require.Equal(t, uint32(1), closed.TxCount())
+		noopID, err := tx.ComputeTransactionHash(noopTxn)
+		require.NoError(t, err)
+		noopExists, err := closed.TxExists(noopID)
+		require.NoError(t, err)
+		require.True(t, noopExists)
 
 		// Final state verification:
 		// - alice's seq should be aliceSeq+3 (aliceSeq consumed by inner pay#1,

@@ -438,12 +438,12 @@ func (e *Engine) preflightMultiSignStructure(tx txcore.Transaction, common *txco
 	return ter.TesSUCCESS
 }
 
-// preflightBatchSignerStructure enforces the rules-gated upper bound on each
+// preflightBatchSignerStructure enforces the upper bound on each
 // multi-signed BatchSigner's nested Signers array. rippled checks this inside
 // multiSignHelper (called from Batch::preflight with ctx.rules); an out-of-range
 // array there surfaces as temBAD_SIGNATURE at the checkBatchSign call site. The
-// crypto verification of those signers lives in Batch.Validate(), which has no
-// rules access, so the rules-dependent size bound is enforced here in preflight.
+// crypto verification of those signers lives in Batch.Validate(), so the size
+// bound is enforced here in preflight.
 func (e *Engine) preflightBatchSignerStructure(tx txcore.Transaction) ter.Result {
 	bsp, ok := tx.(txcore.BatchSignerProvider)
 	if !ok {

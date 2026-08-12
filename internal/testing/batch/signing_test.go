@@ -274,12 +274,12 @@ func TestBatchSigningVectors(t *testing.T) {
 	})
 }
 
-// TestBatchSignerArrayBound exercises the rules-gated upper bound on a
-// multi-signed BatchSigner's nested Signers array. rippled enforces it in
-// multiSignHelper (called from Batch::preflight with ctx.rules): 32 with
-// featureExpandedSignerList, 8 without. An over-bound array there surfaces as
-// temBAD_SIGNATURE at the checkBatchSign call site (Batch.cpp:439-444).
-// Reference: rippled STTx::maxMultiSigners + Batch_test.cpp multi-sign vectors.
+// TestBatchSignerArrayBound exercises the 32-entry upper bound on a
+// multi-signed BatchSigner's nested Signers array. ExpandedSignerList is
+// retired in rippled v3.2.0, so the legacy eight-entry regime is no longer
+// reachable. An over-bound array surfaces as temBAD_SIGNATURE at the
+// checkBatchSign call site.
+// Reference: rippled STTx.h kMaxMultiSigners and STTx.cpp multiSignHelper.
 func TestBatchSignerArrayBound(t *testing.T) {
 	makeNestedSigners := func(env *jtx.TestEnv, n int) []*jtx.Account {
 		signers := make([]*jtx.Account, n)
