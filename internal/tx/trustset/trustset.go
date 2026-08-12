@@ -329,8 +329,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 				if amm.IsAMMEmpty(ammData) {
 					return ter.TecAMM_EMPTY
 				}
-				// Compute LP token currency from the AMM's asset pair
-				lptCurrency := amm.GenerateAMMLPTCurrency(ammData.Asset.Currency, ammData.Asset2.Currency)
+				lptCurrency := ammData.LPTokenBalance.Currency
 				if lptCurrency != t.LimitAmount.Currency {
 					return ter.TecNO_PERMISSION
 				}

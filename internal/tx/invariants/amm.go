@@ -99,6 +99,26 @@ func ammPoolHoldsForInvariant(view ReadView, ammAccountID [20]byte, asset1, asse
 // For XRP: reads from the AMM account's AccountRoot.Balance
 // For IOU: reads from the trustline between AMM account and issuer
 func ammAccountHoldsForInvariant(view ReadView, ammAccountID [20]byte, asset Asset) Amount {
+	if asset.IsMPT() {
+		var id [24]byte
+		decoded, err := hex.DecodeString(asset.MPTIssuanceID)
+		if err != nil || len(decoded) != len(id) {
+			return state.NewMPTAmountWithIssuanceID(0, "", asset.MPTIssuanceID)
+		}
+		copy(id[:], decoded)
+		var issuerID [20]byte
+		copy(issuerID[:], id[4:])
+		issuer := state.EncodeAccountIDSafe(issuerID)
+		data, err := view.Read(keylet.MPTokenByID(id, ammAccountID))
+		if err != nil || data == nil {
+			return state.NewMPTAmountWithIssuanceID(0, issuer, asset.MPTIssuanceID)
+		}
+		token, err := state.ParseMPToken(data)
+		if err != nil {
+			return state.NewMPTAmountWithIssuanceID(0, issuer, asset.MPTIssuanceID)
+		}
+		return state.NewMPTAmountWithIssuanceID(int64(token.MPTAmount), issuer, asset.MPTIssuanceID)
+	}
 	if asset.Currency == "" || asset.Currency == "XRP" {
 		// XRP: read from AccountRoot
 		accountKey := keylet.Account(ammAccountID)
@@ -112,7 +132,6 @@ func ammAccountHoldsForInvariant(view ReadView, ammAccountID [20]byte, asset Ass
 		}
 		return state.NewXRPAmountFromInt(int64(account.Balance))
 	}
-
 	// IOU: read from trustline
 	issuerID, err := state.DecodeAccountID(asset.Issuer)
 	if err != nil {

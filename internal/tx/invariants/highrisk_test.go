@@ -588,6 +588,46 @@ func TestValidMPTIssuance_MayAuthorizePrivilege(t *testing.T) {
 	}
 }
 
+func TestValidMPTIssuance_AMMPrivileges(t *testing.T) {
+	created := mptInvariantEntry(t, addrHolderA, addrIssuer, false)
+	deleted := mptInvariantEntry(t, addrHolderA, addrIssuer, true)
+	rules := amendment.NewRulesBuilder().Enable(amendment.FeatureMPTokensV2).Build()
+
+	for _, count := range []int{0, 1, 2} {
+		entries := make([]InvariantEntry, count)
+		for i := range entries {
+			entries[i] = created
+		}
+		if v := checkValidMPTIssuance(stubTx{txType: TypeAMMCreate}, TesSUCCESS, entries, stubView{}, rules); v != nil {
+			t.Fatalf("AMMCreate with %d MPToken creations: %v", count, v)
+		}
+	}
+	if v := checkValidMPTIssuance(stubTx{txType: TypeAMMCreate}, TesSUCCESS,
+		[]InvariantEntry{created, created, created}, stubView{}, rules); v == nil {
+		t.Fatal("expected AMMCreate with three MPToken creations to violate ValidMPTIssuance")
+	}
+
+	for _, txType := range []TxType{TypeAMMWithdraw, TypeAMMClawback} {
+		if v := checkValidMPTIssuance(stubTx{txType: txType}, TesSUCCESS,
+			[]InvariantEntry{created, deleted, deleted}, stubView{}, rules); v != nil {
+			t.Fatalf("%s valid holding reconciliation: %v", txType, v)
+		}
+		if v := checkValidMPTIssuance(stubTx{txType: txType}, TesSUCCESS,
+			[]InvariantEntry{created, created}, stubView{}, rules); v == nil {
+			t.Fatalf("expected %s with two MPToken creations to violate ValidMPTIssuance", txType)
+		}
+	}
+
+	if v := checkValidMPTIssuance(stubTx{txType: TypeAMMDelete}, TesSUCCESS,
+		[]InvariantEntry{deleted, deleted}, stubView{}, rules); v != nil {
+		t.Fatalf("AMMDelete with two MPToken deletions: %v", v)
+	}
+	if v := checkValidMPTIssuance(stubTx{txType: TypeAMMDelete}, TesSUCCESS,
+		[]InvariantEntry{deleted, deleted, deleted}, stubView{}, rules); v == nil {
+		t.Fatal("expected AMMDelete with three MPToken deletions to violate ValidMPTIssuance")
+	}
+}
+
 func TestValidMPTIssuance_EscrowFinishFeatureGate(t *testing.T) {
 	issuance := []InvariantEntry{mptIssuanceInvariantEntry(t, nil, false)}
 	escrowFinish := stubTx{txType: TypeEscrowFinish}
