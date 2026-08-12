@@ -10,7 +10,6 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
-	batchtesting "github.com/LeJamon/go-xrpl/internal/testing/batch"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
@@ -42,6 +41,36 @@ func signedPaymentWithFee(t *testing.T, env *jtx.TestEnv, sender, receiver *jtx.
 		t.Fatalf("hex.DecodeString: %v", err)
 	}
 	hash, err := tx.ComputeTransactionHash(txn)
+	if err != nil {
+		t.Fatalf("ComputeTransactionHash: %v", err)
+	}
+	return blob, hash
+}
+
+func innerBatchPaymentBlob(t *testing.T, sender, receiver *jtx.Account) ([]byte, [32]byte) {
+	t.Helper()
+	txn := payment.Pay(sender, receiver, 1).Fee(10).Sequence(1).Build()
+	txn.GetCommon().SetFlags(tx.TfInnerBatchTxn)
+	txn.GetCommon().SigningPubKey = ""
+
+	txMap, err := txn.Flatten()
+	if err != nil {
+		t.Fatalf("Flatten: %v", err)
+	}
+	txMap["SigningPubKey"] = ""
+	hexStr, err := binarycodec.Encode(txMap)
+	if err != nil {
+		t.Fatalf("binarycodec.Encode: %v", err)
+	}
+	blob, err := hex.DecodeString(hexStr)
+	if err != nil {
+		t.Fatalf("hex.DecodeString: %v", err)
+	}
+	parsed, err := tx.ParseFromBinary(blob)
+	if err != nil {
+		t.Fatalf("ParseFromBinary: %v", err)
+	}
+	hash, err := tx.ComputeTransactionHash(parsed)
 	if err != nil {
 		t.Fatalf("ComputeTransactionHash: %v", err)
 	}
@@ -100,6 +129,58 @@ func TestService_SubmitTransaction_RejectsOversizedMemo(t *testing.T) {
 	}
 	if res.CurrentLedgerState != nil {
 		t.Errorf("local rejection must omit current-ledger state, got %+v", res.CurrentLedgerState)
+	}
+}
+
+func TestService_SubmitTransaction_RejectsInnerBatchTransaction(t *testing.T) {
+	tests := []struct {
+		name       string
+		amendments [][32]byte
+		want       ter.Result
+	}{
+		{
+			name:       "Batch enabled",
+			amendments: [][32]byte{amendment.FeatureBatch},
+			want:       ter.TemINVALID_FLAG,
+		},
+		{
+			name:       "fixBatchInnerSigs enabled",
+			amendments: [][32]byte{amendment.FeatureBatch, amendment.FeatureFixBatchInnerSigs},
+			want:       ter.TemINVALID,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := defaultServiceConfig()
+			cfg.Startup.Mode = service.StartupFresh
+			cfg.GenesisConfig.Amendments = append(cfg.GenesisConfig.Amendments, test.amendments...)
+			svc, err := service.New(cfg)
+			if err != nil {
+				t.Fatalf("service.New: %v", err)
+			}
+			if err := svc.Start(); err != nil {
+				t.Fatalf("service.Start: %v", err)
+			}
+			t.Cleanup(svc.Stop)
+			for _, feature := range test.amendments {
+				if !svc.TransactionRules().Enabled(feature) {
+					t.Fatalf("configured amendment %X is not enabled", feature)
+				}
+			}
+
+			blob, hash := innerBatchPaymentBlob(t, jtx.MasterAccount(), jtx.NewAccount("alice"))
+			result := submitBlob(t, svc, blob, false)
+			if result.Result != test.want {
+				t.Fatalf("Result = %s, want %s", result.Result, test.want)
+			}
+			if result.Applied {
+				t.Fatal("directly submitted inner Batch transaction applied")
+			}
+			if openLedgerHasTx(t, svc, hash) {
+				t.Fatal("directly submitted inner Batch transaction entered the open ledger")
+			}
+		})
 	}
 }
 
@@ -227,16 +308,25 @@ func TestService_SubmitTransaction_BatchSignerFailureRemainsQueryable(t *testing
 	env.SetVerifySignatures(true)
 	outer := jtx.MasterAccount()
 	innerSigner := jtx.NewAccount("batch-signer")
-	batch := batchtesting.NewBatchBuilder(
-		outer,
-		1,
-		batchtesting.CalcBatchFeeFromEnv(env, 1, 2),
-		batchtx.BatchFlagAllOrNothing,
-	).
-		AddInnerTx(batchtesting.MakeInnerPaymentXRP(outer, innerSigner, 1, 2)).
-		AddInnerTx(batchtesting.MakeInnerPaymentXRP(innerSigner, outer, 1, 1)).
-		AddGarbageSigner(innerSigner).
-		Build()
+	batch := batchtx.NewBatch(outer.Address)
+	batch.Fee = "50"
+	batch.SetSequence(1)
+	batch.SetFlags(batchtx.BatchFlagAllOrNothing)
+	for _, inner := range []tx.Transaction{
+		payment.Pay(outer, innerSigner, uint64(jtx.XRP(1))).Fee(0).Sequence(2).Build(),
+		payment.Pay(innerSigner, outer, uint64(jtx.XRP(1))).Fee(0).Sequence(1).Build(),
+	} {
+		inner.GetCommon().SigningPubKey = ""
+		inner.GetCommon().SetFlags(tx.TfInnerBatchTxn)
+		batch.AddInnerTransaction(inner)
+	}
+	batch.BatchSigners = []batchtx.BatchSigner{{
+		BatchSigner: batchtx.BatchSignerData{
+			Account:           innerSigner.Address,
+			SigningPubKey:     innerSigner.PublicKeyHex(),
+			BatchTxnSignature: "DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF",
+		},
+	}}
 	env.SignWith(batch, outer)
 
 	txMap, err := batch.Flatten()

@@ -392,12 +392,12 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 		feeTrack:   true,
 	})
 
-	// Seed the engine's transaction count so metadata indexes continue across
-	// every outer and committed Batch-inner transaction in the current ledger.
-	applyResult := e.applyStaged(txn, engineConfig, e.txInLedger, true)
+	// Open-ledger admission commits only the outer Batch. Consensus replay at
+	// close applies the inner transactions in canonical order.
+	applyResult := e.applyStaged(txn, engineConfig, e.txInLedger, false)
 
 	if applyResult.Result.IsApplied() {
-		e.txInLedger += 1 + uint32(len(applyResult.AppliedInnerTransactions))
+		e.txInLedger++
 	}
 	if _, batch := txn.(tx.BatchInnerApplier); batch && applyResult.Applied {
 		e.needsConsensusBuild = true

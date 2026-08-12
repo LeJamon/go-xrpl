@@ -34,10 +34,10 @@ func TestBuilderSortsNestedSignersByBinaryAccountID(t *testing.T) {
 	}
 
 	batch := NewBatchBuilder(master, 1, 100, 0x00010000). // tfAllOrNothing
-								AddInnerTx(MakeFakeInnerTx()).
-								AddInnerTx(MakeFakeInnerTx()).
+								AddInnerTx(MakeFakeInnerTx(1)).
+								AddInnerTx(MakeFakeInnerTx(2)).
 								AddMultiSignBatchSigner(master, signers).
-								Build()
+								MustBuild()
 
 	require.Len(t, batch.BatchSigners, 1)
 	nested := batch.BatchSigners[0].BatchSigner.Signers
@@ -54,4 +54,18 @@ func TestBuilderSortsNestedSignersByBinaryAccountID(t *testing.T) {
 		}
 		last = id
 	}
+}
+
+func TestBuilderReturnsSigningMessageErrors(t *testing.T) {
+	outer := jtx.NewAccount("outer")
+	signer := jtx.NewAccount("signer")
+
+	batch, err := NewBatchBuilder(outer, 1, 50, 0x00010000).
+		AddInnerTx(nil).
+		AddInnerTx(MakeFakeInnerTx(2)).
+		AddSigner(signer).
+		Build()
+
+	require.Nil(t, batch)
+	require.ErrorContains(t, err, "build Batch signing message")
 }
