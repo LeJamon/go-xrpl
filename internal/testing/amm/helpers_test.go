@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
@@ -14,6 +15,15 @@ type stubAMMReader struct {
 	existsErr error
 	data      []byte
 	readErr   error
+}
+
+func TestAMMCreateBuilderFee(t *testing.T) {
+	account := jtx.NewAccount("alice")
+	amount1 := XRPAmount(1)
+	amount2 := XRPAmount(2)
+
+	require.Empty(t, AMMCreate(account, amount1, amount2).Build().Fee)
+	require.Equal(t, "123", AMMCreate(account, amount1, amount2).Fee("123").Build().Fee)
 }
 
 func (r stubAMMReader) Exists(keylet.Keylet) (bool, error) { return r.exists, r.existsErr }
