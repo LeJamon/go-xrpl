@@ -221,7 +221,7 @@ func TestPreflightPrecedence_DelegateBeforeNetworkID(t *testing.T) {
 	})
 
 	t.Run("delegate-disabled beats NetworkID", func(t *testing.T) {
-		e := preflightEngine(allRules()) // PermissionDelegationV1_1 is Supported::no → disabled
+		e := preflightEngine(rulesWithout("PermissionDelegationV1_1"))
 		tx := newAccountSet(precedenceSourceAddr)
 		tx.Delegate = precedenceGenesisAddr // present, PermissionDelegationV1_1 off → temDISABLED
 		tx.NetworkID = u32(99)
@@ -229,6 +229,35 @@ func TestPreflightPrecedence_DelegateBeforeNetworkID(t *testing.T) {
 			t.Fatalf("preflight = %v, want TemDISABLED", got)
 		}
 	})
+}
+
+func TestDelegateRejectsNonDelegatableTypesWithoutGranularPermissions(t *testing.T) {
+	rules := allRules()
+	for _, txType := range []txcore.Type{
+		txcore.TypeRegularKeySet,
+		txcore.TypeSignerListSet,
+		txcore.TypeAccountDelete,
+		txcore.TypeDelegateSet,
+		txcore.TypeVaultCreate,
+		txcore.TypeBatch,
+		txcore.TypeLoanSet,
+		txcore.TypeConfidentialMPTConvert,
+		txcore.TypeSponsorshipTransfer,
+	} {
+		transaction := txcore.NewBaseTx(txType, precedenceSourceAddr)
+		transaction.Delegate = precedenceGenesisAddr
+		if got := checkDelegate(transaction, transaction.GetCommon(), rules); got != ter.TemINVALID {
+			t.Fatalf("checkDelegate(%s) = %v, want temINVALID", txType, got)
+		}
+	}
+
+	for _, txType := range []txcore.Type{txcore.TypeAccountSet, txcore.TypePayment, txcore.TypeTrustSet} {
+		transaction := txcore.NewBaseTx(txType, precedenceSourceAddr)
+		transaction.Delegate = precedenceGenesisAddr
+		if got := checkDelegate(transaction, transaction.GetCommon(), rules); got != ter.TesSUCCESS {
+			t.Fatalf("checkDelegate(%s) = %v, want tesSUCCESS", txType, got)
+		}
+	}
 }
 
 // TestPreflightPrecedence_NetworkIDBeforeAccount pins finding E-account: the

@@ -12,38 +12,6 @@ import (
 // Reference: rippled Protocol.h — std::size_t constexpr permissionMaxSize = 10
 const permissionMaxSize = 10
 
-// notDelegatableTxTypes maps transaction type values that are notDelegatable.
-// Reference: rippled transactions.macro — TRANSACTION(tag, value, name, Delegation::notDelegatable, ...)
-// The key is the tx type value (not permissionValue), matching rippled's delegatableTx_ map.
-var notDelegatableTxTypes = map[uint16]bool{
-	3:   true, // ttACCOUNT_SET
-	5:   true, // ttREGULAR_KEY_SET
-	12:  true, // ttSIGNER_LIST_SET
-	21:  true, // ttACCOUNT_DELETE
-	64:  true, // ttDELEGATE_SET
-	65:  true, // ttVAULT_CREATE
-	66:  true, // ttVAULT_SET
-	67:  true, // ttVAULT_DELETE
-	68:  true, // ttVAULT_DEPOSIT
-	69:  true, // ttVAULT_WITHDRAW
-	70:  true, // ttVAULT_CLAWBACK
-	71:  true, // ttBATCH
-	74:  true, // ttLOAN_BROKER_SET
-	75:  true, // ttLOAN_BROKER_DELETE
-	76:  true, // ttLOAN_BROKER_COVER_DEPOSIT
-	77:  true, // ttLOAN_BROKER_COVER_WITHDRAW
-	78:  true, // ttLOAN_BROKER_COVER_CLAWBACK
-	80:  true, // ttLOAN_SET
-	81:  true, // ttLOAN_DELETE
-	82:  true, // ttLOAN_MANAGE
-	84:  true, // ttLOAN_PAY
-	85:  true, // ttCONFIDENTIAL_MPT_CONVERT
-	90:  true, // ttSPONSORSHIP_TRANSFER
-	100: true, // ttAMENDMENT (EnableAmendment)
-	101: true, // ttFEE (SetFee)
-	102: true, // ttUNL_MODIFY (UNLModify)
-}
-
 // DelegateSet sets up delegation for an account.
 // Reference: rippled DelegateSet.cpp
 type DelegateSet struct {
@@ -193,11 +161,22 @@ func (d *DelegateSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 	if err != nil {
 		return ter.TecNO_TARGET
 	}
-	if exists, _ := view.Exists(keylet.Account(authorizeID)); !exists {
+	authorize, readErr := tx.ReadAccountRoot(view, authorizeID)
+	if readErr != nil {
+		return ter.TefINTERNAL
+	}
+	if authorize == nil {
 		return ter.TecNO_TARGET
 	}
+	if authorize.IsPseudoAccount() {
+		return ter.TecPSEUDO_ACCOUNT
+	}
 	if len(d.permissionValues()) == 0 {
-		if exists, _ := view.Exists(keylet.Delegate(accountID, authorizeID)); !exists {
+		data, delegateErr := view.Read(keylet.Delegate(accountID, authorizeID))
+		if delegateErr != nil {
+			return ter.TefINTERNAL
+		}
+		if data == nil {
 			return ter.TecNO_ENTRY
 		}
 	}
@@ -221,7 +200,10 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	delegateKey := keylet.Delegate(ctx.AccountID, authorizeID)
 
 	existingData, readErr := ctx.View.Read(delegateKey)
-	delegateExists := readErr == nil && existingData != nil
+	if readErr != nil {
+		return ter.TefINTERNAL
+	}
+	delegateExists := existingData != nil
 
 	if delegateExists {
 		// Empty permissions -- delete the delegate entry.
@@ -348,12 +330,14 @@ func (d *DelegateSet) permissionValues() []uint32 {
 // and which is not explicitly non-delegatable.
 // Reference: rippled Permissions.cpp Permission::isDelegable().
 func isDelegatable(permissionValue uint32, rules *amendment.Rules) bool {
-	// Granular permissions are always delegatable — but only KNOWN granular
-	// permissions. rippled short-circuits on getGranularName(value) != nullopt,
-	// so an unknown value in the granular range (>= 65536) is NOT treated as
-	// granular; it falls through to the transaction-type path below, where it is
-	// not a registered type and is therefore rejected.
 	if state.IsGranularPermissionValue(permissionValue) {
+		granularTxType, known := tx.GranularPermissionTxType(permissionValue)
+		if !known {
+			return false
+		}
+		if feature, gated := txIntroducingAmendment(uint16(granularTxType)); gated {
+			return rules != nil && rules.Enabled(feature)
+		}
 		return true
 	}
 
@@ -368,7 +352,7 @@ func isDelegatable(permissionValue uint32, rules *amendment.Rules) bool {
 		return false
 	}
 
-	if notDelegatableTxTypes[txType] {
+	if !tx.IsTransactionDelegable(tx.Type(txType)) {
 		return false
 	}
 	return true
@@ -377,7 +361,7 @@ func isDelegatable(permissionValue uint32, rules *amendment.Rules) bool {
 // permissionTxType maps a transaction-level permission value to its tx type
 // (value - 1), reporting whether that type is registered.
 func permissionTxType(permissionValue uint32) (uint16, bool) {
-	if permissionValue == 0 {
+	if permissionValue == 0 || permissionValue > uint32(^uint16(0))+1 {
 		return 0, false
 	}
 	txType := uint16(permissionValue - 1)

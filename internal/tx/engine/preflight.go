@@ -351,8 +351,8 @@ func checkDelegate(transaction txcore.Transaction, common *txcore.Common, rules 
 	if common.Delegate == common.Account {
 		return ter.TemBAD_SIGNER
 	}
-	if transaction.TxType() == txcore.TypeSponsorshipTransfer ||
-		transaction.TxType() == txcore.TypeConfidentialMPTConvert {
+	if !txcore.IsTransactionDelegable(transaction.TxType()) &&
+		!txcore.HasGranularPermissions(transaction.TxType()) {
 		return ter.TemINVALID
 	}
 	return ter.TesSUCCESS

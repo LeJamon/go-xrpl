@@ -902,6 +902,35 @@ func TestApplyFeeSponsoredTransactionCannotQueueButMayApplyDirectly(t *testing.T
 	})
 }
 
+func TestApplyDelegatedTransactionCannotQueueButMayApplyDirectly(t *testing.T) {
+	account := [20]byte{9}
+	delegate := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+
+	t.Run("cannot queue", func(t *testing.T) {
+		q := mustNew(makeAdmissionConfig())
+		ctx := &stubApplyCtx{
+			seq: 5, balance: 1_000_000_000, exists: true, baseFee: 10, txInLedger: 100,
+		}
+		result := q.Apply(ctx, &seqTx{seq: 5, fee: "10", delegate: delegate}, [32]byte{0xF2}, account)
+		require.Equal(t, ter.TelCAN_NOT_QUEUE, result.Result)
+		require.False(t, result.Applied)
+		require.False(t, result.Queued)
+		require.Zero(t, q.Size())
+	})
+
+	t.Run("may apply directly", func(t *testing.T) {
+		q := mustNew(makeAdmissionConfig())
+		ctx := &stubApplyCtx{
+			seq: 5, balance: 1_000_000_000, exists: true, baseFee: 10,
+			applyRes: ter.TesSUCCESS, applied: true,
+		}
+		result := q.Apply(ctx, &seqTx{seq: 5, fee: "10", delegate: delegate}, [32]byte{0xF3}, account)
+		require.Equal(t, ter.TesSUCCESS, result.Result)
+		require.True(t, result.Applied)
+		require.False(t, result.Queued)
+	})
+}
+
 func TestApplyBatchCannotQueueButMayApplyDirectly(t *testing.T) {
 	account := [20]byte{9}
 
