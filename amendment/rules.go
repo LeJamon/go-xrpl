@@ -207,6 +207,7 @@ func (r *Rules) FixCleanup3_2_0Enabled() bool {
 	return r.Enabled(FeatureFixCleanup3_2_0)
 }
 
+// FixCleanup3_3_0Enabled reports whether these rules activate the cleanup amendment.
 func (r *Rules) FixCleanup3_3_0Enabled() bool {
 	return r.Enabled(FeatureFixCleanup3_3_0)
 }
