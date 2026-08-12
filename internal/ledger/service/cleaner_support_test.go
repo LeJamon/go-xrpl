@@ -32,6 +32,10 @@ func TestCleanerLedgerUsesReacquiredCanonicalLedger(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := svc.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(svc.Stop)
 	const seq uint32 = 10
 	parent := [32]byte{0x99}
 	canonical := makeStubLedger(t, seq, [32]byte{0xAA}, parent)
@@ -136,7 +140,9 @@ func TestCleanerReacquireTargetRepairsMissingCanonicalProof(t *testing.T) {
 	}
 	for i := byte(1); i <= 16; i++ {
 		key := [32]byte{i, 0xA5}
-		if err := stateMap.Put(key, []byte{i}); err != nil {
+		data := make([]byte, 12)
+		data[0] = i
+		if err := stateMap.Put(key, data); err != nil {
 			t.Fatal(err)
 		}
 	}
