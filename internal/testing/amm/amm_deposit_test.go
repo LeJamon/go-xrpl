@@ -273,7 +273,6 @@ func TestDeposit(t *testing.T) {
 			t.Fatal("XRP balance should have decreased after deposit")
 		}
 
-		t.Log("Equal deposit by tokens passed")
 	})
 
 	// Single asset deposit with XRP
@@ -299,7 +298,6 @@ func TestDeposit(t *testing.T) {
 			t.Fatal("XRP balance should have decreased after deposit")
 		}
 
-		t.Log("Single asset XRP deposit passed")
 	})
 
 	// Single asset deposit with IOU
@@ -325,7 +323,6 @@ func TestDeposit(t *testing.T) {
 			t.Fatal("USD balance should have decreased after deposit")
 		}
 
-		t.Log("Single asset IOU deposit passed")
 	})
 
 	// Two asset deposit
@@ -358,7 +355,6 @@ func TestDeposit(t *testing.T) {
 			t.Fatal("USD balance should have decreased after two asset deposit")
 		}
 
-		t.Log("Two asset deposit passed")
 	})
 
 	// Single deposit with token amount (OneAssetLPToken)

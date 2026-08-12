@@ -235,7 +235,7 @@ func TestSubmitAutofill(t *testing.T) {
 	transaction := accounttx.NewAccountDelete(alice.Address, destination.Address)
 	env.autoFill(transaction, SubmitOptions{})
 	common := transaction.GetCommon()
-	require.Equal(t, "10", common.Fee)
+	require.Equal(t, formatUint64(env.ReserveIncrement()), common.Fee)
 	require.NotNil(t, common.Sequence)
 	require.Equal(t, env.Seq(alice), *common.Sequence)
 	require.NotNil(t, common.NetworkID)

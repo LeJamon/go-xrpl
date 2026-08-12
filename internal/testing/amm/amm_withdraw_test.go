@@ -462,7 +462,6 @@ func TestWithdraw(t *testing.T) {
 			t.Fatal("XRP balance should have increased after withdrawal")
 		}
 
-		t.Log("Equal withdrawal by tokens passed")
 	})
 
 	// Equal withdrawal with limit
@@ -482,7 +481,6 @@ func TestWithdraw(t *testing.T) {
 		}
 		env.Close()
 
-		t.Log("Equal withdrawal with limit passed")
 	})
 
 	// Single withdrawal by amount - XRP
@@ -508,7 +506,6 @@ func TestWithdraw(t *testing.T) {
 			t.Fatal("XRP balance should have increased after withdrawal")
 		}
 
-		t.Log("Single XRP withdrawal passed")
 	})
 
 	// Single withdrawal by tokens
@@ -528,7 +525,6 @@ func TestWithdraw(t *testing.T) {
 		}
 		env.Close()
 
-		t.Log("Single withdrawal by tokens passed")
 	})
 
 	// Withdraw all tokens - deletes AMM
@@ -577,7 +573,6 @@ func TestWithdraw(t *testing.T) {
 		}
 		env.Close()
 
-		t.Log("Deposit then withdraw all in USD passed")
 	})
 
 	// Single deposit then withdraw all in XRP
@@ -608,7 +603,6 @@ func TestWithdraw(t *testing.T) {
 		}
 		env.Close()
 
-		t.Log("Deposit then withdraw all in XRP passed")
 	})
 
 	// Equal deposit 10%, withdraw all tokens
@@ -638,7 +632,6 @@ func TestWithdraw(t *testing.T) {
 		}
 		env.Close()
 
-		t.Log("Equal deposit then withdraw all passed")
 	})
 }
 

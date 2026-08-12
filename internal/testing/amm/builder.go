@@ -19,15 +19,12 @@ type AMMCreateBuilder struct {
 }
 
 // AMMCreate creates a new AMMCreateBuilder.
-// The default fee matches rippled's AMMCreate::calculateBaseFee — one owner
-// reserve increment (50,000,000 drops).
 func AMMCreate(account *jtx.Account, amount1, amount2 tx.Amount) *AMMCreateBuilder {
 	return &AMMCreateBuilder{
 		account:    account,
 		amount1:    amount1,
 		amount2:    amount2,
 		tradingFee: 0,
-		fee:        "50000000",
 	}
 }
 
@@ -69,7 +66,6 @@ type AMMDepositBuilder struct {
 	lpTokenOut *tx.Amount
 	ePrice     *tx.Amount
 	tradingFee *uint16
-	fee        string
 	flags      uint32
 }
 
@@ -79,7 +75,6 @@ func AMMDeposit(account *jtx.Account, asset, asset2 tx.Asset) *AMMDepositBuilder
 		account: account,
 		asset:   asset,
 		asset2:  asset2,
-		fee:     "10",
 	}
 }
 
@@ -111,12 +106,6 @@ func (b *AMMDepositBuilder) EPrice(amt tx.Amount) *AMMDepositBuilder {
 // a pointer) matters: every other deposit mode rejects a present sfTradingFee.
 func (b *AMMDepositBuilder) TradingFee(fee uint16) *AMMDepositBuilder {
 	b.tradingFee = &fee
-	return b
-}
-
-// Fee sets the transaction fee.
-func (b *AMMDepositBuilder) Fee(fee string) *AMMDepositBuilder {
-	b.fee = fee
 	return b
 }
 
@@ -165,7 +154,6 @@ func (b *AMMDepositBuilder) TwoAssetIfEmpty() *AMMDepositBuilder {
 // Build creates the AMMDeposit transaction.
 func (b *AMMDepositBuilder) Build() *amm.AMMDeposit {
 	ammTx := amm.NewAMMDeposit(b.account.Address, b.asset, b.asset2)
-	ammTx.Fee = b.fee
 	ammTx.Amount = b.amount
 	ammTx.Amount2 = b.amount2
 	ammTx.LPTokenOut = b.lpTokenOut
@@ -186,7 +174,6 @@ type AMMWithdrawBuilder struct {
 	amount2   *tx.Amount
 	lpTokenIn *tx.Amount
 	ePrice    *tx.Amount
-	fee       string
 	flags     uint32
 }
 
@@ -196,7 +183,6 @@ func AMMWithdraw(account *jtx.Account, asset, asset2 tx.Asset) *AMMWithdrawBuild
 		account: account,
 		asset:   asset,
 		asset2:  asset2,
-		fee:     "10",
 	}
 }
 
@@ -221,12 +207,6 @@ func (b *AMMWithdrawBuilder) LPTokenIn(amt tx.Amount) *AMMWithdrawBuilder {
 // EPrice sets the effective price limit.
 func (b *AMMWithdrawBuilder) EPrice(amt tx.Amount) *AMMWithdrawBuilder {
 	b.ePrice = &amt
-	return b
-}
-
-// Fee sets the transaction fee.
-func (b *AMMWithdrawBuilder) Fee(fee string) *AMMWithdrawBuilder {
-	b.fee = fee
 	return b
 }
 
@@ -281,7 +261,6 @@ func (b *AMMWithdrawBuilder) LimitLPToken() *AMMWithdrawBuilder {
 // Build creates the AMMWithdraw transaction.
 func (b *AMMWithdrawBuilder) Build() *amm.AMMWithdraw {
 	ammTx := amm.NewAMMWithdraw(b.account.Address, b.asset, b.asset2)
-	ammTx.Fee = b.fee
 	ammTx.Amount = b.amount
 	ammTx.Amount2 = b.amount2
 	ammTx.LPTokenIn = b.lpTokenIn
@@ -298,7 +277,6 @@ type AMMVoteBuilder struct {
 	asset      tx.Asset
 	asset2     tx.Asset
 	tradingFee uint16
-	fee        string
 	flags      uint32
 }
 
@@ -309,14 +287,7 @@ func AMMVote(account *jtx.Account, asset, asset2 tx.Asset, tradingFee uint16) *A
 		asset:      asset,
 		asset2:     asset2,
 		tradingFee: tradingFee,
-		fee:        "10",
 	}
-}
-
-// Fee sets the transaction fee.
-func (b *AMMVoteBuilder) Fee(fee string) *AMMVoteBuilder {
-	b.fee = fee
-	return b
 }
 
 // Flags sets the transaction flags.
@@ -328,7 +299,6 @@ func (b *AMMVoteBuilder) Flags(flags uint32) *AMMVoteBuilder {
 // Build creates the AMMVote transaction.
 func (b *AMMVoteBuilder) Build() *amm.AMMVote {
 	ammTx := amm.NewAMMVote(b.account.Address, b.asset, b.asset2, b.tradingFee)
-	ammTx.Fee = b.fee
 	if b.flags != 0 {
 		ammTx.SetFlags(b.flags)
 	}
@@ -343,7 +313,6 @@ type AMMBidBuilder struct {
 	bidMin       *tx.Amount
 	bidMax       *tx.Amount
 	authAccounts []amm.AuthAccount
-	fee          string
 	flags        uint32
 }
 
@@ -353,7 +322,6 @@ func AMMBid(account *jtx.Account, asset, asset2 tx.Asset) *AMMBidBuilder {
 		account: account,
 		asset:   asset,
 		asset2:  asset2,
-		fee:     "10",
 	}
 }
 
@@ -380,12 +348,6 @@ func (b *AMMBidBuilder) AuthAccounts(accounts ...string) *AMMBidBuilder {
 	return b
 }
 
-// Fee sets the transaction fee.
-func (b *AMMBidBuilder) Fee(fee string) *AMMBidBuilder {
-	b.fee = fee
-	return b
-}
-
 // Flags sets the transaction flags.
 func (b *AMMBidBuilder) Flags(flags uint32) *AMMBidBuilder {
 	b.flags = flags
@@ -395,7 +357,6 @@ func (b *AMMBidBuilder) Flags(flags uint32) *AMMBidBuilder {
 // Build creates the AMMBid transaction.
 func (b *AMMBidBuilder) Build() *amm.AMMBid {
 	ammTx := amm.NewAMMBid(b.account.Address, b.asset, b.asset2)
-	ammTx.Fee = b.fee
 	ammTx.BidMin = b.bidMin
 	ammTx.BidMax = b.bidMax
 	ammTx.AuthAccounts = b.authAccounts
@@ -410,7 +371,6 @@ type AMMDeleteBuilder struct {
 	account *jtx.Account
 	asset   tx.Asset
 	asset2  tx.Asset
-	fee     string
 	flags   uint32
 }
 
@@ -420,14 +380,7 @@ func AMMDelete(account *jtx.Account, asset, asset2 tx.Asset) *AMMDeleteBuilder {
 		account: account,
 		asset:   asset,
 		asset2:  asset2,
-		fee:     "10",
 	}
-}
-
-// Fee sets the transaction fee.
-func (b *AMMDeleteBuilder) Fee(fee string) *AMMDeleteBuilder {
-	b.fee = fee
-	return b
 }
 
 // Flags sets the transaction flags.
@@ -439,7 +392,6 @@ func (b *AMMDeleteBuilder) Flags(flags uint32) *AMMDeleteBuilder {
 // Build creates the AMMDelete transaction.
 func (b *AMMDeleteBuilder) Build() *amm.AMMDelete {
 	ammTx := amm.NewAMMDelete(b.account.Address, b.asset, b.asset2)
-	ammTx.Fee = b.fee
 	if b.flags != 0 {
 		ammTx.SetFlags(b.flags)
 	}
@@ -453,7 +405,6 @@ type AMMClawbackBuilder struct {
 	asset   tx.Asset
 	asset2  tx.Asset
 	amount  *tx.Amount
-	fee     string
 	flags   uint32
 }
 
@@ -464,19 +415,12 @@ func AMMClawback(account *jtx.Account, holder string, asset, asset2 tx.Asset) *A
 		holder:  holder,
 		asset:   asset,
 		asset2:  asset2,
-		fee:     "10",
 	}
 }
 
 // Amount sets the clawback amount.
 func (b *AMMClawbackBuilder) Amount(amt tx.Amount) *AMMClawbackBuilder {
 	b.amount = &amt
-	return b
-}
-
-// Fee sets the transaction fee.
-func (b *AMMClawbackBuilder) Fee(fee string) *AMMClawbackBuilder {
-	b.fee = fee
 	return b
 }
 
@@ -495,7 +439,6 @@ func (b *AMMClawbackBuilder) ClawTwoAssets() *AMMClawbackBuilder {
 // Build creates the AMMClawback transaction.
 func (b *AMMClawbackBuilder) Build() *amm.AMMClawback {
 	ammTx := amm.NewAMMClawback(b.account.Address, b.holder, b.asset, b.asset2)
-	ammTx.Fee = b.fee
 	ammTx.Amount = b.amount
 	if b.flags != 0 {
 		ammTx.SetFlags(b.flags)

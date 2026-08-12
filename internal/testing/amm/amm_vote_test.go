@@ -129,7 +129,6 @@ func TestFeeVote(t *testing.T) {
 		}
 		env.Close()
 
-		t.Log("Single vote to set fee to 1% passed")
 	})
 
 	// Vote with zero fee
@@ -144,7 +143,6 @@ func TestFeeVote(t *testing.T) {
 		}
 		env.Close()
 
-		t.Log("Vote for zero fee passed")
 	})
 
 	// Multiple LPs voting
@@ -211,7 +209,6 @@ func TestFeeVote(t *testing.T) {
 		}
 		env.Close()
 
-		t.Log("Change vote passed")
 	})
 
 	// Vote after deposit
@@ -238,7 +235,6 @@ func TestFeeVote(t *testing.T) {
 		}
 		env.Close()
 
-		t.Log("Vote after deposit passed")
 	})
 
 	// Vote at maximum fee (1000 basis points = 1%)
@@ -253,7 +249,6 @@ func TestFeeVote(t *testing.T) {
 		}
 		env.Close()
 
-		t.Log("Maximum fee vote passed")
 	})
 }
 

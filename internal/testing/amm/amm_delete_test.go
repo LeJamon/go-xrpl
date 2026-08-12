@@ -114,7 +114,6 @@ func TestAMMDeleteAfterWithdraw(t *testing.T) {
 		}
 		amm.ExpectTER(t, result, amm.TerNO_AMM)
 
-		t.Log("AMM correctly deleted after full withdrawal")
 	})
 }
 

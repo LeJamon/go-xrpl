@@ -94,7 +94,6 @@ func TestAMMWithdraw_LastLPDeletionRecordsReconciledLPTokenBalance(t *testing.T)
 	gwLPT := env.IOUBalance(env.GW, ammAcc, lptRef.Currency)
 	reconciled := gwLPT.Value()
 
-	t.Logf("gw trustline (reconciled)=%s  stored (stale)=%s", reconciled, stale)
 	if reconciled == stale {
 		t.Fatalf("VACUOUS: gw trustline (%s) == stored LPTokenBalance (%s); the reconcile is a no-op so this test cannot distinguish the fix", reconciled, stale)
 	}

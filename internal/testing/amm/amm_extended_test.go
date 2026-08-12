@@ -16,6 +16,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	paymenttx "github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/stretchr/testify/require"
 )
 
 // ───────────────────────────────────────────────────────────────────────
@@ -45,13 +46,7 @@ func TestAMMExtended_RippleStateFreeze(t *testing.T) {
 		// Carol tries to sell USD via offer — should fail
 		offerTx := offerbuild.OfferCreate(env.Carol, amm.XRPAmount(100), amm.IOUAmount(env.GW, "USD", 100)).Build()
 		result := env.Submit(offerTx)
-		if result.Code == "tecUNFUNDED_OFFER" || result.Code == "tecFROZEN" {
-			t.Logf("PASS: frozen Carol cannot sell USD (got %s)", result.Code)
-		} else if result.Success {
-			t.Log("SKIP: Engine gap - frozen account should not create sell offer")
-		} else {
-			t.Logf("Got %s for frozen sell offer", result.Code)
-		}
+		jtx.RequireTxClaimed(t, result, jtx.TecUNFUNDED_OFFER)
 	})
 
 	t.Run("FrozenCanReceivePayment", func(t *testing.T) {
@@ -66,12 +61,7 @@ func TestAMMExtended_RippleStateFreeze(t *testing.T) {
 
 		// GW pays USD to frozen Carol — should succeed (receiving is allowed)
 		payTx := payment.PayIssued(env.GW, env.Carol, amm.IOUAmount(env.GW, "USD", 100)).Build()
-		result := env.Submit(payTx)
-		if result.Success {
-			t.Log("PASS: frozen Carol can receive payment")
-		} else {
-			t.Logf("Note: frozen Carol cannot receive (got %s) - may depend on freeze direction", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(payTx))
 	})
 
 	t.Run("FrozenCannotMakePayment", func(t *testing.T) {
@@ -92,12 +82,7 @@ func TestAMMExtended_RippleStateFreeze(t *testing.T) {
 
 		// Carol tries to pay Bob USD — should fail (sending from frozen line)
 		payTx := payment.PayIssued(env.Carol, env.Bob, amm.IOUAmount(env.GW, "USD", 100)).Build()
-		result := env.Submit(payTx)
-		if !result.Success {
-			t.Logf("PASS: frozen Carol cannot send USD (got %s)", result.Code)
-		} else {
-			t.Log("SKIP: Engine gap - frozen Carol should not be able to send USD")
-		}
+		jtx.RequireTxClaimed(t, env.Submit(payTx), jtx.TecPATH_DRY)
 	})
 
 	t.Run("UnfreezeRestoresAbility", func(t *testing.T) {
@@ -158,12 +143,7 @@ func TestAMMExtended_GlobalFreeze(t *testing.T) {
 
 		// Alice tries to pay Bob USD via rippling
 		payTx := payment.PayIssued(env.Carol, env.Bob, amm.IOUAmount(env.GW, "USD", 100)).Build()
-		result := env.Submit(payTx)
-		if !result.Success {
-			t.Logf("PASS: global freeze blocks via-rippling payment (got %s)", result.Code)
-		} else {
-			t.Log("SKIP: Engine gap - global freeze should block via-rippling")
-		}
+		jtx.RequireTxClaimed(t, env.Submit(payTx), jtx.TecPATH_DRY)
 	})
 
 	t.Run("DirectIssueStillWorks", func(t *testing.T) {
@@ -177,12 +157,7 @@ func TestAMMExtended_GlobalFreeze(t *testing.T) {
 
 		// GW can still issue USD to Carol directly
 		payTx := payment.PayIssued(env.GW, env.Carol, amm.IOUAmount(env.GW, "USD", 100)).Build()
-		result := env.Submit(payTx)
-		if result.Success {
-			t.Log("PASS: gateway can still issue directly under global freeze")
-		} else {
-			t.Logf("Note: gateway direct issue failed (got %s)", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(payTx))
 	})
 
 	t.Run("DirectRedemptionStillWorks", func(t *testing.T) {
@@ -196,12 +171,7 @@ func TestAMMExtended_GlobalFreeze(t *testing.T) {
 
 		// Carol pays USD back to GW (redemption)
 		payTx := payment.PayIssued(env.Carol, env.GW, amm.IOUAmount(env.GW, "USD", 100)).Build()
-		result := env.Submit(payTx)
-		if result.Success {
-			t.Log("PASS: direct redemption works under global freeze")
-		} else {
-			t.Logf("Note: direct redemption failed (got %s)", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(payTx))
 	})
 }
 
@@ -213,8 +183,7 @@ func TestAMMExtended_GlobalFreeze(t *testing.T) {
 // TestAMMExtended_DepositAuth tests deposit authorization with AMM payments.
 // Reference: rippled AMMExtended_test.cpp testPayment and testPayIOU
 func TestAMMExtended_DepositAuth(t *testing.T) {
-	t.Run("DepositAuth_SelfPayment", func(t *testing.T) {
-		// A user with DepositAuth can pay themselves through AMM.
+	t.Run("RedundantDirectSelfPayment", func(t *testing.T) {
 		env := amm.NewAMMTestEnv(t)
 		env.FundWithIOUs(30000, 0)
 
@@ -233,14 +202,9 @@ func TestAMMExtended_DepositAuth(t *testing.T) {
 		env.EnableDepositAuth(env.Bob)
 		env.Close()
 
-		// Bob pays himself USD through XRP→AMM path (self-payment should work)
+		// This is a direct same-issue self-payment, not an AMM path.
 		payTx := payment.PayIssued(env.Bob, env.Bob, amm.IOUAmount(env.GW, "USD", 10)).Build()
-		result := env.Submit(payTx)
-		if result.Success {
-			t.Log("PASS: self-payment with DepositAuth succeeds")
-		} else {
-			t.Logf("Note: self-payment with DepositAuth got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, env.Submit(payTx), jtx.TemREDUNDANT)
 	})
 
 	t.Run("DepositAuth_BlocksIncoming", func(t *testing.T) {
@@ -258,14 +222,7 @@ func TestAMMExtended_DepositAuth(t *testing.T) {
 
 		// Alice tries to send USD to DepositAuth Bob — should fail
 		payTx := payment.PayIssued(env.Alice, env.Bob, amm.IOUAmount(env.GW, "USD", 50)).Build()
-		result := env.Submit(payTx)
-		if result.Code == "tecNO_PERMISSION" {
-			t.Log("PASS: DepositAuth blocks incoming IOU payment")
-		} else if result.Success {
-			t.Log("SKIP: Engine gap - DepositAuth should block incoming IOU payment")
-		} else {
-			t.Logf("Got %s for DepositAuth incoming payment", result.Code)
-		}
+		jtx.RequireTxClaimed(t, env.Submit(payTx), jtx.TecNO_PERMISSION)
 	})
 
 	t.Run("DepositAuth_ClearedAllows", func(t *testing.T) {
@@ -420,12 +377,7 @@ func TestAMMExtended_DeliverMin(t *testing.T) {
 		payTx := payment.PayIssued(env.Alice, env.Carol, amm.IOUAmount(env.GW, "USD", 10)).
 			DeliverMin(amm.IOUAmount(env.GW, "USD", 10)).
 			Build()
-		result := env.Submit(payTx)
-		if result.Code == "temBAD_AMOUNT" {
-			t.Log("PASS: DeliverMin = Amount without partial payment rejected")
-		} else {
-			t.Logf("Note: got %s (expected temBAD_AMOUNT)", result.Code)
-		}
+		jtx.RequireTxFail(t, env.Submit(payTx), jtx.TemBAD_AMOUNT)
 	})
 
 	t.Run("DeliverMinNegative_Rejected", func(t *testing.T) {
@@ -438,12 +390,7 @@ func TestAMMExtended_DeliverMin(t *testing.T) {
 			DeliverMin(amm.IOUAmount(env.GW, "USD", -1)).
 			PartialPayment().
 			Build()
-		result := env.Submit(payTx)
-		if result.Code == "temBAD_AMOUNT" {
-			t.Log("PASS: negative DeliverMin rejected")
-		} else {
-			t.Logf("Note: got %s (expected temBAD_AMOUNT)", result.Code)
-		}
+		jtx.RequireTxFail(t, env.Submit(payTx), jtx.TemBAD_AMOUNT)
 	})
 
 	t.Run("DeliverMinWrongCurrency_Rejected", func(t *testing.T) {
@@ -456,12 +403,7 @@ func TestAMMExtended_DeliverMin(t *testing.T) {
 			DeliverMin(amm.XRPAmount(7)). // wrong currency
 			PartialPayment().
 			Build()
-		result := env.Submit(payTx)
-		if result.Code == "temBAD_AMOUNT" {
-			t.Log("PASS: DeliverMin wrong currency rejected")
-		} else {
-			t.Logf("Note: got %s (expected temBAD_AMOUNT)", result.Code)
-		}
+		jtx.RequireTxFail(t, env.Submit(payTx), jtx.TemBAD_AMOUNT)
 	})
 
 	t.Run("DeliverMinExceedsAmount_Rejected", func(t *testing.T) {
@@ -474,12 +416,7 @@ func TestAMMExtended_DeliverMin(t *testing.T) {
 			DeliverMin(amm.IOUAmount(env.GW, "USD", 20)).
 			PartialPayment().
 			Build()
-		result := env.Submit(payTx)
-		if result.Code == "temBAD_AMOUNT" {
-			t.Log("PASS: DeliverMin > Amount rejected")
-		} else {
-			t.Logf("Note: got %s (expected temBAD_AMOUNT)", result.Code)
-		}
+		jtx.RequireTxFail(t, env.Submit(payTx), jtx.TemBAD_AMOUNT)
 	})
 }
 
@@ -508,20 +445,15 @@ func TestAMMExtended_CrossingLimits(t *testing.T) {
 		env.Close()
 
 		// Bob creates multiple offers (simulating a book with many entries)
-		for i := range 20 {
+		for range 20 {
 			offerTx := offerbuild.OfferCreate(env.Bob, amm.IOUAmount(env.GW, "USD", 10), amm.XRPAmount(10)).Build()
-			result := env.Submit(offerTx)
-			if !result.Success {
-				t.Logf("Offer %d failed: %s", i, result.Code)
-				break
-			}
+			jtx.RequireTxSuccess(t, env.Submit(offerTx))
 		}
 		env.Close()
 
 		// Carol creates a crossing offer that should consume some of Bob's offers
 		offerTx := offerbuild.OfferCreate(env.Carol, amm.XRPAmount(100), amm.IOUAmount(env.GW, "USD", 100)).Build()
-		result := env.Submit(offerTx)
-		t.Logf("Crossing result: success=%v code=%s", result.Success, result.Code)
+		jtx.RequireTxSuccess(t, env.Submit(offerTx))
 	})
 }
 
@@ -558,12 +490,8 @@ func TestAMMExtended_OfferCrossWithXRP(t *testing.T) {
 		crossTx := offerbuild.OfferCreate(env.Carol, amm.IOUAmount(env.GW, "USD", 500), amm.XRPAmount(500)).Build()
 		result := env.Submit(crossTx)
 		carolAfter := env.Balance(env.Carol)
-
-		if result.Success {
-			t.Logf("PASS: XRP offer crossing succeeded (carol XRP: %d → %d)", carolBefore, carolAfter)
-		} else {
-			t.Logf("Note: XRP offer crossing failed (got %s)", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
+		require.Less(t, carolAfter, carolBefore)
 	})
 }
 
@@ -593,8 +521,7 @@ func TestAMMExtended_CurrencyConversion(t *testing.T) {
 
 		// Carol consumes the entire offer
 		crossTx := offerbuild.OfferCreate(env.Carol, amm.IOUAmount(env.GW, "USD", 1000), amm.XRPAmount(1000)).Build()
-		result := env.Submit(crossTx)
-		t.Logf("Entire conversion: success=%v code=%s", result.Success, result.Code)
+		jtx.RequireTxSuccess(t, env.Submit(crossTx))
 	})
 
 	t.Run("InPartsConversion", func(t *testing.T) {
@@ -620,8 +547,7 @@ func TestAMMExtended_CurrencyConversion(t *testing.T) {
 
 		// Carol consumes half
 		crossTx1 := offerbuild.OfferCreate(env.Carol, amm.IOUAmount(env.GW, "USD", 500), amm.XRPAmount(500)).Build()
-		result := env.Submit(crossTx1)
-		t.Logf("First half: success=%v code=%s", result.Success, result.Code)
+		jtx.RequireTxSuccess(t, env.Submit(crossTx1))
 	})
 }
 
@@ -644,16 +570,12 @@ func TestAMMExtended_OfferWithTransferRate(t *testing.T) {
 
 		// Create AMM (creator is charged transfer fee on IOU)
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
-		result := env.Submit(createTx)
-		if !result.Success {
-			t.Skipf("AMM create with transfer rate failed: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
 
 		// Bob creates offer
 		offerTx := offerbuild.OfferCreate(env.Bob, amm.XRPAmount(100), amm.IOUAmount(env.GW, "USD", 100)).Build()
-		result = env.Submit(offerTx)
-		t.Logf("Offer with transfer rate: success=%v code=%s", result.Success, result.Code)
+		jtx.RequireTxSuccess(t, env.Submit(offerTx))
 	})
 }
 
@@ -683,12 +605,7 @@ func TestAMMExtended_FillModes(t *testing.T) {
 		// Carol creates a FillOrKill offer that should fully fill
 		fokTx := offerbuild.OfferCreate(env.Carol, amm.IOUAmount(env.GW, "USD", 100), amm.XRPAmount(100)).
 			FillOrKill().Build()
-		result := env.Submit(fokTx)
-		if result.Success {
-			t.Log("PASS: FillOrKill offer fully filled")
-		} else {
-			t.Logf("FillOrKill result: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(fokTx))
 	})
 
 	t.Run("FillOrKill_Killed", func(t *testing.T) {
@@ -704,12 +621,7 @@ func TestAMMExtended_FillModes(t *testing.T) {
 		// Carol creates FillOrKill for more than available - should be killed
 		fokTx := offerbuild.OfferCreate(env.Carol, amm.IOUAmount(env.GW, "USD", 10000), amm.XRPAmount(10000)).
 			FillOrKill().Build()
-		result := env.Submit(fokTx)
-		if !result.Success {
-			t.Logf("PASS: FillOrKill killed when insufficient liquidity (got %s)", result.Code)
-		} else {
-			t.Log("Note: FillOrKill succeeded (may have partial fill semantics)")
-		}
+		jtx.RequireTxClaimed(t, env.Submit(fokTx), jtx.TecKILLED)
 	})
 }
 
@@ -734,12 +646,7 @@ func TestAMMExtended_PayStrand(t *testing.T) {
 		payTx := payment.PayIssued(env.Bob, env.Carol, amm.IOUAmount(env.GW, "USD", 100)).
 			SendMax(amm.XRPAmount(200)).
 			Build()
-		result := env.Submit(payTx)
-		if result.Success {
-			t.Log("PASS: cross-currency XRP→USD payment through AMM")
-		} else {
-			t.Logf("Note: cross-currency via AMM got %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(payTx))
 	})
 
 	t.Run("CrossCurrencyEndWithXRP", func(t *testing.T) {
@@ -762,12 +669,7 @@ func TestAMMExtended_PayStrand(t *testing.T) {
 		payTx := payment.Pay(env.Bob, env.Carol, uint64(jtx.XRP(100))).
 			SendMax(amm.IOUAmount(env.GW, "USD", 200)).
 			Build()
-		result := env.Submit(payTx)
-		if result.Success {
-			t.Log("PASS: cross-currency USD→XRP payment through AMM")
-		} else {
-			t.Logf("Note: cross-currency via AMM got %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(payTx))
 	})
 }
 
@@ -861,11 +763,6 @@ func TestAMMExtended_RmFundedOffer(t *testing.T) {
 
 	// Carol's first BTC→XRP offer should still exist (funded but unused)
 	carolOffers := env.AccountOffers(env.Carol)
-	t.Logf("Carol has %d offers remaining:", len(carolOffers))
-	for i, o := range carolOffers {
-		t.Logf("  Offer %d: TakerPays=%s(%s) TakerGets=%s(%s)",
-			i, o.TakerPays.Currency, o.TakerPays.Value(), o.TakerGets.Currency, o.TakerGets.Value())
-	}
 	foundOffer := false
 	for _, o := range carolOffers {
 		// XRP amounts have empty currency; BTC is IOU

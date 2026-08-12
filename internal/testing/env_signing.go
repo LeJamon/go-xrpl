@@ -183,7 +183,8 @@ func (e *TestEnv) autoFill(txn tx.Transaction, options SubmitOptions) {
 	}
 	common := txn.GetCommon()
 	if !options.SkipFee && common.Fee == "" {
-		common.Fee = formatUint64(e.baseFee)
+		config := e.engineConfig(e.ledger, engineConfigOpts{openLedger: e.openLedger})
+		common.Fee = formatUint64(sign.CalculateBaseFee(txn, e.ledger, config))
 	}
 	if !options.SkipSequence && common.Sequence == nil {
 		_, accountID, err := addresscodec.DecodeClassicAddressToAccountID(common.Account)

@@ -302,7 +302,6 @@ func TestBid(t *testing.T) {
 		}
 		env.Close()
 
-		t.Log("Bid with bidMin passed")
 	})
 
 	// Bid with exact min/max
@@ -332,7 +331,6 @@ func TestBid(t *testing.T) {
 		}
 		env.Close()
 
-		t.Log("Bid with exact min/max passed")
 	})
 
 	// Bid with min/max range
@@ -351,7 +349,6 @@ func TestBid(t *testing.T) {
 		}
 		env.Close()
 
-		t.Log("Bid with min/max range passed")
 	})
 
 	// Bid with just bidMax
@@ -380,7 +377,6 @@ func TestBid(t *testing.T) {
 		}
 		env.Close()
 
-		t.Log("Bid with bidMax only passed")
 	})
 
 	// Bid without price (auto-calculate)
@@ -423,7 +419,6 @@ func TestBid(t *testing.T) {
 		}
 		env.Close()
 
-		t.Log("Bid with auth accounts passed")
 	})
 
 	// Outbid previous slot owner
@@ -462,7 +457,6 @@ func TestBid(t *testing.T) {
 		}
 		env.Close()
 
-		t.Log("Outbid previous owner passed")
 	})
 }
 
