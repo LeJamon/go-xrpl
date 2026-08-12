@@ -190,6 +190,16 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Res
 		if tx.PseudoAccountAddress(view, config.ParentHash, ammKey.Key) == ([20]byte{}) {
 			return ter.TerADDRESS_COLLISION
 		}
+		isMPTIssuerPseudo := func(asset tx.Asset) bool {
+			if !asset.IsMPT() {
+				return false
+			}
+			issuer, result := assetIssuerID(asset)
+			return result == ter.TesSUCCESS && tx.IsPseudoAccountID(view, issuer)
+		}
+		if isMPTIssuerPseudo(asset1) || isMPTIssuerPseudo(asset2) {
+			return ter.TecWRONG_ASSET
+		}
 	}
 
 	if result := canMPTTradeAndTransfer(view, asset1, accountID, accountID); result != ter.TesSUCCESS {
