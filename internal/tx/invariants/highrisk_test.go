@@ -200,6 +200,22 @@ func TestValidAMM_VoteRejectsLPTokenIssueChange(t *testing.T) {
 	}
 }
 
+func TestValidAMM_MPTPoolChange(t *testing.T) {
+	entries := []InvariantEntry{
+		mptInvariantEntry(t, addrHolderA, addrIssuer, false, entry.LsfMPTAMM),
+	}
+	for _, txType := range []TxType{TypeAMMBid, TypeAMMVote} {
+		t.Run(txType.String(), func(t *testing.T) {
+			transaction := stubTx{txType: txType}
+			if v := checkValidAMM(transaction, TesSUCCESS, entries, stubView{}, amendment.AllSupportedRules()); v == nil {
+				t.Fatalf("expected ValidAMM violation: %s changed an MPT pool holding", txType)
+			} else if v.Name != "ValidAMM" {
+				t.Fatalf("unexpected violation name %q", v.Name)
+			}
+		})
+	}
+}
+
 // TestValidAMM_DeleteMustRemoveObject: a successful AMMDelete that leaves the
 // AMM object behind must trip ValidAMM; a delete that removes it satisfies.
 // Reference: rippled InvariantCheck.cpp finalizeDelete (lines 1864-1880).
@@ -390,7 +406,7 @@ func mptIssuanceInvariantEntry(t *testing.T, referenceHolding *string, deleted b
 	return InvariantEntry{EntryType: entry.TypeMPTokenIssuance, After: data}
 }
 
-func mptInvariantEntry(t *testing.T, account, issuer string, deleted bool) InvariantEntry {
+func mptInvariantEntry(t *testing.T, account, issuer string, deleted bool, flags ...uint32) InvariantEntry {
 	t.Helper()
 	accountID, err := state.DecodeAccountID(account)
 	if err != nil {
@@ -403,9 +419,14 @@ func mptInvariantEntry(t *testing.T, account, issuer string, deleted bool) Invar
 	var issuanceID [24]byte
 	issuanceID[3] = 1
 	copy(issuanceID[4:], issuerID[:])
+	var tokenFlags uint32
+	for _, flag := range flags {
+		tokenFlags |= flag
+	}
 	data, err := state.SerializeMPToken(&state.MPTokenData{
 		Account:           accountID,
 		MPTokenIssuanceID: issuanceID,
+		Flags:             tokenFlags,
 	})
 	if err != nil {
 		t.Fatalf("serialize MPToken: %v", err)

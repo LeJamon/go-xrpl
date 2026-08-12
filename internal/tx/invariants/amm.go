@@ -235,7 +235,8 @@ func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view
 
 	// --- visitEntry phase ---
 	// Track AMM entries: extract account ID and LPTokenBalance from before/after.
-	// Track pool changes: RippleState with lsfAMMNode flag, or AccountRoot with non-zero AMMID.
+	// Track pool changes: RippleState with lsfAMMNode, AccountRoot with AMMID,
+	// or MPToken with lsfMPTAMM.
 	var (
 		ammAccount     *[20]byte
 		lptAfter       *Amount
@@ -278,6 +279,11 @@ func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view
 					if acct.AMMID != zeroHash {
 						ammPoolChanged = true
 					}
+				}
+			} else if e.EntryType == entry.TypeMPToken {
+				token, err := state.ParseMPToken(e.After)
+				if err == nil && token.Flags&entry.LsfMPTAMM != 0 {
+					ammPoolChanged = true
 				}
 			}
 		}
