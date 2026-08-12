@@ -50,6 +50,7 @@ func TestVaultDeleteMemoDataPreflight(t *testing.T) {
 		wantError bool
 	}{
 		{name: "absent amendment off", vaultID: validVaultID, rules: off},
+		{name: "odd length amendment on", vaultID: validVaultID, memoData: "A", rules: on},
 		{name: "one byte amendment on", vaultID: validVaultID, memoData: "AA", rules: on},
 		{name: "maximum amendment on", vaultID: validVaultID, memoData: strings.Repeat("AA", MaxVaultDataLength), rules: on},
 		{name: "empty amendment on", vaultID: validVaultID, present: true, rules: on, want: ter.TemMALFORMED, wantError: true},
@@ -86,10 +87,12 @@ func TestVaultDeleteMemoDataCodecRoundTrip(t *testing.T) {
 	tests := []struct {
 		name    string
 		value   string
+		decoded string
 		present bool
 	}{
 		{name: "absent"},
 		{name: "empty", present: true},
+		{name: "odd length", value: "A", decoded: "0A", present: true},
 		{name: "one byte", value: "AB", present: true},
 		{name: "maximum", value: strings.Repeat("AB", MaxVaultDataLength), present: true},
 		{name: "oversized", value: strings.Repeat("AB", MaxVaultDataLength+1), present: true},
@@ -125,8 +128,12 @@ func TestVaultDeleteMemoDataCodecRoundTrip(t *testing.T) {
 			if !ok {
 				t.Fatalf("parsed transaction = %T, want *VaultDelete", parsed)
 			}
-			if deleteTx.MemoData != test.value {
-				t.Fatalf("MemoData length = %d hex chars, want %d", len(deleteTx.MemoData), len(test.value))
+			wantValue := test.value
+			if test.decoded != "" {
+				wantValue = test.decoded
+			}
+			if deleteTx.MemoData != wantValue {
+				t.Fatalf("MemoData = %q, want %q", deleteTx.MemoData, wantValue)
 			}
 			if got := deleteTx.Common.HasField("MemoData"); got != test.present {
 				t.Fatalf("MemoData presence = %v, want %v", got, test.present)
@@ -137,8 +144,8 @@ func TestVaultDeleteMemoDataCodecRoundTrip(t *testing.T) {
 				t.Fatalf("flatten VaultDelete: %v", err)
 			}
 			flattened, flattenedPresent := flat["MemoData"]
-			if flattenedPresent != test.present || test.present && flattened != test.value {
-				t.Fatalf("flattened MemoData = %#v (present %v), want %q (present %v)", flattened, flattenedPresent, test.value, test.present)
+			if flattenedPresent != test.present || test.present && flattened != wantValue {
+				t.Fatalf("flattened MemoData = %#v (present %v), want %q (present %v)", flattened, flattenedPresent, wantValue, test.present)
 			}
 		})
 	}
