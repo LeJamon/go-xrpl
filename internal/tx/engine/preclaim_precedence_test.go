@@ -308,3 +308,34 @@ func TestPseudoAccountSigningAmendmentGates(t *testing.T) {
 		})
 	}
 }
+
+func TestPseudoSponsorRejectedBeforeDryRunSignatureBypass(t *testing.T) {
+	pseudoID := [32]byte{1}
+	e := precedenceEngineWithRules(t, map[string]*state.AccountRoot{
+		precedenceGenesisAddr: {
+			Account:  precedenceGenesisAddr,
+			Balance:  1_000_000,
+			Sequence: 5,
+		},
+		precedenceSourceAddr: {
+			Account:  precedenceSourceAddr,
+			Balance:  1_000_000,
+			Sequence: 1,
+			AMMID:    pseudoID,
+		},
+	}, amendment.NewRules([][32]byte{
+		amendment.FeatureSponsor,
+		amendment.FeatureFixCleanup3_3_0,
+	}))
+	e.config.SkipSignatureVerification = true
+
+	txn := newAccountSet(precedenceGenesisAddr)
+	common := txn.GetCommon()
+	common.SigningPubKey = precedenceGenesisPubKey
+	common.Sponsor = precedenceSourceAddr
+	common.SponsorSignature = &txcore.SponsorSignature{}
+
+	if got := e.checkSign(txn, common); got != ter.TefBAD_AUTH {
+		t.Fatalf("dry-run pseudo-account Sponsor = %v, want TefBAD_AUTH", got)
+	}
+}

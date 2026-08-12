@@ -424,13 +424,13 @@ func (e *Engine) checkSponsor(common *txcore.Common) ter.Result {
 //	auto const idAccount = ctx.tx[~sfDelegate].value_or(ctx.tx[sfAccount]);
 func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common) ter.Result {
 	if sponsor := common.SponsorSignature; sponsor != nil {
+		if result := e.checkPseudoAccount(common.Sponsor); result != ter.TesSUCCESS {
+			return result
+		}
 		// Dry-run/test mode permits an empty signature object. Real submissions
 		// have already failed crypto verification in preflight.
 		if !(e.config.SkipSignatureVerification &&
 			sponsor.SigningPubKey == "" && len(sponsor.Signers) == 0) {
-			if result := e.checkPseudoAccount(common.Sponsor); result != ter.TesSUCCESS {
-				return result
-			}
 			if len(sponsor.Signers) > 0 {
 				if result := e.checkMultiSignForAccount(common.Sponsor, sponsor.Signers); result != ter.TesSUCCESS {
 					return result
