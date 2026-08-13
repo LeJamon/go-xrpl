@@ -101,7 +101,7 @@ jobs:
         run: bash scripts/consensus-smoke/smoke.sh
         env:
           GOXRPL_IMAGE: goxrpl:latest
-          RIPPLED_IMAGE: xrpllabsofficial/xrpld:3.2.0
+          RIPPLED_IMAGE: xrpllabsofficial/xrpld:3.3.0
           PAYMENT_COUNT: "25"
           MIN_SEQ_EMPTY: "40"
           BOOT_TIMEOUT: "360"

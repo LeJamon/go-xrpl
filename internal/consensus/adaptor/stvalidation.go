@@ -188,6 +188,8 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 	var signingFields []validationSigningField
 	var present uint32
 	seen := make(map[uint32]struct{}, len(validationTemplate))
+	var previousKey uint32
+	havePrevious := false
 
 	pos := 0
 	for pos < len(data) {
@@ -206,6 +208,11 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 		if _, duplicate := seen[key]; duplicate {
 			return nil, fmt.Errorf("%w: %s", errDuplicateField, spec.name)
 		}
+		if havePrevious && key <= previousKey {
+			return nil, fmt.Errorf("%w: %s", errNonCanonicalFieldID, spec.name)
+		}
+		previousKey = key
+		havePrevious = true
 
 		// Determine field data length and advance pos past it.
 		// For VL-encoded fields, skipFieldData reads past the VL prefix and data,

@@ -4,14 +4,10 @@ name: goxrpl-consensus-smoke
 # (ceil(0.8 * 3)), so every node must validate the same ledger for the
 # network to advance. This is the regression gate for cross-implementation
 # consensus and tx-execution determinism.
-#
-# Until #418 (cold-bootstrap fork at seq=6/7) is fixed, this smoke is
-# expected to fail at phase 1 because the network wedges at seq=5. That's
-# the point: the smoke closes when the consensus work is complete.
 
 services:
   rippled-0:
-    image: ${RIPPLED_IMAGE:-xrpllabsofficial/xrpld:3.2.0}
+    image: ${RIPPLED_IMAGE:-xrpllabsofficial/xrpld:3.3.0}
     hostname: rippled-0
     ports:
       - "5005"
@@ -28,7 +24,7 @@ services:
       start_period: 5s
 
   rippled-1:
-    image: ${RIPPLED_IMAGE:-xrpllabsofficial/xrpld:3.2.0}
+    image: ${RIPPLED_IMAGE:-xrpllabsofficial/xrpld:3.3.0}
     hostname: rippled-1
     ports:
       - "5005"

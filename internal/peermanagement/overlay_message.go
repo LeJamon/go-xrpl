@@ -614,8 +614,11 @@ func (o *Overlay) handlePing(evt Event) bool {
 	switch ping.PType {
 	case message.PingTypePing:
 		o.selectMessageCharge(&evt, resource.FeeModerateBurdenPeer(), "ping request")
-		pong := *ping
-		pong.PType = message.PingTypePong
+		pong := message.Ping{PType: message.PingTypePong}
+		if ping.HasSeq() {
+			pong.Seq = ping.Seq
+			pong.SeqSet = true
+		}
 		wireMsg, err := message.EncodeFrame(&pong)
 		if err != nil {
 			return false

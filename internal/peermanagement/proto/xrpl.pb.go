@@ -2297,9 +2297,7 @@ func (x *TMLedgerData) GetError() TMReplyError {
 type TMPing struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Type          *TMPingPingType        `protobuf:"varint,1,req,name=type,enum=protocol.TMPingPingType" json:"type,omitempty"`
-	Seq           *uint32                `protobuf:"varint,2,opt,name=seq" json:"seq,omitempty"`           // detect stale replies, ensure other side is reading
-	PingTime      *uint64                `protobuf:"varint,3,opt,name=pingTime" json:"pingTime,omitempty"` // know when we think we sent the ping
-	NetTime       *uint64                `protobuf:"varint,4,opt,name=netTime" json:"netTime,omitempty"`
+	Seq           *uint32                `protobuf:"varint,2,opt,name=seq" json:"seq,omitempty"` // detect stale replies, ensure other side is reading
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2344,20 +2342,6 @@ func (x *TMPing) GetType() TMPingPingType {
 func (x *TMPing) GetSeq() uint32 {
 	if x != nil && x.Seq != nil {
 		return *x.Seq
-	}
-	return 0
-}
-
-func (x *TMPing) GetPingTime() uint64 {
-	if x != nil && x.PingTime != nil {
-		return *x.PingTime
-	}
-	return 0
-}
-
-func (x *TMPing) GetNetTime() uint64 {
-	if x != nil && x.NetTime != nil {
-		return *x.NetTime
 	}
 	return 0
 }
@@ -2918,17 +2902,15 @@ const file_internal_peermanagement_proto_xrpl_proto_rawDesc = "" +
 	"\x04type\x18\x03 \x02(\x0e2\x1a.protocol.TMLedgerInfoTypeR\x04type\x12,\n" +
 	"\x05nodes\x18\x04 \x03(\v2\x16.protocol.TMLedgerNodeR\x05nodes\x12$\n" +
 	"\rrequestCookie\x18\x05 \x01(\rR\rrequestCookie\x12,\n" +
-	"\x05error\x18\x06 \x01(\x0e2\x16.protocol.TMReplyErrorR\x05error\"\xa3\x01\n" +
+	"\x05error\x18\x06 \x01(\x0e2\x16.protocol.TMReplyErrorR\x05error\"y\n" +
 	"\x06TMPing\x12-\n" +
 	"\x04type\x18\x01 \x02(\x0e2\x19.protocol.TMPing.pingTypeR\x04type\x12\x10\n" +
-	"\x03seq\x18\x02 \x01(\rR\x03seq\x12\x1a\n" +
-	"\bpingTime\x18\x03 \x01(\x04R\bpingTime\x12\x18\n" +
-	"\anetTime\x18\x04 \x01(\x04R\anetTime\"\"\n" +
+	"\x03seq\x18\x02 \x01(\rR\x03seq\"\"\n" +
 	"\bpingType\x12\n" +
 	"\n" +
 	"\x06ptPING\x10\x00\x12\n" +
 	"\n" +
-	"\x06ptPONG\x10\x01\"y\n" +
+	"\x06ptPONG\x10\x01J\x04\b\x03\x10\x04J\x04\b\x04\x10\x05\"y\n" +
 	"\tTMSquelch\x12\x18\n" +
 	"\asquelch\x18\x01 \x02(\bR\asquelch\x12(\n" +
 	"\x0fvalidatorPubKey\x18\x02 \x02(\fR\x0fvalidatorPubKey\x12(\n" +

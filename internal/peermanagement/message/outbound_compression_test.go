@@ -31,7 +31,7 @@ func TestCompressFrameIfWorthwhilePolicy(t *testing.T) {
 		{
 			name:     "ineligible",
 			msgType:  TypePing,
-			payload:  bytes.Repeat([]byte{'A'}, 1024),
+			payload:  bytes.Repeat([]byte{'A'}, maxPingSize-HeaderSizeUncompressed),
 			compress: false,
 		},
 	}

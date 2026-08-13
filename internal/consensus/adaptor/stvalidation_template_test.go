@@ -1,7 +1,6 @@
 package adaptor
 
 import (
-	"bytes"
 	"encoding/binary"
 	"sort"
 	"testing"
@@ -70,6 +69,14 @@ func validationWireFieldIndex(t *testing.T, fields []validationWireField, key ui
 	}
 	t.Fatalf("validation field 0x%x not found", key)
 	return -1
+}
+
+func insertValidationWireField(fields []validationWireField, field validationWireField) []validationWireField {
+	index := sort.Search(len(fields), func(i int) bool { return fields[i].key > field.key })
+	fields = append(fields, validationWireField{})
+	copy(fields[index+1:], fields[index:])
+	fields[index] = field
+	return fields
 }
 
 func signValidationWireFields(
@@ -167,27 +174,15 @@ func TestParseSTValidation_RejectsDuplicateTemplateFields(t *testing.T) {
 }
 
 func TestParseSTValidation_TemplateShape(t *testing.T) {
-	t.Run("out of order is canonicalized", func(t *testing.T) {
+	t.Run("out of order is rejected", func(t *testing.T) {
 		identity, fields := signedValidationFixture(t)
 		signingTime := validationWireFieldIndex(t, fields, validationFieldKey(typeUINT32, fieldSigningTime))
 		ledgerHash := validationWireFieldIndex(t, fields, validationFieldKey(typeHash256, fieldLedgerHash))
 		fields[signingTime], fields[ledgerHash] = fields[ledgerHash], fields[signingTime]
 
 		blob, _, _ := signValidationWireFields(t, identity, fields)
-		validation, err := parseSTValidation(blob)
-		require.NoError(t, err)
-		assert.NoError(t, VerifyValidation(validation))
-
-		canonical, err := CanonicalSTValidation(validation)
-		require.NoError(t, err)
-		assert.False(t, bytes.Equal(blob, canonical))
-		canonicalFields := decodeValidationWireFields(t, canonical)
-		assert.True(t, sort.SliceIsSorted(canonicalFields, func(i, j int) bool {
-			return canonicalFields[i].key < canonicalFields[j].key
-		}))
-		reparsed, err := parseSTValidation(canonical)
-		require.NoError(t, err)
-		assert.NoError(t, VerifyValidation(reparsed))
+		_, err := parseSTValidation(blob)
+		assert.ErrorIs(t, err, errNonCanonicalFieldID)
 	})
 
 	t.Run("unexpected field", func(t *testing.T) {
@@ -381,14 +376,14 @@ func TestParseSTValidation_ValidatesAmounts(t *testing.T) {
 		{
 			name:   "truncated MPT",
 			amount: mptAmount()[:32],
-			target: errShortData,
+			target: errUnexpectedField,
 		},
 	}
 
 	for _, test := range invalid {
 		t.Run(test.name, func(t *testing.T) {
 			identity, fields := signedValidationFixture(t)
-			fields = append(fields, amountField(test.amount))
+			fields = insertValidationWireField(fields, amountField(test.amount))
 
 			blob, _, _ := signValidationWireFields(t, identity, fields)
 			_, err := parseSTValidation(blob)
@@ -421,7 +416,7 @@ func TestParseSTValidation_ValidatesAmounts(t *testing.T) {
 	for _, test := range valid {
 		t.Run(test.name, func(t *testing.T) {
 			identity, fields := signedValidationFixture(t)
-			fields = append(fields, amountField(test.amount))
+			fields = insertValidationWireField(fields, amountField(test.amount))
 
 			blob, _, _ := signValidationWireFields(t, identity, fields)
 			validation, err := parseSTValidation(blob)

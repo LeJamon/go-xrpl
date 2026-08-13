@@ -18,7 +18,7 @@
 #
 # Knobs (env vars):
 #   GOXRPL_IMAGE        image to use for goxrpl-0 (default: goxrpl:latest)
-#   RIPPLED_IMAGE       image to use for rippled-0,1 (default: xrpllabsofficial/xrpld:3.2.0)
+#   RIPPLED_IMAGE       image to use for rippled-0,1 (default: xrpllabsofficial/xrpld:3.3.0)
 #   MIN_SEQ_EMPTY       minimum validated seq for the empty-ledger phase (default 15)
 #   (phase 2 no longer takes a MIN_SEQ_TX — it waits for one submitted
 #    payment to land in a validated ledger, then asserts hash agreement at
@@ -35,7 +35,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 
 GOXRPL_IMAGE="${GOXRPL_IMAGE:-goxrpl:latest}"
-RIPPLED_IMAGE="${RIPPLED_IMAGE:-xrpllabsofficial/xrpld:3.2.0}"
+RIPPLED_IMAGE="${RIPPLED_IMAGE:-xrpllabsofficial/xrpld:3.3.0}"
 MIN_SEQ_EMPTY="${MIN_SEQ_EMPTY:-15}"
 MIN_SEQ_TX="${MIN_SEQ_TX:-12}"
 PAYMENT_COUNT="${PAYMENT_COUNT:-5}"

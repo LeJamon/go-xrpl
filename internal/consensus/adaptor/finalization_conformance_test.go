@@ -60,7 +60,7 @@ func TestSTValidationPreservesSignedAmountPresence(t *testing.T) {
 				wire:      appendFieldHeader(nil, typeAmount, fieldBaseFeeDrops),
 			}
 			amount.wire = binary.BigEndian.AppendUint64(amount.wire, test.raw)
-			fields = append(fields, amount)
+			fields = insertValidationWireField(fields, amount)
 
 			blob, _, _ := signValidationWireFields(t, identity, fields)
 			validation, err := parseSTValidation(blob)
