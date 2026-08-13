@@ -156,14 +156,20 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Read check
 	// Reference: CashCheck.cpp L85-90
 	checkData, err := ctx.View.Read(checkKey)
-	if err != nil || checkData == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if checkData == nil {
 		return ter.TecNO_ENTRY
 	}
 
 	// View.Read is untyped, so reject a CheckID that resolves to a non-Check
 	// object, matching rippled's tecNO_ENTRY.
 	checkType, err := state.DecodeType(checkData)
-	if err != nil || checkType != entry.TypeCheck {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if checkType != entry.TypeCheck {
 		return ter.TecNO_ENTRY
 	}
 
@@ -192,13 +198,19 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Reference: CashCheck.cpp L107-116
 	srcKey := keylet.Account(check.Account)
 	srcData, err := ctx.View.Read(srcKey)
-	if err != nil || srcData == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if srcData == nil {
 		return ter.TecNO_ENTRY
 	}
 
 	destKey := keylet.Account(accountID)
 	destData, err := ctx.View.Read(destKey)
-	if err != nil || destData == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if destData == nil {
 		return ter.TecNO_ENTRY
 	}
 	destAccount, err := state.ParseAccountRoot(destData)
@@ -467,8 +479,14 @@ func (c *CheckCash) applyCashMPTAmount(ctx *tx.ApplyContext, check *state.CheckD
 
 	if dstID != issuerID {
 		issuerData, err := ctx.View.Read(keylet.Account(issuerID))
-		if err != nil || issuerData == nil {
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if issuerData == nil {
 			return ter.TecNO_ISSUER
+		}
+		if _, err := state.ParseAccountRoot(issuerData); err != nil {
+			return ter.TefINTERNAL
 		}
 		if result := mptutil.RequireAuthAt(ctx.View, mptID, dstID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
 			return result
@@ -612,13 +630,19 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	if accountID != issuerID {
 		// Check trust line existence
 		trustLineKey := keylet.Line(accountID, issuerID, sendMax.Currency)
-		trustLineExists, _ := ctx.View.Exists(trustLineKey)
+		trustLineExists, err := ctx.View.Exists(trustLineKey)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
 
 		// Check issuer existence
 		// Reference: CashCheck.cpp L201-208
 		issuerKey := keylet.Account(issuerID)
 		issuerData, err := ctx.View.Read(issuerKey)
-		if err != nil || issuerData == nil {
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if issuerData == nil {
 			return ter.TecNO_ISSUER
 		}
 		issuerAccount, err := state.ParseAccountRoot(issuerData)
@@ -665,7 +689,11 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		// isFrozen(view, dstId, currency, issuerId) checks:
 		// 1. Global freeze on issuer
 		// 2. Issuer's freeze flag on the trust line
-		if isIssuerFrozenForAccount(ctx.View, accountID, issuerID, sendMax.Currency) {
+		frozen, err := isIssuerFrozenForAccount(ctx.View, accountID, issuerID, sendMax.Currency)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if frozen {
 			return ter.TecFROZEN
 		}
 	}
@@ -679,7 +707,10 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 
 	if accountID != issuerID {
 		trustLineKey := keylet.Line(accountID, issuerID, sendMax.Currency)
-		trustLineExists, _ := ctx.View.Exists(trustLineKey)
+		trustLineExists, err := ctx.View.Exists(trustLineKey)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
 
 		if !trustLineExists {
 			// Check reserve for creating trust line
@@ -706,7 +737,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		trustLineKey := keylet.Line(accountID, issuerID, sendMax.Currency)
 		trustLineData, err := ctx.View.Read(trustLineKey)
 		if err != nil {
-			return ter.TecNO_LINE
+			return ter.TefINTERNAL
 		}
 		rs, err := state.ParseRippleState(trustLineData)
 		if err != nil {
@@ -765,7 +796,9 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		ctx.Log.Warn("check cash: flow failed", "result", flowResult)
 		// Restore the trust line limit before returning
 		if savedLimit != nil {
-			restoreTrustLineLimit(ctx, accountID, issuerID, sendMax.Currency, destLow, *savedLimit)
+			if result := restoreTrustLineLimit(ctx, accountID, issuerID, sendMax.Currency, destLow, *savedLimit); result != ter.TesSUCCESS {
+				return result
+			}
 		}
 		return flowResult
 	}
@@ -778,7 +811,9 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 			ctx.Log.Warn("check cash: flow did not produce DeliverMin", "actual", actualOutAmount, "deliverMin", requestedAmount)
 			// Restore the trust line limit before returning
 			if savedLimit != nil {
-				restoreTrustLineLimit(ctx, accountID, issuerID, sendMax.Currency, destLow, *savedLimit)
+				if result := restoreTrustLineLimit(ctx, accountID, issuerID, sendMax.Currency, destLow, *savedLimit); result != ter.TesSUCCESS {
+					return result
+				}
 			}
 			return ter.TecPATH_PARTIAL
 		}
@@ -788,7 +823,9 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	if !isDeliverMin && flowResult != ter.TesSUCCESS {
 		// Restore the trust line limit before returning
 		if savedLimit != nil {
-			restoreTrustLineLimit(ctx, accountID, issuerID, sendMax.Currency, destLow, *savedLimit)
+			if result := restoreTrustLineLimit(ctx, accountID, issuerID, sendMax.Currency, destLow, *savedLimit); result != ter.TesSUCCESS {
+				return result
+			}
 		}
 		return ter.TecPATH_PARTIAL
 	}
@@ -805,7 +842,9 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	// restore the original limit that was tweaked.
 	// Reference: CashCheck.cpp scope_exit at L426-429
 	if savedLimit != nil {
-		restoreTrustLineLimit(ctx, accountID, issuerID, sendMax.Currency, destLow, *savedLimit)
+		if result := restoreTrustLineLimit(ctx, accountID, issuerID, sendMax.Currency, destLow, *savedLimit); result != ter.TesSUCCESS {
+			return result
+		}
 	}
 
 	// Set the delivered amount metadata in all cases, not just for DeliverMin.
@@ -858,15 +897,15 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 // shared IsTrustlineFrozen reads the self-self line (absent) and returns false,
 // so only the global freeze applies.
 // Reference: rippled/src/xrpld/ledger/detail/View.cpp isFrozen().
-func isIssuerFrozenForAccount(view tx.LedgerView, accountID, issuerID [20]byte, currency string) bool {
-	issuerAddr, err := state.EncodeAccountID(issuerID)
+func isIssuerFrozenForAccount(view tx.LedgerView, accountID, issuerID [20]byte, currency string) (bool, error) {
+	issuer, err := tx.ReadAccountRoot(view, issuerID)
 	if err != nil {
-		return false
+		return false, err
 	}
-	if tx.IsGlobalFrozen(view, issuerAddr) {
-		return true
+	if issuer != nil && issuer.Flags&state.LsfGlobalFreeze != 0 {
+		return true, nil
 	}
-	return tx.IsTrustlineFrozen(view, accountID, issuerID, currency)
+	return isTrustLineFrozenByIssuer(view, accountID, issuerID, currency)
 }
 
 // createTrustLineForCheckCash creates a trust line between the check casher
@@ -923,15 +962,15 @@ func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte
 
 // restoreTrustLineLimit restores the original trust line limit after flow.
 // Reference: CashCheck.cpp scope_exit at L426-429
-func restoreTrustLineLimit(ctx *tx.ApplyContext, destID, issuerID [20]byte, currency string, destLow bool, savedLimit state.Amount) {
+func restoreTrustLineLimit(ctx *tx.ApplyContext, destID, issuerID [20]byte, currency string, destLow bool, savedLimit state.Amount) ter.Result {
 	trustLineKey := keylet.Line(destID, issuerID, currency)
 	trustLineData, err := ctx.View.Read(trustLineKey)
 	if err != nil {
-		return
+		return ter.TefINTERNAL
 	}
 	rs, err := state.ParseRippleState(trustLineData)
 	if err != nil {
-		return
+		return ter.TefINTERNAL
 	}
 
 	if destLow {
@@ -942,9 +981,12 @@ func restoreTrustLineLimit(ctx *tx.ApplyContext, destID, issuerID [20]byte, curr
 
 	updatedData, err := state.SerializeRippleState(rs)
 	if err != nil {
-		return
+		return ter.TefINTERNAL
 	}
-	ctx.View.Update(trustLineKey, updatedData)
+	if err := ctx.View.Update(trustLineKey, updatedData); err != nil {
+		return ter.TefINTERNAL
+	}
+	return ter.TesSUCCESS
 }
 
 // removeCheckFromDirectories removes a check from both source and destination

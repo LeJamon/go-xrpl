@@ -4,7 +4,6 @@ import (
 	"context"
 	"strconv"
 	"testing"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -17,7 +16,7 @@ import (
 // whose seq still has a stashed pending-validation must mark the ledger
 // validated but must NOT rewind s.validatedLedger — the drain used to
 // promote unconditionally on any TTL-fresh hash match.
-func TestBackfill_BelowTipDrainDoesNotRewindValidated(t *testing.T) {
+func TestBackfill_BelowTipValidationDoesNotRewindValidated(t *testing.T) {
 	cfg := DefaultConfig()
 	svc, err := New(cfg)
 	require.NoError(t, err)
@@ -53,14 +52,8 @@ func TestBackfill_BelowTipDrainDoesNotRewindValidated(t *testing.T) {
 	}
 	hdr.Hash = header.CalculateHash(*hdr)
 	hashLow = hdr.Hash
-	svc.mu.Lock()
-	svc.pendingLedgerValidations[baseSeq] = pendingValidationEntry{
-		expectedHash: hashLow,
-		at:           time.Now(),
-	}
-	svc.pendingLedgerValidationsOrder = append(svc.pendingLedgerValidationsOrder, baseSeq)
-	svc.mu.Unlock()
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
+	svc.SetValidatedLedger(baseSeq, hashLow)
 	svc.FlushPersists()
 
 	svc.mu.RLock()
@@ -73,8 +66,6 @@ func TestBackfill_BelowTipDrainDoesNotRewindValidated(t *testing.T) {
 	require.True(t, ok, "the backfilled ledger must still be installed")
 	assert.True(t, adopted.IsValidated(),
 		"the backfilled ledger itself is validated — only the pointer must not move")
-	_, stashed := svc.pendingLedgerValidations[baseSeq]
-	assert.False(t, stashed, "the stash must be consumed either way")
 	svc.mu.RUnlock()
 
 	assert.Equal(t, strconv.FormatUint(uint64(baseSeq), 10), svc.GetServerInfo().CompleteLedgers,

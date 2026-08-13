@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"slices"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -164,7 +166,7 @@ type registeredMethod struct {
 	descriptor MethodDescriptor
 }
 
-func (method registeredMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (method registeredMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	return method.descriptor.Handler.Handle(ctx, params)
 }
 
@@ -180,15 +182,79 @@ func (method registeredMethod) RequiredCondition() types.Condition {
 	return method.descriptor.Condition
 }
 
-// RegisterAll wires the same immutable method catalogue into every transport.
-func RegisterAll(registry *types.MethodRegistry) {
+// RegisterAll adds the immutable method catalogue to a builder. The caller
+// must build the registry before publishing it to a transport.
+func RegisterAll(registry *types.MethodRegistryBuilder) error {
+	if registry == nil {
+		return fmt.Errorf("RPC method registry builder is nil")
+	}
 	seen := make(map[string]struct{}, len(methodDescriptors))
 	for _, descriptor := range methodDescriptors {
 		if _, duplicate := seen[descriptor.Name]; duplicate {
-			panic(fmt.Sprintf("duplicate RPC method descriptor %q", descriptor.Name))
+			return fmt.Errorf("duplicate RPC method descriptor %q", descriptor.Name)
 		}
 		seen[descriptor.Name] = struct{}{}
 		descriptor.Handler = newHandlerOfSameType(descriptor.Handler)
-		registry.Register(descriptor.Name, registeredMethod{descriptor: descriptor})
+		if err := registry.Register(descriptor.Name, registeredMethod{descriptor: descriptor}); err != nil {
+			return fmt.Errorf("register RPC method %q: %w", descriptor.Name, err)
+		}
+	}
+	return nil
+}
+
+// BuildRegistry returns a freshly built copy of the production RPC method
+// catalogue.
+func BuildRegistry() (*types.MethodRegistry, error) {
+	builder := types.NewMethodRegistryBuilder()
+	if err := RegisterAll(builder); err != nil {
+		return nil, err
+	}
+	return builder.Build()
+}
+
+// BuildRegistryWithOverrides builds a pre-publication registry for transport
+// tests that need to replace or add a small number of handlers. The returned
+// registry remains immutable once built.
+func BuildRegistryWithOverrides(overrides map[string]types.MethodHandler) (*types.MethodRegistry, error) {
+	builder := types.NewMethodRegistryBuilder()
+	seen := make(map[string]struct{}, len(methodDescriptors)+len(overrides))
+	for _, descriptor := range methodDescriptors {
+		if _, duplicate := seen[descriptor.Name]; duplicate {
+			return nil, fmt.Errorf("duplicate RPC method descriptor %q", descriptor.Name)
+		}
+		seen[descriptor.Name] = struct{}{}
+		if override, ok := overrides[descriptor.Name]; ok {
+			if methodHandlerIsNil(override) {
+				return nil, fmt.Errorf("RPC method %q has a nil override", descriptor.Name)
+			}
+			descriptor.Handler = override
+		} else {
+			descriptor.Handler = newHandlerOfSameType(descriptor.Handler)
+		}
+		if err := builder.Register(descriptor.Name, registeredMethod{descriptor: descriptor}); err != nil {
+			return nil, fmt.Errorf("register RPC method %q: %w", descriptor.Name, err)
+		}
+	}
+	for name, handler := range overrides {
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		if err := builder.Register(name, handler); err != nil {
+			return nil, fmt.Errorf("register RPC method %q: %w", name, err)
+		}
+	}
+	return builder.Build()
+}
+
+func methodHandlerIsNil(handler types.MethodHandler) bool {
+	if handler == nil {
+		return true
+	}
+	value := reflect.ValueOf(handler)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
 	}
 }

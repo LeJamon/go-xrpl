@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -43,7 +45,7 @@ func TestManifestMissingPublicKey(t *testing.T) {
 
 			assert.Nil(t, result, "Expected nil result for missing public_key")
 			require.NotNil(t, rpcErr, "Expected error for missing public_key")
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 			assert.Contains(t, rpcErr.Message, "public_key",
 				"Error message should mention public_key")
 		})
@@ -76,7 +78,7 @@ func TestManifestMalformedPublicKey(t *testing.T) {
 	// When full validation is implemented, this should return an error.
 	if rpcErr != nil {
 		// If the implementation has been updated to validate, verify error
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	} else {
 		// Stub behavior: returns requested field
 		require.NotNil(t, result)

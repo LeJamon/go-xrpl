@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -68,10 +70,10 @@ func TestRPCDiagnosticsConcurrentAccounting(t *testing.T) {
 
 type diagnosticTestHandler struct {
 	panicValue any
-	rpcErr     *types.RpcError
+	rpcErr     *rpcerrors.RpcError
 }
 
-func (h diagnosticTestHandler) Handle(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+func (h diagnosticTestHandler) Handle(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
 	if h.panicValue != nil {
 		panic(h.panicValue)
 	}
@@ -87,22 +89,23 @@ func (diagnosticTestHandler) RequiredCondition() types.Condition { return types.
 func TestDispatchDiagnosticsTreatsRPCResultsAsFinished(t *testing.T) {
 	diagnostics := NewRPCDiagnostics()
 	services := &types.ServiceContainer{RPCDiagnostics: diagnostics}
+	graph := types.NewTestServiceGraph(services)
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   services,
+		Services:   graph,
 	}
 
-	resolution := methodResolution{handler: diagnosticTestHandler{rpcErr: types.RpcErrorInvalidParams("bad request")}, resolved: true}
-	_, _ = dispatchResolvedMethod(nil, services, ctx, "normal_error", nil, resolution, rpcLog())
+	resolution := methodResolution{handler: diagnosticTestHandler{rpcErr: rpcerrors.RpcErrorInvalidParams("bad request")}, resolved: true}
+	_, _ = dispatchResolvedMethod(nil, graph, ctx, "normal_error", nil, resolution, rpcLog())
 	stats := diagnostics.Snapshot().Methods["normal_error"]
 	if stats.Finished != 1 || stats.Errored != 0 {
 		t.Fatalf("ordinary RPC error stats = %#v", stats)
 	}
 
 	resolution = methodResolution{handler: diagnosticTestHandler{panicValue: "boom"}, resolved: true}
-	_, _ = dispatchResolvedMethod(nil, services, ctx, "panic", nil, resolution, rpcLog())
+	_, _ = dispatchResolvedMethod(nil, graph, ctx, "panic", nil, resolution, rpcLog())
 	stats = diagnostics.Snapshot().Methods["panic"]
 	if stats.Finished != 0 || stats.Errored != 1 {
 		t.Fatalf("panic stats = %#v", stats)

@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,10 +34,11 @@ func saturatedShedder() *types.ClientLoadShedder {
 // does not serve the requested (in-range) api_version resolves to unknown-
 // command — matching rippled's getHandler returning null — not invalid_API_version.
 func TestDispatchGateOrder(t *testing.T) {
-	reg := types.NewMethodRegistry()
-	reg.Register("stop", &stubHandler{role: types.RoleAdmin})                                      // admin-only
-	reg.Register("ping", &stubHandler{role: types.RoleGuest})                                      // open
-	reg.Register("v1only", &stubHandler{role: types.RoleGuest, apiVers: []int{types.ApiVersion1}}) // known, v1-only
+	reg := mustTestMethodRegistry(t, map[string]types.MethodHandler{
+		"stop":   &stubHandler{role: types.RoleAdmin},                                    // admin-only
+		"ping":   &stubHandler{role: types.RoleGuest},                                    // open
+		"v1only": &stubHandler{role: types.RoleGuest, apiVers: []int{types.ApiVersion1}}, // known, v1-only
+	})
 
 	cases := []struct {
 		name       string
@@ -46,25 +49,25 @@ func TestDispatchGateOrder(t *testing.T) {
 		wantCode   int
 	}{
 		{"forbidden admin while saturated → FORBIDDEN, not TOO_BUSY",
-			"stop", types.ApiVersion1, true, true, types.RpcFORBIDDEN},
+			"stop", types.ApiVersion1, true, true, rpcerrors.RpcFORBIDDEN},
 		{"forbidden admin while idle → FORBIDDEN",
-			"stop", types.ApiVersion1, false, true, types.RpcFORBIDDEN},
+			"stop", types.ApiVersion1, false, true, rpcerrors.RpcFORBIDDEN},
 		{"unknown method while saturated → TOO_BUSY (busy before unknown)",
-			"nope", types.ApiVersion1, true, true, types.RpcTOO_BUSY},
+			"nope", types.ApiVersion1, true, true, rpcerrors.RpcTOO_BUSY},
 		{"unknown method while idle → METHOD_NOT_FOUND",
-			"nope", types.ApiVersion1, false, true, types.RpcMETHOD_NOT_FOUND},
+			"nope", types.ApiVersion1, false, true, rpcerrors.RpcMETHOD_NOT_FOUND},
 		{"invalid api_version + forbidden admin → INVALID_API_VERSION (before FORBID)",
-			"stop", 99, false, true, types.RpcINVALID_API_VERSION},
+			"stop", 99, false, true, rpcerrors.RpcINVALID_API_VERSION},
 		{"invalid api_version + forbidden admin while saturated → INVALID_API_VERSION",
-			"stop", 99, true, true, types.RpcINVALID_API_VERSION},
+			"stop", 99, true, true, rpcerrors.RpcINVALID_API_VERSION},
 		{"open method while saturated → TOO_BUSY (busy still fires when not forbidden)",
-			"ping", types.ApiVersion1, true, true, types.RpcTOO_BUSY},
+			"ping", types.ApiVersion1, true, true, rpcerrors.RpcTOO_BUSY},
 		{"open method while idle → success",
 			"ping", types.ApiVersion1, false, false, 0},
 		{"known v1-only method at unsupported in-range version → METHOD_NOT_FOUND (not INVALID_API_VERSION)",
-			"v1only", types.ApiVersion2, false, true, types.RpcMETHOD_NOT_FOUND},
+			"v1only", types.ApiVersion2, false, true, rpcerrors.RpcMETHOD_NOT_FOUND},
 		{"known v1-only method at unsupported version while saturated → TOO_BUSY (busy before unknown)",
-			"v1only", types.ApiVersion2, true, true, types.RpcTOO_BUSY},
+			"v1only", types.ApiVersion2, true, true, rpcerrors.RpcTOO_BUSY},
 		{"known v1-only method at its supported version → success",
 			"v1only", types.ApiVersion1, false, false, 0},
 	}
@@ -75,13 +78,14 @@ func TestDispatchGateOrder(t *testing.T) {
 			if c.saturated {
 				services.ClientLoad = saturatedShedder()
 			}
+			graph := types.NewTestServiceGraph(services)
 			ctx := &types.RpcContext{
 				ApiVersion: c.apiVersion,
 				Role:       types.RoleGuest, // non-admin caller
-				Services:   services,
+				Services:   graph,
 			}
 
-			result, rpcErr := dispatchMethod(reg, nil, services, ctx, c.method, nil, types.RpcErrorForbidden, rpcLog())
+			result, rpcErr := dispatchMethod(reg, nil, graph, ctx, c.method, nil, rpcerrors.RpcErrorForbidden, rpcLog())
 
 			if !c.wantErr {
 				require.Nil(t, rpcErr)
@@ -103,8 +107,14 @@ func TestDispatchGateOrder(t *testing.T) {
 func TestHTTPForbiddenBeatsBusy(t *testing.T) {
 	services := types.NewServiceContainer(nil)
 	services.ClientLoad = types.NewClientLoadShedder()
-	srv := NewServer(ServerOptions{Timeout: time.Second, Services: services})
-	srv.registry.Register("stop", &stubHandler{role: types.RoleAdmin})
+	graph := types.NewTestServiceGraph(services)
+	srv := NewServer(ServerOptions{
+		Timeout:  time.Second,
+		Services: graph,
+		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"stop": &stubHandler{role: types.RoleAdmin},
+		}),
+	})
 
 	for i := int64(0); i <= types.MaxJobQueueClients; i++ {
 		services.ClientLoad.Begin()
@@ -147,8 +157,14 @@ func TestHTTPForbiddenBeatsBusy(t *testing.T) {
 // invalid_API_version bare token.
 func TestHTTPKnownMethodUnsupportedVersionIsUnknownCommand(t *testing.T) {
 	services := types.NewServiceContainer(nil)
-	srv := NewServer(ServerOptions{Timeout: time.Second, Services: services})
-	srv.registry.Register("v1only", &stubHandler{role: types.RoleGuest, apiVers: []int{types.ApiVersion1}})
+	graph := types.NewTestServiceGraph(services)
+	srv := NewServer(ServerOptions{
+		Timeout:  time.Second,
+		Services: graph,
+		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"v1only": &stubHandler{role: types.RoleGuest, apiVers: []int{types.ApiVersion1}},
+		}),
+	})
 
 	post := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("POST", "/", strings.NewReader(body))

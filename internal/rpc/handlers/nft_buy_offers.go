@@ -7,6 +7,8 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
@@ -15,46 +17,46 @@ import (
 // Reference: rippled NFTOffers.cpp doNFTBuyOffers
 type NftBuyOffersMethod struct{ baseHandler }
 
-func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-	return handleNFTOffers(ctx, params, ctx.Services.Ledger.GetNFTBuyOffers)
+	return handleNFTOffers(ctx, params, ctx.Services.Ledger().GetNFTBuyOffers)
 }
 
 // handleNFTOffers is the shared nft_buy_offers / nft_sell_offers flow; the only
 // difference between buy and sell is the fetch function. The caller guards the
 // ledger service before binding fetch.
 // Reference: rippled NFTOffers.cpp doNFTBuyOffers / doNFTSellOffers
-func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error)) (any, *types.RpcError) {
+func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error)) (any, *rpcerrors.RpcError) {
 	if rpcErr := validateJsonCppIntegerRange(params); rpcErr != nil {
 		return nil, rpcErr
 	}
 	fields := make(map[string]json.RawMessage)
 	if params != nil {
 		if err := json.Unmarshal(params, &fields); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 
 	nftIDRaw, hasNFTID := fields["nft_id"]
 	if !hasNFTID {
-		return nil, types.RpcErrorMissingField("nft_id")
+		return nil, rpcerrors.RpcErrorMissingField("nft_id")
 	}
 	nftIDValue, validString := jsonCppStringRaw(nftIDRaw)
 	if !validString {
-		return nil, types.RpcErrorInvalidField("nft_id")
+		return nil, rpcerrors.RpcErrorInvalidField("nft_id")
 	}
 
 	// Validate and parse the NFT ID - must be a 64-character hex string (32 bytes)
 	nftIDHex := strings.ToUpper(nftIDValue)
 	if len(nftIDHex) != 64 {
-		return nil, types.RpcErrorInvalidField("nft_id")
+		return nil, rpcerrors.RpcErrorInvalidField("nft_id")
 	}
 
 	nftIDBytes, err := hex.DecodeString(nftIDHex)
 	if err != nil {
-		return nil, types.RpcErrorInvalidField("nft_id")
+		return nil, rpcerrors.RpcErrorInvalidField("nft_id")
 	}
 
 	var nftID [32]byte
@@ -62,7 +64,7 @@ func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(c
 
 	// Apply rippled's readLimitField with nftOffers tuning (NFTOffers.cpp:69):
 	// absent limit -> default, explicit 0 -> invalidParams, else clamp.
-	limit, limitErr := readLimitField(params, limitNFTOffers, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitNFTOffers, ctx.Role.IsUnlimited())
 	if limitErr != nil {
 		return nil, limitErr
 	}
@@ -84,12 +86,12 @@ func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(c
 		marker, markerIsString = rawJSONString(markerRaw)
 		if !markerIsString || marker == "" {
 			if _, err := fetch(ctx.Context, nftID, ledgerIndex, limit, ""); errors.Is(err, svcerr.ErrObjectNotFound) {
-				return nil, types.RpcErrorObjectNotFound("The requested object was not found.")
+				return nil, rpcerrors.RpcErrorObjectNotFound("The requested object was not found.")
 			}
 			if !markerIsString {
-				return nil, types.RpcErrorExpectedField("marker", "string")
+				return nil, rpcerrors.RpcErrorExpectedField("marker", "string")
 			}
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 
@@ -100,9 +102,9 @@ func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(c
 		}
 		switch {
 		case errors.Is(err, svcerr.ErrObjectNotFound):
-			return nil, types.RpcErrorObjectNotFound("The requested object was not found.")
+			return nil, rpcerrors.RpcErrorObjectNotFound("The requested object was not found.")
 		case errors.Is(err, svcerr.ErrInvalidMarker):
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 		return nil, rpcInternalError("nft_offers: ledger query failed", err)
 	}

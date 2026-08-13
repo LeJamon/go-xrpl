@@ -5,6 +5,6 @@ package version
 //
 //	go build -ldflags "-X github.com/LeJamon/go-xrpl/version.Version=x.y.z"
 //
-// Defaults to "dev" so a build that forgot the ldflags is visible in
-// server_info rather than masquerading as a release.
-var Version = "dev"
+// The default identifies the protocol release implemented by this branch;
+// release builds may replace it with a more specific build identifier.
+var Version = "3.3.0"

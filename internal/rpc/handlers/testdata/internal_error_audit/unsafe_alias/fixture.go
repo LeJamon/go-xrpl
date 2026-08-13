@@ -1,8 +1,8 @@
 package unsafe_alias
 
-import rpctypes "github.com/LeJamon/go-xrpl/internal/rpc/types"
+import "github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
-func Build(message string) *rpctypes.RpcError {
-	constructor := rpctypes.NewRpcError
-	return constructor(rpctypes.RpcINTERNAL, "internal", "internal", message)
+func Build(message string) *rpcerrors.RpcError {
+	constructor := rpcerrors.NewRpcError
+	return constructor(rpcerrors.RpcINTERNAL, "internal", "internal", message)
 }

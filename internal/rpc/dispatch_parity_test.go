@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
@@ -20,7 +22,7 @@ type condStubHandler struct {
 	cond types.Condition
 }
 
-func (h *condStubHandler) Handle(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+func (h *condStubHandler) Handle(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
 	return map[string]any{"ok": true}, nil
 }
 func (h *condStubHandler) RequiredRole() types.Role           { return types.RoleGuest }
@@ -31,26 +33,27 @@ func (h *condStubHandler) RequiredCondition() types.Condition { return h.cond }
 // (used by BOTH the HTTP and WebSocket transports) runs conditionMet, so a
 // not-synced node refuses a condition-requiring method on either transport.
 func TestDispatchMethodEnforcesConditionMet(t *testing.T) {
-	reg := types.NewMethodRegistry()
-	reg.Register("gated", &condStubHandler{cond: types.NeedsNetworkConnection})
+	reg := mustTestMethodRegistry(t, map[string]types.MethodHandler{
+		"gated": &condStubHandler{cond: types.NeedsNetworkConnection},
+	})
 
 	t.Run("not synced is refused", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: newMockLedgerService()}, // zero serverInfo: disconnected
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: newMockLedgerService()}), // zero serverInfo: disconnected
 		}
-		_, rpcErr := dispatchMethod(reg, nil, ctx.Services, ctx, "gated", nil, types.RpcErrorNoPermission, rpcLog())
+		_, rpcErr := dispatchMethod(reg, nil, ctx.Services, ctx, "gated", nil, rpcerrors.RpcErrorNoPermission, rpcLog())
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNO_NETWORK, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcNO_NETWORK, rpcErr.Code)
 		assert.Equal(t, "noNetwork", rpcErr.ErrorString)
 	})
 
 	t.Run("synced passes", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: syncedStandalone()},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: syncedStandalone()}),
 		}
-		result, rpcErr := dispatchMethod(reg, nil, ctx.Services, ctx, "gated", nil, types.RpcErrorNoPermission, rpcLog())
+		result, rpcErr := dispatchMethod(reg, nil, ctx.Services, ctx, "gated", nil, rpcerrors.RpcErrorNoPermission, rpcLog())
 		require.Nil(t, rpcErr)
 		assert.Equal(t, map[string]any{"ok": true}, result)
 	})
@@ -134,8 +137,12 @@ func TestLoadWarningNestedInResultOnHTTP(t *testing.T) {
 // alias for `command`, and an unresolvable command yields a bare missingCommand
 // token that echoes the request and id (ServerHandler.cpp:446-468).
 func TestWSCommandAliasAndMissingCommand(t *testing.T) {
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 2 * time.Second})
-	ws.methodRegistry.Register("ping", &stubHandler{})
+	ws := NewWebSocketServer(WebSocketServerOptions{
+		Timeout: 2 * time.Second,
+		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"ping": &stubHandler{},
+		}),
+	})
 
 	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
 	defer httpSrv.Close()
@@ -205,7 +212,7 @@ func TestWSCommandAliasAndMissingCommand(t *testing.T) {
 		resp := roundtrip(map[string]any{"command": "", "id": float64(6)})
 		assert.Equal(t, "error", resp["status"])
 		assert.Equal(t, "unknownCmd", resp["error"])
-		assert.Equal(t, float64(types.RpcMETHOD_NOT_FOUND), resp["error_code"])
+		assert.Equal(t, float64(rpcerrors.RpcMETHOD_NOT_FOUND), resp["error_code"])
 		assert.Equal(t, "Unknown method.", resp["error_message"])
 	})
 }

@@ -1,6 +1,6 @@
 package safe
 
-import rpctypes "github.com/LeJamon/go-xrpl/internal/rpc/types"
+import "github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
 const RpcINTERNAL = 72 + 1
 
@@ -13,10 +13,10 @@ func NewRpcError(code int, message string) *RpcError {
 	return &RpcError{Code: code, Message: message}
 }
 
-func Build(message string) (*rpctypes.RpcError, *RpcError) {
-	_ = rpctypes.RpcErrorInternal()
-	_ = rpctypes.RpcErrorTransactionSubmission()
-	remote := rpctypes.NewRpcError(rpctypes.RpcINVALID_PARAMS, "invalidParams", "invalidParams", message)
+func Build(message string) (*rpcerrors.RpcError, *RpcError) {
+	_ = rpcerrors.RpcErrorInternal()
+	_ = rpcerrors.RpcErrorTransactionSubmission()
+	remote := rpcerrors.NewRpcError(rpcerrors.RpcINVALID_PARAMS, "invalidParams", "invalidParams", message)
 
 	constructor := NewRpcError
 	local := constructor(RpcINTERNAL, message)

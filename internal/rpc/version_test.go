@@ -77,7 +77,7 @@ func TestVersionV2ShapeNumericNoGood(t *testing.T) {
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: tc.version,
-				Services:   &types.ServiceContainer{BetaRPCAPI: tc.beta},
+				Services:   types.NewTestServiceGraph(&types.ServiceContainer{BetaRPCAPI: tc.beta}),
 			}
 
 			result, rpcErr := method.Handle(ctx, nil)
@@ -122,7 +122,7 @@ func TestVersionLastTracksBetaFlag(t *testing.T) {
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: types.ApiVersion2,
-				Services:   &types.ServiceContainer{BetaRPCAPI: tc.beta},
+				Services:   types.NewTestServiceGraph(&types.ServiceContainer{BetaRPCAPI: tc.beta}),
 			}
 
 			result, rpcErr := method.Handle(ctx, nil)

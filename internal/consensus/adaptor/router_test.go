@@ -75,6 +75,10 @@ func (m *mockEngine) TrySwitchToLedger(id consensus.LedgerID) (consensus.LedgerS
 	return result, nil
 }
 
+func (m *mockEngine) CanAcceptLedger(consensus.LedgerID) (bool, error) {
+	return true, nil
+}
+
 func (m *mockEngine) OnLedgerAcquireFailed(id consensus.LedgerID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -421,8 +425,8 @@ func TestRouterRelaysSignedDirectBatchSignerOuterOnly(t *testing.T) {
 	batch := batchtest.NewBatchBuilder(master, 1, 50, batchtx.BatchFlagAllOrNothing).
 		AddInnerTx(batchtest.MakeInnerPaymentXRP(master, bob, 1, 2)).
 		AddInnerTx(batchtest.MakeInnerPaymentXRP(bob, master, 1, 1)).
-		AddSigner(bob, "DEADBEEF").
-		Build()
+		AddSigner(bob).
+		MustBuild()
 	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
 	env.SignWith(batch, master)

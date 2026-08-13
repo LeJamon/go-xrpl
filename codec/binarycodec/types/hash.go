@@ -42,6 +42,9 @@ func hashFromJSON(json any, length int) ([]byte, error) {
 	if !ok {
 		return nil, &InvalidHashTypeError{}
 	}
+	if v == "0" {
+		return make([]byte, length), nil
+	}
 	decoded, err := hex.DecodeString(v)
 	if err != nil {
 		return nil, &InvalidHexStringError{Err: err}

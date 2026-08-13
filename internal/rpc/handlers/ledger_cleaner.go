@@ -3,13 +3,13 @@ package handlers
 import (
 	"encoding/json"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // LedgerCleanerMethod handles the ledger_cleaner admin RPC. It configures the
-// background ledger-integrity verifier and returns its status, mirroring
-// rippled's ledger_cleaner (LedgerCleaner.cpp). A request with no parameters is
-// treated as a non-destructive status query.
+// background ledger-integrity verifier, mirroring rippled's ledger_cleaner.
 //
 // Parameters (all optional, mirroring rippled): ledger (single sequence,
 // forces a deep check), min_ledger, max_ledger, full (bool, deep check),
@@ -24,74 +24,52 @@ func (m *LedgerCleanerMethod) RequiredCondition() types.Condition {
 	return types.NeedsNetworkConnection
 }
 
-func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	if ctx.Services == nil || ctx.Services.LedgerCleanerConfigure == nil {
+func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
+	if ctx.Services == nil || ctx.Services.LedgerCleanerConfigure() == nil {
 		return nil, rpcInternalInvariantError("ledger_cleaner: service unavailable")
 	}
 
 	var req struct {
-		Ledger     *uint32 `json:"ledger,omitempty"`
-		MinLedger  *uint32 `json:"min_ledger,omitempty"`
-		MaxLedger  *uint32 `json:"max_ledger,omitempty"`
-		Full       *bool   `json:"full,omitempty"`
-		CheckNodes *bool   `json:"check_nodes,omitempty"`
-		FixTxns    *bool   `json:"fix_txns,omitempty"`
-		Stop       *bool   `json:"stop,omitempty"`
+		Ledger     jsonCppUInt32Field `json:"ledger"`
+		MinLedger  jsonCppUInt32Field `json:"min_ledger"`
+		MaxLedger  jsonCppUInt32Field `json:"max_ledger"`
+		Full       jsonCppBoolField   `json:"full"`
+		CheckNodes jsonCppBoolField   `json:"check_nodes"`
+		FixTxns    jsonCppBoolField   `json:"fix_txns"`
+		Stop       jsonCppBoolField   `json:"stop"`
 	}
-	if len(params) > 0 {
-		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, types.RpcErrorInvalidParams("ledger_cleaner: malformed params")
-		}
+	if len(params) == 0 {
+		params = json.RawMessage(`{}`)
 	}
-
-	// No parameters at all → non-destructive status query.
-	hasParams := req.Ledger != nil || req.MinLedger != nil || req.MaxLedger != nil ||
-		req.Full != nil || req.CheckNodes != nil || req.FixTxns != nil || req.Stop != nil
-	if !hasParams {
-		if ctx.Services.LedgerCleanerStatusFn != nil {
-			return statusResponse(ctx.Services.LedgerCleanerStatusFn(), false), nil
-		}
-		return statusResponse(types.LedgerCleanerStatus{State: "idle"}, false), nil
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(params, &object); err != nil || object == nil {
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, rpcInternalError("ledger_cleaner: parameter conversion failed", err)
 	}
 
-	st := ctx.Services.LedgerCleanerConfigure(types.LedgerCleanerParams{
-		Ledger:     req.Ledger,
-		MinLedger:  req.MinLedger,
-		MaxLedger:  req.MaxLedger,
-		Full:       req.Full,
-		CheckNodes: req.CheckNodes,
-		FixTxns:    req.FixTxns,
-		Stop:       req.Stop != nil && *req.Stop,
+	optionalUInt := func(field jsonCppUInt32Field) *uint32 {
+		if !field.present {
+			return nil
+		}
+		return &field.value
+	}
+	optionalBool := func(field jsonCppBoolField) *bool {
+		if !field.present {
+			return nil
+		}
+		return &field.value
+	}
+
+	ctx.Services.LedgerCleanerConfigure()(types.LedgerCleanerParams{
+		Ledger:     optionalUInt(req.Ledger),
+		MinLedger:  optionalUInt(req.MinLedger),
+		MaxLedger:  optionalUInt(req.MaxLedger),
+		Full:       optionalBool(req.Full),
+		CheckNodes: optionalBool(req.CheckNodes),
+		FixTxns:    optionalBool(req.FixTxns),
+		Stop:       req.Stop.value,
 	})
-	return statusResponse(st, true), nil
-}
-
-// statusResponse renders a cleaner status as the RPC result. configured marks a
-// request that changed the cleaner's state (vs a pure status query). The
-// status / min_ledger / max_ledger / check_nodes / fail_counts fields mirror
-// rippled's PropertyStream output (LedgerCleaner.cpp:110-127); the *_checked /
-// missing_nodes progress counters are the go-xrpl addition the issue asks for.
-func statusResponse(st types.LedgerCleanerStatus, configured bool) map[string]any {
-	resp := map[string]any{
-		"status":          st.State,
-		"check_nodes":     st.CheckNodes,
-		"fix_txns":        st.FixTxns,
-		"ledgers_checked": st.LedgersChecked,
-		"nodes_checked":   st.NodesChecked,
-		"missing_nodes":   st.MissingNodes,
-	}
-	if configured {
-		resp["message"] = "Ledger cleaner configured"
-	}
-	if st.State == "running" {
-		resp["min_ledger"] = st.MinLedger
-		resp["max_ledger"] = st.MaxLedger
-	}
-	if st.Failures > 0 {
-		resp["fail_counts"] = st.Failures
-	}
-	if st.LastError != "" {
-		resp["last_error"] = st.LastError
-	}
-	return resp
+	return map[string]any{"message": "Cleaner configured"}, nil
 }

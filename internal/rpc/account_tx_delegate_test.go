@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,13 +20,13 @@ func TestAccountTxDelegateValidation(t *testing.T) {
 		code     int
 		message  string
 	}{
-		{name: "non-object", delegate: "actor", code: types.RpcINVALID_PARAMS, message: "Invalid field 'delegate'."},
-		{name: "null", delegate: nil, code: types.RpcINVALID_PARAMS, message: "Invalid field 'delegate'."},
-		{name: "missing filter", delegate: map[string]any{}, code: types.RpcINVALID_PARAMS, message: "Invalid field 'delegate_filter'."},
-		{name: "non-string filter", delegate: map[string]any{"delegate_filter": 1}, code: types.RpcINVALID_PARAMS, message: "Invalid field 'delegate_filter'."},
-		{name: "unknown filter", delegate: map[string]any{"delegate_filter": "other"}, code: types.RpcINVALID_PARAMS, message: "Invalid field 'delegate_filter'."},
-		{name: "non-string counterparty", delegate: map[string]any{"delegate_filter": "actor", "counter_party": 1}, code: types.RpcINVALID_PARAMS, message: "Invalid field 'counter_party'."},
-		{name: "malformed counterparty", delegate: map[string]any{"delegate_filter": "actor", "counter_party": "not-an-account"}, code: types.RpcACT_MALFORMED, message: "Account malformed."},
+		{name: "non-object", delegate: "actor", code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid field 'delegate'."},
+		{name: "null", delegate: nil, code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid field 'delegate'."},
+		{name: "missing filter", delegate: map[string]any{}, code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid field 'delegate_filter'."},
+		{name: "non-string filter", delegate: map[string]any{"delegate_filter": 1}, code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid field 'delegate_filter'."},
+		{name: "unknown filter", delegate: map[string]any{"delegate_filter": "other"}, code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid field 'delegate_filter'."},
+		{name: "non-string counterparty", delegate: map[string]any{"delegate_filter": "actor", "counter_party": 1}, code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid field 'counter_party'."},
+		{name: "malformed counterparty", delegate: map[string]any{"delegate_filter": "actor", "counter_party": "not-an-account"}, code: rpcerrors.RpcACT_MALFORMED, message: "Account malformed."},
 	}
 
 	for _, test := range tests {
@@ -87,7 +88,7 @@ func TestAccountTxDelegateMarkerConvention(t *testing.T) {
 			}, params)
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 			assert.Equal(t, mismatch, rpcErr.Message)
 		})
 	}

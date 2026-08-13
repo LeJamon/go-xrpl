@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -10,7 +11,7 @@ import (
 // This is the "machine-readable" variant (rippled human=false).
 type ServerStateMethod struct{ baseHandler }
 
-func (m *ServerStateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *ServerStateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
@@ -19,7 +20,7 @@ func (m *ServerStateMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	if serverCountersRequested(params) {
 		addServerDiagnostics(state, ctx.Services)
 	}
-	if warnings := buildServerWarnings(ctx.Services, ctx.IsAdmin); len(warnings) > 0 {
+	if warnings := buildServerWarnings(ctx.Services, ctx.Role.IsAdmin()); len(warnings) > 0 {
 		state["warnings"] = warnings
 	}
 	return map[string]any{"state": state}, nil

@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"strconv"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
@@ -42,7 +44,7 @@ type signCredentials struct {
 	KeyType    json.RawMessage `json:"key_type,omitempty"`
 }
 
-func (c signCredentials) deriveKeypair(apiVersion int, params json.RawMessage) (string, string, string, *types.RpcError) {
+func (c signCredentials) deriveKeypair(apiVersion int, params json.RawMessage) (string, string, string, *rpcerrors.RpcError) {
 	return parseCredentialsAndDeriveKeypair(apiVersion, params)
 }
 
@@ -80,7 +82,7 @@ func defaultFeeOptions() feeOptions {
 //   - Negative fee_mult_max    → rpcINVALID_PARAMS with expected_field_message
 //   - Non-integer fee_div_max  → rpcHIGH_FEE with expected_field_message
 //   - Non-positive fee_div_max → rpcINVALID_PARAMS with expected_field_message
-func parseFeeOptions(params json.RawMessage) (feeOptions, *types.RpcError) {
+func parseFeeOptions(params json.RawMessage) (feeOptions, *rpcerrors.RpcError) {
 	opts := defaultFeeOptions()
 
 	if len(params) == 0 {
@@ -121,14 +123,14 @@ func parseFeeOptions(params json.RawMessage) (feeOptions, *types.RpcError) {
 // Matches rippled's checkFee() validation:
 //   - If not an integer type → rpcHIGH_FEE
 //   - If negative (or <=0 for strictPositive) → rpcINVALID_PARAMS
-func parsePositiveIntParam(raw json.RawMessage, fieldName string, strictPositive bool) (int, *types.RpcError) {
+func parsePositiveIntParam(raw json.RawMessage, fieldName string, strictPositive bool) (int, *rpcerrors.RpcError) {
 	// Try to parse as a number
 	var num json.Number
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	if err := dec.Decode(&num); err != nil {
 		// Not a valid JSON number → rpcHIGH_FEE
-		return 0, types.RpcErrorExpectedFieldHighFee(fieldName, "a positive integer")
+		return 0, rpcerrors.RpcErrorExpectedFieldHighFee(fieldName, "a positive integer")
 	}
 
 	// Check if it's an integer (no decimal point, no exponent notation)
@@ -138,15 +140,15 @@ func parsePositiveIntParam(raw json.RawMessage, fieldName string, strictPositive
 		// Could be a float like "1.5" or too large
 		if _, fErr := strconv.ParseFloat(str, 64); fErr == nil {
 			// It's a valid float but not an integer → rpcHIGH_FEE
-			return 0, types.RpcErrorExpectedFieldHighFee(fieldName, "a positive integer")
+			return 0, rpcerrors.RpcErrorExpectedFieldHighFee(fieldName, "a positive integer")
 		}
 		// Not a number at all → rpcHIGH_FEE
-		return 0, types.RpcErrorExpectedFieldHighFee(fieldName, "a positive integer")
+		return 0, rpcerrors.RpcErrorExpectedFieldHighFee(fieldName, "a positive integer")
 	}
 
 	// Range check
 	if val > math.MaxInt32 || val < math.MinInt32 {
-		return 0, types.RpcErrorExpectedFieldHighFee(fieldName, "a positive integer")
+		return 0, rpcerrors.RpcErrorExpectedFieldHighFee(fieldName, "a positive integer")
 	}
 
 	intVal := int(val)
@@ -154,12 +156,12 @@ func parsePositiveIntParam(raw json.RawMessage, fieldName string, strictPositive
 	if strictPositive {
 		// fee_div_max must be > 0
 		if intVal <= 0 {
-			return 0, types.RpcErrorExpectedField(fieldName, "a positive integer")
+			return 0, rpcerrors.RpcErrorExpectedField(fieldName, "a positive integer")
 		}
 	} else {
 		// fee_mult_max must be >= 0 (rippled checks mult < 0)
 		if intVal < 0 {
-			return 0, types.RpcErrorExpectedField(fieldName, "a positive integer")
+			return 0, rpcerrors.RpcErrorExpectedField(fieldName, "a positive integer")
 		}
 	}
 
@@ -183,21 +185,21 @@ func formatSignResult(result signResult, apiVersion int) map[string]any {
 	)
 }
 
-func rejectDisabledSigning(ctx *types.RpcContext) *types.RpcError {
-	if ctx != nil && ctx.Role == types.RoleAdmin {
+func rejectDisabledSigning(ctx *types.RpcContext) *rpcerrors.RpcError {
+	if ctx != nil && ctx.Role.IsAdmin() {
 		return nil
 	}
-	if ctx != nil && ctx.Services != nil && ctx.Services.Capabilities.SigningEnabled {
+	if ctx != nil && ctx.Services != nil && ctx.Services.Capabilities().SigningEnabled {
 		return nil
 	}
-	return types.RpcErrorNotSupported("Signing is not supported by this server.")
+	return rpcerrors.RpcErrorNotSupported("Signing is not supported by this server.")
 }
 
-func addSigningDeprecation(result any, rpcErr *types.RpcError) (any, *types.RpcError) {
+func addSigningDeprecation(result any, rpcErr *rpcerrors.RpcError) (any, *rpcerrors.RpcError) {
 	return addDeprecation(result, rpcErr, signingDeprecation)
 }
 
-func addDeprecation(result any, rpcErr *types.RpcError, message string) (any, *types.RpcError) {
+func addDeprecation(result any, rpcErr *rpcerrors.RpcError, message string) (any, *rpcerrors.RpcError) {
 	if rpcErr != nil {
 		return result, rpcErr.WithExtra(map[string]any{"deprecated": message})
 	}
@@ -216,7 +218,7 @@ func jsonFieldPresent(params json.RawMessage, field string) bool {
 	return ok
 }
 
-func checkPayment(txMap map[string]any, params json.RawMessage, doPath bool, rpcCtx *types.RpcContext) *types.RpcError {
+func checkPayment(txMap map[string]any, params json.RawMessage, doPath bool, rpcCtx *types.RpcContext) *rpcerrors.RpcError {
 	if txMap["TransactionType"] != "Payment" {
 		return nil
 	}
@@ -224,7 +226,7 @@ func checkPayment(txMap map[string]any, params json.RawMessage, doPath bool, rpc
 	if deliverMax, ok := txMap["DeliverMax"]; ok {
 		if amount, present := txMap["Amount"]; present {
 			if !reflect.DeepEqual(amount, deliverMax) {
-				return types.RpcErrorInvalidParams(
+				return rpcerrors.RpcErrorInvalidParams(
 					"Cannot specify differing 'Amount' and 'DeliverMax'")
 			}
 		} else {
@@ -235,50 +237,50 @@ func checkPayment(txMap map[string]any, params json.RawMessage, doPath bool, rpc
 
 	amountValue, ok := txMap["Amount"]
 	if !ok {
-		return types.RpcErrorMissingField("tx_json.Amount")
+		return rpcerrors.RpcErrorMissingField("tx_json.Amount")
 	}
 	amountJSON, err := json.Marshal(amountValue)
 	if err != nil {
-		return types.RpcErrorInvalidField("tx_json.Amount")
+		return rpcerrors.RpcErrorInvalidField("tx_json.Amount")
 	}
 	amount, err := state.AmountFromJSON(amountJSON)
 	if err != nil {
-		return types.RpcErrorInvalidField("tx_json.Amount")
+		return rpcerrors.RpcErrorInvalidField("tx_json.Amount")
 	}
 
 	destinationValue, present := txMap["Destination"]
 	destination, destinationIsString := destinationValue.(string)
 	if !present {
-		return types.RpcErrorMissingField("tx_json.Destination")
+		return rpcerrors.RpcErrorMissingField("tx_json.Destination")
 	}
 	if !destinationIsString || !addresscodec.IsValidClassicAddress(destination) {
-		return types.RpcErrorInvalidField("tx_json.Destination")
+		return rpcerrors.RpcErrorInvalidField("tx_json.Destination")
 	}
 
 	buildPath := jsonFieldPresent(params, "build_path")
 	if buildPath && !doPath {
-		return types.RpcErrorInvalidParams(
+		return rpcerrors.RpcErrorInvalidParams(
 			"Field 'build_path' not allowed in this context.")
 	}
 	if buildPath && amount.IsMPT() {
-		if rpcCtx == nil || rpcCtx.Services == nil || rpcCtx.Services.Ledger == nil {
-			return types.RpcErrorInvalidParams(
+		if rpcCtx == nil || rpcCtx.Services == nil || rpcCtx.Services.Ledger() == nil {
+			return rpcerrors.RpcErrorInvalidParams(
 				"Field 'build_path' not allowed in this context.")
 		}
-		rulesSource, ok := rpcCtx.Services.Ledger.(types.TransactionRulesSource)
+		rulesSource, ok := rpcCtx.Services.Ledger().(types.TransactionRulesSource)
 		if !ok {
-			return types.RpcErrorInvalidParams(
+			return rpcerrors.RpcErrorInvalidParams(
 				"Field 'build_path' not allowed in this context.")
 		}
 		rules := rulesSource.TransactionRules()
 		if rules == nil || !rules.MPTokensV2Enabled() {
-			return types.RpcErrorInvalidParams(
+			return rpcerrors.RpcErrorInvalidParams(
 				"Field 'build_path' not allowed in this context.")
 		}
 	}
 	_, pathsPresent := txMap["Paths"]
 	if buildPath && pathsPresent {
-		return types.RpcErrorInvalidParams(
+		return rpcerrors.RpcErrorInvalidParams(
 			"Cannot specify both 'tx_json.Paths' and 'build_path'")
 	}
 	var domainID *[32]byte
@@ -286,7 +288,7 @@ func checkPayment(txMap map[string]any, params json.RawMessage, doPath bool, rpc
 		domainString, isString := domain.(string)
 		decoded, decodeErr := hex.DecodeString(domainString)
 		if !isString || decodeErr != nil || len(decoded) != 32 {
-			return types.RpcErrorDomainMalformed("Unable to parse 'DomainID'.")
+			return rpcerrors.RpcErrorDomainMalformed("Unable to parse 'DomainID'.")
 		}
 		var parsed [32]byte
 		copy(parsed[:], decoded)
@@ -297,24 +299,24 @@ func checkPayment(txMap map[string]any, params json.RawMessage, doPath bool, rpc
 		if sendMaxValue, present := txMap["SendMax"]; present {
 			sendMaxJSON, marshalErr := json.Marshal(sendMaxValue)
 			if marshalErr != nil {
-				return types.RpcErrorInvalidField("tx_json.SendMax")
+				return rpcerrors.RpcErrorInvalidField("tx_json.SendMax")
 			}
 			parsedSendMax, parseErr := state.AmountFromJSON(sendMaxJSON)
 			if parseErr != nil {
-				return types.RpcErrorInvalidField("tx_json.SendMax")
+				return rpcerrors.RpcErrorInvalidField("tx_json.SendMax")
 			}
 			sendMax = &parsedSendMax
 			if parsedSendMax.IsNative() && amount.IsNative() {
-				return types.RpcErrorInvalidParams(
+				return rpcerrors.RpcErrorInvalidParams(
 					"Cannot build XRP to XRP paths.")
 			}
 		} else if amount.IsNative() {
 			// A missing SendMax defaults to Amount. This is only relevant to
 			// the native/native rejection; issued amounts remain pathable.
-			return types.RpcErrorInvalidParams(
+			return rpcerrors.RpcErrorInvalidParams(
 				"Cannot build XRP to XRP paths.")
 		}
-		if rpcCtx == nil || rpcCtx.Services == nil || rpcCtx.Services.Ledger == nil {
+		if rpcCtx == nil || rpcCtx.Services == nil || rpcCtx.Services.Ledger() == nil {
 			return rpcInternalInvariantError("payment: ledger service unavailable for path construction")
 		}
 		release, rpcErr := acquirePathfind(rpcCtx)
@@ -322,7 +324,7 @@ func checkPayment(txMap map[string]any, params json.RawMessage, doPath bool, rpc
 			return rpcErr
 		}
 		defer release()
-		viewSource, ok := rpcCtx.Services.Ledger.(types.OpenLedgerViewSource)
+		viewSource, ok := rpcCtx.Services.Ledger().(types.OpenLedgerViewSource)
 		if !ok {
 			return rpcInternalInvariantError("payment: open ledger view unavailable for path construction")
 		}
@@ -385,17 +387,17 @@ func checkPayment(txMap map[string]any, params json.RawMessage, doPath bool, rpc
 	return nil
 }
 
-func rpcErrorAlreadyMultisigned() *types.RpcError {
-	return types.NewRpcError(
-		types.RpcALREADY_MULTISIG, "alreadyMultisig", "alreadyMultisig", "Already multisigned.")
+func rpcErrorAlreadyMultisigned() *rpcerrors.RpcError {
+	return rpcerrors.NewRpcError(
+		rpcerrors.RpcALREADY_MULTISIG, "alreadyMultisig", "alreadyMultisig", "Already multisigned.")
 }
 
-func rpcErrorAlreadySingleSigned() *types.RpcError {
-	return types.NewRpcError(
-		types.RpcALREADY_SINGLE_SIG, "alreadySingleSig", "alreadySingleSig", "Already single-signed.")
+func rpcErrorAlreadySingleSigned() *rpcerrors.RpcError {
+	return rpcerrors.NewRpcError(
+		rpcerrors.RpcALREADY_SINGLE_SIG, "alreadySingleSig", "alreadySingleSig", "Already single-signed.")
 }
 
-func submitWithFailHard(ledger types.LedgerService, txJSON []byte, txBlob string, failHard bool) (*types.SubmitResult, error) {
+func submitWithFailHard(ledger types.TransactionSubmission, txJSON []byte, txBlob string, failHard bool) (*types.SubmitResult, error) {
 	if failHard {
 		if submitter, ok := ledger.(types.FailHardSubmitter); ok {
 			return submitter.SubmitTransactionFailHard(txJSON, txBlob)
@@ -412,7 +414,7 @@ func submitWithFailHard(ledger types.LedgerService, txJSON []byte, txBlob string
 // rawParams carries the caller's request so fee_mult_max / fee_div_max are
 // read only when Fee is actually autofilled — rippled's checkFee returns
 // before inspecting them when Fee is present or offline.
-func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds signCredentials, offline bool, rawParams json.RawMessage, signatureTarget string) (*signResult, *types.RpcError) {
+func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds signCredentials, offline bool, rawParams json.RawMessage, signatureTarget string) (*signResult, *rpcerrors.RpcError) {
 	ctx := rpcCtx.Context
 	services := rpcCtx.Services
 	apiVersion := rpcCtx.ApiVersion
@@ -424,15 +426,15 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 	}
 	signatureTargetPresent := jsonFieldPresent(rawParams, "signature_target")
 	if signatureTargetPresent && signatureTarget != counterpartySignatureField {
-		return nil, types.RpcErrorInvalidParams(signatureTarget)
+		return nil, rpcerrors.RpcErrorInvalidParams(signatureTarget)
 	}
 	if len(txJSON) == 0 {
-		return nil, types.RpcErrorMissingField("tx_json")
+		return nil, rpcerrors.RpcErrorMissingField("tx_json")
 	}
 
 	// Check if ledger service is available (needed for auto-filling fields)
 	// only after credentials have entered the shared signing preprocessing.
-	if !offline && (services == nil || services.Ledger == nil) {
+	if !offline && (services == nil || services.Ledger() == nil) {
 		return nil, rpcInternalInvariantError("sign: ledger service unavailable")
 	}
 
@@ -447,15 +449,15 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 	decoder := json.NewDecoder(bytes.NewReader(txJSON))
 	decoder.UseNumber()
 	if err := decoder.Decode(&txValue); err != nil {
-		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
+		return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		return nil, types.RpcErrorInvalidParams("Invalid tx_json: expected object")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid tx_json: expected object")
 	}
 	txMap, ok := txValue.(map[string]any)
 	if !ok {
-		return nil, types.RpcErrorExpectedField("tx_json", "object")
+		return nil, rpcerrors.RpcErrorExpectedField("tx_json", "object")
 	}
 	// signature_target directs the signature into a nested inner object instead
 	// of the top level. Only CounterpartySignature is a valid target; any other
@@ -469,21 +471,21 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 	// the caller's Account (the primary signer) is the source and its ownership
 	// is not checked.
 	if _, ok := txMap["TransactionType"]; !ok {
-		return nil, types.RpcErrorMissingField("tx_json.TransactionType")
+		return nil, rpcerrors.RpcErrorMissingField("tx_json.TransactionType")
 	}
 
 	txAccountValue, accountPresent := txMap["Account"]
 	if !accountPresent {
-		return nil, types.RpcErrorSrcActMissing("Missing field 'tx_json.Account'.")
+		return nil, rpcerrors.RpcErrorSrcActMissing("Missing field 'tx_json.Account'.")
 	}
 	txAccount, ok := txAccountValue.(string)
 	if !ok || !types.IsValidClassicAddress(txAccount) {
-		return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
+		return nil, rpcerrors.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
 	}
 	if rpcErr := rejectOnlineSigningWithoutCurrentLedger(services, offline, apiVersion); rpcErr != nil {
 		return nil, rpcErr
 	}
-	if rpcErr := rejectSigningWhenLoaded(services, rpcCtx.Unlimited); rpcErr != nil {
+	if rpcErr := rejectSigningWhenLoaded(services, rpcCtx.Role.IsUnlimited()); rpcErr != nil {
 		return nil, rpcErr
 	}
 	srcAddress := txAccount
@@ -496,10 +498,10 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 		// The source account must exist in the current ledger, whether or
 		// not Sequence is supplied (rpcSRC_ACT_NOT_FOUND).
 		var err error
-		sourceAccountInfo, err = services.Ledger.GetAccountInfo(ctx, srcAddress, "current")
+		sourceAccountInfo, err = services.Ledger().GetAccountInfo(ctx, srcAddress, "current")
 		if err != nil {
 			if errors.Is(err, svcerr.ErrAccountNotFound) {
-				return nil, types.RpcErrorSrcActNotFound("Source account not found.")
+				return nil, rpcerrors.RpcErrorSrcActNotFound("Source account not found.")
 			}
 			return nil, rpcInternalError("sign: source account lookup failed", err)
 		}
@@ -508,10 +510,10 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 		// TicketSequence supplies the sequence instead (Sequence = 0).
 		if _, ok := txMap["Sequence"]; !ok {
 			_, hasTicket := txMap["TicketSequence"]
-			seq, err := services.Ledger.GetAutofillSequence(srcAddress, hasTicket)
+			seq, err := services.LedgerMutation().GetAutofillSequence(srcAddress, hasTicket)
 			if err != nil {
 				if errors.Is(err, svcerr.ErrAccountNotFound) {
-					return nil, types.RpcErrorSrcActNotFound("Source account not found.")
+					return nil, rpcerrors.RpcErrorSrcActNotFound("Source account not found.")
 				}
 				return nil, rpcInternalError("sign: sequence autofill failed", err)
 			}
@@ -530,7 +532,7 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 		// legacy networks (ID <= 1024) must NOT include NetworkID;
 		// new networks (ID > 1024) require it and it is auto-filled here.
 		if _, ok := txMap["NetworkID"]; !ok {
-			serverInfo := services.Ledger.GetServerInfo()
+			serverInfo := services.Ledger().GetServerInfo()
 			if serverInfo.NetworkID > 1024 {
 				txMap["NetworkID"] = serverInfo.NetworkID
 			}
@@ -548,11 +550,11 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 			if mErr != nil {
 				return nil, rpcInternalError("sign: fee probe marshaling failed", mErr)
 			}
-			fee, feeErr := services.Ledger.GetAutofillFee(probe, rpcCtx.Unlimited, feeOpts.Mult, feeOpts.Div)
+			fee, feeErr := services.LedgerMutation().GetAutofillFee(probe, rpcCtx.Role.IsUnlimited(), feeOpts.Mult, feeOpts.Div)
 			if feeErr != nil {
 				var hfe *svcerr.HighFeeError
 				if errors.As(feeErr, &hfe) {
-					return nil, types.RpcErrorHighFee(hfe.Error())
+					return nil, rpcerrors.RpcErrorHighFee(hfe.Error())
 				}
 				return nil, rpcInternalError("sign: fee autofill failed", feeErr)
 			}
@@ -563,10 +565,10 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 		// (rippled TransactionSign.cpp:451-452 and checkFee with
 		// doAutoFill == false).
 		if _, ok := txMap["Sequence"]; !ok {
-			return nil, types.RpcErrorMissingField("tx_json.Sequence")
+			return nil, rpcerrors.RpcErrorMissingField("tx_json.Sequence")
 		}
 		if _, ok := txMap["Fee"]; !ok {
-			return nil, types.RpcErrorMissingField("tx_json.Fee")
+			return nil, rpcerrors.RpcErrorMissingField("tx_json.Fee")
 		}
 	}
 	if rpcErr := checkPayment(txMap, rawParams, !offline, rpcCtx); rpcErr != nil {
@@ -582,7 +584,7 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 			delegatePresent = true
 			delegate, ok := delegateValue.(string)
 			if !ok || !addresscodec.IsValidClassicAddress(delegate) {
-				return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Delegate'.")
+				return nil, rpcerrors.RpcErrorSrcActMalformed("Invalid field 'tx_json.Delegate'.")
 			}
 			authorizationAccount = delegate
 		}
@@ -603,7 +605,7 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 	if !signatureTargetPresent {
 		txMap["SigningPubKey"] = publicKey
 	} else {
-		var rpcErr *types.RpcError
+		var rpcErr *rpcerrors.RpcError
 		targetObj, rpcErr = signatureTargetObject(txMap, signatureTarget)
 		if rpcErr != nil {
 			return nil, rpcErr
@@ -649,10 +651,10 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 	}, nil
 }
 
-func authorizeSigningKey(ctx *types.RpcContext, account, derivedAccount string, requireAccount bool) *types.RpcError {
+func authorizeSigningKey(ctx *types.RpcContext, account, derivedAccount string, requireAccount bool) *rpcerrors.RpcError {
 	var accountInfo *types.AccountInfo
-	if ctx != nil && ctx.Services != nil && ctx.Services.Ledger != nil {
-		info, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, account, "current")
+	if ctx != nil && ctx.Services != nil && ctx.Services.Ledger() != nil {
+		info, err := ctx.Services.Ledger().GetAccountInfo(ctx.Context, account, "current")
 		if err != nil {
 			if !errors.Is(err, svcerr.ErrAccountNotFound) {
 				return rpcInternalError("signing authorization account lookup failed", err)
@@ -665,47 +667,47 @@ func authorizeSigningKey(ctx *types.RpcContext, account, derivedAccount string, 
 	return signingKeyAuthorization(account, derivedAccount, accountInfo, requireAccount)
 }
 
-func signingKeyAuthorization(account, derivedAccount string, accountInfo *types.AccountInfo, requireAccount bool) *types.RpcError {
+func signingKeyAuthorization(account, derivedAccount string, accountInfo *types.AccountInfo, requireAccount bool) *rpcerrors.RpcError {
 	if accountInfo == nil {
 		if requireAccount {
-			return types.RpcErrorDelegateActNotFound()
+			return rpcerrors.RpcErrorDelegateActNotFound()
 		}
 		if derivedAccount == account {
 			return nil
 		}
-		return types.RpcErrorBadSecret()
+		return rpcerrors.RpcErrorBadSecret()
 	}
 	if derivedAccount == account {
 		if accountInfo.Flags&entry.LsfDisableMaster != 0 {
-			return types.RpcErrorMasterDisabled()
+			return rpcerrors.RpcErrorMasterDisabled()
 		}
 		return nil
 	}
 	if accountInfo.RegularKey == derivedAccount {
 		return nil
 	}
-	return types.RpcErrorBadSecret()
+	return rpcerrors.RpcErrorBadSecret()
 }
 
-func rejectSigningWhenLoaded(services *types.ServiceContainer, unlimited bool) *types.RpcError {
-	if unlimited || services == nil || services.IsLoadedCluster == nil || !services.IsLoadedCluster() {
+func rejectSigningWhenLoaded(services *types.ServiceGraph, unlimited bool) *rpcerrors.RpcError {
+	if unlimited || services == nil || services.IsLoadedCluster() == nil || !services.IsLoadedCluster()() {
 		return nil
 	}
-	return types.RpcErrorTooBusy()
+	return rpcerrors.RpcErrorTooBusy()
 }
 
-func rejectOnlineSigningWithoutCurrentLedger(services *types.ServiceContainer, offline bool, apiVersion int) *types.RpcError {
-	if offline || services == nil || services.Ledger == nil {
+func rejectOnlineSigningWithoutCurrentLedger(services *types.ServiceGraph, offline bool, apiVersion int) *rpcerrors.RpcError {
+	if offline || services == nil || services.Ledger() == nil {
 		return nil
 	}
-	info := services.Ledger.GetServerInfo()
+	info := services.Ledger().GetServerInfo()
 	if info.Standalone || !types.ValidatedLedgerStale(info) {
 		return nil
 	}
 	return types.CurrentLedgerUnavailable(apiVersion)
 }
 
-func signatureTargetObject(txMap map[string]any, target string) (map[string]any, *types.RpcError) {
+func signatureTargetObject(txMap map[string]any, target string) (map[string]any, *rpcerrors.RpcError) {
 	value, exists := txMap[target]
 	if !exists {
 		object := make(map[string]any)
@@ -714,19 +716,19 @@ func signatureTargetObject(txMap map[string]any, target string) (map[string]any,
 	}
 	object, ok := value.(map[string]any)
 	if !ok {
-		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid field 'tx_json.%s'.", target))
+		return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid field 'tx_json.%s'.", target))
 	}
 	return object, nil
 }
 
-func parseTransactionForSigning(txMap map[string]any) (tx.Transaction, *types.RpcError) {
+func parseTransactionForSigning(txMap map[string]any) (tx.Transaction, *rpcerrors.RpcError) {
 	blob, err := binarycodec.EncodeBytes(txMap)
 	if err != nil {
-		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Failed to parse transaction: %v", err))
+		return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Failed to parse transaction: %v", err))
 	}
 	transaction, err := tx.ParseFromBinary(blob)
 	if err != nil {
-		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Failed to parse transaction: %v", err))
+		return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Failed to parse transaction: %v", err))
 	}
 	return transaction, nil
 }

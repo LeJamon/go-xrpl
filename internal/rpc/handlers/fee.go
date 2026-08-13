@@ -5,6 +5,8 @@ import (
 	"math/bits"
 	"strconv"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -23,15 +25,15 @@ const (
 	feeLedgersInQueue          = 20
 )
 
-func (m *FeeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *FeeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	baseFee, _, _ := ctx.Services.Ledger.GetCurrentFees()
-	currentLedgerIndex := ctx.Services.Ledger.GetCurrentLedgerIndex()
+	baseFee, _, _ := ctx.Services.Ledger().GetCurrentFees()
+	currentLedgerIndex := ctx.Services.Ledger().GetCurrentLedgerIndex()
 
-	metrics := snapshotTxQ(ctx.Services, ctx.Services.Ledger.IsStandalone())
+	metrics := snapshotTxQ(ctx.Services, ctx.Services.Ledger().IsStandalone())
 	txCount := metrics.TxCount
 	maxQueue := metrics.TxQMaxSize
 	txInLedger := metrics.TxInLedger
@@ -76,9 +78,9 @@ func (m *FeeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, 
 
 // snapshotTxQ returns the active TxQ metrics, or rippled's idle-state
 // defaults when the TxQ hook isn't wired.
-func snapshotTxQ(services *types.ServiceContainer, standalone bool) types.TxQFeeMetrics {
-	if services != nil && services.TxQFeeMetrics != nil {
-		return services.TxQFeeMetrics()
+func snapshotTxQ(services *types.ServiceGraph, standalone bool) types.TxQFeeMetrics {
+	if services != nil && services.TxQFeeMetrics() != nil {
+		return services.TxQFeeMetrics()()
 	}
 	expected := uint64(feeDefaultExpected)
 	if standalone {

@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
@@ -91,38 +93,40 @@ func (s *rpcSubSink) expectNone(t *testing.T) {
 	}
 }
 
-// newRPCSubTestServer builds a WebSocket server whose service container
-// carries the url-subscription registry, plus admin/guest contexts for
-// driving the plain JSON-RPC handlers.
-func newRPCSubTestServer(t *testing.T) (*WebSocketServer, *types.ServiceContainer) {
+type rpcSubTestServices struct {
+	graph *types.ServiceGraph
+	url   types.URLSubscriptionService
+}
+
+func newRPCSubTestServer(t *testing.T) (*WebSocketServer, *rpcSubTestServices) {
 	return newRPCSubTestServerWithProvider(t, nil)
 }
 
-func newRPCSubTestServerWithProvider(t *testing.T, provider types.LedgerInfoProvider) (*WebSocketServer, *types.ServiceContainer) {
+func newRPCSubTestServerWithProvider(t *testing.T, provider types.LedgerInfoProvider) (*WebSocketServer, *rpcSubTestServices) {
 	t.Helper()
-	services := types.NewServiceContainer(nil)
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second, Services: services, LedgerInfoProvider: provider})
-	services.URLSubscriptions = ws.URLSubscriptionService()
-	require.NotNil(t, services.URLSubscriptions, "composition must expose the url registry explicitly")
-	return ws, services
+	graph := types.NewTestServiceGraph(types.NewServiceContainer(nil))
+	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second, Services: graph, LedgerInfoProvider: provider})
+	url := ws.URLSubscriptionService()
+	require.NotNil(t, url, "composition must expose the url registry explicitly")
+	return ws, &rpcSubTestServices{graph: graph, url: url}
 }
 
-func adminCtx(services *types.ServiceContainer) *types.RpcContext {
+func adminCtx(services *rpcSubTestServices) *types.RpcContext {
 	return &types.RpcContext{
-		Role:       types.RoleAdmin,
-		IsAdmin:    true,
-		ApiVersion: types.ApiVersion1,
-		Services:   services,
+		Role:             types.RoleAdmin,
+		ApiVersion:       types.ApiVersion1,
+		Services:         services.graph,
+		URLSubscriptions: services.url,
 	}
 }
 
-func subscribeURL(t *testing.T, services *types.ServiceContainer, params string) (any, *types.RpcError) {
+func subscribeURL(t *testing.T, services *rpcSubTestServices, params string) (any, *rpcerrors.RpcError) {
 	t.Helper()
 	method := &handlers.SubscribeMethod{}
 	return method.Handle(adminCtx(services), json.RawMessage(params))
 }
 
-func unsubscribeURL(t *testing.T, services *types.ServiceContainer, params string) (any, *types.RpcError) {
+func unsubscribeURL(t *testing.T, services *rpcSubTestServices, params string) (any, *rpcerrors.RpcError) {
 	t.Helper()
 	method := &handlers.UnsubscribeMethod{}
 	return method.Handle(adminCtx(services), json.RawMessage(params))
@@ -255,7 +259,7 @@ func TestRPCSub_URLValidation(t *testing.T) {
 			result, rpcErr := subscribeURL(t, services, tc.params)
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 			assert.Equal(t, tc.message, rpcErr.Message)
 		})
 	}
@@ -351,7 +355,7 @@ func TestRPCSub_EmptyHostRejectedAtSubscribe(t *testing.T) {
 	result, rpcErr := subscribeURL(t, services, `{"url":"http://","streams":["ledger"]}`)
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Zero(t, ws.SubscriptionManager().Metrics().Connections)
 }
 
@@ -610,7 +614,7 @@ func TestRPCSub_ExistingSubscribeKeepsEarlierMutations(t *testing.T) {
 
 	_, rpcErr = subscribeURL(t, services, `{`+urlParam+`,"username":"after","streams":["transactions","invalid"]}`)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcSTREAM_MALFORMED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcSTREAM_MALFORMED, rpcErr.Code)
 
 	after := sub.registration.Snapshot()
 	assert.True(t, before.Has(types.SubLedger))
@@ -683,7 +687,7 @@ func TestRPCSub_SubscribeAfterClosePrecedesURLValidation(t *testing.T) {
 		result, rpcErr := subscribeURL(t, services, params)
 		assert.Nil(t, result, "params=%s", params)
 		require.NotNil(t, rpcErr, "params=%s", params)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code, "params=%s", params)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code, "params=%s", params)
 	}
 }
 
@@ -700,7 +704,7 @@ func TestRPCSub_BoundsGlobalAndPerPrincipal(t *testing.T) {
 	require.Nil(t, rpcErr)
 	_, rpcErr = subscribeURL(t, services, `{"url":"`+second.srv.URL+`","streams":["ledger"]}`)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcTOO_BUSY, rpcErr.Code)
 	assert.Equal(t, uint64(1), ws.SubscriptionManager().Metrics().Connections)
 	ws.urlSubs.mu.Lock()
 	assert.Len(t, ws.urlSubs.subs, 1)
@@ -727,7 +731,7 @@ func TestRPCSub_BoundsGlobalAndPerPrincipal(t *testing.T) {
 	fourth := newRPCSubSink(t)
 	_, rpcErr = ws.urlSubs.Subscribe(ctx, types.SubscriptionRequest{URL: fourth.srv.URL, Streams: []types.SubscriptionType{types.SubLedger}})
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcTOO_BUSY, rpcErr.Code)
 	ctx.ClientIP = "principal-b"
 	_, rpcErr = ws.urlSubs.Subscribe(ctx, types.SubscriptionRequest{URL: fourth.srv.URL, Streams: []types.SubscriptionType{types.SubLedger}})
 	require.Nil(t, rpcErr)
@@ -754,7 +758,7 @@ func TestRPCSub_EquivalentIPv6PrincipalsShareCapacity(t *testing.T) {
 		URL: second.srv.URL, Streams: []types.SubscriptionType{types.SubLedger},
 	})
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcTOO_BUSY, rpcErr.Code)
 
 	ws.urlSubs.mu.Lock()
 	defer ws.urlSubs.mu.Unlock()
@@ -820,7 +824,7 @@ func TestRPCSub_AttachRejectionRollsBackRegistryState(t *testing.T) {
 		URL: sink.srv.URL, Streams: []types.SubscriptionType{types.SubLedger},
 	})
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	ws.urlSubs.mu.Lock()
 	defer ws.urlSubs.mu.Unlock()
 	assert.Empty(t, ws.urlSubs.subs)
@@ -904,7 +908,7 @@ func TestRPCSub_TerminalEntryCannotBeReusedBeforeAsyncRetirement(t *testing.T) {
 	ws.urlSubs.mu.Unlock()
 
 	require.NotNil(t, reuseErr)
-	assert.Equal(t, types.RpcTOO_BUSY, reuseErr.Code)
+	assert.Equal(t, rpcerrors.RpcTOO_BUSY, reuseErr.Code)
 	assert.Nil(t, lookup.sub)
 	assert.True(t, entryUnchanged)
 	assert.Equal(t, 1, entries)
@@ -957,7 +961,7 @@ func TestRPCSub_PrincipalWorkerCapDuringRetirement(t *testing.T) {
 		t.Fatal("timed out waiting for blocked delivery")
 	}
 
-	unsubDone := make(chan *types.RpcError, 1)
+	unsubDone := make(chan *rpcerrors.RpcError, 1)
 	go func() {
 		_, unsubErr := ws.urlSubs.Unsubscribe(ctx, first)
 		unsubDone <- unsubErr
@@ -973,7 +977,7 @@ func TestRPCSub_PrincipalWorkerCapDuringRetirement(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		_, rpcErr = ws.urlSubs.Subscribe(ctx, replacement)
 		require.NotNil(t, rpcErr, "replacement %d should remain blocked while the old worker is retiring", i)
-		assert.Equal(t, types.RpcTOO_BUSY, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcTOO_BUSY, rpcErr.Code)
 		ws.urlSubs.mu.Lock()
 		live := ws.urlSubs.principalWorkers[ctx.ClientIP]
 		ws.urlSubs.mu.Unlock()
@@ -1131,7 +1135,7 @@ func TestRPCSub_MalformedStreamKeepsCreatedEntry(t *testing.T) {
 
 	_, rpcErr := subscribeURL(t, services, `{"url":"`+sink.srv.URL+`","streams":["nonsense"]}`)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcSTREAM_MALFORMED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcSTREAM_MALFORMED, rpcErr.Code)
 	assert.Equal(t, uint64(1), ws.SubscriptionManager().Metrics().Connections,
 		"URL registration precedes stream validation")
 }
@@ -1240,7 +1244,7 @@ func TestRPCSub_CloseJoinsRetiringWorker(t *testing.T) {
 		t.Fatal("timed out waiting for blocked delivery")
 	}
 
-	unsubDone := make(chan *types.RpcError, 1)
+	unsubDone := make(chan *rpcerrors.RpcError, 1)
 	go func() {
 		_, unsubErr := ws.urlSubs.Unsubscribe(ctx, request)
 		unsubDone <- unsubErr

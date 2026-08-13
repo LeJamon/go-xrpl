@@ -40,7 +40,7 @@ func (r *serverStatusRecorder) count() int {
 	return len(r.events)
 }
 
-func serverStatusTestServices(svc *service.Service) *types.ServiceContainer {
+func serverStatusTestServices(svc *service.Service) *types.ServiceGraph {
 	services := types.NewServiceContainer(rpcadapter.NewLedgerServiceAdapter(svc))
 	services.TxQMetrics = func() types.TxQServerMetrics {
 		metrics := svc.TxQMetrics()
@@ -58,7 +58,7 @@ func serverStatusTestServices(svc *service.Service) *types.ServiceContainer {
 			Cluster: fees.ClusterFee(),
 		}
 	}
-	return services
+	return types.NewTestServiceGraph(services)
 }
 
 func waitForServerStatus(t *testing.T, recorder *serverStatusRecorder) *rpc.ServerStatusEvent {
@@ -204,7 +204,7 @@ func TestServerStatusPublisherClipsSaturatedTxQLoad(t *testing.T) {
 		t.Fatalf("Start service: %v", err)
 	}
 	t.Cleanup(svc.Stop)
-	services := serverStatusTestServices(svc)
+	services := types.NewServiceContainer(rpcadapter.NewLedgerServiceAdapter(svc))
 	services.TxQMetrics = func() types.TxQServerMetrics {
 		return types.TxQServerMetrics{
 			ReferenceFeeLevel:     256,
@@ -212,8 +212,9 @@ func TestServerStatusPublisherClipsSaturatedTxQLoad(t *testing.T) {
 			OpenLedgerFeeLevel:    math.MaxUint64,
 		}
 	}
+	servicesGraph := types.NewTestServiceGraph(services)
 	recorder := newServerStatusRecorder()
-	status := newServerStatusPublisher(services, recorder)
+	status := newServerStatusPublisher(servicesGraph, recorder)
 	status.publish(nil)
 
 	event := waitForServerStatus(t, recorder)

@@ -90,10 +90,18 @@ func (c *completeLedgerSet) removeRange(start, end uint32) {
 }
 
 func (c *completeLedgerSet) contains(seq uint32) bool {
+	_, ok := c.rangeContaining(seq)
+	return ok
+}
+
+func (c *completeLedgerSet) rangeContaining(seq uint32) (ledgerRange, bool) {
 	index := sort.Search(len(c.ranges), func(i int) bool {
 		return c.ranges[i].end >= seq
 	})
-	return index < len(c.ranges) && c.ranges[index].contains(seq)
+	if index >= len(c.ranges) || !c.ranges[index].contains(seq) {
+		return ledgerRange{}, false
+	}
+	return c.ranges[index], true
 }
 
 func (c *completeLedgerSet) String() string {

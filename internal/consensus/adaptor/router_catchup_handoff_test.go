@@ -199,6 +199,9 @@ func TestStoredConsensusCandidateRetriesUntilEngineAccepts(t *testing.T) {
 				require.NoError(t, a.OnLedgerSwitched(selected))
 			}
 			r := newTestRouter(engine, a, nil)
+			_, started := r.startLifecycle(t.Context())
+			require.True(t, started)
+			t.Cleanup(r.stopLifecycle)
 
 			stateMap, err := local.StateMapSnapshot()
 			require.NoError(t, err)
@@ -212,8 +215,11 @@ func TestStoredConsensusCandidateRetriesUntilEngineAccepts(t *testing.T) {
 			require.NoError(t, err)
 			require.False(t, initialCandidate)
 
-			svc.SetValidatedLedgerAt(hdr.LedgerIndex, hdr.Hash, time.Now())
+			r.onLedgerFullyValidated(hdr.LedgerIndex, hdr.Hash)
 			require.Eventually(t, func() bool {
+				if len(engine.getLedgers()) != 1 {
+					return false
+				}
 				r.acquisitionMu.Lock()
 				defer r.acquisitionMu.Unlock()
 				return r.consensusRecovery.targetHash == hdr.Hash

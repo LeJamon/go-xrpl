@@ -97,8 +97,8 @@ func rpcCapabilities(cfg *config.Config) types.RPCCapabilities {
 	}
 }
 
-func newRPCServiceContainer(ledger types.LedgerService, cfg *config.Config) *types.ServiceContainer {
-	services := types.NewServiceContainer(ledger)
+func newRPCServiceGraphBuilder(ledger types.LedgerService, cfg *config.Config) *types.ServiceGraphBuilder {
+	services := types.NewServiceGraphBuilder(ledger)
 	services.ClientLoad = types.NewClientLoadShedder()
 	services.RPCDiagnostics = rpc.NewRPCDiagnostics()
 	services.ServerInfoConfig = serverInfoConfigSnapshot(cfg)

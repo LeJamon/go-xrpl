@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/rpc/txprojection"
@@ -19,7 +21,7 @@ import (
 // Supports both tx_blob (pre-signed hex) and tx_json submissions.
 type SubmitMethod struct{ baseHandler }
 
-func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (result any, rpcErr *types.RpcError) {
+func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (result any, rpcErr *rpcerrors.RpcError) {
 	setLoadMedium(ctx)
 	rawParams, err := decodeSubmitParams(params)
 	if err != nil {
@@ -38,38 +40,38 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (re
 		projectionPath = txprojection.PathCanonical
 		blobHex, ok := submitJSONString(rawParams["tx_blob"])
 		if !ok || blobHex == "" {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 		rawBlob, decodeErr := hex.DecodeString(blobHex)
 		if decodeErr != nil || len(rawBlob) == 0 {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 
 		parsed, txParseErr := tx.ParseFromBinary(rawBlob)
 		if txParseErr != nil {
-			return nil, types.RpcErrorInvalidTransaction(txParseErr.Error())
+			return nil, rpcerrors.RpcErrorInvalidTransaction(txParseErr.Error())
 		}
 		canonical, canonicalErr := binarycodec.DecodeBytes(rawBlob)
 		if canonicalErr != nil {
-			return nil, types.RpcErrorInvalidTransaction(canonicalErr.Error())
+			return nil, rpcerrors.RpcErrorInvalidTransaction(canonicalErr.Error())
 		}
 		canonicalBlobHex, canonicalEncodeErr := binarycodec.Encode(canonical)
 		if canonicalEncodeErr != nil {
-			return nil, types.RpcErrorInvalidTransaction(canonicalEncodeErr.Error())
+			return nil, rpcerrors.RpcErrorInvalidTransaction(canonicalEncodeErr.Error())
 		}
 		canonicalBlob, canonicalDecodeErr := hex.DecodeString(canonicalBlobHex)
 		if canonicalDecodeErr != nil {
 			return nil, rpcInternalError("submit: canonical transaction decoding failed", canonicalDecodeErr)
 		}
 		if bindErr := tx.BindRawBytes(parsed, canonicalBlob); bindErr != nil {
-			return nil, types.RpcErrorInvalidTransaction(bindErr.Error())
+			return nil, rpcerrors.RpcErrorInvalidTransaction(bindErr.Error())
 		}
 
 		signatureReason := ""
 		signatureChecked := false
-		checkSigs := ctx.Services == nil || ctx.Services.Ledger == nil || !ctx.Services.Ledger.IsStandalone()
-		if ctx.Services != nil && ctx.Services.Ledger != nil {
-			if rulesSource, ok := ctx.Services.Ledger.(types.TransactionRulesSource); ok {
+		checkSigs := ctx.Services == nil || ctx.Services.Ledger() == nil || !ctx.Services.Ledger().IsStandalone()
+		if ctx.Services != nil && ctx.Services.Ledger() != nil {
+			if rulesSource, ok := ctx.Services.Ledger().(types.TransactionRulesSource); ok {
 				signatureReason = sign.CheckSTTxSignature(parsed, rulesSource.TransactionRules(), checkSigs)
 				signatureChecked = true
 			}
@@ -78,12 +80,12 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (re
 			signatureReason = sign.CheckSTTxSignature(parsed, nil, checkSigs)
 		}
 		if signatureReason != "" {
-			return nil, types.RpcErrorInvalidTransaction("fails local checks: " + signatureReason)
+			return nil, rpcerrors.RpcErrorInvalidTransaction("fails local checks: " + signatureReason)
 		}
 		if reason := tx.TransactionLocalChecksFailureReason(parsed); reason != "" {
-			return nil, types.RpcErrorInvalidTransaction("fails local checks: " + reason)
+			return nil, rpcerrors.RpcErrorInvalidTransaction("fails local checks: " + reason)
 		}
-		var parseErr *types.RpcError
+		var parseErr *rpcerrors.RpcError
 		failHard, parseErr = parseSubmitFailHard(rawParams["fail_hard"])
 		if parseErr != nil {
 			return nil, parseErr
@@ -96,7 +98,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (re
 			txJSON = marshaled
 		}
 	} else {
-		var parseErr *types.RpcError
+		var parseErr *rpcerrors.RpcError
 		failHard, parseErr = parseSubmitFailHard(rawParams["fail_hard"])
 		if parseErr != nil {
 			return nil, parseErr
@@ -114,7 +116,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (re
 			requestParams = json.RawMessage(`{}`)
 		}
 		if unmarshalErr := json.Unmarshal(requestParams, &request); unmarshalErr != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", unmarshalErr))
+			return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", unmarshalErr))
 		}
 
 		signed, signErr := signTransactionJSON(
@@ -146,7 +148,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (re
 	// When the client passed fail_hard:true and the ledger service
 	// implements the FailHardSubmitter surface, route through it so
 	// non-applying submissions are not held or relayed.
-	submitResult, submitErr := submitWithFailHard(ctx.Services.Ledger, txJSON, txBlobHex, failHard)
+	submitResult, submitErr := submitWithFailHard(ctx.Services.LedgerMutation(), txJSON, txBlobHex, failHard)
 	if submitErr != nil {
 		return nil, rpcTransactionSubmissionError("submit: transaction submission failed", submitErr)
 	}
@@ -190,18 +192,18 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (re
 	return response, nil
 }
 
-func decodeSubmitParams(params json.RawMessage) (map[string]json.RawMessage, *types.RpcError) {
+func decodeSubmitParams(params json.RawMessage) (map[string]json.RawMessage, *rpcerrors.RpcError) {
 	if len(params) == 0 || bytes.Equal(bytes.TrimSpace(params), []byte("null")) {
 		return map[string]json.RawMessage{}, nil
 	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(params, &raw); err != nil || raw == nil {
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	return raw, nil
 }
 
-func parseSubmitFailHard(raw json.RawMessage) (bool, *types.RpcError) {
+func parseSubmitFailHard(raw json.RawMessage) (bool, *rpcerrors.RpcError) {
 	if len(raw) == 0 {
 		return false, nil
 	}
@@ -212,7 +214,7 @@ func parseSubmitFailHard(raw json.RawMessage) (bool, *types.RpcError) {
 	if bytes.Equal(trimmed, []byte("false")) {
 		return false, nil
 	}
-	return false, types.RpcErrorExpectedField("fail_hard", "boolean")
+	return false, rpcerrors.RpcErrorExpectedField("fail_hard", "boolean")
 }
 
 func submitJSONString(raw json.RawMessage) (string, bool) {

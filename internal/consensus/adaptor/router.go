@@ -49,6 +49,16 @@ type peerLedgerHintView interface {
 	PeerClosedLedger(peermanagement.PeerID) ([32]byte, bool)
 }
 
+// FastSyncMetrics is a bounded snapshot of finality and recovery outcomes.
+type FastSyncMetrics struct {
+	CompletionRecheckAccepted            uint64
+	CompletionRecheckRejectedNoEvidence  uint64
+	CompletionRecheckRejectedBelowQuorum uint64
+	CompletionRecheckRejectedUnavailable uint64
+	TargetSuperseded                     uint64
+	ObsoleteAcquisitionCompleted         uint64
+}
+
 type peerBootstrapAcknowledger interface {
 	AcknowledgePeerBootstrap(peermanagement.PeerID)
 	RejectPeerBootstrap(peermanagement.PeerID)
@@ -254,10 +264,16 @@ type Router struct {
 	// catchupMu guards the single consensus catch-up target and recent failures.
 	// The router drives at most maxConcurrentCatchup acquisitions toward the
 	// highest trusted (seq,hash), matching rippled's single needed ledger.
-	catchupMu       sync.Mutex
-	catchup         catchupTarget
-	catchupFailures map[[32]byte]time.Time
-	linkageWait     catchupLinkageWait
+	catchupMu                            sync.Mutex
+	catchup                              catchupTarget
+	catchupFailures                      map[[32]byte]time.Time
+	linkageWait                          catchupLinkageWait
+	completionRecheckAccepted            atomic.Uint64
+	completionRecheckRejectedNoEvidence  atomic.Uint64
+	completionRecheckRejectedBelowQuorum atomic.Uint64
+	completionRecheckRejectedUnavailable atomic.Uint64
+	targetSuperseded                     atomic.Uint64
+	obsoleteAcquisitionCompleted         atomic.Uint64
 
 	acquisitionMu     sync.Mutex
 	consensusRecovery consensusRecovery
@@ -421,8 +437,6 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 		seqHash:                make(map[uint32]ledgerHashEntry),
 		lifecycleCtx:           context.Background(),
 	}
-	// Wire the stash → acquisition hook so quorum decisions on unknown
-	// ledgers don't sit silently in pendingLedgerValidations.
 	if adaptor != nil {
 		if _, ok := engine.(consensus.VerifiedValidationProcessor); ok {
 			r.validationWork = newValidationWorkLane(
@@ -440,7 +454,6 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 			}
 		}
 		if svc := adaptor.LedgerService(); svc != nil {
-			svc.SetOnPendingValidationStashed(r.armValidationStashAcquisition)
 			r.prewarmSignatures = svc.PrewarmSignaturesContext
 		}
 		// Wire the still-needed re-arm so every consensus re-ask of an

@@ -2,6 +2,8 @@ package types
 
 import (
 	"context"
+	"fmt"
+	"reflect"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -19,6 +21,22 @@ import (
 // method in `json` to escape per-IP load charging.
 type MethodDispatcher interface {
 	ExecuteMethod(ctx *RpcContext, method string, params []byte) (any, *RpcError)
+}
+
+// Shutdowner requests an orderly node shutdown. The capability is wired before
+// RPC transports are constructed and remains stable for every request.
+type Shutdowner interface {
+	RequestShutdown()
+}
+
+// ShutdownFunc adapts a function to Shutdowner for construction and test
+// fixtures. Production wiring should use a controller that owns the channel.
+type ShutdownFunc func()
+
+func (f ShutdownFunc) RequestShutdown() {
+	if f != nil {
+		f()
+	}
 }
 
 // ValidatorListPublisherInfo is the per-publisher snapshot the
@@ -202,11 +220,9 @@ type ServiceContainer struct {
 	// LedgerService provides ledger operations
 	Ledger LedgerService
 
-	// Dispatcher forwards RPC calls (used by 'json' method)
-	Dispatcher MethodDispatcher
-
-	// ShutdownFunc gracefully stops the server (used by 'stop' method)
-	ShutdownFunc func()
+	// Shutdown requests an orderly node shutdown. It is supplied to the
+	// construction-only builder and copied into the immutable graph.
+	Shutdown Shutdowner
 
 	// NodePublicKey is the base58-encoded node identity public key (e.g. "n9...")
 	NodePublicKey string
@@ -345,6 +361,8 @@ type ServiceContainer struct {
 	// map is empty until consensus is wired.
 	StateAccounting func() StateAccountingSnapshot
 
+	FastSyncMetrics func() FastSyncMetrics
+
 	// CloseTimeOffset returns the consensus-derived close-time offset
 	// from the adaptor. Surfaced as close_time_offset on the ledger
 	// object in human mode when |offset| >= 60s
@@ -444,10 +462,6 @@ type ServiceContainer struct {
 	// the cleaner, so the wiring in cmd/server translates between the two.
 	LedgerCleanerConfigure func(LedgerCleanerParams) LedgerCleanerStatus
 
-	// LedgerCleanerStatusFn returns the verifier's current status without
-	// reconfiguring it, backing a parameterless ledger_cleaner status query.
-	LedgerCleanerStatusFn func() LedgerCleanerStatus
-
 	// UNLBlocked reports whether the node's UNL is blocked (the configured
 	// validator list has expired), driving the rpcEXPIRED_VALIDATOR_LIST
 	// branch of conditionMet (mirrors rippled NetworkOPs::isUNLBlocked).
@@ -460,14 +474,6 @@ type ServiceContainer struct {
 	// wired — the handler then returns notEnabled, matching rippled's
 	// advisoryDelete() gate.
 	AdvisoryDeleteState AdvisoryDeleteStore
-
-	// URLSubscriptions backs rippled's url-based (RPCSub) admin
-	// subscriptions: subscribe/unsubscribe requests carrying a url are
-	// routed here instead of to a per-connection subscription. Populated by
-	// the WebSocket server, which owns the registry so url subscribers share
-	// the broadcast fan-out with WebSocket connections. Nil when no
-	// WebSocket server is wired — the handlers then report notSupported.
-	URLSubscriptions URLSubscriptionService
 
 	// AccountHistorySubscriptions is the optional provider for rippled's
 	// experimental account_history_tx_stream. Nil means the node cannot perform
@@ -727,13 +733,15 @@ const (
 // ClientLoadShedder is the shared in-flight RPC counter plus a
 // dedicated concurrent-path-find counter. See ServiceContainer.ClientLoad.
 //
-// Begin()/End() bracket each RPC dispatch (HTTP and WebSocket). Handlers
+// Begin returns an ownership-bound release function for each RPC dispatch
+// (HTTP and WebSocket). Handlers
 // consult InFlight() against the rippled-faithful tier constants
 // (MaxJobQueueClients, MaxBookOffersClients, MaxPathfindClients).
 //
-// AcquirePathfind/ReleasePathfind manage the second counter, capped at
-// MaxPathfindsInProgress to mirror rippled's LegacyPathFind ctor
-// (LegacyPathFind.cpp:30-60).
+// AcquirePathfind and AcquirePathfindUnlimited return ownership-bound
+// release functions for the second counter, which is capped at
+// MaxPathfindsInProgress for bounded callers. A release function is safe to
+// invoke more than once.
 type ClientLoadShedder struct {
 	inFlight       atomic.Int64
 	pathfindActive atomic.Int64
@@ -752,21 +760,32 @@ func (s *ClientLoadShedder) pathfindSignal() chan struct{} {
 	return s.pathfindReady
 }
 
-// Begin records the start of a client-RPC dispatch.
-func (s *ClientLoadShedder) Begin() {
+func noOpLoadShedRelease() {}
+
+func (s *ClientLoadShedder) release(counter *atomic.Int64, signal bool) func() {
 	if s == nil {
-		return
+		return noOpLoadShedRelease
 	}
-	s.inFlight.Add(1)
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			counter.Add(-1)
+			if signal {
+				select {
+				case s.pathfindSignal() <- struct{}{}:
+				default:
+				}
+			}
+		})
+	}
 }
 
-// End records completion of a client-RPC dispatch. Safe to call from a
-// defer alongside Begin().
-func (s *ClientLoadShedder) End() {
+func (s *ClientLoadShedder) Begin() func() {
 	if s == nil {
-		return
+		return noOpLoadShedRelease
 	}
-	s.inFlight.Add(-1)
+	s.inFlight.Add(1)
+	return s.release(&s.inFlight, false)
 }
 
 // InFlight returns the current in-flight RPC count. Gates compare it
@@ -779,61 +798,55 @@ func (s *ClientLoadShedder) InFlight() int64 {
 }
 
 // AcquirePathfind attempts to enter the path-finding critical section.
-// Returns true on success (caller MUST pair with ReleasePathfind), false
-// when already at MaxPathfindsInProgress. CAS-loop matches rippled's
-// LegacyPathFind ctor at LegacyPathFind.cpp:44-58.
-func (s *ClientLoadShedder) AcquirePathfind() bool {
+// It returns an ownership-bound release function and true on success, or a
+// nil release function and false when already at MaxPathfindsInProgress.
+// CAS-loop matches rippled's LegacyPathFind ctor at LegacyPathFind.cpp:44-58.
+func (s *ClientLoadShedder) AcquirePathfind() (func(), bool) {
 	if s == nil {
-		return true
+		return noOpLoadShedRelease, true
 	}
 	for {
 		prev := s.pathfindActive.Load()
 		if prev >= MaxPathfindsInProgress {
-			return false
+			return nil, false
 		}
 		if s.pathfindActive.CompareAndSwap(prev, prev+1) {
-			return true
+			return s.release(&s.pathfindActive, true), true
 		}
 	}
 }
 
 // WaitPathfind blocks until a bounded path-finding slot is available or the
-// request is canceled.
-func (s *ClientLoadShedder) WaitPathfind(ctx context.Context) bool {
+// request is canceled. It returns the acquired slot's release function and
+// true on success, or a nil release function and false on cancellation.
+func (s *ClientLoadShedder) WaitPathfind(ctx context.Context) (func(), bool) {
 	if s == nil {
-		return true
+		return noOpLoadShedRelease, true
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	for !s.AcquirePathfind() {
+	for {
+		release, acquired := s.AcquirePathfind()
+		if acquired {
+			return release, true
+		}
 		select {
 		case <-ctx.Done():
-			return false
+			return nil, false
 		case <-s.pathfindSignal():
 		}
 	}
-	return true
 }
 
 // AcquirePathfindUnlimited enters the path-finding critical section without
-// enforcing the non-admin concurrency cap.
-func (s *ClientLoadShedder) AcquirePathfindUnlimited() {
+// enforcing the non-admin concurrency cap and returns its release function.
+func (s *ClientLoadShedder) AcquirePathfindUnlimited() func() {
 	if s == nil {
-		return
+		return noOpLoadShedRelease
 	}
 	s.pathfindActive.Add(1)
-}
-
-func (s *ClientLoadShedder) ReleasePathfind() {
-	if s == nil {
-		return
-	}
-	s.pathfindActive.Add(-1)
-	select {
-	case s.pathfindSignal() <- struct{}{}:
-	default:
-	}
+	return s.release(&s.pathfindActive, true)
 }
 
 // PathfindActive returns the current concurrent-path-find count.
@@ -844,17 +857,26 @@ func (s *ClientLoadShedder) PathfindActive() int64 {
 	return s.pathfindActive.Load()
 }
 
-// LedgerNavigator provides ledger index navigation and mode queries.
-type LedgerNavigator interface {
+// LedgerSelectionReader provides read-only ledger index and mode queries.
+type LedgerSelectionReader interface {
 	GetCurrentLedgerIndex() uint32
 	GetClosedLedgerIndex() uint32
 	GetValidatedLedgerIndex() uint32
-	AcceptLedger(ctx context.Context) (uint32, error)
 	IsStandalone() bool
 }
 
-// LedgerAccessor provides ledger retrieval and server metadata.
-type LedgerAccessor interface {
+type LedgerAcceptor interface {
+	AcceptLedger(ctx context.Context) (uint32, error)
+}
+
+// LedgerNavigator is the construction compatibility aggregate.
+type LedgerNavigator interface {
+	LedgerSelectionReader
+	LedgerAcceptor
+}
+
+// LedgerDataReader provides ledger retrieval and server metadata.
+type LedgerDataReader interface {
 	GetLedgerBySequence(seq uint32) (LedgerReader, error)
 	GetLedgerByHash(hash [32]byte) (LedgerReader, error)
 	GetServerInfo() LedgerServerInfo
@@ -863,8 +885,17 @@ type LedgerAccessor interface {
 	GetLedgerRange(ctx context.Context, minSeq, maxSeq uint32) (*LedgerRangeResult, error)
 	GetLedgerEntry(ctx context.Context, entryKey [32]byte, ledgerIndex string) (*LedgerEntryResult, error)
 	GetLedgerData(ctx context.Context, ledgerIndex string, limit uint32, marker string) (*LedgerDataResult, error)
-	GetClosedLedgerView() (LedgerStateView, error)
 	IsAmendmentBlocked() bool
+}
+
+type ClosedLedgerViewSource interface {
+	GetClosedLedgerView() (LedgerStateView, error)
+}
+
+// LedgerAccessor is the construction compatibility aggregate.
+type LedgerAccessor interface {
+	LedgerDataReader
+	ClosedLedgerViewSource
 }
 
 // TxTablesProvider reports whether the node maintains the transaction
@@ -907,13 +938,16 @@ type FailHardSubmitter interface {
 	SubmitTransactionFailHard(txJSON []byte, txBlobHex string) (*SubmitResult, error)
 }
 
-type TransactionSubmitter interface {
+type TransactionQuerier interface {
+	GetTransaction(txHash [32]byte) (*TransactionInfo, error)
+	GetTransactionHistory(ctx context.Context, startIndex uint32) (*TxHistoryResult, error)
+}
+
+type TransactionSubmission interface {
 	// txBlobHex is the signed transaction blob, or an empty string when the
 	// caller has only transaction JSON.
 	SubmitTransaction(txJSON []byte, txBlobHex string) (*SubmitResult, error)
 	SimulateTransaction(txJSON []byte) (*SubmitResult, error)
-	GetTransaction(txHash [32]byte) (*TransactionInfo, error)
-	GetTransactionHistory(ctx context.Context, startIndex uint32) (*TxHistoryResult, error)
 
 	// GetAutofillFee returns the Fee a transaction should carry to enter
 	// the open ledger. Mirrors rippled getCurrentNetworkFee
@@ -940,25 +974,10 @@ type TransactionSubmitter interface {
 	GetAutofillSequence(account string, hasTicketSequence bool) (sequence uint32, err error)
 }
 
-// TransactionSearchRange is the inclusive ledger interval used by tx.
-type TransactionSearchRange struct {
-	Min uint32
-	Max uint32
-}
-
-// TransactionSearchResult preserves rippled's searched_all distinction when a
-// ranged transaction lookup does not find a transaction. SearchedAll is nil
-// when the backend cannot determine whether the complete range was searched.
-type TransactionSearchResult struct {
-	Transaction *TransactionInfo
-	SearchedAll *bool
-}
-
-// TransactionSearcher is implemented by services backed by durable
-// transaction tables. Keeping it separate from LedgerService lets lightweight
-// RPC mocks continue to provide the legacy in-memory lookup.
-type TransactionSearcher interface {
-	SearchTransaction(ctx context.Context, txHash [32]byte, ledgerRange *TransactionSearchRange) (*TransactionSearchResult, error)
+// TransactionSubmitter is the construction compatibility aggregate.
+type TransactionSubmitter interface {
+	TransactionQuerier
+	TransactionSubmission
 }
 
 // LedgerContext contains the durable ledger fields needed to decorate
@@ -972,6 +991,10 @@ type LedgerContext struct {
 // ledger to remain in the in-memory history window.
 type LedgerContextReader interface {
 	GetLedgerContext(ctx context.Context, sequence uint32) (*LedgerContext, error)
+}
+
+type ContextLedgerHashReader interface {
+	GetLedgerByHashContext(ctx context.Context, hash [32]byte) (LedgerReader, error)
 }
 
 // TransactionRulesSource provides the amendment rules used to admit a
@@ -1014,25 +1037,46 @@ type AccountTxDelegateQuerier interface {
 	GetAccountTransactionsWithDelegate(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *AccountTxMarker, forward bool, delegate *AccountTxDelegateFilter) (*AccountTxResult, error)
 }
 
-// LedgerService is the full interface for ledger operations.
-// It composes the sub-interfaces and includes remaining methods.
-type LedgerService interface {
-	LedgerNavigator
-	LedgerAccessor
-	TransactionSubmitter
-	AccountQuerier
-
-	// Book and market data
+type BookReader interface {
 	GetBookOffers(ctx context.Context, takerGets, takerPays Amount, taker, domain string, ledgerIndex string, limit uint32, marker string, withProofs bool) (*BookOffersResult, error)
+}
 
-	// Gateway operations
+type GatewayReader interface {
 	GetGatewayBalances(ctx context.Context, account string, hotWallets []string, ledgerIndex string) (*GatewayBalancesResult, error)
 	GetNoRippleCheck(ctx context.Context, account string, role string, ledgerIndex string, limit uint32, transactions bool) (*NoRippleCheckResult, error)
 	GetDepositAuthorized(ctx context.Context, sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*DepositAuthorizedResult, error)
+}
 
-	// NFT operations
+type NFTReader interface {
 	GetNFTBuyOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error)
 	GetNFTSellOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error)
+}
+
+// LedgerReadService is the read-only ledger capability published to ordinary
+// RPC consumers.
+type LedgerReadService interface {
+	LedgerSelectionReader
+	LedgerDataReader
+	TransactionQuerier
+	AccountQuerier
+	BookReader
+	GatewayReader
+	NFTReader
+}
+
+// LedgerMutationService is reserved for RPCs that close ledgers or submit and
+// simulate transactions.
+type LedgerMutationService interface {
+	LedgerAcceptor
+	TransactionSubmission
+}
+
+// LedgerService is the construction-time aggregate implemented by the ledger
+// adapter. ServiceGraph publishes its read and mutation facets separately.
+type LedgerService interface {
+	LedgerReadService
+	LedgerMutationService
+	ClosedLedgerViewSource
 }
 
 // LedgerViewSource is an optional LedgerService facet for handlers that need
@@ -1053,21 +1097,28 @@ type OpenLedgerViewSource interface {
 	GetOpenLedgerView() (LedgerStateView, error)
 }
 
-// LedgerStateView provides low-level read access to ledger state.
-// This interface matches tx.LedgerView for pathfinding and other operations
-// that need direct state access. Any *ledger.Ledger satisfies this.
-type LedgerStateView interface {
+// LedgerStateReader provides low-level read access to ledger state.
+type LedgerStateReader interface {
 	Read(k keylet.Keylet) ([]byte, error)
 	Exists(k keylet.Keylet) (bool, error)
-	Insert(k keylet.Keylet, data []byte) error
-	Update(k keylet.Keylet, data []byte) error
-	Erase(k keylet.Keylet) error
 	ForEach(fn func(key [32]byte, data []byte) bool) error
 	Succ(key [32]byte) ([32]byte, []byte, bool, error)
-	AdjustDropsDestroyed(d drops.XRPAmount) error
 	TxExists(txID [32]byte) (bool, error)
 	Rules() *amendment.Rules
 	LedgerSeq() uint32
+}
+
+type LedgerStateWriter interface {
+	Insert(k keylet.Keylet, data []byte) error
+	Update(k keylet.Keylet, data []byte) error
+	Erase(k keylet.Keylet) error
+	AdjustDropsDestroyed(d drops.XRPAmount) error
+}
+
+// LedgerStateView is the full engine-facing state interface.
+type LedgerStateView interface {
+	LedgerStateReader
+	LedgerStateWriter
 }
 
 // DepositAuthorizedResult contains the result of deposit_authorized RPC
@@ -1225,6 +1276,16 @@ type StateAccountingSnapshot struct {
 	// transition into Full. Zero before that transition. Surfaced as
 	// initial_sync_duration_us; rippled emits it only when non-zero.
 	InitialSyncUs uint64
+}
+
+// FastSyncMetrics is the server_info representation of fast-sync outcomes.
+type FastSyncMetrics struct {
+	CompletionRecheckAccepted            uint64
+	CompletionRecheckRejectedNoEvidence  uint64
+	CompletionRecheckRejectedBelowQuorum uint64
+	CompletionRecheckRejectedUnavailable uint64
+	TargetSuperseded                     uint64
+	ObsoleteAcquisitionCompleted         uint64
 }
 
 // SubmitResult contains the result of submitting a transaction.
@@ -1676,11 +1737,501 @@ type NFTOffersResult struct {
 	Marker      string         `json:"marker,omitempty"` // Only present when more results available
 }
 
-// NewServiceContainer constructs a ServiceContainer wired to the given
-// ledger service. Callers attach the runtime services as components come
-// online.
+type serviceGraphProfile struct {
+	RequireLedger             bool
+	RequireShutdown           bool
+	RequireClientLoad         bool
+	RequireDiagnostics        bool
+	RequireConfig             bool
+	RequireSubscriptionMetric bool
+}
+
+// ServiceGraphBuilder is mutable construction state. It is never passed to a
+// request context or transport; Build returns the only published graph.
+type ServiceGraphBuilder struct {
+	ServiceContainer
+}
+
+// NewServiceContainer constructs the legacy mutable wiring state. New node
+// code should use NewServiceGraphBuilder; this function remains for small
+// fixture setup before NewTestServiceGraph is called.
 func NewServiceContainer(ledger LedgerService) *ServiceContainer {
-	return &ServiceContainer{
-		Ledger: ledger,
+	return &ServiceContainer{Ledger: ledger}
+}
+
+// NewServiceGraphBuilder starts construction with the mandatory ledger
+// dependency. Additional capabilities are attached while startup stages run.
+func NewServiceGraphBuilder(ledger LedgerService) *ServiceGraphBuilder {
+	return &ServiceGraphBuilder{ServiceContainer: ServiceContainer{Ledger: ledger}}
+}
+
+// Build validates the strict production dependency profile and publishes an
+// immutable graph.
+func (b *ServiceGraphBuilder) Build() (*ServiceGraph, error) {
+	return b.buildProfile(serviceGraphProfile{
+		RequireLedger:             true,
+		RequireShutdown:           true,
+		RequireClientLoad:         true,
+		RequireDiagnostics:        true,
+		RequireConfig:             true,
+		RequireSubscriptionMetric: true,
+	})
+}
+
+func (b *ServiceGraphBuilder) buildProfile(profile serviceGraphProfile) (*ServiceGraph, error) {
+	if b == nil {
+		return nil, fmt.Errorf("service graph builder is nil")
 	}
+	if profile.RequireLedger && serviceCapabilityNil(b.Ledger) {
+		return nil, fmt.Errorf("service graph requires a ledger service")
+	}
+	if profile.RequireShutdown && serviceCapabilityNil(b.Shutdown) {
+		return nil, fmt.Errorf("service graph requires a shutdown capability")
+	}
+	if profile.RequireClientLoad && b.ClientLoad == nil {
+		return nil, fmt.Errorf("service graph requires a client-load shedder")
+	}
+	if profile.RequireDiagnostics && serviceCapabilityNil(b.RPCDiagnostics) {
+		return nil, fmt.Errorf("service graph requires RPC diagnostics")
+	}
+	if profile.RequireConfig && b.ServerInfoConfig.Ports == nil {
+		return nil, fmt.Errorf("service graph requires a server configuration snapshot")
+	}
+	if profile.RequireSubscriptionMetric && b.SubscriptionMetrics == nil {
+		return nil, fmt.Errorf("service graph requires subscription metrics")
+	}
+
+	snapshot := cloneServiceContainer(b.ServiceContainer)
+	// These dependencies belong to the transport/request layer, not the
+	// application graph. They are deliberately absent from ServiceContainer.
+	return &ServiceGraph{snapshot: snapshot}, nil
+}
+
+func serviceCapabilityNil(capability any) bool {
+	if capability == nil {
+		return true
+	}
+	value := reflect.ValueOf(capability)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
+// NewTestServiceGraph publishes a sparse graph for handler and transport
+// fixtures. Production validation is exercised through ServiceGraphBuilder.Build.
+func NewTestServiceGraph(services *ServiceContainer) *ServiceGraph {
+	if services == nil {
+		services = &ServiceContainer{}
+	}
+	builder := &ServiceGraphBuilder{ServiceContainer: *services}
+	graph, err := builder.buildProfile(serviceGraphProfile{})
+	if err != nil {
+		panic(err)
+	}
+	return graph
+}
+
+// NewTestServiceGraphFrom copies a published graph and applies fixture-only
+// overrides before publishing a new snapshot.
+func NewTestServiceGraphFrom(graph *ServiceGraph, configure func(*ServiceContainer)) *ServiceGraph {
+	services := ServiceContainer{}
+	if graph != nil && graph.services() != nil {
+		services = cloneServiceContainer(*graph.services())
+	}
+	if configure != nil {
+		configure(&services)
+	}
+	return NewTestServiceGraph(&services)
+}
+
+// ServiceGraph is the immutable application capability graph published to
+// RPC contexts and transports. Its state is private; live capabilities may
+// expose their own synchronized operations, but the graph topology cannot be
+// changed after Build returns.
+type ServiceGraph struct {
+	snapshot ServiceContainer
+}
+
+func (g *ServiceGraph) services() *ServiceContainer {
+	if g == nil {
+		return nil
+	}
+	return &g.snapshot
+}
+
+func (g *ServiceGraph) Ledger() LedgerReadService {
+	if s := g.services(); s != nil {
+		return s.Ledger
+	}
+	return nil
+}
+
+func (g *ServiceGraph) LedgerMutation() LedgerMutationService {
+	if s := g.services(); s != nil {
+		return s.Ledger
+	}
+	return nil
+}
+
+func (g *ServiceGraph) LedgerViews() ClosedLedgerViewSource {
+	if s := g.services(); s != nil {
+		return s.Ledger
+	}
+	return nil
+}
+
+func (g *ServiceGraph) ClosedLedgerState() (LedgerStateReader, error) {
+	views := g.LedgerViews()
+	if views == nil {
+		return nil, fmt.Errorf("closed ledger view is unavailable")
+	}
+	return views.GetClosedLedgerView()
+}
+
+func (g *ServiceGraph) Shutdowner() Shutdowner {
+	if s := g.services(); s != nil {
+		return s.Shutdown
+	}
+	return nil
+}
+
+func (g *ServiceGraph) NodePublicKey() string {
+	if s := g.services(); s != nil {
+		return s.NodePublicKey
+	}
+	return ""
+}
+
+func (g *ServiceGraph) SystemTime() func() time.Time {
+	if s := g.services(); s != nil {
+		return s.SystemTime
+	}
+	return nil
+}
+
+func (g *ServiceGraph) ServerInfoConfig() ServerInfoConfigSnapshot {
+	if s := g.services(); s != nil {
+		return cloneServerInfoConfig(s.ServerInfoConfig)
+	}
+	return ServerInfoConfigSnapshot{}
+}
+
+func (g *ServiceGraph) Capabilities() RPCCapabilities {
+	if s := g.services(); s != nil {
+		return s.Capabilities
+	}
+	return RPCCapabilities{}
+}
+
+func (g *ServiceGraph) LastCloseInfo() func() (int, int) {
+	if s := g.services(); s != nil {
+		return s.LastCloseInfo
+	}
+	return nil
+}
+
+func (g *ServiceGraph) ConsensusInfo() func(bool) map[string]any {
+	if s := g.services(); s != nil {
+		return s.ConsensusInfo
+	}
+	return nil
+}
+
+func (g *ServiceGraph) Manifests() ManifestLookup {
+	if s := g.services(); s != nil {
+		return s.Manifests
+	}
+	return nil
+}
+
+func (g *ServiceGraph) ValidatorPublicKey() []byte {
+	if s := g.services(); s != nil {
+		return append([]byte(nil), s.ValidatorPublicKey...)
+	}
+	return nil
+}
+
+func (g *ServiceGraph) ValidationQuorum() func() int {
+	if s := g.services(); s != nil {
+		return s.ValidationQuorum
+	}
+	return nil
+}
+
+func (g *ServiceGraph) ValidatorList() ValidatorListReader {
+	if s := g.services(); s != nil {
+		return s.ValidatorList
+	}
+	return nil
+}
+
+func (g *ServiceGraph) LocalStaticTrustedKeysBase58() func() []string {
+	if s := g.services(); s != nil {
+		return s.LocalStaticTrustedKeysBase58
+	}
+	return nil
+}
+
+func (g *ServiceGraph) TrustedValidatorKeysBase58() func() []string {
+	if s := g.services(); s != nil {
+		return s.TrustedValidatorKeysBase58
+	}
+	return nil
+}
+
+func (g *ServiceGraph) SigningKeysBase58() func() map[string]string {
+	if s := g.services(); s != nil {
+		return s.SigningKeysBase58
+	}
+	return nil
+}
+
+func (g *ServiceGraph) NegativeUNLBase58() func() []string {
+	if s := g.services(); s != nil {
+		return s.NegativeUNLBase58
+	}
+	return nil
+}
+
+func (g *ServiceGraph) BetaRPCAPI() bool {
+	if s := g.services(); s != nil {
+		return s.BetaRPCAPI
+	}
+	return false
+}
+
+func (g *ServiceGraph) TxQMetrics() func() TxQServerMetrics {
+	if s := g.services(); s != nil {
+		return s.TxQMetrics
+	}
+	return nil
+}
+
+func (g *ServiceGraph) TxQFeeMetrics() func() TxQFeeMetrics {
+	if s := g.services(); s != nil {
+		return s.TxQFeeMetrics
+	}
+	return nil
+}
+
+func (g *ServiceGraph) JqTransOverflow() func() uint64 {
+	if s := g.services(); s != nil {
+		return s.JqTransOverflow
+	}
+	return nil
+}
+
+func (g *ServiceGraph) PeerDisconnects() func() (uint64, uint64) {
+	if s := g.services(); s != nil {
+		return s.PeerDisconnects
+	}
+	return nil
+}
+
+func (g *ServiceGraph) PeerReservationAdd() func(string, string) (string, bool, error) {
+	if s := g.services(); s != nil {
+		return s.PeerReservationAdd
+	}
+	return nil
+}
+
+func (g *ServiceGraph) PeerReservationDel() func(string) (string, bool, error) {
+	if s := g.services(); s != nil {
+		return s.PeerReservationDel
+	}
+	return nil
+}
+
+func (g *ServiceGraph) PeerReservationList() func() []PeerReservationEntry {
+	if s := g.services(); s != nil {
+		return s.PeerReservationList
+	}
+	return nil
+}
+
+func (g *ServiceGraph) PeerConnect() func(string) error {
+	if s := g.services(); s != nil {
+		return s.PeerConnect
+	}
+	return nil
+}
+
+func (g *ServiceGraph) ResourceBlacklist() func(*int) map[string]any {
+	if s := g.services(); s != nil {
+		return s.ResourceBlacklist
+	}
+	return nil
+}
+
+func (g *ServiceGraph) StateAccounting() func() StateAccountingSnapshot {
+	if s := g.services(); s != nil {
+		return s.StateAccounting
+	}
+	return nil
+}
+
+func (g *ServiceGraph) FastSyncMetrics() func() FastSyncMetrics {
+	if s := g.services(); s != nil {
+		return s.FastSyncMetrics
+	}
+	return nil
+}
+
+func (g *ServiceGraph) CloseTimeOffset() func() time.Duration {
+	if s := g.services(); s != nil {
+		return s.CloseTimeOffset
+	}
+	return nil
+}
+
+func (g *ServiceGraph) FetchPackCacheSize() func() uint32 {
+	if s := g.services(); s != nil {
+		return s.FetchPackCacheSize
+	}
+	return nil
+}
+
+func (g *ServiceGraph) LoadFactorFees() func() LoadFactorFees {
+	if s := g.services(); s != nil {
+		return s.LoadFactorFees
+	}
+	return nil
+}
+
+func (g *ServiceGraph) IsLoadedCluster() func() bool {
+	if s := g.services(); s != nil {
+		return s.IsLoadedCluster
+	}
+	return nil
+}
+
+func (g *ServiceGraph) IsLoadedLocal() func() bool {
+	if s := g.services(); s != nil {
+		return s.IsLoadedLocal
+	}
+	return nil
+}
+
+func (g *ServiceGraph) ClientLoad() *ClientLoadShedder {
+	if s := g.services(); s != nil {
+		return s.ClientLoad
+	}
+	return nil
+}
+
+func (g *ServiceGraph) RPCDiagnostics() RPCDiagnostics {
+	if s := g.services(); s != nil {
+		return s.RPCDiagnostics
+	}
+	return nil
+}
+
+func (g *ServiceGraph) SubscriptionMetrics() func() SubscriptionMetrics {
+	if s := g.services(); s != nil {
+		return s.SubscriptionMetrics
+	}
+	return nil
+}
+
+func (g *ServiceGraph) GetCounts() func() CountsResult {
+	if s := g.services(); s != nil {
+		return s.GetCounts
+	}
+	return nil
+}
+
+func (g *ServiceGraph) TxReduceRelayMetrics() func() TxReduceRelayMetrics {
+	if s := g.services(); s != nil {
+		return s.TxReduceRelayMetrics
+	}
+	return nil
+}
+
+func (g *ServiceGraph) FetchInfo() func() map[string]any {
+	if s := g.services(); s != nil {
+		return s.FetchInfo
+	}
+	return nil
+}
+
+func (g *ServiceGraph) FetchInfoClear() func() {
+	if s := g.services(); s != nil {
+		return s.FetchInfoClear
+	}
+	return nil
+}
+
+func (g *ServiceGraph) RequestLedger() func([32]byte, uint32) (map[string]any, bool, bool) {
+	if s := g.services(); s != nil {
+		return s.RequestLedger
+	}
+	return nil
+}
+
+func (g *ServiceGraph) LedgerCleanerConfigure() func(LedgerCleanerParams) LedgerCleanerStatus {
+	if s := g.services(); s != nil {
+		return s.LedgerCleanerConfigure
+	}
+	return nil
+}
+
+func (g *ServiceGraph) UNLBlocked() func() bool {
+	if s := g.services(); s != nil {
+		return s.UNLBlocked
+	}
+	return nil
+}
+
+func (g *ServiceGraph) AdvisoryDeleteState() AdvisoryDeleteStore {
+	if s := g.services(); s != nil {
+		return s.AdvisoryDeleteState
+	}
+	return nil
+}
+
+func (g *ServiceGraph) AccountHistorySubscriptions() AccountHistorySubscriptionService {
+	if s := g.services(); s != nil {
+		return s.AccountHistorySubscriptions
+	}
+	return nil
+}
+
+func (g *ServiceGraph) QueueAccountTxs() func([20]byte) []QueuedTxInfo {
+	if s := g.services(); s != nil {
+		return s.QueueAccountTxs
+	}
+	return nil
+}
+
+func (g *ServiceGraph) QueueAllTxs() func() []QueuedTxInfo {
+	if s := g.services(); s != nil {
+		return s.QueueAllTxs
+	}
+	return nil
+}
+
+func cloneServiceContainer(input ServiceContainer) ServiceContainer {
+	if serviceCapabilityNil(input.Manifests) {
+		input.Manifests = nil
+	}
+	if serviceCapabilityNil(input.ValidatorList) {
+		input.ValidatorList = nil
+	}
+	if serviceCapabilityNil(input.AdvisoryDeleteState) {
+		input.AdvisoryDeleteState = nil
+	}
+	if serviceCapabilityNil(input.AccountHistorySubscriptions) {
+		input.AccountHistorySubscriptions = nil
+	}
+	input.ValidatorPublicKey = append([]byte(nil), input.ValidatorPublicKey...)
+	input.ServerInfoConfig = cloneServerInfoConfig(input.ServerInfoConfig)
+	return input
+}
+
+func cloneServerInfoConfig(input ServerInfoConfigSnapshot) ServerInfoConfigSnapshot {
+	input.Ports = append([]ServerInfoPortSnapshot(nil), input.Ports...)
+	return input
 }

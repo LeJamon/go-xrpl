@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -171,7 +173,7 @@ func TestSignTransactionJSONValidatesTargetBeforeTransactionPresence(t *testing.
 		params,
 		"NotASignatureField",
 	)
-	if rpcErr == nil || rpcErr.Code != types.RpcINVALID_PARAMS || rpcErr.Message != "NotASignatureField" {
+	if rpcErr == nil || rpcErr.Code != rpcerrors.RpcINVALID_PARAMS || rpcErr.Message != "NotASignatureField" {
 		t.Fatalf("unexpected error: %#v", rpcErr)
 	}
 }
@@ -189,7 +191,7 @@ func TestSignTransactionJSONRejectsNonObjectTransaction(t *testing.T) {
 		params,
 		"",
 	)
-	if rpcErr == nil || rpcErr.Code != types.RpcINVALID_PARAMS || rpcErr.Message != "Invalid field 'tx_json', not object." {
+	if rpcErr == nil || rpcErr.Code != rpcerrors.RpcINVALID_PARAMS || rpcErr.Message != "Invalid field 'tx_json', not object." {
 		t.Fatalf("unexpected error: %#v", rpcErr)
 	}
 }

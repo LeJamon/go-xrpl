@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -41,8 +43,8 @@ func (m *accountOffersMock) GetAccountOffers(_ context.Context, account string, 
 }
 
 // newAccountOffersTestServices builds a *types.ServiceContainer wrapping the mock.
-func newAccountOffersTestServices(mock *accountOffersMock) *types.ServiceContainer {
-	return &types.ServiceContainer{Ledger: mock}
+func newAccountOffersTestServices(mock *accountOffersMock) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 }
 
 // TestAccountOffersErrorValidation tests error handling for invalid inputs
@@ -70,13 +72,13 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 			name:          "Missing account field - empty params",
 			params:        map[string]any{},
 			expectedError: "Missing field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing account field - nil params",
 			params:        nil,
 			expectedError: "Missing field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - integer",
@@ -84,7 +86,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 				"account": 12345,
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - float",
@@ -92,7 +94,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 				"account": 1.1,
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - boolean",
@@ -100,7 +102,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 				"account": true,
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - null",
@@ -108,7 +110,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 				"account": nil,
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - object",
@@ -116,7 +118,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 				"account": map[string]any{"nested": "value"},
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - array",
@@ -124,7 +126,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 				"account": []string{"value1", "value2"},
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Malformed account address - node public key format",
@@ -132,7 +134,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 				"account": "n94JNrQYkDrpt62bbSR7nVEhdyAvcJXRAsjEkFYyqRkh9SUTYEqV",
 			},
 			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_MALFORMED,
+			expectedCode:  rpcerrors.RpcACT_MALFORMED,
 		},
 		{
 			name: "Malformed account address - seed format",
@@ -140,7 +142,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 				"account": "foo",
 			},
 			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_MALFORMED,
+			expectedCode:  rpcerrors.RpcACT_MALFORMED,
 		},
 		{
 			name: "Account not found - valid format but not in ledger",
@@ -589,7 +591,6 @@ func TestAccountOffersMarkerPagination(t *testing.T) {
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
-		IsAdmin:    true,
 		Services:   services,
 	}
 
@@ -956,7 +957,7 @@ func TestAccountOffersServiceUnavailable(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
@@ -965,7 +966,7 @@ func TestAccountOffersServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		params := map[string]any{
@@ -978,7 +979,7 @@ func TestAccountOffersServiceUnavailable(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 }
@@ -1102,7 +1103,7 @@ func TestAccountOffersLedgerHashThreading(t *testing.T) {
 		result, rpcErr := method.Handle(ctx(mock), params)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Exactly one of 'ledger_hash' or 'ledger_index' can be specified.", rpcErr.Message)
 	})
 
@@ -1116,7 +1117,7 @@ func TestAccountOffersLedgerHashThreading(t *testing.T) {
 		result, rpcErr := method.Handle(ctx(mock), params)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcLGR_NOT_FOUND, rpcErr.Code)
 	})
 
 	t.Run("malformed hash → invalid_params", func(t *testing.T) {
@@ -1125,7 +1126,7 @@ func TestAccountOffersLedgerHashThreading(t *testing.T) {
 		result, rpcErr := method.Handle(ctx(mock), params)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 }
 
@@ -1173,7 +1174,7 @@ func TestAccountOffersInvalidAccountTypes(t *testing.T) {
 
 			assert.Nil(t, result, "Expected nil result for invalid account type")
 			require.NotNil(t, rpcErr, "Expected RPC error for invalid account type: %s", tc.name)
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code,
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code,
 				"Expected invalidParams error code for type: %s", tc.name)
 		})
 	}
@@ -1225,7 +1226,7 @@ func TestAccountOffersMalformedAddresses(t *testing.T) {
 
 			assert.Nil(t, result, "Expected nil result for malformed address")
 			require.NotNil(t, rpcErr, "Expected RPC error for malformed address: %s", tc.address)
-			assert.Equal(t, types.RpcACT_MALFORMED, rpcErr.Code,
+			assert.Equal(t, rpcerrors.RpcACT_MALFORMED, rpcErr.Code,
 				"Expected actMalformed error for malformed address: %s", tc.address)
 		})
 	}
@@ -1241,7 +1242,7 @@ func TestAccountOffersMalformedAddresses(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcACT_MALFORMED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcACT_MALFORMED, rpcErr.Code)
 	})
 }
 
@@ -1273,7 +1274,7 @@ func TestAccountOffersServiceError(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, markerParams)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "invalidParams", rpcErr.ErrorString)
 		assert.Equal(t, "Invalid field 'marker'.", rpcErr.Message)
 	})
@@ -1286,7 +1287,7 @@ func TestAccountOffersServiceError(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, markerParams)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "invalidParams", rpcErr.ErrorString)
 		assert.Equal(t, "Invalid parameters.", rpcErr.Message)
 	})
@@ -1306,7 +1307,7 @@ func TestAccountOffersServiceError(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 		assert.NotContains(t, rpcErr.Message, "database connection failed")
 	})

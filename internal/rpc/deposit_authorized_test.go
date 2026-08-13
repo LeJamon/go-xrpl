@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -216,10 +218,10 @@ func (m *mockDepositAuthorizedLedgerService) GetClosedLedgerView() (types.Ledger
 }
 
 // newDepositAuthorizedTestServices builds a per-test ServiceContainer wrapping mock.
-func newDepositAuthorizedTestServices(mock *mockDepositAuthorizedLedgerService) *types.ServiceContainer {
-	return &types.ServiceContainer{
+func newDepositAuthorizedTestServices(mock *mockDepositAuthorizedLedgerService) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger: mock,
-	}
+	})
 }
 
 // Error Validation Tests
@@ -268,7 +270,7 @@ func TestDepositAuthorizedErrorValidation(t *testing.T) {
 			// before the service is called.
 			expectError:   true,
 			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_MALFORMED,
+			expectedCode:  rpcerrors.RpcACT_MALFORMED,
 		},
 		{
 			name: "Corrupt destination_account field",
@@ -280,7 +282,7 @@ func TestDepositAuthorizedErrorValidation(t *testing.T) {
 			// before the service is called.
 			expectError:   true,
 			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_MALFORMED,
+			expectedCode:  rpcerrors.RpcACT_MALFORMED,
 		},
 		{
 			name: "Source account not found",
@@ -293,7 +295,7 @@ func TestDepositAuthorizedErrorValidation(t *testing.T) {
 			},
 			expectError:   true,
 			expectedError: "Source account not found.",
-			expectedCode:  types.RpcSRC_ACT_NOT_FOUND,
+			expectedCode:  rpcerrors.RpcSRC_ACT_NOT_FOUND,
 		},
 		{
 			name: "Destination account not found",
@@ -306,7 +308,7 @@ func TestDepositAuthorizedErrorValidation(t *testing.T) {
 			},
 			expectError:   true,
 			expectedError: "Destination account not found.",
-			expectedCode:  types.RpcDST_ACT_NOT_FOUND,
+			expectedCode:  rpcerrors.RpcDST_ACT_NOT_FOUND,
 		},
 	}
 
@@ -696,7 +698,7 @@ func TestDepositAuthorizedAddressValidation(t *testing.T) {
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_MALFORMED,
+			expectedCode:  rpcerrors.RpcACT_MALFORMED,
 		},
 		{
 			name: "destination_account with special characters",
@@ -705,7 +707,7 @@ func TestDepositAuthorizedAddressValidation(t *testing.T) {
 				"destination_account": "rP6P9ypfAmc!pw8SZHNwM4nvZHFXDraQas",
 			},
 			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_MALFORMED,
+			expectedCode:  rpcerrors.RpcACT_MALFORMED,
 		},
 		{
 			name: "source_account too short",
@@ -714,7 +716,7 @@ func TestDepositAuthorizedAddressValidation(t *testing.T) {
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_MALFORMED,
+			expectedCode:  rpcerrors.RpcACT_MALFORMED,
 		},
 		{
 			name: "destination_account too short",
@@ -723,7 +725,7 @@ func TestDepositAuthorizedAddressValidation(t *testing.T) {
 				"destination_account": "r",
 			},
 			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_MALFORMED,
+			expectedCode:  rpcerrors.RpcACT_MALFORMED,
 		},
 		{
 			name: "source_account random string",
@@ -732,7 +734,7 @@ func TestDepositAuthorizedAddressValidation(t *testing.T) {
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_MALFORMED,
+			expectedCode:  rpcerrors.RpcACT_MALFORMED,
 		},
 		{
 			name: "both accounts malformed — source caught first",
@@ -741,7 +743,7 @@ func TestDepositAuthorizedAddressValidation(t *testing.T) {
 				"destination_account": "ALSO_INVALID",
 			},
 			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_MALFORMED,
+			expectedCode:  rpcerrors.RpcACT_MALFORMED,
 		},
 	}
 
@@ -797,7 +799,7 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 				"credentials":         []string{"ABCD"},
 			},
 			expectedError: "Invalid field 'credentials', not an array of CredentialID(hash256).",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Credential not valid hex",
@@ -807,7 +809,7 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 				"credentials":         []string{"ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"},
 			},
 			expectedError: "Invalid field 'credentials', not an array of CredentialID(hash256).",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Too many credentials",
@@ -827,7 +829,7 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 				},
 			},
 			expectedError: "Invalid field 'credentials', not array too long.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Empty credentials array",
@@ -837,7 +839,7 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 				"credentials":         []string{},
 			},
 			expectedError: "Invalid field 'credentials', not is non-empty array of CredentialID(hash256).",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Non-array credentials",
@@ -847,7 +849,7 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 				"credentials":         "not-an-array",
 			},
 			expectedError: "Invalid field 'credentials', not is non-empty array of CredentialID(hash256).",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Non-string credentials entry",
@@ -857,7 +859,7 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 				"credentials":         []any{1, 3},
 			},
 			expectedError: "Invalid field 'credentials', not an array of CredentialID(hash256).",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Valid credentials — no duplicates",
@@ -883,7 +885,7 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 			},
 			serviceErr:    fmt.Errorf("%w: credentials don't exist", svcerr.ErrBadCredentials),
 			expectedError: "credentials don't exist",
-			expectedCode:  types.RpcBAD_CREDENTIALS,
+			expectedCode:  rpcerrors.RpcBAD_CREDENTIALS,
 		},
 		{
 			name: "Credential not accepted",
@@ -894,7 +896,7 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 			},
 			serviceErr:    fmt.Errorf("%w: credentials aren't accepted", svcerr.ErrBadCredentials),
 			expectedError: "credentials aren't accepted",
-			expectedCode:  types.RpcBAD_CREDENTIALS,
+			expectedCode:  rpcerrors.RpcBAD_CREDENTIALS,
 		},
 		{
 			name: "Credential expired",
@@ -905,7 +907,7 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 			},
 			serviceErr:    fmt.Errorf("%w: credentials are expired", svcerr.ErrBadCredentials),
 			expectedError: "credentials are expired",
-			expectedCode:  types.RpcBAD_CREDENTIALS,
+			expectedCode:  rpcerrors.RpcBAD_CREDENTIALS,
 		},
 		{
 			name: "Credential belongs to another account",
@@ -916,7 +918,7 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 			},
 			serviceErr:    fmt.Errorf("%w: credentials doesn't belong to the root account", svcerr.ErrBadCredentials),
 			expectedError: "credentials doesn't belong to the root account",
-			expectedCode:  types.RpcBAD_CREDENTIALS,
+			expectedCode:  rpcerrors.RpcBAD_CREDENTIALS,
 		},
 		{
 			name: "Duplicate credentials by issuer and type",
@@ -927,7 +929,7 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 			},
 			serviceErr:    fmt.Errorf("%w: duplicates in credentials", svcerr.ErrBadCredentials),
 			expectedError: "duplicates in credentials",
-			expectedCode:  types.RpcBAD_CREDENTIALS,
+			expectedCode:  rpcerrors.RpcBAD_CREDENTIALS,
 		},
 	}
 

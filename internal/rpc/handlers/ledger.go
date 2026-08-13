@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
@@ -22,7 +24,7 @@ import (
 // LedgerMethod handles the ledger RPC method.
 type LedgerMethod struct{ baseHandler }
 
-func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	if boolErr := validateLedgerBooleanOptions(params); boolErr != nil {
 		return nil, boolErr
 	}
@@ -67,8 +69,8 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	}
 
 	if request.Full || request.Accounts {
-		if !ctx.Unlimited {
-			return nil, types.RpcErrorNoPermission("ledger")
+		if !ctx.Role.IsUnlimited() {
+			return nil, rpcerrors.RpcErrorNoPermission("ledger")
 		}
 		if request.Binary {
 			setLoadMedium(ctx)
@@ -77,7 +79,7 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 		}
 	}
 	if dumpQueue && targetLedger.IsClosed() {
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	if request.Full {
 		request.Transactions = true
@@ -288,14 +290,14 @@ func addLedgerTypeWarning(response map[string]any, params json.RawMessage) {
 		return
 	}
 	response["warnings"] = []types.WarningObject{{
-		ID: 2004,
+		ID: types.WarningFieldsDeprecated,
 		Message: "Some fields from your request are deprecated. Please check the documentation at " +
 			"https://xrpl.org/docs/references/http-websocket-apis/ and update your request. " +
 			"Field `type` is deprecated.",
 	}}
 }
 
-func validateLedgerBooleanOptions(params json.RawMessage) *types.RpcError {
+func validateLedgerBooleanOptions(params json.RawMessage) *rpcerrors.RpcError {
 	if params == nil {
 		return nil
 	}
@@ -310,22 +312,22 @@ func validateLedgerBooleanOptions(params json.RawMessage) *types.RpcError {
 		}
 		var value any
 		if err := json.Unmarshal(raw, &value); err != nil {
-			return types.RpcErrorInvalidParams("Invalid parameters.")
+			return rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 		if _, ok := value.(bool); !ok {
-			return types.RpcErrorInvalidParams("Invalid parameters.")
+			return rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 	return nil
 }
 
-func ledgerRequestHasSelector(params json.RawMessage) (bool, *types.RpcError) {
+func ledgerRequestHasSelector(params json.RawMessage) (bool, *rpcerrors.RpcError) {
 	if params == nil {
 		return false, nil
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(params, &fields); err != nil {
-		return false, types.RpcErrorInvalidParams("Invalid parameters.")
+		return false, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	present := make([]string, 0, 1)
 	for _, name := range []string{"ledger", "ledger_hash", "ledger_index"} {
@@ -336,14 +338,14 @@ func ledgerRequestHasSelector(params json.RawMessage) (bool, *types.RpcError) {
 		present = append(present, name)
 		var value any
 		if err := json.Unmarshal(raw, &value); err != nil {
-			return false, types.RpcErrorInvalidParams("Invalid parameters.")
+			return false, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 	if len(present) > 1 {
 		if _, hasLegacy := fields["ledger"]; hasLegacy {
-			return false, types.RpcErrorInvalidParams("Exactly one of 'ledger', 'ledger_hash', or 'ledger_index' can be specified.")
+			return false, rpcerrors.RpcErrorInvalidParams("Exactly one of 'ledger', 'ledger_hash', or 'ledger_index' can be specified.")
 		}
-		return false, types.RpcErrorInvalidParams("Exactly one of 'ledger_hash' or 'ledger_index' can be specified.")
+		return false, rpcerrors.RpcErrorInvalidParams("Exactly one of 'ledger_hash' or 'ledger_index' can be specified.")
 	}
 	if len(present) == 0 {
 		return false, nil
@@ -352,15 +354,15 @@ func ledgerRequestHasSelector(params json.RawMessage) (bool, *types.RpcError) {
 	name := present[0]
 	var value any
 	if err := json.Unmarshal(fields[name], &value); err != nil {
-		return false, types.RpcErrorInvalidParams("Invalid parameters.")
+		return false, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	if name == "ledger_hash" {
 		hash, ok := value.(string)
 		if !ok || len(hash) != 64 {
-			return false, types.RpcErrorInvalidParams("Invalid field 'ledger_hash', not hex string.")
+			return false, rpcerrors.RpcErrorInvalidParams("Invalid field 'ledger_hash', not hex string.")
 		}
 		if _, err := hex.DecodeString(hash); err != nil {
-			return false, types.RpcErrorInvalidParams("Invalid field 'ledger_hash', not hex string.")
+			return false, rpcerrors.RpcErrorInvalidParams("Invalid field 'ledger_hash', not hex string.")
 		}
 		return true, nil
 	}
@@ -370,21 +372,21 @@ func ledgerRequestHasSelector(params json.RawMessage) (bool, *types.RpcError) {
 	if _, ok := value.(float64); ok {
 		rawNumber := strings.TrimSpace(string(fields[name]))
 		if strings.ContainsAny(rawNumber, ".eE") {
-			return false, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid field '%s', not string or number.", name))
+			return false, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid field '%s', not string or number.", name))
 		}
 		return true, nil
 	}
-	return false, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid field '%s', not string or number.", name))
+	return false, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid field '%s', not string or number.", name))
 }
 
-func ledgerDefaultResponse(ctx *types.RpcContext) (map[string]any, *types.RpcError) {
-	closed, err := ctx.Services.Ledger.GetLedgerBySequence(ctx.Services.Ledger.GetClosedLedgerIndex())
+func ledgerDefaultResponse(ctx *types.RpcContext) (map[string]any, *rpcerrors.RpcError) {
+	closed, err := ctx.Services.Ledger().GetLedgerBySequence(ctx.Services.Ledger().GetClosedLedgerIndex())
 	if err != nil || closed == nil {
-		return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
+		return nil, rpcerrors.RpcErrorLgrNotFound("ledgerNotFound")
 	}
-	open, err := ctx.Services.Ledger.GetLedgerBySequence(ctx.Services.Ledger.GetCurrentLedgerIndex())
+	open, err := ctx.Services.Ledger().GetLedgerBySequence(ctx.Services.Ledger().GetCurrentLedgerIndex())
 	if err != nil || open == nil {
-		return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
+		return nil, rpcerrors.RpcErrorLgrNotFound("ledgerNotFound")
 	}
 	return map[string]any{
 		"closed": buildLedgerSummaryJSON(closed, true, ctx.ApiVersion),
@@ -397,7 +399,7 @@ func ledgerDefaultResponse(ctx *types.RpcContext) (map[string]any, *types.RpcErr
 // Missing capabilities, lookup failures, and nil results are operational
 // errors because silently omitting owner_funds would produce a partial reply.
 func ownerFundsLedgerView(ctx *types.RpcContext, l types.LedgerReader) (types.LedgerStateView, error) {
-	src, ok := ctx.Services.Ledger.(types.LedgerViewSource)
+	src, ok := ctx.Services.Ledger().(types.LedgerViewSource)
 	if !ok {
 		return nil, errors.New("ledger service does not expose state views")
 	}
@@ -446,7 +448,7 @@ func (a *ledgerOwnerFundsAnnotator) annotate(txEntry, txJSON map[string]any) (bo
 		a.view = view
 	}
 	if needsReserves && !a.reservesRead {
-		_, fallbackBase, fallbackInc := a.ctx.Services.Ledger.GetCurrentFees()
+		_, fallbackBase, fallbackInc := a.ctx.Services.Ledger().GetCurrentFees()
 		reserveBase, reserveInc, err := reserveSettingsFromLedger(a.view, fallbackBase, fallbackInc)
 		if err != nil {
 			return false, fmt.Errorf("owner_funds reserve lookup: %w", err)
@@ -560,7 +562,7 @@ func dumpAccountState(ctx *types.RpcContext, l types.LedgerReader, binary, expan
 		limit = limitLedgerDataBinary.Default
 	}
 	for {
-		result, err := ctx.Services.Ledger.GetLedgerData(ctx.Context, ledgerIndex, limit, marker)
+		result, err := ctx.Services.Ledger().GetLedgerData(ctx.Context, ledgerIndex, limit, marker)
 		if err != nil {
 			return nil, err
 		}
@@ -591,10 +593,10 @@ func buildLedgerQueueData(
 	binary, expanded bool,
 	ownerFundsAnnotator *ledgerOwnerFundsAnnotator,
 ) ([]any, bool, error) {
-	if ctx.Services == nil || ctx.Services.QueueAllTxs == nil {
+	if ctx.Services == nil || ctx.Services.QueueAllTxs() == nil {
 		return nil, false, nil
 	}
-	txs := ctx.Services.QueueAllTxs()
+	txs := ctx.Services.QueueAllTxs()()
 	if len(txs) == 0 {
 		return nil, false, nil
 	}

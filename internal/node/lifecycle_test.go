@@ -17,6 +17,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc"
+	rpcadapter "github.com/LeJamon/go-xrpl/internal/rpc/adapter"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
@@ -27,23 +28,20 @@ import (
 func TestBindRPCWiresExplicitSharedServices(t *testing.T) {
 	runtime := &nodeRuntime{
 		appConfig:  &config.Config{},
-		services:   types.NewServiceContainer(nil),
+		services:   newRPCServiceGraphBuilder(rpcadapter.NewLedgerServiceAdapter(nil), &config.Config{}),
 		serverLog:  xrpllog.Discard(),
 		shutdownCh: make(chan struct{}, 1),
+		shutdowner: types.ShutdownFunc(func() {}),
 	}
-	runtime.services.ClientLoad = types.NewClientLoadShedder()
 	if err := runtime.bindRPC(); err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = runtime.wsServer.Close(context.Background()) }()
 
-	if runtime.services.Dispatcher != runtime.httpServer {
-		t.Fatal("bindRPC did not install the HTTP dispatcher")
+	if runtime.httpServer == nil || runtime.wsServer == nil || runtime.wsServer.URLSubscriptionService() == nil {
+		t.Fatal("bindRPC did not publish complete transport dependencies")
 	}
-	if runtime.services.URLSubscriptions != runtime.wsServer.URLSubscriptionService() {
-		t.Fatal("bindRPC did not install the WebSocket URL subscription service")
-	}
-	if runtime.services.ClientLoad == nil {
+	if runtime.serviceGraph == nil || runtime.serviceGraph.ClientLoad() == nil {
 		t.Fatal("bindRPC lost the configured client-load shedder")
 	}
 	if runtime.resourceManager == nil || !runtime.ownsResourceManager {
@@ -52,7 +50,7 @@ func TestBindRPCWiresExplicitSharedServices(t *testing.T) {
 	consumer := runtime.resourceManager.NewInboundEndpoint("192.0.2.25")
 	consumer.Charge(resource.NewCharge(resource.WarningThreshold*resource.DecayWindowSeconds, "test"), "")
 	defer consumer.Release()
-	if got := runtime.services.ResourceBlacklist(nil); got["IP Address: 192.0.2.25"] == nil {
+	if got := runtime.serviceGraph.ResourceBlacklist()(nil); got["IP Address: 192.0.2.25"] == nil {
 		t.Fatalf("standalone resource blacklist = %+v", got)
 	}
 }

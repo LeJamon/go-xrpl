@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -60,14 +62,14 @@ func makeValidatorPubKey(prefix byte) []byte {
 	return pk
 }
 
-func installServices(pk []byte, manifests types.ManifestLookup) *types.ServiceContainer {
-	return &types.ServiceContainer{
+func installServices(pk []byte, manifests types.ManifestLookup) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{
 		ValidatorPublicKey: pk,
 		Manifests:          manifests,
-	}
+	})
 }
 
-func adminCtx(services *types.ServiceContainer) *types.RpcContext {
+func adminCtx(services *types.ServiceGraph) *types.RpcContext {
 	return &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
@@ -95,7 +97,7 @@ func TestValidatorInfo_NotConfigured(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Equal(t, "invalidParams", rpcErr.ErrorString)
 	assert.Equal(t, "not a validator", rpcErr.Message)
 }
@@ -246,7 +248,7 @@ func TestValidatorInfo_InvalidPublicKeyLength(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	assert.Equal(t, "internal", rpcErr.ErrorString)
 	assert.Equal(t, "Internal error.", rpcErr.Message)
 }

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
@@ -13,7 +15,7 @@ import (
 // default state on the account's side.
 type AccountLinesMethod struct{ baseHandler }
 
-func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	fields, account, parseErr := accountPageParams(params)
 	if parseErr != nil {
 		return nil, parseErr
@@ -31,14 +33,14 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		var valid bool
 		peer, valid = jsonCppStringRaw(peerRaw)
 		if !valid {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 	if peer != "" && !types.IsValidClassicAddress(peer) {
-		return nil, types.RpcErrorActMalformed("Account malformed.").WithExtra(ledgerFields)
+		return nil, rpcerrors.RpcErrorActMalformed("Account malformed.").WithExtra(ledgerFields)
 	}
 
-	limit, limitErr := readLimitField(params, limitAccountLines, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitAccountLines, ctx.Role.IsUnlimited())
 	if limitErr != nil {
 		return nil, limitErr
 	}
@@ -52,19 +54,19 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	}
 	if _, present := fields["marker"]; present {
 		if marker == "" {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
-	result, err := ctx.Services.Ledger.GetAccountLines(ctx.Context, account, ledgerIndex, peer, limit, marker)
+	result, err := ctx.Services.Ledger().GetAccountLines(ctx.Context, account, ledgerIndex, peer, limit, marker)
 	if err != nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RpcErrorActNotFound("Account not found.")
+			return nil, rpcerrors.RpcErrorActNotFound("Account not found.")
 		}
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 		return nil, rpcInternalError("account_lines: ledger query failed", err)
 	}

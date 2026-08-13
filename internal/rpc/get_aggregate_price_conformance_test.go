@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -158,7 +160,7 @@ func TestGetAggregatePriceNilOracleResultReturnsInternal(t *testing.T) {
 	})
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 }
 
 func TestGetAggregatePriceLookupErrorReturnsInternal(t *testing.T) {
@@ -174,7 +176,7 @@ func TestGetAggregatePriceLookupErrorReturnsInternal(t *testing.T) {
 	})
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 }
 
 func TestGetAggregatePriceMalformedOracleBytesReturnsInternal(t *testing.T) {
@@ -205,7 +207,7 @@ func TestGetAggregatePriceMalformedOracleBytesReturnsInternal(t *testing.T) {
 			})
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		})
 	}
 }
@@ -226,7 +228,7 @@ func TestGetAggregatePriceHistoricalLookupErrorReturnsInternal(t *testing.T) {
 	})
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 }
 
 func TestGetAggregatePriceMissingHistoricalTransactionReturnsObjectNotFound(t *testing.T) {
@@ -244,7 +246,7 @@ func TestGetAggregatePriceMissingHistoricalTransactionReturnsObjectNotFound(t *t
 	})
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcOBJECT_NOT_FOUND, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcOBJECT_NOT_FOUND, rpcErr.Code)
 }
 
 func TestGetAggregatePriceMalformedHistoricalTransactionReturnsInternal(t *testing.T) {
@@ -266,12 +268,12 @@ func TestGetAggregatePriceMalformedHistoricalTransactionReturnsInternal(t *testi
 	})
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 }
 
 const ownerForAggregatePriceTest = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 
-func callAggregatePriceError(t *testing.T, service types.LedgerService, request map[string]any) (any, *types.RpcError) {
+func callAggregatePriceError(t *testing.T, service types.LedgerService, request map[string]any) (any, *rpcerrors.RpcError) {
 	t.Helper()
 	encoded, err := json.Marshal(request)
 	require.NoError(t, err)
@@ -279,7 +281,7 @@ func callAggregatePriceError(t *testing.T, service types.LedgerService, request 
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: service},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: service}),
 	}
 	return (&handlers.GetAggregatePriceMethod{}).Handle(ctx, encoded)
 }
@@ -367,13 +369,13 @@ func TestGetAggregatePriceWalksExactlyThreePriorOracleVersions(t *testing.T) {
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: types.ApiVersion1,
-				Services:   &types.ServiceContainer{Ledger: service},
+				Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: service}),
 			}
 			result, rpcErr := (&handlers.GetAggregatePriceMethod{}).Handle(ctx, encoded)
 			if !test.wantFound {
 				assert.Nil(t, result)
 				require.NotNil(t, rpcErr)
-				assert.Equal(t, types.RpcOBJECT_NOT_FOUND, rpcErr.Code)
+				assert.Equal(t, rpcerrors.RpcOBJECT_NOT_FOUND, rpcErr.Code)
 				return
 			}
 			require.Nil(t, rpcErr)
@@ -392,7 +394,7 @@ func callAggregatePrice(t *testing.T, service types.LedgerService, request map[s
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   &types.ServiceContainer{Ledger: service},
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: service}),
 	}
 	result, rpcErr := (&handlers.GetAggregatePriceMethod{}).Handle(ctx, encoded)
 	require.Nil(t, rpcErr)

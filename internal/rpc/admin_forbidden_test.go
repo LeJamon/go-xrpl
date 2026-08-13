@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
@@ -108,12 +109,13 @@ func TestHTTPAdminDenialChargesFeeMalformed(t *testing.T) {
 // elements are unaffected.
 func TestHTTPBatchAdminDenialForbidden(t *testing.T) {
 	srv := &Server{
-		registry: types.NewMethodRegistry(),
+		registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"stop": &stubHandler{role: types.RoleAdmin},
+			"ping": echoHandler(),
+		}),
 		timeout:  time.Second,
-		services: types.NewServiceContainer(nil),
+		services: types.NewTestServiceGraph(types.NewServiceContainer(nil)),
 	}
-	srv.registry.Register("stop", &stubHandler{role: types.RoleAdmin})
-	srv.registry.Register("ping", echoHandler())
 
 	body := `{"method":"batch","params":[
 		{"method":"stop","value":7},
@@ -168,8 +170,12 @@ func TestHTTPBatchAdminDenialForbidden(t *testing.T) {
 // i.e. the "forbidden" token with code 3. A non-admin role is forced by
 // configuring AdminNets that exclude the loopback test peer.
 func TestWSAdminDenialForbidden(t *testing.T) {
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 2 * time.Second})
-	ws.methodRegistry.Register("stop", &stubHandler{role: types.RoleAdmin})
+	ws := NewWebSocketServer(WebSocketServerOptions{
+		Timeout: 2 * time.Second,
+		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"stop": &stubHandler{role: types.RoleAdmin},
+		}),
+	})
 
 	_, adminNet, _ := net.ParseCIDR("10.0.0.0/8")
 	pc := &PortContext{AdminNets: []net.IPNet{*adminNet}}
@@ -190,7 +196,7 @@ func TestWSAdminDenialForbidden(t *testing.T) {
 
 	assert.Equal(t, "error", resp["status"])
 	assert.Equal(t, "forbidden", resp["error"])
-	assert.Equal(t, float64(types.RpcFORBIDDEN), resp["error_code"])
+	assert.Equal(t, float64(rpcerrors.RpcFORBIDDEN), resp["error_code"])
 	// rpcFORBIDDEN's errorInfo message is "Bad credentials." (ErrorCodes.cpp:77),
 	// not rpcNO_PERMISSION's "You don't have permission for this command."
 	assert.Equal(t, "Bad credentials.", resp["error_message"])

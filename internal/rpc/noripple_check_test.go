@@ -171,10 +171,10 @@ func (m *mockNoRippleCheckLedgerService) GetClosedLedgerView() (types.LedgerStat
 }
 
 // newNoRippleCheckTestServices builds a per-test ServiceContainer wrapping mock.
-func newNoRippleCheckTestServices(mock *mockNoRippleCheckLedgerService) *types.ServiceContainer {
-	return &types.ServiceContainer{
+func newNoRippleCheckTestServices(mock *mockNoRippleCheckLedgerService) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger: mock,
-	}
+	})
 }
 
 // Error Validation Tests

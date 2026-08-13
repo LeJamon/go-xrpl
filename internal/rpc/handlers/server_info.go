@@ -12,6 +12,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/crypto/rfc1751"
@@ -80,12 +82,12 @@ func resolveHostID() string {
 	return "go-xrpl"
 }
 
-func serverHostID(services *types.ServiceContainer, admin bool) string {
+func serverHostID(services *types.ServiceGraph, admin bool) string {
 	if admin {
 		return cachedHostID
 	}
 	if services != nil {
-		key, err := addresscodec.DecodeNodePublicKey(services.NodePublicKey)
+		key, err := addresscodec.DecodeNodePublicKey(services.NodePublicKey())
 		if err == nil && len(key) == addresscodec.NodePublicKeyLength {
 			return rfc1751.WordFromBlob(key)
 		}
@@ -93,14 +95,14 @@ func serverHostID(services *types.ServiceContainer, admin bool) string {
 	return "go-xrpl"
 }
 
-func ServerSubscriptionState(services *types.ServiceContainer, admin bool) map[string]any {
+func ServerSubscriptionState(services *types.ServiceGraph, admin bool) map[string]any {
 	random := make([]byte, 32)
 	_, _ = rand.Read(random)
 	load := ComputeServerLoad(services)
 	status := "full"
 	standalone := false
-	if services != nil && services.Ledger != nil {
-		info := services.Ledger.GetServerInfo()
+	if services != nil && services.Ledger() != nil {
+		info := services.Ledger().GetServerInfo()
 		standalone = info.Standalone
 		if info.ServerState != "" {
 			status = info.ServerState
@@ -120,7 +122,7 @@ func ServerSubscriptionState(services *types.ServiceContainer, admin bool) map[s
 		"pubkey_node":   "",
 	}
 	if services != nil {
-		result["pubkey_node"] = services.NodePublicKey
+		result["pubkey_node"] = services.NodePublicKey()
 	}
 	if standalone {
 		result["stand_alone"] = true
@@ -128,9 +130,9 @@ func ServerSubscriptionState(services *types.ServiceContainer, admin bool) map[s
 	return result
 }
 
-func serverSystemTime(services *types.ServiceContainer) time.Time {
-	if services != nil && services.SystemTime != nil {
-		return services.SystemTime()
+func serverSystemTime(services *types.ServiceGraph) time.Time {
+	if services != nil && services.SystemTime() != nil {
+		return services.SystemTime()()
 	}
 	return time.Now()
 }
@@ -143,7 +145,7 @@ func formatServerTime(t time.Time) string {
 // This is the "human-readable" variant (rippled human=true).
 type ServerInfoMethod struct{ baseHandler }
 
-func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
@@ -152,7 +154,7 @@ func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	if serverCountersRequested(params) {
 		addServerDiagnostics(info, ctx.Services)
 	}
-	if warnings := buildServerWarnings(ctx.Services, ctx.IsAdmin); len(warnings) > 0 {
+	if warnings := buildServerWarnings(ctx.Services, ctx.Role.IsAdmin()); len(warnings) > 0 {
 		info["warnings"] = warnings
 	}
 	return map[string]any{"info": info}, nil
@@ -169,11 +171,11 @@ func serverCountersRequested(params json.RawMessage) bool {
 	return jsonCppBoolRaw(object["counters"])
 }
 
-func addServerDiagnostics(info map[string]any, services *types.ServiceContainer) {
+func addServerDiagnostics(info map[string]any, services *types.ServiceGraph) {
 	rpcCounters := make(map[string]any)
 	var snapshot types.RPCDiagnosticsSnapshot
-	if services != nil && services.RPCDiagnostics != nil {
-		snapshot = services.RPCDiagnostics.Snapshot()
+	if services != nil && services.RPCDiagnostics() != nil {
+		snapshot = services.RPCDiagnostics().Snapshot()
 	}
 	methods := make([]map[string]any, 0, len(snapshot.Current))
 
@@ -199,8 +201,8 @@ func addServerDiagnostics(info map[string]any, services *types.ServiceContainer)
 	}
 
 	nodeStore := make(map[string]any)
-	if services != nil && services.GetCounts != nil {
-		if counts := services.GetCounts().NodeStore; counts != nil {
+	if services != nil && services.GetCounts() != nil {
+		if counts := services.GetCounts()().NodeStore; counts != nil {
 			nodeStore["node_writes"] = strconv.FormatUint(counts.Writes, 10)
 			nodeStore["node_reads_total"] = strconv.FormatUint(counts.Reads, 10)
 			nodeStore["node_reads_hit"] = strconv.FormatUint(counts.FetchHits, 10)
@@ -214,8 +216,8 @@ func addServerDiagnostics(info map[string]any, services *types.ServiceContainer)
 		"job_queue": map[string]any{},
 		"nodestore": nodeStore,
 	}
-	if services != nil && services.SubscriptionMetrics != nil {
-		metrics := services.SubscriptionMetrics()
+	if services != nil && services.SubscriptionMetrics() != nil {
+		metrics := services.SubscriptionMetrics()()
 		counters["subscriptions"] = map[string]any{
 			"connections":                 strconv.FormatUint(metrics.Connections, 10),
 			"items":                       strconv.FormatUint(metrics.Items, 10),
@@ -225,6 +227,17 @@ func addServerDiagnostics(info map[string]any, services *types.ServiceContainer)
 			"deliveries_queued":           strconv.FormatUint(metrics.DeliveriesQueued, 10),
 			"deliveries_dropped":          strconv.FormatUint(metrics.DeliveriesDropped, 10),
 			"delivery_disconnects":        strconv.FormatUint(metrics.DeliveryDisconnects, 10),
+		}
+	}
+	if services != nil && services.FastSyncMetrics() != nil {
+		metrics := services.FastSyncMetrics()()
+		counters["fast_sync"] = map[string]any{
+			"completion_recheck_accepted":                    strconv.FormatUint(metrics.CompletionRecheckAccepted, 10),
+			"completion_recheck_rejected_no_evidence":        strconv.FormatUint(metrics.CompletionRecheckRejectedNoEvidence, 10),
+			"completion_recheck_rejected_below_quorum":       strconv.FormatUint(metrics.CompletionRecheckRejectedBelowQuorum, 10),
+			"completion_recheck_rejected_quorum_unavailable": strconv.FormatUint(metrics.CompletionRecheckRejectedUnavailable, 10),
+			"target_superseded":                              strconv.FormatUint(metrics.TargetSuperseded, 10),
+			"obsolete_acquisition_completed":                 strconv.FormatUint(metrics.ObsoleteAcquisitionCompleted, 10),
 		}
 	}
 	info["counters"] = counters
@@ -243,20 +256,20 @@ func rpcDiagnosticsJSON(stats types.RPCMethodDiagnostics) map[string]any {
 	}
 }
 
-func buildServerWarnings(services *types.ServiceContainer, isAdmin bool) []types.WarningObject {
-	if services == nil || services.Ledger == nil {
+func buildServerWarnings(services *types.ServiceGraph, isAdmin bool) []types.WarningObject {
+	if services == nil || services.Ledger() == nil {
 		return nil
 	}
 
 	var warnings []types.WarningObject
-	blocked := services.Ledger.IsAmendmentBlocked()
+	blocked := services.Ledger().IsAmendmentBlocked()
 	if blocked {
 		warnings = append(warnings, types.WarningObject{
 			ID:      types.WarningAmendmentBlocked,
 			Message: "This server is amendment blocked, and must be updated to be able to stay in sync with the network.",
 		})
 	}
-	if services.ValidatorList != nil && services.ValidatorList.IsUNLBlocked() {
+	if services.ValidatorList() != nil && services.ValidatorList().IsUNLBlocked() {
 		warnings = append(warnings, types.WarningObject{
 			ID:      types.WarningExpiredValidatorList,
 			Message: "This server has an expired validator list. validators.txt may be incorrectly configured or some [validator_list_sites] may be unreachable.",
@@ -264,7 +277,7 @@ func buildServerWarnings(services *types.ServiceContainer, isAdmin bool) []types
 	}
 
 	if isAdmin && !blocked {
-		if p, ok := services.Ledger.(interface {
+		if p, ok := services.Ledger().(interface {
 			Table() *amendment.Table
 		}); ok {
 			if tbl := p.Table(); tbl != nil {
@@ -290,9 +303,9 @@ func buildServerWarnings(services *types.ServiceContainer, isAdmin bool) []types
 func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	services := ctx.Services
 	now := serverSystemTime(services)
-	serverInfo := services.Ledger.GetServerInfo()
-	configSnapshot := services.ServerInfoConfig
-	baseFee, reserveBase, reserveIncrement := services.Ledger.GetCurrentFees()
+	serverInfo := services.Ledger().GetServerInfo()
+	configSnapshot := services.ServerInfoConfig()
+	baseFee, reserveBase, reserveIncrement := services.Ledger().GetCurrentFees()
 
 	// Uptime in seconds
 	uptimeDuration := time.Since(serverStartTime)
@@ -315,7 +328,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	}
 	if serverInfo.Standalone {
 		serverState = "standalone"
-	} else if !ctx.IsAdmin && (serverState == "proposing" || serverState == "validating") {
+	} else if !ctx.Role.IsAdmin() && (serverState == "proposing" || serverState == "validating") {
 		serverState = "full"
 	}
 
@@ -329,7 +342,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 		"build_version":     BuildVersion,
 		"complete_ledgers":  completeLedgers,
 		"io_latency_ms":     observability.SchedLatencyMs(),
-		"pubkey_node":       services.NodePublicKey,
+		"pubkey_node":       services.NodePublicKey(),
 		"server_state":      serverState,
 		"uptime":            uptime,
 		"validation_quorum": resolveValidationQuorum(services),
@@ -347,11 +360,11 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 		"state_accounting":         accounting.modes,
 	}
 
-	info["ports"] = buildServerInfoPorts(configSnapshot.Ports, ctx.IsAdmin)
+	info["ports"] = buildServerInfoPorts(configSnapshot.Ports, ctx.Role.IsAdmin())
 	if configSnapshot.ServerDomain != "" {
 		info["server_domain"] = configSnapshot.ServerDomain
 	}
-	if ctx.IsAdmin {
+	if ctx.Role.IsAdmin() {
 		nodeSize := configSnapshot.NodeSize
 		if nodeSize == "" {
 			nodeSize = "medium"
@@ -361,8 +374,8 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 			info["git"] = map[string]any{"hash": configSnapshot.GitHash}
 		}
 	}
-	if services.FetchPackCacheSize != nil {
-		if size := services.FetchPackCacheSize(); size != 0 {
+	if services.FetchPackCacheSize() != nil {
+		if size := services.FetchPackCacheSize()(); size != 0 {
 			info["fetch_pack"] = size
 		}
 	}
@@ -380,7 +393,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	// Emits the configured validator's MASTER public key (base58 NodePublic),
 	// or "none" when the node is not a validator. Present in both server_info
 	// (human) and server_state (machine) like rippled's shared getServerInfo.
-	if ctx.IsAdmin {
+	if ctx.Role.IsAdmin() {
 		info["pubkey_validator"] = resolveValidatorPubKey(services)
 		validatorList := resolveValidatorListSnapshot(services, now)
 		if human {
@@ -392,7 +405,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 
 	// hostid: only in human mode (server_info), matching rippled
 	if human {
-		info["hostid"] = serverHostID(services, ctx.IsAdmin)
+		info["hostid"] = serverHostID(services, ctx.Role.IsAdmin())
 	}
 
 	info["time"] = formatServerTime(now)
@@ -400,8 +413,8 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	// last_close: converge_time_s (float seconds) for human, converge_time (int ms) for machine
 	proposers := 0
 	convergeTimeMs := 0
-	if services.LastCloseInfo != nil {
-		proposers, convergeTimeMs = services.LastCloseInfo()
+	if services.LastCloseInfo() != nil {
+		proposers, convergeTimeMs = services.LastCloseInfo()()
 	}
 	if human {
 		info["last_close"] = map[string]any{
@@ -425,8 +438,8 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 		loadFactorFeeEscalation = mulDivSaturating(feeEscalation, loadBase, feeReference)
 	}
 	var loadFactorFees types.LoadFactorFees
-	if services != nil && services.LoadFactorFees != nil {
-		loadFactorFees = services.LoadFactorFees()
+	if services != nil && services.LoadFactorFees() != nil {
+		loadFactorFees = services.LoadFactorFees()()
 	} else {
 		// Tracker unwired (older test fixtures): treat as no load so
 		// loadFactorServer collapses to loadBase, matching a fresh
@@ -446,7 +459,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 		// Mirror rippled NetworkOPs.cpp:2887-2901: admin-only emission
 		// of load_factor_{local,net,cluster}, each gated on the fee
 		// differing from loadBase.
-		if ctx.IsAdmin {
+		if ctx.Role.IsAdmin() {
 			if uint64(loadFactorFees.Local) != loadBase {
 				info["load_factor_local"] = float64(loadFactorFees.Local) / float64(loadBase)
 			}
@@ -463,7 +476,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 		//     && (admin || loadFactorFeeEscalation != loadFactor)
 		// and the queue field on
 		//   minProcessingFeeLevel != referenceFeeLevel.
-		if feeEscalation != feeReference && (ctx.IsAdmin || loadFactorFeeEscalation != loadFactor) {
+		if feeEscalation != feeReference && (ctx.Role.IsAdmin() || loadFactorFeeEscalation != loadFactor) {
 			info["load_factor_fee_escalation"] = float64(feeEscalation) / float64(feeReference)
 		}
 		if feeQueue != feeReference {
@@ -527,8 +540,8 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 			// preserving the two's-complement bit pattern — so a negative
 			// offset surfaces as a large positive number. Match that wire
 			// shape rather than emit a signed value.
-			if services != nil && services.CloseTimeOffset != nil {
-				offset := services.CloseTimeOffset()
+			if services != nil && services.CloseTimeOffset() != nil {
+				offset := services.CloseTimeOffset()()
 				abs := offset
 				if abs < 0 {
 					abs = -abs
@@ -573,7 +586,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	}
 
 	// amendment_blocked: rippled only includes this when true
-	if services.Ledger.IsAmendmentBlocked() {
+	if services.Ledger().IsAmendmentBlocked() {
 		info["amendment_blocked"] = true
 	}
 
@@ -631,9 +644,9 @@ func getPeerCount(ctx *types.RpcContext) int {
 // consensus subsystem hasn't been wired (standalone or pre-startup).
 // Rippled exposes the runtime quorum here; previously goxrpl hardcoded
 // 1, which made network-mode soaks misleading (#451).
-func resolveValidationQuorum(services *types.ServiceContainer) uint32 {
-	if services != nil && services.ValidationQuorum != nil {
-		if q := services.ValidationQuorum(); q > 0 {
+func resolveValidationQuorum(services *types.ServiceGraph) uint32 {
+	if services != nil && services.ValidationQuorum() != nil {
+		if q := services.ValidationQuorum()(); q > 0 {
 			return validationQuorumForRPC(q)
 		}
 	}
@@ -654,15 +667,15 @@ func resolveValidationQuorum(services *types.ServiceContainer) uint32 {
 // identity != nil) is the faithful single-term equivalent for every state the
 // node can reach; the two-term form only matters if a separable
 // manifest-revocation path is added later.
-func resolveValidatorPubKey(services *types.ServiceContainer) string {
-	if services == nil || len(services.ValidatorPublicKey) != 33 {
+func resolveValidatorPubKey(services *types.ServiceGraph) string {
+	if services == nil || len(services.ValidatorPublicKey()) != 33 {
 		return "none"
 	}
 	var signing [33]byte
-	copy(signing[:], services.ValidatorPublicKey)
+	copy(signing[:], services.ValidatorPublicKey())
 	master := signing
-	if services.Manifests != nil {
-		master = services.Manifests.GetMasterKey(signing)
+	if services.Manifests() != nil {
+		master = services.Manifests().GetMasterKey(signing)
 	}
 	enc, err := addresscodec.EncodeNodePublicKey(master[:])
 	if err != nil {
@@ -676,15 +689,15 @@ func resolveValidatorPubKey(services *types.ServiceContainer) string {
 // so server_info still produces a complete shape. overflow sources
 // from the overlay's TMTransaction-refusal counter (the rippled-shape
 // jq_trans_overflow signal at PeerImp.cpp:1353).
-func resolveDisconnectCounters(services *types.ServiceContainer) (overflow, peerDisc, peerDiscRes uint64) {
+func resolveDisconnectCounters(services *types.ServiceGraph) (overflow, peerDisc, peerDiscRes uint64) {
 	if services == nil {
 		return 0, 0, 0
 	}
-	if services.JqTransOverflow != nil {
-		overflow = services.JqTransOverflow()
+	if services.JqTransOverflow() != nil {
+		overflow = services.JqTransOverflow()()
 	}
-	if services.PeerDisconnects != nil {
-		peerDisc, peerDiscRes = services.PeerDisconnects()
+	if services.PeerDisconnects() != nil {
+		peerDisc, peerDiscRes = services.PeerDisconnects()()
 	}
 	return overflow, peerDisc, peerDiscRes
 }
@@ -695,11 +708,11 @@ func resolveDisconnectCounters(services *types.ServiceContainer) (overflow, peer
 // gates collapse to "absent". Once the hook fires, values pass through
 // unfiltered — a zero from TxQ would be a TxQ bug, not something to
 // paper over here.
-func resolveLoadFactorFees(services *types.ServiceContainer) (escalation, queue, reference uint64) {
-	if services == nil || services.TxQMetrics == nil {
+func resolveLoadFactorFees(services *types.ServiceGraph) (escalation, queue, reference uint64) {
+	if services == nil || services.TxQMetrics() == nil {
 		return loadBase, loadBase, loadBase
 	}
-	m := services.TxQMetrics()
+	m := services.TxQMetrics()()
 	return m.OpenLedgerFeeLevel, m.MinProcessingFeeLevel, m.ReferenceFeeLevel
 }
 
@@ -722,7 +735,7 @@ type ServerLoadSnapshot struct {
 // and returns the rendered triple every server_info / server-stream
 // emit needs. Mirrors the NetworkOPs::getServerStatus computation at
 // rippled NetworkOPs.cpp:2850-2912.
-func ComputeServerLoad(services *types.ServiceContainer) ServerLoadSnapshot {
+func ComputeServerLoad(services *types.ServiceGraph) ServerLoadSnapshot {
 	feeEscalation, feeQueue, feeReference := resolveLoadFactorFees(services)
 	snap := ServerLoadSnapshot{
 		LoadBase:                loadBase,
@@ -739,8 +752,8 @@ func ComputeServerLoad(services *types.ServiceContainer) ServerLoadSnapshot {
 	if feeReference != 0 {
 		scaledFeeEscalation = mulDivSaturating(feeEscalation, loadBase, feeReference)
 	}
-	if services != nil && services.LoadFactorFees != nil {
-		fees := services.LoadFactorFees()
+	if services != nil && services.LoadFactorFees() != nil {
+		fees := services.LoadFactorFees()()
 		if fees.Local > 0 {
 			snap.LoadFactorLocal = uint64(fees.Local)
 		}
@@ -787,7 +800,7 @@ type stateAccountingResolved struct {
 // goxrpl-only deployments (standalone / RPC-only tests) where wiring the
 // real tracker isn't applicable. Production network nodes always take
 // the wired path above.
-func resolveStateAccounting(services *types.ServiceContainer, serverState string, uptimeUs int64) stateAccountingResolved {
+func resolveStateAccounting(services *types.ServiceGraph, serverState string, uptimeUs int64) stateAccountingResolved {
 	out := make(map[string]any, len(stateAccountingModes))
 	for _, m := range stateAccountingModes {
 		out[m] = map[string]any{
@@ -796,8 +809,8 @@ func resolveStateAccounting(services *types.ServiceContainer, serverState string
 		}
 	}
 
-	if services != nil && services.StateAccounting != nil {
-		snap := services.StateAccounting()
+	if services != nil && services.StateAccounting() != nil {
+		snap := services.StateAccounting()()
 		for mode, entry := range snap.Modes {
 			out[mode] = map[string]any{
 				"duration_us": fmt.Sprintf("%d", entry.DurationUs),

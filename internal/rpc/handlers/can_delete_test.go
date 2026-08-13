@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -57,10 +58,10 @@ func canDeleteParams(t *testing.T, value any) json.RawMessage {
 	return raw
 }
 
-func runCanDelete(t *testing.T, svc *types.ServiceContainer, params json.RawMessage) (map[string]any, *types.RpcError) {
+func runCanDelete(t *testing.T, svc *types.ServiceContainer, params json.RawMessage) (map[string]any, *rpcerrors.RpcError) {
 	t.Helper()
 	method := &handlers.CanDeleteMethod{}
-	result, rpcErr := method.Handle(adminCtx(svc), params)
+	result, rpcErr := method.Handle(adminCtx(types.NewTestServiceGraph(svc)), params)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -71,13 +72,13 @@ func TestCanDelete_NotEnabled(t *testing.T) {
 	// No advisory-delete subsystem wired.
 	_, rpcErr := runCanDelete(t, &types.ServiceContainer{}, nil)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcNOT_ENABLED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcNOT_ENABLED, rpcErr.Code)
 
 	// Subsystem present but advisory delete disabled.
 	svc := &types.ServiceContainer{AdvisoryDeleteState: &fakeAdvisory{enabled: false}}
 	_, rpcErr = runCanDelete(t, svc, nil)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcNOT_ENABLED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcNOT_ENABLED, rpcErr.Code)
 }
 
 func TestCanDelete_Get(t *testing.T) {
@@ -125,7 +126,7 @@ func TestCanDelete_NowNotReady(t *testing.T) {
 	svc := &types.ServiceContainer{AdvisoryDeleteState: store}
 	_, rpcErr := runCanDelete(t, svc, canDeleteParams(t, "now"))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcNOT_READY, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcNOT_READY, rpcErr.Code)
 }
 
 func TestCanDelete_Now(t *testing.T) {
@@ -157,7 +158,7 @@ func TestCanDelete_HashNotFound(t *testing.T) {
 	hash := "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789"
 	_, rpcErr := runCanDelete(t, svc, canDeleteParams(t, hash))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcLGR_NOT_FOUND, rpcErr.Code)
 }
 
 func TestCanDelete_InvalidString(t *testing.T) {
@@ -165,7 +166,7 @@ func TestCanDelete_InvalidString(t *testing.T) {
 	svc := &types.ServiceContainer{AdvisoryDeleteState: store}
 	_, rpcErr := runCanDelete(t, svc, canDeleteParams(t, "garbage"))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 }
 
 // TestCanDelete_EmptyString pins "" to invalidParams, matching rippled which
@@ -176,7 +177,7 @@ func TestCanDelete_EmptyString(t *testing.T) {
 	svc := &types.ServiceContainer{AdvisoryDeleteState: store}
 	_, rpcErr := runCanDelete(t, svc, canDeleteParams(t, ""))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 }
 
 // TestCanDelete_WhitespaceRejected verifies whitespace-padded input is
@@ -189,7 +190,7 @@ func TestCanDelete_WhitespaceRejected(t *testing.T) {
 	for _, v := range []string{" never ", " 123 ", "\tnow"} {
 		_, rpcErr := runCanDelete(t, svc, canDeleteParams(t, v))
 		require.NotNil(t, rpcErr, "input %q should be rejected", v)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code, "input %q", v)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code, "input %q", v)
 	}
 }
 

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -77,9 +79,8 @@ var unblockedMethods = []string{
 // newTestServer creates a Server with all methods registered for testing
 func newTestServer() *Server {
 	server := &Server{
-		registry: types.NewMethodRegistry(),
+		registry: defaultMethodRegistry(),
 	}
-	server.registerAllMethods()
 	return server
 }
 
@@ -107,7 +108,7 @@ func TestAmendmentBlockedMethodsReturnError(t *testing.T) {
 
 			assert.Nil(t, result, "Expected nil result when amendment blocked for %s", method)
 			require.NotNil(t, rpcErr, "Expected error when amendment blocked for %s", method)
-			assert.Equal(t, types.RpcAMENDMENT_BLOCKED, rpcErr.Code,
+			assert.Equal(t, rpcerrors.RpcAMENDMENT_BLOCKED, rpcErr.Code,
 				"Expected amendmentBlocked error code (40) for %s, got %d", method, rpcErr.Code)
 			assert.Equal(t, "amendmentBlocked", rpcErr.ErrorString,
 				"Expected 'amendmentBlocked' error string for %s", method)
@@ -139,7 +140,7 @@ func TestAmendmentBlockedUnblockedMethodsStillWork(t *testing.T) {
 			// The method should NOT return amendmentBlocked.
 			// It may return other errors (e.g., missing params), but never the amendment-blocked code.
 			if rpcErr != nil {
-				assert.NotEqual(t, types.RpcAMENDMENT_BLOCKED, rpcErr.Code,
+				assert.NotEqual(t, rpcerrors.RpcAMENDMENT_BLOCKED, rpcErr.Code,
 					"Method %s should NOT be amendment-blocked (NoCondition), got error: %s", method, rpcErr.Message)
 			}
 			// If no error, that's also fine — the method ran successfully
@@ -171,7 +172,7 @@ func TestAmendmentNotBlockedAllMethodsWork(t *testing.T) {
 
 			// No method should return amendmentBlocked when not blocked
 			if rpcErr != nil {
-				assert.NotEqual(t, types.RpcAMENDMENT_BLOCKED, rpcErr.Code,
+				assert.NotEqual(t, rpcerrors.RpcAMENDMENT_BLOCKED, rpcErr.Code,
 					"Method %s should not be amendment-blocked when server is not blocked", method)
 			}
 		})
@@ -197,7 +198,7 @@ func TestAmendmentBlockedErrorFormat(t *testing.T) {
 	_, rpcErr := server.executeMethod("submit", json.RawMessage(`{}`), ctx)
 
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcAMENDMENT_BLOCKED, rpcErr.Code) // rippled: rpcAMENDMENT_BLOCKED = 14
+	assert.Equal(t, rpcerrors.RpcAMENDMENT_BLOCKED, rpcErr.Code) // rippled: rpcAMENDMENT_BLOCKED = 14
 	assert.Equal(t, "amendmentBlocked", rpcErr.ErrorString)
 	assert.Equal(t, "amendmentBlocked", rpcErr.Type)
 	assert.Equal(t, "Amendment blocked, need upgrade.", rpcErr.Message)

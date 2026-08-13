@@ -1,13 +1,13 @@
 package unsafe_reassignment
 
-import rpctypes "github.com/LeJamon/go-xrpl/internal/rpc/types"
+import "github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
-func safeConstructor(_ int, _, _, message string) *rpctypes.RpcError {
-	return rpctypes.RpcErrorInvalidParams(message)
+func safeConstructor(_ int, _, _, message string) *rpcerrors.RpcError {
+	return rpcerrors.RpcErrorInvalidParams(message)
 }
 
-func Build(message string) *rpctypes.RpcError {
+func Build(message string) *rpcerrors.RpcError {
 	constructor := safeConstructor
-	constructor = rpctypes.NewRpcError
+	constructor = rpcerrors.NewRpcError
 	return constructor(72+1, "internal", "internal", message)
 }

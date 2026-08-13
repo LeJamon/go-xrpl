@@ -182,10 +182,22 @@ func TestAcquiredValidatedTipSurvivesRecoveryTimerTick(t *testing.T) {
 		ParentHash: consensus.LedgerID(stale.Hash()),
 	}, false))
 
-	require.NoError(t, engine.OnLedger(consensus.LedgerID(targetHeader.Hash), nil))
+	router := newTestRouter(engine, a, nil)
+	router.consensusRecovery = consensusRecovery{
+		targetHash: targetHeader.Hash,
+		stepHash:   targetHeader.Hash,
+	}
+	require.True(t, router.completeStoredConsensusRecovery(
+		targetHeader.LedgerIndex,
+		targetHeader.Hash,
+		targetHeader.ParentHash,
+		false,
+	))
 	require.Equal(t, targetHeader.Hash, svc.GetClosedLedger().Hash())
+	require.Equal(t, targetHeader.Hash, svc.GetValidatedLedger().Hash())
 	require.Equal(t, targetHeader.LedgerIndex+1, svc.GetCurrentLedgerIndex())
 	require.Equal(t, consensus.ModeSwitchedLedger, engine.Mode())
+	require.Equal(t, uint64(1), router.FastSyncMetrics().CompletionRecheckAccepted)
 
 	engine.TimerEntry()
 
@@ -193,7 +205,7 @@ func TestAcquiredValidatedTipSurvivesRecoveryTimerTick(t *testing.T) {
 	require.NotEqual(t, consensus.ModeWrongLedger, engine.Mode())
 }
 
-func TestAcquiredValidatedTipSurvivesMovingRecoveryTarget(t *testing.T) {
+func TestSupersededValidatedCompletionDoesNotOverrideRecoveryTarget(t *testing.T) {
 	a := newTestAdaptor(t)
 	svc := a.ledgerService
 	stale := svc.GetClosedLedger()
@@ -253,12 +265,14 @@ func TestAcquiredValidatedTipSurvivesMovingRecoveryTarget(t *testing.T) {
 		false,
 	)
 
-	require.Equal(t, targetHeader.Hash, svc.GetClosedLedger().Hash())
-	require.Equal(t, targetHeader.LedgerIndex+1, svc.GetCurrentLedgerIndex())
-	require.Equal(t, consensus.ModeSwitchedLedger, engine.Mode())
-
-	engine.TimerEntry()
-
-	require.Equal(t, targetHeader.Hash, svc.GetClosedLedger().Hash())
-	require.NotEqual(t, consensus.ModeWrongLedger, engine.Mode())
+	require.Equal(t, stale.Hash(), svc.GetClosedLedger().Hash())
+	require.Equal(t, stale.Sequence()+1, svc.GetCurrentLedgerIndex())
+	require.NotEqual(t, consensus.ModeSwitchedLedger, engine.Mode())
+	require.Equal(t, uint64(1), router.FastSyncMetrics().ObsoleteAcquisitionCompleted)
+	router.acquisitionMu.Lock()
+	require.Equal(t, newerPreferred, router.consensusRecovery.targetHash)
+	router.acquisitionMu.Unlock()
+	stored, err := svc.GetLedgerByHash(targetHeader.Hash)
+	require.NoError(t, err)
+	require.Equal(t, targetHeader.Hash, stored.Hash())
 }

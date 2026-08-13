@@ -31,7 +31,7 @@ type serverStatusEventPublisher interface {
 
 type serverStatusPublisher struct {
 	mu        sync.Mutex
-	services  *types.ServiceContainer
+	services  *types.ServiceGraph
 	publisher serverStatusEventPublisher
 	haveLast  bool
 	last      serverStatusSnapshot
@@ -39,7 +39,7 @@ type serverStatusPublisher struct {
 	mode      string
 }
 
-func newServerStatusPublisher(services *types.ServiceContainer, publisher serverStatusEventPublisher) *serverStatusPublisher {
+func newServerStatusPublisher(services *types.ServiceGraph, publisher serverStatusEventPublisher) *serverStatusPublisher {
 	return &serverStatusPublisher{services: services, publisher: publisher}
 }
 
@@ -62,7 +62,7 @@ func (p *serverStatusPublisher) modePublication(mode string) service.ServerStatu
 	return p.statusPublication(&mode)
 }
 func (p *serverStatusPublisher) capture(mode *string) (serverStatusSnapshot, *rpc.ServerStatusEvent) {
-	if p == nil || p.services == nil || p.services.Ledger == nil || p.publisher == nil {
+	if p == nil || p.services == nil || p.services.Ledger() == nil || p.publisher == nil {
 		return serverStatusSnapshot{}, nil
 	}
 	p.mu.Lock()
@@ -76,13 +76,13 @@ func (p *serverStatusPublisher) capture(mode *string) (serverStatusSnapshot, *rp
 	} else if p.haveMode {
 		serverStatus = p.mode
 	} else {
-		if info := p.services.Ledger.GetServerInfo(); info.ServerState != "" {
+		if info := p.services.Ledger().GetServerInfo(); info.ServerState != "" {
 			serverStatus = info.ServerState
 		}
 		p.mode = serverStatus
 		p.haveMode = true
 	}
-	baseFee, _, _ := p.services.Ledger.GetCurrentFees()
+	baseFee, _, _ := p.services.Ledger().GetCurrentFees()
 	load := handlers.ComputeServerLoad(p.services)
 	snapshot := serverStatusSnapshot{
 		baseFee:                 baseFee,

@@ -564,7 +564,7 @@ func (e *Engine) preflightSponsorSignStructure(common *txcore.Common) ter.Result
 	return ter.TesSUCCESS
 }
 
-// preflightBatchSignerStructure enforces the rules-gated upper bound on each
+// preflightBatchSignerStructure enforces the upper bound on each
 // multi-signed BatchSigner's nested Signers array. rippled checks this inside
 // multiSignHelper (called from Batch::preflight with ctx.rules); an out-of-range
 // array there is a bad-signature validity result and surfaces as temINVALID. The

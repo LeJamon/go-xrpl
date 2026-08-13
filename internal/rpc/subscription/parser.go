@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -53,7 +54,7 @@ func jsonIsArray(raw json.RawMessage) bool {
 	return false
 }
 
-func wireArrayElements(raw json.RawMessage, scope *RequestScope) (present, isArray bool, elements []json.RawMessage, rpcErr *types.RpcError) {
+func wireArrayElements(raw json.RawMessage, scope *RequestScope) (present, isArray bool, elements []json.RawMessage, rpcErr *rpcerrors.RpcError) {
 	if raw == nil {
 		return false, false, nil, nil
 	}
@@ -62,12 +63,12 @@ func wireArrayElements(raw json.RawMessage, scope *RequestScope) (present, isArr
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	if _, err := decoder.Token(); err != nil {
-		return true, true, elements, types.RpcErrorInvalidParams("Invalid parameters.")
+		return true, true, elements, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	for decoder.More() {
 		var element json.RawMessage
 		if err := decoder.Decode(&element); err != nil {
-			return true, true, elements, types.RpcErrorInvalidParams("Invalid parameters.")
+			return true, true, elements, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 		if rpcErr := scope.consumeRaw(1); rpcErr != nil {
 			return true, true, elements, rpcErr
@@ -75,12 +76,12 @@ func wireArrayElements(raw json.RawMessage, scope *RequestScope) (present, isArr
 		elements = append(elements, element)
 	}
 	if _, err := decoder.Token(); err != nil {
-		return true, true, elements, types.RpcErrorInvalidParams("Invalid parameters.")
+		return true, true, elements, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	return true, true, elements, nil
 }
 
-func resolveStreams(wireDecoded bool, raw json.RawMessage, typed []types.SubscriptionType, scope *RequestScope) (bool, []types.SubscriptionType, *types.RpcError) {
+func resolveStreams(wireDecoded bool, raw json.RawMessage, typed []types.SubscriptionType, scope *RequestScope) (bool, []types.SubscriptionType, *rpcerrors.RpcError) {
 	if !wireDecoded {
 		return typed != nil, typed, nil
 	}
@@ -89,20 +90,20 @@ func resolveStreams(wireDecoded bool, raw json.RawMessage, typed []types.Subscri
 		return false, nil, nil
 	}
 	if !isArray {
-		return true, nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return true, nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	streams := make([]types.SubscriptionType, 0, len(elements))
 	for _, element := range elements {
 		var stream string
 		if json.Unmarshal(element, &stream) != nil {
-			return true, streams, types.RpcErrorMalformedStream()
+			return true, streams, rpcerrors.RpcErrorMalformedStream()
 		}
 		streams = append(streams, types.SubscriptionType(stream))
 	}
 	return true, streams, rpcErr
 }
 
-func resolveAccounts(wireDecoded bool, raw json.RawMessage, typed []string, scope *RequestScope) (bool, []string, *types.RpcError) {
+func resolveAccounts(wireDecoded bool, raw json.RawMessage, typed []string, scope *RequestScope) (bool, []string, *rpcerrors.RpcError) {
 	if !wireDecoded {
 		return typed != nil, typed, nil
 	}
@@ -114,7 +115,7 @@ func resolveAccounts(wireDecoded bool, raw json.RawMessage, typed []string, scop
 		return false, nil, nil
 	}
 	if !isArray {
-		return true, nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return true, nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	accounts := make([]string, 0, len(elements))
 	for _, element := range elements {
@@ -127,7 +128,7 @@ func resolveAccounts(wireDecoded bool, raw json.RawMessage, typed []string, scop
 	return true, accounts, nil
 }
 
-func resolveBooks(wireDecoded bool, raw json.RawMessage, typed []types.BookRequest, scope *RequestScope) (bool, []types.BookRequest, *types.RpcError) {
+func resolveBooks(wireDecoded bool, raw json.RawMessage, typed []types.BookRequest, scope *RequestScope) (bool, []types.BookRequest, *rpcerrors.RpcError) {
 	if !wireDecoded {
 		return typed != nil, typed, nil
 	}
@@ -136,26 +137,26 @@ func resolveBooks(wireDecoded bool, raw json.RawMessage, typed []types.BookReque
 		return false, nil, nil
 	}
 	if !isArray {
-		return true, nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return true, nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	books := make([]types.BookRequest, 0, len(elements))
 	for _, element := range elements {
 		var book types.BookRequest
 		if json.Unmarshal(element, &book) != nil {
-			return true, books, types.RpcErrorInvalidParams("Invalid parameters.")
+			return true, books, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 		books = append(books, book)
 	}
 	return true, books, rpcErr
 }
 
-func bookSideObject(raw json.RawMessage) (map[string]json.RawMessage, *types.RpcError) {
+func bookSideObject(raw json.RawMessage) (map[string]json.RawMessage, *rpcerrors.RpcError) {
 	if raw == nil {
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	var side map[string]json.RawMessage
 	if json.Unmarshal(raw, &side) != nil {
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	return side, nil
 }

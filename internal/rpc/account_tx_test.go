@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
@@ -61,8 +63,8 @@ func (m *accountTxMock) GetLedgerByHash(hash [32]byte) (types.LedgerReader, erro
 }
 
 // newTestServicesAccountTx builds a *types.ServiceContainer wrapping the mock.
-func newTestServicesAccountTx(mock *accountTxMock) *types.ServiceContainer {
-	return &types.ServiceContainer{Ledger: mock}
+func newTestServicesAccountTx(mock *accountTxMock) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 }
 
 func TestAccountTxDeliveredAmountHistoricalContext(t *testing.T) {
@@ -196,13 +198,13 @@ func TestAccountTxErrorValidation(t *testing.T) {
 			name:          "Missing account field - empty params",
 			params:        map[string]any{},
 			expectedError: "Missing field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing account field - nil params",
 			params:        nil,
 			expectedError: "Missing field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Malformed account address - hex format",
@@ -239,7 +241,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 				"account": 12345,
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - boolean",
@@ -247,7 +249,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 				"account": true,
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - null",
@@ -255,7 +257,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 				"account": nil,
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - object",
@@ -263,7 +265,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 				"account": map[string]any{"nested": "value"},
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - array",
@@ -271,7 +273,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 				"account": []string{"value1", "value2"},
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - float",
@@ -279,7 +281,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 				"account": 1.1,
 			},
 			expectedError: "Invalid field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 	}
 
@@ -323,43 +325,43 @@ func TestAccountTxValidationOrder(t *testing.T) {
 			name:    "binary type precedes forward limit and account",
 			params:  `{"binary":"true","forward":"true","limit":0}`,
 			message: "Invalid field 'binary'.",
-			code:    types.RpcINVALID_PARAMS,
+			code:    rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:    "forward type precedes limit and account",
 			params:  `{"binary":false,"forward":"true","limit":0}`,
 			message: "Invalid field 'forward'.",
-			code:    types.RpcINVALID_PARAMS,
+			code:    rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:    "limit precedes account",
 			params:  `{"binary":false,"forward":false,"limit":0}`,
 			message: "Invalid field 'limit'.",
-			code:    types.RpcINVALID_PARAMS,
+			code:    rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:    "account presence precedes ledger and marker",
 			params:  `{"ledger_index":"2","marker":{}}`,
 			message: "Missing field 'account'.",
-			code:    types.RpcINVALID_PARAMS,
+			code:    rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:    "account type precedes ledger and marker",
 			params:  `{"account":null,"ledger_index":"2","marker":{}}`,
 			message: "Invalid field 'account'.",
-			code:    types.RpcINVALID_PARAMS,
+			code:    rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:    "account base58 precedes ledger and marker",
 			params:  `{"account":"bad","ledger_index":"2","marker":{}}`,
 			message: "Account malformed.",
-			code:    types.RpcACT_MALFORMED,
+			code:    rpcerrors.RpcACT_MALFORMED,
 		},
 		{
 			name:    "ledger arguments precede marker",
 			params:  `{"account":"` + account + `","ledger_index":"2","marker":{}}`,
 			message: "ledger_index string malformed",
-			code:    types.RpcINVALID_PARAMS,
+			code:    rpcerrors.RpcINVALID_PARAMS,
 		},
 	}
 
@@ -408,7 +410,7 @@ func TestAccountTxLedgerArguments(t *testing.T) {
 		result, rpcErr := (&handlers.AccountTxMethod{}).Handle(ctx, json.RawMessage(`{"account":"`+account+`","ledger_index":"2"}`))
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "ledger_index string malformed", rpcErr.Message)
 	})
 
@@ -430,7 +432,7 @@ func TestAccountTxLedgerArguments(t *testing.T) {
 			result, rpcErr := (&handlers.AccountTxMethod{}).Handle(ctx, json.RawMessage(tc.params))
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 			assert.Equal(t, "invalidParams", rpcErr.Message)
 		})
 	}
@@ -473,7 +475,7 @@ func TestAccountTxLedgerArguments(t *testing.T) {
 			result, rpcErr := (&handlers.AccountTxMethod{}).Handle(ctx, json.RawMessage(`{"account":"`+account+`","ledger_index":`+strconv.FormatUint(uint64(tc.sequence), 10)+`}`))
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcLGR_NOT_VALIDATED, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcLGR_NOT_VALIDATED, rpcErr.Code)
 			assert.Equal(t, "lgrNotValidated", rpcErr.ErrorString)
 			assert.Equal(t, "Ledger not validated.", rpcErr.Message)
 		})
@@ -1478,7 +1480,7 @@ func TestAccountTxServiceUnavailable(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
@@ -1487,14 +1489,14 @@ func TestAccountTxServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 }
@@ -1527,7 +1529,7 @@ func TestAccountTxTransactionHistoryNotAvailable(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcNOT_ENABLED, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcNOT_ENABLED, rpcErr.Code)
 	assert.Equal(t, "notEnabled", rpcErr.ErrorString)
 	assert.Equal(t, "Not enabled in configuration.", rpcErr.Message)
 }
@@ -1626,7 +1628,7 @@ func TestAccountTxLimitParameter(t *testing.T) {
 		paramsJSON := []byte(`{"account":"` + validAccount + `","limit":0}`)
 		_, rpcErr := method.Handle(ctx, paramsJSON)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid field 'limit'.", rpcErr.Message)
 	})
 
@@ -1634,7 +1636,7 @@ func TestAccountTxLimitParameter(t *testing.T) {
 		paramsJSON := []byte(`{"account":"` + validAccount + `","limit":"abc"}`)
 		_, rpcErr := method.Handle(ctx, paramsJSON)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid field 'limit', not unsigned integer.", rpcErr.Message)
 	})
 
@@ -1667,42 +1669,42 @@ func TestAccountTxValidationPrecedence(t *testing.T) {
 			name:       "limit before account",
 			apiVersion: types.ApiVersion1,
 			params:     `{"account":"not-an-account","limit":0}`,
-			code:       types.RpcINVALID_PARAMS,
+			code:       rpcerrors.RpcINVALID_PARAMS,
 			message:    "Invalid field 'limit'.",
 		},
 		{
 			name:       "binary type before limit",
 			apiVersion: types.ApiVersion2,
 			params:     `{"binary":"true","limit":0}`,
-			code:       types.RpcINVALID_PARAMS,
+			code:       rpcerrors.RpcINVALID_PARAMS,
 			message:    "Invalid field 'binary'.",
 		},
 		{
 			name:       "forward type before limit",
 			apiVersion: types.ApiVersion2,
 			params:     `{"forward":"true","limit":0}`,
-			code:       types.RpcINVALID_PARAMS,
+			code:       rpcerrors.RpcINVALID_PARAMS,
 			message:    "Invalid field 'forward'.",
 		},
 		{
 			name:       "legacy boolean coercion after limit",
 			apiVersion: types.ApiVersion1,
 			params:     `{"binary":{},"limit":0}`,
-			code:       types.RpcINVALID_PARAMS,
+			code:       rpcerrors.RpcINVALID_PARAMS,
 			message:    "Invalid field 'limit'.",
 		},
 		{
 			name:       "account before ledger arguments",
 			apiVersion: types.ApiVersion2,
 			params:     `{"account":"not-an-account","ledger_hash":"bad"}`,
-			code:       types.RpcACT_MALFORMED,
+			code:       rpcerrors.RpcACT_MALFORMED,
 			message:    "Account malformed.",
 		},
 		{
 			name:       "ledger arguments before marker",
 			apiVersion: types.ApiVersion2,
 			params:     `{"account":"` + validAccount + `","ledger_hash":"bad","marker":{}}`,
-			code:       types.RpcINVALID_PARAMS,
+			code:       rpcerrors.RpcINVALID_PARAMS,
 			message:    "ledgerHashMalformed",
 		},
 	}
@@ -1834,7 +1836,7 @@ func TestAccountTxServiceErrors(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 		assert.NotContains(t, rpcErr.Message, "database connection failed")
 	})
@@ -1871,7 +1873,7 @@ func TestAccountTxServiceErrors(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNOT_ENABLED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcNOT_ENABLED, rpcErr.Code)
 		assert.Equal(t, "notEnabled", rpcErr.ErrorString)
 		assert.Equal(t, "Not enabled in configuration.", rpcErr.Message)
 	})

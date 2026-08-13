@@ -3,6 +3,7 @@
 package check_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -28,20 +29,14 @@ func requireTrustLineInBothDirs(t *testing.T, env *jtx.TestEnv, holder, issuer *
 	t.Helper()
 
 	lineKey := keylet.Line(holder.ID, issuer.ID, currency)
-	require.True(t, env.LedgerEntryExists(lineKey), "trust line should exist")
-
-	inDir := func(owner *jtx.Account) bool {
-		found := false
-		_ = state.DirForEach(env.Ledger(), keylet.OwnerDir(owner.ID), func(itemKey [32]byte) error {
-			if itemKey == lineKey.Key {
-				found = true
-			}
-			return nil
-		})
-		return found
-	}
-	require.True(t, inDir(holder), "trust line missing from holder's owner directory")
-	require.True(t, inDir(issuer), "trust line missing from issuer's owner directory")
+	data, err := env.LedgerEntry(lineKey)
+	require.NoError(t, err)
+	line, err := state.ParseRippleState(data)
+	require.NoError(t, err)
+	jtx.RequireOwnerDirectoryContains(t, env, holder, lineKey.Key, true)
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, lineKey.Key, true)
+	require.Zero(t, line.LowNode)
+	require.Zero(t, line.HighNode)
 }
 
 // TestCheck_Enabled tests that all check-related facilities are available.
@@ -145,13 +140,30 @@ func TestCheck_CreateValid(t *testing.T) {
 		env.Close()
 
 		// All optional fields combined
+		sequence := env.Seq(alice)
+		expiration := uint32(env.Now().Unix()-protocol.RippleEpochUnix) + 1
 		result = env.Submit(check.CheckCreate(alice, bob, USD(50)).
-			Expiration(uint32(env.Now().Unix()-protocol.RippleEpochUnix) + 1).
+			Expiration(expiration).
 			SourceTag(12).
 			DestTag(13).
 			InvoiceID("0000000000000000000000000000000000000000000000000000000000000004").Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
+
+		checkKey := keylet.Check(alice.ID, sequence)
+		data, err := env.LedgerEntry(checkKey)
+		require.NoError(t, err)
+		stored, err := state.ParseCheck(data)
+		require.NoError(t, err)
+		require.Equal(t, expiration, stored.Expiration)
+		require.True(t, stored.HasSourceTag)
+		require.Equal(t, uint32(12), stored.SourceTag)
+		require.True(t, stored.HasDestTag)
+		require.Equal(t, uint32(13), stored.DestinationTag)
+		require.True(t, stored.HasInvoiceID)
+		require.Equal(t, byte(4), stored.InvoiceID[31])
+		jtx.RequireOwnerDirectoryContains(t, env, alice, checkKey.Key, true)
+		jtx.RequireOwnerDirectoryContains(t, env, bob, checkKey.Key, true)
 	})
 
 	// Reference: rippled Check_test.cpp testCreateValid (lines 266-289)
@@ -564,8 +576,8 @@ func TestCheck_CashXRP(t *testing.T) {
 
 		// Reset balances for next test
 		master := env.MasterAccount()
-		env.Submit(payment.Pay(master, alice, uint64(jtx.XRP(10))+baseFee).Build())
-		env.Submit(payment.Pay(bob, master, uint64(jtx.XRP(10))-baseFee*2).Build())
+		jtx.RequireTxSuccess(t, env.Submit(payment.Pay(master, alice, uint64(jtx.XRP(10))+baseFee).Build()))
+		jtx.RequireTxSuccess(t, env.Submit(payment.Pay(bob, master, uint64(jtx.XRP(10))-baseFee*2).Build()))
 		env.Close()
 		jtx.RequireBalance(t, env, alice, startBalance)
 		jtx.RequireBalance(t, env, bob, startBalance)
@@ -594,6 +606,7 @@ func TestCheck_CashXRP(t *testing.T) {
 		result = env.Submit(check.CheckCashDeliverMin(bob, chkID, tx.NewXRPAmount(int64(checkAmount))).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
+		requireDeliveredAmount(t, result, tx.NewXRPAmount(int64(checkAmount)))
 
 		jtx.RequireBalance(t, env, alice, reserve)
 		jtx.RequireBalance(t, env, bob, startBalance+checkAmount-baseFee*3)
@@ -602,8 +615,8 @@ func TestCheck_CashXRP(t *testing.T) {
 
 		// Reset balances
 		master := env.MasterAccount()
-		env.Submit(payment.Pay(master, alice, checkAmount+baseFee).Build())
-		env.Submit(payment.Pay(bob, master, checkAmount-baseFee*4).Build())
+		jtx.RequireTxSuccess(t, env.Submit(payment.Pay(master, alice, checkAmount+baseFee).Build()))
+		jtx.RequireTxSuccess(t, env.Submit(payment.Pay(bob, master, checkAmount-baseFee*4).Build()))
 		env.Close()
 		jtx.RequireBalance(t, env, alice, startBalance)
 		jtx.RequireBalance(t, env, bob, startBalance)
@@ -628,6 +641,7 @@ func TestCheck_CashXRP(t *testing.T) {
 		result = env.Submit(check.CheckCashDeliverMin(bob, chkID, tx.NewXRPAmount(1)).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
+		requireDeliveredAmount(t, result, tx.NewXRPAmount(int64(checkAmount-1)))
 
 		jtx.RequireBalance(t, env, alice, reserve)
 		jtx.RequireBalance(t, env, bob, startBalance+checkAmount-baseFee*2-1)
@@ -849,16 +863,16 @@ func TestCheck_CashIOU(t *testing.T) {
 
 		// Create checks
 		chkID9 := check.GetCheckID(alice, env.Seq(alice))
-		env.Submit(check.CheckCreate(alice, bob, USD(9)).Build())
+		jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, USD(9)).Build()))
 		env.Close()
 		chkID8 := check.GetCheckID(alice, env.Seq(alice))
-		env.Submit(check.CheckCreate(alice, bob, USD(8)).Build())
+		jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, USD(8)).Build()))
 		env.Close()
 		chkID7 := check.GetCheckID(alice, env.Seq(alice))
-		env.Submit(check.CheckCreate(alice, bob, USD(7)).Build())
+		jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, USD(7)).Build()))
 		env.Close()
 		chkID6 := check.GetCheckID(alice, env.Seq(alice))
-		env.Submit(check.CheckCreate(alice, bob, USD(6)).Build())
+		jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, USD(6)).Build()))
 		env.Close()
 
 		// DeliverMin exceeding available fails
@@ -1013,18 +1027,18 @@ func TestCheck_CashIOU(t *testing.T) {
 
 		// alice creates checks ahead of time.
 		chkID1 := check.GetCheckID(alice, env.Seq(alice))
-		env.Submit(check.CheckCreate(alice, bob, USD(1)).Build())
+		jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, USD(1)).Build()))
 		env.Close()
 
 		chkID2 := check.GetCheckID(alice, env.Seq(alice))
-		env.Submit(check.CheckCreate(alice, bob, USD(2)).Build())
+		jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, USD(2)).Build()))
 		env.Close()
 
 		// Set up trust lines and fund alice.
-		env.Submit(trustset.TrustSet(alice, USD(20)).Build())
-		env.Submit(trustset.TrustSet(bob, USD(20)).Build())
+		jtx.RequireTxSuccess(t, env.Submit(trustset.TrustSet(alice, USD(20)).Build()))
+		jtx.RequireTxSuccess(t, env.Submit(trustset.TrustSet(bob, USD(20)).Build()))
 		env.Close()
-		env.Submit(payment.PayIssued(gw, alice, USD(8)).Build())
+		jtx.RequireTxSuccess(t, env.Submit(payment.PayIssued(gw, alice, USD(8)).Build()))
 		env.Close()
 
 		// Give bob a regular key and signers.
@@ -1122,6 +1136,9 @@ func TestCheck_CashXferFee(t *testing.T) {
 	result = env.Submit(check.CheckCashDeliverMin(bob, chkID125, USD(75)).Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
+	jtx.RequireIOUBalance(t, env, alice, gw, "USD", 875)
+	jtx.RequireIOUBalance(t, env, bob, gw, "USD", 100)
+	requireDeliveredAmount(t, result, USD(100))
 
 	// gw changes fee to 20%
 	env.SetTransferRate(gw, 1200000000)
@@ -1131,6 +1148,9 @@ func TestCheck_CashXferFee(t *testing.T) {
 	result = env.Submit(check.CheckCashAmount(bob, chkID120, USD(50)).Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
+	jtx.RequireIOUBalance(t, env, alice, gw, "USD", 815)
+	jtx.RequireIOUBalance(t, env, bob, gw, "USD", 150)
+	requireDeliveredAmount(t, result, USD(50))
 }
 
 // TestCheck_CashQuality tests check cashing with QualityIn/QualityOut settings.
@@ -1171,9 +1191,14 @@ func TestCheck_CashQuality(t *testing.T) {
 		env.Close()
 
 		// Check cash should deliver USD(10) regardless of alice's QualityIn
+		aliceBefore := env.BalanceIOU(alice, "USD", gw)
+		bobBefore := env.BalanceIOU(bob, "USD", gw)
 		result = env.Submit(check.CheckCashAmount(bob, chkID, USD(10)).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
+		require.Equal(t, aliceBefore-10, env.BalanceIOU(alice, "USD", gw))
+		require.Equal(t, bobBefore+10, env.BalanceIOU(bob, "USD", gw))
+		requireDeliveredAmount(t, result, USD(10))
 
 		// Reset
 		result = env.Submit(trustset.TrustSet(alice, USD(1000)).QualityIn(0).Build())
@@ -1203,9 +1228,14 @@ func TestCheck_CashQuality(t *testing.T) {
 
 		// With QualityIn=50%, bob can only effectively request USD(5).
 		// The flow engine needs srcToDst=10 to deliver quality-adjusted 5.
+		aliceBefore := env.BalanceIOU(alice, "USD", gw)
+		bobBefore := env.BalanceIOU(bob, "USD", gw)
 		result = env.Submit(check.CheckCashAmount(bob, chkID, USD(5)).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
+		require.Equal(t, aliceBefore-10, env.BalanceIOU(alice, "USD", gw))
+		require.Equal(t, bobBefore+10, env.BalanceIOU(bob, "USD", gw))
+		requireDeliveredAmount(t, result, USD(5))
 
 		// Reset
 		result = env.Submit(trustset.TrustSet(bob, USD(1000)).QualityIn(0).Build())
@@ -1227,9 +1257,14 @@ func TestCheck_CashQuality(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
+		aliceBefore := env.BalanceIOU(alice, "USD", gw)
+		bobBefore := env.BalanceIOU(bob, "USD", gw)
 		result = env.Submit(check.CheckCashAmount(bob, chkID, USD(10)).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
+		require.Equal(t, aliceBefore-10, env.BalanceIOU(alice, "USD", gw))
+		require.Equal(t, bobBefore+10, env.BalanceIOU(bob, "USD", gw))
+		requireDeliveredAmount(t, result, USD(10))
 
 		// Reset
 		result = env.Submit(trustset.TrustSet(alice, USD(1000)).QualityOut(0).Build())
@@ -1251,9 +1286,14 @@ func TestCheck_CashQuality(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
+		aliceBefore := env.BalanceIOU(alice, "USD", gw)
+		bobBefore := env.BalanceIOU(bob, "USD", gw)
 		result = env.Submit(check.CheckCashAmount(bob, chkID, USD(10)).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
+		require.Equal(t, aliceBefore-10, env.BalanceIOU(alice, "USD", gw))
+		require.Equal(t, bobBefore+10, env.BalanceIOU(bob, "USD", gw))
+		requireDeliveredAmount(t, result, USD(10))
 
 		// Reset
 		result = env.Submit(trustset.TrustSet(bob, USD(1000)).QualityOut(0).Build())
@@ -1289,11 +1329,6 @@ func TestCheck_CashInvalid(t *testing.T) {
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	// alice writes a check to bob before he has a trust line; it stays on the
-	// ledger uncashed.
-	env.Submit(check.CheckCreate(alice, bob, USD(20)).Build())
-	env.Close()
-
 	// Set up bob's trustline
 	result = env.Submit(trustset.TrustSet(bob, USD(20)).Build())
 	jtx.RequireTxSuccess(t, result)
@@ -1309,39 +1344,17 @@ func TestCheck_CashInvalid(t *testing.T) {
 
 	// Create checks for the common failure tests
 	chkIDU := check.GetCheckID(alice, env.Seq(alice))
-	env.Submit(check.CheckCreate(alice, bob, USD(20)).Build())
+	jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, USD(20)).Build()))
 	env.Close()
 
 	chkIDX := check.GetCheckID(alice, env.Seq(alice))
-	env.Submit(check.CheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(10))).Build())
+	jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(10))).Build()))
 	env.Close()
 
 	// Create an expiring check
 	now := uint32(env.Now().Unix() - protocol.RippleEpochUnix)
 	chkIDExp := check.GetCheckID(alice, env.Seq(alice))
-	env.Submit(check.CheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(10))).Expiration(now + 1).Build())
-	env.Close()
-
-	// Create checks for freeze tests
-	chkIDFroz1 := check.GetCheckID(alice, env.Seq(alice))
-	env.Submit(check.CheckCreate(alice, bob, USD(1)).Build())
-	env.Close()
-	chkIDFroz2 := check.GetCheckID(alice, env.Seq(alice))
-	env.Submit(check.CheckCreate(alice, bob, USD(2)).Build())
-	env.Close()
-	chkIDFroz3 := check.GetCheckID(alice, env.Seq(alice))
-	env.Submit(check.CheckCreate(alice, bob, USD(3)).Build())
-	env.Close()
-	chkIDFroz4 := check.GetCheckID(alice, env.Seq(alice))
-	env.Submit(check.CheckCreate(alice, bob, USD(4)).Build())
-	env.Close()
-
-	// Create checks for RequireDest tests
-	chkIDNoDest1 := check.GetCheckID(alice, env.Seq(alice))
-	env.Submit(check.CheckCreate(alice, bob, USD(1)).Build())
-	env.Close()
-	chkIDHasDest2 := check.GetCheckID(alice, env.Seq(alice))
-	env.Submit(check.CheckCreate(alice, bob, USD(2)).DestTag(7).Build())
+	jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(10))).Expiration(now+1).Build()))
 	env.Close()
 
 	// Common failing cases for both XRP and IOU
@@ -1484,16 +1497,14 @@ func TestCheck_CashInvalid(t *testing.T) {
 
 	// Frozen currency checks
 	t.Run("FrozenCurrency", func(t *testing.T) {
-		// Give alice her USD back for the frozen tests
-		result := env.Submit(payment.PayIssued(bob, alice, USD(20)).Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
+		env, gw, alice, bob, USD, checkIDs := newFrozenCurrencyCheckFixture(t)
+		chkIDFroz1, chkIDFroz2, chkIDFroz3, chkIDFroz4 := checkIDs[0], checkIDs[1], checkIDs[2], checkIDs[3]
 
 		// Global freeze
 		env.EnableGlobalFreeze(gw)
 		env.Close()
 
-		result = env.Submit(check.CheckCashAmount(bob, chkIDFroz1, USD(1)).Build())
+		result := env.Submit(check.CheckCashAmount(bob, chkIDFroz1, USD(1)).Build())
 		require.Equal(t, "tecPATH_PARTIAL", result.Code)
 		env.Close()
 
@@ -1511,7 +1522,7 @@ func TestCheck_CashInvalid(t *testing.T) {
 
 		// Freeze individual trustline (alice's side from gw)
 		aliceUSD := tx.NewIssuedAmountFromFloat64(0, "USD", alice.Address)
-		env.Submit(trustset.TrustSet(gw, aliceUSD).Freeze().Build())
+		jtx.RequireTxSuccess(t, env.Submit(trustset.TrustSet(gw, aliceUSD).Freeze().Build()))
 		env.Close()
 
 		result = env.Submit(check.CheckCashAmount(bob, chkIDFroz2, USD(2)).Build())
@@ -1519,7 +1530,7 @@ func TestCheck_CashInvalid(t *testing.T) {
 		env.Close()
 
 		// Clear freeze
-		env.Submit(trustset.TrustSet(gw, aliceUSD).ClearFreeze().Build())
+		jtx.RequireTxSuccess(t, env.Submit(trustset.TrustSet(gw, aliceUSD).ClearFreeze().Build()))
 		env.Close()
 
 		result = env.Submit(check.CheckCashAmount(bob, chkIDFroz2, USD(2)).Build())
@@ -1528,7 +1539,7 @@ func TestCheck_CashInvalid(t *testing.T) {
 
 		// Freeze bob's trustline
 		bobUSD := tx.NewIssuedAmountFromFloat64(0, "USD", bob.Address)
-		env.Submit(trustset.TrustSet(gw, bobUSD).Freeze().Build())
+		jtx.RequireTxSuccess(t, env.Submit(trustset.TrustSet(gw, bobUSD).Freeze().Build()))
 		env.Close()
 
 		result = env.Submit(check.CheckCashAmount(bob, chkIDFroz3, USD(3)).Build())
@@ -1540,7 +1551,7 @@ func TestCheck_CashInvalid(t *testing.T) {
 		env.Close()
 
 		// Clear bob's freeze
-		env.Submit(trustset.TrustSet(gw, bobUSD).ClearFreeze().Build())
+		jtx.RequireTxSuccess(t, env.Submit(trustset.TrustSet(gw, bobUSD).ClearFreeze().Build()))
 		env.Close()
 
 		result = env.Submit(check.CheckCashDeliverMin(bob, chkIDFroz3, USD(1)).Build())
@@ -1548,7 +1559,7 @@ func TestCheck_CashInvalid(t *testing.T) {
 		env.Close()
 
 		// Freeze from bob's direction
-		env.Submit(trustset.TrustSet(bob, USD(20)).Freeze().Build())
+		jtx.RequireTxSuccess(t, env.Submit(trustset.TrustSet(bob, USD(20)).Freeze().Build()))
 		env.Close()
 
 		result = env.Submit(check.CheckCashAmount(bob, chkIDFroz4, USD(4)).Build())
@@ -1560,7 +1571,7 @@ func TestCheck_CashInvalid(t *testing.T) {
 		env.Close()
 
 		// Clear bob's freeze
-		env.Submit(trustset.TrustSet(bob, USD(20)).ClearFreeze().Build())
+		jtx.RequireTxSuccess(t, env.Submit(trustset.TrustSet(bob, USD(20)).ClearFreeze().Build()))
 		env.Close()
 
 		result = env.Submit(check.CheckCashAmount(bob, chkIDFroz4, USD(4)).Build())
@@ -1570,6 +1581,7 @@ func TestCheck_CashInvalid(t *testing.T) {
 
 	// RequireDest flag
 	t.Run("RequireDest", func(t *testing.T) {
+		env, _, bob, USD, chkIDNoDest1, chkIDHasDest2 := newRequireDestCheckFixture(t)
 		// Set RequireDest on bob
 		result := env.Submit(accountset.AccountSet(bob).RequireDest().Build())
 		jtx.RequireTxSuccess(t, result)
@@ -1601,6 +1613,58 @@ func TestCheck_CashInvalid(t *testing.T) {
 	})
 }
 
+func newRequireDestCheckFixture(t *testing.T) (*jtx.TestEnv, *jtx.Account, *jtx.Account, func(float64) tx.Amount, string, string) {
+	t.Helper()
+	env := jtx.NewTestEnv(t)
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	USD := func(value float64) tx.Amount {
+		return tx.NewIssuedAmountFromFloat64(value, "USD", gw.Address)
+	}
+	env.Fund(gw, alice, bob)
+	env.Close()
+	jtx.RequireTxSuccess(t, env.Submit(trustset.TrustSet(alice, USD(20)).Build()))
+	jtx.RequireTxSuccess(t, env.Submit(trustset.TrustSet(bob, USD(20)).Build()))
+	env.Close()
+	jtx.RequireTxSuccess(t, env.Submit(payment.PayIssued(gw, alice, USD(20)).Build()))
+	env.Close()
+
+	withoutTag := check.GetCheckID(alice, env.Seq(alice))
+	jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, USD(1)).Build()))
+	env.Close()
+	withTag := check.GetCheckID(alice, env.Seq(alice))
+	jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, USD(2)).DestTag(7).Build()))
+	env.Close()
+	return env, alice, bob, USD, withoutTag, withTag
+}
+
+func newFrozenCurrencyCheckFixture(t *testing.T) (*jtx.TestEnv, *jtx.Account, *jtx.Account, *jtx.Account, func(float64) tx.Amount, [4]string) {
+	t.Helper()
+	env := jtx.NewTestEnv(t)
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	USD := func(value float64) tx.Amount {
+		return tx.NewIssuedAmountFromFloat64(value, "USD", gw.Address)
+	}
+	env.Fund(gw, alice, bob)
+	env.Close()
+	jtx.RequireTxSuccess(t, env.Submit(trustset.TrustSet(alice, USD(20)).Build()))
+	jtx.RequireTxSuccess(t, env.Submit(trustset.TrustSet(bob, USD(20)).Build()))
+	env.Close()
+	jtx.RequireTxSuccess(t, env.Submit(payment.PayIssued(gw, alice, USD(20)).Build()))
+	env.Close()
+
+	var checkIDs [4]string
+	for i, amount := range []float64{1, 2, 3, 4} {
+		checkIDs[i] = check.GetCheckID(alice, env.Seq(alice))
+		jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, USD(amount)).Build()))
+		env.Close()
+	}
+	return env, gw, alice, bob, USD, checkIDs
+}
+
 // TestCheck_CancelValid tests many valid ways to cancel a check.
 // Reference: rippled Check_test.cpp testCancelValid (lines 1665-1833)
 func TestCheck_CancelValid(t *testing.T) {
@@ -1620,29 +1684,29 @@ func TestCheck_CancelValid(t *testing.T) {
 	// Create checks ahead of time.
 	// Three ordinary checks with no expiration.
 	chkID1 := check.GetCheckID(alice, env.Seq(alice))
-	env.Submit(check.CheckCreate(alice, bob, USD(10)).Build())
+	jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, USD(10)).Build()))
 	env.Close()
 
 	chkID2 := check.GetCheckID(alice, env.Seq(alice))
-	env.Submit(check.CheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(10))).Build())
+	jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(10))).Build()))
 	env.Close()
 
 	chkID3 := check.GetCheckID(alice, env.Seq(alice))
-	env.Submit(check.CheckCreate(alice, bob, USD(10)).Build())
+	jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, USD(10)).Build()))
 	env.Close()
 
 	// Three checks that expire in 10 minutes.
 	now := uint32(env.Now().Unix() - protocol.RippleEpochUnix)
 	chkIDNotExp1 := check.GetCheckID(alice, env.Seq(alice))
-	env.Submit(check.CheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(10))).Expiration(now + 600).Build())
+	jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(10))).Expiration(now+600).Build()))
 	env.Close()
 
 	chkIDNotExp2 := check.GetCheckID(alice, env.Seq(alice))
-	env.Submit(check.CheckCreate(alice, bob, USD(10)).Expiration(now + 600).Build())
+	jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, USD(10)).Expiration(now+600).Build()))
 	env.Close()
 
 	chkIDNotExp3 := check.GetCheckID(alice, env.Seq(alice))
-	env.Submit(check.CheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(10))).Expiration(now + 600).Build())
+	jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(10))).Expiration(now+600).Build()))
 	env.Close()
 
 	// Three checks that expire in 1 second.
@@ -1651,73 +1715,79 @@ func TestCheck_CancelValid(t *testing.T) {
 	// advances time by 10 seconds, which would expire them.
 	now = uint32(env.Now().Unix() - protocol.RippleEpochUnix)
 	chkIDExp1 := check.GetCheckID(alice, env.Seq(alice))
-	env.Submit(check.CheckCreate(alice, bob, USD(10)).Expiration(now + 1).Build())
+	jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, USD(10)).Expiration(now+1).Build()))
 
 	chkIDExp2 := check.GetCheckID(alice, env.Seq(alice))
-	env.Submit(check.CheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(10))).Expiration(now + 1).Build())
+	jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(10))).Expiration(now+1).Build()))
 
 	chkIDExp3 := check.GetCheckID(alice, env.Seq(alice))
-	env.Submit(check.CheckCreate(alice, bob, USD(10)).Expiration(now + 1).Build())
+	jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, USD(10)).Expiration(now+1).Build()))
 	env.Close()
 
 	// Two checks to cancel using a regular key and using multisigning.
 	// Reference: rippled Check_test.cpp testCancelValid (lines 1733-1740)
 	chkIDReg := check.GetCheckID(alice, env.Seq(alice))
-	env.Submit(check.CheckCreate(alice, bob, USD(10)).Build())
+	jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, USD(10)).Build()))
 	env.Close()
 
 	chkIDMSig := check.GetCheckID(alice, env.Seq(alice))
-	env.Submit(check.CheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(10))).Build())
+	jtx.RequireTxSuccess(t, env.Submit(check.CheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(10))).Build()))
 	env.Close()
 
 	jtx.RequireOwnerCount(t, env, alice, 11)
 
 	// Creator cancels
 	t.Run("CreatorCancels", func(t *testing.T) {
+		ownerCount := env.AccountInfo(alice).OwnerCount
 		result := env.Submit(check.CheckCancel(alice, chkID1).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireOwnerCount(t, env, alice, 10)
+		jtx.RequireOwnerCount(t, env, alice, ownerCount-1)
 	})
 
 	// Destination cancels
 	t.Run("DestinationCancels", func(t *testing.T) {
+		ownerCount := env.AccountInfo(alice).OwnerCount
 		result := env.Submit(check.CheckCancel(bob, chkID2).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireOwnerCount(t, env, alice, 9)
+		jtx.RequireOwnerCount(t, env, alice, ownerCount-1)
 	})
 
 	// Outsider can't cancel non-expired check
 	t.Run("OutsiderCantCancel", func(t *testing.T) {
+		ownerCount := env.AccountInfo(alice).OwnerCount
 		result := env.Submit(check.CheckCancel(zoe, chkID3).Build())
 		require.Equal(t, "tecNO_PERMISSION", result.Code)
 		env.Close()
-		jtx.RequireOwnerCount(t, env, alice, 9)
+		jtx.RequireOwnerCount(t, env, alice, ownerCount)
 	})
 
 	// Creator cancels unexpired check
 	t.Run("CreatorCancelsUnexpired", func(t *testing.T) {
+		ownerCount := env.AccountInfo(alice).OwnerCount
 		result := env.Submit(check.CheckCancel(alice, chkIDNotExp1).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireOwnerCount(t, env, alice, 8)
+		jtx.RequireOwnerCount(t, env, alice, ownerCount-1)
 	})
 
 	// Destination cancels unexpired check
 	t.Run("DestinationCancelsUnexpired", func(t *testing.T) {
+		ownerCount := env.AccountInfo(alice).OwnerCount
 		result := env.Submit(check.CheckCancel(bob, chkIDNotExp2).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireOwnerCount(t, env, alice, 7)
+		jtx.RequireOwnerCount(t, env, alice, ownerCount-1)
 	})
 
 	// Outsider can't cancel unexpired check
 	t.Run("OutsiderCantCancelUnexpired", func(t *testing.T) {
+		ownerCount := env.AccountInfo(alice).OwnerCount
 		result := env.Submit(check.CheckCancel(zoe, chkIDNotExp3).Build())
 		require.Equal(t, "tecNO_PERMISSION", result.Code)
 		env.Close()
-		jtx.RequireOwnerCount(t, env, alice, 7)
+		jtx.RequireOwnerCount(t, env, alice, ownerCount)
 	})
 
 	// Advance time past expiration
@@ -1726,31 +1796,35 @@ func TestCheck_CancelValid(t *testing.T) {
 
 	// Creator cancels expired check
 	t.Run("CreatorCancelsExpired", func(t *testing.T) {
+		ownerCount := env.AccountInfo(alice).OwnerCount
 		result := env.Submit(check.CheckCancel(alice, chkIDExp1).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireOwnerCount(t, env, alice, 6)
+		jtx.RequireOwnerCount(t, env, alice, ownerCount-1)
 	})
 
 	// Destination cancels expired check
 	t.Run("DestinationCancelsExpired", func(t *testing.T) {
+		ownerCount := env.AccountInfo(alice).OwnerCount
 		result := env.Submit(check.CheckCancel(bob, chkIDExp2).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireOwnerCount(t, env, alice, 5)
+		jtx.RequireOwnerCount(t, env, alice, ownerCount-1)
 	})
 
 	// Outsider CAN cancel expired check
 	t.Run("OutsiderCancelsExpired", func(t *testing.T) {
+		ownerCount := env.AccountInfo(alice).OwnerCount
 		result := env.Submit(check.CheckCancel(zoe, chkIDExp3).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireOwnerCount(t, env, alice, 4)
+		jtx.RequireOwnerCount(t, env, alice, ownerCount-1)
 	})
 
 	// Use a regular key and also multisign to cancel checks.
 	// Reference: rippled Check_test.cpp testCancelValid (lines 1792-1820)
 	t.Run("RegularKey", func(t *testing.T) {
+		ownerCount := env.AccountInfo(alice).OwnerCount
 		alie := jtx.NewAccountWithKeyType("alie", jtx.KeyTypeEd25519)
 		env.SetRegularKey(alice, alie)
 		env.Close()
@@ -1760,7 +1834,7 @@ func TestCheck_CancelValid(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 		// 4 checks remain - 1 cancelled = 3 checks + 1 signer list (set below)
-		jtx.RequireOwnerCount(t, env, alice, 3)
+		jtx.RequireOwnerCount(t, env, alice, ownerCount-1)
 	})
 
 	t.Run("MultiSign", func(t *testing.T) {
@@ -1772,9 +1846,7 @@ func TestCheck_CancelValid(t *testing.T) {
 			{Account: demon, Weight: 1},
 		})
 		env.Close()
-
-		// featureMultiSignReserve is enabled: signer list = 1 owner
-		signersCount := uint32(1)
+		ownerCount := env.AccountInfo(alice).OwnerCount
 
 		// alice uses multisigning to cancel a check.
 		result := env.SubmitMultiSigned(
@@ -1783,23 +1855,23 @@ func TestCheck_CancelValid(t *testing.T) {
 		)
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireOwnerCount(t, env, alice, signersCount+2)
+		jtx.RequireOwnerCount(t, env, alice, ownerCount-1)
 	})
 
 	// Creator and destination cancel the remaining checks.
 	// Reference: rippled Check_test.cpp testCancelValid (lines 1822-1831)
 	t.Run("CleanupRemaining", func(t *testing.T) {
-		signersCount := uint32(1)
+		ownerCount := env.AccountInfo(alice).OwnerCount
 
 		result := env.Submit(check.CheckCancel(alice, chkID3).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireOwnerCount(t, env, alice, signersCount+1)
+		jtx.RequireOwnerCount(t, env, alice, ownerCount-1)
 
 		result = env.Submit(check.CheckCancel(bob, chkIDNotExp3).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
-		jtx.RequireOwnerCount(t, env, alice, signersCount+0)
+		jtx.RequireOwnerCount(t, env, alice, ownerCount-2)
 	})
 }
 
@@ -1850,7 +1922,11 @@ func requireDeliveredAmount(t *testing.T, result jtx.TxResult, expected tx.Amoun
 	require.Equal(t, 0, expected.Compare(got), "delivered_amount = %s, want %s", got.Value(), expected.Value())
 	if !expected.IsNative() {
 		require.Equal(t, expected.Currency, got.Currency)
-		require.Equal(t, expected.Issuer, got.Issuer)
+		if expected.IsMPT() {
+			require.True(t, strings.EqualFold(expected.MPTIssuanceID(), got.MPTIssuanceID()))
+		} else {
+			require.Equal(t, expected.Issuer, got.Issuer)
+		}
 	}
 }
 
@@ -2076,8 +2152,8 @@ func TestCheck_TrustLineCreation(t *testing.T) {
 			return tx.NewIssuedAmountFromFloat64(value, "CK1", gw1.Address)
 		}
 
-		env.FundAmount(gw1, uint64(jtx.XRP(5000)))
-		env.FundAmount(alice, uint64(jtx.XRP(5000)))
+		env.FundAmountNoRipple(gw1, uint64(jtx.XRP(5000)))
+		env.FundAmountNoRipple(alice, uint64(jtx.XRP(5000)))
 		env.Close()
 
 		// Issuer creates check to alice (no trust line needed beforehand)
@@ -2105,8 +2181,8 @@ func TestCheck_TrustLineCreation(t *testing.T) {
 			return tx.NewIssuedAmountFromFloat64(value, "CK5", gw1.Address)
 		}
 
-		env.FundAmount(gw1, uint64(jtx.XRP(5000)))
-		env.FundAmount(alice, uint64(jtx.XRP(5000)))
+		env.FundAmountNoRipple(gw1, uint64(jtx.XRP(5000)))
+		env.FundAmountNoRipple(alice, uint64(jtx.XRP(5000)))
 		env.Close()
 
 		// Set global freeze

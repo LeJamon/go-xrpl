@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -24,7 +26,6 @@ func TestFeatureNoParams(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
-		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
@@ -90,7 +91,6 @@ func TestFeatureNoParamsEmptyObject(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
-		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
@@ -124,7 +124,6 @@ func TestFeatureSingleLookupByName(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
-		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
@@ -179,7 +178,6 @@ func TestFeatureSingleLookupByHexID(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
-		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
@@ -234,7 +232,6 @@ func TestFeatureInvalidName(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
-		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
@@ -261,7 +258,7 @@ func TestFeatureInvalidName(t *testing.T) {
 
 			assert.Nil(t, result, "Expected nil result for invalid feature name")
 			require.NotNil(t, rpcErr, "Expected error for invalid feature name")
-			assert.Equal(t, types.RpcBAD_FEATURE, rpcErr.Code, "rippled returns rpcBAD_FEATURE for an unknown feature")
+			assert.Equal(t, rpcerrors.RpcBAD_FEATURE, rpcErr.Code, "rippled returns rpcBAD_FEATURE for an unknown feature")
 			assert.Contains(t, rpcErr.Message, "Feature not found")
 		})
 	}
@@ -277,7 +274,6 @@ func TestFeatureResponseStructure(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
-		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}

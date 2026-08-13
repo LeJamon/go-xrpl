@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -16,20 +18,20 @@ type preparedAccountHistorySubscribe struct {
 	account string
 }
 
-func prepareAccountHistorySubscribe(ctx *types.RpcContext, request types.SubscriptionRequest) (*preparedAccountHistorySubscribe, *types.RpcError) {
+func prepareAccountHistorySubscribe(ctx *types.RpcContext, request types.SubscriptionRequest) (*preparedAccountHistorySubscribe, *rpcerrors.RpcError) {
 	present := accountHistoryPresent(request)
 	if !present {
 		return nil, nil
 	}
 	services := rpcServices(ctx)
-	if services == nil || services.Ledger == nil {
-		return nil, types.RpcErrorNotEnabled("")
+	if services == nil || services.Ledger() == nil {
+		return nil, rpcerrors.RpcErrorNotEnabled("")
 	}
-	if tables, ok := services.Ledger.(types.TxTablesProvider); ok && !tables.UseTxTables() {
-		return nil, types.RpcErrorNotEnabled("")
+	if tables, ok := services.Ledger().(types.TxTablesProvider); ok && !tables.UseTxTables() {
+		return nil, rpcerrors.RpcErrorNotEnabled("")
 	}
-	if services.AccountHistorySubscriptions == nil {
-		return nil, types.RpcErrorNotEnabled("")
+	if services.AccountHistorySubscriptions() == nil {
+		return nil, rpcerrors.RpcErrorNotEnabled("")
 	}
 	if ctx != nil {
 		ctx.LoadCost = uint32(resource.FeeMediumBurdenRPC().Cost())
@@ -39,12 +41,12 @@ func prepareAccountHistorySubscribe(ctx *types.RpcContext, request types.Subscri
 		return nil, rpcErr
 	}
 	return &preparedAccountHistorySubscribe{
-		service: services.AccountHistorySubscriptions,
+		service: services.AccountHistorySubscriptions(),
 		account: account,
 	}, nil
 }
 
-func (p *preparedAccountHistorySubscribe) validate(conn *subscription.Connection) *types.RpcError {
+func (p *preparedAccountHistorySubscribe) validate(conn *subscription.Connection) *rpcerrors.RpcError {
 	if p == nil {
 		return nil
 	}
@@ -57,7 +59,7 @@ func (p *preparedAccountHistorySubscribe) apply(conn *subscription.Connection) {
 	}
 }
 
-func applyAccountHistorySubscribe(ctx *types.RpcContext, conn *subscription.Connection, request types.SubscriptionRequest) (string, *types.RpcError) {
+func applyAccountHistorySubscribe(ctx *types.RpcContext, conn *subscription.Connection, request types.SubscriptionRequest) (string, *rpcerrors.RpcError) {
 	prepared, rpcErr := prepareAccountHistorySubscribe(ctx, request)
 	if rpcErr != nil {
 		return "", rpcErr
@@ -72,7 +74,7 @@ func applyAccountHistorySubscribe(ctx *types.RpcContext, conn *subscription.Conn
 	return accountHistoryWarning, nil
 }
 
-func applyAccountHistoryUnsubscribe(ctx *types.RpcContext, conn *subscription.Connection, request types.SubscriptionRequest) *types.RpcError {
+func applyAccountHistoryUnsubscribe(ctx *types.RpcContext, conn *subscription.Connection, request types.SubscriptionRequest) *rpcerrors.RpcError {
 	prepared, rpcErr := prepareAccountHistoryUnsubscribe(ctx, request)
 	if rpcErr != nil {
 		return rpcErr
@@ -87,7 +89,7 @@ type preparedAccountHistoryUnsubscribe struct {
 	historyOnly bool
 }
 
-func prepareAccountHistoryUnsubscribe(ctx *types.RpcContext, request types.SubscriptionRequest) (*preparedAccountHistoryUnsubscribe, *types.RpcError) {
+func prepareAccountHistoryUnsubscribe(ctx *types.RpcContext, request types.SubscriptionRequest) (*preparedAccountHistoryUnsubscribe, *rpcerrors.RpcError) {
 	if !accountHistoryPresent(request) {
 		return nil, nil
 	}
@@ -98,7 +100,7 @@ func prepareAccountHistoryUnsubscribe(ctx *types.RpcContext, request types.Subsc
 	services := rpcServices(ctx)
 	var service types.AccountHistorySubscriptionService
 	if services != nil {
-		service = services.AccountHistorySubscriptions
+		service = services.AccountHistorySubscriptions()
 	}
 	return &preparedAccountHistoryUnsubscribe{
 		service:     service,
@@ -121,26 +123,26 @@ func accountHistoryPresent(request types.SubscriptionRequest) bool {
 	return request.AccountHistory != nil
 }
 
-func parseAccountHistoryRequest(request types.SubscriptionRequest, unsubscribe bool) (string, bool, *types.RpcError) {
+func parseAccountHistoryRequest(request types.SubscriptionRequest, unsubscribe bool) (string, bool, *rpcerrors.RpcError) {
 	wire := request.WireArrays()
 	if !wire.Present {
 		if request.AccountHistory == nil || !types.IsValidClassicAddress(request.AccountHistory.Account) {
-			return "", false, types.RpcErrorInvalidParams("Invalid parameters.")
+			return "", false, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 		return request.AccountHistory.Account, unsubscribe && request.AccountHistory.StopHistoryTxOnly, nil
 	}
 
 	var nested map[string]json.RawMessage
 	if err := json.Unmarshal(wire.AccountHistory, &nested); err != nil || nested == nil {
-		return "", false, types.RpcErrorInvalidParams("Invalid parameters.")
+		return "", false, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	rawAccount, ok := nested["account"]
 	if !ok {
-		return "", false, types.RpcErrorInvalidParams("Invalid parameters.")
+		return "", false, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	var account string
 	if err := json.Unmarshal(rawAccount, &account); err != nil || !types.IsValidClassicAddress(account) {
-		return "", false, types.RpcErrorInvalidParams("Invalid parameters.")
+		return "", false, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
 	historyOnly := false
@@ -148,7 +150,7 @@ func parseAccountHistoryRequest(request types.SubscriptionRequest, unsubscribe b
 		if rawStop, ok := nested["stop_history_tx_only"]; ok {
 			trimmed := bytes.TrimSpace(rawStop)
 			if !bytes.Equal(trimmed, []byte("true")) && !bytes.Equal(trimmed, []byte("false")) {
-				return "", false, types.RpcErrorInvalidParams("Invalid parameters.")
+				return "", false, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 			}
 			historyOnly = bytes.Equal(trimmed, []byte("true"))
 		}
@@ -156,19 +158,19 @@ func parseAccountHistoryRequest(request types.SubscriptionRequest, unsubscribe b
 	return account, historyOnly, nil
 }
 
-func rpcServices(ctx *types.RpcContext) *types.ServiceContainer {
+func rpcServices(ctx *types.RpcContext) *types.ServiceGraph {
 	if ctx == nil {
 		return nil
 	}
 	return ctx.Services
 }
 
-func removeAccountHistoryConnection(services *types.ServiceContainer, conn *subscription.Connection) {
-	if services != nil && services.AccountHistorySubscriptions != nil {
-		services.AccountHistorySubscriptions.RemoveConnection(conn)
+func removeAccountHistoryConnection(services *types.ServiceGraph, conn *subscription.Connection) {
+	if services != nil && services.AccountHistorySubscriptions() != nil {
+		services.AccountHistorySubscriptions().RemoveConnection(conn)
 	}
 }
 
-func hasAccountHistorySubscriptions(services *types.ServiceContainer, conn *subscription.Connection) bool {
-	return services != nil && services.AccountHistorySubscriptions != nil && services.AccountHistorySubscriptions.HasSubscriptions(conn)
+func hasAccountHistorySubscriptions(services *types.ServiceGraph, conn *subscription.Connection) bool {
+	return services != nil && services.AccountHistorySubscriptions() != nil && services.AccountHistorySubscriptions().HasSubscriptions(conn)
 }

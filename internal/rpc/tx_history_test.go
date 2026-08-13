@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -41,10 +43,10 @@ func (m *mockLedgerServiceTxHistory) GetTransactionHistory(ctx context.Context, 
 	}, nil
 }
 
-func newTxHistoryTestServices(mock *mockLedgerServiceTxHistory) *types.ServiceContainer {
-	return &types.ServiceContainer{
+func newTxHistoryTestServices(mock *mockLedgerServiceTxHistory) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger: mock,
-	}
+	})
 }
 
 // Tests
@@ -262,7 +264,7 @@ func TestTxHistoryDatabaseNotConfigured(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcNOT_ENABLED, rpcErr.Code, "Should return notEnabled (12) for no database")
+	assert.Equal(t, rpcerrors.RpcNOT_ENABLED, rpcErr.Code, "Should return notEnabled (12) for no database")
 	assert.Equal(t, "notEnabled", rpcErr.ErrorString)
 	assert.Equal(t, "Not enabled in configuration.", rpcErr.Message)
 }
@@ -288,7 +290,7 @@ func TestTxHistoryServiceUnavailable(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
@@ -297,7 +299,7 @@ func TestTxHistoryServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		params := map[string]any{
@@ -309,7 +311,7 @@ func TestTxHistoryServiceUnavailable(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 }
@@ -338,7 +340,7 @@ func TestTxHistoryInternalError(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 }
 
 // TestTxHistoryMethodMetadata tests the method's metadata functions.

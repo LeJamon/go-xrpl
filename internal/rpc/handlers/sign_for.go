@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -20,7 +22,7 @@ import (
 // This adds a signature to a transaction for multi-signing
 type SignForMethod struct{ baseHandler }
 
-func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (result any, rpcErr *types.RpcError) {
+func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (result any, rpcErr *rpcerrors.RpcError) {
 	if rpcErr := rejectDisabledSigning(ctx); rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -36,7 +38,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
@@ -44,14 +46,14 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	// transactionSignFor order. An unparseable account is srcActMalformed
 	// ("Invalid field 'account'."), not the generic actMalformed.
 	if request.Account == "" {
-		return nil, types.RpcErrorMissingField("account")
+		return nil, rpcerrors.RpcErrorMissingField("account")
 	}
 	if !addresscodec.IsValidClassicAddress(request.Account) {
-		return nil, types.RpcErrorSrcActMalformed("Invalid field 'account'.")
+		return nil, rpcerrors.RpcErrorSrcActMalformed("Invalid field 'account'.")
 	}
 
 	if len(request.TxJson) == 0 {
-		return nil, types.RpcErrorMissingField("tx_json")
+		return nil, rpcerrors.RpcErrorMissingField("tx_json")
 	}
 
 	signatureTargetPresent := jsonFieldPresent(params, "signature_target")
@@ -59,28 +61,28 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	decoder := json.NewDecoder(bytes.NewReader(request.TxJson))
 	decoder.UseNumber()
 	if err := decoder.Decode(&txMap); err != nil {
-		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
+		return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		return nil, types.RpcErrorInvalidParams("Invalid tx_json: expected object")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid tx_json: expected object")
 	}
 	if txMap == nil {
-		return nil, types.RpcErrorExpectedField("tx_json", "object")
+		return nil, rpcerrors.RpcErrorExpectedField("tx_json", "object")
 	}
 
 	// On networks with ID > 1024, sign_for requires tx_json to carry a matching
 	// integral NetworkID, else invalidParams. Unlike sign/submit — which autofill
 	// a missing NetworkID — sign_for rejects, so a multisigner cannot sign for the
 	// wrong network. Mirrors rippled checkNetworkID in transactionSignFor.
-	if ctx.Services != nil && ctx.Services.Ledger != nil {
-		if networkID := ctx.Services.Ledger.GetServerInfo().NetworkID; networkID > 1024 {
+	if ctx.Services != nil && ctx.Services.Ledger() != nil {
+		if networkID := ctx.Services.Ledger().GetServerInfo().NetworkID; networkID > 1024 {
 			v, ok := txMap["NetworkID"]
 			if !ok {
-				return nil, types.RpcErrorMissingField("tx_json.NetworkID")
+				return nil, rpcerrors.RpcErrorMissingField("tx_json.NetworkID")
 			}
 			if n, ok := integralNetworkID(v); !ok || n != networkID {
-				return nil, types.RpcErrorInvalidField("tx_json.NetworkID")
+				return nil, rpcerrors.RpcErrorInvalidField("tx_json.NetworkID")
 			}
 		}
 	}
@@ -91,12 +93,12 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 		txMap["SigningPubKey"] = ""
 	}
 	if _, ok := txMap["Sequence"]; !ok {
-		return nil, types.RpcErrorMissingField("tx_json.Sequence")
+		return nil, rpcerrors.RpcErrorMissingField("tx_json.Sequence")
 	}
 	if !signatureTargetPresent {
 		signingPubKey, ok := txMap["SigningPubKey"].(string)
 		if !ok || signingPubKey != "" {
-			return nil, types.RpcErrorInvalidParams(
+			return nil, rpcerrors.RpcErrorInvalidParams(
 				"When multi-signing 'tx_json.SigningPubKey' must be empty.")
 		}
 	}
@@ -106,7 +108,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 		return nil, rpcErr
 	}
 	if signatureTargetPresent && request.SignatureTarget != counterpartySignatureField {
-		return nil, types.RpcErrorInvalidParams(request.SignatureTarget)
+		return nil, rpcerrors.RpcErrorInvalidParams(request.SignatureTarget)
 	}
 	if rpcErr := validateSigningTxJSONShape(txMap); rpcErr != nil {
 		return nil, rpcErr
@@ -114,7 +116,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	if rpcErr := rejectOnlineSigningWithoutCurrentLedger(ctx.Services, request.Offline, ctx.ApiVersion); rpcErr != nil {
 		return nil, rpcErr
 	}
-	if rpcErr := rejectSigningWhenLoaded(ctx.Services, ctx.Unlimited); rpcErr != nil {
+	if rpcErr := rejectSigningWhenLoaded(ctx.Services, ctx.Role.IsUnlimited()); rpcErr != nil {
 		return nil, rpcErr
 	}
 	if rpcErr := validateSignForPreConflict(txMap, params); rpcErr != nil {
@@ -154,7 +156,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	signers := common.Signers
 	if signatureTargetPresent {
 		if common.CounterpartySignature == nil {
-			return nil, types.RpcErrorInvalidParams("Invalid field 'tx_json.CounterpartySignature'.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid field 'tx_json.CounterpartySignature'.")
 		}
 		signers = common.CounterpartySignature.Signers
 	}
@@ -179,7 +181,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 
 	canonicalAccount, accountErr := canonicalAccountID(request.Account)
 	if accountErr != nil {
-		return nil, types.RpcErrorInvalidParams("Invalid field 'account'.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid field 'account'.")
 	}
 	canonicalSigners = append(canonicalSigners, tx.SignerWrapper{Signer: tx.Signer{
 		Account:       canonicalAccount,
@@ -245,9 +247,9 @@ func integralNetworkID(value any) (uint32, bool) {
 	}
 }
 
-func validateSignForPreConflict(txMap map[string]any, params json.RawMessage) *types.RpcError {
+func validateSignForPreConflict(txMap map[string]any, params json.RawMessage) *rpcerrors.RpcError {
 	if _, ok := txMap["Fee"]; !ok {
-		return types.RpcErrorMissingField("tx_json.Fee")
+		return rpcerrors.RpcErrorMissingField("tx_json.Fee")
 	}
 	transactionType := txMap["TransactionType"]
 	if transactionType != "Payment" {
@@ -256,21 +258,21 @@ func validateSignForPreConflict(txMap map[string]any, params json.RawMessage) *t
 	return checkPayment(txMap, params, false, nil)
 }
 
-func validateSigningTxJSONShape(txMap map[string]any) *types.RpcError {
+func validateSigningTxJSONShape(txMap map[string]any) *rpcerrors.RpcError {
 	if _, ok := txMap["TransactionType"]; !ok {
-		return types.RpcErrorMissingField("tx_json.TransactionType")
+		return rpcerrors.RpcErrorMissingField("tx_json.TransactionType")
 	}
 	account, ok := txMap["Account"].(string)
 	if !ok || !addresscodec.IsValidClassicAddress(account) {
 		if _, present := txMap["Account"]; !present {
-			return types.RpcErrorSrcActMissing("Missing field 'tx_json.Account'.")
+			return rpcerrors.RpcErrorSrcActMissing("Missing field 'tx_json.Account'.")
 		}
-		return types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
+		return rpcerrors.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
 	}
 	return nil
 }
 
-func normalizeSigners(value any, feePayer string) ([]map[string]any, *types.RpcError) {
+func normalizeSigners(value any, feePayer string) ([]map[string]any, *rpcerrors.RpcError) {
 	const malformedSigners = "Signers array may only contain Signer entries."
 
 	var values []any
@@ -283,7 +285,7 @@ func normalizeSigners(value any, feePayer string) ([]map[string]any, *types.RpcE
 			values[i] = signers[i]
 		}
 	default:
-		return nil, types.RpcErrorInvalidParams(malformedSigners)
+		return nil, rpcerrors.RpcErrorInvalidParams(malformedSigners)
 	}
 
 	type signerEntry struct {
@@ -295,28 +297,28 @@ func normalizeSigners(value any, feePayer string) ([]map[string]any, *types.RpcE
 	for _, value := range values {
 		wrapper, ok := value.(map[string]any)
 		if !ok || len(wrapper) != 1 {
-			return nil, types.RpcErrorInvalidParams(malformedSigners)
+			return nil, rpcerrors.RpcErrorInvalidParams(malformedSigners)
 		}
 		signer, ok := wrapper["Signer"].(map[string]any)
 		if !ok || len(signer) != 3 {
-			return nil, types.RpcErrorInvalidParams(malformedSigners)
+			return nil, rpcerrors.RpcErrorInvalidParams(malformedSigners)
 		}
 		for _, field := range []string{"Account", "SigningPubKey", "TxnSignature"} {
 			if _, ok := signer[field].(string); !ok {
-				return nil, types.RpcErrorInvalidParams(malformedSigners)
+				return nil, rpcerrors.RpcErrorInvalidParams(malformedSigners)
 			}
 		}
 		account, ok := signer["Account"].(string)
 		if !ok {
-			return nil, types.RpcErrorInvalidParams(malformedSigners)
+			return nil, rpcerrors.RpcErrorInvalidParams(malformedSigners)
 		}
 		canonicalAccount, err := canonicalAccountID(account)
 		if err != nil {
-			return nil, types.RpcErrorInvalidParams(malformedSigners)
+			return nil, rpcerrors.RpcErrorInvalidParams(malformedSigners)
 		}
 		_, id, err := addresscodec.DecodeClassicAddressToAccountID(canonicalAccount)
 		if err != nil {
-			return nil, types.RpcErrorInvalidParams(malformedSigners)
+			return nil, rpcerrors.RpcErrorInvalidParams(malformedSigners)
 		}
 		signer["Account"] = canonicalAccount
 		entries = append(entries, signerEntry{wrapper: wrapper, account: canonicalAccount, id: id})
@@ -327,23 +329,23 @@ func normalizeSigners(value any, feePayer string) ([]map[string]any, *types.RpcE
 	})
 	for i := 1; i < len(entries); i++ {
 		if bytes.Equal(entries[i-1].id, entries[i].id) {
-			return nil, types.RpcErrorInvalidParams(
+			return nil, rpcerrors.RpcErrorInvalidParams(
 				"Duplicate Signers:Signer:Account entries (" + entries[i].account + ") are not allowed.")
 		}
 	}
 
 	canonicalFeePayer, err := canonicalAccountID(feePayer)
 	if err != nil {
-		return nil, types.RpcErrorInvalidParams("Invalid field 'tx_json.Account'.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid field 'tx_json.Account'.")
 	}
 	_, feePayerID, err := addresscodec.DecodeClassicAddressToAccountID(canonicalFeePayer)
 	if err != nil {
-		return nil, types.RpcErrorInvalidParams("Invalid field 'tx_json.Account'.")
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid field 'tx_json.Account'.")
 	}
 	result := make([]map[string]any, len(entries))
 	for i, entry := range entries {
 		if bytes.Equal(entry.id, feePayerID) {
-			return nil, types.RpcErrorInvalidParams(
+			return nil, rpcerrors.RpcErrorInvalidParams(
 				"A Signer may not be the transaction's Account (" + feePayer + ").")
 		}
 		result[i] = entry.wrapper
@@ -351,7 +353,7 @@ func normalizeSigners(value any, feePayer string) ([]map[string]any, *types.RpcE
 	return result, nil
 }
 
-func normalizeTypedSigners(signers []tx.SignerWrapper, feePayer string) ([]tx.SignerWrapper, *types.RpcError) {
+func normalizeTypedSigners(signers []tx.SignerWrapper, feePayer string) ([]tx.SignerWrapper, *rpcerrors.RpcError) {
 	value := make([]any, len(signers))
 	for i, signer := range signers {
 		value[i] = map[string]any{"Signer": map[string]any{

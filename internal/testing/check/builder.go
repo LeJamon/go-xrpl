@@ -1,26 +1,24 @@
 package check
 
 import (
-	"encoding/hex"
 	"fmt"
 
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	checktx "github.com/LeJamon/go-xrpl/internal/tx/check"
-	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // GetCheckID computes the check ledger entry ID from the creator account and sequence.
 // This matches rippled's getCheckIndex(account, sequence).
 func GetCheckID(acc *jtx.Account, seq uint32) string {
-	k := keylet.Check(acc.ID, seq)
-	return hex.EncodeToString(k.Key[:])
+	return jtx.CheckID(acc, seq)
 }
 
 // --- CheckCreateBuilder ---
 
 // CheckCreateBuilder provides a fluent interface for building CheckCreate transactions.
 type CheckCreateBuilder struct {
+	common     commonFields
 	from       *jtx.Account
 	to         *jtx.Account
 	sendMax    tx.Amount
@@ -28,19 +26,11 @@ type CheckCreateBuilder struct {
 	sourceTag  *uint32
 	expiration *uint32
 	invoiceID  string
-	fee        uint64
-	sequence   *uint32
-	flags      uint32
 }
 
 // CheckCreate creates a new CheckCreateBuilder.
 func CheckCreate(from, to *jtx.Account, sendMax tx.Amount) *CheckCreateBuilder {
-	return &CheckCreateBuilder{
-		from:    from,
-		to:      to,
-		sendMax: sendMax,
-		fee:     10, // Default fee: 10 drops
-	}
+	return &CheckCreateBuilder{from: from, to: to, sendMax: sendMax}
 }
 
 // DestTag sets the destination tag.
@@ -69,26 +59,20 @@ func (b *CheckCreateBuilder) InvoiceID(id string) *CheckCreateBuilder {
 
 // Fee sets the transaction fee in drops.
 func (b *CheckCreateBuilder) Fee(f uint64) *CheckCreateBuilder {
-	b.fee = f
-	return b
-}
-
-// Sequence sets the sequence number explicitly.
-func (b *CheckCreateBuilder) Sequence(seq uint32) *CheckCreateBuilder {
-	b.sequence = &seq
+	b.common.fee = &f
 	return b
 }
 
 // Flags sets transaction flags explicitly.
 func (b *CheckCreateBuilder) Flags(flags uint32) *CheckCreateBuilder {
-	b.flags = flags
+	b.common.flags = flags
 	return b
 }
 
 // Build constructs the CheckCreate transaction.
-func (b *CheckCreateBuilder) Build() tx.Transaction {
+func (b *CheckCreateBuilder) Build() *checktx.CheckCreate {
 	c := checktx.NewCheckCreate(b.from.Address, b.to.Address, b.sendMax)
-	c.Fee = fmt.Sprintf("%d", b.fee)
+	b.common.apply(c)
 
 	if b.destTag != nil {
 		c.DestinationTag = b.destTag
@@ -102,32 +86,18 @@ func (b *CheckCreateBuilder) Build() tx.Transaction {
 	if b.sourceTag != nil {
 		c.SourceTag = b.sourceTag
 	}
-	if b.sequence != nil {
-		c.SetSequence(*b.sequence)
-	}
-	if b.flags != 0 {
-		c.SetFlags(b.flags)
-	}
-
 	return c
-}
-
-// BuildCheckCreate is a convenience method that returns the concrete *checktx.CheckCreate type.
-func (b *CheckCreateBuilder) BuildCheckCreate() *checktx.CheckCreate {
-	return b.Build().(*checktx.CheckCreate)
 }
 
 // --- CheckCashBuilder ---
 
 // CheckCashBuilder provides a fluent interface for building CheckCash transactions.
 type CheckCashBuilder struct {
+	common     commonFields
 	account    *jtx.Account
 	checkID    string
 	amount     *tx.Amount
 	deliverMin *tx.Amount
-	fee        uint64
-	sequence   *uint32
-	flags      uint32
 }
 
 // CheckCashAmount creates a CheckCash builder with an exact Amount.
@@ -137,7 +107,6 @@ func CheckCashAmount(account *jtx.Account, checkID string, amount tx.Amount) *Ch
 		account: account,
 		checkID: checkID,
 		amount:  &amount,
-		fee:     10, // Default fee: 10 drops
 	}
 }
 
@@ -148,32 +117,19 @@ func CheckCashDeliverMin(account *jtx.Account, checkID string, deliverMin tx.Amo
 		account:    account,
 		checkID:    checkID,
 		deliverMin: &deliverMin,
-		fee:        10, // Default fee: 10 drops
 	}
-}
-
-// Fee sets the transaction fee in drops.
-func (b *CheckCashBuilder) Fee(f uint64) *CheckCashBuilder {
-	b.fee = f
-	return b
-}
-
-// Sequence sets the sequence number explicitly.
-func (b *CheckCashBuilder) Sequence(seq uint32) *CheckCashBuilder {
-	b.sequence = &seq
-	return b
 }
 
 // Flags sets transaction flags explicitly.
 func (b *CheckCashBuilder) Flags(flags uint32) *CheckCashBuilder {
-	b.flags = flags
+	b.common.flags = flags
 	return b
 }
 
 // Build constructs the CheckCash transaction.
-func (b *CheckCashBuilder) Build() tx.Transaction {
+func (b *CheckCashBuilder) Build() *checktx.CheckCash {
 	c := checktx.NewCheckCash(b.account.Address, b.checkID)
-	c.Fee = fmt.Sprintf("%d", b.fee)
+	b.common.apply(c)
 
 	if b.amount != nil {
 		c.SetExactAmount(*b.amount)
@@ -181,75 +137,53 @@ func (b *CheckCashBuilder) Build() tx.Transaction {
 	if b.deliverMin != nil {
 		c.SetDeliverMin(*b.deliverMin)
 	}
-	if b.sequence != nil {
-		c.SetSequence(*b.sequence)
-	}
-	if b.flags != 0 {
-		c.SetFlags(b.flags)
-	}
-
 	return c
-}
-
-// BuildCheckCash is a convenience method that returns the concrete *checktx.CheckCash type.
-func (b *CheckCashBuilder) BuildCheckCash() *checktx.CheckCash {
-	return b.Build().(*checktx.CheckCash)
 }
 
 // --- CheckCancelBuilder ---
 
 // CheckCancelBuilder provides a fluent interface for building CheckCancel transactions.
 type CheckCancelBuilder struct {
-	account  *jtx.Account
-	checkID  string
-	fee      uint64
-	sequence *uint32
-	flags    uint32
+	common  commonFields
+	account *jtx.Account
+	checkID string
 }
 
 // CheckCancel creates a new CheckCancelBuilder.
 func CheckCancel(account *jtx.Account, checkID string) *CheckCancelBuilder {
-	return &CheckCancelBuilder{
-		account: account,
-		checkID: checkID,
-		fee:     10, // Default fee: 10 drops
-	}
+	return &CheckCancelBuilder{account: account, checkID: checkID}
 }
 
 // Fee sets the transaction fee in drops.
 func (b *CheckCancelBuilder) Fee(f uint64) *CheckCancelBuilder {
-	b.fee = f
-	return b
-}
-
-// Sequence sets the sequence number explicitly.
-func (b *CheckCancelBuilder) Sequence(seq uint32) *CheckCancelBuilder {
-	b.sequence = &seq
+	b.common.fee = &f
 	return b
 }
 
 // Flags sets transaction flags explicitly.
 func (b *CheckCancelBuilder) Flags(flags uint32) *CheckCancelBuilder {
-	b.flags = flags
+	b.common.flags = flags
 	return b
 }
 
 // Build constructs the CheckCancel transaction.
-func (b *CheckCancelBuilder) Build() tx.Transaction {
+func (b *CheckCancelBuilder) Build() *checktx.CheckCancel {
 	c := checktx.NewCheckCancel(b.account.Address, b.checkID)
-	c.Fee = fmt.Sprintf("%d", b.fee)
-
-	if b.sequence != nil {
-		c.SetSequence(*b.sequence)
-	}
-	if b.flags != 0 {
-		c.SetFlags(b.flags)
-	}
-
+	b.common.apply(c)
 	return c
 }
 
-// BuildCheckCancel is a convenience method that returns the concrete *checktx.CheckCancel type.
-func (b *CheckCancelBuilder) BuildCheckCancel() *checktx.CheckCancel {
-	return b.Build().(*checktx.CheckCancel)
+type commonFields struct {
+	fee   *uint64
+	flags uint32
+}
+
+func (f commonFields) apply(transaction tx.Transaction) {
+	common := transaction.GetCommon()
+	if f.fee != nil {
+		common.Fee = fmt.Sprintf("%d", *f.fee)
+	}
+	if f.flags != 0 {
+		common.SetFlags(f.flags)
+	}
 }

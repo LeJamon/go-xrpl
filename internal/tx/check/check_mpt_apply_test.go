@@ -3,6 +3,7 @@ package check
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -19,12 +20,20 @@ import (
 )
 
 type checkMPTView struct {
-	data map[[32]byte][]byte
+	data       map[[32]byte][]byte
+	readErrors map[[32]byte]error
 }
 
-func newCheckMPTView() *checkMPTView { return &checkMPTView{data: make(map[[32]byte][]byte)} }
+func newCheckMPTView() *checkMPTView {
+	return &checkMPTView{data: make(map[[32]byte][]byte), readErrors: make(map[[32]byte]error)}
+}
 
-func (v *checkMPTView) Read(k keylet.Keylet) ([]byte, error)       { return v.data[k.Key], nil }
+func (v *checkMPTView) Read(k keylet.Keylet) ([]byte, error) {
+	if err := v.readErrors[k.Key]; err != nil {
+		return nil, err
+	}
+	return v.data[k.Key], nil
+}
 func (v *checkMPTView) Exists(k keylet.Keylet) (bool, error)       { _, ok := v.data[k.Key]; return ok, nil }
 func (v *checkMPTView) Insert(k keylet.Keylet, data []byte) error  { v.data[k.Key] = data; return nil }
 func (v *checkMPTView) Update(k keylet.Keylet, data []byte) error  { v.data[k.Key] = data; return nil }
@@ -164,6 +173,14 @@ func TestCheckCreateStoresMPTSendMaxAndChecksLock(t *testing.T) {
 	_, lockedCtx, lockedCreate := build(entry.LsfMPTCanTransfer | entry.LsfMPTLocked)
 	if result := lockedCreate.Apply(lockedCtx); result != ter.TecLOCKED {
 		t.Fatalf("locked MPT: got %v, want tecLOCKED", result)
+	}
+
+	for _, holderID := range [][20]byte{srcID, dstID} {
+		failedView, failedCtx, failedCreate := build(entry.LsfMPTCanTransfer)
+		failedView.readErrors[keylet.MPTokenByID(mptID, holderID).Key] = errors.New("storage failure")
+		if result := failedCreate.Apply(failedCtx); result != ter.TefINTERNAL {
+			t.Fatalf("MPT holding read failure for %x: got %v, want tefINTERNAL", holderID, result)
+		}
 	}
 }
 

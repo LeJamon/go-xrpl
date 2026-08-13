@@ -19,18 +19,6 @@ func setDelegate(t *testing.T, env *jtx.TestEnv, owner, authorized *jtx.Account)
 	jtx.RequireTxSuccess(t, env.Submit(ds))
 }
 
-func directoryContains(t *testing.T, env *jtx.TestEnv, owner [20]byte, item [32]byte) bool {
-	t.Helper()
-	found := false
-	require.NoError(t, state.DirForEach(env.Ledger(), keylet.OwnerDir(owner), func(key [32]byte) error {
-		if key == item {
-			found = true
-		}
-		return nil
-	}))
-	return found
-}
-
 func TestAccountDelete_CleansDelegateWhenDeletingDelegator(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	env.EnableFeature("PermissionDelegationV1_1")
@@ -43,15 +31,13 @@ func TestAccountDelete_CleansDelegateWhenDeletingDelegator(t *testing.T) {
 	setDelegate(t, env, alice, bob)
 	env.Close()
 	delegateKey := keylet.Delegate(alice.ID, bob.ID)
-	require.True(t, directoryContains(t, env, bob.ID, delegateKey.Key))
+	jtx.RequireOwnerDirectoryContains(t, env, bob, delegateKey.Key, true)
 
 	env.IncLedgerSeqForAccDel(alice)
-	jtx.RequireTxSuccess(t, env.Submit(newAccountDelete(alice, carol)))
+	submitAccountDeleteSuccess(t, env, alice, carol, delegateKey)
 	env.Close()
 
-	jtx.RequireAccountNotExists(t, env, alice)
-	require.False(t, env.LedgerEntryExists(delegateKey))
-	require.False(t, directoryContains(t, env, bob.ID, delegateKey.Key))
+	jtx.RequireOwnerDirectoryContains(t, env, bob, delegateKey.Key, false)
 }
 
 func TestAccountDelete_CleansDelegateWhenDeletingDelegatee(t *testing.T) {
@@ -76,12 +62,10 @@ func TestAccountDelete_CleansDelegateWhenDeletingDelegatee(t *testing.T) {
 	require.Zero(t, entry.DestinationNode)
 
 	env.IncLedgerSeqForAccDel(bob)
-	jtx.RequireTxSuccess(t, env.Submit(newAccountDelete(bob, carol)))
+	submitAccountDeleteSuccess(t, env, bob, carol, delegateKey)
 	env.Close()
 
-	jtx.RequireAccountNotExists(t, env, bob)
-	require.False(t, env.LedgerEntryExists(delegateKey))
-	require.False(t, directoryContains(t, env, alice.ID, delegateKey.Key))
+	jtx.RequireOwnerDirectoryContains(t, env, alice, delegateKey.Key, false)
 	require.Equal(t, uint32(32), env.OwnerCount(alice))
 }
 
@@ -98,15 +82,16 @@ func TestAccountDelete_CleansMultipleInboundDelegates(t *testing.T) {
 	setDelegate(t, env, alice, bob)
 	setDelegate(t, env, carol, bob)
 	env.Close()
+	aliceDelegate := keylet.Delegate(alice.ID, bob.ID)
+	carolDelegate := keylet.Delegate(carol.ID, bob.ID)
 
 	env.IncLedgerSeqForAccDel(bob)
-	jtx.RequireTxSuccess(t, env.Submit(newAccountDelete(bob, destination)))
+	submitAccountDeleteSuccess(t, env, bob, destination, aliceDelegate, carolDelegate)
 	env.Close()
 
 	for _, owner := range []*jtx.Account{alice, carol} {
 		delegateKey := keylet.Delegate(owner.ID, bob.ID)
-		require.False(t, env.LedgerEntryExists(delegateKey))
-		require.False(t, directoryContains(t, env, owner.ID, delegateKey.Key))
+		jtx.RequireOwnerDirectoryContains(t, env, owner, delegateKey.Key, false)
 		require.Zero(t, env.OwnerCount(owner))
 	}
 }
@@ -143,7 +128,7 @@ func TestAccountDelete_DelegateCleanupFailureIsAtomic(t *testing.T) {
 	balanceBefore := env.Balance(alice)
 	sequenceBefore := env.Seq(alice)
 
-	result := env.Submit(newAccountDelete(alice, carol))
+	result := env.Submit(newAccountDelete(env, alice, carol))
 	jtx.RequireTxFail(t, result, jtx.TefBAD_LEDGER)
 	require.Nil(t, result.Metadata)
 

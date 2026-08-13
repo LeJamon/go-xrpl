@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/txprojection"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
@@ -17,7 +19,7 @@ type TransactionEntryMethod struct{ baseHandler }
 
 func (m *TransactionEntryMethod) RequiredRole() types.Role { return types.RoleUser }
 
-func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
 	if ledgerSpecErr != nil {
 		return nil, ledgerSpecErr
@@ -29,7 +31,7 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	fields := make(map[string]json.RawMessage)
 	if len(params) != 0 {
 		if err := json.Unmarshal(params, &fields); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 	lookupExtra := make(map[string]any)
@@ -42,10 +44,10 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	lookupExtra["validated"] = validated
 	txHashRaw, hasTxHash := fields["tx_hash"]
 	if !hasTxHash {
-		return nil, types.RpcErrorFieldNotFoundTransaction().WithExtra(lookupExtra)
+		return nil, rpcerrors.RpcErrorFieldNotFoundTransaction().WithExtra(lookupExtra)
 	}
 	if !targetLedger.IsClosed() {
-		return nil, types.RpcErrorNotYetImplemented().WithExtra(lookupExtra)
+		return nil, rpcerrors.RpcErrorNotYetImplemented().WithExtra(lookupExtra)
 	}
 
 	var txHashString string
@@ -54,7 +56,7 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	if txHashString != "0" {
 		txHashBytes, err := hex.DecodeString(txHashString)
 		if err != nil || len(txHashBytes) != 32 {
-			return nil, types.RpcErrorMalformedRequestBare().WithExtra(lookupExtra)
+			return nil, rpcerrors.RpcErrorMalformedRequestBare().WithExtra(lookupExtra)
 		}
 		copy(txHash[:], txHashBytes)
 	}
@@ -90,14 +92,14 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 			}
 		}
 	} else {
-		txInfo, lookupErr = ctx.Services.Ledger.GetTransaction(txHash)
+		txInfo, lookupErr = ctx.Services.Ledger().GetTransaction(txHash)
 	}
 	if lookupErr != nil || txInfo == nil {
-		return nil, types.RpcErrorTransactionNotFound("Transaction not found.").WithExtra(lookupExtra)
+		return nil, rpcerrors.RpcErrorTransactionNotFound("Transaction not found.").WithExtra(lookupExtra)
 	}
 	targetSeq := targetLedger.Sequence()
 	if txInfo.LedgerIndex != targetSeq {
-		return nil, types.RpcErrorTransactionNotFound(fmt.Sprintf("Transaction not found in ledger %d", targetSeq)).WithExtra(lookupExtra)
+		return nil, rpcerrors.RpcErrorTransactionNotFound(fmt.Sprintf("Transaction not found in ledger %d", targetSeq)).WithExtra(lookupExtra)
 	}
 
 	// Parse the stored transaction data (VL-encoded binary or JSON)

@@ -22,7 +22,7 @@ func (f *fakePeerSource) PeerCount() int              { return len(f.peers) }
 
 func TestPeersMethod_NilSourceReturnsEmptyList(t *testing.T) {
 	m := &handlers.PeersMethod{}
-	ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, IsAdmin: true}
+	ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin}
 
 	result, rpcErr := m.Handle(ctx, json.RawMessage(`{}`))
 	require.Nil(t, rpcErr)
@@ -47,7 +47,6 @@ func TestPeersMethod_PassesThroughSource(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
-		IsAdmin:    true,
 		PeerSource: src,
 	}
 
@@ -83,7 +82,6 @@ func TestPeersMethod_RelaysClusterMap(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
-		IsAdmin:    true,
 		PeerSource: src,
 	}
 

@@ -447,7 +447,7 @@ func TestPathFindRefreshSharesPathfindAdmissionPerConnection(t *testing.T) {
 	ws, connections := newPathFindRefreshTestServer(t, 1)
 	manager := ws.ensurePathFindRefreshManager()
 	shedder := types.NewClientLoadShedder()
-	ws.services = &types.ServiceContainer{ClientLoad: shedder}
+	ws.services = types.NewTestServiceGraph(&types.ServiceContainer{ClientLoad: shedder})
 	firstStarted := make(chan struct{})
 	latestStarted := make(chan struct{})
 	releaseFirst := make(chan struct{})

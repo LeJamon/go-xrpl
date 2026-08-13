@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	rpctypes "github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 )
 
 // The WS path_find session must enforce the same post-parse amount guards as
@@ -143,7 +143,7 @@ func TestParseAndCreateSession_Domain(t *testing.T) {
 			if rpcErr == nil {
 				t.Fatal("expected domainMalformed error")
 			}
-			if rpcErr.Code != rpctypes.RpcDOMAIN_MALFORMED || rpcErr.ErrorString != "domainMalformed" || rpcErr.Message != "Domain is malformed." {
+			if rpcErr.Code != rpcerrors.RpcDOMAIN_MALFORMED || rpcErr.ErrorString != "domainMalformed" || rpcErr.Message != "Domain is malformed." {
 				t.Fatalf("error = %#v, want rpcDOMAIN_MALFORMED/domainMalformed/Domain is malformed.", rpcErr)
 			}
 		})

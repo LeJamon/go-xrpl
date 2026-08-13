@@ -4,13 +4,14 @@ import (
 	"encoding/json"
 	"slices"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // LedgerRangeMethod handles the ledger_range RPC method
 type LedgerRangeMethod struct{ adminHandler }
 
-func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	// Parse parameters
 	var request struct {
 		StartLedger uint32 `json:"start_ledger"`
@@ -23,23 +24,23 @@ func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 
 	// Validate range
 	if request.StartLedger == 0 || request.StopLedger == 0 {
-		return nil, types.RpcErrorInvalidParams("start_ledger and stop_ledger are required")
+		return nil, rpcerrors.RpcErrorInvalidParams("start_ledger and stop_ledger are required")
 	}
 
 	if request.StartLedger > request.StopLedger {
-		return nil, types.RpcErrorInvalidParams("start_ledger cannot be greater than stop_ledger")
+		return nil, rpcerrors.RpcErrorInvalidParams("start_ledger cannot be greater than stop_ledger")
 	}
 
 	// Limit range size to prevent abuse
 	if request.StopLedger-request.StartLedger > 1000 {
-		return nil, types.RpcErrorInvalidParams("Ledger range too large (max 1000 ledgers)")
+		return nil, rpcerrors.RpcErrorInvalidParams("Ledger range too large (max 1000 ledgers)")
 	}
 
 	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	result, err := ctx.Services.Ledger.GetLedgerRange(ctx.Context, request.StartLedger, request.StopLedger)
+	result, err := ctx.Services.Ledger().GetLedgerRange(ctx.Context, request.StartLedger, request.StopLedger)
 	if err != nil {
 		return nil, rpcInternalError("ledger_range: ledger query failed", err)
 	}

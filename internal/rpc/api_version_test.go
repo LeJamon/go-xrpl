@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -189,7 +191,7 @@ func TestApiVersionMethodsWorkWithEachVersion(t *testing.T) {
 				// txnNotFound).  The only thing we reject is an error indicating
 				// version incompatibility.
 				if rpcErr != nil {
-					assert.NotEqual(t, types.RpcINVALID_API_VERSION, rpcErr.Code,
+					assert.NotEqual(t, rpcerrors.RpcINVALID_API_VERSION, rpcErr.Code,
 						"handler %q should not return invalid_api_version for version %d", name, ver)
 					assert.NotContains(t, rpcErr.Message, "API version",
 						"handler %q should not complain about API version %d", name, ver)

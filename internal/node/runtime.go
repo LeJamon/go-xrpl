@@ -60,7 +60,8 @@ type nodeRuntime struct {
 	resourceManager      *resource.Manager
 	ownsResourceManager  bool
 
-	services      *types.ServiceContainer
+	services      *types.ServiceGraphBuilder
+	serviceGraph  *types.ServiceGraph
 	ledgerAdapter *rpcadapter.LedgerServiceAdapter
 	httpServer    *rpc.Server
 	wsServer      *rpc.WebSocketServer
@@ -71,6 +72,7 @@ type nodeRuntime struct {
 	networkID      uint32
 	retentionFloor func() uint32
 	shutdownCh     chan struct{}
+	shutdowner     types.Shutdowner
 	stopSampler    func()
 	stopWatchdog   func()
 }
@@ -85,6 +87,7 @@ func newNodeRuntime(
 	options RunOptions,
 ) *nodeRuntime {
 	runtimeCtx, cancel := context.WithCancelCause(ctx)
+	shutdownCh := make(chan struct{}, 1)
 	return &nodeRuntime{
 		ctx:        runtimeCtx,
 		cancel:     cancel,
@@ -95,7 +98,24 @@ func newNodeRuntime(
 		rootLogger: rootLogger,
 		serverLog:  serverLog,
 		options:    options,
-		shutdownCh: make(chan struct{}, 1),
+		shutdownCh: shutdownCh,
+		shutdowner: &shutdownController{log: serverLog, ch: shutdownCh},
+	}
+}
+
+type shutdownController struct {
+	log xrpllog.Logger
+	ch  chan<- struct{}
+}
+
+func (c *shutdownController) RequestShutdown() {
+	if c == nil {
+		return
+	}
+	c.log.Info("Shutdown requested via RPC stop command")
+	select {
+	case c.ch <- struct{}{}:
+	default:
 	}
 }
 
@@ -256,7 +276,7 @@ func (r *nodeRuntime) configureMaintenance() error {
 	r.stopSampler = sampler.Stop
 
 	r.ledgerAdapter = rpcadapter.NewLedgerServiceAdapter(r.ledger)
-	r.services = newRPCServiceContainer(r.ledgerAdapter, r.appConfig)
+	r.services = newRPCServiceGraphBuilder(r.ledgerAdapter, r.appConfig)
 	if err := r.configureStandaloneNodeIdentity(); err != nil {
 		return err
 	}
@@ -456,9 +476,6 @@ func (r *nodeRuntime) configureMaintenance() error {
 				Stop:       p.Stop,
 			}))
 		}
-		r.services.LedgerCleanerStatusFn = func() types.LedgerCleanerStatus {
-			return toCleanerStatus(cleanerRef.Status())
-		}
 	}
 	return nil
 }
@@ -532,11 +549,11 @@ func (r *nodeRuntime) configureConsensus() error {
 		}
 
 		if router := r.consensus.Router; router != nil && r.cleanerSource != nil {
-			r.cleanerSource.SetReacquire(func(ctx context.Context, seq uint32) error {
+			r.cleanerSource.SetReacquire(func(ctx context.Context, hash [32]byte, seq uint32) error {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				_, started, _ := router.RequestLedger([32]byte{}, seq)
+				_, started, _ := router.RequestLedger(hash, seq)
 				if !started {
 					return fmt.Errorf("ledger_cleaner: unable to acquire ledger %d", seq)
 				}
@@ -745,6 +762,17 @@ func (r *nodeRuntime) configureConsensus() error {
 			r.services.FetchInfoClear = router.ClearFetchInfo
 			r.services.RequestLedger = router.RequestLedger
 			r.services.FetchPackCacheSize = router.FetchPackCacheSize
+			r.services.FastSyncMetrics = func() types.FastSyncMetrics {
+				snapshot := router.FastSyncMetrics()
+				return types.FastSyncMetrics{
+					CompletionRecheckAccepted:            snapshot.CompletionRecheckAccepted,
+					CompletionRecheckRejectedNoEvidence:  snapshot.CompletionRecheckRejectedNoEvidence,
+					CompletionRecheckRejectedBelowQuorum: snapshot.CompletionRecheckRejectedBelowQuorum,
+					CompletionRecheckRejectedUnavailable: snapshot.CompletionRecheckRejectedUnavailable,
+					TargetSuperseded:                     snapshot.TargetSuperseded,
+					ObsoleteAcquisitionCompleted:         snapshot.ObsoleteAcquisitionCompleted,
+				}
+			}
 		}
 
 		// Expose the validator-manifest cache to the `manifest` RPC.
@@ -863,35 +891,47 @@ func (r *nodeRuntime) bindRPC() error {
 		r.resourceManager = resource.NewManager(nil, nil)
 		r.ownsResourceManager = true
 	}
+	if r.services == nil {
+		return errors.New("bind RPC: service graph builder is unavailable")
+	}
 	r.services.ResourceBlacklist = r.resourceManager.BlacklistJSON
 	var peerSource types.PeerSource
 	if r.consensus != nil && r.consensus.Overlay != nil {
 		peerSource = r.consensus.Overlay
 	}
 	manager := subscription.NewManager()
+	r.services.Shutdown = r.shutdowner
+	r.services.SubscriptionMetrics = manager.Metrics
+	ledgerInfo := &ledgerInfoAdapter{ledgerService: r.ledger}
+	graph, err := r.services.Build()
+	if err != nil {
+		return fmt.Errorf("build RPC service graph: %w", err)
+	}
+	r.serviceGraph = graph
+	urlSubscriptions := rpc.NewURLSubscriptionService(manager, graph, ledgerInfo)
 
 	// Create HTTP JSON-RPC server. The dispatch timeout stays strictly below
 	// the transport WriteTimeout (see httpWriteTimeout) so a timed-out request
 	// can still serialize its error envelope.
 	r.httpServer = rpc.NewServer(rpc.ServerOptions{
-		Timeout:         rpcDispatchTimeout,
-		Services:        r.services,
-		ResourceManager: r.resourceManager,
-		PeerSource:      peerSource,
+		Timeout:          rpcDispatchTimeout,
+		Services:         graph,
+		ResourceManager:  r.resourceManager,
+		PeerSource:       peerSource,
+		URLSubscriptions: urlSubscriptions,
 	})
-	r.services.Dispatcher = r.httpServer
 
 	pingInterval := time.Duration(r.appConfig.WebsocketPingFrequency) * time.Second
 	r.wsServer = rpc.NewWebSocketServer(rpc.WebSocketServerOptions{
 		Timeout:             rpcDispatchTimeout,
-		Services:            r.services,
+		Services:            graph,
 		ResourceManager:     r.resourceManager,
 		PeerSource:          peerSource,
 		PingInterval:        pingInterval,
-		LedgerInfoProvider:  &ledgerInfoAdapter{ledgerService: r.ledger},
+		LedgerInfoProvider:  ledgerInfo,
 		SubscriptionManager: manager,
+		URLSubscriptions:    urlSubscriptions,
 	})
-	r.services.URLSubscriptions = r.wsServer.URLSubscriptionService()
 
 	r.publisher = rpc.NewPublisher(r.wsServer.SubscriptionManager())
 	return nil
@@ -947,7 +987,7 @@ func (r *nodeRuntime) bindStreams() error {
 		)
 	})
 
-	serverStatus := newServerStatusPublisher(r.services, r.publisher)
+	serverStatus := newServerStatusPublisher(r.serviceGraph, r.publisher)
 	r.ledger.SetServerStatusCallback(serverStatus.publish)
 	if feeTrack := r.ledger.FeeTrack(); feeTrack != nil {
 		feeTrack.SetOnChange(func() {
@@ -1011,7 +1051,7 @@ func (r *nodeRuntime) bindStreams() error {
 		serverStatus.publish(nil)
 
 		r.wsServer.UpdatePathFindSessions(func() (types.LedgerStateView, error) {
-			return r.services.Ledger.GetClosedLedgerView()
+			return r.serviceGraph.LedgerViews().GetClosedLedgerView()
 		})
 
 		r.serverLog.Debug("Broadcasted ledger",
@@ -1058,13 +1098,6 @@ func (r *nodeRuntime) configureWatchdog() error {
 
 func (r *nodeRuntime) bindTransports() error {
 	ctx := r.ctx
-	r.services.ShutdownFunc = func() {
-		r.serverLog.Info("Shutdown requested via RPC stop command")
-		select {
-		case r.shutdownCh <- struct{}{}:
-		default:
-		}
-	}
 
 	if err := context.Cause(ctx); err != nil {
 		return err

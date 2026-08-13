@@ -6,9 +6,11 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
-	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -56,18 +58,18 @@ var sponsorshipSupportedObjectTypes = map[string]bool{
 	"SignerList":      true,
 }
 
-func chooseAccountObjectType(raw json.RawMessage, present bool) (string, *types.RpcError) {
+func chooseAccountObjectType(raw json.RawMessage, present bool) (string, *rpcerrors.RpcError) {
 	if !present {
 		return "", nil
 	}
 
 	var value any
 	if err := json.Unmarshal(raw, &value); err != nil {
-		return "", types.RpcErrorExpectedField("type", "string")
+		return "", rpcerrors.RpcErrorExpectedField("type", "string")
 	}
 	filter, ok := value.(string)
 	if !ok {
-		return "", types.RpcErrorExpectedField("type", "string")
+		return "", rpcerrors.RpcErrorExpectedField("type", "string")
 	}
 
 	for _, ledgerType := range protocol.LedgerEntryTypes() {
@@ -76,15 +78,15 @@ func chooseAccountObjectType(raw json.RawMessage, present bool) (string, *types.
 		}
 		if strings.EqualFold(ledgerType.Name, filter) || ledgerType.RPCName == filter {
 			if nonAccountObjectTypes[ledgerType.Name] {
-				return "", types.RpcErrorInvalidField("type")
+				return "", rpcerrors.RpcErrorInvalidField("type")
 			}
 			return ledgerType.RPCName, nil
 		}
 	}
-	return "", types.RpcErrorInvalidField("type")
+	return "", rpcerrors.RpcErrorInvalidField("type")
 }
 
-func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	if rpcErr := validateJsonCppIntegerRange(params); rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -119,18 +121,18 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 			}
 		}
 	} else {
-		var typeErr *types.RpcError
+		var typeErr *rpcerrors.RpcError
 		effectiveType, typeErr = chooseAccountObjectType(typeRaw, typePresent)
 		if typeErr != nil {
 			return nil, typeErr
 		}
 	}
-	limit, limitErr := readLimitField(params, limitAccountObjects, ctx.Unlimited)
+	limit, limitErr := readLimitField(params, limitAccountObjects, ctx.Role.IsUnlimited())
 	if limitErr != nil {
 		return nil, limitErr
 	}
 	markerStr := ""
-	var mErr *types.RpcError
+	var mErr *rpcerrors.RpcError
 	if markerRaw, ok := fields["marker"]; ok {
 		markerStr, mErr = markerString(markerRaw)
 	}
@@ -142,25 +144,25 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	if raw, ok := fields["sponsored"]; ok {
 		var value any
 		if err := json.Unmarshal(raw, &value); err != nil {
-			return nil, types.RpcErrorExpectedField("sponsored", "boolean")
+			return nil, rpcerrors.RpcErrorExpectedField("sponsored", "boolean")
 		}
 		sponsored, ok := value.(bool)
 		if !ok {
-			return nil, types.RpcErrorExpectedField("sponsored", "boolean")
+			return nil, rpcerrors.RpcErrorExpectedField("sponsored", "boolean")
 		}
 		sponsoredFilter = &sponsored
 	}
 
-	result, err := ctx.Services.Ledger.GetAccountObjects(ctx.Context, account, ledgerIndex, effectiveType, limit, markerStr)
+	result, err := ctx.Services.Ledger().GetAccountObjects(ctx.Context, account, ledgerIndex, effectiveType, limit, markerStr)
 	if err != nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RpcErrorActNotFound("Account not found.")
+			return nil, rpcerrors.RpcErrorActNotFound("Account not found.")
 		}
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
-			return nil, types.RpcErrorInvalidField("marker")
+			return nil, rpcerrors.RpcErrorInvalidField("marker")
 		}
 		return nil, rpcInternalError("account_objects: ledger query failed", err)
 	}

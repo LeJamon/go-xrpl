@@ -1,6 +1,9 @@
-package types
+package rpcerrors
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 // rippledEnum is rippled's error_code_i enum (ErrorCodes.h:42-160), the source
 // of truth for the numeric error_code field on the wire. Every go-xrpl constant
@@ -141,7 +144,6 @@ func TestErrorConstructorsTokenCodePairs(t *testing.T) {
 		token string
 		code  int
 	}{
-		{RpcErrorUnknown("x"), "unknown", RpcUNKNOWN},
 		{RpcErrorInvalidParams("x"), "invalidParams", 31},
 		{RpcErrorMethodNotFound(), "unknownCmd", 32},
 		{RpcErrorLgrNotFound("x"), "lgrNotFound", 21},
@@ -159,7 +161,6 @@ func TestErrorConstructorsTokenCodePairs(t *testing.T) {
 		{RpcErrorNotEnabled(""), "notEnabled", 12},
 		{RpcErrorNotSupported(""), "notSupported", 75},
 		{RpcErrorNoEvents(""), "noEvents", 7},
-		{RpcErrorAmendmentBlocked(), "amendmentBlocked", 14},
 		{RpcErrorBadFeature("x"), "badFeature", 40},
 		{RpcErrorNoPathRequest(), "noPathRequest", 33},
 		{RpcErrorObjectNotFound("x"), "objectNotFound", 92},
@@ -267,6 +268,190 @@ func TestEntryNotFoundDefaultMessage(t *testing.T) {
 	}
 	if got := RpcErrorEntryNotFound("custom").Message; got != "custom" {
 		t.Errorf("explicit message = %q, want %q", got, "custom")
+	}
+}
+
+var rippledErrorInfos = []rpcErrorInfo{
+	{RpcACT_MALFORMED, "actMalformed", "Account malformed.", 200},
+	{RpcACT_NOT_FOUND, "actNotFound", "Account not found.", 200},
+	{RpcALREADY_MULTISIG, "alreadyMultisig", "Already multisigned.", 200},
+	{RpcALREADY_SINGLE_SIG, "alreadySingleSig", "Already single-signed.", 200},
+	{RpcAMENDMENT_BLOCKED, "amendmentBlocked", "Amendment blocked, need upgrade.", 503},
+	{RpcEXPIRED_VALIDATOR_LIST, "unlBlocked", "Validator list expired.", 503},
+	{RpcATX_DEPRECATED, "deprecated", "Use the new API or specify a ledger range.", 400},
+	{RpcBAD_KEY_TYPE, "badKeyType", "Bad key type.", 400},
+	{RpcBAD_FEATURE, "badFeature", "Feature unknown or invalid.", 500},
+	{RpcBAD_ISSUER, "badIssuer", "Issuer account malformed.", 400},
+	{RpcBAD_MARKET, "badMarket", "No such market.", 404},
+	{RpcBAD_SECRET, "badSecret", "Secret does not match account.", 403},
+	{RpcBAD_SEED, "badSeed", "Disallowed seed.", 403},
+	{RpcBAD_SYNTAX, "badSyntax", "Syntax error.", 400},
+	{RpcCHANNEL_MALFORMED, "channelMalformed", "Payment channel is malformed.", 400},
+	{RpcCHANNEL_AMT_MALFORMED, "channelAmtMalformed", "Payment channel amount is malformed.", 400},
+	{RpcMISSING_COMMAND, "commandMissing", "Missing command entry.", 400},
+	{RpcDB_DESERIALIZATION, "dbDeserialization", "Database deserialization error.", 502},
+	{RpcDST_ACT_MALFORMED, "dstActMalformed", "Destination account is malformed.", 400},
+	{RpcDST_ACT_MISSING, "dstActMissing", "Destination account not provided.", 400},
+	{RpcDST_ACT_NOT_FOUND, "dstActNotFound", "Destination account not found.", 404},
+	{RpcDST_AMT_MALFORMED, "dstAmtMalformed", "Destination amount/currency/issuer is malformed.", 400},
+	{RpcDST_AMT_MISSING, "dstAmtMissing", "Destination amount/currency/issuer is missing.", 400},
+	{RpcDST_ISR_MALFORMED, "dstIsrMalformed", "Destination issuer is malformed.", 400},
+	{RpcEXCESSIVE_LGR_RANGE, "excessiveLgrRange", "Ledger range exceeds 1000.", 400},
+	{RpcFORBIDDEN, "forbidden", "Bad credentials.", 403},
+	{RpcHIGH_FEE, "highFee", "Current transaction fee exceeds your limit.", 402},
+	{RpcINTERNAL, "internal", "Internal error.", 500},
+	{RpcINVALID_LGR_RANGE, "invalidLgrRange", "Ledger range is invalid.", 400},
+	{RpcINVALID_PARAMS, "invalidParams", "Invalid parameters.", 400},
+	{RpcINVALID_HOTWALLET, "invalidHotWallet", "Invalid hotwallet.", 400},
+	{RpcISSUE_MALFORMED, "issueMalformed", "Issue is malformed.", 400},
+	{RpcJSON_RPC, "json_rpc", "JSON-RPC transport error.", 500},
+	{RpcLGR_IDXS_INVALID, "lgrIdxsInvalid", "Ledger indexes invalid.", 400},
+	{RpcLGR_IDX_MALFORMED, "lgrIdxMalformed", "Ledger index malformed.", 400},
+	{RpcLGR_NOT_FOUND, "lgrNotFound", "Ledger not found.", 404},
+	{RpcLGR_NOT_VALIDATED, "lgrNotValidated", "Ledger not validated.", 202},
+	{RpcMASTER_DISABLED, "masterDisabled", "Master key is disabled.", 403},
+	{RpcNOT_ENABLED, "notEnabled", "Not enabled in configuration.", 501},
+	{RpcNOT_IMPL, "notImpl", "Not implemented.", 501},
+	{RpcNOT_READY, "notReady", "Not ready to handle this request.", 503},
+	{RpcNOT_SUPPORTED, "notSupported", "Operation not supported.", 501},
+	{RpcNO_CLOSED, "noClosed", "Closed ledger is unavailable.", 503},
+	{RpcNO_CURRENT, "noCurrent", "Current ledger is unavailable.", 503},
+	{RpcNOT_SYNCED, "notSynced", "Not synced to the network.", 503},
+	{RpcNO_EVENTS, "noEvents", "Current transport does not support events.", 405},
+	{RpcNO_NETWORK, "noNetwork", "Not synced to the network.", 503},
+	{RpcWRONG_NETWORK, "wrongNetwork", "Wrong network.", 503},
+	{RpcNO_PERMISSION, "noPermission", "You don't have permission for this command.", 401},
+	{RpcNO_PF_REQUEST, "noPathRequest", "No pathfinding request in progress.", 404},
+	{RpcOBJECT_NOT_FOUND, "objectNotFound", "The requested object was not found.", 404},
+	{RpcPUBLIC_MALFORMED, "publicMalformed", "Public key is malformed.", 400},
+	{RpcSENDMAX_MALFORMED, "sendMaxMalformed", "SendMax amount malformed.", 400},
+	{RpcSIGNING_MALFORMED, "signingMalformed", "Signing of transaction is malformed.", 400},
+	{RpcSLOW_DOWN, "slowDown", "You are placing too much load on the server.", 429},
+	{RpcSRC_ACT_MALFORMED, "srcActMalformed", "Source account is malformed.", 400},
+	{RpcSRC_ACT_MISSING, "srcActMissing", "Source account not provided.", 400},
+	{RpcSRC_ACT_NOT_FOUND, "srcActNotFound", "Source account not found.", 404},
+	{RpcDELEGATE_ACT_NOT_FOUND, "delegateActNotFound", "Delegate account not found.", 404},
+	{RpcSRC_CUR_MALFORMED, "srcCurMalformed", "Source currency is malformed.", 400},
+	{RpcSRC_ISR_MALFORMED, "srcIsrMalformed", "Source issuer is malformed.", 400},
+	{RpcSTREAM_MALFORMED, "malformedStream", "Stream malformed.", 400},
+	{RpcTOO_BUSY, "tooBusy", "The server is too busy to help you now.", 503},
+	{RpcTXN_NOT_FOUND, "txnNotFound", "Transaction not found.", 404},
+	{RpcMETHOD_NOT_FOUND, "unknownCmd", "Unknown method.", 405},
+	{RpcORACLE_MALFORMED, "oracleMalformed", "Oracle request is malformed.", 400},
+	{RpcBAD_CREDENTIALS, "badCredentials", "Credentials do not exist, are not accepted, or have expired.", 400},
+	{RpcTX_SIGNED, "transactionSigned", "Transaction should not be signed.", 400},
+	{RpcDOMAIN_MALFORMED, "domainMalformed", "Domain is malformed.", 400},
+	{RpcENTRY_NOT_FOUND, "entryNotFound", "Entry not found.", 400},
+	{RpcUNEXPECTED_LEDGER_TYPE, "unexpectedLedgerType", "Unexpected ledger type.", 400},
+}
+
+func TestRpcErrorInfoTableCoversRippledCodes(t *testing.T) {
+	for _, want := range rippledErrorInfos {
+		info, ok := rpcErrorInfos[want.Code]
+		if !ok {
+			t.Errorf("missing metadata for rippled error code %d", want.Code)
+			continue
+		}
+		if info != want {
+			t.Errorf("metadata[%d] = %#v, want %#v", want.Code, info, want)
+		}
+	}
+	if len(rpcErrorInfos) != len(rippledErrorInfos) {
+		t.Errorf("metadata rows = %d, want %d rippled rows", len(rpcErrorInfos), len(rippledErrorInfos))
+	}
+	unknown := rpcErrorInfoForCode(0)
+	if unknown != unknownRpcErrorInfo {
+		t.Errorf("unknown metadata = %#v, want %#v", unknown, unknownRpcErrorInfo)
+	}
+	if info := rpcErrorInfoForCode(RpcREPORTING_UNSUPPORTED); info != unknownRpcErrorInfo {
+		t.Errorf("deprecated unlisted metadata = %#v, want %#v", info, unknownRpcErrorInfo)
+	}
+}
+
+func TestRpcErrorInvalidParamsDefaultMessage(t *testing.T) {
+	if got := RpcErrorInvalidParams("").Message; got != "Invalid parameters." {
+		t.Fatalf("default message = %q, want %q", got, "Invalid parameters.")
+	}
+	if got := RpcErrorInvalidParams("custom").Message; got != "custom" {
+		t.Fatalf("explicit message = %q, want %q", got, "custom")
+	}
+}
+
+func TestRpcErrorWithExtraProjectsCanonicalFields(t *testing.T) {
+	fields := map[string]any{
+		"error":           "spoofed",
+		"status":          "spoofed",
+		"error_code":      999,
+		"error_message":   "spoofed",
+		"error_exception": "spoofed",
+		"code":            999,
+		"message":         "spoofed",
+		"type":            "spoofed",
+		"index":           7,
+	}
+	err := RpcErrorInvalidParams("").WithExtra(fields)
+	fields["index"] = 8
+	got := err.ResponseFields()
+	if got["index"] != 7 {
+		t.Fatalf("WithExtra retained caller map mutation: index = %v, want 7", got["index"])
+	}
+	if got["error"] != "invalidParams" || got["error_code"] != RpcINVALID_PARAMS || got["error_message"] != "Invalid parameters." {
+		t.Fatalf("canonical fields = %#v", got)
+	}
+	for _, key := range []string{"status", "error_exception", "code", "message", "type"} {
+		if _, ok := got[key]; ok {
+			t.Errorf("reserved extra %q was projected: %#v", key, got)
+		}
+	}
+
+	bare := RpcErrorEntryNotFoundBare("").WithExtra(map[string]any{
+		"error_code":    999,
+		"error_message": "spoofed",
+		"index":         9,
+	})
+	bareFields := bare.ResponseFields()
+	if _, ok := bareFields["error_code"]; ok {
+		t.Errorf("bare error projected error_code: %#v", bareFields)
+	}
+	if _, ok := bareFields["error_message"]; ok {
+		t.Errorf("bare error projected error_message: %#v", bareFields)
+	}
+	if bareFields["index"] != 9 {
+		t.Errorf("bare error lost non-reserved extra: %#v", bareFields)
+	}
+
+	exception := RpcErrorInvalidTransaction("decode failed").WithExtra(map[string]any{
+		"error":           "spoofed",
+		"error_code":      999,
+		"error_message":   "spoofed",
+		"error_exception": "spoofed",
+		"index":           10,
+	})
+	exceptionFields := exception.ResponseFields()
+	if exceptionFields["error"] != "invalidTransaction" || exceptionFields["error_exception"] != "decode failed" || exceptionFields["index"] != 10 {
+		t.Fatalf("exception fields = %#v", exceptionFields)
+	}
+	for _, key := range []string{"error_code", "error_message"} {
+		if _, ok := exceptionFields[key]; ok {
+			t.Errorf("exception error projected %q: %#v", key, exceptionFields)
+		}
+	}
+}
+
+func TestRpcErrorJSONOmitsInternalType(t *testing.T) {
+	data, err := json.Marshal(RpcErrorInvalidParams("custom"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(data, &object); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := object["type"]; ok {
+		t.Fatalf("internal Type leaked from default JSON: %s", data)
+	}
+	if object["error"] != "invalidParams" || object["error_code"] != float64(RpcINVALID_PARAMS) {
+		t.Fatalf("canonical JSON fields = %#v", object)
 	}
 }
 

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
@@ -143,7 +145,7 @@ func TestAccountInfoLookupResultConformance(t *testing.T) {
 
 		_, rpcErr := (&handlers.AccountInfoMethod{}).Handle(ctx, params)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcACT_MALFORMED, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcACT_MALFORMED, rpcErr.Code)
 		assert.Equal(t, uint32(2), rpcErr.Extra["ledger_index"])
 		assert.Equal(t, handlers.FormatLedgerHash(hash), rpcErr.Extra["ledger_hash"])
 		assert.Equal(t, true, rpcErr.Extra["validated"])
@@ -156,7 +158,7 @@ func TestAccountInfoLookupResultConformance(t *testing.T) {
 
 		_, rpcErr := (&handlers.AccountInfoMethod{}).Handle(ctx, accountInfoConformanceParams(t, nil))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcACT_NOT_FOUND, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcACT_NOT_FOUND, rpcErr.Code)
 		assert.Equal(t, accountInfoConformanceAccount, rpcErr.Extra["account"])
 		assert.Equal(t, uint32(2), rpcErr.Extra["ledger_index"])
 		assert.Equal(t, handlers.FormatLedgerHash(hash), rpcErr.Extra["ledger_hash"])
@@ -168,7 +170,7 @@ func TestAccountInfoLookupResultConformance(t *testing.T) {
 
 		_, rpcErr := (&handlers.AccountInfoMethod{}).Handle(ctx, accountInfoConformanceParams(t, map[string]any{"queue": true}))
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, uint32(2), rpcErr.Extra["ledger_index"])
 		assert.NotContains(t, rpcErr.Extra, "account_data")
 		assert.NotContains(t, rpcErr.Extra, "account_flags")
@@ -199,7 +201,7 @@ func TestAccountInfoInvalidSignerListsPartialResult(t *testing.T) {
 	ctx, _, _ := newAccountInfoConformanceContext(info, amendment.EmptyRules(), true)
 	_, rpcErr := (&handlers.AccountInfoMethod{}).Handle(ctx, accountInfoConformanceParams(t, map[string]any{"signer_lists": "true"}))
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Contains(t, rpcErr.Extra, "account_data")
 	assert.Contains(t, rpcErr.Extra, "account_flags")
 	assert.Equal(t, map[string]any{"type": "Vault"}, rpcErr.Extra["pseudo_account"])

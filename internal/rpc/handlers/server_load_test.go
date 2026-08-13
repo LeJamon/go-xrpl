@@ -35,7 +35,7 @@ func TestComputeServerLoadKeepsRawAndScaledEscalationDistinct(t *testing.T) {
 		},
 	}
 
-	load := ComputeServerLoad(services)
+	load := ComputeServerLoad(types.NewTestServiceGraph(services))
 	if load.LoadFactorFeeEscalation != 256 {
 		t.Fatalf("raw fee escalation = %d, want 256", load.LoadFactorFeeEscalation)
 	}

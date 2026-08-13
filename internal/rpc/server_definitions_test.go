@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -225,7 +227,7 @@ func TestServerDefinitionsHash(t *testing.T) {
 
 			_, rpcErr := method.Handle(ctx, params)
 			require.NotNil(t, rpcErr, "invalid hash %v should error", bad)
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		}
 	})
 }

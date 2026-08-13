@@ -176,24 +176,6 @@ type Service struct {
 	// pendingValidationOrder tracks insertion order for LRU eviction.
 	pendingValidationOrder [][32]byte
 
-	// pendingLedgerValidations stashes trusted-validation notifications by
-	// *sequence* when SetValidatedLedger arrives before that seq is adopted;
-	// drained and promoted (on hash match within TTL) when the seq lands. The
-	// opposite race to pendingValidation (which is hash-keyed accepted events).
-	pendingLedgerValidations map[uint32]pendingValidationEntry
-
-	// pendingLedgerValidationsOrder tracks insertion order for LRU
-	// eviction of pendingLedgerValidations.
-	pendingLedgerValidationsOrder []uint32
-
-	// Invoked off-thread when SetValidatedLedger stashes a validation for a seq
-	// beyond closed (arms the inbound-ledger acquisition).
-	onPendingValidationStashed func(seq uint32, hash [32]byte)
-
-	// Rechecks the current validation set before a stashed notification promotes
-	// a ledger that arrived later.
-	pendingValidationResolver PendingValidationResolver
-
 	// Invoked after the validated tip advances and after mu is released.
 	onValidatedLedger func(seq uint32, hash, parentHash [32]byte)
 
@@ -364,15 +346,14 @@ func New(cfg Config) (*Service, error) {
 			completeLedgerTokens: make(map[uint32]uint64),
 			sweepInterval:        nodeStoreSweepIntervalForSize(cfg.NodeSize),
 		},
-		pendingValidation:        make(map[[32]byte]*LedgerAcceptedEvent),
-		pendingLedgerValidations: make(map[uint32]pendingValidationEntry),
-		heldAdoptions:            make(map[uint32]*pendingAdopt),
-		txQueue:                  txQueue,
-		localTxs:                 localtxs.New(),
-		relayTxCache:             make(map[[32]byte]relayTxRecord),
-		relayTxCacheLimit:        relayTxCacheMaxBytes,
-		feeTrack:                 feetrack.New(),
-		validatedAgeNow:          time.Now,
+		pendingValidation: make(map[[32]byte]*LedgerAcceptedEvent),
+		heldAdoptions:     make(map[uint32]*pendingAdopt),
+		txQueue:           txQueue,
+		localTxs:          localtxs.New(),
+		relayTxCache:      make(map[[32]byte]relayTxRecord),
+		relayTxCacheLimit: relayTxCacheMaxBytes,
+		feeTrack:          feetrack.New(),
+		validatedAgeNow:   time.Now,
 	}
 	s.persistenceWorker.service = s
 	s.eventPublisher.service = s
@@ -1533,30 +1514,26 @@ func (s *Service) MaxPersistedLedgerSeq(ctx context.Context) uint32 {
 	return uint32(*seq)
 }
 
-// ledgerHistoryRangeLocked returns the inclusive [min, max] span of in-memory
-// history, or ok=false when empty. Caller holds historyComponent.mu. NB: the span assumes
-// contiguity — purges/backward-fills can leave gaps, so callers reporting durable
-// availability must layer their own floor (see GetServerInfo's clamp).
-func (s *historyComponent) ledgerHistoryRangeLocked() (min, max uint32, ok bool) {
-	first := true
-	for seq := range s.ledgerHistory {
-		if first || seq < min {
-			min = seq
-		}
-		if first || seq > max {
-			max = seq
-		}
-		first = false
-	}
-	return min, max, !first
-}
-
-// AvailableLedgerRange returns the inclusive [min, max] range of locally held
-// ledgers, or ok=false when none. Used to bound a ledger-integrity cleaning run.
+// AvailableLedgerRange returns the complete contiguous range ending at the
+// published ledger, or ok=false before any ledger has been published.
 func (s *Service) AvailableLedgerRange() (min, max uint32, ok bool) {
-	s.historyComponent.mu.RLock()
-	defer s.historyComponent.mu.RUnlock()
-	return s.ledgerHistoryRangeLocked()
+	s.mu.RLock()
+	max = s.publishedLedgerSeq
+	ok = s.havePublished && max != 0
+	s.mu.RUnlock()
+	if !ok {
+		return 0, 0, false
+	}
+
+	min = max
+	s.completeMu.RLock()
+	if s.completedLedgers != nil {
+		if current, found := s.completedLedgers.rangeContaining(max); found && current.start > 0 {
+			min = current.start
+		}
+	}
+	s.completeMu.RUnlock()
+	return min, max, true
 }
 
 func (s *Service) contiguousValidatedRangeLocked() (first, last uint32, ok bool) {

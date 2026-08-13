@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/gorilla/websocket"
 )
@@ -18,18 +20,20 @@ import (
 // versions; the dispatch-layer cap, not the handler set, is what gates v3.
 func versionEchoServer(t *testing.T, beta bool) *Server {
 	t.Helper()
+	services := types.NewServiceContainer(nil)
+	services.BetaRPCAPI = beta
 	srv := &Server{
-		registry: types.NewMethodRegistry(),
+		registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"ping": &stubHandler{
+				apiVers: []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3},
+				handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *rpcerrors.RpcError) {
+					return map[string]any{"api_version": ctx.ApiVersion}, nil
+				},
+			},
+		}),
 		timeout:  time.Second,
-		services: types.NewServiceContainer(nil),
+		services: types.NewTestServiceGraph(services),
 	}
-	srv.services.BetaRPCAPI = beta
-	srv.registry.Register("ping", &stubHandler{
-		apiVers: []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3},
-		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
-			return map[string]any{"api_version": ctx.ApiVersion}, nil
-		},
-	})
 	return srv
 }
 
@@ -161,8 +165,8 @@ func TestApiVersion_BatchV3RejectedWithoutBeta(t *testing.T) {
 	if !ok {
 		t.Fatalf("batch element 0 error.error is not a JSON-RPC object: %v", outer)
 	}
-	if errObj["code"] != float64(types.WrongVersionJSONRPCCode) {
-		t.Fatalf("batch element 0 error.error.code = %v, want %d", errObj["code"], types.WrongVersionJSONRPCCode)
+	if errObj["code"] != float64(rpcerrors.WrongVersionJSONRPCCode) {
+		t.Fatalf("batch element 0 error.error.code = %v, want %d", errObj["code"], rpcerrors.WrongVersionJSONRPCCode)
 	}
 	if errObj["message"] != "invalid_API_version" {
 		t.Fatalf("batch element 0 error.error.message = %v, want invalid_API_version", errObj["message"])
@@ -178,13 +182,19 @@ func TestApiVersion_BatchV3RejectedWithoutBeta(t *testing.T) {
 // given beta flag.
 func versionEchoWSServer(t *testing.T, beta bool) *WebSocketServer {
 	t.Helper()
-	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: 30 * time.Second, Services: types.NewServiceContainer(nil)})
-	ws.services.BetaRPCAPI = beta
-	ws.methodRegistry.Register("ping", &stubHandler{
-		apiVers: []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3},
-		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
-			return map[string]any{"api_version": ctx.ApiVersion}, nil
-		},
+	services := types.NewServiceContainer(nil)
+	services.BetaRPCAPI = beta
+	ws := NewWebSocketServer(WebSocketServerOptions{
+		Timeout:  30 * time.Second,
+		Services: types.NewTestServiceGraph(services),
+		Registry: mustTestMethodRegistry(t, map[string]types.MethodHandler{
+			"ping": &stubHandler{
+				apiVers: []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3},
+				handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *rpcerrors.RpcError) {
+					return map[string]any{"api_version": ctx.ApiVersion}, nil
+				},
+			},
+		}),
 	})
 	return ws
 }

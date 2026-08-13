@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	"github.com/LeJamon/go-xrpl/internal/testing/rpcenv"
@@ -208,38 +209,38 @@ func TestAMMInfo_ErrorPrecedenceByApiVersion(t *testing.T) {
 		expectErr(withAccount(map[string]any{
 			"asset":  xrpAsset,
 			"asset2": usdAsset,
-		}, bogie.Address), types.ApiVersion2, types.RpcACT_MALFORMED, "Account malformed.")
+		}, bogie.Address), types.ApiVersion2, rpcerrors.RpcACT_MALFORMED, "Account malformed.")
 
 		// Unparseable asset (IOU missing its issuer) → issueMalformed on both
 		// versions when the combination is valid.
 		badAsset := map[string]any{"currency": "USD"}
 		validComboBadAsset := map[string]any{"asset": badAsset, "asset2": usdAsset}
-		expectErr(validComboBadAsset, types.ApiVersion2, types.RpcISSUE_MALFORMED, "Issue is malformed.")
-		expectErr(validComboBadAsset, types.ApiVersion3, types.RpcISSUE_MALFORMED, "Issue is malformed.")
+		expectErr(validComboBadAsset, types.ApiVersion2, rpcerrors.RpcISSUE_MALFORMED, "Issue is malformed.")
+		expectErr(validComboBadAsset, types.ApiVersion3, rpcerrors.RpcISSUE_MALFORMED, "Issue is malformed.")
 
 		// Unparseable asset in an invalid combination: the combination check
 		// wins below v3, the asset parse wins from v3 on.
 		invalidComboBadAsset := map[string]any{"asset": badAsset}
-		expectErr(invalidComboBadAsset, types.ApiVersion2, types.RpcINVALID_PARAMS, "Invalid parameters.")
-		expectErr(invalidComboBadAsset, types.ApiVersion3, types.RpcISSUE_MALFORMED, "Issue is malformed.")
+		expectErr(invalidComboBadAsset, types.ApiVersion2, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters.")
+		expectErr(invalidComboBadAsset, types.ApiVersion3, rpcerrors.RpcISSUE_MALFORMED, "Issue is malformed.")
 
 		// Invalid combinations (amm_account = the AMM's pseudo-account).
 		for _, row := range invalidCombos(ammAcc.Address) {
-			expectErr(row, types.ApiVersion2, types.RpcINVALID_PARAMS, "Invalid parameters.")
+			expectErr(row, types.ApiVersion2, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters.")
 
 			// With a bad LP account on top: combination wins below v3, the
 			// malformed account wins from v3 on.
-			expectErr(withAccount(row, bogie.Address), types.ApiVersion2, types.RpcINVALID_PARAMS, "Invalid parameters.")
-			expectErr(withAccount(row, bogie.Address), types.ApiVersion3, types.RpcACT_MALFORMED, "Account malformed.")
+			expectErr(withAccount(row, bogie.Address), types.ApiVersion2, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters.")
+			expectErr(withAccount(row, bogie.Address), types.ApiVersion3, rpcerrors.RpcACT_MALFORMED, "Account malformed.")
 		}
 
 		// Invalid combinations with a nonexistent amm_account.
 		for _, row := range invalidCombos(bogie.Address) {
-			expectErr(row, types.ApiVersion2, types.RpcINVALID_PARAMS, "Invalid parameters.")
+			expectErr(row, types.ApiVersion2, rpcerrors.RpcINVALID_PARAMS, "Invalid parameters.")
 
-			wantCode, wantMsg := types.RpcINVALID_PARAMS, "Invalid parameters."
+			wantCode, wantMsg := rpcerrors.RpcINVALID_PARAMS, "Invalid parameters."
 			if _, hasAMMAccount := row["amm_account"]; hasAMMAccount {
-				wantCode, wantMsg = types.RpcACT_MALFORMED, "Account malformed."
+				wantCode, wantMsg = rpcerrors.RpcACT_MALFORMED, "Account malformed."
 			}
 			expectErr(row, types.ApiVersion3, wantCode, wantMsg)
 		}
@@ -270,7 +271,7 @@ func TestAMMInfo_IssueMalformedVariants(t *testing.T) {
 			if rpcErr == nil {
 				t.Fatalf("amm_info(asset=%#v): expected error, got nil", asset)
 			}
-			if rpcErr.Code != types.RpcISSUE_MALFORMED || rpcErr.Message != "Issue is malformed." {
+			if rpcErr.Code != rpcerrors.RpcISSUE_MALFORMED || rpcErr.Message != "Issue is malformed." {
 				t.Errorf("amm_info(asset=%#v) = %q (code=%d), want issueMalformed",
 					asset, rpcErr.Message, rpcErr.Code)
 			}
@@ -301,7 +302,7 @@ func TestAMMInfo_IdenticalAssetPair(t *testing.T) {
 		if rpcErr == nil {
 			t.Fatalf("amm_info(USD/USD): expected error, got nil")
 		}
-		if rpcErr.Code != types.RpcACT_NOT_FOUND || rpcErr.Message != "Account not found." {
+		if rpcErr.Code != rpcerrors.RpcACT_NOT_FOUND || rpcErr.Message != "Account not found." {
 			t.Errorf("amm_info(USD/USD) = %q (code=%d), want actNotFound", rpcErr.Message, rpcErr.Code)
 		}
 	})
@@ -320,7 +321,7 @@ func TestAMMInfo_PresenceSemantics(t *testing.T) {
 			if rpcErr == nil {
 				t.Fatalf("amm_info(%#v): expected error, got nil", params)
 			}
-			if rpcErr.Code != types.RpcACT_MALFORMED || rpcErr.Message != "Account malformed." {
+			if rpcErr.Code != rpcerrors.RpcACT_MALFORMED || rpcErr.Message != "Account malformed." {
 				t.Errorf("amm_info(%#v) = %q (code=%d), want actMalformed",
 					params, rpcErr.Message, rpcErr.Code)
 			}
@@ -349,7 +350,7 @@ func TestAMMInfo_AccountFieldsRequireClassicAddresses(t *testing.T) {
 			if rpcErr == nil {
 				t.Fatalf("amm_info(%#v): expected error, got nil", params)
 			}
-			if rpcErr.Code != types.RpcACT_MALFORMED || rpcErr.Message != "Account malformed." {
+			if rpcErr.Code != rpcerrors.RpcACT_MALFORMED || rpcErr.Message != "Account malformed." {
 				t.Errorf("amm_info(%#v) = %q (code=%d), want actMalformed",
 					params, rpcErr.Message, rpcErr.Code)
 			}
@@ -393,7 +394,7 @@ func TestAMMInfo_LedgerNotFoundPrecedence(t *testing.T) {
 			if rpcErr == nil {
 				t.Fatalf("amm_info(%#v): expected error, got nil", params)
 			}
-			if rpcErr.Code != types.RpcLGR_NOT_FOUND || rpcErr.Message != "ledgerNotFound" {
+			if rpcErr.Code != rpcerrors.RpcLGR_NOT_FOUND || rpcErr.Message != "ledgerNotFound" {
 				t.Errorf("amm_info(%#v) = %q (code=%d), want lgrNotFound",
 					params, rpcErr.Message, rpcErr.Code)
 			}

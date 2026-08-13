@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/rcl"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
@@ -453,6 +454,9 @@ func TestRouter_ProvisionalWarmStartMaintenanceFallsBackAfterGrace(t *testing.T)
 
 func TestAdaptor_FastLoadedLedgerIsReplacedBySameHeightQuorum(t *testing.T) {
 	r, _, svc := makeProvisionalWarmRouter(t)
+	_, started := r.startLifecycle(t.Context())
+	require.True(t, started)
+	t.Cleanup(r.stopLifecycle)
 	loaded := svc.GetValidatedLedger()
 	require.NotNil(t, loaded)
 
@@ -484,6 +488,19 @@ func TestAdaptor_FastLoadedLedgerIsReplacedBySameHeightQuorum(t *testing.T) {
 		switchDone <- err
 	}
 	r.engine = engine
+	tracker := rcl.NewValidationTracker(1)
+	node := consensus.NodeID{1}
+	tracker.SetTrustedAndQuorum([]consensus.NodeID{node}, 1)
+	now := time.Now()
+	require.True(t, tracker.Add(&consensus.Validation{
+		LedgerID:  consensus.LedgerID(replacementHash),
+		LedgerSeq: replacementHeader.LedgerIndex,
+		NodeID:    node,
+		SignTime:  now,
+		SeenTime:  now,
+		Full:      true,
+	}))
+	r.adaptor.SetValidationHistorian(tracker)
 	r.adaptor.OnLedgerFullyValidated(
 		consensus.LedgerID(replacementHash),
 		replacementHeader.LedgerIndex,
@@ -496,9 +513,11 @@ func TestAdaptor_FastLoadedLedgerIsReplacedBySameHeightQuorum(t *testing.T) {
 		t.Fatal("quorum-backed provisional replacement was not handed to consensus")
 	}
 	require.Equal(t, replacementHash, svc.GetClosedLedger().Hash())
-	require.Equal(t, replacementHash, svc.GetValidatedLedger().Hash())
-	require.False(t, svc.IsFastLoadProvisional())
-	require.False(t, svc.NeedsInitialSync())
+	require.Eventually(t, func() bool {
+		validated := svc.GetValidatedLedger()
+		return validated != nil && validated.Hash() == replacementHash &&
+			!svc.IsFastLoadProvisional() && !svc.NeedsInitialSync()
+	}, time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return r.adaptor.GetOperatingMode() == consensus.OpModeTracking
 	}, time.Second, 10*time.Millisecond)

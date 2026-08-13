@@ -17,7 +17,7 @@ func feeRequest(t *testing.T, services *types.ServiceContainer) map[string]any {
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
-		Services:   services,
+		Services:   types.NewTestServiceGraph(services),
 	}, nil)
 	require.Nil(t, rpcErr)
 	require.NotNil(t, result)

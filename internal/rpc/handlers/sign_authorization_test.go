@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -33,10 +35,10 @@ func signingAuthorizationContext(ledger types.LedgerService) *types.RpcContext {
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion2,
-		Services: &types.ServiceContainer{
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{
 			Ledger:       ledger,
 			Capabilities: types.RPCCapabilities{SigningEnabled: true},
-		},
+		}),
 	}
 }
 
@@ -74,7 +76,7 @@ func authorizationSignForParams(signer, txAccount string) json.RawMessage {
 	return params
 }
 
-func requireSigningDeprecation(t *testing.T, rpcErr *types.RpcError) {
+func requireSigningDeprecation(t *testing.T, rpcErr *rpcerrors.RpcError) {
 	t.Helper()
 	if rpcErr == nil || rpcErr.Extra["deprecated"] != signingDeprecation {
 		t.Fatalf("error = %#v, want signing deprecation", rpcErr)
@@ -84,7 +86,7 @@ func requireSigningDeprecation(t *testing.T, rpcErr *types.RpcError) {
 func TestSigningCapabilityGuardPrecedesParsingAndLoad(t *testing.T) {
 	methods := []struct {
 		name   string
-		handle func(*types.RpcContext, json.RawMessage) (any, *types.RpcError)
+		handle func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError)
 	}{
 		{name: "sign", handle: (&SignMethod{}).Handle},
 		{name: "sign_for", handle: (&SignForMethod{}).Handle},
@@ -94,15 +96,14 @@ func TestSigningCapabilityGuardPrecedesParsingAndLoad(t *testing.T) {
 			loadedCalled := false
 			ctx := &types.RpcContext{
 				Role:       types.RoleIdentified,
-				Unlimited:  true,
 				ApiVersion: types.ApiVersion2,
-				Services: &types.ServiceContainer{IsLoadedCluster: func() bool {
+				Services: types.NewTestServiceGraph(&types.ServiceContainer{IsLoadedCluster: func() bool {
 					loadedCalled = true
 					return true
-				}},
+				}}),
 			}
 			_, rpcErr := method.handle(ctx, json.RawMessage(`{`))
-			if rpcErr == nil || rpcErr.Code != types.RpcNOT_SUPPORTED || rpcErr.Message != "Signing is not supported by this server." {
+			if rpcErr == nil || rpcErr.Code != rpcerrors.RpcNOT_SUPPORTED || rpcErr.Message != "Signing is not supported by this server." {
 				t.Fatalf("error = %#v, want signing notSupported", rpcErr)
 			}
 			if rpcErr.Extra != nil {
@@ -118,7 +119,7 @@ func TestSigningCapabilityGuardPrecedesParsingAndLoad(t *testing.T) {
 func TestSigningCapabilityAdminBypassAndDeprecation(t *testing.T) {
 	for _, method := range []struct {
 		name   string
-		handle func(*types.RpcContext, json.RawMessage) (any, *types.RpcError)
+		handle func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError)
 	}{
 		{name: "sign", handle: (&SignMethod{}).Handle},
 		{name: "sign_for", handle: (&SignForMethod{}).Handle},
@@ -126,7 +127,7 @@ func TestSigningCapabilityAdminBypassAndDeprecation(t *testing.T) {
 		t.Run(method.name, func(t *testing.T) {
 			ctx := &types.RpcContext{Role: types.RoleAdmin, ApiVersion: types.ApiVersion2}
 			_, rpcErr := method.handle(ctx, nil)
-			if rpcErr == nil || rpcErr.Code != types.RpcINVALID_PARAMS {
+			if rpcErr == nil || rpcErr.Code != rpcerrors.RpcINVALID_PARAMS {
 				t.Fatalf("error = %#v, want invalidParams after admin bypass", rpcErr)
 			}
 			requireSigningDeprecation(t, rpcErr)
@@ -155,8 +156,8 @@ func TestSignSigningKeyAuthorization(t *testing.T) {
 	}{
 		{name: "master", account: loadAdmissionSigningAccount, info: &types.AccountInfo{}},
 		{name: "regular key", account: loadAdmissionAccount, info: &types.AccountInfo{RegularKey: loadAdmissionSigningAccount}},
-		{name: "disabled master", account: loadAdmissionSigningAccount, info: &types.AccountInfo{Flags: entry.LsfDisableMaster}, wantCode: types.RpcMASTER_DISABLED, wantToken: "masterDisabled"},
-		{name: "wrong key", account: loadAdmissionAccount, info: &types.AccountInfo{}, wantCode: types.RpcBAD_SECRET, wantToken: "badSecret"},
+		{name: "disabled master", account: loadAdmissionSigningAccount, info: &types.AccountInfo{Flags: entry.LsfDisableMaster}, wantCode: rpcerrors.RpcMASTER_DISABLED, wantToken: "masterDisabled"},
+		{name: "wrong key", account: loadAdmissionAccount, info: &types.AccountInfo{}, wantCode: rpcerrors.RpcBAD_SECRET, wantToken: "badSecret"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -197,14 +198,14 @@ func TestSignDelegateSigningKeyAuthorization(t *testing.T) {
 			name:      "missing delegate",
 			delegate:  loadAdmissionSigningAccount,
 			accounts:  map[string]*types.AccountInfo{loadAdmissionAccount: source},
-			wantCode:  types.RpcDELEGATE_ACT_NOT_FOUND,
+			wantCode:  rpcerrors.RpcDELEGATE_ACT_NOT_FOUND,
 			wantToken: "delegateActNotFound",
 		},
 		{
 			name:      "malformed delegate",
 			delegate:  7,
 			accounts:  map[string]*types.AccountInfo{loadAdmissionAccount: source},
-			wantCode:  types.RpcSRC_ACT_MALFORMED,
+			wantCode:  rpcerrors.RpcSRC_ACT_MALFORMED,
 			wantToken: "srcActMalformed",
 		},
 	}
@@ -221,7 +222,7 @@ func TestSignDelegateSigningKeyAuthorization(t *testing.T) {
 			if rpcErr == nil || rpcErr.Code != test.wantCode || rpcErr.ErrorString != test.wantToken {
 				t.Fatalf("error = %#v, want %d/%s", rpcErr, test.wantCode, test.wantToken)
 			}
-			if test.wantCode == types.RpcSRC_ACT_MALFORMED && rpcErr.Message != "Invalid field 'tx_json.Delegate'." {
+			if test.wantCode == rpcerrors.RpcSRC_ACT_MALFORMED && rpcErr.Message != "Invalid field 'tx_json.Delegate'." {
 				t.Fatalf("message = %q", rpcErr.Message)
 			}
 			requireSigningDeprecation(t, rpcErr)
@@ -260,7 +261,7 @@ func TestSignForSigningKeyAuthorization(t *testing.T) {
 				loadAdmissionSigningAccount: {Flags: entry.LsfDisableMaster},
 				loadAdmissionAccount:        {},
 			},
-			wantCode: types.RpcMASTER_DISABLED,
+			wantCode: rpcerrors.RpcMASTER_DISABLED,
 		},
 		{
 			name:      "wrong key",
@@ -270,7 +271,7 @@ func TestSignForSigningKeyAuthorization(t *testing.T) {
 				loadAdmissionSigner:  {},
 				loadAdmissionAccount: {},
 			},
-			wantCode: types.RpcBAD_SECRET,
+			wantCode: rpcerrors.RpcBAD_SECRET,
 		},
 	}
 	for _, test := range tests {

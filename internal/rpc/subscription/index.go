@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -123,13 +124,13 @@ func (sm *Manager) NewRequestScope() *RequestScope {
 	return &RequestScope{manager: sm, seen: make(map[requestEdge]struct{})}
 }
 
-func (scope *RequestScope) add(edge requestEdge) *types.RpcError {
+func (scope *RequestScope) add(edge requestEdge) *rpcerrors.RpcError {
 	return scope.addMany([]requestEdge{edge})
 }
 
-func (scope *RequestScope) addMany(edges []requestEdge) *types.RpcError {
+func (scope *RequestScope) addMany(edges []requestEdge) *rpcerrors.RpcError {
 	if scope == nil || scope.manager == nil {
-		return types.RpcErrorInternal()
+		return rpcerrors.RpcErrorInternal()
 	}
 	additions := make([]requestEdge, 0, len(edges))
 	pending := make(map[requestEdge]struct{}, len(edges))
@@ -147,7 +148,7 @@ func (scope *RequestScope) addMany(edges []requestEdge) *types.RpcError {
 		scope.manager.mu.Lock()
 		scope.manager.recordLimitRejectionLocked("request")
 		scope.manager.mu.Unlock()
-		return types.RpcErrorTooBusy()
+		return rpcerrors.RpcErrorTooBusy()
 	}
 	for _, edge := range additions {
 		scope.seen[edge] = struct{}{}
@@ -155,15 +156,15 @@ func (scope *RequestScope) addMany(edges []requestEdge) *types.RpcError {
 	return nil
 }
 
-func (scope *RequestScope) consumeRaw(count int) *types.RpcError {
+func (scope *RequestScope) consumeRaw(count int) *rpcerrors.RpcError {
 	if scope == nil || scope.manager == nil || count < 0 {
-		return types.RpcErrorInternal()
+		return rpcerrors.RpcErrorInternal()
 	}
 	if count > scope.manager.limits.MaxItemsPerRequest-scope.raw {
 		scope.manager.mu.Lock()
 		scope.manager.recordLimitRejectionLocked("request")
 		scope.manager.mu.Unlock()
-		return types.RpcErrorTooBusy()
+		return rpcerrors.RpcErrorTooBusy()
 	}
 	scope.raw += count
 	return nil
@@ -181,17 +182,17 @@ func (sm *Manager) recordLocked(registration *Registration) *connectionRecord {
 	return record
 }
 
-func (sm *Manager) reserveLocked(record *connectionRecord, delta int) *types.RpcError {
+func (sm *Manager) reserveLocked(record *connectionRecord, delta int) *rpcerrors.RpcError {
 	if delta <= 0 {
 		return nil
 	}
 	if record.items+delta > sm.limits.MaxItemsPerConnection {
 		sm.recordLimitRejectionLocked("connection")
-		return types.RpcErrorTooBusy()
+		return rpcerrors.RpcErrorTooBusy()
 	}
 	if sm.items+delta > sm.limits.MaxItemsGlobal {
 		sm.recordLimitRejectionLocked("global")
-		return types.RpcErrorTooBusy()
+		return rpcerrors.RpcErrorTooBusy()
 	}
 	return nil
 }
@@ -213,12 +214,12 @@ func (sm *Manager) recordLimitRejectionLocked(kind string) {
 	}
 }
 
-func (sm *Manager) addStream(registration *Registration, stream types.SubscriptionType) *types.RpcError {
+func (sm *Manager) addStream(registration *Registration, stream types.SubscriptionType) *rpcerrors.RpcError {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	record := sm.recordLocked(registration)
 	if record == nil {
-		return types.RpcErrorInternal()
+		return rpcerrors.RpcErrorInternal()
 	}
 	if _, exists := record.streams[stream]; exists {
 		return nil
@@ -270,13 +271,13 @@ func uniqueStrings(values []string) []string {
 	return unique
 }
 
-func (sm *Manager) addAccounts(registration *Registration, stream types.SubscriptionType, accounts []string) *types.RpcError {
+func (sm *Manager) addAccounts(registration *Registration, stream types.SubscriptionType, accounts []string) *rpcerrors.RpcError {
 	accounts = uniqueStrings(accounts)
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	record := sm.recordLocked(registration)
 	if record == nil {
-		return types.RpcErrorInternal()
+		return rpcerrors.RpcErrorInternal()
 	}
 	owned := record.accounts[stream]
 	if owned == nil {
@@ -357,13 +358,13 @@ func uniqueBooks(books []book) []book {
 	return unique
 }
 
-func (sm *Manager) addBooks(registration *Registration, books []book) *types.RpcError {
+func (sm *Manager) addBooks(registration *Registration, books []book) *rpcerrors.RpcError {
 	books = uniqueBooks(books)
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	record := sm.recordLocked(registration)
 	if record == nil {
-		return types.RpcErrorInternal()
+		return rpcerrors.RpcErrorInternal()
 	}
 	delta := 0
 	for _, value := range books {

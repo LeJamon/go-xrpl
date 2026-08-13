@@ -4,7 +4,6 @@ package batch
 
 import (
 	"bytes"
-	"encoding/hex"
 	"fmt"
 	"sort"
 
@@ -19,7 +18,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ticket"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
-	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // CalcBatchFee calculates the expected batch fee.
@@ -29,9 +27,18 @@ func CalcBatchFee(baseFee uint64, numSigners uint32, numInnerTxns uint32) uint64
 	return (uint64(numSigners)+2)*baseFee + baseFee*uint64(numInnerTxns)
 }
 
-// CalcBatchFeeFromEnv calculates the expected batch fee using the env's base fee.
 func CalcBatchFeeFromEnv(env *jtx.TestEnv, numSigners uint32, numInnerTxns uint32) uint64 {
 	return CalcBatchFee(env.BaseFee(), numSigners, numInnerTxns)
+}
+
+func SetMinimumBatchFeeFromEnv(env *jtx.TestEnv, batch *batchtx.Batch) uint64 {
+	fee := batch.CalculateMinimumFee(env.Ledger(), tx.EngineConfig{
+		BaseFee:          env.BaseFee(),
+		ReserveIncrement: env.ReserveIncrement(),
+		Rules:            env.Ledger().Rules(),
+	})
+	batch.Fee = fmt.Sprintf("%d", fee)
+	return fee
 }
 
 // BatchBuilder provides a fluent interface for building Batch transactions in tests.
@@ -45,7 +52,6 @@ type BatchBuilder struct {
 	innerTxns []batchtx.RawTransaction
 	signers   []batchtx.BatchSigner
 	signSpecs []signSpec
-	baseFee   uint64
 }
 
 // signSpec records how to produce a real BatchSigner signature once the batch
@@ -69,7 +75,6 @@ func NewBatchBuilder(account *jtx.Account, seq uint32, fee uint64, flag uint32) 
 		seq:     &seq,
 		fee:     fee,
 		flag:    flag,
-		baseFee: 10, // default
 	}
 }
 
@@ -86,10 +91,8 @@ func (b *BatchBuilder) AddInnerTx(txn tx.Transaction) *BatchBuilder {
 }
 
 // AddSigner adds a single-sign batch signer whose master key signs the digest.
-// The signature passed here is a placeholder; the real signature over the batch
-// digest is computed in Build().
 // Reference: rippled test/jtx/batch.h sig class
-func (b *BatchBuilder) AddSigner(account *jtx.Account, signature string) *BatchBuilder {
+func (b *BatchBuilder) AddSigner(account *jtx.Account) *BatchBuilder {
 	b.signSpecs = append(b.signSpecs, signSpec{
 		index:       len(b.signers),
 		batchSigner: account,
@@ -99,7 +102,7 @@ func (b *BatchBuilder) AddSigner(account *jtx.Account, signature string) *BatchB
 		BatchSigner: batchtx.BatchSignerData{
 			Account:           account.Address,
 			SigningPubKey:     account.PublicKeyHex(),
-			BatchTxnSignature: signature,
+			BatchTxnSignature: "DEADBEEF",
 		},
 	})
 	return b
@@ -109,7 +112,7 @@ func (b *BatchBuilder) AddSigner(account *jtx.Account, signature string) *BatchB
 // The 'account' is the BatchSigner.Account, and 'regKey' provides the signing key.
 // The real signature is computed in Build().
 // Reference: rippled test/jtx/batch.h sig(Reg{account, regKey})
-func (b *BatchBuilder) AddSignerWithRegKey(account, regKey *jtx.Account, signature string) *BatchBuilder {
+func (b *BatchBuilder) AddSignerWithRegKey(account, regKey *jtx.Account) *BatchBuilder {
 	b.signSpecs = append(b.signSpecs, signSpec{
 		index:       len(b.signers),
 		batchSigner: account,
@@ -119,7 +122,7 @@ func (b *BatchBuilder) AddSignerWithRegKey(account, regKey *jtx.Account, signatu
 		BatchSigner: batchtx.BatchSignerData{
 			Account:           account.Address,
 			SigningPubKey:     regKey.PublicKeyHex(),
-			BatchTxnSignature: signature,
+			BatchTxnSignature: "DEADBEEF",
 		},
 	})
 	return b
@@ -252,8 +255,9 @@ type RegKeySigner struct {
 	SigningKey *jtx.Account
 }
 
-// Build constructs the Batch transaction.
-func (b *BatchBuilder) Build() *batchtx.Batch {
+// Build constructs the Batch transaction and signs every intended-valid
+// BatchSigner.
+func (b *BatchBuilder) Build() (*batchtx.Batch, error) {
 	batch := batchtx.NewBatch(b.account.Address)
 	batch.Fee = fmt.Sprintf("%d", b.fee)
 	if b.seq != nil {
@@ -266,7 +270,9 @@ func (b *BatchBuilder) Build() *batchtx.Batch {
 	batch.RawTransactions = b.innerTxns
 	if len(b.signers) > 0 {
 		batch.BatchSigners = b.signers
-		b.signBatchSigners(batch)
+		if err := b.signBatchSigners(batch); err != nil {
+			return nil, err
+		}
 		sort.SliceStable(batch.BatchSigners, func(i, j int) bool {
 			left, leftErr := state.DecodeAccountID(batch.BatchSigners[i].BatchSigner.Account)
 			right, rightErr := state.DecodeAccountID(batch.BatchSigners[j].BatchSigner.Account)
@@ -276,17 +282,25 @@ func (b *BatchBuilder) Build() *batchtx.Batch {
 			return bytes.Compare(left[:], right[:]) < 0
 		})
 	}
+	return batch, nil
+}
+
+// MustBuild constructs an intended-valid fixture and panics if signing fails.
+// Negative signature fixtures must use the explicit malformed signer methods.
+func (b *BatchBuilder) MustBuild() *batchtx.Batch {
+	batch, err := b.Build()
+	if err != nil {
+		panic(err)
+	}
 	return batch
 }
 
 // signBatchSigners replaces the placeholder BatchSigner signatures with real
-// signatures over the batch digest, mirroring rippled's batch::sig / batch::msig
-// test helpers. Specs whose digest cannot be computed (e.g. a deliberately
-// malformed batch) are left with their placeholder signatures.
-func (b *BatchBuilder) signBatchSigners(batch *batchtx.Batch) {
+// signatures over the batch digest.
+func (b *BatchBuilder) signBatchSigners(batch *batchtx.Batch) error {
 	digest, err := batch.BatchSigningMessage()
 	if err != nil {
-		return
+		return fmt.Errorf("build Batch signing message: %w", err)
 	}
 	for _, spec := range b.signSpecs {
 		signer := &batch.BatchSigners[spec.index].BatchSigner
@@ -297,31 +311,40 @@ func (b *BatchBuilder) signBatchSigners(batch *batchtx.Batch) {
 			for j, key := range spec.signingKeys {
 				nestedID := spec.signerAccounts[j].ID
 				msg := append(append([]byte{}, dataStart...), nestedID[:]...)
-				signer.Signers[j].Signer.TxnSignature = signBatchMessage(key, msg)
+				signature, err := signBatchMessage(key, msg)
+				if err != nil {
+					return fmt.Errorf("sign nested Batch signer %s: %w", key.Address, err)
+				}
+				signer.Signers[j].Signer.TxnSignature = signature
 			}
 			continue
 		}
-		signer.BatchTxnSignature = signBatchMessage(spec.signingKeys[0], dataStart)
+		signature, err := signBatchMessage(spec.signingKeys[0], dataStart)
+		if err != nil {
+			return fmt.Errorf("sign Batch signer %s: %w", spec.signingKeys[0].Address, err)
+		}
+		signer.BatchTxnSignature = signature
 	}
+	return nil
 }
 
 // signBatchMessage signs raw message bytes with the account's key, mirroring
 // rippled's ripple::sign over the serializeBatch slice. The crypto scheme hashes
 // the message internally.
-func signBatchMessage(acc *jtx.Account, msg []byte) string {
+func signBatchMessage(acc *jtx.Account, msg []byte) (string, error) {
 	priv := prefixedPrivateKeyHex(acc)
 	if acc.IsEd25519() {
 		sig, err := ed25519.Algorithm{}.Sign(string(msg), priv)
 		if err != nil {
-			return ""
+			return "", err
 		}
-		return sig
+		return sig, nil
 	}
 	sig, err := secp256k1.Algorithm{}.Sign(string(msg), priv)
 	if err != nil {
-		return ""
+		return "", err
 	}
-	return sig
+	return sig, nil
 }
 
 // prefixedPrivateKeyHex returns the key-type-prefixed private key hex expected by
@@ -335,7 +358,7 @@ func prefixedPrivateKeyHex(acc *jtx.Account) string {
 
 // MakeFakeInnerTx creates a minimal valid inner transaction for validation-only tests.
 // Returns a Payment that satisfies Batch.Validate() requirements.
-func MakeFakeInnerTx() tx.Transaction {
+func MakeFakeInnerTx(sequence uint32) tx.Transaction {
 	p := payment.NewPayment(
 		"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", // genesis account
 		"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
@@ -343,8 +366,7 @@ func MakeFakeInnerTx() tx.Transaction {
 	)
 	p.Fee = "0"
 	p.SigningPubKey = ""
-	seq := uint32(1)
-	p.Sequence = &seq
+	p.Sequence = &sequence
 	flags := tx.TfInnerBatchTxn
 	p.Flags = &flags
 	return p
@@ -370,7 +392,6 @@ func MakeInnerPaymentXRPWithDelegate(from, to *jtx.Account, xrp int64, seq uint3
 	return p
 }
 
-// MakeInnerPaymentXRP creates an inner Payment for an XRP amount in whole XRP units.
 func MakeInnerPaymentXRP(from, to *jtx.Account, xrp int64, seq uint32) *payment.Payment {
 	return MakeInnerPayment(from, to, jtx.XRP(xrp), seq)
 }
@@ -397,7 +418,6 @@ func NewBatchBuilderWithTicket(account *jtx.Account, ticketSeq uint32, fee uint6
 		seq:       &zero,
 		fee:       fee,
 		flag:      flag,
-		baseFee:   10,
 		ticketSeq: &ticketSeq,
 	}
 }
@@ -494,6 +514,5 @@ func MakeInnerAccountSet(acc *jtx.Account, seq uint32) *account.AccountSet {
 // GetCheckIndex returns the hex-encoded check keylet key for an account and sequence.
 // This mirrors rippled's getCheckIndex(account, sequence) helper in Batch_test.cpp.
 func GetCheckIndex(account *jtx.Account, seq uint32) string {
-	chk := keylet.Check(account.ID, seq)
-	return hex.EncodeToString(chk.Key[:])
+	return jtx.CheckID(account, seq)
 }

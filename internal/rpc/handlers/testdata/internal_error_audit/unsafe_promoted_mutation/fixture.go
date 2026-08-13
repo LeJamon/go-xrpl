@@ -1,13 +1,13 @@
 package unsafe_promoted_mutation
 
-import rpctypes "github.com/LeJamon/go-xrpl/internal/rpc/types"
+import "github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
 type wrappedError struct {
-	*rpctypes.RpcError
+	*rpcerrors.RpcError
 }
 
-func Mutate(message string) *rpctypes.RpcError {
-	wrapper := wrappedError{RpcError: rpctypes.RpcErrorInvalidParams(message)}
+func Mutate(message string) *rpcerrors.RpcError {
+	wrapper := wrappedError{RpcError: rpcerrors.RpcErrorInvalidParams(message)}
 	wrapper.Message = message
 	return wrapper.RpcError
 }

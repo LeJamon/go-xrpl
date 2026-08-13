@@ -195,12 +195,12 @@ func CheckCredentialExpired(cred *CredentialEntry, closeTime uint32) bool {
 
 // CheckFields validates a transaction's CredentialIDs field shape, matching
 // rippled's credentials::checkFields(): when the field is present it must hold
-// between 1 and maxCredentialsArraySize (8) entries with no duplicates. present
-// must reflect whether the field was supplied (callers compute it from the
-// slice plus HasField, since an empty array parses back to a nil slice under
-// omitempty). dupDetail is the detail string used for the duplicate error so
-// each call site keeps its existing message. A malformed field returns
-// temMALFORMED.
+// between 1 and maxCredentialsArraySize (8) valid 256-bit entries with no
+// duplicates. present must reflect whether the field was supplied (callers
+// compute it from the slice plus HasField, since an empty array parses back to
+// a nil slice under omitempty). dupDetail is the detail string used for the
+// duplicate error so each call site keeps its existing message. A malformed
+// field returns temMALFORMED.
 // Reference: rippled CredentialHelpers.cpp credentials::checkFields().
 func CheckFields(ids []string, present bool, dupDetail string) error {
 	if !present {
@@ -209,19 +209,31 @@ func CheckFields(ids []string, present bool, dupDetail string) error {
 	if len(ids) == 0 || len(ids) > 8 {
 		return ter.Errorf(ter.TemMALFORMED, "CredentialIDs array size is invalid")
 	}
-	seen := make(map[string]bool, len(ids))
+	seen := make(map[[32]byte]struct{}, len(ids))
 	for _, id := range ids {
-		decoded, err := hex.DecodeString(id)
-		if err != nil || len(decoded) != 32 {
-			return ter.Errorf(ter.TemMALFORMED, "CredentialID must be a 256-bit hex value")
+		credentialID, ok := parseCredentialID(id)
+		if !ok {
+			return ter.Errorf(ter.TemMALFORMED, "CredentialID is invalid")
 		}
-		canonical := hex.EncodeToString(decoded)
-		if seen[canonical] {
+		if _, exists := seen[credentialID]; exists {
 			return ter.Errorf(ter.TemMALFORMED, "%s", dupDetail)
 		}
-		seen[canonical] = true
+		seen[credentialID] = struct{}{}
 	}
 	return nil
+}
+
+func parseCredentialID(value string) ([32]byte, bool) {
+	var id [32]byte
+	if value == "0" {
+		return id, true
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil || len(decoded) != len(id) {
+		return id, false
+	}
+	copy(id[:], decoded)
+	return id, true
 }
 
 // ValidateCredentialIDs validates a transaction's CredentialIDs: each
@@ -237,12 +249,10 @@ func ValidateCredentialIDs(ctx *tx.ApplyContext, credentialIDs []string) ter.Res
 // Preclaim where only a LedgerView (not an ApplyContext) is available.
 func ValidCredentials(view tx.LedgerView, subject [20]byte, credentialIDs []string) ter.Result {
 	for _, idHex := range credentialIDs {
-		credIDBytes, err := hex.DecodeString(idHex)
-		if err != nil || len(credIDBytes) != 32 {
+		credID, ok := parseCredentialID(idHex)
+		if !ok {
 			return ter.TecBAD_CREDENTIALS
 		}
-		var credID [32]byte
-		copy(credID[:], credIDBytes)
 
 		credData, err := view.Read(keylet.CredentialByID(credID))
 		if err != nil || credData == nil {
@@ -354,12 +364,10 @@ func VerifyValidDomain(ctx *tx.ApplyContext, subject [20]byte, domainID [32]byte
 	}
 
 	for _, idHex := range ids {
-		idBytes, err := hex.DecodeString(idHex)
-		if err != nil || len(idBytes) != 32 {
+		id, ok := parseCredentialID(idHex)
+		if !ok {
 			return ter.TefINTERNAL
 		}
-		var id [32]byte
-		copy(id[:], idBytes)
 		raw, err := ctx.View.Read(keylet.CredentialByID(id))
 		if err != nil {
 			return ter.TefINTERNAL
@@ -393,12 +401,10 @@ func removeExpired(ctx *tx.ApplyContext, credentialIDs []string, stopOnFailure b
 	failTER = ter.TesSUCCESS
 
 	for _, idHex := range credentialIDs {
-		credIDBytes, err := hex.DecodeString(idHex)
-		if err != nil || len(credIDBytes) != 32 {
+		credID, ok := parseCredentialID(idHex)
+		if !ok {
 			continue
 		}
-		var credID [32]byte
-		copy(credID[:], credIDBytes)
 
 		credKey := keylet.CredentialByID(credID)
 		credData, err := ctx.View.Read(credKey)
@@ -503,12 +509,10 @@ func authorizedDepositPreauth(view tx.LedgerView, credentialIDs []string, dst [2
 	seen := make(map[string]bool, len(credentialIDs))
 
 	for _, idHex := range credentialIDs {
-		credIDBytes, err := hex.DecodeString(idHex)
-		if err != nil || len(credIDBytes) != 32 {
+		credID, ok := parseCredentialID(idHex)
+		if !ok {
 			return ter.TefINTERNAL
 		}
-		var credID [32]byte
-		copy(credID[:], credIDBytes)
 
 		// Credential existence was already checked in preclaim.
 		credData, err := view.Read(keylet.CredentialByID(credID))

@@ -9,7 +9,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
-	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 func TestBatchPaymentStructuralTefResults(t *testing.T) {
@@ -31,7 +30,7 @@ func TestBatchPaymentStructuralTefResults(t *testing.T) {
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagIndependent).
 			AddInnerTx(partial).
 			AddInnerTx(valid).
-			Build()
+			MustBuild()
 
 		preAlice := env.Balance(alice)
 		preBob := env.Balance(bob)
@@ -39,8 +38,19 @@ func TestBatchPaymentStructuralTefResults(t *testing.T) {
 
 		jtx.RequireTxSuccess(t, result)
 		require.Equal(t, batchFee, result.Fee)
-		require.Len(t, result.AppliedInnerTransactions, 1)
-		require.Equal(t, ter.TesSUCCESS, result.AppliedInnerTransactions[0].Metadata.TransactionResult)
+		env.Close()
+		closed := env.LastClosedLedger()
+		require.Equal(t, uint32(2), closed.TxCount())
+		partialID, err := tx.ComputeTransactionHash(partial)
+		require.NoError(t, err)
+		partialExists, err := closed.TxExists(partialID)
+		require.NoError(t, err)
+		require.False(t, partialExists)
+		validID, err := tx.ComputeTransactionHash(valid)
+		require.NoError(t, err)
+		validExists, err := closed.TxExists(validID)
+		require.NoError(t, err)
+		require.True(t, validExists)
 		require.False(t, env.Exists(carol))
 		require.Equal(t, seq+2, env.Seq(alice))
 		require.Equal(t, preAlice-batchFee-uint64(jtx.XRP(5)), env.Balance(alice))
@@ -67,7 +77,7 @@ func TestBatchPaymentStructuralTefResults(t *testing.T) {
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(valid).
 			AddInnerTx(oversized).
-			Build()
+			MustBuild()
 
 		preAlice := env.Balance(alice)
 		preBob := env.Balance(bob)

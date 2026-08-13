@@ -14,6 +14,7 @@ import (
 type ledgerCleanerService interface {
 	AvailableLedgerRange() (uint32, uint32, bool)
 	CleanerLedger(context.Context, uint32) (*ledger.Ledger, error)
+	CleanerReacquireTarget(context.Context, uint32) ([32]byte, uint32, bool, error)
 	CanonicalLedgerHash(context.Context, uint32) ([32]byte, bool, error)
 	RepairCleanerLedgerIndex(context.Context, uint32, [32]byte, [32]byte) (bool, error)
 	RepairLedgerTransactions(context.Context, uint32) error
@@ -24,7 +25,7 @@ type ledgerCleanerSource struct {
 	family shamap.Family
 
 	mu        sync.RWMutex
-	reacquire func(context.Context, uint32) error
+	reacquire func(context.Context, [32]byte, uint32) error
 }
 
 func (s *ledgerCleanerSource) AvailableRange() (uint32, uint32, bool) {
@@ -71,7 +72,7 @@ func (s *ledgerCleanerSource) RepairLedgerIndex(
 
 func (s *ledgerCleanerSource) Family() shamap.Family { return s.family }
 
-func (s *ledgerCleanerSource) SetReacquire(fn func(context.Context, uint32) error) {
+func (s *ledgerCleanerSource) SetReacquire(fn func(context.Context, [32]byte, uint32) error) {
 	s.mu.Lock()
 	s.reacquire = fn
 	s.mu.Unlock()
@@ -84,7 +85,14 @@ func (s *ledgerCleanerSource) Reacquire(ctx context.Context, seq uint32) error {
 	if fn == nil {
 		return errors.New("ledger_cleaner: ledger acquisition unavailable")
 	}
-	return fn(ctx, seq)
+	hash, targetSeq, ok, err := s.svc.CleanerReacquireTarget(ctx, seq)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("ledger_cleaner: ledger acquisition target unavailable")
+	}
+	return fn(ctx, hash, targetSeq)
 }
 
 func (s *ledgerCleanerSource) RepairTransactions(ctx context.Context, seq uint32) error {

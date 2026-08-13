@@ -3,6 +3,8 @@ package handlers
 import (
 	"encoding/json"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -11,16 +13,16 @@ import (
 // the current open ledger, allowing progression without consensus.
 type LedgerAcceptMethod struct{ adminHandler }
 
-func (m *LedgerAcceptMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *LedgerAcceptMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	if !ctx.Services.Ledger.IsStandalone() {
-		return nil, types.RpcErrorNotStandalone("ledger_accept is only available in standalone mode")
+	if !ctx.Services.Ledger().IsStandalone() {
+		return nil, rpcerrors.RpcErrorNotStandalone("ledger_accept is only available in standalone mode")
 	}
 
-	closedSeq, err := ctx.Services.Ledger.AcceptLedger(ctx.Context)
+	closedSeq, err := ctx.Services.LedgerMutation().AcceptLedger(ctx.Context)
 	if err != nil {
 		return nil, rpcInternalError("ledger_accept: accepting ledger failed", err)
 	}

@@ -13,7 +13,7 @@ import (
 
 func TestFetchInfoMethod_EmptyWhenNotAcquiring(t *testing.T) {
 	m := &handlers.FetchInfoMethod{}
-	ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, IsAdmin: true}
+	ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin}
 
 	result, rpcErr := m.Handle(ctx, json.RawMessage(`{}`))
 	require.Nil(t, rpcErr)
@@ -39,10 +39,9 @@ func TestFetchInfoMethod_PassesThroughSnapshot(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context: context.Background(),
 		Role:    types.RoleAdmin,
-		IsAdmin: true,
-		Services: &types.ServiceContainer{
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{
 			FetchInfo: func() map[string]any { return snap },
-		},
+		}),
 	}
 
 	result, rpcErr := m.Handle(ctx, json.RawMessage(`{}`))
@@ -58,11 +57,10 @@ func TestFetchInfoMethod_ClearInvokesResetAndEchoes(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context: context.Background(),
 		Role:    types.RoleAdmin,
-		IsAdmin: true,
-		Services: &types.ServiceContainer{
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{
 			FetchInfo:      func() map[string]any { return map[string]any{} },
 			FetchInfoClear: func() { cleared = true },
-		},
+		}),
 	}
 
 	result, rpcErr := m.Handle(ctx, json.RawMessage(`{"clear":true}`))

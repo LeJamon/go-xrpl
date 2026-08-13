@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -174,10 +176,10 @@ func (m *mockGatewayBalancesLedgerService) GetClosedLedgerView() (types.LedgerSt
 }
 
 // newGatewayBalancesTestServices builds a per-test ServiceContainer wrapping mock.
-func newGatewayBalancesTestServices(mock *mockGatewayBalancesLedgerService) *types.ServiceContainer {
-	return &types.ServiceContainer{
+func newGatewayBalancesTestServices(mock *mockGatewayBalancesLedgerService) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{
 		Ledger: mock,
-	}
+	})
 }
 
 // TestGatewayBalancesErrorValidation tests error handling for invalid inputs
@@ -205,13 +207,13 @@ func TestGatewayBalancesErrorValidation(t *testing.T) {
 			name:          "Missing account field - empty params",
 			params:        map[string]any{},
 			expectedError: "Missing field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing account field - nil params",
 			params:        nil,
 			expectedError: "Missing field 'account'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Account not found",
@@ -220,7 +222,7 @@ func TestGatewayBalancesErrorValidation(t *testing.T) {
 				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account not found.",
-			expectedCode:  types.RpcACT_NOT_FOUND,
+			expectedCode:  rpcerrors.RpcACT_NOT_FOUND,
 			setupMock: func() {
 				mock.gatewayBalancesErr = svcerr.ErrAccountNotFound
 			},
@@ -232,7 +234,7 @@ func TestGatewayBalancesErrorValidation(t *testing.T) {
 				"account": "n9MJkEKHDhy5eTLuHUQeAAjo382frHNbFK4C8hcwN4nwM2SrLdBj",
 			},
 			expectedError: "Account malformed.",
-			expectedCode:  types.RpcACT_MALFORMED,
+			expectedCode:  rpcerrors.RpcACT_MALFORMED,
 		},
 	}
 
@@ -298,7 +300,7 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_HOTWALLET, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_HOTWALLET, rpcErr.Code)
 		assert.Equal(t, "invalidHotWallet", rpcErr.ErrorString)
 		assert.Contains(t, rpcErr.Message, "Invalid hotwallet")
 	})
@@ -324,7 +326,7 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	// rippled rejects an empty-string hotwallet (parseBase58 failure) but
@@ -344,7 +346,7 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_HOTWALLET, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_HOTWALLET, rpcErr.Code)
 		assert.Equal(t, "invalidHotWallet", rpcErr.ErrorString)
 		assert.Equal(t, "Invalid hotwallet.", rpcErr.Message)
 	})
@@ -364,7 +366,7 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
 	t.Run("Null hotwallet is a valid empty hotwallet set", func(t *testing.T) {
@@ -726,7 +728,7 @@ func TestGatewayBalancesServiceUnavailable(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 

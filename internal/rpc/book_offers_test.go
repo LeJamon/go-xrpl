@@ -8,6 +8,8 @@ import (
 	"maps"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -43,8 +45,8 @@ func newBookOffersMock() *bookOffersMock {
 }
 
 // newBookOffersTestServices builds a *types.ServiceContainer wrapping the mock.
-func newBookOffersTestServices(mock *bookOffersMock) *types.ServiceContainer {
-	return &types.ServiceContainer{Ledger: mock}
+func newBookOffersTestServices(mock *bookOffersMock) *types.ServiceGraph {
+	return types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
 }
 
 // TestBookOffersErrorValidation tests error handling for invalid inputs
@@ -77,13 +79,13 @@ func TestBookOffersErrorValidation(t *testing.T) {
 			name:          "Missing taker_pays - empty params",
 			params:        map[string]any{},
 			expectedError: "Missing field 'taker_pays'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing taker_pays - nil params",
 			params:        nil,
 			expectedError: "Missing field 'taker_pays'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			// Book_test.cpp:1348-1357 — taker_gets missing fires once pays present.
@@ -92,7 +94,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker_pays": map[string]any{"currency": "XRP"},
 			},
 			expectedError: "Missing field 'taker_gets'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			// Pays-missing fires before gets-missing per rippled order.
@@ -104,7 +106,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				},
 			},
 			expectedError: "Missing field 'taker_pays'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			// M2: rippled BookOffers.cpp:45-49 calls RPC::lookupLedger BEFORE
@@ -116,7 +118,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"ledger_index": "99999999",
 			},
 			expectedError: "ledgerNotFound",
-			expectedCode:  types.RpcLGR_NOT_FOUND,
+			expectedCode:  rpcerrors.RpcLGR_NOT_FOUND,
 		},
 		{
 			// Book_test.cpp:1359-1370 — taker_pays string → not object.
@@ -129,7 +131,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				},
 			},
 			expectedError: "Invalid field 'taker_pays', not object.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "taker_pays not object - boolean",
@@ -141,7 +143,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				},
 			},
 			expectedError: "Invalid field 'taker_pays', not object.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "taker_pays not object - array",
@@ -153,7 +155,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				},
 			},
 			expectedError: "Invalid field 'taker_pays', not object.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			// Book_test.cpp:1372-1383 — taker_gets string → not object.
@@ -163,7 +165,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker_gets": 12345,
 			},
 			expectedError: "Invalid field 'taker_gets', not object.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			name: "taker_gets not object - boolean",
@@ -172,7 +174,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker_gets": true,
 			},
 			expectedError: "Invalid field 'taker_gets', not object.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			// Book_test.cpp:1385-1395 — empty pays object → missing currency.
@@ -182,7 +184,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker_gets": map[string]any{"currency": "XRP"},
 			},
 			expectedError: "Missing field 'taker_pays.currency'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			// Book_test.cpp:1398-1409 — pays currency non-string.
@@ -192,7 +194,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker_gets": map[string]any{},
 			},
 			expectedError: "Invalid field 'taker_pays.currency', not string.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			// Book_test.cpp:1411-1422 — pays currency ok but gets currency missing.
@@ -202,7 +204,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker_gets": map[string]any{},
 			},
 			expectedError: "Missing field 'taker_gets.currency'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			// Book_test.cpp:1424-1435 — gets currency non-string.
@@ -212,7 +214,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker_gets": map[string]any{"currency": 1},
 			},
 			expectedError: "Invalid field 'taker_gets.currency', not string.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			// Book_test.cpp:1437-1447 — bad pay currency.
@@ -222,7 +224,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker_gets": map[string]any{"currency": "XRP"},
 			},
 			expectedError: "Invalid field 'taker_pays.currency', bad currency.",
-			expectedCode:  types.RpcSRC_CUR_MALFORMED,
+			expectedCode:  rpcerrors.RpcSRC_CUR_MALFORMED,
 		},
 		{
 			// Book_test.cpp:1450-1461 — bad get currency returns
@@ -233,7 +235,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker_gets": map[string]any{"currency": "NOT_VALID"},
 			},
 			expectedError: "Invalid field 'taker_gets.currency', bad currency.",
-			expectedCode:  types.RpcDST_AMT_MALFORMED,
+			expectedCode:  rpcerrors.RpcDST_AMT_MALFORMED,
 		},
 		{
 			// 3-char code with a character outside rippled's isoCharSet
@@ -244,7 +246,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker_gets": map[string]any{"currency": "XRP"},
 			},
 			expectedError: "Invalid field 'taker_pays.currency', bad currency.",
-			expectedCode:  types.RpcSRC_CUR_MALFORMED,
+			expectedCode:  rpcerrors.RpcSRC_CUR_MALFORMED,
 		},
 		{
 			name: "taker_gets.currency 3-char with non-isoCharSet rune",
@@ -253,7 +255,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker_gets": map[string]any{"currency": "a/b"},
 			},
 			expectedError: "Invalid field 'taker_gets.currency', bad currency.",
-			expectedCode:  types.RpcDST_AMT_MALFORMED,
+			expectedCode:  rpcerrors.RpcDST_AMT_MALFORMED,
 		},
 		{
 			// Book_test.cpp:1463-1475 — gets.issuer non-string.
@@ -263,7 +265,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker_gets": map[string]any{"currency": "USD", "issuer": 1},
 			},
 			expectedError: "Invalid field 'taker_gets.issuer', not string.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			// Book_test.cpp:1477-1489 — pays.issuer non-string.
@@ -273,7 +275,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker_gets": map[string]any{"currency": "USD"},
 			},
 			expectedError: "Invalid field 'taker_pays.issuer', not string.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			// Book_test.cpp:1491-1503 — pays.issuer unparseable base58 →
@@ -287,7 +289,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker_gets": map[string]any{"currency": "USD"},
 			},
 			expectedError: "Invalid field 'taker_pays.issuer', bad issuer.",
-			expectedCode:  types.RpcSRC_ISR_MALFORMED,
+			expectedCode:  rpcerrors.RpcSRC_ISR_MALFORMED,
 		},
 		{
 			// Book_test.cpp:1505-1517 — pays.issuer == noAccount() (ACCOUNT_ONE)
@@ -301,7 +303,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker_gets": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 			},
 			expectedError: "Invalid field 'taker_pays.issuer', bad issuer account one.",
-			expectedCode:  types.RpcSRC_ISR_MALFORMED,
+			expectedCode:  rpcerrors.RpcSRC_ISR_MALFORMED,
 		},
 		{
 			// Book_test.cpp:1519-1531 — gets.issuer unparseable.
@@ -314,7 +316,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				},
 			},
 			expectedError: "Invalid field 'taker_gets.issuer', bad issuer.",
-			expectedCode:  types.RpcDST_ISR_MALFORMED,
+			expectedCode:  rpcerrors.RpcDST_ISR_MALFORMED,
 		},
 		{
 			// Book_test.cpp:1533-1545 — gets.issuer == ACCOUNT_ONE.
@@ -327,7 +329,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				},
 			},
 			expectedError: "Invalid field 'taker_gets.issuer', bad issuer account one.",
-			expectedCode:  types.RpcDST_ISR_MALFORMED,
+			expectedCode:  rpcerrors.RpcDST_ISR_MALFORMED,
 		},
 		{
 			// Book_test.cpp:1547-1561 — Unneeded issuer for XRP pay currency.
@@ -340,7 +342,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker_gets": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 			},
 			expectedError: "Unneeded field 'taker_pays.issuer' for XRP currency specification.",
-			expectedCode:  types.RpcSRC_ISR_MALFORMED,
+			expectedCode:  rpcerrors.RpcSRC_ISR_MALFORMED,
 		},
 		{
 			// Book_test.cpp:1563-1576 — non-XRP currency with XRP issuer.
@@ -353,7 +355,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker_gets": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 			},
 			expectedError: "Invalid field 'taker_pays.issuer', expected non-XRP issuer.",
-			expectedCode:  types.RpcSRC_ISR_MALFORMED,
+			expectedCode:  rpcerrors.RpcSRC_ISR_MALFORMED,
 		},
 		{
 			// Mirror of the pays-side test for gets.issuer.
@@ -366,7 +368,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				},
 			},
 			expectedError: "Unneeded field 'taker_gets.issuer' for XRP currency specification.",
-			expectedCode:  types.RpcDST_ISR_MALFORMED,
+			expectedCode:  rpcerrors.RpcDST_ISR_MALFORMED,
 		},
 		{
 			// Book_test.cpp:1651-1665 — non-XRP get with XRP issuer.
@@ -376,7 +378,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker_gets": map[string]any{"currency": "EUR", "issuer": "rrrrrrrrrrrrrrrrrrrrrhoLvTp"},
 			},
 			expectedError: "Invalid field 'taker_gets.issuer', expected non-XRP issuer.",
-			expectedCode:  types.RpcDST_ISR_MALFORMED,
+			expectedCode:  rpcerrors.RpcDST_ISR_MALFORMED,
 		},
 		{
 			// Book_test.cpp:1578-1591 — taker non-string.
@@ -387,7 +389,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker":      1,
 			},
 			expectedError: "Invalid field 'taker', not string.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			// Book_test.cpp:1593-1604 — taker base58 decode failure.
@@ -401,7 +403,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker": "not-a-valid-address",
 			},
 			expectedError: "Invalid field 'taker'.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 		{
 			// Book_test.cpp:1666-1678 — bad domain string emits rippled's
@@ -413,7 +415,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"domain":     "badString",
 			},
 			expectedError: "Unable to parse domain.",
-			expectedCode:  types.RpcDOMAIN_MALFORMED,
+			expectedCode:  rpcerrors.RpcDOMAIN_MALFORMED,
 		},
 		{
 			// Explicit empty-string domain — parseHex("") fails the length check.
@@ -424,7 +426,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"domain":     "",
 			},
 			expectedError: "Unable to parse domain.",
-			expectedCode:  types.RpcDOMAIN_MALFORMED,
+			expectedCode:  rpcerrors.RpcDOMAIN_MALFORMED,
 		},
 		{
 			// Non-string domain follows the same path in rippled (line 179).
@@ -435,7 +437,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"domain":     12345,
 			},
 			expectedError: "Unable to parse domain.",
-			expectedCode:  types.RpcDOMAIN_MALFORMED,
+			expectedCode:  rpcerrors.RpcDOMAIN_MALFORMED,
 		},
 		{
 			// Book_test.cpp:1606-1618 — same currency+issuer is rejected as
@@ -446,7 +448,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"taker_gets": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 			},
 			expectedError: "No such market.",
-			expectedCode:  types.RpcBAD_MARKET,
+			expectedCode:  rpcerrors.RpcBAD_MARKET,
 		},
 		{
 			// Canonical form: XRP currency on both sides where one side spells
@@ -462,7 +464,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				},
 			},
 			expectedError: "No such market.",
-			expectedCode:  types.RpcBAD_MARKET,
+			expectedCode:  rpcerrors.RpcBAD_MARKET,
 		},
 		{
 			// Book_test.cpp:1620-1634 — string-typed limit is rejected with
@@ -474,7 +476,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 				"limit":      "0",
 			},
 			expectedError: "Invalid field 'limit', not unsigned integer.",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedCode:  rpcerrors.RpcINVALID_PARAMS,
 		},
 	}
 
@@ -1032,7 +1034,7 @@ func TestBookOffersLimitParameter(t *testing.T) {
 
 		_, rpcErr := method.Handle(ctx, paramsJSON)
 		require.NotNil(t, rpcErr, "limit=0 must be rejected")
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid field 'limit'.", rpcErr.Message)
 	})
 }
@@ -1276,7 +1278,7 @@ func TestBookOffersServiceUnavailable(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
@@ -1285,14 +1287,14 @@ func TestBookOffersServiceUnavailable(t *testing.T) {
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
-			Services:   &types.ServiceContainer{Ledger: nil},
+			Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: nil}),
 		}
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 }
@@ -1330,7 +1332,7 @@ func TestBookOffersServiceError(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
 	assert.Equal(t, "Internal error.", rpcErr.Message)
 	assert.NotContains(t, rpcErr.Message, "ledger not found")
 }
@@ -1416,7 +1418,7 @@ func TestBookOffersStaleMarkerMapping(t *testing.T) {
 	result, rpcErr := method.Handle(ctx, paramsJSON)
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 
 	// Sanity: the malformed-marker branch still produces the invalid_field
 	// shape so callers can distinguish the two on the wire.
@@ -1426,7 +1428,7 @@ func TestBookOffersStaleMarkerMapping(t *testing.T) {
 	result, rpcErr = method.Handle(ctx, paramsJSON)
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 }
 
 func TestBookOffersMarkerValuesIgnored(t *testing.T) {
@@ -1616,8 +1618,8 @@ func TestBookOffersNilOffersArray(t *testing.T) {
 // TestBookOffersLimitClampingConformance pins the rippled
 // `readLimitField(rmin=0, rdefault=60, rmax=100)` semantics from
 // RPCHelpers.cpp:703-712, exercised by Book_test.cpp testBookOfferLimits.
-// Non-admin (Unlimited=false) callers see the value clamped into [0, 100];
-// admin/unlimited callers (Unlimited=true) bypass the upper bound entirely.
+// Non-admin callers see the value clamped into [0, 100]; admin/unlimited
+// callers bypass the upper bound entirely.
 // The existing TestBookOffersLimitParameter covers the lower end (0 / default
 // / small values); this case nails down the upper-bound clamp and the
 // asAdmin=true bypass — the part of testBookOfferLimits that varies behaviour
@@ -1636,7 +1638,6 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 	tests := []struct {
 		name          string
 		role          types.Role
-		unlimited     bool
 		limit         any
 		expectedLimit uint32
 	}{
@@ -1645,7 +1646,6 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 			// for non-admin callers (asAdmin=false branch).
 			name:          "rmax+1 clamps to rmax for guest",
 			role:          types.RoleGuest,
-			unlimited:     false,
 			limit:         101,
 			expectedLimit: 100,
 		},
@@ -1654,7 +1654,6 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 			// (asAdmin=true branch).
 			name:          "rmax+1 passes through for admin",
 			role:          types.RoleAdmin,
-			unlimited:     true,
 			limit:         101,
 			expectedLimit: 101,
 		},
@@ -1663,7 +1662,6 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 			// is unconditional, not a "soft" hint.
 			name:          "large limit clamps to rmax for guest",
 			role:          types.RoleGuest,
-			unlimited:     false,
 			limit:         100000,
 			expectedLimit: 100,
 		},
@@ -1672,7 +1670,6 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 			// for either role.
 			name:          "omitted limit yields default for admin",
 			role:          types.RoleAdmin,
-			unlimited:     true,
 			limit:         nil,
 			expectedLimit: 60,
 		},
@@ -1684,7 +1681,6 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				Role:       tc.role,
-				Unlimited:  tc.unlimited,
 				ApiVersion: types.ApiVersion1,
 				Services:   services,
 			}
@@ -1715,7 +1711,6 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
-			Unlimited:  true,
 			ApiVersion: types.ApiVersion1,
 			Services:   services,
 		}
@@ -1729,7 +1724,7 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 
 		_, rpcErr := method.Handle(ctx, paramsJSON)
 		require.NotNil(t, rpcErr, "admin limit=0 must be rejected")
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid field 'limit'.", rpcErr.Message)
 	})
 }
@@ -1779,7 +1774,7 @@ func TestBookOffersTakerXAddressRejected(t *testing.T) {
 			result, rpcErr := method.Handle(ctx, paramsJSON)
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code,
+			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code,
 				"X-address taker must surface invalidParams")
 			assert.Contains(t, rpcErr.Message, "Invalid field 'taker'",
 				"error message should match rippled BookOffers.cpp:172")
@@ -1843,7 +1838,7 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		assert.Equal(t, "Invalid field 'ledger_hash', not hex string.", rpcErr.Message)
 	})
 
@@ -1897,7 +1892,7 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
+		assert.Equal(t, rpcerrors.RpcLGR_NOT_FOUND, rpcErr.Code)
 		assert.Contains(t, rpcErr.Message, "ledgerNotFound")
 	})
 

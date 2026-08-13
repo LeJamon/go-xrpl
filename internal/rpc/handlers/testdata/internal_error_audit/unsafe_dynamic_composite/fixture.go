@@ -1,9 +1,9 @@
 package unsafe_dynamic_composite
 
-import rpctypes "github.com/LeJamon/go-xrpl/internal/rpc/types"
+import "github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
-func Build(code int, message string) *rpctypes.RpcError {
-	return &rpctypes.RpcError{
+func Build(code int, message string) *rpcerrors.RpcError {
+	return &rpcerrors.RpcError{
 		Code:        code,
 		ErrorString: "dynamic",
 		Type:        "dynamic",

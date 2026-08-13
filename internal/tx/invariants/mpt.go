@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // ---------------------------------------------------------------------------
@@ -34,6 +35,7 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 	var mptCreatedByIssuer bool
 	var deletedHoldingAccounts [][20]byte
 	fixCleanup := rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_2_0)
+	mptV2Enabled := rules != nil && rules.Enabled(amendment.FeatureMPTokensV2)
 	enforceCreatedByIssuer := rules != nil &&
 		(rules.Enabled(amendment.FeatureSingleAssetVault) || rules.Enabled(amendment.FeatureLendingProtocol))
 
@@ -130,7 +132,7 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 		}
 	}
 
-	if result == TesSUCCESS {
+	if result == TesSUCCESS || (mptV2Enabled && result == TecINCOMPLETE) {
 		if mptCreatedByIssuer && enforceCreatedByIssuer {
 			return &InvariantViolation{
 				Name:    "ValidMPTIssuance",
@@ -178,14 +180,6 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 					Message: "MPT authorize succeeded but deleted issuances",
 				}
 			}
-			if lendingEnabled &&
-				mptokensCreated+mptokensDeleted > 1 {
-				return &InvariantViolation{
-					Name:    "ValidMPTIssuance",
-					Message: "MPT authorize succeeded but created/deleted bad number of mptokens",
-				}
-			}
-
 			// Check if submitted by issuer (Holder field present).
 			// Use HasHolder() interface for reliable detection since
 			// Common.HasField may not be populated for programmatically
@@ -196,17 +190,60 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 			} else {
 				submittedByIssuer = tx.TxHasField("Holder")
 			}
-			if submittedByIssuer && (mptokensCreated > 0 || mptokensDeleted > 0) {
+
+			if mptV2Enabled && hasPrivilege(txType, mayAuthorizeMPT) &&
+				(txType == protocol.TxTypeAMMWithdraw || txType == protocol.TxTypeAMMClawback) {
+				if submittedByIssuer && txType == protocol.TxTypeAMMWithdraw && mptokensCreated > 0 {
+					return &InvariantViolation{
+						Name:    "ValidMPTIssuance",
+						Message: "issuer-submitted AMMWithdraw created an MPToken",
+					}
+				}
+				if mptokensCreated > 1 || mptokensDeleted > 2 {
+					return &InvariantViolation{
+						Name:    "ValidMPTIssuance",
+						Message: "MPT authorize succeeded but created/deleted bad number of mptokens",
+					}
+				}
+			} else if lendingEnabled &&
+				mptokensCreated+mptokensDeleted > 1 {
+				return &InvariantViolation{
+					Name:    "ValidMPTIssuance",
+					Message: "MPT authorize succeeded but created/deleted bad number of mptokens",
+				}
+			} else if submittedByIssuer && (mptokensCreated > 0 || mptokensDeleted > 0) {
 				return &InvariantViolation{
 					Name:    "ValidMPTIssuance",
 					Message: "MPT authorize submitted by issuer succeeded but created/deleted mptokens",
 				}
-			}
-			if !submittedByIssuer && hasPrivilege(txType, mustAuthorizeMPT) &&
+			} else if !submittedByIssuer && hasPrivilege(txType, mustAuthorizeMPT) &&
 				(mptokensCreated+mptokensDeleted != 1) {
 				return &InvariantViolation{
 					Name:    "ValidMPTIssuance",
 					Message: "MPT authorize submitted by holder succeeded but created/deleted bad number of mptokens",
+				}
+			}
+			return nil
+		}
+
+		if hasPrivilege(txType, mayCreateMPT) {
+			if mptIssuancesCreated > 0 || mptIssuancesDeleted > 0 || mptokensDeleted > 0 {
+				return &InvariantViolation{
+					Name:    "ValidMPTIssuance",
+					Message: "MPT creation transaction changed an issuance or deleted an MPToken",
+				}
+			}
+			if txType == TypeAMMCreate && mptokensCreated > 2 ||
+				txType == protocol.TxTypeCheckCash && mptokensCreated > 1 {
+				return &InvariantViolation{
+					Name:    "ValidMPTIssuance",
+					Message: "MPT creation transaction created too many MPToken entries",
+				}
+			}
+			if tx.TxHasField("Holder") {
+				return &InvariantViolation{
+					Name:    "ValidMPTIssuance",
+					Message: "issuer-submitted transaction created an MPToken",
 				}
 			}
 			return nil
@@ -228,12 +265,12 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 			// EscrowFinish is fully permissive — may create MPTokens for MPT escrows.
 			return nil
 		}
-	}
 
-	if result == TesSUCCESS && hasPrivilege(txType, mayDeleteMPT) &&
-		mptokensDeleted == 1 && mptokensCreated == 0 &&
-		mptIssuancesCreated == 0 && mptIssuancesDeleted == 0 {
-		return nil
+		if hasPrivilege(txType, mayDeleteMPT) &&
+			((txType == TypeAMMDelete && mptokensDeleted <= 2) || mptokensDeleted == 1) &&
+			mptokensCreated == 0 && mptIssuancesCreated == 0 && mptIssuancesDeleted == 0 {
+			return nil
+		}
 	}
 
 	// For all other tx types (or non-success results), no MPT changes at all.

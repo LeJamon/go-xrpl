@@ -40,10 +40,10 @@ func TestAccountDeleteCascadesDIDFromNonRootOwnerPage(t *testing.T) {
 	env.IncLedgerSeqForAccDel(alice)
 	aliceBefore := env.Balance(alice)
 	beckyBefore := env.Balance(becky)
-	result := env.Submit(newAccountDelete(alice, becky))
+	result := env.Submit(newAccountDelete(env, alice, becky))
 	jtx.RequireTxSuccess(t, result)
 
-	delivered := aliceBefore - acctDelFee
+	delivered := aliceBefore - env.ReserveIncrement()
 	require.Equal(t, beckyBefore+delivered, env.Balance(becky))
 	require.NotNil(t, result.Metadata)
 	require.NotNil(t, result.Metadata.DeliveredAmount)

@@ -65,6 +65,27 @@ type LedgerData struct {
 	TxRoot     [32]byte
 }
 
+type durableFetcher interface {
+	FetchDurable(context.Context, [32]byte) ([]byte, error)
+}
+
+type durableTraversalFamily struct {
+	shamap.Family
+	fetch func(context.Context, [32]byte) ([]byte, error)
+}
+
+func (f durableTraversalFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
+	return f.fetch(ctx, hash)
+}
+
+func newDurableTraversalFamily(family shamap.Family) shamap.Family {
+	fetch := family.Fetch
+	if durable, ok := family.(durableFetcher); ok {
+		fetch = durable.FetchDurable
+	}
+	return durableTraversalFamily{Family: family, fetch: fetch}
+}
+
 // Params configures a cleaning run; the fields mirror the parameters rippled's
 // ledger_cleaner admin command accepts.
 type Params struct {
@@ -189,13 +210,20 @@ func (c *Cleaner) Clean(p Params) Status {
 		}
 		c.running = false
 		c.min, c.max = 0, 0
+		c.deep = false
+		c.fixTxns = false
+		c.failures = 0
+		c.ledgersChecked = 0
+		c.nodesChecked = 0
+		c.missingNodes = 0
+		c.lastError = ""
 		c.cond.Broadcast()
 		return c.statusLocked()
 	}
 
 	// The range provider may perform storage I/O. Keep it outside the cleaner
 	// mutex so status and stop requests cannot be blocked behind that work.
-	availableMin, availableMax, ok := c.src.AvailableRange()
+	availableMin, availableMax, available := c.src.AvailableRange()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -204,11 +232,6 @@ func (c *Cleaner) Clean(p Params) Status {
 		c.lastError = "ledger_cleaner: cleaner stopped"
 		return c.statusLocked()
 	}
-	if !ok {
-		c.lastError = "no ledgers available to verify"
-		return c.statusLocked()
-	}
-
 	min, max := availableMin, availableMax
 	if p.Ledger != nil {
 		min, max = *p.Ledger, *p.Ledger
@@ -219,23 +242,11 @@ func (c *Cleaner) Clean(p Params) Status {
 	if p.MinLedger != nil {
 		min = *p.MinLedger
 	}
-	if min == 0 || max == 0 || min > max {
-		c.lastError = fmt.Sprintf("invalid ledger range %d-%d", min, max)
-		return c.statusLocked()
-	}
-	if min < availableMin || max > availableMax {
-		c.lastError = fmt.Sprintf(
-			"ledger range %d-%d is outside available range %d-%d",
-			min, max, availableMin, availableMax,
-		)
-		return c.statusLocked()
-	}
-
 	if c.runCancel != nil {
 		c.runCancel()
+		c.runCancel = nil
 	}
 	c.generation++
-	c.runCtx, c.runCancel = context.WithCancel(c.ctx)
 
 	c.deep = p.Ledger != nil
 	c.fixTxns = p.Ledger != nil
@@ -255,7 +266,19 @@ func (c *Cleaner) Clean(p Params) Status {
 	if p.CheckNodes != nil {
 		c.deep = *p.CheckNodes
 	}
+	if min == 0 || max == 0 || min > max {
+		c.min, c.max = 0, 0
+		c.running = false
+		if !available && p.Ledger == nil && p.MinLedger == nil && p.MaxLedger == nil {
+			c.lastError = "no ledgers available to verify"
+		} else {
+			c.lastError = fmt.Sprintf("invalid ledger range %d-%d", min, max)
+		}
+		c.cond.Broadcast()
+		return c.statusLocked()
+	}
 
+	c.runCtx, c.runCancel = context.WithCancel(c.ctx)
 	c.min, c.max = min, max
 	c.running = true
 	c.cond.Broadcast()
@@ -294,6 +317,11 @@ func (c *Cleaner) statusLocked() Status {
 // range one ledger at a time.
 func (c *Cleaner) run() {
 	defer close(c.done)
+	var pendingRepair struct {
+		generation uint64
+		seq        uint32
+		needed     bool
+	}
 	for {
 		c.mu.Lock()
 		for !c.exit && !c.running {
@@ -321,9 +349,22 @@ func (c *Cleaner) run() {
 		runCtx := c.runCtx
 		c.mu.Unlock()
 
-		nodes, missing, repairTxns, reacquire, err := c.cleanLedger(runCtx, seq, deep)
+		nodes, missing, repairTxns, reacquire, err := c.cleanLedger(runCtx, seq, deep, func() {
+			pendingRepair.generation = generation
+			pendingRepair.seq = seq
+			pendingRepair.needed = true
+		})
+		repairTxns = repairTxns || (pendingRepair.needed &&
+			pendingRepair.generation == generation && pendingRepair.seq == seq)
 		if err == nil && missing == 0 && (fixTxns || repairTxns) {
 			err = c.src.RepairTransactions(runCtx, seq)
+			if err != nil && repairTxns {
+				pendingRepair.generation = generation
+				pendingRepair.seq = seq
+				pendingRepair.needed = true
+			} else if err == nil {
+				pendingRepair.needed = false
+			}
 		}
 		failed := err != nil || missing != 0
 		if failed && runCtx.Err() == nil && (reacquire || missing != 0) {
@@ -368,13 +409,8 @@ func (c *Cleaner) run() {
 		if c.logger != nil {
 			c.logger.Debug("ledger_cleaner: ledger verified complete", "seq", seq, "nodes", nodes)
 		}
-		if seq == c.min {
-			c.min++
-		}
-		if seq == c.max && c.max > 0 {
-			c.max--
-		}
-		if c.min > c.max {
+		if seq == c.min && seq == c.max {
+			c.min, c.max = 0, 0
 			c.running = false
 			if c.runCancel != nil {
 				c.runCancel()
@@ -384,6 +420,13 @@ func (c *Cleaner) run() {
 				c.logger.Info("ledger_cleaner: run complete",
 					"ledgers_checked", c.ledgersChecked,
 					"missing_nodes", c.missingNodes)
+			}
+		} else {
+			if seq == c.min {
+				c.min++
+			}
+			if seq == c.max {
+				c.max--
 			}
 		}
 		c.mu.Unlock()
@@ -416,6 +459,7 @@ func (c *Cleaner) cleanLedger(
 	ctx context.Context,
 	seq uint32,
 	deep bool,
+	rememberRepair func(),
 ) (nodes, missing uint64, repairTxns, reacquire bool, err error) {
 	info, ok, err := c.src.Ledger(ctx, seq)
 	if err != nil {
@@ -464,10 +508,14 @@ func (c *Cleaner) cleanLedger(
 	if err != nil {
 		return 0, 0, false, false, err
 	}
+	if repairTxns {
+		rememberRepair()
+	}
 	family := c.src.Family()
 	if family == nil {
 		return 0, 0, repairTxns, false, errNoFamily
 	}
+	family = newDurableTraversalFamily(family)
 
 	for _, t := range []struct {
 		root    [32]byte
@@ -480,11 +528,13 @@ func (c *Cleaner) cleanLedger(
 			continue // empty tree
 		}
 
-		sm, ferr := shamap.NewFromRootHash(t.mapType, t.root, family)
+		sm, ferr := shamap.NewFromRootHashContext(ctx, t.mapType, t.root, family)
 		if ferr != nil {
-			// The root node itself is missing or unreadable.
-			missing++
-			continue
+			if errors.Is(ferr, shamap.ErrNodeNotInStore) || errors.Is(ferr, shamap.ErrInvalidNodeData) {
+				missing++
+				continue
+			}
+			return nodes, missing, repairTxns, true, ferr
 		}
 
 		if !deep {

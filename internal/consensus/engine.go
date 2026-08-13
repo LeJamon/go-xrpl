@@ -38,6 +38,10 @@ type EngineLedgerReceiver interface {
 }
 
 type EngineLedgerSwitch interface {
+	// CanAcceptLedger applies the validated-ledger freshness and sequence checks
+	// without changing the consensus working ledger.
+	CanAcceptLedger(id LedgerID) (bool, error)
+
 	// TrySwitchToLedger synchronously attempts to make a locally-held ledger
 	// the consensus parent. The candidate must be the exact wrong-ledger
 	// recovery target, the validated tip, or the current network preference.

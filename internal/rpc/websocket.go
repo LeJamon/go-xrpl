@@ -3,13 +3,15 @@ package rpc
 import (
 	"fmt"
 	"net/http"
+	"reflect"
 	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
+
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
-	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
@@ -52,7 +54,8 @@ type WebSocketServer struct {
 	closing             bool
 	timeout             time.Duration
 	ledgerInfoProvider  types.LedgerInfoProvider
-	services            *types.ServiceContainer
+	services            *types.ServiceGraph
+	urlSubscriptions    types.URLSubscriptionService
 	urlSubs             *urlSubscriptionRegistry
 	peerSourceHolder
 	resourceManager   *resource.Manager
@@ -69,16 +72,23 @@ type WebSocketServer struct {
 	forceDone chan struct{}
 }
 
+var _ types.MethodDispatcher = (*WebSocketServer)(nil)
+
 // WebSocketServerOptions controls construction of a WebSocket RPC server.
 // A nil subscription manager selects a new manager for the standalone server.
 type WebSocketServerOptions struct {
 	Timeout             time.Duration
-	Services            *types.ServiceContainer
+	Services            *types.ServiceGraph
 	ResourceManager     *resource.Manager
 	PeerSource          types.PeerSource
+	Registry            *types.MethodRegistry
 	PingInterval        time.Duration
 	LedgerInfoProvider  types.LedgerInfoProvider
 	SubscriptionManager *subscription.Manager
+	// URLSubscriptions shares URL subscribers with other RPC transports. A
+	// registry returned by NewURLSubscriptionService transfers ownership to
+	// the server and is closed with it; other implementations remain caller-owned.
+	URLSubscriptions types.URLSubscriptionService
 }
 
 // websocketConnection owns the transport-specific state for one logical
@@ -114,7 +124,13 @@ func NewWebSocketServer(options WebSocketServerOptions) *WebSocketServer {
 	if resourceManager == nil {
 		resourceManager = resource.NewManager(nil, nil)
 	}
+	if isNilURLSubscriptionService(options.URLSubscriptions) {
+		options.URLSubscriptions = nil
+	}
 	manager := options.SubscriptionManager
+	if registry, ok := options.URLSubscriptions.(*urlSubscriptionRegistry); ok && registry.manager != nil {
+		manager = registry.manager
+	}
 	if manager == nil {
 		manager = subscription.NewManager()
 	}
@@ -130,7 +146,7 @@ func NewWebSocketServer(options WebSocketServerOptions) *WebSocketServer {
 			// Don't require specific subprotocol - xrpl.js doesn't use one
 		},
 		subscriptionManager: manager,
-		methodRegistry:      types.NewMethodRegistry(),
+		methodRegistry:      options.Registry,
 		connections:         make(map[string]*websocketConnection),
 		timeout:             options.Timeout,
 		services:            options.Services,
@@ -140,17 +156,34 @@ func NewWebSocketServer(options WebSocketServerOptions) *WebSocketServer {
 		closeDone:           make(chan struct{}),
 		forceDone:           make(chan struct{}),
 	}
-	ws.pathFindRefresh = newPathFindRefreshManager(ws)
-	if ws.services != nil {
-		ws.services.SubscriptionMetrics = manager.Metrics
+	if ws.methodRegistry == nil {
+		ws.methodRegistry = defaultMethodRegistry()
 	}
-	// The URL (RPCSub) registry lives on the WebSocket server because URL
-	// subscribers share its subscription manager's broadcast fan-out. Node
-	// composition installs the returned service on the shared container.
-	ws.urlSubs = newURLSubscriptionRegistry(ws)
+	ws.pathFindRefresh = newPathFindRefreshManager(ws)
+	if registry, ok := options.URLSubscriptions.(*urlSubscriptionRegistry); ok {
+		ws.urlSubs = registry
+		ws.urlSubscriptions = registry
+	} else if options.URLSubscriptions != nil {
+		ws.urlSubscriptions = options.URLSubscriptions
+	} else {
+		ws.urlSubs = newURLSubscriptionRegistry(manager, options.Services, options.LedgerInfoProvider)
+		ws.urlSubscriptions = ws.urlSubs
+	}
 	ws.setPeerSource(options.PeerSource)
-	ws.registerAllMethods()
 	return ws
+}
+
+func isNilURLSubscriptionService(service types.URLSubscriptionService) bool {
+	if service == nil {
+		return true
+	}
+	value := reflect.ValueOf(service)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -242,17 +275,17 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-func (ws *WebSocketServer) registerAllMethods() {
-	handlers.RegisterAll(ws.methodRegistry)
-}
-
 // SubscriptionManager returns the subscription manager for event publishing
 func (ws *WebSocketServer) SubscriptionManager() *subscription.Manager {
 	return ws.subscriptionManager
 }
 
-// URLSubscriptionService returns the URL subscription registry that node
-// composition installs on the shared service container after construction.
 func (ws *WebSocketServer) URLSubscriptionService() types.URLSubscriptionService {
-	return ws.urlSubs
+	return ws.urlSubscriptions
+}
+
+// ExecuteMethod lets the json RPC forward through the same immutable registry
+// and request context as a direct WebSocket command.
+func (ws *WebSocketServer) ExecuteMethod(ctx *types.RpcContext, method string, params []byte) (any, *rpcerrors.RpcError) {
+	return dispatchNestedMethod(ws.methodRegistry, ctx, method, params, wsLog())
 }

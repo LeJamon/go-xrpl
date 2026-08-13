@@ -40,8 +40,8 @@ func TestMethodDescriptorCatalogue(t *testing.T) {
 	assert.Equal(t, 40, roleCounts[types.RoleGuest])
 	assert.Equal(t, 10, roleCounts[types.RoleUser])
 
-	registry := types.NewMethodRegistry()
-	handlers.RegisterAll(registry)
+	registry, err := handlers.BuildRegistry()
+	assert.NoError(t, err)
 	assert.ElementsMatch(t, registry.List(), mapKeys(seen))
 	for _, descriptor := range descriptors {
 		registered, ok := registry.Get(descriptor.Name)

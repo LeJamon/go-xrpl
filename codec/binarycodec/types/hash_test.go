@@ -24,6 +24,12 @@ func TestHash_FromJson(t *testing.T) {
 			expectedErr: nil,
 		},
 		{
+			name:     "Zero hash shorthand",
+			json:     "0",
+			length:   32,
+			expected: make([]byte, 32),
+		},
+		{
 			name:        "Invalid hex string",
 			json:        "031G020000000000000000000000000000000000000000000000000000000000",
 			length:      32,
@@ -50,6 +56,8 @@ func TestHash_FromJson(t *testing.T) {
 			require.Equal(t, tc.expected, actual)
 			if tc.expectedErr != nil {
 				require.Equal(t, tc.expectedErr.Error(), err.Error())
+			} else {
+				require.NoError(t, err)
 			}
 		})
 	}

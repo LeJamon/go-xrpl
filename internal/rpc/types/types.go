@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"sort"
+	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
@@ -53,6 +56,10 @@ func (r Role) IsUnlimited() bool {
 	return r == RoleAdmin || r == RoleIdentified
 }
 
+func (r Role) IsAdmin() bool {
+	return r == RoleAdmin
+}
+
 // Condition represents the preconditions required by an RPC method.
 // Matches rippled's Condition enum in Handler.h.
 // When the server is amendment-blocked, methods with any condition
@@ -61,13 +68,13 @@ type Condition int
 
 const (
 	// NoCondition - method has no preconditions, always available even when amendment blocked
-	NoCondition Condition = iota
+	NoCondition Condition = 0
 	// NeedsNetworkConnection - method requires network sync
-	NeedsNetworkConnection
+	NeedsNetworkConnection Condition = 1
 	// NeedsCurrentLedger - method requires access to the current open ledger
-	NeedsCurrentLedger
+	NeedsCurrentLedger Condition = 1 << 1
 	// NeedsClosedLedger - method requires access to the last closed ledger
-	NeedsClosedLedger
+	NeedsClosedLedger Condition = 1 << 2
 )
 
 // PeerSource produces the data the `peers` RPC returns. PeersJSON
@@ -86,22 +93,18 @@ type RpcContext struct {
 	Context    context.Context
 	Role       Role
 	ApiVersion int
-	// IsAdmin gates admin-only commands. True iff Role == RoleAdmin.
-	IsAdmin bool
-	// Unlimited skips per-request resource limits (page sizes, etc.).
-	// True for RoleAdmin and RoleIdentified, matching rippled
-	// isUnlimited() in Role.cpp.
-	Unlimited  bool
 	ClientIP   string
 	ResourceIP string
 	PeerSource PeerSource
-	// Services is the per-request service container handlers read to
-	// reach the ledger service, dispatcher, manifest cache, etc. The
-	// HTTP/WebSocket dispatchers populate this from the server's wired
-	// container; tests construct RpcContext directly with whatever
-	// fixtures they need. Replaces the former package-level
-	// types.Services global.
-	Services *ServiceContainer
+	// Services is the immutable application graph shared by all requests.
+	// Transport-owned dependencies are carried separately below.
+	Services *ServiceGraph
+	// Dispatcher forwards the json proxy through the current transport's
+	// method registry without putting a transport back into the application
+	// graph.
+	Dispatcher MethodDispatcher
+	// URLSubscriptions is the transport-owned RPCSub registry, when enabled.
+	URLSubscriptions URLSubscriptionService
 	// LoadCost is the resource charge selected while handling the request.
 	// Dispatch initializes it to the reference cost; handlers raise it only
 	// after reaching the equivalent rippled work boundary.
@@ -126,31 +129,99 @@ type MethodHandler interface {
 	RequiredCondition() Condition
 }
 
-// Method registry for dynamic method registration
+// MethodRegistry is the immutable, published RPC method catalogue. Use a
+// MethodRegistryBuilder to construct one before handing it to a transport.
 type MethodRegistry struct {
 	methods map[string]MethodHandler
+	names   []string
 }
 
-func NewMethodRegistry() *MethodRegistry {
-	return &MethodRegistry{
-		methods: make(map[string]MethodHandler),
+// MethodRegistryBuilder collects RPC methods before publication. Its zero
+// value is ready for use.
+type MethodRegistryBuilder struct {
+	methods map[string]MethodHandler
+	built   bool
+}
+
+func NewMethodRegistryBuilder() *MethodRegistryBuilder {
+	return &MethodRegistryBuilder{}
+}
+
+// Register adds a method to the builder. Names must be non-empty and have no
+// surrounding whitespace. Handlers must be non-nil, including when an
+// interface contains a typed nil value. Registration is rejected after Build.
+func (b *MethodRegistryBuilder) Register(name string, handler MethodHandler) error {
+	if b == nil {
+		return fmt.Errorf("method registry builder is nil")
+	}
+	if b.built {
+		return fmt.Errorf("method registry is already built")
+	}
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" || trimmed != name {
+		return fmt.Errorf("invalid RPC method name %q", name)
+	}
+	if methodHandlerIsNil(handler) {
+		return fmt.Errorf("RPC method %q has a nil handler", name)
+	}
+	if b.methods == nil {
+		b.methods = make(map[string]MethodHandler)
+	}
+	if _, exists := b.methods[name]; exists {
+		return fmt.Errorf("RPC method %q is already registered", name)
+	}
+	b.methods[name] = handler
+	return nil
+}
+
+// Build publishes an immutable method registry. The builder cannot be reused
+// for further registration after publication.
+func (b *MethodRegistryBuilder) Build() (*MethodRegistry, error) {
+	if b == nil {
+		return nil, fmt.Errorf("method registry builder is nil")
+	}
+	if b.built {
+		return nil, fmt.Errorf("method registry is already built")
+	}
+	methods := make(map[string]MethodHandler, len(b.methods))
+	names := make([]string, 0, len(b.methods))
+	for name, handler := range b.methods {
+		methods[name] = handler
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	registry := &MethodRegistry{methods: methods, names: names}
+	b.built = true
+	return registry, nil
+}
+
+func methodHandlerIsNil(handler MethodHandler) bool {
+	if handler == nil {
+		return true
+	}
+	value := reflect.ValueOf(handler)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
 	}
 }
 
-func (r *MethodRegistry) Register(name string, handler MethodHandler) {
-	r.methods[name] = handler
-}
-
 func (r *MethodRegistry) Get(name string) (MethodHandler, bool) {
+	if r == nil {
+		return nil, false
+	}
 	handler, exists := r.methods[name]
 	return handler, exists
 }
 
 func (r *MethodRegistry) List() []string {
-	methods := make([]string, 0, len(r.methods))
-	for name := range r.methods {
-		methods = append(methods, name)
+	if r == nil {
+		return nil
 	}
+	methods := make([]string, len(r.names))
+	copy(methods, r.names)
 	return methods
 }
 
@@ -208,7 +279,7 @@ const (
 	WarningUnsupportedAmendmentsMajority = 1001 // Unsupported amendments have reached majority
 	WarningAmendmentBlocked              = 1002 // This server is amendment blocked
 	WarningExpiredValidatorList          = 1003 // This server has an expired validator list
-	WarningClioServer                    = 2001 // This is a clio server
+	WarningFieldsDeprecated              = 2004 // Some request fields are deprecated
 )
 
 // WarningObject represents an API warning in responses
@@ -227,22 +298,6 @@ type WebSocketCommand struct {
 	ID      any
 	Params  json.RawMessage
 	Request map[string]any
-}
-
-// WebSocketResponse represents an XRPL WebSocket API response.
-type WebSocketResponse struct {
-	Status       string          `json:"status"`
-	Type         string          `json:"type"`
-	Result       any             `json:"result,omitempty"`
-	ID           any             `json:"id,omitempty"`
-	Warning      string          `json:"warning,omitempty"`
-	Warnings     []WarningObject `json:"warnings,omitempty"`
-	Forwarded    bool            `json:"forwarded,omitempty"`
-	ApiVersion   int             `json:"api_version,omitempty"`
-	Error        string          `json:"error,omitempty"`
-	ErrorCode    int             `json:"error_code,omitempty"`
-	ErrorMessage string          `json:"error_message,omitempty"`
-	Request      any             `json:"request,omitempty"`
 }
 
 // Subscription types for WebSocket streams. Rippled's per-book stream
@@ -378,16 +433,20 @@ func (r *SubscriptionRequest) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return err
 	}
-	r.wire = &wireSubscriptionArrays{
-		streams:          m["streams"],
-		accounts:         m["accounts"],
-		accountsProposed: m["accounts_proposed"],
-		rtAccounts:       m["rt_accounts"],
-		accountHistory:   m["account_history_tx_stream"],
-		books:            m["books"],
-		url:              m["url"],
-		username:         m["username"],
-		password:         m["password"],
+	apiVersion := r.ApiVersion
+	*r = SubscriptionRequest{
+		ApiVersion: apiVersion,
+		wire: &wireSubscriptionArrays{
+			streams:          m["streams"],
+			accounts:         m["accounts"],
+			accountsProposed: m["accounts_proposed"],
+			rtAccounts:       m["rt_accounts"],
+			accountHistory:   m["account_history_tx_stream"],
+			books:            m["books"],
+			url:              m["url"],
+			username:         m["username"],
+			password:         m["password"],
+		},
 	}
 	_ = json.Unmarshal(m["streams"], &r.Streams)
 	_ = json.Unmarshal(m["accounts"], &r.Accounts)
@@ -525,33 +584,6 @@ func jsonCppBool(raw json.RawMessage) bool {
 	}
 }
 
-// Common parameter structures
-
-// Account parameter
-type AccountParam struct {
-	Account string `json:"account"`
-}
-
-// Transaction identifier
-type TransactionParam struct {
-	Transaction string `json:"transaction"`
-	Binary      bool   `json:"binary,omitempty"`
-}
-
-// Pagination parameters
-type PaginationParams struct {
-	Marker json.RawMessage `json:"marker,omitempty"`
-}
-
-// Currency specification
-type Currency struct {
-	Currency string `json:"currency"`
-	Issuer   string `json:"issuer,omitempty"`
-}
-
-// Path specification for path finding
-type Path []PathStep
-
 type PathStep struct {
 	Account       string `json:"account,omitempty"`
 	Currency      string `json:"currency"`
@@ -559,29 +591,6 @@ type PathStep struct {
 	MPTIssuanceID string `json:"mpt_issuance_id,omitempty"`
 	Type          uint8  `json:"type,omitempty"`
 	TypeHex       string `json:"type_hex,omitempty"`
-}
-
-// Quality specification
-type Quality struct {
-	Currency string `json:"currency"`
-	Issuer   string `json:"issuer,omitempty"`
-	Value    string `json:"value"`
-}
-
-// Memo structure
-type Memo struct {
-	MemoData   string `json:"MemoData,omitempty"`
-	MemoFormat string `json:"MemoFormat,omitempty"`
-	MemoType   string `json:"MemoType,omitempty"`
-}
-
-// Signer structure
-type Signer struct {
-	Signer struct {
-		Account       string `json:"Account"`
-		TxnSignature  string `json:"TxnSignature"`
-		SigningPubKey string `json:"SigningPubKey"`
-	} `json:"Signer"`
 }
 
 // CurrencySpec represents a currency specification for order book subscriptions
