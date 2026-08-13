@@ -128,7 +128,7 @@ func TestAccountSet_DisallowIncomingFlags(t *testing.T) {
 }
 
 func TestAccountSet_ClawbackInteractions(t *testing.T) {
-	t.Run("disabled amendment is a no-op", func(t *testing.T) {
+	t.Run("retired amendment remains active", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 		alice := jtx.NewAccount("alice")
 		env.Fund(alice)
@@ -137,7 +137,7 @@ func TestAccountSet_ClawbackInteractions(t *testing.T) {
 
 		result := env.Submit(AccountSet(alice).AllowClawback().Build())
 		jtx.RequireTxSuccess(t, result)
-		jtx.RequireFlagNotSet(t, env, alice, state.LsfAllowTrustLineClawback)
+		jtx.RequireFlagSet(t, env, alice, state.LsfAllowTrustLineClawback)
 	})
 
 	t.Run("set is irreversible and excludes no freeze", func(t *testing.T) {

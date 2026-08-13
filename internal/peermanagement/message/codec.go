@@ -15,6 +15,7 @@ const (
 	smallMsgMax  = 64 * 1024        // 64 KiB
 	mediumMsgMax = 1 * 1024 * 1024  // 1 MiB
 	largeMsgMax  = 16 * 1024 * 1024 // 16 MiB
+	maxPingSize  = 1024
 )
 
 // MaxPayloadSizeForType returns the largest payload a peer may claim
@@ -32,7 +33,7 @@ func IsKnownMessageType(t MessageType) bool {
 
 func payloadSizeLimit(t MessageType) uint32 {
 	switch t {
-	case TypePing, TypeSquelch:
+	case TypeSquelch:
 		return 2048
 	case TypeEndpoints,
 		TypeStatusChange,
@@ -306,6 +307,10 @@ func validateHeaderClaims(header Header) error {
 	if header.PayloadSize > MaxMessageSize || header.UncompressedSize > MaxMessageSize {
 		return fmt.Errorf("%w: exceeds protocol max %d bytes",
 			ErrMessageTooLarge, MaxMessageSize)
+	}
+	if header.MessageType == TypePing && uint64(header.UncompressedSize)+uint64(header.HeaderSize()) > maxPingSize {
+		return fmt.Errorf("%w: uncompressed ping with header exceeds %d bytes",
+			ErrMessageTooLarge, maxPingSize)
 	}
 
 	// Cap both the on-wire and uncompressed claims per message type

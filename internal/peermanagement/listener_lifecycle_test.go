@@ -48,9 +48,14 @@ func TestOverlayStopDuringListenerBindClosesUnpublishedListener(t *testing.T) {
 	stopDone := make(chan error, 1)
 	go func() { stopDone <- o.Stop() }()
 	select {
+	case <-o.stopCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not request shutdown")
+	}
+	select {
 	case err := <-stopDone:
 		t.Fatalf("Stop returned before listener preparation completed: %v", err)
-	case <-time.After(100 * time.Millisecond):
+	default:
 	}
 
 	close(release)

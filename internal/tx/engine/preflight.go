@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -37,17 +38,20 @@ func (e *Engine) preflight(tx txcore.Transaction) (result ter.Result) {
 
 	common := tx.GetCommon()
 	rules := e.rules()
+	currentTxID, currentTxIDErr := txcore.ComputeCurrentTransactionHash(tx)
 
 	// Structural preflight is ledger-state-independent, so its verdict is
 	// memoised on the transaction and a re-preflight under the same rules skips
 	// the repeat (see Common.preflightedRules). Signature verification stays out
 	// of the memo and always runs below, so a multi-signed tx's view-dependent
 	// signer-list check is never cached.
-	if !common.PreflightVerified(rules) {
+	if currentTxIDErr != nil || !common.PreflightVerified(rules, currentTxID) {
 		if result := e.preflightStructure(tx, common); result != ter.TesSUCCESS {
 			return result
 		}
-		common.MarkPreflightVerified(rules)
+		if currentTxIDErr == nil {
+			common.MarkPreflightVerified(rules, currentTxID)
+		}
 	}
 
 	// preflight2 — cryptographic signature verification runs LAST, after the
@@ -67,18 +71,6 @@ func (e *Engine) preflight(tx txcore.Transaction) (result ter.Result) {
 	if svp, ok := tx.(txcore.SigValidatedPreflighter); ok {
 		if err := svp.PreflightSigValidated(); err != nil {
 			return parseValidationError(err)
-		}
-	}
-
-	// Reference: rippled Batch.cpp:303-312.
-	if outer, ok := tx.(BatchOuter); ok {
-		for _, inner := range outer.InnerTransactions() {
-			if inner == nil {
-				return ter.TemINVALID_INNER_BATCH
-			}
-			if r := e.preflightInner(inner); r != ter.TesSUCCESS {
-				return ter.TemINVALID_INNER_BATCH
-			}
 		}
 	}
 
@@ -132,12 +124,20 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 	if result := runTypePreflight(tx, rules); result != ter.TesSUCCESS {
 		return result
 	}
+	if outer, ok := tx.(txcore.BatchInnerPreflightRunner); ok {
+		if err := outer.PreflightInnerTransactions(e.preflightInner); err != nil {
+			return parseValidationError(err)
+		}
+	}
 
 	// preflight2 structural stage — the multi-sign structural rules run after
 	// T::preflight (rippled STTx::multiSignHelper reached via checkValidity) and
 	// a violation is Validity::SigBad → temINVALID. The per-signer cryptographic
 	// verification runs later in verifySignatures.
 	if result := e.preflightMultiSignStructure(tx, common); result != ter.TesSUCCESS {
+		return result
+	}
+	if result := e.preflightSponsorSignStructure(common); result != ter.TesSUCCESS {
 		return result
 	}
 	if result := e.preflightBatchSignerStructure(tx); result != ter.TesSUCCESS {
@@ -150,11 +150,11 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 // preflight1 runs rippled Transactor::preflight1 (which invokes preflight0) in
 // its exact order: delegate → preflight0 (NetworkID, flags mask) → account →
 // fee → signing-key shape → ticket+AccountTxnID → the outer-only
-// tfInnerBatchTxn rejection (last).
+// tfInnerBatchTxn rejection → Sponsor field validation.
 // Reference: rippled Transactor.cpp preflight1/preflight0.
 func (e *Engine) preflight1(tx txcore.Transaction, common *txcore.Common, rules *amendment.Rules) ter.Result {
 	// The delegate check precedes preflight0 (and thus the NetworkID checks).
-	if result := checkDelegate(common, rules); result != ter.TesSUCCESS {
+	if result := checkDelegate(tx, common, rules); result != ter.TesSUCCESS {
 		return result
 	}
 	// preflight0: NetworkID canonicality then the flags mask.
@@ -177,8 +177,11 @@ func (e *Engine) preflight1(tx txcore.Transaction, common *txcore.Common, rules 
 	if result := e.preflightSequence(common); result != ter.TesSUCCESS {
 		return result
 	}
-	// The outer tfInnerBatchTxn rejection is the last preflight1 check.
+	// The outer tfInnerBatchTxn rejection precedes the common Sponsor checks.
 	if result := preflightInnerBatchFlag(common, rules); result != ter.TesSUCCESS {
+		return result
+	}
+	if result := checkSponsorFields(tx, common, rules); result != ter.TesSUCCESS {
 		return result
 	}
 	return ter.TesSUCCESS
@@ -238,6 +241,12 @@ func checkPreflightRules(tx txcore.Transaction, rules *amendment.Rules) ter.Resu
 }
 
 func runTypePreflight(tx txcore.Transaction, rules *amendment.Rules) ter.Result {
+	if batch, ok := tx.(txcore.BatchInnerPreflightRunner); ok {
+		if err := batch.ValidateBatchOuter(); err != nil {
+			return parseValidationError(err)
+		}
+		return checkPreflightRules(tx, rules)
+	}
 	if rp, ok := tx.(txcore.RulesAwarePreflighter); ok {
 		if err := rp.PreflightWithRules(rules); err != nil {
 			return parseValidationError(err)
@@ -248,14 +257,6 @@ func runTypePreflight(tx txcore.Transaction, rules *amendment.Rules) ter.Result 
 		return parseValidationError(err)
 	}
 	return checkPreflightRules(tx, rules)
-}
-
-// BatchOuter is implemented by transaction types whose inner transactions
-// each need to pass preflight as part of the outer's preflight pipeline.
-// Reference: rippled Batch.cpp preflight() — `ripple::preflight(..., tapBATCH)`
-// per inner STTx; any failure → temINVALID_INNER_BATCH on the outer.
-type BatchOuter interface {
-	InnerTransactions() []txcore.Transaction
 }
 
 // preflightInner runs the structural checks for an inner batch tx. rippled routes
@@ -294,45 +295,53 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	if result := checkSigningKeyShape(common); result != ter.TesSUCCESS {
 		return result
 	}
-	if result := checkDelegate(common, rules); result != ter.TesSUCCESS {
+	usesTicket := (common.Sequence == nil || *common.Sequence == 0) && common.TicketSequence != nil
+	if usesTicket && common.AccountTxnID != "" {
+		return ter.TemINVALID
+	}
+	if result := checkDelegate(innerTx, common, rules); result != ter.TesSUCCESS {
 		return result
 	}
-	return runTypePreflight(innerTx, rules)
+	if result := checkSponsorFields(innerTx, common, rules); result != ter.TesSUCCESS {
+		return result
+	}
+	if rules.FixCleanup3_2_0Enabled() && hasInvalidAmount(innerTx) {
+		return ter.TemBAD_AMOUNT
+	}
+	if result := runTypePreflight(innerTx, rules); result != ter.TesSUCCESS {
+		return result
+	}
+	if svp, ok := innerTx.(txcore.SigValidatedPreflighter); ok {
+		if err := svp.PreflightSigValidated(); err != nil {
+			return parseValidationError(err)
+		}
+	}
+	return ter.TesSUCCESS
 }
 
 // preflightInnerBatchFlag rejects a transaction reaching the outer preflight
 // that carries tfInnerBatchTxn. That flag is only ever set by the Batch
 // transactor on the inner transactions it applies (which flow through
 // preflightInner, not here), so on the outer path it is always illegitimate. It
-// is the last preflight1 check, so a transaction that is both inner-flagged and
-// malformed in fee/sequence surfaces the earlier code (matching rippled, where
-// this rejection is the final preflight1 check).
+// follows fee and sequence validation, so a transaction that is both
+// inner-flagged and malformed there surfaces the earlier code.
 //
-// The rejection code mirrors rippled across the two amendment gates:
-//   - Batch disabled: the flag itself is undefined → temINVALID_FLAG
-//     (rippled Transactor::preflight1, unchanged by fixBatchInnerSigs).
-//   - Batch enabled: such a transaction still has no valid signature (its
-//     SigningPubKey is empty). With fixBatchInnerSigs it is rejected as a bad
-//     signature before reaching the engine (rippled apply.cpp checkValidity
-//     falls through to checkSign → SigBad → temINVALID). Before the fix it
-//     reached the transaction engine and failed with temINVALID_FLAG. Either
-//     way it can never apply.
+// Without BatchV1_1 the flag is undefined. With BatchV1_1 it is valid only on
+// an inner transaction carrying a parent batch ID, so the standalone path is
+// rejected as temINVALID_INNER_BATCH.
 func preflightInnerBatchFlag(common *txcore.Common, rules *amendment.Rules) ter.Result {
 	if common.Flags == nil || *common.Flags&txcore.TfInnerBatchTxn == 0 {
 		return ter.TesSUCCESS
 	}
-	if !rules.Enabled(amendment.FeatureBatch) {
+	if !rules.Enabled(amendment.FeatureBatchV1_1) {
 		return ter.TemINVALID_FLAG
 	}
-	if rules.Enabled(amendment.FeatureFixBatchInnerSigs) {
-		return ter.TemINVALID
-	}
-	return ter.TemINVALID_FLAG
+	return ter.TemINVALID_INNER_BATCH
 }
 
 // checkDelegate validates the sfDelegate field.
 // Reference: rippled Transactor.cpp preflight1 (delegate block, before preflight0).
-func checkDelegate(common *txcore.Common, rules *amendment.Rules) ter.Result {
+func checkDelegate(transaction txcore.Transaction, common *txcore.Common, rules *amendment.Rules) ter.Result {
 	if common.Delegate == "" {
 		return ter.TesSUCCESS
 	}
@@ -342,7 +351,81 @@ func checkDelegate(common *txcore.Common, rules *amendment.Rules) ter.Result {
 	if common.Delegate == common.Account {
 		return ter.TemBAD_SIGNER
 	}
+	if !txcore.IsTransactionDelegable(transaction.TxType()) &&
+		!txcore.HasGranularPermissions(transaction.TxType()) {
+		return ter.TemINVALID
+	}
 	return ter.TesSUCCESS
+}
+
+func checkSponsorFields(transaction txcore.Transaction, common *txcore.Common, rules *amendment.Rules) ter.Result {
+	hasSponsor := common.Sponsor != "" || common.HasField("Sponsor")
+	hasSponsorFlags := common.SponsorFlags != nil || common.HasField("SponsorFlags")
+	hasSponsorSignature := common.SponsorSignature != nil || common.HasField("SponsorSignature")
+	if !hasSponsor && !hasSponsorFlags && !hasSponsorSignature {
+		return ter.TesSUCCESS
+	}
+	if !rules.Enabled(amendment.FeatureSponsor) {
+		return ter.TemDISABLED
+	}
+	if hasSponsor != hasSponsorFlags {
+		return ter.TemINVALID_FLAG
+	}
+	if hasSponsorSignature && (!hasSponsor || !hasSponsorFlags) {
+		return ter.TemMALFORMED
+	}
+	if hasSponsorSignature && common.SponsorSignature == nil {
+		return ter.TemMALFORMED
+	}
+	if hasSponsorFlags {
+		if common.SponsorFlags == nil {
+			return ter.TemINVALID_FLAG
+		}
+		flags := *common.SponsorFlags
+		if flags == 0 || flags&txcore.SpfSponsorFlagMask != 0 {
+			return ter.TemINVALID_FLAG
+		}
+		if flags&txcore.SpfSponsorReserve != 0 && !reserveSponsorAllowed(transaction.TxType()) {
+			return ter.TemINVALID_FLAG
+		}
+	}
+	if hasSponsor && common.Sponsor == common.Account {
+		return ter.TemMALFORMED
+	}
+	return ter.TesSUCCESS
+}
+
+func reserveSponsorAllowed(txType txcore.Type) bool {
+	switch txType {
+	case txcore.TypeDelegateSet,
+		txcore.TypeDepositPreauth,
+		txcore.TypePayment,
+		txcore.TypeSignerListSet,
+		txcore.TypeCheckCancel,
+		txcore.TypeCheckCash,
+		txcore.TypeCheckCreate,
+		txcore.TypeEscrowCancel,
+		txcore.TypeEscrowCreate,
+		txcore.TypeEscrowFinish,
+		txcore.TypePaymentChannelClaim,
+		txcore.TypePaymentChannelCreate,
+		txcore.TypePaymentChannelFund,
+		txcore.TypeClawback,
+		txcore.TypeMPTokenAuthorize,
+		txcore.TypeMPTokenIssuanceCreate,
+		txcore.TypeMPTokenIssuanceDestroy,
+		txcore.TypeMPTokenIssuanceSet,
+		txcore.TypeTrustSet,
+		txcore.TypeCredentialAccept,
+		txcore.TypeCredentialCreate,
+		txcore.TypeCredentialDelete,
+		txcore.TypeAccountSet,
+		txcore.TypeRegularKeySet,
+		txcore.TypeSponsorshipTransfer:
+		return true
+	default:
+		return false
+	}
 }
 
 // checkAccountPresent rejects a zero/empty source account.
@@ -438,12 +521,55 @@ func (e *Engine) preflightMultiSignStructure(tx txcore.Transaction, common *txco
 	return ter.TesSUCCESS
 }
 
+// preflightSponsorSignStructure enforces the signature-object shape even when
+// cryptographic verification is disabled (simulation and the test harness).
+// Nested multisigners are ordered and unique by binary AccountID, but unlike
+// top-level Signers they are not compared with the transaction Account.
+func (e *Engine) preflightSponsorSignStructure(common *txcore.Common) ter.Result {
+	sponsor := common.SponsorSignature
+	if sponsor == nil {
+		return ter.TesSUCCESS
+	}
+	if sponsor.SigningPubKey != "" {
+		if len(sponsor.Signers) != 0 {
+			return ter.TemINVALID
+		}
+		return ter.TesSUCCESS
+	}
+	if len(sponsor.Signers) == 0 {
+		if sponsor.TxnSignature != "" {
+			return ter.TemINVALID
+		}
+		// An empty object is accepted only by dry-run/test configurations.
+		// The crypto verifier rejects it on a normal submission.
+		return ter.TesSUCCESS
+	}
+	if sponsor.TxnSignature != "" {
+		return ter.TemINVALID
+	}
+	if n := len(sponsor.Signers); n < sign.MinMultiSigners || n > sign.MaxMultiSigners {
+		return ter.TemINVALID
+	}
+	var lastAccountID [20]byte
+	for _, sw := range sponsor.Signers {
+		signerID, err := state.DecodeAccountID(sw.Signer.Account)
+		if err != nil {
+			return ter.TemINVALID
+		}
+		if signerID == lastAccountID || bytes.Compare(lastAccountID[:], signerID[:]) > 0 {
+			return ter.TemINVALID
+		}
+		lastAccountID = signerID
+	}
+	return ter.TesSUCCESS
+}
+
 // preflightBatchSignerStructure enforces the upper bound on each
 // multi-signed BatchSigner's nested Signers array. rippled checks this inside
 // multiSignHelper (called from Batch::preflight with ctx.rules); an out-of-range
-// array there surfaces as temBAD_SIGNATURE at the checkBatchSign call site. The
-// crypto verification of those signers lives in Batch.Validate(), so the size
-// bound is enforced here in preflight.
+// array there is a bad-signature validity result and surfaces as temINVALID. The
+// crypto verification of those signers lives in Batch.Validate(), which has no
+// rules access, so the rules-dependent size bound is enforced here in preflight.
 func (e *Engine) preflightBatchSignerStructure(tx txcore.Transaction) ter.Result {
 	bsp, ok := tx.(txcore.BatchSignerProvider)
 	if !ok {
@@ -457,7 +583,7 @@ func (e *Engine) preflightBatchSignerStructure(tx txcore.Transaction) ter.Result
 			continue
 		}
 		if n := len(signer.Signers); n < sign.MinMultiSigners || n > maxSigners {
-			return ter.TemBAD_SIGNATURE
+			return ter.TemINVALID
 		}
 	}
 	return ter.TesSUCCESS
@@ -468,6 +594,16 @@ func (e *Engine) preflightBatchSignerStructure(tx txcore.Transaction) ter.Result
 // key) live in preclaim.
 func (e *Engine) verifySignatures(tx txcore.Transaction) ter.Result {
 	if e.config.SkipSignatureVerification {
+		return ter.TesSUCCESS
+	}
+	if matches, err := txcore.CurrentFieldsMatchRaw(tx); err != nil || !matches {
+		return ter.TemINVALID
+	}
+	txID, idErr := txcore.ComputeCurrentTransactionHash(tx)
+	if idErr == nil && tx.GetCommon().SignatureVerified(txID) {
+		return ter.TesSUCCESS
+	}
+	if idErr == nil && sigcache.Verified(txID) {
 		return ter.TesSUCCESS
 	}
 	// Verify the outer single/multi-sign signature first, mirroring rippled's
@@ -484,15 +620,27 @@ func (e *Engine) verifySignatures(tx txcore.Transaction) ter.Result {
 			return ter.TemINVALID
 		}
 	}
+	// SponsorSignature is checked after CounterpartySignature, matching
+	// STTx::checkSign. Its contents are excluded from the signing projection,
+	// but every signature still binds all ordinary transaction fields.
+	if sponsor := tx.GetCommon().SponsorSignature; sponsor != nil {
+		if err := sign.VerifySponsorSignature(tx, sponsor, true); err != nil {
+			return ter.TemINVALID
+		}
+	}
 	// Batch-signer signatures are verified over the batch signing digest, the same
 	// stage rippled runs STTx::checkBatchSign (always RequireFullyCanonicalSig::yes).
-	// The structural/coverage checks on BatchSigners run unconditionally in Validate;
-	// only the cryptographic verification is gated here so it honours
+	// Structural bounds run before hashing; coverage/order runs in
+	// PreflightSigValidated. Only cryptographic verification is gated here so it honours
 	// SkipSignatureVerification like every other signature.
 	if bsv, ok := tx.(txcore.BatchSignatureVerifier); ok {
 		if err := bsv.VerifyBatchSignatures(); err != nil {
-			return ter.TemBAD_SIGNATURE
+			return ter.TemINVALID
 		}
+	}
+	if idErr == nil {
+		tx.GetCommon().MarkSignatureVerified(txID)
+		sigcache.MarkVerified(txID)
 	}
 	return ter.TesSUCCESS
 }
@@ -528,64 +676,46 @@ func (e *Engine) verifyOuterSignature(tx txcore.Transaction) ter.Result {
 	// malformed-key-type case that does warrant temBAD_SIGNATURE is already
 	// caught unconditionally in preflight1 (preflightCommon).
 	//
-	// A verdict cached off-strand (PrewarmSignature) means this same signature
-	// was already verified under the same rules, so the verify is skipped here to
-	// keep it off the open-ledger apply mutex (issue #1105). Only positive
-	// verdicts are cached, so a cold cache still runs the full verify below.
-	if tx.GetCommon().SignatureVerified() {
-		return ter.TesSUCCESS
-	}
-	// tx-ID-keyed verified-good cache (rippled SF_SIGGOOD analog): the object
-	// SignatureVerified flag is cold after the consensus build re-parses the
-	// agreed tx set, but the tx ID survives, so a hit skips the redundant
-	// re-verify. Positive-only — a miss still runs the full verify below.
-	txID, idErr := txcore.ComputeTransactionHash(tx)
-	if idErr == nil && sigcache.Verified(txID) {
-		return ter.TesSUCCESS
-	}
 	if err := sign.VerifySignature(tx, mustBeFullyCanonical); err != nil {
 		return ter.TemINVALID
-	}
-	if idErr == nil {
-		sigcache.MarkVerified(txID)
 	}
 	return ter.TesSUCCESS
 }
 
-// PrewarmSignature cryptographically verifies a single-signed transaction's
-// signature ahead of the open-ledger apply strand and caches a positive verdict
-// on the transaction, so the in-strand signature check skips the repeat verify.
+// PrewarmSignature cryptographically verifies all signatures ahead of the
+// open-ledger apply strand and caches a positive verdict on the transaction, so
+// the in-strand signature check skips the repeat verification.
 // This moves the dominant per-tx cost — ECDSA/EdDSA verification — off the
 // apply mutex onto the ingress workers, where it runs concurrently, mirroring
 // rippled caching SF_SIGGOOD in checkValidity before the apply strand (#1105).
 //
-// It never rejects and never caches a negative verdict: multi-signed, unsigned,
-// and bad-signature transactions leave the cache cold so the in-strand preflight
-// runs unchanged and reports the canonical, ordered result. Multi-signed
-// transactions stay on the in-strand path because go-xrpl interleaves their
-// crypto check with ledger-state signer-list authorization, which must observe
-// the apply view.
-func PrewarmSignature(txn txcore.Transaction) {
+// It returns a signature error to ingress callers and never caches a negative
+// verdict. Authorization against ledger signer lists remains in preclaim.
+var ErrInvalidSignature = errors.New("invalid transaction signature")
+
+func PrewarmSignature(txn txcore.Transaction) error {
 	if txn == nil {
-		return
+		return nil
 	}
 	common := txn.GetCommon()
-	if common == nil || common.SignatureVerified() {
-		return
+	if common == nil {
+		return nil
 	}
-	// Only single-signed transactions are verified off-strand; an empty
-	// SigningPubKey marks a multi-signed or unsigned (inner-batch) transaction.
-	if common.SigningPubKey == "" {
-		return
+	txID, idErr := txcore.ComputeCurrentTransactionHash(txn)
+	if idErr == nil && common.SignatureVerified(txID) {
+		return nil
 	}
-	if sign.VerifySignature(txn, true) == nil {
-		common.MarkSignatureVerified()
-		// Publish to the tx-ID cache so the consensus build path (fresh object,
-		// cold flag) skips the redundant verify.
-		if txID, err := txcore.ComputeTransactionHash(txn); err == nil {
-			sigcache.MarkVerified(txID)
-		}
+	if reason := sign.CheckSTTxSignature(txn, nil, true); reason != "" {
+		return fmt.Errorf("%w: %s", ErrInvalidSignature, reason)
 	}
+	if idErr != nil {
+		return nil
+	}
+	common.MarkSignatureVerified(txID)
+	// Publish to the tx-ID cache so the consensus build path (fresh object,
+	// cold flag) skips the redundant whole-transaction signature verify.
+	sigcache.MarkVerified(txID)
+	return nil
 }
 
 // hasInvalidAmount reports whether the transaction carries a non-canonical

@@ -67,11 +67,18 @@ const (
 	PaymentFlagPartialPayment uint32 = 0x00020000
 	// tfLimitQuality limits quality of paths
 	PaymentFlagLimitQuality uint32 = 0x00040000
+	// tfSponsorCreatedAccount makes the payment source fund the new
+	// destination account's base reserve.
+	PaymentFlagSponsorCreatedAccount uint32 = 0x00080000
 )
 
 // Payment invalid-flag masks (rippled tfPaymentMask / tfMPTPaymentMask).
 const (
-	tfPaymentMask    uint32 = ^(tx.TfUniversal | PaymentFlagPartialPayment | PaymentFlagLimitQuality | PaymentFlagNoDirectRipple)
+	tfPaymentMask uint32 = ^(tx.TfUniversal |
+		PaymentFlagPartialPayment |
+		PaymentFlagLimitQuality |
+		PaymentFlagNoDirectRipple |
+		PaymentFlagSponsorCreatedAccount)
 	tfMPTPaymentMask uint32 = ^(tx.TfUniversal | PaymentFlagPartialPayment)
 )
 
@@ -153,9 +160,24 @@ func (p *Payment) validate(rules *amendment.Rules) error {
 	isDstMPT := p.Amount.IsMPT()
 	rulesAware := rules != nil
 	mpTokensV2 := rulesAware && rules.MPTokensV2Enabled()
+	flags := p.GetFlags()
 	hasPaths := len(p.Paths) > 0 || p.HasField("Paths")
 	if rulesAware && isDstMPT && !rules.Enabled(amendment.FeatureMPTokensV1) {
 		return ter.Errorf(ter.TemDISABLED, "MPT payment requires MPTokensV1 amendment")
+	}
+	if flags&PaymentFlagSponsorCreatedAccount != 0 {
+		if rulesAware && !rules.Enabled(amendment.FeatureSponsor) {
+			return ter.Errorf(ter.TemDISABLED, "sponsored account creation requires Sponsor amendment")
+		}
+		if flags&(PaymentFlagNoDirectRipple|PaymentFlagPartialPayment|PaymentFlagLimitQuality) != 0 {
+			return ter.Errorf(ter.TemINVALID_FLAG, "sponsored account creation does not allow payment path flags")
+		}
+		if p.SendMax != nil || p.HasField("SendMax") || hasPaths {
+			return ter.Errorf(ter.TemINVALID, "sponsored account creation requires a direct payment")
+		}
+		if !p.Amount.IsNative() {
+			return ter.Errorf(ter.TemBAD_AMOUNT, "sponsored account creation requires XRP")
+		}
 	}
 	if rulesAware && !mpTokensV2 && isDstMPT && hasPaths {
 		return ter.Errorf(ter.TemMALFORMED, "Paths not allowed for MPT payment")
@@ -166,7 +188,6 @@ func (p *Payment) validate(rules *amendment.Rules) error {
 		}
 	}
 
-	flags := p.GetFlags()
 	srcAmount := p.Amount
 	if p.SendMax != nil {
 		srcAmount = *p.SendMax
@@ -317,34 +338,34 @@ func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 			if !p.Amount.IsNative() {
 				return ter.TecNO_DST
 			}
-			// A partial payment may not fund a new account on an open ledger.
-			if config.OpenLedger && (p.GetFlags()&PaymentFlagPartialPayment) != 0 {
-				return ter.TelNO_DST_PARTIAL
+			// A partial payment may not fund a new account.
+			if (p.GetFlags() & PaymentFlagPartialPayment) != 0 {
+				if result := partialNewDestinationResult(config); result != ter.TesSUCCESS {
+					return result
+				}
 			}
 			// The delivered amount must cover the account reserve.
-			if uint64(p.Amount.Drops()) < config.ReserveBase {
+			if uint64(p.Amount.Drops()) < config.ReserveBase &&
+				p.GetFlags()&PaymentFlagSponsorCreatedAccount == 0 {
 				return ter.TecNO_DST_INSUF_XRP
 			}
+		} else if p.GetFlags()&PaymentFlagSponsorCreatedAccount != 0 {
+			return ter.TecNO_SPONSOR_PERMISSION
 		} else if (destAccount.Flags&state.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
 			// A newly-formed account is exempt — it has no way to set the flag.
 			return ter.TecDST_TAG_NEEDED
 		}
 	}
 
-	// Path count/length limits — only on an open ledger and only for "ripple"
-	// payments (those that use transitive balances).
+	// Path count/length limits for payments that use transitive balances.
 	// Reference: rippled Payment.cpp:348-360
-	if config.OpenLedger {
-		ripple := len(p.Paths) > 0 || p.HasField("Paths") || p.SendMax != nil || !p.Amount.IsNative()
-		if ripple {
-			if len(p.Paths) > MaxPathSize {
-				return ter.TelBAD_PATH_COUNT
-			}
-			for _, path := range p.Paths {
-				if len(path) > MaxPathLength {
-					return ter.TelBAD_PATH_COUNT
-				}
-			}
+	ripple := len(p.Paths) > 0 || p.HasField("Paths") || p.SendMax != nil || !p.Amount.IsNative()
+	if ripple && pathCountExceeded(p.Paths) {
+		if config.IsViewOpen() {
+			return ter.TelBAD_PATH_COUNT
+		}
+		if config.ParentBatchID != nil && config.RequireRules().Enabled(amendment.FeatureBatchV1_1) {
+			return ter.TefBAD_PATH_COUNT
 		}
 	}
 
@@ -387,6 +408,28 @@ func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 		}
 	}
 
+	return ter.TesSUCCESS
+}
+
+func pathCountExceeded(paths [][]PathStep) bool {
+	if len(paths) > MaxPathSize {
+		return true
+	}
+	for _, path := range paths {
+		if len(path) > MaxPathLength {
+			return true
+		}
+	}
+	return false
+}
+
+func partialNewDestinationResult(config tx.EngineConfig) ter.Result {
+	if config.IsViewOpen() {
+		return ter.TelNO_DST_PARTIAL
+	}
+	if config.ParentBatchID != nil && config.RequireRules().Enabled(amendment.FeatureBatchV1_1) {
+		return ter.TefNO_DST_PARTIAL
+	}
 	return ter.TesSUCCESS
 }
 

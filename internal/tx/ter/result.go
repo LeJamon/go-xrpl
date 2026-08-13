@@ -45,7 +45,7 @@ const (
 	// tesSUCCESS and related (0-99)
 	TesSUCCESS Result = 0
 
-	// tecCLAIM and other "claimed cost" codes (100-199)
+	// tecCLAIM and other "claimed cost" codes (100 and above)
 	// Transaction succeeded but with a caveat
 	TecCLAIM                              Result = 100
 	TecPATH_PARTIAL                       Result = 101
@@ -130,6 +130,10 @@ const (
 	TecLIMIT_EXCEEDED                     Result = 195
 	TecPSEUDO_ACCOUNT                     Result = 196
 	TecPRECISION_LOSS                     Result = 197
+	// Reserved for historical non-production ledgers; kept for wire parity.
+	TecNO_DELEGATE_PERMISSION Result = 198
+	TecBAD_PROOF              Result = 199
+	TecNO_SPONSOR_PERMISSION  Result = 200
 
 	// tefFAILURE and related codes (-199 to -100)
 	// Transaction failed, fee claimed but tx not applied
@@ -155,6 +159,8 @@ const (
 	TefNO_TICKET                   Result = -180
 	TefNFTOKEN_IS_NOT_TRANSFERABLE Result = -179
 	TefINVALID_LEDGER_FIX_TYPE     Result = -178
+	TefNO_DST_PARTIAL              Result = -177
+	TefBAD_PATH_COUNT              Result = -176
 
 	// telLOCAL_ERROR and related codes (-399 to -300)
 	// Local error, transaction not sent to network
@@ -229,6 +235,7 @@ const (
 	TemBAD_TRANSFER_FEE                            Result = -251
 	TemINVALID_INNER_BATCH                         Result = -250
 	TemBAD_MPT                                     Result = -249
+	TemBAD_CIPHERTEXT                              Result = -248
 
 	// terRETRY and related codes (-99 to -1)
 	// Retry later
@@ -248,6 +255,7 @@ const (
 	TerADDRESS_COLLISION      Result = -86
 	TerNO_DELEGATE_PERMISSION Result = -85
 	TerLOCKED                 Result = -84
+	TerNO_PERMISSION          Result = -83
 )
 
 // resultNames maps every Result code to its canonical rippled string.
@@ -341,6 +349,9 @@ var resultNames = map[Result]string{ //nolint:gosec // G101: TER result-code nam
 	TecLIMIT_EXCEEDED:                     "tecLIMIT_EXCEEDED",
 	TecPSEUDO_ACCOUNT:                     "tecPSEUDO_ACCOUNT",
 	TecPRECISION_LOSS:                     "tecPRECISION_LOSS",
+	TecNO_DELEGATE_PERMISSION:             "tecNO_DELEGATE_PERMISSION",
+	TecBAD_PROOF:                          "tecBAD_PROOF",
+	TecNO_SPONSOR_PERMISSION:              "tecNO_SPONSOR_PERMISSION",
 	TefFAILURE:                            "tefFAILURE",
 	TefALREADY:                            "tefALREADY",
 	TefBAD_ADD_AUTH:                       "tefBAD_ADD_AUTH",
@@ -363,6 +374,8 @@ var resultNames = map[Result]string{ //nolint:gosec // G101: TER result-code nam
 	TefNO_TICKET:                          "tefNO_TICKET",
 	TefNFTOKEN_IS_NOT_TRANSFERABLE:        "tefNFTOKEN_IS_NOT_TRANSFERABLE",
 	TefINVALID_LEDGER_FIX_TYPE:            "tefINVALID_LEDGER_FIX_TYPE",
+	TefNO_DST_PARTIAL:                     "tefNO_DST_PARTIAL",
+	TefBAD_PATH_COUNT:                     "tefBAD_PATH_COUNT",
 	TelLOCAL_ERROR:                        "telLOCAL_ERROR",
 	TelBAD_DOMAIN:                         "telBAD_DOMAIN",
 	TelBAD_PATH_COUNT:                     "telBAD_PATH_COUNT",
@@ -431,6 +444,7 @@ var resultNames = map[Result]string{ //nolint:gosec // G101: TER result-code nam
 	TemBAD_TRANSFER_FEE:                            "temBAD_TRANSFER_FEE",
 	TemINVALID_INNER_BATCH:                         "temINVALID_INNER_BATCH",
 	TemBAD_MPT:                                     "temBAD_MPT",
+	TemBAD_CIPHERTEXT:                              "temBAD_CIPHERTEXT",
 	TerRETRY:                                       "terRETRY",
 	TerFUNDS_SPENT:                                 "terFUNDS_SPENT",
 	TerINSUF_FEE_B:                                 "terINSUF_FEE_B",
@@ -447,6 +461,7 @@ var resultNames = map[Result]string{ //nolint:gosec // G101: TER result-code nam
 	TerADDRESS_COLLISION:                           "terADDRESS_COLLISION",
 	TerNO_DELEGATE_PERMISSION:                      "terNO_DELEGATE_PERMISSION",
 	TerLOCKED:                                      "terLOCKED",
+	TerNO_PERMISSION:                               "terNO_PERMISSION",
 }
 
 // String returns the canonical rippled name for this result code, or "-" for
@@ -466,12 +481,12 @@ func (r Result) IsSuccess() bool {
 // IsClaimed returns true if the result indicates the fee was claimed
 // This includes tec codes where the transaction "succeeded" with a caveat
 func (r Result) IsClaimed() bool {
-	return r >= TecCLAIM && r < 200
+	return r >= TecCLAIM
 }
 
 // IsTec returns true if this is a tec (claimed cost) code
 func (r Result) IsTec() bool {
-	return r >= 100 && r < 200
+	return r >= TecCLAIM
 }
 
 // IsTef returns true if this is a tef (failure) code
@@ -601,6 +616,8 @@ var resultMessages = map[Result]string{ //nolint:gosec // G101: TER result-code 
 	TecLIMIT_EXCEEDED:                     "Limit exceeded.",
 	TecPSEUDO_ACCOUNT:                     "This operation is not allowed against a pseudo-account.",
 	TecPRECISION_LOSS:                     "The amounts used by the transaction cannot interact.",
+	TecBAD_PROOF:                          "Proof cannot be verified",
+	TecNO_SPONSOR_PERMISSION:              "Sponsor has not authorized this transaction.",
 	TefALREADY:                            "The exact transaction was already in this ledger.",
 	TefBAD_ADD_AUTH:                       "Not authorized to add account.",
 	TefBAD_AUTH:                           "Transaction's public key is not authorized.",
@@ -623,6 +640,8 @@ var resultMessages = map[Result]string{ //nolint:gosec // G101: TER result-code 
 	TefNO_TICKET:                          "Ticket is not in ledger.",
 	TefNFTOKEN_IS_NOT_TRANSFERABLE:        "The specified NFToken is not transferable.",
 	TefINVALID_LEDGER_FIX_TYPE:            "The LedgerFixType field has an invalid value.",
+	TefNO_DST_PARTIAL:                     "Partial payment to create account not allowed.",
+	TefBAD_PATH_COUNT:                     "Malformed: Too many paths.",
 	TelLOCAL_ERROR:                        "Local failure.",
 	TelBAD_DOMAIN:                         "Domain too long.",
 	TelBAD_PATH_COUNT:                     "Malformed: Too many paths.",
@@ -691,6 +710,7 @@ var resultMessages = map[Result]string{ //nolint:gosec // G101: TER result-code 
 	TemBAD_TRANSFER_FEE:                            "Malformed: Transfer fee is outside valid range.",
 	TemINVALID_INNER_BATCH:                         "Malformed: Invalid inner batch transaction.",
 	TemBAD_MPT:                                     "Malformed: Bad MPT.",
+	TemBAD_CIPHERTEXT:                              "Malformed: Invalid ciphertext.",
 	TerRETRY:                                       "Retry transaction.",
 	TerFUNDS_SPENT:                                 "DEPRECATED.",
 	TerINSUF_FEE_B:                                 "Account balance can't pay fee.",
@@ -707,5 +727,6 @@ var resultMessages = map[Result]string{ //nolint:gosec // G101: TER result-code 
 	TerADDRESS_COLLISION:                           "Failed to allocate an unique account address.",
 	TerNO_DELEGATE_PERMISSION:                      "Delegated account lacks permission to perform this transaction.",
 	TerLOCKED:                                      "Fund is locked.",
+	TerNO_PERMISSION:                               "No permission to perform requested operation.",
 	TesSUCCESS:                                     "The transaction was applied. Only final in a validated ledger.",
 }

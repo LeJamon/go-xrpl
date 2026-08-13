@@ -107,6 +107,7 @@ type Peer struct {
 	manifestMessages       chan<- *InboundMessage
 	inboundReadBudget      *readBudget
 	manifestSpoolDir       string
+	manifestPayloadLimit   uint32
 
 	// droppedEvents counts non-blocking event sends that fell through
 	// because the overlay event loop was wedged. nil until wired by
@@ -270,19 +271,20 @@ func DefaultPeerConfig() PeerConfig {
 
 func NewPeer(id PeerID, endpoint Endpoint, inbound bool, identity *Identity, events chan<- Event) *Peer {
 	return &Peer{
-		id:               id,
-		endpoint:         endpoint,
-		inbound:          inbound,
-		identity:         identity,
-		state:            PeerStateDisconnected,
-		outbound:         newOutboundQueue(),
-		outboundProgress: make(chan struct{}, 1),
-		events:           events,
-		traffic:          NewTrafficCounter(),
-		metrics:          newPeerMetrics(nil),
-		squelchMap:       make(map[string]time.Time),
-		txQueueSet:       make(map[[32]byte]struct{}),
-		pingsInFlight:    make(map[uint32]pingInFlight),
+		id:                   id,
+		endpoint:             endpoint,
+		inbound:              inbound,
+		identity:             identity,
+		state:                PeerStateDisconnected,
+		manifestPayloadLimit: DefaultMaxManifestPayload,
+		outbound:             newOutboundQueue(),
+		outboundProgress:     make(chan struct{}, 1),
+		events:               events,
+		traffic:              NewTrafficCounter(),
+		metrics:              newPeerMetrics(nil),
+		squelchMap:           make(map[string]time.Time),
+		txQueueSet:           make(map[[32]byte]struct{}),
+		pingsInFlight:        make(map[uint32]pingInFlight),
 		readPolicy: peerReadPolicy{
 			now:               time.Now,
 			idleTimeout:       readIdleDeadline,
@@ -324,12 +326,30 @@ func (p *Peer) SetManifestSpoolDir(dir string) {
 	p.manifestSpoolDir = dir
 }
 
-func isInboundBulkMessageType(msgType message.MessageType) bool {
-	return !message.IsKnownMessageType(msgType) || message.MaxPayloadSizeForType(msgType) > 64*1024
+func (p *Peer) SetManifestPayloadLimit(size uint32) {
+	if size == 0 {
+		size = DefaultMaxManifestPayload
+	}
+	p.manifestPayloadLimit = size
+}
+
+func (p *Peer) manifestFrameExceedsLimit(header message.Header) bool {
+	limit := p.manifestPayloadLimit
+	if limit == 0 {
+		limit = DefaultMaxManifestPayload
+	}
+	return header.PayloadSize > limit || header.UncompressedSize > limit
+}
+
+func isInboundBulkFrame(header message.Header) bool {
+	if header.MessageType == message.TypePing {
+		return header.PayloadSize > 64*1024
+	}
+	return !message.IsKnownMessageType(header.MessageType) || message.MaxPayloadSizeForType(header.MessageType) > 64*1024
 }
 
 func inboundFrameReservation(header message.Header) int64 {
-	if !isInboundBulkMessageType(header.MessageType) {
+	if !isInboundBulkFrame(header) {
 		return 0
 	}
 	size := int64(header.PayloadSize)
@@ -1074,6 +1094,22 @@ func (p *Peer) Run(ctx context.Context) error {
 	return runErr
 }
 
+func discardMessagePayload(r io.Reader, header message.Header) error {
+	n, err := io.CopyBuffer(
+		io.Discard,
+		io.LimitReader(r, int64(header.PayloadSize)),
+		make([]byte, manifestSpoolBufferSize),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to read payload: %w", err)
+	}
+	if n != int64(header.PayloadSize) {
+		return fmt.Errorf("failed to read payload: got %d, want %d: %w",
+			n, header.PayloadSize, io.ErrUnexpectedEOF)
+	}
+	return nil
+}
+
 func (p *Peer) readLoop(ctx context.Context) error {
 	var outstandingManifest <-chan struct{}
 	for {
@@ -1100,6 +1136,23 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			p.IncBadData("compression-unnegotiated")
 			frameReader.finish(false, p.readPolicy.now())
 			return errCompressionUnnegotiated
+		}
+		if err == nil && header.MessageType == message.TypeManifests && p.manifestFrameExceedsLimit(*header) {
+			_ = frameReader.setHeader(*header)
+			discardErr := discardMessagePayload(frameReader, *header)
+			now := p.readPolicy.now()
+			if discardErr == nil && !frameReader.deadline.IsZero() && !now.Before(frameReader.deadline) {
+				discardErr = ErrFrameReadTooSlow
+			}
+			frameReader.finish(discardErr == nil, now)
+			if discardErr != nil {
+				if p.closed.Load() {
+					return nil
+				}
+				return frameReader.failure(discardErr, now)
+			}
+			p.metrics.recv.addMessage(uint64(header.TotalSize()))
+			continue
 		}
 		if err == nil &&
 			header.MessageType == message.TypeManifests &&
@@ -1908,8 +1961,6 @@ func wirePreflightChargeReason(err error) string {
 		switch limitErr.Reason {
 		case message.WireLimitEndpoints:
 			return "endpoints-too-large"
-		case message.WireLimitManifests:
-			return "manifests-oversize"
 		case message.WireLimitGetObjectTransactions:
 			return "get-objects-transactions-oversize"
 		case message.WireLimitValidatorBlobs:

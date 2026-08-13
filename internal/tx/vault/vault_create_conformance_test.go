@@ -160,6 +160,7 @@ func TestVaultCreateAssetsMaximumMatchesAssetPrecision(t *testing.T) {
 		{name: "XRP network maximum", asset: xrp, raw: "100000000000000000", want: "100000000000000000e0"},
 		{name: "XRP rounds fractional drops", asset: xrp, raw: "9223372036854775.808", want: "9223372036854776e0"},
 		{name: "MPT signed int64 maximum", asset: mpt, raw: "9223372036854775807", want: "9223372036854775807e0"},
+		{name: "MPT signed int64 maximum plus one", asset: mpt, raw: "9223372036854775808", want: "9223372036854775807e0"},
 		{name: "MPT XRP maximum plus one", asset: mpt, raw: "100000000000000001", want: "100000000000000001e0"},
 		{name: "MPT XRP maximum", asset: mpt, raw: "100000000000000000", want: "100000000000000000e0"},
 		{name: "MPT rounds fractional units", asset: mpt, raw: "922337203685477580.8", want: "922337203685477581e0"},
@@ -209,7 +210,7 @@ func TestVaultCreateAssetsMaximumMatchesAssetPrecision(t *testing.T) {
 	}{
 		{name: "XRP above network maximum", asset: xrp, raw: "100000000000000001"},
 		{name: "XRP int64 maximum", asset: xrp, raw: "9223372036854775807"},
-		{name: "MPT above int64 maximum", asset: mpt, raw: "9223372036854775808"},
+		{name: "MPT above rounded int64 maximum", asset: mpt, raw: "9223372036854775809"},
 		{name: "IOU above maximum exponent", asset: iou, raw: "1000000000000000e81"},
 	}
 	for _, test := range panicTests {

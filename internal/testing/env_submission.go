@@ -360,7 +360,9 @@ func (e *TestEnv) applyStaged(
 		}
 		return applyResult
 	}
-	txn.SetRawBytes(blob)
+	if err := tx.BindRawBytes(txn, blob); err != nil {
+		e.t.Fatalf("bind serialized transaction: %v", err)
+	}
 	engine := txengine.NewEngine(e.ledger, config)
 	engine.SetBaseTxCount(transactionCount)
 	if e.invariantViolationHook != nil {

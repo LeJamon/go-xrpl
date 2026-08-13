@@ -137,6 +137,8 @@ func New(typ Type) Entry {
 		return new(RippleState)
 	case TypeSignerList:
 		return new(SignerList)
+	case TypeSponsorship:
+		return new(Sponsorship)
 	case TypeTicket:
 		return new(Ticket)
 	case TypeVault:

@@ -41,7 +41,7 @@ func newTransportRegressionServer(t *testing.T) *Server {
 			"ping": &stubHandler{},
 			"stop": &stubHandler{role: types.RoleAdmin},
 			"fail": &stubHandler{
-				handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+				handle: func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError) {
 					return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 				},
 			},

@@ -58,6 +58,15 @@ type rulesView struct {
 
 func (v rulesView) Rules() *amendment.Rules { return v.rules }
 
+func (v rulesView) BalanceHookMPT(account [20]byte, id [24]byte, amount int64) int64 {
+	if hook, ok := v.LedgerView.(interface {
+		BalanceHookMPT([20]byte, [24]byte, int64) int64
+	}); ok {
+		return hook.BalanceHookMPT(account, id, amount)
+	}
+	return amount
+}
+
 // NewEngine creates a new transaction engine
 func NewEngine(view applystate.AtomicLedgerView, config txcore.EngineConfig) *Engine {
 	logger := config.Logger
@@ -166,7 +175,10 @@ func deleteNFTokenOfferOnView(view txcore.LedgerView, offerKL keylet.Keylet) {
 	}
 
 	ownerDirKey := keylet.OwnerDir(offer.Owner)
-	state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false)
+	ownerResult, err := state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false)
+	if err != nil || !ownerResult.Success {
+		return
+	}
 
 	// Remove from NFTBuys or NFTSells directory
 	isSellOffer := offer.Flags&entry.LsfSellNFToken != 0
@@ -176,8 +188,13 @@ func deleteNFTokenOfferOnView(view txcore.LedgerView, offerKL keylet.Keylet) {
 	} else {
 		tokenDirKey = keylet.NFTBuys(offer.NFTokenID)
 	}
-	state.DirRemove(view, tokenDirKey, offer.NFTokenOfferNode, offerKL.Key, false)
+	tokenResult, err := state.DirRemove(view, tokenDirKey, offer.NFTokenOfferNode, offerKL.Key, false)
+	if err != nil || !tokenResult.Success {
+		return
+	}
 
-	_ = view.Erase(offerKL)
+	if err := view.Erase(offerKL); err != nil {
+		return
+	}
 	adjustOwnerCountOnView(view, offer.Owner, -1)
 }

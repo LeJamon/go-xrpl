@@ -26,6 +26,18 @@ build-all:
 build-nocgo:
     CGO_ENABLED=0 go build ./...
 
+# Install the locked optional mpt-crypto dependency into a project-local cache.
+setup-mpt-crypto:
+    ./scripts/setup-mpt-crypto.sh setup
+
+# Print the environment needed by an mptcrypto-tagged build.
+mpt-crypto-env:
+    @./scripts/setup-mpt-crypto.sh env
+
+# Build mpt-crypto from its lockfile and run the native backend tests.
+test-mpt-crypto package="./amendment/... ./crypto/mptcrypto/... ./internal/tx/mpt/... ./internal/testing/mpt/...":
+    ./scripts/setup-mpt-crypto.sh test {{package}}
+
 # Run every test in the module.
 test:
     go test ./...
@@ -50,9 +62,9 @@ test-libs:
 test-pkg pkg:
     go test -v {{pkg}}
 
-# Production handshake interop against rippled 3.2.0 on network_id=1.
+# Production handshake and manifest interop against rippled 3.3.0 on network_id=1.
 test-docker:
-    PEERTLS_DOCKER_INTEROP=1 go test -tags docker -timeout 300s -v -run TestHandshake_Interop_RippledDocker ./internal/peermanagement/
+    PEERTLS_DOCKER_INTEROP=1 go test -tags docker -timeout 300s -v -run 'Test(Handshake|Manifest)_Interop_RippledDocker' ./internal/peermanagement/
 
 # PostgreSQL backend integration tests. Needs a reachable server; the DSN
 # points at a throwaway database (its tables are truncated between tests).

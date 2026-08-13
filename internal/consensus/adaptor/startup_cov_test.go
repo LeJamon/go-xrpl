@@ -692,6 +692,22 @@ func TestStup_OverlayOptionsFromConfig_LedgerReplayAndMaxTx(t *testing.T) {
 	assert.Equal(t, 500, pcfg.MaxTransactions)
 }
 
+func TestStup_OverlayOptionsFromConfig_ManifestPayload(t *testing.T) {
+	trusted := 700
+	untrusted := 400
+	cfg := &config.Config{Overlay: config.OverlayConfig{
+		MaxTrustedCount:   &trusted,
+		MaxUntrustedCount: &untrusted,
+	}}
+	pcfg := peermanagement.DefaultConfig()
+	for _, opt := range OverlayOptionsFromConfig(cfg) {
+		opt(&pcfg)
+	}
+
+	want := peermanagement.MaximumManifestsMessageSize(trusted, untrusted)
+	assert.Equal(t, uint32(want), pcfg.MaxManifestPayload)
+}
+
 func TestStup_OverlayOptionsFromConfig_Compression(t *testing.T) {
 	cfg := &config.Config{Compression: true}
 	pcfg := peermanagement.DefaultConfig()

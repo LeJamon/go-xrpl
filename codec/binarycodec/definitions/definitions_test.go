@@ -31,6 +31,128 @@ func TestLoadDefinitions(t *testing.T) {
 	require.Equal(t, int32(1), defs.delegatablePermissions["Payment"])
 }
 
+func TestSponsorDefinitions(t *testing.T) {
+	loadDefinitions()
+	require.Equal(t, int32(90), definitions.transactionTypes["SponsorshipTransfer"])
+	require.Equal(t, int32(91), definitions.transactionTypes["SponsorshipSet"])
+	require.Equal(t, int32(144), definitions.ledgerEntryTypes["Sponsorship"])
+
+	tests := []struct {
+		name      string
+		typeName  string
+		typeCode  int32
+		fieldCode int32
+		variable  bool
+		signing   bool
+	}{
+		{"SponsoredOwnerCount", "UInt32", 2, 70, false, true},
+		{"SponsoringOwnerCount", "UInt32", 2, 71, false, true},
+		{"SponsoringAccountCount", "UInt32", 2, 72, false, true},
+		{"RemainingOwnerCount", "UInt32", 2, 73, false, true},
+		{"RemainingOwnerCountDelta", "Int32", 10, 2, false, true},
+		{"SponsorFlags", "UInt32", 2, 74, false, true},
+		{"SponseeNode", "UInt64", 3, 33, false, true},
+		{"ObjectID", "Hash256", 5, 41, false, true},
+		{"FeeAmount", "Amount", 6, 32, false, true},
+		{"MaxFee", "Amount", 6, 33, false, true},
+		{"FeeAmountDelta", "Amount", 6, 34, false, true},
+		{"Sponsor", "AccountID", 8, 27, true, true},
+		{"HighSponsor", "AccountID", 8, 28, true, true},
+		{"LowSponsor", "AccountID", 8, 29, true, true},
+		{"CounterpartySponsor", "AccountID", 8, 30, true, true},
+		{"Sponsee", "AccountID", 8, 31, true, true},
+		{"SponsorSignature", "STObject", 14, 38, false, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			field, ok := definitions.fields[test.name]
+			require.True(t, ok)
+			require.Equal(t, &FieldInfo{
+				Nth:            test.fieldCode,
+				IsVLEncoded:    test.variable,
+				IsSerialized:   true,
+				IsSigningField: test.signing,
+				Type:           test.typeName,
+			}, field.FieldInfo)
+			require.Equal(t, &FieldHeader{TypeCode: test.typeCode, FieldCode: test.fieldCode}, field.FieldHeader)
+			require.Equal(t, test.name, definitions.fieldIDNameMap[*field.FieldHeader])
+		})
+	}
+}
+
+func TestImmutableFlagsDefinition(t *testing.T) {
+	loadDefinitions()
+	field, ok := definitions.fields["ImmutableFlags"]
+	require.True(t, ok)
+	require.Equal(t, &FieldInfo{
+		Nth:            53,
+		IsVLEncoded:    false,
+		IsSerialized:   true,
+		IsSigningField: true,
+		Type:           "UInt32",
+	}, field.FieldInfo)
+	require.Equal(t, &FieldHeader{TypeCode: 2, FieldCode: 53}, field.FieldHeader)
+	require.Equal(t, int32(131125), field.Ordinal)
+	require.Equal(t, "ImmutableFlags", definitions.fieldIDNameMap[*field.FieldHeader])
+	require.NotContains(t, definitions.fields, "MutableFlags")
+}
+
+func TestConfidentialTransferDefinitions(t *testing.T) {
+	loadDefinitions()
+	require.True(t, IsBaseTenUInt64FieldName("ConfidentialOutstandingAmount"))
+	for name, code := range map[string]int32{
+		"ConfidentialMPTConvert":     85,
+		"ConfidentialMPTMergeInbox":  86,
+		"ConfidentialMPTConvertBack": 87,
+		"ConfidentialMPTSend":        88,
+		"ConfidentialMPTClawback":    89,
+	} {
+		require.Equal(t, code, definitions.transactionTypes[name], name)
+	}
+
+	tests := []struct {
+		name      string
+		typeName  string
+		typeCode  int32
+		fieldCode int32
+		variable  bool
+	}{
+		{"ConfidentialBalanceVersion", "UInt32", 2, 69, false},
+		{"ConfidentialOutstandingAmount", "UInt64", 3, 32, false},
+		{"BlindingFactor", "Hash256", 5, 40, false},
+		{"ConfidentialBalanceInbox", "Blob", 7, 32, true},
+		{"ConfidentialBalanceSpending", "Blob", 7, 33, true},
+		{"IssuerEncryptedBalance", "Blob", 7, 34, true},
+		{"IssuerEncryptionKey", "Blob", 7, 35, true},
+		{"HolderEncryptionKey", "Blob", 7, 36, true},
+		{"ZKProof", "Blob", 7, 37, true},
+		{"HolderEncryptedAmount", "Blob", 7, 38, true},
+		{"IssuerEncryptedAmount", "Blob", 7, 39, true},
+		{"SenderEncryptedAmount", "Blob", 7, 40, true},
+		{"DestinationEncryptedAmount", "Blob", 7, 41, true},
+		{"AuditorEncryptedBalance", "Blob", 7, 42, true},
+		{"AuditorEncryptedAmount", "Blob", 7, 43, true},
+		{"AuditorEncryptionKey", "Blob", 7, 44, true},
+		{"AmountCommitment", "Blob", 7, 45, true},
+		{"BalanceCommitment", "Blob", 7, 46, true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			field, ok := definitions.fields[test.name]
+			require.True(t, ok)
+			require.Equal(t, &FieldInfo{
+				Nth:            test.fieldCode,
+				IsVLEncoded:    test.variable,
+				IsSerialized:   true,
+				IsSigningField: true,
+				Type:           test.typeName,
+			}, field.FieldInfo)
+			require.Equal(t, &FieldHeader{TypeCode: test.typeCode, FieldCode: test.fieldCode}, field.FieldHeader)
+			require.Equal(t, test.name, definitions.fieldIDNameMap[*field.FieldHeader])
+		})
+	}
+}
+
 // Helper functions to create and test ordinals.
 // func CreateOrdinal(fh FieldHeader) int32 {
 // 	return fh.TypeCode<<16 | fh.FieldCode

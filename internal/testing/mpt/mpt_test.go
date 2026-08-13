@@ -703,6 +703,8 @@ func TestMPT_SetValidation(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 		env.DisableFeature("MPTokensV1")
 		env.DisableFeature("SingleAssetVault")
+		env.DisableFeature("DynamicMPT")
+		env.DisableFeature("ConfidentialTransfer")
 		env.Close()
 		alice := jtx.NewAccount("alice")
 		bob := jtx.NewAccount("bob")
@@ -725,10 +727,10 @@ func TestMPT_SetValidation(t *testing.T) {
 		mptAlice.Create(mpt.CreateOpts{OwnerCount: mpt.PtrUint32(1), HolderCount: mpt.PtrUint32(0)})
 		mptAlice.Authorize(mpt.AuthorizeOpts{Account: bob, HolderCount: mpt.PtrUint32(1)})
 
-		// Invalid flag (only tfMPTLock=1 and tfMPTUnlock=2 are valid)
+		// Invalid flag.
 		mptAlice.Set(mpt.SetOpts{
 			Account: alice,
-			Flags:   0x00000008,
+			Flags:   0x00000200,
 			Err:     jtx.TemINVALID_FLAG,
 		})
 
@@ -1463,7 +1465,7 @@ func TestMPT_Payment(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestMPT_ClawbackValidation(t *testing.T) {
-	t.Run("ClawbackFeatureDisabledPrecedesFlags", func(t *testing.T) {
+	t.Run("RetiredClawbackDoesNotPrecedeFlags", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 		env.DisableFeature("Clawback")
 		env.Close()
@@ -1473,7 +1475,7 @@ func TestMPT_ClawbackValidation(t *testing.T) {
 		tester := mpt.NewMPTTesterNoFund(t, env, alice)
 		transaction := clawbacktx.NewMPTokenClawback(alice.Address, bob.Address, tester.MPTAmount(1))
 		transaction.SetFlags(tx.TfUniversalMask)
-		jtx.RequireTxFail(t, env.Submit(transaction), jtx.TemDISABLED)
+		jtx.RequireTxFail(t, env.Submit(transaction), jtx.TemINVALID_FLAG)
 	})
 
 	t.Run("InvalidFlagsPrecedeMPTokensFeatureGate", func(t *testing.T) {

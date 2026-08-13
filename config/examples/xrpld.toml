@@ -175,6 +175,8 @@ journal_size_limit = 1582080
 [overlay]
 max_unknown_time = 600   # seconds (300-1800)
 max_diverged_time = 300  # seconds (60-900)
+# max_untrusted_count = 300  # cached unlisted manifests (50-1000)
+# max_trusted_count = 300    # trusted manifests allowed per message (50-1000)
 # public_ip = "203.0.113.7"
 # verify_endpoints = 1   # 0|1 (default 1); 0 accepts non-public gossip
                          # addresses for local dev — a security risk on

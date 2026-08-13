@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/go-viper/mapstructure/v2"
@@ -18,6 +19,9 @@ func LoadConfig(paths Paths) (*Config, error) {
 
 	// Load main configuration file (required)
 	if err := loadMainConfig(v, paths.Main); err != nil {
+		return nil, fmt.Errorf("failed to load main config: %w", err)
+	}
+	if err := validateManifestCounts(v); err != nil {
 		return nil, fmt.Errorf("failed to load main config: %w", err)
 	}
 
@@ -57,6 +61,37 @@ func LoadConfig(paths Paths) (*Config, error) {
 	}
 
 	return &config, nil
+}
+
+// validateManifestCounts rejects weakly-typed TOML values before
+// mapstructure can coerce them into *int fields. Manifest counts are integer
+// settings; accepting strings or floating-point values here would make a
+// malformed configuration appear valid after decoding.
+func validateManifestCounts(v *viper.Viper) error {
+	for _, key := range []string{"overlay.max_untrusted_count", "overlay.max_trusted_count"} {
+		if !v.IsSet(key) {
+			continue
+		}
+
+		value := reflect.ValueOf(v.Get(key))
+		switch value.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			count := value.Int()
+			if count < MinManifestCount || count > MaxManifestCount {
+				return fmt.Errorf("%s must be between %d and %d, got %d",
+					key, MinManifestCount, MaxManifestCount, count)
+			}
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			count := value.Uint()
+			if count < MinManifestCount || count > MaxManifestCount {
+				return fmt.Errorf("%s must be between %d and %d, got %d",
+					key, MinManifestCount, MaxManifestCount, count)
+			}
+		default:
+			return fmt.Errorf("%s must be an integer count", key)
+		}
+	}
+	return nil
 }
 
 // loadMainConfig loads the main configuration file

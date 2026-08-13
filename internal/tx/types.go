@@ -87,6 +87,13 @@ const (
 	TypeLoanDelete                   = protocol.TxTypeLoanDelete
 	TypeLoanManage                   = protocol.TxTypeLoanManage
 	TypeLoanPay                      = protocol.TxTypeLoanPay
+	TypeConfidentialMPTConvert       = protocol.TxTypeConfidentialMPTConvert
+	TypeConfidentialMPTMergeInbox    = protocol.TxTypeConfidentialMPTMergeInbox
+	TypeConfidentialMPTConvertBack   = protocol.TxTypeConfidentialMPTConvertBack
+	TypeConfidentialMPTSend          = protocol.TxTypeConfidentialMPTSend
+	TypeConfidentialMPTClawback      = protocol.TxTypeConfidentialMPTClawback
+	TypeSponsorshipTransfer          = protocol.TxTypeSponsorshipTransfer
+	TypeSponsorshipSet               = protocol.TxTypeSponsorshipSet
 
 	TypeAmendment = protocol.TxTypeAmendment
 	TypeFee       = protocol.TxTypeFee

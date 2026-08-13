@@ -8,21 +8,22 @@ type FormatField struct {
 	Style int
 }
 
-var commonFields = []FormatField{
+var commonFormatFields = []FormatField{
 	{"LedgerIndex", 1},
 	{"LedgerEntryType", 0},
 	{"Flags", 0},
+	{"Sponsor", 1},
 }
 
 // CommonFields returns the fields shared by all ledger-entry formats.
 func CommonFields() []FormatField {
-	return append([]FormatField(nil), commonFields...)
+	return append([]FormatField(nil), commonFormatFields...)
 }
 
 // formats maps each ledger-entry type NAME (as in definitions
 // LedgerEntryTypes, e.g. "AccountRoot","DirectoryNode") to its UNIQUE fields
 // (common fields excluded), in ledger_entries.macro order.
-// Transcribed from rippled 3.2.0 ledger_entries.macro.
+// Transcribed from rippled's ledger_entries.macro.
 var formats = map[string][]FormatField{
 	"NFTokenOffer": {
 		{"Owner", 0},
@@ -109,6 +110,9 @@ var formats = map[string][]FormatField{
 		{"MintedNFTokens", 2},
 		{"BurnedNFTokens", 2},
 		{"FirstNFTokenSequence", 1},
+		{"SponsoredOwnerCount", 2},
+		{"SponsoringOwnerCount", 2},
+		{"SponsoringAccountCount", 2},
 		{"AMMID", 1},
 		{"VaultID", 1},
 		{"LoanBrokerID", 1},
@@ -199,6 +203,8 @@ var formats = map[string][]FormatField{
 		{"HighNode", 1},
 		{"HighQualityIn", 1},
 		{"HighQualityOut", 1},
+		{"HighSponsor", 1},
+		{"LowSponsor", 1},
 	},
 	"FeeSettings": {
 		{"BaseFee", 1},
@@ -279,8 +285,11 @@ var formats = map[string][]FormatField{
 		{"PreviousTxnID", 0},
 		{"PreviousTxnLgrSeq", 0},
 		{"DomainID", 1},
-		{"MutableFlags", 2},
+		{"ImmutableFlags", 2},
 		{"ReferenceHolding", 1},
+		{"IssuerEncryptionKey", 1},
+		{"AuditorEncryptionKey", 1},
+		{"ConfidentialOutstandingAmount", 2},
 	},
 	"MPToken": {
 		{"Account", 0},
@@ -290,6 +299,12 @@ var formats = map[string][]FormatField{
 		{"OwnerNode", 0},
 		{"PreviousTxnID", 0},
 		{"PreviousTxnLgrSeq", 0},
+		{"ConfidentialBalanceInbox", 1},
+		{"ConfidentialBalanceSpending", 1},
+		{"ConfidentialBalanceVersion", 2},
+		{"IssuerEncryptedBalance", 1},
+		{"AuditorEncryptedBalance", 1},
+		{"HolderEncryptionKey", 1},
 	},
 	"Oracle": {
 		{"Owner", 0},
@@ -395,6 +410,17 @@ var formats = map[string][]FormatField{
 		{"TotalValueOutstanding", 2},
 		{"ManagementFeeOutstanding", 2},
 		{"LoanScale", 2},
+	},
+	"Sponsorship": {
+		{"PreviousTxnID", 0},
+		{"PreviousTxnLgrSeq", 0},
+		{"Owner", 0},
+		{"Sponsee", 0},
+		{"FeeAmount", 1},
+		{"MaxFee", 1},
+		{"RemainingOwnerCount", 2},
+		{"OwnerNode", 0},
+		{"SponseeNode", 0},
 	},
 }
 

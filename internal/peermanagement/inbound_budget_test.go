@@ -20,6 +20,24 @@ func readBudgetUsed(budget *readBudget) int64 {
 	return budget.used
 }
 
+func TestInboundPingBudgetFollowsWireSize(t *testing.T) {
+	small := message.Header{
+		MessageType:      message.TypePing,
+		PayloadSize:      8,
+		UncompressedSize: 8,
+	}
+	require.Zero(t, inboundFrameReservation(small))
+
+	large := message.Header{
+		MessageType:      message.TypePing,
+		PayloadSize:      64*1024 + 1,
+		Compressed:       true,
+		UncompressedSize: 1,
+		Algorithm:        message.AlgorithmLZ4,
+	}
+	require.Equal(t, int64(64*1024+2), inboundFrameReservation(large))
+}
+
 func TestInboundBulkBudgetFollowsMessageThroughConsumer(t *testing.T) {
 	payload := protowire.AppendTag(nil, 100, protowire.BytesType)
 	payload = protowire.AppendBytes(payload, bytes.Repeat([]byte{0x4c}, 32*1024))
@@ -82,6 +100,7 @@ func TestCompressedManifestSpoolSharesInboundBudget(t *testing.T) {
 	budget := newReadBudget(int64(3 * len(payload)))
 	manifests := make(chan *InboundMessage, 1)
 	peer := newLatencyTestPeer(t)
+	peer.SetManifestPayloadLimit(uint32(len(payload)))
 	peer.bufReader = bufio.NewReader(bytes.NewReader(wire))
 	peer.handshakeCfg.EnableCompression = true
 	peer.capabilities = NewPeerCapabilities()
@@ -442,6 +461,7 @@ func TestOverlayShutdownReleasesQueuedManifestSpool(t *testing.T) {
 	budget := newReadBudget(int64(2 * len(payload)))
 	manifests := make(chan *InboundMessage, 1)
 	peer := newLatencyTestPeer(t)
+	peer.SetManifestPayloadLimit(uint32(len(payload)))
 	peer.bufReader = bufio.NewReader(bytes.NewReader(wire))
 	peer.SetManifestMessages(manifests)
 	peer.SetInboundReadBudget(budget)

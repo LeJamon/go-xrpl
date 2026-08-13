@@ -22,9 +22,17 @@ import (
 // accountTxMock wraps mockLedgerService and overrides GetAccountTransactions
 type accountTxMock struct {
 	*mockLedgerService
-	getAccountTransactionsFn func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error)
-	getLedgerBySequenceFn    func(uint32) (types.LedgerReader, error)
-	getLedgerByHashFn        func([32]byte) (types.LedgerReader, error)
+	getAccountTransactionsFn             func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error)
+	getAccountTransactionsWithDelegateFn func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool, delegate *types.AccountTxDelegateFilter) (*types.AccountTxResult, error)
+	getLedgerBySequenceFn                func(uint32) (types.LedgerReader, error)
+	getLedgerByHashFn                    func([32]byte) (types.LedgerReader, error)
+}
+
+func (m *accountTxMock) GetAccountTransactionsWithDelegate(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool, delegate *types.AccountTxDelegateFilter) (*types.AccountTxResult, error) {
+	if m.getAccountTransactionsWithDelegateFn != nil {
+		return m.getAccountTransactionsWithDelegateFn(ctx, account, ledgerMin, ledgerMax, limit, marker, forward, delegate)
+	}
+	return nil, errors.New("not implemented")
 }
 
 func newAccountTxMock() *accountTxMock {

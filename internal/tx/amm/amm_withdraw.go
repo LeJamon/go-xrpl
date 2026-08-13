@@ -173,7 +173,7 @@ func (a *AMMWithdraw) Flatten() (map[string]any, error) {
 }
 
 func (a *AMMWithdraw) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber}
+	return [][32]byte{amendment.FeatureAMM}
 }
 
 // CheckExtraFeatures gates MPT pool assets/amounts on the MPTokensV2 amendment.
@@ -234,11 +234,17 @@ func (a *AMMWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 		if result := requireAssetAuth(view, amtAsset, accountID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
 			return result
 		}
-		if assetFrozen(view, ammAccountID, amtAsset) {
-			return frozenAssetResult(amtAsset)
-		}
-		if assetIndividuallyFrozen(view, accountID, amtAsset) {
-			return frozenAssetResult(amtAsset)
+		if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
+			if result := mptutil.CheckWithdrawFreeze(view, ammAccountID, accountID, accountID, amtAsset); result != ter.TesSUCCESS {
+				return result
+			}
+		} else {
+			if assetFrozen(view, ammAccountID, amtAsset) {
+				return frozenAssetResult(amtAsset)
+			}
+			if assetIndividuallyFrozen(view, accountID, amtAsset) {
+				return frozenAssetResult(amtAsset)
+			}
 		}
 		return ter.TesSUCCESS
 	}
@@ -616,6 +622,12 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 		tPlusAE := lptBalanceNumber.AddRounded(aeFMinus2, state.RoundToNearest)
 		tfMinusAE := lptBalanceNumber.MulRounded(f, state.RoundToNearest).
 			AddRounded(ae.Negate(), state.RoundToNearest)
+		if tfMinusAE.IsZero() {
+			if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_3_0) {
+				return ter.TecAMM_FAILED
+			}
+			return ter.TefEXCEPTION
+		}
 
 		tokensAdj := getRoundedLPTokensCb(math, fixV1_3,
 			func() state.XRPLNumber {
@@ -802,6 +814,19 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 	if err != nil {
 		return ter.TefINTERNAL
 	}
+	postAsset1, err := subtractAMMPoolAmount(assetBalance1, withdrawAmount1, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	postAsset2, err := subtractAMMPoolAmount(assetBalance2, withdrawAmount2, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_3_0) && fixV1_3 {
+		if result := checkAMMPrecisionLoss(postAsset1, postAsset2, newLPBalance, math.ctx); result != ter.TesSUCCESS {
+			return result
+		}
+	}
 	// NOTE: Asset balances are NOT stored in AMM entry
 	// They are updated by the balance transfers above:
 	// - XRP: via ammAccount.Balance -= drops
@@ -827,6 +852,9 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 	ctx.Account.OwnerCount = accountFromView.OwnerCount
+	ctx.Account.SponsoredOwnerCount = accountFromView.SponsoredOwnerCount
+	ctx.Account.SponsoringOwnerCount = accountFromView.SponsoringOwnerCount
+	ctx.Account.SponsoringAccountCount = accountFromView.SponsoringAccountCount
 
 	return ter.TesSUCCESS
 }
@@ -850,15 +878,26 @@ func withdrawAssetToAccount(
 				return ter.TefINTERNAL
 			}
 			if !exists && enabledFixAMMv1_2 {
-				ownerCount := ctx.Account.OwnerCount
+				account := ctx.Account
 				if accountID != ctx.AccountID {
-					account, err := tx.ReadAccountRoot(ctx.View, accountID)
+					account, err = tx.ReadAccountRoot(ctx.View, accountID)
 					if err != nil || account == nil {
 						return ter.TefINTERNAL
 					}
-					ownerCount = account.OwnerCount
 				}
-				if ownerCount >= 2 && ctx.PriorBalance() < ctx.AccountReserve(ownerCount+1) {
+				effectiveOwners := account.OwnerCount
+				if ctx.Rules().Enabled(amendment.FeatureSponsor) {
+					var ok bool
+					effectiveOwners, ok = tx.EffectiveOwnerCount(account, 0)
+					if !ok {
+						return ter.TefINTERNAL
+					}
+				}
+				balance := account.Balance
+				if accountID == ctx.AccountID {
+					balance = ctx.PriorBalance()
+				}
+				if effectiveOwners >= 2 && balance < ctx.AccountReserveFor(account, tx.ConfineOwnerCount(account.OwnerCount, 1)) {
 					return ter.TecINSUFFICIENT_RESERVE
 				}
 				if result := mptutil.RequireAuthAt(ctx.View, id, accountID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
@@ -916,14 +955,32 @@ func withdrawIOUToAccount(
 		// reserve for the new trust line before creating it.
 		// Reference: rippled AMMWithdraw.cpp lines 583-601
 		if enabledFixAMMv1_2 {
-			ownerCount := ctx.Account.OwnerCount
+			account := ctx.Account
+			if accountID != ctx.AccountID {
+				account, err = tx.ReadAccountRoot(ctx.View, accountID)
+				if err != nil || account == nil {
+					return ter.TefINTERNAL
+				}
+			}
+			effectiveOwners := account.OwnerCount
+			if ctx.Rules().Enabled(amendment.FeatureSponsor) {
+				var ok bool
+				effectiveOwners, ok = tx.EffectiveOwnerCount(account, 0)
+				if !ok {
+					return ter.TefINTERNAL
+				}
+			}
 			// See also SetTrust::doApply(): ownerCount < 2 → no reserve needed
-			if ownerCount >= 2 {
-				reserve := ctx.AccountReserve(ownerCount + 1)
+			if effectiveOwners >= 2 {
+				reserve := ctx.AccountReserveFor(account, tx.ConfineOwnerCount(account.OwnerCount, 1))
 				// rippled compares max(priorBalance, balance); the fee only
 				// reduces the balance, so prior (pre-fee) balance is the larger
 				// term. Reference: rippled AMMWithdraw.cpp:599.
-				if ctx.PriorBalance() < reserve {
+				balance := account.Balance
+				if accountID == ctx.AccountID {
+					balance = ctx.PriorBalance()
+				}
+				if balance < reserve {
 					return ter.TecINSUFFICIENT_RESERVE
 				}
 			}

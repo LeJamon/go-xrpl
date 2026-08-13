@@ -171,6 +171,13 @@ jobs:
           repository: XRPLF/rippled
           ref: 3c43f4614f87965298773279ff5b85d4c56c637b
           path: rippled-worktrees/v3.2.0-oracle
+      - name: Check out rippled v3.3.0 oracle
+        if: matrix.group == 'libs'
+        uses: actions/checkout@v5
+        with:
+          repository: XRPLF/rippled
+          ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
+          path: rippled-worktrees/v3.3.0-oracle
       - uses: ./.github/actions/setup
       - run: go test ${{ matrix.race }} -count=1 -timeout 15m ${{ matrix.packages }}
 
@@ -188,9 +195,38 @@ jobs:
       # path on signature accept/reject. No -race here: the detector needs
       # cgo, and no CGO dev headers are installed for this leg.
       - run: CGO_ENABLED=0 go test -count=1 -timeout 15m ./crypto/...
+      - run: CGO_ENABLED=0 go test -tags mptcrypto -count=1 -timeout 15m ./amendment/... ./crypto/mptcrypto/...
+
+  test-mpt-crypto:
+    name: Test (Confidential MPT native backend, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - name: Install Conan
+        run: pipx install conan==2.18.1
+      - name: Build and test native backend
+        run: ./scripts/setup-mpt-crypto.sh test ./amendment/... ./crypto/mptcrypto/... ./internal/tx/mpt/... ./internal/testing/mpt/...
+
+  peer-interop:
+    name: Peer interop (rippled 3.3.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - name: Run live handshake and manifest interop
+        run: PEERTLS_DOCKER_INTEROP=1 go test -tags docker -timeout 5m -v -run 'Test(Handshake|Manifest)_Interop_RippledDocker' ./internal/peermanagement/
 
   consensus-smoke:
-    name: Consensus smoke (2 rippled + 1 goxrpl)
+    name: Consensus smoke (rippled ${{ matrix.rippled-version }})
+    strategy:
+      fail-fast: false
+      matrix:
+        rippled-version: ["3.3.0", "3.2.0"]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -198,17 +234,18 @@ jobs:
       - name: Build goxrpl docker image
         run: docker build --build-arg "VERSION=${{ github.sha }}" -t goxrpl:latest .
 
-      - name: Verify goxrpl image version
+      - name: Verify goxrpl image
         run: |
-          set -o pipefail
-          docker run --rm goxrpl:latest version |
-            grep --fixed-strings --line-regexp "go-xrpl version ${{ github.sha }}"
+          set -euo pipefail
+          output="$(docker run --rm goxrpl:latest version)"
+          grep --fixed-strings --line-regexp "go-xrpl version ${{ github.sha }}" <<<"$output"
+          grep --fixed-strings --line-regexp "Confidential MPT crypto: available" <<<"$output"
 
       - name: Run consensus smoke
         run: bash scripts/consensus-smoke/smoke.sh
         env:
           GOXRPL_IMAGE: goxrpl:latest
-          RIPPLED_IMAGE: xrpllabsofficial/xrpld:3.2.0
+          RIPPLED_IMAGE: xrpllabsofficial/xrpld:${{ matrix.rippled-version }}
           PAYMENT_COUNT: "3"
           MIN_SEQ_EMPTY: "15"
           BOOT_TIMEOUT: "240"

@@ -5,9 +5,12 @@
 package amendment
 
 import (
+	"bytes"
 	"encoding/hex"
 	"slices"
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/crypto/mptcrypto"
 )
 
 func TestFeatureID(t *testing.T) {
@@ -23,6 +26,27 @@ func TestFeatureID(t *testing.T) {
 	id3 := FeatureID("Checks")
 	if id1 == id3 {
 		t.Error("Different names gave same ID")
+	}
+}
+
+func TestFixCleanup330Registration(t *testing.T) {
+	f := FeatureByName("fixCleanup3_3_0")
+	if f == nil {
+		t.Fatal("fixCleanup3_3_0 is not registered")
+	}
+	const amendmentID = "3298D47E1F3A8A24FECAA30F699B8FE1DD234E072834BA099AD8180FFCE0FEC4"
+	want, err := hex.DecodeString(amendmentID)
+	if err != nil {
+		t.Fatalf("decode fixCleanup3_3_0 amendment ID: %v", err)
+	}
+	if got := f.ID[:]; !bytes.Equal(got, want) {
+		t.Fatalf("fixCleanup3_3_0 ID = %X, want %s", got, amendmentID)
+	}
+	if f.Supported != SupportedYes || f.Vote != VoteDefaultNo {
+		t.Fatalf("fixCleanup3_3_0 status = (%v, %v), want (SupportedYes, VoteDefaultNo)", f.Supported, f.Vote)
+	}
+	if !AllSupportedRules().Enabled(FeatureFixCleanup3_3_0) {
+		t.Fatal("fixCleanup3_3_0 must be enabled once all cleanup work is complete")
 	}
 }
 
@@ -92,6 +116,88 @@ func TestFeatureIDMatches(t *testing.T) {
 	}
 	if amm.ID != FeatureAMM {
 		t.Error("FeatureAMM ID mismatch")
+	}
+
+	sponsor := FeatureByName("Sponsor")
+	if sponsor == nil {
+		t.Fatal("Sponsor feature not found")
+	}
+	const sponsorID = "BE1F90581635DBCEBFC4678C4B54FEDDC1A17B50FD02CFE765A4132A342126AC"
+	want, err := hex.DecodeString(sponsorID)
+	if err != nil {
+		t.Fatalf("decode Sponsor amendment ID: %v", err)
+	}
+	if got := sponsor.ID[:]; !bytes.Equal(got, want) {
+		t.Errorf("Sponsor ID = %X, want %s", got, sponsorID)
+	}
+	if sponsor.Supported != SupportedYes || sponsor.Vote != VoteDefaultNo {
+		t.Errorf("Sponsor support/vote = (%v, %v), want (SupportedYes, VoteDefaultNo)", sponsor.Supported, sponsor.Vote)
+	}
+	if !AllSupportedRules().Enabled(FeatureSponsor) {
+		t.Error("supported Sponsor amendment must be enabled by the all-supported preset")
+	}
+}
+
+func TestDynamicMPTFeatureRegistration(t *testing.T) {
+	dynamic := FeatureByName("DynamicMPT")
+	if dynamic == nil {
+		t.Fatal("DynamicMPT feature not found")
+	}
+	if dynamic.Supported != SupportedYes || dynamic.Vote != VoteDefaultNo {
+		t.Errorf("DynamicMPT support/vote = (%v, %v), want (SupportedYes, VoteDefaultNo)", dynamic.Supported, dynamic.Vote)
+	}
+	if !AllSupportedRules().Enabled(FeatureDynamicMPT) {
+		t.Error("supported DynamicMPT amendment must be enabled by the all-supported preset")
+	}
+}
+
+func TestConfidentialTransferFeatureRegistration(t *testing.T) {
+	confidential := FeatureByName("ConfidentialTransfer")
+	if confidential == nil {
+		t.Fatal("ConfidentialTransfer feature not found")
+	}
+	wantSupported := mptcrypto.Available()
+	wantSupport := SupportedNo
+	if wantSupported {
+		wantSupport = SupportedYes
+	}
+	if confidential.Supported != wantSupport || confidential.Vote != VoteDefaultNo {
+		t.Errorf("ConfidentialTransfer support/vote = (%v, %v), want (%v, VoteDefaultNo)", confidential.Supported, confidential.Vote, wantSupport)
+	}
+	if got := AllSupportedRules().Enabled(FeatureConfidentialTransfer); got != wantSupported {
+		t.Errorf("ConfidentialTransfer all-supported state = %v, want %v", got, wantSupported)
+	}
+	foundSupported := false
+	for _, supported := range SupportedFeatures() {
+		if supported.ID == FeatureConfidentialTransfer {
+			foundSupported = true
+			break
+		}
+	}
+	if foundSupported != wantSupported {
+		t.Errorf("ConfidentialTransfer SupportedFeatures membership = %v, want %v", foundSupported, wantSupported)
+	}
+	table := NewTable()
+	if table.IsSupported(FeatureConfidentialTransfer) != wantSupported {
+		t.Errorf("ConfidentialTransfer table support = %v, want %v", table.IsSupported(FeatureConfidentialTransfer), wantSupported)
+	}
+	if slices.Contains(table.Desired(), FeatureConfidentialTransfer) {
+		t.Error("default-no ConfidentialTransfer was desired without an explicit upvote")
+	}
+	table.UpVote(FeatureConfidentialTransfer)
+	if got := slices.Contains(table.Desired(), FeatureConfidentialTransfer); got != wantSupported {
+		t.Errorf("upvoted ConfidentialTransfer desired state = %v, want %v", got, wantSupported)
+	}
+	table.Enable(FeatureConfidentialTransfer)
+	if got := table.HasUnsupportedEnabled(); got != !wantSupported {
+		t.Errorf("ConfidentialTransfer enabled table unsupported state = %v, want %v", got, !wantSupported)
+	}
+	if got := slices.Contains(table.UnsupportedEnabledIDs(), FeatureConfidentialTransfer); got != !wantSupported {
+		t.Errorf("ConfidentialTransfer unsupported-enabled state = %v, want %v", got, !wantSupported)
+	}
+	table.DoValidatedLedger(1, map[[32]byte]bool{FeatureConfidentialTransfer: true}, nil)
+	if got := table.IsBlocked(); got != !wantSupported {
+		t.Errorf("ConfidentialTransfer validated table blocked state = %v, want %v", got, !wantSupported)
 	}
 }
 
@@ -181,6 +287,53 @@ func TestRetiredFeaturesVoteObsolete(t *testing.T) {
 		if !f.IsObsolete() {
 			t.Errorf("retired feature %s IsObsolete() should be true", f.Name)
 		}
+	}
+}
+
+func TestV330RetiredFeatures(t *testing.T) {
+	tests := []struct {
+		name  string
+		id    [32]byte
+		hexID string
+	}{
+		{"fixDisallowIncomingV1", FeatureFixDisallowIncomingV1, "15D61F0C6DB6A2F86BCF96F1E2444FEC54E705923339EC175BD3E517C8B3FF91"},
+		{"fixInnerObjTemplate", FeatureFixInnerObjTemplate, "C393B3AEEBF575E475F0C60D5E4241B2070CC4D0EB6C4846B1A07508FAEFC485"},
+		{"fixNFTokenReserve", FeatureFixNFTokenReserve, "03BDC0099C4E14163ADA272C1B6F6FABB448CC3E51F522F978041E4B57D9158C"},
+		{"fixUniversalNumber", FeatureFixUniversalNumber, "2E2FB9CF8A44EB80F4694D38AADAE9B8B7ADAFD2F092E10068E61C98C4F092B0"},
+		{"Clawback", FeatureClawback, "56B241D7A43D40354D02A9DC4C8DF5C7A1F930D92A9035C4E12291B3CA3E1C2B"},
+	}
+
+	permanent := PermanentlyEnabledIDs()
+	genesis := GenesisRules()
+	defaultYes := DefaultYesFeatures()
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			feature := FeatureByName(test.name)
+			if feature == nil {
+				t.Fatal("feature is not registered")
+			}
+
+			decoded, err := hex.DecodeString(test.hexID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var expectedID [32]byte
+			copy(expectedID[:], decoded)
+			if feature.ID != expectedID || test.id != expectedID {
+				t.Fatalf("feature ID = %X, exported ID = %X, want %s", feature.ID, test.id, test.hexID)
+			}
+			if feature.Supported != SupportedYes || feature.Vote != VoteObsolete || !feature.Retired {
+				t.Fatalf("feature status = supported:%v vote:%v retired:%t", feature.Supported, feature.Vote, feature.Retired)
+			}
+			if !slices.Contains(permanent, expectedID) || !genesis.Enabled(expectedID) {
+				t.Fatal("retired feature is not permanently enabled")
+			}
+			for _, candidate := range defaultYes {
+				if candidate.ID == expectedID {
+					t.Fatal("retired feature is included in default-yes voting")
+				}
+			}
+		})
 	}
 }
 
@@ -425,13 +578,17 @@ func TestAllExpectedFeaturesExist(t *testing.T) {
 		"AMMClawback",
 		"MPTokensV1",
 		"MPTokensV2",
+		"DynamicMPT",
+		"ConfidentialTransfer",
+		"Sponsor",
 		"DeepFreeze",
 		"DynamicNFT",
 		"PermissionedDomains",
-		"Batch",
+		"BatchV1_1",
 		"PermissionedDEX",
 		"TokenEscrow",
 		"fixTokenEscrowV1",
+		"fixCleanup3_3_0",
 		"fixCleanup3_2_0",
 		// Retired
 		"MultiSign",

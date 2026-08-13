@@ -44,6 +44,12 @@ jobs:
           repository: XRPLF/rippled
           ref: 3c43f4614f87965298773279ff5b85d4c56c637b
           path: rippled-worktrees/v3.2.0-oracle
+      - name: Check out rippled v3.3.0 oracle
+        uses: actions/checkout@v5
+        with:
+          repository: XRPLF/rippled
+          ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
+          path: rippled-worktrees/v3.3.0-oracle
       - uses: ./.github/actions/setup
       - run: go test -count=1 -timeout 30m ./codec/... ./crypto/... ./shamap/... ./ledger/... ./keylet/... ./drops/... ./internal/tx/...
 
@@ -64,6 +70,12 @@ jobs:
           repository: XRPLF/rippled
           ref: 3c43f4614f87965298773279ff5b85d4c56c637b
           path: rippled-worktrees/v3.2.0-oracle
+      - name: Check out rippled v3.3.0 oracle
+        uses: actions/checkout@v5
+        with:
+          repository: XRPLF/rippled
+          ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
+          path: rippled-worktrees/v3.3.0-oracle
       - uses: ./.github/actions/setup
         with:
           cgo: "false"
@@ -78,17 +90,18 @@ jobs:
       - name: Build goxrpl docker image
         run: docker build --build-arg "VERSION=${{ github.sha }}" -t goxrpl:latest .
 
-      - name: Verify goxrpl image version
+      - name: Verify goxrpl image
         run: |
-          set -o pipefail
-          docker run --rm goxrpl:latest version |
-            grep --fixed-strings --line-regexp "go-xrpl version ${{ github.sha }}"
+          set -euo pipefail
+          output="$(docker run --rm goxrpl:latest version)"
+          grep --fixed-strings --line-regexp "go-xrpl version ${{ github.sha }}" <<<"$output"
+          grep --fixed-strings --line-regexp "Confidential MPT crypto: available" <<<"$output"
 
       - name: Run extended consensus soak
         run: bash scripts/consensus-smoke/smoke.sh
         env:
           GOXRPL_IMAGE: goxrpl:latest
-          RIPPLED_IMAGE: xrpllabsofficial/xrpld:3.2.0
+          RIPPLED_IMAGE: xrpllabsofficial/xrpld:3.3.0
           PAYMENT_COUNT: "25"
           MIN_SEQ_EMPTY: "40"
           BOOT_TIMEOUT: "360"
@@ -109,6 +122,12 @@ jobs:
           repository: XRPLF/rippled
           ref: 3c43f4614f87965298773279ff5b85d4c56c637b
           path: rippled-worktrees/v3.2.0-oracle
+      - name: Check out rippled v3.3.0 oracle
+        uses: actions/checkout@v5
+        with:
+          repository: XRPLF/rippled
+          ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
+          path: rippled-worktrees/v3.3.0-oracle
       - uses: ./.github/actions/setup
       - name: Run tests with coverage
         run: >

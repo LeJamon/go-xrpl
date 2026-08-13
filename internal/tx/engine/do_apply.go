@@ -37,6 +37,7 @@ type applyState struct {
 	// the fee that was really charged.
 	chargedFee  uint64
 	isDelegated bool
+	feePayer    feePayer
 	isTicket    bool
 	txHash      [32]byte
 	metadata    *txcore.Metadata
@@ -45,10 +46,10 @@ type applyState struct {
 }
 
 // sourceFeeCharged is the fee deducted from the source account for this tx — the
-// transaction fee normally, or 0 when the tx is delegated (the delegate pays the
-// fee, leaving the source balance untouched). It feeds ApplyContext.PriorBalance.
+// transaction fee normally, or 0 when a delegate or sponsor pays externally.
+// It feeds ApplyContext.PriorBalance.
 func (st *applyState) sourceFeeCharged() uint64 {
-	if st.isDelegated {
+	if st.hasExternalFeePayer() {
 		return 0
 	}
 	return st.fee
@@ -74,6 +75,10 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 	}
 
 	fee := e.calculateFee(tx)
+	payer, payerResult := e.getFeePayer(common)
+	if payerResult != ter.TesSUCCESS {
+		return payerResult, 0
+	}
 
 	// Save original serialized account data for tec recovery.
 	// On tec results, we restore the account to its original state
@@ -95,6 +100,7 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 		fee:                 fee,
 		chargedFee:          fee,
 		isDelegated:         common.Delegate != "",
+		feePayer:            payer,
 		isTicket:            common.TicketSequence != nil,
 		txHash:              txHash,
 		metadata:            metadata,
@@ -108,12 +114,7 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 		return result, 0
 	}
 
-	// For delegated transactions, deduct the fee from the delegate's account.
-	// payDelegatedFeeOnTable clamps the charged fee to the delegate's balance and
-	// records st.chargedFee. On this success path preclaim's checkFee already
-	// guaranteed the delegate balance covers the full fee, so the clamp is a
-	// no-op and st.chargedFee == st.fee.
-	if result := e.payDelegatedFeeOnTable(st, table); result != ter.TesSUCCESS {
+	if result := e.payExternalFeeOnTable(st, table, false); result != ter.TesSUCCESS {
 		return result, 0
 	}
 
@@ -223,10 +224,8 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 // AccountTxnID block).
 func (e *Engine) applyPreApplyAccountChanges(st *applyState) ter.Result {
 	// Reference: rippled Transactor::payFee + consumeSeqProxy in Transactor.cpp
-	if st.isDelegated {
-		// Delegated transactions: fee is charged to the delegate account, not the source.
-		// The source account's balance is NOT reduced by the fee.
-		// Reference: rippled Transactor::payFee() lines 327-337
+	if st.hasExternalFeePayer() {
+		// The fee payer is updated separately by payExternalFeeOnTable.
 	} else {
 		// Normal transactions: fee is charged to the source account.
 		st.account.Balance -= st.fee
@@ -322,6 +321,7 @@ func (e *Engine) invokeApplyInner(st *applyState) ter.Result {
 		View:             st.table,
 		Account:          st.account,
 		AccountID:        st.accountID,
+		Common:           st.common,
 		SourceFeeCharged: st.sourceFeeCharged(),
 		Config:           e.config,
 		TxHash:           st.txHash,
@@ -355,11 +355,7 @@ func isReapplyOnRetryTec(r ter.Result) bool {
 // helpers (removeUnfundedOffers, removeDeletedTrustLines,
 // removeExpiredNFTokenOffers).
 func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result {
-	// Collect keys-to-redelete from the to-be-discarded sandbox.
-	removedOfferKeys := collectErasedKeysOfType(st.table, entry.TypeOffer, result == ter.TecOVERSIZE || result == ter.TecKILLED, 1000)
-	removedTrustLineKeys := collectErasedKeysOfType(st.table, entry.TypeRippleState, result == ter.TecINCOMPLETE, 512)
-	expiredNFTokenOfferKeys := collectErasedKeysOfType(st.table, entry.TypeNFTokenOffer, result == ter.TecEXPIRED, 256)
-	expiredCredentialKeys := collectErasedKeysOfType(st.table, entry.TypeCredential, result == ter.TecEXPIRED, 0)
+	deleted := collectPersistentDeletions(st.table, result)
 
 	// Discard the transaction table — all doApply() side effects are lost.
 	// Reference: rippled Transactor.cpp — reset() discards the sandbox.
@@ -377,14 +373,6 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 		}
 	}
 
-	// tecINCOMPLETE (AMMDelete): re-delete trust lines that were found during processing.
-	// These trust lines were deleted in the (now discarded) sandbox.
-	// Reference: rippled Transactor.cpp lines 1207-1209: removeDeletedTrustLines()
-	//   which calls deleteAMMTrustLine() for each collected trust line key.
-	if len(removedTrustLineKeys) > 0 {
-		e.removeDeletedTrustLines(tecTable, removedTrustLineKeys)
-	}
-
 	// Restore account to original state, then apply only fee/sequence.
 	// This discards any changes the transaction made to OwnerCount,
 	// MintedNFTokens, BurnedNFTokens, etc.
@@ -397,32 +385,43 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 		return r
 	}
 
-	// For delegated transactions, deduct the fee from the delegate's account on tec.
-	// Reference: rippled Transactor.cpp reset() lines 1011-1013, 1036
-	if r := e.payDelegatedFeeOnTable(st, tecTable); r != ter.TesSUCCESS {
+	// Reference: rippled Transactor.cpp reset().
+	if r := e.payExternalFeeOnTable(st, tecTable, true); r != ter.TesSUCCESS {
 		return r
+	}
+
+	// tecINCOMPLETE (AMMDelete): re-delete trust lines after reset so cleanup
+	// owner-count changes cannot be overwritten by the recovered source account.
+	if len(deleted.trustLines) > 0 {
+		e.removeDeletedTrustLines(tecTable, deleted.trustLines)
 	}
 
 	// tecOVERSIZE/tecKILLED: re-delete offers that were found during processing.
 	// These offers were deleted in the (now discarded) sandbox.
 	// Reference: rippled Transactor.cpp lines 1198-1201: removeUnfundedOffers()
-	if len(removedOfferKeys) > 0 {
-		e.removeUnfundedOffers(tecTable, removedOfferKeys)
+	if len(deleted.offers) > 0 {
+		e.removeUnfundedOffers(tecTable, deleted.offers)
 	}
 
 	// tecEXPIRED: re-delete expired NFTokenOffers and credentials.
 	// Reference: rippled Transactor.cpp lines 1203-1205: removeExpiredNFTokenOffers()
 	if result == ter.TecEXPIRED {
 		// Re-delete NFTokenOffers through tecTable
-		for _, offerKey := range expiredNFTokenOfferKeys {
+		replayExistingWithLimit(deleted.nftOffers, expiredNFTokenOfferRemoveLimit, func(offerKey [32]byte) bool {
 			offerKL := keylet.Keylet{Key: offerKey}
+			offerData, err := tecTable.Read(offerKL)
+			if err != nil || offerData == nil {
+				return false
+			}
 			deleteNFTokenOfferOnView(tecTable, offerKL)
-		}
+			return true
+		})
 
 		tecCtx := &txcore.ApplyContext{
 			View:             tecTable,
 			Account:          recoveredAccount,
 			AccountID:        st.accountID,
+			Common:           st.common,
 			SourceFeeCharged: st.sourceFeeCharged(),
 			Config:           e.config,
 			TxHash:           st.txHash,
@@ -431,7 +430,7 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 			Log:              e.logger,
 			Ctx:              st.ctx,
 		}
-		for _, credentialKey := range expiredCredentialKeys {
+		for _, credentialKey := range deleted.credentials {
 			credentialKL := keylet.Keylet{Key: credentialKey}
 			credentialData, err := tecTable.Read(credentialKL)
 			if err != nil || credentialData == nil {
@@ -474,34 +473,77 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 	return result
 }
 
-// collectErasedKeysOfType walks the ApplyStateTable and collects up to `limit`
-// keys whose entries are erased ledger entries of the given type. A non-positive
-// limit collects every matching key. When enabled is false, it returns nil.
-// Used by tec recovery to re-apply specific deletions after the sandbox is discarded.
-func collectErasedKeysOfType(table *applystate.ApplyStateTable, entryType entry.Type, enabled bool, limit int) [][32]byte {
-	if !enabled {
-		return nil
+const (
+	unfundedOfferRemoveLimit       = 1000
+	expiredNFTokenOfferRemoveLimit = 256
+	maxDeletableAMMTrustLines      = 512
+)
+
+type persistentDeletions struct {
+	offers      [][32]byte
+	trustLines  [][32]byte
+	nftOffers   [][32]byte
+	credentials [][32]byte
+}
+
+func collectPersistentDeletions(table *applystate.ApplyStateTable, result ter.Result) persistentDeletions {
+	var deleted persistentDeletions
+	switch result {
+	case ter.TecOVERSIZE, ter.TecKILLED:
+		deleted.offers = collectErasedKeysOfType(table, entry.TypeOffer, isUnfundedOfferDeletion)
+	case ter.TecINCOMPLETE:
+		deleted.trustLines = collectErasedKeysOfType(table, entry.TypeRippleState, nil)
+	case ter.TecEXPIRED:
+		deleted.nftOffers = collectErasedKeysOfType(table, entry.TypeNFTokenOffer, nil)
+		deleted.credentials = collectErasedKeysOfType(table, entry.TypeCredential, nil)
 	}
+	return deleted
+}
+
+func collectErasedKeysOfType(table *applystate.ApplyStateTable, entryType entry.Type, include func(*applystate.TrackedEntry) bool) [][32]byte {
 	var keys [][32]byte
-	for key, entry := range table.GetItems() {
-		if entry.Action != applystate.ActionErase {
+	for key, tracked := range table.GetItems() {
+		if tracked.Action != applystate.ActionErase {
 			continue
 		}
-		t, err := state.DecodeType(entry.Original)
-		if err != nil && entry.Current != nil {
-			t, err = state.DecodeType(entry.Current)
+		t, err := state.DecodeType(tracked.Original)
+		if err != nil && tracked.Current != nil {
+			t, err = state.DecodeType(tracked.Current)
 		}
-		if err == nil && t == entryType {
+		if err == nil && t == entryType && (include == nil || include(tracked)) {
 			keys = append(keys, key)
-			if limit > 0 && len(keys) >= limit {
-				break
-			}
 		}
 	}
 	sort.Slice(keys, func(i, j int) bool {
 		return bytes.Compare(keys[i][:], keys[j][:]) < 0
 	})
 	return keys
+}
+
+func isUnfundedOfferDeletion(tracked *applystate.TrackedEntry) bool {
+	before, err := state.ParseLedgerOffer(tracked.Original)
+	if err != nil {
+		return false
+	}
+	after, err := state.ParseLedgerOffer(tracked.Current)
+	if err != nil {
+		return false
+	}
+	cmp, err := before.TakerPays.CompareChecked(after.TakerPays)
+	return err == nil && cmp == 0
+}
+
+func replayExistingWithLimit(keys [][32]byte, limit int, replay func([32]byte) bool) {
+	replayed := 0
+	for _, key := range keys {
+		if !replay(key) {
+			continue
+		}
+		replayed++
+		if replayed == limit {
+			return
+		}
+	}
 }
 
 // consumeTicketForRecovery consumes the ticket through the supplied recovery
@@ -546,6 +588,10 @@ func (e *Engine) eraseTicketEntry(st *applyState, table *applystate.ApplyStateTa
 // the recovery table.
 // Reference: rippled View.cpp deleteAMMTrustLine + Transactor.cpp lines 1207-1209.
 func (e *Engine) removeDeletedTrustLines(tecTable *applystate.ApplyStateTable, keys [][32]byte) {
+	if len(keys) > maxDeletableAMMTrustLines {
+		e.logger.Error("deleted AMM trust lines exceed recovery limit", "count", len(keys))
+		return
+	}
 	for _, lineKey := range keys {
 		lineKL := keylet.Keylet{Key: lineKey}
 		lineData, readErr := tecTable.Read(lineKL)
@@ -564,28 +610,54 @@ func (e *Engine) removeDeletedTrustLines(tecTable *applystate.ApplyStateTable, k
 		if decodeErr != nil {
 			continue
 		}
-		lowDirKey := keylet.OwnerDir(lowID)
-		state.DirRemove(tecTable, lowDirKey, rs.LowNode, lineKey, false)
-		highDirKey := keylet.OwnerDir(highID)
-		state.DirRemove(tecTable, highDirKey, rs.HighNode, lineKey, false)
-		// Erase the trust line
-		_ = tecTable.Erase(lineKL)
-		// Decrement OwnerCount for the non-AMM side that has a reserve.
-		// Reference: rippled View.cpp deleteAMMTrustLine lines 2759-2763
-		lowAcctData, _ := tecTable.Read(keylet.Account(lowID))
-		highAcctData, _ := tecTable.Read(keylet.Account(highID))
-		if lowAcctData != nil && highAcctData != nil {
-			lowAcct, _ := state.ParseAccountRoot(lowAcctData)
-			highAcct, _ := state.ParseAccountRoot(highAcctData)
-			zeroHash := [32]byte{}
-			ammLow := lowAcct.AMMID != zeroHash
-			ammHigh := highAcct.AMMID != zeroHash
-			if rs.Flags&state.LsfLowReserve != 0 && !ammLow {
-				adjustOwnerCountOnView(tecTable, lowID, -1)
-			}
-			if rs.Flags&state.LsfHighReserve != 0 && !ammHigh {
-				adjustOwnerCountOnView(tecTable, highID, -1)
-			}
+		lowAcctData, readErr := tecTable.Read(keylet.Account(lowID))
+		if readErr != nil || lowAcctData == nil {
+			e.logger.Error("failed to re-delete AMM trust line", "reason", "missing low account")
+			continue
+		}
+		lowAcct, parseErr := state.ParseAccountRoot(lowAcctData)
+		if parseErr != nil {
+			e.logger.Error("failed to re-delete AMM trust line", "reason", "invalid low account")
+			continue
+		}
+		highAcctData, readErr := tecTable.Read(keylet.Account(highID))
+		if readErr != nil || highAcctData == nil {
+			e.logger.Error("failed to re-delete AMM trust line", "reason", "missing high account")
+			continue
+		}
+		highAcct, parseErr := state.ParseAccountRoot(highAcctData)
+		if parseErr != nil {
+			e.logger.Error("failed to re-delete AMM trust line", "reason", "invalid high account")
+			continue
+		}
+
+		zeroHash := [32]byte{}
+		ammLow := lowAcct.AMMID != zeroHash
+		ammHigh := highAcct.AMMID != zeroHash
+		if ammLow == ammHigh {
+			e.logger.Error("failed to re-delete AMM trust line", "reason", "invalid AMM ownership")
+			continue
+		}
+
+		if result := txcore.TrustDelete(tecTable, lineKL, lowID, highID, rs.LowNode, rs.HighNode); result != ter.TesSUCCESS {
+			e.logger.Error("failed to re-delete AMM trust line", "result", result)
+			continue
+		}
+
+		nonAMMID := lowID
+		reserveFlag := state.LsfLowReserve
+		sponsor := rs.LowSponsor
+		if ammLow {
+			nonAMMID = highID
+			reserveFlag = state.LsfHighReserve
+			sponsor = rs.HighSponsor
+		}
+		if rs.Flags&reserveFlag == 0 {
+			e.logger.Error("failed to re-delete AMM trust line", "reason", "missing reserve flag")
+			continue
+		}
+		if err := txcore.DecreaseOwnerCountOnView(tecTable, nonAMMID, sponsor, 1); err != nil {
+			e.logger.Error("failed to re-delete AMM trust line owner count", "err", err)
 		}
 	}
 }
@@ -594,24 +666,25 @@ func (e *Engine) removeDeletedTrustLines(tecTable *applystate.ApplyStateTable, k
 // table.
 // Reference: rippled Transactor.cpp lines 1198-1201: removeUnfundedOffers().
 func (e *Engine) removeUnfundedOffers(tecTable *applystate.ApplyStateTable, keys [][32]byte) {
-	for _, offerKey := range keys {
+	replayExistingWithLimit(keys, unfundedOfferRemoveLimit, func(offerKey [32]byte) bool {
 		offerKL := keylet.Keylet{Key: offerKey}
 		offerData, readErr := e.view.Read(offerKL)
 		if readErr != nil || offerData == nil {
-			continue
+			return false
 		}
 		offerObj, parseErr := state.ParseLedgerOffer(offerData)
 		if parseErr != nil {
-			continue
+			return false
 		}
 		ownerID, decodeErr := state.DecodeAccountID(offerObj.Account)
 		if decodeErr != nil {
-			continue
+			return false
 		}
-		if removed, deleteErr := state.DeleteOffer(tecTable, offerKL, offerObj); deleteErr == nil && removed {
+		if success, deleteErr := state.DeleteOffer(tecTable, offerKL, offerObj); deleteErr == nil && success {
 			adjustOwnerCountOnView(tecTable, ownerID, -1)
 		}
-	}
+		return true
+	})
 }
 
 // writeRecoveryAccount applies the fee/seq/ticket-count/PreviousTxn/AccountTxnID
@@ -619,9 +692,9 @@ func (e *Engine) removeUnfundedOffers(tecTable *applystate.ApplyStateTable, keys
 // table.
 // Reference: rippled Transactor.cpp reset() lines 998-1052.
 func (e *Engine) writeRecoveryAccount(st *applyState, tecTable *applystate.ApplyStateTable, recoveredAccount *state.AccountRoot) ter.Result {
-	// For delegated transactions, fee is charged to the delegate, not the source.
-	// Reference: rippled Transactor.cpp reset() lines 1011-1013, 1036
-	if !st.isDelegated {
+	// An external delegate or sponsor pays instead of the source account.
+	// Reference: rippled Transactor.cpp reset().
+	if !st.hasExternalFeePayer() {
 		// Clamp the fee to the payer's balance. rippled Transactor::reset()
 		// (Transactor.cpp:1027) does `if (fee > balance) fee = balance`, so a
 		// payer that cannot cover the full fee is charged everything it has and
@@ -662,42 +735,6 @@ func (e *Engine) writeRecoveryAccount(st *applyState, tecTable *applystate.Apply
 
 	// Update account through tecTable for proper metadata diff generation
 	if err := tecTable.Update(st.accountKey, updatedData); err != nil {
-		return ter.TefINTERNAL
-	}
-	return ter.TesSUCCESS
-}
-
-// payDelegatedFeeOnTable deducts the fee from the delegate's account through
-// the supplied table. Used by both the tec-recovery and invariant-violation
-// recovery paths.
-// Reference: rippled Transactor.cpp reset() lines 1011-1013, 1036.
-func (e *Engine) payDelegatedFeeOnTable(st *applyState, table *applystate.ApplyStateTable) ter.Result {
-	if !st.isDelegated {
-		return ter.TesSUCCESS
-	}
-	delegateID, _ := state.DecodeAccountID(st.common.Delegate)
-	delegateAccountKey := keylet.Account(delegateID)
-	delegateAccountData, delegateReadErr := e.view.Read(delegateAccountKey)
-	if delegateReadErr != nil || delegateAccountData == nil {
-		return ter.TefINTERNAL
-	}
-	delegateAccount, delegateParseErr := state.ParseAccountRoot(delegateAccountData)
-	if delegateParseErr != nil {
-		return ter.TefINTERNAL
-	}
-	// On the recovery path the delegate is the fee payer, so the same reset()
-	// clamp applies: charge at most the delegate's balance, never underflow.
-	// Reference: rippled Transactor::reset() lines 1011-1013, 1027, 1036.
-	fee := min(st.fee, delegateAccount.Balance)
-	st.chargedFee = fee
-	delegateAccount.Balance -= fee
-	delegateAccount.PreviousTxnID = st.txHash
-	delegateAccount.PreviousTxnLgrSeq = e.config.LedgerSequence
-	delegateData, delegateSerErr := state.SerializeAccountRoot(delegateAccount)
-	if delegateSerErr != nil {
-		return ter.TefINTERNAL
-	}
-	if err := table.Update(delegateAccountKey, delegateData); err != nil {
 		return ter.TefINTERNAL
 	}
 	return ter.TesSUCCESS
@@ -866,8 +903,7 @@ func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (
 		return r
 	}
 
-	// For delegated transactions, deduct the fee from the delegate.
-	if r := e.payDelegatedFeeOnTable(st, invTecTable); r != ter.TesSUCCESS {
+	if r := e.payExternalFeeOnTable(st, invTecTable, true); r != ter.TesSUCCESS {
 		return r
 	}
 

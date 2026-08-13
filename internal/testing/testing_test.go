@@ -179,18 +179,18 @@ func TestRegisterAccountRejectsIdentityCollisions(t *testing.T) {
 
 func TestSetAmendmentsClonesAndCanClear(t *testing.T) {
 	env := NewTestEnv(t)
-	names := []string{"Batch"}
+	names := []string{"BatchV1_1"}
 	env.SetAmendments(names)
 	names[0] = "XRPFees"
-	require.True(t, env.FeatureEnabled("Batch"))
+	require.True(t, env.FeatureEnabled("BatchV1_1"))
 	require.False(t, env.FeatureEnabled("XRPFees"))
 	env.Close()
-	require.True(t, env.FeatureEnabled("Batch"))
+	require.True(t, env.FeatureEnabled("BatchV1_1"))
 
 	env.SetAmendments(nil)
-	require.False(t, env.FeatureEnabled("Batch"))
+	require.False(t, env.FeatureEnabled("BatchV1_1"))
 	env.Close()
-	require.False(t, env.FeatureEnabled("Batch"))
+	require.False(t, env.FeatureEnabled("BatchV1_1"))
 }
 
 func TestMultiSignFee(t *testing.T) {

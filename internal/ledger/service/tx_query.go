@@ -98,12 +98,11 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		return nil, ErrNoOpenLedger
 	}
 	if rawBlob != nil {
-		transaction.SetRawBytes(rawBlob)
+		if err := tx.BindRawBytes(transaction, rawBlob); err != nil {
+			return nil, err
+		}
 	}
-	blob := rawBlob
-	if blob == nil {
-		blob = transaction.GetRawBytes()
-	}
+	blob := transaction.GetRawBytes()
 
 	cfg, cfgErr := s.applyConfigLocked()
 	if cfgErr != nil {
@@ -125,10 +124,9 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		}, nil
 	}
 	// Local submission checks (rippled STTx::passesLocalChecks via NetworkOPs):
-	// memo size/charset limits are enforced only here, on the local ingress, not
-	// in the consensus-critical engine preflight. A relayed or consensus-applied
-	// transaction carrying an oversized/invalid memo still applies, so this
-	// refusal cannot fork the ledger.
+	// memo size/charset limits are enforced on RPC and peer ingress, not in the
+	// consensus-critical engine preflight. A transaction already admitted to a
+	// consensus set remains governed only by consensus-critical checks.
 	if localResult := tx.PassesTransactionLocalChecks(ptx.Parsed); localResult != ter.TesSUCCESS {
 		return &SubmitResult{
 			Result:        localResult,
@@ -199,7 +197,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		s.pendingTxs = append(s.pendingTxs, ptx)
 	}
 
-	s.dispatchProposedTransaction(ptx, rawBlob, outcome, s.openLedgerView.Current())
+	s.dispatchProposedTransaction(ptx, ptx.Blob, outcome, s.openLedgerView.Current())
 	if outcome.Applied {
 		s.eventPublisher.dispatchServerStatusEvent()
 	}
@@ -420,7 +418,10 @@ func (s *Service) GetAutofillFee(parsedTx tx.Transaction, unlimited bool, mult, 
 		Rules:            rulesFromLedger(s.closedLedger, s.logger),
 	}
 
-	feeDefault := computeBaseFeeForTx(s.openLedger, parsedTx, feeCfg)
+	feeDefault := baseFee
+	if parsedTx != nil && tx.PassesTransactionLocalChecks(parsedTx) == ter.TesSUCCESS {
+		feeDefault = computeBaseFeeForTx(s.openLedger, parsedTx, feeCfg)
+	}
 
 	loadFee, scaleErr := feetrack.ScaleFeeLoad(feeDefault, s.feeTrack, unlimited)
 	if scaleErr != nil {
@@ -529,7 +530,13 @@ func computeBaseFeeForTx(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.Eng
 	}
 	_, batchFee := parsedTx.(tx.BatchFeeCalculator)
 	_, customFee := parsedTx.(tx.CustomBaseFeeCalculator)
-	if batchFee || customFee || parsedTx.TxType() == tx.TypeRegularKeySet {
+	txType := parsedTx.TxType()
+	confidentialFee := txType == tx.TypeConfidentialMPTConvert ||
+		txType == tx.TypeConfidentialMPTMergeInbox ||
+		txType == tx.TypeConfidentialMPTConvertBack ||
+		txType == tx.TypeConfidentialMPTSend ||
+		txType == tx.TypeConfidentialMPTClawback
+	if batchFee || customFee || confidentialFee || txType == tx.TypeRegularKeySet {
 		defer func() {
 			if r := recover(); r != nil {
 				fee = cfg.BaseFee
@@ -1001,6 +1008,16 @@ func (s *Service) UseTxTables() bool {
 // GetAccountTransactions retrieves transaction history for an account.
 // The supplied ctx is forwarded to the relational DB query.
 func (s *Service) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *relationaldb.AccountTxMarker, forward bool) (*AccountTxResult, error) {
+	return s.getAccountTransactions(ctx, account, ledgerMin, ledgerMax, limit, marker, forward, nil)
+}
+
+// GetAccountTransactionsWithDelegate retrieves delegated transaction history
+// for an account.
+func (s *Service) GetAccountTransactionsWithDelegate(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *relationaldb.AccountTxMarker, forward bool, delegate *relationaldb.AccountTxDelegateFilter) (*AccountTxResult, error) {
+	return s.getAccountTransactions(ctx, account, ledgerMin, ledgerMax, limit, marker, forward, delegate)
+}
+
+func (s *Service) getAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *relationaldb.AccountTxMarker, forward bool, delegate *relationaldb.AccountTxDelegateFilter) (*AccountTxResult, error) {
 	// Snapshot the validated-seq bound under the lock, then release it before
 	// the DB pages: relationalDB is immutable and the query needs no other
 	// service state, so holding s.mu across the I/O would block consensus close
@@ -1059,6 +1076,7 @@ func (s *Service) GetAccountTransactions(ctx context.Context, account string, le
 		MaxLedger: maxLedger,
 		Marker:    marker,
 		Limit:     limit,
+		Delegate:  delegate,
 	}
 
 	var txResult *relationaldb.AccountTxResult

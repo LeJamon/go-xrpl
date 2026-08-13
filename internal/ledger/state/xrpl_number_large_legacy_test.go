@@ -9,11 +9,12 @@ import (
 )
 
 func TestMantissaScaleForRulesWithFix(t *testing.T) {
-	require.Equal(t, MantissaScaleLarge, MantissaScaleForRulesWithFix(false, false, false, false))
+	require.Equal(t, MantissaScaleLarge330, MantissaScaleForRulesWithFixes(false, false, false, false, false))
 	require.Equal(t, MantissaScaleSmall, MantissaScaleForRulesWithFix(true, false, false, true))
 	require.Equal(t, MantissaScaleLargeLegacy, MantissaScaleForRulesWithFix(true, true, false, false))
 	require.Equal(t, MantissaScaleLargeLegacy, MantissaScaleForRulesWithFix(true, false, true, false))
-	require.Equal(t, MantissaScaleLarge, MantissaScaleForRulesWithFix(true, true, false, true))
+	require.Equal(t, MantissaScaleLarge320, MantissaScaleForRulesWithFix(true, true, false, true))
+	require.Equal(t, MantissaScaleLarge330, MantissaScaleForRulesWithFixes(true, true, false, true, true))
 }
 
 func TestLargeLegacyPreservesCuspRounding(t *testing.T) {
@@ -37,16 +38,54 @@ func TestLargeLegacyPreservesCuspRounding(t *testing.T) {
 }
 
 func TestLargeDivisionDroppedRemainderFix(t *testing.T) {
-	const denominator = int64(1_000_000_000_000_000_007)
-	legacy := NewXRPLNumberScaled(2, 0, MantissaScaleLargeLegacy, RoundUpward).
-		DivRounded(NewXRPLNumberScaled(denominator, 0, MantissaScaleLargeLegacy, RoundUpward), RoundUpward)
-	fixed := NewXRPLNumberScaled(2, 0, MantissaScaleLarge, RoundUpward).
-		DivRounded(NewXRPLNumberScaled(denominator, 0, MantissaScaleLarge, RoundUpward), RoundUpward)
-	exact := new(big.Rat).SetFrac(big.NewInt(2), big.NewInt(denominator))
+	tests := []struct {
+		name        string
+		numerator   int64
+		denominator int64
+		mode        RoundingMode
+		legacyCmp   int
+		fixedCmp    int
+	}{
+		{
+			name:        "positive upward",
+			numerator:   2,
+			denominator: 1_000_000_000_000_000_007,
+			mode:        RoundUpward,
+			legacyCmp:   -1,
+			fixedCmp:    1,
+		},
+		{
+			name:        "negative downward",
+			numerator:   -2,
+			denominator: 1_000_000_000_000_000_007,
+			mode:        RoundDownward,
+			legacyCmp:   1,
+			fixedCmp:    -1,
+		},
+		{
+			name:        "nearest with trailing digits after half",
+			numerator:   1_269_917_268_816_087_809,
+			denominator: 3_458_525_013_821_685_511,
+			mode:        RoundToNearest,
+			legacyCmp:   -1,
+			fixedCmp:    1,
+		},
+	}
 
-	require.Negative(t, numberRat(legacy).Cmp(exact))
-	require.GreaterOrEqual(t, numberRat(fixed).Cmp(exact), 0)
-	require.NotEqual(t, legacy, fixed)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			exact := new(big.Rat).SetFrac(big.NewInt(test.numerator), big.NewInt(test.denominator))
+			for _, scale := range []MantissaScale{MantissaScaleLargeLegacy, MantissaScaleLarge320, MantissaScaleLarge330} {
+				quotient := NewXRPLNumberScaled(test.numerator, 0, scale, test.mode).
+					DivRounded(NewXRPLNumberScaled(test.denominator, 0, scale, test.mode), test.mode)
+				wantCmp := test.fixedCmp
+				if scale == MantissaScaleLargeLegacy {
+					wantCmp = test.legacyCmp
+				}
+				require.Equal(t, wantCmp, numberRat(quotient).Cmp(exact), "scale=%d", scale)
+			}
+		})
+	}
 }
 
 func TestParseXRPLNumberRejectsOutOfRangeMantissa(t *testing.T) {

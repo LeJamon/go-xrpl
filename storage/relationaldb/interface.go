@@ -61,13 +61,31 @@ type AccountTxMarker struct {
 	TxnSeq    uint32      `json:"txn_seq"`
 }
 
+// AccountTxDelegateRole identifies which side of a delegated transaction the
+// queried account occupies.
+type AccountTxDelegateRole uint8
+
+// Account transaction delegate roles.
+const (
+	AccountTxDelegateActor AccountTxDelegateRole = iota
+	AccountTxDelegateAuthorizer
+)
+
+// AccountTxDelegateFilter limits account transaction results to delegated
+// transactions, optionally involving one counterparty.
+type AccountTxDelegateFilter struct {
+	Role         AccountTxDelegateRole `json:"role"`
+	Counterparty *AccountID            `json:"counterparty,omitempty"`
+}
+
 // AccountTxPageOptions contains criteria for paginated account transaction queries
 type AccountTxPageOptions struct {
-	Account   AccountID        `json:"account"`
-	MinLedger LedgerIndex      `json:"min_ledger"`
-	MaxLedger LedgerIndex      `json:"max_ledger"`
-	Marker    *AccountTxMarker `json:"marker,omitempty"`
-	Limit     uint32           `json:"limit"`
+	Account   AccountID                `json:"account"`
+	MinLedger LedgerIndex              `json:"min_ledger"`
+	MaxLedger LedgerIndex              `json:"max_ledger"`
+	Marker    *AccountTxMarker         `json:"marker,omitempty"`
+	Limit     uint32                   `json:"limit"`
+	Delegate  *AccountTxDelegateFilter `json:"delegate,omitempty"`
 }
 
 // AccountTxResult contains the result of an account transaction query

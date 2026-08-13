@@ -29,6 +29,7 @@ type NegativeUNL struct {
 	ValidatorToReEnable string // Blob (uppercase hex)
 	PreviousTxnID       string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq   uint32
+	Sponsor             string // AccountID (base58)
 }
 
 // Type returns the concrete ledger-entry type.
@@ -43,6 +44,7 @@ const (
 	negativeunlBitValidatorToReEnable
 	negativeunlBitPreviousTxnID
 	negativeunlBitPreviousTxnLgrSeq
+	negativeunlBitSponsor
 )
 
 // SetFlags assigns Flags and updates its serialized presence.
@@ -85,6 +87,13 @@ func (n *NegativeUNL) SetPreviousTxnLgrSeq(value uint32) {
 	n.PreviousTxnLgrSeq = value
 	n.dirty = true
 	n.present |= negativeunlBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (n *NegativeUNL) SetSponsor(value string) {
+	n.Sponsor = value
+	n.dirty = true
+	n.present |= negativeunlBitSponsor
 }
 
 func (n *NegativeUNL) validateRequired() error {
@@ -187,6 +196,18 @@ func (n *NegativeUNL) decode(data []byte, legacy bool) error {
 			default:
 				return newErrUnknownField("NegativeUNL", typeCode, fieldCode)
 			}
+		case 8: // AccountID
+			val, err := sr.readAccountID()
+			if err != nil {
+				return err
+			}
+			switch fieldCode {
+			case 27:
+				n.Sponsor = val
+				n.present |= negativeunlBitSponsor
+			default:
+				return newErrUnknownField("NegativeUNL", typeCode, fieldCode)
+			}
 		case 15: // STArray
 			val, err := sr.readSTArray("DisabledValidators")
 			if err != nil {
@@ -229,6 +250,9 @@ func (n *NegativeUNL) emitAll(out map[string]any, skipDefault bool) {
 	if n.present&negativeunlBitValidatorToReEnable != 0 && !(skipDefault && n.ValidatorToReEnable == "") {
 		out["ValidatorToReEnable"] = n.ValidatorToReEnable
 	}
+	if n.present&negativeunlBitSponsor != 0 && !(skipDefault && n.Sponsor == "") {
+		out["Sponsor"] = n.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -254,6 +278,7 @@ func (n *NegativeUNL) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedDeep(out, "DisabledValidators", prv.DisabledValidators, n.DisabledValidators, prv.present&negativeunlBitDisabledValidators, n.present&negativeunlBitDisabledValidators)
 	emitIfChangedString(out, "ValidatorToDisable", prv.ValidatorToDisable, n.ValidatorToDisable, prv.present&negativeunlBitValidatorToDisable, n.present&negativeunlBitValidatorToDisable)
 	emitIfChangedString(out, "ValidatorToReEnable", prv.ValidatorToReEnable, n.ValidatorToReEnable, prv.present&negativeunlBitValidatorToReEnable, n.present&negativeunlBitValidatorToReEnable)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, n.Sponsor, prv.present&negativeunlBitSponsor, n.present&negativeunlBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -273,6 +298,9 @@ func (n *NegativeUNL) EmitChangeOrigFields(out map[string]any) {
 	}
 	if n.present&negativeunlBitValidatorToReEnable != 0 {
 		out["ValidatorToReEnable"] = n.ValidatorToReEnable
+	}
+	if n.present&negativeunlBitSponsor != 0 {
+		out["Sponsor"] = n.Sponsor
 	}
 }
 
@@ -332,6 +360,9 @@ func (n *NegativeUNL) ToMap() map[string]any {
 	}
 	if n.present&negativeunlBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = n.PreviousTxnLgrSeq
+	}
+	if n.present&negativeunlBitSponsor != 0 {
+		out["Sponsor"] = n.Sponsor
 	}
 	return out
 }

@@ -593,7 +593,7 @@ func TestBatchDelegate(t *testing.T) {
 		preAlice := env.Balance(alice)
 		preBob := env.Balance(bob)
 
-		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
 		seq := env.Seq(alice)
 
 		innerTx0 := MakeInnerPaymentXRPWithDelegate(alice, bob, 1, seq+1, bob)
@@ -602,6 +602,7 @@ func TestBatchDelegate(t *testing.T) {
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(innerTx0).
 			AddInnerTx(innerTx1).
+			AddSigner(bob).
 			MustBuild()
 
 		result := env.Submit(batch)
@@ -644,7 +645,7 @@ func TestBatchDelegate(t *testing.T) {
 		batch := NewBatchBuilder(alice, aliceSeq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(innerTx0).
 			AddInnerTx(innerTx1).
-			AddSigner(bob).
+			AddSigner(carol).
 			MustBuild()
 
 		result := env.Submit(batch)

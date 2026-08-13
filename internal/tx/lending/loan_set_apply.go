@@ -43,13 +43,10 @@ func (l *LoanSet) loanSetValueFields() []string {
 	return fields
 }
 
-// CalculateBaseFee includes both the transaction signers and the nested
-// counterparty signers in the minimum fee.
+// CalculateBaseFee includes transaction and sponsor signers through the common
+// fee, then adds the nested counterparty signers.
 func (l *LoanSet) CalculateBaseFee(_ tx.LedgerView, config tx.EngineConfig) uint64 {
-	normal := config.BaseFee
-	if sign.IsMultiSigned(l) {
-		normal = sign.CalculateMultiSigFee(config.BaseFee, len(l.GetCommon().Signers))
-	}
+	normal := sign.CalculateDefaultBaseFee(l, config)
 	cp := l.GetCommon().CounterpartySignature
 	if cp == nil {
 		return normal
@@ -350,7 +347,7 @@ func (l *LoanSet) chargeBorrower(ctx *tx.ApplyContext, borrower [20]byte) (bool,
 	if err != nil || br == nil {
 		return false, ter.TefBAD_LEDGER
 	}
-	if br.Balance < ctx.AccountReserve(br.OwnerCount+1) {
+	if br.Balance < ctx.AccountReserveFor(br, br.OwnerCount+1) {
 		return false, ter.TesSUCCESS
 	}
 	if e := tx.AdjustOwnerCount(ctx.View, borrower, 1); e != nil {

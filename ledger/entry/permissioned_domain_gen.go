@@ -30,6 +30,7 @@ type PermissionedDomain struct {
 	Flags               uint32
 	PreviousTxnID       string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq   uint32
+	Sponsor             string // AccountID (base58)
 }
 
 // Type returns the concrete ledger-entry type.
@@ -45,6 +46,7 @@ const (
 	permissioneddomainBitFlags
 	permissioneddomainBitPreviousTxnID
 	permissioneddomainBitPreviousTxnLgrSeq
+	permissioneddomainBitSponsor
 )
 
 // SetOwner assigns Owner and updates its serialized presence.
@@ -94,6 +96,13 @@ func (p *PermissionedDomain) SetPreviousTxnLgrSeq(value uint32) {
 	p.PreviousTxnLgrSeq = value
 	p.dirty = true
 	p.present |= permissioneddomainBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (p *PermissionedDomain) SetSponsor(value string) {
+	p.Sponsor = value
+	p.dirty = true
+	p.present |= permissioneddomainBitSponsor
 }
 
 func (p *PermissionedDomain) validateRequired() error {
@@ -235,6 +244,9 @@ func (p *PermissionedDomain) decode(data []byte, legacy bool) error {
 			case 2:
 				p.Owner = val
 				p.present |= permissioneddomainBitOwner
+			case 27:
+				p.Sponsor = val
+				p.present |= permissioneddomainBitSponsor
 			default:
 				return newErrUnknownField("PermissionedDomain", typeCode, fieldCode)
 			}
@@ -283,6 +295,9 @@ func (p *PermissionedDomain) emitAll(out map[string]any, skipDefault bool) {
 	if p.present&permissioneddomainBitFlags != 0 && !(skipDefault && p.Flags == 0) {
 		out["Flags"] = p.Flags
 	}
+	if p.present&permissioneddomainBitSponsor != 0 && !(skipDefault && p.Sponsor == "") {
+		out["Sponsor"] = p.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -309,6 +324,7 @@ func (p *PermissionedDomain) EmitPreviousFields(prev Entry, out map[string]any) 
 	emitIfChangedDeep(out, "AcceptedCredentials", prv.AcceptedCredentials, p.AcceptedCredentials, prv.present&permissioneddomainBitAcceptedCredentials, p.present&permissioneddomainBitAcceptedCredentials)
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, p.OwnerNode, prv.present&permissioneddomainBitOwnerNode, p.present&permissioneddomainBitOwnerNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, p.Flags, prv.present&permissioneddomainBitFlags, p.present&permissioneddomainBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, p.Sponsor, prv.present&permissioneddomainBitSponsor, p.present&permissioneddomainBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -331,6 +347,9 @@ func (p *PermissionedDomain) EmitChangeOrigFields(out map[string]any) {
 	}
 	if p.present&permissioneddomainBitFlags != 0 {
 		out["Flags"] = p.Flags
+	}
+	if p.present&permissioneddomainBitSponsor != 0 {
+		out["Sponsor"] = p.Sponsor
 	}
 }
 
@@ -393,6 +412,9 @@ func (p *PermissionedDomain) ToMap() map[string]any {
 	}
 	if p.present&permissioneddomainBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = p.PreviousTxnLgrSeq
+	}
+	if p.present&permissioneddomainBitSponsor != 0 {
+		out["Sponsor"] = p.Sponsor
 	}
 	return out
 }

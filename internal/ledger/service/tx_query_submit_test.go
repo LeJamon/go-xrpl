@@ -139,14 +139,14 @@ func TestService_SubmitTransaction_RejectsInnerBatchTransaction(t *testing.T) {
 		want       ter.Result
 	}{
 		{
-			name:       "Batch enabled",
-			amendments: [][32]byte{amendment.FeatureBatch},
+			name:       "BatchV1_1 disabled",
+			amendments: nil,
 			want:       ter.TemINVALID_FLAG,
 		},
 		{
-			name:       "fixBatchInnerSigs enabled",
-			amendments: [][32]byte{amendment.FeatureBatch, amendment.FeatureFixBatchInnerSigs},
-			want:       ter.TemINVALID,
+			name:       "BatchV1_1 enabled",
+			amendments: [][32]byte{amendment.FeatureBatchV1_1},
+			want:       ter.TemINVALID_INNER_BATCH,
 		},
 	}
 
@@ -284,11 +284,11 @@ func TestService_SubmitTransaction_BadSignatureIsNotQueryable(t *testing.T) {
 	}
 }
 
-func TestService_SubmitTransaction_BatchSignerFailureRemainsQueryable(t *testing.T) {
+func TestService_SubmitTransaction_BatchSignerFailureIsNotHeld(t *testing.T) {
 	cfg := defaultServiceConfig()
 	cfg.Standalone = false
 	cfg.Startup.Mode = service.StartupFresh
-	cfg.GenesisConfig.Amendments = append(cfg.GenesisConfig.Amendments, amendment.FeatureBatch)
+	cfg.GenesisConfig.Amendments = append(cfg.GenesisConfig.Amendments, amendment.FeatureBatchV1_1)
 	svc, err := service.New(cfg)
 	if err != nil {
 		t.Fatalf("service.New: %v", err)
@@ -297,12 +297,12 @@ func TestService_SubmitTransaction_BatchSignerFailureRemainsQueryable(t *testing
 		t.Fatalf("service.Start: %v", err)
 	}
 	t.Cleanup(svc.Stop)
-	if !svc.TransactionRules().Enabled(amendment.FeatureBatch) {
+	if !svc.TransactionRules().Enabled(amendment.FeatureBatchV1_1) {
 		t.Fatal("Batch amendment not enabled in service rules")
 	}
 
 	env := jtx.NewTestEnv(t)
-	env.EnableFeatureNow("Batch")
+	env.EnableFeatureNow("BatchV1_1")
 	env.SetVerifySignatures(true)
 	outer := jtx.MasterAccount()
 	innerSigner := jtx.NewAccount("batch-signer")
@@ -352,25 +352,14 @@ func TestService_SubmitTransaction_BatchSignerFailureRemainsQueryable(t *testing
 	if err != nil {
 		t.Fatalf("SubmitTransaction: %v", err)
 	}
-	if result.Result != ter.TemBAD_SIGNATURE {
-		t.Fatalf("Result = %s, want temBAD_SIGNATURE", result.Result)
+	if result.Result != ter.TemINVALID {
+		t.Fatalf("Result = %s, want temINVALID", result.Result)
 	}
 	if result.Applied {
 		t.Fatal("invalid BatchSigner signature must not apply")
 	}
-	hold, err := svc.GetTransaction(hash)
-	if err != nil {
-		t.Fatalf("GetTransaction(held batch) = %v", err)
-	}
-	if hold.Validated || hold.LedgerIndex != 0 || hold.TxIndex != ^uint32(0) {
-		t.Fatalf("held batch advertised validated-ledger state: %+v", hold)
-	}
-	heldBlob, metaBlob, err := tx.SplitTxWithMetaBlob(hold.TxData)
-	if err != nil {
-		t.Fatalf("split held batch: %v", err)
-	}
-	if string(heldBlob) != string(blob) || metaBlob != nil {
-		t.Fatalf("held batch payload = (%x, %x), want tx-only input", heldBlob, metaBlob)
+	if _, err := svc.GetTransaction(hash); !errors.Is(err, service.ErrTxnNotFound) {
+		t.Fatalf("GetTransaction(bad BatchSigner) = %v, want ErrTxnNotFound", err)
 	}
 }
 

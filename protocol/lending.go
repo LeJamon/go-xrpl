@@ -1,6 +1,6 @@
 package protocol
 
-// Lending (XLS-66) protocol constants, mirroring rippled 3.1.0
+// Lending (XLS-66) protocol constants, mirroring rippled 3.3.0
 // include/xrpl/protocol/Protocol.h. Rates are expressed in bips (basis points,
 // 1/10000) or tenth-bips (1/100000); a management fee rate of 10% is stored as
 // 10000 tenth-bips.

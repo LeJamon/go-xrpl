@@ -34,6 +34,7 @@ type AMM struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	Sponsor           string // AccountID (base58)
 }
 
 // Type returns the concrete ledger-entry type.
@@ -53,6 +54,7 @@ const (
 	ammBitFlags
 	ammBitPreviousTxnID
 	ammBitPreviousTxnLgrSeq
+	ammBitSponsor
 )
 
 // SetAccount assigns Account and updates its serialized presence.
@@ -134,6 +136,13 @@ func (a *AMM) SetPreviousTxnLgrSeq(value uint32) {
 	a.PreviousTxnLgrSeq = value
 	a.dirty = true
 	a.present |= ammBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (a *AMM) SetSponsor(value string) {
+	a.Sponsor = value
+	a.dirty = true
+	a.present |= ammBitSponsor
 }
 
 func (a *AMM) validateRequired() error {
@@ -290,6 +299,9 @@ func (a *AMM) decode(data []byte, legacy bool) error {
 			case 1:
 				a.Account = val
 				a.present |= ammBitAccount
+			case 27:
+				a.Sponsor = val
+				a.present |= ammBitSponsor
 			default:
 				return newErrUnknownField("AMM", typeCode, fieldCode)
 			}
@@ -377,6 +389,9 @@ func (a *AMM) emitAll(out map[string]any, skipDefault bool) {
 	if a.present&ammBitFlags != 0 && !(skipDefault && a.Flags == 0) {
 		out["Flags"] = a.Flags
 	}
+	if a.present&ammBitSponsor != 0 && !(skipDefault && a.Sponsor == "") {
+		out["Sponsor"] = a.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -407,6 +422,7 @@ func (a *AMM) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedDeep(out, "Asset2", prv.Asset2, a.Asset2, prv.present&ammBitAsset2, a.present&ammBitAsset2)
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, a.OwnerNode, prv.present&ammBitOwnerNode, a.present&ammBitOwnerNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, a.Flags, prv.present&ammBitFlags, a.present&ammBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, a.Sponsor, prv.present&ammBitSponsor, a.present&ammBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -441,6 +457,9 @@ func (a *AMM) EmitChangeOrigFields(out map[string]any) {
 	}
 	if a.present&ammBitFlags != 0 {
 		out["Flags"] = a.Flags
+	}
+	if a.present&ammBitSponsor != 0 {
+		out["Sponsor"] = a.Sponsor
 	}
 }
 
@@ -515,6 +534,9 @@ func (a *AMM) ToMap() map[string]any {
 	}
 	if a.present&ammBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = a.PreviousTxnLgrSeq
+	}
+	if a.present&ammBitSponsor != 0 {
+		out["Sponsor"] = a.Sponsor
 	}
 	return out
 }

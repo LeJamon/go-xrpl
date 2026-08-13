@@ -39,6 +39,7 @@ type Vault struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	Sponsor           string // AccountID (base58)
 }
 
 // Type returns the concrete ledger-entry type.
@@ -63,6 +64,7 @@ const (
 	vaultBitFlags
 	vaultBitPreviousTxnID
 	vaultBitPreviousTxnLgrSeq
+	vaultBitSponsor
 )
 
 // SetSequence assigns Sequence and updates its serialized presence.
@@ -195,6 +197,13 @@ func (v *Vault) SetPreviousTxnLgrSeq(value uint32) {
 	v.PreviousTxnLgrSeq = value
 	v.dirty = true
 	v.present |= vaultBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (v *Vault) SetSponsor(value string) {
+	v.Sponsor = value
+	v.dirty = true
+	v.present |= vaultBitSponsor
 }
 
 func (v *Vault) validateRequired() error {
@@ -384,6 +393,9 @@ func (v *Vault) decode(data []byte, legacy bool) error {
 			case 2:
 				v.Owner = val
 				v.present |= vaultBitOwner
+			case 27:
+				v.Sponsor = val
+				v.present |= vaultBitSponsor
 			default:
 				return newErrUnknownField("Vault", typeCode, fieldCode)
 			}
@@ -508,6 +520,9 @@ func (v *Vault) emitAll(out map[string]any, skipDefault bool) {
 	if v.present&vaultBitFlags != 0 && !(skipDefault && v.Flags == 0) {
 		out["Flags"] = v.Flags
 	}
+	if v.present&vaultBitSponsor != 0 && !(skipDefault && v.Sponsor == "") {
+		out["Sponsor"] = v.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -543,6 +558,7 @@ func (v *Vault) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedInt(out, "WithdrawalPolicy", prv.WithdrawalPolicy, v.WithdrawalPolicy, prv.present&vaultBitWithdrawalPolicy, v.present&vaultBitWithdrawalPolicy)
 	emitIfChangedInt(out, "Scale", prv.Scale, v.Scale, prv.present&vaultBitScale, v.present&vaultBitScale)
 	emitIfChangedUint32(out, "Flags", prv.Flags, v.Flags, prv.present&vaultBitFlags, v.present&vaultBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, v.Sponsor, prv.present&vaultBitSponsor, v.present&vaultBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -592,6 +608,9 @@ func (v *Vault) EmitChangeOrigFields(out map[string]any) {
 	}
 	if v.present&vaultBitFlags != 0 {
 		out["Flags"] = v.Flags
+	}
+	if v.present&vaultBitSponsor != 0 {
+		out["Sponsor"] = v.Sponsor
 	}
 }
 
@@ -681,6 +700,9 @@ func (v *Vault) ToMap() map[string]any {
 	}
 	if v.present&vaultBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = v.PreviousTxnLgrSeq
+	}
+	if v.present&vaultBitSponsor != 0 {
+		out["Sponsor"] = v.Sponsor
 	}
 	return out
 }

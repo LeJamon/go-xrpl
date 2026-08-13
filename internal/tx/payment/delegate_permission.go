@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // CheckDelegatePermission authorizes a delegated Payment carrying a granular
@@ -31,11 +32,46 @@ func paymentMintBurn(pc tx.DelegatePermissionContext, amt state.Amount, account,
 	if amt.Native {
 		return ter.TerNO_DELEGATE_PERMISSION
 	}
-	issuer := amountIssuer(amt)
-	if pc.HasGranular(tx.GranularPaymentMint) && issuer == account {
+	if amt.IsMPT() {
+		issuer := amountIssuer(amt)
+		if pc.HasGranular(tx.GranularPaymentMint) && issuer == account {
+			return ter.TesSUCCESS
+		}
+		if pc.HasGranular(tx.GranularPaymentBurn) && issuer == destination {
+			return ter.TesSUCCESS
+		}
+		return ter.TerNO_DELEGATE_PERMISSION
+	}
+
+	if amt.Issuer != account && amt.Issuer != destination {
+		return ter.TerNO_DELEGATE_PERMISSION
+	}
+	accountID, accountErr := state.DecodeAccountID(account)
+	destinationID, destinationErr := state.DecodeAccountID(destination)
+	if accountErr != nil || destinationErr != nil {
+		return ter.TerNO_DELEGATE_PERMISSION
+	}
+	line, err := tx.ReadRippleState(pc.View, accountID, destinationID, amt.Currency)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if line == nil {
+		return ter.TerNO_DELEGATE_PERMISSION
+	}
+
+	accountIsLow := keylet.IsLowAccount(accountID, destinationID)
+	destinationLimit := line.LowLimit
+	if accountIsLow {
+		destinationLimit = line.HighLimit
+	}
+	accountIsHolder := line.Balance.Signum() < 0
+	if accountIsLow {
+		accountIsHolder = line.Balance.Signum() > 0
+	}
+	if pc.HasGranular(tx.GranularPaymentMint) && destinationLimit.Signum() > 0 && !accountIsHolder {
 		return ter.TesSUCCESS
 	}
-	if pc.HasGranular(tx.GranularPaymentBurn) && issuer == destination {
+	if pc.HasGranular(tx.GranularPaymentBurn) && accountIsHolder {
 		return ter.TesSUCCESS
 	}
 	return ter.TerNO_DELEGATE_PERMISSION

@@ -16,4 +16,19 @@ func Register() {
 	tx.Register(tx.TypeMPTokenAuthorize, func() tx.Transaction {
 		return &MPTokenAuthorize{BaseTx: *tx.NewBaseTx(tx.TypeMPTokenAuthorize, "")}
 	})
+	tx.Register(tx.TypeConfidentialMPTConvert, func() tx.Transaction {
+		return &ConfidentialMPTConvert{BaseTx: *tx.NewBaseTx(tx.TypeConfidentialMPTConvert, "")}
+	})
+	tx.Register(tx.TypeConfidentialMPTMergeInbox, func() tx.Transaction {
+		return &ConfidentialMPTMergeInbox{BaseTx: *tx.NewBaseTx(tx.TypeConfidentialMPTMergeInbox, "")}
+	})
+	tx.Register(tx.TypeConfidentialMPTConvertBack, func() tx.Transaction {
+		return &ConfidentialMPTConvertBack{BaseTx: *tx.NewBaseTx(tx.TypeConfidentialMPTConvertBack, "")}
+	})
+	tx.Register(tx.TypeConfidentialMPTSend, func() tx.Transaction {
+		return &ConfidentialMPTSend{BaseTx: *tx.NewBaseTx(tx.TypeConfidentialMPTSend, "")}
+	})
+	tx.Register(tx.TypeConfidentialMPTClawback, func() tx.Transaction {
+		return &ConfidentialMPTClawback{BaseTx: *tx.NewBaseTx(tx.TypeConfidentialMPTClawback, "")}
+	})
 }

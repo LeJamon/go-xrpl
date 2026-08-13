@@ -371,11 +371,11 @@ func TestBatchCalculateBaseFee(t *testing.T) {
 
 		bob := jtx.NewAccount("bob")
 		seq := env.Seq(alice)
-		batchFee := CalcBatchFeeFromEnv(env, 9, 2)
+		batchFee := CalcBatchFeeFromEnv(env, batchtx.MaxBatchSigners+1, 2)
 		builder := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+2))
-		for i := range 9 {
+		for i := range batchtx.MaxBatchSigners + 1 {
 			signer := jtx.NewAccount(fmt.Sprintf("signer%d", i))
 			builder.AddSigner(signer)
 		}
@@ -383,7 +383,7 @@ func TestBatchCalculateBaseFee(t *testing.T) {
 
 		err := batch.Validate()
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "exceeds 8")
+		require.Contains(t, err.Error(), "exceeds 24")
 	})
 
 	t.Run("valid batch fee calculation", func(t *testing.T) {

@@ -80,8 +80,12 @@ func TestDelegateSet_PermissionIntroducingAmendment(t *testing.T) {
 	env.Fund(alice, bob)
 	env.Close()
 
-	require.Equal(t, "temMALFORMED", grantPermissions(env, alice, bob, "Clawback").Code)
-	env.EnableFeature("Clawback")
-	env.Close()
 	require.Equal(t, "tesSUCCESS", grantPermissions(env, alice, bob, "Clawback").Code)
+
+	env.DisableFeature("MPTokensV1")
+	env.Close()
+	require.Equal(t, "temMALFORMED", grantPermissions(env, alice, bob, "MPTokenIssuanceLock").Code)
+	env.EnableFeature("MPTokensV1")
+	env.Close()
+	require.Equal(t, "tesSUCCESS", grantPermissions(env, alice, bob, "MPTokenIssuanceLock").Code)
 }

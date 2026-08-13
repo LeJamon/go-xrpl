@@ -7,16 +7,17 @@ XRPL amendments known to this node, generated from the amendment registry
 amendment's behavior; **Default vote** is whether the node votes for it by
 default (operators override via the `[amendments]` config section).
 
-Total: 107 amendments.
+Total: 110 amendments.
 
 | Amendment | Supported | Default vote |
 |-----------|-----------|--------------|
 | `AMM` | yes | no |
 | `AMMClawback` | yes | no |
-| `Batch` | no | no |
+| `BatchV1_1` | yes | no |
 | `CheckCashMakesTrustLine` | yes | no |
 | `Checks` | yes | no |
 | `Clawback` | yes | no |
+| `ConfidentialTransfer` | no | no |
 | `Credentials` | yes | no |
 | `CryptoConditions` | yes | no |
 | `CryptoConditionsSuite` | yes | no |
@@ -26,7 +27,7 @@ Total: 107 amendments.
 | `DepositAuth` | yes | no |
 | `DepositPreauth` | yes | no |
 | `DisallowIncoming` | yes | no |
-| `DynamicMPT` | no | no |
+| `DynamicMPT` | yes | no |
 | `DynamicNFT` | yes | no |
 | `EnforceInvariants` | yes | no |
 | `Escrow` | yes | no |
@@ -39,6 +40,7 @@ Total: 107 amendments.
 | `ImmediateOfferKilled` | yes | no |
 | `InvariantsV1_1` | no | no |
 | `LendingProtocol` | yes | no |
+| `LendingProtocolV1_1` | no | no |
 | `MPTokensV1` | yes | no |
 | `MPTokensV2` | no | no |
 | `MultiSign` | yes | no |
@@ -48,13 +50,14 @@ Total: 107 amendments.
 | `NonFungibleTokensV1` | yes | no |
 | `NonFungibleTokensV1_1` | yes | no |
 | `PayChan` | yes | no |
-| `PermissionDelegationV1_1` | no | no |
+| `PermissionDelegationV1_1` | yes | no |
 | `PermissionedDEX` | yes | no |
 | `PermissionedDomains` | yes | no |
 | `PriceOracle` | yes | no |
 | `RequireFullyCanonicalSig` | yes | no |
 | `SingleAssetVault` | yes | no |
 | `SortedDirectories` | yes | no |
+| `Sponsor` | yes | no |
 | `TickSize` | yes | no |
 | `TicketBatch` | yes | no |
 | `TokenEscrow` | yes | no |
@@ -80,10 +83,10 @@ Total: 107 amendments.
 | `fixAMMv1_2` | yes | no |
 | `fixAMMv1_3` | yes | no |
 | `fixAmendmentMajorityCalc` | yes | no |
-| `fixBatchInnerSigs` | no | no |
 | `fixCheckThreading` | yes | no |
 | `fixCleanup3_1_3` | yes | yes |
 | `fixCleanup3_2_0` | yes | no |
+| `fixCleanup3_3_0` | yes | no |
 | `fixDirectoryLimit` | yes | no |
 | `fixDisallowIncomingV1` | yes | no |
 | `fixEmptyDID` | yes | no |

@@ -279,9 +279,9 @@ func (r *Router) setTxSetRetryKnobsForTest(knobs txSetRetryKnobs) {
 // skipped by the trailing-type-byte check, and a tx the open ledger already
 // holds is not resubmitted. The submit is peer-sourced and the relay reuses
 // relayTransaction exactly as handleTransaction does for an inbound
-// TMTransaction (see handleTransaction), excluding originPeer as the tx's
-// source — so a set the node only holds transiently still pushes its novel
-// txs to peers instead of relying on the slower TMHaveTransactions announce.
+// TMTransaction (see handleTransaction), excluding originPeer and every other
+// recorded source — so a set the node only holds transiently still pushes its
+// novel txs to peers instead of relying on the slower TMHaveTransactions announce.
 //
 // We deliberately do not keep a per-acquisition node cache: the acquired
 // node is already held in txMap and the missing-leaf local-fill (below)
@@ -303,8 +303,12 @@ func (r *Router) learnTxFromLeaf(originPeer uint64, wire []byte) {
 	if err != nil || exists {
 		return
 	}
-	if res, err := r.adaptor.SubmitPendingTx(item.Data(), false); err == nil && res == openledger.ResultSuccess {
-		r.relayTransaction(peermanagement.PeerID(originPeer), item.Data())
+	if outcome, err := r.adaptor.SubmitPendingTx(item.Data(), false); err == nil && outcome.Class == openledger.ResultSuccess {
+		r.relayTransaction(
+			r.transactionRelaySkip(item.Key(), peermanagement.PeerID(originPeer)),
+			item.Data(),
+			outcome.Queued,
+		)
 	}
 }
 

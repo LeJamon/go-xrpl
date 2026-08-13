@@ -128,12 +128,18 @@ func (v *VaultDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 		return ter.TefINTERNAL
 	}
 
-	if res := checkFrozen(view, asset, accountID); res != ter.TesSUCCESS {
-		return res
-	}
-	shareAsset := tx.Asset{MPTIssuanceID: hex.EncodeToString(vd.ShareMPTID[:])}
-	if res := checkFrozen(view, shareAsset, accountID); res != ter.TesSUCCESS {
-		return res
+	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
+		if res := mptutil.CheckDepositFreeze(view, accountID, vd.Account, asset); res != ter.TesSUCCESS {
+			return res
+		}
+	} else {
+		if res := checkFrozen(view, asset, accountID); res != ter.TesSUCCESS {
+			return res
+		}
+		shareAsset := tx.Asset{MPTIssuanceID: hex.EncodeToString(vd.ShareMPTID[:])}
+		if res := checkFrozen(view, shareAsset, accountID); res != ter.TesSUCCESS {
+			return res
+		}
 	}
 
 	// Private vault: a non-owner needs domain authorization.

@@ -22,8 +22,8 @@ func TestLendingNumberRulesPreserveCuspArithmeticAndWireBytes(t *testing.T) {
 	if got := lendingNumberScale(legacyRules); got != state.MantissaScaleLargeLegacy {
 		t.Fatalf("legacy scale = %v, want LargeLegacy", got)
 	}
-	if got := lendingNumberScale(fixedRules); got != state.MantissaScaleLarge {
-		t.Fatalf("fixed scale = %v, want Large", got)
+	if got := lendingNumberScale(fixedRules); got != state.MantissaScaleLarge320 {
+		t.Fatalf("fixed scale = %v, want Large320", got)
 	}
 
 	const (

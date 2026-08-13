@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/offer"
 	"github.com/LeJamon/go-xrpl/internal/tx/paychan"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/sponsor"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/tx/ticket"
 	"github.com/LeJamon/go-xrpl/internal/tx/xchain"
@@ -345,7 +346,7 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 
 			// canBeHeld check (per-account limit).
 			// Reference: TxQ.cpp:980-988 → canBeHeld (TxQ.cpp:383-447)
-			if rejected, result := q.canBeHeld(common, originalFlags, ledgerSeq, aq, replacingCandidate, seqProxy, acctSeq); rejected {
+			if rejected, result := q.canBeHeld(txn.TxType(), common, originalFlags, ledgerSeq, aq, replacingCandidate, seqProxy, acctSeq); rejected {
 				return result
 			}
 		}
@@ -478,7 +479,7 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	// If multiTxn was not needed, we still need canBeHeld checks.
 	// Reference: TxQ.cpp:1227-1238
 	if !requiresMultiTxn {
-		if rejected, result := q.canBeHeld(common, originalFlags, ledgerSeq, aq, replacingCandidate, seqProxy, acctSeq); rejected {
+		if rejected, result := q.canBeHeld(txn.TxType(), common, originalFlags, ledgerSeq, aq, replacingCandidate, seqProxy, acctSeq); rejected {
 			return result
 		}
 	}
@@ -712,8 +713,17 @@ func (q *TxQ) tryClearAccountQueue(
 	return &ApplyResult{Result: result, Applied: true}
 }
 
-func (q *TxQ) canBeHeld(common *tx.Common, flags tx.ApplyFlags, ledgerSeq uint32, aq *accountQueue, replacingCandidate *candidate, seqProxy SeqProxy, acctSeq uint32) (bool, ApplyResult) {
+func (q *TxQ) canBeHeld(txType tx.Type, common *tx.Common, flags tx.ApplyFlags, ledgerSeq uint32, aq *accountQueue, replacingCandidate *candidate, seqProxy SeqProxy, acctSeq uint32) (bool, ApplyResult) {
 	if common.HasField("PreviousTxnID") || common.AccountTxnID != "" || flags&tx.TapFAIL_HARD != 0 {
+		return true, ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
+	}
+	if txType == tx.TypeBatch {
+		return true, ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
+	}
+	if common.Delegate != "" {
+		return true, ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
+	}
+	if common.Sponsor != "" && common.SponsorFlags != nil && *common.SponsorFlags&tx.SpfSponsorFee != 0 {
 		return true, ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
 	}
 	if common.LastLedgerSequence != nil &&
@@ -884,6 +894,10 @@ func computeConsequences(txn tx.Transaction, seqProxy SeqProxy) txConsequences {
 		// (XChainBridge.cpp:1895-1906).
 		if t.Amount.IsNative() && uint64(t.Amount.Drops()) > 0 {
 			cons.PotentialSpend = uint64(t.Amount.Drops())
+		}
+	case *sponsor.SponsorshipSet:
+		if t.FeeAmountDelta != nil && t.FeeAmountDelta.IsNative() && t.FeeAmountDelta.Signum() > 0 {
+			cons.PotentialSpend = uint64(t.FeeAmountDelta.Drops())
 		}
 	}
 

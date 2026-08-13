@@ -10,39 +10,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestOverlayHandlePingPongEchoesOptionalFields(t *testing.T) {
+func TestOverlayHandlePingPongCopiesOnlySequence(t *testing.T) {
 	peer := newTestPeer(t, 7)
 	o := newTestOverlayWithPeers(map[PeerID]*Peer{7: peer})
 
 	tests := []struct {
-		name string
-		ping *message.Ping
+		name    string
+		payload []byte
+		seq     uint32
+		seqSet  bool
 	}{
-		{name: "absent", ping: &message.Ping{PType: message.PingTypePing}},
+		{name: "absent", payload: []byte{0x08, 0x00}},
 		{
-			name: "explicit zero",
-			ping: &message.Ping{
-				PType:       message.PingTypePing,
-				SeqSet:      true,
-				PingTimeSet: true,
-				NetTimeSet:  true,
-			},
+			name:    "explicit zero",
+			payload: []byte{0x08, 0x00, 0x10, 0x00},
+			seqSet:  true,
 		},
 		{
-			name: "nonzero",
-			ping: &message.Ping{
-				PType:    message.PingTypePing,
-				Seq:      11,
-				PingTime: 22,
-				NetTime:  33,
-			},
+			name:    "legacy unknown fields",
+			payload: []byte{0x08, 0x00, 0x10, 0x0b, 0x18, 0x16, 0x20, 0x21},
+			seq:     11,
+			seqSet:  true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			payload, err := message.Encode(tt.ping)
-			require.NoError(t, err)
-			require.True(t, o.handlePing(Event{PeerID: 7, Payload: payload}))
+			require.True(t, o.handlePing(Event{PeerID: 7, Payload: tt.payload}))
 
 			frame := requireOutboundFrame(t, peer)
 			header, replyPayload, err := readTestFrame(bytes.NewReader(frame))
@@ -53,12 +46,15 @@ func TestOverlayHandlePingPongEchoesOptionalFields(t *testing.T) {
 			pong := decoded.(*message.Ping)
 
 			assert.Equal(t, message.PingTypePong, pong.PType)
-			assert.Equal(t, tt.ping.Seq, pong.Seq)
-			assert.Equal(t, tt.ping.HasSeq(), pong.HasSeq())
-			assert.Equal(t, tt.ping.PingTime, pong.PingTime)
-			assert.Equal(t, tt.ping.HasPingTime(), pong.HasPingTime())
-			assert.Equal(t, tt.ping.NetTime, pong.NetTime)
-			assert.Equal(t, tt.ping.HasNetTime(), pong.HasNetTime())
+			assert.Equal(t, tt.seq, pong.Seq)
+			assert.Equal(t, tt.seqSet, pong.HasSeq())
+			expectedPayload, err := message.Encode(&message.Ping{
+				PType:  message.PingTypePong,
+				Seq:    tt.seq,
+				SeqSet: tt.seqSet,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, expectedPayload, replyPayload)
 		})
 	}
 }

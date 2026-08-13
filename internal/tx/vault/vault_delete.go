@@ -16,6 +16,8 @@ type VaultDelete struct {
 
 	// VaultID is the ID of the vault to delete (required)
 	VaultID string `json:"VaultID" xrpl:"VaultID"`
+
+	MemoData string `json:"MemoData,omitempty" xrpl:"MemoData,omitempty"`
 }
 
 // NewVaultDelete creates a new VaultDelete transaction
@@ -38,6 +40,14 @@ func (v *VaultDelete) GetFlagsMask(rules *amendment.Rules) uint32 {
 }
 
 func (v *VaultDelete) Validate() error {
+	return v.validate(nil)
+}
+
+func (v *VaultDelete) PreflightWithRules(rules *amendment.Rules) error {
+	return v.validate(rules)
+}
+
+func (v *VaultDelete) validate(rules *amendment.Rules) error {
 	if err := v.BaseTx.Validate(); err != nil {
 		return err
 	}
@@ -51,6 +61,16 @@ func (v *VaultDelete) Validate() error {
 			return ErrVaultIDZero
 		}
 		return ter.Errorf(ter.TemMALFORMED, "VaultID must be a valid 256-bit hash")
+	}
+
+	if v.MemoData != "" || v.Common.HasField("MemoData") {
+		if rules != nil && !rules.Enabled(amendment.FeatureLendingProtocolV1_1) {
+			return ter.Errorf(ter.TemDISABLED, "LendingProtocolV1_1 amendment is disabled")
+		}
+		data, err := decodeBlob(v.MemoData)
+		if err != nil || len(data) == 0 || len(data) > MaxVaultDataLength {
+			return ter.Errorf(ter.TemMALFORMED, "MemoData must contain 1 to %d bytes", MaxVaultDataLength)
+		}
 	}
 
 	return nil
@@ -290,8 +310,8 @@ func removeDeleteAssetHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx
 	if r, e := state.DirRemove(ctx.View, keylet.OwnerDir(accountID), token.OwnerNode, tokenKey.Key, false); e != nil || !r.Success {
 		return 0, ter.TecINTERNAL
 	}
-	if err := tx.AdjustOwnerCount(ctx.View, accountID, -1); err != nil {
-		return 0, ter.TefINTERNAL
+	if result := tx.DecreaseOwnerCountFor(ctx, accountID, token.Sponsor, 1); result != ter.TesSUCCESS {
+		return 0, result
 	}
 	if err := ctx.View.Erase(tokenKey); err != nil {
 		return 0, ter.TefINTERNAL

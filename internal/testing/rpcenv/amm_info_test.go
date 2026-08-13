@@ -340,44 +340,42 @@ func TestAMMInfo_PresenceSemantics(t *testing.T) {
 	})
 }
 
-// TestAMMInfo_AccountIdentForms verifies the account param accepts the
-// identifier forms rippled's non-strict accountFromString does: a base58
-// account public key and a seed/passphrase (RPCHelpers.cpp:43-85).
-func TestAMMInfo_AccountIdentForms(t *testing.T) {
+func TestAMMInfo_AccountFieldsRequireClassicAddresses(t *testing.T) {
 	amm.TestAMM(t, nil, 0, func(ammEnv *amm.AMMTestEnv, ammAcc *jtx.Account) {
 		env := rpcenv.Wrap(t, ammEnv.TestEnv)
 
-		lpToken := func(ident string) map[string]any {
+		expectMalformed := func(params map[string]any) {
 			t.Helper()
-			result, rpcErr := env.RPC("amm_info", map[string]any{
-				"asset":   map[string]any{"currency": "XRP"},
-				"asset2":  map[string]any{"currency": "USD", "issuer": ammEnv.GW.Address},
-				"account": ident,
-			})
-			if rpcErr != nil {
-				t.Fatalf("amm_info(account=%q): %s (code=%d)", ident, rpcErr.Message, rpcErr.Code)
+			_, rpcErr := env.RPCAs("amm_info", params, types.RoleAdmin, types.ApiVersion3)
+			if rpcErr == nil {
+				t.Fatalf("amm_info(%#v): expected error, got nil", params)
 			}
-			tok, ok := result.(map[string]any)["amm"].(map[string]any)["lp_token"].(map[string]any)
-			if !ok {
-				t.Fatalf("amm_info(account=%q): missing lp_token", ident)
+			if rpcErr.Code != rpcerrors.RpcACT_MALFORMED || rpcErr.Message != "Account malformed." {
+				t.Errorf("amm_info(%#v) = %q (code=%d), want actMalformed",
+					params, rpcErr.Message, rpcErr.Code)
 			}
-			return tok
 		}
-
-		byAddress := lpToken(ammEnv.Alice.Address)
 
 		alicePubKey, err := addresscodec.EncodeAccountPublicKey(ammEnv.Alice.PublicKey)
 		if err != nil {
 			t.Fatalf("encode alice public key: %v", err)
 		}
-		if got := lpToken(alicePubKey); got["value"] != byAddress["value"] {
-			t.Errorf("lp_token via public key = %#v, want %#v", got, byAddress)
+		pair := map[string]any{
+			"asset":  map[string]any{"currency": "XRP"},
+			"asset2": map[string]any{"currency": "USD", "issuer": ammEnv.GW.Address},
+		}
+		for _, ident := range []string{alicePubKey, ammEnv.Alice.Name} {
+			params := maps.Clone(pair)
+			params["account"] = ident
+			expectMalformed(params)
+			expectMalformed(map[string]any{"amm_account": ident})
 		}
 
-		// Test accounts derive from sha512half(name), the same derivation
-		// rippled applies to a passphrase identifier.
-		if got := lpToken(ammEnv.Alice.Name); got["value"] != byAddress["value"] {
-			t.Errorf("lp_token via passphrase = %#v, want %#v", got, byAddress)
+		for _, value := range []any{nil, true, 42, []any{}, map[string]any{}} {
+			params := maps.Clone(pair)
+			params["account"] = value
+			expectMalformed(params)
+			expectMalformed(map[string]any{"amm_account": value})
 		}
 	})
 }

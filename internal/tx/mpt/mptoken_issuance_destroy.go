@@ -151,14 +151,14 @@ func (m *MPTokenIssuanceDestroy) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefBAD_LEDGER
 	}
 
+	if result := tx.DecreaseOwnerCountFor(ctx, ctx.AccountID, issuance.Sponsor, 1); result != ter.TesSUCCESS {
+		return result
+	}
+
 	// Erase the issuance
 	if err := ctx.View.Erase(issuanceKey); err != nil {
 		ctx.Log.Error("mptoken issuance destroy: failed to erase issuance", "error", err)
 		return ter.TefINTERNAL
-	}
-
-	if ctx.Account.OwnerCount > 0 {
-		ctx.Account.OwnerCount--
 	}
 
 	return ter.TesSUCCESS

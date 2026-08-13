@@ -6,7 +6,7 @@ Transaction types registered with the engine, generated from the `tx.Register`
 registry (`internal/tx`). Each runs the full Validate → Preflight → Preclaim →
 Apply pipeline. The numeric code is the XRPL `TransactionType` field value.
 
-Total: 75 transaction types.
+Total: 82 transaction types.
 
 | Transaction type | Type code |
 |------------------|-----------|
@@ -24,6 +24,11 @@ Total: 75 transaction types.
 | `CheckCash` | 17 |
 | `CheckCreate` | 16 |
 | `Clawback` | 30 |
+| `ConfidentialMPTClawback` | 89 |
+| `ConfidentialMPTConvert` | 85 |
+| `ConfidentialMPTConvertBack` | 87 |
+| `ConfidentialMPTMergeInbox` | 86 |
+| `ConfidentialMPTSend` | 88 |
 | `CredentialAccept` | 59 |
 | `CredentialCreate` | 58 |
 | `CredentialDelete` | 60 |
@@ -68,6 +73,8 @@ Total: 75 transaction types.
 | `SetFee` | 101 |
 | `SetRegularKey` | 5 |
 | `SignerListSet` | 12 |
+| `SponsorshipSet` | 91 |
+| `SponsorshipTransfer` | 90 |
 | `TicketCreate` | 10 |
 | `TrustSet` | 20 |
 | `UNLModify` | 102 |

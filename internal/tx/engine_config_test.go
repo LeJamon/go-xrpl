@@ -31,7 +31,7 @@ func TestNumberContextForRules(t *testing.T) {
 		rules *amendment.Rules
 		want  state.MantissaScale
 	}{
-		{name: "no ledger rules", want: state.MantissaScaleLarge},
+		{name: "no ledger rules", want: state.MantissaScaleLarge330},
 		{name: "no large-number amendment", rules: amendment.EmptyRules(), want: state.MantissaScaleSmall},
 		{
 			name:  "vault before cleanup fix",
@@ -44,7 +44,15 @@ func TestNumberContextForRules(t *testing.T) {
 				amendment.FeatureLendingProtocol,
 				amendment.FeatureFixCleanup3_2_0,
 			}),
-			want: state.MantissaScaleLarge,
+			want: state.MantissaScaleLarge320,
+		},
+		{
+			name: "vault after 3.3 cleanup fix",
+			rules: amendment.NewRules([][32]byte{
+				amendment.FeatureSingleAssetVault,
+				amendment.FeatureFixCleanup3_3_0,
+			}),
+			want: state.MantissaScaleLarge330,
 		},
 	}
 
@@ -66,8 +74,8 @@ func TestApplyContextNumberContextUsesConfigRules(t *testing.T) {
 		amendment.FeatureFixCleanup3_2_0,
 	})
 	ctx := ApplyContext{Config: EngineConfig{Rules: rules}}
-	if got := ctx.NumberContext().Scale(); got != state.MantissaScaleLarge {
-		t.Fatalf("ApplyContext.NumberContext().Scale() = %d, want %d", got, state.MantissaScaleLarge)
+	if got := ctx.NumberContext().Scale(); got != state.MantissaScaleLarge320 {
+		t.Fatalf("ApplyContext.NumberContext().Scale() = %d, want %d", got, state.MantissaScaleLarge320)
 	}
 }
 

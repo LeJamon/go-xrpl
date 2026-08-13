@@ -108,6 +108,115 @@ type messageSuppression struct {
 	now     func() time.Time
 }
 
+const transactionProcessInterval = 10 * time.Second
+
+type transactionSuppression struct {
+	mu      sync.Mutex
+	entries map[[32]byte]*transactionSuppressionEntry
+	order   list.List
+	ttl     time.Duration
+	maxSize int
+	now     func() time.Time
+}
+
+type transactionSuppressionEntry struct {
+	processedAt time.Time
+	touchedAt   time.Time
+	bad         bool
+	peers       map[uint64]struct{}
+	order       *list.Element
+}
+
+func newTransactionSuppression(ttl time.Duration, maxSize int) *transactionSuppression {
+	if maxSize < 1 {
+		maxSize = 1
+	}
+	return &transactionSuppression{
+		entries: make(map[[32]byte]*transactionSuppressionEntry),
+		ttl:     ttl,
+		maxSize: maxSize,
+		now:     time.Now,
+	}
+}
+
+// claim atomically reserves the expensive ingress processing for one worker.
+// Duplicates refresh cache retention but do not extend the process interval.
+func (s *transactionSuppression) claim(hash [32]byte, peerID uint64) (shouldProcess, bad bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	s.evictExpiredLocked(now)
+	if entry, ok := s.entries[hash]; ok {
+		addTransactionPeer(entry, peerID)
+		entry.touchedAt = now
+		s.order.MoveToBack(entry.order)
+		if now.Sub(entry.processedAt) < transactionProcessInterval {
+			return false, entry.bad
+		}
+		entry.processedAt = now
+		return true, entry.bad
+	}
+	entry := &transactionSuppressionEntry{processedAt: now, touchedAt: now}
+	addTransactionPeer(entry, peerID)
+	entry.order = s.order.PushBack(hash)
+	s.entries[hash] = entry
+	for len(s.entries) > s.maxSize {
+		s.removeOldestLocked()
+	}
+	return true, false
+}
+
+func addTransactionPeer(entry *transactionSuppressionEntry, peerID uint64) {
+	if peerID == 0 {
+		return
+	}
+	if entry.peers == nil {
+		entry.peers = make(map[uint64]struct{})
+	}
+	entry.peers[peerID] = struct{}{}
+}
+
+func (s *transactionSuppression) releasePeers(hash [32]byte) map[uint64]struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry := s.entries[hash]
+	if entry == nil {
+		return nil
+	}
+	peers := entry.peers
+	entry.peers = nil
+	return peers
+}
+
+func (s *transactionSuppression) markBad(hash [32]byte) {
+	s.mu.Lock()
+	if entry := s.entries[hash]; entry != nil {
+		entry.bad = true
+	}
+	s.mu.Unlock()
+}
+
+func (s *transactionSuppression) evictExpiredLocked(now time.Time) {
+	for oldest := s.order.Front(); oldest != nil; oldest = s.order.Front() {
+		hash := oldest.Value.([32]byte)
+		entry := s.entries[hash]
+		if entry != nil && now.Sub(entry.touchedAt) < s.ttl {
+			return
+		}
+		s.removeOldestLocked()
+	}
+}
+
+func (s *transactionSuppression) removeOldestLocked() {
+	oldest := s.order.Front()
+	if oldest == nil {
+		return
+	}
+	hash := oldest.Value.([32]byte)
+	delete(s.entries, hash)
+	s.order.Remove(oldest)
+}
+
 type suppressionEntry struct {
 	seenAt time.Time
 	peers  map[uint64]struct{}

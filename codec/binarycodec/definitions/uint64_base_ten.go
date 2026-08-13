@@ -7,7 +7,7 @@ package definitions
 // rippled/src/libxrpl/protocol/STInteger.cpp:246.
 func IsBaseTenUInt64FieldName(name string) bool {
 	switch name {
-	case "MaximumAmount", "OutstandingAmount", "MPTAmount", "LockedAmount":
+	case "MaximumAmount", "OutstandingAmount", "MPTAmount", "LockedAmount", "ConfidentialOutstandingAmount":
 		return true
 	}
 	return false

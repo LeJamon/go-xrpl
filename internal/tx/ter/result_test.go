@@ -77,6 +77,8 @@ func TestResultMessage(t *testing.T) {
 		{TefALREADY, "The exact transaction was already in this ledger."},
 		{TelCAN_NOT_QUEUE, "Can not queue at this time."},
 		{TerRETRY, "Retry transaction."},
+		{TerNO_PERMISSION, "No permission to perform requested operation."},
+		{TecNO_SPONSOR_PERMISSION, "Sponsor has not authorized this transaction."},
 		{TelENV_RPC_FAILED, "Unit test RPC failure."},
 		{TemCAN_NOT_PREAUTH_SELF, "Malformed: An account may not preauthorize itself."},
 	}
@@ -105,5 +107,58 @@ func TestResultStringUnknown(t *testing.T) {
 	}
 	if got := TesSUCCESS.String(); got != "tesSUCCESS" {
 		t.Errorf("String(tesSUCCESS): got %q, want %q", got, "tesSUCCESS")
+	}
+}
+
+func TestPaymentStructuralTefResults(t *testing.T) {
+	tests := []struct {
+		result  Result
+		value   Result
+		name    string
+		message string
+	}{
+		{TefNO_DST_PARTIAL, -177, "tefNO_DST_PARTIAL", "Partial payment to create account not allowed."},
+		{TefBAD_PATH_COUNT, -176, "tefBAD_PATH_COUNT", "Malformed: Too many paths."},
+	}
+
+	defs := definitions.Get()
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.result != test.value {
+				t.Fatalf("numeric value = %d, want %d", test.result, test.value)
+			}
+			if got := test.result.String(); got != test.name {
+				t.Fatalf("String() = %q, want %q", got, test.name)
+			}
+			if got := test.result.Message(); got != test.message {
+				t.Fatalf("Message() = %q, want %q", got, test.message)
+			}
+			code, err := defs.TransactionResultCode(test.name)
+			if err != nil || code != int32(test.value) {
+				t.Fatalf("TransactionResultCode(%q) = %d, %v; want %d", test.name, code, err, test.value)
+			}
+			name, err := defs.TransactionResultName(int32(test.value))
+			if err != nil || name != test.name {
+				t.Fatalf("TransactionResultName(%d) = %q, %v; want %q", test.value, name, err, test.name)
+			}
+			if !test.result.IsTef() || test.result.IsApplied() || test.result.ShouldRetry() {
+				t.Fatalf("classification mismatch for %s", test.name)
+			}
+		})
+	}
+}
+
+func TestTecRangeIncludesSponsorCodes(t *testing.T) {
+	for _, code := range []Result{
+		TecNO_DELEGATE_PERMISSION,
+		TecBAD_PROOF,
+		TecNO_SPONSOR_PERMISSION,
+		Result(255),
+		Result(256),
+		Result(399),
+	} {
+		if !code.IsTec() || !code.IsClaimed() {
+			t.Errorf("%d must be classified as a claimed tec result", code)
+		}
 	}
 }

@@ -115,7 +115,7 @@ func (a *AMMClawback) Flatten() (map[string]any, error) {
 
 // RequiredAmendments gates AMMClawback on featureAMMClawback alone. rippled
 // declares no checkExtraFeatures override for this transactor (only getFlagsMask),
-// so ammEnabled (featureAMM && fixUniversalNumber) is NOT a preflight requirement:
+// so featureAMM is NOT a preflight requirement:
 // with AMMClawback enabled but AMM disabled the tx passes preflight and fails in
 // preclaim (terNO_AMM, since no AMM can exist).
 // Reference: rippled transactions.macro ttAMM_CLAWBACK + AMMClawback.h.
@@ -430,6 +430,19 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	if err != nil {
 		return ter.TefINTERNAL
 	}
+	postAsset1, err := subtractAMMPoolAmount(assetBalance1, withdrawAmount1, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	postAsset2, err := subtractAMMPoolAmount(assetBalance2, withdrawAmount2, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_3_0) && fixV1_3 {
+		if result := checkAMMPrecisionLoss(postAsset1, postAsset2, newLPBalance, math.ctx); result != ter.TesSUCCESS {
+			return result
+		}
+	}
 
 	deleteResult := deleteAMMAccountIfEmpty(ctx.View, ammKey, ammAccountKey,
 		newLPBalance, a.Asset, a.Asset2, amm, ammAccount)
@@ -438,6 +451,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	accountKey := keylet.Account(issuerID)
+	ctx.SyncSenderOwnerCount()
 	accountBytes, err := state.SerializeAccountRoot(ctx.Account)
 	if err != nil {
 		return ter.TefINTERNAL

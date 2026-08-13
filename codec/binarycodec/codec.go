@@ -7,6 +7,7 @@ import (
 	"math"
 	"strconv"
 
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
@@ -17,6 +18,14 @@ var (
 	ErrSigningClaimFieldNotFound = errors.New("channel and amount fields are required")
 	// ErrBatchFlagsFieldNotFound is returned when the flags field is missing.
 	ErrBatchFlagsFieldNotFound = errors.New("missing flags field")
+	// ErrBatchAccountFieldNotFound is returned when the batch account field is missing.
+	ErrBatchAccountFieldNotFound = errors.New("missing account field")
+	// ErrBatchSequenceFieldNotFound is returned when the batch sequence field is missing.
+	ErrBatchSequenceFieldNotFound = errors.New("missing sequence field")
+	// ErrBatchAccountNotString is returned when the batch account field is not a string.
+	ErrBatchAccountNotString = errors.New("account field must be a string")
+	// ErrBatchSequenceNotUInt32 is returned when the batch sequence is not a uint32.
+	ErrBatchSequenceNotUInt32 = errors.New("sequence field must be a uint32")
 	// ErrBatchTxIDsFieldNotFound is returned when the txIDs field is missing.
 	ErrBatchTxIDsFieldNotFound = errors.New("missing txIDs field")
 	// ErrBatchTxIDsNotArray is returned when the txIDs field is not an array.
@@ -27,6 +36,8 @@ var (
 	ErrBatchFlagsNotUInt32 = errors.New("flags field must be a uint32")
 	// ErrBatchTxIDsLengthTooLong is returned when the txIDs field is too long.
 	ErrBatchTxIDsLengthTooLong = errors.New("txIDs length exceeds maximum uint32 value")
+	// ErrBatchTooManyTxIDs is returned when the batch contains too many txIDs.
+	ErrBatchTooManyTxIDs = errors.New("txIDs length exceeds maximum batch size")
 	// ErrUnknownField is returned when Encode receives a JSON key with no
 	// matching field definition. Silently dropping unknown keys masks typos
 	// (e.g. "Acount" vs "Account") that produce different binary transactions.
@@ -198,6 +209,12 @@ func EncodeForSigningClaim(json map[string]any) (string, error) {
 
 // EncodeForSigningBatch encodes a batch transaction into binary format in preparation for signing.
 func EncodeForSigningBatch(json map[string]any) (string, error) {
+	if json["account"] == nil {
+		return "", ErrBatchAccountFieldNotFound
+	}
+	if json["sequence"] == nil {
+		return "", ErrBatchSequenceFieldNotFound
+	}
 	if json["flags"] == nil {
 		return "", ErrBatchFlagsFieldNotFound
 	}
@@ -208,6 +225,23 @@ func EncodeForSigningBatch(json map[string]any) (string, error) {
 	txIDsInterface, ok := json["txIDs"].([]string)
 	if !ok {
 		return "", ErrBatchTxIDsNotArray
+	}
+	if len(txIDsInterface) > 8 {
+		return "", ErrBatchTooManyTxIDs
+	}
+
+	account, ok := json["account"].(string)
+	if !ok {
+		return "", ErrBatchAccountNotString
+	}
+	_, accountID, err := addresscodec.DecodeClassicAddressToAccountID(account)
+	if err != nil {
+		return "", err
+	}
+
+	sequence, ok := json["sequence"].(uint32)
+	if !ok {
+		return "", ErrBatchSequenceNotUInt32
 	}
 
 	_, ok = json["flags"].(uint32)
@@ -231,9 +265,16 @@ func EncodeForSigningBatch(json map[string]any) (string, error) {
 		return "", err
 	}
 
-	totalSize := len(batchPrefix) + 2*len(flagsBytes) + 2*len(txIDsLengthBytes) + txIDsLength*2*types.HashLengthBytes
+	totalSize := len(batchPrefix) + 2*len(accountID) + 8 + 2*len(flagsBytes) + 2*len(txIDsLengthBytes) + txIDsLength*2*types.HashLengthBytes
 	buf := make([]byte, 0, totalSize)
 	buf = append(buf, batchPrefix...)
+	buf = appendHexUpper(buf, accountID)
+	sequenceBytes := make([]byte, 4)
+	sequenceBytes[0] = byte(sequence >> 24)
+	sequenceBytes[1] = byte(sequence >> 16)
+	sequenceBytes[2] = byte(sequence >> 8)
+	sequenceBytes[3] = byte(sequence)
+	buf = appendHexUpper(buf, sequenceBytes)
 	buf = appendHexUpper(buf, flagsBytes)
 	buf = appendHexUpper(buf, txIDsLengthBytes)
 

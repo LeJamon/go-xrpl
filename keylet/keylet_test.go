@@ -3,6 +3,8 @@ package keylet
 import (
 	"encoding/hex"
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 func TestBookDirKey(t *testing.T) {
@@ -200,5 +202,37 @@ func TestDepositPreauthKeylets(t *testing.T) {
 				t.Fatalf("DepositPreauth key = %s, want %s", actual, tc.expected)
 			}
 		})
+	}
+}
+
+func TestSponsorshipKeylet(t *testing.T) {
+	decodeAccount := func(encoded string) [20]byte {
+		t.Helper()
+		decoded, err := hex.DecodeString(encoded)
+		if err != nil {
+			t.Fatalf("decode account ID %s: %v", encoded, err)
+		}
+		var account [20]byte
+		copy(account[:], decoded)
+		return account
+	}
+
+	sponsor := decodeAccount("09127e0295e2e0fcb76f70d816fed9029a771f30")
+	sponsee := decodeAccount("0811f666a9c82537a71592b583c4b78e4b7dcc2c")
+
+	forward := Sponsorship(sponsor, sponsee)
+	if forward.Type != entry.TypeSponsorship {
+		t.Fatalf("Sponsorship keylet type = %v, want %v", forward.Type, entry.TypeSponsorship)
+	}
+	if got, want := hex.EncodeToString(forward.Key[:]), "0765c1a12665cfbd739c1c2373b6d888dd91f5d0f9a036a723eef3f4f762d663"; got != want {
+		t.Fatalf("Sponsorship key = %s, want %s", got, want)
+	}
+
+	reverse := Sponsorship(sponsee, sponsor)
+	if got, want := hex.EncodeToString(reverse.Key[:]), "130d808397aa4bdf7db5b9c3c8770a731de33cc6e67825511a3e4945d05a07b6"; got != want {
+		t.Fatalf("reversed Sponsorship key = %s, want %s", got, want)
+	}
+	if forward.Key == reverse.Key {
+		t.Fatal("Sponsorship keylet must preserve sponsor/sponsee order")
 	}
 }

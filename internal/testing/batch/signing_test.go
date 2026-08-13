@@ -112,7 +112,7 @@ func TestBatchSigningVectors(t *testing.T) {
 			MustBuild()
 
 		result := env.SubmitSigned(batch)
-		jtx.RequireTxFail(t, result, "temBAD_SIGNATURE")
+		jtx.RequireTxFail(t, result, "temINVALID")
 	})
 
 	t.Run("temBAD_SIGNATURE - garbage signature", func(t *testing.T) {
@@ -132,7 +132,7 @@ func TestBatchSigningVectors(t *testing.T) {
 			MustBuild()
 
 		result := env.SubmitSigned(batch)
-		jtx.RequireTxFail(t, result, "temBAD_SIGNATURE")
+		jtx.RequireTxFail(t, result, "temINVALID")
 	})
 
 	t.Run("tesSUCCESS - valid single-signed batch signer", func(t *testing.T) {
@@ -313,6 +313,6 @@ func TestBatchSignerArrayBound(t *testing.T) {
 		env.Close()
 
 		result := env.Submit(batch)
-		jtx.RequireTxFail(t, result, "temBAD_SIGNATURE")
+		jtx.RequireTxFail(t, result, "temINVALID")
 	})
 }

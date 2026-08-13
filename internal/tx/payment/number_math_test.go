@@ -18,7 +18,7 @@ func TestPaymentNumberMathUsesRulesScale(t *testing.T) {
 	})
 
 	require.Equal(t, state.MantissaScaleLargeLegacy, numberMathForRules(legacyRules).ctx.Scale())
-	require.Equal(t, state.MantissaScaleLarge, numberMathForRules(fixedRules).ctx.Scale())
+	require.Equal(t, state.MantissaScaleLarge320, numberMathForRules(fixedRules).ctx.Scale())
 	require.Equal(t, state.MantissaScaleSmall, numberMathForRules(amendment.EmptyRules()).ctx.Scale())
 }
 

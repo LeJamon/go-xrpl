@@ -40,6 +40,9 @@ func PassesTransactionLocalChecks(transaction Transaction) ter.Result {
 // TransactionLocalChecksFailureReason returns the first local-submission
 // rejection reason in protocol order.
 func TransactionLocalChecksFailureReason(transaction Transaction) string {
+	if transaction == nil {
+		return "Invalid transaction."
+	}
 	if raw := transaction.GetRawBytes(); len(raw) != 0 {
 		if fields, err := binarycodec.DecodeBytes(raw); err == nil {
 			return TransactionMapLocalChecksFailureReason(transaction.TxType(), fields)
@@ -57,17 +60,23 @@ func TransactionLocalChecksFailureReason(transaction Transaction) string {
 		return reason
 	}
 	if transaction.TxType() == TypeBatch {
-		if signers, ok := transaction.(BatchSignerProvider); ok && len(signers.GetBatchSigners()) > 8 {
-			return "Batch Signers array exceeds max entries."
+		if signers, ok := transaction.(BatchSignerProvider); ok && len(signers.GetBatchSigners()) > MaxBatchSigners {
+			return "BatchSigners array exceeds max entries."
 		}
 		if outer, ok := transaction.(interface{ InnerTransactions() []Transaction }); ok {
 			inners := outer.InnerTransactions()
-			if len(inners) > 8 {
+			if len(inners) > MaxBatchTransactions {
 				return "Raw Transactions array exceeds max entries."
 			}
 			for _, inner := range inners {
-				if inner != nil && inner.TxType() == TypeBatch {
+				if inner == nil {
+					continue
+				}
+				if inner.TxType() == TypeBatch {
 					return "Raw Transactions may not contain batch transactions."
+				}
+				if reason := TransactionLocalChecksFailureReason(inner); reason != "" {
+					return reason
 				}
 			}
 		}
@@ -88,43 +97,71 @@ func TransactionMapLocalChecksFailureReason(txType Type, fields map[string]any) 
 		return reason
 	}
 	if txType == TypeBatch {
-		if batchSigners, ok := fields["BatchSigners"].([]any); ok && len(batchSigners) > 8 {
-			return "Batch Signers array exceeds max entries."
-		}
-		rawTransactions, ok := fields["RawTransactions"].([]any)
+		return batchMapLocalChecksFailureReason(fields)
+	}
+	return ""
+}
+
+func batchMapLocalChecksFailureReason(fields map[string]any) string {
+	if reason := batchMapStructuralChecksFailureReason(fields); reason != "" {
+		return reason
+	}
+	rawTransactions, _ := fields["RawTransactions"].([]any)
+	for _, raw := range rawTransactions {
+		wrapper, _ := raw.(map[string]any)
+		inner, _ := wrapper["RawTransaction"].(map[string]any)
+		innerType, ok := transactionTypeFromCanonicalMap(inner)
 		if !ok {
-			return ""
+			continue
 		}
-		if len(rawTransactions) > 8 {
-			return "Raw Transactions array exceeds max entries."
+		if reason := TransactionMapLocalChecksFailureReason(innerType, inner); reason != "" {
+			return reason
 		}
-		for _, raw := range rawTransactions {
-			wrapper, ok := raw.(map[string]any)
-			if !ok {
-				continue
+	}
+	return ""
+}
+
+func batchMapStructuralChecksFailureReason(fields map[string]any) string {
+	if batchSigners, ok := fields["BatchSigners"].([]any); ok && len(batchSigners) > MaxBatchSigners {
+		return "BatchSigners array exceeds max entries."
+	}
+	return batchMapConstructionChecksFailureReason(fields)
+}
+
+func batchMapConstructionChecksFailureReason(fields map[string]any) string {
+	rawTransactions, ok := fields["RawTransactions"].([]any)
+	if !ok {
+		return ""
+	}
+	if len(rawTransactions) > MaxBatchTransactions {
+		return "Raw Transactions array exceeds max entries."
+	}
+	for _, raw := range rawTransactions {
+		wrapper, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		inner, ok := wrapper["RawTransaction"].(map[string]any)
+		if !ok {
+			continue
+		}
+		innerTypeValue, present := inner["TransactionType"]
+		if !present {
+			return "Field not found: TransactionType"
+		}
+		innerType, ok := transactionTypeFromCanonicalMap(inner)
+		if !ok {
+			if code, numeric := innerTypeValue.(uint16); numeric {
+				return fmt.Sprintf("Invalid transaction type %d", code)
 			}
-			inner, ok := wrapper["RawTransaction"].(map[string]any)
-			if !ok {
-				continue
-			}
-			innerTypeValue, present := inner["TransactionType"]
-			if !present {
-				return "Field not found: TransactionType"
-			}
-			innerType, ok := transactionTypeFromCanonicalMap(inner)
-			if !ok {
-				if code, numeric := innerTypeValue.(uint16); numeric {
-					return fmt.Sprintf("Invalid transaction type %d", code)
-				}
-				return "Field 'TransactionType' has invalid data."
-			}
-			if innerType == TypeBatch {
-				return "Raw Transactions may not contain batch transactions."
-			}
-			inner["TransactionType"] = innerType.String()
-			if err := ValidateTemplateFields(innerType, inner); err != nil {
-				return err.Error()
-			}
+			return "Field 'TransactionType' has invalid data."
+		}
+		if innerType == TypeBatch {
+			return "Raw Transactions may not contain batch transactions."
+		}
+		inner["TransactionType"] = innerType.String()
+		if err := ValidateTemplateFields(innerType, inner); err != nil {
+			return err.Error()
 		}
 	}
 	return ""

@@ -280,16 +280,15 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	// Capture the initial owner count and compute the reserve once,
-	// matching rippled's SetTrust.cpp:385-407 which reads uOwnerCount
-	// and computes reserveCreate before any modifications.
-	uOwnerCount := ctx.Account.OwnerCount
-	var reserveCreate uint64
-	if uOwnerCount < 2 {
-		reserveCreate = 0
-	} else {
-		reserveCreate = ctx.AccountReserve(uOwnerCount + 1)
+	usesReserveSponsor, result := ctx.UsesReserveSponsorFor(ctx.AccountID, ctx.Account)
+	if result != ter.TesSUCCESS {
+		return result
 	}
+	effectiveOwners, ok := tx.EffectiveOwnerCount(ctx.Account, 0)
+	if !ok {
+		return ter.TefINTERNAL
+	}
+	requiresReserve := usesReserveSponsor || effectiveOwners >= 2
 	// mPriorBalance is the balance BEFORE fee deduction, matching rippled's
 	// Transactor::mPriorBalance (set before doApply is called).
 	mPriorBalance := ctx.PriorBalance()
@@ -298,13 +297,8 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	bHigh := state.CompareAccountIDs(accountID, issuerAccountID) > 0
 
 	// If the destination has opted to disallow incoming trustlines, honour that flag.
-	if issuerAccount.Flags&state.LsfDisallowIncomingTrustline != 0 {
-		// fixDisallowIncomingV1: if the trust line already exists, allow the TrustSet
-		if ctx.Rules().Enabled(amendment.FeatureFixDisallowIncomingV1) && trustLineExists {
-			// pass — existing trust lines are allowed
-		} else {
-			return ter.TecNO_PERMISSION
-		}
+	if issuerAccount.Flags&state.LsfDisallowIncomingTrustline != 0 && !trustLineExists {
+		return ter.TecNO_PERMISSION
 	}
 
 	// In general, trust lines to pseudo-accounts (AMM) are not permitted
@@ -428,12 +422,18 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 
 		// Check account has reserve for new trust line
 		// Reference: rippled SetTrust.cpp line 710: mPriorBalance < reserveCreate
-		if mPriorBalance < reserveCreate {
+		if requiresReserve {
+			result = ctx.CheckReserveFor(ctx.AccountID, ctx.Account, mPriorBalance, 1, 0, ter.TecNO_LINE_INSUF_RESERVE)
+		}
+		if result != ter.TesSUCCESS {
 			ctx.Log.Warn("trust set: insufficient reserve for new trust line",
 				"balance", mPriorBalance,
-				"reserve", reserveCreate,
 			)
-			return ter.TecNO_LINE_INSUF_RESERVE
+			return result
+		}
+		sponsorAddress, result := tx.IncreaseOwnerCount(ctx, ctx.AccountID, ctx.Account, 1)
+		if result != ter.TesSUCCESS {
+			return result
 		}
 
 		// Create the trust line through the shared canonical creator. The sender
@@ -446,7 +446,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		if err != nil {
 			return ter.TefINTERNAL
 		}
-		result := tx.TrustCreate(ctx.View, tx.TrustCreateParams{
+		result = tx.TrustCreate(ctx.View, tx.TrustCreateParams{
 			SrcHigh:     bHigh,
 			Src:         accountID,
 			Dst:         issuerAccountID,
@@ -460,12 +460,11 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 			Limit:       tx.NewIssuedAmount(limitAmount.IOU().Mantissa(), limitAmount.IOU().Exponent(), t.LimitAmount.Currency, accountStr),
 			QualityIn:   uQualityIn,
 			QualityOut:  uQualityOut,
+			Sponsor:     sponsorAddress,
 		})
 		if result != ter.TesSUCCESS {
 			return result
 		}
-
-		ctx.Account.OwnerCount++
 	} else {
 		// Modify existing trust line
 		trustLineData, err := ctx.View.Read(trustLineKey)
@@ -619,44 +618,67 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 
 		bDefault := !bLowReserveSet && !bHighReserveSet
 		badCurrency := keylet.CurrencyBytes(t.LimitAmount.Currency) == keylet.BadCurrency()
-		bReserveIncrease := false
 
 		if bLowReserveSet && !bLowReserved {
+			if !bHigh && requiresReserve {
+				if result := ctx.CheckReserveFor(ctx.AccountID, ctx.Account, mPriorBalance, 1, 0, ter.TecINSUF_RESERVE_LINE); result != ter.TesSUCCESS {
+					return result
+				}
+			}
 			rs.Flags |= state.LsfLowReserve
 			if !bHigh {
-				ctx.Account.OwnerCount++
-				bReserveIncrease = true
+				sponsorAddress, result := tx.IncreaseOwnerCount(ctx, ctx.AccountID, ctx.Account, 1)
+				if result != ter.TesSUCCESS {
+					return result
+				}
+				rs.LowSponsor = sponsorAddress
 			} else {
-				issuerAccount.OwnerCount++
+				issuerAccount.OwnerCount = tx.ConfineOwnerCount(issuerAccount.OwnerCount, 1)
 			}
 		} else if !bLowReserveSet && bLowReserved {
 			rs.Flags &^= state.LsfLowReserve
 			if !bHigh {
-				if ctx.Account.OwnerCount > 0 {
-					ctx.Account.OwnerCount--
+				if err := tx.DecreaseOwnerCount(ctx.View, ctx.Account, rs.LowSponsor, 1); err != nil {
+					return ctx.Internal("TrustSet.LowOwnerCount", err)
 				}
-			} else if issuerAccount.OwnerCount > 0 {
-				issuerAccount.OwnerCount--
+			} else {
+				if err := tx.DecreaseOwnerCount(ctx.View, issuerAccount, rs.LowSponsor, 1); err != nil {
+					return ctx.Internal("TrustSet.LowOwnerCount", err)
+				}
+				ctx.SyncSenderSponsorCounts(rs.LowSponsor)
 			}
+			rs.LowSponsor = ""
 		}
 
 		if bHighReserveSet && !bHighReserved {
+			if bHigh && requiresReserve {
+				if result := ctx.CheckReserveFor(ctx.AccountID, ctx.Account, mPriorBalance, 1, 0, ter.TecINSUF_RESERVE_LINE); result != ter.TesSUCCESS {
+					return result
+				}
+			}
 			rs.Flags |= state.LsfHighReserve
 			if bHigh {
-				ctx.Account.OwnerCount++
-				bReserveIncrease = true
+				sponsorAddress, result := tx.IncreaseOwnerCount(ctx, ctx.AccountID, ctx.Account, 1)
+				if result != ter.TesSUCCESS {
+					return result
+				}
+				rs.HighSponsor = sponsorAddress
 			} else {
-				issuerAccount.OwnerCount++
+				issuerAccount.OwnerCount = tx.ConfineOwnerCount(issuerAccount.OwnerCount, 1)
 			}
 		} else if !bHighReserveSet && bHighReserved {
 			rs.Flags &^= state.LsfHighReserve
 			if bHigh {
-				if ctx.Account.OwnerCount > 0 {
-					ctx.Account.OwnerCount--
+				if err := tx.DecreaseOwnerCount(ctx.View, ctx.Account, rs.HighSponsor, 1); err != nil {
+					return ctx.Internal("TrustSet.HighOwnerCount", err)
 				}
-			} else if issuerAccount.OwnerCount > 0 {
-				issuerAccount.OwnerCount--
+			} else {
+				if err := tx.DecreaseOwnerCount(ctx.View, issuerAccount, rs.HighSponsor, 1); err != nil {
+					return ctx.Internal("TrustSet.HighOwnerCount", err)
+				}
+				ctx.SyncSenderSponsorCounts(rs.HighSponsor)
 			}
+			rs.HighSponsor = ""
 		}
 
 		issuerChanged := (bLowReserveSet && !bLowReserved && bHigh) ||
@@ -701,6 +723,11 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 			}
 
 			if issuerChanged {
+				if latest, readErr := tx.ReadAccountRoot(ctx.View, issuerAccountID); readErr != nil || latest == nil {
+					return ter.TefINTERNAL
+				} else {
+					issuerAccount.SponsoringOwnerCount = latest.SponsoringOwnerCount
+				}
 				issuerUpdatedData, serErr := state.SerializeAccountRoot(issuerAccount)
 				if serErr != nil {
 					return ter.TefINTERNAL
@@ -710,14 +737,13 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 				}
 			}
 		} else {
-			// Check reserve increase affordability
-			// Reference: rippled SetTrust.cpp line 681: mPriorBalance < reserveCreate
-			if bReserveIncrease && mPriorBalance < reserveCreate {
-				return ter.TecINSUF_RESERVE_LINE
-			}
-
 			// Write issuer account back if its OwnerCount changed
 			if issuerChanged {
+				if latest, readErr := tx.ReadAccountRoot(ctx.View, issuerAccountID); readErr != nil || latest == nil {
+					return ter.TefINTERNAL
+				} else {
+					issuerAccount.SponsoringOwnerCount = latest.SponsoringOwnerCount
+				}
 				issuerUpdatedData, serErr := state.SerializeAccountRoot(issuerAccount)
 				if serErr != nil {
 					return ter.TefINTERNAL

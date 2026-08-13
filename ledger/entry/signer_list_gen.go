@@ -31,6 +31,7 @@ type SignerList struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	Sponsor           string // AccountID (base58)
 }
 
 // Type returns the concrete ledger-entry type.
@@ -47,6 +48,7 @@ const (
 	signerlistBitFlags
 	signerlistBitPreviousTxnID
 	signerlistBitPreviousTxnLgrSeq
+	signerlistBitSponsor
 )
 
 // SetOwner assigns Owner and updates its serialized presence.
@@ -103,6 +105,13 @@ func (s *SignerList) SetPreviousTxnLgrSeq(value uint32) {
 	s.PreviousTxnLgrSeq = value
 	s.dirty = true
 	s.present |= signerlistBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (s *SignerList) SetSponsor(value string) {
+	s.Sponsor = value
+	s.dirty = true
+	s.present |= signerlistBitSponsor
 }
 
 func (s *SignerList) validateRequired() error {
@@ -255,6 +264,9 @@ func (s *SignerList) decode(data []byte, legacy bool) error {
 			case 2:
 				s.Owner = val
 				s.present |= signerlistBitOwner
+			case 27:
+				s.Sponsor = val
+				s.present |= signerlistBitSponsor
 			default:
 				return newErrUnknownField("SignerList", typeCode, fieldCode)
 			}
@@ -306,6 +318,9 @@ func (s *SignerList) emitAll(out map[string]any, skipDefault bool) {
 	if s.present&signerlistBitFlags != 0 && !(skipDefault && s.Flags == 0) {
 		out["Flags"] = s.Flags
 	}
+	if s.present&signerlistBitSponsor != 0 && !(skipDefault && s.Sponsor == "") {
+		out["Sponsor"] = s.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -333,6 +348,7 @@ func (s *SignerList) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedDeep(out, "SignerEntries", prv.SignerEntries, s.SignerEntries, prv.present&signerlistBitSignerEntries, s.present&signerlistBitSignerEntries)
 	emitIfChangedUint32(out, "SignerListID", prv.SignerListID, s.SignerListID, prv.present&signerlistBitSignerListID, s.present&signerlistBitSignerListID)
 	emitIfChangedUint32(out, "Flags", prv.Flags, s.Flags, prv.present&signerlistBitFlags, s.present&signerlistBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, s.Sponsor, prv.present&signerlistBitSponsor, s.present&signerlistBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -358,6 +374,9 @@ func (s *SignerList) EmitChangeOrigFields(out map[string]any) {
 	}
 	if s.present&signerlistBitFlags != 0 {
 		out["Flags"] = s.Flags
+	}
+	if s.present&signerlistBitSponsor != 0 {
+		out["Sponsor"] = s.Sponsor
 	}
 }
 
@@ -423,6 +442,9 @@ func (s *SignerList) ToMap() map[string]any {
 	}
 	if s.present&signerlistBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = s.PreviousTxnLgrSeq
+	}
+	if s.present&signerlistBitSponsor != 0 {
+		out["Sponsor"] = s.Sponsor
 	}
 	return out
 }

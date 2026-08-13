@@ -20,17 +20,24 @@ import (
 // every canonical field declared in the spec — including those excluded from
 // metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type MPToken struct {
-	present           uint64
-	decoded           bool
-	dirty             bool
-	Account           string // AccountID (base58)
-	MPTokenIssuanceID string
-	MPTAmount         string // UInt64 (decimal string, sMD_BaseTen)
-	LockedAmount      string // UInt64 (decimal string, sMD_BaseTen)
-	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
-	Flags             uint32
-	PreviousTxnID     string // Hash256 (uppercase hex)
-	PreviousTxnLgrSeq uint32
+	present                     uint64
+	decoded                     bool
+	dirty                       bool
+	Account                     string // AccountID (base58)
+	MPTokenIssuanceID           string
+	MPTAmount                   string // UInt64 (decimal string, sMD_BaseTen)
+	LockedAmount                string // UInt64 (decimal string, sMD_BaseTen)
+	OwnerNode                   string // UInt64 (lowercase hex, no leading zeros)
+	Flags                       uint32
+	PreviousTxnID               string // Hash256 (uppercase hex)
+	PreviousTxnLgrSeq           uint32
+	ConfidentialBalanceInbox    string // Blob (uppercase hex)
+	ConfidentialBalanceSpending string // Blob (uppercase hex)
+	ConfidentialBalanceVersion  uint32
+	IssuerEncryptedBalance      string // Blob (uppercase hex)
+	AuditorEncryptedBalance     string // Blob (uppercase hex)
+	HolderEncryptionKey         string // Blob (uppercase hex)
+	Sponsor                     string // AccountID (base58)
 }
 
 // Type returns the concrete ledger-entry type.
@@ -47,6 +54,13 @@ const (
 	mptokenBitFlags
 	mptokenBitPreviousTxnID
 	mptokenBitPreviousTxnLgrSeq
+	mptokenBitConfidentialBalanceInbox
+	mptokenBitConfidentialBalanceSpending
+	mptokenBitConfidentialBalanceVersion
+	mptokenBitIssuerEncryptedBalance
+	mptokenBitAuditorEncryptedBalance
+	mptokenBitHolderEncryptionKey
+	mptokenBitSponsor
 )
 
 // SetAccount assigns Account and updates its serialized presence.
@@ -109,6 +123,59 @@ func (m *MPToken) SetPreviousTxnLgrSeq(value uint32) {
 	m.present |= mptokenBitPreviousTxnLgrSeq
 }
 
+// SetConfidentialBalanceInbox assigns ConfidentialBalanceInbox and updates its serialized presence.
+func (m *MPToken) SetConfidentialBalanceInbox(value string) {
+	m.ConfidentialBalanceInbox = value
+	m.dirty = true
+	m.present |= mptokenBitConfidentialBalanceInbox
+}
+
+// SetConfidentialBalanceSpending assigns ConfidentialBalanceSpending and updates its serialized presence.
+func (m *MPToken) SetConfidentialBalanceSpending(value string) {
+	m.ConfidentialBalanceSpending = value
+	m.dirty = true
+	m.present |= mptokenBitConfidentialBalanceSpending
+}
+
+// SetConfidentialBalanceVersion assigns ConfidentialBalanceVersion and updates its serialized presence.
+func (m *MPToken) SetConfidentialBalanceVersion(value uint32) {
+	m.ConfidentialBalanceVersion = value
+	m.dirty = true
+	if value == 0 {
+		m.present &^= mptokenBitConfidentialBalanceVersion
+		return
+	}
+	m.present |= mptokenBitConfidentialBalanceVersion
+}
+
+// SetIssuerEncryptedBalance assigns IssuerEncryptedBalance and updates its serialized presence.
+func (m *MPToken) SetIssuerEncryptedBalance(value string) {
+	m.IssuerEncryptedBalance = value
+	m.dirty = true
+	m.present |= mptokenBitIssuerEncryptedBalance
+}
+
+// SetAuditorEncryptedBalance assigns AuditorEncryptedBalance and updates its serialized presence.
+func (m *MPToken) SetAuditorEncryptedBalance(value string) {
+	m.AuditorEncryptedBalance = value
+	m.dirty = true
+	m.present |= mptokenBitAuditorEncryptedBalance
+}
+
+// SetHolderEncryptionKey assigns HolderEncryptionKey and updates its serialized presence.
+func (m *MPToken) SetHolderEncryptionKey(value string) {
+	m.HolderEncryptionKey = value
+	m.dirty = true
+	m.present |= mptokenBitHolderEncryptionKey
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (m *MPToken) SetSponsor(value string) {
+	m.Sponsor = value
+	m.dirty = true
+	m.present |= mptokenBitSponsor
+}
+
 func (m *MPToken) validateRequired() error {
 	if m.decoded && !m.dirty {
 		return nil
@@ -149,6 +216,9 @@ func (m *MPToken) validateDecoded() error {
 	}
 	if m.present&mptokenBitPreviousTxnLgrSeq == 0 {
 		return errors.New("ledgerfields: MPToken: required field PreviousTxnLgrSeq is missing")
+	}
+	if m.present&mptokenBitConfidentialBalanceVersion != 0 && m.ConfidentialBalanceVersion == 0 {
+		return errors.New("ledgerfields: MPToken: default field ConfidentialBalanceVersion is explicitly set")
 	}
 	return nil
 }
@@ -206,6 +276,9 @@ func (m *MPToken) decode(data []byte, legacy bool) error {
 			case 5:
 				m.PreviousTxnLgrSeq = val
 				m.present |= mptokenBitPreviousTxnLgrSeq
+			case 69:
+				m.ConfidentialBalanceVersion = val
+				m.present |= mptokenBitConfidentialBalanceVersion
 			default:
 				return newErrUnknownField("MPToken", typeCode, fieldCode)
 			}
@@ -247,6 +320,30 @@ func (m *MPToken) decode(data []byte, legacy bool) error {
 			default:
 				return newErrUnknownField("MPToken", typeCode, fieldCode)
 			}
+		case 7: // Blob
+			val, err := sr.readBlobHex()
+			if err != nil {
+				return err
+			}
+			switch fieldCode {
+			case 32:
+				m.ConfidentialBalanceInbox = val
+				m.present |= mptokenBitConfidentialBalanceInbox
+			case 33:
+				m.ConfidentialBalanceSpending = val
+				m.present |= mptokenBitConfidentialBalanceSpending
+			case 34:
+				m.IssuerEncryptedBalance = val
+				m.present |= mptokenBitIssuerEncryptedBalance
+			case 36:
+				m.HolderEncryptionKey = val
+				m.present |= mptokenBitHolderEncryptionKey
+			case 42:
+				m.AuditorEncryptedBalance = val
+				m.present |= mptokenBitAuditorEncryptedBalance
+			default:
+				return newErrUnknownField("MPToken", typeCode, fieldCode)
+			}
 		case 8: // AccountID
 			val, err := sr.readAccountID()
 			if err != nil {
@@ -256,6 +353,9 @@ func (m *MPToken) decode(data []byte, legacy bool) error {
 			case 1:
 				m.Account = val
 				m.present |= mptokenBitAccount
+			case 27:
+				m.Sponsor = val
+				m.present |= mptokenBitSponsor
 			default:
 				return newErrUnknownField("MPToken", typeCode, fieldCode)
 			}
@@ -307,6 +407,27 @@ func (m *MPToken) emitAll(out map[string]any, skipDefault bool) {
 	if m.present&mptokenBitFlags != 0 && !(skipDefault && m.Flags == 0) {
 		out["Flags"] = m.Flags
 	}
+	if m.present&mptokenBitConfidentialBalanceInbox != 0 && !(skipDefault && m.ConfidentialBalanceInbox == "") {
+		out["ConfidentialBalanceInbox"] = m.ConfidentialBalanceInbox
+	}
+	if m.present&mptokenBitConfidentialBalanceSpending != 0 && !(skipDefault && m.ConfidentialBalanceSpending == "") {
+		out["ConfidentialBalanceSpending"] = m.ConfidentialBalanceSpending
+	}
+	if m.present&mptokenBitConfidentialBalanceVersion != 0 && !(skipDefault && m.ConfidentialBalanceVersion == 0) {
+		out["ConfidentialBalanceVersion"] = m.ConfidentialBalanceVersion
+	}
+	if m.present&mptokenBitIssuerEncryptedBalance != 0 && !(skipDefault && m.IssuerEncryptedBalance == "") {
+		out["IssuerEncryptedBalance"] = m.IssuerEncryptedBalance
+	}
+	if m.present&mptokenBitAuditorEncryptedBalance != 0 && !(skipDefault && m.AuditorEncryptedBalance == "") {
+		out["AuditorEncryptedBalance"] = m.AuditorEncryptedBalance
+	}
+	if m.present&mptokenBitHolderEncryptionKey != 0 && !(skipDefault && m.HolderEncryptionKey == "") {
+		out["HolderEncryptionKey"] = m.HolderEncryptionKey
+	}
+	if m.present&mptokenBitSponsor != 0 && !(skipDefault && m.Sponsor == "") {
+		out["Sponsor"] = m.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -334,6 +455,13 @@ func (m *MPToken) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "LockedAmount", prv.LockedAmount, m.LockedAmount, prv.present&mptokenBitLockedAmount, m.present&mptokenBitLockedAmount)
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, m.OwnerNode, prv.present&mptokenBitOwnerNode, m.present&mptokenBitOwnerNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, m.Flags, prv.present&mptokenBitFlags, m.present&mptokenBitFlags)
+	emitIfChangedString(out, "ConfidentialBalanceInbox", prv.ConfidentialBalanceInbox, m.ConfidentialBalanceInbox, prv.present&mptokenBitConfidentialBalanceInbox, m.present&mptokenBitConfidentialBalanceInbox)
+	emitIfChangedString(out, "ConfidentialBalanceSpending", prv.ConfidentialBalanceSpending, m.ConfidentialBalanceSpending, prv.present&mptokenBitConfidentialBalanceSpending, m.present&mptokenBitConfidentialBalanceSpending)
+	emitIfChangedUint32(out, "ConfidentialBalanceVersion", prv.ConfidentialBalanceVersion, m.ConfidentialBalanceVersion, prv.present&mptokenBitConfidentialBalanceVersion, m.present&mptokenBitConfidentialBalanceVersion)
+	emitIfChangedString(out, "IssuerEncryptedBalance", prv.IssuerEncryptedBalance, m.IssuerEncryptedBalance, prv.present&mptokenBitIssuerEncryptedBalance, m.present&mptokenBitIssuerEncryptedBalance)
+	emitIfChangedString(out, "AuditorEncryptedBalance", prv.AuditorEncryptedBalance, m.AuditorEncryptedBalance, prv.present&mptokenBitAuditorEncryptedBalance, m.present&mptokenBitAuditorEncryptedBalance)
+	emitIfChangedString(out, "HolderEncryptionKey", prv.HolderEncryptionKey, m.HolderEncryptionKey, prv.present&mptokenBitHolderEncryptionKey, m.present&mptokenBitHolderEncryptionKey)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, m.Sponsor, prv.present&mptokenBitSponsor, m.present&mptokenBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -359,6 +487,27 @@ func (m *MPToken) EmitChangeOrigFields(out map[string]any) {
 	}
 	if m.present&mptokenBitFlags != 0 {
 		out["Flags"] = m.Flags
+	}
+	if m.present&mptokenBitConfidentialBalanceInbox != 0 {
+		out["ConfidentialBalanceInbox"] = m.ConfidentialBalanceInbox
+	}
+	if m.present&mptokenBitConfidentialBalanceSpending != 0 {
+		out["ConfidentialBalanceSpending"] = m.ConfidentialBalanceSpending
+	}
+	if m.present&mptokenBitConfidentialBalanceVersion != 0 {
+		out["ConfidentialBalanceVersion"] = m.ConfidentialBalanceVersion
+	}
+	if m.present&mptokenBitIssuerEncryptedBalance != 0 {
+		out["IssuerEncryptedBalance"] = m.IssuerEncryptedBalance
+	}
+	if m.present&mptokenBitAuditorEncryptedBalance != 0 {
+		out["AuditorEncryptedBalance"] = m.AuditorEncryptedBalance
+	}
+	if m.present&mptokenBitHolderEncryptionKey != 0 {
+		out["HolderEncryptionKey"] = m.HolderEncryptionKey
+	}
+	if m.present&mptokenBitSponsor != 0 {
+		out["Sponsor"] = m.Sponsor
 	}
 }
 
@@ -424,6 +573,27 @@ func (m *MPToken) ToMap() map[string]any {
 	}
 	if m.present&mptokenBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = m.PreviousTxnLgrSeq
+	}
+	if m.present&mptokenBitConfidentialBalanceInbox != 0 {
+		out["ConfidentialBalanceInbox"] = m.ConfidentialBalanceInbox
+	}
+	if m.present&mptokenBitConfidentialBalanceSpending != 0 {
+		out["ConfidentialBalanceSpending"] = m.ConfidentialBalanceSpending
+	}
+	if m.present&mptokenBitConfidentialBalanceVersion != 0 {
+		out["ConfidentialBalanceVersion"] = m.ConfidentialBalanceVersion
+	}
+	if m.present&mptokenBitIssuerEncryptedBalance != 0 {
+		out["IssuerEncryptedBalance"] = m.IssuerEncryptedBalance
+	}
+	if m.present&mptokenBitAuditorEncryptedBalance != 0 {
+		out["AuditorEncryptedBalance"] = m.AuditorEncryptedBalance
+	}
+	if m.present&mptokenBitHolderEncryptionKey != 0 {
+		out["HolderEncryptionKey"] = m.HolderEncryptionKey
+	}
+	if m.present&mptokenBitSponsor != 0 {
+		out["Sponsor"] = m.Sponsor
 	}
 	return out
 }

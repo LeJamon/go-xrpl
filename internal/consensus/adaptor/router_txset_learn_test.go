@@ -58,6 +58,7 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 	require.NoError(t, err)
 	txHash, err := tx.ComputeTransactionHash(txn)
 	require.NoError(t, err)
+	_, _ = router.txSeen.claim(txHash, 6)
 
 	require.False(t, adaptorHasTx(t, a, consensus.TxID(txHash)),
 		"precondition: the tx must be unknown before acquisition")
@@ -92,6 +93,8 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 		return adaptorHasTx(t, a, consensus.TxID(txHash))
 	}, time.Second, 10*time.Millisecond,
 		"tx-set acquisition must learn the carried transaction into the open ledger")
+	require.Empty(t, router.txSeen.releasePeers(txHash),
+		"acquired relay must consume peers already known to hold the transaction")
 }
 
 func TestRouterLearnTxFromLeafStopsOnMembershipError(t *testing.T) {

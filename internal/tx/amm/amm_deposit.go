@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -188,7 +189,7 @@ func (a *AMMDeposit) Flatten() (map[string]any, error) {
 }
 
 func (a *AMMDeposit) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber}
+	return [][32]byte{amendment.FeatureAMM}
 }
 
 // CheckExtraFeatures gates MPT pool assets/amounts on the MPTokensV2 amendment.
@@ -247,10 +248,24 @@ func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Re
 	lptKey := keylet.Line(accountID, ammAccountID, lptCurrency)
 	lptExists, _ := view.Exists(lptKey)
 
-	// Check authorization and freeze status for BOTH pool assets — only when
-	// AMMClawback is enabled.
+	// Check authorization and freeze status for BOTH pool assets. fixCleanup3_3_0
+	// uses the unified pseudo-account deposit rules; the legacy path remains
+	// unchanged when the amendment is disabled.
 	// Reference: rippled AMMDeposit.cpp lines 244-273
-	if config.RequireRules().Enabled(amendment.FeatureAMMClawback) {
+	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
+		checkAsset := func(asset tx.Asset) ter.Result {
+			if result := requireAssetAuth(view, asset, accountID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
+				return result
+			}
+			return mptutil.CheckDepositFreeze(view, accountID, ammAccountID, asset)
+		}
+		if result := checkAsset(a.Asset); result != ter.TesSUCCESS {
+			return result
+		}
+		if result := checkAsset(a.Asset2); result != ter.TesSUCCESS {
+			return result
+		}
+	} else if config.RequireRules().Enabled(amendment.FeatureAMMClawback) {
 		if result := requireAssetAuth(view, a.Asset, accountID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
 			return result
 		}
@@ -273,11 +288,13 @@ func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Re
 		if result := requireAssetAuth(view, amtAsset, accountID, true, config.ParentCloseTime); result != ter.TesSUCCESS {
 			return result
 		}
-		if assetFrozen(view, ammAccountID, amtAsset) {
-			return frozenAssetResult(amtAsset)
-		}
-		if assetIndividuallyFrozen(view, accountID, amtAsset) {
-			return frozenAssetResult(amtAsset)
+		if !config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
+			if assetFrozen(view, ammAccountID, amtAsset) {
+				return frozenAssetResult(amtAsset)
+			}
+			if assetIndividuallyFrozen(view, accountID, amtAsset) {
+				return frozenAssetResult(amtAsset)
+			}
 		}
 		if checkBalance {
 			if isXRPAsset(amtAsset) {
@@ -288,7 +305,10 @@ func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Re
 				if !lptExists {
 					extraOwner = 1
 				}
-				reserve := accountReserve(config, account.OwnerCount+extraOwner)
+				reserve, ok := tx.AccountReserveForView(view, config, account, tx.ConfineOwnerCount(account.OwnerCount, int(extraOwner)))
+				if !ok {
+					return ter.TefINTERNAL
+				}
 				xrpLiquid := int64(account.Balance) - int64(reserve)
 				if xrpLiquid < amt.Drops() {
 					if lptExists {
@@ -354,7 +374,7 @@ func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Re
 	// Reserve for the LP token trustline if the depositor holds no LP tokens.
 	// Reference: rippled AMMDeposit.cpp preclaim lines 353-362
 	if ammLPHolds(view, amm, accountID).IsZero() {
-		if insufficientLPTokenReserve(account, config) {
+		if insufficientLPTokenReserve(view, account, config) {
 			return TecINSUF_RESERVE_LINE
 		}
 	}
@@ -1006,8 +1026,8 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 			// Skip the depositor's debit if it IS the issuer — issuers issue from
 			// thin air. Reference: rippled accountSend() handles this internally.
 			if accountID != issuerID {
-				if err := updateTrustlineBalanceInView(accountID, issuerID, a.Asset.Currency, depositAmount1.Negate(), ctx.View, ctx.NumberContext()); err != nil {
-					return TecUNFUNDED_AMM
+				if result := debitDepositTrustline(ctx, accountID, issuerID, a.Asset.Currency, depositAmount1.Negate()); result != ter.TesSUCCESS {
+					return result
 				}
 			}
 			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset, depositAmount1, ctx.View, ctx.NumberContext()); err != nil {
@@ -1026,8 +1046,8 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 				return ter.TefINTERNAL
 			}
 			if accountID != issuerID {
-				if err := updateTrustlineBalanceInView(accountID, issuerID, a.Asset2.Currency, depositAmount2.Negate(), ctx.View, ctx.NumberContext()); err != nil {
-					return TecUNFUNDED_AMM
+				if result := debitDepositTrustline(ctx, accountID, issuerID, a.Asset2.Currency, depositAmount2.Negate()); result != ter.TesSUCCESS {
+					return result
 				}
 			}
 			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, depositAmount2, ctx.View, ctx.NumberContext()); err != nil {
@@ -1039,6 +1059,19 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 	newLPBalance, err := amm.LPTokenBalance.AddWithNumberContext(lpTokensToIssue, math.ctx, state.RoundToNearest)
 	if err != nil {
 		return ter.TefINTERNAL
+	}
+	postAsset1, err := addAMMPoolAmount(assetBalance1, depositAmount1, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	postAsset2, err := addAMMPoolAmount(assetBalance2, depositAmount2, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_3_0) && fixV1_3 {
+		if result := checkAMMPrecisionLoss(postAsset1, postAsset2, newLPBalance, math.ctx); result != ter.TesSUCCESS {
+			return result
+		}
 	}
 	amm.LPTokenBalance = newLPBalance
 
@@ -1095,5 +1128,24 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
+	return ter.TesSUCCESS
+}
+
+func debitDepositTrustline(ctx *tx.ApplyContext, accountID, issuerID [20]byte, currency string, amount tx.Amount) ter.Result {
+	result, err := updateTrustlineBalanceInViewEx(accountID, issuerID, currency, amount, ctx.View, ctx.NumberContext())
+	if err != nil {
+		return TecUNFUNDED_AMM
+	}
+	if result.SenderOwnerCountDelta != 0 {
+		if err := tx.DecreaseOwnerCount(ctx.View, ctx.Account, result.SenderSponsor, 1); err != nil {
+			return ter.TefINTERNAL
+		}
+	}
+	if result.IssuerOwnerCountDelta != 0 {
+		if err := tx.DecreaseOwnerCountOnView(ctx.View, issuerID, result.IssuerSponsor, 1); err != nil {
+			return ter.TefINTERNAL
+		}
+		ctx.SyncSenderSponsorCounts(result.IssuerSponsor)
+	}
 	return ter.TesSUCCESS
 }

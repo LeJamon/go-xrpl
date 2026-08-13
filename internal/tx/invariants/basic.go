@@ -132,6 +132,31 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 				after = pc.Amount - pc.Balance
 			}
 			netChange += int64(after) - int64(before)
+
+		case entry.TypeSponsorship:
+			// Sponsorship may hold prefunded XRP in FeeAmount. It is part of
+			// the ledger's XRP balance just like Escrow.Amount and the
+			// unclaimed portion of a PayChannel.
+			var before, after uint64
+			if e.Before != nil {
+				sponsorship, err := state.ParseSponsorship(e.Before)
+				if err != nil {
+					return xrpNotCreatedParseViolation("Sponsorship", err)
+				}
+				if sponsorship.HasFeeAmount {
+					before = sponsorship.FeeAmount
+				}
+			}
+			if e.After != nil && !e.IsDelete {
+				sponsorship, err := state.ParseSponsorship(e.After)
+				if err != nil {
+					return xrpNotCreatedParseViolation("Sponsorship", err)
+				}
+				if sponsorship.HasFeeAmount {
+					after = sponsorship.FeeAmount
+				}
+			}
+			netChange += int64(after) - int64(before)
 		}
 	}
 

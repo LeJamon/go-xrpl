@@ -15,26 +15,16 @@ type creditHookView interface {
 	CreditHook(sender, receiver [20]byte, amount Amount, preCreditSenderBalance Amount)
 }
 
-// ownerCountHookView is the optional owner-count hook a view may implement to
-// record reserve changes for in-flight payment reserve accounting. It mirrors
-// rippled's virtual ApplyView::adjustOwnerCountHook (no-op on the base view).
-type ownerCountHookView interface {
-	AdjustOwnerCount(account [20]byte, cur, next uint32)
-}
-
-// adjustTrustLineOwnerCount adjusts accountID's OwnerCount by delta, first
-// firing the view's owner-count hook when present so payment reserve accounting
-// stays accurate. Mirrors rippled's adjustOwnerCount, which always calls
-// adjustOwnerCountHook before mutating the count.
-func adjustTrustLineOwnerCount(view LedgerView, accountID [20]byte, delta int) ter.Result {
-	if h, ok := view.(ownerCountHookView); ok {
-		if data, err := view.Read(keylet.Account(accountID)); err == nil && data != nil {
-			if acct, perr := state.ParseAccountRoot(data); perr == nil {
-				h.AdjustOwnerCount(accountID, acct.OwnerCount, confineOwnerCount(acct.OwnerCount, delta))
-			}
-		}
+// adjustTrustLineOwnerCount adjusts accountID's reserve counters. The shared
+// helpers fire the payment sandbox's owner-count hook before persisting them.
+func adjustTrustLineOwnerCount(view LedgerView, accountID [20]byte, delta int, sponsorAddress string) ter.Result {
+	var err error
+	if delta == -1 {
+		err = DecreaseOwnerCountOnView(view, accountID, sponsorAddress, 1)
+	} else {
+		err = AdjustOwnerCount(view, accountID, delta)
 	}
-	if err := AdjustOwnerCount(view, accountID, delta); err != nil {
+	if err != nil {
 		return ter.TefINTERNAL
 	}
 	return ter.TesSUCCESS
@@ -146,10 +136,19 @@ func RippleCreditWithNumberContext(
 			rs.Flags&senderFreeze == 0 &&
 			senderLimit.IsZero() &&
 			senderQIn == 0 && senderQOut == 0 {
-			if r := adjustTrustLineOwnerCount(view, sender, -1); r != ter.TesSUCCESS {
+			sponsorAddress := rs.HighSponsor
+			if senderIsLow {
+				sponsorAddress = rs.LowSponsor
+			}
+			if r := adjustTrustLineOwnerCount(view, sender, -1, sponsorAddress); r != ter.TesSUCCESS {
 				return r
 			}
 			rs.Flags &^= senderReserve
+			if senderIsLow {
+				rs.LowSponsor = ""
+			} else {
+				rs.HighSponsor = ""
+			}
 			bDelete = saAfter.Signum() == 0 && rs.Flags&receiverReserve == 0
 		}
 	}
@@ -284,7 +283,7 @@ func rippleCreditCreate(view LedgerView, sender, receiver [20]byte, amount Amoun
 		return r
 	}
 
-	if r := adjustTrustLineOwnerCount(view, receiver, 1); r != ter.TesSUCCESS {
+	if r := adjustTrustLineOwnerCount(view, receiver, 1, ""); r != ter.TesSUCCESS {
 		return r
 	}
 
@@ -302,6 +301,14 @@ func rippleCreditCreate(view LedgerView, sender, receiver [20]byte, amount Amoun
 // erases it, mirroring rippled's trustDelete (View.cpp lines 1532-1570). Owner
 // count adjustments are the caller's responsibility.
 func TrustDelete(view LedgerView, lineKey keylet.Keylet, lowID, highID [20]byte, lowNode, highNode uint64) ter.Result {
+	lineData, err := view.Read(lineKey)
+	if err != nil || lineData == nil {
+		return ter.TefBAD_LEDGER
+	}
+	line, err := state.ParseRippleState(lineData)
+	if err != nil {
+		return ter.TefBAD_LEDGER
+	}
 	lowResult, err := state.DirRemove(view, keylet.OwnerDir(lowID), lowNode, lineKey.Key, false)
 	if err != nil || !lowResult.Success {
 		return ter.TefBAD_LEDGER
@@ -309,6 +316,15 @@ func TrustDelete(view LedgerView, lineKey keylet.Keylet, lowID, highID [20]byte,
 	highResult, err := state.DirRemove(view, keylet.OwnerDir(highID), highNode, lineKey.Key, false)
 	if err != nil || !highResult.Success {
 		return ter.TefBAD_LEDGER
+	}
+	line.LowSponsor = ""
+	line.HighSponsor = ""
+	updated, err := state.SerializeRippleState(line)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if err := view.Update(lineKey, updated); err != nil {
+		return ter.TefINTERNAL
 	}
 	if err := view.Erase(lineKey); err != nil {
 		return ter.TefINTERNAL

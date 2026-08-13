@@ -75,7 +75,7 @@ func TestReplayDelta_Apply_Integration(t *testing.T) {
 	require.NoError(t, err)
 	txBlob, err := hex.DecodeString(hexStr)
 	require.NoError(t, err)
-	pay.SetRawBytes(txBlob)
+	require.NoError(t, tx.BindRawBytes(pay, txBlob))
 	txHash, err := tx.ComputeTransactionHash(pay)
 	require.NoError(t, err)
 
@@ -147,7 +147,7 @@ func TestReplayDelta_Apply_PseudoTransaction(t *testing.T) {
 	require.NoError(t, err)
 	txn, err := tx.ParseFromBinary(txBlob)
 	require.NoError(t, err)
-	txn.SetRawBytes(txBlob)
+	require.NoError(t, tx.BindRawBytes(txn, txBlob))
 	txHash, err := tx.ComputeTransactionHash(txn)
 	require.NoError(t, err)
 
@@ -210,7 +210,7 @@ func TestReplay_RejectsDuplicateTransaction(t *testing.T) {
 	require.NoError(t, err)
 	txBlob, err := hex.DecodeString(hexStr)
 	require.NoError(t, err)
-	pay.SetRawBytes(txBlob)
+	require.NoError(t, tx.BindRawBytes(pay, txBlob))
 	txHash, err := tx.ComputeTransactionHash(pay)
 	require.NoError(t, err)
 

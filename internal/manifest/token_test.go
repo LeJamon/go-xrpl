@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -61,6 +62,23 @@ func TestLoadValidatorToken_DecodeManifest(t *testing.T) {
 	}
 	if m.Sequence() == 0 {
 		t.Errorf("expected non-zero manifest sequence, got 0")
+	}
+}
+
+func TestValidatorToken_ManifestBase64Boundary(t *testing.T) {
+	for _, size := range []int{MaxManifestBase64, MaxManifestBase64 + 1} {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			_, err := (&ValidatorToken{ManifestB64: strings.Repeat("A", size)}).DecodeManifest()
+			if size == MaxManifestBase64 {
+				if err != nil && strings.Contains(err.Error(), "exceeds") {
+					t.Fatalf("maximum-length input was rejected before base64 decoding: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "exceeds 480") {
+				t.Fatalf("oversized input error = %v, want 480-character limit", err)
+			}
+		})
 	}
 }
 

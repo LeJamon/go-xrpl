@@ -35,13 +35,42 @@ func TestNFTokenCancelOffer_ZeroOfferID(t *testing.T) {
 	t.Run("PureZero", func(t *testing.T) {
 		t.Run("enabled_temMALFORMED", func(t *testing.T) {
 			env, alice := newEnv(t, true)
+			balanceBefore := env.Balance(alice)
+			sequenceBefore := env.Seq(alice)
 			res := env.Submit(nft.NFTokenCancelOffer(alice, zeroID).Build())
 			jtx.RequireTxFail(t, res, "temMALFORMED")
+			require.False(t, res.Applied)
+			require.Zero(t, res.Fee)
+			require.Nil(t, res.Metadata)
+			require.Equal(t, balanceBefore, env.Balance(alice))
+			require.Equal(t, sequenceBefore, env.Seq(alice))
 		})
 		t.Run("disabled_tesSUCCESS", func(t *testing.T) {
 			env, alice := newEnv(t, false)
+			balanceBefore := env.Balance(alice)
+			sequenceBefore := env.Seq(alice)
 			res := env.Submit(nft.NFTokenCancelOffer(alice, zeroID).Build())
 			jtx.RequireTxSuccess(t, res)
+			require.True(t, res.Applied)
+			require.Equal(t, uint64(10), res.Fee)
+			require.NotNil(t, res.Metadata)
+			require.Equal(t, balanceBefore-10, env.Balance(alice))
+			require.Equal(t, sequenceBefore+1, env.Seq(alice))
+		})
+	})
+
+	t.Run("Precedence", func(t *testing.T) {
+		t.Run("invalid_flag", func(t *testing.T) {
+			env, alice := newEnv(t, true)
+			cancel := nft.NFTokenCancelOffer(alice, zeroID).Build()
+			cancel.GetCommon().SetFlags(1)
+			jtx.RequireTxFail(t, env.Submit(cancel), "temINVALID_FLAG")
+		})
+		t.Run("bad_fee", func(t *testing.T) {
+			env, alice := newEnv(t, true)
+			cancel := nft.NFTokenCancelOffer(alice, zeroID).Build()
+			cancel.GetCommon().Fee = "-1"
+			jtx.RequireTxFail(t, env.Submit(cancel), "temBAD_FEE")
 		})
 	})
 
@@ -64,8 +93,15 @@ func TestNFTokenCancelOffer_ZeroOfferID(t *testing.T) {
 
 		t.Run("enabled_temMALFORMED", func(t *testing.T) {
 			env, alice, realOfferID, offerKL := setup(t, true)
+			balanceBefore := env.Balance(alice)
+			sequenceBefore := env.Seq(alice)
 			res := env.Submit(nft.NFTokenCancelOffer(alice, realOfferID, zeroID).Build())
 			jtx.RequireTxFail(t, res, "temMALFORMED")
+			require.False(t, res.Applied)
+			require.Zero(t, res.Fee)
+			require.Nil(t, res.Metadata)
+			require.Equal(t, balanceBefore, env.Balance(alice))
+			require.Equal(t, sequenceBefore, env.Seq(alice))
 			require.True(t, env.LedgerEntryExists(offerKL), "offer must survive a rejected cancel")
 		})
 		t.Run("disabled_cancelsReal", func(t *testing.T) {

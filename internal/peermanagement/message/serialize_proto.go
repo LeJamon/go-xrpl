@@ -177,24 +177,14 @@ var codecs = map[MessageType]msgCodec{
 			if m.HasSeq() {
 				out.Seq = pb.Uint32(m.Seq)
 			}
-			if m.HasPingTime() {
-				out.PingTime = pb.Uint64(m.PingTime)
-			}
-			if m.HasNetTime() {
-				out.NetTime = pb.Uint64(m.NetTime)
-			}
 			return out, nil
 		},
 		decode: func(pmsg pb.Message) (Message, error) {
 			p := pmsg.(*proto.TMPing)
 			return &Ping{
-				PType:       PingType(p.GetType()),
-				Seq:         p.GetSeq(),
-				SeqSet:      p.Seq != nil,
-				PingTime:    p.GetPingTime(),
-				PingTimeSet: p.PingTime != nil,
-				NetTime:     p.GetNetTime(),
-				NetTimeSet:  p.NetTime != nil,
+				PType:  PingType(p.GetType()),
+				Seq:    p.GetSeq(),
+				SeqSet: p.Seq != nil,
 			}, nil
 		},
 	},

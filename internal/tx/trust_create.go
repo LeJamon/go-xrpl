@@ -37,6 +37,9 @@ type TrustCreateParams struct {
 	// AMM↔asset-issuer pool line right after trustCreate (AMMCreate.cpp); folding
 	// it in here keeps that one-step.
 	AMMNode bool
+	// Sponsor is stored on the reserve-bearing side when another account funds
+	// that side's owner reserve.
+	Sponsor string
 }
 
 // TrustCreate creates a RippleState (trust line) ledger entry: it inserts the
@@ -152,6 +155,13 @@ func TrustCreate(view LedgerView, p TrustCreateParams) ter.Result {
 	}
 
 	rs.Flags = flags
+	if p.Sponsor != "" {
+		if bSetHigh {
+			rs.HighSponsor = p.Sponsor
+		} else {
+			rs.LowSponsor = p.Sponsor
+		}
+	}
 
 	lowDirKey := keylet.OwnerDir(lowAccountID)
 	lowDir, err := state.DirInsert(view, lowDirKey, p.LineKey.Key, false, func(dir *state.DirectoryNode) {

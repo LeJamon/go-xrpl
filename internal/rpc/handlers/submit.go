@@ -63,7 +63,9 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (re
 		if canonicalDecodeErr != nil {
 			return nil, rpcInternalError("submit: canonical transaction decoding failed", canonicalDecodeErr)
 		}
-		parsed.SetRawBytes(canonicalBlob)
+		if bindErr := tx.BindRawBytes(parsed, canonicalBlob); bindErr != nil {
+			return nil, rpcerrors.RpcErrorInvalidTransaction(bindErr.Error())
+		}
 
 		signatureReason := ""
 		signatureChecked := false

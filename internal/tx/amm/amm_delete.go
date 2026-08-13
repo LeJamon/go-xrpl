@@ -48,7 +48,7 @@ func (a *AMMDelete) Flatten() (map[string]any, error) {
 }
 
 func (a *AMMDelete) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber}
+	return [][32]byte{amendment.FeatureAMM}
 }
 
 // CheckExtraFeatures gates MPT pool assets on the MPTokensV2 amendment.
@@ -77,5 +77,9 @@ func (a *AMMDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 		"asset2", a.Asset2,
 	)
 
-	return DeleteAMMAccount(ctx.View, a.Asset, a.Asset2)
+	result := DeleteAMMAccount(ctx.View, a.Asset, a.Asset2)
+	if result == ter.TesSUCCESS {
+		ctx.SyncSenderOwnerCount()
+	}
+	return result
 }

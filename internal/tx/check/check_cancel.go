@@ -50,6 +50,13 @@ func (c *CheckCancel) Validate() error {
 	return nil
 }
 
+func (c *CheckCancel) PreflightWithRules(rules *amendment.Rules) error {
+	if rules.FixCleanup3_3_0Enabled() && isZeroCheckID(c.CheckID) {
+		return ter.Errorf(ter.TemMALFORMED, "CheckID must not be zero")
+	}
+	return c.Validate()
+}
+
 func (c *CheckCancel) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(c)
 }
@@ -184,21 +191,27 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 		return result
 	}
 
+	sponsorAddress, err := tx.LedgerEntrySponsor(checkData, "Sponsor")
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+
 	// Adjust creator's owner count.
 	// Reference: CancelCheck.cpp L125-126
 	if isCreator {
 		// Canceller is the creator
-		if ctx.Account.OwnerCount > 0 {
-			ctx.Account.OwnerCount--
+		if err := tx.DecreaseOwnerCount(ctx.View, ctx.Account, sponsorAddress, 1); err != nil {
+			return ter.TefINTERNAL
 		}
 	} else {
 		// Update the creator's owner count. A missing creator account is
 		// tolerated, matching rippled's adjustOwnerCount no-op on a null SLE;
 		// a corrupt one is an internal error.
 		if creatorAccount != nil {
-			if creatorAccount.OwnerCount > 0 {
-				creatorAccount.OwnerCount--
+			if err := tx.DecreaseOwnerCount(ctx.View, creatorAccount, sponsorAddress, 1); err != nil {
+				return ter.TefINTERNAL
 			}
+			ctx.SyncSenderSponsorCounts(sponsorAddress)
 			if result := ctx.UpdateAccountRoot(check.Account, creatorAccount); result != ter.TesSUCCESS {
 				return result
 			}

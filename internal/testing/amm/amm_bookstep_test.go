@@ -806,18 +806,8 @@ func TestAMMBookStep_Selection(t *testing.T) {
 	}
 }
 
-// TestAMMBookStep_FixDefaultInnerObj tests fix for default inner object.
 // Reference: rippled AMM_test.cpp testFixDefaultInnerObj (line 6305)
-// This tests the fixInnerObjTemplate amendment which fixes a C++-specific
-// object template caching bug when ledger is not closed between transactions
-// and trading fee is zero. Go does not share object templates, so this bug
-// cannot occur. All cases should succeed regardless of close/no-close and fee.
 func TestAMMBookStep_FixDefaultInnerObj(t *testing.T) {
-	// Rippled test matrix:
-	// (features, tfee, closeLedger) → (err1, err2, err3, err4)
-	// In C++ without fixInnerObjTemplate, no close, fee=0: all tefEXCEPTION
-	// In C++ without fixInnerObjTemplate, no close, fee=9: SUCCESS, tefEXCEPTION, SUCCESS, SUCCESS
-	// In Go: ALL succeed because we don't have C++ STObject template caching.
 	cases := []struct {
 		name        string
 		tradingFee  uint16

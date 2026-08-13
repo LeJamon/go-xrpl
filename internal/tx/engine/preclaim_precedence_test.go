@@ -22,6 +22,10 @@ const (
 // precedenceEngine builds an engine over a mock view with all supported
 // amendments enabled and an open ledger (so the fee floor is active).
 func precedenceEngine(t *testing.T, accounts map[string]*state.AccountRoot) *Engine {
+	return precedenceEngineWithRules(t, accounts, amendment.AllSupportedRules())
+}
+
+func precedenceEngineWithRules(t *testing.T, accounts map[string]*state.AccountRoot, rules *amendment.Rules) *Engine {
 	t.Helper()
 	base := newMockBaseView()
 	for addr, root := range accounts {
@@ -39,7 +43,7 @@ func precedenceEngine(t *testing.T, accounts map[string]*state.AccountRoot) *Eng
 		BaseFee:        10,
 		OpenLedger:     true,
 		LedgerSequence: 100,
-		Rules:          amendment.AllSupportedRules(),
+		Rules:          rules,
 	})
 }
 
@@ -105,15 +109,13 @@ func TestPreclaimPrecedence_SignBeforeFee(t *testing.T) {
 	})
 }
 
-// TestPreclaimPrecedence_SignBeforePermission pins the same reorder for the
-// delegate permission check (go-xrpl's checkPermission, PR #1257): a
-// delegated transaction that fails both signature verification and the delegate
-// permission check surfaces the signature failure, not terNO_DELEGATE_PERMISSION.
-func TestPreclaimPrecedence_SignBeforePermission(t *testing.T) {
+// TestPreclaimPrecedence_PermissionBeforeSignAndFee pins delegated permission
+// ahead of signature authorization and fee checks.
+func TestPreclaimPrecedence_PermissionBeforeSignAndFee(t *testing.T) {
 	// Source delegates to the genesis account. No Delegate SLE exists, so
 	// checkPermission yields terNO_DELEGATE_PERMISSION. Signature is verified
 	// against the delegate (genesis); disabling its master key makes checkSign
-	// yield tefMASTER_DISABLED. The delegate funds the fee, so checkFee passes.
+	// yield tefMASTER_DISABLED.
 	makeTx := func() *txcore.BaseTx {
 		tx := txcore.NewBaseTx(txcore.TypeAccountSet, precedenceSourceAddr)
 		tx.Fee = "10"
@@ -124,7 +126,7 @@ func TestPreclaimPrecedence_SignBeforePermission(t *testing.T) {
 	}
 	source := &state.AccountRoot{Account: precedenceSourceAddr, Balance: 1_000_000, Sequence: 5}
 
-	t.Run("bad sign + no delegate permission returns sign error", func(t *testing.T) {
+	t.Run("bad sign + no delegate permission returns permission error", func(t *testing.T) {
 		e := precedenceEngine(t, map[string]*state.AccountRoot{
 			precedenceSourceAddr: source,
 			precedenceGenesisAddr: {
@@ -134,8 +136,8 @@ func TestPreclaimPrecedence_SignBeforePermission(t *testing.T) {
 				Flags:    state.LsfDisableMaster,
 			},
 		})
-		if got := e.preclaim(makeTx(), [32]byte{}); got != ter.TefMASTER_DISABLED {
-			t.Fatalf("combined sign+permission failure = %v, want TefMASTER_DISABLED", got)
+		if got := e.preclaim(makeTx(), [32]byte{}); got != ter.TerNO_DELEGATE_PERMISSION {
+			t.Fatalf("combined sign+permission failure = %v, want TerNO_DELEGATE_PERMISSION", got)
 		}
 	})
 
@@ -154,4 +156,186 @@ func TestPreclaimPrecedence_SignBeforePermission(t *testing.T) {
 			t.Fatalf("permission-only failure = %v, want TerNO_DELEGATE_PERMISSION", got)
 		}
 	})
+
+	t.Run("insufficient fee + no delegate permission returns permission error", func(t *testing.T) {
+		tx := makeTx()
+		tx.Fee = "100"
+		e := precedenceEngine(t, map[string]*state.AccountRoot{
+			precedenceSourceAddr: source,
+			precedenceGenesisAddr: {
+				Account:  precedenceGenesisAddr,
+				Balance:  0,
+				Sequence: 1,
+			},
+		})
+		if got := e.preclaim(tx, [32]byte{}); got != ter.TerNO_DELEGATE_PERMISSION {
+			t.Fatalf("combined fee+permission failure = %v, want TerNO_DELEGATE_PERMISSION", got)
+		}
+	})
+}
+
+type batchSignerPrecedenceTx struct {
+	txcore.BaseTx
+	signers []txcore.BatchSignerInfo
+}
+
+func (t *batchSignerPrecedenceTx) GetBatchSigners() []txcore.BatchSignerInfo {
+	return t.signers
+}
+
+func TestPreclaimPrecedence_PermissionBeforeBatchSignerAuthorization(t *testing.T) {
+	base := txcore.NewBaseTx(txcore.TypeBatch, precedenceSourceAddr)
+	base.Fee = "10"
+	base.Sequence = u32(5)
+	base.SigningPubKey = precedenceGenesisPubKey
+	base.Delegate = precedenceGenesisAddr
+	txn := &batchSignerPrecedenceTx{
+		BaseTx: *base,
+		signers: []txcore.BatchSignerInfo{{
+			Account:       precedenceSourceAddr,
+			SigningPubKey: precedenceGenesisPubKey,
+		}},
+	}
+	e := precedenceEngine(t, map[string]*state.AccountRoot{
+		precedenceSourceAddr: {
+			Account:  precedenceSourceAddr,
+			Balance:  1_000_000,
+			Sequence: 5,
+		},
+		precedenceGenesisAddr: {
+			Account:  precedenceGenesisAddr,
+			Balance:  1_000_000,
+			Sequence: 1,
+		},
+	})
+
+	if got := e.preclaim(txn, [32]byte{}); got != ter.TerNO_DELEGATE_PERMISSION {
+		t.Fatalf("combined Batch signer+permission failure = %v, want TerNO_DELEGATE_PERMISSION", got)
+	}
+}
+
+func TestPreclaimInnerPrecedence_PermissionBeforePseudoAccountAuthorization(t *testing.T) {
+	txn := txcore.NewBaseTx(txcore.TypeAccountSet, precedenceSourceAddr)
+	txn.Fee = "0"
+	txn.Sequence = u32(5)
+	txn.SigningPubKey = ""
+	txn.Delegate = precedenceGenesisAddr
+
+	pseudoID := [32]byte{1}
+	e := precedenceEngine(t, map[string]*state.AccountRoot{
+		precedenceSourceAddr: {
+			Account:  precedenceSourceAddr,
+			Balance:  1_000_000,
+			Sequence: 5,
+		},
+		precedenceGenesisAddr: {
+			Account:  precedenceGenesisAddr,
+			Balance:  1_000_000,
+			Sequence: 1,
+			AMMID:    pseudoID,
+		},
+	})
+
+	if got := e.preclaimInner(txn, [32]byte{1}); got != ter.TerNO_DELEGATE_PERMISSION {
+		t.Fatalf("combined pseudo delegate+permission failure = %v, want TerNO_DELEGATE_PERMISSION", got)
+	}
+}
+
+func TestBatchSignerPseudoAccountAuthorizationRejected(t *testing.T) {
+	pseudoID := [32]byte{1}
+	e := precedenceEngine(t, map[string]*state.AccountRoot{
+		precedenceGenesisAddr: {
+			Account:  precedenceGenesisAddr,
+			Balance:  1_000_000,
+			Sequence: 1,
+			AMMID:    pseudoID,
+		},
+	})
+
+	got := e.checkBatchSign([]txcore.BatchSignerInfo{{
+		Account:       precedenceGenesisAddr,
+		SigningPubKey: precedenceGenesisPubKey,
+	}})
+	if got != ter.TefBAD_AUTH {
+		t.Fatalf("pseudo-account Batch signer = %v, want TefBAD_AUTH", got)
+	}
+}
+
+func TestPseudoAccountSigningAmendmentGates(t *testing.T) {
+	pseudoID := [32]byte{1}
+	accounts := map[string]*state.AccountRoot{
+		precedenceGenesisAddr: {
+			Account:  precedenceGenesisAddr,
+			Balance:  1_000_000,
+			Sequence: 1,
+			AMMID:    pseudoID,
+		},
+	}
+
+	tests := []struct {
+		name  string
+		rules *amendment.Rules
+		want  ter.Result
+	}{
+		{name: "legacy", rules: amendment.NewRules([][32]byte{amendment.FeatureSponsor}), want: ter.TesSUCCESS},
+		{name: "lending", rules: amendment.NewRules([][32]byte{amendment.FeatureSponsor, amendment.FeatureLendingProtocol}), want: ter.TefBAD_AUTH},
+		{name: "batch v1.1", rules: amendment.NewRules([][32]byte{amendment.FeatureSponsor, amendment.FeatureBatchV1_1}), want: ter.TefBAD_AUTH},
+		{name: "cleanup", rules: amendment.NewRules([][32]byte{amendment.FeatureSponsor, amendment.FeatureFixCleanup3_3_0}), want: ter.TefBAD_AUTH},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			e := precedenceEngineWithRules(t, accounts, test.rules)
+			if got := e.checkPseudoAccount(precedenceGenesisAddr); got != test.want {
+				t.Fatalf("direct pseudo-account signing gate = %v, want %v", got, test.want)
+			}
+
+			got := e.checkBatchSign([]txcore.BatchSignerInfo{{
+				Account:       precedenceGenesisAddr,
+				SigningPubKey: precedenceGenesisPubKey,
+			}})
+			if got != test.want {
+				t.Fatalf("Batch signer pseudo-account gate = %v, want %v", got, test.want)
+			}
+
+			txn := newAccountSet(precedenceSourceAddr)
+			common := txn.GetCommon()
+			common.Sponsor = precedenceGenesisAddr
+			common.SponsorSignature = &txcore.SponsorSignature{SigningPubKey: precedenceGenesisPubKey}
+			if got := e.checkSign(txn, common); got != test.want {
+				t.Fatalf("Sponsor signer pseudo-account gate = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestPseudoSponsorRejectedBeforeDryRunSignatureBypass(t *testing.T) {
+	pseudoID := [32]byte{1}
+	e := precedenceEngineWithRules(t, map[string]*state.AccountRoot{
+		precedenceGenesisAddr: {
+			Account:  precedenceGenesisAddr,
+			Balance:  1_000_000,
+			Sequence: 5,
+		},
+		precedenceSourceAddr: {
+			Account:  precedenceSourceAddr,
+			Balance:  1_000_000,
+			Sequence: 1,
+			AMMID:    pseudoID,
+		},
+	}, amendment.NewRules([][32]byte{
+		amendment.FeatureSponsor,
+		amendment.FeatureFixCleanup3_3_0,
+	}))
+	e.config.SkipSignatureVerification = true
+
+	txn := newAccountSet(precedenceGenesisAddr)
+	common := txn.GetCommon()
+	common.SigningPubKey = precedenceGenesisPubKey
+	common.Sponsor = precedenceSourceAddr
+	common.SponsorSignature = &txcore.SponsorSignature{}
+
+	if got := e.checkSign(txn, common); got != ter.TefBAD_AUTH {
+		t.Fatalf("dry-run pseudo-account Sponsor = %v, want TefBAD_AUTH", got)
+	}
 }

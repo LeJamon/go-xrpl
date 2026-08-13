@@ -37,6 +37,117 @@ func TestGetAutofillFee_NoLoad(t *testing.T) {
 	}
 }
 
+func TestGetAutofillFee_ConfidentialMPT(t *testing.T) {
+	svc, err := service.New(defaultServiceConfig())
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("service.Start: %v", err)
+	}
+
+	for _, txType := range []tx.Type{
+		tx.TypeConfidentialMPTConvert,
+		tx.TypeConfidentialMPTMergeInbox,
+		tx.TypeConfidentialMPTConvertBack,
+		tx.TypeConfidentialMPTSend,
+		tx.TypeConfidentialMPTClawback,
+	} {
+		t.Run(txType.String(), func(t *testing.T) {
+			parsed := tx.NewBaseTx(txType, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
+			fee, err := svc.GetAutofillFee(parsed, false, 10, 1)
+			if err != nil {
+				t.Fatalf("GetAutofillFee: %v", err)
+			}
+			if fee != 100 {
+				t.Fatalf("confidential MPT autofill fee = %d; want 100", fee)
+			}
+		})
+	}
+}
+
+func TestGetAutofillFee_ConfidentialMPTSigners(t *testing.T) {
+	svc, err := service.New(defaultServiceConfig())
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("service.Start: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		prepare func(*tx.BaseTx)
+		want    uint64
+	}{
+		{
+			name: "transaction multisigned",
+			prepare: func(parsed *tx.BaseTx) {
+				parsed.Signers = make([]tx.SignerWrapper, 3)
+			},
+			want: 130,
+		},
+		{
+			name: "sponsor single signed",
+			prepare: func(parsed *tx.BaseTx) {
+				parsed.SponsorSignature = &tx.SponsorSignature{SigningPubKey: "key"}
+			},
+			want: 100,
+		},
+		{
+			name: "sponsor multisigned",
+			prepare: func(parsed *tx.BaseTx) {
+				parsed.SponsorSignature = &tx.SponsorSignature{
+					Signers: make([]tx.SignerWrapper, 2),
+				}
+			},
+			want: 120,
+		},
+		{
+			name: "transaction and sponsor multisigned",
+			prepare: func(parsed *tx.BaseTx) {
+				parsed.Signers = make([]tx.SignerWrapper, 3)
+				parsed.SponsorSignature = &tx.SponsorSignature{
+					Signers: make([]tx.SignerWrapper, 2),
+				}
+			},
+			want: 150,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			parsed := tx.NewBaseTx(tx.TypeConfidentialMPTSend, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
+			test.prepare(parsed)
+			fee, err := svc.GetAutofillFee(parsed, false, 10, 1)
+			if err != nil {
+				t.Fatalf("GetAutofillFee: %v", err)
+			}
+			if fee != test.want {
+				t.Fatalf("confidential MPT autofill fee = %d; want %d", fee, test.want)
+			}
+		})
+	}
+}
+
+func TestGetAutofillFee_MalformedTransactionUsesReferenceFee(t *testing.T) {
+	svc, err := service.New(defaultServiceConfig())
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("service.Start: %v", err)
+	}
+
+	fee, err := svc.GetAutofillFee(nil, false, 10, 1)
+	if err != nil {
+		t.Fatalf("GetAutofillFee(nil): %v", err)
+	}
+	if fee != 10 {
+		t.Fatalf("malformed transaction autofill fee = %d; want reference fee 10", fee)
+	}
+}
+
 // TestGetAutofillFee_LoadedLocal verifies the LoadFeeTrack integration:
 // raising the local factor inflates the autofilled fee by exactly
 // localFee/LoadBase, matching rippled scaleFeeLoad (LoadFeeTrack.cpp:106-110).

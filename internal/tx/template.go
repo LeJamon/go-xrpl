@@ -42,6 +42,9 @@ var commonFields = []templateField{
 	{name: "Signers", style: soeOPTIONAL},
 	{name: "NetworkID", style: soeOPTIONAL},
 	{name: "Delegate", style: soeOPTIONAL},
+	{name: "Sponsor", style: soeOPTIONAL},
+	{name: "SponsorFlags", style: soeOPTIONAL},
+	{name: "SponsorSignature", style: soeOPTIONAL},
 }
 
 // txTemplates holds the per-transaction-type field allowlist (the unique fields
@@ -327,7 +330,7 @@ var txTemplates = map[Type][]templateField{
 		{name: "MaximumAmount", style: soeOPTIONAL},
 		{name: "MPTokenMetadata", style: soeOPTIONAL},
 		{name: "DomainID", style: soeOPTIONAL},
-		{name: "MutableFlags", style: soeOPTIONAL},
+		{name: "ImmutableFlags", style: soeOPTIONAL},
 	},
 	TypeMPTokenIssuanceDestroy: {
 		{name: "MPTokenIssuanceID", style: soeREQUIRED},
@@ -338,7 +341,9 @@ var txTemplates = map[Type][]templateField{
 		{name: "DomainID", style: soeOPTIONAL},
 		{name: "MPTokenMetadata", style: soeOPTIONAL},
 		{name: "TransferFee", style: soeOPTIONAL},
-		{name: "MutableFlags", style: soeOPTIONAL},
+		{name: "ImmutableFlags", style: soeOPTIONAL},
+		{name: "IssuerEncryptionKey", style: soeOPTIONAL},
+		{name: "AuditorEncryptionKey", style: soeOPTIONAL},
 	},
 	TypeMPTokenAuthorize: {
 		{name: "MPTokenIssuanceID", style: soeREQUIRED},
@@ -392,6 +397,7 @@ var txTemplates = map[Type][]templateField{
 	},
 	TypeVaultDelete: {
 		{name: "VaultID", style: soeREQUIRED},
+		{name: "MemoData", style: soeOPTIONAL},
 	},
 	TypeVaultDeposit: {
 		{name: "VaultID", style: soeREQUIRED},
@@ -467,6 +473,59 @@ var txTemplates = map[Type][]templateField{
 		{name: "LoanID", style: soeREQUIRED},
 		{name: "Amount", style: soeREQUIRED},
 	},
+	TypeConfidentialMPTConvert: {
+		{name: "MPTokenIssuanceID", style: soeREQUIRED},
+		{name: "MPTAmount", style: soeREQUIRED},
+		{name: "HolderEncryptionKey", style: soeOPTIONAL},
+		{name: "HolderEncryptedAmount", style: soeREQUIRED},
+		{name: "IssuerEncryptedAmount", style: soeREQUIRED},
+		{name: "AuditorEncryptedAmount", style: soeOPTIONAL},
+		{name: "BlindingFactor", style: soeREQUIRED},
+		{name: "ZKProof", style: soeOPTIONAL},
+	},
+	TypeConfidentialMPTMergeInbox: {
+		{name: "MPTokenIssuanceID", style: soeREQUIRED},
+	},
+	TypeConfidentialMPTConvertBack: {
+		{name: "MPTokenIssuanceID", style: soeREQUIRED},
+		{name: "MPTAmount", style: soeREQUIRED},
+		{name: "HolderEncryptedAmount", style: soeREQUIRED},
+		{name: "IssuerEncryptedAmount", style: soeREQUIRED},
+		{name: "AuditorEncryptedAmount", style: soeOPTIONAL},
+		{name: "BlindingFactor", style: soeREQUIRED},
+		{name: "ZKProof", style: soeREQUIRED},
+		{name: "BalanceCommitment", style: soeREQUIRED},
+	},
+	TypeConfidentialMPTSend: {
+		{name: "MPTokenIssuanceID", style: soeREQUIRED},
+		{name: "Destination", style: soeREQUIRED},
+		{name: "DestinationTag", style: soeOPTIONAL},
+		{name: "SenderEncryptedAmount", style: soeREQUIRED},
+		{name: "DestinationEncryptedAmount", style: soeREQUIRED},
+		{name: "IssuerEncryptedAmount", style: soeREQUIRED},
+		{name: "AuditorEncryptedAmount", style: soeOPTIONAL},
+		{name: "ZKProof", style: soeREQUIRED},
+		{name: "AmountCommitment", style: soeREQUIRED},
+		{name: "BalanceCommitment", style: soeREQUIRED},
+		{name: "CredentialIDs", style: soeOPTIONAL},
+	},
+	TypeConfidentialMPTClawback: {
+		{name: "MPTokenIssuanceID", style: soeREQUIRED},
+		{name: "Holder", style: soeREQUIRED},
+		{name: "MPTAmount", style: soeREQUIRED},
+		{name: "ZKProof", style: soeREQUIRED},
+	},
+	TypeSponsorshipTransfer: {
+		{name: "ObjectID", style: soeOPTIONAL},
+		{name: "Sponsee", style: soeOPTIONAL},
+	},
+	TypeSponsorshipSet: {
+		{name: "CounterpartySponsor", style: soeOPTIONAL},
+		{name: "Sponsee", style: soeOPTIONAL},
+		{name: "FeeAmountDelta", style: soeOPTIONAL},
+		{name: "MaxFee", style: soeOPTIONAL},
+		{name: "RemainingOwnerCountDelta", style: soeOPTIONAL},
+	},
 	TypeAmendment: {
 		{name: "LedgerSequence", style: soeREQUIRED},
 		{name: "Amendment", style: soeREQUIRED},
@@ -490,6 +549,18 @@ var txTemplates = map[Type][]templateField{
 
 var commonFieldStyles = indexTemplate(commonFields)
 var txTemplateStyles = indexTemplates(txTemplates)
+var innerObjectTemplateStyles = map[string]map[string]fieldStyle{
+	"Signer": indexTemplate([]templateField{
+		{name: "Account", style: soeREQUIRED},
+		{name: "SigningPubKey", style: soeREQUIRED},
+		{name: "TxnSignature", style: soeREQUIRED},
+	}),
+	"SponsorSignature": indexTemplate([]templateField{
+		{name: "SigningPubKey", style: soeOPTIONAL},
+		{name: "TxnSignature", style: soeOPTIONAL},
+		{name: "Signers", style: soeOPTIONAL},
+	}),
+}
 var commonRequiredFields = []string{
 	"TransactionType",
 	"Account",
@@ -562,6 +633,11 @@ var txRequiredFields = map[Type][]string{
 	TypeLoanDelete:                   {"LoanID"},
 	TypeLoanManage:                   {"LoanID"},
 	TypeLoanPay:                      {"LoanID", "Amount"},
+	TypeConfidentialMPTConvert:       {"MPTokenIssuanceID", "MPTAmount", "HolderEncryptedAmount", "IssuerEncryptedAmount", "BlindingFactor"},
+	TypeConfidentialMPTMergeInbox:    {"MPTokenIssuanceID"},
+	TypeConfidentialMPTConvertBack:   {"MPTokenIssuanceID", "MPTAmount", "HolderEncryptedAmount", "IssuerEncryptedAmount", "BlindingFactor", "ZKProof", "BalanceCommitment"},
+	TypeConfidentialMPTSend:          {"MPTokenIssuanceID", "Destination", "SenderEncryptedAmount", "DestinationEncryptedAmount", "IssuerEncryptedAmount", "ZKProof", "AmountCommitment", "BalanceCommitment"},
+	TypeConfidentialMPTClawback:      {"MPTokenIssuanceID", "Holder", "MPTAmount", "ZKProof"},
 	TypeAmendment:                    {"LedgerSequence", "Amendment"},
 	TypeUNLModify:                    {"UNLModifyDisabling", "LedgerSequence", "UNLModifyValidator"},
 }
@@ -644,7 +720,10 @@ func ValidateTemplateFields(txType Type, values map[string]any) error {
 		}
 	}
 
-	return validateTemplateAllowlist(txType, fields)
+	if err := validateTemplateAllowlist(txType, fields); err != nil {
+		return err
+	}
+	return validateInnerObjectTemplates(values)
 }
 
 // ValidateTransactionTemplateAllowlist rejects fields that are not legal for
@@ -696,11 +775,95 @@ func validateTemplateAllowlist(txType Type, fields map[string]bool) error {
 	return nil
 }
 
+func validateInnerObjectTemplates(values map[string]any) error {
+	for objectName := range innerObjectTemplateStyles {
+		raw, present := values[objectName]
+		if !present {
+			continue
+		}
+		object, ok := raw.(map[string]any)
+		if !ok {
+			return errors.New("Field '" + objectName + "' is not an object.")
+		}
+		if err := validateNamedInnerObject(objectName, object); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateNamedInnerObject(objectName string, object map[string]any) error {
+	template, ok := innerObjectTemplateStyles[objectName]
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(object))
+	for name := range object {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if _, ok := template[name]; !ok {
+			return errors.New("Field '" + objectName + "." + name + "' found in disallowed location.")
+		}
+	}
+	for name, style := range template {
+		if _, present := object[name]; style == soeREQUIRED && !present {
+			return errors.New("Field '" + objectName + "." + name + "' is required but missing.")
+		}
+	}
+	if signers, present := object["Signers"]; present {
+		if err := validateInnerObjectArray(objectName+".Signers", signers); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateInnerObjectArray(path string, value any) error {
+	var items []any
+	switch typed := value.(type) {
+	case []any:
+		items = typed
+	case []map[string]any:
+		items = make([]any, len(typed))
+		for i := range typed {
+			items[i] = typed[i]
+		}
+	default:
+		return errors.New("Field '" + path + "' is not an array.")
+	}
+	for _, item := range items {
+		wrapper, ok := item.(map[string]any)
+		if !ok || len(wrapper) != 1 {
+			return errors.New("Field '" + path + "' contains an invalid object.")
+		}
+		for objectName, raw := range wrapper {
+			if objectName != "Signer" {
+				return errors.New("Field '" + path + "." + objectName + "' found in disallowed location.")
+			}
+			object, ok := raw.(map[string]any)
+			if !ok {
+				return errors.New("Field '" + path + "." + objectName + "' is not an object.")
+			}
+			if err := validateNamedInnerObject(objectName, object); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // checkTemplate preserves the transaction-engine TER contract for decoded
 // fields that appear outside their transaction template.
-func checkTemplate(txType Type, fields map[string]bool) error {
+func checkTemplate(txType Type, fields map[string]bool, values ...map[string]any) error {
 	if err := validateTemplateAllowlist(txType, fields); err != nil {
 		return ter.Errorf(ter.TemMALFORMED, "%s", err)
+	}
+	if len(values) != 0 {
+		if err := validateInnerObjectTemplates(values[0]); err != nil {
+			return ter.Errorf(ter.TemMALFORMED, "%s", err)
+		}
 	}
 	return nil
 }

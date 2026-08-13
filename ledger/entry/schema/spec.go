@@ -61,7 +61,7 @@ type Field struct {
 	Meta Meta
 
 	// Style controls serialization presence and fresh-entry validation. Every
-	// field is annotated explicitly from rippled's 3.2.0 ledger template.
+	// field is annotated explicitly from rippled's ledger template.
 	Style Style
 
 	// DeferredRequired marks a required threading field whose default is
@@ -96,6 +96,35 @@ type Entry struct {
 	Fields []Field
 }
 
+// commonFields are serialized fields admitted by every ledger-entry template
+// in LedgerFormats::getCommonFields. LedgerEntryType is injected directly by
+// the generator, LedgerIndex is not part of stored SLE blobs, and Flags remains
+// explicit in each entry spec because its required/default metadata behavior is
+// already modeled there.
+var commonFields = []Field{
+	{Name: "Sponsor", Style: StyleOptional},
+}
+
+// AllFields returns the entry-specific fields plus the common serialized
+// fields. Keeping the merge here ensures every generated decoder preserves a
+// reserve sponsor rather than accepting it only on a hand-picked set of SLEs.
+func (e Entry) AllFields() []Field {
+	fields := make([]Field, 0, len(e.Fields)+len(commonFields))
+	fields = append(fields, e.Fields...)
+
+	present := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		present[field.Name] = struct{}{}
+	}
+	for _, field := range commonFields {
+		if _, ok := present[field.Name]; ok {
+			continue
+		}
+		fields = append(fields, field)
+	}
+	return fields
+}
+
 // Specs is the full set of entry types covered by typed decoders. Order
 // here drives the order of the emitted files (one .go per entry).
 var Specs = []Entry{
@@ -106,6 +135,9 @@ var Specs = []Entry{
 			{Name: "Balance", Style: StyleRequired},
 			{Name: "Sequence", Style: StyleRequired},
 			{Name: "OwnerCount", Style: StyleRequired},
+			{Name: "SponsoredOwnerCount", Style: StyleDefault},
+			{Name: "SponsoringOwnerCount", Style: StyleDefault},
+			{Name: "SponsoringAccountCount", Style: StyleDefault},
 			{Name: "Flags", Style: StyleRequired},
 			{Name: "RegularKey", Style: StyleOptional},
 			{Name: "Domain", Style: StyleOptional},
@@ -182,6 +214,8 @@ var Specs = []Entry{
 			{Name: "LowQualityOut", Style: StyleOptional},
 			{Name: "HighQualityIn", Style: StyleOptional},
 			{Name: "HighQualityOut", Style: StyleOptional},
+			{Name: "HighSponsor", Style: StyleOptional},
+			{Name: "LowSponsor", Style: StyleOptional},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal, Style: StyleRequired, DeferredRequired: true},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal, Style: StyleRequired, DeferredRequired: true},
 		},
@@ -474,8 +508,11 @@ var Specs = []Entry{
 			{Name: "LockedAmount", Style: StyleOptional},
 			{Name: "MPTokenMetadata", Style: StyleOptional},
 			{Name: "DomainID", Style: StyleOptional},
-			{Name: "MutableFlags", Style: StyleDefault},
+			{Name: "ImmutableFlags", Style: StyleDefault},
 			{Name: "ReferenceHolding", Style: StyleOptional},
+			{Name: "IssuerEncryptionKey", Style: StyleOptional},
+			{Name: "AuditorEncryptionKey", Style: StyleOptional},
+			{Name: "ConfidentialOutstandingAmount", Style: StyleDefault},
 			{Name: "Flags", Style: StyleRequired},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal, Style: StyleRequired, DeferredRequired: true},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal, Style: StyleRequired, DeferredRequired: true},
@@ -492,6 +529,12 @@ var Specs = []Entry{
 			{Name: "Flags", Style: StyleRequired},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal, Style: StyleRequired, DeferredRequired: true},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal, Style: StyleRequired, DeferredRequired: true},
+			{Name: "ConfidentialBalanceInbox", Style: StyleOptional},
+			{Name: "ConfidentialBalanceSpending", Style: StyleOptional},
+			{Name: "ConfidentialBalanceVersion", Style: StyleDefault},
+			{Name: "IssuerEncryptedBalance", Style: StyleOptional},
+			{Name: "AuditorEncryptedBalance", Style: StyleOptional},
+			{Name: "HolderEncryptionKey", Style: StyleOptional},
 		},
 	},
 	{
@@ -631,6 +674,21 @@ var Specs = []Entry{
 			{Name: "Flags", Style: StyleRequired},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal, Style: StyleRequired, DeferredRequired: true},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal, Style: StyleRequired, DeferredRequired: true},
+		},
+	},
+	{
+		Name: "Sponsorship",
+		Fields: []Field{
+			{Name: "PreviousTxnID", Meta: MetaDeleteFinal, Style: StyleRequired, DeferredRequired: true},
+			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal, Style: StyleRequired, DeferredRequired: true},
+			{Name: "Owner", Style: StyleRequired},
+			{Name: "Sponsee", Style: StyleRequired},
+			{Name: "FeeAmount", Style: StyleOptional},
+			{Name: "MaxFee", Style: StyleOptional},
+			{Name: "RemainingOwnerCount", Style: StyleDefault},
+			{Name: "OwnerNode", Style: StyleRequired},
+			{Name: "SponseeNode", Style: StyleRequired},
+			{Name: "Flags", Style: StyleRequired},
 		},
 	},
 }

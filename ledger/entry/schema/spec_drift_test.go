@@ -27,7 +27,7 @@ func TestSpecCoversRippledMacro(t *testing.T) {
 	}
 
 	if len(rippled) != len(Specs) {
-		t.Fatalf("rippled has %d ledger templates, schema has %d", len(rippled), len(Specs))
+		t.Fatalf("rippled v3.3.0 has %d ledger templates, schema has %d", len(rippled), len(Specs))
 	}
 	haveEntries := make(map[string]bool, len(Specs))
 	for _, entry := range Specs {
@@ -81,7 +81,7 @@ func TestSpecCoversRippledMacro(t *testing.T) {
 		}
 	}
 	if canonical != len(rippled) {
-		t.Errorf("registry has %d canonical entries, rippled has %d", canonical, len(rippled))
+		t.Errorf("registry has %d canonical entries, rippled v3.3.0 has %d", canonical, len(rippled))
 	}
 }
 
@@ -93,7 +93,7 @@ func requireRippledMacro(t *testing.T) string {
 	}
 	dir := filepath.Dir(file)
 	for range 12 {
-		candidate := filepath.Join(dir, "rippled-worktrees", "v3.2.0-oracle", "include", "xrpl", "protocol", "detail", "ledger_entries.macro")
+		candidate := filepath.Join(dir, "rippled-worktrees", "v3.3.0-oracle", "include", "xrpl", "protocol", "detail", "ledger_entries.macro")
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
@@ -103,7 +103,7 @@ func requireRippledMacro(t *testing.T) string {
 		}
 		dir = parent
 	}
-	t.Fatalf("required rippled v3.2.0 oracle not found from %s", file)
+	t.Fatalf("required rippled v3.3.0 oracle not found from %s", file)
 	return ""
 }
 

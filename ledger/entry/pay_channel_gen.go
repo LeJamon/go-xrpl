@@ -39,6 +39,7 @@ type PayChannel struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	Sponsor           string // AccountID (base58)
 }
 
 // Type returns the concrete ledger-entry type.
@@ -63,6 +64,7 @@ const (
 	paychannelBitFlags
 	paychannelBitPreviousTxnID
 	paychannelBitPreviousTxnLgrSeq
+	paychannelBitSponsor
 )
 
 // SetAccount assigns Account and updates its serialized presence.
@@ -175,6 +177,13 @@ func (p *PayChannel) SetPreviousTxnLgrSeq(value uint32) {
 	p.PreviousTxnLgrSeq = value
 	p.dirty = true
 	p.present |= paychannelBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (p *PayChannel) SetSponsor(value string) {
+	p.Sponsor = value
+	p.dirty = true
+	p.present |= paychannelBitSponsor
 }
 
 func (p *PayChannel) validateRequired() error {
@@ -386,6 +395,9 @@ func (p *PayChannel) decode(data []byte, legacy bool) error {
 			case 3:
 				p.Destination = val
 				p.present |= paychannelBitDestination
+			case 27:
+				p.Sponsor = val
+				p.present |= paychannelBitSponsor
 			default:
 				return newErrUnknownField("PayChannel", typeCode, fieldCode)
 			}
@@ -449,6 +461,9 @@ func (p *PayChannel) emitAll(out map[string]any, skipDefault bool) {
 	if p.present&paychannelBitFlags != 0 && !(skipDefault && p.Flags == 0) {
 		out["Flags"] = p.Flags
 	}
+	if p.present&paychannelBitSponsor != 0 && !(skipDefault && p.Sponsor == "") {
+		out["Sponsor"] = p.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -484,6 +499,7 @@ func (p *PayChannel) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, p.OwnerNode, prv.present&paychannelBitOwnerNode, p.present&paychannelBitOwnerNode)
 	emitIfChangedString(out, "DestinationNode", prv.DestinationNode, p.DestinationNode, prv.present&paychannelBitDestinationNode, p.present&paychannelBitDestinationNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, p.Flags, prv.present&paychannelBitFlags, p.present&paychannelBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, p.Sponsor, prv.present&paychannelBitSponsor, p.present&paychannelBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -533,6 +549,9 @@ func (p *PayChannel) EmitChangeOrigFields(out map[string]any) {
 	}
 	if p.present&paychannelBitFlags != 0 {
 		out["Flags"] = p.Flags
+	}
+	if p.present&paychannelBitSponsor != 0 {
+		out["Sponsor"] = p.Sponsor
 	}
 }
 
@@ -622,6 +641,9 @@ func (p *PayChannel) ToMap() map[string]any {
 	}
 	if p.present&paychannelBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = p.PreviousTxnLgrSeq
+	}
+	if p.present&paychannelBitSponsor != 0 {
+		out["Sponsor"] = p.Sponsor
 	}
 	return out
 }

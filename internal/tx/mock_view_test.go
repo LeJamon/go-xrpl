@@ -10,7 +10,8 @@ import (
 
 // mockBaseView implements LedgerView for core tx tests.
 type mockBaseView struct {
-	data map[[32]byte][]byte
+	data  map[[32]byte][]byte
+	rules *amendment.Rules
 }
 
 func newMockBaseView() *mockBaseView {
@@ -45,7 +46,7 @@ func (m *mockBaseView) AdjustDropsDestroyed(drops.XRPAmount) error { return nil 
 
 func (m *mockBaseView) TxExists([32]byte) (bool, error) { return false, nil }
 
-func (m *mockBaseView) Rules() *amendment.Rules { return nil }
+func (m *mockBaseView) Rules() *amendment.Rules { return m.rules }
 
 func (m *mockBaseView) LedgerSeq() uint32 { return 0 }
 

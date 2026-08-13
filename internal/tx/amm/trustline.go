@@ -98,6 +98,8 @@ type updateTrustlineBalanceResult struct {
 	SenderOwnerCountDelta int
 	// IssuerOwnerCountDelta is the change to the issuer's owner count (-1 if reserve cleared, 0 otherwise)
 	IssuerOwnerCountDelta int
+	SenderSponsor         string
+	IssuerSponsor         string
 }
 
 // createOrUpdateAMMTrustline creates or updates a trust line for an AMM asset.
@@ -210,12 +212,12 @@ func debitAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx.Amount, 
 		return err
 	}
 	if result.SenderOwnerCountDelta != 0 {
-		if err := tx.AdjustOwnerCount(view, ammAccountID, result.SenderOwnerCountDelta); err != nil {
+		if err := tx.DecreaseOwnerCountOnView(view, ammAccountID, result.SenderSponsor, 1); err != nil {
 			return err
 		}
 	}
 	if result.IssuerOwnerCountDelta != 0 {
-		if err := tx.AdjustOwnerCount(view, issuerID, result.IssuerOwnerCountDelta); err != nil {
+		if err := tx.DecreaseOwnerCountOnView(view, issuerID, result.IssuerSponsor, 1); err != nil {
 			return err
 		}
 	}
@@ -324,6 +326,13 @@ func updateTrustlineBalanceInViewEx(accountID [20]byte, issuerID [20]byte, curre
 			senderQualityOut == 0 {
 			result.SenderOwnerCountDelta = -1
 			rs.Flags &^= senderReserveFlag
+			if senderIsLow {
+				result.SenderSponsor = rs.LowSponsor
+				rs.LowSponsor = ""
+			} else {
+				result.SenderSponsor = rs.HighSponsor
+				rs.HighSponsor = ""
+			}
 
 			// Check deletion: balance is zero AND receiver has no reserve
 			var receiverReserveFlag uint32
@@ -334,6 +343,22 @@ func updateTrustlineBalanceInViewEx(accountID [20]byte, issuerID [20]byte, curre
 			}
 			if afterBalance.Signum() == 0 && (rs.Flags&receiverReserveFlag) == 0 {
 				bDelete = true
+			}
+		}
+	}
+	if bDelete {
+		issuerReserveFlag := state.LsfLowReserve
+		if senderIsLow {
+			issuerReserveFlag = state.LsfHighReserve
+		}
+		if uFlags&issuerReserveFlag != 0 {
+			result.IssuerOwnerCountDelta = -1
+			if senderIsLow {
+				result.IssuerSponsor = rs.HighSponsor
+				rs.HighSponsor = ""
+			} else {
+				result.IssuerSponsor = rs.LowSponsor
+				rs.LowSponsor = ""
 			}
 		}
 	}
@@ -353,17 +378,6 @@ func updateTrustlineBalanceInViewEx(accountID [20]byte, issuerID [20]byte, curre
 		}
 
 		err := trustDelete(view, lineKey, lowAccountID, highAccountID, rs.LowNode, rs.HighNode)
-
-		// Check issuer's reserve for owner count delta
-		var issuerReserveFlag uint32
-		if senderIsLow {
-			issuerReserveFlag = state.LsfHighReserve
-		} else {
-			issuerReserveFlag = state.LsfLowReserve
-		}
-		if (uFlags & issuerReserveFlag) != 0 {
-			result.IssuerOwnerCountDelta = -1
-		}
 
 		return result, err
 	}
@@ -519,15 +533,19 @@ func redeemIOUWithCleanup(view tx.LedgerView, holderID, ammAccountID [20]byte, a
 		holderLimitIsZero &&
 		holderQInIsZero &&
 		holderQOutIsZero {
-		if holderAccount != nil && holderAccount.OwnerCount > 0 {
-			holderAccount.OwnerCount--
-			holderBytes, err := state.SerializeAccountRoot(holderAccount)
-			if err != nil {
+		holderSponsor := rs.LowSponsor
+		if holderHigh {
+			holderSponsor = rs.HighSponsor
+		}
+		if holderAccount != nil {
+			if err := tx.DecreaseOwnerCountOnView(view, holderID, holderSponsor, 1); err != nil {
 				return ter.TefINTERNAL
 			}
-			if err := view.Update(keylet.Account(holderID), holderBytes); err != nil {
-				return ter.TefINTERNAL
-			}
+		}
+		if holderHigh {
+			rs.HighSponsor = ""
+		} else {
+			rs.LowSponsor = ""
 		}
 
 		rsFlags &= ^holderReserveFlag

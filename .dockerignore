@@ -5,5 +5,8 @@ xrpld
 docs/
 tasks/
 testdata/
-scripts/
+scripts/*
+!scripts/setup-mpt-crypto.sh
+.conan-home/
+.mpt-crypto/
 .git/

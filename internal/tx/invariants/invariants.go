@@ -22,12 +22,17 @@ const InitialXRP uint64 = 100_000_000_000_000_000
 
 // InvariantEntry represents a single ledger entry modification to be checked by invariants.
 // Before is nil for newly created entries; After is nil for deleted entries.
+// DeleteFinal retains the final pre-erase image for deleted entries. It is
+// separate from Before because metadata and most invariants need the original
+// image, while cleanup and sponsorship invariants inspect the image immediately
+// before the erase.
 type InvariantEntry struct {
-	Key       [32]byte // ledger key of the entry (for invariants like ValidNFTokenPage that need to inspect the key)
-	EntryType entry.Type
-	Before    []byte // serialized SLE before the transaction (nil for inserts)
-	After     []byte // serialized SLE after the transaction (nil for deletes)
-	IsDelete  bool   // true if the entry was deleted
+	Key         [32]byte // ledger key of the entry (for invariants like ValidNFTokenPage that need to inspect the key)
+	EntryType   entry.Type
+	Before      []byte // serialized SLE before the transaction (nil for inserts)
+	After       []byte // serialized SLE after the transaction (nil for deletes)
+	DeleteFinal []byte // serialized SLE immediately before deletion (nil for non-deletes)
+	IsDelete    bool   // true if the entry was deleted
 }
 
 // InvariantViolation holds the name and description of a detected invariant violation.
@@ -75,31 +80,36 @@ type TxType = protocol.TxType
 // Transaction type constants used by invariant checks, aliased from the
 // protocol package.
 const (
-	TypePayment                  = protocol.TxTypePayment
-	TypeEscrowFinish             = protocol.TxTypeEscrowFinish
-	TypeOfferCreate              = protocol.TxTypeOfferCreate
-	TypeCheckCash                = protocol.TxTypeCheckCash
-	TypeAccountDelete            = protocol.TxTypeAccountDelete
-	TypeNFTokenMint              = protocol.TxTypeNFTokenMint
-	TypeNFTokenBurn              = protocol.TxTypeNFTokenBurn
-	TypeClawback                 = protocol.TxTypeClawback
-	TypeAMMClawback              = protocol.TxTypeAMMClawback
-	TypeAMMCreate                = protocol.TxTypeAMMCreate
-	TypeAMMDeposit               = protocol.TxTypeAMMDeposit
-	TypeAMMWithdraw              = protocol.TxTypeAMMWithdraw
-	TypeAMMVote                  = protocol.TxTypeAMMVote
-	TypeAMMBid                   = protocol.TxTypeAMMBid
-	TypeAMMDelete                = protocol.TxTypeAMMDelete
-	TypeMPTokenIssuanceCreate    = protocol.TxTypeMPTokenIssuanceCreate
-	TypeMPTokenIssuanceDestroy   = protocol.TxTypeMPTokenIssuanceDestroy
-	TypeMPTokenIssuanceSet       = protocol.TxTypeMPTokenIssuanceSet
-	TypeMPTokenAuthorize         = protocol.TxTypeMPTokenAuthorize
-	TypePermissionedDomainSet    = protocol.TxTypePermissionedDomainSet
-	TypePermissionedDomainDelete = protocol.TxTypePermissionedDomainDelete
-	TypeVaultCreate              = protocol.TxTypeVaultCreate
-	TypeVaultDelete              = protocol.TxTypeVaultDelete
-	TypeVaultDeposit             = protocol.TxTypeVaultDeposit
-	TypeBatch                    = protocol.TxTypeBatch
+	TypePayment                    = protocol.TxTypePayment
+	TypeEscrowFinish               = protocol.TxTypeEscrowFinish
+	TypeOfferCreate                = protocol.TxTypeOfferCreate
+	TypeCheckCash                  = protocol.TxTypeCheckCash
+	TypeAccountDelete              = protocol.TxTypeAccountDelete
+	TypeNFTokenMint                = protocol.TxTypeNFTokenMint
+	TypeNFTokenBurn                = protocol.TxTypeNFTokenBurn
+	TypeClawback                   = protocol.TxTypeClawback
+	TypeAMMClawback                = protocol.TxTypeAMMClawback
+	TypeAMMCreate                  = protocol.TxTypeAMMCreate
+	TypeAMMDeposit                 = protocol.TxTypeAMMDeposit
+	TypeAMMWithdraw                = protocol.TxTypeAMMWithdraw
+	TypeAMMVote                    = protocol.TxTypeAMMVote
+	TypeAMMBid                     = protocol.TxTypeAMMBid
+	TypeAMMDelete                  = protocol.TxTypeAMMDelete
+	TypeMPTokenIssuanceCreate      = protocol.TxTypeMPTokenIssuanceCreate
+	TypeMPTokenIssuanceDestroy     = protocol.TxTypeMPTokenIssuanceDestroy
+	TypeMPTokenIssuanceSet         = protocol.TxTypeMPTokenIssuanceSet
+	TypeMPTokenAuthorize           = protocol.TxTypeMPTokenAuthorize
+	TypeConfidentialMPTConvert     = protocol.TxTypeConfidentialMPTConvert
+	TypeConfidentialMPTMergeInbox  = protocol.TxTypeConfidentialMPTMergeInbox
+	TypeConfidentialMPTConvertBack = protocol.TxTypeConfidentialMPTConvertBack
+	TypeConfidentialMPTSend        = protocol.TxTypeConfidentialMPTSend
+	TypeConfidentialMPTClawback    = protocol.TxTypeConfidentialMPTClawback
+	TypePermissionedDomainSet      = protocol.TxTypePermissionedDomainSet
+	TypePermissionedDomainDelete   = protocol.TxTypePermissionedDomainDelete
+	TypeVaultCreate                = protocol.TxTypeVaultCreate
+	TypeVaultDelete                = protocol.TxTypeVaultDelete
+	TypeVaultDeposit               = protocol.TxTypeVaultDeposit
+	TypeBatch                      = protocol.TxTypeBatch
 )
 
 // Result represents a transaction result code.
@@ -166,6 +176,7 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 		func() *InvariantViolation { return checkXRPNotCreated(result, fee, entries) },
 		func() *InvariantViolation { return checkAccountRootsNotDeleted(txType, result, entries) },
 		func() *InvariantViolation { return checkLedgerEntryTypesMatch(entries) },
+		func() *InvariantViolation { return checkSponsorship(entries) },
 		func() *InvariantViolation { return checkNoXRPTrustLines(entries) },
 		func() *InvariantViolation {
 			return checkNoDeepFreezeTrustLinesWithoutFreeze(entries)
@@ -182,10 +193,13 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 			return checkNFTokenCountTracking(txType, result, entries)
 		},
 		func() *InvariantViolation {
-			return checkValidClawback(tx, result, entries, view)
+			return checkValidClawback(tx, result, entries, view, rules, numberContext...)
 		},
 		func() *InvariantViolation {
 			return checkValidMPTIssuance(tx, result, entries, view, rules)
+		},
+		func() *InvariantViolation {
+			return checkValidConfidentialMPToken(tx, result, entries, view, rules)
 		},
 		func() *InvariantViolation {
 			return checkValidPermissionedDomain(tx, result, entries, rules)
@@ -195,6 +209,9 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 		},
 		func() *InvariantViolation {
 			return checkAccountRootsDeletedClean(entries, view, rules)
+		},
+		func() *InvariantViolation {
+			return checkObjectsHavePseudoAccounts(entries, view, rules)
 		},
 		func() *InvariantViolation {
 			return checkValidPermissionedDEX(tx, result, entries, view, rules)
@@ -237,6 +254,10 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 // clawback subpackage.
 type ClawbackAmountProvider interface {
 	ClawbackAmount() Amount
+}
+
+type ClawbackHolderProvider interface {
+	ClawbackHolder() string
 }
 
 // HolderFieldProvider is optionally implemented by transactions that have a

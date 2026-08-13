@@ -30,6 +30,7 @@ type CredentialEntry struct {
 	Expiration     *uint32  // Optional expiration time
 	URI            []byte   // Optional URI (max 256 bytes)
 	Flags          uint32   // Credential flags (lsfAccepted)
+	Sponsor        string
 
 	// Directory node hints
 	IssuerNode     uint64
@@ -83,6 +84,7 @@ func ParseCredentialEntry(data []byte) (*CredentialEntry, error) {
 		Flags:             decoded.Flags,
 		IssuerNode:        issuerNode,
 		PreviousTxnLgrSeq: decoded.PreviousTxnLgrSeq,
+		Sponsor:           decoded.Sponsor,
 	}
 
 	if _, ok := fields["Expiration"]; ok {
@@ -151,6 +153,9 @@ func serializeCredentialEntry(cred *CredentialEntry) ([]byte, error) {
 	sle.SetCredentialType(hex.EncodeToString(cred.CredentialType))
 	sle.SetIssuerNode(tx.FormatUint64Hex(cred.IssuerNode))
 	sle.SetFlags(cred.Flags)
+	if cred.Sponsor != "" {
+		sle.SetSponsor(cred.Sponsor)
+	}
 
 	if cred.Expiration != nil {
 		sle.SetExpiration(*cred.Expiration)
@@ -469,11 +474,28 @@ func VerifyDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, src, dst
 			if !credentialsPresent {
 				return ter.TecNO_PERMISSION
 			}
-			return authorizedDepositPreauth(ctx, credentialIDs, dst)
+			return authorizedDepositPreauth(ctx.View, credentialIDs, dst)
 		}
 	}
 
 	return ter.TesSUCCESS
+}
+
+func CheckDepositPreauth(view tx.LedgerView, credentialIDs []string, credentialsPresent bool, src, dst [20]byte, dstAccount *state.AccountRoot) ter.Result {
+	if dstAccount == nil || dstAccount.Flags&state.LsfDepositAuth == 0 || src == dst {
+		return ter.TesSUCCESS
+	}
+	exists, err := view.Exists(keylet.DepositPreauth(dst, src))
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if exists {
+		return ter.TesSUCCESS
+	}
+	if !credentialsPresent {
+		return ter.TecNO_PERMISSION
+	}
+	return authorizedDepositPreauth(view, credentialIDs, dst)
 }
 
 // authorizedDepositPreauth checks whether the (Issuer, CredentialType) pairs
@@ -482,7 +504,7 @@ func VerifyDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, src, dst
 // credentials that passed preflight and preclaim, since credential IDs are
 // deduplicated there and all credentials share the sender as Subject.
 // Reference: rippled CredentialHelpers.cpp credentials::authorizedDepositPreauth()
-func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst [20]byte) ter.Result {
+func authorizedDepositPreauth(view tx.LedgerView, credentialIDs []string, dst [20]byte) ter.Result {
 	pairs := make([]keylet.CredentialPair, 0, len(credentialIDs))
 	seen := make(map[string]bool, len(credentialIDs))
 
@@ -493,7 +515,7 @@ func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst 
 		}
 
 		// Credential existence was already checked in preclaim.
-		credData, err := ctx.View.Read(keylet.CredentialByID(credID))
+		credData, err := view.Read(keylet.CredentialByID(credID))
 		if err != nil || credData == nil {
 			return ter.TefINTERNAL
 		}
@@ -521,7 +543,9 @@ func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst 
 		return bytes.Compare(pairs[i].CredentialType, pairs[j].CredentialType) < 0
 	})
 
-	if exists, _ := ctx.View.Exists(keylet.DepositPreauthCredentials(dst, pairs)); !exists {
+	if exists, err := view.Exists(keylet.DepositPreauthCredentials(dst, pairs)); err != nil {
+		return ter.TefINTERNAL
+	} else if !exists {
 		return ter.TecNO_PERMISSION
 	}
 
@@ -550,7 +574,7 @@ func DeleteSLE(ctx *tx.ApplyContext, credKey keylet.Keylet, cred *CredentialEntr
 			return ter.TefBAD_LEDGER
 		}
 		if isOwner {
-			if err := tx.AdjustOwnerCount(ctx.View, account, -1); err != nil {
+			if err := tx.DecreaseOwnerCountOnView(ctx.View, account, cred.Sponsor, 1); err != nil {
 				return ter.TefBAD_LEDGER
 			}
 		}

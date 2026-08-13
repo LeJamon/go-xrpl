@@ -19,19 +19,23 @@ const (
 // MPTokenIssuanceData holds parsed fields of an MPTokenIssuance ledger entry.
 // Reference: rippled LedgerFormats.h ltMPTOKEN_ISSUANCE
 type MPTokenIssuanceData struct {
-	Issuer            [20]byte
-	Sequence          uint32
-	OwnerNode         uint64
-	OutstandingAmount uint64
-	TransferFee       uint16
-	AssetScale        uint8
-	MaximumAmount     *uint64
-	LockedAmount      *uint64
-	MPTokenMetadata   string  // hex-encoded
-	DomainID          *string // hex-encoded 32-byte hash, nil if not set
-	ReferenceHolding  *string // hex-encoded 32-byte hash (vault share underlying), nil if not set
-	Flags             uint32
-	MutableFlags      uint32 // soeDEFAULT: CanMutate permission bits, 0 when absent
+	Issuer                        [20]byte
+	Sequence                      uint32
+	OwnerNode                     uint64
+	OutstandingAmount             uint64
+	TransferFee                   uint16
+	AssetScale                    uint8
+	MaximumAmount                 *uint64
+	LockedAmount                  *uint64
+	MPTokenMetadata               string  // hex-encoded
+	DomainID                      *string // hex-encoded 32-byte hash, nil if not set
+	ReferenceHolding              *string // hex-encoded 32-byte hash (vault share underlying), nil if not set
+	Flags                         uint32
+	ImmutableFlags                uint32 // soeDEFAULT: immutable capability and field bits, 0 when absent
+	Sponsor                       string
+	IssuerEncryptionKey           []byte
+	AuditorEncryptionKey          []byte
+	ConfidentialOutstandingAmount uint64
 
 	// Threading fields. MPTokenIssuance is a threaded type, so these must
 	// survive a parse→serialize round-trip — otherwise a re-serialize during
@@ -46,12 +50,19 @@ type MPTokenIssuanceData struct {
 // MPTokenData holds parsed fields of an MPToken ledger entry.
 // Reference: rippled LedgerFormats.h ltMPTOKEN
 type MPTokenData struct {
-	Account           [20]byte
-	MPTokenIssuanceID [24]byte // Hash192 (24 bytes)
-	OwnerNode         uint64
-	MPTAmount         uint64
-	LockedAmount      *uint64
-	Flags             uint32
+	Account                     [20]byte
+	MPTokenIssuanceID           [24]byte // Hash192 (24 bytes)
+	OwnerNode                   uint64
+	MPTAmount                   uint64
+	LockedAmount                *uint64
+	Flags                       uint32
+	Sponsor                     string
+	ConfidentialBalanceInbox    []byte
+	ConfidentialBalanceSpending []byte
+	ConfidentialBalanceVersion  uint32
+	IssuerEncryptedBalance      []byte
+	AuditorEncryptedBalance     []byte
+	HolderEncryptionKey         []byte
 
 	// Threading fields — see MPTokenIssuanceData. Dropping them on round-trip
 	// makes MPTokenIssuanceSet on a holder token (lock/unlock) emit a spurious
@@ -80,7 +91,8 @@ func ParseMPTokenIssuance(data []byte) (*MPTokenIssuanceData, error) {
 		AssetScale:        uint8(wire.AssetScale),
 		MPTokenMetadata:   strings.ToLower(wire.MPTokenMetadata),
 		Flags:             wire.Flags,
-		MutableFlags:      wire.MutableFlags,
+		ImmutableFlags:    wire.ImmutableFlags,
+		Sponsor:           wire.Sponsor,
 		PreviousTxnLgrSeq: wire.PreviousTxnLgrSeq,
 	}
 	var err error
@@ -117,6 +129,18 @@ func ParseMPTokenIssuance(data []byte) (*MPTokenIssuanceData, error) {
 	if wire.ReferenceHolding != "" {
 		referenceHolding := strings.ToLower(wire.ReferenceHolding)
 		issuance.ReferenceHolding = &referenceHolding
+	}
+	if wire.ConfidentialOutstandingAmount != "" {
+		issuance.ConfidentialOutstandingAmount, err = parseMPTUint64(wire.ConfidentialOutstandingAmount, 10, "ConfidentialOutstandingAmount")
+		if err != nil {
+			return nil, err
+		}
+	}
+	if issuance.IssuerEncryptionKey, err = decodeMPTOptionalHex(wire.IssuerEncryptionKey, "IssuerEncryptionKey"); err != nil {
+		return nil, err
+	}
+	if issuance.AuditorEncryptionKey, err = decodeMPTOptionalHex(wire.AuditorEncryptionKey, "AuditorEncryptionKey"); err != nil {
+		return nil, err
 	}
 	if err := decodeMPTFixedHex(wire.PreviousTxnID, issuance.PreviousTxnID[:], "PreviousTxnID"); err != nil {
 		return nil, err
@@ -162,7 +186,17 @@ func SerializeMPTokenIssuance(issuance *MPTokenIssuanceData) ([]byte, error) {
 		entry.SetReferenceHolding(strings.ToUpper(*issuance.ReferenceHolding))
 	}
 
-	entry.SetMutableFlags(issuance.MutableFlags)
+	entry.SetImmutableFlags(issuance.ImmutableFlags)
+	if issuance.Sponsor != "" {
+		entry.SetSponsor(issuance.Sponsor)
+	}
+	entry.SetConfidentialOutstandingAmount(fmt.Sprintf("%d", issuance.ConfidentialOutstandingAmount))
+	if len(issuance.IssuerEncryptionKey) != 0 {
+		entry.SetIssuerEncryptionKey(strings.ToUpper(hex.EncodeToString(issuance.IssuerEncryptionKey)))
+	}
+	if len(issuance.AuditorEncryptionKey) != 0 {
+		entry.SetAuditorEncryptionKey(strings.ToUpper(hex.EncodeToString(issuance.AuditorEncryptionKey)))
+	}
 
 	var zeroHash [32]byte
 	if issuance.PreviousTxnID != zeroHash {
@@ -188,8 +222,10 @@ func ParseMPToken(data []byte) (*MPTokenData, error) {
 	}
 
 	token := &MPTokenData{
-		Flags:             wire.Flags,
-		PreviousTxnLgrSeq: wire.PreviousTxnLgrSeq,
+		Flags:                      wire.Flags,
+		Sponsor:                    wire.Sponsor,
+		ConfidentialBalanceVersion: wire.ConfidentialBalanceVersion,
+		PreviousTxnLgrSeq:          wire.PreviousTxnLgrSeq,
 	}
 	var err error
 	if wire.Account != "" {
@@ -217,6 +253,21 @@ func ParseMPToken(data []byte) (*MPTokenData, error) {
 	if err != nil {
 		return nil, err
 	}
+	if token.ConfidentialBalanceInbox, err = decodeMPTOptionalHex(wire.ConfidentialBalanceInbox, "ConfidentialBalanceInbox"); err != nil {
+		return nil, err
+	}
+	if token.ConfidentialBalanceSpending, err = decodeMPTOptionalHex(wire.ConfidentialBalanceSpending, "ConfidentialBalanceSpending"); err != nil {
+		return nil, err
+	}
+	if token.IssuerEncryptedBalance, err = decodeMPTOptionalHex(wire.IssuerEncryptedBalance, "IssuerEncryptedBalance"); err != nil {
+		return nil, err
+	}
+	if token.AuditorEncryptedBalance, err = decodeMPTOptionalHex(wire.AuditorEncryptedBalance, "AuditorEncryptedBalance"); err != nil {
+		return nil, err
+	}
+	if token.HolderEncryptionKey, err = decodeMPTOptionalHex(wire.HolderEncryptionKey, "HolderEncryptionKey"); err != nil {
+		return nil, err
+	}
 	if err := decodeMPTFixedHex(wire.PreviousTxnID, token.PreviousTxnID[:], "PreviousTxnID"); err != nil {
 		return nil, err
 	}
@@ -241,6 +292,17 @@ func parseMPTOptionalUint64(value, field string) (*uint64, error) {
 		return nil, err
 	}
 	return &parsed, nil
+}
+
+func decodeMPTOptionalHex(value, field string) ([]byte, error) {
+	if value == "" {
+		return nil, nil
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode %s: %w", field, err)
+	}
+	return decoded, nil
 }
 
 func decodeMPTFixedHex(value string, destination []byte, field string) error {
@@ -271,6 +333,25 @@ func SerializeMPToken(token *MPTokenData) ([]byte, error) {
 	entry.SetMPTokenIssuanceID(strings.ToUpper(hex.EncodeToString(token.MPTokenIssuanceID[:])))
 	entry.SetOwnerNode(fmt.Sprintf("%x", token.OwnerNode))
 	entry.SetMPTAmount(fmt.Sprintf("%d", token.MPTAmount))
+	if token.Sponsor != "" {
+		entry.SetSponsor(token.Sponsor)
+	}
+	entry.SetConfidentialBalanceVersion(token.ConfidentialBalanceVersion)
+	if len(token.ConfidentialBalanceInbox) != 0 {
+		entry.SetConfidentialBalanceInbox(strings.ToUpper(hex.EncodeToString(token.ConfidentialBalanceInbox)))
+	}
+	if len(token.ConfidentialBalanceSpending) != 0 {
+		entry.SetConfidentialBalanceSpending(strings.ToUpper(hex.EncodeToString(token.ConfidentialBalanceSpending)))
+	}
+	if len(token.IssuerEncryptedBalance) != 0 {
+		entry.SetIssuerEncryptedBalance(strings.ToUpper(hex.EncodeToString(token.IssuerEncryptedBalance)))
+	}
+	if len(token.AuditorEncryptedBalance) != 0 {
+		entry.SetAuditorEncryptedBalance(strings.ToUpper(hex.EncodeToString(token.AuditorEncryptedBalance)))
+	}
+	if len(token.HolderEncryptionKey) != 0 {
+		entry.SetHolderEncryptionKey(strings.ToUpper(hex.EncodeToString(token.HolderEncryptionKey)))
+	}
 
 	if token.LockedAmount != nil {
 		entry.SetLockedAmount(fmt.Sprintf("%d", *token.LockedAmount))

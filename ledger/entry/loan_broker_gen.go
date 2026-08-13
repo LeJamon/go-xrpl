@@ -41,6 +41,7 @@ type LoanBroker struct {
 	Flags                uint32
 	PreviousTxnID        string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq    uint32
+	Sponsor              string // AccountID (base58)
 }
 
 // Type returns the concrete ledger-entry type.
@@ -67,6 +68,7 @@ const (
 	loanbrokerBitFlags
 	loanbrokerBitPreviousTxnID
 	loanbrokerBitPreviousTxnLgrSeq
+	loanbrokerBitSponsor
 )
 
 // SetSequence assigns Sequence and updates its serialized presence.
@@ -225,6 +227,13 @@ func (l *LoanBroker) SetPreviousTxnLgrSeq(value uint32) {
 	l.PreviousTxnLgrSeq = value
 	l.dirty = true
 	l.present |= loanbrokerBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (l *LoanBroker) SetSponsor(value string) {
+	l.Sponsor = value
+	l.dirty = true
+	l.present |= loanbrokerBitSponsor
 }
 
 func (l *LoanBroker) validateRequired() error {
@@ -448,6 +457,9 @@ func (l *LoanBroker) decode(data []byte, legacy bool) error {
 			case 2:
 				l.Owner = val
 				l.present |= loanbrokerBitOwner
+			case 27:
+				l.Sponsor = val
+				l.present |= loanbrokerBitSponsor
 			default:
 				return newErrUnknownField("LoanBroker", typeCode, fieldCode)
 			}
@@ -535,6 +547,9 @@ func (l *LoanBroker) emitAll(out map[string]any, skipDefault bool) {
 	if l.present&loanbrokerBitFlags != 0 && !(skipDefault && l.Flags == 0) {
 		out["Flags"] = l.Flags
 	}
+	if l.present&loanbrokerBitSponsor != 0 && !(skipDefault && l.Sponsor == "") {
+		out["Sponsor"] = l.Sponsor
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -572,6 +587,7 @@ func (l *LoanBroker) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "CoverRateMinimum", prv.CoverRateMinimum, l.CoverRateMinimum, prv.present&loanbrokerBitCoverRateMinimum, l.present&loanbrokerBitCoverRateMinimum)
 	emitIfChangedUint32(out, "CoverRateLiquidation", prv.CoverRateLiquidation, l.CoverRateLiquidation, prv.present&loanbrokerBitCoverRateLiquidation, l.present&loanbrokerBitCoverRateLiquidation)
 	emitIfChangedUint32(out, "Flags", prv.Flags, l.Flags, prv.present&loanbrokerBitFlags, l.present&loanbrokerBitFlags)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, l.Sponsor, prv.present&loanbrokerBitSponsor, l.present&loanbrokerBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -627,6 +643,9 @@ func (l *LoanBroker) EmitChangeOrigFields(out map[string]any) {
 	}
 	if l.present&loanbrokerBitFlags != 0 {
 		out["Flags"] = l.Flags
+	}
+	if l.present&loanbrokerBitSponsor != 0 {
+		out["Sponsor"] = l.Sponsor
 	}
 }
 
@@ -722,6 +741,9 @@ func (l *LoanBroker) ToMap() map[string]any {
 	}
 	if l.present&loanbrokerBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = l.PreviousTxnLgrSeq
+	}
+	if l.present&loanbrokerBitSponsor != 0 {
+		out["Sponsor"] = l.Sponsor
 	}
 	return out
 }

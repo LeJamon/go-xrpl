@@ -12,13 +12,31 @@ import (
 
 var taggedStyleField = regexp.MustCompile(`^\s*\{\s*sf(\w+)\s*,\s*(?:soe|Soe)(REQUIRED|OPTIONAL|DEFAULT|Required|Optional|Default)\s*\}`)
 
+func TestSponsorCommonFieldAppliedToEveryEntry(t *testing.T) {
+	for _, entry := range Specs {
+		count := 0
+		for _, field := range entry.AllFields() {
+			if field.Name != "Sponsor" {
+				continue
+			}
+			count++
+			if field.Style != StyleOptional {
+				t.Errorf("%s.Sponsor style = %d, want optional", entry.Name, field.Style)
+			}
+		}
+		if count != 1 {
+			t.Errorf("%s has %d Sponsor fields, want 1", entry.Name, count)
+		}
+	}
+}
+
 func TestSerializationStylesMatchRippledTag(t *testing.T) {
 	macroPath := requireRippledMacro(t)
 	rippledDir := filepath.Clean(filepath.Join(filepath.Dir(macroPath), "..", "..", "..", ".."))
 	macro := readRippledFile(t, rippledDir, "include/xrpl/protocol/detail/ledger_entries.macro")
 	tagged := parseTaggedStyles(t, macro)
 	if len(tagged) != len(Specs) {
-		t.Fatalf("rippled v3.2.0 has %d ledger templates, schema has %d", len(tagged), len(Specs))
+		t.Fatalf("rippled v3.3.0 has %d ledger templates, schema has %d", len(tagged), len(Specs))
 	}
 
 	byEntry := make(map[string]Entry, len(Specs))
@@ -28,7 +46,7 @@ func TestSerializationStylesMatchRippledTag(t *testing.T) {
 	for entryName, fields := range tagged {
 		entry, ok := byEntry[entryName]
 		if !ok {
-			t.Errorf("rippled v3.2.0 template %s is missing from schema", entryName)
+			t.Errorf("rippled v3.3.0 template %s is missing from schema", entryName)
 			continue
 		}
 		specFields := make(map[string]Field, len(entry.Fields))
@@ -54,7 +72,7 @@ func TestSerializationStylesMatchRippledTag(t *testing.T) {
 				continue
 			}
 			if _, ok := fields[field.Name]; !ok {
-				t.Errorf("schema field %s.%s is absent from rippled v3.2.0", entryName, field.Name)
+				t.Errorf("schema field %s.%s is absent from rippled v3.3.0", entryName, field.Name)
 			}
 		}
 	}
@@ -86,7 +104,7 @@ func readRippledFile(t *testing.T, repo, path string) []byte {
 	t.Helper()
 	out, err := os.ReadFile(filepath.Join(repo, path))
 	if err != nil {
-		t.Fatalf("read rippled v3.2.0 %s: %v", path, err)
+		t.Fatalf("read rippled v3.3.0 %s: %v", path, err)
 	}
 	return out
 }
@@ -106,6 +124,7 @@ func parseTaggedStyles(t *testing.T, data []byte) map[string]map[string]Style {
 			continue
 		}
 		if match := taggedStyleField.FindStringSubmatch(line); match != nil {
+			fieldName := match[1]
 			var style Style
 			switch strings.ToLower(match[2]) {
 			case "required":
@@ -117,7 +136,7 @@ func parseTaggedStyles(t *testing.T, data []byte) map[string]map[string]Style {
 			default:
 				t.Fatalf("unknown style %q", match[2])
 			}
-			out[entryName][match[1]] = style
+			out[entryName][fieldName] = style
 			continue
 		}
 		if strings.Contains(line, "}))") {

@@ -49,30 +49,33 @@ var outOfScopeXChain = map[string]bool{
 // internal/tx so binarycodec accepts them.
 var coverageFixtures = map[string]map[string]any{
 	"AccountRoot": {
-		"Account":              fxAccount,
-		"Balance":              fxXRP,
-		"Sequence":             uint32(1),
-		"OwnerCount":           uint32(2),
-		"Flags":                uint32(0),
-		"RegularKey":           fxIssuer,
-		"Domain":               fxBlob,
-		"EmailHash":            fxHash128,
-		"MessageKey":           fxBlob,
-		"TransferRate":         uint32(1000000005),
-		"TickSize":             uint32(5),
-		"NFTokenMinter":        fxIssuer,
-		"MintedNFTokens":       uint32(3),
-		"BurnedNFTokens":       uint32(1),
-		"FirstNFTokenSequence": uint32(7),
-		"AccountTxnID":         fxHash256,
-		"WalletLocator":        fxHashB,
-		"TicketCount":          uint32(2),
-		"AMMID":                fxHash256,
-		"VaultID":              fxHashB,
-		"LoanBrokerID":         fxHash256,
-		"WalletSize":           uint32(4),
-		"PreviousTxnID":        fxHash256,
-		"PreviousTxnLgrSeq":    uint32(9),
+		"Account":                fxAccount,
+		"Balance":                fxXRP,
+		"Sequence":               uint32(1),
+		"OwnerCount":             uint32(2),
+		"SponsoredOwnerCount":    uint32(3),
+		"SponsoringOwnerCount":   uint32(4),
+		"SponsoringAccountCount": uint32(5),
+		"Flags":                  uint32(0),
+		"RegularKey":             fxIssuer,
+		"Domain":                 fxBlob,
+		"EmailHash":              fxHash128,
+		"MessageKey":             fxBlob,
+		"TransferRate":           uint32(1000000005),
+		"TickSize":               uint32(5),
+		"NFTokenMinter":          fxIssuer,
+		"MintedNFTokens":         uint32(3),
+		"BurnedNFTokens":         uint32(1),
+		"FirstNFTokenSequence":   uint32(7),
+		"AccountTxnID":           fxHash256,
+		"WalletLocator":          fxHashB,
+		"TicketCount":            uint32(2),
+		"AMMID":                  fxHash256,
+		"VaultID":                fxHashB,
+		"LoanBrokerID":           fxHash256,
+		"WalletSize":             uint32(4),
+		"PreviousTxnID":          fxHash256,
+		"PreviousTxnLgrSeq":      uint32(9),
 	},
 	"Offer": {
 		"Account":           fxAccount,
@@ -119,6 +122,8 @@ var coverageFixtures = map[string]map[string]any{
 		"LowQualityOut":     uint32(2),
 		"HighQualityIn":     uint32(3),
 		"HighQualityOut":    uint32(4),
+		"HighSponsor":       fxAccount,
+		"LowSponsor":        fxIssuer,
 		"PreviousTxnID":     fxHash256,
 		"PreviousTxnLgrSeq": uint32(9),
 	},
@@ -310,31 +315,40 @@ var coverageFixtures = map[string]map[string]any{
 		"PreviousTxnLgrSeq": uint32(9),
 	},
 	"MPTokenIssuance": {
-		"Issuer":            fxAccount,
-		"Sequence":          uint32(1),
-		"TransferFee":       uint32(500),
-		"OwnerNode":         "0",
-		"AssetScale":        uint32(2),
-		"MaximumAmount":     "1000000000",
-		"OutstandingAmount": "500000000",
-		"LockedAmount":      "0",
-		"MPTokenMetadata":   fxBlob,
-		"DomainID":          fxHash256,
-		"MutableFlags":      uint32(0x00030000),
-		"ReferenceHolding":  fxHash256,
-		"Flags":             uint32(0),
-		"PreviousTxnID":     fxHash256,
-		"PreviousTxnLgrSeq": uint32(9),
+		"Issuer":                        fxAccount,
+		"Sequence":                      uint32(1),
+		"TransferFee":                   uint32(500),
+		"OwnerNode":                     "0",
+		"AssetScale":                    uint32(2),
+		"MaximumAmount":                 "1000000000",
+		"OutstandingAmount":             "500000000",
+		"LockedAmount":                  "0",
+		"MPTokenMetadata":               fxBlob,
+		"DomainID":                      fxHash256,
+		"ImmutableFlags":                uint32(0x00030000),
+		"ReferenceHolding":              fxHash256,
+		"IssuerEncryptionKey":           fxBlob,
+		"AuditorEncryptionKey":          fxBlob,
+		"ConfidentialOutstandingAmount": "1",
+		"Flags":                         uint32(0),
+		"PreviousTxnID":                 fxHash256,
+		"PreviousTxnLgrSeq":             uint32(9),
 	},
 	"MPToken": {
-		"Account":           fxAccount,
-		"MPTokenIssuanceID": fxHash192,
-		"MPTAmount":         "1000",
-		"LockedAmount":      "0",
-		"OwnerNode":         "0",
-		"Flags":             uint32(0),
-		"PreviousTxnID":     fxHash256,
-		"PreviousTxnLgrSeq": uint32(9),
+		"Account":                     fxAccount,
+		"MPTokenIssuanceID":           fxHash192,
+		"MPTAmount":                   "1000",
+		"LockedAmount":                "0",
+		"OwnerNode":                   "0",
+		"Flags":                       uint32(0),
+		"PreviousTxnID":               fxHash256,
+		"PreviousTxnLgrSeq":           uint32(9),
+		"ConfidentialBalanceInbox":    fxBlob,
+		"ConfidentialBalanceSpending": fxBlob,
+		"ConfidentialBalanceVersion":  uint32(1),
+		"IssuerEncryptedBalance":      fxBlob,
+		"AuditorEncryptedBalance":     fxBlob,
+		"HolderEncryptionKey":         fxBlob,
 	},
 	"Oracle": {
 		"Owner":            fxAccount,
@@ -450,6 +464,19 @@ var coverageFixtures = map[string]map[string]any{
 		"PreviousTxnID":            fxHash256,
 		"PreviousTxnLgrSeq":        uint32(9),
 	},
+	"Sponsorship": {
+		"PreviousTxnID":       fxHash256,
+		"PreviousTxnLgrSeq":   uint32(9),
+		"Owner":               fxAccount,
+		"Sponsee":             fxIssuer,
+		"FeeAmount":           "1000",
+		"MaxFee":              "100",
+		"RemainingOwnerCount": uint32(2),
+		"OwnerNode":           "1",
+		"SponseeNode":         "2",
+		"Flags":               uint32(0x00030000),
+		"Sponsor":             fxAccount,
+	},
 }
 
 // encodeIface is the typed-Encode contract every generated entry satisfies.
@@ -471,6 +498,9 @@ func TestGeneratedSLE_RoundTripAndAccessors(t *testing.T) {
 			input := make(map[string]any, len(fixture)+1)
 			for k, v := range fixture {
 				input[k] = v
+			}
+			if _, ok := input["Sponsor"]; !ok {
+				input["Sponsor"] = fxAccount
 			}
 			input["LedgerEntryType"] = name
 			canonical, err := binarycodec.EncodeBytes(input)
@@ -610,7 +640,7 @@ func specFieldNames(name string) []string {
 			continue
 		}
 		var out []string
-		for _, f := range e.Fields {
+		for _, f := range e.AllFields() {
 			if f.DecodeOnly {
 				// DecodeOnly fields are never carried on the struct or echoed
 				// by ToMap, so exclude them from the declared-field set.

@@ -122,16 +122,16 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 		flags := p.GetFlags()
 		partialPayment := (flags & PaymentFlagPartialPayment) != 0
 
-		// You cannot fund an account with a partial payment on an open ledger.
-		// Reference: rippled Payment.cpp:308-318
-		if ctx.Config.OpenLedger && partialPayment {
-			return ter.TelNO_DST_PARTIAL
+		if partialPayment {
+			if result := partialNewDestinationResult(ctx.Config); result != ter.TesSUCCESS {
+				return result
+			}
 		}
 
 		// Insufficient payment to meet the account reserve (accountReserve(0)).
 		// Reference: rippled Payment.cpp:319-331
 		amountDrops := uint64(p.Amount.Drops())
-		if amountDrops < ctx.AccountReserve(0) {
+		if amountDrops < ctx.Config.AccountReserve(0) {
 			return ter.TecNO_DST_INSUF_XRP
 		}
 

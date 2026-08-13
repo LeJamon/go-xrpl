@@ -103,7 +103,9 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 		if canonicalErr != nil {
 			return nil, fmt.Errorf("decode canonical tx_blob: %w", canonicalErr)
 		}
-		transaction.SetRawBytes(rawBlob)
+		if bindErr := tx.BindRawBytes(transaction, rawBlob); bindErr != nil {
+			return malformedSubmitResult(), nil
+		}
 	} else {
 		var parseErr error
 		transaction, parseErr = tx.ParseJSON(txJSON)

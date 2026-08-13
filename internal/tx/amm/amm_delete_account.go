@@ -93,14 +93,16 @@ func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *state.Rip
 
 	nonAMMAccountID := lowAccountID
 	nonAMMReserveFlag := state.LsfLowReserve
+	nonAMMSponsor := rs.LowSponsor
 	if ammLow {
 		nonAMMAccountID = highAccountID
 		nonAMMReserveFlag = state.LsfHighReserve
+		nonAMMSponsor = rs.HighSponsor
 	}
 	if rs.Flags&nonAMMReserveFlag == 0 {
 		return ter.TecINTERNAL
 	}
-	if err := tx.AdjustOwnerCount(view, nonAMMAccountID, -1); err != nil {
+	if err := tx.DecreaseOwnerCountOnView(view, nonAMMAccountID, nonAMMSponsor, 1); err != nil {
 		return ter.TecINTERNAL
 	}
 

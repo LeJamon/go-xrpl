@@ -53,6 +53,10 @@ type issuerSelfDebitHookMPT interface {
 }
 
 type ownerCountHook interface {
+	AdjustOwnerCounts(account [20]byte, current, next tx.OwnerCounts)
+}
+
+type legacyOwnerCountHook interface {
 	AdjustOwnerCount(account [20]byte, current, next uint32)
 }
 
@@ -192,6 +196,197 @@ func IsAssetFrozen(view state.LedgerView, asset tx.Asset, account [20]byte) bool
 	return isIOUFrozen(view, account, asset)
 }
 
+// CheckDepositFreeze applies the freeze rules for sending an asset from a
+// regular account into a pseudo-account. A regular freeze on the source is
+// bypassed when the source is the issuer; pseudo-accounts must always be able
+// to withdraw what they receive, so their individual freeze is checked too.
+func CheckDepositFreeze(view state.LedgerView, srcAcct, pseudoAcct [20]byte, asset tx.Asset) ter.Result {
+	if asset.IsNative() {
+		return ter.TesSUCCESS
+	}
+
+	if result := checkGlobalFrozen(view, asset); result != ter.TesSUCCESS {
+		return result
+	}
+	issuer, result := assetIssuer(asset)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	if srcAcct != issuer {
+		if result := checkIndividualFrozen(view, srcAcct, asset); result != ter.TesSUCCESS {
+			return result
+		}
+	}
+	if result := checkIndividualFrozen(view, pseudoAcct, asset); result != ter.TesSUCCESS {
+		return result
+	}
+	return checkPseudoAccountBackingFreeze(view, pseudoAcct, asset)
+}
+
+// CheckWithdrawFreeze applies the freeze rules for sending an asset from a
+// pseudo-account through the submitting account to the destination. Issuer
+// redemption is always allowed; a regular freeze on a self-withdrawing
+// submitter is allowed, while a deep freeze still prevents the withdrawal.
+func CheckWithdrawFreeze(view state.LedgerView, pseudoAcct, submitterAcct, dstAcct [20]byte, asset tx.Asset) ter.Result {
+	if asset.IsNative() {
+		return ter.TesSUCCESS
+	}
+
+	issuer, result := assetIssuer(asset)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	if dstAcct == issuer {
+		return ter.TesSUCCESS
+	}
+	if result := checkGlobalFrozen(view, asset); result != ter.TesSUCCESS {
+		return result
+	}
+	if result := checkIndividualFrozen(view, pseudoAcct, asset); result != ter.TesSUCCESS {
+		return result
+	}
+	if submitterAcct != dstAcct {
+		if result := checkIndividualFrozen(view, submitterAcct, asset); result != ter.TesSUCCESS {
+			return result
+		}
+	}
+	if result := checkDeepFrozen(view, dstAcct, asset); result != ter.TesSUCCESS {
+		return result
+	}
+	return checkPseudoAccountBackingFreeze(view, pseudoAcct, asset)
+}
+
+func checkPseudoAccountBackingFreeze(view state.LedgerView, pseudoAcct [20]byte, asset tx.Asset) ter.Result {
+	if !asset.IsMPT() {
+		return ter.TesSUCCESS
+	}
+	id, err := DecodeID(asset.MPTIssuanceID)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if isVaultPseudoAccountFrozen(view, id, pseudoAcct, 0) {
+		return ter.TecINTERNAL
+	}
+	return ter.TesSUCCESS
+}
+
+func assetIssuer(asset tx.Asset) ([20]byte, ter.Result) {
+	if asset.IsMPT() {
+		id, err := DecodeID(asset.MPTIssuanceID)
+		if err != nil {
+			return [20]byte{}, ter.TefINTERNAL
+		}
+		return Issuer(id), ter.TesSUCCESS
+	}
+	issuer, err := state.DecodeAccountID(asset.Issuer)
+	if err != nil {
+		return [20]byte{}, ter.TefINTERNAL
+	}
+	return issuer, ter.TesSUCCESS
+}
+
+func checkGlobalFrozen(view state.LedgerView, asset tx.Asset) ter.Result {
+	if asset.IsMPT() {
+		id, err := DecodeID(asset.MPTIssuanceID)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if IsGlobalFrozen(view, id) {
+			return ter.TecLOCKED
+		}
+		return ter.TesSUCCESS
+	}
+	if isIOUGlobalFrozen(view, asset.Issuer) {
+		return ter.TecFROZEN
+	}
+	return ter.TesSUCCESS
+}
+
+func checkIndividualFrozen(view state.LedgerView, account [20]byte, asset tx.Asset) ter.Result {
+	if asset.IsMPT() {
+		id, err := DecodeID(asset.MPTIssuanceID)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if IsIndividualFrozen(view, id, account) {
+			return ter.TecLOCKED
+		}
+		return ter.TesSUCCESS
+	}
+	if isIOUIndividualFrozen(view, account, asset) {
+		return ter.TecFROZEN
+	}
+	return ter.TesSUCCESS
+}
+
+func checkDeepFrozen(view state.LedgerView, account [20]byte, asset tx.Asset) ter.Result {
+	if asset.IsMPT() {
+		id, err := DecodeID(asset.MPTIssuanceID)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if IsFrozen(view, id, account) {
+			return ter.TecLOCKED
+		}
+		return ter.TesSUCCESS
+	}
+	issuer, err := state.DecodeAccountID(asset.Issuer)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if isIOUDeepFrozen(view, account, issuer, asset.Currency) {
+		return ter.TecFROZEN
+	}
+	return ter.TesSUCCESS
+}
+
+func isIOUGlobalFrozen(view state.LedgerView, issuerAddress string) bool {
+	issuer, err := state.DecodeAccountID(issuerAddress)
+	if err != nil {
+		return false
+	}
+	raw, err := view.Read(keylet.Account(issuer))
+	if err != nil || raw == nil {
+		return false
+	}
+	account, err := state.ParseAccountRoot(raw)
+	return err == nil && account.Flags&state.LsfGlobalFreeze != 0
+}
+
+func isIOUIndividualFrozen(view state.LedgerView, account [20]byte, asset tx.Asset) bool {
+	if asset.IsNative() || asset.Currency == "XRP" {
+		return false
+	}
+	issuer, err := state.DecodeAccountID(asset.Issuer)
+	if err != nil || account == issuer {
+		return false
+	}
+	raw, err := view.Read(keylet.Line(account, issuer, asset.Currency))
+	if err != nil || raw == nil {
+		return false
+	}
+	line, err := state.ParseRippleState(raw)
+	if err != nil {
+		return false
+	}
+	if state.CompareAccountIDs(issuer, account) > 0 {
+		return line.Flags&state.LsfHighFreeze != 0
+	}
+	return line.Flags&state.LsfLowFreeze != 0
+}
+
+func isIOUDeepFrozen(view state.LedgerView, account, issuer [20]byte, currency string) bool {
+	if currency == "" || currency == "XRP" || account == issuer {
+		return false
+	}
+	raw, err := view.Read(keylet.Line(account, issuer, currency))
+	if err != nil || raw == nil {
+		return false
+	}
+	line, err := state.ParseRippleState(raw)
+	return err == nil && line.Flags&(state.LsfLowDeepFreeze|state.LsfHighDeepFreeze) != 0
+}
+
 func isAnyAssetFrozen(view state.LedgerView, asset tx.Asset, accounts [][20]byte, depth uint8) bool {
 	if asset.IsMPT() {
 		id, err := DecodeID(asset.MPTIssuanceID)
@@ -253,6 +448,17 @@ func requireAuthAt(view state.LedgerView, id [24]byte, account [20]byte, authTyp
 	if issuance.Issuer == account {
 		return ter.TesSUCCESS
 	}
+	rules := view.Rules()
+	fix330 := rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_3_0)
+	if fix330 {
+		exempt, result := pseudoAccountAuthExempt(view, account, rules)
+		if result != ter.TesSUCCESS {
+			return result
+		}
+		if exempt {
+			return ter.TesSUCCESS
+		}
+	}
 	if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureSingleAssetVault) {
 		if depth >= maxAssetCheckDepth {
 			return ter.TecINTERNAL
@@ -301,25 +507,35 @@ func requireAuthAt(view state.LedgerView, id [24]byte, account [20]byte, authTyp
 		return ter.TesSUCCESS
 	}
 
-	rules := view.Rules()
-	if rules == nil || (!rules.Enabled(amendment.FeatureSingleAssetVault) && !rules.Enabled(amendment.FeatureMPTokensV2)) {
+	if fix330 {
 		return ter.TecNO_AUTH
 	}
-	accountRaw, err := view.Read(keylet.Account(account))
-	if err != nil {
-		return ter.TefINTERNAL
+	exempt, result := pseudoAccountAuthExempt(view, account, rules)
+	if result != ter.TesSUCCESS {
+		return result
 	}
-	if accountRaw == nil {
-		return ter.TecNO_AUTH
-	}
-	accountRoot, err := state.ParseAccountRoot(accountRaw)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if accountRoot.IsPseudoAccount() {
+	if exempt {
 		return ter.TesSUCCESS
 	}
 	return ter.TecNO_AUTH
+}
+
+func pseudoAccountAuthExempt(view state.LedgerView, account [20]byte, rules *amendment.Rules) (bool, ter.Result) {
+	if rules == nil || (!rules.Enabled(amendment.FeatureSingleAssetVault) && !rules.Enabled(amendment.FeatureMPTokensV2)) {
+		return false, ter.TesSUCCESS
+	}
+	accountRaw, err := view.Read(keylet.Account(account))
+	if err != nil {
+		return false, ter.TefINTERNAL
+	}
+	if accountRaw == nil {
+		return false, ter.TesSUCCESS
+	}
+	accountRoot, err := state.ParseAccountRoot(accountRaw)
+	if err != nil {
+		return false, ter.TefINTERNAL
+	}
+	return accountRoot.IsPseudoAccount(), ter.TesSUCCESS
 }
 
 func RequireAssetAuthAt(view state.LedgerView, asset tx.Asset, account [20]byte, authType AuthType, parentCloseTime uint32) ter.Result {
@@ -759,15 +975,55 @@ func EnsureHolding(view state.LedgerView, id [24]byte, holder [20]byte, flags ui
 		return ter.TefINTERNAL
 	}
 	if adjustOwnerCount {
-		current := account.OwnerCount
+		current := tx.OwnerCounts{
+			Owner: account.OwnerCount, Sponsored: account.SponsoredOwnerCount,
+			Sponsoring: account.SponsoringOwnerCount,
+		}
 		account.OwnerCount++
 		if hook, ok := view.(ownerCountHook); ok {
-			hook.AdjustOwnerCount(holder, current, account.OwnerCount)
+			hook.AdjustOwnerCounts(holder, current, tx.OwnerCounts{
+				Owner: account.OwnerCount, Sponsored: account.SponsoredOwnerCount,
+				Sponsoring: account.SponsoringOwnerCount,
+			})
+		} else if hook, ok := view.(legacyOwnerCountHook); ok {
+			hook.AdjustOwnerCount(holder, current.Owner, account.OwnerCount)
 		}
 		data, err = state.SerializeAccountRoot(account)
 		if err != nil || view.Update(accountKey, data) != nil {
 			return ter.TefINTERNAL
 		}
+	}
+	return ter.TesSUCCESS
+}
+
+// EnsureHoldingForContext creates a holding owned by the transaction source
+// and attributes its reserve to the effective transaction sponsor.
+func EnsureHoldingForContext(ctx *tx.ApplyContext, id [24]byte, holder [20]byte, flags uint32) ter.Result {
+	if ctx == nil || holder != ctx.AccountID {
+		return ter.TefINTERNAL
+	}
+	tokenKey := keylet.MPTokenByID(id, holder)
+	exists, err := ctx.View.Exists(tokenKey)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if exists || holder == Issuer(id) {
+		return ter.TesSUCCESS
+	}
+	if result := EnsureHolding(ctx.View, id, holder, flags, false); result != ter.TesSUCCESS {
+		return result
+	}
+	sponsorAddress, result := tx.IncreaseOwnerCount(ctx, holder, ctx.Account, 1)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	raw, err := ctx.View.Read(tokenKey)
+	if err != nil || raw == nil {
+		return ter.TefINTERNAL
+	}
+	raw, err = tx.SetLedgerEntrySponsor(raw, "Sponsor", sponsorAddress)
+	if err != nil || ctx.View.Update(tokenKey, raw) != nil {
+		return ter.TefINTERNAL
 	}
 	return ter.TesSUCCESS
 }
@@ -808,24 +1064,7 @@ func RemoveHolding(view state.LedgerView, id [24]byte, holder [20]byte, adjustOw
 		return ter.TesSUCCESS
 	}
 
-	accountKey := keylet.Account(holder)
-	accountRaw, err := view.Read(accountKey)
-	if err != nil || accountRaw == nil {
-		return ter.TefINTERNAL
-	}
-	account, err := state.ParseAccountRoot(accountRaw)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	current := account.OwnerCount
-	if account.OwnerCount > 0 {
-		account.OwnerCount--
-	}
-	if hook, ok := view.(ownerCountHook); ok {
-		hook.AdjustOwnerCount(holder, current, account.OwnerCount)
-	}
-	data, err := state.SerializeAccountRoot(account)
-	if err != nil || view.Update(accountKey, data) != nil {
+	if err := tx.DecreaseOwnerCountOnView(view, holder, token.Sponsor, 1); err != nil {
 		return ter.TefINTERNAL
 	}
 	return ter.TesSUCCESS

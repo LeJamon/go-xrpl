@@ -654,6 +654,94 @@ func TestWithdraw(t *testing.T) {
 	})
 }
 
+func TestWithdrawExactPriceZeroDenominator(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		cleanup bool
+		want    string
+	}{
+		{name: "CleanupEnabled", cleanup: true, want: amm.TecAMM_FAILED},
+		{name: "CleanupDisabled", cleanup: false, want: "tefEXCEPTION"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env, _ := setupGBPEURPoolAliceOnly(t, 100, 100, 1000, true)
+			if !tc.cleanup {
+				env.DisableFeature("fixCleanup3_3_0")
+				env.Close()
+			}
+
+			beforeGBP, beforeEUR, beforeLP := env.AMMBalances(env.GBP, env.EUR)
+			if beforeLP.Value() != "100" {
+				t.Fatalf("unexpected initial LP balance: %s", beforeLP.Value())
+			}
+
+			// The creator's auction-slot discount changes the 1% pool fee to 0.1%.
+			// With a 100/100 pool and 100 LP tokens, EPrice=0.001 makes
+			// T*f-A*E exactly zero in singleWithdrawEPrice.
+			withdrawTx := amm.AMMWithdraw(env.Alice, env.GBP, env.EUR).
+				Amount(amm.IOUAmount(env.GW, "GBP", 0)).
+				EPrice(amm.LPTokenAmount(env, env.GBP, env.EUR, 0.001)).
+				LimitLPToken().
+				Build()
+			result := env.Submit(withdrawTx)
+			amm.ExpectTER(t, result, tc.want)
+
+			afterGBP, afterEUR, afterLP := env.AMMBalances(env.GBP, env.EUR)
+			if beforeGBP.Compare(afterGBP) != 0 || beforeEUR.Compare(afterEUR) != 0 || beforeLP.Compare(afterLP) != 0 {
+				t.Fatalf("failed withdrawal changed AMM state: before=(%s,%s,%s), after=(%s,%s,%s)",
+					beforeGBP.Value(), beforeEUR.Value(), beforeLP.Value(),
+					afterGBP.Value(), afterEUR.Value(), afterLP.Value())
+			}
+		})
+	}
+}
+
+func TestWithdrawPrecisionLossAmendmentMatrix(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		fixAMMv13  bool
+		cleanup330 bool
+		want       string
+	}{
+		{name: "AMMv13Disabled", fixAMMv13: false, cleanup330: true, want: amm.TecAMM_BALANCE},
+		{name: "CleanupDisabled", fixAMMv13: true, cleanup330: false, want: "tecINVARIANT_FAILED"},
+		{name: "BothEnabled", fixAMMv13: true, cleanup330: true, want: "tecPRECISION_LOSS"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := setupAMM(t)
+			env.DisableFeature("SingleAssetVault")
+			env.DisableFeature("LendingProtocol")
+			if !tc.fixAMMv13 {
+				env.DisableFeature("fixAMMv1_3")
+			}
+			if !tc.cleanup330 {
+				env.DisableFeature("fixCleanup3_3_0")
+			}
+			env.Close()
+
+			ammAccount := env.ReadAMMAccount(amm.XRP(), env.USD)
+			beforeXRP := env.AMMPoolXRP(ammAccount)
+			beforeUSD := env.AMMPoolIOUPrecise(ammAccount, env.GW, "USD")
+			beforeLP := env.ReadAMMData(amm.XRP(), env.USD).LPTokenBalance
+			amount := tx.NewIssuedAmount(9_999_999_999_999_999, -12, "USD", env.GW.Address)
+			result := env.Submit(amm.AMMWithdraw(env.Alice, amm.XRP(), env.USD).
+				Amount(amount).
+				SingleAsset().
+				Build())
+			amm.ExpectTER(t, result, tc.want)
+
+			afterXRP := env.AMMPoolXRP(ammAccount)
+			afterUSD := env.AMMPoolIOUPrecise(ammAccount, env.GW, "USD")
+			afterLP := env.ReadAMMData(amm.XRP(), env.USD).LPTokenBalance
+			if beforeXRP != afterXRP || beforeUSD.Compare(afterUSD) != 0 || beforeLP.Compare(afterLP) != 0 {
+				t.Fatalf("failed withdrawal changed AMM state: before=(%d,%s,%s), after=(%d,%s,%s)",
+					beforeXRP, beforeUSD.Value(), beforeLP.Value(),
+					afterXRP, afterUSD.Value(), afterLP.Value())
+			}
+		})
+	}
+}
+
 // TestFixReserveCheckOnWithdrawal tests that the fixAMMv1_2 amendment properly
 // enforces reserve checks on AMM withdrawals.
 // Reference: rippled AMM_test.cpp testFixReserveCheckOnWithdrawal (line 7433)

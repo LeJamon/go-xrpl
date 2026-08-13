@@ -40,6 +40,7 @@ type DirectoryNode struct {
 	DomainID          string // Hash256 (uppercase hex)
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	Sponsor           string // AccountID (base58)
 }
 
 // Type returns the concrete ledger-entry type.
@@ -65,6 +66,7 @@ const (
 	directorynodeBitDomainID
 	directorynodeBitPreviousTxnID
 	directorynodeBitPreviousTxnLgrSeq
+	directorynodeBitSponsor
 )
 
 // SetFlags assigns Flags and updates its serialized presence.
@@ -184,6 +186,13 @@ func (d *DirectoryNode) SetPreviousTxnLgrSeq(value uint32) {
 	d.PreviousTxnLgrSeq = value
 	d.dirty = true
 	d.present |= directorynodeBitPreviousTxnLgrSeq
+}
+
+// SetSponsor assigns Sponsor and updates its serialized presence.
+func (d *DirectoryNode) SetSponsor(value string) {
+	d.Sponsor = value
+	d.dirty = true
+	d.present |= directorynodeBitSponsor
 }
 
 func (d *DirectoryNode) validateRequired() error {
@@ -327,6 +336,9 @@ func (d *DirectoryNode) decode(data []byte, legacy bool) error {
 			case 2:
 				d.Owner = val
 				d.present |= directorynodeBitOwner
+			case 27:
+				d.Sponsor = val
+				d.present |= directorynodeBitSponsor
 			default:
 				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
@@ -435,6 +447,9 @@ func (d *DirectoryNode) emitAll(out map[string]any, skipDefault bool) {
 	if d.present&directorynodeBitDomainID != 0 && !(skipDefault && isZeroHexString(d.DomainID)) {
 		out["DomainID"] = d.DomainID
 	}
+	if d.present&directorynodeBitSponsor != 0 && !(skipDefault && d.Sponsor == "") {
+		out["Sponsor"] = d.Sponsor
+	}
 	if d.present&directorynodeBitRootIndex != 0 && !(skipDefault && isZeroHexString(d.RootIndex)) {
 		out["RootIndex"] = d.RootIndex
 	}
@@ -472,6 +487,7 @@ func (d *DirectoryNode) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "ExchangeRate", prv.ExchangeRate, d.ExchangeRate, prv.present&directorynodeBitExchangeRate, d.present&directorynodeBitExchangeRate)
 	emitIfChangedString(out, "NFTokenID", prv.NFTokenID, d.NFTokenID, prv.present&directorynodeBitNFTokenID, d.present&directorynodeBitNFTokenID)
 	emitIfChangedString(out, "DomainID", prv.DomainID, d.DomainID, prv.present&directorynodeBitDomainID, d.present&directorynodeBitDomainID)
+	emitIfChangedString(out, "Sponsor", prv.Sponsor, d.Sponsor, prv.present&directorynodeBitSponsor, d.present&directorynodeBitSponsor)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -518,6 +534,9 @@ func (d *DirectoryNode) EmitChangeOrigFields(out map[string]any) {
 	}
 	if d.present&directorynodeBitDomainID != 0 {
 		out["DomainID"] = d.DomainID
+	}
+	if d.present&directorynodeBitSponsor != 0 {
+		out["Sponsor"] = d.Sponsor
 	}
 }
 
@@ -610,6 +629,9 @@ func (d *DirectoryNode) ToMap() map[string]any {
 	}
 	if d.present&directorynodeBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = d.PreviousTxnLgrSeq
+	}
+	if d.present&directorynodeBitSponsor != 0 {
+		out["Sponsor"] = d.Sponsor
 	}
 	return out
 }

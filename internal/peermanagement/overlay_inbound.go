@@ -267,6 +267,7 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 	peer.SetManifestMessages(o.manifestMessages)
 	peer.SetInboundReadBudget(o.inboundReadBudget)
 	peer.SetManifestSpoolDir(o.manifestSpoolDir)
+	peer.SetManifestPayloadLimit(o.cfg.MaxManifestPayload)
 	if !o.reserveInboundIP(endpoint.Host) {
 		slog.Info("Inbound rejected: IP connection limit reached",
 			"t", "Overlay", "remote", remoteAddr)

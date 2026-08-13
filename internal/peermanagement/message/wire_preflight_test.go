@@ -44,7 +44,6 @@ func TestPreflightCollectionLimitsInclusive(t *testing.T) {
 		{name: "ledger data", msgType: TypeLedgerData, field: 4, limit: maxLedgerDataNodes, reason: WireLimitLedgerData},
 		{name: "endpoints", msgType: TypeEndpoints, field: 3, limit: maxEndpoints, reason: WireLimitEndpoints},
 		{name: "validator blobs", msgType: TypeValidatorListCollection, field: 3, limit: maxValidatorBlobs, reason: WireLimitValidatorBlobs},
-		{name: "manifests", msgType: TypeManifests, field: 1, limit: maxManifests, reason: WireLimitManifests},
 		{name: "cluster nodes", msgType: TypeCluster, field: 1, limit: maxClusterNodes, reason: WireLimitClusterNodes},
 		{name: "load sources", msgType: TypeCluster, field: 2, limit: maxLoadSources, reason: WireLimitLoadSources},
 	}
@@ -243,9 +242,6 @@ func TestEncodeAppliesWireCollectionPolicy(t *testing.T) {
 	}
 	_, err = Encode(&Transactions{Transactions: transactions})
 	requireWireLimit(t, err, WireLimitTransactions, maxTransactions, maxTransactions+1)
-
-	_, err = Encode(&Manifests{List: make([]Manifest, maxManifests+1)})
-	requireWireLimit(t, err, WireLimitManifests, maxManifests, maxManifests+1)
 }
 
 func TestMaximumAcceptedCollectionStructuralMemoryEnvelope(t *testing.T) {

@@ -48,6 +48,16 @@ func (a *invariantsTxAdapter) ClawbackAmount() invariants.Amount {
 	return invariants.Amount{}
 }
 
+func (a *invariantsTxAdapter) ClawbackHolder() string {
+	type provider interface {
+		ClawbackHolder() string
+	}
+	if p, ok := a.tx.(provider); ok {
+		return p.ClawbackHolder()
+	}
+	return ""
+}
+
 // HasHolder implements invariants.HolderFieldProvider.
 func (a *invariantsTxAdapter) HasHolder() bool {
 	type provider interface {

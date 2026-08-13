@@ -18,23 +18,6 @@ import (
 // no-op guards for an owner whose count nets back to its original value.
 // Reference: rippled View.cpp adjustOwnerCount() calls adjustOwnerCountHook()
 func (s *BookStep) adjustOwnerCount(sb *PaymentSandbox, account [20]byte, delta int) error {
-	// Read the current owner count BEFORE modifying so we can record it.
-	accountKey := keylet.Account(account)
-	data, err := sb.Read(accountKey)
-	if err != nil || data == nil {
-		return nil
-	}
-	acct, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return err
-	}
-	curOC := acct.OwnerCount
-	newOC := max(int(curOC)+delta, 0)
-
-	// Record via AdjustOwnerCount hook so OwnerCountHook returns the maximum.
-	sb.AdjustOwnerCount(account, curOC, uint32(newOC))
-
-	// Perform the actual modification.
 	return tx.AdjustOwnerCount(sb, account, delta)
 }
 

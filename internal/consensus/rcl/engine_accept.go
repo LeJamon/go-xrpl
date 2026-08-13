@@ -351,8 +351,9 @@ func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger con
 		Timestamp:   e.adaptor.Now(),
 	})
 
-	// Adjust our clock toward the network's close-time average.
-	if e.mode == consensus.ModeProposing || e.mode == consensus.ModeObserving {
+	// Adjust our clock toward the network's close-time median unless consensus
+	// moved on without us.
+	if !consensusFail && (e.mode == consensus.ModeProposing || e.mode == consensus.ModeObserving) {
 		e.adaptor.AdjustCloseTime(e.state.CloseTimes)
 	}
 

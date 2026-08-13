@@ -17,7 +17,6 @@ const (
 	maxLedgerDataNodes = 12_288
 	maxEndpoints       = 1_023
 	maxValidatorBlobs  = 5
-	maxManifests       = 100
 	maxClusterNodes    = 1_024
 	maxLoadSources     = 1_024
 )
@@ -38,7 +37,6 @@ const (
 	WireLimitLedgerData            WireLimitReason = "ledger-data-nodes"
 	WireLimitEndpoints             WireLimitReason = "endpoints"
 	WireLimitValidatorBlobs        WireLimitReason = "validator-blobs"
-	WireLimitManifests             WireLimitReason = "manifests"
 	WireLimitClusterNodes          WireLimitReason = "cluster-nodes"
 	WireLimitLoadSources           WireLimitReason = "load-sources"
 )
@@ -247,10 +245,6 @@ func (s *wireScanState) observeRootField(
 	case TypeValidatorListCollection:
 		if field.Number() == 3 {
 			reason, limit = WireLimitValidatorBlobs, maxValidatorBlobs
-		}
-	case TypeManifests:
-		if field.Number() == 1 {
-			reason, limit = WireLimitManifests, maxManifests
 		}
 	case TypeCluster:
 		switch field.Number() {

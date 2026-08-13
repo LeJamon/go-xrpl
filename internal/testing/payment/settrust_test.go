@@ -248,6 +248,7 @@ func TestSetTrust_TrustNonexistentAccount(t *testing.T) {
 func TestSetTrust_DisallowIncoming(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	env.EnableFeature("DisallowIncoming")
+	env.DisableFeature("fixDisallowIncomingV1")
 
 	gw := jtx.NewAccount("gateway")
 	alice := jtx.NewAccount("alice")
@@ -278,6 +279,11 @@ func TestSetTrust_DisallowIncoming(t *testing.T) {
 
 	// Set flag on gateway again
 	env.EnableDisallowIncomingTrustline(gw)
+	env.Close()
+
+	// Existing trust lines can still be modified while the flag is set.
+	result = env.Submit(trustset.TrustLine(alice, "USD", gw, "2000").Build())
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Existing trust line still works — gateway can pay alice

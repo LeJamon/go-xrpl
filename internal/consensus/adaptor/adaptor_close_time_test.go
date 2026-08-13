@@ -14,16 +14,13 @@ import (
 func TestAdjustCloseTime_DampingMatchesRippled(t *testing.T) {
 	const second = int64(time.Second)
 
-	// self is fixed; peer close times are constructed to produce the
-	// target `by` (avg_secs - self_secs). With 1 peer the average is
-	// the midpoint, so a single peer at self + 2*by yields the desired
-	// `by`.
+	// A peer bin with weight two determines the median over itself and self.
 	self := time.Unix(1_700_000_000, 0)
 
 	tests := []struct {
 		name       string
 		initialNs  int64 // pre-existing closeOffsetNs
-		bySecs     int64 // desired (avg - self) in seconds
+		bySecs     int64 // desired (median - self) in seconds
 		wantNewSec int64 // expected post-store offset, in seconds
 	}{
 		{
@@ -87,10 +84,10 @@ func TestAdjustCloseTime_DampingMatchesRippled(t *testing.T) {
 			a := newTestAdaptor(t)
 			a.closeOffsetNs.Store(tc.initialNs)
 
-			peer := self.Add(time.Duration(2*tc.bySecs) * time.Second)
+			peer := self.Add(time.Duration(tc.bySecs) * time.Second)
 			a.AdjustCloseTime(consensus.CloseTimes{
 				Self:  self,
-				Peers: map[time.Time]int{peer: 1},
+				Peers: map[time.Time]int{peer: 2},
 			})
 
 			gotNs := a.closeOffsetNs.Load()
@@ -98,6 +95,50 @@ func TestAdjustCloseTime_DampingMatchesRippled(t *testing.T) {
 			if gotNs != wantNs {
 				t.Fatalf("closeOffsetNs = %dns (%ds), want %dns (%ds)",
 					gotNs, gotNs/second, wantNs, tc.wantNewSec)
+			}
+		})
+	}
+}
+
+func TestAdjustCloseTime_WeightedLowerMedian(t *testing.T) {
+	self := time.Unix(1_700_000_000, 0)
+	tests := []struct {
+		name  string
+		peers map[time.Time]int
+		want  time.Duration
+	}{
+		{
+			name: "self participates in median",
+			peers: map[time.Time]int{
+				self.Add(-20 * time.Second): 1,
+				self.Add(20 * time.Second):  1,
+			},
+			want: 0,
+		},
+		{
+			name: "weighted peer bin wins",
+			peers: map[time.Time]int{
+				self.Add(-8 * time.Second): 3,
+				self.Add(30 * time.Second): 1,
+			},
+			want: -2 * time.Second,
+		},
+		{
+			name: "even split chooses earlier bin",
+			peers: map[time.Time]int{
+				self.Add(-8 * time.Second): 1,
+				self.Add(8 * time.Second):  2,
+			},
+			want: 0,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			a := newTestAdaptor(t)
+			a.AdjustCloseTime(consensus.CloseTimes{Self: self, Peers: test.peers})
+			if got := time.Duration(a.closeOffsetNs.Load()); got != test.want {
+				t.Fatalf("close offset = %s, want %s", got, test.want)
 			}
 		})
 	}

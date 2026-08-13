@@ -1,7 +1,9 @@
 package invariants
 
 import (
+	"bytes"
 	"fmt"
+	"math/big"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -281,6 +283,184 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 	}
 
 	return nil
+}
+
+type confidentialMPTChange struct {
+	publicDelta              *big.Int
+	confidentialDelta        *big.Int
+	outstandingDelta         *big.Int
+	issuance                 *state.MPTokenIssuanceData
+	deletedWithBalance       bool
+	badConsistency           bool
+	badOutstanding           bool
+	changedConfidentialField bool
+	badVersion               bool
+}
+
+func newConfidentialMPTChange() *confidentialMPTChange {
+	return &confidentialMPTChange{
+		publicDelta:       new(big.Int),
+		confidentialDelta: new(big.Int),
+		outstandingDelta:  new(big.Int),
+	}
+}
+
+func checkValidConfidentialMPToken(transaction Transaction, result Result, entries []InvariantEntry, view ReadView, _ *amendment.Rules) *InvariantViolation {
+	if result != TesSUCCESS {
+		return nil
+	}
+
+	changes := make(map[[24]byte]*confidentialMPTChange)
+	get := func(id [24]byte) *confidentialMPTChange {
+		if changes[id] == nil {
+			changes[id] = newConfidentialMPTChange()
+		}
+		return changes[id]
+	}
+
+	for _, ledgerChange := range entries {
+		switch ledgerChange.EntryType {
+		case entry.TypeMPTokenIssuance:
+			if ledgerChange.Before != nil {
+				before, err := state.ParseMPTokenIssuance(ledgerChange.Before)
+				if err != nil {
+					return invalidConfidentialMPT("MPTokenIssuance before", err)
+				}
+				change := get(keylet.MakeMPTID(before.Sequence, before.Issuer))
+				change.confidentialDelta.Sub(change.confidentialDelta, new(big.Int).SetUint64(before.ConfidentialOutstandingAmount))
+				change.outstandingDelta.Sub(change.outstandingDelta, new(big.Int).SetUint64(before.OutstandingAmount))
+			}
+			afterData := ledgerChange.After
+			if ledgerChange.IsDelete {
+				afterData = ledgerChange.DeleteFinal
+			}
+			if afterData != nil {
+				after, err := state.ParseMPTokenIssuance(afterData)
+				if err != nil {
+					return invalidConfidentialMPT("MPTokenIssuance after", err)
+				}
+				change := get(keylet.MakeMPTID(after.Sequence, after.Issuer))
+				change.confidentialDelta.Add(change.confidentialDelta, new(big.Int).SetUint64(after.ConfidentialOutstandingAmount))
+				change.outstandingDelta.Add(change.outstandingDelta, new(big.Int).SetUint64(after.OutstandingAmount))
+				change.issuance = after
+				change.badOutstanding = after.ConfidentialOutstandingAmount > after.OutstandingAmount
+			}
+
+		case entry.TypeMPToken:
+			var before *state.MPTokenData
+			if ledgerChange.Before != nil {
+				var err error
+				before, err = state.ParseMPToken(ledgerChange.Before)
+				if err != nil {
+					return invalidConfidentialMPT("MPToken before", err)
+				}
+				change := get(before.MPTokenIssuanceID)
+				change.publicDelta.Sub(change.publicDelta, new(big.Int).SetUint64(before.MPTAmount))
+				if ledgerChange.IsDelete {
+					change.deletedWithBalance = change.deletedWithBalance || before.MPTAmount > 0 || hasEncryptedBalances(before)
+				}
+			}
+			afterData := ledgerChange.After
+			if ledgerChange.IsDelete {
+				afterData = ledgerChange.DeleteFinal
+			}
+			if afterData == nil {
+				continue
+			}
+			after, err := state.ParseMPToken(afterData)
+			if err != nil {
+				return invalidConfidentialMPT("MPToken after", err)
+			}
+			change := get(after.MPTokenIssuanceID)
+			change.publicDelta.Add(change.publicDelta, new(big.Int).SetUint64(after.MPTAmount))
+			hasInbox := len(after.ConfidentialBalanceInbox) != 0
+			hasSpending := len(after.ConfidentialBalanceSpending) != 0
+			hasIssuer := len(after.IssuerEncryptedBalance) != 0
+			hasAuditor := len(after.AuditorEncryptedBalance) != 0
+			change.badConsistency = change.badConsistency || hasInbox != hasSpending || hasInbox != hasIssuer || hasAuditor && !hasIssuer
+			change.changedConfidentialField = change.changedConfidentialField || confidentialBalancesChanged(before, after)
+			if before != nil && len(before.ConfidentialBalanceSpending) != 0 &&
+				!bytes.Equal(before.ConfidentialBalanceSpending, after.ConfidentialBalanceSpending) &&
+				before.ConfidentialBalanceVersion == after.ConfidentialBalanceVersion {
+				change.badVersion = true
+			}
+		}
+	}
+
+	for id, change := range changes {
+		issuance := change.issuance
+		if issuance == nil {
+			raw, err := view.Read(keylet.MPTIssuance(id))
+			if err != nil {
+				return invalidConfidentialMPT("confidential MPToken issuance", err)
+			}
+			if raw == nil {
+				continue
+			}
+			issuance, err = state.ParseMPTokenIssuance(raw)
+			if err != nil {
+				return invalidConfidentialMPT("confidential MPToken issuance", err)
+			}
+		}
+		if change.deletedWithBalance && issuance.ConfidentialOutstandingAmount > 0 {
+			return confidentialViolation("MPToken deleted with encrypted fields while ConfidentialOutstandingAmount is non-zero")
+		}
+		if change.badConsistency {
+			return confidentialViolation("MPToken encrypted field existence inconsistency")
+		}
+		if change.badOutstanding {
+			return confidentialViolation("ConfidentialOutstandingAmount exceeds OutstandingAmount")
+		}
+		if change.changedConfidentialField && issuance.Flags&entry.LsfMPTCanHoldConfidentialBalance == 0 {
+			return confidentialViolation("MPToken encrypted fields changed without issuance capability")
+		}
+		if change.confidentialDelta.Sign() != 0 {
+			actual := new(big.Int).Add(new(big.Int).Set(change.publicDelta), change.confidentialDelta)
+			if actual.Cmp(change.outstandingDelta) != 0 {
+				return confidentialViolation("public and confidential MPT amounts are not conserved")
+			}
+		} else if isConfidentialMPTTransaction(transaction.TxType()) &&
+			(change.publicDelta.Sign() != 0 || change.outstandingDelta.Sign() != 0) {
+			return confidentialViolation("confidential transaction changed public MPT balances")
+		}
+		if change.badVersion {
+			return confidentialViolation("ConfidentialBalanceSpending changed without ConfidentialBalanceVersion")
+		}
+	}
+	return nil
+}
+
+func hasEncryptedBalances(token *state.MPTokenData) bool {
+	return len(token.ConfidentialBalanceInbox) != 0 || len(token.ConfidentialBalanceSpending) != 0 ||
+		len(token.IssuerEncryptedBalance) != 0 || len(token.AuditorEncryptedBalance) != 0
+}
+
+func confidentialBalancesChanged(before, after *state.MPTokenData) bool {
+	if before == nil {
+		return hasEncryptedBalances(after)
+	}
+	return len(after.ConfidentialBalanceInbox) != 0 && !bytes.Equal(before.ConfidentialBalanceInbox, after.ConfidentialBalanceInbox) ||
+		len(after.ConfidentialBalanceSpending) != 0 && !bytes.Equal(before.ConfidentialBalanceSpending, after.ConfidentialBalanceSpending) ||
+		len(after.IssuerEncryptedBalance) != 0 && !bytes.Equal(before.IssuerEncryptedBalance, after.IssuerEncryptedBalance) ||
+		len(after.AuditorEncryptedBalance) != 0 && !bytes.Equal(before.AuditorEncryptedBalance, after.AuditorEncryptedBalance)
+}
+
+func isConfidentialMPTTransaction(txType TxType) bool {
+	switch txType {
+	case TypeConfidentialMPTConvert, TypeConfidentialMPTMergeInbox, TypeConfidentialMPTConvertBack,
+		TypeConfidentialMPTSend, TypeConfidentialMPTClawback:
+		return true
+	default:
+		return false
+	}
+}
+
+func confidentialViolation(message string) *InvariantViolation {
+	return &InvariantViolation{Name: "ValidConfidentialMPToken", Message: message}
+}
+
+func invalidConfidentialMPT(name string, err error) *InvariantViolation {
+	return confidentialViolation(fmt.Sprintf("could not parse %s: %v", name, err))
 }
 
 func invalidMPTEntry(entry string, err error) *InvariantViolation {

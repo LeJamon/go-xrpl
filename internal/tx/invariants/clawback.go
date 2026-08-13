@@ -1,148 +1,280 @@
 package invariants
 
 import (
+	"bytes"
+	"encoding/hex"
 	"fmt"
+	"slices"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
-// ---------------------------------------------------------------------------
-// ValidClawback
-// ---------------------------------------------------------------------------
-//
-// Reference: rippled InvariantCheck.cpp — ValidClawback (lines 1288-1362)
-//
-// For ttCLAWBACK only:
-//   - visitEntry: count modified RippleState entries (before exists) and
-//     modified MPToken entries (before exists).
-//   - finalize (success): at most 1 trust line changed; at most 1 MPToken
-//     changed. If 1 trust line changed, holder balance must be non-negative.
-//   - finalize (failure): no trust lines or MPTokens should have changed.
+type clawbackEntry struct {
+	beforeKey [32]byte
+	afterKey  [32]byte
+	before    []byte
+	after     []byte
+}
 
-func checkValidClawback(tx Transaction, result Result, entries []InvariantEntry, view ReadView) *InvariantViolation {
+func checkValidClawback(tx Transaction, result Result, entries []InvariantEntry, view ReadView, rules *amendment.Rules, numberContext ...state.NumberContext) *InvariantViolation {
 	if tx.TxType() != TypeClawback {
 		return nil
 	}
 
-	// visitEntry phase: count entries where before exists and type matches.
-	// In rippled, visitEntry checks (before && before->getType() == ltXXX).
-	// Entries with before present include both modified and deleted entries.
-	// Created entries (before == nil) are NOT counted.
 	var trustlinesChanged, mptokensChanged int
-	for _, e := range entries {
-		if e.Before == nil {
-			continue
-		}
-		if e.EntryType == entry.TypeRippleState {
+	var iou, mpt clawbackEntry
+	orderedEntries := slices.Clone(entries)
+	slices.SortFunc(orderedEntries, func(a, b InvariantEntry) int {
+		return bytes.Compare(a.Key[:], b.Key[:])
+	})
+	for _, e := range orderedEntries {
+		beforeType, _ := state.DecodeType(e.Before)
+		afterType, _ := state.DecodeType(e.After)
+		if e.Before != nil && beforeType == entry.TypeRippleState {
 			trustlinesChanged++
+			iou.beforeKey = e.Key
+			iou.before = e.Before
 		}
-		if e.EntryType == entry.TypeMPToken {
+		if !e.IsDelete && e.After != nil && afterType == entry.TypeRippleState {
+			iou.afterKey = e.Key
+			iou.after = e.After
+		}
+		if e.Before != nil && beforeType == entry.TypeMPToken {
 			mptokensChanged++
+			mpt.beforeKey = e.Key
+			mpt.before = e.Before
+		}
+		if !e.IsDelete && e.After != nil && afterType == entry.TypeMPToken {
+			mpt.afterKey = e.Key
+			mpt.after = e.After
 		}
 	}
 
-	// finalize phase
-	if result == TesSUCCESS {
-		if trustlinesChanged > 1 {
-			return &InvariantViolation{
-				Name:    "ValidClawback",
-				Message: "more than one trustline changed",
-			}
-		}
-		if mptokensChanged > 1 {
-			return &InvariantViolation{
-				Name:    "ValidClawback",
-				Message: "more than one mptoken changed",
-			}
-		}
-
-		// If exactly 1 trust line changed, verify holder balance is non-negative.
-		if trustlinesChanged == 1 {
-			if v := checkClawbackHolderBalance(tx, view); v != nil {
-				return v
-			}
-		}
-	} else {
-		// On failure, no trust lines or MPTokens should have changed.
+	if result != TesSUCCESS {
 		if trustlinesChanged != 0 {
-			return &InvariantViolation{
-				Name:    "ValidClawback",
-				Message: "some trustlines were changed despite failure of the transaction",
-			}
+			return clawbackViolation("some trustlines were changed despite failure of the transaction")
 		}
 		if mptokensChanged != 0 {
-			return &InvariantViolation{
-				Name:    "ValidClawback",
-				Message: "some mptokens were changed despite failure of the transaction",
-			}
+			return clawbackViolation("some mptokens were changed despite failure of the transaction")
 		}
+		return nil
 	}
 
+	if trustlinesChanged > 1 {
+		return clawbackViolation("more than one trustline changed")
+	}
+	if mptokensChanged > 1 {
+		return clawbackViolation("more than one mptoken changed")
+	}
+
+	mptV2Enabled := rules != nil && rules.Enabled(amendment.FeatureMPTokensV2)
+	if trustlinesChanged != 0 && mptokensChanged != 0 && mptV2Enabled {
+		return clawbackViolation("trustline and MPToken both changed")
+	}
+	if trustlinesChanged == 0 && mptokensChanged == 0 {
+		return nil
+	}
+
+	provider, ok := tx.(ClawbackAmountProvider)
+	if !ok {
+		return nil
+	}
+	amount := provider.ClawbackAmount()
+	if !mptV2Enabled {
+		if trustlinesChanged == 1 && !amount.IsMPT() {
+			return checkLegacyIOUClawback(tx, amount, iou, view)
+		}
+		return nil
+	}
+	if amount.IsMPT() {
+		return checkMPTClawbackDelta(tx, amount, mpt)
+	}
+	return checkIOUClawbackDelta(tx, amount, iou, view, numberContext...)
+}
+
+func checkIOUClawbackDelta(tx Transaction, amount Amount, changed clawbackEntry, view ReadView, numberContext ...state.NumberContext) *InvariantViolation {
+	issuer, err := state.DecodeAccountID(tx.TxAccount())
+	if err != nil {
+		return clawbackViolation("trustline clawback changed the wrong line")
+	}
+	holder, err := state.DecodeAccountID(amount.Issuer)
+	if err != nil {
+		return clawbackViolation("trustline clawback changed the wrong line")
+	}
+
+	if view != nil {
+		if violation := checkClawbackHolderBalance(tx, view); violation != nil {
+			return violation
+		}
+	}
+	expectedKey := keylet.Line(holder, issuer, amount.Currency).Key
+	if changed.before == nil || changed.beforeKey != expectedKey || changed.after != nil && changed.afterKey != expectedKey {
+		return clawbackViolation("trustline clawback changed the wrong line")
+	}
+
+	before, err := clawbackTrustLineBalance(changed.before, holder, issuer, amount.Currency, tx.TxAccount())
+	if err != nil {
+		return clawbackViolation("trustline clawback changed the wrong line")
+	}
+	after, err := clawbackTrustLineBalance(changed.after, holder, issuer, amount.Currency, tx.TxAccount())
+	if err != nil {
+		return clawbackViolation("trustline clawback changed the wrong line")
+	}
+	if before.Currency != amount.Currency || after.Currency != amount.Currency {
+		return clawbackViolation("trustline clawback balance change is invalid")
+	}
+	clawAmount := amount
+	clawAmount.Issuer = tx.TxAccount()
+	if clawAmount.Signum() <= 0 {
+		return clawbackViolation("trustline clawback amount is invalid")
+	}
+	if after.Compare(before) > 0 {
+		return clawbackViolation("trustline clawback balance change is invalid")
+	}
+	context := state.NewNumberContext(state.MantissaScaleSmall, false)
+	if len(numberContext) != 0 {
+		context = numberContext[0]
+	}
+	delta, err := before.SubWithNumberContext(after, context, state.RoundToNearest)
+	if err != nil {
+		return clawbackViolation("trustline clawback balance change is invalid")
+	}
+	expected := clawAmount
+	if before.Compare(clawAmount) < 0 {
+		expected = before
+	}
+	if delta.Compare(expected) != 0 {
+		return clawbackViolation("trustline clawback balance change is invalid")
+	}
 	return nil
 }
 
-// checkClawbackHolderBalance reads the trust line from the view and verifies
-// that the holder's balance is non-negative after clawback.
-// Reference: rippled InvariantCheck.cpp lines 1328-1342 — uses accountHolds().
-func checkClawbackHolderBalance(tx Transaction, view ReadView) *InvariantViolation {
-	if view == nil {
-		return nil // no view available — skip balance check
+func clawbackTrustLineBalance(data []byte, holder, issuer [20]byte, currency, issuerAddress string) (Amount, error) {
+	if data == nil {
+		return state.NewIssuedAmountFromValue(0, 0, currency, issuerAddress), nil
 	}
-
-	// Get the Amount from the transaction to determine holder and currency.
-	cap, ok := tx.(ClawbackAmountProvider)
-	if !ok {
-		return nil // unable to inspect Amount — skip
-	}
-	amt := cap.ClawbackAmount()
-
-	// issuer = tx.Account (the clawback submitter)
-	issuerAddr := tx.TxAccount()
-	issuerID, err := state.DecodeAccountID(issuerAddr)
+	line, err := state.ParseRippleState(data)
 	if err != nil {
-		return nil
+		return Amount{}, err
 	}
-
-	// holder = Amount.Issuer (for IOU clawback, the Issuer field is the holder)
-	holderAddr := amt.Issuer
-	holderID, err := state.DecodeAccountID(holderAddr)
-	if err != nil {
-		return nil
-	}
-	currency := amt.Currency
-
-	// Read the trust line between holder and issuer
-	lineKey := keylet.Line(holderID, issuerID, currency)
-	lineData, err := view.Read(lineKey)
-	if err != nil || lineData == nil {
-		// Trust line doesn't exist — balance is effectively zero, which is non-negative.
-		return nil
-	}
-
-	rs, err := state.ParseRippleState(lineData)
-	if err != nil {
-		return &InvariantViolation{
-			Name:    "ValidClawback",
-			Message: fmt.Sprintf("could not parse RippleState SLE: %v", err),
-		}
-	}
-
-	// accountHolds logic: get balance in holder's terms.
-	// Trust line balance: positive = low account owes high.
-	// If holder > issuer, negate to put balance in holder terms.
-	balance := rs.Balance
-	if state.CompareAccountIDs(holderID, issuerID) > 0 {
+	balance := line.Balance
+	if state.CompareAccountIDs(holder, issuer) > 0 {
 		balance = balance.Negate()
 	}
+	balance.Issuer = issuerAddress
+	return balance, nil
+}
 
-	if balance.Signum() < 0 {
-		return &InvariantViolation{
-			Name:    "ValidClawback",
-			Message: "trustline balance is negative",
+func checkMPTClawbackDelta(tx Transaction, amount Amount, changed clawbackEntry) *InvariantViolation {
+	holderProvider, ok := tx.(ClawbackHolderProvider)
+	if !ok || holderProvider.ClawbackHolder() == "" {
+		return clawbackViolation("MPT clawback missing holder")
+	}
+	holder, err := state.DecodeAccountID(holderProvider.ClawbackHolder())
+	if err != nil {
+		return clawbackViolation("MPT clawback changed the wrong token")
+	}
+	idBytes, err := hex.DecodeString(amount.MPTIssuanceID())
+	if err != nil || len(idBytes) != 24 {
+		return clawbackViolation("MPT clawback changed the wrong token")
+	}
+	var issuanceID [24]byte
+	copy(issuanceID[:], idBytes)
+	if changed.before == nil || changed.after == nil {
+		return clawbackViolation("MPT clawback token is missing")
+	}
+	before, err := state.ParseMPToken(changed.before)
+	if err != nil {
+		return clawbackViolation(fmt.Sprintf("could not parse MPToken SLE: %v", err))
+	}
+	after, err := state.ParseMPToken(changed.after)
+	if err != nil {
+		return clawbackViolation(fmt.Sprintf("could not parse MPToken SLE: %v", err))
+	}
+	if before.Account != holder || after.Account != holder || before.MPTokenIssuanceID != issuanceID || after.MPTokenIssuanceID != issuanceID {
+		return clawbackViolation("MPT clawback changed the wrong token")
+	}
+	clawAmount, ok := amount.MPTRaw()
+	if !ok || clawAmount <= 0 {
+		return clawbackViolation("MPT clawback amount is invalid")
+	}
+	if after.MPTAmount > before.MPTAmount {
+		return clawbackViolation("MPT clawback balance change is invalid")
+	}
+	expected := min(before.MPTAmount, uint64(clawAmount))
+	if before.MPTAmount-after.MPTAmount != expected {
+		return clawbackViolation("MPT clawback balance change is invalid")
+	}
+	return nil
+}
+
+func checkLegacyIOUClawback(tx Transaction, amount Amount, changed clawbackEntry, view ReadView) *InvariantViolation {
+	if view != nil {
+		if violation := checkClawbackHolderBalance(tx, view); violation != nil {
+			return violation
 		}
 	}
+	issuer, err := state.DecodeAccountID(tx.TxAccount())
+	if err != nil {
+		return nil
+	}
+	holder, err := state.DecodeAccountID(amount.Issuer)
+	if err != nil {
+		return nil
+	}
+	expectedKey := keylet.Line(holder, issuer, amount.Currency).Key
+	if changed.before == nil || changed.beforeKey != expectedKey || changed.after != nil && changed.afterKey != expectedKey {
+		return nil
+	}
+	before, err := clawbackTrustLineBalance(changed.before, holder, issuer, amount.Currency, tx.TxAccount())
+	if err != nil {
+		return clawbackViolation("trustline clawback balance change is invalid")
+	}
+	after, err := clawbackTrustLineBalance(changed.after, holder, issuer, amount.Currency, tx.TxAccount())
+	if err != nil {
+		return clawbackViolation("trustline clawback balance change is invalid")
+	}
+	if before.Currency != amount.Currency || after.Currency != amount.Currency {
+		return clawbackViolation("trustline clawback balance change is invalid")
+	}
+	return nil
+}
 
+func clawbackViolation(message string) *InvariantViolation {
+	return &InvariantViolation{Name: "ValidClawback", Message: message}
+}
+
+func checkClawbackHolderBalance(tx Transaction, view ReadView) *InvariantViolation {
+	provider, ok := tx.(ClawbackAmountProvider)
+	if !ok {
+		return nil
+	}
+	amount := provider.ClawbackAmount()
+	issuer, err := state.DecodeAccountID(tx.TxAccount())
+	if err != nil {
+		return nil
+	}
+	holder, err := state.DecodeAccountID(amount.Issuer)
+	if err != nil {
+		return nil
+	}
+	lineData, err := view.Read(keylet.Line(holder, issuer, amount.Currency))
+	if err != nil || lineData == nil {
+		return nil
+	}
+	line, err := state.ParseRippleState(lineData)
+	if err != nil {
+		return clawbackViolation(fmt.Sprintf("could not parse RippleState SLE: %v", err))
+	}
+	balance := line.Balance
+	if state.CompareAccountIDs(holder, issuer) > 0 {
+		balance = balance.Negate()
+	}
+	if balance.Signum() < 0 {
+		return clawbackViolation("trustline or MPT balance is negative")
+	}
 	return nil
 }

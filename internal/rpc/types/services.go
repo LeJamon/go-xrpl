@@ -1016,6 +1016,27 @@ type AccountQuerier interface {
 	GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32, marker string) (*AccountNFTsResult, error)
 }
 
+// AccountTxDelegateRole identifies the queried account's role in a delegated
+// transaction.
+type AccountTxDelegateRole uint8
+
+const (
+	AccountTxDelegateActor AccountTxDelegateRole = iota
+	AccountTxDelegateAuthorizer
+)
+
+// AccountTxDelegateFilter selects delegated account transactions and an
+// optional counterparty.
+type AccountTxDelegateFilter struct {
+	Role         AccountTxDelegateRole
+	Counterparty string
+}
+
+// AccountTxDelegateQuerier extends account_tx with delegation filtering.
+type AccountTxDelegateQuerier interface {
+	GetAccountTransactionsWithDelegate(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *AccountTxMarker, forward bool, delegate *AccountTxDelegateFilter) (*AccountTxResult, error)
+}
+
 type BookReader interface {
 	GetBookOffers(ctx context.Context, takerGets, takerPays Amount, taker, domain string, ledgerIndex string, limit uint32, marker string, withProofs bool) (*BookOffersResult, error)
 }

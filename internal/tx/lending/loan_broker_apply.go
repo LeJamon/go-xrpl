@@ -334,13 +334,22 @@ func (l *LoanBrokerCoverDeposit) Preclaim(view tx.LedgerView, config tx.EngineCo
 	if !amountAssetMatches(l.Amount, asset) {
 		return ter.TecWRONG_ASSET
 	}
-	if res := tx.AssetFrozen(view, accountID, asset); res != ter.TesSUCCESS {
+	if res := mptutil.CanTransferAsset(view, asset, accountID, b.Account, false); res != ter.TesSUCCESS {
 		return res
 	}
-	if res := tx.AssetFrozen(view, b.Account, asset); res != ter.TesSUCCESS {
-		return res
+	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
+		if res := mptutil.CheckDepositFreeze(view, accountID, b.Account, asset); res != ter.TesSUCCESS {
+			return res
+		}
+	} else {
+		if res := tx.AssetFrozen(view, accountID, asset); res != ter.TesSUCCESS {
+			return res
+		}
+		if res := tx.AssetFrozen(view, b.Account, asset); res != ter.TesSUCCESS {
+			return res
+		}
 	}
-	if res := tx.RequireAuth(view, asset, accountID); res != ter.TesSUCCESS {
+	if res := mptutil.RequireAssetAuthAt(view, asset, accountID, mptutil.StrongAuth, config.ParentCloseTime); res != ter.TesSUCCESS {
 		return res
 	}
 	amount, cres := roundCoverDeposit(config.RequireRules().FixCleanup3_2_0Enabled(),
@@ -434,13 +443,25 @@ func (l *LoanBrokerCoverWithdraw) Preclaim(view tx.LedgerView, config tx.EngineC
 	if res := canApplyToBrokerCover(fix320, lendNumForRules(b.CoverAvailable, config.RequireRules()), amountToLendNumForRules(l.Amount, config.RequireRules()), integral); res != ter.TesSUCCESS {
 		return res
 	}
+	if res := mptutil.CanTransferAsset(view, asset, b.Account, dstID, fix320); res != ter.TesSUCCESS {
+		return res
+	}
 	if accountID != dstID {
 		if res := vault.CanWithdraw(view, accountID, dstID, l.Amount, l.DestinationTag != nil, config.NumberContext()); res != ter.TesSUCCESS {
 			return res
 		}
 	}
-	if res := tx.RequireAuth(view, asset, dstID); res != ter.TesSUCCESS {
+	authType := mptutil.WeakAuth
+	if accountID != dstID {
+		authType = mptutil.StrongAuth
+	}
+	if res := mptutil.RequireAssetAuthAt(view, asset, dstID, authType, config.ParentCloseTime); res != ter.TesSUCCESS {
 		return res
+	}
+	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
+		if res := mptutil.CheckWithdrawFreeze(view, b.Account, accountID, dstID, asset); res != ter.TesSUCCESS {
+			return res
+		}
 	}
 
 	amount := amountToLendNumForRules(l.Amount, config.RequireRules())

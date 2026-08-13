@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	ledgerservice "github.com/LeJamon/go-xrpl/internal/ledger/service"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
@@ -216,12 +217,12 @@ func TestTicketsOpenLedger(t *testing.T) {
 }
 
 func TestBatchTxQueue(t *testing.T) {
-	t.Run("outer batch txns count towards queue size", func(t *testing.T) {
+	t.Run("batch cannot queue", func(t *testing.T) {
 		// Reference: rippled Batch_test.cpp testBatchTxQueue() first sub-test
 		// "only outer batch transactions are counter towards the queue size"
 		cfg := makeSmallQueueConfig(2)
 		env := jtx.NewTestEnvWithTxQ(t, cfg)
-		env.EnableFeatureNow("Batch")
+		env.EnableFeatureNow("BatchV1_1")
 
 		alice := jtx.NewAccount("alice")
 		bob := jtx.NewAccount("bob")
@@ -254,8 +255,8 @@ func TestBatchTxQueue(t *testing.T) {
 			AddSigner(bob).
 			MustBuild()
 		result = env.Submit(batch)
-		jtx.RequireTxFail(t, result, "terQUEUED")
-		checkMetrics(t, env, 2, nil, 3, 2)
+		jtx.RequireTxFail(t, result, "telCAN_NOT_QUEUE")
+		checkMetrics(t, env, 1, nil, 3, 2)
 
 		olFee := env.OpenLedgerFee(batchFee)
 		batch2 := NewBatchBuilder(alice, aliceSeq, olFee, batchtx.BatchFlagAllOrNothing).
@@ -287,7 +288,7 @@ func TestBatchTxQueue(t *testing.T) {
 		// "inner batch transactions are counter towards the ledger tx count"
 		cfg := makeSmallQueueConfig(2)
 		env := jtx.NewTestEnvWithTxQ(t, cfg)
-		env.EnableFeatureNow("Batch")
+		env.EnableFeatureNow("BatchV1_1")
 
 		alice := jtx.NewAccount("alice")
 		bob := jtx.NewAccount("bob")
@@ -321,6 +322,88 @@ func TestBatchTxQueue(t *testing.T) {
 		jtx.RequireTxFail(t, result, "terQUEUED")
 		checkMetrics(t, env, 1, nil, 3, 2)
 	})
+
+	t.Run("batch behind queued sequence chain is rejected", func(t *testing.T) {
+		cfg := makeSmallQueueConfig(2)
+		env := jtx.NewTestEnvWithTxQ(t, cfg)
+		env.EnableFeatureNow("BatchV1_1")
+
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		env.FundAmountNoRipple(alice, uint64(jtx.XRP(10000)))
+		env.FundAmountNoRipple(bob, uint64(jtx.XRP(10000)))
+		env.Close()
+
+		env.Noop(alice)
+		env.Noop(alice)
+		env.Noop(alice)
+		checkMetrics(t, env, 0, nil, 3, 2)
+
+		aliceSeq := env.Seq(alice)
+		queued0 := makeNoopWithFee(alice, env.BaseFee())
+		queued0.SetSequence(aliceSeq)
+		result := env.Submit(queued0)
+		jtx.RequireTxFail(t, result, "terQUEUED")
+		queued1 := makeNoopWithFee(alice, env.BaseFee())
+		queued1.SetSequence(aliceSeq + 1)
+		result = env.Submit(queued1)
+		jtx.RequireTxFail(t, result, "terQUEUED")
+		checkMetrics(t, env, 2, nil, 3, 2)
+
+		bobSeq := env.Seq(bob)
+		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
+		batch := NewBatchBuilder(alice, aliceSeq+2, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, aliceSeq+3)).
+			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, bobSeq)).
+			AddSigner(bob).
+			MustBuild()
+		result = env.Submit(batch)
+		jtx.RequireTxFail(t, result, "telCAN_NOT_QUEUE")
+		checkMetrics(t, env, 2, nil, 3, 2)
+	})
+}
+
+func TestClosedLedgerIndexesBatchInnerTransactions(t *testing.T) {
+	env := newBatchEnv(t)
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	env.Fund(alice, bob)
+	env.Close()
+
+	aliceSeq := env.Seq(alice)
+	batch := NewBatchBuilder(alice, aliceSeq, CalcBatchFeeFromEnv(env, 0, 2), batchtx.BatchFlagAllOrNothing).
+		AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, aliceSeq+1)).
+		AddInnerTx(MakeInnerPaymentXRP(alice, bob, 2, aliceSeq+2)).
+		MustBuild()
+	result := env.Submit(batch)
+	jtx.RequireTxSuccess(t, result)
+	outerHash, err := tx.ComputeTransactionHash(batch)
+	require.NoError(t, err)
+	innerHashes := make([][32]byte, len(batch.RawTransactions))
+	for i := range batch.RawTransactions {
+		innerHashes[i], err = tx.ComputeTransactionHash(batch.RawTransactions[i].RawTransaction.InnerTx)
+		require.NoError(t, err)
+	}
+
+	env.Close()
+	closed := env.LastClosedLedger()
+	for i, innerHash := range innerHashes {
+		raw, found, err := closed.GetTransaction(innerHash)
+		require.NoError(t, err)
+		require.True(t, found, "inner transaction %d is missing from the closed ledger", i)
+		accepted := ledgerservice.ParseAcceptedTransaction(raw)
+		require.NoError(t, accepted.ParseError())
+		require.Equal(t, "Payment", accepted.Transaction()["TransactionType"])
+		require.Equal(t, fmt.Sprintf("%X", outerHash[:]), accepted.Metadata()["ParentBatchID"])
+		index, ok := accepted.TransactionIndex()
+		require.True(t, ok)
+		require.Equal(t, uint32(i+1), index)
+		parsed, err := tx.ParseFromBinary(accepted.TransactionBlob())
+		require.NoError(t, err)
+		storedHash, err := tx.ComputeTransactionHash(parsed)
+		require.NoError(t, err)
+		require.Equal(t, innerHash, storedHash)
+	}
 }
 
 // makeSmallQueueConfig creates a TxQ config matching rippled's Batch_test

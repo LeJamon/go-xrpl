@@ -3,6 +3,7 @@ package credential
 import (
 	"context"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -16,6 +17,14 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
+
+func TestCheckFieldsTreatsHexCaseAsTheSameCredential(t *testing.T) {
+	lower := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+	upper := "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789"
+	if result := CheckFields([]string{lower, upper}, true, "duplicate credential ID"); result == nil || !strings.Contains(result.Error(), "temMALFORMED") {
+		t.Fatalf("CheckFields() = %v, want temMALFORMED", result)
+	}
+}
 
 // mapView is a minimal in-memory tx.LedgerView for helper-level tests.
 type mapView struct{ data map[[32]byte][]byte }
