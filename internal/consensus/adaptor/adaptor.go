@@ -74,7 +74,7 @@ type Adaptor struct {
 	// operating mode for server_info.state_accounting.
 	stateAcct *stateAccounting
 
-	// Close-time offset, adjusted each round toward the network average.
+	// Close-time offset, adjusted each round toward the network median.
 	// Atomic ns so the Now() hot path avoids lock contention.
 	closeOffsetNs atomic.Int64
 

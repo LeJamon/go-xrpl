@@ -20,7 +20,7 @@ func TestAdjustCloseTime_DampingMatchesRippled(t *testing.T) {
 	tests := []struct {
 		name       string
 		initialNs  int64 // pre-existing closeOffsetNs
-		bySecs     int64 // desired (avg - self) in seconds
+		bySecs     int64 // desired (median - self) in seconds
 		wantNewSec int64 // expected post-store offset, in seconds
 	}{
 		{

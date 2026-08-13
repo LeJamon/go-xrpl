@@ -14,11 +14,11 @@ behavior is deliberately mirrored, the Go code cites the rippled source file it
 follows (e.g. `Transactor.cpp`, `applySteps.h`), so a reviewer can check the port
 against the original.
 
-The local `rippled/` tree is the working reference. Its transaction logic lives
-under `rippled/src/xrpld/app/tx/detail/`, ledger objects under
-`rippled/src/xrpld/ledger/detail/`, protocol definitions under
-`rippled/src/libxrpl/protocol/`, and the upstream unit tests — which the Go
-conformance suites mirror — under `rippled/src/test/app/`.
+The local `rippled-worktrees/<version>-oracle/` tree is the working reference.
+Its transaction logic lives under `src/xrpld/app/tx/detail/`, ledger objects
+under `src/xrpld/ledger/detail/`, protocol definitions under
+`src/libxrpl/protocol/`, and the upstream unit tests — which the Go conformance
+suites mirror — under `src/test/app/`.
 
 ## The conformance suite
 
@@ -70,15 +70,13 @@ removing a line brings that suite back into scope.
 
 As of this writing the out-of-scope suites fall into two groups:
 
-- **Not implemented yet** — `EscrowToken`, `XChain`, and `XChainSim`. The
+- **Not implemented yet** — `XChain` and `XChainSim`. The
   **XChain** bridge ships as a registered fail-closed stub: it parses and
   registers but is not active (`XChainBridge` is `SupportedNo`).
 - **Implemented features with incomplete legacy-fixture coverage** — `Vault`,
-  `Batch`, `Delegate`, and `Credentials`. Their production implementations and
+  `Batch`, and `Delegate`. Their production implementations and
   focused suites are active, but the imported conformance corpus and runner do
   not yet represent all released variants.
-- **Partially implemented / known gaps** — several `NFTokenBurn*` and `NFToken*`
-  variants, `Regression`, `ThinBook`, `Transaction_ordering`, and `ledger/BookDirs`.
 
 A generated, always-current pass/fail snapshot is produced separately — see
 [conformance-status.md](conformance-status.md) (regenerate with `just docs-gen`)

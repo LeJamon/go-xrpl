@@ -212,6 +212,15 @@ jobs:
       - name: Build and test native backend
         run: ./scripts/setup-mpt-crypto.sh test ./amendment/... ./crypto/mptcrypto/... ./internal/tx/mpt/... ./internal/testing/mpt/...
 
+  peer-interop:
+    name: Peer interop (rippled 3.3.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - name: Run live handshake and manifest interop
+        run: PEERTLS_DOCKER_INTEROP=1 go test -tags docker -timeout 5m -v -run 'Test(Handshake|Manifest)_Interop_RippledDocker' ./internal/peermanagement/
+
   consensus-smoke:
     name: Consensus smoke (rippled ${{ matrix.rippled-version }})
     strategy:

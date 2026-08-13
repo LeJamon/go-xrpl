@@ -28,10 +28,6 @@ beta_rpc_api = 0
 # validate the same ledger for the network to advance. Any consensus
 # divergence between goxrpl and rippled wedges validation, which is the
 # regression signal we want from this per-PR smoke.
-#
-# Until #418 (cold-bootstrap fork at seq=6/7) lands, this smoke is expected
-# to fail — that's the entire point: it becomes the gate that closes when
-# the consensus work is complete.
 validation_seed = "sn8KuG4fs84rowCsqTuz6AtqEkmJ7"
 validators_file = "/etc/goxrpl/validators.toml"
 

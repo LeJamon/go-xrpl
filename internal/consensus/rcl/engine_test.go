@@ -135,6 +135,7 @@ type mockAdaptor struct {
 	modeChanges          []consensus.Mode
 	phaseChanges         []consensus.Phase
 	switchedLedgers      []consensus.Ledger
+	adjustCloseTimeCalls int
 
 	// Time
 	now time.Time
@@ -662,7 +663,11 @@ func (a *mockAdaptor) PrevCloseTimeResolution() time.Duration {
 	return time.Second
 }
 
-func (a *mockAdaptor) AdjustCloseTime(rawCloseTimes consensus.CloseTimes) {}
+func (a *mockAdaptor) AdjustCloseTime(consensus.CloseTimes) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.adjustCloseTimeCalls++
+}
 
 func (a *mockAdaptor) OnConsensusReached(ledger consensus.Ledger, validations []*consensus.Validation, roundTime time.Duration) {
 }
@@ -3995,8 +4000,8 @@ func TestSendValidation_RestartFloorSurvivesIdleExpiry(t *testing.T) {
 	}
 }
 
-// TestAcceptLedger_ConsensusFailSuppressesValidation pins the
-// rippled-faithful emission gate at RCLConsensus.cpp:479,591-594:
+// TestAcceptLedger_ConsensusFailSuppressesValidationAndClockAdjustment pins
+// rippled's consensus-failure gates for validation and close-time adjustment.
 //
 //	bool const consensusFail = result.state == ConsensusState::MovedOn;
 //	if (validating_ && !consensusFail && canValidateSeq(...)) validate(...)
@@ -4010,17 +4015,18 @@ func TestSendValidation_RestartFloorSurvivesIdleExpiry(t *testing.T) {
 // suppress-paths. The previous over-broad rule `result != Success`
 // silently bowed goxrpl out of every timed-out round and turned a
 // recoverable stall into permanent quorum starvation (#451).
-func TestAcceptLedger_ConsensusFailSuppressesValidation(t *testing.T) {
+func TestAcceptLedger_ConsensusFailSuppressesValidationAndClockAdjustment(t *testing.T) {
 	cases := []struct {
-		name   string
-		result consensus.Result
-		want   int // emissions expected
+		name       string
+		result     consensus.Result
+		wantEmit   int
+		wantAdjust int
 	}{
-		{"Success_emits", consensus.ResultSuccess, 1},
-		{"Timeout_emits", consensus.ResultTimeout, 1},
-		{"Abandoned_emits", consensus.ResultAbandoned, 1},
-		{"MovedOn_suppressed", consensus.ResultMovedOn, 0},
-		{"Fail_suppressed", consensus.ResultFail, 0},
+		{"Success_emits", consensus.ResultSuccess, 1, 1},
+		{"Timeout_emits", consensus.ResultTimeout, 1, 1},
+		{"Abandoned_emits", consensus.ResultAbandoned, 1, 1},
+		{"MovedOn_suppressed", consensus.ResultMovedOn, 0, 0},
+		{"Fail_suppressed", consensus.ResultFail, 0, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4055,13 +4061,18 @@ func TestAcceptLedger_ConsensusFailSuppressesValidation(t *testing.T) {
 			engine.mu.Unlock()
 
 			adaptor.mu.RLock()
-			got := len(adaptor.validationsBroadcast)
+			gotEmit := len(adaptor.validationsBroadcast)
+			gotAdjust := adaptor.adjustCloseTimeCalls
 			adaptor.mu.RUnlock()
 
-			if got != tc.want {
+			if gotEmit != tc.wantEmit {
 				t.Fatalf("result=%v: want %d emissions, got %d "+
 					"(consensusFail gate did not match rippled "+
-					"RCLConsensus.cpp:587-594)", tc.result, tc.want, got)
+					"RCLConsensus.cpp:587-594)", tc.result, tc.wantEmit, gotEmit)
+			}
+			if gotAdjust != tc.wantAdjust {
+				t.Fatalf("result=%v: want %d close-time adjustments, got %d",
+					tc.result, tc.wantAdjust, gotAdjust)
 			}
 		})
 	}

@@ -341,12 +341,15 @@ func (p *Peer) manifestFrameExceedsLimit(header message.Header) bool {
 	return header.PayloadSize > limit || header.UncompressedSize > limit
 }
 
-func isInboundBulkMessageType(msgType message.MessageType) bool {
-	return !message.IsKnownMessageType(msgType) || message.MaxPayloadSizeForType(msgType) > 64*1024
+func isInboundBulkFrame(header message.Header) bool {
+	if header.MessageType == message.TypePing {
+		return header.PayloadSize > 64*1024
+	}
+	return !message.IsKnownMessageType(header.MessageType) || message.MaxPayloadSizeForType(header.MessageType) > 64*1024
 }
 
 func inboundFrameReservation(header message.Header) int64 {
-	if !isInboundBulkMessageType(header.MessageType) {
+	if !isInboundBulkFrame(header) {
 		return 0
 	}
 	size := int64(header.PayloadSize)
