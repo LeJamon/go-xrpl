@@ -229,6 +229,9 @@ func TestManifest_Interop_RippledDocker(t *testing.T) {
 	defaultWitness := newManifestInteropPeer(t, node.addr, defaultLimit)
 	lowerWitness := newManifestInteropPeer(t, node.addr, lowerLimit)
 	higherWitness := newManifestInteropPeer(t, node.addr, higherLimit)
+	for _, peer := range []*manifestInteropPeer{source, defaultWitness, lowerWitness, higherWitness} {
+		require.NotEmpty(t, receiveManifests(t, peer).List)
+	}
 
 	serialized := make([][]byte, 0, manifestInteropBatchCount)
 	for i := range manifestInteropBatchCount {
@@ -281,15 +284,24 @@ func TestManifest_Interop_RippledDocker(t *testing.T) {
 	defaultWitness.stop()
 	reconnected := newManifestInteropPeer(t, node.addr, defaultLimit)
 	snapshot := receiveManifests(t, reconnected)
-	require.Len(t, snapshot.List, manifestInteropBatchCount+1)
+	want := make(map[string]struct{}, manifestInteropBatchCount+1)
+	for _, item := range serialized {
+		want[string(item)] = struct{}{}
+	}
+	want[string(revoked)] = struct{}{}
 	var revokedCount int
 	for _, item := range snapshot.List {
+		if _, ok := want[string(item.STObject)]; !ok {
+			continue
+		}
+		delete(want, string(item.STObject))
 		parsed, err := manifest.Deserialize(item.STObject)
 		require.NoError(t, err)
 		if parsed.Revoked() {
 			revokedCount++
 		}
 	}
+	require.Zero(t, len(want), "%d synthetic manifests missing from reconnect snapshot", len(want))
 	require.Equal(t, 1, revokedCount)
 }
 
