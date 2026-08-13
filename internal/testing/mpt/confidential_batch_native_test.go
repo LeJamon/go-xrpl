@@ -4,6 +4,7 @@ package mpt_test
 
 import (
 	"encoding/hex"
+	"fmt"
 	"math/big"
 	"strconv"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeJamon/go-xrpl/crypto/mptcrypto"
+	ledgerservice "github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	batchtest "github.com/LeJamon/go-xrpl/internal/testing/batch"
@@ -109,6 +111,7 @@ func TestConfidentialMPTBatchAllOrNothingRollsBackStaleProof(t *testing.T) {
 	tokenKey := keylet.MPToken(issuanceKey.Key, holder.ID)
 	require.NoError(t, env.Ledger().Insert(issuanceKey, issuanceData))
 	require.NoError(t, env.Ledger().Insert(tokenKey, tokenData))
+	env.Close()
 
 	outerSequence := env.Seq(holder)
 	makeBack := func(sequence uint32) *mpttx.ConfidentialMPTConvertBack {
@@ -146,6 +149,8 @@ func TestConfidentialMPTBatchAllOrNothingRollsBackStaleProof(t *testing.T) {
 	result := env.Submit(batch)
 	require.Equal(t, ter.TesSUCCESS, result.Result)
 	require.Empty(t, result.AppliedInnerTransactions)
+	env.Close()
+	requireClosedBatchInnerResults(t, env, batch)
 
 	gotIssuanceData, err := env.Ledger().Read(issuanceKey)
 	require.NoError(t, err)
@@ -221,6 +226,7 @@ func newConfidentialBatchFixture(t *testing.T) *confidentialBatchFixture {
 	require.NoError(t, env.Ledger().Insert(issuanceKey, issuanceData))
 	require.NoError(t, env.Ledger().Insert(senderKey, senderData))
 	require.NoError(t, env.Ledger().Insert(destinationKey, destinationData))
+	env.Close()
 
 	return &confidentialBatchFixture{
 		env: env, issuer: issuer, sender: sender, destination: destination, id: id,
@@ -280,18 +286,44 @@ func readBatchHolding(t *testing.T, env *jtx.TestEnv, key keylet.Keylet) *state.
 	return holding
 }
 
+func requireClosedBatchInnerResults(t *testing.T, env *jtx.TestEnv, batch *batchtx.Batch, expected ...ter.Result) {
+	t.Helper()
+	closed := env.LastClosedLedger()
+	outerID, err := tx.ComputeTransactionHash(batch)
+	require.NoError(t, err)
+	_, found, err := closed.GetTransaction(outerID)
+	require.NoError(t, err)
+	require.True(t, found, "missing committed outer batch transaction")
+	parentID := fmt.Sprintf("%X", outerID[:])
+	for i, raw := range batch.RawTransactions {
+		innerID, err := tx.ComputeTransactionHash(raw.RawTransaction.InnerTx)
+		require.NoError(t, err)
+		stored, found, err := closed.GetTransaction(innerID)
+		require.NoError(t, err)
+		if i >= len(expected) {
+			require.False(t, found, "unexpected committed inner transaction %d", i)
+			continue
+		}
+		require.True(t, found, "missing committed inner transaction %d", i)
+		accepted := ledgerservice.ParseAcceptedTransaction(stored)
+		require.NoError(t, accepted.ParseError())
+		require.Equal(t, expected[i].String(), accepted.Metadata()["TransactionResult"])
+		require.Equal(t, parentID, accepted.Metadata()["ParentBatchID"])
+	}
+}
+
 func TestConfidentialSendBatchStaleProofModes(t *testing.T) {
 	for _, test := range []struct {
 		name         string
 		flag         uint32
 		wantVersion  uint32
 		wantSequence uint32
-		wantApplied  int
+		wantResults  []ter.Result
 	}{
-		{name: "all or nothing rolls back the first send", flag: batchtx.BatchFlagAllOrNothing, wantVersion: 9, wantSequence: 1, wantApplied: 0},
-		{name: "independent retains the first send", flag: batchtx.BatchFlagIndependent, wantVersion: 10, wantSequence: 3, wantApplied: 2},
-		{name: "until failure stops after the stale proof", flag: batchtx.BatchFlagUntilFailure, wantVersion: 10, wantSequence: 3, wantApplied: 2},
-		{name: "only one accepts exactly one successful send", flag: batchtx.BatchFlagOnlyOne, wantVersion: 10, wantSequence: 2, wantApplied: 1},
+		{name: "all or nothing rolls back the first send", flag: batchtx.BatchFlagAllOrNothing, wantVersion: 9, wantSequence: 1},
+		{name: "independent retains the first send", flag: batchtx.BatchFlagIndependent, wantVersion: 10, wantSequence: 3, wantResults: []ter.Result{ter.TesSUCCESS, ter.TecBAD_PROOF}},
+		{name: "until failure stops after the stale proof", flag: batchtx.BatchFlagUntilFailure, wantVersion: 10, wantSequence: 3, wantResults: []ter.Result{ter.TesSUCCESS, ter.TecBAD_PROOF}},
+		{name: "only one accepts exactly one successful send", flag: batchtx.BatchFlagOnlyOne, wantVersion: 10, wantSequence: 2, wantResults: []ter.Result{ter.TesSUCCESS}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newConfidentialBatchFixture(t)
@@ -304,13 +336,8 @@ func TestConfidentialSendBatchStaleProofModes(t *testing.T) {
 			require.Equal(t, batchFee, batch.CalculateMinimumFee(fixture.env.Ledger(), tx.EngineConfig{BaseFee: fixture.env.BaseFee()}))
 			result := fixture.env.Submit(batch)
 			jtx.RequireTxSuccess(t, result)
-			require.Len(t, result.AppliedInnerTransactions, test.wantApplied)
-			if test.flag == batchtx.BatchFlagIndependent {
-				require.Equal(t, ter.TesSUCCESS, result.AppliedInnerTransactions[0].Metadata.TransactionResult)
-				require.Equal(t, ter.TecBAD_PROOF, result.AppliedInnerTransactions[1].Metadata.TransactionResult)
-				require.NotNil(t, result.AppliedInnerTransactions[0].Metadata.ParentBatchID)
-				require.NotNil(t, result.AppliedInnerTransactions[1].Metadata.ParentBatchID)
-			}
+			fixture.env.Close()
+			requireClosedBatchInnerResults(t, fixture.env, batch, test.wantResults...)
 			updated := readBatchHolding(t, fixture.env, fixture.senderKey)
 			require.Equal(t, test.wantVersion, updated.ConfidentialBalanceVersion)
 			require.Equal(t, outerSequence+test.wantSequence, fixture.env.Seq(fixture.sender))
@@ -334,7 +361,8 @@ func TestConfidentialSendBatchOuterTicketUsesInnerSequenceContext(t *testing.T) 
 	batch := batchtest.NewBatchBuilderWithTicket(fixture.sender, outerTicket, 220, batchtx.BatchFlagAllOrNothing).AddInnerTx(first).AddInnerTx(second).MustBuild()
 	result := fixture.env.Submit(batch)
 	jtx.RequireTxSuccess(t, result)
-	require.Len(t, result.AppliedInnerTransactions, 2)
+	fixture.env.Close()
+	requireClosedBatchInnerResults(t, fixture.env, batch, ter.TesSUCCESS, ter.TesSUCCESS)
 	require.Equal(t, uint32(11), readBatchHolding(t, fixture.env, fixture.senderKey).ConfidentialBalanceVersion)
 }
 
@@ -413,6 +441,7 @@ func TestConfidentialClawbackBatchAndFeeDispatch(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, fixture.env.Ledger().Update(issuanceKey, issuanceData))
 	require.NoError(t, fixture.env.Ledger().Update(holdingKey, holdingData))
+	fixture.env.Close()
 	outerSequence := fixture.env.Seq(fixture.issuer)
 	innerSequence := outerSequence + 1
 	proofContext, ok := mptcrypto.ClawbackContext(fixture.issuer.ID, fixture.id, innerSequence, fixture.sender.ID)
@@ -430,7 +459,8 @@ func TestConfidentialClawbackBatchAndFeeDispatch(t *testing.T) {
 	require.Equal(t, batchFee, batch.CalculateMinimumFee(fixture.env.Ledger(), tx.EngineConfig{BaseFee: fixture.env.BaseFee()}))
 	result := fixture.env.Submit(batch)
 	jtx.RequireTxSuccess(t, result)
-	require.Len(t, result.AppliedInnerTransactions, 2)
+	fixture.env.Close()
+	requireClosedBatchInnerResults(t, fixture.env, batch, ter.TesSUCCESS, ter.TesSUCCESS)
 	updated := readBatchHolding(t, fixture.env, holdingKey)
 	require.Equal(t, uint64(13), updated.MPTAmount)
 	require.Equal(t, uint32(7), updated.ConfidentialBalanceVersion)
