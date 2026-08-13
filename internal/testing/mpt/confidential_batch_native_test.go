@@ -142,7 +142,7 @@ func TestConfidentialMPTBatchAllOrNothingRollsBackStaleProof(t *testing.T) {
 		holder, outerSequence, 22*env.BaseFee(), batchtx.BatchFlagAllOrNothing,
 	).AddInnerTx(makeBack(outerSequence + 1)).
 		AddInnerTx(makeBack(outerSequence + 2)).
-		Build()
+		MustBuild()
 	result := env.Submit(batch)
 	require.Equal(t, ter.TesSUCCESS, result.Result)
 	require.Empty(t, result.AppliedInnerTransactions)
