@@ -174,6 +174,8 @@ func TestIOUStateHelpersFailClosed(t *testing.T) {
 
 	delete(view.readErrors, lineKey.Key)
 	require.NoError(t, view.Insert(lineKey, []byte{0xff}))
+	_, result = isIOUFrozen(view, holderID, issuerID, "USD")
+	require.Equal(t, ter.TefINTERNAL, result)
 	_, result = isIOUDeepFrozen(view, holderID, issuerID, "USD")
 	require.Equal(t, ter.TefINTERNAL, result)
 }

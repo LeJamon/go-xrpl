@@ -549,54 +549,6 @@ func (s *BookStep) isOfferOwnerAuthorized(
 	return (line.Flags & authFlag) != 0
 }
 
-// isFrozen checks if an account's trust line for the given currency/issuer is frozen.
-// Returns true if:
-//   - The issuer has GlobalFreeze set on their AccountRoot, OR
-//   - The issuer has individually frozen the account's trust line (lsfHighFreeze/lsfLowFreeze)
-//
-// XRP cannot be frozen, so this always returns false for XRP.
-// Reference: rippled View.cpp isFrozen(view, account, currency, issuer)
-func (s *BookStep) isFrozen(sb *PaymentSandbox, account [20]byte, currency string, issuer [20]byte) bool {
-	// XRP cannot be frozen
-	if currency == "" || currency == "XRP" {
-		return false
-	}
-
-	// Check global freeze on the issuer
-	issuerData, err := sb.Read(keylet.Account(issuer))
-	if err == nil && issuerData != nil {
-		issuerAcct, err := state.ParseAccountRoot(issuerData)
-		if err == nil && (issuerAcct.Flags&state.LsfGlobalFreeze) != 0 {
-			return true
-		}
-	}
-
-	// If the account IS the issuer, no individual freeze to check
-	if issuer == account {
-		return false
-	}
-
-	// Check individual freeze on the trust line
-	// The issuer's freeze flag depends on which side (high/low) the issuer is on
-	// Reference: rippled View.cpp isFrozen():
-	//   (issuer > account) ? lsfHighFreeze : lsfLowFreeze
-	lineKey := keylet.Line(account, issuer, currency)
-	lineData, err := sb.Read(lineKey)
-	if err != nil || lineData == nil {
-		return false
-	}
-	rs, err := state.ParseRippleState(lineData)
-	if err != nil {
-		return false
-	}
-
-	issuerIsHigh := state.CompareAccountIDs(issuer, account) > 0
-	if issuerIsHigh {
-		return (rs.Flags & state.LsfHighFreeze) != 0
-	}
-	return (rs.Flags & state.LsfLowFreeze) != 0
-}
-
 // isDeepFrozen checks if an account's trust line for the given currency/issuer
 // has either the high or low deep freeze flag set.
 // Deep freeze is more restrictive than regular freeze — it prevents both
@@ -727,7 +679,7 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 	//     if (isFrozen(...) || isDeepFrozen(...)) return false;
 	//   }
 	if offerOwner != issuer {
-		if s.isFrozen(sb, offerOwner, currency, issuer) ||
+		if tx.IsFrozen(sb, offerOwner, tx.Asset{Currency: currency, Issuer: state.EncodeAccountIDSafe(issuer)}) ||
 			s.isDeepFrozen(sb, offerOwner, currency, issuer) {
 			return ZeroIOUEitherAmount(currency, state.EncodeAccountIDSafe(issuer))
 		}

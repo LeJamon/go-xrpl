@@ -816,19 +816,9 @@ func checkFreeze(view *PaymentSandbox, src, dst [20]byte, currency string) ter.R
 			return ter.TefINTERNAL
 		}
 
-		// 3. Check individual freeze
-		// Reference: rippled StepChecks.h:53 — (dst > src) ? lsfHighFreeze : lsfLowFreeze
-		// If src is low (dst is high), check lsfHighFreeze (dst's side)
-		// If src is high (dst is low), check lsfLowFreeze (dst's side)
-		srcIsLow := state.CompareAccountIDs(src, dst) < 0
-		if srcIsLow {
-			if (rs.Flags & state.LsfHighFreeze) != 0 {
-				return ter.TerNO_LINE
-			}
-		} else {
-			if (rs.Flags & state.LsfLowFreeze) != 0 {
-				return ter.TerNO_LINE
-			}
+		// 3. Check individual freeze on the destination's side.
+		if tx.IsRippleStateFrozenBy(rs, dst, src) {
+			return ter.TerNO_LINE
 		}
 
 		// 4. Check deep freeze — either side having deep freeze blocks the line

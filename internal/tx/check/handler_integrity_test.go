@@ -18,17 +18,17 @@ func TestCheckCreateFreezeReadFailuresAreInternal(t *testing.T) {
 	lineKey := keylet.Line(sourceID, issuerID, "USD")
 	view.readErrors[lineKey.Key] = errors.New("storage failure")
 
-	if frozen, err := isTrustLineFrozenByIssuer(view, sourceID, issuerID, "USD"); err == nil || frozen {
+	if frozen, err := tx.IsTrustlineFrozenBy(view, issuerID, sourceID, "USD"); err == nil || frozen {
 		t.Fatalf("issuer freeze lookup = (%v, %v), want (false, error)", frozen, err)
 	}
 	delete(view.readErrors, lineKey.Key)
-	if frozen, err := isTrustLineFrozenByIssuer(view, sourceID, issuerID, "USD"); err != nil || frozen {
+	if frozen, err := tx.IsTrustlineFrozenBy(view, issuerID, sourceID, "USD"); err != nil || frozen {
 		t.Fatalf("missing issuer line = (%v, %v), want (false, nil)", frozen, err)
 	}
 
 	lineKey = keylet.Line(destinationID, issuerID, "USD")
 	view.readErrors[lineKey.Key] = errors.New("storage failure")
-	if frozen, err := isTrustLineFrozenBySelf(view, destinationID, issuerID, "USD"); err == nil || frozen {
+	if frozen, err := tx.IsTrustlineFrozenBy(view, destinationID, issuerID, "USD"); err == nil || frozen {
 		t.Fatalf("self freeze lookup = (%v, %v), want (false, error)", frozen, err)
 	}
 }

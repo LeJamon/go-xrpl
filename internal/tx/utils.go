@@ -31,7 +31,7 @@ func FormatUint64Hex(v uint64) string {
 // that must distinguish the two route err != nil to TefINTERNAL and nil data to
 // their own not-found code; callers that legitimately treat both the same can
 // test (root == nil) after checking err.
-func ReadAccountRoot(view LedgerView, accountID [20]byte) (*state.AccountRoot, error) {
+func ReadAccountRoot(view state.LedgerView, accountID [20]byte) (*state.AccountRoot, error) {
 	data, err := view.Read(keylet.Account(accountID))
 	if err != nil {
 		return nil, err
@@ -47,7 +47,7 @@ func ReadAccountRoot(view LedgerView, accountID [20]byte) (*state.AccountRoot, e
 // contract: an absent line returns (nil, nil), while a storage or parse failure
 // returns (nil, err). Callers that treat "absent" and "error" the same can test
 // (rs == nil) after checking err.
-func ReadRippleState(view LedgerView, accountID, issuerID [20]byte, currency string) (*state.RippleState, error) {
+func ReadRippleState(view state.LedgerView, accountID, issuerID [20]byte, currency string) (*state.RippleState, error) {
 	data, err := view.Read(keylet.Line(accountID, issuerID, currency))
 	if err != nil {
 		return nil, err
@@ -58,34 +58,44 @@ func ReadRippleState(view LedgerView, accountID, issuerID [20]byte, currency str
 	return state.ParseRippleState(data)
 }
 
-// IsTrustlineFrozen checks if a specific trustline is frozen.
-func IsTrustlineFrozen(view LedgerView, accountID, issuerID [20]byte, currency string) bool {
-	trustLineKey := keylet.Line(accountID, issuerID, currency)
-	trustLineData, err := view.Read(trustLineKey)
-	if err != nil || trustLineData == nil {
+// IsRippleStateFrozenBy reports whether freezer set its regular-freeze flag on
+// an already-parsed trust line with counterparty.
+func IsRippleStateFrozenBy(line *state.RippleState, freezerID, counterpartyID [20]byte) bool {
+	if line == nil || freezerID == counterpartyID {
 		return false
 	}
-
-	rs, err := state.ParseRippleState(trustLineData)
-	if err != nil {
-		return false
+	if state.CompareAccountIDs(freezerID, counterpartyID) > 0 {
+		return line.Flags&state.LsfHighFreeze != 0
 	}
+	return line.Flags&state.LsfLowFreeze != 0
+}
 
-	// Check if the ISSUER has frozen this trust line.
-	// Reference: rippled View.cpp isFrozen() - checks the issuer's freeze flag:
-	//   (issuer > account) ? lsfHighFreeze : lsfLowFreeze
-	issuerIsHigh := state.CompareAccountIDs(issuerID, accountID) > 0
-	if issuerIsHigh {
-		return (rs.Flags & state.LsfHighFreeze) != 0
+// IsTrustlineFrozenBy reports whether freezer set its regular-freeze flag on
+// the trust line with counterparty. A missing line is not frozen; read and
+// parse errors are returned to callers that must preserve ledger-integrity
+// failures.
+func IsTrustlineFrozenBy(view state.LedgerView, freezerID, counterpartyID [20]byte, currency string) (bool, error) {
+	if currency == "" || currency == "XRP" || freezerID == counterpartyID {
+		return false, nil
 	}
-	return (rs.Flags & state.LsfLowFreeze) != 0
+	line, err := ReadRippleState(view, freezerID, counterpartyID, currency)
+	if err != nil || line == nil {
+		return false, err
+	}
+	return IsRippleStateFrozenBy(line, freezerID, counterpartyID), nil
+}
+
+// IsTrustlineFrozen reports whether issuer individually froze account's trust
+// line. Read and parse failures retain the historical false result.
+func IsTrustlineFrozen(view state.LedgerView, accountID, issuerID [20]byte, currency string) bool {
+	frozen, _ := IsTrustlineFrozenBy(view, issuerID, accountID, currency)
+	return frozen
 }
 
 // IsIndividualFrozen checks if a specific account is individually frozen for an asset.
 // This checks if the issuer has frozen the account's side of the trustline.
 // Reference: rippled ledger/View.cpp isIndividualFrozen
-func IsIndividualFrozen(view LedgerView, accountID [20]byte, asset Asset) bool {
-	// XRP cannot be frozen
+func IsIndividualFrozen(view state.LedgerView, accountID [20]byte, asset Asset) bool {
 	if asset.Currency == "" || asset.Currency == "XRP" {
 		return false
 	}
@@ -95,31 +105,24 @@ func IsIndividualFrozen(view LedgerView, accountID [20]byte, asset Asset) bool {
 		return false
 	}
 
-	// If account is issuer, not frozen
-	if accountID == issuerID {
-		return false
-	}
+	return IsTrustlineFrozen(view, accountID, issuerID, asset.Currency)
+}
 
-	trustLineKey := keylet.Line(accountID, issuerID, asset.Currency)
-	trustLineData, err := view.Read(trustLineKey)
-	if err != nil || trustLineData == nil {
-		return false
+// IsIOUFrozen reports whether issuer globally froze its currency or
+// individually froze account's trust line. Missing ledger entries are not
+// frozen; read and parse errors are returned.
+func IsIOUFrozen(view state.LedgerView, accountID, issuerID [20]byte, currency string) (bool, error) {
+	if currency == "" || currency == "XRP" {
+		return false, nil
 	}
-
-	rs, err := state.ParseRippleState(trustLineData)
+	issuer, err := ReadAccountRoot(view, issuerID)
 	if err != nil {
-		return false
+		return false, err
 	}
-
-	// Check if the issuer has frozen the trust line.
-	// Reference: rippled View.cpp isFrozen() line 264:
-	//   sle->isFlag((issuer > account) ? lsfHighFreeze : lsfLowFreeze)
-	// The freeze flag is on the ISSUER's side of the trust line.
-	issuerIsHigh := state.CompareAccountIDs(issuerID, accountID) > 0
-	if issuerIsHigh {
-		return (rs.Flags & state.LsfHighFreeze) != 0
+	if issuer != nil && issuer.Flags&state.LsfGlobalFreeze != 0 {
+		return true, nil
 	}
-	return (rs.Flags & state.LsfLowFreeze) != 0
+	return IsTrustlineFrozenBy(view, issuerID, accountID, currency)
 }
 
 // HasExpired reports whether an optional expiration has passed relative to the
@@ -145,7 +148,7 @@ func HasExpiredField(expiration uint32, parentCloseTime uint32) bool {
 // individual freeze); deep freeze is not consulted. XRP is never frozen.
 // Reference: rippled ledger/View.cpp isFrozen(view, account, currency, issuer)
 // and the inline Issue overload in View.h.
-func IsFrozen(view LedgerView, accountID [20]byte, asset Asset) bool {
+func IsFrozen(view state.LedgerView, accountID [20]byte, asset Asset) bool {
 	if asset.Currency == "" || asset.Currency == "XRP" {
 		return false
 	}
@@ -289,7 +292,7 @@ func decodeAssetMPTID(a Asset) ([24]byte, bool) {
 
 // IsGlobalFrozen checks if an issuer has globally frozen assets.
 // Reference: rippled ledger/View.h isGlobalFrozen()
-func IsGlobalFrozen(view LedgerView, issuerAddress string) bool {
+func IsGlobalFrozen(view state.LedgerView, issuerAddress string) bool {
 	if issuerAddress == "" {
 		return false
 	}

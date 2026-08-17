@@ -853,25 +853,11 @@ func isIOUFrozen(
 	if issuer.Flags&state.LsfGlobalFreeze != 0 {
 		return true, ter.TesSUCCESS
 	}
-	if accountID == issuerID {
-		return false, ter.TesSUCCESS
-	}
-
-	data, err := view.Read(keylet.Line(accountID, issuerID, currency))
+	frozen, err := tx.IsTrustlineFrozenBy(view, issuerID, accountID, currency)
 	if err != nil {
 		return false, ter.TefINTERNAL
 	}
-	if data == nil {
-		return false, ter.TesSUCCESS
-	}
-	line, err := state.ParseRippleState(data)
-	if err != nil {
-		return false, ter.TefINTERNAL
-	}
-	if state.CompareAccountIDs(issuerID, accountID) > 0 {
-		return line.Flags&state.LsfHighFreeze != 0, ter.TesSUCCESS
-	}
-	return line.Flags&state.LsfLowFreeze != 0, ter.TesSUCCESS
+	return frozen, ter.TesSUCCESS
 }
 
 func isIOUDeepFrozen(
