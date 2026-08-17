@@ -684,7 +684,6 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 			}
 		}
 
-		// Check the issuer's global and destination trust-line freezes.
 		frozen, err := tx.IsIOUFrozen(ctx.View, accountID, issuerID, sendMax.Currency)
 		if err != nil {
 			return ter.TefINTERNAL

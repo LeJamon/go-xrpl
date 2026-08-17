@@ -178,7 +178,6 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 
 		accountID := ctx.AccountID
 
-		// Check the issuer's global and source trust-line freezes.
 		frozen, err := tx.IsIOUFrozen(ctx.View, accountID, issuerID, c.SendMax.Currency)
 		if err != nil {
 			return ter.TefINTERNAL

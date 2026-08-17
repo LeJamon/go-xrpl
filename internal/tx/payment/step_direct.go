@@ -816,7 +816,6 @@ func checkFreeze(view *PaymentSandbox, src, dst [20]byte, currency string) ter.R
 			return ter.TefINTERNAL
 		}
 
-		// 3. Check individual freeze on the destination's side.
 		if tx.IsRippleStateFrozenBy(rs, dst, src) {
 			return ter.TerNO_LINE
 		}
