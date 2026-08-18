@@ -466,8 +466,10 @@ func (r *Router) armPendingConsensusLedger() bool {
 			r.acquisitionMu.Unlock()
 			return true
 		}
+		acquisitionSeq := seq
 		acquisitionHash := hash
 		if replay {
+			acquisitionSeq = nextSeq
 			acquisitionHash = nextHash
 		}
 		if r.isAcquiring(acquisitionHash) {
@@ -488,10 +490,10 @@ func (r *Router) armPendingConsensusLedger() bool {
 			}
 		}
 
-		peerID, _ := r.selectAcquisitionPeer(seq)
-		r.startLedgerAcquisitionLegacyLocked(seq, hash, peerID)
-		if r.fetchTracker.Find(hash) != nil {
-			r.consensusRecovery.stepHash = hash
+		peerID, _ := r.selectAcquisitionPeer(acquisitionSeq)
+		r.startLedgerAcquisitionLegacyLocked(acquisitionSeq, acquisitionHash, peerID)
+		if r.fetchTracker.Find(acquisitionHash) != nil {
+			r.consensusRecovery.stepHash = acquisitionHash
 		}
 		r.acquisitionMu.Unlock()
 		return true
@@ -942,24 +944,42 @@ func (r *Router) startLedgerAcquisitionLegacyLocked(seq uint32, hash [32]byte, p
 
 func (r *Router) fallbackReplayAcquisition(seq uint32, hash [32]byte, peerID uint64) {
 	r.acquisitionMu.Lock()
-	defer r.acquisitionMu.Unlock()
 
 	target := r.consensusRecovery.targetHash
 	if target != ([32]byte{}) && r.consensusRecovery.stepHash != hash && target != hash {
+		r.acquisitionMu.Unlock()
 		return
 	}
-	if target != ([32]byte{}) && r.consensusRecovery.stepHash == hash {
-		seq, _ = r.lookupSeqForHash(target)
-		hash = target
-		r.consensusRecovery.stepHash = [32]byte{}
+	if target != ([32]byte{}) && target != hash {
+		targetSeq, known := r.lookupSeqForHash(target)
+		if !known {
+			r.consensusRecovery.stepHash = [32]byte{}
+			r.acquisitionMu.Unlock()
+			r.armConsensusCatchup()
+			return
+		}
+		nextSeq, nextHash, _, replay, _ := r.recoveryForwardStep(
+			r.adaptor.LedgerService(),
+			targetSeq,
+			target,
+			r.consensusRecovery,
+		)
+		if !replay || nextSeq != seq || nextHash != hash {
+			r.consensusRecovery.stepHash = [32]byte{}
+			r.acquisitionMu.Unlock()
+			r.armConsensusCatchup()
+			return
+		}
 	}
 	if !r.canAdmitCatchupLocked(hash, maxConcurrentCatchup) {
+		r.acquisitionMu.Unlock()
 		return
 	}
 	r.startLedgerAcquisitionLegacyLocked(seq, hash, peerID)
 	if target != ([32]byte{}) && r.fetchTracker.Find(hash) != nil {
 		r.consensusRecovery.stepHash = hash
 	}
+	r.acquisitionMu.Unlock()
 }
 
 func (r *Router) requestConsensusLedger(id consensus.LedgerID) error {

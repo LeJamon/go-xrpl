@@ -31,6 +31,7 @@ type recordingSender struct {
 	noopSender
 	mu               sync.Mutex
 	replayDeltaCalls []replayDeltaCall
+	replayDeltaErr   error
 	legacyBaseCalls  []legacyBaseCall
 	legacyBaseErr    error
 	legacyBaseErrs   map[uint64]error
@@ -63,7 +64,7 @@ func (s *recordingSender) RequestReplayDelta(peerID uint64, hash [32]byte) error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.replayDeltaCalls = append(s.replayDeltaCalls, replayDeltaCall{peerID: peerID, hash: hash})
-	return nil
+	return s.replayDeltaErr
 }
 
 func (s *recordingSender) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32, indirect bool) error {
