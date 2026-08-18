@@ -71,6 +71,9 @@ func TestConsensusRecoveryLegacyFallbackWalksFromMovingAnchor(t *testing.T) {
 	require.Equal(t, []legacyBaseCall{{peerID: 7, hash: child1Hash, seq: child1Seq}}, sender.legacyCalls())
 	require.Empty(t, sender.replayCalls())
 	require.Nil(t, r.fetchTracker.Find(targetHash))
+	childAcquisition := r.fetchTracker.Find(child1Hash)
+	require.NotNil(t, childAcquisition)
+	require.True(t, childAcquisition.TransactionOnly())
 
 	retireLegacyRecoveryStep(t, r, child1Hash)
 	storeRecoveryLedger(t, svc, child1)
@@ -128,6 +131,7 @@ func TestConsensusRecoveryReplayIssueFailureFallsBackToNextChild(t *testing.T) {
 	require.Equal(t, childHash, r.consensusRecovery.stepHash)
 	require.Zero(t, r.replayer.Count())
 	require.NotNil(t, r.fetchTracker.Find(childHash))
+	require.True(t, r.fetchTracker.Find(childHash).TransactionOnly())
 	require.Nil(t, r.fetchTracker.Find(targetHash))
 }
 

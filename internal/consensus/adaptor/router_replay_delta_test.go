@@ -338,13 +338,11 @@ func TestRouter_NoParent_FallsBackToLegacy(t *testing.T) {
 	assert.Equal(t, 0, r.replayer.Count(), "no replay-delta acquisition when no parent is available")
 }
 
-// TestRouter_PeerDoesNotSupportReplay_FallsBackToLegacy verifies that
+// TestRouter_PeerDoesNotSupportReplay_UsesStandardTransactionReplay verifies that
 // when the peer did NOT advertise the ledger-replay protocol feature
-// during handshake, the router takes the legacy mtGET_LEDGER path even
-// if we have a local parent. Mirrors the policy behind
-// LedgerDeltaAcquire::trigger skipping peers without
-// ProtocolFeature::LedgerReplay.
-func TestRouter_PeerDoesNotSupportReplay_FallsBackToLegacy(t *testing.T) {
+// during handshake, the router uses standard mtGET_LEDGER but marks the
+// acquisition transaction-only so it does not download the child's state tree.
+func TestRouter_PeerDoesNotSupportReplay_UsesStandardTransactionReplay(t *testing.T) {
 	r, _, rs, svc := makeRouter(t)
 	parent := svc.GetClosedLedger()
 	require.NotNil(t, parent)
@@ -363,7 +361,41 @@ func TestRouter_PeerDoesNotSupportReplay_FallsBackToLegacy(t *testing.T) {
 	assert.Equal(t, target, calls[0].hash)
 	assert.Equal(t, uint64(11), calls[0].peerID)
 	assert.Equal(t, 0, r.replayer.Count(), "replay-delta must not be armed")
-	assert.NotNil(t, r.fetchTracker.Find(target), "legacy acquisition must be armed")
+	il := r.fetchTracker.Find(target)
+	require.NotNil(t, il, "standard acquisition must be armed")
+	assert.True(t, il.TransactionOnly(), "held parent must select the tx-only standard fast path")
+}
+
+func TestRouter_StandardTransactionReplay_EmptySuccessor(t *testing.T) {
+	r, _, rs, svc := makeRouter(t)
+	resp, targetHash, targetSeq := buildEmptyClosedSuccessorResponse(t, svc)
+
+	rs.mu.Lock()
+	rs.peerSupportsReplay = false
+	rs.mu.Unlock()
+	r.startLedgerAcquisition(targetSeq, targetHash, 11)
+	il := r.fetchTracker.Find(targetHash)
+	require.NotNil(t, il)
+	require.True(t, il.TransactionOnly())
+
+	// Stock rippled's liBASE reply contains header + state root. The tx root is
+	// absent for an empty transaction tree; transaction-only mode deliberately
+	// ignores the state root and completes immediately.
+	require.NoError(t, il.GotBase([]message.LedgerNode{
+		{NodeData: resp.LedgerHeader},
+		{NodeData: []byte{0x01}},
+	}))
+	require.True(t, il.IsComplete())
+	r.completeInboundLedger(il)
+
+	require.Nil(t, r.fetchTracker.Find(targetHash))
+	require.Zero(t, r.replayer.Count())
+	held, err := svc.GetLedgerByHash(targetHash)
+	require.NoError(t, err)
+	require.NotNil(t, held, "verified standard transaction replay must be stored")
+	assert.Equal(t, targetSeq, held.Sequence())
+	assert.Empty(t, rs.replayCalls())
+	assert.Len(t, rs.legacyCalls(), 1, "only the standard base request should be sent")
 }
 
 // TestRouter_ReplayDeltaResponse_Routed verifies that an inbound

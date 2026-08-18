@@ -9,6 +9,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
@@ -491,7 +492,11 @@ func (r *Router) armPendingConsensusLedger() bool {
 		}
 
 		peerID, _ := r.selectAcquisitionPeer(acquisitionSeq)
-		r.startLedgerAcquisitionLegacyLocked(acquisitionSeq, acquisitionHash, peerID)
+		if replay && parent != nil {
+			r.startLedgerReplayAcquisitionLegacyLocked(acquisitionSeq, acquisitionHash, peerID)
+		} else {
+			r.startLedgerAcquisitionLegacyLocked(acquisitionSeq, acquisitionHash, peerID)
+		}
 		if r.fetchTracker.Find(acquisitionHash) != nil {
 			r.consensusRecovery.stepHash = acquisitionHash
 		}
@@ -780,8 +785,10 @@ func (r *Router) refreshCatchupAcquisitionPeer(il *inbound.Ledger, peerID uint64
 // strategy for the given target. When we have the parent ledger locally
 // and the peer advertises ledger-replay, the bandwidth-efficient
 // replay-delta protocol is preferred (one request returns header + every
-// tx blob); otherwise we fall back to the legacy mtGET_LEDGER
-// header+state walk.
+// tx blob). When the peer does not support that extension, standard
+// mtGET_LEDGER fetches only the header + transaction SHAMap and the same local
+// replay verifier derives the child state. A full header+state walk is reserved
+// for targets whose parent is not held locally.
 //
 // This is currently the only driver of startReplayDeltaAcquisition: it
 // handles a single target ledger per call. The Replayer coordinator
@@ -843,7 +850,12 @@ func (r *Router) startLedgerAcquisitionLocked(seq uint32, hash [32]byte, peerID 
 		if err := r.startReplayDeltaAcquisition(seq, hash, peerID, parent); err == nil {
 			return
 		}
-		// Fall through to the legacy path on issue failure.
+		// Fall through to standard-protocol transaction-only replay on issue
+		// failure. The peer need not implement the optional replay extension.
+	}
+	if parent != nil {
+		r.startLedgerReplayAcquisitionLegacyLocked(seq, hash, peerID)
+		return
 	}
 	r.startLedgerAcquisitionLegacyLocked(seq, hash, peerID)
 }
@@ -903,6 +915,46 @@ func (r *Router) startLedgerAcquisitionLegacy(seq uint32, hash [32]byte, peerID 
 	r.acquisitionMu.Lock()
 	defer r.acquisitionMu.Unlock()
 	r.startLedgerAcquisitionLegacyLocked(seq, hash, peerID)
+}
+
+// startLedgerReplayAcquisitionLegacyLocked uses the standard mtGET_LEDGER
+// protocol to fetch only a successor ledger's header and transaction SHAMap.
+// This is the interoperable fast path for rippled peers, which do not advertise
+// go-xrpl's optional replay-delta extension. Completion locally replays the
+// transactions against the already-held parent and verifies both target roots.
+// Caller holds acquisitionMu.
+func (r *Router) startLedgerReplayAcquisitionLegacyLocked(seq uint32, hash [32]byte, peerID uint64) {
+	if seq != 0 && r.belowFloor(seq) {
+		return
+	}
+	if r.replayer.Has(hash) {
+		return
+	}
+
+	opts := append(r.acquisitionOpts(), inbound.WithTransactionOnly())
+	il, created := r.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
+		return inbound.New(hash, seq, peerID, r.logger, opts...)
+	})
+	if !created {
+		return
+	}
+
+	r.logger.Info("starting ledger replay acquisition (standard tx-only)",
+		"seq", seq,
+		"hash", fmt.Sprintf("%x", hash[:8]),
+		"peer", peerID,
+	)
+
+	r.seedAcquisitionPeers(il)
+	requested := false
+	for _, candidate := range il.Peers() {
+		if r.requestLedgerBaseFromPeer(il, candidate, "failed to request replay ledger base from peer") {
+			requested = true
+		}
+	}
+	if !requested {
+		r.requestLedgerBase(il, 0, "failed to request replay ledger base from peer")
+	}
 }
 
 func (r *Router) startLedgerAcquisitionLegacyLocked(seq uint32, hash [32]byte, peerID uint64) {
@@ -2724,6 +2776,15 @@ func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
 	recoveryTarget := r.consensusRecovery.targetHash == h.Hash
 	r.acquisitionMu.Unlock()
 
+	// A forward child fetched from a standard rippled peer contains only its
+	// header and transaction SHAMap. Rebuild the state from the locally-held
+	// parent, verify the derived roots against the peer header, then feed the
+	// same adoption path as the optional replay-delta protocol.
+	if il.TransactionOnly() {
+		r.completeStandardTransactionReplay(h, txMap, peerID)
+		return
+	}
+
 	// A history backfill installs validated sequence history below the closed tip,
 	// then advances the backward walk to its parent. It never touches operating
 	// mode or the consensus engine.
@@ -2775,4 +2836,93 @@ func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
 		"initial_candidate", initialCandidate,
 	)
 	r.completeStoredConsensusRecovery(h.LedgerIndex, h.Hash, h.ParentHash, initialCandidate)
+}
+
+// completeStandardTransactionReplay turns a transaction-only mtGET_LEDGER
+// acquisition into a verified successor ledger. This keeps forward catch-up
+// interoperable with stock rippled peers: no custom handshake feature is
+// required, and the target account-state tree is never downloaded.
+func (r *Router) completeStandardTransactionReplay(
+	h *header.LedgerHeader,
+	txMap *shamap.SHAMap,
+	peerID uint64,
+) {
+	if h == nil {
+		return
+	}
+	svc := r.adaptor.LedgerService()
+	if svc == nil {
+		return
+	}
+	fallback := func(err error) {
+		r.logger.Warn("standard transaction replay failed; falling back to full-state acquisition",
+			"seq", h.LedgerIndex,
+			"hash", fmt.Sprintf("%x", h.Hash[:8]),
+			"peer", peerID,
+			"error", err,
+		)
+		r.startLedgerAcquisitionLegacy(h.LedgerIndex, h.Hash, peerID)
+	}
+
+	parent, err := svc.GetLedgerByHash(h.ParentHash)
+	if err != nil || parent == nil {
+		if err == nil {
+			err = errors.New("locally-held replay parent is unavailable")
+		}
+		fallback(err)
+		return
+	}
+	if parent.Sequence()+1 != h.LedgerIndex {
+		fallback(fmt.Errorf("replay parent sequence %d is not predecessor of %d", parent.Sequence(), h.LedgerIndex))
+		return
+	}
+
+	stateMap, err := parent.StateMapSnapshot()
+	if err != nil {
+		fallback(fmt.Errorf("snapshot replay parent state: %w", err))
+		return
+	}
+	if txMap == nil {
+		if h.TxHash != ([32]byte{}) {
+			fallback(errors.New("missing transaction map for non-empty transaction root"))
+			return
+		}
+		txMap = shamap.New(shamap.TypeTransaction)
+	}
+
+	// NewStoredLedgerReplay only needs a header and verified transaction map
+	// from target. Carrying the parent's state snapshot here is intentional:
+	// ReplayDelta.Apply replaces it with the derived child state and checks the
+	// resulting AccountHash before adoption.
+	target, err := ledger.NewFromHeader(*h, stateMap, txMap, parent.Fees())
+	if err != nil {
+		fallback(fmt.Errorf("construct transaction-only replay target: %w", err))
+		return
+	}
+	replay, err := inbound.NewStoredLedgerReplay(parent, target, r.logger)
+	if err != nil {
+		fallback(fmt.Errorf("prepare standard transaction replay: %w", err))
+		return
+	}
+	derived, err := replay.Apply(r.adaptor.EngineConfigForReplay(parent))
+	if err != nil {
+		// The transaction SHAMap root was proven against the canonical header;
+		// failure here means local transaction-engine divergence, not bad peer
+		// data. Preserve the full-state fallback as a safe recovery path.
+		r.logger.Error("ENGINE DIVERGENCE: standard transaction replay apply failed",
+			"seq", h.LedgerIndex,
+			"hash", fmt.Sprintf("%x", h.Hash[:8]),
+			"error", err,
+		)
+		fallback(err)
+		return
+	}
+	r.logger.Info("acquired ledger via standard transaction replay",
+		"seq", h.LedgerIndex,
+		"hash", fmt.Sprintf("%x", h.Hash[:8]),
+		"peer", peerID,
+	)
+	if err := r.adoptVerifiedLedger(derived); err != nil {
+		r.logger.Warn("failed to store standard transaction replay ledger", "error", err)
+	}
 }

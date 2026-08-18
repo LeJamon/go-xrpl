@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
+	"github.com/stretchr/testify/require"
 )
 
 type trackerBlockingFamily struct {
@@ -584,6 +585,48 @@ func TestInbound_FullAcquisitionWithTransactions(t *testing.T) {
 	if _, has := entry["needed_transaction_hashes"]; has {
 		t.Errorf("needed_transaction_hashes must be absent once tx acquired, got %#v", entry["needed_transaction_hashes"])
 	}
+}
+
+// TestInbound_TransactionOnlyAcquisition proves the standard-protocol replay
+// path ignores the target account-state tree and completes after fetching only
+// the header and transaction SHAMap. The router later replays this result
+// against its locally-held parent and verifies the derived AccountHash.
+func TestInbound_TransactionOnlyAcquisition(t *testing.T) {
+	t.Parallel()
+	stateRootHash, stateRoot, _ := buildSourceMap(t, shamap.TypeState)
+	txRootHash, txRoot, txWire := buildSourceMap(t, shamap.TypeTransaction)
+
+	hdr, hash := encodeHeader(header.LedgerHeader{
+		LedgerIndex: 701,
+		AccountHash: stateRootHash,
+		TxHash:      txRootHash,
+	})
+	il := New(hash, 701, 7, discardLogger(), WithTransactionOnly())
+	require.NoError(t, il.GotBase([]message.LedgerNode{
+		{NodeData: hdr},
+		{NodeData: stateRoot},
+		{NodeData: txRoot},
+	}))
+	require.True(t, il.TransactionOnly())
+	require.Nil(t, il.stateMap, "transaction-only acquisition must not construct the target state tree")
+	require.True(t, il.Snapshot().HaveState, "local replay supplies state after acquisition")
+	require.False(t, il.IsComplete(), "non-empty transaction tree is still outstanding")
+
+	requests, complete, err := il.CollectMissingAddedRequestsContext(t.Context(), []uint64{7})
+	require.NoError(t, err)
+	require.False(t, complete)
+	require.NotEmpty(t, requests)
+	for _, request := range requests {
+		require.True(t, request.Transaction, "transaction-only mode must never request state nodes")
+	}
+
+	require.NoError(t, il.GotTransactionNodes(txWire))
+	il.CollectMissingRequest(false)
+	require.True(t, il.IsComplete())
+	_, gotState, gotTx, err := il.Result()
+	require.NoError(t, err)
+	require.Nil(t, gotState)
+	require.NotNil(t, gotTx)
 }
 
 // TestInbound_EmptyTxTreeImmediatelyComplete confirms a ledger with no
