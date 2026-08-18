@@ -176,30 +176,9 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			return ter.TefINTERNAL
 		}
 
-		// Check global freeze on issuer
-		// Reference: CreateCheck.cpp L117-125
-		issuerKey := keylet.Account(issuerID)
-		issuerData, err := ctx.View.Read(issuerKey)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if issuerData != nil {
-			issuerAccount, err := state.ParseAccountRoot(issuerData)
-			if err != nil {
-				return ter.TefINTERNAL
-			}
-			if issuerAccount.Flags&state.LsfGlobalFreeze != 0 {
-				return ter.TecFROZEN
-			}
-		}
-
 		accountID := ctx.AccountID
 
-		// Check source trust line freeze (if source is not issuer): the issuer's
-		// freeze of the source side blocks the source from sending. This is the
-		// shared issuer-side individual freeze check.
-		// Reference: CreateCheck.cpp L131-145
-		frozen, err := isTrustLineFrozenByIssuer(ctx.View, accountID, issuerID, c.SendMax.Currency)
+		frozen, err := tx.IsIOUFrozen(ctx.View, accountID, issuerID, c.SendMax.Currency)
 		if err != nil {
 			return ter.TefINTERNAL
 		}
@@ -210,7 +189,7 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		// Check destination trust line freeze (if dest is not issuer): check if
 		// the destination froze their own side (not issuer freeze).
 		// Reference: CreateCheck.cpp L146-159
-		frozen, err = isTrustLineFrozenBySelf(ctx.View, destID, issuerID, c.SendMax.Currency)
+		frozen, err = tx.IsTrustlineFrozenBy(ctx.View, destID, issuerID, c.SendMax.Currency)
 		if err != nil {
 			return ter.TefINTERNAL
 		}
@@ -300,37 +279,4 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	return ter.TesSUCCESS
-}
-
-// isTrustLineFrozenBySelf reports whether the trust line between account and
-// issuer is frozen on the account's own side. Returns false when account ==
-// issuer, the line does not exist, or the line cannot be read or parsed.
-func isTrustLineFrozenByIssuer(view tx.LedgerView, accountID, issuerID [20]byte, currency string) (bool, error) {
-	if accountID == issuerID {
-		return false, nil
-	}
-	tl, err := tx.ReadRippleState(view, accountID, issuerID, currency)
-	if err != nil || tl == nil {
-		return false, err
-	}
-	freezeFlag := state.LsfLowFreeze
-	if keylet.IsLowAccount(accountID, issuerID) {
-		freezeFlag = state.LsfHighFreeze
-	}
-	return tl.Flags&freezeFlag != 0, nil
-}
-
-func isTrustLineFrozenBySelf(view tx.LedgerView, accountID, issuerID [20]byte, currency string) (bool, error) {
-	if accountID == issuerID {
-		return false, nil
-	}
-	tl, err := tx.ReadRippleState(view, accountID, issuerID, currency)
-	if err != nil || tl == nil {
-		return false, err
-	}
-	freezeFlag := state.LsfLowFreeze
-	if !keylet.IsLowAccount(accountID, issuerID) {
-		freezeFlag = state.LsfHighFreeze
-	}
-	return tl.Flags&freezeFlag != 0, nil
 }

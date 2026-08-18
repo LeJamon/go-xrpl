@@ -354,24 +354,8 @@ func ammAccountHoldsFromPayment(view *PaymentSandbox, ammAccountID [20]byte, iss
 // Checks both global freeze on the issuer and individual freeze on the trust line.
 // Reference: rippled View.cpp isFrozen(view, account, currency, issuer)
 func isTrustLineFrozenForAMM(view *PaymentSandbox, ammAccountID, issuerID [20]byte, trustLine *state.RippleState) bool {
-	// Check global freeze on the issuer
-	issuerData, err := view.Read(keylet.Account(issuerID))
-	if err == nil && issuerData != nil {
-		issuerAcct, err := state.ParseAccountRoot(issuerData)
-		if err == nil && (issuerAcct.Flags&state.LsfGlobalFreeze) != 0 {
-			return true
-		}
-	}
-
-	// Check individual freeze on the trust line.
-	// The issuer's freeze flag is on their side of the trust line.
-	// Reference: rippled View.cpp isFrozen():
-	//   (issuer > account) ? lsfHighFreeze : lsfLowFreeze
-	issuerIsHigh := state.CompareAccountIDs(issuerID, ammAccountID) > 0
-	if issuerIsHigh {
-		return (trustLine.Flags & state.LsfHighFreeze) != 0
-	}
-	return (trustLine.Flags & state.LsfLowFreeze) != 0
+	return tx.IsGlobalFrozen(view, state.EncodeAccountIDSafe(issuerID)) ||
+		tx.IsRippleStateFrozenBy(trustLine, issuerID, ammAccountID)
 }
 
 // trustLineBalanceFor extracts the balance from a trust line for a given account.

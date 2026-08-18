@@ -684,12 +684,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 			}
 		}
 
-		// Check if issuer froze destination's trust line
-		// Reference: CashCheck.cpp L240-246
-		// isFrozen(view, dstId, currency, issuerId) checks:
-		// 1. Global freeze on issuer
-		// 2. Issuer's freeze flag on the trust line
-		frozen, err := isIssuerFrozenForAccount(ctx.View, accountID, issuerID, sendMax.Currency)
+		frozen, err := tx.IsIOUFrozen(ctx.View, accountID, issuerID, sendMax.Currency)
 		if err != nil {
 			return ter.TefINTERNAL
 		}
@@ -887,25 +882,6 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	}
 
 	return ter.TesSUCCESS
-}
-
-// isIssuerFrozenForAccount reports rippled's isFrozen(view, account, currency,
-// issuer) for an IOU: the issuer's global freeze, or — when account != issuer —
-// the issuer-side individual freeze of the trust line. It delegates to the
-// shared freeze primitives rather than re-reading and re-deriving the freeze
-// flags. The account == issuer corner short-circuits identically: the
-// shared IsTrustlineFrozen reads the self-self line (absent) and returns false,
-// so only the global freeze applies.
-// Reference: rippled/src/xrpld/ledger/detail/View.cpp isFrozen().
-func isIssuerFrozenForAccount(view tx.LedgerView, accountID, issuerID [20]byte, currency string) (bool, error) {
-	issuer, err := tx.ReadAccountRoot(view, issuerID)
-	if err != nil {
-		return false, err
-	}
-	if issuer != nil && issuer.Flags&state.LsfGlobalFreeze != 0 {
-		return true, nil
-	}
-	return isTrustLineFrozenByIssuer(view, accountID, issuerID, currency)
 }
 
 // createTrustLineForCheckCash creates a trust line between the check casher

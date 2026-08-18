@@ -193,7 +193,7 @@ func IsAssetFrozen(view state.LedgerView, asset tx.Asset, account [20]byte) bool
 		id, err := DecodeID(asset.MPTIssuanceID)
 		return err == nil && IsFrozen(view, id, account)
 	}
-	return isIOUFrozen(view, account, asset)
+	return tx.IsFrozen(view, account, asset)
 }
 
 // CheckDepositFreeze applies the freeze rules for sending an asset from a
@@ -296,7 +296,7 @@ func checkGlobalFrozen(view state.LedgerView, asset tx.Asset) ter.Result {
 		}
 		return ter.TesSUCCESS
 	}
-	if isIOUGlobalFrozen(view, asset.Issuer) {
+	if tx.IsGlobalFrozen(view, asset.Issuer) {
 		return ter.TecFROZEN
 	}
 	return ter.TesSUCCESS
@@ -313,7 +313,7 @@ func checkIndividualFrozen(view state.LedgerView, account [20]byte, asset tx.Ass
 		}
 		return ter.TesSUCCESS
 	}
-	if isIOUIndividualFrozen(view, account, asset) {
+	if tx.IsIndividualFrozen(view, account, asset) {
 		return ter.TecFROZEN
 	}
 	return ter.TesSUCCESS
@@ -338,41 +338,6 @@ func checkDeepFrozen(view state.LedgerView, account [20]byte, asset tx.Asset) te
 		return ter.TecFROZEN
 	}
 	return ter.TesSUCCESS
-}
-
-func isIOUGlobalFrozen(view state.LedgerView, issuerAddress string) bool {
-	issuer, err := state.DecodeAccountID(issuerAddress)
-	if err != nil {
-		return false
-	}
-	raw, err := view.Read(keylet.Account(issuer))
-	if err != nil || raw == nil {
-		return false
-	}
-	account, err := state.ParseAccountRoot(raw)
-	return err == nil && account.Flags&state.LsfGlobalFreeze != 0
-}
-
-func isIOUIndividualFrozen(view state.LedgerView, account [20]byte, asset tx.Asset) bool {
-	if asset.IsNative() || asset.Currency == "XRP" {
-		return false
-	}
-	issuer, err := state.DecodeAccountID(asset.Issuer)
-	if err != nil || account == issuer {
-		return false
-	}
-	raw, err := view.Read(keylet.Line(account, issuer, asset.Currency))
-	if err != nil || raw == nil {
-		return false
-	}
-	line, err := state.ParseRippleState(raw)
-	if err != nil {
-		return false
-	}
-	if state.CompareAccountIDs(issuer, account) > 0 {
-		return line.Flags&state.LsfHighFreeze != 0
-	}
-	return line.Flags&state.LsfLowFreeze != 0
 }
 
 func isIOUDeepFrozen(view state.LedgerView, account, issuer [20]byte, currency string) bool {
@@ -401,7 +366,7 @@ func isAnyAssetFrozen(view state.LedgerView, asset tx.Asset, accounts [][20]byte
 		return false
 	}
 	for _, account := range accounts {
-		if isIOUFrozen(view, account, asset) {
+		if tx.IsFrozen(view, account, asset) {
 			return true
 		}
 	}
@@ -604,38 +569,6 @@ func requireAssetAuthWithTypeAt(view state.LedgerView, asset tx.Asset, account [
 		return ter.TecNO_AUTH
 	}
 	return ter.TesSUCCESS
-}
-
-func isIOUFrozen(view state.LedgerView, account [20]byte, asset tx.Asset) bool {
-	if asset.IsNative() {
-		return false
-	}
-	issuer, err := state.DecodeAccountID(asset.Issuer)
-	if err != nil {
-		return false
-	}
-	issuerRaw, err := view.Read(keylet.Account(issuer))
-	if err == nil && issuerRaw != nil {
-		if issuerAccount, parseErr := state.ParseAccountRoot(issuerRaw); parseErr == nil &&
-			issuerAccount.Flags&state.LsfGlobalFreeze != 0 {
-			return true
-		}
-	}
-	if account == issuer {
-		return false
-	}
-	lineRaw, err := view.Read(keylet.Line(account, issuer, asset.Currency))
-	if err != nil || lineRaw == nil {
-		return false
-	}
-	line, err := state.ParseRippleState(lineRaw)
-	if err != nil {
-		return false
-	}
-	if state.CompareAccountIDs(issuer, account) > 0 {
-		return line.Flags&state.LsfHighFreeze != 0
-	}
-	return line.Flags&state.LsfLowFreeze != 0
 }
 
 func ValidDomain(view state.LedgerView, domainIDHex string, account [20]byte, parentCloseTime uint32) ter.Result {
