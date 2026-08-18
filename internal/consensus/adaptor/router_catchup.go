@@ -165,6 +165,12 @@ const maxConcurrentCatchup = 3
 // requested by consensus wrong-ledger recovery.
 const maxConcurrentSpeculativeCatchup = maxConcurrentCatchup - 1
 
+// A provisional fast-loaded ledger has a cold in-memory full-below cache. A
+// second full-state acquisition would duplicate the same durable SHAMap scan
+// and compete for storage bandwidth. Keep one pinned full-state jump in flight;
+// newer trusted targets remain queued and are armed when it completes.
+const maxConcurrentProvisionalFullStateCatchup = 1
+
 // maxForwardDeltaGap bounds how far behind the tip the router walks forward one
 // ledger at a time (replay-delta against the held parent) before it prefers a
 // single full-state jump-adopt. Within the gap a same-branch serial walk (O(txs)
@@ -967,6 +973,9 @@ func (r *Router) startLedgerAcquisitionLegacyLocked(seq uint32, hash [32]byte, p
 	if r.replayer.Has(hash) {
 		return
 	}
+	if !r.canAdmitProvisionalFullStateLocked(hash) {
+		return
+	}
 
 	il, created := r.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
 		return inbound.New(hash, seq, peerID, r.logger, r.acquisitionOpts()...)
@@ -992,6 +1001,26 @@ func (r *Router) startLedgerAcquisitionLegacyLocked(seq uint32, hash [32]byte, p
 	if !requested {
 		r.requestLedgerBase(il, 0, "failed to request ledger base from peer")
 	}
+}
+
+// canAdmitProvisionalFullStateLocked prevents competing full-state walks only
+// while confirming a fast-loaded ledger. Transaction-only replay acquisitions
+// remain unaffected. Caller holds acquisitionMu.
+func (r *Router) canAdmitProvisionalFullStateLocked(hash [32]byte) bool {
+	svc := r.adaptor.LedgerService()
+	if svc == nil || !svc.IsFastLoadProvisional() {
+		return true
+	}
+	if existing := r.fetchTracker.Find(hash); existing != nil {
+		return true
+	}
+	active := 0
+	for _, candidate := range r.fetchTracker.Active() {
+		if candidate.Reason() == inbound.ReasonConsensus && !candidate.TransactionOnly() {
+			active++
+		}
+	}
+	return active < maxConcurrentProvisionalFullStateCatchup
 }
 
 func (r *Router) fallbackReplayAcquisition(seq uint32, hash [32]byte, peerID uint64) {

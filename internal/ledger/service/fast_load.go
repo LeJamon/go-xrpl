@@ -233,6 +233,14 @@ func (s *Service) verifyStoredSHAMapWithTicks(
 		return fmt.Errorf("zero root")
 	}
 
+	// The strict startup walk proves these durable subtrees complete. Retain
+	// shallow proofs and publish them only after the whole traversal succeeds,
+	// so the first inbound-ledger missing-node walk can skip the shared stored
+	// state instead of reading it all again. A concurrent generation reset makes
+	// Insert reject these old-generation proofs.
+	proofs := newStoredSHAMapProofs(s.shamapFamily)
+	proofs.record(storedSHAMapNode{hash: root})
+
 	fetch := s.storedSHAMapVerificationFetch()
 	rootNode, _, err := s.loadStoredSHAMapNodeWithFetch(
 		ctx,
@@ -270,8 +278,9 @@ func (s *Service) verifyStoredSHAMapWithTicks(
 		workers*storedSHAMapFrontierTasksPerWorker,
 		mapType,
 		fetch,
-		func() {
+		func(node storedSHAMapNode) {
 			progress.nodesChecked.Add(1)
+			proofs.record(node)
 		},
 	)
 	for _, count := range outstanding {
@@ -286,6 +295,7 @@ func (s *Service) verifyStoredSHAMapWithTicks(
 	startedWorkers := min(workers, len(frontier))
 	progress.configureWorkers(workers, startedWorkers, len(frontier))
 	if len(frontier) == 0 {
+		proofs.publish()
 		return nil
 	}
 
@@ -331,8 +341,9 @@ func (s *Service) verifyStoredSHAMapWithTicks(
 					[]storedSHAMapNode{task.node},
 					mapType,
 					fetch,
-					func([32]byte, *nodestore.Node) error {
+					func(node storedSHAMapNode, _ *nodestore.Node) error {
 						unreportedNodes++
+						proofs.record(node)
 						if unreportedNodes == storedSHAMapNodeCountBatch {
 							progress.nodesChecked.Add(unreportedNodes)
 							unreportedNodes = 0
@@ -371,13 +382,63 @@ func (s *Service) verifyStoredSHAMapWithTicks(
 			}
 			select {
 			case <-workersDone:
-				return context.Cause(walkCtx)
+				err = context.Cause(walkCtx)
+				if err == nil {
+					proofs.publish()
+				}
+				return err
 			default:
 			}
 			progress.report(tick)
 		case <-workersDone:
-			return context.Cause(walkCtx)
+			err = context.Cause(walkCtx)
+			if err == nil {
+				proofs.publish()
+			}
+			return err
 		}
+	}
+}
+
+type storedSHAMapProofs struct {
+	cache      *shamap.FullBelowCache
+	generation uint32
+	mu         sync.Mutex
+	hashes     [][32]byte
+}
+
+func newStoredSHAMapProofs(family shamap.Family) *storedSHAMapProofs {
+	proofs := &storedSHAMapProofs{}
+	provider, ok := family.(interface {
+		FullBelowCache() *shamap.FullBelowCache
+	})
+	if !ok || provider.FullBelowCache() == nil {
+		return proofs
+	}
+	proofs.cache = provider.FullBelowCache()
+	proofs.generation = proofs.cache.Generation()
+	return proofs
+}
+
+func (p *storedSHAMapProofs) record(node storedSHAMapNode) {
+	if p.cache == nil || node.depth > shamap.FullBelowCacheMaxDepth {
+		return
+	}
+	p.mu.Lock()
+	p.hashes = append(p.hashes, node.hash)
+	p.mu.Unlock()
+}
+
+func (p *storedSHAMapProofs) publish() {
+	if p.cache == nil {
+		return
+	}
+	p.mu.Lock()
+	hashes := p.hashes
+	p.hashes = nil
+	p.mu.Unlock()
+	for _, hash := range hashes {
+		p.cache.Insert(p.generation, hash)
 	}
 }
 
@@ -427,7 +488,7 @@ func (s *Service) buildStoredSHAMapFrontier(
 	target int,
 	mapType shamap.Type,
 	fetch storedSHAMapFetch,
-	visit func(),
+	visit func(storedSHAMapNode),
 ) ([]storedSHAMapTask, []uint32, error) {
 	splitRootBranches := target > storedSHAMapFrontierTasksPerWorker
 	target = max(target, len(branches))
@@ -463,7 +524,7 @@ func (s *Service) buildStoredSHAMapFrontier(
 			return frontier, outstanding, err
 		}
 		if visit != nil {
-			visit()
+			visit(task.node)
 		}
 		outstanding[task.branch]--
 		for _, child := range children {
@@ -501,7 +562,12 @@ func (s *Service) walkStoredSHAMapWithFetch(
 		[]storedSHAMapNode{{hash: root}},
 		mapType,
 		fetch,
-		visit,
+		func(node storedSHAMapNode, stored *nodestore.Node) error {
+			if visit == nil {
+				return nil
+			}
+			return visit(node.hash, stored)
+		},
 	)
 }
 
@@ -510,7 +576,7 @@ func (s *Service) walkStoredSHAMapNodesWithFetch(
 	stack []storedSHAMapNode,
 	mapType shamap.Type,
 	fetch storedSHAMapFetch,
-	visit func([32]byte, *nodestore.Node) error,
+	visit func(storedSHAMapNode, *nodestore.Node) error,
 ) error {
 	for len(stack) > 0 {
 		if err := ctx.Err(); err != nil {
@@ -527,7 +593,7 @@ func (s *Service) walkStoredSHAMapNodesWithFetch(
 			return err
 		}
 		if visit != nil {
-			if err := visit(pending.hash, stored); err != nil {
+			if err := visit(pending, stored); err != nil {
 				return err
 			}
 		}

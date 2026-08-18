@@ -1063,13 +1063,13 @@ func TestFullBelowCache_DeepProofStreamDoesNotEvictShallowProof(t *testing.T) {
 	c := newFullBelowCacheWithClock(target, time.Hour, time.Now)
 	gen := c.Generation()
 	shallow := [32]byte{0, 0xff}
-	cacheFullBelow(c, gen, shallow, fullBelowCacheMaxDepth)
+	cacheFullBelow(c, gen, shallow, FullBelowCacheMaxDepth)
 
 	var lastDeep [32]byte
 	for i := range 10_000 {
 		var hash [32]byte
 		binary.BigEndian.PutUint64(hash[8:], uint64(i+1))
-		cacheFullBelow(c, gen, hash, fullBelowCacheMaxDepth+1)
+		cacheFullBelow(c, gen, hash, FullBelowCacheMaxDepth+1)
 		lastDeep = hash
 	}
 
