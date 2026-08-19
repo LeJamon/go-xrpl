@@ -1286,6 +1286,22 @@ type FastSyncMetrics struct {
 	CompletionRecheckRejectedUnavailable uint64
 	TargetSuperseded                     uint64
 	ObsoleteAcquisitionCompleted         uint64
+	ReplayPipelineRequested              uint64
+	ReplayPipelineReady                  uint64
+	ReplayPipelineApplied                uint64
+	ReplayPipelineDiscarded              uint64
+	ReplayPipelineRetried                uint64
+	ReplayPipelineFallbacks              uint64
+	ReplayPipelineAcquireUs              uint64
+	ReplayPipelineReadyWaitUs            uint64
+	ReplayPipelineApplyUs                uint64
+	ReplayPipelinePersistUs              uint64
+	ReplayPipelineWindow                 uint32
+	ReplayPipelineDepth                  uint32
+	ReplayPipelineReadyDepth             uint32
+	ReplayPipelineHeadSeq                uint32
+	ReplayPipelineTargetSeq              uint32
+	ReplayPipelineHeadBlockedUs          uint64
 }
 
 // SubmitResult contains the result of submitting a transaction.
