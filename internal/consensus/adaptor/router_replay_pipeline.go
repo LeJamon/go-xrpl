@@ -291,13 +291,6 @@ func (r *Router) pruneStandardReplayEntriesLocked(
 	return retired
 }
 
-func (r *Router) cancelStandardReplayPipeline() {
-	r.acquisitionMu.Lock()
-	retired := r.cancelStandardReplayPipelineLocked()
-	r.acquisitionMu.Unlock()
-	r.retireLegacyAcquisitions(retired)
-}
-
 func (r *Router) standardReplayIdentityLocked() standardReplayIdentity {
 	return standardReplayIdentity{
 		generation: r.standardReplay.generation,
