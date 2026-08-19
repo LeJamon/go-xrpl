@@ -284,7 +284,7 @@ func assertPersisted(t *testing.T, rm *RepositoryManager, value relationaldb.Val
 func TestLegacySignatureSchemaMigrates(t *testing.T) {
 	rm := setupTestDB(t)
 	ctx := context.Background()
-	if _, err := rm.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = 4`); err != nil {
+	if _, err := rm.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version >= 4`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := rm.db.ExecContext(ctx, `ALTER TABLE validations ADD COLUMN signature BYTEA NOT NULL DEFAULT ''`); err != nil {
