@@ -238,6 +238,22 @@ func addServerDiagnostics(info map[string]any, services *types.ServiceGraph) {
 			"completion_recheck_rejected_quorum_unavailable": strconv.FormatUint(metrics.CompletionRecheckRejectedUnavailable, 10),
 			"target_superseded":                              strconv.FormatUint(metrics.TargetSuperseded, 10),
 			"obsolete_acquisition_completed":                 strconv.FormatUint(metrics.ObsoleteAcquisitionCompleted, 10),
+			"replay_pipeline_requested":                      strconv.FormatUint(metrics.ReplayPipelineRequested, 10),
+			"replay_pipeline_ready":                          strconv.FormatUint(metrics.ReplayPipelineReady, 10),
+			"replay_pipeline_applied":                        strconv.FormatUint(metrics.ReplayPipelineApplied, 10),
+			"replay_pipeline_discarded":                      strconv.FormatUint(metrics.ReplayPipelineDiscarded, 10),
+			"replay_pipeline_retried":                        strconv.FormatUint(metrics.ReplayPipelineRetried, 10),
+			"replay_pipeline_fallbacks":                      strconv.FormatUint(metrics.ReplayPipelineFallbacks, 10),
+			"replay_pipeline_acquire_us":                     strconv.FormatUint(metrics.ReplayPipelineAcquireUs, 10),
+			"replay_pipeline_ready_wait_us":                  strconv.FormatUint(metrics.ReplayPipelineReadyWaitUs, 10),
+			"replay_pipeline_apply_us":                       strconv.FormatUint(metrics.ReplayPipelineApplyUs, 10),
+			"replay_pipeline_persist_us":                     strconv.FormatUint(metrics.ReplayPipelinePersistUs, 10),
+			"replay_pipeline_window":                         strconv.FormatUint(uint64(metrics.ReplayPipelineWindow), 10),
+			"replay_pipeline_depth":                          strconv.FormatUint(uint64(metrics.ReplayPipelineDepth), 10),
+			"replay_pipeline_ready_depth":                    strconv.FormatUint(uint64(metrics.ReplayPipelineReadyDepth), 10),
+			"replay_pipeline_head_seq":                       strconv.FormatUint(uint64(metrics.ReplayPipelineHeadSeq), 10),
+			"replay_pipeline_target_seq":                     strconv.FormatUint(uint64(metrics.ReplayPipelineTargetSeq), 10),
+			"replay_pipeline_head_blocked_us":                strconv.FormatUint(metrics.ReplayPipelineHeadBlockedUs, 10),
 		}
 	}
 	info["counters"] = counters

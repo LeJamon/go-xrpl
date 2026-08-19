@@ -771,6 +771,22 @@ func (r *nodeRuntime) configureConsensus() error {
 					CompletionRecheckRejectedUnavailable: snapshot.CompletionRecheckRejectedUnavailable,
 					TargetSuperseded:                     snapshot.TargetSuperseded,
 					ObsoleteAcquisitionCompleted:         snapshot.ObsoleteAcquisitionCompleted,
+					ReplayPipelineRequested:              snapshot.ReplayPipelineRequested,
+					ReplayPipelineReady:                  snapshot.ReplayPipelineReady,
+					ReplayPipelineApplied:                snapshot.ReplayPipelineApplied,
+					ReplayPipelineDiscarded:              snapshot.ReplayPipelineDiscarded,
+					ReplayPipelineRetried:                snapshot.ReplayPipelineRetried,
+					ReplayPipelineFallbacks:              snapshot.ReplayPipelineFallbacks,
+					ReplayPipelineAcquireUs:              snapshot.ReplayPipelineAcquireUs,
+					ReplayPipelineReadyWaitUs:            snapshot.ReplayPipelineReadyWaitUs,
+					ReplayPipelineApplyUs:                snapshot.ReplayPipelineApplyUs,
+					ReplayPipelinePersistUs:              snapshot.ReplayPipelinePersistUs,
+					ReplayPipelineWindow:                 snapshot.ReplayPipelineWindow,
+					ReplayPipelineDepth:                  snapshot.ReplayPipelineDepth,
+					ReplayPipelineReadyDepth:             snapshot.ReplayPipelineReadyDepth,
+					ReplayPipelineHeadSeq:                snapshot.ReplayPipelineHeadSeq,
+					ReplayPipelineTargetSeq:              snapshot.ReplayPipelineTargetSeq,
+					ReplayPipelineHeadBlockedUs:          snapshot.ReplayPipelineHeadBlockedUs,
 				}
 			}
 		}

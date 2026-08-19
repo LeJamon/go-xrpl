@@ -57,6 +57,22 @@ type FastSyncMetrics struct {
 	CompletionRecheckRejectedUnavailable uint64
 	TargetSuperseded                     uint64
 	ObsoleteAcquisitionCompleted         uint64
+	ReplayPipelineRequested              uint64
+	ReplayPipelineReady                  uint64
+	ReplayPipelineApplied                uint64
+	ReplayPipelineDiscarded              uint64
+	ReplayPipelineRetried                uint64
+	ReplayPipelineFallbacks              uint64
+	ReplayPipelineAcquireUs              uint64
+	ReplayPipelineReadyWaitUs            uint64
+	ReplayPipelineApplyUs                uint64
+	ReplayPipelinePersistUs              uint64
+	ReplayPipelineWindow                 uint32
+	ReplayPipelineDepth                  uint32
+	ReplayPipelineReadyDepth             uint32
+	ReplayPipelineHeadSeq                uint32
+	ReplayPipelineTargetSeq              uint32
+	ReplayPipelineHeadBlockedUs          uint64
 }
 
 type peerBootstrapAcknowledger interface {
@@ -274,10 +290,21 @@ type Router struct {
 	completionRecheckRejectedUnavailable atomic.Uint64
 	targetSuperseded                     atomic.Uint64
 	obsoleteAcquisitionCompleted         atomic.Uint64
+	replayPipelineRequested              atomic.Uint64
+	replayPipelineReady                  atomic.Uint64
+	replayPipelineApplied                atomic.Uint64
+	replayPipelineDiscarded              atomic.Uint64
+	replayPipelineRetried                atomic.Uint64
+	replayPipelineFallbacks              atomic.Uint64
+	replayPipelineAcquireUs              atomic.Uint64
+	replayPipelineReadyWaitUs            atomic.Uint64
+	replayPipelineApplyUs                atomic.Uint64
+	replayPipelinePersistUs              atomic.Uint64
 
 	acquisitionMu     sync.Mutex
 	consensusRecovery consensusRecovery
 	lastHandoffSeq    uint32
+	standardReplay    standardReplayPipeline
 
 	// historyMu guards history, the single backward history-backfill target: the
 	// next ledger a jump-adopt skipped (rippled Reason::HISTORY). The walk is
@@ -639,6 +666,7 @@ func (r *Router) StopAcquisitions() (legacy, replay int) {
 	if r.replayer != nil {
 		replay = r.replayer.Stop()
 	}
+	r.cancelStandardReplayPipelineLocked()
 	r.consensusRecovery = consensusRecovery{}
 	r.lastHandoffSeq = 0
 	r.acquisitionMu.Unlock()
