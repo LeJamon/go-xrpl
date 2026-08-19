@@ -176,6 +176,15 @@ type Ledger struct {
 	// fetchPackRequested records that the router escalated this stalled
 	// acquisition to a fetch-pack (at most once). Guarded by mu.
 	fetchPackRequested bool
+
+	// transactionOnly is used by forward catch-up when the parent ledger is
+	// already held locally but the peer does not support the optional
+	// ledger-replay extension. Standard mtGET_LEDGER can still provide the
+	// target header and transaction SHAMap; the router replays those
+	// transactions against the held parent and verifies AccountHash before
+	// adoption. In this mode the peer's account-state SHAMap is deliberately
+	// ignored, avoiding a full-state download for every child ledger.
+	transactionOnly bool
 }
 
 // Option configures an acquisition at construction.
@@ -205,6 +214,16 @@ func WithFamily(family shamap.Family) Option {
 func WithHeaderAdmission(admit func(uint32) error) Option {
 	return func(l *Ledger) {
 		l.headerAdmission = admit
+	}
+}
+
+// WithTransactionOnly configures a standard-protocol acquisition to fetch the
+// target header and transaction SHAMap without walking its account-state
+// SHAMap. The result must be replayed against a locally-held parent and its
+// derived AccountHash verified before it is trusted.
+func WithTransactionOnly() Option {
+	return func(l *Ledger) {
+		l.transactionOnly = true
 	}
 }
 
@@ -269,6 +288,12 @@ func (l *Ledger) newSyncMap(t shamap.Type) (*shamap.SHAMap, error) {
 // Reason returns why this acquisition was started.
 func (l *Ledger) Reason() Reason {
 	return l.reason
+}
+
+// TransactionOnly reports whether this acquisition contains only the target
+// header and transaction SHAMap for local replay.
+func (l *Ledger) TransactionOnly() bool {
+	return l.transactionOnly
 }
 
 // State returns the current acquisition state.
@@ -628,7 +653,12 @@ func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.Ledge
 		)
 	}
 
-	if l.stateMap == nil && len(nodes) >= 2 && len(nodes[1].NodeData) > 0 {
+	if l.transactionOnly {
+		// The parent state is already local. Do not attach or persist the target
+		// state root: the replay engine derives the target state and verifies it
+		// against h.AccountHash before the router adopts the ledger.
+		l.haveState = true
+	} else if l.stateMap == nil && len(nodes) >= 2 && len(nodes[1].NodeData) > 0 {
 		sm, createErr := l.newSyncMap(shamap.TypeState)
 		if createErr != nil {
 			return useful, fmt.Errorf("create state map: %w", createErr)
@@ -664,7 +694,7 @@ func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.Ledge
 		useful++
 	}
 
-	if l.stateMap == nil || (h.TxHash != ([32]byte{}) && l.txMap == nil) {
+	if (!l.transactionOnly && l.stateMap == nil) || (h.TxHash != ([32]byte{}) && l.txMap == nil) {
 		return useful, nil
 	}
 	l.state = StateWantState

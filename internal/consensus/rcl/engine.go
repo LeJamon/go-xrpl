@@ -191,9 +191,10 @@ type Engine struct {
 	// expired round waits at the close-time gate; reset each startRoundLocked.
 	roundExpiredReported bool
 
-	// lastSignTime is the monotonic floor for emitted validation SignTime: a
-	// regressing adaptor clock (NTP step, VM pause) is bumped to
-	// lastSignTime+1s so peers never see non-monotonic validations.
+	// lastSignTime is the whole-second, wire-canonical monotonic floor for
+	// emitted validation SignTime: a regressing adaptor clock (NTP step, VM
+	// pause) is bumped to lastSignTime+1s so peers never see non-monotonic
+	// validations.
 	// Protected by e.mu.
 	lastSignTime time.Time
 

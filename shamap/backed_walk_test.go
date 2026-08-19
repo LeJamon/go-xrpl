@@ -1104,8 +1104,8 @@ func TestPublishAcknowledgedFullBelowPreservesProofDepthAdmission(t *testing.T) 
 	shallow := [32]byte{0x31}
 	deep := [32]byte{0x32}
 	lane := &sm.acquisition.cursor.lanes[0]
-	lane.proofs.add(shallow, fullBelowCacheMaxDepth)
-	lane.proofs.add(deep, fullBelowCacheMaxDepth+1)
+	lane.proofs.add(shallow, FullBelowCacheMaxDepth)
+	lane.proofs.add(deep, FullBelowCacheMaxDepth+1)
 
 	complete, release := sm.publishAcknowledgedFullBelow()
 	if complete {

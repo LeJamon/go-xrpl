@@ -284,6 +284,42 @@ func TestRouter_ProvisionalWarmStartFarGapJumpAdopts(t *testing.T) {
 	assert.True(t, svc.IsFastLoadProvisional())
 }
 
+func TestRouter_ProvisionalWarmStartAllowsOnlyOneFullStateAcquisition(t *testing.T) {
+	r, sender, svc := makeProvisionalWarmRouter(t)
+	closed := svc.GetClosedLedgerIndex()
+	targetSeq := closed + maxForwardDeltaGap + 1
+	trackCatchupPeer(r, 7, targetSeq+1)
+
+	firstHash := [32]byte{0xF1}
+	secondHash := [32]byte{0xF2}
+	require.True(t, r.startLedgerAcquisition(targetSeq, firstHash, 7))
+	assert.False(t, r.startLedgerAcquisition(targetSeq+1, secondHash, 7))
+
+	assert.NotNil(t, r.fetchTracker.Find(firstHash))
+	assert.Nil(t, r.fetchTracker.Find(secondHash))
+	require.Len(t, sender.legacyCalls(), 1)
+	assert.Equal(t, firstHash, sender.legacyCalls()[0].hash)
+}
+
+func TestRouter_ProvisionalWarmStartStillAllowsTransactionOnlyReplay(t *testing.T) {
+	r, sender, svc := makeProvisionalWarmRouter(t)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	trackCatchupPeer(r, 7, closed.Sequence()+maxForwardDeltaGap+1)
+
+	fullHash := [32]byte{0xF1}
+	require.True(t, r.startLedgerAcquisition(closed.Sequence()+maxForwardDeltaGap+1, fullHash, 7))
+
+	nextHash := [32]byte{0xB1}
+	require.True(t, r.startLedgerAcquisition(closed.Sequence()+1, nextHash, 7))
+
+	assert.NotNil(t, r.fetchTracker.Find(fullHash))
+	assert.True(t, r.isAcquiring(nextHash))
+	require.Len(t, sender.legacyCalls(), 1)
+	require.Len(t, sender.replayCalls(), 1)
+	assert.Equal(t, nextHash, sender.replayCalls()[0].hash)
+}
+
 func TestRouter_ProvisionalWarmStartRecentForkJumpAdopts(t *testing.T) {
 	r, sender, svc := makeProvisionalWarmRouter(t)
 	closed := svc.GetClosedLedger()

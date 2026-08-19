@@ -627,10 +627,13 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 
 	full := e.mode == consensus.ModeProposing
 
-	// SignTime under a monotonic floor: a regressing adaptor clock would emit
-	// a stale SignTime peers reject, so bump to lastSignTime+1s. SeenTime
-	// mirrors SignTime.
-	signTime := e.adaptor.Now()
+	// SignTime is a UINT32 count of XRPL epoch seconds on the wire. Normalize
+	// before signing and tracking so a validation relayed back by a peer is
+	// identical to the local copy; retaining adaptor-clock nanoseconds locally
+	// would make the tracker misclassify that echo as a conflicting validation.
+	// Keep the normalized time under a monotonic floor: a regressing adaptor
+	// clock is bumped to lastSignTime+1s so peers never see stale SignTimes.
+	signTime := time.Unix(e.adaptor.Now().Unix(), 0).UTC()
 	if !e.lastSignTime.IsZero() && !signTime.After(e.lastSignTime) {
 		signTime = e.lastSignTime.Add(1 * time.Second)
 	}

@@ -2790,6 +2790,54 @@ func TestSendValidation_ClockRegressionPreservesMonotonic(t *testing.T) {
 	}
 }
 
+// A locally generated validation is tracked before it is serialized. Since
+// sfSigningTime has whole-second precision, the local copy must use the same
+// precision or its peer-relayed echo looks like a same-sequence conflict.
+func TestSendValidation_PeerEchoIsNotConflicting(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+
+	engine := NewEngine(adaptor, DefaultConfig())
+	if err := engine.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	engine.StartRound(consensus.RoundID{
+		Seq:        100,
+		ParentHash: consensus.LedgerID{1},
+	}, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.now = time.Unix(1_700_000_000, 987_654_321).UTC()
+	adaptor.mu.Unlock()
+
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xA1}, seq: 101})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	if len(adaptor.validationsBroadcast) != 1 {
+		adaptor.mu.RUnlock()
+		t.Fatalf("want one validation, got %d", len(adaptor.validationsBroadcast))
+	}
+	emitted := adaptor.validationsBroadcast[0]
+	adaptor.mu.RUnlock()
+
+	if emitted.SignTime.Nanosecond() != 0 {
+		t.Fatalf("SignTime must match whole-second wire precision, got %v", emitted.SignTime)
+	}
+
+	echo := *emitted
+	echo.SignTime = time.Unix(emitted.SignTime.Unix(), 0).UTC()
+	echo.SeenTime = adaptor.Now()
+	if status := engine.validationTracker.AddStatus(&echo); status != ValStatusBadSeq {
+		t.Fatalf("peer echo status: want %v, got %v", ValStatusBadSeq, status)
+	}
+}
+
 // TestSendValidation_ClockMonotonic_NormalCase confirms the monotonic floor
 // does NOT inject an artificial step when the adaptor clock advances
 // normally. With a 3-second forward step, the second SignTime should be

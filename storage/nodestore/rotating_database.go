@@ -16,6 +16,12 @@ type RotatingKVDatabase struct {
 	rotating kvstore.RotatingStore
 }
 
+// DeleteBefore is unsupported for generation stores. Destructive retention
+// changes must use RotateGeneration so the durable manifest identity advances.
+func (d *RotatingKVDatabase) DeleteBefore(context.Context, uint32, int) (uint64, error) {
+	return 0, errors.New("nodestore: direct DeleteBefore is unsupported for rotating stores")
+}
+
 // NewRotatingKVDatabase constructs one logical NodeStore cache over a rotating
 // key-value backend.
 func NewRotatingKVDatabase(
@@ -85,6 +91,8 @@ func (d *RotatingKVDatabase) RotateGeneration(
 	ctx context.Context,
 	lastRotated, minimumOnline uint32,
 ) (bool, error) {
+	d.mutationMu.Lock()
+	defer d.mutationMu.Unlock()
 	if err := d.begin(ctx); err != nil {
 		return false, err
 	}

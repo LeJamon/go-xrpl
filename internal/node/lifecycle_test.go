@@ -359,6 +359,44 @@ func TestNodeRuntimeShutdownBoundsBlockingStoreClose(t *testing.T) {
 	close(release)
 }
 
+func TestNodeRuntimeShutdownLeavesStoresOpenWhileCheckpointFlushIsRunning(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var nodeStoreClosed atomic.Bool
+	var repositoryClosed atomic.Bool
+	runtime := &nodeRuntime{
+		prepareFastLoadCheckpoint: func(context.Context) (bool, error) {
+			close(started)
+			<-release
+			return true, nil
+		},
+		nodeStore: &shutdownProbeDB{close: func() error {
+			nodeStoreClosed.Store(true)
+			return nil
+		}},
+		repo: &shutdownProbeRepository{close: func() error {
+			repositoryClosed.Store(true)
+			return nil
+		}},
+		serverLog: xrpllog.Discard(),
+	}
+	result := make(chan error, 1)
+	go func() { result <- runtime.shutdownWithin(50 * time.Millisecond) }()
+	<-started
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("shutdown error = %v, want deadline exceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shutdown exceeded its total budget")
+	}
+	if nodeStoreClosed.Load() || repositoryClosed.Load() {
+		t.Fatal("storage closed while checkpoint flush was still running")
+	}
+	close(release)
+}
+
 func TestNodeRuntimeShutdownLeavesStoresOpenWhileTransportHandlerIsRunning(t *testing.T) {
 	runtimeCtx, cancelRuntime := context.WithCancel(context.Background())
 	defer cancelRuntime()

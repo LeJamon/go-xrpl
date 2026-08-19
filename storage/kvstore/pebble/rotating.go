@@ -3,6 +3,7 @@ package pebble
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -634,6 +635,27 @@ func (r *RotatingStore) RotationState() (uint32, uint32) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.lastRotated, r.minimumOnline
+}
+
+// RotationIdentity returns a path-free snapshot of the durable manifest.
+func (r *RotatingStore) RotationIdentity() (kvstore.RotationIdentity, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.closed {
+		return kvstore.RotationIdentity{}, kvstore.ErrClosed
+	}
+	owner, err := hex.DecodeString(r.ownerID)
+	if err != nil || len(owner) != 16 {
+		return kvstore.RotationIdentity{}, errors.New("kvstore/pebble: invalid rotation owner ID")
+	}
+	identity := kvstore.RotationIdentity{
+		WritableID:    sha256.Sum256([]byte(filepath.Base(r.writablePath))),
+		ArchiveID:     sha256.Sum256([]byte(filepath.Base(r.archivePath))),
+		LastRotated:   r.lastRotated,
+		MinimumOnline: r.minimumOnline,
+	}
+	copy(identity.OwnerID[:], owner)
+	return identity, nil
 }
 
 // Rotate durably publishes a fresh writable generation before retiring the

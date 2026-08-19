@@ -16,13 +16,18 @@ func (d *KVDatabase) DeleteBefore(
 	boundary uint32,
 	batchSize int,
 ) (deleted uint64, err error) {
+	if boundary == 0 {
+		return 0, nil
+	}
+	d.mutationMu.Lock()
+	defer d.mutationMu.Unlock()
+	if err := d.bumpDurableMutation(ctx); err != nil {
+		return 0, fmt.Errorf("delete-before durable generation: %w", err)
+	}
 	if err := d.begin(ctx); err != nil {
 		return 0, err
 	}
 	defer d.lifecycleMu.RUnlock()
-	if boundary == 0 {
-		return 0, nil
-	}
 	if batchSize <= 0 {
 		batchSize = defaultDeleteBatch
 	}

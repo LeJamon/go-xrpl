@@ -89,3 +89,27 @@ func TestRotatingKVDatabaseCanRotateWithoutRefresh(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, canSkip)
 }
+
+func TestRotatingKVDatabaseRejectsDirectDeleteBefore(t *testing.T) {
+	ctx := context.Background()
+	store, err := kvpebble.NewRotating(
+		filepath.Join(t.TempDir(), "nodes"),
+		kvpebble.Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200},
+	)
+	require.NoError(t, err)
+	db, err := NewRotatingKVDatabase(store, positiveCacheConfig(16))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	node := &Node{
+		Type: NodeAccount, Hash: testHash([]byte("retained-node")),
+		Data: []byte("retained-node"), LedgerSeq: 1,
+	}
+	require.NoError(t, db.Store(ctx, node))
+	deleted, err := db.DeleteBefore(ctx, 2, 10)
+	require.Zero(t, deleted)
+	require.ErrorContains(t, err, "unsupported for rotating stores")
+	stored, err := db.Fetch(ctx, node.Hash)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+}

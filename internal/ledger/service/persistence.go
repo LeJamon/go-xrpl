@@ -77,6 +77,9 @@ func (s *Service) persistValidatedLedgerAtToken(
 
 	if l.IsValidated() {
 		s.recordValidatedPersistence(seq, token, persistErr == nil)
+		if persistErr == nil && s.nodeStore != nil && s.shamapFamily != nil {
+			s.markFastLoadCheckpointEligible()
+		}
 	}
 	return persistErr
 }

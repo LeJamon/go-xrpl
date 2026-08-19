@@ -785,6 +785,63 @@ func TestService_VerifyStoredSHAMapUsesUncachedReads(t *testing.T) {
 	require.Equal(t, before.Reads+expectedNodes, after.Reads)
 }
 
+func TestService_VerifyStoredSHAMapSeedsFullBelowCache(t *testing.T) {
+	svc, _, root, _, _ := newStoredVerificationFixture(t, shamap.BranchFactor)
+	provider, ok := svc.shamapFamily.(interface {
+		FullBelowCache() *shamap.FullBelowCache
+	})
+	require.True(t, ok)
+	cache := provider.FullBelowCache()
+	cache.Bump()
+	generation := cache.Generation()
+
+	rootNode, _, err := svc.loadStoredSHAMapNode(
+		t.Context(),
+		storedSHAMapNode{hash: root},
+		shamap.TypeState,
+	)
+	require.NoError(t, err)
+	inner, ok := rootNode.(shamap.InnerNodeReader)
+	require.True(t, ok)
+	child, err := inner.ChildHash(0)
+	require.NoError(t, err)
+	require.False(t, cache.Has(generation, root))
+	require.False(t, cache.Has(generation, child))
+
+	require.NoError(t, svc.verifyStoredSHAMap(t.Context(), root, shamap.TypeState))
+
+	require.True(t, cache.Has(generation, root))
+	require.True(t, cache.Has(generation, child))
+}
+
+func TestService_VerifyStoredSHAMapDoesNotSeedFailedProofs(t *testing.T) {
+	svc, db, root, _, _ := newStoredVerificationFixture(t, 1)
+	provider, ok := svc.shamapFamily.(interface {
+		FullBelowCache() *shamap.FullBelowCache
+	})
+	require.True(t, ok)
+	cache := provider.FullBelowCache()
+	cache.Bump()
+	generation := cache.Generation()
+
+	raw := db.(interface {
+		FetchDataUncached(context.Context, nodestore.Hash256) ([]byte, error)
+	})
+	tracked := &uncachedTrackingDatabase{Database: db}
+	tracked.rewrite = func(hash nodestore.Hash256, data []byte) ([]byte, error) {
+		if hash == nodestore.Hash256(root) {
+			return data, nil
+		}
+		return raw.FetchDataUncached(t.Context(), nodestore.Hash256(root))
+	}
+	svc.nodeStore = tracked
+
+	err := svc.verifyStoredSHAMap(t.Context(), root, shamap.TypeState)
+	require.ErrorContains(t, err, "invalid content hash")
+	require.False(t, cache.Has(generation, root))
+	require.Zero(t, cache.Size())
+}
+
 func TestService_VerifyStoredSHAMapFallsBackToFetch(t *testing.T) {
 	svc, db, root, expectedNodes, _ := newStoredVerificationFixture(t, shamap.BranchFactor)
 	tracked := &fallbackTrackingDatabase{Database: db}

@@ -265,6 +265,12 @@ type RepositoryManager interface {
 	PersistValidatedLedger(ctx context.Context, ledger ValidatedLedger) error
 }
 
+// SchemaFingerprinter exposes a stable database identity bound to its live
+// schema version. Checkpoint users treat absence as unsupported.
+type SchemaFingerprinter interface {
+	SchemaFingerprint(context.Context) ([32]byte, error)
+}
+
 // Helper methods for Hash type
 func (h Hash) String() string {
 	return fmt.Sprintf("%x", h[:])

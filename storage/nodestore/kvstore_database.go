@@ -78,6 +78,8 @@ type KVDatabase struct {
 	lifecycleMu sync.RWMutex
 	closed      bool
 	syncGate    chan struct{}
+	identityMu  sync.Mutex
+	mutationMu  sync.RWMutex
 
 	pruneMu       sync.RWMutex
 	writeMu       sync.Mutex
@@ -144,6 +146,10 @@ func (d *KVDatabase) Store(ctx context.Context, node *Node) error {
 		return err
 	}
 
+	return d.storeNode(node)
+}
+
+func (d *KVDatabase) storeNode(node *Node) error {
 	encoded := encodeNodeData(node)
 	d.writeMu.Lock()
 	defer d.writeMu.Unlock()
@@ -168,6 +174,25 @@ func (d *KVDatabase) Store(ctx context.Context, node *Node) error {
 	}
 	d.pruneMu.RUnlock()
 	return nil
+}
+
+// StoreDurable admits a write only while ctx is live. Once admitted, the write
+// and one backend flush run to completion without observing cancellation.
+func (d *KVDatabase) StoreDurable(ctx context.Context, node *Node) error {
+	if err := d.begin(ctx); err != nil {
+		return err
+	}
+	defer d.lifecycleMu.RUnlock()
+	if err := validateNode(node); err != nil {
+		return err
+	}
+	if err := d.storeNode(node); err != nil {
+		return err
+	}
+	<-d.syncGate
+	err := d.store.Sync()
+	d.syncGate <- struct{}{}
+	return err
 }
 
 // Fetch returns a node by hash, consulting configured caches.

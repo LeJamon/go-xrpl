@@ -2,7 +2,10 @@ package sqlite
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -85,6 +88,12 @@ func NewRepositoryManager(ctx context.Context, dbDir string, settings Settings) 
 		cleanup()
 		return nil, relationaldb.NewSchemaError("new_repository_manager", "migrate transaction database", err)
 	}
+	for _, db := range []*sql.DB{ledgerRaw, txRaw} {
+		if err := ensureRepositoryIdentity(ctx, db); err != nil {
+			cleanup()
+			return nil, relationaldb.NewSchemaError("new_repository_manager", "initialize repository identity", err)
+		}
+	}
 
 	rm := &RepositoryManager{
 		ledgerDB: sqlutil.NewDB(ledgerRaw),
@@ -96,6 +105,57 @@ func NewRepositoryManager(ctx context.Context, dbDir string, settings Settings) 
 	rm.validationRepo = sqlutil.NewGatedValidationRepository(&rm.gate, newValidationRepository(rm.ledgerDB))
 	rm.amendmentVoteRepo = newAmendmentVoteRepository(rm.ledgerDB)
 	return rm, nil
+}
+
+func ensureRepositoryIdentity(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS repository_metadata (
+		singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+		instance_id BLOB NOT NULL CHECK(length(instance_id) = 16)
+	)`); err != nil {
+		return err
+	}
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT OR IGNORE INTO repository_metadata(singleton, instance_id) VALUES (1, ?)`, id[:]); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SchemaFingerprint binds both SQLite files, their stable identities, and
+// their live migration versions.
+func (rm *RepositoryManager) SchemaFingerprint(ctx context.Context) ([32]byte, error) {
+	end, err := rm.gate.Begin()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	defer end()
+	payload := []byte("sqlite-schema-v1")
+	for _, db := range []*sqlutil.DB{rm.ledgerDB, rm.txDB} {
+		var version uint32
+		if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+			return [32]byte{}, err
+		}
+		var id []byte
+		if err := db.QueryRowContext(ctx,
+			`SELECT instance_id FROM repository_metadata WHERE singleton = 1`).Scan(&id); err != nil {
+			return [32]byte{}, err
+		}
+		if len(id) != 16 {
+			return [32]byte{}, errors.New("invalid SQLite repository identity")
+		}
+		payload = binary.BigEndian.AppendUint32(payload, version)
+		payload = append(payload, id...)
+	}
+	return sha256.Sum256(payload), nil
 }
 
 func (s Settings) normalized() (Settings, error) {

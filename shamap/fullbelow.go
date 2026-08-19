@@ -10,7 +10,10 @@ const (
 	fullBelowCacheTarget     = 1 << 19
 	fullBelowCacheExpiration = 10 * time.Minute
 	fullBelowCacheShards     = 16
-	fullBelowCacheMaxDepth   = 4
+	// FullBelowCacheMaxDepth is the deepest level at which durable subtree
+	// completeness proofs are retained. Startup verification uses the same
+	// bound when warming the cache for the first network acquisition.
+	FullBelowCacheMaxDepth = 4
 )
 
 // FullBelowStats is a point-in-time cache snapshot.
@@ -273,7 +276,7 @@ func (c *FullBelowCache) Insert(generation uint32, hash [32]byte) {
 }
 
 func cacheFullBelow(c *FullBelowCache, generation uint32, hash [32]byte, depth int) {
-	if c != nil && depth <= fullBelowCacheMaxDepth {
+	if c != nil && depth <= FullBelowCacheMaxDepth {
 		c.Insert(generation, hash)
 	}
 }

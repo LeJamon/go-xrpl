@@ -284,7 +284,7 @@ func assertPersisted(t *testing.T, rm *RepositoryManager, value relationaldb.Val
 func TestLegacySignatureSchemaMigrates(t *testing.T) {
 	rm := setupTestDB(t)
 	ctx := context.Background()
-	if _, err := rm.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = 4`); err != nil {
+	if _, err := rm.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version >= 4`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := rm.db.ExecContext(ctx, `ALTER TABLE validations ADD COLUMN signature BYTEA NOT NULL DEFAULT ''`); err != nil {
@@ -544,6 +544,17 @@ func TestConcurrentMigrationStartup(t *testing.T) {
 	}
 	if count != len(postgresMigrations) || minimum != 1 || maximum != len(postgresMigrations) {
 		t.Fatalf("migration history = count %d range %d-%d", count, minimum, maximum)
+	}
+	firstFingerprint, err := managers[0].SchemaFingerprint(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondFingerprint, err := managers[1].SchemaFingerprint(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstFingerprint != secondFingerprint {
+		t.Fatal("concurrent startup produced different repository identities")
 	}
 }
 
