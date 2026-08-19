@@ -129,22 +129,18 @@ func TestLPTokenTransfer_DirectStep(t *testing.T) {
 	})
 
 	t.Run("CannotTransferToAMMAccount", func(t *testing.T) {
-		// Cannot transfer LP tokens to the AMM pseudo-account itself.
-		// The AMM pseudo-account is not a normal account and should reject
-		// direct payments. We verify this by attempting a send.
 		env := setupLPTokenEnv(t)
+		ammAcc := amm.AMMAccount(t, env, amm.XRP(), env.USD)
+		currency := coreAmm.GenerateAMMLPTCurrencyForAssets(amm.XRP(), env.USD)
+		before := env.IOUBalance(env.Bob, ammAcc, currency)
+		require.NotNil(t, before)
 
-		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 100)
-		// Attempt to pay to a non-existent account (stand-in for AMM pseudo-account).
-		// In practice, the AMM account rejects direct payments.
-		nonExistent := jtx.NewAccount("amm_pseudo")
-		payTx := payment.PayIssued(env.Bob, nonExistent, lpAmt).Build()
-		result := env.Submit(payTx)
-		if !result.Success {
-			t.Logf("PASS: cannot send LP tokens to non-existent/AMM account (got %s)", result.Code)
-		} else {
-			t.Log("Note: LP token transfer to non-existent account succeeded")
-		}
+		payTx := payment.PayIssued(env.Bob, ammAcc, env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 100)).Build()
+		amm.ExpectTER(t, env.Submit(payTx), amm.TecNO_PERMISSION)
+
+		after := env.IOUBalance(env.Bob, ammAcc, currency)
+		require.NotNil(t, after)
+		require.Equal(t, before.Value(), after.Value())
 	})
 }
 
