@@ -378,6 +378,14 @@ func (l *Ledger) Timeouts() int {
 	return l.timeouts
 }
 
+// ConsecutiveTimeouts returns the current no-progress streak. Unlike Timeouts,
+// useful peer or local data resets this value.
+func (l *Ledger) ConsecutiveTimeouts() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.consecutiveTimeouts
+}
+
 // TimerDue reports whether the acquisition retry interval has elapsed.
 func (l *Ledger) TimerDue(now time.Time) bool {
 	l.mu.Lock()
@@ -418,6 +426,7 @@ func (l *Ledger) OnTimer(now time.Time) TimerAction {
 		return TimerRefresh
 	}
 
+	l.lastTimer = now
 	l.timeouts++
 	l.consecutiveTimeouts++
 	if l.consecutiveTimeouts > ledgerTimeoutRetriesMax {

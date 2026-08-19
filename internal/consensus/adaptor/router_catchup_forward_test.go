@@ -2,6 +2,8 @@ package adaptor
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -707,4 +709,90 @@ func TestRouter_SeqHashTableBounded(t *testing.T) {
 	size := len(r.seqHash)
 	r.seqHashMu.Unlock()
 	assert.LessOrEqual(t, size, seqHashRetain+1, "the table stays within the retention window")
+}
+
+func TestRouter_OutlierPeerStatusCannotPoisonSeqHashRetention(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	r.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	r.recordSeqHash(closed.Sequence(), closed.Hash(), [32]byte{}, false)
+
+	normalHash := [32]byte{0xff}
+	r.handleStatusChange(statusChangeMessageWithParent(
+		t,
+		7,
+		closed.Sequence()+1,
+		normalHash,
+		closed.Hash(),
+		true,
+	))
+
+	outlierHash := [32]byte{0x01}
+	const outlierBase = uint32(106_000_000)
+	for offset := uint32(0); offset < seqHashRetain+10; offset++ {
+		r.handleStatusChange(statusChangeMessageWithParent(
+			t,
+			9,
+			outlierBase+offset,
+			outlierHash,
+			[32]byte{0x02},
+			true,
+		))
+	}
+
+	link, ok := r.lookupSeqHash(closed.Sequence() + 1)
+	require.True(t, ok)
+	assert.Equal(t, normalHash, link.hash)
+	assert.Equal(t, closed.Hash(), link.parentHash)
+	assert.True(t, link.haveParent)
+	_, outlierRecorded := r.lookupSeqHash(outlierBase + seqHashRetain + 9)
+	assert.False(t, outlierRecorded)
+
+	r.seqHashMu.Lock()
+	anchor := r.seqHashAnchor
+	size := len(r.seqHash)
+	r.seqHashMu.Unlock()
+	assert.Equal(t, closed.Sequence(), anchor)
+	assert.LessOrEqual(t, size, seqHashRetain+maxForwardDeltaGap+1)
+
+	r.peersMu.RLock()
+	_, outlierAdmitted := r.peerStates[9]
+	candidate, outlierStaged := r.peerStatusCandidates[9]
+	r.peersMu.RUnlock()
+	assert.False(t, outlierAdmitted)
+	require.True(t, outlierStaged)
+	assert.Equal(t, outlierBase+seqHashRetain+9, candidate.LedgerSeq)
+	assert.Equal(t, outlierHash, candidate.LedgerHash)
+}
+
+func TestRouter_PeerSeqHashCannotOverwriteTrustedEvidence(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	seq := svc.GetClosedLedgerIndex() + 1
+	trustedHash := [32]byte{0xa1}
+	peerHash := [32]byte{0xb2}
+	parentHash := svc.GetClosedLedger().Hash()
+
+	r.recordValidationSeqHash(seq, trustedHash)
+	r.recordPeerSeqHash(seq, peerHash, [32]byte{0xc3}, true)
+	r.recordPeerSeqHash(seq, trustedHash, parentHash, true)
+
+	entry, ok := r.lookupSeqHash(seq)
+	require.True(t, ok)
+	assert.Equal(t, trustedHash, entry.hash)
+	assert.Equal(t, parentHash, entry.parentHash)
+	assert.True(t, entry.haveParent)
+	assert.Equal(t, seqHashSourceValidation, entry.source)
+	assert.Equal(t, seqHashSourcePeer, entry.parentFrom)
+}
+
+func TestRouter_PeerStatusAdmissionUsesDivergenceWindow(t *testing.T) {
+	r, _, _, _ := makeRouter(t)
+	const anchor = uint32(10_000)
+	r.recordValidationSeqHash(anchor, [32]byte{0xa4})
+
+	assert.True(t, r.peerStatusWithinAnchor(anchor-maxForwardDeltaGap))
+	assert.True(t, r.peerStatusWithinAnchor(anchor+maxForwardDeltaGap))
+	assert.False(t, r.peerStatusWithinAnchor(anchor-maxForwardDeltaGap-1))
+	assert.False(t, r.peerStatusWithinAnchor(anchor+maxForwardDeltaGap+1))
 }

@@ -35,6 +35,13 @@ type peerLedgerState struct {
 	LedgerHash [32]byte
 }
 
+type peerStatusCandidate struct {
+	peerLedgerState
+	peerID     peermanagement.PeerID
+	parentHash [32]byte
+	haveParent bool
+}
+
 type peerSessionView interface {
 	IsPeerConnected(peermanagement.PeerID) bool
 }
@@ -119,9 +126,10 @@ type Router struct {
 	logger        *slog.Logger
 
 	// Peer ledger tracking for catch-up detection
-	peerSessions peerSessionView
-	peersMu      sync.RWMutex
-	peerStates   map[peermanagement.PeerID]*peerLedgerState
+	peerSessions         peerSessionView
+	peersMu              sync.RWMutex
+	peerStates           map[peermanagement.PeerID]*peerLedgerState
+	peerStatusCandidates map[peermanagement.PeerID]peerStatusCandidate
 
 	// The overlay callback only records disconnects; a router-owned worker performs
 	// cleanup so acquisition scans never block the overlay event loop.
@@ -319,10 +327,10 @@ type Router struct {
 	// parent hash) per ledger sequence, from trusted validations and peer
 	// status_change gossip. Supplies the hash of closed+1 (the forward-delta
 	// catch-up target) and the parent linkage proving closed+1 descends from our
-	// closed ledger. Bounded to seqHashRetain; seqHashMax keeps a trailing window.
-	seqHashMu  sync.Mutex
-	seqHash    map[uint32]ledgerHashEntry
-	seqHashMax uint32
+	// closed ledger. Only local or trusted evidence advances seqHashAnchor.
+	seqHashMu     sync.Mutex
+	seqHash       map[uint32]ledgerHashEntry
+	seqHashAnchor uint32
 }
 
 type routerNetworkConfig struct {
@@ -371,7 +379,18 @@ type ledgerHashEntry struct {
 	hash       [32]byte
 	parentHash [32]byte
 	haveParent bool
+	source     seqHashSource
+	parentFrom seqHashSource
 }
+
+type seqHashSource uint8
+
+const (
+	seqHashSourcePeer seqHashSource = iota
+	seqHashSourceAcquired
+	seqHashSourceValidation
+	seqHashSourceQuorum
+)
 
 // txWorkerCount bounds the goroutines draining inbound peer transactions off
 // the consensus Run loop, and txQueueDepth bounds the pending backlog before
@@ -451,6 +470,7 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 		inbox:                  inbox,
 		logger:                 logger,
 		peerStates:             make(map[peermanagement.PeerID]*peerLedgerState),
+		peerStatusCandidates:   make(map[peermanagement.PeerID]peerStatusCandidate),
 		peerDisconnectWake:     make(chan struct{}, 1),
 		peerConnectWake:        make(chan struct{}, 1),
 		replayer:               inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
@@ -691,6 +711,7 @@ func (r *Router) HandlePeerDisconnect(peerID peermanagement.PeerID) {
 	r.pendingPeerConnects.Delete(peerID)
 	r.peersMu.Lock()
 	delete(r.peerStates, peerID)
+	delete(r.peerStatusCandidates, peerID)
 	r.peersMu.Unlock()
 	r.invalidateCatchupPeer(uint64(peerID))
 	r.invalidateHistoryPeer(uint64(peerID))
