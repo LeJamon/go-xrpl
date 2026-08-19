@@ -422,6 +422,56 @@ func TestEngine_TrySwitchToLedger_AcceptsEligibleLedger(t *testing.T) {
 	}
 }
 
+func TestEngine_TrySwitchToLedger_CurrentLedgerIsIdempotent(t *testing.T) {
+	a := newMockAdaptor()
+	e := NewEngine(a, DefaultConfig())
+	current := a.ledgers[consensus.LedgerID{1}]
+	e.prevLedger = current
+	e.setMode(consensus.ModeProposing)
+	a.validatedLedgerHashOverride = current.ID()
+
+	got, err := e.TrySwitchToLedger(current.ID())
+	if err != nil {
+		t.Fatalf("TrySwitchToLedger: %v", err)
+	}
+	if got != consensus.LedgerSwitchAccepted {
+		t.Fatalf("result = %v, want Accepted", got)
+	}
+	if e.prevLedger.ID() != current.ID() {
+		t.Fatal("idempotent switch changed the consensus parent")
+	}
+	if got := e.Mode(); got != consensus.ModeProposing {
+		t.Fatalf("mode = %v, want proposing", got)
+	}
+	if len(a.switchedLedgers) != 0 {
+		t.Fatal("idempotent switch announced a ledger change")
+	}
+}
+
+func TestEngine_TrySwitchToLedger_CurrentLedgerRestartsWrongLedgerRecovery(t *testing.T) {
+	a := newMockAdaptor()
+	e := NewEngine(a, DefaultConfig())
+	current := a.ledgers[consensus.LedgerID{1}]
+	e.prevLedger = current
+	e.setMode(consensus.ModeWrongLedger)
+	e.wrongLedgerID = current.ID()
+	a.validatedLedgerHashOverride = current.ID()
+
+	got, err := e.TrySwitchToLedger(current.ID())
+	if err != nil {
+		t.Fatalf("TrySwitchToLedger: %v", err)
+	}
+	if got != consensus.LedgerSwitchAccepted {
+		t.Fatalf("result = %v, want Accepted", got)
+	}
+	if got := e.Mode(); got != consensus.ModeSwitchedLedger {
+		t.Fatalf("mode = %v, want switchedLedger", got)
+	}
+	if len(a.switchedLedgers) != 1 || a.switchedLedgers[0].ID() != current.ID() {
+		t.Fatalf("switched ledgers = %v, want current recovery target", a.switchedLedgers)
+	}
+}
+
 func TestEngine_TrySwitchToLedger_ReturnsBusyWithoutQueuing(t *testing.T) {
 	a := newMockAdaptor()
 	e := NewEngine(a, DefaultConfig())
