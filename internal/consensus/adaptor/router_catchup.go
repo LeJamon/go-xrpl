@@ -383,16 +383,6 @@ func (r *Router) bestCatchupTarget() (seq uint32, hash [32]byte, peerID uint64) 
 	return r.catchup.seq, r.catchup.hash, r.catchup.peerID
 }
 
-// armCatchupTowardTarget arms catch-up work while the tip is still ahead of
-// closed. Two strategies mirror rippled's forward replay and full-state
-// acquisition:
-//
-//   - Forward-delta step: closed+1 is a known clean child of closed and the tip
-//     is within maxForwardDeltaGap. Replay-capable peers use the delta protocol;
-//     standard peers acquire a bounded window and apply it in ledger order.
-//   - Jump-adopt: otherwise (cold/far/forked) acquire the far validated tip
-//     directly; the legacy full-state path plus completeInboundLedger's gap>1
-//     branch jumps the working ledger forward.
 func (r *Router) armCatchupTowardTarget() {
 	r.armCatchupTowardTargetWithPeer(0)
 }
