@@ -8,10 +8,9 @@ package grpc
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"errors"
 	"math"
-	"strconv"
+	"sort"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -22,7 +21,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
-	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -37,43 +35,17 @@ var errLedgerNotSynced = errors.New("notSynced")
 // LedgerLookup is the slice of the ledger Service that this gRPC
 // implementation needs. Kept narrow so tests can substitute a fake.
 type LedgerLookup interface {
-	GetLedgerByHash(hash [32]byte) (*ledger.Ledger, error)
-	GetLedgerBySequence(seq uint32) (*ledger.Ledger, error)
+	GetLedgerByHashContext(ctx context.Context, hash [32]byte) (*ledger.Ledger, error)
+	GetLedgerBySequenceContext(ctx context.Context, seq uint32) (*ledger.Ledger, error)
 	GetClosedLedger() *ledger.Ledger
 	GetValidatedLedger() *ledger.Ledger
 	GetValidatedLedgerAge() time.Duration
 	GetOpenLedger() *ledger.Ledger
 	IsStandalone() bool
-	GetLedgerEntry(ctx context.Context, entryKey [32]byte, ledgerIndex string) (*service.LedgerEntryResult, error)
-}
-
-type Server struct {
-	rpcv1.UnimplementedXRPLedgerAPIServiceServer
-	lookup LedgerLookup
-}
-
-func NewServer(lookup LedgerLookup) *Server {
-	return &Server{lookup: lookup}
-}
-
-func grpcStorageError(operation string, err error) error {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return status.FromContextError(err).Err()
-	}
-	return status.Errorf(codes.Internal, "%s: %v", operation, err)
 }
 
 func (s *Server) lookupLedgerByHash(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
-	if contextual, ok := s.lookup.(interface {
-		GetLedgerByHashContext(context.Context, [32]byte) (*ledger.Ledger, error)
-	}); ok {
-		return contextual.GetLedgerByHashContext(ctx, hash)
-	}
-	return s.lookup.GetLedgerByHash(hash)
-}
-
-func (s *Server) resolveLedger(spec *rpcv1.LedgerSpecifier) (*ledger.Ledger, error) {
-	return s.resolveLedgerContext(context.Background(), spec)
+	return s.lookup.GetLedgerByHashContext(ctx, hash)
 }
 
 func (s *Server) resolveLedgerContext(ctx context.Context, spec *rpcv1.LedgerSpecifier) (*ledger.Ledger, error) {
@@ -148,7 +120,7 @@ func (s *Server) resolveLedgerSelection(ctx context.Context, selection ledgersel
 			return l, l != nil, nil
 		},
 		BySequence: func(sequence uint32) (*ledger.Ledger, bool, error) {
-			l, err := s.lookup.GetLedgerBySequence(sequence)
+			l, err := s.lookup.GetLedgerBySequenceContext(ctx, sequence)
 			if l != nil {
 				if stale, validSequence := s.validatedLedgerState(); stale && l.Sequence() > validSequence {
 					return nil, false, errLedgerNotSynced
@@ -162,8 +134,13 @@ func (s *Server) resolveLedgerSelection(ctx context.Context, selection ledgersel
 		},
 	})
 	if err != nil {
-		return ledgerselector.Result[*ledger.Ledger]{}, ledgerSelectorError(selection, err)
+		return ledgerselector.Result[*ledger.Ledger]{}, s.ledgerSelectorError(selection, err)
 	}
+	snapshot, err := result.Value.SnapshotContext(ctx)
+	if err != nil {
+		return ledgerselector.Result[*ledger.Ledger]{}, s.grpcStorageError("snapshotting ledger", err)
+	}
+	result.Value = snapshot
 	return result, nil
 }
 
@@ -186,7 +163,7 @@ func (s *Server) shortcutLedgerLagged(l *ledger.Ledger) bool {
 	return validated != nil && uint64(l.Sequence())+10 < uint64(validated.Sequence())
 }
 
-func ledgerSelectorError(selection ledgerselector.Selector, err error) error {
+func (s *Server) ledgerSelectorError(selection ledgerselector.Selector, err error) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return status.FromContextError(err).Err()
 	}
@@ -196,10 +173,10 @@ func ledgerSelectorError(selection ledgerselector.Selector, err error) error {
 	if errors.Is(err, errLedgerNotSynced) {
 		return status.Error(codes.NotFound, errLedgerNotSynced.Error())
 	}
-	if selection.Kind() == ledgerselector.KindHash &&
-		!errors.Is(err, ledgerselector.ErrLedgerNotFound) &&
-		!errors.Is(err, svcerr.ErrLedgerNotFound) {
-		return status.Errorf(codes.Internal, "ledger hash lookup: %v", err)
+	if selection.Kind() == ledgerselector.KindHash || selection.Kind() == ledgerselector.KindSequence {
+		if !errors.Is(err, ledgerselector.ErrLedgerNotFound) && !errors.Is(err, svcerr.ErrLedgerNotFound) {
+			return s.grpcStorageError("looking up ledger", err)
+		}
 	}
 
 	switch selection.Kind() {
@@ -224,6 +201,11 @@ func (s *Server) GetLedger(ctx context.Context, req *rpcv1.GetLedgerRequest) (*r
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
+	unlimited, finish, err := s.beginRequest(ctx, req, "GetLedger")
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
 	l, err := s.resolveLedgerContext(ctx, req.GetLedger())
 	if err != nil {
 		return nil, err
@@ -232,22 +214,33 @@ func (s *Server) GetLedger(ctx context.Context, req *rpcv1.GetLedgerRequest) (*r
 	resp := &rpcv1.GetLedgerResponse{
 		LedgerHeader: header.AddRaw(l.Header(), true),
 		Validated:    l.IsValidated(),
+		IsUnlimited:  unlimited,
 	}
 
 	if req.GetTransactions() {
 		if req.GetExpand() {
-			list, err := expandTransactions(ctx, l)
+			list, err := s.expandTransactions(ctx, l)
 			if err != nil {
 				return nil, err
 			}
 			resp.Transactions = &rpcv1.GetLedgerResponse_TransactionsList{TransactionsList: list}
 		} else {
 			hashes := &rpcv1.TransactionHashList{}
-			if err := l.ForEachTransactionContext(ctx, func(h [32]byte, _ []byte) bool {
-				hashes.Hashes = append(hashes.Hashes, cloneHash(h))
+			if err := l.ForEachTransactionContext(ctx, func(_ [32]byte, data []byte) bool {
+				parsed, _, _, err := decodeLedgerTransaction(l, data)
+				if err != nil {
+					s.log.Error("malformed transaction in ledger", "ledger", l.Sequence(), "err", err)
+					return false
+				}
+				hash, err := tx.ComputeTransactionHash(parsed)
+				if err != nil {
+					s.log.Error("malformed transaction in ledger", "ledger", l.Sequence(), "err", err)
+					return false
+				}
+				hashes.Hashes = append(hashes.Hashes, cloneHash(hash))
 				return true
 			}); err != nil {
-				return nil, grpcStorageError("iterating transactions", err)
+				return nil, s.grpcStorageError("iterating transactions", err)
 			}
 			resp.Transactions = &rpcv1.GetLedgerResponse_HashesList{HashesList: hashes}
 		}
@@ -264,11 +257,12 @@ func (s *Server) GetLedger(ctx context.Context, req *rpcv1.GetLedgerRequest) (*r
 
 // expandTransactions splits each stored tx+metadata blob into its separate
 // transaction and metadata serializations, the shape Clio expects.
-func expandTransactions(ctx context.Context, l *ledger.Ledger) (*rpcv1.TransactionAndMetadataList, error) {
+func (s *Server) expandTransactions(ctx context.Context, l *ledger.Ledger) (*rpcv1.TransactionAndMetadataList, error) {
 	list := &rpcv1.TransactionAndMetadataList{}
 	if err := l.ForEachTransactionContext(ctx, func(_ [32]byte, data []byte) bool {
-		txBlob, metaBlob, e := tx.SplitTxWithMetaBlob(data)
-		if e != nil {
+		_, txBlob, metaBlob, err := decodeLedgerTransaction(l, data)
+		if err != nil {
+			s.log.Error("malformed transaction in ledger", "ledger", l.Sequence(), "err", err)
 			return false
 		}
 		list.Transactions = append(list.Transactions, &rpcv1.TransactionAndMetadata{
@@ -277,9 +271,29 @@ func expandTransactions(ctx context.Context, l *ledger.Ledger) (*rpcv1.Transacti
 		})
 		return true
 	}); err != nil {
-		return nil, grpcStorageError("iterating transactions", err)
+		return nil, s.grpcStorageError("iterating transactions", err)
 	}
 	return list, nil
+}
+
+func decodeLedgerTransaction(l *ledger.Ledger, data []byte) (tx.Transaction, []byte, []byte, error) {
+	txBlob := data
+	var metaBlob []byte
+	var err error
+	if !l.IsOpen() {
+		txBlob, metaBlob, err = tx.SplitTxWithMetaBlobStrict(data)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if _, err := binarycodec.DecodeBytes(metaBlob); err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	parsed, err := tx.ParseFromBinary(txBlob)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return parsed, txBlob, metaBlob, nil
 }
 
 // appendChangedObjects fills the response with the state objects that differ
@@ -287,28 +301,45 @@ func expandTransactions(ctx context.Context, l *ledger.Ledger) (*rpcv1.Transacti
 // DELETED. When wantNeighbors is set it also fills each created/deleted
 // object's predecessor and successor and any order-book successors.
 func (s *Server) appendChangedObjects(ctx context.Context, resp *rpcv1.GetLedgerResponse, l *ledger.Ledger, wantNeighbors bool) error {
-	parent, err := s.lookupLedgerByHash(ctx, l.ParentHash())
+	if l.Sequence() == 0 {
+		return status.Error(codes.NotFound, "parent ledger not validated")
+	}
+	parent, err := s.lookup.GetLedgerBySequenceContext(ctx, l.Sequence()-1)
 	if errors.Is(err, svcerr.ErrLedgerNotFound) || (err == nil && parent == nil) {
 		return status.Error(codes.NotFound, "parent ledger not validated")
 	}
 	if err != nil {
-		return grpcStorageError("looking up parent ledger", err)
+		return s.grpcStorageError("looking up parent ledger", err)
 	}
-	if parent == nil || !parent.IsImmutable() {
+	parent, err = parent.SnapshotContext(ctx)
+	if err != nil {
+		return s.grpcStorageError("snapshotting parent ledger", err)
+	}
+	if !parent.IsClosed() {
 		return status.Error(codes.NotFound, "parent ledger not validated")
 	}
-	if !l.IsImmutable() {
+	if !l.IsClosed() {
 		return status.Error(codes.NotFound, "ledger not validated")
 	}
 	diff, baseMap, desiredMap, err := stateDiff(ctx, parent, l)
 	if err != nil {
-		return grpcStorageError("comparing state maps", err)
+		return s.grpcStorageError("comparing state maps", err)
 	}
 	if !diff.Complete {
 		return status.Error(codes.ResourceExhausted, "too many differences between specified ledgers")
 	}
+	if err := ctx.Err(); err != nil {
+		return status.FromContextError(err).Err()
+	}
+	sortDifferences(diff.Differences)
+	if err := ctx.Err(); err != nil {
+		return status.FromContextError(err).Err()
+	}
 	objects := &rpcv1.RawLedgerObjects{}
 	for _, d := range diff.Differences {
+		if err := ctx.Err(); err != nil {
+			return status.FromContextError(err).Err()
+		}
 		obj := &rpcv1.RawLedgerObject{Key: cloneHash(d.Key)}
 		switch d.Type {
 		case shamap.DiffAdded:
@@ -324,7 +355,7 @@ func (s *Server) appendChangedObjects(ctx context.Context, resp *rpcv1.GetLedger
 		// modified ones.
 		if wantNeighbors && d.Type != shamap.DiffModified {
 			if err := appendNeighbors(ctx, obj, resp, d, baseMap, desiredMap); err != nil {
-				return grpcStorageError("finding object neighbors", err)
+				return s.grpcStorageError("finding object neighbors", err)
 			}
 		}
 		objects.Objects = append(objects.Objects, obj)
@@ -437,6 +468,11 @@ func (s *Server) GetLedgerEntry(ctx context.Context, req *rpcv1.GetLedgerEntryRe
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
+	_, finish, err := s.beginRequest(ctx, req, "GetLedgerEntry")
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
 	resolved, err := s.resolveLedgerContext(ctx, req.GetLedger())
 	if err != nil {
 		return nil, err
@@ -447,25 +483,17 @@ func (s *Server) GetLedgerEntry(ctx context.Context, req *rpcv1.GetLedgerEntryRe
 	var key [32]byte
 	copy(key[:], req.GetKey())
 
-	ledgerIndex := strconv.FormatUint(uint64(resolved.Sequence()), 10)
-	if spec := req.GetLedger(); spec != nil && len(spec.GetHash()) == 32 {
-		ledgerIndex = hex.EncodeToString(spec.GetHash())
-	}
-	entry, err := s.lookup.GetLedgerEntry(ctx, key, ledgerIndex)
+	data, err := resolved.ReadContext(ctx, keylet.Keylet{Type: entry.TypeAny, Key: key})
 	if err != nil {
-		switch {
-		case errors.Is(err, svcerr.ErrLedgerEntryNotFound):
-			return nil, status.Error(codes.NotFound, "object not found")
-		case errors.Is(err, svcerr.ErrLedgerNotFound), errors.Is(err, svcerr.ErrNoOpenLedger):
-			return nil, status.Error(codes.NotFound, err.Error())
-		default:
-			return nil, grpcStorageError("lookup", err)
-		}
+		return nil, s.grpcStorageError("reading ledger entry", err)
+	}
+	if data == nil {
+		return nil, status.Error(codes.NotFound, "object not found")
 	}
 
 	return &rpcv1.GetLedgerEntryResponse{
 		LedgerObject: &rpcv1.RawLedgerObject{
-			Data: entry.Node,
+			Data: data,
 			Key:  cloneHash(key),
 		},
 		Ledger: req.GetLedger(),
@@ -479,6 +507,11 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
+	unlimited, finish, err := s.beginRequest(ctx, req, "GetLedgerData")
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
 	l, err := s.resolveLedgerContext(ctx, req.GetLedger())
 	if err != nil {
 		return nil, err
@@ -487,7 +520,7 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 	var startKey [32]byte
 	hasMarker := false
 	if m := req.GetMarker(); len(m) > 0 {
-		if startKey, err = hash32(m, "marker"); err != nil {
+		if startKey, err = hash32(m); err != nil {
 			return nil, status.Error(codes.InvalidArgument, "marker malformed")
 		}
 		hasMarker = true
@@ -496,20 +529,19 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 	var endKey [32]byte
 	hasEnd := false
 	if m := req.GetEndMarker(); len(m) > 0 {
-		if endKey, err = hash32(m, "end_marker"); err != nil {
+		if endKey, err = hash32(m); err != nil {
 			return nil, status.Error(codes.InvalidArgument, "end marker malformed")
 		}
 		hasEnd = true
 	}
-	if hasMarker && hasEnd && compareKey(endKey, startKey) < 0 {
+	if hasMarker && hasEnd && bytes.Compare(endKey[:], startKey[:]) < 0 {
 		return nil, status.Error(codes.InvalidArgument, "end marker out of range")
 	}
 
 	const pageLimit = 2048
 	resp := &rpcv1.GetLedgerDataResponse{
-		LedgerIndex:   l.Sequence(),
-		LedgerHash:    cloneHash(l.Hash()),
 		LedgerObjects: &rpcv1.RawLedgerObjects{},
+		IsUnlimited:   unlimited,
 	}
 
 	// Resume strictly after the marker via the shared state iterator; the zero
@@ -519,7 +551,7 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 	if err := l.IterateStateFrom(ctx, startKey, func(key [32]byte, data []byte) bool {
 		// end_marker is inclusive: stop only past it, so an entry whose key
 		// equals end_marker is still returned.
-		if hasEnd && compareKey(key, endKey) > 0 {
+		if hasEnd && bytes.Compare(key[:], endKey[:]) > 0 {
 			return false
 		}
 		if count >= pageLimit {
@@ -536,10 +568,7 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 		count++
 		return true
 	}); err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return nil, status.FromContextError(err).Err()
-		}
-		return nil, status.Errorf(codes.Internal, "iterating state: %v", err)
+		return nil, s.grpcStorageError("iterating state", err)
 	}
 	return resp, nil
 }
@@ -552,32 +581,47 @@ func (s *Server) GetLedgerDiff(ctx context.Context, req *rpcv1.GetLedgerDiffRequ
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
-	base, err := s.resolveLedgerContext(ctx, req.GetBaseLedger())
+	_, finish, err := s.beginRequest(ctx, req, "GetLedgerDiff")
 	if err != nil {
 		return nil, err
+	}
+	defer finish()
+	base, err := s.resolveLedgerContext(ctx, req.GetBaseLedger())
+	if err != nil {
+		return nil, diffLedgerLookupError(err, "base")
 	}
 	desired, err := s.resolveLedgerContext(ctx, req.GetDesiredLedger())
 	if err != nil {
-		return nil, err
+		return nil, diffLedgerLookupError(err, "desired")
 	}
-	if !base.IsImmutable() {
+	if !base.IsClosed() {
 		return nil, status.Error(codes.NotFound, "base ledger not validated")
 	}
-	if !desired.IsImmutable() {
+	if !desired.IsClosed() {
 		return nil, status.Error(codes.NotFound, "desired ledger not validated")
 	}
 
 	diff, _, _, err := stateDiff(ctx, base, desired)
 	if err != nil {
-		return nil, grpcStorageError("comparing state maps", err)
+		return nil, s.grpcStorageError("comparing state maps", err)
 	}
 	if !diff.Complete {
 		return nil, status.Error(codes.ResourceExhausted, "too many differences between specified ledgers")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, status.FromContextError(err).Err()
+	}
+	sortDifferences(diff.Differences)
+	if err := ctx.Err(); err != nil {
+		return nil, status.FromContextError(err).Err()
 	}
 
 	includeBlobs := req.GetIncludeBlobs()
 	out := &rpcv1.GetLedgerDiffResponse{LedgerObjects: &rpcv1.RawLedgerObjects{}}
 	for _, d := range diff.Differences {
+		if err := ctx.Err(); err != nil {
+			return nil, status.FromContextError(err).Err()
+		}
 		var desiredData []byte
 		if d.SecondItem != nil {
 			desiredData = d.SecondItem.Data()
@@ -598,8 +642,23 @@ func diffEntry(key [32]byte, desiredData []byte, includeBlobs bool) *rpcv1.RawLe
 	return obj
 }
 
-// maxStateDifferences bounds a state-map diff. The cap is effectively
-// unreachable, so the incomplete-result path stays dead in practice.
+func diffLedgerLookupError(err error, label string) error {
+	switch status.Code(err) {
+	case codes.Canceled, codes.DeadlineExceeded:
+		return err
+	default:
+		return status.Errorf(codes.NotFound, "%s ledger not found", label)
+	}
+}
+
+func sortDifferences(differences []shamap.DifferenceItem) {
+	sort.Slice(differences, func(i, j int) bool {
+		return bytes.Compare(differences[i].Key[:], differences[j].Key[:]) < 0
+	})
+}
+
+// State diffs retain the protocol service's effectively unlimited item cap;
+// per-client request admission bounds concurrent expensive work instead.
 const maxStateDifferences = math.MaxInt32
 
 // stateDiff diffs base and desired ledgers' state maps, returning the
@@ -623,30 +682,10 @@ func stateDiff(ctx context.Context, base, desired *ledger.Ledger) (*shamap.Diffe
 	return diff, baseMap, desiredMap, nil
 }
 
-func (s *Server) specToIndex(spec *rpcv1.LedgerSpecifier) (string, error) {
-	selection, err := selectorFromSpecifier(spec)
-	if err != nil {
-		return "", err
-	}
-	if selection.Kind() == ledgerselector.KindAbsent {
-		return ledgerselector.Current().String(), nil
-	}
-	if selection.Kind() != ledgerselector.KindHash {
-		return selection.String(), nil
-	}
-	result, err := s.resolveLedgerSelection(context.Background(), selection)
-	if err != nil {
-		return "", err
-	}
-	return ledgerselector.FromSequence(result.Sequence).String(), nil
-}
-
-// hash32 validates that input is exactly 32 bytes and copies it into a
-// fixed-size array, reporting InvalidArgument with the field name otherwise.
-func hash32(input []byte, field string) ([32]byte, error) {
+func hash32(input []byte) ([32]byte, error) {
 	var h [32]byte
 	if len(input) != 32 {
-		return h, status.Errorf(codes.InvalidArgument, "%s must be 32 bytes, got %d", field, len(input))
+		return h, errors.New("hash must be 32 bytes")
 	}
 	copy(h[:], input)
 	return h, nil
@@ -656,16 +695,4 @@ func cloneHash(h [32]byte) []byte {
 	out := make([]byte, 32)
 	copy(out, h[:])
 	return out
-}
-
-func compareKey(a, b [32]byte) int {
-	for i := range a {
-		if a[i] < b[i] {
-			return -1
-		}
-		if a[i] > b[i] {
-			return 1
-		}
-	}
-	return 0
 }

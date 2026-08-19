@@ -2,8 +2,10 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
+	"time"
 
 	googlegrpc "google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -24,8 +26,20 @@ func TestGRPC_ServeAndDial(t *testing.T) {
 	}
 	srv := googlegrpc.NewServer()
 	rpcv1.RegisterXRPLedgerAPIServiceServer(srv, NewServer(&fakeLookup{validated: l}))
-	go func() { _ = srv.Serve(lis) }()
-	defer srv.Stop()
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.Serve(lis) }()
+	t.Cleanup(func() {
+		srv.Stop()
+		_ = lis.Close()
+		select {
+		case err := <-serveErr:
+			if err != nil && !errors.Is(err, googlegrpc.ErrServerStopped) {
+				t.Errorf("Serve: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Error("Serve did not stop within one second")
+		}
+	})
 
 	conn, err := googlegrpc.NewClient(lis.Addr().String(), googlegrpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -34,7 +48,9 @@ func TestGRPC_ServeAndDial(t *testing.T) {
 	defer conn.Close()
 
 	client := rpcv1.NewXRPLedgerAPIServiceClient(conn)
-	resp, err := client.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := client.GetLedger(ctx, &rpcv1.GetLedgerRequest{
 		Ledger: &rpcv1.LedgerSpecifier{
 			Ledger: &rpcv1.LedgerSpecifier_Shortcut_{Shortcut: rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED},
 		},

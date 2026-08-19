@@ -23,8 +23,9 @@ type ServerConfig struct {
 	AllowedOrigins []string `toml:"allowed_origins" mapstructure:"allowed_origins"` // Exact browser origins allowed on HTTP/WS ports
 	SecureGateway  []string `toml:"secure_gateway" mapstructure:"secure_gateway"`   // Default trusted proxy networks
 	SSLCiphers     string   `toml:"ssl_ciphers" mapstructure:"ssl_ciphers"`
-	// MaxConnections is the process-wide ceiling on concurrent HTTP + WebSocket
-	// connections. 0 keeps the bounded built-in default; a negative value
+	// MaxConnections is the process-wide ceiling on concurrent HTTP, WebSocket,
+	// and gRPC connections.
+	// 0 keeps the bounded built-in default; a negative value
 	// disables the global cap (per-port limits still apply).
 	MaxConnections int `toml:"max_connections" mapstructure:"max_connections"`
 }
@@ -52,10 +53,11 @@ type PortConfig struct {
 	SecureGateway []string `toml:"secure_gateway" mapstructure:"secure_gateway"`
 
 	// SSL/TLS configuration
-	SSLKey     string `toml:"ssl_key" mapstructure:"ssl_key"`
-	SSLCert    string `toml:"ssl_cert" mapstructure:"ssl_cert"`
-	SSLChain   string `toml:"ssl_chain" mapstructure:"ssl_chain"`
-	SSLCiphers string `toml:"ssl_ciphers" mapstructure:"ssl_ciphers"`
+	SSLKey      string `toml:"ssl_key" mapstructure:"ssl_key"`
+	SSLCert     string `toml:"ssl_cert" mapstructure:"ssl_cert"`
+	SSLChain    string `toml:"ssl_chain" mapstructure:"ssl_chain"`
+	SSLClientCA string `toml:"ssl_client_ca" mapstructure:"ssl_client_ca"`
+	SSLCiphers  string `toml:"ssl_ciphers" mapstructure:"ssl_ciphers"`
 
 	// WebSocket specific settings
 	SendQueueLimit int `toml:"send_queue_limit" mapstructure:"send_queue_limit"`
@@ -121,6 +123,20 @@ func (p *PortConfig) Validate() error {
 	// Validate protocol combinations
 	if err := p.validateProtocols(); err != nil {
 		return err
+	}
+	if p.HasGRPC() {
+		if (p.SSLCert == "") != (p.SSLKey == "") {
+			return errors.New("grpc ssl_cert and ssl_key must be configured together")
+		}
+		if p.SSLChain != "" && p.SSLCert == "" {
+			return errors.New("grpc ssl_chain requires ssl_cert and ssl_key")
+		}
+		if p.SSLCiphers != "" {
+			return errors.New("grpc ssl_ciphers is not supported")
+		}
+		if p.SSLClientCA != "" {
+			return errors.New("grpc ssl_client_ca is not supported")
+		}
 	}
 
 	// Validate compression settings

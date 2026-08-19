@@ -64,6 +64,41 @@ func TestValidateProtocols_GRPC(t *testing.T) {
 	})
 }
 
+func TestValidateGRPCTLS(t *testing.T) {
+	tests := []struct {
+		name     string
+		cert     string
+		key      string
+		chain    string
+		ciphers  string
+		clientCA string
+		wantErr  string
+	}{
+		{name: "plaintext"},
+		{name: "certificate and key", cert: "server.crt", key: "server.key"},
+		{name: "certificate only", cert: "server.crt", wantErr: "grpc ssl_cert and ssl_key must be configured together"},
+		{name: "key only", key: "server.key", wantErr: "grpc ssl_cert and ssl_key must be configured together"},
+		{name: "chain without credentials", chain: "chain.crt", wantErr: "grpc ssl_chain requires ssl_cert and ssl_key"},
+		{name: "unsupported cipher list", ciphers: "ECDHE-RSA-AES256-GCM-SHA384", wantErr: "grpc ssl_ciphers is not supported"},
+		{name: "unsupported client CA", clientCA: "clients.crt", wantErr: "grpc ssl_client_ca is not supported"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			p := &PortConfig{
+				Port: 50051, IP: "127.0.0.1", Protocol: "grpc",
+				SSLCert: test.cert, SSLKey: test.key, SSLChain: test.chain, SSLCiphers: test.ciphers,
+				SSLClientCA: test.clientCA,
+			}
+			err := p.Validate()
+			if test.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.EqualError(t, err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateProtocols_RejectsUnsupportedTLS(t *testing.T) {
 	for _, protocol := range []string{"https", "wss"} {
 		t.Run(protocol, func(t *testing.T) {

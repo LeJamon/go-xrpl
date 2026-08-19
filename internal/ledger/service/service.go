@@ -1268,6 +1268,10 @@ func (s *Service) GetLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
 	return s.getLedgerBySequence(context.Background(), seq)
 }
 
+func (s *Service) GetLedgerBySequenceContext(ctx context.Context, seq uint32) (*ledger.Ledger, error) {
+	return s.getLedgerBySequence(ctx, seq)
+}
+
 func (s *Service) getLedgerBySequence(ctx context.Context, seq uint32) (*ledger.Ledger, error) {
 	s.mu.RLock()
 	s.historyComponent.mu.RLock()
@@ -1312,13 +1316,13 @@ func (s *Service) getLedgerBySequence(ctx context.Context, seq uint32) (*ledger.
 
 	loaded, err := s.loadStoredLedgerByHash(ctx, hash)
 	if err != nil {
-		if errors.Is(err, errStoredLedgerUnavailable) {
-			return nil, fmt.Errorf("%w: load ledger %d from nodestore: %v", ErrLedgerNotFound, seq, err)
-		}
 		return nil, fmt.Errorf("load ledger %d from nodestore: %w", seq, err)
 	}
-	if loaded == nil || loaded.Sequence() != seq {
+	if loaded == nil {
 		return nil, ErrLedgerNotFound
+	}
+	if loaded.Sequence() != seq {
+		return nil, fmt.Errorf("load ledger %d from nodestore: stored sequence is %d", seq, loaded.Sequence())
 	}
 	if err := loaded.SetValidated(); err != nil {
 		return nil, err
@@ -1412,16 +1416,13 @@ func (s *Service) loadPersistedLedgerByHash(ctx context.Context, hash [32]byte) 
 	}
 	loaded, err := s.loadStoredLedgerByHash(ctx, hash)
 	if err != nil {
-		if errors.Is(err, errStoredLedgerUnavailable) {
-			return nil, fmt.Errorf("%w: load ledger %x from nodestore: %v", ErrLedgerNotFound, hash[:8], err)
-		}
 		return nil, fmt.Errorf("load ledger %x from nodestore: %w", hash[:8], err)
 	}
 	if loaded == nil {
 		return nil, ErrLedgerNotFound
 	}
 	if !storedHeaderMatchesInfo(loaded.Header(), info) {
-		return nil, fmt.Errorf("%w: ledger %x header does not match persisted metadata", ErrLedgerNotFound, hash[:8])
+		return nil, fmt.Errorf("ledger %x header does not match persisted metadata", hash[:8])
 	}
 	return loaded, nil
 }

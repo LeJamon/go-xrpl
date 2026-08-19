@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
-	"math"
 	"testing"
 	"time"
 
@@ -18,9 +16,10 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
-	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/shamap"
 
 	rpcv1 "github.com/LeJamon/go-xrpl/internal/grpc/pb/org/xrpl/rpc/v1"
@@ -29,13 +28,13 @@ import (
 // fakeLookup is a tiny LedgerLookup that returns canned ledgers by hash
 // and sequence. Each ledger may include state objects and transactions.
 type fakeLookup struct {
-	bySeq      map[uint32]*ledger.Ledger
-	byHash     map[[32]byte]*ledger.Ledger
-	validated  *ledger.Ledger
-	closed     *ledger.Ledger
-	openLedger *ledger.Ledger
-	entryErr   error
-	entryIndex string
+	bySeq       map[uint32]*ledger.Ledger
+	byHash      map[[32]byte]*ledger.Ledger
+	validated   *ledger.Ledger
+	closed      *ledger.Ledger
+	openLedger  *ledger.Ledger
+	sequenceErr error
+	hashErr     error
 }
 
 type networkLookup struct {
@@ -44,13 +43,27 @@ type networkLookup struct {
 	validatedAge time.Duration
 }
 
+type blockingSequenceLookup struct {
+	*fakeLookup
+	started chan struct{}
+}
+
+func (l *blockingSequenceLookup) GetLedgerBySequenceContext(ctx context.Context, _ uint32) (*ledger.Ledger, error) {
+	close(l.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
 func (l *networkLookup) IsStandalone() bool                   { return l.standalone }
 func (l *networkLookup) GetValidatedLedgerAge() time.Duration { return l.validatedAge }
 
 func (f *fakeLookup) IsStandalone() bool                   { return true }
 func (f *fakeLookup) GetValidatedLedgerAge() time.Duration { return 0 }
 
-func (f *fakeLookup) GetLedgerByHash(h [32]byte) (*ledger.Ledger, error) {
+func (f *fakeLookup) GetLedgerByHashContext(_ context.Context, h [32]byte) (*ledger.Ledger, error) {
+	if f.hashErr != nil {
+		return nil, f.hashErr
+	}
 	if l, ok := f.byHash[h]; ok {
 		return l, nil
 	}
@@ -61,39 +74,18 @@ func (f *fakeLookup) GetLedgerByHash(h [32]byte) (*ledger.Ledger, error) {
 	}
 	return nil, svcerr.ErrLedgerNotFound
 }
-func (f *fakeLookup) GetLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
+func (f *fakeLookup) GetLedgerBySequenceContext(_ context.Context, seq uint32) (*ledger.Ledger, error) {
+	if f.sequenceErr != nil {
+		return nil, f.sequenceErr
+	}
 	if l, ok := f.bySeq[seq]; ok {
 		return l, nil
 	}
-	return nil, errors.New("not found")
+	return nil, svcerr.ErrLedgerNotFound
 }
 func (f *fakeLookup) GetClosedLedger() *ledger.Ledger    { return f.closed }
 func (f *fakeLookup) GetValidatedLedger() *ledger.Ledger { return f.validated }
 func (f *fakeLookup) GetOpenLedger() *ledger.Ledger      { return f.openLedger }
-func (f *fakeLookup) GetLedgerEntry(_ context.Context, key [32]byte, ledgerIndex string) (*service.LedgerEntryResult, error) {
-	f.entryIndex = ledgerIndex
-	if f.entryErr != nil {
-		return nil, f.entryErr
-	}
-	if f.validated == nil {
-		return nil, svcerr.ErrLedgerEntryNotFound
-	}
-	k := keylet.Keylet{Key: key}
-	exists, _ := f.validated.Exists(k)
-	if !exists {
-		return nil, svcerr.ErrLedgerEntryNotFound
-	}
-	data, err := f.validated.Read(k)
-	if err != nil {
-		return nil, svcerr.ErrLedgerEntryNotFound
-	}
-	return &service.LedgerEntryResult{
-		LedgerIndex: f.validated.Sequence(),
-		LedgerHash:  f.validated.Hash(),
-		Node:        data,
-		Validated:   true,
-	}, nil
-}
 
 // pad right-pads a string with zero bytes to at least n bytes; the
 // SHAMap layer rejects items smaller than 12 bytes.
@@ -114,6 +106,39 @@ func txWithMeta(txBytes, metaBytes []byte) []byte {
 	out = append(out, byte(len(metaBytes)))
 	out = append(out, metaBytes...)
 	return out
+}
+
+func validPaymentBlob(t *testing.T, sequence uint32) []byte {
+	t.Helper()
+	blob, err := binarycodec.EncodeBytes(map[string]any{
+		"TransactionType": "Payment",
+		"Account":         "rweYz56rfmQ98cAdRaeTxQS9wVMGnrdsFp",
+		"Destination":     "rweYz56rfmQ98cAdRaeTxQS9wVMGnrdsFp",
+		"Amount":          "1",
+		"Fee":             "10",
+		"Sequence":        sequence,
+		"SigningPubKey":   "",
+	})
+	if err != nil {
+		t.Fatalf("encode payment: %v", err)
+	}
+	if _, err := tx.ParseFromBinary(blob); err != nil {
+		t.Fatalf("parse payment fixture: %v", err)
+	}
+	return blob
+}
+
+func validMetadataBlob(t *testing.T, index uint32) []byte {
+	t.Helper()
+	blob, err := binarycodec.EncodeBytes(map[string]any{
+		"TransactionIndex":  index,
+		"TransactionResult": "tesSUCCESS",
+		"AffectedNodes":     []any{},
+	})
+	if err != nil {
+		t.Fatalf("encode metadata: %v", err)
+	}
+	return blob
 }
 
 // newTestLedger builds an immediately-validated test ledger at the given
@@ -180,6 +205,20 @@ func newClosedTestLedger(t *testing.T, parent *ledger.Ledger) *ledger.Ledger {
 	return l
 }
 
+func newOpenTestLedger(t *testing.T, parent *ledger.Ledger, txs map[[32]byte][]byte) *ledger.Ledger {
+	t.Helper()
+	l, err := ledger.NewOpen(parent, time.Now())
+	if err != nil {
+		t.Fatalf("ledger.NewOpen: %v", err)
+	}
+	for hash, data := range txs {
+		if err := l.AddTransaction(hash, data); err != nil {
+			t.Fatalf("AddTransaction: %v", err)
+		}
+	}
+	return l
+}
+
 func ledgerShortcutSpec(shortcut rpcv1.LedgerSpecifier_Shortcut) *rpcv1.LedgerSpecifier {
 	return &rpcv1.LedgerSpecifier{
 		Ledger: &rpcv1.LedgerSpecifier_Shortcut_{Shortcut: shortcut},
@@ -229,14 +268,36 @@ func TestResolveLedgerSelector(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := srv.resolveLedger(test.spec)
+			got, err := srv.resolveLedgerContext(context.Background(), test.spec)
 			if err != nil {
 				t.Fatalf("resolveLedger() returned error: %v", err)
 			}
-			if got != test.want {
+			if got.Sequence() != test.want.Sequence() || got.Hash() != test.want.Hash() {
 				t.Fatalf("resolveLedger() = ledger %v, want ledger %d", got, test.want.Sequence())
 			}
 		})
+	}
+}
+
+func TestResolveLedgerSelectorSnapshotsOpenLedger(t *testing.T) {
+	parent := newTestLedger(t, 9, nil, nil)
+	open := newOpenTestLedger(t, parent, nil)
+	srv := NewServer(&fakeLookup{openLedger: open})
+
+	resolved, err := srv.resolveLedgerContext(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("resolve current ledger: %v", err)
+	}
+	if !resolved.IsOpen() || !resolved.IsImmutable() {
+		t.Fatalf("resolved ledger state: open=%v immutable=%v", resolved.IsOpen(), resolved.IsImmutable())
+	}
+
+	hash := [32]byte{0xA1}
+	if err := open.AddTransaction(hash, []byte("later-transaction")); err != nil {
+		t.Fatalf("mutate source open ledger: %v", err)
+	}
+	if _, found, err := resolved.GetTransactionContext(context.Background(), hash); err != nil || found {
+		t.Fatalf("snapshot observed later source mutation: found=%v err=%v", found, err)
 	}
 }
 
@@ -289,7 +350,7 @@ func TestResolveLedgerSelectorErrors(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := srv.resolveLedger(test.spec)
+			got, err := srv.resolveLedgerContext(context.Background(), test.spec)
 			if got != nil {
 				t.Fatalf("resolveLedger() returned ledger %d with error %v", got.Sequence(), err)
 			}
@@ -301,6 +362,35 @@ func TestResolveLedgerSelectorErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolveLedgerSelectorPreservesCancellationAndHidesStorageDetails(t *testing.T) {
+	t.Run("mid lookup cancellation", func(t *testing.T) {
+		lookup := &blockingSequenceLookup{fakeLookup: &fakeLookup{}, started: make(chan struct{})}
+		srv := NewServer(lookup)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			_, err := srv.resolveLedgerContext(ctx, ledgerSequenceSpec(99))
+			done <- err
+		}()
+		<-lookup.started
+		cancel()
+		if err := <-done; status.Code(err) != codes.Canceled {
+			t.Fatalf("resolve after cancellation = %v, want Canceled", err)
+		}
+	})
+
+	t.Run("internal detail is hidden", func(t *testing.T) {
+		srv := NewServer(&fakeLookup{sequenceErr: errors.New("secret nodestore path")})
+		_, err := srv.resolveLedgerContext(context.Background(), ledgerSequenceSpec(99))
+		if status.Code(err) != codes.Internal || status.Convert(err).Message() != "Internal error." {
+			t.Fatalf("resolve internal error = %v, want stable Internal", err)
+		}
+		if bytes.Contains([]byte(err.Error()), []byte("secret")) {
+			t.Fatalf("backend detail leaked to client: %v", err)
+		}
+	})
 }
 
 func TestResolveLedgerSelectorRejectsStaleNetworkState(t *testing.T) {
@@ -324,29 +414,29 @@ func TestResolveLedgerSelectorRejectsStaleNetworkState(t *testing.T) {
 		ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED),
 		ledgerSequenceSpec(newer.Sequence()),
 	} {
-		if got, err := srv.resolveLedger(spec); got != nil || status.Code(err) != codes.NotFound || status.Convert(err).Message() != "notSynced" {
+		if got, err := srv.resolveLedgerContext(context.Background(), spec); got != nil || status.Code(err) != codes.NotFound || status.Convert(err).Message() != "notSynced" {
 			t.Errorf("resolveLedger(%v) = (%v, %v), want NotFound notSynced", spec, got, err)
 		}
 	}
-	if got, err := srv.resolveLedger(ledgerSequenceSpec(validated.Sequence())); err != nil || got != validated {
+	if got, err := srv.resolveLedgerContext(context.Background(), ledgerSequenceSpec(validated.Sequence())); err != nil || got.Sequence() != validated.Sequence() {
 		t.Fatalf("stale exact validated ledger = (%v, %v), want ledger %d", got, err, validated.Sequence())
 	}
 	validatedHash := validated.Hash()
-	if got, err := srv.resolveLedger(ledgerHashSpec(validatedHash[:])); err != nil || got != validated {
+	if got, err := srv.resolveLedgerContext(context.Background(), ledgerHashSpec(validatedHash[:])); err != nil || got.Sequence() != validated.Sequence() {
 		t.Fatalf("stale hash ledger = (%v, %v), want ledger %d", got, err, validated.Sequence())
 	}
 
 	lookup.validatedAge = maxValidatedLedgerAge
-	if got, err := srv.resolveLedger(nil); err != nil || got != newer {
+	if got, err := srv.resolveLedgerContext(context.Background(), nil); err != nil || got.Sequence() != newer.Sequence() {
 		t.Fatalf("current at freshness boundary = (%v, %v), want ledger %d", got, err, newer.Sequence())
 	}
 	lookup.validatedAge += time.Nanosecond
-	if got, err := srv.resolveLedger(nil); got != nil || status.Code(err) != codes.NotFound || status.Convert(err).Message() != "notSynced" {
+	if got, err := srv.resolveLedgerContext(context.Background(), nil); got != nil || status.Code(err) != codes.NotFound || status.Convert(err).Message() != "notSynced" {
 		t.Fatalf("current beyond freshness boundary = (%v, %v), want NotFound notSynced", got, err)
 	}
 
 	lookup.standalone = true
-	if got, err := srv.resolveLedger(nil); err != nil || got != newer {
+	if got, err := srv.resolveLedgerContext(context.Background(), nil); err != nil || got.Sequence() != newer.Sequence() {
 		t.Fatalf("standalone current = (%v, %v), want ledger %d", got, err, newer.Sequence())
 	}
 }
@@ -365,87 +455,12 @@ func TestResolveLedgerSelectorRejectsLaggingShortcut(t *testing.T) {
 		nil,
 		ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_CLOSED),
 	} {
-		if got, err := srv.resolveLedger(spec); got != nil || status.Code(err) != codes.NotFound || status.Convert(err).Message() != "notSynced" {
+		if got, err := srv.resolveLedgerContext(context.Background(), spec); got != nil || status.Code(err) != codes.NotFound || status.Convert(err).Message() != "notSynced" {
 			t.Errorf("resolveLedger(%v) = (%v, %v), want NotFound notSynced", spec, got, err)
 		}
 	}
-	if got, err := srv.resolveLedger(ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED)); err != nil || got != validated {
+	if got, err := srv.resolveLedgerContext(context.Background(), ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED)); err != nil || got.Sequence() != validated.Sequence() {
 		t.Fatalf("validated shortcut = (%v, %v), want ledger %d", got, err, validated.Sequence())
-	}
-}
-
-func TestSpecToIndexSelectorParity(t *testing.T) {
-	exact := newTestLedger(t, 40, nil, nil)
-	exactHash := exact.Hash()
-	srv := NewServer(&fakeLookup{byHash: map[[32]byte]*ledger.Ledger{exactHash: exact}})
-
-	tests := []struct {
-		name string
-		spec *rpcv1.LedgerSpecifier
-		want string
-	}{
-		{name: "nil defaults current", want: "current"},
-		{name: "empty defaults current", spec: &rpcv1.LedgerSpecifier{}, want: "current"},
-		{name: "unspecified defaults current", spec: ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_UNSPECIFIED), want: "current"},
-		{name: "current", spec: ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_CURRENT), want: "current"},
-		{name: "closed", spec: ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_CLOSED), want: "closed"},
-		{name: "validated", spec: ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED), want: "validated"},
-		{name: "sequence", spec: ledgerSequenceSpec(math.MaxUint32), want: "4294967295"},
-		{name: "hash resolves exact sequence", spec: ledgerHashSpec(exactHash[:]), want: "40"},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := srv.specToIndex(test.spec)
-			if err != nil {
-				t.Fatalf("specToIndex() returned error: %v", err)
-			}
-			if got != test.want {
-				t.Fatalf("specToIndex() = %q, want %q", got, test.want)
-			}
-		})
-	}
-}
-
-func TestSpecToIndexSelectorErrors(t *testing.T) {
-	missingHash := [32]byte{0xff}
-	srv := NewServer(&fakeLookup{})
-	tests := []struct {
-		name    string
-		spec    *rpcv1.LedgerSpecifier
-		code    codes.Code
-		message string
-	}{
-		{
-			name: "malformed hash",
-			spec: ledgerHashSpec([]byte("short")),
-			code: codes.InvalidArgument, message: "ledgerHashMalformed",
-		},
-		{
-			name: "missing hash",
-			spec: ledgerHashSpec(missingHash[:]),
-			code: codes.NotFound, message: "ledgerNotFound",
-		},
-		{
-			name: "unknown shortcut",
-			spec: ledgerShortcutSpec(rpcv1.LedgerSpecifier_Shortcut(99)),
-			code: codes.InvalidArgument, message: "unknown ledger shortcut 99",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := srv.specToIndex(test.spec)
-			if got != "" {
-				t.Fatalf("specToIndex() = %q with error %v, want empty result", got, err)
-			}
-			if status.Code(err) != test.code {
-				t.Fatalf("specToIndex() code = %s, want %s: %v", status.Code(err), test.code, err)
-			}
-			if message := status.Convert(err).Message(); message != test.message {
-				t.Fatalf("specToIndex() message = %q, want %q", message, test.message)
-			}
-		})
 	}
 }
 
@@ -472,8 +487,8 @@ func TestGRPC_GetLedger_HeaderAndValidated(t *testing.T) {
 func TestGRPC_GetLedger_TransactionsHashesAndExpand(t *testing.T) {
 	tx1Key := [32]byte{0xAA}
 	tx2Key := [32]byte{0xBB}
-	tx1, meta1 := []byte("tx-one-bytes"), []byte("meta-one-bytes")
-	tx2, meta2 := []byte("tx-two-bytes"), []byte("meta-two-bytes")
+	tx1, meta1 := validPaymentBlob(t, 1), validMetadataBlob(t, 1)
+	tx2, meta2 := validPaymentBlob(t, 2), validMetadataBlob(t, 2)
 	l := newTestLedger(t, 200, nil, map[[32]byte][]byte{
 		tx1Key: txWithMeta(tx1, meta1),
 		tx2Key: txWithMeta(tx2, meta2),
@@ -489,7 +504,18 @@ func TestGRPC_GetLedger_TransactionsHashesAndExpand(t *testing.T) {
 		t.Fatalf("expected HashesList, got %T", resp.Transactions)
 	}
 	if len(hashes.HashesList.Hashes) != 2 {
-		t.Errorf("expected 2 hashes, got %d", len(hashes.HashesList.Hashes))
+		t.Fatalf("expected 2 hashes, got %d", len(hashes.HashesList.Hashes))
+	}
+	parsed1, err := tx.ParseFromBinary(tx1)
+	if err != nil {
+		t.Fatalf("parse first transaction: %v", err)
+	}
+	wantHash1, err := tx.ComputeTransactionHash(parsed1)
+	if err != nil {
+		t.Fatalf("hash first transaction: %v", err)
+	}
+	if !bytes.Equal(hashes.HashesList.Hashes[0], wantHash1[:]) {
+		t.Errorf("first hash = %x, want parsed transaction ID %x", hashes.HashesList.Hashes[0], wantHash1)
 	}
 
 	resp, err = srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{Transactions: true, Expand: true})
@@ -518,10 +544,33 @@ func TestGRPC_GetLedger_TransactionsHashesAndExpand(t *testing.T) {
 	}
 }
 
+func TestGRPC_GetLedger_ExpandsOpenTransactionWithoutMetadata(t *testing.T) {
+	raw := validPaymentBlob(t, 1)
+	parent := newTestLedger(t, 199, nil, nil)
+	open := newOpenTestLedger(t, parent, map[[32]byte][]byte{{0xAA}: raw})
+	srv := NewServer(&fakeLookup{openLedger: open})
+
+	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{Transactions: true, Expand: true})
+	if err != nil {
+		t.Fatalf("GetLedger: %v", err)
+	}
+	list := resp.GetTransactionsList().GetTransactions()
+	if len(list) != 1 {
+		t.Fatalf("expanded transactions = %d, want 1", len(list))
+	}
+	if !bytes.Equal(list[0].GetTransactionBlob(), raw) || len(list[0].GetMetadataBlob()) != 0 {
+		t.Fatalf("open transaction = (%x, %x), want raw transaction without metadata", list[0].GetTransactionBlob(), list[0].GetMetadataBlob())
+	}
+}
+
 func TestGRPC_GetLedger_MalformedExpandedTransactionReturnsPartialSuccess(t *testing.T) {
 	badKey := [32]byte{0xAA}
 	l := newTestLedger(t, 200, nil, map[[32]byte][]byte{badKey: pad("bad", 12)})
-	srv := NewServer(&fakeLookup{openLedger: l})
+	var logs bytes.Buffer
+	logConfig := &xrpllog.Config{Level: xrpllog.LevelError, Format: "text", Output: &logs}
+	srv := NewServer(&fakeLookup{openLedger: l}, ServerConfig{
+		Logger: xrpllog.New(xrpllog.NewHandler(logConfig), logConfig),
+	})
 
 	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{Transactions: true, Expand: true})
 	if err != nil {
@@ -533,6 +582,49 @@ func TestGRPC_GetLedger_MalformedExpandedTransactionReturnsPartialSuccess(t *tes
 	}
 	if len(full.TransactionsList.Transactions) != 0 {
 		t.Fatalf("expanded transactions = %d, want partial empty response", len(full.TransactionsList.Transactions))
+	}
+	if !bytes.Contains(logs.Bytes(), []byte("malformed transaction in ledger")) {
+		t.Fatalf("malformed transaction was not logged: %s", logs.String())
+	}
+}
+
+func TestGRPC_GetLedger_MalformedTransactionStopsHashList(t *testing.T) {
+	meta := validMetadataBlob(t, 1)
+	l := newTestLedger(t, 200, nil, map[[32]byte][]byte{
+		{0x01}: txWithMeta(validPaymentBlob(t, 1), meta),
+		{0x02}: pad("bad", 12),
+		{0x03}: txWithMeta(validPaymentBlob(t, 3), meta),
+	})
+	srv := NewServer(&fakeLookup{openLedger: l})
+
+	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{Transactions: true})
+	if err != nil {
+		t.Fatalf("GetLedger hashes: %v", err)
+	}
+	if got := len(resp.GetHashesList().GetHashes()); got != 1 {
+		t.Fatalf("transaction hashes = %d, want partial list stopped at malformed record", got)
+	}
+}
+
+func TestGRPC_GetLedger_MalformedOpenTransactionReturnsPartialSuccess(t *testing.T) {
+	open := newOpenTestLedger(t, newTestLedger(t, 199, nil, nil), map[[32]byte][]byte{
+		{0xAA}: pad("bad", 12),
+	})
+	var logs bytes.Buffer
+	logConfig := &xrpllog.Config{Level: xrpllog.LevelError, Format: "text", Output: &logs}
+	srv := NewServer(&fakeLookup{openLedger: open}, ServerConfig{
+		Logger: xrpllog.New(xrpllog.NewHandler(logConfig), logConfig),
+	})
+
+	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{Transactions: true, Expand: true})
+	if err != nil {
+		t.Fatalf("GetLedger expand: %v", err)
+	}
+	if got := len(resp.GetTransactionsList().GetTransactions()); got != 0 {
+		t.Fatalf("expanded transactions = %d, want partial empty response", got)
+	}
+	if !bytes.Contains(logs.Bytes(), []byte("malformed transaction in ledger")) {
+		t.Fatalf("malformed transaction was not logged: %s", logs.String())
 	}
 }
 
@@ -614,7 +706,7 @@ func TestGRPC_GetLedgerEntry_ResolvesLedgerBeforeKeyValidation(t *testing.T) {
 // failure (unknown sequence) maps to NotFound — not Internal.
 func TestGRPC_GetLedgerEntry_LedgerNotFound(t *testing.T) {
 	l := newTestLedger(t, 7, nil, nil)
-	srv := NewServer(&fakeLookup{validated: l, entryErr: svcerr.ErrLedgerNotFound})
+	srv := NewServer(&fakeLookup{validated: l})
 
 	key := make([]byte, 32)
 	key[0] = 0xCC
@@ -643,11 +735,11 @@ func TestGRPC_GetLedgerData_PaginatesAndStopsAtEndMarker(t *testing.T) {
 	if len(resp.LedgerObjects.Objects) != 10 {
 		t.Errorf("expected 10 objects, got %d", len(resp.LedgerObjects.Objects))
 	}
-	if resp.LedgerIndex != 1 {
-		t.Errorf("ledger_index=%d, want 1", resp.LedgerIndex)
+	if resp.LedgerIndex != 0 {
+		t.Errorf("ledger_index=%d, want unset", resp.LedgerIndex)
 	}
-	if len(resp.LedgerHash) != 32 {
-		t.Errorf("ledger_hash len=%d, want 32", len(resp.LedgerHash))
+	if len(resp.LedgerHash) != 0 {
+		t.Errorf("ledger_hash len=%d, want unset", len(resp.LedgerHash))
 	}
 }
 
@@ -824,6 +916,53 @@ func TestGRPC_GetLedgerDiff_DetectsCreateModifyDelete(t *testing.T) {
 	if _, ok := got[keyKeep]; ok {
 		t.Errorf("unchanged key %x should not appear in diff", keyKeep)
 	}
+	assertLedgerObjectsSorted(t, resp.LedgerObjects.Objects)
+}
+
+func TestGRPC_GetLedgerDiffMapsSelectorFailuresByEndpoint(t *testing.T) {
+	base := newTestLedger(t, 10, nil, nil)
+	tests := []struct {
+		name    string
+		lookup  *fakeLookup
+		request *rpcv1.GetLedgerDiffRequest
+		message string
+	}{
+		{
+			name:   "base failure wins",
+			lookup: &fakeLookup{},
+			request: &rpcv1.GetLedgerDiffRequest{
+				BaseLedger:    ledgerSequenceSpec(9),
+				DesiredLedger: ledgerHashSpec([]byte("short")),
+			},
+			message: "base ledger not found",
+		},
+		{
+			name:   "desired failure",
+			lookup: &fakeLookup{bySeq: map[uint32]*ledger.Ledger{10: base}},
+			request: &rpcv1.GetLedgerDiffRequest{
+				BaseLedger:    ledgerSequenceSpec(10),
+				DesiredLedger: ledgerSequenceSpec(11),
+			},
+			message: "desired ledger not found",
+		},
+		{
+			name:   "base storage failure",
+			lookup: &fakeLookup{sequenceErr: errors.New("backend detail")},
+			request: &rpcv1.GetLedgerDiffRequest{
+				BaseLedger:    ledgerSequenceSpec(10),
+				DesiredLedger: ledgerSequenceSpec(11),
+			},
+			message: "base ledger not found",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewServer(test.lookup).GetLedgerDiff(context.Background(), test.request)
+			if status.Code(err) != codes.NotFound || status.Convert(err).Message() != test.message {
+				t.Fatalf("GetLedgerDiff() = %v, want NotFound %q", err, test.message)
+			}
+		})
+	}
 }
 
 func TestGRPC_GetLedgerDiff_RequiresImmutableLedgers(t *testing.T) {
@@ -970,25 +1109,26 @@ func TestGRPC_GetLedgerData_MalformedMarkerRejected(t *testing.T) {
 }
 
 func TestGRPC_GetLedgerEntry_ByHash(t *testing.T) {
-	l := newTestLedger(t, 9, nil, nil)
+	key := [32]byte{0xCC}
+	selectedData := pad("selected", 12)
+	selected := newTestLedger(t, 9, map[[32]byte][]byte{key: selectedData}, nil)
+	validated := newTestLedger(t, 10, map[[32]byte][]byte{key: pad("other", 12)}, nil)
 	lookup := &fakeLookup{
-		validated: l,
-		byHash:    map[[32]byte]*ledger.Ledger{l.Hash(): l},
+		validated: validated,
+		byHash:    map[[32]byte]*ledger.Ledger{selected.Hash(): selected},
 	}
 	srv := NewServer(lookup)
 
-	key := make([]byte, 32)
-	key[0] = 0xCC
-	h := l.Hash()
-	_, err := srv.GetLedgerEntry(context.Background(), &rpcv1.GetLedgerEntryRequest{
-		Key:    key,
+	h := selected.Hash()
+	resp, err := srv.GetLedgerEntry(context.Background(), &rpcv1.GetLedgerEntryRequest{
+		Key:    key[:],
 		Ledger: &rpcv1.LedgerSpecifier{Ledger: &rpcv1.LedgerSpecifier_Hash{Hash: h[:]}},
 	})
-	if status.Code(err) != codes.NotFound {
-		t.Errorf("by-hash GetLedgerEntry: expected NotFound, got %v", err)
+	if err != nil {
+		t.Fatalf("by-hash GetLedgerEntry: %v", err)
 	}
-	if want := hex.EncodeToString(h[:]); lookup.entryIndex != want {
-		t.Errorf("ledger selector = %q, want exact hash %q", lookup.entryIndex, want)
+	if !bytes.Equal(resp.GetLedgerObject().GetData(), selectedData) {
+		t.Errorf("ledger entry data = %x, want selected snapshot data %x", resp.GetLedgerObject().GetData(), selectedData)
 	}
 }
 
@@ -1068,6 +1208,28 @@ func TestGRPC_GetLedger_GetObjectsDiffsParent(t *testing.T) {
 	}
 	if _, ok := got[keyKeep]; ok {
 		t.Errorf("unchanged key %x should not appear", keyKeep)
+	}
+	assertLedgerObjectsSorted(t, resp.LedgerObjects.Objects)
+}
+
+func TestGRPC_GetLedger_GetObjectsUsesSequencePredecessor(t *testing.T) {
+	key := [32]byte{0x01}
+	parent := newTestLedger(t, 9, map[[32]byte][]byte{key: pad("canonical", 12)}, nil)
+	desired := newTestLedger(t, 10, map[[32]byte][]byte{key: pad("desired", 12)}, nil)
+	wrongParent := newTestLedger(t, 8, map[[32]byte][]byte{key: pad("desired", 12)}, nil)
+	srv := NewServer(&fakeLookup{
+		bySeq:  map[uint32]*ledger.Ledger{9: parent, 10: desired},
+		byHash: map[[32]byte]*ledger.Ledger{desired.ParentHash(): wrongParent},
+	})
+
+	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+		Ledger: ledgerSequenceSpec(10), GetObjects: true,
+	})
+	if err != nil {
+		t.Fatalf("GetLedger: %v", err)
+	}
+	if len(resp.GetLedgerObjects().GetObjects()) != 1 || resp.GetLedgerObjects().GetObjects()[0].GetModType() != rpcv1.RawLedgerObject_MODIFIED {
+		t.Fatalf("objects = %+v, want modification against sequence predecessor", resp.GetLedgerObjects().GetObjects())
 	}
 }
 
@@ -1343,6 +1505,15 @@ func TestIsBookDirectory(t *testing.T) {
 	}
 	if isBookDirectory([]byte{0x11, 0x00}) {
 		t.Error("too-short blob must not be a book directory")
+	}
+}
+
+func assertLedgerObjectsSorted(t *testing.T, objects []*rpcv1.RawLedgerObject) {
+	t.Helper()
+	for i := 1; i < len(objects); i++ {
+		if bytes.Compare(objects[i-1].GetKey(), objects[i].GetKey()) >= 0 {
+			t.Fatalf("ledger objects are not strictly key ordered at %d: %x >= %x", i, objects[i-1].GetKey(), objects[i].GetKey())
+		}
 	}
 }
 
