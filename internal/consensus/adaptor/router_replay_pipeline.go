@@ -194,12 +194,6 @@ func (r *Router) tryArmStandardReplayPipeline(
 		r.cancelStandardReplayPipelineIdentity(identity)
 		return false
 	}
-	for _, link := range links {
-		if r.isBuildingLedger(link.seq) {
-			r.cancelStandardReplayPipelineIdentity(identity)
-			return false
-		}
-	}
 
 	r.acquisitionMu.Lock()
 	if !r.standardReplayIdentityMatchesLocked(identity) {

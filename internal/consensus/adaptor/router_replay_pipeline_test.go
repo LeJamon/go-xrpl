@@ -173,7 +173,7 @@ func TestStandardReplayPipelineCompletesAllLocalTargetWithoutNetwork(t *testing.
 	assert.Equal(t, []consensus.LedgerID{consensus.LedgerID(links[2].hash)}, engine.getLedgers())
 }
 
-func TestStandardReplayPipelineDefersWhileSuccessorIsBuilding(t *testing.T) {
+func TestStandardReplayPipelineAcquiresRecoveryHashAtBuildingSequence(t *testing.T) {
 	r, a, sender, svc := makeRouter(t)
 	_, err := svc.AcceptLedger(context.Background())
 	require.NoError(t, err)
@@ -181,8 +181,9 @@ func TestStandardReplayPipelineDefersWhileSuccessorIsBuilding(t *testing.T) {
 	r.engine = &mockEngine{buildingSeq: links[0].seq}
 	armStandardReplayTestPipeline(t, r, a, sender, links)
 
-	assert.Empty(t, sender.legacyCalls())
-	assert.False(t, r.standardReplay.active)
+	require.Len(t, sender.legacyCalls(), len(links))
+	assert.True(t, r.standardReplay.active)
+	assert.Equal(t, links[0].hash, r.consensusRecovery.stepHash)
 }
 
 func TestStandardReplayPipelineCancelsSupersededFork(t *testing.T) {

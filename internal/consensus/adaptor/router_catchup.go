@@ -954,9 +954,6 @@ func (r *Router) startLedgerReplayAcquisitionLegacyLocked(seq uint32, hash [32]b
 	if r.replayer.Has(hash) {
 		return nil, false
 	}
-	if r.isBuildingLedger(seq) {
-		return nil, false
-	}
 	if svc := r.adaptor.LedgerService(); svc != nil {
 		if l, err := svc.GetLedgerByHash(hash); err == nil && l != nil {
 			return nil, false
