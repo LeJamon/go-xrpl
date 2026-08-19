@@ -47,6 +47,7 @@ func (d *KVDatabase) WithDurableSnapshot(ctx context.Context, fn func([32]byte) 
 	return fn(fingerprint)
 }
 
+// DurableFingerprint returns a stable identity for the current managed store generation.
 func (d *KVDatabase) DurableFingerprint(ctx context.Context) ([32]byte, error) {
 	if rotating, ok := d.store.(kvstore.RotationIdentityStore); ok {
 		identity, err := rotating.RotationIdentity()

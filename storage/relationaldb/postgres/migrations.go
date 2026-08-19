@@ -202,4 +202,10 @@ var postgresMigrations = []migration{
 				char_length(amendment) = 64 AND amendment ~ '^[0-9A-F]{64}$')`,
 		)
 	}},
+	{version: 5, apply: func(ctx context.Context, tx *sql.Tx) error {
+		return execAll(ctx, tx, `CREATE TABLE IF NOT EXISTS repository_metadata (
+			singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+			instance_id BYTEA NOT NULL CHECK(octet_length(instance_id) = 16)
+		)`)
+	}},
 }

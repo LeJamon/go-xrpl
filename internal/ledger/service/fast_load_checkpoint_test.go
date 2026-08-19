@@ -84,7 +84,7 @@ func TestService_FastLoadCheckpointCapturesStrictTraversalMetrics(t *testing.T) 
 	svc, _, root, expectedNodes, _ := newStoredVerificationFixture(t, shamap.BranchFactor)
 	metrics, err := svc.verifyStoredSHAMapMeasured(t.Context(), root, shamap.TypeState)
 	require.NoError(t, err)
-	require.Equal(t, uint64(expectedNodes), metrics.nodes)
+	require.Equal(t, expectedNodes, metrics.nodes)
 	require.Positive(t, metrics.elapsed)
 }
 
@@ -200,6 +200,46 @@ func TestService_FastLoadCheckpointConsumeSyncFailureAbortsStartup(t *testing.T)
 	svc := newFastLoadCheckpointService(t, db, newTestRepositories(t, ctx), false)
 	err := svc.Start()
 	require.ErrorContains(t, err, "consume fast-load checkpoint")
+}
+
+func TestService_FastLoadCheckpointPreservedWhenStartupCannotUseIt(t *testing.T) {
+	tests := []struct {
+		name     string
+		fastLoad bool
+		mode     StartupMode
+	}{
+		{name: "fast load disabled", mode: StartupNormal},
+		{name: "network startup", fastLoad: true, mode: StartupNetwork},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			db := newTestNodeStore(t, 100_000)
+			t.Cleanup(func() { require.NoError(t, db.Close()) })
+			checkpoint := testFastLoadCheckpoint()
+			require.NoError(t, db.Store(ctx, &nodestore.Node{
+				Type: nodestore.NodeLedger, Hash: fastLoadCheckpointKey,
+				Data: encodeFastLoadCheckpoint(checkpoint), LedgerSeq: checkpoint.sequence,
+			}))
+			svc, err := New(Config{
+				Standalone: true, Startup: StartupConfig{Mode: test.mode},
+				GenesisConfig: genesis.DefaultConfig(), NodeStore: db,
+				SHAMapFamily: backend.New(db), RelationalDB: newTestRepositories(t, ctx),
+				FastLoad: test.fastLoad,
+			})
+			require.NoError(t, err)
+			require.NoError(t, svc.Start())
+			svc.Stop()
+
+			stored, err := db.Fetch(ctx, fastLoadCheckpointKey)
+			require.NoError(t, err)
+			require.NotNil(t, stored)
+			got, tombstone, err := decodeFastLoadCheckpoint(stored.Data)
+			require.NoError(t, err)
+			require.False(t, tombstone)
+			require.Equal(t, checkpoint, got)
+		})
+	}
 }
 
 func TestService_FastLoadCheckpointConsumeWaitsAfterCancellation(t *testing.T) {

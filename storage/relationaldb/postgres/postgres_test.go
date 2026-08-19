@@ -545,6 +545,17 @@ func TestConcurrentMigrationStartup(t *testing.T) {
 	if count != len(postgresMigrations) || minimum != 1 || maximum != len(postgresMigrations) {
 		t.Fatalf("migration history = count %d range %d-%d", count, minimum, maximum)
 	}
+	firstFingerprint, err := managers[0].SchemaFingerprint(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondFingerprint, err := managers[1].SchemaFingerprint(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstFingerprint != secondFingerprint {
+		t.Fatal("concurrent startup produced different repository identities")
+	}
 }
 
 func postgresDSNWithSchema(t *testing.T, dsn, schema string) string {

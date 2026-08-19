@@ -82,12 +82,6 @@ func ensureRepositoryIdentity(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS repository_metadata (
-		singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
-		instance_id BYTEA NOT NULL CHECK(octet_length(instance_id) = 16)
-	)`); err != nil {
-		return err
-	}
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
 		return err

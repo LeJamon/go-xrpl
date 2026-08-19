@@ -482,11 +482,12 @@ func (s *Service) Start() (err error) {
 			s.lifecycleState = serviceFailed
 		}
 	}()
-	checkpoint, err := s.consumeFastLoadCheckpoint(context.Background())
-	if err != nil {
-		return err
+	if s.config.FastLoad && s.config.Startup.Mode == StartupNormal {
+		s.startupFastLoadCheckpoint, err = s.consumeFastLoadCheckpoint(context.Background())
+		if err != nil {
+			return err
+		}
 	}
-	s.startupFastLoadCheckpoint = checkpoint
 	defer func() {
 		s.startupFastLoadCheckpoint = nil
 	}()
