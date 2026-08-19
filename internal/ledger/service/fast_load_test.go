@@ -1524,7 +1524,7 @@ func TestService_FastLoadFallsBackWhenTreeIsCorrupt(t *testing.T) {
 	require.Zero(t, second.GetValidatedLedgerIndex())
 }
 
-func TestService_GetLedgerByHashTreatsCorruptDescendantAsNotFound(t *testing.T) {
+func TestService_GetLedgerByHashReportsCorruptDescendant(t *testing.T) {
 	ctx := context.Background()
 	db := newTestNodeStore(t, 10_000)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
@@ -1565,6 +1565,6 @@ func TestService_GetLedgerByHashTreatsCorruptDescendantAsNotFound(t *testing.T) 
 	require.NoError(t, err)
 
 	_, err = reader.GetLedgerByHash(wantHash)
-	require.ErrorIs(t, err, ErrLedgerNotFound)
-	require.False(t, errors.Is(err, shamap.ErrInvalidNodeData))
+	require.ErrorIs(t, err, errStoredLedgerUnavailable)
+	require.False(t, errors.Is(err, ErrLedgerNotFound))
 }

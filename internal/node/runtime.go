@@ -1114,6 +1114,7 @@ func (r *nodeRuntime) bindTransports() error {
 		r.wsServer,
 		r.ledger,
 		systemListen,
+		r.resourceManager,
 	)
 	r.transports = transports
 	if err != nil {

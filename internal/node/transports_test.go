@@ -26,7 +26,7 @@ func newConnectionLimitTestTransports(t *testing.T, protocol string, limit int) 
 	ports := map[string]config.PortConfig{
 		protocol: {IP: "127.0.0.1", Port: 0, Protocol: protocol, Limit: limit},
 	}
-	if protocol == "ws" {
+	if protocol == "ws" || protocol == "grpc" {
 		ports["http"] = config.PortConfig{IP: "127.0.0.1", Port: 0, Protocol: "http"}
 	}
 	bound, err := bindRPCTransports(
@@ -47,10 +47,101 @@ func newConnectionLimitTestTransports(t *testing.T, protocol string, limit int) 
 		for _, server := range append(append([]*boundHTTPServer(nil), bound.ws...), bound.http...) {
 			_ = server.server.Close()
 		}
+		if bound.grpc != nil {
+			bound.grpc.server.Stop()
+		}
 		_ = bound.closeListeners()
 		bound.wait()
 	})
 	return bound
+}
+
+func TestRPCConnectionLimitCountsGRPCConnections(t *testing.T) {
+	bound := newConnectionLimitTestTransports(t, "grpc", 1)
+	address := bound.grpc.address
+
+	first, err := net.Dial("tcp", address)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		bound.limiter.mu.Lock()
+		defer bound.limiter.mu.Unlock()
+		return bound.limiter.counts["grpc"] == 1
+	}, time.Second, time.Millisecond)
+
+	second, err := net.Dial("tcp", address)
+	require.NoError(t, err)
+	require.NoError(t, second.SetDeadline(time.Now().Add(time.Second)))
+	_, _ = io.WriteString(second, "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+	buffer := make([]byte, 1)
+	_, err = second.Read(buffer)
+	require.Error(t, err)
+	_ = second.Close()
+
+	require.NoError(t, first.Close())
+	require.Eventually(t, func() bool {
+		bound.limiter.mu.Lock()
+		defer bound.limiter.mu.Unlock()
+		return bound.limiter.counts["grpc"] == 0
+	}, time.Second, time.Millisecond)
+}
+
+func TestRPCConnectionLimitIsGlobalAcrossHTTPAndGRPCPorts(t *testing.T) {
+	bound, err := bindRPCTransports(
+		t.Context(),
+		xrpllog.Discard(),
+		&config.Config{
+			Server: config.ServerConfig{MaxConnections: 1},
+			Ports: map[string]config.PortConfig{
+				"http": {IP: "127.0.0.1", Port: 0, Protocol: "http"},
+				"grpc": {IP: "127.0.0.1", Port: 0, Protocol: "grpc"},
+			},
+		},
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
+		&stubLookup{validated: newStubLedger(t)},
+		systemListen,
+	)
+	require.NoError(t, err)
+	require.NoError(t, bound.serve(xrpllog.Discard()))
+	t.Cleanup(func() {
+		for _, server := range bound.http {
+			_ = server.server.Close()
+		}
+		if bound.grpc != nil {
+			bound.grpc.server.Stop()
+		}
+		_ = bound.closeListeners()
+		bound.wait()
+	})
+
+	idleHTTP, err := net.Dial("tcp", bound.http[0].address)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		bound.limiter.mu.Lock()
+		defer bound.limiter.mu.Unlock()
+		return bound.limiter.total == 1
+	}, time.Second, time.Millisecond)
+
+	blocked, err := net.Dial("tcp", bound.grpc.address)
+	require.NoError(t, err)
+	require.NoError(t, blocked.SetDeadline(time.Now().Add(time.Second)))
+	_, _ = io.WriteString(blocked, "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+	buffer := make([]byte, 1)
+	_, err = blocked.Read(buffer)
+	require.Error(t, err)
+	_ = blocked.Close()
+	require.NoError(t, idleHTTP.Close())
+
+	require.Eventually(t, func() bool {
+		conn, dialErr := net.Dial("tcp", bound.grpc.address)
+		if dialErr != nil {
+			return false
+		}
+		defer conn.Close()
+		bound.limiter.mu.Lock()
+		defer bound.limiter.mu.Unlock()
+		return bound.limiter.counts["grpc"] == 1
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestRPCConnectionLimitCountsIdleTCPConnections(t *testing.T) {

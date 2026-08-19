@@ -7,15 +7,19 @@ import (
 )
 
 func (l *Ledger) Snapshot() (*Ledger, error) {
+	return l.SnapshotContext(context.Background())
+}
+
+func (l *Ledger) SnapshotContext(ctx context.Context) (*Ledger, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	stateMapCopy, err := l.stateMap.SnapshotImmutable()
+	stateMapCopy, err := l.stateMap.SnapshotImmutableContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	txMapCopy, err := l.txMap.SnapshotImmutable()
+	txMapCopy, err := l.txMap.SnapshotImmutableContext(ctx)
 	if err != nil {
 		return nil, err
 	}

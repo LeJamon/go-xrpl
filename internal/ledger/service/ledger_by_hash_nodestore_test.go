@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,6 +29,18 @@ type fetchErrorDatabase struct {
 
 func (d *fetchErrorDatabase) Fetch(context.Context, nodestore.Hash256) (*nodestore.Node, error) {
 	return nil, d.err
+}
+
+type blockingFetchDatabase struct {
+	nodestore.Database
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (d *blockingFetchDatabase) Fetch(ctx context.Context, _ nodestore.Hash256) (*nodestore.Node, error) {
+	d.once.Do(func() { close(d.entered) })
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 func TestService_GetLedgerByHashLoadsEvictedLedgerFromNodeStore(t *testing.T) {
@@ -397,7 +410,53 @@ func TestService_GetLedgerByHashReturnsNotFoundWithoutPersistedLedger(t *testing
 	})
 }
 
-func TestService_GetLedgerByHashTreatsCorruptPersistedHeaderAsNotFound(t *testing.T) {
+func TestService_GetLedgerBySequenceContextCancelsDurableLoad(t *testing.T) {
+	ctx := context.Background()
+	backend := newTestNodeStore(t, 100)
+	t.Cleanup(func() { require.NoError(t, backend.Close()) })
+	db := &blockingFetchDatabase{Database: backend, entered: make(chan struct{})}
+	rm := newTestRepositories(t, ctx)
+	wantHash := [32]byte{0x07}
+	const wantSequence = 10
+	require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, relationaldb.LedgerInfo{
+		Hash:     relationaldb.Hash(wantHash),
+		Sequence: wantSequence,
+	}))
+	svc, err := New(Config{
+		NodeStore:    db,
+		SHAMapFamily: shamapbackend.New(db),
+		RelationalDB: rm,
+	})
+	require.NoError(t, err)
+	svc.completeMu.Lock()
+	svc.ensureCompleteLedgerStateLocked()
+	svc.completedLedgers.addRange(wantSequence, wantSequence)
+	svc.completeLedgerHashes[wantSequence] = wantHash
+	svc.completeMu.Unlock()
+
+	lookupCtx, cancel := context.WithCancel(ctx)
+	result := make(chan error, 1)
+	go func() {
+		_, lookupErr := svc.GetLedgerBySequenceContext(lookupCtx, wantSequence)
+		result <- lookupErr
+	}()
+
+	select {
+	case <-db.entered:
+	case <-time.After(time.Second):
+		t.Fatal("durable lookup did not reach nodestore")
+	}
+	cancel()
+	select {
+	case lookupErr := <-result:
+		require.ErrorIs(t, lookupErr, context.Canceled)
+		require.False(t, errors.Is(lookupErr, ErrLedgerNotFound))
+	case <-time.After(time.Second):
+		t.Fatal("durable lookup did not stop after cancellation")
+	}
+}
+
+func TestService_GetLedgerByHashReportsCorruptPersistedHeader(t *testing.T) {
 	ctx := context.Background()
 	db := newTestNodeStore(t, 100)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
@@ -420,7 +479,8 @@ func TestService_GetLedgerByHashTreatsCorruptPersistedHeaderAsNotFound(t *testin
 	require.NoError(t, err)
 
 	_, err = svc.GetLedgerByHash(wantHash)
-	require.ErrorIs(t, err, ErrLedgerNotFound)
+	require.ErrorIs(t, err, errStoredLedgerUnavailable)
+	require.False(t, errors.Is(err, ErrLedgerNotFound))
 }
 
 func TestService_PersistedLedgerHashCacheIsBounded(t *testing.T) {
