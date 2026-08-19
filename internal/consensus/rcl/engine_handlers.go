@@ -493,6 +493,17 @@ func (e *Engine) isQuorumValidatedCandidateLocked(l consensus.Ledger) bool {
 }
 
 func (e *Engine) switchToLedgerLocked(id consensus.LedgerID, l consensus.Ledger) bool {
+	// A validated-ledger completion can race with the normal consensus commit:
+	// by the time the router hands the locally-held ledger back to us, it may
+	// already be our current LCL. Treat that handoff as successfully satisfied.
+	// Restarting it as a recovery round would unnecessarily enter
+	// switchedLedger and turn the next validation into a partial validation.
+	// Keep the WrongLedger case active: even an equal hash must restart that
+	// pinned recovery state so consensus can leave WrongLedger safely.
+	if e.mode != consensus.ModeWrongLedger && e.prevLedger != nil && e.prevLedger.ID() == l.ID() {
+		return true
+	}
+
 	if !e.canSwitchToLedgerLocked(l) {
 		if e.lastRefusedSwitch != id {
 			e.lastRefusedSwitch = id
