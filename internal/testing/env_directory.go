@@ -36,7 +36,7 @@ func (e *TestEnv) BumpDirectoryLastPage(acc *Account, targetPage uint64, adjustF
 	if err := stagedEnv.bumpDirectoryLastPage(acc, targetPage, adjustField); err != nil {
 		return err
 	}
-	if err := e.ledger.AdoptState(staged); err != nil {
+	if err := e.ledger.ConsumeState(staged); err != nil {
 		return fmt.Errorf("commit directory mutation: %w", err)
 	}
 	return nil

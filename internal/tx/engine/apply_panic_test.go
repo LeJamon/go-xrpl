@@ -83,7 +83,7 @@ func (v *failingAtomicPseudoView) ApplyAtomically(apply func(ledger.Writer) erro
 	return v.Ledger.ApplyAtomically(apply)
 }
 
-func (v *failingAtomicPseudoView) AdoptState(candidate *ledger.Ledger) error {
+func (v *failingAtomicPseudoView) ConsumeState(candidate *ledger.Ledger) error {
 	v.candidate = candidate
 	return errors.New("commit failed")
 }

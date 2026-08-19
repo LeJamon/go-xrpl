@@ -167,7 +167,7 @@ func (bp *BlockProcessor) applyTransaction(
 				return result, fmt.Errorf("stage batch inner metadata: %w", err)
 			}
 		}
-		if err := base.AdoptState(staged); err != nil {
+		if err := base.ConsumeState(staged); err != nil {
 			return result, fmt.Errorf("commit transaction state and metadata: %w", err)
 		}
 		bp.engine.SetBaseTxCount(stagedEngine.TxCount())
