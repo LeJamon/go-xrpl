@@ -246,3 +246,86 @@ func TestStandardReplayPipelineFallsBackWhenHeadFails(t *testing.T) {
 	assert.Equal(t, uint64(7), metrics.ReplayPipelineRetried)
 	assert.GreaterOrEqual(t, metrics.ReplayPipelineDiscarded, uint64(len(links)))
 }
+
+func TestStandardReplayPipelineFallbackRespectsProtectedLimit(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.Background())
+	require.NoError(t, err)
+	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 3)
+	armStandardReplayTestPipeline(t, r, a, sender, links)
+
+	r.acquisitionMu.Lock()
+	for i := range maxConcurrentCatchup {
+		hash := [32]byte{0xf0, byte(i + 1)}
+		r.startLedgerAcquisitionLegacyLocked(links[len(links)-1].seq+uint32(i)+1, hash, 7)
+	}
+	r.acquisitionMu.Unlock()
+	require.Equal(t, maxConcurrentCatchup, r.protectedCatchupInFlight())
+
+	head := r.fetchTracker.Find(links[0].hash)
+	require.NotNil(t, head)
+	now := time.Now()
+	for range 6 {
+		now = now.Add(4 * time.Second)
+		require.Equal(t, inbound.TimerEscalate, head.OnTimer(now))
+	}
+	now = now.Add(4 * time.Second)
+	require.Equal(t, inbound.TimerFailed, head.OnTimer(now))
+	r.failInboundAcquisition(head)
+
+	assert.Nil(t, r.fetchTracker.Find(links[0].hash))
+	assert.Equal(t, maxConcurrentCatchup, r.protectedCatchupInFlight())
+}
+
+func TestStandardReplayPipelineDoesNotFallbackAfterGossipTargetAdvances(t *testing.T) {
+	r, _, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.Background())
+	require.NoError(t, err)
+	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 3)
+	sender.mu.Lock()
+	sender.peerSupportsReplay = false
+	sender.mu.Unlock()
+	trackCatchupPeer(r, 7, links[len(links)-1].seq)
+	r.recordCatchupTarget(links[len(links)-1].seq, links[len(links)-1].hash, 7)
+	r.armCatchupTowardTarget()
+	require.True(t, r.standardReplay.active)
+	require.Equal(t, [32]byte{}, r.consensusRecovery.targetHash)
+
+	head := r.fetchTracker.Find(links[0].hash)
+	require.NotNil(t, head)
+	r.recordCatchupTarget(links[len(links)-1].seq+1, [32]byte{0xee}, 8)
+	now := time.Now()
+	for range 6 {
+		now = now.Add(4 * time.Second)
+		require.Equal(t, inbound.TimerEscalate, head.OnTimer(now))
+	}
+	now = now.Add(4 * time.Second)
+	require.Equal(t, inbound.TimerFailed, head.OnTimer(now))
+	r.failInboundAcquisition(head)
+
+	assert.Nil(t, r.fetchTracker.Find(links[0].hash))
+	assert.Zero(t, r.protectedCatchupInFlight())
+}
+
+func TestStandardReplayPipelineStaleFailureKeepsReplacementDrain(t *testing.T) {
+	r, _, _, _ := makeRouter(t)
+	replacement := &standardReplayEntry{generation: 2, seq: 11, hash: [32]byte{0x11}}
+	r.standardReplay = standardReplayPipeline{
+		generation: 2,
+		active:     true,
+		applying:   true,
+		anchorSeq:  10,
+		entries:    map[uint32]*standardReplayEntry{replacement.seq: replacement},
+	}
+	stale := &standardReplayEntry{generation: 1, seq: 10, hash: [32]byte{0x10}}
+
+	r.acquisitionMu.Lock()
+	retired, _, current := r.discardStandardReplayHeadLocked(stale, stale.generation)
+	r.acquisitionMu.Unlock()
+
+	assert.Empty(t, retired)
+	assert.False(t, current)
+	assert.True(t, r.standardReplay.active)
+	assert.True(t, r.standardReplay.applying)
+	assert.Same(t, replacement, r.standardReplay.entries[replacement.seq])
+}

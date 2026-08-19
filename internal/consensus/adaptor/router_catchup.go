@@ -1050,9 +1050,43 @@ func (r *Router) canAdmitProvisionalFullStateLocked(hash [32]byte) bool {
 }
 
 func (r *Router) fallbackReplayAcquisition(seq uint32, hash [32]byte, peerID uint64) {
+	r.fallbackReplayAcquisitionForTarget(seq, hash, peerID, standardReplayTarget{})
+}
+
+func (r *Router) fallbackStandardReplayAcquisition(
+	seq uint32,
+	hash [32]byte,
+	peerID uint64,
+	expected standardReplayTarget,
+) {
+	r.fallbackReplayAcquisitionForTarget(seq, hash, peerID, expected)
+}
+
+func (r *Router) fallbackReplayAcquisitionForTarget(
+	seq uint32,
+	hash [32]byte,
+	peerID uint64,
+	expected standardReplayTarget,
+) {
 	r.acquisitionMu.Lock()
 
 	target := r.consensusRecovery.targetHash
+	if expected.hash != ([32]byte{}) {
+		if target != ([32]byte{}) {
+			if target != expected.hash {
+				r.acquisitionMu.Unlock()
+				return
+			}
+		} else {
+			r.catchupMu.Lock()
+			current := r.catchup.seq == expected.seq && r.catchup.hash == expected.hash
+			r.catchupMu.Unlock()
+			if !current {
+				r.acquisitionMu.Unlock()
+				return
+			}
+		}
+	}
 	if target != ([32]byte{}) && r.consensusRecovery.stepHash != hash && target != hash {
 		r.acquisitionMu.Unlock()
 		return
@@ -2890,26 +2924,37 @@ func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
 		}
 		return
 	}
-	if !r.fetchTracker.RemoveExpectedWithSnapshot(il, il.Snapshot(), true) {
-		r.retireAcquisitionStore(r.lifecycleContext(), il)
-		return
-	}
 	peerID := il.PeerID()
-	r.acquisitionMu.Lock()
-	recoveryTarget := r.consensusRecovery.targetHash == h.Hash
-	r.acquisitionMu.Unlock()
 
 	// A forward child fetched from a standard rippled peer contains only its
 	// header and transaction SHAMap. Rebuild the state from the locally-held
 	// parent, verify the derived roots against the peer header, then feed the
 	// same adoption path as the optional replay-delta protocol.
 	if il.TransactionOnly() {
-		if r.completeStandardReplayPipelineEntry(il, h, txMap, peerID) {
+		r.acquisitionMu.Lock()
+		if !r.fetchTracker.RemoveExpectedWithSnapshot(il, il.Snapshot(), true) {
+			r.acquisitionMu.Unlock()
+			r.retireAcquisitionStore(r.lifecycleContext(), il)
+			return
+		}
+		handled, startDrain := r.completeStandardReplayPipelineEntryLocked(il, h, txMap, peerID)
+		r.acquisitionMu.Unlock()
+		if handled {
+			if startDrain {
+				r.drainStandardReplayPipeline()
+			}
 			return
 		}
 		r.completeStandardTransactionReplay(h, txMap, peerID)
 		return
 	}
+	if !r.fetchTracker.RemoveExpectedWithSnapshot(il, il.Snapshot(), true) {
+		r.retireAcquisitionStore(r.lifecycleContext(), il)
+		return
+	}
+	r.acquisitionMu.Lock()
+	recoveryTarget := r.consensusRecovery.targetHash == h.Hash
+	r.acquisitionMu.Unlock()
 
 	// A history backfill installs validated sequence history below the closed tip,
 	// then advances the backward walk to its parent. It never touches operating

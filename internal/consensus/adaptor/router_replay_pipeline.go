@@ -26,6 +26,11 @@ type standardReplayPipeline struct {
 	headBlockedAt time.Time
 }
 
+type standardReplayTarget struct {
+	seq  uint32
+	hash [32]byte
+}
+
 type standardReplayEntry struct {
 	generation  uint64
 	seq         uint32
@@ -280,22 +285,20 @@ func (r *Router) standardReplayOwnsLocked(hash [32]byte) bool {
 	return false
 }
 
-func (r *Router) completeStandardReplayPipelineEntry(
+func (r *Router) completeStandardReplayPipelineEntryLocked(
 	il *inbound.Ledger,
 	h *header.LedgerHeader,
 	txMap *shamap.SHAMap,
 	peerID uint64,
-) bool {
+) (bool, bool) {
 	if il == nil || h == nil {
-		return false
+		return false, false
 	}
 	now := time.Now()
-	r.acquisitionMu.Lock()
 	entry := r.standardReplay.entries[h.LedgerIndex]
 	if !r.standardReplay.active || entry == nil || entry.hash != h.Hash ||
 		entry.generation != r.standardReplay.generation || entry.acquisition != il {
-		r.acquisitionMu.Unlock()
-		return false
+		return false, false
 	}
 	entry.header = *h
 	entry.txMap = txMap
@@ -310,12 +313,7 @@ func (r *Router) completeStandardReplayPipelineEntry(
 		r.standardReplay.applying = true
 	}
 	r.updateStandardReplayHeadBlockLocked(now)
-	r.acquisitionMu.Unlock()
-
-	if startDrain {
-		r.drainStandardReplayPipeline()
-	}
-	return true
+	return true, startDrain
 }
 
 func (r *Router) failStandardReplayPipelineEntry(il *inbound.Ledger) bool {
@@ -383,12 +381,12 @@ func (r *Router) drainStandardReplayPipeline() {
 		}
 		generation := r.standardReplay.generation
 		if entry.failed {
-			retired, current := r.discardStandardReplayHeadLocked(entry, generation)
+			retired, target, current := r.discardStandardReplayHeadLocked(entry, generation)
 			r.acquisitionMu.Unlock()
 			r.retireLegacyAcquisitions(retired)
 			if current {
 				r.replayPipelineFallbacks.Add(1)
-				r.startLedgerAcquisitionLegacy(entry.seq, entry.hash, entry.peerID)
+				r.fallbackStandardReplayAcquisition(entry.seq, entry.hash, entry.peerID, target)
 			}
 			return
 		}
@@ -396,14 +394,15 @@ func (r *Router) drainStandardReplayPipeline() {
 		r.acquisitionMu.Unlock()
 
 		applyStarted := time.Now()
-		hdr, initialCandidate, persistDuration, err := r.applyStandardReplayEntry(&copyEntry)
+		hdr, initialCandidate, persistDuration, err := r.applyStandardReplayEntry(&copyEntry, entry, generation)
 		applyDuration := time.Since(applyStarted) - persistDuration
 		if applyDuration < 0 {
 			applyDuration = 0
 		}
 		if err != nil {
 			r.acquisitionMu.Lock()
-			retired, current := r.discardStandardReplayHeadLocked(entry, generation)
+			retired, target, current := r.discardStandardReplayHeadLocked(entry, generation)
+			continueDrain := !current && r.standardReplay.active
 			r.acquisitionMu.Unlock()
 			r.retireLegacyAcquisitions(retired)
 			if current {
@@ -413,7 +412,10 @@ func (r *Router) drainStandardReplayPipeline() {
 					"hash", fmt.Sprintf("%x", entry.hash[:8]),
 					"error", err,
 				)
-				r.startLedgerAcquisitionLegacy(entry.seq, entry.hash, entry.peerID)
+				r.fallbackStandardReplayAcquisition(entry.seq, entry.hash, entry.peerID, target)
+			}
+			if continueDrain {
+				continue
 			}
 			return
 		}
@@ -459,19 +461,29 @@ func (r *Router) drainStandardReplayPipeline() {
 func (r *Router) discardStandardReplayHeadLocked(
 	entry *standardReplayEntry,
 	generation uint64,
-) ([]*inbound.Ledger, bool) {
+) ([]*inbound.Ledger, standardReplayTarget, bool) {
+	target := standardReplayTarget{
+		seq:  r.standardReplay.targetSeq,
+		hash: r.standardReplay.targetHash,
+	}
 	if !r.standardReplay.active || r.standardReplay.generation != generation ||
 		r.standardReplay.entries[entry.seq] != entry || r.standardReplay.anchorSeq+1 != entry.seq {
-		r.standardReplay.applying = false
-		return nil, false
+		if !r.standardReplay.active {
+			r.standardReplay.applying = false
+		}
+		return nil, standardReplayTarget{}, false
 	}
 	retired := r.cancelStandardReplayPipelineLocked()
+	if r.consensusRecovery.targetHash != ([32]byte{}) {
+		r.consensusRecovery.stepHash = entry.hash
+	}
 	r.standardReplay.applying = false
-	return retired, true
+	return retired, target, true
 }
 
 func (r *Router) applyStandardReplayEntry(
-	entry *standardReplayEntry,
+	entry, activeEntry *standardReplayEntry,
+	generation uint64,
 ) (header.LedgerHeader, bool, time.Duration, error) {
 	if entry == nil {
 		return header.LedgerHeader{}, false, 0, errors.New("nil standard replay pipeline entry")
@@ -535,9 +547,17 @@ func (r *Router) applyStandardReplayEntry(
 		return header.LedgerHeader{}, false, 0, err
 	}
 
+	r.acquisitionMu.Lock()
+	current := r.standardReplay.active && r.standardReplay.generation == generation &&
+		r.standardReplay.entries[activeEntry.seq] == activeEntry && r.standardReplay.anchorSeq+1 == activeEntry.seq
+	if !current {
+		r.acquisitionMu.Unlock()
+		return header.LedgerHeader{}, false, 0, errors.New("standard replay pipeline entry was superseded")
+	}
 	persistStarted := time.Now()
 	storedHeader, initialCandidate, err := r.storeVerifiedLedger(derived)
 	persistDuration := time.Since(persistStarted)
+	r.acquisitionMu.Unlock()
 	if err != nil {
 		return header.LedgerHeader{}, false, persistDuration, err
 	}
