@@ -954,6 +954,14 @@ func (r *Router) startLedgerReplayAcquisitionLegacyLocked(seq uint32, hash [32]b
 	if r.replayer.Has(hash) {
 		return nil, false
 	}
+	if r.isBuildingLedger(seq) {
+		return nil, false
+	}
+	if svc := r.adaptor.LedgerService(); svc != nil {
+		if l, err := svc.GetLedgerByHash(hash); err == nil && l != nil {
+			return nil, false
+		}
+	}
 
 	opts := append(r.acquisitionOpts(), inbound.WithTransactionOnly())
 	il, created := r.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
@@ -2810,6 +2818,27 @@ func (r *Router) failInboundAcquisitionWithSnapshot(il *inbound.Ledger, snapshot
 	}
 }
 
+func (r *Router) discardFailedInboundAcquisition(il *inbound.Ledger) {
+	if !r.fetchTracker.DiscardExpected(il) {
+		return
+	}
+	r.finishDiscardedInboundAcquisition(il)
+}
+
+func (r *Router) discardFailedInboundAcquisitionWithSnapshot(il *inbound.Ledger, snapshot inbound.Snapshot) {
+	if !r.fetchTracker.RemoveExpectedWithSnapshot(il, snapshot, false) {
+		return
+	}
+	r.finishDiscardedInboundAcquisition(il)
+}
+
+func (r *Router) finishDiscardedInboundAcquisition(il *inbound.Ledger) {
+	r.retireAcquisitionStore(r.lifecycleContext(), il)
+	if il.Reason() == inbound.ReasonConsensus && il.TransactionOnly() {
+		r.failStandardReplayPipelineEntry(il)
+	}
+}
+
 // inboundByHashBatch bounds how many missing-node content hashes a single
 // by-hash escalation requests per tree. By-hash is a targeted divergent-path
 // fallback, not a bulk-transfer path, so the set is kept small — matching
@@ -2878,9 +2907,7 @@ func (r *Router) sendNodesByHash(peers []uint64, ledgerHash [32]byte, seq uint32
 func (r *Router) completeInboundLedger(il *inbound.Ledger) {
 	if err := r.flushAcquisitionStore(r.lifecycleContext(), il); err != nil {
 		r.logger.Warn("inbound ledger: verified-node persistence failed", "error", err, "seq", il.Seq())
-		if r.fetchTracker.DiscardExpected(il) {
-			r.retireAcquisitionStore(r.lifecycleContext(), il)
-		}
+		r.discardFailedInboundAcquisition(il)
 		return
 	}
 	r.completeInboundLedgerReady(il)
@@ -2890,29 +2917,21 @@ func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
 	h, stateMap, txMap, err := il.Result()
 	if err != nil {
 		r.logger.Warn("inbound ledger: failed to get result", "error", err)
-		if r.fetchTracker.DiscardExpected(il) {
-			r.retireAcquisitionStore(r.lifecycleContext(), il)
-		}
+		r.discardFailedInboundAcquisition(il)
 		return
 	}
 	if r.adaptor == nil {
-		if r.fetchTracker.DiscardExpected(il) {
-			r.retireAcquisitionStore(r.lifecycleContext(), il)
-		}
+		r.discardFailedInboundAcquisition(il)
 		return
 	}
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
-		if r.fetchTracker.DiscardExpected(il) {
-			r.retireAcquisitionStore(r.lifecycleContext(), il)
-		}
+		r.discardFailedInboundAcquisition(il)
 		return
 	}
 	if err = r.promoteAcquisitionStore(r.lifecycleContext(), il); err != nil {
 		r.logger.Warn("inbound ledger: failed to promote persistence scope", "error", err, "seq", il.Seq())
-		if r.fetchTracker.DiscardExpected(il) {
-			r.retireAcquisitionStore(r.lifecycleContext(), il)
-		}
+		r.discardFailedInboundAcquisition(il)
 		return
 	}
 	peerID := il.PeerID()

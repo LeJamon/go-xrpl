@@ -26,6 +26,15 @@ type standardReplayPipeline struct {
 	headBlockedAt time.Time
 }
 
+type standardReplayIdentity struct {
+	generation uint64
+	active     bool
+	anchorSeq  uint32
+	anchorHash [32]byte
+	targetSeq  uint32
+	targetHash [32]byte
+}
+
 type standardReplayTarget struct {
 	seq  uint32
 	hash [32]byte
@@ -87,55 +96,78 @@ func (r *Router) standardReplayBase(
 	fallback *ledger.Ledger,
 	targetSeq uint32,
 	targetHash [32]byte,
-) *ledger.Ledger {
+) (*ledger.Ledger, standardReplayIdentity, bool) {
 	if svc == nil {
-		return fallback
+		return fallback, standardReplayIdentity{}, false
 	}
 
 	r.acquisitionMu.Lock()
-	active := r.standardReplay.active
-	anchorSeq := r.standardReplay.anchorSeq
-	anchorHash := r.standardReplay.anchorHash
-	currentTargetSeq := r.standardReplay.targetSeq
-	currentTargetHash := r.standardReplay.targetHash
+	identity := r.standardReplayIdentityLocked()
 	r.acquisitionMu.Unlock()
 
-	if !active {
-		return fallback
+	base := fallback
+	if identity.active {
+		compatible := targetSeq == identity.targetSeq && targetHash == identity.targetHash
+		if !compatible && targetSeq > identity.anchorSeq {
+			compatible = r.recoveryAnchorReachesTarget(identity.anchorSeq, identity.anchorHash, targetHash)
+		}
+		if !compatible {
+			var current bool
+			identity, current = r.cancelStandardReplayPipelineIdentity(identity)
+			if !current {
+				return fallback, standardReplayIdentity{}, false
+			}
+		} else if anchor, err := svc.GetLedgerByHash(identity.anchorHash); err == nil && anchor != nil && anchor.Sequence() == identity.anchorSeq {
+			base = anchor
+		} else {
+			var current bool
+			identity, current = r.cancelStandardReplayPipelineIdentity(identity)
+			if !current {
+				return fallback, standardReplayIdentity{}, false
+			}
+		}
 	}
-	compatible := targetSeq == currentTargetSeq && targetHash == currentTargetHash
-	if !compatible && targetSeq > anchorSeq {
-		compatible = r.recoveryAnchorReachesTarget(anchorSeq, anchorHash, targetHash)
+
+	advanced := false
+	for base != nil && base.Sequence() < targetSeq {
+		nextSeq := base.Sequence() + 1
+		link, ok := r.lookupSeqHash(nextSeq)
+		if !ok || !link.haveParent || link.parentHash != base.Hash() || link.hash == ([32]byte{}) {
+			break
+		}
+		if nextSeq == targetSeq && link.hash != targetHash {
+			break
+		}
+		next, err := svc.GetLedgerByHash(link.hash)
+		if err != nil || next == nil || next.Sequence() != nextSeq || next.ParentHash() != base.Hash() {
+			break
+		}
+		base = next
+		advanced = true
 	}
-	if !compatible {
-		r.cancelStandardReplayPipeline()
-		return fallback
+	if identity.active && advanced {
+		var current bool
+		identity, current = r.cancelStandardReplayPipelineIdentity(identity)
+		if !current {
+			return fallback, standardReplayIdentity{}, false
+		}
 	}
-	anchor, err := svc.GetLedgerByHash(anchorHash)
-	if err != nil || anchor == nil || anchor.Sequence() != anchorSeq {
-		r.cancelStandardReplayPipeline()
-		return fallback
-	}
-	return anchor
+	return base, identity, true
 }
 
 func (r *Router) reconcileStandardReplayTarget(targetSeq uint32, targetHash [32]byte) {
 	r.acquisitionMu.Lock()
-	active := r.standardReplay.active
-	anchorSeq := r.standardReplay.anchorSeq
-	anchorHash := r.standardReplay.anchorHash
-	currentTargetSeq := r.standardReplay.targetSeq
-	currentTargetHash := r.standardReplay.targetHash
+	identity := r.standardReplayIdentityLocked()
 	r.acquisitionMu.Unlock()
-	if !active {
+	if !identity.active {
 		return
 	}
-	compatible := targetSeq == currentTargetSeq && targetHash == currentTargetHash
-	if !compatible && targetSeq > anchorSeq {
-		compatible = r.recoveryAnchorReachesTarget(anchorSeq, anchorHash, targetHash)
+	compatible := targetSeq == identity.targetSeq && targetHash == identity.targetHash
+	if !compatible && targetSeq > identity.anchorSeq {
+		compatible = r.recoveryAnchorReachesTarget(identity.anchorSeq, identity.anchorHash, targetHash)
 	}
 	if !compatible {
-		r.cancelStandardReplayPipeline()
+		r.cancelStandardReplayPipelineIdentity(identity)
 	}
 }
 
@@ -146,22 +178,43 @@ func (r *Router) tryArmStandardReplayPipeline(
 	targetHash [32]byte,
 	peerHint uint64,
 ) bool {
-	anchor = r.standardReplayBase(svc, anchor, targetSeq, targetHash)
+	anchor, identity, current := r.standardReplayBase(svc, anchor, targetSeq, targetHash)
+	if !current {
+		return false
+	}
+	if anchor != nil && anchor.Sequence() == targetSeq && anchor.Hash() == targetHash {
+		if _, current = r.cancelStandardReplayPipelineIdentity(identity); !current {
+			return false
+		}
+		r.completeStoredConsensusRecovery(targetSeq, targetHash, anchor.ParentHash(), false)
+		return true
+	}
 	links, proven := r.standardReplayLinks(anchor, targetSeq, targetHash)
 	if !proven {
-		r.cancelStandardReplayPipeline()
+		r.cancelStandardReplayPipelineIdentity(identity)
 		return false
+	}
+	for _, link := range links {
+		if r.isBuildingLedger(link.seq) {
+			r.cancelStandardReplayPipelineIdentity(identity)
+			return false
+		}
 	}
 
 	r.acquisitionMu.Lock()
+	if !r.standardReplayIdentityMatchesLocked(identity) {
+		r.acquisitionMu.Unlock()
+		return false
+	}
 	initial := !r.standardReplay.active
 	if initial && len(links) < 2 {
 		r.acquisitionMu.Unlock()
 		return false
 	}
 	if !initial && (r.standardReplay.anchorSeq != anchor.Sequence() || r.standardReplay.anchorHash != anchor.Hash()) {
+		retired := r.cancelStandardReplayPipelineLocked()
 		r.acquisitionMu.Unlock()
-		r.cancelStandardReplayPipeline()
+		r.retireLegacyAcquisitions(retired)
 		return false
 	}
 	if initial {
@@ -249,6 +302,35 @@ func (r *Router) cancelStandardReplayPipeline() {
 	retired := r.cancelStandardReplayPipelineLocked()
 	r.acquisitionMu.Unlock()
 	r.retireLegacyAcquisitions(retired)
+}
+
+func (r *Router) standardReplayIdentityLocked() standardReplayIdentity {
+	return standardReplayIdentity{
+		generation: r.standardReplay.generation,
+		active:     r.standardReplay.active,
+		anchorSeq:  r.standardReplay.anchorSeq,
+		anchorHash: r.standardReplay.anchorHash,
+		targetSeq:  r.standardReplay.targetSeq,
+		targetHash: r.standardReplay.targetHash,
+	}
+}
+
+func (r *Router) standardReplayIdentityMatchesLocked(identity standardReplayIdentity) bool {
+	return r.standardReplayIdentityLocked() == identity
+}
+
+func (r *Router) cancelStandardReplayPipelineIdentity(identity standardReplayIdentity) (standardReplayIdentity, bool) {
+	r.acquisitionMu.Lock()
+	if !r.standardReplayIdentityMatchesLocked(identity) {
+		current := r.standardReplayIdentityLocked()
+		r.acquisitionMu.Unlock()
+		return current, false
+	}
+	retired := r.cancelStandardReplayPipelineLocked()
+	current := r.standardReplayIdentityLocked()
+	r.acquisitionMu.Unlock()
+	r.retireLegacyAcquisitions(retired)
+	return current, true
 }
 
 func (r *Router) cancelStandardReplayPipelineLocked() []*inbound.Ledger {

@@ -733,9 +733,7 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 	}
 	if result.persistenceErr != nil {
 		r.logger.Warn("inbound ledger: verified-node persistence failed", "error", result.persistenceErr, "seq", ledger.Seq())
-		if r.fetchTracker.DiscardExpected(ledger) {
-			r.retireAcquisitionStore(r.lifecycleContext(), ledger)
-		}
+		r.discardFailedInboundAcquisition(ledger)
 		return
 	}
 	if result.remove {
@@ -744,14 +742,12 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 		}
 		if result.timerFailure || result.policyFailure {
 			r.failInboundAcquisitionWithSnapshot(ledger, result.snapshot)
-		} else if result.haveSnapshot {
-			if r.fetchTracker.RemoveExpectedWithSnapshot(ledger, result.snapshot, false) {
-				r.retireAcquisitionStore(r.lifecycleContext(), ledger)
-			}
 		} else {
-			if r.fetchTracker.RemoveExpectedWithSnapshot(ledger, ledger.Snapshot(), false) {
-				r.retireAcquisitionStore(r.lifecycleContext(), ledger)
+			snapshot := result.snapshot
+			if !result.haveSnapshot {
+				snapshot = ledger.Snapshot()
 			}
+			r.discardFailedInboundAcquisitionWithSnapshot(ledger, snapshot)
 		}
 		return
 	}

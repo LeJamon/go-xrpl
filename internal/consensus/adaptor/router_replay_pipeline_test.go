@@ -2,6 +2,7 @@ package adaptor
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -138,6 +139,52 @@ func TestStandardReplayPipelineBoundsAndRefillsWindow(t *testing.T) {
 	assert.Equal(t, uint32(standardReplayPipelineWindow), metrics.ReplayPipelineDepth)
 }
 
+func TestStandardReplayPipelineAdvancesPastHeldSuccessor(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.Background())
+	require.NoError(t, err)
+	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 3)
+	storeRecoveryLedger(t, svc, links[0].ledger)
+	armStandardReplayTestPipeline(t, r, a, sender, links)
+
+	require.Equal(t, []legacyBaseCall{
+		{peerID: 7, hash: links[1].hash, seq: links[1].seq},
+		{peerID: 7, hash: links[2].hash, seq: links[2].seq},
+	}, sender.legacyCalls())
+	assert.Equal(t, links[0].seq, r.standardReplay.anchorSeq)
+	assert.Nil(t, r.fetchTracker.Find(links[0].hash))
+}
+
+func TestStandardReplayPipelineCompletesAllLocalTargetWithoutNetwork(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.Background())
+	require.NoError(t, err)
+	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 3)
+	for _, link := range links {
+		storeRecoveryLedger(t, svc, link.ledger)
+	}
+	engine := &mockEngine{switchResult: consensus.LedgerSwitchAccepted}
+	r.engine = engine
+	armStandardReplayTestPipeline(t, r, a, sender, links)
+
+	assert.Empty(t, sender.legacyCalls())
+	assert.False(t, r.standardReplay.active)
+	assert.Equal(t, [32]byte{}, r.consensusRecovery.targetHash)
+	assert.Equal(t, []consensus.LedgerID{consensus.LedgerID(links[2].hash)}, engine.getLedgers())
+}
+
+func TestStandardReplayPipelineDefersWhileSuccessorIsBuilding(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.Background())
+	require.NoError(t, err)
+	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 3)
+	r.engine = &mockEngine{buildingSeq: links[0].seq}
+	armStandardReplayTestPipeline(t, r, a, sender, links)
+
+	assert.Empty(t, sender.legacyCalls())
+	assert.False(t, r.standardReplay.active)
+}
+
 func TestStandardReplayPipelineCancelsSupersededFork(t *testing.T) {
 	r, a, sender, svc := makeRouter(t)
 	_, err := svc.AcceptLedger(context.Background())
@@ -247,6 +294,53 @@ func TestStandardReplayPipelineFallsBackWhenHeadFails(t *testing.T) {
 	assert.GreaterOrEqual(t, metrics.ReplayPipelineDiscarded, uint64(len(links)))
 }
 
+func TestStandardReplayPipelineFallsBackWhenPersistenceFails(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.Background())
+	require.NoError(t, err)
+	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 3)
+	armStandardReplayTestPipeline(t, r, a, sender, links)
+
+	head := r.fetchTracker.Find(links[0].hash)
+	require.NotNil(t, head)
+	r.handleAcquisitionWorkResult(acquisitionWorkResult{
+		ledger: head, complete: true, persistenceErr: errors.New("persistence failed"),
+	})
+
+	fallback := r.fetchTracker.Find(links[0].hash)
+	require.NotNil(t, fallback)
+	assert.False(t, fallback.TransactionOnly())
+	for _, link := range links[1:] {
+		assert.Nil(t, r.fetchTracker.Find(link.hash))
+	}
+	metrics := r.FastSyncMetrics()
+	assert.Equal(t, uint64(1), metrics.ReplayPipelineFallbacks)
+	assert.GreaterOrEqual(t, metrics.ReplayPipelineDiscarded, uint64(len(links)))
+}
+
+func TestStandardReplayPipelineFallsBackWhenAcquisitionDataIsRejected(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.Background())
+	require.NoError(t, err)
+	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 3)
+	armStandardReplayTestPipeline(t, r, a, sender, links)
+
+	head := r.fetchTracker.Find(links[0].hash)
+	require.NotNil(t, head)
+	r.handleAcquisitionWorkResult(acquisitionWorkResult{
+		ledger: head, remove: true, haveSnapshot: true, snapshot: head.Snapshot(),
+		err: errors.New("invalid SHAMap node"),
+	})
+
+	fallback := r.fetchTracker.Find(links[0].hash)
+	require.NotNil(t, fallback)
+	assert.False(t, fallback.TransactionOnly())
+	for _, link := range links[1:] {
+		assert.Nil(t, r.fetchTracker.Find(link.hash))
+	}
+	assert.Equal(t, uint64(1), r.FastSyncMetrics().ReplayPipelineFallbacks)
+}
+
 func TestStandardReplayPipelineFallbackRespectsProtectedLimit(t *testing.T) {
 	r, a, sender, svc := makeRouter(t)
 	_, err := svc.AcceptLedger(context.Background())
@@ -327,5 +421,31 @@ func TestStandardReplayPipelineStaleFailureKeepsReplacementDrain(t *testing.T) {
 	assert.False(t, current)
 	assert.True(t, r.standardReplay.active)
 	assert.True(t, r.standardReplay.applying)
+	assert.Same(t, replacement, r.standardReplay.entries[replacement.seq])
+}
+
+func TestStandardReplayPipelineStaleCancellationKeepsReplacement(t *testing.T) {
+	r, _, _, _ := makeRouter(t)
+	replacement := &standardReplayEntry{generation: 2, seq: 11, hash: [32]byte{0x11}}
+	r.standardReplay = standardReplayPipeline{
+		generation: 2,
+		active:     true,
+		anchorSeq:  10,
+		targetSeq:  replacement.seq,
+		targetHash: replacement.hash,
+		entries:    map[uint32]*standardReplayEntry{replacement.seq: replacement},
+	}
+	stale := standardReplayIdentity{
+		generation: 2,
+		active:     true,
+		anchorSeq:  9,
+		targetSeq:  11,
+		targetHash: replacement.hash,
+	}
+
+	_, current := r.cancelStandardReplayPipelineIdentity(stale)
+
+	assert.False(t, current)
+	assert.True(t, r.standardReplay.active)
 	assert.Same(t, replacement, r.standardReplay.entries[replacement.seq])
 }
