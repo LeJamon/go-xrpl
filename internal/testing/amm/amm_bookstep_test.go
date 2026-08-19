@@ -1155,10 +1155,6 @@ func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
 
 // TestAMMBookStep_Malformed — moved to TestInvalidWithdraw in amm_withdraw_test.go
 // Reference: rippled AMM_test.cpp testMalformed (line 6623)
-func TestAMMBookStep_Malformed(t *testing.T) {
-	t.Log("testMalformed cases are in TestInvalidWithdraw/Malformed_* in amm_withdraw_test.go")
-}
-
 // TestAMMBookStep_FixOverflowOffer tests overflow offer fix.
 // Reference: rippled AMM_test.cpp testFixOverflowOffer (line 6682)
 // Tests multi-hop payment through AMM pool + CLOB offers with precise balance checking.
@@ -1397,7 +1393,7 @@ func TestAMMBookStep_SwapRounding(t *testing.T) {
 	offerTx := offerbuild.OfferCreate(env.Bob,
 		amm.XRPAmount(6300),
 		amm.IOUAmount(env.GW, "USD", 100000)).Build()
-	_ = env.Submit(offerTx)
+	amm.ExpectTER(t, env.Submit(offerTx), "tecUNFUNDED_OFFER")
 	env.Close()
 
 	// AMM should be unchanged
@@ -1623,7 +1619,7 @@ func TestAMMBookStep_FillModes(t *testing.T) {
 				amm.XRPAmount(100)).
 				FillOrKill().Build()
 			result := env.Submit(offerTx)
-			amm.ExpectTER(t, result, "tecKILLED", "tesSUCCESS")
+			amm.ExpectTER(t, result, "tecKILLED")
 			env.Close()
 
 			// AMM unchanged
@@ -2540,7 +2536,7 @@ func TestAMMBookStep_SellWithFillOrKill(t *testing.T) {
 			Sell().FillOrKill().Build()
 		result := env.Submit(offerTx)
 		// fix1578 enabled: tecKILLED
-		amm.ExpectTER(t, result, "tecKILLED", "tesSUCCESS")
+		amm.ExpectTER(t, result, "tecKILLED")
 	})
 
 	// Sub-test 2: tfSell | tfFillOrKill that crosses → tesSUCCESS
@@ -3019,10 +3015,6 @@ func TestAMMBookStep_RequireAuthRejectsUnauthorizedSyntheticOffer(t *testing.T) 
 // testBadPathAssert, testSellFlagBasic, testDirectToDirectPath, testRequireAuth, testMissingAuth
 // All are implemented as separate test functions in this file.
 // Reference: rippled AMMExtended_test.cpp testOffers (line 1447)
-func TestAMMBookStep_Offers(t *testing.T) {
-	t.Log("Umbrella test — individual offer tests are separate TestAMMBookStep_* functions")
-}
-
 // ===================================================================
 // AMMExtended_test.cpp BookStep-dependent tests (class AMMExtended2_test)
 // ===================================================================

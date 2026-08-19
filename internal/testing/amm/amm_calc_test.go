@@ -15,6 +15,7 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	offerbuild "github.com/LeJamon/go-xrpl/internal/testing/offer"
+	"github.com/stretchr/testify/require"
 )
 
 // ───────────────────────────────────────────────────────────────────────
@@ -42,12 +43,7 @@ func TestAMMCalc_LPTokensOnCreate(t *testing.T) {
 			Amount(amm.XRPAmount(100)).
 			SingleAsset().
 			Build()
-		result := env.Submit(withdrawTx)
-		if result.Success {
-			t.Log("PASS: LP tokens created and withdrawal works")
-		} else {
-			t.Logf("Note: withdrawal got %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(withdrawTx))
 	})
 
 	t.Run("UnequalAmounts_XRP_USD", func(t *testing.T) {
@@ -57,13 +53,8 @@ func TestAMMCalc_LPTokensOnCreate(t *testing.T) {
 		env.Close()
 
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(2), amm.IOUAmount(env.GW, "USD", 1)).Build()
-		result := env.Submit(createTx)
-		if !result.Success {
-			t.Skipf("AMM create with small amounts failed: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
-
-		t.Log("PASS: AMM created with unequal small amounts")
 	})
 
 	t.Run("LargeAmounts_XRP_USD", func(t *testing.T) {
@@ -75,8 +66,6 @@ func TestAMMCalc_LPTokensOnCreate(t *testing.T) {
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(20000), amm.IOUAmount(env.GW, "USD", 20000)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
-
-		t.Log("PASS: AMM created with large equal amounts")
 	})
 
 	t.Run("IOU_IOU_Pool", func(t *testing.T) {
@@ -88,8 +77,6 @@ func TestAMMCalc_LPTokensOnCreate(t *testing.T) {
 		createTx := amm.AMMCreate(env.Alice, amm.IOUAmount(env.GW, "USD", 20000), amm.IOUAmount(env.GW, "BTC", 0.5)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
-
-		t.Log("PASS: IOU/IOU AMM with asymmetric amounts")
 	})
 }
 
@@ -118,14 +105,9 @@ func TestAMMCalc_SingleAssetDeposit(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(depositTx)
+		jtx.RequireTxSuccess(t, result)
 		carolAfter := env.Balance(env.Carol)
-
-		if result.Success {
-			spent := carolBefore - carolAfter
-			t.Logf("PASS: Carol deposited XRP (spent %d drops) and received LP tokens", spent)
-		} else {
-			t.Logf("Note: single asset deposit got %s", result.Code)
-		}
+		require.Equal(t, uint64(1_000_000_010), carolBefore-carolAfter)
 	})
 
 	t.Run("DepositUSD_GetLPTokens", func(t *testing.T) {
@@ -138,20 +120,19 @@ func TestAMMCalc_SingleAssetDeposit(t *testing.T) {
 		env.Close()
 
 		// Carol deposits 1000 USD (single asset)
-		usdBefore := env.BalanceIOU(env.Carol, "USD", env.GW)
+		usdBefore := env.IOUBalance(env.Carol, env.GW, "USD")
+		require.NotNil(t, usdBefore)
 		depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
 			Amount(amm.IOUAmount(env.GW, "USD", 1000)).
 			SingleAsset().
 			Build()
 		result := env.Submit(depositTx)
-		usdAfter := env.BalanceIOU(env.Carol, "USD", env.GW)
-
-		if result.Success {
-			spent := usdBefore - usdAfter
-			t.Logf("PASS: Carol deposited USD (spent %.2f) and received LP tokens", spent)
-		} else {
-			t.Logf("Note: single asset USD deposit got %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
+		usdAfter := env.IOUBalance(env.Carol, env.GW, "USD")
+		require.NotNil(t, usdAfter)
+		spent, err := usdBefore.Sub(*usdAfter)
+		require.NoError(t, err)
+		require.Equal(t, "999.99999999999", spent.Value())
 	})
 
 	t.Run("DepositWithTradingFee", func(t *testing.T) {
@@ -172,12 +153,7 @@ func TestAMMCalc_SingleAssetDeposit(t *testing.T) {
 			Amount(amm.XRPAmount(1000)).
 			SingleAsset().
 			Build()
-		result := env.Submit(depositTx)
-		if result.Success {
-			t.Log("PASS: single-asset deposit with trading fee")
-		} else {
-			t.Logf("Note: deposit with fee got %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(depositTx))
 	})
 }
 
@@ -220,12 +196,7 @@ func TestAMMCalc_TwoAssetDeposit(t *testing.T) {
 			Amount2(amm.IOUAmount(env.GW, "USD", 1000)).
 			TwoAsset().
 			Build()
-		result := env.Submit(depositTx)
-		if result.Success {
-			t.Log("PASS: disproportionate two-asset deposit (excess returned or limited)")
-		} else {
-			t.Logf("Note: disproportionate deposit got %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(depositTx))
 	})
 }
 
@@ -248,14 +219,9 @@ func TestAMMCalc_SingleAssetWithdraw(t *testing.T) {
 			SingleAsset().
 			Build()
 		result := env.Submit(withdrawTx)
+		jtx.RequireTxSuccess(t, result)
 		aliceAfter := env.Balance(env.Alice)
-
-		if result.Success {
-			gained := aliceAfter - aliceBefore
-			t.Logf("PASS: Alice withdrew XRP (gained %d drops, fee deducted)", gained)
-		} else {
-			t.Logf("Note: single-asset XRP withdrawal got %s", result.Code)
-		}
+		require.Equal(t, uint64(499_999_989), aliceAfter-aliceBefore)
 	})
 
 	t.Run("WithdrawUSD", func(t *testing.T) {
@@ -268,20 +234,19 @@ func TestAMMCalc_SingleAssetWithdraw(t *testing.T) {
 		env.Close()
 
 		// Alice withdraws some USD
-		usdBefore := env.BalanceIOU(env.Alice, "USD", env.GW)
+		usdBefore := env.IOUBalance(env.Alice, env.GW, "USD")
+		require.NotNil(t, usdBefore)
 		withdrawTx := amm.AMMWithdraw(env.Alice, amm.XRP(), env.USD).
 			Amount(amm.IOUAmount(env.GW, "USD", 500)).
 			SingleAsset().
 			Build()
 		result := env.Submit(withdrawTx)
-		usdAfter := env.BalanceIOU(env.Alice, "USD", env.GW)
-
-		if result.Success {
-			gained := usdAfter - usdBefore
-			t.Logf("PASS: Alice withdrew USD (gained %.2f)", gained)
-		} else {
-			t.Logf("Note: single-asset USD withdrawal got %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, result)
+		usdAfter := env.IOUBalance(env.Alice, env.GW, "USD")
+		require.NotNil(t, usdAfter)
+		gained, err := usdAfter.Sub(*usdBefore)
+		require.NoError(t, err)
+		require.Zero(t, gained.Compare(amm.IOUAmount(env.GW, "USD", 500)))
 	})
 
 	t.Run("WithdrawWithTradingFee", func(t *testing.T) {
@@ -300,12 +265,7 @@ func TestAMMCalc_SingleAssetWithdraw(t *testing.T) {
 			Amount(amm.XRPAmount(500)).
 			SingleAsset().
 			Build()
-		result := env.Submit(withdrawTx)
-		if result.Success {
-			t.Log("PASS: single-asset withdrawal with trading fee")
-		} else {
-			t.Logf("Note: withdrawal with fee got %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(withdrawTx))
 	})
 }
 
@@ -327,12 +287,7 @@ func TestAMMCalc_DepositByLPTokens(t *testing.T) {
 			LPTokenOut(lpAmt).
 			LPToken().
 			Build()
-		result := env.Submit(depositTx)
-		if result.Success {
-			t.Log("PASS: deposit by LP token amount succeeded")
-		} else {
-			t.Logf("Note: deposit by LP tokens got %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(depositTx))
 	})
 
 	t.Run("OneAssetLPToken_XRP", func(t *testing.T) {
@@ -351,12 +306,7 @@ func TestAMMCalc_DepositByLPTokens(t *testing.T) {
 			LPTokenOut(lpAmt).
 			OneAssetLPToken().
 			Build()
-		result := env.Submit(depositTx)
-		if result.Success {
-			t.Log("PASS: one-asset LP token deposit succeeded")
-		} else {
-			t.Logf("Note: one-asset LP token deposit got %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(depositTx))
 	})
 }
 
@@ -377,12 +327,7 @@ func TestAMMCalc_WithdrawByLPTokens(t *testing.T) {
 			LPTokenIn(lpAmt).
 			LPToken().
 			Build()
-		result := env.Submit(withdrawTx)
-		if result.Success {
-			t.Log("PASS: proportional withdrawal by burning LP tokens")
-		} else {
-			t.Logf("Note: LP token burn withdrawal got %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(withdrawTx))
 	})
 
 	t.Run("OneAssetLPToken_USD", func(t *testing.T) {
@@ -395,18 +340,13 @@ func TestAMMCalc_WithdrawByLPTokens(t *testing.T) {
 		env.Close()
 
 		// Withdraw USD by burning specific LP tokens
-		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 500)
+		lpAmt := amm.LPTokenAmount(env, amm.XRP(), env.USD, 100000)
 		withdrawTx := amm.AMMWithdraw(env.Alice, amm.XRP(), env.USD).
-			Amount(amm.IOUAmount(env.GW, "USD", 5000)). // maximum USD to receive
+			Amount(amm.IOUAmount(env.GW, "USD", 100)).
 			LPTokenIn(lpAmt).
 			OneAssetLPToken().
 			Build()
-		result := env.Submit(withdrawTx)
-		if result.Success {
-			t.Log("PASS: one-asset LP token USD withdrawal")
-		} else {
-			t.Logf("Note: one-asset LP token withdrawal got %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(withdrawTx))
 	})
 }
 
@@ -423,16 +363,12 @@ func TestAMMCalc_ConstantProduct(t *testing.T) {
 		env.Close()
 
 		// Multiple deposits and withdrawals should not break the AMM
-		for i := range 5 {
+		for range 5 {
 			depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
 				Amount(amm.XRPAmount(100)).
 				SingleAsset().
 				Build()
-			result := env.Submit(depositTx)
-			if !result.Success {
-				t.Logf("Deposit %d got %s", i, result.Code)
-				break
-			}
+			jtx.RequireTxSuccess(t, env.Submit(depositTx))
 		}
 		env.Close()
 
@@ -440,12 +376,7 @@ func TestAMMCalc_ConstantProduct(t *testing.T) {
 		withdrawTx := amm.AMMWithdraw(env.Carol, amm.XRP(), env.USD).
 			WithdrawAll().
 			Build()
-		result := env.Submit(withdrawTx)
-		if result.Success {
-			t.Log("PASS: constant product maintained after deposits and full withdrawal")
-		} else {
-			t.Logf("Note: withdraw all after deposits got %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(withdrawTx))
 	})
 }
 
@@ -471,15 +402,11 @@ func TestAMMCalc_SpotPriceQuality(t *testing.T) {
 
 		// Bob places a CLOB offer at a different price
 		offerTx := offerbuild.OfferCreate(env.Bob, amm.XRPAmount(1100), amm.IOUAmount(env.GW, "USD", 1000)).Build()
-		result := env.Submit(offerTx)
-		if !result.Success {
-			t.Skipf("Bob offer creation failed: %s", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(offerTx))
 		env.Close()
 
 		// Carol crosses — engine should pick best available
 		crossTx := offerbuild.OfferCreate(env.Carol, amm.IOUAmount(env.GW, "USD", 100), amm.XRPAmount(100)).Build()
-		result = env.Submit(crossTx)
-		t.Logf("AMM+CLOB crossing: success=%v code=%s", result.Success, result.Code)
+		jtx.RequireTxSuccess(t, env.Submit(crossTx))
 	})
 }

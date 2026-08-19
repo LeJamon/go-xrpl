@@ -3,7 +3,6 @@
 package amm
 
 import (
-	"slices"
 	"testing"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -199,17 +198,10 @@ func ToIOUForCalc(amt tx.Amount) tx.Amount {
 }
 
 // ExpectTER checks if the result matches one of the expected TER codes.
-func ExpectTER(t *testing.T, result jtx.TxResult, expectedCodes ...string) {
+func ExpectTER(t *testing.T, result jtx.TxResult, expectedCode string) {
 	t.Helper()
-
-	if slices.Contains(expectedCodes, result.Code) {
-		return
-	}
-
-	if len(expectedCodes) == 1 {
-		t.Fatalf("Expected %s, got %s: %s", expectedCodes[0], result.Code, result.Message)
-	} else {
-		t.Fatalf("Expected one of %v, got %s: %s", expectedCodes, result.Code, result.Message)
+	if result.Code != expectedCode {
+		t.Fatalf("expected %s, got %s: %s", expectedCode, result.Code, result.Message)
 	}
 }
 
@@ -397,9 +389,9 @@ func (e *AMMTestEnv) AMMPoolIOU(ammAcc *jtx.Account, issuer *jtx.Account, curren
 // AMMPoolIOUPrecise returns the precise IOU balance of the AMM pool (full mantissa/exponent).
 func (e *AMMTestEnv) AMMPoolIOUPrecise(ammAcc *jtx.Account, issuer *jtx.Account, currency string) tx.Amount {
 	e.T.Helper()
-	balance := e.TestEnv.IOUBalance(ammAcc, issuer, currency)
-	if balance == nil {
-		return tx.NewIssuedAmountFromFloat64(0, currency, issuer.Address)
+	balance, found := e.TestEnv.LookupIOUBalance(ammAcc, issuer, currency)
+	if !found {
+		e.T.Fatalf("AMMPoolIOUPrecise: missing %s trust line", currency)
 	}
 	return *balance
 }
@@ -424,8 +416,10 @@ func (e *AMMTestEnv) AMMBalances(asset1, asset2 tx.Asset) (tx.Amount, tx.Amount,
 
 	ammAcc := e.ReadAMMAccount(asset1, asset2)
 	if ammAcc == nil {
-		zero := tx.NewIssuedAmountFromFloat64(0, "", "")
-		return zero, zero, zero
+		e.T.Fatalf("AMMBalances: AMM not found for %s/%s", asset1.Currency, asset2.Currency)
+	}
+	if asset1.IsNative() || asset2.IsNative() || asset1.IsMPT() || asset2.IsMPT() {
+		e.T.Fatalf("AMMBalances: only IOU/IOU pools are supported")
 	}
 
 	// Get pool IOU balances — must decode issuer addresses to get proper account IDs
@@ -437,9 +431,7 @@ func (e *AMMTestEnv) AMMBalances(asset1, asset2 tx.Asset) (tx.Amount, tx.Amount,
 	// Get LP token balance from AMM SLE
 	ammData := e.ReadAMMData(asset1, asset2)
 	if ammData == nil {
-		// AMM deleted (e.g., after WithdrawAll) — all balances are zero
-		zero := tx.NewIssuedAmountFromFloat64(0, "", "")
-		return zero, zero, zero
+		e.T.Fatalf("AMMBalances: AMM disappeared while reading balances")
 	}
 	lptBalance := ammData.LPTokenBalance
 
@@ -599,36 +591,26 @@ func (e *AMMTestEnv) AMMTradingFee(asset1, asset2 tx.Asset) uint16 {
 // ReadAMMData reads and parses the AMM SLE for the given asset pair.
 func (e *AMMTestEnv) ReadAMMData(asset1, asset2 tx.Asset) *coreAmm.AMMData {
 	e.T.Helper()
-	// Build the keylet the same way the amm code does internally
-	issuer1 := decodeIssuer(asset1.Issuer)
-	currency1 := keylet.CurrencyBytes(asset1.Currency)
-	issuer2 := decodeIssuer(asset2.Issuer)
-	currency2 := keylet.CurrencyBytes(asset2.Currency)
-
-	ammKey := keylet.AMM(issuer1, currency1, issuer2, currency2)
-	data, err := e.Ledger().Read(ammKey)
-	if err != nil || data == nil {
+	ammKey := coreAmm.ComputeAMMKeylet(asset1, asset2)
+	exists, err := e.Ledger().Exists(ammKey)
+	if err != nil {
+		e.T.Fatalf("ReadAMMData: existence check failed: %v", err)
+	}
+	if !exists {
 		return nil
+	}
+	data, err := e.Ledger().Read(ammKey)
+	if err != nil {
+		e.T.Fatalf("ReadAMMData: read failed: %v", err)
+	}
+	if data == nil {
+		e.T.Fatal("ReadAMMData: ledger reported an AMM without data")
 	}
 	ammData, err := coreAmm.ParseAMMData(data)
 	if err != nil {
 		e.T.Fatalf("ReadAMMData: parse error: %v", err)
 	}
 	return ammData
-}
-
-// decodeIssuer converts issuer address to [20]byte.
-func decodeIssuer(issuer string) [20]byte {
-	if issuer == "" {
-		return [20]byte{}
-	}
-	_, bytes, err := addresscodec.DecodeClassicAddressToAccountID(issuer)
-	if err != nil {
-		return [20]byte{}
-	}
-	var id [20]byte
-	copy(id[:], bytes)
-	return id
 }
 
 // AMMAssetOut computes the asset amount received for burning LP tokens.
@@ -645,19 +627,13 @@ func (e *AMMTestEnv) ExpectLPTokens(account *jtx.Account, asset1, asset2 tx.Asse
 
 	ammAcc := e.ReadAMMAccount(asset1, asset2)
 	if ammAcc == nil {
-		if expected != 0 {
-			e.T.Errorf("ExpectLPTokens(%s): AMM not found, want %f", account.Name, expected)
-		}
-		return
+		e.T.Fatalf("ExpectLPTokens(%s): AMM not found", account.Name)
 	}
 	lptCurrency := coreAmm.GenerateAMMLPTCurrency(asset1.Currency, asset2.Currency)
 
-	balance := e.TestEnv.IOUBalance(account, ammAcc, lptCurrency)
-	if balance == nil {
-		if expected != 0 {
-			e.T.Errorf("ExpectLPTokens(%s): no trust line, want %f", account.Name, expected)
-		}
-		return
+	balance, found := e.TestEnv.LookupIOUBalance(account, ammAcc, lptCurrency)
+	if !found {
+		e.T.Fatalf("ExpectLPTokens(%s): no trust line", account.Name)
 	}
 	actual := balance.Float64()
 

@@ -389,15 +389,7 @@ func TestBid(t *testing.T) {
 		env := setupAMM(t)
 
 		bidTx := amm.AMMBid(env.Alice, amm.XRP(), env.USD).Build()
-		result := env.Submit(bidTx)
-
-		// This may succeed or fail depending on auction slot state
-		// If no one owns the slot, it should succeed
-		if result.Success {
-			t.Log("Bid with auto price succeeded")
-		} else {
-			t.Logf("Bid with auto price result: %s (may be expected)", result.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(bidTx))
 	})
 
 	// Bid with authorized accounts
