@@ -338,10 +338,6 @@ func TestRouter_NoParent_FallsBackToLegacy(t *testing.T) {
 	assert.Equal(t, 0, r.replayer.Count(), "no replay-delta acquisition when no parent is available")
 }
 
-// TestRouter_PeerDoesNotSupportReplay_UsesStandardTransactionReplay verifies that
-// when the peer did NOT advertise the ledger-replay protocol feature
-// during handshake, the router uses standard mtGET_LEDGER but marks the
-// acquisition transaction-only so it does not download the child's state tree.
 func TestRouter_PeerDoesNotSupportReplay_UsesStandardTransactionReplay(t *testing.T) {
 	r, _, rs, svc := makeRouter(t)
 	parent := svc.GetClosedLedger()

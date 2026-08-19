@@ -2830,8 +2830,6 @@ func TestSendValidation_PeerEchoIsNotConflicting(t *testing.T) {
 		t.Fatalf("SignTime must match whole-second wire precision, got %v", emitted.SignTime)
 	}
 
-	// Model the precision of sfSigningTime after serialize/parse and feed the
-	// echoed validation through the same tracker used by the engine.
 	echo := *emitted
 	echo.SignTime = time.Unix(emitted.SignTime.Unix(), 0).UTC()
 	echo.SeenTime = adaptor.Now()

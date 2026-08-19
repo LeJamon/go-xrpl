@@ -587,10 +587,6 @@ func TestInbound_FullAcquisitionWithTransactions(t *testing.T) {
 	}
 }
 
-// TestInbound_TransactionOnlyAcquisition proves the standard-protocol replay
-// path ignores the target account-state tree and completes after fetching only
-// the header and transaction SHAMap. The router later replays this result
-// against its locally-held parent and verifies the derived AccountHash.
 func TestInbound_TransactionOnlyAcquisition(t *testing.T) {
 	t.Parallel()
 	stateRootHash, stateRoot, _ := buildSourceMap(t, shamap.TypeState)

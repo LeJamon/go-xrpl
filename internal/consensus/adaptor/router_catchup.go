@@ -856,8 +856,6 @@ func (r *Router) startLedgerAcquisitionLocked(seq uint32, hash [32]byte, peerID 
 		if err := r.startReplayDeltaAcquisition(seq, hash, peerID, parent); err == nil {
 			return
 		}
-		// Fall through to standard-protocol transaction-only replay on issue
-		// failure. The peer need not implement the optional replay extension.
 	}
 	if parent != nil {
 		r.startLedgerReplayAcquisitionLegacyLocked(seq, hash, peerID)
@@ -923,11 +921,6 @@ func (r *Router) startLedgerAcquisitionLegacy(seq uint32, hash [32]byte, peerID 
 	r.startLedgerAcquisitionLegacyLocked(seq, hash, peerID)
 }
 
-// startLedgerReplayAcquisitionLegacyLocked uses the standard mtGET_LEDGER
-// protocol to fetch only a successor ledger's header and transaction SHAMap.
-// This is the interoperable fast path for rippled peers, which do not advertise
-// go-xrpl's optional replay-delta extension. Completion locally replays the
-// transactions against the already-held parent and verifies both target roots.
 // Caller holds acquisitionMu.
 func (r *Router) startLedgerReplayAcquisitionLegacyLocked(seq uint32, hash [32]byte, peerID uint64) {
 	if seq != 0 && r.belowFloor(seq) {
@@ -1003,9 +996,7 @@ func (r *Router) startLedgerAcquisitionLegacyLocked(seq uint32, hash [32]byte, p
 	}
 }
 
-// canAdmitProvisionalFullStateLocked prevents competing full-state walks only
-// while confirming a fast-loaded ledger. Transaction-only replay acquisitions
-// remain unaffected. Caller holds acquisitionMu.
+// Caller holds acquisitionMu.
 func (r *Router) canAdmitProvisionalFullStateLocked(hash [32]byte) bool {
 	svc := r.adaptor.LedgerService()
 	if svc == nil || !svc.IsFastLoadProvisional() {
@@ -2867,10 +2858,6 @@ func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
 	r.completeStoredConsensusRecovery(h.LedgerIndex, h.Hash, h.ParentHash, initialCandidate)
 }
 
-// completeStandardTransactionReplay turns a transaction-only mtGET_LEDGER
-// acquisition into a verified successor ledger. This keeps forward catch-up
-// interoperable with stock rippled peers: no custom handshake feature is
-// required, and the target account-state tree is never downloaded.
 func (r *Router) completeStandardTransactionReplay(
 	h *header.LedgerHeader,
 	txMap *shamap.SHAMap,
