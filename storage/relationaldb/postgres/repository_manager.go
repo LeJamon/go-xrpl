@@ -2,8 +2,12 @@ package postgres
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"errors"
+	"fmt"
 
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb/internal/sqlutil"
@@ -58,6 +62,10 @@ func NewRepositoryManager(ctx context.Context, config *relationaldb.Config) (*Re
 		_ = raw.Close()
 		return nil, relationaldb.NewSchemaError("new_repository_manager", "migrate database", err)
 	}
+	if err := ensureRepositoryIdentity(ctx, raw); err != nil {
+		_ = raw.Close()
+		return nil, relationaldb.NewSchemaError("new_repository_manager", "initialize repository identity", err)
+	}
 
 	rm := &RepositoryManager{db: sqlutil.NewDB(raw)}
 	rm.ledgerRepo = newLedgerRepository(rm.db)
@@ -66,6 +74,62 @@ func NewRepositoryManager(ctx context.Context, config *relationaldb.Config) (*Re
 	rm.validationRepo = sqlutil.NewGatedValidationRepository(&rm.gate, newValidationRepository(rm.db))
 	rm.amendmentVoteRepo = newAmendmentVoteRepository(rm.db)
 	return rm, nil
+}
+
+func ensureRepositoryIdentity(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS repository_metadata (
+		singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+		instance_id BYTEA NOT NULL CHECK(octet_length(instance_id) = 16)
+	)`); err != nil {
+		return err
+	}
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO repository_metadata(singleton, instance_id) VALUES (1, $1)
+		 ON CONFLICT (singleton) DO NOTHING`, id[:]); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SchemaFingerprint binds the PostgreSQL instance identity and complete live
+// migration history summary.
+func (rm *RepositoryManager) SchemaFingerprint(ctx context.Context) ([32]byte, error) {
+	end, err := rm.gate.Begin()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	defer end()
+	var count, minimum, maximum uint32
+	if err := rm.db.QueryRowContext(ctx,
+		`SELECT COUNT(*), MIN(version), MAX(version) FROM schema_migrations`).Scan(&count, &minimum, &maximum); err != nil {
+		return [32]byte{}, err
+	}
+	if count == 0 || minimum != 1 || maximum != count {
+		return [32]byte{}, fmt.Errorf("invalid PostgreSQL migration history count=%d min=%d max=%d", count, minimum, maximum)
+	}
+	var id []byte
+	if err := rm.db.QueryRowContext(ctx,
+		`SELECT instance_id FROM repository_metadata WHERE singleton = 1`).Scan(&id); err != nil {
+		return [32]byte{}, err
+	}
+	if len(id) != 16 {
+		return [32]byte{}, errors.New("invalid PostgreSQL repository identity")
+	}
+	payload := []byte("postgres-schema-v1")
+	payload = binary.BigEndian.AppendUint32(payload, count)
+	payload = binary.BigEndian.AppendUint32(payload, minimum)
+	payload = binary.BigEndian.AppendUint32(payload, maximum)
+	payload = append(payload, id...)
+	return sha256.Sum256(payload), nil
 }
 
 // Close waits for active operations and closes the database.

@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -186,6 +187,11 @@ type Service struct {
 	heldAdoptions map[uint32]*pendingAdopt
 
 	networkLedgerState networkLedgerState
+
+	startupFastLoadCheckpoint *fastLoadCheckpoint
+	fastLoadCheckpointState   atomic.Uint32
+	fastLoadStrictNodes       atomic.Uint64
+	fastLoadStrictElapsed     atomic.Uint64
 
 	// startupReplay is the one-shot replay staged for the first close and is
 	// guarded by mu together with the closed/open ledger frontier.
@@ -475,6 +481,14 @@ func (s *Service) Start() (err error) {
 		if err != nil {
 			s.lifecycleState = serviceFailed
 		}
+	}()
+	checkpoint, err := s.consumeFastLoadCheckpoint(context.Background())
+	if err != nil {
+		return err
+	}
+	s.startupFastLoadCheckpoint = checkpoint
+	defer func() {
+		s.startupFastLoadCheckpoint = nil
 	}()
 
 	s.mu.Lock()

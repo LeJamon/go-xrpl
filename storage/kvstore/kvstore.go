@@ -60,3 +60,19 @@ type RotatingStore interface {
 	Rotate(lastRotated, minimumOnline uint32) (committed bool, err error)
 	RotationState() (lastRotated, minimumOnline uint32)
 }
+
+// RotationIdentity is a path-free snapshot of a rotating store's durable
+// manifest identity and generation boundary.
+type RotationIdentity struct {
+	OwnerID       [16]byte
+	WritableID    [32]byte
+	ArchiveID     [32]byte
+	LastRotated   uint32
+	MinimumOnline uint32
+}
+
+// RotationIdentityStore exposes the durable generation manifest without
+// exposing backend paths.
+type RotationIdentityStore interface {
+	RotationIdentity() (RotationIdentity, error)
+}

@@ -69,12 +69,13 @@ type nodeRuntime struct {
 	transports    *boundRPCTransports
 	watchdog      *watchdog.Watchdog
 
-	networkID      uint32
-	retentionFloor func() uint32
-	shutdownCh     chan struct{}
-	shutdowner     types.Shutdowner
-	stopSampler    func()
-	stopWatchdog   func()
+	networkID                 uint32
+	retentionFloor            func() uint32
+	prepareFastLoadCheckpoint func(context.Context) (bool, error)
+	shutdownCh                chan struct{}
+	shutdowner                types.Shutdowner
+	stopSampler               func()
+	stopWatchdog              func()
 }
 
 func newNodeRuntime(
@@ -338,7 +339,10 @@ func (r *nodeRuntime) configureMaintenance() error {
 				r.rotator.SetStateRefresh(
 					r.ledger.RefreshValidatedState,
 					r.nodeFamily.SetMinimumLedgerSeq,
-					r.nodeFamily.BeginPrune,
+					func() func() {
+						r.ledger.InvalidateFastLoadCheckpointEligibility()
+						return r.nodeFamily.BeginPrune()
+					},
 				)
 				if err := context.Cause(ctx); err != nil {
 					return err
@@ -1312,6 +1316,34 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 	if !serviceStopped {
 		errs = append(errs, errors.New("shutdown incomplete: stores left open because ledger service did not stop"))
 		return errors.Join(errs...)
+	}
+	prepareCheckpoint := r.prepareFastLoadCheckpoint
+	if prepareCheckpoint == nil && r.ledger != nil {
+		prepareCheckpoint = r.ledger.PrepareFastLoadCheckpoint
+	}
+	if len(errs) == 0 && prepareCheckpoint != nil {
+		checkpointCtx, cancelCheckpoint := context.WithTimeout(ctx, storeShutdownGrace)
+		var prepared bool
+		completed, err := runShutdownPhase(checkpointCtx, "prepare fast-load checkpoint", func() error {
+			var prepareErr error
+			prepared, prepareErr = prepareCheckpoint(checkpointCtx)
+			return prepareErr
+		})
+		cancelCheckpoint()
+		if err != nil {
+			errs = append(errs, err)
+		}
+		if !completed {
+			errs = append(errs, errors.New("shutdown incomplete: stores left open because fast-load checkpoint preparation did not stop"))
+			return errors.Join(errs...)
+		}
+		if err == nil {
+			if prepared {
+				r.serverLog.Info("Fast-load checkpoint preparation complete")
+			} else {
+				r.serverLog.Info("Fast-load checkpoint preparation skipped")
+			}
+		}
 	}
 
 	if r.nodeStore != nil {

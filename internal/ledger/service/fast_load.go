@@ -56,13 +56,36 @@ func (s *Service) loadLatestLedger(ctx context.Context) (*ledger.Ledger, error) 
 	if !storedHeaderMatchesInfo(h, info) {
 		return nil, fmt.Errorf("ledger %d header does not match persisted metadata", info.Sequence)
 	}
-	if err := s.verifyStoredSHAMap(ctx, h.AccountHash, shamap.TypeState); err != nil {
-		return nil, fmt.Errorf("ledger %d state tree: %w", info.Sequence, err)
+	accepted, checkpointErr := s.acceptFastLoadCheckpoint(ctx, s.startupFastLoadCheckpoint, h)
+	if checkpointErr != nil {
+		s.logger.Warn("Fast-load checkpoint rejected; using strict traversal",
+			"sequence", h.LedgerIndex,
+			"err", checkpointErr,
+		)
 	}
-	if h.TxHash != ([32]byte{}) {
-		if err := s.verifyStoredSHAMap(ctx, h.TxHash, shamap.TypeTransaction); err != nil {
-			return nil, fmt.Errorf("ledger %d transaction tree: %w", info.Sequence, err)
+	if !accepted {
+		stateMetrics, err := s.verifyStoredSHAMapMeasured(ctx, h.AccountHash, shamap.TypeState)
+		if err != nil {
+			return nil, fmt.Errorf("ledger %d state tree: %w", info.Sequence, err)
 		}
+		metrics := stateMetrics
+		if h.TxHash != ([32]byte{}) {
+			txMetrics, err := s.verifyStoredSHAMapMeasured(ctx, h.TxHash, shamap.TypeTransaction)
+			if err != nil {
+				return nil, fmt.Errorf("ledger %d transaction tree: %w", info.Sequence, err)
+			}
+			metrics.nodes += txMetrics.nodes
+			metrics.elapsed += txMetrics.elapsed
+		}
+		s.fastLoadStrictNodes.Store(metrics.nodes)
+		s.fastLoadStrictElapsed.Store(uint64(metrics.elapsed))
+		s.markFastLoadCheckpointEligible()
+		s.logger.Info("Fast-load strict traversal completed",
+			"sequence", h.LedgerIndex,
+			"checkpoint_fallback", s.startupFastLoadCheckpoint != nil,
+			"nodes_checked", metrics.nodes,
+			"elapsed", metrics.elapsed.String(),
+		)
 	}
 	if err := loaded.SetValidated(); err != nil {
 		return nil, fmt.Errorf("mark newest ledger %d validated: %w", info.Sequence, err)
@@ -210,10 +233,29 @@ func mergeFeeSettings(fees drops.Fees, settings *state.FeeSettings) drops.Fees {
 }
 
 func (s *Service) verifyStoredSHAMap(ctx context.Context, root [32]byte, mapType shamap.Type) error {
+	_, err := s.verifyStoredSHAMapMeasured(ctx, root, mapType)
+	return err
+}
+
+type storedSHAMapVerificationMetrics struct {
+	nodes   uint64
+	elapsed time.Duration
+}
+
+func (s *Service) verifyStoredSHAMapMeasured(
+	ctx context.Context,
+	root [32]byte,
+	mapType shamap.Type,
+) (storedSHAMapVerificationMetrics, error) {
 	startedAt := time.Now()
 	ticker := time.NewTicker(storedSHAMapVerificationLogInterval)
 	defer ticker.Stop()
-	return s.verifyStoredSHAMapWithTicks(ctx, root, mapType, startedAt, time.Now, ticker.C)
+	var metrics storedSHAMapVerificationMetrics
+	err := s.verifyStoredSHAMapWithTicksReport(
+		ctx, root, mapType, startedAt, time.Now, ticker.C,
+		func(result storedSHAMapVerificationMetrics) { metrics = result },
+	)
+	return metrics, err
 }
 
 func (s *Service) verifyStoredSHAMapWithTicks(
@@ -224,9 +266,31 @@ func (s *Service) verifyStoredSHAMapWithTicks(
 	now func() time.Time,
 	ticks <-chan time.Time,
 ) (err error) {
+	return s.verifyStoredSHAMapWithTicksReport(ctx, root, mapType, startedAt, now, ticks, nil)
+}
+
+func (s *Service) verifyStoredSHAMapWithTicksReport(
+	ctx context.Context,
+	root [32]byte,
+	mapType shamap.Type,
+	startedAt time.Time,
+	now func() time.Time,
+	ticks <-chan time.Time,
+	report func(storedSHAMapVerificationMetrics),
+) (err error) {
 	progress := newStoredSHAMapVerificationProgress(s.logger, s.nodeStore, root, mapType, startedAt)
 	defer func() {
-		progress.finish(now(), err)
+		finishedAt := now()
+		progress.finish(finishedAt, err)
+		if err == nil && report != nil {
+			elapsed := finishedAt.Sub(startedAt)
+			if elapsed < 0 {
+				elapsed = 0
+			}
+			report(storedSHAMapVerificationMetrics{
+				nodes: progress.nodesChecked.Load(), elapsed: elapsed,
+			})
+		}
 	}()
 
 	if root == ([32]byte{}) {
