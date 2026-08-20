@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -51,6 +52,22 @@ func TestServerDiagnosticsWireShape(t *testing.T) {
 			CompletionRecheckRejectedUnavailable: 1,
 			TargetSuperseded:                     13,
 			ObsoleteAcquisitionCompleted:         5,
+			ReplayPipelineRequested:              21,
+			ReplayPipelineReady:                  22,
+			ReplayPipelineApplied:                23,
+			ReplayPipelineDiscarded:              24,
+			ReplayPipelineRetried:                25,
+			ReplayPipelineFallbacks:              26,
+			ReplayPipelineAcquireUs:              27,
+			ReplayPipelineReadyWaitUs:            28,
+			ReplayPipelineApplyUs:                29,
+			ReplayPipelinePersistUs:              30,
+			ReplayPipelineWindow:                 31,
+			ReplayPipelineDepth:                  32,
+			ReplayPipelineReadyDepth:             33,
+			ReplayPipelineHeadSeq:                34,
+			ReplayPipelineTargetSeq:              35,
+			ReplayPipelineHeadBlockedUs:          36,
 		}
 	}
 
@@ -93,13 +110,32 @@ func TestServerDiagnosticsWireShape(t *testing.T) {
 				t.Fatalf("subscriptions = %#v", subscriptions)
 			}
 			fastSync := counters["fast_sync"].(map[string]any)
-			if fastSync["completion_recheck_accepted"] != "8" ||
-				fastSync["completion_recheck_rejected_no_evidence"] != "3" ||
-				fastSync["completion_recheck_rejected_below_quorum"] != "2" ||
-				fastSync["completion_recheck_rejected_quorum_unavailable"] != "1" ||
-				fastSync["target_superseded"] != "13" ||
-				fastSync["obsolete_acquisition_completed"] != "5" {
-				t.Fatalf("fast_sync = %#v", fastSync)
+			wantFastSync := map[string]any{
+				"completion_recheck_accepted":                    "8",
+				"completion_recheck_rejected_no_evidence":        "3",
+				"completion_recheck_rejected_below_quorum":       "2",
+				"completion_recheck_rejected_quorum_unavailable": "1",
+				"target_superseded":                              "13",
+				"obsolete_acquisition_completed":                 "5",
+				"replay_pipeline_requested":                      "21",
+				"replay_pipeline_ready":                          "22",
+				"replay_pipeline_applied":                        "23",
+				"replay_pipeline_discarded":                      "24",
+				"replay_pipeline_retried":                        "25",
+				"replay_pipeline_fallbacks":                      "26",
+				"replay_pipeline_acquire_us":                     "27",
+				"replay_pipeline_ready_wait_us":                  "28",
+				"replay_pipeline_apply_us":                       "29",
+				"replay_pipeline_persist_us":                     "30",
+				"replay_pipeline_window":                         "31",
+				"replay_pipeline_depth":                          "32",
+				"replay_pipeline_ready_depth":                    "33",
+				"replay_pipeline_head_seq":                       "34",
+				"replay_pipeline_target_seq":                     "35",
+				"replay_pipeline_head_blocked_us":                "36",
+			}
+			if !reflect.DeepEqual(fastSync, wantFastSync) {
+				t.Fatalf("fast_sync = %#v, want %#v", fastSync, wantFastSync)
 			}
 			activities := body["current_activities"].(map[string]any)
 			if len(activities["jobs"].([]map[string]any)) != 0 {

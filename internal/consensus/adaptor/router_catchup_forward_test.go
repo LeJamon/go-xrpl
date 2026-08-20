@@ -2,6 +2,8 @@ package adaptor
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -112,7 +114,7 @@ func TestRouter_ForwardDeltaStep_SameBranch(t *testing.T) {
 	// A far tip is the recorded catch-up target (the jump-adopt fallback).
 	var tipHash [32]byte
 	tipHash[0] = 0xF0
-	trackCatchupPeer(r, 7, closed+5)
+	trackCatchupPeer(r, 7, closed+5, tipHash)
 	r.recordCatchupTarget(closed+5, tipHash, 7)
 
 	r.armCatchupTowardTarget()
@@ -128,7 +130,7 @@ func TestRouter_CaughtUpLeavesNextLedgerToConsensus(t *testing.T) {
 	r, _, rs, svc := makeRouter(t)
 	closed := svc.GetClosedLedgerIndex()
 	target := [32]byte{0xC1}
-	trackCatchupPeer(r, 7, closed+1)
+	trackCatchupPeer(r, 7, closed+1, target)
 	r.recordCatchupTarget(closed+1, target, 7)
 
 	r.armCatchupTowardTarget()
@@ -155,7 +157,7 @@ func TestRouter_ForwardDeltaStep_SameBranchViaClosedSeqProxy(t *testing.T) {
 
 	var tipHash [32]byte
 	tipHash[0] = 0xF0
-	trackCatchupPeer(r, 7, closed+3)
+	trackCatchupPeer(r, 7, closed+3, tipHash)
 	r.recordCatchupTarget(closed+3, tipHash, 7)
 
 	r.armCatchupTowardTarget()
@@ -180,7 +182,7 @@ func TestRouter_ForwardDeltaStep_ForkFallsBackToJumpAdopt(t *testing.T) {
 
 	var tipHash [32]byte
 	tipHash[0] = 0xF0
-	trackCatchupPeer(r, 7, closed+5)
+	trackCatchupPeer(r, 7, closed+5, tipHash)
 	r.recordCatchupTarget(closed+5, tipHash, 7)
 
 	r.armCatchupTowardTarget()
@@ -200,7 +202,7 @@ func TestRouter_ForwardDeltaStep_UnknownNextFallsBackToJumpAdopt(t *testing.T) {
 
 	var tipHash [32]byte
 	tipHash[0] = 0xF0
-	trackCatchupPeer(r, 7, closed+5)
+	trackCatchupPeer(r, 7, closed+5, tipHash)
 	r.recordCatchupTarget(closed+5, tipHash, 7)
 	// No seqHash entry for closed+1.
 
@@ -227,7 +229,7 @@ func TestRouter_ForwardDeltaStep_FarGapJumpAdopts(t *testing.T) {
 	var tipHash [32]byte
 	tipHash[0] = 0xF0
 	tipSeq := closed + maxForwardDeltaGap + 10
-	trackCatchupPeer(r, 7, tipSeq)
+	trackCatchupPeer(r, 7, tipSeq, tipHash)
 	r.recordCatchupTarget(tipSeq, tipHash, 7)
 
 	r.armCatchupTowardTarget()
@@ -249,7 +251,7 @@ func TestRouter_ProvisionalWarmStartRecentBranchReplaysForward(t *testing.T) {
 	nextHash[0] = 0xB1
 	r.recordSeqHash(closed.Sequence()+1, nextHash, closed.Hash(), true)
 	tipSeq := closed.Sequence() + 2
-	trackCatchupPeer(r, 7, tipSeq)
+	trackCatchupPeer(r, 7, tipSeq, [32]byte{0xF0})
 	r.recordCatchupTarget(tipSeq, [32]byte{0xF0}, 7)
 
 	r.armCatchupTowardTarget()
@@ -270,7 +272,7 @@ func TestRouter_ProvisionalWarmStartFarGapJumpAdopts(t *testing.T) {
 	r.recordSeqHash(closed.Sequence()+1, [32]byte{0xB1}, closed.Hash(), true)
 	tipSeq := closed.Sequence() + maxForwardDeltaGap + 1
 	tipHash := [32]byte{0xF0}
-	trackCatchupPeer(r, 7, tipSeq)
+	trackCatchupPeer(r, 7, tipSeq, tipHash)
 	r.recordCatchupTarget(tipSeq, tipHash, 7)
 
 	r.armCatchupTowardTarget()
@@ -328,7 +330,7 @@ func TestRouter_ProvisionalWarmStartRecentForkJumpAdopts(t *testing.T) {
 	r.recordSeqHash(closed.Sequence()+1, [32]byte{0xB1}, [32]byte{0xD1}, true)
 	tipSeq := closed.Sequence() + 3
 	tipHash := [32]byte{0xF0}
-	trackCatchupPeer(r, 7, tipSeq)
+	trackCatchupPeer(r, 7, tipSeq, tipHash)
 	r.recordCatchupTarget(tipSeq, tipHash, 7)
 
 	r.armCatchupTowardTarget()
@@ -391,6 +393,72 @@ func TestRouter_ProvisionalWarmStartEventOrderPreservesForwardReplay(t *testing.
 			assert.True(t, svc.IsFastLoadProvisional())
 		})
 	}
+}
+
+func TestRouter_TrustedHashReconcilesConflictingPeerParent(t *testing.T) {
+	r, _, svc := makeProvisionalWarmRouter(t)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	seq := closed.Sequence() + 1
+	hash := [32]byte{}
+	for i := range hash {
+		hash[i] = 0xff
+	}
+	wrongParent := [32]byte{0x01}
+	setPeer := func(peerID peermanagement.PeerID, parent [32]byte) {
+		r.peersMu.Lock()
+		r.peerStates[peerID] = &peerLedgerState{
+			LedgerSeq: seq, LedgerHash: hash, parentHash: parent, haveParent: true,
+		}
+		r.peersMu.Unlock()
+		r.adaptor.UpdatePeerLCL(uint64(peerID), consensus.LedgerID(hash))
+		r.reconcilePeerSeqHash(seq)
+	}
+
+	setPeer(7, wrongParent)
+	entry, ok := r.lookupSeqHash(seq)
+	require.True(t, ok)
+	require.Equal(t, wrongParent, entry.parentHash)
+	r.recordValidationSeqHash(seq, hash)
+	setPeer(8, closed.Hash())
+
+	entry, ok = r.lookupSeqHash(seq)
+	require.True(t, ok)
+	assert.Equal(t, seqHashSourceValidation, entry.source)
+	assert.True(t, entry.haveParent)
+	assert.Equal(t, closed.Hash(), entry.parentHash)
+	nextSeq, nextHash, replay := r.forwardDeltaStep(svc, closed.Sequence(), seq)
+	assert.True(t, replay)
+	assert.Equal(t, seq, nextSeq)
+	assert.Equal(t, hash, nextHash)
+}
+
+func TestRouter_ConflictingPeerParentsClearSeededPredecessor(t *testing.T) {
+	r, _, svc := makeProvisionalWarmRouter(t)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	seq := closed.Sequence() + 2
+	hash := [32]byte{0xff}
+	setPeer := func(peerID peermanagement.PeerID, parent [32]byte) {
+		r.peersMu.Lock()
+		r.peerStates[peerID] = &peerLedgerState{
+			LedgerSeq: seq, LedgerHash: hash, parentHash: parent, haveParent: true,
+		}
+		r.peersMu.Unlock()
+		r.adaptor.UpdatePeerLCL(uint64(peerID), consensus.LedgerID(hash))
+		r.reconcilePeerSeqHash(seq)
+	}
+
+	setPeer(7, [32]byte{0x01})
+	_, seeded := r.lookupSeqHash(seq - 1)
+	require.True(t, seeded)
+	setPeer(8, [32]byte{0x02})
+
+	entry, ok := r.lookupSeqHash(seq)
+	require.True(t, ok)
+	assert.False(t, entry.haveParent)
+	_, seeded = r.lookupSeqHash(seq - 1)
+	assert.False(t, seeded)
 }
 
 func TestRouter_ProvisionalWarmStartEventOrderFallsBackWhenLinkageIsIncomplete(t *testing.T) {
@@ -628,7 +696,7 @@ func TestRouter_ForwardWalkStoresNextForConsensus(t *testing.T) {
 	r.recordSeqHash(c+2, next2, childHash, true)
 	var tipHash [32]byte
 	tipHash[0] = 0xF0
-	trackCatchupPeer(r, 7, c+10)
+	trackCatchupPeer(r, 7, c+10, tipHash)
 	r.recordCatchupTarget(c+10, tipHash, 7)
 
 	r.completeInboundLedger(il)
@@ -651,7 +719,7 @@ func TestRouter_ForwardWalk_SerialUnderCap(t *testing.T) {
 	var nextHash [32]byte
 	nextHash[0] = 0xB1
 	r.recordSeqHash(closed+1, nextHash, closedHash, true)
-	trackCatchupPeer(r, 7, closed+5)
+	trackCatchupPeer(r, 7, closed+5, [32]byte{0xF0})
 	r.recordCatchupTarget(closed+5, [32]byte{0xF0}, 7)
 
 	r.armCatchupTowardTarget()
@@ -671,7 +739,7 @@ func TestRouter_ForwardDeltaFailureCooldownUsesChildHash(t *testing.T) {
 	nextHash := [32]byte{0xB1}
 	tipHash := [32]byte{0xF0}
 	r.recordSeqHash(closed+1, nextHash, closedHash, true)
-	trackCatchupPeer(r, 7, closed+5)
+	trackCatchupPeer(r, 7, closed+5, tipHash)
 	r.recordCatchupTarget(closed+5, tipHash, 7)
 
 	il := inbound.New(nextHash, closed+1, 7, serveTestLogger())
@@ -707,4 +775,90 @@ func TestRouter_SeqHashTableBounded(t *testing.T) {
 	size := len(r.seqHash)
 	r.seqHashMu.Unlock()
 	assert.LessOrEqual(t, size, seqHashRetain+1, "the table stays within the retention window")
+}
+
+func TestRouter_OutlierPeerStatusCannotPoisonSeqHashRetention(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	r.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	r.recordSeqHash(closed.Sequence(), closed.Hash(), [32]byte{}, false)
+
+	normalHash := [32]byte{0xff}
+	r.handleStatusChange(statusChangeMessageWithParent(
+		t,
+		7,
+		closed.Sequence()+1,
+		normalHash,
+		closed.Hash(),
+		true,
+	))
+
+	outlierHash := [32]byte{0x01}
+	const outlierBase = uint32(106_000_000)
+	for offset := uint32(0); offset < seqHashRetain+10; offset++ {
+		r.handleStatusChange(statusChangeMessageWithParent(
+			t,
+			9,
+			outlierBase+offset,
+			outlierHash,
+			[32]byte{0x02},
+			true,
+		))
+	}
+
+	link, ok := r.lookupSeqHash(closed.Sequence() + 1)
+	require.True(t, ok)
+	assert.Equal(t, normalHash, link.hash)
+	assert.Equal(t, closed.Hash(), link.parentHash)
+	assert.True(t, link.haveParent)
+	_, outlierRecorded := r.lookupSeqHash(outlierBase + seqHashRetain + 9)
+	assert.False(t, outlierRecorded)
+
+	r.seqHashMu.Lock()
+	anchor := r.seqHashAnchor
+	size := len(r.seqHash)
+	r.seqHashMu.Unlock()
+	assert.Equal(t, closed.Sequence(), anchor)
+	assert.LessOrEqual(t, size, seqHashRetain+maxForwardDeltaGap+1)
+
+	r.peersMu.RLock()
+	_, outlierAdmitted := r.peerStates[9]
+	candidate, outlierStaged := r.peerStatusCandidates[9]
+	r.peersMu.RUnlock()
+	assert.False(t, outlierAdmitted)
+	require.True(t, outlierStaged)
+	assert.Equal(t, outlierBase+seqHashRetain+9, candidate.LedgerSeq)
+	assert.Equal(t, outlierHash, candidate.LedgerHash)
+}
+
+func TestRouter_PeerSeqHashCannotOverwriteTrustedEvidence(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	seq := svc.GetClosedLedgerIndex() + 1
+	trustedHash := [32]byte{0xa1}
+	peerHash := [32]byte{0xb2}
+	parentHash := svc.GetClosedLedger().Hash()
+
+	r.recordValidationSeqHash(seq, trustedHash)
+	r.recordPeerSeqHash(seq, peerHash, [32]byte{0xc3}, true)
+	r.recordPeerSeqHash(seq, trustedHash, parentHash, true)
+
+	entry, ok := r.lookupSeqHash(seq)
+	require.True(t, ok)
+	assert.Equal(t, trustedHash, entry.hash)
+	assert.Equal(t, parentHash, entry.parentHash)
+	assert.True(t, entry.haveParent)
+	assert.Equal(t, seqHashSourceValidation, entry.source)
+	assert.Equal(t, seqHashSourcePeer, entry.parentFrom)
+}
+
+func TestRouter_PeerStatusAdmissionUsesDivergenceWindow(t *testing.T) {
+	r, _, _, _ := makeRouter(t)
+	const anchor = uint32(10_000)
+	r.recordValidationSeqHash(anchor, [32]byte{0xa4})
+
+	assert.True(t, r.peerStatusWithinAnchor(anchor-maxForwardDeltaGap))
+	assert.True(t, r.peerStatusWithinAnchor(anchor+maxForwardDeltaGap))
+	assert.False(t, r.peerStatusWithinAnchor(anchor-maxForwardDeltaGap-1))
+	assert.False(t, r.peerStatusWithinAnchor(anchor+maxForwardDeltaGap+1))
 }

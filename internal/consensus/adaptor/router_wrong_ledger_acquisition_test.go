@@ -390,7 +390,7 @@ func TestBehindPeerCannotPromoteWhileNetworkTargetIsAhead(t *testing.T) {
 	a.SetOperatingMode(consensus.OpModeTracking)
 	closed := svc.GetClosedLedgerIndex()
 	targetHash := [32]byte{0xC2}
-	r.recordCatchupTarget(closed+10, targetHash, 7)
+	r.recordValidationCatchupTarget(closed+10, targetHash, 7, catchupSourceQuorum)
 
 	lowHash := [32]byte{0xC3}
 	r.checkBehind(1, lowHash, 8)
@@ -402,6 +402,22 @@ func TestBehindPeerCannotPromoteWhileNetworkTargetIsAhead(t *testing.T) {
 	assert.Equal(t, closed+10, seq)
 	assert.Equal(t, targetHash, hash)
 	assert.Equal(t, uint64(7), peerID)
+}
+
+func TestOutlierPeerSequenceCannotBlockPromotion(t *testing.T) {
+	r, a, _, svc := makeRouter(t)
+	a.SetOperatingMode(consensus.OpModeTracking)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+
+	r.peersMu.Lock()
+	r.peerStates[7] = &peerLedgerState{LedgerSeq: closed.Sequence(), LedgerHash: closed.Hash()}
+	r.peerStates[9] = &peerLedgerState{LedgerSeq: 106_000_000, LedgerHash: [32]byte{0xee}}
+	r.peersMu.Unlock()
+
+	r.checkBehind(closed.Sequence(), closed.Hash(), 7)
+
+	assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode())
 }
 
 func TestAheadByMoreThanDoesNotWrap(t *testing.T) {

@@ -326,7 +326,7 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 		}
 	}
 	for i := range events {
-		if !result.yielded && events[i].kind == acquisitionWorkTimer {
+		if !result.yielded && !result.timerEscalate && events[i].kind == acquisitionWorkTimer {
 			result.rearmTimer = true
 			break
 		}
@@ -555,19 +555,6 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 		}
 	}
 
-	workCtx := shamap.WithTraversalBudget(ctx, visitBudget)
-
-	if runLocal || runTimer {
-		_, complete, err := ledger.CheckLocalContext(workCtx, fetch)
-		if err != nil {
-			result.err = err
-			return result
-		}
-		if complete {
-			result.complete = true
-			return result
-		}
-	}
 	if runTimerCheck {
 		switch ledger.OnTimer(timerAt) {
 		case inbound.TimerFailed:
@@ -582,6 +569,20 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 			return result
 		case inbound.TimerRefresh:
 			addedPeers = append(addedPeers, acquisitionRequestCandidates(nil, ledger.Peers())...)
+		}
+	}
+
+	workCtx := shamap.WithTraversalBudget(ctx, visitBudget)
+
+	if runLocal || runTimer {
+		_, complete, err := ledger.CheckLocalContext(workCtx, fetch)
+		if err != nil {
+			result.err = err
+			return result
+		}
+		if complete {
+			result.complete = true
+			return result
 		}
 	}
 
@@ -733,9 +734,7 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 	}
 	if result.persistenceErr != nil {
 		r.logger.Warn("inbound ledger: verified-node persistence failed", "error", result.persistenceErr, "seq", ledger.Seq())
-		if r.fetchTracker.DiscardExpected(ledger) {
-			r.retireAcquisitionStore(r.lifecycleContext(), ledger)
-		}
+		r.discardFailedInboundAcquisition(ledger)
 		return
 	}
 	if result.remove {
@@ -744,14 +743,12 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 		}
 		if result.timerFailure || result.policyFailure {
 			r.failInboundAcquisitionWithSnapshot(ledger, result.snapshot)
-		} else if result.haveSnapshot {
-			if r.fetchTracker.RemoveExpectedWithSnapshot(ledger, result.snapshot, false) {
-				r.retireAcquisitionStore(r.lifecycleContext(), ledger)
-			}
 		} else {
-			if r.fetchTracker.RemoveExpectedWithSnapshot(ledger, ledger.Snapshot(), false) {
-				r.retireAcquisitionStore(r.lifecycleContext(), ledger)
+			snapshot := result.snapshot
+			if !result.haveSnapshot {
+				snapshot = ledger.Snapshot()
 			}
+			r.discardFailedInboundAcquisitionWithSnapshot(ledger, snapshot)
 		}
 		return
 	}

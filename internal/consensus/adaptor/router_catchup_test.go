@@ -20,12 +20,25 @@ import (
 // statusChangeMessage builds a wire-framed TMStatusChange for the given
 // seq/hash and returns the InboundMessage the Router's dispatch expects.
 func statusChangeMessage(t *testing.T, peerID peermanagement.PeerID, seq uint32, hash [32]byte) *peermanagement.InboundMessage {
+	return statusChangeMessageWithParent(t, peerID, seq, hash, [32]byte{}, false)
+}
+
+func statusChangeMessageWithParent(
+	t *testing.T,
+	peerID peermanagement.PeerID,
+	seq uint32,
+	hash, parentHash [32]byte,
+	haveParent bool,
+) *peermanagement.InboundMessage {
 	t.Helper()
 	sc := &message.StatusChange{
 		NewStatus:  message.NodeStatus(0),
 		NewEvent:   message.NodeEventClosingLedger,
 		LedgerSeq:  seq,
 		LedgerHash: hash[:],
+	}
+	if haveParent {
+		sc.LedgerHashPrevious = parentHash[:]
 	}
 	encoded, err := message.Encode(sc)
 	require.NoError(t, err)
@@ -187,6 +200,135 @@ func TestRouter_FullNodeBehindPeerLeavesFullBeforeCatchup(t *testing.T) {
 	require.GreaterOrEqual(t, acquireCount(rs), 1)
 }
 
+func TestRouter_FullNodeAcquiresPreferredPeerTwoLedgersAhead(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	a.SetOperatingMode(consensus.OpModeFull)
+	peerHash := [32]byte{}
+	for i := range peerHash {
+		peerHash[i] = 0xff
+	}
+
+	r.handleMessage(statusChangeMessage(
+		t,
+		peermanagement.PeerID(7),
+		svc.GetClosedLedgerIndex()+2,
+		peerHash,
+	))
+
+	assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode())
+	assert.True(t, r.isAcquiring(peerHash))
+	assert.Equal(t, 1, acquireCount(sender))
+}
+
+func TestRouter_AheadPreferredPeerTargetPreventsFullPromotion(t *testing.T) {
+	r, a, _, svc := makeRouter(t)
+	a.SetOperatingMode(consensus.OpModeTracking)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	targetSeq := closed.Sequence() + 2
+	targetHash := [32]byte{}
+	for i := range targetHash {
+		targetHash[i] = 0xff
+	}
+
+	r.peersMu.Lock()
+	r.peerStates[7] = &peerLedgerState{LedgerSeq: targetSeq, LedgerHash: targetHash}
+	r.peersMu.Unlock()
+	a.UpdatePeerLCL(7, consensus.LedgerID(targetHash))
+	r.catchupMu.Lock()
+	r.catchup = catchupTarget{seq: targetSeq, hash: targetHash, peerID: 7}
+	r.catchupMu.Unlock()
+	r.fetchTracker.Track(inbound.New(targetHash, targetSeq, 7, r.logger))
+
+	r.checkBehind(closed.Sequence()+1, closed.Hash(), 8)
+
+	assert.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
+}
+
+func TestRouter_NonPreferredPeerTargetIsNotRearmed(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	seq := svc.GetClosedLedgerIndex() + 3
+	staleHash := [32]byte{0x80}
+	preferredHash := [32]byte{0xff}
+	recordPreferredPeerCatchupTarget(r, 7, seq, staleHash)
+
+	r.peersMu.Lock()
+	r.peerStates[8] = &peerLedgerState{LedgerSeq: seq, LedgerHash: preferredHash}
+	r.peerStates[9] = &peerLedgerState{LedgerSeq: seq, LedgerHash: preferredHash}
+	r.peersMu.Unlock()
+	a.UpdatePeerLCL(8, consensus.LedgerID(preferredHash))
+	a.UpdatePeerLCL(9, consensus.LedgerID(preferredHash))
+
+	r.armCatchupTowardTarget()
+
+	assert.Zero(t, acquireCount(sender))
+	assert.False(t, r.isAcquiring(staleHash))
+}
+
+func TestRouter_CurrentPeerMajorityReplacesSameSequenceFrontier(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	seq := svc.GetClosedLedgerIndex() + 3
+	staleHash := [32]byte{0x80}
+	preferredHash := [32]byte{}
+	for i := range preferredHash {
+		preferredHash[i] = 0xff
+	}
+
+	r.handleMessage(statusChangeMessage(t, 7, seq, staleHash))
+	r.handleMessage(statusChangeMessage(t, 8, seq, preferredHash))
+	r.handleMessage(statusChangeMessage(t, 9, seq, preferredHash))
+
+	entry, ok := r.lookupSeqHash(seq)
+	require.True(t, ok)
+	assert.Equal(t, preferredHash, entry.hash)
+	r.catchupMu.Lock()
+	frontier := r.catchup
+	r.catchupMu.Unlock()
+	assert.Equal(t, seq, frontier.seq)
+	assert.Equal(t, preferredHash, frontier.hash)
+	assert.Equal(t, catchupSourcePeer, frontier.source)
+	assert.True(t, r.isObsoleteRecoveryCompletion(seq, staleHash))
+	assert.False(t, r.shouldSwitchConsensusLedger(seq, staleHash))
+	assert.True(t, r.shouldSwitchConsensusLedger(seq, preferredHash))
+
+	r.completeStoredConsensusRecovery(seq, staleHash, [32]byte{0x70}, false)
+	entry, ok = r.lookupSeqHash(seq)
+	require.True(t, ok)
+	assert.Equal(t, preferredHash, entry.hash)
+}
+
+func TestRouter_CorroboratedFarPeerTipReplacesSameSequenceFrontier(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	seq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 10
+	staleHash := [32]byte{0x80}
+	preferredHash := [32]byte{0xff}
+
+	r.handleMessage(statusChangeMessage(t, 7, seq, staleHash))
+	r.handleMessage(statusChangeMessage(t, 8, seq, staleHash))
+	r.handleMessage(statusChangeMessage(t, 9, seq, preferredHash))
+	r.handleMessage(statusChangeMessage(t, 10, seq, preferredHash))
+
+	r.catchupMu.Lock()
+	frontier := r.catchup
+	r.catchupMu.Unlock()
+	assert.Equal(t, seq, frontier.seq)
+	assert.Equal(t, preferredHash, frontier.hash)
+	assert.Equal(t, catchupSourcePeer, frontier.source)
+}
+
+func TestRouter_PeerTargetCannotReplaceTrustedFrontier(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	trustedSeq := svc.GetClosedLedgerIndex() + 3
+	trustedHash := [32]byte{0xc1}
+	r.recordValidationCatchupTarget(trustedSeq, trustedHash, 7, catchupSourceValidation)
+
+	r.recordCatchupTarget(trustedSeq+10, [32]byte{0xff}, 8)
+
+	assert.Equal(t, catchupTarget{
+		seq: trustedSeq, hash: trustedHash, peerID: 7, source: catchupSourceValidation,
+	}, r.catchup)
+}
+
 func TestRouter_FullNodeDoesNotAcquireNonPreferredPeerTip(t *testing.T) {
 	r, a, sender, svc := makeRouter(t)
 	a.SetOperatingMode(consensus.OpModeFull)
@@ -277,6 +419,24 @@ func TestRouter_TrustedCatchupTargetDoesNotRegress(t *testing.T) {
 	assert.True(t, r.isAcquiring(aheadHash))
 	assert.False(t, r.isAcquiring(laggingHash),
 		"a lower validation must not start a second acquisition after the frontier is set")
+}
+
+func TestRouter_QuorumUpgradePreservesTrustedTargetPeer(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	seq := svc.GetClosedLedgerIndex() + 3
+	hash := [32]byte{0xD3}
+	r.recordValidationCatchupTarget(seq, hash, 7, catchupSourceValidation)
+	r.recordValidationCatchupTarget(seq, hash, 0, catchupSourceQuorum)
+
+	r.catchupMu.Lock()
+	target := r.catchup
+	r.catchupMu.Unlock()
+	require.Equal(t, catchupTarget{
+		seq:    seq,
+		hash:   hash,
+		peerID: 7,
+		source: catchupSourceQuorum,
+	}, target)
 }
 
 // acquireCount totals the acquisition requests the router emitted via either
@@ -387,6 +547,89 @@ func TestRouter_FullyValidatedHashCancelsOnlyConsensusSiblings(t *testing.T) {
 	recorded, ok := r.lookupSeqHash(seq)
 	require.True(t, ok)
 	assert.Equal(t, canonical, recorded.hash)
+}
+
+func TestRouter_TrustedTargetSupersedesOneObsoleteFullStateAcquisition(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	closed := svc.GetClosedLedgerIndex()
+	firstHash := [32]byte{0x81}
+	secondHash := [32]byte{0x82}
+	targetHash := [32]byte{0x90}
+	first := inbound.New(firstHash, closed+1, 7, r.logger)
+	second := inbound.New(secondHash, closed+2, 8, r.logger)
+	r.fetchTracker.Track(first)
+	r.fetchTracker.Track(second)
+	trackCatchupPeer(r, 9, closed+maxForwardDeltaGap+10)
+
+	a.OnLedgerFullyValidated(consensus.LedgerID(targetHash), closed+maxForwardDeltaGap+10)
+
+	assert.Nil(t, r.fetchTracker.Find(firstHash))
+	assert.Same(t, second, r.fetchTracker.Find(secondHash))
+	assert.NotNil(t, r.fetchTracker.Find(targetHash))
+	assert.Equal(t, maxConcurrentSpeculativeCatchup, r.protectedCatchupInFlight())
+	assert.NotEmpty(t, sender.legacyCalls())
+}
+
+func TestRouter_RecentProgressProtectsNearbyFullStateAcquisition(t *testing.T) {
+	r, a, _, svc := makeRouter(t)
+	closed := svc.GetClosedLedgerIndex()
+	firstHash := [32]byte{0x81}
+	secondHash := [32]byte{0x82}
+	targetHash := [32]byte{0x90}
+	first := inbound.New(firstHash, closed+1, 7, r.logger)
+	second := inbound.New(secondHash, closed+2, 8, r.logger)
+	r.fetchTracker.Track(first)
+	r.fetchTracker.Track(second)
+
+	a.OnLedgerFullyValidated(consensus.LedgerID(targetHash), closed+10)
+
+	assert.Same(t, first, r.fetchTracker.Find(firstHash))
+	assert.Same(t, second, r.fetchTracker.Find(secondHash))
+	assert.Nil(t, r.fetchTracker.Find(targetHash))
+}
+
+func TestRouter_StalledNearbyFullStateAcquisitionIsSuperseded(t *testing.T) {
+	r, a, _, svc := makeRouter(t)
+	closed := svc.GetClosedLedgerIndex()
+	firstHash := [32]byte{0x81}
+	secondHash := [32]byte{0x82}
+	targetHash := [32]byte{0x90}
+	first := inbound.New(firstHash, closed+1, 7, r.logger)
+	second := inbound.New(secondHash, closed+2, 8, r.logger)
+	for _, acquisition := range []*inbound.Ledger{first, second} {
+		now := time.Now()
+		acquisition.RearmTimer(now)
+		for range 2 {
+			now = now.Add(4 * time.Second)
+			require.Equal(t, inbound.TimerEscalate, acquisition.OnTimer(now))
+			acquisition.RearmTimer(now)
+		}
+		r.fetchTracker.Track(acquisition)
+	}
+	trackCatchupPeer(r, 9, closed+10)
+
+	a.OnLedgerFullyValidated(consensus.LedgerID(targetHash), closed+10)
+
+	assert.Nil(t, r.fetchTracker.Find(firstHash))
+	assert.Same(t, second, r.fetchTracker.Find(secondHash))
+	assert.NotNil(t, r.fetchTracker.Find(targetHash))
+}
+
+func TestRouter_ExactRecoveryAcquisitionsAreNeverSuperseded(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	closed := svc.GetClosedLedgerIndex()
+	targetHash := [32]byte{0x81}
+	stepHash := [32]byte{0x82}
+	target := inbound.New(targetHash, closed+1, 7, r.logger)
+	step := inbound.New(stepHash, closed+2, 8, r.logger)
+	r.fetchTracker.Track(target)
+	r.fetchTracker.Track(step)
+	r.acquisitionMu.Lock()
+	r.consensusRecovery = consensusRecovery{targetHash: targetHash, stepHash: stepHash}
+	victim := r.obsoleteCatchupVictimLocked(closed + maxForwardDeltaGap + 10)
+	r.acquisitionMu.Unlock()
+
+	assert.Nil(t, victim)
 }
 
 func TestRouter_TrustedValidationAheadLeavesFullBeforeAcquire(t *testing.T) {

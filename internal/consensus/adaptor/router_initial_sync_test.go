@@ -116,3 +116,62 @@ func TestAdaptor_ValidationQuorumConfirmsCurrentInitialLedger(t *testing.T) {
 	require.Equal(t, closed.Hash(), svc.GetClosedLedger().Hash())
 	require.Equal(t, closed.Hash(), svc.GetValidatedLedger().Hash())
 }
+
+func TestRouter_InitialSyncFarPeerStatusRequiresCorroboration(t *testing.T) {
+	svc := adg_newNonStandaloneService(t)
+	a, sender := newRecordingAdaptor(t, svc)
+	r := newTestRouter(nil, a, make(chan *peermanagement.InboundMessage, 2))
+	closed := svc.GetClosedLedgerIndex()
+	targetSeq := closed + maxForwardDeltaGap + 1
+	targetHash := [32]byte{0x91}
+
+	r.handleStatusChange(statusChangeMessage(t, 7, targetSeq, targetHash))
+
+	r.peersMu.RLock()
+	_, admitted := r.peerStates[7]
+	_, staged := r.peerStatusCandidates[7]
+	r.peersMu.RUnlock()
+	require.False(t, admitted)
+	require.True(t, staged)
+	require.Empty(t, a.PeerReportedLedgers())
+	require.Zero(t, acquireCount(sender))
+	require.Equal(t, catchupTarget{}, r.catchup)
+
+	r.handleStatusChange(statusChangeMessage(t, 8, targetSeq, targetHash))
+
+	r.peersMu.RLock()
+	require.Len(t, r.peerStates, 2)
+	require.Empty(t, r.peerStatusCandidates)
+	r.peersMu.RUnlock()
+	require.Len(t, a.PeerReportedLedgers(), 2)
+	require.GreaterOrEqual(t, acquireCount(sender), 1)
+	seq, hash, _ := r.bestCatchupTarget()
+	require.Equal(t, targetSeq, seq)
+	require.Equal(t, targetHash, hash)
+}
+
+func TestRouter_InitialSyncStagedFarPeerPromotedByTrustedTarget(t *testing.T) {
+	svc := adg_newNonStandaloneService(t)
+	a, sender := newRecordingAdaptor(t, svc)
+	r := newTestRouter(nil, a, make(chan *peermanagement.InboundMessage, 1))
+	targetSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
+	targetHash := [32]byte{0x92}
+
+	r.handleStatusChange(statusChangeMessage(t, 7, targetSeq, targetHash))
+	r.peersMu.RLock()
+	_, staged := r.peerStatusCandidates[7]
+	r.peersMu.RUnlock()
+	require.True(t, staged)
+	require.Zero(t, acquireCount(sender))
+
+	r.onLedgerFullyValidated(targetSeq, targetHash)
+
+	r.peersMu.RLock()
+	_, admitted := r.peerStates[7]
+	_, staged = r.peerStatusCandidates[7]
+	r.peersMu.RUnlock()
+	require.True(t, admitted)
+	require.False(t, staged)
+	require.Equal(t, []consensus.LedgerID{consensus.LedgerID(targetHash)}, a.PeerReportedLedgers())
+	require.GreaterOrEqual(t, acquireCount(sender), 1)
+}

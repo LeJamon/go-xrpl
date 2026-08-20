@@ -279,6 +279,28 @@ func TestLedger_OnTimer_NotDueIsNoop(t *testing.T) {
 	}
 }
 
+func TestLedger_OnTimer_EscalationStartsNextInterval(t *testing.T) {
+	t.Parallel()
+	il := New([32]byte{0x04}, 7, 1, discardLogger())
+	il.state = StateWantState
+	base := time.Unix(1_700_000_000, 0)
+	il.lastTimer = base
+
+	first := base.Add(acquireTimerInterval)
+	if got := il.OnTimer(first); got != TimerEscalate {
+		t.Fatalf("first fire: got %v, want TimerEscalate", got)
+	}
+	if got := il.OnTimer(first.Add(100 * time.Millisecond)); got != TimerNone {
+		t.Fatalf("early retry: got %v, want TimerNone", got)
+	}
+	if got := il.Timeouts(); got != 1 {
+		t.Fatalf("timeouts after early retry = %d, want 1", got)
+	}
+	if got := il.OnTimer(first.Add(acquireTimerInterval)); got != TimerEscalate {
+		t.Fatalf("next interval: got %v, want TimerEscalate", got)
+	}
+}
+
 func TestLedger_RearmTimerStartsIntervalAfterEscalation(t *testing.T) {
 	t.Parallel()
 	il := New([32]byte{0x03}, 7, 1, discardLogger())

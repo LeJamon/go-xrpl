@@ -23,14 +23,7 @@ func storeRecoveryLedger(t *testing.T, svc *service.Service, l *ledger.Ledger) {
 	require.NoError(t, svc.StoreLedgerWithState(t.Context(), &h, stateMap, txMap))
 }
 
-func retireLegacyRecoveryStep(t *testing.T, r *Router, hash [32]byte) {
-	t.Helper()
-	il := r.fetchTracker.Find(hash)
-	require.NotNil(t, il)
-	require.True(t, r.fetchTracker.DiscardExpected(il))
-}
-
-func TestConsensusRecoveryLegacyFallbackWalksFromMovingAnchor(t *testing.T) {
+func TestConsensusRecoveryLegacyFallbackPipelinesProvenSuccessors(t *testing.T) {
 	r, _, sender, svc := makeRouter(t)
 	_, err := svc.AcceptLedger(context.Background())
 	require.NoError(t, err)
@@ -68,37 +61,17 @@ func TestConsensusRecoveryLegacyFallbackWalksFromMovingAnchor(t *testing.T) {
 		anchorHash: anchorHash,
 		anchorSeq:  anchorSeq,
 	}, r.consensusRecovery)
-	require.Equal(t, []legacyBaseCall{{peerID: 7, hash: child1Hash, seq: child1Seq}}, sender.legacyCalls())
-	require.Empty(t, sender.replayCalls())
-	require.Nil(t, r.fetchTracker.Find(targetHash))
-	childAcquisition := r.fetchTracker.Find(child1Hash)
-	require.NotNil(t, childAcquisition)
-	require.True(t, childAcquisition.TransactionOnly())
-
-	retireLegacyRecoveryStep(t, r, child1Hash)
-	storeRecoveryLedger(t, svc, child1)
-	r.completeStoredConsensusRecovery(child1Seq, child1Hash, anchorHash, false)
-	require.Equal(t, consensusRecovery{
-		targetHash: targetHash,
-		stepHash:   child2Hash,
-		anchorHash: child1Hash,
-		anchorSeq:  child1Seq,
-	}, r.consensusRecovery)
-
-	retireLegacyRecoveryStep(t, r, child2Hash)
-	storeRecoveryLedger(t, svc, child2)
-	r.completeStoredConsensusRecovery(child2Seq, child2Hash, child1Hash, false)
-	require.Equal(t, consensusRecovery{
-		targetHash: targetHash,
-		stepHash:   targetHash,
-		anchorHash: child2Hash,
-		anchorSeq:  child2Seq,
-	}, r.consensusRecovery)
 	require.Equal(t, []legacyBaseCall{
 		{peerID: 7, hash: child1Hash, seq: child1Seq},
 		{peerID: 7, hash: child2Hash, seq: child2Seq},
 		{peerID: 7, hash: targetHash, seq: targetSeq},
 	}, sender.legacyCalls())
+	require.Empty(t, sender.replayCalls())
+	for _, hash := range [][32]byte{child1Hash, child2Hash, targetHash} {
+		acquisition := r.fetchTracker.Find(hash)
+		require.NotNil(t, acquisition)
+		require.True(t, acquisition.TransactionOnly())
+	}
 }
 
 func TestConsensusRecoveryReplayIssueFailureFallsBackToNextChild(t *testing.T) {
