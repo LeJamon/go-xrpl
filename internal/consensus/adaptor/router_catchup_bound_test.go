@@ -40,8 +40,8 @@ func TestRouter_CatchupFanoutBoundedByCap(t *testing.T) {
 
 	assert.LessOrEqual(t, acquireCount(rs), maxConcurrentCatchup,
 		"feeding %d ever-higher trusted tips must arm at most maxConcurrentCatchup acquisitions, not one per event", n)
-	assert.Equal(t, maxConcurrentSpeculativeCatchup, r.catchupInFlight(),
-		"gossip catch-up must leave one slot for an exact consensus target")
+	assert.Equal(t, 1, r.catchupInFlight(),
+		"moving trusted tips must keep one frozen full-state pivot")
 
 	tSeq, _, _ := r.bestCatchupTarget()
 	assert.Equal(t, highest, tSeq,

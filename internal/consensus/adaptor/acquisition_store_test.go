@@ -1035,6 +1035,37 @@ func TestCompleteInboundLedgerPromotesResultMapPersistence(t *testing.T) {
 	require.ErrorContains(t, err, "store failed")
 }
 
+func TestStandardReplayReloadsPromotedTransactionMap(t *testing.T) {
+	base := newAcquisitionStoreTestFamily()
+	router := newTestRouter(nil, nil, make(chan *peermanagement.InboundMessage))
+	router.SetAcquisitionFamily(base)
+	router.acquisitionStore.start(t.Context())
+	defer router.acquisitionStore.stopDrain()
+
+	txMap := shamap.New(shamap.TypeTransaction)
+	blob, txID := txWithMetaBlob(t, []byte{0x10, 0x20, 0x30, 0x40}, 1)
+	require.NoError(t, txMap.PutWithNodeType(txID, blob, shamap.NodeTypeTransactionWithMeta))
+	txRoot, err := txMap.Hash()
+	require.NoError(t, err)
+	batch, err := txMap.FlushDirty()
+	require.NoError(t, err)
+
+	scope := router.acquisitionStore.scope().(*acquisitionStoreScope)
+	require.NoError(t, scope.StoreBatch(t.Context(), batch.Entries))
+	require.NoError(t, scope.Promote(t.Context()))
+	base.clearCached()
+
+	entry := &standardReplayEntry{
+		header:  header.LedgerHeader{TxHash: txRoot},
+		durable: true,
+	}
+	reloaded, err := router.loadStandardReplayTransactionMap(t.Context(), entry)
+	require.NoError(t, err)
+	reloadedRoot, err := reloaded.Hash()
+	require.NoError(t, err)
+	require.Equal(t, txRoot, reloadedRoot)
+}
+
 func TestCompleteInboundLedgerReadyReleasesUnconsumedScopes(t *testing.T) {
 	t.Run("result error", func(t *testing.T) {
 		base := newAcquisitionStoreTestFamily()

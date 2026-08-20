@@ -310,6 +310,7 @@ type Router struct {
 	replayPipelinePersistUs              atomic.Uint64
 
 	acquisitionMu     sync.Mutex
+	replayCommitMu    sync.Mutex
 	consensusRecovery consensusRecovery
 	lastHandoffSeq    uint32
 	standardReplay    standardReplayPipeline
@@ -680,6 +681,7 @@ func (r *Router) StopAcquisitions() (legacy, replay int) {
 	if r == nil {
 		return 0, 0
 	}
+	r.replayCommitMu.Lock()
 	r.acquisitionMu.Lock()
 	legacyLedgers := r.fetchTracker.Stop()
 	legacy = len(legacyLedgers)
@@ -690,6 +692,7 @@ func (r *Router) StopAcquisitions() (legacy, replay int) {
 	r.consensusRecovery = consensusRecovery{}
 	r.lastHandoffSeq = 0
 	r.acquisitionMu.Unlock()
+	r.replayCommitMu.Unlock()
 
 	r.catchupMu.Lock()
 	r.catchup = catchupTarget{}
@@ -1204,6 +1207,7 @@ func (r *Router) maintenanceTick() {
 	now := time.Now()
 
 	r.retryInboundLedgerAcquisitions(now)
+	r.rebootstrapFrozenPivotIfStalled(now)
 
 	// Timer-driven catch-up re-arm (rippled LedgerMaster::doAdvance cadence): a
 	// reaped/failed sole acquisition (cap=1) can't park catch-up until the next

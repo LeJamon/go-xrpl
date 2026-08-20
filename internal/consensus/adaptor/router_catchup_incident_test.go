@@ -192,3 +192,73 @@ func TestRouter_Issue1663CatchupCascadeRecoversToFull(t *testing.T) {
 	assert.Equal(t, "proposing", consensusServerState(a.GetOperatingMode(), consensus.ModeProposing, true))
 	assert.LessOrEqual(t, r.protectedCatchupInFlight(), maxConcurrentSpeculativeCatchup)
 }
+
+func TestRouter_Issue1668FrozenPivotCollectsAndReplaysMovingHead(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.Background())
+	require.NoError(t, err)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+
+	_, pivot, pivotHash, pivotSeq := buildSuccessorAgainstParent(t, closed)
+	r.recordSeqHash(pivotSeq, pivotHash, [32]byte{}, false)
+	links := buildStandardReplayTestChain(t, r, pivot, maxForwardDeltaGap+16)
+	sender.mu.Lock()
+	sender.peerSupportsReplay = false
+	sender.mu.Unlock()
+
+	trackCatchupPeer(r, 7, pivotSeq, pivotHash)
+	require.NoError(t, a.RequestLedger(consensus.LedgerID(pivotHash)))
+	pivotAcquisition := r.fetchTracker.Find(pivotHash)
+	require.NotNil(t, pivotAcquisition)
+	require.False(t, pivotAcquisition.TransactionOnly())
+	generation := r.standardReplay.generation
+
+	initialHead := links[11]
+	trackCatchupPeer(r, 7, initialHead.seq, initialHead.hash)
+	a.OnLedgerFullyValidated(consensus.LedgerID(initialHead.hash), initialHead.seq)
+	require.Equal(t, initialHead.seq, r.standardReplay.targetSeq)
+	require.Equal(t, standardReplayPipelineWindow, r.standardReplayResidentCountLocked())
+	for i := range standardReplayPipelineWindow {
+		completeStandardReplayTestLink(t, r, links[i])
+	}
+	for i := range standardReplayPipelineWindow {
+		stored, _ := svc.GetLedgerByHash(links[i].hash)
+		assert.Nil(t, stored)
+	}
+
+	storeRecoveryLedger(t, svc, pivot)
+	require.True(t, r.fetchTracker.RemoveExpectedWithSnapshot(
+		pivotAcquisition, pivotAcquisition.Snapshot(), true,
+	))
+	pivotHeader := pivot.Header()
+	require.True(t, r.completeFrozenPivotAcquisition(&pivotHeader, true))
+	require.True(t, r.standardReplay.initialCandidate)
+	for i := range standardReplayPipelineWindow {
+		stored, lookupErr := svc.GetLedgerByHash(links[i].hash)
+		require.NoError(t, lookupErr)
+		require.NotNil(t, stored)
+	}
+
+	completeStandardReplayTestLink(t, r, links[8])
+	completeStandardReplayTestLink(t, r, links[9])
+	require.Equal(t, links[9].seq, r.standardReplay.anchorSeq)
+
+	movedHead := links[maxForwardDeltaGap+8]
+	trackCatchupPeer(r, 7, movedHead.seq, movedHead.hash)
+	a.OnLedgerFullyValidated(consensus.LedgerID(movedHead.hash), movedHead.seq)
+	assert.Equal(t, generation, r.standardReplay.generation)
+	assert.Equal(t, pivotSeq, r.standardReplay.pivotSeq)
+	assert.Equal(t, pivotHash, r.standardReplay.pivotHash)
+	assert.Equal(t, movedHead.seq, r.standardReplay.targetSeq)
+	assert.Equal(t, movedHead.hash, r.standardReplay.targetHash)
+	assert.NotNil(t, r.fetchTracker.Find(links[10].hash))
+
+	pivotRequests := 0
+	for _, call := range sender.legacyCalls() {
+		if call.hash == pivotHash {
+			pivotRequests++
+		}
+	}
+	assert.Equal(t, 1, pivotRequests)
+}
