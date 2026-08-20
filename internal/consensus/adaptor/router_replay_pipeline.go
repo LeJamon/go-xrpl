@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -12,27 +13,48 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
-const standardReplayPipelineWindow = 8
+const (
+	standardReplayPipelineWindow = 8
+	standardReplayPreparedLimit  = 2048
+	standardReplayProgressWindow = time.Minute
+	standardReplayStallWindows   = 2
+)
 
 type standardReplayPipeline struct {
-	generation    uint64
-	active        bool
-	applying      bool
-	anchorSeq     uint32
-	anchorHash    [32]byte
-	targetSeq     uint32
-	targetHash    [32]byte
-	entries       map[uint32]*standardReplayEntry
-	headBlockedAt time.Time
+	generation       uint64
+	active           bool
+	applying         bool
+	pivotReady       bool
+	initialCandidate bool
+	pivotSeq         uint32
+	pivotHash        [32]byte
+	anchorSeq        uint32
+	anchorHash       [32]byte
+	collectSeq       uint32
+	collectHash      [32]byte
+	targetSeq        uint32
+	targetHash       [32]byte
+	entries          map[uint32]*standardReplayEntry
+	headBlockedAt    time.Time
+	progressSampleAt time.Time
+	sampleAnchorSeq  uint32
+	sampleTargetSeq  uint32
+	stalledSamples   uint8
 }
 
 type standardReplayIdentity struct {
-	generation uint64
-	active     bool
-	anchorSeq  uint32
-	anchorHash [32]byte
-	targetSeq  uint32
-	targetHash [32]byte
+	generation       uint64
+	active           bool
+	pivotReady       bool
+	initialCandidate bool
+	pivotSeq         uint32
+	pivotHash        [32]byte
+	anchorSeq        uint32
+	anchorHash       [32]byte
+	collectSeq       uint32
+	collectHash      [32]byte
+	targetSeq        uint32
+	targetHash       [32]byte
 }
 
 type standardReplayTarget struct {
@@ -51,6 +73,7 @@ type standardReplayEntry struct {
 	header      header.LedgerHeader
 	txMap       *shamap.SHAMap
 	acquisition *inbound.Ledger
+	durable     bool
 	failed      bool
 }
 
@@ -60,35 +83,51 @@ type standardReplayLink struct {
 	parentHash [32]byte
 }
 
+type standardReplayLinkState uint8
+
+const (
+	standardReplayLinkUnknown standardReplayLinkState = iota
+	standardReplayLinkReady
+	standardReplayLinkConflict
+)
+
 func (r *Router) standardReplayLinks(
-	anchor *ledger.Ledger,
+	anchorSeq uint32,
+	anchorHash [32]byte,
 	targetSeq uint32,
 	targetHash [32]byte,
-) ([]standardReplayLink, bool) {
-	if anchor == nil || targetSeq <= anchor.Sequence() || targetHash == ([32]byte{}) {
-		return nil, false
+) ([]standardReplayLink, standardReplayLinkState) {
+	if targetSeq <= anchorSeq || anchorHash == ([32]byte{}) || targetHash == ([32]byte{}) {
+		return nil, standardReplayLinkUnknown
 	}
 
 	links := make([]standardReplayLink, 0, standardReplayPipelineWindow)
-	parentHash := anchor.Hash()
-	for seq := anchor.Sequence() + 1; seq <= targetSeq; seq++ {
+	parentHash := anchorHash
+	for seq := anchorSeq + 1; seq <= targetSeq && len(links) < standardReplayPipelineWindow; seq++ {
 		entry, ok := r.lookupSeqHash(seq)
-		if !ok || entry.hash == ([32]byte{}) || !entry.haveParent || entry.parentHash != parentHash {
-			return nil, false
+		if !ok || entry.hash == ([32]byte{}) || !entry.haveParent {
+			if len(links) == 0 {
+				return nil, standardReplayLinkUnknown
+			}
+			return links, standardReplayLinkReady
+		}
+		if entry.parentHash != parentHash {
+			return nil, standardReplayLinkConflict
 		}
 		if seq == targetSeq && entry.hash != targetHash {
-			return nil, false
+			return nil, standardReplayLinkConflict
 		}
-		if len(links) < standardReplayPipelineWindow {
-			links = append(links, standardReplayLink{
-				seq:        seq,
-				hash:       entry.hash,
-				parentHash: parentHash,
-			})
-		}
+		links = append(links, standardReplayLink{
+			seq:        seq,
+			hash:       entry.hash,
+			parentHash: parentHash,
+		})
 		parentHash = entry.hash
 	}
-	return links, len(links) > 0
+	if len(links) == 0 {
+		return nil, standardReplayLinkUnknown
+	}
+	return links, standardReplayLinkReady
 }
 
 func (r *Router) standardReplayBase(
@@ -107,17 +146,10 @@ func (r *Router) standardReplayBase(
 
 	base := fallback
 	if identity.active {
-		compatible := targetSeq == identity.targetSeq && targetHash == identity.targetHash
-		if !compatible && targetSeq > identity.anchorSeq {
-			compatible = r.recoveryAnchorReachesTarget(identity.anchorSeq, identity.anchorHash, targetHash)
+		if !identity.pivotReady {
+			return nil, identity, true
 		}
-		if !compatible {
-			var current bool
-			identity, current = r.cancelStandardReplayPipelineIdentity(identity)
-			if !current {
-				return fallback, standardReplayIdentity{}, false
-			}
-		} else if anchor, err := svc.GetLedgerByHash(identity.anchorHash); err == nil && anchor != nil && anchor.Sequence() == identity.anchorSeq {
+		if anchor, err := svc.GetLedgerByHash(identity.anchorHash); err == nil && anchor != nil && anchor.Sequence() == identity.anchorSeq {
 			base = anchor
 		} else {
 			var current bool
@@ -162,11 +194,9 @@ func (r *Router) reconcileStandardReplayTarget(targetSeq uint32, targetHash [32]
 	if !identity.active {
 		return
 	}
-	compatible := targetSeq == identity.targetSeq && targetHash == identity.targetHash
-	if !compatible && targetSeq > identity.anchorSeq {
-		compatible = r.recoveryAnchorReachesTarget(identity.anchorSeq, identity.anchorHash, targetHash)
-	}
-	if !compatible {
+	if targetSeq < identity.anchorSeq ||
+		(targetSeq == identity.anchorSeq && targetHash != identity.anchorHash) ||
+		(targetSeq == identity.targetSeq && targetHash != identity.targetHash) {
 		r.cancelStandardReplayPipelineIdentity(identity)
 	}
 }
@@ -189,9 +219,34 @@ func (r *Router) tryArmStandardReplayPipeline(
 		r.completeStoredConsensusRecovery(targetSeq, targetHash, anchor.ParentHash(), false)
 		return true
 	}
-	links, proven := r.standardReplayLinks(anchor, targetSeq, targetHash)
-	if !proven {
+	anchorSeq := identity.collectSeq
+	anchorHash := identity.collectHash
+	if identity.active && anchorHash == ([32]byte{}) {
+		anchorSeq = identity.anchorSeq
+		anchorHash = identity.anchorHash
+	}
+	if !identity.active {
+		if anchor == nil {
+			return false
+		}
+		anchorSeq = anchor.Sequence()
+		anchorHash = anchor.Hash()
+	}
+	links, linkState := r.standardReplayLinks(anchorSeq, anchorHash, targetSeq, targetHash)
+	if linkState == standardReplayLinkConflict {
 		r.cancelStandardReplayPipelineIdentity(identity)
+		return false
+	}
+	if linkState != standardReplayLinkReady {
+		if identity.active {
+			r.acquisitionMu.Lock()
+			if r.standardReplayIdentityMatchesLocked(identity) && targetSeq > r.standardReplay.targetSeq {
+				r.standardReplay.targetSeq = targetSeq
+				r.standardReplay.targetHash = targetHash
+			}
+			r.acquisitionMu.Unlock()
+			return true
+		}
 		return false
 	}
 
@@ -205,31 +260,53 @@ func (r *Router) tryArmStandardReplayPipeline(
 		r.acquisitionMu.Unlock()
 		return false
 	}
-	if !initial && (r.standardReplay.anchorSeq != anchor.Sequence() || r.standardReplay.anchorHash != anchor.Hash()) {
-		retired := r.cancelStandardReplayPipelineLocked()
+	if !initial && len(links) == 0 {
 		r.acquisitionMu.Unlock()
-		r.retireLegacyAcquisitions(retired)
+		return true
+	}
+	if !initial && anchor != nil &&
+		(r.standardReplay.anchorSeq != anchor.Sequence() || r.standardReplay.anchorHash != anchor.Hash()) {
+		r.acquisitionMu.Unlock()
+		r.cancelStandardReplayPipelineIdentity(identity)
 		return false
 	}
 	if initial {
 		r.standardReplay.generation++
 		r.standardReplay.active = true
+		r.standardReplay.pivotReady = true
+		r.standardReplay.pivotSeq = anchor.Sequence()
+		r.standardReplay.pivotHash = anchor.Hash()
 		r.standardReplay.anchorSeq = anchor.Sequence()
 		r.standardReplay.anchorHash = anchor.Hash()
-		r.standardReplay.entries = make(map[uint32]*standardReplayEntry, standardReplayPipelineWindow)
+		r.standardReplay.collectSeq = anchor.Sequence()
+		r.standardReplay.collectHash = anchor.Hash()
+		r.standardReplay.entries = make(map[uint32]*standardReplayEntry, standardReplayPreparedLimit)
+		r.standardReplay.progressSampleAt = time.Now()
+		r.standardReplay.sampleAnchorSeq = anchor.Sequence()
+		r.standardReplay.sampleTargetSeq = targetSeq
+		r.standardReplay.stalledSamples = 0
 	}
-	r.standardReplay.targetSeq = targetSeq
-	r.standardReplay.targetHash = targetHash
-
-	desired := make(map[uint32]standardReplayLink, len(links))
-	for _, link := range links {
-		desired[link.seq] = link
+	if targetSeq > r.standardReplay.targetSeq ||
+		(targetSeq == r.standardReplay.targetSeq && targetHash == r.standardReplay.targetHash) {
+		r.standardReplay.targetSeq = targetSeq
+		r.standardReplay.targetHash = targetHash
 	}
-	retired := r.pruneStandardReplayEntriesLocked(desired, targetSeq)
 
 	now := time.Now()
 	for _, link := range links {
+		if len(r.standardReplay.entries) >= standardReplayPreparedLimit ||
+			r.standardReplayResidentCountLocked() >= standardReplayPipelineWindow {
+			break
+		}
 		if existing := r.standardReplay.entries[link.seq]; existing != nil {
+			if existing.hash != link.hash || existing.parentHash != link.parentHash {
+				cancelIdentity := r.standardReplayIdentityLocked()
+				r.acquisitionMu.Unlock()
+				r.cancelStandardReplayPipelineIdentity(cancelIdentity)
+				return false
+			}
+			r.standardReplay.collectSeq = link.seq
+			r.standardReplay.collectHash = link.hash
 			continue
 		}
 		peerID, ok := r.resolveAcquisitionPeer(link.seq, peerHint)
@@ -249,6 +326,8 @@ func (r *Router) tryArmStandardReplayPipeline(
 			requestedAt: now,
 			acquisition: il,
 		}
+		r.standardReplay.collectSeq = link.seq
+		r.standardReplay.collectHash = link.hash
 		if created {
 			r.replayPipelineRequested.Add(1)
 		}
@@ -259,46 +338,41 @@ func (r *Router) tryArmStandardReplayPipeline(
 			r.consensusRecovery.stepHash = head.hash
 		}
 	}
-	armed := len(r.standardReplay.entries) > 0
+	armed := !initial || len(r.standardReplay.entries) > 0
 	if !armed {
-		retired = append(retired, r.cancelStandardReplayPipelineLocked()...)
+		cancelIdentity := r.standardReplayIdentityLocked()
+		r.acquisitionMu.Unlock()
+		r.cancelStandardReplayPipelineIdentity(cancelIdentity)
+		return false
 	}
 	r.acquisitionMu.Unlock()
-	r.retireLegacyAcquisitions(retired)
 	return armed
 }
 
-func (r *Router) pruneStandardReplayEntriesLocked(
-	desired map[uint32]standardReplayLink,
-	targetSeq uint32,
-) []*inbound.Ledger {
-	var retired []*inbound.Ledger
-	for seq, entry := range r.standardReplay.entries {
-		link, keep := desired[seq]
-		keep = keep && seq <= targetSeq && entry.hash == link.hash && entry.parentHash == link.parentHash
-		if keep {
-			continue
-		}
-		if entry.acquisition != nil && r.fetchTracker.DiscardExpected(entry.acquisition) {
-			retired = append(retired, entry.acquisition)
-		}
-		delete(r.standardReplay.entries, seq)
-		r.replayPipelineDiscarded.Add(1)
-		if r.consensusRecovery.stepHash == entry.hash {
-			r.consensusRecovery.stepHash = [32]byte{}
+func (r *Router) standardReplayResidentCountLocked() int {
+	count := 0
+	for _, entry := range r.standardReplay.entries {
+		if entry.acquisition != nil || (!entry.readyAt.IsZero() && !entry.durable) {
+			count++
 		}
 	}
-	return retired
+	return count
 }
 
 func (r *Router) standardReplayIdentityLocked() standardReplayIdentity {
 	return standardReplayIdentity{
-		generation: r.standardReplay.generation,
-		active:     r.standardReplay.active,
-		anchorSeq:  r.standardReplay.anchorSeq,
-		anchorHash: r.standardReplay.anchorHash,
-		targetSeq:  r.standardReplay.targetSeq,
-		targetHash: r.standardReplay.targetHash,
+		generation:       r.standardReplay.generation,
+		active:           r.standardReplay.active,
+		pivotReady:       r.standardReplay.pivotReady,
+		initialCandidate: r.standardReplay.initialCandidate,
+		pivotSeq:         r.standardReplay.pivotSeq,
+		pivotHash:        r.standardReplay.pivotHash,
+		anchorSeq:        r.standardReplay.anchorSeq,
+		anchorHash:       r.standardReplay.anchorHash,
+		collectSeq:       r.standardReplay.collectSeq,
+		collectHash:      r.standardReplay.collectHash,
+		targetSeq:        r.standardReplay.targetSeq,
+		targetHash:       r.standardReplay.targetHash,
 	}
 }
 
@@ -307,15 +381,18 @@ func (r *Router) standardReplayIdentityMatchesLocked(identity standardReplayIden
 }
 
 func (r *Router) cancelStandardReplayPipelineIdentity(identity standardReplayIdentity) (standardReplayIdentity, bool) {
+	r.replayCommitMu.Lock()
 	r.acquisitionMu.Lock()
 	if !r.standardReplayIdentityMatchesLocked(identity) {
 		current := r.standardReplayIdentityLocked()
 		r.acquisitionMu.Unlock()
+		r.replayCommitMu.Unlock()
 		return current, false
 	}
 	retired := r.cancelStandardReplayPipelineLocked()
 	current := r.standardReplayIdentityLocked()
 	r.acquisitionMu.Unlock()
+	r.replayCommitMu.Unlock()
 	r.retireLegacyAcquisitions(retired)
 	return current, true
 }
@@ -325,6 +402,12 @@ func (r *Router) cancelStandardReplayPipelineLocked() []*inbound.Ledger {
 		return nil
 	}
 	var retired []*inbound.Ledger
+	if !r.standardReplay.pivotReady {
+		if pivot := r.fetchTracker.Find(r.standardReplay.pivotHash); pivot != nil &&
+			!pivot.TransactionOnly() && r.fetchTracker.DiscardExpected(pivot) {
+			retired = append(retired, pivot)
+		}
+	}
 	for _, entry := range r.standardReplay.entries {
 		if entry.acquisition != nil && r.fetchTracker.DiscardExpected(entry.acquisition) {
 			retired = append(retired, entry.acquisition)
@@ -336,16 +419,35 @@ func (r *Router) cancelStandardReplayPipelineLocked() []*inbound.Ledger {
 	}
 	r.standardReplay.generation++
 	r.standardReplay.active = false
+	r.standardReplay.pivotReady = false
+	r.standardReplay.initialCandidate = false
+	r.standardReplay.pivotSeq = 0
+	r.standardReplay.pivotHash = [32]byte{}
 	r.standardReplay.anchorSeq = 0
 	r.standardReplay.anchorHash = [32]byte{}
+	r.standardReplay.collectSeq = 0
+	r.standardReplay.collectHash = [32]byte{}
 	r.standardReplay.targetSeq = 0
 	r.standardReplay.targetHash = [32]byte{}
 	r.standardReplay.entries = nil
 	r.standardReplay.headBlockedAt = time.Time{}
+	r.standardReplay.progressSampleAt = time.Time{}
+	r.standardReplay.sampleAnchorSeq = 0
+	r.standardReplay.sampleTargetSeq = 0
+	r.standardReplay.stalledSamples = 0
 	return retired
 }
 
+func (r *Router) waitStandardReplayCommit() {
+	r.replayCommitMu.Lock()
+	r.replayCommitMu.Unlock()
+}
+
 func (r *Router) standardReplayOwnsLocked(hash [32]byte) bool {
+	if r.standardReplay.active &&
+		(hash == r.standardReplay.pivotHash || hash == r.standardReplay.targetHash) {
+		return true
+	}
 	for _, entry := range r.standardReplay.entries {
 		if entry.hash == hash {
 			return true
@@ -371,18 +473,38 @@ func (r *Router) completeStandardReplayPipelineEntryLocked(
 	}
 	entry.header = *h
 	entry.txMap = txMap
+	if r.acquisitionStore != nil && r.acquisitionFamily != nil {
+		entry.durable = true
+		entry.txMap = nil
+	}
 	entry.peerID = peerID
 	entry.readyAt = now
 	entry.acquisition = nil
 	r.replayPipelineReady.Add(1)
 	r.replayPipelineRetried.Add(uint64(il.Timeouts()))
 	r.replayPipelineAcquireUs.Add(durationMicros(now.Sub(entry.requestedAt)))
-	startDrain := !r.standardReplay.applying
+	startDrain := r.standardReplay.pivotReady && !r.standardReplay.applying
 	if startDrain {
 		r.standardReplay.applying = true
 	}
 	r.updateStandardReplayHeadBlockLocked(now)
 	return true, startDrain
+}
+
+func (r *Router) refillStandardReplayCollector(peerHint uint64) bool {
+	r.acquisitionMu.Lock()
+	active := r.standardReplay.active
+	targetSeq := r.standardReplay.targetSeq
+	targetHash := r.standardReplay.targetHash
+	r.acquisitionMu.Unlock()
+	if !active || targetSeq == 0 || targetHash == ([32]byte{}) || r.adaptor == nil {
+		return false
+	}
+	svc := r.adaptor.LedgerService()
+	if svc == nil {
+		return false
+	}
+	return r.tryArmStandardReplayPipeline(svc, nil, targetSeq, targetHash, peerHint)
 }
 
 func (r *Router) failStandardReplayPipelineEntry(il *inbound.Ledger) bool {
@@ -452,6 +574,7 @@ func (r *Router) drainStandardReplayPipeline() {
 		if entry.failed {
 			retired, target, current := r.discardStandardReplayHeadLocked(entry, generation)
 			r.acquisitionMu.Unlock()
+			r.waitStandardReplayCommit()
 			r.retireLegacyAcquisitions(retired)
 			if current {
 				r.replayPipelineFallbacks.Add(1)
@@ -463,7 +586,7 @@ func (r *Router) drainStandardReplayPipeline() {
 		r.acquisitionMu.Unlock()
 
 		applyStarted := time.Now()
-		hdr, initialCandidate, persistDuration, err := r.applyStandardReplayEntry(&copyEntry, entry, generation)
+		hdr, initialCandidate, persistDuration, releaseCommit, err := r.applyStandardReplayEntry(&copyEntry, entry, generation)
 		applyDuration := time.Since(applyStarted) - persistDuration
 		if applyDuration < 0 {
 			applyDuration = 0
@@ -473,6 +596,7 @@ func (r *Router) drainStandardReplayPipeline() {
 			retired, target, current := r.discardStandardReplayHeadLocked(entry, generation)
 			continueDrain := !current && r.standardReplay.active
 			r.acquisitionMu.Unlock()
+			r.waitStandardReplayCommit()
 			r.retireLegacyAcquisitions(retired)
 			if current {
 				r.replayPipelineFallbacks.Add(1)
@@ -495,10 +619,12 @@ func (r *Router) drainStandardReplayPipeline() {
 		if !current {
 			if r.standardReplay.active {
 				r.acquisitionMu.Unlock()
+				releaseCommit()
 				continue
 			}
 			r.standardReplay.applying = false
 			r.acquisitionMu.Unlock()
+			releaseCommit()
 			return
 		}
 		delete(r.standardReplay.entries, entry.seq)
@@ -508,12 +634,12 @@ func (r *Router) drainStandardReplayPipeline() {
 		r.replayPipelineApplyUs.Add(durationMicros(applyDuration))
 		r.replayPipelinePersistUs.Add(durationMicros(persistDuration))
 		r.replayPipelineReadyWaitUs.Add(durationMicros(applyStarted.Sub(entry.readyAt)))
-		if entry.seq == r.standardReplay.targetSeq && entry.hash == r.standardReplay.targetHash {
-			r.standardReplay.active = false
-			r.standardReplay.entries = nil
-			r.standardReplay.headBlockedAt = time.Time{}
+		reachedTarget := entry.seq == r.standardReplay.targetSeq && entry.hash == r.standardReplay.targetHash
+		if reachedTarget {
+			initialCandidate = initialCandidate || r.standardReplay.initialCandidate
 		}
 		r.acquisitionMu.Unlock()
+		releaseCommit()
 
 		r.logger.Info("applied standard transaction replay pipeline entry",
 			"seq", entry.seq,
@@ -524,6 +650,20 @@ func (r *Router) drainStandardReplayPipeline() {
 			"persist_us", durationMicros(persistDuration),
 		)
 		r.completeStoredConsensusRecovery(hdr.LedgerIndex, hdr.Hash, hdr.ParentHash, initialCandidate)
+
+		r.acquisitionMu.Lock()
+		current = r.standardReplay.active && r.standardReplay.generation == generation &&
+			r.standardReplay.anchorSeq == entry.seq && r.standardReplay.anchorHash == entry.hash
+		if current && reachedTarget && r.standardReplay.targetSeq == entry.seq && r.standardReplay.targetHash == entry.hash {
+			r.standardReplay.active = false
+			r.standardReplay.applying = false
+			r.standardReplay.entries = nil
+			r.standardReplay.headBlockedAt = time.Time{}
+		}
+		r.acquisitionMu.Unlock()
+		if !current {
+			return
+		}
 	}
 }
 
@@ -553,84 +693,106 @@ func (r *Router) discardStandardReplayHeadLocked(
 func (r *Router) applyStandardReplayEntry(
 	entry, activeEntry *standardReplayEntry,
 	generation uint64,
-) (header.LedgerHeader, bool, time.Duration, error) {
+) (header.LedgerHeader, bool, time.Duration, func(), error) {
 	if entry == nil {
-		return header.LedgerHeader{}, false, 0, errors.New("nil standard replay pipeline entry")
+		return header.LedgerHeader{}, false, 0, nil, errors.New("nil standard replay pipeline entry")
 	}
 	h := entry.header
 	if h.Hash != entry.hash {
-		return header.LedgerHeader{}, false, 0, errors.New("prepared ledger hash changed")
+		return header.LedgerHeader{}, false, 0, nil, errors.New("prepared ledger hash changed")
 	}
 	if h.LedgerIndex != entry.seq {
-		return header.LedgerHeader{}, false, 0, fmt.Errorf("prepared ledger sequence %d does not match expected %d", h.LedgerIndex, entry.seq)
+		return header.LedgerHeader{}, false, 0, nil, fmt.Errorf("prepared ledger sequence %d does not match expected %d", h.LedgerIndex, entry.seq)
 	}
 	if h.ParentHash != entry.parentHash {
-		return header.LedgerHeader{}, false, 0, errors.New("prepared ledger no longer attaches to the accepted predecessor")
+		return header.LedgerHeader{}, false, 0, nil, errors.New("prepared ledger no longer attaches to the accepted predecessor")
 	}
 
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
-		return header.LedgerHeader{}, false, 0, errors.New("no ledger service")
+		return header.LedgerHeader{}, false, 0, nil, errors.New("no ledger service")
 	}
 	parent, err := svc.GetLedgerByHash(entry.parentHash)
 	if err != nil || parent == nil {
 		if err == nil {
 			err = errors.New("accepted replay predecessor is unavailable")
 		}
-		return header.LedgerHeader{}, false, 0, err
+		return header.LedgerHeader{}, false, 0, nil, err
 	}
 	if parent.Sequence()+1 != entry.seq {
-		return header.LedgerHeader{}, false, 0, fmt.Errorf("replay predecessor sequence %d is not before %d", parent.Sequence(), entry.seq)
+		return header.LedgerHeader{}, false, 0, nil, fmt.Errorf("replay predecessor sequence %d is not before %d", parent.Sequence(), entry.seq)
 	}
 
 	stateMap, err := parent.StateMapSnapshot()
 	if err != nil {
-		return header.LedgerHeader{}, false, 0, fmt.Errorf("snapshot replay predecessor state: %w", err)
+		return header.LedgerHeader{}, false, 0, nil, fmt.Errorf("snapshot replay predecessor state: %w", err)
 	}
-	txMap := entry.txMap
-	if txMap == nil {
-		if h.TxHash != ([32]byte{}) {
-			return header.LedgerHeader{}, false, 0, errors.New("missing transaction map for non-empty transaction root")
-		}
-		txMap = shamap.New(shamap.TypeTransaction)
-	} else {
-		txHash, hashErr := txMap.Hash()
-		if hashErr != nil {
-			return header.LedgerHeader{}, false, 0, fmt.Errorf("hash prepared transaction map: %w", hashErr)
-		}
-		if txHash != h.TxHash {
-			return header.LedgerHeader{}, false, 0, errors.New("prepared transaction map root changed")
-		}
+	txMap, err := r.loadStandardReplayTransactionMap(r.lifecycleContext(), entry)
+	if err != nil {
+		return header.LedgerHeader{}, false, 0, nil, err
 	}
 
 	target, err := ledger.NewFromHeader(h, stateMap, txMap, parent.Fees())
 	if err != nil {
-		return header.LedgerHeader{}, false, 0, fmt.Errorf("construct transaction-only replay target: %w", err)
+		return header.LedgerHeader{}, false, 0, nil, fmt.Errorf("construct transaction-only replay target: %w", err)
 	}
 	replay, err := inbound.NewStoredLedgerReplay(parent, target, r.logger)
 	if err != nil {
-		return header.LedgerHeader{}, false, 0, fmt.Errorf("prepare transaction-only replay: %w", err)
+		return header.LedgerHeader{}, false, 0, nil, fmt.Errorf("prepare transaction-only replay: %w", err)
 	}
 	derived, err := replay.Apply(r.adaptor.EngineConfigForReplay(parent))
 	if err != nil {
-		return header.LedgerHeader{}, false, 0, err
+		return header.LedgerHeader{}, false, 0, nil, err
 	}
 
+	r.replayCommitMu.Lock()
 	r.acquisitionMu.Lock()
 	current := r.standardReplay.active && r.standardReplay.generation == generation &&
 		r.standardReplay.entries[activeEntry.seq] == activeEntry && r.standardReplay.anchorSeq+1 == activeEntry.seq
 	if !current {
 		r.acquisitionMu.Unlock()
-		return header.LedgerHeader{}, false, 0, errors.New("standard replay pipeline entry was superseded")
+		r.replayCommitMu.Unlock()
+		return header.LedgerHeader{}, false, 0, nil, errors.New("standard replay pipeline entry was superseded")
 	}
+	r.acquisitionMu.Unlock()
 	persistStarted := time.Now()
 	storedHeader, initialCandidate, err := r.storeVerifiedLedger(derived)
 	persistDuration := time.Since(persistStarted)
-	r.acquisitionMu.Unlock()
 	if err != nil {
-		return header.LedgerHeader{}, false, persistDuration, err
+		r.replayCommitMu.Unlock()
+		return header.LedgerHeader{}, false, persistDuration, nil, err
 	}
-	return storedHeader, initialCandidate, persistDuration, nil
+	return storedHeader, initialCandidate, persistDuration, r.replayCommitMu.Unlock, nil
+}
+
+func (r *Router) loadStandardReplayTransactionMap(ctx context.Context, entry *standardReplayEntry) (*shamap.SHAMap, error) {
+	if entry == nil {
+		return nil, errors.New("nil standard replay pipeline entry")
+	}
+	txMap := entry.txMap
+	if txMap == nil {
+		if entry.header.TxHash == ([32]byte{}) {
+			return shamap.New(shamap.TypeTransaction), nil
+		}
+		if !entry.durable || r.acquisitionFamily == nil {
+			return nil, errors.New("missing transaction map for non-empty transaction root")
+		}
+		var err error
+		txMap, err = shamap.NewFromRootHashContext(
+			ctx, shamap.TypeTransaction, entry.header.TxHash, r.acquisitionFamily,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("reload prepared transaction map: %w", err)
+		}
+	}
+	txHash, err := txMap.Hash()
+	if err != nil {
+		return nil, fmt.Errorf("hash prepared transaction map: %w", err)
+	}
+	if txHash != entry.header.TxHash {
+		return nil, errors.New("prepared transaction map root changed")
+	}
+	return txMap, nil
 }
 
 func durationMicros(d time.Duration) uint64 {

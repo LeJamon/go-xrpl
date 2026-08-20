@@ -3,6 +3,7 @@ package adaptor
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -449,4 +451,101 @@ func TestStandardReplayPipelineStaleCancellationKeepsReplacement(t *testing.T) {
 	assert.False(t, current)
 	assert.True(t, r.standardReplay.active)
 	assert.Same(t, replacement, r.standardReplay.entries[replacement.seq])
+}
+
+func TestStandardReplayCancellationWaitsBeforeInvalidatingGeneration(t *testing.T) {
+	r := newTestRouter(nil, nil, make(chan *peermanagement.InboundMessage))
+	r.standardReplay = standardReplayPipeline{
+		generation: 7,
+		active:     true,
+		entries:    make(map[uint32]*standardReplayEntry),
+	}
+
+	r.replayCommitMu.Lock()
+	done := make(chan struct{})
+	go func() {
+		r.StopAcquisitions()
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("cancellation passed an active replay commit")
+	case <-time.After(25 * time.Millisecond):
+	}
+	require.True(t, r.standardReplay.active)
+	require.Equal(t, uint64(7), r.standardReplay.generation)
+
+	r.replayCommitMu.Unlock()
+	require.Eventually(t, func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+	require.False(t, r.standardReplay.active)
+	require.Equal(t, uint64(8), r.standardReplay.generation)
+}
+
+func TestStandardReplayHandoffKeepsSessionWhenTargetAdvances(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.Background())
+	require.NoError(t, err)
+	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 3)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	r.engine = &mockEngine{
+		switchResult: consensus.LedgerSwitchAccepted,
+		switchHook: func(consensus.LedgerID) {
+			once.Do(func() {
+				close(entered)
+				<-release
+			})
+		},
+	}
+	armStandardReplayTestPipeline(t, r, a, sender, links[:2])
+	generation := r.standardReplay.generation
+	pivotHash := r.standardReplay.pivotHash
+	completeStandardReplayTestLink(t, r, links[0])
+
+	final := r.fetchTracker.Find(links[1].hash)
+	require.NotNil(t, final)
+	require.NoError(t, final.GotBase([]message.LedgerNode{
+		{NodeData: links[1].response.LedgerHeader},
+		{NodeData: []byte{1}},
+	}))
+	require.True(t, final.IsComplete())
+	done := make(chan struct{})
+	go func() {
+		r.completeInboundLedger(final)
+		close(done)
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("final replay did not reach the handoff barrier")
+	}
+	trackCatchupPeer(r, 7, links[2].seq, links[2].hash)
+	require.NoError(t, a.RequestLedger(consensus.LedgerID(links[2].hash)))
+	assert.True(t, r.standardReplay.active)
+	assert.Equal(t, generation, r.standardReplay.generation)
+	assert.Equal(t, pivotHash, r.standardReplay.pivotHash)
+	assert.Equal(t, links[2].seq, r.standardReplay.targetSeq)
+	next := r.fetchTracker.Find(links[2].hash)
+	require.NotNil(t, next)
+	assert.True(t, next.TransactionOnly())
+	for _, acquisition := range r.fetchTracker.Active() {
+		assert.True(t, acquisition.TransactionOnly())
+	}
+
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("final replay did not leave the handoff barrier")
+	}
 }
