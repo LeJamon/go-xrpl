@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,9 +20,22 @@ func newCatchupHandoffRouter(t *testing.T) (*Router, *Adaptor, *mockEngine) {
 	return r, a, engine
 }
 
+func recordPreferredPeerCatchupTarget(
+	r *Router,
+	peerID peermanagement.PeerID,
+	seq uint32,
+	hash [32]byte,
+) {
+	r.peersMu.Lock()
+	r.peerStates[peerID] = &peerLedgerState{LedgerSeq: seq, LedgerHash: hash}
+	r.peersMu.Unlock()
+	r.adaptor.UpdatePeerLCL(uint64(peerID), consensus.LedgerID(hash))
+	r.recordCatchupTarget(seq, hash, uint64(peerID))
+}
+
 func TestFarCatchupCompletionRemainsStoreOnly(t *testing.T) {
 	r, a, engine := newCatchupHandoffRouter(t)
-	r.recordCatchupTarget(105, [32]byte{0xA5}, 7)
+	recordPreferredPeerCatchupTarget(r, 7, 105, [32]byte{0xA5})
 
 	r.completeStoredConsensusRecovery(100, [32]byte{0xA0}, [32]byte{0x9F}, false)
 
@@ -73,7 +87,7 @@ func TestOlderCatchupCompletionDoesNotRegressConsensus(t *testing.T) {
 
 func TestMovingCatchupFrontierEventuallyNotifies(t *testing.T) {
 	r, _, engine := newCatchupHandoffRouter(t)
-	r.recordCatchupTarget(105, [32]byte{0xE5}, 7)
+	recordPreferredPeerCatchupTarget(r, 7, 105, [32]byte{0xE5})
 
 	r.completeStoredConsensusRecovery(100, [32]byte{0xE0}, [32]byte{0xDF}, false)
 	assert.Empty(t, engine.getLedgers())

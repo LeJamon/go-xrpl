@@ -40,10 +40,17 @@ func (s *disconnectingPeerSession) IsPeerConnected(peermanagement.PeerID) bool {
 	return s.checks.Add(1) == 1
 }
 
-func trackCatchupPeer(r *Router, peerID peermanagement.PeerID, seq uint32) {
+func trackCatchupPeer(r *Router, peerID peermanagement.PeerID, seq uint32, hashes ...[32]byte) {
+	var hash [32]byte
+	if len(hashes) > 0 {
+		hash = hashes[0]
+	}
 	r.peersMu.Lock()
-	r.peerStates[peerID] = &peerLedgerState{LedgerSeq: seq}
+	r.peerStates[peerID] = &peerLedgerState{LedgerSeq: seq, LedgerHash: hash}
 	r.peersMu.Unlock()
+	if hash != ([32]byte{}) {
+		r.adaptor.UpdatePeerLCL(uint64(peerID), consensus.LedgerID(hash))
+	}
 }
 
 func TestRouter_DropsQueuedStatusAfterPeerDisconnect(t *testing.T) {
@@ -142,8 +149,8 @@ func TestRouter_CatchupRevalidatesPeerHint(t *testing.T) {
 	sessions := &testPeerSessions{connected: map[peermanagement.PeerID]bool{1: false, 2: true}}
 	r.setPeerSessionView(sessions)
 
-	trackCatchupPeer(r, 1, targetSeq)
-	trackCatchupPeer(r, 2, targetSeq)
+	trackCatchupPeer(r, 1, targetSeq, targetHash)
+	trackCatchupPeer(r, 2, targetSeq, targetHash)
 	r.ensureCatchupAcquisition(targetSeq, targetHash, 1)
 
 	require.Equal(t, []legacyBaseCall{{peerID: 2, hash: targetHash, seq: targetSeq}}, sender.legacyCalls())
@@ -170,8 +177,8 @@ func TestRouter_CatchupDisconnectErrorRetargetsImmediately(t *testing.T) {
 			targetHash := [32]byte{0xD2}
 			sessions := &testPeerSessions{connected: map[peermanagement.PeerID]bool{1: true, 2: true}}
 			r.setPeerSessionView(sessions)
-			trackCatchupPeer(r, 1, targetSeq)
-			trackCatchupPeer(r, 2, targetSeq)
+			trackCatchupPeer(r, 1, targetSeq, targetHash)
+			trackCatchupPeer(r, 2, targetSeq, targetHash)
 			sender.mu.Lock()
 			sender.legacyBaseErrs = map[uint64]error{1: tc.err}
 			sender.mu.Unlock()
@@ -301,7 +308,7 @@ func TestRouter_CatchupPeerNotFoundWaitsWithoutReplacement(t *testing.T) {
 	targetHash := [32]byte{0xD6}
 	sessions := &testPeerSessions{connected: map[peermanagement.PeerID]bool{1: true}}
 	r.setPeerSessionView(sessions)
-	trackCatchupPeer(r, 1, targetSeq)
+	trackCatchupPeer(r, 1, targetSeq, targetHash)
 	sender.mu.Lock()
 	sender.legacyBaseErrs = map[uint64]error{1: peermanagement.ErrPeerNotFound}
 	sender.mu.Unlock()
@@ -338,7 +345,7 @@ func TestRouter_HistoryPeerNotFoundDoesNotHotLoop(t *testing.T) {
 	targetHash := [32]byte{0xD8}
 	sessions := &testPeerSessions{connected: map[peermanagement.PeerID]bool{1: true}}
 	r.setPeerSessionView(sessions)
-	trackCatchupPeer(r, 1, targetSeq)
+	trackCatchupPeer(r, 1, targetSeq, targetHash)
 	sender.mu.Lock()
 	sender.legacyBaseErrs = map[uint64]error{1: peermanagement.ErrPeerNotFound}
 	sender.mu.Unlock()
@@ -371,7 +378,7 @@ func TestRouter_GenericAcquisitionRetargetsDisconnectedPeer(t *testing.T) {
 			targetSeq := svc.GetClosedLedgerIndex() + 40
 			targetHash := [32]byte{0xD9}
 			r.setPeerSessionView(&testPeerSessions{connected: map[peermanagement.PeerID]bool{1: true, 2: true}})
-			trackCatchupPeer(r, 1, targetSeq)
+			trackCatchupPeer(r, 1, targetSeq, targetHash)
 			trackCatchupPeer(r, 2, targetSeq-1)
 			sender.mu.Lock()
 			sender.legacyBaseErrs = map[uint64]error{1: tc.err}
@@ -400,7 +407,7 @@ func TestRouter_GenericAcquisitionWaitsForReplacementPeer(t *testing.T) {
 	targetHash := [32]byte{0xDA}
 	sessions := &testPeerSessions{connected: map[peermanagement.PeerID]bool{1: true}}
 	r.setPeerSessionView(sessions)
-	trackCatchupPeer(r, 1, targetSeq)
+	trackCatchupPeer(r, 1, targetSeq, targetHash)
 	sender.mu.Lock()
 	sender.legacyBaseErrs = map[uint64]error{1: peermanagement.ErrPeerNotFound}
 	sender.mu.Unlock()
@@ -419,7 +426,7 @@ func TestRouter_GenericAcquisitionWaitsForReplacementPeer(t *testing.T) {
 	assert.Len(t, sender.legacyCalls(), 1)
 
 	sessions.set(2, true)
-	trackCatchupPeer(r, 2, targetSeq)
+	trackCatchupPeer(r, 2, targetSeq, targetHash)
 	r.escalateAcquisition(il, time.Now().Add(4*time.Second))
 
 	calls := sender.legacyCalls()
@@ -457,7 +464,7 @@ func TestRouter_CatchupBaseRequestFailureUsesInboundRetryTimer(t *testing.T) {
 	r, _, sender, svc := makeRouter(t)
 	targetSeq := svc.GetClosedLedgerIndex() + 40
 	targetHash := [32]byte{0xD3}
-	trackCatchupPeer(r, 7, targetSeq)
+	trackCatchupPeer(r, 7, targetSeq, targetHash)
 	sender.mu.Lock()
 	sender.legacyBaseErr = errors.New("temporary send failure")
 	sender.mu.Unlock()

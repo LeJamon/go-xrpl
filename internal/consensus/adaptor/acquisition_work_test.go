@@ -1423,6 +1423,98 @@ func TestAcquisitionWork_EscalationDoesNotRearmPreemptedTraversal(t *testing.T) 
 	require.True(t, <-done)
 }
 
+func TestAcquisitionWork_YieldedWantStateEscalationRearmsAfterWork(t *testing.T) {
+	source := newWideWorkSource(t, 16)
+	require.NoError(t, source.Delete([32]byte{}))
+	rootHash, err := source.Hash()
+	require.NoError(t, err)
+	rootData, err := source.SerializeRoot()
+	require.NoError(t, err)
+	h := header.LedgerHeader{LedgerIndex: 205, AccountHash: rootHash}
+	headerData := header.AddRaw(h, false)
+	ledgerHash := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), headerData)
+	family := backend.NewMemory()
+	ledger := inbound.New(ledgerHash, h.LedgerIndex, 7, serveTestLogger(), inbound.WithFamily(family))
+	require.NoError(t, ledger.GotBase([]message.LedgerNode{{NodeData: headerData}, {NodeData: rootData}}))
+	base := time.Now().Add(-time.Hour)
+	ledger.RearmTimer(base)
+	require.Equal(t, inbound.TimerRefresh, ledger.OnTimer(base.Add(4*time.Second)))
+	timerAt := base.Add(8 * time.Second)
+
+	router := newTestRouter(nil, newTestAdaptor(t), nil)
+	router.fetchTracker.Track(ledger)
+	lane := newAcquisitionWorkLane(1)
+	var blockMu sync.Mutex
+	blockEscalation := false
+	escalationStarted := make(chan struct{})
+	releaseEscalation := make(chan struct{})
+	lane.process = func(ctx context.Context, current *inbound.Ledger, events []acquisitionWorkEvent) acquisitionWorkResult {
+		blockMu.Lock()
+		block := blockEscalation
+		if block {
+			blockEscalation = false
+		}
+		blockMu.Unlock()
+		if block {
+			close(escalationStarted)
+			select {
+			case <-ctx.Done():
+				return acquisitionWorkResult{ledger: current, err: ctx.Err()}
+			case <-releaseEscalation:
+			}
+			return processAcquisitionWork(ctx, current, events)
+		}
+		return processAcquisitionWorkWithBudget(ctx, current, events, 1)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	lane.start(ctx)
+	router.acquisitionWork = lane
+	defer func() {
+		cancel()
+		lane.stop()
+	}()
+
+	require.True(t, lane.submit(ledger, acquisitionWorkEvent{
+		kind:  acquisitionWorkTimer,
+		fetch: func([32]byte) ([]byte, bool) { return nil, false },
+	}))
+	first := <-lane.results()
+	require.True(t, first.yielded)
+	require.True(t, lane.submit(ledger, acquisitionWorkEvent{
+		kind: acquisitionWorkTimerCheck,
+		at:   timerAt,
+	}))
+	router.handleAcquisitionWorkResult(first)
+
+	escalate := <-lane.results()
+	require.True(t, escalate.timerEscalate)
+	blockMu.Lock()
+	blockEscalation = true
+	blockMu.Unlock()
+	router.handleAcquisitionWorkResult(escalate)
+	select {
+	case <-escalationStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timer escalation work was not enqueued on the pending batch")
+	}
+	assert.True(t, lane.has(ledger))
+	assert.True(t, ledger.TimerDue(time.Now()), "timer rearmed before escalation work completed")
+	close(releaseEscalation)
+
+	for {
+		result := <-lane.results()
+		if !result.yielded {
+			require.NoError(t, result.err)
+			require.True(t, result.rearmTimer)
+			assert.True(t, ledger.TimerDue(time.Now()))
+			router.handleAcquisitionWorkResult(result)
+			break
+		}
+		router.handleAcquisitionWorkResult(result)
+	}
+	assert.False(t, ledger.TimerDue(time.Now()), "timer was not rearmed after escalation work completed")
+}
+
 func TestRouter_MaintenanceDrainsBufferedReplyBeforeTerminalTimer(t *testing.T) {
 	ledger, replies := newWideWorkLedger(t)
 	timerAt := primeAcquisitionForTerminalTimer(t, ledger)

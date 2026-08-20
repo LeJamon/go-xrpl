@@ -79,7 +79,7 @@ func armStandardReplayTestPipeline(
 	sender.mu.Lock()
 	sender.peerSupportsReplay = false
 	sender.mu.Unlock()
-	trackCatchupPeer(r, 7, links[len(links)-1].seq)
+	trackCatchupPeer(r, 7, links[len(links)-1].seq, links[len(links)-1].hash)
 	require.NoError(t, a.RequestLedger(consensus.LedgerID(links[len(links)-1].hash)))
 }
 
@@ -380,7 +380,7 @@ func TestStandardReplayPipelineDoesNotFallbackAfterGossipTargetAdvances(t *testi
 	sender.mu.Lock()
 	sender.peerSupportsReplay = false
 	sender.mu.Unlock()
-	trackCatchupPeer(r, 7, links[len(links)-1].seq)
+	trackCatchupPeer(r, 7, links[len(links)-1].seq, links[len(links)-1].hash)
 	r.recordCatchupTarget(links[len(links)-1].seq, links[len(links)-1].hash, 7)
 	r.armCatchupTowardTarget()
 	require.True(t, r.standardReplay.active)

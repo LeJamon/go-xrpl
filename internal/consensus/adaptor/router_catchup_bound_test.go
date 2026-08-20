@@ -58,8 +58,7 @@ func TestRouter_FarCompletionStoresAndRetargets(t *testing.T) {
 	targetSeq := closedSeq + 40
 	var targetHash [32]byte
 	targetHash[0] = 0xC7
-	trackCatchupPeer(r, 7, targetSeq)
-	r.recordCatchupTarget(targetSeq, targetHash, 7)
+	recordPreferredPeerCatchupTarget(r, 7, targetSeq, targetHash)
 
 	// Completion stores the fetched ledger without moving the service frontier.
 	il := completedCatchUpAcquisition(t, closedSeq+10)

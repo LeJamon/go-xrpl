@@ -79,6 +79,10 @@ func TestRouter_Issue1663CatchupCascadeRecoversToFull(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, nextHash, entry.hash)
 	require.Equal(t, closed.Hash(), entry.parentHash)
+	r.fetchTracker.Remove(nextHash, false)
+	r.fetchTracker.Remove(next2Hash, false)
+	r.replayer.Abandon(nextHash)
+	r.replayer.Abandon(next2Hash)
 
 	stale1 := newIssue1663BackedAcquisition(t, closed.Sequence()+1, 7)
 	stale2 := newIssue1663BackedAcquisition(t, closed.Sequence()+2, 7)

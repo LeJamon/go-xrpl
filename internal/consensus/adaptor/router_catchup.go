@@ -61,6 +61,7 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 			delete(r.peerStates, msg.PeerID)
 			delete(r.peerStatusCandidates, msg.PeerID)
 			r.peersMu.Unlock()
+			r.invalidateCatchupPeer(uint64(msg.PeerID))
 			r.adaptor.UpdatePeerLCL(uint64(msg.PeerID), consensus.LedgerID{})
 			return
 		}
@@ -71,17 +72,22 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 		}
 
 		admitted := r.admitPeerStatus(peerStatusCandidate{
-			peerLedgerState: peerLedgerState{LedgerSeq: sc.LedgerSeq, LedgerHash: peerHash},
-			peerID:          msg.PeerID,
-			parentHash:      parentHash,
-			haveParent:      haveParent,
+			peerLedgerState: peerLedgerState{
+				LedgerSeq:  sc.LedgerSeq,
+				LedgerHash: peerHash,
+				parentHash: parentHash,
+				haveParent: haveParent,
+			},
+			peerID: msg.PeerID,
 		})
 		if len(admitted) == 0 {
 			return
 		}
 		for _, status := range admitted {
-			r.recordPeerSeqHash(status.LedgerSeq, status.LedgerHash, status.parentHash, status.haveParent)
 			r.adaptor.UpdatePeerLCL(uint64(status.peerID), consensus.LedgerID(status.LedgerHash))
+		}
+		for _, status := range admitted {
+			r.reconcilePeerSeqHash(status.LedgerSeq)
 		}
 
 		// During network startup or fast-load confirmation, acquire the
@@ -151,6 +157,8 @@ func (r *Router) admitPeerStatus(status peerStatusCandidate) []peerStatusCandida
 		r.peerStates[status.peerID] = &peerLedgerState{
 			LedgerSeq:  status.LedgerSeq,
 			LedgerHash: status.LedgerHash,
+			parentHash: status.parentHash,
+			haveParent: status.haveParent,
 		}
 		r.peersMu.Unlock()
 		return []peerStatusCandidate{status}
@@ -173,6 +181,8 @@ func (r *Router) admitPeerStatus(status peerStatusCandidate) []peerStatusCandida
 		r.peerStates[candidate.peerID] = &peerLedgerState{
 			LedgerSeq:  candidate.LedgerSeq,
 			LedgerHash: candidate.LedgerHash,
+			parentHash: candidate.parentHash,
+			haveParent: candidate.haveParent,
 		}
 	}
 	r.peersMu.Unlock()
@@ -236,6 +246,132 @@ func (r *Router) recordPeerSeqHash(seq uint32, hash, parentHash [32]byte, havePa
 	r.recordSeqHashFrom(seq, hash, parentHash, haveParent, seqHashSourcePeer)
 }
 
+func (r *Router) reconcilePeerSeqHash(seq uint32) {
+	type peerEvidence struct {
+		peerID     uint64
+		hash       [32]byte
+		parentHash [32]byte
+		haveParent bool
+	}
+	r.peersMu.RLock()
+	peers := make([]peerEvidence, 0, len(r.peerStates))
+	hashSupport := make(map[[32]byte]int)
+	for peerID, state := range r.peerStates {
+		if state == nil || state.LedgerSeq != seq {
+			continue
+		}
+		peers = append(peers, peerEvidence{
+			peerID:     uint64(peerID),
+			hash:       state.LedgerHash,
+			parentHash: state.parentHash,
+			haveParent: state.haveParent,
+		})
+		hashSupport[state.LedgerHash]++
+	}
+	r.peersMu.RUnlock()
+	if len(peers) == 0 {
+		return
+	}
+
+	entry, known := r.lookupSeqHash(seq)
+	chosenHash := entry.hash
+	chosenPreferred := false
+	if !known || entry.source < seqHashSourceValidation {
+		chosenHash = [32]byte{}
+		for _, peer := range peers {
+			if r.peerLedgerIsPreferred(peer.hash) {
+				chosenHash = peer.hash
+				chosenPreferred = true
+				break
+			}
+		}
+		if chosenHash == ([32]byte{}) {
+			best := 0
+			for hash, count := range hashSupport {
+				if count > best || (count == best && bytes.Compare(hash[:], chosenHash[:]) > 0) {
+					chosenHash, best = hash, count
+				}
+			}
+		}
+	}
+	if chosenHash == ([32]byte{}) {
+		return
+	}
+
+	parents := make(map[[32]byte]int)
+	var peerID uint64
+	for _, peer := range peers {
+		if peer.hash != chosenHash {
+			continue
+		}
+		if peerID == 0 || peer.peerID < peerID {
+			peerID = peer.peerID
+		}
+		if peer.haveParent {
+			parents[peer.parentHash]++
+		}
+	}
+	if peerID == 0 {
+		return
+	}
+	parentHash, haveParent := r.preferredPeerParent(seq, parents)
+	r.recordPeerSeqHash(seq, chosenHash, parentHash, haveParent)
+	if !haveParent {
+		r.seqHashMu.Lock()
+		entry = r.seqHash[seq]
+		if entry.hash == chosenHash && entry.parentFrom == seqHashSourcePeer {
+			entry.parentHash = [32]byte{}
+			entry.haveParent = false
+			entry.parentFrom = seqHashSourcePeer
+			r.seqHash[seq] = entry
+		}
+		if len(parents) > 1 && seq > 1 {
+			parent := r.seqHash[seq-1]
+			if parent.source == seqHashSourcePeer {
+				delete(r.seqHash, seq-1)
+			}
+		}
+		r.seqHashMu.Unlock()
+	}
+
+	r.catchupMu.Lock()
+	if chosenPreferred && r.catchup.source == catchupSourcePeer && r.catchup.seq == seq {
+		r.catchup.hash = chosenHash
+		r.catchup.peerID = peerID
+	}
+	r.catchupMu.Unlock()
+}
+
+func (r *Router) preferredPeerParent(seq uint32, support map[[32]byte]int) ([32]byte, bool) {
+	if seq > 1 && r.adaptor != nil {
+		if svc := r.adaptor.LedgerService(); svc != nil {
+			if parent, err := svc.GetLedgerBySequence(seq - 1); err == nil && parent != nil {
+				if support[parent.Hash()] > 0 {
+					return parent.Hash(), true
+				}
+			}
+		}
+	}
+	if len(support) == 1 {
+		for parent := range support {
+			return parent, true
+		}
+	}
+
+	var chosen [32]byte
+	best, second := 0, 0
+	for parent, count := range support {
+		if count > best || (count == best && bytes.Compare(parent[:], chosen[:]) > 0) {
+			second = best
+			best = count
+			chosen = parent
+		} else if count > second {
+			second = count
+		}
+	}
+	return chosen, best >= 2 && best > second
+}
+
 func (r *Router) recordSeqHashFrom(
 	seq uint32,
 	hash, parentHash [32]byte,
@@ -263,7 +399,8 @@ func (r *Router) recordSeqHashFrom(
 
 	e := r.seqHash[seq]
 	if e.hash != ([32]byte{}) && e.hash != hash {
-		if source < e.source || (source == e.source && source != seqHashSourceQuorum) {
+		if source < e.source ||
+			(source == e.source && source != seqHashSourcePeer && source != seqHashSourceQuorum) {
 			return
 		}
 		e = ledgerHashEntry{}
@@ -272,7 +409,8 @@ func (r *Router) recordSeqHashFrom(
 	if source > e.source {
 		e.source = source
 	}
-	if haveParent && (!e.haveParent || source > e.parentFrom) {
+	if haveParent && (!e.haveParent || source > e.parentFrom ||
+		(source == seqHashSourcePeer && e.parentFrom == seqHashSourcePeer)) {
 		e.parentHash = parentHash
 		e.haveParent = true
 		e.parentFrom = source
@@ -284,7 +422,8 @@ func (r *Router) recordSeqHashFrom(
 	// validation for it.
 	if haveParent && seq > 1 {
 		pe := r.seqHash[seq-1]
-		if pe.hash == ([32]byte{}) || pe.hash == parentHash || source > pe.source {
+		if pe.hash == ([32]byte{}) || pe.hash == parentHash || source > pe.source ||
+			(source == seqHashSourcePeer && pe.source == seqHashSourcePeer) {
 			if pe.hash != ([32]byte{}) && pe.hash != parentHash {
 				pe = ledgerHashEntry{}
 			}
@@ -414,14 +553,16 @@ func (r *Router) protectedCatchupInFlight() int {
 func (r *Router) recordCatchupTarget(seq uint32, hash [32]byte, peerID uint64) {
 	r.catchupMu.Lock()
 	defer r.catchupMu.Unlock()
-	if r.catchup.source != catchupSourcePeer && r.catchup.hash == hash {
-		r.catchup.peerID = peerID
+	if r.catchup.source != catchupSourcePeer {
+		if r.catchup.hash == hash {
+			r.catchup.peerID = peerID
+		}
 		return
 	}
 	if seq > r.catchup.seq {
 		r.catchup = catchupTarget{seq: seq, hash: hash, peerID: peerID}
-	} else if seq == r.catchup.seq && hash == r.catchup.hash {
-		r.catchup.peerID = peerID
+	} else if seq == r.catchup.seq {
+		r.catchup = catchupTarget{seq: seq, hash: hash, peerID: peerID}
 	}
 }
 
@@ -469,14 +610,21 @@ func (r *Router) promotePeerStatusCandidates(seq uint32, hash [32]byte) {
 		}
 		matching = append(matching, candidate)
 		delete(r.peerStatusCandidates, peerID)
-		r.peerStates[peerID] = &peerLedgerState{LedgerSeq: seq, LedgerHash: hash}
+		r.peerStates[peerID] = &peerLedgerState{
+			LedgerSeq:  seq,
+			LedgerHash: hash,
+			parentHash: candidate.parentHash,
+			haveParent: candidate.haveParent,
+		}
 	}
 	r.peersMu.Unlock()
 
 	for _, candidate := range matching {
-		r.recordPeerSeqHash(seq, hash, candidate.parentHash, candidate.haveParent)
 		r.adaptor.UpdatePeerLCL(uint64(candidate.peerID), consensus.LedgerID(hash))
-		r.recordCatchupTarget(seq, hash, uint64(candidate.peerID))
+	}
+	if len(matching) > 0 {
+		r.reconcilePeerSeqHash(seq)
+		r.recordCatchupTarget(seq, hash, uint64(matching[0].peerID))
 	}
 }
 
@@ -768,9 +916,7 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 	if svc == nil {
 		return
 	}
-	r.catchupMu.Lock()
-	target := r.catchup
-	r.catchupMu.Unlock()
+	target := r.credibleCatchupFrontier()
 	if peerHint == 0 && target.source == catchupSourceQuorum {
 		peerHint = target.peerID
 	}
@@ -1988,13 +2134,16 @@ func (r *Router) storeVerifiedLedger(l *ledger.Ledger) (header.LedgerHeader, boo
 }
 
 func (r *Router) completeStoredConsensusRecovery(seq uint32, hash, parentHash [32]byte, initialCandidate bool) bool {
-	r.recordAcquiredSeqHash(seq, hash, parentHash)
 	_, result := r.adaptor.recheckFullyValidated(seq, hash)
 	r.recordCompletionRecheck(result)
+	obsolete := r.isObsoleteRecoveryCompletion(seq, hash)
 	if result == validationRecheckAccepted {
+		r.recordAcquiredSeqHash(seq, hash, parentHash)
 		r.promoteCompletedLedger(seq, hash)
+	} else if !obsolete {
+		r.recordAcquiredSeqHash(seq, hash, parentHash)
 	}
-	if r.isObsoleteRecoveryCompletion(seq, hash) {
+	if obsolete {
 		r.obsoleteAcquisitionCompleted.Add(1)
 		r.armConsensusCatchup()
 		return false
@@ -2030,10 +2179,11 @@ func (r *Router) isObsoleteRecoveryCompletion(seq uint32, hash [32]byte) bool {
 	if target != ([32]byte{}) {
 		return target != hash && step != hash
 	}
-	r.catchupMu.Lock()
-	frontier := r.catchup
-	r.catchupMu.Unlock()
-	return frontier.source != catchupSourcePeer && frontier.hash != ([32]byte{}) &&
+	frontier := r.credibleCatchupFrontier()
+	if frontier.source == catchupSourcePeer {
+		return frontier.seq == seq && frontier.hash != hash
+	}
+	return frontier.hash != ([32]byte{}) &&
 		frontier.hash != hash && frontier.seq >= seq
 }
 
@@ -2059,7 +2209,7 @@ func (r *Router) promoteCompletedLedger(seq uint32, hash [32]byte) {
 }
 
 func (r *Router) shouldSwitchConsensusLedger(seq uint32, hash [32]byte) bool {
-	frontierSeq, _, _ := r.bestCatchupTarget()
+	frontier := r.credibleCatchupFrontier()
 
 	r.acquisitionMu.Lock()
 	defer r.acquisitionMu.Unlock()
@@ -2068,7 +2218,10 @@ func (r *Router) shouldSwitchConsensusLedger(seq uint32, hash [32]byte) bool {
 	if target != ([32]byte{}) {
 		return target == hash
 	}
-	return !aheadByMoreThan(frontierSeq, seq, 1) && seq > r.lastHandoffSeq
+	if frontier.seq == seq && frontier.hash != ([32]byte{}) && frontier.hash != hash {
+		return false
+	}
+	return !aheadByMoreThan(frontier.seq, seq, 1) && seq > r.lastHandoffSeq
 }
 
 func (r *Router) tryConsensusLedgerSwitch(seq uint32, hash [32]byte) (accepted, rearm bool) {
@@ -2103,7 +2256,7 @@ func (r *Router) retainConsensusLedgerSwitch(hash [32]byte) {
 }
 
 func (r *Router) finishConsensusRecoveryStep(seq uint32, hash [32]byte) (notify, rearm bool) {
-	frontierSeq, _, _ := r.bestCatchupTarget()
+	frontierSeq := r.credibleCatchupFrontier().seq
 
 	r.acquisitionMu.Lock()
 	defer r.acquisitionMu.Unlock()
@@ -2171,7 +2324,7 @@ func (r *Router) finishInitialLedgerSwitch(
 	hash [32]byte,
 	result consensus.LedgerSwitchResult,
 ) bool {
-	frontierSeq, _, _ := r.bestCatchupTarget()
+	frontierSeq := r.credibleCatchupFrontier().seq
 
 	r.acquisitionMu.Lock()
 	defer r.acquisitionMu.Unlock()
@@ -2438,11 +2591,14 @@ func (r *Router) checkBehind(peerSeq uint32, peerHash [32]byte, peerID uint64) {
 	if validatedSeq := r.adaptor.networkValidatedSeq.Load(); validatedSeq > networkSeq {
 		networkSeq = validatedSeq
 	}
-	r.catchupMu.Lock()
-	if r.catchup.source != catchupSourcePeer && r.catchup.seq > networkSeq {
-		networkSeq = r.catchup.seq
+	frontier := r.credibleCatchupFrontier()
+	if frontier.seq > networkSeq {
+		networkSeq = frontier.seq
 	}
-	r.catchupMu.Unlock()
+	peerPreferred := r.peerLedgerIsPreferred(peerHash)
+	if peerPreferred && peerSeq > networkSeq {
+		networkSeq = peerSeq
+	}
 
 	// If we're caught up (gap ≤ 1) and not yet Full, transition to Full
 	// only if our LCL hash matches what the majority of peers report.
@@ -2468,7 +2624,7 @@ func (r *Router) checkBehind(peerSeq uint32, peerHash [32]byte, peerID uint64) {
 	if !aheadByMoreThan(peerSeq, ourSeq, 1) {
 		return
 	}
-	if !r.peerLedgerIsPreferred(peerHash) {
+	if !peerPreferred {
 		return
 	}
 
@@ -2487,6 +2643,36 @@ func (r *Router) checkBehind(peerSeq uint32, peerHash [32]byte, peerID uint64) {
 
 func aheadByMoreThan(seq, base, distance uint32) bool {
 	return seq > base && seq-base > distance
+}
+
+func (r *Router) catchupFrontierIsCredible(target catchupTarget) bool {
+	if target.hash == ([32]byte{}) {
+		return false
+	}
+	if target.source != catchupSourcePeer {
+		return true
+	}
+
+	found := false
+	r.peersMu.RLock()
+	for _, state := range r.peerStates {
+		if state != nil && state.LedgerSeq == target.seq && state.LedgerHash == target.hash {
+			found = true
+			break
+		}
+	}
+	r.peersMu.RUnlock()
+	return found && r.peerLedgerIsPreferred(target.hash)
+}
+
+func (r *Router) credibleCatchupFrontier() catchupTarget {
+	r.catchupMu.Lock()
+	target := r.catchup
+	r.catchupMu.Unlock()
+	if !r.catchupFrontierIsCredible(target) {
+		return catchupTarget{}
+	}
+	return target
 }
 
 // ourLCLMatchesPeers checks if our closed ledger hash matches what the

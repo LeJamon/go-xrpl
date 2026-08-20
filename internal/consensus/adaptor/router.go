@@ -33,13 +33,13 @@ const inboundReplayDeltaTickInterval = 100 * time.Millisecond
 type peerLedgerState struct {
 	LedgerSeq  uint32
 	LedgerHash [32]byte
+	parentHash [32]byte
+	haveParent bool
 }
 
 type peerStatusCandidate struct {
 	peerLedgerState
-	peerID     peermanagement.PeerID
-	parentHash [32]byte
-	haveParent bool
+	peerID peermanagement.PeerID
 }
 
 type peerSessionView interface {
