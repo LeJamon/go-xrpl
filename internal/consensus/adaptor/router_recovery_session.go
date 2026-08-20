@@ -95,6 +95,9 @@ func (r *Router) continueFrozenPivotRecovery(seq uint32, hash [32]byte, peerID u
 	if seq > r.standardReplay.targetSeq {
 		r.standardReplay.targetSeq = seq
 		r.standardReplay.targetHash = hash
+		if trustedReplacement && r.consensusRecovery.targetHash != ([32]byte{}) {
+			r.consensusRecovery.targetHash = hash
+		}
 	}
 	r.acquisitionMu.Unlock()
 

@@ -64,6 +64,26 @@ func TestFrozenPivotRecoveryKeepsExactConsensusTarget(t *testing.T) {
 	assert.Equal(t, exactHash, r.consensusRecovery.targetHash)
 }
 
+func TestFrozenPivotRecoveryAdvancesConsensusTargetOnTrustedEvidence(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	pivotSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
+	pivotHash := [32]byte{0xa9}
+	exactHash := [32]byte{0xaa}
+	validatedHash := [32]byte{0xab}
+	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+	require.True(t, r.continueFrozenPivotRecovery(pivotSeq+1, exactHash, 7))
+	r.acquisitionMu.Lock()
+	r.consensusRecovery.targetHash = exactHash
+	r.acquisitionMu.Unlock()
+	r.recordValidationCatchupTarget(
+		pivotSeq+2, validatedHash, 7, catchupSourceQuorum,
+	)
+
+	require.True(t, r.continueFrozenPivotRecovery(pivotSeq+2, validatedHash, 7))
+	assert.Equal(t, validatedHash, r.standardReplay.targetHash)
+	assert.Equal(t, validatedHash, r.consensusRecovery.targetHash)
+}
+
 func TestFrozenPivotRecoveryCancelsConflictingPivotEvidence(t *testing.T) {
 	r, _, sender, svc := makeRouter(t)
 	pivotSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
