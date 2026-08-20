@@ -32,6 +32,38 @@ func TestFrozenPivotRecoveryWaitsForUnknownSuccessorLink(t *testing.T) {
 	require.Len(t, sender.legacyCalls(), 1)
 }
 
+func TestFrozenPivotRecoveryRejectsUnknownSequenceTarget(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	pivotSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
+	pivotHash := [32]byte{0xa4}
+	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+	generation := r.standardReplay.generation
+
+	assert.False(t, r.continueFrozenPivotRecovery(0, [32]byte{0xa5}, 7))
+	assert.True(t, r.standardReplay.active)
+	assert.Equal(t, generation, r.standardReplay.generation)
+	assert.Equal(t, pivotSeq, r.standardReplay.targetSeq)
+	assert.Equal(t, pivotHash, r.standardReplay.targetHash)
+}
+
+func TestFrozenPivotRecoveryKeepsExactConsensusTarget(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	pivotSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
+	pivotHash := [32]byte{0xa6}
+	exactHash := [32]byte{0xa7}
+	movingHash := [32]byte{0xa8}
+	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+	require.True(t, r.continueFrozenPivotRecovery(pivotSeq+1, exactHash, 7))
+	r.acquisitionMu.Lock()
+	r.consensusRecovery.targetHash = exactHash
+	r.acquisitionMu.Unlock()
+
+	require.True(t, r.continueFrozenPivotRecovery(pivotSeq+2, movingHash, 7))
+	assert.Equal(t, pivotSeq+2, r.standardReplay.targetSeq)
+	assert.Equal(t, movingHash, r.standardReplay.targetHash)
+	assert.Equal(t, exactHash, r.consensusRecovery.targetHash)
+}
+
 func TestFrozenPivotRecoveryCancelsConflictingPivotEvidence(t *testing.T) {
 	r, _, sender, svc := makeRouter(t)
 	pivotSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
@@ -86,7 +118,7 @@ func TestFrozenPivotFailedStartCannotBeKeptAliveByTargetAdvance(t *testing.T) {
 	assert.Nil(t, r.fetchTracker.Find(pivotHash))
 }
 
-func TestFrozenPivotRecoveryRebootstrapsAfterTwoNonConvergingWindows(t *testing.T) {
+func TestFrozenPivotRecoveryRebootstrapsAfterTwoNoProgressWindows(t *testing.T) {
 	r, _, _, _ := makeRouter(t)
 	started := time.Unix(100, 0)
 	targetHash := [32]byte{0xd1}
@@ -102,7 +134,6 @@ func TestFrozenPivotRecoveryRebootstrapsAfterTwoNonConvergingWindows(t *testing.
 		entries:          make(map[uint32]*standardReplayEntry),
 		progressSampleAt: started,
 		sampleAnchorSeq:  100,
-		sampleTargetSeq:  200,
 	}
 
 	assert.False(t, r.rebootstrapFrozenPivotIfStalled(started.Add(standardReplayProgressWindow)))
@@ -121,7 +152,7 @@ func TestFrozenPivotRecoveryRebootstrapsAfterTwoNonConvergingWindows(t *testing.
 	assert.Equal(t, uint64(1), r.FastSyncMetrics().ReplayPipelineFallbacks)
 }
 
-func TestFrozenPivotRecoveryKeepsConvergingReplay(t *testing.T) {
+func TestFrozenPivotRecoveryKeepsAdvancingReplayAtMovingTipRate(t *testing.T) {
 	r, _, _, _ := makeRouter(t)
 	started := time.Unix(200, 0)
 	r.standardReplay = standardReplayPipeline{
@@ -135,11 +166,10 @@ func TestFrozenPivotRecoveryKeepsConvergingReplay(t *testing.T) {
 		entries:          make(map[uint32]*standardReplayEntry),
 		progressSampleAt: started,
 		sampleAnchorSeq:  100,
-		sampleTargetSeq:  200,
 		stalledSamples:   1,
 	}
 	r.standardReplay.anchorSeq = 110
-	r.standardReplay.targetSeq = 205
+	r.standardReplay.targetSeq = 210
 
 	assert.False(t, r.rebootstrapFrozenPivotIfStalled(started.Add(standardReplayProgressWindow)))
 	assert.True(t, r.standardReplay.active)
@@ -161,12 +191,48 @@ func TestFrozenPivotRecoveryDoesNotTimeoutPivotDownload(t *testing.T) {
 		entries:          make(map[uint32]*standardReplayEntry),
 		progressSampleAt: started,
 		sampleAnchorSeq:  100,
-		sampleTargetSeq:  100,
 	}
 
 	assert.False(t, r.rebootstrapFrozenPivotIfStalled(started.Add(24*time.Hour)))
 	assert.True(t, r.standardReplay.active)
 	assert.Equal(t, uint64(8), r.standardReplay.generation)
+}
+
+func TestFrozenPivotBootstrapFailureRearmsTrustedTarget(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	pivot := completedCatchUpAcquisition(t, svc.GetClosedLedgerIndex()+10)
+	pivotSeq, pivotHash := pivot.Seq(), pivot.Hash()
+	r.fetchTracker.Track(pivot)
+	trackCatchupPeer(r, 7, pivotSeq, pivotHash)
+	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+
+	replacement := completedCatchUpAcquisition(t, pivotSeq+10)
+	trackCatchupPeer(r, 7, replacement.Seq(), replacement.Hash())
+	r.recordValidationCatchupTarget(
+		replacement.Seq(), replacement.Hash(), 7, catchupSourceQuorum,
+	)
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	r.lifecycleMu.Lock()
+	r.lifecycleCtx = canceled
+	r.lifecycleMu.Unlock()
+	t.Cleanup(func() {
+		r.lifecycleMu.Lock()
+		r.lifecycleCtx = context.Background()
+		r.lifecycleMu.Unlock()
+	})
+
+	r.completeInboundLedger(pivot)
+
+	assert.Nil(t, r.fetchTracker.Find(pivotHash))
+	assert.True(t, r.standardReplay.active)
+	assert.False(t, r.standardReplay.pivotReady)
+	assert.Equal(t, replacement.Seq(), r.standardReplay.pivotSeq)
+	assert.Equal(t, replacement.Hash(), r.standardReplay.pivotHash)
+	rearmed := r.fetchTracker.Find(replacement.Hash())
+	require.NotNil(t, rearmed)
+	assert.False(t, rearmed.TransactionOnly())
 }
 
 func TestFrozenPivotHandoffKeepsSessionWhenTargetAdvances(t *testing.T) {

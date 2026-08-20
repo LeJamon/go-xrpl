@@ -34,7 +34,6 @@ func (r *Router) beginFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint
 	r.standardReplay.headBlockedAt = time.Time{}
 	r.standardReplay.progressSampleAt = time.Time{}
 	r.standardReplay.sampleAnchorSeq = seq
-	r.standardReplay.sampleTargetSeq = seq
 	r.standardReplay.stalledSamples = 0
 	if r.consensusRecovery.targetHash != ([32]byte{}) {
 		r.consensusRecovery.stepHash = hash
@@ -65,6 +64,10 @@ func (r *Router) beginFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint
 }
 
 func (r *Router) continueFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint64) bool {
+	if seq == 0 || hash == ([32]byte{}) {
+		return false
+	}
+
 	r.catchupMu.Lock()
 	trustedReplacement := r.catchup.source != catchupSourcePeer &&
 		r.catchup.seq == seq && r.catchup.hash == hash
@@ -92,9 +95,6 @@ func (r *Router) continueFrozenPivotRecovery(seq uint32, hash [32]byte, peerID u
 	if seq > r.standardReplay.targetSeq {
 		r.standardReplay.targetSeq = seq
 		r.standardReplay.targetHash = hash
-		if r.consensusRecovery.targetHash != ([32]byte{}) {
-			r.consensusRecovery.targetHash = hash
-		}
 	}
 	r.acquisitionMu.Unlock()
 
@@ -117,7 +117,6 @@ func (r *Router) completeFrozenPivotAcquisition(h *header.LedgerHeader, initialC
 	now := time.Now()
 	r.standardReplay.progressSampleAt = now
 	r.standardReplay.sampleAnchorSeq = h.LedgerIndex
-	r.standardReplay.sampleTargetSeq = r.standardReplay.targetSeq
 	r.standardReplay.stalledSamples = 0
 	generation := r.standardReplay.generation
 	reachedTarget := r.standardReplay.targetSeq == h.LedgerIndex && r.standardReplay.targetHash == h.Hash
@@ -191,7 +190,6 @@ func (r *Router) rebootstrapFrozenPivotIfStalled(now time.Time) bool {
 	if r.standardReplay.progressSampleAt.IsZero() {
 		r.standardReplay.progressSampleAt = now
 		r.standardReplay.sampleAnchorSeq = r.standardReplay.anchorSeq
-		r.standardReplay.sampleTargetSeq = r.standardReplay.targetSeq
 		r.acquisitionMu.Unlock()
 		return false
 	}
@@ -200,16 +198,13 @@ func (r *Router) rebootstrapFrozenPivotIfStalled(now time.Time) bool {
 		return false
 	}
 
-	oldGap := r.standardReplay.sampleTargetSeq - r.standardReplay.sampleAnchorSeq
-	newGap := r.standardReplay.targetSeq - r.standardReplay.anchorSeq
-	if newGap < oldGap {
+	if r.standardReplay.anchorSeq > r.standardReplay.sampleAnchorSeq {
 		r.standardReplay.stalledSamples = 0
 	} else if r.standardReplay.stalledSamples < ^uint8(0) {
 		r.standardReplay.stalledSamples++
 	}
 	r.standardReplay.progressSampleAt = now
 	r.standardReplay.sampleAnchorSeq = r.standardReplay.anchorSeq
-	r.standardReplay.sampleTargetSeq = r.standardReplay.targetSeq
 	if r.standardReplay.stalledSamples < standardReplayStallWindows {
 		r.acquisitionMu.Unlock()
 		return false

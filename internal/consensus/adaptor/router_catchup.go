@@ -3430,6 +3430,11 @@ func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
 	initialCandidate, err := svc.BootstrapLedgerWithState(r.lifecycleContext(), h, stateMap, txMap)
 	if err != nil {
 		r.logger.Warn("inbound ledger: failed to store consensus ledger", "error", err, "seq", h.LedgerIndex)
+		frozenPivot := r.failFrozenPivotRecovery(h.Hash)
+		r.retireAcquisitionStore(r.lifecycleContext(), il)
+		if frozenPivot {
+			r.armConsensusCatchup()
+		}
 		return
 	}
 

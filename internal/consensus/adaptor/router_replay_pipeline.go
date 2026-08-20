@@ -38,7 +38,6 @@ type standardReplayPipeline struct {
 	headBlockedAt    time.Time
 	progressSampleAt time.Time
 	sampleAnchorSeq  uint32
-	sampleTargetSeq  uint32
 	stalledSamples   uint8
 }
 
@@ -283,7 +282,6 @@ func (r *Router) tryArmStandardReplayPipeline(
 		r.standardReplay.entries = make(map[uint32]*standardReplayEntry, standardReplayPreparedLimit)
 		r.standardReplay.progressSampleAt = time.Now()
 		r.standardReplay.sampleAnchorSeq = anchor.Sequence()
-		r.standardReplay.sampleTargetSeq = targetSeq
 		r.standardReplay.stalledSamples = 0
 	}
 	if targetSeq > r.standardReplay.targetSeq ||
@@ -433,7 +431,6 @@ func (r *Router) cancelStandardReplayPipelineLocked() []*inbound.Ledger {
 	r.standardReplay.headBlockedAt = time.Time{}
 	r.standardReplay.progressSampleAt = time.Time{}
 	r.standardReplay.sampleAnchorSeq = 0
-	r.standardReplay.sampleTargetSeq = 0
 	r.standardReplay.stalledSamples = 0
 	return retired
 }
