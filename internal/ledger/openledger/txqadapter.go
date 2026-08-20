@@ -394,7 +394,7 @@ func (s *txqSandbox) ApplyTransactionWithFlags(txn tx.Transaction, flags tx.Appl
 // propagates the last engine ApplyResult so the RPC submit path still reads
 // the submitted tx's Fee/Metadata/Message after a successful queue clear.
 func (s *txqSandbox) Commit() error {
-	if err := s.parent.view.AdoptState(s.child.view); err != nil {
+	if err := s.parent.view.ConsumeState(s.child.view); err != nil {
 		return err
 	}
 	s.parent.lastApply = s.child.lastApply

@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 func (l *Ledger) Exists(k keylet.Keylet) (bool, error) {
@@ -119,6 +120,7 @@ func (l *Ledger) ApplyAtomically(apply func(Writer) error) error {
 		dropsDestroyed: l.dropsDestroyed,
 		rules:          l.rules,
 	}
+	defer staged.invalidateMutableState()
 	if err := apply(staged); err != nil {
 		return err
 	}
@@ -168,4 +170,48 @@ func (l *Ledger) AdoptState(src *Ledger) error {
 	l.txMap = txMap
 	l.dropsDestroyed = dropsDestroyed
 	return nil
+}
+
+// ConsumeState transfers an exclusively owned mutable snapshot derived from
+// this ledger without cloning its SHAMaps. The target must not change between
+// snapshot creation and transfer. After a successful transfer, src is empty and
+// immutable and must not be used concurrently with the transfer.
+func (l *Ledger) ConsumeState(src *Ledger) error {
+	if src == nil {
+		return errors.New("ledger: ConsumeState from nil source")
+	}
+	if src == l {
+		return errors.New("ledger: ConsumeState source is target")
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.state != StateOpen || !l.writable {
+		return ErrLedgerImmutable
+	}
+
+	src.mu.Lock()
+	defer src.mu.Unlock()
+	if src.state != StateOpen || !src.writable {
+		return ErrInvalidState
+	}
+
+	l.stateMap = src.stateMap
+	l.txMap = src.txMap
+	l.dropsDestroyed = src.dropsDestroyed
+	src.invalidateMutableStateLocked()
+	return nil
+}
+
+func (l *Ledger) invalidateMutableState() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.invalidateMutableStateLocked()
+}
+
+func (l *Ledger) invalidateMutableStateLocked() {
+	l.stateMap = shamap.New(shamap.TypeState)
+	l.txMap = shamap.New(shamap.TypeTransaction)
+	l.dropsDestroyed = 0
+	l.writable = false
 }

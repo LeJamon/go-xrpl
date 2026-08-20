@@ -329,7 +329,7 @@ func (e *Engine) ApplyPseudoWithContext(ctx context.Context, tx txcore.Transacti
 type atomicPseudoView interface {
 	txcore.LedgerView
 	MutableSnapshot() (*ledger.Ledger, error)
-	AdoptState(*ledger.Ledger) error
+	ConsumeState(*ledger.Ledger) error
 }
 
 func (e *Engine) applyPseudoSafely(apply func() txcore.ApplyResult) (result txcore.ApplyResult) {
@@ -475,7 +475,7 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transa
 	applied := result.IsApplied()
 	if applied {
 		metadata.TransactionIndex = e.txCount.Load()
-		if err := base.AdoptState(snapshot); err != nil {
+		if err := base.ConsumeState(snapshot); err != nil {
 			return txcore.ApplyResult{
 				Result:  ter.TefINTERNAL,
 				Applied: false,
