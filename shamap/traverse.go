@@ -299,7 +299,7 @@ func (sm *SHAMap) boundBelowCtx(ctx context.Context, node mapNode, ascending boo
 //
 // On a transient family fetch failure: strict=false treats the branch as
 // missing (rippled's getMissingNodes collapse, self-correcting via the
-// wire); strict=true aborts so FinishSync/IsComplete never fabricate a
+// wire); strict=true aborts so FinishSync and CheckComplete never fabricate a
 // missing node or conclude complete over a skipped subtree.
 func walkFullBelow(
 	ctx context.Context,

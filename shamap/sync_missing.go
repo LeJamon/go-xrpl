@@ -237,7 +237,7 @@ func (sm *SHAMap) GetMissingNodesContext(ctx context.Context, maxNodes int, filt
 
 // getMissingNodesUnsafe collects up to maxNodes missing-node references
 // missingNodesLocked is the shared walk behind the lenient request path and
-// the strict completeness checks (FinishSync, IsComplete). strict=true
+// the strict completeness checks (FinishSync, CheckComplete). strict=true
 // aborts on a transient store error instead of reporting phantom missing
 // nodes. Caller must hold at least the read lock.
 func (sm *SHAMap) missingNodesLocked(maxNodes int, filter SyncFilter, strict bool) ([]MissingNode, error) {

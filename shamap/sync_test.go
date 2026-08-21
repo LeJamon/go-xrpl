@@ -24,20 +24,6 @@ func TestSyncFilter(t *testing.T) {
 	})
 }
 
-func TestMissingNode(t *testing.T) {
-	mn := &MissingNode{
-		Hash:       [32]byte{1, 2, 3, 4, 5, 6, 7, 8},
-		Depth:      5,
-		ParentHash: [32]byte{9, 10, 11, 12, 13, 14, 15, 16},
-		Branch:     3,
-	}
-
-	str := mn.String()
-	if str == "" {
-		t.Error("MissingNode.String() should return non-empty string")
-	}
-}
-
 func TestGetMissingNodes(t *testing.T) {
 	// Create a complete map
 	sMap := New(TypeState)

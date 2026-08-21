@@ -85,12 +85,6 @@ type MissingNode struct {
 	NodeID NodeID
 }
 
-// String returns a string representation of the MissingNode.
-func (m *MissingNode) String() string {
-	return fmt.Sprintf("MissingNode(hash=%x, depth=%d, parent=%x, branch=%d)",
-		m.Hash[:8], m.Depth, m.ParentHash[:8], m.Branch)
-}
-
 // StartSync prepares the SHAMap for synchronization.
 // This sets the state to syncing and allows nodes to be added.
 func (sm *SHAMap) StartSync() error {

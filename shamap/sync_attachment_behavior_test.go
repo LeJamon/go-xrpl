@@ -3,8 +3,6 @@ package shamap
 import (
 	"context"
 	"errors"
-	"fmt"
-	"strings"
 	"testing"
 )
 
@@ -249,21 +247,5 @@ func TestSme_AddKnownNodeSuccess(t *testing.T) {
 				t.Logf("AddKnownNode depth=1: %v (may be ErrUnexpectedNode)", err)
 			}
 		}
-	}
-}
-
-func TestSme_MissingNodeStringFull(t *testing.T) {
-	mn := &MissingNode{
-		Hash:       [32]byte{0xAB, 0xCD},
-		Depth:      7,
-		ParentHash: [32]byte{0x11, 0x22},
-		Branch:     0xF,
-	}
-	s := mn.String()
-	if s == "" {
-		t.Error("MissingNode.String() must not be empty")
-	}
-	if !strings.Contains(s, fmt.Sprintf("%d", 7)) {
-		t.Errorf("MissingNode.String() = %q, expected depth 7", s)
 	}
 }
