@@ -26,11 +26,8 @@ func makeRouterWithEngine(t *testing.T) (*Router, *mockEngine, *service.Service)
 
 // TestRouter_AdoptVerifiedLedger_NotifiesEngine pins issue #359. When a
 // replay-delta acquisition succeeds and the router adopts the new
-// ledger via adoptVerifiedLedger, it MUST notify the consensus engine
-// via Engine.OnLedger. Without this notification the engine sits
-// indefinitely in ModeWrongLedger after acquisition (rcl/engine.go:801)
-// because OnLedger is the recovery primitive that flips back into
-// ModeSwitchedLedger and re-enters consensus.
+// ledger via adoptVerifiedLedger, it must switch the consensus engine to the
+// acquired ledger so recovery can leave ModeWrongLedger.
 func TestRouter_AdoptVerifiedLedger_NotifiesEngine(t *testing.T) {
 	r, engine, svc := makeRouterWithEngine(t)
 	resp, expectedHash, seq := buildEmptyClosedSuccessorResponse(t, svc)

@@ -1910,9 +1910,7 @@ func TestEngine_WrongLedgerRecovery_ModeSequence(t *testing.T) {
 	adaptor.ledgers[targetID] = targetLedger
 
 	engine.mu.Lock()
-	// Step into WrongLedger then immediately receive the target — this
-	// mirrors the OnLedger happy-path at engine.go:OnLedger where we
-	// transition straight through WrongLedger into SwitchedLedger.
+	// Step into WrongLedger then immediately switch to the target.
 	engine.wrongLedgerID = targetID
 	engine.setMode(consensus.ModeWrongLedger)
 	// Drive the full recovery: handleWrongLedger resolves the target
@@ -2096,89 +2094,6 @@ func TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch(t *testing.T) {
 				"duplicate-suppression window, got %d requests", reqs)
 		}
 	})
-}
-
-// TestEngine_OnLedger_PromotesToSwitchedLedger pins the SECOND entry
-// point into ModeSwitchedLedger — the OnLedger path at engine.go:447
-// that fires when a peer finally delivers the ledger we were missing.
-// The WrongLedgerRecovery_ModeSequence test above covers the
-// handleWrongLedger direct-call path; this test covers OnLedger, which
-// is what the router actually calls on inbound mtGET_LEDGER responses.
-// A regression on either branch would let a validator emit a Full
-// validation immediately after recovery, violating the rippled
-// contract that recovery rounds MUST emit partials.
-func TestEngine_OnLedger_PromotesToSwitchedLedger(t *testing.T) {
-	adaptor := newMockAdaptor()
-	adaptor.validator = true
-	adaptor.opMode = consensus.OpModeFull
-
-	config := DefaultConfig()
-	engine := NewEngine(adaptor, config)
-
-	ctx := t.Context()
-	if err := engine.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	defer engine.Stop()
-
-	// Start in Proposing on a round whose parent we'll claim we DON'T
-	// have. The wrongLedgerID is the ID we'll feed into OnLedger to
-	// simulate the missing-ledger-arrived event.
-	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
-	engine.StartRound(round, true)
-	if mode := engine.Mode(); mode != consensus.ModeProposing {
-		t.Fatalf("initial round mode: want Proposing, got %v", mode)
-	}
-
-	targetID := consensus.LedgerID{0xCC}
-	targetLedger := &mockLedger{
-		id:        targetID,
-		seq:       101,
-		closeTime: time.Now(),
-	}
-	adaptor.ledgers[targetID] = targetLedger
-
-	// Put the engine in WrongLedger mode WITHOUT calling
-	// handleWrongLedger — this is the precondition OnLedger checks
-	// at engine.go:452.
-	engine.mu.Lock()
-	engine.wrongLedgerID = targetID
-	engine.setMode(consensus.ModeWrongLedger)
-	engine.mu.Unlock()
-
-	// OnLedger takes the engine lock internally — call it directly.
-	if err := engine.OnLedger(targetID, nil); err != nil {
-		t.Fatalf("OnLedger: %v", err)
-	}
-
-	if mode := engine.Mode(); mode != consensus.ModeSwitchedLedger {
-		t.Fatalf("post-OnLedger mode: want SwitchedLedger, got %v", mode)
-	}
-
-	// Emit a validation while in SwitchedLedger via OnLedger entry —
-	// must still be Full=false (partial).
-	adaptor.mu.Lock()
-	adaptor.validationsBroadcast = nil
-	adaptor.mu.Unlock()
-
-	engine.mu.Lock()
-	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xCC}, seq: 102})
-	engine.mu.Unlock()
-
-	adaptor.mu.RLock()
-	got := len(adaptor.validationsBroadcast)
-	var gotFull bool
-	if got > 0 {
-		gotFull = adaptor.validationsBroadcast[0].Full
-	}
-	adaptor.mu.RUnlock()
-
-	if got != 1 {
-		t.Fatalf("SwitchedLedger after OnLedger must emit one partial validation, got %d", got)
-	}
-	if gotFull {
-		t.Fatalf("validation after OnLedger recovery must have Full=false (partial)")
-	}
 }
 
 // TestSendValidation_ValidatedHashGatedOnHardenedValidations pins the

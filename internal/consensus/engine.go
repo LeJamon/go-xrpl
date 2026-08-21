@@ -33,10 +33,6 @@ type EngineInbound interface {
 	OnTxSet(id TxSetID, txs [][]byte) error
 }
 
-type EngineLedgerReceiver interface {
-	OnLedger(id LedgerID, ledger []byte) error
-}
-
 type EngineLedgerSwitch interface {
 	// CanAcceptLedger applies the validated-ledger freshness and sequence checks
 	// without changing the consensus working ledger.
@@ -81,7 +77,6 @@ type Engine interface {
 	EngineLifecycle
 	EngineRoundDriver
 	RouterEngine
-	EngineLedgerReceiver
 	EngineObservability
 	EngineEvents
 }

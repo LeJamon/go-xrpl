@@ -210,7 +210,6 @@ func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger con
 		// Build/validate/store failed off-lock; unwind to Establish so the next
 		// heartbeat retries (matches the pre-offload early-return).
 		e.setPhase(consensus.PhaseEstablish)
-		e.processPendingRecoveryLedgerLocked()
 		return
 	}
 	result := work.result
@@ -400,10 +399,6 @@ func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger con
 	e.acceptedLCL = consensus.LedgerID{}
 	e.proposalTracker.ResetValidations()
 	e.consensusCount++
-	if e.processPendingRecoveryLedgerLocked() {
-		return
-	}
-
 	// Phase is already PhaseAccepted (set before the off-lock apply).
 
 	// Auto-advance only in Full mode; otherwise the router re-adopts until

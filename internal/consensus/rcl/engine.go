@@ -81,12 +81,11 @@ type Engine struct {
 	roundCloseResolution time.Duration
 
 	// buildInProgress is set while acceptLedger applies the LCL off e.mu
-	// (rippled's jtACCEPT job window). While set, round-driving (timerEntry,
-	// OnLedger) parks so no second goroutine starts a round before the commit
+	// (rippled's jtACCEPT job window). While set, round-driving parks so no
+	// second goroutine starts a round before the commit
 	// tail runs. Mutated under e.mu.
-	buildInProgress       bool
-	buildingLedgerSeq     atomic.Uint32
-	pendingRecoveryLedger consensus.Ledger
+	buildInProgress   bool
+	buildingLedgerSeq atomic.Uint32
 
 	ourTxSet consensus.TxSet
 
@@ -885,7 +884,7 @@ func (e *Engine) RestartRound(proposing bool) error {
 }
 
 // startRoundLocked is the inner StartRound; caller must hold e.mu.
-// recovering (entered after handleWrongLedger / OnLedger adoption,
+// recovering (entered after a preferred-ledger switch,
 // rippled's "switchedLedger") makes the node observe for one round — no
 // proposal or validation even as a full validator — because its view of
 // the new round's tx-set isn't coherent yet and a stale emission would

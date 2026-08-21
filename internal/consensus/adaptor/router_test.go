@@ -56,13 +56,6 @@ func (m *mockEngine) GetLastCloseInfo() (int, time.Duration)   { return 0, 0 }
 func (m *mockEngine) GetJSON(bool) map[string]any              { return map[string]any{} }
 func (m *mockEngine) Subscribe(consensus.EventSubscriber)      {}
 
-func (m *mockEngine) OnLedger(id consensus.LedgerID, _ []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.ledgers = append(m.ledgers, id)
-	return nil
-}
-
 func (m *mockEngine) TrySwitchToLedger(id consensus.LedgerID) (consensus.LedgerSwitchResult, error) {
 	m.mu.Lock()
 	m.ledgers = append(m.ledgers, id)

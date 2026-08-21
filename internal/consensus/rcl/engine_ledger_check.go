@@ -339,7 +339,7 @@ func (e *Engine) checkLedger() {
 		}
 
 		// Already targeting this hash: re-resolve once in case it became
-		// locally available (held adoption that didn't fire OnLedger) and
+		// locally available and
 		// complete the switch. Still missing, retry the adaptor request; its
 		// acquisition deadline suppresses duplicates until the retry window opens.
 		var target consensus.Ledger
@@ -506,7 +506,7 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 	// Resolve and verify BEFORE mutating any round state, so a refused
 	// switch leaves the in-progress round untouched (rippled verifies with
 	// canBeCurrent/isCompatible before switching, NetworkOPs.cpp:1948-1962).
-	// An unresolvable target is verified later, at adoption (OnLedger).
+	// An unresolvable target is verified later, after acquisition.
 	newLedger := target
 	if newLedger == nil {
 		newLedger = e.resolveTargetLedger(netLedgerID)

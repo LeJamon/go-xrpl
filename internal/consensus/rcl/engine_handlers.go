@@ -382,52 +382,6 @@ func (e *Engine) seedDisputeVotes(txID consensus.TxID) {
 	}
 }
 
-// OnLedger handles receiving a ledger we were missing.
-func (e *Engine) OnLedger(id consensus.LedgerID, ledger []byte) error {
-	e.mu.Lock()
-	e.deferPostUnlock++
-	defer func() {
-		e.deferPostUnlock--
-		pending := e.takePendingPostUnlockLocked()
-		e.mu.Unlock()
-		runPostUnlock(pending)
-	}()
-
-	recovering := e.mode == consensus.ModeWrongLedger
-	exactRecoveryTarget := recovering && id == e.wrongLedgerID
-	l, err := e.adaptor.GetLedger(id)
-	if err != nil || l == nil {
-		return nil
-	}
-	validatedCandidate := e.adaptor.GetValidatedLedgerHash() == id ||
-		e.isQuorumValidatedCandidateLocked(l)
-	if recovering && !exactRecoveryTarget && !validatedCandidate {
-		return nil
-	}
-	if !recovering && !validatedCandidate {
-		return nil
-	}
-	slog.Info("Recovery ledger completion received",
-		"t", "consensus",
-		"event", "recovery-ledger-complete",
-		"hash", fmt.Sprintf("%x", id[:8]),
-		"build_in_progress", e.buildInProgress,
-	)
-
-	// acceptLedger applies off-lock like rippled's serialized jtACCEPT job.
-	// Retain the newest completed recovery acquisition until its commit tail
-	// regains the engine lock instead of losing the callback.
-	if e.buildInProgress {
-		if exactRecoveryTarget || e.pendingRecoveryLedger == nil || l.Seq() > e.pendingRecoveryLedger.Seq() {
-			e.pendingRecoveryLedger = l
-		}
-		return nil
-	}
-
-	e.switchToAcquiredLedgerLocked(id, l)
-	return nil
-}
-
 // TrySwitchToLedger synchronously evaluates and adopts a locally-held ledger
 // selected by consensus recovery, validation, or the current network view.
 func (e *Engine) TrySwitchToLedger(id consensus.LedgerID) (consensus.LedgerSwitchResult, error) {
@@ -473,31 +427,6 @@ func (e *Engine) CanAcceptLedger(id consensus.LedgerID) (bool, error) {
 		return false, err
 	}
 	return e.canBeCurrentLocked(l), nil
-}
-
-func (e *Engine) switchToAcquiredLedgerLocked(id consensus.LedgerID, l consensus.Ledger) bool {
-	exactRecoveryTarget := e.mode == consensus.ModeWrongLedger && id == e.wrongLedgerID
-	validatedCandidate := e.adaptor.GetValidatedLedgerHash() == id ||
-		e.isQuorumValidatedCandidateLocked(l)
-	if e.mode == consensus.ModeWrongLedger && !exactRecoveryTarget && !validatedCandidate {
-		return false
-	}
-	// Never regress on out-of-order acquisition arrivals — EXCEPT for the hash
-	// checkLedger explicitly pinned: the preferred ledger may be on a lower
-	// sequence of another chain.
-	if e.prevLedger != nil && l.Seq() <= e.prevLedger.Seq() && !exactRecoveryTarget && !validatedCandidate {
-		return false
-	}
-	if e.mode != consensus.ModeWrongLedger {
-		for {
-			next, err := e.adaptor.GetLedgerBySeq(l.Seq() + 1)
-			if err != nil || next == nil || next.ParentID() != l.ID() {
-				break
-			}
-			l = next
-		}
-	}
-	return e.switchToLedgerLocked(id, l)
 }
 
 // isQuorumValidatedCandidateLocked rechecks the live trusted-validation set
@@ -559,20 +488,10 @@ func (e *Engine) switchToLedgerLocked(id consensus.LedgerID, l consensus.Ledger)
 		return false
 	}
 	e.wrongLedgerID = consensus.LedgerID{}
-	e.pendingRecoveryLedger = nil
 	if e.state != nil {
 		e.state.HaveCorrectLCL = true
 	}
 	return true
-}
-
-func (e *Engine) processPendingRecoveryLedgerLocked() bool {
-	l := e.pendingRecoveryLedger
-	if l == nil {
-		return false
-	}
-	e.pendingRecoveryLedger = nil
-	return e.switchToAcquiredLedgerLocked(l.ID(), l)
 }
 
 // parentValidations returns the trusted full validations recorded for the
