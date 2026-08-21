@@ -1,8 +1,6 @@
 package shamap
 
 import (
-	"bytes"
-	"encoding/hex"
 	"errors"
 	"fmt"
 )
@@ -14,9 +12,9 @@ const (
 
 // Errors returned by NodeID parsing and tree traversal.
 var (
-	ErrInvalidNodeIDLength = errors.New("invalid NodeID length")
-	ErrMaxDepthExceeded    = errors.New("maximum depth exceeded")
-	ErrNonCanonicalNodeID  = errors.New("non-canonical NodeID")
+	errInvalidNodeIDLength = errors.New("invalid NodeID length")
+	errMaxDepthExceeded    = errors.New("maximum depth exceeded")
+	errNonCanonicalNodeID  = errors.New("non-canonical NodeID")
 )
 
 // NodeID represents a node's position in the SHAMap tree
@@ -25,15 +23,14 @@ type NodeID struct {
 	id    [32]byte // The key prefix from the leaf's hash
 }
 
-// NewRootNodeID creates a new root NodeID
-func NewRootNodeID() NodeID {
+func newRootNodeID() NodeID {
 	return NodeID{depth: 0, id: [32]byte{}}
 }
 
 // createNodeID creates a node ID for a given key and depth
 func createNodeID(depth uint8, key [32]byte) (NodeID, error) {
-	if depth > MaxDepth {
-		return NodeID{}, ErrMaxDepthExceeded
+	if depth > maxDepth {
+		return NodeID{}, errMaxDepthExceeded
 	}
 
 	// Apply depth mask to ensure only relevant bits are set
@@ -41,7 +38,7 @@ func createNodeID(depth uint8, key [32]byte) (NodeID, error) {
 	copy(id[:], key[:])
 
 	// Mask out irrelevant bits beyond the depth
-	if depth < MaxDepth {
+	if depth < maxDepth {
 		byteIndex := depth / 2
 		if depth%2 == 1 {
 			// Clear lower nibble of the byte at depth boundary
@@ -68,28 +65,20 @@ func (n NodeID) ID() [32]byte {
 	return n.id
 }
 
-// IsRoot returns true if this node is the root
+// IsRoot reports whether this node ID identifies the root.
 func (n NodeID) IsRoot() bool {
 	return n.depth == 0
-}
-
-// MarshalBinary implements encoding.BinaryMarshaler
-func (n NodeID) MarshalBinary() ([]byte, error) {
-	data := make([]byte, NodeIDSize)
-	copy(data[:32], n.id[:])
-	data[32] = n.depth
-	return data, nil
 }
 
 // ParseNodeID parses a NodeID from its NodeIDSize-byte binary encoding.
 func ParseNodeID(data []byte) (NodeID, error) {
 	if len(data) != NodeIDSize {
-		return NodeID{}, fmt.Errorf("%w: got %d, want %d", ErrInvalidNodeIDLength, len(data), NodeIDSize)
+		return NodeID{}, fmt.Errorf("%w: got %d, want %d", errInvalidNodeIDLength, len(data), NodeIDSize)
 	}
 
 	depth := data[32]
-	if depth > MaxDepth {
-		return NodeID{}, ErrMaxDepthExceeded
+	if depth > maxDepth {
+		return NodeID{}, errMaxDepthExceeded
 	}
 
 	var id [32]byte
@@ -99,37 +88,27 @@ func ParseNodeID(data []byte) (NodeID, error) {
 		return NodeID{}, err
 	}
 	if canonical.id != id {
-		return NodeID{}, ErrNonCanonicalNodeID
+		return NodeID{}, errNonCanonicalNodeID
 	}
 
 	return canonical, nil
 }
 
-// UnmarshalBinary implements encoding.BinaryUnmarshaler, making NodeID
-// round-trippable through the encoding interfaces its MarshalBinary advertises.
-func (n *NodeID) UnmarshalBinary(data []byte) error {
-	parsed, err := ParseNodeID(data)
-	if err != nil {
-		return err
-	}
-	*n = parsed
-	return nil
-}
-
 // Bytes returns the wire format: 32-byte ID + 1-byte depth
 func (n NodeID) Bytes() []byte {
-	data, _ := n.MarshalBinary() // Cannot fail for valid NodeID
+	data := make([]byte, NodeIDSize)
+	copy(data[:32], n.id[:])
+	data[32] = n.depth
 	return data
 }
 
-// ChildNodeID returns the child node ID for the given branch (0-15)
-func (n NodeID) ChildNodeID(branch uint8) (NodeID, error) {
+func (n NodeID) childNodeID(branch uint8) (NodeID, error) {
 	if branch > 15 {
-		return NodeID{}, ErrInvalidBranch
+		return NodeID{}, errInvalidBranch
 	}
 
-	if n.depth >= MaxDepth {
-		return NodeID{}, ErrMaxDepthExceeded
+	if n.depth >= maxDepth {
+		return NodeID{}, errMaxDepthExceeded
 	}
 
 	newDepth := n.depth + 1
@@ -137,7 +116,7 @@ func (n NodeID) ChildNodeID(branch uint8) (NodeID, error) {
 
 	byteIndex := n.depth / 2
 	if byteIndex >= 32 {
-		return NodeID{}, ErrMaxDepthExceeded
+		return NodeID{}, errMaxDepthExceeded
 	}
 
 	isHighNibble := n.depth%2 == 0
@@ -149,124 +128,4 @@ func (n NodeID) ChildNodeID(branch uint8) (NodeID, error) {
 	}
 
 	return NodeID{depth: newDepth, id: newID}, nil
-}
-
-// ParentNodeID returns the parent node ID
-func (n NodeID) ParentNodeID() (NodeID, error) {
-	if n.IsRoot() {
-		return NodeID{}, errors.New("root node has no parent")
-	}
-
-	parentDepth := n.depth - 1
-	parentID := n.id // Copy the array
-
-	// Clear the nibble that was set by this child
-	byteIndex := parentDepth / 2
-	if byteIndex < 32 {
-		isHighNibble := parentDepth%2 == 0
-		if isHighNibble {
-			parentID[byteIndex] &= 0x0F // Clear high nibble
-		} else {
-			parentID[byteIndex] &= 0xF0 // Clear low nibble
-		}
-	}
-
-	return NodeID{depth: parentDepth, id: parentID}, nil
-}
-
-// String returns a human-readable representation of the node ID
-func (n NodeID) String() string {
-	if n.IsRoot() {
-		return "NodeID(root)"
-	}
-
-	// Only show relevant bytes based on depth
-	relevantBytes := min((n.depth+1)/2, 32)
-
-	return fmt.Sprintf("NodeID(depth=%d, id=%s)",
-		n.depth,
-		hex.EncodeToString(n.id[:relevantBytes]))
-}
-
-// Equal returns true if two NodeIDs are equal
-func (n NodeID) Equal(other NodeID) bool {
-	return n.depth == other.depth && n.id == other.id
-}
-
-// Compare compares two NodeIDs for ordering
-// Returns -1 if n < other, 0 if equal, 1 if n > other
-func (n NodeID) Compare(other NodeID) int {
-	if n.depth < other.depth {
-		return -1
-	}
-	if n.depth > other.depth {
-		return 1
-	}
-
-	return bytes.Compare(n.id[:], other.id[:])
-}
-
-// IsDescendantOf returns true if this NodeID is a descendant of the other
-func (n NodeID) IsDescendantOf(ancestor NodeID) bool {
-	if n.depth <= ancestor.depth {
-		return false
-	}
-
-	// Check if the ancestor's ID is a prefix of this ID
-	ancestorBytes := (ancestor.depth + 1) / 2
-	for i := 0; i < int(ancestorBytes); i++ {
-		if i >= 32 {
-			break
-		}
-
-		ancestorByte := ancestor.id[i]
-		ourByte := n.id[i]
-
-		// For the last relevant byte, we might need to mask
-		if i == int(ancestorBytes)-1 && ancestor.depth%2 == 0 {
-			// Only compare the high nibble
-			if (ancestorByte & 0xF0) != (ourByte & 0xF0) {
-				return false
-			}
-		} else {
-			if ancestorByte != ourByte {
-				return false
-			}
-		}
-	}
-
-	return true
-}
-
-// IsAncestorOf returns true if this NodeID is an ancestor of the other
-func (n NodeID) IsAncestorOf(descendant NodeID) bool {
-	return descendant.IsDescendantOf(n)
-}
-
-// Validate performs validation on the NodeID
-func (n NodeID) Validate() error {
-	if n.depth > MaxDepth {
-		return ErrMaxDepthExceeded
-	}
-
-	// Check that bits beyond the depth are properly zeroed
-	if n.depth < MaxDepth {
-		// Check bytes that should be completely zero
-		startByte := (n.depth + 1) / 2
-		for i := startByte; i < 32; i++ {
-			if n.id[i] != 0 {
-				return fmt.Errorf("byte %d should be zero for depth %d", i, n.depth)
-			}
-		}
-
-		// Check partial byte if depth is odd
-		if n.depth%2 == 0 && startByte > 0 {
-			byteIndex := startByte - 1
-			if byteIndex < 32 && (n.id[byteIndex]&0x0F) != 0 {
-				return fmt.Errorf("lower nibble of byte %d should be zero for depth %d", byteIndex, n.depth)
-			}
-		}
-	}
-
-	return nil
 }

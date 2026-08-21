@@ -33,21 +33,21 @@ func llr_buildBacked(t *testing.T, family *memoryFamily, n byte) *SHAMap {
 			t.Fatalf("Put(%d): %v", i, err)
 		}
 	}
-	batch, err := sm.FlushDirtyAndRelease()
+	batch, err := collectDirtyAndReleaseForTest(sm)
 	if err != nil {
-		t.Fatalf("FlushDirty: %v", err)
+		t.Fatalf("StoreDirty: %v", err)
 	}
-	if err := family.StoreBatch(context.Background(), batch.Entries); err != nil {
+	if err := family.StoreBatch(context.Background(), batch); err != nil {
 		t.Fatalf("StoreBatch: %v", err)
 	}
 	return sm
 }
 
-// TestFindDifferenceBackedLazyLoad is a regression test for the lazy-load
-// divergence where FindDifference descended via raw child pointers: on a
+// TestCompareBackedLazyLoad is a regression test for the lazy-load
+// divergence where comparison descended via raw child pointers: on a
 // backed map with released children it misclassified entire subtrees as
 // added/removed instead of loading them from the store.
-func TestFindDifferenceBackedLazyLoad(t *testing.T) {
+func TestCompareBackedLazyLoad(t *testing.T) {
 	family := newMemoryFamily()
 	m1 := llr_buildBacked(t, family, 12)
 
@@ -69,38 +69,30 @@ func TestFindDifferenceBackedLazyLoad(t *testing.T) {
 		t.Fatalf("Put added: %v", err)
 	}
 
-	keys, err := m1.FindDifference(m2)
+	differences, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
-		t.Fatalf("FindDifference: %v", err)
+		t.Fatalf("CompareContext: %v", err)
 	}
 
 	want := map[[32]byte]bool{modifiedKey: true, addedKey: true}
-	if len(keys) != len(want) {
-		t.Fatalf("FindDifference on backed maps: got %d keys, want %d (%x)", len(keys), len(want), keys)
+	if differences.Len() != len(want) {
+		t.Fatalf("CompareContext on backed maps: got %d differences, want %d", differences.Len(), len(want))
 	}
-	for _, k := range keys {
-		if !want[k] {
-			t.Errorf("unexpected difference key %x", k)
+	for _, difference := range differences.Differences {
+		if !want[difference.Key] {
+			t.Errorf("unexpected difference key %x", difference.Key)
 		}
 	}
 }
 
-// TestIsCompleteBackedLazyLoad is a regression test for the missing-node
-// walk divergence: FinishSync/IsComplete used a raw-pointer walk that did
-// not lazy-load, so a backed map with released children was reported
-// incomplete even though walkMap (which lazy-loads) said it was complete.
-func TestIsCompleteBackedLazyLoad(t *testing.T) {
+// TestFinishSyncBackedLazyLoad ensures the completeness walk lazy-loads a
+// fully stored backed map whose children have been released.
+func TestFinishSyncBackedLazyLoad(t *testing.T) {
 	family := newMemoryFamily()
 	sm := llr_buildBacked(t, family, 12)
 
-	// IsComplete/FinishSync must run before walkMap: walkMap's lazy load
-	// installs the fetched children back into the tree, which would mask
-	// a non-lazy-loading completeness walk.
 	if err := sm.StartSync(); err != nil {
 		t.Fatalf("StartSync: %v", err)
-	}
-	if !sm.IsComplete() {
-		t.Error("IsComplete must agree with walkMap on a backed map with released children")
 	}
 	if err := sm.FinishSync(); err != nil {
 		t.Errorf("FinishSync on fully-stored backed map: %v", err)
@@ -135,8 +127,8 @@ func TestSnapshotSharedSubtreeFlushRace(t *testing.T) {
 	var wg sync.WaitGroup
 	flush := func(m *SHAMap) {
 		defer wg.Done()
-		if _, err := m.FlushDirty(); err != nil {
-			t.Errorf("FlushDirty: %v", err)
+		if err := m.StoreDirty(func([]FlushEntry) error { return nil }); err != nil {
+			t.Errorf("StoreDirty: %v", err)
 		}
 	}
 	read := func(m *SHAMap) {

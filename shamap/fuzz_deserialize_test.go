@@ -82,7 +82,6 @@ func FuzzDeserializeNodeFromWire(f *testing.F) {
 		_ = node.Hash()
 		_ = node.Type()
 
-		_ = checkNodeInvariants(node, true)
 	})
 }
 
@@ -145,8 +144,6 @@ func FuzzNewInnerNodeFromWire(f *testing.F) {
 		}
 		_ = node.Hash()
 		_ = node.BranchCount()
-		_ = checkNodeInvariants(node, true)
-
 		// Hash must be deterministic
 		if err := node.UpdateHash(); err != nil {
 			t.Fatalf("UpdateHash failed on valid node: %v", err)
@@ -199,7 +196,6 @@ func FuzzNewAccountStateLeafFromWire(f *testing.F) {
 		_ = node.Hash()
 		_ = node.Type()
 		_ = node.Item()
-		_ = checkNodeInvariants(node, true)
 	})
 }
 
@@ -233,7 +229,6 @@ func FuzzNewTransactionLeafFromWire(f *testing.F) {
 		_ = node.Hash()
 		_ = node.Type()
 		_ = node.Item()
-		_ = checkNodeInvariants(node, true)
 	})
 }
 
@@ -270,7 +265,6 @@ func FuzzNewTransactionWithMetaLeafFromWire(f *testing.F) {
 		_ = node.Hash()
 		_ = node.Type()
 		_ = node.Item()
-		_ = checkNodeInvariants(node, true)
 	})
 }
 
@@ -341,6 +335,5 @@ func FuzzDeserializeFromPrefix(f *testing.F) {
 		_ = node.Hash()
 		_ = node.Type()
 
-		_ = checkNodeInvariants(node, true)
 	})
 }

@@ -2,17 +2,17 @@ package shamap
 
 import "testing"
 
-func TestSme_FlushDirtyNilRoot(t *testing.T) {
+func TestSme_StoreDirtyNilRoot(t *testing.T) {
 	sm := New(TypeState)
 	sm.tree.mu.Lock()
 	sm.tree.root = nil
 	sm.tree.mu.Unlock()
-	batch, err := sm.FlushDirty()
+	batch, err := collectDirtyForTest(sm)
 	if err != nil {
-		t.Fatalf("FlushDirty with nil root: %v", err)
+		t.Fatalf("StoreDirty with nil root: %v", err)
 	}
-	if len(batch.Entries) != 0 {
-		t.Errorf("FlushDirty with nil root: expected 0 entries, got %d", len(batch.Entries))
+	if len(batch) != 0 {
+		t.Errorf("StoreDirty with nil root: expected 0 entries, got %d", len(batch))
 	}
 }
 

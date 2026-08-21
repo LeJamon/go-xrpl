@@ -1006,7 +1006,7 @@ func TestCompleteInboundLedgerPromotesResultMapPersistence(t *testing.T) {
 	require.NoError(t, err)
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
-	fullBelow := stateMap.FullBelowCache()
+	fullBelow := scope.FullBelowCache()
 	require.True(t, fullBelow.Has(fullBelow.Generation(), stateRoot), "promoted acquisition must publish its durable root proof")
 	base.mu.Lock()
 	callsAfterCompletion := len(base.calls)
@@ -1047,11 +1047,10 @@ func TestStandardReplayReloadsPromotedTransactionMap(t *testing.T) {
 	require.NoError(t, txMap.PutWithNodeType(txID, blob, shamap.NodeTypeTransactionWithMeta))
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
-	batch, err := txMap.FlushDirty()
-	require.NoError(t, err)
-
 	scope := router.acquisitionStore.scope().(*acquisitionStoreScope)
-	require.NoError(t, scope.StoreBatch(t.Context(), batch.Entries))
+	require.NoError(t, txMap.StoreDirty(func(entries []shamap.FlushEntry) error {
+		return scope.StoreBatch(t.Context(), entries)
+	}))
 	require.NoError(t, scope.Promote(t.Context()))
 	base.clearCached()
 

@@ -86,21 +86,12 @@ func (sm *SHAMap) GetProofPathContext(ctx context.Context, key [32]byte) (*Proof
 //
 // Returns true if the proof is valid, false otherwise.
 func VerifyProofPath(rootHash [32]byte, key [32]byte, path [][]byte) bool {
-	return VerifyProofPathWithValue(rootHash, key, path) != nil
+	return verifyProofPath(rootHash, key, path) != nil
 }
 
-// VerifyProofPathWithValue verifies a Merkle proof path and returns the value if valid.
-// This is useful when you want to both verify the proof and extract the proven data.
-//
-// Parameters:
-//   - rootHash: the expected root hash of the SHAMap
-//   - key: the key being proven
-//   - path: serialized nodes from leaf to root
-//
-// Returns the item data if proof is valid, nil otherwise.
-func VerifyProofPathWithValue(rootHash [32]byte, key [32]byte, path [][]byte) []byte {
+func verifyProofPath(rootHash [32]byte, key [32]byte, path [][]byte) []byte {
 	// Validate path length
-	if len(path) == 0 || len(path) > MaxDepth+1 {
+	if len(path) == 0 || len(path) > maxDepth+1 {
 		return nil
 	}
 

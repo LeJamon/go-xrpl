@@ -247,10 +247,6 @@ func TestPublicProofRoundTrip(t *testing.T) {
 	if !shamap.VerifyProofPath(rootHash, key, proof.Path) {
 		t.Fatal("generated proof did not verify")
 	}
-	if got := shamap.VerifyProofPathWithValue(rootHash, key, proof.Path); !bytes.Equal(got, value) {
-		t.Fatalf("verified value = %q", got)
-	}
-
 	tampered := make([][]byte, len(proof.Path))
 	for i := range proof.Path {
 		tampered[i] = bytes.Clone(proof.Path[i])
@@ -356,10 +352,10 @@ func TestPublicAcquisitionReconstructsRoot(t *testing.T) {
 		}
 		result, err := acquired.AddKnownNodeByID(nodeID, node.Data)
 		if err != nil {
-			t.Fatalf("add %s: %v", nodeID, err)
+			t.Fatalf("add %x: %v", nodeID.Bytes(), err)
 		}
 		if result == shamap.NodeInvalid {
-			t.Fatalf("add %s returned NodeInvalid", nodeID)
+			t.Fatalf("add %x returned NodeInvalid", nodeID.Bytes())
 		}
 	}
 	if err := acquired.FinishSync(); err != nil {

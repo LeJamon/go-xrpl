@@ -46,12 +46,10 @@ func TestApplyPropagatesStateMapReadFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hash state map: %v", err)
 	}
-	batch, err := stateMap.FlushDirty()
-	if err != nil {
-		t.Fatalf("flush state map: %v", err)
-	}
 	family := &failingFamily{nodes: make(map[[32]byte][]byte)}
-	if err := family.StoreBatch(context.Background(), batch.Entries); err != nil {
+	if err := stateMap.StoreDirty(func(entries []shamap.FlushEntry) error {
+		return family.StoreBatch(context.Background(), entries)
+	}); err != nil {
 		t.Fatalf("store state map: %v", err)
 	}
 

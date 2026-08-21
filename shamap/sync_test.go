@@ -13,30 +13,15 @@ func (sm *SHAMap) addKnownNodeFromPrefixForTest(nodeID NodeID, data []byte) (Add
 }
 
 func TestSyncFilter(t *testing.T) {
-	// Test DefaultSyncFilter
-	t.Run("DefaultSyncFilter", func(t *testing.T) {
-		filter := &DefaultSyncFilter{}
+	t.Run("default filter", func(t *testing.T) {
+		filter := &defaultSyncFilter{}
 		var hash [32]byte
 		hash[0] = 1
 
 		if !filter.ShouldFetch(hash) {
-			t.Error("DefaultSyncFilter should always return true")
+			t.Error("default sync filter should always return true")
 		}
 	})
-}
-
-func TestMissingNode(t *testing.T) {
-	mn := &MissingNode{
-		Hash:       [32]byte{1, 2, 3, 4, 5, 6, 7, 8},
-		Depth:      5,
-		ParentHash: [32]byte{9, 10, 11, 12, 13, 14, 15, 16},
-		Branch:     3,
-	}
-
-	str := mn.String()
-	if str == "" {
-		t.Error("MissingNode.String() should return non-empty string")
-	}
 }
 
 func TestGetMissingNodes(t *testing.T) {
@@ -67,65 +52,9 @@ func TestStartAndFinishSync(t *testing.T) {
 		t.Fatalf("StartSync failed: %v", err)
 	}
 
-	if !sMap.IsSyncing() {
-		t.Error("Map should be syncing after StartSync")
-	}
-
 	// Finish sync on empty map (which is complete)
 	if err := sMap.FinishSync(); err != nil {
 		t.Fatalf("FinishSync failed: %v", err)
-	}
-
-	if sMap.IsSyncing() {
-		t.Error("Map should not be syncing after FinishSync")
-	}
-}
-
-func TestIsComplete(t *testing.T) {
-	sMap := New(TypeState)
-
-	// Empty map is complete
-	if !sMap.IsComplete() {
-		t.Error("Empty map should be complete")
-	}
-
-	// Add items
-	var key [32]byte
-	key[0] = 1
-	if err := sMap.Put(key, make([]byte, 12)); err != nil {
-		t.Fatalf("Failed to put: %v", err)
-	}
-
-	// Map with items should still be complete
-	if !sMap.IsComplete() {
-		t.Error("Map should be complete after adding items")
-	}
-}
-
-func TestSyncProgress(t *testing.T) {
-	sMap := New(TypeState)
-
-	present, total := sMap.SyncProgress()
-	// Empty map should have root
-	if total < 0 {
-		t.Error("Total should be non-negative")
-	}
-	if present > total {
-		t.Error("Present should not exceed total")
-	}
-
-	// Add items
-	for i := range byte(5) {
-		var key [32]byte
-		key[0] = i
-		if err := sMap.Put(key, make([]byte, 12)); err != nil {
-			t.Fatalf("Failed to put: %v", err)
-		}
-	}
-
-	present, total = sMap.SyncProgress()
-	if present != total {
-		t.Errorf("Complete map should have present == total, got %d vs %d", present, total)
 	}
 }
 
@@ -346,13 +275,13 @@ func TestWalkMap_BackedLazyLoadAfterRelease(t *testing.T) {
 		}
 	}
 
-	// FlushDirtyAndRelease writes every dirty node to family, then releases
+	// StoreDirtyAndRelease writes every dirty node to family, then releases
 	// each inner node's children while retaining their hashes.
-	batch, err := src.FlushDirtyAndRelease()
+	batch, err := collectDirtyAndReleaseForTest(src)
 	if err != nil {
-		t.Fatalf("FlushDirty: %v", err)
+		t.Fatalf("StoreDirty: %v", err)
 	}
-	if err := family.StoreBatch(context.Background(), batch.Entries); err != nil {
+	if err := family.StoreBatch(context.Background(), batch); err != nil {
 		t.Fatalf("StoreBatch: %v", err)
 	}
 
@@ -431,7 +360,7 @@ func TestGetMissingNodes_PathNodeIDs(t *testing.T) {
 			t.Errorf("duplicate NodeID for missing node at depth %d", m.Depth)
 		}
 		seen[k] = struct{}{}
-		if err := m.NodeID.Validate(); err != nil {
+		if _, err := ParseNodeID(m.NodeID.Bytes()); err != nil {
 			t.Errorf("missing NodeID is malformed: %v", err)
 		}
 	}
@@ -670,7 +599,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 		}
 		nid, _ := ParseNodeID(d1a.NodeID)
 		_, err = dest.AddKnownNodeByID(nid, d1b.Data)
-		if !errors.Is(err, ErrNodeHashMismatch) {
+		if !errors.Is(err, errNodeHashMismatch) {
 			t.Fatalf("want ErrNodeHashMismatch, got %v", err)
 		}
 	})
@@ -700,7 +629,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 			}
 		}
 		_, err = dest.AddKnownNodeByID(nid, anyData)
-		if !errors.Is(err, ErrEmptyBranchOnPath) {
+		if !errors.Is(err, errEmptyBranchOnPath) {
 			t.Fatalf("want ErrEmptyBranchOnPath, got %v", err)
 		}
 	})
@@ -837,11 +766,11 @@ func TestPrefixAcquisitionDirect(t *testing.T) {
 
 	dest := New(TypeTransaction)
 
-	someID, err := NewRootNodeID().ChildNodeID(0)
+	someID, err := newRootNodeID().childNodeID(0)
 	if err != nil {
 		t.Fatalf("ChildNodeID: %v", err)
 	}
-	if _, err := dest.addKnownNodeFromPrefixForTest(someID, []byte{1}); !errors.Is(err, ErrSyncNotInProgress) {
+	if _, err := dest.addKnownNodeFromPrefixForTest(someID, []byte{1}); !errors.Is(err, errSyncNotInProgress) {
 		t.Errorf("not-syncing: want ErrSyncNotInProgress, got %v", err)
 	}
 
@@ -852,7 +781,7 @@ func TestPrefixAcquisitionDirect(t *testing.T) {
 		t.Fatalf("AddRootNode: %v", err)
 	}
 
-	if _, err := dest.addKnownNodeFromPrefixForTest(NewRootNodeID(), rootData); !errors.Is(err, ErrUnexpectedNode) {
+	if _, err := dest.addKnownNodeFromPrefixForTest(newRootNodeID(), rootData); !errors.Is(err, errUnexpectedNode) {
 		t.Errorf("root nodeID: want ErrUnexpectedNode, got %v", err)
 	}
 	if _, err := dest.addKnownNodeFromPrefixForTest(someID, nil); !errors.Is(err, ErrInvalidNodeData) {
@@ -869,7 +798,7 @@ func TestPrefixAcquisitionDirect(t *testing.T) {
 		// rejected by the parent-hash check before it can attach.
 		if !poisonTested && len(missing) >= 2 && missing[0].Hash != missing[1].Hash {
 			poisonTested = true
-			if _, err := dest.addKnownNodeFromPrefixForTest(missing[0].NodeID, byHash[missing[1].Hash]); !errors.Is(err, ErrNodeHashMismatch) {
+			if _, err := dest.addKnownNodeFromPrefixForTest(missing[0].NodeID, byHash[missing[1].Hash]); !errors.Is(err, errNodeHashMismatch) {
 				t.Fatalf("poison: want ErrNodeHashMismatch, got %v", err)
 			}
 		}

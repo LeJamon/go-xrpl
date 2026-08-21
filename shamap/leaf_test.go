@@ -29,7 +29,7 @@ func TestNewLeafNode_RejectsShortPayload(t *testing.T) {
 
 	for _, c := range ctors {
 		t.Run(c.name, func(t *testing.T) {
-			if _, err := c.fn(NewItem(key, make([]byte, 11))); !errors.Is(err, ErrItemTooSmall) {
+			if _, err := c.fn(NewItem(key, make([]byte, 11))); !errors.Is(err, errItemTooSmall) {
 				t.Fatalf("11-byte payload: want ErrItemTooSmall, got %v", err)
 			}
 			if _, err := c.fn(NewItem(key, make([]byte, 12))); err != nil {
@@ -56,7 +56,7 @@ func TestLeafFromWire_RejectsShortPayload(t *testing.T) {
 		w = append(w, key...)
 		return append(w, byte(protocol.WireTypeAccountState))
 	}
-	if _, err := newAccountStateLeafFromWire(buildAS(11)); !errors.Is(err, ErrItemTooSmall) {
+	if _, err := newAccountStateLeafFromWire(buildAS(11)); !errors.Is(err, errItemTooSmall) {
 		t.Fatalf("AS 11-byte payload: want ErrItemTooSmall, got %v", err)
 	}
 	if _, err := newAccountStateLeafFromWire(buildAS(12)); err != nil {
@@ -67,7 +67,7 @@ func TestLeafFromWire_RejectsShortPayload(t *testing.T) {
 	buildTxn := func(dataLen int) []byte {
 		return append(make([]byte, dataLen), byte(protocol.WireTypeTransaction))
 	}
-	if _, err := newTransactionLeafFromWire(buildTxn(11)); !errors.Is(err, ErrItemTooSmall) {
+	if _, err := newTransactionLeafFromWire(buildTxn(11)); !errors.Is(err, errItemTooSmall) {
 		t.Fatalf("TXN 11-byte payload: want ErrItemTooSmall, got %v", err)
 	}
 	if _, err := newTransactionLeafFromWire(buildTxn(12)); err != nil {

@@ -33,12 +33,15 @@ func TestApplyTxsMembershipErrorDoesNotMutateView(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hash transaction map: %v", err)
 	}
-	batch, err := source.FlushDirty()
-	if err != nil {
+	var entries []shamap.FlushEntry
+	if err := source.StoreDirty(func(dirty []shamap.FlushEntry) error {
+		entries = dirty
+		return nil
+	}); err != nil {
 		t.Fatalf("flush transaction map: %v", err)
 	}
 	var rootData []byte
-	for _, entry := range batch.Entries {
+	for _, entry := range entries {
 		if entry.Hash == rootHash {
 			rootData = entry.Data
 			break

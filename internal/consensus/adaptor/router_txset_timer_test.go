@@ -112,7 +112,10 @@ func TestTxSetAcquire_TimerFinalizesCompleteMapAfterInvalidTrailingNode(t *testi
 		}
 	}
 	require.True(t, foundEmpty)
-	badNodeID, err := shamap.NewRootNodeID().ChildNodeID(emptyBranch)
+	badNodeIDBytes := make([]byte, shamap.NodeIDSize)
+	badNodeIDBytes[0] = emptyBranch << 4
+	badNodeIDBytes[shamap.NodeIDSize-1] = 1
+	badNodeID, err := shamap.ParseNodeID(badNodeIDBytes)
 	require.NoError(t, err)
 
 	reply := ldFromWire(rawID, wireNodes)

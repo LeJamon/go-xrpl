@@ -5,71 +5,46 @@ import "fmt"
 // StoreDirty serializes dirty nodes and marks them clean only after store
 // succeeds.
 func (sm *SHAMap) StoreDirty(store func([]FlushEntry) error) error {
+	return sm.storeDirty(store, false)
+}
+
+// StoreDirtyAndRelease stores dirty nodes and releases resident child pointers
+// only after the store succeeds.
+func (sm *SHAMap) StoreDirtyAndRelease(store func([]FlushEntry) error) error {
+	return sm.storeDirty(store, true)
+}
+
+func (sm *SHAMap) storeDirty(store func([]FlushEntry) error, releaseChildren bool) error {
 	if store == nil {
 		return fmt.Errorf("shamap: nil dirty-node store")
 	}
 
 	sm.tree.mu.Lock()
 	defer sm.tree.mu.Unlock()
-	return sm.storeDirtyLocked(store)
+	return sm.storeDirtyLocked(store, releaseChildren)
 }
 
 // storeDirtyLocked serializes and stores dirty nodes while the caller holds
 // the tree write lock.
-func (sm *SHAMap) storeDirtyLocked(store func([]FlushEntry) error) error {
+func (sm *SHAMap) storeDirtyLocked(store func([]FlushEntry) error, releaseChildren bool) error {
 	if sm.tree.root == nil || sm.tree.root.IsEmpty() {
 		return nil
 	}
 
-	batch := &NodeBatch{}
+	var entries []FlushEntry
 	var nodes []mapNode
-	if err := sm.collectDirtyNode(sm.tree.root, batch, &nodes); err != nil {
+	if err := sm.collectDirtyNode(sm.tree.root, &entries, &nodes); err != nil {
 		return fmt.Errorf("failed to flush: %w", err)
 	}
-	if len(batch.Entries) == 0 {
+	if len(entries) == 0 {
 		return nil
 	}
-	if err := store(batch.Entries); err != nil {
+	if err := store(entries); err != nil {
 		return err
 	}
 	// A stored inner node can still reference descendants absent from a
 	// partially synced map. Only a complete traversal may publish its hash as
 	// full-below.
-	for _, node := range nodes {
-		node.SetDirty(false)
-	}
-	return nil
-}
-
-// FlushDirty serializes every dirty node into the returned NodeBatch and marks
-// them clean, retaining all in-memory child pointers.
-func (sm *SHAMap) FlushDirty() (*NodeBatch, error) {
-	return sm.flushDirty(false)
-}
-
-// FlushDirtyAndRelease is FlushDirty that additionally releases inner nodes'
-// child pointers after flushing (retaining only hashes) so the GC can reclaim
-// memory; children are lazily reloaded from the NodeStore on next access.
-func (sm *SHAMap) FlushDirtyAndRelease() (*NodeBatch, error) {
-	return sm.flushDirty(true)
-}
-
-// flushDirty performs a post-order traversal of the tree, collecting all dirty
-// nodes. Each dirty node is serialized and added to the returned NodeBatch.
-// After serialization, nodes are marked clean (dirty=false).
-func (sm *SHAMap) flushDirty(releaseChildren bool) (*NodeBatch, error) {
-	sm.tree.mu.Lock()
-	defer sm.tree.mu.Unlock()
-
-	if sm.tree.root == nil || sm.tree.root.IsEmpty() {
-		return &NodeBatch{}, nil
-	}
-
-	batch := &NodeBatch{}
-	var nodes []mapNode
-	if err := sm.collectDirtyNode(sm.tree.root, batch, &nodes); err != nil {
-		return nil, fmt.Errorf("failed to flush: %w", err)
-	}
 	for _, node := range nodes {
 		node.SetDirty(false)
 		if releaseChildren {
@@ -78,11 +53,10 @@ func (sm *SHAMap) flushDirty(releaseChildren bool) (*NodeBatch, error) {
 			}
 		}
 	}
-
-	return batch, nil
+	return nil
 }
 
-func (sm *SHAMap) collectDirtyNode(node mapNode, batch *NodeBatch, nodes *[]mapNode) error {
+func (sm *SHAMap) collectDirtyNode(node mapNode, entries *[]FlushEntry, nodes *[]mapNode) error {
 	if node == nil || !node.IsDirty() {
 		return nil
 	}
@@ -92,7 +66,7 @@ func (sm *SHAMap) collectDirtyNode(node mapNode, batch *NodeBatch, nodes *[]mapN
 		for i := range BranchFactor {
 			child, _, _ := inner.LoadChild(i)
 			if child != nil && child.IsDirty() {
-				if err := sm.collectDirtyNode(child, batch, nodes); err != nil {
+				if err := sm.collectDirtyNode(child, entries, nodes); err != nil {
 					return err
 				}
 			}
@@ -114,7 +88,7 @@ func (sm *SHAMap) collectDirtyNode(node mapNode, batch *NodeBatch, nodes *[]mapN
 	}
 
 	hash := node.Hash()
-	batch.Entries = append(batch.Entries, FlushEntry{
+	*entries = append(*entries, FlushEntry{
 		Hash:      hash,
 		Data:      data,
 		LedgerSeq: sm.tree.ledgerSeq,

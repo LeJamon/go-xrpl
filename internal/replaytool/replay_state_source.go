@@ -380,15 +380,10 @@ func buildOrOpenLazyState(
 // flushToFamily flushes the map's dirty nodes into fam, releasing child
 // pointers so the heap stays bounded during a cold build.
 func flushToFamily(ctx context.Context, m *shamap.SHAMap, fam shamap.Family) error {
-	batch, err := m.FlushDirtyAndRelease()
-	if err != nil {
-		return fmt.Errorf("flushing nodes: %w", err)
-	}
-	if len(batch.Entries) == 0 {
-		return nil
-	}
-	if err := fam.StoreBatch(ctx, batch.Entries); err != nil {
-		return fmt.Errorf("storing nodes: %w", err)
+	if err := m.StoreDirtyAndRelease(func(entries []shamap.FlushEntry) error {
+		return fam.StoreBatch(ctx, entries)
+	}); err != nil {
+		return fmt.Errorf("storing dirty nodes: %w", err)
 	}
 	return nil
 }

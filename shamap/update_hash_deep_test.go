@@ -92,13 +92,13 @@ func TestFlushNode_GuardsStalePreimage(t *testing.T) {
 	root.hashes[branch] = staleHash
 	root.SetDirty(true)
 
-	batch, err := sm.FlushDirty()
+	batch, err := collectDirtyForTest(sm)
 	if err != nil {
-		t.Fatalf("FlushDirty: %v", err)
+		t.Fatalf("StoreDirty: %v", err)
 	}
 
 	var rootData []byte
-	for _, e := range batch.Entries {
+	for _, e := range batch {
 		if e.Hash == rootHash {
 			rootData = e.Data
 			break
@@ -109,22 +109,5 @@ func TestFlushNode_GuardsStalePreimage(t *testing.T) {
 	}
 	if got := sha512half.Sum(rootData); got != rootHash {
 		t.Errorf("flushed root preimage hashes to %x, want %x", got[:8], rootHash[:8])
-	}
-}
-
-// TestVerifyNodeHash_DetectsStalePreimage verifies the strengthened invariant
-// catches a stale loaded-child preimage that the clone+recompute check, which
-// derives from live children, cannot see.
-func TestVerifyNodeHash_DetectsStalePreimage(t *testing.T) {
-	sm := New(TypeState)
-	inner, _ := newInnerWithLeaf(t)
-
-	if err := sm.verifyNodeHash(inner, NewRootNodeID()); err != nil {
-		t.Fatalf("healthy inner node should pass: %v", err)
-	}
-
-	inner.hashes[0] = staleHash
-	if err := sm.verifyNodeHash(inner, NewRootNodeID()); err == nil {
-		t.Fatal("verifyNodeHash must detect a stale loaded-child preimage")
 	}
 }

@@ -73,38 +73,6 @@ func (sm *SHAMap) WalkFetchPackNodesContext(ctx context.Context, maxNodes int) (
 	return out, nil
 }
 
-// WalkFetchPackDifferences returns the nodes present in sm but not already
-// represented by have. Shared subtrees are skipped by hash, while changed
-// inner nodes and their descendants are serialized with the same prefix used
-// by fetch-pack wire objects. Traversal is bounded and cancellation-aware.
-func (sm *SHAMap) WalkFetchPackDifferences(ctx context.Context, have *SHAMap, maxNodes int) ([]FetchPackNode, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if maxNodes <= 0 || sm == nil {
-		return nil, nil
-	}
-	sm.tree.mu.RLock()
-	defer sm.tree.mu.RUnlock()
-	if sm.tree.root == nil || !sm.tree.root.HasChildren() {
-		return nil, nil
-	}
-	var haveRoot mapNode
-	sharedTree := have != nil && sm == have
-	if have != nil {
-		if !sharedTree {
-			have.tree.mu.RLock()
-			defer have.tree.mu.RUnlock()
-		}
-		haveRoot = have.tree.root
-	}
-	out := make([]FetchPackNode, 0, maxNodes)
-	if err := walkFetchPackDifferences(ctx, sm, have, sm.tree.root, haveRoot, maxNodes, 0, nil, nil, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // WalkFetchPackNodesContextBounded is WalkFetchPackNodesContext with an
 // aggregate serialization budget. complete is false when the byte limit stops
 // traversal before the node-count limit does.

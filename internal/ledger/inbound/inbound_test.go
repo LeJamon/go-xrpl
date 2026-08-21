@@ -57,7 +57,7 @@ func TestNeedsMissingNodeIDs_RequestsActualMissingNodes(t *testing.T) {
 		t.Fatal("expected missing node IDs after GotBase, got none")
 	}
 
-	root := shamap.NewRootNodeID().Bytes()
+	root := make([]byte, shamap.NodeIDSize)
 	if len(ids) == 1 && bytes.Equal(ids[0], root) {
 		t.Fatalf("regression: NeedsMissingNodeIDs returned only rootID; deep nodes can never be requested")
 	}
@@ -68,9 +68,6 @@ func TestNeedsMissingNodeIDs_RequestsActualMissingNodes(t *testing.T) {
 		}
 		if nid.IsRoot() {
 			t.Errorf("nodeID %d: expected non-root NodeID, got root", i)
-		}
-		if err := nid.Validate(); err != nil {
-			t.Errorf("nodeID %d: validate: %v", i, err)
 		}
 	}
 }

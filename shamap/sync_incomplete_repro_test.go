@@ -38,11 +38,11 @@ func buildDeepBackedSource(t *testing.T, family *memoryFamily) (*SHAMap, [32]byt
 		}
 	}
 
-	batch, err := source.FlushDirty()
+	batch, err := collectDirtyForTest(source)
 	if err != nil {
-		t.Fatalf("FlushDirty: %v", err)
+		t.Fatalf("StoreDirty: %v", err)
 	}
-	if err := family.StoreBatch(context.Background(), batch.Entries); err != nil {
+	if err := family.StoreBatch(context.Background(), batch); err != nil {
 		t.Fatalf("StoreBatch: %v", err)
 	}
 
@@ -111,9 +111,7 @@ func familyExcept(src *memoryFamily, h [32]byte) *memoryFamily {
 // TestIncompleteSyncMap_CompletenessConsistency reproduces issue #1161: an
 // acquisition state map built the production way (NewBacked + AddRootNode, no
 // StartSync) over a store that is genuinely missing one deep node must report
-// itself incomplete consistently. Before the fix IsComplete() short-circuits
-// on the stale full flag and returns true while FinishSync() walks and returns
-// "still missing", so have_state never latches and the acquisition wedges.
+// itself incomplete consistently.
 func TestIncompleteSyncMap_CompletenessConsistency(t *testing.T) {
 	familyFull := newMemoryFamily()
 	source, rootHash, rootData := buildDeepBackedSource(t, familyFull)
@@ -131,12 +129,16 @@ func TestIncompleteSyncMap_CompletenessConsistency(t *testing.T) {
 		t.Fatalf("AddRootNode: %v", err)
 	}
 
-	t.Run("IsCompleteAgreesWithFinishSync", func(t *testing.T) {
-		isComplete := dest.IsComplete()
+	t.Run("CheckCompleteAgreesWithFinishSync", func(t *testing.T) {
+		result, err := dest.CheckComplete(context.Background())
+		if err != nil {
+			t.Fatalf("CheckComplete: %v", err)
+		}
+		isComplete := len(result.Missing) == 0 && len(result.Corrupt) == 0
 		finishErr := dest.FinishSync()
-		t.Logf("IsComplete()=%v FinishSync() err=%v", isComplete, finishErr)
+		t.Logf("CheckComplete=%v FinishSync() err=%v", isComplete, finishErr)
 		if isComplete != (finishErr == nil) {
-			t.Fatalf("PARADOX: IsComplete()=%v but FinishSync()==nil is %v (err=%v)",
+			t.Fatalf("CheckComplete=%v but FinishSync()==nil is %v (err=%v)",
 				isComplete, finishErr == nil, finishErr)
 		}
 		if isComplete {
@@ -188,8 +190,12 @@ func TestIncompleteSyncMap_CompletenessConsistency(t *testing.T) {
 		if err := dest.FinishSync(); err != nil {
 			t.Fatalf("FinishSync after feed: %v", err)
 		}
-		if !dest.IsComplete() {
-			t.Fatalf("IsComplete() should be true after finalize")
+		result, err := dest.CheckComplete(context.Background())
+		if err != nil {
+			t.Fatalf("CheckComplete after finalize: %v", err)
+		}
+		if len(result.Missing) != 0 || len(result.Corrupt) != 0 {
+			t.Fatalf("CheckComplete should be true after finalize")
 		}
 		if got := len(dest.GetMissingNodes(1, nil)); got != 0 {
 			t.Fatalf("GetMissingNodes after finalize: want 0, got %d", got)

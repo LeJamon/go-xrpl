@@ -3,8 +3,6 @@ package shamap
 import (
 	"context"
 	"errors"
-	"fmt"
-	"strings"
 	"testing"
 )
 
@@ -29,11 +27,11 @@ func TestSme_AddKnownNodeUnchecked(t *testing.T) {
 	}
 
 	dest1 := New(TypeTransaction)
-	someID, err := NewRootNodeID().ChildNodeID(0)
+	someID, err := newRootNodeID().childNodeID(0)
 	if err != nil {
 		t.Fatalf("ChildNodeID: %v", err)
 	}
-	if _, err := dest1.AddKnownNodeByID(someID, []byte{1, 2, 3}); !errors.Is(err, ErrSyncNotInProgress) {
+	if _, err := dest1.AddKnownNodeByID(someID, []byte{1, 2, 3}); !errors.Is(err, errSyncNotInProgress) {
 		t.Errorf("AddKnownNodeByID not-syncing: want ErrSyncNotInProgress, got %v", err)
 	}
 
@@ -74,8 +72,8 @@ func TestSme_AddKnownNodeByID_RootNodeID(t *testing.T) {
 	if err := sm.StartSync(); err != nil {
 		t.Fatalf("StartSync: %v", err)
 	}
-	rootID := NewRootNodeID()
-	if _, err := sm.AddKnownNodeByID(rootID, []byte{1}); !errors.Is(err, ErrUnexpectedNode) {
+	rootID := newRootNodeID()
+	if _, err := sm.AddKnownNodeByID(rootID, []byte{1}); !errors.Is(err, errUnexpectedNode) {
 		t.Errorf("AddKnownNodeByID(root): want ErrUnexpectedNode, got %v", err)
 	}
 }
@@ -89,7 +87,7 @@ func TestSme_GetMissingNodesNotSyncing(t *testing.T) {
 
 func TestSme_FinishSyncNotSyncing(t *testing.T) {
 	sm := New(TypeState)
-	if err := sm.FinishSync(); !errors.Is(err, ErrSyncNotInProgress) {
+	if err := sm.FinishSync(); !errors.Is(err, errSyncNotInProgress) {
 		t.Errorf("FinishSync not syncing: want ErrSyncNotInProgress, got %v", err)
 	}
 }
@@ -101,32 +99,6 @@ func TestSme_StartSyncOnInvalidMap(t *testing.T) {
 	sm.tree.mu.Unlock()
 	if err := sm.StartSync(); err == nil {
 		t.Error("StartSync on invalid map should return error")
-	}
-}
-
-func TestSme_IsCompleteWithFullFalse(t *testing.T) {
-	sm := New(TypeState)
-	sm.tree.mu.Lock()
-	sm.tree.full = false
-	sm.tree.mu.Unlock()
-	if !sm.IsComplete() {
-		t.Error("empty tree with full=false should still be complete")
-	}
-}
-
-func TestSme_SyncProgressWithItems(t *testing.T) {
-	sm := New(TypeState)
-	for i := byte(1); i <= 5; i++ {
-		if err := sm.Put(sme_keyFromByte(i), sme_data12(i)); err != nil {
-			t.Fatalf("Put: %v", err)
-		}
-	}
-	present, total := sm.SyncProgress()
-	if total == 0 {
-		t.Error("total should be > 0 for non-empty map")
-	}
-	if present != total {
-		t.Errorf("complete map should have present==total, got %d/%d", present, total)
 	}
 }
 
@@ -160,7 +132,7 @@ func TestSme_AddKnownNodeHashMismatch(t *testing.T) {
 		var wrongHash [32]byte
 		wrongHash[0] = 0xFF
 		err := dest.AddKnownNode(wrongHash, w.Data)
-		if !errors.Is(err, ErrNodeHashMismatch) {
+		if !errors.Is(err, errNodeHashMismatch) {
 			t.Errorf("AddKnownNode with wrong hash: want ErrNodeHashMismatch, got %v", err)
 		}
 		break
@@ -186,10 +158,10 @@ func TestSme_WalkSubtreeStopsOnReport(t *testing.T) {
 	stop, err := walkSubtreeForMissing(
 		context.Background(), dest,
 		dest.tree.root,
-		NewRootNodeID(),
+		newRootNodeID(),
 		dest.tree.root.Hash(),
 		0,
-		&DefaultSyncFilter{},
+		&defaultSyncFilter{},
 		false,
 		func(MissingNode) bool {
 			count++
@@ -275,21 +247,5 @@ func TestSme_AddKnownNodeSuccess(t *testing.T) {
 				t.Logf("AddKnownNode depth=1: %v (may be ErrUnexpectedNode)", err)
 			}
 		}
-	}
-}
-
-func TestSme_MissingNodeStringFull(t *testing.T) {
-	mn := &MissingNode{
-		Hash:       [32]byte{0xAB, 0xCD},
-		Depth:      7,
-		ParentHash: [32]byte{0x11, 0x22},
-		Branch:     0xF,
-	}
-	s := mn.String()
-	if s == "" {
-		t.Error("MissingNode.String() must not be empty")
-	}
-	if !strings.Contains(s, fmt.Sprintf("%d", 7)) {
-		t.Errorf("MissingNode.String() = %q, expected depth 7", s)
 	}
 }

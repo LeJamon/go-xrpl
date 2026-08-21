@@ -158,12 +158,10 @@ func TestCleanerReacquireTargetRepairsMissingCanonicalProof(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := stateMap.FlushDirty()
-	if err != nil {
-		t.Fatal(err)
-	}
 	baseFamily := shamapbackend.NewMemory()
-	if err := baseFamily.StoreBatch(context.Background(), batch.Entries); err != nil {
+	if err := stateMap.StoreDirty(func(entries []shamap.FlushEntry) error {
+		return baseFamily.StoreBatch(context.Background(), entries)
+	}); err != nil {
 		t.Fatal(err)
 	}
 	family := &cleanerMissingFamily{Family: baseFamily}
