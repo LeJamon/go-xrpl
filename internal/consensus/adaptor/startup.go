@@ -410,7 +410,7 @@ func NewFromConfig(
 	// pass its pubkey into the overlay for the self-target TMSquelch
 	// filter: without this a peer could silence our own validator's
 	// traffic on the RelayFromValidator path.
-	identity, err := NewValidatorIdentityFromConfig(appCfg.ValidationSeed, appCfg.ValidatorToken)
+	identity, err := newValidatorIdentityFromConfig(appCfg.ValidationSeed, appCfg.ValidatorToken)
 	if err != nil {
 		return nil, fmt.Errorf("create validator identity: %w", err)
 	}
@@ -465,7 +465,7 @@ func NewFromConfig(
 	// service. peermanagement is forbidden from importing
 	// internal/ledger, so the adapter installed here lets both layers
 	// reach the ledger without breaking that layering boundary.
-	ledgerProvider := NewLedgerProvider(ledgerSvc)
+	ledgerProvider := newLedgerProvider(ledgerSvc)
 	ledgerProvider.SetMinimumOnlineFloor(floor)
 	overlay.LedgerSync().SetProvider(ledgerProvider)
 
@@ -496,7 +496,7 @@ func NewFromConfig(
 		Table: ledgerSvc.Table(),
 		// The operator's [voting] stanza.
 		FeeVote:          feeVoteFromConfig(appCfg.Voting, appCfg.FeeDefault),
-		RelayValidations: ParseRelayValidationsPolicy(appCfg.RelayValidations),
+		RelayValidations: parseRelayValidationsPolicy(appCfg.RelayValidations),
 	})
 
 	// Seed the local token manifest after durable validator state has loaded.

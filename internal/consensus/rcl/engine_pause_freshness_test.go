@@ -54,7 +54,7 @@ func TestPhaseEstablish_PauseStillRefreshesProposal(t *testing.T) {
 		PreviousLedger: prev.ID(),
 		Timestamp:      now.Add(-config.Timing.ProposeInterval),
 	}
-	engine.validationTracker.SetTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
+	engine.validationTracker.setTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
 	for _, nodeID := range []consensus.NodeID{peerA, peerB} {
 		if !engine.validationTracker.Add(&consensus.Validation{
 			NodeID:    nodeID,

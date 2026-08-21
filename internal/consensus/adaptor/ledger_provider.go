@@ -1,4 +1,4 @@
-// LedgerProvider implements peermanagement.LedgerProvider over
+// The ledger provider implements peermanagement.LedgerProvider over
 // *service.Service. It is wired into the overlay by NewFromConfig so
 // peer-side replay, proof-path, and fetch-pack handlers can answer real
 // requests instead of silently dropping them.
@@ -48,9 +48,9 @@ type MinimumOnlineFloor interface {
 }
 
 // Compile-time interface check.
-var _ peermanagement.LedgerProvider = (*LedgerProvider)(nil)
+var _ peermanagement.LedgerProvider = (*ledgerProvider)(nil)
 
-// LedgerProvider implements peermanagement.LedgerProvider on top of the
+// ledgerProvider implements peermanagement.ledgerProvider on top of the
 // go-xrpl ledger service. It answers the LedgerReplay protocol paths
 // (mtREPLAY_DELTA_REQ / mtPROOF_PATH_REQ) and fetch-pack serving for the
 // overlay. The mtGET_LEDGER path is NOT routed through this provider — the
@@ -59,19 +59,19 @@ var _ peermanagement.LedgerProvider = (*LedgerProvider)(nil)
 // peermanagement can reach the ledger service without importing
 // internal/ledger, which is forbidden by the layering boundary between the
 // two packages.
-type LedgerProvider struct {
+type ledgerProvider struct {
 	svc          ledgerLookup
 	floor        MinimumOnlineFloor
 	loadedLocal  func() bool
 	validatedAge func() time.Duration
 }
 
-// NewLedgerProvider constructs a LedgerProvider backed by the supplied
+// newLedgerProvider constructs a LedgerProvider backed by the supplied
 // ledger service. The returned value is safe for concurrent use because
 // every call delegates to *service.Service, which carries its own
 // synchronization.
-func NewLedgerProvider(svc *service.Service) *LedgerProvider {
-	return &LedgerProvider{
+func newLedgerProvider(svc *service.Service) *ledgerProvider {
+	return &ledgerProvider{
 		svc:          svc,
 		loadedLocal:  func() bool { return svc.FeeTrack() != nil && svc.FeeTrack().IsLoadedLocal() },
 		validatedAge: svc.GetValidatedLedgerAge,
@@ -82,13 +82,13 @@ func NewLedgerProvider(svc *service.Service) *LedgerProvider {
 // the provider refuses to serve ledgers below it (mirroring rippled, where a
 // peer cannot serve what online-delete already removed). A nil floor leaves
 // serving unrestricted, so the disabled / standalone path is unchanged.
-func (p *LedgerProvider) SetMinimumOnlineFloor(floor MinimumOnlineFloor) {
+func (p *ledgerProvider) SetMinimumOnlineFloor(floor MinimumOnlineFloor) {
 	p.floor = floor
 }
 
 // belowFloor reports whether seq sits below the online-delete retention floor.
 // A nil floor or a zero floor (no rotation yet) never withholds anything.
-func (p *LedgerProvider) belowFloor(seq uint32) bool {
+func (p *ledgerProvider) belowFloor(seq uint32) bool {
 	if p.floor == nil {
 		return false
 	}
@@ -107,11 +107,11 @@ func (p *LedgerProvider) belowFloor(seq uint32) bool {
 //     shamap.Item.Data() already copies, we double-copy via append so
 //     the contract stays correct even if Item ever switches to returning
 //     its internal slice.
-func (p *LedgerProvider) GetReplayDelta(ledgerHash []byte) ([]byte, [][]byte, error) {
+func (p *ledgerProvider) GetReplayDelta(ledgerHash []byte) ([]byte, [][]byte, error) {
 	return p.GetReplayDeltaContext(context.Background(), ledgerHash)
 }
 
-func (p *LedgerProvider) GetReplayDeltaContext(ctx context.Context, ledgerHash []byte) ([]byte, [][]byte, error) {
+func (p *ledgerProvider) GetReplayDeltaContext(ctx context.Context, ledgerHash []byte) ([]byte, [][]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -184,11 +184,11 @@ const (
 // for a known but open HAVE, ErrFetchPackBusy when local state is unavailable
 // for construction, or (nil, nil) when have is unknown or its parent is
 // unavailable.
-func (p *LedgerProvider) MakeFetchPack(haveLedgerHash [32]byte, maxObjects int) ([]message.IndexedObject, error) {
+func (p *ledgerProvider) MakeFetchPack(haveLedgerHash [32]byte, maxObjects int) ([]message.IndexedObject, error) {
 	return p.MakeFetchPackContext(context.Background(), haveLedgerHash, maxObjects)
 }
 
-func (p *LedgerProvider) MakeFetchPackContext(ctx context.Context, haveLedgerHash [32]byte, maxObjects int) ([]message.IndexedObject, error) {
+func (p *ledgerProvider) MakeFetchPackContext(ctx context.Context, haveLedgerHash [32]byte, maxObjects int) ([]message.IndexedObject, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -330,7 +330,7 @@ packLoop:
 	return objects, nil
 }
 
-func (p *LedgerProvider) getLedgerContext(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
+func (p *ledgerProvider) getLedgerContext(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
 	if lookup, ok := p.svc.(ledgerLookupContext); ok {
 		return lookup.GetLedgerByHashContext(ctx, hash)
 	}
@@ -374,7 +374,7 @@ func fetchPackNodesBytes(nodes []shamap.FetchPackNode) int64 {
 //
 // Path orientation is leaf-to-root, matching shamap.GetProofPath's wire
 // ordering.
-func (p *LedgerProvider) GetProofPath(
+func (p *ledgerProvider) GetProofPath(
 	ledgerHash []byte,
 	key []byte,
 	mapType message.LedgerMapType,
@@ -382,7 +382,7 @@ func (p *LedgerProvider) GetProofPath(
 	return p.GetProofPathContext(context.Background(), ledgerHash, key, mapType)
 }
 
-func (p *LedgerProvider) GetProofPathContext(
+func (p *ledgerProvider) GetProofPathContext(
 	ctx context.Context,
 	ledgerHash []byte,
 	key []byte,

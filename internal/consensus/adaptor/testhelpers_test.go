@@ -31,8 +31,8 @@ func HaveSetToMessage(id consensus.TxSetID, status message.TxSetStatus) *message
 }
 
 // newLedgerProviderForTest builds a provider over an arbitrary lookup.
-func newLedgerProviderForTest(lookup ledgerLookup) *LedgerProvider {
-	return &LedgerProvider{svc: lookup}
+func newLedgerProviderForTest(lookup ledgerLookup) *ledgerProvider {
+	return &ledgerProvider{svc: lookup}
 }
 
 func newTestRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermanagement.InboundMessage) *Router {

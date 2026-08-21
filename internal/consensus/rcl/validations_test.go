@@ -43,8 +43,8 @@ func TestValidationTracker_Add(t *testing.T) {
 	}
 
 	// Count should be 2
-	if vt.GetValidationCount(ledger1) != 2 {
-		t.Errorf("Expected 2 validations, got %d", vt.GetValidationCount(ledger1))
+	if vt.getValidationCount(ledger1) != 2 {
+		t.Errorf("Expected 2 validations, got %d", vt.getValidationCount(ledger1))
 	}
 
 	// Adding same validation should return false
@@ -56,7 +56,7 @@ func TestValidationTracker_Add(t *testing.T) {
 func TestValidationTrackerUnreachableQuorumDoesNotFinalize(t *testing.T) {
 	nodes := []consensus.NodeID{{1}, {2}}
 	vt := NewValidationTracker(math.MaxInt)
-	vt.SetTrusted(nodes)
+	vt.setTrusted(nodes)
 
 	fired := false
 	vt.SetFullyValidatedCallback(func(consensus.LedgerID, uint32) { fired = true })
@@ -78,7 +78,7 @@ func TestValidationTrackerUnreachableQuorumDoesNotFinalize(t *testing.T) {
 func TestValidationTrackerLiveQuorumUnavailableGate(t *testing.T) {
 	nodes := []consensus.NodeID{{1}, {2}, {3}}
 	vt := NewValidationTracker(2)
-	vt.SetTrusted(nodes)
+	vt.setTrusted(nodes)
 
 	unavailable := true
 	vt.setQuorumUnavailableFunc(func() bool { return unavailable })
@@ -116,7 +116,7 @@ func TestValidationTracker_TrustedValidations(t *testing.T) {
 	ledger1 := consensus.LedgerID{1}
 
 	// Set trusted nodes
-	vt.SetTrusted([]consensus.NodeID{node1, node2})
+	vt.setTrusted([]consensus.NodeID{node1, node2})
 
 	// Add validations
 	vt.Add(&consensus.Validation{LedgerID: ledger1, LedgerSeq: 100, NodeID: node1, SignTime: time.Now(), Full: true})
@@ -124,8 +124,8 @@ func TestValidationTracker_TrustedValidations(t *testing.T) {
 	vt.Add(&consensus.Validation{LedgerID: ledger1, LedgerSeq: 100, NodeID: node3, SignTime: time.Now(), Full: true})
 
 	// Total should be 3
-	if vt.GetValidationCount(ledger1) != 3 {
-		t.Errorf("Expected 3 total validations, got %d", vt.GetValidationCount(ledger1))
+	if vt.getValidationCount(ledger1) != 3 {
+		t.Errorf("Expected 3 total validations, got %d", vt.getValidationCount(ledger1))
 	}
 
 	// Trusted should be 2
@@ -140,7 +140,7 @@ func TestValidationTracker_RecheckFullyValidatedFiltersAndRearms(t *testing.T) {
 	vt.SetNow(func() time.Time { return now })
 
 	nodes := []consensus.NodeID{{1}, {2}, {3}, {4}, {5}, {6}}
-	vt.SetTrusted([]consensus.NodeID{nodes[0], nodes[1], nodes[2], nodes[4], nodes[5]})
+	vt.setTrusted([]consensus.NodeID{nodes[0], nodes[1], nodes[2], nodes[4], nodes[5]})
 	vt.setNegativeUNL([]consensus.NodeID{nodes[2]})
 
 	ledgerID := consensus.LedgerID{0xAA}
@@ -180,7 +180,7 @@ func TestValidationTracker_RecheckFullyValidatedFiltersAndRearms(t *testing.T) {
 		t.Fatalf("recheck got accepted=%v quorum=%d validations=%d, want true/2/2", accepted, quorum, len(validations))
 	}
 
-	vt.SetQuorum(3)
+	vt.setQuorum(3)
 	validations, quorum, accepted = vt.RecheckFullyValidated(ledgerID, seq)
 	if accepted || quorum != 3 || len(validations) != 2 {
 		t.Fatalf("recheck after quorum change got accepted=%v quorum=%d validations=%d, want false/3/2", accepted, quorum, len(validations))
@@ -197,7 +197,7 @@ func TestValidationTracker_FullyValidated(t *testing.T) {
 	vt := NewValidationTracker(quorum)
 
 	nodes := []consensus.NodeID{{1}, {2}, {3}, {4}}
-	vt.SetTrusted(nodes)
+	vt.setTrusted(nodes)
 
 	ledger1 := consensus.LedgerID{1}
 	var fullyValidatedLedger consensus.LedgerID
@@ -392,7 +392,7 @@ func TestValidationTracker_SameSeqResignRejected(t *testing.T) {
 func TestValidationTracker_NegativeUNL_ExcludedFromQuorum(t *testing.T) {
 	nodes := []consensus.NodeID{{1}, {2}, {3}, {4}}
 	vt := NewValidationTracker(3)
-	vt.SetTrusted(nodes)
+	vt.setTrusted(nodes)
 	// Mark node 4 as negatively-UNL'd.
 	vt.setNegativeUNL([]consensus.NodeID{nodes[3]})
 
@@ -422,7 +422,7 @@ func TestValidationTracker_NegativeUNL_ExcludedFromQuorum(t *testing.T) {
 	if got := vt.trustedValidationCount(ledger); got != 2 {
 		t.Fatalf("GetTrustedValidationCount must exclude negUNL: got %d, want 2", got)
 	}
-	if got := vt.TrustedSupport(ledger); got != 2 {
+	if got := vt.trustedSupport(ledger); got != 2 {
 		t.Fatalf("GetTrustedSupport must exclude negUNL: got %d, want 2", got)
 	}
 
@@ -452,7 +452,7 @@ func TestValidationTracker_NegativeUNL_ExcludedFromQuorum(t *testing.T) {
 func TestValidationTracker_ProposersValidated(t *testing.T) {
 	nodes := []consensus.NodeID{{1}, {2}, {3}, {4}, {5}}
 	vt := NewValidationTracker(3)
-	vt.SetTrusted(nodes[:4])                        // 1-4 trusted; 5 is untrusted
+	vt.setTrusted(nodes[:4])                        // 1-4 trusted; 5 is untrusted
 	vt.setNegativeUNL([]consensus.NodeID{nodes[3]}) // node 4 on negUNL
 
 	prevLedger := consensus.LedgerID{0xAB}
@@ -585,7 +585,7 @@ func TestValidationTracker_Stats(t *testing.T) {
 	vt := NewValidationTracker(2)
 
 	nodes := []consensus.NodeID{{1}, {2}, {3}}
-	vt.SetTrusted(nodes[:2])
+	vt.setTrusted(nodes[:2])
 
 	ledger1 := consensus.LedgerID{1}
 	ledger2 := consensus.LedgerID{2}
@@ -595,7 +595,7 @@ func TestValidationTracker_Stats(t *testing.T) {
 	vt.Add(&consensus.Validation{LedgerID: ledger1, LedgerSeq: 100, NodeID: nodes[1], SignTime: time.Now(), Full: true})
 	vt.Add(&consensus.Validation{LedgerID: ledger2, LedgerSeq: 101, NodeID: nodes[2], SignTime: time.Now(), Full: true})
 
-	stats := vt.GetStats()
+	stats := vt.getStats()
 
 	if stats.TotalValidations != 3 {
 		t.Errorf("Expected 3 total validations, got %d", stats.TotalValidations)
@@ -647,10 +647,10 @@ func TestValidationTracker_ExpireOld_FiresOnStale(t *testing.T) {
 			t.Errorf("stale validation at seq %d leaked; expected only seq 100", v.LedgerSeq)
 		}
 	}
-	if got := vt.GetValidationCount(ledgerOld); got != 0 {
+	if got := vt.getValidationCount(ledgerOld); got != 0 {
 		t.Errorf("stale ledger still has %d validations; expected 0", got)
 	}
-	if got := vt.GetValidationCount(ledgerKeep); got != 1 {
+	if got := vt.getValidationCount(ledgerKeep); got != 1 {
 		t.Errorf("current ledger lost validations: count=%d, expected 1", got)
 	}
 }
@@ -684,7 +684,7 @@ func TestValidationTracker_ExpireOld_OnStaleRunsOutsideLock(t *testing.T) {
 	vt.SetOnStale(func(*consensus.Validation) {
 		// Re-entering the tracker under the lock would deadlock if we
 		// were still holding vt.mu at callback time.
-		_ = vt.GetValidationCount(consensus.LedgerID{1})
+		_ = vt.getValidationCount(consensus.LedgerID{1})
 		close(done)
 	})
 
@@ -715,7 +715,7 @@ func TestValidationTracker_ExpireOld_RetainsRecentlyAccessed(t *testing.T) {
 
 	// Below the floor but touched moments ago: retained, no onStale.
 	vt.ExpireOld(200)
-	if got := vt.GetValidationCount(ledger); got != 1 {
+	if got := vt.getValidationCount(ledger); got != 1 {
 		t.Fatalf("hot set evicted: count=%d, want 1", got)
 	}
 	if fired != 0 {
@@ -725,7 +725,7 @@ func TestValidationTracker_ExpireOld_RetainsRecentlyAccessed(t *testing.T) {
 	// Once cold, the same floor evicts it.
 	now = now.Add(validationSetExpires + time.Second)
 	vt.ExpireOld(200)
-	if got := vt.GetValidationCount(ledger); got != 0 {
+	if got := vt.getValidationCount(ledger); got != 0 {
 		t.Fatalf("cold set survived: count=%d, want 0", got)
 	}
 	if fired != 1 {
@@ -753,10 +753,10 @@ func TestValidationTracker_ExpireOld_HonorsSeqToKeep(t *testing.T) {
 	vt.SetSeqToKeep(100, 400)
 	vt.ExpireOld(200)
 
-	if got := vt.GetValidationCount(ledgerKeep); got != 1 {
+	if got := vt.getValidationCount(ledgerKeep); got != 1 {
 		t.Fatalf("pinned set evicted: count=%d, want 1", got)
 	}
-	if got := vt.GetValidationCount(ledgerDrop); got != 0 {
+	if got := vt.getValidationCount(ledgerDrop); got != 0 {
 		t.Fatalf("set below the pin survived: count=%d, want 0", got)
 	}
 
@@ -765,7 +765,7 @@ func TestValidationTracker_ExpireOld_HonorsSeqToKeep(t *testing.T) {
 	now = now.Add(validationSetExpires + time.Second)
 	vt.SetSeqToKeep(0, 0)
 	vt.ExpireOld(200)
-	if got := vt.GetValidationCount(ledgerKeep); got != 0 {
+	if got := vt.getValidationCount(ledgerKeep); got != 0 {
 		t.Fatalf("unpinned set survived: count=%d, want 0", got)
 	}
 }
@@ -789,10 +789,10 @@ func TestValidationTracker_ExpireOld_SeqToKeepHighExclusive(t *testing.T) {
 	vt.SetSeqToKeep(100, 150)
 	vt.ExpireOld(200)
 
-	if got := vt.GetValidationCount(atLow); got != 1 {
+	if got := vt.getValidationCount(atLow); got != 1 {
 		t.Fatalf("keepLow boundary evicted (should be inclusive): count=%d, want 1", got)
 	}
-	if got := vt.GetValidationCount(atHigh); got != 0 {
+	if got := vt.getValidationCount(atHigh); got != 0 {
 		t.Fatalf("keepHigh boundary survived (should be exclusive): count=%d, want 0", got)
 	}
 }
@@ -807,7 +807,7 @@ func TestValidationTracker_ExpireOld_TouchOnReadExtends(t *testing.T) {
 
 	hot := consensus.LedgerID{1}
 	cold := consensus.LedgerID{2}
-	vt.SetTrusted([]consensus.NodeID{{0xA}, {0xB}})
+	vt.setTrusted([]consensus.NodeID{{0xA}, {0xB}})
 	vt.Add(&consensus.Validation{LedgerID: hot, LedgerSeq: 100, NodeID: consensus.NodeID{0xA}, SignTime: now, Full: true})
 	vt.Add(&consensus.Validation{LedgerID: cold, LedgerSeq: 100, NodeID: consensus.NodeID{0xB}, SignTime: now, Full: true})
 
@@ -821,10 +821,10 @@ func TestValidationTracker_ExpireOld_TouchOnReadExtends(t *testing.T) {
 	// refreshed the other.
 	now = now.Add(2 * time.Second)
 	vt.ExpireOld(200)
-	if got := vt.GetValidationCount(cold); got != 0 {
+	if got := vt.getValidationCount(cold); got != 0 {
 		t.Fatalf("unqueried set survived: count=%d, want 0", got)
 	}
-	if got := vt.GetValidationCount(hot); got != 1 {
+	if got := vt.getValidationCount(hot); got != 1 {
 		t.Fatalf("queried set evicted despite recent read: count=%d, want 1", got)
 	}
 }
@@ -852,7 +852,7 @@ func TestValidationTracker_ExpireOld_WriteDoesNotExtend(t *testing.T) {
 	// Past the creation age: the late write must not have refreshed it.
 	now = now.Add(2 * time.Second)
 	vt.ExpireOld(200)
-	if got := vt.GetValidationCount(ledger); got != 0 {
+	if got := vt.getValidationCount(ledger); got != 0 {
 		t.Fatalf("write-refreshed set survived: count=%d, want 0", got)
 	}
 }
@@ -873,14 +873,14 @@ func TestValidationTracker_Flush(t *testing.T) {
 
 	n1 := consensus.NodeID{1}
 	n2 := consensus.NodeID{2}
-	vt.SetTrusted([]consensus.NodeID{n1, n2})
+	vt.setTrusted([]consensus.NodeID{n1, n2})
 	vt.setLedgerAncestryProvider(provider)
 
 	vt.Add(makeTrustedValidation(n1, abc.ID(), abc.Seq(), now))
 	vt.Add(makeTrustedValidation(n2, abc.ID(), abc.Seq(), now))
 
 	// Sanity: state accumulated and the wired trie steers GetPreferred.
-	if got := vt.GetValidationCount(abc.ID()); got != 2 {
+	if got := vt.getValidationCount(abc.ID()); got != 2 {
 		t.Fatalf("pre-flush: want 2 validations, got %d", got)
 	}
 	if vt.latestValidation(n1) == nil {
@@ -893,13 +893,13 @@ func TestValidationTracker_Flush(t *testing.T) {
 	vt.flush()
 
 	// Every accumulated index is cleared, including the trie.
-	if got := vt.GetValidationCount(abc.ID()); got != 0 {
+	if got := vt.getValidationCount(abc.ID()); got != 0 {
 		t.Errorf("post-flush: want 0 validations, got %d", got)
 	}
 	if vt.latestValidation(n1) != nil {
 		t.Error("post-flush: byNode not cleared")
 	}
-	if got := vt.TrustedSupport(abc.ID()); got != 0 {
+	if got := vt.trustedSupport(abc.ID()); got != 0 {
 		t.Errorf("post-flush: want 0 trusted support, got %d", got)
 	}
 	if _, _, ok := vt.GetPreferred(0); ok {
@@ -933,7 +933,7 @@ func TestValidationTracker_GetCurrentNodeIDs(t *testing.T) {
 	n3 := consensus.NodeID{3} // untrusted, fresh — still enumerated
 	n4 := consensus.NodeID{4} // trusted, partial, fresh — still enumerated
 
-	vt.SetTrusted([]consensus.NodeID{n1, n2, n4})
+	vt.setTrusted([]consensus.NodeID{n1, n2, n4})
 
 	// n2 signs at t0; it falls outside the isCurrent window once time moves.
 	if !vt.Add(makeTrustedValidation(n2, ledger, seq, t0)) {

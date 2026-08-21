@@ -836,7 +836,7 @@ func TestEngine_StartSeedsNegativeUNL(t *testing.T) {
 			SignTime:  adaptor.now,
 			SeenTime:  adaptor.now,
 			Full:      true,
-		}); status != ValStatusCurrent {
+		}); status != valStatusCurrent {
 			t.Fatalf("validation status=%s, want current", status)
 		}
 	}
@@ -874,7 +874,7 @@ func TestEngine_FullyValidatedLedgerRefreshesNegativeUNL(t *testing.T) {
 			if status := engine.validationTracker.addStatus(&consensus.Validation{
 				LedgerID: ledgerID, LedgerSeq: seq, NodeID: node,
 				SignTime: now, SeenTime: now, Full: true,
-			}); status != ValStatusCurrent {
+			}); status != valStatusCurrent {
 				t.Fatalf("validation status=%s, want current", status)
 			}
 		}
@@ -2046,7 +2046,7 @@ func TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch(t *testing.T) {
 		engine.wrongLedgerID = targetID
 		engine.setMode(consensus.ModeWrongLedger)
 		if engine.validationTracker != nil {
-			engine.validationTracker.SetTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
+			engine.validationTracker.setTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
 			for _, nodeID := range []consensus.NodeID{peerA, peerB} {
 				if !engine.validationTracker.Add(&consensus.Validation{
 					NodeID: nodeID, LedgerID: targetID, LedgerSeq: 101,
@@ -2748,8 +2748,8 @@ func TestSendValidation_PeerEchoIsNotConflicting(t *testing.T) {
 	echo := *emitted
 	echo.SignTime = time.Unix(emitted.SignTime.Unix(), 0).UTC()
 	echo.SeenTime = adaptor.Now()
-	if status := engine.validationTracker.addStatus(&echo); status != ValStatusBadSeq {
-		t.Fatalf("peer echo status: want %v, got %v", ValStatusBadSeq, status)
+	if status := engine.validationTracker.addStatus(&echo); status != valStatusBadSeq {
+		t.Fatalf("peer echo status: want %v, got %v", valStatusBadSeq, status)
 	}
 }
 
@@ -4261,7 +4261,7 @@ func TestShouldPause_AheadAndLaggards(t *testing.T) {
 	// Inject peer validations at seq=9 — both peers are laggards: their
 	// latest validation has not advanced past our prev.
 	if engine.validationTracker != nil {
-		engine.validationTracker.SetTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
+		engine.validationTracker.setTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
 		engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: validatedID, LedgerSeq: 9, Full: true, SignTime: time.Now(), SeenTime: time.Now()})
 		engine.validationTracker.Add(&consensus.Validation{NodeID: peerB, LedgerID: validatedID, LedgerSeq: 9, Full: true, SignTime: time.Now(), SeenTime: time.Now()})
 	}
@@ -4345,7 +4345,7 @@ func TestShouldPause_HardTimeoutOverride(t *testing.T) {
 	engine.prevLedger = &mockLedger{id: consensus.LedgerID{0x0c}, seq: 12, closeTime: time.Now()}
 	engine.setPhase(consensus.PhaseEstablish)
 	if engine.validationTracker != nil {
-		engine.validationTracker.SetTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
+		engine.validationTracker.setTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
 		engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: validatedID, LedgerSeq: 9, Full: true, SignTime: time.Now(), SeenTime: time.Now()})
 		engine.validationTracker.Add(&consensus.Validation{NodeID: peerB, LedgerID: validatedID, LedgerSeq: 9, Full: true, SignTime: time.Now(), SeenTime: time.Now()})
 	}
@@ -4542,7 +4542,7 @@ func TestShouldPause_StaleValidationCountsAsOffline(t *testing.T) {
 	engine.setPhase(consensus.PhaseEstablish)
 	now := adaptor.Now()
 	if engine.validationTracker != nil {
-		engine.validationTracker.SetTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
+		engine.validationTracker.setTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
 		// Peer A: fresh validation at our prev (seq=10) → current,
 		// not a laggard with strict-less-than.
 		engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: consensus.LedgerID{0x0a}, LedgerSeq: 10, Full: true, SignTime: now, SeenTime: now})
@@ -4612,7 +4612,7 @@ func TestPhaseEstablish_PauseAndRecover(t *testing.T) {
 	engine.setPhase(consensus.PhaseEstablish)
 	now := adaptor.Now()
 	if engine.validationTracker != nil {
-		engine.validationTracker.SetTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
+		engine.validationTracker.setTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
 		// Phase 1: both peers stuck at validated (seq=9), well
 		// behind our prev (seq=12). ahead=3 puts us in phase=2.
 		engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: validatedID, LedgerSeq: 9, Full: true, SignTime: now, SeenTime: now})

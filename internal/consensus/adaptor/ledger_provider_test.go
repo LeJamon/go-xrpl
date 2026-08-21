@@ -271,18 +271,18 @@ func TestLedgerProvider_GetProofPath_PropagatesLookupDeadline(t *testing.T) {
 func TestLedgerProvider_ContextCancellationWinsOverLookupErrorTranslation(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		call func(*LedgerProvider, context.Context) error
+		call func(*ledgerProvider, context.Context) error
 	}{
 		{
 			name: "replay delta",
-			call: func(provider *LedgerProvider, ctx context.Context) error {
+			call: func(provider *ledgerProvider, ctx context.Context) error {
 				_, _, err := provider.GetReplayDeltaContext(ctx, make([]byte, 32))
 				return err
 			},
 		},
 		{
 			name: "proof path",
-			call: func(provider *LedgerProvider, ctx context.Context) error {
+			call: func(provider *ledgerProvider, ctx context.Context) error {
 				_, _, err := provider.GetProofPathContext(
 					ctx, make([]byte, 32), make([]byte, 32), message.LedgerMapAccountState,
 				)

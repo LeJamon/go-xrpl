@@ -160,7 +160,7 @@ func manifestSigningPreimage(t *testing.T, src map[string]any) []byte {
 func TestNewValidatorIdentityFromToken_HappyPath(t *testing.T) {
 	fix := newTokenFixture(t, 0x42, 7)
 
-	id, err := NewValidatorIdentityFromToken(fix.tokenBlock)
+	id, err := newValidatorIdentityFromToken(fix.tokenBlock)
 	if err != nil {
 		t.Fatalf("NewValidatorIdentityFromToken: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestNewValidatorIdentityFromToken_HappyPath(t *testing.T) {
 
 func TestNewValidatorIdentityFromToken_SignVerifyValidation(t *testing.T) {
 	fix := newTokenFixture(t, 0x55, 3)
-	id, err := NewValidatorIdentityFromToken(fix.tokenBlock)
+	id, err := newValidatorIdentityFromToken(fix.tokenBlock)
 	if err != nil {
 		t.Fatalf("NewValidatorIdentityFromToken: %v", err)
 	}
@@ -272,26 +272,26 @@ func TestNewValidatorIdentityFromToken_KeyMismatch(t *testing.T) {
 	bad, _ := json.Marshal(envelope)
 	corrupted := base64.StdEncoding.EncodeToString(bad)
 
-	if _, err := NewValidatorIdentityFromToken(corrupted); err == nil {
+	if _, err := newValidatorIdentityFromToken(corrupted); err == nil {
 		t.Fatal("expected mismatch error, got nil")
 	}
 }
 
 func TestNewValidatorIdentityFromConfig_Dispatch(t *testing.T) {
 	// Empty → observer.
-	id, err := NewValidatorIdentityFromConfig("", "")
+	id, err := newValidatorIdentityFromConfig("", "")
 	if err != nil || id != nil {
 		t.Fatalf("empty config should yield nil identity, got id=%v err=%v", id, err)
 	}
 
 	// Both set → mutual-exclusion error.
-	if _, err := NewValidatorIdentityFromConfig("snoPBrXtMeMyMHUVTgbuqAfg1SUTb", "anything"); err == nil {
+	if _, err := newValidatorIdentityFromConfig("snoPBrXtMeMyMHUVTgbuqAfg1SUTb", "anything"); err == nil {
 		t.Fatal("expected error when both seed and token configured")
 	}
 
 	// Token only → token path.
 	fix := newTokenFixture(t, 0x77, 5)
-	id, err = NewValidatorIdentityFromConfig("", fix.tokenBlock)
+	id, err = newValidatorIdentityFromConfig("", fix.tokenBlock)
 	if err != nil {
 		t.Fatalf("token-only config: %v", err)
 	}
@@ -300,7 +300,7 @@ func TestNewValidatorIdentityFromConfig_Dispatch(t *testing.T) {
 	}
 
 	// Seed only → seed path (manifest stays nil).
-	id, err = NewValidatorIdentityFromConfig("snoPBrXtMeMyMHUVTgbuqAfg1SUTb", "")
+	id, err = newValidatorIdentityFromConfig("snoPBrXtMeMyMHUVTgbuqAfg1SUTb", "")
 	if err != nil {
 		t.Fatalf("seed-only config: %v", err)
 	}

@@ -39,33 +39,33 @@ func safeTrieCall(fn string, op func()) (panicked bool) {
 type valStatus int
 
 const (
-	// ValStatusCurrent — added; counts toward quorum and steers the trie.
-	ValStatusCurrent valStatus = iota
-	// ValStatusStale — outside the freshness window, below the sequence
+	// valStatusCurrent — added; counts toward quorum and steers the trie.
+	valStatusCurrent valStatus = iota
+	// valStatusStale — outside the freshness window, below the sequence
 	// floor, or superseded by the node's tracked tip.
-	ValStatusStale
-	// ValStatusBadSeq — violates the increasing-seq requirement without
+	valStatusStale
+	// valStatusBadSeq — violates the increasing-seq requirement without
 	// double-sign evidence.
-	ValStatusBadSeq
-	// ValStatusMultiple — same seq and ledger signed with different
+	valStatusBadSeq
+	// valStatusMultiple — same seq and ledger signed with different
 	// cookies (likely two servers sharing a validator key).
-	ValStatusMultiple
-	// ValStatusConflicting — same seq signed for different ledgers, or
+	valStatusMultiple
+	// valStatusConflicting — same seq signed for different ledgers, or
 	// re-signed with a different sign time.
-	ValStatusConflicting
+	valStatusConflicting
 )
 
 func (s valStatus) String() string {
 	switch s {
-	case ValStatusCurrent:
+	case valStatusCurrent:
 		return "current"
-	case ValStatusStale:
+	case valStatusStale:
 		return "stale"
-	case ValStatusBadSeq:
+	case valStatusBadSeq:
 		return "badSeq"
-	case ValStatusMultiple:
+	case valStatusMultiple:
 		return "multiple"
-	case ValStatusConflicting:
+	case valStatusConflicting:
 		return "conflicting"
 	default:
 		return "unknown"
@@ -496,11 +496,11 @@ func IsCurrent(now, signTime, seenTime time.Time) bool {
 // Add adds a validation to the tracker.
 // Returns true if this is a new validation (not duplicate).
 func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
-	return vt.addStatus(validation) == ValStatusCurrent
+	return vt.addStatus(validation) == valStatusCurrent
 }
 
 // addStatus adds a validation and classifies the outcome. Only
-// ValStatusCurrent validations enter the quorum/trie indexes; every
+// Current validations enter the quorum/trie indexes; every
 // non-stale one is recorded in the by-seq evidence index first, so a
 // double-sign is detected even at a seq the node has already superseded.
 //
@@ -538,7 +538,7 @@ func (vt *ValidationTracker) addStatus(validation *consensus.Validation) valStat
 
 func (vt *ValidationTracker) addStatusWithFinality(validation *consensus.Validation, drainFinality bool) valStatus {
 	if validation == nil {
-		return ValStatusStale
+		return valStatusStale
 	}
 	// The tracker owns every validation it admits. Clone before reading any
 	// mutable field so later caller mutations cannot alter indexed state.
@@ -549,7 +549,7 @@ func (vt *ValidationTracker) addStatusWithFinality(validation *consensus.Validat
 	vt.mu.RUnlock()
 	now := nowFn()
 	if !IsCurrent(now, validation.SignTime, validation.SeenTime) {
-		return ValStatusStale
+		return valStatusStale
 	}
 
 	vt.checkAcquired()
@@ -595,20 +595,20 @@ func (vt *ValidationTracker) addStatusWithFinality(validation *consensus.Validat
 	}
 	if !enf.advance(now, validation.LedgerSeq) {
 		if tracked.LedgerID != validation.LedgerID {
-			return ValStatusConflicting
+			return valStatusConflicting
 		}
 		if !tracked.SignTime.Equal(validation.SignTime) {
-			return ValStatusConflicting
+			return valStatusConflicting
 		}
 		if tracked.Cookie != validation.Cookie {
-			return ValStatusMultiple
+			return valStatusMultiple
 		}
-		return ValStatusBadSeq
+		return valStatusBadSeq
 	}
 
 	// Reject far-stale validations below the sequence floor.
 	if vt.minSeq > 0 && validation.LedgerSeq < vt.minSeq {
-		return ValStatusStale
+		return valStatusStale
 	}
 
 	existing, hasExisting := vt.byNode[resolvedID]
@@ -631,7 +631,7 @@ func (vt *ValidationTracker) addStatusWithFinality(validation *consensus.Validat
 		// Rippled records the by-ledger evidence before returning Stale, but
 		// only a Current validation drives checkAccept. A later trust/quorum
 		// recheck can still promote this exact ledger without another message.
-		return ValStatusStale
+		return valStatusStale
 	}
 	vt.byNode[resolvedID] = validation
 
@@ -649,7 +649,7 @@ func (vt *ValidationTracker) addStatusWithFinality(validation *consensus.Validat
 	// Queue the fire-tuple under the lock; the deferred drainer revalidates
 	// eligibility and invokes the callback only after vt.mu is released.
 	vt.checkFullValidationLocked(validation.LedgerID, validation.LedgerSeq, true)
-	return ValStatusCurrent
+	return valStatusCurrent
 }
 
 // trackBySequenceLocked records validation in the by-seq evidence index

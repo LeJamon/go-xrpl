@@ -9,10 +9,10 @@ import (
 // support tests. Keeping them out of validations.go keeps the production
 // API surface limited to what the engine actually calls.
 
-// SetTrusted updates the trusted set without changing the test tracker's
+// setTrusted updates the trusted set without changing the test tracker's
 // quorum. Production code uses SetTrustedAndQuorum so the two values always
 // install atomically.
-func (vt *ValidationTracker) SetTrusted(nodes []consensus.NodeID) {
+func (vt *ValidationTracker) setTrusted(nodes []consensus.NodeID) {
 	vt.mu.Lock()
 	vt.setTrustedLocked(nodes)
 	vt.recheckFinalityLocked()
@@ -21,9 +21,9 @@ func (vt *ValidationTracker) SetTrusted(nodes []consensus.NodeID) {
 	vt.checkAcquired()
 }
 
-// SetQuorum updates the quorum requirement for tests. Production code sets
+// setQuorum updates the quorum requirement for tests. Production code sets
 // quorum together with the trusted set via SetTrustedAndQuorum.
-func (vt *ValidationTracker) SetQuorum(quorum int) {
+func (vt *ValidationTracker) setQuorum(quorum int) {
 	vt.mu.Lock()
 	vt.quorum = quorum
 	vt.recheckFinalityLocked()
@@ -31,10 +31,10 @@ func (vt *ValidationTracker) SetQuorum(quorum int) {
 	vt.drainFinality()
 }
 
-// TrustedSupport returns trusted, non-negative-UNL validators supporting the
+// trustedSupport returns trusted, non-negative-UNL validators supporting the
 // ledger or one of its descendants. It mirrors the old test-facing query;
 // production callers use the finality and preferred-ledger APIs directly.
-func (vt *ValidationTracker) TrustedSupport(ledgerID consensus.LedgerID) int {
+func (vt *ValidationTracker) trustedSupport(ledgerID consensus.LedgerID) int {
 	for attempt := 0; attempt < 2; attempt++ {
 		vt.checkAcquired()
 
@@ -99,8 +99,8 @@ func (vt *ValidationTracker) branchSupportExcludingNegUNLLocked(lgr ledgertrie.L
 	return count
 }
 
-// GetValidationCount returns the count of validations for a ledger.
-func (vt *ValidationTracker) GetValidationCount(ledgerID consensus.LedgerID) int {
+// getValidationCount returns the count of validations for a ledger.
+func (vt *ValidationTracker) getValidationCount(ledgerID consensus.LedgerID) int {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 
@@ -112,16 +112,16 @@ func (vt *ValidationTracker) GetValidationCount(ledgerID consensus.LedgerID) int
 }
 
 // Clear removes all tracked validations.
-// ValidationStats summarizes tracked validations.
-type ValidationStats struct {
+// validationStats summarizes tracked validations.
+type validationStats struct {
 	TotalValidations   int
 	TrustedValidations int
 	ValidatorsActive   int
 	LedgersTracked     int
 }
 
-// GetStats returns current validation statistics.
-func (vt *ValidationTracker) GetStats() ValidationStats {
+// getStats returns current validation statistics.
+func (vt *ValidationTracker) getStats() validationStats {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 
@@ -137,7 +137,7 @@ func (vt *ValidationTracker) GetStats() ValidationStats {
 		}
 	}
 
-	return ValidationStats{
+	return validationStats{
 		TotalValidations:   totalValidations,
 		TrustedValidations: trustedValidations,
 		ValidatorsActive:   len(vt.byNode),

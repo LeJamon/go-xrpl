@@ -27,7 +27,7 @@ func TestParseRelayValidationsPolicy(t *testing.T) {
 		// the parser itself falls back to the rippled default.
 		{"garbage", RelayValidationsAll},
 	} {
-		if got := ParseRelayValidationsPolicy(tc.in); got != tc.want {
+		if got := parseRelayValidationsPolicy(tc.in); got != tc.want {
 			t.Errorf("ParseRelayValidationsPolicy(%q) = %v, want %v", tc.in, got, tc.want)
 		}
 	}

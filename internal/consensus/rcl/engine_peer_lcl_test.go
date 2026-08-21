@@ -185,7 +185,7 @@ func TestEngine_CheckLedger_ValidationMajorityBreaksConsensusIsland(t *testing.T
 		adaptor.trusted[n] = true
 		trustedSet = append(trustedSet, n)
 	}
-	engine.validationTracker.SetTrusted(trustedSet)
+	engine.validationTracker.setTrusted(trustedSet)
 	for _, v := range islandVals {
 		engine.validationTracker.Add(v)
 	}

@@ -243,15 +243,15 @@ func (e *Engine) ProcessVerifiedValidation(
 
 func validationDispositionStatus(status valStatus) consensus.ValidationStatus {
 	switch status {
-	case ValStatusCurrent:
+	case valStatusCurrent:
 		return consensus.ValidationCurrent
-	case ValStatusStale:
+	case valStatusStale:
 		return consensus.ValidationStale
-	case ValStatusBadSeq:
+	case valStatusBadSeq:
 		return consensus.ValidationBadSeq
-	case ValStatusMultiple:
+	case valStatusMultiple:
 		return consensus.ValidationMultiple
-	case ValStatusConflicting:
+	case valStatusConflicting:
 		return consensus.ValidationConflicting
 	default:
 		return consensus.ValidationUntracked

@@ -110,7 +110,7 @@ func NewValidatorIdentity(seed string) (*ValidatorIdentity, error) {
 	return vi, nil
 }
 
-// NewValidatorIdentityFromToken creates a master/ephemeral split
+// newValidatorIdentityFromToken creates a master/ephemeral split
 // identity from a `[validator_token]` config block. The block is the
 // raw multi-line section text (whitespace tolerated).
 //
@@ -124,7 +124,7 @@ func NewValidatorIdentity(seed string) (*ValidatorIdentity, error) {
 //     ephemeral key.
 //  4. Store master, signing, signing-priv, and the wire-format manifest
 //     for broadcast.
-func NewValidatorIdentityFromToken(block string) (*ValidatorIdentity, error) {
+func newValidatorIdentityFromToken(block string) (*ValidatorIdentity, error) {
 	if block == "" {
 		return nil, errNoValidatorKey
 	}
@@ -162,19 +162,19 @@ func NewValidatorIdentityFromToken(block string) (*ValidatorIdentity, error) {
 	return vi, nil
 }
 
-// NewValidatorIdentityFromConfig dispatches to the seed or token
+// newValidatorIdentityFromConfig dispatches to the seed or token
 // constructor based on which field the operator configured. Returns nil
 // when neither is set (observer mode): an empty validator config means a
 // non-validating node.
 //
 // Both configured at once is a fatal misconfiguration; the returned
 // error lets cmd/goxrpl surface it before the consensus engine starts.
-func NewValidatorIdentityFromConfig(seed, token string) (*ValidatorIdentity, error) {
+func newValidatorIdentityFromConfig(seed, token string) (*ValidatorIdentity, error) {
 	if seed != "" && token != "" {
 		return nil, errTokenAndSeed
 	}
 	if token != "" {
-		return NewValidatorIdentityFromToken(token)
+		return newValidatorIdentityFromToken(token)
 	}
 	return NewValidatorIdentity(seed)
 }

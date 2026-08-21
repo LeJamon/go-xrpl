@@ -32,7 +32,7 @@ func TestValidationTrackerIssue1463_ExactHashAndSequenceFinality(t *testing.T) {
 		if status := vt.addStatus(&consensus.Validation{
 			LedgerID: ledger, LedgerSeq: seq, NodeID: node,
 			SignTime: now, SeenTime: now, Full: true,
-		}); status != ValStatusCurrent {
+		}); status != valStatusCurrent {
 			t.Fatalf("validation %x@%d status=%s, want current", node, seq, status)
 		}
 	}
@@ -80,7 +80,7 @@ func TestValidationTrackerIssue1463_TrustQuorumNegativeUNLRecheck(t *testing.T) 
 		if status := vt.addStatus(&consensus.Validation{
 			LedgerID: ledger, LedgerSeq: 7, NodeID: node,
 			SignTime: now, SeenTime: now, Full: true,
-		}); status != ValStatusCurrent {
+		}); status != valStatusCurrent {
 			t.Fatalf("untrusted validation status=%s, want current", status)
 		}
 	}
@@ -124,7 +124,7 @@ func TestValidationTrackerIssue1463_AtomicNegativeUNLTransition(t *testing.T) {
 		if status := vt.addStatus(&consensus.Validation{
 			LedgerID: ledger, LedgerSeq: 8, NodeID: node,
 			SignTime: now, SeenTime: now, Full: true,
-		}); status != ValStatusCurrent {
+		}); status != valStatusCurrent {
 			t.Fatalf("validation status=%s, want current", status)
 		}
 	}
@@ -153,13 +153,13 @@ func TestValidationTrackerIssue1463_ZeroQuorumNeedsTrustedFullEvidence(t *testin
 	if status := vt.addStatus(&consensus.Validation{
 		LedgerID: ledger, LedgerSeq: 8, NodeID: n1,
 		SignTime: now, SeenTime: now, Full: false,
-	}); status != ValStatusCurrent {
+	}); status != valStatusCurrent {
 		t.Fatalf("partial validation status=%s, want current", status)
 	}
 	if status := vt.addStatus(&consensus.Validation{
 		LedgerID: ledger, LedgerSeq: 8, NodeID: n2,
 		SignTime: now, SeenTime: now, Full: true,
-	}); status != ValStatusCurrent {
+	}); status != valStatusCurrent {
 		t.Fatalf("untrusted full validation status=%s, want current", status)
 	}
 	if fires != 0 {
@@ -177,7 +177,7 @@ func TestValidationTrackerIssue1463_LiveGateRecheck(t *testing.T) {
 	ledger := consensus.LedgerID{0xC1}
 	vt := NewValidationTracker(1)
 	vt.SetNow(func() time.Time { return now })
-	vt.SetTrusted([]consensus.NodeID{node})
+	vt.setTrusted([]consensus.NodeID{node})
 	unavailable := true
 	vt.setQuorumUnavailableFunc(func() bool { return unavailable })
 	fired := 0
@@ -186,7 +186,7 @@ func TestValidationTrackerIssue1463_LiveGateRecheck(t *testing.T) {
 	if status := vt.addStatus(&consensus.Validation{
 		LedgerID: ledger, LedgerSeq: 12, NodeID: node,
 		SignTime: now, SeenTime: now, Full: true,
-	}); status != ValStatusCurrent {
+	}); status != valStatusCurrent {
 		t.Fatalf("validation status=%s, want current", status)
 	}
 	if fired != 0 {
@@ -206,13 +206,13 @@ func TestValidationTrackerIssue1463_PendingResolverHonorsLiveGate(t *testing.T) 
 	ledger := consensus.LedgerID{0xC2}
 	vt := NewValidationTracker(1)
 	vt.SetNow(func() time.Time { return now })
-	vt.SetTrusted([]consensus.NodeID{node})
+	vt.setTrusted([]consensus.NodeID{node})
 	unavailable := true
 	vt.setQuorumUnavailableFunc(func() bool { return unavailable })
 	if status := vt.addStatus(&consensus.Validation{
 		LedgerID: ledger, LedgerSeq: 13, NodeID: node,
 		SignTime: now, SeenTime: now, Full: true,
-	}); status != ValStatusCurrent {
+	}); status != valStatusCurrent {
 		t.Fatalf("validation status=%s, want current", status)
 	}
 
@@ -233,7 +233,7 @@ func TestValidationTrackerIssue1463_DemotionCancelsQueuedFinality(t *testing.T) 
 	first, second := consensus.LedgerID{0xD1}, consensus.LedgerID{0xD2}
 	vt := NewValidationTracker(2)
 	vt.SetNow(func() time.Time { return now })
-	vt.SetTrusted([]consensus.NodeID{n1, n2})
+	vt.setTrusted([]consensus.NodeID{n1, n2})
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var mu sync.Mutex
@@ -257,7 +257,7 @@ func TestValidationTrackerIssue1463_DemotionCancelsQueuedFinality(t *testing.T) 
 		if status := vt.addStatus(&consensus.Validation{
 			LedgerID: id, LedgerSeq: seq, NodeID: node,
 			SignTime: signTime, SeenTime: now, Full: true,
-		}); status != ValStatusCurrent {
+		}); status != valStatusCurrent {
 			t.Fatalf("validation (%x,%d,%x) status=%s, want current", id, seq, node, status)
 		}
 	}
@@ -301,13 +301,13 @@ func TestValidationTrackerIssue1463_FinalityNotificationOrder(t *testing.T) {
 	lowA, lowB, high := consensus.LedgerID{0x10}, consensus.LedgerID{0x20}, consensus.LedgerID{0x30}
 	vt := NewValidationTracker(1)
 	vt.SetNow(func() time.Time { return now })
-	vt.SetTrusted([]consensus.NodeID{n1, n2, n3})
+	vt.setTrusted([]consensus.NodeID{n1, n2, n3})
 	add := func(node consensus.NodeID, id consensus.LedgerID, seq uint32) {
 		t.Helper()
 		if status := vt.addStatus(&consensus.Validation{
 			LedgerID: id, LedgerSeq: seq, NodeID: node,
 			SignTime: now, SeenTime: now, Full: true,
-		}); status != ValStatusCurrent {
+		}); status != valStatusCurrent {
 			t.Fatalf("validation (%x,%d) status=%s, want current", id, seq, status)
 		}
 	}
@@ -335,13 +335,13 @@ func TestValidationTrackerIssue1463_TrustedRemovalRearmsEvidence(t *testing.T) {
 	ledger := consensus.LedgerID{0xD3}
 	vt := NewValidationTracker(1)
 	vt.SetNow(func() time.Time { return now })
-	vt.SetTrusted([]consensus.NodeID{node})
+	vt.setTrusted([]consensus.NodeID{node})
 	fires := 0
 	vt.SetFullyValidatedCallback(func(consensus.LedgerID, uint32) { fires++ })
 	if status := vt.addStatus(&consensus.Validation{
 		LedgerID: ledger, LedgerSeq: 23, NodeID: node,
 		SignTime: now, SeenTime: now, Full: true,
-	}); status != ValStatusCurrent {
+	}); status != valStatusCurrent {
 		t.Fatalf("validation status=%s, want current", status)
 	}
 	if fires != 1 {
@@ -363,7 +363,7 @@ func TestValidationTrackerIssue1463_ValidationDeepClone(t *testing.T) {
 	ledger := consensus.LedgerID{0xD}
 	vt := NewValidationTracker(1)
 	vt.SetNow(func() time.Time { return now })
-	vt.SetTrusted([]consensus.NodeID{node})
+	vt.setTrusted([]consensus.NodeID{node})
 
 	var amendment [32]byte
 	amendment[0] = 2
@@ -375,7 +375,7 @@ func TestValidationTrackerIssue1463_ValidationDeepClone(t *testing.T) {
 		SigningData: []byte{3, 4},
 		Raw:         []byte{5, 6},
 	}
-	if status := vt.addStatus(input); status != ValStatusCurrent {
+	if status := vt.addStatus(input); status != valStatusCurrent {
 		t.Fatalf("validation status=%s, want current", status)
 	}
 
@@ -421,14 +421,14 @@ func TestValidationTrackerIssue1463_CurrentTipUsesSigningTime(t *testing.T) {
 	newerID := consensus.LedgerID{0x10}
 	vt := NewValidationTracker(10)
 	vt.SetNow(func() time.Time { return now })
-	vt.SetTrusted([]consensus.NodeID{node})
+	vt.setTrusted([]consensus.NodeID{node})
 
 	old := &consensus.Validation{LedgerID: oldID, LedgerSeq: 10, NodeID: node, SignTime: now, SeenTime: now, Full: true}
-	if status := vt.addStatus(old); status != ValStatusCurrent {
+	if status := vt.addStatus(old); status != valStatusCurrent {
 		t.Fatalf("initial validation status=%s, want current", status)
 	}
 	older := &consensus.Validation{LedgerID: olderID, LedgerSeq: 11, NodeID: node, SignTime: now.Add(-time.Second), SeenTime: now, Full: true}
-	if status := vt.addStatus(older); status != ValStatusStale {
+	if status := vt.addStatus(older); status != valStatusStale {
 		t.Fatalf("older higher-sequence validation status=%s, want stale", status)
 	}
 	if latest := vt.latestValidation(node); latest == nil || latest.LedgerID != oldID || latest.LedgerSeq != 10 {
@@ -439,11 +439,11 @@ func TestValidationTrackerIssue1463_CurrentTipUsesSigningTime(t *testing.T) {
 	}
 
 	equal := &consensus.Validation{LedgerID: consensus.LedgerID{0x11}, LedgerSeq: 12, NodeID: node, SignTime: now, SeenTime: now, Full: true}
-	if status := vt.addStatus(equal); status != ValStatusStale {
+	if status := vt.addStatus(equal); status != valStatusStale {
 		t.Fatalf("equal-sign-time higher-sequence validation status=%s, want stale", status)
 	}
 	newer := &consensus.Validation{LedgerID: newerID, LedgerSeq: 13, NodeID: node, SignTime: now.Add(time.Nanosecond), SeenTime: now, Full: true}
-	if status := vt.addStatus(newer); status != ValStatusCurrent {
+	if status := vt.addStatus(newer); status != valStatusCurrent {
 		t.Fatalf("newer-sign-time validation status=%s, want current", status)
 	}
 	if latest := vt.latestValidation(node); latest == nil || latest.LedgerID != newerID || latest.LedgerSeq != 13 {
@@ -461,7 +461,7 @@ func TestValidationTrackerIssue1463_NegativeUNLPreservesAcquiring(t *testing.T) 
 	node := consensus.NodeID{1}
 	vt := NewValidationTracker(1)
 	vt.SetNow(func() time.Time { return now })
-	vt.SetTrusted([]consensus.NodeID{node})
+	vt.setTrusted([]consensus.NodeID{node})
 	vt.setLedgerAncestryProvider(provider)
 	if !vt.Add(makeTrustedValidation(node, held.ID(), held.Seq(), now)) ||
 		!vt.Add(makeTrustedValidation(node, missing.ID(), missing.Seq(), now)) {

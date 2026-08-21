@@ -28,7 +28,7 @@ func TestFinalityDeferralBlocksConcurrentDrain(t *testing.T) {
 		SeenTime:  now,
 		Full:      true,
 	}, false)
-	require.Equal(t, ValStatusCurrent, status)
+	require.Equal(t, valStatusCurrent, status)
 
 	drainDone := make(chan struct{})
 	go func() {

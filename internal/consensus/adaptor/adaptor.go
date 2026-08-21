@@ -266,10 +266,10 @@ const (
 	RelayValidationsDropUntrusted
 )
 
-// ParseRelayValidationsPolicy maps the [relay_validations] config string
+// parseRelayValidationsPolicy maps the [relay_validations] config string
 // (case-insensitive; "" = default "all") to its policy. Unknown values are
 // rejected by config validation upstream; fall back to the default here.
-func ParseRelayValidationsPolicy(s string) RelayValidationsPolicy {
+func parseRelayValidationsPolicy(s string) RelayValidationsPolicy {
 	switch strings.ToLower(s) {
 	case "trusted":
 		return RelayValidationsTrusted

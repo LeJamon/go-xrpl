@@ -381,11 +381,11 @@ func TestValidationDispositionStatusMappingAndAcquisitionGate(t *testing.T) {
 		input valStatus
 		want  consensus.ValidationStatus
 	}{
-		{ValStatusCurrent, consensus.ValidationCurrent},
-		{ValStatusStale, consensus.ValidationStale},
-		{ValStatusBadSeq, consensus.ValidationBadSeq},
-		{ValStatusMultiple, consensus.ValidationMultiple},
-		{ValStatusConflicting, consensus.ValidationConflicting},
+		{valStatusCurrent, consensus.ValidationCurrent},
+		{valStatusStale, consensus.ValidationStale},
+		{valStatusBadSeq, consensus.ValidationBadSeq},
+		{valStatusMultiple, consensus.ValidationMultiple},
+		{valStatusConflicting, consensus.ValidationConflicting},
 	}
 	for _, test := range tests {
 		got := validationDispositionStatus(test.input)
