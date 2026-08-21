@@ -95,7 +95,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	defer s.mu.Unlock()
 
 	if s.openLedgerView == nil {
-		return nil, ErrNoOpenLedger
+		return nil, svcerr.ErrNoOpenLedger
 	}
 	if rawBlob != nil {
 		if err := tx.BindRawBytes(transaction, rawBlob); err != nil {
@@ -406,7 +406,7 @@ func (s *Service) GetAutofillFee(parsedTx tx.Transaction, unlimited bool, mult, 
 	defer s.mu.RUnlock()
 
 	if s.openLedger == nil {
-		return 0, ErrNoOpenLedger
+		return 0, svcerr.ErrNoOpenLedger
 	}
 
 	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.openLedger)
@@ -476,7 +476,7 @@ func (s *Service) GetAutofillSequence(account string, hasTicketSequence bool) (u
 	defer s.mu.RUnlock()
 
 	if s.openLedger == nil {
-		return 0, ErrNoOpenLedger
+		return 0, svcerr.ErrNoOpenLedger
 	}
 
 	_, accountIDBytes, decodeErr := addresscodec.DecodeClassicAddressToAccountID(account)
@@ -858,7 +858,7 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 	defer s.mu.RUnlock()
 
 	if s.openLedger == nil {
-		return nil, ErrNoOpenLedger
+		return nil, svcerr.ErrNoOpenLedger
 	}
 
 	// Create a snapshot of the open ledger's state map for isolation

@@ -75,7 +75,7 @@ func TestGetTransactionOpenHashMismatchIsOperationalError(t *testing.T) {
 		t.Fatalf("hash-mismatched open leaf collapsed to not found: %v", err)
 	}
 	if !errors.Is(err, svcerr.ErrTxnDataCorrupt) {
-		t.Fatalf("hash-mismatched open leaf error = %v, want ErrTxnDataCorrupt", err)
+		t.Fatalf("hash-mismatched open leaf error = %v, want svcerr.ErrTxnDataCorrupt", err)
 	}
 }
 
@@ -87,7 +87,7 @@ func TestGetTransactionRelayCacheRejectsCorruptData(t *testing.T) {
 
 	_, err := svc.GetTransaction(hash)
 	if !errors.Is(err, svcerr.ErrTxnDataCorrupt) {
-		t.Fatalf("corrupt relay-cache error = %v, want ErrTxnDataCorrupt", err)
+		t.Fatalf("corrupt relay-cache error = %v, want svcerr.ErrTxnDataCorrupt", err)
 	}
 }
 

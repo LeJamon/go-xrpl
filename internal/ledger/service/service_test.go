@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 )
 
 func TestNewValidatesStartupConfiguration(t *testing.T) {
@@ -230,8 +231,8 @@ func TestGetLedgerBySequence(t *testing.T) {
 
 	// Try to get non-existent ledger
 	_, err = svc.GetLedgerBySequence(999)
-	if err != ErrLedgerNotFound {
-		t.Errorf("Expected ErrLedgerNotFound, got %v", err)
+	if err != svcerr.ErrLedgerNotFound {
+		t.Errorf("Expected svcerr.ErrLedgerNotFound, got %v", err)
 	}
 }
 
@@ -272,7 +273,7 @@ func TestGetAdoptedLedgerBySequence(t *testing.T) {
 	if l, err := svc.GetLedgerBySequence(openSeq); err != nil || l == nil {
 		t.Fatalf("GetLedgerBySequence must fall back to the open ledger at seq %d (err=%v)", openSeq, err)
 	}
-	if _, err := svc.AdoptedLedgerBySequence(openSeq); err != ErrLedgerNotFound {
+	if _, err := svc.AdoptedLedgerBySequence(openSeq); err != svcerr.ErrLedgerNotFound {
 		t.Errorf("GetAdoptedLedgerBySequence(%d) must NOT return the open ledger; got %v", openSeq, err)
 	}
 }
@@ -326,8 +327,8 @@ func TestNotStandaloneError(t *testing.T) {
 
 	// AcceptLedger should fail when not in standalone mode
 	_, err = svc.AcceptLedger(context.TODO())
-	if err != ErrNotStandalone {
-		t.Errorf("Expected ErrNotStandalone, got %v", err)
+	if err != svcerr.ErrNotStandalone {
+		t.Errorf("Expected svcerr.ErrNotStandalone, got %v", err)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -30,15 +31,15 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	defer s.historyComponent.mu.Unlock()
 
 	if !s.config.Standalone {
-		return 0, ErrNotStandalone
+		return 0, svcerr.ErrNotStandalone
 	}
 
 	if s.openLedger == nil {
-		return 0, ErrNoOpenLedger
+		return 0, svcerr.ErrNoOpenLedger
 	}
 
 	if s.closedLedger == nil {
-		return 0, ErrNoClosedLedger
+		return 0, svcerr.ErrNoClosedLedger
 	}
 
 	closeTime := explicitCloseTime
@@ -411,7 +412,7 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 	}()
 
 	if s.closedLedger == nil {
-		return ErrNoClosedLedger
+		return svcerr.ErrNoClosedLedger
 	}
 	if parent == nil || !parent.IsClosed() {
 		return ErrPreferredChainSwitch
@@ -538,7 +539,7 @@ func (s *Service) acceptConsensusResult(
 	defer s.historyComponent.mu.Unlock()
 
 	if s.closedLedger == nil {
-		return 0, ErrNoClosedLedger
+		return 0, svcerr.ErrNoClosedLedger
 	}
 
 	parentDiffers := parent != nil && (parent.Sequence() != s.closedLedger.Sequence() || parent.Hash() != s.closedLedger.Hash())
@@ -551,7 +552,7 @@ func (s *Service) acceptConsensusResult(
 	}
 
 	if s.openLedger == nil {
-		return 0, ErrNoOpenLedger
+		return 0, svcerr.ErrNoOpenLedger
 	}
 
 	// ALWAYS rebuild the closed ledger fresh from the parent with exactly the

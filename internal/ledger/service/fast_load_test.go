@@ -16,6 +16,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/keylet"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -1568,6 +1569,6 @@ func TestService_GetLedgerByHashTreatsCorruptDescendantAsNotFound(t *testing.T) 
 	require.NoError(t, err)
 
 	_, err = reader.GetLedgerByHash(wantHash)
-	require.ErrorIs(t, err, ErrLedgerNotFound)
+	require.ErrorIs(t, err, svcerr.ErrLedgerNotFound)
 	require.False(t, errors.Is(err, shamap.ErrInvalidNodeData))
 }

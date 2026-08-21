@@ -33,19 +33,6 @@ import (
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
-// Aliases to the svcerr sentinels for in-package callers; external callers
-// MUST compare against svcerr.* directly.
-var (
-	ErrNotStandalone      = svcerr.ErrNotStandalone
-	ErrNoOpenLedger       = svcerr.ErrNoOpenLedger
-	ErrNoClosedLedger     = svcerr.ErrNoClosedLedger
-	ErrLedgerNotFound     = svcerr.ErrLedgerNotFound
-	ErrInvalidLedgerIndex = svcerr.ErrInvalidLedgerIndex
-	ErrInvalidLedgerHash  = svcerr.ErrInvalidLedgerHash
-	ErrTxnNotFound        = svcerr.ErrTxnNotFound
-	ErrTxnDataCorrupt     = svcerr.ErrTxnDataCorrupt
-)
-
 var (
 	ErrConsensusParentMismatch = errors.New("consensus parent does not match the closed ledger")
 	ErrPreferredChainSwitch    = errors.New("invalid preferred chain switch")
@@ -828,7 +815,7 @@ func (s *Service) acceptOpenLedgerViewLocked(closed *ledger.Ledger, retriableTxs
 func (s *Service) applyConfigLocked() (openledger.ApplyConfig, error) {
 	closed := s.closedLedger
 	if closed == nil {
-		return openledger.ApplyConfig{}, ErrNoClosedLedger
+		return openledger.ApplyConfig{}, svcerr.ErrNoClosedLedger
 	}
 
 	s.configCacheMu.Lock()
@@ -1277,7 +1264,7 @@ func (s *Service) getLedgerBySequence(ctx context.Context, seq uint32) (*ledger.
 		return open, nil
 	}
 	if !complete || s.nodeStore == nil || s.shamapFamily == nil {
-		return nil, ErrLedgerNotFound
+		return nil, svcerr.ErrLedgerNotFound
 	}
 
 	s.historyComponent.mu.RLock()
@@ -1300,12 +1287,12 @@ func (s *Service) getLedgerBySequence(ctx context.Context, seq uint32) (*ledger.
 	loaded, err := s.loadStoredLedgerByHash(ctx, hash)
 	if err != nil {
 		if errors.Is(err, errStoredLedgerUnavailable) {
-			return nil, fmt.Errorf("%w: load ledger %d from nodestore: %v", ErrLedgerNotFound, seq, err)
+			return nil, fmt.Errorf("%w: load ledger %d from nodestore: %v", svcerr.ErrLedgerNotFound, seq, err)
 		}
 		return nil, fmt.Errorf("load ledger %d from nodestore: %w", seq, err)
 	}
 	if loaded == nil || loaded.Sequence() != seq {
-		return nil, ErrLedgerNotFound
+		return nil, svcerr.ErrLedgerNotFound
 	}
 	if err := loaded.SetValidated(); err != nil {
 		return nil, err
@@ -1317,7 +1304,7 @@ func (s *Service) getLedgerBySequence(ctx context.Context, seq uint32) (*ledger.
 		s.completeLedgerHashes[seq] == hash
 	s.completeMu.RUnlock()
 	if !stillComplete {
-		return nil, ErrLedgerNotFound
+		return nil, svcerr.ErrLedgerNotFound
 	}
 
 	s.historyComponent.mu.Lock()
@@ -1335,7 +1322,7 @@ func (s *Service) AdoptedLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
 	if l, ok := s.ledgerHistory[seq]; ok {
 		return l, nil
 	}
-	return nil, ErrLedgerNotFound
+	return nil, svcerr.ErrLedgerNotFound
 }
 
 func (s *Service) GetLedgerByHash(hash [32]byte) (*ledger.Ledger, error) {
@@ -1362,7 +1349,7 @@ func (s *Service) getLedgerByHash(ctx context.Context, hash [32]byte) (*ledger.L
 		s.relationalDB != nil && s.relationalDB.Ledger() != nil
 	s.historyComponent.mu.RUnlock()
 	if !canLoad {
-		return nil, ErrLedgerNotFound
+		return nil, svcerr.ErrLedgerNotFound
 	}
 
 	loaded, err := s.loadPersistedLedgerByHash(ctx, hash)
@@ -1389,26 +1376,26 @@ func (s *Service) getLedgerByHash(ctx context.Context, hash [32]byte) (*ledger.L
 func (s *Service) loadPersistedLedgerByHash(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
 	info, err := s.relationalDB.Ledger().GetLedgerInfoByHash(ctx, relationaldb.Hash(hash))
 	if errors.Is(err, relationaldb.ErrLedgerNotFound) {
-		return nil, ErrLedgerNotFound
+		return nil, svcerr.ErrLedgerNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("load ledger %x metadata: %w", hash[:8], err)
 	}
 	if info == nil {
-		return nil, ErrLedgerNotFound
+		return nil, svcerr.ErrLedgerNotFound
 	}
 	loaded, err := s.loadStoredLedgerByHash(ctx, hash)
 	if err != nil {
 		if errors.Is(err, errStoredLedgerUnavailable) {
-			return nil, fmt.Errorf("%w: load ledger %x from nodestore: %v", ErrLedgerNotFound, hash[:8], err)
+			return nil, fmt.Errorf("%w: load ledger %x from nodestore: %v", svcerr.ErrLedgerNotFound, hash[:8], err)
 		}
 		return nil, fmt.Errorf("load ledger %x from nodestore: %w", hash[:8], err)
 	}
 	if loaded == nil {
-		return nil, ErrLedgerNotFound
+		return nil, svcerr.ErrLedgerNotFound
 	}
 	if !storedHeaderMatchesInfo(loaded.Header(), info) {
-		return nil, fmt.Errorf("%w: ledger %x header does not match persisted metadata", ErrLedgerNotFound, hash[:8])
+		return nil, fmt.Errorf("%w: ledger %x header does not match persisted metadata", svcerr.ErrLedgerNotFound, hash[:8])
 	}
 	return loaded, nil
 }
@@ -1460,7 +1447,7 @@ func (s *Service) persistedLedgerIsValidated(ctx context.Context, hash [32]byte,
 		return false, err
 	}
 	anchor, err := s.loadPersistedLedgerByHash(ctx, anchorHash)
-	if errors.Is(err, ErrLedgerNotFound) {
+	if errors.Is(err, svcerr.ErrLedgerNotFound) {
 		return false, nil
 	}
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -279,8 +280,8 @@ func TestService_SubmitTransaction_BadSignatureIsNotQueryable(t *testing.T) {
 	if result.Result != ter.TemINVALID {
 		t.Fatalf("Result = %s, want temINVALID", result.Result)
 	}
-	if _, err := svc.GetTransaction(hash); !errors.Is(err, service.ErrTxnNotFound) {
-		t.Fatalf("GetTransaction(bad signature) = %v, want ErrTxnNotFound", err)
+	if _, err := svc.GetTransaction(hash); !errors.Is(err, svcerr.ErrTxnNotFound) {
+		t.Fatalf("GetTransaction(bad signature) = %v, want svcerr.ErrTxnNotFound", err)
 	}
 }
 
@@ -358,8 +359,8 @@ func TestService_SubmitTransaction_BatchSignerFailureIsNotHeld(t *testing.T) {
 	if result.Applied {
 		t.Fatal("invalid BatchSigner signature must not apply")
 	}
-	if _, err := svc.GetTransaction(hash); !errors.Is(err, service.ErrTxnNotFound) {
-		t.Fatalf("GetTransaction(bad BatchSigner) = %v, want ErrTxnNotFound", err)
+	if _, err := svc.GetTransaction(hash); !errors.Is(err, svcerr.ErrTxnNotFound) {
+		t.Fatalf("GetTransaction(bad BatchSigner) = %v, want svcerr.ErrTxnNotFound", err)
 	}
 }
 

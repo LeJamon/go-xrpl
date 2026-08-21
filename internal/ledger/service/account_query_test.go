@@ -205,14 +205,14 @@ func TestGetAccountInfo_FieldsAndErrors(t *testing.T) {
 	t.Run("invalid ledger_index", func(t *testing.T) {
 		_, err := svc.GetAccountInfo(context.Background(), addr, "bogus")
 		if !errors.Is(err, svcerr.ErrInvalidLedgerIndex) {
-			t.Fatalf("want ErrInvalidLedgerIndex, got %v", err)
+			t.Fatalf("want svcerr.ErrInvalidLedgerIndex, got %v", err)
 		}
 	})
 
 	t.Run("numeric ledger not found", func(t *testing.T) {
 		_, err := svc.GetAccountInfo(context.Background(), addr, "999999")
-		if !errors.Is(err, ErrLedgerNotFound) {
-			t.Fatalf("want ErrLedgerNotFound, got %v", err)
+		if !errors.Is(err, svcerr.ErrLedgerNotFound) {
+			t.Fatalf("want svcerr.ErrLedgerNotFound, got %v", err)
 		}
 	})
 
