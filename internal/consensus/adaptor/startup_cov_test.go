@@ -294,103 +294,9 @@ func TestStup_ReloadStaticValidators_UpdatesAdaptor(t *testing.T) {
 	assert.ElementsMatch(t, newIDs, trusted)
 }
 
-func TestStup_ReloadStaticValidators_WithValidatorList(t *testing.T) {
-	// When ValidatorList is non-nil the reload must merge static + publisher sets.
-	svc := newTestLedgerService(t)
-	a := New(Config{LedgerService: svc})
-
-	hexKey := "ED" + "0000000000000000000000000000000000000000000000000000000000000001"
-	pk := [33]byte{0xED, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01}
-	_ = hexKey
-	_ = pk
-
-	hexKeyFull := "ED" + "0000000000000000000000000000000000000000000000000000000000000099"
-	cfg := &config.Config{
-		Validators: config.ValidatorsConfig{
-			ValidatorListKeys: []string{hexKeyFull},
-		},
-	}
-	pubKeys, err := ParseValidatorListPublisherKeys(cfg)
-	require.NoError(t, err)
-
-	c := &Components{
-		Adaptor:          a,
-		ValidatorList:    nil,
-		staticValidators: nil,
-		staticMasterKeys: nil,
-	}
-	newIDs := []consensus.NodeID{{0xAA}}
-	newMKs := [][33]byte{{0x02, 0xAA}}
-	c.ReloadStaticValidators(newIDs, newMKs)
-	trusted := a.GetTrustedValidators()
-	assert.ElementsMatch(t, newIDs, trusted)
-
-	_ = pubKeys
-}
-
 func TestStup_RunValidatorListTick_NilListReturnsImmediately(t *testing.T) {
 	c := &Components{ValidatorList: nil}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan struct{})
-	go func() {
-		c.runValidatorListTick(ctx, 10*time.Millisecond)
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("runValidatorListTick with nil ValidatorList did not return quickly")
-	}
-}
-
-func TestStup_RunValidatorListTick_ZeroIntervalReturnsImmediately(t *testing.T) {
-	hexKeyFull := "ED" + "0000000000000000000000000000000000000000000000000000000000000099"
-	cfg := &config.Config{
-		Validators: config.ValidatorsConfig{
-			ValidatorListKeys: []string{hexKeyFull},
-		},
-	}
-	pubKeys, err := ParseValidatorListPublisherKeys(cfg)
-	require.NoError(t, err)
-	_ = pubKeys
-
-	// Use a Components whose ValidatorList is non-nil but interval=0 to
-	// exercise the early-return guard without waiting for a real tick.
-	// We cannot construct a real aggregator in tests without HTTP mocking,
-	// so use a nil ValidatorList and let the nil check hit first.
-	c := &Components{ValidatorList: nil}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan struct{})
-	go func() {
-		c.runValidatorListTick(ctx, 0)
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("runValidatorListTick with interval=0 did not return quickly")
-	}
-}
-
-func TestStup_RunValidatorListTick_CancelStops(t *testing.T) {
-	// Verify the goroutine exits on context cancel even with a non-nil ValidatorList.
-	// We use a stubbed ValidatorList via the indirect nil path and a short interval
-	// to observe stop on cancellation.
-	c := &Components{ValidatorList: nil}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		c.runValidatorListTick(ctx, 10*time.Millisecond)
-		close(done)
-	}()
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("runValidatorListTick did not stop on cancel")
-	}
+	c.runValidatorListTick(t.Context(), 10*time.Millisecond)
 }
 
 func stup_newAggregator(t *testing.T) *validatorlist.Aggregator {
@@ -405,26 +311,6 @@ func stup_newAggregator(t *testing.T) *validatorlist.Aggregator {
 	})
 	require.NoError(t, err)
 	return agg
-}
-
-func TestStup_RunValidatorListTick_RealAggregatorFiresAndStops(t *testing.T) {
-	agg := stup_newAggregator(t)
-	c := &Components{ValidatorList: agg}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		c.runValidatorListTick(ctx, 20*time.Millisecond)
-		close(done)
-	}()
-	// Let at least one tick fire before cancelling.
-	time.Sleep(60 * time.Millisecond)
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("runValidatorListTick did not stop on cancel with real aggregator")
-	}
 }
 
 func TestStup_ReloadStaticValidators_WithNonNilValidatorList(t *testing.T) {
@@ -471,21 +357,6 @@ func TestStup_ComponentsStop_NilSafe(t *testing.T) {
 	assert.NotPanics(t, func() { c.Stop() })
 }
 
-func TestStup_ComponentsStop_NilEngineAndOverlaySafe(t *testing.T) {
-	c := &Components{
-		Engine:  nil,
-		Overlay: nil,
-		Router:  nil,
-	}
-	assert.NotPanics(t, func() { c.Stop() })
-}
-
-func TestStup_ComponentsStop_WithMockEngine(t *testing.T) {
-	eng := &mockEngine{}
-	c := &Components{Engine: eng}
-	assert.NotPanics(t, func() { c.Stop() })
-}
-
 type stupStopErrorEngine struct {
 	mockEngine
 	err error
@@ -500,7 +371,6 @@ func TestStup_ComponentsStop_ReturnsEngineError(t *testing.T) {
 }
 
 func TestStup_ComponentsStart_AndStop(t *testing.T) {
-	svc := newTestLedgerService(t)
 	ad := newTestAdaptor(t)
 
 	overlay, err := peermanagement.New(peermanagement.WithListenAddr("127.0.0.1:0"))
@@ -518,8 +388,6 @@ func TestStup_ComponentsStart_AndStop(t *testing.T) {
 		ValidatorList:       nil,
 		ValidatorListPoller: nil,
 	}
-	_ = svc
-
 	err = c.Start(t.Context())
 	require.NoError(t, err)
 

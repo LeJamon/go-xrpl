@@ -78,14 +78,6 @@ func NewLedgerProvider(svc *service.Service) *LedgerProvider {
 	}
 }
 
-// SetFetchPackGuards installs the load and validated-age signals used by the
-// fetch-pack admission guard. It is primarily useful for embedding services
-// whose load tracker is not the standard ledger Service tracker.
-func (p *LedgerProvider) SetFetchPackGuards(loadedLocal func() bool, validatedAge func() time.Duration) {
-	p.loadedLocal = loadedLocal
-	p.validatedAge = validatedAge
-}
-
 // SetMinimumOnlineFloor installs the online-delete retention floor. Once set,
 // the provider refuses to serve ledgers below it (mirroring rippled, where a
 // peer cannot serve what online-delete already removed). A nil floor leaves

@@ -185,9 +185,9 @@ func TestRouter_ManifestSnapshotSelectsBeforeShuffleAndInvalidatesOnTrustChange(
 		}
 		return manifest.Capped
 	})
-	router.SetManifestShuffle(func(selected [][]byte) {
+	router.manifestShuffle = func(selected [][]byte) {
 		sort.Slice(selected, func(i, j int) bool { return bytes.Compare(selected[i], selected[j]) > 0 })
-	})
+	}
 
 	first := router.cachedManifestFrames()
 	require.Len(t, first, 1)
@@ -215,7 +215,7 @@ func TestRouter_ManifestSnapshotUsesMultipleBoundedFrames(t *testing.T) {
 	router.SetManifestClassifier(func([33]byte) manifest.ManifestRateLimitCapPolicy {
 		return manifest.Capped
 	})
-	router.SetManifestShuffle(func([][]byte) {})
+	router.manifestShuffle = func([][]byte) {}
 
 	frames := router.cachedManifestFrames()
 	require.Len(t, frames, 2)
@@ -243,9 +243,9 @@ func TestRouter_ManifestSuppressionRecordsOnlyEmittedSelection(t *testing.T) {
 		}
 		return manifest.Capped
 	})
-	router.SetManifestShuffle(func(selected [][]byte) {
+	router.manifestShuffle = func(selected [][]byte) {
 		sort.Slice(selected, func(i, j int) bool { return bytes.Compare(selected[i], selected[j]) < 0 })
-	})
+	}
 	first, err := manifest.Deserialize(wires[0])
 	require.NoError(t, err)
 	second, err := manifest.Deserialize(wires[1])

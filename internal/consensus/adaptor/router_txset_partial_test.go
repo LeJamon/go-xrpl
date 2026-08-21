@@ -2,11 +2,9 @@ package adaptor
 
 import (
 	"bytes"
-	"log/slog"
 	"sort"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/stretchr/testify/assert"
@@ -268,8 +266,3 @@ func withTxSetReplyCaps(soft, hard int, fn func() []message.LedgerNode) []messag
 	defer setTxSetReplyCapsForTest(origSoft, origHard)
 	return fn()
 }
-
-// silence the unused-import linter when running -short tests that
-// don't reach the slog.Default() path.
-var _ = slog.Default
-var _ peermanagement.PeerID = 0
