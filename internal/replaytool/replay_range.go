@@ -118,13 +118,13 @@ Database configuration is read from environment variables:
 - POSTGRES_PASSWORD (default: postgres)
 
 Example:
-    xrpld replay-range --from 32750 --to 32800
-    xrpld replay-range --from 32750 --to 32800 -v
-    xrpld replay-range --from 32750 --to 32800 --dump-dir ./debug
-    xrpld replay-range --from 3100000 --to 3278999 --legacy-paychan-owner-dir-gate
-    xrpld replay-range --from 3275000 --to 3285000 --legacy-paychan-owner-dir-gate --paychan-owner-dir-first-fixed-ledger 3280000
-    xrpld replay-range --from 99226370 --to 99236370 --checkpoint-dir ./ckpt
-    xrpld replay-range --from 99226370 --to 99236370 --checkpoint-dir ./ckpt --resume-from 99230000`,
+    goxrpl replay-range --from 32750 --to 32800
+    goxrpl replay-range --from 32750 --to 32800 -v
+    goxrpl replay-range --from 32750 --to 32800 --dump-dir ./debug
+    goxrpl replay-range --from 3100000 --to 3278999 --legacy-paychan-owner-dir-gate
+    goxrpl replay-range --from 3275000 --to 3285000 --legacy-paychan-owner-dir-gate --paychan-owner-dir-first-fixed-ledger 3280000
+    goxrpl replay-range --from 99226370 --to 99236370 --checkpoint-dir ./ckpt
+    goxrpl replay-range --from 99226370 --to 99236370 --checkpoint-dir ./ckpt --resume-from 99230000`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			r.out = cmd.OutOrStdout()
 			return run(cmd.Context(), r)
@@ -749,7 +749,7 @@ func (r *replayRangeRunner) printRangeFailure(ledgerIndex uint32, result *blockR
 	}
 
 	fmt.Fprintln(r.out)
-	fmt.Fprintln(r.out, "Use 'xrpld compare' to analyze state differences.")
+	fmt.Fprintln(r.out, "Use 'goxrpl compare' to analyze state differences.")
 	fmt.Fprintln(r.out, "================================================================================")
 }
 

@@ -94,7 +94,7 @@ var errStopBookWalk = errors.New("stop book walk")
 // withProofs requests per-offer SHAMap proofs (leaf-to-root, hex-encoded) on
 // each BookOffer.Proof. Rippled accepts proof=true and forwards bProof to
 // getBookPage but never emits the proof (NetworkOPs.cpp:4430-4628 declares
-// the parameter then ignores it); goxrpld emits real proofs so clients can
+// the parameter then ignores it); goxrpl emits real proofs so clients can
 // independently verify each offer against the parent ledger's account_hash.
 //
 // marker enables paginated walks: pass the empty string for an initial

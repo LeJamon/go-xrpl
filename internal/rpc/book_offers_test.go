@@ -1732,7 +1732,7 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 // TestBookOffersTakerXAddressRejected nails down that the `taker` field rejects
 // X-addresses. rippled BookOffers.cpp:170 calls `parseBase58<AccountID>(taker)`
 // which only accepts classic addresses (X-address parsing is a separate code
-// path it never invokes). goxrpld mirrors this via
+// path it never invokes). goxrpl mirrors this via
 // DecodeClassicAddressToAccountID, which fails on the "X" / "T" prefix.
 // Pinning this behaviour with a real X-address row prevents a regression that
 // might silently accept X-addresses and resolve them to their classic form —

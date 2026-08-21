@@ -18,7 +18,7 @@ import (
 )
 
 func TestRequireConfigStandaloneSkipsValidators(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "xrpld.toml")
+	configPath := filepath.Join(t.TempDir(), "goxrpl.toml")
 	require.NoError(t, os.WriteFile(configPath, []byte(generateConfigContent("main")), 0o600))
 
 	app := application{
@@ -52,7 +52,8 @@ func TestNewRootCommandHasIsolatedState(t *testing.T) {
 	require.NoError(t, err)
 	outputPath, err := generate.Flags().GetString("output")
 	require.NoError(t, err)
-	assert.Equal(t, "xrpld.toml", outputPath)
+	assert.Equal(t, "goxrpl.toml", outputPath)
+	assert.Equal(t, "goxrpl", second.Use)
 	rpc, _, err := second.Find([]string{"rpc"})
 	require.NoError(t, err)
 	allowInsecure, err := rpc.PersistentFlags().GetBool(insecureRPCFlag)

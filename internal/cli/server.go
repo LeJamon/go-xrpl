@@ -70,7 +70,7 @@ func (a *application) newServerCommand(options *serverOptions) *cobra.Command {
 - All XRPL protocol methods
 
 Requires --conf flag to specify the configuration file.
-Use 'xrpld generate-config' to create an initial configuration file.
+Use 'goxrpl generate-config' to create an initial configuration file.
 
 GOXRPL_PPROF and GOXRPL_METRICS enable loopback diagnostic listeners. A
 configured listener that cannot bind aborts startup. Exposing pprof on a
@@ -110,8 +110,8 @@ func (a *application) runServer(cmd *cobra.Command, options *serverOptions) (res
 	if err != nil {
 		// Fold the guidance into the error so Execute() prints it once. A bare
 		// pre-print here would duplicate the message Execute() emits.
-		return fmt.Errorf("%w\n  Use 'xrpld generate-config' to create an initial configuration file."+
-			"\n  Example: xrpld server --conf /path/to/xrpld.toml", err)
+		return fmt.Errorf("%w\n  Use 'goxrpl generate-config' to create an initial configuration file."+
+			"\n  Example: goxrpl server --conf /path/to/goxrpl.toml", err)
 	}
 	if cause := context.Cause(runCtx); cause != nil {
 		return cause

@@ -1824,7 +1824,7 @@ Expected: No new failures introduced.
 
 - [ ] **Step 3: Run build**
 
-Run: `go build -o /dev/null ./goXRPL/cmd/xrpld`
+Run: `go build -o /dev/null ./goXRPL/cmd/goxrpl`
 Expected: Clean build.
 
 - [ ] **Step 4: Verify conformance test summary (if applicable)**

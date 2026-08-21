@@ -68,12 +68,10 @@ func newRootCommand(streams IOStreams, deps commandDependencies) *cobra.Command 
 	app := &application{deps: deps}
 	defaultServerOptions := &serverOptions{}
 	root := &cobra.Command{
-		Use:   "xrpld",
-		Short: "go-xrpl - XRPL Node Implementation in Go",
-		Long: `go-xrpl is an idiomatic Go implementation of an XRPL (XRP Ledger) client
-with concurrent processing capabilities. This is NOT a direct translation of the
-C++ rippled implementation but rather a native Go implementation that follows
-Go conventions and patterns while maintaining protocol compatibility.`,
+		Use:   "goxrpl",
+		Short: "Go implementation of the XRP Ledger protocol",
+		Long: `goxrpl is an XRPL client written in Go. It provides a node daemon,
+protocol libraries, and developer tools for working with XRP Ledger data.`,
 		Version:       version.Version,
 		Args:          cobra.NoArgs,
 		RunE:          app.serverRunner(defaultServerOptions),

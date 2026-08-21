@@ -54,11 +54,11 @@ Shows:
 Exits non-zero when any difference is found.
 
 Examples:
-    xrpld compare state1.json state2.json
-    xrpld compare fixtures/ledger_100/state.json fixtures/ledger_101/state.json
-    xrpld compare debug/post_state.json expected_state.json --decoded
-    xrpld compare file1.json file2.json --filter AccountRoot
-    xrpld compare file1.json file2.json --all`,
+    goxrpl compare state1.json state2.json
+    goxrpl compare fixtures/ledger_100/state.json fixtures/ledger_101/state.json
+    goxrpl compare debug/post_state.json expected_state.json --decoded
+    goxrpl compare file1.json file2.json --filter AccountRoot
+    goxrpl compare file1.json file2.json --all`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runCompare(cmd, args, options)

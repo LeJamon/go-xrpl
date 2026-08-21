@@ -1,146 +1,166 @@
 # go-xrpl
 
+Go implementation of the [XRP Ledger](https://xrpl.org/) protocol.
+
+[![API Reference](https://pkg.go.dev/badge/github.com/LeJamon/go-xrpl.svg)](https://pkg.go.dev/github.com/LeJamon/go-xrpl)
 [![Go Report Card](https://goreportcard.com/badge/github.com/LeJamon/go-xrpl)](https://goreportcard.com/report/github.com/LeJamon/go-xrpl)
+[![CI](https://github.com/LeJamon/go-xrpl/actions/workflows/ci.yml/badge.svg)](https://github.com/LeJamon/go-xrpl/actions/workflows/ci.yml)
 
-An idiomatic Go implementation of an [XRP Ledger](https://xrpl.org/) node.
+go-xrpl is an XRPL client written in Go. It provides the `goxrpl` node daemon,
+an importable set of protocol libraries, and developer tools for working with
+ledger data. The client can participate in the peer network, process
+transactions, maintain ledger state, take part in consensus, and expose
+JSON-RPC, WebSocket, and optional gRPC services.
 
-go-xrpl is not a line-by-line port of [rippled](https://github.com/XRPLF/rippled) (the C++ reference implementation). It is a native Go implementation that follows Go conventions and concurrency patterns while maintaining full protocol compatibility with the XRP Ledger network. rippled serves as the de facto specification — there is no formal XRPL spec — so behavioral parity with rippled is the correctness bar.
+Protocol compatibility is current through **rippled v3.3.0**. go-xrpl has its
+own architecture and follows Go conventions.
 
-> **Status: actively developed, building in public.** Core transaction processing, ledger state management, and RPC are functional. See [Current Status](#current-status) for details.
+> [!IMPORTANT]
+> go-xrpl is under active development. Review the
+> [operator guide](docs/operating.md) and current generated capability catalogs
+> before deploying it in production.
 
-## Getting Started
+## Building from source
 
-### Prerequisites
+Building `goxrpl` requires Go 1.24 or later, a C compiler, OpenSSL 3,
+libsecp256k1, and `pkg-config`. The examples use
+[`just`](https://just.systems/) as the task runner, with a raw Go command shown
+for environments where it is not installed.
 
-- Go 1.24+
-- `just`
-- PostgreSQL (optional, for relational storage)
+On macOS:
 
-### Build
-
-```bash
-just build
-```
-
-### Run
-
-```bash
-# Start the node
-../tmp/main
-
-# Or with hot reload during development
-cd cmd/xrpld && air
-```
-
-The server exposes:
-- `http://localhost:8080/` — JSON-RPC 2.0
-- `ws://localhost:8080/ws` — WebSocket subscriptions
-- `http://localhost:8080/health` — Health check
-
-### Test
-
-```bash
-# All tests
-go test ./...
-
-# Specific transaction type
-go test ./internal/tx/offer/...
-
-# Specific test suite
-go test ./internal/testing/amm/...
-
-# Single test
-go test ./internal/testing/offer/... -run TestOfferCreateValidation
-
-# Conformance summary
-./scripts/conformance-summary.sh
-./scripts/conformance-summary.sh --failing
-```
-
-## Building
-
-`goxrpl` uses CGO for two subsystems — **OpenSSL** (peer TLS handshake) and
-**libsecp256k1** (hot-path ECDSA verification, with a pure-Go fallback under
-`CGO_ENABLED=0`). Install the development headers, then build:
-
-```bash
-# macOS
-brew install openssl@3 secp256k1 pkg-config
+```shell
+brew install openssl@3 secp256k1 pkg-config just
 export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix secp256k1)/lib/pkgconfig"
-# Debian/Ubuntu: sudo apt install -y libssl-dev libsecp256k1-dev pkg-config
-
-just build
 ```
 
-See **[docs/operating.md](docs/operating.md)** for static/Alpine builds, the
-`CGO_ENABLED=0` path, the full `xrpld.toml` configuration reference, and running a
-node.
+On Debian or Ubuntu:
 
-## Architecture
+```shell
+sudo apt install -y build-essential libssl-dev libsecp256k1-dev pkg-config
+```
 
-go-xrpl is organized into importable public packages (codec, crypto, keylet,
-shamap, ledger entries, storage, …) and internal subsystems (the transaction
-engine, ledger lifecycle, consensus, RPC, peer networking). Every transaction
-flows through the same four-stage pipeline — **Validate → Preflight → Preclaim →
-Apply** — orchestrated by `internal/tx/engine.go`; types self-register via
-`init()` + `tx.Register()`.
+Build the node from the repository root:
 
-See **[docs/architecture.md](docs/architecture.md)** for the full package map,
-the pipeline in detail, the ledger close flow, the consensus split (`rcl` real
-vs `csf` simulation), and storage layering. The per-package API reference is on
-[pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/go-xrpl).
+```shell
+just build
 
-## Current Status
+# Without just
+go build -o ../tmp/goxrpl ./cmd/goxrpl
+```
 
-### What works
+The binary is written to `../tmp/goxrpl`. To compile every package without
+producing the node binary, run `just build-all`.
 
-The client currently targets **standalone mode** (single-node, no network peers), with **rippled v2.6.2** as the first release target.
+The daemon requires CGO. Its peer TLS handshake and production cryptographic
+verification paths depend on the OpenSSL and libsecp256k1 C shims.
 
-- **24 transaction families (66 transaction types)** — Full pipeline (validate through apply) with behavioral parity to rippled
-- **70+ RPC methods** — JSON-RPC 2.0 and WebSocket interfaces
-- **Ledger state** — SHAMap-backed state tree with Pebble storage
-- **Pathfinding** — DFS-based path discovery matching rippled's algorithm
-- **Codec** — Full binary serialization/deserialization
-- **Cryptography** — ED25519 and secp256k1 signing/verification
-- **34 test suites** — Conformance tests validating behavior against rippled
+## Executable
 
-### What's in progress
+The repository builds one executable, `goxrpl`, with the following primary
+commands:
 
-- **Consensus** — CSF and RCL implementations exist but are not yet tested
-- Peer-to-peer networking
-- Full ledger sync / history
-- WebSocket `path_find` subscriptions
-- Admin authentication
+| Command | Description |
+|---------|-------------|
+| `goxrpl server` | Run an XRPL node. This is also the default command. |
+| `goxrpl generate-config` | Generate a complete configuration for Mainnet, Testnet, or Devnet. |
+| `goxrpl rpc` | Send JSON-RPC requests to a running node. |
+| `goxrpl replay` | Replay ledger fixtures for deterministic state comparison. |
+| `goxrpl replay-range` | Replay a range of ledgers. |
+| `goxrpl compare` | Compare two ledger-state dumps. |
+| `goxrpl version` | Print version and build information. |
 
-## Design Decisions
+Run `../tmp/goxrpl --help` or `../tmp/goxrpl <command> --help` for the complete
+command-line reference.
 
-**Why Go?** Go's concurrency model (goroutines, channels) is a natural fit for a blockchain node that juggles peer connections, transaction processing, consensus rounds, and RPC serving concurrently. The language's simplicity and strong standard library reduce the surface area for bugs in critical financial infrastructure.
+## Running a node
 
-**Why not a direct port?** rippled's C++ idioms (templates, RAII, complex inheritance hierarchies) don't translate well to Go. Instead, go-xrpl uses Go interfaces, composition, and table-driven designs while preserving the same protocol semantics. The result is more readable and maintainable while remaining behaviorally equivalent.
+Generate a configuration first:
 
-**rippled as spec.** Every transaction type, ledger entry, and edge case is validated against rippled's behavior. The local `rippled/` source tree is the reference for any ambiguity.
+```shell
+../tmp/goxrpl generate-config --network main --output goxrpl.toml
+```
+
+Start a networked node and acquire its initial ledger from peers:
+
+```shell
+../tmp/goxrpl server --conf goxrpl.toml --net
+```
+
+For a local standalone node instead:
+
+```shell
+../tmp/goxrpl server --conf goxrpl.toml --standalone --start
+```
+
+The configuration controls peer discovery, validation, storage, logging, and
+the listening addresses for JSON-RPC, WebSocket, gRPC, and peer traffic. See the
+[operator guide](docs/operating.md) for startup modes, endpoint security,
+storage backends, validator configuration, and the full configuration reference.
+
+Accurate host time is required for peer connections. Run a synchronized system
+time service before joining a network.
+
+## Go packages
+
+go-xrpl also exposes reusable Go packages for applications and tooling:
+
+- `amendment` — amendment registry and rules
+- `codec` — XRPL address and binary encoding
+- `crypto` — Ed25519, secp256k1, and protocol hashing
+- `drops` — XRP amount handling
+- `keylet` — ledger key derivation
+- `ledger/entry` — serialized ledger entry types
+- `protocol` — protocol constants and primitives
+- `shamap` — authenticated ledger state maps
+- `storage` — node and relational storage backends
+
+Internal node services include transaction execution, the transaction queue,
+ledger acquisition and lifecycle, consensus, peer networking, JSON-RPC,
+WebSocket subscriptions, and gRPC. API documentation for public packages is
+available on [pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/go-xrpl).
+
+## Testing
+
+The `justfile` groups local checks in the same way as CI:
+
+```shell
+just test             # all Go tests
+just test-integration # transaction conformance suites
+just test-tx          # transaction engine and handlers
+just test-core        # ledger, consensus, RPC, queue, and peer subsystems
+just test-libs        # public libraries and storage
+just vet
+just lint
+```
+
+To inspect the conformance suite:
+
+```shell
+just conformance
+just conformance --failing
+```
 
 ## Documentation
 
-| Doc | For |
-|-----|-----|
-| [pkg.go.dev/github.com/LeJamon/go-xrpl](https://pkg.go.dev/github.com/LeJamon/go-xrpl) | Library consumers — full API reference |
-| [docs/architecture.md](docs/architecture.md) | How the node is structured and how transactions flow |
-| [docs/operating.md](docs/operating.md) | Node operators — building, running, and the `xrpld.toml` reference |
-| [docs/conformance.md](docs/conformance.md) | How rippled-parity is verified and the conformance suite |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Contributors — the implement-against-rippled workflow |
-
-The [docs/](docs/) directory also carries generated catalogs (RPC methods,
-supported transactions, amendments, conformance status).
+| Document | Audience |
+|----------|----------|
+| [Architecture](docs/architecture.md) | Client design, transaction flow, ledger lifecycle, consensus, and storage |
+| [Operating a node](docs/operating.md) | Build, configuration, startup, networking, validation, and security |
+| [Conformance](docs/conformance.md) | Protocol compatibility methodology and test suite |
+| [RPC methods](docs/rpc-methods.md) | Implemented RPC API catalog |
+| [Transactions](docs/supported-transactions.md) | Supported transaction types |
+| [Amendments](docs/amendments.md) | Amendment support and voting defaults |
+| [Ledger entries](docs/ledger-entries.md) | Supported ledger object types |
+| [Contributing](CONTRIBUTING.md) | Development workflow and project conventions |
 
 ## Contributing
 
-Contributions are welcome — most work means porting a piece of rippled behavior
-into idiomatic Go while preserving exact protocol semantics. See
-**[CONTRIBUTING.md](CONTRIBUTING.md)** for the workflow, the rippled reference
-locations, the test layout, and the build/test/lint commands. When in doubt about
-expected behavior, rippled is the source of truth.
+Contributions are welcome. Changes to protocol-visible behavior must preserve
+XRPL compatibility, while implementation choices should remain idiomatic Go.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, test
+layout, and review requirements.
 
 ## License
 
-ISC License — see [LICENSE](LICENSE) for details.
+go-xrpl is licensed under the [ISC License](LICENSE).
