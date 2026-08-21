@@ -485,7 +485,7 @@ func TestSubLedgerWireMatrix(t *testing.T) {
 								validatedLedgersPresent: validatedLedgersPresent,
 								networkID:               networkID,
 							})
-							ack := ws.buildSubscribeAck(&types.RpcContext{}, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}})
+							ack := testSubscribeAck(ws, &types.RpcContext{}, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}})
 							got, err := json.Marshal(ack)
 							require.NoError(t, err)
 
@@ -527,7 +527,7 @@ func TestSubLedgerWireMatrixWithoutValidatedLedger(t *testing.T) {
 							validatedLedgersPresent: validatedLedgersPresent,
 							networkID:               networkID,
 						})
-						ack := ws.buildSubscribeAck(&types.RpcContext{}, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}})
+						ack := testSubscribeAck(ws, &types.RpcContext{}, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}})
 						got, err := json.Marshal(ack)
 						require.NoError(t, err)
 
@@ -709,7 +709,7 @@ func TestRPCSub_BoundsGlobalAndPerPrincipal(t *testing.T) {
 	ws.urlSubs.mu.Lock()
 	assert.Len(t, ws.urlSubs.subs, 1)
 	ws.urlSubs.mu.Unlock()
-	assert.Equal(t, uint64(1), ws.urlSubs.metricsSnapshot().CapacityRejects)
+	assert.Equal(t, uint64(1), ws.urlSubs.metrics.snapshot().CapacityRejects)
 
 	_, rpcErr = unsubscribeURL(t, services, `{"url":"`+first.srv.URL+`","streams":["ledger"]}`)
 	require.Nil(t, rpcErr)
@@ -926,7 +926,7 @@ func TestRPCSub_TerminalEntryCannotBeReusedBeforeAsyncRetirement(t *testing.T) {
 	assert.Empty(t, ws.urlSubs.principalWorkers)
 	assert.Zero(t, ws.urlSubs.workers)
 	assert.Zero(t, ws.subscriptionManager.Metrics().Connections)
-	assert.Equal(t, uint64(1), ws.urlSubs.metricsSnapshot().CapacityRejects)
+	assert.Equal(t, uint64(1), ws.urlSubs.metrics.snapshot().CapacityRejects)
 }
 
 func TestRPCSub_PrincipalWorkerCapDuringRetirement(t *testing.T) {
@@ -1120,7 +1120,7 @@ func TestRPCSub_ProductionClientTreatsRedirectAsFailure(t *testing.T) {
 		t.Fatal("timed out waiting for production URL client request")
 	}
 	assert.Eventually(t, func() bool {
-		return ws.urlSubs.metricsSnapshot().DeliveryFailures == 1
+		return ws.urlSubs.metrics.snapshot().DeliveryFailures == 1
 	}, time.Second, time.Millisecond)
 	select {
 	case <-targetHits:

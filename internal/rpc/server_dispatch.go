@@ -139,7 +139,7 @@ func dispatchMethod(
 	if rpcErr := admitMethod(manager, ctx, method, resolution, adminGate, true, log); rpcErr != nil {
 		return nil, rpcErr
 	}
-	return dispatchResolvedMethod(manager, services, ctx, method, params, resolution, log)
+	return dispatchResolvedMethod(services, ctx, method, params, resolution, log)
 }
 func admitMethod(
 	manager *resource.Manager,
@@ -157,13 +157,12 @@ func admitMethod(
 	}
 	if resolution.resolved && resolution.handler.RequiredRole() == types.RoleAdmin && ctx.Role != types.RoleAdmin {
 		rpcErr := adminGate(method)
-		chargeLoad(manager, ctx, method, resource.FeeMalformedRPC(), log)
+		chargeLoad(ctx, method, resource.FeeMalformedRPC(), log)
 		return rpcErr
 	}
 	return nil
 }
 func dispatchResolvedMethod(
-	manager *resource.Manager,
 	services *types.ServiceGraph,
 	ctx *types.RpcContext,
 	method string,
@@ -175,18 +174,18 @@ func dispatchResolvedMethod(
 	ctx.LoadWarning = false
 
 	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
-		finalizeLoad(manager, ctx, method, resource.FeeReferenceRPC(), log)
+		chargeLoad(ctx, method, resource.FeeReferenceRPC(), log)
 		return nil, rpcErr
 	}
 
 	if !resolution.resolved {
 		rpcErr := rpcerrors.RpcErrorMethodNotFound()
-		finalizeLoad(manager, ctx, method, resource.FeeReferenceRPC(), log)
+		chargeLoad(ctx, method, resource.FeeReferenceRPC(), log)
 		return nil, rpcErr
 	}
 
 	if rpcErr := conditionMet(resolution.handler.RequiredCondition(), ctx); rpcErr != nil {
-		finalizeLoad(manager, ctx, method, resource.FeeReferenceRPC(), log)
+		chargeLoad(ctx, method, resource.FeeReferenceRPC(), log)
 		return nil, rpcErr
 	}
 
@@ -201,7 +200,7 @@ func dispatchResolvedMethod(
 	if recovered && fee == resource.FeeReferenceRPC() {
 		fee = resource.FeeExceptionRPC()
 	}
-	finalizeLoad(manager, ctx, method, fee, log)
+	chargeLoad(ctx, method, fee, log)
 	return result, rpcErr
 }
 func startRPCDiagnostics(services *types.ServiceGraph, method string) func(bool) {
@@ -426,7 +425,7 @@ func gateLoad(manager *resource.Manager, ctx *types.RpcContext, method string, l
 	ctx.ResourceAdmission = admission
 	return nil
 }
-func chargeLoad(_ *resource.Manager, ctx *types.RpcContext, method string, fee resource.Charge, log xrpllog.Logger) {
+func chargeLoad(ctx *types.RpcContext, method string, fee resource.Charge, log xrpllog.Logger) {
 	if ctx == nil || ctx.ResourceAdmission == nil {
 		return
 	}
@@ -441,10 +440,6 @@ func chargeLoad(_ *resource.Manager, ctx *types.RpcContext, method string, fee r
 			"client", ctx.ClientIP, "method", method, "balance", completion.Balance)
 	}
 }
-func finalizeLoad(manager *resource.Manager, ctx *types.RpcContext, method string, fee resource.Charge, log xrpllog.Logger) {
-	chargeLoad(manager, ctx, method, fee, log)
-}
-
 func rpcCharge(cost uint32) resource.Charge {
 	switch int(cost) {
 	case resource.FeeReferenceRPC().Cost():

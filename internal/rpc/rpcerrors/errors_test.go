@@ -157,7 +157,6 @@ func TestErrorConstructorsTokenCodePairs(t *testing.T) {
 		{RpcErrorNoPermission("m"), "noPermission", 6},
 		{RpcErrorForbidden("m"), "forbidden", 3},
 		{RpcErrorTooBusy(), "tooBusy", 9},
-		{RpcErrorSlowDown("x"), "slowDown", 10},
 		{RpcErrorNotEnabled(""), "notEnabled", 12},
 		{RpcErrorNotSupported(""), "notSupported", 75},
 		{RpcErrorNoEvents(""), "noEvents", 7},

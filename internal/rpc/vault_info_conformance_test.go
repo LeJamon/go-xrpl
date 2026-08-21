@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
@@ -174,11 +175,11 @@ func TestVaultInfoProjectsSharesFromResolvedLedger(t *testing.T) {
 
 	vault, ok := response["vault"].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, handlers.FormatHash(vaultKey[:]), vault["index"])
+	assert.Equal(t, strings.ToUpper(hex.EncodeToString(vaultKey[:])), vault["index"])
 	shares, ok := vault["shares"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "10", shares["OutstandingAmount"])
-	assert.Equal(t, handlers.FormatHash(issuanceKey[:]), shares["index"])
+	assert.Equal(t, strings.ToUpper(hex.EncodeToString(issuanceKey[:])), shares["index"])
 	assert.Equal(t, vaultShareMPTID, shares["mpt_issuance_id"])
 	assert.NotContains(t, response, "shares")
 	require.Len(t, mock.requests, 2)

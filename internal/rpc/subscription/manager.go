@@ -13,7 +13,7 @@ type Manager struct {
 	streamIndex               map[types.SubscriptionType]map[*connectionRecord]struct{}
 	accountIndex              map[types.SubscriptionType]map[string]map[*connectionRecord]struct{}
 	bookIndex                 map[book]map[*connectionRecord]struct{}
-	limits                    Limits
+	limits                    limits
 	items                     int
 	requestLimitRejections    uint64
 	connectionLimitRejections uint64
@@ -29,7 +29,7 @@ func NewManager() *Manager {
 	return newManager(defaultLimits())
 }
 
-func newManager(limits Limits) *Manager {
+func newManager(limits limits) *Manager {
 	return &Manager{
 		connections:  make(map[string]*connectionRecord),
 		streamIndex:  make(map[types.SubscriptionType]map[*connectionRecord]struct{}),

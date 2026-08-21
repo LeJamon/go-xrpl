@@ -156,10 +156,6 @@ func NewURLSubscriptionService(manager *subscription.Manager, services *types.Se
 	return newURLSubscriptionRegistry(manager, services, ledgerInfoProvider)
 }
 
-func (r *urlSubscriptionRegistry) metricsSnapshot() rpcSubMetricsSnapshot {
-	return r.metrics.snapshot()
-}
-
 // Subscribe finds or creates the url's subscriber, applies the requested
 // streams/accounts/books, and returns the subscribe ack.
 // Mirrors doSubscribe's URL branch for credential reuse: on an existing

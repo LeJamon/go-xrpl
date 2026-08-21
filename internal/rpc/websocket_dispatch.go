@@ -67,7 +67,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *websocketConnection, message []
 	loadCtx.ApiVersion = apiVersion
 	versionCtx := loadCtx
 	if rpcErr := validateApiVersion(versionCtx); rpcErr != nil {
-		chargeLoad(ws.resourceManager, versionCtx, "", resource.FeeMalformedRPC(), wsLog())
+		chargeLoad(versionCtx, "", resource.FeeMalformedRPC(), wsLog())
 		ws.sendErrorResponse(wsConn, rpcErr, id, nil, requestEcho)
 		return
 	}
@@ -78,7 +78,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *websocketConnection, message []
 	// feeMalformedRPC (ServerHandler.cpp:446-468).
 	command, ok := resolveWSCommand(cmdMap)
 	if !ok {
-		chargeLoad(ws.resourceManager, versionCtx, "", resource.FeeMalformedRPC(), wsLog())
+		chargeLoad(versionCtx, "", resource.FeeMalformedRPC(), wsLog())
 		ws.sendMissingCommand(wsConn, cmdMap, id)
 		return
 	}
@@ -145,19 +145,19 @@ func websocketCommandParams(message []byte, requestEcho map[string]any) (json.Ra
 func (ws *WebSocketServer) handleSpecialCommand(wsConn *websocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand, handler wsSpecialHandler) {
 	ctx.LoadCost = uint32(resource.FeeReferenceRPC().Cost())
 	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
-		finalizeLoad(ws.resourceManager, ctx, cmd.Command, resource.FeeReferenceRPC(), wsLog())
+		chargeLoad(ctx, cmd.Command, resource.FeeReferenceRPC(), wsLog())
 		ws.sendCommandError(wsConn, rpcErr, cmd)
 		return
 	}
 
 	resolution := resolveMethod(ws.methodRegistry, cmd.Command, ctx.ApiVersion)
 	if !resolution.resolved {
-		finalizeLoad(ws.resourceManager, ctx, cmd.Command, resource.FeeReferenceRPC(), wsLog())
+		chargeLoad(ctx, cmd.Command, resource.FeeReferenceRPC(), wsLog())
 		ws.sendCommandError(wsConn, rpcerrors.RpcErrorMethodNotFound(), cmd)
 		return
 	}
 	if rpcErr := conditionMet(resolution.handler.RequiredCondition(), ctx); rpcErr != nil {
-		finalizeLoad(ws.resourceManager, ctx, cmd.Command, resource.FeeReferenceRPC(), wsLog())
+		chargeLoad(ctx, cmd.Command, resource.FeeReferenceRPC(), wsLog())
 		ws.sendCommandError(wsConn, rpcErr, cmd)
 		return
 	}
@@ -176,7 +176,7 @@ func (ws *WebSocketServer) handleSpecialCommand(wsConn *websocketConnection, ctx
 	if recovered && fee == resource.FeeReferenceRPC() {
 		fee = resource.FeeExceptionRPC()
 	}
-	finalizeLoad(ws.resourceManager, ctx, cmd.Command, fee, wsLog())
+	chargeLoad(ctx, cmd.Command, fee, wsLog())
 	if rpcErr != nil {
 		// Error responses deliberately omit warnings produced by the final charge.
 		ws.sendCommandError(wsConn, rpcErr, cmd)
@@ -208,7 +208,7 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *websocketConnection, ctx *typ
 		ws.sendErrorResponse(wsConn, rpcErr, cmd.ID, nil, cmd.Request)
 		return
 	}
-	result, rpcErr := dispatchResolvedMethod(ws.resourceManager, ws.services, ctx, cmd.Command, cmd.Params, resolution, wsLog())
+	result, rpcErr := dispatchResolvedMethod(ws.services, ctx, cmd.Command, cmd.Params, resolution, wsLog())
 	if rpcErr != nil {
 		ws.sendErrorResponse(wsConn, rpcErr, cmd.ID, nil, cmd.Request)
 		return
@@ -218,7 +218,7 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *websocketConnection, ctx *typ
 
 // wsLoadWarningOpts surfaces rippled's warning:"load" on a WS reply when the
 // dispatch crossed the resource warn threshold (recorded on ctx by
-// finalizeLoad), and returns nil otherwise.
+// chargeLoad), and returns nil otherwise.
 func wsLoadWarningOpts(ctx *types.RpcContext) *types.WebSocketResponseOptions {
 	if ctx != nil && ctx.LoadWarning {
 		return &types.WebSocketResponseOptions{Warning: "load"}

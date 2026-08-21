@@ -43,7 +43,7 @@ func testLedgerView() types.LedgerStateView {
 func TestUpdatePathFindSessionsDoesNotBlockLedgerCallback(t *testing.T) {
 	ws, _ := newPathFindRefreshTestServer(t, 1)
 	manager := ws.ensurePathFindRefreshManager()
-	defer manager.close()
+	defer func() { _ = manager.wait(context.Background()) }()
 
 	viewStarted := make(chan struct{})
 	releaseView := make(chan struct{})
@@ -73,7 +73,7 @@ func TestUpdatePathFindSessionsDoesNotBlockLedgerCallback(t *testing.T) {
 func TestQueuePathFindSessionsIncludesNewConnection(t *testing.T) {
 	ws, _ := newPathFindRefreshTestServer(t, 0)
 	manager := ws.ensurePathFindRefreshManager()
-	defer manager.close()
+	defer func() { _ = manager.wait(context.Background()) }()
 
 	computed := make(chan struct{}, 1)
 	conn := &websocketConnection{
@@ -100,7 +100,7 @@ func TestQueuePathFindSessionsIncludesNewConnection(t *testing.T) {
 func TestPathFindRefreshMaximumConcurrency(t *testing.T) {
 	ws, connections := newPathFindRefreshTestServer(t, 3)
 	manager := ws.ensurePathFindRefreshManager()
-	defer manager.close()
+	defer func() { _ = manager.wait(context.Background()) }()
 
 	var running, maximum atomic.Int32
 	started := make(chan struct{}, 3)
@@ -152,7 +152,7 @@ func TestPathFindRefreshMaximumConcurrency(t *testing.T) {
 func TestPathFindRefreshLatestGenerationWins(t *testing.T) {
 	ws, connections := newPathFindRefreshTestServer(t, 1)
 	manager := ws.ensurePathFindRefreshManager()
-	defer manager.close()
+	defer func() { _ = manager.wait(context.Background()) }()
 
 	firstStarted := make(chan struct{})
 	releaseFirst := make(chan struct{})
@@ -201,7 +201,7 @@ func TestPathFindRefreshLatestGenerationWins(t *testing.T) {
 func TestPathFindRefreshViewErrorRecovers(t *testing.T) {
 	ws, connections := newPathFindRefreshTestServer(t, 1)
 	manager := ws.ensurePathFindRefreshManager()
-	defer manager.close()
+	defer func() { _ = manager.wait(context.Background()) }()
 
 	firstDone := make(chan struct{})
 	computed := make(chan struct{}, 1)
@@ -225,7 +225,7 @@ func TestPathFindRefreshViewErrorRecovers(t *testing.T) {
 func TestPathFindRefreshCloseSuppressesInFlightResult(t *testing.T) {
 	ws, connections := newPathFindRefreshTestServer(t, 1)
 	manager := ws.ensurePathFindRefreshManager()
-	defer manager.close()
+	defer func() { _ = manager.wait(context.Background()) }()
 
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -259,7 +259,7 @@ func TestPathFindRefreshCloseSuppressesInFlightResult(t *testing.T) {
 func TestPathFindRefreshReplacementStillRuns(t *testing.T) {
 	ws, connections := newPathFindRefreshTestServer(t, 1)
 	manager := ws.ensurePathFindRefreshManager()
-	defer manager.close()
+	defer func() { _ = manager.wait(context.Background()) }()
 
 	old := connections[0].pathFindSession
 	replacement := &PathFindSession{id: "replacement"}
@@ -440,7 +440,7 @@ func TestPathFindRefreshDoesNotCommitSupersededResult(t *testing.T) {
 	status = session.Status()
 	require.Len(t, status.Alternatives, 1)
 	require.Equal(t, `"3"`, string(status.Alternatives[0].DestinationAmount))
-	manager.close()
+	_ = manager.wait(context.Background())
 }
 
 func TestPathFindRefreshSharesPathfindAdmissionPerConnection(t *testing.T) {
@@ -482,13 +482,13 @@ func TestPathFindRefreshSharesPathfindAdmissionPerConnection(t *testing.T) {
 		t.Fatal("latest queued connection job was not published")
 	}
 	require.Equal(t, int64(0), shedder.PathfindActive())
-	manager.close()
+	_ = manager.wait(context.Background())
 }
 
 func TestPathFindRefreshCancellationStress(t *testing.T) {
 	ws, connections := newPathFindRefreshTestServer(t, 4)
 	manager := ws.ensurePathFindRefreshManager()
-	defer manager.close()
+	defer func() { _ = manager.wait(context.Background()) }()
 
 	var calls atomic.Int32
 	started := make(chan struct{}, 1)

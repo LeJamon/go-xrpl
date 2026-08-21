@@ -10,10 +10,10 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-type Limits struct {
-	MaxItemsPerRequest    int
-	MaxItemsPerConnection int
-	MaxItemsGlobal        int
+type limits struct {
+	maxItemsPerRequest    int
+	maxItemsPerConnection int
+	maxItemsGlobal        int
 }
 
 const (
@@ -22,11 +22,11 @@ const (
 	defaultMaxItemsGlobal        = 1_048_576
 )
 
-func defaultLimits() Limits {
-	return Limits{
-		MaxItemsPerRequest:    defaultMaxItemsPerRequest,
-		MaxItemsPerConnection: defaultMaxItemsPerConnection,
-		MaxItemsGlobal:        defaultMaxItemsGlobal,
+func defaultLimits() limits {
+	return limits{
+		maxItemsPerRequest:    defaultMaxItemsPerRequest,
+		maxItemsPerConnection: defaultMaxItemsPerConnection,
+		maxItemsGlobal:        defaultMaxItemsGlobal,
 	}
 }
 
@@ -103,23 +103,6 @@ func newConnectionRecord(conn *Connection, generation uint64) *connectionRecord 
 	}
 }
 
-func validateLimits(limits Limits) error {
-	if limits.MaxItemsPerRequest <= 0 || limits.MaxItemsPerConnection <= 0 || limits.MaxItemsGlobal <= 0 {
-		return errors.New("subscription limits must be positive")
-	}
-	if limits.MaxItemsPerRequest > limits.MaxItemsPerConnection || limits.MaxItemsPerConnection > limits.MaxItemsGlobal {
-		return errors.New("subscription limits must be monotonically nondecreasing")
-	}
-	return nil
-}
-
-func NewManagerWithLimits(limits Limits) (*Manager, error) {
-	if err := validateLimits(limits); err != nil {
-		return nil, err
-	}
-	return newManager(limits), nil
-}
-
 func (sm *Manager) NewRequestScope() *RequestScope {
 	return &RequestScope{manager: sm, seen: make(map[requestEdge]struct{})}
 }
@@ -144,7 +127,7 @@ func (scope *RequestScope) addMany(edges []requestEdge) *rpcerrors.RpcError {
 		pending[edge] = struct{}{}
 		additions = append(additions, edge)
 	}
-	if len(additions) > scope.manager.limits.MaxItemsPerRequest-len(scope.seen) {
+	if len(additions) > scope.manager.limits.maxItemsPerRequest-len(scope.seen) {
 		scope.manager.mu.Lock()
 		scope.manager.recordLimitRejectionLocked("request")
 		scope.manager.mu.Unlock()
@@ -160,7 +143,7 @@ func (scope *RequestScope) consumeRaw(count int) *rpcerrors.RpcError {
 	if scope == nil || scope.manager == nil || count < 0 {
 		return rpcerrors.RpcErrorInternal()
 	}
-	if count > scope.manager.limits.MaxItemsPerRequest-scope.raw {
+	if count > scope.manager.limits.maxItemsPerRequest-scope.raw {
 		scope.manager.mu.Lock()
 		scope.manager.recordLimitRejectionLocked("request")
 		scope.manager.mu.Unlock()
@@ -186,11 +169,11 @@ func (sm *Manager) reserveLocked(record *connectionRecord, delta int) *rpcerrors
 	if delta <= 0 {
 		return nil
 	}
-	if record.items+delta > sm.limits.MaxItemsPerConnection {
+	if record.items+delta > sm.limits.maxItemsPerConnection {
 		sm.recordLimitRejectionLocked("connection")
 		return rpcerrors.RpcErrorTooBusy()
 	}
-	if sm.items+delta > sm.limits.MaxItemsGlobal {
+	if sm.items+delta > sm.limits.maxItemsGlobal {
 		sm.recordLimitRejectionLocked("global")
 		return rpcerrors.RpcErrorTooBusy()
 	}

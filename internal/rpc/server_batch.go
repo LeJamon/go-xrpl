@@ -53,24 +53,24 @@ func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Contex
 	// (ServerHandler.cpp:764-808).
 	mv, present := elem["method"]
 	if !present || mv == nil {
-		chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC(), rpcLog())
+		chargeLoad(ctx, method, resource.FeeMalformedRPC(), rpcLog())
 		return batchMalformedElement(elem, "Null method")
 	}
 	method, ok := mv.(string)
 	if !ok {
-		chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC(), rpcLog())
+		chargeLoad(ctx, method, resource.FeeMalformedRPC(), rpcLog())
 		return batchMalformedElement(elem, "method is not string")
 	}
 	if method == "" {
-		chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC(), rpcLog())
+		chargeLoad(ctx, method, resource.FeeMalformedRPC(), rpcLog())
 		return batchMalformedElement(elem, "method is empty")
 	}
 	if _, valid := ripplerpcVersion(elem); !valid {
-		chargeLoad(s.resourceManager, ctx, method, resource.FeeMalformedRPC(), rpcLog())
+		chargeLoad(ctx, method, resource.FeeMalformedRPC(), rpcLog())
 		return batchMalformedElement(elem, "ripplerpc is not a string")
 	}
 
-	result, rpcErr := dispatchResolvedMethod(s.resourceManager, s.services, ctx, method, el, resolution, rpcLog())
+	result, rpcErr := dispatchResolvedMethod(s.services, ctx, method, el, resolution, rpcLog())
 
 	echo := redactedRequestMap(elem)
 	echo["command"] = method

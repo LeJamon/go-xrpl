@@ -219,8 +219,7 @@ func TestCanonicalBookIdentityAndDomainPresence(t *testing.T) {
 }
 
 func TestCanonicalRequestCapCountsUniqueEdgesAcrossSplits(t *testing.T) {
-	manager, err := NewManagerWithLimits(Limits{MaxItemsPerRequest: 4, MaxItemsPerConnection: 5, MaxItemsGlobal: 8})
-	require.NoError(t, err)
+	manager := newManager(limits{maxItemsPerRequest: 4, maxItemsPerConnection: 5, maxItemsGlobal: 8})
 	_, registration := attach(t, manager, "caps", 1)
 	scope := manager.NewRequestScope()
 	require.Nil(t, manager.HandleSubscribeScoped(registration, scope, types.SubscriptionRequest{
@@ -239,8 +238,7 @@ func TestCanonicalRequestCapCountsUniqueEdgesAcrossSplits(t *testing.T) {
 func TestBothBookExpansionIsAtomicAtCapacityBoundaries(t *testing.T) {
 	both := decodeRequest(t, `{"books":[{"taker_pays":{"currency":"USD","issuer":"`+testIssuer+`"},"taker_gets":{"currency":"XRP"},"both":true}]}`)
 	t.Run("request", func(t *testing.T) {
-		manager, err := NewManagerWithLimits(Limits{MaxItemsPerRequest: 1, MaxItemsPerConnection: 2, MaxItemsGlobal: 2})
-		require.NoError(t, err)
+		manager := newManager(limits{maxItemsPerRequest: 1, maxItemsPerConnection: 2, maxItemsGlobal: 2})
 		_, registration := attach(t, manager, "request", 1)
 		rpcErr := manager.HandleSubscribe(registration, both, true)
 		require.NotNil(t, rpcErr)
@@ -252,8 +250,7 @@ func TestBothBookExpansionIsAtomicAtCapacityBoundaries(t *testing.T) {
 		require.NoError(t, manager.checkInvariants())
 	})
 	t.Run("unsubscribe request", func(t *testing.T) {
-		manager, err := NewManagerWithLimits(Limits{MaxItemsPerRequest: 1, MaxItemsPerConnection: 2, MaxItemsGlobal: 2})
-		require.NoError(t, err)
+		manager := newManager(limits{maxItemsPerRequest: 1, maxItemsPerConnection: 2, maxItemsGlobal: 2})
 		_, registration := attach(t, manager, "unsubscribe-request", 1)
 		forwardBook := both.Books[0]
 		forwardBook.Both = false
@@ -272,8 +269,7 @@ func TestBothBookExpansionIsAtomicAtCapacityBoundaries(t *testing.T) {
 		require.NoError(t, manager.checkInvariants())
 	})
 	t.Run("connection", func(t *testing.T) {
-		manager, err := NewManagerWithLimits(Limits{MaxItemsPerRequest: 2, MaxItemsPerConnection: 2, MaxItemsGlobal: 4})
-		require.NoError(t, err)
+		manager := newManager(limits{maxItemsPerRequest: 2, maxItemsPerConnection: 2, maxItemsGlobal: 4})
 		_, registration := attach(t, manager, "connection", 1)
 		require.Nil(t, manager.HandleSubscribe(registration, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}}, true))
 		rpcErr := manager.HandleSubscribe(registration, both, true)
@@ -286,8 +282,7 @@ func TestBothBookExpansionIsAtomicAtCapacityBoundaries(t *testing.T) {
 		require.NoError(t, manager.checkInvariants())
 	})
 	t.Run("global", func(t *testing.T) {
-		manager, err := NewManagerWithLimits(Limits{MaxItemsPerRequest: 2, MaxItemsPerConnection: 2, MaxItemsGlobal: 2})
-		require.NoError(t, err)
+		manager := newManager(limits{maxItemsPerRequest: 2, maxItemsPerConnection: 2, maxItemsGlobal: 2})
 		_, existing := attach(t, manager, "existing", 1)
 		require.Nil(t, manager.HandleSubscribe(existing, types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubLedger}}, true))
 		_, registration := attach(t, manager, "global", 1)
@@ -303,8 +298,7 @@ func TestBothBookExpansionIsAtomicAtCapacityBoundaries(t *testing.T) {
 }
 
 func TestRawElementCapCountsDuplicatesAcrossScopedCalls(t *testing.T) {
-	manager, err := NewManagerWithLimits(Limits{MaxItemsPerRequest: 3, MaxItemsPerConnection: 8, MaxItemsGlobal: 16})
-	require.NoError(t, err)
+	manager := newManager(limits{maxItemsPerRequest: 3, maxItemsPerConnection: 8, maxItemsGlobal: 16})
 	_, registration := attach(t, manager, "raw", 1)
 	scope := manager.NewRequestScope()
 	for range 3 {
@@ -336,8 +330,7 @@ func TestRawElementCapCountsDuplicatesAcrossScopedCalls(t *testing.T) {
 }
 
 func TestRawElementCapRetainsEarlierFieldMutations(t *testing.T) {
-	manager, err := NewManagerWithLimits(Limits{MaxItemsPerRequest: 3, MaxItemsPerConnection: 8, MaxItemsGlobal: 16})
-	require.NoError(t, err)
+	manager := newManager(limits{maxItemsPerRequest: 3, maxItemsPerConnection: 8, maxItemsGlobal: 16})
 	_, registration := attach(t, manager, "raw-fields", 1)
 	request := types.SubscriptionRequest{
 		Streams:  []types.SubscriptionType{types.SubLedger},
@@ -364,8 +357,7 @@ func TestRawElementCapRetainsEarlierFieldMutations(t *testing.T) {
 }
 
 func TestRawWireElementCapStopsAndRetainsIncrementalMutations(t *testing.T) {
-	manager, err := NewManagerWithLimits(Limits{MaxItemsPerRequest: 3, MaxItemsPerConnection: 8, MaxItemsGlobal: 16})
-	require.NoError(t, err)
+	manager := newManager(limits{maxItemsPerRequest: 3, maxItemsPerConnection: 8, maxItemsGlobal: 16})
 	_, registration := attach(t, manager, "raw-wire", 1)
 	rpcErr := manager.HandleSubscribe(registration, decodeRequest(t, `{"streams":["ledger","ledger","ledger","ledger"]}`), true)
 	require.NotNil(t, rpcErr)
@@ -383,17 +375,6 @@ func TestRawWireElementCapStopsAndRetainsIncrementalMutations(t *testing.T) {
 	assert.Equal(t, rpcerrors.RpcTOO_BUSY, rpcErr.Code)
 	assert.Zero(t, registration.Snapshot().BookCount())
 	require.NoError(t, manager.checkInvariants())
-}
-
-func TestLimitsRejectInvalidConfiguration(t *testing.T) {
-	for _, limits := range []Limits{
-		{},
-		{MaxItemsPerRequest: 2, MaxItemsPerConnection: 1, MaxItemsGlobal: 3},
-		{MaxItemsPerRequest: 1, MaxItemsPerConnection: 3, MaxItemsGlobal: 2},
-	} {
-		_, err := NewManagerWithLimits(limits)
-		require.Error(t, err)
-	}
 }
 
 func TestRegistrationGenerationAndDetachFence(t *testing.T) {
