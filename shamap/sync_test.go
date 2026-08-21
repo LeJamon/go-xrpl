@@ -67,65 +67,9 @@ func TestStartAndFinishSync(t *testing.T) {
 		t.Fatalf("StartSync failed: %v", err)
 	}
 
-	if !sMap.IsSyncing() {
-		t.Error("Map should be syncing after StartSync")
-	}
-
 	// Finish sync on empty map (which is complete)
 	if err := sMap.FinishSync(); err != nil {
 		t.Fatalf("FinishSync failed: %v", err)
-	}
-
-	if sMap.IsSyncing() {
-		t.Error("Map should not be syncing after FinishSync")
-	}
-}
-
-func TestIsComplete(t *testing.T) {
-	sMap := New(TypeState)
-
-	// Empty map is complete
-	if !sMap.IsComplete() {
-		t.Error("Empty map should be complete")
-	}
-
-	// Add items
-	var key [32]byte
-	key[0] = 1
-	if err := sMap.Put(key, make([]byte, 12)); err != nil {
-		t.Fatalf("Failed to put: %v", err)
-	}
-
-	// Map with items should still be complete
-	if !sMap.IsComplete() {
-		t.Error("Map should be complete after adding items")
-	}
-}
-
-func TestSyncProgress(t *testing.T) {
-	sMap := New(TypeState)
-
-	present, total := sMap.SyncProgress()
-	// Empty map should have root
-	if total < 0 {
-		t.Error("Total should be non-negative")
-	}
-	if present > total {
-		t.Error("Present should not exceed total")
-	}
-
-	// Add items
-	for i := range byte(5) {
-		var key [32]byte
-		key[0] = i
-		if err := sMap.Put(key, make([]byte, 12)); err != nil {
-			t.Fatalf("Failed to put: %v", err)
-		}
-	}
-
-	present, total = sMap.SyncProgress()
-	if present != total {
-		t.Errorf("Complete map should have present == total, got %d vs %d", present, total)
 	}
 }
 

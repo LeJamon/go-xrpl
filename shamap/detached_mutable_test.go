@@ -32,8 +32,7 @@ func TestDetachedMutableDoesNotFlushAndIsolatesLoadedTree(t *testing.T) {
 		t.Fatalf("DetachedMutable stored %d nodes, want 0", got)
 	}
 	if detached.tree.mapType != source.tree.mapType ||
-		detached.tree.ledgerSeq != source.tree.ledgerSeq ||
-		detached.tree.full != source.tree.full {
+		detached.tree.ledgerSeq != source.tree.ledgerSeq {
 		t.Fatal("detached map did not preserve tree metadata")
 	}
 	if detached.backing.access != source.backing.access ||

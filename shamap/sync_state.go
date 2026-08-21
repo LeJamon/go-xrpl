@@ -103,7 +103,6 @@ func (sm *SHAMap) StartSync() error {
 	}
 
 	sm.tree.state = stateSyncing
-	sm.tree.full = false
 
 	return nil
 }
@@ -149,79 +148,6 @@ func (sm *SHAMap) FinishSyncContext(ctx context.Context) error {
 		return ErrSyncNotInProgress
 	}
 	sm.tree.state = stateModifying
-	sm.tree.full = true
 
 	return nil
-}
-
-// IsSyncing returns true if the map is in sync mode.
-func (sm *SHAMap) IsSyncing() bool {
-	sm.tree.mu.RLock()
-	defer sm.tree.mu.RUnlock()
-	return sm.tree.state == stateSyncing
-}
-
-// IsComplete returns true if the map has all nodes (no missing references).
-func (sm *SHAMap) IsComplete() bool {
-	sm.tree.mu.RLock()
-	state := sm.tree.state
-	full := sm.tree.full
-	sm.tree.mu.RUnlock()
-	sm.backing.mu.RLock()
-	backed := sm.backing.access.available()
-	sm.backing.mu.RUnlock()
-	// A partially-built acquisition map can carry a stale full, so while
-	// syncing defer to the missing-node walk rather than trust full.
-	if full && state != stateSyncing {
-		return true
-	}
-	if backed && state == stateSyncing {
-		missing, err := sm.walkMapParallelContext(context.Background(), 1, nil)
-		return err == nil && len(missing) == 0
-	}
-
-	// Strict walk: a transient store error means completeness is unknown —
-	// conservatively incomplete.
-	sm.tree.mu.RLock()
-	defer sm.tree.mu.RUnlock()
-	missing, err := sm.missingNodesLocked(1, nil, true)
-	return err == nil && len(missing) == 0
-}
-
-// SyncProgress returns the estimated sync progress as a fraction.
-// This is an approximation based on the ratio of present nodes to total references.
-func (sm *SHAMap) SyncProgress() (present, total int) {
-	sm.tree.mu.RLock()
-	defer sm.tree.mu.RUnlock()
-
-	queue := make([]*innerNode, 0, 64)
-
-	if sm.tree.root != nil {
-		queue = append(queue, sm.tree.root)
-		total++
-		present++
-	}
-
-	for len(queue) > 0 {
-		node := queue[0]
-		queue = queue[1:]
-
-		for branch := range BranchFactor {
-			child, _, isSet := node.LoadChild(branch)
-			if !isSet {
-				continue
-			}
-
-			total++
-
-			if child != nil {
-				present++
-				if inner, ok := child.(*innerNode); ok {
-					queue = append(queue, inner)
-				}
-			}
-		}
-	}
-
-	return present, total
 }

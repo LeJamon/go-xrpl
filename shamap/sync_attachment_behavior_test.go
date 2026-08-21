@@ -104,32 +104,6 @@ func TestSme_StartSyncOnInvalidMap(t *testing.T) {
 	}
 }
 
-func TestSme_IsCompleteWithFullFalse(t *testing.T) {
-	sm := New(TypeState)
-	sm.tree.mu.Lock()
-	sm.tree.full = false
-	sm.tree.mu.Unlock()
-	if !sm.IsComplete() {
-		t.Error("empty tree with full=false should still be complete")
-	}
-}
-
-func TestSme_SyncProgressWithItems(t *testing.T) {
-	sm := New(TypeState)
-	for i := byte(1); i <= 5; i++ {
-		if err := sm.Put(sme_keyFromByte(i), sme_data12(i)); err != nil {
-			t.Fatalf("Put: %v", err)
-		}
-	}
-	present, total := sm.SyncProgress()
-	if total == 0 {
-		t.Error("total should be > 0 for non-empty map")
-	}
-	if present != total {
-		t.Errorf("complete map should have present==total, got %d/%d", present, total)
-	}
-}
-
 func TestSme_AddKnownNodeHashMismatch(t *testing.T) {
 	source := New(TypeState)
 	k := sme_keyFromByte(0x10)

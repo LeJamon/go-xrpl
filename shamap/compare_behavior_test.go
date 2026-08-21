@@ -2,6 +2,7 @@ package shamap
 
 import (
 	"bytes"
+	"context"
 	"testing"
 )
 
@@ -55,7 +56,7 @@ func TestCmpIdenticalMaps(t *testing.T) {
 	m1 := cmp_makeMap(t, entries)
 	m2 := cmp_makeMap(t, entries)
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -71,7 +72,7 @@ func TestCmpBothEmpty(t *testing.T) {
 	m1 := New(TypeState)
 	m2 := New(TypeState)
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -90,7 +91,7 @@ func TestCmpAddedKeys(t *testing.T) {
 		{cmp_key(30), cmp_val(30)},
 	})
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -116,7 +117,7 @@ func TestCmpRemovedKeys(t *testing.T) {
 		{cmp_key(10), cmp_val(10)},
 	})
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -137,7 +138,7 @@ func TestCmpModifiedValues(t *testing.T) {
 	m1 := cmp_makeMap(t, []cmp_entry{{k, cmp_val(1)}})
 	m2 := cmp_makeMap(t, []cmp_entry{{k, cmp_val(2)}})
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -164,7 +165,7 @@ func TestCmpFirstMapEmpty(t *testing.T) {
 		{cmp_key(6), cmp_val(6)},
 	})
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -184,7 +185,7 @@ func TestCmpSecondMapEmpty(t *testing.T) {
 	})
 	m2 := New(TypeState)
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -207,7 +208,7 @@ func TestCmpDisjointSets(t *testing.T) {
 		{cmp_key(101), cmp_val(101)},
 	})
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -240,7 +241,7 @@ func TestCmpMixedDifferences(t *testing.T) {
 		{kModified, cmp_val(2)},
 	})
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -273,7 +274,7 @@ func TestCmpMaxCountTruncation(t *testing.T) {
 	}
 	m2 := cmp_makeMap(t, entries)
 
-	ds, err := m1.Compare(m2, 3)
+	ds, err := m1.CompareContext(context.Background(), m2, 3)
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -296,7 +297,7 @@ func TestCmpMaxCountZeroNoLimit(t *testing.T) {
 	m1 := cmp_makeMap(t, entries)
 	m2 := cmp_makeMap(t, entries)
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -313,12 +314,12 @@ func TestCmpInvalidMapError(t *testing.T) {
 	invalid := New(TypeState)
 	invalid.tree.state = stateInvalid
 
-	_, err := valid.Compare(invalid, 0)
+	_, err := valid.CompareContext(context.Background(), invalid, 0)
 	if err == nil {
 		t.Error("Compare with invalid map should return error")
 	}
 
-	_, err = invalid.Compare(valid, 0)
+	_, err = invalid.CompareContext(context.Background(), valid, 0)
 	if err == nil {
 		t.Error("Compare with invalid self should return error")
 	}
@@ -338,7 +339,7 @@ func TestCmpLargeMaps(t *testing.T) {
 	m1 := cmp_makeMap(t, common)
 	m2 := cmp_makeMap(t, common)
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare large identical: %v", err)
 	}
@@ -356,7 +357,7 @@ func TestCmpLargeMaps(t *testing.T) {
 		}
 	}
 
-	ds, err = m1.Compare(m2, 0)
+	ds, err = m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare large modified: %v", err)
 	}
@@ -370,7 +371,7 @@ func TestCmpDifferenceSetString(t *testing.T) {
 	m1 := cmp_makeMap(t, []cmp_entry{{cmp_key(1), cmp_val(1)}})
 	m2 := cmp_makeMap(t, []cmp_entry{{cmp_key(2), cmp_val(2)}})
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -416,7 +417,7 @@ func TestCmpFirstItemsPopulated(t *testing.T) {
 	m1 := cmp_makeMap(t, []cmp_entry{{k, cmp_val(55)}})
 	m2 := New(TypeState)
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -442,7 +443,7 @@ func TestCmpSecondItemsPopulated(t *testing.T) {
 	m1 := New(TypeState)
 	m2 := cmp_makeMap(t, []cmp_entry{{k, cmp_val(66)}})
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -481,7 +482,7 @@ func TestCmpStructurallyDifferentDepths(t *testing.T) {
 		{kOther, cmp_val(99)},
 	})
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare deep structure: %v", err)
 	}
@@ -495,7 +496,7 @@ func TestCmpSingleItemBothMaps(t *testing.T) {
 
 	m1 := cmp_makeMap(t, []cmp_entry{{k, cmp_val(33)}})
 	m2 := cmp_makeMap(t, []cmp_entry{{k, cmp_val(33)}})
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -504,7 +505,7 @@ func TestCmpSingleItemBothMaps(t *testing.T) {
 	}
 
 	m3 := cmp_makeMap(t, []cmp_entry{{k, cmp_val(34)}})
-	ds, err = m1.Compare(m3, 0)
+	ds, err = m1.CompareContext(context.Background(), m3, 0)
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
@@ -528,7 +529,7 @@ func TestCmpLeafVsInner(t *testing.T) {
 		{k3, cmp_val(4)},
 	})
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare leaf-vs-inner: %v", err)
 	}
@@ -558,7 +559,7 @@ func TestCmpInnerVsLeaf(t *testing.T) {
 	})
 	m2 := cmp_makeMap(t, []cmp_entry{{k0, cmp_val(1)}})
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare inner-vs-leaf: %v", err)
 	}
@@ -584,7 +585,7 @@ func TestCmpWalkBranchMatchedItem(t *testing.T) {
 	})
 	m2 := cmp_makeMap(t, []cmp_entry{{k0, cmp_val(10)}})
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare walkBranch-match: %v", err)
 	}
@@ -610,7 +611,7 @@ func TestCmpWalkBranchModifiedItem(t *testing.T) {
 	})
 	m2 := cmp_makeMap(t, []cmp_entry{{k0, cmp_val(99)}})
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare walkBranch-modified: %v", err)
 	}
@@ -639,7 +640,7 @@ func TestCmpWalkBranchOtherItemUnmatched(t *testing.T) {
 	})
 	m2 := cmp_makeMap(t, []cmp_entry{{kOther, cmp_val(3)}})
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare unmatched: %v", err)
 	}
@@ -659,7 +660,7 @@ func TestCmpCompareMaxCountOnInnerNodes(t *testing.T) {
 	m1 := New(TypeState)
 	m2 := cmp_makeMap(t, entries)
 
-	ds, err := m1.Compare(m2, 5)
+	ds, err := m1.CompareContext(context.Background(), m2, 5)
 	if err != nil {
 		t.Fatalf("Compare maxCount inner: %v", err)
 	}
@@ -674,7 +675,7 @@ func TestCmpLeafMaxCountTruncation(t *testing.T) {
 	m1 := cmp_makeMap(t, []cmp_entry{{k1, cmp_val(11)}})
 	m2 := cmp_makeMap(t, []cmp_entry{{k2, cmp_val(12)}})
 
-	ds, err := m1.Compare(m2, 1)
+	ds, err := m1.CompareContext(context.Background(), m2, 1)
 	if err != nil {
 		t.Fatalf("Compare leaf maxCount: %v", err)
 	}
@@ -688,7 +689,7 @@ func TestCmpModifiedMaxCountTruncation(t *testing.T) {
 	m1 := cmp_makeMap(t, []cmp_entry{{k, cmp_val(1)}})
 	m2 := cmp_makeMap(t, []cmp_entry{{k, cmp_val(2)}})
 
-	ds, err := m1.Compare(m2, 1)
+	ds, err := m1.CompareContext(context.Background(), m2, 1)
 	if err != nil {
 		t.Fatalf("Compare modified maxCount: %v", err)
 	}
@@ -710,7 +711,7 @@ func TestCmpLeafVsInnerModified(t *testing.T) {
 		{k1, cmp_val(2)},
 	})
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare leaf-vs-inner modified: %v", err)
 	}
@@ -742,7 +743,7 @@ func TestCmpLeafVsInnerNoMatch(t *testing.T) {
 		{k2, cmp_val(3)},
 	})
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare leaf-vs-inner no match: %v", err)
 	}
@@ -761,7 +762,7 @@ func TestCmpWalkBranchMaxCountAfterModified(t *testing.T) {
 	})
 	m2 := cmp_makeMap(t, []cmp_entry{{k0, cmp_val(99)}})
 
-	ds, err := m1.Compare(m2, 1)
+	ds, err := m1.CompareContext(context.Background(), m2, 1)
 	if err != nil {
 		t.Fatalf("Compare walkBranch maxCount modified: %v", err)
 	}
@@ -781,7 +782,7 @@ func TestCmpWalkBranchPostLoopAdded(t *testing.T) {
 	})
 	m2 := cmp_makeMap(t, []cmp_entry{{kNew, cmp_val(3)}})
 
-	ds, err := m1.Compare(m2, 0)
+	ds, err := m1.CompareContext(context.Background(), m2, 0)
 	if err != nil {
 		t.Fatalf("Compare walkBranch post-loop added: %v", err)
 	}
@@ -801,7 +802,7 @@ func TestCmpWalkBranchPostLoopMaxCount(t *testing.T) {
 	})
 	m2 := cmp_makeMap(t, []cmp_entry{{kNew, cmp_val(3)}})
 
-	ds, err := m1.Compare(m2, 3)
+	ds, err := m1.CompareContext(context.Background(), m2, 3)
 	if err != nil {
 		t.Fatalf("Compare walkBranch post-loop maxCount: %v", err)
 	}
@@ -822,7 +823,7 @@ func TestCmpInnerCompareMaxCountTruncation(t *testing.T) {
 	})
 	m2 := cmp_makeMap(t, []cmp_entry{{k0, cmp_val(99)}})
 
-	ds, err := m1.Compare(m2, 1)
+	ds, err := m1.CompareContext(context.Background(), m2, 1)
 	if err != nil {
 		t.Fatalf("Compare inner-vs-leaf maxCount: %v", err)
 	}
@@ -837,7 +838,7 @@ func TestCmpInnerCompareMaxCountTruncation(t *testing.T) {
 		{k2, cmp_val(3)},
 	})
 
-	ds, err = m3.Compare(m4, 1)
+	ds, err = m3.CompareContext(context.Background(), m4, 1)
 	if err != nil {
 		t.Fatalf("Compare leaf-vs-inner maxCount: %v", err)
 	}
@@ -846,20 +847,20 @@ func TestCmpInnerCompareMaxCountTruncation(t *testing.T) {
 	}
 }
 
-func TestSme_FindDifferenceNilOther(t *testing.T) {
+func TestSme_CompareNilOther(t *testing.T) {
 	sm := New(TypeState)
-	if _, err := sm.FindDifference(nil); err == nil {
-		t.Error("FindDifference(nil) should return error")
+	if _, err := sm.CompareContext(context.Background(), nil, 0); err == nil {
+		t.Error("CompareContext(nil) should return error")
 	}
 }
 
-func TestSme_FindDifferenceInvalidMap(t *testing.T) {
+func TestSme_CompareInvalidMap(t *testing.T) {
 	sm1 := New(TypeState)
 	sm2 := New(TypeState)
 	sm1.tree.mu.Lock()
 	sm1.tree.state = stateInvalid
 	sm1.tree.mu.Unlock()
-	if _, err := sm1.FindDifference(sm2); err == nil {
-		t.Error("FindDifference with invalid map should return error")
+	if _, err := sm1.CompareContext(context.Background(), sm2, 0); err == nil {
+		t.Error("CompareContext with invalid map should return error")
 	}
 }

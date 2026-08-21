@@ -353,9 +353,6 @@ func (sm *SHAMap) addRootNode(hash [32]byte, data []byte, withEntry bool) (Flush
 	sm.tree.root = root
 	root.SetDirty(!withEntry)
 	sm.tree.state = stateSyncing
-	// Clear full as StartSync does: a stale full lets IsComplete report
-	// complete while the FinishSync walk still finds missing nodes.
-	sm.tree.full = false
 
 	if !withEntry {
 		return FlushEntry{}, nil

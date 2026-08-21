@@ -206,43 +206,6 @@ func (n NodeID) Compare(other NodeID) int {
 	return bytes.Compare(n.id[:], other.id[:])
 }
 
-// IsDescendantOf returns true if this NodeID is a descendant of the other
-func (n NodeID) IsDescendantOf(ancestor NodeID) bool {
-	if n.depth <= ancestor.depth {
-		return false
-	}
-
-	// Check if the ancestor's ID is a prefix of this ID
-	ancestorBytes := (ancestor.depth + 1) / 2
-	for i := 0; i < int(ancestorBytes); i++ {
-		if i >= 32 {
-			break
-		}
-
-		ancestorByte := ancestor.id[i]
-		ourByte := n.id[i]
-
-		// For the last relevant byte, we might need to mask
-		if i == int(ancestorBytes)-1 && ancestor.depth%2 == 0 {
-			// Only compare the high nibble
-			if (ancestorByte & 0xF0) != (ourByte & 0xF0) {
-				return false
-			}
-		} else {
-			if ancestorByte != ourByte {
-				return false
-			}
-		}
-	}
-
-	return true
-}
-
-// IsAncestorOf returns true if this NodeID is an ancestor of the other
-func (n NodeID) IsAncestorOf(descendant NodeID) bool {
-	return descendant.IsDescendantOf(n)
-}
-
 // Validate performs validation on the NodeID
 func (n NodeID) Validate() error {
 	if n.depth > MaxDepth {

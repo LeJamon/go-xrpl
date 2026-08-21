@@ -320,49 +320,6 @@ func TestNid_String_NonRoot(t *testing.T) {
 	}
 }
 
-func TestNid_IsDescendantOf(t *testing.T) {
-	root := NewRootNodeID()
-	child, _ := root.ChildNodeID(3)
-
-	// IsDescendantOf for even-depth ancestors uses high-nibble masking.
-	// For depth-1 (odd) ancestors the implementation compares the full byte,
-	// which means grandchild's low nibble (set by ChildNodeID) differs from
-	// the ancestor's zero low nibble — so we test with even-depth ancestors.
-	child2, _ := child.ChildNodeID(5)      // depth=2 (even)
-	grandchild, _ := child2.ChildNodeID(2) // depth=3
-
-	if !child.IsDescendantOf(root) {
-		t.Error("child should be descendant of root")
-	}
-	if !child2.IsDescendantOf(root) {
-		t.Error("depth-2 child should be descendant of root")
-	}
-	if !grandchild.IsDescendantOf(child2) {
-		t.Error("grandchild should be descendant of depth-2 ancestor")
-	}
-	if root.IsDescendantOf(child) {
-		t.Error("root should not be descendant of child")
-	}
-	if child.IsDescendantOf(grandchild) {
-		t.Error("child should not be descendant of grandchild")
-	}
-	if root.IsDescendantOf(root) {
-		t.Error("node should not be descendant of itself")
-	}
-}
-
-func TestNid_IsAncestorOf(t *testing.T) {
-	root := NewRootNodeID()
-	child, _ := root.ChildNodeID(2)
-
-	if !root.IsAncestorOf(child) {
-		t.Error("root should be ancestor of child")
-	}
-	if child.IsAncestorOf(root) {
-		t.Error("child should not be ancestor of root")
-	}
-}
-
 func TestNid_Validate_Valid(t *testing.T) {
 	nid, _ := createNodeID(3, nid_gradientKey)
 	if err := nid.Validate(); err != nil {

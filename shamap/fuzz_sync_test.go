@@ -188,9 +188,6 @@ func FuzzSyncSequence(f *testing.F) {
 			ops++
 		}
 
-		// Check sync state — must not panic
-		_ = sm.IsSyncing()
-		_ = sm.IsComplete()
 		sm.GetMissingNodes(10, nil)
 
 		// Attempt to finish — will likely fail but must not panic

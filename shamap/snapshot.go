@@ -108,7 +108,6 @@ func (sm *SHAMap) DetachedMutable() (*SHAMap, error) {
 			mapType:   sm.tree.mapType,
 			state:     stateModifying,
 			ledgerSeq: sm.tree.ledgerSeq,
-			full:      sm.tree.full,
 		},
 		backing: backingState{
 			access:    sm.backing.access,
@@ -186,7 +185,6 @@ func (sm *SHAMap) snapshotLocked(mutable bool) (*SHAMap, error) {
 			mapType:   sm.tree.mapType,
 			state:     newState,
 			ledgerSeq: sm.tree.ledgerSeq,
-			full:      sm.tree.full,
 		},
 		backing: backingState{
 			access:    sm.backing.access,

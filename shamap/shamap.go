@@ -35,7 +35,6 @@ type treeState struct {
 	mapType    Type
 	state      mapState
 	ledgerSeq  uint32
-	full       bool
 	cachedSize atomic.Int64
 }
 
@@ -87,7 +86,6 @@ func New(mapType Type) *SHAMap {
 			root:    newInnerNode(),
 			mapType: mapType,
 			state:   stateModifying,
-			full:    true,
 		},
 		backing: backingState{fullBelow: NewFullBelowCache()},
 	}
@@ -107,7 +105,6 @@ func NewBacked(mapType Type, family Family) (*SHAMap, error) {
 			root:    newInnerNode(),
 			mapType: mapType,
 			state:   stateModifying,
-			full:    true,
 		},
 		backing: backingState{
 			access:    access,
@@ -179,7 +176,6 @@ func NewFromRootHashContext(ctx context.Context, mapType Type, rootHash [32]byte
 			root:    root,
 			mapType: mapType,
 			state:   stateModifying,
-			full:    true,
 		},
 		backing: backingState{
 			access:    access,
