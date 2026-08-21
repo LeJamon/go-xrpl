@@ -30,7 +30,7 @@ RUN if [ -z "${VERSION}" ] || [ "${VERSION}" = "dev" ]; then \
  && go build -tags mptcrypto \
     -trimpath \
     -ldflags="-s -w -linkmode external -extldflags '-static' -X=github.com/LeJamon/go-xrpl/version.Version=${VERSION}" \
-    -o /usr/local/bin/goxrpl ./cmd/xrpld \
+    -o /usr/local/bin/goxrpl ./cmd/goxrpl \
  && /usr/local/bin/goxrpl version | grep -Fx "Confidential MPT crypto: available"
 
 # Stage 2: Runtime
@@ -46,4 +46,4 @@ COPY --from=builder /usr/local/bin/goxrpl /usr/local/bin/goxrpl
 EXPOSE 5005 5555 6005 6006 51235
 
 ENTRYPOINT ["goxrpl"]
-CMD ["server", "--conf", "/etc/goxrpl/xrpld.toml"]
+CMD ["server", "--conf", "/etc/goxrpl/goxrpl.toml"]

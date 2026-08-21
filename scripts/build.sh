@@ -13,4 +13,4 @@ fi
 mkdir -p ../tmp
 go build -v \
     -ldflags="-X=github.com/LeJamon/go-xrpl/version.Version=${build_version}" \
-    -o ../tmp/main ./cmd/xrpld
+    -o ../tmp/goxrpl ./cmd/goxrpl

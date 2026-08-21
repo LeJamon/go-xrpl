@@ -22,7 +22,7 @@ func TestRPCCapabilityConfigLoad(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			path := writeConfig(t, t.TempDir(), "xrpld.toml", test.settings+minimalTestConfig())
+			path := writeConfig(t, t.TempDir(), "goxrpl.toml", test.settings+minimalTestConfig())
 			cfg, err := LoadConfig(Paths{Main: path, SkipValidators: true})
 			require.NoError(t, err)
 			require.Equal(t, test.wantSigning, cfg.SigningSupport)
@@ -57,7 +57,7 @@ func TestResolvedPathSearchMaxValidatorDefault(t *testing.T) {
 }
 
 func TestPathSearchMaxRejectsNegative(t *testing.T) {
-	path := writeConfig(t, t.TempDir(), "xrpld.toml", "path_search_max = -1\n"+minimalTestConfig())
+	path := writeConfig(t, t.TempDir(), "goxrpl.toml", "path_search_max = -1\n"+minimalTestConfig())
 	_, err := LoadConfig(Paths{Main: path, SkipValidators: true})
 	require.ErrorContains(t, err, "path_search_max must be non-negative")
 }

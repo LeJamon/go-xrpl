@@ -8,7 +8,7 @@ import (
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
 
-// LoggingConfig represents the [logging] section of xrpld.toml.
+// LoggingConfig represents the [logging] section of goxrpl.toml.
 // It mirrors rippled's per-partition severity configuration model.
 //
 // Example config:

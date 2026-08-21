@@ -137,10 +137,10 @@ This enables validation of the transaction engine against known-good
 state transitions captured from rippled.
 
 Example:
-    xrpld replay ./fixtures/ledger_32750
-    xrpld replay ./fixtures/ledger_32750 -v
-    xrpld replay ./fixtures/ledger_32750 --dump --dump-dir ./debug
-    xrpld replay ./fixtures/ledger_32750 --decoded`,
+    goxrpl replay ./fixtures/ledger_32750
+    goxrpl replay ./fixtures/ledger_32750 -v
+    goxrpl replay ./fixtures/ledger_32750 --dump --dump-dir ./debug
+    goxrpl replay ./fixtures/ledger_32750 --decoded`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			r.out = cmd.OutOrStdout()

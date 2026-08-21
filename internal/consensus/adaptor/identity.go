@@ -168,7 +168,7 @@ func NewValidatorIdentityFromToken(block string) (*ValidatorIdentity, error) {
 // non-validating node.
 //
 // Both configured at once is a fatal misconfiguration; the returned
-// error lets cmd/xrpld surface it before the consensus engine starts.
+// error lets cmd/goxrpl surface it before the consensus engine starts.
 func NewValidatorIdentityFromConfig(seed, token string) (*ValidatorIdentity, error) {
 	if seed != "" && token != "" {
 		return nil, ErrTokenAndSeed

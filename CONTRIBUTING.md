@@ -54,9 +54,8 @@ repository root. See [docs/operating.md](docs/operating.md#build-requirements) f
 the CGO/OpenSSL prerequisites.
 
 ```bash
-just build            # build the xrpld binary (CGO + OpenSSL)
+just build            # build the goxrpl binary (CGO + OpenSSL)
 just build-all        # compile every package
-just build-nocgo      # verify the CGO_ENABLED=0 path still builds
 
 just test             # all tests
 just test-tx          # transaction-engine tests (./internal/tx/...)

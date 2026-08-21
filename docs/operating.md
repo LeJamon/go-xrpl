@@ -10,8 +10,7 @@ go-xrpl uses CGO for two subsystems:
 
 - **OpenSSL** — the peer-to-peer TLS handshake (`peertls`), computing the
   session-signature shared value that matches rippled's `SSL_get_finished` flow.
-- **libsecp256k1** — ECDSA signature verification on the hot path. Falls back to a
-  pure-Go implementation (~6× slower per verify) under `CGO_ENABLED=0`.
+- **libsecp256k1** — ECDSA signature verification on the consensus hot path.
 
 Install the development headers before building:
 
@@ -27,35 +26,34 @@ sudo apt install -y libssl-dev libsecp256k1-dev pkg-config
 Then build:
 
 ```bash
-just build                 # → ../tmp/main (CGO + OpenSSL)
+just build                 # → ../tmp/goxrpl (CGO + OpenSSL)
 ```
 
 The recipe embeds `git describe --tags --always --dirty` in the binary. Set
 `VERSION` explicitly to override it for a packaged build.
 
-A `CGO_ENABLED=0 go build ./cmd/xrpld` also works: the resulting binary cannot
-connect to or accept peers (`peertls` returns `ErrSessionSigUnsupported`) and uses
-the slower pure-Go verify, but RPC, WebSocket, transactions, codec, and every
-other subsystem work unchanged. Useful for contributors without a CGO toolchain.
+The `goxrpl` daemon requires CGO. Builds without CGO are not supported because
+the production peer TLS and cryptographic verification paths require their C
+shims.
 
 ## Running
 
 ```bash
-just run                   # go run ./cmd/xrpld
+just run                   # go run ./cmd/goxrpl
 # or run the built binary
-../tmp/main
+../tmp/goxrpl
 # or hot-reload during development (needs `air`)
 just dev
 ```
 
-The node reads its configuration from `xrpld.toml`. Generate a starter file with:
+The node reads its configuration from `goxrpl.toml`. Generate a starter file with:
 
 ```bash
-xrpld generate-config
+goxrpl generate-config
 ```
 
 A fully-commented example lives at
-[`config/examples/xrpld.toml`](../config/examples/xrpld.toml). Every field there
+[`config/examples/goxrpl.toml`](../config/examples/goxrpl.toml). Every field there
 is **required** unless marked optional — the server refuses to start if a required
 field is missing.
 
@@ -107,17 +105,17 @@ Common recovery commands:
 
 ```bash
 # Resume from the newest complete local ledger.
-xrpld server --conf /etc/xrpld/xrpld.toml --load
+goxrpl server --conf /etc/goxrpl/goxrpl.toml --load
 
 # Recover from a known local sequence (a 64-character hash also works).
-xrpld server --conf /etc/xrpld/xrpld.toml --ledger 32570
+goxrpl server --conf /etc/goxrpl/goxrpl.toml --ledger 32570
 
 # Import an expanded ledger snapshot.
-xrpld server --conf /etc/xrpld/xrpld.toml --ledgerfile /var/lib/xrpld/recovery-ledger.json
+goxrpl server --conf /etc/goxrpl/goxrpl.toml --ledgerfile /var/lib/goxrpl/recovery-ledger.json
 
 # Reproduce a stored close from its parent, or bypass suspect local history.
-xrpld server --conf /etc/xrpld/xrpld.toml --replay --ledger 32570
-xrpld server --conf /etc/xrpld/xrpld.toml --net
+goxrpl server --conf /etc/goxrpl/goxrpl.toml --replay --ledger 32570
+goxrpl server --conf /etc/goxrpl/goxrpl.toml --net
 ```
 
 ### Time synchronization
@@ -205,7 +203,7 @@ valid) so the node does not dial out. Validator operation additionally requires
 
 ## Configuration reference
 
-Fields are grouped as they appear in `xrpld.toml`. TOML requires all top-level
+Fields are grouped as they appear in `goxrpl.toml`. TOML requires all top-level
 keys to precede any `[section]` header.
 
 ### Top-level — peer protocol
@@ -234,8 +232,8 @@ keys to precede any `[section]` header.
 
 | Key | Example | Meaning |
 |-----|---------|---------|
-| `database_path` | `/var/lib/xrpld/db` | Base directory for SQLite databases. |
-| `debug_logfile` | `/var/log/xrpld/debug.log` | Debug log path. |
+| `database_path` | `/var/lib/goxrpl/db` | Base directory for SQLite databases. |
+| `debug_logfile` | `/var/log/goxrpl/debug.log` | Debug log path. |
 | `node_size` | `"medium"` | Resource sizing: `tiny`, `small`, `medium`, `large`, `huge`. |
 | `beta_rpc_api` | `0` | Expose the beta API version. |
 | `validators_file` | — | Path to `validators.toml`/`.txt`. Optional. |
@@ -260,7 +258,7 @@ browser origin must also configure Basic Auth.
 | Key | Example | Meaning |
 |-----|---------|---------|
 | `type` | `"pebble"` | Backend engine. |
-| `path` | `/var/lib/xrpld/db/pebble` | Node-store directory. |
+| `path` | `/var/lib/goxrpl/db/pebble` | Node-store directory. |
 | `online_delete` | `512` | Keep this many recent ledgers online (`0` disables online delete). |
 | `advisory_delete` | `0` | `1` = only delete on an explicit trigger. |
 | `cache_mb` | `2048` | Pebble block-cache capacity in MiB (`0` = 256 MiB). The writable and archive generations share this total. |
@@ -362,4 +360,4 @@ go-xrpl keeps content-addressed state separate from queryable indexes (see
 
 - [architecture.md](architecture.md) — how the node is structured.
 - [conformance.md](conformance.md) — verifying behavior against rippled.
-- [`config/examples/xrpld.toml`](../config/examples/xrpld.toml) — the annotated reference config.
+- [`config/examples/goxrpl.toml`](../config/examples/goxrpl.toml) — the annotated reference config.

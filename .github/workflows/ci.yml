@@ -82,19 +82,19 @@ jobs:
       - name: Verify local build version
         run: |
           expected="$(git describe --tags --always --dirty)"
-          ../tmp/main version |
+          ../tmp/goxrpl version |
             grep --fixed-strings --line-regexp "go-xrpl version ${expected}"
 
-  # 32-bit word-size guard. go-xrpl's correctness is "produce the same bytes as
+  # 32-bit library word-size guard. go-xrpl's correctness is "produce the same bytes as
   # rippled"; an `int`-width or endianness assumption in the codec / hashing
   # paths silently forks account_hash / transaction_hash. `int` is 64-bit on the
   # amd64 matrix, so an overflow like `len(x) > math.MaxUint32` only fails to
-  # compile on a 32-bit target. This compiles the whole module for linux/386
-  # (CGO off → peertls uses its !cgo stub), then exercises the SQLite pagination
-  # boundaries whose correctness depends on runtime int width. Broader runtime
-  # 386 tests run in the nightly workflow.
+  # compile on a 32-bit target. The daemon requires CGO, so this compiles the
+  # protocol and storage libraries for linux/386, then exercises the SQLite
+  # pagination boundaries whose correctness depends on runtime int width.
+  # Broader runtime 386 library tests run in the nightly workflow.
   build-386:
-    name: Build (linux/386 — word-size guard)
+    name: Test (libraries, linux/386 — word-size guard)
     runs-on: ubuntu-latest
     env:
       GOOS: linux
@@ -105,7 +105,7 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           cgo: "false"
-      - run: go build ./...
+      - run: go test -run '^$' ./codec/... ./crypto/... ./shamap/... ./storage/... ./keylet/... ./ledger/... ./amendment/... ./drops/... ./protocol/... ./config/...
       - run: go test -count=1 -timeout 5m ./storage/relationaldb/sqlite/...
 
   postgres:
@@ -131,7 +131,7 @@ jobs:
       - name: Run PostgreSQL repository contract tests
         run: go test -race -tags postgres -count=1 -timeout 10m ./storage/relationaldb/postgres/...
         env:
-          XRPLD_TEST_POSTGRES_DSN: postgres://xrpl:xrpl@localhost:5432/xrpl_test?sslmode=disable
+          GOXRPL_TEST_POSTGRES_DSN: postgres://xrpl:xrpl@localhost:5432/xrpl_test?sslmode=disable
 
   test:
     name: Test (${{ matrix.group }})

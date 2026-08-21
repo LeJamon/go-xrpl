@@ -28,7 +28,7 @@ func newGenerateConfigCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "generate-config",
 		Short: "Generate a complete configuration file",
-		Long: `Generate a complete xrpld.toml configuration file with all required fields.
+		Long: `Generate a complete goxrpl.toml configuration file with all required fields.
 The generated file is a working starting point that passes validation.
 Review and adjust the values before using it to start the server.`,
 		Args: cobra.NoArgs,
@@ -37,7 +37,7 @@ Review and adjust the values before using it to start the server.`,
 		},
 	}
 	command.Flags().StringVar(&options.network, "network", "main", "network type: main, testnet, or devnet")
-	command.Flags().StringVar(&options.output, "output", "xrpld.toml", "output file path")
+	command.Flags().StringVar(&options.output, "output", "goxrpl.toml", "output file path")
 	return command
 }
 
@@ -76,9 +76,9 @@ func runGenerateConfig(cmd *cobra.Command, options *generateOptions) error {
 	fmt.Fprintln(w, "  1. Review and adjust the configuration values")
 	if networkID == "devnet" {
 		fmt.Fprintln(w, "  2. Configure trusted validators, or start in standalone mode:")
-		fmt.Fprintln(w, "     xrpld server --standalone --conf", options.output)
+		fmt.Fprintln(w, "     goxrpl server --standalone --conf", options.output)
 	} else {
-		fmt.Fprintln(w, "  2. Start the server: xrpld server --conf", options.output)
+		fmt.Fprintln(w, "  2. Start the server: goxrpl server --conf", options.output)
 	}
 	return nil
 }

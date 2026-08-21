@@ -9,7 +9,7 @@ import (
 )
 
 func TestOverlayOptionsFromConfigDataDir(t *testing.T) {
-	appCfg := &config.Config{DatabasePath: "/var/lib/xrpld/db"}
+	appCfg := &config.Config{DatabasePath: "/var/lib/goxrpl/db"}
 	peerCfg := peermanagement.DefaultConfig()
 	for _, option := range OverlayOptionsFromConfig(appCfg) {
 		option(&peerCfg)
@@ -30,13 +30,13 @@ func TestOverlayOptionsFromConfigDataDir(t *testing.T) {
 
 	appCfg = &config.Config{
 		DatabasePath: "postgres://user:secret@db.example/xrpl",
-		NodeDB:       config.NodeDBConfig{Path: "/var/lib/xrpld/db/pebble"},
+		NodeDB:       config.NodeDBConfig{Path: "/var/lib/goxrpl/db/pebble"},
 	}
 	peerCfg = peermanagement.DefaultConfig()
 	for _, option := range OverlayOptionsFromConfig(appCfg) {
 		option(&peerCfg)
 	}
-	want = "/var/lib/xrpld/db/peers"
+	want = "/var/lib/goxrpl/db/peers"
 	if peerCfg.DataDir != want {
 		t.Fatalf("PostgreSQL DataDir = %q, want %q", peerCfg.DataDir, want)
 	}
