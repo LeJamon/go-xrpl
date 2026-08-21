@@ -16,16 +16,16 @@ const maxProviderAncestors = uint32(256)
 
 const providerCacheCapacity = 1024
 
-// LedgerHeader is the narrow slice of *ledger.Ledger the provider needs.
-type LedgerHeader interface {
+// ledgerHeader is the narrow slice of *ledger.Ledger the provider needs.
+type ledgerHeader interface {
 	Sequence() uint32
 	Hash() [32]byte
 	ParentHash() [32]byte
 }
 
-var _ LedgerHeader = (*ledger.Ledger)(nil)
+var _ ledgerHeader = (*ledger.Ledger)(nil)
 
-type hashLookupFunc func(hash [32]byte) (LedgerHeader, error)
+type hashLookupFunc func(hash [32]byte) (ledgerHeader, error)
 
 type hashOfSeqHeader interface {
 	HashOfSeq(seq uint32) ([32]byte, bool, error)
@@ -63,7 +63,7 @@ func NewAncestryProvider(svc *service.Service) *AncestryProvider {
 	if svc == nil {
 		return newAncestryProviderFromLookup(nil)
 	}
-	return newAncestryProviderFromLookup(func(hash [32]byte) (LedgerHeader, error) {
+	return newAncestryProviderFromLookup(func(hash [32]byte) (ledgerHeader, error) {
 		l, err := svc.GetLedgerByHash(hash)
 		if err != nil {
 			return nil, err
@@ -177,12 +177,6 @@ func (p *AncestryProvider) cacheGetLocked(id consensus.LedgerID) (*providerLedge
 	}
 	p.lru.MoveToFront(elem)
 	return elem.Value.(*cacheEntry).pl, true
-}
-
-func (p *AncestryProvider) cachePut(id consensus.LedgerID, pl *providerLedger) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.cachePutLocked(id, pl)
 }
 
 func (p *AncestryProvider) cachePutLocked(id consensus.LedgerID, pl *providerLedger) {

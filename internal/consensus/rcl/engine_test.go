@@ -829,7 +829,7 @@ func TestEngine_StartSeedsNegativeUNL(t *testing.T) {
 	defer engine.Stop()
 
 	for _, node := range nodes[:4] {
-		if status := engine.validationTracker.AddStatus(&consensus.Validation{
+		if status := engine.validationTracker.addStatus(&consensus.Validation{
 			LedgerID:  consensus.LedgerID{0xA1},
 			LedgerSeq: 101,
 			NodeID:    node,
@@ -871,7 +871,7 @@ func TestEngine_FullyValidatedLedgerRefreshesNegativeUNL(t *testing.T) {
 		t.Helper()
 		now := adaptor.Now()
 		for _, node := range nodes[:4] {
-			if status := engine.validationTracker.AddStatus(&consensus.Validation{
+			if status := engine.validationTracker.addStatus(&consensus.Validation{
 				LedgerID: ledgerID, LedgerSeq: seq, NodeID: node,
 				SignTime: now, SeenTime: now, Full: true,
 			}); status != ValStatusCurrent {
@@ -1452,7 +1452,7 @@ func TestEngine_OnProposal_SelfKey(t *testing.T) {
 	if relayed != 0 {
 		t.Errorf("self-key proposal relayed %d times, want 0", relayed)
 	}
-	if got := engine.proposalTracker.Count(); got != 0 {
+	if got := engine.proposalTracker.count(); got != 0 {
 		t.Errorf("self-key proposal stored %d positions, want 0", got)
 	}
 
@@ -1470,7 +1470,7 @@ func TestEngine_OnProposal_SelfKey(t *testing.T) {
 	if err := engine.OnProposal(peerProposal, 0); err != nil {
 		t.Fatalf("OnProposal(peer) returned error: %v", err)
 	}
-	if got := engine.proposalTracker.Count(); got != 1 {
+	if got := engine.proposalTracker.count(); got != 1 {
 		t.Errorf("trusted peer proposal stored %d positions, want 1", got)
 	}
 }
@@ -1527,7 +1527,7 @@ func TestEngine_OnProposal_SelfKey_UntrustedStillGuarded(t *testing.T) {
 	if relayed != 0 {
 		t.Errorf("self-key proposal relayed %d times, want 0", relayed)
 	}
-	if got := engine.proposalTracker.Count(); got != 0 {
+	if got := engine.proposalTracker.count(); got != 0 {
 		t.Errorf("self-key proposal stored %d positions, want 0", got)
 	}
 }
@@ -2748,7 +2748,7 @@ func TestSendValidation_PeerEchoIsNotConflicting(t *testing.T) {
 	echo := *emitted
 	echo.SignTime = time.Unix(emitted.SignTime.Unix(), 0).UTC()
 	echo.SeenTime = adaptor.Now()
-	if status := engine.validationTracker.AddStatus(&echo); status != ValStatusBadSeq {
+	if status := engine.validationTracker.addStatus(&echo); status != ValStatusBadSeq {
 		t.Fatalf("peer echo status: want %v, got %v", ValStatusBadSeq, status)
 	}
 }

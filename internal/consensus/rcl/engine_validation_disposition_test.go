@@ -378,7 +378,7 @@ func TestProcessVerifiedValidationClusterForcesRelay(t *testing.T) {
 
 func TestValidationDispositionStatusMappingAndAcquisitionGate(t *testing.T) {
 	tests := []struct {
-		input ValStatus
+		input valStatus
 		want  consensus.ValidationStatus
 	}{
 		{ValStatusCurrent, consensus.ValidationCurrent},

@@ -20,7 +20,7 @@ func TestFinalityDeferralBlocksConcurrentDrain(t *testing.T) {
 	})
 
 	tracker.beginFinalityDeferral()
-	status := tracker.addStatus(&consensus.Validation{
+	status := tracker.addStatusWithFinality(&consensus.Validation{
 		LedgerID:  consensus.LedgerID{0xA5},
 		LedgerSeq: 100,
 		NodeID:    nodeID,

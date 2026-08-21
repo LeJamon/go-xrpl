@@ -49,7 +49,7 @@ func TestEngine_CensorshipWarnsOnPersistentExclusion(t *testing.T) {
 	// x was first proposed exactly one interval ago and never included; we've
 	// since been forced to vote NO on it (why it isn't in our accepted set).
 	engine.censorship.propose([]consensus.TxID{x}, curr-censorshipWarnInterval)
-	engine.disputeTracker.CreateDispute(x, []byte{0xAA}, false)
+	engine.disputeTracker.createDispute(x, []byte{0xAA}, false)
 	engine.acceptLedger(consensus.ResultSuccess)
 	engine.mu.Unlock()
 

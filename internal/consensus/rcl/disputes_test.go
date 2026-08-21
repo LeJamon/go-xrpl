@@ -78,7 +78,7 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 
 	t.Run("empty set is not stalled", func(t *testing.T) {
 		dt := newDisputeTracker()
-		if dt.AllStalled(parms, true, parms.StalledRounds+1) {
+		if dt.allStalled(parms, true, parms.StalledRounds+1) {
 			t.Fatalf("empty dispute set must not be stalled")
 		}
 	})
@@ -86,15 +86,15 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 	t.Run("non-terminal avalanche state is not stalled", func(t *testing.T) {
 		dt := newDisputeTracker()
 		txID := makeTxID(1)
-		dt.CreateDispute(txID, nil, true)
-		d := dt.Dispute(txID)
+		dt.createDispute(txID, nil, true)
+		d := dt.dispute(txID)
 		d.AvalancheState = consensus.AvalancheMid
 		d.AvalancheCounter = parms.MinRounds + 5
 		d.CurrentVoteCounter = parms.StalledRounds + 5
 		// Heavy yes-tally to clear the percent threshold if reached.
 		d.Yays = 9
 		d.Nays = 0
-		if dt.AllStalled(parms, true, parms.StalledRounds+5) {
+		if dt.allStalled(parms, true, parms.StalledRounds+5) {
 			t.Fatalf("mid state must not stall regardless of tally")
 		}
 	})
@@ -102,14 +102,14 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 	t.Run("active flipping suppresses stall", func(t *testing.T) {
 		dt := newDisputeTracker()
 		txID := makeTxID(2)
-		dt.CreateDispute(txID, nil, true)
-		d := dt.Dispute(txID)
+		dt.createDispute(txID, nil, true)
+		d := dt.dispute(txID)
 		d.AvalancheState = consensus.AvalancheStuck
 		d.AvalancheCounter = parms.MinRounds + 1
 		d.CurrentVoteCounter = parms.MinRounds + 1
 		d.Yays = 9
 		d.Nays = 0
-		if dt.AllStalled(parms, true, parms.StalledRounds-1) {
+		if dt.allStalled(parms, true, parms.StalledRounds-1) {
 			t.Fatalf("active flipping on both sides must not stall")
 		}
 	})
@@ -117,19 +117,19 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 	t.Run("frozen + one-sided tally stalls", func(t *testing.T) {
 		dt := newDisputeTracker()
 		txID := makeTxID(3)
-		dt.CreateDispute(txID, nil, true)
-		d := dt.Dispute(txID)
+		dt.createDispute(txID, nil, true)
+		d := dt.dispute(txID)
 		d.AvalancheState = consensus.AvalancheStuck
 		d.AvalancheCounter = parms.MinRounds + 1
 		d.CurrentVoteCounter = parms.StalledRounds + 1
 		d.Yays = 9
 		d.Nays = 0
-		if !dt.AllStalled(parms, true, parms.StalledRounds+1) {
+		if !dt.allStalled(parms, true, parms.StalledRounds+1) {
 			t.Fatalf("frozen dispute with >80%% yes support must stall")
 		}
 		d.Yays = 0
 		d.Nays = 9
-		if !dt.AllStalled(parms, true, parms.StalledRounds+1) {
+		if !dt.allStalled(parms, true, parms.StalledRounds+1) {
 			t.Fatalf("frozen dispute with >80%% no support must stall")
 		}
 	})
@@ -142,8 +142,8 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 	t.Run("observer mode falls through to tally", func(t *testing.T) {
 		dt := newDisputeTracker()
 		txID := makeTxID(4)
-		dt.CreateDispute(txID, nil, false)
-		d := dt.Dispute(txID)
+		dt.createDispute(txID, nil, false)
+		d := dt.dispute(txID)
 		d.AvalancheState = consensus.AvalancheStuck
 		d.AvalancheCounter = parms.MinRounds + 1
 		// CurrentVoteCounter is irrelevant when not proposing.
@@ -152,7 +152,7 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 		d.Nays = 0
 		// peersUnchanged=0 — proposers may still be flipping, but the
 		// gate is disabled in observer mode so the tally still wins.
-		if !dt.AllStalled(parms, false, 0) {
+		if !dt.allStalled(parms, false, 0) {
 			t.Fatalf("observer must consider one-sided tally stalled")
 		}
 	})
@@ -163,8 +163,8 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 	t.Run("mixed disputes — one not stalled — aggregate false", func(t *testing.T) {
 		dt := newDisputeTracker()
 		stalledID := makeTxID(5)
-		dt.CreateDispute(stalledID, nil, true)
-		ds := dt.Dispute(stalledID)
+		dt.createDispute(stalledID, nil, true)
+		ds := dt.dispute(stalledID)
 		ds.AvalancheState = consensus.AvalancheStuck
 		ds.AvalancheCounter = parms.MinRounds + 1
 		ds.CurrentVoteCounter = parms.StalledRounds + 1
@@ -172,15 +172,15 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 		ds.Nays = 0
 
 		notStalledID := makeTxID(6)
-		dt.CreateDispute(notStalledID, nil, true)
-		dns := dt.Dispute(notStalledID)
+		dt.createDispute(notStalledID, nil, true)
+		dns := dt.dispute(notStalledID)
 		dns.AvalancheState = consensus.AvalancheMid // not terminal
 		dns.AvalancheCounter = parms.MinRounds + 5
 		dns.CurrentVoteCounter = parms.StalledRounds + 5
 		dns.Yays = 9
 		dns.Nays = 0
 
-		if dt.AllStalled(parms, true, parms.StalledRounds+1) {
+		if dt.allStalled(parms, true, parms.StalledRounds+1) {
 			t.Fatalf("AllStalled must be false when any dispute is not stalled")
 		}
 	})
@@ -188,14 +188,14 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 	t.Run("invalid avalanche state panics", func(t *testing.T) {
 		dt := newDisputeTracker()
 		txID := makeTxID(7)
-		dt.CreateDispute(txID, nil, true)
-		dt.Dispute(txID).AvalancheState = consensus.AvalancheStuck + 1
+		dt.createDispute(txID, nil, true)
+		dt.dispute(txID).AvalancheState = consensus.AvalancheStuck + 1
 		defer func() {
 			if recover() == nil {
 				t.Fatal("AllStalled did not panic")
 			}
 		}()
-		dt.AllStalled(parms, true, parms.StalledRounds+1)
+		dt.allStalled(parms, true, parms.StalledRounds+1)
 	})
 }
 
@@ -285,8 +285,8 @@ func TestConsensus_OverlappingDisjointProposals_Converges(t *testing.T) {
 	}
 
 	engine.mu.RLock()
-	dC := engine.disputeTracker.Dispute(txC)
-	dD := engine.disputeTracker.Dispute(txD)
+	dC := engine.disputeTracker.dispute(txC)
+	dD := engine.disputeTracker.dispute(txD)
 	engine.mu.RUnlock()
 	if dC == nil {
 		t.Fatal("expected dispute for tx C after feeding peer proposals")
@@ -313,8 +313,8 @@ func TestConsensus_OverlappingDisjointProposals_Converges(t *testing.T) {
 	engine.mu.Unlock()
 
 	engine.mu.RLock()
-	dC = engine.disputeTracker.Dispute(txC)
-	dD = engine.disputeTracker.Dispute(txD)
+	dC = engine.disputeTracker.dispute(txC)
+	dD = engine.disputeTracker.dispute(txD)
 	outSet := engine.ourTxSet
 	engine.mu.RUnlock()
 
@@ -348,11 +348,11 @@ func TestEngine_UpdatePosition_ObserverAdoptsPeerMajority(t *testing.T) {
 	engine.mu.Lock()
 	engine.setMode(consensus.ModeObserving)
 	engine.ourTxSet = empty
-	engine.disputeTracker.CreateDispute(txID, txID[:], false)
+	engine.disputeTracker.createDispute(txID, txID[:], false)
 	for i := byte(1); i <= 3; i++ {
-		engine.disputeTracker.SetVote(txID, consensus.NodeID{i}, true)
+		engine.disputeTracker.setVote(txID, consensus.NodeID{i}, true)
 	}
-	engine.disputeTracker.SetVote(txID, consensus.NodeID{4}, false)
+	engine.disputeTracker.setVote(txID, consensus.NodeID{4}, false)
 	engine.updatePosition()
 	got := engine.ourTxSet
 	engine.mu.Unlock()
@@ -404,7 +404,7 @@ func TestEngine_OnProposalRefreshesDisputeVoteWhenPeerMatchesOurSet(t *testing.T
 	if err := engine.OnProposal(proposal, 1); err != nil {
 		t.Fatalf("OnProposal(empty): %v", err)
 	}
-	dispute := engine.disputeTracker.Dispute(txID)
+	dispute := engine.disputeTracker.dispute(txID)
 	if dispute == nil || dispute.Yays != 0 || dispute.Nays != 1 {
 		t.Fatalf("empty-set vote = %#v, want 0 yes/1 no", dispute)
 	}
@@ -484,8 +484,8 @@ func TestConsensus_BowOut_UnVotesDisputes(t *testing.T) {
 	}
 
 	engine.mu.RLock()
-	preC := engine.disputeTracker.Dispute(txC)
-	preD := engine.disputeTracker.Dispute(txD)
+	preC := engine.disputeTracker.dispute(txC)
+	preD := engine.disputeTracker.dispute(txD)
 	engine.mu.RUnlock()
 	if preC == nil {
 		t.Fatal("expected dispute for tx C after bowingNode's proposal")
@@ -515,8 +515,8 @@ func TestConsensus_BowOut_UnVotesDisputes(t *testing.T) {
 	}
 
 	engine.mu.RLock()
-	postC := engine.disputeTracker.Dispute(txC)
-	postD := engine.disputeTracker.Dispute(txD)
+	postC := engine.disputeTracker.dispute(txC)
+	postD := engine.disputeTracker.dispute(txD)
 	_, stillInProposals := engine.proposalTracker.proposals[bowingNode]
 	_, isDead := engine.proposalTracker.deadNodes[bowingNode]
 	engine.mu.RUnlock()
@@ -563,16 +563,16 @@ func TestConsensus_AvalancheThresholdRamp(t *testing.T) {
 	parms := consensus.DefaultConsensusParms()
 
 	txID := makeTxID(0xC)
-	dt.CreateDispute(txID, []byte("tx"), true)
+	dt.createDispute(txID, []byte("tx"), true)
 	// 3 peers vote YES, 1 NO. ourVote = true. Weight = (3*100+100)/(3+1+1) = 80.
 	// This stays above Init/Mid/Late thresholds but below Stuck's 95%.
 	for i, yes := range []bool{true, true, true, false} {
 		var p consensus.NodeID
 		p[0] = 0x10 + byte(i)
-		dt.SetVote(txID, p, yes)
+		dt.setVote(txID, p, yes)
 	}
 
-	d := dt.Dispute(txID)
+	d := dt.dispute(txID)
 	if d.AvalancheState != consensus.AvalancheInit {
 		t.Fatalf("start AvalancheState = %v, want Init", d.AvalancheState)
 	}
@@ -581,7 +581,7 @@ func TestConsensus_AvalancheThresholdRamp(t *testing.T) {
 	}
 
 	// Call 1 at percentTime=0: MinRounds guard blocks advance.
-	dt.UpdateOurVote(0, true, parms)
+	dt.updateOurVote(0, true, parms)
 	if d.AvalancheState != consensus.AvalancheInit {
 		t.Errorf("after 1 tick: state = %v, want Init (min-rounds guard)", d.AvalancheState)
 	}
@@ -590,7 +590,7 @@ func TestConsensus_AvalancheThresholdRamp(t *testing.T) {
 	}
 
 	// Call 2 at percentTime=60 with counter>=MinRounds: advance to Mid.
-	dt.UpdateOurVote(60, true, parms)
+	dt.updateOurVote(60, true, parms)
 	if d.AvalancheState != consensus.AvalancheMid {
 		t.Errorf("after percentTime=60, 2nd tick: state = %v, want Mid", d.AvalancheState)
 	}
@@ -600,8 +600,8 @@ func TestConsensus_AvalancheThresholdRamp(t *testing.T) {
 
 	// Stay in Mid for MinRounds before advancing. Current counter
 	// resets to 0 on state change; drive two more ticks.
-	dt.UpdateOurVote(60, true, parms) // counter=1, guard blocks
-	dt.UpdateOurVote(90, true, parms) // counter=2, percentTime crosses 85 → advance to Late
+	dt.updateOurVote(60, true, parms) // counter=1, guard blocks
+	dt.updateOurVote(90, true, parms) // counter=2, percentTime crosses 85 → advance to Late
 	if d.AvalancheState != consensus.AvalancheLate {
 		t.Errorf("after percentTime=90: state = %v, want Late", d.AvalancheState)
 	}
@@ -610,8 +610,8 @@ func TestConsensus_AvalancheThresholdRamp(t *testing.T) {
 	}
 
 	// Advance to Stuck.
-	dt.UpdateOurVote(210, true, parms) // counter=1, guard blocks
-	dt.UpdateOurVote(210, true, parms) // counter=2, crosses 200 → advance to Stuck
+	dt.updateOurVote(210, true, parms) // counter=1, guard blocks
+	dt.updateOurVote(210, true, parms) // counter=2, crosses 200 → advance to Stuck
 	if d.AvalancheState != consensus.AvalancheStuck {
 		t.Errorf("after percentTime=210: state = %v, want Stuck", d.AvalancheState)
 	}
@@ -623,7 +623,7 @@ func TestConsensus_AvalancheThresholdRamp(t *testing.T) {
 	// happens on the entry-into-Stuck tick or the one after. Assert
 	// it flipped within one more tick.
 	if d.OurVote {
-		dt.UpdateOurVote(210, true, parms)
+		dt.updateOurVote(210, true, parms)
 	}
 	if d.OurVote {
 		t.Errorf("at Stuck (95%% threshold), weight 80%% should flip our vote to false; got OurVote=%v", d.OurVote)

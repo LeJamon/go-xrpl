@@ -52,7 +52,7 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 	}
 
 	// Buffer for future playback, even between rounds.
-	e.proposalTracker.BufferRecent(proposal)
+	e.proposalTracker.bufferRecent(proposal)
 
 	// Between rounds (accepted phase) only buffer, don't process.
 	if e.phase == consensus.PhaseAccepted {
@@ -66,7 +66,7 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 
 	// Ignore already-dead nodes. Must precede the bow-out arm: otherwise a
 	// dead node could re-insert itself by re-sending seqLeave.
-	if e.proposalTracker.IsDead(proposal.NodeID) {
+	if e.proposalTracker.isDead(proposal.NodeID) {
 		return nil
 	}
 
@@ -75,10 +75,10 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 	// otherwise the seqLeave position keeps voting forever.
 	const seqLeave = uint32(0xFFFFFFFF)
 	if proposal.Position == seqLeave {
-		e.proposalTracker.MarkDead(proposal.NodeID)
+		e.proposalTracker.markDead(proposal.NodeID)
 		// Drop its dispute votes so they stop counting toward convergence.
 		if e.disputeTracker != nil {
-			e.disputeTracker.UnVote(proposal.NodeID)
+			e.disputeTracker.unVote(proposal.NodeID)
 		}
 		e.adaptor.RelayProposal(proposal, originPeer)
 		return nil
@@ -87,7 +87,7 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 	// Drop non-increasing positions before counting close-time votes,
 	// relaying, or updating disputes — otherwise a re-sent or equivocating
 	// proposal at an already-seen ProposeSeq votes again.
-	if !e.proposalTracker.Store(proposal) {
+	if !e.proposalTracker.store(proposal) {
 		return nil
 	}
 
@@ -150,7 +150,7 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 				return nil
 			}
 			e.createDisputesAgainst(peerSet)
-			if e.disputeTracker.UpdateDisputes(proposal.NodeID, peerSet) {
+			if e.disputeTracker.updateDisputes(proposal.NodeID, peerSet) {
 				e.peerUnchangedCounter = 0
 			}
 		}
@@ -220,11 +220,11 @@ func (e *Engine) ProcessVerifiedValidation(
 	deferFinality := tracked && tracker != nil
 	if deferFinality {
 		tracker.beginFinalityDeferral()
-		disposition.Status = validationDispositionStatus(tracker.addStatus(validation, false))
+		disposition.Status = validationDispositionStatus(tracker.addStatusWithFinality(validation, false))
 	}
 
 	if disposition.AcquireEligible() {
-		e.proposalTracker.SetValidation(validation)
+		e.proposalTracker.setValidation(validation)
 	}
 
 	event := &consensus.ValidationReceivedEvent{
@@ -241,7 +241,7 @@ func (e *Engine) ProcessVerifiedValidation(
 	return disposition, nil
 }
 
-func validationDispositionStatus(status ValStatus) consensus.ValidationStatus {
+func validationDispositionStatus(status valStatus) consensus.ValidationStatus {
 	switch status {
 	case ValStatusCurrent:
 		return consensus.ValidationCurrent
@@ -284,12 +284,12 @@ func (e *Engine) OnTxSet(id consensus.TxSetID, txs [][]byte) error {
 		e.acquiredTxSets[id] = txSet
 		if e.ourTxSet != nil && id != e.ourTxSet.ID() {
 			e.createDisputesAgainst(txSet)
-			for nodeID, p := range e.proposalTracker.All() {
+			for nodeID, p := range e.proposalTracker.all() {
 				if !trusted(nodeID) {
 					continue
 				}
 				if p.TxSet == id {
-					if e.disputeTracker.UpdateDisputes(nodeID, txSet) {
+					if e.disputeTracker.updateDisputes(nodeID, txSet) {
 						e.peerUnchangedCounter = 0
 					}
 				}
@@ -335,14 +335,14 @@ func (e *Engine) createDisputesAgainst(peerTxSet consensus.TxSet) {
 		if _, also := peers[txID]; also {
 			continue
 		}
-		if e.disputeTracker.Has(txID) {
+		if e.disputeTracker.has(txID) {
 			continue
 		}
 		var blob []byte
 		if idx < len(ourBlobs) {
 			blob = ourBlobs[idx]
 		}
-		dispute := e.disputeTracker.CreateDispute(txID, blob, true)
+		dispute := e.disputeTracker.createDispute(txID, blob, true)
 		e.seedDisputeVotes(dispute.TxID)
 	}
 
@@ -352,14 +352,14 @@ func (e *Engine) createDisputesAgainst(peerTxSet consensus.TxSet) {
 		if _, also := ours[txID]; also {
 			continue
 		}
-		if e.disputeTracker.Has(txID) {
+		if e.disputeTracker.has(txID) {
 			continue
 		}
 		var blob []byte
 		if idx < len(peerBlobs) {
 			blob = peerBlobs[idx]
 		}
-		dispute := e.disputeTracker.CreateDispute(txID, blob, false)
+		dispute := e.disputeTracker.createDispute(txID, blob, false)
 		e.seedDisputeVotes(dispute.TxID)
 	}
 }
@@ -368,7 +368,7 @@ func (e *Engine) createDisputesAgainst(peerTxSet consensus.TxSet) {
 // its acquired tx set. Caller must hold e.mu.
 func (e *Engine) seedDisputeVotes(txID consensus.TxID) {
 	trusted := e.trustedPredicate()
-	for nodeID, p := range e.proposalTracker.All() {
+	for nodeID, p := range e.proposalTracker.all() {
 		if !trusted(nodeID) {
 			continue
 		}
@@ -376,7 +376,7 @@ func (e *Engine) seedDisputeVotes(txID consensus.TxID) {
 		if !ok {
 			continue
 		}
-		if e.disputeTracker.SetVote(txID, nodeID, peerSet.Contains(txID)) {
+		if e.disputeTracker.setVote(txID, nodeID, peerSet.Contains(txID)) {
 			e.peerUnchangedCounter = 0
 		}
 	}

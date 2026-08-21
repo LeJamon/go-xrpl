@@ -44,12 +44,12 @@ func (vt *ValidationTracker) TrustedSupport(ledgerID consensus.LedgerID) int {
 		vt.mu.RUnlock()
 
 		if trie == nil || ancestry == nil {
-			return vt.TrustedValidationCount(ledgerID)
+			return vt.trustedValidationCount(ledgerID)
 		}
 
 		resolved, ok := resolveAncestry(ancestry, ledgerID, nil)
 		if !ok || resolved.retryable {
-			return vt.TrustedValidationCount(ledgerID)
+			return vt.trustedValidationCount(ledgerID)
 		}
 
 		vt.mu.Lock()
@@ -75,7 +75,7 @@ func (vt *ValidationTracker) TrustedSupport(ledgerID consensus.LedgerID) int {
 		vt.mu.Unlock()
 		return support
 	}
-	return vt.TrustedValidationCount(ledgerID)
+	return vt.trustedValidationCount(ledgerID)
 }
 
 func (vt *ValidationTracker) branchSupportExcludingNegUNLLocked(lgr ledgertrie.Ledger) int {
@@ -112,18 +112,6 @@ func (vt *ValidationTracker) GetValidationCount(ledgerID consensus.LedgerID) int
 }
 
 // Clear removes all tracked validations.
-func (vt *ValidationTracker) Clear() {
-	vt.mu.Lock()
-	defer vt.mu.Unlock()
-
-	vt.validations = make(map[consensus.LedgerID]*ledgerValidations)
-	vt.byNode = make(map[consensus.NodeID]*consensus.Validation)
-	vt.fired = make(map[finalityKey]struct{})
-	vt.pendingFinality = nil
-	vt.pendingGeneration = make(map[finalityKey]uint64)
-	vt.rebuildTrieLocked()
-}
-
 // ValidationStats summarizes tracked validations.
 type ValidationStats struct {
 	TotalValidations   int

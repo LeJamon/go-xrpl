@@ -531,9 +531,9 @@ func (e *Engine) purgePendingTrustLocked() {
 	e.trustMu.Unlock()
 
 	for _, nodeID := range pending {
-		e.proposalTracker.PurgeNode(nodeID)
+		e.proposalTracker.purgeNode(nodeID)
 		if e.disputeTracker != nil {
-			e.disputeTracker.UnVote(nodeID)
+			e.disputeTracker.unVote(nodeID)
 		}
 	}
 }
@@ -542,7 +542,7 @@ func (e *Engine) purgePendingTrustLocked() {
 // to the callback-linearized trusted set. An initial vote remains eligible
 // after a later seqLeave removes the node's final current position. Caller
 // holds e.mu.
-func (e *Engine) appendReplayCloseTimesLocked(votes []ReplayCloseTime) {
+func (e *Engine) appendReplayCloseTimesLocked(votes []replayCloseTime) {
 	if e.state == nil {
 		return
 	}
@@ -635,7 +635,7 @@ func (e *Engine) SetLedgerAncestryProvider(p LedgerAncestryProvider) {
 	defer e.mu.Unlock()
 	e.ledgerAncestry = p
 	if e.validationTracker != nil {
-		e.validationTracker.SetLedgerAncestryProvider(p)
+		e.validationTracker.setLedgerAncestryProvider(p)
 	}
 }
 
@@ -681,7 +681,7 @@ func (e *Engine) Start(ctx context.Context) error {
 	trusted, quorum, negativeUNL := validationConfig(e.adaptor)
 	e.validationTracker = NewValidationTracker(quorum)
 	e.setValidationConfig(trusted, quorum, negativeUNL)
-	e.validationTracker.SetQuorumUnavailableFunc(e.adaptor.IsQuorumUnavailable)
+	e.validationTracker.setQuorumUnavailableFunc(e.adaptor.IsQuorumUnavailable)
 	e.trustMu.Lock()
 	e.trustedSnapshot = make(map[consensus.NodeID]struct{}, len(trusted))
 	for _, nodeID := range trusted {
@@ -710,7 +710,7 @@ func (e *Engine) Start(ctx context.Context) error {
 			e.recordTrustTransition(trusted)
 		})
 		if settled, ok := e.adaptor.(consensus.TrustChangeSettledNotifier); ok {
-			settled.OnTrustSettled(tracker.RecheckFinality)
+			settled.OnTrustSettled(tracker.recheckFinality)
 		}
 	}
 	_, validationConfigNotified := e.adaptor.(validationConfigChangeNotifier)
@@ -719,7 +719,7 @@ func (e *Engine) Start(ctx context.Context) error {
 		e.refreshValidationConfig()
 	}
 	if e.ledgerAncestry != nil {
-		e.validationTracker.SetLedgerAncestryProvider(e.ledgerAncestry)
+		e.validationTracker.setLedgerAncestryProvider(e.ledgerAncestry)
 	}
 	// Network-adjusted clock for freshness checks — avoids rejecting our own
 	// just-signed validation by the close-time offset on a skewed node.
@@ -814,7 +814,7 @@ func (e *Engine) Stop() error {
 	}
 
 	if e.validationTracker != nil {
-		e.validationTracker.Flush()
+		e.validationTracker.flush()
 	}
 
 	if arc != nil {
@@ -1005,7 +1005,7 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 
 	// Reset tracking maps. Dead-node set is round-scoped, so a validator that
 	// bowed out last round can rejoin.
-	e.proposalTracker.ResetRound()
+	e.proposalTracker.resetRound()
 	e.disputeTracker = newDisputeTracker()
 	e.acquiredTxSets = make(map[consensus.TxSetID]consensus.TxSet)
 	e.comparesTxSets = make(map[consensus.TxSetID]struct{})
@@ -1032,13 +1032,13 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	// Replay buffered proposals for this round's prevLedger.
 	if e.prevLedger != nil {
 		replayTrusted := e.trustedPredicate()
-		closeTimes, _, relay := e.proposalTracker.Replay(e.prevLedger.ID(), replayTrusted)
+		closeTimes, _, relay := e.proposalTracker.replay(e.prevLedger.ID(), replayTrusted)
 		e.unvoteDeadProposalsLocked()
 		// Trust can change while replay is running. Remove any positions
 		// that are no longer trusted before deriving close-time votes,
 		// dispute state, or the replay pressure count.
 		e.pruneUntrustedProposalsLocked()
-		replayed := e.proposalTracker.CountTrusted(e.trustedPredicate())
+		replayed := e.proposalTracker.countTrusted(e.trustedPredicate())
 		e.appendReplayCloseTimesLocked(closeTimes)
 
 		// Re-share replayed positions so peers that missed a proposal on this
@@ -1164,7 +1164,7 @@ func (e *Engine) GetJSON(full bool) map[string]any {
 
 	trusted := e.trustedPredicate()
 	proposers := 0
-	for nodeID := range e.proposalTracker.All() {
+	for nodeID := range e.proposalTracker.all() {
 		if trusted(nodeID) {
 			proposers++
 		}
@@ -1188,7 +1188,7 @@ func (e *Engine) GetJSON(full bool) map[string]any {
 
 	disputeCount := 0
 	if e.disputeTracker != nil {
-		disputeCount = e.disputeTracker.Count()
+		disputeCount = e.disputeTracker.count()
 	}
 	if disputeCount > 0 && !full {
 		ret["disputes"] = disputeCount
@@ -1225,7 +1225,7 @@ func (e *Engine) GetJSON(full bool) map[string]any {
 
 		if proposers > 0 {
 			ppj := make(map[string]any, proposers)
-			for nodeID, p := range e.proposalTracker.All() {
+			for nodeID, p := range e.proposalTracker.all() {
 				if !trusted(nodeID) {
 					continue
 				}
@@ -1244,7 +1244,7 @@ func (e *Engine) GetJSON(full bool) map[string]any {
 
 		if disputeCount > 0 {
 			dsj := make(map[string]any, disputeCount)
-			for _, d := range e.disputeTracker.All() {
+			for _, d := range e.disputeTracker.all() {
 				dsj[fmt.Sprintf("%X", d.TxID[:])] = disputeJSON(d)
 			}
 			ret["disputes"] = dsj
@@ -1258,8 +1258,8 @@ func (e *Engine) GetJSON(full bool) map[string]any {
 			ret["close_times"] = ctj
 		}
 
-		if e.proposalTracker.DeadNodeCount() > 0 {
-			deadIDs := e.proposalTracker.DeadNodeIDs()
+		if e.proposalTracker.deadNodeCount() > 0 {
+			deadIDs := e.proposalTracker.deadNodeIDs()
 			dnj := make([]string, 0, len(deadIDs))
 			for _, nodeID := range deadIDs {
 				dnj = append(dnj, fmt.Sprintf("%X", nodeID[:]))
@@ -1333,7 +1333,7 @@ func (e *Engine) GetLastCloseInfo() (proposers int, convergeTime time.Duration) 
 func (e *Engine) recentTrustedProposerCount() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	fresh := e.proposalTracker.LatestFresh(e.trustedPredicate(), e.adaptor.Now(), e.timing.ProposeFreshness)
+	fresh := e.proposalTracker.latestFresh(e.trustedPredicate(), e.adaptor.Now(), e.timing.ProposeFreshness)
 	return len(fresh)
 }
 
@@ -1539,9 +1539,9 @@ func (e *Engine) closeTimesOutOfBounds(timeSincePrevClose time.Duration) bool {
 // map (empty early in a round), so early validation pressure is visible.
 func (e *Engine) closedProposerCounts() (proposersClosed, proposersValidated int) {
 	e.purgePendingTrustLocked()
-	proposersClosed = e.proposalTracker.CountTrusted(e.trustedPredicate())
+	proposersClosed = e.proposalTracker.countTrusted(e.trustedPredicate())
 	if e.prevLedger != nil && e.validationTracker != nil {
-		proposersValidated = e.validationTracker.ProposersValidated(e.prevLedger.ID())
+		proposersValidated = e.validationTracker.proposersValidated(e.prevLedger.ID())
 	}
 	return proposersClosed, proposersValidated
 }
@@ -1746,7 +1746,7 @@ func (e *Engine) closeLedger() {
 	e.pruneUntrustedProposalsLocked()
 	requested := make(map[consensus.TxSetID]struct{})
 	trusted := e.trustedPredicate()
-	for nodeID, p := range e.proposalTracker.All() {
+	for nodeID, p := range e.proposalTracker.all() {
 		if !trusted(nodeID) {
 			continue
 		}

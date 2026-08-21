@@ -147,7 +147,7 @@ func (e *Engine) timerEntry() {
 	// must not keep steering preferred-ledger selection through a stall.
 	if e.validationTracker != nil {
 		stage = e.startHeartbeatStageLocked("flush-stale")
-		e.validationTracker.FlushStale()
+		e.validationTracker.flushStale()
 		slowStages = e.finishHeartbeatStage(slowStages, stage)
 	}
 
@@ -265,7 +265,7 @@ func (e *Engine) checkAndStartRoundInner() {
 	// Buffered proposals → start immediately (peer pressure closes open
 	// phase); otherwise wait for the idle interval.
 	ledgerID := ledger.ID()
-	hasBufferedProposals := e.proposalTracker.HasBufferedFor(ledgerID)
+	hasBufferedProposals := e.proposalTracker.hasBufferedFor(ledgerID)
 
 	if !hasBufferedProposals {
 		timeSinceClose := e.adaptor.Now().Sub(ledger.CloseTime())
@@ -534,7 +534,7 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 
 	// Clear consensus state and replay (only for a new target ledger).
 	if e.prevLedger == nil || netLedgerID != e.prevLedger.ID() {
-		e.proposalTracker.ResetProposals()
+		e.proposalTracker.resetProposals()
 		e.disputeTracker = newDisputeTracker()
 		e.acquiredTxSets = make(map[consensus.TxSetID]consensus.TxSet)
 		e.comparesTxSets = make(map[consensus.TxSetID]struct{})
@@ -548,7 +548,7 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 		// Replay proposals for the new ledger; close-time votes only if a
 		// round state exists.
 		replayTrusted := e.trustedPredicate()
-		closeTimes, _, relay := e.proposalTracker.Replay(netLedgerID, replayTrusted)
+		closeTimes, _, relay := e.proposalTracker.replay(netLedgerID, replayTrusted)
 		e.unvoteDeadProposalsLocked()
 		e.pruneUntrustedProposalsLocked()
 		e.appendReplayCloseTimesLocked(closeTimes)

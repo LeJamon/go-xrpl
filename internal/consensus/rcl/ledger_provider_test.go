@@ -29,8 +29,8 @@ func (h *fakeHeader) ParentHash() [32]byte { return h.parent }
 // buildChain produces headers seq 1..n, each with a deterministic
 // hash (byte 0 = seq, byte 1 = tag to distinguish forks). Returns
 // the tip header and the full {hash → header} map.
-func buildChain(n uint32, tag byte) (*fakeHeader, map[[32]byte]LedgerHeader) {
-	byHash := make(map[[32]byte]LedgerHeader)
+func buildChain(n uint32, tag byte) (*fakeHeader, map[[32]byte]ledgerHeader) {
+	byHash := make(map[[32]byte]ledgerHeader)
 	var prevHash [32]byte // zero = pre-genesis
 	var tip *fakeHeader
 	for s := uint32(1); s <= n; s++ {
@@ -46,8 +46,8 @@ func buildChain(n uint32, tag byte) (*fakeHeader, map[[32]byte]LedgerHeader) {
 
 // newTestProvider constructs a provider backed by a byHash map. Any
 // missing lookup returns a sentinel error.
-func newTestProvider(byHash map[[32]byte]LedgerHeader) *AncestryProvider {
-	return newAncestryProviderFromLookup(func(h [32]byte) (LedgerHeader, error) {
+func newTestProvider(byHash map[[32]byte]ledgerHeader) *AncestryProvider {
+	return newAncestryProviderFromLookup(func(h [32]byte) (ledgerHeader, error) {
 		if lh, ok := byHash[h]; ok {
 			return lh, nil
 		}
@@ -181,7 +181,7 @@ func TestAncestryProvider_RetainsPartialWhenRepairIsTransientlyUnavailable(t *te
 	delete(byHash, missingHash)
 
 	failTip := false
-	p := newAncestryProviderFromLookup(func(hash [32]byte) (LedgerHeader, error) {
+	p := newAncestryProviderFromLookup(func(hash [32]byte) (ledgerHeader, error) {
 		if failTip && hash == tip.hash {
 			failTip = false
 			return nil, errors.New("transient tip failure")
@@ -251,7 +251,7 @@ func TestAncestryProvider_EvictedPartialJoinsInflightFallback(t *testing.T) {
 	releaseRetryProbe := make(chan struct{})
 	buildTip := make(chan struct{})
 	releaseBuildTip := make(chan struct{})
-	p.lookup = func(hash [32]byte) (LedgerHeader, error) {
+	p.lookup = func(hash [32]byte) (ledgerHeader, error) {
 		switch hash {
 		case missingHash:
 			close(retryProbe)
@@ -324,7 +324,7 @@ func TestAncestryProvider_EvictedPartialJoinsInflightFallback(t *testing.T) {
 func TestAncestryProvider_RejectsParentHashMismatchAndRepairs(t *testing.T) {
 	tip, byHash := buildChain(5, 'm')
 	var parentHash [32]byte
-	var correct LedgerHeader
+	var correct ledgerHeader
 	for hash, header := range byHash {
 		if header.Sequence() == 4 {
 			parentHash = hash
@@ -363,7 +363,7 @@ func TestAncestryProvider_RejectsParentHashMismatchAndRepairs(t *testing.T) {
 func TestAncestryProvider_RejectsParentSequenceGapAndRepairs(t *testing.T) {
 	tip, byHash := buildChain(5, 'n')
 	var parentHash [32]byte
-	var correct LedgerHeader
+	var correct ledgerHeader
 	for hash, header := range byHash {
 		if header.Sequence() == 4 {
 			parentHash = hash
@@ -426,7 +426,7 @@ func TestAncestryProvider_SameTipConcurrentLookupIsBounded(t *testing.T) {
 	const workers = 32
 	var calls atomic.Int32
 	start := make(chan struct{})
-	p := newAncestryProviderFromLookup(func(hash [32]byte) (LedgerHeader, error) {
+	p := newAncestryProviderFromLookup(func(hash [32]byte) (ledgerHeader, error) {
 		calls.Add(1)
 		if lh, ok := byHash[hash]; ok {
 			return lh, nil
@@ -554,7 +554,7 @@ func TestAncestryProvider_LRUEvicts(t *testing.T) {
 	// Filling the cache beyond providerCacheCapacity must evict the
 	// oldest entries; the cache stays bounded.
 	tag := byte('g')
-	p := newAncestryProviderFromLookup(func(h [32]byte) (LedgerHeader, error) {
+	p := newAncestryProviderFromLookup(func(h [32]byte) (ledgerHeader, error) {
 		// Synthesize headers on demand so we don't need to materialize
 		// thousands up front.
 		seq := uint32(h[0]) | uint32(h[1])<<8 | uint32(h[2])<<16
@@ -607,7 +607,7 @@ func TestAncestryProvider_CachesRepeatedQueries(t *testing.T) {
 	tip, byHash := buildChain(10, 'c')
 
 	var calls int
-	p := newAncestryProviderFromLookup(func(h [32]byte) (LedgerHeader, error) {
+	p := newAncestryProviderFromLookup(func(h [32]byte) (ledgerHeader, error) {
 		calls++
 		if lh, ok := byHash[h]; ok {
 			return lh, nil
@@ -644,7 +644,7 @@ func TestAncestryProvider_SplicesCachedPrefix(t *testing.T) {
 	}
 
 	var calls int
-	p := newAncestryProviderFromLookup(func(h [32]byte) (LedgerHeader, error) {
+	p := newAncestryProviderFromLookup(func(h [32]byte) (ledgerHeader, error) {
 		calls++
 		if lh, ok := byHash[h]; ok {
 			return lh, nil
@@ -692,12 +692,14 @@ func TestAncestryProvider_BypassesWrongSequenceCachedParent(t *testing.T) {
 	}
 
 	p := newTestProvider(byHash)
-	p.cachePut(consensus.LedgerID(parentHash), &providerLedger{
+	p.mu.Lock()
+	p.cachePutLocked(consensus.LedgerID(parentHash), &providerLedger{
 		id:        consensus.LedgerID(parentHash),
 		seq:       tip.seq - 2,
 		minSeq:    tip.seq - 2,
 		ancestors: nil,
 	})
+	p.mu.Unlock()
 
 	lgr, ok := p.LedgerByID(consensus.LedgerID(tip.hash))
 	if !ok {

@@ -29,7 +29,7 @@ func TestValidationTracker_TrustedPartialSteersButNotQuorum(t *testing.T) {
 
 	n1 := consensus.NodeID{1}
 	vt.SetTrusted([]consensus.NodeID{n1})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setLedgerAncestryProvider(provider)
 
 	var fired int
 	vt.SetFullyValidatedCallback(func(consensus.LedgerID, uint32) { fired++ })
@@ -52,7 +52,7 @@ func TestValidationTracker_TrustedPartialSteersButNotQuorum(t *testing.T) {
 
 	// Quorum: the partial is excluded from the full-validation count and
 	// must not fire finality.
-	if got := vt.TrustedValidationCount(abc.ID()); got != 0 {
+	if got := vt.trustedValidationCount(abc.ID()); got != 0 {
 		t.Errorf("partial must be excluded from full quorum count: got %d, want 0", got)
 	}
 	if fired != 0 {
@@ -64,7 +64,7 @@ func TestValidationTracker_TrustedPartialSteersButNotQuorum(t *testing.T) {
 	if !vt.Add(full) {
 		t.Fatal("full validation should be accepted")
 	}
-	if got := vt.TrustedValidationCount(abcd.ID()); got != 1 {
+	if got := vt.trustedValidationCount(abcd.ID()); got != 1 {
 		t.Errorf("full validation should count toward quorum: got %d, want 1", got)
 	}
 	if fired != 1 {
@@ -99,7 +99,7 @@ func TestValidationTracker_AddStatus_Classification(t *testing.T) {
 		at    time.Duration // tracker clock offset from base
 		flush bool          // run the FlushStale heartbeat sweep first
 		v     *consensus.Validation
-		want  ValStatus
+		want  valStatus
 	}{
 		{name: "first validation", v: mk(100, ledgerA, base, 1), want: ValStatusCurrent},
 		// Freshness gate (isCurrent) rejects a validation signed far in the
@@ -128,9 +128,9 @@ func TestValidationTracker_AddStatus_Classification(t *testing.T) {
 	for _, tc := range steps {
 		now = base.Add(tc.at)
 		if tc.flush {
-			vt.FlushStale()
+			vt.flushStale()
 		}
-		if got := vt.AddStatus(tc.v); got != tc.want {
+		if got := vt.addStatus(tc.v); got != tc.want {
 			t.Errorf("%s: AddStatus = %v, want %v", tc.name, got, tc.want)
 		}
 	}
@@ -152,10 +152,10 @@ func TestValidationTracker_AddStatus_PartialDoubleSign(t *testing.T) {
 		}
 	}
 
-	if got := vt.AddStatus(partial(100, consensus.LedgerID{0xA})); got != ValStatusCurrent {
+	if got := vt.addStatus(partial(100, consensus.LedgerID{0xA})); got != ValStatusCurrent {
 		t.Fatalf("first partial: AddStatus = %v, want current", got)
 	}
-	if got := vt.AddStatus(partial(100, consensus.LedgerID{0xB})); got != ValStatusConflicting {
+	if got := vt.addStatus(partial(100, consensus.LedgerID{0xB})); got != ValStatusConflicting {
 		t.Errorf("partial same-seq different-ledger: AddStatus = %v, want conflicting", got)
 	}
 }
@@ -228,7 +228,7 @@ func TestEngine_OnValidation_ConflictingDoubleSign(t *testing.T) {
 
 	// The conflict must NOT have been stored — the tracked tip stays at
 	// ledger A, so it cannot count toward quorum or steer the trie.
-	if tip := engine.validationTracker.LatestValidation(n); tip == nil || tip.LedgerID != (consensus.LedgerID{0xA}) {
+	if tip := engine.validationTracker.latestValidation(n); tip == nil || tip.LedgerID != (consensus.LedgerID{0xA}) {
 		t.Errorf("tracked tip should remain ledger A; got %+v", tip)
 	}
 
@@ -285,7 +285,7 @@ func TestEngine_OnValidation_SupersededSeqDoubleSign(t *testing.T) {
 	}
 
 	// The tip must stay at the seq-101 ledger.
-	if tip := engine.validationTracker.LatestValidation(n); tip == nil || tip.LedgerID != (consensus.LedgerID{0xC}) {
+	if tip := engine.validationTracker.latestValidation(n); tip == nil || tip.LedgerID != (consensus.LedgerID{0xC}) {
 		t.Errorf("tracked tip should remain the seq-101 ledger; got %+v", tip)
 	}
 

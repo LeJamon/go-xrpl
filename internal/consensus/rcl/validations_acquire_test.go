@@ -43,7 +43,7 @@ func TestValidationTracker_UnresolvableValidationParksThenReplays(t *testing.T) 
 	n1 := consensus.NodeID{1}
 	n2 := consensus.NodeID{2}
 	vt.SetTrusted([]consensus.NodeID{n1, n2})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setLedgerAncestryProvider(provider)
 
 	if !vt.Add(makeTrustedValidation(n1, abc.ID(), abc.Seq(), now)) {
 		t.Fatal("Add(n1->abc) should succeed")
@@ -88,7 +88,7 @@ func TestValidationTracker_AncestryLookupDoesNotHoldTrackerLock(t *testing.T) {
 	node := consensus.NodeID{1}
 	provider := &lockProbeAncestryProvider{}
 	vt.SetTrusted([]consensus.NodeID{node})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setLedgerAncestryProvider(provider)
 	if !vt.Add(makeTrustedValidation(node, ledger.ID(), ledger.Seq(), now)) {
 		t.Fatal("Add should accept the validation")
 	}
@@ -134,7 +134,7 @@ func TestValidationTracker_TrieDecidesWithMajorityParked(t *testing.T) {
 	island := []consensus.NodeID{{1}, {2}}
 	majority := []consensus.NodeID{{3}, {4}, {5}}
 	vt.SetTrusted(append(append([]consensus.NodeID{}, island...), majority...))
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setLedgerAncestryProvider(provider)
 
 	for _, n := range island {
 		vt.Add(makeTrustedValidation(n, abc.ID(), abc.Seq(), now))
@@ -182,19 +182,19 @@ func TestValidationTracker_ReadPollReplaysParked(t *testing.T) {
 
 	n1 := consensus.NodeID{1}
 	vt.SetTrusted([]consensus.NodeID{n1})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setLedgerAncestryProvider(provider)
 
 	vt.Add(makeTrustedValidation(n1, abc.ID(), abc.Seq(), now))
 	// Advance to abcd, not held: parks, tip stays abc.
 	vt.Add(makeTrustedValidation(n1, abcd.ID(), abcd.Seq(), now))
 
 	prev := &mockLedger{id: abc.ID(), seq: abc.Seq()}
-	if got := vt.ProposersFinished(prev); got != 0 {
+	if got := vt.proposersFinished(prev); got != 0 {
 		t.Fatalf("ProposersFinished while parked: got %d, want 0", got)
 	}
 
 	provider.add(abcd)
-	if got := vt.ProposersFinished(prev); got != 1 {
+	if got := vt.proposersFinished(prev); got != 1 {
 		t.Fatalf("ProposersFinished must replay parked validations: got %d, want 1", got)
 	}
 }
@@ -213,7 +213,7 @@ func TestValidationTracker_GetTrustedSupportPollReplaysParked(t *testing.T) {
 
 	n1 := consensus.NodeID{1}
 	vt.SetTrusted([]consensus.NodeID{n1})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setLedgerAncestryProvider(provider)
 
 	vt.Add(makeTrustedValidation(n1, abcd.ID(), abcd.Seq(), now))
 
@@ -236,7 +236,7 @@ func TestValidationTracker_GetPreferred_AcquiringMajorityFallback(t *testing.T) 
 	abcy := b.Build("abcy")
 
 	vt.SetTrusted([]consensus.NodeID{{1}, {2}, {3}})
-	vt.SetLedgerAncestryProvider(newMapAncestryProvider())
+	vt.setLedgerAncestryProvider(newMapAncestryProvider())
 
 	vt.Add(makeTrustedValidation(consensus.NodeID{1}, abcx.ID(), abcx.Seq(), now))
 	vt.Add(makeTrustedValidation(consensus.NodeID{2}, abcx.ID(), abcx.Seq(), now))
@@ -261,7 +261,7 @@ func TestValidationTracker_GetPreferred_AcquiringTieBreaksOnGreaterID(t *testing
 	abcy := b.Build("abcy") // same seq, greater ID than abcx
 
 	vt.SetTrusted([]consensus.NodeID{{1}, {2}})
-	vt.SetLedgerAncestryProvider(newMapAncestryProvider())
+	vt.setLedgerAncestryProvider(newMapAncestryProvider())
 
 	vt.Add(makeTrustedValidation(consensus.NodeID{1}, abcx.ID(), abcx.Seq(), now))
 	vt.Add(makeTrustedValidation(consensus.NodeID{2}, abcy.ID(), abcy.Seq(), now))
@@ -288,7 +288,7 @@ func TestValidationTracker_SupersededValidationUnparks(t *testing.T) {
 
 	n1 := consensus.NodeID{1}
 	vt.SetTrusted([]consensus.NodeID{n1})
-	vt.SetLedgerAncestryProvider(newMapAncestryProvider())
+	vt.setLedgerAncestryProvider(newMapAncestryProvider())
 
 	vt.Add(makeTrustedValidation(n1, abcz.ID(), abcz.Seq(), now))
 	vt.Add(makeTrustedValidation(n1, abcwv.ID(), abcwv.Seq(), now))
@@ -314,7 +314,7 @@ func TestValidationTracker_ExpireOldUnparks(t *testing.T) {
 
 	n1 := consensus.NodeID{1}
 	vt.SetTrusted([]consensus.NodeID{n1})
-	vt.SetLedgerAncestryProvider(newMapAncestryProvider())
+	vt.setLedgerAncestryProvider(newMapAncestryProvider())
 
 	vt.Add(makeTrustedValidation(n1, abcd.ID(), abcd.Seq(), now))
 	now = now.Add(validationSetExpires + time.Second)
@@ -342,14 +342,14 @@ func TestValidationTracker_FlushStaleUnparks(t *testing.T) {
 
 	n1 := consensus.NodeID{1}
 	vt.SetTrusted([]consensus.NodeID{n1})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setLedgerAncestryProvider(provider)
 
 	if !vt.Add(makeTrustedValidation(n1, abcd.ID(), abcd.Seq(), now)) {
 		t.Fatal("Add(n1->abcd) should succeed")
 	}
 
 	now = now.Add(validationCurrentEarly + time.Second)
-	vt.FlushStale()
+	vt.flushStale()
 
 	if _, _, ok := vt.GetPreferred(0); ok {
 		t.Fatal("flushed-stale parked validation must not feed the acquiring fallback")
@@ -382,7 +382,7 @@ func TestValidationTracker_DetrustedParkedValidationNotReplayed(t *testing.T) {
 
 	n1 := consensus.NodeID{1}
 	vt.SetTrusted([]consensus.NodeID{n1})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setLedgerAncestryProvider(provider)
 
 	if !vt.Add(makeTrustedValidation(n1, abcd.ID(), abcd.Seq(), now)) {
 		t.Fatal("Add(n1->abcd) should succeed")
@@ -413,7 +413,7 @@ func TestValidationTracker_TrustChangeReparksFromByNode(t *testing.T) {
 	n1 := consensus.NodeID{1}
 	n2 := consensus.NodeID{2}
 	vt.SetTrusted([]consensus.NodeID{n1, n2})
-	vt.SetLedgerAncestryProvider(newMapAncestryProvider())
+	vt.setLedgerAncestryProvider(newMapAncestryProvider())
 
 	vt.Add(makeTrustedValidation(n1, abcd.ID(), abcd.Seq(), now))
 

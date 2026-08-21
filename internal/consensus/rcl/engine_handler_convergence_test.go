@@ -106,7 +106,7 @@ func TestEngine_OnTxSetDoesNotConvergeBeforeTimer(t *testing.T) {
 	}
 	engine, adaptor, peer := timerDrivenConvergenceEngine(t, txSet)
 	engine.mu.Lock()
-	engine.proposalTracker.Store(&consensus.Proposal{
+	engine.proposalTracker.store(&consensus.Proposal{
 		Round:          engine.state.Round,
 		NodeID:         peer,
 		TxSet:          txSet.ID(),

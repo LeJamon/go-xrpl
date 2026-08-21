@@ -81,7 +81,7 @@ func TestValidationTrackerLiveQuorumUnavailableGate(t *testing.T) {
 	vt.SetTrusted(nodes)
 
 	unavailable := true
-	vt.SetQuorumUnavailableFunc(func() bool { return unavailable })
+	vt.setQuorumUnavailableFunc(func() bool { return unavailable })
 	fired := 0
 	vt.SetFullyValidatedCallback(func(consensus.LedgerID, uint32) { fired++ })
 
@@ -129,8 +129,8 @@ func TestValidationTracker_TrustedValidations(t *testing.T) {
 	}
 
 	// Trusted should be 2
-	if vt.TrustedValidationCount(ledger1) != 2 {
-		t.Errorf("Expected 2 trusted validations, got %d", vt.TrustedValidationCount(ledger1))
+	if vt.trustedValidationCount(ledger1) != 2 {
+		t.Errorf("Expected 2 trusted validations, got %d", vt.trustedValidationCount(ledger1))
 	}
 }
 
@@ -141,7 +141,7 @@ func TestValidationTracker_RecheckFullyValidatedFiltersAndRearms(t *testing.T) {
 
 	nodes := []consensus.NodeID{{1}, {2}, {3}, {4}, {5}, {6}}
 	vt.SetTrusted([]consensus.NodeID{nodes[0], nodes[1], nodes[2], nodes[4], nodes[5]})
-	vt.SetNegativeUNL([]consensus.NodeID{nodes[2]})
+	vt.setNegativeUNL([]consensus.NodeID{nodes[2]})
 
 	ledgerID := consensus.LedgerID{0xAA}
 	const seq uint32 = 7
@@ -288,7 +288,7 @@ func TestValidationTracker_NewerValidation(t *testing.T) {
 	}
 
 	// Latest validation should be for ledger 2
-	latest := vt.LatestValidation(node1)
+	latest := vt.latestValidation(node1)
 	if latest.LedgerID != ledger2 {
 		t.Error("Latest validation should be for ledger 2")
 	}
@@ -345,7 +345,7 @@ func TestValidationTracker_SameSeqResignRejected(t *testing.T) {
 	}) {
 		t.Error("same-seq re-sign should not supersede the tip")
 	}
-	if got := vt.LatestValidation(node); got == nil || !got.SignTime.Equal(base) {
+	if got := vt.latestValidation(node); got == nil || !got.SignTime.Equal(base) {
 		t.Errorf("tip should be unchanged after a same-seq re-sign, got %+v", got)
 	}
 
@@ -359,7 +359,7 @@ func TestValidationTracker_SameSeqResignRejected(t *testing.T) {
 	}) {
 		t.Error("same-seq validation for a conflicting ledger should be dropped")
 	}
-	if got := vt.LatestValidation(node); got == nil || got.LedgerID != ledgerX {
+	if got := vt.latestValidation(node); got == nil || got.LedgerID != ledgerX {
 		t.Errorf("tip should still be ledgerX after equivocation, got %+v", got)
 	}
 
@@ -373,7 +373,7 @@ func TestValidationTracker_SameSeqResignRejected(t *testing.T) {
 	}) {
 		t.Error("a strictly higher seq should supersede")
 	}
-	if got := vt.LatestValidation(node); got == nil || got.LedgerID != ledgerY {
+	if got := vt.latestValidation(node); got == nil || got.LedgerID != ledgerY {
 		t.Errorf("tip should advance to ledgerY at the higher seq, got %+v", got)
 	}
 }
@@ -394,7 +394,7 @@ func TestValidationTracker_NegativeUNL_ExcludedFromQuorum(t *testing.T) {
 	vt := NewValidationTracker(3)
 	vt.SetTrusted(nodes)
 	// Mark node 4 as negatively-UNL'd.
-	vt.SetNegativeUNL([]consensus.NodeID{nodes[3]})
+	vt.setNegativeUNL([]consensus.NodeID{nodes[3]})
 
 	var fired int
 	vt.SetFullyValidatedCallback(func(_ consensus.LedgerID, _ uint32) { fired++ })
@@ -419,7 +419,7 @@ func TestValidationTracker_NegativeUNL_ExcludedFromQuorum(t *testing.T) {
 	// trusted count through negativeUNLFilter. Without the filter here
 	// a caller comparing GetTrustedValidationCount >= quorum would
 	// disagree with the firing gate.
-	if got := vt.TrustedValidationCount(ledger); got != 2 {
+	if got := vt.trustedValidationCount(ledger); got != 2 {
 		t.Fatalf("GetTrustedValidationCount must exclude negUNL: got %d, want 2", got)
 	}
 	if got := vt.TrustedSupport(ledger); got != 2 {
@@ -428,7 +428,7 @@ func TestValidationTracker_NegativeUNL_ExcludedFromQuorum(t *testing.T) {
 
 	// Clear D from negUNL and re-Add its validation — now effective
 	// count = 3 and quorum is reached.
-	vt.SetNegativeUNL(nil)
+	vt.setNegativeUNL(nil)
 	// The per-node newer-seq-only rule would reject a re-Add at the
 	// same seq, so bump seq to force the check to re-run. Note: in
 	// production the refresh on acceptLedger re-runs via the normal
@@ -453,7 +453,7 @@ func TestValidationTracker_ProposersValidated(t *testing.T) {
 	nodes := []consensus.NodeID{{1}, {2}, {3}, {4}, {5}}
 	vt := NewValidationTracker(3)
 	vt.SetTrusted(nodes[:4])                        // 1-4 trusted; 5 is untrusted
-	vt.SetNegativeUNL([]consensus.NodeID{nodes[3]}) // node 4 on negUNL
+	vt.setNegativeUNL([]consensus.NodeID{nodes[3]}) // node 4 on negUNL
 
 	prevLedger := consensus.LedgerID{0xAB}
 	otherLedger := consensus.LedgerID{0xCD}
@@ -473,7 +473,7 @@ func TestValidationTracker_ProposersValidated(t *testing.T) {
 	// That validation from node1 is newer-seq (well, same seq but later signTime)
 	// — don't trip the test on that; rely on the byNode latest behavior.
 
-	got := vt.ProposersValidated(prevLedger)
+	got := vt.proposersValidated(prevLedger)
 	// After the otherLedger validation from node1, its latest points
 	// at otherLedger; so only node2 should still point at prevLedger.
 	// Actually Add's rule is "newer-seq supersedes"; same seq doesn't
@@ -486,7 +486,7 @@ func TestValidationTracker_ProposersValidated(t *testing.T) {
 	}
 
 	// Negative case: an untracked ledger has zero proposers.
-	if got := vt.ProposersValidated(consensus.LedgerID{0xFF}); got != 0 {
+	if got := vt.proposersValidated(consensus.LedgerID{0xFF}); got != 0 {
 		t.Fatalf("unknown ledger must have zero proposers validated; got %d", got)
 	}
 }
@@ -662,14 +662,14 @@ func TestValidationTracker_ExpireOld_ClearsByNode(t *testing.T) {
 	ledger := consensus.LedgerID{1}
 
 	vt.Add(&consensus.Validation{LedgerID: ledger, LedgerSeq: 100, NodeID: nodeA, SignTime: time.Now(), Full: true})
-	if vt.LatestValidation(nodeA) == nil {
+	if vt.latestValidation(nodeA) == nil {
 		t.Fatal("precondition: Add should have populated byNode")
 	}
 
 	vt.SetNow(func() time.Time { return time.Now().Add(validationSetExpires + time.Second) })
 	vt.ExpireOld(200)
 
-	if vt.LatestValidation(nodeA) != nil {
+	if vt.latestValidation(nodeA) != nil {
 		t.Fatal("ExpireOld left stale entry in byNode map")
 	}
 }
@@ -813,7 +813,7 @@ func TestValidationTracker_ExpireOld_TouchOnReadExtends(t *testing.T) {
 
 	// Query the hot ledger just before the window closes on both sets.
 	now = now.Add(validationSetExpires - time.Second)
-	if got := len(vt.GetTrustedValidations(hot)); got != 1 {
+	if got := len(vt.getTrustedValidations(hot)); got != 1 {
 		t.Fatalf("precondition: hot ledger has %d trusted validations, want 1", got)
 	}
 
@@ -874,7 +874,7 @@ func TestValidationTracker_Flush(t *testing.T) {
 	n1 := consensus.NodeID{1}
 	n2 := consensus.NodeID{2}
 	vt.SetTrusted([]consensus.NodeID{n1, n2})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setLedgerAncestryProvider(provider)
 
 	vt.Add(makeTrustedValidation(n1, abc.ID(), abc.Seq(), now))
 	vt.Add(makeTrustedValidation(n2, abc.ID(), abc.Seq(), now))
@@ -883,20 +883,20 @@ func TestValidationTracker_Flush(t *testing.T) {
 	if got := vt.GetValidationCount(abc.ID()); got != 2 {
 		t.Fatalf("pre-flush: want 2 validations, got %d", got)
 	}
-	if vt.LatestValidation(n1) == nil {
+	if vt.latestValidation(n1) == nil {
 		t.Fatal("pre-flush: n1 latest validation missing")
 	}
 	if _, _, ok := vt.GetPreferred(0); !ok {
 		t.Fatal("pre-flush: GetPreferred should resolve with trie wired")
 	}
 
-	vt.Flush()
+	vt.flush()
 
 	// Every accumulated index is cleared, including the trie.
 	if got := vt.GetValidationCount(abc.ID()); got != 0 {
 		t.Errorf("post-flush: want 0 validations, got %d", got)
 	}
-	if vt.LatestValidation(n1) != nil {
+	if vt.latestValidation(n1) != nil {
 		t.Error("post-flush: byNode not cleared")
 	}
 	if got := vt.TrustedSupport(abc.ID()); got != 0 {
@@ -957,7 +957,7 @@ func TestValidationTracker_GetCurrentNodeIDs(t *testing.T) {
 		t.Fatal("n4 partial validation should be accepted at t1")
 	}
 
-	got := vt.CurrentNodeIDs()
+	got := vt.currentNodeIDs()
 	want := map[consensus.NodeID]bool{n1: true, n3: true, n4: true}
 	if len(got) != len(want) {
 		t.Fatalf("GetCurrentNodeIDs: want %d live nodes, got %d (%v)", len(want), len(got), got)
@@ -969,7 +969,7 @@ func TestValidationTracker_GetCurrentNodeIDs(t *testing.T) {
 	}
 
 	// Enumeration must not evict the stale entry — that is FlushStale's job.
-	if vt.LatestValidation(n2) == nil {
+	if vt.latestValidation(n2) == nil {
 		t.Error("GetCurrentNodeIDs must not mutate byNode (n2 was evicted)")
 	}
 }

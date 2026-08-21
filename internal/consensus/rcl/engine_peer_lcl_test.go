@@ -51,7 +51,7 @@ func TestEngine_GetNetworkLedger_ProposalIsNotPeerLCLVote(t *testing.T) {
 
 	engine := NewEngine(adaptor, DefaultConfig())
 	engine.prevLedger = &mockLedger{id: ourID, seq: 100}
-	engine.proposalTracker.BufferRecent(&consensus.Proposal{
+	engine.proposalTracker.bufferRecent(&consensus.Proposal{
 		NodeID:         peer,
 		PreviousLedger: proposedID,
 		Timestamp:      adaptor.now,
