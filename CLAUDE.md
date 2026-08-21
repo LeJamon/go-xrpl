@@ -30,17 +30,14 @@ A `justfile` consolidates the toolchain (CGO + OpenSSL env vars, test groupings
 matching CI, conformance harness). Install `just` with `brew install just`. **All
 `just` recipes run from the repository root.**
 
-Two subsystems use CGO and link OpenSSL / libsecp256k1 via `pkg-config`. On macOS:
+The daemon requires CGO and links OpenSSL / libsecp256k1 via `pkg-config`. On macOS:
 `brew install openssl@3 secp256k1 pkg-config`; on Debian/Ubuntu: `libssl-dev
 libsecp256k1-dev`. The justfile auto-resolves Homebrew's openssl@3 path.
-`CGO_ENABLED=0` builds work but cannot peer (peertls returns
-`ErrSessionSigUnsupported`) and use the slower pure-Go secp256k1 verify.
 
 ```bash
 just                 # discover recipes
-just build           # CGO + OpenSSL → ../tmp/main
+just build           # CGO + OpenSSL → ../tmp/goxrpl
 just build-all       # full module compile
-just build-nocgo     # verify the !cgo peertls stub still builds
 
 just test            # everything
 just test-integration   # ./internal/testing/...
@@ -60,14 +57,14 @@ just conformance               # full suite with per-suite breakdown
 just conformance TxQ           # filter by suite name
 just conformance --failing     # only suites with failures
 
-just run             # plain `go run ./cmd/xrpld`
+just run             # plain `go run ./cmd/goxrpl`
 just dev             # hot reload (needs `air`)
 ```
 
 ### Raw commands (no `just`)
 
 ```bash
-go build -o ./tmp/main ./cmd/xrpld        # build
+go build -o ./tmp/goxrpl ./cmd/goxrpl     # build
 go test ./...                              # all tests
 go test ./internal/tx/offer/...            # one package
 ./scripts/conformance-summary.sh           # conformance summary
@@ -96,7 +93,7 @@ The server exposes JSON-RPC at `http://localhost:8080/`, WebSocket subscriptions
 
 ### Internal packages
 
-- `cmd/xrpld/` — CLI entry point (Cobra)
+- `cmd/goxrpl/` — CLI entry point (Cobra)
 - `internal/cli/` — CLI commands (server, rpc, compare) and root command wiring
 - `internal/replaytool/` — offline `replay`/`replay-range` developer commands
   (mainnet/fixture replay and state-divergence reporting; distinct from the

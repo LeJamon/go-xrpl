@@ -119,7 +119,7 @@ func TestHTTPTransportOriginAndBasicAuth(t *testing.T) {
 			rr := httptest.NewRecorder()
 			handler.ServeHTTP(rr, transportRequest("", test.user, test.password))
 			require.Equal(t, http.StatusUnauthorized, rr.Code)
-			require.Equal(t, `Basic realm="xrpld"`, rr.Header().Get("WWW-Authenticate"))
+			require.Equal(t, `Basic realm="goxrpl"`, rr.Header().Get("WWW-Authenticate"))
 			require.Equal(t, int32(1), calls.Load(), "rejected credentials reached the handler")
 			require.Equal(t, "close", rr.Header().Get("Connection"))
 		})
@@ -180,7 +180,7 @@ func TestWebSocketTransportOriginAndBasicAuth(t *testing.T) {
 	require.Error(t, err)
 	require.NotNil(t, response)
 	require.Equal(t, http.StatusUnauthorized, response.StatusCode)
-	require.Equal(t, `Basic realm="xrpld"`, response.Header.Get("WWW-Authenticate"))
+	require.Equal(t, `Basic realm="goxrpl"`, response.Header.Get("WWW-Authenticate"))
 
 	_, response, err = dialTransport(t, httpSrv, "https://console.example", "operator", "wrong")
 	require.Error(t, err)

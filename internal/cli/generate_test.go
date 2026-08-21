@@ -52,7 +52,7 @@ func TestGenerateConfigContent(t *testing.T) {
 }
 
 func TestRunGenerateConfig(t *testing.T) {
-	out := filepath.Join(t.TempDir(), "xrpld.toml")
+	out := filepath.Join(t.TempDir(), "goxrpl.toml")
 	options := &generateOptions{network: "testnet", output: out}
 
 	cmd := &cobra.Command{}
@@ -106,7 +106,7 @@ func TestRunGenerateConfig_DoesNotOverwriteExistingOutput(t *testing.T) {
 	if err := os.WriteFile(validatorsPath, []byte("operator-owned\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	options := &generateOptions{network: "testnet", output: filepath.Join(dir, "xrpld.toml")}
+	options := &generateOptions{network: "testnet", output: filepath.Join(dir, "goxrpl.toml")}
 
 	cmd := &cobra.Command{}
 	cmd.SetOut(io.Discard)
@@ -134,7 +134,7 @@ func TestRunGenerateConfig_RecoversIdenticalValidatorsOutput(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, generatedValidatorsFilename), []byte(validatorsContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	options := &generateOptions{network: "testnet", output: filepath.Join(dir, "xrpld.toml")}
+	options := &generateOptions{network: "testnet", output: filepath.Join(dir, "goxrpl.toml")}
 
 	cmd := &cobra.Command{}
 	cmd.SetOut(io.Discard)
@@ -147,7 +147,7 @@ func TestRunGenerateConfig_RecoversIdenticalValidatorsOutput(t *testing.T) {
 }
 
 func TestRunGenerateConfig_TightensIdenticalMainConfigPermissions(t *testing.T) {
-	output := filepath.Join(t.TempDir(), "xrpld.toml")
+	output := filepath.Join(t.TempDir(), "goxrpl.toml")
 	if err := os.WriteFile(output, []byte(generateConfigContent("devnet")), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestPublishGeneratedFiles_RollsBackPartialPublish(t *testing.T) {
 	dir := t.TempDir()
 	files := []generatedFile{
 		{path: filepath.Join(dir, "validators.toml"), data: []byte("validators"), mode: 0o644},
-		{path: filepath.Join(dir, "xrpld.toml"), data: []byte("config"), mode: 0o600},
+		{path: filepath.Join(dir, "goxrpl.toml"), data: []byte("config"), mode: 0o600},
 	}
 	links := 0
 	err := publishGeneratedFiles(files, func(oldPath, newPath string) error {
@@ -201,7 +201,7 @@ func TestGenerateConfigContent_LoadsCleanly(t *testing.T) {
 	for _, network := range []string{"main", "testnet", "devnet"} {
 		t.Run(network, func(t *testing.T) {
 			dir := t.TempDir()
-			p := filepath.Join(dir, "xrpld.toml")
+			p := filepath.Join(dir, "goxrpl.toml")
 			if validatorsContent, ok := generateValidatorsContent(network); ok {
 				if err := os.WriteFile(filepath.Join(dir, generatedValidatorsFilename), []byte(validatorsContent), 0o644); err != nil {
 					t.Fatal(err)

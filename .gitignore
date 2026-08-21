@@ -26,10 +26,12 @@ go.work.sum
 
 # Runtime data
 data/
-xrpld.toml
+/goxrpl.toml
+/xrpld.toml
 
 # Built binaries
-xrpld
+/goxrpl
+/xrpld
 main
 
 # Worktrees

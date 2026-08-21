@@ -30,6 +30,6 @@ features:
     details: Supported transaction types, RPC methods, and amendments — generated from the registries so they never go stale.
     link: /supported-transactions
   - title: Run a node
-    details: Build requirements (including CGO), running the server, and the full xrpld.toml configuration reference.
+    details: Build requirements (including CGO), running the server, and the full goxrpl.toml configuration reference.
     link: /operating
 ---

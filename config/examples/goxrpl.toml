@@ -1,7 +1,7 @@
 # go-xrpl configuration file
 # ALL fields listed here are REQUIRED unless marked as optional.
 # The server will refuse to start if any required field is missing.
-# Use 'xrpld generate-config' to create this file automatically.
+# Use 'goxrpl generate-config' to create this file automatically.
 
 # =============================================================================
 # Top-level settings (MUST come before any [section] headers in TOML)
@@ -37,10 +37,10 @@ network_id = "main"
 ledger_replay = 0    # 0 = disabled, 1 = enabled
 
 # Database path (SQLite location)
-database_path = "/var/lib/xrpld/db"
+database_path = "/var/lib/goxrpl/db"
 
 # Diagnostics
-debug_logfile = "/var/log/xrpld/debug.log"
+debug_logfile = "/var/log/goxrpl/debug.log"
 
 # Node sizing: tiny, small, medium, large, huge (optional — default medium)
 node_size = "medium"
@@ -142,7 +142,7 @@ protocol = "peer"
 
 [node_db]
 type = "pebble"
-path = "/var/lib/xrpld/db/pebble"
+path = "/var/lib/goxrpl/db/pebble"
 online_delete = 512
 advisory_delete = 0
 cache_mb = 256                   # Pebble block cache in MiB (0 = default 256)

@@ -35,7 +35,7 @@ cites the rippled source file it follows.
 | [`amendment`](../amendment) | Amendment/feature registry and the per-ledger `Rules` that gate feature-dependent behavior | `Feature.cpp`, `amendmentTable` |
 | [`codec/addresscodec`](../codec/addresscodec) | base58 address/seed/key encoding (classic + X-addresses) | `tokens.cpp`, `AccountID.cpp` |
 | [`codec/binarycodec`](../codec/binarycodec) | Canonical binary serialization of XRPL objects | `STObject`, `Serializer` |
-| [`config`](../config) | `xrpld.toml` parsing and defaults | `Config.cpp` (`rippled.cfg`) |
+| [`config`](../config) | `goxrpl.toml` parsing and defaults | `Config.cpp` (`rippled.cfg`) |
 | [`crypto`](../crypto) | secp256k1 + Ed25519 keys, signing, DER, multi-sign; `common` has SHA-512Half | `PublicKey.cpp`, `SecretKey.cpp` |
 | [`drops`](../drops) | Type-safe XRP amount arithmetic and reserve math | `XRPAmount.h` |
 | [`keylet`](../keylet) | Derivation of the 256-bit keys identifying ledger entries | `Indexes.cpp` (`keylet::`) |
@@ -48,7 +48,7 @@ cites the rippled source file it follows.
 
 | Package | Responsibility |
 |---------|----------------|
-| `cmd/xrpld`, `internal/cli` | CLI entrypoint (Cobra) and subcommands (server, rpc, replay, compare) |
+| `cmd/goxrpl`, `internal/cli` | CLI entrypoint (Cobra) and subcommands (server, rpc, replay, compare) |
 | `internal/tx` | Transaction engine and one subpackage per transaction type; `all` registers them |
 | `internal/ledger` | Ledger lifecycle: `genesis`, `header`, `manager`, `service`, `state`, `store`, `openledger` |
 | `internal/consensus` | Consensus protocol: `rcl` (real), `csf` (simulation framework), plus fee/amendment/UNL voting |
