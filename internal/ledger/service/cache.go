@@ -2,11 +2,8 @@ package service
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
-	"github.com/LeJamon/go-xrpl/internal/ledger/header"
-	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 func (s *historyComponent) ledgerBySequence(seq uint32) *ledger.Ledger {
@@ -367,39 +364,4 @@ func (s *Service) drainPendingValidationLocked(hash [32]byte) *LedgerAcceptedEve
 		}
 	}
 	return event
-}
-
-// pendingAdopt is a held replay-delta adoption awaiting its parent seq, carrying
-// everything AdoptLedgerWithState needs to apply it without refetch.
-type pendingAdopt struct {
-	header   *header.LedgerHeader
-	stateMap *shamap.SHAMap
-	txMap    *shamap.SHAMap
-	at       time.Time
-}
-
-// must outlast a multi-ledger fork catch-up (60s wedged a node)
-const heldAdoptionTTL = 5 * time.Minute
-
-// DoS guard on cascade recursion depth; real cascades are 1-2 hops, a malicious
-// orphan chain could otherwise drive arbitrary stack depth
-const heldAdoptionCascadeMax = 256
-
-// evictExpiredHeldAdoptionsLocked removes held entries older than
-// heldAdoptionTTL. Caller must hold s.mu.
-func (s *Service) evictExpiredHeldAdoptionsLocked() {
-	if len(s.heldAdoptions) == 0 {
-		return
-	}
-	now := time.Now()
-	for key, held := range s.heldAdoptions {
-		if now.Sub(held.at) >= heldAdoptionTTL {
-			s.logger.Warn("heldAdoption TTL eviction",
-				"parent_seq", key,
-				"child_seq", held.header.LedgerIndex,
-				"age", now.Sub(held.at),
-			)
-			delete(s.heldAdoptions, key)
-		}
-	}
 }

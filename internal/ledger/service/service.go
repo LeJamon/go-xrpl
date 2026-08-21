@@ -120,7 +120,6 @@ type Service struct {
 	persistenceWorker
 	eventPublisher
 	historyComponent
-	queries queryFacade
 
 	config         Config
 	logger         xrpllog.Logger
@@ -174,12 +173,6 @@ type Service struct {
 
 	// Invoked after the validated tip advances and after mu is released.
 	onValidatedLedger func(seq uint32, hash, parentHash [32]byte)
-
-	// heldAdoptions stashes out-of-order replay-delta adoptions (child seq
-	// before parent), keyed by the awaited parent seq so an adopt at N pops the
-	// child at N+1 and cascade-adopts it. Multi-level chains cascade via bounded
-	// recursion. Unlike the two pending* maps, this holds the ledger payload.
-	heldAdoptions map[uint32]*pendingAdopt
 
 	networkLedgerState networkLedgerState
 
@@ -356,7 +349,6 @@ func New(cfg Config) (*Service, error) {
 		},
 		pendingValidation:    make(map[[32]byte]*LedgerAcceptedEvent),
 		validationCandidates: make(map[uint32]*ledger.Ledger),
-		heldAdoptions:        make(map[uint32]*pendingAdopt),
 		txQueue:              txQueue,
 		localTxs:             localtxs.New(),
 		relayTxCache:         make(map[[32]byte]relayTxRecord),
@@ -367,9 +359,6 @@ func New(cfg Config) (*Service, error) {
 	s.persistenceWorker.service = s
 	s.eventPublisher.service = s
 	s.eventPublisher.publicationLimit = maxPublicationQueue
-	s.queries.service = s
-	s.queries.history = &s.historyComponent
-	s.queries.relationalDB = s.relationalDB
 	return s, nil
 }
 
