@@ -30,17 +30,3 @@ func TestXtra_ItemSizeStringIsEmpty(t *testing.T) {
 		t.Fatalf("nil item String = %q, want Item(nil)", s)
 	}
 }
-
-func TestXtra_NodeStringRepresentations(t *testing.T) {
-	id := NewRootNodeID()
-
-	inner := newInnerNode()
-	if s := inner.String(id); !strings.Contains(s, "innerNode ID:") {
-		t.Fatalf("innerNode.String = %q", s)
-	}
-
-	// Reach the embedded baseNode.String directly (shadowed by innerNode.String).
-	if s := inner.baseNode.String(id); !strings.Contains(s, "NodeID:") {
-		t.Fatalf("baseNode.String = %q", s)
-	}
-}

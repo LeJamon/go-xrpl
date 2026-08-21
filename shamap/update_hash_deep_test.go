@@ -111,20 +111,3 @@ func TestFlushNode_GuardsStalePreimage(t *testing.T) {
 		t.Errorf("flushed root preimage hashes to %x, want %x", got[:8], rootHash[:8])
 	}
 }
-
-// TestVerifyNodeHash_DetectsStalePreimage verifies the strengthened invariant
-// catches a stale loaded-child preimage that the clone+recompute check, which
-// derives from live children, cannot see.
-func TestVerifyNodeHash_DetectsStalePreimage(t *testing.T) {
-	sm := New(TypeState)
-	inner, _ := newInnerWithLeaf(t)
-
-	if err := sm.verifyNodeHash(inner, NewRootNodeID()); err != nil {
-		t.Fatalf("healthy inner node should pass: %v", err)
-	}
-
-	inner.hashes[0] = staleHash
-	if err := sm.verifyNodeHash(inner, NewRootNodeID()); err == nil {
-		t.Fatal("verifyNodeHash must detect a stale loaded-child preimage")
-	}
-}

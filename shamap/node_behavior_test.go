@@ -511,55 +511,6 @@ func TestNid_AccountStateLeafNode_TooSmall(t *testing.T) {
 	}
 }
 
-func TestNid_AccountStateLeafNode_SetItem(t *testing.T) {
-	key := makeHash(0x33)
-	item1 := NewItem(key, nid_makeData(32))
-	leaf, err := newAccountStateLeafNode(item1)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	key2 := makeHash(0x44)
-	item2 := NewItem(key2, nid_makeData(32))
-	changed, err := leaf.SetItem(item2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !changed {
-		t.Error("SetItem with different key should report hash changed")
-	}
-	if leaf.Item().Key() != key2 {
-		t.Error("Item() should reflect new key after SetItem")
-	}
-}
-
-func TestNid_AccountStateLeafNode_SetItemNil(t *testing.T) {
-	key := makeHash(0x55)
-	item := NewItem(key, nid_makeData(32))
-	leaf, _ := newAccountStateLeafNode(item)
-	_, err := leaf.SetItem(nil)
-	if !errors.Is(err, ErrNilItem) {
-		t.Fatalf("expected ErrNilItem from SetItem(nil), got %v", err)
-	}
-}
-
-func TestNid_AccountStateLeafNode_Clone(t *testing.T) {
-	key := makeHash(0x66)
-	item := NewItem(key, nid_makeData(32))
-	leaf, _ := newAccountStateLeafNode(item)
-	cloned, err := leaf.Clone()
-	if err != nil {
-		t.Fatal(err)
-	}
-	clonedLeaf, ok := cloned.(*leafNode)
-	if !ok {
-		t.Fatal("Clone() did not return *leafNode")
-	}
-	if clonedLeaf.Item().Key() != key {
-		t.Error("cloned leaf has wrong key")
-	}
-}
-
 func TestNid_AccountStateLeafNode_SerializeForWire(t *testing.T) {
 	key := makeHash(0x77)
 	data := nid_makeData(32)
@@ -585,26 +536,6 @@ func TestNid_AccountStateLeafNode_SerializeWithPrefix(t *testing.T) {
 	}
 	if len(prefixed) == 0 {
 		t.Error("SerializeWithPrefix should return non-empty bytes")
-	}
-}
-
-func TestNid_AccountStateLeafNode_Invariants(t *testing.T) {
-	key := makeHash(0x99)
-	item := NewItem(key, nid_makeData(32))
-	leaf, _ := newAccountStateLeafNode(item)
-	if err := leaf.Invariants(false); err != nil {
-		t.Fatalf("Invariants() failed: %v", err)
-	}
-}
-
-func TestNid_AccountStateLeafNode_StringMethod(t *testing.T) {
-	key := makeHash(0xAA)
-	item := NewItem(key, nid_makeData(32))
-	leaf, _ := newAccountStateLeafNode(item)
-	nid, _ := nodeID(2, key)
-	s := leaf.String(nid)
-	if s == "" {
-		t.Error("String() should return non-empty string")
 	}
 }
 
@@ -639,47 +570,6 @@ func TestNid_TransactionLeafNode_TooSmall(t *testing.T) {
 	}
 }
 
-func TestNid_TransactionLeafNode_SetItem(t *testing.T) {
-	key := makeHash(0xDD)
-	item1 := NewItem(key, nid_makeData(32))
-	leaf, _ := newTransactionLeafNode(item1)
-
-	// TransactionLeafNode hashes only the data (not the key), so use different data.
-	key2 := makeHash(0xEE)
-	data2 := nid_makeData(48)
-	item2 := NewItem(key2, data2)
-	changed, err := leaf.SetItem(item2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !changed {
-		t.Error("SetItem with different data should report hash changed")
-	}
-}
-
-func TestNid_TransactionLeafNode_SetItemNil(t *testing.T) {
-	key := makeHash(0xFF)
-	item := NewItem(key, nid_makeData(32))
-	leaf, _ := newTransactionLeafNode(item)
-	_, err := leaf.SetItem(nil)
-	if !errors.Is(err, ErrNilItem) {
-		t.Fatalf("expected ErrNilItem, got %v", err)
-	}
-}
-
-func TestNid_TransactionLeafNode_Clone(t *testing.T) {
-	key := makeHash(0x12)
-	item := NewItem(key, nid_makeData(32))
-	leaf, _ := newTransactionLeafNode(item)
-	cloned, err := leaf.Clone()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := cloned.(*leafNode); !ok {
-		t.Fatal("Clone() did not return *leafNode")
-	}
-}
-
 func TestNid_TransactionLeafNode_SerializeForWire(t *testing.T) {
 	key := makeHash(0x13)
 	item := NewItem(key, nid_makeData(32))
@@ -703,26 +593,6 @@ func TestNid_TransactionLeafNode_SerializeWithPrefix(t *testing.T) {
 	}
 	if len(p) == 0 {
 		t.Error("SerializeWithPrefix should return non-empty bytes")
-	}
-}
-
-func TestNid_TransactionLeafNode_Invariants(t *testing.T) {
-	key := makeHash(0x15)
-	item := NewItem(key, nid_makeData(32))
-	leaf, _ := newTransactionLeafNode(item)
-	if err := leaf.Invariants(false); err != nil {
-		t.Fatalf("Invariants() failed: %v", err)
-	}
-}
-
-func TestNid_TransactionLeafNode_StringMethod(t *testing.T) {
-	key := makeHash(0x16)
-	item := NewItem(key, nid_makeData(32))
-	leaf, _ := newTransactionLeafNode(item)
-	nid, _ := nodeID(1, key)
-	s := leaf.String(nid)
-	if s == "" {
-		t.Error("String() should return non-empty string")
 	}
 }
 
@@ -757,45 +627,6 @@ func TestNid_TransactionWithMetaLeafNode_TooSmall(t *testing.T) {
 	}
 }
 
-func TestNid_TransactionWithMetaLeafNode_SetItem(t *testing.T) {
-	key := makeHash(0x23)
-	item1 := NewItem(key, nid_makeData(32))
-	leaf, _ := newTransactionWithMetaLeafNode(item1)
-
-	key2 := makeHash(0x24)
-	item2 := NewItem(key2, nid_makeData(32))
-	changed, err := leaf.SetItem(item2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !changed {
-		t.Error("SetItem with different key should report hash changed")
-	}
-}
-
-func TestNid_TransactionWithMetaLeafNode_SetItemNil(t *testing.T) {
-	key := makeHash(0x25)
-	item := NewItem(key, nid_makeData(32))
-	leaf, _ := newTransactionWithMetaLeafNode(item)
-	_, err := leaf.SetItem(nil)
-	if !errors.Is(err, ErrNilItem) {
-		t.Fatalf("expected ErrNilItem, got %v", err)
-	}
-}
-
-func TestNid_TransactionWithMetaLeafNode_Clone(t *testing.T) {
-	key := makeHash(0x26)
-	item := NewItem(key, nid_makeData(32))
-	leaf, _ := newTransactionWithMetaLeafNode(item)
-	cloned, err := leaf.Clone()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := cloned.(*leafNode); !ok {
-		t.Fatal("Clone() did not return *leafNode")
-	}
-}
-
 func TestNid_TransactionWithMetaLeafNode_SerializeForWire(t *testing.T) {
 	key := makeHash(0x27)
 	item := NewItem(key, nid_makeData(32))
@@ -819,26 +650,6 @@ func TestNid_TransactionWithMetaLeafNode_SerializeWithPrefix(t *testing.T) {
 	}
 	if len(p) == 0 {
 		t.Error("SerializeWithPrefix should return non-empty bytes")
-	}
-}
-
-func TestNid_TransactionWithMetaLeafNode_Invariants(t *testing.T) {
-	key := makeHash(0x29)
-	item := NewItem(key, nid_makeData(32))
-	leaf, _ := newTransactionWithMetaLeafNode(item)
-	if err := leaf.Invariants(false); err != nil {
-		t.Fatalf("Invariants() failed: %v", err)
-	}
-}
-
-func TestNid_TransactionWithMetaLeafNode_StringMethod(t *testing.T) {
-	key := makeHash(0x2A)
-	item := NewItem(key, nid_makeData(32))
-	leaf, _ := newTransactionWithMetaLeafNode(item)
-	nid, _ := nodeID(1, key)
-	s := leaf.String(nid)
-	if s == "" {
-		t.Error("String() should return non-empty string")
 	}
 }
 

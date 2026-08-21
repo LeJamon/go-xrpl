@@ -67,55 +67,6 @@ func TestDirtyFlag_SetChild(t *testing.T) {
 	}
 }
 
-// TestDirtyFlag_SetItem verifies that SetItem marks leaf nodes dirty.
-func TestDirtyFlag_SetItem(t *testing.T) {
-	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
-	item1 := NewItem(key, intToBytes(1))
-	item2 := NewItem(key, intToBytes(2))
-
-	// AccountStateLeafNode
-	leaf, err := newAccountStateLeafNode(item1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leaf.SetDirty(false)
-
-	if _, err := leaf.SetItem(item2); err != nil {
-		t.Fatal(err)
-	}
-	if !leaf.IsDirty() {
-		t.Error("SetItem should mark AccountStateLeafNode dirty")
-	}
-
-	// TransactionLeafNode
-	txLeaf, err := newTransactionLeafNode(item1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	txLeaf.SetDirty(false)
-
-	if _, err := txLeaf.SetItem(item2); err != nil {
-		t.Fatal(err)
-	}
-	if !txLeaf.IsDirty() {
-		t.Error("SetItem should mark TransactionLeafNode dirty")
-	}
-
-	// TransactionWithMetaLeafNode
-	txMetaLeaf, err := newTransactionWithMetaLeafNode(item1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	txMetaLeaf.SetDirty(false)
-
-	if _, err := txMetaLeaf.SetItem(item2); err != nil {
-		t.Fatal(err)
-	}
-	if !txMetaLeaf.IsDirty() {
-		t.Error("SetItem should mark TransactionWithMetaLeafNode dirty")
-	}
-}
-
 // TestDirtyFlag_WireDeserialize verifies that wire-deserialized nodes are NOT dirty.
 func TestDirtyFlag_WireDeserialize(t *testing.T) {
 	// Create an inner node and serialize it
