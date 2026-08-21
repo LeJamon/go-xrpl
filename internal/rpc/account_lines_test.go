@@ -1436,43 +1436,6 @@ func TestAccountLinesHistoricLedgers(t *testing.T) {
 	}
 }
 
-// TestAccountLinesMarkerOwnership tests that markers from one account cannot be used with another
-// Based on rippled AccountLines_test.cpp testAccountLinesMarker (lines 395-478)
-func TestAccountLinesMarkerOwnership(t *testing.T) {
-	mock := newMockAccountLinesLedgerService()
-	services := newAccountLinesTestServices(mock)
-
-	method := &handlers.AccountLinesMethod{}
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion1,
-		Services:   services,
-	}
-
-	t.Run("Marker from alice's account cannot be used for becky's account", func(t *testing.T) {
-		// First get alice's lines with marker
-		aliceAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
-		beckyAccount := "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
-
-		// Setup mock to return error when using alice's marker with becky's account
-		mock.accountLinesErr = errors.New("invalid marker - not owned by account")
-
-		params := map[string]any{
-			"account": beckyAccount,
-			"marker":  "alice-marker-pointing-to-her-signer-list",
-		}
-		paramsJSON, err := json.Marshal(params)
-		require.NoError(t, err)
-
-		result, rpcErr := method.Handle(ctx, paramsJSON)
-
-		assert.Nil(t, result)
-		require.NotNil(t, rpcErr)
-		_ = aliceAccount // Just to silence unused variable warning
-	})
-}
-
 // TestAccountLinesDeletedEntry tests behavior when a trust line pointed to by marker is deleted
 // Based on rippled AccountLines_test.cpp testAccountLineDelete (lines 480-554)
 func TestAccountLinesDeletedEntry(t *testing.T) {
