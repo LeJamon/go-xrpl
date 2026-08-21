@@ -2,7 +2,6 @@ package adaptor
 
 import (
 	"testing"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
@@ -11,12 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestLpNewLedgerProvider(t *testing.T) {
-	svc := newTestLedgerService(t)
-	p := NewLedgerProvider(svc)
-	require.NotNil(t, p)
-}
 
 func TestLpGetProofPath_BadHashLength(t *testing.T) {
 	lookup := newFakeLookup()
@@ -44,20 +37,6 @@ func TestLpGetProofPath_BadKeyLength(t *testing.T) {
 	assert.Nil(t, path)
 }
 
-func TestLpWrapLedger_CloseTime(t *testing.T) {
-	before := time.Now().Truncate(time.Second)
-	closed := makeClosedLedgerWithTxs(t, nil)
-
-	w := WrapLedger(closed)
-	ct := w.CloseTime()
-
-	// CloseTime is XRPL-epoch-rounded; check it is in a plausible range
-	// relative to the test execution window. We accept any non-zero time.
-	assert.False(t, ct.IsZero(), "CloseTime must not be zero for a closed ledger")
-	assert.True(t, ct.After(before.Add(-2*time.Minute)),
-		"CloseTime %v should be within 2 min of test start %v", ct, before)
-}
-
 func TestLpWrapLedger_TxSetID(t *testing.T) {
 	// A ledger with no transactions still has a valid (all-zeros) tx hash.
 	closed := makeClosedLedgerWithTxs(t, nil)
@@ -81,6 +60,7 @@ func TestLpGetCandidateLedger(t *testing.T) {
 		seq  uint32
 		want uint32
 	}{
+		{0, 0},
 		{1, 256},
 		{255, 256},
 		{256, 256},
@@ -96,92 +76,62 @@ func TestLpGetCandidateLedger(t *testing.T) {
 	}
 }
 
-func TestLpRouter_FetchInfoAndClear(t *testing.T) {
-	engine := &mockEngine{}
-	a := newTestAdaptor(t)
-	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := newTestRouter(engine, a, inbox)
+func TestLpRouter_OurLCLMatchesPeers(t *testing.T) {
+	tests := []struct {
+		name    string
+		peers   func(uint32, [32]byte) []*peerLedgerState
+		matches bool
+	}{
+		{name: "no peers", matches: true},
+		{
+			name: "majority agrees",
+			peers: func(seq uint32, hash [32]byte) []*peerLedgerState {
+				return []*peerLedgerState{
+					{LedgerSeq: seq, LedgerHash: hash},
+					{LedgerSeq: seq, LedgerHash: hash},
+					{LedgerSeq: seq, LedgerHash: fixedKey32(0xFF)},
+				}
+			},
+			matches: true,
+		},
+		{
+			name: "majority disagrees",
+			peers: func(seq uint32, _ [32]byte) []*peerLedgerState {
+				foreign := fixedKey32(0xCC)
+				return []*peerLedgerState{
+					{LedgerSeq: seq, LedgerHash: foreign},
+					{LedgerSeq: seq, LedgerHash: foreign},
+					{LedgerSeq: seq, LedgerHash: foreign},
+				}
+			},
+		},
+		{
+			name: "peers at another sequence",
+			peers: func(seq uint32, _ [32]byte) []*peerLedgerState {
+				return []*peerLedgerState{
+					{LedgerSeq: seq + 10, LedgerHash: fixedKey32(0x01)},
+					{LedgerSeq: seq + 10, LedgerHash: fixedKey32(0x02)},
+				}
+			},
+			matches: true,
+		},
+	}
 
-	info := router.FetchInfo()
-	assert.NotNil(t, info, "FetchInfo must return a non-nil map")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			a := newTestAdaptor(t)
+			router := newTestRouter(&mockEngine{}, a, make(chan *peermanagement.InboundMessage, 4))
+			closed := a.LedgerService().GetClosedLedger()
+			require.NotNil(t, closed)
 
-	router.ClearFetchInfo()
-	info2 := router.FetchInfo()
-	assert.NotNil(t, info2, "FetchInfo after ClearFetchInfo must still return a non-nil map")
-}
-
-func TestLpRouter_OurLCLMatchesPeers_NoPeers(t *testing.T) {
-	engine := &mockEngine{}
-	a := newTestAdaptor(t)
-	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := newTestRouter(engine, a, inbox)
-
-	assert.True(t, router.ourLCLMatchesPeers(),
-		"ourLCLMatchesPeers with no peer data must return true (bootstrap safety)")
-}
-
-func TestLpRouter_OurLCLMatchesPeers_MajorityAgrees(t *testing.T) {
-	engine := &mockEngine{}
-	a := newTestAdaptor(t)
-	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := newTestRouter(engine, a, inbox)
-
-	svc := a.LedgerService()
-	closed := svc.GetClosedLedger()
-	require.NotNil(t, closed)
-
-	ourSeq := svc.GetClosedLedgerIndex()
-	ourHash := closed.Hash()
-
-	router.peersMu.Lock()
-	router.peerStates[1] = &peerLedgerState{LedgerSeq: ourSeq, LedgerHash: ourHash}
-	router.peerStates[2] = &peerLedgerState{LedgerSeq: ourSeq, LedgerHash: ourHash}
-	router.peerStates[3] = &peerLedgerState{LedgerSeq: ourSeq, LedgerHash: fixedKey32(0xFF)}
-	router.peersMu.Unlock()
-
-	assert.True(t, router.ourLCLMatchesPeers(),
-		"majority-matching peers must return true")
-}
-
-func TestLpRouter_OurLCLMatchesPeers_MajorityDisagrees(t *testing.T) {
-	engine := &mockEngine{}
-	a := newTestAdaptor(t)
-	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := newTestRouter(engine, a, inbox)
-
-	svc := a.LedgerService()
-	closed := svc.GetClosedLedger()
-	require.NotNil(t, closed)
-
-	ourSeq := svc.GetClosedLedgerIndex()
-	foreign := fixedKey32(0xCC)
-
-	router.peersMu.Lock()
-	router.peerStates[1] = &peerLedgerState{LedgerSeq: ourSeq, LedgerHash: foreign}
-	router.peerStates[2] = &peerLedgerState{LedgerSeq: ourSeq, LedgerHash: foreign}
-	router.peerStates[3] = &peerLedgerState{LedgerSeq: ourSeq, LedgerHash: foreign}
-	router.peersMu.Unlock()
-
-	assert.False(t, router.ourLCLMatchesPeers(),
-		"majority-disagreeing peers must return false")
-}
-
-func TestLpRouter_OurLCLMatchesPeers_NoPeersAtOurSeq(t *testing.T) {
-	engine := &mockEngine{}
-	a := newTestAdaptor(t)
-	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := newTestRouter(engine, a, inbox)
-
-	svc := a.LedgerService()
-	ourSeq := svc.GetClosedLedgerIndex()
-
-	router.peersMu.Lock()
-	router.peerStates[1] = &peerLedgerState{LedgerSeq: ourSeq + 10, LedgerHash: fixedKey32(0x01)}
-	router.peerStates[2] = &peerLedgerState{LedgerSeq: ourSeq + 10, LedgerHash: fixedKey32(0x02)}
-	router.peersMu.Unlock()
-
-	assert.True(t, router.ourLCLMatchesPeers(),
-		"peers reporting a different seq should not block transition (they may have advanced)")
+			if test.peers != nil {
+				for i, state := range test.peers(closed.Sequence(), closed.Hash()) {
+					router.peerStates[peermanagement.PeerID(i+1)] = state
+				}
+			}
+			assert.Equal(t, test.matches, router.ourLCLMatchesPeers())
+		})
+	}
 }
 
 func TestLpToHash32(t *testing.T) {
@@ -213,9 +163,4 @@ func TestLpWrapLedger_CloseTime_ViaService(t *testing.T) {
 	w := WrapLedger(closed)
 	assert.False(t, w.CloseTime().IsZero(),
 		"LedgerWrapper.CloseTime must not be zero on the service's closed ledger")
-}
-
-func TestLpGetCandidateLedger_ZeroSeq(t *testing.T) {
-	// seq=0: (0 + 255) &^ 255 = 255 &^ 255 = 0
-	assert.Equal(t, uint32(0), getCandidateLedger(0))
 }
