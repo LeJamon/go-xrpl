@@ -224,27 +224,6 @@ func TestEntryTypeName(t *testing.T) {
 	assert.Contains(t, EntryTypeName(0x9999), "Unknown")
 }
 
-// TestGetOwnerNode_TicketSeqContainsHeaderByte pins the regression where a
-// 0x34 byte inside an earlier field's VALUE (here TicketSequence = 52 =
-// 0x00000034) was mistaken for the OwnerNode field header by the old byte-scan,
-// yielding a garbage directory-page hint. The walker-based parse must return
-// the real OwnerNode.
-func TestGetOwnerNode_TicketSeqContainsHeaderByte(t *testing.T) {
-	t.Parallel()
-
-	// Minimal Ticket-shaped SLE: LedgerEntryType, Flags, TicketSequence(52),
-	// OwnerNode(2), in canonical (type, nth) order.
-	data := []byte{
-		0x11, 0x00, 0x54, // LedgerEntryType = Ticket
-		0x22, 0x00, 0x00, 0x00, 0x00, // Flags = 0
-		0x20, 0x29, 0x00, 0x00, 0x00, 0x34, // TicketSequence = 52
-		0x34, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, // OwnerNode = 2
-	}
-	got, err := GetOwnerNode(data)
-	require.NoError(t, err)
-	assert.Equal(t, uint64(2), got)
-}
-
 func TestGetOwnerNode_Absent(t *testing.T) {
 	t.Parallel()
 

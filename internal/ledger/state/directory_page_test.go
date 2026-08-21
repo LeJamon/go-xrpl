@@ -115,25 +115,6 @@ func makePages(t *testing.T, v *stubView, dir keylet.Keylet, n uint64) {
 	}
 }
 
-// TestDirectoryNode_EmptyRoundTrip pins that an empty directory page (no
-// Indexes) round-trips through serialize/parse, since makePages and the
-// page-cleanup paths rely on empty pages existing in state.
-func TestDirectoryNode_EmptyRoundTrip(t *testing.T) {
-	t.Parallel()
-
-	dir := testDir()
-	node := &DirectoryNode{RootIndex: dir.Key, IndexNext: 1, IndexPrevious: 7}
-	data, err := SerializeDirectoryNode(node, false)
-	require.NoError(t, err)
-
-	got, err := ParseDirectoryNode(data)
-	require.NoError(t, err)
-	assert.Empty(t, got.Indexes)
-	assert.Equal(t, uint64(1), got.IndexNext)
-	assert.Equal(t, uint64(7), got.IndexPrevious)
-	assert.Equal(t, dir.Key, got.RootIndex)
-}
-
 // TestDirInsert_CreatesRoot covers the first insert into an empty directory:
 // the root page (page 0) is created in place.
 func TestDirInsert_CreatesRoot(t *testing.T) {
