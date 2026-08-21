@@ -3,7 +3,6 @@ package rpc
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
@@ -15,123 +14,15 @@ import (
 
 // mockNoRippleCheckLedgerService implements LedgerService for noripple_check testing
 type mockNoRippleCheckLedgerService struct {
-	noRippleCheckResult  *types.NoRippleCheckResult
-	noRippleCheckErr     error
-	accountInfo          *types.AccountInfo
-	accountInfoErr       error
-	currentLedgerIndex   uint32
-	closedLedgerIndex    uint32
-	validatedLedgerIndex uint32
-	standalone           bool
-	serverInfo           types.LedgerServerInfo
+	*mockLedgerService
+	noRippleCheckResult *types.NoRippleCheckResult
+	noRippleCheckErr    error
 }
 
 func newMockNoRippleCheckLedgerService() *mockNoRippleCheckLedgerService {
-	return &mockNoRippleCheckLedgerService{
-		currentLedgerIndex:   3,
-		closedLedgerIndex:    2,
-		validatedLedgerIndex: 2,
-		standalone:           true,
-		serverInfo: types.LedgerServerInfo{
-			Standalone:         true,
-			OpenLedgerSeq:      3,
-			ClosedLedgerSeq:    2,
-			ValidatedLedgerSeq: 2,
-			CompleteLedgers:    "1-2",
-		},
-	}
+	return &mockNoRippleCheckLedgerService{mockLedgerService: newMockLedgerService()}
 }
 
-func (m *mockNoRippleCheckLedgerService) GetCurrentLedgerIndex() uint32 { return m.currentLedgerIndex }
-func (m *mockNoRippleCheckLedgerService) GetClosedLedgerIndex() uint32  { return m.closedLedgerIndex }
-func (m *mockNoRippleCheckLedgerService) GetValidatedLedgerIndex() uint32 {
-	return m.validatedLedgerIndex
-}
-func (m *mockNoRippleCheckLedgerService) AcceptLedger(context.Context) (uint32, error) {
-	return m.closedLedgerIndex + 1, nil
-}
-func (m *mockNoRippleCheckLedgerService) IsStandalone() bool { return m.standalone }
-func (m *mockNoRippleCheckLedgerService) GetServerInfo() types.LedgerServerInfo {
-	return m.serverInfo
-}
-func (m *mockNoRippleCheckLedgerService) GetGenesisAccount() (string, error) {
-	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil
-}
-func (m *mockNoRippleCheckLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
-	return accountQueryLedgerBySequence(seq, m.currentLedgerIndex, m.validatedLedgerIndex)
-}
-func (m *mockNoRippleCheckLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
-	return accountQueryLedgerByHash(hash, m.validatedLedgerIndex)
-}
-func (m *mockNoRippleCheckLedgerService) SubmitTransaction(txJSON []byte, txBlobHex string) (*types.SubmitResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
-	return 10, 10000000, 2000000
-}
-func (m *mockNoRippleCheckLedgerService) GetAccountInfo(_ context.Context, account string, ledgerIndex string) (*types.AccountInfo, error) {
-	if m.accountInfoErr != nil {
-		return nil, m.accountInfoErr
-	}
-	if m.accountInfo != nil {
-		return m.accountInfo, nil
-	}
-	return &types.AccountInfo{
-		Account:     account,
-		Balance:     "100000000",
-		Flags:       0,
-		OwnerCount:  0,
-		Sequence:    1,
-		LedgerIndex: m.validatedLedgerIndex,
-		LedgerHash:  "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652",
-		Validated:   true,
-	}, nil
-}
-func (m *mockNoRippleCheckLedgerService) GetTransaction(txHash [32]byte) (*types.TransactionInfo, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) StoreTransaction(txHash [32]byte, txData []byte) error {
-	return errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) GetAccountLines(_ context.Context, account string, ledgerIndex string, peer string, limit uint32, _ string) (*types.AccountLinesResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) GetAccountOffers(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountOffersResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ string, _ bool) (*types.BookOffersResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) GetTransactionHistory(ctx context.Context, startIndex uint32) (*types.TxHistoryResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) GetLedgerRange(ctx context.Context, minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) GetLedgerEntry(_ context.Context, entryKey [32]byte, ledgerIndex string) (*types.LedgerEntryResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) GetLedgerData(_ context.Context, ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) GetAccountObjects(_ context.Context, account string, ledgerIndex string, objType string, limit uint32, _ string) (*types.AccountObjectsResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) GetAccountChannels(_ context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32, _ string) (*types.AccountChannelsResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) GetAccountCurrencies(_ context.Context, account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountNFTsResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) GetGatewayBalances(_ context.Context, account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
-	return nil, errors.New("not implemented")
-}
 func (m *mockNoRippleCheckLedgerService) GetNoRippleCheck(_ context.Context, account string, role string, ledgerIndex string, limit uint32, transactions bool) (*types.NoRippleCheckResult, error) {
 	if m.noRippleCheckErr != nil {
 		return nil, m.noRippleCheckErr
@@ -139,35 +30,12 @@ func (m *mockNoRippleCheckLedgerService) GetNoRippleCheck(_ context.Context, acc
 	if m.noRippleCheckResult != nil {
 		return m.noRippleCheckResult, nil
 	}
-	// Return empty result by default
 	return &types.NoRippleCheckResult{
 		Problems:    []string{},
 		LedgerIndex: m.validatedLedgerIndex,
 		LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
 		Validated:   true,
 	}, nil
-}
-func (m *mockNoRippleCheckLedgerService) GetDepositAuthorized(_ context.Context, sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*types.DepositAuthorizedResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) GetNFTBuyOffers(_ context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) GetNFTSellOffers(_ context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) GetAutofillFee(txJSON []byte, unlimited bool, mult, div int) (uint64, error) {
-	return 0, errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
-	return 0, errors.New("not implemented")
-}
-func (m *mockNoRippleCheckLedgerService) IsAmendmentBlocked() bool { return false }
-func (m *mockNoRippleCheckLedgerService) GetClosedLedgerView() (types.LedgerStateView, error) {
-	return nil, errors.New("not implemented in mock")
 }
 
 // newNoRippleCheckTestServices builds a per-test ServiceContainer wrapping mock.

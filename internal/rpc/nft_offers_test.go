@@ -17,114 +17,25 @@ import (
 
 // mockNFTOffersLedgerService implements LedgerService for nft_buy_offers/nft_sell_offers testing
 type mockNFTOffersLedgerService struct {
-	nftBuyOffersResult   *types.NFTOffersResult
-	nftBuyOffersErr      error
-	nftSellOffersResult  *types.NFTOffersResult
-	nftSellOffersErr     error
-	currentLedgerIndex   uint32
-	closedLedgerIndex    uint32
-	validatedLedgerIndex uint32
-	standalone           bool
-	serverInfo           types.LedgerServerInfo
+	*mockLedgerService
+	nftBuyOffersResult  *types.NFTOffersResult
+	nftBuyOffersErr     error
+	nftSellOffersResult *types.NFTOffersResult
+	nftSellOffersErr    error
 }
 
 func newMockNFTOffersLedgerService() *mockNFTOffersLedgerService {
-	return &mockNFTOffersLedgerService{
-		currentLedgerIndex:   3,
-		closedLedgerIndex:    2,
-		validatedLedgerIndex: 2,
-		standalone:           true,
-		serverInfo: types.LedgerServerInfo{
-			Standalone:         true,
-			OpenLedgerSeq:      3,
-			ClosedLedgerSeq:    2,
-			ValidatedLedgerSeq: 2,
-			CompleteLedgers:    "1-2",
-		},
-	}
+	return &mockNFTOffersLedgerService{mockLedgerService: newMockLedgerService()}
 }
 
-func (m *mockNFTOffersLedgerService) GetCurrentLedgerIndex() uint32   { return m.currentLedgerIndex }
-func (m *mockNFTOffersLedgerService) GetClosedLedgerIndex() uint32    { return m.closedLedgerIndex }
-func (m *mockNFTOffersLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
-func (m *mockNFTOffersLedgerService) AcceptLedger(context.Context) (uint32, error) {
-	return m.closedLedgerIndex + 1, nil
-}
-func (m *mockNFTOffersLedgerService) IsStandalone() bool { return m.standalone }
-func (m *mockNFTOffersLedgerService) GetServerInfo() types.LedgerServerInfo {
-	return m.serverInfo
-}
-func (m *mockNFTOffersLedgerService) GetGenesisAccount() (string, error) {
-	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil
-}
 func (m *mockNFTOffersLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
 	return newDefaultLedgerReader(seq, seq == m.validatedLedgerIndex), nil
 }
+
 func (m *mockNFTOffersLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) SubmitTransaction(txJSON []byte, txBlobHex string) (*types.SubmitResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
-	return 10, 10000000, 2000000
-}
-func (m *mockNFTOffersLedgerService) GetAccountInfo(_ context.Context, account string, ledgerIndex string) (*types.AccountInfo, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) GetTransaction(txHash [32]byte) (*types.TransactionInfo, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) StoreTransaction(txHash [32]byte, txData []byte) error {
-	return errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) GetAccountLines(_ context.Context, account string, ledgerIndex string, peer string, limit uint32, _ string) (*types.AccountLinesResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) GetAccountOffers(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountOffersResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ string, _ bool) (*types.BookOffersResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) GetTransactionHistory(ctx context.Context, startIndex uint32) (*types.TxHistoryResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) GetLedgerRange(ctx context.Context, minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) GetLedgerEntry(_ context.Context, entryKey [32]byte, ledgerIndex string) (*types.LedgerEntryResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) GetLedgerData(_ context.Context, ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) GetAccountObjects(_ context.Context, account string, ledgerIndex string, objType string, limit uint32, _ string) (*types.AccountObjectsResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) GetAccountChannels(_ context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32, _ string) (*types.AccountChannelsResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) GetAccountCurrencies(_ context.Context, account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountNFTsResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) GetGatewayBalances(_ context.Context, account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) GetNoRippleCheck(_ context.Context, account string, role string, ledgerIndex string, limit uint32, transactions bool) (*types.NoRippleCheckResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) GetDepositAuthorized(_ context.Context, sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*types.DepositAuthorizedResult, error) {
-	return nil, errors.New("not implemented")
-}
 
-// NFT offer methods
 func (m *mockNFTOffersLedgerService) GetNFTBuyOffers(_ context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
 	if m.nftBuyOffersErr != nil {
 		return nil, m.nftBuyOffersErr
@@ -143,19 +54,6 @@ func (m *mockNFTOffersLedgerService) GetNFTSellOffers(_ context.Context, nftID [
 		return m.nftSellOffersResult, nil
 	}
 	return nil, svcerr.ErrObjectNotFound
-}
-func (m *mockNFTOffersLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) GetAutofillFee(txJSON []byte, unlimited bool, mult, div int) (uint64, error) {
-	return 0, errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
-	return 0, errors.New("not implemented")
-}
-func (m *mockNFTOffersLedgerService) IsAmendmentBlocked() bool { return false }
-func (m *mockNFTOffersLedgerService) GetClosedLedgerView() (types.LedgerStateView, error) {
-	return nil, errors.New("not implemented in mock")
 }
 
 // newNFTOffersTestServices builds a per-test ServiceContainer wrapping mock.
