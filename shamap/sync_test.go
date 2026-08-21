@@ -13,14 +13,13 @@ func (sm *SHAMap) addKnownNodeFromPrefixForTest(nodeID NodeID, data []byte) (Add
 }
 
 func TestSyncFilter(t *testing.T) {
-	// Test DefaultSyncFilter
-	t.Run("DefaultSyncFilter", func(t *testing.T) {
+	t.Run("default filter", func(t *testing.T) {
 		filter := &defaultSyncFilter{}
 		var hash [32]byte
 		hash[0] = 1
 
 		if !filter.ShouldFetch(hash) {
-			t.Error("DefaultSyncFilter should always return true")
+			t.Error("default sync filter should always return true")
 		}
 	})
 }
@@ -290,13 +289,13 @@ func TestWalkMap_BackedLazyLoadAfterRelease(t *testing.T) {
 		}
 	}
 
-	// FlushDirtyAndRelease writes every dirty node to family, then releases
+	// StoreDirtyAndRelease writes every dirty node to family, then releases
 	// each inner node's children while retaining their hashes.
 	batch, err := collectDirtyAndReleaseForTest(src)
 	if err != nil {
-		t.Fatalf("FlushDirty: %v", err)
+		t.Fatalf("StoreDirty: %v", err)
 	}
-	if err := family.StoreBatch(context.Background(), batch.Entries); err != nil {
+	if err := family.StoreBatch(context.Background(), batch); err != nil {
 		t.Fatalf("StoreBatch: %v", err)
 	}
 

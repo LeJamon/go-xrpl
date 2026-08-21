@@ -35,10 +35,10 @@ func TestNid_NewNodeID_ValidDepths(t *testing.T) {
 	}
 }
 
-func TestNid_NewRootNodeID(t *testing.T) {
+func TestNid_RootNodeID(t *testing.T) {
 	root := newRootNodeID()
 	if !root.IsRoot() {
-		t.Fatal("NewRootNodeID should return a root node")
+		t.Fatal("root NodeID should report itself as root")
 	}
 	if root.Depth() != 0 {
 		t.Fatalf("root depth should be 0, got %d", root.Depth())
@@ -68,13 +68,13 @@ func TestNid_CreateNodeID_MasksIrrelevantBits(t *testing.T) {
 }
 
 func TestNid_CreateNodeID_MaxDepth(t *testing.T) {
-	// At MaxDepth (64) no masking occurs; all bytes preserved.
+	// At the maximum depth no masking occurs; all bytes are preserved.
 	nid, err := createNodeID(maxDepth, nid_fullKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if nid.ID() != nid_fullKey {
-		t.Fatal("at MaxDepth all bytes should be preserved")
+		t.Fatal("at maximum depth all bytes should be preserved")
 	}
 }
 

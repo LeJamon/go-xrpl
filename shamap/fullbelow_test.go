@@ -143,11 +143,11 @@ func TestWalkMapParallel_BoundsFanoutAtRootBranches(t *testing.T) {
 	}
 	batch, err := collectDirtyForTest(source)
 	if err != nil {
-		t.Fatalf("FlushDirty: %v", err)
+		t.Fatalf("StoreDirty: %v", err)
 	}
 
 	base := newMemoryFamily()
-	if err := base.StoreBatch(context.Background(), batch.Entries); err != nil {
+	if err := base.StoreBatch(context.Background(), batch); err != nil {
 		t.Fatalf("StoreBatch: %v", err)
 	}
 	family := &concurrentFetchFamily{Family: base}
@@ -184,12 +184,12 @@ func TestWalkMapParallel_ReleasesCompleteStoredSubtrees(t *testing.T) {
 	}
 	batch, err := collectDirtyForTest(source)
 	if err != nil {
-		t.Fatalf("FlushDirty: %v", err)
+		t.Fatalf("StoreDirty: %v", err)
 	}
 
 	family := newCountingFamily()
-	entries := make([]FlushEntry, 0, len(batch.Entries)-1)
-	for _, entry := range batch.Entries {
+	entries := make([]FlushEntry, 0, len(batch)-1)
+	for _, entry := range batch {
 		if entry.Hash != rootHash {
 			entries = append(entries, entry)
 		}
@@ -247,11 +247,11 @@ func TestFinishSync_ReleasesColdDurableTree(t *testing.T) {
 	}
 	batch, err := collectDirtyForTest(source)
 	if err != nil {
-		t.Fatalf("FlushDirty: %v", err)
+		t.Fatalf("StoreDirty: %v", err)
 	}
 
 	family := newCountingFamily()
-	if err := family.StoreBatch(context.Background(), batch.Entries); err != nil {
+	if err := family.StoreBatch(context.Background(), batch); err != nil {
 		t.Fatalf("StoreBatch: %v", err)
 	}
 	dest, err := NewBacked(TypeState, family)
@@ -310,10 +310,10 @@ func TestWalkMapParallel_RetainsIncompleteFrontier(t *testing.T) {
 
 	batch, err := collectDirtyForTest(source)
 	if err != nil {
-		t.Fatalf("FlushDirty: %v", err)
+		t.Fatalf("StoreDirty: %v", err)
 	}
-	entries := make([]FlushEntry, 0, len(batch.Entries)-1)
-	for _, entry := range batch.Entries {
+	entries := make([]FlushEntry, 0, len(batch)-1)
+	for _, entry := range batch {
 		if entry.Hash != withheldHash {
 			entries = append(entries, entry)
 		}
@@ -771,10 +771,10 @@ func TestWalkMapParallel_DoesNotReleasePendingNodesBeforeDurability(t *testing.T
 	base := newMemoryFamily()
 	family := &pendingDurableFamily{
 		base:    base,
-		pending: make(map[[32]byte][]byte, len(batch.Entries)),
+		pending: make(map[[32]byte][]byte, len(batch)),
 		cache:   base.FullBelowCache(),
 	}
-	for _, entry := range batch.Entries {
+	for _, entry := range batch {
 		family.pending[entry.Hash] = entry.Data
 	}
 	dest, err := NewBacked(TypeState, family)
@@ -801,7 +801,7 @@ func TestWalkMapParallel_DoesNotReleasePendingNodesBeforeDurability(t *testing.T
 		t.Fatal("pending root was published as durable")
 	}
 
-	if err := base.StoreBatch(context.Background(), batch.Entries); err != nil {
+	if err := base.StoreBatch(context.Background(), batch); err != nil {
 		t.Fatal(err)
 	}
 	family.durableFetches.Store(0)

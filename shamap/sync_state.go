@@ -63,7 +63,6 @@ type SyncFilter interface {
 	ShouldFetch(nodeHash [32]byte) bool
 }
 
-// DefaultSyncFilter always returns true, fetching all missing nodes.
 type defaultSyncFilter struct{}
 
 // ShouldFetch implements SyncFilter, always returning true.

@@ -100,7 +100,7 @@ func newInterruptedBackedWalk(t *testing.T, cancelFirst bool) (*SHAMap, *oneShot
 	}
 
 	base := newMemoryFamily()
-	if err := base.StoreBatch(context.Background(), batch.Entries); err != nil {
+	if err := base.StoreBatch(context.Background(), batch); err != nil {
 		t.Fatal(err)
 	}
 	family := &oneShotMissingFamily{
@@ -239,8 +239,8 @@ func TestBackedWalkResumesWithoutRereadingCompletedNodes(t *testing.T) {
 	}
 
 	var withheld []FlushEntry
-	stored := make([]FlushEntry, 0, len(batch.Entries))
-	for _, entry := range batch.Entries {
+	stored := make([]FlushEntry, 0, len(batch))
+	for _, entry := range batch {
 		if len(withheld) < 2 && len(entry.Data) >= 4 && bytes.Equal(entry.Data[:4], protocol.HashPrefixLeafNode().Bytes()) {
 			withheld = append(withheld, entry)
 			continue
@@ -333,7 +333,7 @@ func TestBackedWalkResumesAfterTraversalBudget(t *testing.T) {
 	}
 
 	base := newMemoryFamily()
-	if err := base.StoreBatch(t.Context(), batch.Entries); err != nil {
+	if err := base.StoreBatch(t.Context(), batch); err != nil {
 		t.Fatal(err)
 	}
 	family := &countingDurableFamily{base: base, reads: make(map[[32]byte]int)}
@@ -354,7 +354,7 @@ func TestBackedWalkResumesAfterTraversalBudget(t *testing.T) {
 	}
 
 	const budget = 32
-	for pass := 0; pass < len(batch.Entries); pass++ {
+	for pass := 0; pass < len(batch); pass++ {
 		readsBefore := family.totalReads()
 		missing, walkErr := dest.GetMissingNodesContext(WithTraversalBudget(t.Context(), budget), 1, nil)
 		if got := family.totalReads() - readsBefore; got > budget {
@@ -398,7 +398,7 @@ func TestBackedWalkBudgetsFinalRootProof(t *testing.T) {
 	}
 
 	base := newMemoryFamily()
-	if err := base.StoreBatch(t.Context(), batch.Entries); err != nil {
+	if err := base.StoreBatch(t.Context(), batch); err != nil {
 		t.Fatal(err)
 	}
 	family := &countingDurableFamily{base: base, reads: make(map[[32]byte]int)}
@@ -446,8 +446,8 @@ func TestBackedWalkRetainsExactPositionAcrossCappedPasses(t *testing.T) {
 	}
 
 	var withheld []FlushEntry
-	stored := make([]FlushEntry, 0, len(batch.Entries))
-	for _, entry := range batch.Entries {
+	stored := make([]FlushEntry, 0, len(batch))
+	for _, entry := range batch {
 		if len(withheld) < 2 && len(entry.Data) >= 4 && bytes.Equal(entry.Data[:4], protocol.HashPrefixLeafNode().Bytes()) {
 			withheld = append(withheld, entry)
 			continue
@@ -496,7 +496,7 @@ func TestBackedWalkRetainsExactPositionAcrossCappedPasses(t *testing.T) {
 }
 
 func TestBackedWalkCachesShallowProofsAcrossLedgerRoots(t *testing.T) {
-	build := func(changed bool) (*SHAMap, [32]byte, []byte, *testNodeBatch) {
+	build := func(changed bool) (*SHAMap, [32]byte, []byte, []FlushEntry) {
 		sm := New(TypeState)
 		for i := range 4096 {
 			var key [32]byte
@@ -530,10 +530,10 @@ func TestBackedWalkCachesShallowProofsAcrossLedgerRoots(t *testing.T) {
 	firstSource, firstHash, firstRoot, firstBatch := build(false)
 	_, secondHash, secondRoot, secondBatch := build(true)
 	base := newMemoryFamily()
-	if err := base.StoreBatch(context.Background(), firstBatch.Entries); err != nil {
+	if err := base.StoreBatch(context.Background(), firstBatch); err != nil {
 		t.Fatal(err)
 	}
-	if err := base.StoreBatch(context.Background(), secondBatch.Entries); err != nil {
+	if err := base.StoreBatch(context.Background(), secondBatch); err != nil {
 		t.Fatal(err)
 	}
 	family := &countingDurableFamily{base: base, reads: make(map[[32]byte]int)}
@@ -610,7 +610,7 @@ func TestBackedWalkCachesShallowProofsAcrossLedgerRoots(t *testing.T) {
 }
 
 func TestBackedWalkProofCacheSurvivesSweeps(t *testing.T) {
-	build := func(changed bool) (*SHAMap, [32]byte, []byte, *testNodeBatch) {
+	build := func(changed bool) (*SHAMap, [32]byte, []byte, []FlushEntry) {
 		sm := New(TypeState)
 		for i := range 4096 {
 			var key [32]byte
@@ -646,10 +646,10 @@ func TestBackedWalkProofCacheSurvivesSweeps(t *testing.T) {
 	now := time.Unix(4_000, 0)
 	base := newMemoryFamily()
 	base.fullBelow = newFullBelowCacheWithClock(fullBelowCacheTarget, 10*time.Minute, func() time.Time { return now })
-	if err := base.StoreBatch(t.Context(), firstBatch.Entries); err != nil {
+	if err := base.StoreBatch(t.Context(), firstBatch); err != nil {
 		t.Fatal(err)
 	}
-	if err := base.StoreBatch(t.Context(), secondBatch.Entries); err != nil {
+	if err := base.StoreBatch(t.Context(), secondBatch); err != nil {
 		t.Fatal(err)
 	}
 	family := &countingDurableFamily{base: base, reads: make(map[[32]byte]int)}
@@ -670,8 +670,8 @@ func TestBackedWalkProofCacheSurvivesSweeps(t *testing.T) {
 	}
 
 	coldReads := walkReads(firstHash, firstRoot)
-	if size := base.fullBelow.Size(); size == 0 || size > len(firstBatch.Entries)+1 {
-		t.Fatalf("proof cache size = %d, want 1..%d", size, len(firstBatch.Entries)+1)
+	if size := base.fullBelow.Size(); size == 0 || size > len(firstBatch)+1 {
+		t.Fatalf("proof cache size = %d, want 1..%d", size, len(firstBatch)+1)
 	}
 
 	for range 10 {
@@ -779,8 +779,8 @@ func TestBackedWalkDoesNotPublishDurableRootAbovePendingDescendant(t *testing.T)
 	var pending FlushEntry
 	var pendingAncestor [32]byte
 	pendingAncestorDepth := 0
-	durable := make([]FlushEntry, 0, len(batch.Entries)-1)
-	for _, entry := range batch.Entries {
+	durable := make([]FlushEntry, 0, len(batch)-1)
+	for _, entry := range batch {
 		if pending.Hash == ([32]byte{}) && len(entry.Data) >= 4 && bytes.Equal(entry.Data[:4], protocol.HashPrefixLeafNode().Bytes()) {
 			if ancestor, depth, ok := ancestorForLeaf(entry); ok {
 				pending = entry
@@ -888,8 +888,8 @@ func TestBackedWalkAcknowledgementIgnoresStaleGeneration(t *testing.T) {
 	}
 
 	var pending FlushEntry
-	durable := make([]FlushEntry, 0, len(batch.Entries)-1)
-	for _, entry := range batch.Entries {
+	durable := make([]FlushEntry, 0, len(batch)-1)
+	for _, entry := range batch {
 		if pending.Hash == ([32]byte{}) && len(entry.Data) >= 4 && bytes.Equal(entry.Data[:4], protocol.HashPrefixLeafNode().Bytes()) {
 			pending = entry
 			continue
@@ -960,8 +960,8 @@ func TestBackedWalkDefersPendingProofUntilAcknowledged(t *testing.T) {
 	}
 
 	var pending, missing FlushEntry
-	durable := make([]FlushEntry, 0, len(batch.Entries)-2)
-	for _, entry := range batch.Entries {
+	durable := make([]FlushEntry, 0, len(batch)-2)
+	for _, entry := range batch {
 		if len(entry.Data) >= 4 && bytes.Equal(entry.Data[:4], protocol.HashPrefixLeafNode().Bytes()) {
 			if pending.Hash == ([32]byte{}) {
 				pending = entry
@@ -1180,7 +1180,7 @@ func TestDecodeTraversalNodeValidatesCanonicalPrefixData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, entry := range batch.Entries {
+	for _, entry := range batch {
 		view, err := decodeTraversalNode(entry.Data, entry.Hash)
 		if err != nil {
 			t.Fatalf("decode %x: %v", entry.Hash[:8], err)
@@ -1195,7 +1195,7 @@ func TestDecodeTraversalNodeValidatesCanonicalPrefixData(t *testing.T) {
 		}
 	}
 
-	entry := batch.Entries[0]
+	entry := batch[0]
 	corrupt := append([]byte(nil), entry.Data...)
 	corrupt[len(corrupt)-1] ^= 0xff
 	if _, err := decodeTraversalNode(corrupt, entry.Hash); err == nil {
@@ -1218,7 +1218,7 @@ func BenchmarkTraversalDecode(b *testing.B) {
 		b.Fatal(err)
 	}
 	var inner FlushEntry
-	for _, entry := range batch.Entries {
+	for _, entry := range batch {
 		if len(entry.Data) >= 4 && bytes.Equal(entry.Data[:4], protocol.HashPrefixInnerNode().Bytes()) {
 			inner = entry
 			break

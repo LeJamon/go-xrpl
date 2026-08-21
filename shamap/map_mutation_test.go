@@ -154,10 +154,10 @@ func TestSme_GetBranchAtDepthBeyondMax(t *testing.T) {
 	var k [32]byte
 	k[0] = 0xFF
 	if got := getBranchAtDepth(k, maxDepth); got != 0 {
-		t.Errorf("getBranchAtDepth at MaxDepth = %d, want 0", got)
+		t.Errorf("getBranchAtDepth at maximum depth = %d, want 0", got)
 	}
 	if got := getBranchAtDepth(k, maxDepth+10); got != 0 {
-		t.Errorf("getBranchAtDepth beyond MaxDepth = %d, want 0", got)
+		t.Errorf("getBranchAtDepth beyond maximum depth = %d, want 0", got)
 	}
 }
 

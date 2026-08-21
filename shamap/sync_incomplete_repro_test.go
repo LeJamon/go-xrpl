@@ -40,9 +40,9 @@ func buildDeepBackedSource(t *testing.T, family *memoryFamily) (*SHAMap, [32]byt
 
 	batch, err := collectDirtyForTest(source)
 	if err != nil {
-		t.Fatalf("FlushDirty: %v", err)
+		t.Fatalf("StoreDirty: %v", err)
 	}
-	if err := family.StoreBatch(context.Background(), batch.Entries); err != nil {
+	if err := family.StoreBatch(context.Background(), batch); err != nil {
 		t.Fatalf("StoreBatch: %v", err)
 	}
 

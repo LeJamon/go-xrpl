@@ -123,7 +123,7 @@ func TestWalkMapParallelPruneAndFinishDoNotInvertLocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := newMemoryFamily()
-	if err := base.StoreBatch(context.Background(), batch.Entries); err != nil {
+	if err := base.StoreBatch(context.Background(), batch); err != nil {
 		t.Fatal(err)
 	}
 	family := &blockingWalkFamily{
@@ -211,7 +211,7 @@ func TestWalkMapParallelPinsFamilyUntilTraversalEnds(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := newMemoryFamily()
-	if err := base.StoreBatch(context.Background(), batch.Entries); err != nil {
+	if err := base.StoreBatch(context.Background(), batch); err != nil {
 		t.Fatal(err)
 	}
 	family := &blockingWalkFamily{

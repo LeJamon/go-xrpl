@@ -62,22 +62,18 @@ func (f *memoryFamily) Len() int {
 	return len(f.store)
 }
 
-type testNodeBatch struct {
-	Entries []FlushEntry
-}
-
-func collectDirtyForTest(sm *SHAMap) (*testNodeBatch, error) {
+func collectDirtyForTest(sm *SHAMap) ([]FlushEntry, error) {
 	return collectDirtyWith(sm.StoreDirty)
 }
 
-func collectDirtyAndReleaseForTest(sm *SHAMap) (*testNodeBatch, error) {
+func collectDirtyAndReleaseForTest(sm *SHAMap) ([]FlushEntry, error) {
 	return collectDirtyWith(sm.StoreDirtyAndRelease)
 }
 
-func collectDirtyWith(store func(func([]FlushEntry) error) error) (*testNodeBatch, error) {
-	batch := &testNodeBatch{}
+func collectDirtyWith(store func(func([]FlushEntry) error) error) ([]FlushEntry, error) {
+	var batch []FlushEntry
 	err := store(func(entries []FlushEntry) error {
-		batch.Entries = entries
+		batch = entries
 		return nil
 	})
 	return batch, err

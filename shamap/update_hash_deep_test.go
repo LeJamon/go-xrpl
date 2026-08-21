@@ -94,11 +94,11 @@ func TestFlushNode_GuardsStalePreimage(t *testing.T) {
 
 	batch, err := collectDirtyForTest(sm)
 	if err != nil {
-		t.Fatalf("FlushDirty: %v", err)
+		t.Fatalf("StoreDirty: %v", err)
 	}
 
 	var rootData []byte
-	for _, e := range batch.Entries {
+	for _, e := range batch {
 		if e.Hash == rootHash {
 			rootData = e.Data
 			break

@@ -217,7 +217,7 @@ func markRootFullBelow(root *innerNode, gen uint32) {
 //
 // The actual walk is performed by walkMapParallel so the per-root-branch
 // fan-out is shared with the lower-level walkMap API. maxNodes == 0 is
-// unbounded; a nil filter behaves like DefaultSyncFilter.
+// unbounded; a nil filter accepts every missing node.
 func (sm *SHAMap) GetMissingNodes(maxNodes int, filter SyncFilter) []MissingNode {
 	missing, _ := sm.GetMissingNodesContext(context.Background(), maxNodes, filter)
 	return missing
