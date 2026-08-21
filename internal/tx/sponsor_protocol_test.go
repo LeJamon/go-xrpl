@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
@@ -143,6 +144,95 @@ func TestSponsorTransactionCodecRoundTrip(t *testing.T) {
 			}
 			if !bytes.Equal(parsed.GetRawBytes(), raw) {
 				t.Fatal("ParseFromBinary did not preserve canonical bytes")
+			}
+		})
+	}
+}
+
+func TestSponsorMultisignatureWithoutSigningPubKeyRoundTrip(t *testing.T) {
+	fields := baseCommon("Payment")
+	fields["Destination"] = testDestination
+	fields["Amount"] = "1"
+	fields["Sponsor"] = testDestination
+	fields["SponsorFlags"] = SpfSponsorFee
+	fields["SponsorSignature"] = map[string]any{
+		"Signers": []map[string]any{
+			{
+				"Signer": map[string]any{
+					"Account":       testAccount,
+					"SigningPubKey": "ED0000000000000000000000000000000000000000000000000000000000000002",
+					"TxnSignature":  "AA",
+				},
+			},
+			{
+				"Signer": map[string]any{
+					"Account":       testDestination,
+					"SigningPubKey": "ED0000000000000000000000000000000000000000000000000000000000000003",
+					"TxnSignature":  "BB",
+				},
+			},
+		},
+	}
+
+	raw, err := binarycodec.EncodeBytes(fields)
+	if err != nil {
+		t.Fatalf("encode transaction: %v", err)
+	}
+	parsed, err := ParseFromBinary(raw)
+	if err != nil {
+		t.Fatalf("parse transaction: %v", err)
+	}
+	if !bytes.Equal(parsed.GetRawBytes(), raw) {
+		t.Fatal("ParseFromBinary did not preserve canonical bytes")
+	}
+	flat, err := parsed.Flatten()
+	if err != nil {
+		t.Fatalf("flatten transaction: %v", err)
+	}
+	sponsor, ok := flat["SponsorSignature"].(map[string]any)
+	if !ok {
+		t.Fatalf("flattened SponsorSignature = %#v", flat["SponsorSignature"])
+	}
+	if _, present := sponsor["SigningPubKey"]; present {
+		t.Fatal("flattened SponsorSignature injected SigningPubKey")
+	}
+	wantID := sha512half.Sum(append([]byte{0x54, 0x58, 0x4E, 0x00}, raw...))
+	gotID, err := ComputeTransactionHash(parsed)
+	if err != nil {
+		t.Fatalf("compute transaction hash: %v", err)
+	}
+	if gotID != wantID {
+		t.Fatalf("transaction hash = %X, want %X", gotID, wantID)
+	}
+}
+
+func TestNestedSignatureSigningPubKeyPresence(t *testing.T) {
+	type presenceAwareSignature interface {
+		ToMap() map[string]any
+		MarkFieldPresent(string)
+	}
+	tests := []struct {
+		name string
+		new  func() presenceAwareSignature
+	}{
+		{
+			name: "counterparty",
+			new:  func() presenceAwareSignature { return &CounterpartySignature{} },
+		},
+		{
+			name: "sponsor",
+			new:  func() presenceAwareSignature { return &SponsorSignature{} },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			signature := test.new()
+			if _, present := signature.ToMap()["SigningPubKey"]; present {
+				t.Fatal("empty unmarked SigningPubKey was emitted")
+			}
+			signature.MarkFieldPresent("SigningPubKey")
+			if value, present := signature.ToMap()["SigningPubKey"]; !present || value != "" {
+				t.Fatalf("explicit empty SigningPubKey = (%#v, %v)", value, present)
 			}
 		})
 	}
