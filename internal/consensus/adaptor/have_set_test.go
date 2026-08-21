@@ -20,7 +20,7 @@ func TestHaveSetFromMessageRejectsMalformedHash(t *testing.T) {
 				Hash:   make([]byte, size),
 			}
 
-			id, status, err := HaveSetFromMessage(msg)
+			id, status, err := haveSetFromMessage(msg)
 
 			require.Error(t, err)
 			assert.Zero(t, id)
@@ -44,7 +44,7 @@ func TestRouterHaveSetMalformedHashReturnsBeforeStateMutation(t *testing.T) {
 			engine := &mockEngine{}
 			r.engine = engine
 
-			empty, err := NewTxSet(nil)
+			empty, err := newTxSet(nil)
 			require.NoError(t, err)
 			require.Zero(t, empty.ID())
 			r.adaptor.txSetCache.Put(empty)
@@ -74,7 +74,7 @@ func TestRouterHaveSetNeedDoesNotMutatePeerOrEngineState(t *testing.T) {
 	engine := &mockEngine{}
 	r.engine = engine
 
-	txSet, err := NewTxSet([][]byte{bytes.Repeat([]byte{0x01}, 12)})
+	txSet, err := newTxSet([][]byte{bytes.Repeat([]byte{0x01}, 12)})
 	require.NoError(t, err)
 	require.NotZero(t, txSet.ID())
 	r.adaptor.txSetCache.Put(txSet)

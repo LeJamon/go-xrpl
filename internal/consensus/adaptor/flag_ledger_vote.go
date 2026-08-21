@@ -213,8 +213,8 @@ func (a *Adaptor) runAmendmentVote(
 	// trusted-vote cache expiry and the majority-window enable
 	// check by one round.
 	closeTime := prev.Header().ParentCloseTime
-	a.trustedVotes.RecordVotes(closeTime, parentValidations)
-	available, rawVotes := a.trustedVotes.GetVotes()
+	a.trustedVotes.recordVotes(closeTime, parentValidations)
+	available, rawVotes := a.trustedVotes.getVotes()
 
 	votes := make(map[amendmentvote.Amendment]int, len(rawVotes))
 	maps.Copy(votes, rawVotes)

@@ -29,7 +29,7 @@ func buildTxSetForTest(t *testing.T, n int) (*shamap.SHAMap, [32]byte, []shamap.
 	for i := range blobs {
 		blobs[i] = bytes.Repeat([]byte{byte(0x10 + i)}, 16)
 	}
-	ts, err := NewTxSet(blobs)
+	ts, err := newTxSet(blobs)
 	require.NoError(t, err)
 	txMap := ts.shamap()
 	require.NotNil(t, txMap)

@@ -196,7 +196,7 @@ func TestRouterDispatchesValidation(t *testing.T) {
 	testVal.NodeID = consensus.CalcNodeID([33]byte(testVal.SigningPubKey))
 	testVal.Signature = make([]byte, 70) // dummy signature
 	val := &message.Validation{
-		Validation: SerializeSTValidation(testVal),
+		Validation: serializeSTValidation(testVal),
 	}
 
 	inbox <- &peermanagement.InboundMessage{
@@ -737,7 +737,7 @@ func TestRouter_UpdateRelaySlot_DuplicatesOnly(t *testing.T) {
 	firstRound := sender.getCalls()
 	assert.Empty(t, firstRound,
 		"first-seen proposal must NOT feed UpdateRelaySlot (rippled fires only on duplicates)")
-	sender.setRelayed(hashProposalSuppression(ProposalFromMessage(proposeSet)))
+	sender.setRelayed(hashProposalSuppression(proposalFromMessage(proposeSet)))
 
 	// Peer B delivers the same bytes: duplicate, MUST fire UpdateRelaySlot.
 	inbox <- &peermanagement.InboundMessage{
@@ -799,7 +799,7 @@ func TestRouter_UpdateRelaySlot_UntrustedValidator(t *testing.T) {
 
 	inbox <- &peermanagement.InboundMessage{PeerID: 1, Type: message.TypeProposeLedger, Payload: payload}
 	time.Sleep(30 * time.Millisecond)
-	sender.setRelayed(hashProposalSuppression(ProposalFromMessage(proposeSet)))
+	sender.setRelayed(hashProposalSuppression(proposalFromMessage(proposeSet)))
 	inbox <- &peermanagement.InboundMessage{PeerID: 2, Type: message.TypeProposeLedger, Payload: payload}
 	time.Sleep(30 * time.Millisecond)
 
@@ -854,7 +854,7 @@ func TestRelay_DuplicateAfterRelayFeedsOnlyCurrentSource(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	require.Empty(t, sender.getCalls(), "first-seen proposal must not feed the slot")
 
-	seedProposal := ProposalFromMessage(proposeSet)
+	seedProposal := proposalFromMessage(proposeSet)
 	seedHash := hashProposalSuppression(seedProposal)
 	sender.setRelayed(seedHash)
 
@@ -919,7 +919,7 @@ func TestRelay_FirstSeenMessageDoesNotFeedSlot(t *testing.T) {
 	}
 	payload := encodePayload(t, proposeSet)
 
-	seedProposal := ProposalFromMessage(proposeSet)
+	seedProposal := proposalFromMessage(proposeSet)
 	seedHash := hashProposalSuppression(seedProposal)
 	sender.setRelayed(seedHash)
 
@@ -978,8 +978,8 @@ func TestConverterProposalRoundTrip(t *testing.T) {
 		PreviousLedger: consensus.LedgerID{0x01},
 	}
 
-	msg := ProposalToMessage(original)
-	restored := ProposalFromMessage(msg)
+	msg := proposalToMessage(original)
+	restored := proposalFromMessage(msg)
 
 	assert.Equal(t, original.Position, restored.Position)
 	assert.Equal(t, original.SigningPubKey, restored.SigningPubKey)
@@ -994,14 +994,14 @@ func TestConverterProposalRoundTrip(t *testing.T) {
 func TestConverterTransactionRoundTrip(t *testing.T) {
 	blob := []byte{0x12, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00, 0x01}
 	msg := TransactionToMessage(blob)
-	restored := TransactionFromMessage(msg)
+	restored := transactionFromMessage(msg)
 	assert.Equal(t, blob, restored)
 }
 
 func TestConverterHaveSetRoundTrip(t *testing.T) {
 	id := consensus.TxSetID{0x01, 0x02, 0x03}
 	msg := HaveSetToMessage(id, message.TxSetStatusNeed)
-	restoredID, restoredStatus, err := HaveSetFromMessage(msg)
+	restoredID, restoredStatus, err := haveSetFromMessage(msg)
 	require.NoError(t, err)
 	assert.Equal(t, id, restoredID)
 	assert.Equal(t, message.TxSetStatusNeed, restoredStatus)

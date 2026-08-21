@@ -46,13 +46,13 @@ func newTestRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peer
 	return newRouter(engine, adaptor, inbox, network)
 }
 
-// NewRouterBroadcaster wires the overlay (for peer enumeration + feature
+// newRouterBroadcaster wires the overlay (for peer enumeration + feature
 // lookup) and the sender (for per-peer SendToPeer). Passing nil for either
 // degrades the broadcaster to a silent no-op so tests without an overlay
 // don't crash. Broadcasters built this way carry no hash-suppression
-// registry; production routes through Router.NewValidatorListBroadcaster.
-func NewRouterBroadcaster(overlay *peermanagement.Overlay, sender peerFrameSender) *RouterBroadcaster {
-	return &RouterBroadcaster{overlay: overlay, sender: sender}
+// registry; production routes through Router.newValidatorListBroadcaster.
+func newRouterBroadcaster(overlay *peermanagement.Overlay, sender peerFrameSender) *routerBroadcaster {
+	return &routerBroadcaster{overlay: overlay, sender: sender}
 }
 
 func txSetReplyCapsForTest() (soft, hard int) {

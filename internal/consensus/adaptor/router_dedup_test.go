@@ -199,7 +199,7 @@ func TestProposalSuppression_AdmitsOnlyAfterEngineAcceptance(t *testing.T) {
 		PreviousLedger: make([]byte, 32),
 	}
 	proposal.NodePubKey[0] = 0x02
-	hash := hashProposalSuppression(ProposalFromMessage(proposal))
+	hash := hashProposalSuppression(proposalFromMessage(proposal))
 	inbound := &peermanagement.InboundMessage{
 		PeerID:  7,
 		Type:    message.TypeProposeLedger,

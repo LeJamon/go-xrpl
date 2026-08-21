@@ -137,7 +137,7 @@ func TestAdaptorNonValidator(t *testing.T) {
 	assert.False(t, a.IsValidator())
 
 	_, err := a.GetValidatorKey()
-	assert.ErrorIs(t, err, ErrNoValidatorKey)
+	assert.ErrorIs(t, err, errNoValidatorKey)
 }
 
 func TestAdaptorOperatingMode(t *testing.T) {
@@ -414,7 +414,7 @@ func TestTxSetContains(t *testing.T) {
 	blob2 := []byte{0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C}
 	blob3 := []byte{0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C}
 
-	ts, err := NewTxSet([][]byte{blob1, blob2})
+	ts, err := newTxSet([][]byte{blob1, blob2})
 	require.NoError(t, err)
 
 	id1 := computeTxID(blob1)
@@ -448,13 +448,13 @@ func TestProposalSignVerify(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, proposal.Signature)
 
-	// Verify
-	err = VerifyProposal(proposal)
+	// verify
+	err = verifyProposal(proposal)
 	assert.NoError(t, err)
 
 	// Tamper and verify fails
 	proposal.Position = 99
-	err = VerifyProposal(proposal)
+	err = verifyProposal(proposal)
 	assert.Error(t, err)
 }
 
@@ -477,13 +477,13 @@ func TestValidationSignVerify(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, validation.Signature)
 
-	// Verify
-	err = VerifyValidation(validation)
+	// verify
+	err = verifyValidation(validation)
 	assert.NoError(t, err)
 
 	// Tamper and verify fails
 	validation.LedgerSeq = 99
-	err = VerifyValidation(validation)
+	err = verifyValidation(validation)
 	assert.Error(t, err)
 }
 

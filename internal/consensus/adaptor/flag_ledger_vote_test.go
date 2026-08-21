@@ -126,7 +126,7 @@ func TestGenerateFlagLedgerPseudoTxs_ExcludesPartialAndWrongSequence(t *testing.
 }
 
 func TestExtractFeeVote_NonNativeAndAbsentUseCurrent(t *testing.T) {
-	absent, err := parseSTValidation(SerializeSTValidation(buildTestValidation()))
+	absent, err := parseSTValidation(serializeSTValidation(buildTestValidation()))
 	require.NoError(t, err)
 	nonNative := parseValidationWithBaseFeeDropsIOU(t)
 
@@ -156,7 +156,7 @@ func TestFeeVote_ModernNegativeWireRoundTrip(t *testing.T) {
 	validation := buildTestValidation()
 	validation.SetBaseFeeDrops(-15)
 
-	parsed, err := parseSTValidation(SerializeSTValidation(validation))
+	parsed, err := parseSTValidation(serializeSTValidation(validation))
 	require.NoError(t, err)
 	vote := extractFeeVote(parsed, true)
 	require.NotNil(t, vote.BaseFee)
@@ -227,7 +227,7 @@ func TestFeeVote_ExplicitZeroSurvivesVotingPipeline(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			validation := buildTestValidation()
 			test.set(validation)
-			parsed, err := parseSTValidation(SerializeSTValidation(validation))
+			parsed, err := parseSTValidation(serializeSTValidation(validation))
 			require.NoError(t, err)
 
 			vote := extractFeeVote(parsed, test.modern)
@@ -244,7 +244,7 @@ func TestFeeVote_ExplicitZeroSurvivesVotingPipeline(t *testing.T) {
 			require.NotNil(t, blob)
 			assert.Equal(t, "SetFee", decodeTx(t, blob)["TransactionType"])
 
-			absent, err := parseSTValidation(SerializeSTValidation(buildTestValidation()))
+			absent, err := parseSTValidation(serializeSTValidation(buildTestValidation()))
 			require.NoError(t, err)
 			blob, err = feevote.DoVoting(
 				256,

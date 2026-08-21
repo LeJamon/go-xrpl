@@ -40,7 +40,7 @@ func (s *OverlaySender) CheckTracking(validSeq uint32) {
 // pubkey should NOT cause our own proposals to disappear from the
 // network.
 func (s *OverlaySender) BroadcastProposal(proposal *consensus.Proposal) error {
-	msg := ProposalToMessage(proposal)
+	msg := proposalToMessage(proposal)
 	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode proposal: %w", err)
@@ -52,7 +52,7 @@ func (s *OverlaySender) BroadcastProposal(proposal *consensus.Proposal) error {
 // WITHOUT applying the squelch filter. Same rationale as
 // BroadcastProposal.
 func (s *OverlaySender) BroadcastValidation(validation *consensus.Validation) error {
-	msg := ValidationToMessage(validation)
+	msg := validationToMessage(validation)
 	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode validation: %w", err)
@@ -70,7 +70,7 @@ func (s *OverlaySender) BroadcastValidation(validation *consensus.Validation) er
 // parse time. The overlay uses it to exclude every peer that delivered
 // this message to us.
 func (s *OverlaySender) RelayProposal(proposal *consensus.Proposal, exceptPeer uint64) error {
-	msg := ProposalToMessage(proposal)
+	msg := proposalToMessage(proposal)
 	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode proposal: %w", err)
@@ -82,7 +82,7 @@ func (s *OverlaySender) RelayProposal(proposal *consensus.Proposal, exceptPeer u
 // with the same filter semantics as RelayProposal. Uses
 // validation.SuppressionHash for the reverse-index record.
 func (s *OverlaySender) RelayValidation(validation *consensus.Validation, exceptPeer uint64) error {
-	msg := ValidationToMessage(validation)
+	msg := validationToMessage(validation)
 	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode validation: %w", err)

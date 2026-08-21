@@ -21,7 +21,7 @@ func (a *Adaptor) IsValidator() bool {
 
 func (a *Adaptor) GetValidatorKey() (consensus.NodeID, error) {
 	if a.identity == nil {
-		return consensus.NodeID{}, ErrNoValidatorKey
+		return consensus.NodeID{}, errNoValidatorKey
 	}
 	return a.identity.NodeID, nil
 }
@@ -31,31 +31,31 @@ func (a *Adaptor) GetValidatorKey() (consensus.NodeID, error) {
 // server_info. The 20-byte NodeID from GetValidatorKey must NOT be used here.
 func (a *Adaptor) GetValidatorSigningKey() ([33]byte, error) {
 	if a.identity == nil {
-		return [33]byte{}, ErrNoValidatorKey
+		return [33]byte{}, errNoValidatorKey
 	}
 	return a.identity.SigningKey, nil
 }
 
 func (a *Adaptor) SignProposal(proposal *consensus.Proposal) error {
 	if a.identity == nil {
-		return ErrNoValidatorKey
+		return errNoValidatorKey
 	}
 	return a.identity.SignProposal(proposal)
 }
 
 func (a *Adaptor) SignValidation(validation *consensus.Validation) error {
 	if a.identity == nil {
-		return ErrNoValidatorKey
+		return errNoValidatorKey
 	}
 	return a.identity.SignValidation(validation)
 }
 
 func (a *Adaptor) VerifyProposal(proposal *consensus.Proposal) error {
-	return VerifyProposal(proposal)
+	return verifyProposal(proposal)
 }
 
 func (a *Adaptor) VerifyValidation(validation *consensus.Validation) error {
-	return VerifyValidation(validation)
+	return verifyValidation(validation)
 }
 
 func (a *Adaptor) IsTrusted(node consensus.NodeID) bool {
@@ -231,10 +231,10 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 	a.mu.Unlock()
 
 	// trustedVotes is assigned once in New and never reassigned, so the
-	// unlocked read is safe (TrustedVotes has its own mutex). Called after
+	// unlocked read is safe (trustedVotes has its own mutex). Called after
 	// releasing a.mu to avoid lock nesting.
 	if a.trustedVotes != nil {
-		a.trustedVotes.TrustChanged(vCopy)
+		a.trustedVotes.trustChanged(vCopy)
 	}
 	if a.IsUNLBlocked() && a.GetOperatingMode() > consensus.OpModeConnected {
 		a.SetOperatingMode(consensus.OpModeConnected)

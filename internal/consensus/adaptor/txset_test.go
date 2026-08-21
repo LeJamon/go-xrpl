@@ -31,7 +31,7 @@ func TestTxSet_TxsTxIDsZipped(t *testing.T) {
 	for i := range blobs {
 		blobs[i] = makeBlob(uint32(i + 1))
 	}
-	ts, err := NewTxSet(blobs)
+	ts, err := newTxSet(blobs)
 	require.NoError(t, err)
 
 	txs := ts.Txs()
@@ -53,7 +53,7 @@ func TestTxSet_TxsCanonicalOrder(t *testing.T) {
 	for i := range blobs {
 		blobs[i] = makeBlob(uint32(i + 1))
 	}
-	ts, err := NewTxSet(blobs)
+	ts, err := newTxSet(blobs)
 	require.NoError(t, err)
 
 	ids := ts.TxIDs()
@@ -78,13 +78,13 @@ func TestTxSet_IDStableAcrossInsertionOrder(t *testing.T) {
 		blobs[i] = makeBlob(uint32(i + 1))
 	}
 
-	forward, err := NewTxSet(blobs)
+	forward, err := newTxSet(blobs)
 	require.NoError(t, err)
 	reversed := make([][]byte, len(blobs))
 	for i, b := range blobs {
 		reversed[len(blobs)-1-i] = b
 	}
-	backward, err := NewTxSet(reversed)
+	backward, err := newTxSet(reversed)
 	require.NoError(t, err)
 
 	assert.Equal(t, forward.ID(), backward.ID(),
@@ -93,9 +93,9 @@ func TestTxSet_IDStableAcrossInsertionOrder(t *testing.T) {
 
 func TestTxSet_DuplicateInputIsDeduplicated(t *testing.T) {
 	blob := makeBlob(1)
-	single, err := NewTxSet([][]byte{blob})
+	single, err := newTxSet([][]byte{blob})
 	require.NoError(t, err)
-	duplicates, err := NewTxSet([][]byte{blob, blob, blob})
+	duplicates, err := newTxSet([][]byte{blob, blob, blob})
 	require.NoError(t, err)
 
 	assert.Equal(t, single.ID(), duplicates.ID())
@@ -103,7 +103,7 @@ func TestTxSet_DuplicateInputIsDeduplicated(t *testing.T) {
 	assert.Equal(t, single.Txs(), duplicates.Txs())
 }
 
-// TestTxSet_RejectsInvalidBlobs pins that NewTxSet surfaces SHAMap
+// TestTxSet_RejectsInvalidBlobs pins that newTxSet surfaces SHAMap
 // rejection (e.g. <12-byte transaction leaves) instead of silently
 // shrinking the set. Rippled never silently truncates a tx-set during
 // construction (RCLCxTx.h:87-91); a truncated set would compute the
@@ -112,7 +112,7 @@ func TestTxSet_RejectsInvalidBlobs(t *testing.T) {
 	good := makeBlob(1)
 	tooShort := []byte{0x01, 0x02, 0x03} // <12 bytes — rejected by NewTransactionLeafNode
 
-	ts, err := NewTxSet([][]byte{good, tooShort})
+	ts, err := newTxSet([][]byte{good, tooShort})
 	require.Error(t, err, "short blob must surface as a construction error")
 	assert.Nil(t, ts, "failed construction must not return a partial tx-set")
 }
@@ -124,7 +124,7 @@ func TestTxSet_ConcurrentReaders(t *testing.T) {
 		blobs[i] = makeBlob(uint32(i + 1))
 	}
 
-	ts, err := NewTxSet(blobs)
+	ts, err := newTxSet(blobs)
 	require.NoError(t, err)
 
 	var wg sync.WaitGroup
@@ -146,7 +146,7 @@ func TestTxSet_ConcurrentReaders(t *testing.T) {
 
 func TestTxSet_BackingMapIsImmutable(t *testing.T) {
 	blob := makeBlob(1)
-	ts, err := NewTxSet([][]byte{blob})
+	ts, err := newTxSet([][]byte{blob})
 	require.NoError(t, err)
 	originalID := ts.ID()
 

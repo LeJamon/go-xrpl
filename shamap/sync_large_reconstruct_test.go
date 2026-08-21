@@ -16,7 +16,7 @@ func bitsOnesCount16(x uint16) int { return bits.OnesCount16(x) }
 // (sourced "locally" like goxrpl's pending-pool fill). Asserts that the
 // reconstructed root matches the original, then re-walks leaves into
 // blobs and rebuilds a third SHAMap via the same Put path used in
-// adaptor.NewTxSet — that third hash MUST also match. Covers the
+// the consensus adaptor's transaction-set builder — that third hash MUST also match. Covers the
 // iter4 seq 28 / seq 257 stall pattern where goxrpl receives a 130-tx
 // peer tx_set, "reconstructs" it, but the computed root differs from
 // the expected.

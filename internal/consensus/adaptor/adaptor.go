@@ -27,8 +27,8 @@ import (
 )
 
 var (
-	ErrTxSetNotFound  = errors.New("transaction set not found")
-	ErrLedgerNotFound = errors.New("ledger not found")
+	errTxSetNotFound  = errors.New("transaction set not found")
+	errLedgerNotFound = errors.New("ledger not found")
 )
 
 // Compile-time interface check.
@@ -98,7 +98,7 @@ type Adaptor struct {
 	remoteFeeMu  sync.Mutex
 	remoteFeeSeq uint32
 
-	txSetCache *TxSetCache
+	txSetCache *txSetCache
 
 	// Peer-reported last-closed ledger hashes, keyed by overlay peer ID.
 	// Populated from the handshake and subsequent status changes so
@@ -126,7 +126,7 @@ type Adaptor struct {
 
 	// trustedVotes caches per-validator amendment votes for 24h to dampen
 	// flapping when a flaky validator drops briefly.
-	trustedVotes *TrustedVotes
+	trustedVotes *trustedVotes
 
 	// onTxSetRequested fires before every RequestTxSet broadcast so the router
 	// can re-arm its in-flight tx-set acquisition state. nil-safe.
@@ -373,8 +373,8 @@ func New(cfg Config) *Adaptor {
 	// Seed the amendment-vote cache with the initial UNL so
 	// RecordVotes accepts validations from round one. Re-call
 	// TrustChanged whenever the trusted set mutates at runtime.
-	trustedVotes := NewTrustedVotes()
-	trustedVotes.TrustChanged(cfg.Validators)
+	trustedVotes := newTrustedVotes()
+	trustedVotes.trustChanged(cfg.Validators)
 
 	feeVote := cfg.FeeVote
 	defaults := defaultFeeVote()
@@ -428,7 +428,7 @@ func New(cfg Config) *Adaptor {
 		operatingMode:     consensus.OpModeDisconnected,
 		stateAcct:         newStateAccounting(consensus.OpModeDisconnected, time.Now),
 		negUNLVoter:       negUNLVoter,
-		txSetCache:        NewTxSetCache(),
+		txSetCache:        newTxSetCache(),
 		peerLCLs:          make(map[uint64]consensus.LedgerID),
 		reqLedgerLast:     make(map[consensus.LedgerID]time.Time),
 		announcedSets:     make(map[consensus.TxSetID]struct{}),
@@ -659,7 +659,7 @@ func (a *Adaptor) LedgerService() *service.Service {
 func (a *Adaptor) GetLedger(id consensus.LedgerID) (consensus.Ledger, error) {
 	l, err := a.ledgerService.GetLedgerByHash([32]byte(id))
 	if err != nil {
-		return nil, ErrLedgerNotFound
+		return nil, errLedgerNotFound
 	}
 	return WrapLedger(l), nil
 }
@@ -670,7 +670,7 @@ func (a *Adaptor) GetLedger(id consensus.LedgerID) (consensus.Ledger, error) {
 func (a *Adaptor) GetLedgerBySeq(seq uint32) (consensus.Ledger, error) {
 	l, err := a.ledgerService.AdoptedLedgerBySequence(seq)
 	if err != nil || l == nil {
-		return nil, ErrLedgerNotFound
+		return nil, errLedgerNotFound
 	}
 	return WrapLedger(l), nil
 }
@@ -678,7 +678,7 @@ func (a *Adaptor) GetLedgerBySeq(seq uint32) (consensus.Ledger, error) {
 func (a *Adaptor) GetLastClosedLedger() (consensus.Ledger, error) {
 	l := a.ledgerService.GetClosedLedger()
 	if l == nil {
-		return nil, ErrLedgerNotFound
+		return nil, errLedgerNotFound
 	}
 	return WrapLedger(l), nil
 }
@@ -858,13 +858,13 @@ func excludeNegativeUNL(vals []*consensus.Validation, negUNL []consensus.NodeID)
 func (a *Adaptor) GetTxSet(id consensus.TxSetID) (consensus.TxSet, error) {
 	ts, ok := a.txSetCache.Get(id)
 	if !ok {
-		return nil, ErrTxSetNotFound
+		return nil, errTxSetNotFound
 	}
 	return ts, nil
 }
 
 func (a *Adaptor) BuildTxSet(txs [][]byte) (consensus.TxSet, error) {
-	ts, err := NewTxSet(txs)
+	ts, err := newTxSet(txs)
 	if err != nil {
 		return nil, err
 	}

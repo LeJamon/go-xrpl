@@ -491,7 +491,7 @@ func TestStvParseSTValidation_InvalidAmendmentsLength(t *testing.T) {
 	payload := make([]byte, 33) // 33 bytes — not divisible by 32
 	extraBuf = appendVL(extraBuf, payload)
 
-	base := SerializeSTValidation(orig)
+	base := serializeSTValidation(orig)
 	combined := append(base, extraBuf...)
 	_, err := parseSTValidation(combined)
 	// It may succeed or fail depending on whether signatures and required fields
@@ -527,12 +527,12 @@ func TestStvParseSTValidation_ShortSigningPubKey(t *testing.T) {
 }
 
 func TestStvParseSTValidation_AllOptionalUINT32Fields(t *testing.T) {
-	// Verify ReserveBase and ReserveIncrement branches are exercised.
+	// verify ReserveBase and ReserveIncrement branches are exercised.
 	orig := buildTestValidation()
 	orig.ReserveBase = 200_000_000
 	orig.ReserveIncrement = 50_000_000
 
-	blob := SerializeSTValidation(orig)
+	blob := serializeSTValidation(orig)
 	parsed, err := parseSTValidation(blob)
 	require.NoError(t, err)
 
@@ -547,7 +547,7 @@ func TestStvParseSTValidation_AllUINT64Fields(t *testing.T) {
 	orig.Cookie = 98765
 	orig.ServerVersion = 0x0200000000000000
 
-	blob := SerializeSTValidation(orig)
+	blob := serializeSTValidation(orig)
 	parsed, err := parseSTValidation(blob)
 	require.NoError(t, err)
 
@@ -566,7 +566,7 @@ func TestStvParseSTValidation_AmendmentsField(t *testing.T) {
 	}
 	orig.Amendments = [][32]byte{id1, id2}
 
-	blob := SerializeSTValidation(orig)
+	blob := serializeSTValidation(orig)
 	parsed, err := parseSTValidation(blob)
 	require.NoError(t, err)
 
@@ -584,7 +584,7 @@ func TestStvParseSTValidation_ConsensusAndValidatedHash(t *testing.T) {
 		orig.ValidatedHash[i] = byte(i + 0x20)
 	}
 
-	blob := SerializeSTValidation(orig)
+	blob := serializeSTValidation(orig)
 	parsed, err := parseSTValidation(blob)
 	require.NoError(t, err)
 
@@ -607,7 +607,7 @@ func TestStvSerializeSTValidation_ZeroFlagsNotFull(t *testing.T) {
 	orig.Flags = 0
 	orig.Full = false
 
-	blob := SerializeSTValidation(orig)
+	blob := serializeSTValidation(orig)
 	parsed, err := parseSTValidation(blob)
 	require.NoError(t, err)
 
@@ -620,7 +620,7 @@ func TestStvSerializeSTValidation_WithSignature(t *testing.T) {
 	orig := buildTestValidation()
 	orig.Signature = nil
 
-	blob := SerializeSTValidation(orig)
+	blob := serializeSTValidation(orig)
 	_, err := parseSTValidation(blob)
 	assert.ErrorIs(t, err, errMissingFields)
 }

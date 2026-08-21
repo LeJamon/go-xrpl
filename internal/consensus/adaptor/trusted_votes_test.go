@@ -36,15 +36,15 @@ func TestTrustedVotes_RecordsTrustedValidatorVotes(t *testing.T) {
 	a := makeAmendmentTV(0xAA)
 	b := makeAmendmentTV(0xBB)
 
-	tv := NewTrustedVotes()
-	tv.TrustChanged([]consensus.NodeID{v1, v2})
+	tv := newTrustedVotes()
+	tv.trustChanged([]consensus.NodeID{v1, v2})
 
-	tv.RecordVotes(trustedVotesEpoch, []*consensus.Validation{
+	tv.recordVotes(trustedVotesEpoch, []*consensus.Validation{
 		{NodeID: v1, Amendments: [][32]byte{a, b}},
 		{NodeID: v2, Amendments: [][32]byte{a}},
 	})
 
-	available, votes := tv.GetVotes()
+	available, votes := tv.getVotes()
 	assert.Equal(t, 2, available, "both trusted validators voted → available=2")
 	assert.Equal(t, 2, votes[a], "amendment a got two upVotes")
 	assert.Equal(t, 1, votes[b], "amendment b got one upVote")
@@ -58,14 +58,14 @@ func TestTrustedVotes_IgnoresUntrustedValidations(t *testing.T) {
 	untrusted := makeNodeID(99)
 	a := makeAmendmentTV(0xAA)
 
-	tv := NewTrustedVotes()
-	tv.TrustChanged([]consensus.NodeID{trusted})
+	tv := newTrustedVotes()
+	tv.trustChanged([]consensus.NodeID{trusted})
 
-	tv.RecordVotes(trustedVotesEpoch, []*consensus.Validation{
+	tv.recordVotes(trustedVotesEpoch, []*consensus.Validation{
 		{NodeID: untrusted, Amendments: [][32]byte{a}},
 	})
 
-	available, votes := tv.GetVotes()
+	available, votes := tv.getVotes()
 	assert.Equal(t, 0, available, "no trusted validations → available=0")
 	assert.Empty(t, votes, "untrusted votes must not be tallied")
 }
@@ -77,16 +77,16 @@ func TestTrustedVotes_24hTimeoutClears(t *testing.T) {
 	v1 := makeNodeID(1)
 	a := makeAmendmentTV(0xAA)
 
-	tv := NewTrustedVotes()
-	tv.TrustChanged([]consensus.NodeID{v1})
-	tv.RecordVotes(trustedVotesEpoch, []*consensus.Validation{
+	tv := newTrustedVotes()
+	tv.trustChanged([]consensus.NodeID{v1})
+	tv.recordVotes(trustedVotesEpoch, []*consensus.Validation{
 		{NodeID: v1, Amendments: [][32]byte{a}},
 	})
 
 	// Advance 25h with no fresh validations → entry expires.
-	tv.RecordVotes(trustedVotesEpoch.Add(25*time.Hour), nil)
+	tv.recordVotes(trustedVotesEpoch.Add(25*time.Hour), nil)
 
-	available, votes := tv.GetVotes()
+	available, votes := tv.getVotes()
 	assert.Equal(t, 0, available, "timeout expired → available=0")
 	assert.Empty(t, votes, "expired entry contributes no votes")
 }
@@ -98,16 +98,16 @@ func TestTrustedVotes_BelowTimeoutPreservesVote(t *testing.T) {
 	v1 := makeNodeID(1)
 	a := makeAmendmentTV(0xAA)
 
-	tv := NewTrustedVotes()
-	tv.TrustChanged([]consensus.NodeID{v1})
-	tv.RecordVotes(trustedVotesEpoch, []*consensus.Validation{
+	tv := newTrustedVotes()
+	tv.trustChanged([]consensus.NodeID{v1})
+	tv.recordVotes(trustedVotesEpoch, []*consensus.Validation{
 		{NodeID: v1, Amendments: [][32]byte{a}},
 	})
 
 	// 23h later, no fresh validations: entry still alive.
-	tv.RecordVotes(trustedVotesEpoch.Add(23*time.Hour), nil)
+	tv.recordVotes(trustedVotesEpoch.Add(23*time.Hour), nil)
 
-	available, votes := tv.GetVotes()
+	available, votes := tv.getVotes()
 	assert.Equal(t, 1, available, "within timeout → available preserved")
 	assert.Equal(t, 1, votes[a], "within timeout → vote preserved")
 }
@@ -119,17 +119,17 @@ func TestTrustedVotes_NewVotesReplacePrevious(t *testing.T) {
 	a := makeAmendmentTV(0xAA)
 	b := makeAmendmentTV(0xBB)
 
-	tv := NewTrustedVotes()
-	tv.TrustChanged([]consensus.NodeID{v1})
+	tv := newTrustedVotes()
+	tv.trustChanged([]consensus.NodeID{v1})
 
-	tv.RecordVotes(trustedVotesEpoch, []*consensus.Validation{
+	tv.recordVotes(trustedVotesEpoch, []*consensus.Validation{
 		{NodeID: v1, Amendments: [][32]byte{a}},
 	})
-	tv.RecordVotes(trustedVotesEpoch.Add(time.Hour), []*consensus.Validation{
+	tv.recordVotes(trustedVotesEpoch.Add(time.Hour), []*consensus.Validation{
 		{NodeID: v1, Amendments: [][32]byte{b}},
 	})
 
-	_, votes := tv.GetVotes()
+	_, votes := tv.getVotes()
 	assert.Zero(t, votes[a], "replaced vote must NOT contribute to a anymore")
 	assert.Equal(t, 1, votes[b], "current vote contributes to b")
 }
@@ -143,17 +143,17 @@ func TestTrustedVotes_EmptyAmendmentsClearsUpvotes(t *testing.T) {
 	v1 := makeNodeID(1)
 	a := makeAmendmentTV(0xAA)
 
-	tv := NewTrustedVotes()
-	tv.TrustChanged([]consensus.NodeID{v1})
+	tv := newTrustedVotes()
+	tv.trustChanged([]consensus.NodeID{v1})
 
-	tv.RecordVotes(trustedVotesEpoch, []*consensus.Validation{
+	tv.recordVotes(trustedVotesEpoch, []*consensus.Validation{
 		{NodeID: v1, Amendments: [][32]byte{a}},
 	})
-	tv.RecordVotes(trustedVotesEpoch.Add(time.Hour), []*consensus.Validation{
+	tv.recordVotes(trustedVotesEpoch.Add(time.Hour), []*consensus.Validation{
 		{NodeID: v1, Amendments: nil}, // empty sfAmendments
 	})
 
-	available, votes := tv.GetVotes()
+	available, votes := tv.getVotes()
 	assert.Equal(t, 1, available, "validator still alive → available=1")
 	assert.Empty(t, votes, "empty sfAmendments → no votes contributed")
 }
@@ -168,16 +168,16 @@ func TestTrustedVotes_TrustChangedPreservesExisting(t *testing.T) {
 	v3 := makeNodeID(3)
 	a := makeAmendmentTV(0xAA)
 
-	tv := NewTrustedVotes()
-	tv.TrustChanged([]consensus.NodeID{v1, v2})
-	tv.RecordVotes(trustedVotesEpoch, []*consensus.Validation{
+	tv := newTrustedVotes()
+	tv.trustChanged([]consensus.NodeID{v1, v2})
+	tv.recordVotes(trustedVotesEpoch, []*consensus.Validation{
 		{NodeID: v1, Amendments: [][32]byte{a}},
 	})
 
 	// Replace v2 with v3; v1 retained.
-	tv.TrustChanged([]consensus.NodeID{v1, v3})
+	tv.trustChanged([]consensus.NodeID{v1, v3})
 
-	available, votes := tv.GetVotes()
+	available, votes := tv.getVotes()
 	assert.Equal(t, 1, available, "v1 still alive (v3 has no validations yet)")
 	assert.Equal(t, 1, votes[a], "v1's preserved vote still contributes")
 }
@@ -190,16 +190,16 @@ func TestTrustedVotes_TrustChangedDropsRemoved(t *testing.T) {
 	v2 := makeNodeID(2)
 	a := makeAmendmentTV(0xAA)
 
-	tv := NewTrustedVotes()
-	tv.TrustChanged([]consensus.NodeID{v1})
-	tv.RecordVotes(trustedVotesEpoch, []*consensus.Validation{
+	tv := newTrustedVotes()
+	tv.trustChanged([]consensus.NodeID{v1})
+	tv.recordVotes(trustedVotesEpoch, []*consensus.Validation{
 		{NodeID: v1, Amendments: [][32]byte{a}},
 	})
 
 	// v1 removed from UNL, v2 added.
-	tv.TrustChanged([]consensus.NodeID{v2})
+	tv.trustChanged([]consensus.NodeID{v2})
 
-	available, votes := tv.GetVotes()
+	available, votes := tv.getVotes()
 	assert.Equal(t, 0, available, "v2 has no votes; v1's entry was dropped")
 	assert.Zero(t, votes[a], "removed validator's votes must not contribute")
 }
@@ -213,21 +213,21 @@ func TestTrustedVotes_AvailableCountReflectsTimeoutSet(t *testing.T) {
 	v3 := makeNodeID(3)
 	a := makeAmendmentTV(0xAA)
 
-	tv := NewTrustedVotes()
-	tv.TrustChanged([]consensus.NodeID{v1, v2, v3})
+	tv := newTrustedVotes()
+	tv.trustChanged([]consensus.NodeID{v1, v2, v3})
 
-	available, _ := tv.GetVotes()
+	available, _ := tv.getVotes()
 	assert.Equal(t, 0, available, "fresh entries have unseated timeout → available=0")
 
-	tv.RecordVotes(trustedVotesEpoch, []*consensus.Validation{
+	tv.recordVotes(trustedVotesEpoch, []*consensus.Validation{
 		{NodeID: v1, Amendments: [][32]byte{a}},
 	})
-	available, _ = tv.GetVotes()
+	available, _ = tv.getVotes()
 	assert.Equal(t, 1, available, "one validation → available=1")
 
 	// Advance past timeout with no fresh validations.
-	tv.RecordVotes(trustedVotesEpoch.Add(25*time.Hour), nil)
-	available, _ = tv.GetVotes()
+	tv.recordVotes(trustedVotesEpoch.Add(25*time.Hour), nil)
+	available, _ = tv.getVotes()
 	assert.Equal(t, 0, available, "post-expiry → available=0")
 }
 
@@ -269,16 +269,16 @@ func TestTrustedVotes_Integration_FlapsAtFlagLedger(t *testing.T) {
 	}
 
 	t.Run("fast flap stays above threshold", func(t *testing.T) {
-		tv := NewTrustedVotes()
-		tv.TrustChanged(all)
+		tv := newTrustedVotes()
+		tv.trustChanged(all)
 
 		// Round 0: everyone votes.
-		tv.RecordVotes(trustedVotesEpoch, build(all))
+		tv.recordVotes(trustedVotesEpoch, build(all))
 
 		// Round 1 (23h later): flapper silent, but still within
 		// timeout → its vote still contributes.
-		tv.RecordVotes(trustedVotesEpoch.Add(23*time.Hour), build(stable))
-		available, votes := tv.GetVotes()
+		tv.recordVotes(trustedVotesEpoch.Add(23*time.Hour), build(stable))
+		available, votes := tv.getVotes()
 		assert.Equal(t, total, available,
 			"23h flap: all entries still within timeout")
 		assert.Equal(t, total, votes[amend],
@@ -286,16 +286,16 @@ func TestTrustedVotes_Integration_FlapsAtFlagLedger(t *testing.T) {
 	})
 
 	t.Run("slow flap loses the flapper's vote", func(t *testing.T) {
-		tv := NewTrustedVotes()
-		tv.TrustChanged(all)
+		tv := newTrustedVotes()
+		tv.trustChanged(all)
 
 		// Round 0: everyone votes.
-		tv.RecordVotes(trustedVotesEpoch, build(all))
+		tv.recordVotes(trustedVotesEpoch, build(all))
 
 		// Round 1 (25h later): flapper silent and past timeout →
 		// its entry is cleared.
-		tv.RecordVotes(trustedVotesEpoch.Add(25*time.Hour), build(stable))
-		available, votes := tv.GetVotes()
+		tv.recordVotes(trustedVotesEpoch.Add(25*time.Hour), build(stable))
+		available, votes := tv.getVotes()
 		require.Equal(t, total-1, available,
 			"25h flap: flapper expired, only stable validators count")
 		assert.Equal(t, total-1, votes[amend],

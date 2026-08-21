@@ -412,7 +412,7 @@ func TestLedgerProvider_GetProofPath_KeyAbsent(t *testing.T) {
 }
 
 // TestLedgerProvider_GetProofPath_UnknownLedger verifies that an unknown
-// ledger hash yields ErrLedgerNotFound — handler maps this to reNO_LEDGER.
+// ledger hash yields errLedgerNotFound — handler maps this to reNO_LEDGER.
 func TestLedgerProvider_GetProofPath_UnknownLedger(t *testing.T) {
 	lookup := newFakeLookup()
 	provider := newLedgerProviderForTest(lookup)
@@ -441,7 +441,7 @@ func TestLedgerProvider_GetProofPath_InvalidMapType(t *testing.T) {
 	header, path, err := provider.GetProofPath(hash[:], someKey[:], bogus)
 	require.Error(t, err, "invalid map type must surface an error")
 	assert.NotErrorIs(t, err, peermanagement.ErrLedgerNotFound,
-		"invalid map type must NOT report ErrLedgerNotFound — that would mislead the handler")
+		"invalid map type must NOT report errLedgerNotFound — that would mislead the handler")
 	assert.NotErrorIs(t, err, peermanagement.ErrKeyNotFound,
 		"invalid map type must NOT report ErrKeyNotFound either")
 	assert.Nil(t, header)

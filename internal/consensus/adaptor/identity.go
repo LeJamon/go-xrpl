@@ -15,10 +15,10 @@ import (
 )
 
 var (
-	ErrNoValidatorKey           = errors.New("no validator key configured")
-	ErrInvalidSeed              = errors.New("invalid validator seed")
-	ErrTokenManifestKeyMismatch = errors.New("validator_token: signing key in manifest does not match validation_secret_key")
-	ErrTokenAndSeed             = errors.New("validator_token and validation_seed are mutually exclusive")
+	errNoValidatorKey           = errors.New("no validator key configured")
+	errInvalidSeed              = errors.New("invalid validator seed")
+	errTokenManifestKeyMismatch = errors.New("validator_token: signing key in manifest does not match validation_secret_key")
+	errTokenAndSeed             = errors.New("validator_token and validation_seed are mutually exclusive")
 )
 
 // ValidatorIdentity holds the validator's signing keys and, when
@@ -86,7 +86,7 @@ func NewValidatorIdentity(seed string) (*ValidatorIdentity, error) {
 
 	decodedSeed, _, err := addresscodec.DecodeSeed(seed)
 	if err != nil {
-		return nil, ErrInvalidSeed
+		return nil, errInvalidSeed
 	}
 
 	algo := secp256k1.Algorithm{}
@@ -126,7 +126,7 @@ func NewValidatorIdentity(seed string) (*ValidatorIdentity, error) {
 //     for broadcast.
 func NewValidatorIdentityFromToken(block string) (*ValidatorIdentity, error) {
 	if block == "" {
-		return nil, ErrNoValidatorKey
+		return nil, errNoValidatorKey
 	}
 	tok, err := manifest.LoadValidatorToken(block)
 	if err != nil {
@@ -148,7 +148,7 @@ func NewValidatorIdentityFromToken(block string) (*ValidatorIdentity, error) {
 	var derived [33]byte
 	copy(derived[:], pub)
 	if derived != m.SigningKey() {
-		return nil, ErrTokenManifestKeyMismatch
+		return nil, errTokenManifestKeyMismatch
 	}
 
 	vi := &ValidatorIdentity{
@@ -171,7 +171,7 @@ func NewValidatorIdentityFromToken(block string) (*ValidatorIdentity, error) {
 // error lets cmd/goxrpl surface it before the consensus engine starts.
 func NewValidatorIdentityFromConfig(seed, token string) (*ValidatorIdentity, error) {
 	if seed != "" && token != "" {
-		return nil, ErrTokenAndSeed
+		return nil, errTokenAndSeed
 	}
 	if token != "" {
 		return NewValidatorIdentityFromToken(token)
@@ -194,7 +194,7 @@ func (vi *ValidatorIdentity) SigningPubKey() []byte {
 // passed directly to secp256k1.
 func (vi *ValidatorIdentity) Sign(data []byte) ([]byte, error) {
 	if vi == nil {
-		return nil, ErrNoValidatorKey
+		return nil, errNoValidatorKey
 	}
 	algo := secp256k1.Algorithm{}
 	var digest [32]byte
@@ -202,11 +202,11 @@ func (vi *ValidatorIdentity) Sign(data []byte) ([]byte, error) {
 	return algo.SignDigest(digest, vi.signingPriv)
 }
 
-// Verify dispatches on the pubkey-type prefix (0xED → ed25519, 0x02/0x03
+// verify dispatches on the pubkey-type prefix (0xED → ed25519, 0x02/0x03
 // → secp256k1). The data parameter is a SHA-512Half digest (32 bytes):
 // secp256k1 verifies the digest natively, and ed25519 verifies the
 // digest as a 32-byte message (no internal re-hash).
-func Verify(pubKey []byte, data []byte, signature []byte) bool {
+func verify(pubKey []byte, data []byte, signature []byte) bool {
 	return verifyWithCanonicality(pubKey, data, signature, false)
 }
 
@@ -234,7 +234,7 @@ func verifyWithCanonicality(pubKey []byte, data []byte, signature []byte, mustBe
 // SHA-512Half(HashPrefixProposal + serialized proposal fields).
 func (vi *ValidatorIdentity) SignProposal(proposal *consensus.Proposal) error {
 	if vi == nil {
-		return ErrNoValidatorKey
+		return errNoValidatorKey
 	}
 	proposal.SigningPubKey = consensus.SigningPubKey(vi.SigningKey)
 	proposal.NodeID = vi.NodeID
@@ -247,13 +247,13 @@ func (vi *ValidatorIdentity) SignProposal(proposal *consensus.Proposal) error {
 	return nil
 }
 
-// VerifyProposal verifies a proposal's signature against its
+// verifyProposal verifies a proposal's signature against its
 // SigningPubKey. NodeID is the master-derived 20-byte identifier and
 // is not a verification key — only the ephemeral SigningPubKey
 // (sfSigningPubKey on the wire) is what the proposal was signed with.
-func VerifyProposal(proposal *consensus.Proposal) error {
+func verifyProposal(proposal *consensus.Proposal) error {
 	data := buildProposalSigningData(proposal)
-	if !Verify(proposal.SigningPubKey[:], data, proposal.Signature) {
+	if !verify(proposal.SigningPubKey[:], data, proposal.Signature) {
 		return errors.New("invalid proposal signature")
 	}
 	return nil
@@ -263,7 +263,7 @@ func VerifyProposal(proposal *consensus.Proposal) error {
 // SHA-512Half(HashPrefixValidation + serialized validation fields).
 func (vi *ValidatorIdentity) SignValidation(validation *consensus.Validation) error {
 	if vi == nil {
-		return ErrNoValidatorKey
+		return errNoValidatorKey
 	}
 	validation.SigningPubKey = consensus.SigningPubKey(vi.SigningKey)
 	validation.NodeID = vi.NodeID
@@ -280,12 +280,12 @@ func (vi *ValidatorIdentity) SignValidation(validation *consensus.Validation) er
 	return nil
 }
 
-// VerifyValidation verifies a validation's signature against its
+// verifyValidation verifies a validation's signature against its
 // SigningPubKey. NodeID is the master-derived 20-byte identifier and
 // is not a verification key — only the ephemeral SigningPubKey
 // (sfSigningPubKey on the wire) is what the validation was signed
 // with.
-func VerifyValidation(validation *consensus.Validation) error {
+func verifyValidation(validation *consensus.Validation) error {
 	data := buildValidationSigningData(validation)
 	mustBeFullyCanonical := validation.Flags&vfFullyCanonicalSig != 0
 	if !verifyWithCanonicality(validation.SigningPubKey[:], data, validation.Signature, mustBeFullyCanonical) {
@@ -326,7 +326,7 @@ func buildProposalSigningData(p *consensus.Proposal) []byte {
 //
 // For outbound validations (SigningData nil), we regenerate the preimage
 // from struct fields. It MUST stay byte-identical to what
-// SerializeSTValidation emits (minus sfSignature); otherwise a freshly-
+// serializeSTValidation emits (minus sfSignature); otherwise a freshly-
 // signed validation would fail verification when parsed back from the
 // wire. When extending the wire format, update both functions together.
 func buildValidationSigningData(v *consensus.Validation) []byte {
@@ -337,16 +337,16 @@ func buildValidationSigningData(v *consensus.Validation) []byte {
 	}
 
 	// Outbound: the signing preimage is the canonical wire serialization
-	// with sfSignature omitted. Derive it from SerializeSTValidation — the
+	// with sfSignature omitted. Derive it from serializeSTValidation — the
 	// single STValidation serializer — so the preimage and the wire bytes
 	// can never drift (the previous hand-rolled copy of every field was a
-	// standing fork hazard). SerializeSTValidation emits sfSignature only
+	// standing fork hazard). serializeSTValidation emits sfSignature only
 	// when v.Signature is non-empty and as a distinct field between
 	// sfSigningPubKey and sfAmendments, so clearing it yields exactly the
 	// non-signature preimage. SignValidation stamps outbound flags before
 	// this function is called.
 	unsigned := *v
 	unsigned.Signature = nil
-	hash := sha512half.Sum(protocol.HashPrefixValidation().Bytes(), SerializeSTValidation(&unsigned))
+	hash := sha512half.Sum(protocol.HashPrefixValidation().Bytes(), serializeSTValidation(&unsigned))
 	return hash[:]
 }

@@ -11,7 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
-// TxSetImpl implements consensus.TxSet backed by an immutable SHAMap of
+// txSetImpl implements consensus.TxSet backed by an immutable SHAMap of
 // transaction blobs keyed by txID.
 //
 // Complexity profile (N = set size):
@@ -19,20 +19,20 @@ import (
 //   - ID/Size:             O(1).
 //   - Txs/TxIDs:           O(N) walk of the leaves in canonical key order.
 //     The two methods walk identically, so callers can zip them.
-type TxSetImpl struct {
+type txSetImpl struct {
 	txMap *shamap.SHAMap
 	id    consensus.TxSetID
 	count int
 }
 
-var _ consensus.TxSet = (*TxSetImpl)(nil)
+var _ consensus.TxSet = (*txSetImpl)(nil)
 
-// NewTxSet creates a TxSet from raw transaction blobs. The ID is the
+// newTxSet creates a TxSet from raw transaction blobs. The ID is the
 // canonical SHAMap root hash.
 //
 // Construction fails instead of publishing a partial set when the backing
 // SHAMap rejects a blob.
-func NewTxSet(txBlobs [][]byte) (*TxSetImpl, error) {
+func newTxSet(txBlobs [][]byte) (*txSetImpl, error) {
 	txMap := shamap.New(shamap.TypeTransaction)
 	count := 0
 	for i, blob := range txBlobs {
@@ -57,14 +57,14 @@ func NewTxSet(txBlobs [][]byte) (*TxSetImpl, error) {
 	if err != nil {
 		return nil, fmt.Errorf("NewTxSet: hash: %w", err)
 	}
-	return &TxSetImpl{
+	return &txSetImpl{
 		txMap: txMap,
 		id:    consensus.TxSetID(hash),
 		count: count,
 	}, nil
 }
 
-func (ts *TxSetImpl) ID() consensus.TxSetID {
+func (ts *txSetImpl) ID() consensus.TxSetID {
 	return ts.id
 }
 
@@ -72,7 +72,7 @@ func (ts *TxSetImpl) ID() consensus.TxSetID {
 // ordering matches TxIDs() so callers can zip the two slices. Each
 // blob is a defensive copy (shamap.Item.Data()) — callers may retain
 // or mutate the returned slices safely.
-func (ts *TxSetImpl) Txs() [][]byte {
+func (ts *txSetImpl) Txs() [][]byte {
 	result := make([][]byte, 0, ts.Size())
 	_ = ts.txMap.ForEach(func(it *shamap.Item) bool {
 		result = append(result, it.Data())
@@ -82,7 +82,7 @@ func (ts *TxSetImpl) Txs() [][]byte {
 }
 
 // TxIDs returns every txID in canonical key order, parallel to Txs().
-func (ts *TxSetImpl) TxIDs() []consensus.TxID {
+func (ts *txSetImpl) TxIDs() []consensus.TxID {
 	result := make([]consensus.TxID, 0, ts.Size())
 	_ = ts.txMap.ForEach(func(it *shamap.Item) bool {
 		key := it.Key()
@@ -92,18 +92,18 @@ func (ts *TxSetImpl) TxIDs() []consensus.TxID {
 	return result
 }
 
-func (ts *TxSetImpl) Contains(id consensus.TxID) bool {
+func (ts *txSetImpl) Contains(id consensus.TxID) bool {
 	ok, err := ts.txMap.Has([32]byte(id))
 	return err == nil && ok
 }
 
-func (ts *TxSetImpl) Size() int {
+func (ts *txSetImpl) Size() int {
 	return ts.count
 }
 
 // shamap returns the immutable canonical transaction tree used by the serving
 // path.
-func (ts *TxSetImpl) shamap() *shamap.SHAMap {
+func (ts *txSetImpl) shamap() *shamap.SHAMap {
 	return ts.txMap
 }
 
@@ -123,20 +123,20 @@ func computeTxID(blob []byte) consensus.TxID {
 // process lifetime.
 const txSetCacheTTL = 5 * time.Minute
 
-// TxSetCache is a thread-safe, TTL-expiring cache for transaction sets.
-type TxSetCache struct {
+// txSetCache is a thread-safe, TTL-expiring cache for transaction sets.
+type txSetCache struct {
 	mu    sync.RWMutex
-	cache map[consensus.TxSetID]*TxSetImpl
+	cache map[consensus.TxSetID]*txSetImpl
 	added map[consensus.TxSetID]time.Time
 	// now is the clock used for expiry; tests override it. Defaults to
 	// time.Now, matching the router's txSetAcquire sweep.
 	now func() time.Time
 }
 
-func NewTxSetCache() *TxSetCache {
-	zero := &TxSetImpl{txMap: shamap.New(shamap.TypeTransaction)}
-	return &TxSetCache{
-		cache: map[consensus.TxSetID]*TxSetImpl{
+func newTxSetCache() *txSetCache {
+	zero := &txSetImpl{txMap: shamap.New(shamap.TypeTransaction)}
+	return &txSetCache{
+		cache: map[consensus.TxSetID]*txSetImpl{
 			{}: zero,
 		},
 		added: make(map[consensus.TxSetID]time.Time),
@@ -144,14 +144,14 @@ func NewTxSetCache() *TxSetCache {
 	}
 }
 
-func (c *TxSetCache) Get(id consensus.TxSetID) (*TxSetImpl, bool) {
+func (c *txSetCache) Get(id consensus.TxSetID) (*txSetImpl, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	ts, ok := c.cache[id]
 	return ts, ok
 }
 
-func (c *TxSetCache) Put(ts *TxSetImpl) {
+func (c *txSetCache) Put(ts *txSetImpl) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	id := ts.ID()
@@ -163,7 +163,7 @@ func (c *TxSetCache) Put(ts *TxSetImpl) {
 	c.sweepLocked()
 }
 
-func (c *TxSetCache) Remove(id consensus.TxSetID) {
+func (c *txSetCache) Remove(id consensus.TxSetID) {
 	if id == (consensus.TxSetID{}) {
 		return
 	}
@@ -176,7 +176,7 @@ func (c *TxSetCache) Remove(id consensus.TxSetID) {
 // sweepLocked evicts entries older than txSetCacheTTL. Runs opportunistically
 // on Put — frequent enough at round cadence to keep the map bounded without a
 // dedicated timer. Caller holds c.mu.
-func (c *TxSetCache) sweepLocked() {
+func (c *txSetCache) sweepLocked() {
 	cutoff := c.now().Add(-txSetCacheTTL)
 	for id, t := range c.added {
 		if t.Before(cutoff) {

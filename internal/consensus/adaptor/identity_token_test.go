@@ -130,7 +130,7 @@ func newTokenFixtureWithSeeds(t *testing.T, masterSeed, signingSeed byte, sequen
 }
 
 // manifestSigningPreimage replicates the package-internal preimage
-// construction so the test signs over exactly what Verify checks.
+// construction so the test signs over exactly what verify checks.
 // HashPrefix("MAN\0") || STObject(only signing fields).
 func manifestSigningPreimage(t *testing.T, src map[string]any) []byte {
 	t.Helper()
@@ -218,8 +218,8 @@ func TestNewValidatorIdentityFromToken_SignVerifyValidation(t *testing.T) {
 	if want := uint32(vfFullyCanonicalSig | vfFullValidation); v.Flags != want {
 		t.Fatalf("signed validation flags = %#x, want %#x", v.Flags, want)
 	}
-	if err := VerifyValidation(v); err != nil {
-		t.Fatalf("VerifyValidation: %v", err)
+	if err := verifyValidation(v); err != nil {
+		t.Fatalf("verifyValidation: %v", err)
 	}
 
 	partial := &consensus.Validation{
@@ -233,8 +233,8 @@ func TestNewValidatorIdentityFromToken_SignVerifyValidation(t *testing.T) {
 	if want := uint32(vfFullyCanonicalSig); partial.Flags != want {
 		t.Fatalf("signed partial validation flags = %#x, want %#x", partial.Flags, want)
 	}
-	if err := VerifyValidation(partial); err != nil {
-		t.Fatalf("VerifyValidation partial: %v", err)
+	if err := verifyValidation(partial); err != nil {
+		t.Fatalf("verifyValidation partial: %v", err)
 	}
 
 	conflicting := &consensus.Validation{
@@ -250,8 +250,8 @@ func TestNewValidatorIdentityFromToken_SignVerifyValidation(t *testing.T) {
 	if want := uint32(vfFullyCanonicalSig | vfFullValidation); conflicting.Flags != want {
 		t.Fatalf("normalized conflicting flags = %#x, want %#x", conflicting.Flags, want)
 	}
-	if err := VerifyValidation(conflicting); err != nil {
-		t.Fatalf("VerifyValidation conflicting flags: %v", err)
+	if err := verifyValidation(conflicting); err != nil {
+		t.Fatalf("verifyValidation conflicting flags: %v", err)
 	}
 }
 

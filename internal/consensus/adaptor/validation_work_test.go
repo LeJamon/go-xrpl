@@ -270,7 +270,7 @@ func TestRouterValidationAdmissionFailureAllowsDuplicateRetry(t *testing.T) {
 				}))
 			}
 
-			serialized := SerializeSTValidation(tc.validation(t, adaptor))
+			serialized := serializeSTValidation(tc.validation(t, adaptor))
 			payload := encodePayload(t, &message.Validation{Validation: serialized})
 			suppressionHash := hashValidationSuppression(serialized)
 			router.handleValidation(&peermanagement.InboundMessage{PeerID: 12, Payload: payload})
@@ -589,7 +589,7 @@ func TestRouterValidationAdmissionDropsUntrustedUnderLoadOrDivergence(t *testing
 			router.handleValidation(&peermanagement.InboundMessage{
 				PeerID: 12,
 				Payload: encodePayload(t, &message.Validation{
-					Validation: SerializeSTValidation(validation),
+					Validation: serializeSTValidation(validation),
 				}),
 			})
 
@@ -632,7 +632,7 @@ func TestRouterValidationAdmissionKeepsTrustedUnderLocalLoad(t *testing.T) {
 	router.handleValidation(&peermanagement.InboundMessage{
 		PeerID: 12,
 		Payload: encodePayload(t, &message.Validation{
-			Validation: SerializeSTValidation(validation),
+			Validation: serializeSTValidation(validation),
 		}),
 	})
 

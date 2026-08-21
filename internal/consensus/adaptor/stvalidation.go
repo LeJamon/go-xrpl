@@ -18,7 +18,7 @@ func CanonicalSTValidation(v *consensus.Validation) ([]byte, error) {
 		return nil, errors.New("nil validation")
 	}
 	if len(v.Raw) == 0 {
-		return SerializeSTValidation(v), nil
+		return serializeSTValidation(v), nil
 	}
 	fields, err := binarycodec.DecodeBytes(v.Raw)
 	if err != nil {
@@ -364,7 +364,7 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 	return v, nil
 }
 
-// SerializeSTValidation produces XRPL-binary-encoded STValidation bytes from a
+// serializeSTValidation produces XRPL-binary-encoded STValidation bytes from a
 // consensus.Validation. Fields are written in canonical order (ascending type
 // code, then ascending field code within each type).
 //
@@ -373,7 +373,7 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 //
 // Exported so external packages (the validation archive) can reserialize
 // self-built validations whose Raw field is nil.
-func SerializeSTValidation(v *consensus.Validation) []byte {
+func serializeSTValidation(v *consensus.Validation) []byte {
 	var buf []byte
 
 	// --- UINT32 fields (type 2) ---

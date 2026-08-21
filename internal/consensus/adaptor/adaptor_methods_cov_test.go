@@ -25,7 +25,7 @@ func TestAdg_GetLedger(t *testing.T) {
 	assert.Equal(t, lcl.ID(), got.ID())
 
 	_, err = a.GetLedger(consensus.LedgerID{0xDE, 0xAD})
-	assert.ErrorIs(t, err, ErrLedgerNotFound)
+	assert.ErrorIs(t, err, errLedgerNotFound)
 }
 
 func TestAdg_GetLedgerBySeq(t *testing.T) {
@@ -39,7 +39,7 @@ func TestAdg_GetLedgerBySeq(t *testing.T) {
 	assert.Equal(t, lcl.Seq(), got.Seq())
 
 	_, err = a.GetLedgerBySeq(99999)
-	assert.ErrorIs(t, err, ErrLedgerNotFound)
+	assert.ErrorIs(t, err, errLedgerNotFound)
 }
 
 func TestAdg_GetValidatedLedgerHash(t *testing.T) {
@@ -209,7 +209,7 @@ func TestAdg_GetValidatorSigningKey(t *testing.T) {
 	svc := newTestLedgerService(t)
 	noKey := New(Config{LedgerService: svc})
 	_, err = noKey.GetValidatorSigningKey()
-	assert.ErrorIs(t, err, ErrNoValidatorKey)
+	assert.ErrorIs(t, err, errNoValidatorKey)
 }
 
 func TestAdg_GetNegativeUNLMasters(t *testing.T) {

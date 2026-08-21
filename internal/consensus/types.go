@@ -325,7 +325,7 @@ type Validation struct {
 
 	// Raw is the original wire bytes of the serialized STValidation.
 	// Populated by parseSTValidation for inbound validations. Nil for
-	// self-built validations until SerializeSTValidation is called.
+	// self-built validations until they are serialized.
 	// Used by the validation archive to persist the canonical blob
 	// without a parse → re-serialize round-trip.
 	Raw []byte
