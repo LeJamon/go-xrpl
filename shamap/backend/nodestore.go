@@ -185,12 +185,6 @@ func (f *NodeStore) Sweep() error {
 	return f.db.Sweep()
 }
 
-// ResetFullBelow invalidates completeness marks after the backing store is
-// rotated or otherwise replaces its node set.
-func (f *NodeStore) ResetFullBelow() {
-	f.fullBelow.Bump()
-}
-
 // BeginPrune invalidates completeness marks and blocks missing-node walks
 // until the returned function is called after the backing-store mutation.
 func (f *NodeStore) BeginPrune() func() {

@@ -110,11 +110,11 @@ func TestWalkFullBelow_HonorsSharedStopBeforeStoreRead(t *testing.T) {
 	full, stopped, err := walkFullBelow(
 		context.Background(), dest,
 		dest.tree.root,
-		NewRootNodeID(),
+		newRootNodeID(),
 		rootHash,
 		0,
 		gen,
-		&DefaultSyncFilter{},
+		&defaultSyncFilter{},
 		false,
 		cache,
 		func(MissingNode) bool { return false },
@@ -437,7 +437,7 @@ func TestFullBelow_MarksCompleteSubtrees(t *testing.T) {
 		t.Fatalf("complete tree should have no missing nodes, got %d", len(missing))
 	}
 
-	gen := dest.FullBelowCache().Generation()
+	gen := dest.fullBelowCache().Generation()
 	if !dest.tree.root.isFullBelow(gen) {
 		t.Error("root should be marked full-below after a complete walk")
 	}
@@ -512,7 +512,7 @@ func TestFullBelow_NeverMarkedWhileDescendantMissing(t *testing.T) {
 		t.Fatal("expected the withheld leaf to be reported missing")
 	}
 
-	gen := dest.FullBelowCache().Generation()
+	gen := dest.fullBelowCache().Generation()
 	if dest.tree.root.isFullBelow(gen) {
 		t.Error("root must NOT be full-below while a descendant is missing")
 	}
@@ -610,7 +610,7 @@ func TestFullBelow_PrunesReleasedSubtree(t *testing.T) {
 	// Walk 3 (marks invalidated): with the marks bumped and children
 	// released, the walk must re-descend and re-fetch the tree — the
 	// pre-full-below O(tree) behaviour we are replacing.
-	dest.FullBelowCache().Bump()
+	dest.fullBelowCache().Bump()
 	fam.reset()
 	if missing := dest.walkMap(0, nil); len(missing) != 0 {
 		t.Fatalf("post-bump walk found %d missing on a complete tree", len(missing))
@@ -654,7 +654,7 @@ func TestFullBelow_HashSetSkipsReleasedChildWithoutFetch(t *testing.T) {
 	if missing := dest.walkMap(0, nil); len(missing) != 0 {
 		t.Fatalf("warm-up walk found %d missing", len(missing))
 	}
-	if dest.FullBelowCache().Size() == 0 {
+	if dest.fullBelowCache().Size() == 0 {
 		t.Fatal("hash set should be populated after a backed complete walk")
 	}
 
@@ -675,7 +675,7 @@ func TestFullBelow_HashSetSkipsReleasedChildWithoutFetch(t *testing.T) {
 	}
 
 	// Clear the set: the same released children must now be re-fetched.
-	dest.FullBelowCache().Bump()
+	dest.fullBelowCache().Bump()
 	dest.tree.root.mu.Lock()
 	dest.tree.root.fullBelowGen = 0
 	dest.tree.root.mu.Unlock()
@@ -1033,7 +1033,7 @@ func TestFullBelowCache_SharedByFamily(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.FullBelowCache() != second.FullBelowCache() {
+	if first.fullBelowCache() != second.fullBelowCache() {
 		t.Fatal("maps backed by one family must share completeness marks")
 	}
 }
@@ -1277,7 +1277,7 @@ func benchmarkIncrementalSync(b *testing.B, leaves, batch int, bumpEachWalk bool
 			}
 			pending = pending[:0]
 			if bumpEachWalk {
-				dest.FullBelowCache().Bump()
+				dest.fullBelowCache().Bump()
 			}
 			// The per-reply missing-node walk (rippled trigger()).
 			_ = dest.GetMissingNodes(256, nil)
@@ -1348,7 +1348,7 @@ func benchmarkMissingWalk(b *testing.B, leaves int, bumpEachWalk bool) {
 	b.ResetTimer()
 	for range b.N {
 		if bumpEachWalk {
-			dest.FullBelowCache().Bump()
+			dest.fullBelowCache().Bump()
 		}
 		_ = dest.GetMissingNodes(256, nil)
 	}

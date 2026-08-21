@@ -17,11 +17,6 @@ type CompletenessResult struct {
 	Corrupt    []MissingNode
 }
 
-// Complete reports whether the walk found the tree fully present and readable.
-func (r *CompletenessResult) Complete() bool {
-	return len(r.Missing) == 0 && len(r.Corrupt) == 0
-}
-
 // maxWalkDepth bounds the recursion. A SHAMap key is 256 bits / 4 bits per
 // branch = 64 levels; the guard only fires on a corrupt store that returns an
 // inner node where a leaf belongs, so it is reported as an error, not a panic.

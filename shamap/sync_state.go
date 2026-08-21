@@ -8,19 +8,19 @@ import (
 
 var (
 	// ErrSyncNotInProgress reports a sync-only operation on a map not syncing.
-	ErrSyncNotInProgress = errors.New("sync not in progress")
+	errSyncNotInProgress = errors.New("sync not in progress")
 	// ErrInvalidNodeData reports malformed serialized node data.
 	ErrInvalidNodeData = errors.New("invalid node data")
 	// ErrNodeHashMismatch reports node data that does not match its expected hash.
-	ErrNodeHashMismatch = errors.New("node hash does not match expected")
+	errNodeHashMismatch = errors.New("node hash does not match expected")
 	// ErrRootAlreadySet reports an attempt to replace a populated root.
 	ErrRootAlreadySet = errors.New("root node already set")
 	// ErrUnexpectedNode reports a valid node that does not fit the requested path.
-	ErrUnexpectedNode = errors.New("unexpected node received")
+	errUnexpectedNode = errors.New("unexpected node received")
 	// ErrEmptyBranchOnPath reports a path through an empty branch.
-	ErrEmptyBranchOnPath = errors.New("path descends into an empty branch")
+	errEmptyBranchOnPath = errors.New("path descends into an empty branch")
 	// ErrParentNotInTree reports acquisition data whose parent is not loaded.
-	ErrParentNotInTree = errors.New("parent node not yet loaded for path")
+	errParentNotInTree = errors.New("parent node not yet loaded for path")
 	// ErrNodeSerialization reports failure to serialize an already-verified node.
 	ErrNodeSerialization = errors.New("verified node serialization failed")
 	// ErrTraversalBudget means a resumable backed walk reached its visit limit.
@@ -64,10 +64,10 @@ type SyncFilter interface {
 }
 
 // DefaultSyncFilter always returns true, fetching all missing nodes.
-type DefaultSyncFilter struct{}
+type defaultSyncFilter struct{}
 
 // ShouldFetch implements SyncFilter, always returning true.
-func (f *DefaultSyncFilter) ShouldFetch(nodeHash [32]byte) bool {
+func (f *defaultSyncFilter) ShouldFetch(nodeHash [32]byte) bool {
 	return true
 }
 
@@ -99,7 +99,7 @@ func (sm *SHAMap) StartSync() error {
 	defer sm.tree.mu.Unlock()
 
 	if sm.tree.state == stateInvalid {
-		return fmt.Errorf("%w: cannot start sync on invalid map", ErrInvalidState)
+		return fmt.Errorf("%w: cannot start sync on invalid map", errInvalidState)
 	}
 
 	sm.tree.state = stateSyncing
@@ -119,7 +119,7 @@ func (sm *SHAMap) FinishSyncContext(ctx context.Context) error {
 	sm.tree.mu.RLock()
 	if sm.tree.state != stateSyncing {
 		sm.tree.mu.RUnlock()
-		return ErrSyncNotInProgress
+		return errSyncNotInProgress
 	}
 	sm.tree.mu.RUnlock()
 	sm.backing.mu.RLock()
@@ -145,7 +145,7 @@ func (sm *SHAMap) FinishSyncContext(ctx context.Context) error {
 	sm.tree.mu.Lock()
 	defer sm.tree.mu.Unlock()
 	if sm.tree.state != stateSyncing {
-		return ErrSyncNotInProgress
+		return errSyncNotInProgress
 	}
 	sm.tree.state = stateModifying
 

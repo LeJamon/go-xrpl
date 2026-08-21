@@ -20,7 +20,7 @@ func TestSme_PutItemWithNodeTypeOnImmutable(t *testing.T) {
 
 func TestSme_PutItemWithNodeTypeNilItem(t *testing.T) {
 	sm := New(TypeTransaction)
-	if err := sm.putItemWithNodeType(nil, NodeTypeTransactionNoMeta); !errors.Is(err, ErrNilItem) {
+	if err := sm.putItemWithNodeType(nil, NodeTypeTransactionNoMeta); !errors.Is(err, errNilItem) {
 		t.Errorf("putItemWithNodeType(nil): want ErrNilItem, got %v", err)
 	}
 }
@@ -53,7 +53,7 @@ func TestSme_DirtyUpWhileSyncingReturnsInvalidState(t *testing.T) {
 	}
 	stack := newNodeStack()
 	_, dirtyErr := sm.dirtyUp(stack, [32]byte{}, newInnerNode())
-	if !errors.Is(dirtyErr, ErrInvalidState) {
+	if !errors.Is(dirtyErr, errInvalidState) {
 		t.Errorf("dirtyUp while syncing: want ErrInvalidState, got %v", dirtyErr)
 	}
 }
@@ -145,7 +145,7 @@ func TestSme_PutItemImmutable(t *testing.T) {
 		t.Fatalf("SetImmutable: %v", err)
 	}
 	k := sme_keyFromByte(0x01)
-	if err := sm.PutItem(NewItem(k, sme_data12(1))); !errors.Is(err, ErrImmutable) {
+	if err := sm.putItem(NewItem(k, sme_data12(1))); !errors.Is(err, ErrImmutable) {
 		t.Errorf("PutItem on immutable: want ErrImmutable, got %v", err)
 	}
 }
@@ -153,10 +153,10 @@ func TestSme_PutItemImmutable(t *testing.T) {
 func TestSme_GetBranchAtDepthBeyondMax(t *testing.T) {
 	var k [32]byte
 	k[0] = 0xFF
-	if got := getBranchAtDepth(k, MaxDepth); got != 0 {
+	if got := getBranchAtDepth(k, maxDepth); got != 0 {
 		t.Errorf("getBranchAtDepth at MaxDepth = %d, want 0", got)
 	}
-	if got := getBranchAtDepth(k, MaxDepth+10); got != 0 {
+	if got := getBranchAtDepth(k, maxDepth+10); got != 0 {
 		t.Errorf("getBranchAtDepth beyond MaxDepth = %d, want 0", got)
 	}
 }

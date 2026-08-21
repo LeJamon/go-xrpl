@@ -29,11 +29,11 @@ func TestSme_AddKnownNodeUnchecked(t *testing.T) {
 	}
 
 	dest1 := New(TypeTransaction)
-	someID, err := NewRootNodeID().ChildNodeID(0)
+	someID, err := newRootNodeID().childNodeID(0)
 	if err != nil {
 		t.Fatalf("ChildNodeID: %v", err)
 	}
-	if _, err := dest1.AddKnownNodeByID(someID, []byte{1, 2, 3}); !errors.Is(err, ErrSyncNotInProgress) {
+	if _, err := dest1.AddKnownNodeByID(someID, []byte{1, 2, 3}); !errors.Is(err, errSyncNotInProgress) {
 		t.Errorf("AddKnownNodeByID not-syncing: want ErrSyncNotInProgress, got %v", err)
 	}
 
@@ -74,8 +74,8 @@ func TestSme_AddKnownNodeByID_RootNodeID(t *testing.T) {
 	if err := sm.StartSync(); err != nil {
 		t.Fatalf("StartSync: %v", err)
 	}
-	rootID := NewRootNodeID()
-	if _, err := sm.AddKnownNodeByID(rootID, []byte{1}); !errors.Is(err, ErrUnexpectedNode) {
+	rootID := newRootNodeID()
+	if _, err := sm.AddKnownNodeByID(rootID, []byte{1}); !errors.Is(err, errUnexpectedNode) {
 		t.Errorf("AddKnownNodeByID(root): want ErrUnexpectedNode, got %v", err)
 	}
 }
@@ -89,7 +89,7 @@ func TestSme_GetMissingNodesNotSyncing(t *testing.T) {
 
 func TestSme_FinishSyncNotSyncing(t *testing.T) {
 	sm := New(TypeState)
-	if err := sm.FinishSync(); !errors.Is(err, ErrSyncNotInProgress) {
+	if err := sm.FinishSync(); !errors.Is(err, errSyncNotInProgress) {
 		t.Errorf("FinishSync not syncing: want ErrSyncNotInProgress, got %v", err)
 	}
 }
@@ -134,7 +134,7 @@ func TestSme_AddKnownNodeHashMismatch(t *testing.T) {
 		var wrongHash [32]byte
 		wrongHash[0] = 0xFF
 		err := dest.AddKnownNode(wrongHash, w.Data)
-		if !errors.Is(err, ErrNodeHashMismatch) {
+		if !errors.Is(err, errNodeHashMismatch) {
 			t.Errorf("AddKnownNode with wrong hash: want ErrNodeHashMismatch, got %v", err)
 		}
 		break
@@ -160,10 +160,10 @@ func TestSme_WalkSubtreeStopsOnReport(t *testing.T) {
 	stop, err := walkSubtreeForMissing(
 		context.Background(), dest,
 		dest.tree.root,
-		NewRootNodeID(),
+		newRootNodeID(),
 		dest.tree.root.Hash(),
 		0,
-		&DefaultSyncFilter{},
+		&defaultSyncFilter{},
 		false,
 		func(MissingNode) bool {
 			count++

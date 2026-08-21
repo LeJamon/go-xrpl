@@ -60,8 +60,8 @@ func TestCmpIdenticalMaps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
-	if !ds.IsEmpty() {
-		t.Errorf("identical maps: expected 0 differences, got %d\n%s", ds.Len(), ds.String())
+	if ds.Len() != 0 {
+		t.Errorf("identical maps: expected 0 differences, got %d", ds.Len())
 	}
 	if !ds.Complete {
 		t.Error("Complete should be true for identical maps")
@@ -76,7 +76,7 @@ func TestCmpBothEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
-	if !ds.IsEmpty() {
+	if ds.Len() != 0 {
 		t.Errorf("both empty: expected 0 differences, got %d", ds.Len())
 	}
 }
@@ -284,7 +284,7 @@ func TestCmpMaxCountTruncation(t *testing.T) {
 	if ds.Complete {
 		t.Error("Complete should be false when truncated by maxCount")
 	}
-	if !ds.HasMore() {
+	if ds.Complete {
 		t.Error("HasMore() should return true when truncated")
 	}
 }
@@ -343,7 +343,7 @@ func TestCmpLargeMaps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compare large identical: %v", err)
 	}
-	if !ds.IsEmpty() {
+	if ds.Len() != 0 {
 		t.Errorf("large identical maps: expected 0 differences, got %d", ds.Len())
 	}
 
@@ -367,51 +367,6 @@ func TestCmpLargeMaps(t *testing.T) {
 	}
 }
 
-func TestCmpDifferenceSetString(t *testing.T) {
-	m1 := cmp_makeMap(t, []cmp_entry{{cmp_key(1), cmp_val(1)}})
-	m2 := cmp_makeMap(t, []cmp_entry{{cmp_key(2), cmp_val(2)}})
-
-	ds, err := m1.CompareContext(context.Background(), m2, 0)
-	if err != nil {
-		t.Fatalf("Compare: %v", err)
-	}
-
-	s := ds.String()
-	if len(s) == 0 {
-		t.Error("DifferenceSet.String() should not be empty")
-	}
-	if ds.HasMore() {
-		t.Error("HasMore() should be false when not truncated")
-	}
-}
-
-func TestCmpDifferenceItemString(t *testing.T) {
-	k := cmp_key(77)
-	di := DifferenceItem{Key: k, Type: DiffAdded}
-	s := di.String()
-	if len(s) == 0 {
-		t.Error("DifferenceItem.String() should not be empty")
-	}
-}
-
-func TestCmpDifferenceTypeString(t *testing.T) {
-	tests := []struct {
-		dt   DifferenceType
-		want string
-	}{
-		{DiffAdded, "added"},
-		{DiffRemoved, "removed"},
-		{DiffModified, "modified"},
-		{DifferenceType(99), "unknown(99)"},
-	}
-	for _, tt := range tests {
-		got := tt.dt.String()
-		if got != tt.want {
-			t.Errorf("DifferenceType(%d).String() = %q, want %q", int(tt.dt), got, tt.want)
-		}
-	}
-}
-
 func TestCmpFirstItemsPopulated(t *testing.T) {
 	k := cmp_key(55)
 	m1 := cmp_makeMap(t, []cmp_entry{{k, cmp_val(55)}})
@@ -423,7 +378,7 @@ func TestCmpFirstItemsPopulated(t *testing.T) {
 	}
 	for _, d := range ds.Differences {
 		if d.Type != DiffRemoved {
-			t.Errorf("unexpected diff type %s", d.Type)
+			t.Errorf("unexpected diff type %d", d.Type)
 			continue
 		}
 		if d.FirstItem == nil {
@@ -449,7 +404,7 @@ func TestCmpSecondItemsPopulated(t *testing.T) {
 	}
 	for _, d := range ds.Differences {
 		if d.Type != DiffAdded {
-			t.Errorf("unexpected diff type %s", d.Type)
+			t.Errorf("unexpected diff type %d", d.Type)
 			continue
 		}
 		if d.SecondItem == nil {
@@ -486,7 +441,7 @@ func TestCmpStructurallyDifferentDepths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compare deep structure: %v", err)
 	}
-	if ds.IsEmpty() {
+	if ds.Len() == 0 {
 		t.Error("deep structure: expected non-zero differences")
 	}
 }
@@ -500,7 +455,7 @@ func TestCmpSingleItemBothMaps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compare: %v", err)
 	}
-	if !ds.IsEmpty() {
+	if ds.Len() != 0 {
 		t.Errorf("same single-item maps: expected 0 diffs, got %d", ds.Len())
 	}
 
@@ -644,7 +599,7 @@ func TestCmpWalkBranchOtherItemUnmatched(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compare unmatched: %v", err)
 	}
-	if ds.IsEmpty() {
+	if ds.Len() == 0 {
 		t.Error("unmatched: expected differences, got none")
 	}
 }
@@ -747,7 +702,7 @@ func TestCmpLeafVsInnerNoMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compare leaf-vs-inner no match: %v", err)
 	}
-	if ds.IsEmpty() {
+	if ds.Len() == 0 {
 		t.Error("leaf-vs-inner no match: expected differences")
 	}
 }
@@ -786,7 +741,7 @@ func TestCmpWalkBranchPostLoopAdded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compare walkBranch post-loop added: %v", err)
 	}
-	if ds.IsEmpty() {
+	if ds.Len() == 0 {
 		t.Error("walkBranch post-loop: expected differences")
 	}
 }

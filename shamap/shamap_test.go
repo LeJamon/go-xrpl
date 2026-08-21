@@ -53,11 +53,11 @@ func TestAddAndTraverse(t *testing.T) {
 	sMap := New(TypeTransaction)
 
 	// Add items to the map - same order as C++ test
-	if err := sMap.PutItem(i2); err != nil {
+	if err := sMap.putItem(i2); err != nil {
 		t.Fatalf("Failed to add item 2: %v", err)
 	}
 
-	if err := sMap.PutItem(i1); err != nil {
+	if err := sMap.putItem(i1); err != nil {
 		t.Fatalf("Failed to add item 1: %v", err)
 	}
 
@@ -115,7 +115,7 @@ func TestAddAndTraverse(t *testing.T) {
 	}
 
 	// Add item 4
-	if err := sMap.PutItem(i4); err != nil {
+	if err := sMap.putItem(i4); err != nil {
 		t.Fatalf("Failed to add item 4: %v", err)
 	}
 
@@ -134,7 +134,7 @@ func TestAddAndTraverse(t *testing.T) {
 	}
 
 	// Add item 3
-	if err := sMap.PutItem(i3); err != nil {
+	if err := sMap.putItem(i3); err != nil {
 		t.Fatalf("Failed to add item 3: %v", err)
 	}
 
@@ -379,7 +379,7 @@ func TestSnapshot(t *testing.T) {
 		t.Error("Item not found in snapshot map")
 	}
 
-	if !originalItem.Equal(snapshotItem) {
+	if originalItem.key != snapshotItem.key || !bytes.Equal(originalItem.data, snapshotItem.data) {
 		t.Error("Items should be equal between original and snapshot")
 	}
 
@@ -552,8 +552,8 @@ func TestErrorHandling(t *testing.T) {
 	sMap := New(TypeTransaction)
 
 	// Test adding nil item
-	err := sMap.PutItem(nil)
-	if err != ErrNilItem {
+	err := sMap.putItem(nil)
+	if err != errNilItem {
 		t.Errorf("Expected ErrNilItem, got: %v", err)
 	}
 
@@ -848,7 +848,7 @@ func TestSHAMapPathProof(t *testing.T) {
 
 	// Test: too long path (longer than MaxDepth+1)
 	if len(goodPath) > 0 {
-		tooLongPath := make([][]byte, MaxDepth+2)
+		tooLongPath := make([][]byte, maxDepth+2)
 		for i := range tooLongPath {
 			tooLongPath[i] = make([]byte, len(goodPath[0]))
 			copy(tooLongPath[i], goodPath[0])
@@ -904,95 +904,6 @@ func TestSHAMapPathProof(t *testing.T) {
 	wrongKey[0] = 0xFF
 	if VerifyProofPath(rootHash, wrongKey, goodPath) {
 		t.Error("Wrong key should fail verification")
-	}
-}
-
-// TestVerifyProofPathWithValue tests proof verification with value extraction
-func TestVerifyProofPathWithValue(t *testing.T) {
-	sMap := New(TypeState)
-
-	// Add a single item
-	var key [32]byte
-	key[0] = 42
-	data := []byte("test data for proof verification")
-
-	if err := sMap.Put(key, data); err != nil {
-		t.Fatalf("Failed to add item: %v", err)
-	}
-
-	root, err := sMap.Hash()
-	if err != nil {
-		t.Fatalf("Failed to get root hash: %v", err)
-	}
-
-	proofPath, err := sMap.GetProofPath(key)
-	if err != nil {
-		t.Fatalf("Failed to get proof path: %v", err)
-	}
-
-	// Valid proof should return the data
-	result := VerifyProofPathWithValue(root, key, proofPath.Path)
-	if result == nil {
-		t.Fatal("Valid proof should return data")
-	}
-	if string(result) != string(data) {
-		t.Errorf("Expected data '%s', got '%s'", string(data), string(result))
-	}
-
-	// Invalid proof should return nil
-	var wrongRoot [32]byte
-	wrongRoot[0] = 0xFF
-	result = VerifyProofPathWithValue(wrongRoot, key, proofPath.Path)
-	if result != nil {
-		t.Error("Invalid proof should return nil")
-	}
-}
-
-// TestIterator tests the basic iterator functionality
-func TestIterator(t *testing.T) {
-	sMap := New(TypeState)
-
-	// Add items with keys that will be in known order
-	keys := make([][32]byte, 10)
-	for i := range 10 {
-		keys[i][0] = byte(i * 10) // 0, 10, 20, ..., 90
-		data := make([]byte, 32)
-		data[0] = byte(i)
-		if err := sMap.Put(keys[i], data); err != nil {
-			t.Fatalf("Failed to put item %d: %v", i, err)
-		}
-	}
-
-	// Test Begin() iterator - should visit all items in key order
-	iter := newTestIterator(sMap)
-	count := 0
-	var lastKey [32]byte
-	for iter.Next() {
-		item := iter.Item()
-		if item == nil {
-			t.Fatal("Iterator returned nil item")
-		}
-		if count > 0 && compareKeys(item.Key(), lastKey) <= 0 {
-			t.Errorf("Items not in ascending order: %x <= %x", item.Key(), lastKey)
-		}
-		lastKey = item.Key()
-		count++
-	}
-	if err := iter.Err(); err != nil {
-		t.Fatalf("Iterator error: %v", err)
-	}
-	if count != 10 {
-		t.Errorf("Expected 10 items, got %d", count)
-	}
-
-	// Test empty map
-	emptyMap := New(TypeState)
-	iter = newTestIterator(emptyMap)
-	if iter.Next() {
-		t.Error("Empty map iterator should return false on Next()")
-	}
-	if iter.Valid() {
-		t.Error("Empty map iterator should not be valid")
 	}
 }
 
@@ -1093,55 +1004,6 @@ func TestLowerBound(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// TestIteratorWithManyItems tests iterator with a larger dataset
-func TestIteratorWithManyItems(t *testing.T) {
-	sMap := New(TypeState)
-
-	// Add 100 items
-	for i := range 100 {
-		var key [32]byte
-		key[0] = byte(i)
-		data := make([]byte, 32)
-		copy(data, key[:])
-		if err := sMap.Put(key, data); err != nil {
-			t.Fatalf("Failed to put item %d: %v", i, err)
-		}
-	}
-
-	// Count items via iterator
-	iter := newTestIterator(sMap)
-	count := 0
-	for iter.Next() {
-		count++
-	}
-	if err := iter.Err(); err != nil {
-		t.Fatalf("Iterator error: %v", err)
-	}
-	if count != 100 {
-		t.Errorf("Expected 100 items, got %d", count)
-	}
-
-	// Test UpperBound in the middle
-	var midKey [32]byte
-	midKey[0] = 50
-	iter = sMap.UpperBound(midKey)
-	if !iter.Valid() {
-		t.Fatal("UpperBound(50) should return valid iterator")
-	}
-	if iter.Item().Key()[0] != 51 {
-		t.Errorf("UpperBound(50) should return key 51, got %d", iter.Item().Key()[0])
-	}
-
-	// Test LowerBound in the middle
-	iter = sMap.LowerBound(midKey)
-	if !iter.Valid() {
-		t.Fatal("LowerBound(50) should return valid iterator")
-	}
-	if iter.Item().Key()[0] != 49 {
-		t.Errorf("LowerBound(50) should return key 49, got %d", iter.Item().Key()[0])
 	}
 }
 

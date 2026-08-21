@@ -29,7 +29,7 @@ func (sm *SHAMap) walkMapParallelContext(ctx context.Context, maxMissing int, fi
 		return nil, err
 	}
 	if filter == nil {
-		filter = &DefaultSyncFilter{}
+		filter = &defaultSyncFilter{}
 	}
 	sm.acquisition.walkMu.Lock()
 	defer sm.acquisition.walkMu.Unlock()
@@ -60,7 +60,7 @@ func (sm *SHAMap) walkMapParallelContext(ctx context.Context, maxMissing int, fi
 	}
 	defer done()
 	backed := access.available() && cache != nil
-	rootID := NewRootNodeID()
+	rootID := newRootNodeID()
 	rootHash := root.Hash()
 	if backed {
 		return sm.walkBackedContext(ctx, root, access, cache, gen, maxMissing, filter)
@@ -109,7 +109,7 @@ func (sm *SHAMap) walkMapParallelContext(ctx context.Context, maxMissing int, fi
 		if !isSet {
 			continue
 		}
-		childNodeID, err := rootID.ChildNodeID(uint8(branch))
+		childNodeID, err := rootID.childNodeID(uint8(branch))
 		if err != nil {
 			continue
 		}
@@ -242,7 +242,7 @@ func (sm *SHAMap) GetMissingNodesContext(ctx context.Context, maxNodes int, filt
 // nodes. Caller must hold at least the read lock.
 func (sm *SHAMap) missingNodesLocked(maxNodes int, filter SyncFilter, strict bool) ([]MissingNode, error) {
 	if filter == nil {
-		filter = &DefaultSyncFilter{}
+		filter = &defaultSyncFilter{}
 	}
 	if sm.tree.root == nil {
 		return nil, nil
@@ -252,7 +252,7 @@ func (sm *SHAMap) missingNodesLocked(maxNodes int, filter SyncFilter, strict boo
 	_, err := walkSubtreeForMissing(
 		context.Background(), sm,
 		sm.tree.root,
-		NewRootNodeID(),
+		newRootNodeID(),
 		sm.tree.root.Hash(),
 		0,
 		filter,

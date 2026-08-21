@@ -12,12 +12,12 @@ import (
 // Common errors
 var (
 	ErrImmutable    = errors.New("cannot modify immutable SHAMap")
-	ErrNilItem      = errors.New("cannot add nil item")
+	errNilItem      = errors.New("cannot add nil item")
 	ErrItemNotFound = errors.New("item not found")
-	ErrInvalidType  = errors.New("invalid node type")
-	ErrInvalidState = errors.New("invalid state for operation")
-	ErrItemTooSmall = errors.New("item data too small (minimum 12 bytes)")
-	ErrNilFamily    = errors.New("family is required for backed SHAMap")
+	errInvalidType  = errors.New("invalid node type")
+	errInvalidState = errors.New("invalid state for operation")
+	errItemTooSmall = errors.New("item data too small (minimum 12 bytes)")
+	errNilFamily    = errors.New("family is required for backed SHAMap")
 )
 
 type mapState int
@@ -97,7 +97,7 @@ func New(mapType Type) *SHAMap {
 // Unlike New(), this map will flush dirty nodes to the Family and support lazy loading.
 func NewBacked(mapType Type, family Family) (*SHAMap, error) {
 	if family == nil {
-		return nil, ErrNilFamily
+		return nil, errNilFamily
 	}
 	access := bindFamily(family)
 	sm := &SHAMap{
@@ -148,7 +148,7 @@ func NewFromRootHash(mapType Type, rootHash [32]byte, family Family) (*SHAMap, e
 // root-node fetch. Descendants remain lazily loaded.
 func NewFromRootHashContext(ctx context.Context, mapType Type, rootHash [32]byte, family Family) (*SHAMap, error) {
 	if family == nil {
-		return nil, ErrNilFamily
+		return nil, errNilFamily
 	}
 	access := bindFamily(family)
 
@@ -258,7 +258,7 @@ func (sm *SHAMap) SetImmutable() error {
 	defer sm.tree.mu.Unlock()
 
 	if sm.tree.state == stateInvalid {
-		return fmt.Errorf("%w: cannot set invalid map to immutable", ErrInvalidState)
+		return fmt.Errorf("%w: cannot set invalid map to immutable", errInvalidState)
 	}
 
 	sm.tree.state = stateImmutable
@@ -278,7 +278,7 @@ func (sm *SHAMap) Hash() ([32]byte, error) {
 	defer sm.tree.mu.RUnlock()
 
 	if sm.tree.state == stateInvalid {
-		return [32]byte{}, fmt.Errorf("%w: cannot get hash of invalid map", ErrInvalidState)
+		return [32]byte{}, fmt.Errorf("%w: cannot get hash of invalid map", errInvalidState)
 	}
 
 	return sm.tree.root.Hash(), nil
@@ -296,7 +296,7 @@ func (sm *SHAMap) findItem(ctx context.Context, key [32]byte) (*Item, error) {
 
 	leaf, ok := node.(mapLeaf)
 	if !ok {
-		return nil, ErrInvalidType
+		return nil, errInvalidType
 	}
 
 	item := leaf.Item()
@@ -366,10 +366,7 @@ func (sm *SHAMap) IsBacked() bool {
 	return sm.backing.access.available()
 }
 
-// FullBelowCache returns the map's full-below cache. Snapshots share the
-// source's cache, so a snapshot and its source agree on which subtrees are
-// proven complete.
-func (sm *SHAMap) FullBelowCache() *FullBelowCache {
+func (sm *SHAMap) fullBelowCache() *FullBelowCache {
 	sm.backing.mu.RLock()
 	defer sm.backing.mu.RUnlock()
 	return sm.backing.fullBelow

@@ -19,7 +19,7 @@ type nodeStack struct {
 // newNodeStack creates a new empty node stack
 func newNodeStack() *nodeStack {
 	return &nodeStack{
-		entries: make([]pathEntry, 0, MaxDepth), // Pre-allocate for efficiency
+		entries: make([]pathEntry, 0, maxDepth),
 	}
 }
 
@@ -65,7 +65,7 @@ func (sm *SHAMap) walkToKey(ctx context.Context, key [32]byte, stack *nodeStack,
 	}
 
 	var node mapNode = sm.tree.root
-	nodeID := NewRootNodeID()
+	nodeID := newRootNodeID()
 
 	for {
 		inner, ok := node.(*innerNode)
@@ -91,7 +91,7 @@ func (sm *SHAMap) walkToKey(ctx context.Context, key [32]byte, stack *nodeStack,
 		}
 
 		node = child
-		childNodeID, err := nodeID.ChildNodeID(branch)
+		childNodeID, err := nodeID.childNodeID(branch)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get child node ID: %w", err)
 		}
@@ -128,7 +128,7 @@ func (sm *SHAMap) walkLeavesRec(ctx context.Context, node mapNode, fn func(*Item
 	if !ok {
 		leaf, ok := node.(mapLeaf)
 		if !ok {
-			return false, ErrInvalidType
+			return false, errInvalidType
 		}
 		return fn(leaf.Item()), nil
 	}
@@ -163,7 +163,7 @@ func (sm *SHAMap) walkLeavesReleasingRec(ctx context.Context, node mapNode, fn f
 	if !ok {
 		leaf, ok := node.(mapLeaf)
 		if !ok {
-			return false, ErrInvalidType
+			return false, errInvalidType
 		}
 		return fn(leaf.Item()), nil
 	}
@@ -239,7 +239,7 @@ func (sm *SHAMap) onlyBelow(node mapNode) (*Item, error) {
 	// Found exactly one leaf
 	leaf, ok := current.(mapLeaf)
 	if !ok {
-		return nil, ErrInvalidType
+		return nil, errInvalidType
 	}
 
 	return leaf.Item(), nil
@@ -386,7 +386,7 @@ func walkFullBelowStateAccess(
 		if !isSet {
 			continue
 		}
-		childNodeID, cerr := nodeID.ChildNodeID(uint8(branch))
+		childNodeID, cerr := nodeID.childNodeID(uint8(branch))
 		if cerr != nil {
 			continue
 		}

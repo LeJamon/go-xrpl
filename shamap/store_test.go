@@ -330,8 +330,8 @@ func TestAcknowledgePersistedContextFutureMutationStoresOnlyChangedPath(t *testi
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(stored) == 0 || len(stored) > MaxDepth+2 {
-		t.Fatalf("changed-path entries = %d, want 1..%d", len(stored), MaxDepth+2)
+	if len(stored) == 0 || len(stored) > maxDepth+2 {
+		t.Fatalf("changed-path entries = %d, want 1..%d", len(stored), maxDepth+2)
 	}
 	gotOriginal, err := immutable.Hash()
 	if err != nil {
@@ -1179,53 +1179,6 @@ func TestBacked_SetFamily(t *testing.T) {
 	snapHash, _ := snap.Hash()
 	if snapHash != rootHash {
 		t.Error("Snapshot hash should match")
-	}
-}
-
-// TestBacked_Iterator verifies iterator works with lazy loading.
-func TestBacked_Iterator(t *testing.T) {
-	family := newMemoryFamily()
-
-	sMap := New(TypeState)
-
-	keys := []string{
-		"092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7",
-		"436ccbac3347baa1f1e53baeef1f43334da88f1f6d70d963b833afd6dfa289fe",
-		"b92891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8",
-	}
-
-	for i, keyHex := range keys {
-		key := hexToHash(keyHex)
-		if err := sMap.Put(key, intToBytes(i+1)); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	rootHash, _ := sMap.Hash()
-	if err := flushToFamily(sMap, family); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create backed map and use iterator
-	backed, err := NewFromRootHash(TypeState, rootHash, family)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	count := 0
-	iter := newTestIterator(backed)
-	for iter.Next() {
-		item := iter.Item()
-		if item == nil {
-			t.Error("Iterator item should not be nil")
-		}
-		count++
-	}
-	if err := iter.Err(); err != nil {
-		t.Fatal(err)
-	}
-	if count != len(keys) {
-		t.Errorf("Iterator found %d items, expected %d", count, len(keys))
 	}
 }
 

@@ -1006,7 +1006,7 @@ func TestCompleteInboundLedgerPromotesResultMapPersistence(t *testing.T) {
 	require.NoError(t, err)
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
-	fullBelow := stateMap.FullBelowCache()
+	fullBelow := scope.FullBelowCache()
 	require.True(t, fullBelow.Has(fullBelow.Generation(), stateRoot), "promoted acquisition must publish its durable root proof")
 	base.mu.Lock()
 	callsAfterCompletion := len(base.calls)

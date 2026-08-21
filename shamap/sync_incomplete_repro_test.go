@@ -134,7 +134,7 @@ func TestIncompleteSyncMap_CompletenessConsistency(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CheckComplete: %v", err)
 		}
-		isComplete := result.Complete()
+		isComplete := len(result.Missing) == 0 && len(result.Corrupt) == 0
 		finishErr := dest.FinishSync()
 		t.Logf("CheckComplete=%v FinishSync() err=%v", isComplete, finishErr)
 		if isComplete != (finishErr == nil) {
@@ -194,7 +194,7 @@ func TestIncompleteSyncMap_CompletenessConsistency(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CheckComplete after finalize: %v", err)
 		}
-		if !result.Complete() {
+		if len(result.Missing) != 0 || len(result.Corrupt) != 0 {
 			t.Fatalf("CheckComplete should be true after finalize")
 		}
 		if got := len(dest.GetMissingNodes(1, nil)); got != 0 {

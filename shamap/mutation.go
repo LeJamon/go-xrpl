@@ -10,7 +10,7 @@ import (
 // Put adds or updates an item in the SHAMap
 func (sm *SHAMap) Put(key [32]byte, data []byte) error {
 	item := NewItem(key, data)
-	return sm.PutItem(item)
+	return sm.putItem(item)
 }
 
 // PutWithNodeType adds an item with a specific node type (for transaction+metadata)
@@ -22,7 +22,7 @@ func (sm *SHAMap) PutWithNodeType(key [32]byte, data []byte, nodeType NodeType) 
 // putItemWithNodeType adds an item with a specific node type
 func (sm *SHAMap) putItemWithNodeType(item *Item, nodeType NodeType) error {
 	if item == nil {
-		return ErrNilItem
+		return errNilItem
 	}
 
 	sm.tree.mu.Lock()
@@ -62,7 +62,7 @@ func (sm *SHAMap) putItemWithNodeTypeUnsafe(item *Item, nodeType NodeType) error
 
 	leaf, ok := node.(mapLeaf)
 	if !ok {
-		return ErrInvalidType
+		return errInvalidType
 	}
 
 	existingItem := leaf.Item()
@@ -144,10 +144,9 @@ func (sm *SHAMap) putItemWithNodeTypeUnsafe(item *Item, nodeType NodeType) error
 	return sm.assignRoot(newRoot, key)
 }
 
-// PutItem adds or updates an item in the SHAMap
-func (sm *SHAMap) PutItem(item *Item) error {
+func (sm *SHAMap) putItem(item *Item) error {
 	if item == nil {
-		return ErrNilItem
+		return errNilItem
 	}
 
 	sm.tree.mu.Lock()
@@ -177,7 +176,7 @@ func (sm *SHAMap) PutItemsAtomically(items ...*Item) error {
 	}
 	for _, item := range items {
 		if item == nil {
-			return ErrNilItem
+			return errNilItem
 		}
 		if err := staged.putItemUnsafe(item); err != nil {
 			return err
@@ -201,7 +200,7 @@ func (sm *SHAMap) putItemUnsafe(item *Item) error {
 // dirtyUp updates the tree from leaf to root
 func (sm *SHAMap) dirtyUp(stack *nodeStack, target [32]byte, child mapNode) (mapNode, error) {
 	if sm.tree.state == stateSyncing || sm.tree.state == stateImmutable {
-		return nil, ErrInvalidState
+		return nil, errInvalidState
 	}
 	if child == nil {
 		return nil, errors.New("cannot propagate hash update through a nil child")
@@ -244,7 +243,7 @@ func (sm *SHAMap) assignRoot(newRoot mapNode, key [32]byte) error {
 
 	// If newRoot is a leaf, wrap it in an inner node
 	sm.tree.root = newInnerNode()
-	rootNodeID := NewRootNodeID()
+	rootNodeID := newRootNodeID()
 	branch := selectBranch(rootNodeID, key)
 
 	if err := sm.tree.root.SetChild(int(branch), newRoot); err != nil {
@@ -331,7 +330,7 @@ func (sm *SHAMap) consolidateAfterDelete(stack *nodeStack, key [32]byte) (mapNod
 
 		inner, ok := node.(*innerNode)
 		if !ok {
-			return nil, ErrInvalidType
+			return nil, errInvalidType
 		}
 
 		// Path-copy: shallow-clone so untouched siblings stay shared

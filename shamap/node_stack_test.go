@@ -6,7 +6,7 @@ func TestSme_NodeStackClear(t *testing.T) {
 	ns := newNodeStack()
 
 	inner := newInnerNode()
-	id := NewRootNodeID()
+	id := newRootNodeID()
 	ns.Push(inner, id)
 
 	if ns.Len() != 1 {

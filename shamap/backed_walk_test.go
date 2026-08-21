@@ -124,10 +124,10 @@ func TestBackedWalkRetryDoesNotConsumeInvalidDepthBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	chain := make([]*innerNode, 0, 1+MaxDepth)
+	chain := make([]*innerNode, 0, 1+maxDepth)
 	chain = append(chain, bottom)
 	child := bottom
-	for range MaxDepth {
+	for range maxDepth {
 		parent := newInnerNode()
 		if err := parent.SetChild(0, child); err != nil {
 			t.Fatal(err)
@@ -168,8 +168,8 @@ func TestBackedWalkRetryDoesNotConsumeInvalidDepthBranch(t *testing.T) {
 
 	for attempt := range 2 {
 		_, err := dest.GetMissingNodesContext(t.Context(), 1, nil)
-		if !errors.Is(err, ErrMaxDepthExceeded) {
-			t.Fatalf("attempt %d: got %v, want %v", attempt+1, err, ErrMaxDepthExceeded)
+		if !errors.Is(err, errMaxDepthExceeded) {
+			t.Fatalf("attempt %d: got %v, want %v", attempt+1, err, errMaxDepthExceeded)
 		}
 	}
 	gen := family.FullBelowCache().Generation()
@@ -758,7 +758,7 @@ func TestBackedWalkDoesNotPublishDurableRootAbovePendingDescendant(t *testing.T)
 		current := source.tree.root
 		var candidate [32]byte
 		candidateDepth := 0
-		for depth := 1; depth <= MaxDepth; depth++ {
+		for depth := 1; depth <= maxDepth; depth++ {
 			child, hash, set := current.LoadChild(selectBranchForPath(key, depth-1))
 			if !set {
 				break

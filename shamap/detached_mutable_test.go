@@ -193,7 +193,8 @@ func assertLoadedNodesDetached(t *testing.T, source, detached mapNode) {
 		if sourceNode.item == detachedNode.item {
 			t.Fatal("leaf item is shared")
 		}
-		if !sourceNode.item.Equal(detachedNode.item) {
+		if sourceNode.item.key != detachedNode.item.key ||
+			!bytes.Equal(sourceNode.item.data, detachedNode.item.data) {
 			t.Fatal("detached leaf item differs from source")
 		}
 	default:

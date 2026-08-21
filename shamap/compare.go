@@ -27,7 +27,7 @@ func (sm *SHAMap) CompareContext(ctx context.Context, other *SHAMap, maxCount in
 	defer other.tree.mu.RUnlock()
 
 	if sm.tree.state == stateInvalid || other.tree.state == stateInvalid {
-		return nil, fmt.Errorf("%w: cannot compare invalid SHAMaps", ErrInvalidState)
+		return nil, fmt.Errorf("%w: cannot compare invalid SHAMaps", errInvalidState)
 	}
 
 	result := &DifferenceSet{

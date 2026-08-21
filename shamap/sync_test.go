@@ -15,7 +15,7 @@ func (sm *SHAMap) addKnownNodeFromPrefixForTest(nodeID NodeID, data []byte) (Add
 func TestSyncFilter(t *testing.T) {
 	// Test DefaultSyncFilter
 	t.Run("DefaultSyncFilter", func(t *testing.T) {
-		filter := &DefaultSyncFilter{}
+		filter := &defaultSyncFilter{}
 		var hash [32]byte
 		hash[0] = 1
 
@@ -375,7 +375,7 @@ func TestGetMissingNodes_PathNodeIDs(t *testing.T) {
 			t.Errorf("duplicate NodeID for missing node at depth %d", m.Depth)
 		}
 		seen[k] = struct{}{}
-		if err := m.NodeID.Validate(); err != nil {
+		if _, err := ParseNodeID(m.NodeID.Bytes()); err != nil {
 			t.Errorf("missing NodeID is malformed: %v", err)
 		}
 	}
@@ -614,7 +614,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 		}
 		nid, _ := ParseNodeID(d1a.NodeID)
 		_, err = dest.AddKnownNodeByID(nid, d1b.Data)
-		if !errors.Is(err, ErrNodeHashMismatch) {
+		if !errors.Is(err, errNodeHashMismatch) {
 			t.Fatalf("want ErrNodeHashMismatch, got %v", err)
 		}
 	})
@@ -644,7 +644,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 			}
 		}
 		_, err = dest.AddKnownNodeByID(nid, anyData)
-		if !errors.Is(err, ErrEmptyBranchOnPath) {
+		if !errors.Is(err, errEmptyBranchOnPath) {
 			t.Fatalf("want ErrEmptyBranchOnPath, got %v", err)
 		}
 	})
@@ -781,11 +781,11 @@ func TestPrefixAcquisitionDirect(t *testing.T) {
 
 	dest := New(TypeTransaction)
 
-	someID, err := NewRootNodeID().ChildNodeID(0)
+	someID, err := newRootNodeID().childNodeID(0)
 	if err != nil {
 		t.Fatalf("ChildNodeID: %v", err)
 	}
-	if _, err := dest.addKnownNodeFromPrefixForTest(someID, []byte{1}); !errors.Is(err, ErrSyncNotInProgress) {
+	if _, err := dest.addKnownNodeFromPrefixForTest(someID, []byte{1}); !errors.Is(err, errSyncNotInProgress) {
 		t.Errorf("not-syncing: want ErrSyncNotInProgress, got %v", err)
 	}
 
@@ -796,7 +796,7 @@ func TestPrefixAcquisitionDirect(t *testing.T) {
 		t.Fatalf("AddRootNode: %v", err)
 	}
 
-	if _, err := dest.addKnownNodeFromPrefixForTest(NewRootNodeID(), rootData); !errors.Is(err, ErrUnexpectedNode) {
+	if _, err := dest.addKnownNodeFromPrefixForTest(newRootNodeID(), rootData); !errors.Is(err, errUnexpectedNode) {
 		t.Errorf("root nodeID: want ErrUnexpectedNode, got %v", err)
 	}
 	if _, err := dest.addKnownNodeFromPrefixForTest(someID, nil); !errors.Is(err, ErrInvalidNodeData) {
@@ -813,7 +813,7 @@ func TestPrefixAcquisitionDirect(t *testing.T) {
 		// rejected by the parent-hash check before it can attach.
 		if !poisonTested && len(missing) >= 2 && missing[0].Hash != missing[1].Hash {
 			poisonTested = true
-			if _, err := dest.addKnownNodeFromPrefixForTest(missing[0].NodeID, byHash[missing[1].Hash]); !errors.Is(err, ErrNodeHashMismatch) {
+			if _, err := dest.addKnownNodeFromPrefixForTest(missing[0].NodeID, byHash[missing[1].Hash]); !errors.Is(err, errNodeHashMismatch) {
 				t.Fatalf("poison: want ErrNodeHashMismatch, got %v", err)
 			}
 		}

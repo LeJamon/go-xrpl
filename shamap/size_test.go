@@ -28,7 +28,7 @@ func TestSize_AfterPutAndDelete(t *testing.T) {
 	hashes := make([][32]byte, len(keys))
 	for i, k := range keys {
 		hashes[i] = hexToHash(k)
-		if err := sm.PutItem(makeItem(hashes[i], intToBytes(i+1))); err != nil {
+		if err := sm.putItem(makeItem(hashes[i], intToBytes(i+1))); err != nil {
 			t.Fatalf("put %d: %v", i, err)
 		}
 	}
@@ -50,7 +50,7 @@ func TestSize_CachedWhenImmutable(t *testing.T) {
 	sm := New(TypeState)
 	for i := range 5 {
 		k := [32]byte{byte(i)}
-		if err := sm.PutItem(makeItem(k, intToBytes(i))); err != nil {
+		if err := sm.putItem(makeItem(k, intToBytes(i))); err != nil {
 			t.Fatalf("put: %v", err)
 		}
 	}
@@ -89,7 +89,7 @@ func TestSize_SnapshotInheritsImmutableCache(t *testing.T) {
 	sm := New(TypeState)
 	for i := range 3 {
 		k := [32]byte{byte(i)}
-		if err := sm.PutItem(makeItem(k, intToBytes(i))); err != nil {
+		if err := sm.putItem(makeItem(k, intToBytes(i))); err != nil {
 			t.Fatalf("put: %v", err)
 		}
 	}
@@ -152,7 +152,7 @@ func TestSize_DoesNotCacheOnWalkError(t *testing.T) {
 		{0x40, 0x55}, {0x50, 0x66}, {0x60, 0x77}, {0x70, 0x88},
 	}
 	for i, k := range keys {
-		if err := sm.PutItem(makeItem(k, intToBytes(i+1))); err != nil {
+		if err := sm.putItem(makeItem(k, intToBytes(i+1))); err != nil {
 			t.Fatalf("put %d: %v", i, err)
 		}
 	}
@@ -198,7 +198,7 @@ func TestSize_BackedSnapshotInheritsImmutableCache(t *testing.T) {
 	}
 	for i := range 4 {
 		k := [32]byte{byte(i * 0x11)}
-		if err := sm.PutItem(makeItem(k, intToBytes(i+1))); err != nil {
+		if err := sm.putItem(makeItem(k, intToBytes(i+1))); err != nil {
 			t.Fatalf("put: %v", err)
 		}
 	}

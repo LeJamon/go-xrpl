@@ -22,7 +22,7 @@ func (sm *SHAMap) AddKnownNode(nodeHash [32]byte, data []byte) error {
 	defer sm.acquisition.attachmentMu.Unlock()
 
 	if sm.tree.state != stateSyncing {
-		return ErrSyncNotInProgress
+		return errSyncNotInProgress
 	}
 
 	if len(data) == 0 {
@@ -42,7 +42,7 @@ func (sm *SHAMap) AddKnownNode(nodeHash [32]byte, data []byte) error {
 
 	computedHash := node.Hash()
 	if !bytes.Equal(computedHash[:], nodeHash[:]) {
-		return ErrNodeHashMismatch
+		return errNodeHashMismatch
 	}
 
 	// Find the location in the tree where this node belongs
@@ -65,10 +65,10 @@ func (sm *SHAMap) addKnownNodeFromPrefix(ctx context.Context, nodeID NodeID, dat
 	defer sm.acquisition.attachmentMu.Unlock()
 
 	if sm.tree.state != stateSyncing {
-		return NodeInvalid, FlushEntry{}, ErrSyncNotInProgress
+		return NodeInvalid, FlushEntry{}, errSyncNotInProgress
 	}
 	if nodeID.IsRoot() {
-		return NodeInvalid, FlushEntry{}, ErrUnexpectedNode
+		return NodeInvalid, FlushEntry{}, errUnexpectedNode
 	}
 	if len(data) == 0 {
 		return NodeInvalid, FlushEntry{}, ErrInvalidNodeData
@@ -127,10 +127,10 @@ func (sm *SHAMap) addKnownNodeByID(ctx context.Context, nodeID NodeID, data []by
 	defer sm.acquisition.attachmentMu.Unlock()
 
 	if sm.tree.state != stateSyncing {
-		return NodeInvalid, FlushEntry{}, ErrSyncNotInProgress
+		return NodeInvalid, FlushEntry{}, errSyncNotInProgress
 	}
 	if nodeID.IsRoot() {
-		return NodeInvalid, FlushEntry{}, ErrUnexpectedNode
+		return NodeInvalid, FlushEntry{}, errUnexpectedNode
 	}
 	if len(data) == 0 {
 		return NodeInvalid, FlushEntry{}, ErrInvalidNodeData
@@ -165,7 +165,7 @@ func (sm *SHAMap) addKnownNodeByID(ctx context.Context, nodeID NodeID, data []by
 // FlushEntry; attaching verified immutable data does not modify the tree hash.
 func (sm *SHAMap) attachKnownNodeAt(ctx context.Context, access *familyAccess, nodeID NodeID, markDirty bool, deserialize func() (mapNode, error)) (AddNodeResult, error) {
 	if sm.tree.root == nil {
-		return NodeInvalid, ErrParentNotInTree
+		return NodeInvalid, errParentNotInTree
 	}
 
 	targetDepth := int(nodeID.Depth())
@@ -182,7 +182,7 @@ func (sm *SHAMap) attachKnownNodeAt(ctx context.Context, access *familyAccess, n
 		if !isSet {
 			// A materialized ancestor has no child here: the offered node is
 			// not part of this map (a node from another tree).
-			return NodeInvalid, ErrEmptyBranchOnPath
+			return NodeInvalid, errEmptyBranchOnPath
 		}
 
 		if curDepth+1 == targetDepth {
@@ -195,15 +195,15 @@ func (sm *SHAMap) attachKnownNodeAt(ctx context.Context, access *familyAccess, n
 			}
 			// At leaf depth, an inner node is provably invalid — mark the
 			// map and bail.
-			if _, isInner := newNode.(*innerNode); isInner && targetDepth == MaxDepth {
+			if _, isInner := newNode.(*innerNode); isInner && targetDepth == maxDepth {
 				sm.tree.state = stateInvalid
-				return NodeInvalid, ErrUnexpectedNode
+				return NodeInvalid, errUnexpectedNode
 			}
 			if err := newNode.UpdateHash(); err != nil {
 				return NodeInvalid, fmt.Errorf("failed to compute node hash: %w", err)
 			}
 			if newNode.Hash() != childHash {
-				return NodeInvalid, ErrNodeHashMismatch
+				return NodeInvalid, errNodeHashMismatch
 			}
 			if parent.SetChildIfNil(branch, newNode) != newNode {
 				return NodeDuplicate, nil
@@ -239,14 +239,14 @@ func (sm *SHAMap) attachKnownNodeAt(ctx context.Context, access *familyAccess, n
 		parent = nextInner
 	}
 
-	return NodeInvalid, ErrUnexpectedNode
+	return NodeInvalid, errUnexpectedNode
 }
 
 // insertKnownNode inserts a node at the correct location in the tree.
 // The caller must hold the write lock.
 func (sm *SHAMap) insertKnownNode(nodeHash [32]byte, node mapNode) error {
 	if sm.tree.root == nil {
-		return ErrUnexpectedNode
+		return errUnexpectedNode
 	}
 
 	// Find the parent that references this hash
@@ -256,16 +256,16 @@ func (sm *SHAMap) insertKnownNode(nodeHash [32]byte, node mapNode) error {
 // insertNodeRecursive recursively finds and inserts a node at the correct location.
 func (sm *SHAMap) insertNodeRecursive(current mapNode, targetHash [32]byte, newNode mapNode, depth int) error {
 	if current == nil {
-		return ErrUnexpectedNode
+		return errUnexpectedNode
 	}
 
-	if depth > MaxDepth {
-		return ErrMaxDepthExceeded
+	if depth > maxDepth {
+		return errMaxDepthExceeded
 	}
 
 	inner, ok := current.(*innerNode)
 	if !ok {
-		return ErrUnexpectedNode
+		return errUnexpectedNode
 	}
 
 	for branch := range BranchFactor {
@@ -291,7 +291,7 @@ func (sm *SHAMap) insertNodeRecursive(current mapNode, targetHash [32]byte, newN
 		}
 	}
 
-	return ErrUnexpectedNode
+	return errUnexpectedNode
 }
 
 // AddRootNode sets the root from external data.
@@ -347,7 +347,7 @@ func (sm *SHAMap) addRootNode(hash [32]byte, data []byte, withEntry bool) (Flush
 
 	computedHash := root.Hash()
 	if !bytes.Equal(computedHash[:], hash[:]) {
-		return FlushEntry{}, ErrNodeHashMismatch
+		return FlushEntry{}, errNodeHashMismatch
 	}
 
 	sm.tree.root = root
