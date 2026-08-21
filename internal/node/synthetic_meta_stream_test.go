@@ -87,7 +87,6 @@ func TestBuildValidatedTransactionEventProjection(t *testing.T) {
 		Hash:      ledgerHash,
 		CloseTime: ledgerCloseTime,
 		Validated: true,
-		Closed:    true,
 	}}
 
 	t.Run("validated failure projects result time and checked CTID", func(t *testing.T) {
@@ -133,7 +132,6 @@ func TestBuildValidatedTransactionEventRejectsCorruptLeaf(t *testing.T) {
 	ledgerEvent := &service.LedgerAcceptedEvent{LedgerInfo: &service.LedgerInfo{
 		Sequence:  1,
 		Validated: true,
-		Closed:    true,
 	}}
 	valid := validatedPaymentData(t, 0, 0)
 	tests := [][]byte{
@@ -165,7 +163,6 @@ func TestPrepareAcceptedPublicationsRejectsWholeLedger(t *testing.T) {
 			Sequence:  9,
 			Hash:      ledgerHash,
 			Validated: true,
-			Closed:    true,
 		},
 		TransactionResults: []service.TransactionResultEvent{
 			{
@@ -215,7 +212,6 @@ func TestPrepareAcceptedPublicationsRejectsCorruptOwnerFundsState(t *testing.T) 
 		LedgerInfo: &service.LedgerInfo{
 			Sequence:  view.Sequence(),
 			Validated: true,
-			Closed:    true,
 		},
 		TransactionResults: []service.TransactionResultEvent{{
 			TxHash:      [32]byte{1},
@@ -262,7 +258,6 @@ func TestPrepareAcceptedPublicationsReadsFeesOnlyForXRPOffers(t *testing.T) {
 				LedgerInfo: &service.LedgerInfo{
 					Sequence:  view.Sequence(),
 					Validated: true,
-					Closed:    true,
 				},
 				TransactionResults: []service.TransactionResultEvent{{
 					TxHash:      [32]byte{1},

@@ -602,11 +602,6 @@ type TransactionResult struct {
 	CloseTime   int64
 }
 
-type TransactionSearchResult struct {
-	Transaction *TransactionResult
-	Searched    relationaldb.TxSearchResult
-}
-
 type LedgerContext struct {
 	Hash      [32]byte
 	CloseTime int64
@@ -758,67 +753,6 @@ func (s *Service) getHistoricalTransaction(txHash [32]byte) (*TransactionResult,
 		Validated:   l.IsValidated(),
 		TxIndex:     txIndex,
 		CloseTime:   protocol.RippleSeconds(l.CloseTime()),
-	}, nil
-}
-
-func (s *Service) SearchTransaction(ctx context.Context, txHash [32]byte, ledgerRange *relationaldb.LedgerRange) (*TransactionSearchResult, error) {
-	cached, cacheErr := s.GetTransaction(txHash)
-	if cacheErr != nil && !errors.Is(cacheErr, svcerr.ErrTxnNotFound) {
-		return nil, cacheErr
-	}
-
-	s.mu.RLock()
-	db := s.relationalDB
-	s.mu.RUnlock()
-	if cacheErr == nil && !cached.Validated {
-		return &TransactionSearchResult{Transaction: cached, Searched: relationaldb.TxSearchAll}, nil
-	}
-
-	if db == nil || db.Transaction() == nil {
-		if cacheErr != nil {
-			return nil, cacheErr
-		}
-		return &TransactionSearchResult{Transaction: cached, Searched: relationaldb.TxSearchUnknown}, nil
-	}
-
-	info, searched, err := db.Transaction().GetTransaction(ctx, relationaldb.Hash(txHash), ledgerRange)
-	if err != nil {
-		return nil, err
-	}
-	if info == nil {
-		return &TransactionSearchResult{Searched: searched}, nil
-	}
-
-	vlTx, err := tx.EncodeWithVL(info.RawTxn)
-	if err != nil {
-		return nil, err
-	}
-	vlMeta, err := tx.EncodeWithVL(info.TxnMeta)
-	if err != nil {
-		return nil, err
-	}
-	txData := make([]byte, 0, len(vlTx)+len(vlMeta))
-	txData = append(txData, vlTx...)
-	txData = append(txData, vlMeta...)
-
-	contextInfo, err := s.GetLedgerContext(ctx, uint32(info.LedgerSeq))
-	if err != nil {
-		return nil, err
-	}
-	txIndex, ok := tx.TransactionIndexFromMetadata(info.TxnMeta)
-	if !ok {
-		txIndex = invalidTransactionIndex
-	}
-	return &TransactionSearchResult{
-		Transaction: &TransactionResult{
-			TxData:      txData,
-			LedgerIndex: uint32(info.LedgerSeq),
-			LedgerHash:  contextInfo.Hash,
-			Validated:   true,
-			TxIndex:     txIndex,
-			CloseTime:   contextInfo.CloseTime,
-		},
-		Searched: searched,
 	}, nil
 }
 
@@ -1003,12 +937,6 @@ type AccountTransaction struct {
 // configured. Mirrors rippled config().useTxTables().
 func (s *Service) UseTxTables() bool {
 	return s.relationalDB != nil
-}
-
-// GetAccountTransactions retrieves transaction history for an account.
-// The supplied ctx is forwarded to the relational DB query.
-func (s *Service) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *relationaldb.AccountTxMarker, forward bool) (*AccountTxResult, error) {
-	return s.getAccountTransactions(ctx, account, ledgerMin, ledgerMax, limit, marker, forward, nil)
 }
 
 // GetAccountTransactionsWithDelegate retrieves delegated transaction history

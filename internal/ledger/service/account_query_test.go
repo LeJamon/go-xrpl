@@ -857,53 +857,6 @@ func TestGetNoRippleCheck_RolesAndProblems(t *testing.T) {
 	})
 }
 
-func TestGetLedgerForQuery_Branches(t *testing.T) {
-	svc := newOfferTestService(t)
-
-	t.Run("current resolves open ledger", func(t *testing.T) {
-		l, validated, err := svc.getLedgerForQuery("current")
-		if err != nil || l == nil {
-			t.Fatalf("current: l=%v err=%v", l, err)
-		}
-		if validated {
-			t.Errorf("current must not be validated")
-		}
-	})
-	t.Run("empty string resolves open ledger", func(t *testing.T) {
-		l, _, err := svc.getLedgerForQuery("")
-		if err != nil || l == nil {
-			t.Fatalf("empty: l=%v err=%v", l, err)
-		}
-	})
-	t.Run("validated", func(t *testing.T) {
-		l, validated, err := svc.getLedgerForQuery("validated")
-		if err != nil || l == nil {
-			t.Fatalf("validated: l=%v err=%v", l, err)
-		}
-		if !validated {
-			t.Errorf("validated branch must report validated=true")
-		}
-	})
-	t.Run("closed", func(t *testing.T) {
-		l, _, err := svc.getLedgerForQuery("closed")
-		if err != nil || l == nil {
-			t.Fatalf("closed: l=%v err=%v", l, err)
-		}
-	})
-	t.Run("invalid", func(t *testing.T) {
-		_, _, err := svc.getLedgerForQuery("xyz")
-		if !errors.Is(err, svcerr.ErrInvalidLedgerIndex) {
-			t.Fatalf("want ErrInvalidLedgerIndex, got %v", err)
-		}
-	})
-	t.Run("numeric not found", func(t *testing.T) {
-		_, _, err := svc.getLedgerForQuery("123456789")
-		if !errors.Is(err, ErrLedgerNotFound) {
-			t.Fatalf("want ErrLedgerNotFound, got %v", err)
-		}
-	})
-}
-
 func TestGetAccountOffers_FormatsAmounts(t *testing.T) {
 	svc := newOfferTestService(t)
 	issuerAddr, _ := addressFromBytes(t, 0x10)

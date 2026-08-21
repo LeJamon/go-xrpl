@@ -212,13 +212,10 @@ func (s *Service) prepareNewOpenLedgerLocked(closed *ledger.Ledger, retriableTxs
 
 func ledgerInfo(closed *ledger.Ledger) *LedgerInfo {
 	return &LedgerInfo{
-		Sequence:   closed.Sequence(),
-		Hash:       closed.Hash(),
-		ParentHash: closed.ParentHash(),
-		CloseTime:  closed.CloseTime(),
-		TotalDrops: closed.TotalDrops(),
-		Validated:  closed.IsValidated(),
-		Closed:     closed.IsClosed(),
+		Sequence:  closed.Sequence(),
+		Hash:      closed.Hash(),
+		CloseTime: closed.CloseTime(),
+		Validated: closed.IsValidated(),
 	}
 }
 
@@ -748,13 +745,10 @@ func (s *Service) validatedLedgerEventLocked(l *ledger.Ledger) *LedgerAcceptedEv
 	if event == nil {
 		return &LedgerAcceptedEvent{
 			LedgerInfo: &LedgerInfo{
-				Sequence:   l.Sequence(),
-				Hash:       l.Hash(),
-				ParentHash: l.ParentHash(),
-				CloseTime:  l.CloseTime(),
-				TotalDrops: l.TotalDrops(),
-				Validated:  true,
-				Closed:     l.IsClosed(),
+				Sequence:  l.Sequence(),
+				Hash:      l.Hash(),
+				CloseTime: l.CloseTime(),
+				Validated: true,
 			},
 			Ledger: l,
 		}
@@ -1387,13 +1381,10 @@ func (s *Service) adoptLedgerWithStateLocked(
 	// remain silent so streams never run backward.
 	if advanced {
 		ledgerInfo := &LedgerInfo{
-			Sequence:   h.LedgerIndex,
-			Hash:       h.Hash,
-			ParentHash: adopted.ParentHash(),
-			CloseTime:  adopted.CloseTime(),
-			TotalDrops: adopted.TotalDrops(),
-			Validated:  adopted.IsValidated(),
-			Closed:     adopted.IsClosed(),
+			Sequence:  h.LedgerIndex,
+			Hash:      h.Hash,
+			CloseTime: adopted.CloseTime(),
+			Validated: adopted.IsValidated(),
 		}
 		// The event sink fires on *validated*, not *closed*; peer-adopt advances
 		// closedLedger only. Stash by hash for the next SetValidatedLedger to

@@ -16,7 +16,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
-	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/ledger/localtxs"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
@@ -465,16 +464,6 @@ func (s *Service) IsAmendmentBlocked() bool {
 		return false
 	}
 	return s.amendmentTable.IsBlocked()
-}
-
-// AmendmentFirstUnsupportedExpected returns the projected activation time (XRPL
-// epoch seconds) of the earliest unsupported amendment currently holding
-// majority, or (0, false) when none or no table is configured.
-func (s *Service) AmendmentFirstUnsupportedExpected() (uint32, bool) {
-	if s.amendmentTable == nil {
-		return 0, false
-	}
-	return s.amendmentTable.FirstUnsupportedExpected()
 }
 
 // Start initializes the service with a genesis ledger.
@@ -966,17 +955,6 @@ func (s *Service) SubmitOpenLedgerTxDetailed(blob []byte, local bool) (openledge
 	return outcome, nil
 }
 
-// PrewarmSignatures verifies all signatures on raw tx blobs in parallel
-// and caches the verdicts, so a consensus build over an acquired tx set hits the
-// sig-cache instead of paying cold checks in-strand under the apply mutex. The
-// per-relayed-tx prewarm in SubmitOpenLedgerTx (#1105) covers only individually-
-// arrived txs; wholesale-acquired consensus sets go through here. Safe to call
-// concurrently; unparseable blobs are skipped (the in-strand preflight rejects
-// them authoritatively).
-func (s *Service) PrewarmSignatures(blobs [][]byte) {
-	s.PrewarmSignaturesContext(context.Background(), blobs)
-}
-
 // PrewarmSignaturesContext verifies transaction signatures until ctx is
 // canceled.
 func (s *Service) PrewarmSignaturesContext(ctx context.Context, blobs [][]byte) {
@@ -1269,23 +1247,6 @@ func (s *Service) SetValidatedLedgerAgeClock(now func() time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.validatedAgeNow = now
-}
-
-// XRPFeesEnabled reports whether the XRPFees amendment is active on the
-// validated ledger. The subscribe ack uses it to gate the deprecated
-// fee_ref field, mirroring rippled's subLedger.
-func (s *Service) XRPFeesEnabled() bool {
-	s.mu.RLock()
-	validated := s.validatedLedger
-	s.mu.RUnlock()
-	if validated == nil {
-		return false
-	}
-	rules, err := ledger.LoadAmendmentsFromLedger(validated)
-	if err != nil || rules == nil {
-		return false
-	}
-	return rules.XRPFeesEnabled()
 }
 
 // GetLedgerBySequence returns a ledger by sequence, falling back to the open
@@ -1788,44 +1749,10 @@ type ServerInfo struct {
 	NetworkID                uint32
 }
 
-// LedgerInfo returns information about a specific ledger
-func (s *Service) LedgerInfo(seq uint32) (*LedgerInfo, error) {
-	l, err := s.GetLedgerBySequence(seq)
-	if err != nil {
-		return nil, err
-	}
-
-	return &LedgerInfo{
-		Sequence:   l.Sequence(),
-		Hash:       l.Hash(),
-		ParentHash: l.ParentHash(),
-		CloseTime:  l.CloseTime(),
-		TotalDrops: l.TotalDrops(),
-		Validated:  l.IsValidated(),
-		Closed:     l.IsClosed(),
-	}, nil
-}
-
 // LedgerInfo contains information about a ledger
 type LedgerInfo struct {
-	Sequence   uint32
-	Hash       [32]byte
-	ParentHash [32]byte
-	CloseTime  time.Time
-	TotalDrops uint64
-	Validated  bool
-	Closed     bool
-	Header     header.LedgerHeader
-}
-
-// PendingTxBlobs returns the raw transaction blobs for all pending transactions.
-func (s *Service) PendingTxBlobs() [][]byte {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	blobs := make([][]byte, len(s.pendingTxs))
-	for i, ptx := range s.pendingTxs {
-		blobs[i] = ptx.Blob
-	}
-	return blobs
+	Sequence  uint32
+	Hash      [32]byte
+	CloseTime time.Time
+	Validated bool
 }
