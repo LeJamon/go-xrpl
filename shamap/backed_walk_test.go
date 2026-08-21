@@ -82,7 +82,7 @@ func newInterruptedBackedWalk(t *testing.T, cancelFirst bool) (*SHAMap, *oneShot
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := source.FlushDirty()
+	batch, err := collectDirtyForTest(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestBackedWalkResumesWithoutRereadingCompletedNodes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := source.FlushDirty()
+	batch, err := collectDirtyForTest(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +327,7 @@ func TestBackedWalkResumesAfterTraversalBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := source.FlushDirty()
+	batch, err := collectDirtyForTest(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +392,7 @@ func TestBackedWalkBudgetsFinalRootProof(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := source.FlushDirty()
+	batch, err := collectDirtyForTest(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +440,7 @@ func TestBackedWalkRetainsExactPositionAcrossCappedPasses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := source.FlushDirty()
+	batch, err := collectDirtyForTest(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -496,7 +496,7 @@ func TestBackedWalkRetainsExactPositionAcrossCappedPasses(t *testing.T) {
 }
 
 func TestBackedWalkCachesShallowProofsAcrossLedgerRoots(t *testing.T) {
-	build := func(changed bool) (*SHAMap, [32]byte, []byte, *NodeBatch) {
+	build := func(changed bool) (*SHAMap, [32]byte, []byte, *testNodeBatch) {
 		sm := New(TypeState)
 		for i := range 4096 {
 			var key [32]byte
@@ -520,7 +520,7 @@ func TestBackedWalkCachesShallowProofsAcrossLedgerRoots(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		batch, err := sm.FlushDirty()
+		batch, err := collectDirtyForTest(sm)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -610,7 +610,7 @@ func TestBackedWalkCachesShallowProofsAcrossLedgerRoots(t *testing.T) {
 }
 
 func TestBackedWalkProofCacheSurvivesSweeps(t *testing.T) {
-	build := func(changed bool) (*SHAMap, [32]byte, []byte, *NodeBatch) {
+	build := func(changed bool) (*SHAMap, [32]byte, []byte, *testNodeBatch) {
 		sm := New(TypeState)
 		for i := range 4096 {
 			var key [32]byte
@@ -634,7 +634,7 @@ func TestBackedWalkProofCacheSurvivesSweeps(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		batch, err := sm.FlushDirty()
+		batch, err := collectDirtyForTest(sm)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -740,7 +740,7 @@ func TestBackedWalkDoesNotPublishDurableRootAbovePendingDescendant(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := source.FlushDirty()
+	batch, err := collectDirtyForTest(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -882,7 +882,7 @@ func TestBackedWalkAcknowledgementIgnoresStaleGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := source.FlushDirty()
+	batch, err := collectDirtyForTest(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -954,7 +954,7 @@ func TestBackedWalkDefersPendingProofUntilAcknowledged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := source.FlushDirty()
+	batch, err := collectDirtyForTest(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1176,7 +1176,7 @@ func TestAcknowledgePersistedReleasesProofsEvictedDuringPublication(t *testing.T
 
 func TestDecodeTraversalNodeValidatesCanonicalPrefixData(t *testing.T) {
 	source := buildRandomState(t, 32)
-	batch, err := source.FlushDirty()
+	batch, err := collectDirtyForTest(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1213,7 +1213,7 @@ var (
 
 func BenchmarkTraversalDecode(b *testing.B) {
 	source := buildRandomState(b, 128)
-	batch, err := source.FlushDirty()
+	batch, err := collectDirtyForTest(source)
 	if err != nil {
 		b.Fatal(err)
 	}

@@ -141,7 +141,7 @@ func TestWalkMapParallel_BoundsFanoutAtRootBranches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SerializeRoot: %v", err)
 	}
-	batch, err := source.FlushDirty()
+	batch, err := collectDirtyForTest(source)
 	if err != nil {
 		t.Fatalf("FlushDirty: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestWalkMapParallel_ReleasesCompleteStoredSubtrees(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SerializeRoot: %v", err)
 	}
-	batch, err := source.FlushDirty()
+	batch, err := collectDirtyForTest(source)
 	if err != nil {
 		t.Fatalf("FlushDirty: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestFinishSync_ReleasesColdDurableTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SerializeRoot: %v", err)
 	}
-	batch, err := source.FlushDirty()
+	batch, err := collectDirtyForTest(source)
 	if err != nil {
 		t.Fatalf("FlushDirty: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestWalkMapParallel_RetainsIncompleteFrontier(t *testing.T) {
 	}
 	withheldHash := withheldNode.Hash()
 
-	batch, err := source.FlushDirty()
+	batch, err := collectDirtyForTest(source)
 	if err != nil {
 		t.Fatalf("FlushDirty: %v", err)
 	}
@@ -764,7 +764,7 @@ func TestWalkMapParallel_DoesNotReleasePendingNodesBeforeDurability(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := source.FlushDirty()
+	batch, err := collectDirtyForTest(source)
 	if err != nil {
 		t.Fatal(err)
 	}

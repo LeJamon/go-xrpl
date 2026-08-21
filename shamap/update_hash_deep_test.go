@@ -92,7 +92,7 @@ func TestFlushNode_GuardsStalePreimage(t *testing.T) {
 	root.hashes[branch] = staleHash
 	root.SetDirty(true)
 
-	batch, err := sm.FlushDirty()
+	batch, err := collectDirtyForTest(sm)
 	if err != nil {
 		t.Fatalf("FlushDirty: %v", err)
 	}

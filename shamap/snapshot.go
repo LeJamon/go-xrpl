@@ -63,7 +63,7 @@ func (sm *SHAMap) snapshot(ctx context.Context, mutable bool, ledgerSeq *uint32)
 	if sm.backing.access.available() {
 		if err := sm.storeDirtyLocked(func(entries []FlushEntry) error {
 			return sm.backing.access.storeBatch(ctx, entries)
-		}); err != nil {
+		}, false); err != nil {
 			return nil, fmt.Errorf("failed to store dirty nodes: %w", err)
 		}
 	}

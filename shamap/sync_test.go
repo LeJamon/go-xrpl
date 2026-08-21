@@ -292,7 +292,7 @@ func TestWalkMap_BackedLazyLoadAfterRelease(t *testing.T) {
 
 	// FlushDirtyAndRelease writes every dirty node to family, then releases
 	// each inner node's children while retaining their hashes.
-	batch, err := src.FlushDirtyAndRelease()
+	batch, err := collectDirtyAndReleaseForTest(src)
 	if err != nil {
 		t.Fatalf("FlushDirty: %v", err)
 	}

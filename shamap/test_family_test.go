@@ -3,7 +3,6 @@ package shamap
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"sync"
 )
 
@@ -63,13 +62,29 @@ func (f *memoryFamily) Len() int {
 	return len(f.store)
 }
 
+type testNodeBatch struct {
+	Entries []FlushEntry
+}
+
+func collectDirtyForTest(sm *SHAMap) (*testNodeBatch, error) {
+	return collectDirtyWith(sm.StoreDirty)
+}
+
+func collectDirtyAndReleaseForTest(sm *SHAMap) (*testNodeBatch, error) {
+	return collectDirtyWith(sm.StoreDirtyAndRelease)
+}
+
+func collectDirtyWith(store func(func([]FlushEntry) error) error) (*testNodeBatch, error) {
+	batch := &testNodeBatch{}
+	err := store(func(entries []FlushEntry) error {
+		batch.Entries = entries
+		return nil
+	})
+	return batch, err
+}
+
 func flushToFamily(sm *SHAMap, family *memoryFamily) error {
-	batch, err := sm.FlushDirty()
-	if err != nil {
-		return fmt.Errorf("FlushDirty: %w", err)
-	}
-	if len(batch.Entries) > 0 {
-		return family.StoreBatch(context.Background(), batch.Entries)
-	}
-	return nil
+	return sm.StoreDirty(func(entries []FlushEntry) error {
+		return family.StoreBatch(context.Background(), entries)
+	})
 }

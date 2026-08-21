@@ -159,7 +159,7 @@ func TestSize_DoesNotCacheOnWalkError(t *testing.T) {
 
 	// FlushDirtyAndRelease drops in-memory children, so any subsequent
 	// descend() goes through Family.Fetch.
-	batch, err := sm.FlushDirtyAndRelease()
+	batch, err := collectDirtyAndReleaseForTest(sm)
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}

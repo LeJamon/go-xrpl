@@ -118,7 +118,7 @@ func TestWalkMapParallelPruneAndFinishDoNotInvertLocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := source.FlushDirty()
+	batch, err := collectDirtyForTest(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestWalkMapParallelPinsFamilyUntilTraversalEnds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := source.FlushDirty()
+	batch, err := collectDirtyForTest(source)
 	if err != nil {
 		t.Fatal(err)
 	}

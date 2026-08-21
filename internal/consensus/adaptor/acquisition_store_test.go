@@ -1047,11 +1047,10 @@ func TestStandardReplayReloadsPromotedTransactionMap(t *testing.T) {
 	require.NoError(t, txMap.PutWithNodeType(txID, blob, shamap.NodeTypeTransactionWithMeta))
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
-	batch, err := txMap.FlushDirty()
-	require.NoError(t, err)
-
 	scope := router.acquisitionStore.scope().(*acquisitionStoreScope)
-	require.NoError(t, scope.StoreBatch(t.Context(), batch.Entries))
+	require.NoError(t, txMap.StoreDirty(func(entries []shamap.FlushEntry) error {
+		return scope.StoreBatch(t.Context(), entries)
+	}))
 	require.NoError(t, scope.Promote(t.Context()))
 	base.clearCached()
 

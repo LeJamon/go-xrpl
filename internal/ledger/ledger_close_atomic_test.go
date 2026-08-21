@@ -61,11 +61,9 @@ func lifecycleLazyMap(t *testing.T, source *shamap.SHAMap, family *lifecycleMemo
 	if err != nil {
 		t.Fatalf("hash source map: %v", err)
 	}
-	batch, err := source.FlushDirty()
-	if err != nil {
-		t.Fatalf("flush source map: %v", err)
-	}
-	if err := family.StoreBatch(t.Context(), batch.Entries); err != nil {
+	if err := source.StoreDirty(func(entries []shamap.FlushEntry) error {
+		return family.StoreBatch(t.Context(), entries)
+	}); err != nil {
 		t.Fatalf("store source map: %v", err)
 	}
 	lazy, err := shamap.NewFromRootHash(source.Type(), root, family)

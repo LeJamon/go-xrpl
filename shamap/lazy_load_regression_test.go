@@ -33,7 +33,7 @@ func llr_buildBacked(t *testing.T, family *memoryFamily, n byte) *SHAMap {
 			t.Fatalf("Put(%d): %v", i, err)
 		}
 	}
-	batch, err := sm.FlushDirtyAndRelease()
+	batch, err := collectDirtyAndReleaseForTest(sm)
 	if err != nil {
 		t.Fatalf("FlushDirty: %v", err)
 	}

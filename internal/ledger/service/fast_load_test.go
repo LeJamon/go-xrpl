@@ -444,10 +444,13 @@ func persistVerificationSHAMap(
 	sm *shamap.SHAMap,
 ) [32]byte {
 	t.Helper()
-	batch, err := sm.FlushDirty()
-	require.NoError(t, err)
-	nodes := make([]*nodestore.Node, 0, len(batch.Entries))
-	for _, entry := range batch.Entries {
+	var entries []shamap.FlushEntry
+	require.NoError(t, sm.StoreDirty(func(dirty []shamap.FlushEntry) error {
+		entries = dirty
+		return nil
+	}))
+	nodes := make([]*nodestore.Node, 0, len(entries))
+	for _, entry := range entries {
 		nodes = append(nodes, &nodestore.Node{
 			Type:      nodestore.NodeAccount,
 			Hash:      nodestore.Hash256(entry.Hash),

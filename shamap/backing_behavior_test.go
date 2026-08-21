@@ -7,7 +7,7 @@ func TestSme_FlushDirtyNilRoot(t *testing.T) {
 	sm.tree.mu.Lock()
 	sm.tree.root = nil
 	sm.tree.mu.Unlock()
-	batch, err := sm.FlushDirty()
+	batch, err := collectDirtyForTest(sm)
 	if err != nil {
 		t.Fatalf("FlushDirty with nil root: %v", err)
 	}

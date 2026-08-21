@@ -3,6 +3,7 @@ package shamap
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -134,7 +135,7 @@ func TestFlushDirty_BasicRoundTrip(t *testing.T) {
 	}
 
 	// Flush dirty nodes
-	batch, err := sMap.FlushDirty()
+	batch, err := collectDirtyForTest(sMap)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +190,7 @@ func TestFlushDirty_Idempotent(t *testing.T) {
 	}
 
 	// First flush
-	batch1, err := sMap.FlushDirty()
+	batch1, err := collectDirtyForTest(sMap)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +199,7 @@ func TestFlushDirty_Idempotent(t *testing.T) {
 	}
 
 	// Second flush — nothing dirty
-	batch2, err := sMap.FlushDirty()
+	batch2, err := collectDirtyForTest(sMap)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +357,7 @@ func TestFlushDirty_AfterModification(t *testing.T) {
 	}
 
 	// First flush — all nodes
-	batch1, err := sMap.FlushDirty()
+	batch1, err := collectDirtyForTest(sMap)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +370,7 @@ func TestFlushDirty_AfterModification(t *testing.T) {
 	}
 
 	// Second flush — only modified path
-	batch2, err := sMap.FlushDirty()
+	batch2, err := collectDirtyForTest(sMap)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,8 +385,7 @@ func TestFlushDirty_AfterModification(t *testing.T) {
 	}
 }
 
-// TestFlushDirty_ReleaseChildren verifies child pointers are released when requested.
-func TestFlushDirty_ReleaseChildren(t *testing.T) {
+func TestStoreDirtyAndRelease_RetriesBeforeRelease(t *testing.T) {
 	sMap := New(TypeState)
 
 	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
@@ -393,13 +393,25 @@ func TestFlushDirty_ReleaseChildren(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Flush with releaseChildren=true
-	_, err := sMap.FlushDirtyAndRelease()
-	if err != nil {
-		t.Fatal(err)
+	wantErr := errors.New("store failed")
+	if err := sMap.StoreDirtyAndRelease(func([]FlushEntry) error { return wantErr }); !errors.Is(err, wantErr) {
+		t.Fatalf("StoreDirtyAndRelease error = %v, want %v", err, wantErr)
 	}
+	if !sMap.tree.root.IsDirty() {
+		t.Fatal("failed store marked root clean")
+	}
+	for i := range BranchFactor {
+		child, _, _ := sMap.tree.root.LoadChild(i)
+		if child != nil {
+			goto retry
+		}
+	}
+	t.Fatal("failed store released every child")
 
-	// Verify root's children are nil (released)
+retry:
+	if err := sMap.StoreDirtyAndRelease(func([]FlushEntry) error { return nil }); err != nil {
+		t.Fatalf("StoreDirtyAndRelease retry: %v", err)
+	}
 	for i := range BranchFactor {
 		child, _, _ := sMap.tree.root.LoadChild(i)
 		if child != nil {
