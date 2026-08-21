@@ -32,13 +32,16 @@ func TestAmountMPTArithmeticPreservesIntegralValueAndIssue(t *testing.T) {
 func TestAmountMPTArithmeticRejectsMismatchedIssuesAndOverflow(t *testing.T) {
 	a := NewMPTAmountWithIssuanceID(math.MaxInt64, "rIssuer", arithmeticMPTID)
 	b := NewMPTAmountWithIssuanceID(1, "rIssuer", arithmeticMPTID)
+	ctx := NewNumberContext(MantissaScaleSmall, false)
 	_, err := a.Add(b)
 	require.ErrorContains(t, err, "MPT addition overflow")
 
 	other := NewMPTAmountWithIssuanceID(1, "rIssuer", "00000005AE123A8556F3CF91154711376AFB0F894F832B3D")
 	_, err = b.Add(other)
 	require.ErrorContains(t, err, "different MPT issuances")
-	require.PanicsWithValue(t, "MPT value overflow", func() { _ = a.Mul(NewMPTAmountWithIssuanceID(2, "rIssuer", arithmeticMPTID), false) })
+	require.PanicsWithValue(t, "MPT value overflow", func() {
+		_ = a.MulWithNumberContext(NewMPTAmountWithIssuanceID(2, "rIssuer", arithmeticMPTID), ctx, false, RoundToNearest)
+	})
 }
 
 func TestAmountMPTMulRatioUsesIntegralDirectionalRounding(t *testing.T) {
@@ -54,7 +57,8 @@ func TestAmountMPTMulRatioUsesIntegralDirectionalRounding(t *testing.T) {
 func TestAmountMPTMulPreservesIssue(t *testing.T) {
 	a := NewMPTAmountWithIssuanceID(7, "rIssuer", arithmeticMPTID)
 	b := NewMPTAmountWithIssuanceID(6, "rIssuer", arithmeticMPTID)
-	product := a.Mul(b, false)
+	ctx := NewNumberContext(MantissaScaleSmall, false)
+	product := a.MulWithNumberContext(b, ctx, false, RoundToNearest)
 	require.Equal(t, int64(42), mustMPTRaw(t, product))
 	require.Equal(t, arithmeticMPTID, product.MPTIssuanceID())
 
@@ -98,12 +102,13 @@ func TestMPTRoundHelpersUseIntegralRounding(t *testing.T) {
 	mpt := NewMPTAmountWithIssuanceID(5, "rIssuer", arithmeticMPTID)
 	half := NewIssuedAmountFromValue(5, -1, "", "")
 	two := NewIssuedAmountFromValue(2, 0, "", "")
+	ctx := NewNumberContext(MantissaScaleSmall, false)
 
-	require.Equal(t, int64(3), MulRoundMPT(mpt, half, true))
-	require.Equal(t, int64(3), MulRoundMPTStrict(mpt, half, true))
-	require.Equal(t, int64(2), MulRoundMPTStrict(mpt, half, false))
-	require.Equal(t, int64(3), DivRoundMPT(mpt, two, true))
-	require.Equal(t, int64(2), DivRoundMPTStrict(mpt, two, false))
+	require.Equal(t, int64(3), MulRoundMPTWithNumberContext(mpt, half, ctx, true))
+	require.Equal(t, int64(3), MulRoundMPTStrictWithNumberContext(mpt, half, ctx, true))
+	require.Equal(t, int64(2), MulRoundMPTStrictWithNumberContext(mpt, half, ctx, false))
+	require.Equal(t, int64(3), DivRoundMPTWithNumberContext(mpt, two, ctx, true))
+	require.Equal(t, int64(2), DivRoundMPTStrictWithNumberContext(mpt, two, ctx, false))
 }
 
 func mustMPTRaw(t *testing.T, amount Amount) int64 {

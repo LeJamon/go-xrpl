@@ -45,8 +45,9 @@ func TestAmountCompareCheckedRejectsDifferentAssets(t *testing.T) {
 }
 
 func TestAmountMulRoundedRejectsNativeOverflow(t *testing.T) {
+	ctx := NewNumberContext(MantissaScaleSmall, false)
 	assertPanicsWith(t, "Native value overflow", func() {
-		NewXRPAmountFromInt(math.MaxInt64).MulRounded(NewXRPAmountFromInt(2), false, RoundToNearest)
+		NewXRPAmountFromInt(math.MaxInt64).MulWithNumberContext(NewXRPAmountFromInt(2), ctx, false, RoundToNearest)
 	})
 }
 
@@ -54,32 +55,35 @@ func TestAmountMulRoundedNativeProtocolBounds(t *testing.T) {
 	maxNative := NewXRPAmountFromInt(int64(MaxNativeDrops))
 	oneNative := NewXRPAmountFromInt(1)
 	oneIOU := NewIssuedAmountFromValue(MinMantissa, -15, "USD", "rIssuer")
+	ctx := NewNumberContext(MantissaScaleSmall, false)
 
-	if got := maxNative.MulRounded(oneNative, false, RoundToNearest); got.Drops() != int64(MaxNativeDrops) {
+	if got := maxNative.MulWithNumberContext(oneNative, ctx, false, RoundToNearest); got.Drops() != int64(MaxNativeDrops) {
 		t.Fatalf("native max * 1 = %d, want %d", got.Drops(), MaxNativeDrops)
 	}
-	if got := maxNative.MulRounded(oneIOU, false, RoundToNearest); got.Drops() != int64(MaxNativeDrops) {
+	if got := maxNative.MulWithNumberContext(oneIOU, ctx, false, RoundToNearest); got.Drops() != int64(MaxNativeDrops) {
 		t.Fatalf("native max * IOU(1) = %d, want %d", got.Drops(), MaxNativeDrops)
 	}
 
 	assertPanicsWith(t, "Native currency amount out of range", func() {
-		maxNative.MulRounded(NewXRPAmountFromInt(2), false, RoundToNearest)
+		maxNative.MulWithNumberContext(NewXRPAmountFromInt(2), ctx, false, RoundToNearest)
 	})
 	assertPanicsWith(t, "Native value overflow", func() {
-		NewXRPAmountFromInt(-1).MulRounded(oneNative, false, RoundToNearest)
+		NewXRPAmountFromInt(-1).MulWithNumberContext(oneNative, ctx, false, RoundToNearest)
 	})
 	assertPanicsWith(t, "Native value overflow", func() {
-		NewXRPAmountFromInt(-1).MulRounded(NewXRPAmountFromInt(-1), false, RoundToNearest)
+		NewXRPAmountFromInt(-1).MulWithNumberContext(NewXRPAmountFromInt(-1), ctx, false, RoundToNearest)
 	})
 	assertPanicsWith(t, "Native currency amount out of range", func() {
-		maxNative.MulRounded(
+		maxNative.MulWithNumberContext(
 			NewIssuedAmountFromValue(2*MinMantissa, -15, "USD", "rIssuer"),
+			ctx,
 			false,
 			RoundToNearest,
 		)
 	})
-	if got := oneNative.MulRounded(
+	if got := oneNative.MulWithNumberContext(
 		NewIssuedAmountFromValue(-MinMantissa, -15, "USD", "rIssuer"),
+		ctx,
 		false,
 		RoundToNearest,
 	); got.Drops() != -1 {

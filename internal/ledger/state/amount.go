@@ -30,64 +30,9 @@ const (
 	// Maximum native XRP in drops that can exist on the network
 	MaxNativeDrops uint64 = 100_000_000_000_000_000
 
-	// Drops per XRP
-	DropsPerXRP int64 = 1_000_000
-
 	// Zero exponent value used for IOU zero amounts
 	zeroExponent = -100
 )
-
-// XRPAmount represents XRP in drops (the smallest unit)
-// Uses int64 to match rippled's XRPAmount (allows negative for debt calculations)
-type XRPAmount struct {
-	drops int64
-}
-
-// Drops returns the amount in drops
-func (x XRPAmount) Drops() int64 {
-	return x.drops
-}
-
-// IsZero returns true if the amount is zero
-func (x XRPAmount) IsZero() bool {
-	return x.drops == 0
-}
-
-// IsNegative returns true if the amount is negative
-func (x XRPAmount) IsNegative() bool {
-	return x.drops < 0
-}
-
-// Signum returns the sign of the amount (-1, 0, or 1)
-func (x XRPAmount) Signum() int {
-	if x.drops < 0 {
-		return -1
-	}
-	if x.drops > 0 {
-		return 1
-	}
-	return 0
-}
-
-// Negate returns the negated amount
-func (x XRPAmount) Negate() XRPAmount {
-	return XRPAmount{drops: -x.drops}
-}
-
-// Add adds two XRP amounts
-func (x XRPAmount) Add(other XRPAmount) XRPAmount {
-	return XRPAmount{drops: x.drops + other.drops}
-}
-
-// Sub subtracts two XRP amounts
-func (x XRPAmount) Sub(other XRPAmount) XRPAmount {
-	return XRPAmount{drops: x.drops - other.drops}
-}
-
-// String returns the drops as a string
-func (x XRPAmount) String() string {
-	return strconv.FormatInt(x.drops, 10)
-}
 
 // IOU/MPT arithmetic here shares the panic contract documented in
 // xrpl_number.go: callers validate ranges at parse-time.
@@ -290,7 +235,7 @@ func (v IOUAmountValue) NumberString() string {
 // Matches rippled's STAmount which can hold any asset type (XRP, IOU, or MPT).
 type Amount struct {
 	// For XRP amounts
-	xrp XRPAmount
+	xrp int64
 
 	// For issued currency amounts
 	iou      IOUAmountValue
@@ -315,7 +260,7 @@ type Amount struct {
 // NewXRPAmountFromInt creates an XRP amount from drops as int64
 func NewXRPAmountFromInt(drops int64) Amount {
 	return Amount{
-		xrp:    XRPAmount{drops: drops},
+		xrp:    drops,
 		Native: true,
 	}
 }
@@ -474,11 +419,6 @@ func (a Amount) Drops() int64 {
 	if !a.IsNative() {
 		return 0
 	}
-	return a.xrp.drops
-}
-
-// XRP returns the XRPAmount (only valid for native amounts)
-func (a Amount) XRP() XRPAmount {
 	return a.xrp
 }
 
@@ -490,7 +430,7 @@ func (a Amount) IOU() IOUAmountValue {
 // IsZero returns true if the amount is zero
 func (a Amount) IsZero() bool {
 	if a.IsNative() {
-		return a.xrp.IsZero()
+		return a.xrp == 0
 	}
 	if a.mptRaw != nil {
 		return *a.mptRaw == 0
@@ -501,7 +441,7 @@ func (a Amount) IsZero() bool {
 // IsNegative returns true if the amount is negative
 func (a Amount) IsNegative() bool {
 	if a.IsNative() {
-		return a.xrp.IsNegative()
+		return a.xrp < 0
 	}
 	if a.mptRaw != nil {
 		return *a.mptRaw < 0
@@ -512,7 +452,14 @@ func (a Amount) IsNegative() bool {
 // Signum returns the sign of the amount (-1, 0, or 1)
 func (a Amount) Signum() int {
 	if a.IsNative() {
-		return a.xrp.Signum()
+		switch {
+		case a.xrp < 0:
+			return -1
+		case a.xrp > 0:
+			return 1
+		default:
+			return 0
+		}
 	}
 	if a.mptRaw != nil {
 		if *a.mptRaw < 0 {
@@ -531,7 +478,7 @@ func (a Amount) Signum() int {
 // assets (STAmount.cpp:343), so its getText never enters the scientific branch.
 func (a Amount) Value() string {
 	if a.IsNative() {
-		return a.xrp.String()
+		return strconv.FormatInt(a.xrp, 10)
 	}
 	if a.mptRaw != nil {
 		return strconv.FormatInt(*a.mptRaw, 10)
@@ -542,7 +489,7 @@ func (a Amount) Value() string {
 // Float64 returns an approximate float64 representation
 func (a Amount) Float64() float64 {
 	if a.IsNative() {
-		return float64(a.xrp.drops)
+		return float64(a.xrp)
 	}
 	if a.mptRaw != nil {
 		return float64(*a.mptRaw)
@@ -554,7 +501,7 @@ func (a Amount) Float64() float64 {
 func (a Amount) Negate() Amount {
 	if a.IsNative() {
 		return Amount{
-			xrp:    a.xrp.Negate(),
+			xrp:    -a.xrp,
 			Native: true,
 		}
 	}
@@ -581,7 +528,7 @@ func newMPTAmountLike(prototype Amount, value int64) Amount {
 // MarshalJSON implements custom JSON marshaling
 func (a Amount) MarshalJSON() ([]byte, error) {
 	if a.IsNative() {
-		return json.Marshal(a.xrp.String())
+		return json.Marshal(strconv.FormatInt(a.xrp, 10))
 	}
 	if a.IsMPT() {
 		return json.Marshal(map[string]string{

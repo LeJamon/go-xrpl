@@ -29,13 +29,7 @@ import (
 // consumes do not normalise the issuer the way rippled View.cpp:469-484
 // does. The result is tagged with `a`'s currency and issuer.
 func (a Amount) Add(b Amount) (Amount, error) {
-	return a.AddRounded(b, RoundToNearest)
-}
-
-// AddRounded returns a + b, rounding the IOU result under mode. The AMM math
-// uses this to reproduce rippled's NumberRoundModeGuard around additions.
-func (a Amount) AddRounded(b Amount, mode RoundingMode) (Amount, error) {
-	return a.addRounded(b, mode, NewNumberContext(MantissaScaleSmall, false))
+	return a.addRounded(b, RoundToNearest, NewNumberContext(MantissaScaleSmall, false))
 }
 
 // AddUniversal returns a + b using rippled 3.2's universal Number arithmetic.
@@ -70,7 +64,7 @@ func (a Amount) addRounded(b Amount, mode RoundingMode, ctx NumberContext) (Amou
 	}
 	if a.IsNative() {
 		return Amount{
-			xrp:    a.xrp.Add(b.xrp),
+			xrp:    a.xrp + b.xrp,
 			Native: true,
 		}, nil
 	}
@@ -85,12 +79,7 @@ func (a Amount) addRounded(b Amount, mode RoundingMode, ctx NumberContext) (Amou
 
 // Sub subtracts two amounts (must be same type)
 func (a Amount) Sub(b Amount) (Amount, error) {
-	return a.SubRounded(b, RoundToNearest)
-}
-
-// SubRounded returns a - b, rounding the IOU result under mode.
-func (a Amount) SubRounded(b Amount, mode RoundingMode) (Amount, error) {
-	return a.subRounded(b, mode, NewNumberContext(MantissaScaleSmall, false))
+	return a.subRounded(b, RoundToNearest, NewNumberContext(MantissaScaleSmall, false))
 }
 
 // SubUniversal returns a - b using rippled 3.2's universal Number arithmetic.
@@ -206,10 +195,10 @@ func (a Amount) CompareChecked(b Amount) (int, error) {
 		return 0, fmt.Errorf("temBAD_AMOUNT: cannot compare amounts with different assets")
 	}
 	if a.IsNative() && b.IsNative() {
-		if a.xrp.drops < b.xrp.drops {
+		if a.xrp < b.xrp {
 			return -1, nil
 		}
-		if a.xrp.drops > b.xrp.drops {
+		if a.xrp > b.xrp {
 			return 1, nil
 		}
 		return 0, nil
@@ -538,26 +527,6 @@ func numberToIOUAmountValue(n XRPLNumber) IOUAmountValue {
 		panic("XRPLNumber→IOUAmountValue overflow")
 	}
 	return IOUAmountValue{mantissa: mantissa, exponent: exponent}
-}
-
-// Mul multiplies this Amount by another Amount using banker's rounding.
-func (a Amount) Mul(other Amount, roundUp bool) Amount {
-	return a.MulRounded(other, roundUp, RoundToNearest)
-}
-
-// MulRounded multiplies this Amount by another Amount, rounding the IOU result
-// under mode. The AMM math uses this to reproduce rippled's
-// NumberRoundModeGuard around multiplications.
-// Reference: rippled's mulRound() in STAmount.cpp
-// For IOU * IOU: result = (m1 * m2) * 10^(e1 + e2)
-// When fixUniversalNumber is enabled, delegates to XRPLNumber.Mul() for Guard-based rounding.
-func (a Amount) MulRounded(other Amount, roundUp bool, mode RoundingMode) Amount {
-	return a.mulRounded(
-		other,
-		roundUp,
-		mode,
-		NewNumberContext(MantissaScaleSmall, false),
-	)
 }
 
 // MulWithNumberContext multiplies this Amount by another Amount under the

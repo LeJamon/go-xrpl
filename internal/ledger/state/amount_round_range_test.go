@@ -75,10 +75,15 @@ func TestCanonicalizeDropsMaxNative(t *testing.T) {
 // returned unchanged.
 func TestNativeRoundDropsOutOfRange(t *testing.T) {
 	const iss = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	ctx := NewNumberContext(MantissaScaleSmall, false)
 
 	for _, multiply := range []func(Amount, Amount, bool) int64{
-		MulRoundNative,
-		MulRoundNativeStrict,
+		func(a, b Amount, roundUp bool) int64 {
+			return MulRoundNativeWithNumberContext(a, b, ctx, roundUp)
+		},
+		func(a, b Amount, roundUp bool) int64 {
+			return MulRoundNativeStrictWithNumberContext(a, b, ctx, roundUp)
+		},
 	} {
 		rec := recoverPanic(func() {
 			multiply(
@@ -96,9 +101,10 @@ func TestNativeRoundDropsOutOfRange(t *testing.T) {
 	// cMaxNativeN. Both rounding directions must reject.
 	for _, ru := range []bool{false, true} {
 		rec := recoverPanic(func() {
-			MulRoundNative(
+			MulRoundNativeWithNumberContext(
 				NewIssuedAmountFromValue(1_000_000_000_000_000, 0, "USD", iss),
 				NewXRPAmountFromInt(1_000_000),
+				ctx,
 				ru,
 			)
 		})
@@ -109,9 +115,10 @@ func TestNativeRoundDropsOutOfRange(t *testing.T) {
 
 	// A division whose normalized offset exceeds 17 is rejected by the pre-check.
 	rec := recoverPanic(func() {
-		DivRoundNative(
+		DivRoundNativeWithNumberContext(
 			NewIssuedAmountFromValue(9_999_999_999_999_999, 80, "USD", iss),
 			NewIssuedAmountFromValue(1_000_000_000_000_000, 0, "USD", iss),
+			ctx,
 			false,
 		)
 	})
@@ -120,11 +127,11 @@ func TestNativeRoundDropsOutOfRange(t *testing.T) {
 	}
 
 	// An in-range native division must still return its drops value untouched.
-	if got := DivRoundNative(NewXRPAmountFromInt(100_000_000_000), NewXRPAmountFromInt(7), false); got != 14_285_714_285 {
+	if got := DivRoundNativeWithNumberContext(NewXRPAmountFromInt(100_000_000_000), NewXRPAmountFromInt(7), ctx, false); got != 14_285_714_285 {
 		t.Fatalf("DivRoundNative in-range = %d, want 14285714285", got)
 	}
 	// And an in-range generic (non native×native) multiply.
-	if got := MulRoundNative(NewIssuedAmountFromValue(-2_500_000_000_000_000, -10, "USD", iss), NewXRPAmountFromInt(-123_456_789), false); got != 30_864_197_250_000 {
+	if got := MulRoundNativeWithNumberContext(NewIssuedAmountFromValue(-2_500_000_000_000_000, -10, "USD", iss), NewXRPAmountFromInt(-123_456_789), ctx, false); got != 30_864_197_250_000 {
 		t.Fatalf("MulRoundNative in-range = %d, want 30864197250000", got)
 	}
 }

@@ -46,14 +46,6 @@ func DecodeType(data []byte) (entry.Type, error) {
 	return typ, nil
 }
 
-// GetLedgerEntryType extracts the raw LedgerEntryType code.
-//
-// Deprecated: use DecodeType.
-func GetLedgerEntryType(data []byte) (uint16, error) {
-	typ, err := DecodeType(data)
-	return uint16(typ), err
-}
-
 // MatchesKeyletType reports whether data satisfies a keylet's type constraint.
 // TypeAny imposes no serialization constraint.
 func MatchesKeyletType(k keylet.Keylet, data []byte) bool {

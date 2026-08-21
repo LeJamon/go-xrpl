@@ -353,8 +353,8 @@ func FuzzXRPLNumberProperties(f *testing.F) {
 
 		a := orcMkNum(mA, expA)
 		b := orcMkNum(mB, expB)
-		zero := xrplNumberZero()
-		one := NewXRPLNumberFromInt(1)
+		zero := NewXRPLNumber(0, 0)
+		one := NewXRPLNumber(1, 0)
 
 		if !NewXRPLNumber(a.Mantissa(), a.Exponent()).Equal(a) {
 			t.Fatalf("normalize not idempotent for %s", orcStr(a))
@@ -500,14 +500,14 @@ func FuzzXRPLNumberRoot2(f *testing.F) {
 		// Number.cpp:705-706).
 		if mant < 0 {
 			neg := NewXRPLNumber(mant, exp)
-			if !orcRun(func() { neg.root2() }) {
+			if !orcRun(func() { neg.Root2() }) {
 				t.Fatalf("root2(%s) of a negative radicand did not panic", orcStr(neg))
 			}
 			return
 		}
 
 		n := NewXRPLNumber(mant, exp)
-		r := n.root2()
+		r := n.Root2()
 		if r.mantissa < 0 {
 			t.Fatalf("root2(%s) = %s is negative", orcStr(n), orcStr(r))
 		}
@@ -530,7 +530,7 @@ func FuzzXRPLNumberRoot2(f *testing.F) {
 }
 
 // FuzzIOUArithmetic checks the IOU production entrypoints (addIOUValues and
-// Amount.Mul) with the Number switchover enabled against the same oracle,
+// Amount.MulWithNumberContext) with the Number switchover enabled against the same oracle,
 // clamped to IOUAmount's narrower [-96, 80] exponent range. This guards the
 // path real ledger amounts flow through.
 func FuzzIOUArithmetic(f *testing.F) {

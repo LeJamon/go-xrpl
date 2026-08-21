@@ -35,10 +35,11 @@ func TestComputeMPTTransferFeeUsesCanonicalRounding(t *testing.T) {
 	mptHexID := hex.EncodeToString(mptID[:])
 	issuer := state.EncodeAccountIDSafe(issuerID)
 	rate := state.NewIssuedAmountFromValue(1_001_000_000, -9, "", "")
+	legacyContext := state.NewNumberContext(state.MantissaScaleSmall, false)
 
 	withoutIssuanceID := state.NewMPTAmountDirect(int64(originalAmount), "", issuer)
 	require.False(t, withoutIssuanceID.IsMPT())
-	require.Equal(t, int64(9_991), state.DivRoundMPT(withoutIssuanceID, rate, true))
+	require.Equal(t, int64(9_991), state.DivRoundMPTWithNumberContext(withoutIssuanceID, rate, legacyContext, true))
 
 	withIssuanceID := state.NewMPTAmountWithIssuanceID(
 		int64(originalAmount),
@@ -46,7 +47,7 @@ func TestComputeMPTTransferFeeUsesCanonicalRounding(t *testing.T) {
 		mptHexID,
 	)
 	require.True(t, withIssuanceID.IsMPT())
-	require.Equal(t, int64(9_990), state.DivRoundMPT(withIssuanceID, rate, true))
+	require.Equal(t, int64(9_990), state.DivRoundMPTWithNumberContext(withIssuanceID, rate, legacyContext, true))
 
 	tests := []struct {
 		name         string

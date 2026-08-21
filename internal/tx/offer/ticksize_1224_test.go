@@ -18,7 +18,11 @@ func TestTickSize1224(t *testing.T) {
 	takerGets := tx.NewXRPAmount(900000)                                // XRP drops
 	takerPays := tx.NewIssuedAmount(5000000000000000, -9, hada, issuer) // 5000000
 
-	quality := state.CalculateQuality(takerGets, takerPays)
+	quality := state.CalculateQualityWithNumberContext(
+		takerGets,
+		takerPays,
+		state.NewNumberContext(state.MantissaScaleSmall, false),
+	)
 	t.Logf("quality  mantissa=%d exp=%d", quality&0x00ffffffffffffff, int(quality>>56)-100)
 
 	rounded := roundToTickSize(quality, 15)

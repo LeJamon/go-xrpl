@@ -222,8 +222,8 @@ func TestXRPLNumber_Root2_BothScales(t *testing.T) {
 	t.Parallel()
 	for _, scale := range []MantissaScale{MantissaScaleSmall, MantissaScaleLarge} {
 		four := NewXRPLNumberScaled(4, 0, scale, RoundToNearest)
-		require.True(t, four.root2().Equal(NewXRPLNumberScaled(2, 0, scale, RoundToNearest)), "sqrt(4) scale=%d", scale)
+		require.True(t, four.Root2().Equal(NewXRPLNumberScaled(2, 0, scale, RoundToNearest)), "sqrt(4) scale=%d", scale)
 		nine := NewXRPLNumberScaled(9, 0, scale, RoundToNearest)
-		require.True(t, nine.root2().Equal(NewXRPLNumberScaled(3, 0, scale, RoundToNearest)), "sqrt(9) scale=%d", scale)
+		require.True(t, nine.Root2().Equal(NewXRPLNumberScaled(3, 0, scale, RoundToNearest)), "sqrt(9) scale=%d", scale)
 	}
 }

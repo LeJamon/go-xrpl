@@ -40,16 +40,17 @@ func safeInt(f func() int64) (out string) {
 // both roundUp directions, returning a single deterministic signature string.
 func roundGoldenRow(a, b Amount) string {
 	const cur = "USD"
+	ctx := NewNumberContext(MantissaScaleSmall, false)
 	var s string
 	for _, ru := range []bool{false, true} {
 		s += fmt.Sprintf("|ru=%v MS=%s M=%s D=%s DS=%s DN=%s MN=%s",
 			ru,
-			safeAmt(func() Amount { return MulRoundStrict(a, b, cur, goldenIssuer, ru) }),
-			safeAmt(func() Amount { return MulRound(a, b, cur, goldenIssuer, ru) }),
-			safeAmt(func() Amount { return DivRound(a, b, cur, goldenIssuer, ru) }),
-			safeAmt(func() Amount { return DivRoundStrict(a, b, cur, goldenIssuer, ru) }),
-			safeInt(func() int64 { return DivRoundNative(a, b, ru) }),
-			safeInt(func() int64 { return MulRoundNative(a, b, ru) }),
+			safeAmt(func() Amount { return MulRoundStrictWithNumberContext(a, b, cur, goldenIssuer, ctx, ru) }),
+			safeAmt(func() Amount { return MulRoundWithNumberContext(a, b, cur, goldenIssuer, ctx, ru) }),
+			safeAmt(func() Amount { return DivRoundWithNumberContext(a, b, cur, goldenIssuer, ctx, ru) }),
+			safeAmt(func() Amount { return DivRoundStrictWithNumberContext(a, b, cur, goldenIssuer, ctx, ru) }),
+			safeInt(func() int64 { return DivRoundNativeWithNumberContext(a, b, ctx, ru) }),
+			safeInt(func() int64 { return MulRoundNativeWithNumberContext(a, b, ctx, ru) }),
 		)
 	}
 	return s

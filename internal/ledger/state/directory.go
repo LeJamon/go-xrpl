@@ -103,7 +103,7 @@ const cMinValue uint64 = 1000000000000000
 // tenTo17 is 10^17
 var tenTo17 = new(big.Int).Exp(big.NewInt(10), big.NewInt(17), nil)
 
-// GetRate calculates the quality/exchange rate for an offer.
+// GetRateWithNumberContext calculates the quality/exchange rate for an offer.
 // This matches rippled's getRate(offerOut, offerIn), which returns
 // divide(offerIn, offerOut) packed into a 64-bit quality code.
 // Reference: rippled STAmount.cpp getRate / STAmount.h line 693-694:
@@ -120,16 +120,6 @@ var tenTo17 = new(big.Int).Exp(big.NewInt(10), big.NewInt(17), nil)
 // the legacy regime. A blind truncation here diverged from rippled (and from
 // Amount.Div) on roughly half of non-terminating ratios, shifting the
 // ExchangeRate baked into BookDirectory keys.
-func GetRate(offerOut, offerIn Amount) (rate uint64) {
-	return GetRateWithNumberContext(
-		offerOut,
-		offerIn,
-		NewNumberContext(MantissaScaleSmall, false),
-	)
-}
-
-// GetRateWithNumberContext calculates the encoded quality under the selected
-// ledger arithmetic semantics.
 func GetRateWithNumberContext(
 	offerOut, offerIn Amount,
 	ctx NumberContext,
@@ -171,7 +161,7 @@ func GetRateWithNumberContext(
 }
 
 // rateMantissa returns the unsigned mantissa and exponent of a (non-zero)
-// amount for use in GetRate, lifting an integral amount into the IOU
+// amount for use in GetRateWithNumberContext, lifting an integral amount into the IOU
 // mantissa band [10^15, 10^16) exactly as rippled's divide() does.
 func rateMantissa(a Amount) (uint64, int) {
 	if a.IsNative() || a.IsMPT() {

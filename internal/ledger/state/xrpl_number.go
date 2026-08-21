@@ -90,14 +90,6 @@ func (s MantissaScale) params() (minM, maxM uint64, rangeLog int) {
 	return 1_000_000_000_000_000, 9_999_999_999_999_999, 15
 }
 
-// MantissaScaleForRulesWithFix selects the exact rippled Number range. The
-// large range predates the cusp-rounding fix, so amendment-enabled ledgers use
-// LargeLegacy until fixCleanup3_2_0 is enabled. With no Rules context rippled
-// uses the corrected Large range.
-func MantissaScaleForRulesWithFix(hasRules, singleAssetVault, lendingProtocol, fixCleanup320 bool) MantissaScale {
-	return MantissaScaleForRulesWithFixes(hasRules, singleAssetVault, lendingProtocol, fixCleanup320, false)
-}
-
 func MantissaScaleForRulesWithFixes(hasRules, singleAssetVault, lendingProtocol, fixCleanup320, fixCleanup330 bool) MantissaScale {
 	if !hasRules {
 		return MantissaScaleLarge330
@@ -419,11 +411,6 @@ func ParseXRPLNumber(value string, scale MantissaScale, mode RoundingMode) (numb
 	return normalizeFromBig(match[1] == "-", new(big.Int).SetUint64(magnitude), int(exponent), scale, mode), nil
 }
 
-// NewXRPLNumberFromInt creates a small-scale Number from a plain integer.
-func NewXRPLNumberFromInt(mantissa int64) XRPLNumber {
-	return newNumber(mantissa, 0, MantissaScaleSmall, RoundToNearest)
-}
-
 func newNumber(mantissa int64, exponent int, scale MantissaScale, mode RoundingMode) XRPLNumber {
 	neg, m := externalToInternal(mantissa)
 	n := XRPLNumber{negative: neg, mantissa: m, exponent: exponent, scale: scale}
@@ -455,11 +442,6 @@ func (n XRPLNumber) oneVal() XRPLNumber {
 // zero returns the canonical zero in the receiver's scale.
 func (n XRPLNumber) zero() XRPLNumber {
 	return XRPLNumber{mantissa: 0, exponent: xrplNumZeroExponent, scale: n.scale}
-}
-
-// xrplNumberZero returns a small-scale canonical zero.
-func xrplNumberZero() XRPLNumber {
-	return XRPLNumber{mantissa: 0, exponent: xrplNumZeroExponent}
 }
 
 // IsZero reports whether the number is zero.
@@ -1114,17 +1096,8 @@ func (n XRPLNumber) shiftExponent(delta int) XRPLNumber {
 	return XRPLNumber{negative: n.negative, mantissa: n.mantissa, exponent: newE, scale: n.scale}
 }
 
-// root2 computes the square root using banker's rounding.
-func (n XRPLNumber) root2() XRPLNumber { return n.root2Rounded(RoundToNearest) }
-
 // Root2 computes the square root using banker's rounding.
 func (n XRPLNumber) Root2() XRPLNumber { return n.Root2Rounded(RoundToNearest) }
-
-// root2Rounded computes the square root via Newton-Raphson iteration, rounding
-// every intermediate under mode (rippled root2).
-func (n XRPLNumber) root2Rounded(mode RoundingMode) XRPLNumber {
-	return n.Root2Rounded(mode)
-}
 
 // Root2Rounded computes the square root via Newton-Raphson iteration, rounding
 // every intermediate under mode.
