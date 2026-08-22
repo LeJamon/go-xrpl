@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 )
 
 func (r *Router) beginFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint64) bool {
@@ -61,6 +62,42 @@ func (r *Router) beginFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint
 	r.acquisitionMu.Unlock()
 	r.replayCommitMu.Unlock()
 	return false
+}
+
+// promoteResolvedFrozenPivot turns an already-running hash-only consensus
+// acquisition into the fast-load frozen pivot as soon as its verified header
+// supplies the sequence. Startup can receive a consensus view before peer
+// status/validation bookkeeping has indexed hash -> sequence; without this
+// promotion the full-state fetch remains outside standardReplay and no P+1
+// transaction-only collector is armed.
+func (r *Router) promoteResolvedFrozenPivot(il *inbound.Ledger, peerID uint64) bool {
+	if il == nil || !il.SequenceInitiallyUnknown() || il.Reason() != inbound.ReasonConsensus ||
+		il.TransactionOnly() || il.Seq() == 0 {
+		return false
+	}
+	svc := r.adaptor.LedgerService()
+	if svc == nil || !svc.IsFastLoadProvisional() || il.Seq() <= svc.GetClosedLedgerIndex() ||
+		r.fetchTracker.Find(il.Hash()) != il {
+		return false
+	}
+
+	r.acquisitionMu.Lock()
+	active := r.standardReplay.active
+	eligible := r.consensusRecovery.targetHash == il.Hash() || r.consensusRecovery.stepHash == il.Hash()
+	r.acquisitionMu.Unlock()
+	if active {
+		return r.continueFrozenPivotRecovery(il.Seq(), il.Hash(), peerID)
+	}
+	if !eligible || !r.beginFrozenPivotRecovery(il.Seq(), il.Hash(), peerID) {
+		return false
+	}
+	hash := il.Hash()
+	r.logger.Info("promoted resolved hash-only acquisition to frozen recovery pivot",
+		"seq", il.Seq(),
+		"hash", fmt.Sprintf("%x", hash[:8]),
+		"peer", peerID,
+	)
+	return true
 }
 
 func (r *Router) continueFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint64) bool {

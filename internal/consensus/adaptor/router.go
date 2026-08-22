@@ -137,6 +137,11 @@ type Router struct {
 	peerDisconnectWake     chan struct{}
 	pendingPeerConnects    sync.Map
 	peerConnectWake        chan struct{}
+	// standardReplayDrainWake resumes a replay apply batch on the router loop
+	// after the preceding batch yielded. Keeping the wake edge-triggered and
+	// buffered prevents a ready replay window from monopolising the same loop
+	// that must drain consensus, control, and acquisition traffic.
+	standardReplayDrainWake chan struct{}
 
 	// replayer coordinates concurrent mtREPLAY_DELTA_REQUEST acquisitions
 	// keyed by target ledger hash, under a configurable concurrency cap, so a
@@ -462,28 +467,29 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 		network.serve = noop
 	}
 	r := &Router{
-		engine:                 engine,
-		adaptor:                adaptor,
-		gossip:                 network.gossip,
-		txSetNet:               network.txSet,
-		acquisition:            network.acquisition,
-		serve:                  network.serve,
-		inbox:                  inbox,
-		logger:                 logger,
-		peerStates:             make(map[peermanagement.PeerID]*peerLedgerState),
-		peerStatusCandidates:   make(map[peermanagement.PeerID]peerStatusCandidate),
-		peerDisconnectWake:     make(chan struct{}, 1),
-		peerConnectWake:        make(chan struct{}, 1),
-		replayer:               inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
-		fetchTracker:           inbound.NewTracker(),
-		fetchPacks:             newFetchPackCache(),
-		messageSeen:            newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
-		manifestUntrustedLimit: manifest.DefaultMaxUntrustedCount,
-		txSeen:                 newTransactionSuppression(5*time.Minute, 1<<17),
-		txSetAcquire:           make(map[consensus.TxSetID]*txSetAcquireState),
-		txSetRetryKnobs:        defaultTxSetRetryKnobs(),
-		seqHash:                make(map[uint32]ledgerHashEntry),
-		lifecycleCtx:           context.Background(),
+		engine:                  engine,
+		adaptor:                 adaptor,
+		gossip:                  network.gossip,
+		txSetNet:                network.txSet,
+		acquisition:             network.acquisition,
+		serve:                   network.serve,
+		inbox:                   inbox,
+		logger:                  logger,
+		peerStates:              make(map[peermanagement.PeerID]*peerLedgerState),
+		peerStatusCandidates:    make(map[peermanagement.PeerID]peerStatusCandidate),
+		peerDisconnectWake:      make(chan struct{}, 1),
+		peerConnectWake:         make(chan struct{}, 1),
+		standardReplayDrainWake: make(chan struct{}, 1),
+		replayer:                inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
+		fetchTracker:            inbound.NewTracker(),
+		fetchPacks:              newFetchPackCache(),
+		messageSeen:             newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
+		manifestUntrustedLimit:  manifest.DefaultMaxUntrustedCount,
+		txSeen:                  newTransactionSuppression(5*time.Minute, 1<<17),
+		txSetAcquire:            make(map[consensus.TxSetID]*txSetAcquireState),
+		txSetRetryKnobs:         defaultTxSetRetryKnobs(),
+		seqHash:                 make(map[uint32]ledgerHashEntry),
+		lifecycleCtx:            context.Background(),
 	}
 	if adaptor != nil {
 		if _, ok := engine.(consensus.VerifiedValidationProcessor); ok {
@@ -907,6 +913,8 @@ func (r *Router) Run(ctx context.Context) {
 				return
 			}
 			r.handleValidationWorkResult(result)
+		case <-r.standardReplayDrainWake:
+			r.drainStandardReplayPipeline()
 		case <-r.peerConnectWake:
 			r.drainPeerConnects()
 		case <-ticker.C:
@@ -916,10 +924,13 @@ func (r *Router) Run(ctx context.Context) {
 	}
 }
 
-const consensusDrainBatch = 32
+const (
+	consensusDrainBatch         = 32
+	trustedValidationDrainBatch = 32
+)
 
 func (r *Router) drainTrustedValidationResults(ctx context.Context) bool {
-	for {
+	for range trustedValidationDrainBatch {
 		select {
 		case <-ctx.Done():
 			return false
@@ -929,6 +940,7 @@ func (r *Router) drainTrustedValidationResults(ctx context.Context) bool {
 			return true
 		}
 	}
+	return true
 }
 
 func (r *Router) drainConsensusInbox(ctx context.Context) bool {
