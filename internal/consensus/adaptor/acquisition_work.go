@@ -752,6 +752,7 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 		}
 		return
 	}
+	r.promoteResolvedFrozenPivot(ledger, ledger.PeerID())
 	if result.complete {
 		r.completeInboundLedgerReady(ledger)
 		return

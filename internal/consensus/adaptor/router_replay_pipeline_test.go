@@ -120,6 +120,31 @@ func TestStandardReplayPipelineAppliesReadySuccessorsInOrder(t *testing.T) {
 	assert.Zero(t, metrics.ReplayPipelineReadyDepth)
 }
 
+func TestStandardReplayPipelineYieldsAfterBoundedApplyBatch(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.Background())
+	require.NoError(t, err)
+	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), standardReplayApplyBatch+1)
+	armStandardReplayTestPipeline(t, r, a, sender, links)
+	require.Len(t, sender.legacyCalls(), standardReplayApplyBatch)
+
+	// Make the whole resident window ready before completing its head. The
+	// head completion then enters one apply call with a full batch available.
+	for i := 1; i < standardReplayApplyBatch; i++ {
+		completeStandardReplayTestLink(t, r, links[i])
+	}
+	completeStandardReplayTestLink(t, r, links[0])
+
+	metrics := r.FastSyncMetrics()
+	require.Equal(t, uint64(standardReplayApplyBatch), metrics.ReplayPipelineApplied)
+	require.True(t, r.standardReplay.active)
+	require.True(t, r.standardReplay.applying)
+	require.Len(t, r.standardReplayDrainWake, 1,
+		"a ready replay batch must reschedule through the router loop before continuing")
+	require.NotNil(t, r.fetchTracker.Find(links[standardReplayApplyBatch].hash),
+		"collector refill must continue while the applier yields")
+}
+
 func TestStandardReplayPipelineBoundsAndRefillsWindow(t *testing.T) {
 	r, a, sender, svc := makeRouter(t)
 	_, err := svc.AcceptLedger(context.Background())

@@ -121,20 +121,25 @@ const (
 //     be read through accessors that take mu (State, PeerID, OnTimer, GotBase,
 //     etc.).
 type Ledger struct {
-	hash      [32]byte
-	seq       uint32
-	header    *header.LedgerHeader
-	stateMap  *shamap.SHAMap
-	txMap     *shamap.SHAMap // nil when the transaction tree is empty (TxHash zero)
-	haveState bool
-	haveTx    bool
-	peers     []uint64 // source peers, broadened on no-progress; peers[0] is the original
-	reason    Reason
-	state     State
-	err       error
-	mu        sync.Mutex
-	logger    *slog.Logger
-	snapshot  atomic.Pointer[Snapshot]
+	hash [32]byte
+	seq  uint32
+	// sequenceInitiallyUnknown records hash-only acquisitions. The verified
+	// header later fills seq, but the router still needs to know how this
+	// acquisition began so it can promote a consensus request into the frozen
+	// fast-load recovery session instead of treating it as an ordinary fetch.
+	sequenceInitiallyUnknown bool
+	header                   *header.LedgerHeader
+	stateMap                 *shamap.SHAMap
+	txMap                    *shamap.SHAMap // nil when the transaction tree is empty (TxHash zero)
+	haveState                bool
+	haveTx                   bool
+	peers                    []uint64 // source peers, broadened on no-progress; peers[0] is the original
+	reason                   Reason
+	state                    State
+	err                      error
+	mu                       sync.Mutex
+	logger                   *slog.Logger
+	snapshot                 atomic.Pointer[Snapshot]
 
 	// family backs the acquisition SHAMaps with the persistent node store when
 	// set, so getMissingNodes only reports nodes not already held locally. nil
@@ -238,13 +243,14 @@ func New(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, opts ...
 		"ledger_hash", fmt.Sprintf("%x", hash[:8]),
 	)
 	l := &Ledger{
-		hash:         hash,
-		seq:          seq,
-		state:        StateWantBase,
-		lastTimer:    SystemClock.Now(),
-		logger:       logger,
-		recentNodes:  make(map[[32]byte]uint64),
-		requestPeers: make(map[uint64]struct{}),
+		hash:                     hash,
+		seq:                      seq,
+		sequenceInitiallyUnknown: seq == 0,
+		state:                    StateWantBase,
+		lastTimer:                SystemClock.Now(),
+		logger:                   logger,
+		recentNodes:              make(map[[32]byte]uint64),
+		requestPeers:             make(map[uint64]struct{}),
 	}
 	if peerID != 0 {
 		l.peers = []uint64{peerID}
@@ -575,6 +581,12 @@ func (l *Ledger) Seq() uint32 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.seq
+}
+
+// SequenceInitiallyUnknown reports whether the acquisition was created by
+// hash before its ledger sequence was available. It is immutable after New.
+func (l *Ledger) SequenceInitiallyUnknown() bool {
+	return l.sequenceInitiallyUnknown
 }
 
 // Hash returns the ledger hash being acquired.

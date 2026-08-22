@@ -2925,6 +2925,7 @@ func (r *Router) handleInboundLedgerDataOwned(
 			}
 			return true, false
 		}
+		r.promoteResolvedFrozenPivot(il, peerID)
 
 		if il.IsComplete() {
 			r.completeInboundLedger(il)

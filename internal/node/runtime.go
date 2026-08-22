@@ -1204,13 +1204,14 @@ func (r *nodeRuntime) stopRuntime() {
 	}
 }
 
-const nodeShutdownTimeout = 30 * time.Second
+const nodeShutdownTimeout = 3 * time.Minute
 
 const (
-	transportShutdownGrace = 5 * time.Second
-	producerShutdownGrace  = 5 * time.Second
-	serviceShutdownGrace   = 10 * time.Second
-	storeShutdownGrace     = 5 * time.Second
+	transportShutdownGrace  = 5 * time.Second
+	producerShutdownGrace   = 5 * time.Second
+	serviceShutdownGrace    = 10 * time.Second
+	checkpointShutdownGrace = 2 * time.Minute
+	storeShutdownGrace      = 5 * time.Second
 )
 
 func (r *nodeRuntime) shutdown() error {
@@ -1338,7 +1339,10 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 		prepareCheckpoint = r.ledger.PrepareFastLoadCheckpoint
 	}
 	if len(errs) == 0 && prepareCheckpoint != nil {
-		checkpointCtx, cancelCheckpoint := context.WithTimeout(ctx, storeShutdownGrace)
+		// Proof collection performs uncached random reads over the shallow
+		// SHAMap frontier. On a cold or busy store it can legitimately take
+		// longer than the small timeout used to close an already-flushed DB.
+		checkpointCtx, cancelCheckpoint := context.WithTimeout(ctx, checkpointShutdownGrace)
 		var prepared bool
 		completed, err := runShutdownPhase(checkpointCtx, "prepare fast-load checkpoint", func() error {
 			var prepareErr error

@@ -455,6 +455,27 @@ func TestRouterDrainsTrustedValidationResultsBeforeUntrusted(t *testing.T) {
 	engine.muProcessor.Unlock()
 }
 
+func TestRouterBoundsTrustedValidationDrain(t *testing.T) {
+	adaptor := newTestAdaptor(t)
+	engine := &validationProcessorEngine{mockEngine: &mockEngine{}}
+	router := newTestRouter(engine, adaptor, nil)
+	lane := router.validationWork
+	require.NotNil(t, lane)
+
+	total := trustedValidationDrainBatch + 1
+	for i := range total {
+		lane.trustedResultCh <- validationWorkResult{
+			validation: &consensus.Validation{LedgerID: consensus.LedgerID{byte(i + 1)}},
+			origin:     consensus.ValidationOrigin{PeerID: uint64(i + 1)},
+		}
+	}
+
+	require.True(t, router.drainTrustedValidationResults(t.Context()))
+	require.Equal(t, trustedValidationDrainBatch, engine.processedCount())
+	require.Len(t, lane.trustedResultCh, 1,
+		"a trusted-validation burst must yield before starving the router select loop")
+}
+
 func TestRouterValidationResultChargesOnlyInvalidSignature(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	sender := &validationCaptureSender{}
