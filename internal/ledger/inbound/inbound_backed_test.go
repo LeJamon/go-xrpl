@@ -151,6 +151,75 @@ func TestGotBase_BackedCompletesEntirelyFromStore(t *testing.T) {
 	}
 }
 
+func TestGotBase_BlockedCompletenessWalkDoesNotHoldLedgerLock(t *testing.T) {
+	source, rootHash, rootData := buildBackedTestState(t, 0)
+	family := &trackerBlockingFamily{
+		base:    seedFamilyFrom(t, source),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		block:   true,
+	}
+	headerData, ledgerHash := encodeHeader(header.LedgerHeader{LedgerIndex: 100, AccountHash: rootHash})
+	base := []message.LedgerNode{{NodeData: headerData}, {NodeData: rootData}}
+	acquisition := New(ledgerHash, 100, 7, discardLogger(), WithFamily(family))
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- acquisition.GotBaseContext(ctx, base) }()
+
+	select {
+	case <-family.entered:
+	case <-time.After(time.Second):
+		t.Fatal("completeness walk did not reach the blocking store")
+	}
+
+	seqDone := make(chan uint32, 1)
+	go func() { seqDone <- acquisition.Seq() }()
+	select {
+	case seq := <-seqDone:
+		require.Equal(t, uint32(100), seq)
+	case <-time.After(time.Second):
+		t.Fatal("ledger sequence waited for the completeness walk")
+	}
+
+	peerDone := make(chan bool, 1)
+	go func() { peerDone <- acquisition.RemovePeer(7) }()
+	select {
+	case removed := <-peerDone:
+		require.True(t, removed)
+	case <-time.After(time.Second):
+		t.Fatal("peer removal waited for the completeness walk")
+	}
+
+	type baseResult struct {
+		useful int
+		err    error
+	}
+	stateMap := acquisition.stateMap
+	duplicateDone := make(chan baseResult, 1)
+	go func() {
+		useful, err := acquisition.GotBaseUsefulContext(t.Context(), base)
+		duplicateDone <- baseResult{useful: useful, err: err}
+	}()
+
+	cancel()
+	require.NoError(t, <-done)
+	require.Equal(t, StateWantState, acquisition.State())
+	require.False(t, acquisition.Snapshot().HaveState,
+		"a canceled completeness walk must not publish a stale result")
+
+	duplicate := <-duplicateDone
+	require.NoError(t, duplicate.err)
+	require.Zero(t, duplicate.useful)
+	require.Same(t, stateMap, acquisition.stateMap,
+		"duplicate base data must not replace the active map")
+
+	close(family.release)
+	_, _, complete, err := acquisition.CollectMissingRequestContext(t.Context(), false)
+	require.NoError(t, err)
+	require.True(t, complete)
+	require.True(t, acquisition.IsComplete())
+}
+
 // TestGotBase_ColdStoreMatchesUnbacked proves no regression for forward
 // catch-up of a brand-new ledger: a backed acquisition over an empty store
 // reports the same missing set as an unbacked one, so it still fetches the tree
@@ -483,7 +552,7 @@ func TestGotBase_PersistsStateRootWhileWaitingForTransactionRoot(t *testing.T) {
 	require.NotNil(t, stored, "verified state root must remain reusable while the transaction root is missing")
 }
 
-func TestGotBase_PersistsBeforeReleasingAcquisitionLock(t *testing.T) {
+func TestGotBase_PersistenceDoesNotHoldAcquisitionLock(t *testing.T) {
 	_, rootHash, rootData := buildBackedTestState(t, 0)
 	family := backend.NewMemory()
 	headerData, ledgerHash := encodeHeader(header.LedgerHeader{LedgerIndex: 100, AccountHash: rootHash})
@@ -508,15 +577,12 @@ func TestGotBase_PersistsBeforeReleasingAcquisitionLock(t *testing.T) {
 	stateDone := make(chan State, 1)
 	go func() { stateDone <- acquisition.State() }()
 	select {
-	case <-stateDone:
-		t.Fatal("acquisition lock released before persistence admission")
-	case <-time.After(25 * time.Millisecond):
+	case state := <-stateDone:
+		require.Equal(t, StateWantState, state)
+	case <-time.After(time.Second):
+		t.Fatal("acquisition state waited for persistence admission")
 	}
 	close(release)
 	require.NoError(t, <-done)
-	select {
-	case <-stateDone:
-	case <-time.After(time.Second):
-		t.Fatal("acquisition lock remained held after persistence admission")
-	}
+	require.Equal(t, StateWantState, acquisition.State())
 }

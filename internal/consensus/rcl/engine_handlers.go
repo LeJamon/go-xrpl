@@ -193,7 +193,6 @@ func (e *Engine) ProcessVerifiedValidation(
 	origin consensus.ValidationOrigin,
 ) (consensus.ValidationDisposition, error) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 
 	trusted := e.adaptor.IsTrusted(validation.NodeID)
 
@@ -217,8 +216,11 @@ func (e *Engine) ProcessVerifiedValidation(
 			(e.relayPolicy != nil && e.relayPolicy.RelayUntrustedValidations()),
 	}
 
-	if tracked && e.validationTracker != nil {
-		disposition.Status = validationDispositionStatus(e.validationTracker.AddStatus(validation))
+	tracker := e.validationTracker
+	deferFinality := tracked && tracker != nil
+	if deferFinality {
+		tracker.beginFinalityDeferral()
+		disposition.Status = validationDispositionStatus(tracker.addStatus(validation, false))
 	}
 
 	if disposition.AcquireEligible() {
@@ -231,6 +233,10 @@ func (e *Engine) ProcessVerifiedValidation(
 		Timestamp:  e.adaptor.Now(),
 	})
 
+	e.mu.Unlock()
+	if deferFinality {
+		tracker.endFinalityDeferral()
+	}
 	return disposition, nil
 }
 

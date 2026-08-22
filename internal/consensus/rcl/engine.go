@@ -225,11 +225,9 @@ type Engine struct {
 	// Start. Nil keeps flat-count semantics.
 	ledgerAncestry LedgerAncestryProvider
 
-	// pendingBroadcasts queues broadcasts produced under e.mu so they flush
-	// after Unlock: holding e.mu across BroadcastProposal/Validation blocks
-	// ingress on e.mu.RLock and can stall consensus on a slow peer send
-	// queue. Mutated only under e.mu; drained by takePendingBroadcastsLocked.
-	pendingBroadcasts []func()
+	// pendingPostUnlock queues work produced under e.mu so it runs after Unlock.
+	// Mutated only under e.mu; drained by takePendingPostUnlockLocked.
+	pendingPostUnlock []func()
 
 	// missedHeartbeats counts dropped heartbeat ticks (gap > 2× interval).
 	// time.Ticker silently coalesces ticks under load; this surfaces that
@@ -241,10 +239,10 @@ type Engine struct {
 	// disables it.
 	stallPing atomic.Pointer[func()]
 
-	// deferBroadcasts > 0 inside timerEntry / StartRound enables deferred
-	// broadcast batching; at zero the enqueue helpers send synchronously so
-	// direct callers (tests) observe broadcasts immediately. Mutated under e.mu.
-	deferBroadcasts int
+	// deferPostUnlock > 0 inside timerEntry / StartRound enables deferred work;
+	// at zero the broadcast helpers send synchronously so direct callers (tests)
+	// observe broadcasts immediately. Mutated under e.mu.
+	deferPostUnlock int
 
 	// previousTrustedSet is the trusted set from the previous
 	// startRoundLocked; diffed against the current set each round to derive
@@ -312,6 +310,24 @@ func (e *Engine) refreshValidationConfig() int {
 	return quorum
 }
 
+func (e *Engine) refreshValidationConfigDeferredLocked() int {
+	e.validationConfigMu.Lock()
+	tracker := e.validationTracker
+	if tracker == nil {
+		e.validationConfigMu.Unlock()
+		return 0
+	}
+	trusted, quorum, negativeUNL := validationConfig(e.adaptor)
+	tracker.beginFinalityDeferral()
+	tracker.updateTrustedQuorumAndNegativeUNL(trusted, quorum, negativeUNL)
+	e.validationConfigMu.Unlock()
+	e.pendingPostUnlock = append(e.pendingPostUnlock, func() {
+		tracker.endFinalityDeferral()
+		tracker.checkAcquired()
+	})
+	return quorum
+}
+
 var _ consensus.EngineTerminal = (*Engine)(nil)
 
 // ValidationArchive is the archive API subset the engine consumes,
@@ -334,17 +350,17 @@ func (e *Engine) loadArchive() ValidationArchive {
 }
 
 // enqueueProposalBroadcastLocked stages a proposal to broadcast after e.mu
-// is released (see pendingBroadcasts). Caller must hold e.mu. With no
+// is released (see pendingPostUnlock). Caller must hold e.mu. With no
 // deferred scope active the send is synchronous.
 func (e *Engine) enqueueProposalBroadcastLocked(p *consensus.Proposal) {
 	if p == nil {
 		return
 	}
-	if e.deferBroadcasts == 0 {
+	if e.deferPostUnlock == 0 {
 		e.broadcastProposal(p)
 		return
 	}
-	e.pendingBroadcasts = append(e.pendingBroadcasts, func() {
+	e.pendingPostUnlock = append(e.pendingPostUnlock, func() {
 		e.broadcastProposal(p)
 	})
 }
@@ -365,11 +381,11 @@ func (e *Engine) enqueueValidationBroadcastLocked(v *consensus.Validation) {
 	if v == nil {
 		return
 	}
-	if e.deferBroadcasts == 0 {
+	if e.deferPostUnlock == 0 {
 		e.broadcastValidation(v)
 		return
 	}
-	e.pendingBroadcasts = append(e.pendingBroadcasts, func() {
+	e.pendingPostUnlock = append(e.pendingPostUnlock, func() {
 		e.broadcastValidation(v)
 	})
 }
@@ -382,20 +398,20 @@ func (e *Engine) broadcastValidation(v *consensus.Validation) {
 	}
 }
 
-// takePendingBroadcastsLocked drains the queued broadcast closures.
-// Caller must hold e.mu; pass the result to flushBroadcasts after Unlock.
-func (e *Engine) takePendingBroadcastsLocked() []func() {
-	if len(e.pendingBroadcasts) == 0 {
+// takePendingPostUnlockLocked drains the queued post-lock closures.
+// Caller must hold e.mu; pass the result to runPostUnlock after Unlock.
+func (e *Engine) takePendingPostUnlockLocked() []func() {
+	if len(e.pendingPostUnlock) == 0 {
 		return nil
 	}
-	out := e.pendingBroadcasts
-	e.pendingBroadcasts = nil
+	out := e.pendingPostUnlock
+	e.pendingPostUnlock = nil
 	return out
 }
 
-// flushBroadcasts runs each queued broadcast. MUST be called with e.mu
+// runPostUnlock runs each queued closure. MUST be called with e.mu
 // released.
-func flushBroadcasts(pending []func()) {
+func runPostUnlock(pending []func()) {
 	for _, fn := range pending {
 		fn()
 	}
@@ -693,9 +709,6 @@ func (e *Engine) Start(ctx context.Context) error {
 	}
 	tracker := e.validationTracker
 	e.validationTracker.SetFullyValidatedCallback(func(ledgerID consensus.LedgerID, seq uint32) {
-		// Callback contract: production callers (OnValidation,
-		// sendValidation) hold e.mu; tests call Add without it. So it MUST
-		// NOT take e.mu (non-recursive RWMutex → self-deadlock).
 		// e.archive / e.inMemoryLedgers are read via atomics to stay
 		// race-free against SetArchive.
 		e.adaptor.OnLedgerFullyValidated(ledgerID, seq)
@@ -710,8 +723,7 @@ func (e *Engine) Start(ctx context.Context) error {
 			arc.NoteFullyValidated(seq)
 		}
 		// Drive in-memory retention: ExpireOld fires onStale per evicted
-		// validation (archive captures it first) and takes vt.mu, not e.mu,
-		// so it's safe under the held e.mu. Runs with or without an archive;
+		// validation (archive captures it first). Runs with or without an archive;
 		// the archive's InMemoryLedgers overrides, else defaultInMemoryLedgers.
 		retention := inMem
 		if retention == 0 {
@@ -803,13 +815,13 @@ func (e *Engine) StartRound(round consensus.RoundID, proposing bool) error {
 		e.mu.Unlock()
 		return errLedgerAcceptInProgress
 	}
-	e.deferBroadcasts++
+	e.deferPostUnlock++
 	e.acceptedLCL = consensus.LedgerID{}
 	err := e.startRoundLocked(round, proposing, false)
-	e.deferBroadcasts--
-	pending := e.takePendingBroadcastsLocked()
+	e.deferPostUnlock--
+	pending := e.takePendingPostUnlockLocked()
 	e.mu.Unlock()
-	flushBroadcasts(pending)
+	runPostUnlock(pending)
 	return err
 }
 
@@ -822,7 +834,7 @@ func (e *Engine) RestartRound(proposing bool) error {
 		e.mu.Unlock()
 		return errLedgerAcceptInProgress
 	}
-	e.deferBroadcasts++
+	e.deferPostUnlock++
 
 	working, err := e.adaptor.GetLastClosedLedger()
 	if err == nil && working == nil {
@@ -844,10 +856,10 @@ func (e *Engine) RestartRound(proposing bool) error {
 		err = e.startRoundLocked(round, proposing, false)
 	}
 
-	e.deferBroadcasts--
-	pending := e.takePendingBroadcastsLocked()
+	e.deferPostUnlock--
+	pending := e.takePendingPostUnlockLocked()
 	e.mu.Unlock()
-	flushBroadcasts(pending)
+	runPostUnlock(pending)
 	return err
 }
 
