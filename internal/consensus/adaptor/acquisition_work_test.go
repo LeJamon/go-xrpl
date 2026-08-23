@@ -636,6 +636,50 @@ func TestProcessAcquisitionWork_BaseReplyCannotPoisonSharedAcquisition(t *testin
 	}
 }
 
+func TestAcquisitionWorkResultPromotesResolvedHashOnlyConsensusLedger(t *testing.T) {
+	router, _, svc := makeProvisionalWarmRouter(t)
+	closed := svc.GetClosedLedgerIndex()
+	rootHash, rootData, _ := buildSelfHealSourceState(t)
+	pivotHeader := header.LedgerHeader{
+		LedgerIndex: closed + maxForwardDeltaGap + 1,
+		ParentHash:  [32]byte{0x91},
+		AccountHash: rootHash,
+		CloseTime:   time.Unix(1_700_000_200, 0),
+	}
+	pivotHeader.Hash = header.CalculateHash(pivotHeader)
+
+	require.NoError(t, router.requestConsensusLedger(consensus.LedgerID(pivotHeader.Hash)))
+	pivotAcquisition := router.fetchTracker.Find(pivotHeader.Hash)
+	require.NotNil(t, pivotAcquisition)
+	require.True(t, pivotAcquisition.SequenceInitiallyUnknown())
+
+	lane := newAcquisitionWorkLane(1)
+	lane.start(t.Context())
+	t.Cleanup(lane.stop)
+	require.True(t, lane.submit(pivotAcquisition, acquisitionWorkEvent{
+		kind:   acquisitionWorkData,
+		peerID: 7,
+		data: &message.LedgerData{
+			LedgerHash: pivotHeader.Hash[:],
+			InfoType:   message.LedgerInfoBase,
+			Nodes: []message.LedgerNode{
+				{NodeData: header.AddRaw(pivotHeader, false)},
+				{NodeData: rootData},
+			},
+		},
+	}))
+
+	result := <-lane.results()
+	require.Equal(t, pivotHeader.LedgerIndex, pivotAcquisition.Seq())
+	require.False(t, router.standardReplay.active)
+	router.handleAcquisitionWorkResult(result)
+
+	require.True(t, router.standardReplay.active)
+	require.Equal(t, pivotHeader.LedgerIndex, router.standardReplay.pivotSeq)
+	require.Equal(t, pivotHeader.Hash, router.standardReplay.pivotHash)
+	require.Same(t, pivotAcquisition, router.fetchTracker.Find(pivotHeader.Hash))
+}
+
 func TestProcessAcquisitionWork_DuplicatePartialBaseDoesNotRetry(t *testing.T) {
 	service := newTestLedgerService(t)
 	closed := service.GetClosedLedger()
@@ -1356,9 +1400,9 @@ func TestAcquisitionWork_TimerCheckPreemptsYieldedTraversal(t *testing.T) {
 	for _, node := range packNodes {
 		entries = append(entries, shamap.FlushEntry{Hash: node.Hash, Data: node.Data})
 	}
-	require.NoError(t, family.StoreBatch(t.Context(), entries))
 	ledger := inbound.New(ledgerHash, h.LedgerIndex, 7, serveTestLogger(), inbound.WithFamily(family))
 	require.NoError(t, ledger.GotBase([]message.LedgerNode{{NodeData: headerData}, {NodeData: rootData}}))
+	require.NoError(t, family.StoreBatch(t.Context(), entries))
 	base := time.Now()
 	ledger.RearmTimer(base)
 	require.Equal(t, inbound.TimerRefresh, ledger.OnTimer(base.Add(4*time.Second)))

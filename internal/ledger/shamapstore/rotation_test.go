@@ -50,7 +50,7 @@ func (f *fakeGenerationPruner) GenerationState() (uint32, uint32) {
 
 func TestRotate_RefreshFailureAbortsDeletion(t *testing.T) {
 	r, nodes, rel := newTestRotator(t, false, 256)
-	r.SetStateRefresh(func(context.Context, uint32, func(time.Duration) error) (uint32, error) {
+	r.SetStateRefresh(func(context.Context, uint32, func(context.Context, time.Duration) error) (uint32, error) {
 		return 0, errors.New("missing live node")
 	}, nil, nil)
 	r.maybeRotate(context.Background(), 500)
@@ -97,10 +97,10 @@ func TestRotate_RefreshCheckpointWaitsForHealthRecovery(t *testing.T) {
 	healthy.Store(true)
 	r.SetHealthCheck(healthy.Load, time.Millisecond)
 	checkpointReached := make(chan struct{})
-	r.SetStateRefresh(func(_ context.Context, seq uint32, checkpoint func(time.Duration) error) (uint32, error) {
+	r.SetStateRefresh(func(ctx context.Context, seq uint32, checkpoint func(context.Context, time.Duration) error) (uint32, error) {
 		healthy.Store(false)
 		close(checkpointReached)
-		if err := checkpoint(time.Millisecond); err != nil {
+		if err := checkpoint(ctx, time.Millisecond); err != nil {
 			return 0, err
 		}
 		return seq, nil
@@ -134,10 +134,10 @@ func TestRotate_RefreshCheckpointHonorsCancellation(t *testing.T) {
 	healthy.Store(true)
 	r.SetHealthCheck(healthy.Load, time.Millisecond)
 	checkpointReached := make(chan struct{})
-	r.SetStateRefresh(func(_ context.Context, seq uint32, checkpoint func(time.Duration) error) (uint32, error) {
+	r.SetStateRefresh(func(ctx context.Context, seq uint32, checkpoint func(context.Context, time.Duration) error) (uint32, error) {
 		healthy.Store(false)
 		close(checkpointReached)
-		if err := checkpoint(time.Millisecond); err != nil {
+		if err := checkpoint(ctx, time.Millisecond); err != nil {
 			return 0, err
 		}
 		return seq, nil
@@ -173,9 +173,9 @@ func TestRotate_RefreshPacingHonorsCancellation(t *testing.T) {
 	healthy.Store(true)
 	r.SetHealthCheck(healthy.Load, time.Millisecond)
 	checkpointReached := make(chan struct{})
-	r.SetStateRefresh(func(_ context.Context, seq uint32, checkpoint func(time.Duration) error) (uint32, error) {
+	r.SetStateRefresh(func(ctx context.Context, seq uint32, checkpoint func(context.Context, time.Duration) error) (uint32, error) {
 		close(checkpointReached)
-		if err := checkpoint(time.Hour); err != nil {
+		if err := checkpoint(ctx, time.Hour); err != nil {
 			return 0, err
 		}
 		return seq, nil
@@ -206,7 +206,7 @@ func TestRotator_LongRefreshPersistsActualSequenceAndCoalescesQueuedNotification
 	r, nodes, _ := newTestRotator(t, false, 256)
 	refreshRequests := make(chan uint32, 3)
 	resumeRefresh := make(chan struct{})
-	r.SetStateRefresh(func(_ context.Context, requested uint32, _ func(time.Duration) error) (uint32, error) {
+	r.SetStateRefresh(func(_ context.Context, requested uint32, _ func(context.Context, time.Duration) error) (uint32, error) {
 		refreshRequests <- requested
 		if requested == 800 {
 			<-resumeRefresh
@@ -264,7 +264,9 @@ func TestRotate_PartialPruneResetsCacheWithoutAdvancing(t *testing.T) {
 	nodes.deleted = 3
 	nodes.err = errors.New("partial prune")
 	locked, unlocked := 0, 0
-	r.SetStateRefresh(func(_ context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) { return seq, nil }, nil, func() func() {
+	r.SetStateRefresh(func(_ context.Context, seq uint32, _ func(context.Context, time.Duration) error) (uint32, error) {
+		return seq, nil
+	}, nil, func() func() {
 		locked++
 		return func() { unlocked++ }
 	})
@@ -315,7 +317,9 @@ func newTestRotator(t *testing.T, advisory bool, interval uint32) (*Rotator, *fa
 	if r == nil {
 		t.Fatal("NewRotator returned nil")
 	}
-	r.SetStateRefresh(func(_ context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) { return seq, nil }, nil, nil)
+	r.SetStateRefresh(func(_ context.Context, seq uint32, _ func(context.Context, time.Duration) error) (uint32, error) {
+		return seq, nil
+	}, nil, nil)
 	return r, nodes, rel
 }
 
@@ -383,7 +387,7 @@ func TestRotate_PrefersGenerationRotationOverSequencePruning(t *testing.T) {
 	}
 	nodes := &fakeGenerationPruner{committed: true}
 	r := NewRotator(store, nodes, nil, RotationConfig{DeleteInterval: 256}, nil)
-	r.SetStateRefresh(func(_ context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) {
+	r.SetStateRefresh(func(_ context.Context, seq uint32, _ func(context.Context, time.Duration) error) (uint32, error) {
 		return seq, nil
 	}, nil, nil)
 
@@ -411,7 +415,7 @@ func TestRotate_CommittedGenerationAdvancesDespiteCleanupError(t *testing.T) {
 		rotateErr: errors.New("retired directory cleanup failed"),
 	}
 	r := NewRotator(store, nodes, nil, RotationConfig{DeleteInterval: 256}, nil)
-	r.SetStateRefresh(func(_ context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) {
+	r.SetStateRefresh(func(_ context.Context, seq uint32, _ func(context.Context, time.Duration) error) (uint32, error) {
 		return seq, nil
 	}, nil, nil)
 
@@ -505,7 +509,7 @@ func TestRotator_ReconcileFailureBlocksAnotherGenerationRotation(t *testing.T) {
 	}
 	nodes := &fakeGenerationPruner{committed: true}
 	r := NewRotator(store, nodes, nil, RotationConfig{DeleteInterval: 256}, nil)
-	r.SetStateRefresh(func(_ context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) {
+	r.SetStateRefresh(func(_ context.Context, seq uint32, _ func(context.Context, time.Duration) error) (uint32, error) {
 		return seq, nil
 	}, nil, nil)
 
@@ -588,7 +592,7 @@ func TestRotator_StateRefreshHooksCanBeUpdatedConcurrently(t *testing.T) {
 	refresh := func(
 		_ context.Context,
 		seq uint32,
-		_ func(time.Duration) error,
+		_ func(context.Context, time.Duration) error,
 	) (uint32, error) {
 		return seq, nil
 	}
@@ -621,7 +625,7 @@ func TestRotator_StateRefreshUsesConsistentHookSnapshot(t *testing.T) {
 		func(
 			_ context.Context,
 			seq uint32,
-			_ func(time.Duration) error,
+			_ func(context.Context, time.Duration) error,
 		) (uint32, error) {
 			close(entered)
 			<-release
@@ -640,7 +644,7 @@ func TestRotator_StateRefreshUsesConsistentHookSnapshot(t *testing.T) {
 	}()
 	<-entered
 	r.SetStateRefresh(
-		func(_ context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) {
+		func(_ context.Context, seq uint32, _ func(context.Context, time.Duration) error) (uint32, error) {
 			return seq, nil
 		},
 		func(uint32) {},
@@ -754,7 +758,9 @@ func TestRotate_TolerantOfNilRelationalPruner(t *testing.T) {
 	if r == nil {
 		t.Fatal("rotator nil with valid node pruner")
 	}
-	r.SetStateRefresh(func(_ context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) { return seq, nil }, nil, nil)
+	r.SetStateRefresh(func(_ context.Context, seq uint32, _ func(context.Context, time.Duration) error) (uint32, error) {
+		return seq, nil
+	}, nil, nil)
 	r.maybeRotate(context.Background(), 500)
 	r.maybeRotate(context.Background(), 800)
 	if nc := nodes.calls(); len(nc) != 1 || nc[0] != 500 {

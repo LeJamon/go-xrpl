@@ -192,6 +192,7 @@ type ValidationTracker struct {
 	pendingGeneration   map[finalityKey]uint64
 	finalityGeneration  uint64
 	dispatchingFinality bool
+	finalityDeferrals   int
 
 	// minSeq is the sequence floor for accepting new validations.
 	// Validations with LedgerSeq < minSeq are rejected in Add(). The
@@ -529,21 +530,14 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 //     Sequence monotonicity and equivocation remain enforced independently by
 //     bySequence/seqEnforcers.
 //
-// onFullyValidated is fired OUTSIDE vt.mu so the callback may call
-// back into the tracker (e.g. ExpireOld) or take other locks that
-// vt.mu doesn't shadow without deadlocking. Mirrors the lock-free
-// callback dispatch ExpireOld already uses for onStale.
-//
-// IMPORTANT: the engine's callers (OnValidation, sendValidation) hold
-// engine.e.mu.Lock when they call Add, so the callback runs under that
-// write lock too. The callback MUST NOT take engine.e.mu (RLock or
-// otherwise) — Go's RWMutex is non-recursive and would self-deadlock.
-// Adding new locks the callback may need is fine as long as they are
-// not already held by the caller chain.
-//
-// Defer order is LIFO: vt.mu.Unlock runs first (released before the
-// callback), then the captured fire-tuple is dispatched.
+// onFullyValidated is fired outside vt.mu. Engine callers use addStatus with a
+// finality deferral so tracker and round state remain linearized while callback
+// dispatch waits for the engine mutex to be released.
 func (vt *ValidationTracker) AddStatus(validation *consensus.Validation) ValStatus {
+	return vt.addStatus(validation, true)
+}
+
+func (vt *ValidationTracker) addStatus(validation *consensus.Validation, drainFinality bool) ValStatus {
 	if validation == nil {
 		return ValStatusStale
 	}
@@ -575,7 +569,9 @@ func (vt *ValidationTracker) AddStatus(validation *consensus.Validation) ValStat
 	vt.mu.Lock()
 	defer func() {
 		vt.mu.Unlock()
-		vt.drainFinality()
+		if drainFinality {
+			vt.drainFinality()
+		}
 	}()
 
 	// validation.NodeID is already master-shaped on entry — the
@@ -817,7 +813,7 @@ func (vt *ValidationTracker) cancelFinalityLocked(key finalityKey) {
 // active drainer observes and processes it after the callback returns.
 func (vt *ValidationTracker) drainFinality() {
 	vt.mu.Lock()
-	if vt.dispatchingFinality {
+	if vt.dispatchingFinality || vt.finalityDeferrals > 0 {
 		vt.mu.Unlock()
 		return
 	}
@@ -826,6 +822,11 @@ func (vt *ValidationTracker) drainFinality() {
 
 	for {
 		vt.mu.Lock()
+		if vt.finalityDeferrals > 0 {
+			vt.dispatchingFinality = false
+			vt.mu.Unlock()
+			return
+		}
 		if len(vt.pendingFinality) == 0 {
 			vt.dispatchingFinality = false
 			vt.mu.Unlock()
@@ -851,6 +852,26 @@ func (vt *ValidationTracker) drainFinality() {
 		callback := vt.onFullyValidated
 		vt.mu.Unlock()
 		callback(key.ledgerID, key.ledgerSeq)
+	}
+}
+
+func (vt *ValidationTracker) beginFinalityDeferral() {
+	vt.mu.Lock()
+	vt.finalityDeferrals++
+	vt.mu.Unlock()
+}
+
+func (vt *ValidationTracker) endFinalityDeferral() {
+	vt.mu.Lock()
+	if vt.finalityDeferrals == 0 {
+		vt.mu.Unlock()
+		panic("validation finality deferral underflow")
+	}
+	vt.finalityDeferrals--
+	ready := vt.finalityDeferrals == 0
+	vt.mu.Unlock()
+	if ready {
+		vt.drainFinality()
 	}
 }
 

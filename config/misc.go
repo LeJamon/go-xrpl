@@ -79,6 +79,18 @@ func ValidatePathSearchMax(pathSearchMax *int) error {
 	return validateNonNegative("path_search_max", *pathSearchMax)
 }
 
+// ValidateLedgerCacheSize accepts an unset size or a value within the supported cache bounds.
+func ValidateLedgerCacheSize(size *int) error {
+	if size == nil {
+		return nil
+	}
+	if *size < MinLedgerCacheSize || *size > MaxLedgerCacheSize {
+		return fmt.Errorf("ledger_cache_size must be between %d and %d, got %d",
+			MinLedgerCacheSize, MaxLedgerCacheSize, *size)
+	}
+	return nil
+}
+
 // ValidateWebsocketPingFrequency validates the websocket ping frequency
 func ValidateWebsocketPingFrequency(frequency int) error {
 	return validateNonNegative("websocket_ping_frequency", frequency)

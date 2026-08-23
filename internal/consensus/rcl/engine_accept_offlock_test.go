@@ -149,6 +149,94 @@ func TestEngine_AcceptLedger_OffLockDoesNotBlockPeerHandlers(t *testing.T) {
 	}
 }
 
+func TestEngine_AcceptLedger_BroadcastsValidationAfterFinality(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.standalone = true
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	adaptor.quorum = 1
+	adaptor.setTrusted([]consensus.NodeID{adaptor.nodeID})
+
+	config := DefaultConfig()
+	config.ManualTick = true
+	engine := NewEngine(adaptor, config)
+	if err := engine.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := engine.Stop(); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	})
+
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round, true); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	driveToEstablish(t, engine, adaptor)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	adaptor.mu.Lock()
+	adaptor.onFullyValidated = func(consensus.LedgerID, uint32) {
+		close(entered)
+		<-release
+	}
+	adaptor.mu.Unlock()
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+
+	acceptDone := make(chan struct{})
+	go func() {
+		engine.mu.Lock()
+		engine.acceptLedger(consensus.ResultSuccess)
+		engine.mu.Unlock()
+		close(acceptDone)
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("local validation did not reach finality")
+	}
+
+	adaptor.mu.RLock()
+	broadcasts := len(adaptor.validationsBroadcast)
+	adaptor.mu.RUnlock()
+	if broadcasts != 0 {
+		t.Fatalf("validation broadcast overtook finality: got %d broadcasts", broadcasts)
+	}
+
+	tickDone := make(chan struct{})
+	go func() {
+		engine.timerEntry()
+		close(tickDone)
+	}()
+	select {
+	case <-tickDone:
+	case <-time.After(time.Second):
+		t.Fatal("finality callback held the engine lock")
+	}
+
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case <-acceptDone:
+	case <-time.After(time.Second):
+		t.Fatal("accepted-ledger completion did not resume")
+	}
+
+	adaptor.mu.RLock()
+	broadcasts = len(adaptor.validationsBroadcast)
+	adaptor.mu.RUnlock()
+	if broadcasts != 1 {
+		t.Fatalf("validation broadcasts after finality = %d, want 1", broadcasts)
+	}
+}
+
 func TestEngine_AcceptLedger_BuildFailureRetainsBuildingSequence(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.buildLedgerErr = errors.New("build failed")

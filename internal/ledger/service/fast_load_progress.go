@@ -1,6 +1,8 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -12,13 +14,16 @@ import (
 
 const (
 	storedSHAMapVerificationLogInterval = 15 * time.Second
-	// Workers flush local counts in batches to keep the shared atomic off the
-	// per-node hot path while retaining exact terminal totals.
+	// Worker-local counts avoid a shared atomic operation on every read-only
+	// verification fetch. Refresh walks need exact counts for checkpoint gating.
 	storedSHAMapNodeCountBatch = 256
 )
 
 type storedSHAMapVerificationProgress struct {
-	logger xrpllog.Logger
+	logger             xrpllog.Logger
+	operation          string
+	reportCancellation bool
+	extraFields        []any
 
 	mapType string
 	root    string
@@ -50,6 +55,7 @@ func newStoredSHAMapVerificationProgress(
 ) *storedSHAMapVerificationProgress {
 	progress := &storedSHAMapVerificationProgress{
 		logger:     logger,
+		operation:  "stored SHAMap verification",
 		nodeStore:  nodeStore,
 		mapType:    mapType.String(),
 		root:       fmt.Sprintf("%x", root[:8]),
@@ -60,6 +66,21 @@ func newStoredSHAMapVerificationProgress(
 	if nodeStore != nil {
 		progress.initialStats = nodeStore.Stats()
 	}
+	return progress
+}
+
+func newOnlineDeleteRefreshProgress(
+	logger xrpllog.Logger,
+	nodeStore nodestore.Database,
+	root [32]byte,
+	mapType shamap.Type,
+	sequence uint32,
+	startedAt time.Time,
+) *storedSHAMapVerificationProgress {
+	progress := newStoredSHAMapVerificationProgress(logger, nodeStore, root, mapType, startedAt)
+	progress.operation = "online delete: live-state refresh"
+	progress.reportCancellation = true
+	progress.extraFields = []any{"sequence", sequence}
 	return progress
 }
 
@@ -78,7 +99,8 @@ func (p *storedSHAMapVerificationProgress) start() {
 		return
 	}
 	p.started = true
-	p.logger.Info("stored SHAMap verification started",
+	fields := append([]any(nil), p.extraFields...)
+	fields = append(fields,
 		"map_type", p.mapType,
 		"root", p.root,
 		"active_branches", p.branchesTotal,
@@ -89,6 +111,7 @@ func (p *storedSHAMapVerificationProgress) start() {
 		"node_cache_hits_before", p.initialStats.CacheHits,
 		"node_cache_misses_before", p.initialStats.CacheMisses,
 	)
+	p.logger.Info(p.operation+" started", fields...)
 }
 
 func (p *storedSHAMapVerificationProgress) report(at time.Time) {
@@ -97,17 +120,21 @@ func (p *storedSHAMapVerificationProgress) report(at time.Time) {
 	}
 	fields := p.fields(at)
 	p.lastReport = at
-	p.logger.Info("stored SHAMap verification progress", fields...)
+	p.logger.Info(p.operation+" progress", fields...)
 }
 
 func (p *storedSHAMapVerificationProgress) finish(at time.Time, err error) {
 	p.start()
 	fields := p.fields(at)
 	if err != nil {
-		p.logger.Warn("stored SHAMap verification failed", append(fields, "err", err)...)
+		message := p.operation + " failed"
+		if p.reportCancellation && errors.Is(err, context.Canceled) {
+			message = p.operation + " canceled"
+		}
+		p.logger.Warn(message, append(fields, "err", err)...)
 		return
 	}
-	p.logger.Info("stored SHAMap verification complete", fields...)
+	p.logger.Info(p.operation+" complete", fields...)
 }
 
 func (p *storedSHAMapVerificationProgress) fields(at time.Time) []any {
@@ -138,7 +165,8 @@ func (p *storedSHAMapVerificationProgress) fields(at time.Time) []any {
 	if p.nodeStore != nil {
 		stats = p.nodeStore.Stats()
 	}
-	return []any{
+	fields := append([]any(nil), p.extraFields...)
+	return append(fields,
 		"map_type", p.mapType,
 		"root", p.root,
 		"elapsed", elapsed.String(),
@@ -160,5 +188,5 @@ func (p *storedSHAMapVerificationProgress) fields(at time.Time) []any {
 		"node_cache_hits_after", stats.CacheHits,
 		"node_cache_misses_before", p.initialStats.CacheMisses,
 		"node_cache_misses_after", stats.CacheMisses,
-	}
+	)
 }

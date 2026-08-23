@@ -24,10 +24,11 @@ ips = [
 # Fixed peer connections (optional)
 # ips_fixed = ["192.168.1.100 51235"]
 
-# Ripple Protocol (optional — defaults: trusted / all / 256 / "full")
+# Ripple Protocol (optional — defaults shown below)
 relay_proposals = "trusted"      # all, trusted, drop_untrusted (case-insensitive)
 relay_validations = "all"        # all, trusted, drop_untrusted (case-insensitive)
 ledger_history = 256             # integer, "full", or "none"
+ledger_cache_size = 256          # recent ledger/tx indexes and persisted-ledger lookups (1-384)
 fetch_depth = "full"             # integer, "full", or "none" (values < 10 are clamped to 10)
 
 # Network: "main", "testnet", "devnet", or integer

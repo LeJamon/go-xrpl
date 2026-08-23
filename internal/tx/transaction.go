@@ -286,7 +286,7 @@ type SignerWrapper struct {
 // CounterpartySignature is the nested signature object (sfCounterpartySignature).
 // It lets a second party attach a signature to a transaction without being the
 // signing Account. It carries a single signature (SigningPubKey + TxnSignature)
-// or a multi-signature (empty SigningPubKey + Signers). The field is excluded
+// or a multi-signature (Signers). The field is excluded
 // from the transaction's signing data (notSigning), so neither the top-level
 // signer nor the counterparty covers it.
 type CounterpartySignature struct {
@@ -360,12 +360,11 @@ func (ss *SponsorSignature) MarkFieldPresent(name string) {
 	ss.presentFields[name] = true
 }
 
-// ToMap serializes the counterparty object for the binary codec. SigningPubKey
-// is always emitted — a single-signed object carries the signer's key and a
-// multi-signed object carries an empty key — so a decode/encode round-trip
-// reproduces the original wire bytes.
 func (cs *CounterpartySignature) ToMap() map[string]any {
-	m := map[string]any{"SigningPubKey": cs.SigningPubKey}
+	m := make(map[string]any)
+	if cs.SigningPubKey != "" || cs.HasField("SigningPubKey") {
+		m["SigningPubKey"] = cs.SigningPubKey
+	}
 	if cs.TxnSignature != "" || cs.HasField("TxnSignature") {
 		m["TxnSignature"] = cs.TxnSignature
 	}
@@ -386,7 +385,10 @@ func (cs *CounterpartySignature) ToMap() map[string]any {
 }
 
 func (ss *SponsorSignature) ToMap() map[string]any {
-	m := map[string]any{"SigningPubKey": ss.SigningPubKey}
+	m := make(map[string]any)
+	if ss.SigningPubKey != "" || ss.HasField("SigningPubKey") {
+		m["SigningPubKey"] = ss.SigningPubKey
+	}
 	if ss.TxnSignature != "" || ss.HasField("TxnSignature") {
 		m["TxnSignature"] = ss.TxnSignature
 	}

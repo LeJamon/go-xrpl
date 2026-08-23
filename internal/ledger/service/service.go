@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	appconfig "github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -62,6 +63,9 @@ type Config struct {
 	// FetchDepth limits historical ledger serving relative to the closed ledger.
 	// Zero leaves serving unrestricted.
 	FetchDepth uint32
+	// LedgerCacheSize bounds both recent ledger history and persisted-ledger lookups.
+	// Zero selects config.DefaultLedgerCacheSize.
+	LedgerCacheSize uint32
 
 	// NetworkID is the network identifier for this node.
 	// Legacy networks (ID <= 1024) reject transactions that include NetworkID.
@@ -176,6 +180,11 @@ type Service struct {
 
 	// pendingValidationOrder tracks insertion order for LRU eviction.
 	pendingValidationOrder [][32]byte
+
+	// validationCandidates retain accepted ledgers across history eviction until
+	// quorum arrives. They are keyed by sequence so a replacement fork wins.
+	validationCandidates     map[uint32]*ledger.Ledger
+	validationCandidateOrder []uint32
 
 	// Invoked after the validated tip advances and after mu is released.
 	onValidatedLedger func(seq uint32, hash, parentHash [32]byte)
@@ -297,6 +306,13 @@ func New(cfg Config) (*Service, error) {
 	if err := cfg.Startup.validateMode(); err != nil {
 		return nil, fmt.Errorf("invalid ledger service configuration: %w", err)
 	}
+	if cfg.LedgerCacheSize == 0 {
+		cfg.LedgerCacheSize = appconfig.DefaultLedgerCacheSize
+	}
+	if cfg.LedgerCacheSize > appconfig.MaxLedgerCacheSize {
+		return nil, fmt.Errorf("invalid ledger service configuration: ledger cache size must be between %d and %d, got %d",
+			appconfig.MinLedgerCacheSize, appconfig.MaxLedgerCacheSize, cfg.LedgerCacheSize)
+	}
 
 	logger := cfg.Logger
 	if logger == nil {
@@ -352,14 +368,15 @@ func New(cfg Config) (*Service, error) {
 			completeLedgerTokens: make(map[uint32]uint64),
 			sweepInterval:        nodeStoreSweepIntervalForSize(cfg.NodeSize),
 		},
-		pendingValidation: make(map[[32]byte]*LedgerAcceptedEvent),
-		heldAdoptions:     make(map[uint32]*pendingAdopt),
-		txQueue:           txQueue,
-		localTxs:          localtxs.New(),
-		relayTxCache:      make(map[[32]byte]relayTxRecord),
-		relayTxCacheLimit: relayTxCacheMaxBytes,
-		feeTrack:          feetrack.New(),
-		validatedAgeNow:   time.Now,
+		pendingValidation:    make(map[[32]byte]*LedgerAcceptedEvent),
+		validationCandidates: make(map[uint32]*ledger.Ledger),
+		heldAdoptions:        make(map[uint32]*pendingAdopt),
+		txQueue:              txQueue,
+		localTxs:             localtxs.New(),
+		relayTxCache:         make(map[[32]byte]relayTxRecord),
+		relayTxCacheLimit:    relayTxCacheMaxBytes,
+		feeTrack:             feetrack.New(),
+		validatedAgeNow:      time.Now,
 	}
 	s.persistenceWorker.service = s
 	s.eventPublisher.service = s
@@ -600,6 +617,8 @@ func (s *Service) Start() (err error) {
 	s.logger.Info("Ledger service started",
 		"standalone", s.config.Standalone,
 		"openLedger", s.openLedger.Sequence(),
+		"ledgerCacheSize", s.config.LedgerCacheSize,
+		"persistedLedgerCacheSize", s.config.LedgerCacheSize,
 		"needsInitialSync", s.networkLedgerState == networkLedgerNeeded,
 		"fastLoadProvisional", s.networkLedgerState == networkLedgerFastLoadProvisional,
 	)
@@ -609,6 +628,13 @@ func (s *Service) Start() (err error) {
 	s.lifecycleState = serviceRunning
 
 	return nil
+}
+
+func (s *Service) ledgerCacheSize() uint32 {
+	if s.config.LedgerCacheSize == 0 {
+		return appconfig.DefaultLedgerCacheSize
+	}
+	return s.config.LedgerCacheSize
 }
 
 // rebuildOpenLedgerViewLocked rebuilds s.openLedgerView from s.closedLedger

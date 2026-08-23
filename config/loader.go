@@ -24,6 +24,9 @@ func LoadConfig(paths Paths) (*Config, error) {
 	if err := validateManifestCounts(v); err != nil {
 		return nil, fmt.Errorf("failed to load main config: %w", err)
 	}
+	if err := validateIntegerSetting(v, "ledger_cache_size", MinLedgerCacheSize, MaxLedgerCacheSize); err != nil {
+		return nil, fmt.Errorf("failed to load main config: %w", err)
+	}
 
 	// Unmarshal into struct.
 	// The custom decode hook is required so viper can decode the typed
@@ -69,27 +72,32 @@ func LoadConfig(paths Paths) (*Config, error) {
 // malformed configuration appear valid after decoding.
 func validateManifestCounts(v *viper.Viper) error {
 	for _, key := range []string{"overlay.max_untrusted_count", "overlay.max_trusted_count"} {
-		if !v.IsSet(key) {
-			continue
+		if err := validateIntegerSetting(v, key, MinManifestCount, MaxManifestCount); err != nil {
+			return err
 		}
+	}
+	return nil
+}
 
-		value := reflect.ValueOf(v.Get(key))
-		switch value.Kind() {
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			count := value.Int()
-			if count < MinManifestCount || count > MaxManifestCount {
-				return fmt.Errorf("%s must be between %d and %d, got %d",
-					key, MinManifestCount, MaxManifestCount, count)
-			}
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			count := value.Uint()
-			if count < MinManifestCount || count > MaxManifestCount {
-				return fmt.Errorf("%s must be between %d and %d, got %d",
-					key, MinManifestCount, MaxManifestCount, count)
-			}
-		default:
-			return fmt.Errorf("%s must be an integer count", key)
+func validateIntegerSetting(v *viper.Viper, key string, minValue, maxValue int) error {
+	if !v.IsSet(key) {
+		return nil
+	}
+
+	value := reflect.ValueOf(v.Get(key))
+	switch value.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		count := value.Int()
+		if count < int64(minValue) || count > int64(maxValue) {
+			return fmt.Errorf("%s must be between %d and %d, got %d", key, minValue, maxValue, count)
 		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		count := value.Uint()
+		if count < uint64(minValue) || count > uint64(maxValue) {
+			return fmt.Errorf("%s must be between %d and %d, got %d", key, minValue, maxValue, count)
+		}
+	default:
+		return fmt.Errorf("%s must be an integer count", key)
 	}
 	return nil
 }

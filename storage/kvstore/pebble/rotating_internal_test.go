@@ -262,6 +262,41 @@ func TestPromoteDoesNotOverwriteConcurrentPut(t *testing.T) {
 	require.Equal(t, []byte("new"), value)
 }
 
+func TestPromoteDoesNotBlockUnrelatedPut(t *testing.T) {
+	store := newPromoteRaceStore(t)
+	otherKey := []byte("other")
+	require.NotEqual(t, mutationStripe([]byte("key")), mutationStripe(otherKey))
+
+	store.archive.mu.Lock()
+	archiveLocked := true
+	defer func() {
+		if archiveLocked {
+			store.archive.mu.Unlock()
+		}
+	}()
+	promoteDone := make(chan error, 1)
+	go func() {
+		_, err := store.Promote([]byte("key"))
+		promoteDone <- err
+	}()
+	waitForLocked(t, &store.mu)
+
+	putDone := make(chan error, 1)
+	go func() {
+		putDone <- store.Put(otherKey, []byte("new"))
+	}()
+	select {
+	case err := <-putDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("unrelated Put blocked behind promotion")
+	}
+
+	store.archive.mu.Unlock()
+	archiveLocked = false
+	require.NoError(t, <-promoteDone)
+}
+
 func TestPromoteDoesNotResurrectConcurrentDelete(t *testing.T) {
 	store := newPromoteRaceStore(t)
 	batch, err := store.NewBatch()

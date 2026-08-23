@@ -519,6 +519,55 @@ const (
 	refreshHealthCheckPeriod   = 10 * time.Millisecond
 )
 
+func (s *Service) refreshGenerationState(
+	ctx context.Context,
+	root [32]byte,
+	sequence uint32,
+	generations nodestore.GenerationDatabase,
+	checkpoint func(context.Context, time.Duration) error,
+) (err error) {
+	startedAt := time.Now()
+	progress := newOnlineDeleteRefreshProgress(
+		s.logger,
+		s.nodeStore,
+		root,
+		shamap.TypeState,
+		sequence,
+		startedAt,
+	)
+	defer func() { progress.finish(time.Now(), err) }()
+
+	progressTicker := time.NewTicker(storedSHAMapVerificationLogInterval)
+	defer progressTicker.Stop()
+	var checkpointTicker *time.Ticker
+	var checkpointTicks <-chan time.Time
+	if checkpoint != nil {
+		checkpointTicker = time.NewTicker(refreshHealthCheckPeriod)
+		checkpointTicks = checkpointTicker.C
+		defer checkpointTicker.Stop()
+	}
+
+	err = s.walkStoredSHAMapConcurrentWithFetch(
+		ctx,
+		root,
+		shamap.TypeState,
+		generations.FetchForPromotion,
+		resolveOnlineDeleteRefreshWorkers(),
+		storedSHAMapWalkControl{
+			progress:        progress,
+			progressTicks:   progressTicker.C,
+			checkpoint:      checkpoint,
+			checkpointTicks: checkpointTicks,
+			now:             time.Now,
+		},
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+	return s.nodeStore.Sync(ctx)
+}
+
 // RefreshValidatedState preserves the complete live state tree before online
 // deletion retires older node-store records. Rotating stores promote archive
 // reads into their writable generation; legacy stores re-stamp records in place.
@@ -526,7 +575,7 @@ const (
 func (s *Service) RefreshValidatedState(
 	ctx context.Context,
 	minimumSeq uint32,
-	checkpoint func(time.Duration) error,
+	checkpoint func(context.Context, time.Duration) error,
 ) (uint32, error) {
 	s.mu.RLock()
 	validated := s.validatedLedger
@@ -554,30 +603,7 @@ func (s *Service) RefreshValidatedState(
 		if err != nil {
 			return 0, err
 		}
-		visited := 0
-		checkpointStarted := time.Now()
-		err = s.walkStoredSHAMapWithFetch(
-			ctx,
-			root,
-			shamap.TypeState,
-			generations.FetchForPromotion,
-			func(_ [32]byte, _ *nodestore.Node) error {
-				visited++
-				work := time.Since(checkpointStarted)
-				if checkpoint != nil &&
-					(visited%refreshHealthCheckInterval == 0 || work >= refreshHealthCheckPeriod) {
-					if err := checkpoint(work); err != nil {
-						return err
-					}
-					checkpointStarted = time.Now()
-				}
-				return nil
-			},
-		)
-		if err != nil {
-			return 0, err
-		}
-		if err := s.nodeStore.Sync(ctx); err != nil {
+		if err := s.refreshGenerationState(ctx, root, seq, generations, checkpoint); err != nil {
 			return 0, err
 		}
 		return seq, nil
@@ -618,7 +644,7 @@ func (s *Service) RefreshValidatedState(
 		work := time.Since(checkpointStarted)
 		if checkpoint != nil &&
 			(visited%refreshHealthCheckInterval == 0 || work >= refreshHealthCheckPeriod) {
-			if err := checkpoint(work); err != nil {
+			if err := checkpoint(ctx, work); err != nil {
 				return err
 			}
 			checkpointStarted = time.Now()

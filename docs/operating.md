@@ -226,6 +226,7 @@ keys to precede any `[section]` header.
 | `relay_proposals` | `"trusted"` | `all`, `trusted`, or `drop_untrusted`. |
 | `relay_validations` | `"all"` | `all`, `trusted`, or `drop_untrusted`. |
 | `ledger_history` | `256` | Ledgers to retain: integer, `"full"`, or `"none"`. |
+| `ledger_cache_size` | `256` | Recent in-memory ledger/transaction-index window and persisted-ledger lookup cache; integer from 1 to 384. |
 | `fetch_depth` | `"full"` | Back-fill depth: integer, `"full"`, or `"none"` (values < 10 clamp to 10). |
 | `network_id` | `"main"` | `"main"`, `"testnet"`, `"devnet"`, or an integer. |
 | `ledger_replay` | `0` | `0` = disabled, `1` = advertise peer replay capability. Unrelated to startup `--replay`. |
@@ -271,6 +272,15 @@ browser origin must also configure Basic Auth.
 | `fast_load_workers` | `0` | Concurrent workers for fast-load integrity verification. `0` selects an automatic value based on available CPUs; explicit values may range from `1` to `64`. |
 | `earliest_seq` | `32570` | Lowest ledger sequence to retain. |
 | `delete_batch` / `back_off_milliseconds` / `age_threshold_seconds` / `recovery_wait_seconds` | `100`/`100`/`60`/`5` | Online-delete pacing (batch size, inter-batch pause, minimum age, catch-up wait). |
+
+Before swapping Pebble generations, online delete refreshes the complete live
+state with up to four workers, bounded by the available Go CPUs. Health checks
+pause all refresh reads during the configured backoff. The ledger log reports
+start, periodic node/rate progress, completion, failure, and cancellation.
+Generation metadata advances only after the refreshed writable generation is
+synced and the swap is durable. An interrupted refresh restarts its state-tree
+walk from the root; any records that remain in the writable generation are
+reused, but every live node is read again.
 
 ### `[sqlite]` — relational index databases
 

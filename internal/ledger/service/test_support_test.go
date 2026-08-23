@@ -4,9 +4,12 @@ import (
 	"context"
 	"strconv"
 
+	appconfig "github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 )
+
+const historyWindow = uint32(appconfig.DefaultLedgerCacheSize)
 
 func formatRange(min, max uint32) string {
 	return strconv.FormatUint(uint64(min), 10) + "-" + strconv.FormatUint(uint64(max), 10)

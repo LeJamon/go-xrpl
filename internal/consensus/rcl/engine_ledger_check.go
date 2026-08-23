@@ -60,34 +60,73 @@ func (e *Engine) run() {
 // timerEntry is the single heartbeat dispatch; runs each
 // ledgerGRANULARITY and dispatches on current phase.
 func (e *Engine) timerEntry() {
-	tickStart := time.Now()
+	tickStart := e.heartbeatNow()
 	e.mu.Lock()
-	e.purgePendingTrustLocked()
-	e.deferBroadcasts++
+	// The accepted round stays immutable while its callback runs without e.mu.
+	if e.buildInProgress {
+		e.mu.Unlock()
+		return
+	}
+
+	var slowStages []slowHeartbeatStage
+	slowStages = recordSlowHeartbeatStage(
+		slowStages,
+		"lock-wait",
+		e.heartbeatNow().Sub(tickStart),
+		e.heartbeatContextLocked(),
+	)
+	e.deferPostUnlock++
 	var pending []func()
 	defer func() {
-		e.deferBroadcasts--
-		pending = e.takePendingBroadcastsLocked()
+		e.deferPostUnlock--
+		pending = e.takePendingPostUnlockLocked()
+		tickContext := e.heartbeatContextLocked()
 		e.mu.Unlock()
-		flushBroadcasts(pending)
-		// 50ms threshold — the 250ms heartbeat needs headroom.
-		dur := time.Since(tickStart)
-		if dur > 50*time.Millisecond {
+
+		broadcastStart := e.heartbeatNow()
+		runPostUnlock(pending)
+		slowStages = recordSlowHeartbeatStage(
+			slowStages,
+			"broadcast-flush",
+			e.heartbeatNow().Sub(broadcastStart),
+			tickContext,
+		)
+
+		dur := e.heartbeatNow().Sub(tickStart)
+		for _, stage := range slowStages {
+			slog.Info("timer stage slow",
+				"t", "consensus",
+				"event", "heartbeat-stage-slow",
+				"stage", stage.name,
+				"dur_ms", stage.duration.Milliseconds(),
+				"seq", stage.context.seq,
+				"phase", stage.context.phase.String(),
+				"mode", stage.context.mode.String(),
+			)
+		}
+		if dur > slowHeartbeatThreshold {
 			slog.Info("timer tick slow",
 				"t", "consensus",
 				"event", "tick-slow",
 				"dur_ms", dur.Milliseconds(),
-				"phase", e.phase.String(),
-				"mode", e.mode.String(),
+				"seq", tickContext.seq,
+				"phase", tickContext.phase.String(),
+				"mode", tickContext.mode.String(),
 			)
 		}
 	}()
 
+	stage := e.startHeartbeatStageLocked("trust-purge")
+	e.purgePendingTrustLocked()
+	slowStages = e.finishHeartbeatStage(slowStages, stage)
+
+	stage = e.startHeartbeatStageLocked("preflight")
 	// Phase work runs in every non-disconnected mode; the proposing gate is
 	// per-round (closeLedger/sendValidation gate on ModeProposing). Without
 	// observer-mode advancement a genesis bootstrap deadlocks at
 	// OpModeConnected — no round closes, so auto-promote never fires.
 	if e.adaptor.GetOperatingMode() == consensus.OpModeDisconnected {
+		slowStages = e.finishHeartbeatStage(slowStages, stage)
 		return
 	}
 
@@ -101,40 +140,111 @@ func (e *Engine) timerEntry() {
 		e.adaptor.GetOperatingMode() != consensus.OpModeFull {
 		e.leaveConsensusLocked()
 	}
-
-	// A peer-triggered accept may be applying the LCL off e.mu on another
-	// goroutine; don't drive rounds until its commit tail runs (rippled parks
-	// the timer thread while the jtACCEPT job holds no lock).
-	if e.buildInProgress {
-		return
-	}
+	slowStages = e.finishHeartbeatStage(slowStages, stage)
 
 	// Sweep validations that aged past the isCurrent window off the steering
 	// indexes each tick (rippled doSweep → current()); a silent validator
 	// must not keep steering preferred-ledger selection through a stall.
 	if e.validationTracker != nil {
+		stage = e.startHeartbeatStageLocked("flush-stale")
 		e.validationTracker.FlushStale()
+		slowStages = e.finishHeartbeatStage(slowStages, stage)
 	}
 
 	// checkLedger runs in every non-disconnected mode — the Syncing/Tracking
 	// → Full recovery path; gating on Full would wedge us after a wrongLedger
 	// demotion.
 	if e.phase != consensus.PhaseAccepted {
+		stage = e.startHeartbeatStageLocked("check-ledger")
 		e.checkLedger()
+		slowStages = e.finishHeartbeatStage(slowStages, stage)
 	}
 
 	switch e.phase {
 	case consensus.PhaseOpen:
+		stage = e.startHeartbeatStageLocked("phase-open")
 		e.phaseOpen()
+		slowStages = e.finishHeartbeatStage(slowStages, stage)
 	case consensus.PhaseEstablish:
+		stage = e.startHeartbeatStageLocked("phase-establish")
 		e.phaseEstablish()
+		slowStages = e.finishHeartbeatStage(slowStages, stage)
 	case consensus.PhaseAccepted:
+		stage = e.startHeartbeatStageLocked("round-start")
 		e.checkAndStartRoundInner()
+		slowStages = e.finishHeartbeatStage(slowStages, stage)
 		// Evaluate the new phase in the same tick after starting a round.
 		if e.phase == consensus.PhaseOpen {
+			stage = e.startHeartbeatStageLocked("phase-open")
 			e.phaseOpen()
+			slowStages = e.finishHeartbeatStage(slowStages, stage)
 		}
 	}
+}
+
+const slowHeartbeatThreshold = 50 * time.Millisecond
+
+type heartbeatContext struct {
+	seq   uint32
+	phase consensus.Phase
+	mode  consensus.Mode
+}
+
+type slowHeartbeatStage struct {
+	name     string
+	duration time.Duration
+	context  heartbeatContext
+}
+
+type heartbeatStageTimer struct {
+	name    string
+	started time.Time
+	context heartbeatContext
+}
+
+func (e *Engine) heartbeatContextLocked() heartbeatContext {
+	seq := uint32(0)
+	if e.phase == consensus.PhaseAccepted && e.prevLedger != nil {
+		// Accepted retains the completed round state until the next round starts.
+		seq = e.prevLedger.Seq() + 1
+	} else if e.state != nil {
+		seq = e.state.Round.Seq
+	} else if e.prevLedger != nil {
+		seq = e.prevLedger.Seq() + 1
+	}
+	return heartbeatContext{seq: seq, phase: e.phase, mode: e.mode}
+}
+
+func (e *Engine) startHeartbeatStageLocked(name string) heartbeatStageTimer {
+	return heartbeatStageTimer{
+		name:    name,
+		started: e.heartbeatNow(),
+		context: e.heartbeatContextLocked(),
+	}
+}
+
+func (e *Engine) finishHeartbeatStage(
+	stages []slowHeartbeatStage,
+	stage heartbeatStageTimer,
+) []slowHeartbeatStage {
+	return recordSlowHeartbeatStage(
+		stages,
+		stage.name,
+		e.heartbeatNow().Sub(stage.started),
+		stage.context,
+	)
+}
+
+func recordSlowHeartbeatStage(
+	stages []slowHeartbeatStage,
+	name string,
+	duration time.Duration,
+	context heartbeatContext,
+) []slowHeartbeatStage {
+	if duration <= slowHeartbeatThreshold {
+		return stages
+	}
+	return append(stages, slowHeartbeatStage{name: name, duration: duration, context: context})
 }
 
 // checkAndStartRoundInner is the fallback round-start when acceptLedger's
