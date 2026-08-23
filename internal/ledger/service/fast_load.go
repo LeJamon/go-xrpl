@@ -293,175 +293,25 @@ func (s *Service) verifyStoredSHAMapWithTicksReport(
 		}
 	}()
 
-	if root == ([32]byte{}) {
-		return fmt.Errorf("zero root")
-	}
-
 	// The strict startup walk proves these durable subtrees complete. Retain
 	// shallow proofs and publish them only after the whole traversal succeeds,
 	// so the first inbound-ledger missing-node walk can skip the shared stored
 	// state instead of reading it all again. A concurrent generation reset makes
 	// Insert reject these old-generation proofs.
 	proofs := newStoredSHAMapProofs(s.shamapFamily)
-	proofs.record(storedSHAMapNode{hash: root})
-
-	fetch := s.storedSHAMapVerificationFetch()
-	rootNode, _, err := s.loadStoredSHAMapNodeWithFetch(
+	err = s.walkStoredSHAMapConcurrentWithFetch(
 		ctx,
-		storedSHAMapNode{hash: root},
+		root,
 		mapType,
-		fetch,
+		s.storedSHAMapVerificationFetch(),
+		resolveStoredSHAMapWorkers(s.config.FastLoadWorkers),
+		storedSHAMapWalkControl{progress: progress, progressTicks: ticks, now: now},
+		proofs.record,
 	)
-	if err != nil {
-		return err
-	}
-	progress.nodesChecked.Add(1)
-	inner, ok := rootNode.(shamap.InnerNodeReader)
-	if !ok {
-		return fmt.Errorf("root node %x is not an inner node", root[:8])
-	}
-
-	branches := make([][32]byte, 0, shamap.BranchFactor)
-	for branch := range shamap.BranchFactor {
-		if inner.IsEmptyBranch(branch) {
-			continue
-		}
-		child, childErr := inner.ChildHash(branch)
-		if childErr != nil {
-			return childErr
-		}
-		branches = append(branches, child)
-	}
-	progress.branchesTotal = uint32(len(branches))
-	workers := resolveStoredSHAMapWorkers(s.config.FastLoadWorkers)
-	progress.configureWorkers(workers, 0, len(branches))
-	progress.start()
-	frontier, outstanding, err := s.buildStoredSHAMapFrontier(
-		ctx,
-		branches,
-		workers*storedSHAMapFrontierTasksPerWorker,
-		mapType,
-		fetch,
-		func(node storedSHAMapNode) {
-			progress.nodesChecked.Add(1)
-			proofs.record(node)
-		},
-	)
-	for _, count := range outstanding {
-		if count == 0 {
-			progress.branchesComplete.Add(1)
-		}
-	}
-	if err != nil {
-		return err
-	}
-
-	startedWorkers := min(workers, len(frontier))
-	progress.configureWorkers(workers, startedWorkers, len(frontier))
-	if len(frontier) == 0 {
+	if err == nil {
 		proofs.publish()
-		return nil
 	}
-
-	walkCtx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-	var cancelOnce sync.Once
-	branchOutstanding := make([]atomic.Int64, len(outstanding))
-	for branch, count := range outstanding {
-		branchOutstanding[branch].Store(int64(count))
-	}
-
-	tasks := make(chan storedSHAMapTask, len(frontier))
-	for _, task := range frontier {
-		tasks <- task
-	}
-	close(tasks)
-
-	var wg sync.WaitGroup
-	for range startedWorkers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				if walkCtx.Err() != nil {
-					return
-				}
-				var task storedSHAMapTask
-				var ok bool
-				select {
-				case task, ok = <-tasks:
-					if !ok {
-						return
-					}
-				case <-walkCtx.Done():
-					return
-				}
-
-				progress.frontierSize.Add(-1)
-				progress.activeWorkers.Add(1)
-				var unreportedNodes uint64
-				walkErr := s.walkStoredSHAMapNodesWithFetch(
-					walkCtx,
-					[]storedSHAMapNode{task.node},
-					mapType,
-					fetch,
-					func(node storedSHAMapNode, _ *nodestore.Node) error {
-						unreportedNodes++
-						proofs.record(node)
-						if unreportedNodes == storedSHAMapNodeCountBatch {
-							progress.nodesChecked.Add(unreportedNodes)
-							unreportedNodes = 0
-						}
-						return nil
-					},
-				)
-				if unreportedNodes > 0 {
-					progress.nodesChecked.Add(unreportedNodes)
-				}
-				progress.activeWorkers.Add(-1)
-				if walkErr != nil {
-					cancelOnce.Do(func() {
-						cancel(walkErr)
-					})
-					return
-				}
-				if branchOutstanding[task.branch].Add(-1) == 0 {
-					progress.branchesComplete.Add(1)
-				}
-			}
-		}()
-	}
-	workersDone := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(workersDone)
-	}()
-
-	for {
-		select {
-		case tick, ok := <-ticks:
-			if !ok {
-				ticks = nil
-				continue
-			}
-			select {
-			case <-workersDone:
-				err = context.Cause(walkCtx)
-				if err == nil {
-					proofs.publish()
-				}
-				return err
-			default:
-			}
-			progress.report(tick)
-		case <-workersDone:
-			err = context.Cause(walkCtx)
-			if err == nil {
-				proofs.publish()
-			}
-			return err
-		}
-	}
+	return err
 }
 
 type storedSHAMapProofs struct {
@@ -520,14 +370,279 @@ type storedSHAMapFetch func(context.Context, nodestore.Hash256) (*nodestore.Node
 
 const (
 	maxStoredSHAMapWorkers             = 64
+	maxOnlineDeleteRefreshWorkers      = 4
 	storedSHAMapFrontierTasksPerWorker = 4
 )
+
+type storedSHAMapWalkControl struct {
+	progress        *storedSHAMapVerificationProgress
+	progressTicks   <-chan time.Time
+	checkpoint      func(time.Duration) error
+	checkpointTicks <-chan time.Time
+	now             func() time.Time
+}
 
 func resolveStoredSHAMapWorkers(configured int) int {
 	if configured <= 0 {
 		configured = runtime.GOMAXPROCS(0)
 	}
 	return min(configured, maxStoredSHAMapWorkers)
+}
+
+func resolveOnlineDeleteRefreshWorkers() int {
+	return min(runtime.GOMAXPROCS(0), maxOnlineDeleteRefreshWorkers)
+}
+
+func (s *Service) walkStoredSHAMapConcurrentWithFetch(
+	ctx context.Context,
+	root [32]byte,
+	mapType shamap.Type,
+	fetch storedSHAMapFetch,
+	workers int,
+	control storedSHAMapWalkControl,
+	visit func(storedSHAMapNode),
+) error {
+	if root == ([32]byte{}) {
+		return fmt.Errorf("zero root")
+	}
+	if workers <= 0 {
+		workers = 1
+	}
+	if control.now == nil {
+		control.now = time.Now
+	}
+
+	walkCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	var cancelOnce sync.Once
+	var checkpointGate sync.RWMutex
+	workStartedAt := control.now()
+	var lastCheckpointNodes uint64
+	controlledFetch := fetch
+	if control.checkpoint != nil {
+		controlledFetch = func(ctx context.Context, hash nodestore.Hash256) (*nodestore.Node, error) {
+			checkpointGate.RLock()
+			defer checkpointGate.RUnlock()
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return fetch(ctx, hash)
+		}
+	}
+
+	checkpointSignal := make(chan struct{}, 1)
+	onNode := func(node storedSHAMapNode) {
+		visited := control.progress.nodesChecked.Add(1)
+		if visit != nil {
+			visit(node)
+		}
+		if control.checkpoint != nil && visited%refreshHealthCheckInterval == 0 {
+			select {
+			case checkpointSignal <- struct{}{}:
+			default:
+			}
+		}
+	}
+
+	rootNode, _, err := s.loadStoredSHAMapNodeWithFetch(
+		walkCtx,
+		storedSHAMapNode{hash: root},
+		mapType,
+		controlledFetch,
+	)
+	if err != nil {
+		return err
+	}
+	onNode(storedSHAMapNode{hash: root})
+	inner, ok := rootNode.(shamap.InnerNodeReader)
+	if !ok {
+		return fmt.Errorf("root node %x is not an inner node", root[:8])
+	}
+
+	branches := make([][32]byte, 0, shamap.BranchFactor)
+	for branch := range shamap.BranchFactor {
+		if inner.IsEmptyBranch(branch) {
+			continue
+		}
+		child, childErr := inner.ChildHash(branch)
+		if childErr != nil {
+			return childErr
+		}
+		branches = append(branches, child)
+	}
+	control.progress.branchesTotal = uint32(len(branches))
+	control.progress.configureWorkers(workers, 0, len(branches))
+	frontier, outstanding, err := s.buildStoredSHAMapFrontier(
+		walkCtx,
+		branches,
+		workers*storedSHAMapFrontierTasksPerWorker,
+		mapType,
+		controlledFetch,
+		onNode,
+	)
+	for _, count := range outstanding {
+		if count == 0 {
+			control.progress.branchesComplete.Add(1)
+		}
+	}
+	if err != nil {
+		return err
+	}
+
+	startedWorkers := min(workers, len(frontier))
+	control.progress.configureWorkers(workers, startedWorkers, len(frontier))
+	control.progress.start()
+	if len(frontier) == 0 {
+		return context.Cause(walkCtx)
+	}
+
+	branchOutstanding := make([]atomic.Int64, len(outstanding))
+	for branch, count := range outstanding {
+		branchOutstanding[branch].Store(int64(count))
+	}
+	tasks := make(chan storedSHAMapTask, len(frontier))
+	for _, task := range frontier {
+		tasks <- task
+	}
+	close(tasks)
+
+	var workersGroup sync.WaitGroup
+	for range startedWorkers {
+		workersGroup.Add(1)
+		go func() {
+			defer workersGroup.Done()
+			for {
+				var task storedSHAMapTask
+				var open bool
+				select {
+				case task, open = <-tasks:
+					if !open {
+						return
+					}
+				case <-walkCtx.Done():
+					return
+				}
+
+				control.progress.frontierSize.Add(-1)
+				control.progress.activeWorkers.Add(1)
+				var unreportedNodes uint64
+				walkErr := s.walkStoredSHAMapNodesWithFetch(
+					walkCtx,
+					[]storedSHAMapNode{task.node},
+					mapType,
+					controlledFetch,
+					func(node storedSHAMapNode, _ *nodestore.Node) error {
+						if control.checkpoint != nil {
+							onNode(node)
+							return nil
+						}
+						unreportedNodes++
+						if visit != nil {
+							visit(node)
+						}
+						if unreportedNodes == storedSHAMapNodeCountBatch {
+							control.progress.nodesChecked.Add(unreportedNodes)
+							unreportedNodes = 0
+						}
+						return nil
+					},
+				)
+				if unreportedNodes > 0 {
+					control.progress.nodesChecked.Add(unreportedNodes)
+				}
+				control.progress.activeWorkers.Add(-1)
+				if walkErr != nil {
+					cancelOnce.Do(func() { cancel(walkErr) })
+					return
+				}
+				if branchOutstanding[task.branch].Add(-1) == 0 {
+					control.progress.branchesComplete.Add(1)
+				}
+			}
+		}()
+	}
+	workersDone := make(chan struct{})
+	go func() {
+		workersGroup.Wait()
+		close(workersDone)
+	}()
+
+	runCheckpoint := func() {
+		if control.checkpoint == nil || walkCtx.Err() != nil {
+			return
+		}
+		checkpointGate.Lock()
+		defer checkpointGate.Unlock()
+		if walkCtx.Err() != nil {
+			return
+		}
+		checkpointAt := control.now()
+		work := checkpointAt.Sub(workStartedAt)
+		if work < 0 {
+			work = 0
+		}
+		visited := control.progress.nodesChecked.Load()
+		if work < refreshHealthCheckPeriod &&
+			visited-lastCheckpointNodes < refreshHealthCheckInterval {
+			return
+		}
+		if checkpointErr := control.checkpoint(work); checkpointErr != nil {
+			cancelOnce.Do(func() { cancel(checkpointErr) })
+			return
+		}
+		lastCheckpointNodes = visited
+		workStartedAt = control.now()
+	}
+
+	progressTicks := control.progressTicks
+	checkpointTicks := control.checkpointTicks
+	if control.checkpoint == nil {
+		checkpointSignal = nil
+		checkpointTicks = nil
+	}
+	ctxDone := ctx.Done()
+	for {
+		select {
+		case tick, open := <-progressTicks:
+			if !open {
+				progressTicks = nil
+				continue
+			}
+			select {
+			case <-workersDone:
+				return context.Cause(walkCtx)
+			default:
+			}
+			control.progress.report(tick)
+		case _, open := <-checkpointTicks:
+			if !open {
+				checkpointTicks = nil
+				continue
+			}
+			select {
+			case <-workersDone:
+				return context.Cause(walkCtx)
+			default:
+			}
+			runCheckpoint()
+		case <-checkpointSignal:
+			select {
+			case <-workersDone:
+				return context.Cause(walkCtx)
+			default:
+			}
+			runCheckpoint()
+		case <-ctxDone:
+			ctxDone = nil
+			cause := context.Cause(ctx)
+			if cause == nil {
+				cause = ctx.Err()
+			}
+			cancelOnce.Do(func() { cancel(cause) })
+		case <-workersDone:
+			return context.Cause(walkCtx)
+		}
+	}
 }
 
 func (s *Service) storedSHAMapVerificationFetch() storedSHAMapFetch {

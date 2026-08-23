@@ -22,6 +22,7 @@ const legacyGenerationStateVersion = 1
 const generationStateVersion = 2
 const generationMarkerName = ".goxrpl-generation.json"
 const generationMarkerVersion = 1
+const rotatingStoreMutationStripes = 256
 
 var errGenerationNotOwned = errors.New("kvstore/pebble: generation is not owned by this store")
 
@@ -126,8 +127,11 @@ func validateGenerationBoundaries(lastRotated, minimumOnline uint32) error {
 // one archive generation on reads. Promote explicitly copies an archive record
 // into the writable generation for online-delete preservation.
 type RotatingStore struct {
-	mu       sync.RWMutex
-	rotateMu sync.Mutex
+	// Operations pin the generation pair with mu before locking mutation
+	// stripes. Multi-key operations acquire stripes in ascending order.
+	mu        sync.RWMutex
+	rotateMu  sync.Mutex
+	mutations [rotatingStoreMutationStripes]sync.Mutex
 
 	basePath              string
 	statePath             string
@@ -531,12 +535,49 @@ func (r *RotatingStore) CanRotateWithoutRefresh() (canRotate bool, resultErr err
 
 // Promote fetches key and copies an archive hit into the writable generation.
 func (r *RotatingStore) Promote(key []byte) ([]byte, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	if r.closed {
 		return nil, kvstore.ErrClosed
 	}
+	mutation := &r.mutations[mutationStripe(key)]
+	mutation.Lock()
+	defer mutation.Unlock()
 	return r.getLocked(key, true)
+}
+
+func (r *RotatingStore) lockMutations(keys [][]byte) [rotatingStoreMutationStripes]bool {
+	var selected [rotatingStoreMutationStripes]bool
+	for _, key := range keys {
+		selected[mutationStripe(key)] = true
+	}
+	for index := range selected {
+		if selected[index] {
+			r.mutations[index].Lock()
+		}
+	}
+	return selected
+}
+
+func (r *RotatingStore) unlockMutations(selected *[rotatingStoreMutationStripes]bool) {
+	for index := len(selected) - 1; index >= 0; index-- {
+		if selected[index] {
+			r.mutations[index].Unlock()
+		}
+	}
+}
+
+func mutationStripe(key []byte) int {
+	const (
+		offset = uint32(2166136261)
+		prime  = uint32(16777619)
+	)
+	hash := offset
+	for _, value := range key {
+		hash ^= uint32(value)
+		hash *= prime
+	}
+	return int(hash % rotatingStoreMutationStripes)
 }
 
 func (r *RotatingStore) getLocked(key []byte, promote bool) ([]byte, error) {
@@ -566,6 +607,9 @@ func (r *RotatingStore) Put(key []byte, value []byte) error {
 	if r.closed {
 		return kvstore.ErrClosed
 	}
+	mutation := &r.mutations[mutationStripe(key)]
+	mutation.Lock()
+	defer mutation.Unlock()
 	return r.writable.Put(key, value)
 }
 
@@ -1159,11 +1203,17 @@ func (b *rotatingBatch) Write() (resultErr error) {
 	if b.closed {
 		return kvstore.ErrClosed
 	}
-	b.store.mu.Lock()
-	defer b.store.mu.Unlock()
+	keys := make([][]byte, len(b.ops))
+	for index := range b.ops {
+		keys[index] = b.ops[index].key
+	}
+	b.store.mu.RLock()
+	defer b.store.mu.RUnlock()
 	if b.store.closed {
 		return kvstore.ErrClosed
 	}
+	lockedMutations := b.store.lockMutations(keys)
+	defer b.store.unlockMutations(&lockedMutations)
 	writableBatch, err := b.store.writable.NewBatch()
 	if err != nil {
 		return err

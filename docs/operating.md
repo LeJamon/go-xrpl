@@ -272,6 +272,15 @@ browser origin must also configure Basic Auth.
 | `earliest_seq` | `32570` | Lowest ledger sequence to retain. |
 | `delete_batch` / `back_off_milliseconds` / `age_threshold_seconds` / `recovery_wait_seconds` | `100`/`100`/`60`/`5` | Online-delete pacing (batch size, inter-batch pause, minimum age, catch-up wait). |
 
+Before swapping Pebble generations, online delete refreshes the complete live
+state with up to four workers, bounded by the available Go CPUs. Health checks
+pause all refresh reads during the configured backoff. The ledger log reports
+start, periodic node/rate progress, completion, failure, and cancellation.
+Generation metadata advances only after the refreshed writable generation is
+synced and the swap is durable. An interrupted refresh restarts its state-tree
+walk from the root; any records that remain in the writable generation are
+reused, but every live node is read again.
+
 ### `[sqlite]` — relational index databases
 
 | Key | Example | Meaning |
