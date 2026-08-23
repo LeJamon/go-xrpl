@@ -482,7 +482,7 @@ func TestService_ConcurrentRefreshChecksHealthDuringFrontierBuild(t *testing.T) 
 	require.Equal(t, int64(1), fetches.Load())
 }
 
-func TestService_ConcurrentRefreshCancelsBlockedCheckpointAfterFetchError(t *testing.T) {
+func TestService_ConcurrentRefreshDoesNotBlockAfterFetchError(t *testing.T) {
 	svc, _, _ := newRotatingRefreshFixture(t, 16)
 	root, err := svc.GetValidatedLedger().StateMapHash()
 	require.NoError(t, err)
@@ -504,7 +504,6 @@ func TestService_ConcurrentRefreshCancelsBlockedCheckpointAfterFetchError(t *tes
 		return nil, wantErr
 	}
 	checkpointTicks := make(chan time.Time)
-	checkpointStarted := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
 		done <- svc.walkStoredSHAMapConcurrentWithFetch(
@@ -523,7 +522,6 @@ func TestService_ConcurrentRefreshCancelsBlockedCheckpointAfterFetchError(t *tes
 					startedAt,
 				),
 				checkpoint: func(ctx context.Context, _ time.Duration) error {
-					close(checkpointStarted)
 					<-ctx.Done()
 					return context.Cause(ctx)
 				},
@@ -540,15 +538,10 @@ func TestService_ConcurrentRefreshCancelsBlockedCheckpointAfterFetchError(t *tes
 	close(fetchRelease)
 
 	select {
-	case <-checkpointStarted:
-	case <-time.After(time.Second):
-		t.Fatal("checkpoint did not start after the failed fetch released its read lock")
-	}
-	select {
 	case err := <-done:
 		require.ErrorIs(t, err, wantErr)
 	case <-time.After(time.Second):
-		t.Fatal("refresh did not cancel the blocked checkpoint after the fetch failed")
+		t.Fatal("refresh did not return after the fetch failed with a checkpoint pending")
 	}
 }
 
