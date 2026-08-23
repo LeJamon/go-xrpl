@@ -1356,9 +1356,9 @@ func TestAcquisitionWork_TimerCheckPreemptsYieldedTraversal(t *testing.T) {
 	for _, node := range packNodes {
 		entries = append(entries, shamap.FlushEntry{Hash: node.Hash, Data: node.Data})
 	}
-	require.NoError(t, family.StoreBatch(t.Context(), entries))
 	ledger := inbound.New(ledgerHash, h.LedgerIndex, 7, serveTestLogger(), inbound.WithFamily(family))
 	require.NoError(t, ledger.GotBase([]message.LedgerNode{{NodeData: headerData}, {NodeData: rootData}}))
+	require.NoError(t, family.StoreBatch(t.Context(), entries))
 	base := time.Now()
 	ledger.RearmTimer(base)
 	require.Equal(t, inbound.TimerRefresh, ledger.OnTimer(base.Add(4*time.Second)))

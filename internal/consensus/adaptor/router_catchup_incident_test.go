@@ -38,10 +38,10 @@ func newIssue1663BackedAcquisition(t *testing.T, seq uint32, peerID uint64) *inb
 	for _, node := range pack {
 		entries = append(entries, shamap.FlushEntry{Hash: node.Hash, Data: node.Data})
 	}
-	require.NoError(t, family.StoreBatch(t.Context(), entries))
 
 	il := inbound.New(ledgerHash, seq, peerID, serveTestLogger(), inbound.WithFamily(family))
 	require.NoError(t, il.GotBase([]message.LedgerNode{{NodeData: headerData}, {NodeData: rootData}}))
+	require.NoError(t, family.StoreBatch(t.Context(), entries))
 	return il
 }
 
