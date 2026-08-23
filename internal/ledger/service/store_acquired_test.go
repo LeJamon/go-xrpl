@@ -9,6 +9,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
+	shamapbackend "github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
 func acquiredLedgerFixture(t *testing.T, seq uint32, tag byte) (*header.LedgerHeader, *shamap.SHAMap, *shamap.SHAMap) {
@@ -147,6 +148,36 @@ func TestStoredLedgerValidationAdvancesIndependentlyOfConsensusSwitch(t *testing
 
 	require.NoError(t, svc.SwitchToPreferredLedger(validated))
 	require.Equal(t, h.Hash, svc.GetClosedLedger().Hash())
+}
+
+func TestStoredLedgerPromotionLoadsAfterCacheEviction(t *testing.T) {
+	db := newTestNodeStore(t, 10_000)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	cfg := DefaultConfig()
+	cfg.LedgerCacheSize = 1
+	cfg.NodeStore = db
+	cfg.SHAMapFamily = shamapbackend.New(db)
+	svc, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	first, firstState, firstTx := acquiredLedgerFixture(t, svc.GetClosedLedgerIndex()+1, 0xC3)
+	second, secondState, secondTx := acquiredLedgerFixture(t, first.LedgerIndex+1, 0xC4)
+	require.NoError(t, svc.StoreLedgerWithState(t.Context(), first, firstState, firstTx))
+	require.NoError(t, svc.StoreLedgerWithState(t.Context(), second, secondState, secondTx))
+	svc.FlushPersists()
+
+	svc.historyComponent.mu.RLock()
+	_, firstCached := svc.persistedLedgers[first.Hash]
+	svc.historyComponent.mu.RUnlock()
+	require.False(t, firstCached)
+
+	svc.PromoteStoredValidatedLedgerAt(first.LedgerIndex, first.Hash, time.Time{})
+	validated := svc.GetValidatedLedger()
+	require.NotNil(t, validated)
+	require.Equal(t, first.Hash, validated.Hash())
+	require.True(t, validated.IsValidated())
 }
 
 func TestStoredLedgerValidationPublishesTransactionResultsAfterConsensusSwitch(t *testing.T) {

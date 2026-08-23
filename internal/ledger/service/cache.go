@@ -308,6 +308,50 @@ func (s *Service) stashPendingValidationLocked(hash [32]byte, event *LedgerAccep
 	}
 }
 
+func (s *Service) retainValidationCandidateLocked(l *ledger.Ledger) {
+	seq := l.Sequence()
+	if _, exists := s.validationCandidates[seq]; !exists {
+		s.validationCandidateOrder = append(s.validationCandidateOrder, seq)
+	}
+	s.validationCandidates[seq] = l
+	for len(s.validationCandidateOrder) > pendingValidationMaxLen {
+		oldest := s.validationCandidateOrder[0]
+		s.validationCandidateOrder = s.validationCandidateOrder[1:]
+		delete(s.validationCandidates, oldest)
+	}
+}
+
+func (s *Service) drainValidationCandidateLocked(seq uint32, hash [32]byte) {
+	l := s.validationCandidates[seq]
+	if l == nil || l.Hash() != hash {
+		return
+	}
+	s.dropValidationCandidateLocked(seq)
+}
+
+func (s *Service) dropValidationCandidateLocked(seq uint32) {
+	delete(s.validationCandidates, seq)
+	for i, candidateSeq := range s.validationCandidateOrder {
+		if candidateSeq == seq {
+			s.validationCandidateOrder = append(
+				s.validationCandidateOrder[:i],
+				s.validationCandidateOrder[i+1:]...,
+			)
+			break
+		}
+	}
+}
+
+func (s *Service) dropValidationCandidateRangeLocked(first, keepSeq uint32, keepHash [32]byte) {
+	for seq, candidate := range s.validationCandidates {
+		if seq < first || (seq == keepSeq && candidate.Hash() == keepHash) {
+			continue
+		}
+		s.dropValidationCandidateLocked(seq)
+		s.drainPendingValidationLocked(candidate.Hash())
+	}
+}
+
 // drainPendingValidationLocked removes and returns the stashed event for hash,
 // or nil. Caller must hold s.mu.
 func (s *Service) drainPendingValidationLocked(hash [32]byte) *LedgerAcceptedEvent {

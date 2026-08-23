@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
+	shamapbackend "github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
 func mustNewOpenWithHeader(t *testing.T, h header.LedgerHeader, stateMap, txMap *shamap.SHAMap) *ledger.Ledger {
@@ -176,6 +178,186 @@ func TestAcceptLedgerLoop_BoundsHistory(t *testing.T) {
 	last := svc.GetClosedLedgerIndex()
 	if got, want := svc.GetServerInfo().CompleteLedgers, formatRange(last-window+1, last); got != want {
 		t.Errorf("complete_ledgers includes evicted in-memory history: got %q, want %q", got, want)
+	}
+}
+
+func TestDelayedValidationSurvivesHistoryEviction(t *testing.T) {
+	for _, evictCandidate := range []bool{false, true} {
+		name := "retained_candidate"
+		if evictCandidate {
+			name = "durable_fallback"
+		}
+		t.Run(name, func(t *testing.T) {
+			db := newTestNodeStore(t, 10_000)
+			t.Cleanup(func() {
+				if err := db.Close(); err != nil {
+					t.Errorf("close nodestore: %v", err)
+				}
+			})
+			cfg := DefaultConfig()
+			cfg.LedgerCacheSize = 1
+			cfg.NodeStore = db
+			cfg.SHAMapFamily = shamapbackend.New(db)
+			svc, err := New(cfg)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if err := svc.Start(); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			t.Cleanup(svc.Stop)
+
+			ctx := context.Background()
+			parent := svc.GetClosedLedger()
+			closeTime := time.Now().UTC()
+			firstSeq, err := svc.AcceptConsensusResult(ctx, parent, nil, nil, closeTime, true)
+			if err != nil {
+				t.Fatalf("AcceptConsensusResult(first): %v", err)
+			}
+			first := svc.GetClosedLedger()
+			firstHash := first.Hash()
+			secondSeq, err := svc.AcceptConsensusResult(ctx, first, nil, nil, closeTime.Add(time.Second), true)
+			if err != nil {
+				t.Fatalf("AcceptConsensusResult(second): %v", err)
+			}
+			second := svc.GetClosedLedger()
+			svc.mu.RLock()
+			_, pendingEvent := svc.pendingValidation[firstHash]
+			svc.mu.RUnlock()
+			if pendingEvent {
+				t.Fatal("validation event retained without an event sink")
+			}
+			if evictCandidate {
+				svc.FlushPersists()
+				svc.mu.Lock()
+				svc.drainValidationCandidateLocked(firstSeq, firstHash)
+				svc.mu.Unlock()
+			}
+
+			svc.SetValidatedLedger(secondSeq, second.Hash())
+			svc.historyComponent.mu.RLock()
+			_, firstStillCached := svc.ledgerHistory[firstSeq]
+			svc.historyComponent.mu.RUnlock()
+			if firstStillCached {
+				t.Fatalf("ledger %d remained in one-ledger history window", firstSeq)
+			}
+			if first.IsValidated() {
+				t.Fatalf("ledger %d validated before delayed quorum", firstSeq)
+			}
+
+			svc.SetValidatedLedger(firstSeq, firstHash)
+			if !first.IsValidated() && !evictCandidate {
+				t.Fatalf("ledger %d was not validated after history eviction", firstSeq)
+			}
+			if evictCandidate {
+				svc.FlushPersists()
+				validated, err := svc.GetLedgerBySequence(firstSeq)
+				if err != nil || !validated.IsValidated() {
+					t.Fatalf("durable ledger %d was not validated after cache eviction: %v", firstSeq, err)
+				}
+			}
+			svc.mu.RLock()
+			candidate := svc.validationCandidates[firstSeq]
+			svc.mu.RUnlock()
+			if candidate != nil {
+				t.Fatalf("ledger %d remained a validation candidate", firstSeq)
+			}
+		})
+	}
+}
+
+func TestSetValidatedLedgerRejectsRetainedCandidateOnConflictingHistory(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(svc.Stop)
+
+	seq, err := svc.AcceptConsensusResult(
+		context.Background(), svc.GetClosedLedger(), nil, nil, time.Now().UTC(), true,
+	)
+	if err != nil {
+		t.Fatalf("AcceptConsensusResult: %v", err)
+	}
+	candidate := svc.GetClosedLedger()
+	candidateHash := candidate.Hash()
+	h, stateMap, txMap := acquiredLedgerFixture(t, seq, 0xF1)
+	conflicting, err := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("NewFromHeader: %v", err)
+	}
+	svc.mu.Lock()
+	svc.historyComponent.mu.Lock()
+	svc.putHistoryLocked(conflicting)
+	svc.historyComponent.mu.Unlock()
+	svc.mu.Unlock()
+
+	svc.SetValidatedLedger(seq, candidateHash)
+	if candidate.IsValidated() {
+		t.Fatal("stale validation candidate replaced conflicting history")
+	}
+	svc.historyComponent.mu.RLock()
+	got := svc.ledgerHistory[seq]
+	svc.historyComponent.mu.RUnlock()
+	if got == nil || got.Hash() != conflicting.Hash() {
+		t.Fatal("conflicting history changed after stale validation")
+	}
+}
+
+func TestForkCleanupDropsEvictedValidationCandidate(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(svc.Stop)
+
+	ctx := context.Background()
+	closeTime := time.Now().UTC()
+	parent := svc.GetClosedLedger()
+	_, err = svc.AcceptConsensusResult(ctx, parent, nil, nil, closeTime, true)
+	if err != nil {
+		t.Fatalf("AcceptConsensusResult(parent): %v", err)
+	}
+	staleParent := svc.GetClosedLedger()
+	staleSeq, err := svc.AcceptConsensusResult(
+		ctx, staleParent, nil, nil, closeTime.Add(time.Second), true,
+	)
+	if err != nil {
+		t.Fatalf("AcceptConsensusResult(stale): %v", err)
+	}
+	stale := svc.GetClosedLedger()
+	staleHash := stale.Hash()
+	svc.mu.Lock()
+	svc.historyComponent.mu.Lock()
+	svc.deleteHistoryLocked(staleSeq)
+	svc.historyComponent.mu.Unlock()
+	svc.mu.Unlock()
+
+	replacement, stateMap, txMap := acquiredLedgerFixture(t, staleSeq, 0xF2)
+	if err := svc.AdoptLedgerWithState(ctx, replacement, stateMap, txMap); err != nil {
+		t.Fatalf("AdoptLedgerWithState: %v", err)
+	}
+	svc.mu.RLock()
+	candidate := svc.validationCandidates[staleSeq]
+	svc.mu.RUnlock()
+	if candidate == nil || candidate.Hash() != replacement.Hash {
+		t.Fatal("fork cleanup retained the evicted stale validation candidate")
+	}
+
+	svc.mu.Lock()
+	svc.historyComponent.mu.Lock()
+	svc.deleteHistoryLocked(staleSeq)
+	svc.historyComponent.mu.Unlock()
+	svc.mu.Unlock()
+	svc.SetValidatedLedger(staleSeq, staleHash)
+	if stale.IsValidated() || svc.GetValidatedLedger().Hash() == staleHash {
+		t.Fatal("orphaned validation candidate advanced the validated frontier")
 	}
 }
 

@@ -181,6 +181,11 @@ type Service struct {
 	// pendingValidationOrder tracks insertion order for LRU eviction.
 	pendingValidationOrder [][32]byte
 
+	// validationCandidates retain accepted ledgers across history eviction until
+	// quorum arrives. They are keyed by sequence so a replacement fork wins.
+	validationCandidates     map[uint32]*ledger.Ledger
+	validationCandidateOrder []uint32
+
 	// Invoked after the validated tip advances and after mu is released.
 	onValidatedLedger func(seq uint32, hash, parentHash [32]byte)
 
@@ -363,14 +368,15 @@ func New(cfg Config) (*Service, error) {
 			completeLedgerTokens: make(map[uint32]uint64),
 			sweepInterval:        nodeStoreSweepIntervalForSize(cfg.NodeSize),
 		},
-		pendingValidation: make(map[[32]byte]*LedgerAcceptedEvent),
-		heldAdoptions:     make(map[uint32]*pendingAdopt),
-		txQueue:           txQueue,
-		localTxs:          localtxs.New(),
-		relayTxCache:      make(map[[32]byte]relayTxRecord),
-		relayTxCacheLimit: relayTxCacheMaxBytes,
-		feeTrack:          feetrack.New(),
-		validatedAgeNow:   time.Now,
+		pendingValidation:    make(map[[32]byte]*LedgerAcceptedEvent),
+		validationCandidates: make(map[uint32]*ledger.Ledger),
+		heldAdoptions:        make(map[uint32]*pendingAdopt),
+		txQueue:              txQueue,
+		localTxs:             localtxs.New(),
+		relayTxCache:         make(map[[32]byte]relayTxRecord),
+		relayTxCacheLimit:    relayTxCacheMaxBytes,
+		feeTrack:             feetrack.New(),
+		validatedAgeNow:      time.Now,
 	}
 	s.persistenceWorker.service = s
 	s.eventPublisher.service = s

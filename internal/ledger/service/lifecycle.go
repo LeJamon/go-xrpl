@@ -285,6 +285,8 @@ func (s *Service) fixMismatchLocked(adopted *ledger.Ledger) {
 			}
 		}
 		s.invalidateCompleteLedger(adoptedSeq - 1)
+		s.dropValidationCandidateLocked(adoptedSeq - 1)
+		s.drainPendingValidationLocked(staleHash)
 		s.deleteHistoryLocked(adoptedSeq - 1)
 		s.logger.Warn("history backfill replaced a stale fork ledger below it",
 			"seq", adoptedSeq-1,
@@ -297,6 +299,7 @@ func (s *Service) fixMismatchLocked(adopted *ledger.Ledger) {
 	// Purge: the mismatched prev-seq, the same-seq alt (caller overwrites it
 	// anyway, but its tx-index must go), and every seq > adoptedSeq (orphans).
 	s.invalidateCompleteLedgerRange(adoptedSeq-1, ^uint32(0))
+	s.dropValidationCandidateRangeLocked(adoptedSeq-1, adoptedSeq, adopted.Hash())
 	var toRemove []uint32
 	toRemove = append(toRemove, adoptedSeq-1)
 	if sameSeq, ok := s.ledgerHistory[adoptedSeq]; ok && sameSeq.Hash() != adopted.Hash() {
@@ -477,12 +480,15 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 	if parent.IsValidated() {
 		s.evictOldHistoryLocked(parent.Sequence())
 		s.enqueuePersist(parent)
-	} else if s.hasEventSink() {
-		s.stashPendingValidationLocked(parentHash, &LedgerAcceptedEvent{
-			LedgerInfo:         ledgerInfo(parent),
-			Ledger:             parent,
-			TransactionResults: stagedResults.results,
-		})
+	} else {
+		s.retainValidationCandidateLocked(parent)
+		if s.hasEventSink() {
+			s.stashPendingValidationLocked(parentHash, &LedgerAcceptedEvent{
+				LedgerInfo:         ledgerInfo(parent),
+				Ledger:             parent,
+				TransactionResults: stagedResults.results,
+			})
+		}
 	}
 
 	s.logger.Warn("Switched canonical closed ledger",
@@ -495,6 +501,7 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 func (s *Service) purgeConflictingHistoryLocked(parent *ledger.Ledger) {
 	parentSeq := parent.Sequence()
 	parentHash := parent.Hash()
+	s.dropValidationCandidateRangeLocked(parentSeq, parentSeq, parentHash)
 	if s.closedLedger != nil && s.closedLedger.Sequence() >= parentSeq && s.closedLedger.Hash() != parentHash {
 		s.cachePersistedLedgerLocked(s.closedLedger)
 	}
@@ -713,6 +720,7 @@ func (s *Service) acceptConsensusResult(
 		Ledger:             s.closedLedger,
 		TransactionResults: txResults,
 	}
+	s.retainValidationCandidateLocked(closed)
 	if s.hasEventSink() {
 		s.stashPendingValidationLocked(closedLedgerHash, event)
 	}
@@ -735,6 +743,7 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 }
 
 func (s *Service) validatedLedgerEventLocked(l *ledger.Ledger) *LedgerAcceptedEvent {
+	s.drainValidationCandidateLocked(l.Sequence(), l.Hash())
 	event := s.drainPendingValidationLocked(l.Hash())
 	if event == nil {
 		return &LedgerAcceptedEvent{
@@ -774,22 +783,94 @@ func (s *Service) PromoteStoredValidatedLedgerAt(seq uint32, expectedHash [32]by
 }
 
 func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTime time.Time, allowStored bool) {
-	s.mu.Lock()
-	s.historyComponent.mu.Lock()
-	previousValidated := s.validatedLedger
-	l, inHistory := s.ledgerHistory[seq]
-	fromStored := !inHistory || l.Hash() != expectedHash
-	if fromStored {
+	var (
+		previousValidated  *ledger.Ledger
+		l                  *ledger.Ledger
+		fromStored         bool
+		loadedStored       *ledger.Ledger
+		verifiedTipHash    [32]byte
+		historicalVerified bool
+	)
+	for {
+		s.mu.Lock()
+		s.historyComponent.mu.Lock()
+		previousValidated = s.validatedLedger
+		l, fromStored = s.ledgerHistory[seq], false
+		if l != nil {
+			if l.Hash() == expectedHash {
+				break
+			}
+			if !allowStored {
+				s.historyComponent.mu.Unlock()
+				s.mu.Unlock()
+				return
+			}
+		}
+		candidate := s.validationCandidates[seq]
 		if !allowStored {
-			s.historyComponent.mu.Unlock()
-			s.mu.Unlock()
+			if previousValidated == nil {
+				s.historyComponent.mu.Unlock()
+				s.mu.Unlock()
+				return
+			}
+			if seq > previousValidated.Sequence() {
+				if candidate != nil && candidate.Hash() == expectedHash {
+					l = candidate
+					break
+				}
+				s.historyComponent.mu.Unlock()
+				s.mu.Unlock()
+				return
+			}
+			tipHash := previousValidated.Hash()
+			if !historicalVerified || verifiedTipHash != tipHash {
+				tip := previousValidated
+				s.historyComponent.mu.Unlock()
+				s.mu.Unlock()
+				canonicalHash, ok, err := tip.HashOfSeq(seq)
+				if err != nil || !ok || canonicalHash != expectedHash {
+					return
+				}
+				verifiedTipHash = tipHash
+				historicalVerified = true
+				continue
+			}
+			if candidate != nil && candidate.Hash() == expectedHash {
+				l = candidate
+				break
+			}
+		} else if candidate != nil && candidate.Hash() == expectedHash {
+			l = candidate
+			fromStored = true
+			break
+		}
+		fromStored = allowStored
+		if cached := s.persistedLedgers[expectedHash]; cached != nil && cached.Sequence() == seq {
+			l = cached
+			break
+		}
+		if loadedStored != nil {
+			l = loadedStored
+			break
+		}
+		s.historyComponent.mu.Unlock()
+		s.mu.Unlock()
+
+		var err error
+		loadedStored, err = s.loadStoredLedgerByHash(context.Background(), expectedHash)
+		if err != nil {
+			s.logger.Warn("failed to load stored ledger for validation",
+				"seq", seq,
+				"hash", fmt.Sprintf("%x", expectedHash[:8]),
+				"error", err,
+			)
 			return
 		}
-		var ok bool
-		l, ok = s.persistedLedgers[expectedHash]
-		if !ok || l.Sequence() != seq {
-			s.historyComponent.mu.Unlock()
-			s.mu.Unlock()
+		if loadedStored == nil || loadedStored.Sequence() != seq {
+			s.logger.Warn("stored ledger unavailable for validation",
+				"seq", seq,
+				"hash", fmt.Sprintf("%x", expectedHash[:8]),
+			)
 			return
 		}
 	}
@@ -1322,6 +1403,7 @@ func (s *Service) adoptLedgerWithStateLocked(
 			Ledger:             adopted,
 			TransactionResults: txResults,
 		}
+		s.retainValidationCandidateLocked(adopted)
 		if s.hasEventSink() {
 			s.stashPendingValidationLocked(h.Hash, event)
 		}
