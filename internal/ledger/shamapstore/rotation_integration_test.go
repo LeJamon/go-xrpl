@@ -109,7 +109,9 @@ func TestRotation_ReclaimsNodeStoreSpace(t *testing.T) {
 	if rot == nil {
 		t.Fatal("NewRotator returned nil")
 	}
-	rot.SetStateRefresh(func(_ context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) { return seq, nil }, nil, nil)
+	rot.SetStateRefresh(func(_ context.Context, seq uint32, _ func(context.Context, time.Duration) error) (uint32, error) {
+		return seq, nil
+	}, nil, nil)
 
 	// Build 25 ledgers, notifying the rotator synchronously per ledger via the
 	// internal predicate path so the assertions are deterministic.
@@ -197,7 +199,7 @@ func TestRotation_RotatingPebblePromotesLiveStateAndRetiresHistory(t *testing.T)
 	)
 	liveHashes := make([]nodestore.Hash256, 0, 2)
 	liveHashes = append(liveHashes, live.Hash)
-	rot.SetStateRefresh(func(ctx context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) {
+	rot.SetStateRefresh(func(ctx context.Context, seq uint32, _ func(context.Context, time.Duration) error) (uint32, error) {
 		for _, hash := range liveHashes {
 			node, err := db.FetchForPromotion(ctx, hash)
 			if err != nil {
@@ -295,7 +297,7 @@ func TestRotation_RealGenerationPreservesHigherExistingFloor(t *testing.T) {
 		nil,
 	)
 	rot.SetStateRefresh(
-		func(_ context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) {
+		func(_ context.Context, seq uint32, _ func(context.Context, time.Duration) error) (uint32, error) {
 			return seq, db.Sync(ctx)
 		},
 		nil,
@@ -335,7 +337,7 @@ func TestRotation_AdvancesAcquisitionFloorBeforeLiveStateRefresh(t *testing.T) {
 	}
 	rot := shamapstore.NewRotator(store, db, nil,
 		shamapstore.RotationConfig{DeleteInterval: 256}, nil)
-	rot.SetStateRefresh(func(_ context.Context, seq uint32, _ func(time.Duration) error) (uint32, error) {
+	rot.SetStateRefresh(func(_ context.Context, seq uint32, _ func(context.Context, time.Duration) error) (uint32, error) {
 		err := family.StoreBatch(ctx, []shamap.FlushEntry{{
 			Hash: hash, Data: data, LedgerSeq: 150, MapType: shamap.TypeState,
 		}})
