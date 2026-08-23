@@ -79,6 +79,7 @@ func ValidatePathSearchMax(pathSearchMax *int) error {
 	return validateNonNegative("path_search_max", *pathSearchMax)
 }
 
+// ValidateLedgerCacheSize accepts an unset size or a value within the supported cache bounds.
 func ValidateLedgerCacheSize(size *int) error {
 	if size == nil {
 		return nil

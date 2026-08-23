@@ -149,6 +149,7 @@ func (c *Config) ResolvedLedgerHistory() int {
 	return c.LedgerHistory.Value()
 }
 
+// ResolvedLedgerCacheSize returns the configured size or DefaultLedgerCacheSize when unset.
 func (c *Config) ResolvedLedgerCacheSize() int {
 	if c.LedgerCacheSize == nil {
 		return DefaultLedgerCacheSize
