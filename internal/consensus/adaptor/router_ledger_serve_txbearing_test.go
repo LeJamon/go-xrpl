@@ -136,7 +136,7 @@ func TestServeLedger_TxBearing_FullRoundTrip(t *testing.T) {
 	gotTxHash, err := gotTx.Hash()
 	require.NoError(t, err)
 	require.Equal(t, wantTxHash, gotTxHash,
-		"acquired tx map must match header.TxHash — the value handed to adoption")
+		"acquired tx map must match the header transaction hash")
 	require.Equal(t, wantTxHash, gotHdr.TxHash, "acquired header must carry the tx root hash")
 
 	gotStateHash, err := gotState.Hash()

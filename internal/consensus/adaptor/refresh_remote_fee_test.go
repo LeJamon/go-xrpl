@@ -181,7 +181,7 @@ func TestCollectValidationFees_DistinguishesExplicitZeroFromAbsent(t *testing.T)
 	require.Equal(t, []uint32{feetrack.LoadBase, 0}, collectValidationFees(historian, id, 0, feetrack.LoadBase))
 }
 
-func TestRefreshRemoteFee_ValidationBeforePeerAdoption(t *testing.T) {
+func TestRefreshRemoteFee_ValidationBeforePreferredLedgerSwitch(t *testing.T) {
 	a := newTestAdaptor(t)
 	svc := a.ledgerService
 	ft := svc.FeeTrack()
