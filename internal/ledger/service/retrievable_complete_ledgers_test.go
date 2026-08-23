@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 	"github.com/stretchr/testify/require"
 )
@@ -62,7 +63,7 @@ func TestCompleteLedgers_EvictionRemovesUndurableSequence(t *testing.T) {
 
 	require.Equal(t, "empty", svc.completeLedgersString())
 	_, err = svc.GetLedgerBySequence(seq)
-	require.ErrorIs(t, err, ErrLedgerNotFound)
+	require.ErrorIs(t, err, svcerr.ErrLedgerNotFound)
 }
 
 func TestCompleteLedgers_EvictionCancelsPendingPersistence(t *testing.T) {

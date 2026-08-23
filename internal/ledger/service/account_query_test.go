@@ -205,14 +205,14 @@ func TestGetAccountInfo_FieldsAndErrors(t *testing.T) {
 	t.Run("invalid ledger_index", func(t *testing.T) {
 		_, err := svc.GetAccountInfo(context.Background(), addr, "bogus")
 		if !errors.Is(err, svcerr.ErrInvalidLedgerIndex) {
-			t.Fatalf("want ErrInvalidLedgerIndex, got %v", err)
+			t.Fatalf("want svcerr.ErrInvalidLedgerIndex, got %v", err)
 		}
 	})
 
 	t.Run("numeric ledger not found", func(t *testing.T) {
 		_, err := svc.GetAccountInfo(context.Background(), addr, "999999")
-		if !errors.Is(err, ErrLedgerNotFound) {
-			t.Fatalf("want ErrLedgerNotFound, got %v", err)
+		if !errors.Is(err, svcerr.ErrLedgerNotFound) {
+			t.Fatalf("want svcerr.ErrLedgerNotFound, got %v", err)
 		}
 	})
 
@@ -853,53 +853,6 @@ func TestGetNoRippleCheck_RolesAndProblems(t *testing.T) {
 		_, err := svc.GetNoRippleCheck(context.Background(), stranger, "user", "current", 0, false)
 		if !errors.Is(err, svcerr.ErrAccountNotFound) {
 			t.Fatalf("want ErrAccountNotFound, got %v", err)
-		}
-	})
-}
-
-func TestGetLedgerForQuery_Branches(t *testing.T) {
-	svc := newOfferTestService(t)
-
-	t.Run("current resolves open ledger", func(t *testing.T) {
-		l, validated, err := svc.getLedgerForQuery("current")
-		if err != nil || l == nil {
-			t.Fatalf("current: l=%v err=%v", l, err)
-		}
-		if validated {
-			t.Errorf("current must not be validated")
-		}
-	})
-	t.Run("empty string resolves open ledger", func(t *testing.T) {
-		l, _, err := svc.getLedgerForQuery("")
-		if err != nil || l == nil {
-			t.Fatalf("empty: l=%v err=%v", l, err)
-		}
-	})
-	t.Run("validated", func(t *testing.T) {
-		l, validated, err := svc.getLedgerForQuery("validated")
-		if err != nil || l == nil {
-			t.Fatalf("validated: l=%v err=%v", l, err)
-		}
-		if !validated {
-			t.Errorf("validated branch must report validated=true")
-		}
-	})
-	t.Run("closed", func(t *testing.T) {
-		l, _, err := svc.getLedgerForQuery("closed")
-		if err != nil || l == nil {
-			t.Fatalf("closed: l=%v err=%v", l, err)
-		}
-	})
-	t.Run("invalid", func(t *testing.T) {
-		_, _, err := svc.getLedgerForQuery("xyz")
-		if !errors.Is(err, svcerr.ErrInvalidLedgerIndex) {
-			t.Fatalf("want ErrInvalidLedgerIndex, got %v", err)
-		}
-	})
-	t.Run("numeric not found", func(t *testing.T) {
-		_, _, err := svc.getLedgerForQuery("123456789")
-		if !errors.Is(err, ErrLedgerNotFound) {
-			t.Fatalf("want ErrLedgerNotFound, got %v", err)
 		}
 	})
 }

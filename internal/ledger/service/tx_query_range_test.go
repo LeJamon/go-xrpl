@@ -146,17 +146,6 @@ func TestTransactionSearchReturnsUnvalidatedHistoryBeforeDatabase(t *testing.T) 
 		t.Fatalf("range search = %d, want TxSearchAll", searched)
 	}
 
-	searchedResult, err := svc.SearchTransaction(ctx, hash, &relationaldb.LedgerRange{Min: 999, Max: 1000})
-	if err != nil {
-		t.Fatalf("SearchTransaction: %v", err)
-	}
-	if searchedResult == nil || searchedResult.Transaction == nil || searchedResult.Transaction.LedgerIndex != historyLedger.Sequence() || searchedResult.Transaction.Validated {
-		t.Fatalf("search result = %+v, want unvalidated history result", searchedResult)
-	}
-	if searchedResult.Searched != relationaldb.TxSearchAll {
-		t.Fatalf("search result searched = %d, want TxSearchAll", searchedResult.Searched)
-	}
-
 	if err := historyLedger.SetValidated(); err != nil {
 		t.Fatalf("SetValidated: %v", err)
 	}
@@ -194,12 +183,5 @@ func TestTransactionSearchReturnsUnvalidatedHistoryBeforeDatabase(t *testing.T) 
 	}
 	if validatedRange == nil || !validatedRange.Validated || validatedRange.TxIndex != 9 {
 		t.Fatalf("validated range lookup = %+v, want DB result with index 9", validatedRange)
-	}
-	validatedSearch, err := svc.SearchTransaction(ctx, hash, &relationaldb.LedgerRange{Min: 999, Max: 1000})
-	if err != nil {
-		t.Fatalf("SearchTransaction(validated): %v", err)
-	}
-	if validatedSearch == nil || validatedSearch.Transaction == nil || !validatedSearch.Transaction.Validated || validatedSearch.Transaction.TxIndex != 9 {
-		t.Fatalf("validated search result = %+v, want DB result with index 9", validatedSearch)
 	}
 }

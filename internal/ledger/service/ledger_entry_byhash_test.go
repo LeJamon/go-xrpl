@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 )
 
 // getLedgerForQuery must resolve a 64-character hex ledger_hash against stored
@@ -38,14 +40,14 @@ func TestGetLedgerForQuery_ByHash(t *testing.T) {
 		var miss [32]byte
 		miss[0] = 0xAB
 		_, _, err := svc.getLedgerForQuery(hex.EncodeToString(miss[:]))
-		if !errors.Is(err, ErrLedgerNotFound) {
-			t.Fatalf("want ErrLedgerNotFound, got %v", err)
+		if !errors.Is(err, svcerr.ErrLedgerNotFound) {
+			t.Fatalf("want svcerr.ErrLedgerNotFound, got %v", err)
 		}
 	})
 	t.Run("malformed 64-char hash", func(t *testing.T) {
 		_, _, err := svc.getLedgerForQuery(strings.Repeat("z", 64))
-		if !errors.Is(err, ErrInvalidLedgerHash) {
-			t.Fatalf("want ErrInvalidLedgerHash, got %v", err)
+		if !errors.Is(err, svcerr.ErrInvalidLedgerHash) {
+			t.Fatalf("want svcerr.ErrInvalidLedgerHash, got %v", err)
 		}
 	})
 }

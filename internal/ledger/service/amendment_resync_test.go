@@ -47,9 +47,6 @@ func TestService_TableResync(t *testing.T) {
 		"lastUpdateSeq must advance after the resync")
 
 	require.False(t, svc.IsAmendmentBlocked(), "all genesis amendments are supported")
-	if _, ok := svc.AmendmentFirstUnsupportedExpected(); ok {
-		t.Fatal("no unsupported amendment holds majority")
-	}
 }
 
 // TestService_SetAmendmentVote verifies operator veto/upvote mutate the table.
@@ -82,8 +79,5 @@ func TestService_SetAmendmentVote(t *testing.T) {
 func TestService_NilTable(t *testing.T) {
 	var s Service
 	require.False(t, s.IsAmendmentBlocked())
-	if _, ok := s.AmendmentFirstUnsupportedExpected(); ok {
-		t.Fatal("nil table must report no projection")
-	}
 	require.Nil(t, s.Table())
 }

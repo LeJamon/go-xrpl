@@ -60,9 +60,8 @@ func closedLedgerWithPayment(t *testing.T) *service.Service {
 // those replies alone. Mirrors rippled PeerImp::sendLedgerBase +
 // processLedgerRequest (PeerImp.cpp:3119-3411) feeding InboundLedger.
 //
-// The acquired tx map hash equals header.TxHash — exactly the value
-// completeInboundLedger hands to SubmitHeldAdoption, whose persist path is
-// already covered for a non-empty tx map by the replay-delta adoption tests.
+// The acquired tx map hash equals header.TxHash, the value the catch-up path
+// persists with the acquired ledger.
 func TestServeLedger_TxBearing_FullRoundTrip(t *testing.T) {
 	t.Parallel()
 	svc := closedLedgerWithPayment(t)
@@ -137,7 +136,7 @@ func TestServeLedger_TxBearing_FullRoundTrip(t *testing.T) {
 	gotTxHash, err := gotTx.Hash()
 	require.NoError(t, err)
 	require.Equal(t, wantTxHash, gotTxHash,
-		"acquired tx map must match header.TxHash — the value handed to adoption")
+		"acquired tx map must match the header transaction hash")
 	require.Equal(t, wantTxHash, gotHdr.TxHash, "acquired header must carry the tx root hash")
 
 	gotStateHash, err := gotState.Hash()

@@ -342,15 +342,15 @@ func (s *Service) queryFacade() queryFacade {
 func serviceLedgerSelectorError(selection ledgerselector.Selector, err error) error {
 	switch {
 	case errors.Is(err, ledgerselector.ErrInvalidHash):
-		return ErrInvalidLedgerHash
+		return svcerr.ErrInvalidLedgerHash
 	case errors.Is(err, ledgerselector.ErrInvalidIndex), errors.Is(err, ledgerselector.ErrInvalidSelector):
-		return ErrInvalidLedgerIndex
+		return svcerr.ErrInvalidLedgerIndex
 	case errors.Is(err, ledgerselector.ErrLedgerNotFound):
 		switch selection.Kind() {
 		case ledgerselector.KindAbsent, ledgerselector.KindCurrent, ledgerselector.KindClosed, ledgerselector.KindValidated:
-			return ErrNoOpenLedger
+			return svcerr.ErrNoOpenLedger
 		default:
-			return ErrLedgerNotFound
+			return svcerr.ErrLedgerNotFound
 		}
 	default:
 		return err

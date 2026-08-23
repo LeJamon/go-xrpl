@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/shamap"
 	shamapbackend "github.com/LeJamon/go-xrpl/shamap/backend"
 )
@@ -73,7 +74,7 @@ func TestStoreLedgerWithStateDoesNotMoveCanonicalFrontier(t *testing.T) {
 	require.Equal(t, closedHash, svc.GetClosedLedger().Hash())
 	require.Equal(t, openSeq, svc.GetCurrentLedgerIndex())
 	_, err = svc.AdoptedLedgerBySequence(h.LedgerIndex)
-	require.ErrorIs(t, err, ErrLedgerNotFound)
+	require.ErrorIs(t, err, svcerr.ErrLedgerNotFound)
 }
 
 func TestBootstrapLedgerWithStateStagesUntilConsensusSwitch(t *testing.T) {
@@ -325,13 +326,13 @@ func TestIngestHistoricalLedgerWithStateRejectsNonCanonicalHistory(t *testing.T)
 	closedBefore := svc.GetClosedLedger()
 	require.Error(t, svc.IngestHistoricalLedgerWithState(t.Context(), historical, stateMap, txMap))
 	_, err = svc.AdoptedLedgerBySequence(historical.LedgerIndex)
-	require.ErrorIs(t, err, ErrLedgerNotFound)
+	require.ErrorIs(t, err, svcerr.ErrLedgerNotFound)
 	require.Equal(t, closedBefore.Hash(), svc.GetClosedLedger().Hash())
 
 	current, currentState, currentTx := acquiredLedgerFixture(t, closedBefore.Sequence(), 0xC6)
 	require.Error(t, svc.IngestHistoricalLedgerWithState(t.Context(), current, currentState, currentTx))
 	_, err = svc.GetLedgerByHash(current.Hash)
-	require.ErrorIs(t, err, ErrLedgerNotFound)
+	require.ErrorIs(t, err, svcerr.ErrLedgerNotFound)
 }
 
 func TestStoredLedgerMovesCanonicalFrontierOnlyThroughConsensusSwitch(t *testing.T) {

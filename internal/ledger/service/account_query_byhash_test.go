@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -84,12 +85,12 @@ func TestGetAccountInfo_ByHash(t *testing.T) {
 		}
 	})
 
-	t.Run("unknown hash yields ErrLedgerNotFound", func(t *testing.T) {
+	t.Run("unknown hash yields svcerr.ErrLedgerNotFound", func(t *testing.T) {
 		var miss [32]byte
 		miss[0] = 0xAB
 		_, err := svc.GetAccountInfo(context.Background(), addr, hex.EncodeToString(miss[:]))
-		if !errors.Is(err, ErrLedgerNotFound) {
-			t.Fatalf("want ErrLedgerNotFound, got %v", err)
+		if !errors.Is(err, svcerr.ErrLedgerNotFound) {
+			t.Fatalf("want svcerr.ErrLedgerNotFound, got %v", err)
 		}
 	})
 
@@ -99,8 +100,8 @@ func TestGetAccountInfo_ByHash(t *testing.T) {
 			bad[i] = 'z'
 		}
 		_, err := svc.GetAccountInfo(context.Background(), addr, string(bad))
-		if !errors.Is(err, ErrInvalidLedgerHash) {
-			t.Fatalf("want ErrInvalidLedgerHash, got %v", err)
+		if !errors.Is(err, svcerr.ErrInvalidLedgerHash) {
+			t.Fatalf("want svcerr.ErrInvalidLedgerHash, got %v", err)
 		}
 	})
 }

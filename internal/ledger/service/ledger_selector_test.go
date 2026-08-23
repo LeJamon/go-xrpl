@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -68,11 +69,11 @@ func TestGetLedgerForQueryInvalidSelectors(t *testing.T) {
 		selection string
 		want      error
 	}{
-		{name: "malformed hash", selection: strings.Repeat("z", 64), want: ErrInvalidLedgerHash},
-		{name: "malformed index", selection: "bogus", want: ErrInvalidLedgerIndex},
-		{name: "sign without index", selection: "+", want: ErrInvalidLedgerIndex},
-		{name: "short hash-shaped index", selection: strings.Repeat("a", 63), want: ErrInvalidLedgerIndex},
-		{name: "uint32 overflow", selection: "4294967296", want: ErrInvalidLedgerIndex},
+		{name: "malformed hash", selection: strings.Repeat("z", 64), want: svcerr.ErrInvalidLedgerHash},
+		{name: "malformed index", selection: "bogus", want: svcerr.ErrInvalidLedgerIndex},
+		{name: "sign without index", selection: "+", want: svcerr.ErrInvalidLedgerIndex},
+		{name: "short hash-shaped index", selection: strings.Repeat("a", 63), want: svcerr.ErrInvalidLedgerIndex},
+		{name: "uint32 overflow", selection: "4294967296", want: svcerr.ErrInvalidLedgerIndex},
 	}
 
 	for _, test := range tests {
@@ -101,12 +102,12 @@ func TestGetLedgerForQueryMissingTargets(t *testing.T) {
 		selection string
 		want      error
 	}{
-		{name: "empty", selection: "", want: ErrNoOpenLedger},
-		{name: "current", selection: "current", want: ErrNoOpenLedger},
-		{name: "closed", selection: "closed", want: ErrNoOpenLedger},
-		{name: "validated", selection: "validated", want: ErrNoOpenLedger},
-		{name: "sequence", selection: "99", want: ErrLedgerNotFound},
-		{name: "hash", selection: protocol.Hash256Hex(missingHash), want: ErrLedgerNotFound},
+		{name: "empty", selection: "", want: svcerr.ErrNoOpenLedger},
+		{name: "current", selection: "current", want: svcerr.ErrNoOpenLedger},
+		{name: "closed", selection: "closed", want: svcerr.ErrNoOpenLedger},
+		{name: "validated", selection: "validated", want: svcerr.ErrNoOpenLedger},
+		{name: "sequence", selection: "99", want: svcerr.ErrLedgerNotFound},
+		{name: "hash", selection: protocol.Hash256Hex(missingHash), want: svcerr.ErrLedgerNotFound},
 	}
 
 	for _, test := range tests {

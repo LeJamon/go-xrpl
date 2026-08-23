@@ -339,14 +339,18 @@ func TestForkCleanupDropsEvictedValidationCandidate(t *testing.T) {
 	svc.historyComponent.mu.Unlock()
 	svc.mu.Unlock()
 
-	replacement, stateMap, txMap := acquiredLedgerFixture(t, staleSeq, 0xF2)
-	if err := svc.AdoptLedgerWithState(ctx, replacement, stateMap, txMap); err != nil {
-		t.Fatalf("AdoptLedgerWithState: %v", err)
+	replacementHeader, stateMap, txMap := acquiredLedgerFixture(t, staleSeq, 0xF2)
+	replacement, err := ledger.NewFromHeader(*replacementHeader, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("NewFromHeader: %v", err)
+	}
+	if err := svc.SwitchToPreferredLedger(replacement); err != nil {
+		t.Fatalf("SwitchToPreferredLedger: %v", err)
 	}
 	svc.mu.RLock()
 	candidate := svc.validationCandidates[staleSeq]
 	svc.mu.RUnlock()
-	if candidate == nil || candidate.Hash() != replacement.Hash {
+	if candidate == nil || candidate.Hash() != replacement.Hash() {
 		t.Fatal("fork cleanup retained the evicted stale validation candidate")
 	}
 

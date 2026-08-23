@@ -95,7 +95,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	defer s.mu.Unlock()
 
 	if s.openLedgerView == nil {
-		return nil, ErrNoOpenLedger
+		return nil, svcerr.ErrNoOpenLedger
 	}
 	if rawBlob != nil {
 		if err := tx.BindRawBytes(transaction, rawBlob); err != nil {
@@ -406,7 +406,7 @@ func (s *Service) GetAutofillFee(parsedTx tx.Transaction, unlimited bool, mult, 
 	defer s.mu.RUnlock()
 
 	if s.openLedger == nil {
-		return 0, ErrNoOpenLedger
+		return 0, svcerr.ErrNoOpenLedger
 	}
 
 	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.openLedger)
@@ -476,7 +476,7 @@ func (s *Service) GetAutofillSequence(account string, hasTicketSequence bool) (u
 	defer s.mu.RUnlock()
 
 	if s.openLedger == nil {
-		return 0, ErrNoOpenLedger
+		return 0, svcerr.ErrNoOpenLedger
 	}
 
 	_, accountIDBytes, decodeErr := addresscodec.DecodeClassicAddressToAccountID(account)
@@ -600,11 +600,6 @@ type TransactionResult struct {
 	Validated   bool
 	TxIndex     uint32
 	CloseTime   int64
-}
-
-type TransactionSearchResult struct {
-	Transaction *TransactionResult
-	Searched    relationaldb.TxSearchResult
 }
 
 type LedgerContext struct {
@@ -761,67 +756,6 @@ func (s *Service) getHistoricalTransaction(txHash [32]byte) (*TransactionResult,
 	}, nil
 }
 
-func (s *Service) SearchTransaction(ctx context.Context, txHash [32]byte, ledgerRange *relationaldb.LedgerRange) (*TransactionSearchResult, error) {
-	cached, cacheErr := s.GetTransaction(txHash)
-	if cacheErr != nil && !errors.Is(cacheErr, svcerr.ErrTxnNotFound) {
-		return nil, cacheErr
-	}
-
-	s.mu.RLock()
-	db := s.relationalDB
-	s.mu.RUnlock()
-	if cacheErr == nil && !cached.Validated {
-		return &TransactionSearchResult{Transaction: cached, Searched: relationaldb.TxSearchAll}, nil
-	}
-
-	if db == nil || db.Transaction() == nil {
-		if cacheErr != nil {
-			return nil, cacheErr
-		}
-		return &TransactionSearchResult{Transaction: cached, Searched: relationaldb.TxSearchUnknown}, nil
-	}
-
-	info, searched, err := db.Transaction().GetTransaction(ctx, relationaldb.Hash(txHash), ledgerRange)
-	if err != nil {
-		return nil, err
-	}
-	if info == nil {
-		return &TransactionSearchResult{Searched: searched}, nil
-	}
-
-	vlTx, err := tx.EncodeWithVL(info.RawTxn)
-	if err != nil {
-		return nil, err
-	}
-	vlMeta, err := tx.EncodeWithVL(info.TxnMeta)
-	if err != nil {
-		return nil, err
-	}
-	txData := make([]byte, 0, len(vlTx)+len(vlMeta))
-	txData = append(txData, vlTx...)
-	txData = append(txData, vlMeta...)
-
-	contextInfo, err := s.GetLedgerContext(ctx, uint32(info.LedgerSeq))
-	if err != nil {
-		return nil, err
-	}
-	txIndex, ok := tx.TransactionIndexFromMetadata(info.TxnMeta)
-	if !ok {
-		txIndex = invalidTransactionIndex
-	}
-	return &TransactionSearchResult{
-		Transaction: &TransactionResult{
-			TxData:      txData,
-			LedgerIndex: uint32(info.LedgerSeq),
-			LedgerHash:  contextInfo.Hash,
-			Validated:   true,
-			TxIndex:     txIndex,
-			CloseTime:   contextInfo.CloseTime,
-		},
-		Searched: searched,
-	}, nil
-}
-
 func (s *Service) GetLedgerContext(ctx context.Context, sequence uint32) (*LedgerContext, error) {
 	if l, err := s.GetLedgerBySequence(sequence); err == nil && l != nil {
 		return &LedgerContext{Hash: l.Hash(), CloseTime: protocol.RippleSeconds(l.CloseTime())}, nil
@@ -924,7 +858,7 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 	defer s.mu.RUnlock()
 
 	if s.openLedger == nil {
-		return nil, ErrNoOpenLedger
+		return nil, svcerr.ErrNoOpenLedger
 	}
 
 	// Create a snapshot of the open ledger's state map for isolation
@@ -1003,12 +937,6 @@ type AccountTransaction struct {
 // configured. Mirrors rippled config().useTxTables().
 func (s *Service) UseTxTables() bool {
 	return s.relationalDB != nil
-}
-
-// GetAccountTransactions retrieves transaction history for an account.
-// The supplied ctx is forwarded to the relational DB query.
-func (s *Service) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *relationaldb.AccountTxMarker, forward bool) (*AccountTxResult, error) {
-	return s.getAccountTransactions(ctx, account, ledgerMin, ledgerMax, limit, marker, forward, nil)
 }
 
 // GetAccountTransactionsWithDelegate retrieves delegated transaction history

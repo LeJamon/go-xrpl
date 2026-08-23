@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 )
 
 func newConsensusParentGuardService(t *testing.T) *Service {
@@ -82,7 +84,7 @@ func TestPreferredChainSwitchMovesFrontierBeforeConsensusBuild(t *testing.T) {
 	if got, want := svc.GetCurrentLedgerIndex(), preferredParent.Sequence()+1; got != want {
 		t.Fatalf("open ledger seq = %d, want %d", got, want)
 	}
-	if _, err := svc.AdoptedLedgerBySequence(preferredParent.Sequence() + 2); !errors.Is(err, ErrLedgerNotFound) {
+	if _, err := svc.AdoptedLedgerBySequence(preferredParent.Sequence() + 2); !errors.Is(err, svcerr.ErrLedgerNotFound) {
 		t.Fatalf("abandoned history tail remains after switch: %v", err)
 	}
 	if got := svc.GetServerInfo().CompleteLedgers; got != "empty" {

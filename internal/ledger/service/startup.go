@@ -11,6 +11,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
@@ -219,7 +220,7 @@ func (s *Service) loadStartupLedger(ctx context.Context, id string) (*ledger.Led
 
 func (s *Service) loadStartupLedgerInfo(ctx context.Context, info *relationaldb.LedgerInfo) (*ledger.Ledger, error) {
 	if info == nil {
-		return nil, ErrLedgerNotFound
+		return nil, svcerr.ErrLedgerNotFound
 	}
 	loaded, err := s.loadVerifiedStoredLedgerByHash(ctx, [32]byte(info.Hash))
 	if err != nil {
@@ -237,7 +238,7 @@ func (s *Service) loadVerifiedStoredLedgerByHash(ctx context.Context, hash [32]b
 		return nil, err
 	}
 	if loaded == nil {
-		return nil, ErrLedgerNotFound
+		return nil, svcerr.ErrLedgerNotFound
 	}
 	h := loaded.Header()
 	if h.AccountHash == ([32]byte{}) {

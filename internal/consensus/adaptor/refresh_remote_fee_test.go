@@ -181,7 +181,7 @@ func TestCollectValidationFees_DistinguishesExplicitZeroFromAbsent(t *testing.T)
 	require.Equal(t, []uint32{feetrack.LoadBase, 0}, collectValidationFees(historian, id, 0, feetrack.LoadBase))
 }
 
-func TestRefreshRemoteFee_ValidationBeforePeerAdoption(t *testing.T) {
+func TestRefreshRemoteFee_ValidationBeforePreferredLedgerSwitch(t *testing.T) {
 	a := newTestAdaptor(t)
 	svc := a.ledgerService
 	ft := svc.FeeTrack()
@@ -193,10 +193,6 @@ func TestRefreshRemoteFee_ValidationBeforePeerAdoption(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, candidate.Close(closeTime, 0))
 	header := candidate.Header()
-	stateMap, err := candidate.StateMapSnapshot()
-	require.NoError(t, err)
-	txMap, err := candidate.TxMapSnapshot()
-	require.NoError(t, err)
 
 	targetID := consensus.LedgerID(header.Hash)
 	parentID := consensus.LedgerID(header.ParentHash)
@@ -219,13 +215,13 @@ func TestRefreshRemoteFee_ValidationBeforePeerAdoption(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- svc.AdoptLedgerWithState(context.Background(), &header, stateMap, txMap)
+		done <- svc.SwitchToPreferredLedger(candidate)
 	}()
 	select {
 	case err := <-done:
 		require.NoError(t, err)
 	case <-time.After(time.Second):
-		t.Fatal("peer adoption blocked while notifying the validated-ledger callback")
+		t.Fatal("preferred-ledger switch blocked while notifying the validated-ledger callback")
 	}
 	signTime, result := a.recheckFullyValidated(header.LedgerIndex, header.Hash)
 	require.Equal(t, validationRecheckAccepted, result)

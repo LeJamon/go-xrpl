@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
@@ -15,7 +16,7 @@ func (s *Service) CleanerLedger(ctx context.Context, seq uint32) (*ledger.Ledger
 		return nil, err
 	}
 	canonical, err := s.cleanerLedgerByHash(ctx, hash)
-	if errors.Is(err, ErrLedgerNotFound) {
+	if errors.Is(err, svcerr.ErrLedgerNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -97,7 +98,7 @@ func (s *Service) CanonicalLedgerHash(ctx context.Context, seq uint32) ([32]byte
 		return [32]byte{}, false, err
 	}
 	anchor, err := s.cleanerLedgerByHash(ctx, anchorHash)
-	if errors.Is(err, ErrLedgerNotFound) {
+	if errors.Is(err, svcerr.ErrLedgerNotFound) {
 		return [32]byte{}, false, nil
 	}
 	if err != nil {
@@ -128,7 +129,7 @@ func (s *Service) cleanerLedgerByHash(ctx context.Context, hash [32]byte) (*ledg
 		}
 	}
 	if s.nodeStore == nil || s.shamapFamily == nil || s.relationalDB == nil || s.relationalDB.Ledger() == nil {
-		return nil, ErrLedgerNotFound
+		return nil, svcerr.ErrLedgerNotFound
 	}
 	loaded, err := s.loadPersistedLedgerByHash(ctx, hash)
 	if err != nil {

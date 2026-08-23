@@ -53,7 +53,7 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 	}
 	targetLedger, validated, err := s.resolveLedgerForQuery(ctx, ledgerIndex)
 	if err != nil {
-		if err == ErrLedgerNotFound {
+		if err == svcerr.ErrLedgerNotFound {
 			return nil, svcerr.ErrLedgerNotFound
 		}
 		return nil, err

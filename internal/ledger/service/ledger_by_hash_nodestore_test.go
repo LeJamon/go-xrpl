@@ -181,10 +181,10 @@ func TestService_GetLedgerByHashRejectsNodeStoreOnlyLedger(t *testing.T) {
 	closedHash := closed.Hash()
 	loaded, err := svc.GetLedgerByHash(closedHash)
 	require.Nil(t, loaded)
-	require.ErrorIs(t, err, ErrLedgerNotFound)
+	require.ErrorIs(t, err, svcerr.ErrLedgerNotFound)
 
 	_, err = svc.GetLedgerEntry(ctx, entryKey, hex.EncodeToString(closedHash[:]))
-	require.ErrorIs(t, err, ErrLedgerNotFound)
+	require.ErrorIs(t, err, svcerr.ErrLedgerNotFound)
 
 	require.NoError(t, closed.SetValidated())
 	svc.mu.Lock()
@@ -305,7 +305,7 @@ func TestService_GetLedgerByHashReturnsNotFoundWithoutPersistedLedger(t *testing
 		require.NoError(t, err)
 
 		_, err = svc.GetLedgerByHash([32]byte{0x01})
-		require.ErrorIs(t, err, ErrLedgerNotFound)
+		require.ErrorIs(t, err, svcerr.ErrLedgerNotFound)
 	})
 
 	t.Run("missing nodestore header", func(t *testing.T) {
@@ -326,7 +326,7 @@ func TestService_GetLedgerByHashReturnsNotFoundWithoutPersistedLedger(t *testing
 		require.NoError(t, err)
 
 		_, err = svc.GetLedgerByHash(missingHash)
-		require.ErrorIs(t, err, ErrLedgerNotFound)
+		require.ErrorIs(t, err, svcerr.ErrLedgerNotFound)
 		_, err = svc.GetNFTBuyOffers(ctx, [32]byte{}, hex.EncodeToString(missingHash[:]), 1, "")
 		require.ErrorIs(t, err, svcerr.ErrLedgerNotFound)
 	})
@@ -346,7 +346,7 @@ func TestService_GetLedgerByHashReturnsNotFoundWithoutPersistedLedger(t *testing
 		cancel()
 		_, err = svc.GetLedgerByHashContext(canceled, [32]byte{0x04})
 		require.ErrorIs(t, err, context.Canceled)
-		require.False(t, errors.Is(err, ErrLedgerNotFound))
+		require.False(t, errors.Is(err, svcerr.ErrLedgerNotFound))
 	})
 
 	t.Run("nodestore failure remains operational", func(t *testing.T) {
@@ -370,7 +370,7 @@ func TestService_GetLedgerByHashReturnsNotFoundWithoutPersistedLedger(t *testing
 
 		_, err = svc.GetLedgerByHashContext(ctx, wantHash)
 		require.ErrorIs(t, err, fetchErr)
-		require.False(t, errors.Is(err, ErrLedgerNotFound))
+		require.False(t, errors.Is(err, svcerr.ErrLedgerNotFound))
 	})
 
 	t.Run("nodestore cancellation remains cancellation", func(t *testing.T) {
@@ -393,7 +393,7 @@ func TestService_GetLedgerByHashReturnsNotFoundWithoutPersistedLedger(t *testing
 
 		_, err = svc.GetLedgerByHashContext(ctx, wantHash)
 		require.ErrorIs(t, err, context.Canceled)
-		require.False(t, errors.Is(err, ErrLedgerNotFound))
+		require.False(t, errors.Is(err, svcerr.ErrLedgerNotFound))
 	})
 }
 
@@ -420,7 +420,7 @@ func TestService_GetLedgerByHashTreatsCorruptPersistedHeaderAsNotFound(t *testin
 	require.NoError(t, err)
 
 	_, err = svc.GetLedgerByHash(wantHash)
-	require.ErrorIs(t, err, ErrLedgerNotFound)
+	require.ErrorIs(t, err, svcerr.ErrLedgerNotFound)
 }
 
 func TestService_PersistedLedgerHashCacheIsBounded(t *testing.T) {

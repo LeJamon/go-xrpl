@@ -460,12 +460,6 @@ func (s *Service) SetServerStatusCallback(fn ServerStatusCallback) {
 	s.eventPublisher.setServerStatusCallback(fn)
 }
 
-// SignalServerStatus schedules a coalesced server-status sample on the shared
-// publication FIFO. It reports false after publication has stopped or failed.
-func (s *Service) SignalServerStatus() bool {
-	return s.eventPublisher.dispatchServerStatusEvent()
-}
-
 // SignalServerStatusPublication queues a captured status snapshot. Captured
 // publications do not coalesce because subscribers must observe state changes
 // in trigger order.
