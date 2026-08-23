@@ -43,9 +43,9 @@ type RelationalPruner interface {
 
 // StateRefresh preserves the live state at or above minimumSeq. Rotating stores
 // promote it into the writable generation; legacy stores re-stamp it in place.
-// checkpoint must be called periodically while walking the state tree. The
+// checkpoint must be called periodically with the active walk context. The
 // returned sequence identifies the validated ledger that was preserved.
-type StateRefresh func(ctx context.Context, minimumSeq uint32, checkpoint func(time.Duration) error) (uint32, error)
+type StateRefresh func(ctx context.Context, minimumSeq uint32, checkpoint func(context.Context, time.Duration) error) (uint32, error)
 
 // RotationConfig carries the node_db online-delete settings the rotator needs.
 type RotationConfig struct {
@@ -409,9 +409,7 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 	if advance != nil {
 		advance(minimumOnline)
 	}
-	refreshedSeq, err := refresh(ctx, validatedSeq, func(work time.Duration) error {
-		return r.refreshCheckpoint(ctx, work)
-	})
+	refreshedSeq, err := refresh(ctx, validatedSeq, r.refreshCheckpoint)
 	if err != nil {
 		if ctx.Err() == nil {
 			r.logger.Warn("online delete: live-state refresh failed", "seq", validatedSeq, "err", err)

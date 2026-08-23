@@ -524,7 +524,7 @@ func (s *Service) refreshGenerationState(
 	root [32]byte,
 	sequence uint32,
 	generations nodestore.GenerationDatabase,
-	checkpoint func(time.Duration) error,
+	checkpoint func(context.Context, time.Duration) error,
 ) (err error) {
 	startedAt := time.Now()
 	progress := newOnlineDeleteRefreshProgress(
@@ -575,7 +575,7 @@ func (s *Service) refreshGenerationState(
 func (s *Service) RefreshValidatedState(
 	ctx context.Context,
 	minimumSeq uint32,
-	checkpoint func(time.Duration) error,
+	checkpoint func(context.Context, time.Duration) error,
 ) (uint32, error) {
 	s.mu.RLock()
 	validated := s.validatedLedger
@@ -644,7 +644,7 @@ func (s *Service) RefreshValidatedState(
 		work := time.Since(checkpointStarted)
 		if checkpoint != nil &&
 			(visited%refreshHealthCheckInterval == 0 || work >= refreshHealthCheckPeriod) {
-			if err := checkpoint(work); err != nil {
+			if err := checkpoint(ctx, work); err != nil {
 				return err
 			}
 			checkpointStarted = time.Now()

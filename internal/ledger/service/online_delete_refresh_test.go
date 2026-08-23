@@ -305,7 +305,7 @@ func TestService_RefreshValidatedStateRunsInWalkCheckpoint(t *testing.T) {
 
 	wantErr := errors.New("checkpoint stopped traversal")
 	checks := 0
-	refreshedSeq, err := svc.RefreshValidatedState(ctx, seq, func(time.Duration) error {
+	refreshedSeq, err := svc.RefreshValidatedState(ctx, seq, func(context.Context, time.Duration) error {
 		checks++
 		return wantErr
 	})
@@ -321,7 +321,7 @@ func TestService_RefreshValidatedStateRunsInWalkCheckpoint(t *testing.T) {
 	recovered := make(chan struct{})
 	done := make(chan refreshResult, 1)
 	go func() {
-		seq, err := svc.RefreshValidatedState(ctx, seq, func(time.Duration) error {
+		seq, err := svc.RefreshValidatedState(ctx, seq, func(context.Context, time.Duration) error {
 			select {
 			case checkpointReached <- struct{}{}:
 			default:
@@ -350,7 +350,7 @@ func TestService_RefreshValidatedStateRunsInWalkCheckpoint(t *testing.T) {
 	cancelReached := make(chan struct{})
 	done = make(chan refreshResult, 1)
 	go func() {
-		seq, err := svc.RefreshValidatedState(cancelCtx, seq, func(time.Duration) error {
+		seq, err := svc.RefreshValidatedState(cancelCtx, seq, func(context.Context, time.Duration) error {
 			close(cancelReached)
 			<-cancelCtx.Done()
 			return cancelCtx.Err()
@@ -405,13 +405,194 @@ func TestService_RefreshValidatedStateChecksHealthByElapsedWork(t *testing.T) {
 	db.promotionFetches.Store(0)
 	db.promotionDelay = 2 * time.Millisecond
 	wantErr := errors.New("health checkpoint reached")
-	refreshedSeq, err := svc.RefreshValidatedState(ctx, seq, func(time.Duration) error {
+	refreshedSeq, err := svc.RefreshValidatedState(ctx, seq, func(context.Context, time.Duration) error {
 		return wantErr
 	})
 	require.ErrorIs(t, err, wantErr)
 	require.Zero(t, refreshedSeq)
 	require.Positive(t, db.promotionFetches.Load())
 	require.Less(t, db.promotionFetches.Load(), int64(refreshHealthCheckInterval))
+}
+
+func TestService_ConcurrentRefreshChecksHealthDuringFrontierBuild(t *testing.T) {
+	svc, db, _ := newRotatingRefreshFixture(t, 256)
+	root, err := svc.GetValidatedLedger().StateMapHash()
+	require.NoError(t, err)
+
+	startedAt := time.Date(2026, time.August, 23, 12, 0, 0, 0, time.UTC)
+	var clockAdvanced atomic.Bool
+	now := func() time.Time {
+		if clockAdvanced.Load() {
+			return startedAt.Add(refreshHealthCheckPeriod)
+		}
+		return startedAt
+	}
+	firstFetchStarted := make(chan struct{})
+	firstFetchRelease := make(chan struct{})
+	var fetches atomic.Int64
+	fetch := func(ctx context.Context, hash nodestore.Hash256) (*nodestore.Node, error) {
+		if fetches.Add(1) == 1 {
+			close(firstFetchStarted)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-firstFetchRelease:
+			}
+		}
+		return db.FetchForPromotion(ctx, hash)
+	}
+	checkpointTicks := make(chan time.Time)
+	wantErr := errors.New("frontier health checkpoint")
+	done := make(chan error, 1)
+	go func() {
+		done <- svc.walkStoredSHAMapConcurrentWithFetch(
+			t.Context(),
+			root,
+			shamap.TypeState,
+			fetch,
+			resolveOnlineDeleteRefreshWorkers(),
+			storedSHAMapWalkControl{
+				progress: newOnlineDeleteRefreshProgress(
+					svc.logger,
+					svc.nodeStore,
+					root,
+					shamap.TypeState,
+					svc.GetValidatedLedger().Sequence(),
+					startedAt,
+				),
+				checkpoint:      func(context.Context, time.Duration) error { return wantErr },
+				checkpointTicks: checkpointTicks,
+				now:             now,
+			},
+			nil,
+		)
+	}()
+	<-firstFetchStarted
+	clockAdvanced.Store(true)
+	checkpointTicks <- startedAt.Add(refreshHealthCheckPeriod)
+	time.Sleep(20 * time.Millisecond)
+	close(firstFetchRelease)
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, wantErr)
+	case <-time.After(time.Second):
+		t.Fatal("frontier health checkpoint did not stop the refresh")
+	}
+	require.Equal(t, int64(1), fetches.Load())
+}
+
+func TestService_ConcurrentRefreshCancelsBlockedCheckpointAfterFetchError(t *testing.T) {
+	svc, _, _ := newRotatingRefreshFixture(t, 16)
+	root, err := svc.GetValidatedLedger().StateMapHash()
+	require.NoError(t, err)
+
+	startedAt := time.Date(2026, time.August, 23, 12, 0, 0, 0, time.UTC)
+	var clockAdvanced atomic.Bool
+	now := func() time.Time {
+		if clockAdvanced.Load() {
+			return startedAt.Add(refreshHealthCheckPeriod)
+		}
+		return startedAt
+	}
+	fetchStarted := make(chan struct{})
+	fetchRelease := make(chan struct{})
+	wantErr := errors.New("fetch failed")
+	fetch := func(context.Context, nodestore.Hash256) (*nodestore.Node, error) {
+		close(fetchStarted)
+		<-fetchRelease
+		return nil, wantErr
+	}
+	checkpointTicks := make(chan time.Time)
+	checkpointStarted := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- svc.walkStoredSHAMapConcurrentWithFetch(
+			t.Context(),
+			root,
+			shamap.TypeState,
+			fetch,
+			resolveOnlineDeleteRefreshWorkers(),
+			storedSHAMapWalkControl{
+				progress: newOnlineDeleteRefreshProgress(
+					svc.logger,
+					svc.nodeStore,
+					root,
+					shamap.TypeState,
+					svc.GetValidatedLedger().Sequence(),
+					startedAt,
+				),
+				checkpoint: func(ctx context.Context, _ time.Duration) error {
+					close(checkpointStarted)
+					<-ctx.Done()
+					return context.Cause(ctx)
+				},
+				checkpointTicks: checkpointTicks,
+				now:             now,
+			},
+			nil,
+		)
+	}()
+	<-fetchStarted
+	clockAdvanced.Store(true)
+	checkpointTicks <- startedAt.Add(refreshHealthCheckPeriod)
+	time.Sleep(20 * time.Millisecond)
+	close(fetchRelease)
+
+	select {
+	case <-checkpointStarted:
+	case <-time.After(time.Second):
+		t.Fatal("checkpoint did not start after the failed fetch released its read lock")
+	}
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, wantErr)
+	case <-time.After(time.Second):
+		t.Fatal("refresh did not cancel the blocked checkpoint after the fetch failed")
+	}
+}
+
+func TestService_ConcurrentRefreshChecksHealthBeforeCompletion(t *testing.T) {
+	svc, db, _ := newRotatingRefreshFixture(t, 16)
+	validated := svc.GetValidatedLedger()
+	root, err := validated.StateMapHash()
+	require.NoError(t, err)
+
+	startedAt := time.Date(2026, time.August, 23, 12, 0, 0, 0, time.UTC)
+	var nowCalls atomic.Int64
+	now := func() time.Time {
+		if nowCalls.Add(1) == 1 {
+			return startedAt
+		}
+		return startedAt.Add(refreshHealthCheckPeriod)
+	}
+	wantErr := errors.New("terminal health checkpoint")
+	checks := 0
+	err = svc.walkStoredSHAMapConcurrentWithFetch(
+		t.Context(),
+		root,
+		shamap.TypeState,
+		db.FetchForPromotion,
+		resolveOnlineDeleteRefreshWorkers(),
+		storedSHAMapWalkControl{
+			progress: newOnlineDeleteRefreshProgress(
+				svc.logger,
+				svc.nodeStore,
+				root,
+				shamap.TypeState,
+				validated.Sequence(),
+				startedAt,
+			),
+			checkpoint: func(context.Context, time.Duration) error {
+				checks++
+				return wantErr
+			},
+			now: now,
+		},
+		nil,
+	)
+	require.ErrorIs(t, err, wantErr)
+	require.Equal(t, 1, checks)
 }
 
 func TestService_RefreshValidatedStateUsesBoundedConcurrencyAndReportsProgress(t *testing.T) {

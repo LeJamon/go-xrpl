@@ -377,7 +377,7 @@ const (
 type storedSHAMapWalkControl struct {
 	progress        *storedSHAMapVerificationProgress
 	progressTicks   <-chan time.Time
-	checkpoint      func(time.Duration) error
+	checkpoint      func(context.Context, time.Duration) error
 	checkpointTicks <-chan time.Time
 	now             func() time.Time
 }
@@ -413,7 +413,6 @@ func (s *Service) walkStoredSHAMapConcurrentWithFetch(
 	}
 
 	walkCtx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
 	var cancelOnce sync.Once
 	var checkpointGate sync.RWMutex
 	workStartedAt := control.now()
@@ -430,17 +429,89 @@ func (s *Service) walkStoredSHAMapConcurrentWithFetch(
 		}
 	}
 
-	checkpointSignal := make(chan struct{}, 1)
+	runCheckpoint := func() {
+		if walkCtx.Err() != nil {
+			return
+		}
+		checkpointGate.Lock()
+		defer checkpointGate.Unlock()
+		if walkCtx.Err() != nil {
+			return
+		}
+		checkpointAt := control.now()
+		work := checkpointAt.Sub(workStartedAt)
+		if work < 0 {
+			work = 0
+		}
+		visited := control.progress.nodesChecked.Load()
+		if work < refreshHealthCheckPeriod &&
+			visited-lastCheckpointNodes < refreshHealthCheckInterval {
+			return
+		}
+		if checkpointErr := control.checkpoint(walkCtx, work); checkpointErr != nil {
+			cancelOnce.Do(func() { cancel(checkpointErr) })
+			return
+		}
+		lastCheckpointNodes = visited
+		workStartedAt = control.now()
+	}
+
+	type checkpointRequest struct {
+		done chan struct{}
+	}
+	var checkpointRequests chan checkpointRequest
+	var checkpointDone chan struct{}
+	if control.checkpoint != nil {
+		checkpointRequests = make(chan checkpointRequest)
+		checkpointDone = make(chan struct{})
+		go func() {
+			defer close(checkpointDone)
+			ticks := control.checkpointTicks
+			for {
+				select {
+				case request := <-checkpointRequests:
+					runCheckpoint()
+					close(request.done)
+				case _, open := <-ticks:
+					if !open {
+						ticks = nil
+						continue
+					}
+					runCheckpoint()
+				case <-walkCtx.Done():
+					return
+				}
+			}
+		}()
+	}
+	defer func() {
+		cancel(nil)
+		if checkpointDone != nil {
+			<-checkpointDone
+		}
+	}()
+	requestCheckpoint := func() {
+		if checkpointRequests == nil || walkCtx.Err() != nil {
+			return
+		}
+		request := checkpointRequest{done: make(chan struct{})}
+		select {
+		case checkpointRequests <- request:
+		case <-walkCtx.Done():
+			return
+		}
+		select {
+		case <-request.done:
+		case <-walkCtx.Done():
+		}
+	}
 	onNode := func(node storedSHAMapNode) {
 		visited := control.progress.nodesChecked.Add(1)
 		if visit != nil {
 			visit(node)
 		}
-		if control.checkpoint != nil && visited%refreshHealthCheckInterval == 0 {
-			select {
-			case checkpointSignal <- struct{}{}:
-			default:
-			}
+		if checkpointRequests != nil && visited%refreshHealthCheckInterval == 0 {
+			requestCheckpoint()
 		}
 	}
 
@@ -451,6 +522,9 @@ func (s *Service) walkStoredSHAMapConcurrentWithFetch(
 		controlledFetch,
 	)
 	if err != nil {
+		if cause := context.Cause(walkCtx); cause != nil {
+			return cause
+		}
 		return err
 	}
 	onNode(storedSHAMapNode{hash: root})
@@ -486,6 +560,9 @@ func (s *Service) walkStoredSHAMapConcurrentWithFetch(
 		}
 	}
 	if err != nil {
+		if cause := context.Cause(walkCtx); cause != nil {
+			return cause
+		}
 		return err
 	}
 
@@ -493,6 +570,7 @@ func (s *Service) walkStoredSHAMapConcurrentWithFetch(
 	control.progress.configureWorkers(workers, startedWorkers, len(frontier))
 	control.progress.start()
 	if len(frontier) == 0 {
+		requestCheckpoint()
 		return context.Cause(walkCtx)
 	}
 
@@ -567,39 +645,7 @@ func (s *Service) walkStoredSHAMapConcurrentWithFetch(
 		close(workersDone)
 	}()
 
-	runCheckpoint := func() {
-		if control.checkpoint == nil || walkCtx.Err() != nil {
-			return
-		}
-		checkpointGate.Lock()
-		defer checkpointGate.Unlock()
-		if walkCtx.Err() != nil {
-			return
-		}
-		checkpointAt := control.now()
-		work := checkpointAt.Sub(workStartedAt)
-		if work < 0 {
-			work = 0
-		}
-		visited := control.progress.nodesChecked.Load()
-		if work < refreshHealthCheckPeriod &&
-			visited-lastCheckpointNodes < refreshHealthCheckInterval {
-			return
-		}
-		if checkpointErr := control.checkpoint(work); checkpointErr != nil {
-			cancelOnce.Do(func() { cancel(checkpointErr) })
-			return
-		}
-		lastCheckpointNodes = visited
-		workStartedAt = control.now()
-	}
-
 	progressTicks := control.progressTicks
-	checkpointTicks := control.checkpointTicks
-	if control.checkpoint == nil {
-		checkpointSignal = nil
-		checkpointTicks = nil
-	}
 	ctxDone := ctx.Done()
 	for {
 		select {
@@ -610,28 +656,11 @@ func (s *Service) walkStoredSHAMapConcurrentWithFetch(
 			}
 			select {
 			case <-workersDone:
+				requestCheckpoint()
 				return context.Cause(walkCtx)
 			default:
 			}
 			control.progress.report(tick)
-		case _, open := <-checkpointTicks:
-			if !open {
-				checkpointTicks = nil
-				continue
-			}
-			select {
-			case <-workersDone:
-				return context.Cause(walkCtx)
-			default:
-			}
-			runCheckpoint()
-		case <-checkpointSignal:
-			select {
-			case <-workersDone:
-				return context.Cause(walkCtx)
-			default:
-			}
-			runCheckpoint()
 		case <-ctxDone:
 			ctxDone = nil
 			cause := context.Cause(ctx)
@@ -640,6 +669,7 @@ func (s *Service) walkStoredSHAMapConcurrentWithFetch(
 			}
 			cancelOnce.Do(func() { cancel(cause) })
 		case <-workersDone:
+			requestCheckpoint()
 			return context.Cause(walkCtx)
 		}
 	}
