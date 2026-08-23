@@ -70,16 +70,16 @@ func (e *Engine) timerEntry() {
 		e.heartbeatNow().Sub(tickStart),
 		e.heartbeatContextLocked(),
 	)
-	e.deferBroadcasts++
+	e.deferPostUnlock++
 	var pending []func()
 	defer func() {
-		e.deferBroadcasts--
-		pending = e.takePendingBroadcastsLocked()
+		e.deferPostUnlock--
+		pending = e.takePendingPostUnlockLocked()
 		tickContext := e.heartbeatContextLocked()
 		e.mu.Unlock()
 
 		broadcastStart := e.heartbeatNow()
-		flushBroadcasts(pending)
+		runPostUnlock(pending)
 		slowStages = recordSlowHeartbeatStage(
 			slowStages,
 			"broadcast-flush",

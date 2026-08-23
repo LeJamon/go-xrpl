@@ -26,6 +26,18 @@ type ledgerAcceptWork struct {
 // acceptLedger finalizes consensus and accepts the new ledger. Runs in
 // every mode; only validation emission is mode-gated via isCompatible.
 func (e *Engine) acceptLedger(result consensus.Result) {
+	ownPostUnlockScope := e.deferPostUnlock == 0
+	if ownPostUnlockScope {
+		e.deferPostUnlock++
+		defer func() {
+			e.deferPostUnlock--
+			pending := e.takePendingPostUnlockLocked()
+			e.mu.Unlock()
+			runPostUnlock(pending)
+			e.mu.Lock()
+		}()
+	}
+
 	if e.phase != consensus.PhaseEstablish {
 		return
 	}
@@ -160,12 +172,12 @@ func (e *Engine) completeDeferredLedgerAccept(work ledgerAcceptWork) {
 	newLedger, err := e.buildAcceptedLedger(work)
 
 	e.mu.Lock()
-	e.deferBroadcasts++
+	e.deferPostUnlock++
 	e.commitAcceptedLedgerLocked(work, newLedger, err)
-	e.deferBroadcasts--
-	pending := e.takePendingBroadcastsLocked()
+	e.deferPostUnlock--
+	pending := e.takePendingPostUnlockLocked()
 	e.mu.Unlock()
-	flushBroadcasts(pending)
+	runPostUnlock(pending)
 }
 
 func (e *Engine) buildAcceptedLedger(work ledgerAcceptWork) (consensus.Ledger, error) {
@@ -360,7 +372,7 @@ func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger con
 	// Refresh the tracker's trusted set, quorum, and negative UNL each accept,
 	// and advance the minSeq floor so far-stale validations are rejected at Add().
 	if e.validationTracker != nil {
-		quorum := e.refreshValidationConfig()
+		quorum := e.refreshValidationConfigDeferredLocked()
 		if newLedger.Seq() > 128 {
 			// Keep a small history window so late validations for the
 			// just-accepted ledger still count.
@@ -611,9 +623,10 @@ func (e *Engine) tryAdvanceValidatedSeqLocked(seq uint32) bool {
 	return true
 }
 
-// sendValidation builds and broadcasts a validation. The Full flag (set
-// from mode==ModeProposing) is what makes peers count it toward quorum;
-// partials from non-proposing modes are accepted but don't count.
+// sendValidation builds and broadcasts a validation. Tracker callbacks execute
+// after e.mu is released, either through the caller's deferred scope or by a
+// direct unlock around tracking. The Full flag (set from mode==ModeProposing)
+// is what makes peers count it toward quorum; partials don't count.
 func (e *Engine) sendValidation(ledger consensus.Ledger) {
 	// SeqEnforcer guard + bump; defensive so direct test callers can't bypass.
 	if !e.tryAdvanceValidatedSeqLocked(ledger.Seq()) {
@@ -735,14 +748,25 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 		"sign_time_xrpl", signTime.Unix()-protocol.RippleEpochUnix,
 	)
 
-	e.enqueueValidationBroadcastLocked(validation)
-
 	// Feed our own validation into the tracker. Partials steer our trie but
 	// don't count toward quorum (Full filter); a 1-validator standalone is
 	// always proposing, so Full crosses immediately.
 	if e.validationTracker != nil {
-		e.validationTracker.Add(validation)
+		tracker := e.validationTracker
+		tracker.beginFinalityDeferral()
+		tracker.addStatus(validation, false)
+		if e.deferPostUnlock == 0 {
+			e.mu.Unlock()
+			tracker.endFinalityDeferral()
+			e.mu.Lock()
+		} else {
+			e.pendingPostUnlock = append(e.pendingPostUnlock, func() {
+				tracker.endFinalityDeferral()
+			})
+		}
 	}
+
+	e.enqueueValidationBroadcastLocked(validation)
 }
 
 // roundCloseTime rounds to the nearest multiple of resolution (up at the

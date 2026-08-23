@@ -133,6 +133,7 @@ type Ledger struct {
 	state     State
 	err       error
 	mu        sync.Mutex
+	workMu    sync.Mutex
 	logger    *slog.Logger
 	snapshot  atomic.Pointer[Snapshot]
 
@@ -600,19 +601,43 @@ func (l *Ledger) GotBaseContext(ctx context.Context, nodes []message.LedgerNode)
 // while the acquisition remains in StateWantBase.
 func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.LedgerNode) (useful int, err error) {
 	var stored []shamap.FlushEntry
+	var stateMap, txMap *shamap.SHAMap
+
+	l.workMu.Lock()
+	defer l.workMu.Unlock()
+
 	l.mu.Lock()
+	if l.state != StateWantBase {
+		l.mu.Unlock()
+		return 0, nil
+	}
 	defer func() {
 		if useful > 0 {
 			l.markProgressLocked()
 		}
+		l.publishSnapshotLocked()
+		l.mu.Unlock()
+
 		l.persistReceived(ctx, stored, "roots")
+		stateComplete := stateMap != nil && stateMap.FinishSyncContext(ctx) == nil
+		txComplete := txMap != nil && txMap.FinishSyncContext(ctx) == nil
+
+		l.mu.Lock()
+		if l.state == StateWantBase || l.state == StateWantState {
+			if stateComplete && l.stateMap == stateMap {
+				l.haveState = true
+			}
+			if txComplete && l.txMap == txMap {
+				l.haveTx = true
+			}
+			if l.state == StateWantState {
+				l.recomputeComplete()
+			} else {
+				l.publishSnapshotLocked()
+			}
+		}
 		l.mu.Unlock()
 	}()
-
-	// Ignore duplicate responses after we've moved past WantBase
-	if l.state != StateWantBase {
-		return 0, nil
-	}
 
 	if len(nodes) > hardMaxReplyNodes {
 		return 0, fmt.Errorf("ledger data exceeds hardMaxReplyNodes: %d > %d", len(nodes), hardMaxReplyNodes)
@@ -678,8 +703,8 @@ func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.Ledge
 			return useful, fmt.Errorf("add state root node: %w", rootErr)
 		}
 		l.stateMap = sm
+		stateMap = sm
 		l.publishSnapshotLocked()
-		l.haveState = sm.FinishSyncContext(ctx) == nil
 		stored = append(stored, stateRoot)
 		useful++
 	}
@@ -697,8 +722,8 @@ func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.Ledge
 			return useful, fmt.Errorf("add tx root node: %w", rootErr)
 		}
 		l.txMap = tm
+		txMap = tm
 		l.publishSnapshotLocked()
-		l.haveTx = tm.FinishSyncContext(ctx) == nil
 		stored = append(stored, txRoot)
 		useful++
 	}
@@ -737,10 +762,12 @@ func (l *Ledger) GotStateNodesUsefulContext(ctx context.Context, nodes []message
 	}
 
 	var stored []shamap.FlushEntry
+	l.workMu.Lock()
+	defer l.workMu.Unlock()
 	l.mu.Lock()
 	defer func() {
-		l.persistReceived(ctx, stored, "state nodes")
 		l.mu.Unlock()
+		l.persistReceived(ctx, stored, "state nodes")
 	}()
 
 	if l.state == StateComplete || l.haveState {
@@ -797,10 +824,12 @@ func (l *Ledger) GotTransactionNodesUsefulContext(ctx context.Context, nodes []m
 	}
 
 	var stored []shamap.FlushEntry
+	l.workMu.Lock()
+	defer l.workMu.Unlock()
 	l.mu.Lock()
 	defer func() {
-		l.persistReceived(ctx, stored, "transaction nodes")
 		l.mu.Unlock()
+		l.persistReceived(ctx, stored, "transaction nodes")
 	}()
 
 	if l.state == StateComplete || l.haveTx {
@@ -955,18 +984,21 @@ func (l *Ledger) PromotePersistence(ctx context.Context) error {
 		return nil
 	}
 
+	l.workMu.Lock()
+	defer l.workMu.Unlock()
 	l.mu.Lock()
-	defer l.mu.Unlock()
+	stateMap, txMap := l.stateMap, l.txMap
+	l.mu.Unlock()
 	if err := promoter.Promote(ctx); err != nil {
 		return err
 	}
-	if l.stateMap != nil {
-		if err := l.stateMap.AcknowledgePersistedContext(ctx); err != nil {
+	if stateMap != nil {
+		if err := stateMap.AcknowledgePersistedContext(ctx); err != nil {
 			return err
 		}
 	}
-	if l.txMap != nil {
-		if err := l.txMap.AcknowledgePersistedContext(ctx); err != nil {
+	if txMap != nil {
+		if err := txMap.AcknowledgePersistedContext(ctx); err != nil {
 			return err
 		}
 	}
@@ -1025,13 +1057,22 @@ func (f missingNodeExclusionFilter) ShouldFetch(hash [32]byte) bool {
 // path-based NodeIDs of missing SHAMap inner nodes, ordered by depth.
 // Returns nil if the state map is complete or not yet ready (issue #395).
 func (l *Ledger) NeedsMissingNodeIDs() [][]byte {
+	l.workMu.Lock()
+	defer l.workMu.Unlock()
 	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	if l.stateMap == nil || l.haveState || l.state != StateWantState {
+		l.mu.Unlock()
 		return nil
 	}
-	missing := l.stateMap.GetMissingNodes(missingNodeBatch, nil)
+	stateMap := l.stateMap
+	l.mu.Unlock()
+
+	missing := stateMap.GetMissingNodes(missingNodeBatch, nil)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.stateMap != stateMap || l.haveState || l.state != StateWantState {
+		return nil
+	}
 	l.cacheMissingLocked(false, missing)
 	return missingNodeIDs(missing)
 }
@@ -1040,13 +1081,22 @@ func (l *Ledger) NeedsMissingNodeIDs() [][]byte {
 // missing transaction-tree inner nodes, mirroring NeedsMissingNodeIDs for the
 // tx map. Returns nil once the tx tree is complete (or empty).
 func (l *Ledger) NeedsMissingTxNodeIDs() [][]byte {
+	l.workMu.Lock()
+	defer l.workMu.Unlock()
 	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	if l.txMap == nil || l.haveTx || l.state != StateWantState {
+		l.mu.Unlock()
 		return nil
 	}
-	missing := l.txMap.GetMissingNodes(missingNodeBatch, nil)
+	txMap := l.txMap
+	l.mu.Unlock()
+
+	missing := txMap.GetMissingNodes(missingNodeBatch, nil)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.txMap != txMap || l.haveTx || l.state != StateWantState {
+		return nil
+	}
 	l.cacheMissingLocked(true, missing)
 	return missingNodeIDs(missing)
 }
@@ -1079,10 +1129,11 @@ func (l *Ledger) CollectMissingRequest(isReply bool) (state, txn [][]byte) {
 }
 
 // CollectMissingRequestContext performs the backing-store traversal without
-// holding the acquisition mutex. Peer replies may therefore continue attaching
-// nodes while a cold scan is in flight. The active tree is checked again before
+// holding the acquisition mutex. The active tree is checked again before
 // recent-node filtering or completion is committed.
 func (l *Ledger) CollectMissingRequestContext(ctx context.Context, isReply bool) (state, txn [][]byte, complete bool, err error) {
+	l.workMu.Lock()
+	defer l.workMu.Unlock()
 	l.mu.Lock()
 	if l.state != StateWantState {
 		complete = l.state == StateComplete
@@ -1111,6 +1162,11 @@ func (l *Ledger) CollectMissingRequestContext(ctx context.Context, isReply bool)
 		l.logger.Info("inbound ledger: missing-node walk delayed", "elapsed", elapsed, "missing", len(missing), "reply", isReply)
 	}
 
+	var finishErr error
+	if len(missing) == 0 {
+		finishErr = m.FinishSyncContext(ctx)
+	}
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.state != StateWantState {
@@ -1125,7 +1181,7 @@ func (l *Ledger) CollectMissingRequestContext(ctx context.Context, isReply bool)
 	}
 
 	if len(missing) == 0 {
-		if finishErr := m.FinishSyncContext(ctx); finishErr == nil {
+		if finishErr == nil {
 			if stateTree {
 				l.haveState = true
 			} else {
@@ -1200,6 +1256,8 @@ func (l *Ledger) CollectMissingAddedRequestsContext(ctx context.Context, peerIDs
 }
 
 func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs []uint64, batchLimit int, blind bool) ([]MissingRequest, bool, error) {
+	l.workMu.Lock()
+	defer l.workMu.Unlock()
 	if len(peerIDs) == 0 {
 		return nil, l.IsComplete(), nil
 	}
@@ -1261,6 +1319,7 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 				if filter != nil {
 					break
 				}
+				finishErr := m.FinishSyncContext(ctx)
 				l.mu.Lock()
 				if l.state != StateWantState || (!transaction && (l.stateMap != m || l.haveState)) ||
 					(transaction && (l.txMap != m || l.haveTx)) {
@@ -1268,7 +1327,7 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 					l.mu.Unlock()
 					return requests, complete, nil
 				}
-				if finishErr := m.FinishSyncContext(ctx); finishErr != nil {
+				if finishErr != nil {
 					l.mu.Unlock()
 					return requests, false, nil
 				}
@@ -1590,6 +1649,8 @@ func (l *Ledger) CheckLocalContext(ctx context.Context, fetch func(hash [32]byte
 	if fetch == nil {
 		return false, false, nil
 	}
+	l.workMu.Lock()
+	defer l.workMu.Unlock()
 
 	l.mu.Lock()
 	if l.state != StateWantState {

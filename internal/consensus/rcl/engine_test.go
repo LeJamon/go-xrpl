@@ -3436,14 +3436,11 @@ func TestCheckConsensusState(t *testing.T) {
 	})
 }
 
-// TestEngine_OnValidation_NoSelfDeadlockOnQuorum pins the issue
-// #381 root cause: ValidationTracker.Add fires the
-// fully-validated callback synchronously on the goroutine that
-// called OnValidation — and OnValidation already holds e.mu.Lock.
-// A defensive e.mu.RLock inside the callback self-deadlocks
-// because Go's RWMutex is non-recursive. Once a single
-// fully-validated ledger fires, the engine writer never returns,
-// the heartbeat parks, and every RPC reader piles up.
+// TestEngine_OnValidation_NoSelfDeadlockOnQuorum pins the issue #381 failure:
+// the fully-validated callback used to run while OnValidation held e.mu. A
+// defensive e.mu.RLock inside that callback then self-deadlocked because Go's
+// RWMutex is non-recursive. Finality now drains after the engine lock is
+// released, but the callback must still complete without re-entry deadlock.
 func TestEngine_OnValidation_NoSelfDeadlockOnQuorum(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.quorum = 1
@@ -3473,11 +3470,9 @@ func TestEngine_OnValidation_NoSelfDeadlockOnQuorum(t *testing.T) {
 		Full:      true,
 	}
 
-	// OnValidation must return cleanly even though Add fires the
-	// fully-validated callback (quorum=1, one trusted validator,
-	// one Full validation = quorum reached). Run on a separate
-	// goroutine with a tight timeout so a regression of the
-	// e.mu.RLock self-deadlock cannot pass by hanging.
+	// OnValidation must return cleanly when one trusted Full validation reaches
+	// quorum and fires the fully-validated callback. Run on a separate goroutine
+	// so a lock-lifetime regression cannot pass by hanging.
 	done := make(chan error, 1)
 	go func() {
 		done <- engine.OnValidation(validation, 1)
