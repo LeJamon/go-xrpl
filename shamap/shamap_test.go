@@ -510,7 +510,6 @@ func TestSHAMapPathProof(t *testing.T) {
 		t.Error("Empty path should fail verification")
 	}
 
-	// A path longer than the maximum tree depth is invalid.
 	if len(goodPath) > 0 {
 		tooLongPath := make([][]byte, maxDepth+2)
 		for i := range tooLongPath {

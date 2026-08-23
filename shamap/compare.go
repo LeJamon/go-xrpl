@@ -45,7 +45,6 @@ func (sm *SHAMap) CompareContext(ctx context.Context, other *SHAMap, maxCount in
 	return result, nil
 }
 
-// diffUnsafe is the comparison walk used by CompareContext.
 // It calls emit for every difference between the two maps; emit returning
 // false stops the walk early (complete=false). Both maps descend with lazy
 // loading, so backed maps with released children diff correctly.

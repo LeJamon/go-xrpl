@@ -11,9 +11,6 @@ const (
 	fuzzOpDelete = 2
 )
 
-// FuzzSHAMapOperations fuzzes random sequences of Put/Get/Delete on a SHAMap,
-// verifying tree invariants and correctness against a reference oracle after
-// each operation sequence.
 func FuzzSHAMapOperations(f *testing.F) {
 	// Single Put
 	singlePut := make([]byte, 45)

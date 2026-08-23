@@ -109,8 +109,6 @@ func TestDirtyFlag_WireDeserialize(t *testing.T) {
 	}
 }
 
-// TestStoreDirty_BasicRoundTrip verifies StoreDirty collects all dirty nodes
-// and they can be deserialized back.
 func TestStoreDirty_BasicRoundTrip(t *testing.T) {
 	sMap := New(TypeState)
 
@@ -180,7 +178,6 @@ func TestStoreDirty_BasicRoundTrip(t *testing.T) {
 	}
 }
 
-// TestStoreDirty_Idempotent verifies that flushing twice produces empty batch on second call.
 func TestStoreDirty_Idempotent(t *testing.T) {
 	sMap := New(TypeState)
 
@@ -342,7 +339,6 @@ func TestAcknowledgePersistedContextFutureMutationStoresOnlyChangedPath(t *testi
 	}
 }
 
-// TestStoreDirty_AfterModification verifies only modified nodes are re-flushed.
 func TestStoreDirty_AfterModification(t *testing.T) {
 	sMap := New(TypeState)
 

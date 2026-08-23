@@ -1,9 +1,7 @@
 package shamap
 
 const (
-	// maxDepth is the maximum depth of the SHAMap tree (256 bits / 4 bits per branch).
 	maxDepth = 64
-	// branchMask is the mask for valid branch values (0-15).
 	branchMask = 0x0F
 )
 

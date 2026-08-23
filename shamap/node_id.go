@@ -65,7 +65,6 @@ func (n NodeID) ID() [32]byte {
 	return n.id
 }
 
-// IsRoot reports whether this node ID identifies the root.
 func (n NodeID) IsRoot() bool {
 	return n.depth == 0
 }

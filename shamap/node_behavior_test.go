@@ -68,7 +68,6 @@ func TestNid_CreateNodeID_MasksIrrelevantBits(t *testing.T) {
 }
 
 func TestNid_CreateNodeID_MaxDepth(t *testing.T) {
-	// At the maximum depth no masking occurs; all bytes are preserved.
 	nid, err := createNodeID(maxDepth, nid_fullKey)
 	if err != nil {
 		t.Fatal(err)
