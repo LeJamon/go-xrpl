@@ -9,4 +9,7 @@ func TestVersion(t *testing.T) {
 	if SemanticVersion != "3.3.0" {
 		t.Errorf("SemanticVersion = %q, want %q", SemanticVersion, "3.3.0")
 	}
+	if Version != SemanticVersion {
+		t.Errorf("default Version = %q, want SemanticVersion %q", Version, SemanticVersion)
+	}
 }

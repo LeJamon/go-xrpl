@@ -36,15 +36,15 @@ func encodeServerVersion(value string) (uint64, error) {
 		return 0, fmt.Errorf("invalid go-xrpl semantic version %q", value)
 	}
 
-	major, err := strconv.ParseUint(parts[1], 10, 8)
+	major, err := strconv.ParseUint(parts[1], 10, 31)
 	if err != nil {
 		return 0, fmt.Errorf("invalid go-xrpl major version %q: %w", parts[1], err)
 	}
-	minor, err := strconv.ParseUint(parts[2], 10, 8)
+	minor, err := strconv.ParseUint(parts[2], 10, 31)
 	if err != nil {
 		return 0, fmt.Errorf("invalid go-xrpl minor version %q: %w", parts[2], err)
 	}
-	patch, err := strconv.ParseUint(parts[3], 10, 8)
+	patch, err := strconv.ParseUint(parts[3], 10, 31)
 	if err != nil {
 		return 0, fmt.Errorf("invalid go-xrpl patch version %q: %w", parts[3], err)
 	}
@@ -54,11 +54,17 @@ func encodeServerVersion(value string) (uint64, error) {
 		return 0, err
 	}
 
-	return uint64(implementationID)<<48 |
-		major<<40 |
-		minor<<32 |
-		patch<<24 |
-		release<<16, nil
+	encoded := uint64(implementationID)<<48 | release<<16
+	if major <= 255 {
+		encoded |= major << 40
+	}
+	if minor <= 255 {
+		encoded |= minor << 32
+	}
+	if patch <= 255 {
+		encoded |= patch << 24
+	}
+	return encoded, nil
 }
 
 func encodePrerelease(value string) (uint64, error) {
@@ -66,11 +72,14 @@ func encodePrerelease(value string) (uint64, error) {
 		return 0xC0, nil
 	}
 
-	for _, identifier := range strings.Split(value, ".") {
+	identifiers := strings.Split(value, ".")
+	for _, identifier := range identifiers {
 		if identifier[0] == '0' {
 			return 0, fmt.Errorf("invalid prerelease identifier %q", identifier)
 		}
+	}
 
+	for _, identifier := range identifiers {
 		for _, candidate := range []struct {
 			prefix string
 			kind   uint64

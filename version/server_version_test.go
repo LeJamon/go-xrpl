@@ -34,6 +34,10 @@ func TestEncodeServerVersion(t *testing.T) {
 		{name: "rc ordinal out of range", version: "1.2.8-rc64", want: 0x4000_0102_0800_0000},
 		{name: "zero prerelease", version: "1.2.9-b0", want: 0x4000_0102_0940_0000},
 		{name: "maximum", version: "255.255.255-b63", want: 0x4000_FFFF_FF7F_0000},
+		{name: "major omitted when out of byte range", version: "256.2.3", want: 0x4000_0002_03C0_0000},
+		{name: "minor omitted when out of byte range", version: "1.256.3", want: 0x4000_0100_03C0_0000},
+		{name: "patch omitted when out of byte range", version: "1.2.256", want: 0x4000_0102_00C0_0000},
+		{name: "maximum semantic version component", version: "2147483647.2.3", want: 0x4000_0002_03C0_0000},
 	}
 
 	for _, test := range tests {
@@ -56,14 +60,14 @@ func TestEncodeServerVersionRejectsInvalidValues(t *testing.T) {
 		"1.2",
 		"1.2.3.4",
 		"01.2.3",
-		"256.2.3",
-		"1.256.3",
-		"1.2.256",
+		"2147483648.2.3",
 		"1.2.3-0",
 		"1.2.3-01",
 		"1.2.3-01alpha",
 		"1.2.3-0abc",
 		"1.2.3-alpha.01",
+		"1.2.3-rc7.0",
+		"1.2.3-b7.01",
 		"1.2.3+",
 		"1.2.3+bad_metadata",
 	} {
