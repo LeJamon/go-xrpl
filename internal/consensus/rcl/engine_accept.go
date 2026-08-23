@@ -192,9 +192,9 @@ func (e *Engine) buildAcceptedLedger(work ledgerAcceptWork) (consensus.Ledger, e
 // application. Caller must hold e.mu.
 func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger consensus.Ledger, err error) {
 	e.purgePendingTrustLocked()
-	e.buildInProgress = false
 
 	if err != nil {
+		e.buildInProgress = false
 		// Build/validate/store failed off-lock; unwind to Establish so the next
 		// heartbeat retries (matches the pre-offload early-return).
 		e.setPhase(consensus.PhaseEstablish)
@@ -340,7 +340,8 @@ func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger con
 	validations := e.proposalTracker.ValidationsFor(newLedger.ID())
 
 	e.buildingLedgerSeq.Store(0)
-	e.adaptor.OnConsensusReached(newLedger, validations, roundTime)
+	e.notifyConsensusReachedUnlocked(newLedger, validations, roundTime)
+	e.buildInProgress = false
 
 	e.eventBus.Publish(&consensus.LedgerAcceptedEvent{
 		LedgerID:    newLedger.ID(),
@@ -440,6 +441,19 @@ func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger con
 		}
 		e.startRoundLocked(nextRound, proposing, false)
 	}
+}
+
+// notifyConsensusReachedUnlocked preserves the accepted-ledger callback's
+// ordering while allowing it to call public Engine methods that acquire e.mu.
+// The accepted round remains frozen under buildInProgress until it returns.
+func (e *Engine) notifyConsensusReachedUnlocked(
+	ledger consensus.Ledger,
+	validations []*consensus.Validation,
+	roundTime time.Duration,
+) {
+	e.mu.Unlock()
+	defer e.mu.Lock()
+	e.adaptor.OnConsensusReached(ledger, validations, roundTime)
 }
 
 // updateCloseTimePosition tallies close-time votes, applies avalanche

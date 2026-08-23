@@ -20,6 +20,42 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type issue1677RecheckingHistorian struct {
+	*stubHistorian
+	calls int
+}
+
+func (h *issue1677RecheckingHistorian) RecheckFullyValidated(
+	ledgerID consensus.LedgerID,
+	seq uint32,
+) ([]*consensus.Validation, int, bool) {
+	h.calls++
+	return []*consensus.Validation{{
+		LedgerID:  ledgerID,
+		LedgerSeq: seq,
+		SignTime:  time.Now(),
+		Full:      true,
+	}}, 1, true
+}
+
+type issue1677CanAcceptResult struct {
+	acceptable bool
+	err        error
+}
+
+type issue1677EngineProbe struct {
+	*rcl.Engine
+	entered chan consensus.LedgerID
+	result  chan issue1677CanAcceptResult
+}
+
+func (p *issue1677EngineProbe) CanAcceptLedger(id consensus.LedgerID) (bool, error) {
+	p.entered <- id
+	acceptable, err := p.Engine.CanAcceptLedger(id)
+	p.result <- issue1677CanAcceptResult{acceptable: acceptable, err: err}
+	return acceptable, err
+}
+
 func newIssue1663BackedAcquisition(t *testing.T, seq uint32, peerID uint64) *inbound.Ledger {
 	t.Helper()
 	source := newWideWorkSource(t, 16)
@@ -261,4 +297,120 @@ func TestRouter_Issue1668FrozenPivotCollectsAndReplaysMovingHead(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, pivotRequests)
+}
+
+func TestRouter_Issue1677ConsensusRecoveryCallbackDoesNotReenterEngineLock(t *testing.T) {
+	svc := newTestLedgerService(t)
+	a, _ := newRecordingAdaptor(t, svc)
+	a.SetOperatingMode(consensus.OpModeFull)
+
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+	historian := &issue1677RecheckingHistorian{stubHistorian: &stubHistorian{}}
+	a.closeOffsetNs.Store(int64(time.Minute))
+
+	now := a.Now()
+	config := rcl.DefaultConfig()
+	config.ManualTick = true
+	config.Clock = func() time.Time { return now }
+	config.Timing.LedgerMinClose = time.Millisecond
+	config.Timing.LedgerMinConsensus = time.Millisecond
+	engine := rcl.NewEngine(a, config)
+	require.NoError(t, engine.Start(t.Context()))
+	t.Cleanup(func() { require.NoError(t, engine.Stop()) })
+	a.SetValidationHistorian(historian)
+	probe := &issue1677EngineProbe{
+		Engine:  engine,
+		entered: make(chan consensus.LedgerID, 1),
+		result:  make(chan issue1677CanAcceptResult, 1),
+	}
+	r := NewRouter(probe, a, nil)
+	require.Equal(t, consensus.OpModeFull, a.GetOperatingMode())
+
+	type builtTarget struct {
+		seq  uint32
+		hash [32]byte
+	}
+	built := make(chan builtTarget, 1)
+	onLedgerBuilt := a.onLedgerBuilt
+	a.setOnLedgerBuilt(func(seq uint32, hash [32]byte) {
+		r.catchupMu.Lock()
+		r.catchup = catchupTarget{seq: seq, hash: hash, source: catchupSourceQuorum}
+		r.catchupMu.Unlock()
+		r.acquisitionMu.Lock()
+		r.standardReplay = standardReplayPipeline{
+			active:     true,
+			pivotReady: true,
+			pivotSeq:   seq,
+			pivotHash:  hash,
+			anchorSeq:  seq,
+			anchorHash: hash,
+			targetSeq:  seq,
+			targetHash: hash,
+			entries:    make(map[uint32]*standardReplayEntry),
+		}
+		r.acquisitionMu.Unlock()
+		built <- builtTarget{seq: seq, hash: hash}
+		onLedgerBuilt(seq, hash)
+	})
+
+	round := consensus.RoundID{
+		Seq:        parent.Sequence() + 1,
+		ParentHash: consensus.LedgerID(parent.Hash()),
+	}
+	require.NoError(t, engine.StartRound(round, false))
+	for range 3 {
+		now = now.Add(time.Minute)
+		engine.TimerEntry()
+		if engine.Phase() == consensus.PhaseEstablish {
+			break
+		}
+	}
+	require.Equal(t, consensus.PhaseEstablish, engine.Phase())
+
+	now = now.Add(time.Minute)
+	done := make(chan struct{})
+	go func() {
+		engine.TimerEntry()
+		close(done)
+	}()
+
+	var target builtTarget
+	select {
+	case target = <-built:
+	case <-time.After(time.Second):
+		t.Fatal("accepted ledger did not reach the router callback")
+	}
+	select {
+	case entered := <-probe.entered:
+		require.Equal(t, consensus.LedgerID(target.hash), entered)
+	case <-time.After(time.Second):
+		t.Fatal("recovery did not check the completed ledger")
+	}
+	select {
+	case result := <-probe.result:
+		require.NoError(t, result.err)
+		require.True(t, result.acceptable)
+	case <-time.After(time.Second):
+		t.Fatal("completed-ledger acceptance check re-entered Engine.mu")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("accepted-ledger recovery callback did not complete")
+	}
+
+	require.Equal(t, consensus.PhaseOpen, engine.Phase())
+	require.Equal(t, consensus.ModeProposing, engine.Mode())
+	r.acquisitionMu.Lock()
+	retryTarget := r.consensusRecovery.targetHash
+	replayActive := r.standardReplay.active
+	r.acquisitionMu.Unlock()
+	assert.Equal(t, target.hash, retryTarget)
+	assert.False(t, replayActive)
+	assert.Equal(t, 3, historian.calls)
+	validated := svc.GetValidatedLedger()
+	require.NotNil(t, validated)
+	assert.Equal(t, target.seq, validated.Sequence())
+	assert.Equal(t, target.hash, validated.Hash())
 }
