@@ -132,6 +132,8 @@ type Engine struct {
 
 	// Heartbeat ticker — single global timer at ledgerGRANULARITY cadence.
 	heartbeat *time.Ticker
+	// heartbeatNow stays wall-clock based when simulations replace now.
+	heartbeatNow func() time.Time
 
 	// Lifecycle
 	ctx      context.Context
@@ -446,6 +448,7 @@ func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 		comparesTxSets:    make(map[consensus.TxSetID]struct{}),
 		parms:             consensus.DefaultConsensusParms(),
 		now:               config.Clock,
+		heartbeatNow:      time.Now,
 		manualTick:        config.ManualTick,
 		firstRound:        true,
 		trustedSnapshot:   make(map[consensus.NodeID]struct{}),
