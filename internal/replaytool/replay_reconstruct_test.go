@@ -420,6 +420,105 @@ func TestReconstructFromMeta_CreatedOfferDefaults(t *testing.T) {
 	}
 }
 
+func TestReconstructFromMeta_CreatedSponsorshipDefaults(t *testing.T) {
+	const (
+		owner     = "r4Nvsh3Ksy1zhh3B4sCQf7TGKcZVQ34hsg"
+		sponsee   = "rLwmnMQ9SYoDuEKrsbzV44ci6182ykEw8J"
+		txHashHex = "F08EE09A7F96103F4214C357FD422A6A5833640B9540315B7B501A09592A25C7"
+		ledgerSeq = uint32(4_434_176)
+	)
+
+	ownerID, err := state.DecodeAccountID(owner)
+	if err != nil {
+		t.Fatalf("Decode owner: %v", err)
+	}
+	sponseeID, err := state.DecodeAccountID(sponsee)
+	if err != nil {
+		t.Fatalf("Decode sponsee: %v", err)
+	}
+	sponsorshipKey := keylet.Sponsorship(ownerID, sponseeID).Key
+	sponsorshipIndex := protocol.Hash256Hex(sponsorshipKey)
+	ownerDir := keylet.OwnerDir(ownerID).Key
+	sponseeDir := keylet.OwnerDir(sponseeID).Key
+
+	directory := func(account string, root [32]byte, indexes ...string) map[string]any {
+		entry := map[string]any{
+			"LedgerEntryType": "DirectoryNode",
+			"Flags":           0,
+			"Owner":           account,
+			"RootIndex":       protocol.Hash256Hex(root),
+		}
+		if len(indexes) != 0 {
+			entry["Indexes"] = indexes
+			entry["PreviousTxnID"] = txHashHex
+			entry["PreviousTxnLgrSeq"] = ledgerSeq
+		}
+		return entry
+	}
+
+	full := map[string]any{
+		"LedgerEntryType":     "Sponsorship",
+		"Flags":               0,
+		"Owner":               owner,
+		"Sponsee":             sponsee,
+		"RemainingOwnerCount": 10,
+		"OwnerNode":           "0",
+		"SponseeNode":         "0",
+		"PreviousTxnID":       txHashHex,
+		"PreviousTxnLgrSeq":   ledgerSeq,
+	}
+	wantSponsorship := encodeSLE(t, full)
+	wantRoot := stateRoot(t, map[[32]byte][]byte{
+		ownerDir:       encodeSLE(t, directory(owner, ownerDir, sponsorshipIndex)),
+		sponseeDir:     encodeSLE(t, directory(sponsee, sponseeDir, sponsorshipIndex)),
+		sponsorshipKey: wantSponsorship,
+	})
+
+	meta := encodeMeta(t,
+		map[string]any{"ModifiedNode": map[string]any{
+			"LedgerEntryType": "DirectoryNode",
+			"LedgerIndex":     protocol.Hash256Hex(ownerDir),
+			"FinalFields": map[string]any{
+				"Flags": 0, "Owner": owner, "RootIndex": protocol.Hash256Hex(ownerDir),
+			},
+		}},
+		map[string]any{"ModifiedNode": map[string]any{
+			"LedgerEntryType": "DirectoryNode",
+			"LedgerIndex":     protocol.Hash256Hex(sponseeDir),
+			"FinalFields": map[string]any{
+				"Flags": 0, "Owner": sponsee, "RootIndex": protocol.Hash256Hex(sponseeDir),
+			},
+		}},
+		map[string]any{"CreatedNode": map[string]any{
+			"LedgerEntryType": "Sponsorship",
+			"LedgerIndex":     sponsorshipIndex,
+			"NewFields": map[string]any{
+				"Owner": owner, "Sponsee": sponsee, "RemainingOwnerCount": 10,
+			},
+		}},
+	)
+
+	corrected, err := reconstructFromMeta(
+		putAll(t, map[[32]byte][]byte{
+			ownerDir:   encodeSLE(t, directory(owner, ownerDir)),
+			sponseeDir: encodeSLE(t, directory(sponsee, sponseeDir)),
+		}),
+		[]metaTx{{Blob: meta, TxHash: mustIndex(t, txHashHex)}},
+		ledgerSeq,
+	)
+	if err != nil {
+		t.Fatalf("reconstructFromMeta: %v", err)
+	}
+	assertEntryBytes(t, corrected, sponsorshipKey, wantSponsorship, "Sponsorship")
+	gotRoot, err := corrected.Hash()
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+	if gotRoot != wantRoot {
+		t.Fatalf("reconstructed sponsorship root %x != expected %x", gotRoot[:8], wantRoot[:8])
+	}
+}
+
 func TestReconstructFromMeta_CreatedLoanBrokerDefaults(t *testing.T) {
 	const (
 		ledgerIndexHex = "75F04A09A3F45F989E015B92A39F8B70B99857D31D5D61955AEB16190B7E7341"

@@ -121,6 +121,11 @@ var requiredDefaults = map[string][]createdField{
 		{Name: "OwnerNode", Value: "0"},
 		{Name: "SignerListID", Value: 0},
 	},
+	"Sponsorship": {
+		{Name: "Flags", Value: 0},
+		{Name: "OwnerNode", Value: "0"},
+		{Name: "SponseeNode", Value: "0"},
+	},
 	"Ticket": {
 		{Name: "Flags", Value: 0},
 		{Name: "OwnerNode", Value: "0"},
