@@ -28,7 +28,7 @@ const (
 	minLedgerRecordLen  = 8 + 4 + header.SizeBase + 4
 	minTransactionEntry = hashLen + 4 + minTransactionBytes + 4 + 1
 
-	maxStatePackBytes   int64  = 4 << 30
+	maxStatePackBytes   int64  = 8 << 30
 	maxLedgerPackBytes  int64  = 512 << 20
 	maxStateEntryBytes  uint32 = 16 << 20
 	minTransactionBytes        = 32

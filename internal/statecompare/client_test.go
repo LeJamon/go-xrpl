@@ -414,6 +414,41 @@ func TestSQLManifestSnapshotLoadsTrustMetadata(t *testing.T) {
 	}
 }
 
+func TestSQLManifestAcceptsLargeCheckpoint(t *testing.T) {
+	const objectCount int64 = 34_258_888
+	row := scannerFunc(func(dest ...any) error {
+		*(dest[0].(*int64)) = 10
+		*(dest[1].(*string)) = "state/ckpt-10.pack"
+		*(dest[2].(*[]byte)) = make([]byte, 32)
+		*(dest[3].(*int64)) = objectCount
+		*(dest[4].(*int64)) = observedDevnetStatePackBytes
+		return nil
+	})
+	manifest := &sqlManifest{db: fakeManifestDB{row: row}}
+	checkpoint, err := manifest.checkpoint(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if checkpoint.objectCount != uint32(objectCount) || checkpoint.sizeBytes != observedDevnetStatePackBytes {
+		t.Fatalf("checkpoint count/size = %d/%d", checkpoint.objectCount, checkpoint.sizeBytes)
+	}
+}
+
+func TestSQLManifestRejectsOversizedCheckpoint(t *testing.T) {
+	row := scannerFunc(func(dest ...any) error {
+		*(dest[0].(*int64)) = 10
+		*(dest[1].(*string)) = "state/ckpt-10.pack"
+		*(dest[2].(*[]byte)) = make([]byte, 32)
+		*(dest[3].(*int64)) = 1
+		*(dest[4].(*int64)) = maxStatePackBytes + 1
+		return nil
+	})
+	manifest := &sqlManifest{db: fakeManifestDB{row: row}}
+	if _, err := manifest.checkpoint(context.Background(), 10); err == nil {
+		t.Fatal("oversized checkpoint accepted")
+	}
+}
+
 func TestSQLManifestRejectsImpossibleCheckpoint(t *testing.T) {
 	row := scannerFunc(func(dest ...any) error {
 		*(dest[0].(*int64)) = 10

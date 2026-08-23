@@ -9,6 +9,8 @@ import (
 	"testing"
 )
 
+const observedDevnetStatePackBytes int64 = 5_918_719_233
+
 func encodeStatePack(seq uint32, entries []StateEntry) []byte {
 	var out bytes.Buffer
 	out.WriteString(packMagic)
@@ -45,6 +47,41 @@ func TestUnpackStateStreamValidatesBeforeCallback(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("unpackStateStream: %v", err)
+	}
+}
+
+func TestUnpackStateStreamAcceptsLargeDeclaredSize(t *testing.T) {
+	data := encodeStatePack(10, []StateEntry{{Index: [32]byte{1}, Data: []byte{2}}})
+	sentinel := errors.New("stop after first entry")
+	called := false
+	err := unpackStateStream(
+		context.Background(),
+		bytes.NewReader(data),
+		statePackExpectation{seq: 10, count: 1, size: observedDevnetStatePackBytes},
+		func([32]byte, []byte) error {
+			called = true
+			return sentinel
+		},
+	)
+	if !errors.Is(err, sentinel) || !called {
+		t.Fatalf("unpackStateStream error=%v callback=%t", err, called)
+	}
+}
+
+func TestUnpackStateStreamRejectsOversizedPack(t *testing.T) {
+	data := encodeStatePack(10, []StateEntry{{Index: [32]byte{1}, Data: []byte{2}}})
+	called := false
+	err := unpackStateStream(
+		context.Background(),
+		bytes.NewReader(data),
+		statePackExpectation{seq: 10, count: 1, size: maxStatePackBytes + 1},
+		func([32]byte, []byte) error {
+			called = true
+			return nil
+		},
+	)
+	if !errors.Is(err, errPack) || called {
+		t.Fatalf("unpackStateStream error=%v callback=%t", err, called)
 	}
 }
 
