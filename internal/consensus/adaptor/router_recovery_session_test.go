@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,6 +46,82 @@ func TestFrozenPivotRecoveryRejectsUnknownSequenceTarget(t *testing.T) {
 	assert.Equal(t, generation, r.standardReplay.generation)
 	assert.Equal(t, pivotSeq, r.standardReplay.targetSeq)
 	assert.Equal(t, pivotHash, r.standardReplay.targetHash)
+}
+
+func TestFrozenPivotRecoverySurvivesUnknownSequenceConsensusRequest(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	pivotSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
+	pivotHash := [32]byte{0xa5}
+	trackCatchupPeer(r, 7, pivotSeq, pivotHash)
+	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+	pivotAcquisition := r.fetchTracker.Find(pivotHash)
+	require.NotNil(t, pivotAcquisition)
+	generation := r.standardReplay.generation
+
+	// Reproduce startup ordering from issue #1668: peer status starts the
+	// frozen pivot, then consensus asks for the same hash before lookupSeqForHash
+	// can resolve its sequence. The exact request must join the frozen session,
+	// not cancel it and replace it with an ordinary seq=0 acquisition.
+	require.NoError(t, a.RequestLedger(consensus.LedgerID(pivotHash)))
+
+	assert.True(t, r.standardReplay.active)
+	assert.Equal(t, generation, r.standardReplay.generation)
+	assert.Equal(t, pivotSeq, r.standardReplay.pivotSeq)
+	assert.Equal(t, pivotHash, r.standardReplay.pivotHash)
+	assert.Same(t, pivotAcquisition, r.fetchTracker.Find(pivotHash))
+	assert.Len(t, sender.legacyCalls(), 1)
+}
+
+func TestHashOnlyConsensusAcquisitionPromotesAfterHeaderResolution(t *testing.T) {
+	r, _, svc := makeProvisionalWarmRouter(t)
+	closed := svc.GetClosedLedgerIndex()
+	rootHash, rootData, _ := buildSelfHealSourceState(t)
+	pivotHeader := header.LedgerHeader{
+		LedgerIndex: closed + maxForwardDeltaGap + 1,
+		ParentHash:  [32]byte{0x91},
+		AccountHash: rootHash,
+		CloseTime:   time.Unix(1_700_000_200, 0),
+	}
+	pivotHeader.Hash = header.CalculateHash(pivotHeader)
+
+	// Consensus arrives before any hash -> sequence bookkeeping, reproducing
+	// the live startup order. This creates one ordinary hash-only acquisition.
+	require.NoError(t, r.requestConsensusLedger(consensus.LedgerID(pivotHeader.Hash)))
+	pivotAcquisition := r.fetchTracker.Find(pivotHeader.Hash)
+	require.NotNil(t, pivotAcquisition)
+	require.True(t, pivotAcquisition.SequenceInitiallyUnknown())
+	require.Zero(t, pivotAcquisition.Seq())
+	require.False(t, r.standardReplay.active)
+	require.Len(t, r.fetchTracker.Active(), 1)
+
+	// The verified base header resolves the sequence. The router must promote
+	// the same in-flight object to the frozen session without issuing a second
+	// full-state request.
+	require.True(t, r.handleInboundLedgerData(pivotAcquisition, &message.LedgerData{
+		LedgerHash: pivotHeader.Hash[:],
+		InfoType:   message.LedgerInfoBase,
+		Nodes: []message.LedgerNode{
+			{NodeData: header.AddRaw(pivotHeader, false)},
+			{NodeData: rootData},
+		},
+	}, 7))
+	require.Equal(t, pivotHeader.LedgerIndex, pivotAcquisition.Seq())
+	require.True(t, r.standardReplay.active)
+	require.Equal(t, pivotHeader.LedgerIndex, r.standardReplay.pivotSeq)
+	require.Equal(t, pivotHeader.Hash, r.standardReplay.pivotHash)
+	require.Same(t, pivotAcquisition, r.fetchTracker.Find(pivotHeader.Hash))
+	require.Len(t, r.fetchTracker.Active(), 1)
+
+	// A newly observed successor is now collected as transaction-only replay
+	// data while the pivot's state walk remains in flight.
+	nextSeq := pivotHeader.LedgerIndex + 1
+	nextHash := [32]byte{0xa2}
+	r.recordSeqHash(nextSeq, nextHash, pivotHeader.Hash, true)
+	trackCatchupPeer(r, 7, nextSeq, nextHash)
+	require.True(t, r.continueFrozenPivotRecovery(nextSeq, nextHash, 7))
+	nextAcquisition := r.fetchTracker.Find(nextHash)
+	require.NotNil(t, nextAcquisition)
+	assert.True(t, nextAcquisition.TransactionOnly())
 }
 
 func TestFrozenPivotRecoveryKeepsExactConsensusTarget(t *testing.T) {

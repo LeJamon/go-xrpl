@@ -18,6 +18,8 @@ const (
 	standardReplayPreparedLimit  = 2048
 	standardReplayProgressWindow = time.Minute
 	standardReplayStallWindows   = 2
+	standardReplayApplyBatch     = 8
+	standardReplayApplyBudget    = 25 * time.Millisecond
 )
 
 type standardReplayPipeline struct {
@@ -187,6 +189,15 @@ func (r *Router) standardReplayBase(
 }
 
 func (r *Router) reconcileStandardReplayTarget(targetSeq uint32, targetHash [32]byte) {
+	// The consensus engine may request an exact ledger hash before peer status
+	// or validation bookkeeping has associated that hash with a sequence. An
+	// unknown sequence is not evidence that the requested ledger precedes (or
+	// conflicts with) the frozen replay anchor. Treating seq=0 as an older
+	// target cancels the frozen pivot acquisition and drops startup back onto
+	// the moving-head full-state treadmill.
+	if targetSeq == 0 {
+		return
+	}
 	r.acquisitionMu.Lock()
 	identity := r.standardReplayIdentityLocked()
 	r.acquisitionMu.Unlock()
@@ -552,7 +563,16 @@ func (r *Router) updateStandardReplayHeadBlockLocked(now time.Time) {
 	r.standardReplay.headBlockedAt = time.Time{}
 }
 
+func (r *Router) scheduleStandardReplayDrain() {
+	select {
+	case r.standardReplayDrainWake <- struct{}{}:
+	default:
+	}
+}
+
 func (r *Router) drainStandardReplayPipeline() {
+	batchStarted := time.Now()
+	applied := 0
 	for {
 		r.acquisitionMu.Lock()
 		if !r.standardReplay.active {
@@ -657,8 +677,17 @@ func (r *Router) drainStandardReplayPipeline() {
 			r.standardReplay.entries = nil
 			r.standardReplay.headBlockedAt = time.Time{}
 		}
+		active := r.standardReplay.active
 		r.acquisitionMu.Unlock()
 		if !current {
+			return
+		}
+		applied++
+		if active && (applied >= standardReplayApplyBatch || time.Since(batchStarted) >= standardReplayApplyBudget) {
+			// Keep applying set while the edge-triggered wake is pending. A
+			// completion that lands before the wake is consumed joins this same
+			// drain instead of starting a concurrent applier.
+			r.scheduleStandardReplayDrain()
 			return
 		}
 	}

@@ -275,6 +275,12 @@ func TestRouter_Issue1668FrozenPivotCollectsAndReplaysMovingHead(t *testing.T) {
 		require.NoError(t, lookupErr)
 		require.NotNil(t, stored)
 	}
+	select {
+	case <-r.standardReplayDrainWake:
+		r.drainStandardReplayPipeline()
+	default:
+		require.FailNow(t, "replay apply batch did not reschedule through the router loop")
+	}
 
 	completeStandardReplayTestLink(t, r, links[8])
 	completeStandardReplayTestLink(t, r, links[9])
