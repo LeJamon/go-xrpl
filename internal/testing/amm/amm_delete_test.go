@@ -64,13 +64,7 @@ func TestAMMDelete(t *testing.T) {
 		deleteTx := amm.AMMDelete(env.Carol, amm.XRP(), env.USD).Build()
 		result := env.Submit(deleteTx)
 
-		// Should fail - AMM is not empty
-		if result.Success {
-			t.Log("Note: AMMDelete may succeed if AMM is in special state")
-		} else {
-			// Expected to fail with some error (tecAMM_NOT_EMPTY or similar)
-			t.Logf("Delete AMM with LP tokens correctly failed: %s", result.Code)
-		}
+		amm.ExpectTER(t, result, "tecAMM_NOT_EMPTY")
 	})
 
 	// Invalid flags for AMMDelete
