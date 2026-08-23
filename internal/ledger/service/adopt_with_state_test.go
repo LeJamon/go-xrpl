@@ -370,11 +370,10 @@ func TestAdoptLedgerWithState_TraversalFailureLeavesCanonicalStateUnchanged(t *t
 	}
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
-	batch, err := txMap.FlushDirty()
-	require.NoError(t, err)
-
 	baseFamily := shamapbackend.NewMemory()
-	require.NoError(t, baseFamily.StoreBatch(t.Context(), batch.Entries))
+	require.NoError(t, txMap.StoreDirty(func(entries []shamap.FlushEntry) error {
+		return baseFamily.StoreBatch(t.Context(), entries)
+	}))
 	family := &corruptDescendantFamily{
 		inner: baseFamily,
 		roots: map[[32]byte]struct{}{txRoot: {}},

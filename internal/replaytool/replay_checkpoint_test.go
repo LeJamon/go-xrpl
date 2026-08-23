@@ -160,11 +160,9 @@ func TestCheckpointBackedTraversalFailurePreservesExistingFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := source.FlushDirtyAndRelease()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.StoreBatch(context.Background(), batch.Entries); err != nil {
+	if err := source.StoreDirtyAndRelease(func(entries []shamap.FlushEntry) error {
+		return store.StoreBatch(context.Background(), entries)
+	}); err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()

@@ -79,10 +79,10 @@ type leafNode struct {
 // newLeafNode is the common constructor.
 func newLeafNode(kind leafKind, item *Item) (*leafNode, error) {
 	if item == nil {
-		return nil, ErrNilItem
+		return nil, errNilItem
 	}
-	if item.Size() < 12 {
-		return nil, ErrItemTooSmall
+	if item.DataSize() < 12 {
+		return nil, errItemTooSmall
 	}
 	n := &leafNode{
 		item: item,
@@ -134,7 +134,7 @@ func (n *leafNode) UpdateHash() error {
 
 func (n *leafNode) updateHashUnsafe() error {
 	if n.item == nil {
-		return ErrNilItem
+		return errNilItem
 	}
 	if n.keyOnWire() {
 		key := n.item.Key()
@@ -168,7 +168,7 @@ func (n *leafNode) SerializeForWire() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	if n.item == nil {
-		return nil, ErrNilItem
+		return nil, errNilItem
 	}
 	data := n.item.dataBytes()
 	if n.keyOnWire() {
@@ -191,7 +191,7 @@ func (n *leafNode) SerializeWithPrefix() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	if n.item == nil {
-		return nil, ErrNilItem
+		return nil, errNilItem
 	}
 	data := n.item.dataBytes()
 	if n.keyOnWire() {
@@ -294,7 +294,7 @@ func newTransactionWithMetaLeafFromWire(data []byte) (*leafNode, error) {
 // createLeafNode creates the appropriate leaf node type for the given node type.
 func createLeafNode(nodeType NodeType, item *Item) (mapLeaf, error) {
 	if item == nil {
-		return nil, ErrNilItem
+		return nil, errNilItem
 	}
 	switch nodeType {
 	case NodeTypeAccountState:

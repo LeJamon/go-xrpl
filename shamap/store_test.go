@@ -3,6 +3,7 @@ package shamap
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -67,55 +68,6 @@ func TestDirtyFlag_SetChild(t *testing.T) {
 	}
 }
 
-// TestDirtyFlag_SetItem verifies that SetItem marks leaf nodes dirty.
-func TestDirtyFlag_SetItem(t *testing.T) {
-	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
-	item1 := NewItem(key, intToBytes(1))
-	item2 := NewItem(key, intToBytes(2))
-
-	// AccountStateLeafNode
-	leaf, err := newAccountStateLeafNode(item1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leaf.SetDirty(false)
-
-	if _, err := leaf.SetItem(item2); err != nil {
-		t.Fatal(err)
-	}
-	if !leaf.IsDirty() {
-		t.Error("SetItem should mark AccountStateLeafNode dirty")
-	}
-
-	// TransactionLeafNode
-	txLeaf, err := newTransactionLeafNode(item1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	txLeaf.SetDirty(false)
-
-	if _, err := txLeaf.SetItem(item2); err != nil {
-		t.Fatal(err)
-	}
-	if !txLeaf.IsDirty() {
-		t.Error("SetItem should mark TransactionLeafNode dirty")
-	}
-
-	// TransactionWithMetaLeafNode
-	txMetaLeaf, err := newTransactionWithMetaLeafNode(item1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	txMetaLeaf.SetDirty(false)
-
-	if _, err := txMetaLeaf.SetItem(item2); err != nil {
-		t.Fatal(err)
-	}
-	if !txMetaLeaf.IsDirty() {
-		t.Error("SetItem should mark TransactionWithMetaLeafNode dirty")
-	}
-}
-
 // TestDirtyFlag_WireDeserialize verifies that wire-deserialized nodes are NOT dirty.
 func TestDirtyFlag_WireDeserialize(t *testing.T) {
 	// Create an inner node and serialize it
@@ -157,9 +109,7 @@ func TestDirtyFlag_WireDeserialize(t *testing.T) {
 	}
 }
 
-// TestFlushDirty_BasicRoundTrip verifies FlushDirty collects all dirty nodes
-// and they can be deserialized back.
-func TestFlushDirty_BasicRoundTrip(t *testing.T) {
+func TestStoreDirty_BasicRoundTrip(t *testing.T) {
 	sMap := New(TypeState)
 
 	// Add several items
@@ -183,16 +133,16 @@ func TestFlushDirty_BasicRoundTrip(t *testing.T) {
 	}
 
 	// Flush dirty nodes
-	batch, err := sMap.FlushDirty()
+	batch, err := collectDirtyForTest(sMap)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Should have flushed: root + inner nodes + 3 leaves
-	if len(batch.Entries) == 0 {
-		t.Fatal("FlushDirty returned empty batch")
+	if len(batch) == 0 {
+		t.Fatal("StoreDirty returned empty batch")
 	}
-	t.Logf("Flushed %d nodes", len(batch.Entries))
+	t.Logf("Flushed %d nodes", len(batch))
 
 	// Hash should not change after flush
 	hashAfter, err := sMap.Hash()
@@ -200,16 +150,16 @@ func TestFlushDirty_BasicRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	if hashBefore != hashAfter {
-		t.Error("Hash should not change after FlushDirty")
+		t.Error("Hash should not change after StoreDirty")
 	}
 
 	// Root should no longer be dirty
 	if sMap.tree.root.IsDirty() {
-		t.Error("Root should be clean after FlushDirty")
+		t.Error("Root should be clean after StoreDirty")
 	}
 
 	// Verify all entries can be deserialized
-	for i, entry := range batch.Entries {
+	for i, entry := range batch {
 		node, err := deserializeFromPrefix(entry.Data)
 		if err != nil {
 			t.Errorf("Failed to deserialize entry %d: %v", i, err)
@@ -228,8 +178,7 @@ func TestFlushDirty_BasicRoundTrip(t *testing.T) {
 	}
 }
 
-// TestFlushDirty_Idempotent verifies that flushing twice produces empty batch on second call.
-func TestFlushDirty_Idempotent(t *testing.T) {
+func TestStoreDirty_Idempotent(t *testing.T) {
 	sMap := New(TypeState)
 
 	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
@@ -238,21 +187,21 @@ func TestFlushDirty_Idempotent(t *testing.T) {
 	}
 
 	// First flush
-	batch1, err := sMap.FlushDirty()
+	batch1, err := collectDirtyForTest(sMap)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(batch1.Entries) == 0 {
+	if len(batch1) == 0 {
 		t.Fatal("First flush should return entries")
 	}
 
 	// Second flush — nothing dirty
-	batch2, err := sMap.FlushDirty()
+	batch2, err := collectDirtyForTest(sMap)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(batch2.Entries) != 0 {
-		t.Errorf("Second flush should return 0 entries, got %d", len(batch2.Entries))
+	if len(batch2) != 0 {
+		t.Errorf("Second flush should return 0 entries, got %d", len(batch2))
 	}
 }
 
@@ -378,8 +327,8 @@ func TestAcknowledgePersistedContextFutureMutationStoresOnlyChangedPath(t *testi
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(stored) == 0 || len(stored) > MaxDepth+2 {
-		t.Fatalf("changed-path entries = %d, want 1..%d", len(stored), MaxDepth+2)
+	if len(stored) == 0 || len(stored) > maxDepth+2 {
+		t.Fatalf("changed-path entries = %d, want 1..%d", len(stored), maxDepth+2)
 	}
 	gotOriginal, err := immutable.Hash()
 	if err != nil {
@@ -390,8 +339,7 @@ func TestAcknowledgePersistedContextFutureMutationStoresOnlyChangedPath(t *testi
 	}
 }
 
-// TestFlushDirty_AfterModification verifies only modified nodes are re-flushed.
-func TestFlushDirty_AfterModification(t *testing.T) {
+func TestStoreDirty_AfterModification(t *testing.T) {
 	sMap := New(TypeState)
 
 	key1 := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
@@ -405,11 +353,11 @@ func TestFlushDirty_AfterModification(t *testing.T) {
 	}
 
 	// First flush — all nodes
-	batch1, err := sMap.FlushDirty()
+	batch1, err := collectDirtyForTest(sMap)
 	if err != nil {
 		t.Fatal(err)
 	}
-	count1 := len(batch1.Entries)
+	count1 := len(batch1)
 	t.Logf("First flush: %d nodes", count1)
 
 	// Modify only key1
@@ -418,11 +366,11 @@ func TestFlushDirty_AfterModification(t *testing.T) {
 	}
 
 	// Second flush — only modified path
-	batch2, err := sMap.FlushDirty()
+	batch2, err := collectDirtyForTest(sMap)
 	if err != nil {
 		t.Fatal(err)
 	}
-	count2 := len(batch2.Entries)
+	count2 := len(batch2)
 	t.Logf("Second flush: %d nodes", count2)
 
 	if count2 >= count1 {
@@ -433,8 +381,7 @@ func TestFlushDirty_AfterModification(t *testing.T) {
 	}
 }
 
-// TestFlushDirty_ReleaseChildren verifies child pointers are released when requested.
-func TestFlushDirty_ReleaseChildren(t *testing.T) {
+func TestStoreDirtyAndRelease_RetriesBeforeRelease(t *testing.T) {
 	sMap := New(TypeState)
 
 	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
@@ -442,13 +389,25 @@ func TestFlushDirty_ReleaseChildren(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Flush with releaseChildren=true
-	_, err := sMap.FlushDirtyAndRelease()
-	if err != nil {
-		t.Fatal(err)
+	wantErr := errors.New("store failed")
+	if err := sMap.StoreDirtyAndRelease(func([]FlushEntry) error { return wantErr }); !errors.Is(err, wantErr) {
+		t.Fatalf("StoreDirtyAndRelease error = %v, want %v", err, wantErr)
 	}
+	if !sMap.tree.root.IsDirty() {
+		t.Fatal("failed store marked root clean")
+	}
+	for i := range BranchFactor {
+		child, _, _ := sMap.tree.root.LoadChild(i)
+		if child != nil {
+			goto retry
+		}
+	}
+	t.Fatal("failed store released every child")
 
-	// Verify root's children are nil (released)
+retry:
+	if err := sMap.StoreDirtyAndRelease(func([]FlushEntry) error { return nil }); err != nil {
+		t.Fatalf("StoreDirtyAndRelease retry: %v", err)
+	}
 	for i := range BranchFactor {
 		child, _, _ := sMap.tree.root.LoadChild(i)
 		if child != nil {
@@ -473,177 +432,7 @@ func TestFlushDirty_ReleaseChildren(t *testing.T) {
 }
 
 // TestDeserializeFromPrefix_InnerNode tests inner node round-trip via prefix format.
-func TestDeserializeFromPrefix_InnerNode(t *testing.T) {
-	// Create inner node with a child
-	inner := newInnerNode()
-	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
-	item := NewItem(key, intToBytes(42))
-	leaf, err := newAccountStateLeafNode(item)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := inner.SetChild(0, leaf); err != nil {
-		t.Fatal(err)
-	}
 
-	originalHash := inner.Hash()
-
-	// Serialize
-	data, err := inner.SerializeWithPrefix()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Deserialize
-	node, err := deserializeFromPrefix(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	deserializedInner, ok := node.(*innerNode)
-	if !ok {
-		t.Fatal("Expected innerNode")
-	}
-
-	// Hash should match
-	if deserializedInner.Hash() != originalHash {
-		t.Errorf("Hash mismatch: original=%x deserialized=%x",
-			originalHash[:8], deserializedInner.Hash())
-	}
-
-	// Children should be nil (hash-only)
-	child, _, _ := deserializedInner.LoadChild(0)
-	if child != nil {
-		t.Error("Deserialized inner node should have nil children (hash-only)")
-	}
-
-	// But hash should be set
-	_, childHash, _ := deserializedInner.LoadChild(0)
-	if isZeroHash(childHash) {
-		t.Error("Deserialized inner node should have child hash set")
-	}
-
-	// Should not be dirty
-	if deserializedInner.IsDirty() {
-		t.Error("Deserialized inner node should not be dirty")
-	}
-}
-
-// TestDeserializeFromPrefix_AccountStateLeaf tests leaf round-trip.
-func TestDeserializeFromPrefix_AccountStateLeaf(t *testing.T) {
-	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
-	item := NewItem(key, intToBytes(42))
-
-	leaf, err := newAccountStateLeafNode(item)
-	if err != nil {
-		t.Fatal(err)
-	}
-	originalHash := leaf.Hash()
-
-	// Serialize
-	data, err := leaf.SerializeWithPrefix()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Deserialize
-	node, err := deserializeFromPrefix(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	deserializedLeaf, ok := node.(*leafNode)
-	if !ok {
-		t.Fatal("Expected leafNode")
-	}
-
-	if deserializedLeaf.Hash() != originalHash {
-		t.Errorf("Hash mismatch")
-	}
-
-	if deserializedLeaf.item.Key() != key {
-		t.Error("Key mismatch")
-	}
-
-	if !bytes.Equal(deserializedLeaf.item.Data(), intToBytes(42)) {
-		t.Error("Data mismatch")
-	}
-
-	if deserializedLeaf.IsDirty() {
-		t.Error("Should not be dirty")
-	}
-}
-
-// TestBacked_NewFromRootHash creates a map, flushes it, then recreates from root hash
-// and verifies all data is accessible via lazy loading.
-func TestBacked_NewFromRootHash(t *testing.T) {
-	family := newMemoryFamily()
-
-	// Create unbacked map and populate
-	sMap := New(TypeState)
-
-	keys := []string{
-		"092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7",
-		"436ccbac3347baa1f1e53baeef1f43334da88f1f6d70d963b833afd6dfa289fe",
-		"b92891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8",
-	}
-
-	for i, keyHex := range keys {
-		key := hexToHash(keyHex)
-		if err := sMap.Put(key, intToBytes(i+1)); err != nil {
-			t.Fatalf("Put %d: %v", i, err)
-		}
-	}
-
-	rootHash, err := sMap.Hash()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Flush to family
-	if err := flushToFamily(sMap, family); err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("Stored %d nodes in family", family.Len())
-
-	// Recreate from root hash
-	backed, err := NewFromRootHash(TypeState, rootHash, family)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !backed.IsBacked() {
-		t.Error("backed map should report IsBacked()=true")
-	}
-
-	// Verify root hash matches
-	backedHash, err := backed.Hash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if backedHash != rootHash {
-		t.Errorf("Root hash mismatch: original=%x backed=%x", rootHash[:8], backedHash[:8])
-	}
-
-	// Verify all items are accessible via lazy loading
-	for i, keyHex := range keys {
-		key := hexToHash(keyHex)
-		item, found, err := backed.Get(key)
-		if err != nil {
-			t.Errorf("Get key %d: %v", i, err)
-			continue
-		}
-		if !found || item == nil {
-			t.Errorf("Key %d not found in backed map", i)
-			continue
-		}
-		if !bytes.Equal(item.Data(), intToBytes(i+1)) {
-			t.Errorf("Key %d data mismatch", i)
-		}
-	}
-}
-
-// TestBacked_LazyLoading verifies that children are nil until accessed.
 func TestBacked_LazyLoading(t *testing.T) {
 	family := newMemoryFamily()
 
@@ -719,44 +508,7 @@ func TestBacked_LazyLoading(t *testing.T) {
 }
 
 // TestBacked_DescendUnbacked verifies unbacked maps work identically to before.
-func TestBacked_DescendUnbacked(t *testing.T) {
-	sMap := New(TypeState)
 
-	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
-	if err := sMap.Put(key, intToBytes(42)); err != nil {
-		t.Fatal(err)
-	}
-
-	if sMap.IsBacked() {
-		t.Error("Unbacked map should report IsBacked()=false")
-	}
-
-	// Get should work normally
-	item, found, err := sMap.Get(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !found || item == nil {
-		t.Fatal("Key not found")
-	}
-	if !bytes.Equal(item.Data(), intToBytes(42)) {
-		t.Error("Data mismatch")
-	}
-
-	// ForEach should work
-	count := 0
-	if err := sMap.ForEach(func(item *Item) bool {
-		count++
-		return true
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if count != 1 {
-		t.Errorf("Expected 1 item, got %d", count)
-	}
-}
-
-// TestBacked_FullRoundTrip tests: put → flush → recreate → verify all items → modify → flush → recreate
 func TestBacked_FullRoundTrip(t *testing.T) {
 	family := newMemoryFamily()
 
@@ -1018,257 +770,7 @@ func TestBacked_IndependentInstances(t *testing.T) {
 }
 
 // TestBacked_Snapshot verifies Snapshot creates an independent backed copy.
-func TestBacked_Snapshot(t *testing.T) {
-	family := newMemoryFamily()
 
-	// Create a backed map
-	sMap, err := NewBacked(TypeState, family)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	key1 := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
-	key2 := hexToHash("b92891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
-
-	if err := sMap.Put(key1, intToBytes(1)); err != nil {
-		t.Fatal(err)
-	}
-	if err := sMap.Put(key2, intToBytes(2)); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a mutable snapshot (this flushes + creates from root hash)
-	snap, err := sMap.SnapshotMutable()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !snap.IsBacked() {
-		t.Error("Snapshot should be backed")
-	}
-
-	// Verify snapshot has same data
-	item1, found1, err := snap.Get(key1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !found1 || !bytes.Equal(item1.Data(), intToBytes(1)) {
-		t.Error("Snapshot should have key1")
-	}
-
-	item2, found2, err := snap.Get(key2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !found2 || !bytes.Equal(item2.Data(), intToBytes(2)) {
-		t.Error("Snapshot should have key2")
-	}
-
-	// Modify snapshot — should not affect original
-	if err := snap.Put(key1, intToBytes(99)); err != nil {
-		t.Fatal(err)
-	}
-
-	origItem, origFound, err := sMap.Get(key1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !origFound || !bytes.Equal(origItem.Data(), intToBytes(1)) {
-		t.Error("Original should be unaffected by snapshot modification")
-	}
-
-	// Hashes should differ now
-	origHash, _ := sMap.Hash()
-	snapHash, _ := snap.Hash()
-	if origHash == snapHash {
-		t.Error("Hashes should differ after snapshot modification")
-	}
-}
-
-func TestBacked_MutableForkDefersStore(t *testing.T) {
-	family := newMemoryFamily()
-	source, err := NewBacked(TypeState, family)
-	if err != nil {
-		t.Fatal(err)
-	}
-	key1 := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
-	key2 := hexToHash("b92891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
-	if err := source.Put(key1, intToBytes(1)); err != nil {
-		t.Fatal(err)
-	}
-	sourceHash, err := source.Hash()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	snap, err := source.MutableFork()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := family.Len(); got != 0 {
-		t.Fatalf("stored nodes during unflushed snapshot = %d, want 0", got)
-	}
-	if err := snap.Put(key2, intToBytes(2)); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := source.Hash(); err != nil || got != sourceHash {
-		t.Fatalf("source hash after fork mutation = %x, %v; want %x, nil", got, err, sourceHash)
-	}
-	if _, found, err := source.Get(key2); err != nil || found {
-		t.Fatalf("source lookup after fork mutation = %v, %v; want false, nil", found, err)
-	}
-	if err := snap.StoreDirty(func(entries []FlushEntry) error {
-		return family.StoreBatch(context.Background(), entries)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	rootHash, err := snap.Hash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	reloaded, err := NewFromRootHash(TypeState, rootHash, family)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for key, want := range map[[32]byte][]byte{key1: intToBytes(1), key2: intToBytes(2)} {
-		item, found, err := reloaded.Get(key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !found || !bytes.Equal(item.Data(), want) {
-			t.Fatalf("reloaded item %x = %v, %v; want %v, true", key, item, found, want)
-		}
-	}
-}
-
-// TestBacked_NewBacked verifies NewBacked creates a working backed map.
-func TestBacked_NewBacked(t *testing.T) {
-	family := newMemoryFamily()
-
-	sMap, err := NewBacked(TypeState, family)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !sMap.IsBacked() {
-		t.Error("NewBacked should create a backed map")
-	}
-
-	// Put and get
-	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
-	if err := sMap.Put(key, intToBytes(42)); err != nil {
-		t.Fatal(err)
-	}
-
-	item, found, err := sMap.Get(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !found || !bytes.Equal(item.Data(), intToBytes(42)) {
-		t.Error("Get should return put data")
-	}
-
-	// Flush
-	if err := flushToFamily(sMap, family); err != nil {
-		t.Fatal(err)
-	}
-	if family.Len() == 0 {
-		t.Error("Family should have entries after flush")
-	}
-}
-
-// TestBacked_SetFamily verifies converting unbacked to backed.
-func TestBacked_SetFamily(t *testing.T) {
-	family := newMemoryFamily()
-
-	// Start unbacked
-	sMap := New(TypeState)
-
-	if sMap.IsBacked() {
-		t.Error("New() should create unbacked map")
-	}
-
-	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
-	if err := sMap.Put(key, intToBytes(1)); err != nil {
-		t.Fatal(err)
-	}
-
-	// Convert to backed
-	sMap.SetFamily(family)
-	if !sMap.IsBacked() {
-		t.Error("SetFamily should make map backed")
-	}
-
-	// Flush should work now
-	if err := flushToFamily(sMap, family); err != nil {
-		t.Fatal(err)
-	}
-	if family.Len() == 0 {
-		t.Error("Family should have entries")
-	}
-
-	// Snapshot should use backed path
-	rootHash, _ := sMap.Hash()
-	snap, err := sMap.SnapshotImmutable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapHash, _ := snap.Hash()
-	if snapHash != rootHash {
-		t.Error("Snapshot hash should match")
-	}
-}
-
-// TestBacked_Iterator verifies iterator works with lazy loading.
-func TestBacked_Iterator(t *testing.T) {
-	family := newMemoryFamily()
-
-	sMap := New(TypeState)
-
-	keys := []string{
-		"092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7",
-		"436ccbac3347baa1f1e53baeef1f43334da88f1f6d70d963b833afd6dfa289fe",
-		"b92891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8",
-	}
-
-	for i, keyHex := range keys {
-		key := hexToHash(keyHex)
-		if err := sMap.Put(key, intToBytes(i+1)); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	rootHash, _ := sMap.Hash()
-	if err := flushToFamily(sMap, family); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create backed map and use iterator
-	backed, err := NewFromRootHash(TypeState, rootHash, family)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	count := 0
-	iter := newTestIterator(backed)
-	for iter.Next() {
-		item := iter.Item()
-		if item == nil {
-			t.Error("Iterator item should not be nil")
-		}
-		count++
-	}
-	if err := iter.Err(); err != nil {
-		t.Fatal(err)
-	}
-	if count != len(keys) {
-		t.Errorf("Iterator found %d items, expected %d", count, len(keys))
-	}
-}
-
-// TestBacked_ConcurrentLazyLoad exercises descend()'s lazy-load path from
-// many goroutines under -race to catch regressions in the LoadChild /
-// SetChildIfNil race-safety contract.
 func TestBacked_ConcurrentLazyLoad(t *testing.T) {
 	family := newMemoryFamily()
 

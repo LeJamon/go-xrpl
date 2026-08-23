@@ -43,7 +43,7 @@ func TestCheckComplete_BackedMapFullyPresent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckComplete: %v", err)
 	}
-	if !res.Complete() {
+	if len(res.Missing) != 0 || len(res.Corrupt) != 0 {
 		t.Errorf("expected complete tree, got %d missing: %+v", len(res.Missing), res.Missing)
 	}
 	if res.LeafNodes != len(keys) {
@@ -86,7 +86,7 @@ func TestCheckComplete_DetectsMissingNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckComplete: %v", err)
 	}
-	if res.Complete() {
+	if len(res.Missing) == 0 && len(res.Corrupt) == 0 {
 		t.Fatal("expected an incomplete tree after deleting a node")
 	}
 	if len(res.Corrupt) != 0 {
@@ -132,7 +132,7 @@ func TestCheckComplete_DetectsCorruptNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckComplete: %v", err)
 	}
-	if res.Complete() {
+	if len(res.Missing) == 0 && len(res.Corrupt) == 0 {
 		t.Fatal("expected an incomplete tree after corrupting a node")
 	}
 	corruptReported := false
@@ -188,7 +188,7 @@ func TestCheckComplete_DetectsValidNodeUnderWrongHash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckComplete: %v", err)
 	}
-	if res.Complete() {
+	if len(res.Missing) == 0 && len(res.Corrupt) == 0 {
 		t.Fatal("valid descendant stored under the wrong hash was accepted")
 	}
 	for _, corrupt := range res.Corrupt {
@@ -208,7 +208,7 @@ func TestCheckComplete_UnbackedMapIsComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckComplete: %v", err)
 	}
-	if !res.Complete() {
+	if len(res.Missing) != 0 || len(res.Corrupt) != 0 {
 		t.Errorf("unbacked in-memory map must always be complete, got %+v", res.Missing)
 	}
 	if res.LeafNodes != 1 {
@@ -222,7 +222,7 @@ func TestCheckComplete_EmptyMap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckComplete: %v", err)
 	}
-	if !res.Complete() || res.LeafNodes != 0 {
+	if len(res.Missing) != 0 || len(res.Corrupt) != 0 || res.LeafNodes != 0 {
 		t.Errorf("empty map should be complete with no leaves, got %+v", res)
 	}
 }

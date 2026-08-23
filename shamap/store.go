@@ -15,11 +15,6 @@ type FlushEntry struct {
 	MapType   Type
 }
 
-// NodeBatch holds a batch of serialized nodes from FlushDirty().
-type NodeBatch struct {
-	Entries []FlushEntry
-}
-
 // DeserializeFromPrefix creates a SHAMap node from prefix-format data,
 // returning a read-only NodeReader.
 func DeserializeFromPrefix(data []byte) (NodeReader, error) {

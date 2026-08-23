@@ -120,8 +120,8 @@ Path through tree determined by key nibbles:
 - `New(mapType) *SHAMap` — in-memory map (`TypeTransaction` or `TypeState`).
 - `NewBacked(mapType, family)` — map that flushes to and lazy-loads from a
   `Family` (persistent node store).
-- `NewFromRootHash(mapType, rootHash, family)` — open an existing tree by
-  root hash; children resolve lazily from the store.
+- `NewFromRootHashContext(ctx, mapType, rootHash, family)` — open an existing
+  tree by root hash; children resolve lazily from the store.
 - `Family` implementations: `backend.NodeStore` (memory, PebbleDB, or an
   existing NodeStore database via `backend.NewMemory`, `backend.OpenPebble`,
   and `backend.New`) and `OverlayFamily` (copy-on-write overlay over a
@@ -129,7 +129,7 @@ Path through tree determined by key nibbles:
 
 ### Items
 
-- `Put(key, data)` / `PutItem` / `PutWithNodeType`
+- `Put(key, data)` / `PutWithNodeType` / `PutItemsAtomically`
 - `Get(key)` / `Has(key)` / `Delete(key)`
 - `ForEach` / `ForEachCtx` — in-order leaf iteration.
 - `UpperBound(key)` — iterator at the first item with key > the argument.
@@ -142,18 +142,19 @@ Path through tree determined by key nibbles:
   structurally-shared copies; mutations are path-copy persistent so snapshots
   never observe changes.
 - `SetImmutable()` / `Type()` / `IsBacked()` / `SetFamily`.
-- `FlushDirty` / `FlushDirtyAndRelease` — serialize dirty nodes for the store;
-  the latter also releases child pointers for lazy reload.
+- `StoreDirty(callback)` — serialize dirty nodes and mark them clean only after
+  the callback succeeds.
+- `StoreDirtyAndRelease(callback)` — the same durability barrier, then release
+  child pointers for lazy reload. A failed callback leaves the map retryable.
 
 ### Comparison
 
-- `Compare(other, maxCount) (*DifferenceSet, error)` — full diff with
-  added/removed/modified items.
-- `FindDifference(other) ([]Key, error)` — just the differing keys.
+- `CompareContext(ctx, other, maxCount)` — added, removed, and modified items;
+  `maxCount == 0` is unbounded.
 
 ### Synchronization (ledger acquisition)
 
-- `StartSync` / `FinishSync` / `IsSyncing` / `IsComplete` / `SyncProgress`
+- `StartSync` / `FinishSync` / `FinishSyncContext`
 - `AddRootNode(hash, wireData)` — install the root from a peer.
 - `AddKnownNodeByID(nodeID, wireData)` — attach a peer-supplied node at the
   position given by its 33-byte SHAMapNodeID (path + depth).
@@ -162,7 +163,8 @@ Path through tree determined by key nibbles:
 - `AddKnownNode(hash, wireData)` — hash-located attach (legacy tx-set path).
 - `GetMissingNodes` / `GetMissingNodesContext` — enumerate referenced nodes
   that are neither in memory nor in the local store.
-- `CheckComplete(ctx)` — full store-walk completeness report.
+- `CheckComplete(ctx)` — the authoritative full store-walk completeness
+  report, including missing and corrupt nodes.
 
 ### Wire serving
 
@@ -176,13 +178,13 @@ Path through tree determined by key nibbles:
 ### Proofs
 
 - `GetProofPath(key)` — Merkle proof, leaf-to-root wire blobs.
-- `VerifyProofPath(rootHash, key, path)` / `VerifyProofPathWithValue`.
+- `VerifyProofPath(rootHash, key, path)`.
 
 ---
 
 ## Concurrency Model
 
-- `tree.mu` guards the root, map type, lifecycle, sequence, and full-map state.
+- `tree.mu` guards the root, map type, lifecycle, and sequence.
 - `backing.mu` guards the backing-family capability and `FullBelow` cache.
 - `walkMu` serializes resumable walks and their cursor; `attachmentMu`
   serializes lazy child attachment and release.

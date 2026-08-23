@@ -3,6 +3,7 @@ package shamap
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -12,16 +13,13 @@ type stackEntry struct {
 	otherNode mapNode
 }
 
-// Compare compares this SHAMap with another and returns differences
-// maxCount limits the number of differences to find (0 = no limit)
-// Returns complete=true if all differences found, false if truncated
-func (sm *SHAMap) Compare(other *SHAMap, maxCount int) (*DifferenceSet, error) {
-	return sm.CompareContext(context.Background(), other, maxCount)
-}
-
 // CompareContext compares this SHAMap with another while forwarding ctx to
 // lazy storage fetches.
 func (sm *SHAMap) CompareContext(ctx context.Context, other *SHAMap, maxCount int) (*DifferenceSet, error) {
+	if other == nil {
+		return nil, errors.New("cannot compare with nil map")
+	}
+
 	sm.tree.mu.RLock()
 	defer sm.tree.mu.RUnlock()
 
@@ -29,7 +27,7 @@ func (sm *SHAMap) CompareContext(ctx context.Context, other *SHAMap, maxCount in
 	defer other.tree.mu.RUnlock()
 
 	if sm.tree.state == stateInvalid || other.tree.state == stateInvalid {
-		return nil, fmt.Errorf("%w: cannot compare invalid SHAMaps", ErrInvalidState)
+		return nil, fmt.Errorf("%w: cannot compare invalid SHAMaps", errInvalidState)
 	}
 
 	result := &DifferenceSet{
@@ -47,36 +45,6 @@ func (sm *SHAMap) CompareContext(ctx context.Context, other *SHAMap, maxCount in
 	return result, nil
 }
 
-// FindDifference finds all keys that differ between this map and another.
-// This is a convenience method that returns just the keys of items that
-// differ (added, removed, or modified) between the two maps, without the
-// full DifferenceItem details.
-func (sm *SHAMap) FindDifference(other *SHAMap) ([][32]byte, error) {
-	if other == nil {
-		return nil, fmt.Errorf("cannot compare with nil map")
-	}
-
-	sm.tree.mu.RLock()
-	defer sm.tree.mu.RUnlock()
-
-	other.tree.mu.RLock()
-	defer other.tree.mu.RUnlock()
-
-	if sm.tree.state == stateInvalid || other.tree.state == stateInvalid {
-		return nil, fmt.Errorf("%w: cannot compare invalid SHAMaps", ErrInvalidState)
-	}
-
-	var keys [][32]byte
-	if _, err := sm.diffUnsafe(context.Background(), other, func(diff DifferenceItem) bool {
-		keys = append(keys, diff.Key)
-		return true
-	}); err != nil {
-		return nil, err
-	}
-	return keys, nil
-}
-
-// diffUnsafe is the single diff walk shared by Compare and FindDifference.
 // It calls emit for every difference between the two maps; emit returning
 // false stops the walk early (complete=false). Both maps descend with lazy
 // loading, so backed maps with released children diff correctly.

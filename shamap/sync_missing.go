@@ -29,7 +29,7 @@ func (sm *SHAMap) walkMapParallelContext(ctx context.Context, maxMissing int, fi
 		return nil, err
 	}
 	if filter == nil {
-		filter = &DefaultSyncFilter{}
+		filter = &defaultSyncFilter{}
 	}
 	sm.acquisition.walkMu.Lock()
 	defer sm.acquisition.walkMu.Unlock()
@@ -60,7 +60,7 @@ func (sm *SHAMap) walkMapParallelContext(ctx context.Context, maxMissing int, fi
 	}
 	defer done()
 	backed := access.available() && cache != nil
-	rootID := NewRootNodeID()
+	rootID := newRootNodeID()
 	rootHash := root.Hash()
 	if backed {
 		return sm.walkBackedContext(ctx, root, access, cache, gen, maxMissing, filter)
@@ -109,7 +109,7 @@ func (sm *SHAMap) walkMapParallelContext(ctx context.Context, maxMissing int, fi
 		if !isSet {
 			continue
 		}
-		childNodeID, err := rootID.ChildNodeID(uint8(branch))
+		childNodeID, err := rootID.childNodeID(uint8(branch))
 		if err != nil {
 			continue
 		}
@@ -217,7 +217,7 @@ func markRootFullBelow(root *innerNode, gen uint32) {
 //
 // The actual walk is performed by walkMapParallel so the per-root-branch
 // fan-out is shared with the lower-level walkMap API. maxNodes == 0 is
-// unbounded; a nil filter behaves like DefaultSyncFilter.
+// unbounded; a nil filter accepts every missing node.
 func (sm *SHAMap) GetMissingNodes(maxNodes int, filter SyncFilter) []MissingNode {
 	missing, _ := sm.GetMissingNodesContext(context.Background(), maxNodes, filter)
 	return missing
@@ -237,12 +237,12 @@ func (sm *SHAMap) GetMissingNodesContext(ctx context.Context, maxNodes int, filt
 
 // getMissingNodesUnsafe collects up to maxNodes missing-node references
 // missingNodesLocked is the shared walk behind the lenient request path and
-// the strict completeness checks (FinishSync, IsComplete). strict=true
+// the strict completeness checks (FinishSync, CheckComplete). strict=true
 // aborts on a transient store error instead of reporting phantom missing
 // nodes. Caller must hold at least the read lock.
 func (sm *SHAMap) missingNodesLocked(maxNodes int, filter SyncFilter, strict bool) ([]MissingNode, error) {
 	if filter == nil {
-		filter = &DefaultSyncFilter{}
+		filter = &defaultSyncFilter{}
 	}
 	if sm.tree.root == nil {
 		return nil, nil
@@ -252,7 +252,7 @@ func (sm *SHAMap) missingNodesLocked(maxNodes int, filter SyncFilter, strict boo
 	_, err := walkSubtreeForMissing(
 		context.Background(), sm,
 		sm.tree.root,
-		NewRootNodeID(),
+		newRootNodeID(),
 		sm.tree.root.Hash(),
 		0,
 		filter,

@@ -18,8 +18,8 @@ const fullInnerSerializedSize = 4 + BranchFactor*32
 
 // Errors returned by inner-node operations.
 var (
-	ErrInvalidBranch = errors.New("invalid branch index")
-	ErrEmptyNonRoot  = errors.New("non-root inner node cannot be empty")
+	errInvalidBranch = errors.New("invalid branch index")
+	errEmptyNonRoot  = errors.New("non-root inner node cannot be empty")
 )
 
 // innerNode represents an inner node in the SHAMap tree
@@ -86,7 +86,7 @@ func (n *innerNode) BranchCount() int {
 // Child returns the child node at the given branch index
 func (n *innerNode) Child(index int) (mapNode, error) {
 	if index < 0 || index >= BranchFactor {
-		return nil, ErrInvalidBranch
+		return nil, errInvalidBranch
 	}
 
 	n.mu.RLock()
@@ -97,7 +97,7 @@ func (n *innerNode) Child(index int) (mapNode, error) {
 // SetChild sets the child node at the given branch index
 func (n *innerNode) SetChild(index int, child mapNode) error {
 	if index < 0 || index >= BranchFactor {
-		return ErrInvalidBranch
+		return errInvalidBranch
 	}
 
 	n.mu.Lock()
@@ -181,7 +181,7 @@ func (n *innerNode) setFullBelowGen(generation uint32) {
 // ChildHash returns the hash at a given branch index
 func (n *innerNode) ChildHash(index int) ([32]byte, error) {
 	if index < 0 || index >= BranchFactor {
-		return [32]byte{}, ErrInvalidBranch
+		return [32]byte{}, errInvalidBranch
 	}
 
 	n.mu.RLock()
@@ -268,7 +268,7 @@ func (n *innerNode) SerializeForWire() ([]byte, error) {
 	// Avoid BranchCount(): it would re-acquire the read lock.
 	branchCount := bits.OnesCount16(n.isBranch)
 	if branchCount == 0 {
-		return nil, ErrEmptyNonRoot
+		return nil, errEmptyNonRoot
 	}
 
 	if branchCount < 12 {
@@ -310,7 +310,7 @@ func (n *innerNode) SerializeWithPrefix() ([]byte, error) {
 	defer n.mu.RUnlock()
 
 	if n.isBranch == 0 {
-		return nil, ErrEmptyNonRoot
+		return nil, errEmptyNonRoot
 	}
 
 	result := make([]byte, fullInnerSerializedSize)

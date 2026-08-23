@@ -167,11 +167,9 @@ func putTree(t *testing.T, family *fakeFamily, mapType shamap.Type, keys []strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := sm.FlushDirty()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := family.StoreBatch(context.Background(), batch.Entries); err != nil {
+	if err := sm.StoreDirty(func(entries []shamap.FlushEntry) error {
+		return family.StoreBatch(context.Background(), entries)
+	}); err != nil {
 		t.Fatal(err)
 	}
 	return root

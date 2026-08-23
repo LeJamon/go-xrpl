@@ -32,8 +32,7 @@ func TestDetachedMutableDoesNotFlushAndIsolatesLoadedTree(t *testing.T) {
 		t.Fatalf("DetachedMutable stored %d nodes, want 0", got)
 	}
 	if detached.tree.mapType != source.tree.mapType ||
-		detached.tree.ledgerSeq != source.tree.ledgerSeq ||
-		detached.tree.full != source.tree.full {
+		detached.tree.ledgerSeq != source.tree.ledgerSeq {
 		t.Fatal("detached map did not preserve tree metadata")
 	}
 	if detached.backing.access != source.backing.access ||
@@ -194,7 +193,8 @@ func assertLoadedNodesDetached(t *testing.T, source, detached mapNode) {
 		if sourceNode.item == detachedNode.item {
 			t.Fatal("leaf item is shared")
 		}
-		if !sourceNode.item.Equal(detachedNode.item) {
+		if sourceNode.item.key != detachedNode.item.key ||
+			!bytes.Equal(sourceNode.item.data, detachedNode.item.data) {
 			t.Fatal("detached leaf item differs from source")
 		}
 	default:

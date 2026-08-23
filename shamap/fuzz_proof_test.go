@@ -36,15 +36,7 @@ func FuzzVerifyProofPath(f *testing.F) {
 		path := splitIntoBlobs(pathData, pathCount)
 
 		// VerifyProofPath must not panic — just returns bool
-		result := VerifyProofPath(rootHash, key, path)
-
-		// VerifyProofPathWithValue must not panic
-		val := VerifyProofPathWithValue(rootHash, key, path)
-
-		// If VerifyProofPath says invalid, WithValue must return nil
-		if !result && val != nil {
-			t.Fatal("VerifyProofPathWithValue returned data but VerifyProofPath returned false")
-		}
+		_ = VerifyProofPath(rootHash, key, path)
 	})
 }
 
@@ -124,7 +116,6 @@ func FuzzVerifyProofPathValidTree(f *testing.F) {
 
 		// Must not panic regardless of mutations
 		_ = VerifyProofPath(rootHash, mutatedKey, mutatedPath)
-		_ = VerifyProofPathWithValue(rootHash, mutatedKey, mutatedPath)
 	})
 }
 
@@ -154,7 +145,7 @@ func splitIntoBlobs(data []byte, n uint8) [][]byte {
 		// Cap to prevent huge allocations
 		min(
 
-			int(n), MaxDepth+1), len(data))
+			int(n), maxDepth+1), len(data))
 
 	blobs := make([][]byte, count)
 	chunkSize := len(data) / count

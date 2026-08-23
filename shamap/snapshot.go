@@ -63,7 +63,7 @@ func (sm *SHAMap) snapshot(ctx context.Context, mutable bool, ledgerSeq *uint32)
 	if sm.backing.access.available() {
 		if err := sm.storeDirtyLocked(func(entries []FlushEntry) error {
 			return sm.backing.access.storeBatch(ctx, entries)
-		}); err != nil {
+		}, false); err != nil {
 			return nil, fmt.Errorf("failed to store dirty nodes: %w", err)
 		}
 	}
@@ -94,7 +94,7 @@ func (sm *SHAMap) DetachedMutable() (*SHAMap, error) {
 	defer sm.backing.mu.RUnlock()
 
 	if sm.tree.state == stateInvalid {
-		return nil, fmt.Errorf("%w: cannot detach invalid map", ErrInvalidState)
+		return nil, fmt.Errorf("%w: cannot detach invalid map", errInvalidState)
 	}
 
 	root, err := cloneLoadedInner(sm.tree.root)
@@ -108,7 +108,6 @@ func (sm *SHAMap) DetachedMutable() (*SHAMap, error) {
 			mapType:   sm.tree.mapType,
 			state:     stateModifying,
 			ledgerSeq: sm.tree.ledgerSeq,
-			full:      sm.tree.full,
 		},
 		backing: backingState{
 			access:    sm.backing.access,
@@ -155,7 +154,7 @@ func cloneLoadedNode(source mapNode) (mapNode, error) {
 	case *leafNode:
 		node.mu.RLock()
 		defer node.mu.RUnlock()
-		item, err := node.item.Clone()
+		item, err := node.item.clone()
 		if err != nil {
 			return nil, fmt.Errorf("clone leaf item: %w", err)
 		}
@@ -172,7 +171,7 @@ func cloneLoadedNode(source mapNode) (mapNode, error) {
 // backing read locks (or their write-lock equivalents).
 func (sm *SHAMap) snapshotLocked(mutable bool) (*SHAMap, error) {
 	if sm.tree.state == stateInvalid {
-		return nil, fmt.Errorf("%w: cannot snapshot invalid map", ErrInvalidState)
+		return nil, fmt.Errorf("%w: cannot snapshot invalid map", errInvalidState)
 	}
 
 	newState := stateImmutable
@@ -186,7 +185,6 @@ func (sm *SHAMap) snapshotLocked(mutable bool) (*SHAMap, error) {
 			mapType:   sm.tree.mapType,
 			state:     newState,
 			ledgerSeq: sm.tree.ledgerSeq,
-			full:      sm.tree.full,
 		},
 		backing: backingState{
 			access:    sm.backing.access,

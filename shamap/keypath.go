@@ -1,17 +1,15 @@
 package shamap
 
 const (
-	// MaxDepth is the maximum depth of the SHAMap tree (256 bits / 4 bits per branch).
-	MaxDepth = 64
-	// BranchMask is the mask for valid branch values (0-15).
-	BranchMask = 0x0F
+	maxDepth   = 64
+	branchMask = 0x0F
 )
 
 // selectBranch returns which branch of a node (at depth nodeID.depth) contains
 // the given key.
 func selectBranch(nodeID NodeID, key [32]byte) uint8 {
 	depth := nodeID.depth
-	if depth >= MaxDepth {
+	if depth >= maxDepth {
 		return 0
 	}
 	byteIndex := depth / 2
@@ -22,12 +20,12 @@ func selectBranch(nodeID NodeID, key [32]byte) uint8 {
 	if depth%2 == 0 {
 		return b >> 4
 	}
-	return b & BranchMask
+	return b & branchMask
 }
 
 // getBranchAtDepth extracts the 4-bit branch value at position depth in key.
 func getBranchAtDepth(key [32]byte, depth int) int {
-	if depth >= MaxDepth {
+	if depth >= maxDepth {
 		return 0
 	}
 	byteIndex := depth / 2
@@ -44,12 +42,12 @@ func getBranchAtDepth(key [32]byte, depth int) int {
 // findSplitDepth finds the first depth at which the two keys differ, starting
 // from startDepth.
 func findSplitDepth(key1, key2 [32]byte, startDepth int) int {
-	for depth := startDepth; depth < MaxDepth; depth++ {
+	for depth := startDepth; depth < maxDepth; depth++ {
 		if getBranchAtDepth(key1, depth) != getBranchAtDepth(key2, depth) {
 			return depth
 		}
 	}
-	return MaxDepth - 1
+	return maxDepth - 1
 }
 
 // childPathForBranch returns the child's path after following branch at depth.

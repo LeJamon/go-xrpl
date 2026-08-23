@@ -232,7 +232,7 @@ func (sm *SHAMap) walkBackedContext(
 
 func newBackedWalkCursor(root *innerNode, rootHash [32]byte, gen uint32) *backedWalkCursor {
 	cursor := &backedWalkCursor{generation: gen, rootHash: rootHash}
-	rootID := NewRootNodeID()
+	rootID := newRootNodeID()
 	for branch := range BranchFactor {
 		child, hash, set := root.LoadChild(branch)
 		if !set {
@@ -240,7 +240,7 @@ func newBackedWalkCursor(root *innerNode, rootHash [32]byte, gen uint32) *backed
 			cursor.lanes[branch].durable = true
 			continue
 		}
-		childID, err := rootID.ChildNodeID(uint8(branch))
+		childID, err := rootID.childNodeID(uint8(branch))
 		if err != nil {
 			cursor.lanes[branch].complete = true
 			continue
@@ -324,7 +324,7 @@ func (sm *SHAMap) walkBackedLane(
 		}
 
 		branch := frame.nextBranch
-		childID, err := frame.item.nodeID.ChildNodeID(uint8(branch))
+		childID, err := frame.item.nodeID.childNodeID(uint8(branch))
 		if err != nil {
 			return err
 		}
