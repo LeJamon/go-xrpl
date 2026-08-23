@@ -218,11 +218,6 @@ type openLedgerTxLookup interface {
 	OpenLedgerHasTx([32]byte) (bool, error)
 }
 
-// goxrplServerVersionTag identifies go-xrpl in the sfServerVersion field.
-// rippled uses the top bit (0x8000...); we must NOT set it or this node
-// would be counted as a rippled instance in peer version statistics.
-const goxrplServerVersionTag uint64 = 0x4000_0000_0000_0000
-
 // FeeVoteStance is this validator's desired fee structure. The Set fields
 // distinguish an explicit zero from an omitted configuration value.
 type FeeVoteStance struct {

@@ -23,6 +23,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/protocol"
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
+	"github.com/LeJamon/go-xrpl/version"
 	"github.com/stretchr/testify/require"
 )
 
@@ -582,12 +583,11 @@ func TestBuildValidationEvent_CookieDecimal(t *testing.T) {
 
 func TestBuildValidationEvent_ServerVersionDecimal(t *testing.T) {
 	// rippled emits server_version as std::to_string(*version) — base-10
-	// decimal (NetworkOPs.cpp:2426). The go-xrpl server version tag
-	// 0x4000_0000_0000_0000 = 4611686018427387904 decimal.
-	v := &consensus.Validation{ServerVersion: 0x4000_0000_0000_0000}
+	// decimal (NetworkOPs.cpp:2426).
+	v := &consensus.Validation{ServerVersion: version.EncodedServerVersion()}
 	ev := mustBuildValidationEvent(t, v, 0)
-	if ev.ServerVersion != "4611686018427387904" {
-		t.Errorf("server_version = %q, want decimal \"4611686018427387904\"", ev.ServerVersion)
+	if ev.ServerVersion != "4611689329859756032" {
+		t.Errorf("server_version = %q, want decimal \"4611689329859756032\"", ev.ServerVersion)
 	}
 
 	// ServerVersion 0 is the absent proxy → field omitted.

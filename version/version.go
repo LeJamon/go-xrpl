@@ -1,10 +1,14 @@
-// Package version holds the node's build version, injected at link time.
+// Package version holds the node's software and build versions.
 package version
+
+// SemanticVersion is the canonical go-xrpl software version advertised in
+// protocol messages.
+const SemanticVersion = "3.3.0"
 
 // Version is set at build time via:
 //
-//	go build -ldflags "-X github.com/LeJamon/go-xrpl/version.Version=x.y.z"
+//	go build -ldflags "-X github.com/LeJamon/go-xrpl/version.Version=build-id"
 //
-// The default identifies the protocol release implemented by this branch;
-// release builds may replace it with a more specific build identifier.
-var Version = "3.3.0"
+// It defaults to SemanticVersion, while development builds may replace it with
+// a commit or another human-readable build identifier.
+var Version = SemanticVersion

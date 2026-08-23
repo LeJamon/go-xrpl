@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/version"
 )
 
 func (a *Adaptor) IsValidator() bool {
@@ -398,12 +399,9 @@ func (a *Adaptor) GetCookie() uint64 {
 	return a.cookie
 }
 
-// GetServerVersion returns the 64-bit sfServerVersion identifier. It avoids
-// rippled's top bit (0x8000...) so go-xrpl isn't counted as rippled in peer
-// version statistics.
+// GetServerVersion returns go-xrpl's encoded sfServerVersion value.
 func (a *Adaptor) GetServerVersion() uint64 {
-	// Low bits reserved for a future semantic version; zero for now.
-	return goxrplServerVersionTag
+	return version.EncodedServerVersion()
 }
 
 // GetLoadFee returns the local load_fee for outbound validations: the max of
