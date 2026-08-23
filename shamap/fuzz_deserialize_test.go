@@ -81,7 +81,6 @@ func FuzzDeserializeNodeFromWire(f *testing.F) {
 		// Exercise the returned node — must not panic
 		_ = node.Hash()
 		_ = node.Type()
-
 	})
 }
 
@@ -334,6 +333,5 @@ func FuzzDeserializeFromPrefix(f *testing.F) {
 		}
 		_ = node.Hash()
 		_ = node.Type()
-
 	})
 }
