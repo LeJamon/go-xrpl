@@ -990,7 +990,7 @@ func TestLoadConfigLedgerCacheSize(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			path := writeConfig(t, t.TempDir(), "xrpld.toml", "ledger_cache_size = "+test.value+"\n"+minimalTestConfig())
+			path := writeConfig(t, t.TempDir(), "goxrpl.toml", "ledger_cache_size = "+test.value+"\n"+minimalTestConfig())
 			cfg, err := LoadConfig(Paths{Main: path})
 			if test.wantErr != "" {
 				require.ErrorContains(t, err, test.wantErr)
