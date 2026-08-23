@@ -108,5 +108,4 @@ func TestRPCHexCaseRegression(t *testing.T) {
 		require.Len(t, got, 64)
 		assert.Equal(t, strings.ToUpper(got), got, "FormatLedgerHash must return uppercase hex")
 	})
-
 }

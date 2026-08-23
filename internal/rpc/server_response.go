@@ -12,7 +12,7 @@ import (
 
 // loadWarningOpts returns response options carrying warning:"load" when the
 // dispatch crossed the resource warn threshold (recorded on ctx by
-// finalizeLoad), and nil otherwise. Mirrors rippled attaching
+// chargeLoad), and nil otherwise. Mirrors rippled attaching
 // jr[warning]=load after the post-dispatch charge.
 func loadWarningOpts(ctx *types.RpcContext) *jsonRPCResponseOptions {
 	if ctx != nil && ctx.LoadWarning {
