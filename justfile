@@ -52,7 +52,7 @@ test-core:
 
 # CI group: codec / crypto / shamap / storage / etc.
 test-libs:
-    go test ./codec/... ./crypto/... ./shamap/... ./storage/... ./keylet/... ./ledger/... ./amendment/... ./drops/... ./protocol/... ./config/...
+    go test ./codec/... ./crypto/... ./shamap/... ./storage/... ./keylet/... ./ledger/... ./amendment/... ./drops/... ./protocol/... ./config/... ./version/...
 
 # Test a single package: `just test-pkg ./internal/peermanagement/...`
 test-pkg pkg:

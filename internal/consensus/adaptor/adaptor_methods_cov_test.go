@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/version"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -224,9 +225,8 @@ func TestAdg_GetServerVersion(t *testing.T) {
 	a := newTestAdaptor(t)
 	v := a.GetServerVersion()
 	assert.NotZero(t, v)
-	// Must NOT have the rippled top bit set (0x8000...)
-	assert.Zero(t, v&0x8000_0000_0000_0000, "go-xrpl must not set the rippled top bit")
-	assert.Equal(t, goxrplServerVersionTag, v)
+	assert.Equal(t, uint64(0x4000), v>>48)
+	assert.Equal(t, version.EncodedServerVersion(), v)
 }
 
 func TestAdg_GetFeeVote(t *testing.T) {
