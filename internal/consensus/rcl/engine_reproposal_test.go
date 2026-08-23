@@ -178,3 +178,40 @@ func TestEngine_TimerEntry_BowsOutWhenOperatingModeLosesFull(t *testing.T) {
 		t.Fatalf("demotion proposal must carry seqLeave, got %d", got)
 	}
 }
+
+func TestEngine_TimerEntry_FreezesAcceptedRoundWhileBuildingLedger(t *testing.T) {
+	adaptor := newMockAdaptor()
+	engine := NewEngine(adaptor, DefaultConfig())
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round, true); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+
+	engine.mu.Lock()
+	engine.phase = consensus.PhaseAccepted
+	engine.buildInProgress = true
+	engine.setMode(consensus.ModeProposing)
+	set := buildMockTxSet(consensus.TxSetID{0x5E})
+	engine.state.OurPosition = &consensus.Proposal{
+		Round: round, Position: 3, TxSet: set.ID(), Timestamp: engine.adaptor.Now(),
+	}
+	engine.mu.Unlock()
+	adaptor.mu.Lock()
+	adaptor.proposalsBroadcast = nil
+	adaptor.opMode = consensus.OpModeConnected
+	adaptor.mu.Unlock()
+
+	engine.timerEntry()
+
+	if got := engine.Mode(); got != consensus.ModeProposing {
+		t.Fatalf("ledger build must preserve proposing mode, got %v", got)
+	}
+	if got := engine.Phase(); got != consensus.PhaseAccepted {
+		t.Fatalf("ledger build must preserve accepted phase, got %v", got)
+	}
+	adaptor.mu.RLock()
+	defer adaptor.mu.RUnlock()
+	if len(adaptor.proposalsBroadcast) != 0 {
+		t.Fatalf("ledger build must not broadcast a bow-out, got %d proposals", len(adaptor.proposalsBroadcast))
+	}
+}

@@ -62,6 +62,11 @@ func (e *Engine) run() {
 func (e *Engine) timerEntry() {
 	tickStart := time.Now()
 	e.mu.Lock()
+	// The accepted round stays immutable while its callback runs without e.mu.
+	if e.buildInProgress {
+		e.mu.Unlock()
+		return
+	}
 	e.purgePendingTrustLocked()
 	e.deferBroadcasts++
 	var pending []func()
@@ -100,13 +105,6 @@ func (e *Engine) timerEntry() {
 	if e.mode == consensus.ModeProposing &&
 		e.adaptor.GetOperatingMode() != consensus.OpModeFull {
 		e.leaveConsensusLocked()
-	}
-
-	// A peer-triggered accept may be applying the LCL off e.mu on another
-	// goroutine; don't drive rounds until its commit tail runs (rippled parks
-	// the timer thread while the jtACCEPT job holds no lock).
-	if e.buildInProgress {
-		return
 	}
 
 	// Sweep validations that aged past the isCurrent window off the steering
