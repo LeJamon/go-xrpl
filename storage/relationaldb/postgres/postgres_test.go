@@ -18,7 +18,7 @@ import (
 	"github.com/lib/pq"
 )
 
-const postgresDSNEnv = "XRPLD_TEST_POSTGRES_DSN"
+const postgresDSNEnv = "GOXRPL_TEST_POSTGRES_DSN"
 
 func setupTestDB(t *testing.T) *RepositoryManager {
 	t.Helper()

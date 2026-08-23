@@ -1,4 +1,4 @@
-// Package config defines and loads the xrpld node configuration.
+// Package config defines and loads the goxrpl node configuration.
 //
 // The [Config] type mirrors the structure of rippled's rippled.cfg, grouped into
 // the same sections (server and ports, peer protocol, Ripple protocol, databases,

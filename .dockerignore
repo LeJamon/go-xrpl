@@ -1,6 +1,7 @@
 tmp/
 main
-xrpld
+/goxrpl
+/xrpld
 *.md
 docs/
 tasks/

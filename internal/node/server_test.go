@@ -208,7 +208,7 @@ n949f75evCHwgyP4fPVgaHqNHxUVN15PsJEZ3B3HnXPcPjcZAoy7
 func writeReloadConfig(t *testing.T, validators string) string {
 	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "xrpld.toml")
+	path := filepath.Join(dir, "goxrpl.toml")
 	content := `
 database_path = "/tmp/test/db"
 network_id = "main"

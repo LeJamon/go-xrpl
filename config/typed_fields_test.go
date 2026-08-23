@@ -74,7 +74,7 @@ journal_size_limit = 1582080
 func writeAndLoad(t *testing.T, contents string) (*Config, error) {
 	t.Helper()
 	dir := t.TempDir()
-	p := filepath.Join(dir, "xrpld.toml")
+	p := filepath.Join(dir, "goxrpl.toml")
 	require.NoError(t, os.WriteFile(p, []byte(contents), 0o644))
 	return LoadConfig(Paths{Main: p})
 }

@@ -58,7 +58,7 @@ func authorizeTransport(w http.ResponseWriter, r *http.Request, pc *PortContext)
 		return true
 	}
 	if !basicAuthMatches(r, pc) {
-		w.Header().Set("WWW-Authenticate", `Basic realm="xrpld"`)
+		w.Header().Set("WWW-Authenticate", `Basic realm="goxrpl"`)
 		rejectTransport(w, r, http.StatusUnauthorized, "Unauthorized")
 		return false
 	}

@@ -204,7 +204,7 @@ func TestNodeDBConfigFastLoadWorkersValidation(t *testing.T) {
 }
 
 func TestLoadConfigTracksExplicitZeroVotingValues(t *testing.T) {
-	configPath := writeConfig(t, t.TempDir(), "xrpld.toml", minimalTestConfig()+`
+	configPath := writeConfig(t, t.TempDir(), "goxrpl.toml", minimalTestConfig()+`
 
 [voting]
 reference_fee = 0
@@ -221,7 +221,7 @@ owner_reserve = 0
 
 func TestLoadConfig_ServerAccessDefaults(t *testing.T) {
 	tempDir := t.TempDir()
-	mainConfigPath := writeConfig(t, tempDir, "xrpld.toml", `
+	mainConfigPath := writeConfig(t, tempDir, "goxrpl.toml", `
 database_path = "/tmp/test/db"
 network_id = "main"
 debug_logfile = "/tmp/test/debug.log"
@@ -263,7 +263,7 @@ path = "/tmp/test/db"
 
 func TestLoadConfig_ServerSSLCipherDefaults(t *testing.T) {
 	tempDir := t.TempDir()
-	mainConfigPath := writeConfig(t, tempDir, "xrpld.toml", `
+	mainConfigPath := writeConfig(t, tempDir, "goxrpl.toml", `
 database_path = "/tmp/test/db"
 network_id = "main"
 debug_logfile = "/tmp/test/debug.log"
@@ -299,7 +299,7 @@ path = "/tmp/test/db"
 // node_size, relay_*, max_transactions) may be omitted entirely.
 func TestLoadConfig_MinimalConfig(t *testing.T) {
 	tempDir := t.TempDir()
-	mainConfigPath := writeConfig(t, tempDir, "xrpld.toml", minimalTestConfig())
+	mainConfigPath := writeConfig(t, tempDir, "goxrpl.toml", minimalTestConfig())
 
 	config, err := LoadConfig(Paths{Main: mainConfigPath})
 	require.NoError(t, err)
@@ -376,7 +376,7 @@ protocol = "http"
 type = "pebble"
 path = "/tmp/test/db"
 `
-	mainConfigPath := writeConfig(t, tempDir, "xrpld.toml", configContent)
+	mainConfigPath := writeConfig(t, tempDir, "goxrpl.toml", configContent)
 	writeConfig(t, tempDir, "explicit_validators.toml", `
 validator_list_sites = ["https://from-explicit.example.com"]
 validator_list_keys = ["ED264807102805220DA0F312E71FC2C69E1552C9C5790F6C25E3729DEB573D5860"]
@@ -405,7 +405,7 @@ n9KorY8QtTdRx7TVDpwnG9NvyxsDwHUKUEeDLY3AkiGncVaSXZi5
 	}{
 		{
 			name:           "validators_file",
-			paths:          Paths{Main: filepath.Join(tempDir, "xrpld.toml")},
+			paths:          Paths{Main: filepath.Join(tempDir, "goxrpl.toml")},
 			validatorsFile: "selected.toml",
 		},
 		{
@@ -453,7 +453,7 @@ protocol = "http"
 type = "pebble"
 path = "/tmp/test/db"
 `
-	mainConfigPath := writeConfig(t, tempDir, "xrpld.toml", configContent)
+	mainConfigPath := writeConfig(t, tempDir, "goxrpl.toml", configContent)
 	writeConfig(t, tempDir, "validators.txt", `[validator_list_sites]
 https://implicit.example.com
 
@@ -487,7 +487,7 @@ protocol = "http"
 type = "pebble"
 path = "/tmp/test/db"
 `
-	mainConfigPath := writeConfig(t, tempDir, "xrpld.toml", configContent)
+	mainConfigPath := writeConfig(t, tempDir, "goxrpl.toml", configContent)
 
 	config, err := LoadConfig(Paths{Main: mainConfigPath, SkipValidators: true})
 	require.NoError(t, err)
@@ -514,7 +514,7 @@ protocol = "http"
 type = "pebble"
 path = "/tmp/test/db"
 `
-	mainConfigPath := writeConfig(t, tempDir, "xrpld.toml", configContent)
+	mainConfigPath := writeConfig(t, tempDir, "goxrpl.toml", configContent)
 	require.NoError(t, os.Mkdir(filepath.Join(tempDir, "validators.txt"), 0o700))
 
 	config, err := LoadConfig(Paths{Main: mainConfigPath})
@@ -542,7 +542,7 @@ protocol = "http"
 type = "pebble"
 path = "/tmp/test/db"
 `
-	mainConfigPath := writeConfig(t, tempDir, "xrpld.toml", configContent)
+	mainConfigPath := writeConfig(t, tempDir, "goxrpl.toml", configContent)
 	writeConfig(t, tempDir, "validators.txt", `[validator_list_sites]
 https://invalid.example.com
 `)
@@ -553,7 +553,7 @@ https://invalid.example.com
 }
 
 func TestLoadConfig_MissingFile(t *testing.T) {
-	_, err := LoadConfig(Paths{Main: "/nonexistent/path/xrpld.toml"})
+	_, err := LoadConfig(Paths{Main: "/nonexistent/path/goxrpl.toml"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "config file does not exist")
 }
@@ -622,16 +622,16 @@ func TestConfigLocalStateDir(t *testing.T) {
 	}{
 		{
 			name: "filesystem database path",
-			cfg:  Config{DatabasePath: "/var/lib/xrpld/db"},
-			want: "/var/lib/xrpld/db",
+			cfg:  Config{DatabasePath: "/var/lib/goxrpl/db"},
+			want: "/var/lib/goxrpl/db",
 		},
 		{
 			name: "PostgreSQL uses node store parent",
 			cfg: Config{
 				DatabasePath: "postgres://user:secret@db.example/xrpl",
-				NodeDB:       NodeDBConfig{Path: "/var/lib/xrpld/db/pebble"},
+				NodeDB:       NodeDBConfig{Path: "/var/lib/goxrpl/db/pebble"},
 			},
-			want: "/var/lib/xrpld/db",
+			want: "/var/lib/goxrpl/db",
 		},
 	}
 	for _, test := range tests {
@@ -793,7 +793,7 @@ func TestLoadConfig_ManifestCountTypedAndBoundaryValues(t *testing.T) {
 	}
 	for _, overlay := range validValues {
 		t.Run(strings.ReplaceAll(overlay, "\n", ";"), func(t *testing.T) {
-			path := writeConfig(t, t.TempDir(), "xrpld.toml", minimalTestConfig()+"\n[overlay]\n"+overlay+"\n")
+			path := writeConfig(t, t.TempDir(), "goxrpl.toml", minimalTestConfig()+"\n[overlay]\n"+overlay+"\n")
 			cfg, err := LoadConfig(Paths{Main: path})
 			require.NoError(t, err)
 			require.NotNil(t, cfg.Overlay.MaxUntrustedCount)
@@ -803,13 +803,13 @@ func TestLoadConfig_ManifestCountTypedAndBoundaryValues(t *testing.T) {
 
 	for _, value := range []string{"49", "1001", "0", "-1"} {
 		t.Run("untrusted_"+value, func(t *testing.T) {
-			path := writeConfig(t, t.TempDir(), "xrpld.toml", minimalTestConfig()+"\n[overlay]\nmax_untrusted_count = "+value+"\n")
+			path := writeConfig(t, t.TempDir(), "goxrpl.toml", minimalTestConfig()+"\n[overlay]\nmax_untrusted_count = "+value+"\n")
 			_, err := LoadConfig(Paths{Main: path})
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "max_untrusted_count")
 		})
 		t.Run("trusted_"+value, func(t *testing.T) {
-			path := writeConfig(t, t.TempDir(), "xrpld.toml", minimalTestConfig()+"\n[overlay]\nmax_trusted_count = "+value+"\n")
+			path := writeConfig(t, t.TempDir(), "goxrpl.toml", minimalTestConfig()+"\n[overlay]\nmax_trusted_count = "+value+"\n")
 			_, err := LoadConfig(Paths{Main: path})
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "max_trusted_count")
@@ -818,7 +818,7 @@ func TestLoadConfig_ManifestCountTypedAndBoundaryValues(t *testing.T) {
 
 	for _, value := range []string{"\"50\"", "50.5", "true", "[50]"} {
 		t.Run("malformed_untrusted_"+value, func(t *testing.T) {
-			path := writeConfig(t, t.TempDir(), "xrpld.toml", minimalTestConfig()+"\n[overlay]\nmax_untrusted_count = "+value+"\n")
+			path := writeConfig(t, t.TempDir(), "goxrpl.toml", minimalTestConfig()+"\n[overlay]\nmax_untrusted_count = "+value+"\n")
 			_, err := LoadConfig(Paths{Main: path})
 			require.Error(t, err)
 		})
@@ -990,7 +990,7 @@ func TestLoadConfigLedgerCacheSize(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			path := writeConfig(t, t.TempDir(), "xrpld.toml", "ledger_cache_size = "+test.value+"\n"+minimalTestConfig())
+			path := writeConfig(t, t.TempDir(), "goxrpl.toml", "ledger_cache_size = "+test.value+"\n"+minimalTestConfig())
 			cfg, err := LoadConfig(Paths{Main: path})
 			if test.wantErr != "" {
 				require.ErrorContains(t, err, test.wantErr)
@@ -1169,9 +1169,9 @@ func TestParseValidatorsTxt_LineEndings(t *testing.T) {
 	}
 }
 
-// TestExampleConfigLoads keeps config/examples/xrpld.toml loadable by
+// TestExampleConfigLoads keeps config/examples/goxrpl.toml loadable by
 // the strict loader, so the shipped example never drifts from the schema.
 func TestExampleConfigLoads(t *testing.T) {
-	_, err := LoadConfig(Paths{Main: filepath.Join("examples", "xrpld.toml")})
+	_, err := LoadConfig(Paths{Main: filepath.Join("examples", "goxrpl.toml")})
 	require.NoError(t, err)
 }

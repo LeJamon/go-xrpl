@@ -14,17 +14,13 @@ golangci_version := "v2.11.3"
 default:
     @just --list --unsorted
 
-# Build the xrpld binary into ../tmp/main (CGO + OpenSSL).
+# Build the goxrpl binary into ../tmp/goxrpl (CGO + OpenSSL).
 build:
     ./scripts/build.sh
 
 # Compile every package in the module.
 build-all:
     go build ./...
-
-# Verify the !cgo path still compiles (uses peertls stub).
-build-nocgo:
-    CGO_ENABLED=0 go build ./...
 
 # Install the locked optional mpt-crypto dependency into a project-local cache.
 setup-mpt-crypto:
@@ -68,7 +64,7 @@ test-docker:
 
 # PostgreSQL backend integration tests. Needs a reachable server; the DSN
 # points at a throwaway database (its tables are truncated between tests).
-# e.g. XRPLD_TEST_POSTGRES_DSN='postgres://xrpl:xrpl@localhost:5432/xrpl_test?sslmode=disable' just test-postgres
+# e.g. GOXRPL_TEST_POSTGRES_DSN='postgres://xrpl:xrpl@localhost:5432/xrpl_test?sslmode=disable' just test-postgres
 test-postgres:
     go test -tags postgres -v ./storage/relationaldb/postgres/
 
@@ -148,11 +144,11 @@ conformance *args:
 
 # Hot-reload dev server (needs `air`).
 dev:
-    cd cmd/xrpld && air
+    cd cmd/goxrpl && air
 
 # Run the server without hot-reload.
 run:
-    go run ./cmd/xrpld
+    go run ./cmd/goxrpl
 
 # Regenerate all generated docs (RPC catalog, tx/amendment catalogs, and the
 # conformance-status snapshot). The conformance step runs the full suite and is

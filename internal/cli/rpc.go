@@ -27,7 +27,7 @@ func (a *application) newRPCCommand() *cobra.Command {
 		Long: `Forward RPC commands to a running go-xrpl node over HTTP JSON-RPC.
 
 The target node's host and port are read from the HTTP port in --conf, so a
-config file is required. Start the node with 'xrpld server --conf ...' first;
+config file is required. Start the node with 'goxrpl server --conf ...' first;
 admin methods (stop, peers, feature, ...) succeed when the configured HTTP
 port grants admin to localhost.`,
 	}
@@ -61,7 +61,7 @@ func newRPCHTTPClient() *http.Client {
 
 type rpcRunFunc func(*cobra.Command, string, any) error
 
-// rpcCommandSpec is a single `xrpld rpc <name>` subcommand. The command name
+// rpcCommandSpec is a single `goxrpl rpc <name>` subcommand. The command name
 // and (by default) the RPC method are the first token of Use; params builds
 // the JSON parameters object from positional args. Keeping the per-command
 // arg→param mapping in one closure collapses ~50 near-identical command
@@ -204,7 +204,7 @@ func (a *application) runRPC(cmd *cobra.Command, method string, params any) erro
 func rpcEndpoint(cfg *config.Config, configPath string) (string, *config.PortConfig, error) {
 	ports := cfg.HTTPPorts()
 	if len(ports) == 0 {
-		return "", nil, fmt.Errorf("no HTTP port configured in %s; 'xrpld rpc' forwards to a running node's JSON-RPC port", configPath)
+		return "", nil, fmt.Errorf("no HTTP port configured in %s; 'goxrpl rpc' forwards to a running node's JSON-RPC port", configPath)
 	}
 
 	names := make([]string, 0, len(ports))

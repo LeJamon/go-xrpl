@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Config represents the complete xrpld configuration
+// Config represents the complete goxrpl configuration.
 // This mirrors the structure of rippled.cfg
 type Config struct {
 	// 1. Server section
@@ -81,7 +81,7 @@ type Config struct {
 
 // Paths holds the paths to configuration files
 type Paths struct {
-	Main           string // Path to main config file (xrpld.toml)
+	Main           string // Path to main config file (goxrpl.toml)
 	Validators     string // Path to validators file (validators.toml)
 	SkipValidators bool   // Ignore trusted-validator configuration in standalone mode
 }

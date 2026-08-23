@@ -415,7 +415,7 @@ func TestServerProcessSignalCancelsNodeBeforeReady(t *testing.T) {
 
 func writeServerTestConfig(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "xrpld.toml")
+	path := filepath.Join(t.TempDir(), "goxrpl.toml")
 	require.NoError(t, os.WriteFile(path, []byte(generateConfigContent("devnet")), 0o600))
 	return path
 }
