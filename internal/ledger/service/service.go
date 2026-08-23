@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	appconfig "github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -62,6 +63,9 @@ type Config struct {
 	// FetchDepth limits historical ledger serving relative to the closed ledger.
 	// Zero leaves serving unrestricted.
 	FetchDepth uint32
+	// LedgerCacheSize bounds both recent ledger history and persisted-ledger lookups.
+	// Zero selects config.DefaultLedgerCacheSize.
+	LedgerCacheSize uint32
 
 	// NetworkID is the network identifier for this node.
 	// Legacy networks (ID <= 1024) reject transactions that include NetworkID.
@@ -296,6 +300,13 @@ const (
 func New(cfg Config) (*Service, error) {
 	if err := cfg.Startup.validateMode(); err != nil {
 		return nil, fmt.Errorf("invalid ledger service configuration: %w", err)
+	}
+	if cfg.LedgerCacheSize == 0 {
+		cfg.LedgerCacheSize = appconfig.DefaultLedgerCacheSize
+	}
+	if cfg.LedgerCacheSize > appconfig.MaxLedgerCacheSize {
+		return nil, fmt.Errorf("invalid ledger service configuration: ledger cache size must be between %d and %d, got %d",
+			appconfig.MinLedgerCacheSize, appconfig.MaxLedgerCacheSize, cfg.LedgerCacheSize)
 	}
 
 	logger := cfg.Logger
@@ -600,6 +611,8 @@ func (s *Service) Start() (err error) {
 	s.logger.Info("Ledger service started",
 		"standalone", s.config.Standalone,
 		"openLedger", s.openLedger.Sequence(),
+		"ledgerCacheSize", s.config.LedgerCacheSize,
+		"persistedLedgerCacheSize", s.config.LedgerCacheSize,
 		"needsInitialSync", s.networkLedgerState == networkLedgerNeeded,
 		"fastLoadProvisional", s.networkLedgerState == networkLedgerFastLoadProvisional,
 	)
@@ -609,6 +622,13 @@ func (s *Service) Start() (err error) {
 	s.lifecycleState = serviceRunning
 
 	return nil
+}
+
+func (s *Service) ledgerCacheSize() uint32 {
+	if s.config.LedgerCacheSize == 0 {
+		return appconfig.DefaultLedgerCacheSize
+	}
+	return s.config.LedgerCacheSize
 }
 
 // rebuildOpenLedgerViewLocked rebuilds s.openLedgerView from s.closedLedger

@@ -13,6 +13,11 @@ func TestNewValidatesStartupConfiguration(t *testing.T) {
 	if err == nil || svc != nil {
 		t.Fatalf("New = (%v, %v), want nil service and configuration error", svc, err)
 	}
+
+	svc, err = New(Config{LedgerCacheSize: 385})
+	if err == nil || svc != nil {
+		t.Fatalf("New with oversized ledger cache = (%v, %v), want nil service and configuration error", svc, err)
+	}
 }
 
 func TestGetValidatedLedgerAge(t *testing.T) {
@@ -58,6 +63,9 @@ func TestNewService(t *testing.T) {
 
 	if !svc.IsStandalone() {
 		t.Error("Service should be in standalone mode by default")
+	}
+	if svc.config.LedgerCacheSize != historyWindow {
+		t.Errorf("default ledger cache size = %d, want %d", svc.config.LedgerCacheSize, historyWindow)
 	}
 }
 

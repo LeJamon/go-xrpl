@@ -9,12 +9,6 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
-// caps in-memory ledgerHistory + tx-index to a window of recent validated
-// ledgers; older seqs fall through to the relational DB
-const historyWindow = 256
-
-const persistedLedgerCacheSize = historyWindow
-
 func (s *historyComponent) ledgerBySequence(seq uint32) *ledger.Ledger {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -223,13 +217,14 @@ func (s *Service) completeLedgerEvictionStatus(seq uint32) (tracked, durable boo
 	return tracked, durable
 }
 
-// evictOldHistoryLocked drops ledgerHistory + tx-index entries older than the
-// historyWindow. Caller holds Service.mu and historyComponent.mu.
+// evictOldHistoryLocked drops ledgerHistory + tx-index entries outside the
+// configured cache window. Caller holds Service.mu and historyComponent.mu.
 func (s *Service) evictOldHistoryLocked(latestValidatedSeq uint32) {
-	if latestValidatedSeq <= historyWindow {
+	window := s.ledgerCacheSize()
+	if latestValidatedSeq <= window {
 		return
 	}
-	cutoff := latestValidatedSeq - historyWindow
+	cutoff := latestValidatedSeq - window
 	for seq, l := range s.ledgerHistory {
 		if seq > cutoff {
 			continue
@@ -266,7 +261,7 @@ func (s *historyComponent) deleteHistoryLocked(seq uint32) {
 	}
 }
 
-func (s *historyComponent) cachePersistedLedgerLocked(l *ledger.Ledger) {
+func (s *Service) cachePersistedLedgerLocked(l *ledger.Ledger) {
 	hash := l.Hash()
 	if existing, ok := s.persistedLedgers[hash]; ok {
 		if existing.IsValidated() && !l.IsValidated() {
@@ -277,7 +272,7 @@ func (s *historyComponent) cachePersistedLedgerLocked(l *ledger.Ledger) {
 	}
 	s.persistedLedgers[hash] = l
 	s.persistedLedgerFIFO = append(s.persistedLedgerFIFO, hash)
-	if len(s.persistedLedgerFIFO) <= persistedLedgerCacheSize {
+	if len(s.persistedLedgerFIFO) <= int(s.ledgerCacheSize()) {
 		return
 	}
 	oldest := s.persistedLedgerFIFO[0]

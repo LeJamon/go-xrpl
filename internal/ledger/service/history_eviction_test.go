@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/drops"
@@ -20,7 +21,17 @@ func mustNewOpenWithHeader(t *testing.T, h header.LedgerHeader, stateMap, txMap 
 }
 
 func TestEvictOldHistoryLocked(t *testing.T) {
-	svc, err := New(DefaultConfig())
+	for _, window := range []uint32{64, 256, 384} {
+		t.Run(fmt.Sprintf("window_%d", window), func(t *testing.T) {
+			testEvictOldHistoryLocked(t, window)
+		})
+	}
+}
+
+func testEvictOldHistoryLocked(t *testing.T, window uint32) {
+	cfg := DefaultConfig()
+	cfg.LedgerCacheSize = window
+	svc, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -59,7 +70,7 @@ func TestEvictOldHistoryLocked(t *testing.T) {
 		return l
 	}
 
-	const totalLedgers = historyWindow * 3
+	totalLedgers := window * 3
 	var latestSeq uint32 = 1
 	for range totalLedgers {
 		svc.ledgerHistory[latestSeq] = makeLedger(latestSeq, 0x42)
@@ -68,14 +79,16 @@ func TestEvictOldHistoryLocked(t *testing.T) {
 	latestValidated := latestSeq - 1
 
 	svc.mu.Lock()
+	svc.historyComponent.mu.Lock()
 	svc.evictOldHistoryLocked(latestValidated)
+	svc.historyComponent.mu.Unlock()
 	svc.mu.Unlock()
 
-	if got := len(svc.ledgerHistory); got != historyWindow {
-		t.Errorf("ledgerHistory size after eviction: got %d, want %d", got, historyWindow)
+	if got := len(svc.ledgerHistory); got != int(window) {
+		t.Errorf("ledgerHistory size after eviction: got %d, want %d", got, window)
 	}
 
-	cutoff := latestValidated - historyWindow
+	cutoff := latestValidated - window
 	for seq, l := range svc.ledgerHistory {
 		if seq <= cutoff {
 			t.Errorf("ledgerHistory[%d] survived eviction; cutoff=%d", seq, cutoff)
@@ -88,16 +101,18 @@ func TestEvictOldHistoryLocked(t *testing.T) {
 			t.Errorf("txIndex[%x]=%d survived eviction; cutoff=%d", txHash[:4], txSeq, cutoff)
 		}
 	}
-	if got, want := len(svc.txIndex), historyWindow; got != want {
+	if got, want := len(svc.txIndex), int(window); got != want {
 		t.Errorf("txIndex size: got %d, want %d", got, want)
 	}
-	if got, want := len(svc.txPositionIndex), historyWindow; got != want {
+	if got, want := len(svc.txPositionIndex), int(window); got != want {
 		t.Errorf("txPositionIndex size: got %d, want %d", got, want)
 	}
 }
 
 func TestEvictOldHistoryLocked_BelowWindow(t *testing.T) {
-	svc, err := New(DefaultConfig())
+	cfg := DefaultConfig()
+	cfg.LedgerCacheSize = 64
+	svc, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -105,7 +120,8 @@ func TestEvictOldHistoryLocked_BelowWindow(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	for seq := uint32(1); seq <= historyWindow/2; seq++ {
+	window := svc.ledgerCacheSize()
+	for seq := uint32(1); seq <= window/2; seq++ {
 		stateMap, err := svc.genesisLedger.StateMapSnapshot()
 		if err != nil {
 			t.Fatalf("StateMapSnapshot: %v", err)
@@ -121,7 +137,9 @@ func TestEvictOldHistoryLocked_BelowWindow(t *testing.T) {
 
 	before := len(svc.ledgerHistory)
 	svc.mu.Lock()
-	svc.evictOldHistoryLocked(historyWindow / 2)
+	svc.historyComponent.mu.Lock()
+	svc.evictOldHistoryLocked(window / 2)
+	svc.historyComponent.mu.Unlock()
 	svc.mu.Unlock()
 
 	if got := len(svc.ledgerHistory); got != before {
@@ -130,7 +148,9 @@ func TestEvictOldHistoryLocked_BelowWindow(t *testing.T) {
 }
 
 func TestAcceptLedgerLoop_BoundsHistory(t *testing.T) {
-	svc, err := New(DefaultConfig())
+	cfg := DefaultConfig()
+	cfg.LedgerCacheSize = 64
+	svc, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -139,7 +159,8 @@ func TestAcceptLedgerLoop_BoundsHistory(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	for i := range historyWindow * 2 {
+	window := svc.ledgerCacheSize()
+	for i := range window * 2 {
 		if _, err := svc.AcceptLedger(ctx); err != nil {
 			t.Fatalf("AcceptLedger #%d: %v", i, err)
 		}
@@ -149,11 +170,11 @@ func TestAcceptLedgerLoop_BoundsHistory(t *testing.T) {
 	size := len(svc.ledgerHistory)
 	svc.mu.Unlock()
 
-	if size > historyWindow+1 {
-		t.Errorf("ledgerHistory unbounded under AcceptLedger loop: got %d, want <= %d", size, historyWindow+1)
+	if size > int(window+1) {
+		t.Errorf("ledgerHistory unbounded under AcceptLedger loop: got %d, want <= %d", size, window+1)
 	}
 	last := svc.GetClosedLedgerIndex()
-	if got, want := svc.GetServerInfo().CompleteLedgers, formatRange(last-historyWindow+1, last); got != want {
+	if got, want := svc.GetServerInfo().CompleteLedgers, formatRange(last-window+1, last); got != want {
 		t.Errorf("complete_ledgers includes evicted in-memory history: got %q, want %q", got, want)
 	}
 }
@@ -162,7 +183,9 @@ func TestAcceptLedgerLoop_BoundsHistory(t *testing.T) {
 // and is drained + promoted inline — eviction must run on that path
 // because no second SetValidatedLedger arrives for the same seq.
 func TestValidatedPromotionEvictsHistory(t *testing.T) {
-	svc, err := New(DefaultConfig())
+	cfg := DefaultConfig()
+	cfg.LedgerCacheSize = 64
+	svc, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -182,7 +205,8 @@ func TestValidatedPromotionEvictsHistory(t *testing.T) {
 		return stateMap, txMap
 	}
 
-	const adoptedSeq uint32 = historyWindow + 50
+	window := svc.ledgerCacheSize()
+	adoptedSeq := window + 50
 	adoptedState, adoptedTx := freshMaps()
 	var adoptedHeader header.LedgerHeader
 	adoptedHeader.LedgerIndex = adoptedSeq
@@ -191,7 +215,7 @@ func TestValidatedPromotionEvictsHistory(t *testing.T) {
 
 	// Seed entries below the post-eviction cutoff so promotion has
 	// observable work to do.
-	cutoff := adoptedSeq - historyWindow
+	cutoff := adoptedSeq - window
 	for seq := uint32(1); seq <= cutoff; seq++ {
 		st, tx := freshMaps()
 		var h header.LedgerHeader
@@ -209,7 +233,7 @@ func TestValidatedPromotionEvictsHistory(t *testing.T) {
 	size := len(svc.ledgerHistory)
 	svc.historyComponent.mu.RUnlock()
 
-	if size > historyWindow+1 {
-		t.Errorf("validated promotion left ledgerHistory unbounded: got %d, want <= %d", size, historyWindow+1)
+	if size > int(window+1) {
+		t.Errorf("validated promotion left ledgerHistory unbounded: got %d, want <= %d", size, window+1)
 	}
 }

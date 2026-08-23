@@ -32,6 +32,7 @@ type Config struct {
 	RelayProposals   string        `toml:"relay_proposals" mapstructure:"relay_proposals"`     // optional; "" = default ("trusted")
 	RelayValidations string        `toml:"relay_validations" mapstructure:"relay_validations"` // optional; "" = default ("all")
 	LedgerHistory    LedgerHistory `toml:"ledger_history" mapstructure:"ledger_history"`       // integer, "full", or "none"; absent = 256
+	LedgerCacheSize  *int          `toml:"ledger_cache_size" mapstructure:"ledger_cache_size"` // in-memory ledger and persisted lookup caches; absent = 256
 	FetchDepth       FetchDepth    `toml:"fetch_depth" mapstructure:"fetch_depth"`             // integer, "full", or "none"; absent = "full"; values < 10 are raised to 10
 	ValidationSeed   string        `toml:"validation_seed" mapstructure:"validation_seed"`
 	ValidatorToken   string        `toml:"validator_token" mapstructure:"validator_token"`
@@ -128,6 +129,14 @@ func (c *Config) ResolvedNetworkID() (int, error) {
 // defaultLedgerHistory mirrors rippled's LEDGER_HISTORY default (Config.h).
 const defaultLedgerHistory = 256
 
+// Ledger cache bounds preserve the existing default and use rippled's largest
+// node-size cache target as the safety ceiling.
+const (
+	MinLedgerCacheSize     = 1
+	DefaultLedgerCacheSize = 256
+	MaxLedgerCacheSize     = 384
+)
+
 // ResolvedLedgerHistory returns the configured ledger history as an integer.
 // "full" maps to math.MaxInt32 (matching rippled's uint32 max sentinel)
 // so that downstream comparisons such as the online_delete cross-check
@@ -138,6 +147,14 @@ func (c *Config) ResolvedLedgerHistory() int {
 		return defaultLedgerHistory
 	}
 	return c.LedgerHistory.Value()
+}
+
+// ResolvedLedgerCacheSize returns the configured in-memory ledger cache size.
+func (c *Config) ResolvedLedgerCacheSize() int {
+	if c.LedgerCacheSize == nil {
+		return DefaultLedgerCacheSize
+	}
+	return *c.LedgerCacheSize
 }
 
 // defaultFetchDepth mirrors rippled's FETCH_DEPTH default (Config.h): the
