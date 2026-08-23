@@ -188,7 +188,7 @@ type WireableAdaptor interface {
 	SetValidationHistorian(h ValidationHistorian)
 }
 
-// ListedOracle is an optional TrustOracle extension reporting validator-list
+// ListedOracle is an optional trust-oracle extension reporting validator-list
 // membership: a listed validator is published by at least one configured list
 // publisher but not (necessarily) in the UNL. The engine stores validations
 // from listed signers so a later trust change promotes the ones already seen

@@ -448,7 +448,6 @@ func TestProposalSignVerify(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, proposal.Signature)
 
-	// verify
 	err = verifyProposal(proposal)
 	assert.NoError(t, err)
 
@@ -477,7 +476,6 @@ func TestValidationSignVerify(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, validation.Signature)
 
-	// verify
 	err = verifyValidation(validation)
 	assert.NoError(t, err)
 

@@ -32,19 +32,19 @@ func (u *upvotesAndTimeout) hasTimeout() bool { return !u.timeout.IsZero() }
 type trustedVotes struct {
 	mu sync.Mutex
 	// recordedVotes maps trusted-validator NodeID to its retained
-	// vote. Membership is reconciled by TrustChanged; non-trusted
+	// vote. Membership is reconciled by trustChanged; non-trusted
 	// validators are never inserted.
 	recordedVotes map[consensus.NodeID]*upvotesAndTimeout
 }
 
 // newTrustedVotes constructs an empty trustedVotes. Call
-// TrustChanged with the initial UNL before recording any votes —
+// trustChanged with the initial UNL before recording any votes —
 // otherwise every validation will be ignored as untrusted.
 func newTrustedVotes() *trustedVotes {
 	return &trustedVotes{recordedVotes: map[consensus.NodeID]*upvotesAndTimeout{}}
 }
 
-// TrustChanged reconciles the recordedVotes set against the current
+// trustChanged reconciles the recordedVotes set against the current
 // trusted-validator list. Existing entries for still-trusted
 // validators are preserved verbatim; entries for removed validators
 // are dropped; newly-trusted validators get an empty entry with
@@ -64,7 +64,7 @@ func (t *trustedVotes) trustChanged(allTrusted []consensus.NodeID) {
 	t.recordedVotes = newSet
 }
 
-// RecordVotes ingests this round's validations. For each validation
+// recordVotes ingests this round's validations. For each validation
 // signed by a trusted validator: timeout is reset to closeTime + 24h
 // and upVotes are replaced with the validation's amendments. Then
 // any entry whose timeout is past closeTime is cleared (timeout
@@ -101,11 +101,11 @@ func (t *trustedVotes) recordVotes(
 	}
 }
 
-// GetVotes returns (availableValidatorCount, votesPerAmendment).
+// getVotes returns (availableValidatorCount, votesPerAmendment).
 // availableValidatorCount is the count of entries whose timeout is
 // set (i.e., we've seen a recent enough validation).
 // votesPerAmendment sums upVotes across all entries — only entries
-// with a set timeout contribute, by RecordVotes's invariant
+// with a set timeout contribute, by recordVotes's invariant
 // (cleared entries have empty upVotes).
 func (t *trustedVotes) getVotes() (int, map[[32]byte]int) {
 	t.mu.Lock()

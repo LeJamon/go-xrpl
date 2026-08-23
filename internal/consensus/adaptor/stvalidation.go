@@ -370,9 +370,6 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 //
 // Optional supplementary fields are emitted when present; fields without
 // explicit presence tracking use a non-zero value as their proxy.
-//
-// Exported so external packages (the validation archive) can reserialize
-// self-built validations whose Raw field is nil.
 func serializeSTValidation(v *consensus.Validation) []byte {
 	var buf []byte
 

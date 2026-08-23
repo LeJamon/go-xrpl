@@ -477,7 +477,7 @@ func (v *Validation) hasNativeFeeVote(field uint8, value drops.XRPAmount) bool {
 // from OnValidation to signal that the validation was kept out of the
 // quorum/trie but still relayed; the router logs it and does NOT charge
 // the delivering peer, mirroring rippled's log-and-forward handling of
-// ValStatus conflicting/multiple (Validations.h:637-681,
+// validation statuses conflicting/multiple (Validations.h:637-681,
 // RCLValidations.cpp:214-247).
 type ByzantineValidationError struct {
 	NodeID NodeID

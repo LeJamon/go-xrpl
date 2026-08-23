@@ -47,18 +47,8 @@ type MinimumOnlineFloor interface {
 	MinimumOnline() uint32
 }
 
-// Compile-time interface check.
 var _ peermanagement.LedgerProvider = (*ledgerProvider)(nil)
 
-// ledgerProvider implements peermanagement.ledgerProvider on top of the
-// go-xrpl ledger service. It answers the LedgerReplay protocol paths
-// (mtREPLAY_DELTA_REQ / mtPROOF_PATH_REQ) and fetch-pack serving for the
-// overlay. The mtGET_LEDGER path is NOT routed through this provider — the
-// consensus router's handleGetLedger (router_serve.go) answers those
-// requests directly from the ledger service. The adapter exists so
-// peermanagement can reach the ledger service without importing
-// internal/ledger, which is forbidden by the layering boundary between the
-// two packages.
 type ledgerProvider struct {
 	svc          ledgerLookup
 	floor        MinimumOnlineFloor

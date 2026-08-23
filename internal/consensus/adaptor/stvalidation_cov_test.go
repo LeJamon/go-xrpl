@@ -527,7 +527,6 @@ func TestStvParseSTValidation_ShortSigningPubKey(t *testing.T) {
 }
 
 func TestStvParseSTValidation_AllOptionalUINT32Fields(t *testing.T) {
-	// verify ReserveBase and ReserveIncrement branches are exercised.
 	orig := buildTestValidation()
 	orig.ReserveBase = 200_000_000
 	orig.ReserveIncrement = 50_000_000

@@ -461,7 +461,6 @@ func TestSerializeSTValidation_CanonicalOrder(t *testing.T) {
 	v := buildTestValidation()
 	blob := serializeSTValidation(v)
 
-	// verify field order by checking field header bytes appear in order.
 	var fieldHeaders []byte
 	pos := 0
 	for pos < len(blob) {
@@ -525,11 +524,6 @@ func TestValidationFromMessage_Integration(t *testing.T) {
 }
 
 func TestSignSerializeParseVerify_Roundtrip(t *testing.T) {
-	// This test simulates the full outbound → inbound path:
-	// 1. Create a validation and sign it (like sendValidation)
-	// 2. Serialize to wire format (like validationToMessage)
-	// 3. Parse back from wire format (like validationFromMessage)
-	// 4. verify the signature (like OnValidation → verifyValidation)
 	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
 	require.NoError(t, err)
 
@@ -569,7 +563,6 @@ func TestSignSerializeParseVerify_Roundtrip(t *testing.T) {
 	assert.Equal(t, orig.LedgerID, parsed.LedgerID)
 	assert.Equal(t, orig.NodeID, parsed.NodeID)
 
-	// verify the parsed validation (inbound path, uses SigningData)
 	err = verifyValidation(parsed)
 	assert.NoError(t, err, "roundtrip verify failed")
 }

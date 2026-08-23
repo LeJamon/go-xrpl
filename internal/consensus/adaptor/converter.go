@@ -9,7 +9,6 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-// proposalFromMessage converts a decoded ProposeSet message to a consensus.Proposal.
 func proposalFromMessage(msg *message.ProposeSet) *consensus.Proposal {
 	p := &consensus.Proposal{
 		Position:  msg.ProposeSeq,
@@ -42,7 +41,6 @@ func proposalFromMessage(msg *message.ProposeSet) *consensus.Proposal {
 	return p
 }
 
-// proposalToMessage converts a consensus.Proposal to a ProposeSet message.
 // The wire's NodePubKey field carries the 33-byte ephemeral signing key
 // (sfSigningPubKey semantics), not the 20-byte master-derived NodeID.
 func proposalToMessage(p *consensus.Proposal) *message.ProposeSet {
@@ -93,12 +91,10 @@ func validationToMessage(v *consensus.Validation) *message.Validation {
 	}
 }
 
-// transactionFromMessage extracts the raw transaction blob from a Transaction message.
 func transactionFromMessage(msg *message.Transaction) []byte {
 	return msg.RawTransaction
 }
 
-// haveSetFromMessage converts a decoded HaveTransactionSet message.
 func haveSetFromMessage(msg *message.HaveTransactionSet) (consensus.TxSetID, message.TxSetStatus, error) {
 	var id consensus.TxSetID
 	if len(msg.Hash) != len(id) {

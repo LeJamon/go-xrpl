@@ -50,7 +50,6 @@ func (pt *proposalTracker) resetProposals() {
 	pt.proposals = make(map[consensus.NodeID]*consensus.Proposal)
 }
 
-// count returns the number of current-round positions.
 func (pt *proposalTracker) count() int {
 	return len(pt.proposals)
 }
@@ -168,7 +167,6 @@ func (pt *proposalTracker) bufferRecent(p *consensus.Proposal) {
 	pt.recentProposals[p.NodeID] = append(positions, cloneProposal(p))
 }
 
-// hasBufferedFor reports whether any buffered proposal has prevID as its previous ledger.
 func (pt *proposalTracker) hasBufferedFor(prevID consensus.LedgerID) bool {
 	for _, positions := range pt.recentProposals {
 		for _, p := range positions {

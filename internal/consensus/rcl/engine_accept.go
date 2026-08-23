@@ -130,7 +130,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// clamp track convergence, not the apply.
 	roundTime := e.now().Sub(e.roundStartTime)
 	roundDuration := e.now().Sub(e.state.StartTime)
-	// DisputedNoTxs returns detached blobs; work keeps that snapshot while
+	// disputedNoTxs returns detached blobs; work keeps that snapshot while
 	// the ledger is built after e.mu is released.
 	disputedNoTxs := e.disputeTracker.disputedNoTxs()
 

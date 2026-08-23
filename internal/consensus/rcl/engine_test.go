@@ -1910,7 +1910,6 @@ func TestEngine_WrongLedgerRecovery_ModeSequence(t *testing.T) {
 	adaptor.ledgers[targetID] = targetLedger
 
 	engine.mu.Lock()
-	// Step into WrongLedger then immediately switch to the target.
 	engine.wrongLedgerID = targetID
 	engine.setMode(consensus.ModeWrongLedger)
 	// Drive the full recovery: handleWrongLedger resolves the target

@@ -198,7 +198,7 @@ func voteAmount(value drops.XRPAmount) *drops.XRPAmount {
 // GotMajority and LostMajority across consecutive rounds. Both
 // TrustedValidations (the threshold denominator) and Votes flow
 // from the cache; the raw parentValidations slice is fed into
-// the cache via RecordVotes and not used afterwards.
+// the cache via recordVotes and not used afterwards.
 func (a *Adaptor) runAmendmentVote(
 	prev *ledger.Ledger,
 	upcomingSeq uint32,

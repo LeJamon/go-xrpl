@@ -283,12 +283,10 @@ func disputeStalled(d *consensus.DisputedTx, parms consensus.ConsensusParms, pro
 	return weight > parms.MinConsensusPct || weight < (100-parms.MinConsensusPct)
 }
 
-// dispute returns a disputed transaction.
 func (dt *disputeTracker) dispute(txID consensus.TxID) *consensus.DisputedTx {
 	return dt.disputes[txID]
 }
 
-// has reports whether a dispute exists for the given TxID.
 func (dt *disputeTracker) has(txID consensus.TxID) bool {
 	_, ok := dt.disputes[txID]
 	return ok
@@ -315,7 +313,6 @@ func (dt *disputeTracker) all() []*consensus.DisputedTx {
 	return result
 }
 
-// count returns the number of disputes.
 func (dt *disputeTracker) count() int {
 	return len(dt.disputes)
 }

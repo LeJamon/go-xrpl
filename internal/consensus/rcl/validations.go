@@ -34,8 +34,8 @@ func safeTrieCall(fn string, op func()) (panicked bool) {
 	return false
 }
 
-// valStatus classifies the outcome of AddStatus, mirroring rippled's
-// valStatus (Validations.h:169-180).
+// valStatus classifies the outcome of addStatus, mirroring rippled's
+// ValStatus (Validations.h:169-180).
 type valStatus int
 
 const (
@@ -155,7 +155,7 @@ type ValidationTracker struct {
 	// at that seq — the evidence the Byzantine cross-check runs against
 	// when a node submits a non-monotonic seq, so equivocation is caught
 	// even at seqs the node has already superseded. Buckets age out after
-	// validationSetExpires without access (FlushStale sweep).
+	// validationSetExpires without access (flushStale sweep).
 	bySequence map[uint32]*seqValidations
 
 	// seqEnforcers holds the per-remote-node monotonic-seq floor with
@@ -226,7 +226,7 @@ type ValidationTracker struct {
 
 	// trie holds branch support for every trusted validator's latest tip,
 	// including validators on the negUNL, so they continue to steer
-	// GetPreferred and ProposersFinished. Full-validation quorum counts
+	// GetPreferred and proposersFinished. Full-validation quorum counts
 	// exclude negUNL validators separately. nil when ancestry is unset.
 	trie *ledgertrie.Trie
 
@@ -238,7 +238,7 @@ type ValidationTracker struct {
 	// resolvable yet, keyed by (seq, id) → waiting validators — rippled's
 	// acquiring_ map. Entries drain via checkAcquired once the
 	// ledger is acquired, and expire with the validations that reference
-	// them (supersede, ExpireOld, FlushStale, trust rotation). nil when
+	// them (supersede, ExpireOld, flushStale, trust rotation). nil when
 	// the trie is disabled.
 	acquiring map[acquiringKey]map[consensus.NodeID]struct{}
 }
@@ -512,7 +512,7 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 //     the trie, mirroring rippled where updateTrie runs for every
 //     trusted validation regardless of full-ness. The Full filter lives
 //     in the quorum counters (countTrustedExcludingNegUNLLocked,
-//     ProposersValidated), not at the door — dropping partials here
+//     proposersValidated), not at the door — dropping partials here
 //     blinds every peer's preferred-ledger steering during recovery.
 //   - Stale or clock-skewed validations (outside the wall/local
 //     windows defined above) are rejected via isCurrent.
@@ -1267,7 +1267,7 @@ func (vt *ValidationTracker) latestValidation(nodeID consensus.NodeID) *consensu
 // observed actively validating right now, partial or full, trusted or not.
 // The gate matches Add()'s admission check, so a node appears iff its most
 // recent validation is neither stale nor clock-skewed against the
-// network-adjusted clock. Enumeration only; FlushStale does the paired
+// network-adjusted clock. Enumeration only; flushStale does the paired
 // eviction that rippled folds into its current() sweep. Mirrors rippled's
 // Validations::getCurrentNodeIDs — the live-participation set gathered when
 // the engine refreshes the trusted set and quorum each round.

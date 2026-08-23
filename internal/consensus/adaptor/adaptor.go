@@ -371,8 +371,8 @@ func New(cfg Config) *Adaptor {
 	amendmentStances := seedAmendmentStances(cfg.AmendmentVote, logger)
 
 	// Seed the amendment-vote cache with the initial UNL so
-	// RecordVotes accepts validations from round one. Re-call
-	// TrustChanged whenever the trusted set mutates at runtime.
+	// recordVotes accepts validations from round one. Re-call
+	// trustChanged whenever the trusted set mutates at runtime.
 	trustedVotes := newTrustedVotes()
 	trustedVotes.trustChanged(cfg.Validators)
 
