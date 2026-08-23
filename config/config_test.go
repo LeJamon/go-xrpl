@@ -22,6 +22,7 @@ func completeTestConfig() string {
 database_path = "/tmp/test/db"
 network_id = "main"
 ledger_history = 256
+ledger_cache_size = 300
 fetch_depth = "full"
 node_size = "tiny"
 debug_logfile = "/tmp/test/debug.log"
@@ -124,6 +125,7 @@ func TestLoadConfig(t *testing.T) {
 	assert.Equal(t, int64(2048), config.NodeDB.CacheMB)
 	assert.Equal(t, 1000, config.NodeDB.OpenFiles)
 	assert.Equal(t, 32, config.NodeDB.FastLoadWorkers)
+	assert.Equal(t, 300, config.ResolvedLedgerCacheSize())
 	require.NotNil(t, config.FeeDefault)
 	assert.Equal(t, 13, *config.FeeDefault)
 
@@ -304,6 +306,7 @@ func TestLoadConfig_MinimalConfig(t *testing.T) {
 	require.NotNil(t, config)
 
 	assert.Equal(t, 256, config.ResolvedLedgerHistory())
+	assert.Equal(t, DefaultLedgerCacheSize, config.ResolvedLedgerCacheSize())
 	assert.Equal(t, defaultFetchDepth, config.ResolvedFetchDepth())
 	assert.Zero(t, config.MaxTransactions)
 	assert.Empty(t, config.NodeSize)
@@ -939,10 +942,12 @@ func TestValidatePortString_TrailingGarbage(t *testing.T) {
 }
 
 func TestConfigHelperMethods(t *testing.T) {
+	cacheSize := 300
 	config := &Config{
-		NetworkID:     NetworkID{Set: true, Name: "main"},
-		LedgerHistory: LedgerHistory{Set: true, Count: 1000},
-		FetchDepth:    FetchDepth{Set: true, Full: true},
+		NetworkID:       NetworkID{Set: true, Name: "main"},
+		LedgerHistory:   LedgerHistory{Set: true, Count: 1000},
+		LedgerCacheSize: &cacheSize,
+		FetchDepth:      FetchDepth{Set: true, Full: true},
 	}
 
 	networkID, err := config.ResolvedNetworkID()
@@ -950,6 +955,7 @@ func TestConfigHelperMethods(t *testing.T) {
 	assert.Equal(t, 0, networkID)
 
 	assert.Equal(t, 1000, config.ResolvedLedgerHistory())
+	assert.Equal(t, cacheSize, config.ResolvedLedgerCacheSize())
 	assert.Equal(t, math.MaxInt32, config.ResolvedFetchDepth()) // "full" maps to MaxInt32
 }
 
@@ -960,9 +966,40 @@ func TestConfigHelperMethods_Defaults(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "required but not set")
 
-	// Unset ledger_history / fetch_depth fall back to the rippled defaults.
 	assert.Equal(t, 256, config.ResolvedLedgerHistory())
+	assert.Equal(t, DefaultLedgerCacheSize, config.ResolvedLedgerCacheSize())
 	assert.Equal(t, defaultFetchDepth, config.ResolvedFetchDepth())
+}
+
+func TestLoadConfigLedgerCacheSize(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    int
+		wantErr string
+	}{
+		{name: "minimum", value: "1", want: 1},
+		{name: "default-sized", value: "256", want: 256},
+		{name: "maximum", value: "384", want: 384},
+		{name: "zero", value: "0", wantErr: "ledger_cache_size must be between 1 and 384"},
+		{name: "negative", value: "-1", wantErr: "ledger_cache_size must be between 1 and 384"},
+		{name: "above maximum", value: "385", wantErr: "ledger_cache_size must be between 1 and 384"},
+		{name: "string", value: `"256"`, wantErr: "ledger_cache_size must be an integer count"},
+		{name: "float", value: "256.5", wantErr: "ledger_cache_size must be an integer count"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := writeConfig(t, t.TempDir(), "xrpld.toml", "ledger_cache_size = "+test.value+"\n"+minimalTestConfig())
+			cfg, err := LoadConfig(Paths{Main: path})
+			if test.wantErr != "" {
+				require.ErrorContains(t, err, test.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, test.want, cfg.ResolvedLedgerCacheSize())
+		})
+	}
 }
 
 func TestPortConfigMethods(t *testing.T) {

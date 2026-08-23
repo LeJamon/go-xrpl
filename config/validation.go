@@ -228,6 +228,9 @@ func validateMiscSettings(config *Config) []error {
 	if err := ValidatePathSearchMax(config.PathSearchMax); err != nil {
 		errs = append(errs, err)
 	}
+	if err := ValidateLedgerCacheSize(config.LedgerCacheSize); err != nil {
+		errs = append(errs, err)
+	}
 	if err := ValidateWebsocketPingFrequency(config.WebsocketPingFrequency); err != nil {
 		errs = append(errs, err)
 	}

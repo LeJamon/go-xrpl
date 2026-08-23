@@ -9,6 +9,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
+	shamapbackend "github.com/LeJamon/go-xrpl/shamap/backend"
 )
 
 func acquiredLedgerFixture(t *testing.T, seq uint32, tag byte) (*header.LedgerHeader, *shamap.SHAMap, *shamap.SHAMap) {
@@ -24,6 +25,30 @@ func acquiredLedgerFixture(t *testing.T, seq uint32, tag byte) (*header.LedgerHe
 		ParentHash:  [32]byte{tag},
 		AccountHash: stateRoot,
 		TxHash:      txRoot,
+	}
+	h.Hash = header.CalculateHash(*h)
+	return h, stateMap, txMap
+}
+
+func durableAcquiredLedgerFixture(t *testing.T, svc *Service, seq uint32, tag byte) (*header.LedgerHeader, *shamap.SHAMap, *shamap.SHAMap) {
+	t.Helper()
+	stateMap := shamap.New(shamap.TypeState)
+	stateKey := [32]byte{tag, byte(seq), byte(seq >> 8), 0xAC}
+	require.NoError(t, stateMap.Put(stateKey, []byte("durable-acquired-state")))
+	stateRoot, err := stateMap.Hash()
+	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
+	txRoot, err := txMap.Hash()
+	require.NoError(t, err)
+	h := &header.LedgerHeader{
+		LedgerIndex:         seq,
+		ParentHash:          [32]byte{tag},
+		Drops:               svc.genesisLedger.TotalDrops(),
+		AccountHash:         stateRoot,
+		TxHash:              txRoot,
+		CloseTime:           time.Unix(1_700_000_000+int64(seq), 0).UTC(),
+		ParentCloseTime:     time.Unix(1_699_999_990+int64(seq), 0).UTC(),
+		CloseTimeResolution: 10,
 	}
 	h.Hash = header.CalculateHash(*h)
 	return h, stateMap, txMap
@@ -147,6 +172,36 @@ func TestStoredLedgerValidationAdvancesIndependentlyOfConsensusSwitch(t *testing
 
 	require.NoError(t, svc.SwitchToPreferredLedger(validated))
 	require.Equal(t, h.Hash, svc.GetClosedLedger().Hash())
+}
+
+func TestStoredLedgerPromotionLoadsAfterCacheEviction(t *testing.T) {
+	db := newTestNodeStore(t, 10_000)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	cfg := DefaultConfig()
+	cfg.LedgerCacheSize = 1
+	cfg.NodeStore = db
+	cfg.SHAMapFamily = shamapbackend.New(db)
+	svc, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	first, firstState, firstTx := durableAcquiredLedgerFixture(t, svc, svc.GetClosedLedgerIndex()+1, 0xC3)
+	second, secondState, secondTx := durableAcquiredLedgerFixture(t, svc, first.LedgerIndex+1, 0xC4)
+	require.NoError(t, svc.StoreLedgerWithState(t.Context(), first, firstState, firstTx))
+	require.NoError(t, svc.StoreLedgerWithState(t.Context(), second, secondState, secondTx))
+	svc.FlushPersists()
+
+	svc.historyComponent.mu.RLock()
+	_, firstCached := svc.persistedLedgers[first.Hash]
+	svc.historyComponent.mu.RUnlock()
+	require.False(t, firstCached)
+
+	svc.PromoteStoredValidatedLedgerAt(first.LedgerIndex, first.Hash, time.Time{})
+	validated := svc.GetValidatedLedger()
+	require.NotNil(t, validated)
+	require.Equal(t, first.Hash, validated.Hash())
+	require.True(t, validated.IsValidated())
 }
 
 func TestStoredLedgerValidationPublishesTransactionResultsAfterConsensusSwitch(t *testing.T) {

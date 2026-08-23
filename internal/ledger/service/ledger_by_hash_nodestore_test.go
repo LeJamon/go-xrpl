@@ -424,13 +424,15 @@ func TestService_GetLedgerByHashTreatsCorruptPersistedHeaderAsNotFound(t *testin
 }
 
 func TestService_PersistedLedgerHashCacheIsBounded(t *testing.T) {
+	const cacheSize uint32 = 32
 	svc := &Service{
+		config: Config{LedgerCacheSize: cacheSize},
 		historyComponent: historyComponent{
 			persistedLedgers: make(map[[32]byte]*ledger.Ledger),
 		},
 	}
 	var firstHash, lastHash [32]byte
-	for i := uint32(1); i <= persistedLedgerCacheSize+1; i++ {
+	for i := uint32(1); i <= cacheSize+1; i++ {
 		l := buildLedgerWithState(t, i)
 		if i == 1 {
 			firstHash = l.Hash()
@@ -439,8 +441,8 @@ func TestService_PersistedLedgerHashCacheIsBounded(t *testing.T) {
 		svc.cachePersistedLedgerLocked(l)
 	}
 
-	require.Len(t, svc.persistedLedgers, persistedLedgerCacheSize)
-	require.Len(t, svc.persistedLedgerFIFO, persistedLedgerCacheSize)
+	require.Len(t, svc.persistedLedgers, int(cacheSize))
+	require.Len(t, svc.persistedLedgerFIFO, int(cacheSize))
 	require.NotContains(t, svc.persistedLedgers, firstHash)
 	require.Contains(t, svc.persistedLedgers, lastHash)
 }

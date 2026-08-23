@@ -9,12 +9,6 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
-// caps in-memory ledgerHistory + tx-index to a window of recent validated
-// ledgers; older seqs fall through to the relational DB
-const historyWindow = 256
-
-const persistedLedgerCacheSize = historyWindow
-
 func (s *historyComponent) ledgerBySequence(seq uint32) *ledger.Ledger {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -223,13 +217,14 @@ func (s *Service) completeLedgerEvictionStatus(seq uint32) (tracked, durable boo
 	return tracked, durable
 }
 
-// evictOldHistoryLocked drops ledgerHistory + tx-index entries older than the
-// historyWindow. Caller holds Service.mu and historyComponent.mu.
+// evictOldHistoryLocked drops ledgerHistory + tx-index entries outside the
+// configured cache window. Caller holds Service.mu and historyComponent.mu.
 func (s *Service) evictOldHistoryLocked(latestValidatedSeq uint32) {
-	if latestValidatedSeq <= historyWindow {
+	window := s.ledgerCacheSize()
+	if latestValidatedSeq <= window {
 		return
 	}
-	cutoff := latestValidatedSeq - historyWindow
+	cutoff := latestValidatedSeq - window
 	for seq, l := range s.ledgerHistory {
 		if seq > cutoff {
 			continue
@@ -266,7 +261,7 @@ func (s *historyComponent) deleteHistoryLocked(seq uint32) {
 	}
 }
 
-func (s *historyComponent) cachePersistedLedgerLocked(l *ledger.Ledger) {
+func (s *Service) cachePersistedLedgerLocked(l *ledger.Ledger) {
 	hash := l.Hash()
 	if existing, ok := s.persistedLedgers[hash]; ok {
 		if existing.IsValidated() && !l.IsValidated() {
@@ -277,7 +272,7 @@ func (s *historyComponent) cachePersistedLedgerLocked(l *ledger.Ledger) {
 	}
 	s.persistedLedgers[hash] = l
 	s.persistedLedgerFIFO = append(s.persistedLedgerFIFO, hash)
-	if len(s.persistedLedgerFIFO) <= persistedLedgerCacheSize {
+	if len(s.persistedLedgerFIFO) <= int(s.ledgerCacheSize()) {
 		return
 	}
 	oldest := s.persistedLedgerFIFO[0]
@@ -310,6 +305,50 @@ func (s *Service) stashPendingValidationLocked(hash [32]byte, event *LedgerAccep
 			)
 		}
 		delete(s.pendingValidation, oldest)
+	}
+}
+
+func (s *Service) retainValidationCandidateLocked(l *ledger.Ledger) {
+	seq := l.Sequence()
+	if _, exists := s.validationCandidates[seq]; !exists {
+		s.validationCandidateOrder = append(s.validationCandidateOrder, seq)
+	}
+	s.validationCandidates[seq] = l
+	for len(s.validationCandidateOrder) > pendingValidationMaxLen {
+		oldest := s.validationCandidateOrder[0]
+		s.validationCandidateOrder = s.validationCandidateOrder[1:]
+		delete(s.validationCandidates, oldest)
+	}
+}
+
+func (s *Service) drainValidationCandidateLocked(seq uint32, hash [32]byte) {
+	l := s.validationCandidates[seq]
+	if l == nil || l.Hash() != hash {
+		return
+	}
+	s.dropValidationCandidateLocked(seq)
+}
+
+func (s *Service) dropValidationCandidateLocked(seq uint32) {
+	delete(s.validationCandidates, seq)
+	for i, candidateSeq := range s.validationCandidateOrder {
+		if candidateSeq == seq {
+			s.validationCandidateOrder = append(
+				s.validationCandidateOrder[:i],
+				s.validationCandidateOrder[i+1:]...,
+			)
+			break
+		}
+	}
+}
+
+func (s *Service) dropValidationCandidateRangeLocked(first, keepSeq uint32, keepHash [32]byte) {
+	for seq, candidate := range s.validationCandidates {
+		if seq < first || (seq == keepSeq && candidate.Hash() == keepHash) {
+			continue
+		}
+		s.dropValidationCandidateLocked(seq)
+		s.drainPendingValidationLocked(candidate.Hash())
 	}
 }
 

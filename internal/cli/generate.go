@@ -218,10 +218,11 @@ max_transactions = 250
 
 %s
 
-# Ripple Protocol (optional — defaults: trusted / all / 256 / "full")
+# Ripple Protocol (optional — defaults shown below)
 relay_proposals = "trusted"
 relay_validations = "all"
 ledger_history = 256
+ledger_cache_size = 256
 fetch_depth = "full"
 network_id = "%s"
 ledger_replay = 0
