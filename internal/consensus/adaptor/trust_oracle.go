@@ -399,7 +399,6 @@ func (a *Adaptor) GetCookie() uint64 {
 	return a.cookie
 }
 
-// GetServerVersion returns go-xrpl's encoded sfServerVersion value.
 func (a *Adaptor) GetServerVersion() uint64 {
 	return version.EncodedServerVersion()
 }
