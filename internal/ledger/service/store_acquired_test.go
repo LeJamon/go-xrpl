@@ -30,6 +30,30 @@ func acquiredLedgerFixture(t *testing.T, seq uint32, tag byte) (*header.LedgerHe
 	return h, stateMap, txMap
 }
 
+func durableAcquiredLedgerFixture(t *testing.T, svc *Service, seq uint32, tag byte) (*header.LedgerHeader, *shamap.SHAMap, *shamap.SHAMap) {
+	t.Helper()
+	stateMap := shamap.New(shamap.TypeState)
+	stateKey := [32]byte{tag, byte(seq), byte(seq >> 8), 0xAC}
+	require.NoError(t, stateMap.Put(stateKey, []byte("durable-acquired-state")))
+	stateRoot, err := stateMap.Hash()
+	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
+	txRoot, err := txMap.Hash()
+	require.NoError(t, err)
+	h := &header.LedgerHeader{
+		LedgerIndex:         seq,
+		ParentHash:          [32]byte{tag},
+		Drops:               svc.genesisLedger.TotalDrops(),
+		AccountHash:         stateRoot,
+		TxHash:              txRoot,
+		CloseTime:           time.Unix(1_700_000_000+int64(seq), 0).UTC(),
+		ParentCloseTime:     time.Unix(1_699_999_990+int64(seq), 0).UTC(),
+		CloseTimeResolution: 10,
+	}
+	h.Hash = header.CalculateHash(*h)
+	return h, stateMap, txMap
+}
+
 func TestStoreLedgerWithStateDoesNotMoveCanonicalFrontier(t *testing.T) {
 	svc, err := New(DefaultConfig())
 	require.NoError(t, err)
@@ -162,8 +186,8 @@ func TestStoredLedgerPromotionLoadsAfterCacheEviction(t *testing.T) {
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
 
-	first, firstState, firstTx := acquiredLedgerFixture(t, svc.GetClosedLedgerIndex()+1, 0xC3)
-	second, secondState, secondTx := acquiredLedgerFixture(t, first.LedgerIndex+1, 0xC4)
+	first, firstState, firstTx := durableAcquiredLedgerFixture(t, svc, svc.GetClosedLedgerIndex()+1, 0xC3)
+	second, secondState, secondTx := durableAcquiredLedgerFixture(t, svc, first.LedgerIndex+1, 0xC4)
 	require.NoError(t, svc.StoreLedgerWithState(t.Context(), first, firstState, firstTx))
 	require.NoError(t, svc.StoreLedgerWithState(t.Context(), second, secondState, secondTx))
 	svc.FlushPersists()
