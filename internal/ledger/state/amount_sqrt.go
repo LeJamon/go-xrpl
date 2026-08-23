@@ -45,7 +45,7 @@ func (a Amount) SqrtWithNumberContext(ctx NumberContext, mode RoundingMode) Amou
 		return NewXRPAmountFromInt(int64(result))
 	}
 
-	// When switchover is on, delegate to XRPLNumber.root2()
+	// When switchover is on, delegate to XRPLNumber.Root2Rounded.
 	if ctx.UniversalNumberEnabled() {
 		n := ctx.Number(a.iou.Mantissa(), a.iou.Exponent(), mode)
 		result := n.Root2Rounded(mode)

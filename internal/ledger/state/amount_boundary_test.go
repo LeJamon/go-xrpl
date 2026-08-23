@@ -44,14 +44,14 @@ func TestAmountCompareCheckedRejectsDifferentAssets(t *testing.T) {
 	})
 }
 
-func TestAmountMulRoundedRejectsNativeOverflow(t *testing.T) {
+func TestAmountMulWithNumberContextRejectsNativeOverflow(t *testing.T) {
 	ctx := NewNumberContext(MantissaScaleSmall, false)
 	assertPanicsWith(t, "Native value overflow", func() {
 		NewXRPAmountFromInt(math.MaxInt64).MulWithNumberContext(NewXRPAmountFromInt(2), ctx, false, RoundToNearest)
 	})
 }
 
-func TestAmountMulRoundedNativeProtocolBounds(t *testing.T) {
+func TestAmountMulWithNumberContextNativeProtocolBounds(t *testing.T) {
 	maxNative := NewXRPAmountFromInt(int64(MaxNativeDrops))
 	oneNative := NewXRPAmountFromInt(1)
 	oneIOU := NewIssuedAmountFromValue(MinMantissa, -15, "USD", "rIssuer")

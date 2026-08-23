@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMantissaScaleForRulesWithFix(t *testing.T) {
+func TestMantissaScaleForRulesWithFixes(t *testing.T) {
 	require.Equal(t, MantissaScaleLarge330, MantissaScaleForRulesWithFixes(false, false, false, false, false))
 	require.Equal(t, MantissaScaleSmall, MantissaScaleForRulesWithFixes(true, false, false, true, false))
 	require.Equal(t, MantissaScaleLargeLegacy, MantissaScaleForRulesWithFixes(true, true, false, false, false))
