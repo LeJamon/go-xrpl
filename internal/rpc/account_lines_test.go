@@ -17,82 +17,15 @@ import (
 
 // mockAccountLinesLedgerService implements LedgerService for account_lines testing
 type mockAccountLinesLedgerService struct {
-	accountLinesResult   *types.AccountLinesResult
-	accountLinesErr      error
-	accountInfo          *types.AccountInfo
-	accountInfoErr       error
-	currentLedgerIndex   uint32
-	closedLedgerIndex    uint32
-	validatedLedgerIndex uint32
-	standalone           bool
-	serverInfo           types.LedgerServerInfo
+	*mockLedgerService
+	accountLinesResult *types.AccountLinesResult
+	accountLinesErr    error
 }
 
 func newMockAccountLinesLedgerService() *mockAccountLinesLedgerService {
-	return &mockAccountLinesLedgerService{
-		currentLedgerIndex:   3,
-		closedLedgerIndex:    2,
-		validatedLedgerIndex: 2,
-		standalone:           true,
-		serverInfo: types.LedgerServerInfo{
-			Standalone:         true,
-			OpenLedgerSeq:      3,
-			ClosedLedgerSeq:    2,
-			ValidatedLedgerSeq: 2,
-			CompleteLedgers:    "1-2",
-		},
-	}
+	return &mockAccountLinesLedgerService{mockLedgerService: newMockLedgerService()}
 }
 
-func (m *mockAccountLinesLedgerService) GetCurrentLedgerIndex() uint32 { return m.currentLedgerIndex }
-func (m *mockAccountLinesLedgerService) GetClosedLedgerIndex() uint32  { return m.closedLedgerIndex }
-func (m *mockAccountLinesLedgerService) GetValidatedLedgerIndex() uint32 {
-	return m.validatedLedgerIndex
-}
-func (m *mockAccountLinesLedgerService) AcceptLedger(context.Context) (uint32, error) {
-	return m.closedLedgerIndex + 1, nil
-}
-func (m *mockAccountLinesLedgerService) IsStandalone() bool                    { return m.standalone }
-func (m *mockAccountLinesLedgerService) GetServerInfo() types.LedgerServerInfo { return m.serverInfo }
-func (m *mockAccountLinesLedgerService) GetGenesisAccount() (string, error) {
-	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil
-}
-func (m *mockAccountLinesLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
-	return accountQueryLedgerBySequence(seq, m.currentLedgerIndex, m.validatedLedgerIndex)
-}
-func (m *mockAccountLinesLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
-	return accountQueryLedgerByHash(hash, m.validatedLedgerIndex)
-}
-func (m *mockAccountLinesLedgerService) SubmitTransaction(txJSON []byte, txBlobHex string) (*types.SubmitResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
-	return 10, 10000000, 2000000
-}
-func (m *mockAccountLinesLedgerService) GetAccountInfo(_ context.Context, account string, ledgerIndex string) (*types.AccountInfo, error) {
-	if m.accountInfoErr != nil {
-		return nil, m.accountInfoErr
-	}
-	if m.accountInfo != nil {
-		return m.accountInfo, nil
-	}
-	return &types.AccountInfo{
-		Account:     account,
-		Balance:     "100000000",
-		Flags:       0,
-		OwnerCount:  0,
-		Sequence:    1,
-		LedgerIndex: m.validatedLedgerIndex,
-		LedgerHash:  "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652",
-		Validated:   true,
-	}, nil
-}
-func (m *mockAccountLinesLedgerService) GetTransaction(txHash [32]byte) (*types.TransactionInfo, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) StoreTransaction(txHash [32]byte, txData []byte) error {
-	return errors.New("not implemented")
-}
 func (m *mockAccountLinesLedgerService) GetAccountLines(_ context.Context, account string, ledgerIndex string, peer string, limit uint32, _ string) (*types.AccountLinesResult, error) {
 	if m.accountLinesErr != nil {
 		return nil, m.accountLinesErr
@@ -100,7 +33,6 @@ func (m *mockAccountLinesLedgerService) GetAccountLines(_ context.Context, accou
 	if m.accountLinesResult != nil {
 		return m.accountLinesResult, nil
 	}
-	// Return empty lines by default
 	return &types.AccountLinesResult{
 		Account:     account,
 		Lines:       []types.TrustLine{},
@@ -108,67 +40,6 @@ func (m *mockAccountLinesLedgerService) GetAccountLines(_ context.Context, accou
 		LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
 		Validated:   true,
 	}, nil
-}
-func (m *mockAccountLinesLedgerService) GetAccountOffers(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountOffersResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ string, _ bool) (*types.BookOffersResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) GetTransactionHistory(ctx context.Context, startIndex uint32) (*types.TxHistoryResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) GetLedgerRange(ctx context.Context, minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) GetLedgerEntry(_ context.Context, entryKey [32]byte, ledgerIndex string) (*types.LedgerEntryResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) GetLedgerData(_ context.Context, ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) GetAccountObjects(_ context.Context, account string, ledgerIndex string, objType string, limit uint32, _ string) (*types.AccountObjectsResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) GetAccountChannels(_ context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32, _ string) (*types.AccountChannelsResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) GetAccountCurrencies(_ context.Context, account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountNFTsResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) GetGatewayBalances(_ context.Context, account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) GetNoRippleCheck(_ context.Context, account string, role string, ledgerIndex string, limit uint32, transactions bool) (*types.NoRippleCheckResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) GetDepositAuthorized(_ context.Context, sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*types.DepositAuthorizedResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) GetNFTBuyOffers(_ context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) GetNFTSellOffers(_ context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) GetAutofillFee(txJSON []byte, unlimited bool, mult, div int) (uint64, error) {
-	return 0, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
-	return 0, errors.New("not implemented")
-}
-func (m *mockAccountLinesLedgerService) IsAmendmentBlocked() bool { return false }
-func (m *mockAccountLinesLedgerService) GetClosedLedgerView() (types.LedgerStateView, error) {
-	return nil, errors.New("not implemented in mock")
 }
 
 // newAccountLinesTestServices builds a *types.ServiceContainer wrapping the mock.
@@ -1434,43 +1305,6 @@ func TestAccountLinesHistoricLedgers(t *testing.T) {
 				"Expected %d trust lines in ledger %d", tc.expectedLines, tc.ledgerSequence)
 		})
 	}
-}
-
-// TestAccountLinesMarkerOwnership tests that markers from one account cannot be used with another
-// Based on rippled AccountLines_test.cpp testAccountLinesMarker (lines 395-478)
-func TestAccountLinesMarkerOwnership(t *testing.T) {
-	mock := newMockAccountLinesLedgerService()
-	services := newAccountLinesTestServices(mock)
-
-	method := &handlers.AccountLinesMethod{}
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion1,
-		Services:   services,
-	}
-
-	t.Run("Marker from alice's account cannot be used for becky's account", func(t *testing.T) {
-		// First get alice's lines with marker
-		aliceAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
-		beckyAccount := "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
-
-		// Setup mock to return error when using alice's marker with becky's account
-		mock.accountLinesErr = errors.New("invalid marker - not owned by account")
-
-		params := map[string]any{
-			"account": beckyAccount,
-			"marker":  "alice-marker-pointing-to-her-signer-list",
-		}
-		paramsJSON, err := json.Marshal(params)
-		require.NoError(t, err)
-
-		result, rpcErr := method.Handle(ctx, paramsJSON)
-
-		assert.Nil(t, result)
-		require.NotNil(t, rpcErr)
-		_ = aliceAccount // Just to silence unused variable warning
-	})
 }
 
 // TestAccountLinesDeletedEntry tests behavior when a trust line pointed to by marker is deleted

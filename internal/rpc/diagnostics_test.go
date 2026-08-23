@@ -98,14 +98,14 @@ func TestDispatchDiagnosticsTreatsRPCResultsAsFinished(t *testing.T) {
 	}
 
 	resolution := methodResolution{handler: diagnosticTestHandler{rpcErr: rpcerrors.RpcErrorInvalidParams("bad request")}, resolved: true}
-	_, _ = dispatchResolvedMethod(nil, graph, ctx, "normal_error", nil, resolution, rpcLog())
+	_, _ = dispatchResolvedMethod(graph, ctx, "normal_error", nil, resolution, rpcLog())
 	stats := diagnostics.Snapshot().Methods["normal_error"]
 	if stats.Finished != 1 || stats.Errored != 0 {
 		t.Fatalf("ordinary RPC error stats = %#v", stats)
 	}
 
 	resolution = methodResolution{handler: diagnosticTestHandler{panicValue: "boom"}, resolved: true}
-	_, _ = dispatchResolvedMethod(nil, graph, ctx, "panic", nil, resolution, rpcLog())
+	_, _ = dispatchResolvedMethod(graph, ctx, "panic", nil, resolution, rpcLog())
 	stats = diagnostics.Snapshot().Methods["panic"]
 	if stats.Finished != 0 || stats.Errored != 1 {
 		t.Fatalf("panic stats = %#v", stats)

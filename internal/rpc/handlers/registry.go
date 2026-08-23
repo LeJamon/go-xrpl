@@ -182,9 +182,7 @@ func (method registeredMethod) RequiredCondition() types.Condition {
 	return method.descriptor.Condition
 }
 
-// RegisterAll adds the immutable method catalogue to a builder. The caller
-// must build the registry before publishing it to a transport.
-func RegisterAll(registry *types.MethodRegistryBuilder) error {
+func registerAll(registry *types.MethodRegistryBuilder) error {
 	if registry == nil {
 		return fmt.Errorf("RPC method registry builder is nil")
 	}
@@ -206,7 +204,7 @@ func RegisterAll(registry *types.MethodRegistryBuilder) error {
 // catalogue.
 func BuildRegistry() (*types.MethodRegistry, error) {
 	builder := types.NewMethodRegistryBuilder()
-	if err := RegisterAll(builder); err != nil {
+	if err := registerAll(builder); err != nil {
 		return nil, err
 	}
 	return builder.Build()

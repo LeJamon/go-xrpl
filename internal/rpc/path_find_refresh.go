@@ -417,10 +417,6 @@ func (m *pathFindRefreshManager) wait(ctx context.Context) error {
 	}
 }
 
-func (m *pathFindRefreshManager) close() {
-	_ = m.wait(context.Background())
-}
-
 func (m *pathFindRefreshManager) signal(ch chan struct{}) {
 	select {
 	case ch <- struct{}{}:

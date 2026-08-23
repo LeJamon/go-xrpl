@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -12,6 +13,10 @@ var testRegistrations = struct {
 	sync.Mutex
 	byManager map[*subscription.Manager]map[*subscription.Connection]*subscription.Registration
 }{byManager: make(map[*subscription.Manager]map[*subscription.Connection]*subscription.Registration)}
+
+func testSubscribeAck(ws *WebSocketServer, ctx *types.RpcContext, request types.SubscriptionRequest) map[string]any {
+	return buildSubscribeAckSampled(ws.ledgerInfoProvider, ctx, request, sampleServerSubscriptionState(ctx, request))
+}
 
 func testRegistration(t testing.TB, manager *subscription.Manager, connection *subscription.Connection) *subscription.Registration {
 	t.Helper()

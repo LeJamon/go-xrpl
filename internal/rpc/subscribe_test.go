@@ -1553,9 +1553,8 @@ func TestWebSocketSnapshot_Single(t *testing.T) {
 		},
 	}
 	services := types.NewTestServiceGraph(types.NewServiceContainer(mock))
-	ws := &WebSocketServer{services: services}
 
-	offers, err := ws.snapshotBook(
+	offers, err := snapshotBook(
 		&types.RpcContext{Context: context.Background(), Services: services},
 		types.Amount{Currency: "XRP"},
 		types.Amount{Currency: "USD", Issuer: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
@@ -1580,12 +1579,11 @@ func TestWebSocketSnapshot_Both(t *testing.T) {
 		},
 	}
 	services := types.NewTestServiceGraph(types.NewServiceContainer(mock))
-	ws := &WebSocketServer{services: services}
 	ctx := &types.RpcContext{Context: context.Background(), Services: services}
 
-	bids, err := ws.snapshotBook(ctx, types.Amount{Currency: "XRP"}, types.Amount{Currency: "USD", Issuer: gateway}, "", "")
+	bids, err := snapshotBook(ctx, types.Amount{Currency: "XRP"}, types.Amount{Currency: "USD", Issuer: gateway}, "", "")
 	require.NoError(t, err)
-	asks, err := ws.snapshotBook(ctx, types.Amount{Currency: "USD", Issuer: gateway}, types.Amount{Currency: "XRP"}, "", "")
+	asks, err := snapshotBook(ctx, types.Amount{Currency: "USD", Issuer: gateway}, types.Amount{Currency: "XRP"}, "", "")
 	require.NoError(t, err)
 	require.Len(t, mock.calls, 2, "both:true snapshot must issue one GetBookOffers per side")
 	require.Equal(t, "rBid", bids[0].Account)

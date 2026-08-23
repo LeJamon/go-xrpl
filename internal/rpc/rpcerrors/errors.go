@@ -509,10 +509,6 @@ func RpcErrorTooBusy() *RpcError {
 		"The server is too busy to help you now.")
 }
 
-func RpcErrorSlowDown(message string) *RpcError {
-	return NewRpcError(RpcSLOW_DOWN, "slowDown", "slowDown", message)
-}
-
 // RpcErrorOverloaded is the per-IP resource-overload admission rejection
 // consulted before doCommand (rippled usage.disconnect(), ServerHandler.cpp:735).
 // It carries rpcSLOW_DOWN with rippled's canonical slowDown message so the WS /
@@ -520,7 +516,7 @@ func RpcErrorSlowDown(message string) *RpcError {
 // overloaded flag so the HTTP single (503 "Server is overloaded") and batch
 // (make_json_error(server_overloaded, ...)) writers can special-case it.
 func RpcErrorOverloaded() *RpcError {
-	e := RpcErrorSlowDown("You are placing too much load on the server.")
+	e := NewRpcError(RpcSLOW_DOWN, "slowDown", "slowDown", "You are placing too much load on the server.")
 	e.overloaded = true
 	return e
 }

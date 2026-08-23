@@ -63,7 +63,7 @@ func (ws *WebSocketServer) executeSubscribe(wsConn *websocketConnection, ctx *ty
 		return nil, rpcErr
 	}
 
-	result := ws.buildSubscribeAckSampled(ctx, request, serverState)
+	result := buildSubscribeAckSampled(ws.ledgerInfoProvider, ctx, request, serverState)
 	if historyWarning != "" {
 		result["warning"] = historyWarning
 	}
@@ -199,7 +199,7 @@ func (ws *WebSocketServer) executeUnsubscribe(wsConn *websocketConnection, ctx *
 	return map[string]any{}, nil
 }
 
-// buildSubscribeAck assembles the subscribe response payload shared by the
+// buildSubscribeAckSampled assembles the subscribe response payload shared by the
 // WebSocket and url (RPCSub) subscribe paths: current ledger info when the
 // ledger stream is among the requested streams, and a synthetic book-offers
 // snapshot for any `snapshot:true` book.
@@ -218,14 +218,6 @@ func sampleServerSubscriptionState(ctx *types.RpcContext, request types.Subscrip
 		return nil
 	}
 	return handlers.ServerSubscriptionState(ctx.Services, ctx.Role.IsAdmin())
-}
-
-func (ws *WebSocketServer) buildSubscribeAck(ctx *types.RpcContext, request types.SubscriptionRequest) map[string]any {
-	return ws.buildSubscribeAckSampled(ctx, request, sampleServerSubscriptionState(ctx, request))
-}
-
-func (ws *WebSocketServer) buildSubscribeAckSampled(ctx *types.RpcContext, request types.SubscriptionRequest, serverState map[string]any) map[string]any {
-	return buildSubscribeAckSampled(ws.ledgerInfoProvider, ctx, request, serverState)
 }
 
 func buildSubscribeAckSampled(ledgerInfoProvider types.LedgerInfoProvider, ctx *types.RpcContext, request types.SubscriptionRequest, serverState map[string]any) map[string]any {
@@ -292,10 +284,6 @@ func buildSubscribeAckSampled(ledgerInfoProvider types.LedgerInfoProvider, ctx *
 // subscribe ack. Errors are squashed — a snapshot failure mustn't
 // reject the entire subscribe (rippled Subscribe.cpp:339-394 ignores
 // the snapshot block on lookup failure too).
-func (ws *WebSocketServer) snapshotBook(ctx *types.RpcContext, takerGets, takerPays types.Amount, taker, domain string) ([]types.BookOffer, error) {
-	return snapshotBook(ctx, takerGets, takerPays, taker, domain)
-}
-
 func snapshotBook(ctx *types.RpcContext, takerGets, takerPays types.Amount, taker, domain string) ([]types.BookOffer, error) {
 	if ctx == nil || ctx.Services == nil || ctx.Services.Ledger() == nil {
 		return nil, nil

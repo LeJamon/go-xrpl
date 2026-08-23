@@ -18,15 +18,9 @@ import (
 
 // mockDepositAuthorizedLedgerService implements LedgerService for deposit_authorized testing
 type mockDepositAuthorizedLedgerService struct {
+	*mockLedgerService
 	depositAuthorizedResult *types.DepositAuthorizedResult
 	depositAuthorizedErr    error
-	accountInfo             *types.AccountInfo
-	accountInfoErr          error
-	currentLedgerIndex      uint32
-	closedLedgerIndex       uint32
-	validatedLedgerIndex    uint32
-	standalone              bool
-	serverInfo              types.LedgerServerInfo
 }
 
 type depositAuthorizedLedgerReader struct {
@@ -53,40 +47,9 @@ func (r *depositAuthorizedLedgerReader) ForEachTransaction(func([32]byte, []byte
 }
 
 func newMockDepositAuthorizedLedgerService() *mockDepositAuthorizedLedgerService {
-	return &mockDepositAuthorizedLedgerService{
-		currentLedgerIndex:   3,
-		closedLedgerIndex:    2,
-		validatedLedgerIndex: 2,
-		standalone:           true,
-		serverInfo: types.LedgerServerInfo{
-			Standalone:         true,
-			OpenLedgerSeq:      3,
-			ClosedLedgerSeq:    2,
-			ValidatedLedgerSeq: 2,
-			CompleteLedgers:    "1-2",
-		},
-	}
+	return &mockDepositAuthorizedLedgerService{mockLedgerService: newMockLedgerService()}
 }
 
-func (m *mockDepositAuthorizedLedgerService) GetCurrentLedgerIndex() uint32 {
-	return m.currentLedgerIndex
-}
-func (m *mockDepositAuthorizedLedgerService) GetClosedLedgerIndex() uint32 {
-	return m.closedLedgerIndex
-}
-func (m *mockDepositAuthorizedLedgerService) GetValidatedLedgerIndex() uint32 {
-	return m.validatedLedgerIndex
-}
-func (m *mockDepositAuthorizedLedgerService) AcceptLedger(context.Context) (uint32, error) {
-	return m.closedLedgerIndex + 1, nil
-}
-func (m *mockDepositAuthorizedLedgerService) IsStandalone() bool { return m.standalone }
-func (m *mockDepositAuthorizedLedgerService) GetServerInfo() types.LedgerServerInfo {
-	return m.serverInfo
-}
-func (m *mockDepositAuthorizedLedgerService) GetGenesisAccount() (string, error) {
-	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil
-}
 func (m *mockDepositAuthorizedLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
 	if seq == m.currentLedgerIndex {
 		return &depositAuthorizedLedgerReader{seq: seq}, nil
@@ -101,6 +64,7 @@ func (m *mockDepositAuthorizedLedgerService) GetLedgerBySequence(seq uint32) (ty
 	}
 	return nil, errors.New("ledger not found")
 }
+
 func (m *mockDepositAuthorizedLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	ledger, err := m.GetLedgerBySequence(m.validatedLedgerIndex)
 	if err != nil || ledger.Hash() != hash {
@@ -108,78 +72,7 @@ func (m *mockDepositAuthorizedLedgerService) GetLedgerByHash(hash [32]byte) (typ
 	}
 	return ledger, nil
 }
-func (m *mockDepositAuthorizedLedgerService) SubmitTransaction(txJSON []byte, txBlobHex string) (*types.SubmitResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64) {
-	return 10, 10000000, 2000000
-}
-func (m *mockDepositAuthorizedLedgerService) GetAccountInfo(_ context.Context, account string, ledgerIndex string) (*types.AccountInfo, error) {
-	if m.accountInfoErr != nil {
-		return nil, m.accountInfoErr
-	}
-	if m.accountInfo != nil {
-		return m.accountInfo, nil
-	}
-	return &types.AccountInfo{
-		Account:     account,
-		Balance:     "100000000",
-		Flags:       0,
-		OwnerCount:  0,
-		Sequence:    1,
-		LedgerIndex: m.validatedLedgerIndex,
-		LedgerHash:  "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652",
-		Validated:   true,
-	}, nil
-}
-func (m *mockDepositAuthorizedLedgerService) GetTransaction(txHash [32]byte) (*types.TransactionInfo, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) StoreTransaction(txHash [32]byte, txData []byte) error {
-	return errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) GetAccountLines(_ context.Context, account string, ledgerIndex string, peer string, limit uint32, _ string) (*types.AccountLinesResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) GetAccountOffers(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountOffersResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ string, _ bool) (*types.BookOffersResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) GetTransactionHistory(ctx context.Context, startIndex uint32) (*types.TxHistoryResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) GetLedgerRange(ctx context.Context, minSeq, maxSeq uint32) (*types.LedgerRangeResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) GetLedgerEntry(_ context.Context, entryKey [32]byte, ledgerIndex string) (*types.LedgerEntryResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) GetLedgerData(_ context.Context, ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) GetAccountObjects(_ context.Context, account string, ledgerIndex string, objType string, limit uint32, _ string) (*types.AccountObjectsResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) GetAccountChannels(_ context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32, _ string) (*types.AccountChannelsResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) GetAccountCurrencies(_ context.Context, account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountNFTsResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) GetGatewayBalances(_ context.Context, account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) GetNoRippleCheck(_ context.Context, account string, role string, ledgerIndex string, limit uint32, transactions bool) (*types.NoRippleCheckResult, error) {
-	return nil, errors.New("not implemented")
-}
+
 func (m *mockDepositAuthorizedLedgerService) GetDepositAuthorized(_ context.Context, sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*types.DepositAuthorizedResult, error) {
 	if m.depositAuthorizedErr != nil {
 		return nil, m.depositAuthorizedErr
@@ -187,7 +80,6 @@ func (m *mockDepositAuthorizedLedgerService) GetDepositAuthorized(_ context.Cont
 	if m.depositAuthorizedResult != nil {
 		return m.depositAuthorizedResult, nil
 	}
-	// Return authorized by default
 	return &types.DepositAuthorizedResult{
 		SourceAccount:      sourceAccount,
 		DestinationAccount: destinationAccount,
@@ -196,25 +88,6 @@ func (m *mockDepositAuthorizedLedgerService) GetDepositAuthorized(_ context.Cont
 		LedgerHash:         [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
 		Validated:          true,
 	}, nil
-}
-func (m *mockDepositAuthorizedLedgerService) GetNFTBuyOffers(_ context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) GetNFTSellOffers(_ context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
-	return nil, errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) GetAutofillFee(txJSON []byte, unlimited bool, mult, div int) (uint64, error) {
-	return 0, errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
-	return 0, errors.New("not implemented")
-}
-func (m *mockDepositAuthorizedLedgerService) IsAmendmentBlocked() bool { return false }
-func (m *mockDepositAuthorizedLedgerService) GetClosedLedgerView() (types.LedgerStateView, error) {
-	return nil, errors.New("not implemented in mock")
 }
 
 // newDepositAuthorizedTestServices builds a per-test ServiceContainer wrapping mock.

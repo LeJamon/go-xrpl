@@ -50,7 +50,7 @@ func TestRPCCommandSpecsAreRegisteredHandlers(t *testing.T) {
 		}
 		seen[method] = struct{}{}
 		if _, registered := registry.Get(method); !registered {
-			t.Errorf("rpc command %q has no handler registered by handlers.RegisterAll", method)
+			t.Errorf("rpc command %q has no handler registered by handlers.BuildRegistry", method)
 		}
 		if spec.command().Args == nil {
 			t.Errorf("rpc command %q has no positional argument validator", method)

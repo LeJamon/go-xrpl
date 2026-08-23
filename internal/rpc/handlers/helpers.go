@@ -759,11 +759,6 @@ func fillResolvedLedgerFields(response map[string]any, reader types.LedgerReader
 	response["validated"] = validated
 }
 
-// FormatHash formats arbitrary bytes as uppercase hex string.
-func FormatHash(b []byte) string {
-	return strings.ToUpper(hex.EncodeToString(b))
-}
-
 // limitRange defines the min, default, and max values for a paginated limit parameter.
 // Matches rippled's Tuning::LimitRange struct.
 type limitRange struct {

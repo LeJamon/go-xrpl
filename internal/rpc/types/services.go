@@ -1705,13 +1705,6 @@ type GatewayBalancesResult struct {
 	Validated      bool                         `json:"validated"`
 }
 
-// NoRippleProblem describes a trust line with incorrect NoRipple settings
-type NoRippleProblem struct {
-	Message  string `json:"message"`
-	Currency string `json:"currency"`
-	Peer     string `json:"peer"`
-}
-
 // SuggestedTransaction represents a suggested transaction to fix NoRipple issues
 type SuggestedTransaction struct {
 	TransactionType string         `json:"TransactionType"`

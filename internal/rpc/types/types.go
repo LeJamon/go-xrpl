@@ -322,7 +322,6 @@ const (
 	SubPeerStatus           SubscriptionType = "peer_status"
 	SubServer               SubscriptionType = "server"
 	SubConsensus            SubscriptionType = "consensus"
-	SubPath                 SubscriptionType = "path_find"
 )
 
 // Subscription request structure

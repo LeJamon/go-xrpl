@@ -35,7 +35,7 @@ func TestServerSubscriptionInitialAcknowledgement(t *testing.T) {
 	ws := NewWebSocketServer(WebSocketServerOptions{Services: services})
 	request := types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubServer}}
 
-	guest := ws.buildSubscribeAck(&types.RpcContext{Services: services}, request)
+	guest := testSubscribeAck(ws, &types.RpcContext{Services: services}, request)
 	require.Regexp(t, regexp.MustCompile(`^[0-9A-F]{64}$`), guest["random"])
 	require.Equal(t, "full", guest["server_status"])
 	require.IsType(t, uint32(0), guest["load_base"])
@@ -44,13 +44,13 @@ func TestServerSubscriptionInitialAcknowledgement(t *testing.T) {
 	require.Equal(t, testNodePublicKey(), guest["pubkey_node"])
 	require.NotContains(t, guest, "stand_alone")
 
-	admin := ws.buildSubscribeAck(&types.RpcContext{Services: services, Role: types.RoleAdmin}, request)
+	admin := testSubscribeAck(ws, &types.RpcContext{Services: services, Role: types.RoleAdmin}, request)
 	require.Equal(t, "validating", admin["server_status"])
 	require.NotEmpty(t, admin["hostid"])
 	require.NotEqual(t, guest["random"], admin["random"])
 
 	ledger.standalone = true
-	standalone := ws.buildSubscribeAck(&types.RpcContext{Services: services}, request)
+	standalone := testSubscribeAck(ws, &types.RpcContext{Services: services}, request)
 	require.Equal(t, true, standalone["stand_alone"])
 	require.Equal(t, "full", standalone["server_status"])
 }
@@ -66,7 +66,7 @@ func TestServerSubscriptionInitialLoadExcludesTxQEscalation(t *testing.T) {
 	})
 	ws := NewWebSocketServer(WebSocketServerOptions{Services: services})
 	request := types.SubscriptionRequest{Streams: []types.SubscriptionType{types.SubServer}}
-	ack := ws.buildSubscribeAck(&types.RpcContext{Services: services}, request)
+	ack := testSubscribeAck(ws, &types.RpcContext{Services: services}, request)
 	require.Equal(t, uint32(256), ack["load_factor"])
 	require.Equal(t, uint64(1024), handlers.ComputeServerLoad(services).LoadFactor)
 }
@@ -120,7 +120,7 @@ func TestMPTBookSnapshotPreservesIssuanceID(t *testing.T) {
 	const mptID = "00000001C4F149B6F2A4B6A4C4A01C1570C4A040A3D9B221"
 	var request types.SubscriptionRequest
 	require.NoError(t, json.Unmarshal([]byte(`{"books":[{"taker_pays":{"currency":"XRP"},"taker_gets":{"mpt_issuance_id":"`+mptID+`"},"snapshot":true}]}`), &request))
-	ws.buildSubscribeAck(&types.RpcContext{Services: services}, request)
+	testSubscribeAck(ws, &types.RpcContext{Services: services}, request)
 	require.Equal(t, mptID, ledger.gets.MPTIssuanceID)
 	require.Equal(t, "XRP", ledger.pays.Currency)
 }
