@@ -207,7 +207,10 @@ type heartbeatStageTimer struct {
 
 func (e *Engine) heartbeatContextLocked() heartbeatContext {
 	seq := uint32(0)
-	if e.state != nil {
+	if e.phase == consensus.PhaseAccepted && e.prevLedger != nil {
+		// Accepted retains the completed round state until the next round starts.
+		seq = e.prevLedger.Seq() + 1
+	} else if e.state != nil {
 		seq = e.state.Round.Seq
 	} else if e.prevLedger != nil {
 		seq = e.prevLedger.Seq() + 1

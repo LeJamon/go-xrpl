@@ -68,8 +68,9 @@ func TestEngineHeartbeatSlowStageDiagnostics(t *testing.T) {
 		started := make(chan struct{})
 		var startedOnce sync.Once
 		engine.heartbeatNow = func() time.Time {
+			now := clock.Now()
 			startedOnce.Do(func() { close(started) })
-			return clock.Now()
+			return now
 		}
 
 		out := captureHeartbeatDiagnosticLogs(func() {
@@ -224,6 +225,18 @@ func TestRecordSlowHeartbeatStageThreshold(t *testing.T) {
 	stages = recordSlowHeartbeatStage(nil, "phase-open", slowHeartbeatThreshold+time.Nanosecond, context)
 	if len(stages) != 1 || stages[0].name != "phase-open" || stages[0].context != context {
 		t.Fatalf("slow stage was not retained with its context: %+v", stages)
+	}
+}
+
+func TestHeartbeatContextAcceptedUsesNextRound(t *testing.T) {
+	adaptor := newMockAdaptor()
+	engine := NewEngine(adaptor, DefaultConfig())
+	engine.prevLedger = adaptor.lastLCL
+	engine.state = &roundState{Round: consensus.RoundID{Seq: adaptor.lastLCL.Seq()}}
+
+	context := engine.heartbeatContextLocked()
+	if want := adaptor.lastLCL.Seq() + 1; context.seq != want {
+		t.Fatalf("accepted heartbeat sequence = %d, want next round %d", context.seq, want)
 	}
 }
 
