@@ -227,16 +227,17 @@ func (e *Engine) ProcessVerifiedValidation(
 		e.proposalTracker.SetValidation(validation)
 	}
 
-	e.eventBus.Publish(&consensus.ValidationReceivedEvent{
+	event := &consensus.ValidationReceivedEvent{
 		Validation: validation,
 		Trusted:    trusted,
 		Timestamp:  e.adaptor.Now(),
-	})
+	}
 
 	e.mu.Unlock()
 	if deferFinality {
 		tracker.endFinalityDeferral()
 	}
+	e.eventBus.Publish(event)
 	return disposition, nil
 }
 
@@ -384,7 +385,13 @@ func (e *Engine) seedDisputeVotes(txID consensus.TxID) {
 // OnLedger handles receiving a ledger we were missing.
 func (e *Engine) OnLedger(id consensus.LedgerID, ledger []byte) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.deferPostUnlock++
+	defer func() {
+		e.deferPostUnlock--
+		pending := e.takePendingPostUnlockLocked()
+		e.mu.Unlock()
+		runPostUnlock(pending)
+	}()
 
 	recovering := e.mode == consensus.ModeWrongLedger
 	exactRecoveryTarget := recovering && id == e.wrongLedgerID
@@ -425,7 +432,13 @@ func (e *Engine) OnLedger(id consensus.LedgerID, ledger []byte) error {
 // selected by consensus recovery, validation, or the current network view.
 func (e *Engine) TrySwitchToLedger(id consensus.LedgerID) (consensus.LedgerSwitchResult, error) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.deferPostUnlock++
+	defer func() {
+		e.deferPostUnlock--
+		pending := e.takePendingPostUnlockLocked()
+		e.mu.Unlock()
+		runPostUnlock(pending)
+	}()
 
 	exactRecoveryTarget := e.mode == consensus.ModeWrongLedger && id == e.wrongLedgerID
 	networkPreferred := e.prevLedger != nil && e.getNetworkLedger() == id

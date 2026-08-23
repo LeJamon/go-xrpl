@@ -9,6 +9,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type blockingTestSubscriber struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingTestSubscriber) OnEvent(event consensus.Event) {
+	s.once.Do(func() {
+		close(s.entered)
+		<-s.release
+	})
+}
+
 func TestProcessVerifiedValidationDrainsFinalityOutsideEngineLock(t *testing.T) {
 	adaptor := newMockAdaptor()
 	trusted := consensus.NodeID{0x45}
@@ -75,6 +88,128 @@ func TestProcessVerifiedValidationDrainsFinalityOutsideEngineLock(t *testing.T) 
 
 	releaseOnce.Do(func() { close(release) })
 	require.NoError(t, <-validationDone)
+}
+
+func TestProcessVerifiedValidationPublishesAfterFinality(t *testing.T) {
+	adaptor := newMockAdaptor()
+	trusted := consensus.NodeID{0x46}
+	adaptor.quorum = 1
+	adaptor.setTrusted([]consensus.NodeID{trusted})
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	adaptor.onFullyValidated = func(consensus.LedgerID, uint32) {
+		close(entered)
+		<-release
+	}
+	engine := NewEngine(adaptor, DefaultConfig())
+	engine.eventBus = consensus.NewEventBus(1)
+	subscriberRelease := make(chan struct{})
+	var subscriberReleaseOnce sync.Once
+	subscriber := &blockingTestSubscriber{
+		entered: make(chan struct{}),
+		release: subscriberRelease,
+	}
+	engine.Subscribe(subscriber)
+	require.NoError(t, engine.Start(t.Context()))
+	t.Cleanup(func() { require.NoError(t, engine.Stop()) })
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	t.Cleanup(func() { subscriberReleaseOnce.Do(func() { close(subscriberRelease) }) })
+	require.True(t, engine.eventBus.Publish(&consensus.PhaseChangedEvent{}))
+	select {
+	case <-subscriber.entered:
+	case <-time.After(time.Second):
+		t.Fatal("event subscriber did not start")
+	}
+	require.True(t, engine.eventBus.Publish(&consensus.PhaseChangedEvent{}))
+	require.Zero(t, engine.eventBus.DroppedEvents())
+	now := adaptor.Now()
+
+	validationDone := make(chan error, 1)
+	go func() {
+		_, err := engine.ProcessVerifiedValidation(&consensus.Validation{
+			LedgerSeq: 102,
+			LedgerID:  consensus.LedgerID{0xA2},
+			NodeID:    trusted,
+			SignTime:  now,
+			SeenTime:  now,
+			Full:      true,
+		}, consensus.ValidationOrigin{PeerID: 7})
+		validationDone <- err
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("fully validated callback did not start")
+	}
+	require.Zero(t, engine.eventBus.DroppedEvents(),
+		"validation event was published before finality completed")
+
+	releaseOnce.Do(func() { close(release) })
+	require.NoError(t, <-validationDone)
+	require.Equal(t, uint64(1), engine.eventBus.DroppedEvents(),
+		"validation event was not published after finality completed")
+}
+
+func TestStartRoundTrustRefreshDrainsFinalityOutsideEngineLock(t *testing.T) {
+	adaptor := newMockAdaptor()
+	listed := consensus.NodeID{0x47}
+	adaptor.setListed([]consensus.NodeID{listed})
+	engine := startedEngine(t, adaptor)
+	now := adaptor.Now()
+	_, err := engine.ProcessVerifiedValidation(&consensus.Validation{
+		LedgerSeq: 103,
+		LedgerID:  consensus.LedgerID{0xA3},
+		NodeID:    listed,
+		SignTime:  now,
+		SeenTime:  now,
+		Full:      true,
+	}, consensus.ValidationOrigin{PeerID: 8})
+	require.NoError(t, err)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	adaptor.onFullyValidated = func(consensus.LedgerID, uint32) {
+		close(entered)
+		<-release
+	}
+	adaptor.onRefreshUNL = func() {
+		adaptor.mu.Lock()
+		adaptor.trusted = map[consensus.NodeID]bool{listed: true}
+		adaptor.quorum = 1
+		adaptor.mu.Unlock()
+		adaptor.notifyTrustChanged()
+	}
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+
+	roundDone := make(chan error, 1)
+	go func() {
+		roundDone <- engine.StartRound(consensus.RoundID{
+			Seq:        101,
+			ParentHash: consensus.LedgerID{1},
+		}, true)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("trust refresh did not promote stored validation")
+	}
+
+	tickDone := make(chan struct{})
+	go func() {
+		engine.timerEntry()
+		close(tickDone)
+	}()
+	select {
+	case <-tickDone:
+	case <-time.After(time.Second):
+		t.Fatal("consensus tick waited for trust-refresh finality callback")
+	}
+
+	releaseOnce.Do(func() { close(release) })
+	require.NoError(t, <-roundDone)
 }
 
 func TestSendValidationDrainsFinalityOutsideEngineLock(t *testing.T) {

@@ -328,6 +328,18 @@ func (e *Engine) refreshValidationConfigDeferredLocked() int {
 	return quorum
 }
 
+// refreshUNLStateDeferredLocked requires e.mu and an active post-unlock scope.
+func (e *Engine) refreshUNLStateDeferredLocked() {
+	tracker := e.validationTracker
+	if tracker == nil {
+		e.adaptor.RefreshUNLState()
+		return
+	}
+	tracker.beginFinalityDeferral()
+	e.adaptor.RefreshUNLState()
+	e.pendingPostUnlock = append(e.pendingPostUnlock, tracker.endFinalityDeferral)
+}
+
 var _ consensus.EngineTerminal = (*Engine)(nil)
 
 // ValidationArchive is the archive API subset the engine consumes,
@@ -905,7 +917,7 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	// Kick off a trust-view refresh so the bow-out reacts to an expiring list
 	// within a round or two rather than only on the aggregator's 30s tick
 	// (rippled recomputes via updateTrusted at every ledger close).
-	e.adaptor.RefreshUNLState()
+	e.refreshUNLStateDeferredLocked()
 	// RefreshUNLState may synchronously publish a trust-change callback in
 	// tests and lightweight adaptors. Apply its queued removals before the
 	// round resets or replays any buffered proposal state.
