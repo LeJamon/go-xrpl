@@ -966,7 +966,6 @@ func TestConfigHelperMethods_Defaults(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "required but not set")
 
-	// Unset history, cache, and fetch settings fall back to their defaults.
 	assert.Equal(t, 256, config.ResolvedLedgerHistory())
 	assert.Equal(t, DefaultLedgerCacheSize, config.ResolvedLedgerCacheSize())
 	assert.Equal(t, defaultFetchDepth, config.ResolvedFetchDepth())

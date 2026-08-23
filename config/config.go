@@ -149,7 +149,6 @@ func (c *Config) ResolvedLedgerHistory() int {
 	return c.LedgerHistory.Value()
 }
 
-// ResolvedLedgerCacheSize returns the configured in-memory ledger cache size.
 func (c *Config) ResolvedLedgerCacheSize() int {
 	if c.LedgerCacheSize == nil {
 		return DefaultLedgerCacheSize

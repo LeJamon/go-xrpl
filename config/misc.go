@@ -79,7 +79,6 @@ func ValidatePathSearchMax(pathSearchMax *int) error {
 	return validateNonNegative("path_search_max", *pathSearchMax)
 }
 
-// ValidateLedgerCacheSize validates the in-memory ledger cache limit.
 func ValidateLedgerCacheSize(size *int) error {
 	if size == nil {
 		return nil
