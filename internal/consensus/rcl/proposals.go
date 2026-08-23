@@ -43,14 +43,14 @@ func newDisputeTracker() *disputeTracker {
 	}
 }
 
-// CreateDispute registers a new disputed transaction. If the dispute
+// createDispute registers a new disputed transaction. If the dispute
 // already exists, the existing entry is returned unchanged. OurVote
 // is seeded from the caller (it should be set to whether the tx is
 // in our current proposed tx set).
 //
 // Matches the construction arm of rippled's createDisputes
 // (Consensus.h:1867-1884).
-func (dt *disputeTracker) CreateDispute(txID consensus.TxID, tx []byte, ourVote bool) *consensus.DisputedTx {
+func (dt *disputeTracker) createDispute(txID consensus.TxID, tx []byte, ourVote bool) *consensus.DisputedTx {
 	if existing, exists := dt.disputes[txID]; exists {
 		return existing
 	}
@@ -66,7 +66,7 @@ func (dt *disputeTracker) CreateDispute(txID consensus.TxID, tx []byte, ourVote 
 	return dispute
 }
 
-// SetVote records a peer's yes/no vote on a disputed transaction.
+// setVote records a peer's yes/no vote on a disputed transaction.
 // Returns true iff the vote was newly inserted OR changed from a
 // previous value; returns false if the peer already held this exact
 // vote (no count adjustment needed).
@@ -74,7 +74,7 @@ func (dt *disputeTracker) CreateDispute(txID consensus.TxID, tx []byte, ourVote 
 // The returned bool matches rippled's DisputedTx::setVote contract:
 // callers use it to reset peerUnchangedCounter_ (Consensus.h:1879,
 // 1906) to detect rounds where some peer is still actively updating.
-func (dt *disputeTracker) SetVote(txID consensus.TxID, peerID consensus.NodeID, yes bool) bool {
+func (dt *disputeTracker) setVote(txID consensus.TxID, peerID consensus.NodeID, yes bool) bool {
 	dispute, exists := dt.disputes[txID]
 	if !exists {
 		return false
@@ -111,14 +111,14 @@ func updateVoteCount(dispute *consensus.DisputedTx, peerID consensus.NodeID, yes
 	}
 }
 
-// UnVote removes a peer's contribution from every active dispute.
+// unVote removes a peer's contribution from every active dispute.
 // Called when the peer bows out of the round (isBowOut), when its
 // last-known proposal ages past proposeFRESHNESS, or when it is
 // otherwise forcibly removed from currPeerPositions_.
 //
 // Matches rippled's bow-out loop at Consensus.h:807-811 and the
 // stale-proposal loop at Consensus.h:1517-1520.
-func (dt *disputeTracker) UnVote(peerID consensus.NodeID) {
+func (dt *disputeTracker) unVote(peerID consensus.NodeID) {
 	for _, dispute := range dt.disputes {
 		vote, had := dispute.Votes[peerID]
 		if !had {
@@ -133,12 +133,12 @@ func (dt *disputeTracker) UnVote(peerID consensus.NodeID) {
 	}
 }
 
-// UpdateDisputes records a peer's position across every active
+// updateDisputes records a peer's position across every active
 // dispute: for each dispute, the peer votes YES iff the disputed tx
 // appears in peerTxSet, else NO. Returns true iff any vote changed.
 //
 // Matches rippled's updateDisputes (Consensus.h:1892-1908).
-func (dt *disputeTracker) UpdateDisputes(peerID consensus.NodeID, peerTxSet consensus.TxSet) bool {
+func (dt *disputeTracker) updateDisputes(peerID consensus.NodeID, peerTxSet consensus.TxSet) bool {
 	if peerTxSet == nil {
 		return false
 	}
@@ -151,7 +151,7 @@ func (dt *disputeTracker) UpdateDisputes(peerID consensus.NodeID, peerTxSet cons
 	return changed
 }
 
-// UpdateOurVote re-evaluates our vote on every dispute given the
+// updateOurVote re-evaluates our vote on every dispute given the
 // current convergePercent and avalanche thresholds, mirroring
 // rippled's DisputedTx::updateVote (DisputedTx.h:278-338) applied
 // across all disputes as in updateOurPositions (Consensus.h:1536-1564).
@@ -168,7 +168,7 @@ func (dt *disputeTracker) UpdateDisputes(peerID consensus.NodeID, peerTxSet cons
 //
 // Returns the list of TxIDs whose OurVote flipped this call. The
 // engine uses that list to rebuild the proposed tx set.
-func (dt *disputeTracker) UpdateOurVote(percentTime int, proposing bool, parms consensus.ConsensusParms) []consensus.TxID {
+func (dt *disputeTracker) updateOurVote(percentTime int, proposing bool, parms consensus.ConsensusParms) []consensus.TxID {
 	var changed []consensus.TxID
 	for txID, dispute := range dt.disputes {
 		if dispute.OurVote && dispute.Nays == 0 {
@@ -218,13 +218,13 @@ func (dt *disputeTracker) UpdateOurVote(percentTime int, proposing bool, parms c
 	return changed
 }
 
-// AllStalled reports whether every active dispute is stalled per
+// allStalled reports whether every active dispute is stalled per
 // DisputedTx.Stalled. An empty dispute set returns false — rippled
 // gates the stalled bit on disputes being non-empty (Consensus.h:1718).
 //
 // Matches rippled's std::ranges::all_of stalled check at
 // Consensus.h:1720-1728.
-func (dt *disputeTracker) AllStalled(parms consensus.ConsensusParms, proposing bool, peersUnchanged int) bool {
+func (dt *disputeTracker) allStalled(parms consensus.ConsensusParms, proposing bool, peersUnchanged int) bool {
 	if len(dt.disputes) == 0 {
 		return false
 	}
@@ -283,20 +283,18 @@ func disputeStalled(d *consensus.DisputedTx, parms consensus.ConsensusParms, pro
 	return weight > parms.MinConsensusPct || weight < (100-parms.MinConsensusPct)
 }
 
-// Dispute returns a disputed transaction.
-func (dt *disputeTracker) Dispute(txID consensus.TxID) *consensus.DisputedTx {
+func (dt *disputeTracker) dispute(txID consensus.TxID) *consensus.DisputedTx {
 	return dt.disputes[txID]
 }
 
-// Has reports whether a dispute exists for the given TxID.
-func (dt *disputeTracker) Has(txID consensus.TxID) bool {
+func (dt *disputeTracker) has(txID consensus.TxID) bool {
 	_, ok := dt.disputes[txID]
 	return ok
 }
 
-// DisputedNoTxs returns detached raw blobs of every dispute we currently vote
+// disputedNoTxs returns detached raw blobs of every dispute we currently vote
 // NO on — txs peers proposed that end up excluded from the consensus set.
-func (dt *disputeTracker) DisputedNoTxs() [][]byte {
+func (dt *disputeTracker) disputedNoTxs() [][]byte {
 	var txs [][]byte
 	for _, d := range dt.disputes {
 		if !d.OurVote {
@@ -306,8 +304,8 @@ func (dt *disputeTracker) DisputedNoTxs() [][]byte {
 	return txs
 }
 
-// All returns detached snapshots of all disputed transactions.
-func (dt *disputeTracker) All() []*consensus.DisputedTx {
+// all returns detached snapshots of all disputed transactions.
+func (dt *disputeTracker) all() []*consensus.DisputedTx {
 	result := make([]*consensus.DisputedTx, 0, len(dt.disputes))
 	for _, d := range dt.disputes {
 		result = append(result, cloneDisputedTx(d))
@@ -315,8 +313,7 @@ func (dt *disputeTracker) All() []*consensus.DisputedTx {
 	return result
 }
 
-// Count returns the number of disputes.
-func (dt *disputeTracker) Count() int {
+func (dt *disputeTracker) count() int {
 	return len(dt.disputes)
 }
 

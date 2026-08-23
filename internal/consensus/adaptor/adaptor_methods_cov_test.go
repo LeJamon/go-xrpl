@@ -26,7 +26,7 @@ func TestAdg_GetLedger(t *testing.T) {
 	assert.Equal(t, lcl.ID(), got.ID())
 
 	_, err = a.GetLedger(consensus.LedgerID{0xDE, 0xAD})
-	assert.ErrorIs(t, err, ErrLedgerNotFound)
+	assert.ErrorIs(t, err, errLedgerNotFound)
 }
 
 func TestAdg_GetLedgerBySeq(t *testing.T) {
@@ -40,7 +40,7 @@ func TestAdg_GetLedgerBySeq(t *testing.T) {
 	assert.Equal(t, lcl.Seq(), got.Seq())
 
 	_, err = a.GetLedgerBySeq(99999)
-	assert.ErrorIs(t, err, ErrLedgerNotFound)
+	assert.ErrorIs(t, err, errLedgerNotFound)
 }
 
 func TestAdg_GetValidatedLedgerHash(t *testing.T) {
@@ -210,7 +210,7 @@ func TestAdg_GetValidatorSigningKey(t *testing.T) {
 	svc := newTestLedgerService(t)
 	noKey := New(Config{LedgerService: svc})
 	_, err = noKey.GetValidatorSigningKey()
-	assert.ErrorIs(t, err, ErrNoValidatorKey)
+	assert.ErrorIs(t, err, errNoValidatorKey)
 }
 
 func TestAdg_GetNegativeUNLMasters(t *testing.T) {
@@ -268,17 +268,6 @@ func TestAdg_GetFeeVote(t *testing.T) {
 	assert.False(t, current.HasBaseFee())
 	assert.False(t, current.HasReserveBase())
 	assert.False(t, current.HasReserveIncrement())
-}
-
-func TestAdg_GetAmendmentVote(t *testing.T) {
-	a := newTestAdaptor(t)
-	// Construction seeds VoteUp from registry; at least one DefaultYes
-	// feature should appear.
-	votes := a.GetAmendmentVote()
-	// The slice can be nil if all defaults are already enabled on the
-	// validated ledger — in a test env with genesis rules that won't be
-	// the case for most features, but we just ensure the call does not panic.
-	_ = votes
 }
 
 func TestAdg_IsFeatureEnabled(t *testing.T) {
@@ -347,13 +336,6 @@ func TestAdg_StateAccounting(t *testing.T) {
 	assert.Equal(t, uint64(1), conn.Transitions)
 }
 
-func TestAdg_OnModeChange(t *testing.T) {
-	a := newTestAdaptor(t)
-	assert.NotPanics(t, func() {
-		a.OnModeChange(consensus.ModeObserving, consensus.ModeProposing)
-	})
-}
-
 func TestAdg_OnPhaseChange(t *testing.T) {
 	a := newTestAdaptor(t)
 
@@ -379,16 +361,6 @@ func adg_newNonStandaloneService(t *testing.T) *service.Service {
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	return svc
-}
-
-func TestAdg_BroadcastStatus_NoClosedLedgerNoPanic(t *testing.T) {
-	// Use a service-backed adaptor; the service's GetClosedLedger returns
-	// the genesis ledger (non-nil) after Start. broadcastStatus must not
-	// panic in either case.
-	a := newTestAdaptor(t)
-	assert.NotPanics(t, func() {
-		a.broadcastStatus(0)
-	})
 }
 
 func TestAdg_SetOnTxSetRequested(t *testing.T) {

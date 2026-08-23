@@ -658,10 +658,6 @@ func (r *Router) SetManifestUntrustedLimit(limit int) {
 	r.manifestLimitSet = true
 }
 
-func (r *Router) SetManifestShuffle(shuffle func([][]byte)) {
-	r.manifestShuffle = shuffle
-}
-
 func (r *Router) setPeerSessionView(view peerSessionView) {
 	r.peerSessions = view
 }
@@ -672,13 +668,6 @@ func (r *Router) setPeerSessionView(view peerSessionView) {
 // drops inbound frames in that case. Safe to call before Run.
 func (r *Router) SetValidatorListAggregator(agg *validatorlist.Aggregator) {
 	r.validatorList = agg
-}
-
-// SetInboundClock overrides the clock used by new inbound replay-delta
-// acquisitions. Intended for tests that need to drive timeout behavior
-// deterministically; production callers never invoke this.
-func (r *Router) SetInboundClock(c inbound.Clock) {
-	r.replayer.SetClock(c)
 }
 
 // StopAcquisitions terminally drains both inbound-ledger acquisition paths.

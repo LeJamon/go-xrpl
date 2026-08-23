@@ -410,7 +410,7 @@ func NewFromConfig(
 	// pass its pubkey into the overlay for the self-target TMSquelch
 	// filter: without this a peer could silence our own validator's
 	// traffic on the RelayFromValidator path.
-	identity, err := NewValidatorIdentityFromConfig(appCfg.ValidationSeed, appCfg.ValidatorToken)
+	identity, err := newValidatorIdentityFromConfig(appCfg.ValidationSeed, appCfg.ValidatorToken)
 	if err != nil {
 		return nil, fmt.Errorf("create validator identity: %w", err)
 	}
@@ -465,7 +465,7 @@ func NewFromConfig(
 	// service. peermanagement is forbidden from importing
 	// internal/ledger, so the adapter installed here lets both layers
 	// reach the ledger without breaking that layering boundary.
-	ledgerProvider := NewLedgerProvider(ledgerSvc)
+	ledgerProvider := newLedgerProvider(ledgerSvc)
 	ledgerProvider.SetMinimumOnlineFloor(floor)
 	overlay.LedgerSync().SetProvider(ledgerProvider)
 
@@ -496,7 +496,7 @@ func NewFromConfig(
 		Table: ledgerSvc.Table(),
 		// The operator's [voting] stanza.
 		FeeVote:          feeVoteFromConfig(appCfg.Voting, appCfg.FeeDefault),
-		RelayValidations: ParseRelayValidationsPolicy(appCfg.RelayValidations),
+		RelayValidations: parseRelayValidationsPolicy(appCfg.RelayValidations),
 	})
 
 	// Seed the local token manifest after durable validator state has loaded.
@@ -591,7 +591,7 @@ func NewFromConfig(
 		// suppression registry so SendList / SendCollection stamp the
 		// (hash, peer) pair, preventing the same list from being echoed
 		// back to a peer that already sent it.
-		vlAgg.SetBroadcaster(router.NewValidatorListBroadcaster(overlay, sender))
+		vlAgg.SetBroadcaster(router.newValidatorListBroadcaster(overlay, sender))
 		if len(appCfg.Validators.ValidatorListSites) > 0 {
 			vlPoller, err = validatorlist.NewSitePoller(
 				append([]string(nil), appCfg.Validators.ValidatorListSites...),
@@ -1124,7 +1124,7 @@ func ParseValidatorKeysWithMaster(appCfg *config.Config) ([]consensus.NodeID, []
 	validators := make([]consensus.NodeID, 0, len(appCfg.Validators.Validators))
 	masters := make([][33]byte, 0, len(appCfg.Validators.Validators))
 	for _, key := range appCfg.Validators.Validators {
-		nodeID, master, err := DecodeValidatorKeyWithMaster(key)
+		nodeID, master, err := decodeValidatorKeyWithMaster(key)
 		if err != nil {
 			return nil, nil, fmt.Errorf("invalid validator key %q: %w", key, err)
 		}
@@ -1134,7 +1134,7 @@ func ParseValidatorKeysWithMaster(appCfg *config.Config) ([]consensus.NodeID, []
 	return validators, masters, nil
 }
 
-// DecodeValidatorKeyWithMaster decodes a base58-encoded validator
+// decodeValidatorKeyWithMaster decodes a base58-encoded validator
 // public key into both its 20-byte NodeID and the underlying 33-byte
 // master pubkey. NegativeUNL voting needs the raw master because the
 // UNLModify pseudo-tx carries the master pubkey on the wire
@@ -1144,7 +1144,7 @@ func ParseValidatorKeysWithMaster(appCfg *config.Config) ([]consensus.NodeID, []
 // 33-byte master public key; calcNodeID (RIPEMD-160(SHA-256(masterPubKey)))
 // keys the trust set identically to the inbound NodeID values the
 // consensus router populates.
-func DecodeValidatorKeyWithMaster(key string) (nodeID consensus.NodeID, master [33]byte, err error) {
+func decodeValidatorKeyWithMaster(key string) (nodeID consensus.NodeID, master [33]byte, err error) {
 	// Guard against panics in the base58 decoder for malformed input
 	defer func() {
 		if r := recover(); r != nil {

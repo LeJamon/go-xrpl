@@ -124,7 +124,7 @@ func TestEngine_AcceptLedger_OffLockDoesNotBlockPeerHandlers(t *testing.T) {
 	// The proposal arrived while the round was frozen (PhaseAccepted); it must
 	// have buffered for the next round rather than mutating the closing one.
 	engine.mu.RLock()
-	buffered := engine.proposalTracker.HasBufferedFor(nextParent)
+	buffered := engine.proposalTracker.hasBufferedFor(nextParent)
 	engine.mu.RUnlock()
 	if !buffered {
 		t.Fatal("proposal arriving during the apply was not buffered for the next round")

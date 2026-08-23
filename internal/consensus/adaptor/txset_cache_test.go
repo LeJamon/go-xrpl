@@ -12,11 +12,11 @@ import (
 // txSetCacheTTL on Put, so a long-running node's cache stays bounded
 // instead of retaining one full SHAMap per round forever.
 func TestTxSetCache_TTLEviction(t *testing.T) {
-	c := NewTxSetCache()
+	c := newTxSetCache()
 	clock := time.Unix(1_700_000_000, 0)
 	c.now = func() time.Time { return clock }
 
-	old, err := NewTxSet([][]byte{makeBlob(1)})
+	old, err := newTxSet([][]byte{makeBlob(1)})
 	require.NoError(t, err)
 	c.Put(old)
 
@@ -27,7 +27,7 @@ func TestTxSetCache_TTLEviction(t *testing.T) {
 	// Advance past the TTL and Put a second set: the sweep on Put must
 	// evict the now-stale first entry while keeping the fresh one.
 	clock = clock.Add(txSetCacheTTL + time.Second)
-	fresh, err := NewTxSet([][]byte{makeBlob(2)})
+	fresh, err := newTxSet([][]byte{makeBlob(2)})
 	require.NoError(t, err)
 	c.Put(fresh)
 
@@ -41,8 +41,8 @@ func TestTxSetCache_TTLEviction(t *testing.T) {
 
 // TestTxSetCache_Remove covers explicit removal.
 func TestTxSetCache_Remove(t *testing.T) {
-	c := NewTxSetCache()
-	ts, err := NewTxSet([][]byte{makeBlob(3)})
+	c := newTxSetCache()
+	ts, err := newTxSet([][]byte{makeBlob(3)})
 	require.NoError(t, err)
 	c.Put(ts)
 	c.Remove(ts.ID())
@@ -52,7 +52,7 @@ func TestTxSetCache_Remove(t *testing.T) {
 }
 
 func TestTxSetCache_ZeroSetIsPermanent(t *testing.T) {
-	c := NewTxSetCache()
+	c := newTxSetCache()
 	zeroID := consensus.TxSetID{}
 
 	zero, ok := c.Get(zeroID)
@@ -64,11 +64,11 @@ func TestTxSetCache_ZeroSetIsPermanent(t *testing.T) {
 	c.Remove(zeroID)
 	clock := time.Unix(1_700_000_000, 0)
 	c.now = func() time.Time { return clock }
-	fresh, err := NewTxSet([][]byte{makeBlob(4)})
+	fresh, err := newTxSet([][]byte{makeBlob(4)})
 	require.NoError(t, err)
 	c.Put(fresh)
 	clock = clock.Add(txSetCacheTTL + time.Second)
-	next, err := NewTxSet([][]byte{makeBlob(5)})
+	next, err := newTxSet([][]byte{makeBlob(5)})
 	require.NoError(t, err)
 	c.Put(next)
 

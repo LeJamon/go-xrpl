@@ -130,7 +130,7 @@ func newTokenFixtureWithSeeds(t *testing.T, masterSeed, signingSeed byte, sequen
 }
 
 // manifestSigningPreimage replicates the package-internal preimage
-// construction so the test signs over exactly what Verify checks.
+// construction so the test signs over exactly what verify checks.
 // HashPrefix("MAN\0") || STObject(only signing fields).
 func manifestSigningPreimage(t *testing.T, src map[string]any) []byte {
 	t.Helper()
@@ -160,7 +160,7 @@ func manifestSigningPreimage(t *testing.T, src map[string]any) []byte {
 func TestNewValidatorIdentityFromToken_HappyPath(t *testing.T) {
 	fix := newTokenFixture(t, 0x42, 7)
 
-	id, err := NewValidatorIdentityFromToken(fix.tokenBlock)
+	id, err := newValidatorIdentityFromToken(fix.tokenBlock)
 	if err != nil {
 		t.Fatalf("NewValidatorIdentityFromToken: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestNewValidatorIdentityFromToken_HappyPath(t *testing.T) {
 
 func TestNewValidatorIdentityFromToken_SignVerifyValidation(t *testing.T) {
 	fix := newTokenFixture(t, 0x55, 3)
-	id, err := NewValidatorIdentityFromToken(fix.tokenBlock)
+	id, err := newValidatorIdentityFromToken(fix.tokenBlock)
 	if err != nil {
 		t.Fatalf("NewValidatorIdentityFromToken: %v", err)
 	}
@@ -218,8 +218,8 @@ func TestNewValidatorIdentityFromToken_SignVerifyValidation(t *testing.T) {
 	if want := uint32(vfFullyCanonicalSig | vfFullValidation); v.Flags != want {
 		t.Fatalf("signed validation flags = %#x, want %#x", v.Flags, want)
 	}
-	if err := VerifyValidation(v); err != nil {
-		t.Fatalf("VerifyValidation: %v", err)
+	if err := verifyValidation(v); err != nil {
+		t.Fatalf("verifyValidation: %v", err)
 	}
 
 	partial := &consensus.Validation{
@@ -233,8 +233,8 @@ func TestNewValidatorIdentityFromToken_SignVerifyValidation(t *testing.T) {
 	if want := uint32(vfFullyCanonicalSig); partial.Flags != want {
 		t.Fatalf("signed partial validation flags = %#x, want %#x", partial.Flags, want)
 	}
-	if err := VerifyValidation(partial); err != nil {
-		t.Fatalf("VerifyValidation partial: %v", err)
+	if err := verifyValidation(partial); err != nil {
+		t.Fatalf("verifyValidation partial: %v", err)
 	}
 
 	conflicting := &consensus.Validation{
@@ -250,8 +250,8 @@ func TestNewValidatorIdentityFromToken_SignVerifyValidation(t *testing.T) {
 	if want := uint32(vfFullyCanonicalSig | vfFullValidation); conflicting.Flags != want {
 		t.Fatalf("normalized conflicting flags = %#x, want %#x", conflicting.Flags, want)
 	}
-	if err := VerifyValidation(conflicting); err != nil {
-		t.Fatalf("VerifyValidation conflicting flags: %v", err)
+	if err := verifyValidation(conflicting); err != nil {
+		t.Fatalf("verifyValidation conflicting flags: %v", err)
 	}
 }
 
@@ -272,26 +272,26 @@ func TestNewValidatorIdentityFromToken_KeyMismatch(t *testing.T) {
 	bad, _ := json.Marshal(envelope)
 	corrupted := base64.StdEncoding.EncodeToString(bad)
 
-	if _, err := NewValidatorIdentityFromToken(corrupted); err == nil {
+	if _, err := newValidatorIdentityFromToken(corrupted); err == nil {
 		t.Fatal("expected mismatch error, got nil")
 	}
 }
 
 func TestNewValidatorIdentityFromConfig_Dispatch(t *testing.T) {
 	// Empty → observer.
-	id, err := NewValidatorIdentityFromConfig("", "")
+	id, err := newValidatorIdentityFromConfig("", "")
 	if err != nil || id != nil {
 		t.Fatalf("empty config should yield nil identity, got id=%v err=%v", id, err)
 	}
 
 	// Both set → mutual-exclusion error.
-	if _, err := NewValidatorIdentityFromConfig("snoPBrXtMeMyMHUVTgbuqAfg1SUTb", "anything"); err == nil {
+	if _, err := newValidatorIdentityFromConfig("snoPBrXtMeMyMHUVTgbuqAfg1SUTb", "anything"); err == nil {
 		t.Fatal("expected error when both seed and token configured")
 	}
 
 	// Token only → token path.
 	fix := newTokenFixture(t, 0x77, 5)
-	id, err = NewValidatorIdentityFromConfig("", fix.tokenBlock)
+	id, err = newValidatorIdentityFromConfig("", fix.tokenBlock)
 	if err != nil {
 		t.Fatalf("token-only config: %v", err)
 	}
@@ -300,7 +300,7 @@ func TestNewValidatorIdentityFromConfig_Dispatch(t *testing.T) {
 	}
 
 	// Seed only → seed path (manifest stays nil).
-	id, err = NewValidatorIdentityFromConfig("snoPBrXtMeMyMHUVTgbuqAfg1SUTb", "")
+	id, err = newValidatorIdentityFromConfig("snoPBrXtMeMyMHUVTgbuqAfg1SUTb", "")
 	if err != nil {
 		t.Fatalf("seed-only config: %v", err)
 	}

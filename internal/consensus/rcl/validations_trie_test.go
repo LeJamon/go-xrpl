@@ -174,7 +174,7 @@ func TestValidationTracker_TrieMutationPanicRebuildsForRecovery(t *testing.T) {
 	}
 	vt.mu.Unlock()
 
-	if got := vt.TrustedSupport(valid.ID()); got != 1 {
+	if got := vt.trustedSupport(valid.ID()); got != 1 {
 		t.Fatalf("panic recovery failed to rebuild authoritative support: got %d, want 1", got)
 	}
 
@@ -183,7 +183,7 @@ func TestValidationTracker_TrieMutationPanicRebuildsForRecovery(t *testing.T) {
 		t.Fatal("tracker did not permit safe trie recovery")
 	}
 	vt.mu.Unlock()
-	if got := vt.TrustedSupport(valid.ID()); got != 1 {
+	if got := vt.trustedSupport(valid.ID()); got != 1 {
 		t.Fatalf("safe trie recovery support: got %d, want 1", got)
 	}
 }
@@ -197,8 +197,8 @@ func TestValidationTracker_StaleCleanupPanicClearsDerivedState(t *testing.T) {
 	nodeID := consensus.NodeID{1}
 	provider := newMapAncestryProvider()
 	provider.add(valid)
-	vt.SetTrusted([]consensus.NodeID{nodeID})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setTrusted([]consensus.NodeID{nodeID})
+	vt.setLedgerAncestryProvider(provider)
 	if !vt.Add(makeTrustedValidation(nodeID, valid.ID(), valid.Seq(), now)) {
 		t.Fatal("precondition validation was rejected")
 	}
@@ -207,9 +207,9 @@ func TestValidationTracker_StaleCleanupPanicClearsDerivedState(t *testing.T) {
 	vt.trieTips[nodeID] = mismatchedLedger{id: valid.ID(), seq: valid.Seq() + 1}
 	vt.mu.Unlock()
 	now = now.Add(validationCurrentEarly + time.Second)
-	vt.FlushStale()
+	vt.flushStale()
 
-	if got := vt.TrustedSupport(valid.ID()); got != 0 {
+	if got := vt.trustedSupport(valid.ID()); got != 0 {
 		t.Fatalf("stale cleanup left phantom support: got %d", got)
 	}
 	if _, _, ok := vt.GetPreferred(0); ok {
@@ -239,8 +239,8 @@ func TestValidationTracker_PartialAncestryRepairsPreferredSupport(t *testing.T) 
 	n1 := consensus.NodeID{1}
 	n2 := consensus.NodeID{2}
 	n3 := consensus.NodeID{3}
-	vt.SetTrusted([]consensus.NodeID{n1, n2, n3})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setTrusted([]consensus.NodeID{n1, n2, n3})
+	vt.setLedgerAncestryProvider(provider)
 
 	if !vt.Add(makeTrustedValidation(n1, consensus.LedgerID(tip.hash), tip.seq, now)) {
 		t.Fatal("partial tip validation was rejected")
@@ -251,12 +251,12 @@ func TestValidationTracker_PartialAncestryRepairsPreferredSupport(t *testing.T) 
 	if !vt.Add(makeTrustedValidation(n3, consensus.LedgerID(ancestor.hash), ancestor.seq, now)) {
 		t.Fatal("ancestor validation was rejected")
 	}
-	if got := vt.TrustedSupport(consensus.LedgerID(ancestor.hash)); got != 1 {
+	if got := vt.trustedSupport(consensus.LedgerID(ancestor.hash)); got != 1 {
 		t.Fatalf("partial tip was treated as complete support: got %d, want 1", got)
 	}
 
 	byHash[missingHash] = missing
-	if got := vt.TrustedSupport(consensus.LedgerID(ancestor.hash)); got != 3 {
+	if got := vt.trustedSupport(consensus.LedgerID(ancestor.hash)); got != 3 {
 		t.Fatalf("repaired preferred support = %d, want 3", got)
 	}
 	if id, seq, ok := vt.GetPreferred(tip.seq); !ok || id != consensus.LedgerID(tip.hash) || seq != tip.seq {
@@ -270,8 +270,8 @@ func TestValidationTracker_ProviderNilResultsStayParked(t *testing.T) {
 	vt.SetNow(func() time.Time { return now })
 	nodeID := consensus.NodeID{0xD1}
 	ledgerID := consensus.LedgerID{0xE1}
-	vt.SetTrusted([]consensus.NodeID{nodeID})
-	vt.SetLedgerAncestryProvider(nilAncestryProvider{})
+	vt.setTrusted([]consensus.NodeID{nodeID})
+	vt.setLedgerAncestryProvider(nilAncestryProvider{})
 
 	if !vt.Add(makeTrustedValidation(nodeID, ledgerID, 7, now)) {
 		t.Fatal("validation with nil provider result was rejected")
@@ -279,7 +279,7 @@ func TestValidationTracker_ProviderNilResultsStayParked(t *testing.T) {
 	if _, _, ok := vt.GetPreferred(0); !ok {
 		t.Fatal("parked validation should remain available through acquiring fallback")
 	}
-	if got := vt.TrustedSupport(ledgerID); got != 1 {
+	if got := vt.trustedSupport(ledgerID); got != 1 {
 		t.Fatalf("nil provider result should use flat fallback support: got %d", got)
 	}
 	vt.mu.RLock()
@@ -296,12 +296,12 @@ func TestValidationTracker_ProviderNilResultsStayParked(t *testing.T) {
 	// a nil interface result and must not dereference it.
 	vt = NewValidationTracker(1)
 	vt.SetNow(func() time.Time { return now })
-	vt.SetTrusted([]consensus.NodeID{nodeID})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setTrusted([]consensus.NodeID{nodeID})
+	vt.setLedgerAncestryProvider(provider)
 	if !vt.Add(makeTrustedValidation(nodeID, valid.ID(), valid.Seq(), now)) {
 		t.Fatal("validation with corrected provider result was rejected")
 	}
-	if got := vt.TrustedSupport(valid.ID()); got != 1 {
+	if got := vt.trustedSupport(valid.ID()); got != 1 {
 		t.Fatalf("correct provider result did not restore support: got %d", got)
 	}
 }
@@ -315,18 +315,18 @@ func TestValidationTracker_ProviderTypedNilResultStaysParked(t *testing.T) {
 	valid := b.Build("typed-nil")
 	var typedNil *ledgertrietest.TestLedger
 	provider := &mapAncestryProvider{byID: map[consensus.LedgerID]ledgertrie.Ledger{valid.ID(): typedNil}}
-	vt.SetTrusted([]consensus.NodeID{nodeID})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setTrusted([]consensus.NodeID{nodeID})
+	vt.setLedgerAncestryProvider(provider)
 
 	if !vt.Add(makeTrustedValidation(nodeID, valid.ID(), valid.Seq(), now)) {
 		t.Fatal("validation with typed-nil provider result was rejected")
 	}
-	if got := vt.TrustedSupport(valid.ID()); got != 1 {
+	if got := vt.trustedSupport(valid.ID()); got != 1 {
 		t.Fatalf("typed-nil provider result should use flat fallback support: got %d", got)
 	}
 
 	provider.byID[valid.ID()] = valid
-	if got := vt.TrustedSupport(valid.ID()); got != 1 {
+	if got := vt.trustedSupport(valid.ID()); got != 1 {
 		t.Fatalf("corrected typed-nil provider result did not restore support: got %d", got)
 	}
 	vt.mu.RLock()
@@ -345,8 +345,8 @@ func TestValidationTracker_TypedNilProviderDisablesSafely(t *testing.T) {
 	b := ledgertrietest.NewTestLedgerBuilder()
 	valid := b.Build("typed-provider")
 	var provider *mapAncestryProvider
-	vt.SetTrusted([]consensus.NodeID{nodeID})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setTrusted([]consensus.NodeID{nodeID})
+	vt.setLedgerAncestryProvider(provider)
 
 	vt.mu.RLock()
 	if vt.ancestry != nil || vt.trie != nil || vt.trieTips != nil || vt.acquiring != nil {
@@ -357,11 +357,11 @@ func TestValidationTracker_TypedNilProviderDisablesSafely(t *testing.T) {
 	if !vt.Add(makeTrustedValidation(nodeID, valid.ID(), valid.Seq(), now)) {
 		t.Fatal("validation after typed-nil provider installation was rejected")
 	}
-	if got := vt.TrustedSupport(valid.ID()); got != 1 {
+	if got := vt.trustedSupport(valid.ID()); got != 1 {
 		t.Fatalf("typed-nil provider altered flat support: got %d, want 1", got)
 	}
 	prev := &mockLedger{id: b.Genesis().ID(), seq: b.Genesis().Seq()}
-	if got := vt.ProposersFinished(prev); got != 1 {
+	if got := vt.proposersFinished(prev); got != 1 {
 		t.Fatalf("typed-nil provider altered proposer fallback: got %d, want 1", got)
 	}
 }
@@ -373,16 +373,16 @@ func TestValidationTracker_ProviderPanicFallsBackWithoutCorruption(t *testing.T)
 	b := ledgertrietest.NewTestLedgerBuilder()
 	tip := b.Build("provider-panic")
 	nodeID := consensus.NodeID{0xD6}
-	vt.SetTrusted([]consensus.NodeID{nodeID})
-	vt.SetLedgerAncestryProvider(panicProvider{})
+	vt.setTrusted([]consensus.NodeID{nodeID})
+	vt.setLedgerAncestryProvider(panicProvider{})
 	if !vt.Add(makeTrustedValidation(nodeID, tip.ID(), tip.Seq(), now)) {
 		t.Fatal("validation with panicking provider was rejected")
 	}
-	if got := vt.TrustedSupport(tip.ID()); got != 1 {
+	if got := vt.trustedSupport(tip.ID()); got != 1 {
 		t.Fatalf("provider panic flat support = %d, want 1", got)
 	}
 	prev := &mockLedger{id: consensus.LedgerID{0xD7}, seq: tip.Seq() - 1}
-	if got := vt.ProposersFinished(prev); got != 1 {
+	if got := vt.proposersFinished(prev); got != 1 {
 		t.Fatalf("provider panic proposer fallback = %d, want 1", got)
 	}
 }
@@ -416,25 +416,25 @@ func TestValidationTracker_MetadataPanicsParkAndRepair(t *testing.T) {
 				ancestor.ID(): ancestor,
 				tip.ID():      tc.make(tip.ID(), tip.Seq()),
 			}}
-			vt.SetTrusted([]consensus.NodeID{nodeID})
-			vt.SetLedgerAncestryProvider(provider)
+			vt.setTrusted([]consensus.NodeID{nodeID})
+			vt.setLedgerAncestryProvider(provider)
 			if !vt.Add(makeTrustedValidation(nodeID, tip.ID(), tip.Seq(), now)) {
 				t.Fatal("validation with panicking metadata was rejected")
 			}
-			if got := vt.TrustedSupport(tip.ID()); got != 1 {
+			if got := vt.trustedSupport(tip.ID()); got != 1 {
 				t.Fatalf("metadata panic flat support = %d, want 1", got)
 			}
 			prevTip := &mockLedger{id: tip.ID(), seq: tip.Seq()}
-			if got := vt.ProposersFinished(prevTip); got != 0 {
+			if got := vt.proposersFinished(prevTip); got != 0 {
 				t.Fatalf("metadata panic proposer fallback = %d, want 0", got)
 			}
 
 			provider.byID[tip.ID()] = tip
-			if got := vt.TrustedSupport(tip.ID()); got != 1 {
+			if got := vt.trustedSupport(tip.ID()); got != 1 {
 				t.Fatalf("repaired metadata support = %d, want 1", got)
 			}
 			prevAncestor := &mockLedger{id: ancestor.ID(), seq: ancestor.Seq()}
-			if got := vt.ProposersFinished(prevAncestor); got != 1 {
+			if got := vt.proposersFinished(prevAncestor); got != 1 {
 				t.Fatalf("repaired metadata proposer support = %d, want 1", got)
 			}
 		})
@@ -450,8 +450,8 @@ func TestValidationTracker_TrustedSupportRecoversFromHostileTip(t *testing.T) {
 	nodeID := consensus.NodeID{0xD4}
 	provider := newMapAncestryProvider()
 	provider.add(valid)
-	vt.SetTrusted([]consensus.NodeID{nodeID})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setTrusted([]consensus.NodeID{nodeID})
+	vt.setLedgerAncestryProvider(provider)
 	if !vt.Add(makeTrustedValidation(nodeID, valid.ID(), valid.Seq(), now)) {
 		t.Fatal("precondition validation was rejected")
 	}
@@ -460,10 +460,10 @@ func TestValidationTracker_TrustedSupportRecoversFromHostileTip(t *testing.T) {
 	vt.trieTips[nodeID] = panicAncestorLedger{id: valid.ID(), seq: valid.Seq()}
 	vt.mu.Unlock()
 
-	if got := vt.TrustedSupport(valid.ID()); got != 1 {
+	if got := vt.trustedSupport(valid.ID()); got != 1 {
 		t.Fatalf("hostile tip support = %d, want recovered support 1", got)
 	}
-	if got := vt.TrustedSupport(valid.ID()); got != 1 {
+	if got := vt.trustedSupport(valid.ID()); got != 1 {
 		t.Fatalf("support after hostile tip rebuild = %d, want 1", got)
 	}
 }
@@ -479,23 +479,23 @@ func TestValidationTracker_ProposersFinishedRecoversFromHostileTip(t *testing.T)
 	provider := newMapAncestryProvider()
 	provider.add(ancestor)
 	provider.add(valid)
-	vt.SetTrusted([]consensus.NodeID{nodeID})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setTrusted([]consensus.NodeID{nodeID})
+	vt.setLedgerAncestryProvider(provider)
 	if !vt.Add(makeTrustedValidation(nodeID, valid.ID(), valid.Seq(), now)) {
 		t.Fatal("precondition validation was rejected")
 	}
 
 	prev := &mockLedger{id: ancestor.ID(), seq: ancestor.Seq()}
 	provider.byID[ancestor.ID()] = panicAncestorLedger{id: ancestor.ID(), seq: ancestor.Seq()}
-	if got := vt.ProposersFinished(prev); got != 1 {
+	if got := vt.proposersFinished(prev); got != 1 {
 		t.Fatalf("hostile target proposer support = %d, want recovered fallback 1", got)
 	}
-	if got := vt.TrustedSupport(valid.ID()); got != 1 {
+	if got := vt.trustedSupport(valid.ID()); got != 1 {
 		t.Fatalf("hostile target corrupted descendant support: got %d, want 1", got)
 	}
 
 	provider.byID[ancestor.ID()] = ancestor
-	if got := vt.ProposersFinished(prev); got != 1 {
+	if got := vt.proposersFinished(prev); got != 1 {
 		t.Fatalf("proposer support after hostile target repair = %d, want 1", got)
 	}
 }
@@ -537,8 +537,8 @@ func TestValidationTracker_TrieDeepestSharedAncestor(t *testing.T) {
 	n1 := consensus.NodeID{1}
 	n2 := consensus.NodeID{2}
 	n3 := consensus.NodeID{3}
-	vt.SetTrusted([]consensus.NodeID{n1, n2, n3})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setTrusted([]consensus.NodeID{n1, n2, n3})
+	vt.setLedgerAncestryProvider(provider)
 
 	if !vt.Add(makeTrustedValidation(n1, abc.ID(), abc.Seq(), now)) {
 		t.Fatal("Add(n1->abc) should succeed")
@@ -552,19 +552,19 @@ func TestValidationTracker_TrieDeepestSharedAncestor(t *testing.T) {
 
 	// Flat count: abc has 1, abd has 0, abde has 2.
 	// Trie branchSupport: abc=1, abd=2 (via abde), abde=2.
-	if got := vt.TrustedSupport(abd.ID()); got != 2 {
+	if got := vt.trustedSupport(abd.ID()); got != 2 {
 		t.Errorf("GetTrustedSupport(abd) via trie: got %d, want 2 (branchSupport)", got)
 	}
-	if got := vt.TrustedSupport(abde.ID()); got != 2 {
+	if got := vt.trustedSupport(abde.ID()); got != 2 {
 		t.Errorf("GetTrustedSupport(abde): got %d, want 2", got)
 	}
-	if got := vt.TrustedSupport(abc.ID()); got != 1 {
+	if got := vt.trustedSupport(abc.ID()); got != 1 {
 		t.Errorf("GetTrustedSupport(abc): got %d, want 1", got)
 	}
 
 	// Unknown ancestry falls back to flat count (zero here).
 	unknown := consensus.LedgerID{0xff}
-	if got := vt.TrustedSupport(unknown); got != 0 {
+	if got := vt.trustedSupport(unknown); got != 0 {
 		t.Errorf("GetTrustedSupport(unknown) should fall back to 0, got %d", got)
 	}
 }
@@ -587,13 +587,13 @@ func TestValidationTracker_TrieNewerValidationReplacesOld(t *testing.T) {
 	provider.add(abde)
 
 	n1 := consensus.NodeID{1}
-	vt.SetTrusted([]consensus.NodeID{n1})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setTrusted([]consensus.NodeID{n1})
+	vt.setLedgerAncestryProvider(provider)
 
 	if !vt.Add(makeTrustedValidation(n1, abc.ID(), abc.Seq(), now)) {
 		t.Fatal("first Add should succeed")
 	}
-	if vt.TrustedSupport(abc.ID()) != 1 {
+	if vt.trustedSupport(abc.ID()) != 1 {
 		t.Errorf("abc support after first validation should be 1")
 	}
 
@@ -603,10 +603,10 @@ func TestValidationTracker_TrieNewerValidationReplacesOld(t *testing.T) {
 	}
 
 	// abc's tip should have been removed; only abde contributes.
-	if got := vt.TrustedSupport(abc.ID()); got != 0 {
+	if got := vt.trustedSupport(abc.ID()); got != 0 {
 		t.Errorf("abc support after switch: got %d, want 0", got)
 	}
-	if got := vt.TrustedSupport(abde.ID()); got != 1 {
+	if got := vt.trustedSupport(abde.ID()); got != 1 {
 		t.Errorf("abde support after switch: got %d, want 1", got)
 	}
 }
@@ -627,15 +627,15 @@ func TestValidationTracker_TrieNegUNLExcluded(t *testing.T) {
 
 	n1 := consensus.NodeID{1}
 	n2 := consensus.NodeID{2}
-	vt.SetTrusted([]consensus.NodeID{n1, n2})
-	vt.SetNegativeUNL([]consensus.NodeID{n2})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setTrusted([]consensus.NodeID{n1, n2})
+	vt.setNegativeUNL([]consensus.NodeID{n2})
+	vt.setLedgerAncestryProvider(provider)
 
 	vt.Add(makeTrustedValidation(n1, abc.ID(), abc.Seq(), now))
 	vt.Add(makeTrustedValidation(n2, abc.ID(), abc.Seq(), now))
 
 	// Only n1 counts toward support; n2 on negUNL is excluded.
-	if got := vt.TrustedSupport(abc.ID()); got != 1 {
+	if got := vt.trustedSupport(abc.ID()); got != 1 {
 		t.Errorf("negUNL validator should not contribute to support: got %d, want 1", got)
 	}
 }
@@ -672,9 +672,9 @@ func TestValidationTracker_TrieNegUNLSteersButExcludedFromQuorum(t *testing.T) {
 	n1 := consensus.NodeID{1} // trusted, backs ab
 	n2 := consensus.NodeID{2} // negUNL, backs ac
 	n3 := consensus.NodeID{3} // negUNL, backs ac
-	vt.SetTrusted([]consensus.NodeID{n1, n2, n3})
-	vt.SetNegativeUNL([]consensus.NodeID{n2, n3})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setTrusted([]consensus.NodeID{n1, n2, n3})
+	vt.setNegativeUNL([]consensus.NodeID{n2, n3})
+	vt.setLedgerAncestryProvider(provider)
 
 	vt.Add(makeTrustedValidation(n1, ab.ID(), ab.Seq(), now))
 	vt.Add(makeTrustedValidation(n2, ac.ID(), ac.Seq(), now))
@@ -691,15 +691,15 @@ func TestValidationTracker_TrieNegUNLSteersButExcludedFromQuorum(t *testing.T) {
 	}
 
 	// Quorum/support: negUNL validators contribute nothing.
-	if got := vt.TrustedSupport(ac.ID()); got != 0 {
+	if got := vt.trustedSupport(ac.ID()); got != 0 {
 		t.Errorf("GetTrustedSupport(ac) must exclude negUNL backers: got %d, want 0", got)
 	}
-	if got := vt.TrustedSupport(ab.ID()); got != 1 {
+	if got := vt.trustedSupport(ab.ID()); got != 1 {
 		t.Errorf("GetTrustedSupport(ab): got %d, want 1", got)
 	}
 	// Even at the shared ancestor, only the single non-negUNL validator
 	// counts — the descendant negUNL tips are filtered out.
-	if got := vt.TrustedSupport(a.ID()); got != 1 {
+	if got := vt.trustedSupport(a.ID()); got != 1 {
 		t.Errorf("GetTrustedSupport(a) must exclude negUNL descendants: got %d, want 1", got)
 	}
 }
@@ -722,8 +722,8 @@ func TestValidationTracker_TrieGetPreferred(t *testing.T) {
 	n1 := consensus.NodeID{1}
 	n2 := consensus.NodeID{2}
 	n3 := consensus.NodeID{3}
-	vt.SetTrusted([]consensus.NodeID{n1, n2, n3})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setTrusted([]consensus.NodeID{n1, n2, n3})
+	vt.setLedgerAncestryProvider(provider)
 
 	vt.Add(makeTrustedValidation(n1, abc.ID(), abc.Seq(), now))
 	vt.Add(makeTrustedValidation(n2, abde.ID(), abde.Seq(), now))
@@ -781,8 +781,8 @@ func TestValidationTracker_TrieGetPreferred_LargestIssuedAffectsDescent(t *testi
 	n3 := consensus.NodeID{3} // votes acf
 	n4 := consensus.NodeID{4} // votes abde
 	n5 := consensus.NodeID{5} // votes abde
-	vt.SetTrusted([]consensus.NodeID{n1, n2, n3, n4, n5})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setTrusted([]consensus.NodeID{n1, n2, n3, n4, n5})
+	vt.setLedgerAncestryProvider(provider)
 
 	vt.Add(makeTrustedValidation(n1, ab.ID(), ab.Seq(), now))
 	vt.Add(makeTrustedValidation(n2, ac.ID(), ac.Seq(), now))
@@ -823,13 +823,13 @@ func TestValidationTracker_TrieDisabled_FallsBack(t *testing.T) {
 
 	n1 := consensus.NodeID{1}
 	n2 := consensus.NodeID{2}
-	vt.SetTrusted([]consensus.NodeID{n1, n2})
+	vt.setTrusted([]consensus.NodeID{n1, n2})
 
 	vt.Add(makeTrustedValidation(n1, abc.ID(), abc.Seq(), now))
 	vt.Add(makeTrustedValidation(n2, abc.ID(), abc.Seq(), now))
 
 	// Without ancestry provider, GetTrustedSupport returns flat count.
-	if got := vt.TrustedSupport(abc.ID()); got != 2 {
+	if got := vt.trustedSupport(abc.ID()); got != 2 {
 		t.Errorf("without trie: got %d, want 2 (flat count)", got)
 	}
 
@@ -860,14 +860,14 @@ func TestValidationTracker_ExpireOldDropsTrieTip(t *testing.T) {
 
 	n1 := consensus.NodeID{1}
 	n2 := consensus.NodeID{2}
-	vt.SetTrusted([]consensus.NodeID{n1, n2})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setTrusted([]consensus.NodeID{n1, n2})
+	vt.setLedgerAncestryProvider(provider)
 
 	vt.Add(makeTrustedValidation(n1, abc.ID(), abc.Seq(), now))
 	vt.Add(makeTrustedValidation(n2, abd.ID(), abd.Seq(), now))
 
 	// Both validators back the common ancestor "ab" through their tips.
-	if got := vt.TrustedSupport(ab.ID()); got != 2 {
+	if got := vt.trustedSupport(ab.ID()); got != 2 {
 		t.Fatalf("pre-expire branchSupport(ab): got %d, want 2", got)
 	}
 
@@ -878,10 +878,10 @@ func TestValidationTracker_ExpireOldDropsTrieTip(t *testing.T) {
 
 	// After expiry the trie must drop both tips. branchSupport on any
 	// ancestor falls to 0 — no phantom support survives.
-	if got := vt.TrustedSupport(ab.ID()); got != 0 {
+	if got := vt.trustedSupport(ab.ID()); got != 0 {
 		t.Errorf("post-expire branchSupport(ab): got %d, want 0 (trie tip leaked)", got)
 	}
-	if got := vt.TrustedSupport(abc.ID()); got != 0 {
+	if got := vt.trustedSupport(abc.ID()); got != 0 {
 		t.Errorf("post-expire branchSupport(abc): got %d, want 0", got)
 	}
 }
@@ -898,8 +898,8 @@ func TestValidationTracker_ProposersFinishedIncludesNegUNL(t *testing.T) {
 
 	n1 := consensus.NodeID{1}
 	n2 := consensus.NodeID{2}
-	vt.SetTrusted([]consensus.NodeID{n1, n2})
-	vt.SetNegativeUNL([]consensus.NodeID{n2})
+	vt.setTrusted([]consensus.NodeID{n1, n2})
+	vt.setNegativeUNL([]consensus.NodeID{n2})
 
 	// Both validators advance past prev (seq 100). With no ancestry
 	// provider, ProposersFinished takes the seq-only fallback.
@@ -907,7 +907,7 @@ func TestValidationTracker_ProposersFinishedIncludesNegUNL(t *testing.T) {
 	vt.Add(makeTrustedValidation(n2, consensus.LedgerID{0xA2}, 101, now))
 
 	prev := &mockLedger{id: consensus.LedgerID{0x10}, seq: 100}
-	if got := vt.ProposersFinished(prev); got != 2 {
+	if got := vt.proposersFinished(prev); got != 2 {
 		t.Errorf("ProposersFinished must include negUNL validators: got %d, want 2", got)
 	}
 }
@@ -931,8 +931,8 @@ func TestValidationTracker_GetJSONTrie(t *testing.T) {
 	provider.add(abc)
 
 	n1 := consensus.NodeID{1}
-	vt.SetTrusted([]consensus.NodeID{n1})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setTrusted([]consensus.NodeID{n1})
+	vt.setLedgerAncestryProvider(provider)
 	if !vt.Add(makeTrustedValidation(n1, abc.ID(), abc.Seq(), now)) {
 		t.Fatal("Add(n1->abc) should succeed")
 	}

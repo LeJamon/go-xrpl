@@ -254,7 +254,7 @@ func TestRouter_HandleManifests_InvalidDoesNotStore(t *testing.T) {
 	go router.Run(ctx)
 
 	// Start from a valid manifest and corrupt MasterSignature so
-	// Deserialize succeeds but Verify fails — Cache.ApplyManifest
+	// Deserialize succeeds but verify fails — Cache.ApplyManifest
 	// returns Invalid and the cache stays empty.
 	serialized := buildWireManifest(t, 5, 0x30, 0x31)
 	decoded, err := binarycodec.Decode(hex.EncodeToString(serialized))

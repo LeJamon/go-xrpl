@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-type EngineLifecycle interface {
+type engineLifecycle interface {
 	Start(ctx context.Context) error
 
 	Stop() error
@@ -15,12 +15,12 @@ type EngineTerminal interface {
 	Done() <-chan error
 }
 
-type EngineRoundDriver interface {
+type engineRoundDriver interface {
 	// StartRound begins a round; proposing enables this node's proposal.
 	StartRound(round RoundID, proposing bool) error
 }
 
-type EngineInbound interface {
+type engineInbound interface {
 	// OnProposal handles an incoming proposal. originPeer is the overlay peer
 	// ID that delivered it (0 for self-originated); passed to the relay path
 	// so gossip forwards exclude the originator.
@@ -33,11 +33,7 @@ type EngineInbound interface {
 	OnTxSet(id TxSetID, txs [][]byte) error
 }
 
-type EngineLedgerReceiver interface {
-	OnLedger(id LedgerID, ledger []byte) error
-}
-
-type EngineLedgerSwitch interface {
+type engineLedgerSwitch interface {
 	// CanAcceptLedger applies the validated-ledger freshness and sequence checks
 	// without changing the consensus working ledger.
 	CanAcceptLedger(id LedgerID) (bool, error)
@@ -52,7 +48,7 @@ type EngineLedgerSwitch interface {
 	OnLedgerAcquireFailed(id LedgerID)
 }
 
-type EngineObservability interface {
+type engineObservability interface {
 	Mode() Mode
 
 	Phase() Phase
@@ -66,24 +62,23 @@ type EngineObservability interface {
 	GetJSON(full bool) map[string]any
 }
 
-type EngineEvents interface {
+type engineEvents interface {
 	// Subscribe registers a sink for the engine's typed event bus. The engine
 	// fires events on its own goroutine, so OnEvent must not block.
 	Subscribe(sub EventSubscriber)
 }
 
 type RouterEngine interface {
-	EngineInbound
-	EngineLedgerSwitch
+	engineInbound
+	engineLedgerSwitch
 }
 
 type Engine interface {
-	EngineLifecycle
-	EngineRoundDriver
+	engineLifecycle
+	engineRoundDriver
 	RouterEngine
-	EngineLedgerReceiver
-	EngineObservability
-	EngineEvents
+	engineObservability
+	engineEvents
 }
 
 // VerifiedValidationProcessor is implemented by engines that separate
@@ -193,7 +188,7 @@ type WireableAdaptor interface {
 	SetValidationHistorian(h ValidationHistorian)
 }
 
-// ListedOracle is an optional TrustOracle extension reporting validator-list
+// ListedOracle is an optional trust-oracle extension reporting validator-list
 // membership: a listed validator is published by at least one configured list
 // publisher but not (necessarily) in the UNL. The engine stores validations
 // from listed signers so a later trust change promotes the ones already seen
@@ -241,9 +236,9 @@ type LedgerAcceptDeferrer interface {
 // Adaptor is composed of the narrower per-subsystem interfaces below; depend
 // on the narrowest one that satisfies your needs.
 
-// NetworkBroadcaster handles self-originated outbound traffic and the per-peer
+// networkBroadcaster handles self-originated outbound traffic and the per-peer
 // squelch / reverse-index bookkeeping that goes with it.
-type NetworkBroadcaster interface {
+type networkBroadcaster interface {
 	// BroadcastProposal sends our own proposal to all peers, bypassing
 	// per-peer squelch.
 	BroadcastProposal(proposal *Proposal) error
@@ -272,9 +267,9 @@ type NetworkBroadcaster interface {
 	RequestLedger(id LedgerID) error
 }
 
-// LedgerProvider exposes the node's persistent ledger view: lookup, validated
+// ledgerProvider exposes the node's persistent ledger view: lookup, validated
 // state, and the build/store/validate pipeline.
-type LedgerProvider interface {
+type ledgerProvider interface {
 	GetLedger(id LedgerID) (Ledger, error)
 
 	// GetLedgerBySeq returns the locally-held CLOSED ledger at seq from
@@ -306,8 +301,8 @@ type LedgerProvider interface {
 	StoreLedger(ledger Ledger) error
 }
 
-// TxPool exposes the open-ledger transaction view to the engine.
-type TxPool interface {
+// txPool exposes the open-ledger transaction view to the engine.
+type txPool interface {
 	GetPendingTxs() [][]byte
 
 	// GetProposableTxs returns the tx set the node will propose this round.
@@ -335,9 +330,9 @@ type TxPool interface {
 	GetTx(id TxID) ([]byte, error)
 }
 
-// ValidatorIdentity carries the local node's validator credentials and the
+// validatorIdentity carries the local node's validator credentials and the
 // sign/verify pair for proposals and validations.
-type ValidatorIdentity interface {
+type validatorIdentity interface {
 	IsValidator() bool
 
 	// IsAmendmentBlocked reports whether an unsupported amendment has
@@ -383,9 +378,9 @@ func (f FeeVoteResult) HasReserveIncrement() bool {
 	return f.ReserveIncrementSet || f.ReserveIncrement != 0
 }
 
-// TrustOracle exposes the UNL / negative-UNL / quorum state and the
+// trustOracle exposes the UNL / negative-UNL / quorum state and the
 // amendment / standalone gates used during proposal and validation.
-type TrustOracle interface {
+type trustOracle interface {
 	// IsTrusted returns true if the node is in our UNL.
 	IsTrusted(node NodeID) bool
 
@@ -448,8 +443,8 @@ type TrustOracle interface {
 	PeerReportedLedgers() []LedgerID
 }
 
-// TimeSource exposes the network-adjusted clock and close-time machinery.
-type TimeSource interface {
+// timeSource exposes the network-adjusted clock and close-time machinery.
+type timeSource interface {
 	// Now returns the current network-adjusted time.
 	Now() time.Time
 
@@ -465,10 +460,10 @@ type TimeSource interface {
 	AdjustCloseTime(rawCloseTimes CloseTimes)
 }
 
-// StatusEvents carries the engine's coarse-grained state callbacks:
+// statusEvents carries the engine's coarse-grained state callbacks:
 // operating-mode, consensus-reached, full-validation, and the per-round
 // mode/phase transitions used for instrumentation.
-type StatusEvents interface {
+type statusEvents interface {
 	GetOperatingMode() OperatingMode
 
 	SetOperatingMode(mode OperatingMode)
@@ -495,13 +490,13 @@ type StatusEvents interface {
 // Adaptor is the full seam between the consensus engine and the node; new code
 // should prefer one of the narrower interfaces above.
 type Adaptor interface {
-	NetworkBroadcaster
-	LedgerProvider
-	TxPool
-	ValidatorIdentity
-	TrustOracle
-	TimeSource
-	StatusEvents
+	networkBroadcaster
+	ledgerProvider
+	txPool
+	validatorIdentity
+	trustOracle
+	timeSource
+	statusEvents
 }
 
 // Ledger represents a ledger in the consensus process.

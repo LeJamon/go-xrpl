@@ -47,10 +47,10 @@ func TestEngine_OnValidation_ListedUntrustedStoredAndPromoted(t *testing.T) {
 
 	// Stored but untrusted: tip tracked, quorum count zero, no relay under
 	// the default (mock) trusted-only relay policy.
-	if tip := engine.validationTracker.LatestValidation(nL); tip == nil || tip.LedgerID != ledgerA {
+	if tip := engine.validationTracker.latestValidation(nL); tip == nil || tip.LedgerID != ledgerA {
 		t.Fatalf("listed-untrusted validation must be stored; got %+v", tip)
 	}
-	if got := engine.validationTracker.TrustedValidationCount(ledgerA); got != 0 {
+	if got := engine.validationTracker.trustedValidationCount(ledgerA); got != 0 {
 		t.Errorf("untrusted validation must not count toward quorum: got %d, want 0", got)
 	}
 	if relayed := adaptor.relayedValidations(); len(relayed) != 0 {
@@ -62,7 +62,7 @@ func TestEngine_OnValidation_ListedUntrustedStoredAndPromoted(t *testing.T) {
 	adaptor.setTrusted([]consensus.NodeID{nL})
 	adaptor.notifyTrustChanged()
 
-	if got := engine.validationTracker.TrustedValidationCount(ledgerA); got != 1 {
+	if got := engine.validationTracker.trustedValidationCount(ledgerA); got != 1 {
 		t.Errorf("stored validation must count after trust promotion: got %d, want 1", got)
 	}
 }
@@ -80,7 +80,7 @@ func TestEngine_OnValidation_UnlistedUntrustedNotStored(t *testing.T) {
 	if err := engine.OnValidation(v, 3); err != nil {
 		t.Fatalf("unlisted validation errored: %v", err)
 	}
-	if tip := engine.validationTracker.LatestValidation(nU); tip != nil {
+	if tip := engine.validationTracker.latestValidation(nU); tip != nil {
 		t.Errorf("unlisted-untrusted validation must not be stored; got %+v", tip)
 	}
 }

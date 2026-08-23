@@ -40,7 +40,7 @@ func buildTestValidation() *consensus.Validation {
 
 func TestParseSTValidation_Roundtrip(t *testing.T) {
 	orig := buildTestValidation()
-	blob := SerializeSTValidation(orig)
+	blob := serializeSTValidation(orig)
 
 	parsed, err := parseSTValidation(blob)
 	require.NoError(t, err)
@@ -90,7 +90,7 @@ func TestSTValidation_LoadFeePresenceRoundTrip(t *testing.T) {
 			validation := buildTestValidation()
 			test.configure(validation)
 
-			parsed, err := parseSTValidation(SerializeSTValidation(validation))
+			parsed, err := parseSTValidation(serializeSTValidation(validation))
 			require.NoError(t, err)
 			assert.Equal(t, test.wantPresent, parsed.HasLoadFee())
 			assert.Equal(t, test.wantFee, parsed.LoadFee)
@@ -130,7 +130,7 @@ func TestSTValidation_LegacyExplicitZeroFeeVotesRoundTrip(t *testing.T) {
 			validation := buildTestValidation()
 			test.set(validation)
 
-			parsed, err := parseSTValidation(SerializeSTValidation(validation))
+			parsed, err := parseSTValidation(serializeSTValidation(validation))
 			require.NoError(t, err)
 			assert.True(t, test.has(parsed))
 			assert.Zero(t, test.get(parsed))
@@ -170,7 +170,7 @@ func TestSTValidation_ModernExplicitZeroFeeVotesRoundTrip(t *testing.T) {
 			validation := buildTestValidation()
 			test.set(validation)
 
-			parsed, err := parseSTValidation(SerializeSTValidation(validation))
+			parsed, err := parseSTValidation(serializeSTValidation(validation))
 			require.NoError(t, err)
 			assert.True(t, test.has(parsed))
 			value, ok := test.vote(parsed)
@@ -186,7 +186,7 @@ func TestXRPAmount_SignedFeeVoteRoundTrip(t *testing.T) {
 			validation := buildTestValidation()
 			validation.SetBaseFeeDrops(value)
 
-			parsed, err := parseSTValidation(SerializeSTValidation(validation))
+			parsed, err := parseSTValidation(serializeSTValidation(validation))
 			require.NoError(t, err)
 			require.True(t, parsed.HasBaseFeeDrops())
 			got, ok := parsed.BaseFeeDropsVote()
@@ -197,7 +197,7 @@ func TestXRPAmount_SignedFeeVoteRoundTrip(t *testing.T) {
 }
 
 func TestSTValidation_NonNativeFeeVotePresence(t *testing.T) {
-	absent, err := parseSTValidation(SerializeSTValidation(buildTestValidation()))
+	absent, err := parseSTValidation(serializeSTValidation(buildTestValidation()))
 	require.NoError(t, err)
 
 	assert.False(t, absent.HasBaseFeeDrops())
@@ -241,7 +241,7 @@ func parseValidationWithBaseFeeDropsAmount(
 ) (*consensus.Validation, error) {
 	t.Helper()
 
-	blob := SerializeSTValidation(buildTestValidation())
+	blob := serializeSTValidation(buildTestValidation())
 	insertPos := len(blob)
 	for pos := 0; pos < len(blob); {
 		fieldStart := pos
@@ -283,7 +283,7 @@ func testMPTAmount() []byte {
 
 func TestParseSTValidation_PopulatesRaw(t *testing.T) {
 	orig := buildTestValidation()
-	blob := SerializeSTValidation(orig)
+	blob := serializeSTValidation(orig)
 
 	parsed, err := parseSTValidation(blob)
 	require.NoError(t, err)
@@ -302,7 +302,7 @@ func TestParseSTValidation_PopulatesRaw(t *testing.T) {
 
 // TestSTValidation_FlagsRoundTrip pins the wire-flag fidelity gap from
 // review round 2: parseSTValidation must capture the full sfFlags word,
-// and SerializeSTValidation must re-emit it verbatim, so the archive's
+// and serializeSTValidation must re-emit it verbatim, so the archive's
 // flags column reflects what the validator signed (not a synthesized
 // constant).
 func TestSTValidation_FlagsRoundTrip(t *testing.T) {
@@ -311,7 +311,7 @@ func TestSTValidation_FlagsRoundTrip(t *testing.T) {
 	const customVendorBit = 0x00010000
 	orig.Flags = vfFullyCanonicalSig | vfFullValidation | customVendorBit
 
-	blob := SerializeSTValidation(orig)
+	blob := serializeSTValidation(orig)
 	parsed, err := parseSTValidation(blob)
 	require.NoError(t, err)
 
@@ -324,7 +324,7 @@ func TestSTValidation_FlagsRoundTrip(t *testing.T) {
 
 	legacy := buildTestValidation()
 	legacy.Flags = 0 // explicit
-	legacyBlob := SerializeSTValidation(legacy)
+	legacyBlob := serializeSTValidation(legacy)
 	legacyParsed, err := parseSTValidation(legacyBlob)
 	require.NoError(t, err)
 	if legacyParsed.Flags != 0 {
@@ -386,7 +386,7 @@ func TestParseSTValidation_MinimalFields(t *testing.T) {
 
 func TestParseSTValidation_SigningDataExcludesSigOnly(t *testing.T) {
 	orig := buildTestValidation()
-	blob := SerializeSTValidation(orig)
+	blob := serializeSTValidation(orig)
 
 	parsed, err := parseSTValidation(blob)
 	require.NoError(t, err)
@@ -420,7 +420,7 @@ func TestParseSTValidation_MissingRequiredFields(t *testing.T) {
 
 func TestParseSTValidation_UnknownFieldsRejected(t *testing.T) {
 	orig := buildTestValidation()
-	blob := SerializeSTValidation(orig)
+	blob := serializeSTValidation(orig)
 
 	// Insert an unknown UINT32 field (type=2, field=15 = 0x2F) before the last field.
 	// Find sfSigningPubKey (0x73) position and insert before it.
@@ -459,9 +459,8 @@ func TestParseSTValidation_UnknownFieldsRejected(t *testing.T) {
 
 func TestSerializeSTValidation_CanonicalOrder(t *testing.T) {
 	v := buildTestValidation()
-	blob := SerializeSTValidation(v)
+	blob := serializeSTValidation(v)
 
-	// Verify field order by checking field header bytes appear in order.
 	var fieldHeaders []byte
 	pos := 0
 	for pos < len(blob) {
@@ -511,11 +510,11 @@ func TestSerializeSTValidation_CanonicalOrder(t *testing.T) {
 
 func TestValidationFromMessage_Integration(t *testing.T) {
 	orig := buildTestValidation()
-	blob := SerializeSTValidation(orig)
+	blob := serializeSTValidation(orig)
 
 	msg := &message.Validation{Validation: blob}
 	seen := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	parsed, err := ValidationFromMessage(msg, seen)
+	parsed, err := validationFromMessage(msg, seen)
 	require.NoError(t, err)
 
 	assert.Equal(t, orig.LedgerSeq, parsed.LedgerSeq)
@@ -525,11 +524,6 @@ func TestValidationFromMessage_Integration(t *testing.T) {
 }
 
 func TestSignSerializeParseVerify_Roundtrip(t *testing.T) {
-	// This test simulates the full outbound → inbound path:
-	// 1. Create a validation and sign it (like sendValidation)
-	// 2. Serialize to wire format (like ValidationToMessage)
-	// 3. Parse back from wire format (like ValidationFromMessage)
-	// 4. Verify the signature (like OnValidation → VerifyValidation)
 	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
 	require.NoError(t, err)
 
@@ -548,11 +542,11 @@ func TestSignSerializeParseVerify_Roundtrip(t *testing.T) {
 	require.NotEmpty(t, orig.Signature)
 
 	// Direct verify should work (self-signed, no SigningData)
-	err = VerifyValidation(orig)
+	err = verifyValidation(orig)
 	require.NoError(t, err, "direct verify failed")
 
 	// Serialize to wire format
-	blob := SerializeSTValidation(orig)
+	blob := serializeSTValidation(orig)
 	require.NotEmpty(t, blob)
 
 	// Parse back (inbound path)
@@ -569,8 +563,7 @@ func TestSignSerializeParseVerify_Roundtrip(t *testing.T) {
 	assert.Equal(t, orig.LedgerID, parsed.LedgerID)
 	assert.Equal(t, orig.NodeID, parsed.NodeID)
 
-	// Verify the parsed validation (inbound path, uses SigningData)
-	err = VerifyValidation(parsed)
+	err = verifyValidation(parsed)
 	assert.NoError(t, err, "roundtrip verify failed")
 }
 
@@ -587,7 +580,7 @@ func TestVerifyRippledValidation(t *testing.T) {
 	assert.True(t, v.Full)
 	assert.Equal(t, byte(0x02), v.SigningPubKey[0])
 
-	err = VerifyValidation(v)
+	err = verifyValidation(v)
 	assert.NoError(t, err, "rippled validation should verify correctly")
 }
 
@@ -624,10 +617,10 @@ func TestVerifyRippledValidation_PartialNonFull(t *testing.T) {
 	require.NoError(t, identity.SignValidation(v))
 	require.NotEmpty(t, v.Signature)
 
-	// SerializeSTValidation must put Flags = vfFullyCanonicalSig only
+	// serializeSTValidation must put Flags = vfFullyCanonicalSig only
 	// when v.Full is false (matches buildValidationSigningData and
 	// rippled's early-bootstrap shape).
-	blob := SerializeSTValidation(v)
+	blob := serializeSTValidation(v)
 	require.NotEmpty(t, blob)
 
 	parsed, err := parseSTValidation(blob)
@@ -640,7 +633,7 @@ func TestVerifyRippledValidation_PartialNonFull(t *testing.T) {
 	assert.False(t, parsed.Full, "vfFullValidation bit must be clear")
 
 	// And it must verify — this is the bootstrap unblocker.
-	require.NoError(t, VerifyValidation(parsed),
+	require.NoError(t, verifyValidation(parsed),
 		"non-Full rippled-shaped validation must verify; failure here "+
 			"reproduces the all-5 UNL bootstrap stall at val_seq=5")
 }
@@ -648,7 +641,7 @@ func TestVerifyRippledValidation_PartialNonFull(t *testing.T) {
 func TestValidationToMessage_ProducesValidBlob(t *testing.T) {
 	orig := buildTestValidation()
 
-	msg := ValidationToMessage(orig)
+	msg := validationToMessage(orig)
 	require.NotEmpty(t, msg.Validation)
 
 	// Parse the produced blob back.
@@ -663,7 +656,7 @@ func TestValidationToMessage_ProducesValidBlob(t *testing.T) {
 // TestValidationToMessage_RelaysRawBytesVerbatim pins the relay
 // contract: a peer-originated validation (one whose Raw field was
 // populated by parseSTValidation from the wire) MUST be forwarded
-// byte-for-byte by ValidationToMessage. Re-serializing from struct
+// byte-for-byte by validationToMessage. Re-serializing from struct
 // fields can produce a subtly different preimage (different VL
 // encoding, missing optional fields the parser didn't model, etc.)
 // that no longer matches the validator's signature — every
@@ -678,7 +671,7 @@ func TestValidationToMessage_ProducesValidBlob(t *testing.T) {
 // peers had pairwise-consistent closed ledgers.
 //
 // The test installs a deliberately-bogus marker byte in Raw that
-// SerializeSTValidation would never emit, then asserts the relay
+// serializeSTValidation would never emit, then asserts the relay
 // preserves it verbatim. If the implementation falls back to
 // serializing from struct fields, the marker disappears and the
 // test fails.
@@ -689,7 +682,7 @@ func TestValidationToMessage_RelaysRawBytesVerbatim(t *testing.T) {
 	// the "raw bytes available, use them" branch unconditionally.
 	v.Signature = []byte{0x30, 0x44, 0x02, 0x20, 0xDE, 0xAD, 0xBE, 0xEF}
 
-	// Marker bytes that SerializeSTValidation never emits — a
+	// Marker bytes that serializeSTValidation never emits — a
 	// trailing 0xFE 0xFE pair after a plausible inner blob. The
 	// canonical serializer emits exactly the modeled fields and
 	// nothing else, so any byte-by-byte match against Raw must
@@ -700,23 +693,23 @@ func TestValidationToMessage_RelaysRawBytesVerbatim(t *testing.T) {
 	}
 	v.Raw = raw
 
-	msg := ValidationToMessage(v)
+	msg := validationToMessage(v)
 	require.NotNil(t, msg)
 	assert.Equal(t, raw, msg.Validation,
-		"ValidationToMessage must forward v.Raw verbatim for peer-relayed "+
+		"validationToMessage must forward v.Raw verbatim for peer-relayed "+
 			"validations. Re-serializing from struct fields breaks the "+
 			"signature preimage on relay — the actual 5-validator-soak bug.")
 }
 
 // TestValidationToMessage_NewValidationStillSerializes confirms
 // the locally-signed path is unaffected: when v.Raw is empty, the
-// message MUST be produced via SerializeSTValidation (and v.Raw
+// message MUST be produced via serializeSTValidation (and v.Raw
 // caches the result for downstream consumers).
 func TestValidationToMessage_NewValidationStillSerializes(t *testing.T) {
 	v := buildTestValidation()
 	v.Raw = nil // simulate a freshly-built local validation
 
-	msg := ValidationToMessage(v)
+	msg := validationToMessage(v)
 	require.NotEmpty(t, msg.Validation)
 	require.NotEmpty(t, v.Raw, "v.Raw must be cached after serialization")
 	assert.Equal(t, msg.Validation, v.Raw,
@@ -753,7 +746,7 @@ func TestSerializeSTValidation_CanonicalOrder_Hash256BeforeAmount(t *testing.T) 
 	v.ReserveBaseDrops = 20
 	v.ReserveIncrementDrops = 5
 
-	blob := SerializeSTValidation(v)
+	blob := serializeSTValidation(v)
 	require.NotEmpty(t, blob)
 
 	// Walk each top-level field header and record the type code. We
@@ -833,11 +826,11 @@ func TestSignVerifyRoundTrip_AllOptionalFields(t *testing.T) {
 	// bytes a peer would receive. If serializer and preimage-builder
 	// disagree, the signature doesn't match what the peer hashes and
 	// verify fails.
-	msg := ValidationToMessage(v)
+	msg := validationToMessage(v)
 	reparsed, err := parseSTValidation(msg.Validation)
 	require.NoError(t, err)
 
-	assert.NoError(t, VerifyValidation(reparsed),
+	assert.NoError(t, verifyValidation(reparsed),
 		"signature must verify against the reparsed wire bytes — divergence here means serializer and signing preimage disagree on field order")
 }
 

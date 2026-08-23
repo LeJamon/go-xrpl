@@ -20,7 +20,7 @@ func TestFinalityDeferralBlocksConcurrentDrain(t *testing.T) {
 	})
 
 	tracker.beginFinalityDeferral()
-	status := tracker.addStatus(&consensus.Validation{
+	status := tracker.addStatusWithFinality(&consensus.Validation{
 		LedgerID:  consensus.LedgerID{0xA5},
 		LedgerSeq: 100,
 		NodeID:    nodeID,
@@ -28,7 +28,7 @@ func TestFinalityDeferralBlocksConcurrentDrain(t *testing.T) {
 		SeenTime:  now,
 		Full:      true,
 	}, false)
-	require.Equal(t, ValStatusCurrent, status)
+	require.Equal(t, valStatusCurrent, status)
 
 	drainDone := make(chan struct{})
 	go func() {

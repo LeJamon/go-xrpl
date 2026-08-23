@@ -164,7 +164,7 @@ func TestNewFromConfigRejectsInvalidManifestCacheLimit(t *testing.T) {
 func applyTokenManifest(t *testing.T, cache *manifest.Cache, masterSeed, signingSeed byte, sequence uint32) [33]byte {
 	t.Helper()
 	fixture := newTokenFixtureWithSeeds(t, masterSeed, signingSeed, sequence)
-	identity, err := NewValidatorIdentityFromToken(fixture.tokenBlock)
+	identity, err := newValidatorIdentityFromToken(fixture.tokenBlock)
 	require.NoError(t, err)
 	require.Equal(t, manifest.Accepted, cache.ApplyManifest(identity.Manifest))
 	return identity.MasterKey

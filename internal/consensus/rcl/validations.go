@@ -34,38 +34,38 @@ func safeTrieCall(fn string, op func()) (panicked bool) {
 	return false
 }
 
-// ValStatus classifies the outcome of AddStatus, mirroring rippled's
+// valStatus classifies the outcome of addStatus, mirroring rippled's
 // ValStatus (Validations.h:169-180).
-type ValStatus int
+type valStatus int
 
 const (
-	// ValStatusCurrent — added; counts toward quorum and steers the trie.
-	ValStatusCurrent ValStatus = iota
-	// ValStatusStale — outside the freshness window, below the sequence
+	// valStatusCurrent — added; counts toward quorum and steers the trie.
+	valStatusCurrent valStatus = iota
+	// valStatusStale — outside the freshness window, below the sequence
 	// floor, or superseded by the node's tracked tip.
-	ValStatusStale
-	// ValStatusBadSeq — violates the increasing-seq requirement without
+	valStatusStale
+	// valStatusBadSeq — violates the increasing-seq requirement without
 	// double-sign evidence.
-	ValStatusBadSeq
-	// ValStatusMultiple — same seq and ledger signed with different
+	valStatusBadSeq
+	// valStatusMultiple — same seq and ledger signed with different
 	// cookies (likely two servers sharing a validator key).
-	ValStatusMultiple
-	// ValStatusConflicting — same seq signed for different ledgers, or
+	valStatusMultiple
+	// valStatusConflicting — same seq signed for different ledgers, or
 	// re-signed with a different sign time.
-	ValStatusConflicting
+	valStatusConflicting
 )
 
-func (s ValStatus) String() string {
+func (s valStatus) String() string {
 	switch s {
-	case ValStatusCurrent:
+	case valStatusCurrent:
 		return "current"
-	case ValStatusStale:
+	case valStatusStale:
 		return "stale"
-	case ValStatusBadSeq:
+	case valStatusBadSeq:
 		return "badSeq"
-	case ValStatusMultiple:
+	case valStatusMultiple:
 		return "multiple"
-	case ValStatusConflicting:
+	case valStatusConflicting:
 		return "conflicting"
 	default:
 		return "unknown"
@@ -155,7 +155,7 @@ type ValidationTracker struct {
 	// at that seq — the evidence the Byzantine cross-check runs against
 	// when a node submits a non-monotonic seq, so equivocation is caught
 	// even at seqs the node has already superseded. Buckets age out after
-	// validationSetExpires without access (FlushStale sweep).
+	// validationSetExpires without access (flushStale sweep).
 	bySequence map[uint32]*seqValidations
 
 	// seqEnforcers holds the per-remote-node monotonic-seq floor with
@@ -226,7 +226,7 @@ type ValidationTracker struct {
 
 	// trie holds branch support for every trusted validator's latest tip,
 	// including validators on the negUNL, so they continue to steer
-	// GetPreferred and ProposersFinished. Full-validation quorum counts
+	// GetPreferred and proposersFinished. Full-validation quorum counts
 	// exclude negUNL validators separately. nil when ancestry is unset.
 	trie *ledgertrie.Trie
 
@@ -238,7 +238,7 @@ type ValidationTracker struct {
 	// resolvable yet, keyed by (seq, id) → waiting validators — rippled's
 	// acquiring_ map. Entries drain via checkAcquired once the
 	// ledger is acquired, and expire with the validations that reference
-	// them (supersede, ExpireOld, FlushStale, trust rotation). nil when
+	// them (supersede, ExpireOld, flushStale, trust rotation). nil when
 	// the trie is disabled.
 	acquiring map[acquiringKey]map[consensus.NodeID]struct{}
 }
@@ -301,9 +301,9 @@ func (vt *ValidationTracker) SetTrustedAndQuorum(nodes []consensus.NodeID, quoru
 	vt.checkAcquired()
 }
 
-// SetTrustedQuorumAndNegativeUNL replaces every input to finality accounting
+// setTrustedQuorumAndNegativeUNL replaces every input to finality accounting
 // under one lock so no intermediate configuration can promote a ledger.
-func (vt *ValidationTracker) SetTrustedQuorumAndNegativeUNL(
+func (vt *ValidationTracker) setTrustedQuorumAndNegativeUNL(
 	nodes []consensus.NodeID,
 	quorum int,
 	negativeUNL []consensus.NodeID,
@@ -334,8 +334,8 @@ func (vt *ValidationTracker) setTrustedLocked(nodes []consensus.NodeID) {
 	vt.rebuildTrieLocked()
 }
 
-// SetQuorumUnavailableFunc installs the live finality safety gate.
-func (vt *ValidationTracker) SetQuorumUnavailableFunc(fn func() bool) {
+// setQuorumUnavailableFunc installs the live finality safety gate.
+func (vt *ValidationTracker) setQuorumUnavailableFunc(fn func() bool) {
 	vt.mu.Lock()
 	vt.quorumUnavailable = fn
 	vt.recheckFinalityLocked()
@@ -343,12 +343,12 @@ func (vt *ValidationTracker) SetQuorumUnavailableFunc(fn func() bool) {
 	vt.drainFinality()
 }
 
-// RecheckFinality reevaluates stored validation buckets against the current
+// recheckFinality reevaluates stored validation buckets against the current
 // quorum, trust, negative-UNL, and live-unavailable state. Callers that own a
 // dynamic quorum-unavailable source should invoke this after that source
 // transitions open so evidence collected while the gate was closed can be
 // promoted without waiting for another validation message.
-func (vt *ValidationTracker) RecheckFinality() {
+func (vt *ValidationTracker) recheckFinality() {
 	vt.mu.Lock()
 	vt.recheckFinalityLocked()
 	vt.mu.Unlock()
@@ -373,13 +373,13 @@ func (vt *ValidationTracker) SetSeqToKeep(low, high uint32) {
 	vt.keepLow, vt.keepHigh = low, high
 }
 
-// SetNegativeUNL replaces the current negative-UNL set. Validators on
+// setNegativeUNL replaces the current negative-UNL set. Validators on
 // the negative-UNL are still considered trusted for message acceptance
 // but are excluded from the quorum count in checkFullValidation —
 // matching rippled's behavior of disabling temporarily-offline
 // validators without removing them from the config. Pass nil or an
 // empty slice to clear the negUNL.
-func (vt *ValidationTracker) SetNegativeUNL(nodes []consensus.NodeID) {
+func (vt *ValidationTracker) setNegativeUNL(nodes []consensus.NodeID) {
 	vt.mu.Lock()
 	vt.setNegativeUNLLocked(nodes)
 	// Negative-UNL membership only changes quorum accounting. Trusted
@@ -397,11 +397,11 @@ func (vt *ValidationTracker) setNegativeUNLLocked(nodes []consensus.NodeID) {
 	}
 }
 
-// SetMinSeq advances the sequence floor below which incoming
+// setMinSeq advances the sequence floor below which incoming
 // validations are rejected. Called by the engine after a ledger is
 // accepted to discard far-stale validations without holding them in
 // memory. Passing a value <= current minSeq is a no-op.
-func (vt *ValidationTracker) SetMinSeq(seq uint32) {
+func (vt *ValidationTracker) setMinSeq(seq uint32) {
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
 	if seq > vt.minSeq {
@@ -496,11 +496,11 @@ func IsCurrent(now, signTime, seenTime time.Time) bool {
 // Add adds a validation to the tracker.
 // Returns true if this is a new validation (not duplicate).
 func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
-	return vt.AddStatus(validation) == ValStatusCurrent
+	return vt.addStatus(validation) == valStatusCurrent
 }
 
-// AddStatus adds a validation and classifies the outcome. Only
-// ValStatusCurrent validations enter the quorum/trie indexes; every
+// addStatus adds a validation and classifies the outcome. Only
+// Current validations enter the quorum/trie indexes; every
 // non-stale one is recorded in the by-seq evidence index first, so a
 // double-sign is detected even at a seq the node has already superseded.
 //
@@ -512,7 +512,7 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 //     the trie, mirroring rippled where updateTrie runs for every
 //     trusted validation regardless of full-ness. The Full filter lives
 //     in the quorum counters (countTrustedExcludingNegUNLLocked,
-//     ProposersValidated), not at the door — dropping partials here
+//     proposersValidated), not at the door — dropping partials here
 //     blinds every peer's preferred-ledger steering during recovery.
 //   - Stale or clock-skewed validations (outside the wall/local
 //     windows defined above) are rejected via isCurrent.
@@ -530,16 +530,15 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 //     Sequence monotonicity and equivocation remain enforced independently by
 //     bySequence/seqEnforcers.
 //
-// onFullyValidated is fired outside vt.mu. Engine callers use addStatus with a
-// finality deferral so tracker and round state remain linearized while callback
-// dispatch waits for the engine mutex to be released.
-func (vt *ValidationTracker) AddStatus(validation *consensus.Validation) ValStatus {
-	return vt.addStatus(validation, true)
+// onFullyValidated is fired outside vt.mu. Engine callers defer finality so
+// tracker and round state remain linearized until the engine mutex is released.
+func (vt *ValidationTracker) addStatus(validation *consensus.Validation) valStatus {
+	return vt.addStatusWithFinality(validation, true)
 }
 
-func (vt *ValidationTracker) addStatus(validation *consensus.Validation, drainFinality bool) ValStatus {
+func (vt *ValidationTracker) addStatusWithFinality(validation *consensus.Validation, drainFinality bool) valStatus {
 	if validation == nil {
-		return ValStatusStale
+		return valStatusStale
 	}
 	// The tracker owns every validation it admits. Clone before reading any
 	// mutable field so later caller mutations cannot alter indexed state.
@@ -550,7 +549,7 @@ func (vt *ValidationTracker) addStatus(validation *consensus.Validation, drainFi
 	vt.mu.RUnlock()
 	now := nowFn()
 	if !IsCurrent(now, validation.SignTime, validation.SeenTime) {
-		return ValStatusStale
+		return valStatusStale
 	}
 
 	vt.checkAcquired()
@@ -596,20 +595,20 @@ func (vt *ValidationTracker) addStatus(validation *consensus.Validation, drainFi
 	}
 	if !enf.advance(now, validation.LedgerSeq) {
 		if tracked.LedgerID != validation.LedgerID {
-			return ValStatusConflicting
+			return valStatusConflicting
 		}
 		if !tracked.SignTime.Equal(validation.SignTime) {
-			return ValStatusConflicting
+			return valStatusConflicting
 		}
 		if tracked.Cookie != validation.Cookie {
-			return ValStatusMultiple
+			return valStatusMultiple
 		}
-		return ValStatusBadSeq
+		return valStatusBadSeq
 	}
 
 	// Reject far-stale validations below the sequence floor.
 	if vt.minSeq > 0 && validation.LedgerSeq < vt.minSeq {
-		return ValStatusStale
+		return valStatusStale
 	}
 
 	existing, hasExisting := vt.byNode[resolvedID]
@@ -632,7 +631,7 @@ func (vt *ValidationTracker) addStatus(validation *consensus.Validation, drainFi
 		// Rippled records the by-ledger evidence before returning Stale, but
 		// only a Current validation drives checkAccept. A later trust/quorum
 		// recheck can still promote this exact ledger without another message.
-		return ValStatusStale
+		return valStatusStale
 	}
 	vt.byNode[resolvedID] = validation
 
@@ -650,7 +649,7 @@ func (vt *ValidationTracker) addStatus(validation *consensus.Validation, drainFi
 	// Queue the fire-tuple under the lock; the deferred drainer revalidates
 	// eligibility and invokes the callback only after vt.mu is released.
 	vt.checkFullValidationLocked(validation.LedgerID, validation.LedgerSeq, true)
-	return ValStatusCurrent
+	return valStatusCurrent
 }
 
 // trackBySequenceLocked records validation in the by-seq evidence index
@@ -891,10 +890,10 @@ func (vt *ValidationTracker) quorumUnavailableLocked() bool {
 	return vt.quorumUnavailable != nil && vt.quorumUnavailable()
 }
 
-// GetTrustedValidations returns all trusted validations recorded for a ledger
+// getTrustedValidations returns all trusted validations recorded for a ledger
 // hash, including partial validations. Callers that make protocol quorum or
 // voting decisions must use GetTrustedFullValidations instead.
-func (vt *ValidationTracker) GetTrustedValidations(ledgerID consensus.LedgerID) []*consensus.Validation {
+func (vt *ValidationTracker) getTrustedValidations(ledgerID consensus.LedgerID) []*consensus.Validation {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 
@@ -990,13 +989,13 @@ func (vt *ValidationTracker) RecheckFullyValidated(
 	return result, quorum, accepted
 }
 
-// TrustedValidationCount returns the count of trusted validations
+// trustedValidationCount returns the count of trusted validations
 // for a ledger, EXCLUDING validators currently on the negative UNL.
 // Matches rippled's LedgerMaster.cpp:886,952,1120 where every trusted
 // count flows through negativeUNLFilter before comparison — so any
 // consumer of this method (quorum gate, server_info, future LedgerTrie
 // port) sees consistent, filtered numbers.
-func (vt *ValidationTracker) TrustedValidationCount(ledgerID consensus.LedgerID) int {
+func (vt *ValidationTracker) trustedValidationCount(ledgerID consensus.LedgerID) int {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 
@@ -1094,7 +1093,7 @@ func (vt *ValidationTracker) acquiringMajorityLocked() (consensus.LedgerID, uint
 	return bestKey.id, bestKey.seq, true
 }
 
-// ProposersValidated returns the count of trusted validators whose
+// proposersValidated returns the count of trusted validators whose
 // MOST RECENT (highest-seq) full validation points at ledgerID. This
 // is the peer-pressure signal rippled uses in shouldCloseLedger via
 // adaptor_.proposersValidated(prevLedgerID_) at RCLConsensus.cpp:281.
@@ -1102,7 +1101,7 @@ func (vt *ValidationTracker) acquiringMajorityLocked() (consensus.LedgerID, uint
 // Mirrors numTrustedForLedger at Validations.h:1037-1050 — filters on
 // trusted && full and intentionally does NOT filter negUNL (negUNL
 // adjusts quorum, not the count).
-func (vt *ValidationTracker) ProposersValidated(ledgerID consensus.LedgerID) int {
+func (vt *ValidationTracker) proposersValidated(ledgerID consensus.LedgerID) int {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 
@@ -1127,13 +1126,13 @@ func (vt *ValidationTracker) ProposersValidated(ledgerID consensus.LedgerID) int
 	return count
 }
 
-// ProposersFinished counts trusted validators whose latest validation is
+// proposersFinished counts trusted validators whose latest validation is
 // strictly past prev. Equivalent to rippled's proposersFinished →
 // getNodesAfter used by checkConsensus to return MovedOn. Like
 // getNodesAfter it reads the trie, so negUNL validators ARE counted here
 // (they steer just like any trusted validator); negUNL only adjusts the
 // quorum threshold, not this "have the peers moved on" signal.
-func (vt *ValidationTracker) ProposersFinished(prev consensus.Ledger) int {
+func (vt *ValidationTracker) proposersFinished(prev consensus.Ledger) int {
 	if prev == nil {
 		return 0
 	}
@@ -1256,23 +1255,23 @@ func lexLessLgrID(a, b consensus.LedgerID) bool {
 	return false
 }
 
-// LatestValidation returns the latest validation from a node.
-func (vt *ValidationTracker) LatestValidation(nodeID consensus.NodeID) *consensus.Validation {
+// latestValidation returns the latest validation from a node.
+func (vt *ValidationTracker) latestValidation(nodeID consensus.NodeID) *consensus.Validation {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 	return cloneValidation(vt.byNode[nodeID])
 }
 
-// CurrentNodeIDs returns the node IDs of every validator whose latest
+// currentNodeIDs returns the node IDs of every validator whose latest
 // tracked validation still passes the IsCurrent freshness gate — the set
 // observed actively validating right now, partial or full, trusted or not.
 // The gate matches Add()'s admission check, so a node appears iff its most
 // recent validation is neither stale nor clock-skewed against the
-// network-adjusted clock. Enumeration only; FlushStale does the paired
+// network-adjusted clock. Enumeration only; flushStale does the paired
 // eviction that rippled folds into its current() sweep. Mirrors rippled's
 // Validations::getCurrentNodeIDs — the live-participation set gathered when
 // the engine refreshes the trusted set and quorum each round.
-func (vt *ValidationTracker) CurrentNodeIDs() []consensus.NodeID {
+func (vt *ValidationTracker) currentNodeIDs() []consensus.NodeID {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 
@@ -1286,14 +1285,14 @@ func (vt *ValidationTracker) CurrentNodeIDs() []consensus.NodeID {
 	return ids
 }
 
-// FlushStale drops non-current validations from the steering indexes (byNode
+// flushStale drops non-current validations from the steering indexes (byNode
 // + trie tips), mirroring rippled's current() sweep inside withTrie
 // (Validations.h:509-533): a silent validator must stop steering
 // preferred-ledger selection once its last validation ages past the isCurrent
 // window. Driven from the engine heartbeat because ExpireOld only runs on
 // full-validation progress — during a stall it never fires. Per-ledger
 // history (vt.validations) still ages via ExpireOld.
-func (vt *ValidationTracker) FlushStale() {
+func (vt *ValidationTracker) flushStale() {
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
 	now := vt.now()
@@ -1384,14 +1383,14 @@ func (vt *ValidationTracker) ExpireOld(minSeq uint32) {
 	}
 }
 
-// Flush discards all accumulated validation state — the latest
+// flush discards all accumulated validation state — the latest
 // validation per node, the per-ledger maps, the fully-validated firing
 // set, and the trie — while preserving configuration (trusted set,
 // negUNL, quorum, freshness, clock, callbacks, ancestry, and sequence
 // floor). Called on orderly shutdown and to reset for a clean
 // restart-in-process. It does not fire onStale: the state is dropped,
 // not archived.
-func (vt *ValidationTracker) Flush() {
+func (vt *ValidationTracker) flush() {
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
 

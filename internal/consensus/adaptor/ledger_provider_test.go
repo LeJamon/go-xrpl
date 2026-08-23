@@ -271,18 +271,18 @@ func TestLedgerProvider_GetProofPath_PropagatesLookupDeadline(t *testing.T) {
 func TestLedgerProvider_ContextCancellationWinsOverLookupErrorTranslation(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		call func(*LedgerProvider, context.Context) error
+		call func(*ledgerProvider, context.Context) error
 	}{
 		{
 			name: "replay delta",
-			call: func(provider *LedgerProvider, ctx context.Context) error {
+			call: func(provider *ledgerProvider, ctx context.Context) error {
 				_, _, err := provider.GetReplayDeltaContext(ctx, make([]byte, 32))
 				return err
 			},
 		},
 		{
 			name: "proof path",
-			call: func(provider *LedgerProvider, ctx context.Context) error {
+			call: func(provider *ledgerProvider, ctx context.Context) error {
 				_, _, err := provider.GetProofPathContext(
 					ctx, make([]byte, 32), make([]byte, 32), message.LedgerMapAccountState,
 				)
@@ -412,7 +412,7 @@ func TestLedgerProvider_GetProofPath_KeyAbsent(t *testing.T) {
 }
 
 // TestLedgerProvider_GetProofPath_UnknownLedger verifies that an unknown
-// ledger hash yields ErrLedgerNotFound — handler maps this to reNO_LEDGER.
+// ledger hash yields errLedgerNotFound — handler maps this to reNO_LEDGER.
 func TestLedgerProvider_GetProofPath_UnknownLedger(t *testing.T) {
 	lookup := newFakeLookup()
 	provider := newLedgerProviderForTest(lookup)
@@ -441,7 +441,7 @@ func TestLedgerProvider_GetProofPath_InvalidMapType(t *testing.T) {
 	header, path, err := provider.GetProofPath(hash[:], someKey[:], bogus)
 	require.Error(t, err, "invalid map type must surface an error")
 	assert.NotErrorIs(t, err, peermanagement.ErrLedgerNotFound,
-		"invalid map type must NOT report ErrLedgerNotFound — that would mislead the handler")
+		"invalid map type must NOT report errLedgerNotFound — that would mislead the handler")
 	assert.NotErrorIs(t, err, peermanagement.ErrKeyNotFound,
 		"invalid map type must NOT report ErrKeyNotFound either")
 	assert.Nil(t, header)

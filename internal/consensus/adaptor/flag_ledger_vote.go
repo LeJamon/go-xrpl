@@ -198,7 +198,7 @@ func voteAmount(value drops.XRPAmount) *drops.XRPAmount {
 // GotMajority and LostMajority across consecutive rounds. Both
 // TrustedValidations (the threshold denominator) and Votes flow
 // from the cache; the raw parentValidations slice is fed into
-// the cache via RecordVotes and not used afterwards.
+// the cache via recordVotes and not used afterwards.
 func (a *Adaptor) runAmendmentVote(
 	prev *ledger.Ledger,
 	upcomingSeq uint32,
@@ -213,8 +213,8 @@ func (a *Adaptor) runAmendmentVote(
 	// trusted-vote cache expiry and the majority-window enable
 	// check by one round.
 	closeTime := prev.Header().ParentCloseTime
-	a.trustedVotes.RecordVotes(closeTime, parentValidations)
-	available, rawVotes := a.trustedVotes.GetVotes()
+	a.trustedVotes.recordVotes(closeTime, parentValidations)
+	available, rawVotes := a.trustedVotes.getVotes()
 
 	votes := make(map[amendmentvote.Amendment]int, len(rawVotes))
 	maps.Copy(votes, rawVotes)

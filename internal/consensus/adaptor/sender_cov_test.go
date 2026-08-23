@@ -214,23 +214,6 @@ func snd_newOverlaySender(t *testing.T) *OverlaySender {
 	return NewOverlaySender(overlay)
 }
 
-func TestSndAdaptor_BroadcastStatusChange_ViaOnPhaseChange(t *testing.T) {
-	// BroadcastStatusChange is not public on *Adaptor; it's called
-	// internally by OnPhaseChange when transitioning to Establish/Accepted.
-	fake := &snd_fakeOverlay{}
-	a := snd_newAdaptorWithFake(t, fake)
-	a.OnPhaseChange(consensus.PhaseOpen, consensus.PhaseEstablish)
-	// No error to check — the method is fire-and-forget.
-}
-
-func TestSndAdaptor_NetworkBroadcastStatusChange(t *testing.T) {
-	// Exercise the consensusNetwork.BroadcastStatusChange path directly
-	// through the noopSender (wired by default when Sender is nil).
-	svc := newTestLedgerService(t)
-	a := New(Config{LedgerService: svc})
-	a.OnPhaseChange(consensus.PhaseOpen, consensus.PhaseEstablish)
-}
-
 func TestSndAdaptor_UpdateRelaySlot(t *testing.T) {
 	fake := &snd_fakeOverlay{}
 	a := snd_newAdaptorWithFake(t, fake)
@@ -242,100 +225,10 @@ func TestSndAdaptor_UpdateRelaySlot(t *testing.T) {
 	assert.ElementsMatch(t, []uint64{1, 2, 3}, calls[0].SeenPeers)
 }
 
-func TestSndOverlaySender_BroadcastProposal_NoPeers(t *testing.T) {
-	s := snd_newOverlaySender(t)
-	proposal := &consensus.Proposal{
-		Round:          consensus.RoundID{Seq: 1},
-		NodeID:         consensus.NodeID{0x01},
-		SigningPubKey:  consensus.SigningPubKey{0x02},
-		TxSet:          consensus.TxSetID{0x03},
-		PreviousLedger: consensus.LedgerID{0x04},
-		Signature:      make([]byte, 64),
-	}
-	err := s.BroadcastProposal(proposal)
-	assert.NoError(t, err)
-}
-
-func TestSndOverlaySender_BroadcastValidation_NoPeers(t *testing.T) {
-	s := snd_newOverlaySender(t)
-	validation := &consensus.Validation{
-		LedgerID:  consensus.LedgerID{0x01},
-		LedgerSeq: 3,
-		NodeID:    consensus.NodeID{0x02},
-		Signature: make([]byte, 64),
-	}
-	err := s.BroadcastValidation(validation)
-	assert.NoError(t, err)
-}
-
-func TestSndOverlaySender_RelayProposal_NoPeers(t *testing.T) {
-	s := snd_newOverlaySender(t)
-	proposal := &consensus.Proposal{
-		NodeID:         consensus.NodeID{0x01},
-		SigningPubKey:  consensus.SigningPubKey{0x02},
-		TxSet:          consensus.TxSetID{0x03},
-		PreviousLedger: consensus.LedgerID{0x04},
-		Signature:      make([]byte, 64),
-	}
-	err := s.RelayProposal(proposal, 0)
-	assert.NoError(t, err)
-}
-
-func TestSndOverlaySender_RelayValidation_NoPeers(t *testing.T) {
-	s := snd_newOverlaySender(t)
-	validation := &consensus.Validation{
-		LedgerID:  consensus.LedgerID{0x01},
-		LedgerSeq: 3,
-		NodeID:    consensus.NodeID{0x02},
-		Signature: make([]byte, 64),
-	}
-	err := s.RelayValidation(validation, 0)
-	assert.NoError(t, err)
-}
-
-func TestSndOverlaySender_UpdateRelaySlot(t *testing.T) {
-	s := snd_newOverlaySender(t)
-	s.UpdateRelaySlot([]byte{0x01, 0x02}, 1, []uint64{2, 3})
-}
-
-func TestSndOverlaySender_RequestTxSet_NoPeers(t *testing.T) {
-	s := snd_newOverlaySender(t)
-	err := s.RequestTxSet(consensus.TxSetID{0xAB})
-	assert.NoError(t, err)
-}
-
-func TestSndOverlaySender_RequestTxSetMissingNodes_NoPeers(t *testing.T) {
-	s := snd_newOverlaySender(t)
-	nodeIDs := [][]byte{make([]byte, 33)}
-	err := s.RequestTxSetMissingNodes(consensus.TxSetID{0x01}, nodeIDs, nil, false)
-	assert.NoError(t, err)
-}
-
 func TestSndOverlaySender_RequestTxSetMissingNodes_EmptyNodeIDs(t *testing.T) {
 	s := snd_newOverlaySender(t)
 	err := s.RequestTxSetMissingNodes(consensus.TxSetID{0x01}, nil, nil, false)
 	assert.Error(t, err)
-}
-
-func TestSndOverlaySender_RequestTxSetMissingNodes_WithExcluded_NoPeers(t *testing.T) {
-	s := snd_newOverlaySender(t)
-	nodeIDs := [][]byte{make([]byte, 33)}
-	excluded := map[uint64]bool{1: true, 2: true}
-	err := s.RequestTxSetMissingNodes(consensus.TxSetID{0x01}, nodeIDs, excluded, false)
-	assert.NoError(t, err)
-}
-
-func TestSndOverlaySender_BroadcastStatusChange_NoPeers(t *testing.T) {
-	s := snd_newOverlaySender(t)
-	sc := &message.StatusChange{LedgerSeq: 10}
-	err := s.BroadcastStatusChange(sc)
-	assert.NoError(t, err)
-}
-
-func TestSndOverlaySender_RequestLedger_NoPeers(t *testing.T) {
-	s := snd_newOverlaySender(t)
-	err := s.RequestLedger(consensus.LedgerID{0x01})
-	assert.NoError(t, err)
 }
 
 func TestSndOverlaySender_SendToPeer_UnknownPeer(t *testing.T) {
@@ -360,23 +253,6 @@ func TestSndOverlaySender_RequestLedgerBaseFromPeer_UnknownPeer(t *testing.T) {
 func TestSndOverlaySender_PeerSupportsReplay_UnknownPeer(t *testing.T) {
 	s := snd_newOverlaySender(t)
 	assert.False(t, s.PeerSupportsReplay(999))
-}
-
-func TestSndOverlaySender_ReplayCapablePeersExcluding_NoPeers(t *testing.T) {
-	s := snd_newOverlaySender(t)
-	peers := s.ReplayCapablePeersExcluding(nil, 5)
-	assert.Empty(t, peers)
-}
-
-func TestSndOverlaySender_ReplayCapablePeersExcluding_ZeroMax(t *testing.T) {
-	s := snd_newOverlaySender(t)
-	peers := s.ReplayCapablePeersExcluding(nil, 0)
-	assert.Nil(t, peers)
-}
-
-func TestSndOverlaySender_IncPeerBadData(t *testing.T) {
-	s := snd_newOverlaySender(t)
-	s.IncPeerBadData(999, "test-reason")
 }
 
 func TestSndOverlaySender_RequestReplayDelta_UnknownPeer(t *testing.T) {

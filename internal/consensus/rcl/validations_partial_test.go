@@ -28,8 +28,8 @@ func TestValidationTracker_TrustedPartialSteersButNotQuorum(t *testing.T) {
 	provider.add(abcd)
 
 	n1 := consensus.NodeID{1}
-	vt.SetTrusted([]consensus.NodeID{n1})
-	vt.SetLedgerAncestryProvider(provider)
+	vt.setTrusted([]consensus.NodeID{n1})
+	vt.setLedgerAncestryProvider(provider)
 
 	var fired int
 	vt.SetFullyValidatedCallback(func(consensus.LedgerID, uint32) { fired++ })
@@ -43,7 +43,7 @@ func TestValidationTracker_TrustedPartialSteersButNotQuorum(t *testing.T) {
 
 	// Steering: the partial contributes trie branchSupport and is the
 	// preferred tip.
-	if got := vt.TrustedSupport(abc.ID()); got != 1 {
+	if got := vt.trustedSupport(abc.ID()); got != 1 {
 		t.Errorf("partial should steer trie branchSupport(abc): got %d, want 1", got)
 	}
 	if id, _, ok := vt.GetPreferred(0); !ok || id != abc.ID() {
@@ -52,7 +52,7 @@ func TestValidationTracker_TrustedPartialSteersButNotQuorum(t *testing.T) {
 
 	// Quorum: the partial is excluded from the full-validation count and
 	// must not fire finality.
-	if got := vt.TrustedValidationCount(abc.ID()); got != 0 {
+	if got := vt.trustedValidationCount(abc.ID()); got != 0 {
 		t.Errorf("partial must be excluded from full quorum count: got %d, want 0", got)
 	}
 	if fired != 0 {
@@ -64,7 +64,7 @@ func TestValidationTracker_TrustedPartialSteersButNotQuorum(t *testing.T) {
 	if !vt.Add(full) {
 		t.Fatal("full validation should be accepted")
 	}
-	if got := vt.TrustedValidationCount(abcd.ID()); got != 1 {
+	if got := vt.trustedValidationCount(abcd.ID()); got != 1 {
 		t.Errorf("full validation should count toward quorum: got %d, want 1", got)
 	}
 	if fired != 1 {
@@ -99,38 +99,38 @@ func TestValidationTracker_AddStatus_Classification(t *testing.T) {
 		at    time.Duration // tracker clock offset from base
 		flush bool          // run the FlushStale heartbeat sweep first
 		v     *consensus.Validation
-		want  ValStatus
+		want  valStatus
 	}{
-		{name: "first validation", v: mk(100, ledgerA, base, 1), want: ValStatusCurrent},
+		{name: "first validation", v: mk(100, ledgerA, base, 1), want: valStatusCurrent},
 		// Freshness gate (isCurrent) rejects a validation signed far in the
 		// past before any evidence or enforcer state is touched, so the row
 		// order around it is immaterial.
-		{name: "stale sign time", v: mk(105, ledgerA, base.Add(-time.Hour), 1), want: ValStatusStale},
-		{name: "identical resend", v: mk(100, ledgerA, base, 1), want: ValStatusBadSeq},
-		{name: "same seq different ledger", v: mk(100, ledgerB, base, 1), want: ValStatusConflicting},
-		{name: "same seq same ledger different signtime", v: mk(100, ledgerA, base.Add(time.Second), 1), want: ValStatusConflicting},
-		{name: "same seq same ledger different cookie", v: mk(100, ledgerA, base, 2), want: ValStatusMultiple},
-		{name: "tip advances", v: mk(101, ledgerC, base.Add(time.Nanosecond), 1), want: ValStatusCurrent},
+		{name: "stale sign time", v: mk(105, ledgerA, base.Add(-time.Hour), 1), want: valStatusStale},
+		{name: "identical resend", v: mk(100, ledgerA, base, 1), want: valStatusBadSeq},
+		{name: "same seq different ledger", v: mk(100, ledgerB, base, 1), want: valStatusConflicting},
+		{name: "same seq same ledger different signtime", v: mk(100, ledgerA, base.Add(time.Second), 1), want: valStatusConflicting},
+		{name: "same seq same ledger different cookie", v: mk(100, ledgerA, base, 2), want: valStatusMultiple},
+		{name: "tip advances", v: mk(101, ledgerC, base.Add(time.Nanosecond), 1), want: valStatusCurrent},
 		// The deep-detector case: the tip is at 101, yet the double-sign
 		// at the superseded seq 100 is still flagged.
-		{name: "conflict at superseded seq", v: mk(100, ledgerB, base, 1), want: ValStatusConflicting},
-		{name: "unseen lower seq", v: mk(99, ledgerB, base, 1), want: ValStatusBadSeq},
+		{name: "conflict at superseded seq", v: mk(100, ledgerB, base, 1), want: valStatusConflicting},
+		{name: "unseen lower seq", v: mk(99, ledgerB, base, 1), want: valStatusBadSeq},
 		// Tracked evidence signed >validationCurrentWall before a newer
 		// submission is disregarded and replaced: the same (100, B) pair
 		// that was conflicting above degrades to badSeq.
-		{name: "stale evidence disregarded", at: 6 * time.Minute, v: mk(100, ledgerB, base.Add(6*time.Minute), 1), want: ValStatusBadSeq},
+		{name: "stale evidence disregarded", at: 6 * time.Minute, v: mk(100, ledgerB, base.Add(6*time.Minute), 1), want: valStatusBadSeq},
 		// After validationSetExpires idle the enforcer floor resets (and
 		// the heartbeat sweep drops the stale tip + aged evidence), so a
 		// node may legitimately re-validate a lower seq, e.g. after a
 		// network restart.
-		{name: "idle reset readmits lower seq", at: 17 * time.Minute, flush: true, v: mk(100, ledgerB, base.Add(17*time.Minute), 1), want: ValStatusCurrent},
+		{name: "idle reset readmits lower seq", at: 17 * time.Minute, flush: true, v: mk(100, ledgerB, base.Add(17*time.Minute), 1), want: valStatusCurrent},
 	}
 	for _, tc := range steps {
 		now = base.Add(tc.at)
 		if tc.flush {
-			vt.FlushStale()
+			vt.flushStale()
 		}
-		if got := vt.AddStatus(tc.v); got != tc.want {
+		if got := vt.addStatus(tc.v); got != tc.want {
 			t.Errorf("%s: AddStatus = %v, want %v", tc.name, got, tc.want)
 		}
 	}
@@ -152,10 +152,10 @@ func TestValidationTracker_AddStatus_PartialDoubleSign(t *testing.T) {
 		}
 	}
 
-	if got := vt.AddStatus(partial(100, consensus.LedgerID{0xA})); got != ValStatusCurrent {
+	if got := vt.addStatus(partial(100, consensus.LedgerID{0xA})); got != valStatusCurrent {
 		t.Fatalf("first partial: AddStatus = %v, want current", got)
 	}
-	if got := vt.AddStatus(partial(100, consensus.LedgerID{0xB})); got != ValStatusConflicting {
+	if got := vt.addStatus(partial(100, consensus.LedgerID{0xB})); got != valStatusConflicting {
 		t.Errorf("partial same-seq different-ledger: AddStatus = %v, want conflicting", got)
 	}
 }
@@ -228,7 +228,7 @@ func TestEngine_OnValidation_ConflictingDoubleSign(t *testing.T) {
 
 	// The conflict must NOT have been stored — the tracked tip stays at
 	// ledger A, so it cannot count toward quorum or steer the trie.
-	if tip := engine.validationTracker.LatestValidation(n); tip == nil || tip.LedgerID != (consensus.LedgerID{0xA}) {
+	if tip := engine.validationTracker.latestValidation(n); tip == nil || tip.LedgerID != (consensus.LedgerID{0xA}) {
 		t.Errorf("tracked tip should remain ledger A; got %+v", tip)
 	}
 
@@ -285,7 +285,7 @@ func TestEngine_OnValidation_SupersededSeqDoubleSign(t *testing.T) {
 	}
 
 	// The tip must stay at the seq-101 ledger.
-	if tip := engine.validationTracker.LatestValidation(n); tip == nil || tip.LedgerID != (consensus.LedgerID{0xC}) {
+	if tip := engine.validationTracker.latestValidation(n); tip == nil || tip.LedgerID != (consensus.LedgerID{0xC}) {
 		t.Errorf("tracked tip should remain the seq-101 ledger; got %+v", tip)
 	}
 
@@ -327,7 +327,7 @@ func TestEngine_RetentionWithoutArchive(t *testing.T) {
 	if !engine.validationTracker.Add(old) {
 		t.Fatal("seed Add returned false")
 	}
-	if got := engine.validationTracker.GetValidationCount(consensus.LedgerID{0xA}); got != 1 {
+	if got := engine.validationTracker.getValidationCount(consensus.LedgerID{0xA}); got != 1 {
 		t.Fatalf("precondition: seed validation not tracked (got %d)", got)
 	}
 
@@ -342,7 +342,7 @@ func TestEngine_RetentionWithoutArchive(t *testing.T) {
 		engine.validationTracker.Add(v)
 	}
 
-	if got := engine.validationTracker.GetValidationCount(consensus.LedgerID{0xA}); got != 0 {
+	if got := engine.validationTracker.getValidationCount(consensus.LedgerID{0xA}); got != 0 {
 		t.Errorf("seq-40 validation should be expired by default retention without an archive; %d still tracked", got)
 	}
 }

@@ -211,30 +211,30 @@ func TestProposalTracker_StoreMonotonic(t *testing.T) {
 	pt := newProposalTracker()
 	node := consensus.NodeID{1}
 
-	if !pt.Store(&consensus.Proposal{NodeID: node, Position: 5, TxSet: consensus.TxSetID{5}}) {
+	if !pt.store(&consensus.Proposal{NodeID: node, Position: 5, TxSet: consensus.TxSetID{5}}) {
 		t.Fatal("first proposal not stored")
 	}
-	if pt.Store(&consensus.Proposal{NodeID: node, Position: 3, TxSet: consensus.TxSetID{3}}) {
+	if pt.store(&consensus.Proposal{NodeID: node, Position: 3, TxSet: consensus.TxSetID{3}}) {
 		t.Fatal("stale proposal reported as stored")
 	}
 	if got := pt.proposals[node].Position; got != 5 {
 		t.Fatalf("stale proposal overwrote newer: Position = %d, want 5", got)
 	}
 	// Same-seq equivocation (different tx set) must be dropped.
-	if pt.Store(&consensus.Proposal{NodeID: node, Position: 5, TxSet: consensus.TxSetID{6}}) {
+	if pt.store(&consensus.Proposal{NodeID: node, Position: 5, TxSet: consensus.TxSetID{6}}) {
 		t.Fatal("same-seq proposal reported as stored")
 	}
 	if got := pt.proposals[node].TxSet; got != (consensus.TxSetID{5}) {
 		t.Fatalf("same-seq proposal overwrote position: TxSet = %v", got)
 	}
-	if !pt.Store(&consensus.Proposal{NodeID: node, Position: 7, TxSet: consensus.TxSetID{7}}) {
+	if !pt.store(&consensus.Proposal{NodeID: node, Position: 7, TxSet: consensus.TxSetID{7}}) {
 		t.Fatal("newer proposal not reported as stored")
 	}
 	if got := pt.proposals[node].Position; got != 7 {
 		t.Fatalf("newer proposal not stored: Position = %d, want 7", got)
 	}
-	if pt.Count() != 1 {
-		t.Fatalf("Count = %d, want 1", pt.Count())
+	if pt.count() != 1 {
+		t.Fatalf("Count = %d, want 1", pt.count())
 	}
 }
 
@@ -335,11 +335,11 @@ func TestProposalTracker_ReplayDropsNonIncreasing(t *testing.T) {
 	ct1 := time.Unix(1000, 0)
 	ct2 := time.Unix(2000, 0)
 
-	pt.BufferRecent(&consensus.Proposal{NodeID: node, Position: 0, CloseTime: ct1, PreviousLedger: prev})
-	pt.BufferRecent(&consensus.Proposal{NodeID: node, Position: 0, CloseTime: ct2, PreviousLedger: prev})
-	pt.BufferRecent(&consensus.Proposal{NodeID: node, Position: 1, PreviousLedger: prev})
+	pt.bufferRecent(&consensus.Proposal{NodeID: node, Position: 0, CloseTime: ct1, PreviousLedger: prev})
+	pt.bufferRecent(&consensus.Proposal{NodeID: node, Position: 0, CloseTime: ct2, PreviousLedger: prev})
+	pt.bufferRecent(&consensus.Proposal{NodeID: node, Position: 1, PreviousLedger: prev})
 
-	closeTimes, replayed, relay := pt.Replay(prev, alwaysTrusted)
+	closeTimes, replayed, relay := pt.replay(prev, alwaysTrusted)
 	if len(closeTimes) != 1 || closeTimes[0].NodeID != node || !closeTimes[0].CloseTime.Equal(ct1) {
 		t.Fatalf("closeTimes = %v, want exactly [%v]", closeTimes, ct1)
 	}
@@ -360,22 +360,22 @@ func TestProposalTracker_ReplayDropsNonIncreasing(t *testing.T) {
 func TestProposalTracker_MarkDeadAndReset(t *testing.T) {
 	pt := newProposalTracker()
 	node := consensus.NodeID{1}
-	pt.Store(&consensus.Proposal{NodeID: node, Position: 0})
+	pt.store(&consensus.Proposal{NodeID: node, Position: 0})
 
-	pt.MarkDead(node)
+	pt.markDead(node)
 	if _, ok := pt.proposals[node]; ok {
 		t.Error("MarkDead did not evict the node's position")
 	}
-	if !pt.IsDead(node) {
+	if !pt.isDead(node) {
 		t.Error("MarkDead did not record the node as dead")
 	}
 
-	pt.ResetRound()
-	if pt.IsDead(node) {
+	pt.resetRound()
+	if pt.isDead(node) {
 		t.Error("ResetRound did not clear the dead-node set")
 	}
-	if pt.Count() != 0 {
-		t.Errorf("ResetRound did not clear positions: Count = %d", pt.Count())
+	if pt.count() != 0 {
+		t.Errorf("ResetRound did not clear positions: Count = %d", pt.count())
 	}
 }
 
@@ -385,7 +385,7 @@ func TestProposalTracker_BufferRecentCap(t *testing.T) {
 	pt := newProposalTracker()
 	node := consensus.NodeID{1}
 	for i := 0; i < recentProposalsPerNode+3; i++ {
-		pt.BufferRecent(&consensus.Proposal{NodeID: node, Position: uint32(i)})
+		pt.bufferRecent(&consensus.Proposal{NodeID: node, Position: uint32(i)})
 	}
 	buf := pt.recentProposals[node]
 	if len(buf) != recentProposalsPerNode {
@@ -411,11 +411,11 @@ func TestProposalTracker_Replay(t *testing.T) {
 	nodeB := consensus.NodeID{2}
 	ct := time.Unix(1000, 0)
 
-	pt.BufferRecent(&consensus.Proposal{NodeID: nodeA, Position: 0, PreviousLedger: target, CloseTime: ct})
-	pt.BufferRecent(&consensus.Proposal{NodeID: nodeA, Position: 1, PreviousLedger: target, CloseTime: ct})
-	pt.BufferRecent(&consensus.Proposal{NodeID: nodeB, Position: 0, PreviousLedger: other, CloseTime: ct})
+	pt.bufferRecent(&consensus.Proposal{NodeID: nodeA, Position: 0, PreviousLedger: target, CloseTime: ct})
+	pt.bufferRecent(&consensus.Proposal{NodeID: nodeA, Position: 1, PreviousLedger: target, CloseTime: ct})
+	pt.bufferRecent(&consensus.Proposal{NodeID: nodeB, Position: 0, PreviousLedger: other, CloseTime: ct})
 
-	closeTimes, trustedReplayed, relay := pt.Replay(target, alwaysTrusted)
+	closeTimes, trustedReplayed, relay := pt.replay(target, alwaysTrusted)
 
 	// nodeA contributes two proposals (Position 0 and 1) for the target.
 	if trustedReplayed != 2 {
@@ -448,10 +448,10 @@ func TestProposalTracker_ReplayReshareOnlyStored(t *testing.T) {
 	node := consensus.NodeID{1}
 
 	// Current position already ahead of the buffered one.
-	pt.Store(&consensus.Proposal{NodeID: node, Position: 5, PreviousLedger: target})
-	pt.BufferRecent(&consensus.Proposal{NodeID: node, Position: 2, PreviousLedger: target})
+	pt.store(&consensus.Proposal{NodeID: node, Position: 5, PreviousLedger: target})
+	pt.bufferRecent(&consensus.Proposal{NodeID: node, Position: 2, PreviousLedger: target})
 
-	_, _, relay := pt.Replay(target, alwaysTrusted)
+	_, _, relay := pt.replay(target, alwaysTrusted)
 	if len(relay) != 0 {
 		t.Errorf("stale replay re-shared %d proposals, want 0", len(relay))
 	}
@@ -467,11 +467,11 @@ func TestProposalTracker_PruneStale(t *testing.T) {
 	stale := consensus.NodeID{1}
 	fresh := consensus.NodeID{2}
 	zero := consensus.NodeID{3}
-	pt.Store(&consensus.Proposal{NodeID: stale, Timestamp: now.Add(-30 * time.Second)})
-	pt.Store(&consensus.Proposal{NodeID: fresh, Timestamp: now})
-	pt.Store(&consensus.Proposal{NodeID: zero}) // zero timestamp — never pruned
+	pt.store(&consensus.Proposal{NodeID: stale, Timestamp: now.Add(-30 * time.Second)})
+	pt.store(&consensus.Proposal{NodeID: fresh, Timestamp: now})
+	pt.store(&consensus.Proposal{NodeID: zero}) // zero timestamp — never pruned
 
-	removed := pt.PruneStale(cutoff)
+	removed := pt.pruneStale(cutoff)
 	if len(removed) != 1 || removed[0] != stale {
 		t.Fatalf("removed = %v, want [%v]", removed, stale)
 	}
@@ -498,13 +498,13 @@ func TestProposalTracker_LatestFresh(t *testing.T) {
 	nodeC := consensus.NodeID{3} // only stale entries
 
 	// nodeA: an old then a recent entry — recent one wins.
-	pt.BufferRecent(&consensus.Proposal{NodeID: nodeA, Position: 0, Timestamp: now.Add(-30 * time.Second)})
-	pt.BufferRecent(&consensus.Proposal{NodeID: nodeA, Position: 1, Timestamp: now.Add(-1 * time.Second)})
-	pt.BufferRecent(&consensus.Proposal{NodeID: nodeB, Position: 0, Timestamp: now})
-	pt.BufferRecent(&consensus.Proposal{NodeID: nodeC, Position: 0, Timestamp: now.Add(-60 * time.Second)})
+	pt.bufferRecent(&consensus.Proposal{NodeID: nodeA, Position: 0, Timestamp: now.Add(-30 * time.Second)})
+	pt.bufferRecent(&consensus.Proposal{NodeID: nodeA, Position: 1, Timestamp: now.Add(-1 * time.Second)})
+	pt.bufferRecent(&consensus.Proposal{NodeID: nodeB, Position: 0, Timestamp: now})
+	pt.bufferRecent(&consensus.Proposal{NodeID: nodeC, Position: 0, Timestamp: now.Add(-60 * time.Second)})
 
 	trusted := func(n consensus.NodeID) bool { return n == nodeA || n == nodeC }
-	out := pt.LatestFresh(trusted, now, freshness)
+	out := pt.latestFresh(trusted, now, freshness)
 
 	if len(out) != 1 {
 		t.Fatalf("LatestFresh returned %d entries, want 1", len(out))
@@ -525,15 +525,15 @@ func TestProposalTracker_ValidationsForAndReset(t *testing.T) {
 	ledger := consensus.LedgerID{7}
 	other := consensus.LedgerID{8}
 
-	pt.SetValidation(&consensus.Validation{NodeID: consensus.NodeID{1}, LedgerID: ledger})
-	pt.SetValidation(&consensus.Validation{NodeID: consensus.NodeID{2}, LedgerID: ledger})
-	pt.SetValidation(&consensus.Validation{NodeID: consensus.NodeID{3}, LedgerID: other})
+	pt.setValidation(&consensus.Validation{NodeID: consensus.NodeID{1}, LedgerID: ledger})
+	pt.setValidation(&consensus.Validation{NodeID: consensus.NodeID{2}, LedgerID: ledger})
+	pt.setValidation(&consensus.Validation{NodeID: consensus.NodeID{3}, LedgerID: other})
 
-	if got := pt.ValidationsFor(ledger); len(got) != 2 {
+	if got := pt.validationsFor(ledger); len(got) != 2 {
 		t.Errorf("ValidationsFor(%v) = %d entries, want 2", ledger, len(got))
 	}
-	pt.ResetValidations()
-	if got := pt.ValidationsFor(ledger); len(got) != 0 {
+	pt.resetValidations()
+	if got := pt.validationsFor(ledger); len(got) != 0 {
 		t.Errorf("ResetValidations did not clear: %d entries remain", len(got))
 	}
 }
@@ -546,16 +546,16 @@ func TestProposalTracker_ValidationSnapshotsOwnSignature(t *testing.T) {
 		LedgerID:  ledger,
 		Signature: []byte{1, 2},
 	}
-	pt.SetValidation(input)
+	pt.setValidation(input)
 
 	input.Signature[0] = 9
-	first := pt.ValidationsFor(ledger)
+	first := pt.validationsFor(ledger)
 	if len(first) != 1 || first[0].Signature[0] != 1 {
 		t.Fatalf("mutating input validation changed tracker state: %#v", first)
 	}
 
 	first[0].Signature[1] = 8
-	second := pt.ValidationsFor(ledger)
+	second := pt.validationsFor(ledger)
 	if len(second) != 1 || second[0].Signature[1] != 2 {
 		t.Fatalf("mutating returned validation snapshot changed tracker state: %#v", second)
 	}
@@ -565,11 +565,11 @@ func TestProposalTracker_AllReturnsDetachedSnapshot(t *testing.T) {
 	pt := newProposalTracker()
 	node := consensus.NodeID{1}
 	proposal := &consensus.Proposal{NodeID: node, Position: 3, Signature: []byte{1, 2}}
-	if !pt.Store(proposal) {
+	if !pt.store(proposal) {
 		t.Fatal("Store rejected initial proposal")
 	}
 
-	snapshot := pt.All()
+	snapshot := pt.all()
 	snapshot[node].Position = 99
 	snapshot[node].Signature[0] = 9
 	delete(snapshot, node)

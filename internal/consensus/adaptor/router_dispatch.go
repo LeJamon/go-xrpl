@@ -216,7 +216,7 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	proposal := ProposalFromMessage(proposeSet)
+	proposal := proposalFromMessage(proposeSet)
 	r.resolveMasterNodeID(&proposal.NodeID, proposal.SigningPubKey)
 	originPeer := uint64(msg.PeerID)
 
@@ -266,7 +266,7 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	validation, err := ValidationFromMessage(val, r.adaptor.Now())
+	validation, err := validationFromMessage(val, r.adaptor.Now())
 	if err != nil {
 		r.logger.Warn("failed to parse validation", "error", err, "peer", msg.PeerID)
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), "validation-parse")
@@ -638,7 +638,7 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 		}
 	}
 
-	blob := TransactionFromMessage(txMsg)
+	blob := transactionFromMessage(txMsg)
 	if len(blob) == 0 {
 		r.logger.Warn("inbound transaction has empty blob",
 			"peer", msg.PeerID,
@@ -802,7 +802,7 @@ func (r *Router) handleHaveSet(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	txSetID, status, err := HaveSetFromMessage(hts)
+	txSetID, status, err := haveSetFromMessage(hts)
 	if err != nil {
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), "have-set-hashsize")
 		return

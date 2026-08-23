@@ -113,10 +113,10 @@ type acquiringKey struct {
 	id  consensus.LedgerID
 }
 
-// SetLedgerAncestryProvider installs a provider and enables the trie.
+// setLedgerAncestryProvider installs a provider and enables the trie.
 // Passing nil disables the trie and reverts to flat-count support.
 // The trie is rebuilt from the current byNode / trusted / negUNL state.
-func (vt *ValidationTracker) SetLedgerAncestryProvider(p LedgerAncestryProvider) {
+func (vt *ValidationTracker) setLedgerAncestryProvider(p LedgerAncestryProvider) {
 	vt.mu.Lock()
 	if isNilInterface(p) {
 		vt.ancestry = nil

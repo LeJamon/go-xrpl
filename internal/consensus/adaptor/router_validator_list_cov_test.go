@@ -455,14 +455,14 @@ func (s *rvl_trackingSender) getCalls() []rvl_sendCall {
 }
 
 func TestRvl_NewRouterBroadcaster_NilOverlay(t *testing.T) {
-	b := NewRouterBroadcaster(nil, nil)
+	b := newRouterBroadcaster(nil, nil)
 	assert.Nil(t, b.ActivePeers())
 	assert.False(t, b.PeerSupportsVL(1))
 	assert.False(t, b.PeerSupportsV2(1))
 }
 
 func TestRvl_NewRouterBroadcaster_NilReceiver(t *testing.T) {
-	var b *RouterBroadcaster
+	var b *routerBroadcaster
 	assert.Nil(t, b.ActivePeers())
 	assert.False(t, b.PeerSupportsVL(1))
 	assert.False(t, b.PeerSupportsV2(1))
@@ -470,13 +470,13 @@ func TestRvl_NewRouterBroadcaster_NilReceiver(t *testing.T) {
 
 func TestRvl_NewValidatorListBroadcaster(t *testing.T) {
 	r, _ := makeRouterWithBadDataRecorder(t)
-	b := r.NewValidatorListBroadcaster(nil, nil)
+	b := r.newValidatorListBroadcaster(nil, nil)
 	require.NotNil(t, b)
 	assert.Equal(t, r.messageSeen, b.suppression)
 }
 
 func TestRvl_SendList_NilSender(t *testing.T) {
-	b := &RouterBroadcaster{}
+	b := &routerBroadcaster{}
 	err := b.SendList(1, []byte("m"), []byte("b"), []byte("s"), 1)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nil sender")
@@ -484,7 +484,7 @@ func TestRvl_SendList_NilSender(t *testing.T) {
 
 func TestRvl_SendList_Delivers(t *testing.T) {
 	ts := &rvl_trackingSender{}
-	b := NewRouterBroadcaster(nil, ts)
+	b := newRouterBroadcaster(nil, ts)
 	err := b.SendList(42, []byte("manifest"), []byte("blob"), []byte("sig"), 3)
 	require.NoError(t, err)
 	calls := ts.getCalls()
@@ -496,7 +496,7 @@ func TestRvl_SendList_Delivers(t *testing.T) {
 func TestRvl_SendList_SuppressionDedup(t *testing.T) {
 	ts := &rvl_trackingSender{}
 	r, _ := makeRouterWithBadDataRecorder(t)
-	b := r.NewValidatorListBroadcaster(nil, ts)
+	b := r.newValidatorListBroadcaster(nil, ts)
 	now := time.Unix(1_700_000_000, 0)
 	r.messageSeen.now = func() time.Time { return now }
 
@@ -519,7 +519,7 @@ func TestRvl_SendList_SuppressionDedup(t *testing.T) {
 func TestRvl_SendList_DifferentPeers(t *testing.T) {
 	ts := &rvl_trackingSender{}
 	r, _ := makeRouterWithBadDataRecorder(t)
-	b := r.NewValidatorListBroadcaster(nil, ts)
+	b := r.newValidatorListBroadcaster(nil, ts)
 
 	require.NoError(t, b.SendList(1, []byte("m"), []byte("b"), []byte("s"), 1))
 	require.NoError(t, b.SendList(2, []byte("m"), []byte("b"), []byte("s"), 1))
@@ -528,13 +528,13 @@ func TestRvl_SendList_DifferentPeers(t *testing.T) {
 
 func TestRvl_SendList_SendError(t *testing.T) {
 	ts := &rvl_trackingSender{errOn: 99}
-	b := NewRouterBroadcaster(nil, ts)
+	b := newRouterBroadcaster(nil, ts)
 	err := b.SendList(99, []byte("m"), []byte("b"), []byte("s"), 1)
 	require.Error(t, err)
 }
 
 func TestRvl_SendCollection_NilSender(t *testing.T) {
-	b := &RouterBroadcaster{}
+	b := &routerBroadcaster{}
 	err := b.SendCollection(1, []byte("m"), nil, 2)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nil sender")
@@ -542,7 +542,7 @@ func TestRvl_SendCollection_NilSender(t *testing.T) {
 
 func TestRvl_SendCollection_Delivers(t *testing.T) {
 	ts := &rvl_trackingSender{}
-	b := NewRouterBroadcaster(nil, ts)
+	b := newRouterBroadcaster(nil, ts)
 	blobs := []validatorlist.BroadcastBlob{
 		{Manifest: []byte("bm1"), Blob: []byte("b1"), Signature: []byte("s1")},
 	}
@@ -556,7 +556,7 @@ func TestRvl_SendCollection_Delivers(t *testing.T) {
 
 func TestRvl_SendCollection_EmptyBlobs(t *testing.T) {
 	ts := &rvl_trackingSender{}
-	b := NewRouterBroadcaster(nil, ts)
+	b := newRouterBroadcaster(nil, ts)
 	err := b.SendCollection(33, []byte("m"), nil, 2)
 	require.NoError(t, err)
 	assert.Len(t, ts.getCalls(), 1)
@@ -564,7 +564,7 @@ func TestRvl_SendCollection_EmptyBlobs(t *testing.T) {
 
 func TestRvl_SendCollection_OversizeEmptyBlobs(t *testing.T) {
 	ts := &rvl_trackingSender{}
-	b := NewRouterBroadcaster(nil, ts)
+	b := newRouterBroadcaster(nil, ts)
 	b.maxCollectionFrameSize = 1
 	err := b.SendCollection(33, []byte("manifest"), nil, 2)
 	require.Error(t, err)
@@ -574,7 +574,7 @@ func TestRvl_SendCollection_OversizeEmptyBlobs(t *testing.T) {
 func TestRvl_SendCollection_SuppressionDedup(t *testing.T) {
 	ts := &rvl_trackingSender{}
 	r, _ := makeRouterWithBadDataRecorder(t)
-	b := r.NewValidatorListBroadcaster(nil, ts)
+	b := r.newValidatorListBroadcaster(nil, ts)
 	now := time.Unix(1_700_000_000, 0)
 	r.messageSeen.now = func() time.Time { return now }
 
@@ -591,7 +591,7 @@ func TestRvl_SendCollection_SuppressionDedup(t *testing.T) {
 
 func TestRvl_SendCollection_SendError(t *testing.T) {
 	ts := &rvl_trackingSender{errOn: 66}
-	b := NewRouterBroadcaster(nil, ts)
+	b := newRouterBroadcaster(nil, ts)
 	blobs := []validatorlist.BroadcastBlob{{Blob: []byte("b"), Signature: []byte("s")}}
 	err := b.SendCollection(66, []byte("m"), blobs, 2)
 	require.Error(t, err)
@@ -599,7 +599,7 @@ func TestRvl_SendCollection_SendError(t *testing.T) {
 
 func TestRvl_SendCollection_MultipleBlobs(t *testing.T) {
 	ts := &rvl_trackingSender{}
-	b := NewRouterBroadcaster(nil, ts)
+	b := newRouterBroadcaster(nil, ts)
 	blobs := []validatorlist.BroadcastBlob{
 		{Manifest: []byte("bm1"), Blob: []byte("b1"), Signature: []byte("s1")},
 		{Manifest: []byte("bm2"), Blob: []byte("b2"), Signature: []byte("s2")},
@@ -612,7 +612,7 @@ func TestRvl_SendCollection_MultipleBlobs(t *testing.T) {
 
 func TestRvl_SendCollection_SplitsOversizeLikeRippled(t *testing.T) {
 	ts := &rvl_trackingSender{}
-	b := NewRouterBroadcaster(nil, ts)
+	b := newRouterBroadcaster(nil, ts)
 	b.maxCollectionFrameSize = 40
 	blobs := []validatorlist.BroadcastBlob{
 		{Manifest: []byte("local-1"), Blob: []byte("blob-1"), Signature: []byte("sig-1")},
@@ -639,7 +639,7 @@ func TestRvl_SendCollection_SplitsOversizeLikeRippled(t *testing.T) {
 
 func TestRvl_SendCollection_SplitsOversizeSingleton(t *testing.T) {
 	ts := &rvl_trackingSender{}
-	b := NewRouterBroadcaster(nil, ts)
+	b := newRouterBroadcaster(nil, ts)
 	b.maxCollectionFrameSize = 1
 	blob := validatorlist.BroadcastBlob{Manifest: []byte("local"), Blob: []byte("blob"), Signature: []byte("sig")}
 	require.NoError(t, b.SendCollection(88, []byte("publisher"), []validatorlist.BroadcastBlob{blob}, 2))
@@ -658,7 +658,7 @@ func TestRvl_SendCollection_SplitsOversizeSingleton(t *testing.T) {
 
 func TestRvl_SendList_NoSuppression(t *testing.T) {
 	ts := &rvl_trackingSender{}
-	b := NewRouterBroadcaster(nil, ts) // no suppression
+	b := newRouterBroadcaster(nil, ts) // no suppression
 
 	// Two identical sends to the same peer — both should deliver when no suppression.
 	require.NoError(t, b.SendList(5, []byte("m"), []byte("b"), []byte("s"), 1))

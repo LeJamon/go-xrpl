@@ -43,7 +43,7 @@ func buildLargeTxSet(t *testing.T, n int) (consensus.TxSetID, map[string][]byte)
 		binary.BigEndian.PutUint64(b[8:], uint64(i)*2654435761+0x9e3779b9)
 		blobs[i] = b
 	}
-	ts, err := NewTxSet(blobs)
+	ts, err := newTxSet(blobs)
 	require.NoError(t, err)
 	require.Equal(t, n, ts.Size(), "synthetic blobs must all be distinct")
 	wire, err := ts.shamap().WalkWireNodes()

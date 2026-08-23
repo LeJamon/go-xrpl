@@ -298,7 +298,7 @@ func (r *Router) peerSite(peerID peermanagement.PeerID) string {
 	return "peer:" + strconv.FormatUint(uint64(peerID), 10)
 }
 
-// RouterBroadcaster is the concrete validatorlist.PeerBroadcaster
+// routerBroadcaster is the concrete validatorlist.PeerBroadcaster
 // adapter that bridges the aggregator to the overlay + frame codec.
 // One instance lives for the lifetime of the router; the aggregator
 // holds a reference (set via SetBroadcaster in Components bootstrap).
@@ -311,7 +311,7 @@ type peerFrameSender interface {
 	SendToPeer(peerID uint64, frame []byte) error
 }
 
-type RouterBroadcaster struct {
+type routerBroadcaster struct {
 	overlay *peermanagement.Overlay
 	sender  peerFrameSender
 	// maxCollectionFrameSize is a test seam for exercising rippled's
@@ -326,17 +326,17 @@ type RouterBroadcaster struct {
 	suppression *messageSuppression
 }
 
-var _ validatorlist.PeerBroadcaster = (*RouterBroadcaster)(nil)
+var _ validatorlist.PeerBroadcaster = (*routerBroadcaster)(nil)
 
-// NewValidatorListBroadcaster constructs a RouterBroadcaster bound to
+// newValidatorListBroadcaster constructs a routerBroadcaster bound to
 // the Router's suppression registry so SendList / SendCollection stamp
 // the hash→peer association.
-func (r *Router) NewValidatorListBroadcaster(overlay *peermanagement.Overlay, sender peerFrameSender) *RouterBroadcaster {
-	return &RouterBroadcaster{overlay: overlay, sender: sender, suppression: r.messageSeen}
+func (r *Router) newValidatorListBroadcaster(overlay *peermanagement.Overlay, sender peerFrameSender) *routerBroadcaster {
+	return &routerBroadcaster{overlay: overlay, sender: sender, suppression: r.messageSeen}
 }
 
 // ActivePeers implements validatorlist.PeerBroadcaster.
-func (b *RouterBroadcaster) ActivePeers() []uint64 {
+func (b *routerBroadcaster) ActivePeers() []uint64 {
 	if b == nil || b.overlay == nil {
 		return nil
 	}
@@ -349,7 +349,7 @@ func (b *RouterBroadcaster) ActivePeers() []uint64 {
 }
 
 // PeerSupportsVL implements validatorlist.PeerBroadcaster.
-func (b *RouterBroadcaster) PeerSupportsVL(peerID uint64) bool {
+func (b *routerBroadcaster) PeerSupportsVL(peerID uint64) bool {
 	if b == nil || b.overlay == nil {
 		return false
 	}
@@ -359,7 +359,7 @@ func (b *RouterBroadcaster) PeerSupportsVL(peerID uint64) bool {
 // PeerSupportsV2 implements validatorlist.PeerBroadcaster. Reports
 // ValidatorList2Propagation support, gated on negotiated peer protocol
 // >= 2.2.
-func (b *RouterBroadcaster) PeerSupportsV2(peerID uint64) bool {
+func (b *routerBroadcaster) PeerSupportsV2(peerID uint64) bool {
 	if b == nil || b.overlay == nil {
 		return false
 	}
@@ -372,7 +372,7 @@ func (b *RouterBroadcaster) PeerSupportsV2(peerID uint64) bool {
 // the frame's `version` field. When wired with a suppression
 // registry: short-circuits peers already known to have the content,
 // and stamps the (hash, peer) pair after a successful send.
-func (b *RouterBroadcaster) SendList(peerID uint64, manifestBytes, blob, signature []byte, blobVersion uint32) error {
+func (b *routerBroadcaster) SendList(peerID uint64, manifestBytes, blob, signature []byte, blobVersion uint32) error {
 	if b == nil || b.sender == nil {
 		return fmt.Errorf("router broadcaster: nil sender")
 	}
@@ -406,7 +406,7 @@ func (b *RouterBroadcaster) SendList(peerID uint64, manifestBytes, blob, signatu
 // it to peerID. Used by BroadcastLatest for every v2-capable peer
 // (single-entry collection when the publisher has no Remaining
 // blobs, multi-entry when it does).
-func (b *RouterBroadcaster) SendCollection(peerID uint64, manifestBytes []byte, blobs []validatorlist.BroadcastBlob, version uint32) error {
+func (b *routerBroadcaster) SendCollection(peerID uint64, manifestBytes []byte, blobs []validatorlist.BroadcastBlob, version uint32) error {
 	if b == nil || b.sender == nil {
 		return fmt.Errorf("router broadcaster: nil sender")
 	}

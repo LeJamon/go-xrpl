@@ -36,7 +36,7 @@ func signedValidationFixture(t *testing.T) (*ValidatorIdentity, []validationWire
 	}
 	require.NoError(t, identity.SignValidation(validation))
 
-	return identity, decodeValidationWireFields(t, SerializeSTValidation(validation))
+	return identity, decodeValidationWireFields(t, serializeSTValidation(validation))
 }
 
 func decodeValidationWireFields(t *testing.T, blob []byte) []validationWireField {
@@ -103,7 +103,7 @@ func signValidationWireFields(
 	digest := sha512half.Sum(protocol.HashPrefixValidation().Bytes(), signingData)
 	signature, err := identity.Sign(digest[:])
 	require.NoError(t, err)
-	require.True(t, Verify(identity.SigningKey[:], digest[:], signature))
+	require.True(t, verify(identity.SigningKey[:], digest[:], signature))
 
 	var blob []byte
 	for _, field := range fields {
@@ -421,7 +421,7 @@ func TestParseSTValidation_ValidatesAmounts(t *testing.T) {
 			blob, _, _ := signValidationWireFields(t, identity, fields)
 			validation, err := parseSTValidation(blob)
 			require.NoError(t, err)
-			assert.NoError(t, VerifyValidation(validation))
+			assert.NoError(t, verifyValidation(validation))
 		})
 	}
 }
@@ -448,7 +448,7 @@ func TestParseSTValidation_TracksRequiredPresenceSeparatelyFromValue(t *testing.
 	assert.Zero(t, validation.Flags)
 	assert.Zero(t, validation.LedgerSeq)
 	assert.Equal(t, consensus.LedgerID{}, validation.LedgerID)
-	assert.NoError(t, VerifyValidation(validation))
+	assert.NoError(t, verifyValidation(validation))
 }
 
 func TestParseSTValidation_RequiredSignatureMayBeEmptyStructurally(t *testing.T) {
@@ -464,7 +464,7 @@ func TestParseSTValidation_RequiredSignatureMayBeEmptyStructurally(t *testing.T)
 	validation, err := parseSTValidation(blob)
 	require.NoError(t, err)
 	assert.Empty(t, validation.Signature)
-	assert.Error(t, VerifyValidation(validation))
+	assert.Error(t, verifyValidation(validation))
 }
 
 func TestParseOrVerifyValidation_RejectsEverySerializedByteMutation(t *testing.T) {
@@ -472,7 +472,7 @@ func TestParseOrVerifyValidation_RejectsEverySerializedByteMutation(t *testing.T
 	blob, _, _ := signValidationWireFields(t, identity, fields)
 	validation, err := parseSTValidation(blob)
 	require.NoError(t, err)
-	require.NoError(t, VerifyValidation(validation))
+	require.NoError(t, verifyValidation(validation))
 
 	for i := range blob {
 		tampered := append([]byte(nil), blob...)
@@ -482,6 +482,6 @@ func TestParseOrVerifyValidation_RejectsEverySerializedByteMutation(t *testing.T
 		if err != nil {
 			continue
 		}
-		assert.Error(t, VerifyValidation(parsed), "mutation at byte %d was accepted", i)
+		assert.Error(t, verifyValidation(parsed), "mutation at byte %d was accepted", i)
 	}
 }

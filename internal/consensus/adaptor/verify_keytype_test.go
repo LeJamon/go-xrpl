@@ -10,7 +10,7 @@ import (
 )
 
 // TestVerify_DispatchesByKeyType pins the key-type-aware dispatch in
-// adaptor.Verify. Before this dispatch landed, Verify hardcoded
+// adaptor.Verify. Before this dispatch landed, verify hardcoded
 // secp256k1 — every ed25519-signed validation from a peer silently
 // failed verification. With 5-validator UNL and quorum=4, even one
 // or two ed25519-signing rippled validators dropped goxrpl below
@@ -33,7 +33,7 @@ func TestVerify_DispatchesByKeyType(t *testing.T) {
 	}
 	edSig := ed25519.Sign(edPriv, digest[:])
 	edWirePubKey := append([]byte{0xED}, edPub...) // 33-byte: 0xED + 32-byte raw key
-	if !Verify(edWirePubKey, digest[:], edSig) {
+	if !verify(edWirePubKey, digest[:], edSig) {
 		t.Errorf("ed25519: legitimate signature rejected (key-type dispatch missing — " +
 			"this is the bug that stalled the all-5 UNL bootstrap at val_seq=5)")
 	}
@@ -56,27 +56,27 @@ func TestVerify_DispatchesByKeyType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SignDigest: %v", err)
 	}
-	if !Verify(secPub, digest[:], secSig) {
+	if !verify(secPub, digest[:], secSig) {
 		t.Error("secp256k1: legitimate signature rejected (regression on the existing path)")
 	}
 
 	// --- cross-key rejection ---
-	if Verify(edWirePubKey, digest[:], secSig) {
+	if verify(edWirePubKey, digest[:], secSig) {
 		t.Error("ed25519 pubkey + secp256k1 signature wrongly accepted (cross-key leak)")
 	}
-	if Verify(secPub, digest[:], edSig) {
+	if verify(secPub, digest[:], edSig) {
 		t.Error("secp256k1 pubkey + ed25519 signature wrongly accepted (cross-key leak)")
 	}
 
 	// --- malformed inputs reject cleanly ---
 	garbagePrefix := append([]byte{0xFF}, edPub...)
-	if Verify(garbagePrefix, digest[:], edSig) {
+	if verify(garbagePrefix, digest[:], edSig) {
 		t.Error("0xFF-prefix pubkey wrongly accepted")
 	}
-	if Verify(edWirePubKey[:32], digest[:], edSig) {
+	if verify(edWirePubKey[:32], digest[:], edSig) {
 		t.Error("32-byte pubkey (wrong length) wrongly accepted")
 	}
-	if Verify(edWirePubKey, digest[:], edSig[:32]) {
+	if verify(edWirePubKey, digest[:], edSig[:32]) {
 		t.Error("32-byte ed25519 signature (wrong length) wrongly accepted")
 	}
 }

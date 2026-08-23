@@ -179,7 +179,7 @@ func TestEngine_TrackerReportsProposers_AfterWrongLedger(t *testing.T) {
 
 	// Inbound ledger has jumped the adaptor's LCL to a seq ahead of
 	// the engine's prevLedger. Stash the new ledger in the adaptor's
-	// store so OnLedger can find it.
+	// store so the switch path can find it.
 	adaptor.mu.Lock()
 	jumpedLedger := &mockLedger{
 		id:        consensus.LedgerID{0x99},
@@ -211,12 +211,18 @@ func TestEngine_TrackerReportsProposers_AfterWrongLedger(t *testing.T) {
 		}
 	}
 
-	// Force the engine into wrongLedger and feed it the catch-up
-	// ledger via OnLedger — the path the router takes after an
-	// inbound acquisition lands. handleWrongLedger restarts the
-	// round with recovering=true.
-	if err := engine.OnLedger(jumpedLedger.ID(), nil); err != nil {
-		t.Fatalf("OnLedger: %v", err)
+	// Force the engine into wrongLedger and switch to the acquired catch-up
+	// ledger through the same path used by the router.
+	engine.mu.Lock()
+	engine.wrongLedgerID = jumpedLedger.ID()
+	engine.setMode(consensus.ModeWrongLedger)
+	engine.mu.Unlock()
+	result, err := engine.TrySwitchToLedger(jumpedLedger.ID())
+	if err != nil {
+		t.Fatalf("TrySwitchToLedger: %v", err)
+	}
+	if result != consensus.LedgerSwitchAccepted {
+		t.Fatalf("TrySwitchToLedger: got %v", result)
 	}
 
 	deadline := time.Now().Add(3 * time.Second)

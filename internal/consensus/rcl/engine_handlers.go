@@ -52,7 +52,7 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 	}
 
 	// Buffer for future playback, even between rounds.
-	e.proposalTracker.BufferRecent(proposal)
+	e.proposalTracker.bufferRecent(proposal)
 
 	// Between rounds (accepted phase) only buffer, don't process.
 	if e.phase == consensus.PhaseAccepted {
@@ -66,7 +66,7 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 
 	// Ignore already-dead nodes. Must precede the bow-out arm: otherwise a
 	// dead node could re-insert itself by re-sending seqLeave.
-	if e.proposalTracker.IsDead(proposal.NodeID) {
+	if e.proposalTracker.isDead(proposal.NodeID) {
 		return nil
 	}
 
@@ -75,10 +75,10 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 	// otherwise the seqLeave position keeps voting forever.
 	const seqLeave = uint32(0xFFFFFFFF)
 	if proposal.Position == seqLeave {
-		e.proposalTracker.MarkDead(proposal.NodeID)
+		e.proposalTracker.markDead(proposal.NodeID)
 		// Drop its dispute votes so they stop counting toward convergence.
 		if e.disputeTracker != nil {
-			e.disputeTracker.UnVote(proposal.NodeID)
+			e.disputeTracker.unVote(proposal.NodeID)
 		}
 		e.adaptor.RelayProposal(proposal, originPeer)
 		return nil
@@ -87,7 +87,7 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 	// Drop non-increasing positions before counting close-time votes,
 	// relaying, or updating disputes — otherwise a re-sent or equivocating
 	// proposal at an already-seen ProposeSeq votes again.
-	if !e.proposalTracker.Store(proposal) {
+	if !e.proposalTracker.store(proposal) {
 		return nil
 	}
 
@@ -150,7 +150,7 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 				return nil
 			}
 			e.createDisputesAgainst(peerSet)
-			if e.disputeTracker.UpdateDisputes(proposal.NodeID, peerSet) {
+			if e.disputeTracker.updateDisputes(proposal.NodeID, peerSet) {
 				e.peerUnchangedCounter = 0
 			}
 		}
@@ -220,11 +220,11 @@ func (e *Engine) ProcessVerifiedValidation(
 	deferFinality := tracked && tracker != nil
 	if deferFinality {
 		tracker.beginFinalityDeferral()
-		disposition.Status = validationDispositionStatus(tracker.addStatus(validation, false))
+		disposition.Status = validationDispositionStatus(tracker.addStatusWithFinality(validation, false))
 	}
 
 	if disposition.AcquireEligible() {
-		e.proposalTracker.SetValidation(validation)
+		e.proposalTracker.setValidation(validation)
 	}
 
 	event := &consensus.ValidationReceivedEvent{
@@ -241,17 +241,17 @@ func (e *Engine) ProcessVerifiedValidation(
 	return disposition, nil
 }
 
-func validationDispositionStatus(status ValStatus) consensus.ValidationStatus {
+func validationDispositionStatus(status valStatus) consensus.ValidationStatus {
 	switch status {
-	case ValStatusCurrent:
+	case valStatusCurrent:
 		return consensus.ValidationCurrent
-	case ValStatusStale:
+	case valStatusStale:
 		return consensus.ValidationStale
-	case ValStatusBadSeq:
+	case valStatusBadSeq:
 		return consensus.ValidationBadSeq
-	case ValStatusMultiple:
+	case valStatusMultiple:
 		return consensus.ValidationMultiple
-	case ValStatusConflicting:
+	case valStatusConflicting:
 		return consensus.ValidationConflicting
 	default:
 		return consensus.ValidationUntracked
@@ -284,12 +284,12 @@ func (e *Engine) OnTxSet(id consensus.TxSetID, txs [][]byte) error {
 		e.acquiredTxSets[id] = txSet
 		if e.ourTxSet != nil && id != e.ourTxSet.ID() {
 			e.createDisputesAgainst(txSet)
-			for nodeID, p := range e.proposalTracker.All() {
+			for nodeID, p := range e.proposalTracker.all() {
 				if !trusted(nodeID) {
 					continue
 				}
 				if p.TxSet == id {
-					if e.disputeTracker.UpdateDisputes(nodeID, txSet) {
+					if e.disputeTracker.updateDisputes(nodeID, txSet) {
 						e.peerUnchangedCounter = 0
 					}
 				}
@@ -335,14 +335,14 @@ func (e *Engine) createDisputesAgainst(peerTxSet consensus.TxSet) {
 		if _, also := peers[txID]; also {
 			continue
 		}
-		if e.disputeTracker.Has(txID) {
+		if e.disputeTracker.has(txID) {
 			continue
 		}
 		var blob []byte
 		if idx < len(ourBlobs) {
 			blob = ourBlobs[idx]
 		}
-		dispute := e.disputeTracker.CreateDispute(txID, blob, true)
+		dispute := e.disputeTracker.createDispute(txID, blob, true)
 		e.seedDisputeVotes(dispute.TxID)
 	}
 
@@ -352,14 +352,14 @@ func (e *Engine) createDisputesAgainst(peerTxSet consensus.TxSet) {
 		if _, also := ours[txID]; also {
 			continue
 		}
-		if e.disputeTracker.Has(txID) {
+		if e.disputeTracker.has(txID) {
 			continue
 		}
 		var blob []byte
 		if idx < len(peerBlobs) {
 			blob = peerBlobs[idx]
 		}
-		dispute := e.disputeTracker.CreateDispute(txID, blob, false)
+		dispute := e.disputeTracker.createDispute(txID, blob, false)
 		e.seedDisputeVotes(dispute.TxID)
 	}
 }
@@ -368,7 +368,7 @@ func (e *Engine) createDisputesAgainst(peerTxSet consensus.TxSet) {
 // its acquired tx set. Caller must hold e.mu.
 func (e *Engine) seedDisputeVotes(txID consensus.TxID) {
 	trusted := e.trustedPredicate()
-	for nodeID, p := range e.proposalTracker.All() {
+	for nodeID, p := range e.proposalTracker.all() {
 		if !trusted(nodeID) {
 			continue
 		}
@@ -376,56 +376,10 @@ func (e *Engine) seedDisputeVotes(txID consensus.TxID) {
 		if !ok {
 			continue
 		}
-		if e.disputeTracker.SetVote(txID, nodeID, peerSet.Contains(txID)) {
+		if e.disputeTracker.setVote(txID, nodeID, peerSet.Contains(txID)) {
 			e.peerUnchangedCounter = 0
 		}
 	}
-}
-
-// OnLedger handles receiving a ledger we were missing.
-func (e *Engine) OnLedger(id consensus.LedgerID, ledger []byte) error {
-	e.mu.Lock()
-	e.deferPostUnlock++
-	defer func() {
-		e.deferPostUnlock--
-		pending := e.takePendingPostUnlockLocked()
-		e.mu.Unlock()
-		runPostUnlock(pending)
-	}()
-
-	recovering := e.mode == consensus.ModeWrongLedger
-	exactRecoveryTarget := recovering && id == e.wrongLedgerID
-	l, err := e.adaptor.GetLedger(id)
-	if err != nil || l == nil {
-		return nil
-	}
-	validatedCandidate := e.adaptor.GetValidatedLedgerHash() == id ||
-		e.isQuorumValidatedCandidateLocked(l)
-	if recovering && !exactRecoveryTarget && !validatedCandidate {
-		return nil
-	}
-	if !recovering && !validatedCandidate {
-		return nil
-	}
-	slog.Info("Recovery ledger completion received",
-		"t", "consensus",
-		"event", "recovery-ledger-complete",
-		"hash", fmt.Sprintf("%x", id[:8]),
-		"build_in_progress", e.buildInProgress,
-	)
-
-	// acceptLedger applies off-lock like rippled's serialized jtACCEPT job.
-	// Retain the newest completed recovery acquisition until its commit tail
-	// regains the engine lock instead of losing the callback.
-	if e.buildInProgress {
-		if exactRecoveryTarget || e.pendingRecoveryLedger == nil || l.Seq() > e.pendingRecoveryLedger.Seq() {
-			e.pendingRecoveryLedger = l
-		}
-		return nil
-	}
-
-	e.switchToAcquiredLedgerLocked(id, l)
-	return nil
 }
 
 // TrySwitchToLedger synchronously evaluates and adopts a locally-held ledger
@@ -473,31 +427,6 @@ func (e *Engine) CanAcceptLedger(id consensus.LedgerID) (bool, error) {
 		return false, err
 	}
 	return e.canBeCurrentLocked(l), nil
-}
-
-func (e *Engine) switchToAcquiredLedgerLocked(id consensus.LedgerID, l consensus.Ledger) bool {
-	exactRecoveryTarget := e.mode == consensus.ModeWrongLedger && id == e.wrongLedgerID
-	validatedCandidate := e.adaptor.GetValidatedLedgerHash() == id ||
-		e.isQuorumValidatedCandidateLocked(l)
-	if e.mode == consensus.ModeWrongLedger && !exactRecoveryTarget && !validatedCandidate {
-		return false
-	}
-	// Never regress on out-of-order acquisition arrivals — EXCEPT for the hash
-	// checkLedger explicitly pinned: the preferred ledger may be on a lower
-	// sequence of another chain.
-	if e.prevLedger != nil && l.Seq() <= e.prevLedger.Seq() && !exactRecoveryTarget && !validatedCandidate {
-		return false
-	}
-	if e.mode != consensus.ModeWrongLedger {
-		for {
-			next, err := e.adaptor.GetLedgerBySeq(l.Seq() + 1)
-			if err != nil || next == nil || next.ParentID() != l.ID() {
-				break
-			}
-			l = next
-		}
-	}
-	return e.switchToLedgerLocked(id, l)
 }
 
 // isQuorumValidatedCandidateLocked rechecks the live trusted-validation set
@@ -559,20 +488,10 @@ func (e *Engine) switchToLedgerLocked(id consensus.LedgerID, l consensus.Ledger)
 		return false
 	}
 	e.wrongLedgerID = consensus.LedgerID{}
-	e.pendingRecoveryLedger = nil
 	if e.state != nil {
 		e.state.HaveCorrectLCL = true
 	}
 	return true
-}
-
-func (e *Engine) processPendingRecoveryLedgerLocked() bool {
-	l := e.pendingRecoveryLedger
-	if l == nil {
-		return false
-	}
-	e.pendingRecoveryLedger = nil
-	return e.switchToAcquiredLedgerLocked(l.ID(), l)
 }
 
 // parentValidations returns the trusted full validations recorded for the

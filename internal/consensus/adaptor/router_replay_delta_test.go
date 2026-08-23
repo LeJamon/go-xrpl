@@ -471,7 +471,7 @@ func TestRouter_MaintenanceTick_TimeoutFallback(t *testing.T) {
 	// without wall-clock waits. Must be set before startReplayDeltaAcquisition
 	// so the new ReplayDelta adopts it as its time source.
 	clock := inboundtest.NewFakeClock(time.Now())
-	r.SetInboundClock(clock)
+	r.replayer.SetClock(clock)
 
 	target := [32]byte{0xAB}
 	require.NoError(t, r.startReplayDeltaAcquisition(parent.Sequence()+1, target, 7, parent))

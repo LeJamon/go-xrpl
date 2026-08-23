@@ -100,7 +100,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		"self_ct_xrpl", e.state.CloseTimes.Self.Unix()-protocol.RippleEpochUnix,
 		"resolution_s", int(resolution.Seconds()),
 		"peer_ct_count", len(e.state.CloseTimes.Peers),
-		"proposer_count", e.proposalTracker.CountTrusted(trusted),
+		"proposer_count", e.proposalTracker.countTrusted(trusted),
 	)
 
 	var txSet consensus.TxSet
@@ -109,7 +109,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	} else {
 		// Find most popular among trusted
 		txSetCounts := make(map[consensus.TxSetID]int)
-		for nodeID, proposal := range e.proposalTracker.All() {
+		for nodeID, proposal := range e.proposalTracker.all() {
 			if trusted(nodeID) {
 				txSetCounts[proposal.TxSet]++
 			}
@@ -130,9 +130,9 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// clamp track convergence, not the apply.
 	roundTime := e.now().Sub(e.roundStartTime)
 	roundDuration := e.now().Sub(e.state.StartTime)
-	// DisputedNoTxs returns detached blobs; work keeps that snapshot while
+	// disputedNoTxs returns detached blobs; work keeps that snapshot while
 	// the ledger is built after e.mu is released.
-	disputedNoTxs := e.disputeTracker.DisputedNoTxs()
+	disputedNoTxs := e.disputeTracker.disputedNoTxs()
 
 	// Apply the LCL off e.mu, mirroring rippled onAccept→addJob(jtACCEPT)
 	// ("no lock is held during this job"). Snapshot every build input and
@@ -210,7 +210,6 @@ func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger con
 		// Build/validate/store failed off-lock; unwind to Establish so the next
 		// heartbeat retries (matches the pre-offload early-return).
 		e.setPhase(consensus.PhaseEstablish)
-		e.processPendingRecoveryLedgerLocked()
 		return
 	}
 	result := work.result
@@ -268,7 +267,7 @@ func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger con
 		})
 	}
 
-	trustedProposers := e.proposalTracker.CountTrusted(e.trustedPredicate())
+	trustedProposers := e.proposalTracker.countTrusted(e.trustedPredicate())
 	e.eventBus.Publish(&consensus.ConsensusReachedEvent{
 		Round:     e.state.Round,
 		TxSet:     txSet.ID(),
@@ -349,7 +348,7 @@ func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger con
 		e.sendValidation(newLedger)
 	}
 
-	validations := e.proposalTracker.ValidationsFor(newLedger.ID())
+	validations := e.proposalTracker.validationsFor(newLedger.ID())
 
 	e.buildingLedgerSeq.Store(0)
 	e.notifyConsensusReachedUnlocked(newLedger, validations, roundTime)
@@ -377,12 +376,12 @@ func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger con
 		if newLedger.Seq() > 128 {
 			// Keep a small history window so late validations for the
 			// just-accepted ledger still count.
-			e.validationTracker.SetMinSeq(newLedger.Seq() - 128)
+			e.validationTracker.setMinSeq(newLedger.Seq() - 128)
 		}
 		// rippled feeds getCurrentNodeIDs() into updateTrusted, but its quorum
 		// ignores the set — surface it for partial-outage visibility, not quorum.
 		slog.Debug("live validator participation",
-			"current", len(e.validationTracker.CurrentNodeIDs()),
+			"current", len(e.validationTracker.currentNodeIDs()),
 			"quorum", quorum,
 			"ledger_seq", newLedger.Seq())
 	}
@@ -398,12 +397,8 @@ func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger con
 	// Update state for next round
 	e.prevLedger = newLedger
 	e.acceptedLCL = consensus.LedgerID{}
-	e.proposalTracker.ResetValidations()
+	e.proposalTracker.resetValidations()
 	e.consensusCount++
-	if e.processPendingRecoveryLedgerLocked() {
-		return
-	}
-
 	// Phase is already PhaseAccepted (set before the off-lock apply).
 
 	// Auto-advance only in Full mode; otherwise the router re-adopts until
@@ -478,7 +473,7 @@ func (e *Engine) updateCloseTimePosition() {
 	// Tally close-time votes from trusted proposals, rounded via roundCloseTime.
 	closeTimeVotes := make(map[time.Time]int)
 	participants := 0
-	for nodeID, proposal := range e.proposalTracker.All() {
+	for nodeID, proposal := range e.proposalTracker.all() {
 		if trusted(nodeID) {
 			rounded := roundCloseTime(proposal.CloseTime, resolution)
 			closeTimeVotes[rounded]++
@@ -768,7 +763,7 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 	if e.validationTracker != nil {
 		tracker := e.validationTracker
 		tracker.beginFinalityDeferral()
-		tracker.addStatus(validation, false)
+		tracker.addStatusWithFinality(validation, false)
 		if e.deferPostUnlock == 0 {
 			e.mu.Unlock()
 			tracker.endFinalityDeferral()

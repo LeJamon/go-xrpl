@@ -139,7 +139,7 @@ func TestAcceptLedgerPreferredFrontierMovedAheadUsesCapturedRoundMode(t *testing
 	}
 
 	engine.mu.Lock()
-	engine.proposalTracker.Store(&consensus.Proposal{
+	engine.proposalTracker.store(&consensus.Proposal{
 		NodeID:         peerA,
 		Round:          round,
 		PreviousLedger: round.ParentHash,
@@ -208,7 +208,7 @@ func TestAcceptLedgerCurrentPreferredWithTrustedPositionEmitsFull(t *testing.T) 
 	driveToEstablish(t, engine, adaptor)
 
 	engine.mu.Lock()
-	engine.proposalTracker.Store(&consensus.Proposal{
+	engine.proposalTracker.store(&consensus.Proposal{
 		NodeID:         peerA,
 		Round:          consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}},
 		PreviousLedger: consensus.LedgerID{1},
@@ -270,7 +270,7 @@ func TestAcceptLedgerKeepsPreferredDirectChildForNextRound(t *testing.T) {
 	}
 
 	engine.mu.Lock()
-	engine.proposalTracker.Store(&consensus.Proposal{
+	engine.proposalTracker.store(&consensus.Proposal{
 		NodeID: peerA, Round: round, PreviousLedger: round.ParentHash, Timestamp: now,
 	})
 	engine.acceptLedger(consensus.ResultSuccess)

@@ -491,7 +491,7 @@ func TestStvParseSTValidation_InvalidAmendmentsLength(t *testing.T) {
 	payload := make([]byte, 33) // 33 bytes — not divisible by 32
 	extraBuf = appendVL(extraBuf, payload)
 
-	base := SerializeSTValidation(orig)
+	base := serializeSTValidation(orig)
 	combined := append(base, extraBuf...)
 	_, err := parseSTValidation(combined)
 	// It may succeed or fail depending on whether signatures and required fields
@@ -527,12 +527,11 @@ func TestStvParseSTValidation_ShortSigningPubKey(t *testing.T) {
 }
 
 func TestStvParseSTValidation_AllOptionalUINT32Fields(t *testing.T) {
-	// Verify ReserveBase and ReserveIncrement branches are exercised.
 	orig := buildTestValidation()
 	orig.ReserveBase = 200_000_000
 	orig.ReserveIncrement = 50_000_000
 
-	blob := SerializeSTValidation(orig)
+	blob := serializeSTValidation(orig)
 	parsed, err := parseSTValidation(blob)
 	require.NoError(t, err)
 
@@ -547,7 +546,7 @@ func TestStvParseSTValidation_AllUINT64Fields(t *testing.T) {
 	orig.Cookie = 98765
 	orig.ServerVersion = 0x0200000000000000
 
-	blob := SerializeSTValidation(orig)
+	blob := serializeSTValidation(orig)
 	parsed, err := parseSTValidation(blob)
 	require.NoError(t, err)
 
@@ -566,7 +565,7 @@ func TestStvParseSTValidation_AmendmentsField(t *testing.T) {
 	}
 	orig.Amendments = [][32]byte{id1, id2}
 
-	blob := SerializeSTValidation(orig)
+	blob := serializeSTValidation(orig)
 	parsed, err := parseSTValidation(blob)
 	require.NoError(t, err)
 
@@ -584,7 +583,7 @@ func TestStvParseSTValidation_ConsensusAndValidatedHash(t *testing.T) {
 		orig.ValidatedHash[i] = byte(i + 0x20)
 	}
 
-	blob := SerializeSTValidation(orig)
+	blob := serializeSTValidation(orig)
 	parsed, err := parseSTValidation(blob)
 	require.NoError(t, err)
 
@@ -607,7 +606,7 @@ func TestStvSerializeSTValidation_ZeroFlagsNotFull(t *testing.T) {
 	orig.Flags = 0
 	orig.Full = false
 
-	blob := SerializeSTValidation(orig)
+	blob := serializeSTValidation(orig)
 	parsed, err := parseSTValidation(blob)
 	require.NoError(t, err)
 
@@ -620,7 +619,7 @@ func TestStvSerializeSTValidation_WithSignature(t *testing.T) {
 	orig := buildTestValidation()
 	orig.Signature = nil
 
-	blob := SerializeSTValidation(orig)
+	blob := serializeSTValidation(orig)
 	_, err := parseSTValidation(blob)
 	assert.ErrorIs(t, err, errMissingFields)
 }
@@ -637,61 +636,8 @@ func TestStvSkipAmount_IOUNonZeroMiddleBytes(t *testing.T) {
 }
 
 func TestStvParseSTValidation_ReadFieldHeaderError(t *testing.T) {
-	// Construct a buffer that passes the len >= 50 check but triggers
-	// readFieldHeader's errShortData on the last iteration. Layout:
-	//
-	//  pos 0-4:   sfFlags UINT32 (header 0x22 + 4 bytes)         = 5 bytes
-	//  pos 5-44:  8 × unknown UINT32 (header 0x21 + 4 zero bytes) = 40 bytes
-	//  pos 45-47: 1 × unknown UINT16 (header 0x11 + 2 zero bytes) = 3 bytes
-	//  pos 48-49: 1 byte remaining; byte[48] = 0x11 (UINT16 header) + 1 data byte at 49
-	//
-	// Actually: 8 UINT32 (40) + 1 UINT16 (3) = 43 bytes starting at pos=5 → pos=48.
-	// Then byte[48]=0x09 (typeCode nibble=0, extended needed): reads byte[49], typeCode=0.
-	// fieldCode nibble=9 ≠ 0, no extra read. Returns (0, 9, nil).
-	// skipFieldData(0,...) → "unknown type code 0" — that's a skipFieldData error path.
-	//
-	// To get readFieldHeader to error, byte[49] must be the ONLY remaining byte and have
-	// typeCode nibble=0. Layout:
-	//  pos 0-4:   sfFlags UINT32              = 5 bytes
-	//  pos 5-44:  8 × UINT32 (skip fields)    = 40 bytes → pos=45
-	//  pos 45-48: 1 × UINT32                  = 5 bytes → pos=50? No, that exits.
-	// Shift: 8 UINT32 = 40 bytes → pos=45; then 1 UINT16 (3 bytes) → pos=48; then byte[48]=unknown header + byte[49]=..
-	// At pos=48 after consuming header: 0x11 (UINT16 field 1), 2 data bytes → pos=51. Too far.
-	//
-	// Revised: make pos land on byte 49 as the START of a new header:
-	//  5 + 8*5 + 4 = 49? 5 + 40 + 4 = 49. So: 8 UINT32 fields (40) + 1 field of 4 bytes total.
-	//  A 4-byte field = 1 header + 3 data: UINT8 (1 data) → 2 bytes. Nope.
-	//  No fixed XRPL type is exactly 3 bytes data. But UINT16 is 2 data bytes = 3 bytes total (1+2).
-	//  5 + 40 + 3 = 48. Then 2 bytes remain (pos 48, 49).
-	//  byte[48] = another UINT16 header (0x11), data = byte[49] is only 1 byte → UINT16 needs 2 → errShortData.
-	//  But that's skipFieldData error (advanceFixed), not readFieldHeader error.
-	//
-	// For readFieldHeader errShortData: need last byte to have typeCode nibble = 0 (needs extension).
-	//  5 + 40 + 3 = 48. byte[48] = 0x09 (typeCode nibble 0, needs byte[49]).
-	//  byte[49] = any value, say 0x02 → typeCode=2. fieldCode nibble=9 → returns (2, 9, nil).
-	//  skipFieldData(2,...) reads 4 bytes from pos=50 → only 0 bytes left → errShortData.
-	//  Still skipFieldData error.
-	//
-	// The ONLY way readFieldHeader fails inside the loop is when the byte at the current
-	// position has typeCode nibble=0 AND the data ends at exactly that byte (len=pos+1).
-	// That requires length of exactly pos+1. With minimum size 50:
-	//   5 + 40 + 3 = 48 → pos=48 after 3rd group, length = 49 → byte[48] (last) = 0x09.
-	//   readFieldHeader: reads byte[48]=0x09, pos=49. typeCode=0 → needs byte[49] → pos 49 >= len 49 → errShortData!
-	// (A 49-byte buffer would fail the initial length check, since 49 < 50.)
-	// We need >= 50. So length = 50:
-	//   5 + 8*5 + 4 = 49, but we need 50. Use 5 + 8*5 + 3 + 2 = 50.
-	//   After the 3-byte UINT16 group: pos=48. Then 2 bytes remain (48, 49).
-	//   byte[48] = 0x09 (typeCode nibble 0), byte[49] would be extended type. typeCode=byte[49].
-	//   fieldCode nibble=9 → no further read. Returns (byte[49], 9, nil).
-	//   Then skipFieldData(byte[49], ...) with 0 bytes left → errShortData from advanceFixed.
-	//   This is still a skipFieldData error.
-	//
-	// Conclusion: to hit readFieldHeader's error path, we need exactly (pos+1) == len.
-	// With min-length 50:  pos = 49, len = 50. Need to consume 49 bytes in valid fields before pos=49.
-	//   49 = 5 (Flags) + 9*UINT32 (45) - 1. That doesn't work cleanly.
-	//   49 = 5 + 8*5 + 4 = 49. A 4-byte total field: no standard XRPL field is 4 bytes (1+3).
-	//   49 = 5 + 8*5 + 2 + 2: two UINT16 fields (each 3 bytes) = 6 bytes → 40+6=46 → pos=51? No, 5+40+6=51.
-	//   49 = 5 + 7*5 + 3*3 = 5+35+9 = 49: 7 UINT32 + 3 UINT16. pos=49, len=50. byte[49]=0x09 → OOB!
+	// Seven UINT32 and three UINT16 fields place an extended header in the
+	// final byte, where its required type byte is truncated.
 	buf := make([]byte, 50)
 	pos := 0
 	// sfFlags UINT32 (field 2)
@@ -711,8 +657,6 @@ func TestStvParseSTValidation_ReadFieldHeaderError(t *testing.T) {
 		buf[pos] = 0x11
 		pos += 3 // 1 header + 2 data
 	}
-	// pos should now be 49: 5 + 35 + 9 = 49.
-	// byte[49] = 0x09: typeCode nibble=0, needs extended type byte at pos=50, but len=50 → OOB → errShortData.
 	buf[49] = 0x09
 
 	_, err := parseSTValidation(buf)

@@ -51,7 +51,7 @@ func TestEngine_GetNetworkLedger_ProposalIsNotPeerLCLVote(t *testing.T) {
 
 	engine := NewEngine(adaptor, DefaultConfig())
 	engine.prevLedger = &mockLedger{id: ourID, seq: 100}
-	engine.proposalTracker.BufferRecent(&consensus.Proposal{
+	engine.proposalTracker.bufferRecent(&consensus.Proposal{
 		NodeID:         peer,
 		PreviousLedger: proposedID,
 		Timestamp:      adaptor.now,
@@ -185,7 +185,7 @@ func TestEngine_CheckLedger_ValidationMajorityBreaksConsensusIsland(t *testing.T
 		adaptor.trusted[n] = true
 		trustedSet = append(trustedSet, n)
 	}
-	engine.validationTracker.SetTrusted(trustedSet)
+	engine.validationTracker.setTrusted(trustedSet)
 	for _, v := range islandVals {
 		engine.validationTracker.Add(v)
 	}

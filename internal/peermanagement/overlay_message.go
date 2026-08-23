@@ -412,8 +412,7 @@ func (o *Overlay) DroppedLedgerResponses() uint64 {
 // routes it to the local LedgerSyncHandler. Decode failures are logged and
 // dropped silently — a malformed request from a peer should not crash the
 // dispatch loop. The handler answers via the configured LedgerProvider, which
-// is wired at startup by the consensus adaptor (see
-// internal/consensus/adaptor.NewLedgerProvider) — that layer can import
+// is wired at startup by the consensus adaptor, which can import
 // internal/ledger, which this package cannot.
 func (o *Overlay) dispatchReplayDeltaRequest(evt Event) {
 	decoded, err := message.Decode(message.TypeReplayDeltaReq, evt.Payload)
@@ -439,8 +438,7 @@ func (o *Overlay) dispatchReplayDeltaRequest(evt Event) {
 // routes it to the local LedgerSyncHandler. Decode failures are logged
 // and dropped silently — a malformed request from a peer should not
 // crash the dispatch loop. The handler answers via the configured
-// LedgerProvider, which is wired at startup by the consensus adaptor
-// (see internal/consensus/adaptor.NewLedgerProvider) — that layer can
+// LedgerProvider, which is wired at startup by the consensus adaptor and can
 // import internal/ledger, which this package cannot.
 func (o *Overlay) dispatchProofPathRequest(evt Event) {
 	decoded, err := message.Decode(message.TypeProofPathReq, evt.Payload)

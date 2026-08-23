@@ -54,9 +54,9 @@ func (e *Engine) phaseEstablish() {
 func (e *Engine) pruneUntrustedProposalsLocked() {
 	e.purgePendingTrustLocked()
 	trusted := e.trustedPredicate()
-	for _, nodeID := range e.proposalTracker.PruneUntrusted(trusted) {
+	for _, nodeID := range e.proposalTracker.pruneUntrusted(trusted) {
 		if e.disputeTracker != nil {
-			e.disputeTracker.UnVote(nodeID)
+			e.disputeTracker.unVote(nodeID)
 		}
 	}
 	e.purgePendingTrustLocked()
@@ -69,8 +69,8 @@ func (e *Engine) unvoteDeadProposalsLocked() {
 	if e.disputeTracker == nil {
 		return
 	}
-	for _, nodeID := range e.proposalTracker.DeadNodeIDs() {
-		e.disputeTracker.UnVote(nodeID)
+	for _, nodeID := range e.proposalTracker.deadNodeIDs() {
+		e.disputeTracker.unVote(nodeID)
 	}
 }
 
@@ -78,9 +78,9 @@ func (e *Engine) unvoteDeadProposalsLocked() {
 // window and revokes their dispute votes. Caller must hold e.mu.
 func (e *Engine) pruneStaleProposalsLocked() {
 	cutoff := e.adaptor.Now().Add(-e.timing.ProposeFreshness)
-	for _, nodeID := range e.proposalTracker.PruneStale(cutoff) {
+	for _, nodeID := range e.proposalTracker.pruneStale(cutoff) {
 		if e.disputeTracker != nil {
-			e.disputeTracker.UnVote(nodeID)
+			e.disputeTracker.unVote(nodeID)
 		}
 	}
 }
@@ -336,7 +336,7 @@ func (e *Engine) countLaggardsAndOfflineLocked(prevSeq uint32, trusted []consens
 		if k == self {
 			continue
 		}
-		v := e.validationTracker.LatestValidation(k)
+		v := e.validationTracker.latestValidation(k)
 		if v == nil {
 			offline++
 			continue
@@ -497,7 +497,7 @@ func (e *Engine) checkConvergence() {
 	case consensusStateMovedOn:
 		finished := 0
 		if e.validationTracker != nil && e.prevLedger != nil {
-			finished = e.validationTracker.ProposersFinished(e.prevLedger)
+			finished = e.validationTracker.proposersFinished(e.prevLedger)
 		}
 		slog.Info("consensus moved on, accepting",
 			"t", "consensus",
@@ -608,7 +608,7 @@ func (e *Engine) checkConsensusState(roundTime time.Duration, agree, currentProp
 	// stalled.
 	stalled := false
 	if e.closeTime.haveConsensus && e.disputeTracker != nil {
-		stalled = e.disputeTracker.AllStalled(e.parms, proposing, e.peerUnchangedCounter)
+		stalled = e.disputeTracker.allStalled(e.parms, proposing, e.peerUnchangedCounter)
 	}
 	if checkConsensusReached(agree, currentProposers, proposing, e.thresholds.MinConsensusPct, reachedMax, stalled) {
 		return consensusStateYes
@@ -617,7 +617,7 @@ func (e *Engine) checkConsensusState(roundTime time.Duration, agree, currentProp
 	// MovedOn denominator is current-round proposers (not prevProposers):
 	// peers stop proposing for our round as they advance.
 	if e.prevLedger != nil && e.validationTracker != nil {
-		finished := e.validationTracker.ProposersFinished(e.prevLedger)
+		finished := e.validationTracker.proposersFinished(e.prevLedger)
 		if checkConsensusReached(finished, currentProposers, false, e.thresholds.MinConsensusPct, reachedMax, false) {
 			return consensusStateMovedOn
 		}
@@ -668,7 +668,7 @@ func (e *Engine) countAgreement() (agree, disagree int) {
 		// Observer without a position: count peer-peer agreement on the most
 		// popular tx set so non-proposing nodes still get a convergence signal.
 		counts := make(map[consensus.TxSetID]int)
-		for nodeID, p := range e.proposalTracker.All() {
+		for nodeID, p := range e.proposalTracker.all() {
 			if trusted(nodeID) {
 				counts[p.TxSet]++
 			}
@@ -688,7 +688,7 @@ func (e *Engine) countAgreement() (agree, disagree int) {
 		return agree, disagree
 	}
 
-	for nodeID, p := range e.proposalTracker.All() {
+	for nodeID, p := range e.proposalTracker.all() {
 		if !trusted(nodeID) {
 			continue
 		}
@@ -715,8 +715,8 @@ func (e *Engine) updatePosition() {
 	}
 
 	proposing := e.mode == consensus.ModeProposing
-	disputeCount := e.disputeTracker.Count()
-	changed := e.disputeTracker.UpdateOurVote(e.convergePercent(), proposing, e.parms)
+	disputeCount := e.disputeTracker.count()
+	changed := e.disputeTracker.updateOurVote(e.convergePercent(), proposing, e.parms)
 
 	if disputeCount > 0 || proposing {
 		var ourSetID consensus.TxSetID
@@ -736,7 +736,7 @@ func (e *Engine) updatePosition() {
 			"our_txset", fmt.Sprintf("%x", ourSetID[:8]),
 			"our_tx_count", ourSetSize,
 			"acquired_txsets", len(e.acquiredTxSets),
-			"peer_proposals", e.proposalTracker.Count(),
+			"peer_proposals", e.proposalTracker.count(),
 		)
 	}
 
@@ -768,7 +768,7 @@ func (e *Engine) updatePosition() {
 		keep[id] = true
 	}
 	for _, txID := range changed {
-		dispute := e.disputeTracker.Dispute(txID)
+		dispute := e.disputeTracker.dispute(txID)
 		if dispute == nil {
 			continue
 		}
@@ -794,7 +794,7 @@ func (e *Engine) updatePosition() {
 		if !keep[txID] {
 			continue
 		}
-		dispute := e.disputeTracker.Dispute(txID)
+		dispute := e.disputeTracker.dispute(txID)
 		if dispute == nil || dispute.Tx == nil {
 			continue
 		}
@@ -838,14 +838,14 @@ func (e *Engine) updatePosition() {
 
 	// Refresh per-peer votes for peers whose position matches the new set.
 	trusted := e.trustedPredicate()
-	for nodeID, p := range e.proposalTracker.All() {
+	for nodeID, p := range e.proposalTracker.all() {
 		if !trusted(nodeID) {
 			continue
 		}
 		if p.TxSet != newTxSet.ID() {
 			continue
 		}
-		if e.disputeTracker.UpdateDisputes(nodeID, newTxSet) {
+		if e.disputeTracker.updateDisputes(nodeID, newTxSet) {
 			e.peerUnchangedCounter = 0
 		}
 	}

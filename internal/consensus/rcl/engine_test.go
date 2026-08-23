@@ -829,14 +829,14 @@ func TestEngine_StartSeedsNegativeUNL(t *testing.T) {
 	defer engine.Stop()
 
 	for _, node := range nodes[:4] {
-		if status := engine.validationTracker.AddStatus(&consensus.Validation{
+		if status := engine.validationTracker.addStatus(&consensus.Validation{
 			LedgerID:  consensus.LedgerID{0xA1},
 			LedgerSeq: 101,
 			NodeID:    node,
 			SignTime:  adaptor.now,
 			SeenTime:  adaptor.now,
 			Full:      true,
-		}); status != ValStatusCurrent {
+		}); status != valStatusCurrent {
 			t.Fatalf("validation status=%s, want current", status)
 		}
 	}
@@ -871,10 +871,10 @@ func TestEngine_FullyValidatedLedgerRefreshesNegativeUNL(t *testing.T) {
 		t.Helper()
 		now := adaptor.Now()
 		for _, node := range nodes[:4] {
-			if status := engine.validationTracker.AddStatus(&consensus.Validation{
+			if status := engine.validationTracker.addStatus(&consensus.Validation{
 				LedgerID: ledgerID, LedgerSeq: seq, NodeID: node,
 				SignTime: now, SeenTime: now, Full: true,
-			}); status != ValStatusCurrent {
+			}); status != valStatusCurrent {
 				t.Fatalf("validation status=%s, want current", status)
 			}
 		}
@@ -1452,7 +1452,7 @@ func TestEngine_OnProposal_SelfKey(t *testing.T) {
 	if relayed != 0 {
 		t.Errorf("self-key proposal relayed %d times, want 0", relayed)
 	}
-	if got := engine.proposalTracker.Count(); got != 0 {
+	if got := engine.proposalTracker.count(); got != 0 {
 		t.Errorf("self-key proposal stored %d positions, want 0", got)
 	}
 
@@ -1470,7 +1470,7 @@ func TestEngine_OnProposal_SelfKey(t *testing.T) {
 	if err := engine.OnProposal(peerProposal, 0); err != nil {
 		t.Fatalf("OnProposal(peer) returned error: %v", err)
 	}
-	if got := engine.proposalTracker.Count(); got != 1 {
+	if got := engine.proposalTracker.count(); got != 1 {
 		t.Errorf("trusted peer proposal stored %d positions, want 1", got)
 	}
 }
@@ -1527,7 +1527,7 @@ func TestEngine_OnProposal_SelfKey_UntrustedStillGuarded(t *testing.T) {
 	if relayed != 0 {
 		t.Errorf("self-key proposal relayed %d times, want 0", relayed)
 	}
-	if got := engine.proposalTracker.Count(); got != 0 {
+	if got := engine.proposalTracker.count(); got != 0 {
 		t.Errorf("self-key proposal stored %d positions, want 0", got)
 	}
 }
@@ -1910,9 +1910,6 @@ func TestEngine_WrongLedgerRecovery_ModeSequence(t *testing.T) {
 	adaptor.ledgers[targetID] = targetLedger
 
 	engine.mu.Lock()
-	// Step into WrongLedger then immediately receive the target — this
-	// mirrors the OnLedger happy-path at engine.go:OnLedger where we
-	// transition straight through WrongLedger into SwitchedLedger.
 	engine.wrongLedgerID = targetID
 	engine.setMode(consensus.ModeWrongLedger)
 	// Drive the full recovery: handleWrongLedger resolves the target
@@ -2048,7 +2045,7 @@ func TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch(t *testing.T) {
 		engine.wrongLedgerID = targetID
 		engine.setMode(consensus.ModeWrongLedger)
 		if engine.validationTracker != nil {
-			engine.validationTracker.SetTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
+			engine.validationTracker.setTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
 			for _, nodeID := range []consensus.NodeID{peerA, peerB} {
 				if !engine.validationTracker.Add(&consensus.Validation{
 					NodeID: nodeID, LedgerID: targetID, LedgerSeq: 101,
@@ -2096,89 +2093,6 @@ func TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch(t *testing.T) {
 				"duplicate-suppression window, got %d requests", reqs)
 		}
 	})
-}
-
-// TestEngine_OnLedger_PromotesToSwitchedLedger pins the SECOND entry
-// point into ModeSwitchedLedger — the OnLedger path at engine.go:447
-// that fires when a peer finally delivers the ledger we were missing.
-// The WrongLedgerRecovery_ModeSequence test above covers the
-// handleWrongLedger direct-call path; this test covers OnLedger, which
-// is what the router actually calls on inbound mtGET_LEDGER responses.
-// A regression on either branch would let a validator emit a Full
-// validation immediately after recovery, violating the rippled
-// contract that recovery rounds MUST emit partials.
-func TestEngine_OnLedger_PromotesToSwitchedLedger(t *testing.T) {
-	adaptor := newMockAdaptor()
-	adaptor.validator = true
-	adaptor.opMode = consensus.OpModeFull
-
-	config := DefaultConfig()
-	engine := NewEngine(adaptor, config)
-
-	ctx := t.Context()
-	if err := engine.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	defer engine.Stop()
-
-	// Start in Proposing on a round whose parent we'll claim we DON'T
-	// have. The wrongLedgerID is the ID we'll feed into OnLedger to
-	// simulate the missing-ledger-arrived event.
-	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
-	engine.StartRound(round, true)
-	if mode := engine.Mode(); mode != consensus.ModeProposing {
-		t.Fatalf("initial round mode: want Proposing, got %v", mode)
-	}
-
-	targetID := consensus.LedgerID{0xCC}
-	targetLedger := &mockLedger{
-		id:        targetID,
-		seq:       101,
-		closeTime: time.Now(),
-	}
-	adaptor.ledgers[targetID] = targetLedger
-
-	// Put the engine in WrongLedger mode WITHOUT calling
-	// handleWrongLedger — this is the precondition OnLedger checks
-	// at engine.go:452.
-	engine.mu.Lock()
-	engine.wrongLedgerID = targetID
-	engine.setMode(consensus.ModeWrongLedger)
-	engine.mu.Unlock()
-
-	// OnLedger takes the engine lock internally — call it directly.
-	if err := engine.OnLedger(targetID, nil); err != nil {
-		t.Fatalf("OnLedger: %v", err)
-	}
-
-	if mode := engine.Mode(); mode != consensus.ModeSwitchedLedger {
-		t.Fatalf("post-OnLedger mode: want SwitchedLedger, got %v", mode)
-	}
-
-	// Emit a validation while in SwitchedLedger via OnLedger entry —
-	// must still be Full=false (partial).
-	adaptor.mu.Lock()
-	adaptor.validationsBroadcast = nil
-	adaptor.mu.Unlock()
-
-	engine.mu.Lock()
-	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xCC}, seq: 102})
-	engine.mu.Unlock()
-
-	adaptor.mu.RLock()
-	got := len(adaptor.validationsBroadcast)
-	var gotFull bool
-	if got > 0 {
-		gotFull = adaptor.validationsBroadcast[0].Full
-	}
-	adaptor.mu.RUnlock()
-
-	if got != 1 {
-		t.Fatalf("SwitchedLedger after OnLedger must emit one partial validation, got %d", got)
-	}
-	if gotFull {
-		t.Fatalf("validation after OnLedger recovery must have Full=false (partial)")
-	}
 }
 
 // TestSendValidation_ValidatedHashGatedOnHardenedValidations pins the
@@ -2833,8 +2747,8 @@ func TestSendValidation_PeerEchoIsNotConflicting(t *testing.T) {
 	echo := *emitted
 	echo.SignTime = time.Unix(emitted.SignTime.Unix(), 0).UTC()
 	echo.SeenTime = adaptor.Now()
-	if status := engine.validationTracker.AddStatus(&echo); status != ValStatusBadSeq {
-		t.Fatalf("peer echo status: want %v, got %v", ValStatusBadSeq, status)
+	if status := engine.validationTracker.addStatus(&echo); status != valStatusBadSeq {
+		t.Fatalf("peer echo status: want %v, got %v", valStatusBadSeq, status)
 	}
 }
 
@@ -4346,7 +4260,7 @@ func TestShouldPause_AheadAndLaggards(t *testing.T) {
 	// Inject peer validations at seq=9 — both peers are laggards: their
 	// latest validation has not advanced past our prev.
 	if engine.validationTracker != nil {
-		engine.validationTracker.SetTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
+		engine.validationTracker.setTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
 		engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: validatedID, LedgerSeq: 9, Full: true, SignTime: time.Now(), SeenTime: time.Now()})
 		engine.validationTracker.Add(&consensus.Validation{NodeID: peerB, LedgerID: validatedID, LedgerSeq: 9, Full: true, SignTime: time.Now(), SeenTime: time.Now()})
 	}
@@ -4430,7 +4344,7 @@ func TestShouldPause_HardTimeoutOverride(t *testing.T) {
 	engine.prevLedger = &mockLedger{id: consensus.LedgerID{0x0c}, seq: 12, closeTime: time.Now()}
 	engine.setPhase(consensus.PhaseEstablish)
 	if engine.validationTracker != nil {
-		engine.validationTracker.SetTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
+		engine.validationTracker.setTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
 		engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: validatedID, LedgerSeq: 9, Full: true, SignTime: time.Now(), SeenTime: time.Now()})
 		engine.validationTracker.Add(&consensus.Validation{NodeID: peerB, LedgerID: validatedID, LedgerSeq: 9, Full: true, SignTime: time.Now(), SeenTime: time.Now()})
 	}
@@ -4627,7 +4541,7 @@ func TestShouldPause_StaleValidationCountsAsOffline(t *testing.T) {
 	engine.setPhase(consensus.PhaseEstablish)
 	now := adaptor.Now()
 	if engine.validationTracker != nil {
-		engine.validationTracker.SetTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
+		engine.validationTracker.setTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
 		// Peer A: fresh validation at our prev (seq=10) → current,
 		// not a laggard with strict-less-than.
 		engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: consensus.LedgerID{0x0a}, LedgerSeq: 10, Full: true, SignTime: now, SeenTime: now})
@@ -4697,7 +4611,7 @@ func TestPhaseEstablish_PauseAndRecover(t *testing.T) {
 	engine.setPhase(consensus.PhaseEstablish)
 	now := adaptor.Now()
 	if engine.validationTracker != nil {
-		engine.validationTracker.SetTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
+		engine.validationTracker.setTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
 		// Phase 1: both peers stuck at validated (seq=9), well
 		// behind our prev (seq=12). ahead=3 puts us in phase=2.
 		engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: validatedID, LedgerSeq: 9, Full: true, SignTime: now, SeenTime: now})

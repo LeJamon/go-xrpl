@@ -147,7 +147,7 @@ func (e *Engine) timerEntry() {
 	// must not keep steering preferred-ledger selection through a stall.
 	if e.validationTracker != nil {
 		stage = e.startHeartbeatStageLocked("flush-stale")
-		e.validationTracker.FlushStale()
+		e.validationTracker.flushStale()
 		slowStages = e.finishHeartbeatStage(slowStages, stage)
 	}
 
@@ -265,7 +265,7 @@ func (e *Engine) checkAndStartRoundInner() {
 	// Buffered proposals → start immediately (peer pressure closes open
 	// phase); otherwise wait for the idle interval.
 	ledgerID := ledger.ID()
-	hasBufferedProposals := e.proposalTracker.HasBufferedFor(ledgerID)
+	hasBufferedProposals := e.proposalTracker.hasBufferedFor(ledgerID)
 
 	if !hasBufferedProposals {
 		timeSinceClose := e.adaptor.Now().Sub(ledger.CloseTime())
@@ -339,7 +339,7 @@ func (e *Engine) checkLedger() {
 		}
 
 		// Already targeting this hash: re-resolve once in case it became
-		// locally available (held adoption that didn't fire OnLedger) and
+		// locally available and
 		// complete the switch. Still missing, retry the adaptor request; its
 		// acquisition deadline suppresses duplicates until the retry window opens.
 		var target consensus.Ledger
@@ -506,7 +506,7 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 	// Resolve and verify BEFORE mutating any round state, so a refused
 	// switch leaves the in-progress round untouched (rippled verifies with
 	// canBeCurrent/isCompatible before switching, NetworkOPs.cpp:1948-1962).
-	// An unresolvable target is verified later, at adoption (OnLedger).
+	// An unresolvable target is verified later, after acquisition.
 	newLedger := target
 	if newLedger == nil {
 		newLedger = e.resolveTargetLedger(netLedgerID)
@@ -534,7 +534,7 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 
 	// Clear consensus state and replay (only for a new target ledger).
 	if e.prevLedger == nil || netLedgerID != e.prevLedger.ID() {
-		e.proposalTracker.ResetProposals()
+		e.proposalTracker.resetProposals()
 		e.disputeTracker = newDisputeTracker()
 		e.acquiredTxSets = make(map[consensus.TxSetID]consensus.TxSet)
 		e.comparesTxSets = make(map[consensus.TxSetID]struct{})
@@ -548,7 +548,7 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 		// Replay proposals for the new ledger; close-time votes only if a
 		// round state exists.
 		replayTrusted := e.trustedPredicate()
-		closeTimes, _, relay := e.proposalTracker.Replay(netLedgerID, replayTrusted)
+		closeTimes, _, relay := e.proposalTracker.replay(netLedgerID, replayTrusted)
 		e.unvoteDeadProposalsLocked()
 		e.pruneUntrustedProposalsLocked()
 		e.appendReplayCloseTimesLocked(closeTimes)

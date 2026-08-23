@@ -19,13 +19,13 @@ func TestDecodeValidatorKeyWithMaster(t *testing.T) {
 	assert.True(t, len(encoded) > 0)
 	assert.Equal(t, byte('n'), encoded[0])
 
-	nodeID, master, err := DecodeValidatorKeyWithMaster(encoded)
+	nodeID, master, err := decodeValidatorKeyWithMaster(encoded)
 	assert.NoError(t, err)
 	assert.Equal(t, identity.NodeID, nodeID)
 	assert.NotEqual(t, [33]byte{}, master)
 }
 
 func TestDecodeValidatorKeyWithMasterInvalid(t *testing.T) {
-	_, _, err := DecodeValidatorKeyWithMaster("invalid-key")
+	_, _, err := decodeValidatorKeyWithMaster("invalid-key")
 	assert.Error(t, err)
 }

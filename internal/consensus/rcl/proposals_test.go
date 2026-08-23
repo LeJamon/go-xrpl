@@ -14,7 +14,7 @@ func TestDisputeTracker_CreateAndVote(t *testing.T) {
 
 	// Create dispute. Yays/Nays count peer votes only; our stance
 	// lives on OurVote, matching rippled's DisputedTx constructor.
-	dispute := dt.CreateDispute(txID, tx, true)
+	dispute := dt.createDispute(txID, tx, true)
 	if dispute == nil {
 		t.Fatal("Dispute should be created")
 	}
@@ -31,34 +31,34 @@ func TestDisputeTracker_CreateAndVote(t *testing.T) {
 	peerD := consensus.NodeID{0xD}
 
 	// Three peers vote yes, one no.
-	if !dt.SetVote(txID, peerA, true) {
+	if !dt.setVote(txID, peerA, true) {
 		t.Error("new peer vote should report changed")
 	}
-	if !dt.SetVote(txID, peerB, true) {
+	if !dt.setVote(txID, peerB, true) {
 		t.Error("new peer vote should report changed")
 	}
-	if !dt.SetVote(txID, peerC, true) {
+	if !dt.setVote(txID, peerC, true) {
 		t.Error("new peer vote should report changed")
 	}
-	if !dt.SetVote(txID, peerD, false) {
+	if !dt.setVote(txID, peerD, false) {
 		t.Error("new peer vote should report changed")
 	}
 
-	dispute = dt.Dispute(txID)
+	dispute = dt.dispute(txID)
 	if dispute.Yays != 3 || dispute.Nays != 1 {
 		t.Errorf("Expected 3 yays, 1 nay; got %d/%d", dispute.Yays, dispute.Nays)
 	}
 
 	// Re-asserting the same vote is a no-op and reports unchanged.
-	if dt.SetVote(txID, peerA, true) {
+	if dt.setVote(txID, peerA, true) {
 		t.Error("re-asserting same vote should report unchanged")
 	}
 
 	// Flipping an existing vote swaps one count and reports changed.
-	if !dt.SetVote(txID, peerA, false) {
+	if !dt.setVote(txID, peerA, false) {
 		t.Error("flipped vote should report changed")
 	}
-	dispute = dt.Dispute(txID)
+	dispute = dt.dispute(txID)
 	if dispute.Yays != 2 || dispute.Nays != 2 {
 		t.Errorf("After flip expected 2/2; got %d/%d", dispute.Yays, dispute.Nays)
 	}
@@ -69,28 +69,28 @@ func TestDisputeTracker_UnVote(t *testing.T) {
 
 	tx1 := consensus.TxID{1}
 	tx2 := consensus.TxID{2}
-	dt.CreateDispute(tx1, []byte("tx1"), true)
-	dt.CreateDispute(tx2, []byte("tx2"), false)
+	dt.createDispute(tx1, []byte("tx1"), true)
+	dt.createDispute(tx2, []byte("tx2"), false)
 
 	peerX := consensus.NodeID{0xA}
 	peerY := consensus.NodeID{0xB}
 
-	dt.SetVote(tx1, peerX, true)
-	dt.SetVote(tx1, peerY, true)
-	dt.SetVote(tx2, peerX, false)
+	dt.setVote(tx1, peerX, true)
+	dt.setVote(tx1, peerY, true)
+	dt.setVote(tx2, peerX, false)
 
 	// Before: tx1 has 2 yays, tx2 has 1 nay.
-	if d := dt.Dispute(tx1); d.Yays != 2 {
+	if d := dt.dispute(tx1); d.Yays != 2 {
 		t.Fatalf("tx1 pre-unvote yays = %d, want 2", d.Yays)
 	}
-	if d := dt.Dispute(tx2); d.Nays != 1 {
+	if d := dt.dispute(tx2); d.Nays != 1 {
 		t.Fatalf("tx2 pre-unvote nays = %d, want 1", d.Nays)
 	}
 
 	// UnVote removes peerX from every dispute but not peerY.
-	dt.UnVote(peerX)
+	dt.unVote(peerX)
 
-	tx1Disp := dt.Dispute(tx1)
+	tx1Disp := dt.dispute(tx1)
 	if tx1Disp.Yays != 1 {
 		t.Errorf("tx1 post-unvote yays = %d, want 1", tx1Disp.Yays)
 	}
@@ -101,14 +101,14 @@ func TestDisputeTracker_UnVote(t *testing.T) {
 		t.Error("peerY should remain in tx1 votes")
 	}
 
-	tx2Disp := dt.Dispute(tx2)
+	tx2Disp := dt.dispute(tx2)
 	if tx2Disp.Nays != 0 {
 		t.Errorf("tx2 post-unvote nays = %d, want 0", tx2Disp.Nays)
 	}
 
 	// UnVote for a peer that never voted is a no-op.
-	dt.UnVote(consensus.NodeID{0xFE})
-	if d := dt.Dispute(tx1); d.Yays != 1 {
+	dt.unVote(consensus.NodeID{0xFE})
+	if d := dt.dispute(tx1); d.Yays != 1 {
 		t.Errorf("unknown-peer unvote mutated tx1; yays = %d", d.Yays)
 	}
 }
@@ -118,8 +118,8 @@ func TestDisputeTracker_UpdateDisputes(t *testing.T) {
 
 	tx1 := consensus.TxID{1}
 	tx2 := consensus.TxID{2}
-	dt.CreateDispute(tx1, []byte("tx1"), true)
-	dt.CreateDispute(tx2, []byte("tx2"), false)
+	dt.createDispute(tx1, []byte("tx1"), true)
+	dt.createDispute(tx2, []byte("tx2"), false)
 
 	peerID := consensus.NodeID{0xA}
 
@@ -130,18 +130,18 @@ func TestDisputeTracker_UpdateDisputes(t *testing.T) {
 		containsTxs: map[consensus.TxID]bool{tx1: true},
 	}
 
-	if !dt.UpdateDisputes(peerID, peerTxSet) {
+	if !dt.updateDisputes(peerID, peerTxSet) {
 		t.Error("first UpdateDisputes should report changes")
 	}
-	if d := dt.Dispute(tx1); d.Yays != 1 || d.Nays != 0 {
+	if d := dt.dispute(tx1); d.Yays != 1 || d.Nays != 0 {
 		t.Errorf("tx1 after UpdateDisputes = %d/%d, want 1/0", d.Yays, d.Nays)
 	}
-	if d := dt.Dispute(tx2); d.Yays != 0 || d.Nays != 1 {
+	if d := dt.dispute(tx2); d.Yays != 0 || d.Nays != 1 {
 		t.Errorf("tx2 after UpdateDisputes = %d/%d, want 0/1", d.Yays, d.Nays)
 	}
 
 	// Calling again with the same set is a no-op.
-	if dt.UpdateDisputes(peerID, peerTxSet) {
+	if dt.updateDisputes(peerID, peerTxSet) {
 		t.Error("repeat UpdateDisputes should report no changes")
 	}
 }
@@ -153,21 +153,21 @@ func TestDisputeTracker_UpdateOurVote_AvalancheRamp(t *testing.T) {
 	txID := consensus.TxID{1}
 	// Seed ourVote = false so disputes with any yays are candidates
 	// for flipping.
-	dt.CreateDispute(txID, []byte("tx"), false)
+	dt.createDispute(txID, []byte("tx"), false)
 
 	// Give the dispute 3 yays out of 4 peers = 75% support.
 	peers := []consensus.NodeID{{1}, {2}, {3}, {4}}
-	dt.SetVote(txID, peers[0], true)
-	dt.SetVote(txID, peers[1], true)
-	dt.SetVote(txID, peers[2], true)
-	dt.SetVote(txID, peers[3], false)
+	dt.setVote(txID, peers[0], true)
+	dt.setVote(txID, peers[1], true)
+	dt.setVote(txID, peers[2], true)
+	dt.setVote(txID, peers[3], false)
 
 	// At init (50% threshold), 75% agreement flips our vote.
-	changed := dt.UpdateOurVote(0, true, parms)
+	changed := dt.updateOurVote(0, true, parms)
 	if len(changed) != 1 || changed[0] != txID {
 		t.Fatalf("expected dispute to flip at init state; got %v", changed)
 	}
-	if d := dt.Dispute(txID); !d.OurVote {
+	if d := dt.dispute(txID); !d.OurVote {
 		t.Error("OurVote should now be true")
 	}
 
@@ -175,17 +175,17 @@ func TestDisputeTracker_UpdateOurVote_AvalancheRamp(t *testing.T) {
 	// Build a fresh dispute with the same peer split so we can
 	// observe state progression without the "already agree" shortcut.
 	txID2 := consensus.TxID{2}
-	dt.CreateDispute(txID2, []byte("tx2"), true)
+	dt.createDispute(txID2, []byte("tx2"), true)
 	for _, p := range peers {
-		dt.SetVote(txID2, p, false)
+		dt.setVote(txID2, p, false)
 	}
 
 	// 4 no, 0 yes → under any threshold we should flip to false.
-	changed = dt.UpdateOurVote(0, true, parms)
+	changed = dt.updateOurVote(0, true, parms)
 	if len(changed) != 1 || changed[0] != txID2 {
 		t.Fatalf("expected unanimous opposition to flip our vote; got %v", changed)
 	}
-	d := dt.Dispute(txID2)
+	d := dt.dispute(txID2)
 	if d.OurVote {
 		t.Error("OurVote should have flipped to false")
 	}
@@ -196,41 +196,41 @@ func TestDisputeTracker_UpdateOurVote_AvalancheRamp(t *testing.T) {
 	// the ramp, start from a "yes, with nays>0" stance and check
 	// state transitions via percentTime alone.
 	rampID := consensus.TxID{3}
-	dt.CreateDispute(rampID, []byte("tx3"), true)
+	dt.createDispute(rampID, []byte("tx3"), true)
 	for _, p := range peers[:2] {
-		dt.SetVote(rampID, p, true)
+		dt.setVote(rampID, p, true)
 	}
 	for _, p := range peers[2:] {
-		dt.SetVote(rampID, p, false)
+		dt.setVote(rampID, p, false)
 	}
 
-	ramp := dt.Dispute(rampID)
+	ramp := dt.dispute(rampID)
 	if ramp.AvalancheState != consensus.AvalancheInit {
 		t.Fatalf("ramp dispute should start at AvalancheInit; got %v", ramp.AvalancheState)
 	}
 
 	// avMIN_ROUNDS=2: first call stays in init (counter=1 < 2).
-	dt.UpdateOurVote(60, true, parms)
+	dt.updateOurVote(60, true, parms)
 	if ramp.AvalancheState != consensus.AvalancheInit {
 		t.Errorf("after 1 round at 60%%, state = %v, want Init (min-rounds guard)", ramp.AvalancheState)
 	}
 
 	// Second call with percentTime>=50 and counter>=2: advance to Mid.
-	dt.UpdateOurVote(60, true, parms)
+	dt.updateOurVote(60, true, parms)
 	if ramp.AvalancheState != consensus.AvalancheMid {
 		t.Errorf("after 2 rounds at 60%%, state = %v, want Mid", ramp.AvalancheState)
 	}
 
 	// Drive to Late (cutoff 85%).
-	dt.UpdateOurVote(90, true, parms)
-	dt.UpdateOurVote(90, true, parms)
+	dt.updateOurVote(90, true, parms)
+	dt.updateOurVote(90, true, parms)
 	if ramp.AvalancheState != consensus.AvalancheLate {
 		t.Errorf("after 90%% time, state = %v, want Late", ramp.AvalancheState)
 	}
 
 	// Drive to Stuck (cutoff 200%).
-	dt.UpdateOurVote(210, true, parms)
-	dt.UpdateOurVote(210, true, parms)
+	dt.updateOurVote(210, true, parms)
+	dt.updateOurVote(210, true, parms)
 	if ramp.AvalancheState != consensus.AvalancheStuck {
 		t.Errorf("after 210%% time, state = %v, want Stuck", ramp.AvalancheState)
 	}
@@ -240,16 +240,16 @@ func TestDisputeTracker_AllReturnsDetachedSnapshots(t *testing.T) {
 	dt := newDisputeTracker()
 	txID := consensus.TxID{1}
 	peer := consensus.NodeID{2}
-	dt.CreateDispute(txID, []byte{1, 2}, true)
-	dt.SetVote(txID, peer, true)
+	dt.createDispute(txID, []byte{1, 2}, true)
+	dt.setVote(txID, peer, true)
 
-	snapshot := dt.All()[0]
+	snapshot := dt.all()[0]
 	snapshot.OurVote = false
 	snapshot.Tx[0] = 9
 	snapshot.Votes[peer] = false
 	snapshot.Votes[consensus.NodeID{3}] = true
 
-	stored := dt.Dispute(txID)
+	stored := dt.dispute(txID)
 	if !stored.OurVote || stored.Tx[0] != 1 || !stored.Votes[peer] || len(stored.Votes) != 1 {
 		t.Fatalf("mutating dispute snapshot changed tracker state: %#v", stored)
 	}

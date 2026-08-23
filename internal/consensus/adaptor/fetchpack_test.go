@@ -96,16 +96,19 @@ func TestMakeFetchPack_GuardsAndCancellation(t *testing.T) {
 	lookup.add(have)
 	p := newLedgerProviderForTest(lookup)
 
-	p.SetFetchPackGuards(func() bool { return true }, nil)
+	p.loadedLocal = func() bool { return true }
+	p.validatedAge = nil
 	objects, err := p.MakeFetchPack(have.Hash(), 0)
 	require.ErrorIs(t, err, peermanagement.ErrFetchPackBusy)
 	assert.Nil(t, objects)
-	p.SetFetchPackGuards(nil, func() time.Duration { return 41 * time.Second })
+	p.loadedLocal = nil
+	p.validatedAge = func() time.Duration { return 41 * time.Second }
 	objects, err = p.MakeFetchPack(have.Hash(), 0)
 	require.ErrorIs(t, err, peermanagement.ErrFetchPackBusy)
 	assert.Nil(t, objects)
 
-	p.SetFetchPackGuards(nil, nil)
+	p.loadedLocal = nil
+	p.validatedAge = nil
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	objects, err = p.MakeFetchPackContext(ctx, have.Hash(), 0)

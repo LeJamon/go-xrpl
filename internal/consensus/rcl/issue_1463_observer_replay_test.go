@@ -52,12 +52,12 @@ func TestProposalTracker_ReplayFiltersUntrustedBeforeStore(t *testing.T) {
 	untrusted := consensus.NodeID{0x02}
 	close := time.Unix(1_700_000_001, 0).UTC()
 
-	pt.BufferRecent(&consensus.Proposal{NodeID: trusted, PreviousLedger: prev, CloseTime: close})
-	pt.BufferRecent(&consensus.Proposal{NodeID: untrusted, PreviousLedger: prev, CloseTime: close})
-	pt.Store(&consensus.Proposal{NodeID: untrusted, PreviousLedger: prev, Position: 4})
+	pt.bufferRecent(&consensus.Proposal{NodeID: trusted, PreviousLedger: prev, CloseTime: close})
+	pt.bufferRecent(&consensus.Proposal{NodeID: untrusted, PreviousLedger: prev, CloseTime: close})
+	pt.store(&consensus.Proposal{NodeID: untrusted, PreviousLedger: prev, Position: 4})
 	trust := func(nodeID consensus.NodeID) bool { return nodeID == trusted }
 
-	closeTimes, replayed, relay := pt.Replay(prev, trust)
+	closeTimes, replayed, relay := pt.replay(prev, trust)
 	if replayed != 1 || len(relay) != 1 || len(closeTimes) != 1 {
 		t.Fatalf("Replay = closeTimes %d, replayed %d, relay %d; want 1/1/1", len(closeTimes), replayed, len(relay))
 	}
@@ -70,7 +70,7 @@ func TestProposalTracker_ReplayRechecksTrustDuringStore(t *testing.T) {
 	pt := newProposalTracker()
 	prev := consensus.LedgerID{0xA2}
 	node := consensus.NodeID{0x03}
-	pt.BufferRecent(&consensus.Proposal{NodeID: node, PreviousLedger: prev, Position: 0})
+	pt.bufferRecent(&consensus.Proposal{NodeID: node, PreviousLedger: prev, Position: 0})
 
 	checks := 0
 	trust := func(got consensus.NodeID) bool {
@@ -84,7 +84,7 @@ func TestProposalTracker_ReplayRechecksTrustDuringStore(t *testing.T) {
 		return checks <= 2
 	}
 
-	_, replayed, relay := pt.Replay(prev, trust)
+	_, replayed, relay := pt.replay(prev, trust)
 	if replayed != 0 || len(relay) != 0 {
 		t.Fatalf("trust transition replayed=%d relay=%d; want 0/0", replayed, len(relay))
 	}
@@ -101,12 +101,12 @@ func TestProposalTracker_ReplayPurgesUntrustedBeforeRetrust(t *testing.T) {
 	prev := consensus.LedgerID{0xA5}
 	node := consensus.NodeID{0x04}
 	proposal := &consensus.Proposal{NodeID: node, PreviousLedger: prev, Position: 0}
-	pt.BufferRecent(proposal)
+	pt.bufferRecent(proposal)
 
 	trusted := false
-	pt.Replay(prev, func(consensus.NodeID) bool { return trusted })
+	pt.replay(prev, func(consensus.NodeID) bool { return trusted })
 	trusted = true
-	_, replayed, relay := pt.Replay(prev, func(consensus.NodeID) bool { return trusted })
+	_, replayed, relay := pt.replay(prev, func(consensus.NodeID) bool { return trusted })
 	if replayed != 0 || len(relay) != 0 {
 		t.Fatalf("re-trusted purged proposal replayed=%d relay=%d; want 0/0", replayed, len(relay))
 	}
@@ -120,16 +120,16 @@ func TestProposalTracker_ReplaySeqLeavePersistsForLedgerAndAllowsNextLedgerRejoi
 	prev := consensus.LedgerID{0xA6}
 	node := consensus.NodeID{0x05}
 	txID := consensus.TxSetID{0x06}
-	pt.Store(&consensus.Proposal{NodeID: node, PreviousLedger: prev, Position: 3, TxSet: txID})
+	pt.store(&consensus.Proposal{NodeID: node, PreviousLedger: prev, Position: 3, TxSet: txID})
 	const seqLeave = uint32(0xFFFFFFFF)
 	bowOut := &consensus.Proposal{NodeID: node, PreviousLedger: prev, Position: seqLeave, TxSet: txID}
-	pt.BufferRecent(bowOut)
+	pt.bufferRecent(bowOut)
 
-	closeTimes, replayed, relay := pt.Replay(prev, func(consensus.NodeID) bool { return true })
+	closeTimes, replayed, relay := pt.replay(prev, func(consensus.NodeID) bool { return true })
 	if len(closeTimes) != 0 || replayed != 0 || len(relay) != 1 || !reflect.DeepEqual(relay[0], bowOut) {
 		t.Fatalf("seqLeave replay = closeTimes %d replayed %d relay %d; want 0/0/1", len(closeTimes), replayed, len(relay))
 	}
-	if !pt.IsDead(node) {
+	if !pt.isDead(node) {
 		t.Fatal("replayed seqLeave did not mark node dead")
 	}
 	if _, ok := pt.proposals[node]; ok {
@@ -138,25 +138,25 @@ func TestProposalTracker_ReplaySeqLeavePersistsForLedgerAndAllowsNextLedgerRejoi
 
 	// Replaying the same ledger after a round reset must restore the terminal
 	// bow-out before considering a later buffered position for that ledger.
-	pt.ResetRound()
+	pt.resetRound()
 	sameLedger := &consensus.Proposal{NodeID: node, PreviousLedger: prev, Position: 4, TxSet: txID}
-	pt.BufferRecent(sameLedger)
-	_, replayed, relay = pt.Replay(prev, func(consensus.NodeID) bool { return true })
+	pt.bufferRecent(sameLedger)
+	_, replayed, relay = pt.replay(prev, func(consensus.NodeID) bool { return true })
 	if replayed != 0 || len(relay) != 1 || !reflect.DeepEqual(relay[0], bowOut) {
 		t.Fatalf("same-ledger replay = replayed %d relay %d; want bow-out 0/1", replayed, len(relay))
 	}
-	if !pt.IsDead(node) {
+	if !pt.isDead(node) {
 		t.Fatal("same-ledger replay did not restore dead marker")
 	}
 	if _, ok := pt.proposals[node]; ok {
 		t.Fatal("same-ledger proposal rejoined after bow-out")
 	}
 
-	pt.ResetRound()
+	pt.resetRound()
 	nextPrev := consensus.LedgerID{0xA7}
 	nextLedger := &consensus.Proposal{NodeID: node, PreviousLedger: nextPrev, Position: 0, TxSet: txID}
-	pt.BufferRecent(nextLedger)
-	_, replayed, relay = pt.Replay(nextPrev, func(consensus.NodeID) bool { return true })
+	pt.bufferRecent(nextLedger)
+	_, replayed, relay = pt.replay(nextPrev, func(consensus.NodeID) bool { return true })
 	if replayed != 1 || len(relay) != 1 || !reflect.DeepEqual(relay[0], nextLedger) {
 		t.Fatalf("next-ledger rejoin replayed=%d relay=%d; want 1/1", replayed, len(relay))
 	}
@@ -172,14 +172,14 @@ func TestEngine_ReplayedSeqLeaveUnvotesDisputes(t *testing.T) {
 	e := NewEngine(a, DefaultConfig())
 	prev := consensus.LedgerID{0xA7}
 	txID := consensus.TxID{0x08}
-	e.disputeTracker.CreateDispute(txID, nil, true)
-	e.disputeTracker.SetVote(txID, node, true)
-	e.proposalTracker.BufferRecent(&consensus.Proposal{
+	e.disputeTracker.createDispute(txID, nil, true)
+	e.disputeTracker.setVote(txID, node, true)
+	e.proposalTracker.bufferRecent(&consensus.Proposal{
 		NodeID: node, PreviousLedger: prev, Position: 0xFFFFFFFF,
 	})
-	e.proposalTracker.Replay(prev, a.IsTrusted)
+	e.proposalTracker.replay(prev, a.IsTrusted)
 	e.unvoteDeadProposalsLocked()
-	if votes := e.disputeTracker.Dispute(txID).Votes; len(votes) != 0 {
+	if votes := e.disputeTracker.dispute(txID).Votes; len(votes) != 0 {
 		t.Fatalf("replayed seqLeave retained dispute votes: %v", votes)
 	}
 }
@@ -194,8 +194,8 @@ func TestEngine_OnProposalSeqLeaveRelaysAndUnvotes(t *testing.T) {
 		t.Fatalf("StartRound: %v", err)
 	}
 	txID := consensus.TxID{0x0B}
-	e.disputeTracker.CreateDispute(txID, nil, true)
-	e.disputeTracker.SetVote(txID, node, true)
+	e.disputeTracker.createDispute(txID, nil, true)
+	e.disputeTracker.setVote(txID, node, true)
 	bowOut := &consensus.Proposal{
 		Round: round, NodeID: node, Position: 0xFFFFFFFF,
 		TxSet: consensus.TxSetID{0x0C}, PreviousLedger: round.ParentHash,
@@ -210,10 +210,10 @@ func TestEngine_OnProposalSeqLeaveRelaysAndUnvotes(t *testing.T) {
 	if len(relayed) != 1 || !reflect.DeepEqual(relayed[0], bowOut) {
 		t.Fatalf("seqLeave relay = %v, want exactly bow-out proposal", relayed)
 	}
-	if !e.proposalTracker.IsDead(node) {
+	if !e.proposalTracker.isDead(node) {
 		t.Fatal("seqLeave did not mark validator dead")
 	}
-	if votes := e.disputeTracker.Dispute(txID).Votes; len(votes) != 0 {
+	if votes := e.disputeTracker.dispute(txID).Votes; len(votes) != 0 {
 		t.Fatalf("seqLeave retained dispute vote: %v", votes)
 	}
 }
@@ -240,10 +240,10 @@ func TestEngine_TrustCallbackPurgesBeforeRetrustedProposal(t *testing.T) {
 	}
 	txID := consensus.TxID{0x0F}
 	e.mu.Lock()
-	e.proposalTracker.Store(old)
-	e.proposalTracker.BufferRecent(old)
-	e.disputeTracker.CreateDispute(txID, nil, true)
-	e.disputeTracker.SetVote(txID, node, true)
+	e.proposalTracker.store(old)
+	e.proposalTracker.bufferRecent(old)
+	e.disputeTracker.createDispute(txID, nil, true)
+	e.disputeTracker.setVote(txID, node, true)
 	e.mu.Unlock()
 
 	a.setTrusted(nil)
@@ -259,9 +259,9 @@ func TestEngine_TrustCallbackPurgesBeforeRetrustedProposal(t *testing.T) {
 		t.Fatalf("OnProposal(retrusted): %v", err)
 	}
 	e.mu.RLock()
-	current := e.proposalTracker.All()[node]
+	current := e.proposalTracker.all()[node]
 	recent := e.proposalTracker.recentProposals[node]
-	votes := e.disputeTracker.Dispute(txID).Votes
+	votes := e.disputeTracker.dispute(txID).Votes
 	e.mu.RUnlock()
 	if !reflect.DeepEqual(current, fresh) {
 		t.Fatalf("current proposal = %#v, want fresh %#v", current, fresh)
@@ -300,10 +300,10 @@ func TestEngine_OnTxSetPurgesQueuedTrustBeforeDisputes(t *testing.T) {
 	e.mu.Lock()
 	e.ourTxSet = buildMockTxSet(consensus.TxSetID{0x16})
 	old := &consensus.Proposal{NodeID: node, Position: 0, TxSet: peerSet.ID(), PreviousLedger: round.ParentHash}
-	e.proposalTracker.Store(old)
-	e.proposalTracker.BufferRecent(old)
-	e.disputeTracker.CreateDispute(txID, nil, true)
-	e.disputeTracker.SetVote(txID, node, true)
+	e.proposalTracker.store(old)
+	e.proposalTracker.bufferRecent(old)
+	e.disputeTracker.createDispute(txID, nil, true)
+	e.disputeTracker.setVote(txID, node, true)
 	e.mu.Unlock()
 
 	a.setTrusted(nil)
@@ -315,9 +315,9 @@ func TestEngine_OnTxSetPurgesQueuedTrustBeforeDisputes(t *testing.T) {
 		t.Fatalf("OnTxSet: %v", err)
 	}
 	e.mu.RLock()
-	_, current := e.proposalTracker.All()[node]
+	_, current := e.proposalTracker.all()[node]
 	_, recent := e.proposalTracker.recentProposals[node]
-	votes := e.disputeTracker.Dispute(txID).Votes
+	votes := e.disputeTracker.dispute(txID).Votes
 	e.mu.RUnlock()
 	if current || recent {
 		t.Fatal("queued trust purge did not remove current and recent proposal state")
@@ -345,10 +345,10 @@ func TestEngine_TimerEntryPurgesQueuedTrustBeforeDispatch(t *testing.T) {
 	txID := consensus.TxID{0x18}
 	old := &consensus.Proposal{NodeID: node, Position: 0, TxSet: consensus.TxSetID{0x19}, PreviousLedger: round.ParentHash}
 	e.mu.Lock()
-	e.proposalTracker.Store(old)
-	e.proposalTracker.BufferRecent(old)
-	e.disputeTracker.CreateDispute(txID, nil, true)
-	e.disputeTracker.SetVote(txID, node, true)
+	e.proposalTracker.store(old)
+	e.proposalTracker.bufferRecent(old)
+	e.disputeTracker.createDispute(txID, nil, true)
+	e.disputeTracker.setVote(txID, node, true)
 	e.mu.Unlock()
 	a.setTrusted(nil)
 	a.notifyTrustChanged()
@@ -361,9 +361,9 @@ func TestEngine_TimerEntryPurgesQueuedTrustBeforeDispatch(t *testing.T) {
 	a.mu.Unlock()
 	e.TimerEntry()
 	e.mu.RLock()
-	_, current := e.proposalTracker.All()[node]
+	_, current := e.proposalTracker.all()[node]
 	_, recent := e.proposalTracker.recentProposals[node]
-	votes := e.disputeTracker.Dispute(txID).Votes
+	votes := e.disputeTracker.dispute(txID).Votes
 	e.mu.RUnlock()
 	if current || recent {
 		t.Fatal("timer-entry purge did not remove current and recent proposal state")
@@ -392,10 +392,10 @@ func TestEngine_CommitAcceptedLedgerPurgesQueuedTrust(t *testing.T) {
 	txID := consensus.TxID{0x1B}
 	old := &consensus.Proposal{NodeID: node, Position: 0, TxSet: consensus.TxSetID{0x1C}, PreviousLedger: round.ParentHash}
 	e.mu.Lock()
-	e.proposalTracker.Store(old)
-	e.proposalTracker.BufferRecent(old)
-	e.disputeTracker.CreateDispute(txID, nil, true)
-	e.disputeTracker.SetVote(txID, node, true)
+	e.proposalTracker.store(old)
+	e.proposalTracker.bufferRecent(old)
+	e.disputeTracker.createDispute(txID, nil, true)
+	e.disputeTracker.setVote(txID, node, true)
 	e.mu.Unlock()
 	a.setTrusted(nil)
 	a.notifyTrustChanged()
@@ -428,9 +428,9 @@ func TestEngine_CommitAcceptedLedgerPurgesQueuedTrust(t *testing.T) {
 	e.mu.Unlock()
 
 	e.mu.RLock()
-	_, current := e.proposalTracker.All()[node]
+	_, current := e.proposalTracker.all()[node]
 	_, recent := e.proposalTracker.recentProposals[node]
-	votes := e.disputeTracker.Dispute(txID).Votes
+	votes := e.disputeTracker.dispute(txID).Votes
 	e.mu.RUnlock()
 	if current || recent {
 		t.Fatal("commit purge did not remove current and recent proposal state")
@@ -449,10 +449,10 @@ func TestReplayCloseTimesRecheckTrustAfterReplay(t *testing.T) {
 	e.prevLedger = parent
 	e.state = &roundState{CloseTimes: consensus.CloseTimes{Peers: make(map[time.Time]int)}}
 	closeTime := parent.CloseTime().Add(4 * time.Second)
-	e.proposalTracker.BufferRecent(&consensus.Proposal{
+	e.proposalTracker.bufferRecent(&consensus.Proposal{
 		NodeID: node, PreviousLedger: parent.ID(), Position: 0, CloseTime: closeTime,
 	})
-	votes, replayed, _ := e.proposalTracker.Replay(parent.ID(), a.IsTrusted)
+	votes, replayed, _ := e.proposalTracker.replay(parent.ID(), a.IsTrusted)
 	if replayed != 1 || len(votes) != 1 || votes[0].NodeID != node {
 		t.Fatalf("Replay = votes %v, replayed %d; want one node-associated vote", votes, replayed)
 	}
@@ -488,17 +488,17 @@ func TestReplayCloseTimesTrustCallbackLinearized(t *testing.T) {
 	parent := base.lastLCL
 	closeTime := parent.CloseTime().Add(4 * time.Second)
 	e.state = &roundState{CloseTimes: consensus.CloseTimes{Peers: make(map[time.Time]int)}}
-	e.proposalTracker.BufferRecent(&consensus.Proposal{
+	e.proposalTracker.bufferRecent(&consensus.Proposal{
 		NodeID: node, PreviousLedger: parent.ID(), Position: 0, CloseTime: closeTime,
 	})
 
 	type replayResult struct {
-		votes    []ReplayCloseTime
+		votes    []replayCloseTime
 		replayed int
 	}
 	resultCh := make(chan replayResult, 1)
 	go func() {
-		votes, replayed, _ := e.proposalTracker.Replay(parent.ID(), a.IsTrusted)
+		votes, replayed, _ := e.proposalTracker.replay(parent.ID(), a.IsTrusted)
 		resultCh <- replayResult{votes: votes, replayed: replayed}
 	}()
 	select {
@@ -520,7 +520,7 @@ func TestReplayCloseTimesTrustCallbackLinearized(t *testing.T) {
 	if len(e.state.CloseTimes.Peers) != 0 {
 		t.Fatalf("close-time vote survived callback-linearized purge: %v", e.state.CloseTimes.Peers)
 	}
-	if _, ok := e.proposalTracker.All()[node]; ok {
+	if _, ok := e.proposalTracker.all()[node]; ok {
 		t.Fatal("callback-linearized purge left current proposal state")
 	}
 	if _, ok := e.proposalTracker.recentProposals[node]; ok {
@@ -581,10 +581,10 @@ func TestReplayPreservesInitialCloseTimeWithSeqLeave(t *testing.T) {
 	e := NewEngine(a, DefaultConfig())
 	e.prevLedger = parent
 	initial := base.Add(4 * time.Second)
-	e.proposalTracker.BufferRecent(&consensus.Proposal{
+	e.proposalTracker.bufferRecent(&consensus.Proposal{
 		NodeID: node, PreviousLedger: parent.ID(), Position: 0, CloseTime: initial,
 	})
-	e.proposalTracker.BufferRecent(&consensus.Proposal{
+	e.proposalTracker.bufferRecent(&consensus.Proposal{
 		NodeID: node, PreviousLedger: parent.ID(), Position: 0xFFFFFFFF,
 	})
 	if err := e.StartRound(consensus.RoundID{Seq: 101, ParentHash: parent.ID()}, false); err != nil {
@@ -593,7 +593,7 @@ func TestReplayPreservesInitialCloseTimeWithSeqLeave(t *testing.T) {
 	if got := e.state.CloseTimes.Peers[initial]; got != 1 {
 		t.Fatalf("initial close-time count with seqLeave = %d, want 1", got)
 	}
-	if e.proposalTracker.Count() != 0 || !e.proposalTracker.IsDead(node) {
+	if e.proposalTracker.count() != 0 || !e.proposalTracker.isDead(node) {
 		t.Fatal("seqLeave should remove final current position while preserving raw initial history")
 	}
 
@@ -633,11 +633,11 @@ func TestObserverAcceptanceUsesCloseTimeGateWinner(t *testing.T) {
 	e.ourTxSet = buildMockTxSet(consensus.TxSetID{0xA4})
 	e.acquiredTxSets[e.ourTxSet.ID()] = e.ourTxSet
 
-	e.proposalTracker.Store(&consensus.Proposal{
+	e.proposalTracker.store(&consensus.Proposal{
 		NodeID: peerA, Position: 0, CloseTime: closeA, Timestamp: a.Now().Add(-time.Minute),
 	})
-	e.proposalTracker.Store(&consensus.Proposal{NodeID: peerB, Position: 0, CloseTime: closeB})
-	e.proposalTracker.Store(&consensus.Proposal{NodeID: peerC, Position: 0, CloseTime: closeB})
+	e.proposalTracker.store(&consensus.Proposal{NodeID: peerB, Position: 0, CloseTime: closeB})
+	e.proposalTracker.store(&consensus.Proposal{NodeID: peerC, Position: 0, CloseTime: closeB})
 	e.pruneStaleProposalsLocked()
 	e.updateCloseTimePosition()
 	if !e.closeTime.haveConsensus {
@@ -673,10 +673,10 @@ func TestReplayPreservesInitialCloseTimesForClockAdjustment(t *testing.T) {
 	e.prevLedger = parent
 	initial := base.Add(4 * time.Second)
 	revision := base.Add(8 * time.Second)
-	e.proposalTracker.BufferRecent(&consensus.Proposal{
+	e.proposalTracker.bufferRecent(&consensus.Proposal{
 		NodeID: node, PreviousLedger: parent.ID(), Position: 0, CloseTime: initial,
 	})
-	e.proposalTracker.BufferRecent(&consensus.Proposal{
+	e.proposalTracker.bufferRecent(&consensus.Proposal{
 		NodeID: node, PreviousLedger: parent.ID(), Position: 1, CloseTime: revision,
 	})
 
@@ -745,13 +745,13 @@ func TestProposalTracker_PruneUntrustedRevokesCurrentPosition(t *testing.T) {
 	pt := newProposalTracker()
 	trusted := consensus.NodeID{0x21}
 	untrusted := consensus.NodeID{0x22}
-	pt.Store(&consensus.Proposal{NodeID: trusted})
-	pt.Store(&consensus.Proposal{NodeID: untrusted})
-	removed := pt.PruneUntrusted(func(nodeID consensus.NodeID) bool { return nodeID == trusted })
+	pt.store(&consensus.Proposal{NodeID: trusted})
+	pt.store(&consensus.Proposal{NodeID: untrusted})
+	removed := pt.pruneUntrusted(func(nodeID consensus.NodeID) bool { return nodeID == trusted })
 	if len(removed) != 1 || removed[0] != untrusted {
 		t.Fatalf("removed = %v, want [%v]", removed, untrusted)
 	}
-	if pt.Count() != 1 {
-		t.Fatalf("current positions = %d, want 1", pt.Count())
+	if pt.count() != 1 {
+		t.Fatalf("current positions = %d, want 1", pt.count())
 	}
 }

@@ -172,7 +172,7 @@ func routerWithCache(t *testing.T, sender manifestSender, seedKey byte, seq uint
 	if seq != 0 {
 		fix := newTokenFixture(t, seedKey, seq)
 		var err error
-		id, err = NewValidatorIdentityFromToken(fix.tokenBlock)
+		id, err = newValidatorIdentityFromToken(fix.tokenBlock)
 		if err != nil {
 			t.Fatalf("NewValidatorIdentityFromToken: %v", err)
 		}
@@ -355,7 +355,7 @@ func TestRouter_LocalManifestEmission_AggregatesCache(t *testing.T) {
 	// Mint a second token-mode identity and apply its manifest to the
 	// cache as if it had been gossiped by a trusted peer.
 	otherFix := newTokenFixture(t, 0xA3, 11)
-	other, err := NewValidatorIdentityFromToken(otherFix.tokenBlock)
+	other, err := newValidatorIdentityFromToken(otherFix.tokenBlock)
 	if err != nil {
 		t.Fatalf("NewValidatorIdentityFromToken (other): %v", err)
 	}
@@ -395,7 +395,7 @@ func TestRouter_HandlePeerConnect_DelegatesToSendLocalManifest(t *testing.T) {
 	router, cache, id := routerWithCache(t, sender, 0x77, 9)
 
 	otherFix := newTokenFixture(t, 0x76, 3)
-	other, err := NewValidatorIdentityFromToken(otherFix.tokenBlock)
+	other, err := newValidatorIdentityFromToken(otherFix.tokenBlock)
 	if err != nil {
 		t.Fatalf("NewValidatorIdentityFromToken: %v", err)
 	}
@@ -625,7 +625,7 @@ func TestRouter_CachedManifestFrame_RebuiltOnSequenceAdvance(t *testing.T) {
 	// Mint a higher-sequence manifest under the same master with a new
 	// ephemeral key. Reusing the current ephemeral is a cache collision.
 	rotated := newTokenFixtureWithSeeds(t, 0xC2, 0xC3, 7)
-	rotatedID, err := NewValidatorIdentityFromToken(rotated.tokenBlock)
+	rotatedID, err := newValidatorIdentityFromToken(rotated.tokenBlock)
 	if err != nil {
 		t.Fatalf("rotated identity: %v", err)
 	}

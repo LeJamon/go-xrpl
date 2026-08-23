@@ -24,13 +24,13 @@ func TestVerifyValidationEnforcesCanonicalFlag(t *testing.T) {
 		Full:      true,
 	}
 	require.NoError(t, identity.SignValidation(validation))
-	require.NoError(t, VerifyValidation(validation))
+	require.NoError(t, verifyValidation(validation))
 
 	r, s, err := rootcrypto.DERSigToRS(validation.Signature)
 	require.NoError(t, err)
 	highS := new(big.Int).Sub(btcec.S256().N, new(big.Int).SetBytes(s))
 	validation.Signature = rootcrypto.EncodeDERSignature(new(big.Int).SetBytes(r), highS)
-	require.Error(t, VerifyValidation(validation))
+	require.Error(t, verifyValidation(validation))
 
 	validation.Flags &^= vfFullyCanonicalSig
 	validation.Signature, err = identity.Sign(buildValidationSigningData(validation))
@@ -39,7 +39,7 @@ func TestVerifyValidationEnforcesCanonicalFlag(t *testing.T) {
 	require.NoError(t, err)
 	highS.Sub(btcec.S256().N, new(big.Int).SetBytes(s))
 	validation.Signature = rootcrypto.EncodeDERSignature(new(big.Int).SetBytes(r), highS)
-	require.NoError(t, VerifyValidation(validation))
+	require.NoError(t, verifyValidation(validation))
 }
 
 func TestSTValidationPreservesSignedAmountPresence(t *testing.T) {
@@ -89,14 +89,14 @@ func TestSerializeSTValidationEmitsCloseTimeAndCanonicalFlag(t *testing.T) {
 	}
 	require.NoError(t, identity.SignValidation(validation))
 
-	parsed, err := parseSTValidation(SerializeSTValidation(validation))
+	parsed, err := parseSTValidation(serializeSTValidation(validation))
 	require.NoError(t, err)
 	require.Equal(t, closeTime, parsed.CloseTime)
 	require.NotZero(t, parsed.Flags&vfFullyCanonicalSig)
 	require.NotZero(t, parsed.Flags&0x40)
 
 	validation.Flags = 0x40
-	parsed, err = parseSTValidation(SerializeSTValidation(validation))
+	parsed, err = parseSTValidation(serializeSTValidation(validation))
 	require.NoError(t, err)
 	require.Equal(t, uint32(0x40), parsed.Flags)
 }
