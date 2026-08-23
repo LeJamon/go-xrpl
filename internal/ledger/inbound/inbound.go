@@ -133,11 +133,9 @@ type Ledger struct {
 	state     State
 	err       error
 	mu        sync.Mutex
-	// workMu serializes SHAMap mutation, completion, and persistence. Code that
-	// needs both locks acquires workMu before mu and releases mu before slow work.
-	workMu   sync.Mutex
-	logger   *slog.Logger
-	snapshot atomic.Pointer[Snapshot]
+	workMu    sync.Mutex
+	logger    *slog.Logger
+	snapshot  atomic.Pointer[Snapshot]
 
 	// family backs the acquisition SHAMaps with the persistent node store when
 	// set, so getMissingNodes only reports nodes not already held locally. nil
