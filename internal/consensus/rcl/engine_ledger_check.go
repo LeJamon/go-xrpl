@@ -62,6 +62,11 @@ func (e *Engine) run() {
 func (e *Engine) timerEntry() {
 	tickStart := e.heartbeatNow()
 	e.mu.Lock()
+	// The accepted round stays immutable while its callback runs without e.mu.
+	if e.buildInProgress {
+		e.mu.Unlock()
+		return
+	}
 
 	var slowStages []slowHeartbeatStage
 	slowStages = recordSlowHeartbeatStage(
@@ -134,14 +139,6 @@ func (e *Engine) timerEntry() {
 	if e.mode == consensus.ModeProposing &&
 		e.adaptor.GetOperatingMode() != consensus.OpModeFull {
 		e.leaveConsensusLocked()
-	}
-
-	// A peer-triggered accept may be applying the LCL off e.mu on another
-	// goroutine; don't drive rounds until its commit tail runs (rippled parks
-	// the timer thread while the jtACCEPT job holds no lock).
-	if e.buildInProgress {
-		slowStages = e.finishHeartbeatStage(slowStages, stage)
-		return
 	}
 	slowStages = e.finishHeartbeatStage(slowStages, stage)
 
