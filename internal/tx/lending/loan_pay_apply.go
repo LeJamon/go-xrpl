@@ -299,6 +299,7 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 			return r
 		}
 	}
+	ctx.SyncSenderOwnerCount()
 	return ter.TesSUCCESS
 }
 
