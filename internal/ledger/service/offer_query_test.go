@@ -135,7 +135,11 @@ func insertOffer(t *testing.T, svc *Service, ownerAddr string, sequence uint32, 
 	getsCurr := keylet.CurrencyBytes(takerGets.Currency)
 	getsIssuer := state.GetIssuerBytes(takerGets.Issuer)
 	bookBase := keylet.BookBase(paySide, getsSide, nil).Key
-	quality := state.CalculateQuality(takerGets, takerPays)
+	quality := state.CalculateQualityWithNumberContext(
+		takerGets,
+		takerPays,
+		state.NewNumberContext(state.MantissaScaleSmall, false),
+	)
 	var bookDir [32]byte
 	copy(bookDir[:], bookBase[:])
 	binary.BigEndian.PutUint64(bookDir[24:], quality)
@@ -399,7 +403,11 @@ func insertPermissionedOffer(t *testing.T, svc *Service, ownerAddr string, seque
 	getsCurr := keylet.CurrencyBytes(takerGets.Currency)
 	getsIssuer := state.GetIssuerBytes(takerGets.Issuer)
 	bookBase := keylet.BookDirWithDomain(payCurr, payIssuer, getsCurr, getsIssuer, domainID).Key
-	quality := state.CalculateQuality(takerGets, takerPays)
+	quality := state.CalculateQualityWithNumberContext(
+		takerGets,
+		takerPays,
+		state.NewNumberContext(state.MantissaScaleSmall, false),
+	)
 	var bookDir [32]byte
 	copy(bookDir[:], bookBase[:])
 	binary.BigEndian.PutUint64(bookDir[24:], quality)

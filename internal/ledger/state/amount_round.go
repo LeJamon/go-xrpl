@@ -34,26 +34,8 @@ func PrepareMulDivOperand(a Amount) (mantissa int64, exponent int) {
 	return mantissa, exponent
 }
 
-func MulRoundMPT(v1, v2 Amount, roundUp bool) int64 {
-	return MulRoundMPTWithNumberContext(
-		v1,
-		v2,
-		NewNumberContext(MantissaScaleSmall, false),
-		roundUp,
-	)
-}
-
 func MulRoundMPTWithNumberContext(v1, v2 Amount, ctx NumberContext, roundUp bool) int64 {
 	return mulRoundMPT(v1, v2, ctx, roundUp, false)
-}
-
-func MulRoundMPTStrict(v1, v2 Amount, roundUp bool) int64 {
-	return MulRoundMPTStrictWithNumberContext(
-		v1,
-		v2,
-		NewNumberContext(MantissaScaleSmall, false),
-		roundUp,
-	)
 }
 
 func MulRoundMPTStrictWithNumberContext(v1, v2 Amount, ctx NumberContext, roundUp bool) int64 {
@@ -71,24 +53,6 @@ func mulRoundMPT(v1, v2 Amount, ctx NumberContext, roundUp, strict bool) int64 {
 	amount := MulMantissas(value1, value2, addSlop)
 	offset := offset1 + offset2 + 14
 	return finalizeMPTRound(amount, offset, resultNegative, roundUp, addSlop, strict, strict, ctx)
-}
-
-func DivRoundMPT(num, den Amount, roundUp bool) int64 {
-	return DivRoundMPTWithNumberContext(
-		num,
-		den,
-		NewNumberContext(MantissaScaleSmall, false),
-		roundUp,
-	)
-}
-
-func DivRoundMPTStrict(num, den Amount, roundUp bool) int64 {
-	return DivRoundMPTStrictWithNumberContext(
-		num,
-		den,
-		NewNumberContext(MantissaScaleSmall, false),
-		roundUp,
-	)
 }
 
 func DivRoundMPTWithNumberContext(num, den Amount, ctx NumberContext, roundUp bool) int64 {
@@ -388,25 +352,6 @@ func canonicalizeDropsNoRound(amount uint64, offset int, strict bool, ctx Number
 	return drops
 }
 
-// NativeRoundDrops finalizes a muldiv-round magnitude (amount, offset) as signed
-// XRP drops — the single native (XRP-output) tail shared by the state and offer
-// mul/div round variants. When rounding away from zero (addSlop) it canonicalizes
-// via CanonicalizeDrops{,Strict}; otherwise it rescales to drops via
-// canonicalizeDropsNoRound (non-strict rounds to-nearest post-switchover; strict
-// and pre-switchover truncate). A positive round-up that collapses to zero yields
-// 1 drop.
-func NativeRoundDrops(amount uint64, offset int, resultNegative, roundUp, addSlop, strict bool) int64 {
-	return NativeRoundDropsWithNumberContext(
-		amount,
-		offset,
-		resultNegative,
-		roundUp,
-		addSlop,
-		strict,
-		NewNumberContext(MantissaScaleSmall, false),
-	)
-}
-
 func NativeRoundDropsWithNumberContext(
 	amount uint64,
 	offset int,
@@ -430,24 +375,6 @@ func NativeRoundDropsWithNumberContext(
 		drops = -drops
 	}
 	return drops
-}
-
-// FinalizeRoundIOU builds the signed IOU result. When useMode is set the result
-// is constructed with the given Number rounding mode (the strict variants);
-// otherwise the legacy non-mode constructor is used. A positive round-up that
-// collapsed to zero returns the minimum representable value.
-func FinalizeRoundIOU(amount uint64, offset int, resultNegative, roundUp bool, currency, issuer string, mode RoundingMode, useMode bool) Amount {
-	return FinalizeRoundIOUWithNumberContext(
-		amount,
-		offset,
-		resultNegative,
-		roundUp,
-		currency,
-		issuer,
-		mode,
-		useMode,
-		NewNumberContext(MantissaScaleSmall, false),
-	)
 }
 
 func FinalizeRoundIOUWithNumberContext(
@@ -474,19 +401,6 @@ func FinalizeRoundIOUWithNumberContext(
 	return result
 }
 
-// MulRoundStrict multiplies two Amounts using rippled's mulRoundStrict algorithm
-// (canonicalizeRoundStrict + NumberRoundModeGuard(towards_zero)).
-func MulRoundStrict(v1, v2 Amount, currency, issuer string, roundUp bool) Amount {
-	return MulRoundStrictWithNumberContext(
-		v1,
-		v2,
-		currency,
-		issuer,
-		NewNumberContext(MantissaScaleSmall, false),
-		roundUp,
-	)
-}
-
 func MulRoundStrictWithNumberContext(
 	v1, v2 Amount,
 	currency, issuer string,
@@ -508,21 +422,6 @@ func MulRoundStrictWithNumberContext(
 	}
 	return FinalizeRoundIOUWithNumberContext(
 		amount, offset, resultNegative, roundUp, currency, issuer, RoundTowardsZero, true, ctx,
-	)
-}
-
-// MulRound multiplies two Amounts using rippled's mulRound (non-strict)
-// algorithm (canonicalizeRound + DontAffectNumberRoundMode). The non-strict
-// canonicalize adds 9 or 10 based on loop count rather than the actual
-// remainder, and installs no Number rounding-mode guard.
-func MulRound(v1, v2 Amount, currency, issuer string, roundUp bool) Amount {
-	return MulRoundWithNumberContext(
-		v1,
-		v2,
-		currency,
-		issuer,
-		NewNumberContext(MantissaScaleSmall, false),
-		roundUp,
 	)
 }
 
@@ -550,19 +449,6 @@ func MulRoundWithNumberContext(
 	)
 }
 
-// DivRound divides two Amounts using rippled's divRound (non-strict) algorithm
-// (canonicalizeRound + DontAffectNumberRoundMode).
-func DivRound(num, den Amount, currency, issuer string, roundUp bool) Amount {
-	return DivRoundWithNumberContext(
-		num,
-		den,
-		currency,
-		issuer,
-		NewNumberContext(MantissaScaleSmall, false),
-		roundUp,
-	)
-}
-
 func DivRoundWithNumberContext(
 	num, den Amount,
 	currency, issuer string,
@@ -587,20 +473,6 @@ func DivRoundWithNumberContext(
 	}
 	return FinalizeRoundIOUWithNumberContext(
 		amount, offset, resultNegative, roundUp, currency, issuer, 0, false, ctx,
-	)
-}
-
-// DivRoundStrict divides two Amounts using rippled's divRoundStrict algorithm
-// (canonicalizeRound + NumberRoundModeGuard). The guard mode is upward when
-// rounding away from zero and downward otherwise.
-func DivRoundStrict(num, den Amount, currency, issuer string, roundUp bool) Amount {
-	return DivRoundStrictWithNumberContext(
-		num,
-		den,
-		currency,
-		issuer,
-		NewNumberContext(MantissaScaleSmall, false),
-		roundUp,
 	)
 }
 
@@ -635,17 +507,6 @@ func DivRoundStrictWithNumberContext(
 	)
 }
 
-// DivRoundNative divides two Amounts and returns the result as XRP drops, using
-// the native canonicalizeRound path (native=true) of rippled's divRoundImpl.
-func DivRoundNative(num, den Amount, roundUp bool) int64 {
-	return DivRoundNativeWithNumberContext(
-		num,
-		den,
-		NewNumberContext(MantissaScaleSmall, false),
-		roundUp,
-	)
-}
-
 func DivRoundNativeWithNumberContext(
 	num, den Amount,
 	ctx NumberContext,
@@ -666,20 +527,6 @@ func DivRoundNativeWithNumberContext(
 	offset := numOff - denOff - 17
 	return NativeRoundDropsWithNumberContext(
 		amount, offset, resultNegative, roundUp, addSlop, false, ctx,
-	)
-}
-
-// MulRoundNative multiplies two Amounts and returns the result as XRP drops,
-// using the native canonicalizeRound path (native=true) of rippled's
-// mulRoundImpl. When both operands are native XRP it takes mulRoundImpl's
-// native×native fast path: the product of the two drop values under an overflow
-// guard.
-func MulRoundNative(v1, v2 Amount, roundUp bool) int64 {
-	return MulRoundNativeWithNumberContext(
-		v1,
-		v2,
-		NewNumberContext(MantissaScaleSmall, false),
-		roundUp,
 	)
 }
 
@@ -706,23 +553,6 @@ func MulRoundNativeWithNumberContext(
 	)
 }
 
-// MulRoundNativeStrict multiplies two Amounts and returns the result as XRP
-// drops, taking the strict native canonicalize path of rippled's
-// mulRoundStrict (mulRoundImpl<canonicalizeRoundStrict, NumberRoundModeGuard>
-// with a native asset). It canonicalizes the un-truncated muldiv product
-// directly to drops via canonicalizeRoundStrict(native=true): when rounding
-// away from zero a true sub-drop remainder forces a round-up, unlike the IOU
-// MulRoundStrict which first collapses the product to a 16-digit mantissa and
-// discards that remainder.
-func MulRoundNativeStrict(v1, v2 Amount, roundUp bool) int64 {
-	return MulRoundNativeStrictWithNumberContext(
-		v1,
-		v2,
-		NewNumberContext(MantissaScaleSmall, false),
-		roundUp,
-	)
-}
-
 func MulRoundNativeStrictWithNumberContext(
 	v1, v2 Amount,
 	ctx NumberContext,
@@ -743,24 +573,6 @@ func MulRoundNativeStrictWithNumberContext(
 	offset := offset1 + offset2 + 14
 	return NativeRoundDropsWithNumberContext(
 		amount, offset, resultNegative, roundUp, addSlop, true, ctx,
-	)
-}
-
-// DivRoundNativeStrict divides two Amounts and returns the result as XRP drops,
-// taking the native canonicalize path of rippled's divRoundStrict
-// (divRoundImpl<NumberRoundModeGuard> with a native asset). divRoundImpl always
-// uses the non-strict canonicalizeRound for the away-from-zero branch (only
-// mulRoundImpl is templated on the canonicalize function), so the round-up leg
-// matches the non-strict DivRoundNative; strictness only changes the toward-zero
-// leg, which truncates the un-truncated product to drops rather than rounding to
-// nearest. Like MulRoundNativeStrict it canonicalizes the raw product, not an
-// IOU-collapsed mantissa.
-func DivRoundNativeStrict(num, den Amount, roundUp bool) int64 {
-	return DivRoundNativeStrictWithNumberContext(
-		num,
-		den,
-		NewNumberContext(MantissaScaleSmall, false),
-		roundUp,
 	)
 }
 

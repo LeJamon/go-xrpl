@@ -23,25 +23,6 @@ func (a Amount) Exponent() int {
 	return a.iou.Exponent()
 }
 
-// Sqrt returns the square root of this Amount using banker's rounding.
-func (a Amount) Sqrt() Amount {
-	return a.SqrtRounded(RoundToNearest)
-}
-
-// SqrtRounded returns the square root of this Amount, rounding every
-// intermediate operation under mode. The AMM math uses this to reproduce
-// rippled's NumberRoundModeGuard around root2().
-// Reference: rippled's root2() function in Number.cpp
-// Uses Newton-Raphson iteration for precision.
-// Panics if the amount is negative.
-// When fixUniversalNumber is enabled, delegates to XRPLNumber.root2().
-func (a Amount) SqrtRounded(mode RoundingMode) Amount {
-	return a.SqrtWithNumberContext(
-		NewNumberContext(MantissaScaleSmall, false),
-		mode,
-	)
-}
-
 // SqrtWithNumberContext returns the square root under the transaction's Number
 // semantics.
 func (a Amount) SqrtWithNumberContext(ctx NumberContext, mode RoundingMode) Amount {
@@ -64,10 +45,10 @@ func (a Amount) SqrtWithNumberContext(ctx NumberContext, mode RoundingMode) Amou
 		return NewXRPAmountFromInt(int64(result))
 	}
 
-	// When switchover is on, delegate to XRPLNumber.root2()
+	// When switchover is on, delegate to XRPLNumber.Root2Rounded.
 	if ctx.UniversalNumberEnabled() {
 		n := ctx.Number(a.iou.Mantissa(), a.iou.Exponent(), mode)
-		result := n.root2Rounded(mode)
+		result := n.Root2Rounded(mode)
 		iou := result.ToIOUAmountValue()
 		return ctx.IssuedAmount(iou.mantissa, iou.exponent, a.Currency, a.Issuer, mode)
 	}
@@ -76,7 +57,7 @@ func (a Amount) SqrtWithNumberContext(ctx NumberContext, mode RoundingMode) Amou
 	// approximation that does NOT match rippled's Number::root2. It is effectively
 	// dead — every network that enables AMM (the only consumer of amount sqrt)
 	// also has fixUniversalNumber, so the switchover branch above always runs in
-	// practice. Kept only so SqrtRounded is well-defined when the switchover is
+	// practice. Kept only so SqrtWithNumberContext is well-defined when the switchover is
 	// off; it is not expected to be bit-for-bit rippled-faithful.
 	mantissa := a.iou.Mantissa()
 	exponent := a.iou.Exponent()

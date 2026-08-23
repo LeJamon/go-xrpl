@@ -113,26 +113,27 @@ func TestIssue950_DivRoundNativeNoRound(t *testing.T) {
 // returning the product of the drop values and panicking on either overflow
 // bound before the multiply.
 func TestIssue950_MulRoundNativeNativeOverflow(t *testing.T) {
+	ctx := NewNumberContext(MantissaScaleSmall, false)
 	t.Run("product_no_overflow", func(t *testing.T) {
-		if got := MulRoundNative(NewXRPAmountFromInt(3), NewXRPAmountFromInt(4), true); got != 12 {
+		if got := MulRoundNativeWithNumberContext(NewXRPAmountFromInt(3), NewXRPAmountFromInt(4), ctx, true); got != 12 {
 			t.Errorf("3 * 4 drops = %d, want 12", got)
 		}
 		// minV == 3e9 is at the first bound but not past it; (maxV>>32) == 0.
-		if got := MulRoundNative(NewXRPAmountFromInt(3_000_000_000), NewXRPAmountFromInt(1), true); got != 3_000_000_000 {
+		if got := MulRoundNativeWithNumberContext(NewXRPAmountFromInt(3_000_000_000), NewXRPAmountFromInt(1), ctx, true); got != 3_000_000_000 {
 			t.Errorf("3e9 * 1 drops = %d, want 3000000000", got)
 		}
 	})
 
 	t.Run("first_bound_minV_gt_sqrt_cMaxNative", func(t *testing.T) {
 		assertNativeOverflow(t, func() {
-			MulRoundNative(NewXRPAmountFromInt(3_000_000_001), NewXRPAmountFromInt(3_000_000_001), true)
+			MulRoundNativeWithNumberContext(NewXRPAmountFromInt(3_000_000_001), NewXRPAmountFromInt(3_000_000_001), ctx, true)
 		})
 	})
 
 	t.Run("second_bound_maxV_shift_times_minV", func(t *testing.T) {
 		// minV = 3e9 (<= first bound), maxV = 2^32 → (maxV>>32)*minV = 3e9 > 2095475792.
 		assertNativeOverflow(t, func() {
-			MulRoundNative(NewXRPAmountFromInt(3_000_000_000), NewXRPAmountFromInt(4_294_967_296), true)
+			MulRoundNativeWithNumberContext(NewXRPAmountFromInt(3_000_000_000), NewXRPAmountFromInt(4_294_967_296), ctx, true)
 		})
 	})
 }

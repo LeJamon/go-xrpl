@@ -104,7 +104,7 @@ func TestGetRate_RoundToNearest(t *testing.T) {
 		NewXRPAmountFromInt(1),
 		ctx,
 	); got != 0 {
-		t.Fatalf("GetRate(0, 1) = %#x, want 0", got)
+		t.Fatalf("GetRateWithNumberContext(0, 1) = %#x, want 0", got)
 	}
 }
 
@@ -156,6 +156,7 @@ func TestParseIOUValue_ScientificNotation(t *testing.T) {
 func TestDivideByZeroPanics(t *testing.T) {
 	usd := NewIssuedAmountFromValue(MinMantissa, -15, "USD", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
 	zero := NewIssuedAmountFromValue(0, zeroExponent, "USD", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
+	ctx := NewNumberContext(MantissaScaleSmall, false)
 
 	mustPanic := func(name string, fn func()) {
 		t.Helper()
@@ -168,9 +169,9 @@ func TestDivideByZeroPanics(t *testing.T) {
 	}
 
 	mustPanic("Amount.Div", func() { usd.Div(zero, false) })
-	mustPanic("DivRound", func() { DivRound(usd, zero, "USD", usd.Issuer, false) })
-	mustPanic("DivRoundStrict", func() { DivRoundStrict(usd, zero, "USD", usd.Issuer, false) })
-	mustPanic("DivRoundNative", func() { DivRoundNative(usd, zero, false) })
+	mustPanic("DivRound", func() { DivRoundWithNumberContext(usd, zero, "USD", usd.Issuer, ctx, false) })
+	mustPanic("DivRoundStrict", func() { DivRoundStrictWithNumberContext(usd, zero, "USD", usd.Issuer, ctx, false) })
+	mustPanic("DivRoundNative", func() { DivRoundNativeWithNumberContext(usd, zero, ctx, false) })
 }
 
 // TestDirInsert_PreserveOrderRejectsDuplicate guards the M3 fix: the

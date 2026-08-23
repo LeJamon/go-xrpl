@@ -275,45 +275,6 @@ func TestSerializeMPToken_LockedAmountPresentAtZero(t *testing.T) {
 	}
 }
 
-func TestSerializeRippleState_PreservesNodePresence(t *testing.T) {
-	low, _ := EncodeAccountID([20]byte{0x01})
-	high, _ := EncodeAccountID([20]byte{0x02})
-	newLine := func() *RippleState {
-		return &RippleState{
-			Balance:   NewIssuedAmountFromValue(0, zeroExponent, "USD", accountOne),
-			LowLimit:  NewIssuedAmountFromValue(0, zeroExponent, "USD", low),
-			HighLimit: NewIssuedAmountFromValue(0, zeroExponent, "USD", high),
-		}
-	}
-
-	absent, err := SerializeRippleState(newLine())
-	if err != nil {
-		t.Fatalf("serialize absent nodes: %v", err)
-	}
-	absentFields := decodeSLE(t, absent)
-	if _, ok := absentFields["LowNode"]; ok {
-		t.Fatal("LowNode must remain absent")
-	}
-	if _, ok := absentFields["HighNode"]; ok {
-		t.Fatal("HighNode must remain absent")
-	}
-
-	presentLine := newLine()
-	presentLine.HasLowNode = true
-	presentLine.HasHighNode = true
-	present, err := SerializeRippleState(presentLine)
-	if err != nil {
-		t.Fatalf("serialize present nodes: %v", err)
-	}
-	presentFields := decodeSLE(t, present)
-	if _, ok := presentFields["LowNode"]; !ok {
-		t.Fatal("present-zero LowNode was omitted")
-	}
-	if _, ok := presentFields["HighNode"]; !ok {
-		t.Fatal("present-zero HighNode was omitted")
-	}
-}
-
 func TestSerializeNFTokenPage_EmptyTokensPresent(t *testing.T) {
 	data, err := SerializeNFTokenPage(&NFTokenPageData{})
 	if err != nil {

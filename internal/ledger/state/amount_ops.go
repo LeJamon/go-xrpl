@@ -17,12 +17,6 @@ func EncodeAccountIDSafe(accountID [20]byte) string {
 	return s
 }
 
-// CalculateQuality calculates the quality (exchange rate) for an offer.
-// Quality = TakerPays / TakerGets
-func CalculateQuality(takerPays, takerGets Amount) uint64 {
-	return GetRate(takerPays, takerGets)
-}
-
 func CalculateQualityWithNumberContext(
 	takerPays, takerGets Amount,
 	ctx NumberContext,

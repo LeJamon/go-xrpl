@@ -10,12 +10,6 @@ import (
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
-// Field type code for UInt8 (not defined in account_root.go)
-const (
-	FieldTypeUInt8   = 16
-	FieldTypeHash192 = 21
-)
-
 // MPTokenIssuanceData holds parsed fields of an MPTokenIssuance ledger entry.
 // Reference: rippled LedgerFormats.h ltMPTOKEN_ISSUANCE
 type MPTokenIssuanceData struct {

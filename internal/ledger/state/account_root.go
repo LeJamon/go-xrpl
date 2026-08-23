@@ -113,20 +113,7 @@ func (a *AccountRoot) IsPseudoAccount() bool {
 	return a.PseudoAccountFieldCount() > 0
 }
 
-// Field type codes (exported for use by parent tx/ package)
-const (
-	FieldTypeUInt16    = 1
-	FieldTypeUInt32    = 2
-	FieldTypeUInt64    = 3
-	FieldTypeHash128   = 4
-	FieldTypeHash256   = 5
-	FieldTypeAmount    = 6
-	FieldTypeBlob      = 7
-	FieldTypeAccount   = 8
-	FieldTypeAccountID = 8 // Same as Account, used in serialization
-	FieldTypeObject    = 14
-	FieldTypeArray     = 15
-)
+const FieldTypeHash256 = 5
 
 // STArray/STObject delimiters in the canonical binary format.
 const (
