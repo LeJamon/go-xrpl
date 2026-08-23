@@ -229,6 +229,9 @@ type Engine struct {
 	// Mutated only under e.mu; drained by takePendingPostUnlockLocked.
 	pendingPostUnlock []func()
 
+	// pendingValidationBroadcasts run after all queued finality deferrals drain.
+	pendingValidationBroadcasts []*consensus.Validation
+
 	// missedHeartbeats counts dropped heartbeat ticks (gap > 2× interval).
 	// time.Ticker silently coalesces ticks under load; this surfaces that
 	// pressure so stalls don't hide.
@@ -397,9 +400,7 @@ func (e *Engine) enqueueValidationBroadcastLocked(v *consensus.Validation) {
 		e.broadcastValidation(v)
 		return
 	}
-	e.pendingPostUnlock = append(e.pendingPostUnlock, func() {
-		e.broadcastValidation(v)
-	})
+	e.pendingValidationBroadcasts = append(e.pendingValidationBroadcasts, v)
 }
 
 // broadcastValidation emits our own validation, logging on failure. Like
@@ -413,11 +414,19 @@ func (e *Engine) broadcastValidation(v *consensus.Validation) {
 // takePendingPostUnlockLocked drains the queued post-lock closures.
 // Caller must hold e.mu; pass the result to runPostUnlock after Unlock.
 func (e *Engine) takePendingPostUnlockLocked() []func() {
-	if len(e.pendingPostUnlock) == 0 {
+	total := len(e.pendingPostUnlock) + len(e.pendingValidationBroadcasts)
+	if total == 0 {
 		return nil
 	}
-	out := e.pendingPostUnlock
+	out := make([]func(), 0, total)
+	out = append(out, e.pendingPostUnlock...)
+	for _, validation := range e.pendingValidationBroadcasts {
+		out = append(out, func() {
+			e.broadcastValidation(validation)
+		})
+	}
 	e.pendingPostUnlock = nil
+	e.pendingValidationBroadcasts = nil
 	return out
 }
 
