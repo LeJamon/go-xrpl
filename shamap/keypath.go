@@ -1,7 +1,7 @@
 package shamap
 
 const (
-	maxDepth = 64
+	maxDepth   = 64
 	branchMask = 0x0F
 )
 
