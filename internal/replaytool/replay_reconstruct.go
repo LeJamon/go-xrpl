@@ -9,16 +9,23 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/negativeunl"
+	"github.com/LeJamon/go-xrpl/internal/ledger/skiplist"
 	"github.com/LeJamon/go-xrpl/internal/statecompare"
 	ledgerentry "github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
-// reconstructMainnetState derives mainnet's exact post-transaction account
-// state for a ledger by applying the per-transaction metadata deltas to the
-// (mainnet-correct) pre-state. It returns the reconstructed map and whether its
-// root hash matches mainnet's expected account_hash.
+type ledgerTransactionSource interface {
+	Transactions(context.Context, *statecompare.LedgerSnapshot) ([]statecompare.Transaction, error)
+}
+
+// reconstructMainnetState derives mainnet's exact post-close account state for
+// a ledger by applying the per-transaction metadata deltas and deterministic
+// ledger-lifecycle changes to the (mainnet-correct) pre-state. It returns the
+// reconstructed map and whether its root hash matches mainnet's expected
+// account_hash.
 //
 // Transaction metadata stores deltas, not full objects (rippled emits only
 // changed/always fields per ApplyStateTable.cpp), so each ModifiedNode is
@@ -28,7 +35,7 @@ import (
 // byte-exact, never on a best-effort approximation.
 func reconstructMainnetState(
 	ctx context.Context,
-	client *statecompare.Client,
+	client ledgerTransactionSource,
 	preState *shamap.SHAMap,
 	snapshot *statecompare.LedgerSnapshot,
 	rules *amendment.Rules,
@@ -46,9 +53,29 @@ func reconstructMainnetState(
 		metas[i] = metaTx{Blob: t.MetaBlob, TxHash: t.TxHash}
 	}
 
-	corrected, err := reconstructFromMetaWithRules(preState, metas, snapshot.LedgerIndex, rules, replayPreFixPayChanRecipientOwnerDir)
+	reconstructionBase := preState
+	if protocol.IsFlagLedger(snapshot.LedgerIndex) {
+		reconstructionBase, err = preState.SnapshotMutable()
+		if err != nil {
+			return nil, false, fmt.Errorf("snapshotting pre-transaction lifecycle state: %w", err)
+		}
+		if err := negativeunl.Apply(reconstructionBase, snapshot.LedgerIndex); err != nil {
+			return nil, false, fmt.Errorf("updating reconstructed NegativeUNL: %w", err)
+		}
+	}
+
+	corrected, err := reconstructFromMetaWithRules(
+		reconstructionBase,
+		metas,
+		snapshot.LedgerIndex,
+		rules,
+		replayPreFixPayChanRecipientOwnerDir,
+	)
 	if err != nil {
 		return nil, false, err
+	}
+	if err := skiplist.UpdateOnMap(corrected, snapshot.LedgerIndex, snapshot.ParentHash); err != nil {
+		return nil, false, fmt.Errorf("updating reconstructed skip lists: %w", err)
 	}
 
 	root, err := corrected.Hash()
