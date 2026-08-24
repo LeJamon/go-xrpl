@@ -498,7 +498,14 @@ func recordDivergenceAndReset(
 		return stageErr
 	}
 
-	corrected, verified, err := reconstructMainnetState(ctx, client, preState, result.PostSnapshot, result.Rules)
+	corrected, verified, err := reconstructMainnetState(
+		ctx,
+		client,
+		preState,
+		result.PostSnapshot,
+		result.Rules,
+		result.PreFixPayChanDir,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("reconstructing mainnet state: %w", writeFailedFinding(false, "reconstruction failed", err))
 	}
@@ -535,6 +542,7 @@ type blockResult struct {
 	TxResults               []txApplyInfo
 	Errors                  []string
 	Rules                   *amendment.Rules
+	PreFixPayChanDir        bool
 }
 
 func loadInitialState(ctx context.Context, client *statecompare.Client, ledgerIndex uint32) (*shamap.SHAMap, *statecompare.LedgerSnapshot, drops.Fees, error) {

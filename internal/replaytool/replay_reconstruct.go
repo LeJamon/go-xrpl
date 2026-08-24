@@ -32,6 +32,7 @@ func reconstructMainnetState(
 	preState *shamap.SHAMap,
 	snapshot *statecompare.LedgerSnapshot,
 	rules *amendment.Rules,
+	replayPreFixPayChanRecipientOwnerDir bool,
 ) (*shamap.SHAMap, bool, error) {
 	if snapshot == nil {
 		return nil, false, errors.New("nil ledger snapshot")
@@ -45,7 +46,7 @@ func reconstructMainnetState(
 		metas[i] = metaTx{Blob: t.MetaBlob, TxHash: t.TxHash}
 	}
 
-	corrected, err := reconstructFromMetaWithRules(preState, metas, snapshot.LedgerIndex, rules)
+	corrected, err := reconstructFromMetaWithRules(preState, metas, snapshot.LedgerIndex, rules, replayPreFixPayChanRecipientOwnerDir)
 	if err != nil {
 		return nil, false, err
 	}
@@ -69,7 +70,13 @@ type metaTx struct {
 // copy of preState and returns the resulting state map. metas are in ledger
 // (tx_index) order. A second pass rebuilds directory page contents (sfIndexes),
 // which metadata never carries.
-func reconstructFromMetaWithRules(preState *shamap.SHAMap, metas []metaTx, ledgerIndex uint32, rules *amendment.Rules) (*shamap.SHAMap, error) {
+func reconstructFromMetaWithRules(
+	preState *shamap.SHAMap,
+	metas []metaTx,
+	ledgerIndex uint32,
+	rules *amendment.Rules,
+	replayPreFixPayChanRecipientOwnerDir bool,
+) (*shamap.SHAMap, error) {
 	if rules == nil {
 		return nil, errors.New("reconstruction requires parent amendment rules")
 	}
@@ -99,7 +106,7 @@ func reconstructFromMetaWithRules(preState *shamap.SHAMap, metas []metaTx, ledge
 		}
 		brokerAccounts := loanBrokerAccountsFromMeta(affected)
 		for _, node := range affected {
-			if err := applyAffectedNodeWithRules(corrected, node, m.TxHash, ledgerIndex, rules, deltas, deletedDirs, pendingDirectories, brokerAccounts); err != nil {
+			if err := applyAffectedNodeWithRules(corrected, node, m.TxHash, ledgerIndex, rules, replayPreFixPayChanRecipientOwnerDir, deltas, deletedDirs, pendingDirectories, brokerAccounts); err != nil {
 				return nil, fmt.Errorf("applying metadata for tx %d: %w", i, err)
 			}
 		}
@@ -125,6 +132,7 @@ func applyAffectedNodeWithRules(
 	txHash [32]byte,
 	ledgerSeq uint32,
 	rules *amendment.Rules,
+	replayPreFixPayChanRecipientOwnerDir bool,
 	deltas map[[32]byte]*dirDelta,
 	deletedDirs map[[32]byte]bool,
 	pendingDirectories map[[32]byte]struct{},
@@ -182,7 +190,7 @@ func applyAffectedNodeWithRules(
 			delete(deletedDirs, idx)
 			pendingDirectories[idx] = struct{}{}
 		}
-		if err := fillCreatedDefaults(obj, entryType); err != nil {
+		if err := fillCreatedDefaults(obj, entryType, replayPreFixPayChanRecipientOwnerDir); err != nil {
 			return fmt.Errorf("completing created %s: %w", idxHex, err)
 		}
 		if err := fillBookDirectoryDefaults(obj, entryType); err != nil {

@@ -288,6 +288,7 @@ func (r *replayRangeRunner) processBlockShared(
 		}
 	}
 
+	preFixPayChanRecipientOwnerDir := replayPreFixPayChanRecipientOwnerDir(targetLedger, r.legacyPayChanDirGate, r.payChanDirFirstFixed)
 	executed, err := executeBlock(ctx, blockExecution{
 		StateMap:                             preStateMap,
 		LedgerIndex:                          targetLedger,
@@ -300,7 +301,7 @@ func (r *replayRangeRunner) processBlockShared(
 		Fees:                                 fees,
 		Rules:                                rules,
 		Transactions:                         prepared,
-		ReplayPreFixPayChanRecipientOwnerDir: replayPreFixPayChanRecipientOwnerDir(targetLedger, r.legacyPayChanDirGate, r.payChanDirFirstFixed),
+		ReplayPreFixPayChanRecipientOwnerDir: preFixPayChanRecipientOwnerDir,
 		WantTxDetail:                         r.decoded,
 	})
 	if err != nil {
@@ -320,6 +321,7 @@ func (r *replayRangeRunner) processBlockShared(
 		TxResults:               executed.TxResults,
 		Errors:                  executed.Errors,
 		Rules:                   rules,
+		PreFixPayChanDir:        preFixPayChanRecipientOwnerDir,
 	}
 	for i := range transactions {
 		if !bytes.Equal(result.TxResults[i].MetaBlob, transactions[i].MetaBlob) {

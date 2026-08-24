@@ -227,9 +227,12 @@ var explicitlyCreatedDefaults = map[string][]createdField{
 	"Delegate": {
 		{Name: "DestinationNode", Value: "0"},
 	},
+	"PayChannel": {
+		{Name: "DestinationNode", Value: "0"},
+	},
 }
 
-func fillCreatedDefaults(obj map[string]any, entryType string) error {
+func fillCreatedDefaults(obj map[string]any, entryType string, replayPreFixPayChanRecipientOwnerDir bool) error {
 	if entryType == "Credential" {
 		if err := fillCredentialDefaults(obj); err != nil {
 			return err
@@ -240,7 +243,11 @@ func fillCreatedDefaults(obj map[string]any, entryType string) error {
 			obj[f.Name] = f.Value
 		}
 	}
-	for _, f := range explicitlyCreatedDefaults[entryType] {
+	explicitDefaults := explicitlyCreatedDefaults[entryType]
+	if entryType == "PayChannel" && replayPreFixPayChanRecipientOwnerDir {
+		explicitDefaults = nil
+	}
+	for _, f := range explicitDefaults {
 		if _, present := obj[f.Name]; !present {
 			obj[f.Name] = f.Value
 		}
