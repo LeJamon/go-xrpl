@@ -56,7 +56,7 @@ func TestNFTokenCancelOfferWrongType(t *testing.T) {
 		sequenceBefore := env.Seq(alice)
 		ownerCountBefore := env.OwnerCount(alice)
 
-		result := env.Submit(nft.NFTokenCancelOffer(alice, wrongTypeID, offerID).Build())
+		result := env.Submit(nft.NFTokenCancelOffer(alice, offerID, wrongTypeID).Build())
 
 		jtx.RequireTxClaimed(t, result, jtx.TecNO_PERMISSION)
 		require.True(t, result.Applied)
