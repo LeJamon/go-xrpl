@@ -944,6 +944,9 @@ func restoreTrustLineLimit(ctx *tx.ApplyContext, destID, issuerID [20]byte, curr
 	if err != nil {
 		return ter.TefINTERNAL
 	}
+	if trustLineData == nil {
+		return ter.TesSUCCESS
+	}
 	rs, err := state.ParseRippleState(trustLineData)
 	if err != nil {
 		return ter.TefINTERNAL
