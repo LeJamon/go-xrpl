@@ -53,7 +53,7 @@ func newLoanSetAssetFixture(t *testing.T, kind string, mptCreateFlags ...uint32)
 		createHolding = func(account *jtx.Account) { env.Trust(account, limit) }
 	case "MPT":
 		token := mpttest.NewMPTTester(t, env, issuer, mpttest.MPTInit{Holders: []*jtx.Account{depositor}})
-		flags := uint32(mpttest.TfMPTCanTransfer)
+		flags := mpttest.TfMPTCanTransfer
 		for _, extra := range mptCreateFlags {
 			flags |= extra
 		}
