@@ -112,6 +112,19 @@ func TestRestoreTrustLineLimitDistinguishesAbsenceFromFailure(t *testing.T) {
 	}
 }
 
+func TestCheckCashTrustLineAccount(t *testing.T) {
+	sourceID := checkMPTAccountID(0x41)
+	destinationID := checkMPTAccountID(0x42)
+	issuerID := checkMPTAccountID(0x43)
+
+	if got := checkCashTrustLineAccount(sourceID, destinationID, issuerID); got != destinationID {
+		t.Fatalf("non-issuer destination selected %x, want %x", got, destinationID)
+	}
+	if got := checkCashTrustLineAccount(sourceID, issuerID, issuerID); got != sourceID {
+		t.Fatalf("issuer destination selected %x, want source %x", got, sourceID)
+	}
+}
+
 type checkUpdateFailView struct {
 	*checkMPTView
 }

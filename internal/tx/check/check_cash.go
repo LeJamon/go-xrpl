@@ -698,10 +698,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 
 	// Auto-create the destination's trust line if it does not yet exist.
 	destLow := state.CompareAccountIDs(issuerID, accountID) > 0
-	trustLineAccountID := accountID
-	if accountID == issuerID {
-		trustLineAccountID = srcID
-	}
+	trustLineAccountID := checkCashTrustLineAccount(srcID, accountID, issuerID)
 
 	if accountID != issuerID {
 		trustLineKey := keylet.Line(accountID, issuerID, sendMax.Currency)
@@ -928,6 +925,13 @@ func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte
 	}
 
 	return ter.TesSUCCESS
+}
+
+func checkCashTrustLineAccount(srcID, destID, issuerID [20]byte) [20]byte {
+	if destID == issuerID {
+		return srcID
+	}
+	return destID
 }
 
 // restoreTrustLineLimit restores the original trust line limit after flow.

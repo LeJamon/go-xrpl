@@ -38,7 +38,7 @@ func TestCheckCashExactAmountSkipsRestoreWhenFlowDeletesTrustLine(t *testing.T) 
 	})
 }
 
-func TestCheckCashToIssuerTweaksSourceTrustLine(t *testing.T) {
+func TestCheckCashToIssuerRestoresSourceTrustLine(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	issuer := jtx.NewAccount("check-cash-line-issuer")
 	source := jtx.NewAccount("check-cash-line-casher")
@@ -72,19 +72,23 @@ func TestCheckCashToIssuerTweaksSourceTrustLine(t *testing.T) {
 	jtx.RequireTxSuccess(t, result)
 	requireDeliveredAmount(t, result, issuerUSD)
 
-	deletedLine := requireDeletedLedgerNode(t, result, "RippleState", lineKey)
-	limit, ok := deletedLine.FinalFields["HighLimit"].(map[string]any)
-	require.True(t, ok, "HighLimit must be an issued amount")
-	require.Equal(t, "9999999999999999e80", limit["value"])
-	require.Equal(t, "USD", limit["currency"])
-	require.Equal(t, issuer.Address, limit["issuer"])
+	modifiedLine := metadata.FindNode(result.Metadata, "ModifiedNode", "RippleState")
+	require.NotNil(t, modifiedLine, "modified RippleState metadata")
+	require.Equal(t, strings.ToUpper(hex.EncodeToString(lineKey.Key[:])), modifiedLine.LedgerIndex)
 	jtx.RequireLedgerEntryNotExists(t, env, checkKey)
-	jtx.RequireLedgerEntryNotExists(t, env, lineKey)
+	jtx.RequireLedgerEntryExists(t, env, lineKey)
+	jtx.RequireIOUBalance(t, env, source, issuer, "USD", 0)
+	lineData, err := env.LedgerEntry(lineKey)
+	require.NoError(t, err)
+	line, err := state.ParseRippleState(lineData)
+	require.NoError(t, err)
+	require.True(t, line.HighLimit.IsZero())
+	require.Equal(t, source.Address, line.HighLimit.Issuer)
 	jtx.RequireOwnerDirectoryContains(t, env, source, checkKey.Key, false)
 	jtx.RequireOwnerDirectoryContains(t, env, issuer, checkKey.Key, false)
-	jtx.RequireOwnerDirectoryContains(t, env, source, lineKey.Key, false)
-	jtx.RequireOwnerDirectoryContains(t, env, issuer, lineKey.Key, false)
-	jtx.RequireOwnerCount(t, env, source, 0)
+	jtx.RequireOwnerDirectoryContains(t, env, source, lineKey.Key, true)
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, lineKey.Key, true)
+	jtx.RequireOwnerCount(t, env, source, 1)
 	jtx.RequireOwnerCount(t, env, issuer, 0)
 }
 
