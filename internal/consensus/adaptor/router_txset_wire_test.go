@@ -289,25 +289,7 @@ func TestRouter_LedgerData_TsCandidate_FeedsEngine(t *testing.T) {
 	ctx := t.Context()
 	go router.Run(ctx)
 
-	// Build a real SHAMap of TypeTransaction containing two tx blobs.
-	// Real tx blobs are >= 12 bytes (SHAMap leaf min — see shamap
-	// leaf.go); use 16-byte synthetic blobs that satisfy the floor.
-	blobs := [][]byte{
-		bytes.Repeat([]byte{0x11}, 16),
-		bytes.Repeat([]byte{0x55}, 16),
-	}
-	txMap := shamap.New(shamap.TypeTransaction)
-	for i, blob := range blobs {
-		var key [32]byte
-		key[0] = byte(0x10 + i) // distinct keys to land in different branches
-		require.NoError(t,
-			txMap.PutWithNodeType(key, blob, shamap.NodeTypeTransactionNoMeta),
-			"PutWithNodeType")
-	}
-	id, err := txMap.Hash()
-	require.NoError(t, err, "Hash")
-	wireNodes, err := txMap.WalkWireNodes()
-	require.NoError(t, err, "WalkWireNodes")
+	_, id, wireNodes := buildTxSetForTest(t, 2)
 	require.NotEmpty(t, wireNodes, "expected at least the root + leaves")
 
 	// Convert WalkWireNodes output → LedgerData node entries. Pre-order

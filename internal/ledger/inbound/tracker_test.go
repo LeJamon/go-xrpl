@@ -82,11 +82,15 @@ func buildSourceMap(t *testing.T, mapType shamap.Type) (rootHash [32]byte, rootD
 	for branch := range byte(4) {
 		for sub := range byte(4) {
 			for i := range byte(4) {
+				data := []byte{branch, sub, i, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99}
 				var key [32]byte
 				key[0] = (branch << 4) | sub
 				key[1] = i << 4
 				key[31] = 0xA5
-				if err := source.Put(key, []byte{branch, sub, i, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99}); err != nil {
+				if mapType == shamap.TypeTransaction {
+					key = sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), data)
+				}
+				if err := source.Put(key, data); err != nil {
 					t.Fatalf("put: %v", err)
 				}
 			}

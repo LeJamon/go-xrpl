@@ -7,7 +7,7 @@ import (
 )
 
 func TestSme_AddKnownNodeUnchecked(t *testing.T) {
-	source := New(TypeTransaction)
+	source := New(TypeState)
 	k := sme_keyFromByte(0x01)
 	if err := source.Put(k, []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}); err != nil {
 		t.Fatalf("Put: %v", err)
@@ -26,7 +26,7 @@ func TestSme_AddKnownNodeUnchecked(t *testing.T) {
 		t.Fatalf("WalkWireNodes: %v", err)
 	}
 
-	dest1 := New(TypeTransaction)
+	dest1 := New(TypeState)
 	someID, err := newRootNodeID().childNodeID(0)
 	if err != nil {
 		t.Fatalf("ChildNodeID: %v", err)
@@ -35,7 +35,7 @@ func TestSme_AddKnownNodeUnchecked(t *testing.T) {
 		t.Errorf("AddKnownNodeByID not-syncing: want ErrSyncNotInProgress, got %v", err)
 	}
 
-	dest2 := New(TypeTransaction)
+	dest2 := New(TypeState)
 	if err := dest2.StartSync(); err != nil {
 		t.Fatalf("StartSync: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestSme_AddKnownNodeUnchecked(t *testing.T) {
 		t.Errorf("AddKnownNodeByID nil data: want ErrInvalidNodeData, got %v", err)
 	}
 
-	dest3 := New(TypeTransaction)
+	dest3 := New(TypeState)
 	if err := dest3.StartSync(); err != nil {
 		t.Fatalf("StartSync: %v", err)
 	}

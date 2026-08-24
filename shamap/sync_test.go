@@ -5,6 +5,9 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 func (sm *SHAMap) addKnownNodeFromPrefixForTest(nodeID NodeID, data []byte) (AddNodeResult, error) {
@@ -372,10 +375,9 @@ func TestAddKnownNodeByID_RippledStyleReconstruct(t *testing.T) {
 	for branch := range byte(4) {
 		for sub := range byte(4) {
 			for i := range byte(4) {
-				var key [32]byte
-				key[0] = (branch << 4) | sub
-				key[1] = i << 4
-				if err := source.Put(key, []byte{branch, sub, i, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66}); err != nil {
+				data := []byte{branch, sub, i, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
+				key := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), data)
+				if err := source.Put(key, data); err != nil {
 					t.Fatalf("Put: %v", err)
 				}
 			}
@@ -676,7 +678,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 // Mirrors rippled SHAMapSync.cpp:597,671-672: a leaf encountered mid-path
 // is the canonical content at that slot — return duplicate (nil), not error.
 func TestAddKnownNodeByID_LeafMidPathReturnsDuplicate(t *testing.T) {
-	source := New(TypeTransaction)
+	source := New(TypeState)
 	// Single key → root has a single leaf child at the path's first
 	// nibble, consolidated at depth 1.
 	var k [32]byte
@@ -698,7 +700,7 @@ func TestAddKnownNodeByID_LeafMidPathReturnsDuplicate(t *testing.T) {
 		t.Fatalf("WalkWireNodes: %v", err)
 	}
 
-	dest := New(TypeTransaction)
+	dest := New(TypeState)
 	if err := dest.StartSync(); err != nil {
 		t.Fatalf("StartSync: %v", err)
 	}
@@ -721,7 +723,10 @@ func TestAddKnownNodeByID_LeafMidPathReturnsDuplicate(t *testing.T) {
 	// Synthesize a depth-2 NodeID on the same path as the consolidated
 	// leaf. The peer's data here is irrelevant — descent must short-
 	// circuit on the leaf and return nil.
-	deepNID := NodeID{depth: 2, id: k}
+	deepNID, err := createNodeID(2, k)
+	if err != nil {
+		t.Fatalf("create deep NodeID: %v", err)
+	}
 	res, err := dest.AddKnownNodeByID(deepNID, []byte{0xFF})
 	if err != nil {
 		t.Fatalf("leaf-mid-path: want nil (duplicate), got %v", err)
@@ -739,10 +744,9 @@ func TestPrefixAcquisitionDirect(t *testing.T) {
 	source := New(TypeTransaction)
 	for branch := range byte(3) {
 		for sub := range byte(3) {
-			var key [32]byte
-			key[0] = (branch << 4) | sub
-			key[1] = 0x99
-			if err := source.Put(key, []byte{branch, sub, 0xCA, 0xFE, 0xBA, 0xBE, 0xDE, 0xAD, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66}); err != nil {
+			data := []byte{branch, sub, 0xCA, 0xFE, 0xBA, 0xBE, 0xDE, 0xAD, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
+			key := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), data)
+			if err := source.Put(key, data); err != nil {
 				t.Fatalf("Put: %v", err)
 			}
 		}
