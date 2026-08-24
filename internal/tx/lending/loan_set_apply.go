@@ -224,7 +224,7 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	if r := applyLoanSetHoldingOwnerCount(ctx, borrower, borrowerHoldingDelta); r != ter.TesSUCCESS {
 		return r
 	}
-	if r := tx.RequireAuth(ctx.View, asset, borrower); r != ter.TesSUCCESS {
+	if r := mptutil.RequireAssetAuthAt(ctx.View, asset, borrower, mptutil.StrongAuth, ctx.Config.ParentCloseTime); r != ter.TesSUCCESS {
 		return r
 	}
 	if originationFee.Signum() != 0 {
@@ -239,9 +239,9 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		if r := applyLoanSetHoldingOwnerCount(ctx, b.Owner, ownerHoldingDelta); r != ter.TesSUCCESS {
 			return r
 		}
-		if r := tx.RequireAuth(ctx.View, asset, b.Owner); r != ter.TesSUCCESS {
-			return r
-		}
+	}
+	if r := mptutil.RequireAssetAuthAt(ctx.View, asset, b.Owner, mptutil.StrongAuth, ctx.Config.ParentCloseTime); r != ter.TesSUCCESS {
+		return r
 	}
 
 	// Disburse principal to the borrower and the origination fee to the owner.

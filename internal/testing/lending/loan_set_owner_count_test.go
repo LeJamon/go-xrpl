@@ -25,7 +25,7 @@ type loanSetAssetFixture struct {
 	createHolding           func(*jtx.Account)
 }
 
-func newLoanSetAssetFixture(t *testing.T, kind string) *loanSetAssetFixture {
+func newLoanSetAssetFixture(t *testing.T, kind string, mptCreateFlags ...uint32) *loanSetAssetFixture {
 	t.Helper()
 	env := newLendingEnv(t)
 	issuer := jtx.NewAccount(kind + "-issuer")
@@ -53,8 +53,18 @@ func newLoanSetAssetFixture(t *testing.T, kind string) *loanSetAssetFixture {
 		createHolding = func(account *jtx.Account) { env.Trust(account, limit) }
 	case "MPT":
 		token := mpttest.NewMPTTester(t, env, issuer, mpttest.MPTInit{Holders: []*jtx.Account{depositor}})
-		token.Create(mpttest.CreateOpts{Flags: mpttest.TfMPTCanTransfer})
-		token.Authorize(mpttest.AuthorizeOpts{Account: depositor})
+		flags := mpttest.TfMPTCanTransfer
+		for _, extra := range mptCreateFlags {
+			flags |= extra
+		}
+		token.Create(mpttest.CreateOpts{Flags: flags})
+		authorize := func(account *jtx.Account) {
+			token.Authorize(mpttest.AuthorizeOpts{Account: account})
+			if flags&mpttest.TfMPTRequireAuth != 0 {
+				token.Authorize(mpttest.AuthorizeOpts{Holder: account})
+			}
+		}
+		authorize(depositor)
 		token.Pay(issuer, depositor, 10_000)
 		asset = tx.Asset{MPTIssuanceID: token.IssuanceID()}
 		deposit = token.MPTAmount(10_000)
@@ -67,9 +77,7 @@ func newLoanSetAssetFixture(t *testing.T, kind string) *loanSetAssetFixture {
 		holdingKey = func(account *jtx.Account) keylet.Keylet {
 			return keylet.MPTokenByID(issuanceID, account.AccountID())
 		}
-		createHolding = func(account *jtx.Account) {
-			token.Authorize(mpttest.AuthorizeOpts{Account: account})
-		}
+		createHolding = authorize
 	default:
 		t.Fatalf("unsupported asset kind %q", kind)
 	}
@@ -156,6 +164,7 @@ func assertLoanSetOwnedObjects(t *testing.T, f *loanSetAssetFixture, borrower *j
 func TestLoanSetHoldingOwnerCount(t *testing.T) {
 	t.Run("IOU borrower submits with new holding", func(t *testing.T) {
 		f := newLoanSetAssetFixture(t, "IOU")
+		f.createHolding(f.owner)
 		if got := f.env.OwnerCount(f.borrower); got != 0 {
 			t.Fatalf("initial borrower OwnerCount = %d, want 0", got)
 		}
@@ -168,6 +177,7 @@ func TestLoanSetHoldingOwnerCount(t *testing.T) {
 
 	t.Run("MPT broker owner submits for counterparty borrower", func(t *testing.T) {
 		f := newLoanSetAssetFixture(t, "MPT")
+		f.createHolding(f.owner)
 		ownerCount := f.env.OwnerCount(f.owner)
 		jtx.RequireTxSuccess(t, submitLoanSet(t, f, f.owner, f.borrower, false))
 		if got := f.env.OwnerCount(f.borrower); got != 2 {
@@ -183,6 +193,7 @@ func TestLoanSetHoldingOwnerCount(t *testing.T) {
 		t.Run(kind+" existing holding", func(t *testing.T) {
 			f := newLoanSetAssetFixture(t, kind)
 			f.createHolding(f.borrower)
+			f.createHolding(f.owner)
 			before := f.env.OwnerCount(f.borrower)
 			jtx.RequireTxSuccess(t, submitLoanSet(t, f, f.borrower, f.owner, false))
 			if got := f.env.OwnerCount(f.borrower); got != before+1 {
@@ -223,6 +234,7 @@ func TestLoanSetHoldingReserve(t *testing.T) {
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			f := newLoanSetAssetFixture(t, tc.kind)
+			f.createHolding(f.owner)
 			before := f.env.OwnerCount(f.borrower)
 			target := f.env.ReserveBase() + uint64(before+1)*f.env.ReserveIncrement()
 			balance := f.env.Balance(f.borrower)
