@@ -697,8 +697,11 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	// Reference: CashCheck.cpp L252-end
 
 	// Auto-create the destination's trust line if it does not yet exist.
-	// Determine the trust line key for destination ↔ issuer
 	destLow := state.CompareAccountIDs(issuerID, accountID) > 0
+	trustLineAccountID := accountID
+	if accountID == issuerID {
+		trustLineAccountID = srcID
+	}
 
 	if accountID != issuerID {
 		trustLineKey := keylet.Line(accountID, issuerID, sendMax.Currency)
@@ -727,37 +730,35 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	// CashCheck.cpp L418-439 - saves the limit, sets it to max, runs flow,
 	// then restores it via scope_exit.
 	// Reference: CashCheck.cpp L422-439
-	var savedLimit *state.Amount
-	if accountID != issuerID {
-		trustLineKey := keylet.Line(accountID, issuerID, sendMax.Currency)
-		trustLineData, err := ctx.View.Read(trustLineKey)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		rs, err := state.ParseRippleState(trustLineData)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
+	trustLineKey := keylet.Line(trustLineAccountID, issuerID, sendMax.Currency)
+	trustLineData, err := ctx.View.Read(trustLineKey)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if trustLineData == nil {
+		return ter.TecNO_LINE
+	}
+	rs, err := state.ParseRippleState(trustLineData)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
 
-		// Save and tweak the destination's limit
-		bigLimit := state.NewIssuedAmountFromValue(state.MaxMantissa, state.MaxExponent, sendMax.Currency, sendMax.Issuer)
-		if destLow {
-			saved := rs.LowLimit
-			savedLimit = &saved
-			rs.LowLimit = bigLimit
-		} else {
-			saved := rs.HighLimit
-			savedLimit = &saved
-			rs.HighLimit = bigLimit
-		}
+	var savedLimit state.Amount
+	bigLimit := state.NewIssuedAmountFromValue(state.MaxMantissa, state.MaxExponent, sendMax.Currency, sendMax.Issuer)
+	if destLow {
+		savedLimit = rs.LowLimit
+		rs.LowLimit = bigLimit
+	} else {
+		savedLimit = rs.HighLimit
+		rs.HighLimit = bigLimit
+	}
 
-		updatedData, err := state.SerializeRippleState(rs)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if err := ctx.View.Update(trustLineKey, updatedData); err != nil {
-			return ter.TefINTERNAL
-		}
+	updatedData, err := state.SerializeRippleState(rs)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if err := ctx.View.Update(trustLineKey, updatedData); err != nil {
+		return ter.TefINTERNAL
 	}
 
 	// Determine flow parameters
@@ -791,10 +792,8 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	if flowResult != ter.TesSUCCESS && flowResult != ter.TecPATH_PARTIAL {
 		ctx.Log.Warn("check cash: flow failed", "result", flowResult)
 		// Restore the trust line limit before returning
-		if savedLimit != nil {
-			if result := restoreTrustLineLimit(ctx, accountID, issuerID, sendMax.Currency, destLow, *savedLimit); result != ter.TesSUCCESS {
-				return result
-			}
+		if result := restoreTrustLineLimit(ctx, trustLineAccountID, issuerID, sendMax.Currency, destLow, savedLimit); result != ter.TesSUCCESS {
+			return result
 		}
 		return flowResult
 	}
@@ -806,10 +805,8 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		if actualOutAmount.Compare(requestedAmount) < 0 {
 			ctx.Log.Warn("check cash: flow did not produce DeliverMin", "actual", actualOutAmount, "deliverMin", requestedAmount)
 			// Restore the trust line limit before returning
-			if savedLimit != nil {
-				if result := restoreTrustLineLimit(ctx, accountID, issuerID, sendMax.Currency, destLow, *savedLimit); result != ter.TesSUCCESS {
-					return result
-				}
+			if result := restoreTrustLineLimit(ctx, trustLineAccountID, issuerID, sendMax.Currency, destLow, savedLimit); result != ter.TesSUCCESS {
+				return result
 			}
 			return ter.TecPATH_PARTIAL
 		}
@@ -818,10 +815,8 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	// For exact Amount, flow must have succeeded
 	if !isDeliverMin && flowResult != ter.TesSUCCESS {
 		// Restore the trust line limit before returning
-		if savedLimit != nil {
-			if result := restoreTrustLineLimit(ctx, accountID, issuerID, sendMax.Currency, destLow, *savedLimit); result != ter.TesSUCCESS {
-				return result
-			}
+		if result := restoreTrustLineLimit(ctx, trustLineAccountID, issuerID, sendMax.Currency, destLow, savedLimit); result != ter.TesSUCCESS {
+			return result
 		}
 		return ter.TecPATH_PARTIAL
 	}
@@ -837,10 +832,8 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	// The flow engine may have modified the balance, but we need to
 	// restore the original limit that was tweaked.
 	// Reference: CashCheck.cpp scope_exit at L426-429
-	if savedLimit != nil {
-		if result := restoreTrustLineLimit(ctx, accountID, issuerID, sendMax.Currency, destLow, *savedLimit); result != ter.TesSUCCESS {
-			return result
-		}
+	if result := restoreTrustLineLimit(ctx, trustLineAccountID, issuerID, sendMax.Currency, destLow, savedLimit); result != ter.TesSUCCESS {
+		return result
 	}
 
 	// Set the delivered amount metadata in all cases, not just for DeliverMin.
@@ -939,8 +932,8 @@ func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte
 
 // restoreTrustLineLimit restores the original trust line limit after flow.
 // Reference: CashCheck.cpp scope_exit at L426-429
-func restoreTrustLineLimit(ctx *tx.ApplyContext, destID, issuerID [20]byte, currency string, destLow bool, savedLimit state.Amount) ter.Result {
-	trustLineKey := keylet.Line(destID, issuerID, currency)
+func restoreTrustLineLimit(ctx *tx.ApplyContext, lineAccountID, issuerID [20]byte, currency string, destLow bool, savedLimit state.Amount) ter.Result {
+	trustLineKey := keylet.Line(lineAccountID, issuerID, currency)
 	trustLineData, err := ctx.View.Read(trustLineKey)
 	if err != nil {
 		return ter.TefINTERNAL

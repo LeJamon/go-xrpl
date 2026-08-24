@@ -38,6 +38,56 @@ func TestCheckCashExactAmountSkipsRestoreWhenFlowDeletesTrustLine(t *testing.T) 
 	})
 }
 
+func TestCheckCashToIssuerTweaksSourceTrustLine(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	issuer := jtx.NewAccount("check-cash-line-issuer")
+	source := jtx.NewAccount("check-cash-line-casher")
+	require.Greater(t, state.CompareAccountIDs(source.ID, issuer.ID), 0)
+	env.Fund(issuer, source)
+	env.Close()
+
+	xrp := tx.NewXRPAmount(10_000)
+	issuerUSD := tx.NewIssuedAmountFromFloat64(900, "USD", issuer.Address)
+	jtx.RequireTxSuccess(t, env.Submit(offer.OfferCreate(source, issuerUSD, xrp).Build()))
+	env.Close()
+	jtx.RequireTxSuccess(t, env.Submit(offer.OfferCreate(issuer, xrp, issuerUSD).Build()))
+	env.Close()
+
+	lineKey := keylet.Line(source.ID, issuer.ID, "USD")
+	jtx.RequireLedgerEntryExists(t, env, lineKey)
+	jtx.RequireIOUBalance(t, env, source, issuer, "USD", 900)
+	jtx.RequireOwnerDirectoryContains(t, env, source, lineKey.Key, true)
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, lineKey.Key, true)
+	jtx.RequireOwnerCount(t, env, source, 1)
+	jtx.RequireOwnerCount(t, env, issuer, 0)
+
+	checkSequence := env.Seq(source)
+	checkKey := keylet.Check(source.ID, checkSequence)
+	checkID := strings.ToUpper(hex.EncodeToString(checkKey.Key[:]))
+	jtx.RequireTxSuccess(t, env.Submit(checkbuilder.CheckCreate(source, issuer, issuerUSD).Build()))
+	env.Close()
+	jtx.RequireOwnerCount(t, env, source, 2)
+
+	result := env.Submit(checkbuilder.CheckCashAmount(issuer, checkID, issuerUSD).Build())
+	jtx.RequireTxSuccess(t, result)
+	requireDeliveredAmount(t, result, issuerUSD)
+
+	deletedLine := requireDeletedLedgerNode(t, result, "RippleState", lineKey)
+	limit, ok := deletedLine.FinalFields["HighLimit"].(map[string]any)
+	require.True(t, ok, "HighLimit must be an issued amount")
+	require.Equal(t, "9999999999999999e80", limit["value"])
+	require.Equal(t, "USD", limit["currency"])
+	require.Equal(t, issuer.Address, limit["issuer"])
+	jtx.RequireLedgerEntryNotExists(t, env, checkKey)
+	jtx.RequireLedgerEntryNotExists(t, env, lineKey)
+	jtx.RequireOwnerDirectoryContains(t, env, source, checkKey.Key, false)
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, checkKey.Key, false)
+	jtx.RequireOwnerDirectoryContains(t, env, source, lineKey.Key, false)
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, lineKey.Key, false)
+	jtx.RequireOwnerCount(t, env, source, 0)
+	jtx.RequireOwnerCount(t, env, issuer, 0)
+}
+
 func testCheckCashFlowDeletedLine(t *testing.T, issuerSeed, casherSeed, limitField, metadataSHA, expectedStateRoot, txRoot string) {
 	t.Helper()
 	env := jtx.NewTestEnv(t)
