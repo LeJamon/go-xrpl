@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending/lmath"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
@@ -115,7 +116,13 @@ func (l *LoanSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 	if r := tx.AssetFrozen(view, vinfo.Account, asset); r != ter.TesSUCCESS {
 		return r
 	}
+	if r := mptutil.CheckDeepFrozen(view, b.Account, asset); r != ter.TesSUCCESS {
+		return r
+	}
 	if r := tx.AssetFrozen(view, borrower, asset); r != ter.TesSUCCESS {
+		return r
+	}
+	if r := mptutil.CheckDeepFrozen(view, b.Owner, asset); r != ter.TesSUCCESS {
 		return r
 	}
 	return ter.TesSUCCESS

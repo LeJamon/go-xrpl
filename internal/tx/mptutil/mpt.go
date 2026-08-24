@@ -250,7 +250,7 @@ func CheckWithdrawFreeze(view state.LedgerView, pseudoAcct, submitterAcct, dstAc
 			return result
 		}
 	}
-	if result := checkDeepFrozen(view, dstAcct, asset); result != ter.TesSUCCESS {
+	if result := CheckDeepFrozen(view, dstAcct, asset); result != ter.TesSUCCESS {
 		return result
 	}
 	return checkPseudoAccountBackingFreeze(view, pseudoAcct, asset)
@@ -319,7 +319,11 @@ func checkIndividualFrozen(view state.LedgerView, account [20]byte, asset tx.Ass
 	return ter.TesSUCCESS
 }
 
-func checkDeepFrozen(view state.LedgerView, account [20]byte, asset tx.Asset) ter.Result {
+// CheckDeepFrozen returns whether an account is unable to receive an asset.
+func CheckDeepFrozen(view state.LedgerView, account [20]byte, asset tx.Asset) ter.Result {
+	if asset.IsNative() {
+		return ter.TesSUCCESS
+	}
 	if asset.IsMPT() {
 		id, err := DecodeID(asset.MPTIssuanceID)
 		if err != nil {
