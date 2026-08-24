@@ -264,9 +264,12 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 			withdrawAmount2 = assetBalance2
 		} else {
 			// Proportional withdrawal
-			frac := math.div(math.fromAmount(holdLPTokens), math.fromAmount(lptAMMBalance), state.RoundToNearest)
+			frac := math.stAmountDiv(holdLPTokens, lptAMMBalance)
 			withdrawAmount1 = getRoundedAsset(math, fixV1_3, assetBalance1, frac, false)
 			withdrawAmount2 = getRoundedAsset(math, fixV1_3, assetBalance2, frac, false)
+			if withdrawAmount1.IsZero() || withdrawAmount2.IsZero() {
+				return ter.TecAMM_FAILED
+			}
 		}
 	} else {
 		// Amount specified - calculate proportional withdrawal.
@@ -288,9 +291,12 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 				withdrawAmount1 = assetBalance1
 				withdrawAmount2 = assetBalance2
 			} else {
-				fallbackFrac := math.div(math.fromAmount(holdLPTokens), math.fromAmount(lptAMMBalance), state.RoundToNearest)
+				fallbackFrac := math.stAmountDiv(holdLPTokens, lptAMMBalance)
 				withdrawAmount1 = getRoundedAsset(math, fixV1_3, assetBalance1, fallbackFrac, false)
 				withdrawAmount2 = getRoundedAsset(math, fixV1_3, assetBalance2, fallbackFrac, false)
+				if withdrawAmount1.IsZero() || withdrawAmount2.IsZero() {
+					return ter.TecAMM_FAILED
+				}
 			}
 		} else {
 			// fixAMMClawbackRounding: use rounded tokens and adjusted fractions
