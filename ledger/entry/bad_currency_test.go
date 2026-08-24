@@ -37,8 +37,13 @@ func TestRippleStateDecodeAllowsBinaryBadCurrency(t *testing.T) {
 	if amountOffset < 0 {
 		t.Fatal("badCurrency amount not found")
 	}
-	if _, err := newStreamReader(raw[amountOffset:]).readAmountAny(); err == nil {
-		t.Fatal("generic amount decoder accepted badCurrency")
+	generic, err := newStreamReader(raw[amountOffset:]).readAmountAny()
+	if err != nil {
+		t.Fatalf("generic amount decoder: %v", err)
+	}
+	genericAmount, ok := generic.(map[string]any)
+	if !ok || genericAmount["currency"] != badCurrencyHex {
+		t.Fatalf("generic amount = %#v, want badCurrency", generic)
 	}
 
 	var decoded RippleState
@@ -71,7 +76,11 @@ func TestRippleStateDecodeAllowsBinaryBadCurrency(t *testing.T) {
 	fresh.SetBalance(badAmount)
 	fresh.SetLowLimit(badAmount)
 	fresh.SetHighLimit(badAmount)
-	if _, err := fresh.Encode(); err == nil {
-		t.Fatal("fresh RippleState writer accepted badCurrency")
+	freshData, err := fresh.Encode()
+	if err != nil {
+		t.Fatalf("encode fresh badCurrency RippleState: %v", err)
+	}
+	if count := bytes.Count(freshData, badCurrencyBytes); count != 3 {
+		t.Fatalf("fresh badCurrency payload count = %d, want 3", count)
 	}
 }

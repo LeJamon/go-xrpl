@@ -614,13 +614,12 @@ func TestCurrencyCodeEncoding_RippledVectors(t *testing.T) {
 			expectError: true,
 			description: "XRP uppercase is disallowed for IOU",
 		},
-		// XRP hex format is also reserved
 		{
-			name:        "XRP hex reserved",
+			name:        "badCurrency hex",
 			currency:    "0000000000000000000000005852500000000000",
-			expectedHex: "",
-			expectError: true,
-			description: "XRP in hex format is disallowed",
+			expectedHex: "0000000000000000000000005852500000000000",
+			expectError: false,
+			description: "badCurrency retains its raw 160-bit representation",
 		},
 	}
 
