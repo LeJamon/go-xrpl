@@ -58,10 +58,10 @@ func (n XRPLNumber) RoundToAssetScale(integral bool, scale int, mode RoundingMod
 
 // AssetExponent returns the decimal exponent of STAmount{asset, n} under mode,
 // used to derive a loan's scale (rippled computeLoanProperties reads
-// amount.exponent()). Integral assets and zero have exponent 0; an IOU reports
-// the exponent of its 16-significant-digit normalization.
+// amount.exponent()). Integral assets have exponent 0; an IOU reports the
+// exponent of its 16-significant-digit normalization, including -100 for zero.
 func (n XRPLNumber) AssetExponent(integral bool, mode RoundingMode) int {
-	if n.IsZero() || integral {
+	if integral {
 		return 0
 	}
 	return newIOUAmountValueRoundedWithContext(

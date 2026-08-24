@@ -74,12 +74,16 @@ func TestCanApplyToBrokerCover(t *testing.T) {
 			}
 		})
 	}
+	if got := canApplyToBrokerCover(true, lmath.Zero(), lmath.Num(1, -15), false); got != ter.TesSUCCESS {
+		t.Fatalf("initial tiny IOU cover = %v, want tesSUCCESS", got)
+	}
 }
 
 func TestRoundCoverDeposit(t *testing.T) {
 	cover := lmath.Num(1000000, 0) // IOU, scale -9
 	dust := lmath.Num(5, -12)
 	amt := lmath.Num(25, -1) // 2.5, representable at scale -9
+	tiny := lmath.Num(1, -15)
 
 	// Disabled: amount passes through untouched.
 	if got, res := roundCoverDeposit(false, cover, dust, false); res != ter.TesSUCCESS || !got.Equal(dust) {
@@ -92,6 +96,11 @@ func TestRoundCoverDeposit(t *testing.T) {
 	// Enabled: representable amount is quantized down and preserved.
 	if got, res := roundCoverDeposit(true, cover, amt, false); res != ter.TesSUCCESS || !got.Equal(amt) {
 		t.Fatalf("enabled roundCoverDeposit = (%s,%v), want (2.5,tes)", numStr(got), res)
+	}
+	// An empty IOU cover field has STAmount's canonical zero scale and accepts
+	// every representable positive IOU amount.
+	if got, res := roundCoverDeposit(true, lmath.Zero(), tiny, false); res != ter.TesSUCCESS || !got.Equal(tiny) {
+		t.Fatalf("enabled initial tiny deposit = (%s,%v), want (%s,tes)", numStr(got), res, numStr(tiny))
 	}
 	// Integral: deposit is unchanged (whole units already representable).
 	if got, res := roundCoverDeposit(true, lmath.FromDrops(1000), lmath.FromDrops(7), true); res != ter.TesSUCCESS || !got.Equal(lmath.FromDrops(7)) {

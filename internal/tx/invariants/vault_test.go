@@ -342,6 +342,9 @@ func TestVaultMinScale_AmendmentGate(t *testing.T) {
 	iou := vvAsset{currency: "USD", issuer: [20]byte{1}}
 	afterIOU := vvVault{asset: iou, assetsTotal: state.NewXRPLNumber(1000000, 0)}
 	iouDelta := iou.makeDelta(state.NewXRPLNumber(0, 0), state.NewXRPLNumber(25, -1))
+	if want := iou.scaleOf(state.NewXRPLNumber(25, -1)); iouDelta.scale != want {
+		t.Fatalf("zero-to-nonzero IOU delta scale = %d, want %d", iouDelta.scale, want)
+	}
 
 	on := (&vvChecker{rules: fixOn}).vaultMinScale(iou, afterIOU, iouDelta)
 	off := (&vvChecker{rules: fixOff}).vaultMinScale(iou, afterIOU, iouDelta)
