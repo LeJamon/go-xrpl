@@ -180,15 +180,10 @@ func TestDecide_LostMajorityFiresEvenForAbstain(t *testing.T) {
 	assert.Equal(t, TfLostMajority, got[0].Flags)
 }
 
-// TestDecide_UnknownAmendmentInMajorityIgnored pins C3: when Known is
-// supplied, an amendment recorded in the parent ledger's sfMajorities
-// (in.Majority) but absent from Known — one this server doesn't
-// recognize, e.g. a newer protocol amendment — must NEVER emit a
-// pseudo-tx, even with lost validator support. Rippled's doVoting walks
-// only amendmentMap_ (Table.cpp:875), so it emits nothing for
-// such an amendment; emitting a spurious LostMajority would fork the
-// flag-ledger tx set from the rest of the network.
-func TestDecide_UnknownAmendmentInMajorityIgnored(t *testing.T) {
+// TestDecide_AmendmentOutsideWalkDomainIgnored verifies that Known is the
+// authoritative walk domain. Production callers include majority-only
+// amendments in Known so they can emit LostMajority.
+func TestDecide_AmendmentOutsideWalkDomainIgnored(t *testing.T) {
 	known := makeAmendment(0x01)
 	unknown := makeAmendment(0x02) // recorded on the ledger, but not compiled in
 	in := Inputs{
@@ -202,8 +197,7 @@ func TestDecide_UnknownAmendmentInMajorityIgnored(t *testing.T) {
 		Known:              map[Amendment]bool{known: true},
 	}
 	got := Decide(in)
-	assert.Empty(t, got,
-		"an amendment absent from Known must never emit a pseudo-tx, even with ledger majority + lost support")
+	assert.Empty(t, got, "an amendment absent from Known must not emit a pseudo-tx")
 }
 
 // TestDecide_KnownAbstainAmendmentLostMajorityFires is the companion to

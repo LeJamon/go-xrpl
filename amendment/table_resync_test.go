@@ -4,7 +4,10 @@
 
 package amendment
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // unknownAmendment is a hash not present in the registry.
 var unknownAmendment = [32]byte{0xDE, 0xAD, 0xBE, 0xEF}
@@ -54,6 +57,14 @@ func TestDoValidatedLedger_EnablesAndBlocks(t *testing.T) {
 	}
 }
 
+func TestDoValidatedLedger_IgnoresFalseEntries(t *testing.T) {
+	tbl := NewTable()
+	tbl.DoValidatedLedger(256, map[[32]byte]bool{FeatureDID: false}, nil)
+	if tbl.IsEnabled(FeatureDID) {
+		t.Fatal("false entry in enabled set activated an amendment")
+	}
+}
+
 func TestDoValidatedLedger_FirstUnsupportedExpected(t *testing.T) {
 	tbl := NewTable()
 
@@ -68,7 +79,7 @@ func TestDoValidatedLedger_FirstUnsupportedExpected(t *testing.T) {
 	if !ok {
 		t.Fatal("expected firstUnsupportedExpected to be set for an unsupported majority")
 	}
-	if want := unsupportedMajorityTime + majorityTimeSeconds; exp != want {
+	if want := unsupportedMajorityTime + uint32(DefaultMajorityTime/time.Second); exp != want {
 		t.Fatalf("firstUnsupportedExpected = %d, want %d (majority time + 14d)", exp, want)
 	}
 	if tbl.IsBlocked() {
@@ -83,6 +94,17 @@ func TestDoValidatedLedger_FirstUnsupportedExpected(t *testing.T) {
 	}
 	if !tbl.IsBlocked() {
 		t.Fatal("node must be blocked after the unsupported amendment activates")
+	}
+}
+
+func TestDoValidatedLedger_ConfiguredMajorityTime(t *testing.T) {
+	tbl := NewTableWithMajorityTime(15 * time.Minute)
+	const majorityClose uint32 = 1_000_000
+	tbl.DoValidatedLedger(256, nil, map[[32]byte]uint32{unknownAmendment: majorityClose})
+
+	got, ok := tbl.FirstUnsupportedExpected()
+	if !ok || got != majorityClose+15*60 {
+		t.Fatalf("FirstUnsupportedExpected() = (%d, %t), want (%d, true)", got, ok, majorityClose+15*60)
 	}
 }
 

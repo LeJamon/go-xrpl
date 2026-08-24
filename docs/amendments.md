@@ -4,120 +4,121 @@
 
 XRPL amendments known to this node, generated from the amendment registry
 (`amendment`). **Supported** means this implementation can apply the
-amendment's behavior; **Default vote** is whether the node votes for it by
-default (operators override via the `[amendments]` config section).
+amendment's behavior; it does not mean the amendment is enabled on a ledger.
+Operators may override default yes/no voting for supported amendments, but
+obsolete and retired amendments are never proposed.
 
 Total: 110 amendments.
 
-| Amendment | Supported | Default vote |
-|-----------|-----------|--------------|
-| `AMM` | yes | no |
-| `AMMClawback` | yes | no |
-| `BatchV1_1` | yes | no |
-| `CheckCashMakesTrustLine` | yes | no |
-| `Checks` | yes | no |
-| `Clawback` | yes | no |
-| `ConfidentialTransfer` | no | no |
-| `Credentials` | yes | no |
-| `CryptoConditions` | yes | no |
-| `CryptoConditionsSuite` | yes | no |
-| `DID` | yes | no |
-| `DeepFreeze` | yes | no |
-| `DeletableAccounts` | yes | no |
-| `DepositAuth` | yes | no |
-| `DepositPreauth` | yes | no |
-| `DisallowIncoming` | yes | no |
-| `DynamicMPT` | yes | no |
-| `DynamicNFT` | yes | no |
-| `EnforceInvariants` | yes | no |
-| `Escrow` | yes | no |
-| `ExpandedSignerList` | yes | no |
-| `FeeEscalation` | yes | no |
-| `Flow` | yes | no |
-| `FlowCross` | yes | no |
-| `FlowSortStrands` | yes | no |
-| `HardenedValidations` | yes | no |
-| `ImmediateOfferKilled` | yes | no |
-| `InvariantsV1_1` | no | no |
-| `LendingProtocol` | yes | no |
-| `LendingProtocolV1_1` | no | no |
-| `MPTokensV1` | yes | no |
-| `MPTokensV2` | no | no |
-| `MultiSign` | yes | no |
-| `MultiSignReserve` | yes | no |
-| `NFTokenMintOffer` | yes | no |
-| `NegativeUNL` | yes | no |
-| `NonFungibleTokensV1` | yes | no |
-| `NonFungibleTokensV1_1` | yes | no |
-| `PayChan` | yes | no |
-| `PermissionDelegationV1_1` | yes | no |
-| `PermissionedDEX` | yes | no |
-| `PermissionedDomains` | yes | no |
-| `PriceOracle` | yes | no |
-| `RequireFullyCanonicalSig` | yes | no |
-| `SingleAssetVault` | yes | no |
-| `SortedDirectories` | yes | no |
-| `Sponsor` | yes | no |
-| `TickSize` | yes | no |
-| `TicketBatch` | yes | no |
-| `TokenEscrow` | yes | no |
-| `TrustSetAuth` | yes | no |
-| `XChainBridge` | no | no |
-| `XRPFees` | yes | no |
-| `fix1201` | yes | no |
-| `fix1368` | yes | no |
-| `fix1373` | yes | no |
-| `fix1512` | yes | no |
-| `fix1513` | yes | no |
-| `fix1515` | yes | no |
-| `fix1523` | yes | no |
-| `fix1528` | yes | no |
-| `fix1543` | yes | no |
-| `fix1571` | yes | no |
-| `fix1578` | yes | no |
-| `fix1623` | yes | no |
-| `fix1781` | yes | no |
-| `fixAMMClawbackRounding` | yes | no |
-| `fixAMMOverflowOffer` | yes | yes |
-| `fixAMMv1_1` | yes | no |
-| `fixAMMv1_2` | yes | no |
-| `fixAMMv1_3` | yes | no |
-| `fixAmendmentMajorityCalc` | yes | no |
-| `fixCheckThreading` | yes | no |
-| `fixCleanup3_1_3` | yes | yes |
-| `fixCleanup3_2_0` | yes | no |
-| `fixCleanup3_3_0` | yes | no |
-| `fixDirectoryLimit` | yes | no |
-| `fixDisallowIncomingV1` | yes | no |
-| `fixEmptyDID` | yes | no |
-| `fixEnforceNFTokenTrustline` | yes | no |
-| `fixEnforceNFTokenTrustlineV2` | yes | no |
-| `fixFillOrKill` | yes | no |
-| `fixFrozenLPTokenTransfer` | yes | no |
-| `fixIncludeKeyletFields` | yes | no |
-| `fixInnerObjTemplate` | yes | no |
-| `fixInnerObjTemplate2` | yes | no |
-| `fixInvalidTxFlags` | yes | no |
-| `fixMPTDeliveredAmount` | yes | no |
-| `fixMasterKeyAsRegularKey` | yes | no |
-| `fixNFTokenDirV1` | yes | no |
-| `fixNFTokenNegOffer` | yes | no |
-| `fixNFTokenPageLinks` | yes | no |
-| `fixNFTokenRemint` | yes | no |
-| `fixNFTokenReserve` | yes | no |
-| `fixNonFungibleTokensV1_2` | yes | no |
-| `fixPayChanCancelAfter` | yes | no |
-| `fixPayChanRecipientOwnerDir` | yes | no |
-| `fixPreviousTxnID` | yes | no |
-| `fixPriceOracleOrder` | yes | no |
-| `fixQualityUpperBound` | yes | no |
-| `fixReducedOffersV1` | yes | no |
-| `fixReducedOffersV2` | yes | no |
-| `fixRemoveNFTokenAutoTrustLine` | yes | yes |
-| `fixRmSmallIncreasedQOffers` | yes | no |
-| `fixSTAmountCanonicalize` | yes | no |
-| `fixTakerDryOfferRemoval` | yes | no |
-| `fixTokenEscrowV1` | yes | no |
-| `fixTrustLinesToSelf` | yes | no |
-| `fixUniversalNumber` | yes | no |
-| `fixXChainRewardRounding` | yes | no |
+| Amendment | Supported | Vote behavior | Lifecycle |
+|-----------|-----------|---------------|-----------|
+| `AMM` | yes | default no | active |
+| `AMMClawback` | yes | default no | active |
+| `BatchV1_1` | yes | default no | active |
+| `CheckCashMakesTrustLine` | yes | obsolete | retired |
+| `Checks` | yes | obsolete | retired |
+| `Clawback` | yes | obsolete | retired |
+| `ConfidentialTransfer` | no | default no | active |
+| `Credentials` | yes | default no | active |
+| `CryptoConditions` | yes | obsolete | retired |
+| `CryptoConditionsSuite` | yes | obsolete | retired |
+| `DID` | yes | default no | active |
+| `DeepFreeze` | yes | default no | active |
+| `DeletableAccounts` | yes | obsolete | retired |
+| `DepositAuth` | yes | obsolete | retired |
+| `DepositPreauth` | yes | obsolete | retired |
+| `DisallowIncoming` | yes | obsolete | retired |
+| `DynamicMPT` | yes | default no | active |
+| `DynamicNFT` | yes | default no | active |
+| `EnforceInvariants` | yes | obsolete | retired |
+| `Escrow` | yes | obsolete | retired |
+| `ExpandedSignerList` | yes | obsolete | retired |
+| `FeeEscalation` | yes | obsolete | retired |
+| `Flow` | yes | obsolete | retired |
+| `FlowCross` | yes | obsolete | retired |
+| `FlowSortStrands` | yes | obsolete | retired |
+| `HardenedValidations` | yes | obsolete | retired |
+| `ImmediateOfferKilled` | yes | obsolete | retired |
+| `InvariantsV1_1` | no | default no | active |
+| `LendingProtocol` | yes | default no | active |
+| `LendingProtocolV1_1` | no | default no | active |
+| `MPTokensV1` | yes | default no | active |
+| `MPTokensV2` | no | default no | active |
+| `MultiSign` | yes | obsolete | retired |
+| `MultiSignReserve` | yes | obsolete | retired |
+| `NFTokenMintOffer` | yes | default no | active |
+| `NegativeUNL` | yes | obsolete | retired |
+| `NonFungibleTokensV1` | yes | obsolete | obsolete |
+| `NonFungibleTokensV1_1` | yes | obsolete | retired |
+| `PayChan` | yes | obsolete | retired |
+| `PermissionDelegationV1_1` | yes | default no | active |
+| `PermissionedDEX` | yes | default no | active |
+| `PermissionedDomains` | yes | default no | active |
+| `PriceOracle` | yes | default no | active |
+| `RequireFullyCanonicalSig` | yes | obsolete | retired |
+| `SingleAssetVault` | yes | default no | active |
+| `SortedDirectories` | yes | obsolete | retired |
+| `Sponsor` | yes | default no | active |
+| `TickSize` | yes | obsolete | retired |
+| `TicketBatch` | yes | obsolete | retired |
+| `TokenEscrow` | yes | default no | active |
+| `TrustSetAuth` | yes | obsolete | retired |
+| `XChainBridge` | no | default no | active |
+| `XRPFees` | yes | default no | active |
+| `fix1201` | yes | obsolete | retired |
+| `fix1368` | yes | obsolete | retired |
+| `fix1373` | yes | obsolete | retired |
+| `fix1512` | yes | obsolete | retired |
+| `fix1513` | yes | obsolete | retired |
+| `fix1515` | yes | obsolete | retired |
+| `fix1523` | yes | obsolete | retired |
+| `fix1528` | yes | obsolete | retired |
+| `fix1543` | yes | obsolete | retired |
+| `fix1571` | yes | obsolete | retired |
+| `fix1578` | yes | obsolete | retired |
+| `fix1623` | yes | obsolete | retired |
+| `fix1781` | yes | obsolete | retired |
+| `fixAMMClawbackRounding` | yes | default no | active |
+| `fixAMMOverflowOffer` | yes | default yes | active |
+| `fixAMMv1_1` | yes | default no | active |
+| `fixAMMv1_2` | yes | default no | active |
+| `fixAMMv1_3` | yes | default no | active |
+| `fixAmendmentMajorityCalc` | yes | obsolete | retired |
+| `fixCheckThreading` | yes | obsolete | retired |
+| `fixCleanup3_1_3` | yes | default yes | active |
+| `fixCleanup3_2_0` | yes | default no | active |
+| `fixCleanup3_3_0` | yes | default no | active |
+| `fixDirectoryLimit` | yes | default no | active |
+| `fixDisallowIncomingV1` | yes | obsolete | retired |
+| `fixEmptyDID` | yes | default no | active |
+| `fixEnforceNFTokenTrustline` | yes | default no | active |
+| `fixEnforceNFTokenTrustlineV2` | yes | default no | active |
+| `fixFillOrKill` | yes | default no | active |
+| `fixFrozenLPTokenTransfer` | yes | default no | active |
+| `fixIncludeKeyletFields` | yes | default no | active |
+| `fixInnerObjTemplate` | yes | obsolete | retired |
+| `fixInnerObjTemplate2` | yes | default no | active |
+| `fixInvalidTxFlags` | yes | default no | active |
+| `fixMPTDeliveredAmount` | yes | default no | active |
+| `fixMasterKeyAsRegularKey` | yes | obsolete | retired |
+| `fixNFTokenDirV1` | yes | obsolete | obsolete |
+| `fixNFTokenNegOffer` | yes | obsolete | obsolete |
+| `fixNFTokenPageLinks` | yes | default no | active |
+| `fixNFTokenRemint` | yes | obsolete | retired |
+| `fixNFTokenReserve` | yes | obsolete | retired |
+| `fixNonFungibleTokensV1_2` | yes | obsolete | retired |
+| `fixPayChanCancelAfter` | yes | default no | active |
+| `fixPayChanRecipientOwnerDir` | yes | obsolete | retired |
+| `fixPreviousTxnID` | yes | default no | active |
+| `fixPriceOracleOrder` | yes | default no | active |
+| `fixQualityUpperBound` | yes | obsolete | retired |
+| `fixReducedOffersV1` | yes | obsolete | retired |
+| `fixReducedOffersV2` | yes | default no | active |
+| `fixRemoveNFTokenAutoTrustLine` | yes | default yes | active |
+| `fixRmSmallIncreasedQOffers` | yes | obsolete | retired |
+| `fixSTAmountCanonicalize` | yes | obsolete | retired |
+| `fixTakerDryOfferRemoval` | yes | obsolete | retired |
+| `fixTokenEscrowV1` | yes | default no | active |
+| `fixTrustLinesToSelf` | yes | obsolete | retired |
+| `fixUniversalNumber` | yes | obsolete | retired |
+| `fixXChainRewardRounding` | yes | default no | active |

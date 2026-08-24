@@ -52,6 +52,29 @@ func yesNo(v bool) string {
 	return "no"
 }
 
+func amendmentVote(v amendment.VoteBehavior) string {
+	switch v {
+	case amendment.VoteDefaultNo:
+		return "default no"
+	case amendment.VoteDefaultYes:
+		return "default yes"
+	case amendment.VoteObsolete:
+		return "obsolete"
+	default:
+		return "unknown"
+	}
+}
+
+func amendmentLifecycle(f *amendment.Feature) string {
+	if f.Retired {
+		return "retired"
+	}
+	if f.IsObsolete() {
+		return "obsolete"
+	}
+	return "active"
+}
+
 func writeAmendments() error {
 	feats := amendment.AllFeatures()
 	sort.Slice(feats, func(i, j int) bool { return feats[i].Name < feats[j].Name })
@@ -61,13 +84,14 @@ func writeAmendments() error {
 	b.WriteString("# Amendments\n\n")
 	b.WriteString("XRPL amendments known to this node, generated from the amendment registry\n")
 	b.WriteString("(`amendment`). **Supported** means this implementation can apply the\n")
-	b.WriteString("amendment's behavior; **Default vote** is whether the node votes for it by\n")
-	b.WriteString("default (operators override via the `[amendments]` config section).\n\n")
+	b.WriteString("amendment's behavior; it does not mean the amendment is enabled on a ledger.\n")
+	b.WriteString("Operators may override default yes/no voting for supported amendments, but\n")
+	b.WriteString("obsolete and retired amendments are never proposed.\n\n")
 	fmt.Fprintf(&b, "Total: %d amendments.\n\n", len(feats))
-	b.WriteString("| Amendment | Supported | Default vote |\n")
-	b.WriteString("|-----------|-----------|--------------|\n")
+	b.WriteString("| Amendment | Supported | Vote behavior | Lifecycle |\n")
+	b.WriteString("|-----------|-----------|---------------|-----------|\n")
 	for _, f := range feats {
-		fmt.Fprintf(&b, "| `%s` | %s | %s |\n", f.Name, yesNo(f.IsSupported()), yesNo(f.IsDefaultYes()))
+		fmt.Fprintf(&b, "| `%s` | %s | %s | %s |\n", f.Name, yesNo(f.IsSupported()), amendmentVote(f.Vote), amendmentLifecycle(f))
 	}
 	return os.WriteFile("docs/amendments.md", []byte(b.String()), 0o644) //nolint:gosec // G306: generated docs artifact, world-readable by intent
 }

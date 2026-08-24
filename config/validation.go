@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -64,6 +65,9 @@ func ValidateConfig(config *Config) error {
 	}
 	if err := config.Amendments.Validate(); err != nil {
 		errs = append(errs, fmt.Errorf("amendments: %w", err))
+	}
+	if config.AmendmentMajorityTime != 0 && config.AmendmentMajorityTime < 15*time.Minute {
+		errs = append(errs, errors.New("amendment_majority_time must be at least 15m"))
 	}
 
 	// 8. Validate misc settings

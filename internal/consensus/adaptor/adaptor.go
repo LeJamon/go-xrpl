@@ -122,7 +122,8 @@ type Adaptor struct {
 	// sources vote stances from each round (so operator veto/upvote changes
 	// take effect without restart) and stashes per-round tallies into. nil
 	// falls back to the construction-time amendmentStances map.
-	amendmentTable *amendment.Table
+	amendmentTable        *amendment.Table
+	amendmentMajorityTime time.Duration
 
 	// trustedVotes caches per-validator amendment votes for 24h to dampen
 	// flapping when a flaky validator drops briefly.
@@ -296,6 +297,9 @@ type Config struct {
 	// abstain, upvoted → up) over registry defaults. Shared with the ledger
 	// service, which folds validated flag ledgers in via DoValidatedLedger.
 	Table *amendment.Table
+	// AmendmentMajorityTime is how long majority must hold before activation.
+	// Zero uses amendment.DefaultMajorityTime.
+	AmendmentMajorityTime time.Duration
 	// RelayValidations is the operator's [relay_validations] stance; the
 	// zero value relays untrusted validations (rippled's default).
 	RelayValidations RelayValidationsPolicy
@@ -364,6 +368,10 @@ func New(cfg Config) *Adaptor {
 
 	logger := slog.Default().With("component", "consensus-adaptor")
 	amendmentStances := seedAmendmentStances(cfg.AmendmentVote, logger)
+	amendmentMajorityTime := cfg.AmendmentMajorityTime
+	if amendmentMajorityTime <= 0 {
+		amendmentMajorityTime = amendment.DefaultMajorityTime
+	}
 
 	// Seed the amendment-vote cache with the initial UNL so
 	// recordVotes accepts validations from round one. Re-call
@@ -413,29 +421,30 @@ func New(cfg Config) *Adaptor {
 	}
 
 	a := &Adaptor{
-		ledgerService:     cfg.LedgerService,
-		txLookup:          txLookup,
-		sender:            sender,
-		identity:          cfg.Identity,
-		trustedValidators: cfg.Validators,
-		trustedSet:        trustedSet,
-		trustedMasterKeys: trustedMasterKeys,
-		operatingMode:     consensus.OpModeDisconnected,
-		stateAcct:         newStateAccounting(consensus.OpModeDisconnected, time.Now),
-		negUNLVoter:       negUNLVoter,
-		txSetCache:        newTxSetCache(),
-		peerLCLs:          make(map[uint64]consensus.LedgerID),
-		reqLedgerLast:     make(map[consensus.LedgerID]time.Time),
-		announcedSets:     make(map[consensus.TxSetID]struct{}),
-		onTxSetBuilt:      cfg.OnTxSetBuilt,
-		maxDisallowedSeq:  maxDisallowedSeq,
-		cookie:            cookie,
-		feeVote:           feeVote,
-		amendmentStances:  amendmentStances,
-		amendmentTable:    cfg.Table,
-		trustedVotes:      trustedVotes,
-		relayValidations:  cfg.RelayValidations,
-		logger:            logger,
+		ledgerService:         cfg.LedgerService,
+		txLookup:              txLookup,
+		sender:                sender,
+		identity:              cfg.Identity,
+		trustedValidators:     cfg.Validators,
+		trustedSet:            trustedSet,
+		trustedMasterKeys:     trustedMasterKeys,
+		operatingMode:         consensus.OpModeDisconnected,
+		stateAcct:             newStateAccounting(consensus.OpModeDisconnected, time.Now),
+		negUNLVoter:           negUNLVoter,
+		txSetCache:            newTxSetCache(),
+		peerLCLs:              make(map[uint64]consensus.LedgerID),
+		reqLedgerLast:         make(map[consensus.LedgerID]time.Time),
+		announcedSets:         make(map[consensus.TxSetID]struct{}),
+		onTxSetBuilt:          cfg.OnTxSetBuilt,
+		maxDisallowedSeq:      maxDisallowedSeq,
+		cookie:                cookie,
+		feeVote:               feeVote,
+		amendmentStances:      amendmentStances,
+		amendmentTable:        cfg.Table,
+		amendmentMajorityTime: amendmentMajorityTime,
+		trustedVotes:          trustedVotes,
+		relayValidations:      cfg.RelayValidations,
+		logger:                logger,
 	}
 	if cfg.LedgerService != nil {
 		cfg.LedgerService.SetValidatedLedgerAgeClock(a.Now)

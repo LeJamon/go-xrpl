@@ -428,6 +428,33 @@ func TestGenerateFlagLedgerPseudoTxs_UnsupportedAmendmentNotWalked(t *testing.T)
 	}
 }
 
+func TestRunAmendmentVote_MajorityOnlyAmendmentCanLoseMajority(t *testing.T) {
+	a := newTestAdaptorWithConfig(t, FeeVoteStance{}, nil)
+	prev := a.ledgerService.GetClosedLedger()
+	require.NotNil(t, prev)
+	target := amendment.FeatureID("unknown-majority-amendment")
+
+	blobs := a.runAmendmentVote(
+		prev,
+		prev.Sequence()+1,
+		nil,
+		map[[32]byte]bool{},
+		map[[32]byte]time.Time{target: time.Unix(1_000_000, 0)},
+	)
+
+	var found bool
+	for _, blob := range blobs {
+		stx := decodeTx(t, blob)
+		if stx["TransactionType"] == "EnableAmendment" &&
+			stringFold(stx["Amendment"]) == hex.EncodeToString(target[:]) &&
+			asUint(stx["Flags"]) == uint64(amendmentvote.TfLostMajority) {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "majority-only amendment must emit LostMajority after validator support disappears")
+}
+
 // TestAmendmentStances_SeededFromRegistry verifies the constructor
 // walks amendment.AllFeatures() and seeds the stance map from each
 // feature's registered VoteBehavior, mirroring rippled's

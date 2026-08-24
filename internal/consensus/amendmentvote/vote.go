@@ -65,10 +65,10 @@ type Inputs struct {
 	// this server's per-amendment stance; absent defaults to VoteAbstain
 	Stances map[Amendment]Stance
 
-	// amendments this server supports — the walk domain for Decide.
-	// Includes DefaultYes/DefaultNo/Obsolete but not unsupported, so a
-	// supported-but-down amendment can still emit LostMajority. Nil walks
-	// the union of Stances/Votes/Majority (test-only; inputs assumed known).
+	// amendments tracked by this server — the walk domain for Decide. Callers
+	// include supported amendments and every amendment in the ledger majority
+	// set, including unknown amendments that may need LostMajority emitted. Nil
+	// walks the union of Stances, Votes, and Majority.
 	Known map[Amendment]bool
 }
 

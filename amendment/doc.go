@@ -1,11 +1,9 @@
-// Package amendment implements the XRPL amendment system for managing protocol
-// feature activation.
+// Package amendment models XRP Ledger amendment metadata, per-ledger activation
+// rules, and a node's live amendment policy and observed state.
 //
-// Amendments are identified by a 256-bit hash derived from their name. Each
-// amendment has a support status (supported or unsupported by this node) and a
-// voting default (yes or no). The Rules type tracks which amendments are
-// currently enabled on a given ledger, allowing transaction processing code to
-// gate behavior behind feature flags.
-//
-// The amendment registry is derived from rippled's features.macro.
+// Feature values describe the process-wide registry and local capability. Rules
+// is a read-only activation snapshot for one ledger. Table is the concurrent,
+// mutable node state used for operator vote preferences, validated-ledger
+// observations, and amendment-block detection. Support, activation, and voting
+// policy are independent states.
 package amendment

@@ -9,12 +9,12 @@ import (
 	"maps"
 	"sort"
 	"sync"
+	"time"
 )
 
-// majorityTimeSeconds is the duration an amendment must hold majority before it
-// is enabled (14 days). Mirrors rippled's DEFAULT_AMENDMENT_MAJORITY_TIME used
-// to project firstUnsupportedExpected.
-const majorityTimeSeconds uint32 = 14 * 24 * 60 * 60
+// DefaultMajorityTime is how long an amendment must hold majority before it can
+// be enabled when the operator does not configure another duration.
+const DefaultMajorityTime = 14 * 24 * time.Hour
 
 // Table tracks which amendments are enabled and manages voting.
 // This is the central data structure for amendment management in the node.
@@ -29,6 +29,8 @@ type Table struct {
 
 	// upVoted tracks amendments explicitly voted for by the operator
 	upVoted map[[32]byte]bool
+
+	majorityTime time.Duration
 
 	// unsupportedEnabled is set once an amendment this build does not support
 	// becomes enabled. Cached counterpart of HasUnsupportedEnabled.
@@ -69,10 +71,32 @@ type LastVote struct {
 
 // NewTable creates a new Table with no enabled amendments.
 func NewTable() *Table {
+	return NewTableWithMajorityTime(DefaultMajorityTime)
+}
+
+// NewTableWithMajorityTime creates a Table using majorityTime for activation
+// projections. A non-positive duration uses DefaultMajorityTime.
+func NewTableWithMajorityTime(majorityTime time.Duration) *Table {
+	if majorityTime <= 0 {
+		majorityTime = DefaultMajorityTime
+	}
 	return &Table{
-		enabled: make(map[[32]byte]bool),
-		vetoed:  make(map[[32]byte]bool),
-		upVoted: make(map[[32]byte]bool),
+		enabled:      make(map[[32]byte]bool),
+		vetoed:       make(map[[32]byte]bool),
+		upVoted:      make(map[[32]byte]bool),
+		majorityTime: majorityTime,
+	}
+}
+
+func (t *Table) initMaps() {
+	if t.enabled == nil {
+		t.enabled = make(map[[32]byte]bool)
+	}
+	if t.vetoed == nil {
+		t.vetoed = make(map[[32]byte]bool)
+	}
+	if t.upVoted == nil {
+		t.upVoted = make(map[[32]byte]bool)
 	}
 }
 
@@ -101,6 +125,7 @@ func (t *Table) IsSupported(featureID [32]byte) bool {
 func (t *Table) Enable(featureID [32]byte) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.initMaps()
 	t.enabled[featureID] = true
 	if !isSupported(featureID) {
 		t.unsupportedEnabled = true
@@ -114,7 +139,7 @@ func (t *Table) Disable(featureID [32]byte) {
 	delete(t.enabled, featureID)
 }
 
-// EnabledIDs returns a slice of all enabled amendment IDs.
+// EnabledIDs returns all enabled amendment IDs in ID order.
 func (t *Table) EnabledIDs() [][32]byte {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -123,13 +148,20 @@ func (t *Table) EnabledIDs() [][32]byte {
 	for id := range t.enabled {
 		result = append(result, id)
 	}
+	sort.Slice(result, func(i, j int) bool {
+		return bytes.Compare(result[i][:], result[j][:]) < 0
+	})
 	return result
 }
 
 // Veto marks an amendment as vetoed, preventing this node from voting for it.
 func (t *Table) Veto(featureID [32]byte) {
+	if f := FeatureByID(featureID); f != nil && f.IsObsolete() {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.initMaps()
 	t.vetoed[featureID] = true
 	delete(t.upVoted, featureID)
 }
@@ -143,8 +175,12 @@ func (t *Table) Unveto(featureID [32]byte) {
 
 // UpVote explicitly votes for an amendment.
 func (t *Table) UpVote(featureID [32]byte) {
+	if f := FeatureByID(featureID); f != nil && f.IsObsolete() {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.initMaps()
 	t.upVoted[featureID] = true
 	delete(t.vetoed, featureID)
 }
@@ -170,7 +206,7 @@ func (t *Table) Desired() [][32]byte {
 
 	result := make([][32]byte, 0)
 	for _, feature := range AllFeatures() {
-		if feature.Supported != SupportedYes || t.vetoed[feature.ID] {
+		if feature.Supported != SupportedYes || feature.IsObsolete() || t.vetoed[feature.ID] {
 			continue
 		}
 		if t.upVoted[feature.ID] ||
@@ -195,8 +231,8 @@ func (t *Table) HasUnsupportedEnabled() bool {
 	return t.unsupportedEnabled
 }
 
-// UnsupportedEnabledIDs returns a slice of enabled amendment IDs that are
-// not supported by this node.
+// UnsupportedEnabledIDs returns the enabled amendment IDs that are not
+// supported by this node, in ID order.
 func (t *Table) UnsupportedEnabledIDs() [][32]byte {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -208,6 +244,9 @@ func (t *Table) UnsupportedEnabledIDs() [][32]byte {
 			result = append(result, id)
 		}
 	}
+	sort.Slice(result, func(i, j int) bool {
+		return bytes.Compare(result[i][:], result[j][:]) < 0
+	})
 	return result
 }
 
@@ -281,15 +320,17 @@ func (t *Table) NeedValidatedLedger(seq uint32) bool {
 	return ((seq - 1) / 256) != ((t.lastUpdateSeq - 1) / 256)
 }
 
-// DoValidatedLedger re-syncs the in-memory table from a validated flag ledger:
-// it enables every amendment in `enabled` and recomputes
+// DoValidatedLedger folds a validated flag ledger into the in-memory table. It
+// adds each amendment whose value in enabled is true and recomputes
 // firstUnsupportedExpected from `majorities` (amendment hash → majority close
 // time in XRPL epoch seconds). Blocking is engaged once an unsupported
 // amendment is enabled. Mirrors AmendmentTableImpl::doValidatedLedger.
 func (t *Table) DoValidatedLedger(seq uint32, enabled map[[32]byte]bool, majorities map[[32]byte]uint32) {
 	// enable() locks internally; run it before taking the lock, as rippled does.
-	for id := range enabled {
-		t.Enable(id)
+	for id, isEnabled := range enabled {
+		if isEnabled {
+			t.Enable(id)
+		}
 	}
 
 	t.mu.Lock()
@@ -312,7 +353,11 @@ func (t *Table) DoValidatedLedger(seq uint32, enabled map[[32]byte]bool, majorit
 		}
 	}
 	if haveEarliest {
-		projected := earliest + majorityTimeSeconds
+		majorityTime := t.majorityTime
+		if majorityTime <= 0 {
+			majorityTime = DefaultMajorityTime
+		}
+		projected := earliest + uint32(majorityTime/time.Second)
 		t.firstUnsupportedExpected = &projected
 	} else {
 		t.firstUnsupportedExpected = nil
@@ -348,6 +393,7 @@ func (t *Table) Clone() *Table {
 	clone.unsupportedEnabled = t.unsupportedEnabled
 	clone.blocked = t.blocked
 	clone.lastUpdateSeq = t.lastUpdateSeq
+	clone.majorityTime = t.majorityTime
 	if t.firstUnsupportedExpected != nil {
 		v := *t.firstUnsupportedExpected
 		clone.firstUnsupportedExpected = &v

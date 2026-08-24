@@ -327,6 +327,9 @@ omit one to use rippled's `TxQ::Setup` default, or set it explicitly
   an amendment (rippled's `[amendments]` stanza); `veto` refuses to vote for it
   (rippled's `[veto_amendments]`). Names match the amendment registry; an amendment
   must not appear in both lists.
+- **`amendment_majority_time`** — duration an amendment must continuously hold
+  majority before activation. It uses Go duration syntax, defaults to `"336h"`
+  (14 days), and must be at least `"15m"`.
 
 Before deploying to a public network, manually compare that network's amendment
 state with this build's registry:
