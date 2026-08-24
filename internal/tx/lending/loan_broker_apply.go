@@ -212,6 +212,7 @@ func updateBroker(ctx *tx.ApplyContext, brokerKey keylet.Keylet, b *loanBrokerDa
 // -------------------- LoanBrokerDelete --------------------
 
 func (l *LoanBrokerDelete) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	rules := config.RequireRules()
 	accountID, err := state.DecodeAccountID(l.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT
@@ -233,8 +234,26 @@ func (l *LoanBrokerDelete) Preclaim(view tx.LedgerView, config tx.EngineConfig) 
 	if b.OwnerCount != 0 {
 		return ter.TecHAS_OBLIGATIONS
 	}
-	if lendNumForRules(b.DebtTotal, config.RequireRules()).Signum() != 0 {
-		return ter.TecHAS_OBLIGATIONS
+	vinfo, verr := vault.ReadVaultLending(view, keylet.VaultByID(b.VaultID))
+	if verr != nil || vinfo == nil {
+		return ter.TefBAD_LEDGER
+	}
+	if debt := lendNumForRules(b.DebtTotal, rules); debt.Signum() != 0 {
+		integral := assetIntegral(vinfo.Asset)
+		scale := vaultScaleOfForRules(vinfo, integral, rules)
+		if lmath.RoundAssetTowardsZero(lmath.Asset{Integral: integral}, debt, scale).Signum() != 0 {
+			return ter.TecHAS_OBLIGATIONS
+		}
+	}
+	if lendNumForRules(b.CoverAvailable, rules).Signum() > 0 {
+		if res := mptutil.CheckDeepFrozen(view, b.Owner, vinfo.Asset); res != ter.TesSUCCESS {
+			return res
+		}
+		if rules.FixCleanup3_2_0Enabled() {
+			if res := tx.AssetFrozen(view, b.Account, vinfo.Asset); res != ter.TesSUCCESS {
+				return res
+			}
+		}
 	}
 	return ter.TesSUCCESS
 }
