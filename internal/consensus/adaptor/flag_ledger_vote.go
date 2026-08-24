@@ -16,11 +16,6 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// amendmentMajorityTimeout is how long an amendment must hold
-// majority on the ledger before it's enabled. Mainnet config:
-// 14 days.
-const amendmentMajorityTimeout = 14 * 24 * time.Hour
-
 // readAmendmentsSLE pulls the parent ledger's Amendments SLE
 // (enabled set + majorities array) once at the producer boundary.
 // Both runners consume the result, and the enabled set doubles as
@@ -221,18 +216,16 @@ func (a *Adaptor) runAmendmentVote(
 
 	stances := a.currentAmendmentStances()
 
-	// Restrict the vote walk to amendments this server supports,
-	// mirroring rippled's doVoting over amendmentMap_, which is seeded
-	// from the supported (Supported::yes) set only. Two divergences this
-	// closes: an amendment recorded only in the parent ledger's
-	// sfMajorities but unknown to this binary (a newer protocol
-	// amendment), and a compile-time-known but unsupported amendment —
-	// either would otherwise wrongly emit a LostMajority pseudo-tx,
-	// forking the flag-ledger tx set from the rest of the network.
+	// Rippled walks every supported amendment plus amendments discovered in
+	// the ledger majority set. The latter must remain in the domain even when
+	// this build does not recognize them so a lost majority is cleared.
 	supported := amendment.SupportedFeatures()
-	known := make(map[amendmentvote.Amendment]bool, len(supported))
+	known := make(map[amendmentvote.Amendment]bool, len(supported)+len(majority))
 	for _, f := range supported {
 		known[f.ID] = true
+	}
+	for id := range majority {
+		known[id] = true
 	}
 
 	// Stash this round's tallies for `feature` RPC introspection.
@@ -249,7 +242,7 @@ func (a *Adaptor) runAmendmentVote(
 	in := amendmentvote.Inputs{
 		UpcomingSeq:        upcomingSeq,
 		CloseTime:          closeTime,
-		MajorityTimeout:    amendmentMajorityTimeout,
+		MajorityTimeout:    a.amendmentMajorityTime,
 		TrustedValidations: available,
 		Votes:              votes,
 		Enabled:            enabled,

@@ -223,7 +223,7 @@ func (r *nodeRuntime) configureLedger() error {
 	// One instance is shared between the ledger service (which folds validated
 	// flag ledgers into it) and the consensus adaptor (which sources vote
 	// stances from it).
-	amendmentTable := buildTable(ctx, r.appConfig.Amendments, r.repo, r.serverLog)
+	amendmentTable := buildTable(ctx, r.appConfig.Amendments, r.appConfig.EffectiveAmendmentMajorityTime(), r.repo, r.serverLog)
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}

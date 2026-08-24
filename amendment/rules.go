@@ -4,6 +4,11 @@
 
 package amendment
 
+import (
+	"bytes"
+	"sort"
+)
+
 // Rules provides a read-only view of which amendments are enabled for
 // transaction processing and validation. It is typically loaded from
 // the Amendments entry in a specific ledger.
@@ -48,12 +53,16 @@ func (r *Rules) EnabledCount() int {
 	return len(r.enabled)
 }
 
-// EnabledIDs returns a slice of all enabled amendment IDs.
+// EnabledIDs returns all explicitly enabled amendment IDs in ID order.
+// It does not include amendments enabled only through protocol subsumption.
 func (r *Rules) EnabledIDs() [][32]byte {
 	result := make([][32]byte, 0, len(r.enabled))
 	for id := range r.enabled {
 		result = append(result, id)
 	}
+	sort.Slice(result, func(i, j int) bool {
+		return bytes.Compare(result[i][:], result[j][:]) < 0
+	})
 	return result
 }
 
@@ -71,8 +80,8 @@ func GenesisRules() *Rules {
 	return NewRules(enabledIDs)
 }
 
-// PermanentlyEnabledIDs returns the retired amendments, which are always
-// enabled regardless of a ledger's Amendments object.
+// PermanentlyEnabledIDs returns the retired amendments that ledger-loading
+// callers must add to the IDs stored in a ledger's Amendments object.
 func PermanentlyEnabledIDs() [][32]byte {
 	ids := make([][32]byte, 0)
 	for _, f := range AllFeatures() {
@@ -113,7 +122,8 @@ const (
 	PresetAllSupported
 )
 
-// RulesForPreset returns Rules for the given preset.
+// RulesForPreset returns Rules for the given preset. Unknown presets produce
+// an empty rule set.
 func RulesForPreset(preset Preset) *Rules {
 	switch preset {
 	case PresetEmpty:
@@ -132,6 +142,12 @@ type RulesBuilder struct {
 	enabled map[[32]byte]bool
 }
 
+func (b *RulesBuilder) initEnabled() {
+	if b.enabled == nil {
+		b.enabled = make(map[[32]byte]bool)
+	}
+}
+
 // NewRulesBuilder creates a new RulesBuilder.
 func NewRulesBuilder() *RulesBuilder {
 	return &RulesBuilder{
@@ -141,15 +157,17 @@ func NewRulesBuilder() *RulesBuilder {
 
 // Enable adds an amendment to the enabled set.
 func (b *RulesBuilder) Enable(featureID [32]byte) *RulesBuilder {
+	b.initEnabled()
 	b.enabled[featureID] = true
 	return b
 }
 
-// EnableByName adds an amendment by name to the enabled set.
+// EnableByName adds a registered amendment by name to the enabled set.
+// Unknown names are ignored.
 func (b *RulesBuilder) EnableByName(name string) *RulesBuilder {
 	f := FeatureByName(name)
 	if f != nil {
-		b.enabled[f.ID] = true
+		b.Enable(f.ID)
 	}
 	return b
 }
@@ -160,7 +178,8 @@ func (b *RulesBuilder) Disable(featureID [32]byte) *RulesBuilder {
 	return b
 }
 
-// DisableByName removes an amendment by name from the enabled set.
+// DisableByName removes a registered amendment by name from the enabled set.
+// Unknown names are ignored.
 func (b *RulesBuilder) DisableByName(name string) *RulesBuilder {
 	f := FeatureByName(name)
 	if f != nil {
@@ -169,11 +188,11 @@ func (b *RulesBuilder) DisableByName(name string) *RulesBuilder {
 	return b
 }
 
-// FromPreset initializes the builder from a preset.
+// FromPreset adds the amendments in a preset to the builder's current set.
 func (b *RulesBuilder) FromPreset(preset Preset) *RulesBuilder {
 	rules := RulesForPreset(preset)
 	for id := range rules.enabled {
-		b.enabled[id] = true
+		b.Enable(id)
 	}
 	return b
 }

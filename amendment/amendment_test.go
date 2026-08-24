@@ -272,6 +272,25 @@ func TestTableDesired(t *testing.T) {
 	if !slices.Contains(table.Desired(), FeatureAMM) {
 		t.Fatal("Desired omitted an explicitly upvoted supported amendment")
 	}
+
+	table.UpVote(FeatureNonFungibleTokensV1)
+	if table.IsUpVoted(FeatureNonFungibleTokensV1) {
+		t.Fatal("obsolete amendment accepted an explicit upvote")
+	}
+	if slices.Contains(table.Desired(), FeatureNonFungibleTokensV1) {
+		t.Fatal("Desired included an obsolete amendment")
+	}
+}
+
+func TestTableZeroValue(t *testing.T) {
+	var table Table
+	table.Enable(FeatureAMM)
+	table.Veto(FeatureXRPFees)
+	table.UpVote(FeatureDID)
+
+	if !table.IsEnabled(FeatureAMM) || !table.IsVetoed(FeatureXRPFees) || !table.IsUpVoted(FeatureDID) {
+		t.Fatal("zero-value Table did not retain mutations")
+	}
 }
 
 func TestRetiredFeaturesVoteObsolete(t *testing.T) {
@@ -437,6 +456,30 @@ func TestRulesBuilder(t *testing.T) {
 	}
 	if rules.Enabled(FeatureFlow) {
 		t.Error("Builder should have disabled Flow")
+	}
+}
+
+func TestRulesBuilderZeroValue(t *testing.T) {
+	var builder RulesBuilder
+	rules := builder.Enable(FeatureAMM).FromPreset(PresetGenesis).Build()
+	if !rules.Enabled(FeatureAMM) || !rules.Enabled(FeatureFlow) {
+		t.Fatal("zero-value RulesBuilder did not retain enabled amendments")
+	}
+}
+
+func TestEnabledIDsAreSorted(t *testing.T) {
+	high := [32]byte{2}
+	low := [32]byte{1}
+	rules := NewRules([][32]byte{high, low})
+	if got := rules.EnabledIDs(); !slices.Equal(got, [][32]byte{low, high}) {
+		t.Fatalf("Rules.EnabledIDs() = %x, want ID order", got)
+	}
+
+	table := NewTable()
+	table.Enable(high)
+	table.Enable(low)
+	if got := table.EnabledIDs(); !slices.Equal(got, [][32]byte{low, high}) {
+		t.Fatalf("Table.EnabledIDs() = %x, want ID order", got)
 	}
 }
 

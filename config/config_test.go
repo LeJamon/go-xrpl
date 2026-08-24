@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
@@ -134,6 +135,21 @@ func TestLoadConfig(t *testing.T) {
 	assert.Equal(t, 8080, portConfig.Port)
 	assert.Equal(t, "127.0.0.1", portConfig.IP)
 	assert.Equal(t, "http", portConfig.Protocol)
+}
+
+func TestLoadConfig_AmendmentMajorityTime(t *testing.T) {
+	tempDir := t.TempDir()
+	contents := strings.Replace(
+		completeTestConfig(),
+		"database_path = \"/tmp/test/db\"",
+		"database_path = \"/tmp/test/db\"\namendment_majority_time = \"15m\"",
+		1,
+	)
+	path := writeConfig(t, tempDir, "majority-time.toml", contents)
+
+	cfg, err := LoadConfig(Paths{Main: path, SkipValidators: true})
+	require.NoError(t, err)
+	assert.Equal(t, 15*time.Minute, cfg.EffectiveAmendmentMajorityTime())
 }
 
 func TestNodeDBConfigPebbleResourcesValidation(t *testing.T) {
@@ -849,6 +865,17 @@ func TestConfigValidation_CompleteConfig(t *testing.T) {
 	assert.NoError(t, ValidateConfig(validCompleteConfig()))
 }
 
+func TestConfigValidation_AmendmentMajorityTime(t *testing.T) {
+	cfg := validCompleteConfig()
+	cfg.AmendmentMajorityTime = 14 * time.Minute
+	err := ValidateConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "amendment_majority_time must be at least 15m")
+
+	cfg.AmendmentMajorityTime = 15 * time.Minute
+	assert.NoError(t, ValidateConfig(cfg))
+}
+
 func TestConfigValidation_InvalidPort(t *testing.T) {
 	config := validCompleteConfig()
 	config.Ports = map[string]PortConfig{
@@ -969,6 +996,7 @@ func TestConfigHelperMethods_Defaults(t *testing.T) {
 	assert.Equal(t, 256, config.ResolvedLedgerHistory())
 	assert.Equal(t, DefaultLedgerCacheSize, config.ResolvedLedgerCacheSize())
 	assert.Equal(t, defaultFetchDepth, config.ResolvedFetchDepth())
+	assert.Equal(t, 14*24*time.Hour, config.EffectiveAmendmentMajorityTime())
 }
 
 func TestLoadConfigLedgerCacheSize(t *testing.T) {

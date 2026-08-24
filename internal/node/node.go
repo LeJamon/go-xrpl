@@ -664,8 +664,8 @@ func applyValidatorReloadContextWithGate(
 // DB takes precedence over the config stanzas. Unknown names are logged and
 // ignored. The returned table owns operator veto/upvote and the enabled/blocked
 // state, and is shared between the ledger service and the consensus adaptor.
-func buildTable(ctx context.Context, cfg config.AmendmentsConfig, repo relationaldb.RepositoryManager, log xrpllog.Logger) *amendment.Table {
-	t := amendment.NewTable()
+func buildTable(ctx context.Context, cfg config.AmendmentsConfig, majorityTime time.Duration, repo relationaldb.RepositoryManager, log xrpllog.Logger) *amendment.Table {
+	t := amendment.NewTableWithMajorityTime(majorityTime)
 	for _, name := range cfg.Upvote {
 		f := amendment.FeatureByName(name)
 		if f == nil {

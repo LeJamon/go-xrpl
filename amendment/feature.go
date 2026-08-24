@@ -51,21 +51,21 @@ func FeatureID(name string) [32]byte {
 }
 
 // IsSupported returns true if the feature is supported by this code.
-func (f *Feature) IsSupported() bool {
+func (f Feature) IsSupported() bool {
 	return f.Supported == SupportedYes
 }
 
 // IsDefaultYes returns true if the feature should be voted for by default.
-func (f *Feature) IsDefaultYes() bool {
+func (f Feature) IsDefaultYes() bool {
 	return f.Vote == VoteDefaultYes
 }
 
 // IsObsolete returns true if the feature is obsolete.
-func (f *Feature) IsObsolete() bool {
+func (f Feature) IsObsolete() bool {
 	return f.Vote == VoteObsolete
 }
 
 // String returns the feature name.
-func (f *Feature) String() string {
+func (f Feature) String() string {
 	return f.Name
 }

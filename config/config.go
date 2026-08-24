@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/LeJamon/go-xrpl/amendment"
 )
 
 // Config represents the complete goxrpl configuration.
@@ -56,6 +59,9 @@ type Config struct {
 
 	// Amendments holds the operator's amendment voting preferences.
 	Amendments AmendmentsConfig `toml:"amendments" mapstructure:"amendments"`
+	// AmendmentMajorityTime is how long an amendment must continuously hold
+	// majority before activation. Zero uses amendment.DefaultMajorityTime.
+	AmendmentMajorityTime time.Duration `toml:"amendment_majority_time" mapstructure:"amendment_majority_time"`
 
 	// 9. Misc Settings
 	NodeSize   string `toml:"node_size" mapstructure:"node_size"` // optional; "" = default ("medium")
@@ -77,6 +83,15 @@ type Config struct {
 
 	// Validators configuration (loaded from separate file)
 	Validators ValidatorsConfig `toml:"-" mapstructure:"-"`
+}
+
+// EffectiveAmendmentMajorityTime returns the configured duration or the
+// protocol default when it is unset.
+func (c *Config) EffectiveAmendmentMajorityTime() time.Duration {
+	if c.AmendmentMajorityTime <= 0 {
+		return amendment.DefaultMajorityTime
+	}
+	return c.AmendmentMajorityTime
 }
 
 // Paths holds the paths to configuration files
