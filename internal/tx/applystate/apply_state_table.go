@@ -647,10 +647,10 @@ func (t *ApplyStateTable) applyThreading() {
 			}
 
 		case ActionErase:
-			// Thread owner accounts (the entry itself is being deleted)
-			data := w.entry.Current
+			// Ownership is defined by the entry before any in-transaction mutations.
+			data := w.entry.Original
 			if data == nil {
-				data = w.entry.Original
+				data = w.entry.Current
 			}
 			t.threadOwners(w.key, data, entryType)
 		}

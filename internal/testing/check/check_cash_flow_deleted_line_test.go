@@ -17,15 +17,86 @@ import (
 )
 
 const (
-	checkCashFlowDeletedLineMetadataSHA256 = "B464AAAEC99A18A9CB14DC6087A696BBED6F425D8E31D08BEFF4DB4140C60022"
-	checkCashFlowDeletedLineStateRoot      = "D6761E1369188ABEDC67AD0CEF8173EEA25F806C4CAEF92F92236EDAA5896225"
-	checkCashFlowDeletedLineTxRoot         = "666A42DCCC9A798FF82619D0D5A117E283401D37D407B26C0920014803084675"
+	checkCashFlowDeletedHighMetadataSHA256 = "49B8E61D7371B1E32FA5B55BB365685B1DAFDE118DF17863A9FEE970369717C8"
+	checkCashFlowDeletedHighStateRoot      = "D6761E1369188ABEDC67AD0CEF8173EEA25F806C4CAEF92F92236EDAA5896225"
+	checkCashFlowDeletedHighTxRoot         = "3DA8C496A5EEE71529D01118B69B8D976AFDBFEE5A46CAA4522DC86248E2D825"
+	checkCashFlowDeletedLowMetadataSHA256  = "96E73BC07AAD7F7033A853052B8A38C19872E023109E89E07D50E7D2000DA0DB"
+	checkCashFlowDeletedLowStateRoot       = "264D98529D8E669076AFAB9F5AC8DD8DCC3A2C3A0B827F626B09FEE4F76F6A08"
+	checkCashFlowDeletedLowTxRoot          = "E434097AF3DE53DE2A81EF1CBF6740481E1387770D9C76A05B60867F56F9C69C"
 )
 
 func TestCheckCashExactAmountSkipsRestoreWhenFlowDeletesTrustLine(t *testing.T) {
+	t.Run("high limit", func(t *testing.T) {
+		testCheckCashFlowDeletedLine(t,
+			"check-cash-line-issuer", "check-cash-line-casher", "HighLimit",
+			checkCashFlowDeletedHighMetadataSHA256, checkCashFlowDeletedHighStateRoot, checkCashFlowDeletedHighTxRoot)
+	})
+	t.Run("low limit", func(t *testing.T) {
+		testCheckCashFlowDeletedLine(t,
+			"check-cash-line-casher", "check-cash-line-issuer", "LowLimit",
+			checkCashFlowDeletedLowMetadataSHA256, checkCashFlowDeletedLowStateRoot, checkCashFlowDeletedLowTxRoot)
+	})
+}
+
+func TestCheckCashToIssuerRestoresSourceTrustLine(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	issuer := jtx.NewAccount("check-cash-line-issuer")
-	casher := jtx.NewAccount("check-cash-line-casher")
+	source := jtx.NewAccount("check-cash-line-casher")
+	require.Greater(t, state.CompareAccountIDs(source.ID, issuer.ID), 0)
+	env.Fund(issuer, source)
+	env.Close()
+
+	xrp := tx.NewXRPAmount(10_000)
+	issuerUSD := tx.NewIssuedAmountFromFloat64(900, "USD", issuer.Address)
+	jtx.RequireTxSuccess(t, env.Submit(offer.OfferCreate(source, issuerUSD, xrp).Build()))
+	env.Close()
+	jtx.RequireTxSuccess(t, env.Submit(offer.OfferCreate(issuer, xrp, issuerUSD).Build()))
+	env.Close()
+
+	lineKey := keylet.Line(source.ID, issuer.ID, "USD")
+	jtx.RequireLedgerEntryExists(t, env, lineKey)
+	jtx.RequireIOUBalance(t, env, source, issuer, "USD", 900)
+	jtx.RequireOwnerDirectoryContains(t, env, source, lineKey.Key, true)
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, lineKey.Key, true)
+	jtx.RequireOwnerCount(t, env, source, 1)
+	jtx.RequireOwnerCount(t, env, issuer, 0)
+
+	checkSequence := env.Seq(source)
+	checkKey := keylet.Check(source.ID, checkSequence)
+	checkID := strings.ToUpper(hex.EncodeToString(checkKey.Key[:]))
+	jtx.RequireTxSuccess(t, env.Submit(checkbuilder.CheckCreate(source, issuer, issuerUSD).Build()))
+	env.Close()
+	jtx.RequireOwnerCount(t, env, source, 2)
+
+	result := env.Submit(checkbuilder.CheckCashAmount(issuer, checkID, issuerUSD).Build())
+	jtx.RequireTxSuccess(t, result)
+	requireDeliveredAmount(t, result, issuerUSD)
+
+	modifiedLine := metadata.FindNode(result.Metadata, "ModifiedNode", "RippleState")
+	require.NotNil(t, modifiedLine, "modified RippleState metadata")
+	require.Equal(t, strings.ToUpper(hex.EncodeToString(lineKey.Key[:])), modifiedLine.LedgerIndex)
+	jtx.RequireLedgerEntryNotExists(t, env, checkKey)
+	jtx.RequireLedgerEntryExists(t, env, lineKey)
+	jtx.RequireIOUBalance(t, env, source, issuer, "USD", 0)
+	lineData, err := env.LedgerEntry(lineKey)
+	require.NoError(t, err)
+	line, err := state.ParseRippleState(lineData)
+	require.NoError(t, err)
+	require.True(t, line.HighLimit.IsZero())
+	require.Equal(t, source.Address, line.HighLimit.Issuer)
+	jtx.RequireOwnerDirectoryContains(t, env, source, checkKey.Key, false)
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, checkKey.Key, false)
+	jtx.RequireOwnerDirectoryContains(t, env, source, lineKey.Key, true)
+	jtx.RequireOwnerDirectoryContains(t, env, issuer, lineKey.Key, true)
+	jtx.RequireOwnerCount(t, env, source, 1)
+	jtx.RequireOwnerCount(t, env, issuer, 0)
+}
+
+func testCheckCashFlowDeletedLine(t *testing.T, issuerSeed, casherSeed, limitField, metadataSHA, expectedStateRoot, txRoot string) {
+	t.Helper()
+	env := jtx.NewTestEnv(t)
+	issuer := jtx.NewAccount(issuerSeed)
+	casher := jtx.NewAccount(casherSeed)
 	env.Fund(issuer, casher)
 	env.Close()
 
@@ -73,7 +144,17 @@ func TestCheckCashExactAmountSkipsRestoreWhenFlowDeletesTrustLine(t *testing.T) 
 	requireDeliveredAmount(t, result, issuerUSD)
 
 	requireDeletedLedgerNode(t, result, "Check", checkKey)
-	requireDeletedLedgerNode(t, result, "RippleState", lineKey)
+	deletedLine := requireDeletedLedgerNode(t, result, "RippleState", lineKey)
+	if limitField == "LowLimit" {
+		require.Less(t, state.CompareAccountIDs(casher.ID, issuer.ID), 0)
+	} else {
+		require.Greater(t, state.CompareAccountIDs(casher.ID, issuer.ID), 0)
+	}
+	limit, ok := deletedLine.FinalFields[limitField].(map[string]any)
+	require.True(t, ok, "%s must be an issued amount", limitField)
+	require.Equal(t, "9999999999999999e80", limit["value"])
+	require.Equal(t, "USD", limit["currency"])
+	require.Equal(t, issuer.Address, limit["issuer"])
 	jtx.RequireLedgerEntryNotExists(t, env, checkKey)
 	jtx.RequireLedgerEntryNotExists(t, env, lineKey)
 	jtx.RequireOwnerDirectoryContains(t, env, issuer, checkKey.Key, false)
@@ -93,9 +174,9 @@ func TestCheckCashExactAmountSkipsRestoreWhenFlowDeletesTrustLine(t *testing.T) 
 	require.NoError(t, err)
 	transactionRoot, err := env.LastClosedLedger().TxMapHash()
 	require.NoError(t, err)
-	require.Equal(t, checkCashFlowDeletedLineMetadataSHA256, strings.ToUpper(hex.EncodeToString(metadataHash[:])))
-	require.Equal(t, checkCashFlowDeletedLineStateRoot, strings.ToUpper(hex.EncodeToString(stateRoot[:])))
-	require.Equal(t, checkCashFlowDeletedLineTxRoot, strings.ToUpper(hex.EncodeToString(transactionRoot[:])))
+	require.Equal(t, metadataSHA, strings.ToUpper(hex.EncodeToString(metadataHash[:])))
+	require.Equal(t, expectedStateRoot, strings.ToUpper(hex.EncodeToString(stateRoot[:])))
+	require.Equal(t, txRoot, strings.ToUpper(hex.EncodeToString(transactionRoot[:])))
 }
 
 func requireEmptyOwnerDirectory(t *testing.T, env *jtx.TestEnv, owner *jtx.Account) {
@@ -112,9 +193,10 @@ func requireEmptyOwnerDirectory(t *testing.T, env *jtx.TestEnv, owner *jtx.Accou
 	require.Zero(t, directory.IndexPrevious)
 }
 
-func requireDeletedLedgerNode(t *testing.T, result jtx.TxResult, entryType string, key keylet.Keylet) {
+func requireDeletedLedgerNode(t *testing.T, result jtx.TxResult, entryType string, key keylet.Keylet) *tx.AffectedNode {
 	t.Helper()
 	node := metadata.FindNode(result.Metadata, "DeletedNode", entryType)
 	require.NotNil(t, node, "deleted %s metadata", entryType)
 	require.Equal(t, strings.ToUpper(hex.EncodeToString(key.Key[:])), node.LedgerIndex)
+	return node
 }
