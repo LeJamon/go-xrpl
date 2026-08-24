@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"reflect"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -122,12 +123,6 @@ func parseFromBinaryUnbound(blob []byte) (Transaction, map[string]any, []byte, e
 		}
 	}
 
-	// Convert map to JSON bytes
-	jsonBytes, err := json.Marshal(jsonMap)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to marshal decoded transaction: %w", err)
-	}
-
 	// The TransactionType is already known from the decoded map, so build the
 	// concrete transaction and unmarshal in one pass, skipping the redundant
 	// TransactionType re-parse FromJSON performs. Unknown or unregistered
@@ -135,11 +130,25 @@ func parseFromBinaryUnbound(blob []byte) (Transaction, map[string]any, []byte, e
 	var parsed Transaction
 	if knownType {
 		if t, nerr := NewFromType(txType); nerr == nil {
-			if err := json.Unmarshal(jsonBytes, t); err != nil {
-				return nil, nil, nil, fmt.Errorf("failed to parse transaction: %w", err)
-			}
 			parsed = t
 		}
+	}
+	jsonFields := jsonMap
+	if parsed != nil {
+		jsonFields = binaryAmountJSONFields(parsed, jsonMap)
+		if parsed.TxType() == TypeBatch {
+			jsonFields = binaryBatchJSONFields(jsonFields)
+		}
+	}
+	jsonBytes, err := json.Marshal(jsonFields)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to marshal decoded transaction: %w", err)
+	}
+	if parsed != nil {
+		if err := json.Unmarshal(jsonBytes, parsed); err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to parse transaction: %w", err)
+		}
+		restoreBinaryNoCurrency(parsed, jsonMap)
 	}
 	if parsed == nil {
 		parsed, err = ParseJSON(jsonBytes)
@@ -151,4 +160,109 @@ func parseFromBinaryUnbound(blob []byte) (Transaction, map[string]any, []byte, e
 	parsed.GetCommon().SetPresentFields(presentFields)
 
 	return parsed, jsonMap, canonical, nil
+}
+
+const noCurrencyHex = "0000000000000000000000000000000000000001"
+
+func binaryAmountJSONFields(transaction Transaction, fields map[string]any) map[string]any {
+	value := reflect.ValueOf(transaction)
+	if value.Kind() == reflect.Pointer {
+		value = value.Elem()
+	}
+	var adjusted map[string]any
+	for _, field := range getFlattenInfo(value.Type()).fields {
+		if !field.isAmount {
+			continue
+		}
+		amount, ok := fields[field.name].(map[string]any)
+		if !ok || amount["currency"] != "1" {
+			continue
+		}
+		if adjusted == nil {
+			adjusted = make(map[string]any, len(fields))
+			for name, value := range fields {
+				adjusted[name] = value
+			}
+		}
+		adjustedAmount := make(map[string]any, len(amount))
+		for name, value := range amount {
+			adjustedAmount[name] = value
+		}
+		adjustedAmount["currency"] = noCurrencyHex
+		adjusted[field.name] = adjustedAmount
+	}
+	if adjusted == nil {
+		return fields
+	}
+	return adjusted
+}
+
+func binaryBatchJSONFields(fields map[string]any) map[string]any {
+	rawTransactions, ok := fields["RawTransactions"].([]any)
+	if !ok {
+		return fields
+	}
+	adjustedTransactions := make([]any, len(rawTransactions))
+	copy(adjustedTransactions, rawTransactions)
+	changed := false
+	for i, raw := range rawTransactions {
+		wrapper, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		innerFields, ok := wrapper["RawTransaction"].(map[string]any)
+		if !ok {
+			continue
+		}
+		typeName, _ := innerFields["TransactionType"].(string)
+		txType, ok := TypeFromName(typeName)
+		if !ok {
+			continue
+		}
+		inner, err := NewFromType(txType)
+		if err != nil {
+			continue
+		}
+		adjustedInner := binaryAmountJSONFields(inner, innerFields)
+		adjustedWrapper := make(map[string]any, len(wrapper))
+		for name, value := range wrapper {
+			adjustedWrapper[name] = value
+		}
+		adjustedWrapper["RawTransaction"] = adjustedInner
+		adjustedTransactions[i] = adjustedWrapper
+		changed = true
+	}
+	if !changed {
+		return fields
+	}
+	adjusted := make(map[string]any, len(fields))
+	for name, value := range fields {
+		adjusted[name] = value
+	}
+	adjusted["RawTransactions"] = adjustedTransactions
+	return adjusted
+}
+
+func restoreBinaryNoCurrency(transaction Transaction, fields map[string]any) {
+	value := reflect.ValueOf(transaction)
+	if value.Kind() == reflect.Pointer {
+		value = value.Elem()
+	}
+	for _, field := range getFlattenInfo(value.Type()).fields {
+		if !field.isAmount {
+			continue
+		}
+		encoded, ok := fields[field.name].(map[string]any)
+		if !ok || encoded["currency"] != "1" {
+			continue
+		}
+		amountField := value.Field(field.index)
+		if amountField.Kind() == reflect.Pointer {
+			if !amountField.IsNil() {
+				amountField.Interface().(*Amount).Currency = "1"
+			}
+			continue
+		}
+		amountField.Addr().Interface().(*Amount).Currency = "1"
+	}
 }

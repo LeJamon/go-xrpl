@@ -39,6 +39,9 @@ type RawTransactionData struct {
 }
 
 func (r *RawTransactionData) UnmarshalJSON(data []byte) error {
+	if _, err := tx.ParseJSON(data); err != nil {
+		return fmt.Errorf("parse inner transaction JSON: %w", err)
+	}
 	var innerMap map[string]any
 	if err := json.Unmarshal(data, &innerMap); err != nil {
 		return err

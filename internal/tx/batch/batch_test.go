@@ -17,11 +17,13 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/lending"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	trustsettx "github.com/LeJamon/go-xrpl/internal/tx/trustset"
 )
 
 func TestMain(m *testing.M) {
 	Register()
 	payment.Register()
+	trustsettx.Register()
 	os.Exit(m.Run())
 }
 
@@ -73,6 +75,43 @@ func TestBatchBinaryRoundTripPreservesInnerTransactions(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, originalHash, parsedHash)
 	}
+}
+
+func TestBatchNoCurrencyJSONBoundary(t *testing.T) {
+	outer := NewBatch(testOuter)
+	outer.Fee = "40"
+	outer.SetSequence(1)
+	outer.SetFlags(BatchFlagAllOrNothing)
+
+	sequence := uint32(2)
+	flags := tx.TfInnerBatchTxn
+	inner := trustsettx.NewTrustSet(testOuter, tx.NewIssuedAmountFromFloat64(1, "1", testSigner1))
+	inner.Fee = "0"
+	inner.Sequence = &sequence
+	inner.Flags = &flags
+	outer.AddInnerTransaction(inner)
+	outer.AddInnerTransaction(makeTestPayment())
+
+	fields, err := outer.Flatten()
+	require.NoError(t, err)
+	jsonBlob, err := json.Marshal(fields)
+	require.NoError(t, err)
+	_, err = tx.ParseJSON(jsonBlob)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "currency")
+
+	encoded, err := binarycodec.Encode(fields)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(encoded)
+	require.NoError(t, err)
+	parsed, err := tx.ParseFromBinary(blob)
+	require.NoError(t, err)
+	parsedBatch := parsed.(*Batch)
+	parsedInner := parsedBatch.RawTransactions[0].RawTransaction.InnerTx.(*trustsettx.TrustSet)
+	require.Equal(t, "1", parsedInner.LimitAmount.Currency)
+	reencoded, err := tx.SerializeTransaction(parsed)
+	require.NoError(t, err)
+	require.Equal(t, blob, reencoded)
 }
 
 func TestBatchBinaryRoundTripPreservesEmptyNestedSignature(t *testing.T) {

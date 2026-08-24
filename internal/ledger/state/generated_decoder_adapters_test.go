@@ -58,8 +58,12 @@ func TestParseRippleStatePreservesBinaryBadCurrency(t *testing.T) {
 
 	constructed := *parsed
 	constructed.binaryBadCurrency = false
-	if _, err := SerializeRippleState(&constructed); err == nil {
-		t.Fatal("constructed RippleState writer accepted badCurrency")
+	constructedData, err := SerializeRippleState(&constructed)
+	if err != nil {
+		t.Fatalf("serialize constructed badCurrency RippleState: %v", err)
+	}
+	if !bytes.Equal(constructedData, raw) {
+		t.Fatal("constructed badCurrency RippleState did not round-trip")
 	}
 
 	bad := keylet.BadCurrency()

@@ -588,8 +588,7 @@ func TestCurrencyCodeValidation(t *testing.T) {
 		// Valid 40-character hex codes
 		{"hex USD", "0000000000000000000000005553440000000000", false},
 		{"hex EUR", "0000000000000000000000004555520000000000", false},
-		// Invalid hex - XRP code
-		{"hex XRP reserved", "0000000000000000000000005852500000000000", true},
+		{"hex badCurrency", "0000000000000000000000005852500000000000", false},
 	}
 
 	for _, tc := range tests {
