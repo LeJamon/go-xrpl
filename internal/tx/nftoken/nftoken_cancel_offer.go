@@ -127,7 +127,7 @@ func (n *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 
 		var offerKeyBytes [32]byte
 		copy(offerKeyBytes[:], offerIDBytes)
-		offerKey := keylet.Keylet{Type: entry.TypeNFTokenOffer, Key: offerKeyBytes}
+		offerKey := keylet.Child(offerKeyBytes)
 
 		offerData, err := ctx.View.Read(offerKey)
 		if err != nil || offerData == nil {
