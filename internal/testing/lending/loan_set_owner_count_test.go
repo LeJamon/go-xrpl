@@ -19,10 +19,15 @@ import (
 type loanSetAssetFixture struct {
 	env                     *jtx.TestEnv
 	issuer, owner, borrower *jtx.Account
+	asset                   tx.Asset
 	brokerID                string
 	brokerKey               [32]byte
 	holdingKey              func(*jtx.Account) keylet.Keylet
 	createHolding           func(*jtx.Account)
+	removeHolding           func(*jtx.Account)
+	fundHolding             func(*jtx.Account, int64)
+	amount                  func(int64) tx.Amount
+	token                   *mpttest.MPTTester
 }
 
 func newLoanSetAssetFixture(t *testing.T, kind string, mptCreateFlags ...uint32) *loanSetAssetFixture {
@@ -40,6 +45,10 @@ func newLoanSetAssetFixture(t *testing.T, kind string, mptCreateFlags ...uint32)
 	var deposit tx.Amount
 	var holdingKey func(*jtx.Account) keylet.Keylet
 	var createHolding func(*jtx.Account)
+	var removeHolding func(*jtx.Account)
+	var fundHolding func(*jtx.Account, int64)
+	var amount func(int64) tx.Amount
+	var token *mpttest.MPTTester
 	switch kind {
 	case "IOU":
 		asset = tx.Asset{Currency: "USD", Issuer: issuer.Address}
@@ -51,8 +60,18 @@ func newLoanSetAssetFixture(t *testing.T, kind string, mptCreateFlags ...uint32)
 			return keylet.Line(account.AccountID(), issuer.AccountID(), "USD")
 		}
 		createHolding = func(account *jtx.Account) { env.Trust(account, limit) }
+		removeHolding = func(account *jtx.Account) {
+			env.Trust(account, tx.NewIssuedAmountFromFloat64(0, "USD", issuer.Address))
+		}
+		fundHolding = func(account *jtx.Account, value int64) {
+			env.Trust(account, limit)
+			env.PayIOU(issuer, account, issuer, "USD", float64(value))
+		}
+		amount = func(value int64) tx.Amount {
+			return tx.NewIssuedAmountFromFloat64(float64(value), "USD", issuer.Address)
+		}
 	case "MPT":
-		token := mpttest.NewMPTTester(t, env, issuer, mpttest.MPTInit{Holders: []*jtx.Account{depositor}})
+		token = mpttest.NewMPTTester(t, env, issuer, mpttest.MPTInit{Holders: []*jtx.Account{depositor}})
 		flags := mpttest.TfMPTCanTransfer
 		for _, extra := range mptCreateFlags {
 			flags |= extra
@@ -78,6 +97,11 @@ func newLoanSetAssetFixture(t *testing.T, kind string, mptCreateFlags ...uint32)
 			return keylet.MPTokenByID(issuanceID, account.AccountID())
 		}
 		createHolding = authorize
+		removeHolding = func(account *jtx.Account) {
+			token.Authorize(mpttest.AuthorizeOpts{Account: account, Flags: mpttest.TfMPTUnauthorize})
+		}
+		fundHolding = func(account *jtx.Account, value int64) { token.Pay(issuer, account, value) }
+		amount = token.MPTAmount
 	default:
 		t.Fatalf("unsupported asset kind %q", kind)
 	}
@@ -104,10 +128,15 @@ func newLoanSetAssetFixture(t *testing.T, kind string, mptCreateFlags ...uint32)
 		issuer:        issuer,
 		owner:         owner,
 		borrower:      borrower,
+		asset:         asset,
 		brokerID:      brokerID,
 		brokerKey:     brokerKey,
 		holdingKey:    holdingKey,
 		createHolding: createHolding,
+		removeHolding: removeHolding,
+		fundHolding:   fundHolding,
+		amount:        amount,
+		token:         token,
 	}
 }
 
