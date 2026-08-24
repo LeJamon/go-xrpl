@@ -1,16 +1,21 @@
 package replaytool
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/negativeunl"
 	"github.com/LeJamon/go-xrpl/internal/ledger/skiplist"
 	"github.com/LeJamon/go-xrpl/internal/statecompare"
+	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 type staticTransactionSource []statecompare.Transaction
@@ -62,6 +67,7 @@ func TestReconstructMainnetStateAppliesLedgerHashesLifecycle(t *testing.T) {
 				preState,
 				snapshot,
 				reconstructionTestRules(),
+				false,
 			)
 			if err != nil {
 				t.Fatalf("reconstructMainnetState: %v", err)
@@ -107,6 +113,103 @@ func TestReconstructMainnetStateAppliesLedgerHashesLifecycle(t *testing.T) {
 				t.Fatalf("historical Hashes = %x, want [%x]", historicalHashes, parentHash)
 			}
 		})
+	}
+}
+
+func TestReconstructMainnetStateAppliesFlagLedgerLifecycleBeforeMetadata(t *testing.T) {
+	parent := walkGenesisTo(t, 255)
+	preState, err := parent.StateMapSnapshot()
+	if err != nil {
+		t.Fatalf("StateMapSnapshot: %v", err)
+	}
+	const targetSequence = uint32(256)
+	parentHash := parent.Hash()
+	previousValidator := bytes.Repeat([]byte{0x42}, 33)
+	previousValidator[0] = 0xED
+	nextValidator := bytes.Repeat([]byte{0x43}, 33)
+	nextValidator[0] = 0xED
+	negativeUNL, err := pseudo.SerializeNegativeUNLSLE(&pseudo.NegativeUNLSLE{
+		ValidatorToDisable: previousValidator,
+	})
+	if err != nil {
+		t.Fatalf("serialize NegativeUNL: %v", err)
+	}
+	negativeUNLKey := keylet.NegativeUNL().Key
+	if err := preState.Put(negativeUNLKey, negativeUNL); err != nil {
+		t.Fatalf("seed NegativeUNL: %v", err)
+	}
+
+	txHash := [32]byte{0x99}
+	meta := encodeMeta(t, map[string]any{
+		"ModifiedNode": map[string]any{
+			"LedgerEntryType": "NegativeUNL",
+			"LedgerIndex":     protocol.Hash256Hex(negativeUNLKey),
+			"FinalFields": map[string]any{
+				"ValidatorToDisable": hex.EncodeToString(nextValidator),
+			},
+		},
+	})
+	rules := reconstructionTestRules()
+	expectedBase, err := preState.SnapshotMutable()
+	if err != nil {
+		t.Fatalf("expected SnapshotMutable: %v", err)
+	}
+	if err := negativeunl.Apply(expectedBase, targetSequence); err != nil {
+		t.Fatalf("expected NegativeUNL update: %v", err)
+	}
+	expected, err := reconstructFromMetaWithRules(
+		expectedBase,
+		[]metaTx{{Blob: meta, TxHash: txHash}},
+		targetSequence,
+		rules,
+		false,
+	)
+	if err != nil {
+		t.Fatalf("expected metadata reconstruction: %v", err)
+	}
+	if err := skiplist.UpdateOnMap(expected, targetSequence, parentHash); err != nil {
+		t.Fatalf("expected skip-list update: %v", err)
+	}
+	expectedRoot, err := expected.Hash()
+	if err != nil {
+		t.Fatalf("expected Hash: %v", err)
+	}
+
+	corrected, verified, err := reconstructMainnetState(
+		context.Background(),
+		staticTransactionSource{{MetaBlob: meta, TxHash: txHash}},
+		preState,
+		&statecompare.LedgerSnapshot{
+			LedgerIndex: targetSequence,
+			ParentHash:  parentHash,
+			AccountHash: expectedRoot,
+		},
+		rules,
+		false,
+	)
+	if err != nil {
+		t.Fatalf("reconstructMainnetState: %v", err)
+	}
+	if !verified {
+		t.Fatal("reconstruction_verified = false, want true")
+	}
+	item, found, err := corrected.Get(negativeUNLKey)
+	if err != nil || !found || item == nil {
+		t.Fatalf("read reconstructed NegativeUNL: found=%v err=%v", found, err)
+	}
+	entry, err := pseudo.ParseNegativeUNLSLE(item.Data())
+	if err != nil {
+		t.Fatalf("parse reconstructed NegativeUNL: %v", err)
+	}
+	if len(entry.DisabledValidators) != 1 {
+		t.Fatalf("DisabledValidators length = %d, want 1", len(entry.DisabledValidators))
+	}
+	disabled := entry.DisabledValidators[0]
+	if !bytes.Equal(disabled.PublicKey, previousValidator) || disabled.FirstLedgerSequence != targetSequence {
+		t.Fatalf("disabled validator = (%x, %d), want (%x, %d)", disabled.PublicKey, disabled.FirstLedgerSequence, previousValidator, targetSequence)
+	}
+	if !bytes.Equal(entry.ValidatorToDisable, nextValidator) {
+		t.Fatalf("ValidatorToDisable = %x, want %x", entry.ValidatorToDisable, nextValidator)
 	}
 }
 

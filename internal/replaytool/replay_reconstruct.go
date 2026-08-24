@@ -9,6 +9,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/negativeunl"
 	"github.com/LeJamon/go-xrpl/internal/ledger/skiplist"
 	"github.com/LeJamon/go-xrpl/internal/statecompare"
 	ledgerentry "github.com/LeJamon/go-xrpl/ledger/entry"
@@ -52,7 +53,24 @@ func reconstructMainnetState(
 		metas[i] = metaTx{Blob: t.MetaBlob, TxHash: t.TxHash}
 	}
 
-	corrected, err := reconstructFromMetaWithRules(preState, metas, snapshot.LedgerIndex, rules, replayPreFixPayChanRecipientOwnerDir)
+	reconstructionBase := preState
+	if protocol.IsFlagLedger(snapshot.LedgerIndex) {
+		reconstructionBase, err = preState.SnapshotMutable()
+		if err != nil {
+			return nil, false, fmt.Errorf("snapshotting pre-transaction lifecycle state: %w", err)
+		}
+		if err := negativeunl.Apply(reconstructionBase, snapshot.LedgerIndex); err != nil {
+			return nil, false, fmt.Errorf("updating reconstructed NegativeUNL: %w", err)
+		}
+	}
+
+	corrected, err := reconstructFromMetaWithRules(
+		reconstructionBase,
+		metas,
+		snapshot.LedgerIndex,
+		rules,
+		replayPreFixPayChanRecipientOwnerDir,
+	)
 	if err != nil {
 		return nil, false, err
 	}
