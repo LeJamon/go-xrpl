@@ -47,7 +47,7 @@ func (f *nodePlacementTestFamily) FetchForNodePlacement(ctx context.Context, has
 }
 
 func TestAddKnownNodeByIDHydratesRequiredAncestorForPlacement(t *testing.T) {
-	source := New(TypeTransaction)
+	source := New(TypeState)
 	for branch := range byte(4) {
 		for sub := range byte(4) {
 			var key [32]byte
@@ -90,7 +90,7 @@ func TestAddKnownNodeByIDHydratesRequiredAncestorForPlacement(t *testing.T) {
 		if bytes.Equal(wire[i].NodeID, target.NodeID) {
 			continue
 		}
-		entry, entryErr := FlushEntryFromWire(wire[i].Data, 1, TypeTransaction)
+		entry, entryErr := FlushEntryFromWire(wire[i].Data, 1, TypeState)
 		if entryErr != nil {
 			t.Fatalf("FlushEntryFromWire: %v", entryErr)
 		}
@@ -99,7 +99,7 @@ func TestAddKnownNodeByIDHydratesRequiredAncestorForPlacement(t *testing.T) {
 		}
 	}
 
-	dest, err := NewBacked(TypeTransaction, family)
+	dest, err := NewBacked(TypeState, family)
 	if err != nil {
 		t.Fatalf("NewBacked: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestAddKnownNodeByIDHydratesRequiredAncestorForPlacement(t *testing.T) {
 	if result != NodeUseful {
 		t.Fatalf("result = %v, want NodeUseful", result)
 	}
-	wantEntry, err := FlushEntryFromWire(target.Data, 1, TypeTransaction)
+	wantEntry, err := FlushEntryFromWire(target.Data, 1, TypeState)
 	if err != nil {
 		t.Fatalf("target FlushEntryFromWire: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestAddKnownNodeByIDHydratesRequiredAncestorForPlacement(t *testing.T) {
 }
 
 func TestAddKnownNodeByIDPlacementHonorsContextCancellation(t *testing.T) {
-	source := New(TypeTransaction)
+	source := New(TypeState)
 	var first, second [32]byte
 	first[0], second[0] = 0x10, 0x11
 	if err := source.Put(first, []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}); err != nil {
@@ -170,7 +170,7 @@ func TestAddKnownNodeByIDPlacementHonorsContextCancellation(t *testing.T) {
 
 	family := newNodePlacementTestFamily()
 	for i := range wire {
-		entry, entryErr := FlushEntryFromWire(wire[i].Data, 1, TypeTransaction)
+		entry, entryErr := FlushEntryFromWire(wire[i].Data, 1, TypeState)
 		if entryErr != nil {
 			t.Fatalf("FlushEntryFromWire: %v", entryErr)
 		}
@@ -178,7 +178,7 @@ func TestAddKnownNodeByIDPlacementHonorsContextCancellation(t *testing.T) {
 			t.Fatalf("StoreBatch: %v", err)
 		}
 	}
-	dest, err := NewBacked(TypeTransaction, family)
+	dest, err := NewBacked(TypeState, family)
 	if err != nil {
 		t.Fatalf("NewBacked: %v", err)
 	}

@@ -13,7 +13,7 @@ import (
 // fat-reply / off-frontier nodes must follow rippled's "attach-or-re-request"
 // instead of flooding the reject log with ErrParentNotInTree.
 func TestAddKnownNodeByID_OutOfOrderConverges(t *testing.T) {
-	source := New(TypeTransaction)
+	source := New(TypeState)
 
 	// Three keys sharing the first two bytes force a deep (depth>=3) chain;
 	// the spread keys give the tree breadth so gaps appear at several levels.
@@ -72,7 +72,7 @@ func TestAddKnownNodeByID_OutOfOrderConverges(t *testing.T) {
 	// Deepest-first: every node arrives before its parent — the worst case.
 	sort.SliceStable(list, func(i, j int) bool { return list[i].id.Depth() > list[j].id.Depth() })
 
-	dest := New(TypeTransaction)
+	dest := New(TypeState)
 	if err := dest.StartSync(); err != nil {
 		t.Fatalf("StartSync: %v", err)
 	}

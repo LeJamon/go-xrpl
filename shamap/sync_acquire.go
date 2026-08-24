@@ -104,8 +104,8 @@ func (sm *SHAMap) addKnownNodeFromPrefix(ctx context.Context, nodeID NodeID, dat
 //   - NodeReRequest, nil when an ancestor on the path is still a hash-only
 //     stub: not a reject, re-requested by the next getMissingNodes walk
 //   - NodeInvalid with ErrEmptyBranchOnPath (path into a branch this map does
-//     not reference), ErrNodeHashMismatch, ErrUnexpectedNode (inner where only
-//     a leaf may live), or ErrSyncNotInProgress / ErrInvalidNodeData on misuse
+//     not reference), ErrNodeHashMismatch, ErrUnexpectedNode (wrong node type
+//     or leaf path), or ErrSyncNotInProgress / ErrInvalidNodeData on misuse
 func (sm *SHAMap) AddKnownNodeByID(nodeID NodeID, data []byte) (AddNodeResult, error) {
 	result, _, err := sm.addKnownNodeByID(context.Background(), nodeID, data, false)
 	return result, err
@@ -153,8 +153,9 @@ func (sm *SHAMap) addKnownNodeByID(ctx context.Context, nodeID NodeID, data []by
 }
 
 // attachKnownNodeAt descends along nodeID's path and attaches the node
-// produced by deserialize at the first hash-only slot, after verifying its
-// hash against the parent's stored child hash. deserialize runs only once the
+// produced by deserialize at the first hash-only slot, after verifying its hash
+// against the parent's stored child and any leaf's key against the requested path.
+// deserialize runs only once the
 // target slot is known to be empty, so a duplicate (slot already populated, or
 // a consolidated leaf mid-path) short-circuits without parsing the peer's
 // data. Reaching a hash-only ancestor before the target depth is NodeReRequest,
@@ -204,6 +205,15 @@ func (sm *SHAMap) attachKnownNodeAt(ctx context.Context, access *familyAccess, n
 			}
 			if newNode.Hash() != childHash {
 				return NodeInvalid, errNodeHashMismatch
+			}
+			if leaf, ok := newNode.(mapLeaf); ok {
+				expectedNodeID, err := createNodeID(nodeID.Depth(), leaf.Item().Key())
+				if err != nil {
+					return NodeInvalid, fmt.Errorf("%w: %w", ErrInvalidNodeData, err)
+				}
+				if expectedNodeID != nodeID {
+					return NodeInvalid, errUnexpectedNode
+				}
 			}
 			if parent.SetChildIfNil(branch, newNode) != newNode {
 				return NodeDuplicate, nil
