@@ -629,6 +629,9 @@ func serializeIssuedCurrencyAmount(value, currency, issuer string) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
+	if bytes.Equal(currencyBytes, zeroByteArray) {
+		return nil, errInvalidCurrencyCode
+	}
 	_, issuerBytes, err := addresscodec.DecodeClassicAddressToAccountID(issuer) // decode the issuer address
 	if err != nil {
 		return nil, err

@@ -447,6 +447,13 @@ func TestSerializeIssuedCurrencyAmount(t *testing.T) {
 			expectedErr:   addresscodec.ErrInvalidClassicAddress,
 		},
 		{
+			name:          "fail - native currency bytes in issued amount",
+			inputValue:    "1",
+			inputCurrency: "0000000000000000000000000000000000000000",
+			inputIssuer:   "rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B",
+			expectedErr:   errInvalidCurrencyCode,
+		},
+		{
 			name:          "pass - valid serialized issued currency amount",
 			inputValue:    "7072.8",
 			inputCurrency: "USD",

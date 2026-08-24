@@ -136,6 +136,9 @@ func parseFromBinaryUnbound(blob []byte) (Transaction, map[string]any, []byte, e
 	jsonFields := jsonMap
 	if parsed != nil {
 		jsonFields = binaryAmountJSONFields(parsed, jsonMap)
+		if parsed.TxType() == TypeBatch {
+			jsonFields = binaryBatchJSONFields(jsonFields)
+		}
 	}
 	jsonBytes, err := json.Marshal(jsonFields)
 	if err != nil {
@@ -191,6 +194,52 @@ func binaryAmountJSONFields(transaction Transaction, fields map[string]any) map[
 	if adjusted == nil {
 		return fields
 	}
+	return adjusted
+}
+
+func binaryBatchJSONFields(fields map[string]any) map[string]any {
+	rawTransactions, ok := fields["RawTransactions"].([]any)
+	if !ok {
+		return fields
+	}
+	adjustedTransactions := make([]any, len(rawTransactions))
+	copy(adjustedTransactions, rawTransactions)
+	changed := false
+	for i, raw := range rawTransactions {
+		wrapper, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		innerFields, ok := wrapper["RawTransaction"].(map[string]any)
+		if !ok {
+			continue
+		}
+		typeName, _ := innerFields["TransactionType"].(string)
+		txType, ok := TypeFromName(typeName)
+		if !ok {
+			continue
+		}
+		inner, err := NewFromType(txType)
+		if err != nil {
+			continue
+		}
+		adjustedInner := binaryAmountJSONFields(inner, innerFields)
+		adjustedWrapper := make(map[string]any, len(wrapper))
+		for name, value := range wrapper {
+			adjustedWrapper[name] = value
+		}
+		adjustedWrapper["RawTransaction"] = adjustedInner
+		adjustedTransactions[i] = adjustedWrapper
+		changed = true
+	}
+	if !changed {
+		return fields
+	}
+	adjusted := make(map[string]any, len(fields))
+	for name, value := range fields {
+		adjusted[name] = value
+	}
+	adjusted["RawTransactions"] = adjustedTransactions
 	return adjusted
 }
 
