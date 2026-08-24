@@ -34,7 +34,7 @@ func reconstructionTestRules() *amendment.Rules {
 }
 
 func reconstructFromMeta(preState *shamap.SHAMap, metas []metaTx, ledgerIndex uint32) (*shamap.SHAMap, error) {
-	return reconstructFromMetaWithRules(preState, metas, ledgerIndex, reconstructionTestRules())
+	return reconstructFromMetaWithRules(preState, metas, ledgerIndex, reconstructionTestRules(), false)
 }
 
 func applyAffectedNode(
@@ -46,7 +46,7 @@ func applyAffectedNode(
 	deletedDirs map[[32]byte]bool,
 	brokerAccounts map[[32]byte][20]byte,
 ) error {
-	return applyAffectedNodeWithRules(stateMap, node, txHash, ledgerSeq, reconstructionTestRules(), deltas, deletedDirs, make(map[[32]byte]struct{}), brokerAccounts)
+	return applyAffectedNodeWithRules(stateMap, node, txHash, ledgerSeq, reconstructionTestRules(), false, deltas, deletedDirs, make(map[[32]byte]struct{}), brokerAccounts)
 }
 
 func encodeSLE(t *testing.T, m map[string]any) []byte {
@@ -519,6 +519,211 @@ func TestReconstructFromMeta_CreatedSponsorshipDefaults(t *testing.T) {
 	}
 }
 
+func TestReconstructFromMeta_CreatedPayChannelDefaults(t *testing.T) {
+	const (
+		account     = "rU4QQcdo3yyx2QJ2aG3Sj1HVphRdEnaVjJ"
+		destination = "rHg8ZLwDbJ9WLS8MmrkmRfSkorJHcEmzHh"
+		channelHex  = "1B62EE3C03BA2F388E99F1CDBF89B826B19589E51E6D4A3DAC444C648C39E787"
+		destDirHex  = "9847DFAE50832A9E30232363045E92CFA30F3654DAD3B9E537CD8297B1DEAE31"
+		txHashHex   = "114C5CD3DC821D7538412415C197B1B241532F44B5572AD192AF213534D03548"
+		publicKey   = "039F66F962D32A14B7BD28D1AEFAFEBACFA1741C38BFB688920425B1BA88DD52FE"
+		ledgerSeq   = uint32(4_516_358)
+		channelSeq  = uint32(4_516_355)
+	)
+
+	accountID, err := state.DecodeAccountID(account)
+	if err != nil {
+		t.Fatalf("Decode account: %v", err)
+	}
+	destinationID, err := state.DecodeAccountID(destination)
+	if err != nil {
+		t.Fatalf("Decode destination: %v", err)
+	}
+	accountDir := keylet.OwnerDirPage(accountID, 0).Key
+	destinationDir := keylet.OwnerDirPage(destinationID, 0).Key
+	if destinationDir != mustIndex(t, destDirHex) {
+		t.Fatalf("destination directory = %X, want %s", destinationDir, destDirHex)
+	}
+	channel := mustIndex(t, channelHex)
+
+	directory := func(owner string, root [32]byte, withChannel bool) map[string]any {
+		entry := map[string]any{
+			"LedgerEntryType": "DirectoryNode",
+			"Flags":           0,
+			"Owner":           owner,
+			"RootIndex":       protocol.Hash256Hex(root),
+		}
+		if withChannel {
+			entry["Indexes"] = []string{channelHex}
+			entry["PreviousTxnID"] = txHashHex
+			entry["PreviousTxnLgrSeq"] = ledgerSeq
+		}
+		return entry
+	}
+
+	wantChannel := encodeSLE(t, map[string]any{
+		"LedgerEntryType": "PayChannel", "Flags": 0,
+		"Account": account, "Destination": destination, "Sequence": channelSeq,
+		"Amount": "10000", "Balance": "0", "PublicKey": publicKey, "SettleDelay": uint32(20),
+		"OwnerNode": "0", "DestinationNode": "0",
+		"PreviousTxnID": txHashHex, "PreviousTxnLgrSeq": ledgerSeq,
+	})
+	wantRoot := stateRoot(t, map[[32]byte][]byte{
+		accountDir:     encodeSLE(t, directory(account, accountDir, true)),
+		destinationDir: encodeSLE(t, directory(destination, destinationDir, true)),
+		channel:        wantChannel,
+	})
+
+	meta := encodeMeta(t,
+		map[string]any{"CreatedNode": map[string]any{
+			"LedgerEntryType": "DirectoryNode", "LedgerIndex": protocol.Hash256Hex(accountDir),
+			"NewFields": map[string]any{"Owner": account, "RootIndex": protocol.Hash256Hex(accountDir)},
+		}},
+		map[string]any{"CreatedNode": map[string]any{
+			"LedgerEntryType": "DirectoryNode", "LedgerIndex": destDirHex,
+			"NewFields": map[string]any{"Owner": destination, "RootIndex": destDirHex},
+		}},
+		map[string]any{"CreatedNode": map[string]any{
+			"LedgerEntryType": "PayChannel", "LedgerIndex": channelHex,
+			"NewFields": map[string]any{
+				"Account": account, "Destination": destination, "Sequence": channelSeq,
+				"Amount": "10000", "PublicKey": publicKey, "SettleDelay": uint32(20),
+			},
+		}},
+	)
+
+	corrected, err := reconstructFromMeta(
+		putAll(t, nil),
+		[]metaTx{{Blob: meta, TxHash: mustIndex(t, txHashHex)}},
+		ledgerSeq,
+	)
+	if err != nil {
+		t.Fatalf("reconstructFromMeta: %v", err)
+	}
+	assertEntryBytes(t, corrected, channel, wantChannel, "PayChannel")
+	assertDirectoryMembers(t, corrected, accountDir, channel)
+	assertDirectoryMembers(t, corrected, destinationDir, channel)
+	gotRoot, err := corrected.Hash()
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+	if gotRoot != wantRoot {
+		t.Fatalf("reconstructed PayChannel root %x != expected %x", gotRoot[:8], wantRoot[:8])
+	}
+}
+
+func TestFillCreatedDefaults_PayChannelDestinationNodeCompatibility(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		preFix    bool
+		explicit  any
+		want      any
+		wantField bool
+	}{
+		{name: "post-fix page zero", want: "0", wantField: true},
+		{name: "post-fix explicit page", explicit: "3", want: "3", wantField: true},
+		{name: "pre-fix absent", preFix: true},
+		{name: "pre-fix explicit page", preFix: true, explicit: "3", want: "3", wantField: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fields := map[string]any{}
+			if test.explicit != nil {
+				fields["DestinationNode"] = test.explicit
+			}
+			if err := fillCreatedDefaults(fields, "PayChannel", test.preFix); err != nil {
+				t.Fatal(err)
+			}
+			got, present := fields["DestinationNode"]
+			if present != test.wantField || got != test.want {
+				t.Fatalf("DestinationNode = %v (present=%t), want %v (present=%t)", got, present, test.want, test.wantField)
+			}
+		})
+	}
+}
+
+func TestReconstructFromMeta_CreatedPayChannelPreFixCompatibility(t *testing.T) {
+	const (
+		account     = "rU4QQcdo3yyx2QJ2aG3Sj1HVphRdEnaVjJ"
+		destination = "rHg8ZLwDbJ9WLS8MmrkmRfSkorJHcEmzHh"
+		channelHex  = "1B62EE3C03BA2F388E99F1CDBF89B826B19589E51E6D4A3DAC444C648C39E787"
+		txHashHex   = "114C5CD3DC821D7538412415C197B1B241532F44B5572AD192AF213534D03548"
+		publicKey   = "039F66F962D32A14B7BD28D1AEFAFEBACFA1741C38BFB688920425B1BA88DD52FE"
+		ledgerSeq   = uint32(4_516_358)
+	)
+	accountID, err := state.DecodeAccountID(account)
+	if err != nil {
+		t.Fatalf("Decode account: %v", err)
+	}
+	destinationID, err := state.DecodeAccountID(destination)
+	if err != nil {
+		t.Fatalf("Decode destination: %v", err)
+	}
+	accountDir := keylet.OwnerDirPage(accountID, 0).Key
+	destinationDir := keylet.OwnerDirPage(destinationID, 0).Key
+	channel := mustIndex(t, channelHex)
+	meta := encodeMeta(t,
+		map[string]any{"CreatedNode": map[string]any{
+			"LedgerEntryType": "DirectoryNode", "LedgerIndex": protocol.Hash256Hex(accountDir),
+			"NewFields": map[string]any{"Owner": account, "RootIndex": protocol.Hash256Hex(accountDir)},
+		}},
+		map[string]any{"CreatedNode": map[string]any{
+			"LedgerEntryType": "PayChannel", "LedgerIndex": channelHex,
+			"NewFields": map[string]any{
+				"Account": account, "Destination": destination,
+				"Amount": "10000", "PublicKey": publicKey, "SettleDelay": uint32(20),
+			},
+		}},
+	)
+
+	corrected, err := reconstructFromMetaWithRules(
+		putAll(t, nil),
+		[]metaTx{{Blob: meta, TxHash: mustIndex(t, txHashHex)}},
+		ledgerSeq,
+		reconstructionTestRules(),
+		true,
+	)
+	if err != nil {
+		t.Fatalf("reconstructFromMetaWithRules: %v", err)
+	}
+	wantChannel := encodeSLE(t, map[string]any{
+		"LedgerEntryType": "PayChannel", "Flags": 0,
+		"Account": account, "Destination": destination,
+		"Amount": "10000", "Balance": "0", "PublicKey": publicKey, "SettleDelay": uint32(20),
+		"OwnerNode": "0", "PreviousTxnID": txHashHex, "PreviousTxnLgrSeq": ledgerSeq,
+	})
+	assertEntryBytes(t, corrected, channel, wantChannel, "pre-fix PayChannel")
+	assertDirectoryMembers(t, corrected, accountDir, channel)
+	if _, found, err := corrected.Get(destinationDir); err != nil || found {
+		t.Fatalf("pre-fix destination directory found=%t err=%v", found, err)
+	}
+}
+
+func TestDirectoryPlacements_PayChannelNonzeroNodes(t *testing.T) {
+	const destination = "rHg8ZLwDbJ9WLS8MmrkmRfSkorJHcEmzHh"
+	accountID, err := state.DecodeAccountID(testAccount)
+	if err != nil {
+		t.Fatalf("Decode account: %v", err)
+	}
+	destinationID, err := state.DecodeAccountID(destination)
+	if err != nil {
+		t.Fatalf("Decode destination: %v", err)
+	}
+	placements, err := directoryPlacements(shamap.New(shamap.TypeState), "PayChannel", map[string]any{
+		"Account": testAccount, "Destination": destination,
+		"OwnerNode": "2", "DestinationNode": "3",
+	}, nil)
+	if err != nil {
+		t.Fatalf("directoryPlacements: %v", err)
+	}
+	want := []dirPlacement{
+		{Key: keylet.OwnerDirPage(accountID, 2).Key, Strategy: dirSorted},
+		{Key: keylet.OwnerDirPage(destinationID, 3).Key, Strategy: dirSorted},
+	}
+	if !slices.Equal(placements, want) {
+		t.Fatalf("PayChannel placements = %#v, want %#v", placements, want)
+	}
+}
+
 func TestReconstructFromMeta_CreatedLoanBrokerDefaults(t *testing.T) {
 	const (
 		ledgerIndexHex = "75F04A09A3F45F989E015B92A39F8B70B99857D31D5D61955AEB16190B7E7341"
@@ -870,7 +1075,7 @@ func TestFillCreatedDefaults_CredentialSubjectRules(t *testing.T) {
 	self := map[string]any{
 		"Issuer": testAccount, "Subject": testAccount, "Flags": ledgerentry.LsfAccepted,
 	}
-	if err := fillCreatedDefaults(self, "Credential"); err != nil {
+	if err := fillCreatedDefaults(self, "Credential", false); err != nil {
 		t.Fatal(err)
 	}
 	if _, present := self["SubjectNode"]; present {
@@ -881,7 +1086,7 @@ func TestFillCreatedDefaults_CredentialSubjectRules(t *testing.T) {
 	}
 
 	distinct := map[string]any{"Issuer": testAccount, "Subject": distinctSubject}
-	if err := fillCreatedDefaults(distinct, "Credential"); err != nil {
+	if err := fillCreatedDefaults(distinct, "Credential", false); err != nil {
 		t.Fatal(err)
 	}
 	if distinct["SubjectNode"] != "0" || distinct["IssuerNode"] != "0" {
@@ -889,7 +1094,7 @@ func TestFillCreatedDefaults_CredentialSubjectRules(t *testing.T) {
 	}
 
 	invalid := map[string]any{"Issuer": testAccount, "Subject": testAccount, "Flags": 0}
-	if err := fillCreatedDefaults(invalid, "Credential"); err == nil {
+	if err := fillCreatedDefaults(invalid, "Credential", false); err == nil {
 		t.Fatal("self-issued credential without accepted flag was accepted")
 	}
 }
@@ -1139,7 +1344,7 @@ func TestFillCreatedDefaults_EscrowDirectoryNodes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fillCreatedDefaults(tt.fields, "Escrow")
+			fillCreatedDefaults(tt.fields, "Escrow", false)
 			if got := tt.fields["DestinationNode"]; got != tt.wantDest {
 				t.Fatalf("DestinationNode = %v, want %v", got, tt.wantDest)
 			}
