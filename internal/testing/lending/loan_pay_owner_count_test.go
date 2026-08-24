@@ -15,6 +15,7 @@ import (
 
 func TestLoanPayDeletingSourceTrustLinePersistsOwnerCount(t *testing.T) {
 	f := newLoanSetAssetFixture(t, "IOU")
+	f.createHolding(f.owner)
 	jtx.RequireTxSuccess(t, f.env.Submit(accounttest.AccountSet(f.borrower).
 		ClearFlag(accounttx.AccountSetFlagDefaultRipple).
 		Build()))
