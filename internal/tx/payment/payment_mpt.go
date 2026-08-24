@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -60,15 +61,15 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecDST_TAG_NEEDED
 	}
 
-	// requireAuth: check sender is authorized
-	// Reference: rippled View.cpp requireAuth() for MPTIssue + Payment.cpp:518-520
-	if res := requireMPTAuth(ctx, issuance, issuanceKey, ctx.AccountID, issuerID); res != ter.TesSUCCESS {
+	if res := mptutil.RequireAuthWithTypeAt(
+		ctx.View, mptID, ctx.AccountID, mptutil.LegacyAuth, ctx.Config.ParentCloseTime,
+	); res != ter.TesSUCCESS {
 		return res
 	}
 
-	// requireAuth: check destination is authorized
-	// Reference: rippled View.cpp requireAuth() for MPTIssue + Payment.cpp:522-524
-	if res := requireMPTAuth(ctx, issuance, issuanceKey, destAccountID, issuerID); res != ter.TesSUCCESS {
+	if res := mptutil.RequireAuthWithTypeAt(
+		ctx.View, mptID, destAccountID, mptutil.LegacyAuth, ctx.Config.ParentCloseTime,
+	); res != ter.TesSUCCESS {
 		return res
 	}
 
@@ -418,103 +419,4 @@ func mptAmountToUint64(a tx.Amount) uint64 {
 		exp++
 	}
 	return result
-}
-
-// requireMPTAuth checks if an account is authorized for an MPToken issuance.
-// Reference: rippled View.cpp requireAuth() for MPTIssue (lines 2436-2519)
-func requireMPTAuth(ctx *tx.ApplyContext, issuance *state.MPTokenIssuanceData,
-	issuanceKey keylet.Keylet, accountID [20]byte, issuerID [20]byte) ter.Result {
-	// Issuer is always authorized
-	if accountID == issuerID {
-		return ter.TesSUCCESS
-	}
-
-	// Read the MPToken for this account
-	tokenKey := keylet.MPToken(issuanceKey.Key, accountID)
-	tokenRaw, _ := ctx.View.Read(tokenKey)
-	var token *state.MPTokenData
-	if tokenRaw != nil {
-		token, _ = state.ParseMPToken(tokenRaw)
-	}
-
-	// If no MPToken exists, fail (StrongAuth/Legacy path)
-	if token == nil && issuance.Flags&entry.LsfMPTRequireAuth != 0 {
-		// Check domain-based credential authorization first
-		if issuance.DomainID != nil {
-			domainID, err := hex.DecodeString(*issuance.DomainID)
-			if err == nil && len(domainID) == 32 {
-				var did [32]byte
-				copy(did[:], domainID)
-				res := validDomain(ctx, did, accountID)
-				return res // No token → return domain result directly
-			}
-		}
-		return ter.TecNO_AUTH
-	}
-
-	// Check domain-based credential authorization
-	// Reference: rippled View.cpp lines 2494-2511
-	if issuance.DomainID != nil {
-		domainID, err := hex.DecodeString(*issuance.DomainID)
-		if err == nil && len(domainID) == 32 {
-			var did [32]byte
-			copy(did[:], domainID)
-			res := validDomain(ctx, did, accountID)
-			if res == ter.TesSUCCESS {
-				return ter.TesSUCCESS // Authorized by credentials
-			}
-			if token == nil {
-				return res // No token and credentials invalid
-			}
-			// Token exists but credentials invalid — fall through to classic check
-		}
-	}
-
-	// Classic authorization check
-	if issuance.Flags&entry.LsfMPTRequireAuth != 0 {
-		if token == nil || token.Flags&entry.LsfMPTAuthorized == 0 {
-			return ter.TecNO_AUTH
-		}
-	}
-
-	return ter.TesSUCCESS
-}
-
-// validDomain checks if an account has valid credentials for a permissioned domain.
-// Reference: rippled CredentialHelpers.cpp credentials::validDomain()
-func validDomain(ctx *tx.ApplyContext, domainID [32]byte, account [20]byte) ter.Result {
-	domKey := keylet.PermissionedDomainByID(domainID)
-	domData, err := ctx.View.Read(domKey)
-	if err != nil || domData == nil {
-		return ter.TecOBJECT_NOT_FOUND
-	}
-	pd, err := state.ParsePermissionedDomain(domData)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-
-	foundExpired := false
-	for _, c := range pd.AcceptedCredentials {
-		credKey := keylet.Credential(account, c.Issuer, c.CredentialType)
-		credData, err := ctx.View.Read(credKey)
-		if err != nil || credData == nil {
-			continue
-		}
-		cred, err := credential.ParseCredentialEntry(credData)
-		if err != nil {
-			continue
-		}
-		if credential.CheckCredentialExpired(cred, ctx.Config.ParentCloseTime) {
-			foundExpired = true
-			continue
-		}
-		if cred.IsAccepted() {
-			return ter.TesSUCCESS
-		}
-	}
-
-	if foundExpired {
-		return ter.TecEXPIRED
-	}
-	return ter.TecNO_AUTH
 }
