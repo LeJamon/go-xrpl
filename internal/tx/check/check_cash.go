@@ -740,14 +740,15 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		}
 
 		// Save and tweak the destination's limit
+		bigLimit := state.NewIssuedAmountFromValue(state.MaxMantissa, state.MaxExponent, sendMax.Currency, sendMax.Issuer)
 		if destLow {
 			saved := rs.LowLimit
 			savedLimit = &saved
-			rs.LowLimit = state.NewIssuedAmountFromValue(state.MaxMantissa, state.MaxExponent, sendMax.Currency, rs.LowLimit.Issuer)
+			rs.LowLimit = bigLimit
 		} else {
 			saved := rs.HighLimit
 			savedLimit = &saved
-			rs.HighLimit = state.NewIssuedAmountFromValue(state.MaxMantissa, state.MaxExponent, sendMax.Currency, rs.HighLimit.Issuer)
+			rs.HighLimit = bigLimit
 		}
 
 		updatedData, err := state.SerializeRippleState(rs)
