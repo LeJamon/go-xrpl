@@ -102,26 +102,9 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) ter.Result {
 	// rate is in QUALITY_ONE format: 1_000_000_000 = 1.0
 	rate := uint64(mptRateOne)
 	if !senderIsIssuer && !destIsIssuer {
-		// Check frozen (globally or individually locked)
-		if issuance.Flags&entry.LsfMPTLocked != 0 {
+		if mptutil.IsFrozen(ctx.View, mptID, ctx.AccountID) ||
+			mptutil.IsFrozen(ctx.View, mptID, destAccountID) {
 			return ter.TecLOCKED
-		}
-		// Check individual locks on sender and destination
-		senderTokenKey := keylet.MPToken(issuanceKey.Key, ctx.AccountID)
-		senderTokenRaw, _ := ctx.View.Read(senderTokenKey)
-		if senderTokenRaw != nil {
-			senderToken, _ := state.ParseMPToken(senderTokenRaw)
-			if senderToken != nil && senderToken.Flags&entry.LsfMPTLocked != 0 {
-				return ter.TecLOCKED
-			}
-		}
-		destTokenKey := keylet.MPToken(issuanceKey.Key, destAccountID)
-		destTokenRaw, _ := ctx.View.Read(destTokenKey)
-		if destTokenRaw != nil {
-			destToken, _ := state.ParseMPToken(destTokenRaw)
-			if destToken != nil && destToken.Flags&entry.LsfMPTLocked != 0 {
-				return ter.TecLOCKED
-			}
 		}
 
 		// Transfer fee: rate = 1_000_000_000 + 10_000 * TransferFee
