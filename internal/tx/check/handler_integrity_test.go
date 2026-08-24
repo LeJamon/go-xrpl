@@ -70,6 +70,56 @@ func TestCheckCashReadFailuresAreNotAbsence(t *testing.T) {
 	}
 }
 
+func TestRestoreTrustLineLimitDistinguishesAbsenceFromFailure(t *testing.T) {
+	destinationID := checkMPTAccountID(0x43)
+	issuerID := checkMPTAccountID(0x44)
+	lineKey := keylet.Line(destinationID, issuerID, "USD")
+	view := newCheckMPTView()
+	ctx := checkMPTContext(view, nil, destinationID)
+
+	if got := restoreTrustLineLimit(ctx, destinationID, issuerID, "USD", true, state.Amount{}); got != ter.TesSUCCESS {
+		t.Fatalf("missing trust line: got %v, want tesSUCCESS", got)
+	}
+
+	view.readErrors[lineKey.Key] = errors.New("storage failure")
+	if got := restoreTrustLineLimit(ctx, destinationID, issuerID, "USD", true, state.Amount{}); got != ter.TefINTERNAL {
+		t.Fatalf("trust line read failure: got %v, want tefINTERNAL", got)
+	}
+	delete(view.readErrors, lineKey.Key)
+
+	view.data[lineKey.Key] = []byte{0x00}
+	if got := restoreTrustLineLimit(ctx, destinationID, issuerID, "USD", true, state.Amount{}); got != ter.TefINTERNAL {
+		t.Fatalf("malformed trust line: got %v, want tefINTERNAL", got)
+	}
+
+	destinationAddress := state.EncodeAccountIDSafe(destinationID)
+	issuerAddress := state.EncodeAccountIDSafe(issuerID)
+	line := &state.RippleState{
+		Balance:     state.NewIssuedAmountFromFloat64(0, "USD", state.AccountOneAddress),
+		LowLimit:    state.NewIssuedAmountFromFloat64(0, "USD", destinationAddress),
+		HighLimit:   state.NewIssuedAmountFromFloat64(0, "USD", issuerAddress),
+		HasLowNode:  true,
+		HasHighNode: true,
+	}
+	lineData, err := state.SerializeRippleState(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view.data[lineKey.Key] = lineData
+	ctx.View = &checkUpdateFailView{checkMPTView: view}
+	if got := restoreTrustLineLimit(ctx, destinationID, issuerID, "USD", true, line.LowLimit); got != ter.TefINTERNAL {
+		t.Fatalf("trust line update failure: got %v, want tefINTERNAL", got)
+	}
+}
+
+type checkUpdateFailView struct {
+	*checkMPTView
+}
+
+func (v *checkUpdateFailView) Update(keylet.Keylet, []byte) error {
+	return errors.New("storage failure")
+}
+
 func TestCheckCancelCreatorReadFailureIsInternal(t *testing.T) {
 	sourceID := checkMPTAccountID(0x51)
 	destinationID := checkMPTAccountID(0x52)
