@@ -380,19 +380,20 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// --- Handle tfClose ---
 	// Reference: rippled PayChan.cpp doApply() lines 544-570
+	closeImmediately := false
 	if flags&PaymentChannelClaimFlagClose != 0 {
 		// Destination can close immediately.
 		// Channel is dry (Balance == Amount) → close immediately.
 		// Otherwise owner must wait settle delay.
 		if isDest || channel.Balance == channel.Amount {
-			return closeChannel(ctx, channelKey, channel)
-		}
-
-		// Owner closing: set expiration to closeTime + SettleDelay
-		settleExpiration := saturatingAdd(rules, closeTime, channel.SettleDelay)
-		if channel.Expiration == 0 || channel.Expiration > settleExpiration {
-			channel.Expiration = settleExpiration
-			channelChanged = true
+			closeImmediately = true
+		} else {
+			// Owner closing: set expiration to closeTime + SettleDelay
+			settleExpiration := saturatingAdd(rules, closeTime, channel.SettleDelay)
+			if channel.Expiration == 0 || channel.Expiration > settleExpiration {
+				channel.Expiration = settleExpiration
+				channelChanged = true
+			}
 		}
 	}
 
@@ -401,17 +402,19 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) ter.Result {
 	// expiration, or tfClose setting one). A fee-only / no-op claim leaves the
 	// channel untouched — no ModifiedNode, no PreviousTxnID bump — so the
 	// metadata carries only the submitter's AccountRoot (the fee).
-	if !channelChanged {
-		return ter.TesSUCCESS
+	if channelChanged {
+		updatedChannelData, err := state.SerializePayChannelFromData(channel)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+
+		if err := ctx.View.Update(channelKey, updatedChannelData); err != nil {
+			return ter.TefINTERNAL
+		}
 	}
 
-	updatedChannelData, err := state.SerializePayChannelFromData(channel)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-
-	if err := ctx.View.Update(channelKey, updatedChannelData); err != nil {
-		return ter.TefINTERNAL
+	if closeImmediately {
+		return closeChannel(ctx, channelKey, channel)
 	}
 
 	return ter.TesSUCCESS

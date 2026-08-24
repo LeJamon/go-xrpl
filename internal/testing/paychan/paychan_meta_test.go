@@ -1,10 +1,14 @@
 package paychan
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
+	"strconv"
+	"strings"
 	"testing"
 
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,6 +22,19 @@ func findModified(t *testing.T, res jtx.TxResult, entryType string) (prev, final
 	}
 	t.Fatalf("no ModifiedNode of type %s in meta", entryType)
 	return nil, nil
+}
+
+func findDeleted(t *testing.T, res jtx.TxResult, entryType string) *tx.AffectedNode {
+	t.Helper()
+	require.NotNil(t, res.Metadata, "metadata must be present")
+	for i := range res.Metadata.AffectedNodes {
+		n := &res.Metadata.AffectedNodes[i]
+		if n.NodeType == "DeletedNode" && n.LedgerEntryType == entryType {
+			return n
+		}
+	}
+	t.Fatalf("no DeletedNode of type %s in meta", entryType)
+	return nil
 }
 
 func findCreatedNewFields(t *testing.T, res jtx.TxResult, entryType string) map[string]any {
@@ -184,4 +201,75 @@ func TestPayChanClaim_Meta_PreviousBalance(t *testing.T) {
 	require.NotNil(t, prev, "PayChannel ModifiedNode must carry PreviousFields")
 	require.Equal(t, "100000000", prev["Balance"], "PreviousFields.Balance must be the pre-claim balance (100 XRP)")
 	require.Equal(t, "250000000", final["Balance"], "FinalFields.Balance must be the post-claim balance (250 XRP)")
+}
+
+func TestPayChanClaim_Meta_ImmediateCloseUsesClaimedBalance(t *testing.T) {
+	tests := []struct {
+		name        string
+		balance     int64
+		destination bool
+		metadataSHA string
+		txRoot      string
+	}{
+		{
+			name:        "owner closes dry channel",
+			balance:     10000,
+			metadataSHA: "FE389A52E07A44B7FA655379F37E92F2C478F9EE0ED958F86E2357E45AD9260C",
+			txRoot:      "E010A06F1ED2B1D604C59FAC5C3C98F91D0D0E4C15CFF64A5B431DCF9931841B",
+		},
+		{
+			name:        "destination closes partial channel",
+			balance:     4000,
+			destination: true,
+			metadataSHA: "B901BE7B515B0B6B6D487EFCCDF89958CC46BB78B2136FA013EF5B61CBAAC92E",
+			txRoot:      "F97FD30D431B08EB91E54122FF92D97736E58B7826D5457E20CE1AD2D2829DF8",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := jtx.NewTestEnv(t)
+			alice := jtx.NewAccount("alice")
+			bob := jtx.NewAccount("bob")
+			env.FundAmount(alice, uint64(xrp(10000)))
+			env.FundAmount(bob, uint64(xrp(10000)))
+			env.Close()
+
+			pk := alice.PublicKeyHex()
+			createSeq := env.Seq(alice)
+			chanK := chanKeylet(alice, bob, createSeq)
+			jtx.RequireTxSuccess(t, env.Submit(ChannelCreate(alice, bob, drops(10000), 100, pk).Build()))
+			env.Close()
+
+			chanIDHex := hex.EncodeToString(chanK.Key[:])
+			claim := ChannelClaim(alice, chanIDHex).Balance(drops(tc.balance)).Close()
+			if tc.destination {
+				claim = ChannelClaim(bob, chanIDHex).
+					Balance(drops(tc.balance)).
+					Amount(drops(tc.balance)).
+					Signature(signClaimAuth(alice, chanIDHex, uint64(tc.balance))).
+					PublicKey(pk).
+					Close()
+			}
+
+			res := env.Submit(claim.Build())
+			jtx.RequireTxSuccess(t, res)
+
+			node := findDeleted(t, res, "PayChannel")
+			require.Equal(t, strings.ToUpper(chanIDHex), node.LedgerIndex)
+			require.Equal(t, "0", node.PreviousFields["Balance"])
+			require.Equal(t, strconv.FormatInt(tc.balance, 10), node.FinalFields["Balance"])
+			require.False(t, hasNode(res, "ModifiedNode", "PayChannel"))
+			jtx.RequireLedgerEntryNotExists(t, env, chanK)
+
+			metadataBlob, err := tx.SerializeMetadata(res.Metadata)
+			require.NoError(t, err)
+			metadataHash := sha256.Sum256(metadataBlob)
+			env.Close()
+			transactionRoot, err := env.LastClosedLedger().TxMapHash()
+			require.NoError(t, err)
+			require.Equal(t, tc.metadataSHA, strings.ToUpper(hex.EncodeToString(metadataHash[:])))
+			require.Equal(t, tc.txRoot, strings.ToUpper(hex.EncodeToString(transactionRoot[:])))
+		})
+	}
 }
