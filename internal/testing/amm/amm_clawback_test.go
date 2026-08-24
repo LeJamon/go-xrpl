@@ -378,6 +378,92 @@ func TestAMMClawback_SpecificAmount(t *testing.T) {
 	})
 }
 
+func TestAMMClawbackRejectsRoundedLPWithdrawalAboveHolderBalance(t *testing.T) {
+	env := amm.NewAMMTestEnv(t)
+	for _, account := range []*jtx.Account{env.GW, env.Alice, env.Bob} {
+		env.FundAmount(account, uint64(jtx.XRP(1_000_000)))
+	}
+	env.Close()
+
+	jtx.RequireTxSuccess(t, env.Submit(accountset.AccountSet(env.GW).AllowClawback().Build()))
+	env.Close()
+
+	for _, holder := range []*jtx.Account{env.Alice, env.Bob} {
+		for _, currency := range []string{"USD", "EUR"} {
+			env.Trust(holder, env.GW, currency, 100)
+			env.PayIOU(env.GW, holder, currency, 100)
+		}
+	}
+	env.Close()
+
+	jtx.RequireTxSuccess(t, env.Submit(amm.AMMCreate(
+		env.Alice,
+		amm.IOUAmount(env.GW, "USD", 10),
+		amm.IOUAmount(env.GW, "EUR", 10),
+	).Build()))
+	env.Close()
+	jtx.RequireTxSuccess(t, env.Submit(amm.AMMDeposit(env.Bob, env.USD, env.EUR).
+		Amount(amm.IOUAmount(env.GW, "USD", 5)).
+		Amount2(amm.IOUAmount(env.GW, "EUR", 5)).
+		TwoAsset().
+		Build()))
+	env.Close()
+
+	usdBefore, eurBefore, lpSupplyBefore := env.AMMBalances(env.USD, env.EUR)
+	require.Equal(t, "15", usdBefore.Value())
+	require.Equal(t, "15", eurBefore.Value())
+	require.Equal(t, "15", lpSupplyBefore.Value())
+	ammAccount := env.ReadAMMAccount(env.USD, env.EUR)
+	require.NotNil(t, ammAccount)
+	holderLPBefore := env.IOUBalance(env.Alice, ammAccount, lpSupplyBefore.Currency)
+	require.NotNil(t, holderLPBefore)
+	require.Equal(t, "10", holderLPBefore.Value())
+	holderUSDBefore := env.IOUBalance(env.Alice, env.GW, "USD")
+	holderEURBefore := env.IOUBalance(env.Alice, env.GW, "EUR")
+	require.NotNil(t, holderUSDBefore)
+	require.NotNil(t, holderEURBefore)
+	holderOwnerCountBefore := env.OwnerCount(env.Alice)
+	issuerBalanceBefore := env.Balance(env.GW)
+	issuerSequenceBefore := env.Seq(env.GW)
+
+	result := env.Submit(amm.AMMClawback(env.GW, env.Alice.Address, env.USD, env.EUR).
+		Amount(amm.IOUAmount(env.GW, "USD", 10)).
+		Build())
+
+	jtx.RequireTxClaimed(t, result, amm.TecAMM_INVALID_TOKENS)
+	require.Equal(t, env.BaseFee(), result.Fee)
+	require.NotNil(t, result.Metadata)
+	require.Len(t, result.Metadata.AffectedNodes, 1)
+	require.Equal(t, "ModifiedNode", result.Metadata.AffectedNodes[0].NodeType)
+	require.Equal(t, "AccountRoot", result.Metadata.AffectedNodes[0].LedgerEntryType)
+	require.Equal(t, issuerBalanceBefore-env.BaseFee(), env.Balance(env.GW))
+	require.Equal(t, issuerSequenceBefore+1, env.Seq(env.GW))
+	require.Equal(t, holderOwnerCountBefore, env.OwnerCount(env.Alice))
+
+	usdAfter, eurAfter, lpSupplyAfter := env.AMMBalances(env.USD, env.EUR)
+	require.Zero(t, usdBefore.Compare(usdAfter))
+	require.Zero(t, eurBefore.Compare(eurAfter))
+	require.Zero(t, lpSupplyBefore.Compare(lpSupplyAfter))
+	holderLPAfter := env.IOUBalance(env.Alice, ammAccount, lpSupplyBefore.Currency)
+	require.NotNil(t, holderLPAfter)
+	require.Zero(t, holderLPBefore.Compare(*holderLPAfter))
+	holderUSDAfter := env.IOUBalance(env.Alice, env.GW, "USD")
+	holderEURAfter := env.IOUBalance(env.Alice, env.GW, "EUR")
+	require.NotNil(t, holderUSDAfter)
+	require.NotNil(t, holderEURAfter)
+	require.Zero(t, holderUSDBefore.Compare(*holderUSDAfter))
+	require.Zero(t, holderEURBefore.Compare(*holderEURAfter))
+
+	withdrawAllResult := env.Submit(amm.AMMClawback(env.GW, env.Alice.Address, env.USD, env.EUR).Build())
+	jtx.RequireTxSuccess(t, withdrawAllResult)
+	_, _, lpSupplyAfterWithdrawAll := env.AMMBalances(env.USD, env.EUR)
+	require.Equal(t, "5", lpSupplyAfterWithdrawAll.Value())
+	holderLPAfterWithdrawAll := env.IOUBalance(env.Alice, ammAccount, lpSupplyBefore.Currency)
+	if holderLPAfterWithdrawAll != nil {
+		require.True(t, holderLPAfterWithdrawAll.IsZero())
+	}
+}
+
 // TestAMMClawback_ExceedBalance tests clawing back amounts that exceed the holder's
 // balance in the AMM pool.
 // Reference: AMMClawback_test.cpp testAMMClawbackExceedBalance (line 543)

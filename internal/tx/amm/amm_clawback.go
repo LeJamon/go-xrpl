@@ -314,6 +314,10 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
+	if lpTokensToWithdraw.IsZero() || lpTokensToWithdraw.IsNegative() || isGreater(lpTokensToWithdraw, holdLPTokens) {
+		return ter.TecAMM_INVALID_TOKENS
+	}
+
 	// Verify withdrawal amounts against the pool balances exactly as rippled's
 	// AMMWithdraw::withdraw does — fail tecAMM_BALANCE rather than silently
 	// clamping. The clawback math inherits these guards because rippled routes
