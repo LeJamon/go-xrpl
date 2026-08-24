@@ -481,7 +481,7 @@ func (r *replayRangeRunner) findingsPath() string {
 // could not be reconstructed byte-exactly (in which case replay must stop).
 func recordDivergenceAndReset(
 	ctx context.Context,
-	client *statecompare.Client,
+	client ledgerTransactionSource,
 	findings *findingsWriter,
 	commit string,
 	ledgerIndex uint32,
