@@ -24,8 +24,9 @@ func flipSToHighS(t testing.TB, sigHex string) string {
 	r, s, err := rootcrypto.DERSigToRS(sigBytes)
 	require.NoError(t, err)
 	flipped := new(big.Int).Sub(secpCurveOrderN, new(big.Int).SetBytes(s))
-	return hex.EncodeToString(
-		rootcrypto.EncodeDERSignature(new(big.Int).SetBytes(r), flipped))
+	encoded, err := rootcrypto.EncodeDERSignature(new(big.Int).SetBytes(r), flipped)
+	require.NoError(t, err)
+	return hex.EncodeToString(encoded)
 }
 
 // signHighS produces a transaction signed with a high-S secp256k1 signature.

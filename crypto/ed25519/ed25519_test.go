@@ -13,6 +13,9 @@ func TestED25519_Prefix(t *testing.T) {
 
 func TestED25519_FamilySeedPrefix(t *testing.T) {
 	t.Parallel()
+	prefix := Algorithm{}.FamilySeedPrefix()
+	require.Equal(t, []byte{0x01, 0xE1, 0x4B}, prefix)
+	prefix[0] = 0
 	require.Equal(t, []byte{0x01, 0xE1, 0x4B}, Algorithm{}.FamilySeedPrefix())
 }
 
@@ -41,6 +44,16 @@ func TestED25519DeriveKeypair(t *testing.T) {
 			expPubKey:  "",
 			expPrivKey: "",
 			expErr:     ErrValidatorNotSupported,
+		},
+		{
+			name:      "fail - short seed",
+			seedBytes: make([]byte, 15),
+			expErr:    ErrInvalidSeed,
+		},
+		{
+			name:      "fail - long seed",
+			seedBytes: make([]byte, 17),
+			expErr:    ErrInvalidSeed,
 		},
 	}
 
@@ -142,6 +155,13 @@ func TestED25519Validate(t *testing.T) {
 			name:        "fail - invalid public key hex",
 			inputMsg:    "test message",
 			inputPubKey: "invalid_key",
+			inputSig:    "C001CB8A9883497518917DD16391930F4FEE39CEA76C846CFF4330BA44ED19DC4730056C2C6D7452873DE8120A5023C6807135C6329A89A13BA1D476FE8E7100",
+			expected:    false,
+		},
+		{
+			name:        "fail - wrong public key prefix",
+			inputMsg:    "test message",
+			inputPubKey: "004924A9045FE5ED8B22BAA7B6229A72A287CCF3EA287AADD3A032A24C0F008FA6",
 			inputSig:    "C001CB8A9883497518917DD16391930F4FEE39CEA76C846CFF4330BA44ED19DC4730056C2C6D7452873DE8120A5023C6807135C6329A89A13BA1D476FE8E7100",
 			expected:    false,
 		},

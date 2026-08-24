@@ -3,8 +3,7 @@
 //
 // SHA-512Half is the first 32 bytes of a SHA-512 digest. The XRPL protocol uses it
 // (typically over a domain-separating prefix plus the serialized payload) for
-// transaction IDs, ledger and SHAMap node hashes, signing hashes, and elsewhere on
-// the consensus hot path. Because it is computed constantly, [Sum] draws its
-// underlying hasher from a [sync.Pool]; [Acquire] and [Release] expose
-// that pool for callers that hash incrementally.
+// transaction IDs, ledger and SHAMap node hashes, signing hashes, and elsewhere
+// on the consensus hot path. [Sum] accepts multiple slices and hashes their
+// bytes in order without adding separators.
 package sha512half

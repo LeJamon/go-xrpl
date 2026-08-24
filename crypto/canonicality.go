@@ -12,10 +12,10 @@ const (
 	// CanonicalityNone indicates the signature is not canonical (invalid format or out of range).
 	CanonicalityNone Canonicality = iota
 	// CanonicalityCanonical indicates the signature is canonical but not fully canonical.
-	// Both (R, S) and (R, G-S) are valid signatures for the same message.
+	// Both (R, S) and (R, n-S) are valid signatures for the same message.
 	CanonicalityCanonical
 	// CanonicalityFullyCanonical indicates the signature is fully canonical.
-	// This means S <= G/2, which prevents signature malleability.
+	// This means S <= n/2, which prevents signature malleability.
 	CanonicalityFullyCanonical
 )
 
@@ -40,6 +40,10 @@ var (
 		0x58, 0x12, 0x63, 0x1A, 0x5C, 0xF5, 0xD3, 0xED,
 	}
 )
+
+func validSecp256k1Scalar(v *big.Int) bool {
+	return v != nil && v.Sign() > 0 && v.Cmp(secp256k1Order) < 0
+}
 
 // ECDSACanonicality checks if a DER-encoded ECDSA signature is canonical.
 // It returns the canonicality status of the signature.

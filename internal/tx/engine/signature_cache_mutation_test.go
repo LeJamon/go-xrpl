@@ -8,7 +8,9 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/crypto"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/account"
 	"github.com/LeJamon/go-xrpl/internal/tx/sigcache"
@@ -23,7 +25,8 @@ func registerCacheMutationAccount() {
 
 func cacheMutationKeypair(t *testing.T, seed string) (privateKey, publicKey, account string) {
 	t.Helper()
-	privateKey, publicKey, err := ed25519.Algorithm{}.DeriveKeypair([]byte(seed), false)
+	seedDigest := sha512half.Sum([]byte(seed))
+	privateKey, publicKey, err := ed25519.Algorithm{}.DeriveKeypair(seedDigest[:crypto.FamilySeedSize], false)
 	if err != nil {
 		t.Fatalf("derive keypair: %v", err)
 	}

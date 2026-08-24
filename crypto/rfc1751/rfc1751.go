@@ -1,6 +1,5 @@
-// Package rfc1751 implements RFC 1751 (S/KEY) encoding/decoding of binary
-// data as human-readable English words. This is a faithful port of rippled's
-// RFC1751.cpp implementation.
+// Package rfc1751 implements RFC 1751 (S/KEY) encoding and decoding of binary
+// data as human-readable English words.
 //
 // RFC 1751 encodes 8 bytes of binary data as 6 English words.
 // A 16-byte (128-bit) key produces 12 words (two groups of 6).

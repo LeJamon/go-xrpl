@@ -14,6 +14,9 @@ func TestSecp256k1_Prefix(t *testing.T) {
 
 func TestSecp256k1_FamilySeedPrefix(t *testing.T) {
 	t.Parallel()
+	prefix := Algorithm{}.FamilySeedPrefix()
+	require.Equal(t, []byte{secp256K1FamilySeedPrefix}, prefix)
+	prefix[0] = 0
 	require.Equal(t, []byte{secp256K1FamilySeedPrefix}, Algorithm{}.FamilySeedPrefix())
 }
 
@@ -42,6 +45,16 @@ func TestSecp256k1_deriveKeypair(t *testing.T) {
 			expectedPubKey:  "031FBCFDD2EC6C2EDFBBA3866BDBAC28E5253C6A01FE9EFF8CAAE01871F009E837",
 			expectedPrivKey: "00A3D1513DBE784107428B363A1F8EAF1377AB63D4D137AB9E28E0BC614C71D8C0",
 			expectedErr:     nil,
+		},
+		{
+			name:        "fail - short seed",
+			seedBytes:   make([]byte, 15),
+			expectedErr: ErrInvalidSeed,
+		},
+		{
+			name:        "fail - long seed",
+			seedBytes:   make([]byte, 17),
+			expectedErr: ErrInvalidSeed,
 		},
 	}
 
@@ -140,13 +153,6 @@ func TestSecp256k1_Sign(t *testing.T) {
 			wantErr:           true,
 		},
 		{
-			name:              "fail - invalid message length",
-			message:           "",
-			privKey:           "00B167A9F3B9E60A4F93695713682C102438620AA1785C3AE635F53E5B6261071A",
-			expectedSignature: "",
-			wantErr:           true,
-		},
-		{
 			name:              "fail - invalid private key hex",
 			message:           "Hello World",
 			privKey:           "00B167A9F3B9E60A4F93695713682C102438620AA1785C3AE635F53E5B6261071X",
@@ -167,6 +173,17 @@ func TestSecp256k1_Sign(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSecp256k1_SignEmptyMessage(t *testing.T) {
+	t.Parallel()
+	const (
+		privateKey = "00B167A9F3B9E60A4F93695713682C102438620AA1785C3AE635F53E5B6261071A"
+		publicKey  = "02950F4710101A25073BF37086D73FBBD00C7A6B0F91097D8F0BC6D268C400D56E"
+	)
+	signature, err := Algorithm{}.Sign("", privateKey)
+	require.NoError(t, err)
+	require.True(t, Algorithm{}.Validate("", publicKey, signature))
 }
 
 func TestSecp256k1_Validate(t *testing.T) {

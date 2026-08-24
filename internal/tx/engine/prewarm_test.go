@@ -21,7 +21,7 @@ const prewarmTestAccount = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 // verdict is independent of the RequireFullyCanonicalSig rule.
 func newSignedSingleSignTx(t *testing.T) *txcore.BaseTx {
 	t.Helper()
-	priv, pub, err := ed25519.Algorithm{}.DeriveKeypair([]byte("prewarm-issue-1105-seed"), false)
+	priv, pub, err := ed25519.Algorithm{}.DeriveKeypair([]byte("prewarm-seed-001"), false)
 	if err != nil {
 		t.Fatalf("DeriveKeypair: %v", err)
 	}

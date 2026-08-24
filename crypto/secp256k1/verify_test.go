@@ -61,7 +61,7 @@ func flipSToHighS(t *testing.T, sigHex string) string {
 	require.NoError(t, err)
 	sBig := new(big.Int).SetBytes(s)
 	flipped := new(big.Int).Sub(curveOrderN, sBig)
-	return strings.ToUpper(hex.EncodeToString(
-		rootcrypto.EncodeDERSignature(new(big.Int).SetBytes(r), flipped),
-	))
+	encoded, err := rootcrypto.EncodeDERSignature(new(big.Int).SetBytes(r), flipped)
+	require.NoError(t, err)
+	return strings.ToUpper(hex.EncodeToString(encoded))
 }

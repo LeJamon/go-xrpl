@@ -29,7 +29,8 @@ func TestVerifyValidationEnforcesCanonicalFlag(t *testing.T) {
 	r, s, err := rootcrypto.DERSigToRS(validation.Signature)
 	require.NoError(t, err)
 	highS := new(big.Int).Sub(btcec.S256().N, new(big.Int).SetBytes(s))
-	validation.Signature = rootcrypto.EncodeDERSignature(new(big.Int).SetBytes(r), highS)
+	validation.Signature, err = rootcrypto.EncodeDERSignature(new(big.Int).SetBytes(r), highS)
+	require.NoError(t, err)
 	require.Error(t, verifyValidation(validation))
 
 	validation.Flags &^= vfFullyCanonicalSig
@@ -38,7 +39,8 @@ func TestVerifyValidationEnforcesCanonicalFlag(t *testing.T) {
 	r, s, err = rootcrypto.DERSigToRS(validation.Signature)
 	require.NoError(t, err)
 	highS.Sub(btcec.S256().N, new(big.Int).SetBytes(s))
-	validation.Signature = rootcrypto.EncodeDERSignature(new(big.Int).SetBytes(r), highS)
+	validation.Signature, err = rootcrypto.EncodeDERSignature(new(big.Int).SetBytes(r), highS)
+	require.NoError(t, err)
 	require.NoError(t, verifyValidation(validation))
 }
 

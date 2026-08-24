@@ -22,17 +22,13 @@ const (
 	secp256K1FamilySeedPrefix byte = 0x21
 )
 
-// secp256K1FamilySeedPrefixBytes is the byte-slice form returned by
-// FamilySeedPrefix. Callers must not mutate the returned slice.
-var secp256K1FamilySeedPrefixBytes = []byte{secp256K1FamilySeedPrefix}
-
 var (
 	_ rootcrypto.Algorithm = Algorithm{}
 
 	// ErrInvalidPrivateKey is returned when a private key is invalid
 	ErrInvalidPrivateKey = errors.New("invalid private key")
-	// ErrInvalidMessage is returned when a message is required but not provided
-	ErrInvalidMessage = errors.New("message is required")
+	// ErrInvalidSeed is returned when family-seed entropy is not 16 bytes.
+	ErrInvalidSeed = errors.New("seed must be 16 bytes")
 	// ErrScalarDerivation is returned when family-seed scalar derivation fails to
 	// find a valid scalar within the bounded retries. Reaching this is practically
 	// impossible (see deriveScalar).
@@ -49,9 +45,8 @@ func (c Algorithm) Prefix() byte {
 }
 
 // FamilySeedPrefix returns the family seed prefix for the secp256k1 algorithm.
-// The returned slice aliases shared package state; callers must not mutate it.
 func (c Algorithm) FamilySeedPrefix() []byte {
-	return secp256K1FamilySeedPrefixBytes
+	return []byte{secp256K1FamilySeedPrefix}
 }
 
 // deriveScalar derives a scalar from a seed using the rippled "XRP Family
@@ -116,6 +111,9 @@ func (c Algorithm) deriveScalar(seed []byte, discrim *big.Int) (*big.Int, error)
 // uses an additional scalar derived from the root public key. For validator
 // keys, only the root generator is used.
 func (c Algorithm) DeriveKeypair(seed []byte, validator bool) (privHex, pubHex string, err error) {
+	if len(seed) != rootcrypto.FamilySeedSize {
+		return "", "", ErrInvalidSeed
+	}
 	curve := btcec.S256()
 	order := curve.N
 
@@ -138,6 +136,9 @@ func (c Algorithm) DeriveKeypair(seed []byte, validator bool) (privHex, pubHex s
 		}
 		scalarWithPrivateGen := derivatedScalar.Add(derivatedScalar, privateGen)
 		privateKey = scalarWithPrivateGen.Mod(scalarWithPrivateGen, order)
+		if privateKey.Sign() == 0 {
+			return "", "", ErrScalarDerivation
+		}
 	}
 
 	// Ensure private key is 32 bytes with leading zeros if needed
@@ -156,16 +157,13 @@ func (c Algorithm) DeriveKeypair(seed []byte, validator bool) (privHex, pubHex s
 // SignBytes signs msg with a 32-byte raw secp256k1 private key and returns
 // the DER-encoded signature in bytes.
 func (c Algorithm) SignBytes(msg, privKey []byte) ([]byte, error) {
-	if len(privKey) != 32 {
+	if !validPrivateKey(privKey) {
 		return nil, ErrInvalidPrivateKey
-	}
-	if len(msg) == 0 {
-		return nil, ErrInvalidMessage
 	}
 	secpPrivKey := secp256k1.PrivKeyFromBytes(privKey)
 	hash := sha512half.Sum(msg)
 	sig := ecdsa.Sign(secpPrivKey, hash[:])
-	return derFromRS(sig.R(), sig.S()), nil
+	return derFromRS(sig.R(), sig.S())
 }
 
 // decodePrivKeyHex decodes a secp256k1 private key supplied as either a bare
@@ -183,7 +181,7 @@ func decodePrivKeyHex(privKeyHex string) ([]byte, error) {
 		privKeyHex = privKeyHex[2:]
 	}
 	key, err := hex.DecodeString(privKeyHex)
-	if err != nil {
+	if err != nil || !validPrivateKey(key) {
 		return nil, ErrInvalidPrivateKey
 	}
 	return key, nil
@@ -246,6 +244,9 @@ func (c Algorithm) ValidateBytes(msg, pubkey, sig []byte) bool {
 // When hashMsg is true the message is SHA-512Half-hashed before verification;
 // otherwise msg is treated as a pre-computed 32-byte digest.
 func (c Algorithm) validateBytes(msg, pubkey, sig []byte, mustBeFullyCanonical, hashMsg bool) bool {
+	if len(pubkey) != 33 || (pubkey[0] != 0x02 && pubkey[0] != 0x03) {
+		return false
+	}
 	canonicality := rootcrypto.ECDSACanonicality(sig)
 	if canonicality == rootcrypto.CanonicalityNone {
 		return false
@@ -326,7 +327,7 @@ func (c Algorithm) DerivePublicKeyFromPublicGenerator(pubKey []byte) ([]byte, er
 // loading, where the JSON `validation_secret_key` already is the raw
 // scalar (no seed expansion).
 func (c Algorithm) DerivePublicKeyFromSecret(secret []byte) ([]byte, error) {
-	if len(secret) != 32 {
+	if !validPrivateKey(secret) {
 		return nil, ErrInvalidPrivateKey
 	}
 	_, pubKey := btcec.PrivKeyFromBytes(secret)
@@ -335,11 +336,19 @@ func (c Algorithm) DerivePublicKeyFromSecret(secret []byte) ([]byte, error) {
 
 // derFromRS builds a DER-encoded signature directly from a decred ModNScalar
 // r/s pair, avoiding a string→hex→bytes round-trip.
-func derFromRS(r, s secp256k1.ModNScalar) []byte {
+func derFromRS(r, s secp256k1.ModNScalar) ([]byte, error) {
 	rBytes := r.Bytes()
 	sBytes := s.Bytes()
 	return rootcrypto.EncodeDERSignature(
 		new(big.Int).SetBytes(rBytes[:]),
 		new(big.Int).SetBytes(sBytes[:]),
 	)
+}
+
+func validPrivateKey(key []byte) bool {
+	if len(key) != 32 {
+		return false
+	}
+	v := new(big.Int).SetBytes(key)
+	return v.Sign() > 0 && v.Cmp(btcec.S256().N) < 0
 }
