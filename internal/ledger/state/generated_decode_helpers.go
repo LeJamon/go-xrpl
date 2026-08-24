@@ -8,6 +8,8 @@ import (
 	"strconv"
 )
 
+const decodedNoCurrencyHex = "0000000000000000000000000000000000000001"
+
 func decodeLedgerHex(field, value string, dst []byte) error {
 	decoded, err := hex.DecodeString(value)
 	if err != nil {
@@ -37,13 +39,27 @@ func decodeLedgerAccount(field, value string) ([20]byte, error) {
 }
 
 func decodeLedgerAmount(field string, value any) (Amount, error) {
-	raw, err := json.Marshal(value)
+	decoded := value
+	noCurrency := false
+	if issued, ok := value.(map[string]any); ok && issued["currency"] == "1" {
+		adjusted := make(map[string]any, len(issued))
+		for name, value := range issued {
+			adjusted[name] = value
+		}
+		adjusted["currency"] = decodedNoCurrencyHex
+		decoded = adjusted
+		noCurrency = true
+	}
+	raw, err := json.Marshal(decoded)
 	if err != nil {
 		return Amount{}, fmt.Errorf("%s: marshal decoded amount: %w", field, err)
 	}
 	amount, err := AmountFromJSON(raw)
 	if err != nil {
 		return Amount{}, fmt.Errorf("%s: invalid amount: %w", field, err)
+	}
+	if noCurrency {
+		amount.Currency = "1"
 	}
 	return amount, nil
 }

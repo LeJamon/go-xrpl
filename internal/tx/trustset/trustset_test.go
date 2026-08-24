@@ -3,6 +3,7 @@ package trustset
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
@@ -95,6 +96,23 @@ func TestTrustSetValidation(t *testing.T) {
 			},
 			expectError: true,
 			errorMsg:    "temBAD_CURRENCY: cannot use XRP as IOU currency",
+		},
+		{
+			name: "noCurrency sentinel from binary - passes preflight",
+			trustSet: &TrustSet{
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "1", "rGateway"),
+			},
+			expectError: false,
+		},
+		{
+			name: "badCurrency sentinel - should fail",
+			trustSet: &TrustSet{
+				BaseTx:      *tx.NewBaseTx(tx.TypeTrustSet, "rAlice"),
+				LimitAmount: tx.NewIssuedAmountFromFloat64(100, "0000000000000000000000005852500000000000", "rGateway"),
+			},
+			expectError: true,
+			errorMsg:    "temBAD_CURRENCY: invalid currency",
 		},
 		{
 			name: "negative limit - should fail",
@@ -202,6 +220,21 @@ func TestTrustSetValidation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestTrustSetDeepFreezeGatePrecedesBadCurrency(t *testing.T) {
+	trustSet := NewTrustSet("rAlice", tx.NewIssuedAmountFromFloat64(
+		100, "0000000000000000000000005852500000000000", "rGateway"))
+	trustSet.SetFlags(TrustSetFlagSetDeepFreeze)
+	rules := amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		DisableByName("DeepFreeze").
+		Build()
+
+	err := trustSet.PreflightWithRules(rules)
+	if err == nil || err.Error() != "temINVALID_FLAG: deep freeze flags require the DeepFreeze amendment" {
+		t.Fatalf("preflight result = %v, want temINVALID_FLAG", err)
 	}
 }
 

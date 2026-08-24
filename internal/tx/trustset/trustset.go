@@ -73,14 +73,21 @@ func (t *TrustSet) TxType() tx.Type {
 // Reference: rippled STAmount::cMaxNativeN / isLegalNet.
 const cMaxNativeN int64 = 100_000_000_000_000_000
 
-// Validate runs the rules-independent structural checks of rippled's
-// SetTrust::preflight body. The flag mask lives in GetFlagsMask (preflight0),
-// the amendment-gated deep-freeze rejection in PreflightRules, and the
-// self-issuer check is a ledger-stage preclaim check (see Apply) — not preflight.
-// Reference: rippled SetTrust.cpp preflight().
 func (t *TrustSet) Validate() error {
+	return t.validate(nil)
+}
+
+func (t *TrustSet) PreflightWithRules(rules *amendment.Rules) error {
+	return t.validate(rules)
+}
+
+func (t *TrustSet) validate(rules *amendment.Rules) error {
 	if err := t.BaseTx.Validate(); err != nil {
 		return err
+	}
+	if rules != nil && !rules.DeepFreezeEnabled() &&
+		t.GetFlags()&(TrustSetFlagSetDeepFreeze|TrustSetFlagClearDeepFreeze) != 0 {
+		return ter.Errorf(ter.TemINVALID_FLAG, "deep freeze flags require the DeepFreeze amendment")
 	}
 
 	// isLegalNet: a native limit whose magnitude exceeds the total XRP supply is
@@ -108,6 +115,9 @@ func (t *TrustSet) Validate() error {
 	if t.LimitAmount.Currency == "XRP" {
 		return ter.Errorf(ter.TemBAD_CURRENCY, "cannot use XRP as IOU currency")
 	}
+	if keylet.CurrencyBytes(t.LimitAmount.Currency) == keylet.BadCurrency() {
+		return ter.Errorf(ter.TemBAD_CURRENCY, "invalid currency")
+	}
 
 	// Negative limit is not allowed
 	if t.LimitAmount.IsNegative() {
@@ -124,26 +134,8 @@ func (t *TrustSet) Validate() error {
 	return nil
 }
 
-// GetFlagsMask reports the invalid-flag mask (rippled SetTrust::getFlagsMask =
-// tfTrustSetMask). The deep-freeze bits are valid in this mask; their amendment
-// gating is the separate preflight-body check in PreflightRules, so the mask is
-// unconditional. The engine rejects flags intersecting it at preflight0.
 func (t *TrustSet) GetFlagsMask(rules *amendment.Rules) uint32 {
 	return TrustSetFlagMask
-}
-
-// PreflightRules runs the amendment-gated deep-freeze rejection at rippled's
-// position: the first statement of SetTrust::preflight's body, after preflight1's
-// fee/account/key checks. The deep-freeze flag bits are valid within
-// tfTrustSetMask, so the flag mask never rejects them; only this
-// amendment-conditional check does.
-// Reference: rippled SetTrust.cpp preflight() (featureDeepFreeze gate).
-func (t *TrustSet) PreflightRules(rules *amendment.Rules) error {
-	if !rules.DeepFreezeEnabled() &&
-		t.GetFlags()&(TrustSetFlagSetDeepFreeze|TrustSetFlagClearDeepFreeze) != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "deep freeze flags require the DeepFreeze amendment")
-	}
-	return nil
 }
 
 func (t *TrustSet) Flatten() (map[string]any, error) {
@@ -342,7 +334,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	bNoFreeze := (ctx.Account.Flags & state.LsfNoFreeze) != 0
 
 	// Deep freeze preclaim invariants. The amendment-disabled flag rejection is a
-	// preflight check (PreflightRules); only these ledger-state invariants remain.
+	// preflight check; only these ledger-state invariants remain.
 	// Reference: rippled SetTrust.cpp preclaim() freeze/deep-freeze checks.
 	if ctx.Rules().DeepFreezeEnabled() {
 		// Check #1: Cannot freeze if account has lsfNoFreeze set.
