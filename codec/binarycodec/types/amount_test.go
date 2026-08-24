@@ -347,10 +347,9 @@ func TestSerializeIssuedCurrencyCode(t *testing.T) {
 			expectedErr: &InvalidCodeError{"XRP uppercase"},
 		},
 		{
-			name:        "fail - disallowed standard currency - XRP - hex",
-			input:       "0000000000000000000000005852500000000000",
-			expected:    nil,
-			expectedErr: &InvalidCodeError{"XRP uppercase"},
+			name:     "pass - badCurrency sentinel - hex",
+			input:    "0000000000000000000000005852500000000000",
+			expected: []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x58, 0x52, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00},
 		},
 		{
 			name:        "fail - invalid standard currency - 4 characters",

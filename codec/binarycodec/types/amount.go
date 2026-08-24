@@ -78,11 +78,6 @@ var (
 
 	zeroByteArray = make([]byte, 20)
 
-	// standardXRPBytes is the standard-form spelling of the system code: zero
-	// padding with the ASCII chars "XRP" at bytes 12-14. rippled forbids it as
-	// an issued-currency code.
-	standardXRPBytes = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'X', 'R', 'P', 0, 0, 0, 0, 0}
-
 	errAmountMissingValue            = errors.New("amount missing value field")
 	errInvalidAmountValue            = errors.New("invalid amount value")
 	errInvalidCurrencyValue          = errors.New("invalid currency value")
@@ -323,14 +318,7 @@ func deserializeValue(data []byte) (string, error) {
 	return d.GetScaledValue(), nil
 }
 
-// deserializeCurrencyCode decodes an amount/path-step currency. It rejects the
-// standard-form system code (zero-padded "XRP" chars): rippled's to_string
-// renders those bytes as hex, but the amount encoder explicitly refuses that
-// hex form, so accepting it on decode would break the round-trip invariant.
 func deserializeCurrencyCode(data []byte) (string, error) {
-	if bytes.Equal(data, standardXRPBytes) {
-		return "", errInvalidCurrencyCode
-	}
 	return decodeCurrencyCode(data)
 }
 
@@ -617,10 +605,10 @@ func SerializeIssuedCurrencyValue(value string) ([]byte, error) {
 
 // serializeIssuedCurrencyCode serializes an issued currency code to its bytes representation.
 // The currency code can be 3 allowed string characters, or 20 bytes of hex.
-// The native code is disallowed in both its ISO and hex spellings.
+// The native code is disallowed in its ISO spelling.
 func serializeIssuedCurrencyCode(currency string) ([]byte, error) {
 	currency = strings.TrimPrefix(currency, "0x")
-	if currency == "XRP" || currency == "0000000000000000000000005852500000000000" {
+	if currency == "XRP" {
 		return nil, &InvalidCodeError{Disallowed: "XRP uppercase"}
 	}
 

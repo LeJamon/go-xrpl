@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
@@ -18,6 +19,51 @@ import (
 )
 
 const noCurrencyTrustSetBlob = "120014240045CF2A201B0045D0C5204A0000000363D4838D7EA4C680000000000000000000000000000000000000000001F2D3998AF7133840529595D2D80FFA90B670AD0D68400000000000000C7321ED5067639DE601D7043EA9EDAC37CF7CB9A5DC8E51268F3B4ABC2C61009B1F34017440673215C69AB49B2C1305A5D87E589E1DE61F0FCAE16EE1AC05E9A900E171F3489688E6739866F29919FF8F219B01EA375FAFDA1D5B6E37005D0DC019A007910B811426E613343B8F39EAD2216786FBBE891A9DB6609A801B1491CBEE1263AF5B8A4B253F68561611150D27064D"
+
+func TestTrustSetBadCurrencyBinaryPreflight(t *testing.T) {
+	all.RegisterAll()
+	raw, err := hex.DecodeString(noCurrencyTrustSetBlob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noCurrency := keylet.NoCurrency()
+	badCurrency := keylet.BadCurrency()
+	offset := bytes.Index(raw, noCurrency[:])
+	if offset < 0 || bytes.Index(raw[offset+len(noCurrency):], noCurrency[:]) >= 0 {
+		t.Fatal("captured TrustSet does not contain exactly one noCurrency field")
+	}
+	copy(raw[offset:offset+len(badCurrency)], badCurrency[:])
+
+	transaction, err := txcore.ParseFromBinary(raw)
+	if err != nil {
+		t.Fatalf("ParseFromBinary: %v", err)
+	}
+	parsed, ok := transaction.(*trustsettx.TrustSet)
+	if !ok {
+		t.Fatalf("parsed transaction = %T, want *trustset.TrustSet", transaction)
+	}
+	if parsed.LimitAmount.Currency != "0000000000000000000000005852500000000000" {
+		t.Fatalf("LimitAmount currency = %q, want badCurrency", parsed.LimitAmount.Currency)
+	}
+	reencoded, err := txcore.SerializeTransaction(transaction)
+	if err != nil {
+		t.Fatalf("SerializeTransaction: %v", err)
+	}
+	if !bytes.Equal(reencoded, raw) {
+		t.Fatalf("canonical re-encoding changed transaction\nwant %X\n got %X", raw, reencoded)
+	}
+	if err := parsed.PreflightWithRules(amendment.AllSupportedRules()); err == nil || err.Error() != "temBAD_CURRENCY: invalid currency" {
+		t.Fatalf("PreflightWithRules = %v, want temBAD_CURRENCY", err)
+	}
+	parsed.SetFlags(trustsettx.TrustSetFlagSetDeepFreeze)
+	rules := amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		DisableByName("DeepFreeze").
+		Build()
+	if err := parsed.PreflightWithRules(rules); err == nil || err.Error() != "temINVALID_FLAG: deep freeze flags require the DeepFreeze amendment" {
+		t.Fatalf("PreflightWithRules without DeepFreeze = %v, want temINVALID_FLAG", err)
+	}
+}
 
 func TestTrustSetNoCurrencyBinaryReplay(t *testing.T) {
 	all.RegisterAll()
