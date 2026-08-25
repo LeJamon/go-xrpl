@@ -424,8 +424,9 @@ func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common) ter.Res
 	if result := e.checkPseudoAccountSign(common); result != ter.TesSUCCESS {
 		return result
 	}
+	hasSigners := len(common.Signers) > 0 || common.HasField("Signers")
 	if e.config.ApplyFlags&txcore.TapDRY_RUN != 0 &&
-		common.SigningPubKey == "" && !common.HasField("Signers") {
+		common.SigningPubKey == "" && !hasSigners {
 		return ter.TesSUCCESS
 	}
 	if sponsor := common.SponsorSignature; sponsor != nil {
@@ -436,9 +437,10 @@ func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common) ter.Res
 		// have already failed crypto verification in preflight.
 		skipSignatureVerification := e.config.SkipSignatureVerification ||
 			e.config.ApplyFlags&txcore.TapDRY_RUN != 0
+		sponsorHasSigners := len(sponsor.Signers) > 0 || sponsor.HasField("Signers")
 		if !(skipSignatureVerification &&
-			sponsor.SigningPubKey == "" && len(sponsor.Signers) == 0) {
-			if len(sponsor.Signers) > 0 {
+			sponsor.SigningPubKey == "" && !sponsorHasSigners) {
+			if sponsorHasSigners {
 				if result := e.checkMultiSignForAccount(common.Sponsor, sponsor.Signers); result != ter.TesSUCCESS {
 					return result
 				}
@@ -448,7 +450,7 @@ func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common) ter.Res
 		}
 	}
 	if sign.IsMultiSigned(tx) ||
-		(e.config.ApplyFlags&txcore.TapDRY_RUN != 0 && common.HasField("Signers")) {
+		(e.config.ApplyFlags&txcore.TapDRY_RUN != 0 && hasSigners) {
 		return e.checkMultiSign(common)
 	}
 	if common.SigningPubKey != "" {

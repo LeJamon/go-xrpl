@@ -123,4 +123,34 @@ func TestService_SimulateDelegatedMultiSignDryRun(t *testing.T) {
 			t.Fatalf("simulate result = %v, applied = %v; want tefBAD_QUORUM, false", result.Result, result.Applied)
 		}
 	})
+
+	t.Run("empty sponsor signer array reaches quorum check", func(t *testing.T) {
+		simulated := newSimulated()
+		common := simulated.GetCommon()
+		common.Signers = []tx.SignerWrapper{{Signer: tx.Signer{Account: otherSigner.Address}}}
+		common.Sponsor = delegate.Address
+		sponsorFlags := tx.SpfSponsorFee
+		common.SponsorFlags = &sponsorFlags
+		fields, err := simulated.Flatten()
+		if err != nil {
+			t.Fatalf("Flatten: %v", err)
+		}
+		fields["SponsorSignature"] = map[string]any{"Signers": []any{}}
+		encoded, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		parsed, err := tx.ParseJSON(encoded)
+		if err != nil {
+			t.Fatalf("ParseJSON: %v", err)
+		}
+
+		result, err := svc.SimulateTransaction(parsed)
+		if err != nil {
+			t.Fatalf("SimulateTransaction: %v", err)
+		}
+		if result.Result != ter.TefBAD_QUORUM || result.Applied {
+			t.Fatalf("simulate result = %v, applied = %v; want tefBAD_QUORUM, false", result.Result, result.Applied)
+		}
+	})
 }
