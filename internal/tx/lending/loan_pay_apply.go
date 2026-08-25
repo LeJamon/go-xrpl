@@ -228,6 +228,8 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 	brokerPayee := b.Account
 	if sendFeeToOwner {
 		brokerPayee = b.Owner
+	} else if r := mptutil.CheckDeepFrozen(ctx.View, brokerPayee, asset); r != ter.TesSUCCESS {
+		return r
 	}
 
 	// Reverse any impairment before applying the payment.

@@ -44,13 +44,17 @@ func setupLoanPayFeeRouting(t *testing.T, kind string) (*loanSetAssetFixture, st
 	return f, loanID, pseudo
 }
 
-func submitLoanPayFee(t *testing.T, f *loanSetAssetFixture, loanID string) {
-	t.Helper()
-	jtx.RequireTxSuccess(t, f.env.Submit(lending.NewLoanPay(
+func loanPayFee(f *loanSetAssetFixture, loanID string) *lending.LoanPay {
+	return lending.NewLoanPay(
 		f.borrower.Address,
 		loanID,
 		f.amount(1000+loanPayServiceFee),
-	)))
+	)
+}
+
+func submitLoanPayFee(t *testing.T, f *loanSetAssetFixture, loanID string) {
+	t.Helper()
+	jtx.RequireTxSuccess(t, f.env.Submit(loanPayFee(f, loanID)))
 }
 
 func requireLoanPayFeeBalances(t *testing.T, f *loanSetAssetFixture, pseudo *jtx.Account, owner, cover int64) {
@@ -122,4 +126,13 @@ func TestLoanPayMissingBrokerOwnerHoldingRoutesFeeToCover(t *testing.T) {
 			requireLoanPayFeeBalances(t, f, pseudo, 0, loanPayServiceFee)
 		})
 	}
+}
+
+func TestLoanPayDeepFrozenBrokerOwnerAndPseudoFails(t *testing.T) {
+	f, loanID, pseudo := setupLoanPayFeeRouting(t, "IOU")
+	deepFreezeLoanSetTrustLine(t, f, f.owner.AccountID())
+	deepFreezeLoanSetTrustLine(t, f, pseudo.AccountID())
+
+	jtx.RequireTxClaimed(t, f.env.Submit(loanPayFee(f, loanID)), jtx.TecFROZEN)
+	requireLoanPayFeeBalances(t, f, pseudo, 0, 0)
 }
