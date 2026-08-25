@@ -40,11 +40,10 @@ func (e *Engine) preflight(tx txcore.Transaction) (result ter.Result) {
 	rules := e.rules()
 	currentTxID, currentTxIDErr := txcore.ComputeCurrentTransactionHash(tx)
 
-	// Structural preflight is ledger-state-independent, so its verdict is
-	// memoised on the transaction and a re-preflight under the same rules skips
-	// the repeat (see Common.preflightedRules). Signature verification stays out
-	// of the memo and always runs below, so a multi-signed tx's view-dependent
-	// signer-list check is never cached.
+	// Non-signature structural preflight is ledger-state-independent, so its
+	// verdict is memoised on the transaction and a re-preflight under the same
+	// rules skips the repeat (see Common.preflightedRules). Signature structure
+	// and verification stay out of the memo and always run below.
 	if currentTxIDErr != nil || !common.PreflightVerified(rules, currentTxID) {
 		if result := e.preflightStructure(tx, common); result != ter.TesSUCCESS {
 			return result
@@ -52,6 +51,9 @@ func (e *Engine) preflight(tx txcore.Transaction) (result ter.Result) {
 		if currentTxIDErr == nil {
 			common.MarkPreflightVerified(rules, currentTxID)
 		}
+	}
+	if result := e.preflightSignatureStructure(tx, common); result != ter.TesSUCCESS {
+		return result
 	}
 
 	// preflight2 — cryptographic signature verification runs LAST, after the
@@ -79,11 +81,10 @@ func (e *Engine) preflight(tx txcore.Transaction) (result ter.Result) {
 
 // preflightStructure runs the ledger-state-independent preflight checks in
 // rippled's invokePreflight order: the amendment gate and T::checkExtraFeatures,
-// then preflight1 (which invokes preflight0), then the per-type preflight body,
-// then the preflight2 structural (multi-sign) checks. Signature verification
-// itself runs separately in verifySignatures. This is a pure function of the
-// transaction fields and the active rules, which is what makes its verdict safe
-// to memoise (see Common.PreflightVerified).
+// then preflight1 (which invokes preflight0), then the per-type preflight body.
+// Signature-dependent structure and cryptographic verification run separately
+// below. This is a pure function of the transaction fields and the active rules,
+// which is what makes its verdict safe to memoise (see Common.PreflightVerified).
 // Reference: rippled Transactor.h Transactor::invokePreflight<T>.
 func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common) ter.Result {
 	rules := e.rules()
@@ -130,20 +131,41 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 		}
 	}
 
-	// preflight2 structural stage — the multi-sign structural rules run after
-	// T::preflight (rippled STTx::multiSignHelper reached via checkValidity) and
-	// a violation is Validity::SigBad → temINVALID. The per-signer cryptographic
-	// verification runs later in verifySignatures.
+	return ter.TesSUCCESS
+}
+
+// preflightSignatureStructure runs the non-cryptographic parts of checkValidity.
+// rippled bypasses all of checkValidity for TapDryRun and performs signer-list
+// authorization later in preclaim.
+func (e *Engine) preflightSignatureStructure(tx txcore.Transaction, common *txcore.Common) ter.Result {
+	if e.config.ApplyFlags&txcore.TapDRY_RUN != 0 {
+		return preflightSimulateKeys(common)
+	}
 	if result := e.preflightMultiSignStructure(tx, common); result != ter.TesSUCCESS {
 		return result
 	}
 	if result := e.preflightSponsorSignStructure(common); result != ter.TesSUCCESS {
 		return result
 	}
-	if result := e.preflightBatchSignerStructure(tx); result != ter.TesSUCCESS {
-		return result
-	}
+	return e.preflightBatchSignerStructure(tx)
+}
 
+func preflightSimulateKeys(common *txcore.Common) ter.Result {
+	if common.TxnSignature != "" {
+		return ter.TemINVALID
+	}
+	hasSigners := len(common.Signers) > 0 || common.HasField("Signers")
+	if !hasSigners {
+		return ter.TesSUCCESS
+	}
+	for _, signer := range common.Signers {
+		if signer.Signer.TxnSignature != "" {
+			return ter.TemINVALID
+		}
+	}
+	if common.SigningPubKey != "" {
+		return ter.TemINVALID
+	}
 	return ter.TesSUCCESS
 }
 
@@ -483,12 +505,15 @@ func (e *Engine) preflightSequence(common *txcore.Common) ter.Result {
 // (bounds, sort, uniqueness, self-sign rejection). rippled runs these inside
 // STTx::multiSignHelper, reached via checkValidity in preflight2 — AFTER the
 // per-type preflight body — and a violation is Validity::SigBad → temINVALID
-// (NOT temBAD_SIGNATURE, which the submission layer reports separately). It runs
-// regardless of SkipSignatureVerification.
+// (NOT temBAD_SIGNATURE, which the submission layer reports separately).
 // Reference: rippled STTx.cpp multiSignHelper() + Transactor::preflight2.
 func (e *Engine) preflightMultiSignStructure(tx txcore.Transaction, common *txcore.Common) ter.Result {
-	if !sign.IsMultiSigned(tx) {
+	hasSigners := len(common.Signers) > 0 || common.HasField("Signers")
+	if !hasSigners {
 		return ter.TesSUCCESS
+	}
+	if common.SigningPubKey != "" || common.TxnSignature != "" || common.HasField("TxnSignature") {
+		return ter.TemINVALID
 	}
 	// The signer array must lie within the multi-signer bounds.
 	if n := len(common.Signers); n < sign.MinMultiSigners || n > sign.MaxMultiSigners {
@@ -525,7 +550,7 @@ func (e *Engine) preflightMultiSignStructure(tx txcore.Transaction, common *txco
 }
 
 // preflightSponsorSignStructure enforces the signature-object shape even when
-// cryptographic verification is disabled (simulation and the test harness).
+// generic cryptographic verification is disabled.
 // Nested multisigners are ordered and unique by binary AccountID, but unlike
 // top-level Signers they are not compared with the transaction Account.
 func (e *Engine) preflightSponsorSignStructure(common *txcore.Common) ter.Result {
@@ -533,13 +558,14 @@ func (e *Engine) preflightSponsorSignStructure(common *txcore.Common) ter.Result
 	if sponsor == nil {
 		return ter.TesSUCCESS
 	}
+	hasSigners := len(sponsor.Signers) > 0 || sponsor.HasField("Signers")
 	if sponsor.SigningPubKey != "" {
-		if len(sponsor.Signers) != 0 {
+		if hasSigners {
 			return ter.TemINVALID
 		}
 		return ter.TesSUCCESS
 	}
-	if len(sponsor.Signers) == 0 {
+	if !hasSigners {
 		if sponsor.TxnSignature != "" {
 			return ter.TemINVALID
 		}
@@ -547,7 +573,7 @@ func (e *Engine) preflightSponsorSignStructure(common *txcore.Common) ter.Result
 		// The crypto verifier rejects it on a normal submission.
 		return ter.TesSUCCESS
 	}
-	if sponsor.TxnSignature != "" {
+	if sponsor.TxnSignature != "" || sponsor.HasField("TxnSignature") {
 		return ter.TemINVALID
 	}
 	if n := len(sponsor.Signers); n < sign.MinMultiSigners || n > sign.MaxMultiSigners {
@@ -569,10 +595,8 @@ func (e *Engine) preflightSponsorSignStructure(common *txcore.Common) ter.Result
 
 // preflightBatchSignerStructure enforces the upper bound on each
 // multi-signed BatchSigner's nested Signers array. rippled checks this inside
-// multiSignHelper (called from Batch::preflight with ctx.rules); an out-of-range
-// array there is a bad-signature validity result and surfaces as temINVALID. The
-// crypto verification of those signers lives in Batch.Validate(), which has no
-// rules access, so the rules-dependent size bound is enforced here in preflight.
+// multiSignHelper through STTx::checkBatchSign; an out-of-range array is a
+// bad-signature validity result and surfaces as temINVALID.
 func (e *Engine) preflightBatchSignerStructure(tx txcore.Transaction) ter.Result {
 	bsp, ok := tx.(txcore.BatchSignerProvider)
 	if !ok {
@@ -596,7 +620,7 @@ func (e *Engine) preflightBatchSignerStructure(tx txcore.Transaction) ter.Result
 // when SkipSignatureVerification is false. Authorization checks (master/regular
 // key) live in preclaim.
 func (e *Engine) verifySignatures(tx txcore.Transaction) ter.Result {
-	if e.config.SkipSignatureVerification {
+	if e.config.SkipSignatureVerification || e.config.ApplyFlags&txcore.TapDRY_RUN != 0 {
 		return ter.TesSUCCESS
 	}
 	if matches, err := txcore.CurrentFieldsMatchRaw(tx); err != nil || !matches {

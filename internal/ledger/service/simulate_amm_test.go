@@ -16,6 +16,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	coreamm "github.com/LeJamon/go-xrpl/internal/tx/amm"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -135,6 +136,9 @@ func TestService_SimulateTransaction_AMMCreateUsesParentHash(t *testing.T) {
 	if !result.Result.IsSuccess() {
 		t.Fatalf("AMMCreate simulate result = %v (%s), want a tes success", result.Result, result.Message)
 	}
+	if result.Applied {
+		t.Fatal("AMMCreate simulate reported applied=true")
+	}
 	if result.Metadata == nil {
 		t.Fatal("simulate returned nil metadata")
 	}
@@ -164,5 +168,43 @@ func TestService_SimulateTransaction_AMMCreateUsesParentHash(t *testing.T) {
 	}
 	if hasZero {
 		t.Errorf("simulated AMMCreate created the AMM pseudo-account at the zero-parent-hash address %s — ParentHash not threaded into the simulate EngineConfig", zeroIdx)
+	}
+}
+
+func TestService_SimulateTransaction_DoesNotAssumeMasterSignature(t *testing.T) {
+	cfg := defaultServiceConfig()
+	cfg.Startup = service.StartupConfig{Mode: service.StartupFresh}
+	svc, err := service.New(cfg)
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("service.Start: %v", err)
+	}
+	defer svc.Stop()
+
+	env := jtx.NewTestEnv(t)
+	master := jtx.MasterAccount()
+	alice := jtx.NewAccount("alice-simulate-master")
+	masterSeq := accountSeq(t, svc, master.Address)
+	mustApply(t, svc, signedBlob(t, env,
+		payment.Pay(master, alice, 100_000_000).Sequence(masterSeq).Build(), master))
+	closeLedger(t, svc)
+
+	sequence := accountSeq(t, svc, alice.Address)
+	transaction := accountset.AccountSet(alice).
+		NoFreeze().
+		Fee(env.BaseFee()).
+		Sequence(sequence).
+		Build()
+	result, err := svc.SimulateTransaction(transaction)
+	if err != nil {
+		t.Fatalf("SimulateTransaction: %v", err)
+	}
+	if result.Result != ter.TecNEED_MASTER_KEY || result.Applied {
+		t.Fatalf("simulate result = %v, applied = %v; want tecNEED_MASTER_KEY, false", result.Result, result.Applied)
+	}
+	if result.Metadata == nil {
+		t.Fatal("simulate returned nil metadata")
 	}
 }

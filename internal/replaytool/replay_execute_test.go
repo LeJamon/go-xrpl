@@ -3,6 +3,8 @@ package replaytool
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,20 +47,113 @@ func TestFillExpectedBatchInnerValidatesCanonicalLeaf(t *testing.T) {
 		t.Fatalf("inner result not synthesized from outer execution: %+v", info)
 	}
 
-	badHash := input
-	badHash.Hash[0] ^= 0xff
-	if err := fillExpectedBatchInner(&txApplyInfo{}, badHash, expected); err == nil {
-		t.Fatal("hash mismatch accepted")
+	t.Run("hash computation", func(t *testing.T) {
+		malformed := tx.NewBaseTx(tx.TypeClawback, inner.Account)
+		malformed.SetRawBytes([]byte{0})
+		badExpected := expected
+		badExpected.Transaction = malformed
+		err := fillExpectedBatchInner(&txApplyInfo{}, input, badExpected)
+		if err == nil || !strings.Contains(err.Error(), "tx 3 computing batch inner hash from outer execution:") {
+			t.Fatalf("hash computation error = %v", err)
+		}
+	})
+
+	t.Run("hash mismatch", func(t *testing.T) {
+		badInput := input
+		badInput.Hash[0] ^= 0xff
+		want := fmt.Sprintf(
+			"tx 3 batch inner hash mismatch: outer execution produced %X, captured ledger has %X",
+			hash,
+			badInput.Hash,
+		)
+		if err := fillExpectedBatchInner(&txApplyInfo{}, badInput, expected); err == nil || err.Error() != want {
+			t.Fatalf("hash mismatch error = %v, want %q", err, want)
+		}
+	})
+
+	t.Run("nil metadata", func(t *testing.T) {
+		badExpected := expected
+		badExpected.Metadata = nil
+		want := "tx 3 batch inner outer execution returned nil metadata"
+		if err := fillExpectedBatchInner(&txApplyInfo{}, input, badExpected); err == nil || err.Error() != want {
+			t.Fatalf("nil metadata error = %v, want %q", err, want)
+		}
+	})
+
+	t.Run("index mismatch", func(t *testing.T) {
+		badInput := input
+		badInput.Index++
+		want := "tx 4 batch inner TransactionIndex mismatch: outer execution produced 3, captured ledger has 4"
+		if err := fillExpectedBatchInner(&txApplyInfo{}, badInput, expected); err == nil || err.Error() != want {
+			t.Fatalf("index mismatch error = %v, want %q", err, want)
+		}
+	})
+
+	t.Run("missing parent", func(t *testing.T) {
+		badExpected := expected
+		metadata := *expected.Metadata
+		metadata.ParentBatchID = nil
+		badExpected.Metadata = &metadata
+		want := "tx 3 batch inner metadata from outer execution is missing ParentBatchID"
+		if err := fillExpectedBatchInner(&txApplyInfo{}, input, badExpected); err == nil || err.Error() != want {
+			t.Fatalf("missing parent error = %v, want %q", err, want)
+		}
+	})
+}
+
+func TestExecuteBlockRejectsCanonicalTransactionDivergence(t *testing.T) {
+	seed, err := genesis.Create(genesis.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
 	}
-	badIndex := input
-	badIndex.Index++
-	if err := fillExpectedBatchInner(&txApplyInfo{}, badIndex, expected); err == nil {
-		t.Fatal("index mismatch accepted")
+	makeInput := func(t *testing.T, sequence uint32, index int) blockTransaction {
+		t.Helper()
+		transaction := account.NewAccountSet(seed.GenesisAddress)
+		transaction.Fee = "10"
+		transaction.SetSequence(sequence)
+		blob, err := tx.SerializeTransaction(transaction)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hash, err := tx.ComputeTransactionHash(transaction)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return blockTransaction{Index: index, Hash: hash, Blob: blob, Transaction: transaction}
 	}
-	expected.Metadata.ParentBatchID = nil
-	if err := fillExpectedBatchInner(&txApplyInfo{}, input, expected); err == nil {
-		t.Fatal("missing ParentBatchID accepted")
+	execute := func(transaction blockTransaction) error {
+		stateMap, err := seed.StateMap.SnapshotMutable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = executeBlock(context.Background(), blockExecution{
+			StateMap:            stateMap,
+			LedgerIndex:         2,
+			ParentCloseTime:     time.Unix(10, 0),
+			CloseTime:           time.Unix(20, 0),
+			CloseTimeResolution: 10,
+			TotalCoins:          seed.Header.Drops,
+			Fees:                drops.DefaultFees(),
+			Rules:               amendment.AllSupportedRules(),
+			Transactions:        []blockTransaction{transaction},
+		})
+		return err
 	}
+
+	t.Run("not applied", func(t *testing.T) {
+		err := execute(makeInput(t, 2, 0))
+		if err == nil || err.Error() != "tx 0 was not applied: terPRE_SEQ" {
+			t.Fatalf("non-applied error = %v", err)
+		}
+	})
+
+	t.Run("metadata index", func(t *testing.T) {
+		err := execute(makeInput(t, 1, 1))
+		want := "tx 1 TransactionIndex mismatch: execution produced 0, captured ledger has 1"
+		if err == nil || err.Error() != want {
+			t.Fatalf("metadata index error = %v, want %q", err, want)
+		}
+	})
 }
 
 func TestExecuteBlockSkipsRecordedBatchInnerLeaves(t *testing.T) {

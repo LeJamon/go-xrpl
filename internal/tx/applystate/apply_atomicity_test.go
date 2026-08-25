@@ -124,6 +124,40 @@ func applyTestAccountRootFields() map[string]any {
 	}
 }
 
+func TestPreviewBuildsMetadataWithoutMutatingBase(t *testing.T) {
+	base := newRecordingBaseView()
+	accountKey := keylet.Keylet{Key: [32]byte{1}}
+	originalFields := applyTestAccountRootFields()
+	originalFields["PreviousTxnID"] = hex.EncodeToString(make([]byte, 32))
+	originalFields["PreviousTxnLgrSeq"] = uint32(1)
+	original := encodeApplyTestEntry(t, originalFields)
+	base.data[accountKey.Key] = original
+
+	table := NewApplyStateTable(base, [32]byte{2}, 3, amendment.AllSupportedRules())
+	updatedFields := applyTestAccountRootFields()
+	updatedFields["PreviousTxnID"] = hex.EncodeToString(make([]byte, 32))
+	updatedFields["PreviousTxnLgrSeq"] = uint32(1)
+	updatedFields["Balance"] = "999990"
+	updated := encodeApplyTestEntry(t, updatedFields)
+	if err := table.Update(accountKey, updated); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	metadata, err := table.Preview()
+	if err != nil {
+		t.Fatalf("Preview: %v", err)
+	}
+	if len(metadata.AffectedNodes) != 1 {
+		t.Fatalf("AffectedNodes = %d, want 1", len(metadata.AffectedNodes))
+	}
+	if !bytes.Equal(base.data[accountKey.Key], original) {
+		t.Fatal("Preview mutated the base entry")
+	}
+	if len(base.mutations) != 0 {
+		t.Fatalf("Preview recorded %d base mutations", len(base.mutations))
+	}
+}
+
 func TestApplyMetadataBuildErrorDoesNotMutateBase(t *testing.T) {
 	valid := encodeApplyTestEntry(t, applyTestAccountRootFields())
 	invalidFields := applyTestAccountRootFields()

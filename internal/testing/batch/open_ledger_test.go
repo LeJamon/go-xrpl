@@ -11,6 +11,7 @@ import (
 	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
 	"github.com/LeJamon/go-xrpl/internal/tx/check"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	sponsortx "github.com/LeJamon/go-xrpl/internal/tx/sponsor"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/stretchr/testify/require"
@@ -404,6 +405,90 @@ func TestClosedLedgerIndexesBatchInnerTransactions(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, innerHash, storedHash)
 	}
+}
+
+func TestClosedLedgerIndexesSponsoredBatchAfterDelegatedMultiSign(t *testing.T) {
+	env := newBatchEnv(t)
+	alice := jtx.NewAccount("alice")
+	delegate := jtx.NewAccount("delegate")
+	destination := jtx.NewAccount("destination")
+	otherSigner := jtx.NewAccount("other-signer")
+	sponsor := jtx.NewAccount("sponsor")
+	env.Fund(alice, delegate, destination, otherSigner, sponsor)
+	env.Close()
+
+	env.SetDelegate(alice, delegate, []string{"Payment"})
+	env.SetSignerList(delegate, 2, []jtx.TestSigner{
+		{Account: alice, Weight: 1},
+		{Account: otherSigner, Weight: 1},
+	})
+	sponsorship := sponsortx.NewSponsorshipSet(sponsor.Address)
+	sponsorship.Sponsee = alice.Address
+	feeBudget := tx.NewXRPAmount(1_000)
+	sponsorship.FeeAmountDelta = &feeBudget
+	jtx.RequireTxSuccess(t, env.Submit(sponsorship))
+	env.Close()
+
+	transactions := make([]tx.Transaction, 0, 8)
+	delegated := payment.NewPayment(alice.Address, destination.Address, tx.NewXRPAmount(1))
+	delegated.Delegate = delegate.Address
+	jtx.RequireTxSuccess(t, env.SubmitMultiSigned(delegated, []*jtx.Account{alice, otherSigner}))
+	transactions = append(transactions, delegated)
+	for range 4 {
+		noop := accounttx.NewAccountSet(alice.Address)
+		jtx.RequireTxSuccess(t, env.Submit(noop))
+		transactions = append(transactions, noop)
+	}
+
+	aliceSeq := env.Seq(alice)
+	batch := NewBatchBuilder(alice, aliceSeq, CalcBatchFeeFromEnv(env, 0, 2), batchtx.BatchFlagAllOrNothing).
+		AddInnerTx(MakeInnerPaymentXRP(alice, destination, 1, aliceSeq+1)).
+		AddInnerTx(MakeInnerPaymentXRP(alice, destination, 2, aliceSeq+2)).
+		MustBuild()
+	batch.Sponsor = sponsor.Address
+	sponsorFlags := tx.SpfSponsorFee
+	batch.SponsorFlags = &sponsorFlags
+	jtx.RequireTxSuccess(t, env.Submit(batch))
+	transactions = append(transactions, batch)
+	for i := range batch.RawTransactions {
+		transactions = append(transactions, batch.RawTransactions[i].RawTransaction.InnerTx)
+	}
+
+	hashes := make([][32]byte, len(transactions))
+	for i, transaction := range transactions {
+		var err error
+		hashes[i], err = tx.ComputeTransactionHash(transaction)
+		require.NoError(t, err)
+	}
+	outerHash := hashes[5]
+
+	env.Close()
+	closed := env.LastClosedLedger()
+	require.Equal(t, uint32(8), closed.TxCount())
+	for index, hash := range hashes {
+		raw, found, err := closed.GetTransaction(hash)
+		require.NoError(t, err)
+		require.True(t, found, "transaction %d is missing from the closed ledger", index)
+		accepted := ledgerservice.ParseAcceptedTransaction(raw)
+		require.NoError(t, accepted.ParseError())
+		require.Equal(t, ter.TesSUCCESS, accepted.Result())
+		storedIndex, ok := accepted.TransactionIndex()
+		require.True(t, ok)
+		require.Equal(t, uint32(index), storedIndex)
+		parsed, err := tx.ParseFromBinary(accepted.TransactionBlob())
+		require.NoError(t, err)
+		storedHash, err := tx.ComputeTransactionHash(parsed)
+		require.NoError(t, err)
+		require.Equal(t, hash, storedHash)
+		if index >= 6 {
+			require.Equal(t, fmt.Sprintf("%X", outerHash[:]), accepted.Metadata()["ParentBatchID"])
+		}
+	}
+
+	txRoot, err := closed.TxMapHash()
+	require.NoError(t, err)
+	require.Equal(t, closed.Header().TxHash, txRoot)
+	require.Equal(t, "BD76A302261EC77B227F1DC8FCAE86C9CA58D8FD6A8E1397872744551ACA17B1", fmt.Sprintf("%X", txRoot[:]))
 }
 
 // makeSmallQueueConfig creates a TxQ config matching rippled's Batch_test

@@ -206,7 +206,7 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 	if err := table.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee)); err != nil {
 		return ter.TefINTERNAL, 0
 	}
-	generatedMeta, err := table.Apply()
+	generatedMeta, err := e.applyTable(table)
 	if err != nil {
 		return ter.TefINTERNAL, 0
 	}
@@ -464,7 +464,7 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 	if err := tecTable.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee)); err != nil {
 		return ter.TefINTERNAL
 	}
-	generatedMeta, applyErr := tecTable.Apply()
+	generatedMeta, applyErr := e.applyTable(tecTable)
 	if applyErr != nil {
 		return ter.TefINTERNAL
 	}
@@ -925,11 +925,18 @@ func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (
 	if err := invTecTable.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee)); err != nil {
 		return ter.TefINTERNAL
 	}
-	generatedMeta, applyErr := invTecTable.Apply()
+	generatedMeta, applyErr := e.applyTable(invTecTable)
 	if applyErr != nil {
 		return ter.TefINTERNAL
 	}
 	st.metadata.AffectedNodes = generatedMeta.AffectedNodes
 
 	return ter.TecINVARIANT_FAILED
+}
+
+func (e *Engine) applyTable(table *applystate.ApplyStateTable) (*txcore.Metadata, error) {
+	if e.config.ApplyFlags&txcore.TapDRY_RUN != 0 {
+		return table.Preview()
+	}
+	return table.Apply()
 }
