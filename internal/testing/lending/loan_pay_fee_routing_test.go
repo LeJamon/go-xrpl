@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	mpttest "github.com/LeJamon/go-xrpl/internal/testing/mpt"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending"
 	txsign "github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -14,9 +15,9 @@ import (
 
 const loanPayServiceFee = int64(100)
 
-func setupLoanPayFeeRouting(t *testing.T, kind string) (*loanSetAssetFixture, string, *jtx.Account) {
+func setupLoanPayFeeRouting(t *testing.T, kind string, mptCreateFlags ...uint32) (*loanSetAssetFixture, string, *jtx.Account) {
 	t.Helper()
-	f := newLoanSetAssetFixture(t, kind)
+	f := newLoanSetAssetFixture(t, kind, mptCreateFlags...)
 	f.createHolding(f.owner)
 
 	loanSet := lending.NewLoanSet(f.borrower.Address, f.brokerID, "1000")
@@ -129,10 +130,41 @@ func TestLoanPayMissingBrokerOwnerHoldingRoutesFeeToCover(t *testing.T) {
 }
 
 func TestLoanPayDeepFrozenBrokerOwnerAndPseudoFails(t *testing.T) {
-	f, loanID, pseudo := setupLoanPayFeeRouting(t, "IOU")
-	deepFreezeLoanSetTrustLine(t, f, f.owner.AccountID())
-	deepFreezeLoanSetTrustLine(t, f, pseudo.AccountID())
+	tests := []struct {
+		name           string
+		kind           string
+		mptCreateFlags []uint32
+		freeze         func(*testing.T, *loanSetAssetFixture, *jtx.Account)
+		want           string
+	}{
+		{
+			name: "IOU",
+			kind: "IOU",
+			freeze: func(t *testing.T, f *loanSetAssetFixture, pseudo *jtx.Account) {
+				deepFreezeLoanSetTrustLine(t, f, f.owner.AccountID())
+				deepFreezeLoanSetTrustLine(t, f, pseudo.AccountID())
+			},
+			want: jtx.TecFROZEN,
+		},
+		{
+			name:           "MPT",
+			kind:           "MPT",
+			mptCreateFlags: []uint32{mpttest.TfMPTCanLock},
+			freeze: func(_ *testing.T, f *loanSetAssetFixture, pseudo *jtx.Account) {
+				f.token.Set(mpttest.SetOpts{Holder: f.owner, Flags: mpttest.TfMPTLock})
+				f.token.Set(mpttest.SetOpts{Holder: pseudo, Flags: mpttest.TfMPTLock})
+			},
+			want: jtx.TecLOCKED,
+		},
+	}
 
-	jtx.RequireTxClaimed(t, f.env.Submit(loanPayFee(f, loanID)), jtx.TecFROZEN)
-	requireLoanPayFeeBalances(t, f, pseudo, 0, 0)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			f, loanID, pseudo := setupLoanPayFeeRouting(t, test.kind, test.mptCreateFlags...)
+			test.freeze(t, f, pseudo)
+
+			jtx.RequireTxClaimed(t, f.env.Submit(loanPayFee(f, loanID)), test.want)
+			requireLoanPayFeeBalances(t, f, pseudo, 0, 0)
+		})
+	}
 }
