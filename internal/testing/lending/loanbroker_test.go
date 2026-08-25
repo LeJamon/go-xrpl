@@ -13,6 +13,7 @@ import (
 	mpttest "github.com/LeJamon/go-xrpl/internal/testing/mpt"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending"
+	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	txsign "github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -219,6 +220,52 @@ func TestLoanBroker_CoverDepositInsufficientFunds(t *testing.T) {
 	// Deposit more than the owner can spend.
 	dep := lending.NewLoanBrokerCoverDeposit(owner.Address, bid, tx.NewXRPAmount(1_000_000_000_000))
 	jtx.RequireTxClaimed(t, env.Submit(dep), jtx.TecINSUFFICIENT_FUNDS)
+}
+
+func TestLoanBroker_InitialTinyIOUCoverDeposit(t *testing.T) {
+	env := newLendingEnv(t)
+	issuer := jtx.NewAccount("issuer")
+	owner := jtx.NewAccount("owner")
+	for _, account := range []*jtx.Account{issuer, owner} {
+		env.FundAmount(account, 10_000_000_000)
+	}
+
+	env.Trust(owner, tx.NewIssuedAmountFromFloat64(1, "USD", issuer.Address))
+	tiny := tx.NewIssuedAmount(1_000_000_000_000_000, -30, "USD", issuer.Address)
+	jtx.RequireTxSuccess(t, env.Submit(payment.NewPayment(issuer.Address, owner.Address, tiny)))
+
+	vaultSeq := env.Seq(owner)
+	create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: "USD", Issuer: issuer.Address})
+	create.Common.Fee = reserveIncrement
+	jtx.RequireTxSuccess(t, env.Submit(create))
+
+	brokerSeq := env.Seq(owner)
+	jtx.RequireTxSuccess(t, env.Submit(lending.NewLoanBrokerSet(owner.Address, vaultID(owner, vaultSeq))))
+	bid := brokerID(owner, brokerSeq)
+	brokerKey := keylet.LoanBroker(owner.AccountID(), brokerSeq)
+	broker := decodeLendingEntry(t, env, brokerKey)
+	if _, present := broker["CoverAvailable"]; present {
+		t.Fatalf("initial LoanBroker CoverAvailable = %v, want absent", broker["CoverAvailable"])
+	}
+	jtx.RequireTxClaimed(t, env.Submit(lending.NewLoanBrokerCoverWithdraw(owner.Address, bid, tiny)), jtx.TecINSUFFICIENT_FUNDS)
+
+	jtx.RequireTxSuccess(t, env.Submit(lending.NewLoanBrokerCoverDeposit(owner.Address, bid, tiny)))
+
+	broker = decodeLendingEntry(t, env, brokerKey)
+	if got := broker["CoverAvailable"]; got != "1e-15" {
+		t.Fatalf("LoanBroker CoverAvailable = %v, want 1e-15", got)
+	}
+	pseudoAddress, ok := broker["Account"].(string)
+	if !ok {
+		t.Fatalf("LoanBroker Account = %v, want address", broker["Account"])
+	}
+	pseudo := jtx.NewAccountWithAddress("broker", pseudoAddress)
+	if got := env.IOUBalance(pseudo, issuer, "USD"); got.Compare(tiny) != 0 {
+		t.Fatalf("broker USD balance = %s, want 1e-15", got.Value())
+	}
+	if got := env.IOUBalance(owner, issuer, "USD").Value(); got != "0" {
+		t.Fatalf("owner USD balance = %s, want 0", got)
+	}
 }
 
 func TestLoanSet_UpwardPaymentCountXRP(t *testing.T) {

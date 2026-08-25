@@ -39,6 +39,14 @@ func TestRoundToAsset_IOU(t *testing.T) {
 	require.True(t, NewXRPLNumberScaled(0, 0, MantissaScaleLarge, RoundToNearest).RoundToAsset(false).IsZero())
 }
 
+func TestAssetExponent_Zero(t *testing.T) {
+	t.Parallel()
+	zero := NewXRPLNumberScaled(0, 0, MantissaScaleLarge, RoundToNearest)
+	require.Equal(t, 0, zero.AssetExponent(true, RoundToNearest))
+	require.Equal(t, zeroExponent, zero.AssetExponent(false, RoundToNearest))
+	require.Equal(t, -15, NewXRPLNumberScaled(25, -1, MantissaScaleLarge, RoundToNearest).AssetExponent(false, RoundToNearest))
+}
+
 func TestAssociateAssetField_Removal(t *testing.T) {
 	t.Parallel()
 	// Integral asset, sub-unit value, soeDEFAULT field -> removed.
