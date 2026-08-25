@@ -20,6 +20,7 @@ func TestService_SimulateDelegatedMultiSignDryRun(t *testing.T) {
 	cfg.GenesisConfig.Amendments = append(
 		cfg.GenesisConfig.Amendments,
 		amendment.FeaturePermissionDelegationV1_1,
+		amendment.FeatureSponsor,
 	)
 	svc, err := service.New(cfg)
 	if err != nil {
