@@ -215,8 +215,6 @@ func (e *Engine) payExternalFeeOnTable(
 		return ter.TefINTERNAL
 	}
 	account.Balance = balance - fee
-	account.PreviousTxnID = st.txHash
-	account.PreviousTxnLgrSeq = e.config.LedgerSequence
 	updated, err := state.SerializeAccountRoot(account)
 	if err != nil {
 		return ter.TefINTERNAL
