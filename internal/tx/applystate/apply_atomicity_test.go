@@ -127,11 +127,16 @@ func applyTestAccountRootFields() map[string]any {
 func TestPreviewBuildsMetadataWithoutMutatingBase(t *testing.T) {
 	base := newRecordingBaseView()
 	accountKey := keylet.Keylet{Key: [32]byte{1}}
-	original := encodeApplyTestEntry(t, applyTestAccountRootFields())
+	originalFields := applyTestAccountRootFields()
+	originalFields["PreviousTxnID"] = hex.EncodeToString(make([]byte, 32))
+	originalFields["PreviousTxnLgrSeq"] = uint32(1)
+	original := encodeApplyTestEntry(t, originalFields)
 	base.data[accountKey.Key] = original
 
 	table := NewApplyStateTable(base, [32]byte{2}, 3, amendment.AllSupportedRules())
 	updatedFields := applyTestAccountRootFields()
+	updatedFields["PreviousTxnID"] = hex.EncodeToString(make([]byte, 32))
+	updatedFields["PreviousTxnLgrSeq"] = uint32(1)
 	updatedFields["Balance"] = "999990"
 	updated := encodeApplyTestEntry(t, updatedFields)
 	if err := table.Update(accountKey, updated); err != nil {
