@@ -69,8 +69,7 @@ func (a vvAsset) roundMode(n state.XRPLNumber, scale int, mode state.RoundingMod
 		return n.RoundToAssetScale(a.integral(), scale, mode)
 	}
 
-	iou := state.NewIssuedAmountFromValueRounded(
-		n.Mantissa(), n.Exponent(), a.currency, state.AccountOneAddress, mode)
+	iou := n.ToIOUAmountValueRounded(mode)
 	if iou.Exponent() >= scale {
 		return state.NewXRPLNumberScaled(
 			iou.Mantissa(), iou.Exponent(), a.numberScale, state.RoundToNearest)

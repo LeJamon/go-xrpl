@@ -629,3 +629,111 @@ func TestValidVault_IOUWithdrawDestinationRounding(t *testing.T) {
 		})
 	}
 }
+
+func TestValidVault_IOUWithdrawDevnetReplays(t *testing.T) {
+	decodeAccount := func(address string) [20]byte {
+		t.Helper()
+		id, err := state.DecodeAccountID(address)
+		if err != nil {
+			t.Fatalf("DecodeAccountID(%q): %v", address, err)
+		}
+		return id
+	}
+
+	ownerAddr := "r46WNXDDAtSHdh9Rvm5J41j4Ti3GyzM5Sp"
+	pseudoAddr := "rLRMvHBbB6JTEBBhehM1JPUVWQMZD4z3Xz"
+	issuerAddr := "rKdn3RpnuzPET9woCQuk2SgkbELy6H6W1R"
+	pseudo := decodeAccount(pseudoAddr)
+	issuer := decodeAccount(issuerAddr)
+	shareMPTID := keylet.MakeMPTID(1, pseudo)
+	rules := amendment.NewRules([][32]byte{
+		amendment.FeatureSingleAssetVault,
+		amendment.FeatureFixCleanup3_1_3,
+		amendment.FeatureFixCleanup3_2_0,
+		amendment.FeatureFixCleanup3_3_0,
+	})
+
+	tests := []struct {
+		name              string
+		depositor         string
+		totalBefore       string
+		totalAfter        string
+		availableBefore   string
+		availableAfter    string
+		sharesBefore      uint64
+		sharesAfter       uint64
+		holderBefore      uint64
+		holderAfter       uint64
+		destinationBefore string
+		destinationAfter  string
+	}{
+		{
+			name:              "ledger 4578582 tx 4 D0AE3BBD",
+			depositor:         "rsA1zaXz9HQxB4d2fBGUu9r3Ygb2UNNXKv",
+			totalBefore:       "54808762.11826391",
+			totalAfter:        "52723329.09645424",
+			availableBefore:   "54808762.11826391",
+			availableAfter:    "52723329.09645424",
+			sharesBefore:      54806520867600,
+			sharesAfter:       52721173123727,
+			holderBefore:      19352057169703,
+			holderAfter:       17266709425830,
+			destinationBefore: "647862.6713233182",
+			destinationAfter:  "2733295.693132984",
+		},
+		{
+			name:              "ledger 4580939 tx 0 966DA1AE",
+			depositor:         "rhTUoerSbHpZ5E8FeUCAutQzcfHfRdziRi",
+			totalBefore:       "50691895.9212125",
+			totalAfter:        "49631799.29673517",
+			availableBefore:   "41607962.51892146",
+			availableAfter:    "40547865.89444413",
+			sharesBefore:      50689501511014,
+			sharesAfter:       49629454959751,
+			holderBefore:      19005255421867,
+			holderAfter:       17945208870604,
+			destinationBefore: "994666.4983692964",
+			destinationAfter:  "2054763.122846622",
+		},
+		{
+			name:              "ledger 4581017 tx 1 06DF8E74",
+			depositor:         "r4VEHkgBRH2iMoBU67MtowpEhSpZ6MWgz2",
+			totalBefore:       "54413672.32739238",
+			totalAfter:        "53066747.76670765",
+			availableBefore:   "53131632.44966958",
+			availableAfter:    "51784707.88898485",
+			sharesBefore:      54411096988060,
+			sharesAfter:       53064236175835,
+			holderBefore:      19094084839304,
+			holderAfter:       17747224027079,
+			destinationBefore: "905825.8066623792",
+			destinationAfter:  "2252750.367347105",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			depositor := decodeAccount(tc.depositor)
+			entries := []InvariantEntry{
+				{
+					EntryType: entry.TypeVault,
+					Before: vvCraftIOUVault(
+						t, ownerAddr, pseudoAddr, issuerAddr, shareMPTID,
+						tc.totalBefore, tc.availableBefore),
+					After: vvCraftIOUVault(
+						t, ownerAddr, pseudoAddr, issuerAddr, shareMPTID,
+						tc.totalAfter, tc.availableAfter),
+				},
+				vvIssuanceEntry(t, pseudo, shareMPTID, tc.sharesBefore, tc.sharesAfter),
+				vvMPTokenEntry(t, depositor, shareMPTID, tc.holderBefore, tc.holderAfter),
+				vvIOULineEntry(t, pseudo, issuer, tc.availableBefore, tc.availableAfter),
+				vvIOULineEntry(t, depositor, issuer, tc.destinationBefore, tc.destinationAfter),
+			}
+			tx := vvTx{txType: protocol.TxTypeVaultWithdraw, acct: tc.depositor}
+
+			if violation := checkValidVault(tx, TesSUCCESS, 1, entries, stubView{}, rules); violation != nil {
+				t.Fatalf("checkValidVault = %q", violation.Message)
+			}
+		})
+	}
+}
