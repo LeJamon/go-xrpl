@@ -508,7 +508,6 @@ func (e *Engine) preflightMultiSignStructure(tx txcore.Transaction, common *txco
 		if decErr != nil {
 			return ter.TemINVALID
 		}
-		// The signing identity may not multisign for itself.
 		if signerID == idAccountID {
 			return ter.TemINVALID
 		}
