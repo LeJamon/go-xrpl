@@ -11,7 +11,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -76,13 +75,8 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) ter.Result {
 	senderIsIssuer := ctx.AccountID == issuerID
 	destIsIssuer := destAccountID == issuerID
 
-	// canTransfer: holder-to-holder requires CanTransfer flag.
-	// Checked BEFORE deposit preauth, matching rippled's ordering.
-	// Reference: rippled Payment.cpp:526-529
-	if !senderIsIssuer && !destIsIssuer {
-		if issuance.Flags&entry.LsfMPTCanTransfer == 0 {
-			return ter.TecNO_AUTH
-		}
+	if result := mptutil.CanTransfer(ctx.View, mptID, ctx.AccountID, destAccountID); result != ter.TesSUCCESS {
+		return result
 	}
 
 	// Verify deposit preauth

@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	paybuilder "github.com/LeJamon/go-xrpl/internal/testing/payment"
+	trustbuilder "github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/mpt"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
@@ -16,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestVaultSharePaymentRequiresUnderlyingIOUAuthorization(t *testing.T) {
+func TestVaultSharePaymentInheritsUnderlyingIOUChecks(t *testing.T) {
 	env := newVaultEnv(t)
 	env.DisableFeature("MPTokensV2")
 	env.Close()
@@ -41,6 +42,7 @@ func TestVaultSharePaymentRequiresUnderlyingIOUAuthorization(t *testing.T) {
 	vaultInfo, err := vault.ReadVaultInfo(env.Ledger(), vaultKey)
 	require.NoError(t, err)
 	require.NotNil(t, vaultInfo)
+	require.NotNil(t, vaultShareIssuance(t, env, vaultInfo.ShareMPTID).ReferenceHolding)
 	shareID := mptutil.EncodeID(vaultInfo.ShareMPTID)
 
 	deposit := vault.NewVaultDeposit(
@@ -77,6 +79,26 @@ func TestVaultSharePaymentRequiresUnderlyingIOUAuthorization(t *testing.T) {
 	require.Equal(t, destinationShares, vaultShareBalance(t, env, vaultInfo.ShareMPTID, destination))
 
 	env.AuthorizeTrustLine(issuer, destination, currency)
+	jtx.RequireTxSuccess(t, env.Submit(trustbuilder.TrustLine(issuer, currency, owner, "0").NoRipple().Build()))
+	jtx.RequireTxSuccess(t, env.Submit(trustbuilder.TrustLine(issuer, currency, destination, "0").NoRipple().Build()))
+	require.True(t, env.HasNoRipple(issuer, owner, currency))
+	require.True(t, env.HasNoRipple(issuer, destination, currency))
+
+	ownerXRP = env.Balance(owner)
+	ownerSequence := env.Seq(owner)
+	noRippleResult := env.Submit(payment())
+	jtx.RequireTxFail(t, noRippleResult, jtx.TerNO_RIPPLE)
+	require.False(t, noRippleResult.Applied)
+	require.False(t, noRippleResult.Queued)
+	require.Zero(t, noRippleResult.Fee)
+	require.Nil(t, noRippleResult.Metadata)
+	require.Equal(t, ownerXRP, env.Balance(owner))
+	require.Equal(t, ownerSequence, env.Seq(owner))
+	require.Equal(t, ownerShares, vaultShareBalance(t, env, vaultInfo.ShareMPTID, owner))
+	require.Equal(t, destinationShares, vaultShareBalance(t, env, vaultInfo.ShareMPTID, destination))
+
+	jtx.RequireTxSuccess(t, env.Submit(trustbuilder.TrustLine(issuer, currency, destination, "0").ClearNoRipple().Build()))
+	require.False(t, env.HasNoRipple(issuer, destination, currency))
 	ownerXRP = env.Balance(owner)
 	jtx.RequireTxSuccess(t, env.Submit(payment()))
 	require.Equal(t, ownerXRP-env.BaseFee(), env.Balance(owner))
