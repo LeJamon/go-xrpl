@@ -39,6 +39,63 @@ func payDelegated(env *jtx.TestEnv, owner, delegate, dest *jtx.Account, amount t
 	return env.SubmitSignedWith(p, delegate)
 }
 
+func TestDelegate_MultiSignUsesDelegateAsInitiator(t *testing.T) {
+	newEnv := func(t *testing.T) (*jtx.TestEnv, *jtx.Account, *jtx.Account, *jtx.Account, *jtx.Account) {
+		t.Helper()
+		env := jtx.NewTestEnv(t)
+		owner := jtx.NewAccount("owner")
+		delegate := jtx.NewAccount("delegate")
+		destination := jtx.NewAccount("destination")
+		otherSigner := jtx.NewAccount("other-signer")
+		env.Fund(owner, delegate, destination, otherSigner)
+		env.Close()
+		return env, owner, delegate, destination, otherSigner
+	}
+
+	t.Run("delegator may sign for delegate", func(t *testing.T) {
+		env, owner, delegate, destination, otherSigner := newEnv(t)
+		env.SetDelegate(owner, delegate, []string{"Payment"})
+		env.SetSignerList(delegate, 2, []jtx.TestSigner{
+			{Account: owner, Weight: 1},
+			{Account: otherSigner, Weight: 1},
+		})
+		env.Close()
+
+		payment := paymenttx.NewPayment(owner.Address, destination.Address, tx.NewXRPAmount(1_000))
+		payment.Delegate = delegate.Address
+		result := env.SubmitMultiSigned(payment, []*jtx.Account{owner, otherSigner})
+		jtx.RequireTxSuccess(t, result)
+	})
+
+	t.Run("delegate may not sign for itself", func(t *testing.T) {
+		env, owner, delegate, destination, otherSigner := newEnv(t)
+		env.SetDelegate(owner, delegate, []string{"Payment"})
+		env.SetSignerList(delegate, 2, []jtx.TestSigner{
+			{Account: owner, Weight: 1},
+			{Account: otherSigner, Weight: 1},
+		})
+		env.Close()
+
+		payment := paymenttx.NewPayment(owner.Address, destination.Address, tx.NewXRPAmount(1_000))
+		payment.Delegate = delegate.Address
+		result := env.SubmitMultiSigned(payment, []*jtx.Account{owner, delegate})
+		jtx.RequireTxFail(t, result, "temINVALID")
+	})
+
+	t.Run("ordinary account may not sign for itself", func(t *testing.T) {
+		env, owner, delegate, destination, otherSigner := newEnv(t)
+		env.SetSignerList(owner, 2, []jtx.TestSigner{
+			{Account: delegate, Weight: 1},
+			{Account: otherSigner, Weight: 1},
+		})
+		env.Close()
+
+		payment := paymenttx.NewPayment(owner.Address, destination.Address, tx.NewXRPAmount(1_000))
+		result := env.SubmitMultiSigned(payment, []*jtx.Account{owner, otherSigner})
+		jtx.RequireTxFail(t, result, "temINVALID")
+	})
+}
+
 // TestDelegate_FeatureDisabled confirms a DelegateSet is rejected with
 // temDISABLED until PermissionDelegationV1_1 is enabled.
 // Reference: rippled Delegate_test.cpp testFeatureDisabled.

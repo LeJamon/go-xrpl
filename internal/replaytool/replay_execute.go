@@ -149,17 +149,29 @@ func executeBlock(ctx context.Context, input blockExecution) (*executedBlock, er
 			return nil, fmt.Errorf("tx %d processor hash %x does not match validated hash %x", transaction.Index, blockTxResult.Hash, transaction.Hash)
 		}
 		applyResult := blockTxResult.ApplyResult
+		if !applyResult.Applied {
+			return nil, fmt.Errorf("tx %d was not applied: %s", transaction.Index, applyResult.Result)
+		}
+		if applyResult.Metadata == nil {
+			return nil, fmt.Errorf("tx %d execution returned nil metadata", transaction.Index)
+		}
+		if applyResult.Metadata.TransactionIndex != uint32(transaction.Index) {
+			return nil, fmt.Errorf(
+				"tx %d TransactionIndex mismatch: execution produced %d, captured ledger has %d",
+				transaction.Index,
+				applyResult.Metadata.TransactionIndex,
+				transaction.Index,
+			)
+		}
 		txInfo.Result = applyResult.Result.String()
 		txInfo.ResultCode = int(applyResult.Result)
 		txInfo.Applied = applyResult.Applied
 		txInfo.Fee = applyResult.Fee
-		if applyResult.Applied {
-			_, metadata, err := tx.SplitTxWithMetaBlobStrict(blockTxResult.TxWithMetaBlob)
-			if err != nil {
-				return nil, fmt.Errorf("tx %d extracting applied metadata: %w", transaction.Index, err)
-			}
-			txInfo.MetaBlob = metadata
+		_, metadata, err := tx.SplitTxWithMetaBlobStrict(blockTxResult.TxWithMetaBlob)
+		if err != nil {
+			return nil, fmt.Errorf("tx %d extracting applied metadata: %w", transaction.Index, err)
 		}
+		txInfo.MetaBlob = metadata
 		result.TxResults = append(result.TxResults, txInfo)
 		expectedBatchInners = append(expectedBatchInners, applyResult.AppliedInnerTransactions...)
 	}
@@ -199,11 +211,31 @@ func executeBlock(ctx context.Context, input blockExecution) (*executedBlock, er
 }
 
 func fillExpectedBatchInner(info *txApplyInfo, input blockTransaction, expected tx.AppliedInnerTransaction) error {
-	expectedHash, hashErr := tx.ComputeTransactionHash(expected.Transaction)
-	if hashErr != nil || expectedHash != input.Hash || expected.Metadata == nil ||
-		expected.Metadata.TransactionIndex != uint32(input.Index) ||
-		expected.Metadata.ParentBatchID == nil {
-		return fmt.Errorf("tx %d batch inner does not match outer execution", input.Index)
+	expectedHash, err := tx.ComputeTransactionHash(expected.Transaction)
+	if err != nil {
+		return fmt.Errorf("tx %d computing batch inner hash from outer execution: %w", input.Index, err)
+	}
+	if expectedHash != input.Hash {
+		return fmt.Errorf(
+			"tx %d batch inner hash mismatch: outer execution produced %X, captured ledger has %X",
+			input.Index,
+			expectedHash,
+			input.Hash,
+		)
+	}
+	if expected.Metadata == nil {
+		return fmt.Errorf("tx %d batch inner outer execution returned nil metadata", input.Index)
+	}
+	if expected.Metadata.TransactionIndex != uint32(input.Index) {
+		return fmt.Errorf(
+			"tx %d batch inner TransactionIndex mismatch: outer execution produced %d, captured ledger has %d",
+			input.Index,
+			expected.Metadata.TransactionIndex,
+			input.Index,
+		)
+	}
+	if expected.Metadata.ParentBatchID == nil {
+		return fmt.Errorf("tx %d batch inner metadata from outer execution is missing ParentBatchID", input.Index)
 	}
 	metadata, err := tx.SerializeMetadata(expected.Metadata)
 	if err != nil {
