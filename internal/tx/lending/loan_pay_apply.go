@@ -5,6 +5,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending/lmath"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
@@ -222,11 +223,13 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 		minCover = brokerCoverRateAtScale(number(b.DebtTotal), b.CoverRateMinimum, loanScale, integral)
 	}
 	sendFeeToOwner := number(b.CoverAvailable).Cmp(minCover) >= 0 &&
-		tx.AssetFrozen(ctx.View, b.Owner, asset) == ter.TesSUCCESS &&
-		tx.RequireAuth(ctx.View, asset, b.Owner) == ter.TesSUCCESS
+		mptutil.CheckDeepFrozen(ctx.View, b.Owner, asset) == ter.TesSUCCESS &&
+		mptutil.RequireAssetAuthAt(ctx.View, asset, b.Owner, mptutil.StrongAuth, ctx.Config.ParentCloseTime) == ter.TesSUCCESS
 	brokerPayee := b.Account
 	if sendFeeToOwner {
 		brokerPayee = b.Owner
+	} else if r := mptutil.CheckDeepFrozen(ctx.View, brokerPayee, asset); r != ter.TesSUCCESS {
+		return r
 	}
 
 	// Reverse any impairment before applying the payment.
