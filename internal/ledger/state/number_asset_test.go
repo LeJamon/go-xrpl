@@ -37,6 +37,12 @@ func TestRoundToAsset_IOU(t *testing.T) {
 
 	// Zero stays zero.
 	require.True(t, NewXRPLNumberScaled(0, 0, MantissaScaleLarge, RoundToNearest).RoundToAsset(false).IsZero())
+
+	// Values outside the IOU exponent range follow STAmount canonicalization.
+	require.True(t, NewXRPLNumberScaled(1, -82, MantissaScaleLarge, RoundToNearest).RoundToAsset(false).IsZero())
+	require.Panics(t, func() {
+		NewXRPLNumberScaled(1, 96, MantissaScaleLarge, RoundToNearest).RoundToAsset(false)
+	})
 }
 
 func TestAssociateAssetField_Removal(t *testing.T) {

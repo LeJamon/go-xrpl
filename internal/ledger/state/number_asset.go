@@ -32,8 +32,16 @@ func (n XRPLNumber) RoundToAsset(integral bool) XRPLNumber {
 		v := n.ToInt64WithMode(RoundToNearest)
 		return NewXRPLNumberScaled(v, 0, n.scale, RoundToNearest)
 	}
-	m, e := n.NormalizeToRange(uint64(MinMantissa), uint64(MaxMantissa))
-	return NewXRPLNumberScaled(m, e, n.scale, RoundToNearest)
+	iou := newIOUAmountValueRoundedWithContext(
+		n.Mantissa(),
+		n.Exponent(),
+		RoundToNearest,
+		NewNumberContext(MantissaScaleSmall, true),
+	)
+	if iou.IsZero() {
+		return n.zero()
+	}
+	return NewXRPLNumberScaled(iou.Mantissa(), iou.Exponent(), n.scale, RoundToNearest)
 }
 
 // AssociateAssetField applies the associateAsset semantics to one NUMBER field
