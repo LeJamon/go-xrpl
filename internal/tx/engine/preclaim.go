@@ -415,21 +415,28 @@ func (e *Engine) checkSponsor(common *txcore.Common) ter.Result {
 	return ter.TesSUCCESS
 }
 
-// checkSign performs sponsor authorization first, then the transaction's
-// ordinary single- or multi-sign authorization.
+// checkSign validates the effective initiator, applies the dry-run unsigned
+// shortcut, then checks sponsor and transaction signature authorization.
 // Reference: rippled Transactor::checkSign in Transactor.cpp.
 // When a delegate is present, the idAccount for signature checking is the
-// delegate. Reference: rippled line 602:
-//
-//	auto const idAccount = ctx.tx[~sfDelegate].value_or(ctx.tx[sfAccount]);
+// delegate.
 func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common) ter.Result {
+	if result := e.checkPseudoAccountSign(common); result != ter.TesSUCCESS {
+		return result
+	}
+	if e.config.ApplyFlags&txcore.TapDRY_RUN != 0 &&
+		common.SigningPubKey == "" && !common.HasField("Signers") {
+		return ter.TesSUCCESS
+	}
 	if sponsor := common.SponsorSignature; sponsor != nil {
 		if result := e.checkPseudoAccount(common.Sponsor); result != ter.TesSUCCESS {
 			return result
 		}
 		// Dry-run/test mode permits an empty signature object. Real submissions
 		// have already failed crypto verification in preflight.
-		if !(e.config.SkipSignatureVerification &&
+		skipSignatureVerification := e.config.SkipSignatureVerification ||
+			e.config.ApplyFlags&txcore.TapDRY_RUN != 0
+		if !(skipSignatureVerification &&
 			sponsor.SigningPubKey == "" && len(sponsor.Signers) == 0) {
 			if len(sponsor.Signers) > 0 {
 				if result := e.checkMultiSignForAccount(common.Sponsor, sponsor.Signers); result != ter.TesSUCCESS {
@@ -440,10 +447,8 @@ func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common) ter.Res
 			}
 		}
 	}
-	if result := e.checkPseudoAccountSign(common); result != ter.TesSUCCESS {
-		return result
-	}
-	if sign.IsMultiSigned(tx) {
+	if sign.IsMultiSigned(tx) ||
+		(e.config.ApplyFlags&txcore.TapDRY_RUN != 0 && common.HasField("Signers")) {
 		return e.checkMultiSign(common)
 	}
 	if common.SigningPubKey != "" {

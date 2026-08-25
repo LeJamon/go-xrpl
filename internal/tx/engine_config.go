@@ -36,9 +36,10 @@ type ApplyFlags uint32
 
 const (
 	TapNONE      ApplyFlags = 0x00
-	TapFAIL_HARD ApplyFlags = 0x10  // Local tx with fail_hard flag
-	TapRETRY     ApplyFlags = 0x20  // Not the tx's last pass — tec from preclaim is not applied
-	TapUNLIMITED ApplyFlags = 0x400 // Privileged source
+	TapFAIL_HARD ApplyFlags = 0x10   // Local tx with fail_hard flag
+	TapRETRY     ApplyFlags = 0x20   // Not the tx's last pass — tec from preclaim is not applied
+	TapUNLIMITED ApplyFlags = 0x400  // Privileged source
+	TapDRY_RUN   ApplyFlags = 0x1000 // Simulation; bypasses signature validity in preflight2
 )
 
 // EngineConfig holds configuration for the transaction engine
@@ -123,7 +124,8 @@ type EngineConfig struct {
 	// ApplyFlags controls transaction application behavior.
 	// TapRETRY means this is not the tx's last pass: tec results from
 	// preclaim are not applied (likelyToClaimFee = false), allowing the
-	// tx to be retried on the next pass.
+	// tx to be retried on the next pass. TapDRY_RUN marks simulation and
+	// bypasses preflight2 signature validity while retaining authorization.
 	// Reference: rippled Transactor.cpp / BuildLedger.cpp
 	ApplyFlags ApplyFlags
 

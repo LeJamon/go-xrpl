@@ -875,17 +875,17 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 
 	// Create engine config from current state
 	engineConfig := tx.EngineConfig{
-		BaseFee:                   simBaseFee,
-		ReserveBase:               simReserveBase,
-		ReserveIncrement:          simReserveIncrement,
-		LedgerSequence:            s.openLedger.Sequence(),
-		ParentHash:                s.openLedger.ParentHash(),
-		SkipSignatureVerification: true, // Skip signatures for simulation
-		OpenLedger:                true, // Check fee adequacy for simulation
-		NetworkID:                 s.config.NetworkID,
-		Logger:                    s.config.Logger,
-		Rules:                     rulesFromLedger(s.closedLedger, s.logger),
-		FeeTrack:                  s.feeTrack,
+		BaseFee:          simBaseFee,
+		ReserveBase:      simReserveBase,
+		ReserveIncrement: simReserveIncrement,
+		LedgerSequence:   s.openLedger.Sequence(),
+		ParentHash:       s.openLedger.ParentHash(),
+		OpenLedger:       true, // Check fee adequacy for simulation
+		ApplyFlags:       tx.TapDRY_RUN,
+		NetworkID:        s.config.NetworkID,
+		Logger:           s.config.Logger,
+		Rules:            rulesFromLedger(s.closedLedger, s.logger),
+		FeeTrack:         s.feeTrack,
 	}
 
 	// Create engine with the snapshot view

@@ -206,9 +206,17 @@ func (e *Engine) applyWithContext(
 
 	// The charged fee was committed atomically with the state table.
 	if applied {
-		metadata.TransactionIndex = e.txCount.Add(1) - 1
+		if e.config.ApplyFlags&txcore.TapDRY_RUN != 0 {
+			metadata.TransactionIndex = e.txCount.Load()
+		} else {
+			metadata.TransactionIndex = e.txCount.Add(1) - 1
+		}
 	} else {
 		metadata = nil
+	}
+	// Dry-run still builds metadata from the snapshot but is never reported as applied.
+	if e.config.ApplyFlags&txcore.TapDRY_RUN != 0 {
+		applied = false
 	}
 
 	e.logger.Debug("apply result",
@@ -565,7 +573,7 @@ func (e *Engine) commitPreclaimTec(ctx context.Context, tx txcore.Transaction, t
 	if err := tecTable.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee)); err != nil {
 		return ter.TefINTERNAL, 0
 	}
-	generatedMeta, applyErr := tecTable.Apply()
+	generatedMeta, applyErr := e.applyTable(tecTable)
 	if applyErr != nil {
 		return ter.TefINTERNAL, 0
 	}

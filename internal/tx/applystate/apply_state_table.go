@@ -424,6 +424,17 @@ func (t *ApplyStateTable) Apply() (*tx.Metadata, error) {
 	return metadata, nil
 }
 
+// Preview generates the same metadata as Apply without mutating the base view.
+func (t *ApplyStateTable) Preview() (*tx.Metadata, error) {
+	staged := t.clone()
+	staged.applyThreading()
+	return staged.applyOrdered(
+		nil,
+		sortedLedgerKeys(staged.items),
+		sortedLedgerKeys(staged.threadOnlyOwners),
+	)
+}
+
 // ApplyUnthreaded commits changes that were already threaded by child
 // transaction state tables.
 func (t *ApplyStateTable) ApplyUnthreaded() error {
@@ -520,6 +531,10 @@ func (t *ApplyStateTable) applyOrdered(
 			}
 			metadata.AffectedNodes = append(metadata.AffectedNodes, node)
 		}
+	}
+
+	if atomicBase == nil {
+		return metadata, nil
 	}
 
 	// Metadata builders may fail; keep the base unchanged until all succeed.

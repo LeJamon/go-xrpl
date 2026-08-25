@@ -473,11 +473,10 @@ type Common struct {
 	txIDCached bool
 
 	// preflightedRules records the amendment rules under which this
-	// transaction's structural preflight last succeeded. Structural preflight
-	// (everything except the view-dependent signature check) is a pure function
-	// of the transaction fields and the active rules, so when the engine
-	// re-preflights the same parsed transaction under the identical rules — as
-	// the open-ledger apply strand does, preflighting once in TxQ.Apply and
+	// transaction's non-signature structural preflight last succeeded. This stage
+	// is a pure function of the transaction fields and the active rules, so when
+	// the engine re-preflights the same parsed transaction under identical rules —
+	// as the open-ledger apply strand does, preflighting once in TxQ.Apply and
 	// again in Engine.Apply under modifyMu — the second run skips the repeat.
 	// The rules pointer keys the verdict: a later ledger rebuilds rules, so a
 	// pointer mismatch forces a recompute and the verdict never outlives an
