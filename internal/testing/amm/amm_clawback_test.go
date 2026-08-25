@@ -467,13 +467,14 @@ func TestAMMClawbackRejectsRoundedLPWithdrawalAboveHolderBalance(t *testing.T) {
 	}
 }
 
-func setupAMMClawbackHolderExhaustionPool(t *testing.T, fixAMMv1_3 bool) (*amm.AMMTestEnv, *jtx.Account) {
+func setupAMMClawbackHolderExhaustionPool(t *testing.T, fixAMMv1_3, largeMantissa bool) (*amm.AMMTestEnv, *jtx.Account) {
 	t.Helper()
 
 	env := amm.NewAMMTestEnv(t)
-	// Keep Number in the small-mantissa regime used by the AMMClawback fixture.
-	env.DisableFeature("SingleAssetVault")
-	env.DisableFeature("LendingProtocol")
+	if !largeMantissa {
+		env.DisableFeature("SingleAssetVault")
+		env.DisableFeature("LendingProtocol")
+	}
 	if !fixAMMv1_3 {
 		env.DisableFeature("fixAMMv1_3")
 	}
@@ -534,47 +535,55 @@ func TestAMMClawbackHolderExhaustionUsesSTAmountFraction(t *testing.T) {
 		{name: "WithFixAMMv1_3", fixAMMv1_3: true, poolXRP: 70_710_679},
 		{name: "WithoutFixAMMv1_3", fixAMMv1_3: false, poolXRP: 70_710_678},
 	}
+	mantissaScales := []struct {
+		name  string
+		large bool
+	}{
+		{name: "SmallMantissa", large: false},
+		{name: "LargeMantissa", large: true},
+	}
 	for _, path := range paths {
-		for _, ruleSet := range rules {
-			t.Run(path.name+"/"+ruleSet.name, func(t *testing.T) {
-				env, ammAccount := setupAMMClawbackHolderExhaustionPool(t, ruleSet.fixAMMv1_3)
-				jtx.RequireTxSuccess(t, env.Submit(amm.AMMDeposit(env.Alice, amm.XRP(), env.USD).
-					Amount(amm.IOUAmount(env.GW, "USD", 400)).
-					SingleAsset().
-					Build()))
-				env.Close()
+		for _, mantissaScale := range mantissaScales {
+			for _, ruleSet := range rules {
+				t.Run(path.name+"/"+mantissaScale.name+"/"+ruleSet.name, func(t *testing.T) {
+					env, ammAccount := setupAMMClawbackHolderExhaustionPool(t, ruleSet.fixAMMv1_3, mantissaScale.large)
+					jtx.RequireTxSuccess(t, env.Submit(amm.AMMDeposit(env.Alice, amm.XRP(), env.USD).
+						Amount(amm.IOUAmount(env.GW, "USD", 400)).
+						SingleAsset().
+						Build()))
+					env.Close()
 
-				ammData := env.ReadAMMData(amm.XRP(), env.USD)
-				require.NotNil(t, ammData)
-				require.Equal(t, "282842.712474619", ammData.LPTokenBalance.Value())
-				poolUSDBefore := env.IOUBalance(ammAccount, env.GW, "USD")
-				require.NotNil(t, poolUSDBefore)
-				require.Equal(t, "800", poolUSDBefore.Value())
-				holderLPTokens := env.IOUBalance(env.Alice, ammAccount, ammData.LPTokenBalance.Currency)
-				require.NotNil(t, holderLPTokens)
-				require.Equal(t, "82842.712474619", holderLPTokens.Value())
+					ammData := env.ReadAMMData(amm.XRP(), env.USD)
+					require.NotNil(t, ammData)
+					require.Equal(t, "282842.712474619", ammData.LPTokenBalance.Value())
+					poolUSDBefore := env.IOUBalance(ammAccount, env.GW, "USD")
+					require.NotNil(t, poolUSDBefore)
+					require.Equal(t, "800", poolUSDBefore.Value())
+					holderLPTokens := env.IOUBalance(env.Alice, ammAccount, ammData.LPTokenBalance.Currency)
+					require.NotNil(t, holderLPTokens)
+					require.Equal(t, "82842.712474619", holderLPTokens.Value())
 
-				result := env.Submit(path.build(env))
-				jtx.RequireTxSuccess(t, result)
+					result := env.Submit(path.build(env))
+					jtx.RequireTxSuccess(t, result)
 
-				poolUSD := env.IOUBalance(ammAccount, env.GW, "USD")
-				require.NotNil(t, poolUSD)
-				require.Equal(t, "565.685424949238", poolUSD.Value())
-				require.Equal(t, ruleSet.poolXRP, env.Balance(ammAccount))
-				ammData = env.ReadAMMData(amm.XRP(), env.USD)
-				require.NotNil(t, ammData)
-				require.Equal(t, "200000", ammData.LPTokenBalance.Value())
-				holderLPTokens = env.IOUBalance(env.Alice, ammAccount, ammData.LPTokenBalance.Currency)
-				if holderLPTokens != nil {
-					require.True(t, holderLPTokens.IsZero())
-				}
+					poolUSD := env.IOUBalance(ammAccount, env.GW, "USD")
+					require.NotNil(t, poolUSD)
+					require.Equal(t, "565.685424949238", poolUSD.Value())
+					require.Equal(t, ruleSet.poolXRP, env.Balance(ammAccount))
+					ammData = env.ReadAMMData(amm.XRP(), env.USD)
+					require.NotNil(t, ammData)
+					require.Equal(t, "200000", ammData.LPTokenBalance.Value())
+					holderLPTokens = env.IOUBalance(env.Alice, ammAccount, ammData.LPTokenBalance.Currency)
+					if holderLPTokens != nil {
+						require.True(t, holderLPTokens.IsZero())
+					}
 
-				lineData, err := env.LedgerEntry(keylet.Line(ammAccount.ID, env.GW.ID, "USD"))
-				require.NoError(t, err)
-				lineHex := strings.ToUpper(hex.EncodeToString(lineData))
-				require.Contains(t, lineHex, "62D51418E104164F9C00000000000000000000000055534400000000000000000000000000000000000000000000000001")
-				require.Equal(t, path.expectedLineHex, lineHex)
-			})
+					lineData, err := env.LedgerEntry(keylet.Line(ammAccount.ID, env.GW.ID, "USD"))
+					require.NoError(t, err)
+					lineHex := strings.ToUpper(hex.EncodeToString(lineData))
+					require.Equal(t, path.expectedLineHex, lineHex)
+				})
+			}
 		}
 	}
 }
@@ -602,7 +611,7 @@ func TestAMMClawbackHolderExhaustionRejectsZeroRoundedAsset(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			env, ammAccount := setupAMMClawbackHolderExhaustionPool(t, true)
+			env, ammAccount := setupAMMClawbackHolderExhaustionPool(t, true, true)
 			lpToken := amm.LPTokenAmount(env, amm.XRP(), env.USD, 0)
 			dust := tx.NewIssuedAmount(1, -4, lpToken.Currency, lpToken.Issuer)
 			jtx.RequireTxSuccess(t, env.Submit(amm.AMMDeposit(env.Alice, amm.XRP(), env.USD).
