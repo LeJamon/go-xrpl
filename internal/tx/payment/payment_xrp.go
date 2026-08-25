@@ -105,10 +105,6 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 			destAccount.Flags &^= state.LsfPasswordSpent
 		}
 
-		// Update PreviousTxnID and PreviousTxnLgrSeq on destination (thread the account)
-		destAccount.PreviousTxnID = ctx.TxHash
-		destAccount.PreviousTxnLgrSeq = ctx.Config.LedgerSequence
-
 		// Debit sender
 		ctx.Account.Balance -= amountDrops
 
