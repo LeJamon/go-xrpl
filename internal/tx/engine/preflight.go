@@ -494,7 +494,11 @@ func (e *Engine) preflightMultiSignStructure(tx txcore.Transaction, common *txco
 	if n := len(common.Signers); n < sign.MinMultiSigners || n > sign.MaxMultiSigners {
 		return ter.TemINVALID
 	}
-	txAccountID, acctErr := state.DecodeAccountID(common.Account)
+	idAccount := common.Account
+	if common.Delegate != "" {
+		idAccount = common.Delegate
+	}
+	idAccountID, acctErr := state.DecodeAccountID(idAccount)
 	if acctErr != nil {
 		return ter.TemBAD_SRC_ACCOUNT
 	}
@@ -504,8 +508,8 @@ func (e *Engine) preflightMultiSignStructure(tx txcore.Transaction, common *txco
 		if decErr != nil {
 			return ter.TemINVALID
 		}
-		// The account owner may not multisign for themselves.
-		if signerID == txAccountID {
+		// The signing identity may not multisign for itself.
+		if signerID == idAccountID {
 			return ter.TemINVALID
 		}
 		// No duplicate signers allowed.
