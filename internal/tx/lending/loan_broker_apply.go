@@ -245,7 +245,8 @@ func (l *LoanBrokerDelete) Preclaim(view tx.LedgerView, config tx.EngineConfig) 
 			return ter.TecHAS_OBLIGATIONS
 		}
 	}
-	if lendNumForRules(b.CoverAvailable, rules).Signum() > 0 {
+	cover := lendNumForRules(b.CoverAvailable, rules).RoundToAsset(assetIntegral(vinfo.Asset))
+	if cover.Signum() > 0 {
 		if res := mptutil.CheckDeepFrozen(view, b.Owner, vinfo.Asset); res != ter.TesSUCCESS {
 			return res
 		}

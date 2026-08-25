@@ -266,6 +266,56 @@ func TestLoanBrokerDeleteRoundsResidualDebt(t *testing.T) {
 	}
 }
 
+func TestLoanBrokerDeleteRoundsResidualCoverBeforeFreezeChecks(t *testing.T) {
+	env := newLendingEnv(t)
+	issuer := jtx.NewAccount("cover-dust-delete-issuer")
+	owner := jtx.NewAccount("cover-dust-delete-owner")
+	env.FundAmount(issuer, 10_000_000_000)
+	env.FundAmount(owner, 10_000_000_000)
+	env.Trust(owner, tx.NewIssuedAmountFromFloat64(1_000, "USD", issuer.Address))
+
+	vaultSeq := env.Seq(owner)
+	create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: "USD", Issuer: issuer.Address})
+	create.Common.Fee = reserveIncrement
+	jtx.RequireTxSuccess(t, env.Submit(create))
+	brokerSeq := env.Seq(owner)
+	jtx.RequireTxSuccess(t, env.Submit(lending.NewLoanBrokerSet(owner.Address, vaultID(owner, vaultSeq))))
+	brokerKey := keylet.LoanBroker(owner.AccountID(), brokerSeq)
+	pseudoID := loanBrokerPseudoID(t, env, brokerKey)
+
+	brokerData, err := env.LedgerEntry(brokerKey)
+	if err != nil {
+		t.Fatalf("read LoanBroker: %v", err)
+	}
+	brokerFields, err := binarycodec.DecodeBytes(brokerData)
+	if err != nil {
+		t.Fatalf("decode LoanBroker: %v", err)
+	}
+	brokerFields["CoverAvailable"] = "1e-82"
+	brokerData, err = binarycodec.EncodeBytes(brokerFields)
+	if err != nil {
+		t.Fatalf("encode LoanBroker: %v", err)
+	}
+	if err := env.Ledger().Update(brokerKey, brokerData); err != nil {
+		t.Fatalf("update LoanBroker: %v", err)
+	}
+
+	freeze := trustset.NewTrustSet(issuer.Address, tx.NewIssuedAmountFromFloat64(0, "USD", owner.Address))
+	freeze.SetFlags(trustset.TrustSetFlagSetFreeze | trustset.TrustSetFlagSetDeepFreeze)
+	jtx.RequireTxSuccess(t, env.Submit(freeze))
+	jtx.RequireTxSuccess(t, env.Submit(lending.NewLoanBrokerDelete(owner.Address, brokerID(owner, brokerSeq))))
+
+	for name, entryKey := range map[string]keylet.Keylet{
+		"LoanBroker":     brokerKey,
+		"pseudo-account": keylet.Account(pseudoID),
+		"asset holding":  keylet.Line(pseudoID, issuer.AccountID(), "USD"),
+	} {
+		if env.LedgerEntryExists(entryKey) {
+			t.Errorf("%s remains after successful deletion", name)
+		}
+	}
+}
+
 func TestLoanBrokerDeleteOwnerDeepFreeze(t *testing.T) {
 	t.Run("ordinary freeze permits returning cover", func(t *testing.T) {
 		f := newLoanBrokerDeleteFreezeFixture(t, "IOU", true)
