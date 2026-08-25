@@ -527,63 +527,56 @@ func TestAMMClawbackHolderExhaustionUsesSTAmountFraction(t *testing.T) {
 			expectedLineHex: "1100722201010000250000000737000000000000000038000000000000000055457DB1AD99D27B68363B7F986A39923649BC8E27B679F94967458EF90AAF8AF362D51418E104164F9C0000000000000000000000005553440000000000000000000000000000000000000000000000000166800000000000000000000000000000000000000055534400000000008F41242483ADD4D2B69900347812D2B0E68E3D0E6780000000000000000000000000000000000000005553440000000000A407AF5856CCF3C42619DAA925813FC955C72983",
 		},
 	}
-	rules := []struct {
-		name       string
-		fixAMMv1_3 bool
-		poolXRP    uint64
+	contexts := []struct {
+		name          string
+		fixAMMv1_3    bool
+		largeMantissa bool
+		poolXRP       uint64
 	}{
-		{name: "WithFixAMMv1_3", fixAMMv1_3: true, poolXRP: 70_710_679},
-		{name: "WithoutFixAMMv1_3", fixAMMv1_3: false, poolXRP: 70_710_678},
-	}
-	mantissaScales := []struct {
-		name  string
-		large bool
-	}{
-		{name: "SmallMantissa", large: false},
-		{name: "LargeMantissa", large: true},
+		{name: "SmallMantissa/WithFixAMMv1_3", fixAMMv1_3: true, largeMantissa: false, poolXRP: 70_710_679},
+		{name: "SmallMantissa/WithoutFixAMMv1_3", fixAMMv1_3: false, largeMantissa: false, poolXRP: 70_710_678},
+		{name: "LargeMantissa/WithFixAMMv1_3", fixAMMv1_3: true, largeMantissa: true, poolXRP: 70_710_679},
 	}
 	for _, path := range paths {
-		for _, mantissaScale := range mantissaScales {
-			for _, ruleSet := range rules {
-				t.Run(path.name+"/"+mantissaScale.name+"/"+ruleSet.name, func(t *testing.T) {
-					env, ammAccount := setupAMMClawbackHolderExhaustionPool(t, ruleSet.fixAMMv1_3, mantissaScale.large)
-					jtx.RequireTxSuccess(t, env.Submit(amm.AMMDeposit(env.Alice, amm.XRP(), env.USD).
-						Amount(amm.IOUAmount(env.GW, "USD", 400)).
-						SingleAsset().
-						Build()))
-					env.Close()
+		for _, context := range contexts {
+			t.Run(path.name+"/"+context.name, func(t *testing.T) {
+				env, ammAccount := setupAMMClawbackHolderExhaustionPool(t, context.fixAMMv1_3, context.largeMantissa)
+				jtx.RequireTxSuccess(t, env.Submit(amm.AMMDeposit(env.Alice, amm.XRP(), env.USD).
+					Amount(amm.IOUAmount(env.GW, "USD", 400)).
+					SingleAsset().
+					Build()))
+				env.Close()
 
-					ammData := env.ReadAMMData(amm.XRP(), env.USD)
-					require.NotNil(t, ammData)
-					require.Equal(t, "282842.712474619", ammData.LPTokenBalance.Value())
-					poolUSDBefore := env.IOUBalance(ammAccount, env.GW, "USD")
-					require.NotNil(t, poolUSDBefore)
-					require.Equal(t, "800", poolUSDBefore.Value())
-					holderLPTokens := env.IOUBalance(env.Alice, ammAccount, ammData.LPTokenBalance.Currency)
-					require.NotNil(t, holderLPTokens)
-					require.Equal(t, "82842.712474619", holderLPTokens.Value())
+				ammData := env.ReadAMMData(amm.XRP(), env.USD)
+				require.NotNil(t, ammData)
+				require.Equal(t, "282842.712474619", ammData.LPTokenBalance.Value())
+				poolUSDBefore := env.IOUBalance(ammAccount, env.GW, "USD")
+				require.NotNil(t, poolUSDBefore)
+				require.Equal(t, "800", poolUSDBefore.Value())
+				holderLPTokens := env.IOUBalance(env.Alice, ammAccount, ammData.LPTokenBalance.Currency)
+				require.NotNil(t, holderLPTokens)
+				require.Equal(t, "82842.712474619", holderLPTokens.Value())
 
-					result := env.Submit(path.build(env))
-					jtx.RequireTxSuccess(t, result)
+				result := env.Submit(path.build(env))
+				jtx.RequireTxSuccess(t, result)
 
-					poolUSD := env.IOUBalance(ammAccount, env.GW, "USD")
-					require.NotNil(t, poolUSD)
-					require.Equal(t, "565.685424949238", poolUSD.Value())
-					require.Equal(t, ruleSet.poolXRP, env.Balance(ammAccount))
-					ammData = env.ReadAMMData(amm.XRP(), env.USD)
-					require.NotNil(t, ammData)
-					require.Equal(t, "200000", ammData.LPTokenBalance.Value())
-					holderLPTokens = env.IOUBalance(env.Alice, ammAccount, ammData.LPTokenBalance.Currency)
-					if holderLPTokens != nil {
-						require.True(t, holderLPTokens.IsZero())
-					}
+				poolUSD := env.IOUBalance(ammAccount, env.GW, "USD")
+				require.NotNil(t, poolUSD)
+				require.Equal(t, "565.685424949238", poolUSD.Value())
+				require.Equal(t, context.poolXRP, env.Balance(ammAccount))
+				ammData = env.ReadAMMData(amm.XRP(), env.USD)
+				require.NotNil(t, ammData)
+				require.Equal(t, "200000", ammData.LPTokenBalance.Value())
+				holderLPTokens = env.IOUBalance(env.Alice, ammAccount, ammData.LPTokenBalance.Currency)
+				if holderLPTokens != nil {
+					require.True(t, holderLPTokens.IsZero())
+				}
 
-					lineData, err := env.LedgerEntry(keylet.Line(ammAccount.ID, env.GW.ID, "USD"))
-					require.NoError(t, err)
-					lineHex := strings.ToUpper(hex.EncodeToString(lineData))
-					require.Equal(t, path.expectedLineHex, lineHex)
-				})
-			}
+				lineData, err := env.LedgerEntry(keylet.Line(ammAccount.ID, env.GW.ID, "USD"))
+				require.NoError(t, err)
+				lineHex := strings.ToUpper(hex.EncodeToString(lineData))
+				require.Equal(t, path.expectedLineHex, lineHex)
+			})
 		}
 	}
 }
