@@ -475,7 +475,8 @@ func TestXChainRewardRoundingPreventsOverDistribution(t *testing.T) {
 		jtx.NewAccount("xchain-rounding-witness-2"),
 		jtx.NewAccount("xchain-rounding-witness-3"),
 	}
-	accounts := []*jtx.Account{lockingDoor, owner, destination}
+	accounts := make([]*jtx.Account, 0, 3+len(witnesses))
+	accounts = append(accounts, lockingDoor, owner, destination)
 	accounts = append(accounts, witnesses...)
 	for _, account := range accounts {
 		env.FundAmount(account, uint64(5_000*dropsPerXRP))

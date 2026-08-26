@@ -69,6 +69,10 @@ func TestAssetEqualUsesCurrencyBytes(t *testing.T) {
 		tx.Asset{Currency: "USD", Issuer: issuer},
 		tx.Asset{Currency: "0000000000000000000000005553440000000000", Issuer: issuer},
 	))
+	assert.True(t, amountEqual(
+		tx.NewIssuedAmount(1, 0, "USD", issuer),
+		tx.NewIssuedAmount(1, 0, "0000000000000000000000005553440000000000", issuer),
+	))
 }
 
 func TestRewardShareRounding(t *testing.T) {
@@ -94,7 +98,7 @@ func TestRewardShareRounding(t *testing.T) {
 	}
 }
 
-func TestNativeAmountLegalNetBoundaries(t *testing.T) {
+func TestNativeAmountLegalNetPreflightParity(t *testing.T) {
 	const (
 		lockingDoor = "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
 		issuingDoor = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -104,19 +108,29 @@ func TestNativeAmountLegalNetBoundaries(t *testing.T) {
 		IssuingChainDoor: issuingDoor, IssuingChainIssue: tx.Asset{Currency: "XRP"},
 	}
 	tooLarge := tx.NewXRPAmount(maxNativeDrops + 1)
-	assert.Error(t, validateCreateBridge(lockingDoor, bridge, tooLarge, nil))
-	assert.Error(t, validateModifyBridge(lockingDoor, bridge, &tooLarge, nil, 0))
+	require.NoError(t, validateCreateBridge(lockingDoor, bridge, tooLarge, &tooLarge))
+	require.NoError(t, validateModifyBridge(lockingDoor, bridge, &tooLarge, nil, 0))
 
 	claim := &XChainClaim{
 		BaseTx: *tx.NewBaseTx(tx.TypeXChainClaim, lockingDoor), XChainBridge: bridge,
 		Amount: tooLarge, Destination: lockingDoor, XChainClaimID: 1,
 	}
-	assert.Error(t, claim.Validate())
+	require.NoError(t, claim.Validate())
 	accountCreate := &XChainAccountCreateCommit{
 		BaseTx: *tx.NewBaseTx(tx.TypeXChainAccountCreateCommit, lockingDoor), XChainBridge: bridge,
-		Amount: tooLarge, SignatureReward: tx.NewXRPAmount(0), Destination: lockingDoor,
+		Amount: tooLarge, SignatureReward: tooLarge, Destination: lockingDoor,
 	}
-	assert.Error(t, accountCreate.Validate())
+	require.NoError(t, accountCreate.Validate())
+	commit := &XChainCommit{
+		BaseTx: *tx.NewBaseTx(tx.TypeXChainCommit, lockingDoor), XChainBridge: bridge,
+		Amount: tooLarge,
+	}
+	require.ErrorContains(t, commit.Validate(), "temBAD_AMOUNT")
+	createClaimID := &XChainCreateClaimID{
+		BaseTx: *tx.NewBaseTx(tx.TypeXChainCreateClaimID, lockingDoor), XChainBridge: bridge,
+		SignatureReward: tooLarge, OtherChainSource: lockingDoor,
+	}
+	require.ErrorContains(t, createClaimID.Validate(), "temXCHAIN_BRIDGE_BAD_REWARD_AMOUNT")
 }
 
 func TestMaxStoredAttestations(t *testing.T) {

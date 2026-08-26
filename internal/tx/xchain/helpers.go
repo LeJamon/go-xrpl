@@ -3,7 +3,6 @@ package xchain
 import (
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -159,10 +158,10 @@ func validateCreateBridge(account string, bridge XChainBridge, reward tx.Amount,
 	if bridgeAssetIsNative(bridge.LockingChainIssue) != bridgeAssetIsNative(bridge.IssuingChainIssue) {
 		return ter.Errorf(ter.TemXCHAIN_BRIDGE_BAD_ISSUES, "bridge issues must both be XRP or both be issued")
 	}
-	if !reward.IsNative() || reward.IsNegative() || !isLegalNet(reward) {
+	if !reward.IsNative() || reward.IsNegative() {
 		return ter.Errorf(ter.TemXCHAIN_BRIDGE_BAD_REWARD_AMOUNT, "invalid bridge reward")
 	}
-	if minCreate != nil && (!minCreate.IsNative() || minCreate.Signum() <= 0 || !isLegalNet(*minCreate) ||
+	if minCreate != nil && (!minCreate.IsNative() || minCreate.Signum() <= 0 ||
 		!bridgeAssetIsNative(bridge.LockingChainIssue) || !bridgeAssetIsNative(bridge.IssuingChainIssue)) {
 		return ter.Errorf(ter.TemXCHAIN_BRIDGE_BAD_MIN_ACCOUNT_CREATE_AMOUNT, "invalid minimum account-create amount")
 	}
@@ -193,10 +192,10 @@ func validateModifyBridge(account string, bridge XChainBridge, reward, minCreate
 	if account != bridge.LockingChainDoor && account != bridge.IssuingChainDoor {
 		return ter.Errorf(ter.TemXCHAIN_BRIDGE_NONDOOR_OWNER, "bridge owner is not a door")
 	}
-	if reward != nil && (!reward.IsNative() || reward.IsNegative() || !isLegalNet(*reward)) {
+	if reward != nil && (!reward.IsNative() || reward.IsNegative()) {
 		return ter.Errorf(ter.TemXCHAIN_BRIDGE_BAD_REWARD_AMOUNT, "invalid bridge reward")
 	}
-	if minCreate != nil && (!minCreate.IsNative() || minCreate.Signum() <= 0 || !isLegalNet(*minCreate) ||
+	if minCreate != nil && (!minCreate.IsNative() || minCreate.Signum() <= 0 ||
 		!bridgeAssetIsNative(bridge.LockingChainIssue) || !bridgeAssetIsNative(bridge.IssuingChainIssue)) {
 		return ter.Errorf(ter.TemXCHAIN_BRIDGE_BAD_MIN_ACCOUNT_CREATE_AMOUNT, "invalid minimum account-create amount")
 	}
@@ -449,13 +448,6 @@ func publicKeyAccount(publicKeyHex string) (string, error) {
 		return "", err
 	}
 	return addresscodec.EncodeClassicAddressFromPublicKey(publicKey)
-}
-
-func mapViewError(err error) ter.Result {
-	if errors.Is(err, state.ErrDirFull) {
-		return ter.TecDIR_FULL
-	}
-	return ter.TefINTERNAL
 }
 
 func mustAmountAny(amount tx.Amount) any {

@@ -41,6 +41,13 @@ func (x *XChainBridge) FromJSON(json any) ([]byte, error) {
 	if !ok {
 		return nil, errNotValidJSON
 	}
+	for name := range v {
+		switch name {
+		case "LockingChainDoor", "LockingChainIssue", "IssuingChainDoor", "IssuingChainIssue":
+		default:
+			return nil, fmt.Errorf("%w: extra field %s", errNotValidXChainBridge, name)
+		}
+	}
 
 	out := make([]byte, 0, 2*(1+20+40))
 	for _, f := range xchainBridgeFields {
@@ -128,13 +135,10 @@ func xchainIssueFromJSON(issue map[string]any) ([]byte, error) {
 
 	issuer, hasIssuer := issue["issuer"]
 	if bytes.Equal(currencyBytes, zeroByteArray) {
-		if (hasIssuer && issuer != nil) || len(issue) != 1 && !(len(issue) == 2 && issuer == nil) {
+		if hasIssuer && issuer != nil {
 			return nil, ErrInvalidIssuer
 		}
 		return currencyBytes, nil
-	}
-	if len(issue) != 2 {
-		return nil, ErrInvalidIssueObject
 	}
 	issuerString, ok := issuer.(string)
 	if !hasIssuer || !ok || issuerString == "" {

@@ -304,7 +304,17 @@ func createQuorum(
 }
 
 func amountEqual(a, b tx.Amount) bool {
-	return assetEqual(assetOf(a), assetOf(b)) && a.Compare(b) == 0
+	aAsset := normalizedAsset(assetOf(a))
+	bAsset := normalizedAsset(assetOf(b))
+	if aAsset != bAsset {
+		return false
+	}
+	if !aAsset.IsMPT() {
+		a = amountWithAsset(a, aAsset)
+		b = amountWithAsset(b, bAsset)
+	}
+	comparison, err := a.CompareChecked(b)
+	return err == nil && comparison == 0
 }
 
 type transferFailurePolicy uint8

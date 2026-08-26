@@ -100,6 +100,33 @@ func TestXChainBridge_FromJson(t *testing.T) {
 			want: iouBridgeBytes(),
 		},
 		{
+			name: "unknown XRP issue fields are ignored",
+			json: func() map[string]any {
+				bridge := xrpXrpBridgeJSON()
+				bridge["LockingChainIssue"] = map[string]any{"currency": "XRP", "Extra": 1, "Other": 2}
+				return bridge
+			}(),
+			want: xrpXrpBridgeBytes(),
+		},
+		{
+			name: "unknown IOU issue fields are ignored",
+			json: func() map[string]any {
+				bridge := iouBridgeJSON()
+				bridge["IssuingChainIssue"].(map[string]any)["Extra"] = 1
+				return bridge
+			}(),
+			want: iouBridgeBytes(),
+		},
+		{
+			name: "unknown bridge field is rejected",
+			json: func() map[string]any {
+				bridge := xrpXrpBridgeJSON()
+				bridge["Extra"] = 1
+				return bridge
+			}(),
+			err: true,
+		},
+		{
 			name: "MPT issue is rejected",
 			json: map[string]any{
 				"LockingChainDoor":  "r3e7qTG44Mg8pHXgxPtyRx286Re5Urtx2p",

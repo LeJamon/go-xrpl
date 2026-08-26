@@ -44,7 +44,7 @@ func TestDoValidatedLedger_EnablesAndBlocks(t *testing.T) {
 		t.Fatal("DoValidatedLedger must enable all amendments in the set")
 	}
 	if !tbl.HasUnsupportedEnabled() {
-		t.Fatal("expected HasUnsupportedEnabled after enabling XChainBridge")
+		t.Fatal("expected HasUnsupportedEnabled after enabling LendingProtocolV1_1")
 	}
 	if !tbl.IsBlocked() {
 		t.Fatal("node must be blocked once an unsupported amendment activates")

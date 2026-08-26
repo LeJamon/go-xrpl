@@ -294,7 +294,7 @@ func (x *XChainClaim) Validate() error {
 		return ter.Errorf(ter.TemMALFORMED, "Destination is required")
 	}
 
-	if x.Amount.Signum() <= 0 || !isLegalNet(x.Amount) ||
+	if x.Amount.Signum() <= 0 ||
 		(!assetEqual(assetOf(x.Amount), x.XChainBridge.LockingChainIssue) &&
 			!assetEqual(assetOf(x.Amount), x.XChainBridge.IssuingChainIssue)) {
 		return ter.Errorf(ter.TemBAD_AMOUNT, "invalid claim amount")
@@ -361,10 +361,10 @@ func (x *XChainAccountCreateCommit) Validate() error {
 		return ter.Errorf(ter.TemMALFORMED, "Destination is required")
 	}
 
-	if x.Amount.Signum() <= 0 || !x.Amount.IsNative() || !isLegalNet(x.Amount) {
+	if x.Amount.Signum() <= 0 || !x.Amount.IsNative() {
 		return ter.Errorf(ter.TemBAD_AMOUNT, "account-create amount must be positive XRP")
 	}
-	if x.SignatureReward.IsNegative() || !x.SignatureReward.IsNative() || !isLegalNet(x.SignatureReward) ||
+	if x.SignatureReward.IsNegative() || !x.SignatureReward.IsNative() ||
 		!assetEqual(assetOf(x.SignatureReward), assetOf(x.Amount)) {
 		return ter.Errorf(ter.TemBAD_AMOUNT, "account-create reward must be non-negative XRP")
 	}
