@@ -2,6 +2,7 @@
 package types
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 
@@ -11,6 +12,7 @@ import (
 
 var (
 	errNotValidXChainBridge = errors.New("not a valid xchain bridge")
+	badXRPCurrencyBytes     = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'X', 'R', 'P', 0, 0, 0, 0, 0}
 )
 
 // accountVLLength is the length prefix a door account carries on the wire: a
@@ -39,6 +41,13 @@ func (x *XChainBridge) FromJSON(json any) ([]byte, error) {
 	if !ok {
 		return nil, errNotValidJSON
 	}
+	for name := range v {
+		switch name {
+		case "LockingChainDoor", "LockingChainIssue", "IssuingChainDoor", "IssuingChainIssue":
+		default:
+			return nil, fmt.Errorf("%w: extra field %s", errNotValidXChainBridge, name)
+		}
+	}
 
 	out := make([]byte, 0, 2*(1+20+40))
 	for _, f := range xchainBridgeFields {
@@ -57,7 +66,11 @@ func (x *XChainBridge) FromJSON(json any) ([]byte, error) {
 		if !ok {
 			return nil, fmt.Errorf("%w: missing %s", errNotValidXChainBridge, f.issue)
 		}
-		issueBytes, err := (&Issue{}).FromJSON(issueJSON)
+		issueMap, ok := issueJSON.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("%w: %s must be an issue object", errNotValidXChainBridge, f.issue)
+		}
+		issueBytes, err := xchainIssueFromJSON(issueMap)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %s: %w", errNotValidXChainBridge, f.issue, err)
 		}
@@ -94,8 +107,46 @@ func (x *XChainBridge) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", f.issue, err)
 		}
+		if issueMap, ok := issue.(map[string]any); ok {
+			if _, err := xchainIssueFromJSON(issueMap); err != nil {
+				return nil, fmt.Errorf("%w: %s: %w", errNotValidXChainBridge, f.issue, err)
+			}
+		} else {
+			return nil, fmt.Errorf("%w: %s is not an issue object", errNotValidXChainBridge, f.issue)
+		}
 		json[f.issue] = issue
 	}
 
 	return json, nil
+}
+
+func xchainIssueFromJSON(issue map[string]any) ([]byte, error) {
+	if _, isMPT := issue["mpt_issuance_id"]; isMPT {
+		return nil, errors.New("MPT issues are not supported")
+	}
+	currency, ok := issue["currency"]
+	if !ok {
+		return nil, ErrInvalidCurrency
+	}
+	currencyBytes, err := (&Currency{}).FromJSON(currency)
+	if err != nil || bytes.Equal(currencyBytes, noCurrencyBytes) || bytes.Equal(currencyBytes, badXRPCurrencyBytes) {
+		return nil, ErrInvalidCurrency
+	}
+
+	issuer, hasIssuer := issue["issuer"]
+	if bytes.Equal(currencyBytes, zeroByteArray) {
+		if hasIssuer && issuer != nil {
+			return nil, ErrInvalidIssuer
+		}
+		return currencyBytes, nil
+	}
+	issuerString, ok := issuer.(string)
+	if !hasIssuer || !ok || issuerString == "" {
+		return nil, ErrInvalidIssuer
+	}
+	_, issuerBytes, err := addresscodec.DecodeClassicAddressToAccountID(issuerString)
+	if err != nil || bytes.Equal(issuerBytes, zeroByteArray) || bytes.Equal(issuerBytes, noAccountBytes) {
+		return nil, ErrInvalidIssuer
+	}
+	return append(currencyBytes, issuerBytes...), nil
 }
