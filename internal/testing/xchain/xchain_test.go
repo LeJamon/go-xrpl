@@ -78,7 +78,7 @@ func signClaimAttestation(t *testing.T, att *xchaintx.XChainAddClaimAttestation,
 		"WasLockingChainSend":      uint8(0),
 		"XChainBridge":             bridgeJSON(att.XChainBridge),
 	}
-	if att.WasLockingChainSend {
+	if att.WasLockingChainSend != 0 {
 		fields["WasLockingChainSend"] = uint8(1)
 	}
 	if att.Destination != "" {
@@ -95,7 +95,7 @@ func signClaimAttestation(t *testing.T, att *xchaintx.XChainAddClaimAttestation,
 func signCreateAttestation(t *testing.T, att *xchaintx.XChainAddAccountCreateAttestation, witness *jtx.Account) {
 	t.Helper()
 	locking := uint8(0)
-	if att.WasLockingChainSend {
+	if att.WasLockingChainSend != 0 {
 		locking = 1
 	}
 	message, err := binarycodec.EncodeBytes(map[string]any{
@@ -130,7 +130,7 @@ func newClaimAttestation(
 	att.AttestationRewardAccount = witness.Address
 	att.AttestationSignerAccount = witness.Address
 	att.Destination = destination
-	att.WasLockingChainSend = false
+	att.WasLockingChainSend = 0
 	signClaimAttestation(t, att, witness)
 	return att
 }
@@ -151,7 +151,7 @@ func newCreateAttestation(
 	att.SignatureReward = reward
 	att.AttestationRewardAccount = witness.Address
 	att.AttestationSignerAccount = witness.Address
-	att.WasLockingChainSend = false
+	att.WasLockingChainSend = 0
 	att.XChainAccountCreateCount = count
 	signCreateAttestation(t, att, witness)
 	return att

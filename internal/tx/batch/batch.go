@@ -1,7 +1,6 @@
 package batch
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/bits"
@@ -39,7 +38,8 @@ type RawTransactionData struct {
 }
 
 func (r *RawTransactionData) UnmarshalJSON(data []byte) error {
-	if _, err := tx.ParseJSON(data); err != nil {
+	parsed, err := tx.ParseJSON(data)
+	if err != nil {
 		return fmt.Errorf("parse inner transaction JSON: %w", err)
 	}
 	var innerMap map[string]any
@@ -53,13 +53,9 @@ func (r *RawTransactionData) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("validate inner transaction: %w", err)
 		}
 	}
-	encoded, err := binarycodec.Encode(innerMap)
+	raw, err := tx.SerializeTransaction(parsed)
 	if err != nil {
 		return fmt.Errorf("encode inner transaction: %w", err)
-	}
-	raw, err := hex.DecodeString(encoded)
-	if err != nil {
-		return fmt.Errorf("decode inner transaction: %w", err)
 	}
 	inner, err := tx.ParseFromBinary(raw)
 	if err != nil {

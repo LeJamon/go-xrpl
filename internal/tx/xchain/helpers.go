@@ -374,7 +374,7 @@ func claimAttestationMessage(x *XChainAddClaimAttestation) ([]byte, error) {
 		"Amount":                   amount,
 		"OtherChainSource":         x.OtherChainSource,
 		"AttestationRewardAccount": x.AttestationRewardAccount,
-		"WasLockingChainSend":      boolInt(x.WasLockingChainSend),
+		"WasLockingChainSend":      boolInt(x.WasLockingChainSend != 0),
 		"XChainBridge":             bridgeMap(x.XChainBridge),
 	}
 	if x.Destination != "" {
@@ -399,7 +399,7 @@ func createAccountAttestationMessage(x *XChainAddAccountCreateAttestation) ([]by
 		"Destination":              x.Destination,
 		"OtherChainSource":         x.OtherChainSource,
 		"AttestationRewardAccount": x.AttestationRewardAccount,
-		"WasLockingChainSend":      boolInt(x.WasLockingChainSend),
+		"WasLockingChainSend":      boolInt(x.WasLockingChainSend != 0),
 		"XChainBridge":             bridgeMap(x.XChainBridge),
 	})
 }
@@ -419,7 +419,7 @@ func validateClaimAttestation(x *XChainAddClaimAttestation) error {
 	message, err := claimAttestationMessage(x)
 	if err != nil || !verifyAttestationSignature(x.PublicKey, x.Signature, message) ||
 		!isLegalNet(x.Amount) || x.Amount.Signum() <= 0 ||
-		!assetEqual(assetOf(x.Amount), x.XChainBridge.issue(sourceChain(x.WasLockingChainSend))) {
+		!assetEqual(assetOf(x.Amount), x.XChainBridge.issue(sourceChain(x.WasLockingChainSend != 0))) {
 		return ter.Errorf(ter.TemXCHAIN_BAD_PROOF, "invalid claim attestation proof")
 	}
 	return nil
@@ -436,7 +436,7 @@ func validateCreateAccountAttestation(x *XChainAddAccountCreateAttestation) erro
 	message, err := createAccountAttestationMessage(x)
 	if err != nil || !verifyAttestationSignature(x.PublicKey, x.Signature, message) ||
 		!isLegalNet(x.Amount) || !isLegalNet(x.SignatureReward) || x.Amount.Signum() <= 0 ||
-		!assetEqual(assetOf(x.Amount), x.XChainBridge.issue(sourceChain(x.WasLockingChainSend))) {
+		!assetEqual(assetOf(x.Amount), x.XChainBridge.issue(sourceChain(x.WasLockingChainSend != 0))) {
 		return ter.Errorf(ter.TemXCHAIN_BAD_PROOF, "invalid account-create attestation proof")
 	}
 	return nil

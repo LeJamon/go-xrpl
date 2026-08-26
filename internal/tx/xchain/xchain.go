@@ -411,7 +411,7 @@ type XChainAddClaimAttestation struct {
 	Signature string `json:"Signature" xrpl:"Signature"`
 
 	// WasLockingChainSend indicates if this was a locking chain send (required)
-	WasLockingChainSend bool `json:"WasLockingChainSend" xrpl:"WasLockingChainSend,boolint"`
+	WasLockingChainSend uint8 `json:"WasLockingChainSend" xrpl:"WasLockingChainSend"`
 }
 
 // NewXChainAddClaimAttestation creates a new XChainAddClaimAttestation transaction
@@ -505,7 +505,7 @@ type XChainAddAccountCreateAttestation struct {
 	Signature string `json:"Signature" xrpl:"Signature"`
 
 	// WasLockingChainSend indicates if this was a locking chain send (required)
-	WasLockingChainSend bool `json:"WasLockingChainSend" xrpl:"WasLockingChainSend,boolint"`
+	WasLockingChainSend uint8 `json:"WasLockingChainSend" xrpl:"WasLockingChainSend"`
 
 	// XChainAccountCreateCount is the create count (required)
 	XChainAccountCreateCount uint64 `json:"XChainAccountCreateCount" xrpl:"XChainAccountCreateCount"`
