@@ -1,6 +1,7 @@
 package xchain
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -8,6 +9,15 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/batch"
 	"github.com/stretchr/testify/require"
 )
+
+var registerBinaryParseTypes sync.Once
+
+func registerBinaryParseTransactionTypes() {
+	registerBinaryParseTypes.Do(func() {
+		Register()
+		batch.Register()
+	})
+}
 
 func TestXChainUInt64BinaryRoundTrip(t *testing.T) {
 	const (
@@ -115,7 +125,7 @@ func TestXChainUInt64BinaryRoundTrip(t *testing.T) {
 		},
 	}
 
-	Register()
+	registerBinaryParseTransactionTypes()
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			test.fields["Sequence"] = uint32(1)
@@ -189,8 +199,7 @@ func TestXChainUInt64BatchBinaryRoundTrip(t *testing.T) {
 		},
 	}
 
-	Register()
-	batch.Register()
+	registerBinaryParseTransactionTypes()
 	blob, err := binarycodec.EncodeBytes(fields)
 	require.NoError(t, err)
 
