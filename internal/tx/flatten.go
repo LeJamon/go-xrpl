@@ -38,7 +38,6 @@ type flattenField struct {
 	omitempty bool
 	isAmount  bool // use flattenAmount converter
 	isAsset   bool // use flattenAsset converter for Asset/Issue fields
-	boolint   bool // convert bool to int (0 or 1)
 	baseTen   bool // UInt64 field rippled emits as decimal (sMD_BaseTen)
 }
 
@@ -51,11 +50,11 @@ type flattenInfo struct {
 var flattenCache sync.Map // map[reflect.Type]*flattenInfo
 
 // parseXRPLTag parses an xrpl struct tag.
-// Format: "FieldName,opt1,opt2" where options are: omitempty, amount, asset, boolint
+// Format: "FieldName,opt1,opt2" where options are: omitempty, amount, asset
 // Returns ("", false) for tags that should be skipped ("-").
-func parseXRPLTag(tag string) (name string, omitempty bool, isAmount bool, isAsset bool, boolint bool, skip bool) {
+func parseXRPLTag(tag string) (name string, omitempty bool, isAmount bool, isAsset bool, skip bool) {
 	if tag == "" || tag == "-" {
-		return "", false, false, false, false, true
+		return "", false, false, false, true
 	}
 	parts := strings.Split(tag, ",")
 	name = parts[0]
@@ -67,11 +66,9 @@ func parseXRPLTag(tag string) (name string, omitempty bool, isAmount bool, isAss
 			isAmount = true
 		case "asset":
 			isAsset = true
-		case "boolint":
-			boolint = true
 		}
 	}
-	return name, omitempty, isAmount, isAsset, boolint, false
+	return name, omitempty, isAmount, isAsset, false
 }
 
 // getFlattenInfo returns the cached flattenInfo for a struct type.
@@ -96,7 +93,7 @@ func getFlattenInfo(t reflect.Type) *flattenInfo {
 		}
 
 		tag := field.Tag.Get("xrpl")
-		name, omitempty, isAmount, isAsset, boolint, skip := parseXRPLTag(tag)
+		name, omitempty, isAmount, isAsset, skip := parseXRPLTag(tag)
 		if skip {
 			continue
 		}
@@ -107,7 +104,6 @@ func getFlattenInfo(t reflect.Type) *flattenInfo {
 			omitempty: omitempty,
 			isAmount:  isAmount,
 			isAsset:   isAsset,
-			boolint:   boolint,
 			baseTen:   definitions.IsBaseTenUInt64FieldName(name),
 		})
 	}
@@ -190,13 +186,6 @@ func ReflectFlatten(tx Transaction) (map[string]any, error) {
 				asset = val.Interface().(Asset)
 			}
 			m[f.name] = flattenAsset(asset)
-		} else if f.boolint {
-			// Convert bool to int (0 or 1) for XRPL protocol
-			if val.Bool() {
-				m[f.name] = 1
-			} else {
-				m[f.name] = 0
-			}
 		} else {
 			// Default: dereference pointers and convert struct slices
 			if val.Kind() == reflect.Pointer {

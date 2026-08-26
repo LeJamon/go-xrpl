@@ -185,18 +185,6 @@ func binaryTransactionJSONFields(transaction Transaction, fields map[string]any)
 			adjusted[field.name] = adjustedAmount
 			continue
 		}
-		if field.boolint {
-			encoded, ok := fields[field.name].(int)
-			if !ok {
-				continue
-			}
-			if adjusted == nil {
-				adjusted = cloneFields(fields)
-			}
-			adjusted[field.name] = encoded != 0
-			continue
-		}
-
 		fieldType := value.Type().Field(field.index).Type
 		if fieldType.Kind() == reflect.Pointer {
 			fieldType = fieldType.Elem()

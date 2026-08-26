@@ -206,7 +206,7 @@ func storedClaimMap(x *XChainAddClaimAttestation) map[string]any {
 		"PublicKey":                x.PublicKey,
 		"Amount":                   mustAmountAny(x.Amount),
 		"AttestationRewardAccount": x.AttestationRewardAccount,
-		"WasLockingChainSend":      boolInt(x.WasLockingChainSend),
+		"WasLockingChainSend":      boolInt(x.WasLockingChainSend != 0),
 	}
 	if x.Destination != "" {
 		fields["Destination"] = x.Destination
@@ -221,7 +221,7 @@ func storedCreateMap(x *XChainAddAccountCreateAttestation) map[string]any {
 		"Amount":                   mustAmountAny(x.Amount),
 		"SignatureReward":          mustAmountAny(x.SignatureReward),
 		"AttestationRewardAccount": x.AttestationRewardAccount,
-		"WasLockingChainSend":      boolInt(x.WasLockingChainSend),
+		"WasLockingChainSend":      boolInt(x.WasLockingChainSend != 0),
 		"Destination":              x.Destination,
 	}}
 }
@@ -294,7 +294,7 @@ func createQuorum(
 		}
 		valid = append(valid, value)
 		if !amountEqual(att.amount, x.Amount) || !amountEqual(att.reward, x.SignatureReward) ||
-			att.lockingSend != x.WasLockingChainSend || att.destination != x.Destination {
+			att.lockingSend != (x.WasLockingChainSend != 0) || att.destination != x.Destination {
 			continue
 		}
 		weight += uint64(signers.weights[att.signerAccount])
@@ -555,7 +555,7 @@ func (x *XChainAddClaimAttestation) Apply(ctx *tx.ApplyContext) ter.Result {
 	if claim.OtherChainSource != x.OtherChainSource {
 		return ter.TecXCHAIN_SENDING_ACCOUNT_MISMATCH
 	}
-	if destinationChain(x.WasLockingChainSend) != dstChain {
+	if destinationChain(x.WasLockingChainSend != 0) != dstChain {
 		return ter.TecXCHAIN_WRONG_CHAIN
 	}
 	values := append([]any(nil), claim.XChainClaimAttestations...)
@@ -567,7 +567,7 @@ func (x *XChainAddClaimAttestation) Apply(ctx *tx.ApplyContext) ter.Result {
 		values = addOrReplaceClaim(values, x)
 		didModify = true
 	}
-	values, rewards, quorum := claimQuorum(outer, values, signers, x.Amount, x.WasLockingChainSend, x.Destination, true)
+	values, rewards, quorum := claimQuorum(outer, values, signers, x.Amount, x.WasLockingChainSend != 0, x.Destination, true)
 	claim.SetXChainClaimAttestations(values)
 	data, encodeResult := encodeEntry(&claim)
 	if encodeResult != ter.TesSUCCESS {
@@ -617,7 +617,7 @@ func (x *XChainAddAccountCreateAttestation) Apply(ctx *tx.ApplyContext) ter.Resu
 		return result
 	}
 	srcChain := otherChain(dstChain)
-	if destinationChain(x.WasLockingChainSend) != dstChain {
+	if destinationChain(x.WasLockingChainSend != 0) != dstChain {
 		return ter.TecXCHAIN_WRONG_CHAIN
 	}
 	signers, result := loadSignerSet(outer, bridge)

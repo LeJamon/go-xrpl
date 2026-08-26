@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/batch"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,7 +34,7 @@ func TestXChainUInt64BinaryRoundTrip(t *testing.T) {
 			"AttestationSignerAccount": account,
 			"PublicKey":                publicKey,
 			"Signature":                "00",
-			"WasLockingChainSend":      1,
+			"WasLockingChainSend":      2,
 		}
 	}
 
@@ -91,6 +92,7 @@ func TestXChainUInt64BinaryRoundTrip(t *testing.T) {
 				parsed, ok := transaction.(*XChainAddClaimAttestation)
 				require.True(t, ok)
 				require.Equal(t, value, parsed.XChainClaimID)
+				require.Equal(t, uint8(2), parsed.WasLockingChainSend)
 			},
 		},
 		{
@@ -108,6 +110,7 @@ func TestXChainUInt64BinaryRoundTrip(t *testing.T) {
 				parsed, ok := transaction.(*XChainAddAccountCreateAttestation)
 				require.True(t, ok)
 				require.Equal(t, value, parsed.XChainAccountCreateCount)
+				require.Equal(t, uint8(2), parsed.WasLockingChainSend)
 			},
 		},
 	}
@@ -140,4 +143,76 @@ func TestXChainUInt64BinaryRoundTrip(t *testing.T) {
 			require.Equal(t, blob, roundTripped)
 		})
 	}
+}
+
+func TestXChainUInt64BatchBinaryRoundTrip(t *testing.T) {
+	const (
+		account      = "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
+		otherAccount = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+		publicKey    = "ED0000000000000000000000000000000000000000000000000000000000000000"
+		wireValue    = "ABCDEF1234567890"
+		value        = uint64(0xABCDEF1234567890)
+	)
+	bridge := bridgeMap(XChainBridge{
+		LockingChainDoor:  account,
+		LockingChainIssue: tx.Asset{Currency: "XRP"},
+		IssuingChainDoor:  otherAccount,
+		IssuingChainIssue: tx.Asset{Currency: "XRP"},
+	})
+	inner := func(transactionType string, sequence uint32) map[string]any {
+		fields := map[string]any{
+			"Account":         account,
+			"TransactionType": transactionType,
+			"XChainBridge":    bridge,
+			"XChainClaimID":   wireValue,
+			"Amount":          "1000000",
+			"Sequence":        sequence,
+			"Fee":             "0",
+			"SigningPubKey":   "",
+			"Flags":           tx.TfInnerBatchTxn,
+		}
+		if transactionType == tx.TypeXChainClaim.String() {
+			fields["Destination"] = otherAccount
+		}
+		return fields
+	}
+	fields := map[string]any{
+		"Account":         account,
+		"TransactionType": tx.TypeBatch.String(),
+		"Sequence":        uint32(1),
+		"Fee":             "40",
+		"SigningPubKey":   publicKey,
+		"Flags":           batch.BatchFlagAllOrNothing,
+		"RawTransactions": []any{
+			map[string]any{"RawTransaction": inner(tx.TypeXChainCommit.String(), 2)},
+			map[string]any{"RawTransaction": inner(tx.TypeXChainClaim.String(), 3)},
+		},
+	}
+
+	Register()
+	batch.Register()
+	blob, err := binarycodec.EncodeBytes(fields)
+	require.NoError(t, err)
+
+	parsedTransaction, err := tx.ParseFromBinary(blob)
+	require.NoError(t, err)
+	parsed, ok := parsedTransaction.(*batch.Batch)
+	require.True(t, ok)
+	require.Len(t, parsed.RawTransactions, 2)
+	commit, ok := parsed.RawTransactions[0].RawTransaction.InnerTx.(*XChainCommit)
+	require.True(t, ok)
+	require.Equal(t, value, commit.XChainClaimID)
+	claim, ok := parsed.RawTransactions[1].RawTransaction.InnerTx.(*XChainClaim)
+	require.True(t, ok)
+	require.Equal(t, value, claim.XChainClaimID)
+	require.Equal(t, blob, parsed.GetRawBytes())
+	matches, err := tx.CurrentFieldsMatchRaw(parsed)
+	require.NoError(t, err)
+	require.True(t, matches)
+
+	flattened, err := parsed.Flatten()
+	require.NoError(t, err)
+	roundTripped, err := binarycodec.EncodeBytes(flattened)
+	require.NoError(t, err)
+	require.Equal(t, blob, roundTripped)
 }
