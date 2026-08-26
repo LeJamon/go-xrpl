@@ -70,13 +70,21 @@ type FastSyncMetrics struct {
 	ReplayPipelineDiscarded              uint64
 	ReplayPipelineRetried                uint64
 	ReplayPipelineFallbacks              uint64
+	ReplayPipelineCapacityRetargets      uint64
+	ReplayPipelineRetargetFailures       uint64
 	ReplayPipelineAcquireUs              uint64
 	ReplayPipelineReadyWaitUs            uint64
 	ReplayPipelineApplyUs                uint64
 	ReplayPipelinePersistUs              uint64
 	ReplayPipelineWindow                 uint32
+	ReplayPipelinePreparedLimit          uint32
 	ReplayPipelineDepth                  uint32
 	ReplayPipelineReadyDepth             uint32
+	ReplayPipelinePivotSeq               uint32
+	ReplayPipelinePreparedTailSeq        uint32
+	ReplayPipelineTrustedHeadSeq         uint32
+	ReplayPipelineGeneration             uint64
+	ReplayPipelinePivotStateNodesPerSec  uint64
 	ReplayPipelineHeadSeq                uint32
 	ReplayPipelineTargetSeq              uint32
 	ReplayPipelineHeadBlockedUs          uint64
@@ -309,6 +317,8 @@ type Router struct {
 	replayPipelineDiscarded              atomic.Uint64
 	replayPipelineRetried                atomic.Uint64
 	replayPipelineFallbacks              atomic.Uint64
+	replayPipelineCapacityRetargets      atomic.Uint64
+	replayPipelineRetargetFailures       atomic.Uint64
 	replayPipelineAcquireUs              atomic.Uint64
 	replayPipelineReadyWaitUs            atomic.Uint64
 	replayPipelineApplyUs                atomic.Uint64

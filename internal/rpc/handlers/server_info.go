@@ -244,6 +244,8 @@ func addServerDiagnostics(info map[string]any, services *types.ServiceGraph) {
 			"replay_pipeline_discarded":                      strconv.FormatUint(metrics.ReplayPipelineDiscarded, 10),
 			"replay_pipeline_retried":                        strconv.FormatUint(metrics.ReplayPipelineRetried, 10),
 			"replay_pipeline_fallbacks":                      strconv.FormatUint(metrics.ReplayPipelineFallbacks, 10),
+			"replay_pipeline_capacity_retargets":             strconv.FormatUint(metrics.ReplayPipelineCapacityRetargets, 10),
+			"replay_pipeline_retarget_failures":              strconv.FormatUint(metrics.ReplayPipelineRetargetFailures, 10),
 			"replay_pipeline_acquire_us":                     strconv.FormatUint(metrics.ReplayPipelineAcquireUs, 10),
 			"replay_pipeline_ready_wait_us":                  strconv.FormatUint(metrics.ReplayPipelineReadyWaitUs, 10),
 			"replay_pipeline_apply_us":                       strconv.FormatUint(metrics.ReplayPipelineApplyUs, 10),
@@ -253,6 +255,12 @@ func addServerDiagnostics(info map[string]any, services *types.ServiceGraph) {
 			"replay_pipeline_ready_depth":                    strconv.FormatUint(uint64(metrics.ReplayPipelineReadyDepth), 10),
 			"replay_pipeline_head_seq":                       strconv.FormatUint(uint64(metrics.ReplayPipelineHeadSeq), 10),
 			"replay_pipeline_target_seq":                     strconv.FormatUint(uint64(metrics.ReplayPipelineTargetSeq), 10),
+			"replay_pipeline_prepared_limit":                 strconv.FormatUint(uint64(metrics.ReplayPipelinePreparedLimit), 10),
+			"replay_pipeline_pivot_seq":                      strconv.FormatUint(uint64(metrics.ReplayPipelinePivotSeq), 10),
+			"replay_pipeline_prepared_tail_seq":              strconv.FormatUint(uint64(metrics.ReplayPipelinePreparedTailSeq), 10),
+			"replay_pipeline_trusted_head_seq":               strconv.FormatUint(uint64(metrics.ReplayPipelineTrustedHeadSeq), 10),
+			"replay_pipeline_generation":                     strconv.FormatUint(metrics.ReplayPipelineGeneration, 10),
+			"replay_pipeline_pivot_state_nodes_per_sec":      strconv.FormatUint(metrics.ReplayPipelinePivotStateNodesPerSec, 10),
 			"replay_pipeline_head_blocked_us":                strconv.FormatUint(metrics.ReplayPipelineHeadBlockedUs, 10),
 		}
 	}

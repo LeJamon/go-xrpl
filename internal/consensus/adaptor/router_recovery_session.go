@@ -8,6 +8,13 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 )
 
+type frozenPivotRetargetReason string
+
+const (
+	frozenPivotRetargetCapacity frozenPivotRetargetReason = "prepared_capacity"
+	frozenPivotRetargetStalled  frozenPivotRetargetReason = "replay_stalled"
+)
+
 func (r *Router) beginFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint64) bool {
 	if seq == 0 || hash == ([32]byte{}) {
 		return false
@@ -33,9 +40,11 @@ func (r *Router) beginFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint
 	r.standardReplay.targetHash = hash
 	r.standardReplay.entries = make(map[uint32]*standardReplayEntry, standardReplayPreparedLimit)
 	r.standardReplay.headBlockedAt = time.Time{}
+	r.standardReplay.pivotStartedAt = time.Now()
 	r.standardReplay.progressSampleAt = time.Time{}
 	r.standardReplay.sampleAnchorSeq = seq
 	r.standardReplay.stalledSamples = 0
+	r.standardReplay.retargetAttemptAt = time.Time{}
 	if r.consensusRecovery.targetHash != ([32]byte{}) {
 		r.consensusRecovery.stepHash = hash
 	}
@@ -222,65 +231,165 @@ func (r *Router) completeFrozenPivotAcquisition(h *header.LedgerHeader, initialC
 
 func (r *Router) rebootstrapFrozenPivotIfStalled(now time.Time) bool {
 	r.acquisitionMu.Lock()
-	if !r.standardReplay.active || !r.standardReplay.pivotReady || r.standardReplay.applying ||
-		r.standardReplay.targetSeq <= r.standardReplay.anchorSeq {
-		r.acquisitionMu.Unlock()
-		return false
-	}
-	if r.standardReplay.progressSampleAt.IsZero() {
-		r.standardReplay.progressSampleAt = now
-		r.standardReplay.sampleAnchorSeq = r.standardReplay.anchorSeq
-		r.acquisitionMu.Unlock()
-		return false
-	}
-	if now.Sub(r.standardReplay.progressSampleAt) < standardReplayProgressWindow {
+	if !r.standardReplay.active {
 		r.acquisitionMu.Unlock()
 		return false
 	}
 
-	if r.standardReplay.anchorSeq > r.standardReplay.sampleAnchorSeq {
-		r.standardReplay.stalledSamples = 0
-	} else if r.standardReplay.stalledSamples < ^uint8(0) {
-		r.standardReplay.stalledSamples++
+	reason := frozenPivotRetargetReason("")
+	if !r.standardReplay.pivotReady && len(r.standardReplay.entries) >= standardReplayRetargetThreshold {
+		reason = frozenPivotRetargetCapacity
+	} else {
+		if !r.standardReplay.pivotReady || r.standardReplay.applying ||
+			r.standardReplay.targetSeq <= r.standardReplay.anchorSeq {
+			r.acquisitionMu.Unlock()
+			return false
+		}
+		if r.standardReplay.progressSampleAt.IsZero() {
+			r.standardReplay.progressSampleAt = now
+			r.standardReplay.sampleAnchorSeq = r.standardReplay.anchorSeq
+			r.acquisitionMu.Unlock()
+			return false
+		}
+		if now.Sub(r.standardReplay.progressSampleAt) < standardReplayProgressWindow {
+			r.acquisitionMu.Unlock()
+			return false
+		}
+
+		if r.standardReplay.anchorSeq > r.standardReplay.sampleAnchorSeq {
+			r.standardReplay.stalledSamples = 0
+			r.standardReplay.retargetAttemptAt = time.Time{}
+		} else if r.standardReplay.stalledSamples < ^uint8(0) {
+			r.standardReplay.stalledSamples++
+		}
+		r.standardReplay.progressSampleAt = now
+		r.standardReplay.sampleAnchorSeq = r.standardReplay.anchorSeq
+		if r.standardReplay.stalledSamples < standardReplayStallWindows {
+			r.acquisitionMu.Unlock()
+			return false
+		}
+		reason = frozenPivotRetargetStalled
 	}
-	r.standardReplay.progressSampleAt = now
-	r.standardReplay.sampleAnchorSeq = r.standardReplay.anchorSeq
-	if r.standardReplay.stalledSamples < standardReplayStallWindows {
+
+	if !r.standardReplay.retargetAttemptAt.IsZero() &&
+		now.Sub(r.standardReplay.retargetAttemptAt) < standardReplayProgressWindow {
 		r.acquisitionMu.Unlock()
 		return false
 	}
+	r.standardReplay.retargetAttemptAt = now
 	generation := r.standardReplay.generation
 	frontierSeq := r.standardReplay.anchorSeq
+	pivotSeq := r.standardReplay.pivotSeq
 	r.acquisitionMu.Unlock()
+
+	return r.retargetFrozenPivot(generation, frontierSeq, pivotSeq, reason, now)
+}
+
+func (r *Router) retargetFrozenPivot(
+	generation uint64,
+	frontierSeq uint32,
+	pivotSeq uint32,
+	reason frozenPivotRetargetReason,
+	now time.Time,
+) bool {
+	r.catchupMu.Lock()
+	target := r.catchup
+	r.catchupMu.Unlock()
+	minimumSeq := pivotSeq
+	if reason == frozenPivotRetargetStalled {
+		minimumSeq = frontierSeq
+	}
+	if target.source != catchupSourceQuorum || target.seq <= minimumSeq || target.hash == ([32]byte{}) {
+		r.replayPipelineRetargetFailures.Add(1)
+		r.logger.Warn("cannot retarget frozen recovery pivot without a newer quorum target",
+			"reason", string(reason),
+			"pivot_seq", pivotSeq,
+			"frontier_seq", frontierSeq,
+			"trusted_head_seq", target.seq,
+		)
+		return false
+	}
+
+	peerID, ok := r.resolveAcquisitionPeer(target.seq, target.peerID)
+	if !ok {
+		r.replayPipelineRetargetFailures.Add(1)
+		r.logger.Warn("cannot retarget frozen recovery pivot without an acquisition peer",
+			"reason", string(reason),
+			"pivot_seq", pivotSeq,
+			"frontier_seq", frontierSeq,
+			"trusted_head_seq", target.seq,
+		)
+		return false
+	}
+	if r.belowFloor(target.seq) || r.catchupRetryBlocked(target.hash, now) {
+		r.replayPipelineRetargetFailures.Add(1)
+		r.logger.Warn("cannot retarget frozen recovery pivot while the quorum target is not admissible",
+			"reason", string(reason),
+			"pivot_seq", pivotSeq,
+			"frontier_seq", frontierSeq,
+			"trusted_head_seq", target.seq,
+		)
+		return false
+	}
 
 	r.replayCommitMu.Lock()
 	r.acquisitionMu.Lock()
-	if !r.standardReplay.active || !r.standardReplay.pivotReady ||
-		r.standardReplay.generation != generation || r.standardReplay.anchorSeq != frontierSeq ||
-		r.standardReplay.stalledSamples < standardReplayStallWindows {
+	capacityCurrent := reason == frozenPivotRetargetCapacity && !r.standardReplay.pivotReady &&
+		len(r.standardReplay.entries) >= standardReplayRetargetThreshold
+	stallCurrent := reason == frozenPivotRetargetStalled && r.standardReplay.pivotReady &&
+		!r.standardReplay.applying && r.standardReplay.stalledSamples >= standardReplayStallWindows
+	if !r.standardReplay.active || r.standardReplay.generation != generation ||
+		r.standardReplay.anchorSeq != frontierSeq || (!capacityCurrent && !stallCurrent) {
 		r.acquisitionMu.Unlock()
 		r.replayCommitMu.Unlock()
 		return false
 	}
-	targetSeq := r.standardReplay.targetSeq
-	targetHash := r.standardReplay.targetHash
+	preparedTailSeq := r.standardReplay.collectSeq
+	preparedOccupancy := len(r.standardReplay.entries)
+	pivotHash := r.standardReplay.pivotHash
+	pivotStartedAt := r.standardReplay.pivotStartedAt
+	pivotStateRate := uint64(0)
+	if pivot := r.fetchTracker.Find(pivotHash); pivot != nil && !pivotStartedAt.IsZero() {
+		elapsed := now.Sub(pivotStartedAt)
+		if elapsed > 0 {
+			pivotStateRate = uint64(float64(pivot.Snapshot().StateUseful) / elapsed.Seconds())
+		}
+	}
 	retired := r.cancelStandardReplayPipelineLocked()
+	retired = append(retired, r.discardSupersededProvisionalFullStateLocked(target.hash)...)
+	r.consensusRecovery.targetHash = target.hash
 	r.consensusRecovery.anchorSeq = 0
 	r.consensusRecovery.anchorHash = [32]byte{}
 	r.consensusRecovery.stepHash = [32]byte{}
 	r.acquisitionMu.Unlock()
 	r.replayCommitMu.Unlock()
 	r.retireLegacyAcquisitions(retired)
-	r.replayPipelineFallbacks.Add(1)
-	r.logger.Warn("replay recovery is not converging; selecting a new full-state pivot",
-		"frontier_seq", frontierSeq,
-		"target_seq", targetSeq,
-		"target_hash", fmt.Sprintf("%x", targetHash[:8]),
-	)
-	if peerID, ok := r.resolveAcquisitionPeer(targetSeq, 0); ok {
-		r.beginFrozenPivotRecovery(targetSeq, targetHash, peerID)
+	if reason == frozenPivotRetargetCapacity {
+		r.replayPipelineCapacityRetargets.Add(1)
+	} else {
+		r.replayPipelineFallbacks.Add(1)
 	}
-	return true
+	r.logger.Warn("retargeting frozen recovery to a newer full-state pivot",
+		"reason", string(reason),
+		"pivot_seq", pivotSeq,
+		"frontier_seq", frontierSeq,
+		"prepared_tail_seq", preparedTailSeq,
+		"trusted_head_seq", target.seq,
+		"trusted_head_hash", fmt.Sprintf("%x", target.hash[:8]),
+		"prepared_occupancy", preparedOccupancy,
+		"prepared_limit", standardReplayPreparedLimit,
+		"pivot_state_nodes_per_sec", pivotStateRate,
+	)
+	if r.beginFrozenPivotRecovery(target.seq, target.hash, peerID) {
+		return true
+	}
+	r.replayPipelineRetargetFailures.Add(1)
+	r.logger.Warn("failed to start replacement full-state pivot",
+		"reason", string(reason),
+		"target_seq", target.seq,
+		"target_hash", fmt.Sprintf("%x", target.hash[:8]),
+	)
+	return false
 }
 
 func (r *Router) failFrozenPivotRecovery(hash [32]byte) bool {

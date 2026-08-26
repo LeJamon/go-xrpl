@@ -1292,6 +1292,8 @@ type FastSyncMetrics struct {
 	ReplayPipelineDiscarded              uint64
 	ReplayPipelineRetried                uint64
 	ReplayPipelineFallbacks              uint64
+	ReplayPipelineCapacityRetargets      uint64
+	ReplayPipelineRetargetFailures       uint64
 	ReplayPipelineAcquireUs              uint64
 	ReplayPipelineReadyWaitUs            uint64
 	ReplayPipelineApplyUs                uint64
@@ -1301,6 +1303,12 @@ type FastSyncMetrics struct {
 	ReplayPipelineReadyDepth             uint32
 	ReplayPipelineHeadSeq                uint32
 	ReplayPipelineTargetSeq              uint32
+	ReplayPipelinePreparedLimit          uint32
+	ReplayPipelinePivotSeq               uint32
+	ReplayPipelinePreparedTailSeq        uint32
+	ReplayPipelineTrustedHeadSeq         uint32
+	ReplayPipelineGeneration             uint64
+	ReplayPipelinePivotStateNodesPerSec  uint64
 	ReplayPipelineHeadBlockedUs          uint64
 }
 

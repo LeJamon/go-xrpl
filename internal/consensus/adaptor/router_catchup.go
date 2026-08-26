@@ -824,11 +824,12 @@ func (r *Router) armPendingConsensusLedger() bool {
 		} else {
 			r.startLedgerAcquisitionLegacyLocked(acquisitionSeq, acquisitionHash, peerID)
 		}
-		if r.fetchTracker.Find(acquisitionHash) != nil {
+		started := r.fetchTracker.Find(acquisitionHash) != nil
+		if started {
 			r.consensusRecovery.stepHash = acquisitionHash
 		}
 		r.acquisitionMu.Unlock()
-		return true
+		return started
 	}
 }
 
@@ -1810,7 +1811,24 @@ func (r *Router) FastSyncMetrics() FastSyncMetrics {
 		}
 	}
 	targetSeq := r.standardReplay.targetSeq
+	pivotSeq := r.standardReplay.pivotSeq
+	preparedTailSeq := r.standardReplay.collectSeq
+	generation := r.standardReplay.generation
+	pivotHash := r.standardReplay.pivotHash
+	pivotStartedAt := r.standardReplay.pivotStartedAt
 	r.acquisitionMu.Unlock()
+	pivotStateRate := uint64(0)
+	if pivot := r.fetchTracker.Find(pivotHash); pivot != nil && !pivotStartedAt.IsZero() {
+		if elapsed := time.Since(pivotStartedAt); elapsed > 0 {
+			pivotStateRate = uint64(float64(pivot.Snapshot().StateUseful) / elapsed.Seconds())
+		}
+	}
+	r.catchupMu.Lock()
+	trustedHeadSeq := uint32(0)
+	if r.catchup.source == catchupSourceQuorum {
+		trustedHeadSeq = r.catchup.seq
+	}
+	r.catchupMu.Unlock()
 	return FastSyncMetrics{
 		CompletionRecheckAccepted:            r.completionRecheckAccepted.Load(),
 		CompletionRecheckRejectedNoEvidence:  r.completionRecheckRejectedNoEvidence.Load(),
@@ -1824,13 +1842,21 @@ func (r *Router) FastSyncMetrics() FastSyncMetrics {
 		ReplayPipelineDiscarded:              r.replayPipelineDiscarded.Load(),
 		ReplayPipelineRetried:                r.replayPipelineRetried.Load(),
 		ReplayPipelineFallbacks:              r.replayPipelineFallbacks.Load(),
+		ReplayPipelineCapacityRetargets:      r.replayPipelineCapacityRetargets.Load(),
+		ReplayPipelineRetargetFailures:       r.replayPipelineRetargetFailures.Load(),
 		ReplayPipelineAcquireUs:              r.replayPipelineAcquireUs.Load(),
 		ReplayPipelineReadyWaitUs:            r.replayPipelineReadyWaitUs.Load(),
 		ReplayPipelineApplyUs:                r.replayPipelineApplyUs.Load(),
 		ReplayPipelinePersistUs:              r.replayPipelinePersistUs.Load(),
 		ReplayPipelineWindow:                 standardReplayPipelineWindow,
+		ReplayPipelinePreparedLimit:          standardReplayPreparedLimit,
 		ReplayPipelineDepth:                  uint32(depth),
 		ReplayPipelineReadyDepth:             uint32(readyDepth),
+		ReplayPipelinePivotSeq:               pivotSeq,
+		ReplayPipelinePreparedTailSeq:        preparedTailSeq,
+		ReplayPipelineTrustedHeadSeq:         trustedHeadSeq,
+		ReplayPipelineGeneration:             generation,
+		ReplayPipelinePivotStateNodesPerSec:  pivotStateRate,
 		ReplayPipelineHeadSeq:                headSeq,
 		ReplayPipelineTargetSeq:              targetSeq,
 		ReplayPipelineHeadBlockedUs:          blockedUs,
