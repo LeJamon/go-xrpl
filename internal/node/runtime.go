@@ -782,6 +782,8 @@ func (r *nodeRuntime) configureConsensus() error {
 					ReplayPipelineDiscarded:              snapshot.ReplayPipelineDiscarded,
 					ReplayPipelineRetried:                snapshot.ReplayPipelineRetried,
 					ReplayPipelineFallbacks:              snapshot.ReplayPipelineFallbacks,
+					ReplayPipelineCapacityRetargets:      snapshot.ReplayPipelineCapacityRetargets,
+					ReplayPipelineRetargetFailures:       snapshot.ReplayPipelineRetargetFailures,
 					ReplayPipelineAcquireUs:              snapshot.ReplayPipelineAcquireUs,
 					ReplayPipelineReadyWaitUs:            snapshot.ReplayPipelineReadyWaitUs,
 					ReplayPipelineApplyUs:                snapshot.ReplayPipelineApplyUs,
@@ -791,6 +793,12 @@ func (r *nodeRuntime) configureConsensus() error {
 					ReplayPipelineReadyDepth:             snapshot.ReplayPipelineReadyDepth,
 					ReplayPipelineHeadSeq:                snapshot.ReplayPipelineHeadSeq,
 					ReplayPipelineTargetSeq:              snapshot.ReplayPipelineTargetSeq,
+					ReplayPipelinePreparedLimit:          snapshot.ReplayPipelinePreparedLimit,
+					ReplayPipelinePivotSeq:               snapshot.ReplayPipelinePivotSeq,
+					ReplayPipelinePreparedTailSeq:        snapshot.ReplayPipelinePreparedTailSeq,
+					ReplayPipelineTrustedHeadSeq:         snapshot.ReplayPipelineTrustedHeadSeq,
+					ReplayPipelineGeneration:             snapshot.ReplayPipelineGeneration,
+					ReplayPipelinePivotStateNodesPerSec:  snapshot.ReplayPipelinePivotStateNodesPerSec,
 					ReplayPipelineHeadBlockedUs:          snapshot.ReplayPipelineHeadBlockedUs,
 				}
 			}

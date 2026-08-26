@@ -68,6 +68,14 @@ func TestServerDiagnosticsWireShape(t *testing.T) {
 			ReplayPipelineHeadSeq:                34,
 			ReplayPipelineTargetSeq:              35,
 			ReplayPipelineHeadBlockedUs:          36,
+			ReplayPipelineCapacityRetargets:      37,
+			ReplayPipelineRetargetFailures:       38,
+			ReplayPipelinePreparedLimit:          39,
+			ReplayPipelinePivotSeq:               40,
+			ReplayPipelinePreparedTailSeq:        41,
+			ReplayPipelineTrustedHeadSeq:         42,
+			ReplayPipelineGeneration:             43,
+			ReplayPipelinePivotStateNodesPerSec:  44,
 		}
 	}
 
@@ -133,6 +141,14 @@ func TestServerDiagnosticsWireShape(t *testing.T) {
 				"replay_pipeline_head_seq":                       "34",
 				"replay_pipeline_target_seq":                     "35",
 				"replay_pipeline_head_blocked_us":                "36",
+				"replay_pipeline_capacity_retargets":             "37",
+				"replay_pipeline_retarget_failures":              "38",
+				"replay_pipeline_prepared_limit":                 "39",
+				"replay_pipeline_pivot_seq":                      "40",
+				"replay_pipeline_prepared_tail_seq":              "41",
+				"replay_pipeline_trusted_head_seq":               "42",
+				"replay_pipeline_generation":                     "43",
+				"replay_pipeline_pivot_state_nodes_per_sec":      "44",
 			}
 			if !reflect.DeepEqual(fastSync, wantFastSync) {
 				t.Fatalf("fast_sync = %#v, want %#v", fastSync, wantFastSync)

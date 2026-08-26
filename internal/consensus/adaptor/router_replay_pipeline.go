@@ -14,33 +14,36 @@ import (
 )
 
 const (
-	standardReplayPipelineWindow = 8
-	standardReplayPreparedLimit  = 2048
-	standardReplayProgressWindow = time.Minute
-	standardReplayStallWindows   = 2
-	standardReplayApplyBatch     = 8
-	standardReplayApplyBudget    = 25 * time.Millisecond
+	standardReplayPipelineWindow    = 8
+	standardReplayPreparedLimit     = 2048
+	standardReplayRetargetThreshold = standardReplayPreparedLimit * 7 / 8
+	standardReplayProgressWindow    = time.Minute
+	standardReplayStallWindows      = 2
+	standardReplayApplyBatch        = 8
+	standardReplayApplyBudget       = 25 * time.Millisecond
 )
 
 type standardReplayPipeline struct {
-	generation       uint64
-	active           bool
-	applying         bool
-	pivotReady       bool
-	initialCandidate bool
-	pivotSeq         uint32
-	pivotHash        [32]byte
-	anchorSeq        uint32
-	anchorHash       [32]byte
-	collectSeq       uint32
-	collectHash      [32]byte
-	targetSeq        uint32
-	targetHash       [32]byte
-	entries          map[uint32]*standardReplayEntry
-	headBlockedAt    time.Time
-	progressSampleAt time.Time
-	sampleAnchorSeq  uint32
-	stalledSamples   uint8
+	generation        uint64
+	active            bool
+	applying          bool
+	pivotReady        bool
+	initialCandidate  bool
+	pivotSeq          uint32
+	pivotHash         [32]byte
+	anchorSeq         uint32
+	anchorHash        [32]byte
+	collectSeq        uint32
+	collectHash       [32]byte
+	targetSeq         uint32
+	targetHash        [32]byte
+	entries           map[uint32]*standardReplayEntry
+	headBlockedAt     time.Time
+	pivotStartedAt    time.Time
+	progressSampleAt  time.Time
+	sampleAnchorSeq   uint32
+	stalledSamples    uint8
+	retargetAttemptAt time.Time
 }
 
 type standardReplayIdentity struct {
@@ -440,9 +443,32 @@ func (r *Router) cancelStandardReplayPipelineLocked() []*inbound.Ledger {
 	r.standardReplay.targetHash = [32]byte{}
 	r.standardReplay.entries = nil
 	r.standardReplay.headBlockedAt = time.Time{}
+	r.standardReplay.pivotStartedAt = time.Time{}
 	r.standardReplay.progressSampleAt = time.Time{}
 	r.standardReplay.sampleAnchorSeq = 0
 	r.standardReplay.stalledSamples = 0
+	r.standardReplay.retargetAttemptAt = time.Time{}
+	return retired
+}
+
+func (r *Router) discardSupersededProvisionalFullStateLocked(keepHash [32]byte) []*inbound.Ledger {
+	if r.adaptor == nil {
+		return nil
+	}
+	svc := r.adaptor.LedgerService()
+	if svc == nil || !svc.IsFastLoadProvisional() {
+		return nil
+	}
+
+	var retired []*inbound.Ledger
+	for _, candidate := range r.fetchTracker.Active() {
+		if candidate.Hash() == keepHash || candidate.Reason() != inbound.ReasonConsensus || candidate.TransactionOnly() {
+			continue
+		}
+		if r.fetchTracker.DiscardExpected(candidate) {
+			retired = append(retired, candidate)
+		}
+	}
 	return retired
 }
 

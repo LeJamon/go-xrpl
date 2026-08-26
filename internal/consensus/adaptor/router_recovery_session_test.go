@@ -2,6 +2,9 @@ package adaptor
 
 import (
 	"context"
+	"encoding/binary"
+	"io"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -221,6 +224,7 @@ func TestFrozenPivotRecoveryRebootstrapsAfterTwoNoProgressWindows(t *testing.T) 
 	started := time.Unix(100, 0)
 	targetHash := [32]byte{0xd1}
 	trackCatchupPeer(r, 7, 200, targetHash)
+	r.recordValidationCatchupTarget(200, targetHash, 7, catchupSourceQuorum)
 	r.standardReplay = standardReplayPipeline{
 		generation:       3,
 		active:           true,
@@ -248,6 +252,236 @@ func TestFrozenPivotRecoveryRebootstrapsAfterTwoNoProgressWindows(t *testing.T) 
 	require.NotNil(t, pivot)
 	assert.False(t, pivot.TransactionOnly())
 	assert.Equal(t, uint64(1), r.FastSyncMetrics().ReplayPipelineFallbacks)
+}
+
+func TestFrozenPivotRecoveryRebootstrapRetiresObsoleteProvisionalFullState(t *testing.T) {
+	r, _, svc := makeProvisionalWarmRouter(t)
+	started := time.Unix(100, 0)
+	frontierSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
+	oldPivotHash := [32]byte{0xd1}
+	obsoleteSeq := frontierSeq + 50
+	obsoleteHash := [32]byte{0xd2}
+	targetSeq := obsoleteSeq + 50
+	targetHash := [32]byte{0xd3}
+
+	trackCatchupPeer(r, 7, targetSeq, targetHash)
+	r.recordValidationCatchupTarget(targetSeq, targetHash, 7, catchupSourceQuorum)
+	r.acquisitionMu.Lock()
+	r.startLedgerAcquisitionLegacyLocked(obsoleteSeq, obsoleteHash, 7)
+	r.standardReplay = standardReplayPipeline{
+		generation:       3,
+		active:           true,
+		pivotReady:       true,
+		pivotSeq:         frontierSeq,
+		pivotHash:        oldPivotHash,
+		anchorSeq:        frontierSeq,
+		targetSeq:        targetSeq,
+		targetHash:       targetHash,
+		entries:          make(map[uint32]*standardReplayEntry),
+		progressSampleAt: started,
+		sampleAnchorSeq:  frontierSeq,
+		stalledSamples:   standardReplayStallWindows - 1,
+	}
+	r.acquisitionMu.Unlock()
+	require.NotNil(t, r.fetchTracker.Find(obsoleteHash))
+
+	require.True(t, r.rebootstrapFrozenPivotIfStalled(started.Add(standardReplayProgressWindow)))
+
+	assert.Nil(t, r.fetchTracker.Find(obsoleteHash))
+	replacement := r.fetchTracker.Find(targetHash)
+	require.NotNil(t, replacement)
+	assert.False(t, replacement.TransactionOnly())
+	assert.True(t, r.standardReplay.active)
+	assert.False(t, r.standardReplay.pivotReady)
+	assert.Equal(t, targetSeq, r.standardReplay.pivotSeq)
+	assert.Equal(t, targetHash, r.standardReplay.pivotHash)
+	replacementGeneration := r.standardReplay.generation
+	assert.False(t, r.completeFrozenPivotAcquisition(&header.LedgerHeader{
+		LedgerIndex: frontierSeq,
+		Hash:        oldPivotHash,
+	}, false))
+	assert.Equal(t, replacementGeneration, r.standardReplay.generation)
+	assert.Equal(t, targetHash, r.standardReplay.pivotHash)
+}
+
+func TestPendingConsensusLedgerReportsBlockedStart(t *testing.T) {
+	r, _, _, _ := makeRouter(t)
+	targetHash := [32]byte{0xA4}
+	r.consensusRecovery.targetHash = targetHash
+	r.catchupFailures = make(map[[32]byte]time.Time)
+	r.catchupFailures[targetHash] = time.Now().Add(time.Minute)
+
+	require.False(t, r.armPendingConsensusLedger())
+	assert.Nil(t, r.fetchTracker.Find(targetHash))
+	assert.Equal(t, consensusRecovery{targetHash: targetHash}, r.consensusRecovery)
+}
+
+func TestFrozenPivotCapacityRetargetRequiresQuorumTarget(t *testing.T) {
+	r, _, _, _ := makeRouter(t)
+	pivotHash := [32]byte{0xb1}
+	targetHash := [32]byte{0xb2}
+	now := time.Unix(300, 0)
+	r.standardReplay = standardReplayPipeline{
+		generation:     3,
+		active:         true,
+		pivotSeq:       100,
+		pivotHash:      pivotHash,
+		anchorSeq:      100,
+		entries:        make(map[uint32]*standardReplayEntry, standardReplayRetargetThreshold),
+		pivotStartedAt: now.Add(-time.Minute),
+	}
+	for i := range standardReplayRetargetThreshold {
+		seq := uint32(i) + 101
+		r.standardReplay.entries[seq] = &standardReplayEntry{seq: seq}
+	}
+	r.recordCatchupTarget(200, targetHash, 7)
+
+	assert.False(t, r.rebootstrapFrozenPivotIfStalled(now))
+	assert.True(t, r.standardReplay.active)
+	assert.Equal(t, uint64(3), r.standardReplay.generation)
+	assert.Equal(t, pivotHash, r.standardReplay.pivotHash)
+	assert.Equal(t, uint64(1), r.FastSyncMetrics().ReplayPipelineRetargetFailures)
+
+	assert.False(t, r.rebootstrapFrozenPivotIfStalled(now.Add(time.Second)))
+	assert.Equal(t, uint64(1), r.FastSyncMetrics().ReplayPipelineRetargetFailures)
+}
+
+func TestFrozenPivotCapacityRetargetKeepsSessionWhenTargetIsCoolingDown(t *testing.T) {
+	r, _, _, _ := makeRouter(t)
+	pivotHash := [32]byte{0xb3}
+	targetHash := [32]byte{0xb4}
+	now := time.Now()
+	r.standardReplay = standardReplayPipeline{
+		generation: 3,
+		active:     true,
+		pivotSeq:   100,
+		pivotHash:  pivotHash,
+		anchorSeq:  100,
+		entries:    make(map[uint32]*standardReplayEntry, standardReplayRetargetThreshold),
+	}
+	for i := range standardReplayRetargetThreshold {
+		seq := uint32(i) + 101
+		r.standardReplay.entries[seq] = &standardReplayEntry{seq: seq}
+	}
+	trackCatchupPeer(r, 7, 200, targetHash)
+	r.recordValidationCatchupTarget(200, targetHash, 7, catchupSourceQuorum)
+	r.catchupMu.Lock()
+	r.catchupFailures = map[[32]byte]time.Time{targetHash: now.Add(time.Minute)}
+	r.catchupMu.Unlock()
+
+	assert.False(t, r.rebootstrapFrozenPivotIfStalled(now))
+	assert.True(t, r.standardReplay.active)
+	assert.Equal(t, uint64(3), r.standardReplay.generation)
+	assert.Equal(t, pivotHash, r.standardReplay.pivotHash)
+	assert.Nil(t, r.fetchTracker.Find(targetHash))
+	assert.Equal(t, uint64(1), r.FastSyncMetrics().ReplayPipelineRetargetFailures)
+}
+
+func TestFrozenPivotRecoveryRetargetsBeforePreparedCapacityIsExhausted(t *testing.T) {
+	r, _, svc := makeProvisionalWarmRouter(t)
+	r.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	pivotSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
+	pivotHash := [32]byte{0xd4}
+	trackCatchupPeer(r, 7, pivotSeq, pivotHash)
+	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+	initialGeneration := r.standardReplay.generation
+	parentHash := pivotHash
+	now := time.Unix(500, 0)
+
+	for offset := uint32(1); offset <= standardReplayPreparedLimit+1; offset++ {
+		seq := pivotSeq + offset
+		var hash [32]byte
+		hash[0] = 0xd5
+		binary.BigEndian.PutUint32(hash[len(hash)-4:], seq)
+		r.recordSeqHash(seq, hash, parentHash, true)
+		trackCatchupPeer(r, 7, seq, hash)
+		r.recordValidationCatchupTarget(seq, hash, 7, catchupSourceQuorum)
+		require.True(t, r.continueFrozenPivotRecovery(seq, hash, 7))
+
+		r.acquisitionMu.Lock()
+		for _, entry := range r.standardReplay.entries {
+			if entry.acquisition == nil {
+				continue
+			}
+			require.True(t, r.fetchTracker.DiscardExpected(entry.acquisition))
+			entry.acquisition = nil
+			entry.durable = true
+		}
+		r.acquisitionMu.Unlock()
+
+		now = now.Add(time.Second)
+		r.rebootstrapFrozenPivotIfStalled(now)
+		parentHash = hash
+	}
+
+	metrics := r.FastSyncMetrics()
+	assert.GreaterOrEqual(t, metrics.ReplayPipelineCapacityRetargets, uint64(1))
+	assert.Zero(t, metrics.ReplayPipelineRetargetFailures)
+	assert.Greater(t, metrics.ReplayPipelineGeneration, initialGeneration)
+	assert.Greater(t, metrics.ReplayPipelinePivotSeq, pivotSeq)
+	assert.Equal(t, pivotSeq+standardReplayPreparedLimit+1, metrics.ReplayPipelinePreparedTailSeq)
+	assert.Equal(t, uint32(standardReplayPreparedLimit), metrics.ReplayPipelinePreparedLimit)
+	assert.Less(t, metrics.ReplayPipelineDepth, uint32(standardReplayPreparedLimit))
+	assert.Equal(t, pivotSeq+standardReplayPreparedLimit+1, metrics.ReplayPipelineTrustedHeadSeq)
+}
+
+func TestFrozenPivotCapacityRetargetReplaysToTrustedHead(t *testing.T) {
+	r, _, svc := makeProvisionalWarmRouter(t)
+	engine := &mockEngine{switchResult: consensus.LedgerSwitchAccepted}
+	r.engine = engine
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	_, initialPivot, initialHash, initialSeq := buildSuccessorAgainstParent(t, closed)
+	_, replacement, replacementHash, replacementSeq := buildSuccessorAgainstParent(t, initialPivot)
+	links := buildStandardReplayTestChain(t, r, replacement, 3)
+
+	trackCatchupPeer(r, 7, initialSeq, initialHash)
+	require.True(t, r.beginFrozenPivotRecovery(initialSeq, initialHash, 7))
+	r.acquisitionMu.Lock()
+	for i := range standardReplayRetargetThreshold {
+		seq := initialSeq + uint32(i) + 1
+		r.standardReplay.entries[seq] = &standardReplayEntry{
+			generation: r.standardReplay.generation,
+			seq:        seq,
+			durable:    true,
+		}
+	}
+	r.standardReplay.collectSeq = initialSeq + standardReplayRetargetThreshold
+	r.acquisitionMu.Unlock()
+
+	trackCatchupPeer(r, 7, replacementSeq, replacementHash)
+	r.recordValidationCatchupTarget(replacementSeq, replacementHash, 7, catchupSourceQuorum)
+	require.True(t, r.rebootstrapFrozenPivotIfStalled(time.Now()))
+	assert.Equal(t, replacementSeq, r.standardReplay.pivotSeq)
+	assert.Equal(t, replacementHash, r.standardReplay.pivotHash)
+
+	trustedHead := links[len(links)-1]
+	trackCatchupPeer(r, 7, trustedHead.seq, trustedHead.hash)
+	r.recordValidationCatchupTarget(trustedHead.seq, trustedHead.hash, 7, catchupSourceQuorum)
+	require.True(t, r.continueFrozenPivotRecovery(trustedHead.seq, trustedHead.hash, 7))
+	for _, link := range links {
+		completeStandardReplayTestLink(t, r, link)
+	}
+
+	pivotAcquisition := r.fetchTracker.Find(replacementHash)
+	require.NotNil(t, pivotAcquisition)
+	storeRecoveryLedger(t, svc, replacement)
+	require.True(t, r.fetchTracker.RemoveExpectedWithSnapshot(
+		pivotAcquisition, pivotAcquisition.Snapshot(), true,
+	))
+	replacementHeader := replacement.Header()
+	require.True(t, r.completeFrozenPivotAcquisition(&replacementHeader, false))
+
+	assert.False(t, r.standardReplay.active)
+	assert.Equal(t, uint64(len(links)), r.FastSyncMetrics().ReplayPipelineApplied)
+	storedHead, err := svc.GetLedgerByHash(trustedHead.hash)
+	require.NoError(t, err)
+	require.NotNil(t, storedHead)
+	assert.Equal(t, trustedHead.seq, storedHead.Sequence())
+	switched := engine.getLedgers()
+	require.NotEmpty(t, switched)
+	assert.Equal(t, consensus.LedgerID(trustedHead.hash), switched[len(switched)-1])
+	assert.Equal(t, consensus.OpModeTracking, r.adaptor.GetOperatingMode())
 }
 
 func TestFrozenPivotRecoveryKeepsAdvancingReplayAtMovingTipRate(t *testing.T) {
