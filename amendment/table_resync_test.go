@@ -20,7 +20,7 @@ func TestEnable_TracksUnsupported(t *testing.T) {
 		t.Fatal("supported amendment must not block")
 	}
 
-	tbl.Enable(FeatureXChainBridge) // SupportedNo
+	tbl.Enable(FeatureLendingProtocolV1_1) // SupportedNo
 	if !tbl.unsupportedEnabled {
 		t.Fatal("enabling an unsupported amendment must set unsupportedEnabled")
 	}
@@ -35,12 +35,12 @@ func TestDoValidatedLedger_EnablesAndBlocks(t *testing.T) {
 	tbl := NewTable()
 
 	enabled := map[[32]byte]bool{
-		FeatureDID:          true,
-		FeatureXChainBridge: true, // unsupported
+		FeatureDID:                 true,
+		FeatureLendingProtocolV1_1: true, // unsupported
 	}
 	tbl.DoValidatedLedger(256, enabled, nil)
 
-	if !tbl.IsEnabled(FeatureDID) || !tbl.IsEnabled(FeatureXChainBridge) {
+	if !tbl.IsEnabled(FeatureDID) || !tbl.IsEnabled(FeatureLendingProtocolV1_1) {
 		t.Fatal("DoValidatedLedger must enable all amendments in the set")
 	}
 	if !tbl.HasUnsupportedEnabled() {
@@ -59,8 +59,8 @@ func TestDoValidatedLedger_FirstUnsupportedExpected(t *testing.T) {
 
 	const unsupportedMajorityTime uint32 = 1_000_000
 	majorities := map[[32]byte]uint32{
-		FeatureXChainBridge: unsupportedMajorityTime,       // unsupported, not enabled
-		FeatureDID:          unsupportedMajorityTime - 100, // supported → ignored
+		FeatureLendingProtocolV1_1: unsupportedMajorityTime,       // unsupported, not enabled
+		FeatureDID:                 unsupportedMajorityTime - 100, // supported → ignored
 	}
 	tbl.DoValidatedLedger(256, nil, majorities)
 
@@ -77,7 +77,7 @@ func TestDoValidatedLedger_FirstUnsupportedExpected(t *testing.T) {
 
 	// Once the unsupported amendment is enabled and no longer in majority, the
 	// projection clears.
-	tbl.DoValidatedLedger(512, map[[32]byte]bool{FeatureXChainBridge: true}, nil)
+	tbl.DoValidatedLedger(512, map[[32]byte]bool{FeatureLendingProtocolV1_1: true}, nil)
 	if _, ok := tbl.FirstUnsupportedExpected(); ok {
 		t.Fatal("firstUnsupportedExpected must clear once majority no longer holds")
 	}

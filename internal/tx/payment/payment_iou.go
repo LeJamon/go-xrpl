@@ -316,6 +316,59 @@ func (p *Payment) applyFlowPaymentWithPaths(ctx *tx.ApplyContext, senderID, dest
 	return result
 }
 
+// ApplyExactIOUFlow transfers an exact issued amount over the default path and
+// preserves the flow engine's result. It is used by protocol operations that
+// must not apply Payment's retry-to-fee-claim conversion.
+func (p *Payment) ApplyExactIOUFlow(ctx *tx.ApplyContext, senderID, destID [20]byte) ter.Result {
+	rules := ctx.Rules()
+
+	rc := RippleCalculate(
+		ctx.View,
+		senderID,
+		destID,
+		p.Amount,
+		nil,
+		nil,
+		true,
+		false,
+		false,
+		ctx.TxHash,
+		ctx.Config.LedgerSequence,
+		WithAmendments(
+			ctx.Config.ParentCloseTime,
+			rules.Enabled(amendment.FeatureFixReducedOffersV2),
+		),
+		WithAMMAmendments(
+			rules.Enabled(amendment.FeatureFixAMMv1_1),
+			rules.Enabled(amendment.FeatureFixAMMv1_2),
+			rules.Enabled(amendment.FeatureFixAMMOverflowOffer),
+		),
+		WithOpenLedger(ctx.Config.IsViewOpen()),
+		WithNumberContext(ctx.NumberContext()),
+	)
+	if rc.Result != ter.TesSUCCESS {
+		return rc.Result
+	}
+	if rc.Sandbox != nil {
+		if err := rc.Sandbox.ApplyToView(ctx.View); err != nil {
+			return ter.TefINTERNAL
+		}
+	}
+
+	updatedData, err := ctx.View.Read(keylet.Account(senderID))
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if updatedData != nil {
+		updated, err := state.ParseAccountRoot(updatedData)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		*ctx.Account = *updated
+	}
+	return ter.TesSUCCESS
+}
+
 // getMaxSourceAmount returns the maximum amount the source will spend. When
 // SendMax is present it is used directly. Otherwise the bound defaults to the
 // delivered Amount: native XRP and MPT amounts are used as-is, while an IOU is

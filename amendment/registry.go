@@ -74,7 +74,7 @@ var (
 	FeatureFixAMMOverflowOffer           = registerFix("fixAMMOverflowOffer", SupportedYes, VoteDefaultYes)
 	FeatureFixFillOrKill                 = registerFix("fixFillOrKill", SupportedYes, VoteDefaultNo)
 	FeatureDID                           = registerFeature("DID", SupportedYes, VoteDefaultNo)
-	FeatureXChainBridge                  = registerFeature("XChainBridge", SupportedNo, VoteDefaultNo)
+	FeatureXChainBridge                  = registerFeature("XChainBridge", SupportedYes, VoteDefaultNo)
 	FeatureAMM                           = registerFeature("AMM", SupportedYes, VoteDefaultNo)
 	FeatureXRPFees                       = registerFeature("XRPFees", SupportedYes, VoteDefaultNo)
 	FeatureFixRemoveNFTokenAutoTrustLine = registerFix("fixRemoveNFTokenAutoTrustLine", SupportedYes, VoteDefaultYes)

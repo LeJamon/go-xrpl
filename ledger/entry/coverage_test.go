@@ -17,10 +17,6 @@ import (
 // declares, so the generated per-field decode arms and emit lines all run.
 // TestGeneratedSLE_FixtureCompleteness pins the fixtures to schema.Specs so a
 // new field or entry type can't silently slip past the round-trip guard.
-//
-// The two XChainOwned* entry types are intentionally excluded: they ship as
-// registered stubs and are out of scope for this pass (issue #751).
-
 const (
 	fxAccount = "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
 	fxIssuer  = "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn"
@@ -33,14 +29,6 @@ const (
 	fxBlob    = "DEADBEEF"
 	fxXRP     = "1000000"
 )
-
-// outOfScopeXChain lists the registered-but-stubbed XChain ledger objects the
-// coverage fixtures deliberately skip (issue #751: their accessors are out of
-// scope and excluded from the ≥90% target).
-var outOfScopeXChain = map[string]bool{
-	"XChainOwnedClaimID":              true,
-	"XChainOwnedCreateAccountClaimID": true,
-}
 
 // coverageFixtures maps a ledger-entry-type name to a canonical JSON map that
 // populates every field the type carries. Values are codec-valid but
@@ -235,6 +223,55 @@ var coverageFixtures = map[string]map[string]any{
 		"Flags":                    uint32(0),
 		"PreviousTxnID":            fxHash256,
 		"PreviousTxnLgrSeq":        uint32(9),
+	},
+	"XChainOwnedClaimID": {
+		"Account": fxAccount,
+		"XChainBridge": map[string]any{
+			"LockingChainDoor":  fxAccount,
+			"LockingChainIssue": map[string]any{"currency": "XRP"},
+			"IssuingChainDoor":  fxIssuer,
+			"IssuingChainIssue": map[string]any{"currency": "XRP"},
+		},
+		"XChainClaimID":    "1",
+		"OtherChainSource": fxIssuer,
+		"XChainClaimAttestations": []any{map[string]any{"XChainClaimProofSig": map[string]any{
+			"AttestationSignerAccount": fxAccount,
+			"PublicKey":                "ED5F1EEA3CC1A5F9A77E122416C5A8541D42BF1B976FD727BB0168B6F42D9D1A90",
+			"Amount":                   fxXRP,
+			"AttestationRewardAccount": fxIssuer,
+			"WasLockingChainSend":      uint32(1),
+			"Destination":              fxIssuer,
+		}}},
+		"SignatureReward":   fxXRP,
+		"OwnerNode":         "0",
+		"Flags":             uint32(0),
+		"PreviousTxnID":     fxHash256,
+		"PreviousTxnLgrSeq": uint32(9),
+		"Sponsor":           fxIssuer,
+	},
+	"XChainOwnedCreateAccountClaimID": {
+		"Account": fxAccount,
+		"XChainBridge": map[string]any{
+			"LockingChainDoor":  fxAccount,
+			"LockingChainIssue": map[string]any{"currency": "XRP"},
+			"IssuingChainDoor":  fxIssuer,
+			"IssuingChainIssue": map[string]any{"currency": "XRP"},
+		},
+		"XChainAccountCreateCount": "1",
+		"XChainCreateAccountAttestations": []any{map[string]any{"XChainCreateAccountProofSig": map[string]any{
+			"AttestationSignerAccount": fxAccount,
+			"PublicKey":                "ED5F1EEA3CC1A5F9A77E122416C5A8541D42BF1B976FD727BB0168B6F42D9D1A90",
+			"Amount":                   fxXRP,
+			"SignatureReward":          fxXRP,
+			"AttestationRewardAccount": fxIssuer,
+			"WasLockingChainSend":      uint32(1),
+			"Destination":              fxIssuer,
+		}}},
+		"OwnerNode":         "0",
+		"Flags":             uint32(0),
+		"PreviousTxnID":     fxHash256,
+		"PreviousTxnLgrSeq": uint32(9),
+		"Sponsor":           fxIssuer,
 	},
 	"DepositPreauth": {
 		"Account":              fxAccount,
@@ -595,15 +632,6 @@ func TestGeneratedSLE_RoundTripAndAccessors(t *testing.T) {
 // going stale when a field or entry type is added to the schema.
 func TestGeneratedSLE_FixtureCompleteness(t *testing.T) {
 	for _, entry := range schema.Specs {
-		if outOfScopeXChain[entry.Name] {
-			if !HasTypedName(entry.Name) {
-				t.Errorf("%q listed out-of-scope but is not registered", entry.Name)
-			}
-			if _, ok := coverageFixtures[entry.Name]; ok {
-				t.Errorf("%q is out-of-scope XChain but has a coverage fixture", entry.Name)
-			}
-			continue
-		}
 		fixture, ok := coverageFixtures[entry.Name]
 		if !ok {
 			t.Errorf("no coverage fixture for ledger type %q; add one to coverageFixtures", entry.Name)

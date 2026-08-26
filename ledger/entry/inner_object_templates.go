@@ -51,8 +51,8 @@ var arrayElementTemplates = map[string]string{
 	"PriceDataSeries":                 "PriceData",
 	"SignerEntries":                   "SignerEntry",
 	"VoteSlots":                       "VoteEntry",
-	"XChainClaimAttestations":         "XChainClaimAttestationCollectionElement",
-	"XChainCreateAccountAttestations": "XChainCreateAccountAttestationCollectionElement",
+	"XChainClaimAttestations":         "XChainClaimProofSig",
+	"XChainCreateAccountAttestations": "XChainCreateAccountProofSig",
 }
 
 var innerObjectTemplates = map[string]innerObjectTemplate{
@@ -122,6 +122,27 @@ var innerObjectTemplates = map[string]innerObjectTemplate{
 			"XChainAccountCreateCount": {style: innerRequired, kind: innerUInt64},
 			"Destination":              {style: innerRequired, kind: innerString},
 			"SignatureReward":          {style: innerRequired},
+		},
+	},
+	"XChainClaimProofSig": {
+		fields: map[string]innerFieldTemplate{
+			"AttestationSignerAccount": {style: innerRequired, kind: innerString},
+			"PublicKey":                {style: innerRequired, kind: innerString},
+			"Amount":                   {style: innerRequired},
+			"AttestationRewardAccount": {style: innerRequired, kind: innerString},
+			"WasLockingChainSend":      {style: innerRequired, kind: innerUInt8},
+			"Destination":              {style: innerOptional, kind: innerString},
+		},
+	},
+	"XChainCreateAccountProofSig": {
+		fields: map[string]innerFieldTemplate{
+			"AttestationSignerAccount": {style: innerRequired, kind: innerString},
+			"PublicKey":                {style: innerRequired, kind: innerString},
+			"Amount":                   {style: innerRequired},
+			"SignatureReward":          {style: innerRequired},
+			"AttestationRewardAccount": {style: innerRequired, kind: innerString},
+			"WasLockingChainSend":      {style: innerRequired, kind: innerUInt8},
+			"Destination":              {style: innerRequired, kind: innerString},
 		},
 	},
 	"AuthAccount": {

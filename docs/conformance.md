@@ -70,9 +70,6 @@ removing a line brings that suite back into scope.
 
 As of this writing the out-of-scope suites fall into two groups:
 
-- **Not implemented yet** — `XChain` and `XChainSim`. The
-  **XChain** bridge ships as a registered fail-closed stub: it parses and
-  registers but is not active (`XChainBridge` is `SupportedNo`).
 - **Implemented features with incomplete legacy-fixture coverage** — `Vault`,
   `Batch`, and `Delegate`. Their production implementations and
   focused suites are active, but the imported conformance corpus and runner do

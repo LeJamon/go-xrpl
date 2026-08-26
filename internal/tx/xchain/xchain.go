@@ -60,15 +60,11 @@ func (x *XChainCreateBridge) Validate() error {
 		return err
 	}
 
-	if x.SignatureReward.IsZero() {
-		return ter.Errorf(ter.TemMALFORMED, "SignatureReward is required")
-	}
-
-	return nil
+	return validateCreateBridge(x.Account, x.XChainBridge, x.SignatureReward, x.MinAccountCreateAmount)
 }
 
 func (x *XChainCreateBridge) Flatten() (map[string]any, error) {
-	return tx.ReflectFlatten(x)
+	return flattenXChain(x, x.XChainBridge)
 }
 
 func (x *XChainCreateBridge) RequiredAmendments() [][32]byte {
@@ -109,11 +105,14 @@ func (x *XChainModifyBridge) GetFlagsMask(rules *amendment.Rules) uint32 {
 }
 
 func (x *XChainModifyBridge) Validate() error {
-	return x.BaseTx.Validate()
+	if err := x.BaseTx.Validate(); err != nil {
+		return err
+	}
+	return validateModifyBridge(x.Account, x.XChainBridge, x.SignatureReward, x.MinAccountCreateAmount, x.GetFlags())
 }
 
 func (x *XChainModifyBridge) Flatten() (map[string]any, error) {
-	return tx.ReflectFlatten(x)
+	return flattenXChain(x, x.XChainBridge)
 }
 
 func (x *XChainModifyBridge) RequiredAmendments() [][32]byte {
@@ -158,16 +157,21 @@ func (x *XChainCreateClaimID) Validate() error {
 	if err := x.BaseTx.Validate(); err != nil {
 		return err
 	}
+	if err := validateBridgeFields(x.XChainBridge); err != nil {
+		return err
+	}
 
 	if x.OtherChainSource == "" {
 		return ter.Errorf(ter.TemMALFORMED, "OtherChainSource is required")
 	}
-
+	if !x.SignatureReward.IsNative() || x.SignatureReward.IsNegative() || !isLegalNet(x.SignatureReward) {
+		return ter.Errorf(ter.TemXCHAIN_BRIDGE_BAD_REWARD_AMOUNT, "invalid signature reward")
+	}
 	return nil
 }
 
 func (x *XChainCreateClaimID) Flatten() (map[string]any, error) {
-	return tx.ReflectFlatten(x)
+	return flattenXChain(x, x.XChainBridge)
 }
 
 func (x *XChainCreateClaimID) RequiredAmendments() [][32]byte {
@@ -215,16 +219,22 @@ func (x *XChainCommit) Validate() error {
 	if err := x.BaseTx.Validate(); err != nil {
 		return err
 	}
-
-	if x.Amount.IsZero() {
-		return ter.Errorf(ter.TemBAD_AMOUNT, "Amount is required")
+	if err := validateBridgeFields(x.XChainBridge); err != nil {
+		return err
 	}
 
+	if x.Amount.Signum() <= 0 || !isLegalNet(x.Amount) {
+		return ter.Errorf(ter.TemBAD_AMOUNT, "invalid commit amount")
+	}
+	if !assetEqual(assetOf(x.Amount), x.XChainBridge.LockingChainIssue) &&
+		!assetEqual(assetOf(x.Amount), x.XChainBridge.IssuingChainIssue) {
+		return ter.Errorf(ter.TemBAD_ISSUER, "amount is not a bridge issue")
+	}
 	return nil
 }
 
 func (x *XChainCommit) Flatten() (map[string]any, error) {
-	return tx.ReflectFlatten(x)
+	return flattenXChain(x, x.XChainBridge)
 }
 
 func (x *XChainCommit) RequiredAmendments() [][32]byte {
@@ -276,20 +286,24 @@ func (x *XChainClaim) Validate() error {
 	if err := x.BaseTx.Validate(); err != nil {
 		return err
 	}
+	if err := validateBridgeFields(x.XChainBridge); err != nil {
+		return err
+	}
 
 	if x.Destination == "" {
 		return ter.Errorf(ter.TemMALFORMED, "Destination is required")
 	}
 
-	if x.Amount.IsZero() {
-		return ter.Errorf(ter.TemBAD_AMOUNT, "Amount is required")
+	if x.Amount.Signum() <= 0 || !isLegalNet(x.Amount) ||
+		(!assetEqual(assetOf(x.Amount), x.XChainBridge.LockingChainIssue) &&
+			!assetEqual(assetOf(x.Amount), x.XChainBridge.IssuingChainIssue)) {
+		return ter.Errorf(ter.TemBAD_AMOUNT, "invalid claim amount")
 	}
-
 	return nil
 }
 
 func (x *XChainClaim) Flatten() (map[string]any, error) {
-	return tx.ReflectFlatten(x)
+	return flattenXChain(x, x.XChainBridge)
 }
 
 func (x *XChainClaim) RequiredAmendments() [][32]byte {
@@ -339,20 +353,26 @@ func (x *XChainAccountCreateCommit) Validate() error {
 	if err := x.BaseTx.Validate(); err != nil {
 		return err
 	}
+	if err := validateBridgeFields(x.XChainBridge); err != nil {
+		return err
+	}
 
 	if x.Destination == "" {
 		return ter.Errorf(ter.TemMALFORMED, "Destination is required")
 	}
 
-	if x.Amount.IsZero() {
-		return ter.Errorf(ter.TemBAD_AMOUNT, "Amount is required")
+	if x.Amount.Signum() <= 0 || !x.Amount.IsNative() || !isLegalNet(x.Amount) {
+		return ter.Errorf(ter.TemBAD_AMOUNT, "account-create amount must be positive XRP")
 	}
-
+	if x.SignatureReward.IsNegative() || !x.SignatureReward.IsNative() || !isLegalNet(x.SignatureReward) ||
+		!assetEqual(assetOf(x.SignatureReward), assetOf(x.Amount)) {
+		return ter.Errorf(ter.TemBAD_AMOUNT, "account-create reward must be non-negative XRP")
+	}
 	return nil
 }
 
 func (x *XChainAccountCreateCommit) Flatten() (map[string]any, error) {
-	return tx.ReflectFlatten(x)
+	return flattenXChain(x, x.XChainBridge)
 }
 
 func (x *XChainAccountCreateCommit) RequiredAmendments() [][32]byte {
@@ -418,6 +438,9 @@ func (x *XChainAddClaimAttestation) Validate() error {
 	if err := x.BaseTx.Validate(); err != nil {
 		return err
 	}
+	if err := validateBridgeFields(x.XChainBridge); err != nil {
+		return err
+	}
 
 	if x.OtherChainSource == "" {
 		return ter.Errorf(ter.TemMALFORMED, "OtherChainSource is required")
@@ -439,11 +462,11 @@ func (x *XChainAddClaimAttestation) Validate() error {
 		return ter.Errorf(ter.TemMALFORMED, "Signature is required")
 	}
 
-	return nil
+	return validateClaimAttestation(x)
 }
 
 func (x *XChainAddClaimAttestation) Flatten() (map[string]any, error) {
-	return tx.ReflectFlatten(x)
+	return flattenXChain(x, x.XChainBridge)
 }
 
 func (x *XChainAddClaimAttestation) RequiredAmendments() [][32]byte {
@@ -511,6 +534,9 @@ func (x *XChainAddAccountCreateAttestation) Validate() error {
 	if err := x.BaseTx.Validate(); err != nil {
 		return err
 	}
+	if err := validateBridgeFields(x.XChainBridge); err != nil {
+		return err
+	}
 
 	if x.OtherChainSource == "" {
 		return ter.Errorf(ter.TemMALFORMED, "OtherChainSource is required")
@@ -520,59 +546,13 @@ func (x *XChainAddAccountCreateAttestation) Validate() error {
 		return ter.Errorf(ter.TemMALFORMED, "Destination is required")
 	}
 
-	return nil
+	return validateCreateAccountAttestation(x)
 }
 
 func (x *XChainAddAccountCreateAttestation) Flatten() (map[string]any, error) {
-	return tx.ReflectFlatten(x)
+	return flattenXChain(x, x.XChainBridge)
 }
 
 func (x *XChainAddAccountCreateAttestation) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureXChainBridge}
-}
-
-// The XChain Apply methods are intentionally unimplemented. XChainBridge is
-// SupportedNo, so the engine rejects these transactions at preflight with
-// temDISABLED and Apply is unreachable. Each returns a hard error that mutates
-// no state, guarding against the amendment being enabled before the real
-// cross-chain semantics are implemented.
-
-func (x *XChainCreateBridge) Apply(ctx *tx.ApplyContext) ter.Result {
-	ctx.Log.Trace("xchain create bridge apply: not implemented", "account", x.Account)
-	return ter.TefINTERNAL
-}
-
-func (x *XChainModifyBridge) Apply(ctx *tx.ApplyContext) ter.Result {
-	ctx.Log.Trace("xchain modify bridge apply: not implemented", "account", x.Account)
-	return ter.TefINTERNAL
-}
-
-func (x *XChainCreateClaimID) Apply(ctx *tx.ApplyContext) ter.Result {
-	ctx.Log.Trace("xchain create claim id apply: not implemented", "account", x.Account)
-	return ter.TefINTERNAL
-}
-
-func (x *XChainCommit) Apply(ctx *tx.ApplyContext) ter.Result {
-	ctx.Log.Trace("xchain commit apply: not implemented", "account", x.Account)
-	return ter.TefINTERNAL
-}
-
-func (x *XChainClaim) Apply(ctx *tx.ApplyContext) ter.Result {
-	ctx.Log.Trace("xchain claim apply: not implemented", "account", x.Account)
-	return ter.TefINTERNAL
-}
-
-func (x *XChainAccountCreateCommit) Apply(ctx *tx.ApplyContext) ter.Result {
-	ctx.Log.Trace("xchain account create commit apply: not implemented", "account", x.Account)
-	return ter.TefINTERNAL
-}
-
-func (x *XChainAddClaimAttestation) Apply(ctx *tx.ApplyContext) ter.Result {
-	ctx.Log.Trace("xchain add claim attestation apply: not implemented", "account", x.Account)
-	return ter.TefINTERNAL
-}
-
-func (x *XChainAddAccountCreateAttestation) Apply(ctx *tx.ApplyContext) ter.Result {
-	ctx.Log.Trace("xchain add account create attestation apply: not implemented", "account", x.Account)
-	return ter.TefINTERNAL
 }

@@ -8,7 +8,3 @@
 app/Batch
 app/Delegate
 app/Vault
-
-# Not implemented yet
-app/XChain
-app/XChainSim
