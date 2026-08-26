@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -135,7 +136,7 @@ func parseFromBinaryUnbound(blob []byte) (Transaction, map[string]any, []byte, e
 	}
 	jsonFields := jsonMap
 	if parsed != nil {
-		jsonFields = binaryAmountJSONFields(parsed, jsonMap)
+		jsonFields = binaryTransactionJSONFields(parsed, jsonMap)
 		if parsed.TxType() == TypeBatch {
 			jsonFields = binaryBatchJSONFields(jsonFields)
 		}
@@ -164,37 +165,74 @@ func parseFromBinaryUnbound(blob []byte) (Transaction, map[string]any, []byte, e
 
 const noCurrencyHex = "0000000000000000000000000000000000000001"
 
-func binaryAmountJSONFields(transaction Transaction, fields map[string]any) map[string]any {
+func binaryTransactionJSONFields(transaction Transaction, fields map[string]any) map[string]any {
 	value := reflect.ValueOf(transaction)
 	if value.Kind() == reflect.Pointer {
 		value = value.Elem()
 	}
 	var adjusted map[string]any
 	for _, field := range getFlattenInfo(value.Type()).fields {
-		if !field.isAmount {
+		if field.isAmount {
+			amount, ok := fields[field.name].(map[string]any)
+			if !ok || amount["currency"] != "1" {
+				continue
+			}
+			if adjusted == nil {
+				adjusted = cloneFields(fields)
+			}
+			adjustedAmount := cloneFields(amount)
+			adjustedAmount["currency"] = noCurrencyHex
+			adjusted[field.name] = adjustedAmount
 			continue
 		}
-		amount, ok := fields[field.name].(map[string]any)
-		if !ok || amount["currency"] != "1" {
+		if field.boolint {
+			encoded, ok := fields[field.name].(int)
+			if !ok {
+				continue
+			}
+			if adjusted == nil {
+				adjusted = cloneFields(fields)
+			}
+			adjusted[field.name] = encoded != 0
+			continue
+		}
+
+		fieldType := value.Type().Field(field.index).Type
+		if fieldType.Kind() == reflect.Pointer {
+			fieldType = fieldType.Elem()
+		}
+		if fieldType.Kind() != reflect.Uint64 {
+			continue
+		}
+		encoded, ok := fields[field.name].(string)
+		if !ok {
+			continue
+		}
+		base := 16
+		if field.baseTen {
+			base = 10
+		}
+		decoded, err := strconv.ParseUint(encoded, base, 64)
+		if err != nil {
 			continue
 		}
 		if adjusted == nil {
-			adjusted = make(map[string]any, len(fields))
-			for name, value := range fields {
-				adjusted[name] = value
-			}
+			adjusted = cloneFields(fields)
 		}
-		adjustedAmount := make(map[string]any, len(amount))
-		for name, value := range amount {
-			adjustedAmount[name] = value
-		}
-		adjustedAmount["currency"] = noCurrencyHex
-		adjusted[field.name] = adjustedAmount
+		adjusted[field.name] = decoded
 	}
 	if adjusted == nil {
 		return fields
 	}
 	return adjusted
+}
+
+func cloneFields(fields map[string]any) map[string]any {
+	cloned := make(map[string]any, len(fields))
+	for name, value := range fields {
+		cloned[name] = value
+	}
+	return cloned
 }
 
 func binaryBatchJSONFields(fields map[string]any) map[string]any {
@@ -223,7 +261,7 @@ func binaryBatchJSONFields(fields map[string]any) map[string]any {
 		if err != nil {
 			continue
 		}
-		adjustedInner := binaryAmountJSONFields(inner, innerFields)
+		adjustedInner := binaryTransactionJSONFields(inner, innerFields)
 		adjustedWrapper := make(map[string]any, len(wrapper))
 		for name, value := range wrapper {
 			adjustedWrapper[name] = value
