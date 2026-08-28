@@ -144,7 +144,9 @@ func TestRouter_Issue1663CatchupCascadeRecoversToFull(t *testing.T) {
 	now := base.Add(3900 * time.Millisecond)
 	for range 2 {
 		require.True(t, lane.submit(stale1, acquisitionWorkEvent{
-			kind:  acquisitionWorkTimer,
+			// Fetch-pack arrivals, rather than timer retries, now own the
+			// resumable local traversal exercised by this cascade regression.
+			kind:  acquisitionWorkLocal,
 			fetch: func([32]byte) ([]byte, bool) { return nil, false },
 		}))
 		yielded := <-lane.results()

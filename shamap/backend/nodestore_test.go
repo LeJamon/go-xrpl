@@ -58,6 +58,28 @@ type controlledFetchNodeStore struct {
 	once     sync.Once
 }
 
+type concurrentFetchNodeStore struct {
+	nodestore.Database
+	active  atomic.Int32
+	maximum atomic.Int32
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *concurrentFetchNodeStore) Fetch(ctx context.Context, hash nodestore.Hash256) (*nodestore.Node, error) {
+	active := s.active.Add(1)
+	defer s.active.Add(-1)
+	for maximum := s.maximum.Load(); active > maximum && !s.maximum.CompareAndSwap(maximum, active); maximum = s.maximum.Load() {
+	}
+	s.entered <- struct{}{}
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return &nodestore.Node{Hash: hash, Data: []byte("node")}, nil
+}
+
 func (s *controlledFetchNodeStore) Fetch(ctx context.Context, hash nodestore.Hash256) (*nodestore.Node, error) {
 	call := s.calls.Add(1)
 	if call == 1 {
@@ -328,5 +350,46 @@ func TestNodeStoreFetchDurableErrorPropagatesAndRetries(t *testing.T) {
 	}
 	if got := store.calls.Load(); got != 2 {
 		t.Fatalf("backend fetches after retry = %d, want 2", got)
+	}
+}
+
+func TestNodeStoreFetchDurableBoundsBackendConcurrency(t *testing.T) {
+	store := &concurrentFetchNodeStore{
+		Database: NewMemory().db,
+		entered:  make(chan struct{}, durableReadWorkers+8),
+		release:  make(chan struct{}),
+	}
+	family := New(store)
+
+	const queued = durableReadWorkers + 8
+	results := make(chan error, queued)
+	for i := range queued {
+		hash := [32]byte{byte(i + 1)}
+		go func() {
+			_, err := family.FetchDurable(t.Context(), hash)
+			results <- err
+		}()
+	}
+	for range durableReadWorkers {
+		select {
+		case <-store.entered:
+		case <-time.After(time.Second):
+			t.Fatal("durable read pool did not fill")
+		}
+	}
+	select {
+	case <-store.entered:
+		t.Fatal("durable reads exceeded the worker bound")
+	case <-time.After(20 * time.Millisecond):
+	}
+	if maximum := store.maximum.Load(); maximum != durableReadWorkers {
+		t.Fatalf("maximum concurrent backend reads = %d, want %d", maximum, durableReadWorkers)
+	}
+
+	close(store.release)
+	for range queued {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
 	}
 }

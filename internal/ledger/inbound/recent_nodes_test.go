@@ -40,11 +40,11 @@ func (f *countingMissingFamily) FullBelowCache() *shamap.FullBelowCache {
 // newAcquisitionWithMissingNodes builds an acquisition parked in StateWantState
 // with an incomplete state tree, so CollectMissingRequest has outstanding nodes
 // to hand out. Modeled on TestNeedsMissingNodeIDs_RequestsActualMissingNodes.
-func newAcquisitionWithMissingNodes(t *testing.T) *Ledger {
+func newAcquisitionWithMissingNodes(t testing.TB) *Ledger {
 	return newAcquisitionWithMissingNodesAndOptions(t)
 }
 
-func newAcquisitionWithMissingNodesAndOptions(t *testing.T, opts ...Option) *Ledger {
+func newAcquisitionWithMissingNodesAndOptions(t testing.TB, opts ...Option) *Ledger {
 	t.Helper()
 	source := shamap.New(shamap.TypeState)
 	for branch := range byte(8) {
@@ -342,5 +342,82 @@ func TestCollectMissingRequest_TimeoutStillFiresWhenAllDuplicates(t *testing.T) 
 	}
 	if state, _ := il.CollectMissingRequest(false); len(state) == 0 {
 		t.Fatal("timeout path must still fan out even when every node is a duplicate")
+	}
+}
+
+func TestCollectMissingRequest_TimeoutReusesCachedFrontier(t *testing.T) {
+	family := &countingMissingFamily{base: backend.NewMemory()}
+	il := newAcquisitionWithMissingNodesAndOptions(t, WithFamily(family))
+
+	first, _, complete, err := il.CollectMissingRequestContext(t.Context(), false)
+	if err != nil || complete || len(first) == 0 {
+		t.Fatalf("first collect = %d nodes, complete=%t, err=%v", len(first), complete, err)
+	}
+	if reads := family.reads.Load(); reads == 0 {
+		t.Fatal("precondition: initial frontier discovery performed no durable reads")
+	}
+
+	// A due timer clears the request reservations, but the missing paths remain
+	// valid until a reply advances them. Retrying those paths must not rescan the
+	// durable tree.
+	il.OnTimer(time.Now().Add(2 * acquireTimerInterval))
+	family.reads.Store(0)
+	second, _, complete, err := il.CollectMissingRequestContext(t.Context(), false)
+	if err != nil || complete {
+		t.Fatalf("cached collect complete=%t, err=%v", complete, err)
+	}
+	if !slices.EqualFunc(first, second, func(a, b []byte) bool { return slices.Equal(a, b) }) {
+		t.Fatalf("cached frontier differs: first=%x second=%x", first, second)
+	}
+	if reads := family.reads.Load(); reads != 0 {
+		t.Fatalf("cached timeout retry performed %d durable reads, want 0", reads)
+	}
+}
+
+func TestTakeByHashRequest_ReusesCachedFrontier(t *testing.T) {
+	family := &countingMissingFamily{base: backend.NewMemory()}
+	il := newAcquisitionWithMissingNodesAndOptions(t, WithFamily(family))
+	if state, _ := il.CollectMissingRequest(false); len(state) == 0 {
+		t.Fatal("precondition: initial collect produced no state frontier")
+	}
+
+	base := time.Now()
+	il.RearmTimer(base)
+	if action := il.OnTimer(base.Add(4 * time.Second)); action != TimerRefresh {
+		t.Fatalf("initial timer action = %v, want refresh", action)
+	}
+	for i := 2; i <= 6; i++ {
+		if action := il.OnTimer(base.Add(time.Duration(i) * 4 * time.Second)); action != TimerEscalate {
+			t.Fatalf("timer %d action = %v, want escalate", i, action)
+		}
+	}
+
+	family.reads.Store(0)
+	state, _, err := il.TakeByHashRequestContext(t.Context(), missingNodeBatch)
+	if err != nil || len(state) == 0 {
+		t.Fatalf("by-hash request = %d nodes, err=%v", len(state), err)
+	}
+	if reads := family.reads.Load(); reads != 0 {
+		t.Fatalf("cached by-hash retry performed %d durable reads, want 0", reads)
+	}
+}
+
+func BenchmarkCollectMissingRequest_CachedTimeout(b *testing.B) {
+	family := &countingMissingFamily{base: backend.NewMemory()}
+	il := newAcquisitionWithMissingNodesAndOptions(b, WithFamily(family))
+	if state, _ := il.CollectMissingRequest(false); len(state) == 0 {
+		b.Fatal("precondition: initial collect produced no state frontier")
+	}
+	family.reads.Store(0)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, _, complete, err := il.CollectMissingRequestContext(b.Context(), false); err != nil || complete {
+			b.Fatalf("cached timeout collect complete=%t err=%v", complete, err)
+		}
+	}
+	b.StopTimer()
+	if reads := family.reads.Load(); reads != 0 {
+		b.Fatalf("cached timeout benchmark performed %d durable reads, want 0", reads)
 	}
 }

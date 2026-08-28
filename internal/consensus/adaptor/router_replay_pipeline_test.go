@@ -322,6 +322,40 @@ func TestStandardReplayPipelineFallsBackWhenHeadFails(t *testing.T) {
 	assert.GreaterOrEqual(t, metrics.ReplayPipelineDiscarded, uint64(len(links)))
 }
 
+func TestStandardReplayPipelineDefersFailedEntryUntilFrozenPivotReady(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.Background())
+	require.NoError(t, err)
+	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 3)
+	armStandardReplayTestPipeline(t, r, a, sender, links)
+
+	r.acquisitionMu.Lock()
+	r.standardReplay.pivotReady = false
+	r.standardReplay.applying = false
+	generation := r.standardReplay.generation
+	pivotSeq := r.standardReplay.anchorSeq
+	r.acquisitionMu.Unlock()
+
+	// The first successor may be ready while the full-state pivot is still
+	// being verified. A failure farther ahead must not wake the drain yet.
+	completeStandardReplayTestLink(t, r, links[0])
+	failed := r.fetchTracker.Find(links[2].hash)
+	require.NotNil(t, failed)
+	r.failInboundAcquisition(failed)
+
+	r.acquisitionMu.Lock()
+	require.True(t, r.standardReplay.active)
+	assert.Equal(t, generation, r.standardReplay.generation)
+	assert.Equal(t, pivotSeq, r.standardReplay.anchorSeq)
+	assert.False(t, r.standardReplay.applying)
+	assert.False(t, r.standardReplay.entries[links[0].seq].readyAt.IsZero())
+	assert.True(t, r.standardReplay.entries[links[2].seq].failed)
+	r.acquisitionMu.Unlock()
+
+	assert.Zero(t, r.FastSyncMetrics().ReplayPipelineApplied)
+	assert.Zero(t, r.FastSyncMetrics().ReplayPipelineFallbacks)
+}
+
 func TestStandardReplayPipelineFallsBackWhenPersistenceFails(t *testing.T) {
 	r, a, sender, svc := makeRouter(t)
 	_, err := svc.AcceptLedger(context.Background())

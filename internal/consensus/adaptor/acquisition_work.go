@@ -314,6 +314,11 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 	if errors.Is(result.err, shamap.ErrTraversalBudget) && batch.ctx.Err() == nil {
 		result.err = nil
 		result.yielded = true
+		// Exhausting a slice means the resumable SHAMap cursor made bounded
+		// local progress; it is not a stalled acquisition. Keep the retry timer
+		// behind the active walk so a large on-disk tree cannot consume the
+		// terminal no-progress budget before the next missing frontier is found.
+		result.rearmTimer = true
 	}
 	if result.err == nil && !result.complete && !result.remove {
 		useful := 0
@@ -574,7 +579,10 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 
 	workCtx := shamap.WithTraversalBudget(ctx, visitBudget)
 
-	if runLocal || runTimer {
+	// Fetch-pack arrivals explicitly enqueue acquisitionWorkLocal. A timeout
+	// must schedule network retries first rather than repeating the full local
+	// SHAMap/fetch-pack scan before it can send a request.
+	if runLocal {
 		_, complete, err := ledger.CheckLocalContext(workCtx, fetch)
 		if err != nil {
 			result.err = err
@@ -596,7 +604,7 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 			return result
 		}
 		if len(addedPeers) > 0 {
-			result.requests, result.complete, result.err = ledger.CollectMissingAddedRequestsContext(workCtx, addedPeers)
+			result.requests = ledger.CollectMissingCachedAddedRequests(addedPeers)
 		}
 		return result
 	}
