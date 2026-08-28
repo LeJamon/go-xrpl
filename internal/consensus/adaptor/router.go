@@ -70,26 +70,25 @@ type FastSyncMetrics struct {
 	ReplayPipelineDiscarded              uint64
 	ReplayPipelineRetried                uint64
 	ReplayPipelineFallbacks              uint64
-	// ReplayPipelineCapacityRetargets remains zero for RPC counter compatibility.
-	ReplayPipelineCapacityRetargets     uint64
-	ReplayPipelineBackpressureEvents    uint64
-	ReplayPipelineRetargetFailures      uint64
-	ReplayPipelineAcquireUs             uint64
-	ReplayPipelineReadyWaitUs           uint64
-	ReplayPipelineApplyUs               uint64
-	ReplayPipelinePersistUs             uint64
-	ReplayPipelineWindow                uint32
-	ReplayPipelinePreparedLimit         uint32
-	ReplayPipelineDepth                 uint32
-	ReplayPipelineReadyDepth            uint32
-	ReplayPipelinePivotSeq              uint32
-	ReplayPipelinePreparedTailSeq       uint32
-	ReplayPipelineTrustedHeadSeq        uint32
-	ReplayPipelineGeneration            uint64
-	ReplayPipelinePivotStateNodesPerSec uint64
-	ReplayPipelineHeadSeq               uint32
-	ReplayPipelineTargetSeq             uint32
-	ReplayPipelineHeadBlockedUs         uint64
+	ReplayPipelineCapacityRetargets      uint64
+	ReplayPipelineBackpressureEvents     uint64
+	ReplayPipelineRetargetFailures       uint64
+	ReplayPipelineAcquireUs              uint64
+	ReplayPipelineReadyWaitUs            uint64
+	ReplayPipelineApplyUs                uint64
+	ReplayPipelinePersistUs              uint64
+	ReplayPipelineWindow                 uint32
+	ReplayPipelinePreparedLimit          uint32
+	ReplayPipelineDepth                  uint32
+	ReplayPipelineReadyDepth             uint32
+	ReplayPipelinePivotSeq               uint32
+	ReplayPipelinePreparedTailSeq        uint32
+	ReplayPipelineTrustedHeadSeq         uint32
+	ReplayPipelineGeneration             uint64
+	ReplayPipelinePivotStateNodesPerSec  uint64
+	ReplayPipelineHeadSeq                uint32
+	ReplayPipelineTargetSeq              uint32
+	ReplayPipelineHeadBlockedUs          uint64
 }
 
 type peerBootstrapAcknowledger interface {
