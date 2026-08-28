@@ -1,11 +1,8 @@
-// Package crypto provides cryptographic operations for the XRPL protocol.
+// Package crypto provides shared cryptographic types and helpers for the XRP
+// Ledger.
 //
-// It supports two key algorithms: secp256k1 (the original XRPL algorithm)
-// and Ed25519. The package handles key generation from seeds, transaction
-// signing, signature verification, DER encoding of signatures, and
-// multi-signing with sorted signer lists.
-//
-// The common subpackage provides the SHA-512Half hash function used
-// extensively throughout the XRPL protocol for key derivation, node
-// identification, and integrity verification.
+// The concrete signing implementations live in the ed25519 and secp256k1
+// subpackages. This package defines their common Algorithm interface and key
+// types, validates signature canonicality, encodes and decodes DER signatures,
+// generates family-seed entropy, and provides best-effort secret erasure.
 package crypto

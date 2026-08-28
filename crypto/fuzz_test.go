@@ -39,7 +39,10 @@ func FuzzDERSigToRS(f *testing.F) {
 
 		// Round-trip: re-encode the parsed r/s and parse again. The values must
 		// survive unchanged.
-		reencoded := EncodeDERSignature(new(big.Int).SetBytes(r), new(big.Int).SetBytes(s))
+		reencoded, err := EncodeDERSignature(new(big.Int).SetBytes(r), new(big.Int).SetBytes(s))
+		if err != nil {
+			t.Fatalf("EncodeDERSignature rejected parsed values: r=%x s=%x err=%v", r, s, err)
+		}
 		r2, s2, err := DERSigToRS(reencoded)
 		if err != nil {
 			t.Fatalf("DERSigToRS failed on re-encoded signature: r=%x s=%x err=%v", r, s, err)

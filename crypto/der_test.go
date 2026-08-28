@@ -126,7 +126,8 @@ func TestEncodeDERSignature(t *testing.T) {
 			s, ok := new(big.Int).SetString(tc.sHex, 16)
 			require.True(t, ok)
 
-			result := EncodeDERSignature(r, s)
+			result, err := EncodeDERSignature(r, s)
+			require.NoError(t, err)
 			require.Equal(t, tc.expectedDER, hex.EncodeToString(result))
 
 			// The encoded signature must parse back to the same r/s.
@@ -134,6 +135,27 @@ func TestEncodeDERSignature(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, new(big.Int).SetBytes(gotR), r)
 			require.Equal(t, new(big.Int).SetBytes(gotS), s)
+		})
+	}
+}
+
+func TestEncodeDERSignatureRejectsInvalidScalars(t *testing.T) {
+	valid := big.NewInt(1)
+	for _, tc := range []struct {
+		name string
+		r    *big.Int
+		s    *big.Int
+	}{
+		{name: "nil r", s: valid},
+		{name: "nil s", r: valid},
+		{name: "zero", r: new(big.Int), s: valid},
+		{name: "negative", r: big.NewInt(-1), s: valid},
+		{name: "curve order", r: new(big.Int).Set(secp256k1Order), s: valid},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded, err := EncodeDERSignature(tc.r, tc.s)
+			require.ErrorIs(t, err, ErrInvalidDERSignatureValue)
+			require.Nil(t, encoded)
 		})
 	}
 }

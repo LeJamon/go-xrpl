@@ -15,25 +15,21 @@ var sha512Pool = sync.Pool{
 	},
 }
 
-// Acquire returns a reset sha512.Hash from the pool. The caller must
-// call Release when done. The hasher is not safe for concurrent use.
-func Acquire() hash.Hash {
+func acquire() hash.Hash {
 	h := sha512Pool.Get().(hash.Hash)
 	h.Reset()
 	return h
 }
 
-// Release returns a hasher obtained from Acquire to the pool. The
-// hasher must not be used after it is released.
-func Release(h hash.Hash) {
+func release(h hash.Hash) {
 	sha512Pool.Put(h)
 }
 
 // Sum returns the first 32 bytes of the SHA-512 hash of the
 // concatenated argument slices.
 func Sum(args ...[]byte) [32]byte {
-	hasher := Acquire()
-	defer Release(hasher)
+	hasher := acquire()
+	defer release(hasher)
 	for _, arg := range args {
 		hasher.Write(arg)
 	}

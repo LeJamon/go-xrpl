@@ -3,6 +3,7 @@ package secp256k1
 import (
 	"bytes"
 	"encoding/hex"
+	"math/big"
 	"strings"
 	"testing"
 
@@ -136,6 +137,33 @@ func TestSignDigestBytes_BadInputs(t *testing.T) {
 	}
 	if _, err := SignDigestBytes(sampleDigest(1), make([]byte, 31)); err == nil {
 		t.Fatalf("SignDigestBytes accepted a 31-byte private key")
+	}
+
+	order := btcec.S256().N
+	orderPlusOne := new(big.Int).Add(order, big.NewInt(1))
+	for name, key := range map[string][]byte{
+		"zero":            make([]byte, 32),
+		"curve order":     order.FillBytes(make([]byte, 32)),
+		"above the order": orderPlusOne.FillBytes(make([]byte, 32)),
+		"all bits set":    bytes.Repeat([]byte{0xff}, 32),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := SignDigestBytes(sampleDigest(1), key); err == nil {
+				t.Fatal("SignDigestBytes accepted an invalid private scalar")
+			}
+		})
+	}
+}
+
+func TestVerifyDigestBytes_RejectsUncompressedPublicKey(t *testing.T) {
+	privateKey, privateKeyBytes, _ := newTestKey(t)
+	digest := sampleDigest(0x42)
+	signature, err := SignDigestBytes(digest, privateKeyBytes)
+	if err != nil {
+		t.Fatalf("SignDigestBytes: %v", err)
+	}
+	if VerifyDigestBytes(digest, privateKey.PubKey().SerializeUncompressed(), signature) {
+		t.Fatal("VerifyDigestBytes accepted an uncompressed public key")
 	}
 }
 

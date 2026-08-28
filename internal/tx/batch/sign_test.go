@@ -74,7 +74,7 @@ func TestBatchSigningMessageMatchesTxids(t *testing.T) {
 }
 
 func TestBatchSignerSigningDataBindings(t *testing.T) {
-	privateKey, publicKey, err := ed25519.Algorithm{}.DeriveKeypair([]byte("batch-v1.1-signer"), false)
+	privateKey, publicKey, err := ed25519.Algorithm{}.DeriveKeypair([]byte("batch-signer-001"), false)
 	require.NoError(t, err)
 	signerAccount, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(publicKey)
 	require.NoError(t, err)
@@ -173,7 +173,7 @@ func TestBatchSignerSigningDataBindings(t *testing.T) {
 }
 
 func TestTicketedBatchSignerSigningData(t *testing.T) {
-	privateKey, publicKey, err := ed25519.Algorithm{}.DeriveKeypair([]byte("batch-v1.1-ticket-signer"), false)
+	privateKey, publicKey, err := ed25519.Algorithm{}.DeriveKeypair([]byte("batch-ticket-001"), false)
 	require.NoError(t, err)
 	signerAccount, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(publicKey)
 	require.NoError(t, err)
@@ -211,7 +211,7 @@ func TestTicketedBatchSignerSigningData(t *testing.T) {
 }
 
 func TestMultiSignedBatchSignerBindsMasterAccount(t *testing.T) {
-	privateKey, publicKey, err := ed25519.Algorithm{}.DeriveKeypair([]byte("batch-v1.1-nested-signer"), false)
+	privateKey, publicKey, err := ed25519.Algorithm{}.DeriveKeypair([]byte("batch-nested-001"), false)
 	require.NoError(t, err)
 	nestedAccount, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(publicKey)
 	require.NoError(t, err)

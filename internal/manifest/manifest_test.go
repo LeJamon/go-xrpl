@@ -987,7 +987,10 @@ func TestManifest_Secp256k1MasterSig_HighS_Rejected(t *testing.T) {
 		t.Fatalf("parse master sig DER: %v", err)
 	}
 	highS := new(big.Int).Sub(secp256k1CurveOrderN, new(big.Int).SetBytes(s))
-	highSDER := rootcrypto.EncodeDERSignature(new(big.Int).SetBytes(r), highS)
+	highSDER, err := rootcrypto.EncodeDERSignature(new(big.Int).SetBytes(r), highS)
+	if err != nil {
+		t.Fatalf("encode high-S master signature: %v", err)
+	}
 	if got := rootcrypto.ECDSACanonicality(highSDER); got != rootcrypto.CanonicalityCanonical {
 		t.Fatalf("flipped sig canonicality: got %v want %v (high-S but otherwise valid)", got, rootcrypto.CanonicalityCanonical)
 	}

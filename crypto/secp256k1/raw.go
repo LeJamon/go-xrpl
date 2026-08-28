@@ -12,7 +12,7 @@ func SignDigestBytes(digest, privKey []byte) ([]byte, error) {
 	if len(digest) != 32 {
 		return nil, errors.New("secp256k1: digest must be 32 bytes")
 	}
-	if len(privKey) != 32 {
+	if !validPrivateKey(privKey) {
 		return nil, ErrInvalidPrivateKey
 	}
 	sk := secp256k1.PrivKeyFromBytes(privKey)

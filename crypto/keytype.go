@@ -4,16 +4,11 @@ package crypto
 type KeyType int
 
 const (
-	// KeyTypeSecp256k1 indicates a secp256k1 (ECDSA) key. Matches rippled's
-	// KeyType::secp256k1 = 0 (KeyType.h:29).
+	// KeyTypeSecp256k1 indicates a secp256k1 (ECDSA) key.
 	KeyTypeSecp256k1 KeyType = 0
-	// KeyTypeEd25519 indicates an Ed25519 key. Matches rippled's
-	// KeyType::ed25519 = 1 (KeyType.h:30).
+	// KeyTypeEd25519 indicates an Ed25519 key.
 	KeyTypeEd25519 KeyType = 1
-	// KeyTypeUnknown indicates an unknown or invalid key type. This is a
-	// go-xrpl-only sentinel; rippled has no equivalent (parse failures are
-	// signalled via std::optional). The enum is never serialised, so the
-	// negative sentinel is purely internal.
+	// KeyTypeUnknown indicates an unknown or invalid key type.
 	KeyTypeUnknown KeyType = -1
 )
 

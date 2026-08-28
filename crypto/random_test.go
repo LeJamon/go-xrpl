@@ -23,9 +23,9 @@ func TestRandomBytes(t *testing.T) {
 		assert.Nil(t, b)
 	})
 
-	t.Run("Negative length returns nil", func(t *testing.T) {
+	t.Run("Negative length returns an error", func(t *testing.T) {
 		b, err := RandomBytes(-1)
-		require.NoError(t, err)
+		require.ErrorIs(t, err, ErrInvalidRandomLength)
 		assert.Nil(t, b)
 	})
 
@@ -44,7 +44,7 @@ func TestRandomSeed(t *testing.T) {
 	t.Run("Generates 16 byte seed", func(t *testing.T) {
 		seed, err := RandomSeed()
 		require.NoError(t, err)
-		assert.Equal(t, 16, len(seed))
+		assert.Len(t, seed, FamilySeedSize)
 	})
 
 	t.Run("Generates different seeds", func(t *testing.T) {

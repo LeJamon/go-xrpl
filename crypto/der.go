@@ -6,9 +6,6 @@ import (
 )
 
 var (
-	// ErrInvalidHexString is returned when the hex string is invalid.
-	ErrInvalidHexString = errors.New("invalid hex string")
-
 	// ErrInvalidDERSignature is returned when the DER signature is invalid.
 	ErrInvalidDERSignature = errors.New("invalid signature: incorrect length")
 	// ErrInvalidDERSignatureValue is returned when r or s falls outside the
@@ -21,12 +18,15 @@ var (
 	ErrLeftoverBytes = errors.New("invalid signature: left bytes after parsing")
 )
 
-// EncodeDERSignature builds the canonical DER encoding of an ECDSA signature
-// directly into a byte slice. The big.Int input form matches the existing
-// signing code paths; callers holding raw r/s byte slices can pass
-// new(big.Int).SetBytes(rBytes).
-func EncodeDERSignature(r, s *big.Int) []byte {
-	return encodeDERSignature(r, s)
+// EncodeDERSignature builds the minimal DER encoding of an ECDSA signature.
+// Both scalars must be in [1, n-1]. The function does not normalize s to the
+// low half of the curve order; use [ECDSACanonicality] when that distinction
+// matters.
+func EncodeDERSignature(r, s *big.Int) ([]byte, error) {
+	if !validSecp256k1Scalar(r) || !validSecp256k1Scalar(s) {
+		return nil, ErrInvalidDERSignatureValue
+	}
+	return encodeDERSignature(r, s), nil
 }
 
 // DERSigToRS decodes a DER-encoded ECDSA signature into the underlying
@@ -57,8 +57,7 @@ func DERSigToRS(data []byte) ([]byte, []byte, error) {
 
 	r := new(big.Int).SetBytes(rSlice)
 	s := new(big.Int).SetBytes(sSlice)
-	if r.Sign() <= 0 || s.Sign() <= 0 ||
-		r.Cmp(secp256k1Order) >= 0 || s.Cmp(secp256k1Order) >= 0 {
+	if !validSecp256k1Scalar(r) || !validSecp256k1Scalar(s) {
 		return nil, nil, ErrInvalidDERSignatureValue
 	}
 

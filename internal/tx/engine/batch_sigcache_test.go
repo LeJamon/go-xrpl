@@ -20,11 +20,11 @@ import (
 func TestBatchSigCacheCoversEverySignature(t *testing.T) {
 	batch.Register()
 	payment.Register()
-	outerPrivate, outerPublic, err := ed25519.Algorithm{}.DeriveKeypair([]byte("batch-cache-outer"), false)
+	outerPrivate, outerPublic, err := ed25519.Algorithm{}.DeriveKeypair([]byte("batch-outer-0001"), false)
 	require.NoError(t, err)
 	outerAccount, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(outerPublic)
 	require.NoError(t, err)
-	signerPrivate, signerPublic, err := ed25519.Algorithm{}.DeriveKeypair([]byte("batch-cache-signer"), false)
+	signerPrivate, signerPublic, err := ed25519.Algorithm{}.DeriveKeypair([]byte("batch-signr-0001"), false)
 	require.NoError(t, err)
 	signerAccount, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(signerPublic)
 	require.NoError(t, err)

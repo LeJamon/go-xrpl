@@ -20,7 +20,7 @@ var registerWireTests sync.Once
 func TestCredentialArrayPresenceRoundTrips(t *testing.T) {
 	registerWireTests.Do(Register)
 	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
-	privateKey, publicKey, err := ed25519.Algorithm{}.DeriveKeypair([]byte("depositpreauth-field-presence"), false)
+	privateKey, publicKey, err := ed25519.Algorithm{}.DeriveKeypair([]byte("deposit-wire-001"), false)
 	require.NoError(t, err)
 
 	for _, tc := range []struct {
@@ -142,7 +142,7 @@ func TestNonEmptyCredentialArrayKeepsCanonicalSTArrayShape(t *testing.T) {
 
 func TestCredentialArrayAbsenceRoundTrips(t *testing.T) {
 	registerWireTests.Do(Register)
-	_, publicKey, err := ed25519.Algorithm{}.DeriveKeypair([]byte("depositpreauth-field-absence"), false)
+	_, publicKey, err := ed25519.Algorithm{}.DeriveKeypair([]byte("deposit-wire-002"), false)
 	require.NoError(t, err)
 	txn := NewDepositPreauth("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
 	txn.Fee = "10"
