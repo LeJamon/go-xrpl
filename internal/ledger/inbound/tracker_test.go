@@ -471,7 +471,9 @@ func TestTracker_InfoDoesNotWaitForWorkerStoreRead(t *testing.T) {
 		_, err := il.GotStateNodesUseful([]message.LedgerNode{depthOne})
 		close(applied)
 		if err == nil {
-			_, _, _, err = il.CollectMissingRequestContext(context.Background(), false)
+			// Force fresh frontier discovery. A timeout collect intentionally
+			// reuses the cached frontier and no longer touches durable storage.
+			_, _, _, err = il.CollectMissingRequestContext(context.Background(), true)
 		}
 		workerDone <- err
 	}()

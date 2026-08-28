@@ -163,8 +163,14 @@ type Ledger struct {
 	// recentNodes keeps request frontiers disjoint within a timer interval.
 	// requestPeers caps the acquisition at one active request per peer and six
 	// active peer streams. Both are cleared when the timer advances.
-	recentNodes      map[[32]byte]uint64
-	requestPeers     map[uint64]struct{}
+	recentNodes  map[[32]byte]uint64
+	requestPeers map[uint64]struct{}
+	// missingState and missingTx retain the last verified path frontier. Timeout
+	// retries can resend it without walking the durable SHAMap again; useful
+	// replies still perform a fresh walk and replace the frontier. neededState
+	// and neededTx are the bounded diagnostic views exposed in Snapshot.
+	missingState     []shamap.MissingNode
+	missingTx        []shamap.MissingNode
 	neededState      [][32]byte
 	neededTx         [][32]byte
 	stateRecv        uint64
@@ -528,6 +534,19 @@ func (l *Ledger) TakeByHashRequestContext(ctx context.Context, max int) (state, 
 		return nil, nil, nil
 	}
 	l.byHash = false // consumed; re-armed by the next no-progress OnTimer
+	if !l.haveState {
+		state = missingNodeHashes(l.missingState, max)
+	}
+	if !l.haveTx {
+		tx = missingNodeHashes(l.missingTx, max)
+	}
+	// A cached frontier is already sufficient to make network progress. Do not
+	// follow it with another durable traversal merely to fill the other tree's
+	// aggressive request; a later reply or timeout will advance that tree.
+	if len(state) > 0 || len(tx) > 0 {
+		l.mu.Unlock()
+		return state, tx, nil
+	}
 	var stateMap, txMap *shamap.SHAMap
 	if !l.haveState && l.stateMap != nil {
 		stateMap = l.stateMap
@@ -897,6 +916,11 @@ func (l *Ledger) applyKnownNodes(ctx context.Context, m *shamap.SHAMap, nodes []
 		if parsedID.IsRoot() {
 			continue
 		}
+		// A reply for a cached path is no longer an outstanding frontier item,
+		// whether it proves useful, is already local, or contains bad data. A
+		// failed/invalid attachment therefore forces discovery of a fresh path
+		// instead of blindly retrying the same cached NodeID forever.
+		l.removeMissingNodeLocked(m == l.txMap, parsedID)
 		res, entry, err := m.AddKnownNodeByIDWithEntryContext(ctx, parsedID, node.NodeData)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return added, stored, err
@@ -1164,6 +1188,24 @@ func (l *Ledger) CollectMissingRequestContext(ctx context.Context, isReply bool)
 	if m == nil {
 		return nil, nil, false, nil
 	}
+	if !isReply {
+		l.mu.Lock()
+		var cached []shamap.MissingNode
+		if stateTree && l.stateMap == m && !l.haveState {
+			cached = l.missingState
+		} else if !stateTree && l.txMap == m && !l.haveTx {
+			cached = l.missingTx
+		}
+		if len(cached) > 0 {
+			nodeIDs := l.filterMissingResultLocked(cached, false)
+			l.mu.Unlock()
+			if stateTree {
+				return nodeIDs, nil, false, nil
+			}
+			return nil, nodeIDs, false, nil
+		}
+		l.mu.Unlock()
+	}
 
 	started := time.Now()
 	missing, err := m.GetMissingNodesContext(ctx, missingNodesFind, nil)
@@ -1196,8 +1238,12 @@ func (l *Ledger) CollectMissingRequestContext(ctx context.Context, isReply bool)
 		if finishErr == nil {
 			if stateTree {
 				l.haveState = true
+				l.missingState = nil
+				l.neededState = nil
 			} else {
 				l.haveTx = true
+				l.missingTx = nil
+				l.neededTx = nil
 			}
 			l.recomputeComplete()
 			return nil, nil, l.state == StateComplete, nil
@@ -1265,6 +1311,79 @@ func (l *Ledger) CollectMissingReplyRequestsContext(ctx context.Context, peerIDs
 // newly admitted to an active acquisition.
 func (l *Ledger) CollectMissingAddedRequestsContext(ctx context.Context, peerIDs []uint64) ([]MissingRequest, bool, error) {
 	return l.collectMissingPeerRequestsContext(ctx, peerIDs, reqNodes, true)
+}
+
+// CollectMissingCachedAddedRequests assigns newly-added peers work from the
+// last verified frontier without touching the backing store. It is used only
+// by the timeout path, after CollectMissingRequestContext has guaranteed that
+// a frontier exists (or established that discovery itself must continue).
+func (l *Ledger) CollectMissingCachedAddedRequests(peerIDs []uint64) []MissingRequest {
+	l.workMu.Lock()
+	defer l.workMu.Unlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	available := requestPeerLimit - len(l.requestPeers)
+	peers := make([]uint64, 0, min(len(peerIDs), available))
+	for _, peerID := range peerIDs {
+		if available == 0 {
+			break
+		}
+		if peerID == 0 || slices.Contains(peers, peerID) {
+			continue
+		}
+		if _, busy := l.requestPeers[peerID]; busy {
+			continue
+		}
+		peers = append(peers, peerID)
+		available--
+	}
+	if l.state != StateWantState || len(peers) == 0 {
+		return nil
+	}
+
+	requests := make([]MissingRequest, 0, len(peers))
+	for _, transaction := range []bool{false, true} {
+		var frontier []shamap.MissingNode
+		if transaction {
+			if !l.haveTx {
+				frontier = l.missingTx
+			}
+		} else if !l.haveState {
+			frontier = l.missingState
+		}
+		fresh := make([]shamap.MissingNode, 0, len(frontier))
+		for i := range frontier {
+			if _, reserved := l.recentNodes[frontier[i].Hash]; !reserved {
+				fresh = append(fresh, frontier[i])
+			}
+		}
+		for len(peers) > 0 && len(fresh) > 0 {
+			peerID := peers[0]
+			peers = peers[1:]
+			n := min(reqNodes, len(fresh))
+			batch := fresh[:n]
+			fresh = fresh[n:]
+			request := MissingRequest{
+				PeerID:      peerID,
+				NodeIDs:     make([][]byte, 0, n),
+				NodeHashes:  make([][32]byte, 0, n),
+				Transaction: transaction,
+				Blind:       true,
+			}
+			for i := range batch {
+				request.NodeIDs = append(request.NodeIDs, batch[i].NodeID.Bytes())
+				request.NodeHashes = append(request.NodeHashes, batch[i].Hash)
+				l.recentNodes[batch[i].Hash] = peerID
+			}
+			l.requestPeers[peerID] = struct{}{}
+			requests = append(requests, request)
+		}
+		if len(peers) == 0 {
+			break
+		}
+	}
+	return requests
 }
 
 func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs []uint64, batchLimit int, blind bool) ([]MissingRequest, bool, error) {
@@ -1345,8 +1464,12 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 				}
 				if transaction {
 					l.haveTx = true
+					l.missingTx = nil
+					l.neededTx = nil
 				} else {
 					l.haveState = true
+					l.missingState = nil
+					l.neededState = nil
 					clear(l.requestPeers)
 					clear(l.recentNodes)
 				}
@@ -1366,7 +1489,11 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 				l.mu.Unlock()
 				return requests, complete, nil
 			}
-			l.cacheMissingLocked(transaction, missing)
+			// Filtered walks expose extra work for additional peers, but the
+			// unfiltered result remains the authoritative timeout retry frontier.
+			if filter == nil {
+				l.cacheMissingLocked(transaction, missing)
+			}
 			fresh := missing[:0]
 			for i := range missing {
 				if _, exists := l.recentNodes[missing[i].Hash]; !exists {
@@ -1549,11 +1676,32 @@ func (l *Ledger) snapshotLocked() Snapshot {
 func (l *Ledger) cacheMissingLocked(transaction bool, missing []shamap.MissingNode) {
 	hashes := missingHashes(missing)
 	if transaction {
+		l.missingTx = slices.Clone(missing)
 		l.neededTx = hashes
 	} else {
+		l.missingState = slices.Clone(missing)
 		l.neededState = hashes
 	}
 	l.publishSnapshotLocked()
+}
+
+// removeMissingNodeLocked invalidates a path satisfied (or explicitly
+// answered) by a peer. Caller holds l.mu; the next useful-reply walk replaces
+// the remainder with the newly exposed frontier.
+func (l *Ledger) removeMissingNodeLocked(transaction bool, nodeID shamap.NodeID) {
+	frontier := &l.missingState
+	needed := &l.neededState
+	if transaction {
+		frontier = &l.missingTx
+		needed = &l.neededTx
+	}
+	for i := range *frontier {
+		if (*frontier)[i].NodeID == nodeID {
+			*frontier = slices.Delete(*frontier, i, i+1)
+			*needed = missingHashes(*frontier)
+			return
+		}
+	}
 }
 
 func (l *Ledger) publishSnapshotLocked() {
@@ -1578,6 +1726,20 @@ func cloneHashes(src [][32]byte) [][32]byte {
 func missingHashes(missing []shamap.MissingNode) [][32]byte {
 	if len(missing) > missingNodeBatch {
 		missing = missing[:missingNodeBatch]
+	}
+	hashes := make([][32]byte, len(missing))
+	for i := range missing {
+		hashes[i] = missing[i].Hash
+	}
+	return hashes
+}
+
+func missingNodeHashes(missing []shamap.MissingNode, max int) [][32]byte {
+	if max <= 0 || len(missing) == 0 {
+		return nil
+	}
+	if len(missing) > max {
+		missing = missing[:max]
 	}
 	hashes := make([][32]byte, len(missing))
 	for i := range missing {
@@ -1681,9 +1843,10 @@ func (l *Ledger) CheckLocalContext(ctx context.Context, fetch func(hash [32]byte
 
 	stateProgress, stateComplete := false, false
 	var stateStored []shamap.FlushEntry
+	var stateMissing []shamap.MissingNode
 	if stateMap != nil {
 		loadsBefore := stateMap.FamilyLoadCount()
-		stateProgress, stateStored, err = fillFromLocalContext(ctx, stateMap, fetch)
+		stateProgress, stateStored, stateMissing, err = fillFromLocalContext(ctx, stateMap, fetch)
 		stateProgress = stateProgress || stateMap.FamilyLoadCount() > loadsBefore
 		l.persistReceived(ctx, stateStored, "locally recovered state nodes")
 		if err != nil {
@@ -1694,9 +1857,10 @@ func (l *Ledger) CheckLocalContext(ctx context.Context, fetch func(hash [32]byte
 	}
 	txProgress, txComplete := false, false
 	var txStored []shamap.FlushEntry
+	var txMissing []shamap.MissingNode
 	if txMap != nil {
 		loadsBefore := txMap.FamilyLoadCount()
-		txProgress, txStored, err = fillFromLocalContext(ctx, txMap, fetch)
+		txProgress, txStored, txMissing, err = fillFromLocalContext(ctx, txMap, fetch)
 		txProgress = txProgress || txMap.FamilyLoadCount() > loadsBefore
 		l.persistReceived(ctx, txStored, "locally recovered transaction nodes")
 		if err != nil {
@@ -1712,11 +1876,23 @@ func (l *Ledger) CheckLocalContext(ctx context.Context, fetch func(hash [32]byte
 	if l.state != StateWantState {
 		return false, l.state == StateComplete, nil
 	}
-	if stateMap != nil && l.stateMap == stateMap && stateComplete {
-		l.haveState = true
+	if stateMap != nil && l.stateMap == stateMap {
+		if stateComplete {
+			l.haveState = true
+			l.missingState = nil
+			l.neededState = nil
+		} else if len(stateMissing) > 0 {
+			l.cacheMissingLocked(false, stateMissing)
+		}
 	}
-	if txMap != nil && l.txMap == txMap && txComplete {
-		l.haveTx = true
+	if txMap != nil && l.txMap == txMap {
+		if txComplete {
+			l.haveTx = true
+			l.missingTx = nil
+			l.neededTx = nil
+		} else if len(txMissing) > 0 {
+			l.cacheMissingLocked(true, txMissing)
+		}
 	}
 	progressed = stateProgress || txProgress
 	if progressed {
@@ -1744,16 +1920,20 @@ func (l *Ledger) recordLocalProgress(stateMap, txMap *shamap.SHAMap, progressed 
 	l.markProgressLocked()
 }
 
-func fillFromLocalContext(ctx context.Context, m *shamap.SHAMap, fetch func(hash [32]byte) ([]byte, bool)) (bool, []shamap.FlushEntry, error) {
+func fillFromLocalContext(
+	ctx context.Context,
+	m *shamap.SHAMap,
+	fetch func(hash [32]byte) ([]byte, bool),
+) (bool, []shamap.FlushEntry, []shamap.MissingNode, error) {
 	added := false
 	var stored []shamap.FlushEntry
 	for {
 		missing, err := m.GetMissingNodesContext(ctx, localFillBatch, nil)
 		if err != nil {
-			return added, stored, err
+			return added, stored, nil, err
 		}
 		if len(missing) == 0 {
-			return added, stored, nil
+			return added, stored, nil, nil
 		}
 		passAdded := 0
 		for i := range missing {
@@ -1771,7 +1951,7 @@ func fillFromLocalContext(ctx context.Context, m *shamap.SHAMap, fetch func(hash
 			}
 		}
 		if passAdded == 0 {
-			return added, stored, nil
+			return added, stored, missing, nil
 		}
 		added = true
 	}

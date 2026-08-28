@@ -556,7 +556,12 @@ func (r *Router) failStandardReplayPipelineEntry(il *inbound.Ledger) bool {
 	entry.acquisition = nil
 	entry.peerID = il.PeerID()
 	r.replayPipelineRetried.Add(uint64(il.Timeouts()))
-	startDrain := !r.standardReplay.applying
+	// A failed entry may be far ahead of a frozen pivot that is still being
+	// acquired. Do not let that failure wake the drain before the pivot is
+	// installed: the prepared head has no locally available parent until then,
+	// so applying it would cancel the replay pipeline and incorrectly fall back
+	// to another full-state acquisition.
+	startDrain := r.standardReplay.pivotReady && !r.standardReplay.applying
 	if startDrain {
 		r.standardReplay.applying = true
 	}

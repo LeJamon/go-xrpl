@@ -16,6 +16,63 @@ type durableReadCoalescer struct {
 	flights map[[32]byte]*durableReadFlight
 }
 
+const durableReadWorkers = 32
+const durableReadQueue = durableReadWorkers
+
+type durableReadTask struct {
+	coalescer *durableReadCoalescer
+	ctx       context.Context
+	hash      [32]byte
+	flight    *durableReadFlight
+	read      func(context.Context, [32]byte) ([]byte, error)
+}
+
+// durableReads is shared by every NodeStore. Backed SHAMap walks already fan
+// out over 16 root branches; a bounded pool preserves that I/O parallelism
+// without creating another goroutine for every Pebble point lookup.
+var durableReads durableReadPool
+
+type durableReadPool struct {
+	once  sync.Once
+	slots chan struct{}
+	tasks chan durableReadTask
+}
+
+func (p *durableReadPool) start() {
+	p.once.Do(func() {
+		p.slots = make(chan struct{}, durableReadWorkers+durableReadQueue)
+		p.tasks = make(chan durableReadTask, durableReadQueue)
+		for range durableReadWorkers {
+			go p.run()
+		}
+	})
+}
+
+func (p *durableReadPool) reserve(ctx context.Context) bool {
+	p.start()
+	select {
+	case p.slots <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (p *durableReadPool) release() {
+	<-p.slots
+}
+
+func (p *durableReadPool) submit(task durableReadTask) {
+	p.tasks <- task
+}
+
+func (p *durableReadPool) run() {
+	for task := range p.tasks {
+		task.coalescer.read(task.ctx, task.hash, task.flight, task.read)
+		p.release()
+	}
+}
+
 func (c *durableReadCoalescer) fetch(
 	ctx context.Context,
 	hash [32]byte,
@@ -26,16 +83,36 @@ func (c *durableReadCoalescer) fetch(
 	}
 
 	c.mu.Lock()
-	if c.flights == nil {
-		c.flights = make(map[[32]byte]*durableReadFlight)
-	}
 	flight := c.flights[hash]
-	if flight == nil {
-		flight = &durableReadFlight{done: make(chan struct{})}
-		c.flights[hash] = flight
-		go c.read(context.WithoutCancel(ctx), hash, flight, read)
-	}
 	c.mu.Unlock()
+	if flight == nil {
+		if !durableReads.reserve(ctx) {
+			return nil, ctx.Err()
+		}
+		created := false
+		c.mu.Lock()
+		if c.flights == nil {
+			c.flights = make(map[[32]byte]*durableReadFlight)
+		}
+		flight = c.flights[hash]
+		if flight == nil {
+			flight = &durableReadFlight{done: make(chan struct{})}
+			c.flights[hash] = flight
+			created = true
+		}
+		c.mu.Unlock()
+		if created {
+			durableReads.submit(durableReadTask{
+				coalescer: c,
+				ctx:       context.WithoutCancel(ctx),
+				hash:      hash,
+				flight:    flight,
+				read:      read,
+			})
+		} else {
+			durableReads.release()
+		}
+	}
 
 	select {
 	case <-ctx.Done():
