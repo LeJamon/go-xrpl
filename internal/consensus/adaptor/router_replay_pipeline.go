@@ -14,13 +14,12 @@ import (
 )
 
 const (
-	standardReplayPipelineWindow    = 8
-	standardReplayPreparedLimit     = 2048
-	standardReplayRetargetThreshold = standardReplayPreparedLimit * 7 / 8
-	standardReplayProgressWindow    = time.Minute
-	standardReplayStallWindows      = 2
-	standardReplayApplyBatch        = 8
-	standardReplayApplyBudget       = 25 * time.Millisecond
+	standardReplayPipelineWindow = 8
+	standardReplayPreparedLimit  = 2048
+	standardReplayProgressWindow = time.Minute
+	standardReplayStallWindows   = 2
+	standardReplayApplyBatch     = 8
+	standardReplayApplyBudget    = 25 * time.Millisecond
 )
 
 type standardReplayPipeline struct {
@@ -44,6 +43,7 @@ type standardReplayPipeline struct {
 	sampleAnchorSeq   uint32
 	stalledSamples    uint8
 	retargetAttemptAt time.Time
+	backpressured     bool
 }
 
 type standardReplayIdentity struct {
@@ -297,6 +297,7 @@ func (r *Router) tryArmStandardReplayPipeline(
 		r.standardReplay.progressSampleAt = time.Now()
 		r.standardReplay.sampleAnchorSeq = anchor.Sequence()
 		r.standardReplay.stalledSamples = 0
+		r.standardReplay.backpressured = false
 	}
 	if targetSeq > r.standardReplay.targetSeq ||
 		(targetSeq == r.standardReplay.targetSeq && targetHash == r.standardReplay.targetHash) {
@@ -344,6 +345,19 @@ func (r *Router) tryArmStandardReplayPipeline(
 			r.replayPipelineRequested.Add(1)
 		}
 	}
+	backpressureStarted := len(r.standardReplay.entries) >= standardReplayPreparedLimit &&
+		r.standardReplay.collectSeq < r.standardReplay.targetSeq && !r.standardReplay.backpressured
+	if backpressureStarted {
+		r.standardReplay.backpressured = true
+		r.replayPipelineBackpressureEvents.Add(1)
+	} else if len(r.standardReplay.entries) < standardReplayPreparedLimit {
+		r.standardReplay.backpressured = false
+	}
+	backpressurePivotSeq := r.standardReplay.pivotSeq
+	backpressurePivotReady := r.standardReplay.pivotReady
+	backpressureTailSeq := r.standardReplay.collectSeq
+	backpressureTargetSeq := r.standardReplay.targetSeq
+	backpressureOccupancy := len(r.standardReplay.entries)
 
 	if r.consensusRecovery.targetHash == targetHash {
 		if head := r.standardReplay.entries[r.standardReplay.anchorSeq+1]; head != nil {
@@ -358,6 +372,16 @@ func (r *Router) tryArmStandardReplayPipeline(
 		return false
 	}
 	r.acquisitionMu.Unlock()
+	if backpressureStarted {
+		r.logger.Info("standard replay collector paused at prepared capacity",
+			"pivot_seq", backpressurePivotSeq,
+			"pivot_ready", backpressurePivotReady,
+			"prepared_tail_seq", backpressureTailSeq,
+			"trusted_head_seq", backpressureTargetSeq,
+			"prepared_occupancy", backpressureOccupancy,
+			"prepared_limit", standardReplayPreparedLimit,
+		)
+	}
 	return armed
 }
 
@@ -448,6 +472,7 @@ func (r *Router) cancelStandardReplayPipelineLocked() []*inbound.Ledger {
 	r.standardReplay.sampleAnchorSeq = 0
 	r.standardReplay.stalledSamples = 0
 	r.standardReplay.retargetAttemptAt = time.Time{}
+	r.standardReplay.backpressured = false
 	return retired
 }
 
@@ -707,11 +732,15 @@ func (r *Router) drainStandardReplayPipeline() {
 			r.standardReplay.applying = false
 			r.standardReplay.entries = nil
 			r.standardReplay.headBlockedAt = time.Time{}
+			r.standardReplay.backpressured = false
 		}
 		active := r.standardReplay.active
 		r.acquisitionMu.Unlock()
 		if !current {
 			return
+		}
+		if active {
+			r.refillStandardReplayCollector(entry.peerID)
 		}
 		applied++
 		if active && (applied >= standardReplayApplyBatch || time.Since(batchStarted) >= standardReplayApplyBudget) {

@@ -1842,7 +1842,7 @@ func (r *Router) FastSyncMetrics() FastSyncMetrics {
 		ReplayPipelineDiscarded:              r.replayPipelineDiscarded.Load(),
 		ReplayPipelineRetried:                r.replayPipelineRetried.Load(),
 		ReplayPipelineFallbacks:              r.replayPipelineFallbacks.Load(),
-		ReplayPipelineCapacityRetargets:      r.replayPipelineCapacityRetargets.Load(),
+		ReplayPipelineBackpressureEvents:     r.replayPipelineBackpressureEvents.Load(),
 		ReplayPipelineRetargetFailures:       r.replayPipelineRetargetFailures.Load(),
 		ReplayPipelineAcquireUs:              r.replayPipelineAcquireUs.Load(),
 		ReplayPipelineReadyWaitUs:            r.replayPipelineReadyWaitUs.Load(),

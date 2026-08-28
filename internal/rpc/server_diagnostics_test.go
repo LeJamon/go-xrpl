@@ -76,6 +76,7 @@ func TestServerDiagnosticsWireShape(t *testing.T) {
 			ReplayPipelineTrustedHeadSeq:         42,
 			ReplayPipelineGeneration:             43,
 			ReplayPipelinePivotStateNodesPerSec:  44,
+			ReplayPipelineBackpressureEvents:     45,
 		}
 	}
 
@@ -149,6 +150,7 @@ func TestServerDiagnosticsWireShape(t *testing.T) {
 				"replay_pipeline_trusted_head_seq":               "42",
 				"replay_pipeline_generation":                     "43",
 				"replay_pipeline_pivot_state_nodes_per_sec":      "44",
+				"replay_pipeline_backpressure_events":            "45",
 			}
 			if !reflect.DeepEqual(fastSync, wantFastSync) {
 				t.Fatalf("fast_sync = %#v, want %#v", fastSync, wantFastSync)

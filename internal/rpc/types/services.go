@@ -1293,6 +1293,7 @@ type FastSyncMetrics struct {
 	ReplayPipelineRetried                uint64
 	ReplayPipelineFallbacks              uint64
 	ReplayPipelineCapacityRetargets      uint64
+	ReplayPipelineBackpressureEvents     uint64
 	ReplayPipelineRetargetFailures       uint64
 	ReplayPipelineAcquireUs              uint64
 	ReplayPipelineReadyWaitUs            uint64
