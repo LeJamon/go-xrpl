@@ -245,6 +245,7 @@ func addServerDiagnostics(info map[string]any, services *types.ServiceGraph) {
 			"replay_pipeline_retried":                        strconv.FormatUint(metrics.ReplayPipelineRetried, 10),
 			"replay_pipeline_fallbacks":                      strconv.FormatUint(metrics.ReplayPipelineFallbacks, 10),
 			"replay_pipeline_capacity_retargets":             strconv.FormatUint(metrics.ReplayPipelineCapacityRetargets, 10),
+			"replay_pipeline_backpressure_events":            strconv.FormatUint(metrics.ReplayPipelineBackpressureEvents, 10),
 			"replay_pipeline_retarget_failures":              strconv.FormatUint(metrics.ReplayPipelineRetargetFailures, 10),
 			"replay_pipeline_acquire_us":                     strconv.FormatUint(metrics.ReplayPipelineAcquireUs, 10),
 			"replay_pipeline_ready_wait_us":                  strconv.FormatUint(metrics.ReplayPipelineReadyWaitUs, 10),

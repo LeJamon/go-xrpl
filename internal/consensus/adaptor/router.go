@@ -71,6 +71,7 @@ type FastSyncMetrics struct {
 	ReplayPipelineRetried                uint64
 	ReplayPipelineFallbacks              uint64
 	ReplayPipelineCapacityRetargets      uint64
+	ReplayPipelineBackpressureEvents     uint64
 	ReplayPipelineRetargetFailures       uint64
 	ReplayPipelineAcquireUs              uint64
 	ReplayPipelineReadyWaitUs            uint64
@@ -317,7 +318,7 @@ type Router struct {
 	replayPipelineDiscarded              atomic.Uint64
 	replayPipelineRetried                atomic.Uint64
 	replayPipelineFallbacks              atomic.Uint64
-	replayPipelineCapacityRetargets      atomic.Uint64
+	replayPipelineBackpressureEvents     atomic.Uint64
 	replayPipelineRetargetFailures       atomic.Uint64
 	replayPipelineAcquireUs              atomic.Uint64
 	replayPipelineReadyWaitUs            atomic.Uint64

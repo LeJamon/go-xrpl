@@ -783,6 +783,7 @@ func (r *nodeRuntime) configureConsensus() error {
 					ReplayPipelineRetried:                snapshot.ReplayPipelineRetried,
 					ReplayPipelineFallbacks:              snapshot.ReplayPipelineFallbacks,
 					ReplayPipelineCapacityRetargets:      snapshot.ReplayPipelineCapacityRetargets,
+					ReplayPipelineBackpressureEvents:     snapshot.ReplayPipelineBackpressureEvents,
 					ReplayPipelineRetargetFailures:       snapshot.ReplayPipelineRetargetFailures,
 					ReplayPipelineAcquireUs:              snapshot.ReplayPipelineAcquireUs,
 					ReplayPipelineReadyWaitUs:            snapshot.ReplayPipelineReadyWaitUs,

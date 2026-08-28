@@ -1,9 +1,9 @@
 package adaptor
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
-	"io"
 	"log/slog"
 	"sync"
 	"testing"
@@ -316,77 +316,20 @@ func TestPendingConsensusLedgerReportsBlockedStart(t *testing.T) {
 	assert.Equal(t, consensusRecovery{targetHash: targetHash}, r.consensusRecovery)
 }
 
-func TestFrozenPivotCapacityRetargetRequiresQuorumTarget(t *testing.T) {
-	r, _, _, _ := makeRouter(t)
-	pivotHash := [32]byte{0xb1}
-	targetHash := [32]byte{0xb2}
-	now := time.Unix(300, 0)
-	r.standardReplay = standardReplayPipeline{
-		generation:     3,
-		active:         true,
-		pivotSeq:       100,
-		pivotHash:      pivotHash,
-		anchorSeq:      100,
-		entries:        make(map[uint32]*standardReplayEntry, standardReplayRetargetThreshold),
-		pivotStartedAt: now.Add(-time.Minute),
-	}
-	for i := range standardReplayRetargetThreshold {
-		seq := uint32(i) + 101
-		r.standardReplay.entries[seq] = &standardReplayEntry{seq: seq}
-	}
-	r.recordCatchupTarget(200, targetHash, 7)
-
-	assert.False(t, r.rebootstrapFrozenPivotIfStalled(now))
-	assert.True(t, r.standardReplay.active)
-	assert.Equal(t, uint64(3), r.standardReplay.generation)
-	assert.Equal(t, pivotHash, r.standardReplay.pivotHash)
-	assert.Equal(t, uint64(1), r.FastSyncMetrics().ReplayPipelineRetargetFailures)
-
-	assert.False(t, r.rebootstrapFrozenPivotIfStalled(now.Add(time.Second)))
-	assert.Equal(t, uint64(1), r.FastSyncMetrics().ReplayPipelineRetargetFailures)
-}
-
-func TestFrozenPivotCapacityRetargetKeepsSessionWhenTargetIsCoolingDown(t *testing.T) {
-	r, _, _, _ := makeRouter(t)
-	pivotHash := [32]byte{0xb3}
-	targetHash := [32]byte{0xb4}
-	now := time.Now()
-	r.standardReplay = standardReplayPipeline{
-		generation: 3,
-		active:     true,
-		pivotSeq:   100,
-		pivotHash:  pivotHash,
-		anchorSeq:  100,
-		entries:    make(map[uint32]*standardReplayEntry, standardReplayRetargetThreshold),
-	}
-	for i := range standardReplayRetargetThreshold {
-		seq := uint32(i) + 101
-		r.standardReplay.entries[seq] = &standardReplayEntry{seq: seq}
-	}
-	trackCatchupPeer(r, 7, 200, targetHash)
-	r.recordValidationCatchupTarget(200, targetHash, 7, catchupSourceQuorum)
-	r.catchupMu.Lock()
-	r.catchupFailures = map[[32]byte]time.Time{targetHash: now.Add(time.Minute)}
-	r.catchupMu.Unlock()
-
-	assert.False(t, r.rebootstrapFrozenPivotIfStalled(now))
-	assert.True(t, r.standardReplay.active)
-	assert.Equal(t, uint64(3), r.standardReplay.generation)
-	assert.Equal(t, pivotHash, r.standardReplay.pivotHash)
-	assert.Nil(t, r.fetchTracker.Find(targetHash))
-	assert.Equal(t, uint64(1), r.FastSyncMetrics().ReplayPipelineRetargetFailures)
-}
-
-func TestFrozenPivotRecoveryRetargetsBeforePreparedCapacityIsExhausted(t *testing.T) {
+func TestFrozenPivotRecoveryBackpressuresAtPreparedCapacity(t *testing.T) {
 	r, _, svc := makeProvisionalWarmRouter(t)
-	r.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	var logs bytes.Buffer
+	r.logger = slog.New(slog.NewJSONHandler(&logs, nil))
 	pivotSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
 	pivotHash := [32]byte{0xd4}
+	r.standardReplay.backpressured = true
 	trackCatchupPeer(r, 7, pivotSeq, pivotHash)
 	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
-	initialGeneration := r.standardReplay.generation
+	require.False(t, r.standardReplay.backpressured)
+	pivotAcquisition := r.fetchTracker.Find(pivotHash)
+	require.NotNil(t, pivotAcquisition)
+	generation := r.standardReplay.generation
 	parentHash := pivotHash
-	now := time.Unix(500, 0)
 
 	for offset := uint32(1); offset <= standardReplayPreparedLimit+1; offset++ {
 		seq := pivotSeq + offset
@@ -408,72 +351,139 @@ func TestFrozenPivotRecoveryRetargetsBeforePreparedCapacityIsExhausted(t *testin
 			entry.durable = true
 		}
 		r.acquisitionMu.Unlock()
-
-		now = now.Add(time.Second)
-		r.rebootstrapFrozenPivotIfStalled(now)
 		parentHash = hash
 	}
 
+	assert.False(t, r.rebootstrapFrozenPivotIfStalled(time.Now()))
+	assert.True(t, r.standardReplay.active)
+	assert.False(t, r.standardReplay.pivotReady)
+	assert.Equal(t, generation, r.standardReplay.generation)
+	assert.Equal(t, pivotSeq, r.standardReplay.pivotSeq)
+	assert.Equal(t, pivotHash, r.standardReplay.pivotHash)
+	assert.Same(t, pivotAcquisition, r.fetchTracker.Find(pivotHash))
+	assert.Len(t, r.standardReplay.entries, standardReplayPreparedLimit)
 	metrics := r.FastSyncMetrics()
-	assert.GreaterOrEqual(t, metrics.ReplayPipelineCapacityRetargets, uint64(1))
-	assert.Zero(t, metrics.ReplayPipelineRetargetFailures)
-	assert.Greater(t, metrics.ReplayPipelineGeneration, initialGeneration)
-	assert.Greater(t, metrics.ReplayPipelinePivotSeq, pivotSeq)
-	assert.Equal(t, pivotSeq+standardReplayPreparedLimit+1, metrics.ReplayPipelinePreparedTailSeq)
+	assert.Equal(t, generation, metrics.ReplayPipelineGeneration)
+	assert.Equal(t, pivotSeq, metrics.ReplayPipelinePivotSeq)
+	assert.Equal(t, pivotSeq+standardReplayPreparedLimit, metrics.ReplayPipelinePreparedTailSeq)
 	assert.Equal(t, uint32(standardReplayPreparedLimit), metrics.ReplayPipelinePreparedLimit)
-	assert.Less(t, metrics.ReplayPipelineDepth, uint32(standardReplayPreparedLimit))
+	assert.Equal(t, uint32(standardReplayPreparedLimit), metrics.ReplayPipelineDepth)
 	assert.Equal(t, pivotSeq+standardReplayPreparedLimit+1, metrics.ReplayPipelineTrustedHeadSeq)
+	assert.Equal(t, uint64(1), metrics.ReplayPipelineBackpressureEvents)
+	assert.Zero(t, metrics.ReplayPipelineFallbacks)
+	assert.Zero(t, metrics.ReplayPipelineRetargetFailures)
+	assert.Contains(t, logs.String(), `"msg":"standard replay collector paused at prepared capacity"`)
+	assert.Contains(t, logs.String(), `"prepared_occupancy":2048`)
+	assert.NotContains(t, logs.String(), "retargeting frozen recovery")
 }
 
-func TestFrozenPivotCapacityRetargetReplaysToTrustedHead(t *testing.T) {
+func TestFrozenPivotBackpressureRefillsAsReplayDrains(t *testing.T) {
 	r, _, svc := makeProvisionalWarmRouter(t)
 	engine := &mockEngine{switchResult: consensus.LedgerSwitchAccepted}
 	r.engine = engine
 	closed := svc.GetClosedLedger()
 	require.NotNil(t, closed)
-	_, initialPivot, initialHash, initialSeq := buildSuccessorAgainstParent(t, closed)
-	_, replacement, replacementHash, replacementSeq := buildSuccessorAgainstParent(t, initialPivot)
-	links := buildStandardReplayTestChain(t, r, replacement, 3)
+	_, pivot, pivotHash, pivotSeq := buildSuccessorAgainstParent(t, closed)
+	head := buildStandardReplayTestChain(t, r, pivot, 1)[0]
 
-	trackCatchupPeer(r, 7, initialSeq, initialHash)
-	require.True(t, r.beginFrozenPivotRecovery(initialSeq, initialHash, 7))
+	trackCatchupPeer(r, 7, pivotSeq, pivotHash)
+	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+	generation := r.standardReplay.generation
+	trackCatchupPeer(r, 7, head.seq, head.hash)
+	require.True(t, r.continueFrozenPivotRecovery(head.seq, head.hash, 7))
+	completeStandardReplayTestLink(t, r, head)
+
 	r.acquisitionMu.Lock()
-	for i := range standardReplayRetargetThreshold {
-		seq := initialSeq + uint32(i) + 1
+	var tailHash [32]byte
+	for offset := uint32(2); offset <= standardReplayPreparedLimit; offset++ {
+		seq := pivotSeq + offset
+		tailHash = [32]byte{0xe1}
+		binary.BigEndian.PutUint32(tailHash[len(tailHash)-4:], seq)
 		r.standardReplay.entries[seq] = &standardReplayEntry{
 			generation: r.standardReplay.generation,
 			seq:        seq,
+			hash:       tailHash,
 			durable:    true,
 		}
 	}
-	r.standardReplay.collectSeq = initialSeq + standardReplayRetargetThreshold
+	r.standardReplay.collectSeq = pivotSeq + standardReplayPreparedLimit
+	r.standardReplay.collectHash = tailHash
 	r.acquisitionMu.Unlock()
 
-	trackCatchupPeer(r, 7, replacementSeq, replacementHash)
-	r.recordValidationCatchupTarget(replacementSeq, replacementHash, 7, catchupSourceQuorum)
-	require.True(t, r.rebootstrapFrozenPivotIfStalled(time.Now()))
-	assert.Equal(t, replacementSeq, r.standardReplay.pivotSeq)
-	assert.Equal(t, replacementHash, r.standardReplay.pivotHash)
+	nextSeq := pivotSeq + standardReplayPreparedLimit + 1
+	nextHash := [32]byte{0xe2}
+	r.recordSeqHash(nextSeq, nextHash, tailHash, true)
+	trackCatchupPeer(r, 7, nextSeq, nextHash)
+	r.recordValidationCatchupTarget(nextSeq, nextHash, 7, catchupSourceQuorum)
+	require.True(t, r.continueFrozenPivotRecovery(nextSeq, nextHash, 7))
+	assert.Nil(t, r.fetchTracker.Find(nextHash))
+	assert.Len(t, r.standardReplay.entries, standardReplayPreparedLimit)
 
-	trustedHead := links[len(links)-1]
-	trackCatchupPeer(r, 7, trustedHead.seq, trustedHead.hash)
-	r.recordValidationCatchupTarget(trustedHead.seq, trustedHead.hash, 7, catchupSourceQuorum)
-	require.True(t, r.continueFrozenPivotRecovery(trustedHead.seq, trustedHead.hash, 7))
+	pivotAcquisition := r.fetchTracker.Find(pivotHash)
+	require.NotNil(t, pivotAcquisition)
+	storeRecoveryLedger(t, svc, pivot)
+	require.True(t, r.fetchTracker.RemoveExpectedWithSnapshot(
+		pivotAcquisition, pivotAcquisition.Snapshot(), true,
+	))
+	pivotHeader := pivot.Header()
+	require.True(t, r.completeFrozenPivotAcquisition(&pivotHeader, false))
+
+	assert.True(t, r.standardReplay.active)
+	assert.True(t, r.standardReplay.pivotReady)
+	assert.Equal(t, generation, r.standardReplay.generation)
+	assert.Equal(t, pivotSeq, r.standardReplay.pivotSeq)
+	assert.Equal(t, head.seq, r.standardReplay.anchorSeq)
+	assert.Len(t, r.standardReplay.entries, standardReplayPreparedLimit)
+	next := r.standardReplay.entries[nextSeq]
+	require.NotNil(t, next)
+	assert.NotNil(t, next.acquisition)
+	assert.Same(t, next.acquisition, r.fetchTracker.Find(nextHash))
+	assert.Equal(t, uint64(1), r.FastSyncMetrics().ReplayPipelineApplied)
+}
+
+func TestFrozenPivotRecoveryReplaysToMovingTrustedHead(t *testing.T) {
+	r, _, svc := makeProvisionalWarmRouter(t)
+	engine := &mockEngine{switchResult: consensus.LedgerSwitchAccepted}
+	r.engine = engine
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	_, pivot, pivotHash, pivotSeq := buildSuccessorAgainstParent(t, closed)
+	links := buildStandardReplayTestChain(t, r, pivot, 3)
+
+	trackCatchupPeer(r, 7, pivotSeq, pivotHash)
+	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+	initialHead := links[len(links)-1]
+	trackCatchupPeer(r, 7, initialHead.seq, initialHead.hash)
+	r.recordValidationCatchupTarget(initialHead.seq, initialHead.hash, 7, catchupSourceQuorum)
+	require.True(t, r.continueFrozenPivotRecovery(initialHead.seq, initialHead.hash, 7))
 	for _, link := range links {
 		completeStandardReplayTestLink(t, r, link)
 	}
 
-	pivotAcquisition := r.fetchTracker.Find(replacementHash)
+	movingLinks := buildStandardReplayTestChain(t, r, initialHead.ledger, 2)
+	trustedHead := movingLinks[len(movingLinks)-1]
+	trackCatchupPeer(r, 7, trustedHead.seq, trustedHead.hash)
+	r.recordValidationCatchupTarget(trustedHead.seq, trustedHead.hash, 7, catchupSourceQuorum)
+	require.True(t, r.continueFrozenPivotRecovery(trustedHead.seq, trustedHead.hash, 7))
+	for _, link := range movingLinks {
+		completeStandardReplayTestLink(t, r, link)
+	}
+	r.acquisitionMu.Lock()
+	r.standardReplay.backpressured = true
+	r.acquisitionMu.Unlock()
+
+	pivotAcquisition := r.fetchTracker.Find(pivotHash)
 	require.NotNil(t, pivotAcquisition)
-	storeRecoveryLedger(t, svc, replacement)
+	storeRecoveryLedger(t, svc, pivot)
 	require.True(t, r.fetchTracker.RemoveExpectedWithSnapshot(
 		pivotAcquisition, pivotAcquisition.Snapshot(), true,
 	))
-	replacementHeader := replacement.Header()
-	require.True(t, r.completeFrozenPivotAcquisition(&replacementHeader, false))
+	pivotHeader := pivot.Header()
+	require.True(t, r.completeFrozenPivotAcquisition(&pivotHeader, false))
 
 	assert.False(t, r.standardReplay.active)
-	assert.Equal(t, uint64(len(links)), r.FastSyncMetrics().ReplayPipelineApplied)
+	assert.False(t, r.standardReplay.backpressured)
+	assert.Equal(t, uint64(len(links)+len(movingLinks)), r.FastSyncMetrics().ReplayPipelineApplied)
 	storedHead, err := svc.GetLedgerByHash(trustedHead.hash)
 	require.NoError(t, err)
 	require.NotNil(t, storedHead)
