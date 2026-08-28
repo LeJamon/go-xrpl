@@ -179,6 +179,19 @@ func TestCollectMissingReplyRequests_SixDisjointFrontiers(t *testing.T) {
 					t.Fatal("next frontier repeated an in-flight node")
 				}
 			}
+
+			il.OnTimer(time.Now().Add(2 * acquireTimerInterval))
+			retry, _ := il.CollectMissingRequest(false)
+			if len(retry) == 0 {
+				t.Fatal("timeout did not retain the original retry frontier")
+			}
+			for _, nodeID := range retry {
+				if !slices.ContainsFunc(requests, func(request MissingRequest) bool {
+					return slices.ContainsFunc(request.NodeIDs, func(prior []byte) bool { return string(prior) == string(nodeID) })
+				}) {
+					t.Fatal("timeout replaced the original frontier with filtered follow-on work")
+				}
+			}
 		})
 	}
 }

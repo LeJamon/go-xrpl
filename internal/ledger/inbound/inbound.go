@@ -1489,7 +1489,11 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 				l.mu.Unlock()
 				return requests, complete, nil
 			}
-			l.cacheMissingLocked(transaction, missing)
+			// Filtered walks expose extra work for additional peers, but the
+			// unfiltered result remains the authoritative timeout retry frontier.
+			if filter == nil {
+				l.cacheMissingLocked(transaction, missing)
+			}
 			fresh := missing[:0]
 			for i := range missing {
 				if _, exists := l.recentNodes[missing[i].Hash]; !exists {

@@ -110,6 +110,7 @@ type acquisitionWorkResult struct {
 	timerEscalate  bool
 	timerAt        time.Time
 	rearmTimer     bool
+	localFetch     func([32]byte) ([]byte, bool)
 	retryBase      bool
 	retarget       bool
 	queryDepth     uint32
@@ -606,6 +607,7 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 		if len(addedPeers) > 0 {
 			result.requests = ledger.CollectMissingCachedAddedRequests(addedPeers)
 		}
+		result.localFetch = fetch
 		return result
 	}
 	if preferred := selectUsefulAcquisitionPeers(usefulByPeer); len(preferred) > 0 {
@@ -826,6 +828,11 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 		peers := ledger.Peers()
 		r.sendNodesByHash(peers, ledger.Hash(), ledger.Seq(), result.byHashState, message.ObjectTypeStateNode)
 		r.sendNodesByHash(peers, ledger.Hash(), ledger.Seq(), result.byHashTx, message.ObjectTypeTransactionNode)
+	}
+	if result.localFetch != nil && !r.submitAcquisitionWork(ledger, acquisitionWorkEvent{
+		kind: acquisitionWorkLocal, fetch: result.localFetch,
+	}) {
+		r.logger.Warn("inbound ledger: post-timeout local refresh deferred; acquisition worker unavailable", "seq", ledger.Seq())
 	}
 }
 

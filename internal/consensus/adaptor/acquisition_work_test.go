@@ -302,7 +302,36 @@ func TestProcessAcquisitionWork_TimeoutSchedulesCachedFrontierBeforeLocalScan(t 
 	assert.NotEmpty(t, result.stateIDs)
 	require.Len(t, result.requests, 1)
 	assert.Equal(t, uint64(22), result.requests[0].PeerID)
-	assert.Zero(t, localFetches, "timeout must not run the fetch-pack/local traversal")
+	require.NotNil(t, result.localFetch)
+	assert.Zero(t, localFetches, "timeout must defer the local traversal until requests are sent")
+}
+
+func TestHandleAcquisitionWorkResult_TimeoutRequestsPrecedeLocalRefresh(t *testing.T) {
+	events := &orderedAcquisitionEvents{}
+	sender := &orderedAcquisitionSender{events: events}
+	adaptor := newTestAdaptor(t)
+	adaptor.sender = sender
+	router := newTestRouter(nil, adaptor, nil)
+	router.acquisition = sender
+	ledger, _ := newWideWorkLedger(t)
+	router.fetchTracker.Track(ledger)
+
+	result := processAcquisitionWork(t.Context(), ledger, []acquisitionWorkEvent{{
+		kind:  acquisitionWorkTimer,
+		peers: []uint64{1},
+		fetch: func([32]byte) ([]byte, bool) {
+			events.add("local fetch")
+			return nil, false
+		},
+	}})
+	require.NoError(t, result.err)
+	require.NotEmpty(t, result.stateIDs)
+
+	router.handleAcquisitionWorkResult(result)
+	got := events.snapshot()
+	require.NotEmpty(t, got)
+	assert.Equal(t, "state request", got[0])
+	assert.Contains(t, got, "local fetch")
 }
 
 func TestProcessAcquisitionWork_BaseSplitsBlindFrontierAcrossSeededPeers(t *testing.T) {

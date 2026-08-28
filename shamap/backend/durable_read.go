@@ -17,6 +17,7 @@ type durableReadCoalescer struct {
 }
 
 const durableReadWorkers = 32
+const durableReadQueue = durableReadWorkers
 
 type durableReadTask struct {
 	coalescer *durableReadCoalescer
@@ -33,41 +34,42 @@ var durableReads durableReadPool
 
 type durableReadPool struct {
 	once  sync.Once
-	mu    sync.Mutex
-	ready *sync.Cond
-	queue []durableReadTask
-	head  int
+	slots chan struct{}
+	tasks chan durableReadTask
 }
 
-func (p *durableReadPool) submit(task durableReadTask) {
+func (p *durableReadPool) start() {
 	p.once.Do(func() {
-		p.ready = sync.NewCond(&p.mu)
+		p.slots = make(chan struct{}, durableReadWorkers+durableReadQueue)
+		p.tasks = make(chan durableReadTask, durableReadQueue)
 		for range durableReadWorkers {
 			go p.run()
 		}
 	})
-	p.mu.Lock()
-	p.queue = append(p.queue, task)
-	p.ready.Signal()
-	p.mu.Unlock()
+}
+
+func (p *durableReadPool) reserve(ctx context.Context) bool {
+	p.start()
+	select {
+	case p.slots <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (p *durableReadPool) release() {
+	<-p.slots
+}
+
+func (p *durableReadPool) submit(task durableReadTask) {
+	p.tasks <- task
 }
 
 func (p *durableReadPool) run() {
-	for {
-		p.mu.Lock()
-		for p.head == len(p.queue) {
-			p.ready.Wait()
-		}
-		task := p.queue[p.head]
-		p.queue[p.head] = durableReadTask{}
-		p.head++
-		if p.head >= 1024 && p.head*2 >= len(p.queue) {
-			p.queue = append(p.queue[:0], p.queue[p.head:]...)
-			p.head = 0
-		}
-		p.mu.Unlock()
-
+	for task := range p.tasks {
 		task.coalescer.read(task.ctx, task.hash, task.flight, task.read)
+		p.release()
 	}
 }
 
@@ -81,24 +83,35 @@ func (c *durableReadCoalescer) fetch(
 	}
 
 	c.mu.Lock()
-	if c.flights == nil {
-		c.flights = make(map[[32]byte]*durableReadFlight)
-	}
 	flight := c.flights[hash]
-	created := flight == nil
-	if flight == nil {
-		flight = &durableReadFlight{done: make(chan struct{})}
-		c.flights[hash] = flight
-	}
 	c.mu.Unlock()
-	if created {
-		durableReads.submit(durableReadTask{
-			coalescer: c,
-			ctx:       context.WithoutCancel(ctx),
-			hash:      hash,
-			flight:    flight,
-			read:      read,
-		})
+	if flight == nil {
+		if !durableReads.reserve(ctx) {
+			return nil, ctx.Err()
+		}
+		created := false
+		c.mu.Lock()
+		if c.flights == nil {
+			c.flights = make(map[[32]byte]*durableReadFlight)
+		}
+		flight = c.flights[hash]
+		if flight == nil {
+			flight = &durableReadFlight{done: make(chan struct{})}
+			c.flights[hash] = flight
+			created = true
+		}
+		c.mu.Unlock()
+		if created {
+			durableReads.submit(durableReadTask{
+				coalescer: c,
+				ctx:       context.WithoutCancel(ctx),
+				hash:      hash,
+				flight:    flight,
+				read:      read,
+			})
+		} else {
+			durableReads.release()
+		}
 	}
 
 	select {
