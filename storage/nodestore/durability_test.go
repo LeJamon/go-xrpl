@@ -244,3 +244,67 @@ func TestDurableSnapshotExcludesManagedPruneThroughPublication(t *testing.T) {
 		t.Fatalf("publication missing after serialized prune: node=%v err=%v", stored, err)
 	}
 }
+
+func TestAcquireDurableSnapshotPinsManagedMutationUntilRelease(t *testing.T) {
+	database := testDatabase(t, memorydb.New(), noCacheConfig())
+	before, release, err := database.AcquireDurableSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseAgain := release
+
+	pruneDone := make(chan error, 1)
+	go func() {
+		_, pruneErr := database.DeleteBefore(context.Background(), 2, 1)
+		pruneDone <- pruneErr
+	}()
+	select {
+	case err := <-pruneDone:
+		t.Fatalf("prune crossed the retained durable snapshot: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	release()
+	releaseAgain()
+	if err := <-pruneDone; err != nil {
+		t.Fatal(err)
+	}
+	after, err := database.DurableFingerprint(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after == before {
+		t.Fatal("released snapshot did not permit the prune generation to advance")
+	}
+}
+
+func TestDurableSnapshotOrdersPruneInvalidationAfterLease(t *testing.T) {
+	database := testDatabase(t, memorydb.New(), noCacheConfig())
+	_, release, err := database.AcquireDurableSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pruneStarted := make(chan struct{})
+	pruneDone := make(chan error, 1)
+	go func() {
+		_, pruneErr := database.DeleteBeforeWithPrune(context.Background(), 2, 1, func() func() {
+			close(pruneStarted)
+			return func() {}
+		})
+		pruneDone <- pruneErr
+	}()
+	select {
+	case <-pruneStarted:
+		t.Fatal("prune invalidated SHAMap proofs before acquiring the durable mutation gate")
+	case <-time.After(25 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-pruneStarted:
+	case <-time.After(time.Second):
+		t.Fatal("prune did not start after the durable snapshot was released")
+	}
+	if err := <-pruneDone; err != nil {
+		t.Fatal(err)
+	}
+}

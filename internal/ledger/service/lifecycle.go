@@ -906,6 +906,7 @@ func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 	s.validatedSignTime = signTime
 	if !fromStored && s.networkLedgerState == networkLedgerFastLoadProvisional {
 		s.networkLedgerState = networkLedgerReady
+		s.clearFastLoadBaseLocked()
 	}
 	s.evictOldHistoryLocked(seq)
 
@@ -949,6 +950,7 @@ func (s *Service) confirmFastLoadLocked(seq uint32, hash [32]byte) {
 	}
 	if seq == s.validatedLedger.Sequence() && hash == s.validatedLedger.Hash() {
 		s.networkLedgerState = networkLedgerReady
+		s.clearFastLoadBaseLocked()
 	}
 }
 

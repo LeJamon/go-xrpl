@@ -145,8 +145,9 @@ type Ledger struct {
 	// family backs the acquisition SHAMaps with the persistent node store when
 	// set, so getMissingNodes only reports nodes not already held locally. nil
 	// leaves the maps unbacked. Set once at construction, never mutated after.
-	family          shamap.Family
-	headerAdmission func(uint32) error
+	family            shamap.Family
+	headerAdmission   func(uint32) error
+	verifiedStateBase [32]byte
 
 	// Retry-loop bookkeeping ported from rippled's TimeoutCounter. lastTimer
 	// is when OnTimer last evaluated; progress records a fresh node attach
@@ -291,11 +292,51 @@ func NewHistory(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, o
 
 // newSyncMap builds an acquisition SHAMap, backed by the node-store family when
 // one is wired (see WithFamily) and unbacked otherwise.
-func (l *Ledger) newSyncMap(t shamap.Type) (*shamap.SHAMap, error) {
+func (l *Ledger) newSyncMap(ctx context.Context, t shamap.Type) (*shamap.SHAMap, error) {
 	if l.family != nil {
-		return shamap.NewBacked(t, l.family)
+		m, err := shamap.NewBacked(t, l.family)
+		if err != nil {
+			return nil, err
+		}
+		if t == shamap.TypeState && l.verifiedStateBase != ([32]byte{}) {
+			if err := m.SetVerifiedBaseContext(ctx, l.verifiedStateBase); err != nil {
+				l.logger.Warn("inbound ledger: verified state base unavailable; using strict discovery", "error", err)
+			}
+		}
+		return m, nil
 	}
 	return shamap.New(t), nil
+}
+
+// SetVerifiedStateBaseContext installs a base before or during account-state
+// acquisition. An existing discovery cursor is reset by the SHAMap.
+func (l *Ledger) SetVerifiedStateBaseContext(ctx context.Context, rootHash [32]byte) error {
+	l.workMu.Lock()
+	defer l.workMu.Unlock()
+	l.mu.Lock()
+	l.verifiedStateBase = rootHash
+	stateMap := l.stateMap
+	l.mu.Unlock()
+	if stateMap == nil {
+		return nil
+	}
+	if err := stateMap.SetVerifiedBaseContext(ctx, rootHash); err != nil {
+		l.mu.Lock()
+		if l.verifiedStateBase == rootHash {
+			l.verifiedStateBase = [32]byte{}
+		}
+		l.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+// WaitForWork waits for the ledger's current discovery or attachment operation
+// to leave its critical section. Callers must first prevent new work from being
+// submitted for the ledger.
+func (l *Ledger) WaitForWork() {
+	l.workMu.Lock()
+	l.workMu.Unlock()
 }
 
 // Reason returns why this acquisition was started.
@@ -724,7 +765,7 @@ func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.Ledge
 		// against h.AccountHash before the router adopts the ledger.
 		l.haveState = true
 	} else if l.stateMap == nil && len(nodes) >= 2 && len(nodes[1].NodeData) > 0 {
-		sm, createErr := l.newSyncMap(shamap.TypeState)
+		sm, createErr := l.newSyncMap(ctx, shamap.TypeState)
 		if createErr != nil {
 			return useful, fmt.Errorf("create state map: %w", createErr)
 		}
@@ -743,7 +784,7 @@ func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.Ledge
 	if h.TxHash == ([32]byte{}) {
 		l.haveTx = true
 	} else if l.txMap == nil && len(nodes) >= 3 && len(nodes[2].NodeData) > 0 {
-		tm, terr := l.newSyncMap(shamap.TypeTransaction)
+		tm, terr := l.newSyncMap(ctx, shamap.TypeTransaction)
 		if terr != nil {
 			return useful, fmt.Errorf("create tx map: %w", terr)
 		}
@@ -1597,22 +1638,27 @@ func (l *Ledger) ReleaseMissingPeer(peerID uint64) {
 // InboundLedger::getJson). Timeouts is the live no-progress retry count, and
 // Peers is the current broadened source-peer set size.
 type Snapshot struct {
-	Hash             [32]byte
-	Seq              uint32
-	HaveHeader       bool
-	HaveState        bool
-	HaveTransactions bool
-	Complete         bool
-	Failed           bool
-	Timeouts         int
-	Peers            int
-	RequestPeers     int
-	StateReceived    uint64
-	StateUseful      uint64
-	TxReceived       uint64
-	TxUseful         uint64
-	NeededState      [][32]byte // hashes of up to missingNodeBatch missing state nodes
-	NeededTx         [][32]byte // hashes of up to missingNodeBatch missing tx nodes
+	Hash                       [32]byte
+	Seq                        uint32
+	HaveHeader                 bool
+	HaveState                  bool
+	HaveTransactions           bool
+	Complete                   bool
+	Failed                     bool
+	Timeouts                   int
+	Peers                      int
+	RequestPeers               int
+	StateReceived              uint64
+	StateUseful                uint64
+	TxReceived                 uint64
+	TxUseful                   uint64
+	StateEqualSubtreesSkipped  uint64
+	StateNodesDescended        uint64
+	StateDurableReads          uint64
+	StateMissingDiscovered     uint64
+	StateVerifiedBaseFallbacks uint64
+	NeededState                [][32]byte // hashes of up to missingNodeBatch missing state nodes
+	NeededTx                   [][32]byte // hashes of up to missingNodeBatch missing tx nodes
 }
 
 func (s Snapshot) Phase() string {
@@ -1663,6 +1709,14 @@ func (l *Ledger) snapshotLocked() Snapshot {
 		StateUseful:      l.stateUseful,
 		TxReceived:       l.txRecv,
 		TxUseful:         l.txUseful,
+	}
+	if l.stateMap != nil {
+		stats := l.stateMap.BackedWalkStats()
+		s.StateEqualSubtreesSkipped = stats.EqualSubtreesSkipped
+		s.StateNodesDescended = stats.NodesDescended
+		s.StateDurableReads = stats.DurableReads
+		s.StateMissingDiscovered = stats.MissingNodes
+		s.StateVerifiedBaseFallbacks = stats.VerifiedBaseFallbacks
 	}
 	if !l.haveState {
 		s.NeededState = cloneHashes(l.neededState)

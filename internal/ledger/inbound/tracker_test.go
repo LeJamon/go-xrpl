@@ -160,6 +160,17 @@ func TestTracker_ActiveAcquisitionSnapshot(t *testing.T) {
 	if entry["timeouts"] != 0 {
 		t.Errorf("timeouts = %v, want 0", entry["timeouts"])
 	}
+	for _, field := range []string{
+		"state_equal_subtrees_skipped",
+		"state_nodes_descended",
+		"state_durable_reads",
+		"state_missing_discovered",
+		"state_verified_base_fallbacks",
+	} {
+		if _, ok := entry[field]; !ok {
+			t.Errorf("missing discovery diagnostic %q", field)
+		}
+	}
 }
 
 func TestTracker_CompletedReportedThenSwept(t *testing.T) {

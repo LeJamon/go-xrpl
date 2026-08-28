@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
 )
@@ -29,21 +30,44 @@ type DurableDatabase interface {
 	WithDurableSnapshot(context.Context, func([32]byte) error) error
 }
 
-// WithDurableSnapshot prevents managed destructive mutations while fn checks
-// the fingerprint and publishes work derived from the current store contents.
-func (d *KVDatabase) WithDurableSnapshot(ctx context.Context, fn func([32]byte) error) error {
+// DurableSnapshotDatabase can retain a stable durable generation beyond one
+// callback, for work that spans multiple resumable operations.
+type DurableSnapshotDatabase interface {
+	DurableDatabase
+	AcquireDurableSnapshot(context.Context) ([32]byte, func(), error)
+}
+
+// AcquireDurableSnapshot prevents managed destructive mutations until the
+// returned release function is called. Ordinary writes remain available.
+func (d *KVDatabase) AcquireDurableSnapshot(ctx context.Context) ([32]byte, func(), error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return [32]byte{}, nil, err
 	}
 	d.mutationMu.RLock()
-	defer d.mutationMu.RUnlock()
+	var once sync.Once
+	release := func() {
+		once.Do(d.mutationMu.RUnlock)
+	}
 	if err := ctx.Err(); err != nil {
-		return err
+		release()
+		return [32]byte{}, nil, err
 	}
 	fingerprint, err := d.DurableFingerprint(ctx)
 	if err != nil {
+		release()
+		return [32]byte{}, nil, err
+	}
+	return fingerprint, release, nil
+}
+
+// WithDurableSnapshot prevents managed destructive mutations while fn checks
+// the fingerprint and publishes work derived from the current store contents.
+func (d *KVDatabase) WithDurableSnapshot(ctx context.Context, fn func([32]byte) error) error {
+	fingerprint, release, err := d.AcquireDurableSnapshot(ctx)
+	if err != nil {
 		return err
 	}
+	defer release()
 	return fn(fingerprint)
 }
 

@@ -35,6 +35,40 @@ type oneShotMissingFamily struct {
 	failed      bool
 }
 
+type cancelOnceBaseFamily struct {
+	base    *memoryFamily
+	target  [32]byte
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (f *cancelOnceBaseFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
+	return f.base.Fetch(ctx, hash)
+}
+
+func (f *cancelOnceBaseFamily) FetchDurable(ctx context.Context, hash [32]byte) ([]byte, error) {
+	blocked := false
+	if hash == f.target {
+		f.once.Do(func() {
+			blocked = true
+			close(f.entered)
+		})
+	}
+	if blocked {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return f.base.FetchDurable(ctx, hash)
+}
+
+func (f *cancelOnceBaseFamily) StoreBatch(ctx context.Context, entries []FlushEntry) error {
+	return f.base.StoreBatch(ctx, entries)
+}
+
+func (f *cancelOnceBaseFamily) FullBelowCache() *FullBelowCache {
+	return f.base.FullBelowCache()
+}
+
 func (f *oneShotMissingFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
 	if hash == f.target {
 		return nil, nil
@@ -211,6 +245,420 @@ func (f *countingDurableFamily) snapshotReads() map[[32]byte]int {
 		reads[hash] = count
 	}
 	return reads
+}
+
+func TestBackedWalkVerifiedBaseMatchesStrictFrontierWithFewerReads(t *testing.T) {
+	base := buildRandomState(t, 2000)
+	pivot, err := base.SnapshotMutable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var changedKey [32]byte
+	for i := range changedKey {
+		changedKey[i] = 0xff
+	}
+	if err := pivot.Put(changedKey, make([]byte, 12)); err != nil {
+		t.Fatal(err)
+	}
+
+	baseRoot, err := base.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pivotRoot, err := pivot.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pivotRootData, err := pivot.SerializeRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseEntries, err := collectDirtyForTest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pivotEntries, err := collectDirtyForTest(pivot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newDestination := func(useBase bool) (*SHAMap, *countingDurableFamily) {
+		t.Helper()
+		memory := newMemoryFamily()
+		if err := memory.StoreBatch(t.Context(), baseEntries); err != nil {
+			t.Fatal(err)
+		}
+		family := &countingDurableFamily{base: memory, reads: make(map[[32]byte]int)}
+		dest, err := NewBacked(TypeState, family)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := dest.AddRootNode(pivotRoot, pivotRootData); err != nil {
+			t.Fatal(err)
+		}
+		if useBase {
+			if err := dest.SetVerifiedBaseContext(t.Context(), baseRoot); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dest, family
+	}
+
+	strict, strictFamily := newDestination(false)
+	strictMissing, err := strict.GetMissingNodesContext(t.Context(), 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	optimized, optimizedFamily := newDestination(true)
+	optimizedMissing, err := optimized.GetMissingNodesContext(t.Context(), 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	strictFrontier := make(map[[32]byte]NodeID, len(strictMissing))
+	for _, missing := range strictMissing {
+		strictFrontier[missing.Hash] = missing.NodeID
+	}
+	if len(optimizedMissing) != len(strictFrontier) {
+		t.Fatalf("optimized frontier has %d nodes, strict has %d", len(optimizedMissing), len(strictFrontier))
+	}
+	for _, missing := range optimizedMissing {
+		if nodeID, ok := strictFrontier[missing.Hash]; !ok || nodeID != missing.NodeID {
+			t.Fatalf("optimized frontier contains unexpected node %x at %x", missing.Hash[:8], missing.NodeID.Bytes())
+		}
+	}
+	countReads := func(reads map[[32]byte]int) int {
+		total := 0
+		for _, count := range reads {
+			total += count
+		}
+		return total
+	}
+	strictReads := countReads(strictFamily.snapshotReads())
+	optimizedReads := countReads(optimizedFamily.snapshotReads())
+	if optimizedReads >= strictReads {
+		t.Fatalf("optimized durable reads = %d, strict = %d", optimizedReads, strictReads)
+	}
+	stats := optimized.BackedWalkStats()
+	if stats.EqualSubtreesSkipped == 0 || stats.NodesDescended == 0 || stats.MissingNodes != uint64(len(optimizedMissing)) {
+		t.Fatalf("unexpected backed-walk stats: %+v", stats)
+	}
+	corruptHash := optimizedMissing[0].Hash
+	optimizedFamily.base.mu.Lock()
+	optimizedFamily.base.store[corruptHash] = []byte("corrupt")
+	optimizedFamily.base.mu.Unlock()
+	if _, err := optimized.GetMissingNodesContext(t.Context(), 0, nil); !errors.Is(err, ErrInvalidNodeData) {
+		t.Fatalf("corrupt pivot node error = %v", err)
+	}
+	if fallbacks := optimized.BackedWalkStats().VerifiedBaseFallbacks; fallbacks != 0 {
+		t.Fatalf("pivot corruption disabled verified base: fallbacks = %d", fallbacks)
+	}
+	if err := optimizedFamily.base.StoreBatch(t.Context(), pivotEntries); err != nil {
+		t.Fatal(err)
+	}
+	missing, err := optimized.GetMissingNodesContext(t.Context(), 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("completed pivot still reports %d missing nodes", len(missing))
+	}
+	if err := optimized.FinishSyncContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	gotRoot, err := optimized.Hash()
+	if err != nil || gotRoot != pivotRoot {
+		t.Fatalf("completed pivot root = %x, err = %v", gotRoot[:8], err)
+	}
+}
+
+func TestBackedWalkVerifiedBaseIdenticalRootSkipsDescendants(t *testing.T) {
+	source := buildRandomState(t, 1000)
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := collectDirtyForTest(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memory := newMemoryFamily()
+	if err := memory.StoreBatch(t.Context(), entries); err != nil {
+		t.Fatal(err)
+	}
+	family := &countingDurableFamily{base: memory, reads: make(map[[32]byte]int)}
+	dest, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatal(err)
+	}
+	if err := dest.SetVerifiedBaseContext(t.Context(), rootHash); err != nil {
+		t.Fatal(err)
+	}
+	missing, err := dest.GetMissingNodesContext(t.Context(), 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("identical root reported %d missing nodes", len(missing))
+	}
+	stats := dest.BackedWalkStats()
+	if stats.EqualSubtreesSkipped != 1 || stats.NodesDescended != 0 || stats.DurableReads != 1 {
+		t.Fatalf("unexpected identical-root stats: %+v", stats)
+	}
+}
+
+func TestBackedWalkVerifiedBaseFailureFallsBackToStrictWalk(t *testing.T) {
+	base := buildRandomState(t, 1000)
+	pivot, err := base.SnapshotMutable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var changedKey [32]byte
+	for i := range changedKey {
+		changedKey[i] = 0xee
+	}
+	if err := pivot.Put(changedKey, make([]byte, 12)); err != nil {
+		t.Fatal(err)
+	}
+
+	baseRoot, err := base.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pivotRoot, err := pivot.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pivotRootData, err := pivot.SerializeRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseEntries, err := collectDirtyForTest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pivotEntries, err := collectDirtyForTest(pivot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	branch := selectBranchForPath(changedKey, 0)
+	_, damagedHash, set := base.tree.root.LoadChild(branch)
+	if !set || damagedHash == ([32]byte{}) {
+		t.Fatal("changed branch is absent from verified base")
+	}
+
+	for _, test := range []struct {
+		name   string
+		damage func(*memoryFamily, [32]byte)
+	}{
+		{
+			name: "missing",
+			damage: func(family *memoryFamily, hash [32]byte) {
+				delete(family.store, hash)
+			},
+		},
+		{
+			name: "corrupt",
+			damage: func(family *memoryFamily, hash [32]byte) {
+				family.store[hash] = []byte("corrupt")
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			family := newMemoryFamily()
+			if err := family.StoreBatch(t.Context(), append(baseEntries, pivotEntries...)); err != nil {
+				t.Fatal(err)
+			}
+			dest, err := NewBacked(TypeState, family)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := dest.AddRootNode(pivotRoot, pivotRootData); err != nil {
+				t.Fatal(err)
+			}
+			if err := dest.SetVerifiedBaseContext(t.Context(), baseRoot); err != nil {
+				t.Fatal(err)
+			}
+			family.mu.Lock()
+			test.damage(family, damagedHash)
+			family.mu.Unlock()
+
+			missing, err := dest.GetMissingNodesContext(t.Context(), 0, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(missing) != 0 {
+				t.Fatalf("strict fallback reported %d missing pivot nodes", len(missing))
+			}
+			stats := dest.BackedWalkStats()
+			if stats.VerifiedBaseFallbacks != 1 {
+				t.Fatalf("verified-base fallbacks = %d, want 1", stats.VerifiedBaseFallbacks)
+			}
+		})
+	}
+}
+
+func TestBackedWalkVerifiedBaseCancellationResumes(t *testing.T) {
+	base := buildRandomState(t, 1000)
+	pivot, err := base.SnapshotMutable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var changedKey [32]byte
+	for i := range changedKey {
+		changedKey[i] = 0xdd
+	}
+	if err := pivot.Put(changedKey, make([]byte, 12)); err != nil {
+		t.Fatal(err)
+	}
+	baseRoot, err := base.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pivotRoot, err := pivot.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pivotRootData, err := pivot.SerializeRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseEntries, err := collectDirtyForTest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pivotEntries, err := collectDirtyForTest(pivot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	branch := selectBranchForPath(changedKey, 0)
+	_, target, set := base.tree.root.LoadChild(branch)
+	if !set {
+		t.Fatal("changed branch is absent from verified base")
+	}
+	memory := newMemoryFamily()
+	if err := memory.StoreBatch(t.Context(), append(baseEntries, pivotEntries...)); err != nil {
+		t.Fatal(err)
+	}
+	family := &cancelOnceBaseFamily{base: memory, target: target, entered: make(chan struct{})}
+	dest, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dest.AddRootNode(pivotRoot, pivotRootData); err != nil {
+		t.Fatal(err)
+	}
+	if err := dest.SetVerifiedBaseContext(t.Context(), baseRoot); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, walkErr := dest.GetMissingNodesContext(ctx, 0, nil)
+		done <- walkErr
+	}()
+	<-family.entered
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled walk error = %v", err)
+	}
+	missing, err := dest.GetMissingNodesContext(t.Context(), 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("resumed walk reported %d missing nodes", len(missing))
+	}
+	if fallbacks := dest.BackedWalkStats().VerifiedBaseFallbacks; fallbacks != 0 {
+		t.Fatalf("cancellation disabled the verified base: fallbacks = %d", fallbacks)
+	}
+}
+
+func BenchmarkBackedWalkVerifiedBaseSparseChange(b *testing.B) {
+	base := buildRandomState(b, 10_000)
+	pivot, err := base.SnapshotMutable()
+	if err != nil {
+		b.Fatal(err)
+	}
+	var changedKey [32]byte
+	for i := range changedKey {
+		changedKey[i] = 0xcc
+	}
+	if err := pivot.Put(changedKey, make([]byte, 12)); err != nil {
+		b.Fatal(err)
+	}
+	baseRoot, err := base.Hash()
+	if err != nil {
+		b.Fatal(err)
+	}
+	pivotRoot, err := pivot.Hash()
+	if err != nil {
+		b.Fatal(err)
+	}
+	pivotRootData, err := pivot.SerializeRoot()
+	if err != nil {
+		b.Fatal(err)
+	}
+	baseEntries, err := collectDirtyForTest(base)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	for _, benchmark := range []struct {
+		name    string
+		useBase bool
+	}{
+		{name: "strict"},
+		{name: "verified-base", useBase: true},
+	} {
+		b.Run(benchmark.name, func(b *testing.B) {
+			b.ReportAllocs()
+			var reads, skipped uint64
+			for range b.N {
+				b.StopTimer()
+				memory := newMemoryFamily()
+				if err := memory.StoreBatch(b.Context(), baseEntries); err != nil {
+					b.Fatal(err)
+				}
+				family := &countingDurableFamily{base: memory, reads: make(map[[32]byte]int)}
+				dest, err := NewBacked(TypeState, family)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if err := dest.AddRootNode(pivotRoot, pivotRootData); err != nil {
+					b.Fatal(err)
+				}
+				if benchmark.useBase {
+					if err := dest.SetVerifiedBaseContext(b.Context(), baseRoot); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.StartTimer()
+				missing, err := dest.GetMissingNodesContext(b.Context(), 0, nil)
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.StopTimer()
+				if len(missing) == 0 {
+					b.Fatal("sparse pivot change produced no missing frontier")
+				}
+				for _, count := range family.snapshotReads() {
+					reads += uint64(count)
+				}
+				skipped += dest.BackedWalkStats().EqualSubtreesSkipped
+			}
+			b.ReportMetric(float64(reads)/float64(b.N), "durable_reads/op")
+			b.ReportMetric(float64(skipped)/float64(b.N), "equal_subtrees/op")
+		})
+	}
 }
 
 func (f *countingDurableFamily) totalReads() int {
@@ -1079,7 +1527,7 @@ func TestBackedWalkCompletionRetainsMaximalCheckpointProof(t *testing.T) {
 				proofStart: 0,
 			}}
 
-			sm.finishBackedWalkFrame(&lane, cache, gen, true, stored)
+			sm.finishBackedWalkFrame(&lane, cache, gen, true, stored, false)
 
 			if got := lane.proofs.count(); got != 1 {
 				t.Fatalf("proof count = %d, want one maximal proof", got)

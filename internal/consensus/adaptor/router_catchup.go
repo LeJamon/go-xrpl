@@ -1595,11 +1595,14 @@ func (r *Router) onLedgerFullyValidated(seq uint32, hash [32]byte) {
 	if entry := r.standardReplay.entries[seq]; entry != nil && entry.hash != hash {
 		pipelineConflict = true
 	}
+	var pipelineRetirement standardReplayRetirement
 	if pipelineConflict {
 		for _, pipelineEntry := range r.standardReplay.entries {
 			removed[pipelineEntry.hash] = struct{}{}
 		}
-		legacy = append(legacy, r.cancelStandardReplayPipelineLocked()...)
+		pipelineRetirement = r.cancelStandardReplayPipelineLocked()
+		legacy = append(legacy, pipelineRetirement.ledgers...)
+		pipelineRetirement.ledgers = nil
 	}
 	if victim := r.obsoleteCatchupVictimLocked(seq); victim != nil && r.fetchTracker.DiscardExpected(victim) {
 		legacy = append(legacy, victim)
@@ -1617,6 +1620,7 @@ func (r *Router) onLedgerFullyValidated(seq uint32, hash [32]byte) {
 	r.recordValidationCatchupTarget(seq, hash, 0, catchupSourceQuorum)
 
 	r.retireLegacyAcquisitions(legacy)
+	r.retireStandardReplay(pipelineRetirement)
 	if len(removed) > 0 {
 		r.logger.Info("canceled acquisitions superseded by trusted validation quorum",
 			"seq", seq,
@@ -1882,10 +1886,11 @@ func (r *Router) ClearFetchInfo() {
 	r.replayCommitMu.Lock()
 	r.acquisitionMu.Lock()
 	ledgers := r.fetchTracker.Clear()
-	r.cancelStandardReplayPipelineLocked()
+	retirement := r.cancelStandardReplayPipelineLocked()
 	r.acquisitionMu.Unlock()
 	r.replayCommitMu.Unlock()
 	r.retireLegacyAcquisitions(ledgers)
+	r.retireStandardReplay(retirement)
 }
 
 func (r *Router) retireLegacyAcquisitions(ledgers []*inbound.Ledger) {

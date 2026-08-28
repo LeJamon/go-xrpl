@@ -256,6 +256,9 @@ func (s *Service) Stop() {
 	s.stopNodeStoreSweeper()
 	s.persistenceWorker.stop()
 	s.eventPublisher.stop()
+	s.mu.Lock()
+	s.clearFastLoadBaseLocked()
+	s.mu.Unlock()
 
 	s.lifecycleMu.Lock()
 	s.lifecycleState = serviceStopped

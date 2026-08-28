@@ -44,6 +44,8 @@ type standardReplayPipeline struct {
 	stalledSamples    uint8
 	retargetAttemptAt time.Time
 	backpressured     bool
+	baseLedger        *inbound.Ledger
+	baseRelease       func()
 }
 
 type standardReplayIdentity struct {
@@ -429,13 +431,19 @@ func (r *Router) cancelStandardReplayPipelineIdentity(identity standardReplayIde
 	current := r.standardReplayIdentityLocked()
 	r.acquisitionMu.Unlock()
 	r.replayCommitMu.Unlock()
-	r.retireLegacyAcquisitions(retired)
+	r.retireStandardReplay(retired)
 	return current, true
 }
 
-func (r *Router) cancelStandardReplayPipelineLocked() []*inbound.Ledger {
-	if !r.standardReplay.active && len(r.standardReplay.entries) == 0 {
-		return nil
+type standardReplayRetirement struct {
+	ledgers    []*inbound.Ledger
+	baseLedger *inbound.Ledger
+	release    func()
+}
+
+func (r *Router) cancelStandardReplayPipelineLocked() standardReplayRetirement {
+	if !r.standardReplay.active && len(r.standardReplay.entries) == 0 && r.standardReplay.baseRelease == nil {
+		return standardReplayRetirement{}
 	}
 	var retired []*inbound.Ledger
 	if !r.standardReplay.pivotReady {
@@ -473,7 +481,37 @@ func (r *Router) cancelStandardReplayPipelineLocked() []*inbound.Ledger {
 	r.standardReplay.stalledSamples = 0
 	r.standardReplay.retargetAttemptAt = time.Time{}
 	r.standardReplay.backpressured = false
-	return retired
+	baseLedger := r.standardReplay.baseLedger
+	r.standardReplay.baseLedger = nil
+	release := r.standardReplay.baseRelease
+	r.standardReplay.baseRelease = nil
+	return standardReplayRetirement{ledgers: retired, baseLedger: baseLedger, release: release}
+}
+
+func (r *Router) retireStandardReplay(retirement standardReplayRetirement) <-chan struct{} {
+	r.retireLegacyAcquisitions(retirement.ledgers)
+	if retirement.release == nil {
+		return nil
+	}
+	if retirement.baseLedger == nil {
+		retirement.release()
+		return nil
+	}
+	done := make(chan struct{})
+	go func() {
+		retirement.baseLedger.WaitForWork()
+		retirement.release()
+		close(done)
+	}()
+	return done
+}
+
+func (r *Router) releaseStandardReplayBaseLocked() {
+	r.standardReplay.baseLedger = nil
+	if release := r.standardReplay.baseRelease; release != nil {
+		r.standardReplay.baseRelease = nil
+		release()
+	}
 }
 
 func (r *Router) discardSupersededProvisionalFullStateLocked(keepHash [32]byte) []*inbound.Ledger {
@@ -648,7 +686,7 @@ func (r *Router) drainStandardReplayPipeline() {
 			retired, target, current := r.discardStandardReplayHeadLocked(entry, generation)
 			r.acquisitionMu.Unlock()
 			r.waitStandardReplayCommit()
-			r.retireLegacyAcquisitions(retired)
+			r.retireStandardReplay(retired)
 			if current {
 				r.replayPipelineFallbacks.Add(1)
 				r.fallbackStandardReplayAcquisition(entry.seq, entry.hash, entry.peerID, target)
@@ -670,7 +708,7 @@ func (r *Router) drainStandardReplayPipeline() {
 			continueDrain := !current && r.standardReplay.active
 			r.acquisitionMu.Unlock()
 			r.waitStandardReplayCommit()
-			r.retireLegacyAcquisitions(retired)
+			r.retireStandardReplay(retired)
 			if current {
 				r.replayPipelineFallbacks.Add(1)
 				r.logger.Error("standard transaction replay pipeline apply failed; falling back to full-state acquisition",
@@ -733,6 +771,7 @@ func (r *Router) drainStandardReplayPipeline() {
 			r.standardReplay.entries = nil
 			r.standardReplay.headBlockedAt = time.Time{}
 			r.standardReplay.backpressured = false
+			r.releaseStandardReplayBaseLocked()
 		}
 		active := r.standardReplay.active
 		r.acquisitionMu.Unlock()
@@ -756,7 +795,7 @@ func (r *Router) drainStandardReplayPipeline() {
 func (r *Router) discardStandardReplayHeadLocked(
 	entry *standardReplayEntry,
 	generation uint64,
-) ([]*inbound.Ledger, standardReplayTarget, bool) {
+) (standardReplayRetirement, standardReplayTarget, bool) {
 	target := standardReplayTarget{
 		seq:  r.standardReplay.targetSeq,
 		hash: r.standardReplay.targetHash,
@@ -766,7 +805,7 @@ func (r *Router) discardStandardReplayHeadLocked(
 		if !r.standardReplay.active {
 			r.standardReplay.applying = false
 		}
-		return nil, standardReplayTarget{}, false
+		return standardReplayRetirement{}, standardReplayTarget{}, false
 	}
 	retired := r.cancelStandardReplayPipelineLocked()
 	if r.consensusRecovery.targetHash != ([32]byte{}) {

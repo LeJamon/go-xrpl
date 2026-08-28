@@ -2,6 +2,7 @@ package shamap
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 )
@@ -63,6 +64,13 @@ func (sm *SHAMap) walkMapParallelContext(ctx context.Context, maxMissing int, fi
 	rootID := newRootNodeID()
 	rootHash := root.Hash()
 	if backed {
+		missing, err := sm.walkBackedContext(ctx, root, access, cache, gen, maxMissing, filter)
+		if !errors.Is(err, errVerifiedBaseUnavailable) {
+			return missing, err
+		}
+		sm.acquisition.base = nil
+		sm.acquisition.cursor = nil
+		sm.acquisition.stats.verifiedBaseFallbacks.Add(1)
 		return sm.walkBackedContext(ctx, root, access, cache, gen, maxMissing, filter)
 	}
 

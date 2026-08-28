@@ -91,8 +91,22 @@ func (d *RotatingKVDatabase) RotateGeneration(
 	ctx context.Context,
 	lastRotated, minimumOnline uint32,
 ) (bool, error) {
+	return d.RotateGenerationWithPrune(ctx, lastRotated, minimumOnline, nil)
+}
+
+// RotateGenerationWithPrune acquires the durable mutation gate before
+// invalidating SHAMap completeness proofs, preserving the global lock order.
+func (d *RotatingKVDatabase) RotateGenerationWithPrune(
+	ctx context.Context,
+	lastRotated, minimumOnline uint32,
+	beginPrune func() func(),
+) (bool, error) {
 	d.mutationMu.Lock()
 	defer d.mutationMu.Unlock()
+	if beginPrune != nil {
+		finish := beginPrune()
+		defer finish()
+	}
 	if err := d.begin(ctx); err != nil {
 		return false, err
 	}

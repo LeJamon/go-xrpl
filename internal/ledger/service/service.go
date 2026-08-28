@@ -180,6 +180,9 @@ type Service struct {
 	fastLoadCheckpointState   atomic.Uint32
 	fastLoadStrictNodes       atomic.Uint64
 	fastLoadStrictElapsed     atomic.Uint64
+	fastLoadBaseStateRoot     [32]byte
+	fastLoadBaseFingerprint   [32]byte
+	fastLoadBaseVerified      bool
 
 	// startupReplay is the one-shot replay staged for the first close and is
 	// guarded by mu together with the closed/open ledger frontier.
@@ -464,6 +467,13 @@ func (s *Service) Start() (err error) {
 			s.lifecycleState = serviceFailed
 		}
 	}()
+	defer func() {
+		if err != nil {
+			s.mu.Lock()
+			s.clearFastLoadBaseLocked()
+			s.mu.Unlock()
+		}
+	}()
 	if s.config.FastLoad && s.config.Startup.Mode == StartupNormal {
 		s.startupFastLoadCheckpoint, err = s.consumeFastLoadCheckpoint(context.Background())
 		if err != nil {
@@ -561,6 +571,9 @@ func (s *Service) Start() (err error) {
 		}
 	}
 	s.networkLedgerState = selection.networkState
+	if s.networkLedgerState != networkLedgerFastLoadProvisional {
+		s.clearFastLoadBaseLocked()
+	}
 	s.startupReplay = selection.replay
 
 	openLedger, err := ledger.NewOpen(s.closedLedger, time.Now())

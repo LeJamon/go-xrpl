@@ -1241,6 +1241,15 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 		errs = append(errs, errors.New("shutdown incomplete: dependencies left running because transport handlers did not stop"))
 		return errors.Join(errs...)
 	}
+	if r.consensus != nil && r.consensus.Router != nil {
+		legacy, replay := r.consensus.Router.StopAcquisitions()
+		if legacy > 0 || replay > 0 {
+			r.serverLog.Info("Ledger acquisitions drained before producer shutdown",
+				"legacy_in_flight_at_stop", legacy,
+				"replay_in_flight_at_stop", replay,
+			)
+		}
+	}
 
 	producersStopped := true
 	if r.rotator != nil {

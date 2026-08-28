@@ -185,11 +185,14 @@ func TestFrozenPivotRecoveryFailureReleasesPivotGeneration(t *testing.T) {
 	pivotHash := [32]byte{0xc1}
 	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
 	generation := r.standardReplay.generation
+	released := 0
+	r.standardReplay.baseRelease = func() { released++ }
 
 	require.True(t, r.failFrozenPivotRecovery(pivotHash))
 	assert.False(t, r.standardReplay.active)
 	assert.Greater(t, r.standardReplay.generation, generation)
 	assert.Nil(t, r.fetchTracker.Find(pivotHash))
+	assert.Equal(t, 1, released)
 }
 
 func TestFrozenPivotFailedStartCannotBeKeptAliveByTargetAdvance(t *testing.T) {
@@ -452,6 +455,8 @@ func TestFrozenPivotRecoveryReplaysToMovingTrustedHead(t *testing.T) {
 
 	trackCatchupPeer(r, 7, pivotSeq, pivotHash)
 	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+	released := 0
+	r.standardReplay.baseRelease = func() { released++ }
 	initialHead := links[len(links)-1]
 	trackCatchupPeer(r, 7, initialHead.seq, initialHead.hash)
 	r.recordValidationCatchupTarget(initialHead.seq, initialHead.hash, 7, catchupSourceQuorum)
@@ -482,6 +487,7 @@ func TestFrozenPivotRecoveryReplaysToMovingTrustedHead(t *testing.T) {
 	require.True(t, r.completeFrozenPivotAcquisition(&pivotHeader, false))
 
 	assert.False(t, r.standardReplay.active)
+	assert.Equal(t, 1, released)
 	assert.False(t, r.standardReplay.backpressured)
 	assert.Equal(t, uint64(len(links)+len(movingLinks)), r.FastSyncMetrics().ReplayPipelineApplied)
 	storedHead, err := svc.GetLedgerByHash(trustedHead.hash)

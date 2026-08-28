@@ -81,6 +81,19 @@ func TestBlockedInboundTraversalDoesNotStallValidationOrConsensusTick(t *testing
 	engine := rcl.NewEngine(adaptor, engineConfig)
 	router := newTestRouter(engine, adaptor, nil)
 	router.fetchTracker.Track(candidate)
+	baseReleased := make(chan struct{})
+	router.standardReplay = standardReplayPipeline{
+		active:      true,
+		pivotSeq:    seq,
+		pivotHash:   candidateHash,
+		anchorSeq:   seq,
+		anchorHash:  candidateHash,
+		targetSeq:   seq,
+		targetHash:  candidateHash,
+		entries:     make(map[uint32]*standardReplayEntry),
+		baseLedger:  candidate,
+		baseRelease: func() { close(baseReleased) },
+	}
 	require.NoError(t, engine.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, engine.Stop()) })
 
@@ -120,6 +133,11 @@ func TestBlockedInboundTraversalDoesNotStallValidationOrConsensusTick(t *testing
 		t.Fatal("trusted validation waited for the inbound completeness walk")
 	}
 	require.Nil(t, router.fetchTracker.Find(candidateHash))
+	select {
+	case <-baseReleased:
+		t.Fatal("checkpoint base released while discovery still used it")
+	default:
+	}
 
 	tickDone := make(chan struct{})
 	go func() {
@@ -134,4 +152,9 @@ func TestBlockedInboundTraversalDoesNotStallValidationOrConsensusTick(t *testing
 
 	releaseOnce.Do(func() { close(family.release) })
 	require.NoError(t, <-baseDone)
+	select {
+	case <-baseReleased:
+	case <-time.After(time.Second):
+		t.Fatal("checkpoint base was not released after discovery stopped")
+	}
 }
