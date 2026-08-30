@@ -161,6 +161,11 @@ func TestService_FastLoadCheckpointCleanRestartAndOneUse(t *testing.T) {
 	secondRestart := newFastLoadCheckpointService(t, tracked, repositories, false)
 	require.NoError(t, secondRestart.Start())
 	require.Greater(t, tracked.uncachedReads(), len(checkpoint.stateProofs)+len(checkpoint.txProofs))
+	baseRoot, releaseBase, available, err = secondRestart.AcquireFastLoadStateBase(ctx)
+	require.NoError(t, err)
+	require.True(t, available)
+	require.Equal(t, checkpoint.stateRoot, baseRoot)
+	releaseBase()
 	secondRestart.Stop()
 }
 
