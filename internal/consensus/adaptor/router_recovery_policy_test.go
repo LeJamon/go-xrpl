@@ -218,6 +218,30 @@ func TestPendingReplayRebaseConsumedAfterApplyCommit(t *testing.T) {
 	assert.Equal(t, targetSeq, r.standardReplay.pivotSeq)
 }
 
+func TestPendingReplayRebaseUsesCurrentQuorumTarget(t *testing.T) {
+	r, _, _, _ := makeRouter(t)
+	pivotSeq := uint32(100)
+	observedTargetSeq := pivotSeq + 10
+	observedTargetHash := [32]byte{0x27}
+	currentTargetSeq := observedTargetSeq + 1
+	currentTargetHash := [32]byte{0x29}
+	r.standardReplay = policyReplayState(3, pivotSeq, observedTargetSeq)
+	r.standardReplay.applying = true
+	r.standardReplay.rebasePending = true
+	r.standardReplay.rebaseGeneration = 3
+	r.standardReplay.rebaseAnchorSeq = pivotSeq
+	r.standardReplay.rebaseTargetSeq = observedTargetSeq
+	r.standardReplay.rebaseTargetHash = observedTargetHash
+	trackCatchupPeer(r, 7, currentTargetSeq, currentTargetHash)
+	r.recordValidationCatchupTarget(currentTargetSeq, currentTargetHash, 7, catchupSourceQuorum)
+
+	require.True(t, r.consumePendingReplayRebaseAfterCommit(time.Unix(101, 0)))
+	assert.True(t, r.standardReplay.active)
+	assert.False(t, r.standardReplay.pivotReady)
+	assert.Equal(t, currentTargetSeq, r.standardReplay.pivotSeq)
+	assert.Equal(t, currentTargetHash, r.standardReplay.pivotHash)
+}
+
 func TestReplayConvergenceRequiresTwoNonShrinkingWindows(t *testing.T) {
 	r, _, _, _ := makeRouter(t)
 	targetHash := [32]byte{0x28}

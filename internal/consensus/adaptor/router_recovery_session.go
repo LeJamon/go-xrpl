@@ -438,6 +438,16 @@ func (r *Router) retargetFrozenPivotWithApplying(
 		readyForReplacement && r.standardReplay.stalledSamples >= standardReplayStallWindows
 	ancestryCurrent := reason == frozenPivotRetargetAncestryUnavailable && r.standardReplay.pivotReady &&
 		readyForReplacement && r.standardReplay.collectSeq == frontierSeq && ancestryLinkMissing
+	if reason == frozenPivotRetargetConvergence && r.standardReplay.rebasePending &&
+		r.standardReplay.rebaseGeneration == r.standardReplay.generation &&
+		r.standardReplay.rebaseAnchorSeq == frontierSeq &&
+		(r.standardReplay.rebaseTargetSeq != target.seq || r.standardReplay.rebaseTargetHash != target.hash) {
+		// The quorum head may advance after the convergence sample. The
+		// decision belongs to this replay generation and anchor; replacement
+		// must use the current quorum target rather than strand the old sample.
+		r.standardReplay.rebaseTargetSeq = target.seq
+		r.standardReplay.rebaseTargetHash = target.hash
+	}
 	convergenceCurrent := reason == frozenPivotRetargetConvergence && r.standardReplay.pivotReady &&
 		readyForReplacement && r.standardReplay.rebasePending &&
 		r.standardReplay.rebaseGeneration == r.standardReplay.generation &&
