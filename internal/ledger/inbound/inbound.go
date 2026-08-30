@@ -702,7 +702,7 @@ func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.Ledge
 		l.publishSnapshotLocked()
 		l.mu.Unlock()
 
-		l.persistReceived(ctx, stored, "roots")
+		l.persistReceivedOwned(ctx, stored, "roots")
 		stateComplete := stateMap != nil && stateMap.FinishSyncContext(ctx) == nil
 		txComplete := txMap != nil && txMap.FinishSyncContext(ctx) == nil
 
@@ -858,7 +858,7 @@ func (l *Ledger) GotStateNodesMeasuredContext(ctx context.Context, nodes []messa
 	l.mu.Lock()
 	defer func() {
 		l.mu.Unlock()
-		l.persistReceived(ctx, stored, "state nodes")
+		l.persistReceivedOwned(ctx, stored, "state nodes")
 	}()
 
 	if l.state == StateComplete || l.haveState {
@@ -927,7 +927,7 @@ func (l *Ledger) GotTransactionNodesMeasuredContext(ctx context.Context, nodes [
 	l.mu.Lock()
 	defer func() {
 		l.mu.Unlock()
-		l.persistReceived(ctx, stored, "transaction nodes")
+		l.persistReceivedOwned(ctx, stored, "transaction nodes")
 	}()
 
 	if l.state == StateComplete || l.haveTx {
@@ -1037,10 +1037,26 @@ func nodeInputStats(nodes []message.LedgerNode) NodeApplyStats {
 }
 
 func (l *Ledger) persistReceived(ctx context.Context, entries []shamap.FlushEntry, label string) {
+	l.persistReceivedWithMode(ctx, entries, label, false)
+}
+
+func (l *Ledger) persistReceivedOwned(ctx context.Context, entries []shamap.FlushEntry, label string) {
+	l.persistReceivedWithMode(ctx, entries, label, true)
+}
+
+func (l *Ledger) persistReceivedWithMode(ctx context.Context, entries []shamap.FlushEntry, label string, owned bool) {
 	if l.family == nil || len(entries) == 0 {
 		return
 	}
-	if err := l.family.StoreBatch(ctx, entries); err != nil {
+	store := l.family.StoreBatch
+	if owned {
+		if ownedStore, ok := l.family.(interface {
+			StoreBatchOwned(context.Context, []shamap.FlushEntry) error
+		}); ok {
+			store = ownedStore.StoreBatchOwned
+		}
+	}
+	if err := store(ctx, entries); err != nil {
 		l.logger.Warn("inbound ledger: failed to persist verified "+label, "error", err)
 	}
 }
