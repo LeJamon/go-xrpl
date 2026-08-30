@@ -39,11 +39,13 @@ func TestControlledStateAcquisitionKeepsPeerStreamsProductive(t *testing.T) {
 
 func BenchmarkControlledStateAcquisition(b *testing.B) {
 	peers := []uint64{101, 102, 103, 104, 105, 106}
+	source := newControlledAcquisitionSource(b, 16)
+	leafCount := source.Size()
 	b.ReportAllocs()
 	b.ResetTimer()
 	var result controlledAcquisitionResult
 	for i := 0; i < b.N; i++ {
-		result = runControlledStateAcquisition(b, 16, peers)
+		result = runControlledStateAcquisitionFromSource(b, source, leafCount, peers)
 	}
 	b.StopTimer()
 	b.ReportMetric(float64(result.requests), "requests/op")
@@ -54,11 +56,14 @@ func BenchmarkControlledStateAcquisition(b *testing.B) {
 
 func runControlledStateAcquisition(tb testing.TB, firstBranches byte, peers []uint64) controlledAcquisitionResult {
 	tb.Helper()
-	require.NotEmpty(tb, peers)
 	source := newControlledAcquisitionSource(tb, firstBranches)
+	return runControlledStateAcquisitionFromSource(tb, source, source.Size(), peers)
+}
+
+func runControlledStateAcquisitionFromSource(tb testing.TB, source *shamap.SHAMap, leafCount int, peers []uint64) controlledAcquisitionResult {
+	tb.Helper()
+	require.NotEmpty(tb, peers)
 	ledger, base := newControlledAcquisitionLedger(tb, source, peers)
-	wire, err := source.WalkWireNodes()
-	require.NoError(tb, err)
 
 	result := controlledAcquisitionResult{peerReplies: make(map[uint64]int, len(peers))}
 	consecutiveUnproductive := 0
@@ -80,7 +85,7 @@ func runControlledStateAcquisition(tb testing.TB, firstBranches byte, peers []ui
 		if work.complete {
 			break
 		}
-		require.Less(tb, round, len(wire)*2, "controlled acquisition made no bounded progress")
+		require.Less(tb, round, leafCount*4+1, "controlled acquisition made no bounded progress")
 		if len(work.requests) == 0 {
 			work = processAcquisitionWork(tb.Context(), ledger, []acquisitionWorkEvent{{kind: acquisitionWorkTimer, peers: peers}})
 			require.NoError(tb, work.err)
@@ -100,7 +105,7 @@ func runControlledStateAcquisition(tb testing.TB, firstBranches byte, peers []ui
 		for _, request := range work.requests {
 			queryDepth := 1
 			if request.Blind {
-				queryDepth = 2
+				queryDepth = 0
 			}
 			nodes := buildShaMapReplyNodes(source, request.NodeIDs, queryDepth, true, serveTestLogger(), peermanagement.PeerID(request.PeerID), "controlled state")
 			require.NotEmpty(tb, nodes, "controlled source could not serve peer %d", request.PeerID)
@@ -124,7 +129,7 @@ func runControlledStateAcquisition(tb testing.TB, firstBranches byte, peers []ui
 		work = processAcquisitionWork(tb.Context(), ledger, events)
 		require.NoError(tb, work.err)
 	}
-	require.True(tb, work.complete, "state=%v useful=%d wire=%d invalid=%d rerequests=%d unprocessed=%d pending_state=%d", ledger.State(), result.usefulNodes, len(wire), result.invalid, result.rerequests, result.unprocessed, len(work.stateIDs))
+	require.True(tb, work.complete, "state=%v useful=%d leaves=%d invalid=%d rerequests=%d unprocessed=%d pending_state=%d", ledger.State(), result.usefulNodes, leafCount, result.invalid, result.rerequests, result.unprocessed, len(work.stateIDs))
 	require.True(tb, ledger.IsComplete())
 	return result
 }
