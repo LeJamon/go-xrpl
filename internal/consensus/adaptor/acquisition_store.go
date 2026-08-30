@@ -753,7 +753,7 @@ func (l *acquisitionStoreLane) removePending(scope uint64, entries []shamap.Flus
 }
 
 func acquisitionStoreBatchEnd(entries []shamap.FlushEntry, start int) int {
-	bytes := int64(acquisitionStoreJobMetadata)
+	bytes := acquisitionStoreJobMetadata
 	end := start
 	for end < len(entries) && end-start < acquisitionStoreBatchNodes {
 		entryBytes := acquisitionStoreEntryBytes(entries[end])
@@ -762,7 +762,7 @@ func acquisitionStoreBatchEnd(entries []shamap.FlushEntry, start int) int {
 		}
 		bytes += entryBytes
 		end++
-		if entryBytes+int64(acquisitionStoreJobMetadata) > acquisitionStoreBatchBytes {
+		if entryBytes+acquisitionStoreJobMetadata > acquisitionStoreBatchBytes {
 			break
 		}
 	}
@@ -770,7 +770,7 @@ func acquisitionStoreBatchEnd(entries []shamap.FlushEntry, start int) int {
 }
 
 func acquisitionStoreJobBytes(entries []shamap.FlushEntry) int64 {
-	bytes := int64(acquisitionStoreJobMetadata)
+	bytes := acquisitionStoreJobMetadata
 	for i := range entries {
 		bytes += acquisitionStoreEntryBytes(entries[i])
 	}
