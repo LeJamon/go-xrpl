@@ -914,12 +914,87 @@ func TestAcquisitionWorkLane_YieldRunsAnotherLedger(t *testing.T) {
 	require.True(t, first.yielded)
 	close(first.ack)
 	second := <-lane.results()
-	require.Same(t, fast, second.ledger, "a yielded walk must move to the back of the ready queue")
 	close(second.ack)
 	third := <-lane.results()
-	require.Same(t, slow, third.ledger)
 	close(third.ack)
+	assert.ElementsMatch(t, []*inbound.Ledger{fast, slow}, []*inbound.Ledger{second.ledger, third.ledger},
+		"a yielded walk must not starve another ledger")
 	require.Equal(t, 2, slowCalls)
+}
+
+func TestAcquisitionWorkLane_ProcessesDifferentLedgersConcurrently(t *testing.T) {
+	lane := newAcquisitionWorkLaneWithWorkers(2, 2)
+	started := make(chan *inbound.Ledger, 2)
+	release := make(chan struct{}, 2)
+	lane.process = func(_ context.Context, ledger *inbound.Ledger, _ []acquisitionWorkEvent) acquisitionWorkResult {
+		started <- ledger
+		<-release
+		return acquisitionWorkResult{ledger: ledger}
+	}
+	lane.start(t.Context())
+	t.Cleanup(lane.stop)
+
+	first := inbound.New([32]byte{0xC1}, 21, 1, serveTestLogger())
+	second := inbound.New([32]byte{0xC2}, 22, 2, serveTestLogger())
+	require.True(t, lane.submit(first, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
+	require.True(t, lane.submit(second, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
+
+	seen := map[*inbound.Ledger]bool{}
+	for range 2 {
+		select {
+		case ledger := <-started:
+			seen[ledger] = true
+		case <-time.After(time.Second):
+			t.Fatal("different-ledger acquisition work did not run concurrently")
+		}
+	}
+	assert.True(t, seen[first])
+	assert.True(t, seen[second])
+	release <- struct{}{}
+	release <- struct{}{}
+	for range 2 {
+		result := <-lane.results()
+		close(result.ack)
+	}
+}
+
+func TestAcquisitionWorkLane_SerializesOneLedger(t *testing.T) {
+	lane := newAcquisitionWorkLaneWithWorkers(2, 2)
+	started := make(chan struct{}, 2)
+	release := make(chan struct{}, 2)
+	lane.process = func(_ context.Context, ledger *inbound.Ledger, _ []acquisitionWorkEvent) acquisitionWorkResult {
+		started <- struct{}{}
+		<-release
+		return acquisitionWorkResult{ledger: ledger}
+	}
+	lane.start(t.Context())
+	t.Cleanup(lane.stop)
+
+	ledger := inbound.New([32]byte{0xC3}, 23, 1, serveTestLogger())
+	require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first acquisition batch did not start")
+	}
+	require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkTimer}))
+	select {
+	case <-started:
+		t.Fatal("same-ledger acquisition work ran concurrently")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	release <- struct{}{}
+	first := <-lane.results()
+	close(first.ack)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("queued same-ledger batch did not start after the first completed")
+	}
+	release <- struct{}{}
+	second := <-lane.results()
+	close(second.ack)
 }
 
 func TestAcquisitionWorkLane_YieldProcessesNewWorkBeforeResume(t *testing.T) {

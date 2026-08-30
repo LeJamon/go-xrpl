@@ -28,6 +28,7 @@ const (
 	// next missing node. Bound each pass so replies and timers for other ledgers
 	// are serviced between resumable cursor passes.
 	acquisitionWorkVisitBudget int64 = 2 * 1024
+	acquisitionWorkWorkers           = 4
 )
 
 type acquisitionWorkKind uint8
@@ -155,32 +156,50 @@ type acquisitionWorkLane struct {
 	process func(context.Context, *inbound.Ledger, []acquisitionWorkEvent) acquisitionWorkResult
 	flush   func(context.Context, *inbound.Ledger) error
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	wake   chan struct{}
-	result chan acquisitionWorkResult
-	done   chan struct{}
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wake    chan struct{}
+	result  chan acquisitionWorkResult
+	done    chan struct{}
+	workers sync.WaitGroup
 
-	mu         sync.Mutex
-	queueDepth int
-	ready      []*acquisitionWorkBatch
-	pending    map[*inbound.Ledger]*acquisitionWorkBatch
+	mu          sync.Mutex
+	queueDepth  int
+	workerCount int
+	ready       []*acquisitionWorkBatch
+	pending     map[*inbound.Ledger]*acquisitionWorkBatch
 }
 
 func newAcquisitionWorkLane(queueDepth int) *acquisitionWorkLane {
+	return newAcquisitionWorkLaneWithWorkers(queueDepth, acquisitionWorkWorkers)
+}
+
+func newAcquisitionWorkLaneWithWorkers(queueDepth, workerCount int) *acquisitionWorkLane {
+	if workerCount < 1 {
+		workerCount = 1
+	}
 	return &acquisitionWorkLane{
-		process:    processAcquisitionWorkBudgeted,
-		wake:       make(chan struct{}, 1),
-		result:     make(chan acquisitionWorkResult),
-		done:       make(chan struct{}),
-		queueDepth: queueDepth,
-		pending:    make(map[*inbound.Ledger]*acquisitionWorkBatch),
+		process:     processAcquisitionWorkBudgeted,
+		wake:        make(chan struct{}, workerCount),
+		result:      make(chan acquisitionWorkResult),
+		done:        make(chan struct{}),
+		queueDepth:  queueDepth,
+		workerCount: workerCount,
+		pending:     make(map[*inbound.Ledger]*acquisitionWorkBatch),
 	}
 }
 
 func (l *acquisitionWorkLane) start(parent context.Context) {
 	l.ctx, l.cancel = context.WithCancel(parent)
-	go l.run()
+	l.workers.Add(l.workerCount)
+	for range l.workerCount {
+		go l.run()
+	}
+	go func() {
+		l.workers.Wait()
+		l.releasePending()
+		close(l.done)
+	}()
 }
 
 func (l *acquisitionWorkLane) stop() {
@@ -302,8 +321,7 @@ func (l *acquisitionWorkLane) submit(ledger *inbound.Ledger, event acquisitionWo
 }
 
 func (l *acquisitionWorkLane) run() {
-	defer close(l.done)
-	defer l.releasePending()
+	defer l.workers.Done()
 	for {
 		select {
 		case <-l.ctx.Done():
