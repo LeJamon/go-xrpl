@@ -11,7 +11,11 @@ import (
 
 type frozenPivotRetargetReason string
 
-const frozenPivotRetargetStalled frozenPivotRetargetReason = "replay_stalled"
+const (
+	frozenPivotRetargetStalled             frozenPivotRetargetReason = "replay_stalled"
+	frozenPivotRetargetAncestryUnavailable frozenPivotRetargetReason = "ancestry_unavailable"
+	frozenPivotRetargetConvergence         frozenPivotRetargetReason = "replay_nonconverging"
+)
 
 func (r *Router) beginFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint64) bool {
 	if seq == 0 || hash == ([32]byte{}) {
@@ -65,9 +69,23 @@ func (r *Router) beginFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint
 	r.standardReplay.pivotStartedAt = time.Now()
 	r.standardReplay.progressSampleAt = time.Time{}
 	r.standardReplay.sampleAnchorSeq = seq
+	r.standardReplay.sampleTargetSeq = 0
 	r.standardReplay.stalledSamples = 0
 	r.standardReplay.retargetAttemptAt = time.Time{}
 	r.standardReplay.backpressured = false
+	r.standardReplay.rebasePending = false
+	r.standardReplay.rebaseGeneration = 0
+	r.standardReplay.rebaseAnchorSeq = 0
+	r.standardReplay.rebaseTargetSeq = 0
+	r.standardReplay.rebaseTargetHash = [32]byte{}
+	r.standardReplay.ancestryGeneration = 0
+	r.standardReplay.replayRate = 0
+	r.standardReplay.headRate = 0
+	r.standardReplay.backlog = 0
+	r.standardReplay.eta = 0
+	r.standardReplay.etaAvailable = false
+	r.standardReplay.strategy = "state_pivot"
+	r.standardReplay.decisionReason = "pivot_acquiring"
 	r.standardReplay.baseRelease = baseRelease
 	if r.consensusRecovery.targetHash != ([32]byte{}) {
 		r.consensusRecovery.stepHash = hash
@@ -195,10 +213,18 @@ func (r *Router) completeFrozenPivotAcquisition(h *header.LedgerHeader, initialC
 	}
 	r.standardReplay.pivotReady = true
 	r.standardReplay.initialCandidate = initialCandidate
+	r.standardReplay.strategy = "replay"
+	r.standardReplay.decisionReason = "replay_started"
 	now := time.Now()
 	r.standardReplay.progressSampleAt = now
 	r.standardReplay.sampleAnchorSeq = h.LedgerIndex
+	r.standardReplay.sampleTargetSeq = r.standardReplay.targetSeq
 	r.standardReplay.stalledSamples = 0
+	r.standardReplay.rebasePending = false
+	r.standardReplay.rebaseGeneration = 0
+	r.standardReplay.rebaseAnchorSeq = 0
+	r.standardReplay.rebaseTargetSeq = 0
+	r.standardReplay.rebaseTargetHash = [32]byte{}
 	generation := r.standardReplay.generation
 	reachedTarget := r.standardReplay.targetSeq == h.LedgerIndex && r.standardReplay.targetHash == h.Hash
 	startDrain := false
@@ -239,6 +265,9 @@ func (r *Router) completeFrozenPivotAcquisition(h *header.LedgerHeader, initialC
 	if !current {
 		return true
 	}
+	if !reachedTarget && r.maybeRebaseForMissingReplayAncestry(now) {
+		return true
+	}
 	if reachedTarget {
 		r.completeStoredConsensusRecovery(h.LedgerIndex, h.Hash, h.ParentHash, initialCandidate)
 		r.acquisitionMu.Lock()
@@ -249,6 +278,9 @@ func (r *Router) completeFrozenPivotAcquisition(h *header.LedgerHeader, initialC
 			r.standardReplay.active = false
 			r.standardReplay.entries = nil
 			r.standardReplay.backpressured = false
+			r.standardReplay.rebasePending = false
+			r.standardReplay.strategy = "complete"
+			r.standardReplay.decisionReason = "pivot_complete"
 			r.releaseStandardReplayBaseLocked()
 		}
 		r.acquisitionMu.Unlock()
@@ -270,47 +302,69 @@ func (r *Router) rebootstrapFrozenPivotIfStalled(now time.Time) bool {
 		return false
 	}
 
-	if !r.standardReplay.pivotReady || r.standardReplay.applying ||
-		r.standardReplay.targetSeq <= r.standardReplay.anchorSeq {
+	if !r.standardReplay.pivotReady || r.standardReplay.applying {
 		r.acquisitionMu.Unlock()
 		return false
 	}
-	if r.standardReplay.progressSampleAt.IsZero() {
-		r.standardReplay.progressSampleAt = now
-		r.standardReplay.sampleAnchorSeq = r.standardReplay.anchorSeq
-		r.acquisitionMu.Unlock()
-		return false
-	}
-	if now.Sub(r.standardReplay.progressSampleAt) < standardReplayProgressWindow {
-		r.acquisitionMu.Unlock()
-		return false
-	}
-
-	if r.standardReplay.anchorSeq > r.standardReplay.sampleAnchorSeq {
-		r.standardReplay.stalledSamples = 0
-		r.standardReplay.retargetAttemptAt = time.Time{}
-	} else if r.standardReplay.stalledSamples < ^uint8(0) {
-		r.standardReplay.stalledSamples++
-	}
-	r.standardReplay.progressSampleAt = now
-	r.standardReplay.sampleAnchorSeq = r.standardReplay.anchorSeq
-	if r.standardReplay.stalledSamples < standardReplayStallWindows {
-		r.acquisitionMu.Unlock()
-		return false
-	}
-
-	if !r.standardReplay.retargetAttemptAt.IsZero() &&
-		now.Sub(r.standardReplay.retargetAttemptAt) < standardReplayProgressWindow {
-		r.acquisitionMu.Unlock()
-		return false
-	}
-	r.standardReplay.retargetAttemptAt = now
-	generation := r.standardReplay.generation
-	frontierSeq := r.standardReplay.anchorSeq
-	pivotSeq := r.standardReplay.pivotSeq
 	r.acquisitionMu.Unlock()
 
-	return r.retargetFrozenPivot(generation, frontierSeq, pivotSeq, frozenPivotRetargetStalled, now)
+	if r.maybeRebaseForMissingReplayAncestry(now) {
+		return true
+	}
+	r.evaluateStandardReplayConvergence(now)
+	r.acquisitionMu.Lock()
+	if !r.standardReplay.active || !r.standardReplay.pivotReady || r.standardReplay.applying ||
+		!r.standardReplay.rebasePending || r.standardReplay.rebaseGeneration != r.standardReplay.generation {
+		r.acquisitionMu.Unlock()
+		return false
+	}
+	generation := r.standardReplay.rebaseGeneration
+	frontierSeq := r.standardReplay.rebaseAnchorSeq
+	pivotSeq := r.standardReplay.pivotSeq
+	r.acquisitionMu.Unlock()
+	return r.retargetFrozenPivot(
+		generation,
+		frontierSeq,
+		pivotSeq,
+		frozenPivotRetargetConvergence,
+		now,
+	)
+}
+
+func (r *Router) maybeRebaseForMissingReplayAncestry(now time.Time) bool {
+	target := r.trustedReplayTarget()
+	if target.seq == 0 || target.hash == ([32]byte{}) {
+		return false
+	}
+	r.acquisitionMu.Lock()
+	if !r.standardReplay.active || !r.standardReplay.pivotReady || r.standardReplay.applying {
+		r.acquisitionMu.Unlock()
+		return false
+	}
+	frontierSeq := r.standardReplay.collectSeq
+	if target.seq <= frontierSeq || target.seq-frontierSeq <= seqHashRetain {
+		r.acquisitionMu.Unlock()
+		return false
+	}
+	if next, known := r.lookupSeqHash(frontierSeq + 1); known && next.hash != ([32]byte{}) && next.haveParent {
+		r.acquisitionMu.Unlock()
+		return false
+	}
+	generation := r.standardReplay.generation
+	pivotSeq := r.standardReplay.pivotSeq
+	if r.standardReplay.ancestryGeneration != generation {
+		r.standardReplay.ancestryGeneration = generation
+		r.standardReplay.decisionReason = string(frozenPivotRetargetAncestryUnavailable)
+		r.replayPipelineAncestryUnavailable.Add(1)
+	}
+	r.acquisitionMu.Unlock()
+	return r.retargetFrozenPivot(
+		generation,
+		frontierSeq,
+		pivotSeq,
+		frozenPivotRetargetAncestryUnavailable,
+		now,
+	)
 }
 
 func (r *Router) retargetFrozenPivot(
@@ -320,9 +374,18 @@ func (r *Router) retargetFrozenPivot(
 	reason frozenPivotRetargetReason,
 	now time.Time,
 ) bool {
-	r.catchupMu.Lock()
-	target := r.catchup
-	r.catchupMu.Unlock()
+	return r.retargetFrozenPivotWithApplying(generation, frontierSeq, pivotSeq, reason, now, false)
+}
+
+func (r *Router) retargetFrozenPivotWithApplying(
+	generation uint64,
+	frontierSeq uint32,
+	pivotSeq uint32,
+	reason frozenPivotRetargetReason,
+	now time.Time,
+	allowApplying bool,
+) bool {
+	target := r.trustedReplayTarget()
 	if target.source != catchupSourceQuorum || target.seq <= frontierSeq || target.hash == ([32]byte{}) {
 		r.replayPipelineRetargetFailures.Add(1)
 		r.logger.Warn("cannot retarget frozen recovery pivot without a newer quorum target",
@@ -355,17 +418,52 @@ func (r *Router) retargetFrozenPivot(
 		)
 		return false
 	}
+	r.acquisitionMu.Lock()
+	if !r.standardReplay.retargetAttemptAt.IsZero() &&
+		now.Sub(r.standardReplay.retargetAttemptAt) < standardReplayProgressWindow {
+		r.acquisitionMu.Unlock()
+		return false
+	}
+	r.acquisitionMu.Unlock()
 
 	r.replayCommitMu.Lock()
 	r.acquisitionMu.Lock()
+	readyForReplacement := !r.standardReplay.applying || allowApplying
+	ancestryLinkMissing := false
+	if reason == frozenPivotRetargetAncestryUnavailable && r.standardReplay.collectSeq < ^uint32(0) {
+		next, known := r.lookupSeqHash(r.standardReplay.collectSeq + 1)
+		ancestryLinkMissing = !known || next.hash == ([32]byte{}) || !next.haveParent
+	}
 	stallCurrent := reason == frozenPivotRetargetStalled && r.standardReplay.pivotReady &&
-		!r.standardReplay.applying && r.standardReplay.stalledSamples >= standardReplayStallWindows
+		readyForReplacement && r.standardReplay.stalledSamples >= standardReplayStallWindows
+	ancestryCurrent := reason == frozenPivotRetargetAncestryUnavailable && r.standardReplay.pivotReady &&
+		readyForReplacement && r.standardReplay.collectSeq == frontierSeq && ancestryLinkMissing
+	if reason == frozenPivotRetargetConvergence && r.standardReplay.rebasePending &&
+		r.standardReplay.rebaseGeneration == r.standardReplay.generation &&
+		r.standardReplay.rebaseAnchorSeq == frontierSeq &&
+		(r.standardReplay.rebaseTargetSeq != target.seq || r.standardReplay.rebaseTargetHash != target.hash) {
+		// The quorum head may advance after the convergence sample. The
+		// decision belongs to this replay generation and anchor; replacement
+		// must use the current quorum target rather than strand the old sample.
+		r.standardReplay.rebaseTargetSeq = target.seq
+		r.standardReplay.rebaseTargetHash = target.hash
+	}
+	convergenceCurrent := reason == frozenPivotRetargetConvergence && r.standardReplay.pivotReady &&
+		readyForReplacement && r.standardReplay.rebasePending &&
+		r.standardReplay.rebaseGeneration == r.standardReplay.generation &&
+		r.standardReplay.rebaseAnchorSeq == frontierSeq &&
+		r.standardReplay.rebaseTargetSeq == target.seq &&
+		r.standardReplay.rebaseTargetHash == target.hash
 	if !r.standardReplay.active || r.standardReplay.generation != generation ||
-		r.standardReplay.anchorSeq != frontierSeq || !stallCurrent {
+		((reason == frozenPivotRetargetConvergence && r.standardReplay.anchorSeq != frontierSeq) ||
+			(reason == frozenPivotRetargetStalled && r.standardReplay.anchorSeq != frontierSeq) ||
+			(reason == frozenPivotRetargetAncestryUnavailable && r.standardReplay.collectSeq != frontierSeq)) ||
+		(!stallCurrent && !ancestryCurrent && !convergenceCurrent) {
 		r.acquisitionMu.Unlock()
 		r.replayCommitMu.Unlock()
 		return false
 	}
+	r.standardReplay.retargetAttemptAt = now
 	preparedTailSeq := r.standardReplay.collectSeq
 	preparedOccupancy := len(r.standardReplay.entries)
 	pivotHash := r.standardReplay.pivotHash
@@ -383,6 +481,7 @@ func (r *Router) retargetFrozenPivot(
 	r.consensusRecovery.anchorSeq = 0
 	r.consensusRecovery.anchorHash = [32]byte{}
 	r.consensusRecovery.stepHash = [32]byte{}
+	r.replayPipelineRebasesStarted.Add(1)
 	r.acquisitionMu.Unlock()
 	r.replayCommitMu.Unlock()
 	r.retireStandardReplay(retired)
@@ -399,8 +498,16 @@ func (r *Router) retargetFrozenPivot(
 		"pivot_state_nodes_per_sec", pivotStateRate,
 	)
 	if r.beginFrozenPivotRecovery(target.seq, target.hash, peerID) {
+		r.acquisitionMu.Lock()
+		if r.standardReplay.active && r.standardReplay.pivotSeq == target.seq && r.standardReplay.pivotHash == target.hash {
+			r.standardReplay.strategy = "state_rebase"
+			r.standardReplay.decisionReason = string(reason)
+		}
+		r.acquisitionMu.Unlock()
+		r.replayPipelineRebasesSucceeded.Add(1)
 		return true
 	}
+	r.replayPipelineRebasesFailed.Add(1)
 	r.replayPipelineRetargetFailures.Add(1)
 	r.logger.Warn("failed to start replacement full-state pivot",
 		"reason", string(reason),

@@ -637,6 +637,27 @@ func TestApplyAcquisitionData_DuplicateBaseIsNotUseful(t *testing.T) {
 	assert.Zero(t, duplicate)
 }
 
+func TestApplyAcquisitionData_BaseUsefulBytesExcludeIgnoredNodes(t *testing.T) {
+	service := newTestLedgerService(t)
+	closed := service.GetClosedLedger()
+	router := newTestRouter(nil, newTestAdaptor(t), nil)
+	ledger := inbound.New(closed.Hash(), closed.Sequence(), 1, serveTestLogger())
+	nodes := router.buildLedgerBaseNodes(closed)
+	usefulBytes := 0
+	for i := range nodes {
+		usefulBytes += len(nodes[i].NodeData)
+	}
+	nodes = append(nodes, message.LedgerNode{NodeData: make([]byte, 257)})
+
+	stats, _, _, _, err := applyAcquisitionDataMeasured(t.Context(), ledger, &message.LedgerData{
+		InfoType: message.LedgerInfoBase,
+		Nodes:    nodes,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, usefulBytes, stats.UsefulBytes)
+	assert.Equal(t, usefulBytes+257, stats.ReceivedBytes)
+}
+
 func TestProcessAcquisitionWork_BaseReplyCannotPoisonSharedAcquisition(t *testing.T) {
 	service := newTestLedgerService(t)
 	closed := service.GetClosedLedger()
@@ -800,7 +821,7 @@ func TestAcquisitionWork_PersistenceFailureDoesNotAdoptOrRecordPeerFailure(t *te
 }
 
 func TestAcquisitionWorkLane_BoundsAndCoalesces(t *testing.T) {
-	lane := newAcquisitionWorkLane(1)
+	lane := newAcquisitionWorkLaneWithWorkers(1, 1)
 	firstEntered := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
@@ -845,7 +866,10 @@ func TestAcquisitionWorkLane_BoundsAndCoalesces(t *testing.T) {
 	}
 	require.True(t, lane.submit(b, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
 	assert.False(t, lane.submit(c, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
-	assert.LessOrEqual(t, len(lane.ready), 1)
+	lane.mu.Lock()
+	ready := len(lane.ready)
+	lane.mu.Unlock()
+	assert.LessOrEqual(t, ready, 1)
 
 	close(release)
 	require.Eventually(t, func() bool {
@@ -880,7 +904,7 @@ func TestAcquisitionWorkLane_BackpressuresFullDataBatch(t *testing.T) {
 }
 
 func TestAcquisitionWorkLane_YieldRunsAnotherLedger(t *testing.T) {
-	lane := newAcquisitionWorkLane(2)
+	lane := newAcquisitionWorkLaneWithWorkers(2, 1)
 	slow := inbound.New([32]byte{0xA0}, 10, 1, serveTestLogger())
 	fast := inbound.New([32]byte{0xB0}, 11, 2, serveTestLogger())
 	slowStarted := make(chan struct{})
@@ -914,16 +938,91 @@ func TestAcquisitionWorkLane_YieldRunsAnotherLedger(t *testing.T) {
 	require.True(t, first.yielded)
 	close(first.ack)
 	second := <-lane.results()
-	require.Same(t, fast, second.ledger, "a yielded walk must move to the back of the ready queue")
 	close(second.ack)
 	third := <-lane.results()
-	require.Same(t, slow, third.ledger)
 	close(third.ack)
+	assert.ElementsMatch(t, []*inbound.Ledger{fast, slow}, []*inbound.Ledger{second.ledger, third.ledger},
+		"a yielded walk must not starve another ledger")
 	require.Equal(t, 2, slowCalls)
 }
 
+func TestAcquisitionWorkLane_ProcessesDifferentLedgersConcurrently(t *testing.T) {
+	lane := newAcquisitionWorkLaneWithWorkers(2, 2)
+	started := make(chan *inbound.Ledger, 2)
+	release := make(chan struct{}, 2)
+	lane.process = func(_ context.Context, ledger *inbound.Ledger, _ []acquisitionWorkEvent) acquisitionWorkResult {
+		started <- ledger
+		<-release
+		return acquisitionWorkResult{ledger: ledger}
+	}
+	lane.start(t.Context())
+	t.Cleanup(lane.stop)
+
+	first := inbound.New([32]byte{0xC1}, 21, 1, serveTestLogger())
+	second := inbound.New([32]byte{0xC2}, 22, 2, serveTestLogger())
+	require.True(t, lane.submit(first, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
+	require.True(t, lane.submit(second, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
+
+	seen := map[*inbound.Ledger]bool{}
+	for range 2 {
+		select {
+		case ledger := <-started:
+			seen[ledger] = true
+		case <-time.After(time.Second):
+			t.Fatal("different-ledger acquisition work did not run concurrently")
+		}
+	}
+	assert.True(t, seen[first])
+	assert.True(t, seen[second])
+	release <- struct{}{}
+	release <- struct{}{}
+	for range 2 {
+		result := <-lane.results()
+		close(result.ack)
+	}
+}
+
+func TestAcquisitionWorkLane_SerializesOneLedger(t *testing.T) {
+	lane := newAcquisitionWorkLaneWithWorkers(2, 2)
+	started := make(chan struct{}, 2)
+	release := make(chan struct{}, 2)
+	lane.process = func(_ context.Context, ledger *inbound.Ledger, _ []acquisitionWorkEvent) acquisitionWorkResult {
+		started <- struct{}{}
+		<-release
+		return acquisitionWorkResult{ledger: ledger}
+	}
+	lane.start(t.Context())
+	t.Cleanup(lane.stop)
+
+	ledger := inbound.New([32]byte{0xC3}, 23, 1, serveTestLogger())
+	require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first acquisition batch did not start")
+	}
+	require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkTimer}))
+	select {
+	case <-started:
+		t.Fatal("same-ledger acquisition work ran concurrently")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	release <- struct{}{}
+	first := <-lane.results()
+	close(first.ack)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("queued same-ledger batch did not start after the first completed")
+	}
+	release <- struct{}{}
+	second := <-lane.results()
+	close(second.ack)
+}
+
 func TestAcquisitionWorkLane_YieldProcessesNewWorkBeforeResume(t *testing.T) {
-	lane := newAcquisitionWorkLane(1)
+	lane := newAcquisitionWorkLaneWithWorkers(1, 1)
 	ledger := inbound.New([32]byte{0xA3}, 13, 7, serveTestLogger())
 	firstStarted := make(chan struct{})
 	releaseFirst := make(chan struct{})
@@ -1220,7 +1319,7 @@ func TestAcquisitionWorkLane_ShutdownCancelsAndJoins(t *testing.T) {
 }
 
 func TestAcquisitionWorkLane_CancelLedgerPreemptsObsoleteTraversal(t *testing.T) {
-	lane := newAcquisitionWorkLane(1)
+	lane := newAcquisitionWorkLaneWithWorkers(1, 1)
 	staleStarted := make(chan struct{})
 	exactStarted := make(chan struct{})
 	stale := inbound.New([32]byte{1}, 1, 1, serveTestLogger())
@@ -1585,7 +1684,7 @@ func TestRouter_MaintenanceDrainsBufferedReplyBeforeTerminalTimer(t *testing.T) 
 	router.fetchTracker.Track(ledger)
 	inbox := make(chan *peermanagement.InboundMessage, 1)
 	router.SetAcqInbox(inbox)
-	lane := newAcquisitionWorkLane(1)
+	lane := newAcquisitionWorkLaneWithWorkers(1, 1)
 	blocker := inbound.New([32]byte{0xB8}, 202, 8, serveTestLogger())
 	entered := make(chan struct{})
 	release := make(chan struct{})

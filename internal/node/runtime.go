@@ -801,6 +801,18 @@ func (r *nodeRuntime) configureConsensus() error {
 					ReplayPipelineGeneration:             snapshot.ReplayPipelineGeneration,
 					ReplayPipelinePivotStateNodesPerSec:  snapshot.ReplayPipelinePivotStateNodesPerSec,
 					ReplayPipelineHeadBlockedUs:          snapshot.ReplayPipelineHeadBlockedUs,
+					ReplayPipelineStrategy:               snapshot.ReplayPipelineStrategy,
+					ReplayPipelineDecisionReason:         snapshot.ReplayPipelineDecisionReason,
+					ReplayPipelineReplayRate:             snapshot.ReplayPipelineReplayRate,
+					ReplayPipelineHeadRate:               snapshot.ReplayPipelineHeadRate,
+					ReplayPipelineBacklog:                snapshot.ReplayPipelineBacklog,
+					ReplayPipelineETASeconds:             snapshot.ReplayPipelineETASeconds,
+					ReplayPipelineETAAvailable:           snapshot.ReplayPipelineETAAvailable,
+					ReplayPipelineRebasePending:          snapshot.ReplayPipelineRebasePending,
+					ReplayPipelineRebasesStarted:         snapshot.ReplayPipelineRebasesStarted,
+					ReplayPipelineRebasesSucceeded:       snapshot.ReplayPipelineRebasesSucceeded,
+					ReplayPipelineRebasesFailed:          snapshot.ReplayPipelineRebasesFailed,
+					ReplayPipelineAncestryUnavailable:    snapshot.ReplayPipelineAncestryUnavailable,
 				}
 			}
 		}

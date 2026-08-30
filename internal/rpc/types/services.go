@@ -1311,6 +1311,18 @@ type FastSyncMetrics struct {
 	ReplayPipelineGeneration             uint64
 	ReplayPipelinePivotStateNodesPerSec  uint64
 	ReplayPipelineHeadBlockedUs          uint64
+	ReplayPipelineStrategy               string
+	ReplayPipelineDecisionReason         string
+	ReplayPipelineReplayRate             uint64
+	ReplayPipelineHeadRate               uint64
+	ReplayPipelineBacklog                uint32
+	ReplayPipelineETASeconds             uint64
+	ReplayPipelineETAAvailable           bool
+	ReplayPipelineRebasePending          bool
+	ReplayPipelineRebasesStarted         uint64
+	ReplayPipelineRebasesSucceeded       uint64
+	ReplayPipelineRebasesFailed          uint64
+	ReplayPipelineAncestryUnavailable    uint64
 }
 
 // SubmitResult contains the result of submitting a transaction.

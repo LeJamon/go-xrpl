@@ -1,6 +1,9 @@
 package shamap
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Family provides access to a persistent store for backed SHAMap instances.
 // Each SHAMap independently fetches and deserializes nodes from the Family,
@@ -12,6 +15,21 @@ type Family interface {
 
 	// StoreBatch persists a batch of serialized nodes.
 	StoreBatch(ctx context.Context, entries []FlushEntry) error
+}
+
+// PersistenceStats is an optional scalar-only view of an asynchronous Family.
+// It lets acquisition diagnostics expose backpressure without fetching nodes.
+type PersistenceStats struct {
+	CapacityBytes  int64
+	PendingBytes   int64
+	CurrentBytes   int64
+	PeakBytes      int64
+	QueueWaits     uint64
+	QueueWait      time.Duration
+	EntriesWritten uint64
+	BytesWritten   uint64
+	StoreLatency   time.Duration
+	StoreFailures  uint64
 }
 
 type fullBelowCacheProvider interface {

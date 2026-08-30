@@ -1236,3 +1236,155 @@ func TestClearThenStaleResultRetiresLaterPersistenceFailure(t *testing.T) {
 	router.handleAcquisitionWorkResult(acquisitionWorkResult{ledger: ledger})
 	require.NoError(t, scope.Flush(t.Context()))
 }
+
+type acquisitionStorePointerFamily struct {
+	*acquisitionStoreTestFamily
+	pointers      chan *byte
+	blockSecond   chan struct{}
+	secondStarted chan struct{}
+}
+
+func (f *acquisitionStorePointerFamily) StoreBatch(ctx context.Context, entries []shamap.FlushEntry) error {
+	f.mu.Lock()
+	call := len(f.calls)
+	f.mu.Unlock()
+	if len(entries) > 0 && len(entries[0].Data) > 0 {
+		f.pointers <- &entries[0].Data[0]
+	}
+	if call == 1 && f.blockSecond != nil {
+		close(f.secondStarted)
+		<-f.blockSecond
+	}
+	return f.acquisitionStoreTestFamily.StoreBatch(ctx, entries)
+}
+
+func TestAcquisitionStoreOwnedTransferAndDefensiveNormalPath(t *testing.T) {
+	base := &acquisitionStorePointerFamily{
+		acquisitionStoreTestFamily: newAcquisitionStoreTestFamily(),
+		pointers:                   make(chan *byte, 4),
+		blockSecond:                make(chan struct{}),
+		secondStarted:              make(chan struct{}),
+	}
+	lane := newAcquisitionStoreLane(base, slog.Default(), -1)
+	lane.start(t.Context())
+	defer lane.stopDrain()
+	scope := lane.scope().(*acquisitionStoreScope)
+
+	ownedData := make([]byte, 99)
+	ownedData[0] = 1
+	owned := shamap.FlushEntry{Hash: [32]byte{1}, Data: ownedData}
+	ownedEntries := []shamap.FlushEntry{owned}
+	require.NoError(t, scope.StoreBatchOwned(t.Context(), ownedEntries))
+	require.Equal(t, &ownedData[0], <-base.pointers)
+	require.NoError(t, scope.Flush(t.Context()))
+	require.Nil(t, ownedEntries[0].Data, "owned callers relinquish the buffer after persistence")
+
+	normalData := make([]byte, 100)
+	normalData[0] = 4
+	normal := shamap.FlushEntry{Hash: [32]byte{2}, Data: normalData}
+	require.NoError(t, scope.StoreBatch(t.Context(), []shamap.FlushEntry{normal}))
+	<-base.secondStarted
+	normalData[0] = 99
+	close(base.blockSecond)
+	require.NotEqual(t, &normalData[0], <-base.pointers)
+	require.NoError(t, scope.Flush(t.Context()))
+	stored, err := base.Fetch(t.Context(), normal.Hash)
+	require.NoError(t, err)
+	require.Equal(t, byte(4), stored[0], "ordinary StoreBatch remains defensive")
+}
+
+func TestAcquisitionStoreOwnedReplySplitsByNodeCountAndPreservesOrder(t *testing.T) {
+	base := newAcquisitionStoreTestFamily()
+	lane := newAcquisitionStoreLane(base, slog.Default(), -1)
+	lane.start(t.Context())
+	defer lane.stopDrain()
+	scope := lane.scope().(*acquisitionStoreScope)
+
+	entries := make([]shamap.FlushEntry, 513)
+	for i := range entries {
+		entries[i] = acquisitionEntry(byte(i))
+		entries[i].Hash[1] = byte(i >> 8)
+	}
+	require.NoError(t, scope.StoreBatchOwned(t.Context(), entries))
+	require.NoError(t, scope.Flush(t.Context()))
+
+	base.mu.Lock()
+	calls := append([][32]byte(nil), base.calls...)
+	base.mu.Unlock()
+	require.Equal(t, [][32]byte{entries[0].Hash, entries[512].Hash}, calls)
+	snapshot := lane.snapshot()
+	require.Equal(t, uint64(len(entries)), snapshot.EntriesWritten)
+	require.Zero(t, snapshot.CurrentBytes)
+}
+
+func TestAcquisitionStoreOwnedReplySplitsByBytes(t *testing.T) {
+	base := newAcquisitionStoreTestFamily()
+	lane := newAcquisitionStoreLane(base, slog.Default(), -1)
+	lane.start(t.Context())
+	defer lane.stopDrain()
+	scope := lane.scope().(*acquisitionStoreScope)
+
+	entries := make([]shamap.FlushEntry, 3)
+	for i := range entries {
+		entries[i] = acquisitionEntry(byte(i + 1))
+		entries[i].Data = make([]byte, 600<<10)
+	}
+	require.NoError(t, scope.StoreBatchOwned(t.Context(), entries))
+	require.NoError(t, scope.Flush(t.Context()))
+
+	base.mu.Lock()
+	calls := append([][32]byte(nil), base.calls...)
+	base.mu.Unlock()
+	require.Equal(t, [][32]byte{entries[0].Hash, entries[1].Hash, entries[2].Hash}, calls)
+	require.Equal(t, uint64(3), lane.snapshot().EntriesWritten)
+}
+
+func TestAcquisitionStoreOwnedOversizedAdmissionAndRetirement(t *testing.T) {
+	base := newAcquisitionStoreTestFamily()
+	base.blockFirst = make(chan struct{})
+	lane := newAcquisitionStoreLane(base, slog.Default(), -1)
+	lane.start(t.Context())
+	defer lane.stopDrain()
+
+	first := lane.scope().(*acquisitionStoreScope)
+	second := lane.scope().(*acquisitionStoreScope)
+	oversized := acquisitionEntry(11)
+	oversized.Data = make([]byte, int(acquisitionStoreQueueBytes)+1)
+	require.NoError(t, first.StoreBatchOwned(t.Context(), []shamap.FlushEntry{oversized}))
+	require.Equal(t, oversized.Hash, <-base.started)
+	require.Greater(t, lane.snapshot().CurrentBytes, acquisitionStoreQueueBytes)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	small := acquisitionEntry(12)
+	smallEntries := []shamap.FlushEntry{small}
+	done := make(chan error, 1)
+	go func() { done <- second.StoreBatchOwned(ctx, smallEntries) }()
+	require.Eventually(t, func() bool {
+		lane.queueMu.Lock()
+		defer lane.queueMu.Unlock()
+		return len(lane.waiters) > 0
+	}, time.Second, time.Millisecond)
+	require.NoError(t, second.Retire(t.Context()))
+	require.ErrorContains(t, <-done, "scope retired")
+	require.Nil(t, smallEntries[0].Data)
+
+	close(base.blockFirst)
+	require.NoError(t, first.Flush(t.Context()))
+	require.Zero(t, lane.snapshot().CurrentBytes)
+}
+
+func TestAcquisitionStoreOwnedFailureConsumesBuffers(t *testing.T) {
+	base := newAcquisitionStoreTestFamily()
+	base.failFirst = true
+	lane := newAcquisitionStoreLane(base, slog.Default(), -1)
+	lane.start(t.Context())
+	defer lane.stopDrain()
+	scope := lane.scope().(*acquisitionStoreScope)
+
+	entries := []shamap.FlushEntry{acquisitionEntry(13)}
+	require.NoError(t, scope.StoreBatchOwned(t.Context(), entries))
+	require.EqualError(t, scope.Flush(t.Context()), "store failed")
+	require.Nil(t, entries[0].Data)
+	require.Equal(t, uint64(1), lane.snapshot().StoreFailures)
+}

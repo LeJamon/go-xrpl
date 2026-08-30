@@ -1521,10 +1521,12 @@ func (r *Router) requestLedgerBase(il *inbound.Ledger, peerID uint64, logMessage
 
 func (r *Router) requestLedgerBaseFromPeer(il *inbound.Ledger, peerID uint64, logMessage string) bool {
 	il.AddPeer(peerID)
+	requestID := il.RecordRequestStart(peerID, 1, 0, inbound.AcquisitionRequestBase, false, time.Now())
 	err := r.acquisition.RequestLedgerBaseFromPeer(peerID, il.Hash(), il.Seq(), il.Timeouts() > 0)
 	if err == nil {
 		return true
 	}
+	il.RecordRequestSendFailure(peerID, requestID)
 	r.logger.Warn(logMessage, "error", err, "peer", peerID)
 	if !isAcquisitionDisconnectError(err) {
 		return true
@@ -1820,6 +1822,23 @@ func (r *Router) FastSyncMetrics() FastSyncMetrics {
 	generation := r.standardReplay.generation
 	pivotHash := r.standardReplay.pivotHash
 	pivotStartedAt := r.standardReplay.pivotStartedAt
+	strategy := r.standardReplay.strategy
+	decisionReason := r.standardReplay.decisionReason
+	replayRate := uint64(0)
+	if r.standardReplay.replayRate > 0 {
+		replayRate = uint64(r.standardReplay.replayRate)
+	}
+	headRate := uint64(0)
+	if r.standardReplay.headRate > 0 {
+		headRate = uint64(r.standardReplay.headRate)
+	}
+	backlog := r.standardReplay.backlog
+	etaSeconds := uint64(0)
+	if r.standardReplay.eta > 0 {
+		etaSeconds = uint64(r.standardReplay.eta / time.Second)
+	}
+	etaAvailable := r.standardReplay.etaAvailable
+	rebasePending := r.standardReplay.rebasePending
 	r.acquisitionMu.Unlock()
 	pivotStateRate := uint64(0)
 	if pivot := r.fetchTracker.Find(pivotHash); pivot != nil && !pivotStartedAt.IsZero() {
@@ -1864,6 +1883,18 @@ func (r *Router) FastSyncMetrics() FastSyncMetrics {
 		ReplayPipelineHeadSeq:                headSeq,
 		ReplayPipelineTargetSeq:              targetSeq,
 		ReplayPipelineHeadBlockedUs:          blockedUs,
+		ReplayPipelineStrategy:               strategy,
+		ReplayPipelineDecisionReason:         decisionReason,
+		ReplayPipelineReplayRate:             replayRate,
+		ReplayPipelineHeadRate:               headRate,
+		ReplayPipelineBacklog:                backlog,
+		ReplayPipelineETASeconds:             etaSeconds,
+		ReplayPipelineETAAvailable:           etaAvailable,
+		ReplayPipelineRebasePending:          rebasePending,
+		ReplayPipelineRebasesStarted:         r.replayPipelineRebasesStarted.Load(),
+		ReplayPipelineRebasesSucceeded:       r.replayPipelineRebasesSucceeded.Load(),
+		ReplayPipelineRebasesFailed:          r.replayPipelineRebasesFailed.Load(),
+		ReplayPipelineAncestryUnavailable:    r.replayPipelineAncestryUnavailable.Load(),
 	}
 }
 
@@ -2782,7 +2813,10 @@ func (r *Router) ourLCLMatchesPeers() bool {
 }
 
 func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) bool {
+	receivedAt := time.Now()
+	decodeStarted := time.Now()
 	decoded, err := message.Decode(message.TypeLedgerData, msg.Payload)
+	decodeDuration := time.Since(decodeStarted)
 	if err != nil {
 		r.logger.Warn("failed to decode ledger_data", "error", err, "peer", msg.PeerID)
 		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-decode")
@@ -2880,7 +2914,8 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) bool {
 	}
 
 	if il != nil {
-		if consumed, transferred := r.handleInboundLedgerDataOwned(il, ld, uint64(msg.PeerID), msg); consumed {
+		il.RecordDecodeDuration(decodeDuration)
+		if consumed, transferred := r.handleInboundLedgerDataOwned(il, ld, uint64(msg.PeerID), msg, receivedAt); consumed {
 			return transferred
 		}
 	}
@@ -2908,7 +2943,7 @@ func (r *Router) cacheStaleStateNodes(ld *message.LedgerData) {
 // acquisition (already matched by hash in handleLedgerData). Returns true if
 // the data was consumed by the acquisition.
 func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerData, peerID uint64) bool {
-	consumed, _ := r.handleInboundLedgerDataOwned(il, ld, peerID, nil)
+	consumed, _ := r.handleInboundLedgerDataOwned(il, ld, peerID, nil, time.Now())
 	return consumed
 }
 
@@ -2917,20 +2952,29 @@ func (r *Router) handleInboundLedgerDataOwned(
 	ld *message.LedgerData,
 	peerID uint64,
 	owner *peermanagement.InboundMessage,
+	receivedAt time.Time,
 ) (bool, bool) {
 	if il == nil {
 		return false, false
 	}
 	if lane := r.currentAcquisitionWork(); lane != nil {
+		wireBytes := 0
+		payloadBytes := 0
+		if owner != nil {
+			wireBytes = int(owner.WireSize)
+			payloadBytes = len(owner.Payload)
+		}
 		switch ld.InfoType {
 		case message.LedgerInfoBase, message.LedgerInfoAsNode, message.LedgerInfoTxNode:
 			if lane.submit(il, acquisitionWorkEvent{
 				kind: acquisitionWorkData, data: ld, owner: owner, peerID: peerID,
+				receivedAt: receivedAt, wireBytes: wireBytes, payloadBytes: payloadBytes,
 			}) {
 				return true, owner != nil
 			}
 			r.logger.Warn("inbound ledger reply deferred: acquisition worker saturated",
 				"peer", peerID, "seq", il.Seq(), "info_type", ld.InfoType)
+			il.RecordWorkerSaturation()
 			return true, false
 		}
 	}

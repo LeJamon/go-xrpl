@@ -161,6 +161,7 @@ func (e *Event) inboundMessage() *InboundMessage {
 		PeerID:        e.PeerID,
 		Type:          e.MessageType,
 		Payload:       e.Payload,
+		WireSize:      e.WireSize,
 		ManifestFrame: e.ManifestFrame,
 		reservation:   e.reservation,
 		charge:        e.charge,
@@ -184,6 +185,7 @@ func (e *Event) retainedInboundMessage() *InboundMessage {
 		PeerID:        e.PeerID,
 		Type:          e.MessageType,
 		Payload:       e.Payload,
+		WireSize:      e.WireSize,
 		ManifestFrame: e.ManifestFrame,
 		reservation:   e.reservation.retain(),
 	}
@@ -200,6 +202,9 @@ type InboundMessage struct {
 
 	// Payload is the raw message payload.
 	Payload []byte
+
+	// WireSize is the compressed on-wire payload size, excluding its header.
+	WireSize uint64
 
 	// ManifestFrame carries an oversized manifest payload spooled to disk.
 	ManifestFrame *ManifestFrame
