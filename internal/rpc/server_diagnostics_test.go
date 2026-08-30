@@ -151,6 +151,18 @@ func TestServerDiagnosticsWireShape(t *testing.T) {
 				"replay_pipeline_generation":                     "43",
 				"replay_pipeline_pivot_state_nodes_per_sec":      "44",
 				"replay_pipeline_backpressure_events":            "45",
+				"replay_pipeline_strategy":                       "",
+				"replay_pipeline_decision_reason":                "",
+				"replay_pipeline_replay_rate":                    "0",
+				"replay_pipeline_head_rate":                      "0",
+				"replay_pipeline_backlog":                        "0",
+				"replay_pipeline_eta_seconds":                    "0",
+				"replay_pipeline_eta_available":                  false,
+				"replay_pipeline_rebase_pending":                 false,
+				"replay_pipeline_rebases_started":                "0",
+				"replay_pipeline_rebases_succeeded":              "0",
+				"replay_pipeline_rebases_failed":                 "0",
+				"replay_pipeline_ancestry_unavailable":           "0",
 			}
 			if !reflect.DeepEqual(fastSync, wantFastSync) {
 				t.Fatalf("fast_sync = %#v, want %#v", fastSync, wantFastSync)

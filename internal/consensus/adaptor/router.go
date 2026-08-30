@@ -89,6 +89,18 @@ type FastSyncMetrics struct {
 	ReplayPipelineHeadSeq                uint32
 	ReplayPipelineTargetSeq              uint32
 	ReplayPipelineHeadBlockedUs          uint64
+	ReplayPipelineStrategy               string
+	ReplayPipelineDecisionReason         string
+	ReplayPipelineReplayRate             uint64
+	ReplayPipelineHeadRate               uint64
+	ReplayPipelineBacklog                uint32
+	ReplayPipelineETASeconds             uint64
+	ReplayPipelineETAAvailable           bool
+	ReplayPipelineRebasePending          bool
+	ReplayPipelineRebasesStarted         uint64
+	ReplayPipelineRebasesSucceeded       uint64
+	ReplayPipelineRebasesFailed          uint64
+	ReplayPipelineAncestryUnavailable    uint64
 }
 
 type peerBootstrapAcknowledger interface {
@@ -324,6 +336,10 @@ type Router struct {
 	replayPipelineReadyWaitUs            atomic.Uint64
 	replayPipelineApplyUs                atomic.Uint64
 	replayPipelinePersistUs              atomic.Uint64
+	replayPipelineRebasesStarted         atomic.Uint64
+	replayPipelineRebasesSucceeded       atomic.Uint64
+	replayPipelineRebasesFailed          atomic.Uint64
+	replayPipelineAncestryUnavailable    atomic.Uint64
 
 	acquisitionMu     sync.Mutex
 	replayCommitMu    sync.Mutex

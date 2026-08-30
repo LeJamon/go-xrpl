@@ -16,36 +16,53 @@ import (
 const (
 	standardReplayPipelineWindow = 8
 	standardReplayPreparedLimit  = 2048
-	standardReplayProgressWindow = time.Minute
+	// Replay convergence is sampled at batch boundaries. A short interval
+	// keeps a stalled session responsive while the two-window hysteresis below
+	// prevents a transient slow batch from causing a rebase.
+	standardReplayProgressWindow = 5 * time.Second
 	standardReplayStallWindows   = 2
 	standardReplayApplyBatch     = 8
 	standardReplayApplyBudget    = 25 * time.Millisecond
 )
 
 type standardReplayPipeline struct {
-	generation        uint64
-	active            bool
-	applying          bool
-	pivotReady        bool
-	initialCandidate  bool
-	pivotSeq          uint32
-	pivotHash         [32]byte
-	anchorSeq         uint32
-	anchorHash        [32]byte
-	collectSeq        uint32
-	collectHash       [32]byte
-	targetSeq         uint32
-	targetHash        [32]byte
-	entries           map[uint32]*standardReplayEntry
-	headBlockedAt     time.Time
-	pivotStartedAt    time.Time
-	progressSampleAt  time.Time
-	sampleAnchorSeq   uint32
-	stalledSamples    uint8
-	retargetAttemptAt time.Time
-	backpressured     bool
-	baseLedger        *inbound.Ledger
-	baseRelease       func()
+	generation         uint64
+	active             bool
+	applying           bool
+	pivotReady         bool
+	initialCandidate   bool
+	pivotSeq           uint32
+	pivotHash          [32]byte
+	anchorSeq          uint32
+	anchorHash         [32]byte
+	collectSeq         uint32
+	collectHash        [32]byte
+	targetSeq          uint32
+	targetHash         [32]byte
+	entries            map[uint32]*standardReplayEntry
+	headBlockedAt      time.Time
+	pivotStartedAt     time.Time
+	progressSampleAt   time.Time
+	sampleAnchorSeq    uint32
+	sampleTargetSeq    uint32
+	stalledSamples     uint8
+	retargetAttemptAt  time.Time
+	backpressured      bool
+	rebasePending      bool
+	rebaseGeneration   uint64
+	rebaseAnchorSeq    uint32
+	rebaseTargetSeq    uint32
+	rebaseTargetHash   [32]byte
+	ancestryGeneration uint64
+	replayRate         float64
+	headRate           float64
+	backlog            uint32
+	eta                time.Duration
+	etaAvailable       bool
+	strategy           string
+	decisionReason     string
+	baseLedger         *inbound.Ledger
+	baseRelease        func()
 }
 
 type standardReplayIdentity struct {
@@ -64,8 +81,179 @@ type standardReplayIdentity struct {
 }
 
 type standardReplayTarget struct {
-	seq  uint32
-	hash [32]byte
+	seq    uint32
+	hash   [32]byte
+	peerID uint64
+	source catchupTargetSource
+}
+
+type replayConvergenceSample struct {
+	generation uint64
+	anchorSeq  uint32
+	targetSeq  uint32
+	at         time.Time
+}
+
+type replayConvergenceObservation struct {
+	valid        bool
+	deltaAnchor  uint32
+	deltaTarget  uint32
+	replayRate   float64
+	headRate     float64
+	backlog      uint32
+	eta          time.Duration
+	etaAvailable bool
+	nonShrinking bool
+}
+
+// sampleReplayConvergence compares two monotonic replay snapshots. It is
+// deliberately pure so the policy can be tested without a live router or
+// clock. A backwards counter or non-positive interval invalidates the sample
+// rather than producing a wrapped rate.
+func sampleReplayConvergence(previous, current replayConvergenceSample) replayConvergenceObservation {
+	if previous.generation != current.generation ||
+		previous.at.IsZero() || current.at.IsZero() {
+		return replayConvergenceObservation{}
+	}
+	duration := current.at.Sub(previous.at)
+	if duration <= 0 || current.anchorSeq < previous.anchorSeq || current.targetSeq < previous.targetSeq {
+		return replayConvergenceObservation{}
+	}
+
+	deltaAnchor := current.anchorSeq - previous.anchorSeq
+	deltaTarget := current.targetSeq - previous.targetSeq
+	seconds := duration.Seconds()
+	if seconds <= 0 {
+		return replayConvergenceObservation{}
+	}
+	replayRate := float64(deltaAnchor) / seconds
+	headRate := float64(deltaTarget) / seconds
+	backlog := uint32(0)
+	if current.targetSeq >= current.anchorSeq {
+		backlog = current.targetSeq - current.anchorSeq
+	}
+	eta, etaAvailable := replayConvergenceETA(backlog, replayRate, headRate)
+	return replayConvergenceObservation{
+		valid:        true,
+		deltaAnchor:  deltaAnchor,
+		deltaTarget:  deltaTarget,
+		replayRate:   replayRate,
+		headRate:     headRate,
+		backlog:      backlog,
+		eta:          eta,
+		etaAvailable: etaAvailable,
+		nonShrinking: deltaAnchor <= deltaTarget,
+	}
+}
+
+func replayConvergenceETA(backlog uint32, replayRate, headRate float64) (time.Duration, bool) {
+	netRate := replayRate - headRate
+	if netRate <= 0 {
+		return 0, false
+	}
+	if backlog == 0 {
+		return 0, true
+	}
+	seconds := float64(backlog) / netRate
+	if seconds <= 0 || seconds > float64((1<<63-1))/float64(time.Second) {
+		return 0, false
+	}
+	return time.Duration(seconds * float64(time.Second)), true
+}
+
+func (r *Router) trustedReplayTarget() standardReplayTarget {
+	r.catchupMu.Lock()
+	defer r.catchupMu.Unlock()
+	if r.catchup.source != catchupSourceQuorum || r.catchup.hash == ([32]byte{}) {
+		return standardReplayTarget{}
+	}
+	return standardReplayTarget{seq: r.catchup.seq, hash: r.catchup.hash, peerID: r.catchup.peerID, source: r.catchup.source}
+}
+
+// evaluateStandardReplayConvergence records a replay/head-rate observation.
+// It is called at replay batch boundaries; maintenance calls it only as a
+// safety net for a session whose drain has already yielded.
+func (r *Router) evaluateStandardReplayConvergence(now time.Time) {
+	target := r.trustedReplayTarget()
+	trustedTarget := target.source == catchupSourceQuorum
+	r.acquisitionMu.Lock()
+	defer r.acquisitionMu.Unlock()
+	if target.seq == 0 {
+		target = standardReplayTarget{
+			seq:  r.standardReplay.targetSeq,
+			hash: r.standardReplay.targetHash,
+		}
+	}
+	if !r.standardReplay.active || !r.standardReplay.pivotReady || target.seq == 0 {
+		return
+	}
+	if target.seq < r.standardReplay.anchorSeq {
+		return
+	}
+	if target.seq == r.standardReplay.anchorSeq {
+		r.standardReplay.backlog = 0
+		r.standardReplay.eta = 0
+		r.standardReplay.etaAvailable = false
+		r.standardReplay.stalledSamples = 0
+		r.standardReplay.rebasePending = false
+		return
+	}
+	current := replayConvergenceSample{
+		generation: r.standardReplay.generation,
+		anchorSeq:  r.standardReplay.anchorSeq,
+		targetSeq:  target.seq,
+		at:         now,
+	}
+	if r.standardReplay.progressSampleAt.IsZero() {
+		r.standardReplay.progressSampleAt = now
+		r.standardReplay.sampleAnchorSeq = current.anchorSeq
+		r.standardReplay.sampleTargetSeq = current.targetSeq
+		return
+	}
+	if now.Sub(r.standardReplay.progressSampleAt) < standardReplayProgressWindow {
+		return
+	}
+	if r.standardReplay.sampleTargetSeq == 0 {
+		r.standardReplay.sampleTargetSeq = current.targetSeq
+	}
+	previous := replayConvergenceSample{
+		generation: r.standardReplay.generation,
+		anchorSeq:  r.standardReplay.sampleAnchorSeq,
+		targetSeq:  r.standardReplay.sampleTargetSeq,
+		at:         r.standardReplay.progressSampleAt,
+	}
+	observation := sampleReplayConvergence(previous, current)
+	r.standardReplay.progressSampleAt = now
+	r.standardReplay.sampleAnchorSeq = current.anchorSeq
+	r.standardReplay.sampleTargetSeq = current.targetSeq
+	if !observation.valid {
+		r.standardReplay.stalledSamples = 0
+		r.standardReplay.decisionReason = "replay_observation_invalid"
+		return
+	}
+	r.standardReplay.replayRate = observation.replayRate
+	r.standardReplay.headRate = observation.headRate
+	r.standardReplay.backlog = observation.backlog
+	r.standardReplay.eta = observation.eta
+	r.standardReplay.etaAvailable = observation.etaAvailable
+	if observation.nonShrinking {
+		if r.standardReplay.stalledSamples < ^uint8(0) {
+			r.standardReplay.stalledSamples++
+		}
+		r.standardReplay.decisionReason = "replay_nonconverging_observed"
+	} else {
+		r.standardReplay.stalledSamples = 0
+		r.standardReplay.retargetAttemptAt = time.Time{}
+		r.standardReplay.decisionReason = "replay_converging"
+	}
+	if trustedTarget && r.standardReplay.stalledSamples >= standardReplayStallWindows && !r.standardReplay.rebasePending {
+		r.standardReplay.rebasePending = true
+		r.standardReplay.rebaseGeneration = r.standardReplay.generation
+		r.standardReplay.rebaseAnchorSeq = r.standardReplay.anchorSeq
+		r.standardReplay.rebaseTargetSeq = target.seq
+		r.standardReplay.rebaseTargetHash = target.hash
+		r.standardReplay.decisionReason = "replay_nonconverging"
+	}
 }
 
 type standardReplayEntry struct {
@@ -298,7 +486,21 @@ func (r *Router) tryArmStandardReplayPipeline(
 		r.standardReplay.entries = make(map[uint32]*standardReplayEntry, standardReplayPreparedLimit)
 		r.standardReplay.progressSampleAt = time.Now()
 		r.standardReplay.sampleAnchorSeq = anchor.Sequence()
+		r.standardReplay.sampleTargetSeq = targetSeq
 		r.standardReplay.stalledSamples = 0
+		r.standardReplay.rebasePending = false
+		r.standardReplay.rebaseGeneration = 0
+		r.standardReplay.rebaseAnchorSeq = 0
+		r.standardReplay.rebaseTargetSeq = 0
+		r.standardReplay.rebaseTargetHash = [32]byte{}
+		r.standardReplay.ancestryGeneration = 0
+		r.standardReplay.replayRate = 0
+		r.standardReplay.headRate = 0
+		r.standardReplay.backlog = 0
+		r.standardReplay.eta = 0
+		r.standardReplay.etaAvailable = false
+		r.standardReplay.strategy = "replay"
+		r.standardReplay.decisionReason = "replay_started"
 		r.standardReplay.backpressured = false
 	}
 	if targetSeq > r.standardReplay.targetSeq ||
@@ -478,9 +680,23 @@ func (r *Router) cancelStandardReplayPipelineLocked() standardReplayRetirement {
 	r.standardReplay.pivotStartedAt = time.Time{}
 	r.standardReplay.progressSampleAt = time.Time{}
 	r.standardReplay.sampleAnchorSeq = 0
+	r.standardReplay.sampleTargetSeq = 0
 	r.standardReplay.stalledSamples = 0
 	r.standardReplay.retargetAttemptAt = time.Time{}
 	r.standardReplay.backpressured = false
+	r.standardReplay.rebasePending = false
+	r.standardReplay.rebaseGeneration = 0
+	r.standardReplay.rebaseAnchorSeq = 0
+	r.standardReplay.rebaseTargetSeq = 0
+	r.standardReplay.rebaseTargetHash = [32]byte{}
+	r.standardReplay.ancestryGeneration = 0
+	r.standardReplay.replayRate = 0
+	r.standardReplay.headRate = 0
+	r.standardReplay.backlog = 0
+	r.standardReplay.eta = 0
+	r.standardReplay.etaAvailable = false
+	r.standardReplay.strategy = ""
+	r.standardReplay.decisionReason = ""
 	baseLedger := r.standardReplay.baseLedger
 	r.standardReplay.baseLedger = nil
 	release := r.standardReplay.baseRelease
@@ -657,6 +873,30 @@ func (r *Router) updateStandardReplayHeadBlockLocked(now time.Time) {
 	r.standardReplay.headBlockedAt = time.Time{}
 }
 
+func (r *Router) consumePendingReplayRebaseAfterCommit(now time.Time) bool {
+	r.replayCommitMu.Lock()
+	r.acquisitionMu.Lock()
+	if !r.standardReplay.active || !r.standardReplay.pivotReady || !r.standardReplay.rebasePending ||
+		r.standardReplay.rebaseGeneration != r.standardReplay.generation {
+		r.acquisitionMu.Unlock()
+		r.replayCommitMu.Unlock()
+		return false
+	}
+	generation := r.standardReplay.rebaseGeneration
+	frontierSeq := r.standardReplay.rebaseAnchorSeq
+	pivotSeq := r.standardReplay.pivotSeq
+	r.acquisitionMu.Unlock()
+	r.replayCommitMu.Unlock()
+	return r.retargetFrozenPivotWithApplying(
+		generation,
+		frontierSeq,
+		pivotSeq,
+		frozenPivotRetargetConvergence,
+		now,
+		true,
+	)
+}
+
 func (r *Router) scheduleStandardReplayDrain() {
 	select {
 	case r.standardReplayDrainWake <- struct{}{}:
@@ -771,6 +1011,9 @@ func (r *Router) drainStandardReplayPipeline() {
 			r.standardReplay.entries = nil
 			r.standardReplay.headBlockedAt = time.Time{}
 			r.standardReplay.backpressured = false
+			r.standardReplay.rebasePending = false
+			r.standardReplay.strategy = "complete"
+			r.standardReplay.decisionReason = "replay_complete"
 			r.releaseStandardReplayBaseLocked()
 		}
 		active := r.standardReplay.active
@@ -783,6 +1026,13 @@ func (r *Router) drainStandardReplayPipeline() {
 		}
 		applied++
 		if active && (applied >= standardReplayApplyBatch || time.Since(batchStarted) >= standardReplayApplyBudget) {
+			// Convergence is evaluated at the same boundary that yields the
+			// applier. The commit lock has already been released, so a pending
+			// rebase can only replace this generation between ledger commits.
+			r.evaluateStandardReplayConvergence(time.Now())
+			if r.consumePendingReplayRebaseAfterCommit(time.Now()) {
+				return
+			}
 			// Keep applying set while the edge-triggered wake is pending. A
 			// completion that lands before the wake is consumed joins this same
 			// drain instead of starting a concurrent applier.

@@ -1820,6 +1820,23 @@ func (r *Router) FastSyncMetrics() FastSyncMetrics {
 	generation := r.standardReplay.generation
 	pivotHash := r.standardReplay.pivotHash
 	pivotStartedAt := r.standardReplay.pivotStartedAt
+	strategy := r.standardReplay.strategy
+	decisionReason := r.standardReplay.decisionReason
+	replayRate := uint64(0)
+	if r.standardReplay.replayRate > 0 {
+		replayRate = uint64(r.standardReplay.replayRate)
+	}
+	headRate := uint64(0)
+	if r.standardReplay.headRate > 0 {
+		headRate = uint64(r.standardReplay.headRate)
+	}
+	backlog := r.standardReplay.backlog
+	etaSeconds := uint64(0)
+	if r.standardReplay.eta > 0 {
+		etaSeconds = uint64(r.standardReplay.eta / time.Second)
+	}
+	etaAvailable := r.standardReplay.etaAvailable
+	rebasePending := r.standardReplay.rebasePending
 	r.acquisitionMu.Unlock()
 	pivotStateRate := uint64(0)
 	if pivot := r.fetchTracker.Find(pivotHash); pivot != nil && !pivotStartedAt.IsZero() {
@@ -1864,6 +1881,18 @@ func (r *Router) FastSyncMetrics() FastSyncMetrics {
 		ReplayPipelineHeadSeq:                headSeq,
 		ReplayPipelineTargetSeq:              targetSeq,
 		ReplayPipelineHeadBlockedUs:          blockedUs,
+		ReplayPipelineStrategy:               strategy,
+		ReplayPipelineDecisionReason:         decisionReason,
+		ReplayPipelineReplayRate:             replayRate,
+		ReplayPipelineHeadRate:               headRate,
+		ReplayPipelineBacklog:                backlog,
+		ReplayPipelineETASeconds:             etaSeconds,
+		ReplayPipelineETAAvailable:           etaAvailable,
+		ReplayPipelineRebasePending:          rebasePending,
+		ReplayPipelineRebasesStarted:         r.replayPipelineRebasesStarted.Load(),
+		ReplayPipelineRebasesSucceeded:       r.replayPipelineRebasesSucceeded.Load(),
+		ReplayPipelineRebasesFailed:          r.replayPipelineRebasesFailed.Load(),
+		ReplayPipelineAncestryUnavailable:    r.replayPipelineAncestryUnavailable.Load(),
 	}
 }
 

@@ -263,6 +263,18 @@ func addServerDiagnostics(info map[string]any, services *types.ServiceGraph) {
 			"replay_pipeline_generation":                     strconv.FormatUint(metrics.ReplayPipelineGeneration, 10),
 			"replay_pipeline_pivot_state_nodes_per_sec":      strconv.FormatUint(metrics.ReplayPipelinePivotStateNodesPerSec, 10),
 			"replay_pipeline_head_blocked_us":                strconv.FormatUint(metrics.ReplayPipelineHeadBlockedUs, 10),
+			"replay_pipeline_strategy":                       metrics.ReplayPipelineStrategy,
+			"replay_pipeline_decision_reason":                metrics.ReplayPipelineDecisionReason,
+			"replay_pipeline_replay_rate":                    strconv.FormatUint(metrics.ReplayPipelineReplayRate, 10),
+			"replay_pipeline_head_rate":                      strconv.FormatUint(metrics.ReplayPipelineHeadRate, 10),
+			"replay_pipeline_backlog":                        strconv.FormatUint(uint64(metrics.ReplayPipelineBacklog), 10),
+			"replay_pipeline_eta_seconds":                    strconv.FormatUint(metrics.ReplayPipelineETASeconds, 10),
+			"replay_pipeline_eta_available":                  metrics.ReplayPipelineETAAvailable,
+			"replay_pipeline_rebase_pending":                 metrics.ReplayPipelineRebasePending,
+			"replay_pipeline_rebases_started":                strconv.FormatUint(metrics.ReplayPipelineRebasesStarted, 10),
+			"replay_pipeline_rebases_succeeded":              strconv.FormatUint(metrics.ReplayPipelineRebasesSucceeded, 10),
+			"replay_pipeline_rebases_failed":                 strconv.FormatUint(metrics.ReplayPipelineRebasesFailed, 10),
+			"replay_pipeline_ancestry_unavailable":           strconv.FormatUint(metrics.ReplayPipelineAncestryUnavailable, 10),
 		}
 	}
 	info["counters"] = counters
