@@ -183,6 +183,10 @@ func (s *acquisitionStoreScope) FullBelowCache() *shamap.FullBelowCache {
 	return s.lane.FullBelowCache()
 }
 
+func (s *acquisitionStoreScope) PersistenceStats() shamap.PersistenceStats {
+	return s.lane.PersistenceStats()
+}
+
 func (s *acquisitionStoreScope) recordFailure(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -291,6 +295,17 @@ func newAcquisitionStoreLane(base shamap.Family, logger *slog.Logger, queueDepth
 
 func (l *acquisitionStoreLane) FullBelowCache() *shamap.FullBelowCache {
 	return l.fullBelow
+}
+
+func (l *acquisitionStoreLane) PersistenceStats() shamap.PersistenceStats {
+	snapshot := l.snapshot()
+	return shamap.PersistenceStats{
+		CapacityBytes: acquisitionStoreQueueBytes, PendingBytes: snapshot.PendingBytes,
+		CurrentBytes: snapshot.CurrentBytes, PeakBytes: snapshot.PeakBytes,
+		QueueWaits: snapshot.QueueWaits, QueueWait: snapshot.QueueWait,
+		EntriesWritten: snapshot.EntriesWritten, BytesWritten: snapshot.BytesWritten,
+		StoreLatency: snapshot.StoreLatency, StoreFailures: snapshot.StoreFailures,
+	}
 }
 
 func (l *acquisitionStoreLane) scope() shamap.Family {

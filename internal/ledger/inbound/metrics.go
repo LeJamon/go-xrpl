@@ -7,6 +7,8 @@ package inbound
 import (
 	"sort"
 	"time"
+
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 const (
@@ -175,6 +177,7 @@ type AcquisitionDiagnostics struct {
 	FrontierWalkMax    time.Duration
 	RequestRefillTotal time.Duration
 	RequestRefillMax   time.Duration
+	Persistence        shamap.PersistenceStats
 	LimitingStage      string
 	Peers              []PeerDiagnostics
 }
@@ -404,6 +407,14 @@ func (l *Ledger) diagnosticsSnapshotLocked(now time.Time) AcquisitionDiagnostics
 		RequestRefillMax:   l.diagnostics.refillMax,
 		LimitingStage:      l.diagnostics.stage,
 		Peers:              make([]PeerDiagnostics, 0, len(l.diagnostics.peers)),
+	}
+	if provider, ok := l.family.(interface {
+		PersistenceStats() shamap.PersistenceStats
+	}); ok {
+		d.Persistence = provider.PersistenceStats()
+		if d.Persistence.CurrentBytes >= d.Persistence.CapacityBytes && d.Persistence.CapacityBytes > 0 {
+			d.LimitingStage = "persistence"
+		}
 	}
 	for _, request := range l.diagnostics.outstanding {
 		d.OutstandingNodes += request.requestedNodes

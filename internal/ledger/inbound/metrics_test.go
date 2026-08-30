@@ -1,12 +1,30 @@
 package inbound
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type diagnosticsPersistenceFamily struct {
+	stats shamap.PersistenceStats
+}
+
+func (f diagnosticsPersistenceFamily) Fetch(context.Context, [32]byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (f diagnosticsPersistenceFamily) StoreBatch(context.Context, []shamap.FlushEntry) error {
+	return nil
+}
+
+func (f diagnosticsPersistenceFamily) PersistenceStats() shamap.PersistenceStats {
+	return f.stats
+}
 
 func TestAcquisitionDiagnosticsCorrelateRequestReplyAndRefill(t *testing.T) {
 	now := time.Now()
@@ -94,4 +112,19 @@ func TestAcquisitionJSONIncludesNestedDiagnostics(t *testing.T) {
 	peers, ok := diagnostics["peers"].([]any)
 	require.True(t, ok)
 	require.Len(t, peers, 1)
+}
+
+func TestAcquisitionDiagnosticsExposePersistencePressure(t *testing.T) {
+	family := diagnosticsPersistenceFamily{stats: shamap.PersistenceStats{
+		CapacityBytes: 32 << 20, CurrentBytes: 32 << 20, PendingBytes: 24 << 20,
+		PeakBytes: 32 << 20, QueueWaits: 3, QueueWait: 25 * time.Millisecond,
+	}}
+	ledger := New([32]byte{5}, 14, 9, nil, WithFamily(family))
+
+	snap := ledger.Snapshot()
+	assert.Equal(t, "persistence", snap.Diagnostics.LimitingStage)
+	assert.Equal(t, int64(24<<20), snap.Diagnostics.Persistence.PendingBytes)
+	diagnostics := AcquisitionJSON(snap)["diagnostics"].(map[string]any)
+	assert.Equal(t, int64(32<<20), diagnostics["persistence_capacity_bytes"])
+	assert.Equal(t, uint64(3), diagnostics["persistence_queue_waits_total"])
 }
