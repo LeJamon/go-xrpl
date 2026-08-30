@@ -85,6 +85,10 @@ type FastSyncMetrics struct {
 	ReplayPipelinePreparedTailSeq        uint32
 	ReplayPipelineTrustedHeadSeq         uint32
 	ReplayPipelineGeneration             uint64
+	ReplayPipelinePivotNodesExamined     uint64
+	ReplayPipelinePivotEqualSubtrees     uint64
+	ReplayPipelinePivotMissingNodes      uint64
+	ReplayPipelinePivotStateDownloaded   uint64
 	ReplayPipelinePivotStateNodesPerSec  uint64
 	ReplayPipelineHeadSeq                uint32
 	ReplayPipelineTargetSeq              uint32

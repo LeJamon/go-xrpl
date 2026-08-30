@@ -77,6 +77,10 @@ func TestServerDiagnosticsWireShape(t *testing.T) {
 			ReplayPipelineGeneration:             43,
 			ReplayPipelinePivotStateNodesPerSec:  44,
 			ReplayPipelineBackpressureEvents:     45,
+			ReplayPipelinePivotNodesExamined:     46,
+			ReplayPipelinePivotEqualSubtrees:     47,
+			ReplayPipelinePivotMissingNodes:      48,
+			ReplayPipelinePivotStateDownloaded:   49,
 		}
 	}
 
@@ -151,6 +155,10 @@ func TestServerDiagnosticsWireShape(t *testing.T) {
 				"replay_pipeline_generation":                     "43",
 				"replay_pipeline_pivot_state_nodes_per_sec":      "44",
 				"replay_pipeline_backpressure_events":            "45",
+				"replay_pipeline_pivot_nodes_examined":           "46",
+				"replay_pipeline_pivot_equal_subtrees_skipped":   "47",
+				"replay_pipeline_pivot_missing_nodes_found":      "48",
+				"replay_pipeline_pivot_state_nodes_downloaded":   "49",
 				"replay_pipeline_strategy":                       "",
 				"replay_pipeline_decision_reason":                "",
 				"replay_pipeline_replay_rate":                    "0",

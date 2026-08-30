@@ -132,6 +132,40 @@ func TestLedger_OnTimer_ReportsIntervalStallWithLifetimeTotals(t *testing.T) {
 	}
 }
 
+func TestLedger_StateDiscoveryProgressLogIncludesLiveCounters(t *testing.T) {
+	t.Parallel()
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	il := New([32]byte{0xAC}, 43, 1, logger)
+	il.stateUseful = 1365
+
+	if !il.logStateDiscoveryProgress(time.Now().Add(-time.Minute)) {
+		t.Fatal("incomplete state discovery did not request another heartbeat")
+	}
+
+	logged := output.String()
+	for _, field := range []string{
+		`"msg":"inbound ledger: state discovery in progress"`,
+		`"nodes_examined":0`,
+		`"equal_subtrees_skipped":0`,
+		`"missing_nodes_found":0`,
+		`"state_nodes_downloaded":1365`,
+	} {
+		if !strings.Contains(logged, field) {
+			t.Fatalf("state discovery progress %s missing from %q", field, logged)
+		}
+	}
+
+	output.Reset()
+	il.haveState = true
+	if il.logStateDiscoveryProgress(time.Now()) {
+		t.Fatal("completed state discovery requested another heartbeat")
+	}
+	if output.Len() != 0 {
+		t.Fatalf("completed state discovery logged %q", output.String())
+	}
+}
+
 func TestLedger_OnTimer_AlternatingProgressAndQuietPreservesCumulativeTimeouts(t *testing.T) {
 	t.Parallel()
 	il := New([32]byte{0x01}, 7, 1, discardLogger())
