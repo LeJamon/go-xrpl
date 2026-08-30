@@ -2782,7 +2782,10 @@ func (r *Router) ourLCLMatchesPeers() bool {
 }
 
 func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) bool {
+	receivedAt := time.Now()
+	decodeStarted := time.Now()
 	decoded, err := message.Decode(message.TypeLedgerData, msg.Payload)
+	decodeDuration := time.Since(decodeStarted)
 	if err != nil {
 		r.logger.Warn("failed to decode ledger_data", "error", err, "peer", msg.PeerID)
 		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-decode")
@@ -2880,7 +2883,8 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) bool {
 	}
 
 	if il != nil {
-		if consumed, transferred := r.handleInboundLedgerDataOwned(il, ld, uint64(msg.PeerID), msg); consumed {
+		il.RecordDecodeDuration(decodeDuration)
+		if consumed, transferred := r.handleInboundLedgerDataOwned(il, ld, uint64(msg.PeerID), msg, receivedAt); consumed {
 			return transferred
 		}
 	}
@@ -2908,7 +2912,7 @@ func (r *Router) cacheStaleStateNodes(ld *message.LedgerData) {
 // acquisition (already matched by hash in handleLedgerData). Returns true if
 // the data was consumed by the acquisition.
 func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerData, peerID uint64) bool {
-	consumed, _ := r.handleInboundLedgerDataOwned(il, ld, peerID, nil)
+	consumed, _ := r.handleInboundLedgerDataOwned(il, ld, peerID, nil, time.Now())
 	return consumed
 }
 
@@ -2917,20 +2921,29 @@ func (r *Router) handleInboundLedgerDataOwned(
 	ld *message.LedgerData,
 	peerID uint64,
 	owner *peermanagement.InboundMessage,
+	receivedAt time.Time,
 ) (bool, bool) {
 	if il == nil {
 		return false, false
 	}
 	if lane := r.currentAcquisitionWork(); lane != nil {
+		wireBytes := 0
+		payloadBytes := 0
+		if owner != nil {
+			wireBytes = int(owner.WireSize)
+			payloadBytes = len(owner.Payload)
+		}
 		switch ld.InfoType {
 		case message.LedgerInfoBase, message.LedgerInfoAsNode, message.LedgerInfoTxNode:
 			if lane.submit(il, acquisitionWorkEvent{
 				kind: acquisitionWorkData, data: ld, owner: owner, peerID: peerID,
+				receivedAt: receivedAt, wireBytes: wireBytes, payloadBytes: payloadBytes,
 			}) {
 				return true, owner != nil
 			}
 			r.logger.Warn("inbound ledger reply deferred: acquisition worker saturated",
 				"peer", peerID, "seq", il.Seq(), "info_type", ld.InfoType)
+			il.RecordWorkerSaturation()
 			return true, false
 		}
 	}

@@ -335,6 +335,7 @@ func AcquisitionJSON(snap Snapshot) map[string]any {
 		// timeouts_ now that the acquisition runs a timer-driven retry loop.
 		"timeouts": snap.Timeouts,
 	}
+	entry["diagnostics"] = acquisitionDiagnosticsJSON(snap)
 	switch {
 	case snap.Complete:
 		entry["complete"] = true
@@ -356,6 +357,103 @@ func AcquisitionJSON(snap Snapshot) map[string]any {
 		}
 	}
 	return entry
+}
+
+func acquisitionDiagnosticsJSON(snap Snapshot) map[string]any {
+	d := snap.Diagnostics
+	now := SystemClock.Now()
+	elapsed := nonNegativeDuration(now.Sub(d.StartedAt))
+	lastProgressAgo := nonNegativeDuration(now.Sub(d.LastProgressAt))
+	usefulNodes := snap.StateUseful + snap.TxUseful
+	diagnostics := map[string]any{
+		"elapsed_ms":                     elapsed.Milliseconds(),
+		"last_progress_ms_ago":           lastProgressAgo.Milliseconds(),
+		"limiting_stage":                 d.LimitingStage,
+		"requests_total":                 d.Requests,
+		"request_send_failures_total":    d.SendFailures,
+		"replies_total":                  d.Replies,
+		"empty_replies_total":            d.EmptyReplies,
+		"late_replies_total":             d.LateReplies,
+		"worker_saturation_total":        d.WorkerSaturation,
+		"outstanding_requests":           d.OutstandingReplies,
+		"outstanding_nodes":              d.OutstandingNodes,
+		"received_bytes_total":           d.ReceivedBytes,
+		"wire_bytes_total":               d.WireBytes,
+		"useful_bytes_total":             d.UsefulBytes,
+		"duplicate_nodes_total":          d.DuplicateNodes,
+		"rerequest_nodes_total":          d.ReRequestNodes,
+		"invalid_nodes_total":            d.InvalidNodes,
+		"unprocessed_nodes_total":        d.UnprocessedNodes,
+		"useful_node_ratio":              ratio(usefulNodes, snap.StateReceived+snap.TxReceived),
+		"useful_byte_ratio":              ratio(d.UsefulBytes, d.ReceivedBytes),
+		"useful_nodes_per_second":        rate(usefulNodes, elapsed),
+		"useful_bytes_per_second":        rate(d.UsefulBytes, elapsed),
+		"recent_useful_nodes_per_second": rate(d.RecentUsefulNodes, d.RecentWindow),
+		"recent_useful_bytes_per_second": rate(d.RecentUsefulBytes, d.RecentWindow),
+		"decode_ms_total":                d.DecodeTotal.Milliseconds(),
+		"decode_ms_max":                  d.DecodeMax.Milliseconds(),
+		"worker_queue_ms_total":          d.WorkerQueueTotal.Milliseconds(),
+		"worker_queue_ms_max":            d.WorkerQueueMax.Milliseconds(),
+		"apply_ms_total":                 d.ApplyTotal.Milliseconds(),
+		"apply_ms_max":                   d.ApplyMax.Milliseconds(),
+		"frontier_walk_ms_total":         d.FrontierWalkTotal.Milliseconds(),
+		"frontier_walk_ms_max":           d.FrontierWalkMax.Milliseconds(),
+		"request_refill_ms_total":        d.RequestRefillTotal.Milliseconds(),
+		"request_refill_ms_max":          d.RequestRefillMax.Milliseconds(),
+	}
+	peers := make([]any, 0, len(d.Peers))
+	for _, peer := range d.Peers {
+		lastReplyAgo := int64(0)
+		if !peer.LastReplyAt.IsZero() {
+			lastReplyAgo = nonNegativeDuration(now.Sub(peer.LastReplyAt)).Milliseconds()
+		}
+		peers = append(peers, map[string]any{
+			"peer_id":                  peer.PeerID,
+			"requests":                 peer.Requests,
+			"request_send_failures":    peer.SendFailures,
+			"replies":                  peer.Replies,
+			"requested_nodes":          peer.RequestedNodes,
+			"returned_nodes":           peer.ReturnedNodes,
+			"useful_nodes":             peer.UsefulNodes,
+			"received_bytes":           peer.ReceivedBytes,
+			"wire_bytes":               peer.WireBytes,
+			"useful_bytes":             peer.UsefulBytes,
+			"useful_node_ratio":        ratio(peer.UsefulNodes, peer.ReturnedNodes),
+			"useful_byte_ratio":        ratio(peer.UsefulBytes, peer.ReceivedBytes),
+			"empty_replies":            peer.EmptyReplies,
+			"late_replies":             peer.LateReplies,
+			"invalid_nodes":            peer.InvalidNodes,
+			"disconnects":              peer.Disconnects,
+			"response_ms_average":      durationAverageMillis(peer.ResponseTotal, peer.Replies-peer.LateReplies),
+			"response_ms_max":          peer.ResponseMax.Milliseconds(),
+			"last_reply_ms_ago":        lastReplyAgo,
+			"last_query_depth":         peer.LastQueryDepth,
+			"last_request_transaction": peer.LastTransaction,
+		})
+	}
+	diagnostics["peers"] = peers
+	return diagnostics
+}
+
+func rate(value uint64, d time.Duration) float64 {
+	if d <= 0 {
+		return 0
+	}
+	return float64(value) / d.Seconds()
+}
+
+func ratio(numerator, denominator uint64) float64 {
+	if denominator == 0 {
+		return 0
+	}
+	return float64(numerator) / float64(denominator)
+}
+
+func durationAverageMillis(total time.Duration, count uint64) float64 {
+	if count == 0 {
+		return 0
+	}
+	return float64(total) / float64(time.Millisecond) / float64(count)
 }
 
 func hashList(hs [][32]byte) []any {

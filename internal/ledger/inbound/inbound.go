@@ -179,6 +179,7 @@ type Ledger struct {
 	txRecv           uint64
 	txUseful         uint64
 	checkpointUseful uint64
+	diagnostics      acquisitionDiagnostics
 
 	// Rejection diagnostics, surfaced on the no-progress tick so a stuck
 	// acquisition names which node it cannot place and why (the signal the
@@ -250,15 +251,17 @@ func New(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, opts ...
 		"ledger_seq", seq,
 		"ledger_hash", fmt.Sprintf("%x", hash[:8]),
 	)
+	now := SystemClock.Now()
 	l := &Ledger{
 		hash:                     hash,
 		seq:                      seq,
 		sequenceInitiallyUnknown: seq == 0,
 		state:                    StateWantBase,
-		lastTimer:                SystemClock.Now(),
+		lastTimer:                now,
 		logger:                   logger,
 		recentNodes:              make(map[[32]byte]uint64),
 		requestPeers:             make(map[uint64]struct{}),
+		diagnostics:              newAcquisitionDiagnostics(now),
 	}
 	if peerID != 0 {
 		l.peers = []uint64{peerID}
@@ -405,9 +408,16 @@ func (l *Ledger) RemovePeer(peerID uint64) bool {
 		}
 	}
 	delete(l.requestPeers, peerID)
+	for key := range l.diagnostics.outstanding {
+		if key.peerID == peerID {
+			delete(l.diagnostics.outstanding, key)
+		}
+	}
 	for i, id := range l.peers {
 		if id == peerID {
 			l.peers = slices.Delete(l.peers, i, i+1)
+			l.peerMetricsLocked(peerID).disconnects++
+			l.publishSnapshotLocked()
 			return true
 		}
 	}
@@ -473,6 +483,7 @@ func (l *Ledger) OnTimer(now time.Time) TimerAction {
 	// Mirrors rippled onTimer's mRecentNodes.clear() (InboundLedger.cpp:368).
 	clear(l.recentNodes)
 	clear(l.requestPeers)
+	l.clearOutstandingDiagnosticsLocked()
 
 	if l.progress {
 		l.lastTimer = now
@@ -551,6 +562,7 @@ func (l *Ledger) RearmTimer(now time.Time) {
 func (l *Ledger) markProgressLocked() {
 	l.progress = true
 	l.consecutiveTimeouts = 0
+	l.diagnostics.lastProgressAt = SystemClock.Now()
 }
 
 // TakeByHashRequest returns the content hashes of up to max still-missing nodes
@@ -829,8 +841,15 @@ func (l *Ledger) GotStateNodesUseful(nodes []message.LedgerNode) (int, error) {
 }
 
 func (l *Ledger) GotStateNodesUsefulContext(ctx context.Context, nodes []message.LedgerNode) (int, error) {
+	stats, err := l.GotStateNodesMeasuredContext(ctx, nodes)
+	return stats.UsefulNodes, err
+}
+
+// GotStateNodesMeasuredContext processes state nodes and returns reply-level
+// classification and byte counts for acquisition diagnostics.
+func (l *Ledger) GotStateNodesMeasuredContext(ctx context.Context, nodes []message.LedgerNode) (NodeApplyStats, error) {
 	if err := ValidateReplyNodeCount(nodes); err != nil {
-		return 0, err
+		return NodeApplyStats{}, err
 	}
 
 	var stored []shamap.FlushEntry
@@ -843,37 +862,37 @@ func (l *Ledger) GotStateNodesUsefulContext(ctx context.Context, nodes []message
 	}()
 
 	if l.state == StateComplete || l.haveState {
-		return 0, nil // State tree already acquired
+		return nodeInputStats(nodes), nil // State tree already acquired
 	}
 	if l.state != StateWantState {
-		return 0, fmt.Errorf("unexpected state %d for GotStateNodes", l.state)
+		return NodeApplyStats{}, fmt.Errorf("unexpected state %d for GotStateNodes", l.state)
 	}
 
 	// Mirrors the tx-set sync fix in router.handleTxSetData (issue #413):
 	// drive placement by the peer-supplied NodeID via AddKnownNodeByID
 	// rather than the hash-search AddKnownNodeUnchecked, which silently
 	// drops nodes whose direct parent isn't loaded yet.
-	added, stored, applyErr := l.applyKnownNodes(ctx, l.stateMap, nodes, "state")
+	stats, stored, applyErr := l.applyKnownNodes(ctx, l.stateMap, nodes, "state")
 	l.stateRecv += uint64(len(nodes))
-	l.stateUseful += uint64(added)
+	l.stateUseful += uint64(stats.UsefulNodes)
 	if applyErr != nil {
 		l.state = StateFailed
 		l.err = applyErr
-		return added, applyErr
+		return stats, applyErr
 	}
 
-	if added > 0 {
+	if stats.UsefulNodes > 0 {
 		l.markProgressLocked()
 	}
 	l.publishSnapshotLocked()
 	l.logger.Debug("inbound ledger: added state nodes",
-		"added", added,
+		"added", stats.UsefulNodes,
 		"total_received", len(nodes),
 		"useful_total", l.stateUseful,
 		"received_total", l.stateRecv,
 	)
 
-	return added, nil
+	return stats, nil
 }
 
 // GotTransactionNodes processes transaction tree nodes received from the peer.
@@ -891,8 +910,15 @@ func (l *Ledger) GotTransactionNodesUseful(nodes []message.LedgerNode) (int, err
 }
 
 func (l *Ledger) GotTransactionNodesUsefulContext(ctx context.Context, nodes []message.LedgerNode) (int, error) {
+	stats, err := l.GotTransactionNodesMeasuredContext(ctx, nodes)
+	return stats.UsefulNodes, err
+}
+
+// GotTransactionNodesMeasuredContext is the measured transaction-tree
+// equivalent of GotStateNodesMeasuredContext.
+func (l *Ledger) GotTransactionNodesMeasuredContext(ctx context.Context, nodes []message.LedgerNode) (NodeApplyStats, error) {
 	if err := ValidateReplyNodeCount(nodes); err != nil {
-		return 0, err
+		return NodeApplyStats{}, err
 	}
 
 	var stored []shamap.FlushEntry
@@ -905,33 +931,33 @@ func (l *Ledger) GotTransactionNodesUsefulContext(ctx context.Context, nodes []m
 	}()
 
 	if l.state == StateComplete || l.haveTx {
-		return 0, nil // Transaction tree already acquired (or empty)
+		return nodeInputStats(nodes), nil // Transaction tree already acquired (or empty)
 	}
 	if l.state != StateWantState || l.txMap == nil {
-		return 0, fmt.Errorf("unexpected state %d for GotTransactionNodes", l.state)
+		return NodeApplyStats{}, fmt.Errorf("unexpected state %d for GotTransactionNodes", l.state)
 	}
 
-	added, stored, applyErr := l.applyKnownNodes(ctx, l.txMap, nodes, "tx")
+	stats, stored, applyErr := l.applyKnownNodes(ctx, l.txMap, nodes, "tx")
 	l.txRecv += uint64(len(nodes))
-	l.txUseful += uint64(added)
+	l.txUseful += uint64(stats.UsefulNodes)
 	if applyErr != nil {
 		l.state = StateFailed
 		l.err = applyErr
-		return added, applyErr
+		return stats, applyErr
 	}
 
-	if added > 0 {
+	if stats.UsefulNodes > 0 {
 		l.markProgressLocked()
 	}
 	l.publishSnapshotLocked()
 	l.logger.Debug("inbound ledger: added tx nodes",
-		"added", added,
+		"added", stats.UsefulNodes,
 		"total_received", len(nodes),
 		"useful_total", l.txUseful,
 		"received_total", l.txRecv,
 	)
 
-	return added, nil
+	return stats, nil
 }
 
 // applyKnownNodes places peer-supplied tree nodes by NodeID, returning the
@@ -940,21 +966,24 @@ func (l *Ledger) GotTransactionNodesUsefulContext(ctx context.Context, nodes []m
 // getMissingNodes walk re-requests the correct frontier and it returns on a
 // later reply. The first genuinely invalid node stops harvesting the rest of
 // the reply. Caller holds l.mu.
-func (l *Ledger) applyKnownNodes(ctx context.Context, m *shamap.SHAMap, nodes []message.LedgerNode, label string) (int, []shamap.FlushEntry, error) {
-	added := 0
+func (l *Ledger) applyKnownNodes(ctx context.Context, m *shamap.SHAMap, nodes []message.LedgerNode, label string) (NodeApplyStats, []shamap.FlushEntry, error) {
+	stats := nodeInputStats(nodes)
 	stored := make([]shamap.FlushEntry, 0, len(nodes))
-	for _, node := range nodes {
+	for i, node := range nodes {
 		if len(node.NodeData) == 0 {
+			stats.InvalidNodes++
 			continue
 		}
 		parsedID, err := shamap.ParseNodeID(node.NodeID)
 		if err != nil {
+			stats.InvalidNodes++
 			l.logger.Debug("inbound ledger: malformed "+label+" node ID",
 				"node_id_len", len(node.NodeID),
 				"error", err.Error())
 			continue
 		}
 		if parsedID.IsRoot() {
+			stats.InvalidNodes++
 			continue
 		}
 		// A reply for a cached path is no longer an outstanding frontier item,
@@ -964,19 +993,27 @@ func (l *Ledger) applyKnownNodes(ctx context.Context, m *shamap.SHAMap, nodes []
 		l.removeMissingNodeLocked(m == l.txMap, parsedID)
 		res, entry, err := m.AddKnownNodeByIDWithEntryContext(ctx, parsedID, node.NodeData)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return added, stored, err
+			stats.UnprocessedNodes = len(nodes) - i - 1
+			return stats, stored, err
 		}
 		switch res {
 		case shamap.NodeUseful:
-			added++
+			stats.UsefulNodes++
+			stats.UsefulBytes += len(node.NodeData)
 			if err != nil {
-				return added, stored, fmt.Errorf("prepare verified %s node for persistence: %w", label, err)
+				stats.UnprocessedNodes = len(nodes) - i - 1
+				return stats, stored, fmt.Errorf("prepare verified %s node for persistence: %w", label, err)
 			}
 			stored = append(stored, entry)
-		case shamap.NodeDuplicate, shamap.NodeReRequest:
+		case shamap.NodeDuplicate:
+			stats.DuplicateNodes++
+		case shamap.NodeReRequest:
+			stats.ReRequestNodes++
 			// Already present, or ahead of its frontier: neither progress nor
 			// a reject. Re-requested by the next missing-node walk.
 		default: // NodeInvalid, or any unrecognized result — reject conservatively.
+			stats.InvalidNodes++
+			stats.UnprocessedNodes = len(nodes) - i - 1
 			l.rejectCount++
 			if err != nil {
 				l.lastRejectErr = err.Error()
@@ -985,10 +1022,18 @@ func (l *Ledger) applyKnownNodes(ctx context.Context, m *shamap.SHAMap, nodes []
 				"node_id", fmt.Sprintf("%x", node.NodeID),
 				"node_data_len", len(node.NodeData),
 				"error", err)
-			return added, stored, nil
+			return stats, stored, nil
 		}
 	}
-	return added, stored, nil
+	return stats, stored, nil
+}
+
+func nodeInputStats(nodes []message.LedgerNode) NodeApplyStats {
+	stats := NodeApplyStats{ReceivedNodes: len(nodes)}
+	for i := range nodes {
+		stats.ReceivedBytes += len(nodes[i].NodeData)
+	}
+	return stats
 }
 
 func (l *Ledger) persistReceived(ctx context.Context, entries []shamap.FlushEntry, label string) {
@@ -1250,6 +1295,7 @@ func (l *Ledger) CollectMissingRequestContext(ctx context.Context, isReply bool)
 
 	started := time.Now()
 	missing, err := m.GetMissingNodesContext(ctx, missingNodesFind, nil)
+	l.RecordFrontierWalk(time.Since(started))
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -1455,6 +1501,8 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 		return nil, complete, nil
 	}
 	requests := make([]MissingRequest, 0, len(peers))
+	walkStarted := time.Now()
+	defer func() { l.RecordFrontierWalk(time.Since(walkStarted)) }()
 	for _, transaction := range []bool{false, true} {
 		if len(peers) == 0 {
 			break
@@ -1657,6 +1705,7 @@ type Snapshot struct {
 	StateDurableReads          uint64
 	StateMissingDiscovered     uint64
 	StateVerifiedBaseFallbacks uint64
+	Diagnostics                AcquisitionDiagnostics
 	NeededState                [][32]byte // hashes of up to missingNodeBatch missing state nodes
 	NeededTx                   [][32]byte // hashes of up to missingNodeBatch missing tx nodes
 }
@@ -1709,6 +1758,7 @@ func (l *Ledger) snapshotLocked() Snapshot {
 		StateUseful:      l.stateUseful,
 		TxReceived:       l.txRecv,
 		TxUseful:         l.txUseful,
+		Diagnostics:      l.diagnosticsSnapshotLocked(SystemClock.Now()),
 	}
 	if l.stateMap != nil {
 		stats := l.stateMap.BackedWalkStats()
@@ -1765,6 +1815,7 @@ func (l *Ledger) publishSnapshotLocked() {
 func snapshotCopy(s Snapshot) *Snapshot {
 	s.NeededState = cloneHashes(s.NeededState)
 	s.NeededTx = cloneHashes(s.NeededTx)
+	s.Diagnostics.Peers = slices.Clone(s.Diagnostics.Peers)
 	return &s
 }
 

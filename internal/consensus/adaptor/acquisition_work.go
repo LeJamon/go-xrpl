@@ -56,20 +56,24 @@ type ledgerAcquisitionNetwork interface {
 }
 
 type acquisitionWorkEvent struct {
-	kind       acquisitionWorkKind
-	data       *message.LedgerData
-	owner      *peermanagement.InboundMessage
-	peerID     uint64
-	resume     bool
-	useful     int
-	fetch      func([32]byte) ([]byte, bool)
-	peers      []uint64
-	added      []uint64
-	stateIDs   [][]byte
-	txIDs      [][]byte
-	queryDepth uint32
-	collect    bool
-	at         time.Time
+	kind         acquisitionWorkKind
+	data         *message.LedgerData
+	owner        *peermanagement.InboundMessage
+	peerID       uint64
+	resume       bool
+	useful       int
+	fetch        func([32]byte) ([]byte, bool)
+	peers        []uint64
+	added        []uint64
+	stateIDs     [][]byte
+	txIDs        [][]byte
+	queryDepth   uint32
+	collect      bool
+	at           time.Time
+	receivedAt   time.Time
+	enqueuedAt   time.Time
+	wireBytes    int
+	payloadBytes int
 }
 
 func (e *acquisitionWorkEvent) release() {
@@ -128,10 +132,23 @@ type acquisitionBadData struct {
 }
 
 type acquisitionReplyStat struct {
-	peerID   uint64
-	infoType message.LedgerInfoType
-	received int
-	useful   int
+	peerID          uint64
+	infoType        message.LedgerInfoType
+	requestID       uint64
+	requested       int
+	queryDepth      uint32
+	received        int
+	useful          int
+	receivedBytes   int
+	usefulBytes     int
+	duplicates      int
+	rerequests      int
+	invalid         int
+	unprocessed     int
+	wireBytes       int
+	responseLatency time.Duration
+	queueDelay      time.Duration
+	applyDuration   time.Duration
 }
 
 type acquisitionWorkLane struct {
@@ -234,6 +251,12 @@ func (l *acquisitionWorkLane) canAcceptData() bool {
 func (l *acquisitionWorkLane) submit(ledger *inbound.Ledger, event acquisitionWorkEvent) bool {
 	if l == nil || ledger == nil {
 		return false
+	}
+	if event.enqueuedAt.IsZero() {
+		event.enqueuedAt = time.Now()
+	}
+	if event.receivedAt.IsZero() {
+		event.receivedAt = event.enqueuedAt
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -483,13 +506,40 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 				}
 				continue
 			}
-			useful, badKind, remove, complete, err := applyAcquisitionData(ctx, ledger, event.data)
+			var replyTrace inbound.ReplyTrace
+			inputStats := acquisitionNodeInputStats(event.data)
+			if event.data != nil {
+				receivedBytes := max(inputStats.ReceivedBytes, event.payloadBytes)
+				replyTrace = ledger.BeginReplyDiagnostics(
+					event.peerID,
+					event.data.InfoType == message.LedgerInfoTxNode,
+					inputStats.ReceivedNodes,
+					receivedBytes,
+					event.wireBytes,
+					event.receivedAt,
+					time.Now(),
+				)
+			}
+			applyStarted := time.Now()
+			stats, badKind, remove, complete, err := applyAcquisitionDataMeasured(ctx, ledger, event.data)
+			applyDuration := time.Since(applyStarted)
+			useful := stats.UsefulNodes
+			if event.data != nil {
+				ledger.FinishReplyDiagnostics(replyTrace, stats, applyDuration)
+			}
 			event.resume = true
 			event.useful = useful
 			if event.data != nil {
 				result.replies = append(result.replies, acquisitionReplyStat{
 					peerID: event.peerID, infoType: event.data.InfoType,
-					received: len(event.data.Nodes), useful: useful,
+					requestID: replyTrace.RequestID, requested: replyTrace.RequestedNodes,
+					queryDepth: replyTrace.QueryDepth,
+					received:   stats.ReceivedNodes, useful: useful,
+					receivedBytes: max(stats.ReceivedBytes, event.payloadBytes), usefulBytes: stats.UsefulBytes,
+					duplicates: stats.DuplicateNodes, rerequests: stats.ReRequestNodes,
+					invalid: stats.InvalidNodes, unprocessed: stats.UnprocessedNodes,
+					wireBytes: event.wireBytes, responseLatency: replyTrace.ResponseLatency,
+					queueDelay: replyTrace.QueueDelay, applyDuration: applyDuration,
 				})
 			}
 			if err != nil {
@@ -584,7 +634,9 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 	// must schedule network retries first rather than repeating the full local
 	// SHAMap/fetch-pack scan before it can send a request.
 	if runLocal {
+		walkStarted := time.Now()
 		_, complete, err := ledger.CheckLocalContext(workCtx, fetch)
+		ledger.RecordFrontierWalk(time.Since(walkStarted))
 		if err != nil {
 			result.err = err
 			return result
@@ -600,7 +652,9 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 		if result.err != nil || result.complete {
 			return result
 		}
+		walkStarted := time.Now()
 		result.byHashState, result.byHashTx, result.err = ledger.TakeByHashRequestContext(workCtx, inboundByHashBatch)
+		ledger.RecordFrontierWalk(time.Since(walkStarted))
 		if result.err != nil {
 			return result
 		}
@@ -781,8 +835,21 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 			"seq", ledger.Seq(),
 			"peer", reply.peerID,
 			"info_type", reply.infoType,
+			"request_id", reply.requestID,
+			"requested", reply.requested,
+			"query_depth", reply.queryDepth,
 			"received", reply.received,
 			"useful", reply.useful,
+			"received_bytes", reply.receivedBytes,
+			"wire_bytes", reply.wireBytes,
+			"useful_bytes", reply.usefulBytes,
+			"duplicates", reply.duplicates,
+			"rerequests", reply.rerequests,
+			"invalid", reply.invalid,
+			"unprocessed", reply.unprocessed,
+			"response_ms", reply.responseLatency.Milliseconds(),
+			"worker_queue_ms", reply.queueDelay.Milliseconds(),
+			"apply_ms", reply.applyDuration.Milliseconds(),
 		)
 	}
 	retry := missingNodeRetry{queryDepth: result.queryDepth}
@@ -849,6 +916,14 @@ func (r *Router) sendMissingReplyRequest(ledger *inbound.Ledger, request inbound
 		r.removeStaleAcquisitionPeer(ledger, request.PeerID)
 		return true
 	}
+	requestID := ledger.RecordRequestStart(
+		request.PeerID,
+		len(request.NodeIDs),
+		queryDepth,
+		request.Transaction,
+		request.Blind,
+		time.Now(),
+	)
 	var err error
 	if request.Transaction {
 		err = r.acquisition.RequestTransactionNodes(request.PeerID, ledger.Hash(), request.NodeIDs, queryDepth, indirect)
@@ -858,6 +933,7 @@ func (r *Router) sendMissingReplyRequest(ledger *inbound.Ledger, request inbound
 	if err == nil {
 		return false
 	}
+	ledger.RecordRequestSendFailure(request.PeerID, requestID)
 	ledger.ReleaseMissingRequest(request.PeerID, request.NodeHashes)
 	return r.handleMissingNodeSendFailure(ledger, request.PeerID, request.Transaction, err)
 }
@@ -886,7 +962,9 @@ func (r *Router) sendMissingAcquisitionNodes(
 			continue
 		}
 		if len(stateIDs) > 0 {
+			requestID := ledger.RecordRequestStart(peerID, len(stateIDs), queryDepth, false, queryDepth == 0, time.Now())
 			if err := r.acquisition.RequestStateNodes(peerID, ledger.Hash(), stateIDs, queryDepth, indirect); err != nil {
+				ledger.RecordRequestSendFailure(peerID, requestID)
 				disconnected = r.handleMissingNodeSendFailure(ledger, peerID, false, err)
 				stateDisconnected = stateDisconnected || disconnected
 			} else {
@@ -898,7 +976,9 @@ func (r *Router) sendMissingAcquisitionNodes(
 			continue
 		}
 		if len(txIDs) > 0 {
+			requestID := ledger.RecordRequestStart(peerID, len(txIDs), queryDepth, true, queryDepth == 0, time.Now())
 			if err := r.acquisition.RequestTransactionNodes(peerID, ledger.Hash(), txIDs, queryDepth, indirect); err != nil {
+				ledger.RecordRequestSendFailure(peerID, requestID)
 				disconnected = r.handleMissingNodeSendFailure(ledger, peerID, true, err)
 				txDisconnected = txDisconnected || disconnected
 			} else {
@@ -926,38 +1006,56 @@ func (r *Router) removeStaleAcquisitionPeer(ledger *inbound.Ledger, peerID uint6
 }
 
 func applyAcquisitionData(ctx context.Context, ledger *inbound.Ledger, data *message.LedgerData) (useful int, badKind string, remove, complete bool, err error) {
+	stats, badKind, remove, complete, err := applyAcquisitionDataMeasured(ctx, ledger, data)
+	return stats.UsefulNodes, badKind, remove, complete, err
+}
+
+func applyAcquisitionDataMeasured(ctx context.Context, ledger *inbound.Ledger, data *message.LedgerData) (stats inbound.NodeApplyStats, badKind string, remove, complete bool, err error) {
 	if data == nil {
-		return 0, "", false, false, nil
+		return stats, "", false, false, nil
 	}
+	stats = acquisitionNodeInputStats(data)
 	switch data.InfoType {
 	case message.LedgerInfoBase:
-		useful, err = ledger.GotBaseUsefulContext(ctx, data.Nodes)
+		stats.UsefulNodes, err = ledger.GotBaseUsefulContext(ctx, data.Nodes)
+		if stats.UsefulNodes > 0 {
+			stats.UsefulBytes = stats.ReceivedBytes
+		}
 		localFailure := errors.Is(err, shamap.ErrNodeSerialization)
 		policyFailure := errors.Is(err, inbound.ErrHeaderRejected)
 		badKind := "ledger-data-base"
 		if localFailure || policyFailure {
 			badKind = ""
 		}
-		return useful, badKind, localFailure || policyFailure, ledger.IsComplete(), err
+		return stats, badKind, localFailure || policyFailure, ledger.IsComplete(), err
 	case message.LedgerInfoAsNode:
-		var added int
-		added, err = ledger.GotStateNodesUsefulContext(ctx, data.Nodes)
+		stats, err = ledger.GotStateNodesMeasuredContext(ctx, data.Nodes)
 		localFailure := errors.Is(err, shamap.ErrNodeSerialization)
 		badKind := "ledger-data-state"
 		if localFailure {
 			badKind = ""
 		}
-		return added, badKind, localFailure, ledger.IsComplete(), err
+		return stats, badKind, localFailure, ledger.IsComplete(), err
 	case message.LedgerInfoTxNode:
-		var added int
-		added, err = ledger.GotTransactionNodesUsefulContext(ctx, data.Nodes)
+		stats, err = ledger.GotTransactionNodesMeasuredContext(ctx, data.Nodes)
 		localFailure := errors.Is(err, shamap.ErrNodeSerialization)
 		badKind := "ledger-data-tx"
 		if localFailure {
 			badKind = ""
 		}
-		return added, badKind, localFailure, ledger.IsComplete(), err
+		return stats, badKind, localFailure, ledger.IsComplete(), err
 	default:
-		return 0, "", false, false, nil
+		return stats, "", false, false, nil
 	}
+}
+
+func acquisitionNodeInputStats(data *message.LedgerData) inbound.NodeApplyStats {
+	if data == nil {
+		return inbound.NodeApplyStats{}
+	}
+	stats := inbound.NodeApplyStats{ReceivedNodes: len(data.Nodes)}
+	for i := range data.Nodes {
+		stats.ReceivedBytes += len(data.Nodes[i].NodeData)
+	}
+	return stats
 }
