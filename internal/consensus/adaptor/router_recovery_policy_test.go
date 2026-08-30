@@ -270,8 +270,6 @@ func TestReplayConvergenceRequiresTwoNonShrinkingWindows(t *testing.T) {
 	assert.Equal(t, uint8(2), r.standardReplay.stalledSamples)
 	assert.True(t, r.standardReplay.rebasePending)
 
-	// A later window in which replay gains ground clears the hysteresis
-	// counter; it cannot create another pending request by itself.
 	r.acquisitionMu.Lock()
 	r.standardReplay.anchorSeq = 112
 	r.standardReplay.targetSeq = 211

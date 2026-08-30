@@ -116,8 +116,6 @@ type NodeApplyStats struct {
 	UnprocessedNodes int
 }
 
-// ReplyTrace correlates a peer reply with its outstanding request. The router
-// passes it back to FinishReplyDiagnostics after SHAMap attachment.
 type ReplyTrace struct {
 	RequestID       uint64
 	PeerID          uint64
@@ -129,7 +127,6 @@ type ReplyTrace struct {
 	QueueDelay      time.Duration
 }
 
-// PeerDiagnostics is the bounded per-peer portion of fetch_info diagnostics.
 type PeerDiagnostics struct {
 	PeerID          uint64
 	Requests        uint64
@@ -343,7 +340,6 @@ func (l *Ledger) BeginReplyDiagnostics(peerID uint64, kind AcquisitionRequestKin
 	return trace
 }
 
-// FinishReplyDiagnostics records aggregate attachment results once per reply.
 func (l *Ledger) FinishReplyDiagnostics(trace ReplyTrace, stats NodeApplyStats, applyDuration time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

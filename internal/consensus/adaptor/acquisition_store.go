@@ -211,8 +211,6 @@ type pendingAcquisitionKey struct {
 	hash  [32]byte
 }
 
-// acquisitionStoreSnapshot is a point-in-time view of the lane's bounded
-// persistence pipeline. The counters are cumulative except for CurrentBytes.
 type acquisitionStoreSnapshot struct {
 	PendingBytes   int64
 	CurrentBytes   int64
@@ -362,8 +360,6 @@ func (l *acquisitionStoreLane) StoreBatch(ctx context.Context, entries []shamap.
 	return l.storeBatch(ctx, l.unscoped, entries, false)
 }
 
-// StoreBatchOwned is the lane-level counterpart used by inbound callers that
-// have freshly serialized immutable entries and can transfer their buffers.
 func (l *acquisitionStoreLane) StoreBatchOwned(ctx context.Context, entries []shamap.FlushEntry) error {
 	return l.storeBatch(ctx, l.unscoped, entries, true)
 }

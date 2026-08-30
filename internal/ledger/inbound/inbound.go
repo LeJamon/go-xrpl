@@ -688,7 +688,6 @@ func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.Ledge
 	return stats.UsefulNodes, err
 }
 
-// GotBaseMeasuredContext processes a base reply with node and byte accounting.
 func (l *Ledger) GotBaseMeasuredContext(ctx context.Context, nodes []message.LedgerNode) (NodeApplyStats, error) {
 	stats := nodeInputStats(nodes)
 	useful, usefulBytes, err := l.gotBaseUsefulContext(ctx, nodes)
@@ -862,8 +861,6 @@ func (l *Ledger) GotStateNodesUsefulContext(ctx context.Context, nodes []message
 	return stats.UsefulNodes, err
 }
 
-// GotStateNodesMeasuredContext processes state nodes and returns reply-level
-// classification and byte counts for acquisition diagnostics.
 func (l *Ledger) GotStateNodesMeasuredContext(ctx context.Context, nodes []message.LedgerNode) (NodeApplyStats, error) {
 	if err := ValidateReplyNodeCount(nodes); err != nil {
 		return NodeApplyStats{}, err
@@ -931,8 +928,6 @@ func (l *Ledger) GotTransactionNodesUsefulContext(ctx context.Context, nodes []m
 	return stats.UsefulNodes, err
 }
 
-// GotTransactionNodesMeasuredContext is the measured transaction-tree
-// equivalent of GotStateNodesMeasuredContext.
 func (l *Ledger) GotTransactionNodesMeasuredContext(ctx context.Context, nodes []message.LedgerNode) (NodeApplyStats, error) {
 	if err := ValidateReplyNodeCount(nodes); err != nil {
 		return NodeApplyStats{}, err

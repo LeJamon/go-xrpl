@@ -106,10 +106,6 @@ type replayConvergenceObservation struct {
 	nonShrinking bool
 }
 
-// sampleReplayConvergence compares two monotonic replay snapshots. It is
-// deliberately pure so the policy can be tested without a live router or
-// clock. A backwards counter or non-positive interval invalidates the sample
-// rather than producing a wrapped rate.
 func sampleReplayConvergence(previous, current replayConvergenceSample) replayConvergenceObservation {
 	if previous.generation != current.generation ||
 		previous.at.IsZero() || current.at.IsZero() {
@@ -170,9 +166,6 @@ func (r *Router) trustedReplayTarget() standardReplayTarget {
 	return standardReplayTarget{seq: r.catchup.seq, hash: r.catchup.hash, peerID: r.catchup.peerID, source: r.catchup.source}
 }
 
-// evaluateStandardReplayConvergence records a replay/head-rate observation.
-// It is called at replay batch boundaries; maintenance calls it only as a
-// safety net for a session whose drain has already yielded.
 func (r *Router) evaluateStandardReplayConvergence(now time.Time) {
 	target := r.trustedReplayTarget()
 	trustedTarget := target.source == catchupSourceQuorum
