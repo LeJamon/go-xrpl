@@ -30,9 +30,9 @@ func TestAcquisitionDiagnosticsCorrelateRequestReplyAndRefill(t *testing.T) {
 	now := time.Now()
 	ledger := New([32]byte{1}, 10, 1, nil)
 
-	requestID := ledger.RecordRequestStart(1, 128, 2, false, false, now)
+	requestID := ledger.RecordRequestStart(1, 128, 2, AcquisitionRequestState, false, now)
 	require.NotZero(t, requestID)
-	trace := ledger.BeginReplyDiagnostics(1, false, 2, 200, 120, now.Add(100*time.Millisecond), now.Add(110*time.Millisecond))
+	trace := ledger.BeginReplyDiagnostics(1, AcquisitionRequestState, 2, 200, 120, now.Add(100*time.Millisecond), now.Add(110*time.Millisecond))
 	assert.Equal(t, requestID, trace.RequestID)
 	assert.Equal(t, 100*time.Millisecond, trace.ResponseLatency)
 	assert.Equal(t, 10*time.Millisecond, trace.QueueDelay)
@@ -41,7 +41,7 @@ func TestAcquisitionDiagnosticsCorrelateRequestReplyAndRefill(t *testing.T) {
 		ReceivedNodes: 2, ReceivedBytes: 200, UsefulNodes: 1, UsefulBytes: 80, DuplicateNodes: 1,
 	}, 5*time.Millisecond)
 	ledger.RecordFrontierWalk(3 * time.Millisecond)
-	secondID := ledger.RecordRequestStart(2, 64, 1, false, false, now.Add(150*time.Millisecond))
+	secondID := ledger.RecordRequestStart(2, 64, 1, AcquisitionRequestState, false, now.Add(150*time.Millisecond))
 
 	snap := ledger.Snapshot().Diagnostics
 	assert.Equal(t, uint64(2), snap.Requests)
@@ -71,7 +71,7 @@ func TestAcquisitionDiagnosticsClassifyLateEmptyReply(t *testing.T) {
 	now := time.Now()
 	ledger := New([32]byte{2}, 11, 7, nil)
 
-	trace := ledger.BeginReplyDiagnostics(7, false, 0, 0, 0, now, now)
+	trace := ledger.BeginReplyDiagnostics(7, AcquisitionRequestState, 0, 0, 0, now, now)
 	ledger.FinishReplyDiagnostics(trace, NodeApplyStats{}, 0)
 
 	snap := ledger.Snapshot().Diagnostics
@@ -99,7 +99,7 @@ func TestAcquisitionDiagnosticsRecentRateExpires(t *testing.T) {
 
 func TestAcquisitionJSONIncludesNestedDiagnostics(t *testing.T) {
 	ledger := New([32]byte{4}, 13, 9, nil)
-	ledger.RecordRequestStart(9, 12, 1, false, false, time.Now())
+	ledger.RecordRequestStart(9, 12, 1, AcquisitionRequestState, false, time.Now())
 
 	entry := AcquisitionJSON(ledger.Snapshot())
 	assert.Contains(t, entry, "state_received_total")

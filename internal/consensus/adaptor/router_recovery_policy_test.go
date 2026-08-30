@@ -67,6 +67,24 @@ func TestFrozenPivotRecoveryKeepsReplayWhenNextLinkIsKnown(t *testing.T) {
 	assert.Equal(t, uint64(0), r.FastSyncMetrics().ReplayPipelineRebasesStarted)
 }
 
+func TestFrozenPivotRecoveryRebasesWhenNextHashHasNoParentLink(t *testing.T) {
+	r, _, _, _ := makeRouter(t)
+	pivotSeq := uint32(100)
+	targetSeq := pivotSeq + seqHashRetain + 1
+	targetHash := [32]byte{0x24}
+	r.recordSeqHash(pivotSeq+1, [32]byte{0x23}, [32]byte{}, false)
+	trackCatchupPeer(r, 7, targetSeq, targetHash)
+	r.recordValidationCatchupTarget(targetSeq, targetHash, 7, catchupSourceQuorum)
+	r.standardReplay = policyReplayState(3, pivotSeq, targetSeq)
+
+	require.True(t, r.maybeRebaseForMissingReplayAncestry(time.Unix(101, 0)))
+	assert.True(t, r.standardReplay.active)
+	assert.False(t, r.standardReplay.pivotReady)
+	assert.Equal(t, targetSeq, r.standardReplay.pivotSeq)
+	assert.Equal(t, targetHash, r.standardReplay.pivotHash)
+	assert.Equal(t, uint64(1), r.FastSyncMetrics().ReplayPipelineAncestryUnavailable)
+}
+
 func TestFrozenPivotRecoveryDoesNotRebaseToUntrustedTarget(t *testing.T) {
 	r, _, _, _ := makeRouter(t)
 	pivotSeq := uint32(100)

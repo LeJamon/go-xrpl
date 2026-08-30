@@ -1521,10 +1521,12 @@ func (r *Router) requestLedgerBase(il *inbound.Ledger, peerID uint64, logMessage
 
 func (r *Router) requestLedgerBaseFromPeer(il *inbound.Ledger, peerID uint64, logMessage string) bool {
 	il.AddPeer(peerID)
+	requestID := il.RecordRequestStart(peerID, 1, 0, inbound.AcquisitionRequestBase, false, time.Now())
 	err := r.acquisition.RequestLedgerBaseFromPeer(peerID, il.Hash(), il.Seq(), il.Timeouts() > 0)
 	if err == nil {
 		return true
 	}
+	il.RecordRequestSendFailure(peerID, requestID)
 	r.logger.Warn(logMessage, "error", err, "peer", peerID)
 	if !isAcquisitionDisconnectError(err) {
 		return true

@@ -528,9 +528,16 @@ func processAcquisitionWorkWithBudget(ctx context.Context, ledger *inbound.Ledge
 			inputStats := acquisitionNodeInputStats(event.data)
 			if event.data != nil {
 				receivedBytes := max(inputStats.ReceivedBytes, event.payloadBytes)
+				requestKind := inbound.AcquisitionRequestState
+				switch event.data.InfoType {
+				case message.LedgerInfoBase:
+					requestKind = inbound.AcquisitionRequestBase
+				case message.LedgerInfoTxNode:
+					requestKind = inbound.AcquisitionRequestTransaction
+				}
 				replyTrace = ledger.BeginReplyDiagnostics(
 					event.peerID,
-					event.data.InfoType == message.LedgerInfoTxNode,
+					requestKind,
 					inputStats.ReceivedNodes,
 					receivedBytes,
 					event.wireBytes,
@@ -934,11 +941,15 @@ func (r *Router) sendMissingReplyRequest(ledger *inbound.Ledger, request inbound
 		r.removeStaleAcquisitionPeer(ledger, request.PeerID)
 		return true
 	}
+	requestKind := inbound.AcquisitionRequestState
+	if request.Transaction {
+		requestKind = inbound.AcquisitionRequestTransaction
+	}
 	requestID := ledger.RecordRequestStart(
 		request.PeerID,
 		len(request.NodeIDs),
 		queryDepth,
-		request.Transaction,
+		requestKind,
 		request.Blind,
 		time.Now(),
 	)
@@ -980,7 +991,7 @@ func (r *Router) sendMissingAcquisitionNodes(
 			continue
 		}
 		if len(stateIDs) > 0 {
-			requestID := ledger.RecordRequestStart(peerID, len(stateIDs), queryDepth, false, queryDepth == 0, time.Now())
+			requestID := ledger.RecordRequestStart(peerID, len(stateIDs), queryDepth, inbound.AcquisitionRequestState, queryDepth == 0, time.Now())
 			if err := r.acquisition.RequestStateNodes(peerID, ledger.Hash(), stateIDs, queryDepth, indirect); err != nil {
 				ledger.RecordRequestSendFailure(peerID, requestID)
 				disconnected = r.handleMissingNodeSendFailure(ledger, peerID, false, err)
@@ -994,7 +1005,7 @@ func (r *Router) sendMissingAcquisitionNodes(
 			continue
 		}
 		if len(txIDs) > 0 {
-			requestID := ledger.RecordRequestStart(peerID, len(txIDs), queryDepth, true, queryDepth == 0, time.Now())
+			requestID := ledger.RecordRequestStart(peerID, len(txIDs), queryDepth, inbound.AcquisitionRequestTransaction, queryDepth == 0, time.Now())
 			if err := r.acquisition.RequestTransactionNodes(peerID, ledger.Hash(), txIDs, queryDepth, indirect); err != nil {
 				ledger.RecordRequestSendFailure(peerID, requestID)
 				disconnected = r.handleMissingNodeSendFailure(ledger, peerID, true, err)

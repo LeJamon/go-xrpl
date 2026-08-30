@@ -116,7 +116,7 @@ func runControlledStateAcquisitionFromSource(tb testing.TB, source *shamap.SHAMa
 				wireBytes += len(node.NodeID) + len(node.NodeData)
 			}
 			now := time.Now()
-			ledger.RecordRequestStart(request.PeerID, len(request.NodeIDs), uint32(queryDepth), false, request.Blind, now)
+			ledger.RecordRequestStart(request.PeerID, len(request.NodeIDs), uint32(queryDepth), inbound.AcquisitionRequestState, request.Blind, now)
 			events = append(events, acquisitionWorkEvent{
 				kind:         acquisitionWorkData,
 				peerID:       request.PeerID,

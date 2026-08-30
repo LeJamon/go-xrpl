@@ -346,7 +346,7 @@ func (r *Router) maybeRebaseForMissingReplayAncestry(now time.Time) bool {
 		r.acquisitionMu.Unlock()
 		return false
 	}
-	if next, known := r.lookupSeqHash(frontierSeq + 1); known && next.hash != ([32]byte{}) {
+	if next, known := r.lookupSeqHash(frontierSeq + 1); known && next.hash != ([32]byte{}) && next.haveParent {
 		r.acquisitionMu.Unlock()
 		return false
 	}
@@ -432,7 +432,7 @@ func (r *Router) retargetFrozenPivotWithApplying(
 	ancestryLinkMissing := false
 	if reason == frozenPivotRetargetAncestryUnavailable && r.standardReplay.collectSeq < ^uint32(0) {
 		next, known := r.lookupSeqHash(r.standardReplay.collectSeq + 1)
-		ancestryLinkMissing = !known || next.hash == ([32]byte{})
+		ancestryLinkMissing = !known || next.hash == ([32]byte{}) || !next.haveParent
 	}
 	stallCurrent := reason == frozenPivotRetargetStalled && r.standardReplay.pivotReady &&
 		readyForReplacement && r.standardReplay.stalledSamples >= standardReplayStallWindows

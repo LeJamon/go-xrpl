@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -85,6 +86,37 @@ func TestRequestAcquisitionBase_QueryTypeEscalation(t *testing.T) {
 	for _, indirect := range got[len(il.Peers()):] {
 		assert.True(t, indirect)
 	}
+}
+
+func TestRequestLedgerBaseDiagnosticsCorrelateReply(t *testing.T) {
+	svc := newTestLedgerService(t)
+	rs := &acqRecordingSender{}
+	router := newTestRouter(&mockEngine{}, New(Config{LedgerService: svc, Sender: rs}), nil)
+	il := inbound.New([32]byte{0xAC}, 43, 7, serveTestLogger())
+
+	require.True(t, router.requestLedgerBaseFromPeer(il, 7, "request failed"))
+	il.RecordRequestStart(7, 1, 1, inbound.AcquisitionRequestState, false, time.Now())
+	result := processAcquisitionWork(context.Background(), il, []acquisitionWorkEvent{
+		{
+			kind:       acquisitionWorkData,
+			data:       &message.LedgerData{InfoType: message.LedgerInfoBase},
+			peerID:     7,
+			receivedAt: time.Now(),
+		},
+		{
+			kind:       acquisitionWorkData,
+			data:       &message.LedgerData{InfoType: message.LedgerInfoAsNode},
+			peerID:     7,
+			receivedAt: time.Now(),
+		},
+	})
+	require.Len(t, result.replies, 2)
+
+	diagnostics := il.Snapshot().Diagnostics
+	assert.Equal(t, uint64(2), diagnostics.Requests)
+	assert.Equal(t, uint64(2), diagnostics.Replies)
+	assert.Zero(t, diagnostics.LateReplies)
+	assert.Zero(t, diagnostics.OutstandingReplies)
 }
 
 func TestEncodeLedgerBaseRequest_QueryType(t *testing.T) {

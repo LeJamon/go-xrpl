@@ -16,18 +16,26 @@ const (
 	acquisitionRateBucketCount    = 12
 )
 
+type AcquisitionRequestKind uint8
+
+const (
+	AcquisitionRequestBase AcquisitionRequestKind = iota
+	AcquisitionRequestState
+	AcquisitionRequestTransaction
+)
+
 type acquisitionRequestTrace struct {
 	id             uint64
 	sentAt         time.Time
 	requestedNodes int
 	queryDepth     uint32
-	transaction    bool
+	kind           AcquisitionRequestKind
 	blind          bool
 }
 
 type acquisitionRequestKey struct {
-	peerID      uint64
-	transaction bool
+	peerID uint64
+	kind   AcquisitionRequestKind
 }
 
 type acquisitionRateBucket struct {
@@ -203,7 +211,7 @@ func (l *Ledger) peerMetricsLocked(peerID uint64) *acquisitionPeerMetrics {
 
 // RecordRequestStart installs request correlation before the network call. The
 // caller must invoke RecordRequestSendFailure if that call fails.
-func (l *Ledger) RecordRequestStart(peerID uint64, requestedNodes int, queryDepth uint32, transaction, blind bool, now time.Time) uint64 {
+func (l *Ledger) RecordRequestStart(peerID uint64, requestedNodes int, queryDepth uint32, kind AcquisitionRequestKind, blind bool, now time.Time) uint64 {
 	if peerID == 0 || requestedNodes <= 0 {
 		return 0
 	}
@@ -211,12 +219,12 @@ func (l *Ledger) RecordRequestStart(peerID uint64, requestedNodes int, queryDept
 	defer l.mu.Unlock()
 	l.diagnostics.nextRequestID++
 	id := l.diagnostics.nextRequestID
-	l.diagnostics.outstanding[acquisitionRequestKey{peerID: peerID, transaction: transaction}] = acquisitionRequestTrace{
+	l.diagnostics.outstanding[acquisitionRequestKey{peerID: peerID, kind: kind}] = acquisitionRequestTrace{
 		id:             id,
 		sentAt:         now,
 		requestedNodes: requestedNodes,
 		queryDepth:     queryDepth,
-		transaction:    transaction,
+		kind:           kind,
 		blind:          blind,
 	}
 	l.diagnostics.requests++
@@ -224,7 +232,7 @@ func (l *Ledger) RecordRequestStart(peerID uint64, requestedNodes int, queryDept
 	peer.requests++
 	peer.requestedNodes += uint64(requestedNodes)
 	peer.lastQueryDepth = queryDepth
-	peer.lastTransaction = transaction
+	peer.lastTransaction = kind == AcquisitionRequestTransaction
 	if !l.diagnostics.lastReplyReceivedAt.IsZero() {
 		d := nonNegativeDuration(now.Sub(l.diagnostics.lastReplyReceivedAt))
 		l.diagnostics.refillTotal += d
@@ -266,7 +274,7 @@ func (l *Ledger) RecordRequestSendFailure(peerID, requestID uint64) {
 
 // BeginReplyDiagnostics records network and worker-queue delay and consumes at
 // most one outstanding request for the replying peer.
-func (l *Ledger) BeginReplyDiagnostics(peerID uint64, transaction bool, receivedNodes, receivedBytes, wireBytes int, receivedAt, processingAt time.Time) ReplyTrace {
+func (l *Ledger) BeginReplyDiagnostics(peerID uint64, kind AcquisitionRequestKind, receivedNodes, receivedBytes, wireBytes int, receivedAt, processingAt time.Time) ReplyTrace {
 	if receivedAt.IsZero() {
 		receivedAt = processingAt
 	}
@@ -291,13 +299,13 @@ func (l *Ledger) BeginReplyDiagnostics(peerID uint64, transaction bool, received
 		l.diagnostics.emptyReplies++
 		peer.emptyReplies++
 	}
-	key := acquisitionRequestKey{peerID: peerID, transaction: transaction}
+	key := acquisitionRequestKey{peerID: peerID, kind: kind}
 	if request, ok := l.diagnostics.outstanding[key]; ok {
 		delete(l.diagnostics.outstanding, key)
 		trace.RequestID = request.id
 		trace.RequestedNodes = request.requestedNodes
 		trace.QueryDepth = request.queryDepth
-		trace.Transaction = request.transaction
+		trace.Transaction = request.kind == AcquisitionRequestTransaction
 		trace.Blind = request.blind
 		trace.ResponseLatency = nonNegativeDuration(receivedAt.Sub(request.sentAt))
 		peer.responseTotal += trace.ResponseLatency
