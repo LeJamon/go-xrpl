@@ -694,7 +694,7 @@ func (r *Router) StopAcquisitions() (legacy, replay int) {
 	if r.replayer != nil {
 		replay = r.replayer.Stop()
 	}
-	r.cancelStandardReplayPipelineLocked()
+	retirement := r.cancelStandardReplayPipelineLocked()
 	r.consensusRecovery = consensusRecovery{}
 	r.lastHandoffSeq = 0
 	r.acquisitionMu.Unlock()
@@ -706,6 +706,9 @@ func (r *Router) StopAcquisitions() (legacy, replay int) {
 	r.linkageWait = catchupLinkageWait{}
 	r.catchupMu.Unlock()
 	r.retireLegacyAcquisitions(legacyLedgers)
+	if releaseDone := r.retireStandardReplay(retirement); releaseDone != nil {
+		<-releaseDone
+	}
 	return legacy, replay
 }
 

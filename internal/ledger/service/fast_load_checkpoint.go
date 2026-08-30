@@ -355,6 +355,9 @@ func (s *Service) acceptFastLoadCheckpoint(
 		}
 		s.fastLoadStrictNodes.Store(checkpoint.strictNodes)
 		s.fastLoadStrictElapsed.Store(checkpoint.strictElapsed)
+		s.fastLoadBaseStateRoot = h.AccountHash
+		s.fastLoadBaseFingerprint = nodeFingerprint
+		s.fastLoadBaseVerified = true
 		s.markFastLoadCheckpointEligible()
 		s.logger.Info("Fast-load checkpoint accepted",
 			"sequence", h.LedgerIndex,
@@ -396,6 +399,46 @@ func (s *Service) InvalidateFastLoadCheckpointEligibility() {
 
 func (s *Service) markFastLoadCheckpointEligible() {
 	s.fastLoadCheckpointState.CompareAndSwap(fastLoadCheckpointIneligible, fastLoadCheckpointEligible)
+}
+
+// AcquireFastLoadStateBase pins the accepted checkpoint's durable NodeStore
+// generation for a frozen-pivot recovery session.
+func (s *Service) AcquireFastLoadStateBase(ctx context.Context) ([32]byte, func(), bool, error) {
+	s.mu.RLock()
+	root := s.fastLoadBaseStateRoot
+	expected := s.fastLoadBaseFingerprint
+	eligible := s.networkLedgerState == networkLedgerFastLoadProvisional && s.fastLoadBaseVerified
+	s.mu.RUnlock()
+	if !eligible {
+		return [32]byte{}, nil, false, nil
+	}
+	durable, ok := s.nodeStore.(nodestore.DurableSnapshotDatabase)
+	if !ok {
+		return [32]byte{}, nil, false, errors.New("NodeStore cannot retain a durable snapshot")
+	}
+	fingerprint, release, err := durable.AcquireDurableSnapshot(ctx)
+	if err != nil {
+		return [32]byte{}, nil, false, fmt.Errorf("acquire checkpoint NodeStore snapshot: %w", err)
+	}
+	if fingerprint != expected {
+		release()
+		return [32]byte{}, nil, false, errors.New("checkpoint NodeStore mutation generation changed before pivot acquisition")
+	}
+	s.mu.RLock()
+	current := s.networkLedgerState == networkLedgerFastLoadProvisional && s.fastLoadBaseVerified &&
+		s.fastLoadBaseStateRoot == root && s.fastLoadBaseFingerprint == expected
+	s.mu.RUnlock()
+	if !current {
+		release()
+		return [32]byte{}, nil, false, nil
+	}
+	return root, release, true, nil
+}
+
+func (s *Service) clearFastLoadBaseLocked() {
+	s.fastLoadBaseStateRoot = [32]byte{}
+	s.fastLoadBaseFingerprint = [32]byte{}
+	s.fastLoadBaseVerified = false
 }
 
 // PrepareFastLoadCheckpoint publishes a one-use checkpoint for the next clean

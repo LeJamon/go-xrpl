@@ -16,11 +16,26 @@ func (d *KVDatabase) DeleteBefore(
 	boundary uint32,
 	batchSize int,
 ) (deleted uint64, err error) {
+	return d.DeleteBeforeWithPrune(ctx, boundary, batchSize, nil)
+}
+
+// DeleteBeforeWithPrune acquires the durable mutation gate before invalidating
+// SHAMap completeness proofs, preserving the global lock order.
+func (d *KVDatabase) DeleteBeforeWithPrune(
+	ctx context.Context,
+	boundary uint32,
+	batchSize int,
+	beginPrune func() func(),
+) (deleted uint64, err error) {
 	if boundary == 0 {
 		return 0, nil
 	}
 	d.mutationMu.Lock()
 	defer d.mutationMu.Unlock()
+	if beginPrune != nil {
+		finish := beginPrune()
+		defer finish()
+	}
 	if err := d.bumpDurableMutation(ctx); err != nil {
 		return 0, fmt.Errorf("delete-before durable generation: %w", err)
 	}

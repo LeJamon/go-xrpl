@@ -3,12 +3,37 @@ package shamap
 import (
 	"context"
 	"crypto/sha512"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 )
 
 const backedWalkProofChunkSize = 1024
+
+var errVerifiedBaseUnavailable = errors.New("verified SHAMap base is unavailable")
+
+// BackedWalkStats reports local discovery work performed by a backed SHAMap.
+type BackedWalkStats struct {
+	EqualSubtreesSkipped  uint64
+	NodesDescended        uint64
+	DurableReads          uint64
+	MissingNodes          uint64
+	VerifiedBaseFallbacks uint64
+}
+
+type backedWalkStats struct {
+	equalSubtreesSkipped  atomic.Uint64
+	nodesDescended        atomic.Uint64
+	durableReads          atomic.Uint64
+	missingNodes          atomic.Uint64
+	verifiedBaseFallbacks atomic.Uint64
+}
+
+type verifiedWalkBase struct {
+	rootHash [32]byte
+	root     traversalNode
+}
 
 type traversalBudgetKey struct{}
 
@@ -84,6 +109,7 @@ func (proofs *backedWalkProofs) clear() {
 
 type backedWalkItem struct {
 	hash       [32]byte
+	baseHash   [32]byte
 	parentHash [32]byte
 	nodeID     NodeID
 	depth      int
@@ -95,12 +121,14 @@ type backedWalkItem struct {
 type backedWalkFrame struct {
 	item       backedWalkItem
 	view       traversalNode
+	baseView   traversalNode
 	nextBranch int
 	full       bool
 	stored     bool
 	loaded     bool
 	topLevel   bool
 	proofStart int
+	usedBase   bool
 }
 
 type backedWalkLane struct {
@@ -116,6 +144,7 @@ type backedWalkLane struct {
 type backedWalkCursor struct {
 	generation uint32
 	rootHash   [32]byte
+	baseRoot   [32]byte
 	lanes      [BranchFactor]backedWalkLane
 }
 
@@ -124,6 +153,52 @@ type traversalNode struct {
 	branches uint16
 	hashes   [BranchFactor][32]byte
 	children [BranchFactor]mapNode
+}
+
+// SetVerifiedBaseContext installs a durable, position-aligned comparison base
+// for subsequent backed walks. The caller must keep managed destructive store
+// mutations excluded until the acquisition using the base has completed.
+func (sm *SHAMap) SetVerifiedBaseContext(ctx context.Context, rootHash [32]byte) error {
+	if rootHash == ([32]byte{}) {
+		return errors.New("verified SHAMap base has an empty root hash")
+	}
+	sm.acquisition.walkMu.Lock()
+	defer sm.acquisition.walkMu.Unlock()
+	sm.backing.mu.RLock()
+	access := sm.backing.access
+	sm.backing.mu.RUnlock()
+	if !access.available() || access.durable == nil {
+		return errors.New("verified SHAMap base requires a durable backing family")
+	}
+	sm.acquisition.stats.durableReads.Add(1)
+	data, err := access.fetchDurable(ctx, rootHash)
+	if err != nil {
+		return fmt.Errorf("load verified SHAMap base root: %w", err)
+	}
+	if len(data) == 0 {
+		return fmt.Errorf("%w: root %x is missing", errVerifiedBaseUnavailable, rootHash[:8])
+	}
+	view, err := decodeTraversalNode(data, rootHash)
+	if err != nil {
+		return fmt.Errorf("%w: root %x: %v", errVerifiedBaseUnavailable, rootHash[:8], err)
+	}
+	if !view.inner {
+		return fmt.Errorf("%w: root %x is not an inner node", errVerifiedBaseUnavailable, rootHash[:8])
+	}
+	sm.acquisition.base = &verifiedWalkBase{rootHash: rootHash, root: view}
+	sm.acquisition.cursor = nil
+	return nil
+}
+
+// BackedWalkStats returns a consistent snapshot of the acquisition counters.
+func (sm *SHAMap) BackedWalkStats() BackedWalkStats {
+	return BackedWalkStats{
+		EqualSubtreesSkipped:  sm.acquisition.stats.equalSubtreesSkipped.Load(),
+		NodesDescended:        sm.acquisition.stats.nodesDescended.Load(),
+		DurableReads:          sm.acquisition.stats.durableReads.Load(),
+		MissingNodes:          sm.acquisition.stats.missingNodes.Load(),
+		VerifiedBaseFallbacks: sm.acquisition.stats.verifiedBaseFallbacks.Load(),
+	}
 }
 
 func (sm *SHAMap) walkBackedContext(
@@ -139,8 +214,20 @@ func (sm *SHAMap) walkBackedContext(
 	if cache.Has(gen, rootHash) {
 		return nil, nil
 	}
-	if sm.acquisition.cursor == nil || sm.acquisition.cursor.generation != gen || sm.acquisition.cursor.rootHash != rootHash {
-		sm.acquisition.cursor = newBackedWalkCursor(root, rootHash, gen)
+	base := sm.acquisition.base
+	baseRoot := [32]byte{}
+	if base != nil {
+		baseRoot = base.rootHash
+		if baseRoot == rootHash {
+			sm.acquisition.stats.equalSubtreesSkipped.Add(1)
+			root.setFullBelowGen(gen)
+			cacheFullBelow(cache, gen, rootHash, 0)
+			return nil, nil
+		}
+	}
+	if sm.acquisition.cursor == nil || sm.acquisition.cursor.generation != gen ||
+		sm.acquisition.cursor.rootHash != rootHash || sm.acquisition.cursor.baseRoot != baseRoot {
+		sm.acquisition.cursor = newBackedWalkCursor(root, rootHash, gen, base)
 	}
 	cursor := sm.acquisition.cursor
 
@@ -166,6 +253,7 @@ func (sm *SHAMap) walkBackedContext(
 			return
 		}
 		reported[item.hash] = struct{}{}
+		sm.acquisition.stats.missingNodes.Add(1)
 		missing = append(missing, MissingNode{
 			Hash:       item.hash,
 			Depth:      item.depth,
@@ -230,8 +318,11 @@ func (sm *SHAMap) walkBackedContext(
 	return missing, nil
 }
 
-func newBackedWalkCursor(root *innerNode, rootHash [32]byte, gen uint32) *backedWalkCursor {
+func newBackedWalkCursor(root *innerNode, rootHash [32]byte, gen uint32, base *verifiedWalkBase) *backedWalkCursor {
 	cursor := &backedWalkCursor{generation: gen, rootHash: rootHash}
+	if base != nil {
+		cursor.baseRoot = base.rootHash
+	}
 	rootID := newRootNodeID()
 	for branch := range BranchFactor {
 		child, hash, set := root.LoadChild(branch)
@@ -245,8 +336,13 @@ func newBackedWalkCursor(root *innerNode, rootHash [32]byte, gen uint32) *backed
 			cursor.lanes[branch].complete = true
 			continue
 		}
+		baseHash := [32]byte{}
+		if base != nil && base.root.branches&(1<<branch) != 0 {
+			baseHash = base.root.hashes[branch]
+		}
 		item := backedWalkItem{
-			hash: hash, parentHash: rootHash, nodeID: childID, depth: 1, branch: branch, parent: root, node: child,
+			hash: hash, baseHash: baseHash, parentHash: rootHash, nodeID: childID,
+			depth: 1, branch: branch, parent: root, node: child,
 		}
 		cursor.lanes[branch].root = item
 		cursor.lanes[branch].stack = []backedWalkFrame{{item: item, topLevel: true, proofStart: 0}}
@@ -285,13 +381,19 @@ func (sm *SHAMap) walkBackedLane(
 		last := len(lane.stack) - 1
 		frame := &lane.stack[last]
 		if !frame.loaded {
+			if frame.item.baseHash != ([32]byte{}) && frame.item.baseHash == frame.item.hash {
+				sm.acquisition.stats.equalSubtreesSkipped.Add(1)
+				sm.finishBackedWalkFrame(lane, cache, gen, true, true, true)
+				continue
+			}
 			if cache.Has(gen, frame.item.hash) {
-				sm.finishBackedWalkFrame(lane, cache, gen, true, true)
+				sm.finishBackedWalkFrame(lane, cache, gen, true, true, false)
 				continue
 			}
 			if !takeTraversalVisit(ctx) {
 				return ErrTraversalBudget
 			}
+			sm.acquisition.stats.nodesDescended.Add(1)
 			view, found, stored, err := sm.loadTraversalNode(ctx, access, root, frame.item)
 			if err != nil {
 				return err
@@ -301,14 +403,21 @@ func (sm *SHAMap) walkBackedLane(
 				if filter.ShouldFetch(frame.item.hash) {
 					report(frame.item)
 				}
-				sm.finishBackedWalkFrame(lane, cache, gen, false, false)
+				sm.finishBackedWalkFrame(lane, cache, gen, false, false, false)
 				continue
 			}
 			if !view.inner {
-				sm.finishBackedWalkFrame(lane, cache, gen, true, stored)
+				sm.finishBackedWalkFrame(lane, cache, gen, true, stored, false)
 				continue
 			}
 			frame.view = view
+			if frame.item.baseHash != ([32]byte{}) {
+				baseView, err := sm.loadVerifiedBaseTraversalNode(ctx, access, frame.item.baseHash)
+				if err != nil {
+					return err
+				}
+				frame.baseView = baseView
+			}
 			frame.full = true
 			frame.stored = stored
 			frame.loaded = true
@@ -318,8 +427,8 @@ func (sm *SHAMap) walkBackedLane(
 			frame.nextBranch++
 		}
 		if frame.nextBranch == BranchFactor {
-			full, stored := frame.full, frame.stored
-			sm.finishBackedWalkFrame(lane, cache, gen, full, stored)
+			full, stored, usedBase := frame.full, frame.stored, frame.usedBase
+			sm.finishBackedWalkFrame(lane, cache, gen, full, stored, usedBase)
 			continue
 		}
 
@@ -333,9 +442,14 @@ func (sm *SHAMap) walkBackedLane(
 		if attached, ok := frame.item.node.(*innerNode); ok {
 			parent = attached
 		}
+		baseHash := [32]byte{}
+		if frame.baseView.inner && frame.baseView.branches&(1<<branch) != 0 {
+			baseHash = frame.baseView.hashes[branch]
+		}
 		lane.stack = append(lane.stack, backedWalkFrame{
 			item: backedWalkItem{
 				hash:       frame.view.hashes[branch],
+				baseHash:   baseHash,
 				parentHash: frame.item.hash,
 				nodeID:     childID,
 				depth:      frame.item.depth + 1,
@@ -366,22 +480,23 @@ func (sm *SHAMap) finishBackedWalkFrame(
 	generation uint32,
 	full bool,
 	stored bool,
+	usedBase bool,
 ) {
 	frame := &lane.stack[len(lane.stack)-1]
 	if full {
 		lane.proofs.truncate(frame.proofStart)
 		lane.rememberProof(frame.item.hash, frame.item.depth)
-		if stored {
+		if stored && !usedBase {
 			cacheFullBelow(cache, generation, frame.item.hash, frame.item.depth)
-			if frame.item.parent != nil && frame.item.node != nil {
-				sm.releaseChild(frame.item.parent, frame.item.branch, frame.item.node)
-			}
+		}
+		if stored && frame.item.parent != nil && frame.item.node != nil {
+			sm.releaseChild(frame.item.parent, frame.item.branch, frame.item.node)
 		}
 	}
-	finishBackedWalkFrame(lane, full, stored)
+	finishBackedWalkFrame(lane, full, stored, usedBase)
 }
 
-func finishBackedWalkFrame(lane *backedWalkLane, full, stored bool) {
+func finishBackedWalkFrame(lane *backedWalkLane, full, stored, usedBase bool) {
 	last := len(lane.stack) - 1
 	topLevel := lane.stack[last].topLevel
 	lane.stack = lane.stack[:last]
@@ -392,6 +507,7 @@ func finishBackedWalkFrame(lane *backedWalkLane, full, stored bool) {
 	parent := &lane.stack[len(lane.stack)-1]
 	parent.full = parent.full && full
 	parent.stored = parent.stored && stored
+	parent.usedBase = parent.usedBase || usedBase
 }
 
 func dedupeBackedWalkItems(items []backedWalkItem) []backedWalkItem {
@@ -411,6 +527,7 @@ func dedupeBackedWalkItems(items []backedWalkItem) []backedWalkItem {
 }
 
 func (sm *SHAMap) loadTraversalNode(ctx context.Context, access *familyAccess, root *innerNode, item backedWalkItem) (traversalNode, bool, bool, error) {
+	sm.acquisition.stats.durableReads.Add(1)
 	data, stored, err := access.fetchPreferDurable(ctx, item.hash)
 	if err != nil {
 		return traversalNode{}, false, false, err
@@ -430,6 +547,29 @@ func (sm *SHAMap) loadTraversalNode(ctx context.Context, access *familyAccess, r
 		return traversalNodeFromNode(attached), true, false, nil
 	}
 	return traversalNode{}, false, false, nil
+}
+
+func (sm *SHAMap) loadVerifiedBaseTraversalNode(
+	ctx context.Context,
+	access *familyAccess,
+	hash [32]byte,
+) (traversalNode, error) {
+	sm.acquisition.stats.durableReads.Add(1)
+	data, err := access.fetchDurable(ctx, hash)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return traversalNode{}, ctxErr
+		}
+		return traversalNode{}, fmt.Errorf("%w: read %x: %v", errVerifiedBaseUnavailable, hash[:8], err)
+	}
+	if len(data) == 0 {
+		return traversalNode{}, fmt.Errorf("%w: node %x is missing", errVerifiedBaseUnavailable, hash[:8])
+	}
+	view, err := decodeTraversalNode(data, hash)
+	if err != nil {
+		return traversalNode{}, fmt.Errorf("%w: node %x: %v", errVerifiedBaseUnavailable, hash[:8], err)
+	}
+	return view, nil
 }
 
 func attachedNode(root *innerNode, nodeID NodeID) mapNode {

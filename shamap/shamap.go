@@ -49,6 +49,8 @@ type acquisitionState struct {
 	walkMu       sync.Mutex
 	attachmentMu sync.Mutex
 	cursor       *backedWalkCursor
+	base         *verifiedWalkBase
+	stats        backedWalkStats
 }
 
 // Type defines the SHAMap type
@@ -129,6 +131,7 @@ func (sm *SHAMap) SetFamily(family Family) {
 	sm.backing.mu.Lock()
 	sm.backing.access = access
 	sm.acquisition.cursor = nil
+	sm.acquisition.base = nil
 	if family != nil {
 		sm.backing.fullBelow = fullBelow
 	}

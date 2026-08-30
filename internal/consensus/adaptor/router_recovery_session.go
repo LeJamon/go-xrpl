@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -20,6 +21,30 @@ func (r *Router) beginFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint
 	r.acquisitionMu.Lock()
 	if r.standardReplay.active {
 		r.acquisitionMu.Unlock()
+		return r.continueFrozenPivotRecovery(seq, hash, peerID)
+	}
+	r.acquisitionMu.Unlock()
+
+	var baseRoot [32]byte
+	var baseRelease func()
+	if r.adaptor != nil {
+		if svc := r.adaptor.LedgerService(); svc != nil {
+			root, release, ok, err := svc.AcquireFastLoadStateBase(context.Background())
+			if err != nil {
+				r.logger.Warn("checkpoint-relative pivot discovery unavailable", "error", err)
+			} else if ok {
+				baseRoot = root
+				baseRelease = release
+			}
+		}
+	}
+
+	r.acquisitionMu.Lock()
+	if r.standardReplay.active {
+		r.acquisitionMu.Unlock()
+		if baseRelease != nil {
+			baseRelease()
+		}
 		return r.continueFrozenPivotRecovery(seq, hash, peerID)
 	}
 	r.standardReplay.generation++
@@ -43,6 +68,7 @@ func (r *Router) beginFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint
 	r.standardReplay.stalledSamples = 0
 	r.standardReplay.retargetAttemptAt = time.Time{}
 	r.standardReplay.backpressured = false
+	r.standardReplay.baseRelease = baseRelease
 	if r.consensusRecovery.targetHash != ([32]byte{}) {
 		r.consensusRecovery.stepHash = hash
 	}
@@ -50,6 +76,14 @@ func (r *Router) beginFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint
 	r.startLedgerAcquisitionLegacyLocked(seq, hash, peerID)
 	il := r.fetchTracker.Find(hash)
 	if il != nil && !il.TransactionOnly() {
+		if baseRoot != ([32]byte{}) {
+			if err := il.SetVerifiedStateBaseContext(context.Background(), baseRoot); err != nil {
+				r.logger.Warn("checkpoint-relative pivot discovery unavailable", "error", err)
+				r.releaseStandardReplayBaseLocked()
+			} else {
+				r.standardReplay.baseLedger = il
+			}
+		}
 		r.acquisitionMu.Unlock()
 		return true
 	}
@@ -63,7 +97,7 @@ func (r *Router) beginFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint
 		retired := r.cancelStandardReplayPipelineLocked()
 		r.acquisitionMu.Unlock()
 		r.replayCommitMu.Unlock()
-		r.retireLegacyAcquisitions(retired)
+		r.retireStandardReplay(retired)
 		return false
 	}
 	r.acquisitionMu.Unlock()
@@ -215,6 +249,7 @@ func (r *Router) completeFrozenPivotAcquisition(h *header.LedgerHeader, initialC
 			r.standardReplay.active = false
 			r.standardReplay.entries = nil
 			r.standardReplay.backpressured = false
+			r.releaseStandardReplayBaseLocked()
 		}
 		r.acquisitionMu.Unlock()
 		if !current {
@@ -343,14 +378,14 @@ func (r *Router) retargetFrozenPivot(
 		}
 	}
 	retired := r.cancelStandardReplayPipelineLocked()
-	retired = append(retired, r.discardSupersededProvisionalFullStateLocked(target.hash)...)
+	retired.ledgers = append(retired.ledgers, r.discardSupersededProvisionalFullStateLocked(target.hash)...)
 	r.consensusRecovery.targetHash = target.hash
 	r.consensusRecovery.anchorSeq = 0
 	r.consensusRecovery.anchorHash = [32]byte{}
 	r.consensusRecovery.stepHash = [32]byte{}
 	r.acquisitionMu.Unlock()
 	r.replayCommitMu.Unlock()
-	r.retireLegacyAcquisitions(retired)
+	r.retireStandardReplay(retired)
 	r.replayPipelineFallbacks.Add(1)
 	r.logger.Warn("retargeting frozen recovery to a newer full-state pivot",
 		"reason", string(reason),
@@ -389,6 +424,6 @@ func (r *Router) failFrozenPivotRecovery(hash [32]byte) bool {
 	}
 	r.acquisitionMu.Unlock()
 	r.replayCommitMu.Unlock()
-	r.retireLegacyAcquisitions(retired)
+	r.retireStandardReplay(retired)
 	return true
 }

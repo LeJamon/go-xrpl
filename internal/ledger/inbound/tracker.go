@@ -319,13 +319,18 @@ func acquisitionKey(seq uint32, hash [32]byte) string {
 // scanned at least once.
 func AcquisitionJSON(snap Snapshot) map[string]any {
 	entry := map[string]any{
-		"hash":                 fmt.Sprintf("%X", snap.Hash),
-		"have_header":          snap.HaveHeader,
-		"request_peers":        snap.RequestPeers,
-		"state_received_total": snap.StateReceived,
-		"state_useful_total":   snap.StateUseful,
-		"tx_received_total":    snap.TxReceived,
-		"tx_useful_total":      snap.TxUseful,
+		"hash":                          fmt.Sprintf("%X", snap.Hash),
+		"have_header":                   snap.HaveHeader,
+		"request_peers":                 snap.RequestPeers,
+		"state_received_total":          snap.StateReceived,
+		"state_useful_total":            snap.StateUseful,
+		"tx_received_total":             snap.TxReceived,
+		"tx_useful_total":               snap.TxUseful,
+		"state_equal_subtrees_skipped":  snap.StateEqualSubtreesSkipped,
+		"state_nodes_descended":         snap.StateNodesDescended,
+		"state_durable_reads":           snap.StateDurableReads,
+		"state_missing_discovered":      snap.StateMissingDiscovered,
+		"state_verified_base_fallbacks": snap.StateVerifiedBaseFallbacks,
 		// Live no-progress retry count, mirroring InboundLedger::getJson's
 		// timeouts_ now that the acquisition runs a timer-driven retry loop.
 		"timeouts": snap.Timeouts,

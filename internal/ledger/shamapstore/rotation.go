@@ -33,6 +33,23 @@ type NodeGenerationRotator interface {
 	GenerationState() (lastRotated, minimumOnline uint32)
 }
 
+type guardedNodePruner interface {
+	DeleteBeforeWithPrune(
+		ctx context.Context,
+		boundary uint32,
+		batchSize int,
+		beginPrune func() func(),
+	) (deleted uint64, err error)
+}
+
+type guardedNodeGenerationRotator interface {
+	RotateGenerationWithPrune(
+		ctx context.Context,
+		lastRotated, minimumOnline uint32,
+		beginPrune func() func(),
+	) (committed bool, err error)
+}
+
 // RelationalPruner deletes ledger and transaction index rows below a retention
 // boundary. It is the go-xrpl equivalent of rippled's clearSql over the
 // Ledgers / Transactions / AccountTransactions tables. A nil RelationalPruner
@@ -439,13 +456,25 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 	}
 
 	deleted, committed, err := func() (uint64, bool, error) {
+		if generations, ok := r.nodes.(NodeGenerationRotator); ok {
+			if guarded, ok := generations.(guardedNodeGenerationRotator); ok {
+				committed, err := guarded.RotateGenerationWithPrune(ctx, refreshedSeq, minimumOnline, beginPrune)
+				return 0, committed, err
+			}
+			if beginPrune != nil {
+				unlock := beginPrune()
+				defer unlock()
+			}
+			committed, err := generations.RotateGeneration(ctx, refreshedSeq, minimumOnline)
+			return 0, committed, err
+		}
+		if guarded, ok := r.nodes.(guardedNodePruner); ok {
+			deleted, err := guarded.DeleteBeforeWithPrune(ctx, lastRotated, r.cfg.DeleteBatch, beginPrune)
+			return deleted, err == nil, err
+		}
 		if beginPrune != nil {
 			unlock := beginPrune()
 			defer unlock()
-		}
-		if generations, ok := r.nodes.(NodeGenerationRotator); ok {
-			committed, err := generations.RotateGeneration(ctx, refreshedSeq, minimumOnline)
-			return 0, committed, err
 		}
 		deleted, err := r.nodes.DeleteBefore(ctx, lastRotated, r.cfg.DeleteBatch)
 		return deleted, err == nil, err

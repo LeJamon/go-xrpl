@@ -138,6 +138,11 @@ func TestService_FastLoadCheckpointCleanRestartAndOneUse(t *testing.T) {
 	require.Equal(t, checkpoint.strictNodes, reader.fastLoadStrictNodes.Load())
 	require.Equal(t, checkpoint.strictElapsed, reader.fastLoadStrictElapsed.Load())
 	require.Equal(t, len(checkpoint.stateProofs)+len(checkpoint.txProofs), tracked.uncachedReads())
+	baseRoot, releaseBase, available, err := reader.AcquireFastLoadStateBase(ctx)
+	require.NoError(t, err)
+	require.True(t, available)
+	require.Equal(t, checkpoint.stateRoot, baseRoot)
+	releaseBase()
 	cache := reader.shamapFamily.(interface {
 		FullBelowCache() *shamap.FullBelowCache
 	}).FullBelowCache()
@@ -370,6 +375,28 @@ func TestService_FastLoadCheckpointManagedMutationFallsBackToStrictTraversal(t *
 	reader.Stop()
 }
 
+func TestService_FastLoadBaseRejectsMutationBeforePivot(t *testing.T) {
+	ctx := context.Background()
+	db := newTestNodeStore(t, 100_000)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	fingerprint, err := db.DurableFingerprint(ctx)
+	require.NoError(t, err)
+	svc := newFastLoadCheckpointService(t, db, newTestRepositories(t, ctx), false)
+	svc.mu.Lock()
+	svc.networkLedgerState = networkLedgerFastLoadProvisional
+	svc.fastLoadBaseStateRoot = [32]byte{0xaa}
+	svc.fastLoadBaseFingerprint = fingerprint
+	svc.fastLoadBaseVerified = true
+	svc.mu.Unlock()
+
+	_, err = db.DeleteBefore(ctx, 1, 1)
+	require.NoError(t, err)
+	_, release, available, err := svc.AcquireFastLoadStateBase(ctx)
+	require.ErrorContains(t, err, "mutation generation changed")
+	require.False(t, available)
+	require.Nil(t, release)
+}
+
 func TestService_FastLoadCheckpointPreparationOrderingAndFailures(t *testing.T) {
 	ctx := context.Background()
 	t.Run("store then sync", func(t *testing.T) {
@@ -595,6 +622,14 @@ func (d *checkpointTrackingDatabase) WithDurableSnapshot(
 		return errors.New("missing durable database capability")
 	}
 	return durable.WithDurableSnapshot(ctx, fn)
+}
+
+func (d *checkpointTrackingDatabase) AcquireDurableSnapshot(ctx context.Context) ([32]byte, func(), error) {
+	durable, ok := d.Database.(nodestore.DurableSnapshotDatabase)
+	if !ok {
+		return [32]byte{}, nil, errors.New("missing retained durable snapshot capability")
+	}
+	return durable.AcquireDurableSnapshot(ctx)
 }
 
 func (d *checkpointTrackingDatabase) uncachedReads() int {
