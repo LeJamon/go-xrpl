@@ -684,6 +684,20 @@ func (l *Ledger) GotBaseContext(ctx context.Context, nodes []message.LedgerNode)
 // root nodes were newly accepted. Duplicate partial replies return zero even
 // while the acquisition remains in StateWantBase.
 func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.LedgerNode) (useful int, err error) {
+	stats, err := l.GotBaseMeasuredContext(ctx, nodes)
+	return stats.UsefulNodes, err
+}
+
+// GotBaseMeasuredContext processes a base reply with node and byte accounting.
+func (l *Ledger) GotBaseMeasuredContext(ctx context.Context, nodes []message.LedgerNode) (NodeApplyStats, error) {
+	stats := nodeInputStats(nodes)
+	useful, usefulBytes, err := l.gotBaseUsefulContext(ctx, nodes)
+	stats.UsefulNodes = useful
+	stats.UsefulBytes = usefulBytes
+	return stats, err
+}
+
+func (l *Ledger) gotBaseUsefulContext(ctx context.Context, nodes []message.LedgerNode) (useful, usefulBytes int, err error) {
 	var stored []shamap.FlushEntry
 	var stateMap, txMap *shamap.SHAMap
 
@@ -693,7 +707,7 @@ func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.Ledge
 	l.mu.Lock()
 	if l.state != StateWantBase {
 		l.mu.Unlock()
-		return 0, nil
+		return 0, 0, nil
 	}
 	defer func() {
 		if useful > 0 {
@@ -724,11 +738,11 @@ func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.Ledge
 	}()
 
 	if len(nodes) > hardMaxReplyNodes {
-		return 0, fmt.Errorf("ledger data exceeds hardMaxReplyNodes: %d > %d", len(nodes), hardMaxReplyNodes)
+		return 0, 0, fmt.Errorf("ledger data exceeds hardMaxReplyNodes: %d > %d", len(nodes), hardMaxReplyNodes)
 	}
 
 	if len(nodes) == 0 || len(nodes[0].NodeData) == 0 {
-		return 0, fmt.Errorf("ledger base missing header")
+		return 0, 0, fmt.Errorf("ledger base missing header")
 	}
 
 	// Parse header from node[0].
@@ -739,7 +753,7 @@ func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.Ledge
 		// Try with prefix (some sources add a 4-byte prefix)
 		h, err = header.DeserializePrefixedHeader(nodes[0].NodeData, false)
 		if err != nil {
-			return 0, fmt.Errorf("deserialize header: %w (data_len=%d)", err, len(nodes[0].NodeData))
+			return 0, 0, fmt.Errorf("deserialize header: %w (data_len=%d)", err, len(nodes[0].NodeData))
 		}
 	}
 	// The wire format doesn't include the hash, so recompute it and reject a
@@ -748,12 +762,12 @@ func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.Ledge
 	//
 	computed := header.CalculateHash(*h)
 	if computed != l.hash || (l.seq != 0 && l.seq != h.LedgerIndex) {
-		return 0, fmt.Errorf("acquire hash mismatch: computed %x != requested %x (seq %d, requested %d)",
+		return 0, 0, fmt.Errorf("acquire hash mismatch: computed %x != requested %x (seq %d, requested %d)",
 			computed[:8], l.hash[:8], h.LedgerIndex, l.seq)
 	}
 	if l.headerAdmission != nil {
 		if err := l.headerAdmission(h.LedgerIndex); err != nil {
-			return 0, fmt.Errorf("%w: %w", ErrHeaderRejected, err)
+			return 0, 0, fmt.Errorf("%w: %w", ErrHeaderRejected, err)
 		}
 	}
 	h.Hash = computed
@@ -765,6 +779,7 @@ func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.Ledge
 	if l.header == nil {
 		l.header = h
 		useful++
+		usefulBytes += len(nodes[0].NodeData)
 		l.logger.Info("inbound ledger: got header",
 			"seq", h.LedgerIndex,
 			"account_hash", fmt.Sprintf("%x", h.AccountHash[:8]),
@@ -779,18 +794,19 @@ func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.Ledge
 	} else if l.stateMap == nil && len(nodes) >= 2 && len(nodes[1].NodeData) > 0 {
 		sm, createErr := l.newSyncMap(ctx, shamap.TypeState)
 		if createErr != nil {
-			return useful, fmt.Errorf("create state map: %w", createErr)
+			return useful, usefulBytes, fmt.Errorf("create state map: %w", createErr)
 		}
 		sm.SetLedgerSeq(h.LedgerIndex)
 		stateRoot, rootErr := sm.AddRootNodeWithEntry(h.AccountHash, nodes[1].NodeData)
 		if rootErr != nil {
-			return useful, fmt.Errorf("add state root node: %w", rootErr)
+			return useful, usefulBytes, fmt.Errorf("add state root node: %w", rootErr)
 		}
 		l.stateMap = sm
 		stateMap = sm
 		l.publishSnapshotLocked()
 		stored = append(stored, stateRoot)
 		useful++
+		usefulBytes += len(nodes[1].NodeData)
 	}
 
 	if h.TxHash == ([32]byte{}) {
@@ -798,22 +814,23 @@ func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.Ledge
 	} else if l.txMap == nil && len(nodes) >= 3 && len(nodes[2].NodeData) > 0 {
 		tm, terr := l.newSyncMap(ctx, shamap.TypeTransaction)
 		if terr != nil {
-			return useful, fmt.Errorf("create tx map: %w", terr)
+			return useful, usefulBytes, fmt.Errorf("create tx map: %w", terr)
 		}
 		tm.SetLedgerSeq(h.LedgerIndex)
 		txRoot, rootErr := tm.AddRootNodeWithEntry(h.TxHash, nodes[2].NodeData)
 		if rootErr != nil {
-			return useful, fmt.Errorf("add tx root node: %w", rootErr)
+			return useful, usefulBytes, fmt.Errorf("add tx root node: %w", rootErr)
 		}
 		l.txMap = tm
 		txMap = tm
 		l.publishSnapshotLocked()
 		stored = append(stored, txRoot)
 		useful++
+		usefulBytes += len(nodes[2].NodeData)
 	}
 
 	if (!l.transactionOnly && l.stateMap == nil) || (h.TxHash != ([32]byte{}) && l.txMap == nil) {
-		return useful, nil
+		return useful, usefulBytes, nil
 	}
 	l.state = StateWantState
 	l.recomputeComplete()
@@ -824,7 +841,7 @@ func (l *Ledger) GotBaseUsefulContext(ctx context.Context, nodes []message.Ledge
 		"have_tx", l.haveTx,
 	)
 
-	return useful, nil
+	return useful, usefulBytes, nil
 }
 
 // GotStateNodes processes state tree nodes received from the peer.

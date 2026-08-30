@@ -1046,10 +1046,7 @@ func applyAcquisitionDataMeasured(ctx context.Context, ledger *inbound.Ledger, d
 	stats = acquisitionNodeInputStats(data)
 	switch data.InfoType {
 	case message.LedgerInfoBase:
-		stats.UsefulNodes, err = ledger.GotBaseUsefulContext(ctx, data.Nodes)
-		if stats.UsefulNodes > 0 {
-			stats.UsefulBytes = stats.ReceivedBytes
-		}
+		stats, err = ledger.GotBaseMeasuredContext(ctx, data.Nodes)
 		localFailure := errors.Is(err, shamap.ErrNodeSerialization)
 		policyFailure := errors.Is(err, inbound.ErrHeaderRejected)
 		badKind := "ledger-data-base"

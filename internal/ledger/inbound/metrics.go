@@ -69,7 +69,7 @@ type acquisitionDiagnostics struct {
 	startedAt      time.Time
 	lastProgressAt time.Time
 	nextRequestID  uint64
-	outstanding    map[acquisitionRequestKey]acquisitionRequestTrace
+	outstanding    map[acquisitionRequestKey][]acquisitionRequestTrace
 	peers          map[uint64]*acquisitionPeerMetrics
 	rate           [acquisitionRateBucketCount]acquisitionRateBucket
 
@@ -194,7 +194,7 @@ func newAcquisitionDiagnostics(now time.Time) acquisitionDiagnostics {
 	return acquisitionDiagnostics{
 		startedAt:      now,
 		lastProgressAt: now,
-		outstanding:    make(map[acquisitionRequestKey]acquisitionRequestTrace),
+		outstanding:    make(map[acquisitionRequestKey][]acquisitionRequestTrace),
 		peers:          make(map[uint64]*acquisitionPeerMetrics),
 		stage:          "idle",
 	}
@@ -219,14 +219,15 @@ func (l *Ledger) RecordRequestStart(peerID uint64, requestedNodes int, queryDept
 	defer l.mu.Unlock()
 	l.diagnostics.nextRequestID++
 	id := l.diagnostics.nextRequestID
-	l.diagnostics.outstanding[acquisitionRequestKey{peerID: peerID, kind: kind}] = acquisitionRequestTrace{
+	key := acquisitionRequestKey{peerID: peerID, kind: kind}
+	l.diagnostics.outstanding[key] = append(l.diagnostics.outstanding[key], acquisitionRequestTrace{
 		id:             id,
 		sentAt:         now,
 		requestedNodes: requestedNodes,
 		queryDepth:     queryDepth,
 		kind:           kind,
 		blind:          blind,
-	}
+	})
 	l.diagnostics.requests++
 	peer := l.peerMetricsLocked(peerID)
 	peer.requests++
@@ -253,18 +254,34 @@ func (l *Ledger) RecordRequestSendFailure(peerID, requestID uint64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	var key acquisitionRequestKey
-	found := false
-	for candidate, trace := range l.diagnostics.outstanding {
-		if candidate.peerID == peerID && trace.id == requestID {
-			key = candidate
-			found = true
+	traceIndex := -1
+	for candidate, traces := range l.diagnostics.outstanding {
+		if candidate.peerID != peerID {
+			continue
+		}
+		for i := range traces {
+			if traces[i].id == requestID {
+				key = candidate
+				traceIndex = i
+				break
+			}
+		}
+		if traceIndex >= 0 {
 			break
 		}
 	}
-	if !found {
+	if traceIndex < 0 {
 		return
 	}
-	delete(l.diagnostics.outstanding, key)
+	traces := l.diagnostics.outstanding[key]
+	copy(traces[traceIndex:], traces[traceIndex+1:])
+	traces[len(traces)-1] = acquisitionRequestTrace{}
+	traces = traces[:len(traces)-1]
+	if len(traces) == 0 {
+		delete(l.diagnostics.outstanding, key)
+	} else {
+		l.diagnostics.outstanding[key] = traces
+	}
 	l.diagnostics.sendFailures++
 	peer := l.peerMetricsLocked(peerID)
 	peer.sendFailures++
@@ -300,8 +317,15 @@ func (l *Ledger) BeginReplyDiagnostics(peerID uint64, kind AcquisitionRequestKin
 		peer.emptyReplies++
 	}
 	key := acquisitionRequestKey{peerID: peerID, kind: kind}
-	if request, ok := l.diagnostics.outstanding[key]; ok {
-		delete(l.diagnostics.outstanding, key)
+	if requests := l.diagnostics.outstanding[key]; len(requests) > 0 {
+		request := requests[0]
+		requests[0] = acquisitionRequestTrace{}
+		requests = requests[1:]
+		if len(requests) == 0 {
+			delete(l.diagnostics.outstanding, key)
+		} else {
+			l.diagnostics.outstanding[key] = requests
+		}
 		trace.RequestID = request.id
 		trace.RequestedNodes = request.requestedNodes
 		trace.QueryDepth = request.queryDepth
@@ -402,7 +426,6 @@ func (l *Ledger) diagnosticsSnapshotLocked(now time.Time) AcquisitionDiagnostics
 		EmptyReplies:       l.diagnostics.emptyReplies,
 		LateReplies:        l.diagnostics.lateReplies,
 		WorkerSaturation:   l.diagnostics.workerSaturation,
-		OutstandingReplies: len(l.diagnostics.outstanding),
 		DecodeTotal:        l.diagnostics.decodeTotal,
 		DecodeMax:          l.diagnostics.decodeMax,
 		WorkerQueueTotal:   l.diagnostics.queueTotal,
@@ -424,8 +447,11 @@ func (l *Ledger) diagnosticsSnapshotLocked(now time.Time) AcquisitionDiagnostics
 			d.LimitingStage = "persistence"
 		}
 	}
-	for _, request := range l.diagnostics.outstanding {
-		d.OutstandingNodes += request.requestedNodes
+	for _, requests := range l.diagnostics.outstanding {
+		d.OutstandingReplies += len(requests)
+		for _, request := range requests {
+			d.OutstandingNodes += request.requestedNodes
+		}
 	}
 	currentEpoch := now.UnixNano() / int64(acquisitionRateBucketDuration)
 	for _, bucket := range l.diagnostics.rate {

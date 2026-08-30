@@ -67,6 +67,37 @@ func TestAcquisitionDiagnosticsCorrelateRequestReplyAndRefill(t *testing.T) {
 	assert.Equal(t, "request_refill", snap.LimitingStage)
 }
 
+func TestAcquisitionDiagnosticsPreserveRepeatedRequestCorrelation(t *testing.T) {
+	now := time.Now()
+	ledger := New([32]byte{2}, 11, 7, nil)
+
+	firstID := ledger.RecordRequestStart(7, 1, 0, AcquisitionRequestBase, false, now)
+	secondID := ledger.RecordRequestStart(7, 1, 0, AcquisitionRequestBase, false, now.Add(10*time.Millisecond))
+	require.NotZero(t, firstID)
+	require.NotZero(t, secondID)
+
+	snap := ledger.Snapshot().Diagnostics
+	assert.Equal(t, 2, snap.OutstandingReplies)
+	assert.Equal(t, 2, snap.OutstandingNodes)
+
+	ledger.RecordRequestSendFailure(7, secondID)
+	trace := ledger.BeginReplyDiagnostics(
+		7,
+		AcquisitionRequestBase,
+		1,
+		100,
+		80,
+		now.Add(20*time.Millisecond),
+		now.Add(20*time.Millisecond),
+	)
+	assert.Equal(t, firstID, trace.RequestID)
+	assert.Equal(t, 20*time.Millisecond, trace.ResponseLatency)
+
+	snap = ledger.Snapshot().Diagnostics
+	assert.Equal(t, uint64(1), snap.SendFailures)
+	assert.Zero(t, snap.OutstandingReplies)
+}
+
 func TestAcquisitionDiagnosticsClassifyLateEmptyReply(t *testing.T) {
 	now := time.Now()
 	ledger := New([32]byte{2}, 11, 7, nil)

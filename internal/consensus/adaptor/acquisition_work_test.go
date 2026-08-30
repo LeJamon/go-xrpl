@@ -637,6 +637,27 @@ func TestApplyAcquisitionData_DuplicateBaseIsNotUseful(t *testing.T) {
 	assert.Zero(t, duplicate)
 }
 
+func TestApplyAcquisitionData_BaseUsefulBytesExcludeIgnoredNodes(t *testing.T) {
+	service := newTestLedgerService(t)
+	closed := service.GetClosedLedger()
+	router := newTestRouter(nil, newTestAdaptor(t), nil)
+	ledger := inbound.New(closed.Hash(), closed.Sequence(), 1, serveTestLogger())
+	nodes := router.buildLedgerBaseNodes(closed)
+	usefulBytes := 0
+	for i := range nodes {
+		usefulBytes += len(nodes[i].NodeData)
+	}
+	nodes = append(nodes, message.LedgerNode{NodeData: make([]byte, 257)})
+
+	stats, _, _, _, err := applyAcquisitionDataMeasured(t.Context(), ledger, &message.LedgerData{
+		InfoType: message.LedgerInfoBase,
+		Nodes:    nodes,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, usefulBytes, stats.UsefulBytes)
+	assert.Equal(t, usefulBytes+257, stats.ReceivedBytes)
+}
+
 func TestProcessAcquisitionWork_BaseReplyCannotPoisonSharedAcquisition(t *testing.T) {
 	service := newTestLedgerService(t)
 	closed := service.GetClosedLedger()
