@@ -800,7 +800,7 @@ func TestAcquisitionWork_PersistenceFailureDoesNotAdoptOrRecordPeerFailure(t *te
 }
 
 func TestAcquisitionWorkLane_BoundsAndCoalesces(t *testing.T) {
-	lane := newAcquisitionWorkLane(1)
+	lane := newAcquisitionWorkLaneWithWorkers(1, 1)
 	firstEntered := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
@@ -845,7 +845,10 @@ func TestAcquisitionWorkLane_BoundsAndCoalesces(t *testing.T) {
 	}
 	require.True(t, lane.submit(b, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
 	assert.False(t, lane.submit(c, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
-	assert.LessOrEqual(t, len(lane.ready), 1)
+	lane.mu.Lock()
+	ready := len(lane.ready)
+	lane.mu.Unlock()
+	assert.LessOrEqual(t, ready, 1)
 
 	close(release)
 	require.Eventually(t, func() bool {
@@ -880,7 +883,7 @@ func TestAcquisitionWorkLane_BackpressuresFullDataBatch(t *testing.T) {
 }
 
 func TestAcquisitionWorkLane_YieldRunsAnotherLedger(t *testing.T) {
-	lane := newAcquisitionWorkLane(2)
+	lane := newAcquisitionWorkLaneWithWorkers(2, 1)
 	slow := inbound.New([32]byte{0xA0}, 10, 1, serveTestLogger())
 	fast := inbound.New([32]byte{0xB0}, 11, 2, serveTestLogger())
 	slowStarted := make(chan struct{})
@@ -998,7 +1001,7 @@ func TestAcquisitionWorkLane_SerializesOneLedger(t *testing.T) {
 }
 
 func TestAcquisitionWorkLane_YieldProcessesNewWorkBeforeResume(t *testing.T) {
-	lane := newAcquisitionWorkLane(1)
+	lane := newAcquisitionWorkLaneWithWorkers(1, 1)
 	ledger := inbound.New([32]byte{0xA3}, 13, 7, serveTestLogger())
 	firstStarted := make(chan struct{})
 	releaseFirst := make(chan struct{})
@@ -1295,7 +1298,7 @@ func TestAcquisitionWorkLane_ShutdownCancelsAndJoins(t *testing.T) {
 }
 
 func TestAcquisitionWorkLane_CancelLedgerPreemptsObsoleteTraversal(t *testing.T) {
-	lane := newAcquisitionWorkLane(1)
+	lane := newAcquisitionWorkLaneWithWorkers(1, 1)
 	staleStarted := make(chan struct{})
 	exactStarted := make(chan struct{})
 	stale := inbound.New([32]byte{1}, 1, 1, serveTestLogger())
@@ -1660,7 +1663,7 @@ func TestRouter_MaintenanceDrainsBufferedReplyBeforeTerminalTimer(t *testing.T) 
 	router.fetchTracker.Track(ledger)
 	inbox := make(chan *peermanagement.InboundMessage, 1)
 	router.SetAcqInbox(inbox)
-	lane := newAcquisitionWorkLane(1)
+	lane := newAcquisitionWorkLaneWithWorkers(1, 1)
 	blocker := inbound.New([32]byte{0xB8}, 202, 8, serveTestLogger())
 	entered := make(chan struct{})
 	release := make(chan struct{})
