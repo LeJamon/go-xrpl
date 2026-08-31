@@ -244,12 +244,11 @@ func TestRouterDispatchesTransaction(t *testing.T) {
 		Payload: encodePayload(t, txMsg),
 	}
 
-	time.Sleep(50 * time.Millisecond)
-
-	// Transaction should be visible via HasTx now that AddPendingTx
-	// routed it through service.SubmitOpenLedgerTx into the persistent
-	// open view.
-	assert.True(t, adaptorHasTx(t, a, consensus.TxID(txHash)))
+	// Transaction should be visible via HasTx once AddPendingTx routes it
+	// through service.SubmitOpenLedgerTx into the persistent open view.
+	require.Eventually(t, func() bool {
+		return adaptorHasTx(t, a, consensus.TxID(txHash))
+	}, 2*time.Second, 5*time.Millisecond)
 }
 
 // TestRouterDispatchesPreDecodedTransaction covers the path taken by
@@ -292,9 +291,9 @@ func TestRouterDispatchesPreDecodedTransaction(t *testing.T) {
 		},
 	}
 
-	time.Sleep(50 * time.Millisecond)
-
-	assert.True(t, adaptorHasTx(t, a, consensus.TxID(txHash)),
+	require.Eventually(t, func() bool {
+		return adaptorHasTx(t, a, consensus.TxID(txHash))
+	}, 2*time.Second, 5*time.Millisecond,
 		"router must accept a pre-decoded (batch-fanned) transaction")
 }
 

@@ -64,25 +64,22 @@ func (s *Service) loadLatestLedger(ctx context.Context) (*ledger.Ledger, error) 
 		)
 	}
 	if !accepted {
-		stateMetrics, err := s.verifyStoredSHAMapMeasured(ctx, h.AccountHash, shamap.TypeState)
+		metrics, nodeFingerprint, baseAvailable, err := s.verifyFastLoadStrictState(ctx, h)
 		if err != nil {
-			return nil, fmt.Errorf("ledger %d state tree: %w", info.Sequence, err)
-		}
-		metrics := stateMetrics
-		if h.TxHash != ([32]byte{}) {
-			txMetrics, err := s.verifyStoredSHAMapMeasured(ctx, h.TxHash, shamap.TypeTransaction)
-			if err != nil {
-				return nil, fmt.Errorf("ledger %d transaction tree: %w", info.Sequence, err)
-			}
-			metrics.nodes += txMetrics.nodes
-			metrics.elapsed += txMetrics.elapsed
+			return nil, fmt.Errorf("ledger %d: %w", info.Sequence, err)
 		}
 		s.fastLoadStrictNodes.Store(metrics.nodes)
 		s.fastLoadStrictElapsed.Store(uint64(metrics.elapsed))
+		if baseAvailable {
+			s.fastLoadBaseStateRoot = h.AccountHash
+			s.fastLoadBaseFingerprint = nodeFingerprint
+			s.fastLoadBaseVerified = true
+		}
 		s.markFastLoadCheckpointEligible()
 		s.logger.Info("Fast-load strict traversal completed",
 			"sequence", h.LedgerIndex,
 			"checkpoint_fallback", s.startupFastLoadCheckpoint != nil,
+			"checkpoint_relative_base", baseAvailable,
 			"nodes_checked", metrics.nodes,
 			"elapsed", metrics.elapsed.String(),
 		)
@@ -91,6 +88,56 @@ func (s *Service) loadLatestLedger(ctx context.Context) (*ledger.Ledger, error) 
 		return nil, fmt.Errorf("mark newest ledger %d validated: %w", info.Sequence, err)
 	}
 	return loaded, nil
+}
+
+// verifyFastLoadStrictState verifies the durable startup ledger while pinning
+// the NodeStore generation when that capability is available. A successful
+// strict traversal is as strong a completeness proof as an accepted startup
+// checkpoint, so retain its state root and fingerprint for checkpoint-relative
+// pivot discovery instead of forcing the subsequent pivot acquisition to walk
+// the entire state again.
+func (s *Service) verifyFastLoadStrictState(
+	ctx context.Context,
+	h header.LedgerHeader,
+) (storedSHAMapVerificationMetrics, [32]byte, bool, error) {
+	var metrics storedSHAMapVerificationMetrics
+	verify := func() error {
+		stateMetrics, err := s.verifyStoredSHAMapMeasured(ctx, h.AccountHash, shamap.TypeState)
+		if err != nil {
+			return fmt.Errorf("state tree: %w", err)
+		}
+		metrics = stateMetrics
+		if h.TxHash == ([32]byte{}) {
+			return nil
+		}
+		txMetrics, err := s.verifyStoredSHAMapMeasured(ctx, h.TxHash, shamap.TypeTransaction)
+		if err != nil {
+			return fmt.Errorf("transaction tree: %w", err)
+		}
+		metrics.nodes += txMetrics.nodes
+		metrics.elapsed += txMetrics.elapsed
+		return nil
+	}
+
+	durable, ok := s.nodeStore.(nodestore.DurableSnapshotDatabase)
+	if !ok {
+		return metrics, [32]byte{}, false, verify()
+	}
+	fingerprint, release, err := durable.AcquireDurableSnapshot(ctx)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return metrics, [32]byte{}, false, ctxErr
+		}
+		s.logger.Warn("Fast-load strict traversal cannot retain durable state base; continuing without it",
+			"err", err,
+		)
+		return metrics, [32]byte{}, false, verify()
+	}
+	defer release()
+	if err := verify(); err != nil {
+		return metrics, [32]byte{}, false, err
+	}
+	return metrics, fingerprint, true, nil
 }
 
 func (s *Service) loadStoredLedgerByHash(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {

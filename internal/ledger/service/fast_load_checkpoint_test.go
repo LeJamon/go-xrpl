@@ -161,6 +161,11 @@ func TestService_FastLoadCheckpointCleanRestartAndOneUse(t *testing.T) {
 	secondRestart := newFastLoadCheckpointService(t, tracked, repositories, false)
 	require.NoError(t, secondRestart.Start())
 	require.Greater(t, tracked.uncachedReads(), len(checkpoint.stateProofs)+len(checkpoint.txProofs))
+	baseRoot, releaseBase, available, err = secondRestart.AcquireFastLoadStateBase(ctx)
+	require.NoError(t, err)
+	require.True(t, available)
+	require.Equal(t, checkpoint.stateRoot, baseRoot)
+	releaseBase()
 	secondRestart.Stop()
 }
 
@@ -375,6 +380,47 @@ func TestService_FastLoadCheckpointManagedMutationFallsBackToStrictTraversal(t *
 	reader.Stop()
 }
 
+func TestService_FastLoadStrictTraversalDoesNotRequireReusableSnapshot(t *testing.T) {
+	tests := map[string]func(*nodestore.KVDatabase) nodestore.Database{
+		"snapshot setup failure": func(base *nodestore.KVDatabase) nodestore.Database {
+			return &checkpointTrackingDatabase{
+				Database: base, uncached: base, snapshotErr: errors.New("injected snapshot failure"),
+			}
+		},
+		"durable database without retained snapshots": func(base *nodestore.KVDatabase) nodestore.Database {
+			return &durableOnlyDatabase{Database: base, DurableDatabase: base}
+		},
+	}
+	for name, wrap := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			base := newTestNodeStore(t, 100_000)
+			t.Cleanup(func() { require.NoError(t, base.Close()) })
+			repositories := newTestRepositories(t, ctx)
+
+			writer := newFastLoadCheckpointService(t, base, repositories, true)
+			require.NoError(t, writer.Start())
+			_, err := writer.AcceptLedger(ctx)
+			require.NoError(t, err)
+			writer.FlushPersists()
+			want := writer.GetValidatedLedger()
+			require.NotNil(t, want)
+			writer.Stop()
+
+			reader := newFastLoadCheckpointService(t, wrap(base), repositories, false)
+			require.NoError(t, reader.Start())
+			require.True(t, reader.IsFastLoadProvisional())
+			require.Equal(t, want.Hash(), reader.GetValidatedLedger().Hash())
+			require.Positive(t, reader.fastLoadStrictNodes.Load())
+			_, release, available, err := reader.AcquireFastLoadStateBase(ctx)
+			require.NoError(t, err)
+			require.False(t, available)
+			require.Nil(t, release)
+			reader.Stop()
+		})
+	}
+}
+
 func TestService_FastLoadBaseRejectsMutationBeforePivot(t *testing.T) {
 	ctx := context.Background()
 	db := newTestNodeStore(t, 100_000)
@@ -547,6 +593,7 @@ type checkpointTrackingDatabase struct {
 	blockOnSyncCall     int
 	syncStarted         chan struct{}
 	syncRelease         chan struct{}
+	snapshotErr         error
 }
 
 func (d *checkpointTrackingDatabase) FetchDataUncached(ctx context.Context, hash nodestore.Hash256) ([]byte, error) {
@@ -625,11 +672,22 @@ func (d *checkpointTrackingDatabase) WithDurableSnapshot(
 }
 
 func (d *checkpointTrackingDatabase) AcquireDurableSnapshot(ctx context.Context) ([32]byte, func(), error) {
+	d.mu.Lock()
+	err := d.snapshotErr
+	d.mu.Unlock()
+	if err != nil {
+		return [32]byte{}, nil, err
+	}
 	durable, ok := d.Database.(nodestore.DurableSnapshotDatabase)
 	if !ok {
 		return [32]byte{}, nil, errors.New("missing retained durable snapshot capability")
 	}
 	return durable.AcquireDurableSnapshot(ctx)
+}
+
+type durableOnlyDatabase struct {
+	nodestore.Database
+	nodestore.DurableDatabase
 }
 
 func (d *checkpointTrackingDatabase) uncachedReads() int {
