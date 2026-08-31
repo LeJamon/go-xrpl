@@ -283,6 +283,18 @@ func TestEncode(t *testing.T) {
 			expectedErr: nil,
 		},
 		{
+			description: "serialize maximum unsigned Int32",
+			input:       map[string]any{"RemainingOwnerCountDelta": uint32(math.MaxInt32)},
+			output:      "A27FFFFFFF",
+			expectedErr: nil,
+		},
+		{
+			description: "serialize minimum string Int32",
+			input:       map[string]any{"RemainingOwnerCountDelta": "-2147483648"},
+			output:      "A280000000",
+			expectedErr: nil,
+		},
+		{
 			description: "reject Int32 overflow",
 			input:       map[string]any{"RemainingOwnerCountDelta": int64(math.MaxInt32) + 1},
 			output:      "",
@@ -291,6 +303,12 @@ func TestEncode(t *testing.T) {
 		{
 			description: "reject fractional Int32",
 			input:       map[string]any{"RemainingOwnerCountDelta": 1.5},
+			output:      "",
+			expectedErr: types.ErrInvalidInt32,
+		},
+		{
+			description: "reject string Int32 overflow",
+			input:       map[string]any{"RemainingOwnerCountDelta": "2147483648"},
 			output:      "",
 			expectedErr: types.ErrInvalidInt32,
 		},

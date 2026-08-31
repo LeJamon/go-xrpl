@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
+	"strconv"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
@@ -16,7 +17,7 @@ type Int32 struct{}
 var ErrInvalidInt32 = errors.New("invalid Int32 value")
 
 // FromJSON converts a JSON value into a serialized byte slice representing a 32-bit signed integer.
-// The input value can be an int, int32, int64, or float64.
+// The input value can be an int, int32, int64, uint, uint32, uint64, float64, or decimal string.
 func (i *Int32) FromJSON(value any) ([]byte, error) {
 	var v int32
 
@@ -33,11 +34,32 @@ func (i *Int32) FromJSON(value any) ([]byte, error) {
 			return nil, ErrInvalidInt32
 		}
 		v = int32(val)
+	case uint:
+		if val > math.MaxInt32 {
+			return nil, ErrInvalidInt32
+		}
+		v = int32(val)
+	case uint32:
+		if val > math.MaxInt32 {
+			return nil, ErrInvalidInt32
+		}
+		v = int32(val)
+	case uint64:
+		if val > math.MaxInt32 {
+			return nil, ErrInvalidInt32
+		}
+		v = int32(val)
 	case float64:
 		if val < math.MinInt32 || val > math.MaxInt32 || val != math.Trunc(val) {
 			return nil, ErrInvalidInt32
 		}
 		v = int32(val)
+	case string:
+		parsed, err := strconv.ParseInt(val, 10, 32)
+		if err != nil {
+			return nil, ErrInvalidInt32
+		}
+		v = int32(parsed)
 	default:
 		return nil, ErrInvalidInt32
 	}
