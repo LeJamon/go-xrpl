@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 	"time"
@@ -179,6 +180,10 @@ func Create(cfg Config) (*GenesisLedger, error) {
 		return nil, fmt.Errorf("genesis XRP supply %d exceeds protocol maximum %d", totalXRP, drops.MaxDrops)
 	}
 	cfg.Amendments = canonicalAmendments(cfg.Amendments)
+	feeSettings, err := buildFeeSettings(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("invalid genesis fee settings: %w", err)
+	}
 
 	passphrase := cfg.MasterPassphrase
 	if passphrase == "" {
@@ -239,7 +244,7 @@ func Create(cfg Config) (*GenesisLedger, error) {
 		}
 	}
 
-	if err := createFeeSettings(stateMap, cfg); err != nil {
+	if err := createFeeSettings(stateMap, feeSettings); err != nil {
 		return nil, fmt.Errorf("failed to create fee settings: %w", err)
 	}
 
@@ -359,26 +364,43 @@ func createInitialAccount(stateMap *shamap.SHAMap, accountID [20]byte, balance u
 	return stateMap.Put(k.Key, data)
 }
 
-// createFeeSettings writes the fee settings entry (modern Amount fields if
-// XRPFees is present, else legacy UInt32/UInt64).
-func createFeeSettings(stateMap *shamap.SHAMap, cfg Config) error {
-	var feeSettings *feeSettings
-
-	if hasXRPFeesAmendment(cfg.Amendments) {
-		feeSettings = newFeeSettings(
-			cfg.Fees.BaseFee,
-			cfg.Fees.ReserveBase,
-			cfg.Fees.ReserveIncrement,
-		)
-	} else {
-		feeSettings = newLegacyFeeSettings(
-			uint64(cfg.Fees.BaseFee.Drops()),
-			10, // ReferenceFeeUnits (deprecated)
-			uint32(cfg.Fees.ReserveBase.Drops()),
-			uint32(cfg.Fees.ReserveIncrement.Drops()),
-		)
+func buildFeeSettings(cfg Config) (*feeSettings, error) {
+	for _, fee := range []struct {
+		name   string
+		amount drops.XRPAmount
+	}{
+		{"BaseFee", cfg.Fees.BaseFee},
+		{"ReserveBase", cfg.Fees.ReserveBase},
+		{"ReserveIncrement", cfg.Fees.ReserveIncrement},
+	} {
+		if fee.amount < 0 {
+			return nil, fmt.Errorf("%s %d must be nonnegative", fee.name, fee.amount)
+		}
+		if fee.amount > drops.MaxDrops {
+			return nil, fmt.Errorf("%s %d exceeds maximum XRP amount %d", fee.name, fee.amount, drops.MaxDrops)
+		}
 	}
 
+	if hasXRPFeesAmendment(cfg.Amendments) {
+		return newFeeSettings(cfg.Fees.BaseFee, cfg.Fees.ReserveBase, cfg.Fees.ReserveIncrement), nil
+	}
+
+	if cfg.Fees.ReserveBase > math.MaxUint32 {
+		return nil, fmt.Errorf("ReserveBase %d exceeds legacy UInt32 maximum %d", cfg.Fees.ReserveBase, uint64(math.MaxUint32))
+	}
+	if cfg.Fees.ReserveIncrement > math.MaxUint32 {
+		return nil, fmt.Errorf("ReserveIncrement %d exceeds legacy UInt32 maximum %d", cfg.Fees.ReserveIncrement, uint64(math.MaxUint32))
+	}
+
+	return newLegacyFeeSettings(
+		uint64(cfg.Fees.BaseFee),
+		10,
+		uint32(cfg.Fees.ReserveBase),
+		uint32(cfg.Fees.ReserveIncrement),
+	), nil
+}
+
+func createFeeSettings(stateMap *shamap.SHAMap, feeSettings *feeSettings) error {
 	data, err := serializeFeeSettings(feeSettings)
 	if err != nil {
 		return err

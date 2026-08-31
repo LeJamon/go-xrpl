@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -120,7 +119,6 @@ func TestGenesisJSONFeeSettingsSerialization(t *testing.T) {
 
 func TestGenesisJSONFeeSettingsValidation(t *testing.T) {
 	maxNativePlusOne := uint64(drops.MaxDrops) + 1
-	maxInt64PlusOne := uint64(math.MaxInt64) + 1
 	tests := []struct {
 		name    string
 		xrpFees bool
@@ -229,6 +227,24 @@ func TestGenesisJSONFeeSettingsValidation(t *testing.T) {
 			wantErr: "BaseFeeDrops out of range",
 		},
 		{
+			name:    "negative modern base fee",
+			xrpFees: true,
+			fees:    `{"LedgerEntryType":"FeeSettings","BaseFeeDrops":"-1","ReserveBaseDrops":"1","ReserveIncrementDrops":"1"}`,
+			wantErr: "BaseFeeDrops out of range",
+		},
+		{
+			name:    "negative modern reserve base",
+			xrpFees: true,
+			fees:    `{"LedgerEntryType":"FeeSettings","BaseFeeDrops":"1","ReserveBaseDrops":"-1","ReserveIncrementDrops":"1"}`,
+			wantErr: "ReserveBaseDrops out of range",
+		},
+		{
+			name:    "negative modern reserve increment",
+			xrpFees: true,
+			fees:    `{"LedgerEntryType":"FeeSettings","BaseFeeDrops":"1","ReserveBaseDrops":"1","ReserveIncrementDrops":"-1"}`,
+			wantErr: "ReserveIncrementDrops out of range",
+		},
+		{
 			name:    "unknown field",
 			xrpFees: true,
 			fees:    `{"LedgerEntryType":"FeeSettings","BaseFeeDrops":"1","ReserveBaseDrops":"1","ReserveIncrementDrops":"1","Typo":1}`,
@@ -270,7 +286,7 @@ func TestGenesisJSONFeeSettingsValidation(t *testing.T) {
 				"ReferenceFeeUnits":10,
 				"ReserveBase":1,
 				"ReserveIncrement":1
-			}`, maxInt64PlusOne),
+			}`, maxNativePlusOne),
 			wantErr: "BaseFee out of range",
 		},
 		{
@@ -316,12 +332,6 @@ func TestGenesisJSONFeeSettingsRippledInputForms(t *testing.T) {
 			want:    [3]drops.XRPAmount{10, 200_000, 50_000},
 		},
 		{
-			name:    "negative modern amount",
-			xrpFees: true,
-			fees:    `{"LedgerEntryType":"FeeSettings","BaseFeeDrops":"-1","ReserveBaseDrops":"1","ReserveIncrementDrops":"1"}`,
-			want:    [3]drops.XRPAmount{-1, 1, 1},
-		},
-		{
 			name: "numeric base fee and string legacy integers",
 			fees: `{"LedgerEntryType":"FeeSettings","BaseFee":10,"ReferenceFeeUnits":"10","ReserveBase":"200000","ReserveIncrement":"50000"}`,
 			want: [3]drops.XRPAmount{10, 200_000, 50_000},
@@ -341,7 +351,7 @@ func TestGenesisJSONFeeSettingsRippledInputForms(t *testing.T) {
 	}
 }
 
-func TestGenesisJSONLegacyBaseFeeAboveNativeLimit(t *testing.T) {
+func TestGenesisJSONRejectsLegacyBaseFeeAboveNativeLimit(t *testing.T) {
 	baseFee := uint64(drops.MaxDrops) + 1
 	input := genesisJSONWithFees(fmt.Sprintf(`{
 		"LedgerEntryType":"FeeSettings",
@@ -350,10 +360,9 @@ func TestGenesisJSONLegacyBaseFeeAboveNativeLimit(t *testing.T) {
 		"ReserveBase":1,
 		"ReserveIncrement":1
 	}`, baseFee), false)
-	require.NoError(t, input.Validate())
-	cfg, err := input.ToGenesisConfig()
-	require.NoError(t, err)
-	require.Equal(t, drops.XRPAmount(baseFee), cfg.BaseFee)
+	require.ErrorContains(t, input.Validate(), "BaseFee out of range")
+	_, err := input.ToGenesisConfig()
+	require.ErrorContains(t, err, "BaseFee out of range")
 }
 
 func TestFeeSettingsJSONMarshalProgrammaticLegacy(t *testing.T) {

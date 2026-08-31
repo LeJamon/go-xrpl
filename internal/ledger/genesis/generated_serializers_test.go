@@ -127,6 +127,20 @@ func TestGenesisGeneratedFeeSettingsPresentZeroAndErrors(t *testing.T) {
 	if value, ok := fields["BaseFee"]; !ok || value != "0" {
 		t.Errorf("BaseFee = %#v, want present zero UInt64", value)
 	}
+
+	data, err = serializeFeeSettings(newFeeSettings(0, 0, 0))
+	if err != nil {
+		t.Fatalf("serialize present-zero modern fees: %v", err)
+	}
+	fields, err = binarycodec.DecodeBytes(data)
+	if err != nil {
+		t.Fatalf("decode present-zero modern fees: %v", err)
+	}
+	for _, name := range []string{"BaseFeeDrops", "ReserveBaseDrops", "ReserveIncrementDrops"} {
+		if value, ok := fields[name]; !ok || value != "0" {
+			t.Errorf("%s = %#v, want present zero Amount", name, value)
+		}
+	}
 	if _, err := serializeAccountRoot(nil); err == nil {
 		t.Error("nil AccountRoot must fail")
 	}

@@ -527,6 +527,18 @@ func (f *FeeSettingsJSON) fees(xrpFees bool) (drops.XRPAmount, drops.XRPAmount, 
 		if err != nil {
 			return 0, 0, 0, err
 		}
+		for _, fee := range []struct {
+			name   string
+			amount drops.XRPAmount
+		}{
+			{"BaseFeeDrops", baseFee},
+			{"ReserveBaseDrops", reserveBase},
+			{"ReserveIncrementDrops", reserveIncrement},
+		} {
+			if fee.amount < 0 {
+				return 0, 0, 0, fmt.Errorf("%s out of range: %d must be nonnegative", fee.name, fee.amount)
+			}
+		}
 		return baseFee, reserveBase, reserveIncrement, nil
 	}
 
@@ -540,7 +552,7 @@ func (f *FeeSettingsJSON) fees(xrpFees bool) (drops.XRPAmount, drops.XRPAmount, 
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("invalid BaseFee: %w", err)
 	}
-	if baseFee > math.MaxInt64 {
+	if baseFee > uint64(drops.MaxDrops) {
 		return 0, 0, 0, fmt.Errorf("BaseFee out of range: %d", baseFee)
 	}
 	if f.ReserveBase > uint64(^uint32(0)) {
