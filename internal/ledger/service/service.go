@@ -111,6 +111,8 @@ type Service struct {
 	lifecycleMu    sync.Mutex
 	lifecycleState serviceLifecycleState
 	stopDone       chan struct{}
+	// Add is serialized with Stop's state transition by lifecycleMu.
+	validationWG sync.WaitGroup
 
 	// openLedgerMu serializes open-ledger submission with lifecycle transitions.
 	// It is acquired before mu so a transition waiting on transaction application
@@ -300,6 +302,16 @@ func (s *Service) lockOpenLedgerIfRunning() error {
 	}
 	s.openLedgerMu.Lock()
 	return nil
+}
+
+func (s *Service) beginValidatedLedgerUpdate() bool {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.lifecycleState != serviceRunning {
+		return false
+	}
+	s.validationWG.Add(1)
+	return true
 }
 
 // New creates a new LedgerService

@@ -253,8 +253,10 @@ func (s *Service) Stop() {
 	done := s.stopDone
 	s.lifecycleMu.Unlock()
 
-	// Wait for an in-flight submission or ledger transition. The stopping state
-	// makes later submitters fail after they enter the gate.
+	// Drain validation lookups before the underlying stores can be closed, then
+	// wait for an in-flight submission or ledger transition. The stopping state
+	// rejects later work.
+	s.validationWG.Wait()
 	s.openLedgerMu.Lock()
 	s.openLedgerMu.Unlock()
 	s.stopNodeStoreSweeper()

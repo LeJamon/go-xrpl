@@ -181,6 +181,9 @@ func TestService_SubmitTransaction_RejectsInnerBatchTransaction(t *testing.T) {
 			if openLedgerHasTx(t, svc, hash) {
 				t.Fatal("directly submitted inner Batch transaction entered the open ledger")
 			}
+			if _, err := svc.GetTransaction(hash); !errors.Is(err, svcerr.ErrTxnNotFound) {
+				t.Fatalf("directly submitted inner Batch transaction was retained: %v", err)
+			}
 		})
 	}
 }

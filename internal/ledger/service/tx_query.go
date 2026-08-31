@@ -137,11 +137,12 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 			CurrentLedger: openLedgerView.Current().Sequence(),
 		}, nil
 	}
+	preprocessValid := ptx.Parsed.GetCommon().GetFlags()&tx.TfInnerBatchTxn == 0
 	// Verify the signature before SubmitDetailed acquires the apply mutex so the
 	// in-strand check reuses the cached verdict (#1105). Skipped in standalone
 	// mode, matching cfg.SkipSignatureVerification above.
-	if !cfg.SkipSignatureVerification {
-		txengine.PrewarmSignature(ptx.Parsed)
+	if preprocessValid && !cfg.SkipSignatureVerification {
+		preprocessValid = txengine.PrewarmSignature(ptx.Parsed) == nil
 	}
 
 	if err := s.lockOpenLedgerIfRunning(); err != nil {
@@ -165,7 +166,6 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	if failHard {
 		cfg.ApplyFlags |= tx.TapFAIL_HARD
 	}
-	preprocessValid := sign.CheckSTTxSignature(ptx.Parsed, cfg.Rules, !cfg.SkipSignatureVerification) == ""
 	outcome := openLedgerView.SubmitDetailed(ptx, cfg, txQueue)
 
 	current := openLedgerView.Current()
