@@ -4,6 +4,7 @@ package types
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
@@ -12,26 +13,38 @@ import (
 type UInt32 struct{}
 
 // FromJSON converts a JSON value into a serialized byte slice representing a 32-bit unsigned integer.
-// The input value is assumed to be an integer. If the serialization fails, an error is returned.
+// If the value cannot be represented exactly as a UInt32, an error is returned.
 func (u *UInt32) FromJSON(value any) ([]byte, error) {
-	var val uint32
+	var val uint64
 	switch v := value.(type) {
 	case uint32:
-		val = v
+		val = uint64(v)
 	case int:
-		val = uint32(v)
+		if v < 0 {
+			return nil, fmt.Errorf("value %d out of range for UInt32", v)
+		}
+		val = uint64(v)
 	case int64:
-		val = uint32(v)
+		if v < 0 {
+			return nil, fmt.Errorf("value %d out of range for UInt32", v)
+		}
+		val = uint64(v)
 	case uint64:
-		val = uint32(v)
+		val = v
 	case float64:
-		val = uint32(v)
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > math.MaxUint32 || math.Trunc(v) != v {
+			return nil, fmt.Errorf("value %v out of range for UInt32", v)
+		}
+		val = uint64(v)
 	default:
 		return nil, fmt.Errorf("unsupported type %T for UInt32", value)
 	}
+	if val > math.MaxUint32 {
+		return nil, fmt.Errorf("value %d out of range for UInt32", val)
+	}
 
 	var out [4]byte
-	binary.BigEndian.PutUint32(out[:], val)
+	binary.BigEndian.PutUint32(out[:], uint32(val))
 	return out[:], nil
 }
 
