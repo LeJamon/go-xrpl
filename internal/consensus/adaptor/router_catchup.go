@@ -706,6 +706,7 @@ func (r *Router) armCatchupTowardTarget() {
 }
 
 func (r *Router) armConsensusCatchup() {
+	r.retireLocallySatisfiedFrozenPivot("local_frontier")
 	if r.armPendingConsensusLedger() {
 		return
 	}
@@ -1304,6 +1305,11 @@ func (r *Router) startLedgerAcquisitionLegacyLocked(seq uint32, hash [32]byte, p
 	if seq != 0 && r.belowFloor(seq) {
 		return
 	}
+	if svc := r.adaptor.LedgerService(); svc != nil {
+		if held, err := svc.GetLedgerByHash(hash); err == nil && held != nil {
+			return
+		}
+	}
 	// Safety net: if a replay-delta for the same hash is still
 	// registered, don't start a legacy on top of it — one path is
 	// always enough.
@@ -1570,6 +1576,9 @@ func (r *Router) onLedgerSwitched(seq uint32, _ [32]byte, parentHash [32]byte, h
 
 func (r *Router) onLedgerFullyValidated(seq uint32, hash [32]byte) {
 	r.recordSeqHash(seq, hash, [32]byte{}, false)
+	if r.locallySatisfiesLedger(seq, hash) {
+		r.retireLocallySatisfiedLedger(seq, hash, "ledger_validated")
+	}
 
 	removed := make(map[[32]byte]struct{})
 	var legacy []*inbound.Ledger
@@ -2620,7 +2629,8 @@ func (r *Router) isBuildingLedger(seq uint32) bool {
 	return ok && seq != 0 && engine.BuildingLedgerSeq() == seq
 }
 
-func (r *Router) onLedgerBuilt(uint32, [32]byte) {
+func (r *Router) onLedgerBuilt(seq uint32, hash [32]byte) {
+	r.retireLocallySatisfiedLedger(seq, hash, "ledger_built")
 	r.armCatchupTowardTarget()
 }
 

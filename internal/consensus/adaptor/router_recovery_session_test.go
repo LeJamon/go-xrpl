@@ -195,6 +195,127 @@ func TestFrozenPivotRecoveryFailureReleasesPivotGeneration(t *testing.T) {
 	assert.Equal(t, 1, released)
 }
 
+func TestFrozenPivotRecoveryDoesNotStartForHeldLedger(t *testing.T) {
+	r, _, sender, svc := makeRouter(t)
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+	_, pivot, pivotHash, pivotSeq := buildSuccessorAgainstParent(t, parent)
+	storeRecoveryLedger(t, svc, pivot)
+
+	generation := r.standardReplay.generation
+	assert.False(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+	assert.Equal(t, generation, r.standardReplay.generation)
+	assert.False(t, r.standardReplay.active)
+	assert.Nil(t, r.fetchTracker.Find(pivotHash))
+	assert.Empty(t, sender.legacyCalls())
+}
+
+func TestLegacyFullStateAcquisitionDoesNotStartForHeldLedger(t *testing.T) {
+	r, _, sender, svc := makeRouter(t)
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+	_, pivot, pivotHash, pivotSeq := buildSuccessorAgainstParent(t, parent)
+	storeRecoveryLedger(t, svc, pivot)
+
+	r.startLedgerAcquisitionLegacy(pivotSeq, pivotHash, 7)
+
+	assert.Nil(t, r.fetchTracker.Find(pivotHash))
+	assert.Empty(t, sender.legacyCalls())
+}
+
+func TestLedgerBuiltRetiresFrozenPivotAndContinuesCatchup(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+	_, pivot, pivotHash, pivotSeq := buildSuccessorAgainstParent(t, parent)
+	_, successor, successorHash, successorSeq := buildSuccessorAgainstParent(t, pivot)
+	_, _, targetHash, targetSeq := buildSuccessorAgainstParent(t, successor)
+	trackCatchupPeer(r, 7, targetSeq, targetHash)
+	r.recordSeqHash(pivotSeq, pivotHash, parent.Hash(), true)
+	r.recordSeqHash(successorSeq, successorHash, pivotHash, true)
+	r.recordSeqHash(targetSeq, targetHash, successorHash, true)
+	r.recordValidationCatchupTarget(targetSeq, targetHash, 7, catchupSourceQuorum)
+
+	r.acquisitionMu.Lock()
+	r.consensusRecovery.targetHash = targetHash
+	r.acquisitionMu.Unlock()
+	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+	released := 0
+	r.standardReplay.baseRelease = func() { released++ }
+	require.NotNil(t, r.fetchTracker.Find(pivotHash))
+	require.NoError(t, pivot.SetValidated())
+	require.NoError(t, svc.SwitchToPreferredLedger(pivot))
+
+	r.onLedgerBuilt(pivotSeq, pivotHash)
+
+	assert.False(t, r.standardReplay.active)
+	assert.Nil(t, r.fetchTracker.Find(pivotHash))
+	assert.Equal(t, 1, released)
+	assert.Equal(t, targetHash, r.consensusRecovery.targetHash)
+	assert.Zero(t, r.consensusRecovery.stepHash)
+	assert.True(t, r.isAcquiring(successorHash))
+}
+
+func TestLedgerFullyValidatedRetiresHeldFrozenPivot(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+	_, pivot, pivotHash, pivotSeq := buildSuccessorAgainstParent(t, parent)
+	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+	require.NoError(t, pivot.SetValidated())
+	require.NoError(t, svc.SwitchToPreferredLedger(pivot))
+
+	r.onLedgerFullyValidated(pivotSeq, pivotHash)
+
+	assert.False(t, r.standardReplay.active)
+	assert.Nil(t, r.fetchTracker.Find(pivotHash))
+}
+
+func TestConsensusCatchupRetiresLocallySatisfiedFrozenPivot(t *testing.T) {
+	r, _, _, svc := makeRouter(t)
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+	_, pivot, pivotHash, pivotSeq := buildSuccessorAgainstParent(t, parent)
+	trackCatchupPeer(r, 7, pivotSeq, pivotHash)
+	r.recordValidationCatchupTarget(pivotSeq, pivotHash, 7, catchupSourceQuorum)
+	r.acquisitionMu.Lock()
+	r.consensusRecovery.targetHash = pivotHash
+	r.acquisitionMu.Unlock()
+	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+	require.NoError(t, pivot.SetValidated())
+	require.NoError(t, svc.SwitchToPreferredLedger(pivot))
+
+	r.armConsensusCatchup()
+
+	assert.False(t, r.standardReplay.active)
+	assert.Nil(t, r.fetchTracker.Find(pivotHash))
+	assert.Equal(t, consensusRecovery{}, r.consensusRecovery)
+}
+
+func TestConsensusCatchupHandsHeldPivotToConsensus(t *testing.T) {
+	r, engine, svc := makeRouterWithEngine(t)
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+	_, pivot, pivotHash, pivotSeq := buildSuccessorAgainstParent(t, parent)
+	trackCatchupPeer(r, 7, pivotSeq, pivotHash)
+	r.recordValidationCatchupTarget(pivotSeq, pivotHash, 7, catchupSourceQuorum)
+	r.acquisitionMu.Lock()
+	r.consensusRecovery.targetHash = pivotHash
+	r.acquisitionMu.Unlock()
+	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+	storeRecoveryLedger(t, svc, pivot)
+
+	r.armConsensusCatchup()
+
+	assert.False(t, r.standardReplay.active)
+	assert.Nil(t, r.fetchTracker.Find(pivotHash))
+	assert.Equal(t, []consensus.LedgerID{consensus.LedgerID(pivotHash)}, engine.getLedgers())
+	assert.Equal(t, pivotSeq, r.consensusRecovery.anchorSeq)
+	assert.Equal(t, pivotHash, r.consensusRecovery.anchorHash)
+	assert.Zero(t, r.consensusRecovery.targetHash)
+	assert.Zero(t, r.consensusRecovery.stepHash)
+}
+
 func TestFrozenPivotFailedStartCannotBeKeptAliveByTargetAdvance(t *testing.T) {
 	r, _, _, svc := makeRouter(t)
 	pivotSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1

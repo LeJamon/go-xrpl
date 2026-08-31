@@ -17,6 +17,9 @@ func (r *Router) beginFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint
 	if seq == 0 || hash == ([32]byte{}) {
 		return false
 	}
+	if r.retireLocallySatisfiedFrozenPivot("local_frontier") {
+		return false
+	}
 
 	r.acquisitionMu.Lock()
 	if r.standardReplay.active {
@@ -24,6 +27,9 @@ func (r *Router) beginFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint
 		return r.continueFrozenPivotRecovery(seq, hash, peerID)
 	}
 	r.acquisitionMu.Unlock()
+	if r.locallySatisfiesLedger(seq, hash) {
+		return false
+	}
 
 	var baseRoot [32]byte
 	var baseRelease func()
@@ -37,6 +43,12 @@ func (r *Router) beginFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint
 				baseRelease = release
 			}
 		}
+	}
+	if r.locallySatisfiesLedger(seq, hash) {
+		if baseRelease != nil {
+			baseRelease()
+		}
+		return false
 	}
 
 	r.acquisitionMu.Lock()
@@ -145,6 +157,9 @@ func (r *Router) continueFrozenPivotRecovery(seq uint32, hash [32]byte, peerID u
 	if seq == 0 || hash == ([32]byte{}) {
 		return false
 	}
+	if r.retireLocallySatisfiedFrozenPivot("local_frontier") {
+		return false
+	}
 
 	r.catchupMu.Lock()
 	trustedReplacement := r.catchup.source != catchupSourcePeer &&
@@ -180,6 +195,109 @@ func (r *Router) continueFrozenPivotRecovery(seq uint32, hash [32]byte, peerID u
 	r.acquisitionMu.Unlock()
 
 	return r.refillStandardReplayCollector(peerID)
+}
+
+func (r *Router) locallySatisfiesLedger(seq uint32, hash [32]byte) bool {
+	if seq == 0 || hash == ([32]byte{}) || r.adaptor == nil {
+		return false
+	}
+	svc := r.adaptor.LedgerService()
+	if svc == nil {
+		return false
+	}
+	if closed := svc.GetClosedLedger(); closed != nil && closed.Sequence() == seq && closed.Hash() == hash {
+		return true
+	}
+	if validated := svc.GetValidatedLedger(); validated != nil {
+		if validated.Sequence() > seq || validated.Sequence() == seq && validated.Hash() == hash {
+			return true
+		}
+	}
+	held, err := svc.GetLedgerByHash(hash)
+	return err == nil && held != nil && held.Sequence() == seq
+}
+
+func (r *Router) consensusHandoffComplete(seq uint32, hash [32]byte) bool {
+	if seq == 0 || hash == ([32]byte{}) || r.adaptor == nil {
+		return false
+	}
+	svc := r.adaptor.LedgerService()
+	if svc == nil {
+		return false
+	}
+	if closed := svc.GetClosedLedger(); closed != nil && closed.Sequence() == seq && closed.Hash() == hash {
+		return true
+	}
+	validated := svc.GetValidatedLedger()
+	return validated != nil && validated.Sequence() > seq
+}
+
+func (r *Router) retireLocallySatisfiedFrozenPivot(reason string) bool {
+	r.acquisitionMu.Lock()
+	if !r.standardReplay.active || r.standardReplay.pivotReady {
+		r.acquisitionMu.Unlock()
+		return false
+	}
+	seq := r.standardReplay.pivotSeq
+	hash := r.standardReplay.pivotHash
+	r.acquisitionMu.Unlock()
+	if !r.locallySatisfiesLedger(seq, hash) {
+		return false
+	}
+	return r.retireLocallySatisfiedLedger(seq, hash, reason)
+}
+
+func (r *Router) retireLocallySatisfiedLedger(seq uint32, hash [32]byte, reason string) bool {
+	if seq == 0 || hash == ([32]byte{}) {
+		return false
+	}
+	handoffComplete := r.consensusHandoffComplete(seq, hash)
+
+	r.replayCommitMu.Lock()
+	r.acquisitionMu.Lock()
+	retirement := standardReplayRetirement{}
+	retiredPipeline := r.standardReplay.active && !r.standardReplay.pivotReady && r.standardReplay.pivotSeq == seq &&
+		r.standardReplay.pivotHash == hash
+	if retiredPipeline {
+		retirement = r.cancelStandardReplayPipelineLocked()
+	}
+	if acquisition := r.fetchTracker.Find(hash); acquisition != nil &&
+		r.fetchTracker.DiscardExpected(acquisition) {
+		retirement.ledgers = append(retirement.ledgers, acquisition)
+	}
+	retiredReplay := r.replayer.Has(hash)
+	if retiredReplay {
+		r.replayer.Abandon(hash)
+	}
+	releasedRecovery := false
+	if r.consensusRecovery.targetHash == hash {
+		if handoffComplete {
+			r.consensusRecovery = consensusRecovery{}
+		} else {
+			r.consensusRecovery.stepHash = [32]byte{}
+		}
+		releasedRecovery = true
+	} else if r.consensusRecovery.stepHash == hash {
+		r.consensusRecovery.stepHash = [32]byte{}
+		releasedRecovery = true
+	}
+	r.acquisitionMu.Unlock()
+	r.replayCommitMu.Unlock()
+
+	retiredLegacy := len(retirement.ledgers)
+	r.retireStandardReplay(retirement)
+	retired := retiredPipeline || retiredLegacy != 0 || retiredReplay || releasedRecovery
+	if retired {
+		r.logger.Info("retired locally satisfied recovery work",
+			"reason", reason,
+			"seq", seq,
+			"hash", fmt.Sprintf("%x", hash[:8]),
+			"pipeline", retiredPipeline,
+			"legacy", retiredLegacy,
+			"replay", retiredReplay,
+		)
+	}
+	return retired
 }
 
 func (r *Router) completeFrozenPivotAcquisition(h *header.LedgerHeader, initialCandidate bool) bool {
