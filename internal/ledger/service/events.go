@@ -467,8 +467,9 @@ func (s *Service) SignalServerStatusPublication(publication ServerStatusPublicat
 	return s.eventPublisher.dispatchServerStatusPublication(publication)
 }
 
-// SetTxRelay registers the per-tx broadcast handler invoked by
-// OpenLedger.Accept's relay callback. Pass nil to unwire.
+// SetTxRelay registers the per-tx broadcast handler invoked synchronously by
+// ledger transitions. The handler must not block or call back into Service.
+// Pass nil to unwire.
 func (s *Service) SetTxRelay(fn func(blob []byte)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -505,12 +506,6 @@ func (s *Service) validatedLedgerNotificationLocked(previous *ledger.Ledger) val
 		hash:       s.validatedLedger.Hash(),
 		parentHash: s.validatedLedger.ParentHash(),
 	}
-}
-
-func (s *Service) unlockAndNotifyValidatedLedger(previous *ledger.Ledger) {
-	notification := s.validatedLedgerNotificationLocked(previous)
-	s.mu.Unlock()
-	notification.notify()
 }
 
 func (n validatedLedgerNotification) notify() {

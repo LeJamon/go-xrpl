@@ -86,15 +86,15 @@ type SubmitLedgerState struct {
 // fed into the canonical pendingTxs slice. The ApplyFlags also carries
 // the bit so TxQ.canBeHeld rejects the queue admission (TxQ.cpp:393-399).
 //
-// Lock ordering: this holds s.mu while SubmitDetailed acquires the TxQ
-// mutex via TxQ.Apply. The contract is s.mu → txQueue.mu (documented on
-// both Service fields); TxQ methods never reach back for s.mu, so the
-// submit and consensus-close paths cannot deadlock.
+// Lock ordering: openLedgerMu serializes submission with ledger transitions;
+// the service mutex is held only while capturing the current configuration and
+// dependencies. SubmitDetailed then acquires the TxQ mutex without holding the
+// service mutex.
 func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, failHard bool) (*SubmitResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.openLedgerView == nil {
+	s.mu.RLock()
+	openLedgerView := s.openLedgerView
+	s.mu.RUnlock()
+	if openLedgerView == nil {
 		return nil, svcerr.ErrNoOpenLedger
 	}
 	if rawBlob != nil {
@@ -104,13 +104,16 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	}
 	blob := transaction.GetRawBytes()
 
+	s.mu.RLock()
 	cfg, cfgErr := s.applyConfigLocked()
+	standalone := s.config.Standalone
+	s.mu.RUnlock()
 	if cfgErr != nil {
 		return nil, cfgErr
 	}
 	// RPC ingress skips signature verification in standalone mode (the
 	// previous engine path did the same); the network path leaves it on.
-	cfg.SkipSignatureVerification = s.config.Standalone
+	cfg.SkipSignatureVerification = standalone
 	if failHard {
 		cfg.ApplyFlags |= tx.TapFAIL_HARD
 	}
@@ -120,7 +123,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		return &SubmitResult{
 			Result:        ter.TemMALFORMED,
 			Message:       ter.TemMALFORMED.Message(),
-			CurrentLedger: s.openLedgerView.Current().Sequence(),
+			CurrentLedger: openLedgerView.Current().Sequence(),
 		}, nil
 	}
 	// Local submission checks (rippled STTx::passesLocalChecks via NetworkOPs):
@@ -131,20 +134,41 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		return &SubmitResult{
 			Result:        localResult,
 			Message:       localResult.Message(),
-			CurrentLedger: s.openLedgerView.Current().Sequence(),
+			CurrentLedger: openLedgerView.Current().Sequence(),
 		}, nil
 	}
-	preprocessValid := sign.CheckSTTxSignature(ptx.Parsed, cfg.Rules, !cfg.SkipSignatureVerification) == ""
+	preprocessValid := ptx.Parsed.GetCommon().GetFlags()&tx.TfInnerBatchTxn == 0
 	// Verify the signature before SubmitDetailed acquires the apply mutex so the
 	// in-strand check reuses the cached verdict (#1105). Skipped in standalone
 	// mode, matching cfg.SkipSignatureVerification above.
-	if !cfg.SkipSignatureVerification {
-		txengine.PrewarmSignature(ptx.Parsed)
+	if preprocessValid && !cfg.SkipSignatureVerification {
+		preprocessValid = txengine.PrewarmSignature(ptx.Parsed) == nil
 	}
 
-	outcome := s.openLedgerView.SubmitDetailed(ptx, cfg, s.txQueue)
+	if err := s.lockOpenLedgerIfRunning(); err != nil {
+		return nil, err
+	}
+	defer s.openLedgerMu.Unlock()
+	s.mu.RLock()
+	openLedgerView = s.openLedgerView
+	txQueue := s.txQueue
+	localTxs := s.localTxs
+	cfg, cfgErr = s.applyConfigLocked()
+	standalone = s.config.Standalone
+	s.mu.RUnlock()
+	if openLedgerView == nil {
+		return nil, svcerr.ErrNoOpenLedger
+	}
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
+	cfg.SkipSignatureVerification = standalone
+	if failHard {
+		cfg.ApplyFlags |= tx.TapFAIL_HARD
+	}
+	outcome := openLedgerView.SubmitDetailed(ptx, cfg, txQueue)
 
-	current := s.openLedgerView.Current()
+	current := openLedgerView.Current()
 	currentSeq := current.Sequence()
 	result := &SubmitResult{
 		Result:        outcome.Result,
@@ -154,9 +178,12 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		Message:       outcome.Message,
 		CurrentLedger: currentSeq,
 	}
-	if s.validatedLedger != nil {
-		result.ValidatedLedger = s.validatedLedger.Sequence()
-		result.CurrentLedgerState = s.submitLedgerStateLocked(current, ptx.Parsed, cfg)
+	s.mu.RLock()
+	validatedLedger := s.validatedLedger
+	s.mu.RUnlock()
+	if validatedLedger != nil {
+		result.ValidatedLedger = validatedLedger.Sequence()
+		result.CurrentLedgerState = s.submitLedgerState(current, ptx.Parsed, cfg, validatedLedger, txQueue)
 	}
 	if outcome.Class == openledger.ResultSuccess {
 		s.rememberRelayTransaction(ptx.Hash, ptx.Blob, outcome.Queued)
@@ -183,10 +210,10 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	// enforceFailHard (NetworkOPs.cpp:1674) suppresses both this push (1677)
 	// and relay (1685-1689) so the caller learns about the failure
 	// immediately without a delayed re-application.
-	if preprocessValid && rawBlob != nil && s.localTxs != nil {
+	if preprocessValid && rawBlob != nil && localTxs != nil {
 		tr := outcome.Result
 		if (!failHard || tr == ter.TesSUCCESS) && tr != ter.TefALREADY {
-			s.localTxs.PushBack(currentSeq, ptx)
+			localTxs.PushBack(currentSeq, ptx)
 		}
 	}
 
@@ -197,7 +224,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		s.pendingTxs = append(s.pendingTxs, ptx)
 	}
 
-	s.dispatchProposedTransaction(ptx, ptx.Blob, outcome, s.openLedgerView.Current())
+	s.dispatchProposedTransaction(ptx, ptx.Blob, outcome, current)
 	if outcome.Applied {
 		s.eventPublisher.dispatchServerStatusEvent()
 	}
@@ -205,15 +232,17 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	return result, nil
 }
 
-// submitLedgerStateLocked derives the four submit-state fields from the same
-// post-submit view and TxQ snapshot while the service lock is held. Any read or
-// decode failure omits the complete snapshot rather than returning mixed state.
-func (s *Service) submitLedgerStateLocked(
+// submitLedgerState derives the four submit-state fields from the same
+// post-submit view and captured frontier dependencies. Any read or decode
+// failure omits the complete snapshot rather than returning mixed state.
+func (s *Service) submitLedgerState(
 	current *ledger.Ledger,
 	parsedTx tx.Transaction,
 	cfg openledger.ApplyConfig,
+	validatedLedger *ledger.Ledger,
+	txQueue *txq.TxQ,
 ) *SubmitLedgerState {
-	if current == nil || parsedTx == nil {
+	if current == nil || parsedTx == nil || validatedLedger == nil {
 		return nil
 	}
 
@@ -259,14 +288,14 @@ func (s *Service) submitLedgerStateLocked(
 	baseFeeForTx := computeBaseFeeForTx(current, parsedTx, feeConfig)
 	availableSeq := accountSeq
 	openLedgerCost := baseFeeForTx
-	if s.txQueue != nil {
-		feeAndSeq := s.txQueue.TxRequiredFeeAndSeq(accountID, accountSeq, baseFeeForTx, current.TxCount())
+	if txQueue != nil {
+		feeAndSeq := txQueue.TxRequiredFeeAndSeq(accountID, accountSeq, baseFeeForTx, current.TxCount())
 		openLedgerCost = feeAndSeq.RequiredFee
 		availableSeq = feeAndSeq.AvailableSeq
 	}
 
 	return &SubmitLedgerState{
-		ValidatedLedgerIndex:     s.validatedLedger.Sequence(),
+		ValidatedLedgerIndex:     validatedLedger.Sequence(),
 		OpenLedgerCost:           openLedgerCost,
 		AccountSequenceNext:      accountSeq,
 		AccountSequenceAvailable: availableSeq,
@@ -274,8 +303,8 @@ func (s *Service) submitLedgerStateLocked(
 }
 
 // dispatchProposedTransaction publishes only transactions committed to the
-// open ledger. Callers hold s.mu, which serializes local and peer ingress with
-// ledger acceptance before the shared publication FIFO.
+// open ledger. Callers hold s.openLedgerMu, which serializes local and peer
+// ingress with ledger acceptance before the shared publication FIFO.
 func (s *Service) dispatchProposedTransaction(
 	ptx openledger.PendingTx,
 	rawBlob []byte,

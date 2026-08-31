@@ -111,9 +111,17 @@ type Service struct {
 	lifecycleMu    sync.Mutex
 	lifecycleState serviceLifecycleState
 	stopDone       chan struct{}
+	// Add is serialized with Stop's state transition by lifecycleMu.
+	validationWG sync.WaitGroup
+
+	// openLedgerMu serializes open-ledger submission with lifecycle transitions.
+	// It is acquired before mu so a transition waiting on transaction application
+	// never blocks closed-ledger readers.
+	openLedgerMu sync.Mutex
 
 	// mu guards the lifecycle frontier and cross-component state. Lock ordering
-	// is mu, historyComponent.mu, then component-specific locks such as TxQ.
+	// is openLedgerMu, mu, historyComponent.mu, then component-specific locks
+	// such as TxQ.
 	// History-only query paths take historyComponent.mu without taking mu.
 	mu sync.RWMutex
 
@@ -156,7 +164,8 @@ type Service struct {
 	genesisLedger *ledger.Ledger
 
 	// Pending transactions accumulated during the open ledger phase;
-	// re-applied in canonical order at AcceptLedger time.
+	// re-applied in canonical order at AcceptLedger time. Guarded by
+	// openLedgerMu.
 	pendingTxs []openledger.PendingTx
 
 	// pendingValidation stashes accepted events by hash at close time so
@@ -282,6 +291,28 @@ const (
 	serviceStopping
 	serviceStopped
 )
+
+var errServiceNotRunning = errors.New("ledger service is not running")
+
+func (s *Service) lockOpenLedgerIfRunning() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.lifecycleState != serviceRunning {
+		return errServiceNotRunning
+	}
+	s.openLedgerMu.Lock()
+	return nil
+}
+
+func (s *Service) beginValidatedLedgerUpdate() bool {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.lifecycleState != serviceRunning {
+		return false
+	}
+	s.validationWG.Add(1)
+	return true
+}
 
 // New creates a new LedgerService
 func New(cfg Config) (*Service, error) {
@@ -484,6 +515,8 @@ func (s *Service) Start() (err error) {
 		s.startupFastLoadCheckpoint = nil
 	}()
 
+	s.openLedgerMu.Lock()
+	defer s.openLedgerMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.historyComponent.mu.Lock()
@@ -742,7 +775,8 @@ func (s *Service) tickLoadFeeLocked() {
 // acceptOpenLedgerViewLocked invokes OpenLedger.Accept on the LCL transition to
 // closed. No-op pre-Start. retriableTxs are the disputed we-voted-NO txs
 // plus the build pass's retry-state txs, replayed first; anyDisputes is the
-// retriesFirst flag. closedSeq is for log context only. Caller must hold s.mu.
+// retriesFirst flag. closedSeq is for log context only. Caller must hold
+// openLedgerMu and s.mu.
 func (s *Service) acceptOpenLedgerViewLocked(closed *ledger.Ledger, retriableTxs []openledger.PendingTx, anyDisputes bool) error {
 	if s.openLedgerView == nil {
 		s.processClosedLedgerLocked(closed)
@@ -920,22 +954,31 @@ func (s *Service) SubmitOpenLedgerTxDetailed(blob []byte, local bool) (openledge
 	if reason := tx.TransactionLocalChecksFailureReason(ptx.Parsed); reason != "" {
 		return failure, fmt.Errorf("%w: %s", ErrInvalidLocalTransaction, reason)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.openLedgerView == nil {
+
+	if err := s.lockOpenLedgerIfRunning(); err != nil {
+		return failure, err
+	}
+	defer s.openLedgerMu.Unlock()
+	s.mu.RLock()
+	openLedgerView := s.openLedgerView
+	txQueue := s.txQueue
+	localTxs := s.localTxs
+	if openLedgerView == nil {
+		s.mu.RUnlock()
 		return failure, errors.New("openLedgerView not initialised")
 	}
 	cfg, cfgErr = s.applyConfigLocked()
+	s.mu.RUnlock()
 	if cfgErr != nil {
 		return failure, cfgErr
 	}
-	outcome := s.openLedgerView.SubmitDetailed(ptx, cfg, s.txQueue)
+	outcome := openLedgerView.SubmitDetailed(ptx, cfg, txQueue)
 	if outcome.Class == openledger.ResultSuccess {
 		s.rememberRelayTransaction(ptx.Hash, ptx.Blob, outcome.Queued)
 	}
-	current := s.openLedgerView.Current()
-	if local && s.localTxs != nil {
-		s.localTxs.PushBack(current.Sequence(), ptx)
+	current := openLedgerView.Current()
+	if local && localTxs != nil {
+		localTxs.PushBack(current.Sequence(), ptx)
 	}
 	s.dispatchProposedTransaction(ptx, ptx.Blob, outcome, current)
 	if outcome.Applied {

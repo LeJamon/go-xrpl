@@ -25,6 +25,10 @@ func (s *Service) AcceptLedger(ctx context.Context) (uint32, error) {
 // acceptLedgerAt lets replay tests keep close_time byte-identical without
 // exposing deterministic clock control through the RPC service or wire.
 func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Time) (uint32, error) {
+	if err := s.lockOpenLedgerIfRunning(); err != nil {
+		return 0, err
+	}
+	defer s.openLedgerMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.historyComponent.mu.Lock()
@@ -380,6 +384,16 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 // SwitchToPreferredLedger installs the complete ledger selected by consensus as
 // the canonical closed-ledger frontier before the recovery round starts.
 func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
+	return s.switchToPreferredLedger(parent, nil)
+}
+
+func (s *Service) switchToPreferredLedger(parent *ledger.Ledger, beforeLock func()) error {
+	if beforeLock != nil {
+		beforeLock()
+	}
+	if err := s.lockOpenLedgerIfRunning(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	s.historyComponent.mu.Lock()
 	previousValidated := s.validatedLedger
@@ -387,6 +401,7 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 		notification := s.validatedLedgerNotificationLocked(previousValidated)
 		s.historyComponent.mu.Unlock()
 		s.mu.Unlock()
+		s.openLedgerMu.Unlock()
 		notification.notify()
 	}()
 
@@ -511,11 +526,19 @@ func (s *Service) acceptConsensusResult(
 	closeTime time.Time,
 	closeTimeCorrect bool,
 ) (uint32, error) {
+	if err := s.lockOpenLedgerIfRunning(); err != nil {
+		return 0, err
+	}
 	s.mu.Lock()
 	previousValidated := s.validatedLedger
-	defer s.unlockAndNotifyValidatedLedger(previousValidated)
 	s.historyComponent.mu.Lock()
-	defer s.historyComponent.mu.Unlock()
+	defer func() {
+		notification := s.validatedLedgerNotificationLocked(previousValidated)
+		s.historyComponent.mu.Unlock()
+		s.mu.Unlock()
+		s.openLedgerMu.Unlock()
+		notification.notify()
+	}()
 
 	if s.closedLedger == nil {
 		return 0, svcerr.ErrNoClosedLedger
@@ -757,6 +780,15 @@ func (s *Service) PromoteStoredValidatedLedgerAt(seq uint32, expectedHash [32]by
 }
 
 func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTime time.Time, allowStored bool) {
+	if !s.beginValidatedLedgerUpdate() {
+		return
+	}
+	updateFinished := false
+	defer func() {
+		if !updateFinished {
+			s.validationWG.Done()
+		}
+	}()
 	var (
 		previousValidated  *ledger.Ledger
 		l                  *ledger.Ledger
@@ -764,7 +796,30 @@ func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 		loadedStored       *ledger.Ledger
 		verifiedTipHash    [32]byte
 		historicalVerified bool
+		gateHeld           bool
 	)
+	defer func() {
+		if gateHeld {
+			s.openLedgerMu.Unlock()
+		}
+	}()
+	acquireGateAndRetry := func() error {
+		s.historyComponent.mu.Unlock()
+		s.mu.Unlock()
+		if err := s.lockOpenLedgerIfRunning(); err != nil {
+			return err
+		}
+		gateHeld = true
+		return nil
+	}
+	unlockForLookup := func() {
+		s.historyComponent.mu.Unlock()
+		s.mu.Unlock()
+		if gateHeld {
+			s.openLedgerMu.Unlock()
+			gateHeld = false
+		}
+	}
 	for {
 		s.mu.Lock()
 		s.historyComponent.mu.Lock()
@@ -772,6 +827,12 @@ func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 		l, fromStored = s.ledgerHistory[seq], false
 		if l != nil {
 			if l.Hash() == expectedHash {
+				if !gateHeld {
+					if err := acquireGateAndRetry(); err != nil {
+						return
+					}
+					continue
+				}
 				break
 			}
 			if !allowStored {
@@ -790,6 +851,12 @@ func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 			if seq > previousValidated.Sequence() {
 				if candidate != nil && candidate.Hash() == expectedHash {
 					l = candidate
+					if !gateHeld {
+						if err := acquireGateAndRetry(); err != nil {
+							return
+						}
+						continue
+					}
 					break
 				}
 				s.historyComponent.mu.Unlock()
@@ -799,8 +866,7 @@ func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 			tipHash := previousValidated.Hash()
 			if !historicalVerified || verifiedTipHash != tipHash {
 				tip := previousValidated
-				s.historyComponent.mu.Unlock()
-				s.mu.Unlock()
+				unlockForLookup()
 				canonicalHash, ok, err := tip.HashOfSeq(seq)
 				if err != nil || !ok || canonicalHash != expectedHash {
 					return
@@ -811,24 +877,47 @@ func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 			}
 			if candidate != nil && candidate.Hash() == expectedHash {
 				l = candidate
+				if !gateHeld {
+					if err := acquireGateAndRetry(); err != nil {
+						return
+					}
+					continue
+				}
 				break
 			}
 		} else if candidate != nil && candidate.Hash() == expectedHash {
 			l = candidate
 			fromStored = true
+			if !gateHeld {
+				if err := acquireGateAndRetry(); err != nil {
+					return
+				}
+				continue
+			}
 			break
 		}
 		fromStored = allowStored
 		if cached := s.persistedLedgers[expectedHash]; cached != nil && cached.Sequence() == seq {
 			l = cached
+			if !gateHeld {
+				if err := acquireGateAndRetry(); err != nil {
+					return
+				}
+				continue
+			}
 			break
 		}
 		if loadedStored != nil {
 			l = loadedStored
+			if !gateHeld {
+				if err := acquireGateAndRetry(); err != nil {
+					return
+				}
+				continue
+			}
 			break
 		}
-		s.historyComponent.mu.Unlock()
-		s.mu.Unlock()
+		unlockForLookup()
 
 		var err error
 		loadedStored, err = s.loadStoredLedgerByHash(context.Background(), expectedHash)
@@ -925,6 +1014,8 @@ func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 	s.dispatchLedgerEvent(event)
 	s.historyComponent.mu.Unlock()
 	s.mu.Unlock()
+	s.openLedgerMu.Unlock()
+	gateHeld = false
 
 	// Fold into the amendment table outside the lock (it has its own mutex).
 	s.syncTable(l)
@@ -935,6 +1026,8 @@ func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 		}
 	}
 
+	s.validationWG.Done()
+	updateFinished = true
 	notification.notify()
 }
 
