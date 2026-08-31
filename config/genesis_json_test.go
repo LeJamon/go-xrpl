@@ -218,17 +218,6 @@ func TestGenesisJSONFeeSettingsValidation(t *testing.T) {
 			wantErr: "BaseFeeDrops must not be null",
 		},
 		{
-			name:    "negative modern amount",
-			xrpFees: true,
-			fees: `{
-				"LedgerEntryType":"FeeSettings",
-				"BaseFeeDrops":"-1",
-				"ReserveBaseDrops":"1",
-				"ReserveIncrementDrops":"1"
-			}`,
-			wantErr: "invalid BaseFeeDrops",
-		},
-		{
 			name:    "modern amount out of range",
 			xrpFees: true,
 			fees: fmt.Sprintf(`{
@@ -238,6 +227,18 @@ func TestGenesisJSONFeeSettingsValidation(t *testing.T) {
 				"ReserveIncrementDrops":"1"
 			}`, maxNativePlusOne),
 			wantErr: "BaseFeeDrops out of range",
+		},
+		{
+			name:    "unknown field",
+			xrpFees: true,
+			fees:    `{"LedgerEntryType":"FeeSettings","BaseFeeDrops":"1","ReserveBaseDrops":"1","ReserveIncrementDrops":"1","Typo":1}`,
+			wantErr: "unknown FeeSettings field",
+		},
+		{
+			name:    "case variant field",
+			xrpFees: true,
+			fees:    `{"LedgerEntryType":"FeeSettings","baseFeeDrops":"1","ReserveBaseDrops":"1","ReserveIncrementDrops":"1"}`,
+			wantErr: "unknown FeeSettings field",
 		},
 		{
 			name: "empty legacy base fee",
@@ -295,6 +296,51 @@ func TestGenesisJSONFeeSettingsValidation(t *testing.T) {
 	}
 }
 
+func TestGenesisJSONFeeSettingsRippledInputForms(t *testing.T) {
+	tests := []struct {
+		name    string
+		xrpFees bool
+		fees    string
+		want    [3]drops.XRPAmount
+	}{
+		{
+			name:    "numeric modern amounts",
+			xrpFees: true,
+			fees:    `{"LedgerEntryType":"FeeSettings","BaseFeeDrops":10,"ReserveBaseDrops":200000,"ReserveIncrementDrops":50000}`,
+			want:    [3]drops.XRPAmount{10, 200_000, 50_000},
+		},
+		{
+			name:    "integral exponent modern amounts",
+			xrpFees: true,
+			fees:    `{"LedgerEntryType":"FeeSettings","BaseFeeDrops":"+1e1","ReserveBaseDrops":"2e5","ReserveIncrementDrops":"5.0e4"}`,
+			want:    [3]drops.XRPAmount{10, 200_000, 50_000},
+		},
+		{
+			name:    "negative modern amount",
+			xrpFees: true,
+			fees:    `{"LedgerEntryType":"FeeSettings","BaseFeeDrops":"-1","ReserveBaseDrops":"1","ReserveIncrementDrops":"1"}`,
+			want:    [3]drops.XRPAmount{-1, 1, 1},
+		},
+		{
+			name: "numeric base fee and string legacy integers",
+			fees: `{"LedgerEntryType":"FeeSettings","BaseFee":10,"ReferenceFeeUnits":"10","ReserveBase":"200000","ReserveIncrement":"50000"}`,
+			want: [3]drops.XRPAmount{10, 200_000, 50_000},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := genesisJSONWithFees(test.fees, test.xrpFees)
+			require.NoError(t, input.Validate())
+			cfg, err := input.ToGenesisConfig()
+			require.NoError(t, err)
+			require.Equal(t, test.want[0], cfg.BaseFee)
+			require.Equal(t, test.want[1], cfg.ReserveBase)
+			require.Equal(t, test.want[2], cfg.ReserveIncrement)
+		})
+	}
+}
+
 func TestGenesisJSONLegacyBaseFeeAboveNativeLimit(t *testing.T) {
 	baseFee := uint64(drops.MaxDrops) + 1
 	input := genesisJSONWithFees(fmt.Sprintf(`{
@@ -330,6 +376,32 @@ func TestFeeSettingsJSONMarshalProgrammaticLegacy(t *testing.T) {
 		require.NotContains(t, fields, name)
 	}
 	require.NoError(t, genesisJSONWithFees(string(data), false).Validate())
+}
+
+func TestFeeSettingsJSONPreservesOptionalFields(t *testing.T) {
+	input := `{
+		"LedgerEntryType":"FeeSettings",
+		"Flags":0,
+		"BaseFee":"A",
+		"ReferenceFeeUnits":10,
+		"ReserveBase":200000,
+		"ReserveIncrement":50000,
+		"LedgerIndex":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"Sponsor":"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"PreviousTxnID":"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+		"PreviousTxnLgrSeq":0
+	}`
+	var settings FeeSettingsJSON
+	require.NoError(t, json.Unmarshal([]byte(input), &settings))
+
+	data, err := json.Marshal(settings)
+	require.NoError(t, err)
+	var fields map[string]any
+	require.NoError(t, json.Unmarshal(data, &fields))
+	require.Equal(t, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", fields["LedgerIndex"])
+	require.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", fields["Sponsor"])
+	require.Equal(t, "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", fields["PreviousTxnID"])
+	require.Equal(t, float64(0), fields["PreviousTxnLgrSeq"])
 }
 
 func genesisJSONWithFees(fees string, xrpFees bool) *GenesisJSON {
