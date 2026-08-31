@@ -63,6 +63,23 @@ func syncCtxOwnerCount(ctx *tx.ApplyContext) {
 	ctx.Account.OwnerCount = acct.OwnerCount
 }
 
+func creditNFTokenIssuerXRP(ctx *tx.ApplyContext, issuerID [20]byte, amount uint64) ter.Result {
+	if amount == 0 {
+		return ter.TesSUCCESS
+	}
+	if issuerID == ctx.AccountID {
+		ctx.Account.Balance += amount
+		return ter.TesSUCCESS
+	}
+
+	issuerAccount, err := tx.ReadAccountRoot(ctx.View, issuerID)
+	if err != nil || issuerAccount == nil {
+		return ter.TefINTERNAL
+	}
+	issuerAccount.Balance += amount
+	return ctx.UpdateAccountRoot(issuerID, issuerAccount)
+}
+
 // ---------------------------------------------------------------------------
 // Brokered mode and direct offer acceptance helpers
 // ---------------------------------------------------------------------------
@@ -201,22 +218,8 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 
 			// Pay issuer cut
 			if issuerCut > 0 {
-				if nftIssuerID == accountID {
-					// Issuer is the broker/source: credit ctx.Account so the
-					// engine's authoritative write-back keeps it. Crediting the
-					// view here would be clobbered by ctx.Account's write-back.
-					ctx.Account.Balance += issuerCut
-				} else {
-					issuerKey := keylet.Account(nftIssuerID)
-					issuerData, err := ctx.View.Read(issuerKey)
-					if err == nil {
-						issuerAccount, err := state.ParseAccountRoot(issuerData)
-						if err == nil {
-							issuerAccount.Balance += issuerCut
-							issuerUpdatedData, _ := state.SerializeAccountRoot(issuerAccount)
-							ctx.View.Update(issuerKey, issuerUpdatedData)
-						}
-					}
+				if r := creditNFTokenIssuerXRP(ctx, nftIssuerID, issuerCut); r != ter.TesSUCCESS {
+					return r
 				}
 				amount -= issuerCut
 			}
@@ -343,15 +346,8 @@ func (n *NFTokenAcceptOffer) acceptNFTokenSellOfferDirect(ctx *tx.ApplyContext, 
 		ctx.Account.Balance -= totalCost
 
 		if issuerCut > 0 {
-			issuerKey := keylet.Account(nftIssuerID)
-			issuerData, err := ctx.View.Read(issuerKey)
-			if err == nil {
-				issuerAccount, err := state.ParseAccountRoot(issuerData)
-				if err == nil {
-					issuerAccount.Balance += issuerCut
-					issuerUpdatedData, _ := state.SerializeAccountRoot(issuerAccount)
-					ctx.View.Update(issuerKey, issuerUpdatedData)
-				}
+			if r := creditNFTokenIssuerXRP(ctx, nftIssuerID, issuerCut); r != ter.TesSUCCESS {
+				return r
 			}
 			amount -= issuerCut
 		}
@@ -490,15 +486,8 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 		}
 
 		if issuerCut > 0 {
-			issuerKey := keylet.Account(nftIssuerID)
-			issuerData, err := ctx.View.Read(issuerKey)
-			if err == nil {
-				issuerAccount, err := state.ParseAccountRoot(issuerData)
-				if err == nil {
-					issuerAccount.Balance += issuerCut
-					issuerUpdatedData, _ := state.SerializeAccountRoot(issuerAccount)
-					ctx.View.Update(issuerKey, issuerUpdatedData)
-				}
+			if r := creditNFTokenIssuerXRP(ctx, nftIssuerID, issuerCut); r != ter.TesSUCCESS {
+				return r
 			}
 			amount -= issuerCut
 		}
