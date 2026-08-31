@@ -349,6 +349,104 @@ func TestCreateGenesisLedgerModernFees(t *testing.T) {
 	t.Logf("Genesis with modern fees created successfully")
 }
 
+func TestCreateRejectsInvalidFeeSettings(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		modern    bool
+		fees      DefaultFees
+		wantField string
+	}{
+		{"legacy negative BaseFee", false, DefaultFees{BaseFee: -1}, "BaseFee"},
+		{"modern negative ReserveBase", true, DefaultFees{ReserveBase: -1}, "ReserveBase"},
+		{"legacy BaseFee above MaxDrops", false, DefaultFees{BaseFee: drops.MaxDrops + 1}, "BaseFee"},
+		{"modern ReserveIncrement above MaxDrops", true, DefaultFees{ReserveIncrement: drops.MaxDrops + 1}, "ReserveIncrement"},
+		{"legacy ReserveBase above UInt32", false, DefaultFees{ReserveBase: math.MaxUint32 + 1}, "ReserveBase"},
+		{"legacy ReserveIncrement above UInt32", false, DefaultFees{ReserveIncrement: math.MaxUint32 + 1}, "ReserveIncrement"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := Config{Fees: test.fees}
+			if test.modern {
+				cfg.Amendments = [][32]byte{amendment.FeatureXRPFees}
+			}
+			ledger, err := Create(cfg)
+			if err == nil || ledger != nil {
+				t.Fatalf("Create = (%v, %v), want nil ledger and error", ledger, err)
+			}
+			if !strings.Contains(err.Error(), test.wantField) {
+				t.Fatalf("Create error = %q, want substring %q", err, test.wantField)
+			}
+		})
+	}
+}
+
+func TestCreatePreservesFeeSettingsBoundaries(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		modern bool
+		fees   DefaultFees
+	}{
+		{
+			name: "legacy zero",
+		},
+		{
+			name: "legacy maxima",
+			fees: DefaultFees{
+				BaseFee:          drops.MaxDrops,
+				ReserveBase:      math.MaxUint32,
+				ReserveIncrement: math.MaxUint32,
+			},
+		},
+		{
+			name:   "modern zero",
+			modern: true,
+		},
+		{
+			name:   "modern maxima",
+			modern: true,
+			fees: DefaultFees{
+				BaseFee:          drops.MaxDrops,
+				ReserveBase:      drops.MaxDrops,
+				ReserveIncrement: drops.MaxDrops,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := Config{Fees: test.fees}
+			if test.modern {
+				cfg.Amendments = [][32]byte{amendment.FeatureXRPFees}
+			}
+			ledger, err := Create(cfg)
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			item, found, err := ledger.StateMap.Get(keylet.Fees().Key)
+			if err != nil || !found {
+				t.Fatalf("read FeeSettings = (%v, %v), want present entry", found, err)
+			}
+			fees, err := state.ParseFeeSettings(item.Data())
+			if err != nil {
+				t.Fatalf("parse FeeSettings: %v", err)
+			}
+			if fees.IsUsingModernFees() != test.modern {
+				t.Fatalf("modern format = %v, want %v", fees.IsUsingModernFees(), test.modern)
+			}
+			if got := [3]uint64{fees.GetBaseFee(), fees.GetReserveBase(), fees.GetReserveIncrement()}; got != [3]uint64{
+				uint64(test.fees.BaseFee), uint64(test.fees.ReserveBase), uint64(test.fees.ReserveIncrement),
+			} {
+				t.Fatalf("fee amounts = %v, want %v", got, test.fees)
+			}
+		})
+	}
+}
+
 func TestStandardFees(t *testing.T) {
 	t.Parallel()
 	fees := StandardFees()
