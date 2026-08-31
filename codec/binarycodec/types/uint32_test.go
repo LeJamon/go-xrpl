@@ -1,7 +1,8 @@
 package types
 
 import (
-	"bytes"
+	"math"
+	"strconv"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
@@ -9,44 +10,61 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestUint32_FromJson(t *testing.T) {
-	tt := []struct {
-		name        string
-		input       any
-		expected    []byte
-		expectedErr error
+func TestUInt32FromJSON(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    any
+		expected []byte
 	}{
-		{
-			name:        "Valid uint32",
-			input:       uint32(1),
-			expected:    []byte{0, 0, 0, 1},
-			expectedErr: nil,
-		},
-		{
-			name:        "Valid uint32 (2)",
-			input:       uint32(100),
-			expected:    []byte{0, 0, 0, 100},
-			expectedErr: nil,
-		},
-		{
-			name:        "Valid uint32 (3)",
-			input:       uint32(255),
-			expected:    []byte{0, 0, 0, 255},
-			expectedErr: nil,
-		},
-		// TODO: Add test for overflow case
+		{name: "uint32 zero", input: uint32(0), expected: []byte{0, 0, 0, 0}},
+		{name: "uint32 maximum", input: uint32(math.MaxUint32), expected: []byte{255, 255, 255, 255}},
+		{name: "int", input: int(1), expected: []byte{0, 0, 0, 1}},
+		{name: "int64", input: int64(100), expected: []byte{0, 0, 0, 100}},
+		{name: "uint64 maximum", input: uint64(math.MaxUint32), expected: []byte{255, 255, 255, 255}},
+		{name: "float64 maximum", input: float64(math.MaxUint32), expected: []byte{255, 255, 255, 255}},
 	}
 
-	for _, tc := range tt {
+	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			uint32 := &UInt32{}
-			actual, err := uint32.FromJSON(tc.input)
-			if err != tc.expectedErr {
-				t.Errorf("Expected error %v, got %v", tc.expectedErr, err)
-			}
-			if !bytes.Equal(actual, tc.expected) {
-				t.Errorf("Expected %v, got %v", tc.expected, actual)
-			}
+			t.Parallel()
+			actual, err := (&UInt32{}).FromJSON(tc.input)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, actual)
+		})
+	}
+}
+
+func TestUInt32FromJSONRejectsInvalidNumbers(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name  string
+		input any
+	}
+	tests := []testCase{
+		{name: "negative int", input: int(-1)},
+		{name: "negative int64", input: int64(-1)},
+		{name: "overflowing int64", input: int64(math.MaxUint32) + 1},
+		{name: "overflowing uint64", input: uint64(math.MaxUint32) + 1},
+		{name: "negative float64", input: float64(-1)},
+		{name: "overflowing float64", input: float64(math.MaxUint32) + 1},
+		{name: "fractional float64", input: float64(1.5)},
+		{name: "NaN", input: math.NaN()},
+		{name: "positive infinity", input: math.Inf(1)},
+		{name: "negative infinity", input: math.Inf(-1)},
+	}
+	if strconv.IntSize == 64 {
+		tests = append(tests, testCase{name: "overflowing int", input: int(uint64(math.MaxUint32) + 1)})
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			actual, err := (&UInt32{}).FromJSON(tc.input)
+			require.Error(t, err)
+			require.Nil(t, actual)
 		})
 	}
 }
