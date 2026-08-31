@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const DefaultCheckpointShutdownGrace = 2 * time.Minute
+const defaultCheckpointShutdownGrace = 2 * time.Minute
 
 // ServerConfig represents the [server] section
 // This defines the ports that the server will listen on and default values

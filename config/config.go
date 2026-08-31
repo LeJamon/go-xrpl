@@ -100,9 +100,10 @@ func (c *Config) LocalStateDir() string {
 	return filepath.Dir(filepath.Clean(c.NodeDB.Path))
 }
 
+// ResolvedCheckpointShutdownGrace returns the configured checkpoint grace or its default.
 func (c *Config) ResolvedCheckpointShutdownGrace() time.Duration {
 	if c == nil || c.Server.CheckpointShutdownGrace == nil {
-		return DefaultCheckpointShutdownGrace
+		return defaultCheckpointShutdownGrace
 	}
 	return *c.Server.CheckpointShutdownGrace
 }
