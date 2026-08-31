@@ -2,6 +2,7 @@ package types
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
@@ -59,6 +60,12 @@ func TestUint64_FromJson(t *testing.T) {
 			expectedErr: nil,
 		},
 		{
+			name:        "fail - negative int value",
+			input:       int(-1),
+			expected:    nil,
+			expectedErr: ErrInvalidUInt64String,
+		},
+		{
 			name:        "pass - float64 value (from JSON unmarshal)",
 			input:       float64(740),
 			expected:    []byte{0, 0, 0, 0, 0, 0, 0x02, 0xE4},
@@ -101,6 +108,18 @@ func TestUint64_FromJson(t *testing.T) {
 			expectedErr: nil,
 		},
 		{
+			name:        "fail - negative int64 value",
+			input:       int64(-1),
+			expected:    nil,
+			expectedErr: ErrInvalidUInt64String,
+		},
+		{
+			name:        "fail - minimum int64 value",
+			input:       int64(math.MinInt64),
+			expected:    nil,
+			expectedErr: ErrInvalidUInt64String,
+		},
+		{
 			name:        "pass - uint64 value",
 			input:       uint64(65535),
 			expected:    []byte{0, 0, 0, 0, 0, 0, 0xFF, 0xFF},
@@ -120,6 +139,7 @@ func TestUint64_FromJson(t *testing.T) {
 			actual, err := class.FromJSON(tc.input)
 			if tc.expectedErr != nil {
 				require.EqualError(t, err, tc.expectedErr.Error())
+				require.Nil(t, actual)
 			} else {
 				require.Equal(t, tc.expected, actual)
 			}

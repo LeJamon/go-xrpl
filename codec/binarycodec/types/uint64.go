@@ -48,8 +48,14 @@ func (u *UInt64) FromJSON(value any) ([]byte, error) {
 		}
 		n = uint64(v)
 	case int:
+		if v < 0 {
+			return nil, ErrInvalidUInt64String
+		}
 		n = uint64(v)
 	case int64:
+		if v < 0 {
+			return nil, ErrInvalidUInt64String
+		}
 		n = uint64(v)
 	case uint64:
 		n = v
