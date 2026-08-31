@@ -19,6 +19,8 @@ type accountRoot struct {
 // during genesis construction. Modern fields (XRPFees amendment) take
 // precedence; legacy fields apply only when XRPFees is not enabled.
 type feeSettings struct {
+	modern bool
+
 	BaseFeeDrops          drops.XRPAmount
 	ReserveBaseDrops      drops.XRPAmount
 	ReserveIncrementDrops drops.XRPAmount
@@ -31,6 +33,7 @@ type feeSettings struct {
 
 func newFeeSettings(baseFee, reserveBase, reserveIncrement drops.XRPAmount) *feeSettings {
 	return &feeSettings{
+		modern:                true,
 		BaseFeeDrops:          baseFee,
 		ReserveBaseDrops:      reserveBase,
 		ReserveIncrementDrops: reserveIncrement,
@@ -47,5 +50,5 @@ func newLegacyFeeSettings(baseFee uint64, refFeeUnits, reserveBase, reserveIncre
 }
 
 func (f *feeSettings) IsUsingModernFees() bool {
-	return f.BaseFeeDrops > 0 || f.ReserveBaseDrops > 0 || f.ReserveIncrementDrops > 0
+	return f.modern
 }
