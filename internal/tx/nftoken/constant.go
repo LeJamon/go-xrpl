@@ -51,9 +51,11 @@ const (
 //
 // Reference: rippled Rate2.cpp, Number.cpp operator rep()
 func nftTransferFeeXRP(amount uint64, fee uint16) uint64 {
-	numerator := amount * uint64(fee)
-	quotient := numerator / transferFeeDivisor
-	remainder := numerator % transferFeeDivisor
+	fee64 := uint64(fee)
+	whole := amount / transferFeeDivisor
+	fraction := amount % transferFeeDivisor
+	quotient := whole*fee64 + fraction*fee64/transferFeeDivisor
+	remainder := fraction * fee64 % transferFeeDivisor
 
 	// Round-half-even (banker's rounding)
 	half := uint64(transferFeeDivisor / 2) // 50000
