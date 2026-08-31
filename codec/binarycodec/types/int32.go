@@ -4,6 +4,7 @@ package types
 import (
 	"encoding/binary"
 	"errors"
+	"math"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
@@ -21,12 +22,21 @@ func (i *Int32) FromJSON(value any) ([]byte, error) {
 
 	switch val := value.(type) {
 	case int:
+		if val < math.MinInt32 || val > math.MaxInt32 {
+			return nil, ErrInvalidInt32
+		}
 		v = int32(val)
 	case int32:
 		v = val
 	case int64:
+		if val < math.MinInt32 || val > math.MaxInt32 {
+			return nil, ErrInvalidInt32
+		}
 		v = int32(val)
 	case float64:
+		if val < math.MinInt32 || val > math.MaxInt32 || val != math.Trunc(val) {
+			return nil, ErrInvalidInt32
+		}
 		v = int32(val)
 	default:
 		return nil, ErrInvalidInt32
