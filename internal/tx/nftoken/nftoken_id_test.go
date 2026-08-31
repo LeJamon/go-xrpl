@@ -330,6 +330,7 @@ func TestNFTransferFeeXRP(t *testing.T) {
 		{"round_up_above_half", 2, 30000, 1},   // 60000/100000 = 0.6 → 1
 		{"tie_to_even_down", 1, 50000, 0},      // 50000/100000 = 0.5 → ties to even (0)
 		{"tie_to_even_up", 3, 50000, 2},        // 150000/100000 = 1.5 → ties to even (2)
+		{"max_native_half", state.MaxNativeDrops, 50000, state.MaxNativeDrops / 2},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
