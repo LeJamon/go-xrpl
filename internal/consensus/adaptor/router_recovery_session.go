@@ -217,6 +217,21 @@ func (r *Router) locallySatisfiesLedger(seq uint32, hash [32]byte) bool {
 	return err == nil && held != nil && held.Sequence() == seq
 }
 
+func (r *Router) consensusHandoffComplete(seq uint32, hash [32]byte) bool {
+	if seq == 0 || hash == ([32]byte{}) || r.adaptor == nil {
+		return false
+	}
+	svc := r.adaptor.LedgerService()
+	if svc == nil {
+		return false
+	}
+	if closed := svc.GetClosedLedger(); closed != nil && closed.Sequence() == seq && closed.Hash() == hash {
+		return true
+	}
+	validated := svc.GetValidatedLedger()
+	return validated != nil && validated.Sequence() > seq
+}
+
 func (r *Router) retireLocallySatisfiedFrozenPivot(reason string) bool {
 	r.acquisitionMu.Lock()
 	if !r.standardReplay.active || r.standardReplay.pivotReady {
@@ -236,6 +251,7 @@ func (r *Router) retireLocallySatisfiedLedger(seq uint32, hash [32]byte, reason 
 	if seq == 0 || hash == ([32]byte{}) {
 		return false
 	}
+	handoffComplete := r.consensusHandoffComplete(seq, hash)
 
 	r.replayCommitMu.Lock()
 	r.acquisitionMu.Lock()
@@ -255,7 +271,11 @@ func (r *Router) retireLocallySatisfiedLedger(seq uint32, hash [32]byte, reason 
 	}
 	releasedRecovery := false
 	if r.consensusRecovery.targetHash == hash {
-		r.consensusRecovery = consensusRecovery{}
+		if handoffComplete {
+			r.consensusRecovery = consensusRecovery{}
+		} else {
+			r.consensusRecovery.stepHash = [32]byte{}
+		}
 		releasedRecovery = true
 	} else if r.consensusRecovery.stepHash == hash {
 		r.consensusRecovery.stepHash = [32]byte{}

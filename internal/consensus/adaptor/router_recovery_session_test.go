@@ -292,6 +292,30 @@ func TestConsensusCatchupRetiresLocallySatisfiedFrozenPivot(t *testing.T) {
 	assert.Equal(t, consensusRecovery{}, r.consensusRecovery)
 }
 
+func TestConsensusCatchupHandsHeldPivotToConsensus(t *testing.T) {
+	r, engine, svc := makeRouterWithEngine(t)
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+	_, pivot, pivotHash, pivotSeq := buildSuccessorAgainstParent(t, parent)
+	trackCatchupPeer(r, 7, pivotSeq, pivotHash)
+	r.recordValidationCatchupTarget(pivotSeq, pivotHash, 7, catchupSourceQuorum)
+	r.acquisitionMu.Lock()
+	r.consensusRecovery.targetHash = pivotHash
+	r.acquisitionMu.Unlock()
+	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+	storeRecoveryLedger(t, svc, pivot)
+
+	r.armConsensusCatchup()
+
+	assert.False(t, r.standardReplay.active)
+	assert.Nil(t, r.fetchTracker.Find(pivotHash))
+	assert.Equal(t, []consensus.LedgerID{consensus.LedgerID(pivotHash)}, engine.getLedgers())
+	assert.Equal(t, pivotSeq, r.consensusRecovery.anchorSeq)
+	assert.Equal(t, pivotHash, r.consensusRecovery.anchorHash)
+	assert.Zero(t, r.consensusRecovery.targetHash)
+	assert.Zero(t, r.consensusRecovery.stepHash)
+}
+
 func TestFrozenPivotFailedStartCannotBeKeptAliveByTargetAdvance(t *testing.T) {
 	r, _, _, svc := makeRouter(t)
 	pivotSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
