@@ -322,12 +322,13 @@ func createFieldInstanceMapFromJson(json map[string]any) (map[definitions.FieldI
 		if !ok || !addresscodec.IsValidXAddress(strVal) {
 			continue
 		}
-		classicAddr, tag, _, err := addresscodec.XAddressToClassicAddress(strVal)
+		classicAddr, tag, _, err := addresscodec.XAddressToClassicAddressWithTagPresence(strVal)
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode X-address for field %s: %w", k, err)
 		}
 		processedJSON[k] = classicAddr
-		if tag != 0 {
+		if tag != nil {
+			tagValue := *tag
 			var tagFieldName string
 			switch k {
 			case "Destination":
@@ -338,11 +339,15 @@ func createFieldInstanceMapFromJson(json map[string]any) (map[definitions.FieldI
 				return nil, fmt.Errorf("%s cannot have an associated tag", k)
 			}
 			if existingTag, exists := processedJSON[tagFieldName]; exists {
-				if existingTag != tag {
-					return nil, fmt.Errorf("duplicate %s: X-address tag (%d) does not match existing tag (%v)", tagFieldName, tag, existingTag)
+				existingTagValue, err := uint32FromJSON(existingTag)
+				if err != nil {
+					return nil, err
+				}
+				if existingTagValue != tagValue {
+					return nil, fmt.Errorf("duplicate %s: X-address tag (%d) does not match existing tag (%v)", tagFieldName, tagValue, existingTag)
 				}
 			}
-			processedJSON[tagFieldName] = tag
+			processedJSON[tagFieldName] = tagValue
 		}
 	}
 

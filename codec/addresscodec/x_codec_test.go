@@ -260,6 +260,59 @@ func TestXAddressToClassicAddress(t *testing.T) {
 	}
 }
 
+func TestXAddressTagPresence(t *testing.T) {
+	const classicAddress = "r9cZA1mLK5R5Am25ArfXFmqgNwjZgnfk59"
+	_, expectedAccountID, err := DecodeClassicAddressToAccountID(classicAddress)
+	require.NoError(t, err)
+
+	zero := uint32(0)
+	nonzero := uint32(22)
+	testcases := []struct {
+		name string
+		tag  *uint32
+	}{
+		{name: "absent", tag: nil},
+		{name: "zero", tag: &zero},
+		{name: "nonzero", tag: &nonzero},
+	}
+
+	addresses := make([]string, 0, len(testcases))
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			xAddress, err := ClassicAddressToXAddress(classicAddress, tc.tag, Mainnet)
+			require.NoError(t, err)
+			addresses = append(addresses, xAddress)
+
+			accountID, tag, network, err := DecodeXAddressWithTagPresence(xAddress)
+			require.NoError(t, err)
+			require.Equal(t, expectedAccountID, accountID)
+			require.Equal(t, tc.tag, tag)
+			require.Equal(t, Mainnet, network)
+
+			decodedClassic, convertedTag, convertedNetwork, err := XAddressToClassicAddressWithTagPresence(xAddress)
+			require.NoError(t, err)
+			require.Equal(t, classicAddress, decodedClassic)
+			require.Equal(t, tc.tag, convertedTag)
+			require.Equal(t, Mainnet, convertedNetwork)
+
+			_, legacyTag, _, err := DecodeXAddress(xAddress)
+			require.NoError(t, err)
+			_, legacyConvertedTag, _, err := XAddressToClassicAddress(xAddress)
+			require.NoError(t, err)
+			if tc.tag == nil {
+				require.Zero(t, legacyTag)
+				require.Zero(t, legacyConvertedTag)
+			} else {
+				require.Equal(t, *tc.tag, legacyTag)
+				require.Equal(t, *tc.tag, legacyConvertedTag)
+			}
+		})
+	}
+
+	require.Len(t, addresses, len(testcases))
+	require.NotEqual(t, addresses[0], addresses[1])
+}
+
 func TestClassicAddressToXAddress(t *testing.T) {
 	testcases := []struct {
 		name        string
@@ -333,6 +386,13 @@ func TestDecodeTag(t *testing.T) {
 			name:        "pass - valid tag - 1",
 			input:       []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0},
 			expectedTag: 1,
+			hasTag:      true,
+			expectedErr: nil,
+		},
+		{
+			name:        "pass - explicit zero tag",
+			input:       []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+			expectedTag: 0,
 			hasTag:      true,
 			expectedErr: nil,
 		},
