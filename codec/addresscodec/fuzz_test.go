@@ -135,7 +135,7 @@ func FuzzDecodeSeed(f *testing.F) {
 	})
 }
 
-// FuzzDecodeXAddress fuzzes DecodeXAddress with arbitrary strings.
+// FuzzDecodeXAddress fuzzes DecodeXAddressWithTagPresence with arbitrary strings.
 // On success, it verifies that EncodeXAddress round-trips to the same x-address.
 func FuzzDecodeXAddress(f *testing.F) {
 	// Mainnet no tag
@@ -172,7 +172,7 @@ func FuzzDecodeXAddress(f *testing.F) {
 		}
 
 		if reEncoded != addr {
-			t.Errorf("round-trip failed: EncodeXAddress(DecodeXAddress(%q)) = %q", addr, reEncoded)
+			t.Errorf("round-trip failed: EncodeXAddress(DecodeXAddressWithTagPresence(%q)) = %q", addr, reEncoded)
 		}
 	})
 }

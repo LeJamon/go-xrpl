@@ -1,6 +1,7 @@
 package binarycodec
 
 import (
+	"math"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -74,6 +75,13 @@ func TestXAddressExplicitZeroTagConflicts(t *testing.T) {
 		addresscodec.Mainnet,
 	)
 	require.NoError(t, err)
+	one := uint32(1)
+	nonzeroXAddress, err := addresscodec.ClassicAddressToXAddress(
+		"r9cZA1mLK5R5Am25ArfXFmqgNwjZgnfk59",
+		&one,
+		addresscodec.Mainnet,
+	)
+	require.NoError(t, err)
 
 	testcases := []struct {
 		address string
@@ -92,6 +100,23 @@ func TestXAddressExplicitZeroTagConflicts(t *testing.T) {
 		{name: "uint64", value: uint64(0)},
 		{name: "float64", value: float64(0)},
 	}
+	malformedValues := []struct {
+		name  string
+		value any
+	}{
+		{name: "negative wraps to zero", value: int64(-1 << 32)},
+		{name: "overflow wraps to zero", value: uint64(1 << 32)},
+		{name: "fraction truncates to zero", value: float64(0.5)},
+		{name: "NaN", value: math.NaN()},
+		{name: "positive infinity", value: math.Inf(1)},
+	}
+	malformedNonzeroValues := []struct {
+		name  string
+		value any
+	}{
+		{name: "fraction truncates to one", value: float64(1.5)},
+		{name: "overflow wraps to one", value: (uint64(1) << 32) + 1},
+	}
 	for _, tc := range testcases {
 		t.Run(tc.address, func(t *testing.T) {
 			for _, matching := range matchingValues {
@@ -109,6 +134,26 @@ func TestXAddressExplicitZeroTagConflicts(t *testing.T) {
 				tc.tag:     float64(1),
 			})
 			require.ErrorContains(t, err, "duplicate "+tc.tag)
+
+			for _, malformed := range malformedValues {
+				t.Run("malformed/"+malformed.name, func(t *testing.T) {
+					_, err := Encode(map[string]any{
+						tc.address: xAddress,
+						tc.tag:     malformed.value,
+					})
+					require.ErrorContains(t, err, "out of range for UInt32")
+				})
+			}
+
+			for _, malformed := range malformedNonzeroValues {
+				t.Run("malformed/nonzero/"+malformed.name, func(t *testing.T) {
+					_, err := Encode(map[string]any{
+						tc.address: nonzeroXAddress,
+						tc.tag:     malformed.value,
+					})
+					require.ErrorContains(t, err, "out of range for UInt32")
+				})
+			}
 		})
 	}
 }
