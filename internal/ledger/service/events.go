@@ -507,12 +507,6 @@ func (s *Service) validatedLedgerNotificationLocked(previous *ledger.Ledger) val
 	}
 }
 
-func (s *Service) unlockAndNotifyValidatedLedger(previous *ledger.Ledger) {
-	notification := s.validatedLedgerNotificationLocked(previous)
-	s.mu.Unlock()
-	notification.notify()
-}
-
 func (n validatedLedgerNotification) notify() {
 	if n.handler != nil {
 		n.handler(n.seq, n.hash, n.parentHash)
