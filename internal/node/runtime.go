@@ -1214,18 +1214,24 @@ func (r *nodeRuntime) stopRuntime() {
 	}
 }
 
-const nodeShutdownTimeout = 3 * time.Minute
-
 const (
-	transportShutdownGrace  = 5 * time.Second
-	producerShutdownGrace   = 5 * time.Second
-	serviceShutdownGrace    = 10 * time.Second
-	checkpointShutdownGrace = 2 * time.Minute
-	storeShutdownGrace      = 5 * time.Second
+	nodeShutdownNonCheckpointGrace = time.Minute
+	transportShutdownGrace         = 5 * time.Second
+	producerShutdownGrace          = 5 * time.Second
+	serviceShutdownGrace           = 10 * time.Second
+	storeShutdownGrace             = 5 * time.Second
 )
 
 func (r *nodeRuntime) shutdown() error {
-	return r.shutdownWithin(nodeShutdownTimeout)
+	return r.shutdownWithin(nodeShutdownTimeoutFor(r.appConfig.ResolvedCheckpointShutdownGrace()))
+}
+
+func nodeShutdownTimeoutFor(checkpointGrace time.Duration) time.Duration {
+	const maxDuration = time.Duration(1<<63 - 1)
+	if checkpointGrace > maxDuration-nodeShutdownNonCheckpointGrace {
+		return maxDuration
+	}
+	return checkpointGrace + nodeShutdownNonCheckpointGrace
 }
 
 func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
@@ -1361,7 +1367,13 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 		// Proof collection performs uncached random reads over the shallow
 		// SHAMap frontier. On a cold or busy store it can legitimately take
 		// longer than the small timeout used to close an already-flushed DB.
-		checkpointCtx, cancelCheckpoint := context.WithTimeout(ctx, checkpointShutdownGrace)
+		checkpointGrace := r.appConfig.ResolvedCheckpointShutdownGrace()
+		checkpointCtx, cancelCheckpoint := context.WithTimeout(ctx, checkpointGrace)
+		checkpointDeadline, _ := checkpointCtx.Deadline()
+		r.serverLog.Info("Fast-load checkpoint preparation started",
+			"grace", checkpointGrace.String(),
+			"deadline", checkpointDeadline,
+		)
 		var prepared bool
 		completed, err := runShutdownPhase(checkpointCtx, "prepare fast-load checkpoint", func() error {
 			var prepareErr error
@@ -1371,6 +1383,15 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 		cancelCheckpoint()
 		if err != nil {
 			errs = append(errs, err)
+			message := "Fast-load checkpoint preparation failed"
+			if errors.Is(err, context.DeadlineExceeded) {
+				message = "Fast-load checkpoint preparation expired"
+			}
+			r.serverLog.Warn(message,
+				"grace", checkpointGrace.String(),
+				"deadline", checkpointDeadline,
+				"err", err,
+			)
 		}
 		if !completed {
 			errs = append(errs, errors.New("shutdown incomplete: stores left open because fast-load checkpoint preparation did not stop"))
@@ -1378,9 +1399,9 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 		}
 		if err == nil {
 			if prepared {
-				r.serverLog.Info("Fast-load checkpoint preparation complete")
+				r.serverLog.Info("Fast-load checkpoint preparation complete", "prepared", true)
 			} else {
-				r.serverLog.Info("Fast-load checkpoint preparation skipped")
+				r.serverLog.Info("Fast-load checkpoint preparation skipped", "prepared", false)
 			}
 		}
 	}
@@ -1526,6 +1547,8 @@ func shutdownTransports(
 	}
 	joinCount := 0
 	joined := make(chan joinResult, 3)
+	joinCtx, cancelJoin := context.WithTimeout(ctx, transportShutdownGrace)
+	defer cancelJoin()
 	if transports != nil {
 		joinCount += 2
 		go func() {
@@ -1540,7 +1563,7 @@ func shutdownTransports(
 	if wsServer != nil {
 		joinCount++
 		go func() {
-			joined <- joinResult{name: "join WebSocket sessions", err: wsServer.Close(ctx)}
+			joined <- joinResult{name: "join WebSocket sessions", err: wsServer.Close(joinCtx)}
 		}()
 	}
 	complete := true
@@ -1551,9 +1574,9 @@ func shutdownTransports(
 				complete = false
 				errs = append(errs, fmt.Errorf("%s: %w", result.name, result.err))
 			}
-		case <-ctx.Done():
+		case <-joinCtx.Done():
 			complete = false
-			errs = append(errs, fmt.Errorf("join transports: %w", context.Cause(ctx)))
+			errs = append(errs, fmt.Errorf("join transports: %w", context.Cause(joinCtx)))
 			remaining = 0
 		}
 	}

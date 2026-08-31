@@ -254,6 +254,13 @@ empty list rejects browser-originated requests while clients without an Origin
 header (including the CLI) remain usable. An admin-capable port that enables a
 browser origin must also configure Basic Auth.
 
+`[server].checkpoint_shutdown_grace` is the maximum time allowed to prepare a
+fast-load checkpoint during a clean shutdown. It accepts a positive Go duration
+string such as `"30m"` and defaults to `"2m"` when omitted. Set the service
+manager or container graceful-stop timeout to at least the configured grace plus
+one minute, with additional operational headroom, so checkpoint preparation and
+the remaining shutdown phases can finish.
+
 ### `[node_db]` — content-addressed state store
 
 | Key | Example | Meaning |

@@ -521,6 +521,39 @@ func TestService_FastLoadCheckpointPreparationOrderingAndFailures(t *testing.T) 
 	})
 }
 
+func TestService_FastLoadCheckpointDeadlinePreservesTombstone(t *testing.T) {
+	ctx := context.Background()
+	base := newTestNodeStore(t, 100_000)
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
+	tracked := &checkpointTrackingDatabase{Database: base, uncached: base}
+	svc := durableCheckpointService(t, ctx, tracked)
+	require.NoError(t, tracked.StoreDurable(ctx, &nodestore.Node{
+		Type: nodestore.NodeLedger, Hash: fastLoadCheckpointKey,
+		Data: encodeFastLoadCheckpoint(nil),
+	}))
+
+	blocked := &deadlineCheckpointDatabase{
+		checkpointTrackingDatabase: tracked,
+		started:                    make(chan struct{}, 1),
+	}
+	svc.nodeStore = blocked
+	prepareCtx, cancelPrepare := context.WithTimeout(ctx, 25*time.Millisecond)
+	defer cancelPrepare()
+	prepared, err := svc.PrepareFastLoadCheckpoint(prepareCtx)
+	require.False(t, prepared)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	select {
+	case <-blocked.started:
+	default:
+		t.Fatal("checkpoint proof read did not observe the deadline")
+	}
+	stored, err := tracked.Fetch(ctx, fastLoadCheckpointKey)
+	require.NoError(t, err)
+	_, tombstone, err := decodeFastLoadCheckpoint(stored.Data)
+	require.NoError(t, err)
+	require.True(t, tombstone)
+}
+
 func TestService_FastLoadCheckpointRefusesInvalidTipAndPrune(t *testing.T) {
 	ctx := context.Background()
 	t.Run("tip mismatch", func(t *testing.T) {
@@ -594,6 +627,20 @@ type checkpointTrackingDatabase struct {
 	syncStarted         chan struct{}
 	syncRelease         chan struct{}
 	snapshotErr         error
+}
+
+type deadlineCheckpointDatabase struct {
+	*checkpointTrackingDatabase
+	started chan struct{}
+}
+
+func (d *deadlineCheckpointDatabase) FetchDataUncached(ctx context.Context, _ nodestore.Hash256) ([]byte, error) {
+	select {
+	case d.started <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return nil, context.Cause(ctx)
 }
 
 func (d *checkpointTrackingDatabase) FetchDataUncached(ctx context.Context, hash nodestore.Hash256) ([]byte, error) {
