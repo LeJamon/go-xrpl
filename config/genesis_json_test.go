@@ -4,6 +4,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -13,6 +15,33 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
+
+func TestParseHexFeeUint64Boundaries(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		input string
+		want  uint64
+	}{
+		{name: "single digit", input: "A", want: 10},
+		{name: "leading zeroes", input: "000000000000000A", want: 10},
+		{name: "maximum", input: "FFFFFFFFFFFFFFFF", want: math.MaxUint64},
+		{name: "maximum with leading zeroes", input: "00FFFFFFFFFFFFFFFF", want: math.MaxUint64},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := parseHexFee(test.input)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+
+	for _, input := range []string{"10000000000000000", "1000000000000000A"} {
+		t.Run(input, func(t *testing.T) {
+			_, err := parseHexFee(input)
+			require.Error(t, err)
+			require.ErrorIs(t, err, strconv.ErrRange)
+		})
+	}
+}
 
 func TestGenesisJSONFeeSettingsSerialization(t *testing.T) {
 	tests := []struct {
@@ -272,6 +301,28 @@ func TestGenesisJSONFeeSettingsValidation(t *testing.T) {
 			fees: `{
 				"LedgerEntryType":"FeeSettings",
 				"BaseFee":"0xA",
+				"ReferenceFeeUnits":10,
+				"ReserveBase":1,
+				"ReserveIncrement":1
+			}`,
+			wantErr: "invalid BaseFee",
+		},
+		{
+			name: "legacy base fee maximum plus one",
+			fees: `{
+				"LedgerEntryType":"FeeSettings",
+				"BaseFee":"10000000000000000",
+				"ReferenceFeeUnits":10,
+				"ReserveBase":1,
+				"ReserveIncrement":1
+			}`,
+			wantErr: "invalid BaseFee",
+		},
+		{
+			name: "legacy base fee overflow with low bits",
+			fees: `{
+				"LedgerEntryType":"FeeSettings",
+				"BaseFee":"1000000000000000A",
 				"ReferenceFeeUnits":10,
 				"ReserveBase":1,
 				"ReserveIncrement":1
