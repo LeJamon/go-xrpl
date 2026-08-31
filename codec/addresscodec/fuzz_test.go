@@ -146,6 +146,12 @@ func FuzzDecodeXAddress(f *testing.F) {
 	f.Add("T719a5UwUCnEs54UsxG9CJYYDhwmFCqkr7wxCcNcfZ6p5GZ")
 	// Testnet with tag=22
 	f.Add("T719a5UwUCnEs54UsxG9CJYYDhwmFCvzHM39KcuJw6gp2gS")
+	zero := uint32(0)
+	zeroTagAddress, err := ClassicAddressToXAddress("r9cZA1mLK5R5Am25ArfXFmqgNwjZgnfk59", &zero, Mainnet)
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(zeroTagAddress)
 	// Edge cases
 	f.Add("")
 	f.Add("X")
@@ -155,27 +161,12 @@ func FuzzDecodeXAddress(f *testing.F) {
 	f.Add("X7AcgcsBL6XDcUb289X4mJ8djcdyKaB5hJDWMArnXr61cq")
 
 	f.Fuzz(func(t *testing.T, addr string) {
-		accountID, tag, network, err := DecodeXAddress(addr)
+		accountID, tag, network, err := DecodeXAddressWithTagPresence(addr)
 		if err != nil {
 			return
 		}
 
-		tagFlag := tag != 0
-		// DecodeXAddress uses decodeTag which returns (tag, hasTag, err).
-		// When hasTag is false, tag is 0 and tagFlag should be false.
-		// When hasTag is true, tag could be 0 with tagFlag true.
-		// We need to decode the raw bytes to check the actual flag byte.
-		// Re-decode to get the flag byte for accurate round-trip.
-		xAddrBytes, _ := Base58CheckDecode(addr)
-		if len(xAddrBytes) >= 23 {
-			tagFlag = xAddrBytes[22] == 1
-		}
-
-		var tagPtr *uint32
-		if tagFlag {
-			tagPtr = &tag
-		}
-		reEncoded, err := EncodeXAddress(accountID, tagPtr, network)
+		reEncoded, err := EncodeXAddress(accountID, tag, network)
 		if err != nil {
 			t.Fatalf("EncodeXAddress failed on successfully decoded x-address: %v", err)
 		}

@@ -85,14 +85,28 @@ func EncodeXAddress(accountID []byte, tag *uint32, network Network) (string, err
 // DecodeXAddress returns the accountID, tag, and network of the x-address.
 // If the x-address is invalid, it returns an error.
 func DecodeXAddress(xAddress string) (accountID []byte, tag uint32, network Network, err error) {
-	xAddressBytes, err := Base58CheckDecode(xAddress)
+	accountID, tagPtr, network, err := DecodeXAddressWithTagPresence(xAddress)
 	if err != nil {
 		return nil, 0, Mainnet, err
+	}
+	if tagPtr != nil {
+		tag = *tagPtr
+	}
+	return accountID, tag, network, nil
+}
+
+// DecodeXAddressWithTagPresence returns the accountID, optional tag, and
+// network of the x-address. A nil tag means the X-address has no tag; a
+// non-nil tag preserves an explicitly encoded zero value.
+func DecodeXAddressWithTagPresence(xAddress string) (accountID []byte, tag *uint32, network Network, err error) {
+	xAddressBytes, err := Base58CheckDecode(xAddress)
+	if err != nil {
+		return nil, nil, Mainnet, err
 	}
 
 	// Verify length (2 prefix + 20 accountID + 1 flag + 8 tag bytes = 31)
 	if len(xAddressBytes) != 31 {
-		return nil, 0, Mainnet, ErrInvalidXAddress
+		return nil, nil, Mainnet, ErrInvalidXAddress
 	}
 
 	switch {
@@ -101,12 +115,15 @@ func DecodeXAddress(xAddress string) (accountID []byte, tag uint32, network Netw
 	case bytes.HasPrefix(xAddressBytes, testnetXAddressPrefix):
 		network = Testnet
 	default:
-		return nil, 0, Mainnet, ErrInvalidXAddress
+		return nil, nil, Mainnet, ErrInvalidXAddress
 	}
 
-	tag, _, err = decodeTag(xAddressBytes)
+	tagValue, hasTag, err := decodeTag(xAddressBytes)
 	if err != nil {
-		return nil, 0, Mainnet, err
+		return nil, nil, Mainnet, err
+	}
+	if hasTag {
+		tag = &tagValue
 	}
 
 	return xAddressBytes[2:22], tag, network, nil
@@ -116,14 +133,27 @@ func DecodeXAddress(xAddress string) (accountID []byte, tag uint32, network Netw
 // It returns the classic address, tag and network.
 // If the x-address is invalid, it returns an error.
 func XAddressToClassicAddress(xAddress string) (classicAddress string, tag uint32, network Network, err error) {
-	accountID, tag, network, err := DecodeXAddress(xAddress)
+	classicAddress, tagPtr, network, err := XAddressToClassicAddressWithTagPresence(xAddress)
 	if err != nil {
 		return "", 0, Mainnet, err
+	}
+	if tagPtr != nil {
+		tag = *tagPtr
+	}
+	return classicAddress, tag, network, nil
+}
+
+// XAddressToClassicAddressWithTagPresence converts the x-address to a classic
+// address while preserving whether its optional tag is present.
+func XAddressToClassicAddressWithTagPresence(xAddress string) (classicAddress string, tag *uint32, network Network, err error) {
+	accountID, tag, network, err := DecodeXAddressWithTagPresence(xAddress)
+	if err != nil {
+		return "", nil, Mainnet, err
 	}
 
 	classicAddress, err = EncodeAccountIDToClassicAddress(accountID)
 	if err != nil {
-		return "", 0, Mainnet, err
+		return "", nil, Mainnet, err
 	}
 
 	return classicAddress, tag, network, nil
