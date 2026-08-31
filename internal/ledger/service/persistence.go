@@ -253,6 +253,10 @@ func (s *Service) Stop() {
 	done := s.stopDone
 	s.lifecycleMu.Unlock()
 
+	// Wait for an in-flight submission or ledger transition. The stopping state
+	// makes later submitters fail after they enter the gate.
+	s.openLedgerMu.Lock()
+	s.openLedgerMu.Unlock()
 	s.stopNodeStoreSweeper()
 	s.persistenceWorker.stop()
 	s.eventPublisher.stop()

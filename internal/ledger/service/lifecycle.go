@@ -25,6 +25,10 @@ func (s *Service) AcceptLedger(ctx context.Context) (uint32, error) {
 // acceptLedgerAt lets replay tests keep close_time byte-identical without
 // exposing deterministic clock control through the RPC service or wire.
 func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Time) (uint32, error) {
+	if err := s.lockOpenLedgerIfRunning(); err != nil {
+		return 0, err
+	}
+	defer s.openLedgerMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.historyComponent.mu.Lock()
@@ -380,6 +384,16 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 // SwitchToPreferredLedger installs the complete ledger selected by consensus as
 // the canonical closed-ledger frontier before the recovery round starts.
 func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
+	return s.switchToPreferredLedger(parent, nil)
+}
+
+func (s *Service) switchToPreferredLedger(parent *ledger.Ledger, beforeLock func()) error {
+	if beforeLock != nil {
+		beforeLock()
+	}
+	if err := s.lockOpenLedgerIfRunning(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	s.historyComponent.mu.Lock()
 	previousValidated := s.validatedLedger
@@ -387,6 +401,7 @@ func (s *Service) SwitchToPreferredLedger(parent *ledger.Ledger) error {
 		notification := s.validatedLedgerNotificationLocked(previousValidated)
 		s.historyComponent.mu.Unlock()
 		s.mu.Unlock()
+		s.openLedgerMu.Unlock()
 		notification.notify()
 	}()
 
@@ -511,11 +526,19 @@ func (s *Service) acceptConsensusResult(
 	closeTime time.Time,
 	closeTimeCorrect bool,
 ) (uint32, error) {
+	if err := s.lockOpenLedgerIfRunning(); err != nil {
+		return 0, err
+	}
 	s.mu.Lock()
 	previousValidated := s.validatedLedger
-	defer s.unlockAndNotifyValidatedLedger(previousValidated)
 	s.historyComponent.mu.Lock()
-	defer s.historyComponent.mu.Unlock()
+	defer func() {
+		notification := s.validatedLedgerNotificationLocked(previousValidated)
+		s.historyComponent.mu.Unlock()
+		s.mu.Unlock()
+		s.openLedgerMu.Unlock()
+		notification.notify()
+	}()
 
 	if s.closedLedger == nil {
 		return 0, svcerr.ErrNoClosedLedger
