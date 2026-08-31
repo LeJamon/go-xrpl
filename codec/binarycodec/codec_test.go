@@ -1,6 +1,7 @@
 package binarycodec
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -268,6 +269,48 @@ func TestEncode(t *testing.T) {
 			input:       map[string]any{"CloseResolution": 25},
 			output:      "011019",
 			expectedErr: nil,
+		},
+		{
+			description: "serialize minimum Int32",
+			input:       map[string]any{"RemainingOwnerCountDelta": float64(math.MinInt32)},
+			output:      "A280000000",
+			expectedErr: nil,
+		},
+		{
+			description: "serialize maximum Int32",
+			input:       map[string]any{"RemainingOwnerCountDelta": float64(math.MaxInt32)},
+			output:      "A27FFFFFFF",
+			expectedErr: nil,
+		},
+		{
+			description: "serialize maximum unsigned Int32",
+			input:       map[string]any{"RemainingOwnerCountDelta": uint32(math.MaxInt32)},
+			output:      "A27FFFFFFF",
+			expectedErr: nil,
+		},
+		{
+			description: "serialize minimum string Int32",
+			input:       map[string]any{"RemainingOwnerCountDelta": "-2147483648"},
+			output:      "A280000000",
+			expectedErr: nil,
+		},
+		{
+			description: "reject Int32 overflow",
+			input:       map[string]any{"RemainingOwnerCountDelta": int64(math.MaxInt32) + 1},
+			output:      "",
+			expectedErr: types.ErrInvalidInt32,
+		},
+		{
+			description: "reject fractional Int32",
+			input:       map[string]any{"RemainingOwnerCountDelta": 1.5},
+			output:      "",
+			expectedErr: types.ErrInvalidInt32,
+		},
+		{
+			description: "reject string Int32 overflow",
+			input:       map[string]any{"RemainingOwnerCountDelta": "2147483648"},
+			output:      "",
+			expectedErr: types.ErrInvalidInt32,
 		},
 		{
 			description: "serialize hash 128",
