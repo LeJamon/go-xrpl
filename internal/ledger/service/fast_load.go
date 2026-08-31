@@ -119,16 +119,22 @@ func (s *Service) verifyFastLoadStrictState(
 		return nil
 	}
 
-	durable, ok := s.nodeStore.(nodestore.DurableDatabase)
+	durable, ok := s.nodeStore.(nodestore.DurableSnapshotDatabase)
 	if !ok {
 		return metrics, [32]byte{}, false, verify()
 	}
-	var fingerprint [32]byte
-	err := durable.WithDurableSnapshot(ctx, func(current [32]byte) error {
-		fingerprint = current
-		return verify()
-	})
+	fingerprint, release, err := durable.AcquireDurableSnapshot(ctx)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return metrics, [32]byte{}, false, ctxErr
+		}
+		s.logger.Warn("Fast-load strict traversal cannot retain durable state base; continuing without it",
+			"err", err,
+		)
+		return metrics, [32]byte{}, false, verify()
+	}
+	defer release()
+	if err := verify(); err != nil {
 		return metrics, [32]byte{}, false, err
 	}
 	return metrics, fingerprint, true, nil
