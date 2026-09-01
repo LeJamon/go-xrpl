@@ -304,6 +304,18 @@ func TestSponsoredExpiredOfferCleanupAdjustsReserveCounts(t *testing.T) {
 	requireAccountOwnerCounts(t, fixture.sandbox, fixture.sponsor, tx.OwnerCounts{})
 }
 
+func TestConsumedSponsoredOfferCleanupAdjustsReserveCounts(t *testing.T) {
+	fixture := newExpiredOfferFixture(t)
+	fixture.addSponsor(t)
+
+	err := fixture.step.deleteOffer(fixture.sandbox, fixture.offer, fixture.owner)
+
+	require.NoError(t, err)
+	requireExpiredOfferState(t, fixture, false, 0)
+	requireAccountOwnerCounts(t, fixture.sandbox, fixture.owner, tx.OwnerCounts{})
+	requireAccountOwnerCounts(t, fixture.sandbox, fixture.sponsor, tx.OwnerCounts{})
+}
+
 func TestDeferredOfferCleanupIsAtomic(t *testing.T) {
 	fixture := newExpiredOfferFixture(t)
 	fixture.view.faultKey = fixture.accountKey

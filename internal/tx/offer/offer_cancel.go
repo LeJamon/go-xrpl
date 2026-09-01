@@ -113,8 +113,8 @@ func (o *OfferCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefBAD_LEDGER
 	}
 
-	if ctx.Account.OwnerCount > 0 {
-		ctx.Account.OwnerCount--
+	if result := tx.DecreaseOwnerCountFor(ctx, accountID, ledgerOffer.Sponsor, 1); result != ter.TesSUCCESS {
+		return result
 	}
 
 	return ter.TesSUCCESS

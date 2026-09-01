@@ -306,8 +306,7 @@ func deleteOffer(ctx *tx.ApplyContext, _ keylet.Keylet, ik keylet.Keylet, data [
 	if err != nil || !removed {
 		return ter.TefBAD_LEDGER
 	}
-	decrementOwnerCount(ctx)
-	return ter.TesSUCCESS
+	return tx.DecreaseOwnerCountFor(ctx, ctx.AccountID, offer.Sponsor, 1)
 }
 
 func deleteTicket(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []byte) ter.Result {

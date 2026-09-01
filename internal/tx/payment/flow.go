@@ -564,6 +564,12 @@ func sumAmountsWithNumberContext(
 //	    if (auto ok = sb.peek(keylet::offer(o)))
 //	        offerDelete(sb, ok, j);
 func offerDeleteInSandbox(sb *PaymentSandbox, offerKey [32]byte) error {
+	return DeleteOfferAtomically(sb, offerKey)
+}
+
+// DeleteOfferAtomically removes an offer and adjusts its reserve counters in
+// an isolated child sandbox.
+func DeleteOfferAtomically(sb *PaymentSandbox, offerKey [32]byte) error {
 	offerKL := keylet.Keylet{Key: offerKey}
 	offerData, err := sb.Read(offerKL)
 	if err != nil {
@@ -585,14 +591,6 @@ func deleteOfferAtomically(sb *PaymentSandbox, offerKey [32]byte, offer *state.L
 	if err != nil {
 		return fmt.Errorf("decode offer owner: %w", err)
 	}
-	var sponsorID *[20]byte
-	if offer.Sponsor != "" {
-		decodedSponsor, err := state.DecodeAccountID(offer.Sponsor)
-		if err != nil {
-			return fmt.Errorf("decode offer sponsor: %w", err)
-		}
-		sponsorID = &decodedSponsor
-	}
 
 	staged := NewChildSandbox(sb)
 	removed, err := state.DeleteOffer(staged, keylet.Keylet{Key: offerKey}, offer)
@@ -602,7 +600,7 @@ func deleteOfferAtomically(sb *PaymentSandbox, offerKey [32]byte, offer *state.L
 	if !removed {
 		return ter.Errorf(ter.TefBAD_LEDGER, "offer removal incomplete")
 	}
-	if err := tx.AdjustOwnerCountForObject(staged, ownerID, sponsorID, -1); err != nil {
+	if err := tx.DecreaseOwnerCountOnView(staged, ownerID, offer.Sponsor, 1); err != nil {
 		return fmt.Errorf("adjust offer owner count: %w", err)
 	}
 	if err := staged.Apply(sb); err != nil {

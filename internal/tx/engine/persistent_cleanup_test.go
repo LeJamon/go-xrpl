@@ -228,6 +228,156 @@ func TestRemoveDeletedTrustLinesPreservesLineWhenAccountMissing(t *testing.T) {
 	}
 }
 
+type eraseOfferTecTx struct {
+	*txcore.BaseTx
+	key  keylet.Keylet
+	code ter.Result
+}
+
+func (tx eraseOfferTecTx) Apply(ctx *txcore.ApplyContext) ter.Result {
+	if err := ctx.View.Erase(tx.key); err != nil {
+		return ter.TefINTERNAL
+	}
+	return tx.code
+}
+
+func putRecoverySponsoredOffer(
+	t *testing.T,
+	view *recordingBaseView,
+	withDirectories bool,
+) ([20]byte, keylet.Keylet) {
+	t.Helper()
+	sponsorID, err := state.DecodeAccountID(recoveryTestAccount)
+	if err != nil {
+		t.Fatalf("DecodeAccountID sponsor: %v", err)
+	}
+	sponsorKey := keylet.Account(sponsorID)
+	sponsor := readRecoveryAccount(t, view, sponsorKey)
+	sponsor.SponsoringOwnerCount = 1
+	sponsorData, err := state.SerializeAccountRoot(sponsor)
+	if err != nil {
+		t.Fatalf("SerializeAccountRoot sponsor: %v", err)
+	}
+	if err := view.Update(sponsorKey, sponsorData); err != nil {
+		t.Fatalf("Update sponsor: %v", err)
+	}
+
+	ownerID := [20]byte{7}
+	ownerAddress := state.EncodeAccountIDSafe(ownerID)
+	ownerData, err := state.SerializeAccountRoot(&state.AccountRoot{
+		Account:             ownerAddress,
+		Balance:             1_000_000_000,
+		Sequence:            2,
+		OwnerCount:          1,
+		SponsoredOwnerCount: 1,
+	})
+	if err != nil {
+		t.Fatalf("SerializeAccountRoot owner: %v", err)
+	}
+	if err := view.Insert(keylet.Account(ownerID), ownerData); err != nil {
+		t.Fatalf("Insert owner: %v", err)
+	}
+
+	offerKey := keylet.Offer(ownerID, 1)
+	bookDir := keylet.Keylet{Key: [32]byte{0x55, 2}}
+	var ownerNode, bookNode uint64
+	if withDirectories {
+		ownerResult, dirErr := state.DirInsert(view, keylet.OwnerDir(ownerID), offerKey.Key, false, func(dir *state.DirectoryNode) {
+			dir.Owner = ownerID
+		})
+		if dirErr != nil {
+			t.Fatalf("DirInsert owner: %v", dirErr)
+		}
+		ownerNode = ownerResult.Page
+		bookResult, dirErr := state.DirInsert(view, bookDir, offerKey.Key, true, func(dir *state.DirectoryNode) {
+			dir.TakerPaysCurrency = keylet.CurrencyBytes("USD")
+			dir.TakerPaysIssuer = sponsorID
+		})
+		if dirErr != nil {
+			t.Fatalf("DirInsert book: %v", dirErr)
+		}
+		bookNode = bookResult.Page
+	}
+	offerData, err := state.SerializeLedgerOffer(&state.LedgerOffer{
+		Account:       ownerAddress,
+		Sequence:      1,
+		TakerPays:     state.NewIssuedAmountFromValue(100, 0, "USD", recoveryTestAccount),
+		TakerGets:     state.NewXRPAmountFromInt(100),
+		BookDirectory: bookDir.Key,
+		BookNode:      bookNode,
+		OwnerNode:     ownerNode,
+		Sponsor:       recoveryTestAccount,
+	})
+	if err != nil {
+		t.Fatalf("SerializeLedgerOffer: %v", err)
+	}
+	if err := view.Insert(offerKey, offerData); err != nil {
+		t.Fatalf("Insert offer: %v", err)
+	}
+	return ownerID, offerKey
+}
+
+func TestWorkOnTecOfferReplayAdjustsSponsoredCounters(t *testing.T) {
+	for _, code := range []ter.Result{ter.TecKILLED, ter.TecOVERSIZE} {
+		t.Run(code.String(), func(t *testing.T) {
+			view := newRecordingBaseView()
+			sponsorKey := fundRecoveryAccount(t, view, 1_000_000, 1)
+			ownerID, offerKey := putRecoverySponsoredOffer(t, view, true)
+
+			result := recoveryEngine(view, txcore.TapNONE).Apply(eraseOfferTecTx{
+				BaseTx: recoveryTx(10, 1),
+				key:    offerKey,
+				code:   code,
+			})
+
+			if result.Result != code || !result.Applied {
+				t.Fatalf("result/applied = %s/%v, want %s/true", result.Result, result.Applied, code)
+			}
+			offerData, err := view.Read(offerKey)
+			if err != nil || offerData != nil {
+				t.Fatalf("replayed offer = %x, err=%v, want deleted", offerData, err)
+			}
+			owner := readRecoveryAccount(t, view, keylet.Account(ownerID))
+			if owner.OwnerCount != 0 || owner.SponsoredOwnerCount != 0 {
+				t.Fatalf("owner counts = %d/%d, want 0/0", owner.OwnerCount, owner.SponsoredOwnerCount)
+			}
+			sponsor := readRecoveryAccount(t, view, sponsorKey)
+			if sponsor.SponsoringOwnerCount != 0 {
+				t.Fatalf("sponsor count = %d, want 0", sponsor.SponsoringOwnerCount)
+			}
+		})
+	}
+}
+
+func TestWorkOnTecOfferReplayPropagatesCleanupFailure(t *testing.T) {
+	view := newRecordingBaseView()
+	sponsorKey := fundRecoveryAccount(t, view, 1_000_000, 1)
+	ownerID, offerKey := putRecoverySponsoredOffer(t, view, false)
+
+	result := recoveryEngine(view, txcore.TapNONE).Apply(eraseOfferTecTx{
+		BaseTx: recoveryTx(10, 1),
+		key:    offerKey,
+		code:   ter.TecKILLED,
+	})
+
+	if result.Result != ter.TefBAD_LEDGER || result.Applied {
+		t.Fatalf("result/applied = %s/%v, want tefBAD_LEDGER/false", result.Result, result.Applied)
+	}
+	offerData, err := view.Read(offerKey)
+	if err != nil || offerData == nil {
+		t.Fatalf("offer after failed replay = %x, err=%v, want preserved", offerData, err)
+	}
+	owner := readRecoveryAccount(t, view, keylet.Account(ownerID))
+	if owner.OwnerCount != 1 || owner.SponsoredOwnerCount != 1 {
+		t.Fatalf("owner counts = %d/%d, want 1/1", owner.OwnerCount, owner.SponsoredOwnerCount)
+	}
+	sponsor := readRecoveryAccount(t, view, sponsorKey)
+	if sponsor.SponsoringOwnerCount != 1 || sponsor.Balance != 1_000_000 || sponsor.Sequence != 1 {
+		t.Fatalf("sponsor state = count %d balance %d sequence %d, want 1/1000000/1",
+			sponsor.SponsoringOwnerCount, sponsor.Balance, sponsor.Sequence)
+	}
+}
+
 func erasedType(t ledgerentry.Type) *applystate.TrackedEntry {
 	data := ledgerTypeBytes(t)
 	return &applystate.TrackedEntry{Action: applystate.ActionErase, Original: data, Current: data}

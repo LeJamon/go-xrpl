@@ -83,6 +83,9 @@ func (o *OfferCreate) ApplyCreate(ctx *tx.ApplyContext) ter.Result {
 		if updatedAccount, parseErr := state.ParseAccountRoot(updatedData); parseErr == nil {
 			ctx.Account.Balance = updatedAccount.Balance
 			ctx.Account.OwnerCount = uint32(int32(updatedAccount.OwnerCount) + ctxDelta)
+			ctx.Account.SponsoredOwnerCount = updatedAccount.SponsoredOwnerCount
+			ctx.Account.SponsoringOwnerCount = updatedAccount.SponsoringOwnerCount
+			ctx.Account.SponsoringAccountCount = updatedAccount.SponsoringAccountCount
 		}
 	}
 
@@ -193,48 +196,6 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 	}
 
 	return o.placeRemainingOffer(ctx, sb, saTakerPays, saTakerGets, uRate, bPassive, bSell, bHybrid)
-}
-
-// peekOffer reads an offer from the ledger without modifying it.
-func peekOffer(view tx.LedgerView, accountID [20]byte, sequence uint32) *state.LedgerOffer {
-	offerKey := keylet.Offer(accountID, sequence)
-	data, err := view.Read(offerKey)
-	if err != nil || data == nil {
-		return nil
-	}
-
-	offer, err := state.ParseLedgerOffer(data)
-	if err != nil {
-		return nil
-	}
-
-	return offer
-}
-
-// offerDeleteInView removes an offer from the given view without modifying account state.
-// This is used by the two-sandbox pattern to delete offers in both sandboxes.
-func offerDeleteInView(view tx.LedgerView, offer *state.LedgerOffer) ter.Result {
-	accountID, err := state.DecodeAccountID(offer.Account)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	offerKey := keylet.Offer(accountID, offer.Sequence)
-	removed, err := state.DeleteOffer(view, offerKey, offer)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if !removed {
-		return ter.TefBAD_LEDGER
-	}
-	return ter.TesSUCCESS
-}
-
-// adjustOwnerCountInView adjusts an account's OwnerCount directly through the view.
-// Used for offer deletion when the offer owner is NOT ctx.Account (e.g., self-crossed
-// offers or unfunded offers from other accounts removed during crossing).
-// Reference: rippled adjustOwnerCount() in View.cpp
-func adjustOwnerCountInView(view tx.LedgerView, accountID [20]byte, delta int) {
-	_ = tx.AdjustOwnerCount(view, accountID, delta)
 }
 
 // applyHybridInSandbox handles hybrid offer placement in a specific view/sandbox.
