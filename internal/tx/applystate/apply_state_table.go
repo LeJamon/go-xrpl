@@ -364,9 +364,6 @@ func (t *ApplyStateTable) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 	for {
 		baseKey, baseData, baseFound, err := t.base.Succ(searchBase)
 		if err != nil {
-			if found {
-				return bestKey, bestData, true, nil
-			}
 			return [32]byte{}, nil, false, err
 		}
 		if !baseFound {

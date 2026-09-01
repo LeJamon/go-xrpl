@@ -578,9 +578,6 @@ func (s *PaymentSandbox) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 			baseKey, baseData, baseFound, err = s.view.Succ(searchBase)
 		}
 		if err != nil {
-			if found {
-				return bestKey, bestData, true, nil
-			}
 			return [32]byte{}, nil, false, err
 		}
 
