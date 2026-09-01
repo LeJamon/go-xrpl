@@ -96,10 +96,11 @@ func NewIdentityFromPrivateKey(privKeyHex string) (*Identity, error) {
 		return nil, ErrInvalidPrivateKey
 	}
 
-	privateKey, _ := btcec.PrivKeyFromBytes(privKeyBytes)
-	if privateKey == nil {
+	_, err = secp256k1.Algorithm{}.DerivePublicKeyFromSecret(privKeyBytes)
+	if err != nil {
 		return nil, ErrInvalidPrivateKey
 	}
+	privateKey, _ := btcec.PrivKeyFromBytes(privKeyBytes)
 
 	return &Identity{
 		privateKey: privateKey,

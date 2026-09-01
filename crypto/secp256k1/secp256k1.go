@@ -156,8 +156,8 @@ func (c Algorithm) DeriveKeypair(seed []byte, validator bool) (privHex, pubHex s
 // SignBytes signs msg with a 32-byte raw secp256k1 private key and returns
 // the DER-encoded signature in bytes.
 func (c Algorithm) SignBytes(msg, privKey []byte) ([]byte, error) {
-	if len(privKey) != 32 {
-		return nil, ErrInvalidPrivateKey
+	if err := validatePrivateKey(privKey); err != nil {
+		return nil, err
 	}
 	if len(msg) == 0 {
 		return nil, ErrInvalidMessage
@@ -166,6 +166,19 @@ func (c Algorithm) SignBytes(msg, privKey []byte) ([]byte, error) {
 	hash := sha512half.Sum(msg)
 	sig := ecdsa.Sign(secpPrivKey, hash[:])
 	return derFromRS(sig.R(), sig.S()), nil
+}
+
+func validatePrivateKey(privKey []byte) error {
+	if len(privKey) != 32 {
+		return ErrInvalidPrivateKey
+	}
+
+	var scalar secp256k1.ModNScalar
+	defer scalar.Zero()
+	if scalar.SetByteSlice(privKey) || scalar.IsZero() {
+		return ErrInvalidPrivateKey
+	}
+	return nil
 }
 
 // decodePrivKeyHex decodes a secp256k1 private key supplied as either a bare
@@ -326,8 +339,8 @@ func (c Algorithm) DerivePublicKeyFromPublicGenerator(pubKey []byte) ([]byte, er
 // loading, where the JSON `validation_secret_key` already is the raw
 // scalar (no seed expansion).
 func (c Algorithm) DerivePublicKeyFromSecret(secret []byte) ([]byte, error) {
-	if len(secret) != 32 {
-		return nil, ErrInvalidPrivateKey
+	if err := validatePrivateKey(secret); err != nil {
+		return nil, err
 	}
 	_, pubKey := btcec.PrivKeyFromBytes(secret)
 	return pubKey.SerializeCompressed(), nil

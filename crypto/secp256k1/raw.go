@@ -12,8 +12,8 @@ func SignDigestBytes(digest, privKey []byte) ([]byte, error) {
 	if len(digest) != 32 {
 		return nil, errors.New("secp256k1: digest must be 32 bytes")
 	}
-	if len(privKey) != 32 {
-		return nil, ErrInvalidPrivateKey
+	if err := validatePrivateKey(privKey); err != nil {
+		return nil, err
 	}
 	sk := secp256k1.PrivKeyFromBytes(privKey)
 	return ecdsa.Sign(sk, digest).Serialize(), nil
