@@ -145,11 +145,26 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 						groomable := false
 						if ownErr == nil && ownData != nil {
 							if probeOffer, pErr := state.ParseLedgerOffer(ownData); pErr == nil {
-								groomable, err = s.isFoundPermGroomable(sb, afView, probeOffer)
-								if err != nil {
-									return nil, [32]byte{}, err
+								groomable = s.offerExpired(probeOffer) ||
+									probeOffer.TakerPays.IsZero() || probeOffer.TakerGets.IsZero()
+								if !groomable {
+									ownerID, decodeErr := state.DecodeAccountID(probeOffer.Account)
+									if decodeErr == nil {
+										groomable, err = s.isDeepFrozenIssue(sb, ownerID, s.book.In)
+										if err != nil {
+											return nil, [32]byte{}, err
+										}
+									}
 								}
-								groomable = groomable || s.offerExpired(probeOffer) || s.offerOutOfDomain(sb, probeOffer)
+								if !groomable {
+									groomable = s.offerOutOfDomain(sb, probeOffer)
+								}
+								if !groomable {
+									groomable, err = s.isFoundPermGroomable(sb, afView, probeOffer)
+									if err != nil {
+										return nil, [32]byte{}, err
+									}
+								}
 							}
 						}
 						if !groomable {
@@ -200,19 +215,6 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 					continue
 				}
 
-				// Domain membership check: if the offer has a DomainID (domain or
-				// hybrid offer), verify the owner is still in that domain. Owners
-				// who have left the domain (or whose credential has expired) have
-				// their offers treated as unfunded and removed. With
-				// fixCleanup3_3_0 enabled, this check is limited to domain books so
-				// expired hybrid offers remain usable in the open book.
-				// Reference: rippled OfferStream.cpp lines 294-303
-				if s.offerOutOfDomain(sb, offer) {
-					ofrsToRm[offerKey] = true
-					s.recordPermRm(offerKey)
-					continue
-				}
-
 				// The single funded/groom rule, applied to every offer the walk
 				// steps onto and read from the live working sandbox — rippled's
 				// OfferStream::step. A deep-frozen or zero-amount offer is a
@@ -229,11 +231,29 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 				if ownerErr != nil {
 					continue
 				}
+				if offer.TakerPays.IsZero() || offer.TakerGets.IsZero() {
+					ofrsToRm[offerKey] = true
+					s.recordPermRm(offerKey)
+					continue
+				}
 				deepFrozen, err := s.isDeepFrozenIssue(sb, offerOwner, s.book.In)
 				if err != nil {
 					return nil, [32]byte{}, err
 				}
-				if offer.TakerGets.IsZero() || deepFrozen {
+				if deepFrozen {
+					ofrsToRm[offerKey] = true
+					s.recordPermRm(offerKey)
+					continue
+				}
+
+				// Domain membership check: if the offer has a DomainID (domain or
+				// hybrid offer), verify the owner is still in that domain. Owners
+				// who have left the domain (or whose credential has expired) have
+				// their offers treated as unfunded and removed. With
+				// fixCleanup3_3_0 enabled, this check is limited to domain books so
+				// expired hybrid offers remain usable in the open book.
+				// Reference: rippled OfferStream.cpp lines 294-303
+				if s.offerOutOfDomain(sb, offer) {
 					ofrsToRm[offerKey] = true
 					s.recordPermRm(offerKey)
 					continue
@@ -310,7 +330,7 @@ func (s *BookStep) firstCrossableTipQuality(sb *PaymentSandbox, ofrsToRm, visite
 				if perr != nil {
 					continue
 				}
-				if s.offerExpired(offer) || s.offerOutOfDomain(sb, offer) {
+				if s.offerExpired(offer) || offer.TakerPays.IsZero() || offer.TakerGets.IsZero() {
 					continue
 				}
 				offerOwner, derr := state.DecodeAccountID(offer.Account)
@@ -321,7 +341,10 @@ func (s *BookStep) firstCrossableTipQuality(sb *PaymentSandbox, ofrsToRm, visite
 				if err != nil {
 					return nil, err
 				}
-				if offer.TakerGets.IsZero() || deepFrozen {
+				if deepFrozen {
+					continue
+				}
+				if s.offerOutOfDomain(sb, offer) {
 					continue
 				}
 				funds, err := s.getOfferFundedAmount(sb, offer)

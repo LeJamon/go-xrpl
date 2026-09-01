@@ -184,6 +184,7 @@ func TestBookStepDeepFreezeLookupErrorsAbortTraversal(t *testing.T) {
 				requestedOut = NewIOUEitherAmount(tx.NewIssuedAmountFromFloat64(1, "USD", issuerString))
 			}
 			step := NewBookStep(inIssue, outIssue, source, destination, nil, false)
+			step.qualityLimit = &Quality{Value: 1}
 			directoryKey := step.bookBaseKey()
 			binary.BigEndian.PutUint64(directoryKey[24:], 0x5500000000000000)
 			var offerKey [32]byte
@@ -263,4 +264,144 @@ func TestBookStepDeepFreezeLookupErrorsAbortTraversal(t *testing.T) {
 			require.Equal(t, originalOffer, view.data[offerKey])
 		})
 	}
+}
+
+func TestBookStepSkipsDeepFreezeLookupAfterEarlierGroomingDecision(t *testing.T) {
+	readSentinel := errors.New("trust line read failed")
+
+	t.Run("zero offer", func(t *testing.T) {
+		var issuer, owner, source, destination [20]byte
+		issuer[19] = 1
+		owner[19] = 2
+		source[19] = 3
+		destination[19] = 4
+
+		view := newPaymentMockLedgerView()
+		view.createAccount(owner, 1_000_000_000, 1)
+		view.createTrustLine(owner, issuer, "USD", 10, 100, 100)
+		issuerString := state.EncodeAccountIDSafe(issuer)
+		step := NewBookStep(
+			Issue{Currency: "USD", Issuer: issuer},
+			Issue{Currency: "XRP"},
+			source,
+			destination,
+			nil,
+			false,
+		)
+		directoryKey := step.bookBaseKey()
+		binary.BigEndian.PutUint64(directoryKey[24:], 0x5500000000000000)
+		offerKey := insertBookOffer(t, view, owner, issuerString, 1, 0, directoryKey)
+		offer, err := state.ParseLedgerOffer(view.data[offerKey])
+		require.NoError(t, err)
+		offer.TakerGets = tx.NewXRPAmount(0)
+		view.data[offerKey], err = state.SerializeLedgerOffer(offer)
+		require.NoError(t, err)
+		directory := &state.DirectoryNode{
+			RootIndex:         directoryKey,
+			Indexes:           [][32]byte{offerKey},
+			TakerPaysCurrency: keylet.CurrencyBytes("USD"),
+			TakerPaysIssuer:   issuer,
+		}
+		view.data[directoryKey], err = state.SerializeDirectoryNode(directory, true)
+		require.NoError(t, err)
+
+		errorView := &deepFreezeReadErrorView{
+			paymentMockLedgerView: view,
+			key:                   keylet.Line(owner, issuer, "USD").Key,
+			err:                   readSentinel,
+		}
+		afView := NewPaymentSandbox(errorView)
+		sb := NewChildSandbox(afView)
+		quality, err := step.firstCrossableTipQuality(sb, nil, nil)
+		require.NoError(t, err)
+		require.Nil(t, quality)
+		require.Zero(t, errorView.reads)
+
+		offersToRemove := make(map[[32]byte]bool)
+		gotOffer, gotKey, err := step.getNextOfferSkipVisited(
+			sb,
+			afView,
+			offersToRemove,
+			make(map[[32]byte]bool),
+			true,
+		)
+		require.NoError(t, err)
+		require.Nil(t, gotOffer)
+		require.Zero(t, gotKey)
+		require.Contains(t, offersToRemove, offerKey)
+		require.Contains(t, step.PermRemovals(), offerKey)
+		require.Zero(t, errorView.reads)
+	})
+
+	t.Run("expired offer beyond quality limit", func(t *testing.T) {
+		var issuer, owner, source, destination [20]byte
+		issuer[19] = 1
+		owner[19] = 2
+		source[19] = 3
+		destination[19] = 4
+
+		view := newPaymentMockLedgerView()
+		view.createAccount(owner, 1_000_000_000, 1)
+		view.createTrustLine(owner, issuer, "USD", 10, 100, 100)
+		issuerString := state.EncodeAccountIDSafe(issuer)
+		step := NewBookStep(
+			Issue{Currency: "XRP"},
+			Issue{Currency: "USD", Issuer: issuer},
+			source,
+			destination,
+			nil,
+			false,
+		)
+		step.parentCloseTime = 100
+		step.qualityLimit = &Quality{Value: 1}
+		directoryKey := step.bookBaseKey()
+		binary.BigEndian.PutUint64(directoryKey[24:], 0x5500000000000000)
+		offer := &state.LedgerOffer{
+			Account:       state.EncodeAccountIDSafe(owner),
+			Sequence:      1,
+			TakerPays:     tx.NewXRPAmount(100_000_000),
+			TakerGets:     tx.NewIssuedAmountFromFloat64(10, "USD", issuerString),
+			BookDirectory: directoryKey,
+			Expiration:    99,
+		}
+		offerData, err := state.SerializeLedgerOffer(offer)
+		require.NoError(t, err)
+		offerKey := keylet.Offer(owner, 1).Key
+		view.data[offerKey] = offerData
+		directory := &state.DirectoryNode{
+			RootIndex:         directoryKey,
+			Indexes:           [][32]byte{offerKey},
+			TakerGetsCurrency: keylet.CurrencyBytes("USD"),
+			TakerGetsIssuer:   issuer,
+		}
+		view.data[directoryKey], err = state.SerializeDirectoryNode(directory, true)
+		require.NoError(t, err)
+
+		errorView := &deepFreezeReadErrorView{
+			paymentMockLedgerView: view,
+			key:                   keylet.Line(owner, issuer, "USD").Key,
+			err:                   readSentinel,
+		}
+		afView := NewPaymentSandbox(errorView)
+		sb := NewChildSandbox(afView)
+		quality, err := step.firstCrossableTipQuality(sb, nil, nil)
+		require.NoError(t, err)
+		require.Nil(t, quality)
+		require.Zero(t, errorView.reads)
+
+		offersToRemove := make(map[[32]byte]bool)
+		gotOffer, gotKey, err := step.getNextOfferSkipVisited(
+			sb,
+			afView,
+			offersToRemove,
+			make(map[[32]byte]bool),
+			true,
+		)
+		require.NoError(t, err)
+		require.Nil(t, gotOffer)
+		require.Zero(t, gotKey)
+		require.Contains(t, offersToRemove, offerKey)
+		require.Contains(t, step.PermRemovals(), offerKey)
+		require.Zero(t, errorView.reads)
+	})
 }
