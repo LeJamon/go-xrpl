@@ -137,7 +137,9 @@ func (s *DirectStepI) Rev(
 		}
 
 		// Execute the credit
-		_ = tx.RippleCredit(sb, s.src, s.dst, srcToDst)
+		if result := tx.RippleCredit(sb, s.src, s.dst, srcToDst); result != ter.TesSUCCESS {
+			throwFlowError(result)
+		}
 
 		return NewIOUEitherAmount(in), out
 	}
@@ -154,7 +156,9 @@ func (s *DirectStepI) Rev(
 	}
 
 	// Execute the credit
-	_ = tx.RippleCredit(sb, s.src, s.dst, maxSrcToDst)
+	if result := tx.RippleCredit(sb, s.src, s.dst, maxSrcToDst); result != ter.TesSUCCESS {
+		throwFlowError(result)
+	}
 
 	return NewIOUEitherAmount(in), NewIOUEitherAmount(actualOut)
 }
@@ -220,7 +224,9 @@ func (s *DirectStepI) Fwd(
 		s.setCacheLimiting(in.IOU, srcToDst, out, srcDebtDir, sb.NumberContext())
 
 		// Execute the credit
-		_ = tx.RippleCredit(sb, s.src, s.dst, s.cache.srcToDst)
+		if result := tx.RippleCredit(sb, s.src, s.dst, s.cache.srcToDst); result != ter.TesSUCCESS {
+			throwFlowError(result)
+		}
 
 		return NewIOUEitherAmount(s.cache.in), NewIOUEitherAmount(s.cache.out)
 	}
@@ -231,7 +237,9 @@ func (s *DirectStepI) Fwd(
 	s.setCacheLimiting(actualIn, maxSrcToDst, out, srcDebtDir, sb.NumberContext())
 
 	// Execute the credit
-	_ = tx.RippleCredit(sb, s.src, s.dst, s.cache.srcToDst)
+	if result := tx.RippleCredit(sb, s.src, s.dst, s.cache.srcToDst); result != ter.TesSUCCESS {
+		throwFlowError(result)
+	}
 
 	return NewIOUEitherAmount(s.cache.in), NewIOUEitherAmount(s.cache.out)
 }
