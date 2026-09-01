@@ -1,6 +1,7 @@
 package types
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,11 @@ func TestVerifyXrpValue(t *testing.T) {
 		{
 			name:   "fail - invalid xrp value - out of range",
 			input:  "0.000000007",
+			expErr: errInvalidXRPValue,
+		},
+		{
+			name:   "fail - leading zeroes",
+			input:  "00",
 			expErr: errInvalidXRPValue,
 		},
 		{
@@ -126,6 +132,11 @@ func TestVerifyMPTValue(t *testing.T) {
 			expErr: &InvalidAmountError{Amount: "100.50"},
 		},
 		{
+			name:   "fail - invalid mpt value - leading zeroes",
+			input:  "00",
+			expErr: &InvalidAmountError{Amount: "00"},
+		},
+		{
 			name:   "pass - valid mpt value - negative number",
 			input:  "-500",
 			expErr: nil,
@@ -165,6 +176,18 @@ func TestSerializeXrpAmount(t *testing.T) {
 			name:           "pass - valid xrp value - 1",
 			input:          "524801",
 			expectedOutput: []byte{0x40, 0x00, 0x00, 0x00, 0x00, 0x8, 0x2, 0x01},
+			expErr:         nil,
+		},
+		{
+			name:           "pass - valid xrp value - explicit positive sign",
+			input:          "+1",
+			expectedOutput: []byte{0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01},
+			expErr:         nil,
+		},
+		{
+			name:           "pass - valid xrp zero - explicit positive sign",
+			input:          "+0",
+			expectedOutput: []byte{0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
 			expErr:         nil,
 		},
 		{
@@ -628,6 +651,18 @@ func TestSerializeMPTCurrencyAmount(t *testing.T) {
 			expErr: nil,
 		},
 		{
+			name:       "pass - valid amount - negative one",
+			value:      "-1",
+			issuanceID: validIssuanceID,
+			expectedOutput: []byte{
+				0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+				0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF,
+				0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF,
+				0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF,
+			},
+			expErr: nil,
+		},
+		{
 			name:           "fail - invalid mpt value - decimal point",
 			value:          "100.50",
 			issuanceID:     validIssuanceID,
@@ -823,6 +858,67 @@ func TestDeserializeMPTAmount(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestXRPAmountNegativeZero(t *testing.T) {
+	amount := &Amount{}
+	defs := definitions.Get()
+
+	encoded, err := amount.FromJSON("-0")
+	require.NoError(t, err)
+	require.Equal(t, "4000000000000000", hex.EncodeToString(encoded))
+
+	decoded, err := amount.ToJSON(serdes.NewBinaryParser(encoded, defs))
+	require.NoError(t, err)
+	require.Equal(t, "0", decoded)
+
+	_, err = amount.FromJSON("-00")
+	require.ErrorIs(t, err, errInvalidXRPValue)
+
+	_, err = amount.ToJSON(serdes.NewBinaryParser(make([]byte, NativeAmountByteLength), defs))
+	require.ErrorIs(t, err, errNonCanonicalNegativeZero)
+}
+
+func TestMPTAmountNegativeZero(t *testing.T) {
+	const issuanceID = "1234567890abcdef1234567890abcdef1234567890abcdef"
+	const canonicalHex = "6000000000000000001234567890abcdef1234567890abcdef1234567890abcdef"
+	amount := &Amount{}
+	defs := definitions.Get()
+
+	encoded, err := amount.FromJSON(map[string]any{
+		"value":           "-0",
+		"mpt_issuance_id": issuanceID,
+	})
+	require.NoError(t, err)
+	require.Equal(t, canonicalHex, hex.EncodeToString(encoded))
+
+	decoded, err := amount.ToJSON(serdes.NewBinaryParser(encoded, defs))
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{
+		"value":           "0",
+		"mpt_issuance_id": issuanceID,
+	}, decoded)
+
+	_, err = amount.FromJSON(map[string]any{
+		"value":           "-00",
+		"mpt_issuance_id": issuanceID,
+	})
+	require.EqualError(t, err, "value '-00' is an invalid amount")
+
+	negativeZero, err := hex.DecodeString(
+		"2000000000000000001234567890abcdef1234567890abcdef1234567890abcdef",
+	)
+	require.NoError(t, err)
+	decoded, err = amount.ToJSON(serdes.NewBinaryParser(negativeZero, defs))
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{
+		"value":           "0",
+		"mpt_issuance_id": issuanceID,
+	}, decoded)
+
+	reencoded, err := amount.FromJSON(decoded)
+	require.NoError(t, err)
+	require.Equal(t, canonicalHex, hex.EncodeToString(reencoded))
 }
 
 func TestIsNative(t *testing.T) {

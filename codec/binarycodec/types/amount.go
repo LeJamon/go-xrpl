@@ -69,8 +69,9 @@ const (
 )
 
 var (
-	errInvalidXRPValue     = errors.New("invalid XRP value")
-	errInvalidCurrencyCode = errors.New("invalid currency code")
+	errInvalidXRPValue          = errors.New("invalid XRP value")
+	errInvalidCurrencyCode      = errors.New("invalid currency code")
+	errNonCanonicalNegativeZero = errors.New("negative zero is not canonical")
 
 	errInvalidMPTLength     = fmt.Errorf("MPT slice must be exactly %d bytes", MPTAmountByteLength)
 	errInsufficientMPTBytes = fmt.Errorf("not enough bytes for MPT issuance ID, need %d bytes", MPTIssuanceIDByteLength)
@@ -92,8 +93,8 @@ var (
 
 // Compiled once at package init: avoiding MustCompile on hot paths.
 var (
-	xrpDigitsRegex = regexp.MustCompile(`\d+`)
-	iouCodeRegex   = regexp.MustCompile(IOUCodeRegex)
+	integralAmountRegex = regexp.MustCompile(`^[+-]?(?:0|[1-9]\d*)$`)
+	iouCodeRegex        = regexp.MustCompile(IOUCodeRegex)
 )
 
 // IsScientificOffset reports whether an IOU mantissa/exponent combination
@@ -192,11 +193,6 @@ func (a *Amount) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	var sign string
-	if !isPositive(b) {
-		sign = "-"
-	}
-
 	// Check IOU first (bit 0x80 set) - IOU amounts are 48 bytes
 	if !isNative(b) {
 		token, err := p.ReadBytes(48)
@@ -230,6 +226,16 @@ func (a *Amount) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
 	}
 	xrpVal := binary.BigEndian.Uint64(xrp)
 	xrpVal &= 0x3FFFFFFFFFFFFFFF
+	if xrpVal == 0 {
+		if !isPositive(b) {
+			return nil, errNonCanonicalNegativeZero
+		}
+		return "0", nil
+	}
+	var sign string
+	if !isPositive(b) {
+		sign = "-"
+	}
 	// rippled's native deserialize skips canonicalize and so skips the max-drops
 	// cap, but its JSON re-entry path applies it (STAmount.cpp:937-938,
 	// cMaxNativeN = 10^17). This codec round-trips through JSON, so enforce the
@@ -333,11 +339,6 @@ func deserializeMPTValue(data []byte) (string, error) {
 		return "", errInvalidMPTLength
 	}
 
-	sign := ""
-	if !isPositive(data[0]) {
-		sign = "-"
-	}
-
 	mant := data[1:MPTValueWithHeaderLength]
 	msb := binary.BigEndian.Uint32(mant[0:4])
 	lsb := binary.BigEndian.Uint32(mant[4:8])
@@ -348,6 +349,14 @@ func deserializeMPTValue(data []byte) (string, error) {
 	shifted := new(big.Int).Lsh(msbBig, 32)
 
 	num := new(big.Int).Or(shifted, lsbBig)
+	if num.Sign() == 0 {
+		return "0", nil
+	}
+
+	sign := ""
+	if !isPositive(data[0]) {
+		sign = "-"
+	}
 
 	// rippled's MPT deserialize skips canonicalize and so skips the max-value
 	// cap, but its JSON re-entry path applies it (STAmount.cpp:939-940,
@@ -395,16 +404,14 @@ func deserializeMPTAmount(data []byte) (map[string]any, error) {
 // XRP values should not contain a decimal point because they are represented as integers as drops.
 // Negative XRP values are valid in ledger objects (e.g., NFToken sell offers with negative prices).
 func verifyXrpValue(value string) error {
-	// Strip optional leading negative sign for validation.
-	checkValue := value
-	if strings.HasPrefix(checkValue, "-") {
-		checkValue = checkValue[1:]
+	if !integralAmountRegex.MatchString(value) {
+		return errInvalidXRPValue
 	}
 
-	m := xrpDigitsRegex.FindAllString(checkValue, -1)
-
-	if len(m) != 1 {
-		return errInvalidXRPValue
+	// Strip the optional leading sign for validation.
+	checkValue := value
+	if strings.HasPrefix(checkValue, "-") || strings.HasPrefix(checkValue, "+") {
+		checkValue = checkValue[1:]
 	}
 
 	decimal := new(big.Float)
@@ -460,7 +467,7 @@ func verifyIOUValue(value string) error {
 // verifyMPTValue validates the format of an MPT amount value.
 // MPT values must be integers (no decimal point) and must not have the high bit set.
 func verifyMPTValue(value string) error {
-	if strings.Contains(value, ".") {
+	if !integralAmountRegex.MatchString(value) {
 		return &InvalidAmountError{Amount: value}
 	}
 
@@ -498,7 +505,7 @@ func serializeXrpAmount(value string) ([]byte, error) {
 
 	isNegative := strings.HasPrefix(value, "-")
 	absValue := value
-	if isNegative {
+	if isNegative || strings.HasPrefix(value, "+") {
 		absValue = value[1:]
 	}
 
@@ -508,7 +515,7 @@ func serializeXrpAmount(value string) ([]byte, error) {
 	}
 
 	var serialized uint64
-	if isNegative {
+	if isNegative && val != 0 {
 		// Negative: store absolute value without positive sign bit
 		serialized = val
 	} else {
@@ -703,7 +710,7 @@ func serializeMPTCurrencyAmount(valueStr, issuanceHex string) ([]byte, error) {
 	// MPT header: bit 0x20 (MPT flag) + bit 0x40 (positive sign).
 	// Negative amounts omit the positive bit.
 	header := byte(MPTAmountFlag) // 0x20
-	if !strings.HasPrefix(valueStr, "-") {
+	if binary.BigEndian.Uint64(valBytes) == 0 || !strings.HasPrefix(valueStr, "-") {
 		header |= MPTSignBitMask // 0x40
 	}
 	buf[0] = header

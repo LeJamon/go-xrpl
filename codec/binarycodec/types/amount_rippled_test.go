@@ -134,6 +134,11 @@ func TestXRPAmountDeserialization(t *testing.T) {
 			expectedDrops: "1",
 		},
 		{
+			name:          "negative one drop",
+			inputHex:      "0000000000000001",
+			expectedDrops: "-1",
+		},
+		{
 			name:          "100 drops",
 			inputHex:      "4000000000000064",
 			expectedDrops: "100",
