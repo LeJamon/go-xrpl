@@ -384,7 +384,10 @@ func (s *BookStep) forEachOffer(
 		// Reference: rippled OfferStream reads ownerFunds from view_ (sb),
 		// which is the execution sandbox, so consumed balances are visible.
 		if !isAMM {
-			funds := s.getOfferFundedAmount(sb, clobOffer)
+			funds, err := s.getOfferFundedAmount(sb, clobOffer)
+			if err != nil {
+				throwConsumeFailure(err)
+			}
 			isFundedByIssuer := !s.book.Out.IsMPT && offerOwner == s.book.Out.Issuer
 			if !isFundedByIssuer && funds.Compare(ownerGives) < 0 {
 				ownerGives = funds
@@ -506,7 +509,7 @@ func (s *BookStep) forEachOffer(
 	for s.offersUsed < s.maxOffersToConsume {
 		offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited, !consumed)
 		if err != nil {
-			break
+			throwConsumeFailure(err)
 		}
 		if offer == nil {
 			break
@@ -582,7 +585,9 @@ func (s *BookStep) forEachOffer(
 		// reset rolls it back with the rest of an over-extended pass (issue #1029)
 		// and the re-executed final pass re-derives it.
 		if s.lastConsumedTipValid {
-			s.removeConsumedTipIfUnfunded(sb)
+			if err := s.removeConsumedTipIfUnfunded(sb); err != nil {
+				throwConsumeFailure(err)
+			}
 		}
 	}
 
@@ -595,7 +600,11 @@ func (s *BookStep) forEachOffer(
 	// the AMM with it; fall back to nil only when the book truly has no crossable
 	// offer.
 	if firstCLOB {
-		tryAMM(s.firstCrossableTipQuality(sb, ofrsToRm, visited))
+		quality, err := s.firstCrossableTipQuality(sb, ofrsToRm, visited)
+		if err != nil {
+			throwConsumeFailure(err)
+		}
+		tryAMM(quality)
 	}
 }
 
@@ -612,24 +621,29 @@ func (s *BookStep) forEachOffer(
 // rides the sandbox's reset/apply lifecycle: a limiting-step reset rolls it back
 // with the rest of an over-extended pass, and the re-executed final pass re-runs
 // it. Reference: rippled BookTip.cpp:37-41 (offerDelete of m_entry on view_).
-func (s *BookStep) removeConsumedTipIfUnfunded(sb *PaymentSandbox) {
+func (s *BookStep) removeConsumedTipIfUnfunded(sb *PaymentSandbox) error {
 	key := s.lastConsumedTipKey
 	offerData, err := sb.Read(keylet.Keylet{Key: key})
 	if err != nil || offerData == nil {
-		return
+		return nil
 	}
 	offer, err := state.ParseLedgerOffer(offerData)
 	if err != nil {
-		return
+		return nil
 	}
-	if !s.getOfferFundedAmount(sb, offer).IsZero() {
-		return
+	funds, err := s.getOfferFundedAmount(sb, offer)
+	if err != nil {
+		return err
+	}
+	if !funds.IsZero() {
+		return nil
 	}
 	owner, err := state.DecodeAccountID(offer.Account)
 	if err != nil {
-		return
+		return nil
 	}
 	_ = s.deleteOffer(sb, offer, owner)
+	return nil
 }
 
 // prevStepDebtDir returns the previous step's debt direction for the given
