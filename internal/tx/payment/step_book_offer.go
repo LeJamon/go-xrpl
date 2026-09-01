@@ -14,6 +14,18 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
+type offerCleanupError struct {
+	cause error
+}
+
+func (e *offerCleanupError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *offerCleanupError) Unwrap() error {
+	return e.cause
+}
+
 // stepOfferCounter counts a single offer the book walk has advanced to and
 // reports whether the walk may continue. It mirrors rippled's
 // TOfferStreamBase::StepCounter::step(): once the per-execution limit is
@@ -207,7 +219,9 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 				// Check offer expiration
 				// Reference: rippled OfferStream.cpp lines 256-265
 				if s.offerExpired(offer) {
-					s.removeExpiredOffer(sb, offer, offerKey)
+					if err := s.removeExpiredOffer(sb, offer, offerKey); err != nil {
+						return nil, [32]byte{}, &offerCleanupError{cause: err}
+					}
 					if ofrsToRm != nil {
 						ofrsToRm[offerKey] = true
 					}
@@ -551,15 +565,8 @@ func (s *BookStep) eraseDanglingOffer(view *PaymentSandbox, pageKey keylet.Keyle
 
 // removeExpiredOffer removes an expired offer from the ledger.
 // Reference: rippled OfferStream::permRmOffer
-func (s *BookStep) removeExpiredOffer(sb *PaymentSandbox, offer *state.LedgerOffer, offerKey [32]byte) {
-	ownerID, err := state.DecodeAccountID(offer.Account)
-	if err != nil {
-		return
-	}
-
-	if removed, deleteErr := state.DeleteOffer(sb, keylet.Keylet{Key: offerKey}, offer); deleteErr == nil && removed {
-		_ = s.adjustOwnerCount(sb, ownerID, -1)
-	}
+func (s *BookStep) removeExpiredOffer(sb *PaymentSandbox, offer *state.LedgerOffer, offerKey [32]byte) error {
+	return deleteOfferAtomically(sb, offerKey, offer)
 }
 
 // isOfferOwnerAuthorized checks if the offer owner is authorized to hold currency

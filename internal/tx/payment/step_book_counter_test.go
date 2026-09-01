@@ -15,6 +15,19 @@ import (
 // funding check reads the owner's XRP balance/reserve.
 func insertBookOffer(t *testing.T, view *paymentMockLedgerView, owner [20]byte, gwStr string, seq, expiration uint32, bookDir [32]byte) [32]byte {
 	t.Helper()
+	key := keylet.Offer(owner, seq).Key
+	ownerDirKey := keylet.OwnerDir(owner).Key
+	ownerDir := &state.DirectoryNode{RootIndex: ownerDirKey, Owner: owner}
+	if existing := view.data[ownerDirKey]; existing != nil {
+		var err error
+		ownerDir, err = state.ParseDirectoryNode(existing)
+		require.NoError(t, err)
+	}
+	ownerDir.Indexes = append(ownerDir.Indexes, key)
+	ownerDirData, err := state.SerializeDirectoryNode(ownerDir, false)
+	require.NoError(t, err)
+	view.data[ownerDirKey] = ownerDirData
+
 	offer := &state.LedgerOffer{
 		Account:       state.EncodeAccountIDSafe(owner),
 		Sequence:      seq,
@@ -25,7 +38,6 @@ func insertBookOffer(t *testing.T, view *paymentMockLedgerView, owner [20]byte, 
 	}
 	data, err := state.SerializeLedgerOffer(offer)
 	require.NoError(t, err)
-	key := keylet.Offer(owner, seq).Key
 	view.data[key] = data
 	return key
 }

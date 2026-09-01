@@ -509,6 +509,10 @@ func (s *BookStep) forEachOffer(
 	for s.offersUsed < s.maxOffersToConsume {
 		offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited, !consumed)
 		if err != nil {
+			var cleanupErr *offerCleanupError
+			if errors.As(err, &cleanupErr) {
+				throwOfferCleanupFailure(cleanupErr)
+			}
 			throwConsumeFailure(err)
 		}
 		if offer == nil {

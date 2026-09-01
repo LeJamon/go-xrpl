@@ -114,13 +114,14 @@ type Step interface {
 
 // StrandResult captures the outcome of executing a single strand
 type StrandResult struct {
-	Success    bool
-	In         EitherAmount
-	Out        EitherAmount
-	Sandbox    *PaymentSandbox
-	OffsToRm   map[[32]byte]bool
-	OffersUsed uint32
-	Inactive   bool
+	Success     bool
+	In          EitherAmount
+	Out         EitherAmount
+	Sandbox     *PaymentSandbox
+	OffsToRm    map[[32]byte]bool
+	OffersUsed  uint32
+	Inactive    bool
+	FatalResult ter.Result
 }
 
 // FlowResult captures the overall result of payment flow execution

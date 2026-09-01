@@ -1,6 +1,7 @@
 package payment
 
 import (
+	"fmt"
 	"maps"
 	"sort"
 
@@ -267,6 +268,14 @@ func Flow(
 			// Execute this strand with the potentially limited output.
 			// Reference: rippled StrandFlow.h line 694: flow(sb, *strand, remainingIn, limitRemainingOut, j)
 			result := ExecuteStrand(accumSandbox, *strand, remainingIn, limitRemainingOut)
+			if result.FatalResult != ter.TesSUCCESS {
+				return FlowResult{
+					In:      ZeroXRPEitherAmount(),
+					Out:     ZeroXRPEitherAmount(),
+					Sandbox: nil,
+					Result:  result.FatalResult,
+				}
+			}
 
 			// Every removal a BookStep now reports is a perm removal (rippled's
 			// permToRemove_), deleted from both views regardless of TER. A
@@ -360,7 +369,14 @@ func Flow(
 				allOfrsToRm[k] = true
 			}
 			for k := range iterOfrsToRm {
-				offerDeleteInSandbox(accumSandbox, k)
+				if err := offerDeleteInSandbox(accumSandbox, k); err != nil {
+					return FlowResult{
+						In:      ZeroXRPEitherAmount(),
+						Out:     ZeroXRPEitherAmount(),
+						Sandbox: nil,
+						Result:  offerCleanupResult(err),
+					}
+				}
 			}
 		}
 
@@ -547,33 +563,52 @@ func sumAmountsWithNumberContext(
 //	for (auto const& o : ofrsToRm)
 //	    if (auto ok = sb.peek(keylet::offer(o)))
 //	        offerDelete(sb, ok, j);
-func offerDeleteInSandbox(sb *PaymentSandbox, offerKey [32]byte) {
+func offerDeleteInSandbox(sb *PaymentSandbox, offerKey [32]byte) error {
 	offerKL := keylet.Keylet{Key: offerKey}
 	offerData, err := sb.Read(offerKL)
-	if err != nil || offerData == nil {
-		return // Offer already deleted or not found
+	if err != nil {
+		return fmt.Errorf("read removable offer: %w", err)
+	}
+	if offerData == nil {
+		return nil
 	}
 
 	offer, err := state.ParseLedgerOffer(offerData)
 	if err != nil {
-		return
+		return fmt.Errorf("parse removable offer: %w", err)
 	}
-
-	ownerID, err := state.DecodeAccountID(offer.Account)
-	if err != nil {
-		return
-	}
-
-	if removed, deleteErr := state.DeleteOffer(sb, offerKL, offer); deleteErr == nil && removed {
-		adjustOwnerCountInSandbox(sb, ownerID, -1)
-	}
+	return deleteOfferAtomically(sb, offerKey, offer)
 }
 
-// adjustOwnerCountInSandbox modifies an account's OwnerCount by delta in a PaymentSandbox.
-// Records the change via AdjustOwnerCount hook so OwnerCountHook returns the maximum.
-// This is a standalone version used by offerDeleteInSandbox.
-func adjustOwnerCountInSandbox(sb *PaymentSandbox, account [20]byte, delta int) {
-	_ = tx.AdjustOwnerCount(sb, account, delta)
+func deleteOfferAtomically(sb *PaymentSandbox, offerKey [32]byte, offer *state.LedgerOffer) error {
+	ownerID, err := state.DecodeAccountID(offer.Account)
+	if err != nil {
+		return fmt.Errorf("decode offer owner: %w", err)
+	}
+	var sponsorID *[20]byte
+	if offer.Sponsor != "" {
+		decodedSponsor, err := state.DecodeAccountID(offer.Sponsor)
+		if err != nil {
+			return fmt.Errorf("decode offer sponsor: %w", err)
+		}
+		sponsorID = &decodedSponsor
+	}
+
+	staged := NewChildSandbox(sb)
+	removed, err := state.DeleteOffer(staged, keylet.Keylet{Key: offerKey}, offer)
+	if err != nil {
+		return fmt.Errorf("delete offer: %w", err)
+	}
+	if !removed {
+		return ter.Errorf(ter.TefBAD_LEDGER, "offer removal incomplete")
+	}
+	if err := tx.AdjustOwnerCountForObject(staged, ownerID, sponsorID, -1); err != nil {
+		return fmt.Errorf("adjust offer owner count: %w", err)
+	}
+	if err := staged.Apply(sb); err != nil {
+		return fmt.Errorf("apply offer removal: %w", err)
+	}
+	return nil
 }
 
 // RippleCalculateResult bundles the outputs of a RippleCalculate run.
