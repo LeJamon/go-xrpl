@@ -103,13 +103,22 @@ func (t *TicketCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	// actual fee was deducted), allowing the account to dip into the reserve to
 	// pay fees.
 	priorBalance := ctx.PriorBalance()
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + t.TicketCount)
-	if priorBalance < reserve {
-		ctx.Log.Warn("ticket create: insufficient reserve",
+	ownerCountAfter := tx.ConfineOwnerCount(ctx.Account.OwnerCount, int(t.TicketCount))
+	if result := ctx.CheckReserveFor(
+		ctx.AccountID,
+		ctx.Account,
+		priorBalance,
+		int(t.TicketCount),
+		0,
+		ter.TecINSUFFICIENT_RESERVE,
+	); result != ter.TesSUCCESS {
+		ctx.Log.Warn("ticket create: reserve check failed",
 			"balance", priorBalance,
-			"reserve", reserve,
+			"ownerCount", ctx.Account.OwnerCount,
+			"ticketCount", t.TicketCount,
+			"result", result,
 		)
-		return ter.TecINSUFFICIENT_RESERVE
+		return result
 	}
 
 	for i := uint32(0); i < t.TicketCount; i++ {
@@ -145,7 +154,7 @@ func (t *TicketCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		"lastSequence", lastSeq,
 	)
 
-	ctx.Account.OwnerCount += t.TicketCount
+	ctx.Account.OwnerCount = ownerCountAfter
 	ctx.Account.Sequence += t.TicketCount
 
 	// Update TicketCount on the AccountRoot
