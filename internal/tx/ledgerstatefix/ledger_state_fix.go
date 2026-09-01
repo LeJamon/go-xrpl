@@ -197,7 +197,13 @@ func (l *LedgerStateFix) Apply(ctx *tx.ApplyContext) ter.Result {
 		// Reference: rippled LedgerStateFix.cpp doApply() lines 83-96
 		repaired, repairErr := repairNFTokenDirectoryLinks(ctx, ownerID)
 		if repairErr != nil {
-			return ctx.Internal("LedgerStateFix.repairNFTokenDirectoryLinks", repairErr)
+			if ctx.Log != nil {
+				ctx.Log.Error("tefEXCEPTION",
+					"op", "LedgerStateFix.repairNFTokenDirectoryLinks",
+					"err", repairErr,
+				)
+			}
+			return ter.TefEXCEPTION
 		}
 		if !repaired {
 			ctx.Log.Warn("ledger state fix: no repairs needed",

@@ -201,7 +201,7 @@ func TestLedgerStateFixNFTokenPageRepairOutcomes(t *testing.T) {
 		view := newNFTokenPageRepairView()
 		view.faults.succAt = 1
 		txn := NewNFTokenPageLinkFix("rAdmin", ownerAddress)
-		require.Equal(t, ter.TefINTERNAL, txn.Apply(nftPageRepairContext(view)))
+		require.Equal(t, ter.TefEXCEPTION, txn.Apply(nftPageRepairContext(view)))
 	})
 
 	t.Run("repair", func(t *testing.T) {
