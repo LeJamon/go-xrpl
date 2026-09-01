@@ -346,11 +346,11 @@ func mptDivide(amount, rate uint64) uint64 {
 	if rate == mptRateOne {
 		return amount
 	}
-	if amount == 0 {
-		return 0
-	}
 	if amount > math.MaxInt64 || rate == 0 || rate > math.MaxUint32 {
 		panic("MPT amount out of range")
+	}
+	if amount == 0 {
+		return 0
 	}
 
 	numMantissa, numExponent := normalizeMPTDivideOperand(amount, 0)
@@ -360,7 +360,7 @@ func mptDivide(amount, rate uint64) uint64 {
 		new(big.Int).SetUint64(100_000_000_000_000_000),
 	)
 	quotient := new(big.Int).Quo(numerator, new(big.Int).SetUint64(denMantissa))
-	if !quotient.IsUint64() || quotient.Uint64() > math.MaxUint64-5 {
+	if !quotient.IsUint64() {
 		panic("MPT amount out of range")
 	}
 	return mptFromUncheckedNumber(quotient.Uint64()+5, numExponent-denExponent-17)

@@ -67,6 +67,7 @@ func TestMPTDivideLegacyRounding(t *testing.T) {
 		{name: "issue boundary", amount: 11_000_000_000_000_000, rate: 1_100_000_000, want: 10_000_000_000_000_000},
 		{name: "issue boundary plus one", amount: 11_000_000_000_000_001, rate: 1_100_000_000, want: 10_000_000_000_000_001},
 		{name: "largest muldiv result", amount: 202_914_184_810_805_067, rate: 1_100_000_000, want: 184_467_440_737_095_516},
+		{name: "muldiv rounding wraps", amount: 184_472_974_760_317_629, rate: 1_000_030_000, want: 0},
 	}
 
 	for _, test := range tests {
@@ -87,4 +88,13 @@ func TestMPTDivideLegacyRounding(t *testing.T) {
 			_ = mptDivide(amount, 1_100_000_000)
 		}()
 	}
+
+	t.Run("zero denominator", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Error("mptDivide(0, 0) did not panic")
+			}
+		}()
+		_ = mptDivide(0, 0)
+	})
 }
