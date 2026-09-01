@@ -84,6 +84,9 @@ func (v *snapshotView) ForEach(fn func(key [32]byte, data []byte) bool) error {
 
 func (v *snapshotView) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 	it := v.stateMap.UpperBound(key)
+	if err := it.Err(); err != nil {
+		return [32]byte{}, nil, false, err
+	}
 	if it.Valid() {
 		item := it.Item()
 		if item != nil {
