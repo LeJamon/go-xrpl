@@ -2,6 +2,7 @@ package payment
 
 import (
 	"encoding/hex"
+	"math"
 	"math/big"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -117,7 +118,7 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) ter.Result {
 	// Amount to deliver and required source amount factoring in transfer rate
 	// Reference: rippled Payment.cpp:560-580
 	amountDeliver := dstAmount
-	requiredMaxSourceAmount := mptMultiply(dstAmount, rate)
+	requiredMaxSourceAmount := mptMultiply(dstAmount, rate, ctx.NumberContext())
 
 	// Partial payment: if required exceeds maxSource, adjust amountDeliver
 	isPartialPayment := p.GetFlags()&PaymentFlagPartialPayment != 0
@@ -252,7 +253,7 @@ func (p *Payment) mptDirectTransfer(ctx *tx.ApplyContext, issuance *state.MPToke
 func (p *Payment) mptTransitTransfer(ctx *tx.ApplyContext, issuance *state.MPTokenIssuanceData,
 	issuanceKey keylet.Keylet, amountDeliver, rate uint64, destAccountID [20]byte) ter.Result {
 	// Actual amount sender pays (includes transfer fee)
-	saActual := mptMultiply(amountDeliver, rate)
+	saActual := mptMultiply(amountDeliver, rate, ctx.NumberContext())
 
 	// Step 1: Credit receiver (issuer → receiver via rippleCreditMPT)
 	// Outstanding increases by amountDeliver
@@ -323,51 +324,91 @@ const (
 	maxMPTokenAmount = protocol.MaxMPTokenAmount
 )
 
-// mptMultiply multiplies amount by rate/QUALITY_ONE using big.Int to avoid overflow.
-// Reference: rippled STAmount multiply() for MPT - "No rounding"
-func mptMultiply(amount, rate uint64) uint64 {
+func mptMultiply(amount, rate uint64, numberContext state.NumberContext) uint64 {
 	if rate == mptRateOne {
 		return amount
 	}
-	num := new(big.Int).Mul(
-		new(big.Int).SetUint64(amount),
-		new(big.Int).SetUint64(rate),
-	)
-	return divRoundNearest(num, new(big.Int).SetUint64(mptRateOne))
+	if amount > math.MaxInt64 || rate == 0 || rate > math.MaxUint32 {
+		panic("MPT amount out of range")
+	}
+
+	amountNumber := numberContext.Int(int64(amount))
+	rateNumber := numberContext.Number(int64(rate), -9, state.RoundToNearest)
+	result := amountNumber.MulRounded(rateNumber, state.RoundToNearest).
+		ToInt64WithMode(state.RoundToNearest)
+	if result < 0 {
+		panic("MPT amount out of range")
+	}
+	return uint64(result)
 }
 
-// mptDivide divides amount by rate/QUALITY_ONE using big.Int to avoid overflow.
-// Reference: rippled STAmount divide() for MPT
 func mptDivide(amount, rate uint64) uint64 {
 	if rate == mptRateOne {
 		return amount
 	}
-	num := new(big.Int).Mul(
-		new(big.Int).SetUint64(amount),
-		new(big.Int).SetUint64(mptRateOne),
+	if amount == 0 {
+		return 0
+	}
+	if amount > math.MaxInt64 || rate == 0 || rate > math.MaxUint32 {
+		panic("MPT amount out of range")
+	}
+
+	numMantissa, numExponent := normalizeMPTDivideOperand(amount, 0)
+	denMantissa, denExponent := normalizeMPTDivideOperand(rate, -9)
+	numerator := new(big.Int).Mul(
+		new(big.Int).SetUint64(numMantissa),
+		new(big.Int).SetUint64(100_000_000_000_000_000),
 	)
-	return divRoundNearest(num, new(big.Int).SetUint64(rate))
+	quotient := new(big.Int).Quo(numerator, new(big.Int).SetUint64(denMantissa))
+	if !quotient.IsUint64() || quotient.Uint64() > math.MaxUint64-5 {
+		panic("MPT amount out of range")
+	}
+	return mptFromUncheckedNumber(quotient.Uint64()+5, numExponent-denExponent-17)
 }
 
-// divRoundNearest divides num by den rounding to the nearest integer,
-// ties to even — the rounding rippled's STAmount/Number arithmetic
-// applies when an MPT multiply/divide result is canonicalized back to
-// an integer amount (e.g. 90/1.1 → 81.81… → 82). rippled additionally
-// rounds the intermediate Number mantissa to 16 significant digits,
-// a no-op for amounts ≤ 10^15; this single-stage round matches it
-// exactly in that range.
-func divRoundNearest(num, den *big.Int) uint64 {
-	q, r := new(big.Int).QuoRem(num, den, new(big.Int))
-	r.Lsh(r, 1)
-	switch r.Cmp(den) {
-	case 1:
-		q.Add(q, big.NewInt(1))
-	case 0:
-		if q.Bit(0) == 1 {
-			q.Add(q, big.NewInt(1))
-		}
+func normalizeMPTDivideOperand(mantissa uint64, exponent int) (uint64, int) {
+	for mantissa < uint64(state.MinMantissa) {
+		mantissa *= 10
+		exponent--
 	}
-	return q.Uint64()
+	return mantissa, exponent
+}
+
+func mptFromUncheckedNumber(mantissa uint64, exponent int) uint64 {
+	if mantissa == 0 || exponent <= -20 {
+		return 0
+	}
+	if exponent > 18 {
+		panic("MPT amount out of range")
+	}
+	if mantissa > math.MaxInt64 {
+		mantissa /= 10
+		exponent++
+	}
+
+	for exponent > 0 {
+		if mantissa > math.MaxInt64/10 {
+			panic("MPT amount out of range")
+		}
+		mantissa *= 10
+		exponent--
+	}
+	if exponent < 0 {
+		divisor := uint64(1)
+		for ; exponent < 0; exponent++ {
+			divisor *= 10
+		}
+		quotient, remainder := mantissa/divisor, mantissa%divisor
+		half := divisor / 2
+		if remainder > half || (remainder == half && quotient&1 != 0) {
+			quotient++
+		}
+		mantissa = quotient
+	}
+	if mantissa > math.MaxInt64 {
+		panic("MPT amount out of range")
+	}
+	return mantissa
 }
 
 // mptAmountToUint64 converts an Amount to a uint64 integer value.
