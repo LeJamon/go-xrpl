@@ -2,6 +2,7 @@ package applystate
 
 import (
 	"bytes"
+	"errors"
 	"sort"
 	"testing"
 
@@ -15,6 +16,13 @@ import (
 // mockBaseView implements LedgerView for ApplyStateTable tests.
 type mockBaseView struct {
 	data map[[32]byte][]byte
+}
+
+type succErrorBaseView struct {
+	*mockBaseView
+	err        error
+	failOnCall int
+	calls      int
 }
 
 func newMockBaseView() *mockBaseView {
@@ -91,6 +99,14 @@ func (m *mockBaseView) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 	return [32]byte{}, nil, false, nil
 }
 
+func (m *succErrorBaseView) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
+	m.calls++
+	if m.calls == m.failOnCall {
+		return [32]byte{}, nil, false, m.err
+	}
+	return m.mockBaseView.Succ(key)
+}
+
 // helpers
 
 func key(b byte) [32]byte {
@@ -105,6 +121,103 @@ func kl(b byte) keylet.Keylet {
 
 func typedEntryData(typ entry.Type, tag byte) []byte {
 	return []byte{0x11, byte(typ >> 8), byte(typ), tag}
+}
+
+func TestSuccPropagatesBaseErrorWithLocalCandidate(t *testing.T) {
+	sentinel := errors.New("base successor failed")
+	base := &succErrorBaseView{
+		mockBaseView: newMockBaseView(),
+		err:          sentinel,
+		failOnCall:   1,
+	}
+	table := NewApplyStateTable(base, [32]byte{}, 0, nil)
+	if err := table.Insert(kl(2), []byte{2}); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	gotKey, gotData, found, err := table.Succ(key(0))
+	if err != sentinel {
+		t.Fatalf("Succ error = %v, want %v", err, sentinel)
+	}
+	if found || gotKey != ([32]byte{}) || gotData != nil {
+		t.Fatalf("Succ returned successful result on error: key=%x data=%x found=%v", gotKey, gotData, found)
+	}
+}
+
+func TestSuccPropagatesBaseErrorAfterErasedEntry(t *testing.T) {
+	sentinel := errors.New("base successor retry failed")
+	base := &succErrorBaseView{
+		mockBaseView: newMockBaseView(),
+		err:          sentinel,
+		failOnCall:   2,
+	}
+	base.data[key(1)] = []byte{1}
+	table := NewApplyStateTable(base, [32]byte{}, 0, nil)
+	if err := table.Erase(kl(1)); err != nil {
+		t.Fatalf("Erase: %v", err)
+	}
+	if err := table.Insert(kl(3), []byte{3}); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	gotKey, gotData, found, err := table.Succ(key(0))
+	if err != sentinel {
+		t.Fatalf("Succ error = %v, want %v", err, sentinel)
+	}
+	if found || gotKey != ([32]byte{}) || gotData != nil {
+		t.Fatalf("Succ returned successful result on error: key=%x data=%x found=%v", gotKey, gotData, found)
+	}
+	if base.calls != 2 {
+		t.Fatalf("base Succ calls = %d, want 2", base.calls)
+	}
+}
+
+func TestSuccCombinesBaseAndLocalCandidates(t *testing.T) {
+	tests := []struct {
+		name      string
+		baseKey   byte
+		localKey  byte
+		wantKey   byte
+		wantData  []byte
+		baseEmpty bool
+	}{
+		{name: "base first", baseKey: 2, localKey: 3, wantKey: 2, wantData: []byte("base")},
+		{name: "local first", baseKey: 3, localKey: 2, wantKey: 2, wantData: []byte("local")},
+		{name: "base exhausted", localKey: 2, wantKey: 2, wantData: []byte("local"), baseEmpty: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			base := newMockBaseView()
+			if !test.baseEmpty {
+				base.data[key(test.baseKey)] = []byte("base")
+			}
+			table := NewApplyStateTable(base, [32]byte{}, 0, nil)
+			if err := table.Insert(kl(test.localKey), []byte("local")); err != nil {
+				t.Fatalf("Insert: %v", err)
+			}
+
+			gotKey, gotData, found, err := table.Succ(key(0))
+			if err != nil {
+				t.Fatalf("Succ: %v", err)
+			}
+			if !found || gotKey != key(test.wantKey) || !bytes.Equal(gotData, test.wantData) {
+				t.Fatalf("Succ = (%x, %q, %v), want (%x, %q, true)", gotKey, gotData, found, key(test.wantKey), test.wantData)
+			}
+		})
+	}
+}
+
+func TestSuccReturnsNormalExhaustion(t *testing.T) {
+	table := NewApplyStateTable(newMockBaseView(), [32]byte{}, 0, nil)
+
+	gotKey, gotData, found, err := table.Succ(key(0))
+	if err != nil {
+		t.Fatalf("Succ: %v", err)
+	}
+	if found || gotKey != ([32]byte{}) || gotData != nil {
+		t.Fatalf("Succ exhaustion = (%x, %x, %v), want zero, nil, false", gotKey, gotData, found)
+	}
 }
 
 func TestReadChecksKeyletTypeForBaseAndTrackedEntries(t *testing.T) {
