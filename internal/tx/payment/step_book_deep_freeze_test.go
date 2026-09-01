@@ -257,6 +257,7 @@ func TestBookStepDeepFreezeLookupErrorsAbortTraversal(t *testing.T) {
 				requestedOut,
 			)
 			require.False(t, result.Success)
+			require.Equal(t, ter.TesSUCCESS, result.FatalResult)
 			require.Nil(t, result.Sandbox)
 			require.True(t, result.In.IsZero())
 			require.True(t, result.Out.IsZero())
