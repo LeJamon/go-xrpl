@@ -2,9 +2,11 @@ package inbound
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +14,33 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
+
+type notifyingBuffer struct {
+	mu    sync.Mutex
+	data  bytes.Buffer
+	wrote chan struct{}
+}
+
+func newNotifyingBuffer() *notifyingBuffer {
+	return &notifyingBuffer{wrote: make(chan struct{}, 1)}
+}
+
+func (b *notifyingBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	n, err := b.data.Write(p)
+	b.mu.Unlock()
+	select {
+	case b.wrote <- struct{}{}:
+	default:
+	}
+	return n, err
+}
+
+func (b *notifyingBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.data.String()
+}
 
 // incompleteStateAcquisition builds an acquisition seeded with a header + state
 // root for a tree with several branches, leaving it in StateWantState with
@@ -164,6 +193,84 @@ func TestLedger_StateDiscoveryProgressLogIncludesLiveCounters(t *testing.T) {
 	if output.Len() != 0 {
 		t.Fatalf("completed state discovery logged %q", output.String())
 	}
+}
+
+func TestLedger_StateDiscoveryProgressHeartbeatLifecycle(t *testing.T) {
+	waitStopped := func(t *testing.T, stopped <-chan struct{}) {
+		t.Helper()
+		select {
+		case <-stopped:
+		case <-time.After(time.Second):
+			t.Fatal("state discovery heartbeat did not stop")
+		}
+	}
+
+	t.Run("stop is synchronous and idempotent", func(t *testing.T) {
+		output := newNotifyingBuffer()
+		ledger := New([32]byte{0xAD}, 44, 1, slog.New(slog.NewJSONHandler(output, nil)))
+		ledger.stateUseful = 1365
+		ticks := make(chan time.Time, 1)
+		stopped := make(chan struct{})
+		stop := ledger.startStateDiscoveryProgressWithTicks(
+			t.Context(), time.Now().Add(-time.Minute), ticks, func() { close(stopped) },
+		)
+
+		ticks <- time.Now()
+		select {
+		case <-output.wrote:
+		case <-time.After(time.Second):
+			t.Fatal("state discovery heartbeat was not logged")
+		}
+		if logged := output.String(); !strings.Contains(logged, `"state_nodes_downloaded":1365`) {
+			t.Fatalf("live state discovery counter missing from %q", logged)
+		}
+
+		stop()
+		stop()
+		waitStopped(t, stopped)
+		logged := output.String()
+		ticks <- time.Now()
+		if after := output.String(); after != logged {
+			t.Fatalf("heartbeat logged after stop: before %q, after %q", logged, after)
+		}
+	})
+
+	t.Run("context cancellation stops without another log", func(t *testing.T) {
+		output := newNotifyingBuffer()
+		ledger := New([32]byte{0xAE}, 45, 1, slog.New(slog.NewJSONHandler(output, nil)))
+		ticks := make(chan time.Time, 1)
+		stopped := make(chan struct{})
+		ctx, cancel := context.WithCancel(t.Context())
+		stop := ledger.startStateDiscoveryProgressWithTicks(
+			ctx, time.Now(), ticks, func() { close(stopped) },
+		)
+
+		cancel()
+		waitStopped(t, stopped)
+		stop()
+		ticks <- time.Now()
+		if logged := output.String(); logged != "" {
+			t.Fatalf("heartbeat logged after context cancellation: %q", logged)
+		}
+	})
+
+	t.Run("completed discovery stops on its next tick", func(t *testing.T) {
+		output := newNotifyingBuffer()
+		ledger := New([32]byte{0xAF}, 46, 1, slog.New(slog.NewJSONHandler(output, nil)))
+		ledger.haveState = true
+		ticks := make(chan time.Time, 1)
+		stopped := make(chan struct{})
+		stop := ledger.startStateDiscoveryProgressWithTicks(
+			t.Context(), time.Now(), ticks, func() { close(stopped) },
+		)
+
+		ticks <- time.Now()
+		waitStopped(t, stopped)
+		stop()
+		if logged := output.String(); logged != "" {
+			t.Fatalf("completed state discovery logged a heartbeat: %q", logged)
+		}
+	})
 }
 
 func TestLedger_OnTimer_AlternatingProgressAndQuietPreservesCumulativeTimeouts(t *testing.T) {

@@ -1384,19 +1384,28 @@ func (l *Ledger) CollectMissingRequestContext(ctx context.Context, isReply bool)
 }
 
 func (l *Ledger) startStateDiscoveryProgress(ctx context.Context, started time.Time) func() {
+	ticker := time.NewTicker(stateDiscoveryProgressLogInterval)
+	return l.startStateDiscoveryProgressWithTicks(ctx, started, ticker.C, ticker.Stop)
+}
+
+func (l *Ledger) startStateDiscoveryProgressWithTicks(
+	ctx context.Context,
+	started time.Time,
+	ticks <-chan time.Time,
+	stopTicker func(),
+) func() {
 	done := make(chan struct{})
 	exited := make(chan struct{})
 	go func() {
 		defer close(exited)
-		ticker := time.NewTicker(stateDiscoveryProgressLogInterval)
-		defer ticker.Stop()
+		defer stopTicker()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-done:
 				return
-			case <-ticker.C:
+			case <-ticks:
 				if !l.logStateDiscoveryProgress(started) {
 					return
 				}
