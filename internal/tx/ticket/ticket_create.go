@@ -104,18 +104,21 @@ func (t *TicketCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	// pay fees.
 	priorBalance := ctx.PriorBalance()
 	ownerCountAfter := tx.ConfineOwnerCount(ctx.Account.OwnerCount, int(t.TicketCount))
-	// Pre-Sponsor reserve projection retains rippled's legacy uint32 wrapping.
-	ownerCountForReserve := ctx.Account.OwnerCount + t.TicketCount
-	if ctx.Rules().Enabled(amendment.FeatureSponsor) {
-		ownerCountForReserve = ownerCountAfter
-	}
-	reserve := ctx.AccountReserve(ownerCountForReserve)
-	if priorBalance < reserve {
-		ctx.Log.Warn("ticket create: insufficient reserve",
+	if result := ctx.CheckReserveFor(
+		ctx.AccountID,
+		ctx.Account,
+		priorBalance,
+		int(t.TicketCount),
+		0,
+		ter.TecINSUFFICIENT_RESERVE,
+	); result != ter.TesSUCCESS {
+		ctx.Log.Warn("ticket create: reserve check failed",
 			"balance", priorBalance,
-			"reserve", reserve,
+			"ownerCount", ctx.Account.OwnerCount,
+			"ticketCount", t.TicketCount,
+			"result", result,
 		)
-		return ter.TecINSUFFICIENT_RESERVE
+		return result
 	}
 
 	for i := uint32(0); i < t.TicketCount; i++ {

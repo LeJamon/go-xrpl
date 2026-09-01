@@ -11,7 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func seedTicketOwnerCount(t *testing.T, env *jtx.TestEnv, account *jtx.Account, ownerCount uint32) {
+func seedTicketOwnerCounts(
+	t *testing.T,
+	env *jtx.TestEnv,
+	account *jtx.Account,
+	ownerCount uint32,
+	sponsoredOwnerCount uint32,
+) {
 	t.Helper()
 
 	accountKey := keylet.Account(account.ID)
@@ -20,9 +26,17 @@ func seedTicketOwnerCount(t *testing.T, env *jtx.TestEnv, account *jtx.Account, 
 	accountRoot, err := state.ParseAccountRoot(data)
 	require.NoError(t, err)
 	accountRoot.OwnerCount = ownerCount
+	accountRoot.SponsoredOwnerCount = sponsoredOwnerCount
 	data, err = state.SerializeAccountRoot(accountRoot)
 	require.NoError(t, err)
 	require.NoError(t, env.Ledger().Update(accountKey, data))
+
+	data, err = env.Ledger().Read(accountKey)
+	require.NoError(t, err)
+	accountRoot, err = state.ParseAccountRoot(data)
+	require.NoError(t, err)
+	require.Equal(t, ownerCount, accountRoot.OwnerCount)
+	require.Equal(t, sponsoredOwnerCount, accountRoot.SponsoredOwnerCount)
 }
 
 func TestTicketCreate_ConfinesOwnerCount(t *testing.T) {
@@ -30,6 +44,7 @@ func TestTicketCreate_ConfinesOwnerCount(t *testing.T) {
 		name             string
 		sponsorEnabled   bool
 		ownerCount       uint32
+		sponsoredOwners  uint32
 		ticketCount      uint32
 		balance          uint64
 		wantResult       string
@@ -52,6 +67,18 @@ func TestTicketCreate_ConfinesOwnerCount(t *testing.T) {
 			name:             "sponsor enabled max count one below max reserve",
 			sponsorEnabled:   true,
 			ownerCount:       math.MaxUint32,
+			ticketCount:      1,
+			balance:          math.MaxUint32 - 1,
+			wantResult:       "tecINSUFFICIENT_RESERVE",
+			wantOwnerCount:   math.MaxUint32,
+			wantTicketCount:  0,
+			wantSequenceStep: 1,
+		},
+		{
+			name:             "sponsor enabled max count one sponsored owner below max reserve",
+			sponsorEnabled:   true,
+			ownerCount:       math.MaxUint32,
+			sponsoredOwners:  1,
 			ticketCount:      1,
 			balance:          math.MaxUint32 - 1,
 			wantResult:       "tecINSUFFICIENT_RESERVE",
@@ -115,7 +142,7 @@ func TestTicketCreate_ConfinesOwnerCount(t *testing.T) {
 				env.DisableFeature("Sponsor")
 			}
 			env.Close()
-			seedTicketOwnerCount(t, env, alice, tt.ownerCount)
+			seedTicketOwnerCounts(t, env, alice, tt.ownerCount, tt.sponsoredOwners)
 
 			sequenceBefore := env.Seq(alice)
 			balanceBefore := env.Balance(alice)
