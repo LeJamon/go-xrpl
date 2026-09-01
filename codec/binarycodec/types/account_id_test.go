@@ -54,8 +54,36 @@ func TestAccountID_FromJson(t *testing.T) {
 			expectedErr: nil,
 		},
 		{
+			name:  "Valid AccountID with testnet XAddress",
+			input: "T719a5UwUCnEs54UsxG9CJYYDhwmFCqkr7wxCcNcfZ6p5GZ", // r9cZA1mLK5R5Am25ArfXFmqgNwjZgnfk59
+			expected: []byte{
+				94, 123, 17, 37, 35, 246,
+				141, 47, 94, 135, 157, 180,
+				234, 197, 28, 102, 152, 166,
+				147, 4,
+			},
+			expectedErr: nil,
+		},
+		{
+			name:  "Valid AccountID with testnet XAddress and tag",
+			input: "T719a5UwUCnEs54UsxG9CJYYDhwmFCvzHM39KcuJw6gp2gS", // r9cZA1mLK5R5Am25ArfXFmqgNwjZgnfk59:22
+			expected: []byte{
+				94, 123, 17, 37, 35, 246,
+				141, 47, 94, 135, 157, 180,
+				234, 197, 28, 102, 152, 166,
+				147, 4,
+			},
+			expectedErr: nil,
+		},
+		{
 			name:        "Invalid AccountID with invalid XAddress",
 			input:       "XVYRdEocC28DRx94ZFGP3qNJ1D5Ln7ecXFMd3vREB5PesjuA",
+			expected:    nil,
+			expectedErr: addresscodec.ErrChecksum,
+		},
+		{
+			name:        "Invalid AccountID with invalid testnet XAddress",
+			input:       "T719a5UwUCnEs54UsxG9CJYYDhwmFCqkr7wxCcNcfZ6p5GZA",
 			expected:    nil,
 			expectedErr: addresscodec.ErrChecksum,
 		},

@@ -42,7 +42,7 @@ func (a *AccountID) FromJSON(value any) ([]byte, error) {
 		}
 		return accountID, nil
 
-	case strings.HasPrefix(strValue, "X"):
+	case strings.HasPrefix(strValue, "X"), strings.HasPrefix(strValue, "T"):
 		accountID, _, _, err := addresscodec.DecodeXAddress(strValue)
 		if err != nil {
 			return nil, err
