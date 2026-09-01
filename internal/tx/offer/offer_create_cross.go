@@ -24,15 +24,11 @@ func (o *OfferCreate) processCancelRequest(ctx *tx.ApplyContext, sb *payment.Pay
 	if o.OfferSequence == nil {
 		return ter.TesSUCCESS
 	}
-	sleCancel := peekOffer(ctx.View, ctx.AccountID, *o.OfferSequence)
-	if sleCancel == nil {
-		return ter.TesSUCCESS
+	offerKey := keylet.Offer(ctx.AccountID, *o.OfferSequence)
+	if err := payment.DeleteOfferAtomically(sb, offerKey.Key); err != nil {
+		return cleanupResult(err)
 	}
-	result := offerDeleteInView(sb, sleCancel)
-	if result == ter.TesSUCCESS {
-		adjustOwnerCountInView(sb, ctx.AccountID, -1)
-	}
-	return result
+	return ter.TesSUCCESS
 }
 
 // crossOutcome captures everything takerCross hands back to applyGuts.
@@ -187,7 +183,9 @@ func (o *OfferCreate) takerCross(
 	// FlowCross), erase the groomed offers, and fall through with the original
 	// amounts so applyGuts reaches the FillOrKill kill (tecKILLED).
 	if result == ter.TecPATH_PARTIAL {
-		removeRemovableOffers(sb, sbCancel, crossResult.RemovableOffers, crossResult.PermRemovableOffers)
+		if err := removeRemovableOffers(sb, sbCancel, crossResult.RemovableOffers, crossResult.PermRemovableOffers); err != nil {
+			return crossOutcome{terminated: true, result: cleanupResult(err), applyMain: false}
+		}
 		return crossOutcome{
 			terminated:  false,
 			result:      ter.TesSUCCESS,
@@ -210,7 +208,9 @@ func (o *OfferCreate) takerCross(
 	// original amounts — an in-ledger result, not the whole-tx discard the raw
 	// engine tefEXCEPTION would produce.
 	if result == ter.TefEXCEPTION {
-		removeRemovableOffers(sb, sbCancel, crossResult.RemovableOffers, crossResult.PermRemovableOffers)
+		if err := removeRemovableOffers(sb, sbCancel, crossResult.RemovableOffers, crossResult.PermRemovableOffers); err != nil {
+			return crossOutcome{terminated: true, result: cleanupResult(err), applyMain: false}
+		}
 		return crossOutcome{
 			terminated:  false,
 			result:      ter.TesSUCCESS,
@@ -236,9 +236,13 @@ func (o *OfferCreate) takerCross(
 	// when applied) plus sbCancel keeps both sandboxes clean regardless of which
 	// one is ultimately applied.
 	if crossResult.Sandbox != nil {
-		removeRemovableOffers(crossResult.Sandbox, sbCancel, crossResult.RemovableOffers, crossResult.PermRemovableOffers)
+		if err := removeRemovableOffers(crossResult.Sandbox, sbCancel, crossResult.RemovableOffers, crossResult.PermRemovableOffers); err != nil {
+			return crossOutcome{terminated: true, result: cleanupResult(err), applyMain: false}
+		}
 	} else {
-		removeRemovableOffers(sb, sbCancel, crossResult.RemovableOffers, crossResult.PermRemovableOffers)
+		if err := removeRemovableOffers(sb, sbCancel, crossResult.RemovableOffers, crossResult.PermRemovableOffers); err != nil {
+			return crossOutcome{terminated: true, result: cleanupResult(err), applyMain: false}
+		}
 	}
 
 	// Check if account's funds were exhausted during crossing.
@@ -445,32 +449,23 @@ func offerDisallowUnfunded(amount tx.Amount, account [20]byte) bool {
 // back when a FillOrKill/IoC kill applies the cancel sandbox.
 //
 // Reference: rippled CreateOffer.cpp lines 419-426; StrandFlow.h removableOffers.
-func removeRemovableOffers(sb, sbCancel *payment.PaymentSandbox, removable, permRemovable map[[32]byte]bool) {
+func removeRemovableOffers(sb, sbCancel *payment.PaymentSandbox, removable, permRemovable map[[32]byte]bool) error {
 	for offerKey := range removable {
-		removeOfferFromView(sb, keylet.Keylet{Key: offerKey})
+		if err := payment.DeleteOfferAtomically(sb, offerKey); err != nil {
+			return err
+		}
 	}
 	for offerKey := range permRemovable {
-		removeOfferFromView(sbCancel, keylet.Keylet{Key: offerKey})
+		if err := payment.DeleteOfferAtomically(sbCancel, offerKey); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-// removeOfferFromView deletes a single offer keylet from a view and adjusts
-// the offer-owner's reserve count. Silently no-ops on missing/unparseable
-// entries to mirror the original best-effort cleanup loop.
-func removeOfferFromView(view *payment.PaymentSandbox, offerKeylet keylet.Keylet) {
-	offerData, err := view.Read(offerKeylet)
-	if err != nil || offerData == nil {
-		return
+func cleanupResult(err error) ter.Result {
+	if resultErr, ok := ter.AsResultError(err); ok {
+		return resultErr.Code
 	}
-	offer, err := state.ParseLedgerOffer(offerData)
-	if err != nil {
-		return
-	}
-	ownerID, err := state.DecodeAccountID(offer.Account)
-	if err != nil {
-		return
-	}
-	if offerDeleteInView(view, offer) == ter.TesSUCCESS {
-		adjustOwnerCountInView(view, ownerID, -1)
-	}
+	return ter.TefINTERNAL
 }

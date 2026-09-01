@@ -21,6 +21,7 @@ type LedgerOffer struct {
 	Flags             uint32
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
+	Sponsor           string
 
 	// DomainID is the permissioned domain for this offer (optional, requires PermissionedDEX amendment)
 	DomainID [32]byte
@@ -67,6 +68,9 @@ func SerializeLedgerOffer(offer *LedgerOffer) ([]byte, error) {
 	entry.SetOwnerNode(fmt.Sprintf("%x", offer.OwnerNode))
 	entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(offer.PreviousTxnID[:])))
 	entry.SetPreviousTxnLgrSeq(offer.PreviousTxnLgrSeq)
+	if offer.Sponsor != "" || decodedFieldUnchanged(offer.decodedOptionals, "Sponsor", offer.Sponsor) {
+		entry.SetSponsor(offer.Sponsor)
+	}
 
 	if offer.Expiration > 0 || decodedFieldUnchanged(offer.decodedOptionals, "Expiration", offer.Expiration) {
 		entry.SetExpiration(offer.Expiration)
@@ -129,6 +133,7 @@ func parseLedgerOffer(data []byte) (*LedgerOffer, error) {
 		Expiration:        decoded.Expiration,
 		Flags:             decoded.Flags,
 		PreviousTxnLgrSeq: decoded.PreviousTxnLgrSeq,
+		Sponsor:           decoded.Sponsor,
 		decodedOptionals:  make(map[string]any),
 	}
 	for _, hash := range []struct {
@@ -152,6 +157,9 @@ func parseLedgerOffer(data []byte) (*LedgerOffer, error) {
 	}
 	if _, ok := fields["DomainID"]; ok {
 		offer.decodedOptionals["DomainID"] = offer.DomainID
+	}
+	if _, ok := fields["Sponsor"]; ok {
+		offer.decodedOptionals["Sponsor"] = offer.Sponsor
 	}
 	if _, ok := fields["AdditionalBooks"]; ok {
 		if err := decodeAdditionalBook(decoded.AdditionalBooks, offer); err != nil {

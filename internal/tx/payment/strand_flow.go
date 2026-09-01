@@ -9,21 +9,30 @@ import "github.com/LeJamon/go-xrpl/internal/tx/ter"
 // unconsumed transfer) and is caught in ExecuteStrand, which discards those totals
 // and fails the whole strand — exactly as rippled's flow() catch does.
 //
-// ter carries the failing transfer's result code, faithfully mirroring rippled's
-// Throw<FlowException>(dr). Like rippled's catch (FlowException const&), which
-// returns Result{strand, ofrsToRm} without reading the exception's TER,
-// ExecuteStrand's recover discards it — the strand is simply treated as dry. The
-// field is retained for parity and diagnosability, not consumed.
+// ter carries the failing transfer's result code. Ordinary transfer failures are
+// treated as a dry strand like rippled; fatal cleanup failures propagate to Flow.
 //
 // Reference: rippled Steps.h FlowException + StrandFlow.h flow() catch (lines 295-298).
 type flowError struct {
-	ter ter.Result
+	ter   ter.Result
+	fatal bool
 }
 
 // throwFlowError panics with a flowError carrying the given TER. The TER is the
 // failed transfer's result code, matching rippled's Throw<FlowException>(dr).
 func throwFlowError(ter ter.Result) {
 	panic(flowError{ter: ter})
+}
+
+func offerCleanupResult(err error) ter.Result {
+	if re, ok := ter.AsResultError(err); ok {
+		return re.Code
+	}
+	return ter.TefINTERNAL
+}
+
+func throwOfferCleanupFailure(err error) {
+	panic(flowError{ter: offerCleanupResult(err), fatal: true})
 }
 
 // throwConsumeFailure panics with a flowError after a consumeOffer/consumeAMMOffer
@@ -121,7 +130,8 @@ func ExecuteStrand(
 	// swallowed into a "dry strand".
 	defer func() {
 		if r := recover(); r != nil {
-			if _, ok := r.(flowError); !ok {
+			flowErr, ok := r.(flowError)
+			if !ok {
 				panic(r)
 			}
 			// Keep unconditional ("perm") removals even on a flow exception —
@@ -135,13 +145,17 @@ func ExecuteStrand(
 				}
 			}
 			result = StrandResult{
-				Success:    false,
-				In:         ZeroXRPEitherAmount(),
-				Out:        ZeroXRPEitherAmount(),
-				Sandbox:    nil,
-				OffsToRm:   ofrsToRm,
-				OffersUsed: strandOffersUsed(strand),
-				Inactive:   true,
+				Success:     false,
+				In:          ZeroXRPEitherAmount(),
+				Out:         ZeroXRPEitherAmount(),
+				Sandbox:     nil,
+				OffsToRm:    ofrsToRm,
+				OffersUsed:  strandOffersUsed(strand),
+				Inactive:    true,
+				FatalResult: ter.TesSUCCESS,
+			}
+			if flowErr.fatal {
+				result.FatalResult = flowErr.ter
 			}
 		}
 	}()

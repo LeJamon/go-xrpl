@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBookStepDeleteOfferIgnoresMissingDirectoryEntry(t *testing.T) {
+func TestBookStepDeleteOfferRejectsMissingDirectoryEntry(t *testing.T) {
 	t.Parallel()
 
 	view := newPaymentMockLedgerView()
@@ -19,5 +19,6 @@ func TestBookStepDeleteOfferIgnoresMissingDirectoryEntry(t *testing.T) {
 		Sequence: 7,
 	}
 
-	require.NoError(t, (&BookStep{}).deleteOffer(sandbox, offer, owner))
+	err := (&BookStep{}).deleteOffer(sandbox, offer, owner)
+	require.ErrorContains(t, err, "tefBAD_LEDGER: offer removal incomplete")
 }

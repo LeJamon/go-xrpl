@@ -10,17 +10,6 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// adjustOwnerCount adjusts the OwnerCount on an account.
-// Also records the change via AdjustOwnerCount for the PaymentSandbox's
-// OwnerCountHook, which returns the maximum count seen.
-// It must not touch PreviousTxnID/PreviousTxnLgrSeq: threading is the
-// ApplyStateTable's job at metadata time, and a mid-apply stamp defeats the
-// no-op guards for an owner whose count nets back to its original value.
-// Reference: rippled View.cpp adjustOwnerCount() calls adjustOwnerCountHook()
-func (s *BookStep) adjustOwnerCount(sb *PaymentSandbox, account [20]byte, delta int) error {
-	return tx.AdjustOwnerCount(sb, account, delta)
-}
-
 // transferFunds transfers an amount between two accounts.
 func (s *BookStep) transferFunds(sb *PaymentSandbox, from, to [20]byte, amount EitherAmount, issue Issue) error {
 	if from == to {

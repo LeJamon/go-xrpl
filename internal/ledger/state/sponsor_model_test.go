@@ -55,6 +55,34 @@ func TestAccountRootSponsorCountersRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLedgerOfferSponsorRoundTrip(t *testing.T) {
+	offer := &LedgerOffer{
+		Account:   walkerTestAccount,
+		Sequence:  1,
+		TakerPays: NewXRPAmountFromInt(1),
+		TakerGets: NewXRPAmountFromInt(2),
+		Sponsor:   walkerTestAccount,
+	}
+	encoded, err := SerializeLedgerOffer(offer)
+	if err != nil {
+		t.Fatalf("SerializeLedgerOffer: %v", err)
+	}
+	parsed, err := ParseLedgerOffer(encoded)
+	if err != nil {
+		t.Fatalf("ParseLedgerOffer: %v", err)
+	}
+	if parsed.Sponsor != walkerTestAccount {
+		t.Fatalf("Sponsor = %q, want %q", parsed.Sponsor, walkerTestAccount)
+	}
+	roundTrip, err := SerializeLedgerOffer(parsed)
+	if err != nil {
+		t.Fatalf("re-serialize LedgerOffer: %v", err)
+	}
+	if !bytes.Equal(roundTrip, encoded) {
+		t.Fatalf("LedgerOffer sponsor round-trip changed bytes\nwant %X\n got %X", encoded, roundTrip)
+	}
+}
+
 func TestRippleStateSponsorsRoundTrip(t *testing.T) {
 	low, err := EncodeAccountID([20]byte{1})
 	if err != nil {

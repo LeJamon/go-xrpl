@@ -142,18 +142,7 @@ func (s *BookStep) zeroIn() EitherAmount {
 // deleteOffer properly deletes an offer from the ledger.
 func (s *BookStep) deleteOffer(sb *PaymentSandbox, offer *state.LedgerOffer, owner [20]byte) error {
 	offerKey := keylet.Offer(owner, offer.Sequence)
-	removed, err := state.DeleteOffer(sb, offerKey, offer)
-	if err != nil {
-		return err
-	}
-	if !removed {
-		return nil
-	}
-
-	if err := s.adjustOwnerCount(sb, owner, -1); err != nil {
-		return err
-	}
-	return nil
+	return deleteOfferAtomically(sb, offerKey.Key, offer)
 }
 
 func (s *BookStep) subtractFromAmount(

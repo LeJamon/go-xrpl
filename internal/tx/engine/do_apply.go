@@ -400,7 +400,9 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 	// These offers were deleted in the (now discarded) sandbox.
 	// Reference: rippled Transactor.cpp lines 1198-1201: removeUnfundedOffers()
 	if len(deleted.offers) > 0 {
-		e.removeUnfundedOffers(tecTable, deleted.offers)
+		if r := e.removeUnfundedOffers(tecTable, deleted.offers); r != ter.TesSUCCESS {
+			return r
+		}
 	}
 
 	// tecEXPIRED: re-delete expired NFTokenOffers and credentials.
@@ -665,26 +667,48 @@ func (e *Engine) removeDeletedTrustLines(tecTable *applystate.ApplyStateTable, k
 // removeUnfundedOffers re-deletes the supplied offer keys through the recovery
 // table.
 // Reference: rippled Transactor.cpp lines 1198-1201: removeUnfundedOffers().
-func (e *Engine) removeUnfundedOffers(tecTable *applystate.ApplyStateTable, keys [][32]byte) {
+func (e *Engine) removeUnfundedOffers(tecTable *applystate.ApplyStateTable, keys [][32]byte) ter.Result {
+	result := ter.TesSUCCESS
 	replayExistingWithLimit(keys, unfundedOfferRemoveLimit, func(offerKey [32]byte) bool {
+		if result != ter.TesSUCCESS {
+			return false
+		}
 		offerKL := keylet.Keylet{Key: offerKey}
 		offerData, readErr := e.view.Read(offerKL)
-		if readErr != nil || offerData == nil {
+		if readErr != nil {
+			result = ter.TefINTERNAL
+			return false
+		}
+		if offerData == nil {
+			result = ter.TefBAD_LEDGER
 			return false
 		}
 		offerObj, parseErr := state.ParseLedgerOffer(offerData)
 		if parseErr != nil {
+			result = ter.TefBAD_LEDGER
 			return false
 		}
 		ownerID, decodeErr := state.DecodeAccountID(offerObj.Account)
 		if decodeErr != nil {
+			result = ter.TefBAD_LEDGER
 			return false
 		}
-		if success, deleteErr := state.DeleteOffer(tecTable, offerKL, offerObj); deleteErr == nil && success {
-			adjustOwnerCountOnView(tecTable, ownerID, -1)
+		success, deleteErr := state.DeleteOffer(tecTable, offerKL, offerObj)
+		if deleteErr != nil {
+			result = ter.TefINTERNAL
+			return false
+		}
+		if !success {
+			result = ter.TefBAD_LEDGER
+			return false
+		}
+		if err := txcore.DecreaseOwnerCountOnView(tecTable, ownerID, offerObj.Sponsor, 1); err != nil {
+			result = ter.TefINTERNAL
+			return false
 		}
 		return true
 	})
+	return result
 }
 
 // writeRecoveryAccount applies the fee/seq/ticket-count/PreviousTxn/AccountTxnID
