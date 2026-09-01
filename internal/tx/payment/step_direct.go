@@ -137,9 +137,7 @@ func (s *DirectStepI) Rev(
 		}
 
 		// Execute the credit
-		if result := tx.RippleCredit(sb, s.src, s.dst, srcToDst); result != ter.TesSUCCESS {
-			throwFlowError(result)
-		}
+		s.credit(sb, srcToDst)
 
 		return NewIOUEitherAmount(in), out
 	}
@@ -156,9 +154,7 @@ func (s *DirectStepI) Rev(
 	}
 
 	// Execute the credit
-	if result := tx.RippleCredit(sb, s.src, s.dst, maxSrcToDst); result != ter.TesSUCCESS {
-		throwFlowError(result)
-	}
+	s.credit(sb, maxSrcToDst)
 
 	return NewIOUEitherAmount(in), NewIOUEitherAmount(actualOut)
 }
@@ -224,9 +220,7 @@ func (s *DirectStepI) Fwd(
 		s.setCacheLimiting(in.IOU, srcToDst, out, srcDebtDir, sb.NumberContext())
 
 		// Execute the credit
-		if result := tx.RippleCredit(sb, s.src, s.dst, s.cache.srcToDst); result != ter.TesSUCCESS {
-			throwFlowError(result)
-		}
+		s.credit(sb, s.cache.srcToDst)
 
 		return NewIOUEitherAmount(s.cache.in), NewIOUEitherAmount(s.cache.out)
 	}
@@ -237,11 +231,17 @@ func (s *DirectStepI) Fwd(
 	s.setCacheLimiting(actualIn, maxSrcToDst, out, srcDebtDir, sb.NumberContext())
 
 	// Execute the credit
-	if result := tx.RippleCredit(sb, s.src, s.dst, s.cache.srcToDst); result != ter.TesSUCCESS {
-		throwFlowError(result)
-	}
+	s.credit(sb, s.cache.srcToDst)
 
 	return NewIOUEitherAmount(s.cache.in), NewIOUEitherAmount(s.cache.out)
+}
+
+func (s *DirectStepI) credit(sb *PaymentSandbox, amount tx.Amount) {
+	result := tx.RippleCredit(sb, s.src, s.dst, amount)
+	// Offer crossing preserves the legacy direct-step behavior of ignoring this result.
+	if result != ter.TesSUCCESS && !s.offerCrossing {
+		throwFlowError(result)
+	}
 }
 
 // setCacheLimiting updates the cache, keeping minimum values to prevent
