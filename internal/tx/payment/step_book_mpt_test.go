@@ -54,7 +54,8 @@ func TestBookStepMPTFundingAndTransferFee(t *testing.T) {
 	step := NewBookStep(Issue{Currency: "XRP"}, issue, alice, bob, nil, true)
 	offer := &state.LedgerOffer{Account: state.EncodeAccountIDSafe(alice)}
 
-	funds := step.getOfferFundedAmount(sb, offer)
+	funds, err := step.getOfferFundedAmount(sb, offer)
+	require.NoError(t, err)
 	require.True(t, funds.IsMPT)
 	require.Equal(t, int64(200), funds.MPT)
 	require.NoError(t, step.transferFundsWithFee(
