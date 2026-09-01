@@ -1,6 +1,8 @@
 package addresscodec
 
 import (
+	"fmt"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -267,6 +269,7 @@ func TestXAddressTagPresence(t *testing.T) {
 
 	zero := uint32(0)
 	nonzero := uint32(22)
+	max := uint32(math.MaxUint32)
 	testcases := []struct {
 		name string
 		tag  *uint32
@@ -274,6 +277,7 @@ func TestXAddressTagPresence(t *testing.T) {
 		{name: "absent", tag: nil},
 		{name: "zero", tag: &zero},
 		{name: "nonzero", tag: &nonzero},
+		{name: "max", tag: &max},
 	}
 
 	addresses := make([]string, 0, len(testcases))
@@ -424,5 +428,37 @@ func TestDecodeTag(t *testing.T) {
 				require.Equal(t, tc.hasTag, hasTag)
 			}
 		})
+	}
+}
+
+func TestDecodeTagRejectsReservedBytes(t *testing.T) {
+	testcases := []struct {
+		name          string
+		flag          byte
+		reservedStart int
+	}{
+		{name: "without tag", flag: 0, reservedStart: 23},
+		{name: "with tag", flag: 1, reservedStart: 27},
+	}
+
+	for _, tc := range testcases {
+		for position := tc.reservedStart; position < 31; position++ {
+			t.Run(fmt.Sprintf("%s/byte-%d", tc.name, position), func(t *testing.T) {
+				payload := make([]byte, 31)
+				copy(payload, mainnetXAddressPrefix)
+				payload[22] = tc.flag
+				if tc.flag == 1 {
+					copy(payload[23:27], []byte{0x78, 0x56, 0x34, 0x12})
+				}
+				payload[position] = 1
+
+				_, _, err := decodeTag(payload)
+				require.ErrorIs(t, err, ErrInvalidTag)
+
+				xAddress := Base58CheckEncode(payload)
+				_, _, _, err = DecodeXAddress(xAddress)
+				require.ErrorIs(t, err, ErrInvalidTag)
+			})
+		}
 	}
 }
