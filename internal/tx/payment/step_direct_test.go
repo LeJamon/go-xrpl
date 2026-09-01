@@ -1,17 +1,251 @@
 package payment
 
 import (
+	"bytes"
+	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // usd builds an IOU amount with the given mantissa/exponent in the USD currency.
 func usd(mantissa int64, exponent int) tx.Amount {
 	return tx.NewIssuedAmount(mantissa, exponent, "USD", "")
+}
+
+type directCreditFault uint8
+
+const (
+	directCreditReadFault directCreditFault = iota
+	directCreditParseFault
+	directCreditUpdateFault
+)
+
+type directCreditFaultView struct {
+	*paymentMockLedgerView
+	lineKey   [32]byte
+	fault     directCreditFault
+	faultAt   int
+	lineReads int
+	writes    int
+}
+
+type directCreditDirectoryFaultView struct {
+	*paymentMockLedgerView
+	directoryKey [32]byte
+}
+
+func (v *directCreditDirectoryFaultView) Exists(k keylet.Keylet) (bool, error) {
+	if k.Key == v.directoryKey {
+		return false, errors.New("owner directory full")
+	}
+	return v.paymentMockLedgerView.Exists(k)
+}
+
+func (v *directCreditFaultView) Read(k keylet.Keylet) ([]byte, error) {
+	data, err := v.paymentMockLedgerView.Read(k)
+	if k.Key != v.lineKey {
+		return data, err
+	}
+
+	v.lineReads++
+	if v.lineReads != v.faultAt {
+		return data, err
+	}
+
+	switch v.fault {
+	case directCreditReadFault, directCreditUpdateFault:
+		return nil, errors.New("trust line read failed")
+	case directCreditParseFault:
+		return bytes.Clone(data[:3]), nil
+	default:
+		panic("unknown direct credit fault")
+	}
+}
+
+func (v *directCreditFaultView) Insert(k keylet.Keylet, data []byte) error {
+	v.writes++
+	return v.paymentMockLedgerView.Insert(k, data)
+}
+
+func (v *directCreditFaultView) Update(k keylet.Keylet, data []byte) error {
+	v.writes++
+	return v.paymentMockLedgerView.Update(k, data)
+}
+
+func (v *directCreditFaultView) Erase(k keylet.Keylet) error {
+	v.writes++
+	return v.paymentMockLedgerView.Erase(k)
+}
+
+func TestDirectStepICreditFailuresAbortEveryBranch(t *testing.T) {
+	src := [20]byte{1}
+	dst := [20]byte{2}
+	lineKey := keylet.Line(src, dst, "USD")
+	nonLimiting := usd(5_000_000_000_000_000, -14)
+	limiting := usd(1_000_000_000_000_000, -13)
+	maxFlow := usd(9_000_000_000_000_000, -14)
+
+	branches := []struct {
+		name string
+		run  func(*DirectStepI, *PaymentSandbox)
+		want tx.Amount
+	}{
+		{
+			name: "reverse non-limiting",
+			run: func(step *DirectStepI, sb *PaymentSandbox) {
+				step.Rev(sb, NewChildSandbox(sb), nil, NewIOUEitherAmount(nonLimiting))
+			},
+			want: nonLimiting,
+		},
+		{
+			name: "reverse limiting",
+			run: func(step *DirectStepI, sb *PaymentSandbox) {
+				step.Rev(sb, NewChildSandbox(sb), nil, NewIOUEitherAmount(limiting))
+			},
+			want: maxFlow,
+		},
+		{
+			name: "forward non-limiting",
+			run: func(step *DirectStepI, sb *PaymentSandbox) {
+				step.cache = &directCache{in: limiting, srcToDst: limiting, out: limiting, srcDebtDir: DebtDirectionIssues}
+				step.Fwd(sb, NewChildSandbox(sb), nil, NewIOUEitherAmount(nonLimiting))
+			},
+			want: nonLimiting,
+		},
+		{
+			name: "forward limiting",
+			run: func(step *DirectStepI, sb *PaymentSandbox) {
+				step.cache = &directCache{in: limiting, srcToDst: limiting, out: limiting, srcDebtDir: DebtDirectionIssues}
+				step.Fwd(sb, NewChildSandbox(sb), nil, NewIOUEitherAmount(limiting))
+			},
+			want: maxFlow,
+		},
+	}
+
+	faults := []struct {
+		name    string
+		fault   directCreditFault
+		faultAt int
+	}{
+		{name: "read", fault: directCreditReadFault, faultAt: 4},
+		{name: "parse", fault: directCreditParseFault, faultAt: 4},
+		{name: "update preimage", fault: directCreditUpdateFault, faultAt: 5},
+	}
+
+	for _, branch := range branches {
+		t.Run(branch.name, func(t *testing.T) {
+			for _, fault := range faults {
+				t.Run(fault.name, func(t *testing.T) {
+					base := newPaymentMockLedgerView()
+					base.createTrustLine(src, dst, "USD", -10, 100, 100)
+					before := bytes.Clone(base.data[lineKey.Key])
+					view := &directCreditFaultView{
+						paymentMockLedgerView: base,
+						lineKey:               lineKey.Key,
+						fault:                 fault.fault,
+						faultAt:               fault.faultAt,
+					}
+					sb := NewPaymentSandbox(view)
+					step := NewDirectStepI(src, dst, "USD", nil, false, false)
+
+					flowErr := recoverFlowError(t, func() { branch.run(step, sb) })
+
+					require.Equal(t, ter.TefINTERNAL, flowErr.ter)
+					require.Equal(t, fault.faultAt, view.lineReads)
+					require.Zero(t, step.cache.srcToDst.Compare(branch.want))
+					require.Equal(t, before, base.data[lineKey.Key])
+					require.Zero(t, view.writes)
+					require.Empty(t, sb.Modifications())
+					require.Empty(t, sb.Insertions())
+					require.Empty(t, sb.Deletions())
+				})
+			}
+		})
+	}
+}
+
+func TestDirectStepICreditFailureDiscardsStrandSandbox(t *testing.T) {
+	src := [20]byte{1}
+	dst := [20]byte{2}
+	lineKey := keylet.Line(src, dst, "USD")
+	faults := []struct {
+		name    string
+		fault   directCreditFault
+		faultAt int
+	}{
+		{name: "read", fault: directCreditReadFault, faultAt: 4},
+		{name: "parse", fault: directCreditParseFault, faultAt: 4},
+		{name: "update preimage", fault: directCreditUpdateFault, faultAt: 5},
+	}
+
+	for _, fault := range faults {
+		t.Run(fault.name, func(t *testing.T) {
+			base := newPaymentMockLedgerView()
+			base.createTrustLine(src, dst, "USD", -10, 100, 100)
+			before := bytes.Clone(base.data[lineKey.Key])
+			view := &directCreditFaultView{
+				paymentMockLedgerView: base,
+				lineKey:               lineKey.Key,
+				fault:                 fault.fault,
+				faultAt:               fault.faultAt,
+			}
+			sandbox := NewPaymentSandbox(view)
+			step := NewDirectStepI(src, dst, "USD", nil, false, false)
+
+			result := ExecuteStrand(
+				sandbox,
+				Strand{step},
+				nil,
+				NewIOUEitherAmount(usd(5_000_000_000_000_000, -14)),
+			)
+
+			require.False(t, result.Success)
+			require.True(t, result.In.IsZero())
+			require.True(t, result.Out.IsZero())
+			require.Nil(t, result.Sandbox)
+			require.Equal(t, before, base.data[lineKey.Key])
+			require.Zero(t, view.writes)
+			require.Empty(t, sandbox.Modifications())
+			require.Empty(t, sandbox.Insertions())
+			require.Empty(t, sandbox.Deletions())
+			require.Empty(t, sandbox.tab.credits)
+			require.Empty(t, sandbox.tab.mpt)
+			require.Empty(t, sandbox.tab.ownerCounts)
+		})
+	}
+}
+
+func TestDirectStepIOfferCrossingIgnoresCreditFailure(t *testing.T) {
+	src := [20]byte{1}
+	dst := [20]byte{2}
+	base := newPaymentMockLedgerView()
+	base.createAccount(src, 1_000_000_000, 0)
+	base.createAccount(dst, 1_000_000_000, 0)
+	view := &directCreditDirectoryFaultView{
+		paymentMockLedgerView: base,
+		directoryKey:          keylet.OwnerDir(src).Key,
+	}
+	sandbox := NewPaymentSandbox(view)
+	step := NewDirectStepI(src, dst, "USD", nil, false, true)
+	step.offerCrossing = true
+	desired := NewIOUEitherAmount(usd(5_000_000_000_000_000, -14))
+
+	in, out := step.Rev(sandbox, NewChildSandbox(sandbox), nil, desired)
+
+	require.Zero(t, in.Compare(desired))
+	require.Zero(t, out.Compare(desired))
+	require.NotNil(t, step.cache)
+	require.Nil(t, base.data[keylet.Line(src, dst, "USD").Key])
+	require.Empty(t, sandbox.Modifications())
+	require.Empty(t, sandbox.Insertions())
+	require.Empty(t, sandbox.Deletions())
 }
 
 // TestSetCacheLimiting_LargeDiffReplacesCache exercises the large-difference
