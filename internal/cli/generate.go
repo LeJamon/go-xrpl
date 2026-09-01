@@ -280,6 +280,7 @@ output = "stdout" # stdout | stderr | /path/to/logfile
 
 [server]
 ports = ["port_rpc_admin_local", "port_peer", "port_ws_admin_local"]
+checkpoint_shutdown_grace = "2m"
 
 [port_rpc_admin_local]
 port = 5005

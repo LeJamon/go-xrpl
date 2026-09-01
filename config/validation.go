@@ -29,6 +29,9 @@ func ValidateConfig(config *Config) error {
 	if _, err := NormalizeOrigins(config.Server.AllowedOrigins); err != nil {
 		errs = append(errs, fmt.Errorf("server allowed_origins: %w", err))
 	}
+	if grace := config.Server.CheckpointShutdownGrace; grace != nil && *grace <= 0 {
+		errs = append(errs, fmt.Errorf("server checkpoint_shutdown_grace must be positive, got %s", *grace))
+	}
 	if len(config.Ports) > 0 {
 		errs = append(errs, validatePorts(config.Ports)...)
 	}

@@ -71,6 +71,8 @@ validators_file = "validators.toml"
 [server]
 # List of port names — each MUST have a corresponding [port_*] section below.
 ports = ["port_rpc_admin_local", "port_rpc_public", "port_peer", "port_ws_admin_local", "port_ws_public"]
+# Maximum time to prepare the next-launch fast-load checkpoint during shutdown.
+checkpoint_shutdown_grace = "2m"
 
 # =============================================================================
 # Port Configurations

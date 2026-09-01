@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 )
+
+const defaultCheckpointShutdownGrace = 2 * time.Minute
 
 // ServerConfig represents the [server] section
 // This defines the ports that the server will listen on and default values
@@ -27,6 +30,8 @@ type ServerConfig struct {
 	// connections. 0 keeps the bounded built-in default; a negative value
 	// disables the global cap (per-port limits still apply).
 	MaxConnections int `toml:"max_connections" mapstructure:"max_connections"`
+
+	CheckpointShutdownGrace *time.Duration `toml:"checkpoint_shutdown_grace" mapstructure:"checkpoint_shutdown_grace"`
 }
 
 // PortConfig represents individual port configurations like [port_rpc_admin_local]

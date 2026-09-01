@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Config represents the complete goxrpl configuration.
@@ -97,6 +98,14 @@ func (c *Config) LocalStateDir() string {
 		return ""
 	}
 	return filepath.Dir(filepath.Clean(c.NodeDB.Path))
+}
+
+// ResolvedCheckpointShutdownGrace returns the configured checkpoint grace or its default.
+func (c *Config) ResolvedCheckpointShutdownGrace() time.Duration {
+	if c == nil || c.Server.CheckpointShutdownGrace == nil {
+		return defaultCheckpointShutdownGrace
+	}
+	return *c.Server.CheckpointShutdownGrace
 }
 
 // networkIDByName maps rippled's named network aliases to their canonical

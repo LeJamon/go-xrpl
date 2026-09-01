@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
@@ -25,6 +26,9 @@ func LoadConfig(paths Paths) (*Config, error) {
 		return nil, fmt.Errorf("failed to load main config: %w", err)
 	}
 	if err := validateIntegerSetting(v, "ledger_cache_size", MinLedgerCacheSize, MaxLedgerCacheSize); err != nil {
+		return nil, fmt.Errorf("failed to load main config: %w", err)
+	}
+	if err := validatePositiveDurationSetting(v, "server.checkpoint_shutdown_grace"); err != nil {
 		return nil, fmt.Errorf("failed to load main config: %w", err)
 	}
 
@@ -64,6 +68,24 @@ func LoadConfig(paths Paths) (*Config, error) {
 	}
 
 	return &config, nil
+}
+
+func validatePositiveDurationSetting(v *viper.Viper, key string) error {
+	if !v.IsSet(key) {
+		return nil
+	}
+	value, ok := v.Get(key).(string)
+	if !ok {
+		return fmt.Errorf("%s must be a duration string", key)
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return fmt.Errorf("%s must be a valid duration string, got %q: %w", key, value, err)
+	}
+	if duration <= 0 {
+		return fmt.Errorf("%s must be positive, got %q", key, value)
+	}
+	return nil
 }
 
 // validateManifestCounts rejects weakly-typed TOML values before

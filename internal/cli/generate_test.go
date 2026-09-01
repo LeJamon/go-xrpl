@@ -40,6 +40,9 @@ func TestGenerateConfigContent(t *testing.T) {
 					t.Errorf("%s: generated config missing section %s", tc.network, section)
 				}
 			}
+			if !strings.Contains(content, `checkpoint_shutdown_grace = "2m"`) {
+				t.Errorf("%s: generated config missing checkpoint shutdown grace", tc.network)
+			}
 			if tc.network == "devnet" {
 				if !strings.Contains(content, "--standalone") {
 					t.Error("devnet config does not document standalone startup")
