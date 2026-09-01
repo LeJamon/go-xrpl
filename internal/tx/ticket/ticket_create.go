@@ -103,7 +103,13 @@ func (t *TicketCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	// actual fee was deducted), allowing the account to dip into the reserve to
 	// pay fees.
 	priorBalance := ctx.PriorBalance()
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + t.TicketCount)
+	ownerCountAfter := tx.ConfineOwnerCount(ctx.Account.OwnerCount, int(t.TicketCount))
+	// Pre-Sponsor reserve projection retains rippled's legacy uint32 wrapping.
+	ownerCountForReserve := ctx.Account.OwnerCount + t.TicketCount
+	if ctx.Rules().Enabled(amendment.FeatureSponsor) {
+		ownerCountForReserve = ownerCountAfter
+	}
+	reserve := ctx.AccountReserve(ownerCountForReserve)
 	if priorBalance < reserve {
 		ctx.Log.Warn("ticket create: insufficient reserve",
 			"balance", priorBalance,
@@ -145,7 +151,7 @@ func (t *TicketCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		"lastSequence", lastSeq,
 	)
 
-	ctx.Account.OwnerCount += t.TicketCount
+	ctx.Account.OwnerCount = ownerCountAfter
 	ctx.Account.Sequence += t.TicketCount
 
 	// Update TicketCount on the AccountRoot
