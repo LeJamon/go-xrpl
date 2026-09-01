@@ -180,7 +180,10 @@ func (e *Engine) checkSeqProxy(common *txcore.Common, accountID [20]byte, accoun
 		}
 		ticketKey := keylet.Ticket(accountID, *common.TicketSequence)
 		ticketExists, ticketErr := e.view.Exists(ticketKey)
-		if ticketErr != nil || !ticketExists {
+		if ticketErr != nil {
+			return ter.TefINTERNAL
+		}
+		if !ticketExists {
 			return ter.TefNO_TICKET
 		}
 	} else if common.Sequence != nil {
