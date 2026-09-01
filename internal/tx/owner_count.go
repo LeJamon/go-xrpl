@@ -91,8 +91,11 @@ func AdjustOwnerCount(view LedgerView, accountID [20]byte, delta int) error {
 
 	accountKey := keylet.Account(accountID)
 	data, err := view.Read(accountKey)
-	if err != nil || data == nil {
-		return nil // Account doesn't exist (may have been deleted)
+	if err != nil {
+		return fmt.Errorf("failed to read account root: %w", err)
+	}
+	if data == nil {
+		return nil
 	}
 
 	account, err := state.ParseAccountRoot(data)
