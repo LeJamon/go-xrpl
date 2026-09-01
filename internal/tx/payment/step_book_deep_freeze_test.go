@@ -365,9 +365,18 @@ func TestBookStepSkipsDeepFreezeLookupAfterEarlierGroomingDecision(t *testing.T)
 			BookDirectory: directoryKey,
 			Expiration:    99,
 		}
+		offerKey := keylet.Offer(owner, 1).Key
+		ownerResult, err := state.DirInsert(
+			view,
+			keylet.OwnerDir(owner),
+			offerKey,
+			false,
+			func(directory *state.DirectoryNode) { directory.Owner = owner },
+		)
+		require.NoError(t, err)
+		offer.OwnerNode = ownerResult.Page
 		offerData, err := state.SerializeLedgerOffer(offer)
 		require.NoError(t, err)
-		offerKey := keylet.Offer(owner, 1).Key
 		view.data[offerKey] = offerData
 		directory := &state.DirectoryNode{
 			RootIndex:         directoryKey,
