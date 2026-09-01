@@ -37,11 +37,14 @@ func TestSigningRejectsInvalidPrivateScalars(t *testing.T) {
 	for _, test := range invalid {
 		t.Run(test.name, func(t *testing.T) {
 			scalar := decodePrivateScalar(t, test.scalar)
-			encoded := "00" + test.scalar
-			signers := []struct {
+			if _, err := (Algorithm{}).DerivePublicKeyFromSecret(scalar); !errors.Is(err, ErrInvalidPrivateKey) {
+				t.Fatalf("DerivePublicKeyFromSecret got error %v, want %v", err, ErrInvalidPrivateKey)
+			}
+			type signer struct {
 				name string
 				sign func() error
-			}{
+			}
+			signers := []signer{
 				{name: "SignBytes", sign: func() error {
 					_, err := Algorithm{}.SignBytes(message, scalar)
 					return err
@@ -50,14 +53,24 @@ func TestSigningRejectsInvalidPrivateScalars(t *testing.T) {
 					_, err := SignDigestBytes(digest[:], scalar)
 					return err
 				}},
-				{name: "Sign", sign: func() error {
-					_, err := Algorithm{}.Sign(string(message), encoded)
-					return err
-				}},
-				{name: "SignDigest", sign: func() error {
-					_, err := Algorithm{}.SignDigest(digest, encoded)
-					return err
-				}},
+			}
+			for _, encoded := range []struct {
+				name string
+				key  string
+			}{
+				{name: "bare", key: test.scalar},
+				{name: "prefixed", key: "00" + test.scalar},
+			} {
+				signers = append(signers,
+					signer{name: "Sign/" + encoded.name, sign: func() error {
+						_, err := Algorithm{}.Sign(string(message), encoded.key)
+						return err
+					}},
+					signer{name: "SignDigest/" + encoded.name, sign: func() error {
+						_, err := Algorithm{}.SignDigest(digest, encoded.key)
+						return err
+					}},
+				)
 			}
 
 			for _, signer := range signers {
@@ -109,21 +122,30 @@ func TestSigningAcceptsPrivateScalarBounds(t *testing.T) {
 				t.Fatal("VerifyDigestBytes rejected SignDigestBytes signature")
 			}
 
-			encoded := "00" + test.scalar
-			signatureHex, err := algo.Sign(string(message), encoded)
-			if err != nil {
-				t.Fatalf("Sign: %v", err)
-			}
-			if !algo.Validate(string(message), hex.EncodeToString(publicKey), signatureHex) {
-				t.Fatal("Validate rejected Sign signature")
-			}
+			for _, encoded := range []struct {
+				name string
+				key  string
+			}{
+				{name: "bare", key: test.scalar},
+				{name: "prefixed", key: "00" + test.scalar},
+			} {
+				t.Run(encoded.name, func(t *testing.T) {
+					signatureHex, err := algo.Sign(string(message), encoded.key)
+					if err != nil {
+						t.Fatalf("Sign: %v", err)
+					}
+					if !algo.Validate(string(message), hex.EncodeToString(publicKey), signatureHex) {
+						t.Fatal("Validate rejected Sign signature")
+					}
 
-			signature, err = algo.SignDigest(digest, encoded)
-			if err != nil {
-				t.Fatalf("SignDigest: %v", err)
-			}
-			if !VerifyDigestBytes(digest[:], publicKey, signature) {
-				t.Fatal("VerifyDigestBytes rejected SignDigest signature")
+					signature, err := algo.SignDigest(digest, encoded.key)
+					if err != nil {
+						t.Fatalf("SignDigest: %v", err)
+					}
+					if !VerifyDigestBytes(digest[:], publicKey, signature) {
+						t.Fatal("VerifyDigestBytes rejected SignDigest signature")
+					}
+				})
 			}
 		})
 	}

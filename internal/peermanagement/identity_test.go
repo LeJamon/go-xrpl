@@ -112,6 +112,10 @@ func TestNewIdentityFromPrivateKey_Invalid(t *testing.T) {
 		{"empty", ""},
 		{"invalid hex", "ZZZZ"},
 		{"too short", "1234"},
+		{"zero scalar", strings.Repeat("0", 64)},
+		{"curve order", "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"},
+		{"curve order plus one", "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364142"},
+		{"all ff", strings.Repeat("F", 64)},
 	}
 
 	for _, tt := range tests {

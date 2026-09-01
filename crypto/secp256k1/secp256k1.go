@@ -339,8 +339,8 @@ func (c Algorithm) DerivePublicKeyFromPublicGenerator(pubKey []byte) ([]byte, er
 // loading, where the JSON `validation_secret_key` already is the raw
 // scalar (no seed expansion).
 func (c Algorithm) DerivePublicKeyFromSecret(secret []byte) ([]byte, error) {
-	if len(secret) != 32 {
-		return nil, ErrInvalidPrivateKey
+	if err := validatePrivateKey(secret); err != nil {
+		return nil, err
 	}
 	_, pubKey := btcec.PrivKeyFromBytes(secret)
 	return pubKey.SerializeCompressed(), nil
