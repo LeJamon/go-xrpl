@@ -87,8 +87,8 @@ func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *state.Rip
 		return ter.TerNO_AMM
 	}
 
-	if trustDelete(view, lineKey, lowAccountID, highAccountID, rs.LowNode, rs.HighNode) != nil {
-		return ter.TefBAD_LEDGER
+	if err := trustDelete(view, lineKey, lowAccountID, highAccountID, rs.LowNode, rs.HighNode); err != nil {
+		return ammResultFromError(err, ter.TefEXCEPTION)
 	}
 
 	nonAMMAccountID := lowAccountID
