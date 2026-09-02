@@ -102,7 +102,8 @@ func (p *PaymentChannelClaim) Validate() error {
 	// the claim signature is verified here — entirely from tx fields, before any
 	// ledger access. rippled runs this whole block before the CredentialIDs shape
 	// check. Reference: rippled PayChan.cpp PayChanClaim::preflight (Signature block).
-	if p.Signature != "" {
+	hasSignature := p.FieldPresent("Signature", p.Signature != "")
+	if hasSignature {
 		if p.PublicKey == "" {
 			return ErrPayChanSigNeedsKey
 		}
@@ -282,7 +283,8 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) ter.Result {
 
 		// Destination claiming without signature
 		// Reference: rippled PayChan.cpp doApply() line 529
-		if isDest && !isOwner && p.Signature == "" {
+		hasSignature := p.FieldPresent("Signature", p.Signature != "")
+		if isDest && !isOwner && !hasSignature {
 			if rules.FixCleanup3_2_0Enabled() {
 				return ter.TecNO_PERMISSION
 			}
@@ -292,7 +294,7 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) ter.Result {
 		// The signature itself is verified in Validate(); here we only confirm
 		// the supplied PublicKey matches the channel's stored key, which needs
 		// ledger state. Reference: rippled PayChan.cpp doApply() lines 532-537.
-		if p.Signature != "" {
+		if hasSignature {
 			if !strings.EqualFold(p.PublicKey, channel.PublicKey) {
 				if rules.FixCleanup3_2_0Enabled() {
 					return ter.TecNO_PERMISSION

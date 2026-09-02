@@ -51,10 +51,10 @@ func (e *EscrowCreate) Validate() error {
 		return err
 	}
 
-	// sfDestination is a required field; a missing one is temMALFORMED before the
-	// per-type preflight body (which lives in PreflightRules).
-	if err := tx.CheckDestRequired(e.Destination); err != nil {
-		return err
+	// Parsed transactions enforce required-field presence in the template. Keep
+	// the value fallback for directly constructed transactions.
+	if !e.FieldPresent("Destination", e.Destination != "") {
+		return tx.CheckDestRequired(e.Destination)
 	}
 
 	return nil
@@ -161,7 +161,7 @@ func (e *EscrowCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT
 	}
-	destID, err := state.DecodeAccountID(e.Destination)
+	destID, err := tx.DecodeAccountIDField(e.Destination, e.FieldPresent("Destination", e.Destination != ""))
 	if err != nil {
 		return ter.TemINVALID
 	}

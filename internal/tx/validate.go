@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
@@ -40,6 +41,15 @@ func CheckDestRequired(destination string) error {
 		return ter.Errorf(ter.TemDST_NEEDED, "Destination is required")
 	}
 	return nil
+}
+
+// DecodeAccountIDField decodes an STAccount value, preserving the default
+// account represented by a present zero-length field.
+func DecodeAccountIDField(account string, present bool) ([20]byte, error) {
+	if account == "" && present {
+		return [20]byte{}, nil
+	}
+	return state.DecodeAccountID(account)
 }
 
 // IsValidPublicKey mirrors rippled's publicKeyType() (PublicKey.cpp): a public

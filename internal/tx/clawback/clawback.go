@@ -78,11 +78,12 @@ func (c *Clawback) Validate() error {
 // then the holder-shape temMALFORMED checks, then the amount temBAD_AMOUNT check.
 // Reference: rippled Clawback.cpp preflightHelper<Issue>/<MPTIssue>.
 func (c *Clawback) PreflightRules(rules *amendment.Rules) error {
+	hasHolder := c.FieldPresent("Holder", c.Holder != "")
 	if c.Amount.IsMPT() {
 		if !rules.Enabled(amendment.FeatureMPTokensV1) {
 			return ter.Errorf(ter.TemDISABLED, "MPToken clawback requires MPTokensV1")
 		}
-		if c.Holder == "" {
+		if !hasHolder {
 			return ErrClawbackHolderRequired
 		}
 		if c.Account == c.Holder {
@@ -96,7 +97,7 @@ func (c *Clawback) PreflightRules(rules *amendment.Rules) error {
 		return nil
 	}
 	// Issue arm — IOU, and native XRP, which std::visit routes here too.
-	if c.Holder != "" {
+	if hasHolder {
 		return ErrClawbackHolderWithToken
 	}
 	// rippled: issuer == holder || isXRP(amount) || amount <= 0 -> temBAD_AMOUNT.
@@ -127,7 +128,7 @@ func (c *Clawback) applyMPT(ctx *tx.ApplyContext) ter.Result {
 	// Read the holder's AccountRoot and reject a pseudo-account / AMM holder
 	// before the per-issue preclaim checks, mirroring rippled's preclaim order.
 	// Reference: rippled Clawback.cpp:202-216
-	holderID, err := state.DecodeAccountID(c.Holder)
+	holderID, err := tx.DecodeAccountIDField(c.Holder, c.FieldPresent("Holder", c.Holder != ""))
 	if err != nil {
 		return ter.TecNO_DST
 	}

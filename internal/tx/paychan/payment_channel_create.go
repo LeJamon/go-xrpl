@@ -61,9 +61,10 @@ func (p *PaymentChannelCreate) Validate() error {
 	// The tfUniversalMask flag check is gated on fix1543 and runs in Preclaim,
 	// where the amendment rules are available.
 
-	// Destination is required
-	if err := tx.CheckDestRequired(p.Destination); err != nil {
-		return err
+	// Destination is required by field presence. A present default STAccount is
+	// a zero account and reaches the ledger-aware destination lookup.
+	if !p.FieldPresent("Destination", p.Destination != "") {
+		return tx.CheckDestRequired(p.Destination)
 	}
 
 	// Amount is required and must be XRP
@@ -126,65 +127,63 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	)
 
 	amount := uint64(p.Amount.Drops())
-
-	// Reserve and funding checks run before the destination checks, matching
-	// rippled's preclaim order, which reads the PRE-fee balance — so use
-	// PriorBalance, else a fee straddling reserve(OwnerCount+1) flips the TER.
-	// Reference: rippled PayChan.cpp preclaim() lines 204-214.
 	priorBalance := ctx.PriorBalance()
-	if result := ctx.CheckReserveFor(ctx.AccountID, ctx.Account, priorBalance, 1, 0, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
-		ctx.Log.Warn("payment channel create: insufficient reserve",
-			"balance", priorBalance,
-		)
-		return result
-	}
-	usesSponsor, result := ctx.UsesReserveSponsorFor(ctx.AccountID, ctx.Account)
-	if result != ter.TesSUCCESS {
-		return result
-	}
-	ownerDelta := 1
-	if usesSponsor {
-		ownerDelta = 0
-	}
-	sourceReserve, ok := tx.RequiredAccountReserve(ctx.Config, ctx.Account, ownerDelta, 0)
-	if !ok {
-		return ter.TefINTERNAL
-	}
-	if priorBalance < amount || priorBalance-amount < sourceReserve {
-		ctx.Log.Warn("payment channel create: unfunded",
-			"balance", priorBalance,
-			"amount", amount,
-		)
-		return ter.TecUNFUNDED
+	checkFunding := func() ter.Result {
+		if result := ctx.CheckReserveFor(ctx.AccountID, ctx.Account, priorBalance, 1, 0, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
+			ctx.Log.Warn("payment channel create: insufficient reserve", "balance", priorBalance)
+			return result
+		}
+		usesSponsor, result := ctx.UsesReserveSponsorFor(ctx.AccountID, ctx.Account)
+		if result != ter.TesSUCCESS {
+			return result
+		}
+		ownerDelta := 1
+		if usesSponsor {
+			ownerDelta = 0
+		}
+		sourceReserve, ok := tx.RequiredAccountReserve(ctx.Config, ctx.Account, ownerDelta, 0)
+		if !ok {
+			return ter.TefINTERNAL
+		}
+		if priorBalance < amount || priorBalance-amount < sourceReserve {
+			ctx.Log.Warn("payment channel create: unfunded", "balance", priorBalance, "amount", amount)
+			return ter.TecUNFUNDED
+		}
+		return ter.TesSUCCESS
 	}
 
-	// Verify destination exists and is not a pseudo-account (AMM)
-	// Reference: rippled PayChan.cpp preclaim() lines 216-248
-	destAccount, destID, result := ctx.LookupDestination(p.Destination)
-	if result != ter.TesSUCCESS {
-		ctx.Log.Warn("payment channel create: destination lookup failed",
-			"destination", p.Destination,
-			"result", result,
-		)
+	var destAccount *state.AccountRoot
+	var destID [20]byte
+	lookupDestination := func() ter.Result {
+		if p.Destination == "" {
+			return ter.TecNO_DST
+		}
+		var result ter.Result
+		destAccount, destID, result = ctx.LookupDestination(p.Destination)
+		if result != ter.TesSUCCESS {
+			ctx.Log.Warn("payment channel create: destination lookup failed",
+				"destination", p.Destination,
+				"result", result,
+			)
+			return result
+		}
+		if destAccount.Flags&state.LsfDisallowIncomingPayChan != 0 {
+			return ter.TecNO_PERMISSION
+		}
+		if (destAccount.Flags&state.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
+			return ter.TecDST_TAG_NEEDED
+		}
+		return ter.TesSUCCESS
+	}
+
+	sponsorEnabled := ctx.Rules().Enabled(amendment.FeatureSponsor)
+	if !sponsorEnabled {
+		if result := checkFunding(); result != ter.TesSUCCESS {
+			return result
+		}
+	}
+	if result := lookupDestination(); result != ter.TesSUCCESS {
 		return result
-	}
-
-	// DisallowIncoming check
-	// Reference: rippled PayChan.cpp preclaim() lsfDisallowIncomingPayChan
-	if destAccount.Flags&state.LsfDisallowIncomingPayChan != 0 {
-		ctx.Log.Warn("payment channel create: destination disallows incoming pay channels",
-			"destination", p.Destination,
-		)
-		return ter.TecNO_PERMISSION
-	}
-
-	// RequireDestTag check
-	// Reference: rippled PayChan.cpp preclaim() lsfRequireDestTag
-	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
-		ctx.Log.Warn("payment channel create: destination tag required",
-			"destination", p.Destination,
-		)
-		return ter.TecDST_TAG_NEEDED
 	}
 
 	// fixPayChanCancelAfter: CancelAfter must be in the future
@@ -195,6 +194,11 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			if closeTime > *p.CancelAfter {
 				return ter.TecEXPIRED
 			}
+		}
+	}
+	if sponsorEnabled {
+		if result := checkFunding(); result != ter.TesSUCCESS {
+			return result
 		}
 	}
 
