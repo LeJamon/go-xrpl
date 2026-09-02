@@ -478,7 +478,6 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 		// Sync ctx.Account.OwnerCount after IOU payments that may auto-create trust lines
 		syncCtxOwnerCount(ctx)
 	} else {
-		// XRP payment path
 		amount := buyOffer.Amount
 
 		var issuerCut uint64
