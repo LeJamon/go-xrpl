@@ -375,13 +375,10 @@ func TestIOUExponentRange(t *testing.T) {
 			value:       "1e95",
 			expectError: false,
 		},
-		// Out of range - too small exponent
-		// For "1e-82": adjusted = -82 + 1 - 16 = -97 (below min)
 		{
-			name:        "exponent too small",
+			name:        "exponent underflow",
 			value:       "1e-82",
-			expectError: true,
-			errorType:   "Exponent",
+			expectError: false,
 		},
 		// Out of range - too large exponent
 		// For "1e96": adjusted = 96 + 1 - 16 = 81 (above max)
@@ -397,18 +394,16 @@ func TestIOUExponentRange(t *testing.T) {
 			value:       "9999999999999999",
 			expectError: false,
 		},
-		// Exceeding maximum precision
 		{
-			name:        "precision exceeded - 17 digits",
+			name:        "17 digits round to wire precision",
 			value:       "12345678901234567",
-			expectError: true,
-			errorType:   "Precision",
+			expectError: false,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := verifyIOUValue(tc.value)
+			_, err := SerializeIssuedCurrencyValue(tc.value)
 
 			if tc.expectError {
 				require.Error(t, err)

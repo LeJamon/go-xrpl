@@ -1,10 +1,8 @@
 package binarycodec
 
 import (
-	"errors"
 	"testing"
 
-	bigdecimal "github.com/Peersyst/xrpl-go/pkg/big-decimal"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,7 +21,17 @@ func TestQualityCodec_Encode(t *testing.T) {
 		{
 			name:        "fail - invalid quality - invalid character",
 			input:       "invalid",
-			expectedErr: bigdecimal.ErrInvalidCharacter,
+			expectedErr: ErrInvalidQuality,
+		},
+		{
+			name:        "fail - invalid quality - leading zero",
+			input:       "0195796912.5171664",
+			expectedErr: ErrInvalidQuality,
+		},
+		{
+			name:        "fail - invalid quality - embedded number",
+			input:       "junk195796912junk",
+			expectedErr: ErrInvalidQuality,
 		},
 		{
 			name:        "fail - invalid quality - overflow",
@@ -56,6 +64,11 @@ func TestQualityCodec_Encode(t *testing.T) {
 			expected: "5500000000000000",
 		},
 		{
+			name:     "pass - signed scientific zero",
+			input:    "-0e80",
+			expected: "5500000000000000",
+		},
+		{
 			name:     "pass - valid negative quality",
 			input:    "-195796912.5171664",
 			expected: "5D06F4C3362FE1D0",
@@ -70,18 +83,37 @@ func TestQualityCodec_Encode(t *testing.T) {
 			input:    "195796912.5171664",
 			expected: "5D06F4C3362FE1D0",
 		},
+		{
+			name:     "pass - explicit positive sign",
+			input:    "+195796912.5171664",
+			expected: "5D06F4C3362FE1D0",
+		},
+		{
+			name:     "pass - minimum exponent",
+			input:    "1e-96",
+			expected: "0400000000000001",
+		},
+		{
+			name:     "pass - maximum exponent",
+			input:    "1e80",
+			expected: "B400000000000001",
+		},
+		{
+			name:        "fail - exponent below minimum",
+			input:       "1e-97",
+			expectedErr: ErrInvalidQuality,
+		},
+		{
+			name:        "fail - exponent above maximum",
+			input:       "1e81",
+			expectedErr: ErrInvalidQuality,
+		},
 	}
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
 			encoded, err := EncodeQuality(tc.input)
 			if tc.expectedErr != nil {
-				require.Error(t, err)
-				// Use errors.Is() for error comparison
-				if errors.Is(tc.expectedErr, bigdecimal.ErrInvalidCharacter) {
-					require.True(t, errors.Is(err, bigdecimal.ErrInvalidCharacter))
-				} else {
-					require.ErrorIs(t, err, tc.expectedErr)
-				}
+				require.ErrorIs(t, err, tc.expectedErr)
 			} else {
 				require.NoError(t, err)
 				require.Equal(t, tc.expected, encoded)
@@ -129,5 +161,13 @@ func TestQualityCodec_Decode(t *testing.T) {
 				require.Equal(t, tc.expected, decoded)
 			}
 		})
+	}
+}
+
+func BenchmarkEncodeQuality(b *testing.B) {
+	for b.Loop() {
+		if _, err := EncodeQuality("195796912.5171664"); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

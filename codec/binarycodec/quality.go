@@ -4,11 +4,10 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
-	"strconv"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/internal/decimal"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
-	bigdecimal "github.com/Peersyst/xrpl-go/pkg/big-decimal"
 )
 
 const (
@@ -32,32 +31,24 @@ func EncodeQuality(quality string) (string, error) {
 		return hex.EncodeToString(zeroAmount), nil
 	}
 
-	bigDecimal, err := bigdecimal.NewBigDecimal(quality)
+	parts, err := decimal.Parse(quality)
 	if err != nil {
-		return "", err
-	}
-
-	if !isValidQuality(*bigDecimal) {
 		return "", ErrInvalidQuality
 	}
 
-	if bigDecimal.UnscaledValue == "" {
+	if parts.Precision > types.MaxIOUPrecision ||
+		parts.Exponent < types.MinIOUExponent || parts.Exponent > types.MaxIOUExponent {
+		return "", ErrInvalidQuality
+	}
+
+	if parts.Mantissa == 0 {
 		zeroAmount := make([]byte, 8)
 		binary.BigEndian.PutUint64(zeroAmount, uint64(zeroQualityHex))
 		return hex.EncodeToString(zeroAmount), nil
 	}
 
-	mantissa, err := strconv.ParseUint(bigDecimal.UnscaledValue, 10, 64)
-
-	if err != nil {
-		return "", err
-	}
-
-	exp := bigDecimal.Scale
-
 	serialized := make([]byte, 8)
-	binary.BigEndian.PutUint64(serialized, mantissa)
-	serialized[0] += byte(exp) + 100
+	binary.BigEndian.PutUint64(serialized, uint64(parts.Exponent+100)<<56|parts.Mantissa)
 	return strings.ToUpper(hex.EncodeToString(serialized)), nil
 }
 
@@ -81,28 +72,5 @@ func DecodeQuality(quality string) (string, error) {
 	mantissaBytes := append([]byte{0}, bytes[1:]...)
 	mantissa := binary.BigEndian.Uint64(mantissaBytes)
 
-	mantissaStr := strconv.FormatUint(mantissa, 10)
-
-	if exp < 0 {
-		if len(mantissaStr) <= -exp {
-			zeros := strings.Repeat("0", -exp-len(mantissaStr)+1)
-			mantissaStr = "0." + zeros + mantissaStr
-		} else {
-			insertPos := len(mantissaStr) + exp
-			mantissaStr = mantissaStr[:insertPos] + "." + mantissaStr[insertPos:]
-		}
-	} else if exp > 0 {
-		mantissaStr += strings.Repeat("0", exp)
-	}
-
-	if strings.Contains(mantissaStr, ".") {
-		mantissaStr = strings.TrimRight(mantissaStr, "0")
-		mantissaStr = strings.TrimRight(mantissaStr, ".")
-	}
-
-	return mantissaStr, nil
-}
-
-func isValidQuality(quality bigdecimal.BigDecimal) bool {
-	return quality.Precision <= types.MaxIOUPrecision && quality.Scale >= types.MinIOUExponent && quality.Scale <= types.MaxIOUExponent
+	return decimal.Format(mantissa, exp, false), nil
 }

@@ -52,19 +52,22 @@ func TestNumberNormalizeRoundHalfEven(t *testing.T) {
 // canonical zero (mantissa 0, exponent 0x80000000) like rippled.
 func TestNumberNormalizeUnderflowClamp(t *testing.T) {
 	cases := []struct {
-		name  string
-		input string
+		name     string
+		mantissa string
+		exponent int32
 	}{
 		// Mantissa cannot be scaled up to minMantissa before hitting the
 		// exponent floor.
-		{"mantissa below min at exponent floor", "1e-32768"},
+		{"mantissa below min at exponent floor", "1", -32768},
 		// Exponent already below minExponent.
-		{"exponent below min", "5000000000000000e-40000"},
+		{"exponent below min", "5000000000000000", -40000},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m, exp, err := parseAndNormalize(tc.input)
+			input, ok := new(big.Int).SetString(tc.mantissa, 10)
+			require.True(t, ok)
+			m, exp, err := normalize(input, tc.exponent)
 			require.NoError(t, err)
 			require.Equal(t, big.NewInt(0).String(), m.String())
 			require.Equal(t, defaultZeroExp, exp)
@@ -85,6 +88,9 @@ func TestNumberJSONInputBoundary(t *testing.T) {
 	n := &Number{}
 
 	for _, value := range []any{
+		"+1",
+		"-0.0e80",
+		"9223372036854775807",
 		int32(-42),
 		int64(4294967295),
 		uint32(42),
@@ -98,9 +104,18 @@ func TestNumberJSONInputBoundary(t *testing.T) {
 	}
 
 	for _, value := range []any{
+		".1",
+		"1.",
+		"junk1junk",
 		"001",
 		"000.0",
 		"18446744073709551616",
+		"12345678901234567895",
+		"9223372036854775808",
+		"-9223372036854775808",
+		"18446744073709551615",
+		"-18446744073709551615",
+		"1e-32768",
 		"1e2147483648",
 		"1e-2147483648",
 		int64(-2147483649),
@@ -136,8 +151,8 @@ func TestNumberLargeScaleWireParity(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "500", decoded)
 
-	b, err = n.FromJSON("9223372036854775808")
+	b, err = n.FromJSON("9223372036854775800")
 	require.NoError(t, err)
-	require.Equal(t, int64(922337203685477581), int64(binary.BigEndian.Uint64(b[:8])))
-	require.Equal(t, int32(1), int32(binary.BigEndian.Uint32(b[8:])))
+	require.Equal(t, int64(9223372036854775800), int64(binary.BigEndian.Uint64(b[:8])))
+	require.Equal(t, int32(0), int32(binary.BigEndian.Uint32(b[8:])))
 }
