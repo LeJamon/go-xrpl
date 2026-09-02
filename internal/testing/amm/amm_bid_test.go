@@ -554,8 +554,8 @@ func TestBid(t *testing.T) {
 		require.Equal(t, lpCurrency, line.HighLimit.Currency)
 		require.Equal(t, highAddress, line.HighLimit.Issuer)
 
-		holderReserve, holderNoRipple := uint32(state.LsfLowReserve), uint32(state.LsfLowNoRipple)
-		ammNoRipple := uint32(state.LsfHighNoRipple)
+		holderReserve, holderNoRipple := state.LsfLowReserve, state.LsfLowNoRipple
+		ammNoRipple := state.LsfHighNoRipple
 		if !keylet.IsLowAccount(env.Carol.ID, ammAccount.ID) {
 			holderReserve, holderNoRipple = state.LsfHighReserve, state.LsfHighNoRipple
 			ammNoRipple = state.LsfLowNoRipple
