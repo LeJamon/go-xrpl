@@ -1840,10 +1840,12 @@ func (r *Router) FastSyncMetrics() FastSyncMetrics {
 	etaAvailable := r.standardReplay.etaAvailable
 	rebasePending := r.standardReplay.rebasePending
 	r.acquisitionMu.Unlock()
+	var pivotSnapshot inbound.Snapshot
 	pivotStateRate := uint64(0)
 	if pivot := r.fetchTracker.Find(pivotHash); pivot != nil && !pivotStartedAt.IsZero() {
+		pivotSnapshot = pivot.Snapshot()
 		if elapsed := time.Since(pivotStartedAt); elapsed > 0 {
-			pivotStateRate = uint64(float64(pivot.Snapshot().StateUseful) / elapsed.Seconds())
+			pivotStateRate = uint64(float64(pivotSnapshot.StateUseful) / elapsed.Seconds())
 		}
 	}
 	r.catchupMu.Lock()
@@ -1879,6 +1881,10 @@ func (r *Router) FastSyncMetrics() FastSyncMetrics {
 		ReplayPipelinePreparedTailSeq:        preparedTailSeq,
 		ReplayPipelineTrustedHeadSeq:         trustedHeadSeq,
 		ReplayPipelineGeneration:             generation,
+		ReplayPipelinePivotNodesExamined:     pivotSnapshot.StateNodesDescended,
+		ReplayPipelinePivotEqualSubtrees:     pivotSnapshot.StateEqualSubtreesSkipped,
+		ReplayPipelinePivotMissingNodes:      pivotSnapshot.StateMissingDiscovered,
+		ReplayPipelinePivotStateDownloaded:   pivotSnapshot.StateUseful,
 		ReplayPipelinePivotStateNodesPerSec:  pivotStateRate,
 		ReplayPipelineHeadSeq:                headSeq,
 		ReplayPipelineTargetSeq:              targetSeq,

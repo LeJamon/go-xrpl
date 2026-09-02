@@ -35,7 +35,8 @@ const (
 	// which the acquisition abandons path-based requests and asks every peer
 	// for the missing nodes by content hash (rippled
 	// ledgerBecomeAggressiveThreshold).
-	ledgerBecomeAggressiveThreshold = 4
+	ledgerBecomeAggressiveThreshold   = 4
+	stateDiscoveryProgressLogInterval = 30 * time.Second
 )
 
 // hardMaxReplyNodes is rippled's per-message cap on the nodes a peer may pack
@@ -610,7 +611,9 @@ func (l *Ledger) TakeByHashRequestContext(ctx context.Context, max int) (state, 
 	l.mu.Unlock()
 
 	if stateMap != nil {
+		stopProgress := l.startStateDiscoveryProgress(ctx, time.Now())
 		state, err = neededHashesContext(ctx, stateMap, max)
+		stopProgress()
 		if err != nil {
 			l.restoreByHashAfterInterruptedWalk()
 			return nil, nil, err
@@ -1322,6 +1325,11 @@ func (l *Ledger) CollectMissingRequestContext(ctx context.Context, isReply bool)
 	}
 
 	started := time.Now()
+	stopProgress := func() {}
+	if stateTree {
+		stopProgress = l.startStateDiscoveryProgress(ctx, started)
+	}
+	defer stopProgress()
 	missing, err := m.GetMissingNodesContext(ctx, missingNodesFind, nil)
 	l.RecordFrontierWalk(time.Since(started))
 	if err != nil {
@@ -1373,6 +1381,59 @@ func (l *Ledger) CollectMissingRequestContext(ctx context.Context, isReply bool)
 	}
 	l.cacheMissingLocked(true, missing)
 	return nil, nodeIDs, false, nil
+}
+
+func (l *Ledger) startStateDiscoveryProgress(ctx context.Context, started time.Time) func() {
+	ticker := time.NewTicker(stateDiscoveryProgressLogInterval)
+	return l.startStateDiscoveryProgressWithTicks(ctx, started, ticker.C, ticker.Stop)
+}
+
+func (l *Ledger) startStateDiscoveryProgressWithTicks(
+	ctx context.Context,
+	started time.Time,
+	ticks <-chan time.Time,
+	stopTicker func(),
+) func() {
+	done := make(chan struct{})
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		defer stopTicker()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-done:
+				return
+			case <-ticks:
+				if !l.logStateDiscoveryProgress(started) {
+					return
+				}
+			}
+		}
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(done)
+			<-exited
+		})
+	}
+}
+
+func (l *Ledger) logStateDiscoveryProgress(started time.Time) bool {
+	snapshot := l.Snapshot()
+	if snapshot.HaveState {
+		return false
+	}
+	l.logger.Info("inbound ledger: state discovery in progress",
+		"elapsed", time.Since(started),
+		"nodes_examined", snapshot.StateNodesDescended,
+		"equal_subtrees_skipped", snapshot.StateEqualSubtreesSkipped,
+		"missing_nodes_found", snapshot.StateMissingDiscovered,
+		"state_nodes_downloaded", snapshot.StateUseful,
+	)
+	return true
 }
 
 // filterMissingResultLocked applies the request throttle to a frontier already
@@ -1524,6 +1585,7 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 		available--
 	}
 	complete := l.state == StateComplete
+	monitorState := l.stateMap != nil && !l.haveState
 	l.mu.Unlock()
 	if len(peers) == 0 {
 		return nil, complete, nil
@@ -1531,6 +1593,11 @@ func (l *Ledger) collectMissingPeerRequestsContext(ctx context.Context, peerIDs 
 	requests := make([]MissingRequest, 0, len(peers))
 	walkStarted := time.Now()
 	defer func() { l.RecordFrontierWalk(time.Since(walkStarted)) }()
+	stopProgress := func() {}
+	if monitorState {
+		stopProgress = l.startStateDiscoveryProgress(ctx, walkStarted)
+	}
+	defer stopProgress()
 	for _, transaction := range []bool{false, true} {
 		if len(peers) == 0 {
 			break
@@ -1979,14 +2046,17 @@ func (l *Ledger) CheckLocalContext(ctx context.Context, fetch func(hash [32]byte
 	var stateMissing []shamap.MissingNode
 	if stateMap != nil {
 		loadsBefore := stateMap.FamilyLoadCount()
+		stopProgress := l.startStateDiscoveryProgress(ctx, time.Now())
 		stateProgress, stateStored, stateMissing, err = fillFromLocalContext(ctx, stateMap, fetch)
 		stateProgress = stateProgress || stateMap.FamilyLoadCount() > loadsBefore
 		l.persistReceived(ctx, stateStored, "locally recovered state nodes")
 		if err != nil {
+			stopProgress()
 			l.recordLocalProgress(stateMap, txMap, stateProgress)
 			return stateProgress, false, err
 		}
 		stateComplete = stateMap.FinishSyncContext(ctx) == nil
+		stopProgress()
 	}
 	txProgress, txComplete := false, false
 	var txStored []shamap.FlushEntry
