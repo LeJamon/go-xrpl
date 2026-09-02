@@ -339,7 +339,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) ter.Result {
 		// Reference: rippled AMMBid.cpp:355-360 — accountSend(account_, previousOwner, refund)
 		if !refund.IsZero() {
 			refundWithIssue := math.toAmount(refund, lptAMMBalance, state.RoundToNearest)
-			if r := transferLPTokens(ctx.View, accountID, amm.AuctionSlot.Account, amm.Account, refundWithIssue, math.ctx); r != ter.TesSUCCESS {
+			if r := transferLPTokens(ctx.View, accountID, amm.AuctionSlot.Account, refundWithIssue, math.ctx); r != ter.TesSUCCESS {
 				return r
 			}
 		}
@@ -359,6 +359,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) ter.Result {
 			return r
 		}
 	}
+	ctx.SyncSenderOwnerCount()
 	newLPBalance, err := amm.LPTokenBalance.SubWithNumberContext(saBurn, math.ctx, state.RoundToNearest)
 	if err != nil {
 		return ter.TecINTERNAL
@@ -402,80 +403,14 @@ func redeemLPTokens(view tx.LedgerView, accountID, ammAccountID [20]byte, amount
 	if amount.IsZero() {
 		return ter.TesSUCCESS
 	}
-	return adjustLPTrustLine(view, accountID, ammAccountID, amount, false, numberContext)
+	return redeemIOUWithCleanup(view, accountID, ammAccountID, amount, numberContext)
 }
 
 // transferLPTokens transfers LP tokens from one account to another via the AMM (issuer).
-// This debits the sender's trust line and credits the receiver's trust line.
 // Reference: rippled Ledger/View.cpp accountSend() → rippleCredit()
-func transferLPTokens(view tx.LedgerView, from, to, ammAccountID [20]byte, amount tx.Amount, numberContext state.NumberContext) ter.Result {
+func transferLPTokens(view tx.LedgerView, from, to [20]byte, amount tx.Amount, numberContext state.NumberContext) ter.Result {
 	if amount.IsZero() || from == to {
 		return ter.TesSUCCESS
 	}
-	// Debit sender → AMM (issuer)
-	if r := adjustLPTrustLine(view, from, ammAccountID, amount, false, numberContext); r != ter.TesSUCCESS {
-		return r
-	}
-	// Credit AMM (issuer) → receiver
-	return adjustLPTrustLine(view, to, ammAccountID, amount, true, numberContext)
-}
-
-// adjustLPTrustLine modifies the LP token trust line balance between an account and the AMM.
-// If isCredit is true, the account's balance increases; if false, it decreases.
-// Reference: rippled Ledger/View.cpp rippleCredit()
-func adjustLPTrustLine(view tx.LedgerView, accountID, ammAccountID [20]byte, amount tx.Amount, isCredit bool, numberContext state.NumberContext) ter.Result {
-	trustLineKey := keylet.Line(accountID, ammAccountID, amount.Currency)
-	data, err := view.Read(trustLineKey)
-	if err != nil || data == nil {
-		return ter.TecINTERNAL
-	}
-
-	rs, err := state.ParseRippleState(data)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-
-	// Determine if the LP account is the low account
-	lpIsLow := keylet.IsLowAccount(accountID, ammAccountID)
-
-	// Trust line balance convention:
-	//   positive balance → low account holds tokens (low owes high)
-	//   For LP tokens: AMM is the issuer, LP is the holder
-	currentBalance := rs.Balance
-
-	var newBalance tx.Amount
-	if lpIsLow {
-		// LP is low: positive = LP holds tokens
-		if isCredit {
-			newBalance, err = currentBalance.AddWithNumberContext(amount, numberContext, state.RoundToNearest)
-		} else {
-			newBalance, err = currentBalance.SubWithNumberContext(amount, numberContext, state.RoundToNearest)
-		}
-	} else {
-		// LP is high: negative = LP holds tokens (from low perspective)
-		if isCredit {
-			newBalance, err = currentBalance.SubWithNumberContext(amount, numberContext, state.RoundToNearest)
-		} else {
-			newBalance, err = currentBalance.AddWithNumberContext(amount, numberContext, state.RoundToNearest)
-		}
-	}
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-
-	rs.Balance = state.NewIssuedAmountFromValue(
-		newBalance.Mantissa(), newBalance.Exponent(),
-		rs.Balance.Currency, rs.Balance.Issuer,
-	)
-
-	rsBytes, err := state.SerializeRippleState(rs)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-
-	if err := view.Update(trustLineKey, rsBytes); err != nil {
-		return ter.TefINTERNAL
-	}
-
-	return ter.TesSUCCESS
+	return tx.RippleSendIOUWithNumberContext(view, from, to, amount, false, numberContext)
 }
