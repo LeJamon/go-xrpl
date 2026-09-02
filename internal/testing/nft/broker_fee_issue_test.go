@@ -24,6 +24,12 @@ func TestNFTokenBrokerFeeIssue(t *testing.T) {
 			},
 		},
 		{
+			name: "same issue canonical hex currency",
+			brokerFee: func(gateway, _ *jtx.Account) tx.Amount {
+				return gateway.IOU("0000000000000000000000005553440000000000", 100)
+			},
+		},
+		{
 			name: "different issuer",
 			brokerFee: func(_, otherGateway *jtx.Account) tx.Amount {
 				return otherGateway.IOU("USD", 100)
