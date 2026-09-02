@@ -597,8 +597,5 @@ func trustDeleteRippleState(view tx.LedgerView, lineKey keylet.Keylet, rs *state
 	if id1IsHigh {
 		lowID, highID = id2, id1
 	}
-	if trustDelete(view, lineKey, lowID, highID, rs.LowNode, rs.HighNode) != nil {
-		return ter.TefBAD_LEDGER
-	}
-	return ter.TesSUCCESS
+	return tx.TrustDelete(view, lineKey, lowID, highID, rs.LowNode, rs.HighNode)
 }
