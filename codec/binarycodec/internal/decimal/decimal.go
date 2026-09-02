@@ -1,3 +1,4 @@
+// Package decimal parses and formats exact decimal values used by the binary codec.
 package decimal
 
 import (
@@ -7,8 +8,10 @@ import (
 	"strings"
 )
 
+// ErrInvalid reports a decimal that does not match the supported grammar or ranges.
 var ErrInvalid = errors.New("invalid decimal")
 
+// Parts is the normalized representation of a parsed decimal value.
 type Parts struct {
 	Mantissa  uint64
 	Exponent  int32
@@ -16,6 +19,7 @@ type Parts struct {
 	Precision int
 }
 
+// Parse converts an anchored decimal string into normalized parts.
 func Parse(value string) (Parts, error) {
 	if value == "" {
 		return Parts{}, ErrInvalid
@@ -123,6 +127,7 @@ func Parse(value string) (Parts, error) {
 	}, nil
 }
 
+// Format returns the exact fixed-point representation of decimal parts.
 func Format(mantissa uint64, exponent int, negative bool) string {
 	if mantissa == 0 {
 		return "0"
