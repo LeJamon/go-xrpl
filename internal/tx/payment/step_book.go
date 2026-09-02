@@ -890,7 +890,7 @@ func (s *BookStep) Fwd(
 					return true
 				}
 				// Reconciliation declined: rippled re-inserts the erased output
-				// (BookStep.cpp:1241) so the running totals stay consistent.
+				// (BookStep.cpp:1220) so the running totals stay consistent.
 				savedOuts.insert(lastOut)
 			}
 
@@ -982,7 +982,7 @@ func (s *BookStep) Fwd(
 					ownerGivesAdj = revOwnerGives
 				} else {
 					// Reconciliation declined: rippled re-inserts the erased output
-					// (BookStep.cpp:1241).
+					// (BookStep.cpp:1220).
 					savedOuts.insert(stpAdjOut)
 				}
 				_ = revOfrOut
