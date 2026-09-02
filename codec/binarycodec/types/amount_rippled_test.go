@@ -375,7 +375,6 @@ func TestIOUExponentRange(t *testing.T) {
 			value:       "1e95",
 			expectError: false,
 		},
-		// Values below the minimum normalized exponent underflow to zero.
 		{
 			name:        "exponent underflow",
 			value:       "1e-82",
@@ -395,7 +394,6 @@ func TestIOUExponentRange(t *testing.T) {
 			value:       "9999999999999999",
 			expectError: false,
 		},
-		// Inputs wider than 16 digits are rounded to the wire precision.
 		{
 			name:        "17 digits round to wire precision",
 			value:       "12345678901234567",

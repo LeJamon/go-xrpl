@@ -410,7 +410,6 @@ func TestIOUExponentBoundaries_RippledVectors(t *testing.T) {
 			expectError: false,
 			description: "Maximum valid adjusted exponent",
 		},
-		// Values below the minimum normalized exponent underflow to zero.
 		{
 			name:        "exponent underflow",
 			value:       "1e-82",
@@ -425,7 +424,6 @@ func TestIOUExponentBoundaries_RippledVectors(t *testing.T) {
 			errorType:   "Exponent",
 			description: "Above MaxIOUExponent",
 		},
-		// Issued amounts normalize to 16 digits of wire precision.
 		{
 			name:        "max precision (16 digits)",
 			value:       "9999999999999999",
