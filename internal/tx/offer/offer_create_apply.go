@@ -220,7 +220,7 @@ func applyHybridInSandbox(view tx.LedgerView, offer *state.LedgerOffer, offerKey
 		// No DomainID for open book
 	})
 	if err != nil {
-		return ter.TefINTERNAL
+		return mapOfferDirInsertError(err)
 	}
 
 	offer.AdditionalBookDirectory = openBookDirKey.Key
