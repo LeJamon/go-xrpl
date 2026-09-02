@@ -107,8 +107,8 @@ func (d *DepositPreauth) Validate() error {
 
 	// Count which fields are present.
 	// Empty arrays are still present for mutual exclusivity.
-	hasAuth := d.Authorize != ""
-	hasUnauth := d.Unauthorize != ""
+	hasAuth := d.hasAuthorize()
+	hasUnauth := d.hasUnauthorize()
 	hasAuthCreds := d.hasAuthorizeCredentials()
 	hasUnauthCreds := d.hasUnauthorizeCredentials()
 
@@ -212,11 +212,19 @@ func (d *DepositPreauth) Flatten() (map[string]any, error) {
 }
 
 func (d *DepositPreauth) hasAuthorizeCredentials() bool {
-	return d.AuthorizeCredentials != nil || d.Common.HasField("AuthorizeCredentials")
+	return d.FieldPresent("AuthorizeCredentials", d.AuthorizeCredentials != nil)
 }
 
 func (d *DepositPreauth) hasUnauthorizeCredentials() bool {
-	return d.UnauthorizeCredentials != nil || d.Common.HasField("UnauthorizeCredentials")
+	return d.FieldPresent("UnauthorizeCredentials", d.UnauthorizeCredentials != nil)
+}
+
+func (d *DepositPreauth) hasAuthorize() bool {
+	return d.FieldPresent("Authorize", d.Authorize != "")
+}
+
+func (d *DepositPreauth) hasUnauthorize() bool {
+	return d.FieldPresent("Unauthorize", d.Unauthorize != "")
 }
 
 // SetAuthorize sets the account to authorize
@@ -302,8 +310,8 @@ func (d *DepositPreauth) Preclaim(view tx.LedgerView, config tx.EngineConfig) te
 	}
 
 	switch {
-	case d.Authorize != "":
-		authorizedID, derr := state.DecodeAccountID(d.Authorize)
+	case d.hasAuthorize():
+		authorizedID, derr := tx.DecodeAccountIDField(d.Authorize, true)
 		if derr != nil {
 			return ter.TemINVALID
 		}
@@ -324,8 +332,8 @@ func (d *DepositPreauth) Preclaim(view tx.LedgerView, config tx.EngineConfig) te
 		if exists {
 			return ter.TecDUPLICATE
 		}
-	case d.Unauthorize != "":
-		unauthorizedID, derr := state.DecodeAccountID(d.Unauthorize)
+	case d.hasUnauthorize():
+		unauthorizedID, derr := tx.DecodeAccountIDField(d.Unauthorize, true)
 		if derr != nil {
 			return ter.TemINVALID
 		}
@@ -336,7 +344,7 @@ func (d *DepositPreauth) Preclaim(view tx.LedgerView, config tx.EngineConfig) te
 		if !exists {
 			return ter.TecNO_ENTRY
 		}
-	case len(d.AuthorizeCredentials) > 0:
+	case d.hasAuthorizeCredentials():
 		sorted := makeSorted(d.AuthorizeCredentials)
 		if sorted == nil {
 			return ter.TefINTERNAL
@@ -357,7 +365,7 @@ func (d *DepositPreauth) Preclaim(view tx.LedgerView, config tx.EngineConfig) te
 		if exists {
 			return ter.TecDUPLICATE
 		}
-	case len(d.UnauthorizeCredentials) > 0:
+	case d.hasUnauthorizeCredentials():
 		sorted := makeSorted(d.UnauthorizeCredentials)
 		if sorted == nil {
 			return ter.TefINTERNAL
@@ -384,13 +392,13 @@ func (d *DepositPreauth) Apply(ctx *tx.ApplyContext) ter.Result {
 		"unauthorizeCredentials", len(d.UnauthorizeCredentials),
 	)
 
-	if d.Authorize != "" {
+	if d.hasAuthorize() {
 		return d.applyAuthorize(ctx)
-	} else if d.Unauthorize != "" {
+	} else if d.hasUnauthorize() {
 		return d.applyUnauthorize(ctx)
-	} else if len(d.AuthorizeCredentials) > 0 {
+	} else if d.hasAuthorizeCredentials() {
 		return d.applyAuthorizeCredentials(ctx)
-	} else if len(d.UnauthorizeCredentials) > 0 {
+	} else if d.hasUnauthorizeCredentials() {
 		return d.applyUnauthorizeCredentials(ctx)
 	}
 	return ter.TemMALFORMED
@@ -399,7 +407,7 @@ func (d *DepositPreauth) Apply(ctx *tx.ApplyContext) ter.Result {
 // applyAuthorize handles the Authorize case.
 // Reference: rippled DepositPreauth preclaim(sfAuthorize) + doApply(sfAuthorize)
 func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) ter.Result {
-	authorizedID, err := state.DecodeAccountID(d.Authorize)
+	authorizedID, err := tx.DecodeAccountIDField(d.Authorize, d.hasAuthorize())
 	if err != nil {
 		return ter.TemINVALID
 	}
@@ -452,7 +460,7 @@ func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) ter.Result {
 // applyUnauthorize handles the Unauthorize case.
 // Reference: rippled DepositPreauth preclaim(sfUnauthorize) + doApply(sfUnauthorize)
 func (d *DepositPreauth) applyUnauthorize(ctx *tx.ApplyContext) ter.Result {
-	unauthorizedID, err := state.DecodeAccountID(d.Unauthorize)
+	unauthorizedID, err := tx.DecodeAccountIDField(d.Unauthorize, d.hasUnauthorize())
 	if err != nil {
 		return ter.TemINVALID
 	}

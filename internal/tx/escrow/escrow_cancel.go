@@ -37,7 +37,7 @@ func (e *EscrowCancel) Validate() error {
 		return err
 	}
 
-	if e.Owner == "" {
+	if !e.FieldPresent("Owner", e.Owner != "") {
 		return ter.Errorf(ter.TemMALFORMED, "Owner is required")
 	}
 
@@ -67,7 +67,7 @@ func (e *EscrowCancel) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 	if rules == nil || !rules.Enabled(amendment.FeatureTokenEscrow) {
 		return ter.TesSUCCESS
 	}
-	ownerID, err := state.DecodeAccountID(e.Owner)
+	ownerID, err := tx.DecodeAccountIDField(e.Owner, e.FieldPresent("Owner", e.Owner != ""))
 	if err != nil {
 		return ter.TemINVALID
 	}
@@ -106,7 +106,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	rules := ctx.Rules()
 
-	ownerID, err := state.DecodeAccountID(e.Owner)
+	ownerID, err := tx.DecodeAccountIDField(e.Owner, e.FieldPresent("Owner", e.Owner != ""))
 	if err != nil {
 		return ter.TemINVALID
 	}

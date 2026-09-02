@@ -511,6 +511,12 @@ func (c *Common) HasField(name string) bool {
 	return c.PresentFields[name]
 }
 
+// FieldPresent reports whether a field is present in parsed input or in a
+// programmatically constructed transaction.
+func (c *Common) FieldPresent(name string, typedPresent bool) bool {
+	return typedPresent || c != nil && c.HasField(name)
+}
+
 // SetPresentFields sets the map of fields that were present in the original parsed data.
 func (c *Common) SetPresentFields(fields map[string]bool) {
 	c.PresentFields = fields
