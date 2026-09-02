@@ -410,14 +410,12 @@ func TestIOUExponentBoundaries_RippledVectors(t *testing.T) {
 			expectError: false,
 			description: "Maximum valid adjusted exponent",
 		},
-		// Out of range exponents
-		// For "1e-82": adjusted = -82 + 1 - 16 = -97 (below min)
+		// Values below the minimum normalized exponent underflow to zero.
 		{
-			name:        "exponent too small (-82 gives adjusted -97)",
+			name:        "exponent underflow",
 			value:       "1e-82",
-			expectError: true,
-			errorType:   "Exponent",
-			description: "Below MinIOUExponent",
+			expectError: false,
+			description: "Below MinIOUExponent canonicalizes to zero",
 		},
 		// For "1e96": adjusted = 96 + 1 - 16 = 81 (above max)
 		{
@@ -427,7 +425,7 @@ func TestIOUExponentBoundaries_RippledVectors(t *testing.T) {
 			errorType:   "Exponent",
 			description: "Above MaxIOUExponent",
 		},
-		// Precision tests - MaxIOUPrecision = 16
+		// Issued amounts normalize to 16 digits of wire precision.
 		{
 			name:        "max precision (16 digits)",
 			value:       "9999999999999999",
@@ -435,11 +433,10 @@ func TestIOUExponentBoundaries_RippledVectors(t *testing.T) {
 			description: "Maximum allowed precision",
 		},
 		{
-			name:        "precision exceeded (17 digits)",
+			name:        "17 digits round to wire precision",
 			value:       "12345678901234567",
-			expectError: true,
-			errorType:   "Precision",
-			description: "Exceeds MaxIOUPrecision",
+			expectError: false,
+			description: "Rounds to MaxIOUPrecision",
 		},
 		// Mantissa boundaries
 		{
@@ -452,7 +449,7 @@ func TestIOUExponentBoundaries_RippledVectors(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := verifyIOUValue(tc.value)
+			_, err := SerializeIssuedCurrencyValue(tc.value)
 
 			if tc.expectError {
 				require.Error(t, err, "Expected error for: %s", tc.description)

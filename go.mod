@@ -5,7 +5,6 @@ go 1.24.0
 toolchain go1.24.4
 
 require (
-	github.com/Peersyst/xrpl-go v0.1.10
 	github.com/btcsuite/btcd/btcec/v2 v2.3.4
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/decred/dcrd/crypto/ripemd160 v1.0.2

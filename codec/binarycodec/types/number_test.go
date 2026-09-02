@@ -85,6 +85,8 @@ func TestNumberJSONInputBoundary(t *testing.T) {
 	n := &Number{}
 
 	for _, value := range []any{
+		"+1",
+		"-0.0e80",
 		int32(-42),
 		int64(4294967295),
 		uint32(42),
@@ -98,6 +100,9 @@ func TestNumberJSONInputBoundary(t *testing.T) {
 	}
 
 	for _, value := range []any{
+		".1",
+		"1.",
+		"junk1junk",
 		"001",
 		"000.0",
 		"18446744073709551616",

@@ -1,6 +1,7 @@
 package types
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -10,7 +11,6 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
-	bigdecimal "github.com/Peersyst/xrpl-go/pkg/big-decimal"
 	"github.com/stretchr/testify/require"
 )
 
@@ -57,7 +57,7 @@ func TestVerifyXrpValue(t *testing.T) {
 	}
 }
 
-func TestVerifyIOUValue(t *testing.T) {
+func TestParseIOUValue(t *testing.T) {
 	tests := []struct {
 		name   string
 		input  string
@@ -74,14 +74,14 @@ func TestVerifyIOUValue(t *testing.T) {
 			expErr: nil,
 		},
 		{
-			name:   "pass - valid iou value - negative value & multiple leading zeros before decimal",
+			name:   "fail - multiple leading zeros",
 			input:  "-000.2345",
-			expErr: nil,
+			expErr: errInvalidCurrencyValue,
 		},
 		{
-			name:   "fail - invalid iou value - out of range precision",
+			name:   "fail - raw coefficient overflow",
 			input:  "0.000000000000000000007265675687436598345739475",
-			expErr: &OutOfRangeError{Type: "Precision"},
+			expErr: errInvalidCurrencyValue,
 		},
 		{
 			name: "fail - invalid iou value - out of range exponent too large",
@@ -91,16 +91,14 @@ func TestVerifyIOUValue(t *testing.T) {
 			expErr: &OutOfRangeError{Type: "Exponent"},
 		},
 		{
-			name: "fail - invalid iou value - out of range exponent too small",
-			// Needs adjustedExp = Scale + Precision - 16 < -96
-			// 1e-113: Scale=-113, Precision=1, adjustedExp = -113+1-16 = -128 < -96
+			name:   "pass - exponent underflow canonicalizes to zero",
 			input:  "1e-113",
-			expErr: &OutOfRangeError{Type: "Exponent"},
+			expErr: nil,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := verifyIOUValue(tt.input)
+			_, err := parseIOUValue(tt.input)
 			if tt.expErr != nil {
 				require.EqualError(t, tt.expErr, err.Error())
 			} else {
@@ -270,6 +268,16 @@ func TestSerializeIssuedCurrencyValue(t *testing.T) {
 			expectedErr: nil,
 		},
 		{
+			name:     "pass - signed decimal zero canonicalizes",
+			input:    "-0.000e80",
+			expected: []byte{0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+		},
+		{
+			name:     "pass - explicit positive sign",
+			input:    "+1",
+			expected: []byte{0xD4, 0x83, 0x8D, 0x7E, 0xA4, 0xC6, 0x80, 0x00},
+		},
+		{
 			name:        "pass - valid value - 2",
 			input:       "1",
 			expected:    []byte{0xD4, 0x83, 0x8D, 0x7E, 0xA4, 0xC6, 0x80, 0x00},
@@ -317,6 +325,21 @@ func TestSerializeIssuedCurrencyValue(t *testing.T) {
 			expected:    []byte{0xec, 0x63, 0x86, 0xf2, 0x6f, 0xc0, 0xff, 0xff},
 			expectedErr: nil,
 		},
+		{
+			name:        "fail - leading zero",
+			input:       "01",
+			expectedErr: errInvalidCurrencyValue,
+		},
+		{
+			name:        "fail - embedded number",
+			input:       "junk1junk",
+			expectedErr: errInvalidCurrencyValue,
+		},
+		{
+			name:        "fail - raw coefficient overflow",
+			input:       "100000000000000000000",
+			expectedErr: errInvalidCurrencyValue,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -330,6 +353,41 @@ func TestSerializeIssuedCurrencyValue(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSerializeIssuedCurrencyValueNormalizesLikeRippled(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		mantissa uint64
+		exponent int
+	}{
+		{"round below half", "12345678901234564", 1234567890123456, 1},
+		{"round half to even stays", "12345678901234565", 1234567890123456, 1},
+		{"round half to even increments", "12345678901234575", 1234567890123458, 1},
+		{"round above half", "12345678901234567", 1234567890123457, 1},
+		{"minimum exponent", "1e-81", 1000000000000000, -96},
+		{"underflow", "1e-82", 0, 0},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := SerializeIssuedCurrencyValue(test.input)
+			require.NoError(t, err)
+			want := make([]byte, 8)
+			if test.mantissa == 0 {
+				binary.BigEndian.PutUint64(want, ZeroCurrencyAmountHex)
+			} else {
+				want = encodeIOUValueWire(test.mantissa, test.exponent, true)
+			}
+			require.Equal(t, want, got)
+		})
+	}
+
+	_, err := SerializeIssuedCurrencyValue("1e96")
+	var outOfRange *OutOfRangeError
+	require.ErrorAs(t, err, &outOfRange)
+	require.Equal(t, "Exponent", outOfRange.Type)
 }
 
 func TestSerializeIssuedCurrencyCode(t *testing.T) {
@@ -451,7 +509,7 @@ func TestSerializeIssuedCurrencyAmount(t *testing.T) {
 			inputCurrency: "USD",
 			inputIssuer:   "rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B",
 			expected:      nil,
-			expectedErr:   bigdecimal.ErrInvalidCharacter,
+			expectedErr:   errInvalidCurrencyValue,
 		},
 		{
 			name:          "fail - invalid currency code",
@@ -1267,6 +1325,24 @@ func TestValueToString(t *testing.T) {
 				require.Equal(t, tc.exp, got)
 			}
 		})
+	}
+}
+
+func BenchmarkSerializeIssuedCurrencyValue(b *testing.B) {
+	for b.Loop() {
+		if _, err := SerializeIssuedCurrencyValue("195796912.5171664"); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkDeserializeIssuedCurrencyValue(b *testing.B) {
+	wire := encodeIOUValueWire(1_957_969_125_171_664, -7, true)
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := deserializeValue(wire); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

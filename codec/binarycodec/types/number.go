@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/internal/decimal"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
@@ -34,12 +35,7 @@ var (
 // used by Vault, LoanBroker, and Loan, whose amendments install the large range.
 const numberRangeLog = 18
 
-// numberRegex matches decimal/float/scientific number strings.
-// Pattern: optional sign, integer part, optional decimal, optional exponent
-var (
-	numberRegex      = regexp.MustCompile(`^([-+]?)(0|[1-9][0-9]*)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)
-	jsonIntegerRegex = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
-)
+var jsonIntegerRegex = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
 
 // FromJSON converts a JSON string or integer into a serialized 12-byte slice.
 func (n *Number) FromJSON(value any) ([]byte, error) {
@@ -152,42 +148,12 @@ func (n *Number) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
 
 // parseAndNormalize extracts mantissa, exponent from a string and normalizes them.
 func parseAndNormalize(s string) (*big.Int, int32, error) {
-	match := numberRegex.FindStringSubmatch(s)
-	if match == nil {
-		return nil, 0, ErrInvalidNumber
-	}
-
-	sign := match[1]
-	intPart := match[2]
-	fracPart := match[3]
-	expPart := match[4]
-
-	mantissaStr := intPart
-	exponent := int64(0)
-
-	if fracPart != "" {
-		mantissaStr += fracPart
-		exponent -= int64(len(fracPart))
-	}
-
-	if expPart != "" {
-		expVal, err := strconv.ParseInt(expPart, 10, 32)
-		if err != nil || expVal == math.MinInt32 {
-			return nil, 0, ErrInvalidNumber
-		}
-		exponent += expVal
-	}
-	if exponent < math.MinInt32 || exponent > math.MaxInt32 {
-		return nil, 0, ErrInvalidNumber
-	}
-
-	magnitude, err := strconv.ParseUint(mantissaStr, 10, 64)
+	parts, err := decimal.Parse(s)
 	if err != nil {
 		return nil, 0, ErrInvalidNumber
 	}
-	mantissa := new(big.Int).SetUint64(magnitude)
-
-	if sign == "-" {
+	mantissa := new(big.Int).SetUint64(parts.Mantissa)
+	if parts.Negative {
 		mantissa.Neg(mantissa)
 	}
 
@@ -197,7 +163,7 @@ func parseAndNormalize(s string) (*big.Int, int32, error) {
 	}
 
 	// Normalize
-	mantissa, normalizedExponent, err := normalize(mantissa, int32(exponent))
+	mantissa, normalizedExponent, err := normalize(mantissa, parts.Exponent)
 	if err != nil {
 		return nil, 0, err
 	}

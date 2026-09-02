@@ -14,8 +14,8 @@ import (
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/internal/decimal"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
-	bigdecimal "github.com/Peersyst/xrpl-go/pkg/big-decimal"
 )
 
 const (
@@ -310,18 +310,10 @@ func deserializeValue(data []byte) (string, error) {
 		return "", errInvalidCurrencyValue
 	}
 
-	mantissaStr := strconv.FormatUint(sigFigsInt, 10)
-	d, err := bigdecimal.NewBigDecimal(sign + mantissaStr + "e" + strconv.Itoa(exponent))
-	if err != nil {
-		return "", err
-	}
-	if err := verifyIOUValue(d.GetScaledValue()); err != nil {
-		return "", err
-	}
 	if IsScientificOffset(exponent) {
-		return sign + mantissaStr + "e" + strconv.Itoa(exponent), nil
+		return sign + strconv.FormatUint(sigFigsInt, 10) + "e" + strconv.Itoa(exponent), nil
 	}
-	return d.GetScaledValue(), nil
+	return decimal.Format(sigFigsInt, exponent, sign == "-"), nil
 }
 
 func deserializeCurrencyCode(data []byte) (string, error) {
@@ -432,36 +424,54 @@ func verifyXrpValue(value string) error {
 	return nil
 }
 
-// verifyIOUValue validates the format of an issued currency amount value.
-// This matches the JS implementation: const e = (decimal.e || 0) - 15
-// where decimal.e is BigNumber's exponent for normalized scientific notation.
-func verifyIOUValue(value string) error {
-	bigDecimal, err := bigdecimal.NewBigDecimal(value)
+type iouValue struct {
+	mantissa uint64
+	exponent int32
+	negative bool
+}
+
+func parseIOUValue(value string) (iouValue, error) {
+	parts, err := decimal.Parse(value)
 	if err != nil {
-		return err
+		return iouValue{}, errInvalidCurrencyValue
+	}
+	if parts.Mantissa == 0 {
+		return iouValue{}, nil
 	}
 
-	if bigDecimal.UnscaledValue == "" {
-		return nil
+	mantissa := parts.Mantissa
+	exponent := int64(parts.Exponent)
+	for mantissa < MinIOUMantissa && exponent > MinIOUExponent {
+		mantissa *= 10
+		exponent--
 	}
 
-	if bigDecimal.Precision > MaxIOUPrecision {
-		return &OutOfRangeError{Type: "Precision"}
+	var discarded, scale uint64 = 0, 1
+	for mantissa > MaxIOUMantissa {
+		discarded += mantissa % 10 * scale
+		scale *= 10
+		mantissa /= 10
+		exponent++
+	}
+	if scale > 1 {
+		half := scale / 2
+		if discarded > half || discarded == half && mantissa&1 != 0 {
+			mantissa++
+			if mantissa > MaxIOUMantissa {
+				mantissa /= 10
+				exponent++
+			}
+		}
 	}
 
-	// JS uses: const e = (decimal.e || 0) - 15
-	// BigNumber.e = Scale + Precision - 1 (for normalized representation)
-	// So: adjusted_exp = Scale + Precision - 1 - 15 = Scale + Precision - 16
-	adjustedExp := bigDecimal.Scale + bigDecimal.Precision - 16
-
-	if adjustedExp < MinIOUExponent {
-		return &OutOfRangeError{Type: "Exponent"}
+	if exponent < MinIOUExponent || mantissa < MinIOUMantissa {
+		return iouValue{}, nil
 	}
-	if adjustedExp > MaxIOUExponent {
-		return &OutOfRangeError{Type: "Exponent"}
+	if exponent > MaxIOUExponent {
+		return iouValue{}, &OutOfRangeError{Type: "Exponent"}
 	}
 
-	return nil
+	return iouValue{mantissa: mantissa, exponent: int32(exponent), negative: parts.Negative}, nil
 }
 
 // verifyMPTValue validates the format of an MPT amount value.
@@ -539,70 +549,22 @@ func serializeXrpAmount(value string) ([]byte, error) {
 
 // SerializeIssuedCurrencyValue serializes the value field of an issued currency amount to its bytes representation.
 func SerializeIssuedCurrencyValue(value string) ([]byte, error) {
-	// bigdecimal rejects zero outright, so the canonical zero encoding
-	// (the not-native bit alone) is emitted before any parsing.
-	if value == "0" {
+	parsed, err := parseIOUValue(value)
+	if err != nil {
+		return nil, err
+	}
+	if parsed.mantissa == 0 {
 		zeroAmount := make([]byte, 8)
 		binary.BigEndian.PutUint64(zeroAmount, uint64(ZeroCurrencyAmountHex))
 		return zeroAmount, nil
 	}
 
-	if err := verifyIOUValue(value); err != nil {
-		return nil, err
+	serial := uint64(ZeroCurrencyAmountHex)
+	if !parsed.negative {
+		serial |= PosSignBitMask
 	}
-
-	bigDecimal, err := bigdecimal.NewBigDecimal(value)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if bigDecimal.UnscaledValue == "" {
-		zeroAmount := make([]byte, 8)
-		binary.BigEndian.PutUint64(zeroAmount, uint64(ZeroCurrencyAmountHex))
-		return zeroAmount, nil // if the value is zero, then return the zero currency amount hex
-	}
-
-	mantissa, err := strconv.ParseUint(bigDecimal.UnscaledValue, 10, 64) // convert the unscaled value to an unsigned integer
-
-	if err != nil {
-		return nil, err
-	}
-
-	exp := bigDecimal.Scale // get the scale
-
-	for mantissa < MinIOUMantissa && exp > MinIOUExponent {
-		mantissa *= 10
-		exp--
-	}
-
-	for mantissa > MaxIOUMantissa {
-		if exp >= MaxIOUExponent {
-			return nil, &OutOfRangeError{Type: "Exponent"} // if the scale is less than -96 or greater than 80, return an error
-		}
-		mantissa /= 10
-		exp++
-
-		if exp < MinIOUExponent || mantissa < MinIOUMantissa {
-			// round down to zero
-			zeroAmount := make([]byte, 8)
-			binary.BigEndian.PutUint64(zeroAmount, uint64(ZeroCurrencyAmountHex))
-			return zeroAmount, nil
-		}
-
-		if exp > MaxIOUExponent || mantissa > MaxIOUMantissa {
-			return nil, &OutOfRangeError{Type: "Exponent"} // if the scale is less than -96 or greater than 80, return an error
-		}
-	}
-
-	// convert components to bytes
-
-	serial := uint64(ZeroCurrencyAmountHex) // set first bit to 1 because it is not XRP
-	if bigDecimal.Sign == 0 {
-		serial |= PosSignBitMask // if the sign is positive, set the sign (second) bit to 1
-	}
-	serial |= (uint64(exp+97) << 54) // exp >= MinIOUExponent, so exp+97 >= 1
-	serial |= mantissa               // last 54 bits are mantissa
+	serial |= uint64(parsed.exponent+97) << 54
+	serial |= parsed.mantissa
 
 	serialReturn := make([]byte, 8)
 	binary.BigEndian.PutUint64(serialReturn, serial)
