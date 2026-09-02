@@ -1221,6 +1221,7 @@ func (r *Router) maintenanceTick() {
 	// replay-delta path, both of which refuse to arm while the hash is in flight.
 	now := time.Now()
 
+	r.fetchTracker.Sweep()
 	r.retryInboundLedgerAcquisitions(now)
 	r.rebootstrapFrozenPivotIfStalled(now)
 

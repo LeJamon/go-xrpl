@@ -17,6 +17,10 @@ const reacquireInterval = 5 * time.Minute
 // window (InboundLedgers::sweep) during which getInfo still reports complete:true.
 const completedRetention = time.Minute
 
+// trackerSweepInterval matches rippled's shortest application sweep cadence
+// while avoiding a full history scan on every router maintenance tick.
+const trackerSweepInterval = 10 * time.Second
+
 // Tracker aggregates the in-flight classic ledger acquisitions and a short
 // history of recent failures, producing the JSON snapshot served by the
 // fetch_info RPC. It is the go-xrpl analogue of rippled's InboundLedgers:
@@ -33,6 +37,8 @@ type Tracker struct {
 	active    map[[32]byte]*Ledger
 	completed map[[32]byte]completedRecord
 	failures  map[[32]byte]failureRecord
+	clock     Clock
+	nextSweep time.Time
 	stopped   bool
 }
 
@@ -48,10 +54,22 @@ type completedRecord struct {
 
 // NewTracker returns an empty Tracker.
 func NewTracker() *Tracker {
+	return NewTrackerWithClock(SystemClock)
+}
+
+// NewTrackerWithClock returns an empty Tracker driven by clock. A nil clock
+// uses SystemClock.
+func NewTrackerWithClock(clock Clock) *Tracker {
+	if clock == nil {
+		clock = SystemClock
+	}
+	now := clock.Now()
 	return &Tracker{
 		active:    make(map[[32]byte]*Ledger),
 		completed: make(map[[32]byte]completedRecord),
 		failures:  make(map[[32]byte]failureRecord),
+		clock:     clock,
+		nextSweep: now.Add(trackerSweepInterval),
 	}
 }
 
@@ -148,7 +166,9 @@ func (t *Tracker) RemoveExpectedWithSnapshot(l *Ledger, snap Snapshot, complete 
 	if t.active[hash] != l {
 		return false
 	}
-	t.removeLocked(hash, snap, complete, time.Now())
+	now := t.clock.Now()
+	t.sweepIfDueLocked(now)
+	t.removeLocked(hash, snap, complete, now)
 	return true
 }
 
@@ -258,6 +278,35 @@ func (t *Tracker) clearLocked() []*Ledger {
 	return active
 }
 
+// Sweep removes expired terminal acquisition history when its maintenance
+// interval has elapsed.
+func (t *Tracker) Sweep() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	now := t.clock.Now()
+	t.sweepIfDueLocked(now)
+	t.mu.Unlock()
+}
+
+func (t *Tracker) sweepIfDueLocked(now time.Time) {
+	if t.stopped || now.Before(t.nextSweep) {
+		return
+	}
+	t.nextSweep = now.Add(trackerSweepInterval)
+	for hash, rec := range t.completed {
+		if rec.at.Add(completedRetention).Before(now) {
+			delete(t.completed, hash)
+		}
+	}
+	for hash, rec := range t.failures {
+		if !rec.at.Add(reacquireInterval).After(now) {
+			delete(t.failures, hash)
+		}
+	}
+}
+
 // Info returns the fetch_info snapshot keyed by ledger sequence (decimal, when
 // seq > 1) or hash, mirroring rippled InboundLedgers::getInfo. In-flight entries
 // report have_header/have_state/have_transactions/peers and the latest cached
@@ -265,13 +314,12 @@ func (t *Tracker) clearLocked() []*Ledger {
 // report complete:true until their retention window elapses; recent failures
 // report failed:true with the same per-tree fields.
 // Terminal lifecycle belongs to the acquisition owner; Info only reads each
-// acquisition's cached worker frontier and expires retained terminal records.
+// acquisition's cached worker frontier and retained terminal records.
 func (t *Tracker) Info() map[string]any {
 	if t == nil {
 		return map[string]any{}
 	}
 
-	now := time.Now()
 	t.mu.Lock()
 	active := make(map[[32]byte]*Ledger, len(t.active))
 	for hash, l := range t.active {
@@ -279,18 +327,10 @@ func (t *Tracker) Info() map[string]any {
 	}
 	ret := make(map[string]any)
 	for hash, rec := range t.failures {
-		if now.Sub(rec.at) > reacquireInterval {
-			delete(t.failures, hash)
-			continue
-		}
 		ret[acquisitionKey(rec.snap.Seq, hash)] = AcquisitionJSON(rec.snap)
 	}
 
 	for hash, rec := range t.completed {
-		if now.Sub(rec.at) > completedRetention {
-			delete(t.completed, hash)
-			continue
-		}
 		ret[acquisitionKey(rec.snap.Seq, hash)] = AcquisitionJSON(rec.snap)
 	}
 	t.mu.Unlock()
