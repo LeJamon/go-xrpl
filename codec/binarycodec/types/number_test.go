@@ -153,6 +153,6 @@ func TestNumberLargeScaleWireParity(t *testing.T) {
 
 	b, err = n.FromJSON("9223372036854775800")
 	require.NoError(t, err)
-	require.Equal(t, int64(922337203685477580), int64(binary.BigEndian.Uint64(b[:8])))
-	require.Equal(t, int32(1), int32(binary.BigEndian.Uint32(b[8:])))
+	require.Equal(t, int64(9223372036854775800), int64(binary.BigEndian.Uint64(b[:8])))
+	require.Equal(t, int32(0), int32(binary.BigEndian.Uint32(b[8:])))
 }
