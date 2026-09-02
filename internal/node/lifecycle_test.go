@@ -414,6 +414,7 @@ func TestNodeRuntimeShutdownLeavesStoresOpenWhileTransportHandlerIsRunning(t *te
 		}),
 		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
 		nil,
+		nil,
 		systemListen,
 	)
 	if err != nil {

@@ -31,6 +31,7 @@ func TestWebSocketInvalidSendQueueReleasesListenerSlot(t *testing.T) {
 				}),
 				ws,
 				nil,
+				nil,
 				systemListen,
 			)
 			require.NoError(t, err)

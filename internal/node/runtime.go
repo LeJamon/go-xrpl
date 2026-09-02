@@ -1139,6 +1139,7 @@ func (r *nodeRuntime) bindTransports() error {
 		r.httpServer,
 		r.wsServer,
 		r.ledger,
+		r.resourceManager,
 		systemListen,
 	)
 	r.transports = transports

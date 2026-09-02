@@ -2,12 +2,14 @@ package node
 
 import (
 	"context"
+	"net"
 	"testing"
 	"time"
 
 	googlegrpc "google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	"github.com/LeJamon/go-xrpl/config"
@@ -18,6 +20,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -72,11 +75,12 @@ func newStubLedger(t *testing.T) *ledger.Ledger {
 // XRPLedgerAPIService.
 func TestGRPCServer_RoundTrip(t *testing.T) {
 	lookup := &stubLookup{validated: newStubLedger(t)}
-	p := config.PortConfig{Port: 0, IP: "127.0.0.1", Protocol: "grpc"}
+	manager := resource.NewManager(nil, nil)
+	p := config.PortConfig{Port: 0, IP: "127.0.0.1", Protocol: "grpc", Limit: 1}
 	errCh := make(chan error, 1)
 
 	bound, err := prepareGRPCServer(
-		context.Background(), "port_grpc", p, lookup, xrpllog.Discard(), systemListen,
+		context.Background(), "port_grpc", p, lookup, manager, xrpllog.Discard(), systemListen,
 	)
 	if err != nil {
 		t.Fatalf("prepareGRPCServer: %v", err)
@@ -123,6 +127,17 @@ func TestGRPCServer_RoundTrip(t *testing.T) {
 	if got := len(dataResp.LedgerObjects.Objects); got != 1 {
 		t.Errorf("expected 1 ledger object, got %d", got)
 	}
+	if bound.requestLimit != 1 || bound.resourceManager != manager {
+		t.Fatal("gRPC admission configuration was not wired into the bound server")
+	}
+	consumer := manager.NewInboundEndpoint("127.0.0.1")
+	if consumer == nil {
+		t.Fatal("round trip did not create a resource consumer")
+	}
+	if balance := consumer.Balance(); balance == 0 {
+		t.Fatal("round trip did not charge the resource consumer")
+	}
+	consumer.Release()
 
 	select {
 	case e := <-errCh:
@@ -136,18 +151,183 @@ func TestGRPCServer_RoundTrip(t *testing.T) {
 // error, not a match-all wildcard.
 func TestGRPCServer_RejectsUnspecifiedSecureGateway(t *testing.T) {
 	lookup := &stubLookup{validated: newStubLedger(t)}
-	p := config.PortConfig{
-		Port:          0,
-		IP:            "127.0.0.1",
-		Protocol:      "grpc",
-		SecureGateway: []string{"0.0.0.0"},
+	for _, gateway := range []string{"0.0.0.0", "::", "0.0.0.0/0", "::/0"} {
+		t.Run(gateway, func(t *testing.T) {
+			p := config.PortConfig{
+				Port:          0,
+				IP:            "127.0.0.1",
+				Protocol:      "grpc",
+				SecureGateway: []string{gateway},
+			}
+			_, err := prepareGRPCServer(
+				context.Background(), "port_grpc", p, lookup, nil, xrpllog.Discard(), systemListen,
+			)
+			if err == nil {
+				t.Fatalf("expected prepareGRPCServer to reject unspecified secure_gateway %q", gateway)
+			}
+		})
 	}
-	_, err := prepareGRPCServer(
-		context.Background(), "port_grpc", p, lookup, xrpllog.Discard(), systemListen,
-	)
-	if err == nil {
-		t.Fatal("expected prepareGRPCServer to reject unspecified secure_gateway IP")
+}
+
+func TestGRPCServer_RequestLimit(t *testing.T) {
+	server := &boundGRPCServer{requestLimit: 2}
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	done := make(chan error, 2)
+	handler := func(context.Context, any) (any, error) {
+		entered <- struct{}{}
+		<-release
+		return nil, nil
 	}
+	for range 2 {
+		go func() {
+			_, err := server.trackUnary(context.Background(), nil, nil, handler)
+			done <- err
+		}()
+	}
+	for range 2 {
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("request did not enter the handler")
+		}
+	}
+
+	_, err := server.trackUnary(context.Background(), nil, nil, func(context.Context, any) (any, error) {
+		return nil, nil
+	})
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("over-limit request code = %v, want %v", status.Code(err), codes.ResourceExhausted)
+	}
+
+	close(release)
+	for range 2 {
+		if err := <-done; err != nil {
+			t.Fatalf("admitted request failed: %v", err)
+		}
+	}
+	if _, err := server.trackUnary(context.Background(), nil, nil, func(context.Context, any) (any, error) {
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("request after completion failed: %v", err)
+	}
+}
+
+func TestGRPCServer_CancellationReleasesAdmission(t *testing.T) {
+	manager := resource.NewManager(nil, nil)
+	server := &boundGRPCServer{requestLimit: 1, resourceManager: manager}
+	ctx, cancel := context.WithCancel(grpcPeerContext("192.0.2.1"))
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		_, err := server.trackUnary(ctx, &rpcv1.GetLedgerRequest{}, nil, func(ctx context.Context, _ any) (any, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		})
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("request did not enter the handler")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Fatalf("canceled request error = %v, want %v", err, context.Canceled)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled request did not exit")
+	}
+
+	stats := manager.Stats()
+	if stats.Inflight != 0 || stats.Active != 0 {
+		t.Fatalf("resource state after cancellation = inflight %d, active %d; want zero", stats.Inflight, stats.Active)
+	}
+	if _, err := server.trackUnary(grpcPeerContext("192.0.2.1"), &rpcv1.GetLedgerRequest{}, nil, func(context.Context, any) (any, error) {
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("request after cancellation failed: %v", err)
+	}
+}
+
+func TestGRPCServer_ResourceAdmissionAndSecureGateway(t *testing.T) {
+	_, gatewayNet, err := net.ParseCIDR("192.0.2.10/32")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("ordinary request is charged", func(t *testing.T) {
+		manager := resource.NewManager(nil, nil)
+		server := &boundGRPCServer{resourceManager: manager, secureGatewayNets: []net.IPNet{*gatewayNet}}
+		if _, err := server.trackUnary(grpcPeerContext("192.0.2.11"), &rpcv1.GetLedgerRequest{}, nil, func(context.Context, any) (any, error) {
+			return &rpcv1.GetLedgerResponse{}, nil
+		}); err != nil {
+			t.Fatalf("ordinary request failed: %v", err)
+		}
+		consumer := manager.NewInboundEndpoint("192.0.2.11")
+		if consumer == nil {
+			t.Fatal("ordinary request did not create a resource consumer")
+		}
+		defer consumer.Release()
+		want := int64(resource.FeeMediumBurdenRPC().Cost() / resource.DecayWindowSeconds)
+		if balance := consumer.Balance(); balance != want {
+			t.Fatalf("ordinary request balance = %d, want %d", balance, want)
+		}
+	})
+
+	t.Run("only a matching peer with a user is unlimited", func(t *testing.T) {
+		manager := resource.NewManager(nil, nil)
+		server := &boundGRPCServer{resourceManager: manager, secureGatewayNets: []net.IPNet{*gatewayNet}}
+		seedGRPCResourceDrop(t, manager, "192.0.2.10")
+		seedGRPCResourceDrop(t, manager, "192.0.2.11")
+
+		for _, test := range []struct {
+			name string
+			ip   string
+			user string
+		}{
+			{name: "matching peer without user", ip: "192.0.2.10"},
+			{name: "non-matching peer with user", ip: "192.0.2.11", user: "clio"},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				_, err := server.trackUnary(grpcPeerContext(test.ip), &rpcv1.GetLedgerRequest{User: test.user}, nil, func(context.Context, any) (any, error) {
+					return &rpcv1.GetLedgerResponse{}, nil
+				})
+				if status.Code(err) != codes.ResourceExhausted {
+					t.Fatalf("request code = %v, want %v", status.Code(err), codes.ResourceExhausted)
+				}
+			})
+		}
+
+		response, err := server.trackUnary(grpcPeerContext("192.0.2.10"), &rpcv1.GetLedgerRequest{User: "clio"}, nil, func(context.Context, any) (any, error) {
+			return &rpcv1.GetLedgerResponse{}, nil
+		})
+		if err != nil {
+			t.Fatalf("identified gateway request failed: %v", err)
+		}
+		if !response.(*rpcv1.GetLedgerResponse).GetIsUnlimited() {
+			t.Fatal("identified gateway response did not set is_unlimited")
+		}
+	})
+}
+
+func grpcPeerContext(ip string) context.Context {
+	return peer.NewContext(context.Background(), &peer.Peer{
+		Addr: &net.TCPAddr{IP: net.ParseIP(ip), Port: 50051},
+	})
+}
+
+func seedGRPCResourceDrop(t *testing.T, manager *resource.Manager, ip string) {
+	t.Helper()
+	consumer := manager.NewInboundEndpoint(ip)
+	if consumer == nil {
+		t.Fatalf("create resource consumer for %s", ip)
+	}
+	consumer.Charge(resource.NewCharge(resource.DropThreshold*resource.DecayWindowSeconds, "test"), "")
+	consumer.Release()
 }
 
 func TestGRPCServer_StopBeforeServeIsNotFatal(t *testing.T) {
@@ -158,6 +338,7 @@ func TestGRPCServer_StopBeforeServeIsNotFatal(t *testing.T) {
 		"port_grpc",
 		p,
 		lookup,
+		nil,
 		xrpllog.Discard(),
 		systemListen,
 	)
