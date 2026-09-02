@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 )
 
 func TestServeSchedulerPerPeerFairness(t *testing.T) {
@@ -292,5 +294,111 @@ func TestServeSchedulerActiveCancellationUsesRunCleanup(t *testing.T) {
 	}
 	if got := discarded.Load(); got != 0 {
 		t.Fatalf("active task discard count = %d, want 0", got)
+	}
+}
+
+func TestServeSchedulerRecoversTaskPanic(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := newServeScheduler(ctx, 1, 3, 2, 1)
+	peer := NewPeer(1, Endpoint{Host: "192.0.2.1", Port: 51235}, false, nil, nil)
+	peer.setState(PeerStateConnected)
+	overlay := &Overlay{
+		peers:          map[PeerID]*Peer{peer.ID(): peer},
+		serveScheduler: s,
+		ctx:            ctx,
+		lifecycleState: overlayLifecycleRunning,
+	}
+	panicked := make(chan PeerID, 1)
+	s.onTaskPanic = func(peerID PeerID) {
+		panicked <- peerID
+		overlay.closePeerAfterServePanic(peerID)
+	}
+
+	discarded := make(chan struct{})
+	released := make(chan struct{})
+	queuedRan := make(chan struct{}, 1)
+	progressed := make(chan struct{})
+	if !s.Submit(ctx, peer.ID(), func(context.Context) {
+		defer close(released)
+		panic("injected serve panic")
+	}) {
+		t.Fatal("panicking task submission rejected")
+	}
+	if !s.SubmitOwned(ctx, peer.ID(), func(context.Context) {
+		queuedRan <- struct{}{}
+	}, func() {
+		close(discarded)
+	}) {
+		t.Fatal("queued peer task submission rejected")
+	}
+	if !s.Submit(ctx, 2, func(context.Context) {
+		close(progressed)
+	}) {
+		t.Fatal("subsequent peer task submission rejected")
+	}
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- s.Run(ctx) }()
+
+	select {
+	case peerID := <-panicked:
+		if peerID != peer.ID() {
+			t.Fatalf("panic attributed to peer %d, want %d", peerID, peer.ID())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("serve task panic was not recovered")
+	}
+	select {
+	case <-discarded:
+	case <-time.After(time.Second):
+		t.Fatal("panicking peer's queued task was not discarded")
+	}
+	select {
+	case <-released:
+	case <-time.After(time.Second):
+		t.Fatal("panicking task did not release owned resources")
+	}
+	select {
+	case <-progressed:
+	case <-time.After(time.Second):
+		t.Fatal("scheduler worker did not make progress after panic")
+	}
+	select {
+	case <-queuedRan:
+		t.Fatal("panicking peer's queued task ran")
+	default:
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		s.mu.Lock()
+		active := len(s.active)
+		running := len(s.running)
+		s.mu.Unlock()
+		if active == 0 && running == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("scheduler accounting leaked after panic: active=%d running=%d", active, running)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !peer.closed.Load() || peer.State() != PeerStateDisconnected {
+		t.Fatal("panicking peer was not closed")
+	}
+	if overlay.submitServeForPeerOwned(
+		peer.ID(), resource.NewCharge(0, "test"), func(context.Context) {}, nil,
+	) {
+		t.Fatal("overlay accepted serve work from the closed peer")
+	}
+
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != context.Canceled {
+			t.Fatalf("scheduler run error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("scheduler did not stop after cancellation")
 	}
 }

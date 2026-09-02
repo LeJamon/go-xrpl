@@ -2,6 +2,8 @@ package peermanagement
 
 import (
 	"context"
+	"log/slog"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 )
@@ -34,6 +36,8 @@ type serveScheduler struct {
 	idle   atomic.Int32
 
 	dropped atomic.Uint64
+
+	onTaskPanic func(PeerID)
 }
 
 type serveTask struct {
@@ -238,12 +242,26 @@ func (s *serveScheduler) worker(ctx context.Context) {
 		if !ok {
 			return
 		}
-		if task.ctx.Err() == nil {
-			task.run(task.ctx)
-		} else {
-			task.discardTask()
+		s.runTask(task)
+	}
+}
+
+func (s *serveScheduler) runTask(task serveTask) {
+	defer s.finish(task)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("serve worker panicked", "t", "Overlay", "peer", task.peerID,
+				"panic", recovered, "stack", string(debug.Stack()))
+			if s.onTaskPanic != nil {
+				s.onTaskPanic(task.peerID)
+			}
+			s.CancelPeer(task.peerID)
 		}
-		s.finish(task)
+	}()
+	if task.ctx.Err() == nil {
+		task.run(task.ctx)
+	} else {
+		task.discardTask()
 	}
 }
 
