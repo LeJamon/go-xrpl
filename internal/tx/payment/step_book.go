@@ -974,26 +974,18 @@ func (s *BookStep) Fwd(
 					false,
 					sb.NumberContext(),
 				)
-				_ = revOfrOut
-
 				if revStpIn.Compare(remainingIn) == 0 {
 					totalIn = in
 					totalOut = prevCache.out
-					if e.isAMM {
-						if err := s.consumeAMMOffer(sb, e.ammOffer, revStpIn, revOfrIn, revStpOut, revOwnerGives); err != nil {
-							throwConsumeFailure(err)
-						}
-					} else {
-						if err := s.consumeOffer(sb, e.clobOffer, revStpIn, revOfrIn, revStpOut, revOwnerGives); err != nil {
-							throwConsumeFailure(err)
-						}
-					}
-					remainingIn = s.zeroIn()
-					return true
+					ofrAdjIn = revOfrIn
+					stpAdjIn, stpAdjOut = revStpIn, revStpOut
+					ownerGivesAdj = revOwnerGives
+				} else {
+					// Reconciliation declined: rippled re-inserts the erased output
+					// (BookStep.cpp:1241).
+					savedOuts.insert(stpAdjOut)
 				}
-				// Reconciliation declined: rippled re-inserts the erased output
-				// (BookStep.cpp:1241).
-				savedOuts.insert(stpAdjOut)
+				_ = revOfrOut
 			}
 
 			remainingIn = s.zeroIn()
