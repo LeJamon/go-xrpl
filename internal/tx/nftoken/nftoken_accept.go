@@ -80,6 +80,49 @@ func creditNFTokenIssuerXRP(ctx *tx.ApplyContext, issuerID [20]byte, amount uint
 	return ctx.UpdateAccountRoot(issuerID, issuerAccount)
 }
 
+func payNFTokenXRP(ctx *tx.ApplyContext, fromID, toID [20]byte, amount uint64) ter.Result {
+	if amount == 0 || fromID == toID {
+		return ter.TesSUCCESS
+	}
+
+	from := ctx.Account
+	if fromID != ctx.AccountID {
+		var err error
+		from, err = tx.ReadAccountRoot(ctx.View, fromID)
+		if err != nil || from == nil {
+			return ter.TefINTERNAL
+		}
+	}
+
+	to := ctx.Account
+	if toID != ctx.AccountID {
+		var err error
+		to, err = tx.ReadAccountRoot(ctx.View, toID)
+		if err != nil || to == nil {
+			return ter.TefINTERNAL
+		}
+	}
+
+	if from.Balance < amount {
+		if ctx.Config.IsViewOpen() {
+			return ter.TelFAILED_PROCESSING
+		}
+		return ter.TecFAILED_PROCESSING
+	}
+
+	from.Balance -= amount
+	to.Balance += amount
+	if fromID != ctx.AccountID {
+		if result := ctx.UpdateAccountRoot(fromID, from); result != ter.TesSUCCESS {
+			return result
+		}
+	}
+	if toID != ctx.AccountID {
+		return ctx.UpdateAccountRoot(toID, to)
+	}
+	return ter.TesSUCCESS
+}
+
 // ---------------------------------------------------------------------------
 // Brokered mode and direct offer acceptance helpers
 // ---------------------------------------------------------------------------
@@ -337,32 +380,15 @@ func (n *NFTokenAcceptOffer) acceptNFTokenSellOfferDirect(ctx *tx.ApplyContext, 
 			}
 		}
 
-		totalCost := amount
-		ctx.Account.Balance -= totalCost
-
 		if issuerCut > 0 {
-			if r := creditNFTokenIssuerXRP(ctx, nftIssuerID, issuerCut); r != ter.TesSUCCESS {
+			if r := payNFTokenXRP(ctx, accountID, nftIssuerID, issuerCut); r != ter.TesSUCCESS {
 				return r
 			}
 			amount -= issuerCut
 		}
 
-		sellerKey := keylet.Account(sellerID)
-		sellerData, err := ctx.View.Read(sellerKey)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		sellerAccount, err := state.ParseAccountRoot(sellerData)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		sellerAccount.Balance += amount
-		sellerUpdatedData, err := state.SerializeAccountRoot(sellerAccount)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if err := ctx.View.Update(sellerKey, sellerUpdatedData); err != nil {
-			return ter.TefINTERNAL
+		if r := payNFTokenXRP(ctx, accountID, sellerID, amount); r != ter.TesSUCCESS {
+			return r
 		}
 	}
 
@@ -452,25 +478,7 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 		// Sync ctx.Account.OwnerCount after IOU payments that may auto-create trust lines
 		syncCtxOwnerCount(ctx)
 	} else {
-		// XRP payment path — deduct from buyer, pay issuer + seller
-		// Reference: rippled NFTokenAcceptOffer.cpp — uses accountSend()
 		amount := buyOffer.Amount
-
-		// Re-read buyer account (OwnerCount reduced by offer deletion)
-		buyerKey := keylet.Account(buyerID)
-		buyerData, err := ctx.View.Read(buyerKey)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		buyerAccount, err := state.ParseAccountRoot(buyerData)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		buyerAccount.Balance -= amount
-		buyerUpdated, _ := state.SerializeAccountRoot(buyerAccount)
-		if err := ctx.View.Update(buyerKey, buyerUpdated); err != nil {
-			return ter.TefINTERNAL
-		}
 
 		var issuerCut uint64
 		if transferFee != 0 && amount > 0 {
@@ -481,14 +489,15 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 		}
 
 		if issuerCut > 0 {
-			if r := creditNFTokenIssuerXRP(ctx, nftIssuerID, issuerCut); r != ter.TesSUCCESS {
+			if r := payNFTokenXRP(ctx, buyerID, nftIssuerID, issuerCut); r != ter.TesSUCCESS {
 				return r
 			}
 			amount -= issuerCut
 		}
 
-		// Pay seller (the account accepting the buy offer)
-		ctx.Account.Balance += amount
+		if r := payNFTokenXRP(ctx, buyerID, accountID, amount); r != ter.TesSUCCESS {
+			return r
+		}
 	}
 
 	// Transfer the NFToken

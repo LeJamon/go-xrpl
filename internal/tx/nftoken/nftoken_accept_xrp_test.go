@@ -147,3 +147,68 @@ func TestCreditNFTokenIssuerXRP(t *testing.T) {
 		})
 	}
 }
+
+func TestPayNFTokenXRP(t *testing.T) {
+	ctxID := [20]byte{1}
+	externalID := [20]byte{2}
+	externalAddress, err := state.EncodeAccountID(externalID)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name        string
+		fromContext bool
+		open        bool
+		balance     uint64
+		amount      uint64
+		result      ter.Result
+	}{
+		{name: "context insufficient closed", fromContext: true, balance: 99, amount: 100, result: ter.TecFAILED_PROCESSING},
+		{name: "context insufficient open", fromContext: true, open: true, balance: 99, amount: 100, result: ter.TelFAILED_PROCESSING},
+		{name: "external insufficient closed", balance: 99, amount: 100, result: ter.TecFAILED_PROCESSING},
+		{name: "external insufficient open", open: true, balance: 99, amount: 100, result: ter.TelFAILED_PROCESSING},
+		{name: "context exact balance", fromContext: true, balance: 100, amount: 100, result: ter.TesSUCCESS},
+		{name: "external exact balance", balance: 100, amount: 100, result: ter.TesSUCCESS},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			view := newMockView()
+			externalBalance := uint64(25)
+			contextBalance := uint64(25)
+			fromID, toID := externalID, ctxID
+			if tc.fromContext {
+				fromID, toID = ctxID, externalID
+				contextBalance = tc.balance
+			} else {
+				externalBalance = tc.balance
+			}
+			externalData, err := state.SerializeAccountRoot(&state.AccountRoot{
+				Account: externalAddress,
+				Balance: externalBalance,
+			})
+			require.NoError(t, err)
+			view.store[keylet.Account(externalID).Key] = externalData
+			ctx := &tx.ApplyContext{
+				View:      view,
+				AccountID: ctxID,
+				Account:   &state.AccountRoot{Balance: contextBalance},
+				Config:    tx.EngineConfig{ViewOpen: tc.open},
+			}
+
+			require.Equal(t, tc.result, payNFTokenXRP(ctx, fromID, toID, tc.amount))
+
+			external, err := tx.ReadAccountRoot(view, externalID)
+			require.NoError(t, err)
+			if tc.result == ter.TesSUCCESS {
+				if tc.fromContext {
+					require.Zero(t, ctx.Account.Balance)
+					require.Equal(t, uint64(125), external.Balance)
+				} else {
+					require.Zero(t, external.Balance)
+					require.Equal(t, uint64(125), ctx.Account.Balance)
+				}
+			} else {
+				require.Equal(t, contextBalance, ctx.Account.Balance)
+				require.Equal(t, externalBalance, external.Balance)
+			}
+		})
+	}
+}

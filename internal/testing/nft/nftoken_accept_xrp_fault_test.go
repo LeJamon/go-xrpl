@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -179,6 +180,19 @@ func snapshotLedger(t *testing.T, view tx.LedgerView) map[[32]byte][]byte {
 	return snapshot
 }
 
+func setXRPBalance(t *testing.T, env *jtx.TestEnv, account *jtx.Account, balance uint64) {
+	t.Helper()
+	accountKey := keylet.Account(account.ID)
+	data, err := env.Ledger().Read(accountKey)
+	require.NoError(t, err)
+	accountRoot, err := state.ParseAccountRoot(data)
+	require.NoError(t, err)
+	accountRoot.Balance = balance
+	data, err = state.SerializeAccountRoot(accountRoot)
+	require.NoError(t, err)
+	require.NoError(t, env.Ledger().Update(accountKey, data))
+}
+
 func TestNFTokenAcceptOfferXRP_IssuerCreditFailuresRollBack(t *testing.T) {
 	for _, mode := range []string{"brokered", "direct sell", "direct buy"} {
 		for _, fault := range []string{"read", "malformed"} {
@@ -273,4 +287,82 @@ func TestNFTokenAcceptOfferXRP_HealthySettlement(t *testing.T) {
 			require.True(t, ownsNFToken(t, fixture.env.Ledger(), fixture.buyer.ID, fixture.tokenID))
 		})
 	}
+}
+
+func TestNFTokenAcceptOfferXRP_PostFeeDebitFailureRollsBack(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		open    bool
+		result  ter.Result
+		applied bool
+	}{
+		{name: "closed ledger", result: ter.TecFAILED_PROCESSING, applied: true},
+		{name: "open ledger", open: true, result: ter.TelFAILED_PROCESSING},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newAcceptXRPFixture(t, "direct sell", false)
+			fee := fixture.env.ReserveBase() + 1
+			balance := fixture.env.ReserveBase() + fixture.price
+			setXRPBalance(t, fixture.env, fixture.buyer, balance)
+			fixture.txn.GetCommon().Fee = strconv.FormatUint(fee, 10)
+			fixture.env.SetOpenLedger(tc.open)
+			fixture.env.SetViewOpen(tc.open)
+
+			offerBefore, err := fixture.env.Ledger().Read(fixture.offerKeys[0])
+			require.NoError(t, err)
+			sellerBalance := fixture.env.Balance(fixture.seller)
+			issuerBalance := fixture.env.Balance(fixture.issuer)
+			sequence := fixture.env.Seq(fixture.buyer)
+
+			result := fixture.env.Submit(fixture.txn)
+
+			require.Equal(t, tc.result, result.Result)
+			require.Equal(t, tc.applied, result.Applied)
+			if tc.applied {
+				require.Equal(t, fee, result.Fee)
+				require.Equal(t, balance-fee, fixture.env.Balance(fixture.buyer))
+				require.Equal(t, sequence+1, fixture.env.Seq(fixture.buyer))
+			} else {
+				require.Zero(t, result.Fee)
+				require.Equal(t, balance, fixture.env.Balance(fixture.buyer))
+				require.Equal(t, sequence, fixture.env.Seq(fixture.buyer))
+			}
+			require.Equal(t, sellerBalance, fixture.env.Balance(fixture.seller))
+			require.Equal(t, issuerBalance, fixture.env.Balance(fixture.issuer))
+			offerAfter, err := fixture.env.Ledger().Read(fixture.offerKeys[0])
+			require.NoError(t, err)
+			require.Equal(t, offerBefore, offerAfter)
+			require.True(t, ownsNFToken(t, fixture.env.Ledger(), fixture.seller.ID, fixture.tokenID))
+			require.False(t, ownsNFToken(t, fixture.env.Ledger(), fixture.buyer.ID, fixture.tokenID))
+		})
+	}
+}
+
+func TestNFTokenAcceptOfferXRP_DirectBuyOrdinaryInsufficiency(t *testing.T) {
+	fixture := newAcceptXRPFixture(t, "direct buy", false)
+	buyerReserve := fixture.env.ReserveBase() +
+		uint64(fixture.env.OwnerCount(fixture.buyer))*fixture.env.ReserveIncrement()
+	buyerBalance := buyerReserve + fixture.price - 1
+	setXRPBalance(t, fixture.env, fixture.buyer, buyerBalance)
+
+	offerBefore, err := fixture.env.Ledger().Read(fixture.offerKeys[0])
+	require.NoError(t, err)
+	sellerBalance := fixture.env.Balance(fixture.seller)
+	issuerBalance := fixture.env.Balance(fixture.issuer)
+	sequence := fixture.env.Seq(fixture.seller)
+
+	result := fixture.env.Submit(fixture.txn)
+
+	require.Equal(t, ter.TecINSUFFICIENT_FUNDS, result.Result)
+	require.True(t, result.Applied)
+	require.Equal(t, fixture.env.BaseFee(), result.Fee)
+	require.Equal(t, buyerBalance, fixture.env.Balance(fixture.buyer))
+	require.Equal(t, sellerBalance-fixture.env.BaseFee(), fixture.env.Balance(fixture.seller))
+	require.Equal(t, issuerBalance, fixture.env.Balance(fixture.issuer))
+	require.Equal(t, sequence+1, fixture.env.Seq(fixture.seller))
+	offerAfter, err := fixture.env.Ledger().Read(fixture.offerKeys[0])
+	require.NoError(t, err)
+	require.Equal(t, offerBefore, offerAfter)
+	require.True(t, ownsNFToken(t, fixture.env.Ledger(), fixture.seller.ID, fixture.tokenID))
+	require.False(t, ownsNFToken(t, fixture.env.Ledger(), fixture.buyer.ID, fixture.tokenID))
 }
