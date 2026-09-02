@@ -370,9 +370,9 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Reference: rippled AMMCreate.cpp sendAndTrustSet uses accountSend which
 	// handles issuer-as-sender (no self-trust-line debit needed).
 	if isXRP1 {
-		drops := uint64(sortedAmount1.Drops())
-		ctx.Account.Balance -= drops
-		ammAccount.Balance += drops
+		if result := transferCreateXRP(ctx, ammAccount, sortedAmount1); result != ter.TesSUCCESS {
+			return result
+		}
 	} else if sortedAsset1.IsMPT() {
 		if result := requireAssetAuth(ctx.View, sortedAsset1, ammAccountID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
 			return result
@@ -415,9 +415,9 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	if isXRP2 {
-		drops := uint64(sortedAmount2.Drops())
-		ctx.Account.Balance -= drops
-		ammAccount.Balance += drops
+		if result := transferCreateXRP(ctx, ammAccount, sortedAmount2); result != ter.TesSUCCESS {
+			return result
+		}
 	} else if sortedAsset2.IsMPT() {
 		if result := requireAssetAuth(ctx.View, sortedAsset2, ammAccountID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
 			return result
@@ -487,6 +487,19 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		"amount2", sortedAmount2,
 	)
 
+	return ter.TesSUCCESS
+}
+
+func transferCreateXRP(ctx *tx.ApplyContext, ammAccount *state.AccountRoot, amount tx.Amount) ter.Result {
+	drops := uint64(amount.Drops())
+	if ctx.Account.Balance < drops {
+		if ctx.Config.IsViewOpen() {
+			return ter.TelFAILED_PROCESSING
+		}
+		return ter.TecFAILED_PROCESSING
+	}
+	ctx.Account.Balance -= drops
+	ammAccount.Balance += drops
 	return ter.TesSUCCESS
 }
 
