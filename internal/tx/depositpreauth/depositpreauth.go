@@ -231,12 +231,22 @@ func (d *DepositPreauth) hasUnauthorize() bool {
 func (d *DepositPreauth) SetAuthorize(account string) {
 	d.Authorize = account
 	d.Unauthorize = ""
+	if d.PresentFields == nil {
+		d.PresentFields = make(map[string]bool)
+	}
+	d.PresentFields["Authorize"] = true
+	delete(d.PresentFields, "Unauthorize")
 }
 
 // SetUnauthorize sets the account to unauthorize
 func (d *DepositPreauth) SetUnauthorize(account string) {
 	d.Unauthorize = account
 	d.Authorize = ""
+	if d.PresentFields == nil {
+		d.PresentFields = make(map[string]bool)
+	}
+	d.PresentFields["Unauthorize"] = true
+	delete(d.PresentFields, "Authorize")
 }
 
 // sortedCredPair is a sorted (issuer, credentialType) pair.

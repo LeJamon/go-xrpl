@@ -175,3 +175,36 @@ func TestCredentialArrayAbsenceRoundTrips(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, ter.TemMALFORMED, resultErr.Code)
 }
+
+func TestAccountSettersReplaceParsedFieldPresence(t *testing.T) {
+	const (
+		authorize   = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+		unauthorize = "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn"
+	)
+
+	txn := NewDepositPreauth(authorize)
+	txn.Unauthorize = unauthorize
+	txn.SetPresentFields(map[string]bool{"Unauthorize": true})
+	txn.SetAuthorize(authorize)
+
+	require.True(t, txn.hasAuthorize())
+	require.False(t, txn.hasUnauthorize())
+	require.True(t, txn.HasField("Authorize"))
+	require.False(t, txn.HasField("Unauthorize"))
+
+	txn.SetUnauthorize(unauthorize)
+
+	require.False(t, txn.hasAuthorize())
+	require.True(t, txn.hasUnauthorize())
+	require.False(t, txn.HasField("Authorize"))
+	require.True(t, txn.HasField("Unauthorize"))
+
+	txn = NewDepositPreauth(authorize)
+	txn.SetAuthorize("")
+	require.True(t, txn.hasAuthorize())
+	require.False(t, txn.hasUnauthorize())
+
+	txn.SetUnauthorize("")
+	require.False(t, txn.hasAuthorize())
+	require.True(t, txn.hasUnauthorize())
+}
