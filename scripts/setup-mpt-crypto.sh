@@ -10,7 +10,11 @@ readonly remote_name="${GOXRPL_MPT_CRYPTO_REMOTE_NAME:-xrplf}"
 readonly remote_url="${GOXRPL_MPT_CRYPTO_REMOTE_URL:-https://conan.xrplf.org/repository/conan/}"
 readonly conan_storage_home="${GOXRPL_MPT_CRYPTO_CONAN_HOME:-$repo_root/.conan-home}"
 readonly output_dir="${GOXRPL_MPT_CRYPTO_OUTPUT_DIR:-$repo_root/.mpt-crypto}"
-readonly go_cache="${GOXRPL_MPT_CRYPTO_GOCACHE:-$output_dir/go-build-cache}"
+go_cache="${GOXRPL_MPT_CRYPTO_GOCACHE:-$output_dir/go-build-cache}"
+if [[ "$go_cache" != /* ]]; then
+    go_cache="$repo_root/$go_cache"
+fi
+readonly go_cache
 readonly requirements_file="$repo_root/conan-mpt-crypto.txt"
 readonly lock_file="$repo_root/conan-mpt-crypto.lock"
 conan_home="$conan_storage_home"

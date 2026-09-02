@@ -14,10 +14,10 @@ func TestParse(t *testing.T) {
 		{"0", Parts{}},
 		{"+0.000e+80", Parts{}},
 		{"-0e-80", Parts{Negative: true}},
-		{"1", Parts{Mantissa: 1, Precision: 1}},
-		{"+12.3400", Parts{Mantissa: 1234, Exponent: -2, Precision: 4}},
-		{"-0.0012300e+4", Parts{Mantissa: 123, Exponent: -1, Negative: true, Precision: 3}},
-		{"18446744073709551615", Parts{Mantissa: 18446744073709551615, Precision: 20}},
+		{"1", Parts{Mantissa: 1, RawMantissa: 1, Precision: 1}},
+		{"+12.3400", Parts{Mantissa: 1234, Exponent: -2, RawMantissa: 123400, RawExponent: -4, Precision: 4}},
+		{"-0.0012300e+4", Parts{Mantissa: 123, Exponent: -1, RawMantissa: 12300, RawExponent: -3, Negative: true, Precision: 3}},
+		{"18446744073709551615", Parts{Mantissa: 18446744073709551615, RawMantissa: 18446744073709551615, Precision: 20}},
 	}
 
 	for _, test := range tests {

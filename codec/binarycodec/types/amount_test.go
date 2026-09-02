@@ -361,13 +361,20 @@ func TestSerializeIssuedCurrencyValueNormalizesLikeRippled(t *testing.T) {
 		input    string
 		mantissa uint64
 		exponent int
+		negative bool
 	}{
-		{"round below half", "12345678901234564", 1234567890123456, 1},
-		{"round half to even stays", "12345678901234565", 1234567890123456, 1},
-		{"round half to even increments", "12345678901234575", 1234567890123458, 1},
-		{"round above half", "12345678901234567", 1234567890123457, 1},
-		{"minimum exponent", "1e-81", 1000000000000000, -96},
-		{"underflow", "1e-82", 0, 0},
+		{"round below half", "12345678901234564", 1234567890123456, 1, false},
+		{"round half to even stays", "12345678901234565", 1234567890123456, 1, false},
+		{"round half to even increments", "12345678901234575", 1234567890123458, 1, false},
+		{"round above half", "12345678901234567", 1234567890123457, 1, false},
+		{"maximum signed coefficient", "9223372036854775807", 9223372036854776, 3, false},
+		{"minimum signed coefficient", "-9223372036854775808", 9223372036854776, 3, true},
+		{"unsigned sign boundary", "9223372036854775808", 9223372036854776, 3, true},
+		{"unsigned trailing-zero coefficient", "10000000000000000000", 8446744073709552, 3, true},
+		{"maximum unsigned coefficient", "18446744073709551615", 1000000000000000, -15, true},
+		{"negative maximum unsigned coefficient", "-18446744073709551615", 1000000000000000, -15, false},
+		{"minimum exponent", "1e-81", 1000000000000000, -96, false},
+		{"underflow", "1e-82", 0, 0, false},
 	}
 
 	for _, test := range tests {
@@ -378,7 +385,7 @@ func TestSerializeIssuedCurrencyValueNormalizesLikeRippled(t *testing.T) {
 			if test.mantissa == 0 {
 				binary.BigEndian.PutUint64(want, ZeroCurrencyAmountHex)
 			} else {
-				want = encodeIOUValueWire(test.mantissa, test.exponent, true)
+				want = encodeIOUValueWire(test.mantissa, test.exponent, !test.negative)
 			}
 			require.Equal(t, want, got)
 		})

@@ -13,10 +13,12 @@ var ErrInvalid = errors.New("invalid decimal")
 
 // Parts is the normalized representation of a parsed decimal value.
 type Parts struct {
-	Mantissa  uint64
-	Exponent  int32
-	Negative  bool
-	Precision int
+	Mantissa    uint64
+	Exponent    int32
+	RawMantissa uint64
+	RawExponent int32
+	Negative    bool
+	Precision   int
 }
 
 // Parse converts an anchored decimal string into normalized parts.
@@ -111,6 +113,8 @@ func Parse(value string) (Parts, error) {
 	if mantissa == 0 {
 		return Parts{Negative: negative}, nil
 	}
+	rawMantissa := mantissa
+	rawExponent := int32(exponent)
 	for mantissa%10 == 0 {
 		mantissa /= 10
 		exponent++
@@ -120,10 +124,12 @@ func Parse(value string) (Parts, error) {
 	}
 
 	return Parts{
-		Mantissa:  mantissa,
-		Exponent:  int32(exponent),
-		Negative:  negative,
-		Precision: decimalDigits(mantissa),
+		Mantissa:    mantissa,
+		Exponent:    int32(exponent),
+		RawMantissa: rawMantissa,
+		RawExponent: rawExponent,
+		Negative:    negative,
+		Precision:   decimalDigits(mantissa),
 	}, nil
 }
 

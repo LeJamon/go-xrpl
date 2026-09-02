@@ -167,8 +167,35 @@ func parseAndNormalize(s string) (*big.Int, int32, error) {
 	if err != nil {
 		return nil, 0, err
 	}
+	if !isExactNumber(parts, mantissa, normalizedExponent) {
+		return nil, 0, ErrInvalidNumber
+	}
 
 	return mantissa, normalizedExponent, nil
+}
+
+func isExactNumber(parts decimal.Parts, mantissa *big.Int, exponent int32) bool {
+	if parts.Mantissa == 0 {
+		return mantissa.Sign() == 0
+	}
+	if mantissa.Sign() == 0 || parts.Negative != (mantissa.Sign() < 0) {
+		return false
+	}
+
+	magnitude := new(big.Int).Abs(new(big.Int).Set(mantissa))
+	ten := big.NewInt(10)
+	quotient := new(big.Int)
+	remainder := new(big.Int)
+	for {
+		quotient.QuoRem(magnitude, ten, remainder)
+		if remainder.Sign() != 0 {
+			break
+		}
+		magnitude.Set(quotient)
+		exponent++
+	}
+
+	return magnitude.IsUint64() && magnitude.Uint64() == parts.Mantissa && exponent == parts.Exponent
 }
 
 // normalize adjusts mantissa and exponent to the large XRPL Number range. The

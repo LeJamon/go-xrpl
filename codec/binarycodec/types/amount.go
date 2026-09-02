@@ -439,8 +439,17 @@ func parseIOUValue(value string) (iouValue, error) {
 		return iouValue{}, nil
 	}
 
-	mantissa := parts.Mantissa
-	exponent := int64(parts.Exponent)
+	// Apply the textual sign after the raw coefficient's signed conversion.
+	signedMantissa := int64(parts.RawMantissa)
+	if parts.Negative {
+		signedMantissa = -signedMantissa
+	}
+	negative := signedMantissa < 0
+	mantissa := uint64(signedMantissa)
+	if negative {
+		mantissa = -mantissa
+	}
+	exponent := int64(parts.RawExponent)
 	for mantissa < MinIOUMantissa && exponent > MinIOUExponent {
 		mantissa *= 10
 		exponent--
@@ -471,7 +480,7 @@ func parseIOUValue(value string) (iouValue, error) {
 		return iouValue{}, &OutOfRangeError{Type: "Exponent"}
 	}
 
-	return iouValue{mantissa: mantissa, exponent: int32(exponent), negative: parts.Negative}, nil
+	return iouValue{mantissa: mantissa, exponent: int32(exponent), negative: negative}, nil
 }
 
 // verifyMPTValue validates the format of an MPT amount value.
