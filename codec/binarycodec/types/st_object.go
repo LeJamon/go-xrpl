@@ -65,7 +65,7 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 			fieldOrder = append(fieldOrder, field.FieldName)
 		}
 		sort.Strings(fieldOrder)
-		if err := validateInnerObject(t.innerTemplateField, values, fieldOrder); err != nil {
+		if err := validateObjectTemplate(t.innerTemplateField, values, fieldOrder); err != nil {
 			return nil, err
 		}
 	}
@@ -155,12 +155,30 @@ func (t *STObject) ToJSON(p *serdes.BinaryParser, opts ...int) (any, error) {
 // well-formed serialization carries a top-level terminator, so this never rejects
 // valid input. Nested objects consume their own end marker through ToJSON.
 func (t *STObject) ToJSONStrict(p *serdes.BinaryParser) (map[string]any, error) {
-	m, _, sawEndMarker, err := t.toJSON(p, 0)
+	return t.toJSONStrict(p, "")
+}
+
+// ToJSONStrictWithTemplate decodes a top-level object and validates it against
+// a registered object template.
+func (t *STObject) ToJSONStrictWithTemplate(p *serdes.BinaryParser, templateName string) (map[string]any, error) {
+	if _, ok := objectTemplates[templateName]; !ok {
+		return nil, fmt.Errorf("unknown object template %q", templateName)
+	}
+	return t.toJSONStrict(p, templateName)
+}
+
+func (t *STObject) toJSONStrict(p *serdes.BinaryParser, templateName string) (map[string]any, error) {
+	m, fieldOrder, sawEndMarker, err := t.toJSON(p, 0)
 	if err != nil {
 		return nil, err
 	}
 	if sawEndMarker {
 		return nil, errStrayEndMarker
+	}
+	if templateName != "" {
+		if err := validateObjectTemplate(templateName, m, fieldOrder); err != nil {
+			return nil, err
+		}
 	}
 	return m, nil
 }
@@ -225,7 +243,7 @@ func (t *STObject) toJSON(p *serdes.BinaryParser, depth int) (map[string]any, []
 				var childOrder []string
 				res, childOrder, _, err = st.(*STObject).toJSON(p, childDepth)
 				if err == nil {
-					err = validateInnerObject(fi.FieldName, res.(map[string]any), childOrder)
+					err = validateObjectTemplate(fi.FieldName, res.(map[string]any), childOrder)
 				}
 			case "STArray":
 				res, err = st.ToJSON(p, childDepth)

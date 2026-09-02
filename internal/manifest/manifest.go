@@ -154,16 +154,9 @@ func Deserialize(data []byte) (*Manifest, error) {
 		return nil, fmt.Errorf("manifest: payload exceeds %d bytes", maxSerializedSize)
 	}
 
-	decoded, err := binarycodec.DecodeBytes(data)
+	decoded, err := binarycodec.DecodeBytesWithTemplate(data, "Manifest")
 	if err != nil {
 		return nil, fmt.Errorf("manifest: decode STObject: %w", err)
-	}
-	for field := range decoded {
-		switch field {
-		case "PublicKey", "MasterSignature", "Sequence", "Version", "Domain", "SigningPubKey", "Signature":
-		default:
-			return nil, fmt.Errorf("manifest: unexpected field %s", field)
-		}
 	}
 
 	// Version defaults to 0; any other value is unsupported.

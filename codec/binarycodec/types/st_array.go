@@ -125,7 +125,7 @@ func (t *STArray) ToJSON(p *serdes.BinaryParser, opts ...int) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := validateInnerObject(fi.FieldName, res, fieldOrder); err != nil {
+		if err := validateObjectTemplate(fi.FieldName, res, fieldOrder); err != nil {
 			return nil, err
 		}
 

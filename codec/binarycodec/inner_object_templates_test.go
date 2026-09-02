@@ -153,6 +153,33 @@ func TestEncodeBytesOmitsDefaultInnerObjectFields(t *testing.T) {
 	require.NotContains(t, priceData, "Scale")
 }
 
+func TestDecodeBytesWithTemplateValidatesTopLevelObject(t *testing.T) {
+	manifest := map[string]any{
+		"PublicKey":       "",
+		"MasterSignature": "",
+		"Sequence":        uint32(1),
+	}
+
+	canonical, err := EncodeBytes(manifest)
+	require.NoError(t, err)
+	decoded, err := DecodeBytesWithTemplate(canonical, "Manifest")
+	require.NoError(t, err)
+	require.NotContains(t, decoded, "Version")
+
+	manifest["Version"] = uint16(0)
+	explicitDefault, err := EncodeBytes(manifest)
+	require.NoError(t, err)
+	_, err = DecodeBytesWithTemplate(explicitDefault, "Manifest")
+	require.EqualError(t, err, "Field 'Version' may not be explicitly set to default.")
+
+	manifest["Version"] = uint16(1)
+	nonDefault, err := EncodeBytes(manifest)
+	require.NoError(t, err)
+	decoded, err = DecodeBytesWithTemplate(nonDefault, "Manifest")
+	require.NoError(t, err)
+	require.Equal(t, 1, decoded["Version"])
+}
+
 func TestDecodeBytesValidatesInnerObjectTemplates(t *testing.T) {
 	child, err := EncodeBytes(map[string]any{"Account": innerTemplateTestAccount})
 	require.NoError(t, err)

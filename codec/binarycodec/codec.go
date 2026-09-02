@@ -317,6 +317,14 @@ func DecodeBytes(b []byte) (map[string]any, error) {
 	return st.ToJSONStrict(p)
 }
 
+// DecodeBytesWithTemplate decodes canonical binary bytes and validates the
+// resulting top-level object against a registered protocol template.
+func DecodeBytesWithTemplate(b []byte, templateName string) (map[string]any, error) {
+	p := serdes.NewBinaryParser(b, definitions.Get())
+	st := types.NewSTObject(serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()))
+	return st.ToJSONStrictWithTemplate(p, templateName)
+}
+
 // Decode decodes a hex string in the canonical binary format into a JSON
 // transaction object.
 func Decode(hexEncoded string) (map[string]any, error) {
