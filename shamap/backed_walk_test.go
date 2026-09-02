@@ -42,6 +42,58 @@ type cancelOnceBaseFamily struct {
 	once    sync.Once
 }
 
+func TestBackedWalkLoadTraversalNodeAttachedFallback(t *testing.T) {
+	family := newMemoryFamily()
+	sm, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeID, err := newRootNodeID().childNodeID(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("nil root", func(t *testing.T) {
+		view, found, stored, err := sm.loadTraversalNode(t.Context(), sm.backing.access, nil, backedWalkItem{
+			hash:   [32]byte{1},
+			nodeID: nodeID,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if found || stored || view != (traversalNode{}) {
+			t.Fatalf("nil-root traversal = (%+v, found=%t, stored=%t), want empty missing node", view, found, stored)
+		}
+	})
+
+	t.Run("attached node", func(t *testing.T) {
+		resident := New(TypeState)
+		for _, key := range [][32]byte{{0x30}, {0x31}} {
+			if err := resident.Put(key, make([]byte, 12)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		child, childHash, set := resident.tree.root.LoadChild(3)
+		if !set {
+			t.Fatal("resident root branch 3 is unset")
+		}
+
+		view, found, stored, err := sm.loadTraversalNode(t.Context(), sm.backing.access, resident.tree.root, backedWalkItem{
+			hash:   childHash,
+			nodeID: nodeID,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !found || stored {
+			t.Fatalf("attached traversal found=%t, stored=%t, want true, false", found, stored)
+		}
+		if want := traversalNodeFromNode(child); view != want {
+			t.Fatalf("attached traversal = %+v, want %+v", view, want)
+		}
+	})
+}
+
 func (f *cancelOnceBaseFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
 	return f.base.Fetch(ctx, hash)
 }
