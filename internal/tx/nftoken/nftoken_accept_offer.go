@@ -120,6 +120,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Reference: rippled NFTokenAcceptOffer.cpp preclaim lines 66-97
 	var buyOffer, sellOffer *state.NFTokenOfferData
 	var buyOfferKey, sellOfferKey keylet.Keylet
+	var normalizedBrokerFee *tx.Amount
 	// Track whether offer amounts are negative (from raw binary, since
 	// NFTokenOfferData.Amount is uint64 and loses sign info).
 	// These flags are used both for fixNFTokenNegOffer (temBAD_OFFER)
@@ -310,6 +311,12 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 				if err != nil {
 					return ter.TecINTERNAL
 				}
+				if keylet.CurrencyBytes(brokerFeeIOU.Currency) != keylet.CurrencyBytes(buyAmount.Currency) ||
+					brokerFeeIOU.Issuer != buyAmount.Issuer {
+					return ter.TecNFTOKEN_BUY_SELL_MISMATCH
+				}
+				brokerFeeIOU.Currency = buyAmount.Currency
+				normalizedBrokerFee = &brokerFeeIOU
 				sellAmount, err := offerIOUToAmount(sellOffer)
 				if err != nil {
 					return ter.TecINTERNAL
@@ -584,7 +591,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Brokered mode (both offers)
 	if buyOffer != nil && sellOffer != nil {
 		return n.executeBrokeredMode(ctx, accountID, buyOffer, sellOffer, buyOfferKey, sellOfferKey,
-			buyOfferNegative, sellOfferNegative)
+			buyOfferNegative, sellOfferNegative, normalizedBrokerFee)
 	}
 
 	// Direct mode - sell offer only

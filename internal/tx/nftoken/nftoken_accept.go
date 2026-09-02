@@ -89,7 +89,7 @@ func creditNFTokenIssuerXRP(ctx *tx.ApplyContext, issuerID [20]byte, amount uint
 // Reference: rippled NFTokenAcceptOffer.cpp doApply (brokered mode)
 func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID [20]byte,
 	buyOffer, sellOffer *state.NFTokenOfferData, buyOfferKey, sellOfferKey keylet.Keylet,
-	buyOfferNegative, sellOfferNegative bool) ter.Result {
+	buyOfferNegative, sellOfferNegative bool, normalizedBrokerFee *tx.Amount) ter.Result {
 	sellerID := sellOffer.Owner
 	buyerID := buyOffer.Owner
 
@@ -117,13 +117,8 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 		buyIsXRP := buyOffer.AmountIOU == nil
 
 		var brokerFee uint64
-		var brokerFeeIOU tx.Amount
-		if n.NFTokenBrokerFee != nil {
-			if buyIsXRP {
-				brokerFee = uint64(n.NFTokenBrokerFee.Drops())
-			} else {
-				brokerFeeIOU = *n.NFTokenBrokerFee
-			}
+		if n.NFTokenBrokerFee != nil && buyIsXRP {
+			brokerFee = uint64(n.NFTokenBrokerFee.Drops())
 		}
 
 		transferFee := getNFTTransferFee(sellOffer.NFTokenID)
@@ -137,12 +132,12 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 			}
 
 			// Step 1: Pay broker fee
-			if n.NFTokenBrokerFee != nil && !brokerFeeIOU.IsZero() {
-				if r := payIOU(ctx, buyerID, accountID, brokerFeeIOU); r != ter.TesSUCCESS {
+			if normalizedBrokerFee != nil && !normalizedBrokerFee.IsZero() {
+				if r := payIOU(ctx, buyerID, accountID, *normalizedBrokerFee); r != ter.TesSUCCESS {
 					return r
 				}
 				buyAmount, _ = buyAmount.SubWithNumberContext(
-					brokerFeeIOU,
+					*normalizedBrokerFee,
 					ctx.NumberContext(),
 					state.RoundToNearest,
 				)
