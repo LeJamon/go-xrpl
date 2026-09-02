@@ -570,35 +570,42 @@ func (s *BookStep) removeExpiredOffer(sb *PaymentSandbox, offer *state.LedgerOff
 }
 
 // isOfferOwnerAuthorized checks if the offer owner is authorized to hold currency
-// from the issuer. Returns true if authorized or if no auth is required.
+// from the issuer. Returns true if authorized or if no auth is required, and
+// preserves lookup failures as errors.
 // Reference: BookStep.cpp lines 760-790
 func (s *BookStep) isOfferOwnerAuthorized(
 	view *PaymentSandbox, owner, issuer [20]byte, currency string,
-) bool {
+) (bool, error) {
 	// Read issuer account to check RequireAuth flag
 	issuerKey := keylet.Account(issuer)
 	issuerData, err := view.Read(issuerKey)
-	if err != nil || issuerData == nil {
-		return true // No issuer account = no auth check
+	if err != nil {
+		return false, fmt.Errorf("read offer issuer account: %w", err)
+	}
+	if issuerData == nil {
+		return true, nil // No issuer account = no auth check
 	}
 	issuerAccount, err := state.ParseAccountRoot(issuerData)
 	if err != nil {
-		return true
+		return false, fmt.Errorf("parse offer issuer account: %w", err)
 	}
 	if (issuerAccount.Flags & state.LsfRequireAuth) == 0 {
-		return true // Issuer doesn't require auth
+		return true, nil // Issuer doesn't require auth
 	}
 
 	// Issuer requires auth — check if owner has authorization on trust line
 	// Reference: rippled uses lsfHighAuth/lsfLowAuth based on account ordering
 	lineKey := keylet.Line(owner, issuer, currency)
 	lineData, err := view.Read(lineKey)
-	if err != nil || lineData == nil {
-		return false // No trust line = not authorized
+	if err != nil {
+		return false, fmt.Errorf("read offer owner trust line: %w", err)
+	}
+	if lineData == nil {
+		return false, nil // No trust line = not authorized
 	}
 	line, err := state.ParseRippleState(lineData)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("parse offer owner trust line: %w", err)
 	}
 
 	// Determine which auth flag to check based on account ordering
@@ -610,7 +617,7 @@ func (s *BookStep) isOfferOwnerAuthorized(
 		authFlag = state.LsfLowAuth
 	}
 
-	return (line.Flags & authFlag) != 0
+	return (line.Flags & authFlag) != 0, nil
 }
 
 // isDeepFrozen checks if an account's trust line for the given currency/issuer
