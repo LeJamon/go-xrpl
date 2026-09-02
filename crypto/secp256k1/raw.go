@@ -16,6 +16,7 @@ func SignDigestBytes(digest, privKey []byte) ([]byte, error) {
 		return nil, err
 	}
 	sk := secp256k1.PrivKeyFromBytes(privKey)
+	defer sk.Zero()
 	return ecdsa.Sign(sk, digest).Serialize(), nil
 }
 

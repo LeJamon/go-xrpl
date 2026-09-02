@@ -63,6 +63,9 @@ func (c Algorithm) deriveScalar(seed []byte, discrim *big.Int) (*big.Int, error)
 	order := btcec.S256().N
 	hasher := sha512.New()
 	sum := make([]byte, 0, sha512.Size)
+	defer func() {
+		rootcrypto.SecureErase(sum)
+	}()
 
 	var discrimWord uint32
 	var hasDiscrim bool
@@ -116,13 +119,25 @@ func (c Algorithm) deriveScalar(seed []byte, discrim *big.Int) (*big.Int, error)
 // uses an additional scalar derived from the root public key. For validator
 // keys, only the root generator is used.
 func (c Algorithm) DeriveKeypair(seed []byte, validator bool) (privHex, pubHex string, err error) {
+	privateKey, publicKey, err := c.DeriveKeypairBytes(seed, validator)
+	if err != nil {
+		return "", "", err
+	}
+	defer rootcrypto.SecureErase(privateKey)
+	return "00" + strings.ToUpper(hex.EncodeToString(privateKey)), strings.ToUpper(hex.EncodeToString(publicKey)), nil
+}
+
+// DeriveKeypairBytes derives a keypair from a seed and returns owned raw key
+// buffers. The private key is a 32-byte scalar and the public key is compressed.
+// Callers should erase the private-key buffer when it is no longer needed.
+func (c Algorithm) DeriveKeypairBytes(seed []byte, validator bool) (privateBytes, publicBytes []byte, err error) {
 	curve := btcec.S256()
 	order := curve.N
 
 	// Derive the root private generator from the seed
 	privateGen, err := c.deriveScalar(seed, nil)
 	if err != nil {
-		return "", "", err
+		return nil, nil, err
 	}
 
 	var privateKey *big.Int
@@ -131,10 +146,13 @@ func (c Algorithm) DeriveKeypair(seed []byte, validator bool) (privHex, pubHex s
 		privateKey = privateGen
 	} else {
 		// For regular keys, derive an additional scalar from the root public key
-		rootPrivateKey, _ := btcec.PrivKeyFromBytes(privateGen.Bytes())
+		privateGenBytes := privateGen.Bytes()
+		defer rootcrypto.SecureErase(privateGenBytes)
+		rootPrivateKey, _ := btcec.PrivKeyFromBytes(privateGenBytes)
+		defer rootPrivateKey.Zero()
 		derivatedScalar, err := c.deriveScalar(rootPrivateKey.PubKey().SerializeCompressed(), big.NewInt(0))
 		if err != nil {
-			return "", "", err
+			return nil, nil, err
 		}
 		scalarWithPrivateGen := derivatedScalar.Add(derivatedScalar, privateGen)
 		privateKey = scalarWithPrivateGen.Mod(scalarWithPrivateGen, order)
@@ -143,14 +161,14 @@ func (c Algorithm) DeriveKeypair(seed []byte, validator bool) (privHex, pubHex s
 	// Ensure private key is 32 bytes with leading zeros if needed
 	privKeyBytes := make([]byte, 32)
 	keyBytes := privateKey.Bytes()
+	defer rootcrypto.SecureErase(keyBytes)
 	copy(privKeyBytes[32-len(keyBytes):], keyBytes)
 
-	private := strings.ToUpper(hex.EncodeToString(privKeyBytes))
-
-	_, pubKey := btcec.PrivKeyFromBytes(privKeyBytes)
+	privateKeyObject, pubKey := btcec.PrivKeyFromBytes(privKeyBytes)
+	defer privateKeyObject.Zero()
 	pubKeyBytes := pubKey.SerializeCompressed()
 
-	return "00" + private, strings.ToUpper(hex.EncodeToString(pubKeyBytes)), nil
+	return privKeyBytes, pubKeyBytes, nil
 }
 
 // SignBytes signs msg with a 32-byte raw secp256k1 private key and returns
@@ -163,6 +181,7 @@ func (c Algorithm) SignBytes(msg, privKey []byte) ([]byte, error) {
 		return nil, ErrInvalidMessage
 	}
 	secpPrivKey := secp256k1.PrivKeyFromBytes(privKey)
+	defer secpPrivKey.Zero()
 	hash := sha512half.Sum(msg)
 	sig := ecdsa.Sign(secpPrivKey, hash[:])
 	return derFromRS(sig.R(), sig.S()), nil
@@ -210,6 +229,7 @@ func (c Algorithm) Sign(msg, privKey string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	defer rootcrypto.SecureErase(key)
 	sig, err := c.SignBytes([]byte(msg), key)
 	if err != nil {
 		return "", err
@@ -226,6 +246,7 @@ func (c Algorithm) SignDigest(digest [32]byte, privKeyHex string) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
+	defer rootcrypto.SecureErase(key)
 	return SignDigestBytes(digest[:], key)
 }
 
@@ -342,7 +363,8 @@ func (c Algorithm) DerivePublicKeyFromSecret(secret []byte) ([]byte, error) {
 	if err := validatePrivateKey(secret); err != nil {
 		return nil, err
 	}
-	_, pubKey := btcec.PrivKeyFromBytes(secret)
+	privateKey, pubKey := btcec.PrivKeyFromBytes(secret)
+	defer privateKey.Zero()
 	return pubKey.SerializeCompressed(), nil
 }
 

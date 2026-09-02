@@ -1,12 +1,14 @@
 package adaptor
 
 import (
+	"bytes"
 	"crypto/ed25519"
-	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	xrplcrypto "github.com/LeJamon/go-xrpl/crypto"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
@@ -17,6 +19,7 @@ import (
 var (
 	errNoValidatorKey           = errors.New("no validator key configured")
 	errInvalidSeed              = errors.New("invalid validator seed")
+	errSigningKeyMismatch       = errors.New("signing private key does not match signing public key")
 	errTokenManifestKeyMismatch = errors.New("validator_token: signing key in manifest does not match validation_secret_key")
 	errTokenAndSeed             = errors.New("validator_token and validation_seed are mutually exclusive")
 )
@@ -67,10 +70,13 @@ type ValidatorIdentity struct {
 	// re-encoding through the codec.
 	SerializedMfst []byte
 
-	// signingPriv is the hex-encoded signing private key (with or
-	// without the leading "00" prefix; secp256k1.SignDigest accepts
-	// both). Unexported so callers cannot accidentally leak the secret.
-	signingPriv string
+	signingSecret *signingSecret
+}
+
+type signingSecret struct {
+	mu         sync.RWMutex
+	privateKey []byte
+	closed     bool
 }
 
 // NewValidatorIdentity creates a seed-only identity. The seed is the
@@ -78,7 +84,8 @@ type ValidatorIdentity struct {
 // observer / non-validator case).
 //
 // Master and signing keys are identical in this mode, the fallback when
-// [validator_token] is absent.
+// [validator_token] is absent. The caller owns the returned identity and
+// must call [ValidatorIdentity.Close] when it is no longer needed.
 func NewValidatorIdentity(seed string) (*ValidatorIdentity, error) {
 	if seed == "" {
 		return nil, nil
@@ -88,24 +95,24 @@ func NewValidatorIdentity(seed string) (*ValidatorIdentity, error) {
 	if err != nil {
 		return nil, errInvalidSeed
 	}
+	defer xrplcrypto.SecureErase(decodedSeed)
 
 	algo := secp256k1.Algorithm{}
-	privKeyHex, pubKeyHex, err := algo.DeriveKeypair(decodedSeed, true)
+	privKeyBytes, pubKeyBytes, err := algo.DeriveKeypairBytes(decodedSeed, true)
 	if err != nil {
 		return nil, err
 	}
-
-	pubKeyBytes, err := hex.DecodeString(pubKeyHex)
-	if err != nil {
-		return nil, err
-	}
+	defer xrplcrypto.SecureErase(privKeyBytes)
 	if len(pubKeyBytes) != 33 {
 		return nil, fmt.Errorf("derived pubkey: unexpected length %d", len(pubKeyBytes))
 	}
 
-	vi := &ValidatorIdentity{signingPriv: privKeyHex}
+	vi := &ValidatorIdentity{}
 	copy(vi.MasterKey[:], pubKeyBytes)
 	copy(vi.SigningKey[:], pubKeyBytes)
+	if err := vi.replaceSigningPrivateKey(privKeyBytes); err != nil {
+		return nil, err
+	}
 	vi.NodeID = consensus.CalcNodeID(vi.MasterKey)
 	return vi, nil
 }
@@ -132,6 +139,7 @@ func newValidatorIdentityFromToken(block string) (*ValidatorIdentity, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer xrplcrypto.SecureErase(tok.ValidationSecret[:])
 	wire, err := tok.DecodeManifest()
 	if err != nil {
 		return nil, err
@@ -156,7 +164,9 @@ func newValidatorIdentityFromToken(block string) (*ValidatorIdentity, error) {
 		SigningKey:     m.SigningKey(),
 		Manifest:       m,
 		SerializedMfst: m.Serialized(),
-		signingPriv:    hex.EncodeToString(tok.ValidationSecret[:]),
+	}
+	if err := vi.replaceSigningPrivateKey(tok.ValidationSecret[:]); err != nil {
+		return nil, err
 	}
 	vi.NodeID = consensus.CalcNodeID(vi.MasterKey)
 	return vi, nil
@@ -189,6 +199,49 @@ func (vi *ValidatorIdentity) SigningPubKey() []byte {
 	return append([]byte(nil), vi.SigningKey[:]...)
 }
 
+func (vi *ValidatorIdentity) replaceSigningPrivateKey(privateKey []byte) error {
+	publicKey, err := (secp256k1.Algorithm{}).DerivePublicKeyFromSecret(privateKey)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(publicKey, vi.SigningKey[:]) {
+		return errSigningKeyMismatch
+	}
+	privateKeyCopy := append([]byte(nil), privateKey...)
+	if vi.signingSecret == nil {
+		vi.signingSecret = &signingSecret{}
+	}
+
+	vi.signingSecret.mu.Lock()
+	defer vi.signingSecret.mu.Unlock()
+	if vi.signingSecret.closed {
+		xrplcrypto.SecureErase(privateKeyCopy)
+		return errNoValidatorKey
+	}
+	xrplcrypto.SecureErase(vi.signingSecret.privateKey)
+	vi.signingSecret.privateKey = privateKeyCopy
+	return nil
+}
+
+// Close erases the identity-owned signing key. Memory erasure is best-effort
+// in Go: encoded seeds and tokens are immutable strings, and copies held by the
+// runtime, dependencies, registers, or swap may remain.
+func (vi *ValidatorIdentity) Close() error {
+	if vi == nil {
+		return nil
+	}
+
+	if vi.signingSecret == nil {
+		return nil
+	}
+	vi.signingSecret.mu.Lock()
+	defer vi.signingSecret.mu.Unlock()
+	xrplcrypto.SecureErase(vi.signingSecret.privateKey)
+	vi.signingSecret.privateKey = nil
+	vi.signingSecret.closed = true
+	return nil
+}
+
 // Sign signs a pre-computed digest with the ephemeral signing key using
 // secp256k1. The data parameter must be a SHA-512Half digest (32 bytes),
 // passed directly to secp256k1.
@@ -196,10 +249,17 @@ func (vi *ValidatorIdentity) Sign(data []byte) ([]byte, error) {
 	if vi == nil {
 		return nil, errNoValidatorKey
 	}
-	algo := secp256k1.Algorithm{}
+	if vi.signingSecret == nil {
+		return nil, errNoValidatorKey
+	}
+	vi.signingSecret.mu.RLock()
+	defer vi.signingSecret.mu.RUnlock()
+	if len(vi.signingSecret.privateKey) == 0 {
+		return nil, errNoValidatorKey
+	}
 	var digest [32]byte
 	copy(digest[:], data)
-	return algo.SignDigest(digest, vi.signingPriv)
+	return secp256k1.SignDigestBytes(digest[:], vi.signingSecret.privateKey)
 }
 
 // verify dispatches on the pubkey-type prefix (0xED → ed25519, 0x02/0x03
