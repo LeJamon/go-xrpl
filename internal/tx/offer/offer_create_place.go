@@ -42,7 +42,8 @@ func (o *OfferCreate) placeRemainingOffer(
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {
-		return ter.TefINTERNAL, false
+		result := mapOfferDirInsertError(err)
+		return result, result == ter.TecDIR_FULL
 	}
 
 	// Reference: line 851
@@ -57,7 +58,8 @@ func (o *OfferCreate) placeRemainingOffer(
 		}
 	})
 	if err != nil {
-		return ter.TefINTERNAL, false
+		result := mapOfferDirInsertError(err)
+		return result, result == ter.TecDIR_FULL
 	}
 
 	// Reference: lines 895-910
@@ -102,7 +104,7 @@ func (o *OfferCreate) placeRemainingOffer(
 			openRate = uRate
 		}
 		if result := applyHybridInSandbox(sb, ledgerOffer, offerKey, saTakerPays, saTakerGets, openRate); result != ter.TesSUCCESS {
-			return result, false
+			return result, result == ter.TecDIR_FULL
 		}
 	}
 
@@ -117,6 +119,13 @@ func (o *OfferCreate) placeRemainingOffer(
 	}
 
 	return ter.TesSUCCESS, true // Apply main sandbox
+}
+
+func mapOfferDirInsertError(err error) ter.Result {
+	if errors.Is(err, state.ErrDirFull) {
+		return ter.TecDIR_FULL
+	}
+	return ter.TefINTERNAL
 }
 
 func offerBookBase(takerPays, takerGets tx.Amount, domainID *[32]byte) (keylet.Keylet, error) {
