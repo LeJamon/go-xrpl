@@ -1,14 +1,18 @@
 package amm
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
+	"strconv"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
+	ledgercore "github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -48,6 +52,18 @@ func (v *ammMPTView) Erase(k keylet.Keylet) error {
 	return nil
 }
 func (v *ammMPTView) AdjustDropsDestroyed(drops.XRPAmount) error { return nil }
+func (v *ammMPTView) ApplyAtomically(apply func(ledgercore.Writer) error) error {
+	staged := newAMMMPTView()
+	staged.rules = v.rules
+	for key, data := range v.data {
+		staged.data[key] = bytes.Clone(data)
+	}
+	if err := apply(staged); err != nil {
+		return err
+	}
+	v.data = staged.data
+	return nil
+}
 func (v *ammMPTView) ForEach(fn func([32]byte, []byte) bool) error {
 	for k, data := range v.data {
 		if !fn(k, data) {
@@ -274,6 +290,84 @@ func TestAMMCreateMPTApplyAndDelete(t *testing.T) {
 	exists, err = view.Exists(keylet.Account(amm.Account))
 	require.NoError(t, err)
 	require.False(t, exists)
+}
+
+func TestAMMCreateMPTXRPPostFeeFailureRollsBack(t *testing.T) {
+	const (
+		depositDrops = int64(100_000_000)
+		feeDrops     = uint64(400_000_000)
+	)
+
+	for _, test := range []struct {
+		name        string
+		open        bool
+		wantResult  ter.Result
+		wantApplied bool
+		wantFee     uint64
+	}{
+		{name: "closed", wantResult: ter.TecFAILED_PROCESSING, wantApplied: true, wantFee: feeDrops},
+		{name: "open", open: true, wantResult: ter.TelFAILED_PROCESSING},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			view := newAMMMPTView()
+			var issuerID, creatorID [20]byte
+			copy(issuerID[:], []byte("amm-mpt-issuer-00001"))
+			copy(creatorID[:], []byte("amm-mpt-creator-0001"))
+			issuerAddr := state.EncodeAccountIDSafe(issuerID)
+			creatorAddr := state.EncodeAccountIDSafe(creatorID)
+			insertAMMMPTAccount(t, view, issuerID, 100_000_000, 0)
+			startingBalance := uint64(depositDrops) + feeDrops - 1
+			insertAMMMPTAccount(t, view, creatorID, startingBalance, 0)
+
+			id := ammMPTID(7, issuerID)
+			idHex := mptutil.EncodeID(id)
+			insertAMMMPTIssuance(t, view, id, entry.LsfMPTCanTrade|entry.LsfMPTCanTransfer, 0)
+			require.Equal(t, ter.TesSUCCESS,
+				mptutil.EnsureHolding(view, id, creatorID, entry.LsfMPTAuthorized, true))
+			require.Equal(t, ter.TesSUCCESS, mptutil.Credit(view, id, issuerID, creatorID, 2_000, false))
+
+			mptAsset := tx.Asset{MPTIssuanceID: idHex}
+			xrpAsset := tx.Asset{Currency: "XRP"}
+			create := NewAMMCreate(
+				creatorAddr,
+				state.NewMPTAmountWithIssuanceID(1_000, issuerAddr, idHex),
+				state.NewXRPAmountFromInt(depositDrops),
+				300,
+			)
+			create.Fee = strconv.FormatUint(feeDrops, 10)
+			create.SetSequence(1)
+			entryCount := len(view.data)
+
+			result := txengine.NewEngine(view, tx.EngineConfig{
+				ReserveBase:               10_000_000,
+				ReserveIncrement:          2_000_000,
+				LedgerSequence:            1,
+				Rules:                     view.rules,
+				SkipSignatureVerification: true,
+				OpenLedger:                test.open,
+			}).Apply(create)
+
+			require.Equal(t, test.wantResult, result.Result)
+			require.Equal(t, test.wantApplied, result.Applied)
+			require.Equal(t, test.wantFee, result.Fee)
+			creator := readAMMMPTAccount(t, view, creatorID)
+			wantBalance := startingBalance
+			wantSequence := uint32(1)
+			if !test.open {
+				wantBalance -= feeDrops
+				wantSequence++
+			}
+			require.Equal(t, wantBalance, creator.Balance)
+			require.Equal(t, wantSequence, creator.Sequence)
+			holding, _, holdingResult := mptutil.ReadHolding(view, id, creatorID)
+			require.Equal(t, ter.TesSUCCESS, holdingResult)
+			require.Equal(t, uint64(2_000), holding.MPTAmount)
+			exists, err := view.Exists(computeAMMKeylet(mptAsset, xrpAsset))
+			require.NoError(t, err)
+			require.False(t, exists)
+			require.Len(t, view.data, entryCount)
+		})
+	}
 }
 
 func TestAMMWithdrawCreatesMPTWithWaivedTransferFee(t *testing.T) {
