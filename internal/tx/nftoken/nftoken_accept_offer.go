@@ -310,6 +310,9 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 				if err != nil {
 					return ter.TecINTERNAL
 				}
+				if brokerFeeIOU.Currency != buyAmount.Currency || brokerFeeIOU.Issuer != buyAmount.Issuer {
+					return ter.TecNFTOKEN_BUY_SELL_MISMATCH
+				}
 				sellAmount, err := offerIOUToAmount(sellOffer)
 				if err != nil {
 					return ter.TecINTERNAL
