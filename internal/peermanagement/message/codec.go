@@ -12,8 +12,8 @@ import (
 // type and force a 64MB allocation per claim — trivial OOM vector.
 // Values are ~10× typical observed traffic per known type.
 const (
-	smallMsgMax  = 64 * 1024        // 64 KiB
-	mediumMsgMax = 1 * 1024 * 1024  // 1 MiB
+	smallMsgMax  = 64 * 1024       // 64 KiB
+	mediumMsgMax = 1 * 1024 * 1024 // 1 MiB
 	maxPingSize  = 1024
 )
 
