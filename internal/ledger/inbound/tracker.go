@@ -12,8 +12,6 @@ import (
 // Mirrors rippled's kReacquireInterval expiry on InboundLedgers::mRecentFailures.
 const reacquireInterval = 5 * time.Minute
 
-// terminalRetention bounds how long a finished acquisition keeps its full
-// fetch_info diagnostics before only a recent-failure marker remains, if any.
 const terminalRetention = time.Minute
 
 const defaultTrackerSweepInterval = time.Minute
@@ -61,7 +59,6 @@ func NewTrackerWithClock(clock Clock) *Tracker {
 	return NewTrackerWithClockAndSweepInterval(clock, defaultTrackerSweepInterval)
 }
 
-// NewTrackerWithClockAndSweepInterval returns an empty Tracker with explicit time dependencies.
 func NewTrackerWithClockAndSweepInterval(clock Clock, interval time.Duration) *Tracker {
 	if clock == nil {
 		clock = SystemClock
@@ -286,8 +283,6 @@ func (t *Tracker) clearLocked() []*Ledger {
 	return active
 }
 
-// Sweep removes expired terminal acquisition history when its maintenance
-// interval has elapsed.
 func (t *Tracker) Sweep() {
 	if t == nil {
 		return
