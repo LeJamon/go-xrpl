@@ -25,6 +25,8 @@ const DirNodeMaxPages uint64 = 262144
 // because the page limit has been reached.
 var ErrDirFull = errors.New("directory full")
 
+var ErrMalformedDirectory = errors.New("malformed directory")
+
 // DirectoryNode represents a directory ledger entry
 type DirectoryNode struct {
 	// Common fields
@@ -690,6 +692,90 @@ type DirRemoveModifiedNode struct {
 type DirRemoveDeletedNode struct {
 	Key        [32]byte
 	FinalState *DirectoryNode
+}
+
+// EmptyDirDelete removes an empty directory, including the legacy two-page
+// form whose final page is also empty. It returns false when the root is not
+// the requested directory or entries remain.
+func EmptyDirDelete(view LedgerView, directory keylet.Keylet) (bool, error) {
+	if directory.Type != ledgerfields.TypeDirectoryNode {
+		return false, nil
+	}
+	rootData, err := view.Read(directory)
+	if err != nil {
+		return false, err
+	}
+	if rootData == nil {
+		return false, nil
+	}
+
+	rootType, err := DecodeType(rootData)
+	if err != nil {
+		return false, fmt.Errorf("%w: decode root type: %w", ErrMalformedDirectory, err)
+	}
+	if rootType != ledgerfields.TypeDirectoryNode {
+		return false, nil
+	}
+	root, err := ParseDirectoryNode(rootData)
+	if err != nil {
+		return false, fmt.Errorf("%w: parse root: %w", ErrMalformedDirectory, err)
+	}
+	if root.RootIndex != directory.Key {
+		return false, nil
+	}
+	if len(root.Indexes) != 0 {
+		return false, nil
+	}
+
+	const rootPage uint64 = 0
+	prevPage := root.IndexPrevious
+	nextPage := root.IndexNext
+	if nextPage == rootPage && prevPage != rootPage {
+		return false, fmt.Errorf("%w: forward link broken", ErrMalformedDirectory)
+	}
+	if prevPage == rootPage && nextPage != rootPage {
+		return false, fmt.Errorf("%w: reverse link broken", ErrMalformedDirectory)
+	}
+
+	if nextPage == prevPage && nextPage != rootPage {
+		lastKey := keylet.DirPage(directory.Key, nextPage)
+		lastData, err := view.Read(lastKey)
+		if err != nil {
+			return false, err
+		}
+		if lastData == nil {
+			return false, fmt.Errorf("%w: forward link broken", ErrMalformedDirectory)
+		}
+		last, err := ParseDirectoryNode(lastData)
+		if err != nil {
+			return false, fmt.Errorf("%w: parse last page: %w", ErrMalformedDirectory, err)
+		}
+		if len(last.Indexes) != 0 {
+			return false, nil
+		}
+
+		root.SetIndexNext(rootPage)
+		root.SetIndexPrevious(rootPage)
+		data, err := SerializeDirectoryNode(root, false)
+		if err != nil {
+			return false, err
+		}
+		if err := view.Update(directory, data); err != nil {
+			return false, err
+		}
+		if err := view.Erase(lastKey); err != nil {
+			return false, err
+		}
+		nextPage = rootPage
+		prevPage = rootPage
+	}
+
+	if nextPage == rootPage && prevPage == rootPage {
+		if err := view.Erase(directory); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 // dirRemove removes an item from a directory.

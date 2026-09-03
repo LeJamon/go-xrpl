@@ -356,6 +356,7 @@ func isReapplyOnRetryTec(r ter.Result) bool {
 // removeExpiredNFTokenOffers).
 func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result {
 	deleted := collectPersistentDeletions(st.table, result)
+	st.metadata.DeliveredAmount = nil
 
 	// Discard the transaction table — all doApply() side effects are lost.
 	// Reference: rippled Transactor.cpp — reset() discards the sandbox.

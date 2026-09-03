@@ -1,6 +1,8 @@
 package account
 
 import (
+	"errors"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -208,9 +210,6 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 			return r
 		}
 	}
-	if dirData, err := ctx.View.Read(ownerDirKey); err == nil && dirData != nil {
-		ctx.View.Erase(ownerDirKey)
-	}
 	destData, err := ctx.View.Read(destKey)
 	if err != nil {
 		ctx.Log.Error("account delete: failed to re-read destination account")
@@ -237,6 +236,22 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	// the metadata (sfDeliveredAmount) for every successful AccountDelete.
 	xrpDelivered := tx.NewXRPAmount(int64(sourceBalance))
 	ctx.Metadata.DeliveredAmount = &xrpDelivered
+	dirExists, err := ctx.View.Exists(ownerDirKey)
+	if err != nil {
+		return ctx.Internal("AccountDelete.OwnerDirExists", err)
+	}
+	if dirExists {
+		deleted, err := state.EmptyDirDelete(ctx.View, ownerDirKey)
+		if errors.Is(err, state.ErrMalformedDirectory) {
+			return ter.TefEXCEPTION
+		}
+		if err != nil {
+			return ctx.Internal("AccountDelete.EmptyOwnerDirDelete", err)
+		}
+		if !deleted {
+			return ter.TecHAS_OBLIGATIONS
+		}
+	}
 	if sourceBalance > 0 && (destAccount.Flags&state.LsfPasswordSpent) != 0 {
 		destAccount.Flags &^= state.LsfPasswordSpent
 	}

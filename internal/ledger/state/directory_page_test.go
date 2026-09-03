@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/binary"
+	"errors"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -568,4 +569,159 @@ func TestDirForEach_AcrossPages(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, want, got, "DirForEach visits every entry in insertion order")
+}
+
+type emptyDirFaultView struct {
+	*stubView
+	eraseErrors map[[32]byte]error
+	mutations   []string
+}
+
+func (v *emptyDirFaultView) Update(k keylet.Keylet, data []byte) error {
+	v.mutations = append(v.mutations, "update")
+	return v.stubView.Update(k, data)
+}
+
+func (v *emptyDirFaultView) Erase(k keylet.Keylet) error {
+	v.mutations = append(v.mutations, "erase")
+	if err := v.eraseErrors[k.Key]; err != nil {
+		return err
+	}
+	return v.stubView.Erase(k)
+}
+
+func TestEmptyDirDelete(t *testing.T) {
+	t.Parallel()
+
+	t.Run("root only", func(t *testing.T) {
+		v := newStubView()
+		dir := testDir()
+		makePages(t, v, dir, 1)
+
+		deleted, err := EmptyDirDelete(v, dir)
+		require.NoError(t, err)
+		assert.True(t, deleted)
+		assert.False(t, v.hasPage(dir, 0))
+	})
+
+	t.Run("legacy empty last page", func(t *testing.T) {
+		v := newStubView()
+		dir := testDir()
+		makePages(t, v, dir, 2)
+
+		deleted, err := EmptyDirDelete(v, dir)
+		require.NoError(t, err)
+		assert.True(t, deleted)
+		assert.False(t, v.hasPage(dir, 0))
+		assert.False(t, v.hasPage(dir, 1))
+	})
+
+	t.Run("residual root entry", func(t *testing.T) {
+		v := newStubView()
+		dir := testDir()
+		_, err := DirInsert(v, dir, itemKeyN(1), false, nil)
+		require.NoError(t, err)
+
+		deleted, err := EmptyDirDelete(v, dir)
+		require.NoError(t, err)
+		assert.False(t, deleted)
+		assert.True(t, v.hasPage(dir, 0))
+	})
+
+	t.Run("residual last-page entry", func(t *testing.T) {
+		v := newStubView()
+		dir := testDir()
+		makePages(t, v, dir, 2)
+		last := v.page(t, dir, 1)
+		last.Indexes = [][32]byte{itemKeyN(1)}
+		data, err := SerializeDirectoryNode(last, false)
+		require.NoError(t, err)
+		require.NoError(t, v.Update(keylet.DirPage(dir.Key, 1), data))
+
+		deleted, err := EmptyDirDelete(v, dir)
+		require.NoError(t, err)
+		assert.False(t, deleted)
+		assert.True(t, v.hasPage(dir, 0))
+		assert.True(t, v.hasPage(dir, 1))
+	})
+
+	t.Run("mismatched root index", func(t *testing.T) {
+		v := newStubView()
+		dir := testDir()
+		root := &DirectoryNode{RootIndex: itemKeyN(99)}
+		data, err := SerializeDirectoryNode(root, false)
+		require.NoError(t, err)
+		require.NoError(t, v.Insert(dir, data))
+
+		deleted, err := EmptyDirDelete(v, dir)
+		require.NoError(t, err)
+		assert.False(t, deleted)
+		assert.True(t, v.hasPage(dir, 0))
+	})
+}
+
+func TestEmptyDirDeleteRejectsMalformedChain(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		next uint64
+		prev uint64
+	}{
+		{name: "broken forward link", next: 0, prev: 1},
+		{name: "broken reverse link", next: 1, prev: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := newStubView()
+			dir := testDir()
+			root := &DirectoryNode{RootIndex: dir.Key}
+			root.SetIndexNext(tc.next)
+			root.SetIndexPrevious(tc.prev)
+			data, err := SerializeDirectoryNode(root, false)
+			require.NoError(t, err)
+			require.NoError(t, v.Insert(dir, data))
+
+			deleted, err := EmptyDirDelete(v, dir)
+			require.ErrorIs(t, err, ErrMalformedDirectory)
+			assert.False(t, deleted)
+			assert.True(t, v.hasPage(dir, 0))
+		})
+	}
+
+	t.Run("missing legacy last page", func(t *testing.T) {
+		v := newStubView()
+		dir := testDir()
+		root := &DirectoryNode{RootIndex: dir.Key}
+		root.SetIndexNext(1)
+		root.SetIndexPrevious(1)
+		data, err := SerializeDirectoryNode(root, false)
+		require.NoError(t, err)
+		require.NoError(t, v.Insert(dir, data))
+
+		deleted, err := EmptyDirDelete(v, dir)
+		require.ErrorIs(t, err, ErrMalformedDirectory)
+		assert.False(t, deleted)
+		assert.True(t, v.hasPage(dir, 0))
+	})
+}
+
+func TestEmptyDirDeletePropagatesEraseFailure(t *testing.T) {
+	t.Parallel()
+
+	base := newStubView()
+	dir := testDir()
+	makePages(t, base, dir, 2)
+	v := &emptyDirFaultView{
+		stubView:    base,
+		eraseErrors: map[[32]byte]error{dir.Key: errors.New("root erase failed")},
+	}
+
+	deleted, err := EmptyDirDelete(v, dir)
+	require.ErrorContains(t, err, "root erase failed")
+	assert.False(t, deleted)
+	assert.Equal(t, []string{"update", "erase", "erase"}, v.mutations)
+	assert.False(t, v.hasPage(dir, 1), "legacy last page is erased before the root")
+	root := v.page(t, dir, 0)
+	assert.Zero(t, root.IndexNext)
+	assert.Zero(t, root.IndexPrevious)
 }
