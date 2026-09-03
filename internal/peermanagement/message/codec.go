@@ -14,7 +14,6 @@ import (
 const (
 	smallMsgMax  = 64 * 1024        // 64 KiB
 	mediumMsgMax = 1 * 1024 * 1024  // 1 MiB
-	largeMsgMax  = 16 * 1024 * 1024 // 16 MiB
 	maxPingSize  = 1024
 )
 
@@ -48,9 +47,8 @@ func payloadSizeLimit(t MessageType) uint32 {
 		TypeReplayDeltaReq,
 		TypeTransaction:
 		return mediumMsgMax
-	case TypeProofPathResponse:
-		return largeMsgMax
-	case TypeReplayDeltaResponse:
+	case TypeProofPathResponse,
+		TypeReplayDeltaResponse:
 		return MaxMessageSize
 	case TypeManifests,
 		TypeValidatorList,

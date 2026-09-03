@@ -59,15 +59,6 @@ type ContextFetchPackProvider interface {
 	MakeFetchPackContext(context.Context, [32]byte, int) ([]message.IndexedObject, error)
 }
 
-// Ledger sync constants.
-const (
-	// MaxProofPathResponseBytes caps the complete encoded wire frame of a
-	// proof response. The check deliberately includes protobuf field
-	// tags, varints, and the six-byte XRPL frame header rather than only raw
-	// ledger node bytes.
-	MaxProofPathResponseBytes = 16 * 1024 * 1024
-)
-
 // LedgerProvider is called to retrieve ledger data for responses.
 type LedgerProvider interface {
 	// GetReplayDelta returns the serialized ledger header and every
@@ -346,7 +337,7 @@ func (h *LedgerSyncHandler) handleProofPathRequest(ctx context.Context, peerID P
 		LedgerHeader: header,
 		Path:         path,
 	})
-	if err != nil || len(frame) > MaxProofPathResponseBytes {
+	if err != nil {
 		h.charge(peerID, resource.FeeRequestNoReply(), "proof path response oversized")
 		return nil
 	}

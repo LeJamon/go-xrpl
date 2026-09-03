@@ -166,9 +166,8 @@ func TestHeaderClaimBoundariesAreSymmetric(t *testing.T) {
 		{"ping compressed exact", 100, TypePing, AlgorithmLZ4, maxPingSize - HeaderSizeCompressed, false},
 		{"ping compressed claim over", 100, TypePing, AlgorithmLZ4, maxPingSize - HeaderSizeCompressed + 1, true},
 		{"ping compressed wire above limit", maxPingSize + 1, TypePing, AlgorithmLZ4, 1, false},
-		{"proof exact", largeMsgMax, TypeProofPathResponse, AlgorithmLZ4, largeMsgMax, false},
-		{"proof over", 100, TypeProofPathResponse, AlgorithmLZ4, largeMsgMax + 1, true},
-		{"replay above proof", 100, TypeReplayDeltaResponse, AlgorithmLZ4, largeMsgMax + 1, false},
+		{"proof universal exact", 100, TypeProofPathResponse, AlgorithmLZ4, MaxMessageSize, false},
+		{"proof universal over", 100, TypeProofPathResponse, AlgorithmLZ4, MaxMessageSize + 1, true},
 		{"replay universal exact", 100, TypeReplayDeltaResponse, AlgorithmLZ4, MaxMessageSize, false},
 		{"replay universal over", 100, TypeReplayDeltaResponse, AlgorithmLZ4, MaxMessageSize + 1, true},
 		{"wire representable exact", MaxPayloadSize, TypeReplayDeltaResponse, AlgorithmLZ4, MaxMessageSize, false},
@@ -223,16 +222,21 @@ func TestBuildWireMessagePingBoundary(t *testing.T) {
 }
 
 func TestReplayAndProofOutboundBoundaries(t *testing.T) {
-	payload := make([]byte, largeMsgMax+1)
+	const formerProofLimit = 16 * 1024 * 1024
+	payload := make([]byte, formerProofLimit+1)
 	replayFrame, err := BuildWireMessage(TypeReplayDeltaResponse, payload)
 	if err != nil {
-		t.Fatalf("BuildWireMessage replay above proof limit: %v", err)
+		t.Fatalf("BuildWireMessage replay above former proof limit: %v", err)
 	}
 	if _, err := ReadHeader(bytes.NewReader(replayFrame)); err != nil {
-		t.Fatalf("ReadHeader replay above proof limit: %v", err)
+		t.Fatalf("ReadHeader replay above former proof limit: %v", err)
 	}
-	if _, err := BuildWireMessage(TypeProofPathResponse, payload); !errors.Is(err, ErrMessageTooLarge) {
-		t.Fatalf("BuildWireMessage proof above limit error = %v, want ErrMessageTooLarge", err)
+	proofFrame, err := BuildWireMessage(TypeProofPathResponse, payload)
+	if err != nil {
+		t.Fatalf("BuildWireMessage proof above former limit: %v", err)
+	}
+	if _, err := ReadHeader(bytes.NewReader(proofFrame)); err != nil {
+		t.Fatalf("ReadHeader proof above former limit: %v", err)
 	}
 
 	replayFrame, err = EncodeFrame(&ReplayDeltaResponse{Transactions: [][]byte{payload}})
@@ -243,12 +247,20 @@ func TestReplayAndProofOutboundBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replayHeader.PayloadSize <= largeMsgMax {
-		t.Fatalf("replay protobuf payload = %d, want above %d", replayHeader.PayloadSize, largeMsgMax)
+	if replayHeader.PayloadSize <= formerProofLimit {
+		t.Fatalf("replay protobuf payload = %d, want above %d", replayHeader.PayloadSize, formerProofLimit)
 	}
 
-	if _, err := EncodeFrame(&ProofPathResponse{MapType: LedgerMapTransaction, Path: [][]byte{payload}}); !errors.Is(err, ErrMessageTooLarge) {
-		t.Fatalf("EncodeFrame proof above limit error = %v, want ErrMessageTooLarge", err)
+	proofFrame, err = EncodeFrame(&ProofPathResponse{MapType: LedgerMapTransaction, Path: [][]byte{payload}})
+	if err != nil {
+		t.Fatalf("EncodeFrame proof above former limit: %v", err)
+	}
+	proofHeader, err := ReadHeader(bytes.NewReader(proofFrame))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proofHeader.PayloadSize <= formerProofLimit {
+		t.Fatalf("proof protobuf payload = %d, want above %d", proofHeader.PayloadSize, formerProofLimit)
 	}
 }
 
@@ -463,6 +475,7 @@ func TestReadFrameCaps(t *testing.T) {
 		{"vlcollection_20mib_ok", TypeValidatorListCollection, 20 * mib, false},
 		{"manifests_20mib_ok", TypeManifests, 20 * mib, false},
 		{"validatorlist_20mib_ok", TypeValidatorList, 20 * mib, false},
+		{"proofpath_20mib_ok", TypeProofPathResponse, 20 * mib, false},
 		{"unknown_20mib_ok", MessageType(9999), 20 * mib, false},
 		// Request-shaped types keep their stricter hardening caps.
 		{"ping_20mib_claim_rejected", TypePing, 20 * mib, true},
