@@ -371,7 +371,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 				return result
 			}
 		} else if err := debitAMMTrustline(ammAccountID, a.Asset, withdrawAmount1, ctx.View, ctx.NumberContext()); err != nil {
-			return ter.TefINTERNAL
+			return ammResultFromError(err, ter.TefINTERNAL)
 		}
 	}
 
@@ -388,7 +388,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 					return result
 				}
 			} else if err := debitAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2, ctx.View, ctx.NumberContext()); err != nil {
-				return ter.TefINTERNAL
+				return ammResultFromError(err, ter.TefINTERNAL)
 			}
 		} else if isXRP2 && !withdrawAmount2.IsZero() {
 			// XRP clawback: AMM loses XRP, issuer gains
@@ -407,12 +407,12 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 				}
 			} else {
 				if err := debitAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2, ctx.View, ctx.NumberContext()); err != nil {
-					return ter.TefINTERNAL
+					return ammResultFromError(err, ter.TefINTERNAL)
 				}
 				issuer2ID, _ := state.DecodeAccountID(a.Asset2.Issuer)
 				if holderID != issuer2ID {
 					if err := updateTrustlineBalanceInView(holderID, issuer2ID, a.Asset2.Currency, withdrawAmount2, ctx.View, ctx.NumberContext()); err != nil {
-						return ter.TefINTERNAL
+						return ammResultFromError(err, ter.TefINTERNAL)
 					}
 				}
 			}

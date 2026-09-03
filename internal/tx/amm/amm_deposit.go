@@ -1134,7 +1134,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 func debitDepositTrustline(ctx *tx.ApplyContext, accountID, issuerID [20]byte, currency string, amount tx.Amount) ter.Result {
 	result, err := updateTrustlineBalanceInViewEx(accountID, issuerID, currency, amount, ctx.View, ctx.NumberContext())
 	if err != nil {
-		return TecUNFUNDED_AMM
+		return ammResultFromError(err, TecUNFUNDED_AMM)
 	}
 	if result.SenderOwnerCountDelta != 0 {
 		if err := tx.DecreaseOwnerCount(ctx.View, ctx.Account, result.SenderSponsor, 1); err != nil {

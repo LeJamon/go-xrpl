@@ -396,7 +396,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		if accountID != issuerID1 {
 			tlResult, tlErr := updateTrustlineBalanceInViewEx(accountID, issuerID1, sortedAsset1.Currency, sortedAmount1.Negate(), ctx.View, ctx.NumberContext())
 			if tlErr != nil {
-				return TecUNFUNDED_AMM
+				return ammResultFromError(tlErr, TecUNFUNDED_AMM)
 			}
 			if tlResult.SenderOwnerCountDelta != 0 {
 				if err := tx.DecreaseOwnerCount(ctx.View, ctx.Account, tlResult.SenderSponsor, 1); err != nil {
@@ -439,7 +439,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		if accountID != issuerID2 {
 			tlResult, tlErr := updateTrustlineBalanceInViewEx(accountID, issuerID2, sortedAsset2.Currency, sortedAmount2.Negate(), ctx.View, ctx.NumberContext())
 			if tlErr != nil {
-				return TecUNFUNDED_AMM
+				return ammResultFromError(tlErr, TecUNFUNDED_AMM)
 			}
 			if tlResult.SenderOwnerCountDelta != 0 {
 				if err := tx.DecreaseOwnerCount(ctx.View, ctx.Account, tlResult.SenderSponsor, 1); err != nil {

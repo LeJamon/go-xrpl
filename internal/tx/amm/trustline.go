@@ -64,16 +64,53 @@ func trustCreate(view tx.LedgerView, receiverID, counterpartyID [20]byte, curren
 
 // trustDelete removes a trust line from the low and high owner directories and
 // erases it, mirroring rippled's trustDelete. Owner-count adjustments are the
-// caller's responsibility. It returns the first DirRemove error, if any, before
-// erasing — callers that must ignore directory errors can discard the result.
+// caller's responsibility. It returns the first directory failure before
+// erasing.
 func trustDelete(view tx.LedgerView, lineKey keylet.Keylet, lowID, highID [20]byte, lowNode, highNode uint64) error {
-	if _, err := state.DirRemove(view, keylet.OwnerDir(lowID), lowNode, lineKey.Key, false); err != nil {
+	lowResult, err := state.DirRemove(view, keylet.OwnerDir(lowID), lowNode, lineKey.Key, false)
+	if err != nil {
 		return err
 	}
-	if _, err := state.DirRemove(view, keylet.OwnerDir(highID), highNode, lineKey.Key, false); err != nil {
+	if lowResult == nil || !lowResult.Success {
+		return ter.Errorf(ter.TefBAD_LEDGER, "trust line missing from low owner directory")
+	}
+
+	highResult, err := state.DirRemove(view, keylet.OwnerDir(highID), highNode, lineKey.Key, false)
+	if err != nil {
+		return err
+	}
+	if highResult == nil || !highResult.Success {
+		return ter.Errorf(ter.TefBAD_LEDGER, "trust line missing from high owner directory")
+	}
+
+	lineData, err := view.Read(lineKey)
+	if err != nil {
+		return err
+	}
+	if lineData == nil {
+		return ter.Errorf(ter.TefBAD_LEDGER, "trust line is missing")
+	}
+	line, err := state.ParseRippleState(lineData)
+	if err != nil {
+		return err
+	}
+	line.LowSponsor = ""
+	line.HighSponsor = ""
+	updated, err := state.SerializeRippleState(line)
+	if err != nil {
+		return err
+	}
+	if err := view.Update(lineKey, updated); err != nil {
 		return err
 	}
 	return view.Erase(lineKey)
+}
+
+func ammResultFromError(err error, fallback ter.Result) ter.Result {
+	if resultErr, ok := ter.AsResultError(err); ok {
+		return resultErr.Code
+	}
+	return fallback
 }
 
 // accountHasDefaultRipple reports whether an account has lsfDefaultRipple set.
