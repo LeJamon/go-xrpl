@@ -55,6 +55,10 @@ func TestVerificationPublicKeyEncoding(t *testing.T) {
 
 	invalidPrefix := append([]byte(nil), pub...)
 	invalidPrefix[0] = 0x04
+	invalidPoint := append([]byte{0x02}, make([]byte, 32)...)
+	for i := 1; i < len(invalidPoint); i++ {
+		invalidPoint[i] = 0xFF
+	}
 	keys := []struct {
 		name string
 		key  []byte
@@ -64,6 +68,7 @@ func TestVerificationPublicKeyEncoding(t *testing.T) {
 		{"uncompressed", parsedPub.SerializeUncompressed(), false},
 		{"invalid prefix", invalidPrefix, false},
 		{"invalid length", pub[:len(pub)-1], false},
+		{"invalid point", invalidPoint, false},
 	}
 
 	for _, verifier := range verifiers {

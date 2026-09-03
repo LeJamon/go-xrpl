@@ -10,6 +10,9 @@ import (
 )
 
 func verifyDigestRaw(hash32, pubkey, sigDER []byte) bool {
+	if len(hash32) != 32 || rootcrypto.PublicKeyType(pubkey) != rootcrypto.KeyTypeSecp256k1 {
+		return false
+	}
 	r, s, err := rootcrypto.DERSigToRS(sigDER)
 	if err != nil {
 		return false

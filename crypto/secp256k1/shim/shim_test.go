@@ -5,6 +5,8 @@ package shim
 import (
 	"encoding/hex"
 	"testing"
+
+	"github.com/btcsuite/btcd/btcec/v2"
 )
 
 // Vector lifted from the package-level Validate tests.
@@ -42,6 +44,39 @@ func TestVerifyDigest_RejectsMalformedSig(t *testing.T) {
 	digest := sha512HalfStr(testMsg)
 	if VerifyDigest(digest[:], pub, []byte{0x30, 0x00}) {
 		t.Fatal("expected libsecp256k1 to reject malformed DER")
+	}
+}
+
+func TestVerifyDigest_RejectsNoncanonicalPublicKeys(t *testing.T) {
+	pub := mustHex(t, testPubHex)
+	sig := mustHex(t, testSigDERHex)
+	digest := sha512HalfStr(testMsg)
+	parsedPub, err := btcec.ParsePubKey(pub)
+	if err != nil {
+		t.Fatalf("parse public key: %v", err)
+	}
+
+	invalidPrefix := append([]byte(nil), pub...)
+	invalidPrefix[0] = 0x04
+	invalidPoint := append([]byte{0x02}, make([]byte, 32)...)
+	for i := 1; i < len(invalidPoint); i++ {
+		invalidPoint[i] = 0xFF
+	}
+	keys := []struct {
+		name string
+		key  []byte
+	}{
+		{"uncompressed", parsedPub.SerializeUncompressed()},
+		{"invalid prefix", invalidPrefix},
+		{"invalid length", pub[:len(pub)-1]},
+		{"invalid point", invalidPoint},
+	}
+	for _, key := range keys {
+		t.Run(key.name, func(t *testing.T) {
+			if VerifyDigest(digest[:], key.key, sig) {
+				t.Fatalf("accepted invalid public key %X", key.key)
+			}
+		})
 	}
 }
 

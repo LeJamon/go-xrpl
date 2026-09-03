@@ -10,7 +10,11 @@ package shim
 // #include "shim.h"
 import "C"
 
-import "unsafe"
+import (
+	"unsafe"
+
+	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
+)
 
 func init() {
 	C.goxrpl_secp256k1_init()
@@ -19,9 +23,10 @@ func init() {
 // VerifyDigest accepts a DER-encoded ECDSA signature with either low-S
 // or high-S — the shim normalizes to low-S before calling
 // secp256k1_ecdsa_verify, which itself rejects high-S. Canonicality
-// gating (if any) is the caller's responsibility.
+// gating (if any) is the caller's responsibility. pub must be an
+// XRPL-canonical 33-byte compressed secp256k1 key.
 func VerifyDigest(hash32 []byte, pub []byte, sigDER []byte) bool {
-	if len(hash32) != 32 || len(pub) == 0 || len(sigDER) == 0 {
+	if len(hash32) != 32 || rootcrypto.PublicKeyType(pub) != rootcrypto.KeyTypeSecp256k1 || len(sigDER) == 0 {
 		return false
 	}
 	rc := C.goxrpl_secp256k1_verify_digest(

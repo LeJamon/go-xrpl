@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,6 +37,14 @@ func TestVerifyDigestRaw_GoldenVectors(t *testing.T) {
 	wrongPub := mustDecodeHex(t, otherPub)
 	lowS := mustDecodeHex(t, lowSDER)
 	highS := mustDecodeHex(t, flipSToHighS(t, lowSDER))
+	parsedPub, err := btcec.ParsePubKey(pub)
+	require.NoError(t, err)
+	invalidPrefix := append([]byte(nil), pub...)
+	invalidPrefix[0] = 0x04
+	invalidPoint := append([]byte{0x02}, make([]byte, 32)...)
+	for i := 1; i < len(invalidPoint); i++ {
+		invalidPoint[i] = 0xFF
+	}
 
 	digest := sha512half.Sum([]byte(msg))
 	wrongDigest := sha512half.Sum([]byte("Goodbye World"))
@@ -54,6 +63,11 @@ func TestVerifyDigestRaw_GoldenVectors(t *testing.T) {
 		{"malformed DER", digest[:], pub, []byte{0x30, 0x00}, false},
 		{"garbage sig", digest[:], pub, []byte("not a der signature"), false},
 		{"empty sig", digest[:], pub, nil, false},
+		{"invalid digest length", digest[:len(digest)-1], pub, lowS, false},
+		{"uncompressed key", digest[:], parsedPub.SerializeUncompressed(), lowS, false},
+		{"invalid key prefix", digest[:], invalidPrefix, lowS, false},
+		{"invalid key length", digest[:], pub[:len(pub)-1], lowS, false},
+		{"invalid key point", digest[:], invalidPoint, lowS, false},
 	}
 
 	for _, tc := range cases {
