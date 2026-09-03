@@ -1225,10 +1225,29 @@ func (o *Overlay) submitServeForPeerOwned(
 		return false
 	}
 	if scheduler == nil {
+		if exists {
+			peer.sendMu.RLock()
+			closed := peer.closed.Load() || peer.gracefulClosing
+			peer.sendMu.RUnlock()
+			if closed {
+				return false
+			}
+		}
 		job(context.Background())
 		return true
 	}
-	if scheduler.SubmitOwned(serveCtx, peerID, job, discard) {
+	if exists {
+		peer.sendMu.RLock()
+		if peer.closed.Load() || peer.gracefulClosing {
+			peer.sendMu.RUnlock()
+			return false
+		}
+		accepted := scheduler.SubmitOwned(serveCtx, peerID, job, discard)
+		peer.sendMu.RUnlock()
+		if accepted {
+			return true
+		}
+	} else if scheduler.SubmitOwned(serveCtx, peerID, job, discard) {
 		return true
 	}
 	o.droppedServeJobs.Add(1)

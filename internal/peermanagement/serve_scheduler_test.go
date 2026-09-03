@@ -402,3 +402,61 @@ func TestServeSchedulerRecoversTaskPanic(t *testing.T) {
 		t.Fatal("scheduler did not stop after cancellation")
 	}
 }
+
+func TestOverlayServeAdmissionSerializesWithPeerClose(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := newServeScheduler(ctx, 1, 1, 1, 1)
+	peer := NewPeer(1, Endpoint{Host: "192.0.2.1", Port: 51235}, false, nil, nil)
+	peer.setState(PeerStateConnected)
+	overlay := &Overlay{
+		peers:          map[PeerID]*Peer{peer.ID(): peer},
+		serveScheduler: s,
+		ctx:            ctx,
+		lifecycleState: overlayLifecycleRunning,
+	}
+
+	s.mu.Lock()
+	submitDone := make(chan bool, 1)
+	go func() {
+		submitDone <- overlay.submitServeForPeerOwned(
+			peer.ID(), resource.NewCharge(0, "test"), func(context.Context) {}, nil,
+		)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for peer.sendMu.TryLock() {
+		peer.sendMu.Unlock()
+		if time.Now().After(deadline) {
+			s.mu.Unlock()
+			t.Fatal("serve admission did not lock the peer against close")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	closeStarted := make(chan struct{})
+	closeDone := make(chan error, 1)
+	go func() {
+		close(closeStarted)
+		closeDone <- peer.Close()
+	}()
+	<-closeStarted
+	select {
+	case err := <-closeDone:
+		s.mu.Unlock()
+		t.Fatalf("peer closed before serve admission completed: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	s.mu.Unlock()
+	if accepted := <-submitDone; !accepted {
+		t.Fatal("serve admission was rejected before peer close")
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatalf("peer close failed: %v", err)
+	}
+	s.CancelPeer(peer.ID())
+	if pending := s.Pending(); pending != 0 {
+		t.Fatalf("pending = %d after peer close cancellation, want 0", pending)
+	}
+}
