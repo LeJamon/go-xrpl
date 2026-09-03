@@ -120,6 +120,7 @@ func (c *TestCluster) Stop() {
 		if node.started {
 			_ = node.Engine.Stop()
 		}
+		_ = node.Identity.Close()
 	}
 }
 

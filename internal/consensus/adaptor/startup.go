@@ -76,6 +76,7 @@ type Components struct {
 	stopErr       error
 	fatalOnce     sync.Once
 	manifestStore manifest.Store
+	identity      *ValidatorIdentity
 
 	overlayDone       chan struct{}
 	routerDone        chan struct{}
@@ -343,6 +344,9 @@ func (c *Components) stop() {
 		if c.Engine != nil {
 			c.stopErr = errors.Join(c.stopErr, c.Engine.Stop())
 		}
+		if c.identity != nil {
+			c.stopErr = errors.Join(c.stopErr, c.identity.Close())
+		}
 		if c.manifestStore != nil {
 			stored := manifest.StoredManifests{
 				Validators: persistedManifests(c.ValidatorManifests, func(master [33]byte) bool {
@@ -414,6 +418,11 @@ func NewFromConfig(
 	if err != nil {
 		return nil, fmt.Errorf("create validator identity: %w", err)
 	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, identity.Close())
+		}
+	}()
 	publisherKeys, err := ParseValidatorListPublisherKeys(appCfg)
 	if err != nil {
 		return nil, fmt.Errorf("parse validator_list_keys: %w", err)
@@ -659,6 +668,7 @@ func NewFromConfig(
 		configuredPublisherThreshold: appCfg.Validators.EffectiveListThreshold(),
 		Archive:                      validationArchive,
 		manifestStore:                manifestStore,
+		identity:                     identity,
 	}
 
 	// Capturing the boot values directly here would let a SIGHUP removal

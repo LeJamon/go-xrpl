@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	xrplcrypto "github.com/LeJamon/go-xrpl/crypto"
 )
 
 // MaxManifestBase64 is the largest base64 representation of a serialized
@@ -60,6 +62,7 @@ func LoadValidatorToken(block string) (*ValidatorToken, error) {
 	if err != nil {
 		return nil, fmt.Errorf("validator_token: base64 decode: %w", err)
 	}
+	defer xrplcrypto.SecureErase(decoded)
 
 	var raw struct {
 		Manifest            string `json:"manifest"`
@@ -82,6 +85,7 @@ func LoadValidatorToken(block string) (*ValidatorToken, error) {
 	if err != nil {
 		return nil, fmt.Errorf("validator_token: validation_secret_key not hex: %w", err)
 	}
+	defer xrplcrypto.SecureErase(keyBytes)
 	if len(keyBytes) != 32 {
 		return nil, fmt.Errorf("validator_token: validation_secret_key wrong length %d", len(keyBytes))
 	}
