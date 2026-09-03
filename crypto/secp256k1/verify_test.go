@@ -7,9 +7,82 @@ import (
 	"testing"
 
 	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/stretchr/testify/require"
 )
+
+func TestVerificationPublicKeyEncoding(t *testing.T) {
+	t.Parallel()
+
+	const (
+		msg     = "Hello World"
+		pubHex  = "02950F4710101A25073BF37086D73FBBD00C7A6B0F91097D8F0BC6D268C400D56E"
+		lowSDER = "3045022100E1617F1A3C85B5BC8FA6224F893FE9068BEA8F8D075EE144F6F9D255C829761802206FD9B361CDE83A0C3D5654232F1D7CFB1A614E9A8F9B1A861564029065516E64"
+	)
+
+	pub := mustDecodeHex(t, pubHex)
+	sig := mustDecodeHex(t, lowSDER)
+	parsedPub, err := btcec.ParsePubKey(pub)
+	require.NoError(t, err)
+	digest := sha512half.Sum([]byte(msg))
+	algo := Algorithm{}
+
+	verifiers := []struct {
+		name   string
+		verify func([]byte) bool
+	}{
+		{"Validate", func(key []byte) bool {
+			return algo.Validate(msg, hex.EncodeToString(key), lowSDER)
+		}},
+		{"ValidateWithCanonicality", func(key []byte) bool {
+			return algo.ValidateWithCanonicality(msg, hex.EncodeToString(key), lowSDER, false)
+		}},
+		{"ValidateBytes", func(key []byte) bool {
+			return algo.ValidateBytes([]byte(msg), key, sig)
+		}},
+		{"ValidateDigest", func(key []byte) bool {
+			return algo.ValidateDigest(digest, key, sig)
+		}},
+		{"ValidateDigestWithCanonicality", func(key []byte) bool {
+			return algo.ValidateDigestWithCanonicality(digest, key, sig, false)
+		}},
+		{"VerifyDigestBytes", func(key []byte) bool {
+			return VerifyDigestBytes(digest[:], key, sig)
+		}},
+	}
+
+	invalidPrefix := append([]byte(nil), pub...)
+	invalidPrefix[0] = 0x04
+	invalidPoint := append([]byte{0x02}, make([]byte, 32)...)
+	for i := 1; i < len(invalidPoint); i++ {
+		invalidPoint[i] = 0xFF
+	}
+	keys := []struct {
+		name string
+		key  []byte
+		want bool
+	}{
+		{"compressed", pub, true},
+		{"uncompressed", parsedPub.SerializeUncompressed(), false},
+		{"invalid prefix", invalidPrefix, false},
+		{"invalid length", pub[:len(pub)-1], false},
+		{"invalid point", invalidPoint, false},
+	}
+
+	for _, verifier := range verifiers {
+		t.Run(verifier.name, func(t *testing.T) {
+			t.Parallel()
+			for _, key := range keys {
+				t.Run(key.name, func(t *testing.T) {
+					t.Parallel()
+					require.Equal(t, key.want, verifier.verify(key.key))
+				})
+			}
+		})
+	}
+}
 
 // TestValidateWithCanonicality_HighS locks in the relaxed-verify
 // contract: with mustBeFullyCanonical=false, a high-S signature must

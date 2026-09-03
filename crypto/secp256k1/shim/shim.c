@@ -22,7 +22,7 @@ int goxrpl_secp256k1_verify_digest(const unsigned char* pub, size_t pub_len,
     if (g_ctx == NULL || pub == NULL || sig_der == NULL || hash32 == NULL) {
         return 0;
     }
-    if (pub_len == 0 || sig_len == 0) {
+    if (pub_len != 33 || (pub[0] != 0x02 && pub[0] != 0x03) || sig_len == 0) {
         return 0;
     }
 

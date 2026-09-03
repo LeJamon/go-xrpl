@@ -280,6 +280,9 @@ func (c Algorithm) ValidateBytes(msg, pubkey, sig []byte) bool {
 // When hashMsg is true the message is SHA-512Half-hashed before verification;
 // otherwise msg is treated as a pre-computed 32-byte digest.
 func (c Algorithm) validateBytes(msg, pubkey, sig []byte, mustBeFullyCanonical, hashMsg bool) bool {
+	if rootcrypto.PublicKeyType(pubkey) != rootcrypto.KeyTypeSecp256k1 {
+		return false
+	}
 	canonicality := rootcrypto.ECDSACanonicality(sig)
 	if canonicality == rootcrypto.CanonicalityNone {
 		return false
