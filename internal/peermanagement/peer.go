@@ -1392,11 +1392,11 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 			return err
 		}
 		n, err := writeComplete(conn, wire)
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			err = ErrWriteIdle
+		}
 		p.completeOutbound(token, err)
 		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				return ErrWriteIdle
-			}
 			return err
 		}
 		p.metrics.sent.addMessage(uint64(n))

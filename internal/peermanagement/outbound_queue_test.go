@@ -603,6 +603,43 @@ func TestPeerRunReturnsGracefulDrainFailure(t *testing.T) {
 	}
 }
 
+func TestPeerRunReturnsGracefulDrainTimeout(t *testing.T) {
+	peer := newLatencyTestPeer(t)
+	conn := newGracefulDrainConn(io.EOF)
+	conn.writeErr = livenessTimeoutError{}
+	peer.conn = conn
+	peer.bufReader = bufio.NewReader(conn)
+	peer.setState(PeerStateConnected)
+
+	require.NoError(t, peer.Send([]byte("accepted")))
+	done := make(chan error, 1)
+	go func() { done <- peer.Run(context.Background()) }()
+
+	select {
+	case <-conn.writeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("writer did not start")
+	}
+	require.Eventually(t, func() bool {
+		peer.sendMu.RLock()
+		defer peer.sendMu.RUnlock()
+		return peer.gracefulClosing
+	}, time.Second, time.Millisecond)
+	close(conn.releaseWrites)
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, ErrWriteIdle)
+	case <-time.After(time.Second):
+		t.Fatal("Peer.Run did not return graceful drain timeout")
+	}
+	select {
+	case <-conn.shutdown:
+		t.Fatal("write timeout used graceful TLS shutdown")
+	default:
+	}
+}
+
 func TestPeerRunReturnsGracefulShutdownFailure(t *testing.T) {
 	shutdownErr := errors.New("TLS shutdown failed")
 	peer := newLatencyTestPeer(t)
