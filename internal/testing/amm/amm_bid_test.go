@@ -5,8 +5,11 @@ package amm_test
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
+	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/stretchr/testify/require"
 )
 
 // TestInvalidBid tests invalid bid scenarios.
@@ -460,6 +463,14 @@ func TestBid(t *testing.T) {
 		}
 		env.Close()
 
+		ammAccount := env.ReadAMMAccount(amm.XRP(), env.USD)
+		require.NotNil(t, ammAccount)
+		lpCurrency := env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 0).Currency
+		lineKey := keylet.Line(env.Carol.ID, ammAccount.ID, lpCurrency)
+		lineBefore := readBidLPLine(t, env, lineKey)
+		balanceBefore := bidLPHolding(lineBefore, env.Carol.ID, ammAccount.ID)
+		ownerCountBefore := env.OwnerCount(env.Carol)
+
 		// Alice outbids Carol
 		bidTx2 := amm.AMMBid(env.Alice, amm.XRP(), env.USD).
 			BidMin(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 200)).
@@ -470,8 +481,116 @@ func TestBid(t *testing.T) {
 		}
 		env.Close()
 
-		t.Log("Outbid previous owner passed")
+		lineAfter := readBidLPLine(t, env, lineKey)
+		balanceAfter := bidLPHolding(lineAfter, env.Carol.ID, ammAccount.ID)
+		refund, err := balanceAfter.Sub(balanceBefore)
+		require.NoError(t, err)
+		wantRefund := env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 104.5)
+		require.Equal(t, wantRefund.Mantissa(), refund.Mantissa())
+		require.Equal(t, wantRefund.Exponent(), refund.Exponent())
+		require.Equal(t, ownerCountBefore, env.OwnerCount(env.Carol), "updating an existing LP line must not change OwnerCount")
 	})
+
+	t.Run("OutbidPreviousOwnerWithoutLPLine", func(t *testing.T) {
+		env := setupAMM(t)
+
+		result := env.Submit(amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 1000000)).
+			LPToken().
+			Build())
+		require.True(t, result.Success, "Carol deposit: %s - %s", result.Code, result.Message)
+		env.Close()
+
+		result = env.Submit(amm.AMMBid(env.Carol, amm.XRP(), env.USD).
+			BidMin(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 110)).
+			Build())
+		require.True(t, result.Success, "Carol bid: %s - %s", result.Code, result.Message)
+		env.Close()
+
+		ammAccount := env.ReadAMMAccount(amm.XRP(), env.USD)
+		require.NotNil(t, ammAccount)
+		lpCurrency := env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 0).Currency
+		lineKey := keylet.Line(env.Carol.ID, ammAccount.ID, lpCurrency)
+		require.True(t, env.LedgerEntryExists(lineKey))
+
+		result = env.Submit(amm.AMMWithdraw(env.Carol, amm.XRP(), env.USD).WithdrawAll().Build())
+		require.True(t, result.Success, "Carol withdraw all: %s - %s", result.Code, result.Message)
+		env.Close()
+
+		require.False(t, env.LedgerEntryExists(lineKey), "withdraw all should remove Carol's LP line")
+		require.Equal(t, env.Carol.ID, env.ReadAMMData(amm.XRP(), env.USD).AuctionSlot.Account,
+			"withdrawing liquidity must not invalidate the active slot owner")
+		jtx.RequireOwnerDirectoryContains(t, env.TestEnv, env.Carol, lineKey.Key, false)
+		jtx.RequireOwnerDirectoryContains(t, env.TestEnv, ammAccount, lineKey.Key, false)
+		ownerCountBefore := env.OwnerCount(env.Carol)
+		ammOwnerCountBefore := env.OwnerCount(ammAccount)
+
+		result = env.Submit(amm.AMMBid(env.Alice, amm.XRP(), env.USD).
+			BidMin(env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 200)).
+			Build())
+		require.True(t, result.Success, "Alice outbid: %s - %s", result.Code, result.Message)
+		env.Close()
+
+		line := readBidLPLine(t, env, lineKey)
+		holding := bidLPHolding(line, env.Carol.ID, ammAccount.ID)
+		wantRefund := env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 104.5)
+		require.Equal(t, wantRefund.Mantissa(), holding.Mantissa())
+		require.Equal(t, wantRefund.Exponent(), holding.Exponent())
+		require.Equal(t, lpCurrency, line.Balance.Currency)
+		require.Equal(t, state.AccountOneAddress, line.Balance.Issuer)
+
+		lowID, highID := env.Carol.ID, ammAccount.ID
+		if !keylet.IsLowAccount(lowID, highID) {
+			lowID, highID = highID, lowID
+		}
+		lowAddress, err := state.EncodeAccountID(lowID)
+		require.NoError(t, err)
+		highAddress, err := state.EncodeAccountID(highID)
+		require.NoError(t, err)
+		require.True(t, line.LowLimit.IsZero())
+		require.Equal(t, lpCurrency, line.LowLimit.Currency)
+		require.Equal(t, lowAddress, line.LowLimit.Issuer)
+		require.True(t, line.HighLimit.IsZero())
+		require.Equal(t, lpCurrency, line.HighLimit.Currency)
+		require.Equal(t, highAddress, line.HighLimit.Issuer)
+
+		holderReserve, holderNoRipple := state.LsfLowReserve, state.LsfLowNoRipple
+		ammNoRipple := state.LsfHighNoRipple
+		if !keylet.IsLowAccount(env.Carol.ID, ammAccount.ID) {
+			holderReserve, holderNoRipple = state.LsfHighReserve, state.LsfHighNoRipple
+			ammNoRipple = state.LsfLowNoRipple
+		}
+		wantFlags := holderReserve
+		if env.AccountInfo(env.Carol).Flags&state.LsfDefaultRipple == 0 {
+			wantFlags |= holderNoRipple
+		}
+		if env.AccountInfo(ammAccount).Flags&state.LsfDefaultRipple == 0 {
+			wantFlags |= ammNoRipple
+		}
+		require.Equal(t, wantFlags, line.Flags)
+		require.Empty(t, line.LowSponsor)
+		require.Empty(t, line.HighSponsor)
+		require.Equal(t, ownerCountBefore+1, env.OwnerCount(env.Carol))
+		require.Equal(t, ammOwnerCountBefore, env.OwnerCount(ammAccount))
+		jtx.RequireOwnerDirectoryContains(t, env.TestEnv, env.Carol, lineKey.Key, true)
+		jtx.RequireOwnerDirectoryContains(t, env.TestEnv, ammAccount, lineKey.Key, true)
+	})
+}
+
+func readBidLPLine(t *testing.T, env *amm.AMMTestEnv, lineKey keylet.Keylet) *state.RippleState {
+	t.Helper()
+	data, err := env.LedgerEntry(lineKey)
+	require.NoError(t, err)
+	line, err := state.ParseRippleState(data)
+	require.NoError(t, err)
+	return line
+}
+
+func bidLPHolding(line *state.RippleState, holderID, ammAccountID [20]byte) state.Amount {
+	if keylet.IsLowAccount(holderID, ammAccountID) {
+		return line.Balance
+	}
+	return line.Balance.Negate()
 }
 
 // TestBidAuthAccountsPrecedence pins that the fixAMMv1_3 duplicate/self
