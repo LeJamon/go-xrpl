@@ -151,7 +151,7 @@ func TestGRPCServer_RoundTrip(t *testing.T) {
 // error, not a match-all wildcard.
 func TestGRPCServer_RejectsUnspecifiedSecureGateway(t *testing.T) {
 	lookup := &stubLookup{validated: newStubLedger(t)}
-	for _, gateway := range []string{"0.0.0.0", "::", "0.0.0.0/0", "::/0"} {
+	for _, gateway := range []string{"0.0.0.0", "::"} {
 		t.Run(gateway, func(t *testing.T) {
 			p := config.PortConfig{
 				Port:          0,
@@ -164,6 +164,26 @@ func TestGRPCServer_RejectsUnspecifiedSecureGateway(t *testing.T) {
 			)
 			if err == nil {
 				t.Fatalf("expected prepareGRPCServer to reject unspecified secure_gateway %q", gateway)
+			}
+		})
+	}
+}
+
+func TestGRPCServer_RejectsNonIPSecureGateway(t *testing.T) {
+	lookup := &stubLookup{validated: newStubLedger(t)}
+	for _, gateway := range []string{"192.0.2.0/24", "2001:db8::/64", "0.0.0.0/0", "::/0", "", "localhost"} {
+		t.Run(gateway, func(t *testing.T) {
+			p := config.PortConfig{
+				Port:          0,
+				IP:            "127.0.0.1",
+				Protocol:      "grpc",
+				SecureGateway: []string{gateway},
+			}
+			_, err := prepareGRPCServer(
+				context.Background(), "port_grpc", p, lookup, nil, xrpllog.Discard(), systemListen,
+			)
+			if err == nil {
+				t.Fatalf("expected prepareGRPCServer to reject non-IP secure_gateway %q", gateway)
 			}
 		})
 	}
@@ -254,14 +274,11 @@ func TestGRPCServer_CancellationReleasesAdmission(t *testing.T) {
 }
 
 func TestGRPCServer_ResourceAdmissionAndSecureGateway(t *testing.T) {
-	_, gatewayNet, err := net.ParseCIDR("192.0.2.10/32")
-	if err != nil {
-		t.Fatal(err)
-	}
+	gatewayIP := net.ParseIP("192.0.2.10")
 
 	t.Run("ordinary request is charged", func(t *testing.T) {
 		manager := resource.NewManager(nil, nil)
-		server := &boundGRPCServer{resourceManager: manager, secureGatewayNets: []net.IPNet{*gatewayNet}}
+		server := &boundGRPCServer{resourceManager: manager, secureGatewayIPs: []net.IP{gatewayIP}}
 		if _, err := server.trackUnary(grpcPeerContext("192.0.2.11"), &rpcv1.GetLedgerRequest{}, nil, func(context.Context, any) (any, error) {
 			return &rpcv1.GetLedgerResponse{}, nil
 		}); err != nil {
@@ -278,9 +295,35 @@ func TestGRPCServer_ResourceAdmissionAndSecureGateway(t *testing.T) {
 		}
 	})
 
+	t.Run("request crossing the drop threshold succeeds", func(t *testing.T) {
+		now := time.Unix(1_700_000_000, 0)
+		manager := resource.NewManager(func() time.Time { return now }, nil)
+		server := &boundGRPCServer{resourceManager: manager}
+		consumer := manager.NewInboundEndpoint("192.0.2.12")
+		if consumer == nil {
+			t.Fatal("create resource consumer")
+		}
+		consumer.Charge(resource.NewCharge((resource.DropThreshold-1)*resource.DecayWindowSeconds, "test"), "")
+		consumer.Release()
+
+		request := func() error {
+			_, err := server.trackUnary(grpcPeerContext("192.0.2.12"), &rpcv1.GetLedgerRequest{}, nil, func(context.Context, any) (any, error) {
+				return &rpcv1.GetLedgerResponse{}, nil
+			})
+			return err
+		}
+		if err := request(); err != nil {
+			t.Fatalf("threshold-crossing request failed: %v", err)
+		}
+		if code := status.Code(request()); code != codes.ResourceExhausted {
+			t.Fatalf("request after threshold crossing code = %v, want %v", code, codes.ResourceExhausted)
+		}
+	})
+
 	t.Run("only a matching peer with a user is unlimited", func(t *testing.T) {
-		manager := resource.NewManager(nil, nil)
-		server := &boundGRPCServer{resourceManager: manager, secureGatewayNets: []net.IPNet{*gatewayNet}}
+		now := time.Unix(1_700_000_000, 0)
+		manager := resource.NewManager(func() time.Time { return now }, nil)
+		server := &boundGRPCServer{resourceManager: manager, secureGatewayIPs: []net.IP{gatewayIP}}
 		seedGRPCResourceDrop(t, manager, "192.0.2.10")
 		seedGRPCResourceDrop(t, manager, "192.0.2.11")
 
@@ -310,6 +353,15 @@ func TestGRPCServer_ResourceAdmissionAndSecureGateway(t *testing.T) {
 		}
 		if !response.(*rpcv1.GetLedgerResponse).GetIsUnlimited() {
 			t.Fatal("identified gateway response did not set is_unlimited")
+		}
+		consumer := manager.NewInboundEndpoint("192.0.2.10")
+		if consumer == nil {
+			t.Fatal("identified gateway request did not retain resource accounting")
+		}
+		defer consumer.Release()
+		want := int64(resource.DropThreshold + resource.FeeMediumBurdenRPC().Cost()/resource.DecayWindowSeconds)
+		if balance := consumer.Balance(); balance != want {
+			t.Fatalf("identified gateway balance = %d, want %d", balance, want)
 		}
 	})
 }

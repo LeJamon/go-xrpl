@@ -54,13 +54,13 @@ type boundGRPCServer struct {
 	markReady func()
 	server    *googlegrpc.Server
 
-	resourceManager   *resource.Manager
-	secureGatewayNets []net.IPNet
-	requestLimit      int
-	requestMu         sync.Mutex
-	requestWG         sync.WaitGroup
-	requests          int
-	stopping          bool
+	resourceManager  *resource.Manager
+	secureGatewayIPs []net.IP
+	requestLimit     int
+	requestMu        sync.Mutex
+	requestWG        sync.WaitGroup
+	requests         int
+	stopping         bool
 }
 
 func prepareGRPCServer(
@@ -87,9 +87,9 @@ func bindGRPCServer(
 	log xrpllog.Logger,
 	listen listenFunc,
 ) (*boundGRPCServer, error) {
-	secureGatewayNets, err := p.ParseSecureGatewayNets()
+	secureGatewayIPs, err := parseGRPCSecureGatewayIPs(name, p.SecureGateway)
 	if err != nil {
-		return nil, fmt.Errorf("parse secure_gateway nets for grpc port %q: %w", name, err)
+		return nil, err
 	}
 	addr := p.BindAddress()
 	lis, err := listen(ctx, "tcp", addr)
@@ -100,14 +100,14 @@ func bindGRPCServer(
 	readyListener := newServeReadyListener(lis)
 
 	bound := &boundGRPCServer{
-		name:              name,
-		address:           boundAddr,
-		listener:          readyListener,
-		ready:             readyListener.ready,
-		markReady:         readyListener.markReady,
-		resourceManager:   resourceManager,
-		secureGatewayNets: secureGatewayNets,
-		requestLimit:      p.Limit,
+		name:             name,
+		address:          boundAddr,
+		listener:         readyListener,
+		ready:            readyListener.ready,
+		markReady:        readyListener.markReady,
+		resourceManager:  resourceManager,
+		secureGatewayIPs: secureGatewayIPs,
+		requestLimit:     p.Limit,
 	}
 	srv := googlegrpc.NewServer(
 		googlegrpc.ChainUnaryInterceptor(bound.trackUnary, grpcRecoveryInterceptor(log)),
@@ -150,16 +150,16 @@ func (s *boundGRPCServer) trackUnary(
 	}
 	defer s.finishRequest()
 
-	admission, unlimited, err := s.admitResource(ctx, req)
+	method := ""
+	if info != nil {
+		method = info.FullMethod
+	}
+	finishResource, unlimited, err := s.admitResource(ctx, req, method)
 	if err != nil {
 		return nil, err
 	}
-	if admission != nil {
-		method := ""
-		if info != nil {
-			method = info.FullMethod
-		}
-		defer admission.Finish(resource.FeeMediumBurdenRPC(), method)
+	if finishResource != nil {
+		defer finishResource()
 	}
 
 	resp, err := handler(ctx, req)
@@ -182,7 +182,7 @@ func (s *boundGRPCServer) trackStream(
 	return handler(srv, stream)
 }
 
-func (s *boundGRPCServer) admitResource(ctx context.Context, req any) (*resource.Admission, bool, error) {
+func (s *boundGRPCServer) admitResource(ctx context.Context, req any, method string) (func(), bool, error) {
 	if s.resourceManager == nil {
 		return nil, false, nil
 	}
@@ -190,19 +190,17 @@ func (s *boundGRPCServer) admitResource(ctx context.Context, req any) (*resource
 	if !ok {
 		return nil, false, status.Error(codes.Internal, "Failed to get client endpoint")
 	}
-	unlimited := grpcUser(req) != "" && config.IPInNets(clientIP, s.secureGatewayNets)
-	if unlimited {
-		admission, disposition := s.resourceManager.AdmitUnlimited(clientIP.String())
-		if admission == nil || disposition == resource.Drop {
-			return nil, false, status.Error(codes.ResourceExhausted, "usage balance exceeds threshold")
-		}
-		return admission, true, nil
-	}
-	admission, disposition := s.resourceManager.AdmitInbound(clientIP.String(), resource.FeeMediumBurdenRPC())
-	if admission == nil || disposition == resource.Drop {
+	unlimited := grpcUser(req) != "" && s.isSecureGateway(clientIP)
+	consumer := s.resourceManager.NewInboundEndpoint(clientIP.String())
+	if consumer == nil {
 		return nil, false, status.Error(codes.ResourceExhausted, "usage balance exceeds threshold")
 	}
-	return admission, false, nil
+	if !unlimited && consumer.Disconnect() {
+		consumer.Release()
+		return nil, false, status.Error(codes.ResourceExhausted, "usage balance exceeds threshold")
+	}
+	consumer.Charge(resource.FeeMediumBurdenRPC(), method)
+	return consumer.Release, unlimited, nil
 }
 
 func grpcClientIP(ctx context.Context) (net.IP, bool) {
@@ -226,6 +224,15 @@ func grpcUser(req any) string {
 		return request.GetUser()
 	}
 	return ""
+}
+
+func (s *boundGRPCServer) isSecureGateway(clientIP net.IP) bool {
+	for _, gatewayIP := range s.secureGatewayIPs {
+		if gatewayIP.Equal(clientIP) {
+			return true
+		}
+	}
+	return false
 }
 
 func setGRPCUnlimited(resp any) {
@@ -253,25 +260,24 @@ func (s *boundGRPCServer) waitRequests() {
 }
 
 func validateGRPCPort(name string, p config.PortConfig) error {
-	if _, err := p.ParseSecureGatewayNets(); err != nil {
-		return fmt.Errorf("parse secure_gateway nets for grpc port %q: %w", name, err)
-	}
-	// rippled forbids an unspecified address in grpc secure_gateway
-	// (GRPCServer.cpp:361-368) — match-all would defeat the rate-limit
-	// bypass it scopes to known Clio hosts.
-	for _, entry := range p.SecureGateway {
+	_, err := parseGRPCSecureGatewayIPs(name, p.SecureGateway)
+	return err
+}
+
+func parseGRPCSecureGatewayIPs(name string, entries []string) ([]net.IP, error) {
+	gateways := make([]net.IP, 0, len(entries))
+	for _, entry := range entries {
 		entry = strings.TrimSpace(entry)
-		if ip := net.ParseIP(entry); ip != nil && ip.IsUnspecified() {
-			return fmt.Errorf("grpc port %q: unspecified IP %q in secure_gateway", name, entry)
+		ip := net.ParseIP(entry)
+		if ip == nil {
+			return nil, fmt.Errorf("grpc port %q: invalid secure_gateway IP %q", name, entry)
 		}
-		if _, network, err := net.ParseCIDR(entry); err == nil {
-			prefix, _ := network.Mask.Size()
-			if prefix == 0 {
-				return fmt.Errorf("grpc port %q: unspecified network %q in secure_gateway", name, entry)
-			}
+		if ip.IsUnspecified() {
+			return nil, fmt.Errorf("grpc port %q: unspecified IP %q in secure_gateway", name, entry)
 		}
+		gateways = append(gateways, ip)
 	}
-	return nil
+	return gateways, nil
 }
 
 func (s *boundGRPCServer) serve(log xrpllog.Logger, errCh chan<- error, done func()) {

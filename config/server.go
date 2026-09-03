@@ -108,6 +108,9 @@ func (p *PortConfig) Validate() error {
 	if p.SendQueueLimit < 0 || p.SendQueueLimit > 65535 {
 		return fmt.Errorf("send_queue_limit must be 0 (default) or between 1 and 65535, got %d", p.SendQueueLimit)
 	}
+	if p.Limit < 0 || p.Limit > 65535 {
+		return fmt.Errorf("limit must be 0 (unlimited) or between 1 and 65535, got %d", p.Limit)
+	}
 	if p.IP == "" {
 		return errors.New("IP address is required")
 	}
