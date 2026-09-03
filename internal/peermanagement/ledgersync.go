@@ -346,13 +346,6 @@ func (h *LedgerSyncHandler) handleProofPathRequest(ctx context.Context, peerID P
 	return nil
 }
 
-// sendProofPathResponse delivers an encoded wire frame through the bounded
-// priority lane. Standalone handlers without a priority sender use the legacy
-// non-blocking event fallback.
-//
-// The handler wraps the response before this delivery boundary so the Event
-// payload is a fully formed frame that Overlay.onLedgerResponse can hand
-// straight to the peer's send queue.
 func (h *LedgerSyncHandler) sendProofPathResponse(ctx context.Context, peerID PeerID, frame []byte) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -455,13 +448,6 @@ func (h *LedgerSyncHandler) handleReplayDeltaRequest(ctx context.Context, peerID
 	return nil
 }
 
-// sendReplayDeltaResponse delivers an encoded wire frame through the bounded
-// priority lane. Standalone handlers without a priority sender use the legacy
-// non-blocking event fallback.
-//
-// The handler wraps the response before this delivery boundary so the Event
-// payload is a fully formed frame that Overlay.onLedgerResponse can hand
-// straight to the peer's send queue.
 func (h *LedgerSyncHandler) sendReplayDeltaResponse(ctx context.Context, peerID PeerID, frame []byte) {
 	if ctx == nil {
 		ctx = context.Background()
