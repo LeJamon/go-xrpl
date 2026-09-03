@@ -10,6 +10,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -1030,12 +1031,46 @@ const (
 	peerPingLoop
 )
 
+func (l peerRunLoop) String() string {
+	switch l {
+	case peerReadLoop:
+		return "read"
+	case peerWriteLoop:
+		return "write"
+	case peerPingLoop:
+		return "ping"
+	default:
+		return "unknown"
+	}
+}
+
 type peerRunResult struct {
 	loop peerRunLoop
 	err  error
 }
 
+func (p *Peer) runWorker(loop peerRunLoop, worker func() error) (result peerRunResult) {
+	result.loop = loop
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result.err = fmt.Errorf("peer %d %s worker panic: %v", p.id, loop, recovered)
+			slog.Error("peer worker panicked",
+				"t", "Peer", "peer", p.id, "endpoint", p.endpoint.String(),
+				"worker", loop.String(), "panic", recovered, "stack", string(debug.Stack()))
+		}
+	}()
+	result.err = worker()
+	return result
+}
+
 func (p *Peer) Run(ctx context.Context) error {
+	return p.run(ctx, p.readLoop, p.writeLoop, p.pingLoop)
+}
+
+func (p *Peer) run(
+	ctx context.Context,
+	read, write, ping func(context.Context) error,
+) error {
 	p.mu.RLock()
 	if p.state != PeerStateConnected {
 		p.mu.RUnlock()
@@ -1048,17 +1083,17 @@ func (p *Peer) Run(ctx context.Context) error {
 	p.runWG.Add(3)
 	go func() {
 		defer p.runWG.Done()
-		errCh <- peerRunResult{loop: peerReadLoop, err: p.readLoop(ctx)}
+		errCh <- p.runWorker(peerReadLoop, func() error { return read(ctx) })
 	}()
 
 	go func() {
 		defer p.runWG.Done()
-		errCh <- peerRunResult{loop: peerWriteLoop, err: p.writeLoop(ctx)}
+		errCh <- p.runWorker(peerWriteLoop, func() error { return write(ctx) })
 	}()
 
 	go func() {
 		defer p.runWG.Done()
-		errCh <- peerRunResult{loop: peerPingLoop, err: p.pingLoop(ctx)}
+		errCh <- p.runWorker(peerPingLoop, func() error { return ping(ctx) })
 	}()
 
 	var runErr error

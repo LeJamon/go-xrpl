@@ -957,6 +957,7 @@ func (o *Overlay) Run(ctx context.Context) error {
 	// scheduler context is canceled with the overlay and cancels queued or
 	// running work during shutdown.
 	scheduler := newServeScheduler(gCtx, serveWorkerCount, serveQueueDepth, servePerPeerQueue, servePerPeerConcurrency)
+	scheduler.onTaskPanic = o.closePeerAfterServePanic
 	o.lifecycleMu.Lock()
 	if o.lifecycleState != overlayLifecycleRunning {
 		o.lifecycleMu.Unlock()
@@ -1205,6 +1206,9 @@ func (o *Overlay) submitServeForPeerOwned(
 	if peerID != 0 && !exists {
 		return false
 	}
+	if exists && peer.closed.Load() {
+		return false
+	}
 	if exists && admission.Cost() > 0 {
 		peer.Charge(admission, "serve request admission")
 	}
@@ -1221,10 +1225,29 @@ func (o *Overlay) submitServeForPeerOwned(
 		return false
 	}
 	if scheduler == nil {
+		if exists {
+			peer.sendMu.RLock()
+			closed := peer.closed.Load() || peer.gracefulClosing
+			peer.sendMu.RUnlock()
+			if closed {
+				return false
+			}
+		}
 		job(context.Background())
 		return true
 	}
-	if scheduler.SubmitOwned(serveCtx, peerID, job, discard) {
+	if exists {
+		peer.sendMu.RLock()
+		if peer.closed.Load() || peer.gracefulClosing {
+			peer.sendMu.RUnlock()
+			return false
+		}
+		accepted := scheduler.SubmitOwned(serveCtx, peerID, job, discard)
+		peer.sendMu.RUnlock()
+		if accepted {
+			return true
+		}
+	} else if scheduler.SubmitOwned(serveCtx, peerID, job, discard) {
 		return true
 	}
 	o.droppedServeJobs.Add(1)
@@ -1243,6 +1266,12 @@ func (o *Overlay) cancelServePeer(peerID PeerID) {
 	o.lifecycleMu.Unlock()
 	if scheduler != nil {
 		scheduler.CancelPeer(peerID)
+	}
+}
+
+func (o *Overlay) closePeerAfterServePanic(peerID PeerID) {
+	if peer, ok := o.getPeer(peerID); ok {
+		_ = peer.Close()
 	}
 }
 
