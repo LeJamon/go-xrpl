@@ -9,6 +9,7 @@ import (
 
 func TestServeSchedulerPerPeerFairness(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	s := newServeScheduler(ctx, 2, 32, 16, 1)
 	runDone := make(chan struct{})
 	go func() {
@@ -35,7 +36,14 @@ func TestServeSchedulerPerPeerFairness(t *testing.T) {
 	if !s.Submit(ctx, 2, job(2)) {
 		t.Fatal("peer 2 submission rejected")
 	}
-	startedPeers := [2]PeerID{<-started, <-started}
+	var startedPeers [2]PeerID
+	for i := range startedPeers {
+		select {
+		case startedPeers[i] = <-started:
+		case <-time.After(time.Second):
+			t.Fatal("scheduler did not start one job from each peer")
+		}
+	}
 	close(release)
 	cancel()
 	select {
