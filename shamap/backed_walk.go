@@ -573,10 +573,10 @@ func (sm *SHAMap) loadVerifiedBaseTraversalNode(
 }
 
 func attachedNode(root *innerNode, nodeID NodeID) mapNode {
-	current := mapNode(root)
-	if current == nil {
+	if root == nil {
 		return nil
 	}
+	current := mapNode(root)
 	path := nodeID.ID()
 	for depth := 0; depth < int(nodeID.Depth()); depth++ {
 		inner, ok := current.(*innerNode)
