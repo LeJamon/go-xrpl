@@ -133,6 +133,8 @@ type LedgerSyncHandler struct {
 	// shared event channel when the overlay is running.
 	prioritySender func(context.Context, PeerID, []byte) error
 
+	encodeFrame func(message.Message) ([]byte, error)
+
 	// droppedResponses counts how many response events we had to drop
 	// because the events channel was full (slow consumer). Exposed via
 	// DroppedResponses so the overlay can aggregate into server_info.
@@ -156,7 +158,8 @@ func (h *LedgerSyncHandler) DroppedResponses() uint64 {
 // NewLedgerSyncHandler creates a new ledger sync handler.
 func NewLedgerSyncHandler(events chan<- Event) *LedgerSyncHandler {
 	return &LedgerSyncHandler{
-		events: events,
+		events:      events,
+		encodeFrame: message.EncodeFrame,
 	}
 }
 
@@ -336,44 +339,34 @@ func (h *LedgerSyncHandler) handleProofPathRequest(ctx context.Context, peerID P
 		return nil
 	}
 
-	if proofPathResponseOversized(req, header, path) {
-		h.charge(peerID, resource.FeeRequestNoReply(), "proof path response oversized")
-		return nil
-	}
-
-	h.sendProofPathResponse(ctx, peerID, &message.ProofPathResponse{
+	frame, err := h.encodeFrame(&message.ProofPathResponse{
 		Key:          req.Key,
 		LedgerHash:   req.LedgerHash,
 		MapType:      req.MapType,
 		LedgerHeader: header,
 		Path:         path,
 	})
+	if err != nil || len(frame) > MaxProofPathResponseBytes {
+		h.charge(peerID, resource.FeeRequestNoReply(), "proof path response oversized")
+		return nil
+	}
+
+	h.sendProofPathResponse(ctx, peerID, frame)
 	return nil
 }
 
-// sendProofPathResponse encodes the response, wraps it in the XRPL
-// wire-frame header (6-byte type/size envelope), and delivers it through the
-// bounded priority lane. Standalone handlers without a priority sender use
-// the legacy non-blocking event fallback.
+// sendProofPathResponse delivers an encoded wire frame through the bounded
+// priority lane. Standalone handlers without a priority sender use the legacy
+// non-blocking event fallback.
 //
-// The wire-frame wrap lives here (not in the overlay) so the Event
-// payload is a fully-formed frame that Overlay.onLedgerResponse can
-// hand straight to the peer's send queue. Mirrors the handlePing
-// round-trip in overlay.go, which also emits a complete wire frame.
-func (h *LedgerSyncHandler) sendProofPathResponse(ctx context.Context, peerID PeerID, resp *message.ProofPathResponse) {
+// The handler wraps the response before this delivery boundary so the Event
+// payload is a fully formed frame that Overlay.onLedgerResponse can hand
+// straight to the peer's send queue.
+func (h *LedgerSyncHandler) sendProofPathResponse(ctx context.Context, peerID PeerID, frame []byte) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return
-	}
-	frame, err := message.EncodeFrame(resp)
-	if err != nil {
-		slog.Warn("ProofPath encode failed", "t", "LedgerSync", "peer", peerID, "err", err)
-		return
-	}
-	if len(frame) > MaxProofPathResponseBytes {
-		h.charge(peerID, resource.FeeRequestNoReply(), "proof path response oversized")
 		return
 	}
 	h.mu.RLock()
@@ -398,26 +391,6 @@ func (h *LedgerSyncHandler) sendProofPathResponse(ctx context.Context, peerID Pe
 		slog.Warn("ProofPath response dropped: events channel full",
 			"t", "LedgerSync", "peer", peerID, "bytes", len(frame))
 	}
-}
-
-func replayDeltaResponseOversized(ledgerHash, header []byte, txLeaves [][]byte) bool {
-	_, err := message.EncodeFrame(&message.ReplayDeltaResponse{
-		LedgerHash:   ledgerHash,
-		LedgerHeader: header,
-		Transactions: txLeaves,
-	})
-	return err != nil
-}
-
-func proofPathResponseOversized(req *message.ProofPathRequest, header []byte, path [][]byte) bool {
-	frame, err := message.EncodeFrame(&message.ProofPathResponse{
-		Key:          req.Key,
-		LedgerHash:   req.LedgerHash,
-		MapType:      req.MapType,
-		LedgerHeader: header,
-		Path:         path,
-	})
-	return err != nil || len(frame) > MaxProofPathResponseBytes
 }
 
 // handleReplayDeltaRequest serves an inbound mtREPLAY_DELTA_REQUEST.
@@ -471,9 +444,12 @@ func (h *LedgerSyncHandler) handleReplayDeltaRequest(ctx context.Context, peerID
 		return nil
 	}
 
-	// Defensive size cap: refuse to encode a response above our ceiling and
-	// charge the no-reply fee; the request itself is well-formed.
-	if replayDeltaResponseOversized(req.LedgerHash, header, txLeaves) {
+	frame, err := h.encodeFrame(&message.ReplayDeltaResponse{
+		LedgerHash:   req.LedgerHash,
+		LedgerHeader: header,
+		Transactions: txLeaves,
+	})
+	if err != nil {
 		slog.Warn("ReplayDelta response oversized; refusing",
 			"t", "LedgerSync",
 			"peer", peerID,
@@ -484,35 +460,22 @@ func (h *LedgerSyncHandler) handleReplayDeltaRequest(ctx context.Context, peerID
 		return nil
 	}
 
-	h.sendReplayDeltaResponse(ctx, peerID, &message.ReplayDeltaResponse{
-		LedgerHash:   req.LedgerHash,
-		LedgerHeader: header,
-		Transactions: txLeaves,
-	})
+	h.sendReplayDeltaResponse(ctx, peerID, frame)
 	return nil
 }
 
-// sendReplayDeltaResponse encodes the response, wraps it in the XRPL
-// wire-frame header (6-byte type/size envelope), and delivers it through the
-// bounded priority lane. Standalone handlers without a priority sender use
-// the legacy non-blocking event fallback.
+// sendReplayDeltaResponse delivers an encoded wire frame through the bounded
+// priority lane. Standalone handlers without a priority sender use the legacy
+// non-blocking event fallback.
 //
-// The wire-frame wrap lives here (not in the overlay) so the Event
-// payload is a fully-formed frame that Overlay.onLedgerResponse can
-// hand straight to the peer's send queue. Without the wire header the
-// peer on the other end parses the first 6 protobuf bytes as a garbage
-// frame header and stalls reading the phantom payload — the regression
-// this commit fixes.
-func (h *LedgerSyncHandler) sendReplayDeltaResponse(ctx context.Context, peerID PeerID, resp *message.ReplayDeltaResponse) {
+// The handler wraps the response before this delivery boundary so the Event
+// payload is a fully formed frame that Overlay.onLedgerResponse can hand
+// straight to the peer's send queue.
+func (h *LedgerSyncHandler) sendReplayDeltaResponse(ctx context.Context, peerID PeerID, frame []byte) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return
-	}
-	frame, err := message.EncodeFrame(resp)
-	if err != nil {
-		slog.Warn("ReplayDelta encode failed", "t", "LedgerSync", "peer", peerID, "err", err)
 		return
 	}
 	h.mu.RLock()

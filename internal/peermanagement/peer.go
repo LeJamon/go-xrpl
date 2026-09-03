@@ -1421,6 +1421,12 @@ func (p *Peer) completeOutbound(token outboundToken, writeErr error) {
 	}
 }
 
+func (p *Peer) outboundWriteError() error {
+	p.outboundErrMu.Lock()
+	defer p.outboundErrMu.Unlock()
+	return p.outboundErr
+}
+
 func (p *Peer) beginGracefulClose() bool {
 	p.sendMu.Lock()
 	defer p.sendMu.Unlock()
@@ -1437,14 +1443,12 @@ func (p *Peer) waitOutboundDrain(
 	runResults <-chan peerRunResult,
 ) error {
 	for {
-		p.outboundErrMu.Lock()
-		writeErr := p.outboundErr
-		p.outboundErrMu.Unlock()
-		if writeErr != nil {
-			return writeErr
+		if err := p.outboundWriteError(); err != nil {
+			return err
 		}
 		if p.outbound.snapshot().TotalFrames == 0 {
-			return nil
+			// The writer records its error before removing the final frame.
+			return p.outboundWriteError()
 		}
 		select {
 		case <-runCtx.Done():

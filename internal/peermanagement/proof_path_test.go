@@ -115,11 +115,20 @@ func TestProofPathRequest_PrioritySenderBypassesSharedEvents(t *testing.T) {
 	events := make(chan Event)
 	h := NewLedgerSyncHandler(events)
 	h.SetProvider(provider)
+	encodeFrame := h.encodeFrame
+	var encodeCalls int
+	var encodedFrame []byte
+	h.encodeFrame = func(msg message.Message) ([]byte, error) {
+		encodeCalls++
+		frame, err := encodeFrame(msg)
+		encodedFrame = frame
+		return frame, err
+	}
 	var gotPeer PeerID
 	var gotFrame []byte
 	h.SetPrioritySender(func(_ context.Context, peerID PeerID, frame []byte) error {
 		gotPeer = peerID
-		gotFrame = append([]byte(nil), frame...)
+		gotFrame = frame
 		return nil
 	})
 	require.NoError(t, h.HandleMessage(context.Background(), PeerID(9), &message.ProofPathRequest{
@@ -127,6 +136,9 @@ func TestProofPathRequest_PrioritySenderBypassesSharedEvents(t *testing.T) {
 	}))
 	assert.Equal(t, PeerID(9), gotPeer)
 	require.NotEmpty(t, gotFrame)
+	assert.Equal(t, 1, encodeCalls)
+	assert.Equal(t, encodedFrame, gotFrame)
+	assert.True(t, &encodedFrame[0] == &gotFrame[0], "sender must receive the size-checked frame")
 	header, _, err := readTestFrame(bytes.NewReader(gotFrame))
 	require.NoError(t, err)
 	assert.Equal(t, message.TypeProofPathResponse, header.MessageType)
@@ -343,10 +355,17 @@ func TestProofPathRequest_ResponseAbove16MiBRejected(t *testing.T) {
 	events := make(chan Event, 1)
 	h := NewLedgerSyncHandler(events)
 	h.SetProvider(provider)
+	encodeFrame := h.encodeFrame
+	var encodeCalls int
+	h.encodeFrame = func(msg message.Message) ([]byte, error) {
+		encodeCalls++
+		return encodeFrame(msg)
+	}
 
 	err := h.HandleMessage(context.Background(), PeerID(10), &message.ProofPathRequest{
 		Key: fixedKey(), LedgerHash: fixedHash(), MapType: message.LedgerMapAccountState,
 	})
 	require.NoError(t, err)
 	assert.Empty(t, events)
+	assert.Equal(t, 1, encodeCalls)
 }
