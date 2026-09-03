@@ -25,7 +25,6 @@ const DirNodeMaxPages uint64 = 262144
 // because the page limit has been reached.
 var ErrDirFull = errors.New("directory full")
 
-// ErrMalformedDirectory reports structurally invalid directory state.
 var ErrMalformedDirectory = errors.New("malformed directory")
 
 // DirectoryNode represents a directory ledger entry
