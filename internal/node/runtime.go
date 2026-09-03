@@ -238,6 +238,7 @@ func (r *nodeRuntime) configureLedger() error {
 	cfg := service.Config{
 		Standalone:      r.standalone,
 		NodeSize:        r.appConfig.NodeSize,
+		SweepInterval:   r.appConfig.ResolvedSweepInterval(),
 		FetchDepth:      effectivePeerFetchDepth(r.appConfig.GetFetchDepthUint32(), r.appConfig.NodeDB.OnlineDelete),
 		LedgerCacheSize: uint32(r.appConfig.ResolvedLedgerCacheSize()),
 		NetworkID:       uint32(networkID),

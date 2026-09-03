@@ -235,6 +235,7 @@ debug_logfile = "./data/log/debug.log"
 
 # Misc (optional)
 node_size = "medium"
+# sweep_interval = 60
 beta_rpc_api = 0
 
 # Operator domain emitted in the peer handshake (optional)

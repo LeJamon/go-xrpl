@@ -45,6 +45,8 @@ debug_logfile = "/var/log/goxrpl/debug.log"
 
 # Node sizing: tiny, small, medium, large, huge (optional — default medium)
 node_size = "medium"
+# Cache/history sweep cadence in seconds (optional — node_size default, range 10-600)
+# sweep_interval = 60
 
 beta_rpc_api = 0
 

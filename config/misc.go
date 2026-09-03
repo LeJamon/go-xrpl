@@ -4,6 +4,13 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
+)
+
+const (
+	defaultSweepInterval    = 60 * time.Second
+	minSweepIntervalSeconds = 10
+	maxSweepIntervalSeconds = 600
 )
 
 // validateZeroOrOne validates an int knob that rippled treats as a boolean.
@@ -35,6 +42,47 @@ func ValidateNodeSize(nodeSize string) error {
 	}
 
 	return fmt.Errorf("invalid node_size: %s (valid options: tiny, small, medium, large, huge)", nodeSize)
+}
+
+// SweepIntervalForNodeSize returns rippled's cache sweep cadence for a node-size profile.
+func SweepIntervalForNodeSize(nodeSize string) time.Duration {
+	switch nodeSize {
+	case "tiny":
+		return 10 * time.Second
+	case "small":
+		return 30 * time.Second
+	case "large":
+		return 90 * time.Second
+	case "huge":
+		return 120 * time.Second
+	case "", "medium":
+		return defaultSweepInterval
+	default:
+		return defaultSweepInterval
+	}
+}
+
+// ResolvedSweepInterval returns the explicit sweep interval or the node-size default.
+func (c *Config) ResolvedSweepInterval() time.Duration {
+	if c == nil {
+		return defaultSweepInterval
+	}
+	if c.SweepInterval != nil {
+		return time.Duration(*c.SweepInterval) * time.Second
+	}
+	return SweepIntervalForNodeSize(c.NodeSize)
+}
+
+// ValidateSweepInterval accepts an unset interval or rippled's supported range in seconds.
+func ValidateSweepInterval(interval *int) error {
+	if interval == nil {
+		return nil
+	}
+	if *interval < minSweepIntervalSeconds || *interval > maxSweepIntervalSeconds {
+		return fmt.Errorf("sweep_interval must be between %d and %d seconds, got %d",
+			minSweepIntervalSeconds, maxSweepIntervalSeconds, *interval)
+	}
+	return nil
 }
 
 // ValidateMaxTransactions validates the max_transactions setting.

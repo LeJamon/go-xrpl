@@ -28,6 +28,9 @@ func LoadConfig(paths Paths) (*Config, error) {
 	if err := validateIntegerSetting(v, "ledger_cache_size", MinLedgerCacheSize, MaxLedgerCacheSize); err != nil {
 		return nil, fmt.Errorf("failed to load main config: %w", err)
 	}
+	if err := validateIntegerSetting(v, "sweep_interval", minSweepIntervalSeconds, maxSweepIntervalSeconds); err != nil {
+		return nil, fmt.Errorf("failed to load main config: %w", err)
+	}
 	if err := validatePositiveDurationSetting(v, "server.checkpoint_shutdown_grace"); err != nil {
 		return nil, fmt.Errorf("failed to load main config: %w", err)
 	}
