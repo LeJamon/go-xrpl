@@ -30,7 +30,8 @@ func TestDeriveKeypairBytesMatchesHexAPI(t *testing.T) {
 }
 
 func TestDeriveKeypairBytesValidatorVector(t *testing.T) {
-	seed := []byte{229, 81, 182, 134, 131, 220, 192, 126, 133, 114, 150, 132, 140, 237, 222, 196}
+	seed, err := hex.DecodeString("DEDCE9CE67B451D852FD4E846FCDE31C")
+	require.NoError(t, err)
 	privateKey, publicKey, err := (secp256k1.Algorithm{}).DeriveKeypairBytes(seed, true)
 	require.NoError(t, err)
 	defer rootcrypto.SecureErase(privateKey)
