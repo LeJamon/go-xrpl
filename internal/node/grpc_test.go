@@ -327,6 +327,25 @@ func TestGRPCServer_ResourceAdmissionAndSecureGateway(t *testing.T) {
 		seedGRPCResourceDrop(t, manager, "192.0.2.10")
 		seedGRPCResourceDrop(t, manager, "192.0.2.11")
 
+		response, err := server.trackUnary(grpcPeerContext("192.0.2.10"), &rpcv1.GetLedgerRequest{User: "clio"}, nil, func(context.Context, any) (any, error) {
+			return &rpcv1.GetLedgerResponse{}, nil
+		})
+		if err != nil {
+			t.Fatalf("identified gateway request failed: %v", err)
+		}
+		if !response.(*rpcv1.GetLedgerResponse).GetIsUnlimited() {
+			t.Fatal("identified gateway response did not set is_unlimited")
+		}
+		consumer := manager.NewInboundEndpoint("192.0.2.10")
+		if consumer == nil {
+			t.Fatal("identified gateway request did not retain resource accounting")
+		}
+		want := int64(resource.DropThreshold + resource.FeeMediumBurdenRPC().Cost()/resource.DecayWindowSeconds)
+		if balance := consumer.Balance(); balance != want {
+			t.Fatalf("identified gateway balance = %d, want %d", balance, want)
+		}
+		consumer.Release()
+
 		for _, test := range []struct {
 			name string
 			ip   string
@@ -343,25 +362,6 @@ func TestGRPCServer_ResourceAdmissionAndSecureGateway(t *testing.T) {
 					t.Fatalf("request code = %v, want %v", status.Code(err), codes.ResourceExhausted)
 				}
 			})
-		}
-
-		response, err := server.trackUnary(grpcPeerContext("192.0.2.10"), &rpcv1.GetLedgerRequest{User: "clio"}, nil, func(context.Context, any) (any, error) {
-			return &rpcv1.GetLedgerResponse{}, nil
-		})
-		if err != nil {
-			t.Fatalf("identified gateway request failed: %v", err)
-		}
-		if !response.(*rpcv1.GetLedgerResponse).GetIsUnlimited() {
-			t.Fatal("identified gateway response did not set is_unlimited")
-		}
-		consumer := manager.NewInboundEndpoint("192.0.2.10")
-		if consumer == nil {
-			t.Fatal("identified gateway request did not retain resource accounting")
-		}
-		defer consumer.Release()
-		want := int64(resource.DropThreshold + resource.FeeMediumBurdenRPC().Cost()/resource.DecayWindowSeconds)
-		if balance := consumer.Balance(); balance != want {
-			t.Fatalf("identified gateway balance = %d, want %d", balance, want)
 		}
 	})
 }
