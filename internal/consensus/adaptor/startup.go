@@ -514,10 +514,11 @@ func NewFromConfig(
 	engine.SetLedgerAncestryProvider(rcl.NewAncestryProvider(ledgerSvc))
 
 	router := newRouter(engine, adaptor, overlay.ConsensusMessages(), routerNetworkConfig{
-		gossip:      sender,
-		txSet:       sender,
-		acquisition: sender,
-		serve:       sender,
+		gossip:               sender,
+		txSet:                sender,
+		acquisition:          sender,
+		serve:                sender,
+		inboundSweepInterval: appCfg.ResolvedSweepInterval(),
 	})
 	router.SetConsensusControlInbox(overlay.ConsensusControlMessages())
 	router.SetServiceInbox(overlay.Messages())

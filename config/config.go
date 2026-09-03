@@ -59,8 +59,9 @@ type Config struct {
 	Amendments AmendmentsConfig `toml:"amendments" mapstructure:"amendments"`
 
 	// 9. Misc Settings
-	NodeSize   string `toml:"node_size" mapstructure:"node_size"` // optional; "" = default ("medium")
-	BetaRPCAPI int    `toml:"beta_rpc_api" mapstructure:"beta_rpc_api"`
+	NodeSize      string `toml:"node_size" mapstructure:"node_size"` // optional; "" = default ("medium")
+	SweepInterval *int   `toml:"sweep_interval" mapstructure:"sweep_interval"`
+	BetaRPCAPI    int    `toml:"beta_rpc_api" mapstructure:"beta_rpc_api"`
 	// PathSearchMax is a pointer so an explicit zero remains distinct from
 	// the absent default.
 	PathSearchMax  *int `toml:"path_search_max" mapstructure:"path_search_max"`

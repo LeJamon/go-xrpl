@@ -3,25 +3,14 @@ package service
 import (
 	"context"
 	"time"
+
+	appconfig "github.com/LeJamon/go-xrpl/config"
 )
 
 const defaultNodeStoreSweepInterval = 60 * time.Second
 
 func nodeStoreSweepIntervalForSize(nodeSize string) time.Duration {
-	switch nodeSize {
-	case "tiny":
-		return 10 * time.Second
-	case "small":
-		return 30 * time.Second
-	case "large":
-		return 90 * time.Second
-	case "huge":
-		return 120 * time.Second
-	case "", "medium":
-		return defaultNodeStoreSweepInterval
-	default:
-		return defaultNodeStoreSweepInterval
-	}
+	return appconfig.SweepIntervalForNodeSize(nodeSize)
 }
 
 type nodeStoreSweeper interface {

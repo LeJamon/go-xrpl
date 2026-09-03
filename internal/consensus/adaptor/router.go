@@ -351,10 +351,12 @@ type Router struct {
 }
 
 type routerNetworkConfig struct {
-	gossip      gossipNetwork
-	txSet       txSetNetwork
-	acquisition ledgerAcquisitionNetwork
-	serve       ledgerServeNetwork
+	gossip               gossipNetwork
+	txSet                txSetNetwork
+	acquisition          ledgerAcquisitionNetwork
+	serve                ledgerServeNetwork
+	inboundClock         inbound.Clock
+	inboundSweepInterval time.Duration
 }
 
 // catchupTarget is the highest (seq,hash) the router is driving a bounded
@@ -492,15 +494,18 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 		peerConnectWake:         make(chan struct{}, 1),
 		standardReplayDrainWake: make(chan struct{}, 1),
 		replayer:                inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
-		fetchTracker:            inbound.NewTracker(),
-		fetchPacks:              newFetchPackCache(),
-		messageSeen:             newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
-		manifestUntrustedLimit:  manifest.DefaultMaxUntrustedCount,
-		txSeen:                  newTransactionSuppression(5*time.Minute, 1<<17),
-		txSetAcquire:            make(map[consensus.TxSetID]*txSetAcquireState),
-		txSetRetryKnobs:         defaultTxSetRetryKnobs(),
-		seqHash:                 make(map[uint32]ledgerHashEntry),
-		lifecycleCtx:            context.Background(),
+		fetchTracker: inbound.NewTrackerWithClockAndSweepInterval(
+			network.inboundClock,
+			network.inboundSweepInterval,
+		),
+		fetchPacks:             newFetchPackCache(),
+		messageSeen:            newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
+		manifestUntrustedLimit: manifest.DefaultMaxUntrustedCount,
+		txSeen:                 newTransactionSuppression(5*time.Minute, 1<<17),
+		txSetAcquire:           make(map[consensus.TxSetID]*txSetAcquireState),
+		txSetRetryKnobs:        defaultTxSetRetryKnobs(),
+		seqHash:                make(map[uint32]ledgerHashEntry),
+		lifecycleCtx:           context.Background(),
 	}
 	if adaptor != nil {
 		if _, ok := engine.(consensus.VerifiedValidationProcessor); ok {

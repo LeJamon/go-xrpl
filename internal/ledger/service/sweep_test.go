@@ -58,3 +58,12 @@ func TestServiceNodeStoreSweeperRunsWhileIdleAndStops(t *testing.T) {
 
 	service.Stop()
 }
+
+func TestServiceSweepIntervalOverride(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.NodeSize = "large"
+	cfg.SweepInterval = 45 * time.Second
+	service, err := New(cfg)
+	require.NoError(t, err)
+	require.Equal(t, 45*time.Second, service.sweepInterval)
+}

@@ -225,6 +225,9 @@ func validateMiscSettings(config *Config) []error {
 	if err := ValidateNodeSize(config.NodeSize); err != nil {
 		errs = append(errs, err)
 	}
+	if err := ValidateSweepInterval(config.SweepInterval); err != nil {
+		errs = append(errs, err)
+	}
 	if err := ValidateBetaRPCAPI(config.BetaRPCAPI); err != nil {
 		errs = append(errs, err)
 	}

@@ -12,14 +12,11 @@ import (
 // Mirrors rippled's kReacquireInterval expiry on InboundLedgers::mRecentFailures.
 const reacquireInterval = 5 * time.Minute
 
-// completedRetention bounds how long a finished acquisition keeps appearing in
-// fetch_info before being dropped, mirroring rippled's ~1-minute mLedgers sweep
-// window (InboundLedgers::sweep) during which getInfo still reports complete:true.
-const completedRetention = time.Minute
+// terminalRetention bounds how long a finished acquisition keeps its full
+// fetch_info diagnostics before only a recent-failure marker remains, if any.
+const terminalRetention = time.Minute
 
-// trackerSweepInterval matches rippled's shortest application sweep cadence
-// while avoiding a full history scan on every router maintenance tick.
-const trackerSweepInterval = 10 * time.Second
+const defaultTrackerSweepInterval = time.Minute
 
 // Tracker aggregates the in-flight classic ledger acquisitions and a short
 // history of recent failures, producing the JSON snapshot served by the
@@ -35,41 +32,51 @@ const trackerSweepInterval = 10 * time.Second
 type Tracker struct {
 	mu        sync.Mutex
 	active    map[[32]byte]*Ledger
-	completed map[[32]byte]completedRecord
+	terminal  map[[32]byte]terminalRecord
 	failures  map[[32]byte]failureRecord
 	clock     Clock
+	interval  time.Duration
 	nextSweep time.Time
 	stopped   bool
 }
 
 type failureRecord struct {
-	snap Snapshot
-	at   time.Time
+	seq uint32
+	at  time.Time
 }
 
-type completedRecord struct {
+type terminalRecord struct {
 	snap Snapshot
 	at   time.Time
 }
 
 // NewTracker returns an empty Tracker.
 func NewTracker() *Tracker {
-	return NewTrackerWithClock(SystemClock)
+	return NewTrackerWithClockAndSweepInterval(SystemClock, defaultTrackerSweepInterval)
 }
 
 // NewTrackerWithClock returns an empty Tracker driven by clock. A nil clock
 // uses SystemClock.
 func NewTrackerWithClock(clock Clock) *Tracker {
+	return NewTrackerWithClockAndSweepInterval(clock, defaultTrackerSweepInterval)
+}
+
+// NewTrackerWithClockAndSweepInterval returns an empty Tracker with explicit time dependencies.
+func NewTrackerWithClockAndSweepInterval(clock Clock, interval time.Duration) *Tracker {
 	if clock == nil {
 		clock = SystemClock
+	}
+	if interval <= 0 {
+		interval = defaultTrackerSweepInterval
 	}
 	now := clock.Now()
 	return &Tracker{
 		active:    make(map[[32]byte]*Ledger),
-		completed: make(map[[32]byte]completedRecord),
+		terminal:  make(map[[32]byte]terminalRecord),
 		failures:  make(map[[32]byte]failureRecord),
 		clock:     clock,
-		nextSweep: now.Add(trackerSweepInterval),
+		interval:  interval,
+		nextSweep: now.Add(interval),
 	}
 }
 
@@ -125,10 +132,10 @@ func (t *Tracker) GetOrCreate(hash [32]byte, factory func() *Ledger) (l *Ledger,
 	return l, true
 }
 
-// Remove finalizes an in-flight acquisition: it records the terminal snapshot
-// for fetch_info retention (completed window when complete, failure window
-// otherwise) and drops it from the in-flight set. Idempotent — a no-op if the
-// hash is not currently active.
+// Remove finalizes an in-flight acquisition, retains its terminal snapshot for
+// fetch_info, and drops it from the in-flight set. Failed acquisitions also
+// leave a longer-lived recent-failure marker. Idempotent — a no-op if the hash
+// is not currently active.
 func (t *Tracker) Remove(hash [32]byte, complete bool) {
 	if t == nil {
 		return
@@ -197,12 +204,13 @@ func (t *Tracker) removeLocked(hash [32]byte, snap Snapshot, complete bool, now 
 		// branch below).
 		snap.Complete = true
 		snap.Failed = false
-		t.completed[hash] = completedRecord{snap: snap, at: now}
+		delete(t.failures, hash)
 	} else {
 		snap.Failed = true
 		snap.Complete = false
-		t.failures[hash] = failureRecord{snap: snap, at: now}
+		t.failures[hash] = failureRecord{seq: snap.Seq, at: now}
 	}
+	t.terminal[hash] = terminalRecord{snap: snap, at: now}
 	delete(t.active, hash)
 }
 
@@ -242,8 +250,8 @@ func (t *Tracker) Active() []*Ledger {
 	return out
 }
 
-// Clear resets both the in-flight set and the recent-failure history and
-// returns the removed acquisitions for owner-side resource retirement.
+// Clear resets the in-flight set and retained terminal history, returning the
+// removed acquisitions for owner-side resource retirement.
 func (t *Tracker) Clear() []*Ledger {
 	if t == nil {
 		return nil
@@ -273,7 +281,7 @@ func (t *Tracker) clearLocked() []*Ledger {
 		active = append(active, l)
 	}
 	t.active = make(map[[32]byte]*Ledger)
-	t.completed = make(map[[32]byte]completedRecord)
+	t.terminal = make(map[[32]byte]terminalRecord)
 	t.failures = make(map[[32]byte]failureRecord)
 	return active
 }
@@ -294,10 +302,10 @@ func (t *Tracker) sweepIfDueLocked(now time.Time) {
 	if t.stopped || now.Before(t.nextSweep) {
 		return
 	}
-	t.nextSweep = now.Add(trackerSweepInterval)
-	for hash, rec := range t.completed {
-		if rec.at.Add(completedRetention).Before(now) {
-			delete(t.completed, hash)
+	t.nextSweep = now.Add(t.interval)
+	for hash, rec := range t.terminal {
+		if rec.at.Add(terminalRetention).Before(now) {
+			delete(t.terminal, hash)
 		}
 	}
 	for hash, rec := range t.failures {
@@ -312,7 +320,7 @@ func (t *Tracker) sweepIfDueLocked(now time.Time) {
 // report have_header/have_state/have_transactions/peers and the latest cached
 // needed_*_hashes after an outstanding tree has been scanned; completed entries
 // report complete:true until their retention window elapses; recent failures
-// report failed:true with the same per-tree fields.
+// report failed:true after the richer terminal snapshot expires.
 // Terminal lifecycle belongs to the acquisition owner; Info only reads each
 // acquisition's cached worker frontier and retained terminal records.
 func (t *Tracker) Info() map[string]any {
@@ -327,10 +335,10 @@ func (t *Tracker) Info() map[string]any {
 	}
 	ret := make(map[string]any)
 	for hash, rec := range t.failures {
-		ret[acquisitionKey(rec.snap.Seq, hash)] = AcquisitionJSON(rec.snap)
+		ret[acquisitionKey(rec.seq, hash)] = map[string]any{"failed": true}
 	}
 
-	for hash, rec := range t.completed {
+	for hash, rec := range t.terminal {
 		ret[acquisitionKey(rec.snap.Seq, hash)] = AcquisitionJSON(rec.snap)
 	}
 	t.mu.Unlock()

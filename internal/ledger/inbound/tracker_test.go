@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +26,21 @@ type trackerBlockingFamily struct {
 	release chan struct{}
 	once    sync.Once
 	block   bool
+}
+
+type trackerBlockingClock struct {
+	now     time.Time
+	block   atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (c *trackerBlockingClock) Now() time.Time {
+	if c.block.Load() {
+		close(c.entered)
+		<-c.release
+	}
+	return c.now
 }
 
 func (f *trackerBlockingFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
@@ -64,10 +80,10 @@ func trackTerminal(tr *Tracker, hash [32]byte, seq uint32, complete bool) {
 	tr.RemoveExpectedWithSnapshot(il, Snapshot{Hash: hash, Seq: seq}, complete)
 }
 
-func trackerHistoryCounts(tr *Tracker) (completed, failures int) {
+func trackerHistoryCounts(tr *Tracker) (terminal, failures int) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
-	return len(tr.completed), len(tr.failures)
+	return len(tr.terminal), len(tr.failures)
 }
 
 // encodeHeader serializes a header for the wire and returns the hash a peer
@@ -226,7 +242,7 @@ func TestTracker_CompletedReportedThenSwept(t *testing.T) {
 	}
 	tr.RemoveExpectedWithSnapshot(il, il.Snapshot(), true)
 
-	clock.Advance(completedRetention + time.Nanosecond)
+	clock.Advance(terminalRetention + time.Nanosecond)
 	if info := tr.Info(); len(info) != 1 {
 		t.Fatalf("Info mutated expired history before maintenance, got %#v", info)
 	}
@@ -242,55 +258,77 @@ func TestTracker_CompletedReportedThenSwept(t *testing.T) {
 
 func TestTracker_SweepExpiresHistoryWithoutInfo(t *testing.T) {
 	t.Parallel()
+	const sweepInterval = 10 * time.Second
 	clock := inboundtest.NewFakeClock(time.Unix(1_700_000_000, 0))
-	tr := NewTrackerWithClock(clock)
+	tr := NewTrackerWithClockAndSweepInterval(clock, sweepInterval)
 	trackTerminal(tr, [32]byte{0xC1}, 301, true)
-	trackTerminal(tr, [32]byte{0xF1}, 302, false)
+	failureHash := [32]byte{0xF1}
+	failure := New(failureHash, 302, 1, discardLogger())
+	tr.Track(failure)
+	tr.RemoveExpectedWithSnapshot(failure, Snapshot{
+		Hash:       failureHash,
+		Seq:        302,
+		HaveHeader: true,
+		Timeouts:   3,
+	}, false)
 
-	clock.Advance(completedRetention)
+	clock.Advance(terminalRetention)
 	tr.Sweep()
-	if completed, failures := trackerHistoryCounts(tr); completed != 1 || failures != 1 {
-		t.Fatalf("history at completed retention = (%d completed, %d failures), want (1, 1)", completed, failures)
+	if terminal, failures := trackerHistoryCounts(tr); terminal != 2 || failures != 1 {
+		t.Fatalf("history at terminal retention = (%d terminal, %d failures), want (2, 1)", terminal, failures)
+	}
+	richFailure := tr.Info()["302"].(map[string]any)
+	if richFailure["failed"] != true || richFailure["have_header"] != true || richFailure["timeouts"] != 3 {
+		t.Fatalf("retained failure = %#v, want rich terminal snapshot", richFailure)
 	}
 
-	clock.Advance(trackerSweepInterval)
+	clock.Advance(sweepInterval)
 	tr.Sweep()
-	if completed, failures := trackerHistoryCounts(tr); completed != 0 || failures != 1 {
-		t.Fatalf("history after completed retention = (%d completed, %d failures), want (0, 1)", completed, failures)
+	if terminal, failures := trackerHistoryCounts(tr); terminal != 0 || failures != 1 {
+		t.Fatalf("history after terminal retention = (%d terminal, %d failures), want (0, 1)", terminal, failures)
+	}
+	entry := tr.Info()["302"].(map[string]any)
+	if len(entry) != 1 || entry["failed"] != true {
+		t.Fatalf("expired rich failure = %#v, want bare failed marker", entry)
 	}
 
-	clock.Advance(reacquireInterval - completedRetention - trackerSweepInterval)
+	clock.Advance(reacquireInterval - terminalRetention - sweepInterval)
 	tr.Sweep()
-	if completed, failures := trackerHistoryCounts(tr); completed != 0 || failures != 0 {
-		t.Fatalf("history at failure retention = (%d completed, %d failures), want (0, 0)", completed, failures)
+	if terminal, failures := trackerHistoryCounts(tr); terminal != 0 || failures != 0 {
+		t.Fatalf("history at failure retention = (%d terminal, %d failures), want (0, 0)", terminal, failures)
 	}
 }
 
 func TestTracker_TerminalInsertionBoundsSustainedChurn(t *testing.T) {
 	t.Parallel()
-	const acquisitions = 10_000
-	clock := inboundtest.NewFakeClock(time.Unix(1_700_000_000, 0))
+	const (
+		acquisitions  = 10_009
+		sweepInterval = 10 * time.Second
+	)
+	start := time.Unix(1_700_000_000, 0)
 
-	completedTracker := NewTrackerWithClock(clock)
+	completedClock := inboundtest.NewFakeClock(start)
+	completedTracker := NewTrackerWithClockAndSweepInterval(completedClock, sweepInterval)
 	for i := range acquisitions {
-		clock.Advance(time.Second)
+		completedClock.Advance(time.Second)
 		hash := [32]byte{byte(i), byte(i >> 8), byte(i >> 16), 0xC0}
 		trackTerminal(completedTracker, hash, uint32(i+2), true)
 	}
-	completed, _ := trackerHistoryCounts(completedTracker)
-	if max := int(completedRetention/time.Second) + 1; completed > max {
-		t.Fatalf("completed history retained %d records after churn, want at most %d", completed, max)
+	terminal, _ := trackerHistoryCounts(completedTracker)
+	if max := int((terminalRetention + sweepInterval) / time.Second); terminal != max {
+		t.Fatalf("terminal history retained %d records just before sweep, want %d", terminal, max)
 	}
 
-	failureTracker := NewTrackerWithClock(clock)
+	failureClock := inboundtest.NewFakeClock(start)
+	failureTracker := NewTrackerWithClockAndSweepInterval(failureClock, sweepInterval)
 	for i := range acquisitions {
-		clock.Advance(time.Second)
+		failureClock.Advance(time.Second)
 		hash := [32]byte{byte(i), byte(i >> 8), byte(i >> 16), 0xF0}
 		trackTerminal(failureTracker, hash, uint32(i+2), false)
 	}
 	_, failures := trackerHistoryCounts(failureTracker)
-	if max := int(reacquireInterval / time.Second); failures > max {
-		t.Fatalf("failure history retained %d records after churn, want at most %d", failures, max)
+	if min, max := int(reacquireInterval/time.Second), int((reacquireInterval+sweepInterval)/time.Second); failures <= min || failures > max {
+		t.Fatalf("failure history retained %d records just before sweep, want (%d, %d]", failures, min, max)
 	}
 }
 
@@ -370,8 +408,8 @@ func TestTracker_StopDrainsAndRejectsLaterAdmissions(t *testing.T) {
 	if got := tr.Find(first.Hash()); got != nil {
 		t.Fatalf("stopped tracker retained active acquisition %p", got)
 	}
-	if completed, failures := trackerHistoryCounts(tr); completed != 0 || failures != 0 {
-		t.Fatalf("stopped tracker retained history (%d completed, %d failures)", completed, failures)
+	if terminal, failures := trackerHistoryCounts(tr); terminal != 0 || failures != 0 {
+		t.Fatalf("stopped tracker retained history (%d terminal, %d failures)", terminal, failures)
 	}
 	clock.Advance(reacquireInterval)
 	tr.Sweep()
@@ -390,7 +428,7 @@ func TestTracker_StopDrainsAndRejectsLaterAdmissions(t *testing.T) {
 	}
 }
 
-func TestTracker_ConcurrentAccessAndStop(t *testing.T) {
+func TestTracker_ConcurrentAccess(t *testing.T) {
 	clock := inboundtest.NewFakeClock(time.Unix(1_700_000_000, 0))
 	tr := NewTrackerWithClock(clock)
 	start := make(chan struct{})
@@ -431,13 +469,58 @@ func TestTracker_ConcurrentAccessAndStop(t *testing.T) {
 	}()
 
 	close(start)
-	tr.Stop()
 	workers.Wait()
 	if active := tr.Active(); len(active) != 0 {
-		t.Fatalf("stopped tracker retained %d active acquisitions", len(active))
+		t.Fatalf("tracker retained %d active acquisitions", len(active))
 	}
-	if completed, failures := trackerHistoryCounts(tr); completed != 0 || failures != 0 {
-		t.Fatalf("stopped tracker retained history (%d completed, %d failures)", completed, failures)
+	tr.Stop()
+	if terminal, failures := trackerHistoryCounts(tr); terminal != 0 || failures != 0 {
+		t.Fatalf("stopped tracker retained history (%d terminal, %d failures)", terminal, failures)
+	}
+}
+
+func TestTracker_StopSerializesWithInFlightFinalization(t *testing.T) {
+	clock := &trackerBlockingClock{
+		now:     time.Unix(1_700_000_000, 0),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	tr := NewTrackerWithClock(clock)
+	hash := [32]byte{0xA3}
+	ledger := New(hash, 1828, 1, discardLogger())
+	tr.Track(ledger)
+	clock.block.Store(true)
+	finalizationDone := make(chan bool, 1)
+	go func() {
+		finalizationDone <- tr.RemoveExpectedWithSnapshot(
+			ledger,
+			Snapshot{Hash: hash, Seq: 1828},
+			true,
+		)
+	}()
+
+	<-clock.entered
+	stopStarted := make(chan struct{})
+	stopDone := make(chan []*Ledger, 1)
+	go func() {
+		close(stopStarted)
+		stopDone <- tr.Stop()
+	}()
+	<-stopStarted
+	close(clock.release)
+
+	if !<-finalizationDone {
+		t.Fatal("in-flight finalization did not retire the tracked ledger")
+	}
+	drained := <-stopDone
+	if len(drained) != 0 {
+		t.Fatalf("Stop drained %#v after finalization, want no active ledgers", drained)
+	}
+	if got := tr.Find(hash); got != nil {
+		t.Fatalf("stopped tracker retained finalized ledger %p", got)
+	}
+	if terminal, failures := trackerHistoryCounts(tr); terminal != 0 || failures != 0 {
+		t.Fatalf("stopped tracker retained history (%d terminal, %d failures)", terminal, failures)
 	}
 }
 

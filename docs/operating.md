@@ -236,6 +236,7 @@ keys to precede any `[section]` header.
 | `database_path` | `/var/lib/goxrpl/db` | Base directory for SQLite databases. |
 | `debug_logfile` | `/var/log/goxrpl/debug.log` | Debug log path. |
 | `node_size` | `"medium"` | Resource sizing: `tiny`, `small`, `medium`, `large`, `huge`. |
+| `sweep_interval` | `60` | Cache and inbound-history sweep cadence in seconds (10–600); defaults to the `node_size` profile. |
 | `beta_rpc_api` | `0` | Expose the beta API version. |
 | `validators_file` | — | Path to `validators.toml`/`.txt`. Optional. |
 | `genesis_file` | — | Custom genesis; omit for built-in defaults. Optional. |

@@ -28,3 +28,27 @@ func TestRouterMaintenancePrunesInboundHistory(t *testing.T) {
 	router.maintenanceTick()
 	require.Empty(t, router.FetchInfo())
 }
+
+func TestRouterMaintenanceUsesConfiguredInboundSweepInterval(t *testing.T) {
+	clock := inboundtest.NewFakeClock(time.Unix(1_700_000_000, 0))
+	router := newRouter(nil, New(Config{}), nil, routerNetworkConfig{
+		inboundClock:         clock,
+		inboundSweepInterval: 90 * time.Second,
+	})
+	hash := [32]byte{0xA4}
+	ledger := inbound.New(hash, 1829, 1, slog.Default())
+	router.fetchTracker.Track(ledger)
+	require.True(t, router.fetchTracker.RemoveExpectedWithSnapshot(
+		ledger,
+		inbound.Snapshot{Hash: hash, Seq: 1829},
+		true,
+	))
+
+	clock.Advance(70 * time.Second)
+	router.maintenanceTick()
+	require.Contains(t, router.FetchInfo(), "1829")
+
+	clock.Advance(20 * time.Second)
+	router.maintenanceTick()
+	require.Empty(t, router.FetchInfo())
+}

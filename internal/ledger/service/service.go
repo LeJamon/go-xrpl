@@ -46,6 +46,8 @@ type Config struct {
 	// NodeSize selects rippled's cache sweep cadence. Empty uses the medium
 	// profile, matching the top-level configuration default.
 	NodeSize string
+	// SweepInterval overrides the node-size sweep cadence when positive.
+	SweepInterval time.Duration
 	// FetchDepth limits historical ledger serving relative to the closed ledger.
 	// Zero leaves serving unrestricted.
 	FetchDepth uint32
@@ -354,6 +356,11 @@ func New(cfg Config) (*Service, error) {
 		configuredFees = *cfg.ConfiguredFees
 	}
 
+	sweepInterval := cfg.SweepInterval
+	if sweepInterval <= 0 {
+		sweepInterval = nodeStoreSweepIntervalForSize(cfg.NodeSize)
+	}
+
 	s := &Service{
 		config:         cfg,
 		logger:         logger.Named(xrpllog.PartitionLedger),
@@ -379,7 +386,7 @@ func New(cfg Config) (*Service, error) {
 			completedLedgers:     newCompleteLedgerSet(),
 			completeLedgerHashes: make(map[uint32][32]byte),
 			completeLedgerTokens: make(map[uint32]uint64),
-			sweepInterval:        nodeStoreSweepIntervalForSize(cfg.NodeSize),
+			sweepInterval:        sweepInterval,
 		},
 		pendingValidation:    make(map[[32]byte]*LedgerAcceptedEvent),
 		validationCandidates: make(map[uint32]*ledger.Ledger),
