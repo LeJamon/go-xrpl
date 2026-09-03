@@ -5,8 +5,17 @@ import (
 	"testing"
 )
 
-func TestInnerObjectTemplateRegistry(t *testing.T) {
+func TestObjectTemplateRegistry(t *testing.T) {
 	expected := map[string][]innerObjectField{
+		"Manifest": {
+			{name: "PublicKey", style: innerRequired},
+			{name: "MasterSignature", style: innerRequired},
+			{name: "Sequence", style: innerRequired},
+			{name: "Version", style: innerDefault},
+			{name: "Domain", style: innerOptional},
+			{name: "SigningPubKey", style: innerOptional},
+			{name: "Signature", style: innerOptional},
+		},
 		"SignerEntry": {
 			{name: "Account", style: innerRequired},
 			{name: "SignerWeight", style: innerRequired},
@@ -119,8 +128,8 @@ func TestInnerObjectTemplateRegistry(t *testing.T) {
 		},
 	}
 
-	if !reflect.DeepEqual(innerObjectTemplates, expected) {
-		t.Fatalf("inner object template registry mismatch:\n got: %#v\nwant: %#v", innerObjectTemplates, expected)
+	if !reflect.DeepEqual(objectTemplates, expected) {
+		t.Fatalf("object template registry mismatch:\n got: %#v\nwant: %#v", objectTemplates, expected)
 	}
 }
 
@@ -154,7 +163,7 @@ func TestMeetsInnerObjectTemplate(t *testing.T) {
 
 func TestValidateInnerObjectTemplateSemantics(t *testing.T) {
 	t.Run("missing required precedes disallowed field", func(t *testing.T) {
-		err := validateInnerObject("SignerEntry", map[string]any{"Amount": "1"}, []string{"Amount"})
+		err := validateObjectTemplate("SignerEntry", map[string]any{"Amount": "1"}, []string{"Amount"})
 		if err == nil || err.Error() != "Field 'Account' is required but missing." {
 			t.Fatalf("unexpected validation error: %v", err)
 		}
@@ -166,7 +175,7 @@ func TestValidateInnerObjectTemplateSemantics(t *testing.T) {
 			"SignerWeight":  0,
 			"WalletLocator": "",
 		}
-		if err := validateInnerObject("SignerEntry", values, []string{"Account", "SignerWeight", "WalletLocator"}); err != nil {
+		if err := validateObjectTemplate("SignerEntry", values, []string{"Account", "SignerWeight", "WalletLocator"}); err != nil {
 			t.Fatalf("explicit required or optional default rejected: %v", err)
 		}
 	})
@@ -177,7 +186,7 @@ func TestValidateInnerObjectTemplateSemantics(t *testing.T) {
 			"QuoteAsset": "USD",
 			"Scale":      uint8(0),
 		}
-		err := validateInnerObject("PriceData", values, []string{"BaseAsset", "QuoteAsset", "Scale"})
+		err := validateObjectTemplate("PriceData", values, []string{"BaseAsset", "QuoteAsset", "Scale"})
 		if err == nil || err.Error() != "Field 'Scale' may not be explicitly set to default." {
 			t.Fatalf("unexpected validation error: %v", err)
 		}

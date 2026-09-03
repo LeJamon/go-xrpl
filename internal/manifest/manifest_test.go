@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"fmt"
 	"math/big"
 	"strings"
 	"sync"
@@ -34,6 +35,10 @@ var secp256k1CurveOrderN, _ = new(big.Int).SetString(
 // the two public keys (master, ephemeral) so callers can check the
 // stored state after apply.
 func buildManifest(t testing.TB, seq uint32, revoked bool, masterSeed, ephemeralSeed byte) (serialized []byte, masterPub [33]byte, ephemeralPub [33]byte) {
+	return buildManifestWithVersion(t, seq, revoked, masterSeed, ephemeralSeed, nil)
+}
+
+func buildManifestWithVersion(t testing.TB, seq uint32, revoked bool, masterSeed, ephemeralSeed byte, version *uint16) (serialized []byte, masterPub [33]byte, ephemeralPub [33]byte) {
 	t.Helper()
 
 	masterPubBytes, masterPriv := deterministicEd25519Keypair(masterSeed)
@@ -42,6 +47,9 @@ func buildManifest(t testing.TB, seq uint32, revoked bool, masterSeed, ephemeral
 	json := map[string]any{
 		"PublicKey": hex.EncodeToString(masterPubBytes),
 		"Sequence":  seq,
+	}
+	if version != nil {
+		json["Version"] = *version
 	}
 
 	if !revoked {
@@ -142,7 +150,34 @@ func TestManifest_RejectsFieldsOutsideManifestFormat(t *testing.T) {
 			require.NoError(t, err)
 
 			_, err = manifest.Deserialize(withExtraField)
-			require.ErrorContains(t, err, "unexpected field "+field)
+			require.ErrorContains(t, err, "Field '"+field+"' found in disallowed location.")
+		})
+	}
+}
+
+func TestManifest_DefaultVersionCanonicality(t *testing.T) {
+	canonical, master, ephemeral := buildManifest(t, 1, false, 0x75, 0x76)
+	parsed, err := manifest.Deserialize(canonical)
+	require.NoError(t, err)
+	require.NoError(t, parsed.Verify())
+	cache := manifest.NewCache()
+	require.Equal(t, manifest.Accepted, cache.ApplyManifest(parsed))
+	require.Equal(t, master, cache.GetMasterKey(ephemeral))
+
+	zero := uint16(0)
+	explicitDefault, _, _ := buildManifestWithVersion(t, 2, false, 0x75, 0x77, &zero)
+	parsed, err = manifest.Deserialize(explicitDefault)
+	require.Nil(t, parsed)
+	require.ErrorContains(t, err, "Field 'Version' may not be explicitly set to default.")
+	require.Equal(t, uint32(1), mustSequence(t, cache, master))
+	require.Equal(t, ephemeral, mustSigningKey(t, cache, master))
+
+	for _, version := range []uint16{1, 2001} {
+		t.Run(fmt.Sprintf("unsupported version %d", version), func(t *testing.T) {
+			unsupported, _, _ := buildManifestWithVersion(t, 2, false, 0x75, 0x77, &version)
+			parsed, err := manifest.Deserialize(unsupported)
+			require.Nil(t, parsed)
+			require.ErrorContains(t, err, fmt.Sprintf("unsupported Version %d", version))
 		})
 	}
 }

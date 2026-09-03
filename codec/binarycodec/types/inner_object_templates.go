@@ -19,7 +19,16 @@ type innerObjectField struct {
 	style innerObjectFieldStyle
 }
 
-var innerObjectTemplates = map[string][]innerObjectField{
+var objectTemplates = map[string][]innerObjectField{
+	"Manifest": {
+		{name: "PublicKey", style: innerRequired},
+		{name: "MasterSignature", style: innerRequired},
+		{name: "Sequence", style: innerRequired},
+		{name: "Version", style: innerDefault},
+		{name: "Domain", style: innerOptional},
+		{name: "SigningPubKey", style: innerOptional},
+		{name: "Signature", style: innerOptional},
+	},
 	"SignerEntry": {
 		{name: "Account", style: innerRequired},
 		{name: "SignerWeight", style: innerRequired},
@@ -139,14 +148,14 @@ func MeetsInnerObjectTemplate(fieldName string, values map[string]any) bool {
 	for name := range values {
 		fieldOrder = append(fieldOrder, name)
 	}
-	return validateInnerObject(fieldName, values, fieldOrder) == nil
+	return validateObjectTemplate(fieldName, values, fieldOrder) == nil
 }
 
 // CanonicalizeInnerObjectTemplate removes discardable fields and reports
 // whether the remaining object satisfies its registered SField template.
 // Fields without a registered template are left unchanged and are valid.
 func CanonicalizeInnerObjectTemplate(fieldName string, values map[string]any) bool {
-	if _, ok := innerObjectTemplates[fieldName]; !ok {
+	if _, ok := objectTemplates[fieldName]; !ok {
 		return true
 	}
 	for name := range values {
@@ -157,8 +166,8 @@ func CanonicalizeInnerObjectTemplate(fieldName string, values map[string]any) bo
 	return MeetsInnerObjectTemplate(fieldName, values)
 }
 
-func validateInnerObject(fieldName string, values map[string]any, fieldOrder []string) error {
-	template, ok := innerObjectTemplates[fieldName]
+func validateObjectTemplate(fieldName string, values map[string]any, fieldOrder []string) error {
+	template, ok := objectTemplates[fieldName]
 	if !ok {
 		return nil
 	}
@@ -196,7 +205,7 @@ func isDiscardableInnerField(name string) bool {
 }
 
 func isDefaultInnerField(objectName, fieldName string, value any) bool {
-	for _, field := range innerObjectTemplates[objectName] {
+	for _, field := range objectTemplates[objectName] {
 		if field.name == fieldName {
 			return field.style == innerDefault && isDefaultInnerValue(value)
 		}
