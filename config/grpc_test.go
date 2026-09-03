@@ -64,6 +64,21 @@ func TestValidateProtocols_GRPC(t *testing.T) {
 	})
 }
 
+func TestValidateGRPCLimit(t *testing.T) {
+	for _, limit := range []int{0, 1, 65535} {
+		p := &PortConfig{Port: 50051, IP: "127.0.0.1", Protocol: "grpc", Limit: limit}
+		if err := p.Validate(); err != nil {
+			t.Fatalf("limit %d rejected: %v", limit, err)
+		}
+	}
+	for _, limit := range []int{-1, 65536} {
+		p := &PortConfig{Port: 50051, IP: "127.0.0.1", Protocol: "grpc", Limit: limit}
+		if err := p.Validate(); err == nil {
+			t.Fatalf("limit %d accepted", limit)
+		}
+	}
+}
+
 func TestValidateProtocols_RejectsUnsupportedTLS(t *testing.T) {
 	for _, protocol := range []string{"https", "wss"} {
 		t.Run(protocol, func(t *testing.T) {

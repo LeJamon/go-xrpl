@@ -12,6 +12,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/config"
 	xrplgrpc "github.com/LeJamon/go-xrpl/internal/grpc"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/internal/rpc"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
@@ -72,6 +73,7 @@ func bindRPCTransports(
 	httpHandler http.Handler,
 	wsServer *rpc.WebSocketServer,
 	grpcLookup xrplgrpc.LedgerLookup,
+	resourceManager *resource.Manager,
 	listen listenFunc,
 ) (_ *boundRPCTransports, err error) {
 	connLimiter := newConnectionLimiter(cfg.Server.MaxConnections)
@@ -181,7 +183,7 @@ func bindRPCTransports(
 	}
 
 	if hasGRPC {
-		grpcServer, grpcErr := bindGRPCServer(ctx, grpcName, grpcPort, grpcLookup, log, listen)
+		grpcServer, grpcErr := bindGRPCServer(ctx, grpcName, grpcPort, grpcLookup, resourceManager, log, listen)
 		if grpcErr != nil {
 			return nil, grpcErr
 		}

@@ -39,6 +39,7 @@ func newConnectionLimitTestTransports(t *testing.T, protocol string, limit int) 
 		}),
 		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
 		nil,
+		nil,
 		systemListen,
 	)
 	require.NoError(t, err)
@@ -196,6 +197,7 @@ func TestRPCConnectionLimitReleasesRejectedHTTPTransportConnections(t *testing.T
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
 		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
 		nil,
+		nil,
 		systemListen,
 	)
 	require.NoError(t, err)
@@ -270,6 +272,7 @@ func TestRPCConnectionLimitReleasesRejectedWebSocketConnections(t *testing.T) {
 		}},
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
 		wsServer,
+		nil,
 		nil,
 		systemListen,
 	)
@@ -348,6 +351,7 @@ func TestRPCConnectionLimitIsGlobalAcrossHTTPAndWebSocketPorts(t *testing.T) {
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
 		wsServer,
 		nil,
+		nil,
 		systemListen,
 	)
 	require.NoError(t, err)
@@ -405,6 +409,7 @@ func TestBindRPCTransportsValidatesAllPortsBeforeBinding(t *testing.T) {
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
 		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
 		nil,
+		nil,
 		func(context.Context, string, string) (net.Listener, error) {
 			calls.Add(1)
 			return nil, errors.New("must not bind")
@@ -430,6 +435,7 @@ func TestBindRPCTransportsClosesEarlierListenersOnLaterFailure(t *testing.T) {
 		cfg,
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
 		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
+		nil,
 		nil,
 		func(context.Context, string, string) (net.Listener, error) {
 			if calls.Add(1) == 2 {
@@ -463,6 +469,7 @@ func TestBindRPCTransportsClosesHTTPWhenGRPCBindFails(t *testing.T) {
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
 		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
 		&stubLookup{},
+		nil,
 		func(context.Context, string, string) (net.Listener, error) {
 			if calls.Add(1) == 2 {
 				return nil, wantErr
@@ -504,6 +511,7 @@ func TestBoundRPCTransportsDoNotServeBeforeCommit(t *testing.T) {
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
 		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
 		nil,
+		nil,
 		func(context.Context, string, string) (net.Listener, error) { return tracked, nil },
 	)
 	require.NoError(t, err)
@@ -531,6 +539,7 @@ func TestBoundRPCTransportsHealthUsesTransportBasicAuth(t *testing.T) {
 		}},
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
 		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
+		nil,
 		nil,
 		systemListen,
 	)
@@ -580,6 +589,7 @@ func TestBoundRPCTransportsServeAndJoinAllProtocols(t *testing.T) {
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
 		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
 		&stubLookup{},
+		nil,
 		systemListen,
 	)
 	require.NoError(t, err)
@@ -621,6 +631,7 @@ func TestBoundRPCTransportsPreStoppedServersDoNotBlockServe(t *testing.T) {
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
 		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
 		&stubLookup{},
+		nil,
 		systemListen,
 	)
 	require.NoError(t, err)
@@ -655,6 +666,7 @@ func TestShutdownTransportsForceClosesStuckHTTPHandler(t *testing.T) {
 			<-release
 		}),
 		rpc.NewWebSocketServer(rpc.WebSocketServerOptions{Timeout: time.Second}),
+		nil,
 		nil,
 		systemListen,
 	)

@@ -17,7 +17,7 @@ type ServerConfig struct {
 	Port           int      `toml:"port" mapstructure:"port"`         // Default port number
 	IP             string   `toml:"ip" mapstructure:"ip"`             // Default IP address
 	Protocol       string   `toml:"protocol" mapstructure:"protocol"` // Default protocol
-	Limit          int      `toml:"limit" mapstructure:"limit"`       // Default connection limit
+	Limit          int      `toml:"limit" mapstructure:"limit"`       // Default per-port admission limit
 	User           string   `toml:"user" mapstructure:"user"`         // Default HTTP basic auth user
 	Password       string   `toml:"password" mapstructure:"password"` // Default HTTP basic auth password
 	Admin          []string `toml:"admin" mapstructure:"admin"`       // Default administrative networks
@@ -41,7 +41,7 @@ type PortConfig struct {
 	Port     int    `toml:"port" mapstructure:"port"`
 	IP       string `toml:"ip" mapstructure:"ip"`
 	Protocol string `toml:"protocol" mapstructure:"protocol"`
-	Limit    int    `toml:"limit" mapstructure:"limit"`
+	Limit    int    `toml:"limit" mapstructure:"limit"` // Connections for HTTP/WS; concurrent requests for gRPC
 
 	// HTTP Basic Authentication
 	User     string `toml:"user" mapstructure:"user"`
@@ -107,6 +107,9 @@ func (p *PortConfig) Validate() error {
 	}
 	if p.SendQueueLimit < 0 || p.SendQueueLimit > 65535 {
 		return fmt.Errorf("send_queue_limit must be 0 (default) or between 1 and 65535, got %d", p.SendQueueLimit)
+	}
+	if p.Limit < 0 || p.Limit > 65535 {
+		return fmt.Errorf("limit must be 0 (unlimited) or between 1 and 65535, got %d", p.Limit)
 	}
 	if p.IP == "" {
 		return errors.New("IP address is required")

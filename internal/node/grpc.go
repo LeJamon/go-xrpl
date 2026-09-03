@@ -11,11 +11,13 @@ import (
 
 	googlegrpc "google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	"github.com/LeJamon/go-xrpl/config"
 	xrplgrpc "github.com/LeJamon/go-xrpl/internal/grpc"
 	rpcv1 "github.com/LeJamon/go-xrpl/internal/grpc/pb/org/xrpl/rpc/v1"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
 
@@ -51,9 +53,14 @@ type boundGRPCServer struct {
 	ready     <-chan struct{}
 	markReady func()
 	server    *googlegrpc.Server
-	requestMu sync.Mutex
-	requestWG sync.WaitGroup
-	stopping  bool
+
+	resourceManager  *resource.Manager
+	secureGatewayIPs []net.IP
+	requestLimit     int
+	requestMu        sync.Mutex
+	requestWG        sync.WaitGroup
+	requests         int
+	stopping         bool
 }
 
 func prepareGRPCServer(
@@ -61,13 +68,14 @@ func prepareGRPCServer(
 	name string,
 	p config.PortConfig,
 	lookup xrplgrpc.LedgerLookup,
+	resourceManager *resource.Manager,
 	log xrpllog.Logger,
 	listen listenFunc,
 ) (*boundGRPCServer, error) {
 	if err := validateGRPCPort(name, p); err != nil {
 		return nil, err
 	}
-	return bindGRPCServer(ctx, name, p, lookup, log, listen)
+	return bindGRPCServer(ctx, name, p, lookup, resourceManager, log, listen)
 }
 
 func bindGRPCServer(
@@ -75,9 +83,14 @@ func bindGRPCServer(
 	name string,
 	p config.PortConfig,
 	lookup xrplgrpc.LedgerLookup,
+	resourceManager *resource.Manager,
 	log xrpllog.Logger,
 	listen listenFunc,
 ) (*boundGRPCServer, error) {
+	secureGatewayIPs, err := parseGRPCSecureGatewayIPs(name, p.SecureGateway)
+	if err != nil {
+		return nil, err
+	}
 	addr := p.BindAddress()
 	lis, err := listen(ctx, "tcp", addr)
 	if err != nil {
@@ -87,11 +100,14 @@ func bindGRPCServer(
 	readyListener := newServeReadyListener(lis)
 
 	bound := &boundGRPCServer{
-		name:      name,
-		address:   boundAddr,
-		listener:  readyListener,
-		ready:     readyListener.ready,
-		markReady: readyListener.markReady,
+		name:             name,
+		address:          boundAddr,
+		listener:         readyListener,
+		ready:            readyListener.ready,
+		markReady:        readyListener.markReady,
+		resourceManager:  resourceManager,
+		secureGatewayIPs: secureGatewayIPs,
+		requestLimit:     p.Limit,
 	}
 	srv := googlegrpc.NewServer(
 		googlegrpc.ChainUnaryInterceptor(bound.trackUnary, grpcRecoveryInterceptor(log)),
@@ -102,27 +118,55 @@ func bindGRPCServer(
 	return bound, nil
 }
 
-func (s *boundGRPCServer) admitRequest() bool {
+func (s *boundGRPCServer) admitRequest() error {
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
 	if s.stopping {
-		return false
+		return status.Error(codes.Unavailable, "server shutting down")
+	}
+	if s.requestLimit > 0 && s.requests >= s.requestLimit {
+		return status.Error(codes.ResourceExhausted, "request limit exceeded")
 	}
 	s.requestWG.Add(1)
-	return true
+	s.requests++
+	return nil
+}
+
+func (s *boundGRPCServer) finishRequest() {
+	s.requestMu.Lock()
+	s.requests--
+	s.requestMu.Unlock()
+	s.requestWG.Done()
 }
 
 func (s *boundGRPCServer) trackUnary(
 	ctx context.Context,
 	req any,
-	_ *googlegrpc.UnaryServerInfo,
+	info *googlegrpc.UnaryServerInfo,
 	handler googlegrpc.UnaryHandler,
 ) (any, error) {
-	if !s.admitRequest() {
-		return nil, status.Error(codes.Unavailable, "server shutting down")
+	if err := s.admitRequest(); err != nil {
+		return nil, err
 	}
-	defer s.requestWG.Done()
-	return handler(ctx, req)
+	defer s.finishRequest()
+
+	method := ""
+	if info != nil {
+		method = info.FullMethod
+	}
+	finishResource, unlimited, err := s.admitResource(ctx, req, method)
+	if err != nil {
+		return nil, err
+	}
+	if finishResource != nil {
+		defer finishResource()
+	}
+
+	resp, err := handler(ctx, req)
+	if unlimited && resp != nil {
+		setGRPCUnlimited(resp)
+	}
+	return resp, err
 }
 
 func (s *boundGRPCServer) trackStream(
@@ -131,11 +175,73 @@ func (s *boundGRPCServer) trackStream(
 	_ *googlegrpc.StreamServerInfo,
 	handler googlegrpc.StreamHandler,
 ) error {
-	if !s.admitRequest() {
-		return status.Error(codes.Unavailable, "server shutting down")
+	if err := s.admitRequest(); err != nil {
+		return err
 	}
-	defer s.requestWG.Done()
+	defer s.finishRequest()
 	return handler(srv, stream)
+}
+
+func (s *boundGRPCServer) admitResource(ctx context.Context, req any, method string) (func(), bool, error) {
+	if s.resourceManager == nil {
+		return nil, false, nil
+	}
+	clientIP, ok := grpcClientIP(ctx)
+	if !ok {
+		return nil, false, status.Error(codes.Internal, "Failed to get client endpoint")
+	}
+	unlimited := grpcUser(req) != "" && s.isSecureGateway(clientIP)
+	consumer := s.resourceManager.NewInboundEndpoint(clientIP.String())
+	if consumer == nil {
+		return nil, false, status.Error(codes.ResourceExhausted, "usage balance exceeds threshold")
+	}
+	if !unlimited && consumer.Disconnect() {
+		consumer.Release()
+		return nil, false, status.Error(codes.ResourceExhausted, "usage balance exceeds threshold")
+	}
+	consumer.Charge(resource.FeeMediumBurdenRPC(), method)
+	return consumer.Release, unlimited, nil
+}
+
+func grpcClientIP(ctx context.Context) (net.IP, bool) {
+	client, ok := peer.FromContext(ctx)
+	if !ok || client.Addr == nil {
+		return nil, false
+	}
+	if tcpAddr, ok := client.Addr.(*net.TCPAddr); ok && tcpAddr.IP != nil {
+		return tcpAddr.IP, true
+	}
+	host, _, err := net.SplitHostPort(client.Addr.String())
+	if err != nil {
+		return nil, false
+	}
+	ip := net.ParseIP(host)
+	return ip, ip != nil
+}
+
+func grpcUser(req any) string {
+	if request, ok := req.(interface{ GetUser() string }); ok {
+		return request.GetUser()
+	}
+	return ""
+}
+
+func (s *boundGRPCServer) isSecureGateway(clientIP net.IP) bool {
+	for _, gatewayIP := range s.secureGatewayIPs {
+		if gatewayIP.Equal(clientIP) {
+			return true
+		}
+	}
+	return false
+}
+
+func setGRPCUnlimited(resp any) {
+	switch response := resp.(type) {
+	case *rpcv1.GetLedgerResponse:
+		response.IsUnlimited = true
+	case *rpcv1.GetLedgerDataResponse:
+		response.IsUnlimited = true
+	}
 }
 
 func (s *boundGRPCServer) stopRequests() {
@@ -154,18 +260,24 @@ func (s *boundGRPCServer) waitRequests() {
 }
 
 func validateGRPCPort(name string, p config.PortConfig) error {
-	if _, err := p.ParseSecureGatewayNets(); err != nil {
-		return fmt.Errorf("parse secure_gateway nets for grpc port %q: %w", name, err)
-	}
-	// rippled forbids an unspecified address in grpc secure_gateway
-	// (GRPCServer.cpp:361-368) — match-all would defeat the rate-limit
-	// bypass it scopes to known Clio hosts.
-	for _, entry := range p.SecureGateway {
-		if ip := net.ParseIP(strings.TrimSpace(entry)); ip != nil && ip.IsUnspecified() {
-			return fmt.Errorf("grpc port %q: unspecified IP %q in secure_gateway", name, entry)
+	_, err := parseGRPCSecureGatewayIPs(name, p.SecureGateway)
+	return err
+}
+
+func parseGRPCSecureGatewayIPs(name string, entries []string) ([]net.IP, error) {
+	gateways := make([]net.IP, 0, len(entries))
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		ip := net.ParseIP(entry)
+		if ip == nil {
+			return nil, fmt.Errorf("grpc port %q: invalid secure_gateway IP %q", name, entry)
 		}
+		if ip.IsUnspecified() {
+			return nil, fmt.Errorf("grpc port %q: unspecified IP %q in secure_gateway", name, entry)
+		}
+		gateways = append(gateways, ip)
 	}
-	return nil
+	return gateways, nil
 }
 
 func (s *boundGRPCServer) serve(log xrpllog.Logger, errCh chan<- error, done func()) {
