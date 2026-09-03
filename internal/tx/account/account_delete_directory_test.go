@@ -163,6 +163,37 @@ func TestAccountDeleteRejectsMismatchedOwnerDirectoryRoot(t *testing.T) {
 	require.Equal(t, before, view.data)
 }
 
+func TestAccountDeleteEngineMismatchedOwnerDirectoryRootClearsDeliveredAmount(t *testing.T) {
+	view, accountDelete, _, ownerDir := accountDeleteDirectoryFixture(t)
+	node := &state.DirectoryNode{RootIndex: [32]byte{9}, Owner: [20]byte{1}}
+	directoryData, err := state.SerializeDirectoryNode(node, false)
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(ownerDir, directoryData))
+	sourceID, err := state.DecodeAccountID(accountDelete.Account)
+	require.NoError(t, err)
+	destinationID, err := state.DecodeAccountID(accountDelete.Destination)
+	require.NoError(t, err)
+	accountDelete.Fee = "200000"
+	accountDelete.SetSequence(1)
+
+	result := engine.NewEngine(view, accountDeleteEngineConfig(view.rules)).Apply(accountDelete)
+
+	require.Equal(t, ter.TecHAS_OBLIGATIONS, result.Result)
+	require.True(t, result.Applied)
+	require.Equal(t, uint64(200_000), result.Fee)
+	require.NotNil(t, result.Metadata)
+	require.Nil(t, result.Metadata.DeliveredAmount)
+	require.Equal(t, directoryData, view.data[ownerDir.Key])
+
+	source, err := state.ParseAccountRoot(view.data[keylet.Account(sourceID).Key])
+	require.NoError(t, err)
+	require.Equal(t, uint64(800_000), source.Balance)
+	require.Equal(t, uint32(2), source.Sequence)
+	destination, err := state.ParseAccountRoot(view.data[keylet.Account(destinationID).Key])
+	require.NoError(t, err)
+	require.Equal(t, uint64(1_000_000), destination.Balance)
+}
+
 func TestAccountDeleteEngineRollsBackLegacyDirectoryEraseFailure(t *testing.T) {
 	view, accountDelete, _, ownerDir := accountDeleteDirectoryFixture(t)
 	putEmptyOwnerDirPage(t, view, ownerDir, 0, 1, 1)
