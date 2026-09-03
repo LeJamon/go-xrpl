@@ -46,9 +46,9 @@ test-integration:
 test-tx:
     go test ./internal/tx/...
 
-# CI group: ledger / txq / rpc / consensus / peermanagement.
+# CI group: ledger / txq / rpc / consensus / peermanagement / manifest.
 test-core:
-    go test ./internal/ledger/... ./internal/txq/... ./internal/rpc/... ./internal/consensus/... ./internal/peermanagement/...
+    go test ./internal/ledger/... ./internal/txq/... ./internal/rpc/... ./internal/consensus/... ./internal/peermanagement/... ./internal/manifest/...
 
 # CI group: codec / crypto / shamap / storage / etc.
 test-libs:
