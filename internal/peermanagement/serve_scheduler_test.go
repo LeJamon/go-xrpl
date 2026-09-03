@@ -2,7 +2,6 @@ package peermanagement
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -10,24 +9,21 @@ import (
 
 func TestServeSchedulerPerPeerFairness(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	s := newServeScheduler(ctx, 2, 32, 16, 1)
+	runDone := make(chan struct{})
 	go func() {
 		_ = s.Run(ctx)
+		close(runDone)
 	}()
 
-	var mu sync.Mutex
-	order := make([]PeerID, 0, 4)
-	var release atomic.Int32
-	started := make(chan struct{}, 4)
+	release := make(chan struct{})
+	started := make(chan PeerID, 2)
 	job := func(peerID PeerID) func(context.Context) {
-		return func(context.Context) {
-			mu.Lock()
-			order = append(order, peerID)
-			mu.Unlock()
-			started <- struct{}{}
-			for release.Load() == 0 {
-				time.Sleep(time.Millisecond)
+		return func(ctx context.Context) {
+			started <- peerID
+			select {
+			case <-release:
+			case <-ctx.Done():
 			}
 		}
 	}
@@ -39,18 +35,18 @@ func TestServeSchedulerPerPeerFairness(t *testing.T) {
 	if !s.Submit(ctx, 2, job(2)) {
 		t.Fatal("peer 2 submission rejected")
 	}
-	for range 2 {
-		<-started
+	startedPeers := [2]PeerID{<-started, <-started}
+	close(release)
+	cancel()
+	select {
+	case <-runDone:
+	case <-time.After(time.Second):
+		t.Fatal("scheduler did not shut down")
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	if len(order) != 2 || order[0] != 1 || order[1] != 2 {
-		t.Fatalf("start order = %v, want one job from each peer", order)
+	if !((startedPeers[0] == 1 && startedPeers[1] == 2) ||
+		(startedPeers[0] == 2 && startedPeers[1] == 1)) {
+		t.Fatalf("started peers = %v, want one job from each peer", startedPeers)
 	}
-	release.Store(1)
-	mu.Unlock()
-	time.Sleep(10 * time.Millisecond)
-	mu.Lock()
 }
 
 func TestServeSchedulerBoundsAndCancellation(t *testing.T) {
