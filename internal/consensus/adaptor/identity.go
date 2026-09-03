@@ -257,9 +257,7 @@ func (vi *ValidatorIdentity) Sign(data []byte) ([]byte, error) {
 	if len(vi.signingSecret.privateKey) == 0 {
 		return nil, errNoValidatorKey
 	}
-	var digest [32]byte
-	copy(digest[:], data)
-	return secp256k1.SignDigestBytes(digest[:], vi.signingSecret.privateKey)
+	return secp256k1.SignDigestBytes(data, vi.signingSecret.privateKey)
 }
 
 // verify dispatches on the pubkey-type prefix (0xED → ed25519, 0x02/0x03

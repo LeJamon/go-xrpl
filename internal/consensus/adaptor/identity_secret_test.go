@@ -3,6 +3,7 @@ package adaptor
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -84,6 +85,19 @@ func TestValidatorIdentityReplacementErasesOldSecret(t *testing.T) {
 	require.False(t, allZero(ownedReplacement))
 	require.NoError(t, identity.Close())
 	require.True(t, allZero(ownedReplacement))
+}
+
+func TestValidatorIdentitySignRejectsInvalidDigestLength(t *testing.T) {
+	identity, err := NewValidatorIdentity(testValidatorSeed)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, identity.Close()) })
+
+	for _, size := range []int{31, 33} {
+		t.Run(fmt.Sprintf("%d_bytes", size), func(t *testing.T) {
+			_, err := identity.Sign(make([]byte, size))
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestValidatorIdentitySignAndCloseAreRaceSafe(t *testing.T) {
