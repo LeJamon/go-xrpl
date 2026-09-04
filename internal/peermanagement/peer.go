@@ -1427,11 +1427,11 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 			return err
 		}
 		n, err := writeComplete(conn, wire)
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			err = ErrWriteIdle
+		}
 		p.completeOutbound(token, err)
 		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				return ErrWriteIdle
-			}
 			return err
 		}
 		p.metrics.sent.addMessage(uint64(n))
@@ -1456,6 +1456,12 @@ func (p *Peer) completeOutbound(token outboundToken, writeErr error) {
 	}
 }
 
+func (p *Peer) outboundWriteError() error {
+	p.outboundErrMu.Lock()
+	defer p.outboundErrMu.Unlock()
+	return p.outboundErr
+}
+
 func (p *Peer) beginGracefulClose() bool {
 	p.sendMu.Lock()
 	defer p.sendMu.Unlock()
@@ -1472,14 +1478,12 @@ func (p *Peer) waitOutboundDrain(
 	runResults <-chan peerRunResult,
 ) error {
 	for {
-		p.outboundErrMu.Lock()
-		writeErr := p.outboundErr
-		p.outboundErrMu.Unlock()
-		if writeErr != nil {
-			return writeErr
+		if err := p.outboundWriteError(); err != nil {
+			return err
 		}
 		if p.outbound.snapshot().TotalFrames == 0 {
-			return nil
+			// The writer records its error before removing the final frame.
+			return p.outboundWriteError()
 		}
 		select {
 		case <-runCtx.Done():

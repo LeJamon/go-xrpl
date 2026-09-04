@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -96,16 +97,28 @@ func TestReplayDeltaRequest_PrioritySenderBypassesSharedEvents(t *testing.T) {
 	events := make(chan Event)
 	h := NewLedgerSyncHandler(events)
 	h.SetProvider(provider)
+	encodeFrame := h.encodeFrame
+	var encodeCalls int
+	var encodedFrame []byte
+	h.encodeFrame = func(msg message.Message) ([]byte, error) {
+		encodeCalls++
+		frame, err := encodeFrame(msg)
+		encodedFrame = frame
+		return frame, err
+	}
 	var gotPeer PeerID
 	var gotFrame []byte
 	h.SetPrioritySender(func(_ context.Context, peerID PeerID, frame []byte) error {
 		gotPeer = peerID
-		gotFrame = append([]byte(nil), frame...)
+		gotFrame = frame
 		return nil
 	})
 	require.NoError(t, h.HandleMessage(context.Background(), PeerID(9), &message.ReplayDeltaRequest{LedgerHash: fixedHash()}))
 	assert.Equal(t, PeerID(9), gotPeer)
 	require.NotEmpty(t, gotFrame)
+	assert.Equal(t, 1, encodeCalls)
+	assert.Equal(t, encodedFrame, gotFrame)
+	assert.True(t, &encodedFrame[0] == &gotFrame[0], "sender must receive the size-checked frame")
 	header, _, err := readTestFrame(bytes.NewReader(gotFrame))
 	require.NoError(t, err)
 	assert.Equal(t, message.TypeReplayDeltaResponse, header.MessageType)
@@ -217,4 +230,30 @@ func TestReplayDeltaRequest_ResponseAbove16MiBAccepted(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, message.TypeReplayDeltaResponse, frameHeader.MessageType)
 	assert.Greater(t, len(payload), 16*1024*1024)
+}
+
+func TestReplayDeltaRequest_OversizedResponseRejectedAfterOneEncoding(t *testing.T) {
+	provider := &fakeReplayDeltaProvider{header: []byte("header")}
+	h := NewLedgerSyncHandler(make(chan Event, 1))
+	h.SetProvider(provider)
+	var encodeCalls int
+	h.encodeFrame = func(message.Message) ([]byte, error) {
+		encodeCalls++
+		return nil, message.ErrMessageTooLarge
+	}
+	var sent bool
+	h.SetPrioritySender(func(context.Context, PeerID, []byte) error {
+		sent = true
+		return nil
+	})
+	var chargedReason string
+	h.SetChargePeer(func(_ PeerID, _ resource.Charge, reason string) {
+		chargedReason = reason
+	})
+
+	err := h.HandleMessage(context.Background(), PeerID(11), &message.ReplayDeltaRequest{LedgerHash: fixedHash()})
+	require.NoError(t, err)
+	assert.Equal(t, 1, encodeCalls)
+	assert.False(t, sent)
+	assert.Equal(t, "replay delta response oversized", chargedReason)
 }

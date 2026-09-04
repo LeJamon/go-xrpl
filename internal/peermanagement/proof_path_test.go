@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -115,11 +116,20 @@ func TestProofPathRequest_PrioritySenderBypassesSharedEvents(t *testing.T) {
 	events := make(chan Event)
 	h := NewLedgerSyncHandler(events)
 	h.SetProvider(provider)
+	encodeFrame := h.encodeFrame
+	var encodeCalls int
+	var encodedFrame []byte
+	h.encodeFrame = func(msg message.Message) ([]byte, error) {
+		encodeCalls++
+		frame, err := encodeFrame(msg)
+		encodedFrame = frame
+		return frame, err
+	}
 	var gotPeer PeerID
 	var gotFrame []byte
 	h.SetPrioritySender(func(_ context.Context, peerID PeerID, frame []byte) error {
 		gotPeer = peerID
-		gotFrame = append([]byte(nil), frame...)
+		gotFrame = frame
 		return nil
 	})
 	require.NoError(t, h.HandleMessage(context.Background(), PeerID(9), &message.ProofPathRequest{
@@ -127,6 +137,9 @@ func TestProofPathRequest_PrioritySenderBypassesSharedEvents(t *testing.T) {
 	}))
 	assert.Equal(t, PeerID(9), gotPeer)
 	require.NotEmpty(t, gotFrame)
+	assert.Equal(t, 1, encodeCalls)
+	assert.Equal(t, encodedFrame, gotFrame)
+	assert.True(t, &encodedFrame[0] == &gotFrame[0], "sender must receive the size-checked frame")
 	header, _, err := readTestFrame(bytes.NewReader(gotFrame))
 	require.NoError(t, err)
 	assert.Equal(t, message.TypeProofPathResponse, header.MessageType)
@@ -335,18 +348,54 @@ func TestProofPathRequest_NoProvider(t *testing.T) {
 	assert.Equal(t, 0, len(events), "no event should be emitted when provider is nil")
 }
 
-func TestProofPathRequest_ResponseAbove16MiBRejected(t *testing.T) {
+func TestProofPathRequest_ResponseAbove16MiBAcceptedAfterOneEncoding(t *testing.T) {
+	const formerProofLimit = 16 * 1024 * 1024
 	provider := &fakeProofPathProvider{
 		header: []byte("hdr"),
-		path:   [][]byte{make([]byte, MaxProofPathResponseBytes)},
+		path:   [][]byte{make([]byte, formerProofLimit)},
 	}
 	events := make(chan Event, 1)
 	h := NewLedgerSyncHandler(events)
 	h.SetProvider(provider)
+	encodeFrame := h.encodeFrame
+	var encodeCalls int
+	h.encodeFrame = func(msg message.Message) ([]byte, error) {
+		encodeCalls++
+		return encodeFrame(msg)
+	}
 
 	err := h.HandleMessage(context.Background(), PeerID(10), &message.ProofPathRequest{
 		Key: fixedKey(), LedgerHash: fixedHash(), MapType: message.LedgerMapAccountState,
 	})
 	require.NoError(t, err)
-	assert.Empty(t, events)
+	require.Len(t, events, 1)
+	assert.Greater(t, len((<-events).Payload), formerProofLimit)
+	assert.Equal(t, 1, encodeCalls)
+}
+
+func TestProofPathRequest_OversizedResponseRejectedAfterOneEncoding(t *testing.T) {
+	h := NewLedgerSyncHandler(make(chan Event, 1))
+	h.SetProvider(&fakeProofPathProvider{header: []byte("header")})
+	var encodeCalls int
+	h.encodeFrame = func(message.Message) ([]byte, error) {
+		encodeCalls++
+		return nil, message.ErrMessageTooLarge
+	}
+	var sent bool
+	h.SetPrioritySender(func(context.Context, PeerID, []byte) error {
+		sent = true
+		return nil
+	})
+	var chargedReason string
+	h.SetChargePeer(func(_ PeerID, _ resource.Charge, reason string) {
+		chargedReason = reason
+	})
+
+	err := h.HandleMessage(context.Background(), PeerID(10), &message.ProofPathRequest{
+		Key: fixedKey(), LedgerHash: fixedHash(), MapType: message.LedgerMapAccountState,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, encodeCalls)
+	assert.False(t, sent)
+	assert.Equal(t, "proof path response oversized", chargedReason)
 }
