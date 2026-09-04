@@ -119,6 +119,22 @@ func TestDecodeLedgerHashesMatchesPublicErrors(t *testing.T) {
 	duplicate := append(append([]byte(nil), valid...), valid[marker:]...)
 	wrongType := append([]byte(nil), valid...)
 	wrongType[marker] = 0x52
+	wrongLedgerEntryType := append([]byte(nil), valid...)
+	wrongLedgerEntryType[2] = 0
+	truncatedUint32 := append([]byte(nil), valid[:6]...)
+	duplicateFlags := append(append([]byte(nil), valid...), valid[3:8]...)
+	lastSequenceMarker := bytes.Index(valid, []byte{0x20, 0x1b})
+	if lastSequenceMarker < 0 {
+		t.Fatal("LastLedgerSequence field marker not found")
+	}
+	duplicateLastSequence := append(append([]byte(nil), valid...), valid[lastSequenceMarker:lastSequenceMarker+6]...)
+	malformedSponsor := append([]byte(nil), valid[:marker]...)
+	malformedSponsor = append(malformedSponsor, 0x80, 0x1b, 19)
+	malformedSponsor = append(malformedSponsor, make([]byte, 19)...)
+	malformedSponsor = append(malformedSponsor, valid[marker:]...)
+	truncatedSponsor := append([]byte(nil), valid[:marker]...)
+	truncatedSponsor = append(truncatedSponsor, 0x80, 0x1b, 20)
+	truncatedSponsor = append(truncatedSponsor, make([]byte, 10)...)
 
 	tests := []struct {
 		name string
@@ -139,11 +155,20 @@ func TestDecodeLedgerHashesMatchesPublicErrors(t *testing.T) {
 			"LastLedgerSequence": uint32(1),
 			"Hashes":             []string{strings.Repeat("01", 32)},
 		})},
+		{name: "wrong ledger entry type", data: wrongLedgerEntryType},
+		{name: "truncated extended type header", data: []byte{0x01}},
+		{name: "truncated extended field header", data: []byte{0x10}},
+		{name: "truncated UInt16", data: []byte{0x11, 0x00}},
+		{name: "truncated UInt32", data: truncatedUint32},
+		{name: "malformed Sponsor", data: malformedSponsor},
+		{name: "truncated Sponsor", data: truncatedSponsor},
 		{name: "31 byte vector", data: cloneWithLength(31)},
 		{name: "33 byte vector", data: cloneWithLength(33)},
 		{name: "truncated vector", data: valid[:len(valid)-1]},
 		{name: "invalid VL prefix", data: cloneWithLength(255)},
 		{name: "duplicate hashes", data: duplicate},
+		{name: "duplicate flags", data: duplicateFlags},
+		{name: "duplicate last ledger sequence", data: duplicateLastSequence},
 		{name: "wrong field type", data: wrongType},
 	}
 
