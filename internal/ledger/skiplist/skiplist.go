@@ -195,6 +195,9 @@ func encode(fields *LedgerHashesFields, hashes [][32]byte, lastSeq uint32) ([]by
 		if fields.hasFirst {
 			entry.SetFirstLedgerSequence(fields.FirstLedgerSequence)
 		}
+		if fields.hasLedgerIndex {
+			entry.SetLedgerIndex(fields.LedgerIndex)
+		}
 		if fields.hasSponsor {
 			entry.SetSponsor(fields.Sponsor)
 		}

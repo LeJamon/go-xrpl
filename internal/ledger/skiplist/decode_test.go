@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	"github.com/LeJamon/go-xrpl/keylet"
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -161,8 +162,39 @@ func TestDecodeLedgerHashesMatchesPublicErrors(t *testing.T) {
 	}
 }
 
+func TestDecodeLedgerHashesRejectsNonCanonicalFieldHeaders(t *testing.T) {
+	valid, _, _ := ledgerHashesFixture(t, 1)
+	if valid[0] != 0x11 {
+		t.Fatalf("LedgerEntryType header = %02X, want 11", valid[0])
+	}
+
+	tests := []struct {
+		name    string
+		header  []byte
+		wantErr error
+	}{
+		{name: "extended type", header: []byte{0x01, 0x01}, wantErr: serdes.ErrInvalidTypecode},
+		{name: "extended field", header: []byte{0x10, 0x01}, wantErr: serdes.ErrInvalidFieldcode},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data := append(append([]byte(nil), test.header...), valid[1:]...)
+
+			var public ledgerfields.LedgerHashes
+			if err := public.Decode(data); err != test.wantErr {
+				t.Fatalf("public Decode error = %v, want %v", err, test.wantErr)
+			}
+			if _, _, err := decodeLedgerHashes(data); err != test.wantErr {
+				t.Fatalf("typed decode error = %v, want %v", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestLedgerHashesRewritePreservesOptionalFields(t *testing.T) {
 	const sponsor = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	ledgerIndex := strings.Repeat("ab", 32)
+	wantLedgerIndex := strings.ToUpper(ledgerIndex)
 	data, wantHashes, hashStrings := ledgerHashesFixture(t, 1)
 	var entry ledgerfields.LedgerHashes
 	if err := entry.Decode(data); err != nil {
@@ -170,10 +202,18 @@ func TestLedgerHashesRewritePreservesOptionalFields(t *testing.T) {
 	}
 	entry.SetFlags(0x10)
 	entry.SetFirstLedgerSequence(1)
+	entry.SetLedgerIndex(ledgerIndex)
 	entry.SetSponsor(sponsor)
 	data, err := entry.Encode()
 	if err != nil {
 		t.Fatalf("Encode optional fields: %v", err)
+	}
+	var public ledgerfields.LedgerHashes
+	if err := public.Decode(data); err != nil {
+		t.Fatalf("Decode optional fields: %v", err)
+	}
+	if public.LedgerIndex != wantLedgerIndex {
+		t.Fatalf("public LedgerIndex = %q, want %q", public.LedgerIndex, wantLedgerIndex)
 	}
 
 	stateMap := shamap.New(shamap.TypeState)
@@ -184,6 +224,9 @@ func TestLedgerHashesRewritePreservesOptionalFields(t *testing.T) {
 	fields, hashes, lastSeq, err := ReadLedgerHashesSLE(stateMap, key)
 	if err != nil {
 		t.Fatalf("ReadLedgerHashesSLE: %v", err)
+	}
+	if !fields.HasLedgerIndex() || fields.LedgerIndex != wantLedgerIndex {
+		t.Fatalf("typed LedgerIndex: present=%v value=%q, want %q", fields.HasLedgerIndex(), fields.LedgerIndex, wantLedgerIndex)
 	}
 	if err := Write(stateMap, key, fields, hashes, lastSeq); err != nil {
 		t.Fatalf("Write: %v", err)

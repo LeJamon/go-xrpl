@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
@@ -15,9 +16,11 @@ type LedgerHashesFields struct {
 	Flags               uint32
 	FirstLedgerSequence uint32
 	LastLedgerSequence  uint32
+	LedgerIndex         string
 	Sponsor             string
 	hasFirst            bool
 	hasLast             bool
+	hasLedgerIndex      bool
 	hasSponsor          bool
 }
 
@@ -30,6 +33,11 @@ func (f *LedgerHashesFields) HasFirstLedgerSequence() bool {
 func (f *LedgerHashesFields) SetFirstLedgerSequence(value uint32) {
 	f.FirstLedgerSequence = value
 	f.hasFirst = true
+}
+
+// HasLedgerIndex reports whether the decoded entry contained LedgerIndex.
+func (f *LedgerHashesFields) HasLedgerIndex() bool {
+	return f != nil && f.hasLedgerIndex
 }
 
 func decodeLedgerHashes(data []byte) (*LedgerHashesFields, [][32]byte, error) {
@@ -81,6 +89,16 @@ func decodeLedgerHashes(data []byte) (*LedgerHashesFields, [][32]byte, error) {
 			default:
 				return nil, nil, unknownLedgerHashesField(typeCode, fieldCode)
 			}
+		case 5:
+			value, err := reader.readHash256()
+			if err != nil {
+				return nil, nil, err
+			}
+			if fieldCode != 6 {
+				return nil, nil, unknownLedgerHashesField(typeCode, fieldCode)
+			}
+			fields.LedgerIndex = value
+			fields.hasLedgerIndex = true
 		case 8:
 			value, err := reader.readAccountID()
 			if err != nil {
@@ -149,6 +167,9 @@ func (r *ledgerHashesReader) readFieldHeader() (typeCode, fieldCode int, err err
 		}
 		typeCode = int(r.data[r.pos])
 		r.pos++
+		if typeCode < 16 {
+			return 0, 0, serdes.ErrInvalidTypecode
+		}
 	}
 	if fieldCode == 0 {
 		if r.pos >= len(r.data) {
@@ -156,8 +177,20 @@ func (r *ledgerHashesReader) readFieldHeader() (typeCode, fieldCode int, err err
 		}
 		fieldCode = int(r.data[r.pos])
 		r.pos++
+		if fieldCode < 16 {
+			return 0, 0, serdes.ErrInvalidFieldcode
+		}
 	}
 	return typeCode, fieldCode, nil
+}
+
+func (r *ledgerHashesReader) readHash256() (string, error) {
+	if r.pos+32 > len(r.data) {
+		return "", errors.New("ledgerfields: out of bounds reading Hash")
+	}
+	value := fmt.Sprintf("%064X", r.data[r.pos:r.pos+32])
+	r.pos += 32
+	return value, nil
 }
 
 func (r *ledgerHashesReader) readUint16() (uint16, error) {
