@@ -95,9 +95,55 @@ func TestReadLedgerHashesRejectsMissingLastSequence(t *testing.T) {
 	if err := sm.Put(keylet.LedgerHashes().Key, data); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	if _, _, _, err := ReadLedgerHashesSLE(sm, keylet.LedgerHashes().Key); err == nil {
-		t.Fatal("expected missing LastLedgerSequence to be rejected")
+	if _, _, _, err := ReadLedgerHashesSLE(sm, keylet.LedgerHashes().Key); err == nil || err.Error() != "LedgerHashes missing LastLedgerSequence" {
+		t.Fatalf("error = %v, want missing LastLedgerSequence", err)
 	}
+}
+
+func TestReadLedgerHashesValidatesTypedFields(t *testing.T) {
+	tests := []struct {
+		name      string
+		hashCount int
+		first     *uint32
+		last      uint32
+		wantErr   string
+	}{
+		{name: "empty hashes", last: 1, wantErr: "LedgerHashes has invalid Hashes cardinality 0"},
+		{name: "too many hashes", hashCount: 257, last: 257, wantErr: "LedgerHashes has invalid Hashes cardinality 257"},
+		{name: "zero first sequence", hashCount: 1, first: uint32Pointer(0), last: 1, wantErr: "LedgerHashes has invalid FirstLedgerSequence"},
+		{name: "first after last", hashCount: 1, first: uint32Pointer(2), last: 1, wantErr: "LedgerHashes has invalid FirstLedgerSequence"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			entry := &ledgerfields.LedgerHashes{}
+			entry.SetFlags(0)
+			entry.SetLastLedgerSequence(test.last)
+			if test.first != nil {
+				entry.SetFirstLedgerSequence(*test.first)
+			}
+			hashes := make([]string, test.hashCount)
+			for i := range hashes {
+				hashes[i] = fmt.Sprintf("%064X", synthHash(uint32(i+1)))
+			}
+			entry.SetHashes(hashes)
+			data, err := entry.Encode()
+			if err != nil {
+				t.Fatalf("Encode: %v", err)
+			}
+			sm := shamap.New(shamap.TypeState)
+			if err := sm.Put(keylet.LedgerHashes().Key, data); err != nil {
+				t.Fatalf("Put: %v", err)
+			}
+			if _, _, _, err := ReadLedgerHashesSLE(sm, keylet.LedgerHashes().Key); err == nil || err.Error() != test.wantErr {
+				t.Fatalf("error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func uint32Pointer(value uint32) *uint32 {
+	return &value
 }
 
 // TestUpdateOnMap_PreservesFirstLedgerSequence pins issue #1008: the rolling
@@ -137,7 +183,7 @@ func TestUpdateOnMap_PreservesFirstLedgerSequence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadLedgerHashesSLE after advance: %v", err)
 	}
-	if _, ok := gotEntry.ToMap()["FirstLedgerSequence"]; !ok {
+	if !gotEntry.HasFirstLedgerSequence() {
 		t.Fatalf("FirstLedgerSequence dropped on rewrite (issue #1008)")
 	}
 	gotFirst := gotEntry.FirstLedgerSequence
@@ -168,7 +214,7 @@ func TestUpdateOnMap_CreatedSkipListHasNoFirstLedgerSequence(t *testing.T) {
 	if entry == nil {
 		t.Fatalf("rolling LedgerHashes SLE absent after seeding to seq 5")
 	}
-	if _, ok := entry.ToMap()["FirstLedgerSequence"]; ok {
+	if entry.HasFirstLedgerSequence() {
 		t.Errorf("freshly created skip list has FirstLedgerSequence; rippled does not set it on creation")
 	}
 }
