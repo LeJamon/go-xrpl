@@ -6,7 +6,6 @@ package skiplist
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -132,13 +131,13 @@ func assertHistoricalSkipListConsistent(hashes [][32]byte, lastSeq, prevIndex ui
 	return nil
 }
 
-// ReadLedgerHashesSLE returns the decoded entry, Hashes, and LastLedgerSequence
+// ReadLedgerHashesSLE returns the decoded fields, Hashes, and LastLedgerSequence
 // for the LedgerHashes SLE at key, or (nil, nil, 0, nil) when absent.
-func ReadLedgerHashesSLE(stateMap *shamap.SHAMap, key [32]byte) (*ledgerfields.LedgerHashes, [][32]byte, uint32, error) {
+func ReadLedgerHashesSLE(stateMap *shamap.SHAMap, key [32]byte) (*LedgerHashesFields, [][32]byte, uint32, error) {
 	return ReadLedgerHashesSLEContext(context.Background(), stateMap, key)
 }
 
-func ReadLedgerHashesSLEContext(ctx context.Context, stateMap *shamap.SHAMap, key [32]byte) (*ledgerfields.LedgerHashes, [][32]byte, uint32, error) {
+func ReadLedgerHashesSLEContext(ctx context.Context, stateMap *shamap.SHAMap, key [32]byte) (*LedgerHashesFields, [][32]byte, uint32, error) {
 	item, found, err := stateMap.GetContext(ctx, key)
 	if err != nil {
 		return nil, nil, 0, err
@@ -146,46 +145,23 @@ func ReadLedgerHashesSLEContext(ctx context.Context, stateMap *shamap.SHAMap, ke
 	if !found {
 		return nil, nil, 0, nil
 	}
-	entry := &ledgerfields.LedgerHashes{}
-	if err := entry.Decode(item.Data()); err != nil {
+	fields, hashes, err := decodeLedgerHashes(item.Data())
+	if err != nil {
 		return nil, nil, 0, fmt.Errorf("decode LedgerHashes: %w", err)
 	}
 
-	hashes, err := decodeHashesField(entry.Hashes)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	fields := entry.ToMap()
-	if _, ok := fields["LastLedgerSequence"]; !ok {
+	if !fields.hasLast {
 		return nil, nil, 0, errors.New("LedgerHashes missing LastLedgerSequence")
 	}
 	if len(hashes) == 0 || len(hashes) > 256 {
 		return nil, nil, 0, fmt.Errorf("LedgerHashes has invalid Hashes cardinality %d", len(hashes))
 	}
-	if firstRaw, ok := fields["FirstLedgerSequence"]; ok {
-		first, ok := firstRaw.(uint32)
-		if !ok || first == 0 || first > entry.LastLedgerSequence {
+	if fields.hasFirst {
+		if fields.FirstLedgerSequence == 0 || fields.FirstLedgerSequence > fields.LastLedgerSequence {
 			return nil, nil, 0, errors.New("LedgerHashes has invalid FirstLedgerSequence")
 		}
 	}
-	return entry, hashes, entry.LastLedgerSequence, nil
-}
-
-func decodeHashesField(hashStrings []string) ([][32]byte, error) {
-	result := make([][32]byte, 0, len(hashStrings))
-	for _, hashStr := range hashStrings {
-		hashBytes, err := hex.DecodeString(hashStr)
-		if err != nil {
-			return nil, fmt.Errorf("decode hash hex: %w", err)
-		}
-		if len(hashBytes) != 32 {
-			return nil, fmt.Errorf("decoded hash length %d, want 32", len(hashBytes))
-		}
-		var hash [32]byte
-		copy(hash[:], hashBytes)
-		result = append(result, hash)
-	}
-	return result, nil
+	return fields, hashes, fields.LastLedgerSequence, nil
 }
 
 // ReadHashes returns the Hashes array from a LedgerHashes SLE, or nil when absent.
@@ -197,23 +173,31 @@ func ReadHashes(stateMap *shamap.SHAMap, key [32]byte) ([][32]byte, error) {
 
 // Write serializes a LedgerHashes SLE to the state map. Existing entries retain
 // every decoded optional field; fresh entries leave FirstLedgerSequence absent.
-func Write(stateMap *shamap.SHAMap, key [32]byte, entry *ledgerfields.LedgerHashes, hashes [][32]byte, lastSeq uint32) error {
-	data, err := encode(entry, hashes, lastSeq)
+func Write(stateMap *shamap.SHAMap, key [32]byte, fields *LedgerHashesFields, hashes [][32]byte, lastSeq uint32) error {
+	data, err := encode(fields, hashes, lastSeq)
 	if err != nil {
 		return err
 	}
 	return stateMap.Put(key, data)
 }
 
-func encode(entry *ledgerfields.LedgerHashes, hashes [][32]byte, lastSeq uint32) ([]byte, error) {
+func encode(fields *LedgerHashesFields, hashes [][32]byte, lastSeq uint32) ([]byte, error) {
 	hashHexes := make([]string, len(hashes))
 	for i, h := range hashes {
 		hashHexes[i] = fmt.Sprintf("%064X", h)
 	}
 
-	if entry == nil {
-		entry = &ledgerfields.LedgerHashes{}
+	entry := &ledgerfields.LedgerHashes{}
+	if fields == nil {
 		entry.SetFlags(0)
+	} else {
+		entry.SetFlags(fields.Flags)
+		if fields.hasFirst {
+			entry.SetFirstLedgerSequence(fields.FirstLedgerSequence)
+		}
+		if fields.hasSponsor {
+			entry.SetSponsor(fields.Sponsor)
+		}
 	}
 	entry.SetHashes(hashHexes)
 	entry.SetLastLedgerSequence(lastSeq)

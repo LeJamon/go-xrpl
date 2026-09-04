@@ -45,6 +45,9 @@ func (r *streamReader) readFieldHeader() (typeCode, fieldCode int, err error) {
 		}
 		typeCode = int(r.data[r.pos])
 		r.pos++
+		if typeCode < 16 {
+			return 0, 0, serdes.ErrInvalidTypecode
+		}
 	}
 	if fieldCode == 0 {
 		if r.pos >= len(r.data) {
@@ -52,6 +55,9 @@ func (r *streamReader) readFieldHeader() (typeCode, fieldCode int, err error) {
 		}
 		fieldCode = int(r.data[r.pos])
 		r.pos++
+		if fieldCode < 16 {
+			return 0, 0, serdes.ErrInvalidFieldcode
+		}
 	}
 	return typeCode, fieldCode, nil
 }
