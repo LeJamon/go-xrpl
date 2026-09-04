@@ -98,9 +98,9 @@ type Entry struct {
 
 // commonFields are serialized fields admitted by every ledger-entry template
 // in LedgerFormats::getCommonFields. LedgerEntryType is injected directly by
-// the generator, LedgerIndex is declared explicitly where a stored blob carries
-// it, and Flags remains explicit in each entry spec because its required/default
-// metadata behavior is already modeled there.
+// the generator, LedgerIndex is not part of stored SLE blobs, and Flags remains
+// explicit in each entry spec because its required/default metadata behavior is
+// already modeled there.
 var commonFields = []Field{
 	{Name: "Sponsor", Style: StyleOptional},
 }
@@ -350,7 +350,6 @@ var Specs = []Entry{
 			{Name: "FirstLedgerSequence", Style: StyleOptional},
 			{Name: "LastLedgerSequence", Style: StyleOptional},
 			{Name: "Hashes", Style: StyleRequired},
-			{Name: "LedgerIndex", Style: StyleOptional},
 		},
 	},
 	{
