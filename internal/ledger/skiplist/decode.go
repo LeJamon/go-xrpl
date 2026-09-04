@@ -22,12 +22,10 @@ type LedgerHashesFields struct {
 	hasSponsor          bool
 }
 
-// HasFirstLedgerSequence reports whether FirstLedgerSequence was serialized.
 func (f *LedgerHashesFields) HasFirstLedgerSequence() bool {
 	return f != nil && f.hasFirst
 }
 
-// SetFirstLedgerSequence sets FirstLedgerSequence for the next rewrite.
 func (f *LedgerHashesFields) SetFirstLedgerSequence(value uint32) {
 	f.FirstLedgerSequence = value
 	f.hasFirst = true
