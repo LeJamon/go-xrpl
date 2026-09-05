@@ -651,6 +651,33 @@ func (r *RotatingStore) CacheMetrics() kvstore.CacheMetrics {
 	return kvstore.CacheMetrics{Hits: metrics.Hits, Misses: metrics.Misses}
 }
 
+// IOMetrics returns a point-in-time snapshot of Pebble persistence counters.
+func (r *RotatingStore) IOMetrics() kvstore.IOMetrics {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.closed || r.writable == nil || r.archive == nil {
+		return kvstore.IOMetrics{}
+	}
+	var metrics kvstore.IOMetrics
+	addIOMetrics(&metrics, r.writable.db.Metrics())
+	addIOMetrics(&metrics, r.archive.db.Metrics())
+	return metrics
+}
+
+func addIOMetrics(result *kvstore.IOMetrics, metrics *cockroachpebble.Metrics) {
+	result.LogicalBytesWritten += metrics.WAL.BytesIn
+	result.WALBytesWritten += metrics.WAL.BytesWritten
+	result.MemTableBytes += metrics.MemTable.Size
+	for _, level := range metrics.Levels {
+		result.FlushBytesWritten += level.BytesFlushed
+		result.CompactionBytesRead += level.BytesRead
+		result.CompactionBytesWritten += level.BytesCompacted
+		if level.Size > 0 {
+			result.SSTableBytes += uint64(level.Size)
+		}
+	}
+}
+
 func (r *RotatingStore) lockMutations(keys [][]byte) [rotatingStoreMutationStripes]bool {
 	var selected [rotatingStoreMutationStripes]bool
 	for _, key := range keys {

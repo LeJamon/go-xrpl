@@ -26,6 +26,15 @@ func (d *RotatingKVDatabase) PromotionCacheMetrics() kvstore.CacheMetrics {
 	return kvstore.CacheMetrics{}
 }
 
+// PromotionIOMetrics returns optional backend persistence counters for refresh
+// benchmark instrumentation.
+func (d *RotatingKVDatabase) PromotionIOMetrics() kvstore.IOMetrics {
+	if store, ok := d.rotating.(kvstore.IOMetricsStore); ok {
+		return store.IOMetrics()
+	}
+	return kvstore.IOMetrics{}
+}
+
 // DeleteBefore is unsupported for generation stores. Destructive retention
 // changes must use RotateGeneration so the durable manifest identity advances.
 func (d *RotatingKVDatabase) DeleteBefore(context.Context, uint32, int) (uint64, error) {

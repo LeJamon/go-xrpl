@@ -99,6 +99,24 @@ type CacheMetricsStore interface {
 	CacheMetrics() CacheMetrics
 }
 
+// IOMetrics is a point-in-time snapshot of backend persistence counters.
+// CompactionBytesRead measures bytes read by Pebble compactions; foreground
+// point-read bytes are not exposed by this optional interface.
+type IOMetrics struct {
+	LogicalBytesWritten    uint64
+	WALBytesWritten        uint64
+	FlushBytesWritten      uint64
+	CompactionBytesRead    uint64
+	CompactionBytesWritten uint64
+	SSTableBytes           uint64
+	MemTableBytes          uint64
+}
+
+// IOMetricsStore exposes optional backend persistence instrumentation.
+type IOMetricsStore interface {
+	IOMetrics() IOMetrics
+}
+
 // RotationIdentity is a path-free snapshot of a rotating store's durable
 // manifest identity and generation boundary.
 type RotationIdentity struct {
