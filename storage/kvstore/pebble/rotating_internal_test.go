@@ -347,22 +347,25 @@ func TestPromoteBatchDoesNotResurrectConcurrentDeleteDuringPrefetch(t *testing.T
 		}
 	}()
 
-	promoteDone := make(chan error, 1)
+	type promotionResult struct {
+		promotions []kvstore.Promotion
+		err        error
+	}
+	promoteDone := make(chan promotionResult, 1)
 	go func() {
-		_, _, err := store.PromoteBatch([][]byte{[]byte("key")}, 1<<20)
-		promoteDone <- err
+		promotions, _, err := store.PromoteBatch([][]byte{[]byte("key")}, 1<<20)
+		promoteDone <- promotionResult{promotions, err}
 	}()
 	waitForLocked(t, &store.archiveMu)
 
-	otherKey := []byte("other")
-	require.NotEqual(t, mutationStripe([]byte("key")), mutationStripe(otherKey))
+	key := []byte("key")
 	putDone := make(chan error, 1)
-	go func() { putDone <- store.Put(otherKey, []byte("value")) }()
+	go func() { putDone <- store.Put(key, []byte("new value")) }()
 	select {
 	case err := <-putDone:
 		require.NoError(t, err)
 	case <-time.After(time.Second):
-		t.Fatal("unrelated Put blocked during archive prefetch")
+		t.Fatal("Put blocked during archive prefetch")
 	}
 
 	deleteDone := make(chan error, 1)
@@ -371,7 +374,10 @@ func TestPromoteBatchDoesNotResurrectConcurrentDeleteDuringPrefetch(t *testing.T
 
 	store.archive.mu.Unlock()
 	archiveLocked = false
-	require.NoError(t, <-promoteDone)
+	result := <-promoteDone
+	require.NoError(t, result.err)
+	require.Len(t, result.promotions, 1)
+	require.Equal(t, []byte("new value"), result.promotions[0].Value)
 	require.NoError(t, <-deleteDone)
 
 	_, err = store.Get([]byte("key"))

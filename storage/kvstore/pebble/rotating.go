@@ -128,9 +128,10 @@ func validateGenerationBoundaries(lastRotated, minimumOnline uint32) error {
 // one archive generation on reads. Promote explicitly copies an archive record
 // into the writable generation for online-delete preservation.
 type RotatingStore struct {
-	// Operations pin the generation pair with mu before locking mutation
-	// stripes. Multi-key operations acquire stripes in ascending order.
+	// Lock order is mu, archiveMu when needed, then mutation stripes in
+	// ascending order. Put-only operations skip archiveMu.
 	mu        sync.RWMutex
+	archiveMu sync.RWMutex
 	rotateMu  sync.Mutex
 	mutations [rotatingStoreMutationStripes]sync.Mutex
 
@@ -571,6 +572,15 @@ func (r *RotatingStore) PromoteBatch(
 	if r.closed {
 		return nil, stats, kvstore.ErrClosed
 	}
+	// Archive deletion must wait through commit, but ordinary writable stores
+	// can proceed while archive blocks are read and decompressed.
+	r.archiveMu.RLock()
+	defer r.archiveMu.RUnlock()
+	prefetched, err := r.prefetchPromotion(sorted, maxBytes)
+	if err != nil {
+		return nil, stats, err
+	}
+	sorted = sorted[:len(prefetched)]
 	lockedMutations := r.lockMutations(sorted)
 	defer r.unlockMutations(&lockedMutations)
 
@@ -579,11 +589,6 @@ func (r *RotatingStore) PromoteBatch(
 		return nil, stats, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, writable.Close()) }()
-	archive, err := r.archive.newPointIterator()
-	if err != nil {
-		return nil, stats, err
-	}
-	defer func() { resultErr = errors.Join(resultErr, archive.Close()) }()
 
 	batch, err := r.writable.NewBatch()
 	if err != nil {
@@ -592,7 +597,7 @@ func (r *RotatingStore) PromoteBatch(
 	defer func() { resultErr = errors.Join(resultErr, batch.Close()) }()
 
 	promotions = make([]kvstore.Promotion, 0, len(sorted))
-	for _, key := range sorted {
+	for index, key := range sorted {
 		remaining := maxBytes - stats.BufferedBytes
 		value, found, tooLarge, err := writable.get(key, remaining, len(promotions) == 0)
 		if err != nil {
@@ -611,7 +616,9 @@ func (r *RotatingStore) PromoteBatch(
 			continue
 		}
 		stats.WritableMisses++
-		value, found, tooLarge, err = archive.get(key, remaining, len(promotions) == 0)
+		candidate := prefetched[index]
+		value, found, err = candidate.value, candidate.found, candidate.err
+		tooLarge = len(value) > remaining && len(promotions) > 0
 		if err != nil {
 			return nil, stats, err
 		}
@@ -643,6 +650,44 @@ func (r *RotatingStore) PromoteBatch(
 		stats.Batches = 1
 	}
 	return promotions, stats, nil
+}
+
+type promotionPrefetch struct {
+	value []byte
+	found bool
+	err   error
+}
+
+// The prefetched payload and the final results each have their own byte budget.
+// A shorter prefix is valid even when writable precedence would leave room for
+// more results; the caller retries the remaining hashes.
+func (r *RotatingStore) prefetchPromotion(keys [][]byte, maxBytes int) ([]promotionPrefetch, error) {
+	archive, err := r.archive.newPointIterator()
+	if err != nil {
+		return nil, err
+	}
+	records := make([]promotionPrefetch, 0, len(keys))
+	buffered := 0
+	for _, key := range keys {
+		value, found, tooLarge, readErr := archive.get(key, maxBytes-buffered, len(records) == 0)
+		if tooLarge {
+			break
+		}
+		records = append(records, promotionPrefetch{value: value, found: found, err: readErr})
+		if readErr != nil {
+			break
+		}
+		buffered += len(value)
+	}
+	closeErr := archive.Close()
+	if len(records) > 0 && records[len(records)-1].err != nil {
+		// Lazy read errors also reach Close. Keep the error with its key so a
+		// newer writable value can take precedence over the failed archive read.
+		last := &records[len(records)-1]
+		last.err = errors.Join(last.err, closeErr)
+		return records, nil
+	}
+	return records, closeErr
 }
 
 // CacheMetrics returns a point-in-time snapshot of the shared block cache.
@@ -1344,6 +1389,17 @@ func (b *rotatingBatch) Write() (resultErr error) {
 	if b.store.closed {
 		return kvstore.ErrClosed
 	}
+	hasDeletes := false
+	for _, op := range b.ops {
+		if op.delete {
+			hasDeletes = true
+			break
+		}
+	}
+	if hasDeletes {
+		b.store.archiveMu.Lock()
+		defer b.store.archiveMu.Unlock()
+	}
 	lockedMutations := b.store.lockMutations(keys)
 	defer b.store.unlockMutations(&lockedMutations)
 	writableBatch, err := b.store.writable.NewBatch()
@@ -1353,10 +1409,8 @@ func (b *rotatingBatch) Write() (resultErr error) {
 	defer func() {
 		resultErr = errors.Join(resultErr, writableBatch.Close())
 	}()
-	hasDeletes := false
 	for _, op := range b.ops {
 		if op.delete {
-			hasDeletes = true
 			if err := writableBatch.Delete(op.key); err != nil {
 				return err
 			}

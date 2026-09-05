@@ -128,21 +128,6 @@ func TestPromoteBatchPropagatesLazyValueReadError(t *testing.T) {
 		t.Fatalf("writable value after failed promotion: %v, want ErrNotFound", err)
 	}
 
-	fault.Disarm()
-	promotions, stats, err = store.PromoteBatch([][]byte{[]byte(archiveKey)}, 1<<20)
-	if err != nil {
-		t.Fatalf("retry PromoteBatch: %v", err)
-	}
-	if len(promotions) != 1 || !promotions[0].Found || !bytes.Equal(promotions[0].Value, archiveValue) {
-		t.Fatalf("retry promotions = %+v, want archive value", promotions)
-	}
-	if stats.Promoted != 1 || stats.Batches != 1 {
-		t.Fatalf("retry promotion stats = %+v, want one committed promotion", stats)
-	}
-	if got, err := store.writable.Get([]byte(archiveKey)); err != nil || !bytes.Equal(got, archiveValue) {
-		t.Fatalf("writable value after retry = %q, %v; want %q", got, err, archiveValue)
-	}
-
 	writableValue := []byte("writable-value")
 	if err := store.writable.Put([]byte(archiveKey), writableValue); err != nil {
 		t.Fatalf("replace writable value: %v", err)
@@ -158,6 +143,25 @@ func TestPromoteBatchPropagatesLazyValueReadError(t *testing.T) {
 	if stats.WritableHits != 1 || stats.Promoted != 0 {
 		t.Fatalf("writable precedence stats = %+v, want one writable hit and no promotion", stats)
 	}
+	if err := store.writable.db.Delete([]byte(archiveKey), nil); err != nil {
+		t.Fatalf("remove writable override: %v", err)
+	}
+
+	fault.Disarm()
+	promotions, stats, err = store.PromoteBatch([][]byte{[]byte(archiveKey)}, 1<<20)
+	if err != nil {
+		t.Fatalf("retry PromoteBatch: %v", err)
+	}
+	if len(promotions) != 1 || !promotions[0].Found || !bytes.Equal(promotions[0].Value, archiveValue) {
+		t.Fatalf("retry promotions = %+v, want archive value", promotions)
+	}
+	if stats.Promoted != 1 || stats.Batches != 1 {
+		t.Fatalf("retry promotion stats = %+v, want one committed promotion", stats)
+	}
+	if got, err := store.writable.Get([]byte(archiveKey)); err != nil || !bytes.Equal(got, archiveValue) {
+		t.Fatalf("writable value after retry = %q, %v; want %q", got, err, archiveValue)
+	}
+
 	fault.Disarm()
 }
 
