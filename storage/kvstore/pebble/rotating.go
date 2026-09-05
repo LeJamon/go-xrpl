@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -544,6 +545,108 @@ func (r *RotatingStore) Promote(key []byte) ([]byte, error) {
 	mutation.Lock()
 	defer mutation.Unlock()
 	return r.getLocked(key, true)
+}
+
+func (r *RotatingStore) PromoteBatch(
+	keys [][]byte,
+	maxBytes int,
+) (promotions []kvstore.Promotion, stats kvstore.PromotionStats, resultErr error) {
+	stats.Requested = len(keys)
+	if len(keys) == 0 {
+		return nil, stats, nil
+	}
+	if maxBytes <= 0 {
+		return nil, stats, errors.New("kvstore/pebble: promotion byte limit must be positive")
+	}
+
+	sorted := make([][]byte, len(keys))
+	for i, key := range keys {
+		sorted[i] = append([]byte(nil), key...)
+	}
+	sort.SliceStable(sorted, func(i, j int) bool { return bytes.Compare(sorted[i], sorted[j]) < 0 })
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.closed {
+		return nil, stats, kvstore.ErrClosed
+	}
+	lockedMutations := r.lockMutations(sorted)
+	defer r.unlockMutations(&lockedMutations)
+
+	writable, err := r.writable.newPointIterator()
+	if err != nil {
+		return nil, stats, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, writable.Close()) }()
+	archive, err := r.archive.newPointIterator()
+	if err != nil {
+		return nil, stats, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, archive.Close()) }()
+
+	batch, err := r.writable.NewBatch()
+	if err != nil {
+		return nil, stats, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, batch.Close()) }()
+
+	promotions = make([]kvstore.Promotion, 0, len(sorted))
+	for _, key := range sorted {
+		remaining := maxBytes - stats.BufferedBytes
+		value, found, tooLarge, err := writable.get(key, remaining, len(promotions) == 0)
+		if err != nil {
+			return nil, stats, err
+		}
+		if tooLarge {
+			break
+		}
+		if found {
+			stats.WritableHits++
+			stats.BufferedBytes += len(value)
+			promotions = append(promotions, kvstore.Promotion{
+				Key: append([]byte(nil), key...), Value: value, Found: true,
+			})
+			stats.Consumed++
+			continue
+		}
+		stats.WritableMisses++
+		value, found, tooLarge, err = archive.get(key, remaining, len(promotions) == 0)
+		if err != nil {
+			return nil, stats, err
+		}
+		if tooLarge {
+			break
+		}
+		if !found {
+			stats.ArchiveMisses++
+			promotions = append(promotions, kvstore.Promotion{Key: append([]byte(nil), key...)})
+			stats.Consumed++
+			continue
+		}
+		stats.ArchiveHits++
+		stats.BufferedBytes += len(value)
+		if err := batch.Put(key, value); err != nil {
+			return nil, stats, err
+		}
+		stats.Promoted++
+		stats.PromotedBytes += len(value)
+		promotions = append(promotions, kvstore.Promotion{
+			Key: append([]byte(nil), key...), Value: value, Found: true,
+		})
+		stats.Consumed++
+	}
+	if stats.Promoted > 0 {
+		if err := batch.Write(); err != nil {
+			return nil, stats, fmt.Errorf("kvstore/pebble: promote archive batch: %w", err)
+		}
+		stats.Batches = 1
+	}
+	return promotions, stats, nil
+}
+
+func (r *RotatingStore) CacheMetrics() kvstore.CacheMetrics {
+	metrics := r.blockCache.Metrics()
+	return kvstore.CacheMetrics{Hits: metrics.Hits, Misses: metrics.Misses}
 }
 
 func (r *RotatingStore) lockMutations(keys [][]byte) [rotatingStoreMutationStripes]bool {

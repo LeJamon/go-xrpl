@@ -1,6 +1,10 @@
 package nodestore
 
-import "context"
+import (
+	"context"
+
+	"github.com/LeJamon/go-xrpl/storage/kvstore"
+)
 
 // Hash256 is a 32-byte content key — an XRPL SHA-512Half digest.
 type Hash256 [32]byte
@@ -91,6 +95,12 @@ type GenerationDatabase interface {
 	FetchForPromotion(ctx context.Context, hash Hash256) (*Node, error)
 	RotateGeneration(ctx context.Context, lastRotated, minimumOnline uint32) (committed bool, err error)
 	GenerationState() (lastRotated, minimumOnline uint32)
+}
+
+// BatchGenerationDatabase extends a generation database with bounded batch promotion.
+type BatchGenerationDatabase interface {
+	GenerationDatabase
+	FetchBatchForPromotion(ctx context.Context, hashes []Hash256, maxBytes int) ([]*Node, kvstore.PromotionStats, error)
 }
 
 // Statistics holds performance metrics for the NodeStore.

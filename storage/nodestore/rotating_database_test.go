@@ -1,6 +1,7 @@
 package nodestore
 
 import (
+	"bytes"
 	"context"
 	"path/filepath"
 	"testing"
@@ -53,6 +54,60 @@ func TestRotatingKVDatabasePromotionBypassesDecodedCache(t *testing.T) {
 	fetched, err := reopened.Fetch(ctx, node.Hash)
 	require.NoError(t, err)
 	require.Equal(t, node.Data, fetched.Data)
+}
+
+func TestRotatingKVDatabaseBatchPromotionDecodesSortedResults(t *testing.T) {
+	ctx := context.Background()
+	store, err := kvpebble.NewRotating(
+		filepath.Join(t.TempDir(), "nodes"),
+		kvpebble.Options{BlockCacheBytes: 16 << 20, MaxOpenFiles: 200},
+	)
+	require.NoError(t, err)
+	db, err := NewRotatingKVDatabase(store, positiveCacheConfig(16))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	first := &Node{Type: NodeAccount, Hash: testHash([]byte("first")), Data: []byte("first"), LedgerSeq: 10}
+	second := &Node{Type: NodeAccount, Hash: testHash([]byte("second")), Data: []byte("second"), LedgerSeq: 10}
+	require.NoError(t, db.Store(ctx, first))
+	require.NoError(t, db.Store(ctx, second))
+	committed, err := db.RotateGeneration(ctx, 11, 1)
+	require.True(t, committed)
+	require.NoError(t, err)
+
+	missing := testHash([]byte("missing"))
+	nodes, stats, err := db.FetchBatchForPromotion(ctx, []Hash256{second.Hash, missing, first.Hash}, 1<<20)
+	require.NoError(t, err)
+	require.Len(t, nodes, 3)
+	var previous Hash256
+	got := make(map[Hash256][]byte)
+	missingResults := 0
+	for i, node := range nodes {
+		var hash Hash256
+		if node == nil {
+			hash = missing
+			missingResults++
+		} else {
+			hash = node.Hash
+			got[hash] = node.Data
+		}
+		if i > 0 {
+			require.LessOrEqual(t, bytes.Compare(previous[:], hash[:]), 0)
+		}
+		previous = hash
+	}
+	require.Equal(t, 1, missingResults)
+	require.Equal(t, first.Data, got[first.Hash])
+	require.Equal(t, second.Data, got[second.Hash])
+	require.Equal(t, 3, stats.Consumed)
+	require.Equal(t, 2, stats.Promoted)
+	require.Equal(t, uint64(3), db.Stats().Reads)
+	require.Equal(t, uint64(2), db.Stats().FetchHits)
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, _, err = db.FetchBatchForPromotion(cancelled, []Hash256{first.Hash}, 1<<20)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestRotatingKVDatabaseCanRotateWithoutRefresh(t *testing.T) {

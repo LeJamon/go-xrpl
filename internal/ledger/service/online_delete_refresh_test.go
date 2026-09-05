@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 	shamapbackend "github.com/LeJamon/go-xrpl/shamap/backend"
+	"github.com/LeJamon/go-xrpl/storage/kvstore"
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/stretchr/testify/require"
@@ -21,9 +23,13 @@ import (
 
 type countingGenerationDatabase struct {
 	nodestore.Database
-	generation            nodestore.GenerationDatabase
+	generation            nodestore.BatchGenerationDatabase
 	storeBatchNodes       int
 	promotionFetches      atomic.Int64
+	promotionBatches      atomic.Int64
+	maxPromotionBatch     atomic.Int64
+	maxPromotionBytes     atomic.Int64
+	promotedNodes         atomic.Int64
 	promotionsInFlight    atomic.Int64
 	maxPromotionsInFlight atomic.Int64
 	promotionDelay        time.Duration
@@ -75,6 +81,50 @@ func (d *countingGenerationDatabase) FetchForPromotion(
 		}
 	}
 	return d.generation.FetchForPromotion(ctx, hash)
+}
+
+func (d *countingGenerationDatabase) FetchBatchForPromotion(
+	ctx context.Context,
+	hashes []nodestore.Hash256,
+	maxBytes int,
+) ([]*nodestore.Node, kvstore.PromotionStats, error) {
+	d.promotionFetches.Add(int64(len(hashes)))
+	d.promotionBatches.Add(1)
+	for {
+		peak := d.maxPromotionBatch.Load()
+		if int64(len(hashes)) <= peak || d.maxPromotionBatch.CompareAndSwap(peak, int64(len(hashes))) {
+			break
+		}
+	}
+	inFlight := d.promotionsInFlight.Add(1)
+	defer d.promotionsInFlight.Add(-1)
+	for {
+		peak := d.maxPromotionsInFlight.Load()
+		if inFlight <= peak || d.maxPromotionsInFlight.CompareAndSwap(peak, inFlight) {
+			break
+		}
+	}
+	if d.promotionStart != nil {
+		d.promotionOnce.Do(func() { close(d.promotionStart) })
+	}
+	if d.promotionDelay > 0 {
+		timer := time.NewTimer(d.promotionDelay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, kvstore.PromotionStats{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	nodes, stats, err := d.generation.FetchBatchForPromotion(ctx, hashes, maxBytes)
+	d.promotedNodes.Add(int64(stats.Promoted))
+	for {
+		peak := d.maxPromotionBytes.Load()
+		if int64(stats.BufferedBytes) <= peak || d.maxPromotionBytes.CompareAndSwap(peak, int64(stats.BufferedBytes)) {
+			break
+		}
+	}
+	return nodes, stats, err
 }
 
 func (d *countingGenerationDatabase) CanRotateWithoutRefresh(ctx context.Context) (bool, error) {
@@ -603,6 +653,11 @@ func TestService_RefreshValidatedStateUsesBoundedConcurrencyAndReportsProgress(t
 		db.maxPromotionsInFlight.Load(),
 		int64(resolveOnlineDeleteRefreshWorkers()),
 	)
+	require.Greater(t, db.promotionBatches.Load(), int64(0))
+	require.Less(t, db.promotionBatches.Load(), db.promotionFetches.Load())
+	require.LessOrEqual(t, db.maxPromotionBatch.Load(), int64(storedSHAMapPromotionBatchNodes))
+	require.LessOrEqual(t, db.maxPromotionBytes.Load(), int64(storedSHAMapPromotionBatchBytes))
+	require.Greater(t, db.promotedNodes.Load(), int64(0))
 
 	records := decodeVerificationLogs(t, capture)
 	require.Len(t, records, 2)
@@ -682,10 +737,23 @@ func newRotatingRefreshFixture(
 }
 
 func BenchmarkService_RefreshValidatedState(b *testing.B) {
+	for _, warm := range []bool{false, true} {
+		for _, workers := range []int{1, 2, 4} {
+			for _, batchNodes := range []int{0, 64, storedSHAMapPromotionBatchNodes} {
+				name := fmt.Sprintf("warm=%t/workers=%d/batch=%d", warm, workers, batchNodes)
+				b.Run(name, func(b *testing.B) {
+					benchmarkRefreshValidatedState(b, warm, workers, batchNodes)
+				})
+			}
+		}
+	}
+}
+
+func benchmarkRefreshValidatedState(b *testing.B, warm bool, workers, batchNodes int) {
 	const entries = 16_384
 	backend, err := kvpebble.NewRotating(
 		filepath.Join(b.TempDir(), "nodes"),
-		kvpebble.Options{BlockCacheBytes: 64 << 20, MaxOpenFiles: 200},
+		kvpebble.Options{BlockCacheBytes: 8 << 20, MaxOpenFiles: 200},
 	)
 	require.NoError(b, err)
 	base, err := nodestore.NewRotatingKVDatabase(backend, nodestore.DatabaseConfig{})
@@ -712,16 +780,31 @@ func BenchmarkService_RefreshValidatedState(b *testing.B) {
 	seq, err := svc.AcceptLedger(b.Context())
 	require.NoError(b, err)
 	svc.FlushPersists()
+	root, err := svc.GetValidatedLedger().StateMapHash()
+	require.NoError(b, err)
 	committed, err := db.RotateGeneration(b.Context(), seq, 1)
 	require.True(b, committed)
 	require.NoError(b, err)
+	if warm {
+		require.NoError(b, svc.walkStoredSHAMap(b.Context(), root, shamap.TypeState, nil))
+	}
 	db.promotionFetches.Store(0)
+	metricsBefore := base.PromotionCacheMetrics()
 
+	b.ReportAllocs()
 	b.ResetTimer()
 	for iteration := range b.N {
-		refreshedSeq, refreshErr := svc.RefreshValidatedState(b.Context(), seq, nil)
-		require.NoError(b, refreshErr)
-		require.Equal(b, seq, refreshedSeq)
+		err := svc.refreshGenerationStateWithBatch(
+			b.Context(),
+			root,
+			seq,
+			db,
+			nil,
+			workers,
+			batchNodes,
+			storedSHAMapPromotionBatchBytes,
+		)
+		require.NoError(b, err)
 
 		b.StopTimer()
 		committed, rotateErr := db.RotateGeneration(b.Context(), seq+uint32(iteration)+1, 1)
@@ -730,9 +813,15 @@ func BenchmarkService_RefreshValidatedState(b *testing.B) {
 		b.StartTimer()
 	}
 	b.StopTimer()
-	b.ReportMetric(
-		float64(db.promotionFetches.Load())/b.Elapsed().Seconds(),
-		"nodes/s",
-	)
-	b.ReportMetric(float64(resolveOnlineDeleteRefreshWorkers()), "workers")
+	fetches := db.promotionFetches.Load()
+	metricsAfter := base.PromotionCacheMetrics()
+	b.ReportMetric(float64(fetches)/b.Elapsed().Seconds(), "nodes/s")
+	b.ReportMetric(float64(workers), "workers")
+	if batches := db.promotionBatches.Load(); batches > 0 {
+		b.ReportMetric(float64(batches)/float64(b.N), "batches/op")
+		b.ReportMetric(float64(fetches)/float64(batches), "nodes/batch")
+		b.ReportMetric(float64(db.maxPromotionBytes.Load()), "max-batch-bytes")
+		b.ReportMetric(float64(metricsAfter.Hits-metricsBefore.Hits)/float64(fetches), "cache-hits/node")
+		b.ReportMetric(float64(metricsAfter.Misses-metricsBefore.Misses)/float64(fetches), "cache-misses/node")
+	}
 }

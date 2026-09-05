@@ -61,6 +61,44 @@ type RotatingStore interface {
 	RotationState() (lastRotated, minimumOnline uint32)
 }
 
+// BatchPromotingStore extends a rotating store with bounded locality-aware promotion.
+type BatchPromotingStore interface {
+	RotatingStore
+	PromoteBatch(keys [][]byte, maxBytes int) ([]Promotion, PromotionStats, error)
+}
+
+// Promotion is one hash-ordered result from a bounded promotion operation.
+type Promotion struct {
+	Key   []byte
+	Value []byte
+	Found bool
+}
+
+// PromotionStats describes the logical reads and writes performed by one batch.
+type PromotionStats struct {
+	Requested      int
+	Consumed       int
+	WritableHits   int
+	WritableMisses int
+	ArchiveHits    int
+	ArchiveMisses  int
+	Promoted       int
+	PromotedBytes  int
+	BufferedBytes  int
+	Batches        int
+}
+
+// CacheMetrics is a point-in-time snapshot of shared block-cache activity.
+type CacheMetrics struct {
+	Hits   int64
+	Misses int64
+}
+
+// CacheMetricsStore exposes optional backend cache instrumentation.
+type CacheMetricsStore interface {
+	CacheMetrics() CacheMetrics
+}
+
 // RotationIdentity is a path-free snapshot of a rotating store's durable
 // manifest identity and generation boundary.
 type RotationIdentity struct {
