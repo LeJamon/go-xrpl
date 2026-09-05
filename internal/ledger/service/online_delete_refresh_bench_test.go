@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"runtime"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -38,6 +39,7 @@ func benchmarkRefreshValidatedState(b *testing.B, warm bool, workers, batchNodes
 		if warm {
 			require.NoError(b, fixture.svc.walkStoredSHAMap(b.Context(), fixture.root, shamap.TypeState, nil))
 		}
+		runtime.GC()
 		cacheBefore := fixture.base.PromotionCacheMetrics()
 		ioBefore := fixture.base.PromotionIOMetrics()
 		b.StartTimer()

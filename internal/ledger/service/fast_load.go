@@ -917,12 +917,14 @@ func (s *Service) walkStoredSHAMapNodesWithBatchFetch(
 	if maxNodes <= 0 {
 		maxNodes = 1
 	}
+	pending := make([]storedSHAMapNode, 0, maxNodes)
+	hashes := make([]nodestore.Hash256, 0, maxNodes)
 	for len(stack) > 0 {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		count := min(len(stack), maxNodes)
-		pending := make([]storedSHAMapNode, count)
+		pending = pending[:count]
 		for i := range count {
 			pending[i] = stack[len(stack)-1-i]
 		}
@@ -930,7 +932,7 @@ func (s *Service) walkStoredSHAMapNodesWithBatchFetch(
 		sort.SliceStable(pending, func(i, j int) bool {
 			return bytes.Compare(pending[i].hash[:], pending[j].hash[:]) < 0
 		})
-		hashes := make([]nodestore.Hash256, count)
+		hashes = hashes[:count]
 		for i := range pending {
 			hashes[i] = nodestore.Hash256(pending[i].hash)
 		}
@@ -959,9 +961,6 @@ func (s *Service) walkStoredSHAMapNodesWithBatchFetch(
 				}
 			}
 		}
-		// Cached batches can finish without blocking; give foreground ledger
-		// work a scheduling opportunity between bounded groups.
-		runtime.Gosched()
 	}
 	return nil
 }

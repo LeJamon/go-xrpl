@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/binary"
 	"fmt"
+	"runtime"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -39,6 +40,7 @@ func benchmarkRefreshWithPersistence(b *testing.B, workers, batchNodes int) {
 		done := make(chan error, 1)
 		var completed atomic.Bool
 		var elapsed time.Duration
+		runtime.GC()
 		b.StartTimer()
 		go func() {
 			started := time.Now()
