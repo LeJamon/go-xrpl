@@ -959,6 +959,9 @@ func (s *Service) walkStoredSHAMapNodesWithBatchFetch(
 				}
 			}
 		}
+		// Cached batches can finish without blocking; give foreground ledger
+		// work a scheduling opportunity between bounded groups.
+		runtime.Gosched()
 	}
 	return nil
 }

@@ -60,6 +60,23 @@ jobs:
               > "promotion-results/batch-${batch}-alloc-top.txt"
             grep -q '^BenchmarkService_' "promotion-results/batch-${batch}-profile-run.txt"
           done
+      - name: Capture concurrent persistence contention
+        run: |
+          for batch in 0 256; do
+            go test ./internal/ledger/service -run '^$' \
+              -bench "^BenchmarkService_RefreshWithPersistence$/^workers=4$/^batch=${batch}$" \
+              -benchtime=3x -count=1 -timeout 5m \
+              -cpuprofile "promotion-results/persistence-batch-${batch}-cpu.pprof" \
+              -mutexprofile "promotion-results/persistence-batch-${batch}-mutex.pprof" \
+              -mutexprofilefraction 1 \
+              > "promotion-results/persistence-batch-${batch}-profile-run.txt"
+            for profile in cpu mutex; do
+              go tool pprof -top -nodecount=40 service.test \
+                "promotion-results/persistence-batch-${batch}-${profile}.pprof" \
+                > "promotion-results/persistence-batch-${batch}-${profile}-top.txt"
+            done
+            grep -q '^BenchmarkService_' "promotion-results/persistence-batch-${batch}-profile-run.txt"
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
