@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	ledgerpkg "github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -928,25 +929,25 @@ func newBenchmarkRefreshFixture(b *testing.B, entries int) *benchmarkRefreshFixt
 	base, err := nodestore.NewRotatingKVDatabase(backend, nodestore.DatabaseConfig{})
 	require.NoError(b, err)
 	db := &countingGenerationDatabase{Database: base, generation: base}
-	svc, err := New(Config{
-		Standalone:    true,
-		GenesisConfig: genesis.DefaultConfig(),
-		NodeStore:     db,
-		SHAMapFamily:  shamapbackend.New(db),
-	})
+	initial, err := genesis.Create(genesis.DefaultConfig())
 	require.NoError(b, err)
-	require.NoError(b, svc.Start())
+	parent, err := ledgerpkg.FromGenesis(initial.Header, initial.StateMap, initial.TxMap, drops.Fees{})
+	require.NoError(b, err)
+	writer := &Service{nodeStore: base}
+	require.NoError(b, writer.persistToNodeStore(b.Context(), parent, parent.Sequence()))
+	closeTime := parent.CloseTime().Add(10 * time.Second)
+	validated, err := ledgerpkg.NewOpen(parent, closeTime)
+	require.NoError(b, err)
 	for i := range entries {
 		var key [32]byte
 		binary.BigEndian.PutUint32(key[28:], uint32(i+1))
 		data := make([]byte, 12)
 		binary.BigEndian.PutUint32(data[8:], uint32(i+1))
-		require.NoError(b, svc.openLedger.Insert(keylet.Keylet{Key: key}, data))
+		require.NoError(b, validated.Insert(keylet.Keylet{Key: key}, data))
 	}
-	seq, err := svc.AcceptLedger(b.Context())
-	require.NoError(b, err)
-	svc.FlushPersists()
-	validated := svc.GetValidatedLedger()
+	require.NoError(b, validated.Close(closeTime, 0))
+	seq := validated.Sequence()
+	require.NoError(b, writer.persistToNodeStore(b.Context(), validated, seq))
 	fixture.root, err = validated.StateMapHash()
 	require.NoError(b, err)
 	fixture.seq = seq
@@ -956,7 +957,6 @@ func newBenchmarkRefreshFixture(b *testing.B, entries int) *benchmarkRefreshFixt
 	committed, err := db.RotateGeneration(b.Context(), fixture.rotation, 1)
 	require.True(b, committed)
 	require.NoError(b, err)
-	svc.Stop()
 	require.NoError(b, db.Close())
 	fixture.open(b)
 	b.Cleanup(func() { fixture.close(b) })

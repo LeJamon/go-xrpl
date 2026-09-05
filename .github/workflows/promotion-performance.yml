@@ -40,7 +40,7 @@ jobs:
             -timeout 20m | tee promotion-results/benchmarks.txt
       - name: Capture comparable baseline and batch profiles
         run: |
-          for batch in 0 256; do
+          for batch in 0 64 256; do
             go test ./internal/ledger/service -run '^$' \
               -bench "^BenchmarkService_RefreshValidatedState$/^warm=false$/^workers=4$/^batch=${batch}$" \
               -benchtime=3x -count=1 -timeout 5m \
@@ -50,6 +50,14 @@ jobs:
               -mutexprofile "promotion-results/batch-${batch}-mutex.pprof" \
               -blockprofilerate 1 -mutexprofilefraction 1 \
               > "promotion-results/batch-${batch}-profile-run.txt"
+            for profile in cpu block mutex; do
+              go tool pprof -top -nodecount=40 service.test \
+                "promotion-results/batch-${batch}-${profile}.pprof" \
+                > "promotion-results/batch-${batch}-${profile}-top.txt"
+            done
+            go tool pprof -top -nodecount=40 -sample_index=alloc_space service.test \
+              "promotion-results/batch-${batch}-alloc.pprof" \
+              > "promotion-results/batch-${batch}-alloc-top.txt"
             grep -q '^BenchmarkService_' "promotion-results/batch-${batch}-profile-run.txt"
           done
       - uses: actions/upload-artifact@v4
