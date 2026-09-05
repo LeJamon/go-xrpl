@@ -1,0 +1,59 @@
+name: Promotion performance
+
+on:
+  pull_request:
+    paths:
+      - "storage/**"
+      - "internal/ledger/service/**"
+      - ".github/workflows/promotion-performance.yml"
+      - "docs/performance/shamap-promotions.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promotion-performance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: Promotion performance
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: ./.github/actions/setup
+      - name: Record environment
+        run: |
+          mkdir -p promotion-results
+          git rev-parse HEAD > promotion-results/revision.txt
+          go version > promotion-results/environment.txt
+          lscpu >> promotion-results/environment.txt
+      - name: Measure refresh and concurrent persistence
+        run: |
+          set -o pipefail
+          go test ./internal/ledger/service -run '^$' \
+            -bench '^BenchmarkService_Refresh' -benchmem -benchtime=3x -count=3 \
+            -timeout 20m | tee promotion-results/benchmarks.txt
+      - name: Capture comparable baseline and batch profiles
+        run: |
+          for batch in 0 256; do
+            go test ./internal/ledger/service -run '^$' \
+              -bench "^BenchmarkService_RefreshValidatedState$/^warm=false$/^workers=4$/^batch=${batch}$" \
+              -benchtime=3x -count=1 -timeout 5m \
+              -cpuprofile "promotion-results/batch-${batch}-cpu.pprof" \
+              -memprofile "promotion-results/batch-${batch}-alloc.pprof" \
+              -blockprofile "promotion-results/batch-${batch}-block.pprof" \
+              -mutexprofile "promotion-results/batch-${batch}-mutex.pprof" \
+              -blockprofilerate 1 -mutexprofilefraction 1 \
+              > "promotion-results/batch-${batch}-profile-run.txt"
+            grep -q '^BenchmarkService_' "promotion-results/batch-${batch}-profile-run.txt"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: promotion-performance-${{ github.event.pull_request.head.sha || github.sha }}
+          path: promotion-results/

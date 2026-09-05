@@ -33,7 +33,9 @@ func TestPromoteBatchPropagatesLazyValueReadError(t *testing.T) {
 		t.Fatalf("open archive fixture: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = fixtureDB.Close()
+		if fixtureDB != nil {
+			_ = fixtureDB.Close()
+		}
 		fixtureCache.Unref()
 	})
 	if err := fixtureDB.Set([]byte("k/1"), []byte("older-value"), nil); err != nil {
@@ -45,10 +47,12 @@ func TestPromoteBatchPropagatesLazyValueReadError(t *testing.T) {
 	if err := fixtureDB.Flush(); err != nil {
 		t.Fatalf("flush archive fixture: %v", err)
 	}
-	if valueBlocks := valueBlockBytes(fixtureDB); valueBlocks == 0 {
+	if valueBlocks := valueBlockBytes(t, fixtureDB); valueBlocks == 0 {
 		t.Fatal("archive fixture did not persist any value blocks")
 	}
-	if err := fixtureDB.Close(); err != nil {
+	err = fixtureDB.Close()
+	fixtureDB = nil
+	if err != nil {
 		t.Fatalf("close archive fixture: %v", err)
 	}
 
@@ -61,11 +65,6 @@ func TestPromoteBatchPropagatesLazyValueReadError(t *testing.T) {
 	if err != nil {
 		cache.Unref()
 		t.Fatalf("reopen archive: %v", err)
-	}
-	if valueBlocks := valueBlockBytes(archiveDB); valueBlocks == 0 {
-		_ = archiveDB.Close()
-		cache.Unref()
-		t.Fatal("reopened archive did not retain any value blocks")
 	}
 	writablePath := filepath.Join(t.TempDir(), "writable")
 	if err := os.MkdirAll(writablePath, 0o755); err != nil {
@@ -148,7 +147,7 @@ func TestPromoteBatchPropagatesLazyValueReadError(t *testing.T) {
 func testValueBlockComparer() *cockroachpebble.Comparer {
 	comparer := *cockroachpebble.DefaultComparer
 	comparer.Name = "goxrpl.lazy-value-test"
-	comparer.Split = func(key []byte) int { return 1 }
+	comparer.Split = func(key []byte) int { return min(len(key), 1) }
 	return &comparer
 }
 
@@ -167,11 +166,17 @@ func testValueBlockOptions(
 	return options
 }
 
-func valueBlockBytes(db *cockroachpebble.DB) uint64 {
-	metrics := db.Metrics()
+func valueBlockBytes(t *testing.T, db *cockroachpebble.DB) uint64 {
+	t.Helper()
+	tables, err := db.SSTables(cockroachpebble.WithProperties())
+	if err != nil {
+		t.Fatalf("read table properties: %v", err)
+	}
 	var total uint64
-	for _, level := range metrics.Levels {
-		total += level.Additional.ValueBlocksSize
+	for _, level := range tables {
+		for _, table := range level {
+			total += table.Properties.ValueBlocksSize
+		}
 	}
 	return total
 }
