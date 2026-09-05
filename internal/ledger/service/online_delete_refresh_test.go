@@ -3,27 +3,39 @@ package service
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/drops"
+	ledgerpkg "github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/keylet"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/shamap"
 	shamapbackend "github.com/LeJamon/go-xrpl/shamap/backend"
+	"github.com/LeJamon/go-xrpl/storage/kvstore"
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
+	cockroachpebble "github.com/cockroachdb/pebble"
 	"github.com/stretchr/testify/require"
 )
 
 type countingGenerationDatabase struct {
 	nodestore.Database
-	generation            nodestore.GenerationDatabase
+	generation            nodestore.BatchGenerationDatabase
 	storeBatchNodes       int
 	promotionFetches      atomic.Int64
+	promotionRequests     atomic.Int64
+	promotionBatches      atomic.Int64
+	maxPromotionBatch     atomic.Int64
+	maxPromotionBytes     atomic.Int64
+	promotedNodes         atomic.Int64
 	promotionsInFlight    atomic.Int64
 	maxPromotionsInFlight atomic.Int64
 	promotionDelay        time.Duration
@@ -33,6 +45,10 @@ type countingGenerationDatabase struct {
 	storeBatchOnce        sync.Once
 	storeBatchStart       chan struct{}
 	storeBatchResume      chan struct{}
+	promotionHashMu       sync.Mutex
+	promotionHashes       map[nodestore.Hash256]struct{}
+	promotedHashSet       map[nodestore.Hash256]struct{}
+	recordPromotionHashes atomic.Bool
 }
 
 func (d *countingGenerationDatabase) StoreBatch(ctx context.Context, nodes []*nodestore.Node) error {
@@ -53,7 +69,7 @@ func (d *countingGenerationDatabase) FetchForPromotion(
 	ctx context.Context,
 	hash nodestore.Hash256,
 ) (*nodestore.Node, error) {
-	d.promotionFetches.Add(1)
+	d.promotionRequests.Add(1)
 	inFlight := d.promotionsInFlight.Add(1)
 	defer d.promotionsInFlight.Add(-1)
 	for {
@@ -74,7 +90,85 @@ func (d *countingGenerationDatabase) FetchForPromotion(
 		case <-timer.C:
 		}
 	}
-	return d.generation.FetchForPromotion(ctx, hash)
+	node, err := d.generation.FetchForPromotion(ctx, hash)
+	if err == nil {
+		d.promotionFetches.Add(1)
+	}
+	if d.recordPromotionHashes.Load() {
+		d.promotionHashMu.Lock()
+		if d.promotionHashes != nil {
+			d.promotionHashes[hash] = struct{}{}
+			if node != nil {
+				d.promotedHashSet[node.Hash] = struct{}{}
+			}
+		}
+		d.promotionHashMu.Unlock()
+	}
+	if node != nil {
+		d.promotedNodes.Add(1)
+	}
+	return node, err
+}
+
+func (d *countingGenerationDatabase) FetchBatchForPromotion(
+	ctx context.Context,
+	hashes []nodestore.Hash256,
+	maxBytes int,
+) ([]*nodestore.Node, kvstore.PromotionStats, error) {
+	d.promotionRequests.Add(int64(len(hashes)))
+	d.promotionBatches.Add(1)
+	for {
+		peak := d.maxPromotionBatch.Load()
+		if int64(len(hashes)) <= peak || d.maxPromotionBatch.CompareAndSwap(peak, int64(len(hashes))) {
+			break
+		}
+	}
+	inFlight := d.promotionsInFlight.Add(1)
+	defer d.promotionsInFlight.Add(-1)
+	for {
+		peak := d.maxPromotionsInFlight.Load()
+		if inFlight <= peak || d.maxPromotionsInFlight.CompareAndSwap(peak, inFlight) {
+			break
+		}
+	}
+	if d.promotionStart != nil {
+		d.promotionOnce.Do(func() { close(d.promotionStart) })
+	}
+	if d.promotionDelay > 0 {
+		timer := time.NewTimer(d.promotionDelay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, kvstore.PromotionStats{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	nodes, stats, err := d.generation.FetchBatchForPromotion(ctx, hashes, maxBytes)
+	if err == nil {
+		d.promotionFetches.Add(int64(stats.Consumed))
+		d.promotedNodes.Add(int64(stats.Promoted))
+	}
+	if d.recordPromotionHashes.Load() {
+		d.promotionHashMu.Lock()
+		if d.promotionHashes != nil {
+			for _, hash := range hashes {
+				d.promotionHashes[hash] = struct{}{}
+			}
+			for _, node := range nodes {
+				if node != nil {
+					d.promotedHashSet[node.Hash] = struct{}{}
+				}
+			}
+		}
+		d.promotionHashMu.Unlock()
+	}
+	for {
+		peak := d.maxPromotionBytes.Load()
+		if int64(stats.BufferedBytes) <= peak || d.maxPromotionBytes.CompareAndSwap(peak, int64(stats.BufferedBytes)) {
+			break
+		}
+	}
+	return nodes, stats, err
 }
 
 func (d *countingGenerationDatabase) CanRotateWithoutRefresh(ctx context.Context) (bool, error) {
@@ -91,6 +185,28 @@ func (d *countingGenerationDatabase) RotateGeneration(
 
 func (d *countingGenerationDatabase) GenerationState() (uint32, uint32) {
 	return d.generation.GenerationState()
+}
+
+func (d *countingGenerationDatabase) enablePromotionHashRecording() {
+	d.promotionHashMu.Lock()
+	d.promotionHashes = make(map[nodestore.Hash256]struct{})
+	d.promotedHashSet = make(map[nodestore.Hash256]struct{})
+	d.recordPromotionHashes.Store(true)
+	d.promotionHashMu.Unlock()
+}
+
+func (d *countingGenerationDatabase) promotionHashSnapshot() (map[nodestore.Hash256]struct{}, map[nodestore.Hash256]struct{}) {
+	d.promotionHashMu.Lock()
+	defer d.promotionHashMu.Unlock()
+	requested := make(map[nodestore.Hash256]struct{}, len(d.promotionHashes))
+	for hash := range d.promotionHashes {
+		requested[hash] = struct{}{}
+	}
+	promoted := make(map[nodestore.Hash256]struct{}, len(d.promotedHashSet))
+	for hash := range d.promotedHashSet {
+		promoted[hash] = struct{}{}
+	}
+	return requested, promoted
 }
 
 func TestService_RefreshValidatedStateSurvivesPruning(t *testing.T) {
@@ -597,12 +713,21 @@ func TestService_RefreshValidatedStateUsesBoundedConcurrencyAndReportsProgress(t
 	refreshedSeq, err := svc.RefreshValidatedState(t.Context(), seq, nil)
 	require.NoError(t, err)
 	require.Equal(t, seq, refreshedSeq)
-	require.Greater(t, db.maxPromotionsInFlight.Load(), int64(1))
+	if resolveOnlineDeleteRefreshWorkers() > 1 {
+		require.Greater(t, db.maxPromotionsInFlight.Load(), int64(1))
+	} else {
+		require.Equal(t, int64(1), db.maxPromotionsInFlight.Load())
+	}
 	require.LessOrEqual(
 		t,
 		db.maxPromotionsInFlight.Load(),
 		int64(resolveOnlineDeleteRefreshWorkers()),
 	)
+	require.Greater(t, db.promotionBatches.Load(), int64(0))
+	require.Less(t, db.promotionBatches.Load(), db.promotionFetches.Load())
+	require.LessOrEqual(t, db.maxPromotionBatch.Load(), int64(storedSHAMapPromotionBatchNodes))
+	require.LessOrEqual(t, db.maxPromotionBytes.Load(), int64(storedSHAMapPromotionBatchBytes))
+	require.Greater(t, db.promotedNodes.Load(), int64(0))
 
 	records := decodeVerificationLogs(t, capture)
 	require.Len(t, records, 2)
@@ -681,58 +806,232 @@ func newRotatingRefreshFixture(
 	return svc, db, seq
 }
 
-func BenchmarkService_RefreshValidatedState(b *testing.B) {
-	const entries = 16_384
-	backend, err := kvpebble.NewRotating(
-		filepath.Join(b.TempDir(), "nodes"),
-		kvpebble.Options{BlockCacheBytes: 64 << 20, MaxOpenFiles: 200},
-	)
+func TestService_RefreshValidatedStatePreservesReachableHashSet(t *testing.T) {
+	const entries = 512
+	ctx := t.Context()
+
+	svc, db, seq := newRotatingRefreshFixture(t, entries)
+	root, err := svc.GetValidatedLedger().StateMapHash()
+	require.NoError(t, err)
+	want := make(map[nodestore.Hash256]struct{})
+	require.NoError(t, svc.walkStoredSHAMap(ctx, root, shamap.TypeState, func(hash [32]byte, _ *nodestore.Node) error {
+		want[nodestore.Hash256(hash)] = struct{}{}
+		return nil
+	}))
+	require.NotEmpty(t, want)
+
+	for _, batchNodes := range []int{0, 64, storedSHAMapPromotionBatchNodes} {
+		db.enablePromotionHashRecording()
+		err := svc.refreshGenerationStateWithBatch(
+			ctx,
+			root,
+			seq,
+			db,
+			nil,
+			1,
+			batchNodes,
+			storedSHAMapPromotionBatchBytes,
+		)
+		require.NoError(t, err)
+		committed, rotateErr := db.RotateGeneration(ctx, seq+1, 1)
+		require.True(t, committed)
+		require.NoError(t, rotateErr)
+		require.NoError(t, svc.verifyStoredSHAMap(ctx, root, shamap.TypeState))
+		requested, promoted := db.promotionHashSnapshot()
+		require.Equal(t, want, requested, "batch=%d reachable hashes", batchNodes)
+		require.Equal(t, want, promoted, "batch=%d promoted hashes", batchNodes)
+		seq++
+	}
+}
+
+func TestService_RefreshValidatedStateHandlesPartialPromotionBatches(t *testing.T) {
+	const entries = 128
+	svc, db, seq := newRotatingRefreshFixture(t, entries)
+	root, err := svc.GetValidatedLedger().StateMapHash()
+	require.NoError(t, err)
+	want := make(map[nodestore.Hash256]struct{})
+	require.NoError(t, svc.walkStoredSHAMap(t.Context(), root, shamap.TypeState, func(hash [32]byte, _ *nodestore.Node) error {
+		want[nodestore.Hash256(hash)] = struct{}{}
+		return nil
+	}))
+
+	db.enablePromotionHashRecording()
+	require.NoError(t, svc.refreshGenerationStateWithBatch(
+		t.Context(),
+		root,
+		seq,
+		db,
+		nil,
+		1,
+		64,
+		1,
+	))
+	requested, promoted := db.promotionHashSnapshot()
+	require.Equal(t, want, requested)
+	require.Equal(t, want, promoted)
+	require.Greater(t, db.promotionBatches.Load(), int64(1))
+	require.Greater(t, db.promotionRequests.Load(), db.promotionFetches.Load())
+
+	committed, err := db.RotateGeneration(t.Context(), seq+1, 1)
+	require.True(t, committed)
+	require.NoError(t, err)
+	require.NoError(t, svc.verifyStoredSHAMap(t.Context(), root, shamap.TypeState))
+}
+
+type benchmarkRefreshFixture struct {
+	path     string
+	options  kvpebble.Options
+	template *ledgerpkg.Ledger
+	root     [32]byte
+	seq      uint32
+	rotation uint32
+	svc      *Service
+	db       *countingGenerationDatabase
+	base     *nodestore.RotatingKVDatabase
+}
+
+func addBenchmarkIOMetrics(total *kvstore.IOMetrics, delta kvstore.IOMetrics) {
+	total.LogicalBytesWritten += delta.LogicalBytesWritten
+	total.WALBytesWritten += delta.WALBytesWritten
+	total.FlushBytesWritten += delta.FlushBytesWritten
+	total.CompactionBytesRead += delta.CompactionBytesRead
+	total.CompactionBytesWritten += delta.CompactionBytesWritten
+	total.SSTableBytes += delta.SSTableBytes
+	total.MemTableBytes += delta.MemTableBytes
+}
+
+func benchmarkIOMetricsDelta(after, before kvstore.IOMetrics) kvstore.IOMetrics {
+	return kvstore.IOMetrics{
+		LogicalBytesWritten:    benchmarkMetricDelta(after.LogicalBytesWritten, before.LogicalBytesWritten),
+		WALBytesWritten:        benchmarkMetricDelta(after.WALBytesWritten, before.WALBytesWritten),
+		FlushBytesWritten:      benchmarkMetricDelta(after.FlushBytesWritten, before.FlushBytesWritten),
+		CompactionBytesRead:    benchmarkMetricDelta(after.CompactionBytesRead, before.CompactionBytesRead),
+		CompactionBytesWritten: benchmarkMetricDelta(after.CompactionBytesWritten, before.CompactionBytesWritten),
+		SSTableBytes:           benchmarkMetricDelta(after.SSTableBytes, before.SSTableBytes),
+		MemTableBytes:          benchmarkMetricDelta(after.MemTableBytes, before.MemTableBytes),
+	}
+}
+
+func benchmarkMetricDelta(after, before uint64) uint64 {
+	if after < before {
+		return 0
+	}
+	return after - before
+}
+
+func newBenchmarkRefreshFixture(b *testing.B, entries int, cacheBytes int64) *benchmarkRefreshFixture {
+	b.Helper()
+	fixture := &benchmarkRefreshFixture{
+		path: filepath.Join(b.TempDir(), "nodes"),
+		options: kvpebble.Options{
+			BlockCacheBytes: cacheBytes,
+			MaxOpenFiles:    200,
+		},
+	}
+	backend, err := kvpebble.NewRotating(fixture.path, fixture.options)
 	require.NoError(b, err)
 	base, err := nodestore.NewRotatingKVDatabase(backend, nodestore.DatabaseConfig{})
 	require.NoError(b, err)
 	db := &countingGenerationDatabase{Database: base, generation: base}
-	b.Cleanup(func() { require.NoError(b, db.Close()) })
-	svc, err := New(Config{
-		Standalone:    true,
-		GenesisConfig: genesis.DefaultConfig(),
-		NodeStore:     db,
-		SHAMapFamily:  shamapbackend.New(db),
-	})
+	initial, err := genesis.Create(genesis.DefaultConfig())
 	require.NoError(b, err)
-	require.NoError(b, svc.Start())
-	b.Cleanup(svc.Stop)
-
+	parent, err := ledgerpkg.FromGenesis(initial.Header, initial.StateMap, initial.TxMap, drops.Fees{})
+	require.NoError(b, err)
+	writer := &Service{nodeStore: base}
+	require.NoError(b, writer.persistToNodeStore(b.Context(), parent, parent.Sequence()))
+	closeTime := parent.CloseTime().Add(10 * time.Second)
+	validated, err := ledgerpkg.NewOpen(parent, closeTime)
+	require.NoError(b, err)
 	for i := range entries {
 		var key [32]byte
 		binary.BigEndian.PutUint32(key[28:], uint32(i+1))
 		data := make([]byte, 12)
 		binary.BigEndian.PutUint32(data[8:], uint32(i+1))
-		require.NoError(b, svc.openLedger.Insert(keylet.Keylet{Key: key}, data))
+		require.NoError(b, validated.Insert(keylet.Keylet{Key: key}, data))
 	}
-	seq, err := svc.AcceptLedger(b.Context())
+	require.NoError(b, validated.Close(closeTime, 0))
+	seq := validated.Sequence()
+	require.NoError(b, writer.persistToNodeStore(b.Context(), validated, seq))
+	fixture.root, err = validated.StateMapHash()
 	require.NoError(b, err)
-	svc.FlushPersists()
-	committed, err := db.RotateGeneration(b.Context(), seq, 1)
+	fixture.seq = seq
+	fixture.rotation = seq
+	fixture.template, err = validated.Snapshot()
+	require.NoError(b, err)
+	committed, err := db.RotateGeneration(b.Context(), fixture.rotation, 1)
 	require.True(b, committed)
 	require.NoError(b, err)
-	db.promotionFetches.Store(0)
+	require.NoError(b, db.Close())
+	fixture.open(b)
+	b.Cleanup(func() { fixture.close(b) })
+	return fixture
+}
 
-	b.ResetTimer()
-	for iteration := range b.N {
-		refreshedSeq, refreshErr := svc.RefreshValidatedState(b.Context(), seq, nil)
-		require.NoError(b, refreshErr)
-		require.Equal(b, seq, refreshedSeq)
-
-		b.StopTimer()
-		committed, rotateErr := db.RotateGeneration(b.Context(), seq+uint32(iteration)+1, 1)
-		require.True(b, committed)
-		require.NoError(b, rotateErr)
-		b.StartTimer()
+func (f *benchmarkRefreshFixture) open(b *testing.B) {
+	b.Helper()
+	// Sync and Close preserve the WAL; explicitly materialize the offline fixture
+	// so a reopened archive cannot serve the timed traversal from replayed memtables.
+	data, err := os.ReadFile(f.path + ".generations.json")
+	require.NoError(b, err)
+	var manifest struct {
+		Writable string `json:"writable"`
+		Archive  string `json:"archive"`
 	}
-	b.StopTimer()
-	b.ReportMetric(
-		float64(db.promotionFetches.Load())/b.Elapsed().Seconds(),
-		"nodes/s",
-	)
-	b.ReportMetric(float64(resolveOnlineDeleteRefreshWorkers()), "workers")
+	require.NoError(b, json.Unmarshal(data, &manifest))
+	for _, name := range []string{manifest.Writable, manifest.Archive} {
+		require.True(b, filepath.IsLocal(name))
+		require.Equal(b, filepath.Base(name), name)
+		database, openErr := cockroachpebble.Open(filepath.Join(filepath.Dir(f.path), name), &cockroachpebble.Options{})
+		require.NoError(b, openErr)
+		flushErr := database.Flush()
+		closeErr := database.Close()
+		require.NoError(b, flushErr)
+		require.NoError(b, closeErr)
+	}
+	backend, err := kvpebble.NewRotating(f.path, f.options)
+	require.NoError(b, err)
+	base, err := nodestore.NewRotatingKVDatabase(backend, nodestore.DatabaseConfig{})
+	require.NoError(b, err)
+	db := &countingGenerationDatabase{Database: base, generation: base}
+	family := shamapbackend.New(db)
+	svc := &Service{
+		nodeStore:    db,
+		shamapFamily: family,
+		logger:       xrpllog.Discard(),
+	}
+	f.template.SetSHAMapFamily(family)
+	svc.validatedLedger = f.template
+	svc.validatedSignTime = f.template.CloseTime()
+	gotRoot, err := f.template.StateMapHash()
+	require.NoError(b, err)
+	require.Equal(b, f.root, gotRoot)
+	f.base = base
+	f.db = db
+	f.svc = svc
+	if metrics := base.PromotionIOMetrics(); f.options.BlockCacheBytes == 256<<10 && metrics.SSTableBytes <= uint64(f.options.BlockCacheBytes) {
+		b.Fatalf("refresh fixture SSTables (%d bytes) do not exceed block cache (%d bytes)", metrics.SSTableBytes, f.options.BlockCacheBytes)
+	}
+}
+
+func (f *benchmarkRefreshFixture) close(b *testing.B) {
+	b.Helper()
+	f.svc = nil
+	if f.db != nil {
+		require.NoError(b, f.db.Close())
+		f.db = nil
+		f.base = nil
+	}
+}
+
+func (f *benchmarkRefreshFixture) rotateAndReopen(b *testing.B) {
+	b.Helper()
+	f.svc = nil
+	f.rotation++
+	committed, err := f.db.RotateGeneration(b.Context(), f.rotation, 1)
+	require.True(b, committed)
+	require.NoError(b, err)
+	require.NoError(b, f.db.Close())
+	f.db = nil
+	f.base = nil
+	f.open(b)
 }

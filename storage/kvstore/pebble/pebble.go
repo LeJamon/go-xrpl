@@ -2,6 +2,7 @@
 package pebble
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -287,6 +288,53 @@ type iterator struct {
 	iter    *pebble.Iterator
 	started bool // whether the iterator has been positioned
 	closed  bool
+}
+
+type pointIterator struct {
+	store  *Store
+	iter   *pebble.Iterator
+	closed bool
+}
+
+func (s *Store) newPointIterator() (*pointIterator, error) {
+	s.mu.RLock()
+	if s.closed {
+		s.mu.RUnlock()
+		return nil, kvstore.ErrClosed
+	}
+	iter, err := s.db.NewIter(nil)
+	if err != nil {
+		s.mu.RUnlock()
+		return nil, err
+	}
+	return &pointIterator{store: s, iter: iter}, nil
+}
+
+func (i *pointIterator) get(key []byte, remaining int, allowOversized bool) ([]byte, bool, bool, error) {
+	if !i.iter.SeekGE(key) {
+		return nil, false, false, i.iter.Error()
+	}
+	if !bytes.Equal(i.iter.Key(), key) {
+		return nil, false, false, nil
+	}
+	value, err := i.iter.ValueAndErr()
+	if err != nil {
+		return nil, false, false, err
+	}
+	if len(value) > remaining && !allowOversized {
+		return nil, true, true, nil
+	}
+	return append([]byte(nil), value...), true, false, nil
+}
+
+func (i *pointIterator) Close() error {
+	if i.closed {
+		return nil
+	}
+	i.closed = true
+	err := i.iter.Close()
+	i.store.mu.RUnlock()
+	return err
 }
 
 // Next advances the iterator and reports whether a pair is available.

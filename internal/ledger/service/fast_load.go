@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/storage/kvstore"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
@@ -414,11 +416,18 @@ type storedSHAMapTask struct {
 }
 
 type storedSHAMapFetch func(context.Context, nodestore.Hash256) (*nodestore.Node, error)
+type storedSHAMapBatchFetch func(
+	context.Context,
+	[]nodestore.Hash256,
+	int,
+) ([]*nodestore.Node, kvstore.PromotionStats, error)
 
 const (
 	maxStoredSHAMapWorkers             = 64
 	maxOnlineDeleteRefreshWorkers      = 4
 	storedSHAMapFrontierTasksPerWorker = 4
+	storedSHAMapPromotionBatchNodes    = 256
+	storedSHAMapPromotionBatchBytes    = 4 << 20
 )
 
 type storedSHAMapWalkControl struct {
@@ -427,6 +436,9 @@ type storedSHAMapWalkControl struct {
 	checkpoint      func(context.Context, time.Duration) error
 	checkpointTicks <-chan time.Time
 	now             func() time.Time
+	batchFetch      storedSHAMapBatchFetch
+	batchNodes      int
+	batchBytes      int
 }
 
 func resolveStoredSHAMapWorkers(configured int) int {
@@ -465,6 +477,7 @@ func (s *Service) walkStoredSHAMapConcurrentWithFetch(
 	workStartedAt := control.now()
 	var lastCheckpointNodes uint64
 	controlledFetch := fetch
+	controlledBatchFetch := control.batchFetch
 	if control.checkpoint != nil {
 		controlledFetch = func(ctx context.Context, hash nodestore.Hash256) (*nodestore.Node, error) {
 			checkpointGate.RLock()
@@ -473,6 +486,21 @@ func (s *Service) walkStoredSHAMapConcurrentWithFetch(
 				return nil, err
 			}
 			return fetch(ctx, hash)
+		}
+		if controlledBatchFetch != nil {
+			batchFetch := controlledBatchFetch
+			controlledBatchFetch = func(
+				ctx context.Context,
+				hashes []nodestore.Hash256,
+				maxBytes int,
+			) ([]*nodestore.Node, kvstore.PromotionStats, error) {
+				checkpointGate.RLock()
+				defer checkpointGate.RUnlock()
+				if err := ctx.Err(); err != nil {
+					return nil, kvstore.PromotionStats{}, err
+				}
+				return batchFetch(ctx, hashes, maxBytes)
+			}
 		}
 	}
 
@@ -651,7 +679,27 @@ func (s *Service) walkStoredSHAMapConcurrentWithFetch(
 				control.progress.frontierSize.Add(-1)
 				control.progress.activeWorkers.Add(1)
 				var unreportedNodes uint64
-				walkErr := s.walkStoredSHAMapNodesWithFetch(
+				walk := s.walkStoredSHAMapNodesWithFetch
+				if controlledBatchFetch != nil {
+					walk = func(
+						ctx context.Context,
+						stack []storedSHAMapNode,
+						mapType shamap.Type,
+						_ storedSHAMapFetch,
+						visit func(storedSHAMapNode, *nodestore.Node) error,
+					) error {
+						return s.walkStoredSHAMapNodesWithBatchFetch(
+							ctx,
+							stack,
+							mapType,
+							controlledBatchFetch,
+							control.batchNodes,
+							control.batchBytes,
+							visit,
+						)
+					}
+				}
+				walkErr := walk(
 					walkCtx,
 					[]storedSHAMapNode{task.node},
 					mapType,
@@ -857,6 +905,66 @@ func (s *Service) walkStoredSHAMapNodesWithFetch(
 	return nil
 }
 
+func (s *Service) walkStoredSHAMapNodesWithBatchFetch(
+	ctx context.Context,
+	stack []storedSHAMapNode,
+	mapType shamap.Type,
+	fetch storedSHAMapBatchFetch,
+	maxNodes int,
+	maxBytes int,
+	visit func(storedSHAMapNode, *nodestore.Node) error,
+) error {
+	if maxNodes <= 0 {
+		maxNodes = 1
+	}
+	pending := make([]storedSHAMapNode, 0, maxNodes)
+	hashes := make([]nodestore.Hash256, 0, maxNodes)
+	for len(stack) > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		count := min(len(stack), maxNodes)
+		pending = pending[:count]
+		for i := range count {
+			pending[i] = stack[len(stack)-1-i]
+		}
+		stack = stack[:len(stack)-count]
+		sort.SliceStable(pending, func(i, j int) bool {
+			return bytes.Compare(pending[i].hash[:], pending[j].hash[:]) < 0
+		})
+		hashes = hashes[:count]
+		for i := range pending {
+			hashes[i] = nodestore.Hash256(pending[i].hash)
+		}
+		nodes, _, err := fetch(ctx, hashes, maxBytes)
+		if err != nil {
+			return err
+		}
+		if len(nodes) <= 0 || len(nodes) > len(pending) {
+			return fmt.Errorf("invalid batch fetch result: returned %d of %d nodes", len(nodes), len(pending))
+		}
+		for i := len(pending) - 1; i >= len(nodes); i-- {
+			stack = append(stack, pending[i])
+		}
+		for i, stored := range nodes {
+			node, err := validateStoredSHAMapNode(pending[i], mapType, stored)
+			if err != nil {
+				return err
+			}
+			stack, err = appendStoredSHAMapChildren(stack, pending[i], node)
+			if err != nil {
+				return err
+			}
+			if visit != nil {
+				if err := visit(pending[i], stored); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func appendStoredSHAMapChildren(
 	children []storedSHAMapNode,
 	pending storedSHAMapNode,
@@ -906,26 +1014,38 @@ func (s *Service) loadStoredSHAMapNodeWithFetch(
 	if stored == nil {
 		return nil, nil, fmt.Errorf("node %x is missing", pending.hash[:8])
 	}
+	node, err := validateStoredSHAMapNode(pending, mapType, stored)
+	return node, stored, err
+}
+
+func validateStoredSHAMapNode(
+	pending storedSHAMapNode,
+	mapType shamap.Type,
+	stored *nodestore.Node,
+) (shamap.NodeReader, error) {
+	if stored == nil {
+		return nil, fmt.Errorf("node %x is missing", pending.hash[:8])
+	}
 	node, err := shamap.DeserializeFromPrefix(stored.Data)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if node.Hash() != pending.hash {
-		return nil, nil, fmt.Errorf("node %x has invalid content hash", pending.hash[:8])
+		return nil, fmt.Errorf("node %x has invalid content hash", pending.hash[:8])
 	}
 	if _, inner := node.(shamap.InnerNodeReader); inner {
-		return node, stored, nil
+		return node, nil
 	}
 	if pending.depth == 0 {
-		return nil, nil, fmt.Errorf("root node %x is not an inner node", pending.hash[:8])
+		return nil, fmt.Errorf("root node %x is not an inner node", pending.hash[:8])
 	}
 	if mapType == shamap.TypeState && node.Type() != shamap.NodeTypeAccountState {
-		return nil, nil, fmt.Errorf("state tree contains %s leaf", node.Type())
+		return nil, fmt.Errorf("state tree contains %s leaf", node.Type())
 	}
 	if mapType == shamap.TypeTransaction &&
 		node.Type() != shamap.NodeTypeTransactionNoMeta &&
 		node.Type() != shamap.NodeTypeTransactionWithMeta {
-		return nil, nil, fmt.Errorf("transaction tree contains %s leaf", node.Type())
+		return nil, fmt.Errorf("transaction tree contains %s leaf", node.Type())
 	}
-	return node, stored, nil
+	return node, nil
 }

@@ -534,6 +534,28 @@ func (s *Service) refreshGenerationState(
 	sequence uint32,
 	generations nodestore.GenerationDatabase,
 	checkpoint func(context.Context, time.Duration) error,
+) error {
+	return s.refreshGenerationStateWithBatch(
+		ctx,
+		root,
+		sequence,
+		generations,
+		checkpoint,
+		resolveOnlineDeleteRefreshWorkers(),
+		storedSHAMapPromotionBatchNodes,
+		storedSHAMapPromotionBatchBytes,
+	)
+}
+
+func (s *Service) refreshGenerationStateWithBatch(
+	ctx context.Context,
+	root [32]byte,
+	sequence uint32,
+	generations nodestore.GenerationDatabase,
+	checkpoint func(context.Context, time.Duration) error,
+	workers int,
+	batchNodes int,
+	batchBytes int,
 ) (err error) {
 	startedAt := time.Now()
 	progress := newOnlineDeleteRefreshProgress(
@@ -556,19 +578,27 @@ func (s *Service) refreshGenerationState(
 		defer checkpointTicker.Stop()
 	}
 
+	control := storedSHAMapWalkControl{
+		progress:        progress,
+		progressTicks:   progressTicker.C,
+		checkpoint:      checkpoint,
+		checkpointTicks: checkpointTicks,
+		now:             time.Now,
+	}
+	if batchNodes > 0 {
+		if batches, ok := generations.(nodestore.BatchGenerationDatabase); ok {
+			control.batchFetch = batches.FetchBatchForPromotion
+			control.batchNodes = batchNodes
+			control.batchBytes = batchBytes
+		}
+	}
 	err = s.walkStoredSHAMapConcurrentWithFetch(
 		ctx,
 		root,
 		shamap.TypeState,
 		generations.FetchForPromotion,
-		resolveOnlineDeleteRefreshWorkers(),
-		storedSHAMapWalkControl{
-			progress:        progress,
-			progressTicks:   progressTicker.C,
-			checkpoint:      checkpoint,
-			checkpointTicks: checkpointTicks,
-			now:             time.Now,
-		},
+		workers,
+		control,
 		nil,
 	)
 	if err != nil {

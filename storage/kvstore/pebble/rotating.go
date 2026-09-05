@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -127,9 +128,10 @@ func validateGenerationBoundaries(lastRotated, minimumOnline uint32) error {
 // one archive generation on reads. Promote explicitly copies an archive record
 // into the writable generation for online-delete preservation.
 type RotatingStore struct {
-	// Operations pin the generation pair with mu before locking mutation
-	// stripes. Multi-key operations acquire stripes in ascending order.
+	// Lock order is mu, archiveMu when needed, then mutation stripes in
+	// ascending order. Put-only operations skip archiveMu.
 	mu        sync.RWMutex
+	archiveMu sync.RWMutex
 	rotateMu  sync.Mutex
 	mutations [rotatingStoreMutationStripes]sync.Mutex
 
@@ -544,6 +546,181 @@ func (r *RotatingStore) Promote(key []byte) ([]byte, error) {
 	mutation.Lock()
 	defer mutation.Unlock()
 	return r.getLocked(key, true)
+}
+
+// PromoteBatch resolves and promotes a bounded hash-sorted group.
+func (r *RotatingStore) PromoteBatch(
+	keys [][]byte,
+	maxBytes int,
+) (promotions []kvstore.Promotion, stats kvstore.PromotionStats, resultErr error) {
+	stats.Requested = len(keys)
+	if len(keys) == 0 {
+		return nil, stats, nil
+	}
+	if maxBytes <= 0 {
+		return nil, stats, errors.New("kvstore/pebble: promotion byte limit must be positive")
+	}
+
+	sorted := make([][]byte, len(keys))
+	for i, key := range keys {
+		sorted[i] = append([]byte(nil), key...)
+	}
+	sort.SliceStable(sorted, func(i, j int) bool { return bytes.Compare(sorted[i], sorted[j]) < 0 })
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.closed {
+		return nil, stats, kvstore.ErrClosed
+	}
+	// Archive deletion must wait through commit, but ordinary writable stores
+	// can proceed while archive blocks are read and decompressed.
+	r.archiveMu.RLock()
+	defer r.archiveMu.RUnlock()
+	prefetched, err := r.prefetchPromotion(sorted, maxBytes)
+	if err != nil {
+		return nil, stats, err
+	}
+	sorted = sorted[:len(prefetched)]
+	lockedMutations := r.lockMutations(sorted)
+	defer r.unlockMutations(&lockedMutations)
+
+	writable, err := r.writable.newPointIterator()
+	if err != nil {
+		return nil, stats, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, writable.Close()) }()
+
+	batch, err := r.writable.NewBatch()
+	if err != nil {
+		return nil, stats, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, batch.Close()) }()
+
+	promotions = make([]kvstore.Promotion, 0, len(sorted))
+	for index, key := range sorted {
+		remaining := maxBytes - stats.BufferedBytes
+		value, found, tooLarge, err := writable.get(key, remaining, len(promotions) == 0)
+		if err != nil {
+			return nil, stats, err
+		}
+		if tooLarge {
+			break
+		}
+		if found {
+			stats.WritableHits++
+			stats.BufferedBytes += len(value)
+			promotions = append(promotions, kvstore.Promotion{
+				Key: append([]byte(nil), key...), Value: value, Found: true,
+			})
+			stats.Consumed++
+			continue
+		}
+		stats.WritableMisses++
+		candidate := prefetched[index]
+		value, found, err = candidate.value, candidate.found, candidate.err
+		tooLarge = found && len(value) > remaining && len(promotions) > 0
+		if err != nil {
+			return nil, stats, err
+		}
+		if tooLarge {
+			break
+		}
+		if !found {
+			stats.ArchiveMisses++
+			promotions = append(promotions, kvstore.Promotion{Key: append([]byte(nil), key...)})
+			stats.Consumed++
+			continue
+		}
+		stats.ArchiveHits++
+		stats.BufferedBytes += len(value)
+		if err := batch.Put(key, value); err != nil {
+			return nil, stats, err
+		}
+		stats.Promoted++
+		stats.PromotedBytes += len(value)
+		promotions = append(promotions, kvstore.Promotion{
+			Key: append([]byte(nil), key...), Value: value, Found: true,
+		})
+		stats.Consumed++
+	}
+	if stats.Promoted > 0 {
+		if err := batch.Write(); err != nil {
+			return nil, stats, fmt.Errorf("kvstore/pebble: promote archive batch: %w", err)
+		}
+		stats.Batches = 1
+	}
+	return promotions, stats, nil
+}
+
+type promotionPrefetch struct {
+	value []byte
+	found bool
+	err   error
+}
+
+// The prefetched payload and the final results each have their own byte budget.
+// A shorter prefix is valid even when writable precedence would leave room for
+// more results; the caller retries the remaining hashes.
+func (r *RotatingStore) prefetchPromotion(keys [][]byte, maxBytes int) ([]promotionPrefetch, error) {
+	archive, err := r.archive.newPointIterator()
+	if err != nil {
+		return nil, err
+	}
+	records := make([]promotionPrefetch, 0, len(keys))
+	buffered := 0
+	for _, key := range keys {
+		value, found, tooLarge, readErr := archive.get(key, maxBytes-buffered, len(records) == 0)
+		if tooLarge {
+			break
+		}
+		records = append(records, promotionPrefetch{value: value, found: found, err: readErr})
+		if readErr != nil {
+			break
+		}
+		buffered += len(value)
+	}
+	closeErr := archive.Close()
+	if len(records) > 0 && records[len(records)-1].err != nil {
+		// Lazy read errors also reach Close. Keep the error with its key so a
+		// newer writable value can take precedence over the failed archive read.
+		last := &records[len(records)-1]
+		last.err = errors.Join(last.err, closeErr)
+		return records, nil
+	}
+	return records, closeErr
+}
+
+// CacheMetrics returns a point-in-time snapshot of the shared block cache.
+func (r *RotatingStore) CacheMetrics() kvstore.CacheMetrics {
+	metrics := r.blockCache.Metrics()
+	return kvstore.CacheMetrics{Hits: metrics.Hits, Misses: metrics.Misses}
+}
+
+// IOMetrics returns a point-in-time snapshot of Pebble persistence counters.
+func (r *RotatingStore) IOMetrics() kvstore.IOMetrics {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.closed || r.writable == nil || r.archive == nil {
+		return kvstore.IOMetrics{}
+	}
+	var metrics kvstore.IOMetrics
+	addIOMetrics(&metrics, r.writable.db.Metrics())
+	addIOMetrics(&metrics, r.archive.db.Metrics())
+	return metrics
+}
+
+func addIOMetrics(result *kvstore.IOMetrics, metrics *cockroachpebble.Metrics) {
+	result.LogicalBytesWritten += metrics.WAL.BytesIn
+	result.WALBytesWritten += metrics.WAL.BytesWritten
+	result.MemTableBytes += metrics.MemTable.Size
+	for _, level := range metrics.Levels {
+		result.FlushBytesWritten += level.BytesFlushed
+		result.CompactionBytesRead += level.BytesRead
+		result.CompactionBytesWritten += level.BytesCompacted
+		if level.Size > 0 {
+			result.SSTableBytes += uint64(level.Size)
+		}
+	}
 }
 
 func (r *RotatingStore) lockMutations(keys [][]byte) [rotatingStoreMutationStripes]bool {
@@ -1212,6 +1389,17 @@ func (b *rotatingBatch) Write() (resultErr error) {
 	if b.store.closed {
 		return kvstore.ErrClosed
 	}
+	hasDeletes := false
+	for _, op := range b.ops {
+		if op.delete {
+			hasDeletes = true
+			break
+		}
+	}
+	if hasDeletes {
+		b.store.archiveMu.Lock()
+		defer b.store.archiveMu.Unlock()
+	}
 	lockedMutations := b.store.lockMutations(keys)
 	defer b.store.unlockMutations(&lockedMutations)
 	writableBatch, err := b.store.writable.NewBatch()
@@ -1221,10 +1409,8 @@ func (b *rotatingBatch) Write() (resultErr error) {
 	defer func() {
 		resultErr = errors.Join(resultErr, writableBatch.Close())
 	}()
-	hasDeletes := false
 	for _, op := range b.ops {
 		if op.delete {
-			hasDeletes = true
 			if err := writableBatch.Delete(op.key); err != nil {
 				return err
 			}

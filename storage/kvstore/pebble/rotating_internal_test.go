@@ -332,6 +332,58 @@ func TestPromoteDoesNotResurrectConcurrentDelete(t *testing.T) {
 	require.ErrorIs(t, err, kvstore.ErrNotFound)
 }
 
+func TestPromoteBatchDoesNotResurrectConcurrentDeleteDuringPrefetch(t *testing.T) {
+	store := newPromoteRaceStore(t)
+	batch, err := store.NewBatch()
+	require.NoError(t, err)
+	require.NoError(t, batch.Delete([]byte("key")))
+	t.Cleanup(func() { require.NoError(t, batch.Close()) })
+
+	store.archive.mu.Lock()
+	archiveLocked := true
+	defer func() {
+		if archiveLocked {
+			store.archive.mu.Unlock()
+		}
+	}()
+
+	type promotionResult struct {
+		promotions []kvstore.Promotion
+		err        error
+	}
+	promoteDone := make(chan promotionResult, 1)
+	go func() {
+		promotions, _, err := store.PromoteBatch([][]byte{[]byte("key")}, 1<<20)
+		promoteDone <- promotionResult{promotions, err}
+	}()
+	waitForLocked(t, &store.archiveMu)
+
+	key := []byte("key")
+	putDone := make(chan error, 1)
+	go func() { putDone <- store.Put(key, []byte("new value")) }()
+	select {
+	case err := <-putDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("Put blocked during archive prefetch")
+	}
+
+	deleteDone := make(chan error, 1)
+	go func() { deleteDone <- batch.Write() }()
+	assertBlocked(t, deleteDone, "Delete")
+
+	store.archive.mu.Unlock()
+	archiveLocked = false
+	result := <-promoteDone
+	require.NoError(t, result.err)
+	require.Len(t, result.promotions, 1)
+	require.Equal(t, []byte("new value"), result.promotions[0].Value)
+	require.NoError(t, <-deleteDone)
+
+	_, err = store.Get([]byte("key"))
+	require.ErrorIs(t, err, kvstore.ErrNotFound)
+}
+
 func newPromoteRaceStore(t *testing.T) *RotatingStore {
 	t.Helper()
 	store, err := NewRotating(

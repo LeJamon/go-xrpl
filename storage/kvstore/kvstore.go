@@ -61,6 +61,63 @@ type RotatingStore interface {
 	RotationState() (lastRotated, minimumOnline uint32)
 }
 
+// BatchPromotingStore extends a rotating store with bounded locality-aware promotion.
+type BatchPromotingStore interface {
+	RotatingStore
+	PromoteBatch(keys [][]byte, maxBytes int) ([]Promotion, PromotionStats, error)
+}
+
+// Promotion is one hash-ordered result from a bounded promotion operation.
+type Promotion struct {
+	Key   []byte
+	Value []byte
+	Found bool
+}
+
+// PromotionStats describes the logical reads and writes performed by one batch.
+type PromotionStats struct {
+	Requested      int
+	Consumed       int
+	WritableHits   int
+	WritableMisses int
+	ArchiveHits    int
+	ArchiveMisses  int
+	Promoted       int
+	PromotedBytes  int
+	BufferedBytes  int
+	Batches        int
+}
+
+// CacheMetrics is a point-in-time snapshot of shared block-cache activity.
+type CacheMetrics struct {
+	Hits   int64
+	Misses int64
+}
+
+// CacheMetricsStore exposes optional backend cache instrumentation.
+type CacheMetricsStore interface {
+	CacheMetrics() CacheMetrics
+}
+
+// IOMetrics snapshots persistence counters and size gauges for active generations.
+// Counters can reset when generations rotate or the store reopens.
+// CompactionBytesRead measures bytes read by Pebble compactions; foreground
+// point-read bytes are not exposed by this optional interface.
+type IOMetrics struct {
+	LogicalBytesWritten    uint64
+	WALBytesWritten        uint64
+	FlushBytesWritten      uint64
+	CompactionBytesRead    uint64
+	CompactionBytesWritten uint64
+	SSTableBytes           uint64
+	MemTableBytes          uint64
+}
+
+// IOMetricsStore exposes optional backend persistence instrumentation.
+type IOMetricsStore interface {
+	IOMetrics() IOMetrics
+}
+
 // RotationIdentity is a path-free snapshot of a rotating store's durable
 // manifest identity and generation boundary.
 type RotationIdentity struct {
