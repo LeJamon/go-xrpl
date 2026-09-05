@@ -547,6 +547,7 @@ func (r *RotatingStore) Promote(key []byte) ([]byte, error) {
 	return r.getLocked(key, true)
 }
 
+// PromoteBatch resolves and promotes a bounded hash-sorted group.
 func (r *RotatingStore) PromoteBatch(
 	keys [][]byte,
 	maxBytes int,
@@ -644,6 +645,7 @@ func (r *RotatingStore) PromoteBatch(
 	return promotions, stats, nil
 }
 
+// CacheMetrics returns a point-in-time snapshot of the shared block cache.
 func (r *RotatingStore) CacheMetrics() kvstore.CacheMetrics {
 	metrics := r.blockCache.Metrics()
 	return kvstore.CacheMetrics{Hits: metrics.Hits, Misses: metrics.Misses}

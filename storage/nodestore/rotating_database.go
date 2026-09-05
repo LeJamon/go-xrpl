@@ -18,6 +18,7 @@ type RotatingKVDatabase struct {
 	rotating kvstore.RotatingStore
 }
 
+// PromotionCacheMetrics returns backend cache counters for refresh benchmarks.
 func (d *RotatingKVDatabase) PromotionCacheMetrics() kvstore.CacheMetrics {
 	if store, ok := d.rotating.(kvstore.CacheMetricsStore); ok {
 		return store.CacheMetrics()
@@ -85,6 +86,7 @@ func (d *RotatingKVDatabase) FetchForPromotion(ctx context.Context, hash Hash256
 	return node, nil
 }
 
+// FetchBatchForPromotion fetches a bounded hash-sorted group without caching decoded nodes.
 func (d *RotatingKVDatabase) FetchBatchForPromotion(
 	ctx context.Context,
 	hashes []Hash256,
