@@ -29,6 +29,7 @@ func benchmarkRefreshValidatedState(b *testing.B, warm bool, workers, batchNodes
 	fixture := newBenchmarkRefreshFixture(b, 16_384, cacheBytes)
 	var fetches, batches, maxBytes int64
 	var hits, misses int64
+	var materializedBytes uint64
 	var io kvstore.IOMetrics
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -54,6 +55,7 @@ func benchmarkRefreshValidatedState(b *testing.B, warm bool, workers, batchNodes
 		batches += fixture.db.promotionBatches.Load()
 		maxBytes = max(maxBytes, fixture.db.maxPromotionBytes.Load())
 		fixture.rotateAndReopen(b)
+		materializedBytes += fixture.base.PromotionIOMetrics().SSTableBytes
 	}
 	if warm {
 		require.Positive(b, hits, "prewarmed traversal must use the block cache")
@@ -64,6 +66,7 @@ func benchmarkRefreshValidatedState(b *testing.B, warm bool, workers, batchNodes
 	b.ReportMetric(float64(hits)/float64(fetches), "cache-hits/node")
 	b.ReportMetric(float64(misses)/float64(fetches), "cache-misses/node")
 	b.ReportMetric(float64(io.WALBytesWritten)/float64(b.N), "wal-bytes/op")
+	b.ReportMetric(float64(materializedBytes)/float64(b.N), "materialized-sst-bytes/op")
 	b.ReportMetric(float64(io.FlushBytesWritten)/float64(b.N), "flush-bytes/op")
 	b.ReportMetric(float64(io.CompactionBytesRead)/float64(b.N), "compaction-read-bytes/op")
 	b.ReportMetric(float64(io.CompactionBytesWritten)/float64(b.N), "compaction-write-bytes/op")

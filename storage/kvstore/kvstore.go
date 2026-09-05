@@ -99,7 +99,8 @@ type CacheMetricsStore interface {
 	CacheMetrics() CacheMetrics
 }
 
-// IOMetrics is a point-in-time snapshot of backend persistence counters.
+// IOMetrics snapshots persistence counters and size gauges for active generations.
+// Counters can reset when generations rotate or the store reopens.
 // CompactionBytesRead measures bytes read by Pebble compactions; foreground
 // point-read bytes are not exposed by this optional interface.
 type IOMetrics struct {

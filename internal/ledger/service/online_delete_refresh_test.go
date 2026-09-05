@@ -713,7 +713,11 @@ func TestService_RefreshValidatedStateUsesBoundedConcurrencyAndReportsProgress(t
 	refreshedSeq, err := svc.RefreshValidatedState(t.Context(), seq, nil)
 	require.NoError(t, err)
 	require.Equal(t, seq, refreshedSeq)
-	require.Greater(t, db.maxPromotionsInFlight.Load(), int64(1))
+	if resolveOnlineDeleteRefreshWorkers() > 1 {
+		require.Greater(t, db.maxPromotionsInFlight.Load(), int64(1))
+	} else {
+		require.Equal(t, int64(1), db.maxPromotionsInFlight.Load())
+	}
 	require.LessOrEqual(
 		t,
 		db.maxPromotionsInFlight.Load(),

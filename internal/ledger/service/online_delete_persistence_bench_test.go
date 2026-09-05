@@ -88,8 +88,8 @@ func benchmarkRefreshWithPersistence(b *testing.B, workers, batchNodes int) {
 
 func reportPersistenceLatencies(b *testing.B, values []int64, prefix string) {
 	slices.Sort(values)
-	b.ReportMetric(float64(values[len(values)/2]), prefix+"-p50-ns")
-	b.ReportMetric(float64(values[min(len(values)-1, len(values)*95/100)]), prefix+"-p95-ns")
+	b.ReportMetric(float64(values[(len(values)-1)/2]), prefix+"-p50-ns")
+	b.ReportMetric(float64(values[(len(values)*95+99)/100-1]), prefix+"-p95-ns")
 	b.ReportMetric(float64(values[len(values)-1]), prefix+"-max-ns")
 }
 
