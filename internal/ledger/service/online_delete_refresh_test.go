@@ -915,12 +915,12 @@ func benchmarkMetricDelta(after, before uint64) uint64 {
 	return after - before
 }
 
-func newBenchmarkRefreshFixture(b *testing.B, entries int) *benchmarkRefreshFixture {
+func newBenchmarkRefreshFixture(b *testing.B, entries int, cacheBytes int64) *benchmarkRefreshFixture {
 	b.Helper()
 	fixture := &benchmarkRefreshFixture{
 		path: filepath.Join(b.TempDir(), "nodes"),
 		options: kvpebble.Options{
-			BlockCacheBytes: 256 << 10,
+			BlockCacheBytes: cacheBytes,
 			MaxOpenFiles:    200,
 		},
 	}
@@ -1004,7 +1004,7 @@ func (f *benchmarkRefreshFixture) open(b *testing.B) {
 	f.base = base
 	f.db = db
 	f.svc = svc
-	if metrics := base.PromotionIOMetrics(); metrics.SSTableBytes <= uint64(f.options.BlockCacheBytes) {
+	if metrics := base.PromotionIOMetrics(); f.options.BlockCacheBytes == 256<<10 && metrics.SSTableBytes <= uint64(f.options.BlockCacheBytes) {
 		b.Fatalf("refresh fixture SSTables (%d bytes) do not exceed block cache (%d bytes)", metrics.SSTableBytes, f.options.BlockCacheBytes)
 	}
 }

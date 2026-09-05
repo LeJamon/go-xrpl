@@ -22,7 +22,11 @@ func BenchmarkService_RefreshValidatedState(b *testing.B) {
 }
 
 func benchmarkRefreshValidatedState(b *testing.B, warm bool, workers, batchNodes int) {
-	fixture := newBenchmarkRefreshFixture(b, 16_384)
+	cacheBytes := int64(256 << 10)
+	if warm {
+		cacheBytes = 8 << 20
+	}
+	fixture := newBenchmarkRefreshFixture(b, 16_384, cacheBytes)
 	var fetches, batches, maxBytes int64
 	var hits, misses int64
 	var io kvstore.IOMetrics
@@ -51,7 +55,11 @@ func benchmarkRefreshValidatedState(b *testing.B, warm bool, workers, batchNodes
 		maxBytes = max(maxBytes, fixture.db.maxPromotionBytes.Load())
 		fixture.rotateAndReopen(b)
 	}
-	require.Positive(b, misses, "SSTable reads must reach the block cache")
+	if warm {
+		require.Positive(b, hits, "prewarmed traversal must use the block cache")
+	} else {
+		require.Positive(b, misses, "cold SSTable reads must reach the block cache")
+	}
 	b.ReportMetric(float64(fetches)/b.Elapsed().Seconds(), "nodes/s")
 	b.ReportMetric(float64(hits)/float64(fetches), "cache-hits/node")
 	b.ReportMetric(float64(misses)/float64(fetches), "cache-misses/node")

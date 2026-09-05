@@ -26,7 +26,7 @@ func BenchmarkService_RefreshWithPersistence(b *testing.B) {
 }
 
 func benchmarkRefreshWithPersistence(b *testing.B, workers, batchNodes int) {
-	fixture := newBenchmarkRefreshFixture(b, 16_384)
+	fixture := newBenchmarkRefreshFixture(b, 16_384, 256<<10)
 	var persistence, overlapping []int64
 	var refreshDuration time.Duration
 	b.ReportAllocs()

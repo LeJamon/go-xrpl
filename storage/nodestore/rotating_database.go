@@ -96,6 +96,9 @@ func (d *RotatingKVDatabase) FetchForPromotion(ctx context.Context, hash Hash256
 }
 
 // FetchBatchForPromotion fetches a bounded hash-sorted group without caching decoded nodes.
+// Scalar-only backends report Requested, Consumed and BufferedBytes; source-hit
+// and write counters are unavailable. They may promote the first unreturned
+// record before discovering that it exceeds the remaining byte budget.
 func (d *RotatingKVDatabase) FetchBatchForPromotion(
 	ctx context.Context,
 	hashes []Hash256,
