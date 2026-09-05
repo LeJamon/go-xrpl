@@ -317,7 +317,10 @@ func (i *pointIterator) get(key []byte, remaining int, allowOversized bool) ([]b
 	if !bytes.Equal(i.iter.Key(), key) {
 		return nil, false, false, nil
 	}
-	value := i.iter.Value()
+	value, err := i.iter.ValueAndErr()
+	if err != nil {
+		return nil, false, false, err
+	}
 	if len(value) > remaining && !allowOversized {
 		return nil, true, true, nil
 	}
