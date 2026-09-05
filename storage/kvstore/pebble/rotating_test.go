@@ -208,6 +208,14 @@ func TestRotatingStoreBatchPromotionDistinguishesEmptyValueFromMissing(t *testin
 	require.Empty(t, promotions[0].Value)
 	require.Equal(t, "missing", string(promotions[1].Key))
 	require.False(t, promotions[1].Found)
+
+	require.NoError(t, store.Put([]byte("large"), []byte("oversized")))
+	promotions, stats, err := store.PromoteBatch([][]byte{[]byte("large"), []byte("missing")}, 1)
+	require.NoError(t, err)
+	require.Len(t, promotions, 2)
+	require.Equal(t, 2, stats.Consumed)
+	require.Equal(t, []byte("oversized"), promotions[0].Value)
+	require.False(t, promotions[1].Found)
 }
 
 func TestRotatingStoreRejectsRetentionFloorRollback(t *testing.T) {

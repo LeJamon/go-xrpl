@@ -618,7 +618,7 @@ func (r *RotatingStore) PromoteBatch(
 		stats.WritableMisses++
 		candidate := prefetched[index]
 		value, found, err = candidate.value, candidate.found, candidate.err
-		tooLarge = len(value) > remaining && len(promotions) > 0
+		tooLarge = found && len(value) > remaining && len(promotions) > 0
 		if err != nil {
 			return nil, stats, err
 		}
