@@ -540,7 +540,8 @@ func TestTransactionOwnerFundsMPT(t *testing.T) {
 	}, paramsJSON)
 	require.Nil(t, rpcErr)
 	txns := resultToMap(t, result)["ledger"].(map[string]any)["transactions"].([]any)
-	assert.Empty(t, txns)
+	require.Len(t, txns, 2)
+	assert.Equal(t, "75", txns[0].(map[string]any)["owner_funds"])
 
 	services.QueueAllTxs = func() []types.QueuedTxInfo {
 		return []types.QueuedTxInfo{
@@ -563,13 +564,11 @@ func TestTransactionOwnerFundsMPT(t *testing.T) {
 		ApiVersion: types.ApiVersion1,
 		Services:   types.NewTestServiceGraph(services),
 	}, queueParams)
-	require.Nil(t, result)
-	require.NotNil(t, rpcErr)
-	assert.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
-	queueData := rpcErr.Extra["queue_data"].([]any)
-	require.Len(t, queueData, 2)
-	assert.Contains(t, queueData[0].(map[string]any), "tx")
-	failingEntry := queueData[1].(map[string]any)
-	assert.Equal(t, holder, failingEntry["account"])
-	assert.NotContains(t, failingEntry, "tx")
+	require.Nil(t, rpcErr)
+	queueData := resultToMap(t, result)["queue_data"].([]any)
+	require.Len(t, queueData, 3)
+	for _, item := range queueData {
+		assert.Contains(t, item.(map[string]any), "tx")
+	}
+	assert.Equal(t, "75", queueData[1].(map[string]any)["tx"].(map[string]any)["owner_funds"])
 }

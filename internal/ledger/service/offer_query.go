@@ -382,9 +382,32 @@ func (s *Service) buildBookOffer(
 
 	switch {
 	case ownerOwnsIssue:
-		// rippled NetworkOPs.cpp:4516-4521: selling issuer's own IOUs ⇒
-		// fully funded. firstOwnerOffer stays true.
-		ownerFunds = offer.TakerGets
+		if id, ok := amountMPTID(takerGets); ok {
+			// MPT issuers have bounded self-issuance. Reuse the running
+			// balance for later offers from the same issuer so the issuance
+			// headroom is consumed once per book walk.
+			if prev, seen := balances[offer.Account]; seen {
+				ownerFunds = prev
+				firstOwnerOffer = false
+			} else {
+				funds, result := mptutil.IssuerFundsToSelfIssue(view, id)
+				if result == ter.TefINTERNAL {
+					return BookOffer{}, fmt.Errorf("book_offers MPT issuer funds: %s", result)
+				}
+				if result != ter.TesSUCCESS {
+					funds = 0
+				}
+				ownerFunds = state.NewMPTAmountWithIssuanceID(
+					funds,
+					amountIssuer(takerGets),
+					takerGets.MPTIssuanceID(),
+				)
+			}
+		} else {
+			// IOU issuers can always self-issue the offered amount.
+			// firstOwnerOffer stays true for this per-iteration branch.
+			ownerFunds = offer.TakerGets
+		}
 	case bGlobalFreeze:
 		// rippled NetworkOPs.cpp:4522-4527: global freeze ⇒ treat as
 		// unfunded. firstOwnerOffer stays true.
@@ -534,11 +557,23 @@ func amountIssuer(amount tx.Amount) string {
 }
 
 func amountGlobalFrozen(view tx.LedgerView, amount tx.Amount) bool {
+	if id, ok := amountMPTID(amount); ok {
+		return mptutil.IsGlobalFrozen(view, id)
+	}
+	if amount.IsMPT() {
+		return false
+	}
 	issuer := amountIssuer(amount)
 	return issuer != "" && tx.IsGlobalFrozen(view, issuer)
 }
 
 func amountTransferRate(view tx.LedgerView, amount tx.Amount) uint32 {
+	if id, ok := amountMPTID(amount); ok {
+		return mptutil.TransferRate(view, id)
+	}
+	if amount.IsMPT() {
+		return tx.TransferRateParity
+	}
 	issuer := amountIssuer(amount)
 	if issuer == "" {
 		return tx.TransferRateParity

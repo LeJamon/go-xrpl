@@ -33,7 +33,7 @@ func AccountSourceCurrencies(account [20]byte, cache *RippleLineCache) map[payme
 		}
 	}
 	for _, mpt := range cache.GetMPTs(account) {
-		if !mpt.ZeroBalance && !mpt.MaxedOut {
+		if mpt.CanSend(account) {
 			currencies[payment.NewMPTIssue(mpt.ID)] = true
 		}
 	}
@@ -58,9 +58,9 @@ func AccountDestCurrencies(account [20]byte, cache *RippleLineCache) map[payment
 		}
 	}
 	for _, mpt := range cache.GetMPTs(account) {
-		if mpt.ZeroBalance && !mpt.MaxedOut {
-			currencies[payment.NewMPTIssue(mpt.ID)] = true
-		}
+		// An existing issuance or holding remains a valid destination even
+		// when the issuer has reached its issuance limit.
+		currencies[payment.NewMPTIssue(mpt.ID)] = true
 	}
 
 	return currencies

@@ -72,6 +72,16 @@ type PathFindMPT struct {
 	MaxedOut    bool
 }
 
+// CanSend reports whether the account represented by a cached MPT entry can
+// send that issuance. The issuer may self-issue until the issuance limit, while
+// a holder may send any non-zero balance even when the issuance is maxed out.
+func (m PathFindMPT) CanSend(account [20]byte) bool {
+	if account == mptutil.Issuer(m.ID) {
+		return !m.MaxedOut
+	}
+	return !m.ZeroBalance
+}
+
 // accountKey is the cache key for RippleLineCache.
 type accountKey struct {
 	Account   [20]byte
