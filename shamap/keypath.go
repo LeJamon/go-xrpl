@@ -10,7 +10,8 @@ const (
 func selectBranch(nodeID NodeID, key [32]byte) uint8 {
 	depth := nodeID.depth
 	if depth >= maxDepth {
-		return 0
+		// A leaf-depth ID has no next nibble; keep malformed requests bounded.
+		depth = maxDepth - 1
 	}
 	byteIndex := depth / 2
 	if byteIndex >= 32 {
