@@ -85,6 +85,7 @@ func checkValidMPTTransfer(tx Transaction, result Result, entries []InvariantEnt
 		if e.EntryType != entry.TypeMPToken {
 			continue
 		}
+		var beforeToken *state.MPTokenData
 		setImage := func(data []byte, before bool) *InvariantViolation {
 			if data == nil {
 				return nil
@@ -92,6 +93,11 @@ func checkValidMPTTransfer(tx Transaction, result Result, entries []InvariantEnt
 			token, err := state.ParseMPToken(data)
 			if err != nil {
 				return invalidMPTTransfer(fmt.Sprintf("MPToken: %v", err))
+			}
+			if before {
+				beforeToken = token
+			} else if beforeToken != nil && (beforeToken.MPTokenIssuanceID != token.MPTokenIssuanceID || beforeToken.Account != token.Account) {
+				return invalidMPTTransfer("MPToken issuance or holder changed")
 			}
 			byHolder := changes[token.MPTokenIssuanceID]
 			if byHolder == nil {

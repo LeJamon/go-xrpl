@@ -306,10 +306,15 @@ func addEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset, p
 	if tx.IsGlobalFrozen(ctx.View, asset.Issuer) {
 		return 0, ter.TecFROZEN
 	}
-	if fix340 {
-		if result := canAddHoldingIssue(ctx.View, asset); result != ter.TesSUCCESS {
-			return 0, result
+	issuer, err := tx.ReadAccountRoot(ctx.View, issuerID)
+	if err != nil || issuer == nil {
+		return 0, ter.TefINTERNAL
+	}
+	if issuer.Flags&state.LsfDefaultRipple == 0 {
+		if fix340 {
+			return 0, ter.TerNO_RIPPLE
 		}
+		return 0, ter.TecINTERNAL
 	}
 
 	lineKey := keylet.Line(issuerID, accountID, asset.Currency)

@@ -271,7 +271,7 @@ func TestLoanDefaultMPTFreezeGateAndExemption(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			tx, view, entries := mptDefaultFixture(t, assetID, test.flags, sender, receiver, test.tokenFlags)
-			got := checkLoanDefaultMPTTransfer(tx, TesSUCCESS, entries, view, test.rules) != nil
+			got := checkValidMPTTransfer(tx, TesSUCCESS, entries, view, test.rules) != nil
 			if got != test.want {
 				t.Fatalf("violation = %v, want %v", got, test.want)
 			}
@@ -326,7 +326,7 @@ func TestLoanDefaultMPTFreezeExemptionScope(t *testing.T) {
 				test.receiver,
 				0,
 			)
-			got := checkLoanDefaultMPTTransfer(tx, TesSUCCESS, entries, view, rules) != nil
+			got := checkValidMPTTransfer(tx, TesSUCCESS, entries, view, rules) != nil
 			if got != test.want {
 				t.Fatalf("violation = %v, want %v", got, test.want)
 			}
@@ -349,7 +349,7 @@ func TestLoanDefaultMPTAuthorizationScope(t *testing.T) {
 		receiver,
 		0,
 	)
-	if got := checkLoanDefaultMPTTransfer(tx, TesSUCCESS, entries, view, mptDefaultRules(true, false)); got == nil {
+	if got := checkValidMPTTransfer(tx, TesSUCCESS, entries, view, mptDefaultRules(true, false)); got == nil {
 		t.Fatal("cleanup freeze exemption must not bypass ordinary-holder MPT authorization")
 	}
 }
@@ -389,7 +389,7 @@ func TestLoanDefaultMPTAuthorizationUsesPreTransactionPseudo(t *testing.T) {
 			Before:    before,
 			After:     after,
 		})
-		if got := checkLoanDefaultMPTTransfer(tx, TesSUCCESS, entries, view, mptDefaultRules(true, false)); got != nil {
+		if got := checkValidMPTTransfer(tx, TesSUCCESS, entries, view, mptDefaultRules(true, false)); got != nil {
 			t.Fatalf("pre-transaction pseudo-account should remain authorized: %v", got)
 		}
 	})
@@ -410,10 +410,10 @@ func TestLoanDefaultMPTAuthorizationUsesPreTransactionPseudo(t *testing.T) {
 			Before:    before,
 			After:     after,
 		})
-		if got := checkLoanDefaultMPTTransfer(tx, TesSUCCESS, entries, view, mptDefaultRules(true, false)); got == nil {
+		if got := checkValidMPTTransfer(tx, TesSUCCESS, entries, view, mptDefaultRules(true, false)); got == nil {
 			t.Fatal("cleanup-only requireAuth must not exempt current pseudo status")
 		}
-		if got := checkLoanDefaultMPTTransfer(tx, TesSUCCESS, entries, view, mptDefaultRules(true, true)); got != nil {
+		if got := checkValidMPTTransfer(tx, TesSUCCESS, entries, view, mptDefaultRules(true, true)); got != nil {
 			t.Fatalf("MPTokensV2 requireAuth should use current pseudo status: %v", got)
 		}
 	})
@@ -437,7 +437,7 @@ func TestLoanDefaultMPTAuthorizationUsesPreTransactionPseudo(t *testing.T) {
 			Before:    before,
 			After:     before,
 		})
-		if got := checkLoanDefaultMPTTransfer(tx, TesSUCCESS, entries, view, mptDefaultRules(true, false)); got != nil {
+		if got := checkValidMPTTransfer(tx, TesSUCCESS, entries, view, mptDefaultRules(true, false)); got != nil {
 			t.Fatalf("touched ordinary authorized holder should pass: %v", got)
 		}
 	})
@@ -461,7 +461,7 @@ func TestLoanDefaultMPTAuthorizationUsesPreTransactionPseudo(t *testing.T) {
 			Before:    before,
 			After:     before,
 		})
-		if got := checkLoanDefaultMPTTransfer(tx, TesSUCCESS, entries, view, mptDefaultRules(true, false)); got != nil {
+		if got := checkValidMPTTransfer(tx, TesSUCCESS, entries, view, mptDefaultRules(true, false)); got != nil {
 			t.Fatalf("touched ordinary holder without auth requirement should pass: %v", got)
 		}
 	})
@@ -480,30 +480,30 @@ func TestLoanDefaultMPTFailedChangeCleanupGate(t *testing.T) {
 		0,
 	)
 
-	if got := checkLoanDefaultMPTTransfer(tx, TecINCOMPLETE, entries, view, mptDefaultRules(true, false)); got == nil {
+	if got := checkValidMPTTransfer(tx, TecINCOMPLETE, entries, view, mptDefaultRules(true, false)); got == nil {
 		t.Fatal("cleanup must reject MPT balance changes on a failed default")
 	}
-	if got := checkLoanDefaultMPTTransfer(tx, TecINCOMPLETE, entries, view, mptDefaultRules(false, true)); got != nil {
+	if got := checkValidMPTTransfer(tx, TecINCOMPLETE, entries, view, mptDefaultRules(false, true)); got != nil {
 		t.Fatalf("MPTokensV2 without cleanup must retain legacy behavior: %v", got)
 	}
 
 	deleted := append([]InvariantEntry(nil), entries...)
 	deleted[0].After = nil
 	deleted[0].IsDelete = true
-	if got := checkLoanDefaultMPTTransfer(tx, TecINCOMPLETE, deleted, view, mptDefaultRules(true, false)); got == nil {
+	if got := checkValidMPTTransfer(tx, TecINCOMPLETE, deleted, view, mptDefaultRules(true, false)); got == nil {
 		t.Fatal("cleanup must reject MPToken deletion on a failed default")
 	}
-	if got := checkLoanDefaultMPTTransfer(tx, TesSUCCESS, deleted, view, mptDefaultRules(true, false)); got != nil {
+	if got := checkValidMPTTransfer(tx, TesSUCCESS, deleted, view, mptDefaultRules(true, false)); got != nil {
 		t.Fatalf("successful MPToken deletion should pass: %v", got)
 	}
-	if got := checkLoanDefaultMPTTransfer(tx, TecINCOMPLETE, deleted, view, mptDefaultRules(false, true)); got != nil {
+	if got := checkValidMPTTransfer(tx, TecINCOMPLETE, deleted, view, mptDefaultRules(false, true)); got != nil {
 		t.Fatalf("MPTokensV2 without cleanup must retain legacy deletion behavior: %v", got)
 	}
 
 	unchanged := append([]InvariantEntry(nil), entries...)
 	unchanged[0].After = unchanged[0].Before
 	unchanged[1].After = unchanged[1].Before
-	if got := checkLoanDefaultMPTTransfer(tx, TecINCOMPLETE, unchanged, view, mptDefaultRules(true, false)); got != nil {
+	if got := checkValidMPTTransfer(tx, TecINCOMPLETE, unchanged, view, mptDefaultRules(true, false)); got != nil {
 		t.Fatalf("unchanged MPToken balances should pass on a failed default: %v", got)
 	}
 }
@@ -533,7 +533,7 @@ func TestLoanDefaultMPTOrphanHandling(t *testing.T) {
 		entries = entries[:1]
 		entries[0].After = nil
 		entries[0].IsDelete = true
-		if got := checkLoanDefaultMPTTransfer(tx, TesSUCCESS, entries, view, rules); got != nil {
+		if got := checkValidMPTTransfer(tx, TesSUCCESS, entries, view, rules); got != nil {
 			t.Fatalf("successful orphan MPToken deletion should pass: %v", got)
 		}
 	})
@@ -542,14 +542,14 @@ func TestLoanDefaultMPTOrphanHandling(t *testing.T) {
 		tx, view, entries := newOrphan(t)
 		entries[0].After = entries[0].Before
 		entries[1].After = entries[1].Before
-		if got := checkLoanDefaultMPTTransfer(tx, TecINCOMPLETE, entries, view, rules); got != nil {
+		if got := checkValidMPTTransfer(tx, TecINCOMPLETE, entries, view, rules); got != nil {
 			t.Fatalf("unchanged orphan MPToken balances should pass: %v", got)
 		}
 	})
 
 	t.Run("balance change fails", func(t *testing.T) {
 		tx, view, entries := newOrphan(t)
-		if got := checkLoanDefaultMPTTransfer(tx, TesSUCCESS, entries, view, rules); got == nil {
+		if got := checkValidMPTTransfer(tx, TesSUCCESS, entries, view, rules); got == nil {
 			t.Fatal("orphan MPToken balance change should fail")
 		}
 	})
@@ -559,7 +559,7 @@ func TestLoanDefaultMPTOrphanHandling(t *testing.T) {
 		entries = entries[:1]
 		entries[0].After = nil
 		entries[0].IsDelete = true
-		if got := checkLoanDefaultMPTTransfer(tx, TecINCOMPLETE, entries, view, rules); got == nil {
+		if got := checkValidMPTTransfer(tx, TecINCOMPLETE, entries, view, rules); got == nil {
 			t.Fatal("cleanup must reject orphan MPToken deletion on a failed default")
 		}
 	})

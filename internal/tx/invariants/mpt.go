@@ -430,20 +430,6 @@ func checkValidConfidentialMPToken(transaction Transaction, result Result, entri
 	return nil
 }
 
-// checkLoanDefaultMPTTransfer remains as a focused compatibility entry point for
-// the loan-default invariant tests and callers. The generic transfer checker now
-// carries the same freeze, authorization, and failure-gating rules for every
-// transaction type, including LoanManage defaults.
-func checkLoanDefaultMPTTransfer(
-	tx Transaction,
-	result Result,
-	entries []InvariantEntry,
-	view ReadView,
-	rules *amendment.Rules,
-) *InvariantViolation {
-	return checkValidMPTTransfer(tx, result, entries, view, rules)
-}
-
 func hasEncryptedBalances(token *state.MPTokenData) bool {
 	return len(token.ConfidentialBalanceInbox) != 0 || len(token.ConfidentialBalanceSpending) != 0 ||
 		len(token.IssuerEncryptedBalance) != 0 || len(token.AuditorEncryptedBalance) != 0

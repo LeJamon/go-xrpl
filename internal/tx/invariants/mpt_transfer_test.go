@@ -320,3 +320,22 @@ func mustSerializeMPToken(t *testing.T, token *state.MPTokenData) []byte {
 	}
 	return b
 }
+
+func TestValidMPTTransferRejectsIdentityChange(t *testing.T) {
+	before := state.MPTokenData{Account: [20]byte{1}, MPTokenIssuanceID: [24]byte{2}}
+	for _, field := range []string{"holder", "issuance"} {
+		t.Run(field, func(t *testing.T) {
+			after := before
+			if field == "holder" {
+				after.Account[0]++
+			} else {
+				after.MPTokenIssuanceID[0]++
+			}
+			entries := []InvariantEntry{{EntryType: entry.TypeMPToken, Before: mustSerializeMPToken(t, &before), After: mustSerializeMPToken(t, &after)}}
+			violation := checkValidMPTTransfer(stubTx{txType: protocol.TxTypeLoanManage}, TesSUCCESS, entries, &mptTransferView{}, mptTransferRules(amendment.FeatureFixCleanup3_4_0))
+			if violation == nil || violation.Message != "MPToken issuance or holder changed" {
+				t.Fatalf("identity change: got %v", violation)
+			}
+		})
+	}
+}
