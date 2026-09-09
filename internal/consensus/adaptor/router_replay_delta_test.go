@@ -1162,7 +1162,8 @@ func TestRouter_ValidatedTargetArmsAcquisition(t *testing.T) {
 	}
 	r.peersMu.Unlock()
 
-	// Hash is arbitrary — we only verify the router asks for it.
+	// Hash is arbitrary — the trusted target should first be resolved through
+	// header ancestry, because no parent links are known yet.
 	var validatedHash [32]byte
 	for i := range validatedHash {
 		validatedHash[i] = byte(0xA0 + i%16)
@@ -1171,17 +1172,13 @@ func TestRouter_ValidatedTargetArmsAcquisition(t *testing.T) {
 
 	r.onLedgerFullyValidated(validatedSeq, validatedHash)
 
-	totalCalls := len(rs.replayCalls()) + len(rs.legacyCalls())
-	require.Equal(t, 1, totalCalls,
-		"router must auto-arm exactly one acquisition for the validated target")
-
-	armedHash, armedSeq := autoArmTarget(rs)
-	assert.Equal(t, validatedHash, armedHash,
-		"auto-armed acquisition must target the validated target's hash")
-	if armedSeq != 0 {
-		assert.Equal(t, validatedSeq, armedSeq,
-			"auto-armed acquisition must carry the stashed validation's seq (legacy path)")
-	}
+	requests := rs.headerRequests()
+	require.Len(t, requests, 1,
+		"router must auto-arm exactly one bounded ancestry request for the validated target")
+	assert.Equal(t, validatedHash, requests[0].hash)
+	assert.Equal(t, validatedSeq, requests[0].seq)
+	assert.Empty(t, rs.replayCalls())
+	assert.Empty(t, rs.legacyCalls())
 }
 
 // Dispatching to peerID=0 would race against the wire layer's per-peer

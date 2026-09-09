@@ -88,12 +88,21 @@ func (r *Router) startHeaderParentDiscovery(
 
 	r.headerDiscoveryMu.Lock()
 	if current := r.headerDiscovery; current != nil {
-		// The admitted target and replay base are immutable for this walk.
-		// A newer validation is re-armed after it completes, so it cannot
-		// replace the anchor while replies are in flight.
-		active := !current.terminal
-		r.headerDiscoveryMu.Unlock()
-		return active
+		if current.terminal &&
+			(baseSeq > current.baseSeq || current.baseHash != base.Hash()) {
+			// A completed fallback or ledger switch moved the replay anchor.
+			// Retire the old terminal session so a later outage gets a fresh
+			// bounded budget; a moving target alone must not reset a failed walk.
+			r.headerDiscoveryGeneration++
+			r.headerDiscovery = nil
+		} else {
+			// The admitted target and replay base are immutable for this walk.
+			// A newer validation is re-armed after it completes, so it cannot
+			// replace the anchor while replies are in flight.
+			active := !current.terminal
+			r.headerDiscoveryMu.Unlock()
+			return active
+		}
 	}
 	r.headerDiscoveryGeneration++
 	now := time.Now()
@@ -208,6 +217,21 @@ func (r *Router) maybeStartHeaderParentDiscovery(target catchupTarget, peerHint 
 	}
 	svc := r.adaptor.LedgerService()
 	if svc == nil || svc.NeedsInitialSync() || svc.IsFastLoadProvisional() {
+		return false
+	}
+	if r.isBuildingLedger(target.seq) {
+		return false
+	}
+	r.acquisitionMu.Lock()
+	activePivotReachesTarget := r.standardReplay.active &&
+		r.standardReplay.pivotSeq < target.seq &&
+		r.recoveryAnchorReachesTarget(
+			r.standardReplay.pivotSeq,
+			r.standardReplay.pivotHash,
+			target.hash,
+		)
+	r.acquisitionMu.Unlock()
+	if activePivotReachesTarget {
 		return false
 	}
 	base := r.catchupReplayBase(svc)
@@ -415,6 +439,27 @@ func (r *Router) cancelHeaderDiscovery() {
 	r.headerDiscoveryMu.Unlock()
 }
 
+// retireHeaderDiscoveryForRecovery releases a terminal walk once recovery has
+// produced a new local anchor. A failed walk keeps its bounded budget across
+// repeated status updates, but it must not prevent a later outage from
+// starting a fresh walk after a ledger completion or branch switch.
+func (r *Router) retireHeaderDiscoveryForRecovery(seq uint32, hash [32]byte) {
+	if seq == 0 || hash == ([32]byte{}) {
+		return
+	}
+	r.headerDiscoveryMu.Lock()
+	current := r.headerDiscovery
+	if current == nil ||
+		seq < current.baseSeq ||
+		(seq == current.baseSeq && hash == current.baseHash) {
+		r.headerDiscoveryMu.Unlock()
+		return
+	}
+	r.headerDiscoveryGeneration++
+	r.headerDiscovery = nil
+	r.headerDiscoveryMu.Unlock()
+}
+
 func (r *Router) headerDiscoveryPeerDisconnected(peerID uint64) {
 	if peerID == 0 {
 		return
@@ -500,10 +545,19 @@ func (r *Router) handleHeaderDiscoveryReply(ld *message.LedgerData, peerID uint6
 		r.retryHeaderDiscoveryPeer(generation, peerID, err)
 		return true
 	}
-	if ld.LedgerSeq != expectedSeq || h.LedgerIndex != expectedSeq ||
-		h.ParentHash == ([32]byte{}) || header.CalculateHash(*h) != expected {
+	if ld.LedgerSeq != expectedSeq || header.CalculateHash(*h) != expected {
 		r.retryHeaderDiscoveryPeer(generation, peerID,
 			fmt.Errorf("header does not match requested sequence/hash: requested %d/%x, got %d/%x", expectedSeq, expected[:8], h.LedgerIndex, h.Hash[:8]))
+		return true
+	}
+	if h.LedgerIndex != expectedSeq {
+		r.failHeaderDiscovery(generation, errHeaderDiscoveryConflict, peerID,
+			fmt.Errorf("header sequence %d conflicts with requested sequence %d", h.LedgerIndex, expectedSeq))
+		return true
+	}
+	if h.ParentHash == ([32]byte{}) {
+		r.retryHeaderDiscoveryPeer(generation, peerID,
+			fmt.Errorf("header %d has no parent hash", expectedSeq))
 		return true
 	}
 	if expectedSeq == baseSeq+1 && h.ParentHash != baseHash {

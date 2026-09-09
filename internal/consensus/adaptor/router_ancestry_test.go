@@ -1,10 +1,12 @@
 package adaptor
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/assert"
@@ -281,6 +283,33 @@ func TestRouter_HeaderDiscoveryRejectsReplyAfterDeadline(t *testing.T) {
 	r.headerDiscoveryMu.Unlock()
 }
 
+func TestRouter_HeaderDiscoveryRetiresTerminalSessionOnlyAfterNewAnchor(t *testing.T) {
+	r, _, sender, svc := makeRouter(t)
+	base := svc.GetClosedLedger()
+	require.NotNil(t, base)
+	first := buildAlternativeReplaySuccessor(t, base, time.Second)
+	newer := buildAlternativeReplaySuccessor(t, first.ledger, time.Second)
+	startTestHeaderDiscovery(t, r, base.Sequence(), first, 7, catchupSourceQuorum)
+
+	r.headerDiscoveryMu.Lock()
+	r.headerDiscovery.terminal = true
+	r.headerDiscovery.deadline = time.Now().Add(-time.Second)
+	r.headerDiscoveryMu.Unlock()
+	r.recordValidationCatchupTarget(newer.seq, newer.hash, 7, catchupSourceQuorum)
+	assert.False(t, r.startHeaderParentDiscovery(base, newer.seq, newer.hash, 7, catchupSourceQuorum))
+	assert.Len(t, sender.headerRequests(), 1, "a moving target must not reset a terminal session")
+
+	// Complete a newly built local ledger. The next outage must receive a fresh
+	// bounded session budget after that anchor advances.
+	_, err := svc.AcceptConsensusResult(context.Background(), svc.GetClosedLedger(), nil, nil, time.Now(), true)
+	require.NoError(t, err)
+	built := svc.GetClosedLedger()
+	require.NotNil(t, built)
+	r.onLedgerBuilt(built.Sequence(), built.Hash())
+	assert.Len(t, sender.headerRequests(), 2)
+	r.cancelHeaderDiscovery()
+}
+
 func TestRouter_HeaderDiscoveryValidWrongParentFallsBackWithoutChargingPeer(t *testing.T) {
 	r, sender := makeRouterWithBadDataRecorder(t)
 	svc := r.adaptor.LedgerService()
@@ -304,6 +333,33 @@ func TestRouter_HeaderDiscoveryValidWrongParentFallsBackWithoutChargingPeer(t *t
 	r.headerDiscoveryMu.Lock()
 	assert.True(t, r.headerDiscovery.terminal)
 	r.headerDiscoveryMu.Unlock()
+}
+
+func TestRouter_HeaderDiscoveryWrongEmbeddedSequenceIsConflict(t *testing.T) {
+	r, sender := makeRouterWithBadDataRecorder(t)
+	svc := r.adaptor.LedgerService()
+	base := svc.GetClosedLedger()
+	require.NotNil(t, base)
+	link := buildAlternativeReplaySuccessor(t, base, time.Second)
+	wrong := link
+	h := link.ledger.Header()
+	h.LedgerIndex--
+	h.Hash = header.CalculateHash(h)
+	wrong.hash = h.Hash
+	wrong.response = &message.ReplayDeltaResponse{
+		LedgerHash:   h.Hash[:],
+		LedgerHeader: header.AddRaw(h, false),
+	}
+	startTestHeaderDiscovery(t, r, base.Sequence(), wrong, 7, catchupSourceQuorum)
+
+	sendTestHeaderReply(t, r, 7, wrong)
+	assert.Empty(t, sender.getBadDataCalls(), "authentic wrong-sequence ancestry is a branch conflict")
+	assert.Len(t, sender.headerRequests(), 1)
+	r.headerDiscoveryMu.Lock()
+	assert.True(t, r.headerDiscovery.terminal)
+	r.headerDiscoveryMu.Unlock()
+	_, known := r.lookupSeqHash(wrong.seq)
+	assert.False(t, known)
 }
 
 func TestRouter_HeaderDiscoveryPublishesNoPrefixAfterLateConflict(t *testing.T) {

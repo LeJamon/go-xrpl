@@ -252,7 +252,7 @@ func TestRouter_Issue1668FrozenPivotCollectsAndReplaysMovingHead(t *testing.T) {
 
 	initialHead := links[11]
 	trackCatchupPeer(r, 7, initialHead.seq, initialHead.hash)
-	a.OnLedgerFullyValidated(consensus.LedgerID(initialHead.hash), initialHead.seq)
+	r.onLedgerFullyValidated(initialHead.seq, initialHead.hash)
 	require.Equal(t, initialHead.seq, r.standardReplay.targetSeq)
 	require.Equal(t, standardReplayPipelineWindow, r.standardReplayResidentCountLocked())
 	for i := range standardReplayPipelineWindow {
@@ -288,7 +288,7 @@ func TestRouter_Issue1668FrozenPivotCollectsAndReplaysMovingHead(t *testing.T) {
 
 	movedHead := links[maxForwardDeltaGap+8]
 	trackCatchupPeer(r, 7, movedHead.seq, movedHead.hash)
-	a.OnLedgerFullyValidated(consensus.LedgerID(movedHead.hash), movedHead.seq)
+	r.onLedgerFullyValidated(movedHead.seq, movedHead.hash)
 	assert.Equal(t, generation, r.standardReplay.generation)
 	assert.Equal(t, pivotSeq, r.standardReplay.pivotSeq)
 	assert.Equal(t, pivotHash, r.standardReplay.pivotHash)

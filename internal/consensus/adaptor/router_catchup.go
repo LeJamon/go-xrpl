@@ -475,11 +475,14 @@ func (r *Router) recordAcquiredSeqHashChainLocked(
 	if len(headers) == 0 {
 		return true
 	}
-	if localAnchor > r.seqHashAnchor {
-		r.seqHashAnchor = localAnchor
+	anchor := r.seqHashAnchor
+	if localAnchor > anchor {
+		anchor = localAnchor
 	}
-	r.pruneSeqHashLocked()
 	for _, h := range headers {
+		if !seqHashWithinAnchor(h.LedgerIndex, anchor) {
+			return false
+		}
 		e := r.seqHash[h.LedgerIndex]
 		if e.hash != ([32]byte{}) && e.hash != h.Hash && e.source >= seqHashSourceValidation {
 			return false
@@ -488,6 +491,8 @@ func (r *Router) recordAcquiredSeqHashChainLocked(
 			return false
 		}
 	}
+	r.seqHashAnchor = anchor
+	r.pruneSeqHashLocked()
 	for _, h := range headers {
 		r.recordSeqHashFromLocked(
 			h.LedgerIndex,
@@ -1094,7 +1099,8 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 	}
 
 	if target.source == catchupSourcePeer || svc.IsFastLoadProvisional() {
-		if seq, hash, ok := r.forwardDeltaStep(svc, actualClosed, tSeq); ok {
+		if seq, hash, ok := r.forwardDeltaStep(svc, actualClosed, tSeq); ok &&
+			!r.locallySatisfiesLedger(seq, hash) {
 			r.clearPeerStatusEvidence(actualClosed, tSeq, tHash)
 			peer, found := r.resolveAcquisitionPeer(seq, peerHint)
 			if !found {
@@ -1340,6 +1346,9 @@ func (r *Router) startLedgerAcquisition(seq uint32, hash [32]byte, peerID uint64
 
 func (r *Router) startLedgerAcquisitionFromParent(seq uint32, hash [32]byte, peerID uint64, parent *ledger.Ledger) bool {
 	if seq != 0 && r.belowFloor(seq) {
+		return false
+	}
+	if r.isBuildingLedger(seq) {
 		return false
 	}
 	if target := r.credibleCatchupFrontier(); target.seq == seq && target.hash == hash &&
@@ -1812,6 +1821,7 @@ func (r *Router) onLedgerFullyValidated(seq uint32, hash [32]byte) {
 	r.recordSeqHash(seq, hash, [32]byte{}, false)
 	if r.locallySatisfiesLedger(seq, hash) {
 		r.retireLocallySatisfiedLedger(seq, hash, "ledger_validated")
+		r.retireHeaderDiscoveryForRecovery(seq, hash)
 	}
 
 	removed := make(map[[32]byte]struct{})
@@ -2453,6 +2463,7 @@ func (r *Router) completeStoredConsensusRecovery(seq uint32, hash, parentHash [3
 	} else if !obsolete {
 		r.recordAcquiredSeqHash(seq, hash, parentHash)
 	}
+	r.retireHeaderDiscoveryForRecovery(seq, hash)
 	if obsolete {
 		r.obsoleteAcquisitionCompleted.Add(1)
 		r.armConsensusCatchup()
@@ -2867,6 +2878,7 @@ func (r *Router) isBuildingLedger(seq uint32) bool {
 
 func (r *Router) onLedgerBuilt(seq uint32, hash [32]byte) {
 	r.retireLocallySatisfiedLedger(seq, hash, "ledger_built")
+	r.retireHeaderDiscoveryForRecovery(seq, hash)
 	r.armCatchupTowardTarget()
 }
 
