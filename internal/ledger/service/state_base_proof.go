@@ -34,7 +34,9 @@ func (s *Service) rememberValidatedStateBase(h header.LedgerHeader, fingerprint 
 	}
 	s.validatedStateBaseMu.Lock()
 	s.validatedStateBaseProof = &proof
-	s.validatedStateBaseCandidate = nil
+	if candidate := s.validatedStateBaseCandidate; candidate != nil && candidate.sequence <= proof.sequence {
+		s.validatedStateBaseCandidate = nil
+	}
 	s.validatedStateBaseMu.Unlock()
 }
 
@@ -291,11 +293,11 @@ func (s *Service) advanceValidatedStateBaseProof(ctx context.Context, l *ledger.
 	}
 	if !proofMatches {
 		s.validatedStateBaseMu.Lock()
-		if candidateFound && s.validatedStateBaseCandidate != nil &&
+		if candidateFound && candidateIdentity.sequence <= h.LedgerIndex && s.validatedStateBaseCandidate != nil &&
 			*s.validatedStateBaseCandidate == candidateIdentity {
 			s.validatedStateBaseCandidate = nil
 		}
-		if found && s.validatedStateBaseProof != nil && *s.validatedStateBaseProof == proof {
+		if found && proof.sequence <= h.LedgerIndex && s.validatedStateBaseProof != nil && *s.validatedStateBaseProof == proof {
 			s.validatedStateBaseProof = nil
 		}
 		s.validatedStateBaseMu.Unlock()

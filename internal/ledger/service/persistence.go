@@ -317,7 +317,7 @@ func (s *Service) runPersistJob(job *persistJob) {
 		updateTip := job.updatesTip.Load()
 		var err error
 		if !job.canceled.Load() && job.tipOnly {
-			if s.nodeStore != nil && s.relationalDB != nil {
+			if s.nodeStore != nil {
 				err = s.persistValidatedTipJob(
 					context.Background(),
 					job.l,
@@ -343,7 +343,7 @@ func (s *Service) runPersistJob(job *persistJob) {
 			delete(s.validatedPersistJobs, job.l.Sequence())
 		}
 		s.persistMu.Unlock()
-		if err == nil && lateTip && s.nodeStore != nil && s.relationalDB != nil {
+		if err == nil && lateTip && s.nodeStore != nil {
 			err = s.persistValidatedTipJob(
 				context.Background(),
 				job.l,
@@ -498,7 +498,11 @@ func (s *Service) persistValidatedTipJob(
 	if canceled != nil && canceled() {
 		return nil
 	}
-	return s.persistValidatedTipLocked(ctx, l, allowSameSequenceReplacement)
+	if err := s.persistValidatedTipLocked(ctx, l, allowSameSequenceReplacement); err != nil {
+		return err
+	}
+	s.tryAdvanceValidatedStateBaseProof(ctx, l)
+	return nil
 }
 
 func (s *Service) persistValidatedTipLocked(
