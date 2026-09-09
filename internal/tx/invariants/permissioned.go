@@ -226,6 +226,7 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 	// entry (size == 1); before the amendment, only a missing field or size > 1
 	// was rejected (an empty array slipped through).
 	hybridSizeStrict := rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_1_3)
+	cleanup340 := rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0)
 	txType := tx.TxType()
 
 	// Only check for Payment and OfferCreate with tesSUCCESS.
@@ -247,7 +248,11 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 		// rippled visitEntry inspects the entry's final state (its "after"); for a
 		// delete that is the erased SLE, which goXRPL carries as Before.
 		image := e.After
-		if image == nil {
+		if cleanup340 {
+			if e.IsDelete {
+				image = e.DeleteFinal
+			}
+		} else if image == nil {
 			image = e.Before
 		}
 		if image == nil {
@@ -263,7 +268,9 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 			// Check if the DirNode has a DomainID field.
 			// Reference: rippled lines 1643-1647
 			if domainID, present := extractDomainIDFromBinary(image); present {
-				domains[domainID] = true
+				if !cleanup340 || !e.IsDelete {
+					domains[domainID] = true
+				}
 			}
 
 		case entry.TypeOffer:
@@ -276,7 +283,9 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 			}
 
 			if offer.DomainID != zeroHash {
-				domains[offer.DomainID] = true
+				if !cleanup340 || !e.IsDelete {
+					domains[offer.DomainID] = true
+				}
 			} else {
 				// A deleted regular offer counts only for the pre-fixCleanup3_2_0
 				// set: the amendment stops the invariant firing on a domain

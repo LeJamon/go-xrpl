@@ -265,7 +265,7 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 			if err != nil {
 				return ter.TecNO_ISSUER
 			}
-			result = checkAcceptAsset(view, accountID, paysIssuerID, saTakerPays.Currency)
+			result = checkAcceptAsset(view, accountID, paysIssuerID, saTakerPays.Currency, config)
 		}
 		if result != ter.TesSUCCESS {
 			return result
@@ -275,7 +275,7 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 	// Check domain membership if DomainID is specified
 	// Reference: lines 217-222
 	if o.DomainID != nil {
-		if !accountInDomain(view, accountID, *o.DomainID, config.ParentCloseTime) {
+		if !permissioneddomain.DEXDomainPreclaim(view, accountID, *o.DomainID, config) {
 			return ter.TecNO_PERMISSION
 		}
 	}
@@ -319,7 +319,7 @@ func checkAcceptMPT(view tx.LedgerView, accountID [20]byte, amount tx.Amount, pa
 
 // checkAcceptAsset validates that an account can receive an asset.
 // Reference: rippled CreateOffer.cpp checkAcceptAsset() lines 227-312
-func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency string) ter.Result {
+func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency string, config tx.EngineConfig) ter.Result {
 	// Read issuer account
 	issuerAccount, err := tx.ReadAccountRoot(view, issuerID)
 	if err != nil || issuerAccount == nil {
@@ -331,6 +331,16 @@ func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency
 	// Reference: lines 254-256
 	if accountID == issuerID {
 		return ter.TesSUCCESS
+	}
+
+	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0) && issuerAccount.Flags&state.LsfDisallowIncomingTrustline != 0 {
+		line, err := view.Read(keylet.Line(accountID, issuerID, currency))
+		if err != nil || line == nil {
+			if config.ApplyFlags&tx.TapRETRY != 0 {
+				return ter.TerNO_LINE
+			}
+			return ter.TecNO_LINE
+		}
 	}
 
 	// Reference: lines 258-282

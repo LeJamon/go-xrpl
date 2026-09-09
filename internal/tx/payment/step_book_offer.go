@@ -229,6 +229,10 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 					continue
 				}
 
+				if rules := sb.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0) && s.domainID != nil && offer.DomainID != *s.domainID {
+					throwFlowError(ter.TecINTERNAL)
+				}
+
 				// The single funded/groom rule, applied to every offer the walk
 				// steps onto and read from the live working sandbox — rippled's
 				// OfferStream::step. A deep-frozen or zero-amount offer is a
