@@ -188,7 +188,7 @@ func TestRouter_HeaderDiscoveryRetriesTransientSendError(t *testing.T) {
 	r.headerDiscoveryMu.Unlock()
 }
 
-func TestRouter_HeaderDiscoveryRetriesUnavailableReply(t *testing.T) {
+func TestRouter_HeaderDiscoveryRejectsMalformedErrorReply(t *testing.T) {
 	r, sender := makeRouterWithBadDataRecorder(t)
 	svc := r.adaptor.LedgerService()
 	base := svc.GetClosedLedger()
@@ -213,7 +213,8 @@ func TestRouter_HeaderDiscoveryRetriesUnavailableReply(t *testing.T) {
 	requests := sender.headerRequests()
 	require.Len(t, requests, 2)
 	assert.Equal(t, uint64(8), requests[1].peerID)
-	assert.Empty(t, sender.getBadDataCalls(), "unavailable is a retryable response, not bad peer data")
+	require.Len(t, sender.getBadDataCalls(), 1)
+	assert.Equal(t, "ledger-header-ancestry", sender.getBadDataCalls()[0].reason)
 	sendTestHeaderReply(t, r, 8, link)
 	_, known := r.lookupSeqHash(link.seq)
 	assert.True(t, known)

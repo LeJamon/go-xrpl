@@ -74,11 +74,13 @@ func TestHeaderDiscoveryWireEnvelope(t *testing.T) {
 		age        time.Duration
 		gap        int
 		emptyError bool
+		errorFlag  bool
 		wantReason string
 	}{
 		{name: "fresh at sequence limit", age: 10 * time.Second, gap: 10},
 		{name: "fresh beyond sequence limit", age: 10 * time.Second, gap: 11, wantReason: "ledger-data-sequence"},
 		{name: "stale beyond sequence limit", age: 11 * time.Second, gap: 11},
+		{name: "valid header with error flag", age: 11 * time.Second, gap: 11, errorFlag: true},
 		{name: "empty unavailable reply", age: 90 * time.Second, gap: 1, emptyError: true, wantReason: "ledger-data-count"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -100,6 +102,8 @@ func TestHeaderDiscoveryWireEnvelope(t *testing.T) {
 			}
 			if tc.emptyError {
 				data.Nodes = nil
+			}
+			if tc.emptyError || tc.errorFlag {
 				data.Error = message.ReplyErrorNoLedger
 				data.ErrorSet = true
 			}

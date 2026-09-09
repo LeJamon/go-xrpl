@@ -512,13 +512,6 @@ func (r *Router) handleHeaderDiscoveryReply(ld *message.LedgerData, peerID uint6
 		return false
 	}
 
-	if ld.HasError() {
-		if ld.Error < message.ReplyErrorNoLedger || ld.Error > message.ReplyErrorBadRequest {
-			return false
-		}
-		r.retryHeaderDiscoveryUnavailable(generation, peerID, fmt.Errorf("peer reply error %d", ld.Error))
-		return true
-	}
 	h, err := decodeHeaderDiscoveryHeader(ld)
 	if err != nil {
 		r.retryHeaderDiscoveryPeer(generation, peerID, err)
@@ -585,11 +578,6 @@ func (r *Router) handleHeaderDiscoveryReply(ld *message.LedgerData, peerID uint6
 func (r *Router) retryHeaderDiscoveryPeer(generation, peerID uint64, detail error) {
 	r.headerDiscoveryRequestFailed(generation, detail)
 	r.acquisition.IncPeerBadData(peerID, "ledger-header-ancestry")
-	r.retryHeaderDiscovery(generation)
-}
-
-func (r *Router) retryHeaderDiscoveryUnavailable(generation uint64, _ uint64, detail error) {
-	r.headerDiscoveryRequestFailed(generation, detail)
 	r.retryHeaderDiscovery(generation)
 }
 
