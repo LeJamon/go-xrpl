@@ -26,12 +26,6 @@ func decodeEntry(data []byte) (map[string]any, error) {
 	return binarycodec.Decode(hex.EncodeToString(data))
 }
 
-// numFieldIsZero reports whether a NUMBER field is absent or zero.
-func numFieldIsZero(fields map[string]any, key string) bool {
-	v, ok := fields[key].(string)
-	return !ok || v == "" || v == "0"
-}
-
 // numFieldIsNegative reports whether a NUMBER field is present and negative (the
 // codec renders negatives with a leading '-').
 func numFieldIsNegative(fields map[string]any, key string) bool {
@@ -168,12 +162,6 @@ func transactionType(txn Transaction) TxType {
 		return TxType(0)
 	}
 	return txn.TxType()
-}
-
-// checkValidLoan preserves the package-local helper used by existing tests and
-// routes full engine checks through checkValidLoanForTx.
-func checkValidLoan(entries []InvariantEntry, rules *amendment.Rules) *InvariantViolation {
-	return checkValidLoanForTx(nil, TesSUCCESS, entries, nil, rules)
 }
 
 // checkValidLoanForTx enforces ValidLoan, including the V1.1 lifecycle and
@@ -445,7 +433,7 @@ func checkLoanRedemptionSchedule(loan map[string]any, vaultData []byte) *Invaria
 		return lendingViolation("ValidLoan", fmt.Sprintf("could not decode Vault: %v", err))
 	}
 	vaultKind, present := vvU64Present(vaultFields, "VaultKind")
-	if !present || uint8(vaultKind) != vvVaultKindClosedEnded {
+	if !present || uint8(vaultKind) != vault.VaultKindClosedEnded {
 		return nil
 	}
 	start := uint64(u32Field(loan, "StartDate"))
@@ -455,7 +443,7 @@ func checkLoanRedemptionSchedule(loan map[string]any, vaultData []byte) *Invaria
 	if !present {
 		return nil
 	}
-	if start+interval*remaining+vvLoanRedemptionBuffer > redemption {
+	if start+interval*remaining+vault.LoanRedemptionBuffer > redemption {
 		return lendingViolation("ValidLoan", "closed-ended loan final payment must precede RedemptionDate by at least the redemption buffer")
 	}
 	return nil

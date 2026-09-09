@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	vaulttx "github.com/LeJamon/go-xrpl/internal/tx/vault"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -167,7 +168,7 @@ func TestValidLoan_RedemptionScheduleRunsBeforeLendingGate(t *testing.T) {
 	})
 	vault := mustEncode(t, map[string]any{
 		"LedgerEntryType": "Vault",
-		"VaultKind":       uint8(vvVaultKindClosedEnded),
+		"VaultKind":       vaulttx.VaultKindClosedEnded,
 		"RedemptionDate":  uint32(1150),
 		"Asset":           map[string]any{"currency": "XRP"},
 	})
@@ -195,7 +196,7 @@ func TestValidLoan_RedemptionScheduleRunsBeforeLendingGate(t *testing.T) {
 
 	validVault := mustEncode(t, map[string]any{
 		"LedgerEntryType": "Vault",
-		"VaultKind":       uint8(vvVaultKindClosedEnded),
+		"VaultKind":       vaulttx.VaultKindClosedEnded,
 		"RedemptionDate":  uint32(1200),
 		"Asset":           map[string]any{"currency": "XRP"},
 	})

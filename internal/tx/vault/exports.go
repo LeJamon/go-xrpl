@@ -48,8 +48,11 @@ func PseudoAssetHoldsWithNumberContext(view AssetReadView, account [20]byte, vau
 	}
 	if isNativeAsset(vd.Asset) {
 		data, rerr := view.Read(keylet.Account(account))
-		if rerr != nil || data == nil {
+		if rerr != nil {
 			return zero(), false
+		}
+		if data == nil {
+			return zero(), true
 		}
 		ar, perr := state.ParseAccountRoot(data)
 		if perr != nil {

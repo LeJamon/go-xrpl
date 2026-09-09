@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -20,14 +21,6 @@ const (
 	ttLoanSet    TxType = 80
 	ttLoanManage TxType = 82
 	ttLoanPay    TxType = 84
-)
-
-const (
-	vvVaultKindClosedEnded = 1
-	vvMinInvestmentPeriod  = uint64(180)
-	// 30 Julian years, matching rippled's std::chrono::years{30}.
-	vvMaxInvestmentPeriod  = uint64(946708560)
-	vvLoanRedemptionBuffer = uint64(60)
 )
 
 // vvMaxMPTokenAmount is the default share-supply cap (2^63-1) when a share
@@ -456,35 +449,19 @@ func (c *vvChecker) fixCleanup3_4_0Enabled() bool {
 	return c.rules != nil && c.rules.Enabled(amendment.FeatureFixCleanup3_4_0)
 }
 
-type vvVaultPhase uint8
-
-const (
-	vvNoPhase vvVaultPhase = iota
-	vvSubscription
-	vvInvestment
-	vvRedemption
-)
-
-func (c *vvChecker) vaultPhase(v vvVault) vvVaultPhase {
-	if !v.hasVaultKind || v.vaultKind != vvVaultKindClosedEnded {
-		return vvNoPhase
+func (c *vvChecker) vaultPhase(v vvVault) vault.VaultPhase {
+	kind := vault.VaultKindOpenEnded
+	if v.hasVaultKind {
+		kind = v.vaultKind
 	}
-	// Missing dates behave as not-yet-expired in rippled's optional expiry
-	// helper. Creation separately rejects a closed-ended vault without both.
-	if !v.hasSubscriptionDate || !c.currentCloseTimeKnown || c.currentCloseTime <= v.subscriptionDate {
-		return vvSubscription
+	var subscription, redemption *uint32
+	if v.hasSubscriptionDate && c.currentCloseTimeKnown {
+		subscription = &v.subscriptionDate
 	}
-	if !v.hasRedemptionDate || c.currentCloseTime < v.redemptionDate {
-		return vvInvestment
+	if v.hasRedemptionDate {
+		redemption = &v.redemptionDate
 	}
-	return vvRedemption
-}
-
-func vvIsValidClosedEndedGap(subscription, redemption uint32) bool {
-	if uint64(redemption) < uint64(subscription)+vvMinInvestmentPeriod {
-		return false
-	}
-	return uint64(redemption) < uint64(subscription)+vvMaxInvestmentPeriod
+	return vault.GetVaultPhase(kind, subscription, redemption, c.currentCloseTime)
 }
 
 func (c *vvChecker) agreesWithinOneUnit(lhs, rhs state.XRPLNumber, asset vvAsset, scale int) bool {
@@ -658,7 +635,7 @@ func (c *vvChecker) finalizeUpdate() string {
 	case protocol.TxTypeVaultClawback:
 		return c.finalizeClawback(afterVault, beforeShares)
 	case ttLoanSet:
-		if c.vaultPhase(afterVault) != vvNoPhase && c.vaultPhase(afterVault) != vvInvestment {
+		if c.vaultPhase(afterVault) != vault.VaultPhaseNoPhase && c.vaultPhase(afterVault) != vault.VaultPhaseInvestment {
 			return "loan origination only allowed in Investment phase"
 		}
 		return ""
@@ -695,11 +672,11 @@ func (c *vvChecker) finalizeCreate(afterVault vvVault, updatedShares vvShares) s
 	if !ar.HasVaultID() || ar.VaultID != afterVault.key {
 		return "shares issuer pseudo-account must point back to the vault"
 	}
-	if afterVault.hasVaultKind && afterVault.vaultKind == vvVaultKindClosedEnded {
+	if afterVault.hasVaultKind && afterVault.vaultKind == vault.VaultKindClosedEnded {
 		if !afterVault.hasSubscriptionDate || !afterVault.hasRedemptionDate {
 			return "closed-ended vault must have SubscriptionDate and RedemptionDate"
 		}
-		if !vvIsValidClosedEndedGap(afterVault.subscriptionDate, afterVault.redemptionDate) {
+		if !vault.IsValidClosedEndedGap(afterVault.subscriptionDate, afterVault.redemptionDate) {
 			return "closed-ended vault RedemptionDate - SubscriptionDate must be within [MIN_INVESTMENT_PERIOD, MAX_INVESTMENT_PERIOD)"
 		}
 	}
@@ -736,7 +713,7 @@ func (c *vvChecker) finalizeDeposit(afterVault vvVault, updatedShares vvShares) 
 	beforeVault := c.beforeVault[0]
 	vaultAsset := afterVault.asset
 	phase := c.vaultPhase(afterVault)
-	if phase != vvNoPhase && phase != vvSubscription {
+	if phase != vault.VaultPhaseNoPhase && phase != vault.VaultPhaseSubscription {
 		return "deposit only allowed in Subscription or NoPhase"
 	}
 
@@ -876,7 +853,7 @@ func (c *vvChecker) reconcileWithdrawAssets(beforeVault, afterVault vvVault, vau
 	}
 
 	phase := c.vaultPhase(afterVault)
-	if phase == vvInvestment {
+	if phase == vault.VaultPhaseInvestment {
 		return "withdrawal not allowed during Investment phase"
 	}
 
