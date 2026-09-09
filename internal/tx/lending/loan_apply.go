@@ -25,6 +25,58 @@ func updateLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, l *loanData) ter.Re
 	return ter.TesSUCCESS
 }
 
+type loanAccountingDeltas struct {
+	assetsTotal lmath.N
+	debtTotal   lmath.N
+}
+
+func cashBasisEnabled(v *vault.VaultLending) bool {
+	return v != nil && v.LEVersion == vault.VaultVersionCashBasis
+}
+
+func loanOriginationDeltasForRules(
+	v *vault.VaultLending,
+	principal, interest lmath.N,
+) loanAccountingDeltas {
+	if cashBasisEnabled(v) {
+		return loanAccountingDeltas{assetsTotal: principal.Sub(principal), debtTotal: principal}
+	}
+	return loanAccountingDeltas{assetsTotal: interest, debtTotal: principal.Add(interest)}
+}
+
+func loanOriginationExceedsVaultMaximumForRules(
+	v *vault.VaultLending,
+	vaultTotal, interest lmath.N,
+	rules *amendment.Rules,
+) bool {
+	if cashBasisEnabled(v) {
+		return false
+	}
+	vaultMaximum := lendNumForRules(v.AssetsMaximum, rules)
+	return vaultMaximum.Signum() != 0 && interest.Cmp(vaultMaximum.Sub(vaultTotal)) > 0
+}
+
+func loanPaymentDeltasForRules(
+	v *vault.VaultLending,
+	parts lmath.LoanPaymentParts,
+) loanAccountingDeltas {
+	if cashBasisEnabled(v) {
+		return loanAccountingDeltas{assetsTotal: parts.InterestPaid, debtTotal: parts.PrincipalPaid}
+	}
+	rawToVault := parts.PrincipalPaid.Add(parts.InterestPaid)
+	return loanAccountingDeltas{
+		assetsTotal: parts.ValueChange,
+		debtTotal:   rawToVault.Sub(parts.ValueChange),
+	}
+}
+
+func loanVaultExposureForRules(v *vault.VaultLending, l *loanData, rules *amendment.Rules) lmath.N {
+	if cashBasisEnabled(v) {
+		return lendNumForRules(l.PrincipalOutstanding, rules)
+	}
+	return owedToVaultForRules(l, rules)
+}
+
 func owedToVaultForRules(l *loanData, rules *amendment.Rules) lmath.N {
 	return lendNumForRules(l.TotalValueOutstanding, rules).Sub(lendNumForRules(l.ManagementFeeOutstanding, rules))
 }

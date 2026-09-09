@@ -423,6 +423,7 @@ func (v *VaultCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			vd.SubscriptionDate = &subscriptionDate
 			vd.RedemptionDate = &redemptionDate
 		}
+		vd.LEVersion = VaultVersionCashBasis
 	}
 	if asset.IsMPT() {
 		vd.AssetIsMPT = true

@@ -257,12 +257,12 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Vault + broker accounting.
 	vaultScale := vaultScaleOfForRules(vinfo, integral, ctx.Rules())
+	accountingDeltas := loanPaymentDeltasForRules(vinfo, parts)
 	rawToVault := parts.PrincipalPaid.Add(parts.InterestPaid)
 	toVaultRounded := lmath.RoundAssetDownward(mAsset, rawToVault, vaultScale)
-	toVaultForDebt := rawToVault.Sub(parts.ValueChange)
 	toBroker := parts.FeePaid
 
-	b.DebtTotal = numStr(lmath.AdjustImprecise(mAsset, number(b.DebtTotal), toVaultForDebt.Negate(), vaultScale))
+	b.DebtTotal = numStr(lmath.AdjustImprecise(mAsset, number(b.DebtTotal), accountingDeltas.debtTotal.Negate(), vaultScale))
 	if !sendFeeToOwner {
 		b.CoverAvailable = numStr(number(b.CoverAvailable).Add(toBroker))
 	}
@@ -272,7 +272,7 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	newAvailable := number(vinfo.AssetsAvailable).Add(toVaultRounded)
-	newTotal := number(vinfo.AssetsTotal).Add(parts.ValueChange)
+	newTotal := number(vinfo.AssetsTotal).Add(accountingDeltas.assetsTotal)
 	if newAvailable.Cmp(newTotal) > 0 {
 		return ter.TecINTERNAL
 	}

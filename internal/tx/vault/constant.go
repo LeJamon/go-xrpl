@@ -18,6 +18,9 @@ const (
 	// VaultStrategyFirstComeFirstServe is the only valid withdrawal policy
 	VaultStrategyFirstComeFirstServe uint8 = 1
 
+	// VaultVersionCashBasis marks vaults created under LendingProtocolV1_1.
+	VaultVersionCashBasis uint8 = 1
+
 	// vaultMaximumIOUScale is the largest Scale permitted on an IOU vault.
 	vaultMaximumIOUScale uint8 = 18
 

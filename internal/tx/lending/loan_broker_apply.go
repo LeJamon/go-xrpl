@@ -486,6 +486,17 @@ func (l *LoanBrokerCoverWithdraw) Preclaim(view tx.LedgerView, config tx.EngineC
 	if res := mptutil.RequireAssetAuthAt(view, asset, dstID, authType, config.ParentCloseTime); res != ter.TesSUCCESS {
 		return res
 	}
+	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0) && accountID == dstID {
+		holdingExists, herr := vault.HoldingExists(view, dstID, asset)
+		if herr != nil {
+			return ter.TefINTERNAL
+		}
+		if !holdingExists {
+			if res := vault.CanAddHolding(view, asset); res != ter.TesSUCCESS {
+				return res
+			}
+		}
+	}
 	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
 		if res := mptutil.CheckWithdrawFreeze(view, b.Account, accountID, dstID, asset); res != ter.TesSUCCESS {
 			return res
@@ -550,7 +561,7 @@ func (l *LoanBrokerCoverWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	// Ensure the destination can hold the asset when it is the submitter.
-	if dstID == accountID {
+	if dstID == accountID && (amount.Signum() > 0 || !ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0)) {
 		if _, res := vault.AddEmptyHolding(ctx, dstID, asset, ctx.PriorBalance()); res != ter.TesSUCCESS && res != ter.TecDUPLICATE {
 			return res
 		}
