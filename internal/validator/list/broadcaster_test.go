@@ -13,8 +13,9 @@ import (
 
 // fakeBroadcaster records each collection sent to each active peer.
 type fakeBroadcaster struct {
-	mu    sync.Mutex
-	peers []uint64
+	mu     sync.Mutex
+	peers  []uint64
+	onSend func()
 
 	collectionCalls []sendCollectionCall
 }
@@ -37,6 +38,9 @@ func (f *fakeBroadcaster) ActivePeers() []uint64 {
 }
 
 func (f *fakeBroadcaster) SendCollection(peerID uint64, manifest []byte, blobs []list.BroadcastBlob, version uint32) error {
+	if f.onSend != nil {
+		f.onSend()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	cp := make([]list.BroadcastBlob, len(blobs))
@@ -248,6 +252,123 @@ func TestBroadcastLatest_V2FiltersEntriesByPeerSequence(t *testing.T) {
 		default:
 			t.Fatalf("unexpected peer %d", call.peerID)
 		}
+	}
+}
+
+func TestSendCachedToPeer_ReplaysCurrentAndFutureOnce(t *testing.T) {
+	pub := newPublisher(t, 0x65, 0x66)
+	validator := derivedValidatorKey(0x67)
+	now := fixedClock()()
+	agg, err := list.New(list.Config{
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	blob5, sig5 := pub.signList(t, 5, 0, now.Add(48*time.Hour).Unix(), [][33]byte{validator})
+	if d, _, _ := agg.ApplyList(pub.manifestB64, blob5, sig5, 1, "site://"); d != list.Accepted {
+		t.Fatalf("seq=5 apply: %s", d)
+	}
+	blob10, sig10 := pub.signList(t, 10, now.Add(time.Hour).Unix(), now.Add(48*time.Hour).Unix(), [][33]byte{validator})
+	if d, _, _ := agg.ApplyList(pub.manifestB64, blob10, sig10, 1, "site://"); d != list.Pending {
+		t.Fatalf("seq=10 apply: %s", d)
+	}
+	blob15, sig15 := pub.signList(t, 15, now.Add(3*time.Hour).Unix(), now.Add(48*time.Hour).Unix(), [][33]byte{validator})
+	if d, _, _ := agg.ApplyList(pub.manifestB64, blob15, sig15, 1, "site://"); d != list.Pending {
+		t.Fatalf("seq=15 apply: %s", d)
+	}
+
+	fake := newFakeBroadcaster([]uint64{7, 8})
+	agg.SetBroadcaster(fake)
+	agg.SendCachedToPeer(42)
+
+	fake.mu.Lock()
+	if len(fake.collectionCalls) != 1 {
+		fake.mu.Unlock()
+		t.Fatalf("cached publisher list was sent %d times, want once", len(fake.collectionCalls))
+	}
+	call := fake.collectionCalls[0]
+	fake.mu.Unlock()
+	if call.peerID != 42 {
+		t.Fatalf("cached list sent to peer %d, want 42", call.peerID)
+	}
+	if !bytes.Equal(call.manifest, pub.manifestB64) {
+		t.Fatalf("publisher manifest: got %q want %q", call.manifest, pub.manifestB64)
+	}
+	if call.version < 2 || len(call.blobs) != 3 {
+		t.Fatalf("cached collection version/blobs: version=%d blobs=%d", call.version, len(call.blobs))
+	}
+	for i, want := range [][]byte{blob5, blob10, blob15} {
+		if !bytes.Equal(call.blobs[i].Blob, want) {
+			t.Fatalf("blob %d changed or reordered", i)
+		}
+	}
+	for i, want := range [][]byte{sig5, sig10, sig15} {
+		if !bytes.Equal(call.blobs[i].Signature, want) {
+			t.Fatalf("signature %d changed or reordered", i)
+		}
+		if call.blobs[i].Manifest != nil {
+			t.Fatalf("blob %d unexpectedly gained a local manifest", i)
+		}
+	}
+
+	agg.SendCachedToPeer(42)
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.collectionCalls) != 1 {
+		t.Fatalf("peer sequence suppression sent %d collections on repeat, want one", len(fake.collectionCalls))
+	}
+	if got := agg.PeerSequence(42, list.PublisherKey(pub.masterPub)); got != 15 {
+		t.Fatalf("peer sequence: got %d want 15", got)
+	}
+}
+
+func TestSendCachedToPeerReleasesAggregatorLockBeforeSend(t *testing.T) {
+	pub := newPublisher(t, 0x68, 0x69)
+	validator := derivedValidatorKey(0x6a)
+	agg, err := list.New(list.Config{
+		PublisherKeys:      []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		Threshold:          1,
+		ValidatorManifests: manifest.NewCache(),
+		PublisherManifests: manifest.NewCache(),
+		Clock:              fixedClock(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	now := fixedClock()()
+	blob, sig := pub.signList(t, 1, 0, now.Add(24*time.Hour).Unix(), [][33]byte{validator})
+	if d, _, _ := agg.ApplyList(pub.manifestB64, blob, sig, 1, "site://"); d != list.Accepted {
+		t.Fatalf("apply: %s", d)
+	}
+
+	callback := make(chan struct{})
+	fake := newFakeBroadcaster(nil)
+	fake.onSend = func() {
+		_ = agg.PublisherSnapshot()
+		close(callback)
+	}
+	agg.SetBroadcaster(fake)
+
+	done := make(chan struct{})
+	go func() {
+		agg.SendCachedToPeer(42)
+		close(done)
+	}()
+	select {
+	case <-callback:
+	case <-time.After(time.Second):
+		t.Fatal("SendCollection could not re-enter aggregator; SendCachedToPeer may hold aggregator lock")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("SendCachedToPeer did not complete")
 	}
 }
 

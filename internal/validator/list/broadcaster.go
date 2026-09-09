@@ -91,18 +91,59 @@ func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
 	a.broadcastLatest(pubKey, exceptPeer, 0)
 }
 
+// SendCachedToPeer sends every available publisher collection to peerID.
+func (a *Aggregator) SendCachedToPeer(peerID uint64) {
+	if peerID == 0 {
+		return
+	}
+	a.mu.Lock()
+	publishers := make([]PublisherKey, 0, len(a.state))
+	for pubKey := range a.state {
+		publishers = append(publishers, pubKey)
+	}
+	a.mu.Unlock()
+
+	for _, pubKey := range publishers {
+		snapshot, ok := a.snapshotBroadcast(pubKey, 0, true)
+		if !ok {
+			continue
+		}
+		a.sendBroadcastEntries(snapshot, []uint64{peerID}, 0)
+	}
+}
+
 func (a *Aggregator) broadcastLatest(pubKey PublisherKey, exceptPeer uint64, targetSequence uint32) {
+	snapshot, ok := a.snapshotBroadcast(pubKey, targetSequence, false)
+	if !ok {
+		return
+	}
+	a.sendBroadcastEntries(snapshot, snapshot.bcaster.ActivePeers(), exceptPeer)
+}
+
+type broadcastSnapshot struct {
+	pubKey        PublisherKey
+	bcaster       PeerBroadcaster
+	rawManifest   []byte
+	entries       []broadcastEntry
+	collVersion   uint32
+	relaySequence uint32
+	maxSequence   uint32
+	sequence      uint32
+}
+
+func (a *Aggregator) snapshotBroadcast(pubKey PublisherKey, targetSequence uint32, requireAvailable bool) (broadcastSnapshot, bool) {
 	a.mu.Lock()
 	bcaster := a.bcaster
 	if bcaster == nil {
 		a.mu.Unlock()
-		return
+		return broadcastSnapshot{}, false
 	}
 	s, ok := a.state[pubKey]
 	if !ok || s.Sequence == 0 || s.Status == StatusRevoked ||
+		(requireAvailable && s.Status != StatusAvailable) ||
 		len(s.RawManifest) == 0 || len(s.RawBlob) == 0 || len(s.RawSignature) == 0 {
 		a.mu.Unlock()
-		return
+		return broadcastSnapshot{}, false
 	}
 	sequence := s.Sequence
 	blobVersion := s.Version
@@ -146,21 +187,35 @@ func (a *Aggregator) broadcastLatest(pubKey PublisherKey, exceptPeer uint64, tar
 	if relaySequence == 0 {
 		relaySequence = maxSeq
 	}
-	logger := a.logger
 	a.mu.Unlock()
+	return broadcastSnapshot{
+		pubKey:        pubKey,
+		bcaster:       bcaster,
+		rawManifest:   rawManifest,
+		entries:       entries,
+		collVersion:   collVersion,
+		relaySequence: relaySequence,
+		maxSequence:   maxSeq,
+		sequence:      sequence,
+	}, true
+}
 
-	active := bcaster.ActivePeers()
+func (a *Aggregator) sendBroadcastEntries(
+	snapshot broadcastSnapshot,
+	active []uint64,
+	exceptPeer uint64,
+) {
 	sent := 0
 	for _, peerID := range active {
 		if peerID == exceptPeer {
 			continue
 		}
-		peerSequence := a.PeerSequence(peerID, pubKey)
-		if peerSequence >= relaySequence {
+		peerSequence := a.PeerSequence(peerID, snapshot.pubKey)
+		if peerSequence >= snapshot.relaySequence {
 			continue
 		}
-		peerBlobs := make([]BroadcastBlob, 0, len(entries))
-		for _, entry := range entries {
+		peerBlobs := make([]BroadcastBlob, 0, len(snapshot.entries))
+		for _, entry := range snapshot.entries {
 			if peerSequence == 0 || entry.sequence > peerSequence {
 				peerBlobs = append(peerBlobs, entry.blob)
 			}
@@ -168,23 +223,23 @@ func (a *Aggregator) broadcastLatest(pubKey PublisherKey, exceptPeer uint64, tar
 		if len(peerBlobs) == 0 {
 			continue
 		}
-		if err := bcaster.SendCollection(peerID, rawManifest, peerBlobs, collVersion); err != nil {
-			logger.Debug("validator list collection broadcast: send failed",
+		if err := snapshot.bcaster.SendCollection(peerID, snapshot.rawManifest, peerBlobs, snapshot.collVersion); err != nil {
+			a.logger.Debug("validator list collection broadcast: send failed",
 				"peer", peerID,
-				"publisher", hex.EncodeToString(pubKey[:]),
-				"max_sequence", maxSeq,
+				"publisher", hex.EncodeToString(snapshot.pubKey[:]),
+				"max_sequence", snapshot.maxSequence,
 				"error", err)
 			continue
 		}
-		a.RecordPeerSequence(peerID, pubKey, relaySequence)
+		a.RecordPeerSequence(peerID, snapshot.pubKey, snapshot.relaySequence)
 		sent++
 	}
 
 	if sent > 0 {
-		logger.Debug("validator list broadcast",
-			"publisher", hex.EncodeToString(pubKey[:]),
-			"sequence", sequence,
-			"remaining", len(entries)-1,
+		a.logger.Debug("validator list broadcast",
+			"publisher", hex.EncodeToString(snapshot.pubKey[:]),
+			"sequence", snapshot.sequence,
+			"remaining", len(snapshot.entries)-1,
 			"peers_sent", sent)
 	}
 }
