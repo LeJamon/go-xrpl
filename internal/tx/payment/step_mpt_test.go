@@ -147,8 +147,8 @@ func TestMPTEndpointStepCapsInputAtMPTMaximum(t *testing.T) {
 	require.Equal(t, int64(protocol.MaxMPTokenAmount), in.MPT)
 
 	issuanceOutstanding, balances := readMPTAmounts(t, sb, id, holder)
-	require.Equal(t, uint64(protocol.MaxMPTokenAmount)-uint64(maxOutput), issuanceOutstanding)
-	require.Equal(t, []uint64{uint64(protocol.MaxMPTokenAmount) - uint64(maxOutput)}, balances)
+	require.Equal(t, protocol.MaxMPTokenAmount-uint64(maxOutput), issuanceOutstanding)
+	require.Equal(t, []uint64{protocol.MaxMPTokenAmount - uint64(maxOutput)}, balances)
 }
 
 func TestMPTEndpointStepHolderToHolderChargesTransferFee(t *testing.T) {
