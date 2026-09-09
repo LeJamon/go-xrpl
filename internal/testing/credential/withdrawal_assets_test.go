@@ -246,8 +246,6 @@ func TestCredentialWithdrawalAssetAuthorizationAndRollback(t *testing.T) {
 				f.assertFailure(t, f.env.Submit(f.withdrawal([]string{missing})), tecBadCredentials,
 					objectBefore, destinationBefore, ownerBalance, ownerSequence)
 
-				objectBefore, err = f.env.LedgerEntry(f.object)
-				require.NoError(t, err)
 				destinationBefore = f.destinationBalance()
 				ownerBalance, ownerSequence = f.env.Balance(f.owner), f.env.Seq(f.owner)
 				result := f.env.Submit(f.withdrawal([]string{f.validID}))

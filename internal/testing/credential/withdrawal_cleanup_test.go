@@ -336,6 +336,15 @@ func TestCredentialWithdrawalDestinationPrecedence(t *testing.T) {
 			jtx.RequireTxFail(t, f.env.Submit(txn), "tecNO_PERMISSION")
 			jtx.RequireTxFail(t, f.env.Submit(f.build([]string{strings.Repeat("F", 64)}, jtx.NewAccount("missing").Address)), "tecBAD_CREDENTIALS")
 			jtx.RequireTxFail(t, f.env.Submit(f.build([]string{valid}, jtx.NewAccount("missing").Address)), "tecNO_DST")
+			if !broker {
+				raw, err := f.env.LedgerEntry(f.object)
+				require.NoError(t, err)
+				fields, err := binarycodec.DecodeBytes(raw)
+				require.NoError(t, err)
+				pseudo := fields["Account"].(string)
+				jtx.RequireTxFail(t, f.env.Submit(f.build([]string{strings.Repeat("F", 64)}, pseudo)), "tecBAD_CREDENTIALS")
+				jtx.RequireTxFail(t, f.env.Submit(f.build([]string{valid}, pseudo)), "tecPSEUDO_ACCOUNT")
+			}
 		})
 	}
 }

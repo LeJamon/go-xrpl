@@ -72,6 +72,9 @@ func (p *PaymentChannelClaim) validate(rules *amendment.Rules) error {
 	if err != nil || len(channelBytes) != 32 {
 		return ter.Errorf(ter.TemMALFORMED, "Channel must be a valid 256-bit hash")
 	}
+	if rules != nil && rules.FixCleanup3_2_0Enabled() && isZeroChannel(p.Channel) {
+		return ter.Errorf(ter.TemMALFORMED, "Channel must not be zero")
+	}
 
 	// Validate Balance if present.
 	if p.Balance != nil {
@@ -178,15 +181,6 @@ func (p *PaymentChannelClaim) CheckExtraFeatures(rules *amendment.Rules) error {
 	present := p.CredentialIDs != nil || p.HasField("CredentialIDs")
 	if present && !rules.Enabled(amendment.FeatureCredentials) {
 		return ter.Errorf(ter.TemDISABLED, "Credentials amendment not enabled")
-	}
-	return nil
-}
-
-// PreflightRules rejects a zero Channel once fixCleanup3_2_0 is enabled: a zero
-// hash cannot be a ledger key.
-func (p *PaymentChannelClaim) PreflightRules(rules *amendment.Rules) error {
-	if rules.FixCleanup3_2_0Enabled() && isZeroChannel(p.Channel) {
-		return ter.Errorf(ter.TemMALFORMED, "Channel must not be zero")
 	}
 	return nil
 }
