@@ -311,6 +311,9 @@ func (sm *SHAMap) walkBackedContext(
 		}
 		durable = durable && cursor.lanes[i].durable
 	}
+	if !retryBlocked && !complete && len(missing) == 0 {
+		return nil, ErrTraversalBudget
+	}
 	if complete {
 		root.setFullBelowGen(gen)
 	}
