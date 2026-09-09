@@ -70,13 +70,6 @@ func loanPaymentDeltas(
 	}
 }
 
-func loanVaultExposureForRules(v *vault.VaultLending, l *loanData, rules *amendment.Rules) lmath.N {
-	if cashBasisEnabled(v) {
-		return lendNumForRules(l.PrincipalOutstanding, rules)
-	}
-	return owedToVaultForRules(l, rules)
-}
-
 func owedToVaultForRules(l *loanData, rules *amendment.Rules) lmath.N {
 	return lendNumForRules(l.TotalValueOutstanding, rules).Sub(lendNumForRules(l.ManagementFeeOutstanding, rules))
 }
