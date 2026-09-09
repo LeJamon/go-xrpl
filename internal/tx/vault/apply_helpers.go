@@ -510,8 +510,31 @@ func canWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDes
 	if from == to {
 		return ter.TesSUCCESS
 	}
-	if res := credential.CheckDepositPreauth(view, credentialIDs, credentialIDs != nil, from, to, toAcct); res != ter.TesSUCCESS {
-		return res
+	if credentialIDs != nil && toAcct.Flags&state.LsfDepositAuth != 0 {
+		authorized, err := view.Exists(keylet.DepositPreauth(to, from))
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if !authorized {
+			for _, value := range credentialIDs {
+				raw, err := hex.DecodeString(value)
+				if err != nil || len(raw) != 32 {
+					return ter.TefINTERNAL
+				}
+				var id [32]byte
+				copy(id[:], raw)
+				exists, err := view.Exists(keylet.CredentialByID(id))
+				if err != nil {
+					return ter.TefINTERNAL
+				}
+				if !exists {
+					return ter.TecINTERNAL
+				}
+			}
+		}
+	}
+	if result := credential.CheckDepositPreauth(view, credentialIDs, credentialIDs != nil, from, to, toAcct); result != ter.TesSUCCESS {
+		return result
 	}
 	return withdrawToDestExceedsLimit(view, from, to, amount, numberContext)
 }

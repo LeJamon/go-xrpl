@@ -462,3 +462,17 @@ func TestApplyAssetHoldingOwnerCountResultClassification(t *testing.T) {
 	require.Equal(t, ter.TesSUCCESS, result)
 	require.Zero(t, account.OwnerCount)
 }
+
+func TestCanWithdrawRequiresPrevalidatedCredentials(t *testing.T) {
+	view := newVaultDepositView()
+	var from, to [20]byte
+	from[19] = 1
+	to[19] = 2
+	vaultDepositAccount(t, view, to, state.LsfDepositAuth)
+	id := make([]byte, 32)
+	id[31] = 3
+	credentialIDs := []string{hex.EncodeToString(id)}
+	require.Equal(t, ter.TecINTERNAL, canWithdraw(view, from, to, tx.NewXRPAmount(1), false, state.NumberContext{}, credentialIDs))
+	view.data[keylet.DepositPreauth(to, from).Key] = []byte{1}
+	require.Equal(t, ter.TesSUCCESS, canWithdraw(view, from, to, tx.NewXRPAmount(1), false, state.NumberContext{}, credentialIDs))
+}
