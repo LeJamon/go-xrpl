@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending/lmath"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -466,8 +467,11 @@ func (l *LoanBrokerCoverWithdraw) Preclaim(view tx.LedgerView, config tx.EngineC
 	if res := mptutil.CanTransferAsset(view, asset, b.Account, dstID, fix320); res != ter.TesSUCCESS {
 		return res
 	}
+	if res := credential.ValidCredentials(view, accountID, l.CredentialIDs); res != ter.TesSUCCESS {
+		return res
+	}
 	if accountID != dstID {
-		if res := vault.CanWithdraw(view, accountID, dstID, l.Amount, l.DestinationTag != nil, config.NumberContext()); res != ter.TesSUCCESS {
+		if res := vault.CanWithdraw(view, accountID, dstID, l.Amount, l.DestinationTag != nil, l.CredentialIDs, config.NumberContext()); res != ter.TesSUCCESS {
 			return res
 		}
 	}
@@ -544,6 +548,14 @@ func (l *LoanBrokerCoverWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Ensure the destination can hold the asset when it is the submitter.
 	if dstID == accountID {
 		if _, res := vault.AddEmptyHolding(ctx, dstID, asset, ctx.PriorBalance()); res != ter.TesSUCCESS && res != ter.TecDUPLICATE {
+			return res
+		}
+	} else {
+		dstAccount, err := tx.ReadAccountRoot(ctx.View, dstID)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if res := credential.VerifyDepositPreauth(ctx, l.CredentialIDs, accountID, dstID, dstAccount); res != ter.TesSUCCESS {
 			return res
 		}
 	}

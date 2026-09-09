@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -26,7 +27,8 @@ type VaultWithdraw struct {
 	Destination string `json:"Destination,omitempty" xrpl:"Destination,omitempty"`
 
 	// DestinationTag is the destination tag (optional)
-	DestinationTag *uint32 `json:"DestinationTag,omitempty" xrpl:"DestinationTag,omitempty"`
+	DestinationTag *uint32  `json:"DestinationTag,omitempty" xrpl:"DestinationTag,omitempty"`
+	CredentialIDs  []string `json:"CredentialIDs,omitempty" xrpl:"CredentialIDs,omitempty"`
 }
 
 // NewVaultWithdraw creates a new VaultWithdraw transaction
@@ -77,11 +79,23 @@ func (v *VaultWithdraw) Validate() error {
 		}
 	}
 
-	return nil
+	return credential.CheckFields(v.CredentialIDs, v.CredentialIDs != nil || v.HasField("CredentialIDs"), "duplicate credentials")
 }
 
 func (v *VaultWithdraw) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(v)
+}
+
+func (v *VaultWithdraw) CheckExtraFeatures(rules *amendment.Rules) error {
+	if (v.CredentialIDs != nil || v.HasField("CredentialIDs")) &&
+		(!rules.Enabled(amendment.FeatureCredentials) || !rules.Enabled(amendment.FeatureFixCleanup3_4_0)) {
+		return ter.Errorf(ter.TemDISABLED, "withdrawal credentials are disabled")
+	}
+	return nil
+}
+
+func (v *VaultWithdraw) PreflightRules(rules *amendment.Rules) error {
+	return credential.CheckFieldsWithRules(v.CredentialIDs, v.CredentialIDs != nil || v.HasField("CredentialIDs"), "duplicate credentials", rules)
 }
 
 func (v *VaultWithdraw) RequiredAmendments() [][32]byte {
@@ -160,6 +174,10 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 		return ter.TefINTERNAL
 	}
 
+	if res := credential.ValidCredentials(view, accountID, v.CredentialIDs); res != ter.TesSUCCESS {
+		return res
+	}
+
 	// canWithdraw's trust-limit branch is exempt for the share MPT, so a
 	// share-denominated withdrawal pre-amendment skipped the destination's IOU
 	// trust limit entirely. Post-fixCleanup3_1_3 the shares are converted to the
@@ -179,7 +197,7 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 		}
 		limitAmount = assets
 	}
-	if res := canWithdraw(view, accountID, dstID, limitAmount, v.DestinationTag != nil, config.NumberContext()); res != ter.TesSUCCESS {
+	if res := canWithdraw(view, accountID, dstID, limitAmount, v.DestinationTag != nil, v.CredentialIDs, config.NumberContext()); res != ter.TesSUCCESS {
 		return res
 	}
 
@@ -453,6 +471,14 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 	if dstID == ctx.AccountID {
 		if res := addWithdrawDestinationHolding(ctx, asset); res != ter.TesSUCCESS {
+			return res
+		}
+	} else {
+		dstAccount, err := tx.ReadAccountRoot(ctx.View, dstID)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if res := credential.VerifyDepositPreauth(ctx, v.CredentialIDs, ctx.AccountID, dstID, dstAccount); res != ter.TesSUCCESS {
 			return res
 		}
 	}

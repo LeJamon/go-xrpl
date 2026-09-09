@@ -129,8 +129,8 @@ func ApplyAssetHoldingOwnerCount(view tx.LedgerView, accountID [20]byte, delta i
 
 // CanWithdraw validates delivery of amount from → to (destination exists,
 // dest-tag / deposit-auth, IOU trust-limit).
-func CanWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDestTag bool, numberContext state.NumberContext) ter.Result {
-	return canWithdraw(view, from, to, amount, hasDestTag, numberContext)
+func CanWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDestTag bool, credentialIDs []string, numberContext state.NumberContext) ter.Result {
+	return canWithdraw(view, from, to, amount, hasDestTag, credentialIDs, numberContext)
 }
 
 // AccountHoldsFull returns how much of asset accountID can spend

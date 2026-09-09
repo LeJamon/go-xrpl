@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -447,7 +448,7 @@ func vaultAssetOf(vd *vaultData) tx.Asset {
 // `to`: the destination must exist, satisfy any RequireDestTag / DepositAuth
 // requirement, and (for an IOU delivered to a third party) not exceed its trust
 // limit. Reference: rippled View.cpp canWithdraw.
-func canWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDestTag bool, numberContext state.NumberContext) ter.Result {
+func canWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDestTag bool, credentialIDs []string, numberContext state.NumberContext) ter.Result {
 	toAcct, err := tx.ReadAccountRoot(view, to)
 	if err != nil {
 		return ter.TefINTERNAL
@@ -461,10 +462,8 @@ func canWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDes
 	if from == to {
 		return ter.TesSUCCESS
 	}
-	if toAcct.Flags&state.LsfDepositAuth != 0 {
-		if exists, _ := view.Exists(keylet.DepositPreauth(to, from)); !exists {
-			return ter.TecNO_PERMISSION
-		}
+	if res := credential.CheckDepositPreauth(view, credentialIDs, credentialIDs != nil, from, to, toAcct); res != ter.TesSUCCESS {
+		return res
 	}
 	return withdrawToDestExceedsLimit(view, from, to, amount, numberContext)
 }
