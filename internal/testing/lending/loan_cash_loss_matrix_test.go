@@ -50,12 +50,13 @@ func newLossLifecycleFixture(t *testing.T, cash, cleanup bool) *lossLifecycleFix
 	env.FundAmount(borrower, 10_000_000_000)
 
 	vaultSequence := env.Seq(owner)
-	vaultID := setupXRPVault(t, env, owner, 10_000_000)
-	vaultKey := keylet.Vault(owner.AccountID(), vaultSequence)
-	if !cash {
-		env.EnableFeature("LendingProtocolV1_1")
-		env.Close()
+	var vaultID string
+	if cash {
+		vaultID = setupClosedEndedXRPVaultForAccounting(t, env, owner, 10_000_000)
+	} else {
+		vaultID = setupXRPVault(t, env, owner, 10_000_000)
 	}
+	vaultKey := keylet.Vault(owner.AccountID(), vaultSequence)
 
 	brokerSequence := env.Seq(owner)
 	brokerSet := lending.NewLoanBrokerSet(owner.Address, vaultID)
@@ -66,6 +67,10 @@ func newLossLifecycleFixture(t *testing.T, cash, cleanup bool) *lossLifecycleFix
 	brokerSet.CoverRateMinimum = &coverRateMinimum
 	brokerSet.CoverRateLiquidation = &coverRateLiquidation
 	jtx.RequireTxSuccess(t, env.Submit(brokerSet))
+	if !cash {
+		env.EnableFeature("LendingProtocolV1_1")
+		env.Close()
+	}
 	brokerID := brokerID(owner, brokerSequence)
 	brokerKey := keylet.LoanBroker(owner.AccountID(), brokerSequence)
 	jtx.RequireTxSuccess(t, env.Submit(lending.NewLoanBrokerCoverDeposit(
