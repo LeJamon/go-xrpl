@@ -362,6 +362,10 @@ var formats = map[string][]FormatField{
 		{"ShareMPTID", 0},
 		{"WithdrawalPolicy", 0},
 		{"Scale", 2},
+		{"LEVersion", 2},
+		{"VaultKind", 2},
+		{"SubscriptionDate", 1},
+		{"RedemptionDate", 1},
 	},
 	"LoanBroker": {
 		{"PreviousTxnID", 0},

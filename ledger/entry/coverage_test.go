@@ -434,6 +434,10 @@ var coverageFixtures = map[string]map[string]any{
 		"PreviousTxnLgrSeq": uint32(9),
 	},
 	"Vault": {
+		"LEVersion":         uint32(1),
+		"VaultKind":         uint32(1),
+		"SubscriptionDate":  uint32(100),
+		"RedemptionDate":    uint32(1000),
 		"Sequence":          uint32(1),
 		"OwnerNode":         "0",
 		"Owner":             fxAccount,
