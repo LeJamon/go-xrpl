@@ -348,7 +348,7 @@ func reverseImpairment(ctx *tx.ApplyContext, loan *loanData, vaultKey keylet.Key
 			prev = loan.StartDate
 		}
 		normalDue := prev + loan.PaymentInterval
-		if !hasExpired(ctx.Config.ParentCloseTime, normalDue) {
+		if !lmath.IsPaymentLate(ctx.Config.ParentCloseTime, normalDue, false) {
 			loan.NextPaymentDueDate = normalDue
 		} else {
 			loan.NextPaymentDueDate = ctx.Config.ParentCloseTime + loan.PaymentInterval

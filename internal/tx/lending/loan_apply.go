@@ -10,9 +10,6 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// hasExpired reports whether exp has passed at the given close time.
-func hasExpired(now, exp uint32) bool { return exp != 0 && now >= exp }
-
 // updateLoan serializes and updates a loan entry.
 func updateLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, l *loanData) ter.Result {
 	data, serr := serializeLoanForRules(l, ctx.Rules())
@@ -344,7 +341,7 @@ func (l *LoanManage) unimpairLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, l
 			prev = loan.StartDate
 		}
 		normalDue := prev + loan.PaymentInterval
-		if !hasExpired(ctx.Config.ParentCloseTime, normalDue) {
+		if !lmath.IsPaymentLate(ctx.Config.ParentCloseTime, normalDue, false) {
 			loan.NextPaymentDueDate = normalDue
 		} else {
 			loan.NextPaymentDueDate = ctx.Config.ParentCloseTime + loan.PaymentInterval
