@@ -177,7 +177,6 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 	if vd.WithdrawalPolicy != VaultStrategyFirstComeFirstServe {
 		return ter.TefINTERNAL
 	}
-
 	if res := credential.ValidCredentials(view, accountID, v.CredentialIDs); res != ter.TesSUCCESS {
 		return res
 	}

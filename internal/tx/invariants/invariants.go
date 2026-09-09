@@ -216,6 +216,9 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 			return checkValidMPTIssuance(tx, result, entries, view, rules)
 		},
 		func() *InvariantViolation {
+			return checkValidMPTTransfer(tx, result, entries, view, rules)
+		},
+		func() *InvariantViolation {
 			return checkValidConfidentialMPToken(tx, result, entries, view, rules)
 		},
 		func() *InvariantViolation {

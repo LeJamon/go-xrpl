@@ -180,6 +180,73 @@ func TestWithdrawSelfIOUReserveUsesUpdatedOwnerCount(t *testing.T) {
 	require.Equal(t, int32(1), delta)
 }
 
+func TestAddEmptyHoldingFix340ExistingLinePrecedesFreeze(t *testing.T) {
+	var issuer, holder [20]byte
+	issuer[19] = 1
+	holder[19] = 2
+	asset := tx.Asset{Currency: "USD", Issuer: state.EncodeAccountIDSafe(issuer)}
+
+	build := func(t *testing.T, enabled bool) (*tx.ApplyContext, *sharedHelperView) {
+		rules := amendment.NewRulesBuilder().Enable(amendment.FeatureSingleAssetVault).Build()
+		if enabled {
+			rules = amendment.NewRulesBuilder().Enable(amendment.FeatureSingleAssetVault).Enable(amendment.FeatureFixCleanup3_4_0).Build()
+		}
+		view := newSharedHelperView(rules)
+		ctx := buildArmsCtx(t, view.mptArmsView, holder, rules)
+		ctx.View = view
+		issuerRaw, err := state.SerializeAccountRoot(&state.AccountRoot{
+			Account: state.EncodeAccountIDSafe(issuer),
+			Flags:   state.LsfGlobalFreeze,
+		})
+		require.NoError(t, err)
+		require.NoError(t, view.Insert(keylet.Account(issuer), issuerRaw))
+		lineRaw, err := state.SerializeRippleState(&state.RippleState{
+			Balance:   state.NewIssuedAmountFromValue(0, state.MinExponent, "USD", asset.Issuer),
+			LowLimit:  state.NewIssuedAmountFromValue(100, state.MinExponent, "USD", asset.Issuer),
+			HighLimit: state.NewIssuedAmountFromValue(100, state.MinExponent, "USD", state.EncodeAccountIDSafe(holder)),
+		})
+		require.NoError(t, err)
+		require.NoError(t, view.Insert(keylet.Line(holder, issuer, "USD"), lineRaw))
+		return ctx, view
+	}
+
+	ctx, _ := build(t, false)
+	_, result := addEmptyHolding(ctx, holder, asset, ctx.PriorBalance())
+	require.Equal(t, ter.TecFROZEN, result)
+
+	ctx, _ = build(t, true)
+	_, result = addEmptyHolding(ctx, holder, asset, ctx.PriorBalance())
+	require.Equal(t, ter.TecDUPLICATE, result)
+}
+
+func TestAddEmptyHoldingFix340ReportsNoRippleOnCreate(t *testing.T) {
+	var issuer, holder [20]byte
+	issuer[19] = 1
+	holder[19] = 2
+	asset := tx.Asset{Currency: "USD", Issuer: state.EncodeAccountIDSafe(issuer)}
+
+	build := func(t *testing.T, enabled bool) *tx.ApplyContext {
+		rules := amendment.NewRulesBuilder().Enable(amendment.FeatureSingleAssetVault).Build()
+		if enabled {
+			rules = amendment.NewRulesBuilder().Enable(amendment.FeatureSingleAssetVault).Enable(amendment.FeatureFixCleanup3_4_0).Build()
+		}
+		view := newSharedHelperView(rules)
+		ctx := buildArmsCtx(t, view.mptArmsView, holder, rules)
+		ctx.View = view
+		issuerRaw, err := state.SerializeAccountRoot(&state.AccountRoot{Account: state.EncodeAccountIDSafe(issuer)})
+		require.NoError(t, err)
+		require.NoError(t, view.Insert(keylet.Account(issuer), issuerRaw))
+		return ctx
+	}
+
+	ctx := build(t, false)
+	_, result := addEmptyHolding(ctx, holder, asset, ctx.PriorBalance())
+	require.Equal(t, ter.TecINTERNAL, result)
+	ctx = build(t, true)
+	_, result = addEmptyHolding(ctx, holder, asset, ctx.PriorBalance())
+	require.Equal(t, ter.TerNO_RIPPLE, result)
+}
+
 func TestAddEmptyHoldingUsesNonSubmitterReserve(t *testing.T) {
 	var issuer, submitter, holder [20]byte
 	issuer[19] = 1
