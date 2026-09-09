@@ -233,6 +233,15 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 			}
 		}
 	} else {
+		if uGetsIssuerID != "" {
+			lpIssuer, decodeErr := state.DecodeAccountID(uGetsIssuerID)
+			if decodeErr != nil {
+				return ter.TefINTERNAL
+			}
+			if result := mptutil.CanTransferLPToken(view, accountID, accountID, lpIssuer); result != ter.TesSUCCESS {
+				return ter.TecUNFUNDED_OFFER
+			}
+		}
 		funds := tx.AccountFunds(view, accountID, saTakerGets, true, config.ReserveBase, config.ReserveIncrement)
 		if funds.Signum() <= 0 {
 			return ter.TecUNFUNDED_OFFER

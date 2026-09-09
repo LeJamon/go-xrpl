@@ -776,6 +776,9 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 			return ZeroIOUEitherAmount(currency, state.EncodeAccountIDSafe(issuer)), nil
 		}
 	}
+	if result := mptutil.CanTransferLPToken(sb, offerOwner, offerOwner, issuer); result != ter.TesSUCCESS {
+		return ZeroIOUEitherAmount(currency, state.EncodeAccountIDSafe(issuer)), nil
+	}
 
 	ownerBalance := s.getIOUBalance(sb, offerOwner, issuer, currency)
 

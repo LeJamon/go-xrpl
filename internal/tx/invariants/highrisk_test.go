@@ -533,6 +533,7 @@ func TestValidMPTIssuance_AMMPrivileges(t *testing.T) {
 		transaction := stubTx{txType: txType}
 		for name, entries := range map[string][]InvariantEntry{
 			"create one": {created},
+			"create two": {created, created},
 			"delete two": {deleted, deleted},
 		} {
 			t.Run(txType.String()+"/"+name, func(t *testing.T) {
@@ -541,8 +542,8 @@ func TestValidMPTIssuance_AMMPrivileges(t *testing.T) {
 				}
 			})
 		}
-		if v := checkValidMPTIssuance(transaction, TesSUCCESS, []InvariantEntry{created, created}, stubView{}, rules); v == nil {
-			t.Fatalf("expected %s creating two MPToken entries to violate ValidMPTIssuance", txType)
+		if v := checkValidMPTIssuance(transaction, TesSUCCESS, []InvariantEntry{created, created, created}, stubView{}, rules); v == nil {
+			t.Fatalf("expected %s creating three MPToken entries to violate ValidMPTIssuance", txType)
 		}
 		if v := checkValidMPTIssuance(transaction, TesSUCCESS, []InvariantEntry{deleted, deleted, deleted}, stubView{}, rules); v == nil {
 			t.Fatalf("expected %s deleting three MPToken entries to violate ValidMPTIssuance", txType)

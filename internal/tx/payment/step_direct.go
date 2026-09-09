@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -651,6 +652,9 @@ func (s *DirectStepI) Check(sb *PaymentSandbox) ter.Result {
 	// This runs in the BASE class check(), before delegating to derived class.
 	if !(s.isFirst && s.isLast) {
 		if result := checkFreeze(sb, s.src, s.dst, s.currency); result != ter.TesSUCCESS {
+			return result
+		}
+		if result := mptutil.CanTransferLPToken(sb, s.src, s.dst, s.dst); result != ter.TesSUCCESS {
 			return result
 		}
 	}

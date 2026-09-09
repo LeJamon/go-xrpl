@@ -226,10 +226,10 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 			return checkValidMPTIssuance(tx, result, entries, view, rules)
 		},
 		func() *InvariantViolation {
-			return checkValidMPTTransfer(tx, result, entries, view, rules)
+			return checkValidConfidentialMPToken(tx, result, entries, view, rules)
 		},
 		func() *InvariantViolation {
-			return checkValidConfidentialMPToken(tx, result, entries, view, rules)
+			return checkValidMPTBalanceChanges(tx, result, entries, view, rules)
 		},
 		func() *InvariantViolation {
 			return checkValidPermissionedDomain(tx, result, entries, rules)
@@ -269,6 +269,9 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 		},
 		func() *InvariantViolation {
 			return checkValidAmounts(entries, rules)
+		},
+		func() *InvariantViolation {
+			return checkValidMPTTransfer(tx, result, entries, view, rules)
 		},
 	}
 	for _, check := range checks {
