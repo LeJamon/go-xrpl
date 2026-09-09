@@ -169,6 +169,10 @@ func addEmptyMPTHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset
 // sendMPTAsset moves amount of the MPT asset from `from` to `to`, crediting or
 // debiting OutstandingAmount when either party is the issuer.
 func sendMPTAsset(ctx *tx.ApplyContext, mptID [24]byte, from, to [20]byte, amount uint64) ter.Result {
+	if amount == 0 || from == to {
+		return ter.TesSUCCESS
+	}
+
 	issuanceKey := keylet.MPTIssuance(mptID)
 	issData, err := ctx.View.Read(issuanceKey)
 	if err != nil || len(issData) == 0 {
