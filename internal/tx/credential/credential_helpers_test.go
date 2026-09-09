@@ -125,6 +125,14 @@ func TestRemoveExpiredCredentials_DeletionFailure(t *testing.T) {
 		require.Equal(t, ter.TecEXPIRED, result)
 	})
 
+	t.Run("cleanup340 preserves cleanup313 deletion error gate", func(t *testing.T) {
+		rules := amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported).
+			Disable(amendment.FeatureFixCleanup3_1_3).
+			Enable(amendment.FeatureFixCleanup3_4_0).Build()
+		ctx := buildCtx(rules)
+		require.Equal(t, ter.TecEXPIRED, VerifyDepositPreauth(ctx, []string{credIDHex}, subjectID, [20]byte{}, nil))
+	})
+
 	t.Run("after fix: deletion failure aborts, tecINTERNAL", func(t *testing.T) {
 		ctx := buildCtx(fix313On)
 		result := VerifyDepositPreauth(ctx, []string{credIDHex}, subjectID, [20]byte{}, nil)

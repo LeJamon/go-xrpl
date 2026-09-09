@@ -417,6 +417,10 @@ func removeExpired(ctx *tx.ApplyContext, credentialIDs []string, stopOnFailure b
 			continue
 		}
 
+		if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && credID == ([32]byte{}) {
+			return anyExpired, ter.TecINTERNAL
+		}
+
 		credKey := keylet.CredentialByID(credID)
 		credData, err := ctx.View.Read(credKey)
 		if err != nil || credData == nil {
@@ -434,9 +438,6 @@ func removeExpired(ctx *tx.ApplyContext, credentialIDs []string, stopOnFailure b
 				if stopOnFailure {
 					return anyExpired, r
 				}
-				if failTER == ter.TesSUCCESS {
-					failTER = r
-				}
 			}
 			anyExpired = true
 		}
@@ -452,19 +453,7 @@ func removeExpired(ctx *tx.ApplyContext, credentialIDs []string, stopOnFailure b
 // TER); before the amendment the failure is swallowed (returns tesSUCCESS),
 // matching rippled removeExpired.
 func RemoveExpiredCredentials(ctx *tx.ApplyContext, credentialIDs []string) (bool, ter.Result) {
-	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) {
-		for _, value := range credentialIDs {
-			if id, ok := parseCredentialID(value); ok && id == ([32]byte{}) {
-				return false, ter.TecINTERNAL
-			}
-		}
-	}
-	fix313 := ctx.Rules().Enabled(amendment.FeatureFixCleanup3_1_3)
-	anyExpired, failTER := removeExpired(ctx, credentialIDs, fix313)
-	if fix313 {
-		return anyExpired, failTER
-	}
-	return anyExpired, ter.TesSUCCESS
+	return removeExpired(ctx, credentialIDs, ctx.Rules().Enabled(amendment.FeatureFixCleanup3_1_3))
 }
 
 // VerifyDepositPreauth enforces deposit authorization for a transaction
