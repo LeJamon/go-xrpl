@@ -1555,6 +1555,13 @@ func computeMPTTransferFee(
 			state.EncodeAccountIDSafe(issuerID),
 			mptHexID,
 		)
+		if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0) {
+			if effectiveRate < parityRate {
+				panic("MPT escrow transfer rate below parity")
+			}
+			finalAmount, _ := amount.MulRatio(parityRate, effectiveRate, false).MPTRaw()
+			return originalAmount, uint64(finalAmount), ter.TesSUCCESS
+		}
 		rate := state.NewIssuedAmountFromValue(int64(effectiveRate), -9, "", "")
 
 		// rippled's muldivRound throws if the pre-canonicalization quotient does
