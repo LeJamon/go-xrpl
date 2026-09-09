@@ -102,13 +102,13 @@ func (b *baseNode) IsZeroHash() bool {
 	return b.hash == [32]byte{}
 }
 
-// deserializeNodeFromWire reconstructs a node from its wire-format encoding,
-// dispatching on the trailing wire-type byte.
 // DeserializeFromWire validates a wire node and returns its read-only view.
 func DeserializeFromWire(data []byte) (NodeReader, error) {
 	return deserializeNodeFromWire(data)
 }
 
+// deserializeNodeFromWire reconstructs a node from its wire-format encoding,
+// dispatching on the trailing wire-type byte.
 func deserializeNodeFromWire(data []byte) (mapNode, error) {
 	if len(data) == 0 {
 		return nil, errors.New("empty wire data")
