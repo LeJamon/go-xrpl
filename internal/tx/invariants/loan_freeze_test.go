@@ -173,7 +173,7 @@ func TestLoanDefaultDoesNotExemptUnrelatedAccount(t *testing.T) {
 func TestLoanDefaultMPTLockExemptionScope(t *testing.T) {
 	for _, name := range []string{"default", "other issuance", "unrelated holder", "transfer disabled", "authorization required", "ordinary payment", "cleanup disabled"} {
 		t.Run(name, func(t *testing.T) {
-			flags := uint32(entry.LsfMPTCanTransfer | entry.LsfMPTLocked)
+			flags := entry.LsfMPTCanTransfer | entry.LsfMPTLocked
 			if name == "transfer disabled" {
 				flags &^= entry.LsfMPTCanTransfer
 			}
