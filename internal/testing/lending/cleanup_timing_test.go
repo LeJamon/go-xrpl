@@ -279,10 +279,10 @@ func testCleanupLoanDefaultFrozenCover(t *testing.T, cashBasis bool) {
 				repayment := lending.NewLoanPay(f.borrower.Address, hex.EncodeToString(lk.Key[:]), f.amount(1000))
 				repayment.SetFlags(lending.TfLoanLatePayment)
 				repaymentCode := "tecINVARIANT_FAILED"
-				if kind == "global" || kind == "individual" {
+				if kind == "global" || kind == "individual" || kind == "deep" {
 					repaymentCode = "tecFROZEN"
 				}
-				if kind == "issuance lock" {
+				if kind == "issuance lock" || kind == "holder lock" {
 					repaymentCode = "tecLOCKED"
 				}
 				borrowerBalance, borrowerSeq := f.env.Balance(f.borrower), f.env.Seq(f.borrower)
@@ -294,6 +294,23 @@ func testCleanupLoanDefaultFrozenCover(t *testing.T, cashBasis bool) {
 					require.NoError(t, err)
 					require.Equal(t, before, after)
 				}
+				for _, account := range []*jtx.Account{f.borrower, f.issuer, brokerAccount, vaultAccount} {
+					k := keylet.Account(account.ID)
+					raw, err := f.env.LedgerEntry(k)
+					require.NoError(t, err)
+					snapshots[k] = raw
+				}
+				if asset == "MPT" {
+					rawID, err := hex.DecodeString(f.asset.MPTIssuanceID)
+					require.NoError(t, err)
+					var issuance [24]byte
+					copy(issuance[:], rawID)
+					k := keylet.MPTIssuance(issuance)
+					raw, err := f.env.LedgerEntry(k)
+					require.NoError(t, err)
+					snapshots[k] = raw
+				}
+				ownerCount := f.env.OwnerCount(f.owner)
 				balance, seq := f.env.Balance(f.owner), f.env.Seq(f.owner)
 				m := lending.NewLoanManage(f.owner.Address, hex.EncodeToString(lk.Key[:]))
 				m.SetFlags(lending.TfLoanDefault)
@@ -303,6 +320,32 @@ func testCleanupLoanDefaultFrozenCover(t *testing.T, cashBasis bool) {
 					require.Empty(t, cleanupLoanFields(t, f.env, lk)["PrincipalOutstanding"])
 					require.Empty(t, cleanupLoanFields(t, f.env, keylet.LoanBrokerByID(f.brokerKey))["CoverAvailable"])
 					require.Equal(t, "10000", cleanupLoanFields(t, f.env, vk)["AssetsAvailable"])
+					require.Equal(t, "10000", cleanupLoanFields(t, f.env, vk)["AssetsTotal"])
+					require.Empty(t, cleanupLoanFields(t, f.env, vk)["LossUnrealized"])
+					require.Empty(t, cleanupLoanFields(t, f.env, keylet.LoanBrokerByID(f.brokerKey))["DebtTotal"])
+					require.Empty(t, cleanupLoanFields(t, f.env, lk)["PaymentRemaining"])
+					require.EqualValues(t, lending.LsfLoanDefault, cleanupLoanFields(t, f.env, lk)["Flags"])
+					found := map[string]bool{}
+					for _, node := range result.Metadata.AffectedNodes {
+						switch node.LedgerEntryType {
+						case "Loan":
+							found["Loan"] = true
+							require.Equal(t, "ModifiedNode", node.NodeType)
+							require.Equal(t, "1000", node.PreviousFields["PrincipalOutstanding"])
+							require.Equal(t, uint32(1), node.PreviousFields["PaymentRemaining"])
+							require.EqualValues(t, lending.LsfLoanDefault, node.FinalFields["Flags"])
+						case "LoanBroker":
+							found["LoanBroker"] = true
+							require.Equal(t, "1000", node.PreviousFields["DebtTotal"])
+							require.Equal(t, "1000", node.PreviousFields["CoverAvailable"])
+						case "Vault":
+							found["Vault"] = true
+							require.Equal(t, "9000", node.PreviousFields["AssetsAvailable"])
+							require.Equal(t, "10000", node.FinalFields["AssetsAvailable"])
+						}
+					}
+					require.Equal(t, map[string]bool{"Loan": true, "LoanBroker": true, "Vault": true}, found)
+
 					if asset == "MPT" {
 						f.token.RequireMPTokenAmount(brokerAccount, 0)
 						f.token.RequireMPTokenAmount(vaultAccount, 10000)
@@ -321,6 +364,7 @@ func testCleanupLoanDefaultFrozenCover(t *testing.T, cashBasis bool) {
 						require.Equal(t, before, after)
 					}
 				}
+				require.Equal(t, ownerCount, f.env.OwnerCount(f.owner))
 				require.Equal(t, balance-10, f.env.Balance(f.owner))
 				require.Equal(t, seq+1, f.env.Seq(f.owner))
 			})
@@ -349,5 +393,40 @@ func TestCleanupLoanPaymentDueBoundary(t *testing.T) {
 func TestCleanupLoanDefaultFrozenCover(t *testing.T) {
 	for _, cashBasis := range []bool{false, true} {
 		t.Run(fmt.Sprintf("LP1.1=%t", cashBasis), func(t *testing.T) { testCleanupLoanDefaultFrozenCover(t, cashBasis) })
+	}
+}
+
+func TestCleanupLoanImpairmentBoundaryModes(t *testing.T) {
+	for _, cleanup := range []bool{false, true} {
+		for _, delta := range []int64{-1, 0, 1} {
+			t.Run(fmt.Sprintf("cleanup=%t/delta=%d", cleanup, delta), func(t *testing.T) {
+				env, owner, _, lk, _, due := newCleanupLoan(t, cleanup, false)
+				now := uint32(int64(due) + delta)
+				env.CloseToParentCloseTime(now)
+				manage := lending.NewLoanManage(owner.Address, hex.EncodeToString(lk.Key[:]))
+				manage.SetFlags(lending.TfLoanImpair)
+				result := env.Submit(manage)
+				if cleanup && delta <= 0 {
+					jtx.RequireTxFail(t, result, "tecTOO_SOON")
+					require.Equal(t, due, cleanupLoanFields(t, env, lk)["NextPaymentDueDate"])
+					return
+				}
+				jtx.RequireTxSuccess(t, result)
+				expected := due
+				if !cleanup && delta < 0 {
+					expected = now
+				}
+				require.Equal(t, expected, cleanupLoanFields(t, env, lk)["NextPaymentDueDate"])
+				manage = lending.NewLoanManage(owner.Address, hex.EncodeToString(lk.Key[:]))
+				manage.SetFlags(lending.TfLoanUnimpair)
+				jtx.RequireTxSuccess(t, env.Submit(manage))
+				if !cleanup && delta >= 0 {
+					expected = now + 120
+				} else {
+					expected = due
+				}
+				require.Equal(t, expected, cleanupLoanFields(t, env, lk)["NextPaymentDueDate"])
+			})
+		}
 	}
 }
