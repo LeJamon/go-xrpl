@@ -425,7 +425,13 @@ func addWithdrawDestinationHolding(ctx *tx.ApplyContext, asset tx.Asset) ter.Res
 
 // Apply redeems the caller's shares for the underlying asset and delivers it to
 // the destination. Reference: rippled VaultWithdraw::doApply.
-func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
+func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
+	defer func() {
+		if recover() != nil {
+			result = ter.TecPATH_DRY
+		}
+	}()
+
 	vaultID, ok := v.vaultIDBytes()
 	if !ok {
 		return ter.TefINTERNAL
@@ -451,6 +457,21 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 	if result != ter.TesSUCCESS {
 		return result
 	}
+	fix340 := rules.FixCleanup3_4_0Enabled()
+	integral := asset.IsNative() || asset.IsMPT()
+	isFinal := shares == issuance.OutstandingAmount
+	if fix340 && !isFinal {
+		lossN, _ := vaultNumberForRules(vd.LossUnrealized, rules)
+		if fix320 && isSoleShareholder(ctx.View, ctx.AccountID, vd.ShareMPTID, issuance.OutstandingAmount) {
+			lossN = state.NewXRPLNumberScaled(0, 0, vaultNumberScale(rules), state.RoundToNearest)
+		}
+		if v.amountIsShares(vd) && assetsWithdrawnN.IsZero() && !assetsTotalN.Sub(lossN).IsZero() {
+			return ter.TecPRECISION_LOSS
+		}
+		if debitIsNonZeroDust(assetsTotalN, assetsWithdrawnN, integral) {
+			return ter.TecPRECISION_LOSS
+		}
+	}
 
 	// The caller must hold enough shares.
 	token, terr := readMPToken(ctx.View, keylet.MPTokenByID(vd.ShareMPTID, ctx.AccountID))
@@ -459,6 +480,22 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 	if token == nil || token.MPTAmount < shares {
 		return ter.TecINSUFFICIENT_FUNDS
+	}
+
+	if fix340 && !isFinal && assetsWithdrawnN.Signum() > 0 {
+		// Check availability before clamping so an overdraw reports insufficient
+		// funds even when the requested payout is below the posterior ULP.
+		if availN.Cmp(assetsWithdrawnN) < 0 {
+			return ter.TecINSUFFICIENT_FUNDS
+		}
+		assetsWithdrawnN, result = clampToAssetsTotalScale(
+			assetsTotalN,
+			assetsWithdrawnN.Negate(),
+			integral,
+		)
+		if result != ter.TesSUCCESS {
+			return result
+		}
 	}
 
 	// The vault must have enough available assets.

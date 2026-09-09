@@ -50,6 +50,30 @@ func TestFixCleanup330Registration(t *testing.T) {
 	}
 }
 
+func TestFixCleanup340Registration(t *testing.T) {
+	f := FeatureByName("fixCleanup3_4_0")
+	if f == nil {
+		t.Fatal("fixCleanup3_4_0 is not registered")
+	}
+	const amendmentID = "98433DD001A5737F773D74F8CA2A25A065089C73B2E611C760BAF369E4FECA76"
+	want, err := hex.DecodeString(amendmentID)
+	if err != nil {
+		t.Fatalf("decode fixCleanup3_4_0 amendment ID: %v", err)
+	}
+	if got := f.ID[:]; !bytes.Equal(got, want) {
+		t.Fatalf("fixCleanup3_4_0 ID = %X, want %s", got, amendmentID)
+	}
+	if f.Supported != SupportedNo || f.Vote != VoteDefaultNo {
+		t.Fatalf("fixCleanup3_4_0 status = (%v, %v), want (SupportedNo, VoteDefaultNo)", f.Supported, f.Vote)
+	}
+	if AllSupportedRules().Enabled(FeatureFixCleanup3_4_0) {
+		t.Fatal("unsupported fixCleanup3_4_0 must not be enabled by all-supported rules")
+	}
+	if GenesisRules().Enabled(FeatureFixCleanup3_4_0) {
+		t.Fatal("default-no fixCleanup3_4_0 must not be enabled by genesis rules")
+	}
+}
+
 func TestFeatureRegistry(t *testing.T) {
 	count := len(AllFeatures())
 	if count < 80 {

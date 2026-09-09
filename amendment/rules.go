@@ -212,6 +212,11 @@ func (r *Rules) FixCleanup3_3_0Enabled() bool {
 	return r.Enabled(FeatureFixCleanup3_3_0)
 }
 
+// FixCleanup3_4_0Enabled reports whether these rules activate the cleanup amendment.
+func (r *Rules) FixCleanup3_4_0Enabled() bool {
+	return r.Enabled(FeatureFixCleanup3_4_0)
+}
+
 // MPTokensV2Enabled returns true if the MPTokensV2 amendment is enabled — MPT
 // support in the DEX, AMM and Checks.
 func (r *Rules) MPTokensV2Enabled() bool {

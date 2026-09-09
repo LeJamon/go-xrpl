@@ -230,7 +230,13 @@ func (v *VaultClawback) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 
 // Apply burns the holder's shares and, for an issuer asset clawback, recovers
 // the corresponding assets to the issuer. Reference: rippled VaultClawback::doApply.
-func (v *VaultClawback) Apply(ctx *tx.ApplyContext) ter.Result {
+func (v *VaultClawback) Apply(ctx *tx.ApplyContext) (result ter.Result) {
+	defer func() {
+		if recover() != nil {
+			result = ter.TecPATH_DRY
+		}
+	}()
+
 	accountID := ctx.AccountID
 	holderID, herr := state.DecodeAccountID(v.Holder)
 	if herr != nil {
@@ -266,7 +272,6 @@ func (v *VaultClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	if result != ter.TesSUCCESS {
 		return result
 	}
-
 	vd.AssetsTotal = numberToString(assetsTotalN.Sub(assetsRecoveredN))
 	vd.AssetsAvailable = numberToString(availN.Sub(assetsRecoveredN))
 	if err := associateVaultAsset(vd, rules); err != nil {
@@ -322,6 +327,7 @@ func (v *VaultClawback) clawbackAmounts(
 	}()
 
 	rules := ctx.Rules()
+	fix340 := rules.FixCleanup3_4_0Enabled()
 	numberScale := vaultNumberScale(rules)
 	assetsTotalN, _ = vaultNumberForRules(vd.AssetsTotal, rules)
 	availN, _ = vaultNumberForRules(vd.AssetsAvailable, rules)
@@ -334,23 +340,26 @@ func (v *VaultClawback) clawbackAmounts(
 	)
 	asset := vaultAssetOf(vd)
 	integral := asset.IsNative() || asset.IsMPT()
-	fix340 := rules.Enabled(amendment.FeatureFixCleanup3_4_0)
-	if fix340 && isSoleShareholder(ctx.View, holderID, vd.ShareMPTID, issuance.OutstandingAmount) {
-		lossN = state.NewXRPLNumberScaled(0, 0, numberScale, state.RoundToNearest)
-	}
 	held := holderMPTBalance(ctx.View, vd.ShareMPTID, holderID)
 	assetsRecoveredN = state.NewXRPLNumberScaled(0, 0, numberScale, state.RoundToNearest)
 	clampAssets := false
+	waiveLoss := fix340 && isSoleShareholder(ctx.View, holderID, vd.ShareMPTID, issuance.OutstandingAmount)
+	if waiveLoss {
+		lossN = state.NewXRPLNumberScaled(0, 0, numberScale, state.RoundToNearest)
+	}
 
 	if v.clawsBackShares(vd, accountID) {
 		sharesDestroyed = held
 	} else if v.Amount == nil || v.Amount.Signum() == 0 {
 		sharesDestroyed = held
+		if waiveLoss {
+			sharesDestroyed = issuance.OutstandingAmount
+		}
 		assetsRecoveredN = sharesToAssetsWithdraw(
 			assetsTotalN,
 			lossN,
 			shareTotalN,
-			state.NewXRPLNumberScaled(int64(held), 0, numberScale, state.RoundToNearest),
+			state.NewXRPLNumberScaled(int64(sharesDestroyed), 0, numberScale, state.RoundToNearest),
 			integral,
 		)
 		clampAssets = rules.Enabled(amendment.FeatureFixCleanup3_1_3)

@@ -149,7 +149,7 @@ func sharesToAssetsDeposit(
 func assetsToSharesWithdraw(assetsTotal, lossUnrealized, shareTotal, assets state.XRPLNumber, truncate bool) state.XRPLNumber {
 	effective := assetsTotal.Sub(lossUnrealized)
 	if effective.IsZero() {
-		return effective
+		return shareTotal
 	}
 	result := shareTotal.Mul(assets).Div(effective)
 	if truncate {
