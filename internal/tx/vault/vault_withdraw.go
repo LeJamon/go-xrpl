@@ -173,13 +173,13 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 	if vd.WithdrawalPolicy != VaultStrategyFirstComeFirstServe {
 		return ter.TefINTERNAL
 	}
-	fix340 := config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0)
-	if fix340 && tx.IsPseudoAccountID(view, dstID) {
-		return ter.TecPSEUDO_ACCOUNT
-	}
 
 	if res := credential.ValidCredentials(view, accountID, v.CredentialIDs); res != ter.TesSUCCESS {
 		return res
+	}
+	fix340 := config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0)
+	if fix340 && tx.IsPseudoAccountID(view, dstID) {
+		return ter.TecPSEUDO_ACCOUNT
 	}
 
 	// canWithdraw's trust-limit branch is exempt for the share MPT, so a
