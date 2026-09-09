@@ -1,12 +1,16 @@
 package invariants
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 type mptTransferChange struct {
@@ -17,17 +21,48 @@ type mptTransferChange struct {
 	deleted   bool
 }
 
+// mptInvariantView adapts the invariant read view to the state-layer view used
+// by the MPT authorization and freeze helpers. Invariant checks are read-only;
+// the mutating methods fail closed if a helper ever attempts to write.
+type mptInvariantView struct {
+	ReadView
+	rules           *amendment.Rules
+	parentCloseTime uint32
+}
+
+func (v mptInvariantView) Rules() *amendment.Rules { return v.rules }
+
+func (v mptInvariantView) ParentCloseTime() uint32 { return v.parentCloseTime }
+
+func (mptInvariantView) Insert(keylet.Keylet, []byte) error {
+	return errors.New("MPT invariant view is read-only")
+}
+
+func (mptInvariantView) Update(keylet.Keylet, []byte) error {
+	return errors.New("MPT invariant view is read-only")
+}
+
+func (mptInvariantView) Erase(keylet.Keylet) error {
+	return errors.New("MPT invariant view is read-only")
+}
+
 // checkValidMPTTransfer enforces authorization for MPT transfers once the
 // transfer invariant is active. AccountRoot pseudo-account status is captured
 // from the pre-transaction image so deleting a broker or vault in the same
 // transaction cannot erase the authorization exemption before this check runs.
-func checkValidMPTTransfer(_ Transaction, result Result, entries []InvariantEntry, view ReadView, rules *amendment.Rules) *InvariantViolation {
+func checkValidMPTTransfer(tx Transaction, result Result, entries []InvariantEntry, view ReadView, rules *amendment.Rules) *InvariantViolation {
 	if rules == nil || (!rules.Enabled(amendment.FeatureMPTokensV2) && !rules.Enabled(amendment.FeatureFixCleanup3_4_0)) {
 		return nil
 	}
-	if result != TesSUCCESS {
+	if hasPrivilege(tx.TxType(), overrideFreeze) {
 		return nil
 	}
+	fix340Enabled := rules.Enabled(amendment.FeatureFixCleanup3_4_0)
+	parentCloseTime := uint32(0)
+	if provider, ok := view.(interface{ ParentCloseTime() uint32 }); ok {
+		parentCloseTime = provider.ParentCloseTime()
+	}
+	viewForMPT := mptInvariantView{ReadView: view, rules: rules, parentCloseTime: parentCloseTime}
 
 	changes := make(map[[24]byte]map[[20]byte]*mptTransferChange)
 	pseudoBefore := make(map[[20]byte]bool)
@@ -72,7 +107,11 @@ func checkValidMPTTransfer(_ Transaction, result Result, entries []InvariantEntr
 				change.beforeSet = true
 				if e.IsDelete {
 					change.deleted = true
-					deletedAuthorized[e.Key] = token.Flags&entry.LsfMPTAuthorized != 0
+					deletedKey := e.Key
+					if deletedKey == ([32]byte{}) {
+						deletedKey = keylet.MPTokenByID(token.MPTokenIssuanceID, token.Account).Key
+					}
+					deletedAuthorized[deletedKey] = token.Flags&entry.LsfMPTAuthorized != 0
 				}
 			} else {
 				change.after = token.MPTAmount
@@ -104,6 +143,10 @@ func checkValidMPTTransfer(_ Transaction, result Result, entries []InvariantEntr
 			change.afterSet = true
 		}
 	}
+	if fix340Enabled && result != TesSUCCESS && len(deletedAuthorized) != 0 {
+		return invalidMPTTransfer("MPToken deleted on failure")
+	}
+	isDEX := isMPTDEX(tx)
 
 	for issuanceID, byHolder := range changes {
 		issuanceRaw, err := view.Read(keylet.MPTIssuance(issuanceID))
@@ -111,13 +154,18 @@ func checkValidMPTTransfer(_ Transaction, result Result, entries []InvariantEntr
 			return invalidMPTTransfer(fmt.Sprintf("MPTokenIssuance: %v", err))
 		}
 		if issuanceRaw == nil {
+			for _, change := range byHolder {
+				if change.afterSet && change.before != change.after {
+					return invalidMPTTransfer("orphaned MPToken balance changed")
+				}
+			}
 			continue
 		}
 		issuance, err := state.ParseMPTokenIssuance(issuanceRaw)
 		if err != nil {
 			return invalidMPTTransfer(fmt.Sprintf("MPTokenIssuance: %v", err))
 		}
-		issuer := mptIssuer(issuanceID)
+		issuer := issuance.Issuer
 		senders, receivers := 0, 0
 		invalid := false
 		for account, change := range byHolder {
@@ -129,7 +177,7 @@ func checkValidMPTTransfer(_ Transaction, result Result, entries []InvariantEntr
 			if change.afterSet {
 				after = change.after
 			}
-			if before == after {
+			if !change.afterSet || before == after {
 				continue
 			}
 			if after > before {
@@ -137,22 +185,30 @@ func checkValidMPTTransfer(_ Transaction, result Result, entries []InvariantEntr
 			} else {
 				senders++
 			}
-			if !mptTransferAuthorized(view, issuanceID, issuer, account, issuance.Flags&entry.LsfMPTRequireAuth != 0, pseudoBefore, pseudoSeen, deletedAuthorized, change) {
+			if mptutil.IsFrozen(viewForMPT, issuanceID, account) ||
+				!mptTransferAuthorized(viewForMPT, issuanceID, issuer, account, issuance.Flags&entry.LsfMPTRequireAuth != 0, pseudoBefore, pseudoSeen, deletedAuthorized, change) {
 				invalid = true
 			}
 		}
-		if senders > 0 && receivers > 0 && (invalid || issuance.Flags&entry.LsfMPTCanTransfer == 0) {
+		waivesCanTransfer := tx.TxType() == protocol.TxTypeAMMWithdraw ||
+			(fix320Enabled(rules) && (tx.TxType() == protocol.TxTypeVaultWithdraw ||
+				tx.TxType() == protocol.TxTypeLoanBrokerCoverWithdraw || tx.TxType() == protocol.TxTypeLoanPay))
+		canTransfer := issuance.Flags&entry.LsfMPTCanTransfer != 0 || waivesCanTransfer
+		if senders > 0 && receivers > 0 && (invalid || !canTransfer || (isDEX && issuance.Flags&entry.LsfMPTCanTrade == 0)) {
 			return &InvariantViolation{
 				Name:    "ValidMPTTransfer",
 				Message: "invalid MPToken transfer between holders",
 			}
+		}
+		if fix340Enabled && result != TesSUCCESS && (senders > 0 || receivers > 0) {
+			return invalidMPTTransfer("MPToken balance changed on failure")
 		}
 	}
 	return nil
 }
 
 func mptTransferAuthorized(
-	view ReadView,
+	view state.LedgerView,
 	issuanceID [24]byte,
 	issuer, account [20]byte,
 	requireAuth bool,
@@ -172,18 +228,74 @@ func mptTransferAuthorized(
 			}
 		}
 	}
-	if !requireAuth {
-		return true
-	}
 	if change.deleted {
-		return deletedAuthorized[keylet.MPTokenByID(issuanceID, account).Key]
+		return !requireAuth || deletedAuthorized[keylet.MPTokenByID(issuanceID, account).Key]
 	}
-	raw, err := view.Read(keylet.MPTokenByID(issuanceID, account))
-	if err != nil || raw == nil {
+	parentCloseTime := uint32(0)
+	if provider, ok := view.(interface{ ParentCloseTime() uint32 }); ok {
+		parentCloseTime = provider.ParentCloseTime()
+	}
+	return mptutil.RequireAuthWithTypeAt(view, issuanceID, account, mptutil.LegacyAuth, parentCloseTime).IsSuccess()
+}
+
+func fix320Enabled(rules *amendment.Rules) bool {
+	return rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_2_0)
+}
+
+func isMPTDEX(tx Transaction) bool {
+	switch tx.TxType() {
+	case protocol.TxTypeAMMCreate, protocol.TxTypeAMMDeposit, protocol.TxTypeOfferCreate:
+		return true
+	case protocol.TxTypePayment:
+		fields, err := tx.Flatten()
+		if err != nil {
+			return true
+		}
+		amount, ok := mptAmountAsset(fields["Amount"])
+		if !ok {
+			return false
+		}
+		sendMax, ok := fields["SendMax"]
+		if !ok {
+			return false
+		}
+		maxAsset, ok := mptAmountAsset(sendMax)
+		return ok && !sameMPTAsset(amount, maxAsset)
+	default:
 		return false
 	}
-	token, err := state.ParseMPToken(raw)
-	return err == nil && token.Flags&entry.LsfMPTAuthorized != 0
+}
+
+func mptAmountAsset(value any) (Asset, bool) {
+	switch v := value.(type) {
+	case string:
+		return Asset{Currency: "XRP"}, true
+	case map[string]any:
+		if id, ok := v["mpt_issuance_id"].(string); ok && id != "" {
+			return Asset{MPTIssuanceID: strings.ToUpper(id)}, true
+		}
+		currency, currencyOK := v["currency"].(string)
+		issuer, issuerOK := v["issuer"].(string)
+		if !currencyOK {
+			return Asset{}, false
+		}
+		if currency == "XRP" && !issuerOK {
+			return Asset{Currency: "XRP"}, true
+		}
+		if !issuerOK {
+			return Asset{}, false
+		}
+		return Asset{Currency: currency, Issuer: issuer}, true
+	default:
+		return Asset{}, false
+	}
+}
+
+func sameMPTAsset(a, b Asset) bool {
+	if a.IsMPT() || b.IsMPT() {
+		return a.IsMPT() && b.IsMPT() && strings.EqualFold(a.MPTIssuanceID, b.MPTIssuanceID)
+	}
+	return a.Currency == b.Currency && a.Issuer == b.Issuer
 }
 
 func invalidMPTTransfer(message string) *InvariantViolation {
