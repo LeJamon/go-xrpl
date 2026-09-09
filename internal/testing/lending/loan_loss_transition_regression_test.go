@@ -96,7 +96,13 @@ func TestLoanPayReversesImpairmentWithExactAccounting(t *testing.T) {
 				if !ok {
 					t.Fatalf("impaired Loan NextPaymentDueDate = %v, want uint32", loanBeforePayment["NextPaymentDueDate"])
 				}
-				f.env.CloseToParentCloseTime(impairedDue + 1)
+				paymentTime := impairedDue + 1
+				if !cleanup {
+					interval, ok := loanBeforePayment["PaymentInterval"].(uint32)
+					require.True(t, ok)
+					paymentTime = impairedDue + interval
+				}
+				f.env.CloseToParentCloseTime(paymentTime)
 
 				periodic := lossNumber(t, loanBeforePayment, "PeriodicPayment")
 				paymentAmount := periodic.Add(state.NewNumberContext(state.MantissaScaleLarge, true).Int(1)).ToInt64WithMode(state.RoundUpward)
