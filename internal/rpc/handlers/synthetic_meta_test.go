@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"encoding/hex"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -246,7 +248,197 @@ func TestExpandStoredTransactionSyntheticMetadata(t *testing.T) {
 		},
 	}, strings.Repeat("0", 64), false, 2, modernSyntheticMetadataContext())
 	require.NoError(t, err)
-	assert.NotContains(t, response["meta"].(map[string]any), "offer_id")
+	assert.Equal(t, offerID, response["meta"].(map[string]any)["offer_id"])
+}
+
+func TestExpandStoredTransactionSyntheticNFTAndAccountDeleteMetadata(t *testing.T) {
+	const (
+		mintedID = "000800001234567890ABCDEF1234567890ABCDEF1234567890ABCDEF00000001"
+		offerID  = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	)
+
+	tests := []struct {
+		name     string
+		txJSON   map[string]any
+		metadata func() map[string]any
+		want     map[string]any
+	}{
+		{
+			name:   "successful mint",
+			txJSON: map[string]any{"TransactionType": "NFTokenMint"},
+			metadata: func() map[string]any {
+				return map[string]any{
+					"TransactionResult": "tesSUCCESS",
+					"AffectedNodes":     []any{nftPageNode("CreatedNode", "NewFields", mintedID)},
+				}
+			},
+			want: map[string]any{
+				"TransactionResult": "tesSUCCESS",
+				"AffectedNodes":     []any{nftPageNode("CreatedNode", "NewFields", mintedID)},
+				"nftoken_id":        mintedID,
+			},
+		},
+		{
+			name:   "failed mint has no synthetic fields",
+			txJSON: map[string]any{"TransactionType": "NFTokenMint"},
+			metadata: func() map[string]any {
+				return map[string]any{
+					"TransactionResult": "tecNO_PERMISSION",
+					"AffectedNodes":     []any{nftPageNode("CreatedNode", "NewFields", mintedID)},
+				}
+			},
+			want: map[string]any{
+				"TransactionResult": "tecNO_PERMISSION",
+				"AffectedNodes":     []any{nftPageNode("CreatedNode", "NewFields", mintedID)},
+			},
+		},
+		{
+			name:   "burn has no synthetic fields",
+			txJSON: map[string]any{"TransactionType": "NFTokenBurn"},
+			metadata: func() map[string]any {
+				return map[string]any{
+					"TransactionResult": "tesSUCCESS",
+					"AffectedNodes":     []any{nftPageNode("ModifiedNode", "FinalFields", mintedID)},
+				}
+			},
+			want: map[string]any{
+				"TransactionResult": "tesSUCCESS",
+				"AffectedNodes":     []any{nftPageNode("ModifiedNode", "FinalFields", mintedID)},
+			},
+		},
+		{
+			name:   "accept offer emits nftoken_id",
+			txJSON: map[string]any{"TransactionType": "NFTokenAcceptOffer"},
+			metadata: func() map[string]any {
+				return map[string]any{
+					"TransactionResult": "tesSUCCESS",
+					"AffectedNodes":     []any{deletedOfferNode(mintedID)},
+				}
+			},
+			want: map[string]any{
+				"TransactionResult": "tesSUCCESS",
+				"AffectedNodes":     []any{deletedOfferNode(mintedID)},
+				"nftoken_id":        mintedID,
+			},
+		},
+		{
+			name:   "cancel offers emits nftoken_ids",
+			txJSON: map[string]any{"TransactionType": "NFTokenCancelOffer"},
+			metadata: func() map[string]any {
+				return map[string]any{
+					"TransactionResult": "tesSUCCESS",
+					"AffectedNodes":     []any{deletedOfferNode(offerID), deletedOfferNode(mintedID), deletedOfferNode(offerID)},
+				}
+			},
+			want: map[string]any{
+				"TransactionResult": "tesSUCCESS",
+				"AffectedNodes":     []any{deletedOfferNode(offerID), deletedOfferNode(mintedID), deletedOfferNode(offerID)},
+				"nftoken_ids":       []any{mintedID, offerID},
+			},
+		},
+		{
+			name:   "create offer emits offer_id",
+			txJSON: map[string]any{"TransactionType": "NFTokenCreateOffer"},
+			metadata: func() map[string]any {
+				return map[string]any{
+					"TransactionResult": "tesSUCCESS",
+					"AffectedNodes": []any{map[string]any{"CreatedNode": map[string]any{
+						"LedgerEntryType": "NFTokenOffer",
+						"LedgerIndex":     offerID,
+					}}},
+				}
+			},
+			want: map[string]any{
+				"TransactionResult": "tesSUCCESS",
+				"AffectedNodes": []any{map[string]any{"CreatedNode": map[string]any{
+					"LedgerEntryType": "NFTokenOffer",
+					"LedgerIndex":     offerID,
+				}}},
+				"offer_id": offerID,
+			},
+		},
+		{
+			name:   "account delete copies delivered amount",
+			txJSON: map[string]any{"TransactionType": "AccountDelete"},
+			metadata: func() map[string]any {
+				return map[string]any{
+					"TransactionResult": "tesSUCCESS",
+					"DeliveredAmount":   "25",
+					"AffectedNodes":     []any{},
+				}
+			},
+			want: map[string]any{
+				"TransactionResult": "tesSUCCESS",
+				"DeliveredAmount":   "25",
+				"AffectedNodes":     []any{},
+				"delivered_amount":  "25",
+			},
+		},
+		{
+			name:   "account delete failure has no delivered amount",
+			txJSON: map[string]any{"TransactionType": "AccountDelete"},
+			metadata: func() map[string]any {
+				return map[string]any{
+					"TransactionResult": "tecNO_PERMISSION",
+					"DeliveredAmount":   "25",
+					"AffectedNodes":     []any{},
+				}
+			},
+			want: map[string]any{
+				"TransactionResult": "tecNO_PERMISSION",
+				"DeliveredAmount":   "25",
+				"AffectedNodes":     []any{},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		for _, apiVersion := range []int{1, 2, 3} {
+			metaKey := "metaData"
+			if apiVersion > 1 {
+				metaKey = "meta"
+			}
+			t.Run(tc.name+"/api_v"+strconv.Itoa(apiVersion), func(t *testing.T) {
+				response, err := expandStoredTransaction(StoredTransaction{
+					TxJSON: tc.txJSON,
+					Meta:   tc.metadata(),
+				}, strings.Repeat("0", 64), false, apiVersion, modernSyntheticMetadataContext())
+				require.NoError(t, err)
+				assert.Equal(t, tc.want, response[metaKey])
+				if apiVersion == 1 {
+					assert.NotContains(t, response, "meta")
+				} else {
+					assert.NotContains(t, response, "metaData")
+				}
+			})
+		}
+	}
+}
+
+func TestExpandStoredTransactionBinaryMetadataRemainsRaw(t *testing.T) {
+	const offerID = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	metadata := map[string]any{
+		"TransactionResult": "tesSUCCESS",
+		"AffectedNodes": []any{map[string]any{"CreatedNode": map[string]any{
+			"LedgerEntryType": "NFTokenOffer",
+			"LedgerIndex":     offerID,
+		}}},
+	}
+	wantMetaBlob, err := binarycodec.Encode(metadata)
+	require.NoError(t, err)
+
+	for _, apiVersion := range []int{1, 2, 3} {
+		response, err := expandStoredTransaction(StoredTransaction{
+			TxJSON: map[string]any{"TransactionType": "NFTokenCreateOffer"},
+			Meta:   metadata,
+		}, strings.Repeat("0", 64), true, apiVersion, modernSyntheticMetadataContext())
+		require.NoError(t, err)
+		metaKey := "meta"
+		if apiVersion > 1 {
+			metaKey = "meta_blob"
+		}
+		assert.Equal(t, wantMetaBlob, response[metaKey])
+	}
 }
 
 func TestExpandStoredTransactionProjection(t *testing.T) {
@@ -290,5 +482,5 @@ func TestExpandStoredTransactionProjection(t *testing.T) {
 		Meta:   map[string]any{"TransactionResult": "tesSUCCESS"},
 	}, hash, false, 2, modernSyntheticMetadataContext())
 	require.NoError(t, err)
-	assert.NotContains(t, accountDelete["meta"].(map[string]any), "delivered_amount")
+	assert.Equal(t, "unavailable", accountDelete["meta"].(map[string]any)["delivered_amount"])
 }

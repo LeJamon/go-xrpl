@@ -73,6 +73,35 @@ func TestProjectAcceptedTransactionInjectsSyntheticFields(t *testing.T) {
 	require.Equal(t, want, decodedMeta["mpt_issuance_id"])
 }
 
+func TestProjectAcceptedTransactionInjectsNFTSyntheticFields(t *testing.T) {
+	const tokenID = "000800001234567890ABCDEF1234567890ABCDEF1234567890ABCDEF00000001"
+	txJSON := map[string]any{
+		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Fee":             "10",
+		"NFTokenTaxon":    uint32(0),
+		"Sequence":        uint32(42),
+		"SigningPubKey":   "",
+		"TransactionType": "NFTokenMint",
+	}
+	meta := map[string]any{
+		"AffectedNodes": []any{map[string]any{"CreatedNode": map[string]any{
+			"LedgerEntryType": "NFTokenPage",
+			"NewFields": map[string]any{
+				"NFTokens": []any{map[string]any{"NFToken": map[string]any{"NFTokenID": tokenID}}},
+			},
+		}}},
+		"TransactionIndex":  uint32(0),
+		"TransactionResult": "tesSUCCESS",
+	}
+
+	projection, err := projectAcceptedTransaction(
+		service.ParseAcceptedTransaction(validatedTransactionDataWithMetadata(t, txJSON, meta)),
+		handlers.SyntheticMetadataContext{LedgerSequence: 4_594_095},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tokenID, projection.metadata["nftoken_id"])
+}
+
 func TestBuildValidatedTransactionEventProjection(t *testing.T) {
 	const (
 		ledgerSequence   = uint32(1)
@@ -331,6 +360,11 @@ func validatedTransactionData(t *testing.T, txJSON map[string]any, transactionIn
 		"TransactionIndex":  transactionIndex,
 		"TransactionResult": "tecUNFUNDED_PAYMENT",
 	}
+	return validatedTransactionDataWithMetadata(t, txJSON, meta)
+}
+
+func validatedTransactionDataWithMetadata(t *testing.T, txJSON, meta map[string]any) []byte {
+	t.Helper()
 	txHex, err := binarycodec.Encode(txJSON)
 	require.NoError(t, err)
 	txBlob, err := hex.DecodeString(txHex)

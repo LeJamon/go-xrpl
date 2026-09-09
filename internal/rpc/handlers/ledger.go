@@ -746,28 +746,21 @@ func expandStoredTransaction(
 		return txEntry, nil
 	}
 
+	if storedTx.Meta != nil {
+		InjectSyntheticFields(storedTx.TxJSON, storedTx.Meta, ctx)
+	}
+
 	if apiVersion > 1 {
 		txEntry["tx_json"] = txprojection.ProjectJSON(storedTx.TxJSON, "", apiVersion)
 		txEntry["hash"] = hashStr
 		if storedTx.Meta != nil {
-			injectExpandedLedgerDeliveredAmount(storedTx.TxJSON, storedTx.Meta, ctx)
-			injectMPTokenIssuanceID(storedTx.TxJSON, storedTx.Meta)
 			txEntry["meta"] = storedTx.Meta
 		}
 	} else {
 		maps.Copy(txEntry, txprojection.ProjectJSON(storedTx.TxJSON, hashStr, apiVersion))
 		if storedTx.Meta != nil {
-			injectExpandedLedgerDeliveredAmount(storedTx.TxJSON, storedTx.Meta, ctx)
-			injectMPTokenIssuanceID(storedTx.TxJSON, storedTx.Meta)
 			txEntry["metaData"] = storedTx.Meta
 		}
 	}
 	return txEntry, nil
-}
-
-func injectExpandedLedgerDeliveredAmount(txJSON, meta map[string]any, ctx SyntheticMetadataContext) {
-	txType, _ := txJSON["TransactionType"].(string)
-	if txType == "Payment" || txType == "CheckCash" {
-		InjectDeliveredAmount(txJSON, meta, ctx)
-	}
 }

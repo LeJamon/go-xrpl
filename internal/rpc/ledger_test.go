@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -574,6 +575,74 @@ func TestLedgerFullOption(t *testing.T) {
 		assert.True(t, isMap, "With expand, transactions should be objects")
 		assert.Contains(t, txObj, "hash")
 	})
+}
+
+func TestLedgerExpandedSyntheticMetadataForAccountDelete(t *testing.T) {
+	storedTxData, err := json.Marshal(handlers.StoredTransaction{
+		TxJSON: map[string]any{
+			"TransactionType": "AccountDelete",
+			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination":     "rDsbeomae4FXwgQTJp9Rs64Qg9vDiTCdBv",
+			"Fee":             "10",
+			"Sequence":        1,
+			"SigningPubKey":   "",
+		},
+		Meta: map[string]any{
+			"AffectedNodes":     []any{},
+			"DeliveredAmount":   "25",
+			"TransactionResult": "tesSUCCESS",
+		},
+	})
+	require.NoError(t, err)
+
+	reader := newDefaultLedgerReader(2, true)
+	reader.transactions = []struct {
+		hash [32]byte
+		data []byte
+	}{{hash: [32]byte{1}, data: storedTxData}}
+	mock := &ledgerMock{mockLedgerService: newMockLedgerService()}
+	mock.getLedgerBySequenceFn = func(sequence uint32) (types.LedgerReader, error) {
+		require.Equal(t, uint32(2), sequence)
+		return reader, nil
+	}
+	mock.getLedgerDataFn = func(string, uint32, string) (*types.LedgerDataResult, error) {
+		return &types.LedgerDataResult{}, nil
+	}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
+	method := &handlers.LedgerMethod{}
+
+	for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3} {
+		metaKey := "metaData"
+		if apiVersion > 1 {
+			metaKey = "meta"
+		}
+		for _, tc := range []struct {
+			name   string
+			role   types.Role
+			params string
+		}{
+			{name: "expanded", role: types.RoleGuest, params: `{"ledger_index":2,"transactions":true,"expand":true}`},
+			{name: "full admin", role: types.RoleAdmin, params: `{"ledger_index":2,"full":true}`},
+		} {
+			t.Run(tc.name+"/api_v"+strconv.Itoa(apiVersion), func(t *testing.T) {
+				ctx := &types.RpcContext{
+					Context:    context.Background(),
+					Role:       tc.role,
+					ApiVersion: apiVersion,
+					Services:   services,
+				}
+				result, rpcErr := method.Handle(ctx, json.RawMessage(tc.params))
+				require.Nil(t, rpcErr)
+				ledger := result.(map[string]any)["ledger"].(map[string]any)
+				transactions := ledger["transactions"].([]any)
+				require.Len(t, transactions, 1)
+				entry := transactions[0].(map[string]any)
+				meta := entry[metaKey].(map[string]any)
+				assert.Equal(t, "25", meta["delivered_amount"])
+				assert.Equal(t, "tesSUCCESS", meta["TransactionResult"])
+			})
+		}
+	}
 }
 
 func TestLedgerExpandedTransactionsStopAtMalformedLeaf(t *testing.T) {
