@@ -106,7 +106,7 @@ func (c *ConfidentialMPTSend) validate(rules *amendment.Rules) error {
 		}
 	}
 	credentialsPresent := c.CredentialIDs != nil || c.HasField("CredentialIDs")
-	return credential.CheckFields(c.CredentialIDs, credentialsPresent, "Duplicate credential ID", rules)
+	return credential.CheckFieldsWithRules(c.CredentialIDs, credentialsPresent, "Duplicate credential ID", rules)
 }
 
 func (c *ConfidentialMPTSend) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {

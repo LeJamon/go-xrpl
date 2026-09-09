@@ -529,10 +529,3 @@ func (l *LoanPay) Validate() error {
 
 func (l *LoanPay) Flatten() (map[string]any, error) { return tx.ReflectFlatten(l) }
 func (l *LoanPay) RequiredAmendments() [][32]byte   { return requiredLending() }
-
-func (l *LoanBrokerCoverWithdraw) CheckExtraFeatures(rules *amendment.Rules) error {
-	if (l.CredentialIDs != nil || l.HasField("CredentialIDs")) && (!rules.Enabled(amendment.FeatureCredentials) || !rules.Enabled(amendment.FeatureFixCleanup3_4_0)) {
-		return ter.Errorf(ter.TemDISABLED, "CredentialIDs requires Credentials and fixCleanup3_4_0")
-	}
-	return nil
-}

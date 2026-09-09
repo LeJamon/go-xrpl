@@ -472,7 +472,7 @@ func TestCanWithdrawRequiresPrevalidatedCredentials(t *testing.T) {
 	id := make([]byte, 32)
 	id[31] = 3
 	credentialIDs := []string{hex.EncodeToString(id)}
-	require.Equal(t, ter.TecINTERNAL, canWithdraw(view, from, to, tx.NewXRPAmount(1), false, state.NumberContext{}, credentialIDs))
+	require.Equal(t, ter.TecINTERNAL, canWithdraw(view, from, to, tx.NewXRPAmount(1), false, credentialIDs, state.NumberContext{}))
 	view.data[keylet.DepositPreauth(to, from).Key] = []byte{1}
-	require.Equal(t, ter.TesSUCCESS, canWithdraw(view, from, to, tx.NewXRPAmount(1), false, state.NumberContext{}, credentialIDs))
+	require.Equal(t, ter.TesSUCCESS, canWithdraw(view, from, to, tx.NewXRPAmount(1), false, credentialIDs, state.NumberContext{}))
 }

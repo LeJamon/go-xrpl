@@ -532,9 +532,11 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	if derr != nil {
 		return ter.TefINTERNAL
 	}
-	if dstID == ctx.AccountID && (assetsWithdrawnN.Signum() > 0 || !rules.Enabled(amendment.FeatureFixCleanup3_4_0)) {
-		if res := addWithdrawDestinationHolding(ctx, asset); res != ter.TesSUCCESS {
-			return res
+	if dstID == ctx.AccountID {
+		if !rules.Enabled(amendment.FeatureFixCleanup3_4_0) || !assetsWithdrawnN.IsZero() {
+			if res := addWithdrawDestinationHolding(ctx, asset); res != ter.TesSUCCESS {
+				return res
+			}
 		}
 	} else {
 		dstAccount, err := tx.ReadAccountRoot(ctx.View, dstID)
@@ -554,11 +556,4 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	}
 
 	return ter.TesSUCCESS
-}
-
-func (v *VaultWithdraw) CheckExtraFeatures(rules *amendment.Rules) error {
-	if (v.CredentialIDs != nil || v.HasField("CredentialIDs")) && (!rules.Enabled(amendment.FeatureCredentials) || !rules.Enabled(amendment.FeatureFixCleanup3_4_0)) {
-		return ter.Errorf(ter.TemDISABLED, "CredentialIDs requires Credentials and fixCleanup3_4_0")
-	}
-	return nil
 }

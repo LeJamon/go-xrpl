@@ -21,8 +21,8 @@ import (
 func TestCheckFieldsTreatsHexCaseAsTheSameCredential(t *testing.T) {
 	lower := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 	upper := "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789"
-	if result := CheckFields([]string{lower, upper}, true, "duplicate credential ID", nil); result == nil || !strings.Contains(result.Error(), "temMALFORMED") {
-		t.Fatalf("CheckFields() = %v, want temMALFORMED", result)
+	if result := CheckFieldsWithRules([]string{lower, upper}, true, "duplicate credential ID", nil); result == nil || !strings.Contains(result.Error(), "temMALFORMED") {
+		t.Fatalf("CheckFieldsWithRules() = %v, want temMALFORMED", result)
 	}
 }
 
@@ -304,7 +304,7 @@ func TestCleanupZeroCredentialGuards(t *testing.T) {
 			rules = amendment.NewRulesBuilder().Enable(amendment.FeatureCredentials).Enable(amendment.FeatureFixCleanup3_4_0).Build()
 		}
 		for _, zero := range []string{"0", strings.Repeat("0", 64)} {
-			err := CheckFields([]string{zero}, true, "duplicate", rules)
+			err := CheckFieldsWithRules([]string{zero}, true, "duplicate", rules)
 			if cleanup {
 				require.ErrorContains(t, err, "temMALFORMED")
 			} else {

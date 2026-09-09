@@ -146,7 +146,7 @@ func (p *PaymentChannelClaim) validate(rules *amendment.Rules) error {
 	// after the Signature block. Use HasField to detect an empty array that binary
 	// parsing leaves as a nil Go slice. Reference: rippled credentials::checkFields.
 	present := p.CredentialIDs != nil || p.HasField("CredentialIDs")
-	if err := credential.CheckFields(p.CredentialIDs, present, "duplicates in credentials", rules); err != nil {
+	if err := credential.CheckFieldsWithRules(p.CredentialIDs, present, "duplicates in credentials", rules); err != nil {
 		return err
 	}
 

@@ -72,7 +72,7 @@ func (a *AccountDelete) validate(rules *amendment.Rules) error {
 	if a.Account == a.Destination {
 		return ter.Errorf(ter.TemDST_IS_SRC, "cannot delete account to self")
 	}
-	if err := credential.CheckFields(a.CredentialIDs, a.credentialIDsPresent(), "Duplicate credential ID", rules); err != nil {
+	if err := credential.CheckFieldsWithRules(a.CredentialIDs, a.credentialIDsPresent(), "Duplicate credential ID", rules); err != nil {
 		return err
 	}
 	return nil

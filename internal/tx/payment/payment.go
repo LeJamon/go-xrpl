@@ -270,7 +270,7 @@ func (p *Payment) validate(rules *amendment.Rules) error {
 	}
 
 	present := p.CredentialIDs != nil || p.HasField("CredentialIDs")
-	if err := credential.CheckFields(p.CredentialIDs, present, "Duplicate credential ID", rules); err != nil {
+	if err := credential.CheckFieldsWithRules(p.CredentialIDs, present, "Duplicate credential ID", rules); err != nil {
 		return err
 	}
 

@@ -102,7 +102,7 @@ func (e *EscrowFinish) CheckExtraFeatures(rules *amendment.Rules) error {
 // Reference: rippled Escrow.cpp EscrowFinish::preflightSigValidated.
 func (e *EscrowFinish) PreflightSigValidated(rules *amendment.Rules) error {
 	present := e.CredentialIDs != nil || e.HasField("CredentialIDs")
-	return credential.CheckFields(e.CredentialIDs, present, "Duplicate credential ID", rules)
+	return credential.CheckFieldsWithRules(e.CredentialIDs, present, "Duplicate credential ID", rules)
 }
 
 // CalculateBaseFee mirrors rippled's EscrowFinish::calculateBaseFee: the
