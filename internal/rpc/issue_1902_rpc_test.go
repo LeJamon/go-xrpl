@@ -165,7 +165,7 @@ func TestIssue1902AggregatePriceDeduplicatesPairsAndPreservesLimit(t *testing.T)
 		assert.Equal(t, 1, count, "oracle %X was looked up more than once", key)
 	}
 
-	duplicateOracles := make([]map[string]any, 200)
+	duplicateOracles := make([]map[string]any, 200, 201)
 	for i := range duplicateOracles {
 		duplicateOracles[i] = oracles[0]
 	}
