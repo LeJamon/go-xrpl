@@ -65,6 +65,7 @@ func TestLoanPayAssetPaymentRollbackAndAccounting(t *testing.T) {
 						matrixAmount(t, f, periodic.Sub(one)),
 					))
 					jtx.RequireTxClaimed(t, failed, "tecINSUFFICIENT_PAYMENT")
+					require.Equal(t, uint64(20), failed.Fee)
 					require.Equal(t, failedBalance-failed.Fee, f.env.Balance(f.borrower))
 					require.Equal(t, failedSequence+1, f.env.Seq(f.borrower))
 					assertAccountingEntriesEqual(t, "Loan after failed payment", loanBefore, decodeLendingEntry(t, f.env, loanKey))
@@ -85,6 +86,7 @@ func TestLoanPayAssetPaymentRollbackAndAccounting(t *testing.T) {
 						matrixAmount(t, f, periodic.Add(one)),
 					))
 					jtx.RequireTxSuccess(t, payment)
+					require.Equal(t, uint64(20), payment.Fee)
 					require.Equal(t, paymentBalance-payment.Fee, f.env.Balance(f.borrower))
 					require.Equal(t, paymentSequence+1, f.env.Seq(f.borrower))
 
