@@ -674,6 +674,8 @@ func TestFrozenPivotRecoveryDoesNotTimeoutPivotDownload(t *testing.T) {
 
 func TestFrozenPivotBootstrapFailureRearmsTrustedTarget(t *testing.T) {
 	r, _, rs, svc := makeRouter(t)
+	base := svc.GetValidatedLedger()
+	svc.SetValidatedLedgerAgeClock(func() time.Time { return base.CloseTime().Add(90 * time.Second) })
 	pivot := completedCatchUpAcquisition(t, svc.GetClosedLedgerIndex()+10)
 	pivotSeq, pivotHash := pivot.Seq(), pivot.Hash()
 	r.fetchTracker.Track(pivot)

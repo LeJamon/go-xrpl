@@ -53,12 +53,13 @@ func TestRuntimeRecoveryRepairsThirtyLedgerOutage(t *testing.T) {
 				base := svc.GetClosedLedger()
 				signTime := base.CloseTime()
 				svc.SetValidatedLedgerAt(base.Sequence(), base.Hash(), signTime)
-				svc.SetValidatedLedgerAgeClock(func() time.Time { return signTime.Add(90 * time.Second) })
 				require.NoError(t, svc.SwitchToPreferredLedger(base))
 				require.False(t, svc.NeedsInitialSync())
 				require.False(t, svc.IsFastLoadProvisional())
 
 				a, sender := newRecordingAdaptor(t, svc)
+				svc.SetValidatedLedgerAgeClock(func() time.Time { return signTime.Add(90 * time.Second) })
+				require.Equal(t, 90*time.Second, svc.GetValidatedLedgerAge())
 				sender.peerSupportsReplay = false
 				engine := &mockEngine{switchResult: consensus.LedgerSwitchAccepted}
 				engine.switchHook = func(id consensus.LedgerID) {
@@ -105,6 +106,7 @@ func TestRuntimeRecoveryRepairsThirtyLedgerOutage(t *testing.T) {
 				}
 				r.onLedgerFullyValidated(target.seq, target.hash)
 				r.armConsensusCatchup()
+				require.Equal(t, 90*time.Second, svc.GetValidatedLedgerAge())
 				require.NotNil(t, r.headerDiscovery)
 				generation := r.headerDiscovery.generation
 				deadline := r.headerDiscovery.deadline
