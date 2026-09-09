@@ -636,22 +636,10 @@ func decodeHeaderDiscoveryHeader(ld *message.LedgerData) (*header.LedgerHeader, 
 		return nil, errors.New("header reply has no header node")
 	}
 	data := ld.Nodes[0].NodeData
-	var (
-		h   *header.LedgerHeader
-		err error
-	)
-	switch len(data) {
-	case header.SizeBase:
-		h, err = header.DeserializeHeader(data, false)
-	case header.SizeWithHash:
-		h, err = header.DeserializeHeader(data, true)
-	case 4 + header.SizeBase:
-		h, err = header.DeserializePrefixedHeader(data, false)
-	case 4 + header.SizeWithHash:
-		h, err = header.DeserializePrefixedHeader(data, true)
-	default:
+	if len(data) < header.SizeBase {
 		return nil, fmt.Errorf("invalid header node size: %d", len(data))
 	}
+	h, err := header.DeserializeHeader(data[:header.SizeBase], false)
 	if err != nil {
 		return nil, err
 	}
