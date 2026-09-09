@@ -66,6 +66,10 @@ type historyComponent struct {
 	completeLedgerFloor  uint32
 	completeLedgerTokens map[uint32]uint64
 
+	validatedStateBaseMu        sync.RWMutex
+	validatedStateBaseProof     *validatedStateBaseProof
+	validatedStateBaseCandidate *validatedStateBaseProof
+
 	nextCompleteLedgerToken uint64
 	sweepMu                 sync.Mutex
 	sweepCancel             context.CancelFunc

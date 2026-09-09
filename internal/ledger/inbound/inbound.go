@@ -156,6 +156,7 @@ type Ledger struct {
 	// byHash latches eligibility for a by-hash escalation on the next aggressive
 	// request. All guarded by mu.
 	lastTimer           time.Time
+	lastProgressReport  time.Time
 	progress            bool
 	timeouts            int
 	consecutiveTimeouts int
@@ -1655,8 +1656,12 @@ type Snapshot struct {
 	StateEqualSubtreesSkipped  uint64
 	StateNodesDescended        uint64
 	StateDurableReads          uint64
+	StateNodesLoaded           uint64
 	StateMissingDiscovered     uint64
 	StateVerifiedBaseFallbacks uint64
+	TxNodesDescended           uint64
+	TxDurableReads             uint64
+	TxNodesLoaded              uint64
 	NeededState                [][32]byte // hashes of up to missingNodeBatch missing state nodes
 	NeededTx                   [][32]byte // hashes of up to missingNodeBatch missing tx nodes
 }
@@ -1711,12 +1716,19 @@ func (l *Ledger) snapshotLocked() Snapshot {
 		TxUseful:         l.txUseful,
 	}
 	if l.stateMap != nil {
+		s.StateNodesLoaded = l.stateMap.FamilyLoadCount()
 		stats := l.stateMap.BackedWalkStats()
 		s.StateEqualSubtreesSkipped = stats.EqualSubtreesSkipped
 		s.StateNodesDescended = stats.NodesDescended
 		s.StateDurableReads = stats.DurableReads
 		s.StateMissingDiscovered = stats.MissingNodes
 		s.StateVerifiedBaseFallbacks = stats.VerifiedBaseFallbacks
+	}
+	if l.txMap != nil {
+		s.TxNodesLoaded = l.txMap.FamilyLoadCount()
+		stats := l.txMap.BackedWalkStats()
+		s.TxNodesDescended = stats.NodesDescended
+		s.TxDurableReads = stats.DurableReads
 	}
 	if !l.haveState {
 		s.NeededState = cloneHashes(l.neededState)

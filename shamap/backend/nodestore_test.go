@@ -124,6 +124,9 @@ func TestNodeStoreRejectsWritesBelowMinimumLedger(t *testing.T) {
 	}
 
 	family.SetMinimumLedgerSeq(250)
+	if got := family.MinimumLedgerSeq(); got != 250 {
+		t.Fatalf("minimum ledger sequence = %d, want 250", got)
+	}
 	entry.LedgerSeq = 200
 	if err := family.StoreBatch(ctx, []shamap.FlushEntry{entry}); !errors.Is(err, ErrStoreBelowMinimum) {
 		t.Fatalf("below-floor store error = %v, want %v", err, ErrStoreBelowMinimum)

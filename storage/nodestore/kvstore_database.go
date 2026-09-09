@@ -81,6 +81,9 @@ type KVDatabase struct {
 	identityMu  sync.Mutex
 	mutationMu  sync.RWMutex
 
+	durableSnapshotMu   sync.Mutex
+	durableSnapshotRefs uint64
+
 	pruneMu       sync.RWMutex
 	writeMu       sync.Mutex
 	store         kvstore.KeyValueStore

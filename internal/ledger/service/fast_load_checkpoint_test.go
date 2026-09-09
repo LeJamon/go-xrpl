@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
@@ -138,7 +139,7 @@ func TestService_FastLoadCheckpointCleanRestartAndOneUse(t *testing.T) {
 	require.Equal(t, checkpoint.strictNodes, reader.fastLoadStrictNodes.Load())
 	require.Equal(t, checkpoint.strictElapsed, reader.fastLoadStrictElapsed.Load())
 	require.Equal(t, len(checkpoint.stateProofs)+len(checkpoint.txProofs), tracked.uncachedReads())
-	baseRoot, releaseBase, available, err := reader.AcquireFastLoadStateBase(ctx)
+	baseRoot, releaseBase, available, err := reader.AcquireValidatedStateBase(ctx)
 	require.NoError(t, err)
 	require.True(t, available)
 	require.Equal(t, checkpoint.stateRoot, baseRoot)
@@ -161,7 +162,7 @@ func TestService_FastLoadCheckpointCleanRestartAndOneUse(t *testing.T) {
 	secondRestart := newFastLoadCheckpointService(t, tracked, repositories, false)
 	require.NoError(t, secondRestart.Start())
 	require.Greater(t, tracked.uncachedReads(), len(checkpoint.stateProofs)+len(checkpoint.txProofs))
-	baseRoot, releaseBase, available, err = secondRestart.AcquireFastLoadStateBase(ctx)
+	baseRoot, releaseBase, available, err = secondRestart.AcquireValidatedStateBase(ctx)
 	require.NoError(t, err)
 	require.True(t, available)
 	require.Equal(t, checkpoint.stateRoot, baseRoot)
@@ -421,6 +422,148 @@ func TestService_FastLoadStrictTraversalDoesNotRequireReusableSnapshot(t *testin
 	}
 }
 
+func TestService_ValidatedStateBaseStrictRestartAndPersistenceAdvance(t *testing.T) {
+	ctx := context.Background()
+	db := newTestNodeStore(t, 100_000)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	repositories := newTestRepositories(t, ctx)
+
+	writer := newFastLoadCheckpointService(t, db, repositories, true)
+	require.NoError(t, writer.Start())
+	_, err := writer.AcceptLedger(ctx)
+	require.NoError(t, err)
+	writer.FlushPersists()
+	writer.Stop()
+
+	reader := newFastLoadCheckpointService(t, db, repositories, true)
+	require.NoError(t, reader.Start())
+	defer reader.Stop()
+
+	for range 3 {
+		validated := reader.GetValidatedLedger()
+		require.NotNil(t, validated)
+		root, release, available, err := reader.AcquireValidatedStateBase(ctx)
+		require.NoError(t, err)
+		require.True(t, available)
+		require.Equal(t, validated.Header().AccountHash, root)
+		require.NotNil(t, release)
+		release()
+
+		_, err = reader.AcceptLedger(ctx)
+		require.NoError(t, err)
+		reader.FlushPersists()
+	}
+
+	validated := reader.GetValidatedLedger()
+	require.NotNil(t, validated)
+	proof, ok := reader.currentValidatedStateBaseProof()
+	require.True(t, ok)
+	require.Equal(t, validated.Sequence(), proof.sequence)
+	require.Equal(t, validated.Hash(), proof.ledgerHash)
+
+	token := reader.beginValidatedPersistence(validated.Sequence(), validated.Hash())
+	_, release, available, err := reader.AcquireValidatedStateBase(ctx)
+	require.NoError(t, err)
+	require.False(t, available)
+	require.Nil(t, release)
+	reader.recordValidatedPersistence(validated.Sequence(), token, false)
+	_, release, available, err = reader.AcquireValidatedStateBase(ctx)
+	require.NoError(t, err)
+	require.False(t, available)
+	require.Nil(t, release)
+}
+
+func TestService_ValidatedStateBaseBootstrapCandidateUsesCompleteBoundGeneration(t *testing.T) {
+	for _, storeAtRuntime := range []bool{false, true} {
+		for _, deleteBeforeStore := range []bool{false, true} {
+			name := "bootstrap complete candidate"
+			if storeAtRuntime {
+				name = "runtime store complete candidate"
+			}
+			if deleteBeforeStore {
+				name += ", rejects direct durable deletion"
+			}
+			t.Run(name, func(t *testing.T) {
+				ctx := context.Background()
+				db := newTestNodeStore(t, 100_000)
+				t.Cleanup(func() { require.NoError(t, db.Close()) })
+				repositories := newTestRepositories(t, ctx)
+
+				writer := newFastLoadCheckpointService(t, db, repositories, true)
+				require.NoError(t, writer.Start())
+				var stateKey [32]byte
+				stateKey[0] = 0xd1
+				stateKey[31] = 0x01
+				require.NoError(t, writer.openLedger.Insert(keylet.Keylet{Key: stateKey}, []byte("candidate-state")))
+				_, err := writer.AcceptLedger(ctx)
+				require.NoError(t, err)
+				writer.FlushPersists()
+				target := writer.GetValidatedLedger()
+				require.NotNil(t, target)
+				targetHeader := target.Header()
+				writer.Stop()
+
+				reader, err := New(Config{
+					Standalone: false, Startup: StartupConfig{Mode: StartupNetwork},
+					GenesisConfig: genesis.DefaultConfig(), NodeStore: db,
+					SHAMapFamily: backend.New(db), RelationalDB: repositories, FastLoad: true,
+				})
+				require.NoError(t, err)
+				require.NoError(t, reader.Start())
+				t.Cleanup(reader.Stop)
+				require.True(t, reader.NeedsInitialSync())
+
+				stateMap, err := shamap.NewFromRootHashContext(ctx, shamap.TypeState, targetHeader.AccountHash, reader.shamapFamily)
+				require.NoError(t, err)
+				require.NoError(t, stateMap.StartSync())
+				require.NoError(t, stateMap.FinishSyncContext(ctx))
+
+				candidateHeader := targetHeader
+				candidateHeader.Validated = false
+				candidateHeader.CloseFlags ^= header.LCFNoConsensusTime
+				candidateHeader.Hash = header.CalculateHash(candidateHeader)
+				if storeAtRuntime {
+					reader.mu.Lock()
+					reader.networkLedgerState = networkLedgerReady
+					reader.mu.Unlock()
+				}
+				if deleteBeforeStore {
+					deleted, deleteErr := db.DeleteBefore(ctx, candidateHeader.LedgerIndex, 1)
+					require.NoError(t, deleteErr)
+					require.Positive(t, deleted)
+				}
+				if storeAtRuntime {
+					require.NoError(t, reader.StoreLedgerWithState(ctx, &candidateHeader, stateMap, nil))
+				} else {
+					initialCandidate, err := reader.BootstrapLedgerWithState(ctx, &candidateHeader, stateMap, nil)
+					require.NoError(t, err)
+					require.True(t, initialCandidate)
+				}
+				reader.FlushPersists()
+
+				stored, err := reader.GetLedgerByHash(candidateHeader.Hash)
+				require.NoError(t, err)
+				require.NoError(t, reader.SwitchToPreferredLedger(stored))
+				reader.SetValidatedLedgerAt(candidateHeader.LedgerIndex, candidateHeader.Hash, time.Time{})
+				reader.FlushPersists()
+
+				root, release, available, err := reader.AcquireValidatedStateBase(ctx)
+				if deleteBeforeStore {
+					require.ErrorContains(t, err, "completeness proof")
+					require.False(t, available)
+					require.Nil(t, release)
+					return
+				}
+				require.NoError(t, err)
+				require.True(t, available)
+				require.Equal(t, candidateHeader.AccountHash, root)
+				require.NotNil(t, release)
+				release()
+			})
+		}
+	}
+}
+
 func TestService_FastLoadBaseRejectsMutationBeforePivot(t *testing.T) {
 	ctx := context.Background()
 	db := newTestNodeStore(t, 100_000)
@@ -441,6 +584,141 @@ func TestService_FastLoadBaseRejectsMutationBeforePivot(t *testing.T) {
 	require.ErrorContains(t, err, "mutation generation changed")
 	require.False(t, available)
 	require.Nil(t, release)
+}
+
+func TestService_ValidatedStateBasePinsCompleteValidatedLedger(t *testing.T) {
+	ctx := context.Background()
+	db := newTestNodeStore(t, 100_000)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	svc := newFastLoadCheckpointService(t, db, newTestRepositories(t, ctx), true)
+	require.NoError(t, svc.Start())
+	_, err := svc.AcceptLedger(ctx)
+	require.NoError(t, err)
+	_, err = svc.AcceptLedger(ctx)
+	require.NoError(t, err)
+	svc.FlushPersists()
+	validated := svc.GetValidatedLedger()
+	require.NotNil(t, validated)
+	wantRoot, err := validated.StateMapHash()
+	require.NoError(t, err)
+	h := validated.Header()
+	require.NoError(t, db.WithDurableSnapshot(ctx, func(fingerprint [32]byte) error {
+		if err := svc.verifyStoredSHAMap(ctx, h.AccountHash, shamap.TypeState); err != nil {
+			return err
+		}
+		if h.TxHash != ([32]byte{}) {
+			if err := svc.verifyStoredSHAMap(ctx, h.TxHash, shamap.TypeTransaction); err != nil {
+				return err
+			}
+		}
+		svc.rememberValidatedStateBase(h, fingerprint)
+		return nil
+	}))
+	rootNode, err := db.Fetch(ctx, nodestore.Hash256(wantRoot))
+	require.NoError(t, err)
+	require.NotNil(t, rootNode)
+	rootReader, err := shamap.DeserializeFromPrefix(rootNode.Data)
+	require.NoError(t, err)
+	rootInner, ok := rootReader.(shamap.InnerNodeReader)
+	require.True(t, ok)
+	var childHash [32]byte
+	for branch := range shamap.BranchFactor {
+		if rootInner.IsEmptyBranch(branch) {
+			continue
+		}
+		childHash, err = rootInner.ChildHash(branch)
+		require.NoError(t, err)
+		break
+	}
+	require.NotEqual(t, [32]byte{}, childHash)
+	childNode, err := db.Fetch(ctx, nodestore.Hash256(childHash))
+	require.NoError(t, err)
+	require.NotNil(t, childNode)
+	childNode.LedgerSeq = validated.Sequence() - 1
+	require.NoError(t, db.Store(ctx, childNode))
+	require.NoError(t, db.Sync(ctx))
+
+	root, release, available, err := svc.AcquireValidatedStateBase(ctx)
+	require.NoError(t, err)
+	require.True(t, available)
+	require.Equal(t, wantRoot, root)
+	require.NotNil(t, release)
+	type deletionResult struct {
+		deleted uint64
+		err     error
+	}
+	deletionDone := make(chan deletionResult, 1)
+	go func() {
+		deleted, deleteErr := db.DeleteBefore(ctx, validated.Sequence(), 1)
+		deletionDone <- deletionResult{deleted: deleted, err: deleteErr}
+	}()
+	select {
+	case <-deletionDone:
+		t.Fatal("managed deletion completed while state base was pinned")
+	case <-time.After(25 * time.Millisecond):
+	}
+	release()
+	deleted := <-deletionDone
+	require.NoError(t, deleted.err)
+	require.Positive(t, deleted.deleted)
+	_, _, available, err = svc.AcquireValidatedStateBase(ctx)
+	require.ErrorContains(t, err, "completeness proof")
+	require.False(t, available)
+	svc.shamapFamily.(*backend.NodeStore).SetMinimumLedgerSeq(validated.Sequence() + 1)
+	_, release, available, err = svc.AcquireValidatedStateBase(ctx)
+	require.NoError(t, err)
+	require.False(t, available)
+	require.Nil(t, release)
+	svc.Stop()
+}
+
+func TestService_ValidatedStateBaseCancellationAndShutdownRelease(t *testing.T) {
+	ctx := context.Background()
+	db := newTestNodeStore(t, 100_000)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	svc := newFastLoadCheckpointService(t, db, newTestRepositories(t, ctx), true)
+	require.NoError(t, svc.Start())
+	_, err := svc.AcceptLedger(ctx)
+	require.NoError(t, err)
+	svc.FlushPersists()
+	validated := svc.GetValidatedLedger()
+	require.NotNil(t, validated)
+	h := validated.Header()
+	require.NoError(t, db.WithDurableSnapshot(ctx, func(fingerprint [32]byte) error {
+		if err := svc.verifyStoredSHAMap(ctx, h.AccountHash, shamap.TypeState); err != nil {
+			return err
+		}
+		if h.TxHash != ([32]byte{}) {
+			if err := svc.verifyStoredSHAMap(ctx, h.TxHash, shamap.TypeTransaction); err != nil {
+				return err
+			}
+		}
+		svc.rememberValidatedStateBase(h, fingerprint)
+		return nil
+	}))
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, release, available, err := svc.AcquireValidatedStateBase(canceled)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, available)
+	require.Nil(t, release)
+
+	_, release, available, err = svc.AcquireValidatedStateBase(ctx)
+	require.NoError(t, err)
+	require.True(t, available)
+	require.NotNil(t, release)
+	stopped := make(chan struct{})
+	go func() {
+		svc.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("service shutdown did not complete while state base was pinned")
+	}
+	release()
 }
 
 func TestService_FastLoadCheckpointPreparationOrderingAndFailures(t *testing.T) {

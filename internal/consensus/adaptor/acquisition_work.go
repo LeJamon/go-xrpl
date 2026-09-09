@@ -311,15 +311,24 @@ func (l *acquisitionWorkLane) runBatch(batch *acquisitionWorkBatch) bool {
 		}
 	}()
 
+	previous := batch.ledger.Snapshot()
 	result := l.process(batch.ctx, batch.ledger, events)
 	if errors.Is(result.err, shamap.ErrTraversalBudget) && batch.ctx.Err() == nil {
 		result.err = nil
 		result.yielded = true
-		// Exhausting a slice means the resumable SHAMap cursor made bounded
-		// local progress; it is not a stalled acquisition. Keep the retry timer
-		// behind the active walk so a large on-disk tree cannot consume the
-		// terminal no-progress budget before the next missing frontier is found.
-		result.rearmTimer = true
+		result.rearmTimer = batch.ledger.RecordTraversalProgress(previous)
+		if !result.rearmTimer {
+			switch batch.ledger.OnTimer(time.Now()) {
+			case inbound.TimerFailed:
+				result.snapshot = batch.ledger.Snapshot()
+				result.haveSnapshot = true
+				result.remove = true
+				result.timerFailure = true
+			case inbound.TimerEscalate:
+				result.timerEscalate = true
+				result.timerAt = time.Now()
+			}
+		}
 	}
 	if result.err == nil && !result.complete && !result.remove {
 		useful := 0
@@ -733,6 +742,7 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 	if result.rearmTimer && !result.complete && !result.remove {
 		defer ledger.RearmTimer(time.Now())
 	}
+	r.reportAcquisitionProgress(ledger, result.yielded)
 	for _, bad := range result.badData {
 		if bad.kind != "" {
 			r.acquisition.IncPeerBadData(bad.peerID, bad.kind)

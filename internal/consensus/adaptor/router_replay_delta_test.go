@@ -32,6 +32,9 @@ type recordingSender struct {
 	mu               sync.Mutex
 	replayDeltaCalls []replayDeltaCall
 	replayDeltaErr   error
+	headerCalls      []headerCall
+	headerErr        error
+	headerErrs       map[uint64][]error
 	legacyBaseCalls  []legacyBaseCall
 	legacyBaseErr    error
 	legacyBaseErrs   map[uint64]error
@@ -60,6 +63,12 @@ type legacyBaseCall struct {
 	seq    uint32
 }
 
+type headerCall struct {
+	peerID uint64
+	hash   [32]byte
+	seq    uint32
+}
+
 func (s *recordingSender) RequestReplayDelta(peerID uint64, hash [32]byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -77,6 +86,18 @@ func (s *recordingSender) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte
 	return s.legacyBaseErr
 }
 
+func (s *recordingSender) RequestLedgerHeaderFromPeer(peerID uint64, hash [32]byte, seq uint32, _ bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.headerCalls = append(s.headerCalls, headerCall{peerID: peerID, hash: hash, seq: seq})
+	if errs := s.headerErrs[peerID]; len(errs) > 0 {
+		err := errs[0]
+		s.headerErrs[peerID] = errs[1:]
+		return err
+	}
+	return s.headerErr
+}
+
 func (s *recordingSender) replayCalls() []replayDeltaCall {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -90,6 +111,14 @@ func (s *recordingSender) legacyCalls() []legacyBaseCall {
 	defer s.mu.Unlock()
 	out := make([]legacyBaseCall, len(s.legacyBaseCalls))
 	copy(out, s.legacyBaseCalls)
+	return out
+}
+
+func (s *recordingSender) headerRequests() []headerCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]headerCall, len(s.headerCalls))
+	copy(out, s.headerCalls)
 	return out
 }
 
@@ -1104,17 +1133,6 @@ func TestSwitchedLedgerHistoryFloorFallsBackFromForkedClosedLedger(t *testing.T)
 // autoArmTarget returns the hash and seq of the single auto-armed
 // acquisition. seq is 0 when the replay-delta path was taken (hash-
 // keyed on the wire). Caller asserts totalAutoArmCalls == 1 first.
-func autoArmTarget(rs *recordingSender) ([32]byte, uint32) {
-	rs.mu.Lock()
-	defer rs.mu.Unlock()
-	if len(rs.replayDeltaCalls) == 1 {
-		return rs.replayDeltaCalls[0].hash, 0
-	}
-	if len(rs.legacyBaseCalls) == 1 {
-		return rs.legacyBaseCalls[0].hash, rs.legacyBaseCalls[0].seq
-	}
-	return [32]byte{}, 0
-}
 
 // A quorum target beyond the closed ledger must arm acquisition directly from
 // the validation lifecycle, even when the ledger is not yet available locally.
@@ -1133,7 +1151,8 @@ func TestRouter_ValidatedTargetArmsAcquisition(t *testing.T) {
 	}
 	r.peersMu.Unlock()
 
-	// Hash is arbitrary — we only verify the router asks for it.
+	// Hash is arbitrary — the trusted target should first be resolved through
+	// header ancestry, because no parent links are known yet.
 	var validatedHash [32]byte
 	for i := range validatedHash {
 		validatedHash[i] = byte(0xA0 + i%16)
@@ -1142,17 +1161,13 @@ func TestRouter_ValidatedTargetArmsAcquisition(t *testing.T) {
 
 	r.onLedgerFullyValidated(validatedSeq, validatedHash)
 
-	totalCalls := len(rs.replayCalls()) + len(rs.legacyCalls())
-	require.Equal(t, 1, totalCalls,
-		"router must auto-arm exactly one acquisition for the validated target")
-
-	armedHash, armedSeq := autoArmTarget(rs)
-	assert.Equal(t, validatedHash, armedHash,
-		"auto-armed acquisition must target the validated target's hash")
-	if armedSeq != 0 {
-		assert.Equal(t, validatedSeq, armedSeq,
-			"auto-armed acquisition must carry the stashed validation's seq (legacy path)")
-	}
+	requests := rs.headerRequests()
+	require.Len(t, requests, 1,
+		"router must auto-arm exactly one bounded ancestry request for the validated target")
+	assert.Equal(t, validatedHash, requests[0].hash)
+	assert.Equal(t, validatedSeq, requests[0].seq)
+	assert.Empty(t, rs.replayCalls())
+	assert.Empty(t, rs.legacyCalls())
 }
 
 // Dispatching to peerID=0 would race against the wire layer's per-peer

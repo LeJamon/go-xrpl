@@ -59,6 +59,11 @@ func (s *Service) loadLatestLedger(ctx context.Context) (*ledger.Ledger, error) 
 		return nil, fmt.Errorf("ledger %d header does not match persisted metadata", info.Sequence)
 	}
 	accepted, checkpointErr := s.acceptFastLoadCheckpoint(ctx, s.startupFastLoadCheckpoint, h)
+	var proofFingerprint [32]byte
+	proofReady := accepted
+	if accepted && s.startupFastLoadCheckpoint != nil {
+		proofFingerprint = s.startupFastLoadCheckpoint.nodeStoreFingerprint
+	}
 	if checkpointErr != nil {
 		s.logger.Warn("Fast-load checkpoint rejected; using strict traversal",
 			"sequence", h.LedgerIndex,
@@ -76,6 +81,8 @@ func (s *Service) loadLatestLedger(ctx context.Context) (*ledger.Ledger, error) 
 			s.fastLoadBaseStateRoot = h.AccountHash
 			s.fastLoadBaseFingerprint = nodeFingerprint
 			s.fastLoadBaseVerified = true
+			proofFingerprint = nodeFingerprint
+			proofReady = true
 		}
 		s.markFastLoadCheckpointEligible()
 		s.logger.Info("Fast-load strict traversal completed",
@@ -88,6 +95,9 @@ func (s *Service) loadLatestLedger(ctx context.Context) (*ledger.Ledger, error) 
 	}
 	if err := loaded.SetValidated(); err != nil {
 		return nil, fmt.Errorf("mark newest ledger %d validated: %w", info.Sequence, err)
+	}
+	if proofReady {
+		s.rememberValidatedStateBase(h, proofFingerprint)
 	}
 	return loaded, nil
 }
@@ -136,8 +146,19 @@ func (s *Service) verifyFastLoadStrictState(
 		return metrics, [32]byte{}, false, verify()
 	}
 	defer release()
+	if !s.prepareValidatedStateBaseCache(fingerprint) {
+		s.logger.Warn("Fast-load strict traversal has no shared full-below cache")
+		if err := verify(); err != nil {
+			return metrics, [32]byte{}, false, err
+		}
+		return metrics, [32]byte{}, false, nil
+	}
 	if err := verify(); err != nil {
 		return metrics, [32]byte{}, false, err
+	}
+	if !s.bindValidatedStateBaseCache(fingerprint) {
+		s.logger.Warn("Fast-load strict traversal completed without a durable full-below binding")
+		return metrics, [32]byte{}, false, nil
 	}
 	return metrics, fingerprint, true, nil
 }

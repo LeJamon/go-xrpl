@@ -306,6 +306,7 @@ type Router struct {
 	catchup                              catchupTarget
 	catchupFailures                      map[[32]byte]time.Time
 	linkageWait                          catchupLinkageWait
+	peerStatusEvidence                   bool
 	completionRecheckAccepted            atomic.Uint64
 	completionRecheckRejectedNoEvidence  atomic.Uint64
 	completionRecheckRejectedBelowQuorum atomic.Uint64
@@ -348,6 +349,15 @@ type Router struct {
 	seqHashMu     sync.Mutex
 	seqHash       map[uint32]ledgerHashEntry
 	seqHashAnchor uint32
+
+	// headerDiscoveryMu guards the one bounded target-to-anchor header walk.
+	// Header discovery is deliberately separate from full-state acquisitions:
+	// a header reply only establishes ancestry and must not become a pivot until
+	// the complete chain reaches the locally validated ledger.
+	headerDiscoveryMu         sync.Mutex
+	headerDiscovery           *headerDiscoverySession
+	headerDiscoveryGeneration uint64
+	retiredHeaderRequests     map[[32]byte]time.Time
 }
 
 type routerNetworkConfig struct {
@@ -703,7 +713,9 @@ func (r *Router) StopAcquisitions() (legacy, replay int) {
 	r.catchup = catchupTarget{}
 	r.catchupFailures = nil
 	r.linkageWait = catchupLinkageWait{}
+	r.peerStatusEvidence = false
 	r.catchupMu.Unlock()
+	r.cancelHeaderDiscovery()
 	r.retireLegacyAcquisitions(legacyLedgers)
 	if releaseDone := r.retireStandardReplay(retirement); releaseDone != nil {
 		<-releaseDone
@@ -725,6 +737,7 @@ func (r *Router) HandlePeerDisconnect(peerID peermanagement.PeerID) {
 	delete(r.peerStatusCandidates, peerID)
 	r.peersMu.Unlock()
 	r.invalidateCatchupPeer(uint64(peerID))
+	r.headerDiscoveryPeerDisconnected(uint64(peerID))
 	r.invalidateHistoryPeer(uint64(peerID))
 	r.removePeerFromAcquisitions(uint64(peerID))
 
@@ -1234,6 +1247,7 @@ func (r *Router) maintenanceTick() {
 	r.fetchTracker.Sweep()
 	r.retryInboundLedgerAcquisitions(now)
 	r.rebootstrapFrozenPivotIfStalled(now)
+	r.tickHeaderDiscovery(now)
 
 	// Timer-driven catch-up re-arm (rippled LedgerMaster::doAdvance cadence): a
 	// reaped/failed sole acquisition (cap=1) can't park catch-up until the next

@@ -54,13 +54,12 @@ func (sm *SHAMap) walkMapParallelContext(ctx context.Context, maxMissing int, fi
 	sm.tree.mu.RUnlock()
 	defer sm.backing.mu.RUnlock()
 
-	gen := uint32(0)
-	done := func() {}
-	if cache != nil {
-		gen, done = cache.Begin()
+	backed := access.available() && cache != nil
+	gen, done, err := sm.acquireBackedWalkGeneration(ctx, access, cache, backed)
+	if err != nil {
+		return nil, err
 	}
 	defer done()
-	backed := access.available() && cache != nil
 	rootID := newRootNodeID()
 	rootHash := root.Hash()
 	if backed {
@@ -212,6 +211,60 @@ func (sm *SHAMap) walkMapParallelContext(ctx context.Context, maxMissing int, fi
 	}
 
 	return missing, nil
+}
+
+// acquireBackedWalkGeneration admits one bounded walk against a stable
+// durable generation. The durable snapshot is acquired before the cache read
+// admission, matching the destructive mutation lock order. A cache generation
+// with no matching durable fingerprint is bound while both are held; a stale
+// binding is reset once and admitted again so a resumable cursor keeps its
+// generation across slices.
+func (sm *SHAMap) acquireBackedWalkGeneration(
+	ctx context.Context,
+	access *familyAccess,
+	cache *FullBelowCache,
+	backed bool,
+) (uint32, func(), error) {
+	if cache == nil {
+		return 0, func() {}, nil
+	}
+	if !backed {
+		generation, releaseCache := cache.Begin()
+		return generation, releaseCache, nil
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return 0, nil, err
+		}
+		fingerprint, releaseDurable, durablePinned, err := access.acquireDurableSnapshot(ctx)
+		if err != nil {
+			return 0, nil, err
+		}
+		if !durablePinned {
+			generation, releaseCache := cache.Begin()
+			return generation, releaseCache, nil
+		}
+		generation, releaseCache := cache.Begin()
+		boundFingerprint, bound := cache.DurableFingerprint(generation)
+		if bound && boundFingerprint == fingerprint {
+			return generation, func() {
+				releaseDurable()
+				releaseCache()
+			}, nil
+		}
+		releaseCache()
+		cache.EnsureDurableFingerprint(fingerprint)
+		generation, releaseCache = cache.Begin()
+		boundFingerprint, bound = cache.DurableFingerprint(generation)
+		if bound && boundFingerprint == fingerprint {
+			return generation, func() {
+				releaseDurable()
+				releaseCache()
+			}, nil
+		}
+		releaseCache()
+		releaseDurable()
+	}
 }
 
 // markRootFullBelow records the root as full-below at gen.

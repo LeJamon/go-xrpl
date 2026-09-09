@@ -854,7 +854,16 @@ func (s *Service) StoreLedgerWithState(ctx context.Context, h *header.LedgerHead
 	defer s.mu.Unlock()
 	s.historyComponent.mu.Lock()
 	defer s.historyComponent.mu.Unlock()
-	return s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap)
+	if err := s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap); err != nil {
+		return err
+	}
+	// Runtime catch-up can complete a full acquired state after startup has
+	// already left initial-sync mode. Keep only its identity until persistence
+	// and the generation-bound FullBelow proof authorize promotion.
+	if h != nil {
+		s.rememberValidatedStateBaseCandidate(*h)
+	}
+	return nil
 }
 
 // BootstrapLedgerWithState stores an acquired ledger and reports whether the
@@ -865,7 +874,11 @@ func (s *Service) BootstrapLedgerWithState(ctx context.Context, h *header.Ledger
 	s.historyComponent.mu.Lock()
 	defer s.historyComponent.mu.Unlock()
 	initialCandidate := s.networkLedgerState != networkLedgerReady
-	return initialCandidate, s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap)
+	err := s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap)
+	if err == nil && initialCandidate {
+		s.rememberValidatedStateBaseCandidate(*h)
+	}
+	return initialCandidate, err
 }
 
 // IngestHistoricalLedgerWithState installs an acquired ledger into validated

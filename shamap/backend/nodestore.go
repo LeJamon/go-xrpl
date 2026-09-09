@@ -4,6 +4,7 @@ package backend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -127,6 +128,16 @@ func (f *NodeStore) FetchDurable(ctx context.Context, hash [32]byte) ([]byte, er
 	return f.durable.fetch(ctx, hash, f.fetchDurable)
 }
 
+// AcquireDurableSnapshot retains the backing NodeStore generation while a
+// complete SHAMap walk publishes its cache proof.
+func (f *NodeStore) AcquireDurableSnapshot(ctx context.Context) ([32]byte, func(), error) {
+	durable, ok := f.db.(nodestore.DurableSnapshotDatabase)
+	if !ok {
+		return [32]byte{}, nil, fmt.Errorf("shamap: NodeStore cannot retain a durable snapshot: %w", errors.ErrUnsupported)
+	}
+	return durable.AcquireDurableSnapshot(ctx)
+}
+
 func (f *NodeStore) fetchDurable(ctx context.Context, hash [32]byte) ([]byte, error) {
 	if raw, ok := f.db.(interface {
 		FetchDataUncached(context.Context, nodestore.Hash256) ([]byte, error)
@@ -177,6 +188,11 @@ func (f *NodeStore) SetMinimumLedgerSeq(seq uint32) {
 		f.minimum.Store(seq)
 	}
 	f.storeMu.Unlock()
+}
+
+// MinimumLedgerSeq returns the current online-delete floor.
+func (f *NodeStore) MinimumLedgerSeq() uint32 {
+	return f.minimum.Load()
 }
 
 // Sweep removes expired entries from the NodeStore and SHAMap caches.

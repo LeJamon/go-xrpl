@@ -278,6 +278,79 @@ func TestAcquireDurableSnapshotPinsManagedMutationUntilRelease(t *testing.T) {
 	}
 }
 
+func TestAcquireDurableSnapshotSharesReaderWhileMutationWaits(t *testing.T) {
+	database := testDatabase(t, memorydb.New(), noCacheConfig())
+	firstFingerprint, releaseFirst, err := database.AcquireDurableSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseFirst()
+
+	writerReady := make(chan struct{})
+	writerAcquired := make(chan struct{})
+	go func() {
+		close(writerReady)
+		database.mutationMu.Lock()
+		close(writerAcquired)
+		database.mutationMu.Unlock()
+	}()
+	<-writerReady
+
+	deadline := time.Now().Add(time.Second)
+	for database.mutationMu.TryRLock() {
+		database.mutationMu.RUnlock()
+		if time.Now().After(deadline) {
+			t.Fatal("mutation writer did not become pending")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	secondContext, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	secondFingerprint, releaseSecond, err := database.AcquireDurableSnapshot(secondContext)
+	if err != nil {
+		t.Fatalf("second snapshot acquisition: %v", err)
+	}
+	defer releaseSecond()
+	if secondFingerprint != firstFingerprint {
+		t.Fatal("shared durable snapshot changed fingerprint")
+	}
+
+	releaseFirst()
+	select {
+	case <-writerAcquired:
+		t.Fatal("mutation writer crossed the remaining durable snapshot")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	releaseSecond()
+	select {
+	case <-writerAcquired:
+	case <-time.After(time.Second):
+		t.Fatal("mutation writer did not proceed after the final snapshot release")
+	}
+}
+
+func TestAcquireDurableSnapshotCancellationWhileMutationHeld(t *testing.T) {
+	database := testDatabase(t, memorydb.New(), noCacheConfig())
+	database.mutationMu.Lock()
+	defer database.mutationMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, release, err := database.AcquireDurableSnapshot(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("AcquireDurableSnapshot error = %v, want context deadline", err)
+	}
+	if release != nil {
+		t.Fatal("canceled durable snapshot returned a release function")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("canceled durable snapshot took too long: %s", elapsed)
+	}
+}
+
 func TestDurableSnapshotOrdersPruneInvalidationAfterLease(t *testing.T) {
 	database := testDatabase(t, memorydb.New(), noCacheConfig())
 	_, release, err := database.AcquireDurableSnapshot(t.Context())

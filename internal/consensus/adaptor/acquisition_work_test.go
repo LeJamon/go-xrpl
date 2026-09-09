@@ -1524,7 +1524,7 @@ func TestAcquisitionWork_EscalationDoesNotRearmPreemptedTraversal(t *testing.T) 
 	require.True(t, <-done)
 }
 
-func TestAcquisitionWork_YieldedWantStateDefersEscalation(t *testing.T) {
+func TestAcquisitionWork_YieldedMissingStateDoesNotCountAsProgress(t *testing.T) {
 	source := newWideWorkSource(t, 16)
 	require.NoError(t, source.Delete([32]byte{}))
 	rootHash, err := source.Hash()
@@ -1562,7 +1562,8 @@ func TestAcquisitionWork_YieldedWantStateDefersEscalation(t *testing.T) {
 	}))
 	first := <-lane.results()
 	require.True(t, first.yielded)
-	require.True(t, first.rearmTimer)
+	require.False(t, first.rearmTimer)
+	require.True(t, first.timerEscalate)
 	require.True(t, lane.submit(ledger, acquisitionWorkEvent{
 		kind: acquisitionWorkTimerCheck,
 		at:   timerAt,
@@ -1570,10 +1571,9 @@ func TestAcquisitionWork_YieldedWantStateDefersEscalation(t *testing.T) {
 	router.handleAcquisitionWorkResult(first)
 
 	second := <-lane.results()
-	require.True(t, second.yielded)
-	require.True(t, second.rearmTimer)
+	require.False(t, second.rearmTimer)
 	require.False(t, second.timerEscalate)
-	require.Zero(t, ledger.Timeouts())
+	require.Equal(t, 1, ledger.Timeouts())
 	router.handleAcquisitionWorkResult(second)
 	assert.False(t, ledger.TimerDue(time.Now()), "timer was not rearmed after the traversal slice")
 }

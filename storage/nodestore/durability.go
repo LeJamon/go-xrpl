@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
 )
@@ -37,16 +38,40 @@ type DurableSnapshotDatabase interface {
 	AcquireDurableSnapshot(context.Context) ([32]byte, func(), error)
 }
 
+const durableSnapshotLockPoll = time.Millisecond
+
 // AcquireDurableSnapshot prevents managed destructive mutations until the
-// returned release function is called. Ordinary writes remain available.
+// returned release function is called. Ordinary writes remain available. The
+// read lock is admitted in cancelable polls so shutdown cannot strand a caller
+// behind an online-delete mutation.
 func (d *KVDatabase) AcquireDurableSnapshot(ctx context.Context) ([32]byte, func(), error) {
-	if err := ctx.Err(); err != nil {
-		return [32]byte{}, nil, err
+	for {
+		if err := ctx.Err(); err != nil {
+			return [32]byte{}, nil, err
+		}
+		d.durableSnapshotMu.Lock()
+		// Share an admitted reader so a queued mutation cannot block a nested
+		// traversal behind the recovery snapshot it already holds.
+		if d.durableSnapshotRefs > 0 || d.mutationMu.TryRLock() {
+			d.durableSnapshotRefs++
+			d.durableSnapshotMu.Unlock()
+			return d.durableSnapshotFingerprint(ctx)
+		}
+		d.durableSnapshotMu.Unlock()
+		timer := time.NewTimer(durableSnapshotLockPoll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return [32]byte{}, nil, ctx.Err()
+		case <-timer.C:
+		}
 	}
-	d.mutationMu.RLock()
+}
+
+func (d *KVDatabase) durableSnapshotFingerprint(ctx context.Context) ([32]byte, func(), error) {
 	var once sync.Once
 	release := func() {
-		once.Do(d.mutationMu.RUnlock)
+		once.Do(d.releaseDurableSnapshot)
 	}
 	if err := ctx.Err(); err != nil {
 		release()
@@ -58,6 +83,15 @@ func (d *KVDatabase) AcquireDurableSnapshot(ctx context.Context) ([32]byte, func
 		return [32]byte{}, nil, err
 	}
 	return fingerprint, release, nil
+}
+
+func (d *KVDatabase) releaseDurableSnapshot() {
+	d.durableSnapshotMu.Lock()
+	defer d.durableSnapshotMu.Unlock()
+	d.durableSnapshotRefs--
+	if d.durableSnapshotRefs == 0 {
+		d.mutationMu.RUnlock()
+	}
 }
 
 // WithDurableSnapshot prevents managed destructive mutations while fn checks

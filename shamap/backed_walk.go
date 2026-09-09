@@ -230,6 +230,17 @@ func (sm *SHAMap) walkBackedContext(
 		sm.acquisition.cursor = newBackedWalkCursor(root, rootHash, gen, base)
 	}
 	cursor := sm.acquisition.cursor
+	retryBlocked := true
+	if _, bounded := ctx.Value(traversalBudgetKey{}).(*traversalBudget); bounded {
+		// Bounded slices drain unvisited cursor work before retrying blocked nodes.
+		for i := range BranchFactor {
+			lane := &cursor.lanes[i]
+			if !lane.complete && len(lane.stack) != 0 {
+				retryBlocked = false
+				break
+			}
+		}
+	}
 
 	var (
 		missing  []MissingNode
@@ -274,7 +285,7 @@ func (sm *SHAMap) walkBackedContext(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := sm.walkBackedLane(ctx, access, cache, gen, root, lane, filter, &stop, report); err != nil {
+			if err := sm.walkBackedLane(ctx, access, cache, gen, root, lane, filter, retryBlocked, &stop, report); err != nil {
 				errMu.Lock()
 				if firstErr == nil {
 					firstErr = err
@@ -286,6 +297,9 @@ func (sm *SHAMap) walkBackedContext(
 	}
 	wg.Wait()
 	if firstErr != nil {
+		if errors.Is(firstErr, ErrTraversalBudget) && len(missing) != 0 {
+			return missing, nil
+		}
 		return nil, firstErr
 	}
 
@@ -296,6 +310,9 @@ func (sm *SHAMap) walkBackedContext(
 			complete = false
 		}
 		durable = durable && cursor.lanes[i].durable
+	}
+	if !retryBlocked && !complete && len(missing) == 0 {
+		return nil, ErrTraversalBudget
 	}
 	if complete {
 		root.setFullBelowGen(gen)
@@ -359,10 +376,11 @@ func (sm *SHAMap) walkBackedLane(
 	root *innerNode,
 	lane *backedWalkLane,
 	filter SyncFilter,
+	retryBlocked bool,
 	stop *atomic.Bool,
 	report func(backedWalkItem),
 ) error {
-	if len(lane.blocked) != 0 {
+	if retryBlocked && len(lane.blocked) != 0 {
 		for _, item := range dedupeBackedWalkItems(lane.blocked) {
 			lane.stack = append(lane.stack, backedWalkFrame{
 				item: item, topLevel: true, proofStart: lane.proofs.count(),

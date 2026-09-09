@@ -131,6 +131,10 @@ func (s *acquisitionStoreScope) FullBelowCache() *shamap.FullBelowCache {
 	return s.lane.FullBelowCache()
 }
 
+func (s *acquisitionStoreScope) AcquireDurableSnapshot(ctx context.Context) ([32]byte, func(), error) {
+	return s.lane.AcquireDurableSnapshot(ctx)
+}
+
 func (s *acquisitionStoreScope) recordFailure(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -205,6 +209,15 @@ func newAcquisitionStoreLane(base shamap.Family, logger *slog.Logger, queueDepth
 
 func (l *acquisitionStoreLane) FullBelowCache() *shamap.FullBelowCache {
 	return l.fullBelow
+}
+
+func (l *acquisitionStoreLane) AcquireDurableSnapshot(ctx context.Context) ([32]byte, func(), error) {
+	if durable, ok := l.base.(interface {
+		AcquireDurableSnapshot(context.Context) ([32]byte, func(), error)
+	}); ok {
+		return durable.AcquireDurableSnapshot(ctx)
+	}
+	return [32]byte{}, nil, errors.ErrUnsupported
 }
 
 func (l *acquisitionStoreLane) scope() shamap.Family {

@@ -180,6 +180,10 @@ func TestRouter_CheckBehindArmsAcquisition(t *testing.T) {
 
 	msg := statusChangeMessage(t, peermanagement.PeerID(9), closed.Sequence()+100, peerHash)
 	r.handleMessage(msg)
+	r.catchupMu.Lock()
+	r.linkageWait.since = time.Now().Add(-catchupLinkageGracePeriod)
+	r.catchupMu.Unlock()
+	r.armCatchupTowardTarget()
 
 	replayCalls := rs.replayCalls()
 	legacyCalls := rs.legacyCalls()
@@ -195,6 +199,10 @@ func TestRouter_FullNodeBehindPeerLeavesFullBeforeCatchup(t *testing.T) {
 	peerSeq := svc.GetClosedLedgerIndex() + 3
 	r.handleMessage(statusChangeMessage(t, peermanagement.PeerID(7), peerSeq, [32]byte{0xB1}))
 	r.handleMessage(statusChangeMessage(t, peermanagement.PeerID(9), peerSeq, [32]byte{0xB1}))
+	r.catchupMu.Lock()
+	r.linkageWait.since = time.Now().Add(-catchupLinkageGracePeriod)
+	r.catchupMu.Unlock()
+	r.armCatchupTowardTarget()
 
 	assert.Equal(t, consensus.OpModeConnected, a.GetOperatingMode())
 	require.GreaterOrEqual(t, acquireCount(rs), 1)
@@ -589,7 +597,7 @@ func TestRouter_RecentProgressProtectsNearbyFullStateAcquisition(t *testing.T) {
 }
 
 func TestRouter_StalledNearbyFullStateAcquisitionIsSuperseded(t *testing.T) {
-	r, a, _, svc := makeRouter(t)
+	r, a, sender, svc := makeRouter(t)
 	closed := svc.GetClosedLedgerIndex()
 	firstHash := [32]byte{0x81}
 	secondHash := [32]byte{0x82}
@@ -612,7 +620,10 @@ func TestRouter_StalledNearbyFullStateAcquisitionIsSuperseded(t *testing.T) {
 
 	assert.Nil(t, r.fetchTracker.Find(firstHash))
 	assert.Same(t, second, r.fetchTracker.Find(secondHash))
-	assert.NotNil(t, r.fetchTracker.Find(targetHash))
+	requests := sender.headerRequests()
+	require.NotEmpty(t, requests)
+	assert.Equal(t, targetHash, requests[len(requests)-1].hash)
+	assert.Nil(t, r.fetchTracker.Find(targetHash), "trusted target ancestry starts as a header walk")
 }
 
 func TestRouter_ExactRecoveryAcquisitionsAreNeverSuperseded(t *testing.T) {
@@ -706,7 +717,9 @@ func TestRouter_ActiveBuildDoesNotAcquireItsTargetLedger(t *testing.T) {
 	require.NotNil(t, built)
 	engine.buildingSeq = 0
 	r.onLedgerBuilt(built.Sequence(), built.Hash())
-	require.GreaterOrEqual(t, acquireCount(rs), 1)
+	require.Len(t, rs.headerRequests(), 1,
+		"rearming a trusted target after an active build starts header discovery")
+	assert.Equal(t, [32]byte(hash), rs.headerRequests()[0].hash)
 }
 
 func TestRouter_LedgerBuiltRearmsQuorumTargetWithoutPeerStatus(t *testing.T) {
@@ -747,7 +760,9 @@ func TestRouter_LedgerBuiltRearmsQuorumTargetWithoutPeerStatus(t *testing.T) {
 	engine.buildingSeq = 0
 	r.onLedgerBuilt(built.Sequence(), built.Hash())
 
-	require.GreaterOrEqual(t, acquireCount(rs), 1)
+	require.Len(t, rs.headerRequests(), 1,
+		"rearming a trusted target with unknown ancestry starts header discovery")
+	assert.Equal(t, [32]byte(hash), rs.headerRequests()[0].hash)
 }
 
 // An UNTRUSTED validator must not steer acquisition (RCLValidations.cpp:194).
