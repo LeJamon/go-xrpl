@@ -327,7 +327,6 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 	associateLoanAsset(loan, integral, ctx.Rules())
 
-	// Vault: draw principal and apply the accounting model's asset delta.
 	newAvailable := vaultAvailable.Sub(principal)
 	newTotal := vaultTotal.Add(accountingDeltas.assetsTotal)
 	if r := vault.UpdateVaultTotals(ctx, vaultKey, numStr(newTotal), numStr(newAvailable), vinfo.LossUnrealized); r != ter.TesSUCCESS {
