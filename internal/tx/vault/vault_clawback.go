@@ -281,9 +281,14 @@ func (v *VaultClawback) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 		return ter.TefINTERNAL
 	}
 
-	// Burn the holder's shares.
-	if res := burnShares(ctx, vd.ShareMPTID, holderID, sharesDestroyed); res != ter.TesSUCCESS {
-		return res
+	// Sending shares from the vault pseudo-account back to the same account is
+	// a no-op. Rippled's accountSend returns success before touching the share
+	// issuance or an MPToken, allowing the invariant pass to report the
+	// resulting invalid clawback as tecINVARIANT_FAILED before the cleanup fix.
+	if holderID != vd.Account {
+		if res := burnShares(ctx, vd.ShareMPTID, holderID, sharesDestroyed); res != ter.TesSUCCESS {
+			return res
+		}
 	}
 	if holderID != vd.Owner {
 		if res := removeEmptyShareMPToken(ctx, holderID, vd.ShareMPTID); res != ter.TesSUCCESS && res != ter.TecHAS_OBLIGATIONS {
