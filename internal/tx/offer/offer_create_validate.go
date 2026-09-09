@@ -390,9 +390,3 @@ func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency
 
 	return ter.TesSUCCESS
 }
-
-// accountInDomain checks if an account is a member of a permissioned domain.
-// Reference: rippled app/misc/PermissionedDEXHelpers.cpp accountInDomain()
-func accountInDomain(view tx.LedgerView, accountID [20]byte, domainID [32]byte, parentCloseTime uint32) bool {
-	return permissioneddomain.AccountInDomain(view, accountID, domainID, parentCloseTime)
-}
