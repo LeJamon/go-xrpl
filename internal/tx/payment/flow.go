@@ -506,14 +506,28 @@ func limitOut(v *PaymentSandbox, strand Strand, remainingOut EitherAmount, limit
 		return remainingOut
 	}
 
-	// Convert the Number result to an EitherAmount matching remainingOut's type
+	// Convert the Number result to an EitherAmount matching remainingOut's type.
+	// Integral output must be rounded down when the default rounded value would
+	// violate the requested average quality.
 	var out EitherAmount
 	if remainingOut.IsNative {
 		prototype := state.NewXRPAmountFromInt(0)
-		out = ToEitherAmount(qf.math.toAmount(*outAmt, prototype, state.RoundToNearest))
+		rounded := qf.math.toAmount(*outAmt, prototype, state.RoundToNearest)
+		if rules := v.Rules(); rules != nil && rules.MPTokensV2Enabled() &&
+			qf.math.fromAmount(rounded, state.RoundToNearest).Cmp(*outAmt) > 0 &&
+			!qf.SatisfiesAvgQ(limitQuality, qf.math.fromAmount(rounded, state.RoundToNearest)) {
+			rounded = qf.math.toAmount(*outAmt, prototype, state.RoundDownward)
+		}
+		out = ToEitherAmount(rounded)
 	} else if remainingOut.IsMPT {
 		prototype := newMPTAmount(0, remainingOut.MPTID)
-		out = ToEitherAmount(qf.math.toAmount(*outAmt, prototype, state.RoundToNearest))
+		rounded := qf.math.toAmount(*outAmt, prototype, state.RoundToNearest)
+		if rules := v.Rules(); rules != nil && rules.MPTokensV2Enabled() &&
+			qf.math.fromAmount(rounded, state.RoundToNearest).Cmp(*outAmt) > 0 &&
+			!qf.SatisfiesAvgQ(limitQuality, qf.math.fromAmount(rounded, state.RoundToNearest)) {
+			rounded = qf.math.toAmount(*outAmt, prototype, state.RoundDownward)
+		}
+		out = ToEitherAmount(rounded)
 	} else {
 		out = ToEitherAmount(qf.math.toAmount(*outAmt, remainingOut.IOU, state.RoundToNearest))
 	}

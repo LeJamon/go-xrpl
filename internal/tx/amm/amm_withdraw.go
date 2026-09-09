@@ -287,7 +287,18 @@ func (a *AMMWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 }
 
 // Reference: rippled AMMWithdraw.cpp applyGuts
-func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
+func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
+	calculationComplete := false
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if !calculationComplete && ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && isAMMAmountOverflowPanic(recovered) {
+				result = ter.TecAMM_FAILED
+				return
+			}
+			panic(recovered)
+		}
+	}()
+
 	ctx.Log.Trace("amm withdraw apply",
 		"account", a.Account,
 		"asset", a.Asset,
@@ -769,6 +780,28 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 	isXRP1 := isXRPAsset(a.Asset)
 	isXRP2 := isXRPAsset(a.Asset2)
 
+	newLPBalance, err := amm.LPTokenBalance.SubWithNumberContext(lpTokensToRedeem, math.ctx, state.RoundToNearest)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	postAsset1, err := subtractAMMPoolAmount(assetBalance1, withdrawAmount1, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	postAsset2, err := subtractAMMPoolAmount(assetBalance2, withdrawAmount2, math.ctx)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_3_0) && fixV1_3 {
+		if result := checkAMMPrecisionLoss(postAsset1, postAsset2, newLPBalance, math.ctx); result != ter.TesSUCCESS {
+			return result
+		}
+	}
+
+	// All remaining operations mutate the transaction view. Keep overflow
+	// recovery limited to the calculation stage above so a post-transfer fault
+	// remains a normal apply exception and is rolled back by the engine.
+	calculationComplete = true
 	if isXRP1 && !withdrawAmount1.IsZero() {
 		// Convert to drops, handling IOU representation from calculations
 		drops := uint64(withdrawAmount1.Drops())
@@ -808,23 +841,6 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 			lpTokensToRedeem.Mantissa(), lpTokensToRedeem.Exponent(), lptCurrency, ammAccountAddr)
 		if r := redeemIOUWithCleanup(ctx.View, accountID, amm.Account, redeemAmt, ctx.NumberContext()); r != ter.TesSUCCESS {
 			return r
-		}
-	}
-	newLPBalance, err := amm.LPTokenBalance.SubWithNumberContext(lpTokensToRedeem, math.ctx, state.RoundToNearest)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	postAsset1, err := subtractAMMPoolAmount(assetBalance1, withdrawAmount1, math.ctx)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	postAsset2, err := subtractAMMPoolAmount(assetBalance2, withdrawAmount2, math.ctx)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_3_0) && fixV1_3 {
-		if result := checkAMMPrecisionLoss(postAsset1, postAsset2, newLPBalance, math.ctx); result != ter.TesSUCCESS {
-			return result
 		}
 	}
 	// NOTE: Asset balances are NOT stored in AMM entry
@@ -894,7 +910,7 @@ func withdrawAssetToAccount(
 					}
 				}
 				balance := account.Balance
-				if accountID == ctx.AccountID {
+				if accountID == ctx.AccountID && ctx.PriorBalance() > balance {
 					balance = ctx.PriorBalance()
 				}
 				if effectiveOwners >= 2 && balance < ctx.AccountReserveFor(account, tx.ConfineOwnerCount(account.OwnerCount, 1)) {
@@ -977,7 +993,7 @@ func withdrawIOUToAccount(
 				// reduces the balance, so prior (pre-fee) balance is the larger
 				// term. Reference: rippled AMMWithdraw.cpp:599.
 				balance := account.Balance
-				if accountID == ctx.AccountID {
+				if accountID == ctx.AccountID && ctx.PriorBalance() > balance {
 					balance = ctx.PriorBalance()
 				}
 				if balance < reserve {

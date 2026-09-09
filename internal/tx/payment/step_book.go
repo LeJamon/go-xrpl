@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"slices"
+	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -125,11 +126,6 @@ type BookStep struct {
 	// Reference: rippled BookStep::ammLiquidity_
 	ammLiquidity *AMMLiquidity
 
-	// fixAMMOverflowOffer gates the AMM pool product invariant check.
-	// When enabled, throws tecINVARIANT_FAILED if the invariant is violated.
-	// Reference: rippled fixAMMOverflowOffer amendment
-	fixAMMOverflowOffer bool
-
 	// permRm records offers this step removed unconditionally — self-crossed
 	// (limitSelfCrossQuality), authorization-failed, expired, and domain-removed
 	// offers. rippled puts these in FlowOfferStream::permToRemove_, which is
@@ -222,6 +218,31 @@ func (m *amountMultiset) sum(
 	return total
 }
 
+func (m amountMultiset) clone() amountMultiset {
+	return amountMultiset{elems: slices.Clone(m.elems)}
+}
+
+func isAmountOverflowPanic(value any) bool {
+	message, ok := value.(string)
+	if !ok {
+		err, isError := value.(error)
+		if !isError {
+			return false
+		}
+		message = err.Error()
+	}
+	message = strings.ToLower(message)
+	return strings.Contains(message, "overflow") || strings.Contains(message, "out of range")
+}
+
+func catchesMPTOverflow(sb *PaymentSandbox, book Book) bool {
+	if sb == nil || (!book.In.IsMPT && !book.Out.IsMPT) {
+		return false
+	}
+	rules := sb.Rules()
+	return rules != nil && rules.MPTokensV2Enabled()
+}
+
 // NewBookStep creates a new BookStep for order book consumption
 func NewBookStep(inIssue, outIssue Issue, strandSrc, strandDst [20]byte, prevStep Step, ownerPaysTransferFee bool) *BookStep {
 	return &BookStep{
@@ -296,7 +317,23 @@ func (s *BookStep) forEachOffer(
 	execOffer := func(ofrIn, ofrOut EitherAmount, offerQuality Quality,
 		ofrTrIn, ofrTrOut uint32, isAMM bool,
 		ammOffer *AMMOffer, clobOffer *state.LedgerOffer, clobKey [32]byte,
-	) bool {
+	) (result bool) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				if isAMM || !catchesMPTOverflow(sb, s.book) || !isAmountOverflowPanic(recovered) {
+					panic(recovered)
+				}
+				if ofrsToRm != nil {
+					ofrsToRm[clobKey] = true
+				}
+				s.recordPermRm(clobKey)
+				if !offerAttempted {
+					currentQuality = nil
+				}
+				result = true
+			}
+		}()
+
 		// Quality tracking
 		if currentQuality == nil {
 			currentQuality = &offerQuality
@@ -328,15 +365,6 @@ func (s *BookStep) forEachOffer(
 			}
 		}
 
-		if s.book.In.IsMPT {
-			if result := mptutil.EnsureHolding(sb, s.book.In.MPTID, offerOwner, 0, true); result != ter.TesSUCCESS {
-				if !isAMM {
-					s.dropBecameOffer(sb, clobOffer, offerOwner)
-				}
-				return true
-			}
-		}
-
 		authView := afView
 		if rules := sb.Rules(); rules != nil && rules.MPTokensV2Enabled() {
 			authView = sb
@@ -345,7 +373,7 @@ func (s *BookStep) forEachOffer(
 		if offerOwner != s.book.In.Issuer {
 			switch {
 			case s.book.In.IsMPT:
-				authorized = mptutil.RequireAuthAt(authView, s.book.In.MPTID, offerOwner, true, s.parentCloseTime) == ter.TesSUCCESS
+				authorized = mptutil.RequireAuthAt(authView, s.book.In.MPTID, offerOwner, false, s.parentCloseTime) == ter.TesSUCCESS
 			case !s.book.In.IsXRP():
 				var err error
 				authorized, err = s.isOfferOwnerAuthorized(
@@ -372,8 +400,6 @@ func (s *BookStep) forEachOffer(
 			return false
 		}
 
-		offerAttempted = true
-
 		// AMM offers use adjustRates to waive output transfer fee
 		if isAMM {
 			ofrTrIn, ofrTrOut = ammOffer.AdjustRates(ofrTrIn, ofrTrOut)
@@ -382,7 +408,7 @@ func (s *BookStep) forEachOffer(
 		// stpAmt.in = mulRatio(ofrAmt.in, ofrInRate, QUALITY_ONE, true)
 		stpIn := MulRatioWithNumberContext(ofrIn, ofrTrIn, QualityOne, true, sb.NumberContext())
 		stpOut := ofrOut
-		ownerGives := MulRatioWithNumberContext(ofrOut, ofrTrOut, QualityOne, false, sb.NumberContext())
+		ownerGives := MulRatioWithNumberContext(ofrOut, ofrTrOut, QualityOne, s.book.Out.IsMPT, sb.NumberContext())
 
 		// Funding cap (CLOB only — AMM is always funded)
 		// Reference: rippled OfferStream reads ownerFunds from view_ (sb),
@@ -429,11 +455,12 @@ func (s *BookStep) forEachOffer(
 						)
 					}
 					stpOut = ofrOut
-					ownerGives = MulRatioWithNumberContext(ofrOut, ofrTrOut, QualityOne, false, sb.NumberContext())
+					ownerGives = MulRatioWithNumberContext(ofrOut, ofrTrOut, QualityOne, s.book.Out.IsMPT, sb.NumberContext())
 				}
 			}
 		}
 
+		offerAttempted = true
 		res := callback(offerExec{
 			ofrIn:        ofrIn,
 			ofrOut:       ofrOut,
@@ -715,11 +742,16 @@ func (s *BookStep) Rev(
 		}
 		if e.stpOut.Compare(remainingOut) <= 0 {
 			// Full take
-			savedIns.insert(e.stpIn)
-			savedOuts.insert(e.stpOut)
-			totalIn = savedIns.sum(s.zeroIn(), sb.NumberContext())
-			totalOut = savedOuts.sum(s.zeroOut(), sb.NumberContext())
-			remainingOut = out.SubWithNumberContext(totalOut, sb.NumberContext())
+			// Stage both accumulation sets. MPT sums are integral and can overflow;
+			// the enclosing offer callback removes the offending offer while these
+			// local sets leave the committed totals untouched.
+			savedInsAdj := savedIns.clone()
+			savedOutsAdj := savedOuts.clone()
+			savedInsAdj.insert(e.stpIn)
+			savedOutsAdj.insert(e.stpOut)
+			totalInAdj := savedInsAdj.sum(s.zeroIn(), sb.NumberContext())
+			totalOutAdj := savedOutsAdj.sum(s.zeroOut(), sb.NumberContext())
+			remainingOutAdj := out.SubWithNumberContext(totalOutAdj, sb.NumberContext())
 
 			if e.isAMM {
 				if err := s.consumeAMMOffer(sb, e.ammOffer, e.stpIn, e.ofrIn, e.stpOut, e.ownerGives); err != nil {
@@ -730,6 +762,11 @@ func (s *BookStep) Rev(
 					throwConsumeFailure(err)
 				}
 			}
+			savedIns = savedInsAdj
+			savedOuts = savedOutsAdj
+			totalIn = totalInAdj
+			totalOut = totalOutAdj
+			remainingOut = remainingOutAdj
 			// rippled's eachOffer returns true here unconditionally ("even if the
 			// payment is satisfied, we need to consume the offer"), so the do-while
 			// runs offers.step() again and grooms trailing offers.
@@ -744,15 +781,16 @@ func (s *BookStep) Rev(
 				ofrAdjIn, ofrAdjOut = e.offerQuality.CeilOutStrict(e.ofrIn, e.ofrOut, stpAdjOut, true)
 			}
 			stpAdjIn := MulRatioWithNumberContext(ofrAdjIn, e.ofrTrIn, QualityOne, true, sb.NumberContext())
-			ownerGivesAdj := MulRatioWithNumberContext(stpAdjOut, e.ofrTrOut, QualityOne, false, sb.NumberContext())
+			ownerGivesAdj := MulRatioWithNumberContext(stpAdjOut, e.ofrTrOut, QualityOne, s.book.Out.IsMPT, sb.NumberContext())
 			_ = ofrAdjOut
 
 			// rippled inserts stpAdjAmt.in into savedIns and sets result.in =
 			// sum(savedIns); result.out = out (BookStep.cpp:1069-1072).
-			savedIns.insert(stpAdjIn)
-			totalIn = savedIns.sum(s.zeroIn(), sb.NumberContext())
-			totalOut = out
-			remainingOut = s.zeroOut()
+			savedInsAdj := savedIns.clone()
+			savedOutsAdj := savedOuts.clone()
+			savedInsAdj.insert(stpAdjIn)
+			totalInAdj := savedInsAdj.sum(s.zeroIn(), sb.NumberContext())
+			totalOutAdj := out
 
 			if e.isAMM {
 				if err := s.consumeAMMOffer(sb, e.ammOffer, stpAdjIn, ofrAdjIn, stpAdjOut, ownerGivesAdj); err != nil {
@@ -763,6 +801,11 @@ func (s *BookStep) Rev(
 					throwConsumeFailure(err)
 				}
 			}
+			savedIns = savedInsAdj
+			savedOuts = savedOutsAdj
+			totalIn = totalInAdj
+			totalOut = totalOutAdj
+			remainingOut = s.zeroOut()
 			// Demand met mid-offer: rippled returns offer.fully_consumed() here. A
 			// still-funded partially-filled tip is NOT fully consumed, so the
 			// do-while breaks without another offers.step() and trailing offers are
@@ -828,6 +871,26 @@ func (s *BookStep) Fwd(
 	// pass cache, consume, and update accumulators.
 	// Reference: rippled BookStep.cpp fwdImp callback lines 1175-1240.
 	fwdCallback := func(e offerExec) bool {
+		// Keep the accumulator state transactional while amount limits and
+		// reconciliation are evaluated. The outer forEachOffer handler removes a
+		// malformed MPT offer after an arithmetic overflow; none of this offer's
+		// provisional totals may survive that removal.
+		savedInsBefore := savedIns.clone()
+		savedOutsBefore := savedOuts.clone()
+		totalInBefore, totalOutBefore := totalIn, totalOut
+		remainingInBefore := remainingIn
+		lastTipFullyConsumedBefore := s.lastTipFullyConsumed
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				savedIns = savedInsBefore
+				savedOuts = savedOutsBefore
+				totalIn, totalOut = totalInBefore, totalOutBefore
+				remainingIn = remainingInBefore
+				s.lastTipFullyConsumed = lastTipFullyConsumedBefore
+				panic(recovered)
+			}
+		}()
+
 		// rippled fwd eachOffer: once the input is exhausted, break the do-while
 		// (the prior take's step already groomed the trailing run).
 		if remainingIn.IsZero() {
@@ -874,7 +937,7 @@ func (s *BookStep) Fwd(
 						adjStpOut,
 						e.ofrTrOut,
 						QualityOne,
-						false,
+						s.book.Out.IsMPT,
 						sb.NumberContext(),
 					)
 					if e.isAMM {
@@ -934,7 +997,7 @@ func (s *BookStep) Fwd(
 				ofrAdjOut,
 				e.ofrTrOut,
 				QualityOne,
-				false,
+				s.book.Out.IsMPT,
 				sb.NumberContext(),
 			)
 
@@ -971,7 +1034,7 @@ func (s *BookStep) Fwd(
 					revStpOut,
 					e.ofrTrOut,
 					QualityOne,
-					false,
+					s.book.Out.IsMPT,
 					sb.NumberContext(),
 				)
 				if revStpIn.Compare(remainingIn) == 0 {
@@ -1271,8 +1334,6 @@ func (s *BookStep) checkMPTDEX(view *PaymentSandbox, owner [20]byte) bool {
 	if s.book.In.IsMPT {
 		switch {
 		case s.prevStep == nil, owner == s.book.In.Issuer:
-		case mptutil.IsFrozen(view, s.book.In.MPTID, owner):
-			return false
 		case s.prevStep.BookStepBook() != nil:
 		default:
 			if mptutil.CanTransfer(view, s.book.In.MPTID, owner, owner) != ter.TesSUCCESS {
@@ -1335,9 +1396,7 @@ func (s *BookStep) consumeAMMOffer(
 ) error {
 	// Check pool product invariant
 	if !ammOffer.CheckInvariant(eitherToAmount(consumedInNet), eitherToAmount(consumedOut)) {
-		if s.fixAMMOverflowOffer {
-			return errors.New("AMM pool product invariant failed")
-		}
+		return errors.New("AMM pool product invariant failed")
 	}
 
 	// Transfer input: book.in.account → AMM account.
@@ -1371,10 +1430,8 @@ func (s *BookStep) initAMMLiquidity(
 	view *PaymentSandbox,
 	ammCtx *AMMContext,
 	parentCloseTime uint32,
-	fixAMMv1_1, fixAMMv1_2, fixAMMOverflowOffer bool,
+	fixAMMv1_1, fixAMMv1_2, _ bool,
 ) {
-	s.fixAMMOverflowOffer = fixAMMOverflowOffer
-
 	ammKey := keylet.AMMAsset(bookSideFromIssue(s.book.In), bookSideFromIssue(s.book.Out))
 	ammData, err := view.Read(ammKey)
 	if err != nil || ammData == nil {
@@ -1400,7 +1457,7 @@ func (s *BookStep) initAMMLiquidity(
 		tradingFee,
 		s.book.In, s.book.Out,
 		ammCtx,
-		fixAMMv1_1, fixAMMv1_2, fixAMMOverflowOffer,
+		fixAMMv1_1, fixAMMv1_2, false,
 	)
 }
 

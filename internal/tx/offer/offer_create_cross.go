@@ -99,16 +99,21 @@ func (o *OfferCreate) takerCross(
 ) crossOutcome {
 	rules := ctx.Rules()
 
-	// Apply tick size rounding if applicable
-	// Reference: lines 643-685
-	saTakerPays, saTakerGets = applyTickSize(ctx.View, saTakerPays, saTakerGets, bSell, rules, ctx.NumberContext())
-	if isAmountZeroOrNegative(saTakerPays) || isAmountZeroOrNegative(saTakerGets) {
-		// Offer rounded to zero
-		return crossOutcome{terminated: true, result: ter.TesSUCCESS, applyMain: true}
-	}
+	// Apply tick size rounding if applicable. An unrepresentable MPT quality is
+	// zero; rounding it can attempt to divide by zero and turn a cross into a
+	// tefEXCEPTION. Keep the original integral amounts and quality in that case.
+	unrepresentableRate := rules.MPTokensV2Enabled() && uRate == 0
+	if !unrepresentableRate {
+		// Reference: lines 643-685
+		saTakerPays, saTakerGets = applyTickSize(ctx.View, saTakerPays, saTakerGets, bSell, rules, ctx.NumberContext())
+		if isAmountZeroOrNegative(saTakerPays) || isAmountZeroOrNegative(saTakerGets) {
+			// Offer rounded to zero
+			return crossOutcome{terminated: true, result: ter.TesSUCCESS, applyMain: true}
+		}
 
-	// Recalculate rate after tick size
-	uRate = state.GetRateWithNumberContext(saTakerGets, saTakerPays, ctx.NumberContext())
+		// Recalculate rate after tick size
+		uRate = state.GetRateWithNumberContext(saTakerGets, saTakerPays, ctx.NumberContext())
+	}
 
 	// If the taker is unfunded before crossing, return tecUNFUNDED_OFFER. This
 	// is checked in preclaim too, but preclaim runs before the fee is charged;

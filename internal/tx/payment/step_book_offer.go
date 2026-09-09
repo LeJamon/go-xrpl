@@ -369,7 +369,8 @@ func (s *BookStep) firstCrossableTipQuality(sb *PaymentSandbox, ofrsToRm, visite
 				if err != nil {
 					return nil, err
 				}
-				if funds.IsZero() || s.shouldRmSmallIncreasedQOffer(sb, offer, funds) {
+				shouldRemove, _ := s.shouldRmSmallIncreasedQOfferSafe(sb, offer, funds)
+				if funds.IsZero() || shouldRemove {
 					continue
 				}
 				q := s.offerQuality(offer)
@@ -416,7 +417,8 @@ func (s *BookStep) isFoundPermGroomable(sb, afView *PaymentSandbox, offer *state
 		fundsAf, err := s.getOfferFundedAmount(afView, offer)
 		return fundsAf.IsZero(), err
 	}
-	if s.shouldRmSmallIncreasedQOffer(sb, offer, fundsSb) {
+	shouldRemove, _ := s.shouldRmSmallIncreasedQOfferSafe(sb, offer, fundsSb)
+	if shouldRemove {
 		fundsAf, err := s.getOfferFundedAmount(afView, offer)
 		return fundsAf.Compare(fundsSb) == 0, err
 	}
@@ -485,7 +487,13 @@ func (s *BookStep) groomUnfundedOffer(sb, afView *PaymentSandbox, offer *state.L
 		}
 		return true, nil
 	}
-	if s.shouldRmSmallIncreasedQOffer(sb, offer, funds) {
+	shouldRemove, overflow := s.shouldRmSmallIncreasedQOfferSafe(sb, offer, funds)
+	if overflow {
+		ofrsToRm[offerKey] = true
+		s.recordPermRm(offerKey)
+		return true, nil
+	}
+	if shouldRemove {
 		fundsAf, err := s.getOfferFundedAmount(afView, offer)
 		if err != nil {
 			return false, err
@@ -839,20 +847,38 @@ func (s *BookStep) getIOUBalance(sb *PaymentSandbox, account, issuer [20]byte, c
 // should be removed.
 //
 // This check applies when:
-//   - TakerPays is XRP (because of XRP drops granularity), OR
+//   - TakerPays is integral (XRP or MPT), OR
 //   - Both TakerPays and TakerGets are IOU and TakerPays < TakerGets
 //
-// It does NOT apply when TakerGets is XRP (the worst quality change is ~10^-81
-// TakerPays per 1 drop, which is good quality for any realistic asset).
+// It does NOT apply when only TakerGets is integral (the worst quality change
+// is ~10^-81 TakerPays per one integral unit, which is good quality for any
+// realistic asset).
 //
 // Reference: rippled OfferStream.cpp shouldRmSmallIncreasedQOffer() lines 141-222
+func (s *BookStep) shouldRmSmallIncreasedQOfferSafe(
+	sb *PaymentSandbox,
+	offer *state.LedgerOffer,
+	ownerFunds EitherAmount,
+) (remove, overflow bool) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if !catchesMPTOverflow(sb, s.book) || !isAmountOverflowPanic(recovered) {
+				panic(recovered)
+			}
+			remove = true
+			overflow = true
+		}
+	}()
+	return s.shouldRmSmallIncreasedQOffer(sb, offer, ownerFunds), false
+}
+
 func (s *BookStep) shouldRmSmallIncreasedQOffer(sb *PaymentSandbox, offer *state.LedgerOffer, ownerFunds EitherAmount) bool {
-	inIsXRP := s.book.In.IsXRP()
-	outIsXRP := s.book.Out.IsXRP()
+	inIsIntegral := s.book.In.IsXRP() || s.book.In.IsMPT
+	outIsIntegral := s.book.Out.IsXRP() || s.book.Out.IsMPT
 
 	// If TakerGets is XRP, the worst quality change is ~10^-81 TakerPays per 1 drop.
 	// This is remarkably good quality for any realistic asset, so skip the check.
-	if outIsXRP {
+	if outIsIntegral && !inIsIntegral {
 		return false
 	}
 
@@ -860,7 +886,7 @@ func (s *BookStep) shouldRmSmallIncreasedQOffer(sb *PaymentSandbox, offer *state
 	ofrOut := s.offerTakerGets(offer)
 
 	// For IOU/IOU: only check if TakerPays < TakerGets
-	if !inIsXRP && !outIsXRP {
+	if !inIsIntegral && !outIsIntegral {
 		if toNumberAmount(ofrIn).Compare(toNumberAmount(ofrOut)) >= 0 {
 			return false
 		}
@@ -874,7 +900,8 @@ func (s *BookStep) shouldRmSmallIncreasedQOffer(sb *PaymentSandbox, offer *state
 	// Compute effective amounts adjusted by owner funds
 	effectiveIn := ofrIn
 	effectiveOut := ofrOut
-	if offerOwner != s.book.Out.Issuer && ownerFunds.Compare(ofrOut) < 0 {
+	issuerHasUnlimitedFunds := !s.book.Out.IsMPT && offerOwner == s.book.Out.Issuer
+	if !issuerHasUnlimitedFunds && ownerFunds.Compare(ofrOut) < 0 {
 		// Adjust amounts by owner funds using ceil_out_strict.
 		// Reference: rippled OfferStream.cpp lines 192-207
 		offerQ := s.offerQuality(offer)
@@ -891,7 +918,7 @@ func (s *BookStep) shouldRmSmallIncreasedQOffer(sb *PaymentSandbox, offer *state
 	// Check if the effective input is at or below the minimum positive amount.
 	// For XRP: 1 drop
 	// For IOU: 1e-81 (mantissa=10^15, exponent=-96)
-	if inIsXRP {
+	if s.book.In.IsXRP() {
 		// XRP: minPositiveAmount = 1 drop
 		if effectiveIn.XRP > 1 {
 			return false

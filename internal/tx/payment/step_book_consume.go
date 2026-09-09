@@ -45,6 +45,15 @@ func (s *BookStep) consumeOffer(sb *PaymentSandbox, offer *state.LedgerOffer, co
 	grossIn := consumedInGross
 	netIn := consumedInNet
 
+	if s.book.In.IsMPT {
+		// An offer owner needs an MPToken holding to receive the input asset.
+		// Defer creation until the offer is actually consumed so merely scanning
+		// an order book cannot create a ledger object or charge its reserve.
+		if result := mptutil.EnsureHolding(sb, s.book.In.MPTID, offerOwner, 0, true); result != ter.TesSUCCESS {
+			return mptTransferResult(result)
+		}
+	}
+
 	// 1. Transfer input currency with transfer fee:
 	//    - For IOU: Transfer from input issuer (book.In.Issuer) to offer owner
 	//    - For XRP: Transfer from XRP pseudo-account (zero) to offer owner.

@@ -9,8 +9,18 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
 )
+
+type mptEndpointPrevStep struct {
+	fakeStep
+	lineQuality uint32
+}
+
+func (s *mptEndpointPrevStep) LineQualityIn(*PaymentSandbox) uint32 {
+	return s.lineQuality
+}
 
 func putMPTIssuance(t *testing.T, view *paymentMockLedgerView, id [24]byte, outstanding uint64, fee uint16) {
 	t.Helper()
@@ -83,13 +93,16 @@ func TestMPTEndpointStepIssuerToHolder(t *testing.T) {
 	view.createAccount(issuer, 100_000_000, 1)
 	view.createAccount(holder, 100_000_000, 1)
 	putMPTIssuance(t, view, id, 0, 0)
-	putMPTHolding(t, view, id, holder, 0)
 	sb := NewPaymentSandbox(view)
 
 	ctx := NewStrandContext(sb, issuer, holder)
 	ctx.StrandDeliver = NewMPTIssue(id)
+	ctx.OfferCrossing = true
 	step, result := NewMPTEndpointStep(ctx, issuer, holder, NewMPTIssue(id), nil, true, true)
 	require.Equal(t, ter.TesSUCCESS, result)
+	exists, err := sb.Exists(keylet.MPTokenByID(id, holder))
+	require.NoError(t, err)
+	require.False(t, exists, "offer-crossing endpoint must defer holding creation until send")
 
 	in, out := step.Rev(sb, NewChildSandbox(sb), nil, NewMPTEitherAmount(100, id))
 	require.Equal(t, int64(100), in.MPT)
@@ -98,6 +111,44 @@ func TestMPTEndpointStepIssuerToHolder(t *testing.T) {
 	outstanding, balances := readMPTAmounts(t, sb, id, holder)
 	require.Equal(t, uint64(100), outstanding)
 	require.Equal(t, []uint64{100}, balances)
+}
+
+func TestMPTEndpointStepCapsInputAtMPTMaximum(t *testing.T) {
+	var issuer, holder [20]byte
+	copy(issuer[:], []byte("issuer12345678901234"))
+	copy(holder[:], []byte("holder12345678901234"))
+	id := keylet.MakeMPTID(2, issuer)
+	issue := NewMPTIssue(id)
+
+	view := newPaymentMockLedgerView()
+	view.rules = amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported).EnableByName("MPTokensV2").Build()
+	view.createAccount(issuer, 100_000_000, 1)
+	view.createAccount(holder, 100_000_000, 1)
+	putMPTIssuance(t, view, id, protocol.MaxMPTokenAmount, 0)
+	putMPTHolding(t, view, id, holder, protocol.MaxMPTokenAmount)
+	sb := NewPaymentSandbox(view)
+
+	previous := &mptEndpointPrevStep{
+		lineQuality: 1_100_000_000,
+	}
+	ctx := NewStrandContext(sb, holder, issuer)
+	ctx.StrandDeliver = issue
+	step, result := NewMPTEndpointStep(ctx, holder, issuer, issue, previous, false, true)
+	require.Equal(t, ter.TesSUCCESS, result)
+
+	in, out := step.Rev(
+		sb,
+		NewChildSandbox(sb),
+		nil,
+		NewMPTEitherAmount(int64(protocol.MaxMPTokenAmount), id),
+	)
+	maxOutput := mptMulRatio(int64(protocol.MaxMPTokenAmount), QualityOne, 1_100_000_000, false)
+	require.Equal(t, maxOutput, out.MPT)
+	require.Equal(t, int64(protocol.MaxMPTokenAmount), in.MPT)
+
+	issuanceOutstanding, balances := readMPTAmounts(t, sb, id, holder)
+	require.Equal(t, uint64(protocol.MaxMPTokenAmount)-uint64(maxOutput), issuanceOutstanding)
+	require.Equal(t, []uint64{uint64(protocol.MaxMPTokenAmount) - uint64(maxOutput)}, balances)
 }
 
 func TestMPTEndpointStepHolderToHolderChargesTransferFee(t *testing.T) {

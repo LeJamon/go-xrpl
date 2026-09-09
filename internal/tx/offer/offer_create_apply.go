@@ -182,6 +182,17 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 		return ter.TesSUCCESS, true // Crossing happened - apply main sandbox
 	}
 
+	// An MPT offer whose quality is zero cannot be represented by a book
+	// directory. It may still cross existing liquidity, but leaving a remainder
+	// at the zero-quality base key would make that remainder permanently
+	// unreachable.
+	if rules := ctx.Rules(); rules != nil && rules.MPTokensV2Enabled() && uRate == 0 {
+		if !crossed {
+			return ter.TecKILLED, false
+		}
+		return ter.TesSUCCESS, true
+	}
+
 	// Reference: rippled CreateOffer.cpp lines 811-834
 	// IMPORTANT: Read OwnerCount fresh from the sandbox, not from ctx.Account.
 	// The crossing may have modified OwnerCount (e.g., trust line deletion).
