@@ -123,7 +123,6 @@ func verifyProofPath(rootHash [32]byte, key [32]byte, path [][]byte) []byte {
 
 		switch typed := node.(type) {
 		case *innerNode:
-			// Only a leaf may occupy the maximum depth.
 			if depth >= maxDepth {
 				return nil
 			}

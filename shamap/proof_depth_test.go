@@ -101,23 +101,8 @@ func TestVerifyProofPathRejectsInvalidInnerNode(t *testing.T) {
 
 func TestVerifyProofPathRejectsSubstitutedTerminalLeaf(t *testing.T) {
 	key := [32]byte{0x10}
-	otherKey := [32]byte{0x20}
-	sm := New(TypeState)
-	for _, item := range [][2][32]byte{{key, {}}, {otherKey, {}}} {
-		if err := sm.Put(item[0], bytes.Repeat([]byte{item[0][0]}, 12)); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	keyProof, err := sm.GetProofPath(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	otherProof, err := sm.GetProofPath(otherKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leaf, err := deserializeNodeFromWire(keyProof.Path[0])
+	otherKey := [32]byte{0x11}
+	leaf, err := newAccountStateLeafNode(NewItem(otherKey, bytes.Repeat([]byte{1}, 12)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,13 +114,16 @@ func TestVerifyProofPathRejectsSubstitutedTerminalLeaf(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	goodPath := [][]byte{keyProof.Path[0], rootWire}
-	if !VerifyProofPath(root.Hash(), key, goodPath) {
-		t.Fatal("forged root over the requested leaf did not verify")
+	leafWire, err := leaf.SerializeForWire()
+	if err != nil {
+		t.Fatal(err)
 	}
-	badPath := [][]byte{otherProof.Path[0], rootWire}
-	if VerifyProofPath(root.Hash(), key, badPath) {
-		t.Fatal("substituted terminal leaf verified for the wrong key")
+	path := [][]byte{leafWire, rootWire}
+	if !VerifyProofPath(root.Hash(), otherKey, path) {
+		t.Fatal("proof for the stored leaf did not verify")
+	}
+	if VerifyProofPath(root.Hash(), key, path) {
+		t.Fatal("hash-valid proof verified for the wrong terminal key")
 	}
 }
 
