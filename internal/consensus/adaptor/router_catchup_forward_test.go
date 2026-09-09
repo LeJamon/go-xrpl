@@ -427,8 +427,10 @@ func TestRouter_TrustedHashReconcilesConflictingPeerParent(t *testing.T) {
 	assert.Equal(t, seqHashSourceValidation, entry.source)
 	assert.True(t, entry.haveParent)
 	assert.Equal(t, closed.Hash(), entry.parentHash)
-	nextSeq, nextHash, replay := r.forwardDeltaStep(svc, closed.Sequence(), seq)
+	nextSeq, nextHash, parentLedger, replay, _ := r.recoveryForwardStep(svc, seq, hash, consensusRecovery{})
 	assert.True(t, replay)
+	require.NotNil(t, parentLedger)
+	assert.Equal(t, closed.Hash(), parentLedger.Hash())
 	assert.Equal(t, seq, nextSeq)
 	assert.Equal(t, hash, nextHash)
 }
@@ -663,8 +665,8 @@ func TestRouter_FastLoadedSameHeightQuorumAcquiresUnknownReplacement(t *testing.
 	assert.Equal(t, loaded.Hash(), svc.GetClosedLedger().Hash())
 }
 
-// A completed forward fetch becomes available to consensus without advancing
-// the service frontier or re-arming the acquisition walk.
+// A completed forward fetch must advance recovery independently of consensus:
+// the closed ledger can still be older than the verified replay parent.
 func TestRouter_ForwardWalkStoresNextForConsensus(t *testing.T) {
 	r, _, rs, svc := makeRouter(t)
 	parent := svc.GetClosedLedger()
@@ -705,8 +707,12 @@ func TestRouter_ForwardWalkStoresNextForConsensus(t *testing.T) {
 	stored, err := svc.GetLedgerByHash(childHash)
 	require.NoError(t, err)
 	require.Equal(t, c+1, stored.Sequence())
-	assert.Empty(t, rs.replayCalls())
+	replays := rs.replayCalls()
+	require.Len(t, replays, 1, "continue past the stored child instead of deduplicating it forever")
+	assert.Equal(t, next2, replays[0].hash)
 	assert.Empty(t, rs.legacyCalls())
+	r.armCatchupTowardTarget()
+	assert.Len(t, rs.replayCalls(), 1, "the next step stays deduplicated")
 }
 
 // maxConcurrentCatchup is preserved: while a forward step is in flight, a second
@@ -730,6 +736,30 @@ func TestRouter_ForwardWalk_SerialUnderCap(t *testing.T) {
 	assert.Equal(t, 1, r.catchupInFlight(),
 		"the same forward target remains deduplicated")
 	assert.Len(t, rs.replayCalls(), 1, "no second acquisition while one is in flight")
+}
+
+func TestRouter_ForwardReplayUsesValidatedBaseAfterObserverFork(t *testing.T) {
+	r, _, rs, svc := makeRouter(t)
+	validated := svc.GetClosedLedger()
+	svc.SetValidatedLedgerAt(validated.Sequence(), validated.Hash(), time.Now())
+	require.Equal(t, validated.Hash(), svc.GetValidatedLedger().Hash())
+	_, err := svc.AcceptConsensusResult(context.Background(), validated, nil, nil, time.Now(), true)
+	require.NoError(t, err)
+	local := svc.GetClosedLedger()
+	require.Greater(t, local.Sequence(), validated.Sequence())
+
+	nextHash := [32]byte{0xB1}
+	tipHash := [32]byte{0xF0}
+	r.recordSeqHash(validated.Sequence()+1, nextHash, validated.Hash(), true)
+	trackCatchupPeer(r, 7, validated.Sequence()+5, tipHash)
+	r.recordCatchupTarget(validated.Sequence()+5, tipHash, 7)
+	r.armCatchupTowardTarget()
+
+	replays := rs.replayCalls()
+	require.Len(t, replays, 1)
+	require.Equal(t, nextHash, replays[0].hash)
+	require.Empty(t, rs.legacyCalls(), "a speculative close must not force full-state acquisition")
+	require.Equal(t, local.Hash(), svc.GetClosedLedger().Hash(), "acquisition must not mutate consensus")
 }
 
 func TestRouter_ForwardDeltaFailureCooldownUsesChildHash(t *testing.T) {

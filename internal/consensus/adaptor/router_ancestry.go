@@ -8,7 +8,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
-	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
@@ -56,28 +55,6 @@ type headerDiscoverySession struct {
 	lastSentAt    time.Time
 	excludedPeers map[uint64]struct{}
 	headers       map[uint32]header.LedgerHeader
-}
-
-func (r *Router) catchupReplayBase(svc *service.Service) *ledger.Ledger {
-	if svc == nil {
-		return nil
-	}
-	closed := svc.GetClosedLedger()
-	validated := svc.GetValidatedLedger()
-	if validated == nil || closed == nil {
-		if validated != nil {
-			return validated
-		}
-		return closed
-	}
-	if validated.Sequence() >= closed.Sequence() {
-		return validated
-	}
-	if entry, ok := r.lookupSeqHash(closed.Sequence()); ok &&
-		entry.source >= seqHashSourceValidation && entry.hash == closed.Hash() {
-		return closed
-	}
-	return validated
 }
 
 func (r *Router) startHeaderParentDiscovery(

@@ -255,8 +255,9 @@ func (s *Service) Stop() {
 	s.lifecycleMu.Unlock()
 
 	// Drain validation lookups before the underlying stores can be closed, then
-	// wait for an in-flight submission or ledger transition. The stopping state
-	// rejects later work.
+	// wait for an in-flight submission or ledger transition. Queued open-ledger
+	// callers recheck the stopping state after acquiring openLedgerMu and cannot
+	// mutate state, regardless of which side of this barrier they acquire it on.
 	s.validationWG.Wait()
 	s.consensusWG.Wait()
 	s.openLedgerMu.LockRole(openLedgerShutdown)
