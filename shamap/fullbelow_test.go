@@ -1012,6 +1012,34 @@ func TestFullBelowCacheBeginMutationInvalidatesAndBlocksWalks(t *testing.T) {
 	<-walkDone
 }
 
+func TestFullBelowCacheEnsureDurableFingerprintClearsUnboundMarks(t *testing.T) {
+	cache := NewFullBelowCache()
+	oldGeneration := cache.Generation()
+	marked := [32]byte{0xA6}
+	cache.Insert(oldGeneration, marked)
+	fingerprint := [32]byte{0xB7}
+
+	newGeneration := cache.EnsureDurableFingerprint(fingerprint)
+	if newGeneration == oldGeneration {
+		t.Fatalf("EnsureDurableFingerprint kept generation %d", oldGeneration)
+	}
+	if cache.Has(newGeneration, marked) {
+		t.Fatal("unbound mark survived durable fingerprint binding")
+	}
+	gotFingerprint, bound := cache.DurableFingerprint(newGeneration)
+	if !bound || gotFingerprint != fingerprint {
+		t.Fatalf("durable fingerprint = %x, bound=%v; want %x", gotFingerprint, bound, fingerprint)
+	}
+
+	cache.Insert(newGeneration, marked)
+	if next := cache.EnsureDurableFingerprint(fingerprint); next != newGeneration {
+		t.Fatalf("same durable fingerprint advanced generation from %d to %d", newGeneration, next)
+	}
+	if !cache.Has(newGeneration, marked) {
+		t.Fatal("same durable fingerprint discarded a valid mark")
+	}
+}
+
 func TestFullBelowCache_RejectsStaleGenerationInsert(t *testing.T) {
 	c := NewFullBelowCache()
 	stale := c.Generation()

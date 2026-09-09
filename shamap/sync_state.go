@@ -115,19 +115,7 @@ func (sm *SHAMap) FinishSyncContext(ctx context.Context) error {
 		return errSyncNotInProgress
 	}
 	sm.tree.mu.RUnlock()
-	sm.backing.mu.RLock()
-	backed := sm.backing.access.available()
-	sm.backing.mu.RUnlock()
-
-	var missingNodes []MissingNode
-	var err error
-	if backed {
-		missingNodes, err = sm.walkMapParallelContext(ctx, 1, nil)
-	} else {
-		sm.tree.mu.RLock()
-		missingNodes, err = sm.missingNodesLocked(1, nil, true)
-		sm.tree.mu.RUnlock()
-	}
+	missingNodes, err := sm.walkMapParallelContext(ctx, 1, nil)
 	if err != nil {
 		return fmt.Errorf("sync completeness walk: %w", err)
 	}

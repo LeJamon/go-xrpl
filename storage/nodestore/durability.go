@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
 )
@@ -37,13 +38,30 @@ type DurableSnapshotDatabase interface {
 	AcquireDurableSnapshot(context.Context) ([32]byte, func(), error)
 }
 
+const durableSnapshotLockPoll = time.Millisecond
+
 // AcquireDurableSnapshot prevents managed destructive mutations until the
-// returned release function is called. Ordinary writes remain available.
+// returned release function is called. Ordinary writes remain available. The
+// read lock is admitted in cancelable polls so shutdown cannot strand a caller
+// behind an online-delete mutation.
 func (d *KVDatabase) AcquireDurableSnapshot(ctx context.Context) ([32]byte, func(), error) {
 	if err := ctx.Err(); err != nil {
 		return [32]byte{}, nil, err
 	}
-	d.mutationMu.RLock()
+	for !d.mutationMu.TryRLock() {
+		timer := time.NewTimer(durableSnapshotLockPoll)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return [32]byte{}, nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 	var once sync.Once
 	release := func() {
 		once.Do(d.mutationMu.RUnlock)

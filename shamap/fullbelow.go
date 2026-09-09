@@ -102,6 +102,12 @@ type FullBelowCache struct {
 	// walks prevents a generation reset from overtaking an in-flight walk.
 	walks   sync.RWMutex
 	stateMu sync.RWMutex
+	// durableFingerprint identifies the NodeStore generation in which the
+	// current cache marks were proven. A cache generation alone is local to the
+	// process and cannot detect a durable mutation performed without a cache
+	// hook.
+	durableFingerprint [32]byte
+	durableGeneration  uint32
 
 	targetSize int
 	targetAge  time.Duration
@@ -196,8 +202,84 @@ func (c *FullBelowCache) BeginMutation() func() {
 		shard.lastRotation = resetAt
 		shard.mu.Unlock()
 	}
+	c.durableFingerprint = [32]byte{}
+	c.durableGeneration = 0
 	c.stateMu.Unlock()
 	return c.walks.Unlock
+}
+
+// EnsureDurableFingerprint atomically clears stale completeness marks and
+// binds the resulting cache generation to fingerprint. The caller must hold
+// the corresponding durable snapshot first, matching the store mutation lock
+// order.
+func (c *FullBelowCache) EnsureDurableFingerprint(fingerprint [32]byte) uint32 {
+	if c == nil || fingerprint == ([32]byte{}) {
+		return 0
+	}
+	c.walks.Lock()
+	c.stateMu.Lock()
+	generation := c.gen.Load()
+	if c.durableGeneration == generation && c.durableFingerprint == fingerprint {
+		c.stateMu.Unlock()
+		c.walks.Unlock()
+		return generation
+	}
+	if c.gen.Add(1) == 0 {
+		c.gen.Store(1)
+	}
+	generation = c.gen.Load()
+	resetAt := c.now()
+	for i := range c.shards {
+		shard := &c.shards[i]
+		shard.mu.Lock()
+		clear(shard.current)
+		clear(shard.previous)
+		shard.lastRotation = resetAt
+		shard.mu.Unlock()
+	}
+	c.durableGeneration = generation
+	c.durableFingerprint = fingerprint
+	c.stateMu.Unlock()
+	c.walks.Unlock()
+	return generation
+}
+
+// BindDurableFingerprint associates a cache generation with the durable
+// NodeStore generation pinned for its walk. A complete subtree mark still
+// establishes the proof; this binding only prevents it crossing mutations.
+// It returns false when the cache generation changed or the fingerprint is
+// empty.
+func (c *FullBelowCache) BindDurableFingerprint(generation uint32, fingerprint [32]byte) bool {
+	if c == nil || generation == 0 || fingerprint == ([32]byte{}) {
+		return false
+	}
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	if c.gen.Load() != generation {
+		return false
+	}
+	if c.durableGeneration == generation && c.durableFingerprint != ([32]byte{}) &&
+		c.durableFingerprint != fingerprint {
+		return false
+	}
+	c.durableGeneration = generation
+	c.durableFingerprint = fingerprint
+	return true
+}
+
+// DurableFingerprint reports the durable generation bound to the requested
+// cache generation, if a complete walk established one.
+func (c *FullBelowCache) DurableFingerprint(generation uint32) ([32]byte, bool) {
+	if c == nil || generation == 0 {
+		return [32]byte{}, false
+	}
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	if c.gen.Load() != generation || c.durableGeneration != generation ||
+		c.durableFingerprint == ([32]byte{}) {
+		return [32]byte{}, false
+	}
+	return c.durableFingerprint, true
 }
 
 func (c *FullBelowCache) shard(hash [32]byte) *fullBelowShard {

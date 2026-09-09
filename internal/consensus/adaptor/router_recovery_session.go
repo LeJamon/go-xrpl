@@ -33,9 +33,13 @@ func (r *Router) beginFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint
 
 	var baseRoot [32]byte
 	var baseRelease func()
+	baseCtx := r.lifecycleContext()
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
 	if r.adaptor != nil {
 		if svc := r.adaptor.LedgerService(); svc != nil {
-			root, release, ok, err := svc.AcquireFastLoadStateBase(context.Background())
+			root, release, ok, err := svc.AcquireValidatedStateBase(baseCtx)
 			if err != nil {
 				r.logger.Warn("checkpoint-relative pivot discovery unavailable", "error", err)
 			} else if ok {
@@ -90,7 +94,7 @@ func (r *Router) beginFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint
 	il := r.fetchTracker.Find(hash)
 	if il != nil && !il.TransactionOnly() {
 		if baseRoot != ([32]byte{}) {
-			if err := il.SetVerifiedStateBaseContext(context.Background(), baseRoot); err != nil {
+			if err := il.SetVerifiedStateBaseContext(baseCtx, baseRoot); err != nil {
 				r.logger.Warn("checkpoint-relative pivot discovery unavailable", "error", err)
 				r.releaseStandardReplayBaseLocked()
 			} else {

@@ -1,6 +1,9 @@
 package shamap
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // Family provides access to a persistent store for backed SHAMap instances.
 // Each SHAMap independently fetches and deserializes nodes from the Family,
@@ -22,6 +25,10 @@ type durableFamily interface {
 	FetchDurable(ctx context.Context, hash [32]byte) ([]byte, error)
 }
 
+type durableSnapshotFamily interface {
+	AcquireDurableSnapshot(context.Context) ([32]byte, func(), error)
+}
+
 type nodePlacementFamily interface {
 	FetchForNodePlacement(ctx context.Context, hash [32]byte) ([]byte, error)
 }
@@ -31,8 +38,9 @@ type nodePlacementFamily interface {
 // that.
 type familyAccess struct {
 	Family
-	durable   durableFamily
-	placement nodePlacementFamily
+	durable         durableFamily
+	durableSnapshot durableSnapshotFamily
+	placement       nodePlacementFamily
 }
 
 func bindFamily(family Family) *familyAccess {
@@ -41,6 +49,7 @@ func bindFamily(family Family) *familyAccess {
 	}
 	access := &familyAccess{Family: family}
 	access.durable, _ = family.(durableFamily)
+	access.durableSnapshot, _ = family.(durableSnapshotFamily)
 	access.placement, _ = family.(nodePlacementFamily)
 	return access
 }
@@ -90,6 +99,17 @@ func (a *familyAccess) fetchPreferDurable(ctx context.Context, hash [32]byte) ([
 	}
 	data, err := a.fetch(ctx, hash)
 	return data, len(data) > 0, err
+}
+
+func (a *familyAccess) acquireDurableSnapshot(ctx context.Context) ([32]byte, func(), bool, error) {
+	if a == nil || a.durableSnapshot == nil {
+		return [32]byte{}, nil, false, nil
+	}
+	fingerprint, release, err := a.durableSnapshot.AcquireDurableSnapshot(ctx)
+	if errors.Is(err, errors.ErrUnsupported) {
+		return [32]byte{}, nil, false, nil
+	}
+	return fingerprint, release, true, err
 }
 
 func (a *familyAccess) fetchForPlacement(ctx context.Context, hash [32]byte) ([]byte, error) {

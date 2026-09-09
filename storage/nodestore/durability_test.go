@@ -278,6 +278,26 @@ func TestAcquireDurableSnapshotPinsManagedMutationUntilRelease(t *testing.T) {
 	}
 }
 
+func TestAcquireDurableSnapshotCancellationWhileMutationHeld(t *testing.T) {
+	database := testDatabase(t, memorydb.New(), noCacheConfig())
+	database.mutationMu.Lock()
+	defer database.mutationMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, release, err := database.AcquireDurableSnapshot(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("AcquireDurableSnapshot error = %v, want context deadline", err)
+	}
+	if release != nil {
+		t.Fatal("canceled durable snapshot returned a release function")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("canceled durable snapshot took too long: %s", elapsed)
+	}
+}
+
 func TestDurableSnapshotOrdersPruneInvalidationAfterLease(t *testing.T) {
 	database := testDatabase(t, memorydb.New(), noCacheConfig())
 	_, release, err := database.AcquireDurableSnapshot(t.Context())

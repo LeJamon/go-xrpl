@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
@@ -346,12 +347,18 @@ func (s *Service) acceptFastLoadCheckpoint(
 			return errors.New("SHAMap family has no shared full-below cache")
 		}
 		cache := provider.FullBelowCache()
+		if !s.prepareValidatedStateBaseCache(nodeFingerprint) {
+			return errors.New("checkpoint has no durable full-below cache")
+		}
 		generation := cache.Generation()
 		for _, hash := range stateProofs {
 			cache.Insert(generation, hash)
 		}
 		for _, hash := range txProofs {
 			cache.Insert(generation, hash)
+		}
+		if !s.bindValidatedStateBaseCache(nodeFingerprint) {
+			return errors.New("checkpoint full-below proof has no durable generation binding")
 		}
 		s.fastLoadStrictNodes.Store(checkpoint.strictNodes)
 		s.fastLoadStrictElapsed.Store(checkpoint.strictElapsed)
@@ -433,6 +440,127 @@ func (s *Service) AcquireFastLoadStateBase(ctx context.Context) ([32]byte, func(
 		return [32]byte{}, nil, false, nil
 	}
 	return root, release, true, nil
+}
+
+// AcquireValidatedStateBase pins a complete, durable validated ledger for a
+// runtime recovery session. Unlike AcquireFastLoadStateBase, this path uses a
+// completeness certificate inherited from strict startup validation and checks
+// the current durable publication while the NodeStore generation is pinned.
+func (s *Service) AcquireValidatedStateBase(ctx context.Context) ([32]byte, func(), bool, error) {
+	if err := ctx.Err(); err != nil {
+		return [32]byte{}, nil, false, err
+	}
+	s.lifecycleMu.Lock()
+	running := s.lifecycleState == serviceRunning
+	s.lifecycleMu.Unlock()
+	if !running {
+		return [32]byte{}, nil, false, nil
+	}
+
+	s.mu.RLock()
+	validated := s.validatedLedger
+	minimumOnline := s.minimumOnlineFunc
+	s.mu.RUnlock()
+	if validated == nil || !validated.IsValidated() || !s.hasDurableCompleteLedger(validated) {
+		return [32]byte{}, nil, false, nil
+	}
+	h := validated.Header()
+	if h.LedgerIndex == 0 || h.Hash == ([32]byte{}) || h.AccountHash == ([32]byte{}) {
+		return [32]byte{}, nil, false, errors.New("validated state base has an invalid ledger header")
+	}
+	if s.stateBaseBelowRetention(h.LedgerIndex, minimumOnline) {
+		return [32]byte{}, nil, false, nil
+	}
+
+	durable, ok := s.nodeStore.(nodestore.DurableSnapshotDatabase)
+	if !ok {
+		return [32]byte{}, nil, false, errors.New("NodeStore cannot retain a durable validated state base")
+	}
+	fingerprint, release, err := durable.AcquireDurableSnapshot(ctx)
+	if err != nil {
+		return [32]byte{}, nil, false, fmt.Errorf("acquire validated state NodeStore snapshot: %w", err)
+	}
+	releaseOnError := true
+	defer func() {
+		if releaseOnError {
+			release()
+		}
+	}()
+
+	if err := s.proveValidatedStateBase(ctx, validated, h, fingerprint); err != nil {
+		return [32]byte{}, nil, false, err
+	}
+	currentFingerprint, err := durable.DurableFingerprint(ctx)
+	if err != nil {
+		return [32]byte{}, nil, false, fmt.Errorf("recheck validated state NodeStore generation: %w", err)
+	}
+	if currentFingerprint != fingerprint {
+		return [32]byte{}, nil, false, errors.New("validated state NodeStore generation changed during proof")
+	}
+	if err := ctx.Err(); err != nil {
+		return [32]byte{}, nil, false, err
+	}
+	s.lifecycleMu.Lock()
+	running = s.lifecycleState == serviceRunning
+	s.lifecycleMu.Unlock()
+	if !running {
+		return [32]byte{}, nil, false, nil
+	}
+	if s.stateBaseBelowRetention(h.LedgerIndex, minimumOnline) {
+		return [32]byte{}, nil, false, nil
+	}
+	s.mu.RLock()
+	current := s.validatedLedger == validated && s.validatedLedger.Hash() == h.Hash &&
+		s.validatedLedger.Sequence() == h.LedgerIndex && s.hasDurableCompleteLedger(validated)
+	s.mu.RUnlock()
+	if !current {
+		return [32]byte{}, nil, false, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return [32]byte{}, nil, false, err
+	}
+	releaseOnError = false
+	return h.AccountHash, release, true, nil
+}
+
+func (s *Service) proveValidatedStateBase(
+	ctx context.Context,
+	validated *ledger.Ledger,
+	h header.LedgerHeader,
+	fingerprint [32]byte,
+) error {
+	if validated.Hash() != h.Hash || validated.Sequence() != h.LedgerIndex {
+		return errors.New("validated state base ledger identity changed during proof")
+	}
+	proof, found := s.currentValidatedStateBaseProof()
+	if !found || !validatedStateBaseProofMatchesLedger(proof, h, fingerprint) {
+		return errors.New("validated state base has no matching completeness proof")
+	}
+	if err := s.durableValidatedHeader(ctx, h); err != nil {
+		return err
+	}
+	if err := s.verifyDurableSHAMapRoot(ctx, h.AccountHash, "state"); err != nil {
+		return fmt.Errorf("read validated state base root: %w", err)
+	}
+	if h.TxHash != ([32]byte{}) {
+		if err := s.verifyDurableSHAMapRoot(ctx, h.TxHash, "transaction"); err != nil {
+			return fmt.Errorf("read validated state base transaction root: %w", err)
+		}
+	}
+	return s.durableValidatedTipMatches(ctx, h)
+}
+
+func (s *Service) stateBaseBelowRetention(seq uint32, minimumOnline func() uint32) bool {
+	floor := uint32(0)
+	if minimumOnline != nil {
+		floor = minimumOnline()
+	}
+	if family, ok := s.shamapFamily.(interface{ MinimumLedgerSeq() uint32 }); ok {
+		if familyFloor := family.MinimumLedgerSeq(); familyFloor > floor {
+			floor = familyFloor
+		}
+	}
+	return floor != 0 && seq < floor
 }
 
 func (s *Service) clearFastLoadBaseLocked() {

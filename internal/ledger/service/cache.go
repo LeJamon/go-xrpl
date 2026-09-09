@@ -183,6 +183,25 @@ func (s *Service) hasCompleteLedger(l *ledger.Ledger) bool {
 	return s.completeLedgerHashes[l.Sequence()] == l.Hash()
 }
 
+// hasDurableCompleteLedger reports whether the ledger's persistence token has
+// completed. beginValidatedPersistence adds a ledger to completedLedgers before
+// its writes finish so duplicate jobs can be coalesced; a recovery base must
+// wait for the token to leave completeLedgerTokens as well.
+func (s *Service) hasDurableCompleteLedger(l *ledger.Ledger) bool {
+	if l == nil {
+		return false
+	}
+	s.completeMu.RLock()
+	defer s.completeMu.RUnlock()
+	if s.completedLedgers == nil || !s.completedLedgers.contains(l.Sequence()) {
+		return false
+	}
+	if _, pending := s.completeLedgerTokens[l.Sequence()]; pending {
+		return false
+	}
+	return s.completeLedgerHashes[l.Sequence()] == l.Hash()
+}
+
 // HasCompleteLedger reports whether seq belongs to the completed-ledger set.
 func (s *Service) HasCompleteLedger(seq uint32) bool {
 	s.completeMu.RLock()

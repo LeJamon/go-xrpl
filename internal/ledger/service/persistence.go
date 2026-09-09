@@ -71,6 +71,18 @@ func (s *Service) persistValidatedLedgerAtToken(
 		if persistErr == nil && updateTip && s.nodeStore != nil {
 			if err := s.persistValidatedTipLocked(ctx, l, allowTipReplacement); err != nil {
 				persistErr = err
+			} else {
+				s.tryAdvanceValidatedStateBaseProof(ctx, l)
+			}
+		}
+		s.canonicalPersistMu.Unlock()
+	} else if persistErr == nil && updateTip && s.nodeStore != nil {
+		s.canonicalPersistMu.Lock()
+		if canceled == nil || !canceled() {
+			if err := s.persistValidatedTipLocked(ctx, l, allowTipReplacement); err != nil {
+				persistErr = err
+			} else {
+				s.tryAdvanceValidatedStateBaseProof(ctx, l)
 			}
 		}
 		s.canonicalPersistMu.Unlock()
@@ -268,6 +280,7 @@ func (s *Service) Stop() {
 	s.mu.Lock()
 	s.clearFastLoadBaseLocked()
 	s.mu.Unlock()
+	s.clearValidatedStateBase()
 
 	s.lifecycleMu.Lock()
 	s.lifecycleState = serviceStopped
