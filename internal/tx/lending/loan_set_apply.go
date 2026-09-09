@@ -1,6 +1,7 @@
 package lending
 
 import (
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending/lmath"
@@ -100,6 +101,22 @@ func (l *LoanSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 	vinfo, verr := vault.ReadVaultLending(view, keylet.VaultByID(b.VaultID))
 	if verr != nil || vinfo == nil {
 		return ter.TefBAD_LEDGER
+	}
+	rules := config.RequireRules()
+	if rules.Enabled(amendment.FeatureLendingProtocolV1_1) {
+		switch vault.GetVaultPhase(vinfo.VaultKind, vinfo.SubscriptionDate, vinfo.RedemptionDate, config.ParentCloseTime) {
+		case vault.VaultPhaseSubscription:
+			return ter.TecTOO_SOON
+		case vault.VaultPhaseRedemption:
+			return ter.TecEXPIRED
+		case vault.VaultPhaseInvestment:
+			if vinfo.RedemptionDate != nil {
+				finalPayment := uint64(now) + uint64(interval)*uint64(total)
+				if finalPayment+vault.LoanRedemptionBuffer > uint64(*vinfo.RedemptionDate) {
+					return ter.TecNO_PERMISSION
+				}
+			}
+		}
 	}
 	if number(vinfo.AssetsMaximum).Signum() != 0 && number(vinfo.AssetsTotal).Cmp(number(vinfo.AssetsMaximum)) >= 0 {
 		return ter.TecLIMIT_EXCEEDED

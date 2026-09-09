@@ -196,11 +196,14 @@ func adjustXRPBalance(ctx *tx.ApplyContext, account [20]byte, delta int64) ter.R
 
 // VaultInfo is the subset of a vault entry the lending package reads.
 type VaultInfo struct {
-	Account    [20]byte // pseudo-account
-	Owner      [20]byte
-	ShareMPTID [24]byte
-	Asset      tx.Asset
-	OwnerNode  uint64
+	Account          [20]byte // pseudo-account
+	Owner            [20]byte
+	ShareMPTID       [24]byte
+	Asset            tx.Asset
+	OwnerNode        uint64
+	VaultKind        uint8
+	SubscriptionDate *uint32
+	RedemptionDate   *uint32
 }
 
 // ReadVaultInfo reads the vault at vaultKey, returning (nil, nil) when absent.
@@ -210,11 +213,14 @@ func ReadVaultInfo(view AssetReadView, vaultKey keylet.Keylet) (*VaultInfo, erro
 		return nil, err
 	}
 	return &VaultInfo{
-		Account:    vd.Account,
-		Owner:      vd.Owner,
-		ShareMPTID: vd.ShareMPTID,
-		Asset:      vaultAssetOf(vd),
-		OwnerNode:  vd.OwnerNode,
+		Account:          vd.Account,
+		Owner:            vd.Owner,
+		ShareMPTID:       vd.ShareMPTID,
+		Asset:            vaultAssetOf(vd),
+		OwnerNode:        vd.OwnerNode,
+		VaultKind:        vd.VaultKind,
+		SubscriptionDate: vd.SubscriptionDate,
+		RedemptionDate:   vd.RedemptionDate,
 	}, nil
 }
 
@@ -238,8 +244,14 @@ func ReadVaultLending(view tx.LedgerView, vaultKey keylet.Keylet) (*VaultLending
 	}
 	return &VaultLending{
 		VaultInfo: VaultInfo{
-			Account: vd.Account, Owner: vd.Owner, ShareMPTID: vd.ShareMPTID,
-			Asset: vaultAssetOf(vd), OwnerNode: vd.OwnerNode,
+			Account:          vd.Account,
+			Owner:            vd.Owner,
+			ShareMPTID:       vd.ShareMPTID,
+			Asset:            vaultAssetOf(vd),
+			OwnerNode:        vd.OwnerNode,
+			VaultKind:        vd.VaultKind,
+			SubscriptionDate: vd.SubscriptionDate,
+			RedemptionDate:   vd.RedemptionDate,
 		},
 		AssetsTotal:     vd.AssetsTotal,
 		AssetsAvailable: vd.AssetsAvailable,

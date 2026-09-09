@@ -104,6 +104,12 @@ func (v *VaultDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 	if vd == nil {
 		return ter.TecNO_ENTRY
 	}
+	if config.RequireRules().Enabled(amendment.FeatureLendingProtocolV1_1) {
+		switch GetVaultPhase(vd.VaultKind, vd.SubscriptionDate, vd.RedemptionDate, config.ParentCloseTime) {
+		case VaultPhaseInvestment, VaultPhaseRedemption:
+			return ter.TecEXPIRED
+		}
+	}
 
 	if !assetMatches(v.Amount, vd) {
 		return ter.TecWRONG_ASSET

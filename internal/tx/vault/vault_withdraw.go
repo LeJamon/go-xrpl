@@ -150,6 +150,10 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 	if vd == nil {
 		return ter.TecNO_ENTRY
 	}
+	if config.RequireRules().Enabled(amendment.FeatureLendingProtocolV1_1) &&
+		GetVaultPhase(vd.VaultKind, vd.SubscriptionDate, vd.RedemptionDate, config.ParentCloseTime) == VaultPhaseInvestment {
+		return ter.TecTOO_SOON
+	}
 
 	if !assetMatches(v.Amount, vd) && !v.amountIsShares(vd) {
 		return ter.TecWRONG_ASSET

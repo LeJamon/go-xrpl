@@ -80,6 +80,10 @@ func (l *LoanBrokerSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 			}
 		}
 	} else {
+		if config.RequireRules().Enabled(amendment.FeatureLendingProtocolV1_1) &&
+			vinfo.VaultKind != vault.VaultKindClosedEnded {
+			return ter.TecNO_PERMISSION
+		}
 		if res := vault.CanAddHolding(view, asset); res != ter.TesSUCCESS {
 			return res
 		}
