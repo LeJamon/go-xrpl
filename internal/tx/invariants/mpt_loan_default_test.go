@@ -354,6 +354,68 @@ func TestLoanDefaultMPTAuthorizationScope(t *testing.T) {
 	}
 }
 
+func TestLoanDefaultMPTAuthorizationUsesPreTransactionPseudo(t *testing.T) {
+	assetID := mptDefaultID(t, 50)
+	sender := mptDefaultAccount(t, addrHolderA)
+	receiver := mptDefaultAccount(t, addrHolderB)
+	ordinaryRoot := func(t *testing.T) []byte {
+		t.Helper()
+		return mustEncode(t, map[string]any{
+			"LedgerEntryType":   "AccountRoot",
+			"Account":           addrHolderA,
+			"Balance":           "0",
+			"Flags":             uint32(0),
+			"OwnerCount":        uint32(0),
+			"Sequence":          uint32(0),
+			"PreviousTxnID":     strings.Repeat("0", 64),
+			"PreviousTxnLgrSeq": uint32(0),
+		})
+	}
+
+	t.Run("pseudo before ordinary after remains authorized", func(t *testing.T) {
+		tx, view, entries := mptDefaultFixture(
+			t,
+			assetID,
+			entry.LsfMPTCanTransfer|entry.LsfMPTRequireAuth,
+			sender,
+			receiver,
+			0,
+		)
+		before := view.data[keylet.Account(sender).Key]
+		after := ordinaryRoot(t)
+		view.data[keylet.Account(sender).Key] = after
+		entries = append(entries, InvariantEntry{
+			EntryType: entry.TypeAccountRoot,
+			Before:    before,
+			After:     after,
+		})
+		if got := checkLoanDefaultMPTTransfer(tx, TesSUCCESS, entries, view, mptDefaultRules(true, false)); got != nil {
+			t.Fatalf("pre-transaction pseudo-account should remain authorized: %v", got)
+		}
+	})
+
+	t.Run("ordinary before pseudo after remains unauthorized", func(t *testing.T) {
+		tx, view, entries := mptDefaultFixture(
+			t,
+			assetID,
+			entry.LsfMPTCanTransfer|entry.LsfMPTRequireAuth,
+			sender,
+			receiver,
+			0,
+		)
+		before := ordinaryRoot(t)
+		after := view.data[keylet.Account(sender).Key]
+		entries = append(entries, InvariantEntry{
+			EntryType: entry.TypeAccountRoot,
+			Before:    before,
+			After:     after,
+		})
+		if got := checkLoanDefaultMPTTransfer(tx, TesSUCCESS, entries, view, mptDefaultRules(true, false)); got == nil {
+			t.Fatal("ordinary pre-transaction account must not inherit pseudo authorization")
+		}
+	})
+}
+
 func TestLoanDefaultMPTFailedChangeCleanupGate(t *testing.T) {
 	assetID := mptDefaultID(t, 50)
 	sender := mptDefaultAccount(t, addrHolderA)

@@ -475,9 +475,27 @@ func checkLoanDefaultMPTTransfer(
 		return nil
 	}
 
+	pseudoAccountsBefore := make(map[[20]byte]bool)
 	changes := make(map[[24]byte]map[[20]byte]mptTransferChange)
 	failedMPTChange := false
 	for _, e := range entries {
+		if e.EntryType == entry.TypeAccountRoot && e.Before != nil {
+			account, err := state.ParseAccountRoot(e.Before)
+			if err != nil {
+				return &InvariantViolation{
+					Name:    "ValidMPTTransfer",
+					Message: fmt.Sprintf("could not parse AccountRoot before state: %v", err),
+				}
+			}
+			accountID, err := state.DecodeAccountID(account.Account)
+			if err != nil {
+				return &InvariantViolation{
+					Name:    "ValidMPTTransfer",
+					Message: fmt.Sprintf("could not decode AccountRoot account: %v", err),
+				}
+			}
+			pseudoAccountsBefore[accountID] = account.IsPseudoAccount()
+		}
 		if e.EntryType != entry.TypeMPToken {
 			continue
 		}
@@ -568,9 +586,6 @@ func checkLoanDefaultMPTTransfer(
 			if change.before != nil {
 				beforeAmount = change.before.MPTAmount
 			}
-			if beforeAmount == change.after.MPTAmount {
-				continue
-			}
 			if change.before == nil || change.after.MPTAmount > beforeAmount {
 				receivers++
 			} else {
@@ -581,7 +596,7 @@ func checkLoanDefaultMPTTransfer(
 			if !exempt && mptutil.IsFrozen(freezeView, id, account) {
 				invalidTransfer = true
 			}
-			authorized, authErr := loanDefaultMPTAuthorized(freezeView, issuance, id, account)
+			authorized, authErr := loanDefaultMPTAuthorized(freezeView, pseudoAccountsBefore, issuance, id, account)
 			if authErr != nil {
 				return &InvariantViolation{
 					Name:    "ValidMPTTransfer",
@@ -618,12 +633,16 @@ func loanDefaultMPTFreezeExempt(exemption *loanDefaultFreezeExemption, id [24]by
 
 func loanDefaultMPTAuthorized(
 	view invariantMPTView,
+	pseudoAccountsBefore map[[20]byte]bool,
 	issuance *state.MPTokenIssuanceData,
 	id [24]byte,
 	account [20]byte,
 ) (bool, error) {
 	if issuance.Issuer == account {
 		return true, nil
+	}
+	if isPseudo, ok := pseudoAccountsBefore[account]; ok {
+		return isPseudo, nil
 	}
 	accountData, err := view.Read(keylet.Account(account))
 	if err != nil {
