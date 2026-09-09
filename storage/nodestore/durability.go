@@ -45,8 +45,53 @@ const durableSnapshotLockPoll = time.Millisecond
 // read lock is admitted in cancelable polls so shutdown cannot strand a caller
 // behind an online-delete mutation.
 func (d *KVDatabase) AcquireDurableSnapshot(ctx context.Context) ([32]byte, func(), error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return [32]byte{}, nil, err
+		}
+
+		d.durableSnapshotMu.Lock()
+		if d.durableSnapshotChanged == nil {
+			d.durableSnapshotChanged = make(chan struct{})
+		}
+		if d.durableSnapshotRefs > 0 {
+			d.durableSnapshotRefs++
+			d.durableSnapshotMu.Unlock()
+			return d.durableSnapshotFingerprint(ctx)
+		}
+		if !d.durableSnapshotAcquiring && !d.durableSnapshotReleasing {
+			d.durableSnapshotAcquiring = true
+			d.durableSnapshotMu.Unlock()
+
+			if err := d.acquireDurableSnapshotReader(ctx); err != nil {
+				d.durableSnapshotMu.Lock()
+				d.durableSnapshotAcquiring = false
+				d.signalDurableSnapshotChangeLocked()
+				d.durableSnapshotMu.Unlock()
+				return [32]byte{}, nil, err
+			}
+
+			d.durableSnapshotMu.Lock()
+			d.durableSnapshotRefs = 1
+			d.durableSnapshotAcquiring = false
+			d.signalDurableSnapshotChangeLocked()
+			d.durableSnapshotMu.Unlock()
+			return d.durableSnapshotFingerprint(ctx)
+		}
+		changed := d.durableSnapshotChanged
+		d.durableSnapshotMu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return [32]byte{}, nil, ctx.Err()
+		case <-changed:
+		}
+	}
+}
+
+func (d *KVDatabase) acquireDurableSnapshotReader(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
-		return [32]byte{}, nil, err
+		return err
 	}
 	for !d.mutationMu.TryRLock() {
 		timer := time.NewTimer(durableSnapshotLockPoll)
@@ -58,13 +103,21 @@ func (d *KVDatabase) AcquireDurableSnapshot(ctx context.Context) ([32]byte, func
 				default:
 				}
 			}
-			return [32]byte{}, nil, ctx.Err()
+			return ctx.Err()
 		case <-timer.C:
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		d.mutationMu.RUnlock()
+		return err
+	}
+	return nil
+}
+
+func (d *KVDatabase) durableSnapshotFingerprint(ctx context.Context) ([32]byte, func(), error) {
 	var once sync.Once
 	release := func() {
-		once.Do(d.mutationMu.RUnlock)
+		once.Do(d.releaseDurableSnapshot)
 	}
 	if err := ctx.Err(); err != nil {
 		release()
@@ -76,6 +129,37 @@ func (d *KVDatabase) AcquireDurableSnapshot(ctx context.Context) ([32]byte, func
 		return [32]byte{}, nil, err
 	}
 	return fingerprint, release, nil
+}
+
+func (d *KVDatabase) releaseDurableSnapshot() {
+	d.durableSnapshotMu.Lock()
+	if d.durableSnapshotRefs == 0 {
+		d.durableSnapshotMu.Unlock()
+		return
+	}
+	d.durableSnapshotRefs--
+	if d.durableSnapshotRefs > 0 {
+		d.durableSnapshotMu.Unlock()
+		return
+	}
+	d.durableSnapshotReleasing = true
+	d.durableSnapshotMu.Unlock()
+
+	d.mutationMu.RUnlock()
+
+	d.durableSnapshotMu.Lock()
+	d.durableSnapshotReleasing = false
+	d.signalDurableSnapshotChangeLocked()
+	d.durableSnapshotMu.Unlock()
+}
+
+func (d *KVDatabase) signalDurableSnapshotChangeLocked() {
+	if d.durableSnapshotChanged == nil {
+		d.durableSnapshotChanged = make(chan struct{})
+		return
+	}
+	close(d.durableSnapshotChanged)
+	d.durableSnapshotChanged = make(chan struct{})
 }
 
 // WithDurableSnapshot prevents managed destructive mutations while fn checks
