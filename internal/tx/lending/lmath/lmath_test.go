@@ -132,6 +132,42 @@ func TestLoanLatePaymentInterest(t *testing.T) {
 	}
 }
 
+func TestLoanMakePaymentDueDateBoundary(t *testing.T) {
+	newLoan := func() *LoanAccount {
+		return &LoanAccount{
+			PrincipalOutstanding:     num(1000, 0),
+			TotalValueOutstanding:    num(1000, 0),
+			ManagementFeeOutstanding: num(0, 0),
+			PeriodicPayment:          num(500, 0),
+			PaymentRemaining:         2,
+			NextPaymentDueDate:       100,
+			PaymentInterval:          month,
+			LoanScale:                0,
+		}
+	}
+	asset := Asset{Integral: true}
+
+	// fixCleanup3_4_0 keeps the due close on time for regular payments and
+	// rejects the late-payment path until the following close.
+	if _, got := LoanMakePayment(asset, 100, newLoan(), 0, num(500, 0), PaymentRegular, false, false, true); got != ter.TesSUCCESS {
+		t.Fatalf("fix340 regular payment at due date: got %v, want tesSUCCESS", got)
+	}
+	if _, got := LoanMakePayment(asset, 100, newLoan(), 0, num(500, 0), PaymentLate, false, false, true); got != ter.TecTOO_SOON {
+		t.Fatalf("fix340 late payment at due date: got %v, want tecTOO_SOON", got)
+	}
+	if _, got := LoanMakePayment(asset, 101, newLoan(), 0, num(500, 0), PaymentRegular, false, false, true); got != ter.TecEXPIRED {
+		t.Fatalf("fix340 regular payment after due date: got %v, want tecEXPIRED", got)
+	}
+
+	// With the amendment disabled the due close remains an expired boundary.
+	if _, got := LoanMakePayment(asset, 100, newLoan(), 0, num(500, 0), PaymentRegular, false, false, false); got != ter.TecEXPIRED {
+		t.Fatalf("legacy regular payment at due date: got %v, want tecEXPIRED", got)
+	}
+	if _, got := LoanMakePayment(asset, 100, newLoan(), 0, num(500, 0), PaymentLate, false, false, false); got != ter.TesSUCCESS {
+		t.Fatalf("legacy late payment at due date: got %v, want tesSUCCESS", got)
+	}
+}
+
 func TestLoanAccruedInterest(t *testing.T) {
 	cases := []struct {
 		name      string
