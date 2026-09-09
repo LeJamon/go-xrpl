@@ -12,7 +12,7 @@ import (
 // (via PreflightRules), so its tem* rejections happen before any ledger read and
 // before signature verification.
 //
-// The check order is identical to rippled: negative → OnlyXRP/zero → buy-zero →
+// The check order is identical to rippled: negative → currency → OnlyXRP/zero → buy-zero →
 // expiration → owner presence → owner==account → destination. Keeping this order
 // matters because the negative-amount temBAD_AMOUNT must win over a later
 // temBAD_EXPIRATION/temMALFORMED on the same transaction.
@@ -32,6 +32,10 @@ func tokenOfferCreatePreflight(
 	// which the original implementation lacked).
 	if amount.IsNegative() && rules.Enabled(amendment.FeatureFixNFTokenNegOffer) {
 		return ter.Errorf(ter.TemBAD_AMOUNT, "offer amount cannot be negative")
+	}
+
+	if rules.Enabled(amendment.FeatureFixCleanup3_4_0) && isFakeXRP(amount) {
+		return ter.Errorf(ter.TemBAD_CURRENCY, "issued currency cannot use XRP")
 	}
 
 	if !amount.IsNative() {
@@ -73,4 +77,8 @@ func tokenOfferCreatePreflight(
 	}
 
 	return nil
+}
+
+func isFakeXRP(amount tx.Amount) bool {
+	return !amount.IsNative() && !amount.IsMPT() && (amount.Currency == "XRP" || amount.Currency == "0000000000000000000000005852500000000000")
 }

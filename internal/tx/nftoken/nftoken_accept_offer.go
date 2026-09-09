@@ -81,6 +81,13 @@ func (n *NFTokenAcceptOffer) Validate() error {
 	return nil
 }
 
+func (n *NFTokenAcceptOffer) PreflightRules(rules *amendment.Rules) error {
+	if n.NFTokenBrokerFee != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0) && isFakeXRP(*n.NFTokenBrokerFee) {
+		return ter.Errorf(ter.TemBAD_CURRENCY, "issued broker fee cannot use XRP")
+	}
+	return nil
+}
+
 func (n *NFTokenAcceptOffer) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(n)
 }
