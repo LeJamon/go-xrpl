@@ -13,6 +13,7 @@ import (
 	permissioneddomaintest "github.com/LeJamon/go-xrpl/internal/testing/permissioneddomain"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
+	paymenttx "github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -232,6 +233,72 @@ func TestVaultWithdrawNonzeroCreatesMissingHolding(t *testing.T) {
 			token, err := state.ParseMPToken(holdingData)
 			require.NoError(t, err)
 			require.Equal(t, uint64(1), token.MPTAmount)
+		})
+	}
+}
+
+func cleanupZeroAssetAddReserveHolding(t *testing.T, f *zeroAssetWithdrawFixture, kind string) {
+	t.Helper()
+	reserveIssuer := jtx.NewAccount(kind + "-reserve-issuer")
+	f.env.Fund(reserveIssuer)
+	switch kind {
+	case "IOU":
+		f.env.Trust(f.holder, tx.NewIssuedAmountFromFloat64(100, "EUR", reserveIssuer.Address))
+	case "MPT":
+		token := mpttest.NewMPTTesterNoFund(t, f.env, reserveIssuer)
+		token.Create(mpttest.CreateOpts{Flags: mpttest.TfMPTCanTransfer})
+		token.Authorize(mpttest.AuthorizeOpts{Account: f.holder})
+		token.Pay(reserveIssuer, f.holder, 1)
+	default:
+		t.Fatalf("unsupported asset kind %q", kind)
+	}
+	require.GreaterOrEqual(t, f.env.OwnerCount(f.holder), uint32(2), "fixture needs a second holder object")
+}
+
+func cleanupZeroAssetDrainToReserve(t *testing.T, f *zeroAssetWithdrawFixture) {
+	t.Helper()
+	reserve := f.env.ReserveBase() + uint64(f.env.OwnerCount(f.holder))*f.env.ReserveIncrement()
+	fee := f.env.BaseFee()
+	before := f.env.Balance(f.holder)
+	require.Greater(t, before, reserve+fee, "fixture holder must have funds to drain")
+	amount := before - reserve - fee
+	payment := paymenttx.NewPayment(f.holder.Address, f.owner.Address, tx.NewXRPAmount(int64(amount)))
+	jtx.RequireTxSuccess(t, f.env.Submit(payment))
+	require.Equal(t, reserve, f.env.Balance(f.holder))
+}
+
+func TestVaultWithdrawNonzeroMissingHoldingInsufficientReserve(t *testing.T) {
+	for _, kind := range []string{"IOU", "MPT"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newZeroAssetWithdrawFixture(t, kind, true)
+			patchImpairedVault(t, f.env, f.vaultKey, "10", "10", "")
+			cleanupZeroAssetAddReserveHolding(t, f, kind)
+			cleanupZeroAssetDrainToReserve(t, f)
+
+			beforeBalance := f.env.Balance(f.holder)
+			beforeSequence := f.env.Seq(f.holder)
+			beforeOwnerCount := f.env.OwnerCount(f.holder)
+			beforeShares := vaultShareBalance(t, f.env, f.shareID, f.holder)
+			beforeVault, err := f.env.LedgerEntry(f.vaultKey)
+			require.NoError(t, err)
+			result := f.env.Submit(vault.NewVaultWithdraw(f.holder.Address, f.vaultID, f.assetAmount))
+			wantCode := jtx.TecINSUFFICIENT_RESERVE
+			if kind == "IOU" {
+				wantCode = jtx.TecNO_LINE_INSUF_RESERVE
+			}
+			require.Equal(t, wantCode, result.Code)
+			require.True(t, result.Applied)
+			require.Equal(t, f.env.BaseFee(), result.Fee)
+			require.NotNil(t, result.Metadata)
+			require.Equal(t, result.Code, result.Metadata.TransactionResult.String())
+			require.Equal(t, beforeBalance-f.env.BaseFee(), f.env.Balance(f.holder))
+			require.Equal(t, beforeSequence+1, f.env.Seq(f.holder))
+			require.Equal(t, beforeOwnerCount, f.env.OwnerCount(f.holder))
+			require.Equal(t, beforeShares, vaultShareBalance(t, f.env, f.shareID, f.holder))
+			require.False(t, f.env.LedgerEntryExists(f.assetHolding))
+			afterVault, err := f.env.LedgerEntry(f.vaultKey)
+			require.NoError(t, err)
+			require.Equal(t, beforeVault, afterVault, "rejected withdrawal changed vault state")
 		})
 	}
 }

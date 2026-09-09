@@ -15,10 +15,7 @@ import (
 )
 
 // TestLoanBrokerDeleteAuthRequiredMPTUsesPreTransactionPseudoClassification
-// covers the case where deleting the broker erases the source pseudo-account
-// in the same transaction that returns its MPT cover to the owner. The MPT
-// requires authorization, so the transfer can succeed only when the invariant
-// classifies the erased account from the pre-transaction ledger.
+// verifies the authorized cover transfer while deletion erases its pseudo-account.
 func TestLoanBrokerDeleteAuthRequiredMPTUsesPreTransactionPseudoClassification(t *testing.T) {
 	for _, cleanup := range []bool{false, true} {
 		name := "without fixCleanup3_4_0"
@@ -74,7 +71,6 @@ func TestLoanBrokerDeleteAuthRequiredMPTUsesPreTransactionPseudoClassification(t
 			beforeOwnerCount := env.OwnerCount(owner)
 			result := env.Submit(lending.NewLoanBrokerDelete(owner.Address, brokerID))
 
-			t.Logf("delete result=%s cleanup=%t", result.Code, cleanup)
 			jtx.RequireTxSuccess(t, result)
 			require.True(t, result.Applied)
 			require.Equal(t, env.BaseFee(), result.Fee)
@@ -92,8 +88,6 @@ func TestLoanBrokerDeleteAuthRequiredMPTUsesPreTransactionPseudoClassification(t
 				require.False(t, env.LedgerEntryExists(entryKey), "%s remains after successful deletion", name)
 			}
 
-			// The deleted pseudo-account is the source of the returning transfer;
-			// metadata must record its removal together with the authorized MPT.
 			pseudoAccountKey := keylet.Account(pseudoID)
 			wantPseudoIndex := strings.ToUpper(hex.EncodeToString(pseudoAccountKey.Key[:]))
 			wantTokenIndex := strings.ToUpper(hex.EncodeToString(pseudoTokenKey.Key[:]))
