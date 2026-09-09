@@ -372,10 +372,7 @@ func (s *Service) buildBookOffer(
 	bookOffer.TakerGets = amountToJSON(offer.TakerGets)
 	bookOffer.TakerPays = amountToJSON(offer.TakerPays)
 
-	// firstOwnerOffer is per-iteration in rippled (NetworkOPs.cpp:4514).
-	// It only flips to false when the default branch finds an existing
-	// entry in umBalance — the own-IOU and global-freeze branches never
-	// touch it, so they emit owner_funds on every offer.
+	// Issuer IOUs and globally frozen offers report owner_funds on every offer.
 	firstOwnerOffer := true
 	var ownerFunds tx.Amount
 	ownerOwnsIssue := !takerGets.IsNative() && offer.Account == getsIssuer
@@ -383,9 +380,7 @@ func (s *Service) buildBookOffer(
 	switch {
 	case ownerOwnsIssue:
 		if id, ok := amountMPTID(takerGets); ok {
-			// MPT issuers have bounded self-issuance. Reuse the running
-			// balance for later offers from the same issuer so the issuance
-			// headroom is consumed once per book walk.
+			// Issuer offers share the remaining self-issuance headroom.
 			if prev, seen := balances[offer.Account]; seen {
 				ownerFunds = prev
 				firstOwnerOffer = false
@@ -399,7 +394,7 @@ func (s *Service) buildBookOffer(
 				}
 				ownerFunds = state.NewMPTAmountWithIssuanceID(
 					funds,
-					amountIssuer(takerGets),
+					getsIssuer,
 					takerGets.MPTIssuanceID(),
 				)
 			}
@@ -476,12 +471,18 @@ func (s *Service) buildBookOffer(
 	// holds in both branches; surface a programming error if it isn't.
 	ownerPays := takerGetsFunded
 	if offerRate != tx.TransferRateParity {
-		scaled := takerGetsFunded.MulRatioWithNumberContext(
-			offerRate,
-			tx.TransferRateParity,
-			false,
-			numberContext,
-		)
+		var scaled tx.Amount
+		if takerGetsFunded.IsMPT() {
+			rateAmount := tx.NewIssuedAmount(int64(offerRate), -9, "", "")
+			scaled = multiplyByDirRate(takerGetsFunded, rateAmount, takerGetsFunded)
+		} else {
+			scaled = takerGetsFunded.MulRatioWithNumberContext(
+				offerRate,
+				tx.TransferRateParity,
+				false,
+				numberContext,
+			)
+		}
 		if scaled.Compare(ownerFunds) > 0 {
 			ownerPays = ownerFunds
 		} else {
