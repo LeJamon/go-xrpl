@@ -358,11 +358,11 @@ func TestLoanDefaultMPTAuthorizationUsesPreTransactionPseudo(t *testing.T) {
 	assetID := mptDefaultID(t, 50)
 	sender := mptDefaultAccount(t, addrHolderA)
 	receiver := mptDefaultAccount(t, addrHolderB)
-	ordinaryRoot := func(t *testing.T) []byte {
+	ordinaryRoot := func(t *testing.T, address string) []byte {
 		t.Helper()
 		return mustEncode(t, map[string]any{
 			"LedgerEntryType":   "AccountRoot",
-			"Account":           addrHolderA,
+			"Account":           address,
 			"Balance":           "0",
 			"Flags":             uint32(0),
 			"OwnerCount":        uint32(0),
@@ -382,7 +382,7 @@ func TestLoanDefaultMPTAuthorizationUsesPreTransactionPseudo(t *testing.T) {
 			0,
 		)
 		before := view.data[keylet.Account(sender).Key]
-		after := ordinaryRoot(t)
+		after := ordinaryRoot(t, addrHolderA)
 		view.data[keylet.Account(sender).Key] = after
 		entries = append(entries, InvariantEntry{
 			EntryType: entry.TypeAccountRoot,
@@ -394,7 +394,7 @@ func TestLoanDefaultMPTAuthorizationUsesPreTransactionPseudo(t *testing.T) {
 		}
 	})
 
-	t.Run("ordinary before pseudo after remains unauthorized", func(t *testing.T) {
+	t.Run("ordinary before pseudo after follows requireAuth", func(t *testing.T) {
 		tx, view, entries := mptDefaultFixture(
 			t,
 			assetID,
@@ -403,7 +403,7 @@ func TestLoanDefaultMPTAuthorizationUsesPreTransactionPseudo(t *testing.T) {
 			receiver,
 			0,
 		)
-		before := ordinaryRoot(t)
+		before := ordinaryRoot(t, addrHolderA)
 		after := view.data[keylet.Account(sender).Key]
 		entries = append(entries, InvariantEntry{
 			EntryType: entry.TypeAccountRoot,
@@ -411,7 +411,58 @@ func TestLoanDefaultMPTAuthorizationUsesPreTransactionPseudo(t *testing.T) {
 			After:     after,
 		})
 		if got := checkLoanDefaultMPTTransfer(tx, TesSUCCESS, entries, view, mptDefaultRules(true, false)); got == nil {
-			t.Fatal("ordinary pre-transaction account must not inherit pseudo authorization")
+			t.Fatal("cleanup-only requireAuth must not exempt current pseudo status")
+		}
+		if got := checkLoanDefaultMPTTransfer(tx, TesSUCCESS, entries, view, mptDefaultRules(true, true)); got != nil {
+			t.Fatalf("MPTokensV2 requireAuth should use current pseudo status: %v", got)
+		}
+	})
+
+	t.Run("touched ordinary authorized holder passes", func(t *testing.T) {
+		var ordinary [20]byte
+		for i := range ordinary {
+			ordinary[i] = 0x44
+		}
+		tx, view, entries := mptDefaultFixture(
+			t,
+			assetID,
+			entry.LsfMPTCanTransfer|entry.LsfMPTRequireAuth,
+			ordinary,
+			receiver,
+			entry.LsfMPTAuthorized,
+		)
+		before := ordinaryRoot(t, state.EncodeAccountIDSafe(ordinary))
+		entries = append(entries, InvariantEntry{
+			EntryType: entry.TypeAccountRoot,
+			Before:    before,
+			After:     before,
+		})
+		if got := checkLoanDefaultMPTTransfer(tx, TesSUCCESS, entries, view, mptDefaultRules(true, false)); got != nil {
+			t.Fatalf("touched ordinary authorized holder should pass: %v", got)
+		}
+	})
+
+	t.Run("touched ordinary holder without auth requirement passes", func(t *testing.T) {
+		var ordinary [20]byte
+		for i := range ordinary {
+			ordinary[i] = 0x55
+		}
+		tx, view, entries := mptDefaultFixture(
+			t,
+			assetID,
+			entry.LsfMPTCanTransfer,
+			ordinary,
+			receiver,
+			0,
+		)
+		before := ordinaryRoot(t, state.EncodeAccountIDSafe(ordinary))
+		entries = append(entries, InvariantEntry{
+			EntryType: entry.TypeAccountRoot,
+			Before:    before,
+			After:     before,
+		})
+		if got := checkLoanDefaultMPTTransfer(tx, TesSUCCESS, entries, view, mptDefaultRules(true, false)); got != nil {
+			t.Fatalf("touched ordinary holder without auth requirement should pass: %v", got)
 		}
 	})
 }

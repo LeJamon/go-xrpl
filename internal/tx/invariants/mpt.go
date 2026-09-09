@@ -641,20 +641,23 @@ func loanDefaultMPTAuthorized(
 	if issuance.Issuer == account {
 		return true, nil
 	}
-	if isPseudo, ok := pseudoAccountsBefore[account]; ok {
-		return isPseudo, nil
-	}
-	accountData, err := view.Read(keylet.Account(account))
-	if err != nil {
-		return false, err
-	}
-	if accountData != nil {
-		root, parseErr := state.ParseAccountRoot(accountData)
-		if parseErr != nil {
-			return false, parseErr
-		}
-		if root.IsPseudoAccount() {
+	if isPseudo, touched := pseudoAccountsBefore[account]; touched {
+		if isPseudo {
 			return true, nil
+		}
+	} else {
+		accountData, err := view.Read(keylet.Account(account))
+		if err != nil {
+			return false, err
+		}
+		if accountData != nil {
+			root, parseErr := state.ParseAccountRoot(accountData)
+			if parseErr != nil {
+				return false, parseErr
+			}
+			if root.IsPseudoAccount() {
+				return true, nil
+			}
 		}
 	}
 	if result := mptutil.RequireAuth(view, id, account, false); result != ter.TesSUCCESS {
