@@ -205,7 +205,11 @@ func (l *LoanManage) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Re
 	if loan.PaymentRemaining == 0 {
 		return ter.TecNO_PERMISSION
 	}
-	if flags&TfLoanDefault != 0 && !hasExpired(config.ParentCloseTime, loan.NextPaymentDueDate+loan.GracePeriod) {
+	if flags&TfLoanDefault != 0 && !lmath.IsPaymentLate(
+		config.ParentCloseTime,
+		loan.NextPaymentDueDate+loan.GracePeriod,
+		config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0),
+	) {
 		return ter.TecTOO_SOON
 	}
 	b, berr := readLoanBroker(view, keylet.LoanBrokerByID(loan.LoanBrokerID))
@@ -293,6 +297,13 @@ func (l *LoanManage) associateEntities(ctx *tx.ApplyContext, loanKey, brokerKey,
 }
 
 func (l *LoanManage) impairLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, loan *loanData, vaultKey keylet.Keylet, v *vault.VaultLending) ter.Result {
+	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && !lmath.IsPaymentLate(
+		ctx.Config.ParentCloseTime,
+		loan.NextPaymentDueDate,
+		ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0),
+	) {
+		return ter.TecTOO_SOON
+	}
 	asset := mathAsset(v.Asset)
 	integral := asset.Integral
 	scale := vaultScaleOfForRules(v, integral, ctx.Rules())
@@ -326,15 +337,17 @@ func (l *LoanManage) unimpairLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, l
 		return res
 	}
 	loan.Flags &^= LsfLoanImpaired
-	prev := loan.PreviousPaymentDueDate
-	if loan.StartDate > prev {
-		prev = loan.StartDate
-	}
-	normalDue := prev + loan.PaymentInterval
-	if !hasExpired(ctx.Config.ParentCloseTime, normalDue) {
-		loan.NextPaymentDueDate = normalDue
-	} else {
-		loan.NextPaymentDueDate = ctx.Config.ParentCloseTime + loan.PaymentInterval
+	if !ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) {
+		prev := loan.PreviousPaymentDueDate
+		if loan.StartDate > prev {
+			prev = loan.StartDate
+		}
+		normalDue := prev + loan.PaymentInterval
+		if !hasExpired(ctx.Config.ParentCloseTime, normalDue) {
+			loan.NextPaymentDueDate = normalDue
+		} else {
+			loan.NextPaymentDueDate = ctx.Config.ParentCloseTime + loan.PaymentInterval
+		}
 	}
 	return updateLoan(ctx, loanKey, loan)
 }

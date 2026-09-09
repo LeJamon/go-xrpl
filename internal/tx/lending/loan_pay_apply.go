@@ -86,7 +86,11 @@ func (l *LoanPay) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) u
 	if loan.PaymentRemaining <= protocol.LoanPaymentsPerFeeIncrement {
 		return normal
 	}
-	if hasExpired(config.ParentCloseTime, loan.NextPaymentDueDate) {
+	if lmath.IsPaymentLate(
+		config.ParentCloseTime,
+		loan.NextPaymentDueDate,
+		config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0),
+	) {
 		return normal
 	}
 	b, berr := readLoanBroker(view, keylet.LoanBrokerByID(loan.LoanBrokerID))
@@ -174,6 +178,9 @@ func (l *LoanPay) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 	if r := tx.AssetFrozen(view, accountID, asset); r != ter.TesSUCCESS {
 		return r
 	}
+	if r := mptutil.CheckDeepFrozen(view, vinfo.Account, asset); r != ter.TesSUCCESS {
+		return r
+	}
 	if r := tx.RequireAuth(view, asset, accountID); r != ter.TesSUCCESS {
 		return r
 	}
@@ -245,7 +252,17 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	acc := loanToAccount(loan, ctx.Rules())
-	parts, t := lmath.LoanMakePayment(mAsset, ctx.Config.ParentCloseTime, acc, uint32(b.ManagementFeeRate), amountToLendNumForRules(l.Amount, ctx.Rules()), l.paymentType(), ctx.Rules().Enabled(amendment.FeatureFixCleanup3_1_3), ctx.Rules().FixCleanup3_2_0Enabled())
+	parts, t := lmath.LoanMakePayment(
+		mAsset,
+		ctx.Config.ParentCloseTime,
+		acc,
+		uint32(b.ManagementFeeRate),
+		amountToLendNumForRules(l.Amount, ctx.Rules()),
+		l.paymentType(),
+		ctx.Rules().Enabled(amendment.FeatureFixCleanup3_1_3),
+		ctx.Rules().FixCleanup3_2_0Enabled(),
+		ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0),
+	)
 	if t != ter.TesSUCCESS {
 		return t
 	}
@@ -282,8 +299,10 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Auth + holdings for the receivers, then move the funds.
 	if toVaultRounded.Signum() != 0 {
-		if r := tx.RequireAuth(ctx.View, asset, vinfo.Account); r != ter.TesSUCCESS {
-			return r
+		if !ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) {
+			if r := tx.RequireAuth(ctx.View, asset, vinfo.Account); r != ter.TesSUCCESS {
+				return r
+			}
 		}
 		if r := vault.SendAsset(ctx, accountID, vinfo.Account, asset, toVaultRounded); r != ter.TesSUCCESS {
 			return r
@@ -295,8 +314,10 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 				return r
 			}
 		}
-		if r := tx.RequireAuth(ctx.View, asset, brokerPayee); r != ter.TesSUCCESS {
-			return r
+		if !ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) {
+			if r := tx.RequireAuth(ctx.View, asset, brokerPayee); r != ter.TesSUCCESS {
+				return r
+			}
 		}
 		if r := vault.SendAsset(ctx, accountID, brokerPayee, asset, toBroker); r != ter.TesSUCCESS {
 			return r
@@ -321,15 +342,17 @@ func reverseImpairment(ctx *tx.ApplyContext, loan *loanData, vaultKey keylet.Key
 		return r
 	}
 	loan.Flags &^= LsfLoanImpaired
-	prev := loan.PreviousPaymentDueDate
-	if loan.StartDate > prev {
-		prev = loan.StartDate
-	}
-	normalDue := prev + loan.PaymentInterval
-	if !hasExpired(ctx.Config.ParentCloseTime, normalDue) {
-		loan.NextPaymentDueDate = normalDue
-	} else {
-		loan.NextPaymentDueDate = ctx.Config.ParentCloseTime + loan.PaymentInterval
+	if !ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) {
+		prev := loan.PreviousPaymentDueDate
+		if loan.StartDate > prev {
+			prev = loan.StartDate
+		}
+		normalDue := prev + loan.PaymentInterval
+		if !hasExpired(ctx.Config.ParentCloseTime, normalDue) {
+			loan.NextPaymentDueDate = normalDue
+		} else {
+			loan.NextPaymentDueDate = ctx.Config.ParentCloseTime + loan.PaymentInterval
+		}
 	}
 	return ter.TesSUCCESS
 }

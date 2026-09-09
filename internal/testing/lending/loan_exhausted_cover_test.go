@@ -62,6 +62,16 @@ func TestLoanDefaultExhaustedCoverAndBrokerDeletion(t *testing.T) {
 						transaction.Flags = &flags
 						return env.Submit(transaction)
 					}
+					if cleanup {
+						loanBefore := decodeLendingEntry(t, env, loanKey)
+						due, ok := loanBefore["NextPaymentDueDate"].(uint32)
+						require.True(t, ok)
+						env.CloseToParentCloseTime(due - 1)
+						jtx.RequireTxClaimed(t, manage(lending.TfLoanImpair), "tecTOO_SOON")
+						env.CloseToParentCloseTime(due)
+						jtx.RequireTxClaimed(t, manage(lending.TfLoanImpair), "tecTOO_SOON")
+						env.CloseToParentCloseTime(due + 1)
+					}
 					jtx.RequireTxSuccess(t, manage(lending.TfLoanImpair))
 					loan := decodeLendingEntry(t, env, loanKey)
 					vaultBefore := decodeLendingEntry(t, env, f.vaultKey)

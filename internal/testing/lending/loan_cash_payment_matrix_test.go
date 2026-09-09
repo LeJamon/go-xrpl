@@ -197,6 +197,47 @@ func TestLoanPaymentAccountingMatchesCashAndLegacyModels(t *testing.T) {
 	}
 }
 
+func TestLoanPayExactDueBoundary(t *testing.T) {
+	tests := []struct {
+		name       string
+		cleanup    bool
+		flags      uint32
+		wantResult string
+	}{
+		{name: "legacy regular payment", flags: 0, wantResult: jtx.TecEXPIRED},
+		{name: "cleanup regular payment", cleanup: true, flags: 0, wantResult: "tesSUCCESS"},
+		{name: "legacy late payment", flags: lending.TfLoanLatePayment, wantResult: "tesSUCCESS"},
+		{name: "cleanup late payment", cleanup: true, flags: lending.TfLoanLatePayment, wantResult: "tecTOO_SOON"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			env := newPaymentLegacyLendingEnvWithCleanup(t, test.cleanup)
+			f := newLoanSetAssetFixtureWithEnv(t, env, "IOU", false)
+			loanID, loanKey := createMatrixLoan(t, f, false)
+			loan := decodeLendingEntry(t, f.env, loanKey)
+			nextDue, ok := loan["NextPaymentDueDate"].(uint32)
+			if !ok {
+				t.Fatalf("Loan NextPaymentDueDate = %v, want uint32", loan["NextPaymentDueDate"])
+			}
+			f.env.CloseToParentCloseTime(nextDue)
+
+			context := state.NewNumberContext(state.MantissaScaleLarge, true)
+			periodic := matrixNumber(t, loan, "PeriodicPayment")
+			payment := lending.NewLoanPay(f.borrower.Address, loanID, matrixAmount(t, f, periodic.Add(context.Int(1))))
+			if test.flags != 0 {
+				payment.GetCommon().Flags = &test.flags
+			}
+			result := f.env.Submit(payment)
+			if test.wantResult == jtx.TesSUCCESS {
+				jtx.RequireTxSuccess(t, result)
+			} else {
+				jtx.RequireTxClaimed(t, result, test.wantResult)
+			}
+		})
+	}
+}
+
 func newCashLendingEnvWithCleanup(t *testing.T, cleanup bool) *jtx.TestEnv {
 	t.Helper()
 	env := jtx.NewTestEnv(t)

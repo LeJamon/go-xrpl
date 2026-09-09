@@ -32,9 +32,18 @@ type LoanAccount struct {
 	HasOverpaymentFlag       bool // lsfLoanOverpayment
 }
 
-// hasExpired reports whether exp has passed relative to now (rippled hasExpired:
-// exp != 0 && parentCloseTime >= exp).
-func hasExpired(now, exp uint32) bool { return exp != 0 && now >= exp }
+// IsPaymentLate reports whether the payment due date has passed relative to now.
+// fixCleanup340 makes the boundary exclusive: a payment at the due time is still
+// on time, while the legacy behavior treats that same close time as late.
+func IsPaymentLate(now, exp uint32, fixCleanup340 bool) bool {
+	if exp == 0 {
+		return false
+	}
+	if fixCleanup340 {
+		return now > exp
+	}
+	return now >= exp
+}
 
 // doPayment applies a payment's deltas to the loan and returns the parts paid
 // (rippled detail::doPayment). now unused; the schedule advance uses the loan's
@@ -69,8 +78,8 @@ func doPayment(payment ExtendedPaymentComponents, loan *LoanAccount) LoanPayment
 // computeLatePayment builds the components for a late payment (rippled
 // computeLatePayment). Returns the failing tec (tecTOO_SOON /
 // tecINSUFFICIENT_PAYMENT) when the payment cannot be made.
-func computeLatePayment(asset Asset, now uint32, principalOutstanding N, nextDueDate uint32, periodic ExtendedPaymentComponents, lateInterestRate uint32, loanScale int, latePaymentFee, amount N, managementFeeRate uint32) (ExtendedPaymentComponents, ter.Result) {
-	if !hasExpired(now, nextDueDate) {
+func computeLatePayment(asset Asset, now uint32, principalOutstanding N, nextDueDate uint32, periodic ExtendedPaymentComponents, lateInterestRate uint32, loanScale int, latePaymentFee, amount N, managementFeeRate uint32, fixCleanup340 bool) (ExtendedPaymentComponents, ter.Result) {
+	if !IsPaymentLate(now, nextDueDate, fixCleanup340) {
 		return ExtendedPaymentComponents{}, ter.TecTOO_SOON
 	}
 	latePaymentInterest := loanLatePaymentInterest(principalOutstanding, lateInterestRate, now, nextDueDate)
@@ -184,8 +193,9 @@ func doOverpayment(fix320 bool, asset Asset, loanScale int, overpaymentComponent
 // parent close time in Ripple-epoch seconds. A result other than tesSUCCESS is a
 // failure; loan must not be persisted in that case. fixCleanupEnabled reflects
 // the fixCleanup3_1_3 amendment: when set, an overpayment Amount is truncated to
-// the loan scale so meaningless dust is not processed.
-func LoanMakePayment(asset Asset, now uint32, loan *LoanAccount, managementFeeRate uint32, amount N, paymentType LoanPaymentType, fixCleanupEnabled, fix320 bool) (LoanPaymentParts, ter.Result) {
+// the loan scale so meaningless dust is not processed. fixCleanup340 controls the
+// exact due-date boundary for regular and late payments.
+func LoanMakePayment(asset Asset, now uint32, loan *LoanAccount, managementFeeRate uint32, amount N, paymentType LoanPaymentType, fixCleanupEnabled, fix320, fixCleanup340 bool) (LoanPaymentParts, ter.Result) {
 	if loan.PaymentRemaining == 0 || loan.PrincipalOutstanding.IsZero() {
 		return LoanPaymentParts{}, ter.TecKILLED
 	}
@@ -195,7 +205,7 @@ func LoanMakePayment(asset Asset, now uint32, loan *LoanAccount, managementFeeRa
 	loanScale := loan.LoanScale
 	periodicRate := loanPeriodicRateLike(loan.PrincipalOutstanding, loan.InterestRate, loan.PaymentInterval)
 
-	if paymentType != PaymentLate && hasExpired(now, loan.NextPaymentDueDate) {
+	if paymentType != PaymentLate && IsPaymentLate(now, loan.NextPaymentDueDate, fixCleanup340) {
 		return LoanPaymentParts{}, ter.TecEXPIRED
 	}
 
@@ -220,7 +230,7 @@ func LoanMakePayment(asset Asset, now uint32, loan *LoanAccount, managementFeeRa
 
 	if paymentType == PaymentLate {
 		late, t := computeLatePayment(asset, now, loan.PrincipalOutstanding, loan.NextPaymentDueDate, periodic,
-			loan.LateInterestRate, loanScale, loan.LatePaymentFee, amount, managementFeeRate)
+			loan.LateInterestRate, loanScale, loan.LatePaymentFee, amount, managementFeeRate, fixCleanup340)
 		if t != ter.TesSUCCESS {
 			return LoanPaymentParts{}, t
 		}

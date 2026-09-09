@@ -137,9 +137,14 @@ func requireLossNumberEqual(t *testing.T, name string, got, want state.XRPLNumbe
 
 func submitLoanManage(t *testing.T, f *lossLifecycleFixture, flags uint32) {
 	t.Helper()
+	jtx.RequireTxSuccess(t, submitLoanManageResult(t, f, flags))
+}
+
+func submitLoanManageResult(t *testing.T, f *lossLifecycleFixture, flags uint32) jtx.TxResult {
+	t.Helper()
 	manage := lending.NewLoanManage(f.owner.Address, f.loanID)
 	manage.GetCommon().Flags = &flags
-	jtx.RequireTxSuccess(t, f.env.Submit(manage))
+	return f.env.Submit(manage)
 }
 
 func TestLoanManageCashAndLegacyImpairmentTransitions(t *testing.T) {
@@ -153,6 +158,17 @@ func TestLoanManageCashAndLegacyImpairmentTransitions(t *testing.T) {
 					exposure = lossNumber(t, loanBefore, "TotalValueOutstanding").Sub(lossNumber(t, loanBefore, "ManagementFeeOutstanding"))
 				}
 
+				if cleanup {
+					loanDue, ok := loanBefore["NextPaymentDueDate"].(uint32)
+					if !ok {
+						t.Fatalf("Loan NextPaymentDueDate = %v, want uint32", loanBefore["NextPaymentDueDate"])
+					}
+					f.env.CloseToParentCloseTime(loanDue - 1)
+					jtx.RequireTxClaimed(t, submitLoanManageResult(t, f, lending.TfLoanImpair), "tecTOO_SOON")
+					f.env.CloseToParentCloseTime(loanDue)
+					jtx.RequireTxClaimed(t, submitLoanManageResult(t, f, lending.TfLoanImpair), "tecTOO_SOON")
+					f.env.CloseToParentCloseTime(loanDue + 1)
+				}
 				submitLoanManage(t, f, lending.TfLoanImpair)
 				vaultAfterImpair := decodeLendingEntry(t, f.env, f.vaultKey)
 				requireLossNumberEqual(t, "LossUnrealized after impair", lossNumber(t, vaultAfterImpair, "LossUnrealized"), exposure)
@@ -176,6 +192,9 @@ func TestLoanManageCashAndLegacyImpairmentTransitions(t *testing.T) {
 				f.env.CloseToParentCloseTime(nextDue + 61)
 				pay := lending.NewLoanPay(f.borrower.Address, f.loanID, tx.NewXRPAmount(2_000))
 				payFlags := lending.TfLoanFullPayment
+				if cleanup {
+					payFlags = lending.TfLoanLatePayment
+				}
 				pay.GetCommon().Flags = &payFlags
 				paymentResult := f.env.Submit(pay)
 				if !paymentResult.Success {
@@ -198,6 +217,17 @@ func TestLoanManageDefaultUsesExposureAndPartialCover(t *testing.T) {
 				if !cash {
 					exposure = lossNumber(t, loanBefore, "TotalValueOutstanding").Sub(lossNumber(t, loanBefore, "ManagementFeeOutstanding"))
 				}
+				if cleanup {
+					loanDue, ok := loanBefore["NextPaymentDueDate"].(uint32)
+					if !ok {
+						t.Fatalf("Loan NextPaymentDueDate = %v, want uint32", loanBefore["NextPaymentDueDate"])
+					}
+					f.env.CloseToParentCloseTime(loanDue - 1)
+					jtx.RequireTxClaimed(t, submitLoanManageResult(t, f, lending.TfLoanImpair), "tecTOO_SOON")
+					f.env.CloseToParentCloseTime(loanDue)
+					jtx.RequireTxClaimed(t, submitLoanManageResult(t, f, lending.TfLoanImpair), "tecTOO_SOON")
+					f.env.CloseToParentCloseTime(loanDue + 1)
+				}
 				submitLoanManage(t, f, lending.TfLoanImpair)
 				loanImpaired := decodeLendingEntry(t, f.env, f.loanKey)
 				nextDue, ok := loanImpaired["NextPaymentDueDate"].(uint32)
@@ -206,7 +236,11 @@ func TestLoanManageDefaultUsesExposureAndPartialCover(t *testing.T) {
 				}
 				vaultBefore := decodeLendingEntry(t, f.env, f.vaultKey)
 				brokerBefore := decodeLendingEntry(t, f.env, f.brokerKey)
-				f.env.CloseToParentCloseTime(nextDue + 61)
+				f.env.CloseToParentCloseTime(nextDue + 60)
+				if cleanup {
+					jtx.RequireTxClaimed(t, submitLoanManageResult(t, f, lending.TfLoanDefault), "tecTOO_SOON")
+					f.env.CloseToParentCloseTime(nextDue + 61)
+				}
 				submitLoanManage(t, f, lending.TfLoanDefault)
 
 				vaultAfter := decodeLendingEntry(t, f.env, f.vaultKey)
