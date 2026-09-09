@@ -328,3 +328,31 @@ func TestCleanupZeroCredentialGuards(t *testing.T) {
 		}
 	}
 }
+
+type credentialRulesView struct {
+	*mapView
+	rules *amendment.Rules
+}
+
+func (v credentialRulesView) Rules() *amendment.Rules { return v.rules }
+
+func TestCleanupZeroCredentialPreauthGuard(t *testing.T) {
+	subject, issuer, destination := [20]byte{1}, [20]byte{2}, [20]byte{3}
+	credentialType := []byte("guard")
+	data, err := serializeCredentialEntry(&CredentialEntry{Subject: subject, Issuer: issuer, CredentialType: credentialType, Flags: LsfCredentialAccepted, HasSubjectNode: true})
+	require.NoError(t, err)
+	for _, cleanup := range []bool{false, true} {
+		builder := amendment.NewRulesBuilder()
+		if cleanup {
+			builder.Enable(amendment.FeatureFixCleanup3_4_0)
+		}
+		view := credentialRulesView{mapView: newMapView(), rules: builder.Build()}
+		require.NoError(t, view.Insert(keylet.CredentialByID([32]byte{}), data))
+		require.NoError(t, view.Insert(keylet.DepositPreauthCredentials(destination, []keylet.CredentialPair{{Issuer: issuer, CredentialType: credentialType}}), []byte{1}))
+		want := ter.TesSUCCESS
+		if cleanup {
+			want = ter.TefINTERNAL
+		}
+		require.Equal(t, want, authorizedDepositPreauth(view, []string{strings.Repeat("0", 64)}, destination))
+	}
+}

@@ -521,6 +521,10 @@ func authorizedDepositPreauth(view tx.LedgerView, credentialIDs []string, dst [2
 			return ter.TefINTERNAL
 		}
 
+		if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0) && credID == ([32]byte{}) {
+			return ter.TefINTERNAL
+		}
+
 		// Credential existence was already checked in preclaim.
 		credData, err := view.Read(keylet.CredentialByID(credID))
 		if err != nil || credData == nil {
