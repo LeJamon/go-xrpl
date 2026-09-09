@@ -78,6 +78,12 @@ func newCleanupLoan(t *testing.T, cleanup, cashBasis bool) (*jtx.TestEnv, *jtx.A
 	}
 	require.NotEqual(t, [32]byte{}, lk.Key)
 	fields := cleanupLoanFields(t, env, lk)
+	vaultFields := cleanupLoanFields(t, env, vk)
+	if cashBasis {
+		require.EqualValues(t, vault.VaultVersionCashBasis, vaultFields["LEVersion"])
+	} else {
+		require.NotContains(t, vaultFields, "LEVersion")
+	}
 	due := fields["NextPaymentDueDate"].(uint32)
 	return env, owner, borrower, lk, vk, due
 }
