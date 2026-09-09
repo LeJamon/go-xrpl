@@ -89,18 +89,21 @@ func newLoanFreezeFixtureWithLine(t *testing.T, assetCurrency, lineCurrency stri
 	vaultIDHex := strings.ToUpper(hex.EncodeToString(vaultID[:]))
 
 	loan := mustEncode(t, map[string]any{
-		"LedgerEntryType": "Loan", "Flags": uint32(0), "LoanBrokerID": brokerIDHex,
+		"LedgerEntryType": "Loan", "Flags": uint32(0), "OwnerNode": "0", "LoanBrokerNode": "0",
+		"LoanBrokerID": brokerIDHex, "LoanSequence": uint32(1), "Borrower": brokerAddr,
+		"StartDate": uint32(1), "PaymentInterval": uint32(100), "PeriodicPayment": "1",
 		"PreviousTxnID": strings.Repeat("0", 64), "PreviousTxnLgrSeq": uint32(0),
 		"PaymentRemaining": uint32(1), "TotalValueOutstanding": "1", "PrincipalOutstanding": "1",
 	})
 	brokerEntry := mustEncode(t, map[string]any{
-		"LedgerEntryType": "LoanBroker", "Flags": uint32(0), "Account": brokerAddr,
-		"Owner": issuerAddr, "VaultID": vaultIDHex, "CoverAvailable": "1",
+		"LedgerEntryType": "LoanBroker", "Flags": uint32(0), "Sequence": uint32(1),
+		"OwnerNode": "0", "VaultNode": "0", "Account": brokerAddr,
+		"Owner": issuerAddr, "VaultID": vaultIDHex, "LoanSequence": uint32(1), "CoverAvailable": "1",
 		"PreviousTxnID": strings.Repeat("0", 64), "PreviousTxnLgrSeq": uint32(0),
 	})
 	vaultEntry := mustEncode(t, map[string]any{
-		"LedgerEntryType": "Vault", "Flags": uint32(0), "Account": vaultAddr,
-		"Owner": issuerAddr, "Asset": map[string]any{"currency": assetCurrency, "issuer": issuerAddr},
+		"LedgerEntryType": "Vault", "Flags": uint32(0), "Sequence": uint32(1), "OwnerNode": "0",
+		"Account": vaultAddr, "Owner": issuerAddr, "Asset": map[string]any{"currency": assetCurrency, "issuer": issuerAddr},
 		"ShareMPTID": strings.Repeat("0", 48), "WithdrawalPolicy": uint32(1),
 		"PreviousTxnID": strings.Repeat("0", 64), "PreviousTxnLgrSeq": uint32(0),
 	})
