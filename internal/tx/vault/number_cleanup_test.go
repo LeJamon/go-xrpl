@@ -117,8 +117,8 @@ func TestAssetsToSharesWithdrawLossExhaustion(t *testing.T) {
 		shareTotal,
 		state.NewXRPLNumber(1, 0),
 		true,
-	); !got.Equal(shareTotal) {
-		t.Fatalf("loss-exhausted withdrawal shares = %s, want %s", got, shareTotal)
+	); !got.IsZero() {
+		t.Fatalf("loss-exhausted withdrawal shares = %s, want zero", got)
 	}
 }
 
@@ -126,8 +126,8 @@ func TestAssetWithdrawalAmountsTruncatesShares(t *testing.T) {
 	total := state.NewXRPLNumber(3, 0)
 	shares := state.NewXRPLNumber(2, 0)
 	assets := state.NewXRPLNumber(1, 0)
-	nearest, _ := assetWithdrawalAmountsWithMode(total, state.NewXRPLNumber(0, 0), shares, assets, true, false)
-	truncated, payout := assetWithdrawalAmountsWithMode(total, state.NewXRPLNumber(0, 0), shares, assets, true, true)
+	nearest, _ := assetWithdrawalAmounts(total, state.NewXRPLNumber(0, 0), shares, assets, true, false)
+	truncated, payout := assetWithdrawalAmounts(total, state.NewXRPLNumber(0, 0), shares, assets, true, true)
 	if got := nearest.ToInt64WithMode(state.RoundTowardsZero); got != 1 {
 		t.Fatalf("nearest shares = %d, want 1", got)
 	}
@@ -158,9 +158,39 @@ func TestAssetWithdrawalAmountsNeverOverpays(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, payout := assetWithdrawalAmountsWithMode(total, state.NewXRPLNumber(0, 0), shareTotal, assets, false, true)
+			_, payout := assetWithdrawalAmounts(total, state.NewXRPLNumber(0, 0), shareTotal, assets, false, true)
 			if payout.Cmp(assets) > 0 {
 				t.Fatalf("payout %s exceeds requested %s", payout, assets)
+			}
+		})
+	}
+}
+
+func TestVaultNumberOverflowRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		value     any
+		expected  ter.Result
+		propagate bool
+	}{
+		{"number overflow", "XRPLNumber::normalize overflow", ter.TecPATH_DRY, false},
+		{"unexpected panic", "unexpected ledger failure", ter.TesSUCCESS, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := ter.TesSUCCESS
+			var recovered any
+			func() {
+				defer func() { recovered = recover() }()
+				func() { defer recoverVaultNumberOverflow(&result); panic(tc.value) }()
+			}()
+			if result != tc.expected {
+				t.Fatalf("result = %v, want %v", result, tc.expected)
+			}
+			if tc.propagate && recovered != tc.value {
+				t.Fatalf("panic = %v, want %v", recovered, tc.value)
+			}
+			if !tc.propagate && recovered != nil {
+				t.Fatalf("unexpected panic: %v", recovered)
 			}
 		})
 	}

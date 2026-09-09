@@ -231,11 +231,7 @@ func (v *VaultClawback) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 // Apply burns the holder's shares and, for an issuer asset clawback, recovers
 // the corresponding assets to the issuer. Reference: rippled VaultClawback::doApply.
 func (v *VaultClawback) Apply(ctx *tx.ApplyContext) (result ter.Result) {
-	defer func() {
-		if recover() != nil {
-			result = ter.TecPATH_DRY
-		}
-	}()
+	defer recoverVaultNumberOverflow(&result)
 
 	accountID := ctx.AccountID
 	holderID, herr := state.DecodeAccountID(v.Holder)

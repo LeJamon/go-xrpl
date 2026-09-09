@@ -426,11 +426,7 @@ func addWithdrawDestinationHolding(ctx *tx.ApplyContext, asset tx.Asset) ter.Res
 // Apply redeems the caller's shares for the underlying asset and delivers it to
 // the destination. Reference: rippled VaultWithdraw::doApply.
 func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
-	defer func() {
-		if recover() != nil {
-			result = ter.TecPATH_DRY
-		}
-	}()
+	defer recoverVaultNumberOverflow(&result)
 
 	vaultID, ok := v.vaultIDBytes()
 	if !ok {
@@ -460,19 +456,6 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	fix340 := rules.FixCleanup3_4_0Enabled()
 	integral := asset.IsNative() || asset.IsMPT()
 	isFinal := shares == issuance.OutstandingAmount
-	if fix340 && !isFinal {
-		lossN, _ := vaultNumberForRules(vd.LossUnrealized, rules)
-		if fix320 && isSoleShareholder(ctx.View, ctx.AccountID, vd.ShareMPTID, issuance.OutstandingAmount) {
-			lossN = state.NewXRPLNumberScaled(0, 0, vaultNumberScale(rules), state.RoundToNearest)
-		}
-		if v.amountIsShares(vd) && assetsWithdrawnN.IsZero() && !assetsTotalN.Sub(lossN).IsZero() {
-			return ter.TecPRECISION_LOSS
-		}
-		if debitIsNonZeroDust(assetsTotalN, assetsWithdrawnN, integral) {
-			return ter.TecPRECISION_LOSS
-		}
-	}
-
 	// The caller must hold enough shares.
 	token, terr := readMPToken(ctx.View, keylet.MPTokenByID(vd.ShareMPTID, ctx.AccountID))
 	if terr != nil {
@@ -501,13 +484,6 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	// The vault must have enough available assets.
 	if availN.Cmp(assetsWithdrawnN) < 0 {
 		return ter.TecINSUFFICIENT_FUNDS
-	}
-
-	if rules.Enabled(amendment.FeatureFixCleanup3_4_0) && shares != issuance.OutstandingAmount && assetsWithdrawnN.Signum() > 0 {
-		assetsWithdrawnN, result = clampToAssetsTotalScale(assetsTotalN, assetsWithdrawnN.Negate(), asset.IsNative() || asset.IsMPT())
-		if result != ter.TesSUCCESS {
-			return result
-		}
 	}
 
 	if fix320 && shares == issuance.OutstandingAmount {

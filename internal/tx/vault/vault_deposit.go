@@ -254,11 +254,7 @@ func vaultDepositExchange(assetsTotal, shareTotal, assets state.XRPLNumber, scal
 // Apply mints shares to the depositor in exchange for the deposited asset.
 // Reference: rippled VaultDeposit::doApply.
 func (v *VaultDeposit) Apply(ctx *tx.ApplyContext) (result ter.Result) {
-	defer func() {
-		if recover() != nil {
-			result = ter.TecPATH_DRY
-		}
-	}()
+	defer recoverVaultNumberOverflow(&result)
 
 	vaultID, ok := v.vaultIDBytes()
 	if !ok {
