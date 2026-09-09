@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // AMMWithdraw withdraws assets from an AMM.
@@ -819,15 +820,13 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	// For IOU transfers: check reserve if trust line creation is needed,
 	// then transfer tokens.
 	// Reference: rippled AMMWithdraw.cpp lines 581-647
-	enabledFixAMMv1_2 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_2)
-
 	if !isXRP1 && !withdrawAmount1.IsZero() {
-		if result := withdrawAssetToAccount(ctx, accountID, ammAccountID, a.Asset, withdrawAmount1, enabledFixAMMv1_2); result != ter.TesSUCCESS {
+		if result := withdrawAssetToAccount(ctx, accountID, ammAccountID, a.Asset, withdrawAmount1, withdrawalOptions{}); result != ter.TesSUCCESS {
 			return result
 		}
 	}
 	if !isXRP2 && !withdrawAmount2.IsZero() {
-		if result := withdrawAssetToAccount(ctx, accountID, ammAccountID, a.Asset2, withdrawAmount2, enabledFixAMMv1_2); result != ter.TesSUCCESS {
+		if result := withdrawAssetToAccount(ctx, accountID, ammAccountID, a.Asset2, withdrawAmount2, withdrawalOptions{}); result != ter.TesSUCCESS {
 			return result
 		}
 	}
@@ -876,12 +875,66 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	return ter.TesSUCCESS
 }
 
+type withdrawalOptions struct {
+	clawbackIssuer *[20]byte
+}
+
+func clawbackWithdrawalOptions(issuer [20]byte) withdrawalOptions {
+	return withdrawalOptions{clawbackIssuer: &issuer}
+}
+
+func withdrawalAccount(ctx *tx.ApplyContext, accountID [20]byte) (*state.AccountRoot, ter.Result) {
+	if accountID == ctx.AccountID {
+		return ctx.Account, ter.TesSUCCESS
+	}
+	account, err := tx.ReadAccountRoot(ctx.View, accountID)
+	if err != nil || account == nil {
+		return nil, ter.TefINTERNAL
+	}
+	return account, ter.TesSUCCESS
+}
+
+func checkWithdrawalReserve(ctx *tx.ApplyContext, accountID [20]byte, options withdrawalOptions) ter.Result {
+	if !ctx.Rules().Enabled(amendment.FeatureFixAMMv1_2) {
+		return ter.TesSUCCESS
+	}
+	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && options.clawbackIssuer != nil {
+		return ter.TesSUCCESS
+	}
+
+	account, result := withdrawalAccount(ctx, accountID)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	effectiveOwners := account.OwnerCount
+	if ctx.Rules().Enabled(amendment.FeatureSponsor) {
+		var ok bool
+		effectiveOwners, ok = tx.EffectiveOwnerCount(account, 0)
+		if !ok {
+			return ter.TefINTERNAL
+		}
+	}
+	if effectiveOwners < 2 {
+		return ter.TesSUCCESS
+	}
+
+	reserve := ctx.AccountReserveFor(account, tx.ConfineOwnerCount(account.OwnerCount, 1))
+	balance := account.Balance
+	if prior := ctx.PriorBalance(); prior > balance {
+		balance = prior
+	}
+	if balance < reserve {
+		return ter.TecINSUFFICIENT_RESERVE
+	}
+	return ter.TesSUCCESS
+}
+
 func withdrawAssetToAccount(
 	ctx *tx.ApplyContext,
 	accountID, ammAccountID [20]byte,
 	asset tx.Asset,
 	amount tx.Amount,
-	enabledFixAMMv1_2 bool,
+	options withdrawalOptions,
 ) ter.Result {
 	if asset.IsMPT() {
 		id, result := decodeMPTAsset(asset)
@@ -894,33 +947,20 @@ func withdrawAssetToAccount(
 			if err != nil {
 				return ter.TefINTERNAL
 			}
-			if !exists && enabledFixAMMv1_2 {
-				account := ctx.Account
-				if accountID != ctx.AccountID {
-					account, err = tx.ReadAccountRoot(ctx.View, accountID)
-					if err != nil || account == nil {
-						return ter.TefINTERNAL
-					}
-				}
-				effectiveOwners := account.OwnerCount
-				if ctx.Rules().Enabled(amendment.FeatureSponsor) {
-					var ok bool
-					effectiveOwners, ok = tx.EffectiveOwnerCount(account, 0)
-					if !ok {
-						return ter.TefINTERNAL
-					}
-				}
-				balance := account.Balance
-				if accountID == ctx.AccountID && ctx.PriorBalance() > balance {
-					balance = ctx.PriorBalance()
-				}
-				if effectiveOwners >= 2 && balance < ctx.AccountReserveFor(account, tx.ConfineOwnerCount(account.OwnerCount, 1)) {
-					return ter.TecINSUFFICIENT_RESERVE
-				}
-				if result := mptutil.RequireAuthAt(ctx.View, id, accountID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
+			if !exists && ctx.Rules().Enabled(amendment.FeatureFixAMMv1_2) {
+				if result := checkWithdrawalReserve(ctx, accountID, options); result != ter.TesSUCCESS {
 					return result
 				}
-				if result := mptutil.EnsureHolding(ctx.View, id, accountID, 0, true); result != ter.TesSUCCESS {
+				createFlags := uint32(0)
+				if result := mptutil.RequireAuthAt(ctx.View, id, accountID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
+					if options.clawbackIssuer == nil || result != ter.TecNO_AUTH {
+						return result
+					}
+					if mptutil.Issuer(id) == *options.clawbackIssuer {
+						createFlags = entry.LsfMPTAuthorized
+					}
+				}
+				if result := mptutil.EnsureHolding(ctx.View, id, accountID, createFlags, true); result != ter.TesSUCCESS {
 					return result
 				}
 				if accountID == ctx.AccountID {
@@ -935,7 +975,7 @@ func withdrawAssetToAccount(
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	return withdrawIOUToAccount(ctx, accountID, issuerID, ammAccountID, asset, amount, enabledFixAMMv1_2)
+	return withdrawIOUToAccount(ctx, accountID, issuerID, ammAccountID, asset, amount, options)
 }
 
 // withdrawIOUToAccount handles IOU transfer from AMM to withdrawer, including
@@ -947,7 +987,7 @@ func withdrawIOUToAccount(
 	accountID, issuerID, ammAccountID [20]byte,
 	asset tx.Asset,
 	amount tx.Amount,
-	enabledFixAMMv1_2 bool,
+	options withdrawalOptions,
 ) ter.Result {
 	// When the withdrawer IS the issuer, no trust line is needed between them.
 	// Just debit the AMM's trust line (which is between AMM and issuer).
@@ -968,39 +1008,9 @@ func withdrawIOUToAccount(
 	}
 
 	if !trustLineExists {
-		// Reserve check: with fixAMMv1_2, verify the withdrawer has enough
-		// reserve for the new trust line before creating it.
-		// Reference: rippled AMMWithdraw.cpp lines 583-601
-		if enabledFixAMMv1_2 {
-			account := ctx.Account
-			if accountID != ctx.AccountID {
-				account, err = tx.ReadAccountRoot(ctx.View, accountID)
-				if err != nil || account == nil {
-					return ter.TefINTERNAL
-				}
-			}
-			effectiveOwners := account.OwnerCount
-			if ctx.Rules().Enabled(amendment.FeatureSponsor) {
-				var ok bool
-				effectiveOwners, ok = tx.EffectiveOwnerCount(account, 0)
-				if !ok {
-					return ter.TefINTERNAL
-				}
-			}
-			// See also SetTrust::doApply(): ownerCount < 2 → no reserve needed
-			if effectiveOwners >= 2 {
-				reserve := ctx.AccountReserveFor(account, tx.ConfineOwnerCount(account.OwnerCount, 1))
-				// rippled compares max(priorBalance, balance); the fee only
-				// reduces the balance, so prior (pre-fee) balance is the larger
-				// term. Reference: rippled AMMWithdraw.cpp:599.
-				balance := account.Balance
-				if accountID == ctx.AccountID && ctx.PriorBalance() > balance {
-					balance = ctx.PriorBalance()
-				}
-				if balance < reserve {
-					return ter.TecINSUFFICIENT_RESERVE
-				}
-			}
+		// Reference: rippled AMMWithdraw.cpp sufficientReserve().
+		if result := checkWithdrawalReserve(ctx, accountID, options); result != ter.TesSUCCESS {
+			return result
 		}
 
 		// Create trust line for the withdrawer.
@@ -1043,8 +1053,12 @@ func createWithdrawTrustLine(
 	// see the updated OwnerCount.
 	// Reference: rippled — adjustOwnerCount on the SLE which is immediately
 	// visible through peek().
-	_ = tx.AdjustOwnerCount(ctx.View, accountID, 1)
-	ctx.Account.OwnerCount++
+	if err := tx.AdjustOwnerCount(ctx.View, accountID, 1); err != nil {
+		return ter.TefINTERNAL
+	}
+	if accountID == ctx.AccountID {
+		ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, 1)
+	}
 
 	return ter.TesSUCCESS
 }

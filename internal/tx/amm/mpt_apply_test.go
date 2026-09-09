@@ -390,7 +390,7 @@ func TestAMMWithdrawCreatesMPTWithWaivedTransferFee(t *testing.T) {
 	asset := tx.Asset{MPTIssuanceID: mptutil.EncodeID(id)}
 	amount := mptAmount(asset, 25)
 	require.Equal(t, ter.TesSUCCESS,
-		withdrawAssetToAccount(ctx, destinationID, ammAccountID, asset, amount, true))
+		withdrawAssetToAccount(ctx, destinationID, ammAccountID, asset, amount, withdrawalOptions{}))
 
 	ammHolding, _, result := mptutil.ReadHolding(view, id, ammAccountID)
 	require.Equal(t, ter.TesSUCCESS, result)

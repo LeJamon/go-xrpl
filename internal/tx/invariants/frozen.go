@@ -271,6 +271,7 @@ func checkTransfersNotFrozen(
 	// Phase 2: finalize — validate each issuer's changes.
 	loanDefaultExemption := findLoanDefaultFreezeExemption(tx, view, rules)
 
+	fixCleanup3_4_0 := rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0)
 	for issueKey, changes := range balanceChanges {
 		// Find the issuer's AccountRoot.
 		issuerAcct := findFrozenIssuer(issueKey.issuer, possibleIssuers, view)
@@ -287,7 +288,7 @@ func checkTransfersNotFrozen(
 		}
 
 		// Validate this issuer's changes.
-		if v := validateFrozenIssuerChanges(issuerAcct, changes, tx, enforce, loanDefaultExemption); v != nil {
+		if v := validateFrozenIssuerChanges(issuerAcct, changes, tx, enforce, loanDefaultExemption, fixCleanup3_4_0); v != nil {
 			return v
 		}
 	}
@@ -439,6 +440,7 @@ func validateFrozenIssuerChanges(
 	tx Transaction,
 	enforce bool,
 	loanDefaultExemption *loanDefaultFreezeExemption,
+	fixCleanup3_4_0 bool,
 ) *InvariantViolation {
 	// If there are no receivers or no senders, the transfer is between
 	// holder(s) and the issuer directly. This is always allowed regardless
@@ -465,7 +467,7 @@ func validateFrozenIssuerChanges(
 		// Reference: rippled line 868 — high = (line->sfLowLimit.getIssuer() == issuer->sfAccount)
 		high := change.lineData.LowLimit.Issuer == issuerAddr
 
-		if v := validateFrozenState(change, high, tx, enforce, globalFreeze, loanDefaultExemption, issuerAddr); v != nil {
+		if v := validateFrozenState(change, high, tx, enforce, globalFreeze, loanDefaultExemption, issuerAddr, fixCleanup3_4_0); v != nil {
 			return v
 		}
 	}
@@ -484,6 +486,7 @@ func validateFrozenState(
 	globalFreeze bool,
 	loanDefaultExemption *loanDefaultFreezeExemption,
 	issuerAddr string,
+	fixCleanup3_4_0 bool,
 ) *InvariantViolation {
 	// "freeze" only applies to senders (balance decrease). Checks the freeze
 	// flag on the issuer's side of the trust line:
@@ -522,7 +525,7 @@ func validateFrozenState(
 	// line, or if there's a global freeze, an overrideFreeze transaction may
 	// move the funds.
 	// Reference: rippled lines 904-911
-	if (!isAMMLine || globalFreeze) && hasPrivilege(tx.TxType(), overrideFreeze) {
+	if (fixCleanup3_4_0 || !isAMMLine || globalFreeze) && hasPrivilege(tx.TxType(), overrideFreeze) {
 		return nil
 	}
 

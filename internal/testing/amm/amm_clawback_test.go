@@ -381,8 +381,12 @@ func TestAMMClawback_SpecificAmount(t *testing.T) {
 	})
 }
 
-func TestAMMClawbackRejectsRoundedLPWithdrawalAboveHolderBalance(t *testing.T) {
+func setupAMMClawbackExactLPBoundary(t *testing.T, cleanup bool) (*amm.AMMTestEnv, *jtx.Account) {
+	t.Helper()
 	env := amm.NewAMMTestEnv(t)
+	if cleanup {
+		env.EnableFeature("fixCleanup3_4_0")
+	}
 	for _, account := range []*jtx.Account{env.GW, env.Alice, env.Bob} {
 		env.FundAmount(account, uint64(jtx.XRP(1_000_000)))
 	}
@@ -411,12 +415,16 @@ func TestAMMClawbackRejectsRoundedLPWithdrawalAboveHolderBalance(t *testing.T) {
 		TwoAsset().
 		Build()))
 	env.Close()
+	return env, env.ReadAMMAccount(env.USD, env.EUR)
+}
+
+func TestAMMClawbackRejectsRoundedLPWithdrawalAboveHolderBalance(t *testing.T) {
+	env, ammAccount := setupAMMClawbackExactLPBoundary(t, false)
 
 	usdBefore, eurBefore, lpSupplyBefore := env.AMMBalances(env.USD, env.EUR)
 	require.Equal(t, "15", usdBefore.Value())
 	require.Equal(t, "15", eurBefore.Value())
 	require.Equal(t, "15", lpSupplyBefore.Value())
-	ammAccount := env.ReadAMMAccount(env.USD, env.EUR)
 	require.NotNil(t, ammAccount)
 	holderLPBefore := env.IOUBalance(env.Alice, ammAccount, lpSupplyBefore.Currency)
 	require.NotNil(t, holderLPBefore)
@@ -464,6 +472,27 @@ func TestAMMClawbackRejectsRoundedLPWithdrawalAboveHolderBalance(t *testing.T) {
 	holderLPAfterWithdrawAll := env.IOUBalance(env.Alice, ammAccount, lpSupplyBefore.Currency)
 	if holderLPAfterWithdrawAll != nil {
 		require.True(t, holderLPAfterWithdrawAll.IsZero())
+	}
+}
+
+func TestAMMClawbackExactLPBoundaryWithCleanup(t *testing.T) {
+	env, ammAccount := setupAMMClawbackExactLPBoundary(t, true)
+	_, _, lpSupplyBefore := env.AMMBalances(env.USD, env.EUR)
+	holderLPBefore := env.IOUBalance(env.Alice, ammAccount, lpSupplyBefore.Currency)
+	require.NotNil(t, holderLPBefore)
+	require.Equal(t, "10", holderLPBefore.Value())
+
+	result := env.Submit(amm.AMMClawback(env.GW, env.Alice.Address, env.USD, env.EUR).
+		Amount(amm.IOUAmount(env.GW, "USD", 10)).
+		Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	_, _, lpSupplyAfter := env.AMMBalances(env.USD, env.EUR)
+	require.Equal(t, "5", lpSupplyAfter.Value())
+	holderLPAfter := env.IOUBalance(env.Alice, ammAccount, lpSupplyBefore.Currency)
+	if holderLPAfter != nil {
+		require.True(t, holderLPAfter.IsZero())
 	}
 }
 
