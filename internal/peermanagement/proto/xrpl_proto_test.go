@@ -16,7 +16,7 @@ func TestSchemaProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const expected = "f920a631f343959b5a582e7089d06c678001d2c5a5ccd07acc6c7d2a994ddbcf"
+	const expected = "423aabff6fc854f78cac4fa8480ebc3a8b4572a902227fef9e7891fbda103e24"
 	if actual := fmt.Sprintf("%x", sha256.Sum256(schema)); actual != expected {
 		t.Fatalf("xrpl.proto SHA256 = %s, want %s", actual, expected)
 	}
@@ -42,8 +42,8 @@ func TestSchemaDescriptorShape(t *testing.T) {
 	}
 
 	messages, required, optional, repeated := descriptorCounts(file.Messages())
-	if messages != 30 || required != 48 || optional != 41 || repeated != 14 {
-		t.Fatalf("descriptor counts = messages:%d required:%d optional:%d repeated:%d, want 30/48/41/14", messages, required, optional, repeated)
+	if messages != 30 || required != 48 || optional != 43 || repeated != 14 {
+		t.Fatalf("descriptor counts = messages:%d required:%d optional:%d repeated:%d, want 30/48/43/14", messages, required, optional, repeated)
 	}
 
 	endpoints := file.Messages().ByName("TMEndpoints")

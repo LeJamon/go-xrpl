@@ -3077,18 +3077,6 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) bool {
 	if r.handleHeaderDiscoveryReply(ld, uint64(msg.PeerID)) {
 		return false
 	}
-	if ld.InfoType == message.LedgerInfoAsNode || ld.InfoType == message.LedgerInfoTxNode {
-		for _, node := range ld.Nodes {
-			if len(node.NodeData) == 0 {
-				r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-node")
-				return false
-			}
-			if _, err := shamap.ParseNodeID(node.NodeID); err != nil {
-				r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-node")
-				return false
-			}
-		}
-	}
 
 	// A reply carrying a request_cookie answers a GetLedger we relayed on
 	// another peer's behalf. Route it back to the original requester named
@@ -3097,6 +3085,15 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) bool {
 	if ld.HasRequestCookie() {
 		r.routeRelayedLedgerData(ld, msg.PeerID)
 		return false
+	}
+
+	if ld.InfoType == message.LedgerInfoAsNode || ld.InfoType == message.LedgerInfoTxNode {
+		for _, node := range ld.Nodes {
+			if len(node.NodeData) == 0 || (node.NodeID == nil && node.ID == nil && node.Depth == nil) {
+				r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-node")
+				return false
+			}
+		}
 	}
 
 	var il *inbound.Ledger
@@ -3135,7 +3132,7 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) bool {
 func (r *Router) cacheStaleStateNodes(ld *message.LedgerData) {
 	now := time.Now()
 	for _, node := range ld.Nodes {
-		if len(node.NodeID) == 0 || len(node.NodeData) == 0 {
+		if _, err := node.SHAMapNodeID(); err != nil {
 			return
 		}
 		entry, err := shamap.FlushEntryFromWire(node.NodeData, ld.LedgerSeq, shamap.TypeState)

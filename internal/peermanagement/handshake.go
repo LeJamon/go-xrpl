@@ -39,7 +39,7 @@ func (v protocolVersion) less(o protocolVersion) bool {
 // supportedProtocols lists the peer-protocol versions go-xrpl
 // advertises. Must stay strictly ascending — duplicates are forbidden;
 // enforced by init() below.
-var supportedProtocols = []protocolVersion{{2, 1}, {2, 2}}
+var supportedProtocols = []protocolVersion{{2, 1}, {2, 2}, {2, 3}}
 
 func init() {
 	if len(supportedProtocols) == 0 {

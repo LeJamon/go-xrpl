@@ -76,6 +76,12 @@ func (r *Router) maybeRelayGetLedger(from peermanagement.PeerID, req *message.Ge
 func (r *Router) routeRelayedLedgerData(ld *message.LedgerData, from peermanagement.PeerID) {
 	target := uint64(ld.RequestCookie)
 	out := *ld
+	var err error
+	out.Nodes, err = relayLedgerNodes(ld, r.serve.PeerSupportsNodeDepth(target))
+	if err != nil {
+		r.serve.IncPeerBadData(uint64(from), "ledger-data-node")
+		return
+	}
 	out.RequestCookie = 0
 	out.RequestCookieSet = false
 	frame, err := message.EncodeFrame(&out)

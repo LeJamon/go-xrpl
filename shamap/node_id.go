@@ -55,6 +55,11 @@ func createNodeID(depth uint8, key [32]byte) (NodeID, error) {
 	return NodeID{depth: depth, id: id}, nil
 }
 
+// NewNodeID returns the canonical path prefix for a key at the given depth.
+func NewNodeID(depth uint8, key [32]byte) (NodeID, error) {
+	return createNodeID(depth, key)
+}
+
 // Depth returns the depth of this node
 func (n NodeID) Depth() uint8 {
 	return n.depth

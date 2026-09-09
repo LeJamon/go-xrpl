@@ -393,3 +393,7 @@ func indirectQueryType(indirect bool) *message.LedgerQueryType {
 	qt := message.QueryTypeIndirect
 	return &qt
 }
+
+func (s *OverlaySender) PeerSupportsNodeDepth(peerID uint64) bool {
+	return s.overlay.PeerSupportsNodeDepth(peermanagement.PeerID(peerID))
+}

@@ -121,7 +121,7 @@ func TestTxSetAcquire_TimerFinalizesCompleteMapAfterInvalidTrailingNode(t *testi
 	reply := ldFromWire(rawID, wireNodes)
 	reply.Nodes = append(reply.Nodes, message.LedgerNode{
 		NodeID:   badNodeID.Bytes(),
-		NodeData: []byte{0xde, 0xad},
+		NodeData: mismatchedInnerNode(t),
 	})
 	router.MarkTxSetStillNeeded(id)
 

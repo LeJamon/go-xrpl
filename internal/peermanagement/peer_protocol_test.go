@@ -74,7 +74,7 @@ func TestPeer_ProtocolVersion_NegotiationMatchesRippled(t *testing.T) {
 			{"single_supported_older", "XRPL/2.1", "XRPL/2.1"},
 			// rippled fixture: max of intersection.
 			{"rippled_intersection_2_1", "RTXP/1.2, XRPL/2.0, XRPL/2.1", "XRPL/2.1"},
-			{"rippled_intersection_2_2", "RTXP/1.2, XRPL/2.2, XRPL/2.3, XRPL/999.999", "XRPL/2.2"},
+			{"rippled_intersection_2_2", "RTXP/1.2, XRPL/2.2, XRPL/2.3, XRPL/999.999", "XRPL/2.3"},
 			// Original Finding 1 trigger: rippled-style peer offering
 			// {2.1, 2.2} — first-token parser would have stored 2.1,
 			// negotiation must emit 2.2.
@@ -110,4 +110,14 @@ func TestPeer_ProtocolVersion_NegotiationMatchesRippled(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestOverlayPeerSupportsNodeDepth(t *testing.T) {
+	peer := newProtocolTestPeer(t)
+	overlay := newTestOverlayWithPeers(map[PeerID]*Peer{peer.ID(): peer})
+	for _, version := range []string{"", "XRPL/2.1", "XRPL/2.2", "XRPL/2.3"} {
+		peer.setProtocolVersion(version)
+		assert.Equal(t, version == "XRPL/2.3", overlay.PeerSupportsNodeDepth(peer.ID()))
+	}
+	assert.False(t, overlay.PeerSupportsNodeDepth(999))
 }

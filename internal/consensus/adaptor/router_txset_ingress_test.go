@@ -193,7 +193,7 @@ func TestTxSetIngress_ChargesInvalidSHAMapReply(t *testing.T) {
 		InfoType:   message.LedgerInfoTsCandidate,
 		Nodes: []message.LedgerNode{
 			{NodeID: wireNodes[0].NodeID, NodeData: wireNodes[0].Data},
-			{NodeID: wireNodes[1].NodeID, NodeData: []byte{0xde, 0xad}},
+			{NodeID: wireNodes[1].NodeID, NodeData: mismatchedInnerNode(t)},
 		},
 	})
 
@@ -246,7 +246,7 @@ func TestTxSetIngress_BadRootReRequestsWithoutPenalty(t *testing.T) {
 			InfoType:   message.LedgerInfoTsCandidate,
 			Nodes: []message.LedgerNode{{
 				NodeID:   make([]byte, shamap.NodeIDSize),
-				NodeData: []byte{0xde, 0xad},
+				NodeData: mismatchedInnerNode(t),
 			}},
 		}, 62)
 	})
@@ -281,7 +281,7 @@ func TestTxSetIngress_BadRootThenValidRootContinues(t *testing.T) {
 	reply := ldFromWire(rawID, wireNodes)
 	reply.Nodes = append([]message.LedgerNode{{
 		NodeID:   make([]byte, shamap.NodeIDSize),
-		NodeData: []byte{0xde, 0xad},
+		NodeData: mismatchedInnerNode(t),
 	}}, reply.Nodes...)
 	router.handleTxSetData(reply, 63)
 
@@ -309,7 +309,7 @@ func TestTxSetIngress_BadRootThenNonRootIsInvalid(t *testing.T) {
 		LedgerHash: id[:],
 		InfoType:   message.LedgerInfoTsCandidate,
 		Nodes: []message.LedgerNode{
-			{NodeID: make([]byte, shamap.NodeIDSize), NodeData: []byte{0xde, 0xad}},
+			{NodeID: make([]byte, shamap.NodeIDSize), NodeData: mismatchedInnerNode(t)},
 			{NodeID: wireNodes[1].NodeID, NodeData: wireNodes[1].Data},
 		},
 	}, 64)

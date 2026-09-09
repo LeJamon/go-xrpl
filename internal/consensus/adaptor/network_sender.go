@@ -65,3 +65,5 @@ func (n *noopSender) PeerWithLedger([32]byte, uint32, uint64) (uint64, bool)    
 func (n *noopSender) SelectLedgerPeers([32]byte, uint32, []uint64, int) []uint64 { return nil }
 func (n *noopSender) PeerWithTxSet([32]byte, uint64) (uint64, bool)              { return 0, false }
 func (n *noopSender) NotePeerHasTxSet(uint64, [32]byte) bool                     { return true }
+
+func (s *noopSender) PeerSupportsNodeDepth(uint64) bool { return false }

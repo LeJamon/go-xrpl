@@ -371,6 +371,14 @@ var codecs = map[MessageType]msgCodec{
 					Nodedata: requiredBytes(n.NodeData),
 					Nodeid:   n.NodeID,
 				}
+				if n.ID != nil && n.Depth != nil {
+					return nil, fmt.Errorf("ledger node has both id and depth")
+				}
+				if n.ID != nil {
+					nodes[i].Reference = &proto.TMLedgerNode_Id{Id: n.ID}
+				} else if n.Depth != nil {
+					nodes[i].Reference = &proto.TMLedgerNode_Depth{Depth: *n.Depth}
+				}
 			}
 			ledgerInfoType := proto.TMLedgerInfoType(m.InfoType)
 			out := &proto.TMLedgerData{
@@ -395,6 +403,12 @@ var codecs = map[MessageType]msgCodec{
 				nodes[i] = LedgerNode{
 					NodeData: n.GetNodedata(),
 					NodeID:   n.GetNodeid(),
+				}
+				switch ref := n.Reference.(type) {
+				case *proto.TMLedgerNode_Id:
+					nodes[i].ID = requiredBytes(ref.Id)
+				case *proto.TMLedgerNode_Depth:
+					nodes[i].Depth = pb.Uint32(ref.Depth)
 				}
 			}
 			out := &LedgerData{

@@ -83,7 +83,10 @@ func txSetReplyBytes(ld *message.LedgerData) (int64, bool) {
 	}
 	var total int64
 	for _, node := range ld.Nodes {
-		nodeBytes := int64(len(node.NodeID)) + int64(len(node.NodeData))
+		nodeBytes := int64(len(node.NodeID)) + int64(len(node.ID)) + int64(len(node.NodeData))
+		if node.Depth != nil {
+			nodeBytes += 4
+		}
 		if nodeBytes > txSetAcquireMaxReplyBytes-total {
 			return 0, false
 		}
@@ -400,21 +403,26 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 		}
 		return
 	}
-	for _, node := range ld.Nodes {
-		if len(node.NodeID) == 0 || len(node.NodeData) == 0 {
+	for i := range ld.Nodes {
+		node := &ld.Nodes[i]
+		if len(node.NodeData) == 0 {
 			r.txSetAcquireMu.Unlock()
 			if originPeer != 0 {
 				r.gossip.IncPeerBadData(originPeer, "ledger-data-decode")
 			}
 			return
 		}
-		if _, err := shamap.ParseNodeID(node.NodeID); err != nil {
+		id, err := node.SHAMapNodeID()
+		if err != nil {
 			r.txSetAcquireMu.Unlock()
 			if originPeer != 0 {
 				r.gossip.IncPeerBadData(originPeer, "txset-baddata-nodeid")
 			}
 			return
 		}
+		node.NodeID = id.Bytes()
+		node.ID = nil
+		node.Depth = nil
 	}
 
 	if state.txMap == nil {

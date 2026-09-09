@@ -2059,9 +2059,14 @@ func (x *TMGetObjectByHash) GetObjects() []*TMIndexedObject {
 }
 
 type TMLedgerNode struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Nodedata      []byte                 `protobuf:"bytes,1,req,name=nodedata" json:"nodedata,omitempty"`
-	Nodeid        []byte                 `protobuf:"bytes,2,opt,name=nodeid" json:"nodeid,omitempty"` // missing for ledger base data
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Nodedata []byte                 `protobuf:"bytes,1,req,name=nodedata" json:"nodedata,omitempty"`
+	Nodeid   []byte                 `protobuf:"bytes,2,opt,name=nodeid" json:"nodeid,omitempty"`
+	// Types that are valid to be assigned to Reference:
+	//
+	//	*TMLedgerNode_Id
+	//	*TMLedgerNode_Depth
+	Reference     isTMLedgerNode_Reference `protobuf_oneof:"reference"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2109,6 +2114,47 @@ func (x *TMLedgerNode) GetNodeid() []byte {
 	}
 	return nil
 }
+
+func (x *TMLedgerNode) GetReference() isTMLedgerNode_Reference {
+	if x != nil {
+		return x.Reference
+	}
+	return nil
+}
+
+func (x *TMLedgerNode) GetId() []byte {
+	if x != nil {
+		if x, ok := x.Reference.(*TMLedgerNode_Id); ok {
+			return x.Id
+		}
+	}
+	return nil
+}
+
+func (x *TMLedgerNode) GetDepth() uint32 {
+	if x != nil {
+		if x, ok := x.Reference.(*TMLedgerNode_Depth); ok {
+			return x.Depth
+		}
+	}
+	return 0
+}
+
+type isTMLedgerNode_Reference interface {
+	isTMLedgerNode_Reference()
+}
+
+type TMLedgerNode_Id struct {
+	Id []byte `protobuf:"bytes,3,opt,name=id,oneof"`
+}
+
+type TMLedgerNode_Depth struct {
+	Depth uint32 `protobuf:"varint,4,opt,name=depth,oneof"`
+}
+
+func (*TMLedgerNode_Id) isTMLedgerNode_Reference() {}
+
+func (*TMLedgerNode_Depth) isTMLedgerNode_Reference() {}
 
 type TMGetLedger struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -2877,10 +2923,13 @@ const file_internal_peermanagement_proto_xrpl_proto_rawDesc = "" +
 	"\fotSTATE_NODE\x10\x04\x12\x10\n" +
 	"\fotCAS_OBJECT\x10\x05\x12\x10\n" +
 	"\fotFETCH_PACK\x10\x06\x12\x12\n" +
-	"\x0eotTRANSACTIONS\x10\aJ\x04\b\x03\x10\x04\"B\n" +
+	"\x0eotTRANSACTIONS\x10\aJ\x04\b\x03\x10\x04\"y\n" +
 	"\fTMLedgerNode\x12\x1a\n" +
 	"\bnodedata\x18\x01 \x02(\fR\bnodedata\x12\x16\n" +
-	"\x06nodeid\x18\x02 \x01(\fR\x06nodeid\"\xc0\x02\n" +
+	"\x06nodeid\x18\x02 \x01(\fR\x06nodeid\x12\x10\n" +
+	"\x02id\x18\x03 \x01(\fH\x00R\x02id\x12\x16\n" +
+	"\x05depth\x18\x04 \x01(\rH\x00R\x05depthB\v\n" +
+	"\treference\"\xc0\x02\n" +
 	"\vTMGetLedger\x120\n" +
 	"\x05itype\x18\x01 \x02(\x0e2\x1a.protocol.TMLedgerInfoTypeR\x05itype\x12,\n" +
 	"\x05ltype\x18\x02 \x01(\x0e2\x16.protocol.TMLedgerTypeR\x05ltype\x12\x1e\n" +
@@ -3111,6 +3160,10 @@ func init() { file_internal_peermanagement_proto_xrpl_proto_init() }
 func file_internal_peermanagement_proto_xrpl_proto_init() {
 	if File_internal_peermanagement_proto_xrpl_proto != nil {
 		return
+	}
+	file_internal_peermanagement_proto_xrpl_proto_msgTypes[19].OneofWrappers = []any{
+		(*TMLedgerNode_Id)(nil),
+		(*TMLedgerNode_Depth)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

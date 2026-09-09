@@ -945,15 +945,11 @@ func (l *Ledger) applyKnownNodes(ctx context.Context, m *shamap.SHAMap, nodes []
 	added := 0
 	stored := make([]shamap.FlushEntry, 0, len(nodes))
 	for _, node := range nodes {
-		if len(node.NodeData) == 0 {
-			continue
-		}
-		parsedID, err := shamap.ParseNodeID(node.NodeID)
+		parsedID, err := node.SHAMapNodeID()
 		if err != nil {
-			l.logger.Debug("inbound ledger: malformed "+label+" node ID",
-				"node_id_len", len(node.NodeID),
-				"error", err.Error())
-			continue
+			l.rejectCount++
+			l.lastRejectErr = err.Error()
+			return added, stored, nil
 		}
 		if parsedID.IsRoot() {
 			continue

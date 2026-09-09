@@ -535,7 +535,7 @@ func TestNegotiateProtocolVersion(t *testing.T) {
 		// 2.1 supported).
 		{"max_of_intersection_2_1", "RTXP/1.2, XRPL/2.0, XRPL/2.1", "XRPL/2.1"},
 		// rippled fixture: peer offers a future version we don't speak.
-		{"max_of_intersection_2_2", "RTXP/1.2, XRPL/2.2, XRPL/2.3, XRPL/999.999", "XRPL/2.2"},
+		{"max_of_intersection_2_2", "RTXP/1.2, XRPL/2.2, XRPL/2.3, XRPL/999.999", "XRPL/2.3"},
 		// Original Finding 1 case: first-token parser would have picked
 		// XRPL/2.1; rippled negotiation picks XRPL/2.2.
 		{"unordered_picks_max", "XRPL/2.1, XRPL/2.2", "XRPL/2.2"},
@@ -586,7 +586,7 @@ func TestVerifyOutboundProtocolVersion(t *testing.T) {
 // downstream interop assertions catch accidental edits to the supported
 // set.
 func TestSupportedProtocolVersions(t *testing.T) {
-	assert.Equal(t, "XRPL/2.1, XRPL/2.2", SupportedProtocolVersions())
+	assert.Equal(t, "XRPL/2.1, XRPL/2.2, XRPL/2.3", SupportedProtocolVersions())
 }
 
 // TestSupportedProtocolsStrictlyAscending mirrors rippled's static_assert

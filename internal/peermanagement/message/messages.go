@@ -202,8 +202,10 @@ func (g *GetObjectByHash) HasLedgerHash() bool {
 
 // LedgerNode represents a node in the ledger.
 type LedgerNode struct {
-	NodeData []byte `json:"nodedata"`
-	NodeID   []byte `json:"nodeid,omitempty"`
+	NodeData []byte  `json:"nodedata"`
+	NodeID   []byte  `json:"nodeid,omitempty"`
+	ID       []byte  `json:"id,omitempty"`
+	Depth    *uint32 `json:"depth,omitempty"`
 }
 
 // GetLedger requests ledger data.

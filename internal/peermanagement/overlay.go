@@ -568,6 +568,12 @@ func (o *Overlay) PeerSupports(peerID PeerID, f Feature) bool {
 	return caps.HasFeature(f)
 }
 
+// PeerSupportsNodeDepth reports support negotiated through the peer protocol version.
+func (o *Overlay) PeerSupportsNodeDepth(peerID PeerID) bool {
+	peer, ok := o.getPeer(peerID)
+	return ok && peer.ProtocolVersion() == "XRPL/2.3"
+}
+
 // PeerClosedLedger returns the closed-ledger hash advertised during the
 // handshake or in the peer's latest status message.
 func (o *Overlay) PeerClosedLedger(peerID PeerID) ([32]byte, bool) {
