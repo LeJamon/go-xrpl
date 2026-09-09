@@ -12,6 +12,8 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
+const tfLoanDefault uint32 = 0x00010000
+
 func TestLoanDefaultFreezeExemptionIsScoped(t *testing.T) {
 	for _, tc := range []struct {
 		name        string

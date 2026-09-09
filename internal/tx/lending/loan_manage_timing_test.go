@@ -31,7 +31,7 @@ func TestLoanPaymentLateBoundaries(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := lmath.IsPaymentLate(tc.now, 100, tc.rules.Enabled(amendment.FeatureFixCleanup3_4_0)); got != tc.want {
-				t.Fatalf("loanPaymentLate(%d): got %t, want %t", tc.now, got, tc.want)
+				t.Fatalf("IsPaymentLate(%d): got %t, want %t", tc.now, got, tc.want)
 			}
 		})
 	}
