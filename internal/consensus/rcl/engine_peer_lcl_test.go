@@ -258,7 +258,7 @@ func TestEngine_CheckLedger_RefusesSwitchBehindValidated(t *testing.T) {
 	gotPrev := engine.prevLedger.ID()
 	engine.mu.Unlock()
 
-	if gotPrev != ourID {
-		t.Fatalf("prevLedger = %x — a candidate behind the validated tip must be refused (canBeCurrent)", gotPrev[:2])
+	if gotPrev != validatedID {
+		t.Fatalf("prevLedger = %x — recover to held validated tip, never the older peer candidate", gotPrev[:2])
 	}
 }

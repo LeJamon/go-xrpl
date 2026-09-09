@@ -186,6 +186,18 @@ func (e *Engine) timerEntry() {
 		slowStages = e.finishHeartbeatStage(slowStages, stage)
 	}
 
+	// Once a trusted quorum is ahead, closing unsupported observer ledgers is
+	// not recovery. It changes the replay parent and can keep us on a private
+	// branch forever. Keep steering/acquisition above alive, but let replay
+	// advance the verified frontier before starting another local close.
+	if frontier, ok := e.adaptor.(interface{ NetworkValidatedLedgerSeq() uint32 }); ok &&
+		e.adaptor.GetOperatingMode() != consensus.OpModeFull && e.prevLedger != nil {
+		network := frontier.NetworkValidatedLedgerSeq()
+		if network > e.prevLedger.Seq() && network-e.prevLedger.Seq() > 1 {
+			return
+		}
+	}
+
 	switch e.phase {
 	case consensus.PhaseOpen:
 		stage = e.startHeartbeatStageLocked("phase-open")
@@ -411,10 +423,11 @@ func (e *Engine) checkLedger() {
 			}
 		}
 	}
-	if e.mode == consensus.ModeWrongLedger {
+	if e.mode == consensus.ModeWrongLedger || e.adaptor.GetOperatingMode() != consensus.OpModeFull {
 		validatedID := e.adaptor.GetValidatedLedgerHash()
 		if validatedID != (consensus.LedgerID{}) && validatedID != ourID {
 			if validated := e.resolveTargetLedger(validatedID); validated != nil &&
+				(e.mode == consensus.ModeWrongLedger || validated.Seq() > e.prevLedger.Seq()) &&
 				e.canSwitchToLedgerLocked(validated) {
 				slog.Info("Switching to held validated recovery ledger",
 					"t", "consensus",

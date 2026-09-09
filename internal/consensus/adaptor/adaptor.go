@@ -687,6 +687,12 @@ func (a *Adaptor) LedgerService() *service.Service {
 	return a.ledgerService
 }
 
+// NetworkValidatedLedgerSeq is the trusted quorum frontier, not an arbitrary
+// peer's advertised height. Consensus uses it to leave catch-up to replay.
+func (a *Adaptor) NetworkValidatedLedgerSeq() uint32 {
+	return a.networkValidatedSeq.Load()
+}
+
 func (a *Adaptor) GetLedger(id consensus.LedgerID) (consensus.Ledger, error) {
 	l, err := a.ledgerService.GetLedgerByHash([32]byte(id))
 	if err != nil {

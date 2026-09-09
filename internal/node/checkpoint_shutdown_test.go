@@ -9,9 +9,27 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/config"
+	"github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSlowProducerDrainStillPreparesCheckpoint(t *testing.T) {
+	prepared := false
+	runtime := &nodeRuntime{
+		consensus: &adaptor.Components{Engine: &lifecycleShutdownEngine{onStop: func() error {
+			time.Sleep(producerShutdownGrace + 100*time.Millisecond)
+			return nil
+		}}},
+		prepareFastLoadCheckpoint: func(context.Context) (bool, error) {
+			prepared = true
+			return true, nil
+		},
+		serverLog: xrpllog.Discard(),
+	}
+	require.NoError(t, runtime.shutdownWithin(15*time.Second))
+	require.True(t, prepared, "a completed slow drain must not discard checkpoint eligibility")
+}
 
 func TestNodeRuntimeUsesConfiguredCheckpointShutdownGrace(t *testing.T) {
 	const grace = 30 * time.Minute
