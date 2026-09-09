@@ -312,7 +312,7 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 func reverseImpairment(ctx *tx.ApplyContext, loan *loanData, vaultKey keylet.Keylet, v *vault.VaultLending, integral bool) ter.Result {
 	asset := lmath.Asset{Integral: integral}
 	scale := vaultScaleOfForRules(v, integral, ctx.Rules())
-	loss := owedToVaultForRules(loan, ctx.Rules())
+	loss := loanVaultExposureForRules(v, loan, ctx.Rules())
 	if lendNumForRules(v.LossUnrealized, ctx.Rules()).Cmp(loss) < 0 {
 		return ter.TefBAD_LEDGER
 	}

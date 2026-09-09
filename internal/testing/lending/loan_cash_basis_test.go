@@ -29,7 +29,7 @@ func setupCashXRPVault(t *testing.T, env *jtx.TestEnv, owner *jtx.Account, depos
 	sequence := env.Seq(owner)
 	kind := vault.VaultKindClosedEnded
 	subscription := env.NowRipple() + 1
-	redemption := subscription + 1000
+	redemption := subscription + 7*24*60*60
 	create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: "XRP"})
 	create.Fee = reserveIncrement
 	create.VaultKind = &kind

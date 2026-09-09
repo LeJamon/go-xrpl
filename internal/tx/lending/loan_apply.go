@@ -70,6 +70,13 @@ func loanPaymentDeltas(
 	}
 }
 
+func loanVaultExposureForRules(v *vault.VaultLending, l *loanData, rules *amendment.Rules) lmath.N {
+	if cashBasisEnabled(v) {
+		return lendNumForRules(l.PrincipalOutstanding, rules)
+	}
+	return owedToVaultForRules(l, rules)
+}
+
 func owedToVaultForRules(l *loanData, rules *amendment.Rules) lmath.N {
 	return lendNumForRules(l.TotalValueOutstanding, rules).Sub(lendNumForRules(l.ManagementFeeOutstanding, rules))
 }
@@ -289,7 +296,7 @@ func (l *LoanManage) impairLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, loa
 	asset := mathAsset(v.Asset)
 	integral := asset.Integral
 	scale := vaultScaleOfForRules(v, integral, ctx.Rules())
-	loss := owedToVaultForRules(loan, ctx.Rules())
+	loss := loanVaultExposureForRules(v, loan, ctx.Rules())
 	newLoss := lmath.AdjustImprecise(asset, lendNumForRules(v.LossUnrealized, ctx.Rules()), loss, scale)
 	// Loss cannot exceed the vault's committed-but-unavailable assets.
 	committed := lendNumForRules(v.AssetsTotal, ctx.Rules()).Sub(lendNumForRules(v.AssetsAvailable, ctx.Rules()))
@@ -310,7 +317,7 @@ func (l *LoanManage) unimpairLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, l
 	asset := mathAsset(v.Asset)
 	integral := asset.Integral
 	scale := vaultScaleOfForRules(v, integral, ctx.Rules())
-	loss := owedToVaultForRules(loan, ctx.Rules())
+	loss := loanVaultExposureForRules(v, loan, ctx.Rules())
 	if lendNumForRules(v.LossUnrealized, ctx.Rules()).Cmp(loss) < 0 {
 		return ter.TefBAD_LEDGER
 	}
@@ -338,7 +345,7 @@ func (l *LoanManage) defaultLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, lo
 	loanScale := int(loan.LoanScale)
 	vaultScale := vaultScaleOfForRules(v, integral, ctx.Rules())
 	debtTotal := lendNumForRules(b.DebtTotal, ctx.Rules())
-	totalDefault := owedToVaultForRules(loan, ctx.Rules())
+	totalDefault := loanVaultExposureForRules(v, loan, ctx.Rules())
 
 	// Liquidation cover: min(debtTotal * coverMin * coverLiq, totalDefault),
 	// capped at the broker's available cover.
