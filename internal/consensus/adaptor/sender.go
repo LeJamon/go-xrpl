@@ -221,6 +221,13 @@ func (s *OverlaySender) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, 
 	return s.overlay.SendPriority(peermanagement.PeerID(peerID), frame)
 }
 
+// RequestLedgerHeaderFromPeer sends the liBASE header used by the bounded
+// ancestry walk. The wire reply is the normal liBASE reply; the separate
+// method keeps header discovery out of the full-state acquisition tracker.
+func (s *OverlaySender) RequestLedgerHeaderFromPeer(peerID uint64, hash [32]byte, seq uint32, indirect bool) error {
+	return s.RequestLedgerBaseFromPeer(peerID, hash, seq, indirect)
+}
+
 func encodeLedgerBaseRequest(hash [32]byte, seq uint32, indirect bool) ([]byte, error) {
 	msg := &message.GetLedger{
 		InfoType:   message.LedgerInfoBase,

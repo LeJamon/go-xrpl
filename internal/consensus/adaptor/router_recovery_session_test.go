@@ -673,7 +673,7 @@ func TestFrozenPivotRecoveryDoesNotTimeoutPivotDownload(t *testing.T) {
 }
 
 func TestFrozenPivotBootstrapFailureRearmsTrustedTarget(t *testing.T) {
-	r, _, _, svc := makeRouter(t)
+	r, _, rs, svc := makeRouter(t)
 	pivot := completedCatchUpAcquisition(t, svc.GetClosedLedgerIndex()+10)
 	pivotSeq, pivotHash := pivot.Seq(), pivot.Hash()
 	r.fetchTracker.Track(pivot)
@@ -700,13 +700,13 @@ func TestFrozenPivotBootstrapFailureRearmsTrustedTarget(t *testing.T) {
 	r.completeInboundLedger(pivot)
 
 	assert.Nil(t, r.fetchTracker.Find(pivotHash))
-	assert.True(t, r.standardReplay.active)
-	assert.False(t, r.standardReplay.pivotReady)
-	assert.Equal(t, replacement.Seq(), r.standardReplay.pivotSeq)
-	assert.Equal(t, replacement.Hash(), r.standardReplay.pivotHash)
-	rearmed := r.fetchTracker.Find(replacement.Hash())
-	require.NotNil(t, rearmed)
-	assert.False(t, rearmed.TransactionOnly())
+	assert.False(t, r.standardReplay.active)
+	assert.Equal(t, replacement.Seq(), r.catchup.seq)
+	assert.Equal(t, replacement.Hash(), r.catchup.hash)
+	require.Len(t, rs.headerRequests(), 1)
+	assert.Equal(t, replacement.Seq(), rs.headerRequests()[0].seq)
+	assert.Equal(t, replacement.Hash(), rs.headerRequests()[0].hash)
+	assert.Empty(t, rs.legacyCalls())
 }
 
 func TestFrozenPivotHandoffKeepsSessionWhenTargetAdvances(t *testing.T) {
