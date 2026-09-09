@@ -92,6 +92,7 @@ func reportPersistenceLatencies(b *testing.B, values []int64, prefix string) {
 	slices.Sort(values)
 	b.ReportMetric(float64(values[(len(values)-1)/2]), prefix+"-p50-ns")
 	b.ReportMetric(float64(values[(len(values)*95+99)/100-1]), prefix+"-p95-ns")
+	b.ReportMetric(float64(values[(len(values)*99+99)/100-1]), prefix+"-p99-ns")
 	b.ReportMetric(float64(values[len(values)-1]), prefix+"-max-ns")
 }
 

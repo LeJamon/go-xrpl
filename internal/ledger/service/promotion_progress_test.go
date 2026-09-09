@@ -36,6 +36,9 @@ type promotionProgressLogRecord struct {
 	Message               string `json:"msg"`
 	Requested             uint64 `json:"promotion_requested"`
 	Consumed              uint64 `json:"promotion_consumed"`
+	Returned              uint64 `json:"promotion_returned"`
+	PrefetchBytes         uint64 `json:"promotion_prefetch_bytes"`
+	PartialPrefixRetries  uint64 `json:"promotion_partial_prefix_retries"`
 	WritableHits          uint64 `json:"promotion_writable_hits"`
 	WritableMisses        uint64 `json:"promotion_writable_misses"`
 	ArchiveHits           uint64 `json:"promotion_archive_hits"`
@@ -88,6 +91,7 @@ func TestOnlineDeleteRefreshPromotionMetricsAggregatesParallelBatches(t *testing
 				kvstore.PromotionStats{
 					Requested:             5,
 					Consumed:              3,
+					PrefetchBytes:         11,
 					WritableHits:          1,
 					WritableMisses:        2,
 					ArchiveHits:           3,
@@ -102,6 +106,7 @@ func TestOnlineDeleteRefreshPromotionMetricsAggregatesParallelBatches(t *testing
 					Fallbacks:             1,
 					Batches:               1,
 				},
+				3,
 				batchErr,
 			)
 		}(index)
@@ -117,6 +122,9 @@ func TestOnlineDeleteRefreshPromotionMetricsAggregatesParallelBatches(t *testing
 	require.Equal(t, batches*3*time.Millisecond, snapshot.fetchElapsed)
 	require.Equal(t, uint64(batches*5), snapshot.requested)
 	require.Equal(t, uint64(batches*3), snapshot.consumed)
+	require.Equal(t, uint64(batches*3), snapshot.returned)
+	require.Equal(t, uint64(batches*11), snapshot.prefetchBytes)
+	require.Equal(t, uint64(batches-(batches/3+1)), snapshot.partialPrefixRetries)
 	require.Equal(t, uint64(batches), snapshot.writableHits)
 	require.Equal(t, uint64(batches*2), snapshot.writableMisses)
 	require.Equal(t, uint64(batches*3), snapshot.archiveHits)
@@ -139,7 +147,8 @@ func TestOnlineDeleteRefreshPromotionMetricsUseUint64ByteTotals(t *testing.T) {
 		metrics.record(0, 0, kvstore.PromotionStats{
 			PromotedBytes: perBatch,
 			BufferedBytes: perBatch,
-		}, nil)
+			PrefetchBytes: perBatch,
+		}, 0, nil)
 	}
 
 	snapshot := metrics.snapshot()
@@ -147,6 +156,7 @@ func TestOnlineDeleteRefreshPromotionMetricsUseUint64ByteTotals(t *testing.T) {
 	require.Greater(t, want, uint64(1<<31-1))
 	require.Equal(t, want, snapshot.promotedBytes)
 	require.Equal(t, want, snapshot.bufferedBytes)
+	require.Equal(t, want, snapshot.prefetchBytes)
 }
 
 func TestOnlineDeleteRefreshPromotionMetricsResetBetweenRefreshes(t *testing.T) {
@@ -215,6 +225,9 @@ func TestOnlineDeleteRefreshPromotionMetricsReportPartialPrefixAndSources(t *tes
 	require.Equal(t, "online delete: live-state refresh complete", second.Message)
 	require.Positive(t, first.BatchCalls)
 	require.Positive(t, first.PartialPrefixes)
+	require.Equal(t, first.PartialPrefixes, first.PartialPrefixRetries)
+	require.Equal(t, first.Consumed, first.Returned)
+	require.Positive(t, first.PrefetchBytes)
 	require.Greater(t, first.Requested, first.Consumed)
 	require.Positive(t, first.ArchiveLookups)
 	require.Positive(t, first.ArchiveHits)
@@ -225,6 +238,9 @@ func TestOnlineDeleteRefreshPromotionMetricsReportPartialPrefixAndSources(t *tes
 	require.Greater(t, first.NodeStoreReadsAfter, first.NodeStoreReadsBefore)
 	require.Positive(t, second.BatchCalls)
 	require.Zero(t, second.PartialPrefixes)
+	require.Zero(t, second.PartialPrefixRetries)
+	require.Equal(t, second.Consumed, second.Returned)
+	require.Positive(t, second.PrefetchBytes)
 	require.Equal(t, second.Requested, second.Consumed)
 	require.Positive(t, second.WritableHits)
 	require.Positive(t, second.ArchiveLookupsAvoided)
@@ -312,5 +328,6 @@ func TestOnlineDeleteRefreshPromotionMetricsRetainBackendErrorAndFailureLog(t *t
 	require.Positive(t, records[1].Requested)
 	require.Positive(t, records[1].BatchCalls)
 	require.Positive(t, records[1].BatchErrors)
+	require.Zero(t, records[1].PartialPrefixRetries)
 	require.NotEqual(t, "online delete: live-state refresh complete", records[1].Message)
 }

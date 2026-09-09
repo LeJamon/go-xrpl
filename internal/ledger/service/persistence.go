@@ -645,7 +645,7 @@ func (s *Service) refreshGenerationStateWithBatch(
 				fetchElapsed := time.Since(fetchStartedAt)
 				// Record the backend's counters before propagating its error. The
 				// backend may return useful partial-prefix diagnostics on failure.
-				promotionMetrics.record(waitElapsed, fetchElapsed, stats, fetchErr)
+				promotionMetrics.record(waitElapsed, fetchElapsed, stats, len(nodes), fetchErr)
 				return nodes, stats, fetchErr
 			}
 			control.batchNodes = batchNodes

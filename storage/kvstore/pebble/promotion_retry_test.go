@@ -2,9 +2,11 @@ package pebble
 
 import (
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
+	"github.com/cockroachdb/pebble/vfs/errorfs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -57,13 +59,13 @@ func TestPromotionFallbackPreservesPrecedenceAndByteLimitedPrefix(t *testing.T) 
 			defer store.mu.RUnlock()
 			store.archiveMu.RLock()
 			defer store.archiveMu.RUnlock()
-			_, archive, _, err := store.prefetchPromotion(keys, 1024, &kvstore.PromotionStats{})
+			archive, _, err := store.prefetchPromotionPass(keys, 1024, nil, [rotatingStoreMutationStripes]uint64{}, &kvstore.PromotionStats{})
 			require.NoError(t, err)
 			var records []kvstore.Promotion
 			var stats kvstore.PromotionStats
 			for index, key := range keys {
 				var consumed bool
-				records, consumed, err = store.promoteOne(key, promotionPrefetch{}, ^uint64(0), archive[index], test.limit, records, &stats)
+				records, consumed, err = store.promoteOne(key, archive[index], ^uint64(0), test.limit, records, &stats)
 				require.NoError(t, err)
 				if !consumed {
 					break
@@ -83,4 +85,49 @@ func TestPromotionFallbackPreservesPrecedenceAndByteLimitedPrefix(t *testing.T) 
 			require.ErrorIs(t, err, kvstore.ErrNotFound)
 		})
 	}
+}
+
+func TestPromotionCopyForwardDoesNotRetryConcurrentObservation(t *testing.T) {
+	var armed atomic.Bool
+	entered, release := make(chan struct{}), make(chan struct{})
+	injector := errorfs.InjectorFunc(func(op errorfs.Op, path string) error {
+		if filepath.Ext(path) == ".sst" && (op == errorfs.OpFileRead || op == errorfs.OpFileReadAt) && armed.CompareAndSwap(true, false) {
+			close(entered)
+			<-release
+		}
+		return nil
+	})
+	key := []byte("key")
+	store := openPromotionPrefetchStore(t, injector)
+	t.Cleanup(func() { closePromotionGate(release) })
+	collision := promotionKeyOnStripe(mutationStripe(key), "copy-forward")
+	require.NoError(t, store.archive.Put(collision, []byte("archive")))
+	type result struct {
+		records []kvstore.Promotion
+		stats   kvstore.PromotionStats
+		err     error
+	}
+	done := make(chan result, 1)
+	armed.Store(true)
+	go func() {
+		records, stats, err := store.PromoteBatch([][]byte{key}, 1024)
+		done <- result{records, stats, err}
+	}()
+	waitPromotionSignal(t, entered, "concurrent observation")
+	copied := make(chan result, 1)
+	go func() {
+		records, stats, err := store.PromoteBatch([][]byte{collision}, 1024)
+		copied <- result{records, stats, err}
+	}()
+	copyResult := waitPromotionResultValue(t, copied, "copy-forward")
+	require.NoError(t, copyResult.err)
+	require.Equal(t, 1, copyResult.stats.Promoted)
+	closePromotionGate(release)
+	observed := waitPromotionResultValue(t, done, "original promotion")
+	require.NoError(t, observed.err)
+	require.Len(t, observed.records, 1)
+	require.Equal(t, []byte("old"), observed.records[0].Value)
+	require.Zero(t, observed.stats.VersionMismatches)
+	require.Zero(t, observed.stats.Retries)
+	require.Zero(t, observed.stats.Fallbacks)
 }

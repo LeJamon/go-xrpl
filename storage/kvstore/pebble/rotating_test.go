@@ -193,6 +193,52 @@ func TestRotatingStoreBatchPromotionPreservesOrderPrecedenceAndBounds(t *testing
 	require.Greater(t, oversizedStats.BufferedBytes, 1)
 }
 
+func TestRotatingStoreBatchPromotionIgnoresSupersededArchivePayloads(t *testing.T) {
+	store, err := kvpebble.NewRotating(filepath.Join(t.TempDir(), "nodes"), rotatingTestOptions())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	for _, key := range []string{"a", "b", "empty"} {
+		require.NoError(t, store.Put([]byte(key), make([]byte, 4096)))
+	}
+	require.NoError(t, store.Put([]byte("dead"), []byte("obsolete")))
+	require.NoError(t, store.Put([]byte("c"), []byte("archive")))
+	committed, err := store.Rotate(11, 1)
+	require.NoError(t, err)
+	require.True(t, committed)
+	require.NoError(t, store.Put([]byte("a"), []byte("a")))
+	require.NoError(t, store.Put([]byte("b"), []byte("b")))
+	require.NoError(t, store.Put([]byte("empty"), nil))
+
+	keys := [][]byte{[]byte("missing"), []byte("empty"), []byte("c"), []byte("b"), []byte("a")}
+	promotions, stats, err := store.PromoteBatch(keys, 9)
+	require.NoError(t, err)
+	require.Len(t, promotions, 5)
+	require.Equal(t, 5, stats.Consumed)
+	require.Equal(t, 3, stats.ArchiveLookupsAvoided)
+	require.Equal(t, 2, stats.ArchiveLookups)
+	require.Equal(t, 9, stats.PrefetchBytes)
+	require.Equal(t, 9, stats.BufferedBytes)
+	require.Equal(t, []byte("a"), promotions[0].Value)
+	require.Equal(t, []byte("b"), promotions[1].Value)
+	require.Equal(t, []byte("archive"), promotions[2].Value)
+	require.True(t, promotions[3].Found)
+	require.Empty(t, promotions[3].Value)
+	require.False(t, promotions[4].Found)
+
+	committed, err = store.Rotate(21, 12)
+	require.NoError(t, err)
+	require.True(t, committed)
+	iter, err := store.NewIterator(nil, nil)
+	require.NoError(t, err)
+	var retained []string
+	for iter.Next() {
+		retained = append(retained, string(iter.Key()))
+	}
+	require.NoError(t, iter.Error())
+	require.NoError(t, iter.Close())
+	require.Equal(t, []string{"a", "b", "c", "empty"}, retained)
+}
+
 func TestRotatingStoreBatchPromotionDistinguishesEmptyValueFromMissing(t *testing.T) {
 	store, err := kvpebble.NewRotating(filepath.Join(t.TempDir(), "nodes"), rotatingTestOptions())
 	require.NoError(t, err)

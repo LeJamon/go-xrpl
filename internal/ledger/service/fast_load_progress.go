@@ -23,9 +23,8 @@ const (
 
 // onlineDeleteRefreshPromotionMetrics is scoped to one batched refresh.
 // It records the backend's returned counters even when a batch returns an
-// error; promoted counters then describe work attempted by the backend, while
-// Batches describes writes completed before the error. No node identities are
-// retained, so memory use stays constant as the refresh grows.
+// error; promoted counters describe writes committed before the error.
+// No node identities are retained, so memory use stays constant as the refresh grows.
 type onlineDeleteRefreshPromotionMetrics struct {
 	mu sync.Mutex
 
@@ -35,6 +34,9 @@ type onlineDeleteRefreshPromotionMetrics struct {
 type onlineDeleteRefreshPromotionTotals struct {
 	requested             uint64
 	consumed              uint64
+	returned              uint64
+	prefetchBytes         uint64
+	partialPrefixRetries  uint64
 	writableHits          uint64
 	writableMisses        uint64
 	archiveHits           uint64
@@ -59,6 +61,7 @@ func (m *onlineDeleteRefreshPromotionMetrics) record(
 	waitElapsed time.Duration,
 	fetchElapsed time.Duration,
 	stats kvstore.PromotionStats,
+	returned int,
 	err error,
 ) {
 	if waitElapsed < 0 {
@@ -71,6 +74,11 @@ func (m *onlineDeleteRefreshPromotionMetrics) record(
 	defer m.mu.Unlock()
 	m.totals.requested += uint64(stats.Requested)
 	m.totals.consumed += uint64(stats.Consumed)
+	m.totals.returned += uint64(returned)
+	m.totals.prefetchBytes += uint64(stats.PrefetchBytes)
+	if err == nil && returned > 0 && returned < stats.Requested {
+		m.totals.partialPrefixRetries++
+	}
 	m.totals.writableHits += uint64(stats.WritableHits)
 	m.totals.writableMisses += uint64(stats.WritableMisses)
 	m.totals.archiveHits += uint64(stats.ArchiveHits)
@@ -115,6 +123,9 @@ func (m *onlineDeleteRefreshPromotionMetrics) fields() []any {
 	return []any{
 		"promotion_requested", snapshot.requested,
 		"promotion_consumed", snapshot.consumed,
+		"promotion_returned", snapshot.returned,
+		"promotion_prefetch_bytes", snapshot.prefetchBytes,
+		"promotion_partial_prefix_retries", snapshot.partialPrefixRetries,
 		"promotion_writable_hits", snapshot.writableHits,
 		"promotion_writable_misses", snapshot.writableMisses,
 		"promotion_archive_hits", snapshot.archiveHits,

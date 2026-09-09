@@ -105,15 +105,19 @@ type PromotionStats struct {
 	PromotedBytes  int
 	BufferedBytes  int
 	Batches        int
+	// ArchiveLookups counts archive-generation lookups, including retries and fallback rereads.
+	ArchiveLookups int
+	// ArchiveLookupsAvoided is the number of archive lookups skipped because
+	// the writable generation resolved the key first, including retries and fallback rereads.
+	ArchiveLookupsAvoided int
+	// PrefetchBytes is the payload size fetched while prefetching promotion
+	// records, including retry payloads and fallback rereads.
+	PrefetchBytes int
 	// VersionMismatches includes repeated invalidated observations of a key.
 	VersionMismatches int
 	Retries           int
 	// Fallbacks counts single-stripe rereads after the retry budget is exhausted.
 	Fallbacks int
-
-	// Prefetch lookups can cover keys beyond the returned prefix.
-	ArchiveLookups        int
-	ArchiveLookupsAvoided int
 }
 
 // CacheMetrics is a point-in-time snapshot of shared block-cache activity.
