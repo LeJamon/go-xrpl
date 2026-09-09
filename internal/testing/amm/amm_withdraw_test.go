@@ -656,18 +656,24 @@ func TestWithdraw(t *testing.T) {
 
 func TestWithdrawExactPriceZeroDenominator(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		cleanup bool
-		want    string
+		name       string
+		cleanup    bool
+		cleanup340 bool
+		want       string
 	}{
 		{name: "CleanupEnabled", cleanup: true, want: amm.TecAMM_FAILED},
 		{name: "CleanupDisabled", cleanup: false, want: "tefEXCEPTION"},
+		{name: "Cleanup340Only", cleanup: false, cleanup340: true, want: amm.TecAMM_FAILED},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env, _ := setupGBPEURPoolAliceOnly(t, 100, 100, 1000, true)
 			if !tc.cleanup {
 				env.DisableFeature("fixCleanup3_3_0")
 				env.Close()
+			}
+
+			if tc.cleanup340 {
+				env.EnableFeatureNow("fixCleanup3_4_0")
 			}
 
 			beforeGBP, beforeEUR, beforeLP := env.AMMBalances(env.GBP, env.EUR)

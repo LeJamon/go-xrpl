@@ -634,7 +634,8 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 		tfMinusAE := lptBalanceNumber.MulRounded(f, state.RoundToNearest).
 			AddRounded(ae.Negate(), state.RoundToNearest)
 		if tfMinusAE.IsZero() {
-			if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_3_0) {
+			if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_3_0) ||
+				ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) {
 				return ter.TecAMM_FAILED
 			}
 			return ter.TefEXCEPTION
