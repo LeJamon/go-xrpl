@@ -21,6 +21,9 @@ func newCleanupLoan(t *testing.T, cleanup, cashBasis bool) (*jtx.TestEnv, *jtx.A
 	t.Helper()
 	env := jtx.NewTestEnv(t)
 	env.EnableFeature("SingleAssetVault")
+	if cashBasis {
+		env.EnableFeature("MPTokensV1")
+	}
 	env.EnableFeature("LendingProtocol")
 	if cashBasis {
 		env.EnableFeature("LendingProtocolV1_1")
@@ -35,8 +38,19 @@ func newCleanupLoan(t *testing.T, cleanup, cashBasis bool) (*jtx.TestEnv, *jtx.A
 	vid := hex.EncodeToString(vk.Key[:])
 	create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: "XRP"})
 	create.Fee = "50000000"
+	if cashBasis {
+		kind := vault.VaultKindClosedEnded
+		subscription := env.NowRipple() + 60
+		redemption := subscription + 100_000
+		create.VaultKind = &kind
+		create.SubscriptionDate = &subscription
+		create.RedemptionDate = &redemption
+	}
 	jtx.RequireTxSuccess(t, env.Submit(create))
 	jtx.RequireTxSuccess(t, env.Submit(vault.NewVaultDeposit(owner.Address, vid, tx.NewXRPAmount(1000000))))
+	if cashBasis {
+		env.CloseToParentCloseTime(*create.SubscriptionDate + 1)
+	}
 	bk := keylet.LoanBroker(owner.ID, env.Seq(owner))
 	bid := hex.EncodeToString(bk.Key[:])
 	broker := lending.NewLoanBrokerSet(owner.Address, vid)
@@ -221,9 +235,11 @@ func testCleanupLoanDefaultFrozenCover(t *testing.T, cashBasis bool) {
 				if kind == "holder lock" || kind == "issuance lock" {
 					asset = "MPT"
 				}
-				f := newLoanSetAssetFixture(t, asset, mpttest.TfMPTCanLock)
+				var f *loanSetAssetFixture
 				if cashBasis {
-					f.env.EnableFeature("LendingProtocolV1_1")
+					f = newCashLoanSetAssetFixture(t, asset, mpttest.TfMPTCanLock)
+				} else {
+					f = newLoanSetAssetFixture(t, asset, mpttest.TfMPTCanLock)
 				}
 				if cleanup {
 					f.env.EnableFeature("fixCleanup3_4_0")
