@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	ledgerentry "github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -84,6 +85,30 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 		Validated:   validated,
 	}
 
+	var markerKey [32]byte
+	var markerOffer *state.NFTokenOfferData
+	if marker != "" {
+		// Find the marker in the offer list and validate it
+		markerBytes, err := hex.DecodeString(marker)
+		if err != nil || len(markerBytes) != 32 {
+			return nil, svcerr.ErrInvalidMarker
+		}
+		copy(markerKey[:], markerBytes)
+
+		// Verify the marker offer exists and belongs to this NFT
+		markerKeylet := keylet.Keylet{Key: markerKey}
+		offerData, err := targetLedger.ReadContext(ctx, markerKeylet)
+		if err != nil {
+			return nil, err
+		}
+
+		// Parse the offer to verify NFTokenID matches
+		markerOffer, err = state.ParseNFTokenOfferLegacy(offerData)
+		if err != nil || markerOffer.NFTokenID != nftID || (markerOffer.Flags&ledgerentry.LsfSellNFToken != 0) != isSellOffers {
+			return nil, svcerr.ErrInvalidMarker
+		}
+	}
+
 	// Walk every directory page (following IndexNext) to collect all offer
 	// indexes; rippled's enumerateNFTOffers pages through cdirNext, so a single
 	// root-page read truncates books with more than one page of offers.
@@ -105,29 +130,8 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 	reserve := limit
 
 	if marker != "" {
-		// Find the marker in the offer list and validate it
-		markerBytes, err := hex.DecodeString(marker)
-		if err != nil || len(markerBytes) != 32 {
-			return nil, svcerr.ErrInvalidMarker
-		}
-		var markerKey [32]byte
-		copy(markerKey[:], markerBytes)
-
-		// Verify the marker offer exists and belongs to this NFT
-		markerKeylet := keylet.Keylet{Key: markerKey}
-		offerData, err := targetLedger.ReadContext(ctx, markerKeylet)
-		if err != nil {
-			return nil, err
-		}
-
-		// Parse the offer to verify NFTokenID matches
-		offer, err := state.ParseNFTokenOfferLegacy(offerData)
-		if err != nil || offer.NFTokenID != nftID {
-			return nil, svcerr.ErrInvalidMarker
-		}
-
 		// Add marker offer first
-		offerInfo, err := s.buildNFTOfferInfo(markerKey, offer)
+		offerInfo, err := s.buildNFTOfferInfo(markerKey, markerOffer)
 		if err == nil {
 			result.Offers = append(result.Offers, offerInfo)
 		}

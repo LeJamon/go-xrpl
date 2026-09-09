@@ -10,10 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
-	"github.com/LeJamon/go-xrpl/keylet"
-	ledgerentry "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // NftBuyOffersMethod handles the nft_buy_offers RPC method
@@ -24,14 +21,14 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-	return handleNFTOffers(ctx, params, false, ctx.Services.Ledger().GetNFTBuyOffers)
+	return handleNFTOffers(ctx, params, ctx.Services.Ledger().GetNFTBuyOffers)
 }
 
 // handleNFTOffers is the shared nft_buy_offers / nft_sell_offers flow; the only
 // difference between buy and sell is the fetch function. The caller guards the
 // ledger service before binding fetch.
 // Reference: rippled NFTOffers.cpp doNFTBuyOffers / doNFTSellOffers
-func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, sellOffers bool, fetch func(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error)) (any, *rpcerrors.RpcError) {
+func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error)) (any, *rpcerrors.RpcError) {
 	if rpcErr := validateJsonCppIntegerRange(params); rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -97,11 +94,6 @@ func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, sellOffers b
 			return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
-	if marker != "" {
-		if markerErr := validateNFTOfferMarkerSide(ctx, nftID, ledgerIndex, marker, sellOffers); markerErr != nil {
-			return nil, markerErr
-		}
-	}
 
 	result, err := fetch(ctx.Context, nftID, ledgerIndex, limit, marker)
 	if err != nil {
@@ -157,44 +149,4 @@ func buildNFTOffersResponse(nftIDHex string, result *types.NFTOffersResult, limi
 	}
 
 	return response
-}
-
-func validateNFTOfferMarkerSide(ctx *types.RpcContext, nftID [32]byte, ledgerIndex, marker string, sellOffers bool) *rpcerrors.RpcError {
-	directoryKey := keylet.NFTBuys(nftID).Key
-	if sellOffers {
-		directoryKey = keylet.NFTSells(nftID).Key
-	}
-	if directory, directoryErr := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, directoryKey, ledgerIndex); directoryErr != nil || directory == nil {
-		// Preserve the fetcher's object-not-found and ledger-error mapping when
-		// the requested offer directory is absent or cannot be read.
-		return nil
-	}
-
-	markerBytes, err := hex.DecodeString(marker)
-	if err != nil || len(markerBytes) != 32 {
-		return rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
-	}
-	var markerKey [32]byte
-	copy(markerKey[:], markerBytes)
-	entry, err := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, markerKey, ledgerIndex)
-	if err != nil {
-		if errors.Is(err, svcerr.ErrLedgerEntryNotFound) {
-			return rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
-		}
-		return nil
-	}
-	if entry == nil {
-		return rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
-	}
-	offer, err := state.ParseNFTokenOffer(entry.Node)
-	if err != nil {
-		offer, err = state.ParseNFTokenOfferLegacy(entry.Node)
-	}
-	if err != nil || offer == nil || offer.NFTokenID != nftID {
-		return rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
-	}
-	if (offer.Flags&ledgerentry.LsfSellNFToken != 0) != sellOffers {
-		return rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
-	}
-	return nil
 }
