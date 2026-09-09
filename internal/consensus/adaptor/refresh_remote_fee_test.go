@@ -9,6 +9,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/stretchr/testify/require"
 )
 
@@ -239,13 +241,18 @@ func TestRefreshRemoteFee_ValidationBeforePreferredLedgerSwitch(t *testing.T) {
 func TestRefreshRemoteFee_ValidationBeforeConsensusClose(t *testing.T) {
 	a := newTestAdaptor(t)
 	svc := a.ledgerService
+	t.Cleanup(svc.Stop)
 	ft := svc.FeeTrack()
 	parent := svc.GetClosedLedger()
 	require.NotNil(t, parent)
 	closeTime := time.Unix(1_700_000_000, 0)
 
-	probe := newTestLedgerService(t)
-	_, err := probe.AcceptConsensusResult(context.Background(), parent, nil, nil, closeTime, true)
+	probe, err := service.New(service.Config{GenesisConfig: genesis.DefaultConfig()})
+	require.NoError(t, err)
+	t.Cleanup(probe.Stop)
+	require.NoError(t, probe.Start())
+	require.NoError(t, probe.SwitchToPreferredLedger(parent))
+	_, err = probe.AcceptConsensusResult(context.Background(), parent, nil, nil, closeTime, true)
 	require.NoError(t, err)
 	expected := probe.GetClosedLedger()
 	require.NotNil(t, expected)

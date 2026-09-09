@@ -1546,7 +1546,12 @@ func TestAcquisitionWork_YieldedMissingStateDoesNotCountAsProgress(t *testing.T)
 	router.fetchTracker.Track(ledger)
 	lane := newAcquisitionWorkLane(1)
 	lane.process = func(ctx context.Context, current *inbound.Ledger, events []acquisitionWorkEvent) acquisitionWorkResult {
-		return processAcquisitionWorkWithBudget(ctx, current, events, 1)
+		// Force the yield boundary after discovery so worker scheduling cannot return a partial batch instead.
+		result := processAcquisitionWork(ctx, current, events)
+		if result.err == nil && !result.complete && !result.remove && !result.timerEscalate {
+			result.err = shamap.ErrTraversalBudget
+		}
+		return result
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	lane.start(ctx)
@@ -1556,12 +1561,14 @@ func TestAcquisitionWork_YieldedMissingStateDoesNotCountAsProgress(t *testing.T)
 		lane.stop()
 	}()
 
+	before := ledger.Snapshot()
 	require.True(t, lane.submit(ledger, acquisitionWorkEvent{
 		kind:  acquisitionWorkTimer,
 		fetch: func([32]byte) ([]byte, bool) { return nil, false },
 	}))
 	first := <-lane.results()
-	require.True(t, first.yielded)
+	require.True(t, first.yielded, "result: %+v", first)
+	require.Greater(t, ledger.Snapshot().StateMissingDiscovered, before.StateMissingDiscovered)
 	require.False(t, first.rearmTimer)
 	require.True(t, first.timerEscalate)
 	require.True(t, lane.submit(ledger, acquisitionWorkEvent{
@@ -1571,6 +1578,7 @@ func TestAcquisitionWork_YieldedMissingStateDoesNotCountAsProgress(t *testing.T)
 	router.handleAcquisitionWorkResult(first)
 
 	second := <-lane.results()
+	require.True(t, second.yielded)
 	require.False(t, second.rearmTimer)
 	require.False(t, second.timerEscalate)
 	require.Equal(t, 1, ledger.Timeouts())
