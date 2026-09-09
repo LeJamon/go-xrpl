@@ -198,4 +198,38 @@ func TestLoanPay_CalculateBaseFeeCap(t *testing.T) {
 	if got := multisignedOverpayment.CalculateBaseFee(view, cfg(true, true)); got != 6*10 {
 		t.Errorf("multisigned overpayment: got %d, want %d", got, 6*10)
 	}
+
+	loan, err := parseLoan(loanBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loan.NextPaymentDueDate = 1000
+	loanBytes, err = serializeLoan(loan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view.data[keylet.LoanByID(loanID).Key] = loanBytes
+	for _, cleanup := range []bool{false, true} {
+		for _, now := range []uint32{999, 1000, 1001} {
+			config := cfg(true, true)
+			if cleanup {
+				config.Rules = amendment.NewRules([][32]byte{
+					amendment.FeatureLendingProtocol,
+					amendment.FeatureSingleAssetVault,
+					amendment.FeatureMPTokensV1,
+					amendment.FeatureFixCleanup3_1_3,
+					amendment.FeatureFixCleanup3_2_0,
+					amendment.FeatureFixCleanup3_4_0,
+				})
+			}
+			config.ParentCloseTime = now
+			want := uint64(200)
+			if now > 1000 || now == 1000 && !cleanup {
+				want = 10
+			}
+			if got := pay.CalculateBaseFee(view, config); got != want {
+				t.Errorf("cleanup=%t time=%d: fee=%d, want %d", cleanup, now, got, want)
+			}
+		}
+	}
 }
