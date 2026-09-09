@@ -856,6 +856,27 @@ func (r *Router) resolveReplayPeer(seq uint32, preferred uint64) (uint64, bool) 
 	return peers[0], true
 }
 
+// catchupReplayBase keeps recovery on the verified branch even when an observer
+// has closed newer, noncanonical ledgers. A speculative close is not replay
+// progress. Prefer it only when the recorded network chain agrees with it.
+func (r *Router) catchupReplayBase(svc *service.Service) *ledger.Ledger {
+	closed := svc.GetClosedLedger()
+	validated := svc.GetValidatedLedger()
+	if validated == nil || closed == nil {
+		if validated != nil {
+			return validated
+		}
+		return closed
+	}
+	if validated.Sequence() >= closed.Sequence() {
+		return validated
+	}
+	if entry, ok := r.lookupSeqHash(closed.Sequence()); ok && entry.hash == closed.Hash() {
+		return closed
+	}
+	return validated
+}
+
 func (r *Router) recoveryForwardStep(
 	svc *service.Service,
 	targetSeq uint32,
@@ -865,7 +886,7 @@ func (r *Router) recoveryForwardStep(
 	if svc == nil {
 		return 0, [32]byte{}, nil, false, recovery.anchorHash != ([32]byte{})
 	}
-	parent := svc.GetClosedLedger()
+	parent := r.catchupReplayBase(svc)
 	if parent == nil || targetSeq <= parent.Sequence() {
 		return 0, [32]byte{}, nil, false, recovery.anchorHash != ([32]byte{})
 	}
@@ -904,7 +925,7 @@ func (r *Router) recoveryForwardStep(
 			if entry.parentHash != parentHash {
 				return 0, [32]byte{}, nil, false, discardAnchor
 			}
-		} else if current, ok := r.lookupSeqHash(parent.Sequence()); !ok || current.hash != parentHash {
+		} else if current, ok := r.lookupSeqHash(parent.Sequence()); (!ok || current.hash != parentHash) && !svc.IsFastLoadProvisional() {
 			return 0, [32]byte{}, nil, false, discardAnchor
 		}
 
@@ -940,7 +961,11 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 		return
 	}
 	r.reconcileStandardReplayTarget(tSeq, tHash)
-	closed := svc.GetClosedLedgerIndex()
+	closedLedger := r.catchupReplayBase(svc)
+	if closedLedger == nil {
+		return
+	}
+	closed := closedLedger.Sequence()
 	if tSeq <= closed {
 		if target.source != catchupSourceQuorum {
 			return
@@ -963,7 +988,6 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 		!aheadByMoreThan(tSeq, closed, 1) {
 		return
 	}
-	closedLedger := svc.GetClosedLedger()
 	if closedLedger != nil && tSeq-closed <= maxForwardDeltaGap &&
 		r.recoveryAnchorReachesTarget(closedLedger.Sequence(), closedLedger.Hash(), tHash) {
 		if _, replayPeerFound := r.resolveReplayPeer(closedLedger.Sequence()+1, peerHint); !replayPeerFound &&
@@ -975,7 +999,7 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 		return
 	}
 
-	if seq, hash, ok := r.forwardDeltaStep(svc, closed, tSeq); ok {
+	if seq, hash, parent, ok, _ := r.recoveryForwardStep(svc, tSeq, tHash, consensusRecovery{}); ok {
 		peer, found := r.resolveAcquisitionPeer(seq, peerHint)
 		if !found {
 			return
@@ -983,7 +1007,7 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 		if r.isBuildingLedger(seq) {
 			return
 		}
-		r.startLedgerAcquisition(seq, hash, peer)
+		r.startLedgerAcquisitionFromParent(seq, hash, peer, parent)
 		return
 	}
 	if svc.IsFastLoadProvisional() && r.forwardLinkagePending(svc, closed, tSeq) {
@@ -1040,46 +1064,6 @@ func (r *Router) forwardLinkagePending(svc *service.Service, closed, tipSeq uint
 	}
 	current, known := r.lookupSeqHash(closed)
 	return !known || current.hash == ([32]byte{})
-}
-
-// forwardDeltaStep returns the (seq, hash) for a forward one-ledger step
-// against our held closed ledger when all hold, else ok=false (deferring to
-// jump-adopt):
-//
-//   - gap to tip within maxForwardDeltaGap;
-//   - a known network hash for closed+1; and
-//   - closed+1 descends from our closed ledger (same branch) — either closed+1's
-//     recorded parentHash equals our closed hash, or the recorded hash for our
-//     closed seq equals it. A provisional fast load may also probe a parentless
-//     closed+1 hash; replay verification rejects it before apply if its header
-//     names a different parent.
-func (r *Router) forwardDeltaStep(svc *service.Service, closed, tipSeq uint32) (seq uint32, hash [32]byte, ok bool) {
-	if tipSeq-closed > maxForwardDeltaGap {
-		return 0, [32]byte{}, false
-	}
-	next := closed + 1
-	entry, known := r.lookupSeqHash(next)
-	if !known || entry.hash == ([32]byte{}) {
-		return 0, [32]byte{}, false
-	}
-	closedLedger := svc.GetClosedLedger()
-	if closedLedger == nil {
-		return 0, [32]byte{}, false
-	}
-	closedHash := closedLedger.Hash()
-
-	sameBranch := false
-	if entry.haveParent {
-		sameBranch = entry.parentHash == closedHash
-	} else if svc.IsFastLoadProvisional() {
-		sameBranch = true
-	} else if cEntry, okC := r.lookupSeqHash(closed); okC && cEntry.hash != ([32]byte{}) {
-		sameBranch = cEntry.hash == closedHash
-	}
-	if !sameBranch {
-		return 0, [32]byte{}, false
-	}
-	return next, entry.hash, true
 }
 
 // ensureCatchupAcquisition is the single funnel for gossip-driven consensus
@@ -1149,6 +1133,10 @@ func (r *Router) refreshCatchupAcquisitionPeer(il *inbound.Ledger, peerID uint64
 // layer that walks a range (e.g., backward from a peer's tip via
 // ParentHash) is a follow-up item.
 func (r *Router) startLedgerAcquisition(seq uint32, hash [32]byte, peerID uint64) bool {
+	return r.startLedgerAcquisitionFromParent(seq, hash, peerID, nil)
+}
+
+func (r *Router) startLedgerAcquisitionFromParent(seq uint32, hash [32]byte, peerID uint64, parent *ledger.Ledger) bool {
 	if seq != 0 && r.belowFloor(seq) {
 		return false
 	}
@@ -1160,7 +1148,7 @@ func (r *Router) startLedgerAcquisition(seq uint32, hash [32]byte, peerID uint64
 	if !r.canAdmitCatchupLocked(hash, maxConcurrentSpeculativeCatchup) {
 		return false
 	}
-	r.startLedgerAcquisitionLocked(seq, hash, peerID)
+	r.startLedgerAcquisitionWithParentLocked(seq, hash, peerID, parent)
 	return r.isAcquiringLocked(hash)
 }
 
@@ -1174,7 +1162,7 @@ func (r *Router) canAdmitCatchupLocked(hash [32]byte, limit int) bool {
 	return r.protectedCatchupInFlightLocked() < limit
 }
 
-func (r *Router) startLedgerAcquisitionLocked(seq uint32, hash [32]byte, peerID uint64) {
+func (r *Router) startLedgerAcquisitionWithParentLocked(seq uint32, hash [32]byte, peerID uint64, parent *ledger.Ledger) {
 	if r.catchupRetryBlocked(hash, time.Now()) {
 		return
 	}
@@ -1198,7 +1186,9 @@ func (r *Router) startLedgerAcquisitionLocked(seq uint32, hash [32]byte, peerID 
 		}
 	}
 
-	parent := r.adaptor.GetParentLedgerForReplay(seq)
+	if parent == nil {
+		parent = r.adaptor.GetParentLedgerForReplay(seq)
+	}
 	if parent != nil && r.acquisition.PeerSupportsReplay(peerID) {
 		if err := r.startReplayDeltaAcquisition(seq, hash, peerID, parent); err == nil {
 			return

@@ -1260,8 +1260,12 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 	}
 
 	producersStopped := true
+	// Storage-backed producers can be finishing a cold read when canceled.
+	// Let them drain within the overall shutdown budget; the old five-second
+	// cap could abandon a producer just before it stopped, skipping the durable
+	// checkpoint even with a generous configured checkpoint grace.
 	if r.rotator != nil {
-		completed, err := runShutdownPhaseWithin(ctx, producerShutdownGrace, "stop online delete rotator", func() error {
+		completed, err := runShutdownPhase(ctx, "stop online delete rotator", func() error {
 			r.rotator.Stop()
 			return nil
 		})
@@ -1273,7 +1277,7 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 		}
 	}
 	if r.cleaner != nil {
-		completed, err := runShutdownPhaseWithin(ctx, producerShutdownGrace, "stop ledger cleaner", func() error {
+		completed, err := runShutdownPhase(ctx, "stop ledger cleaner", func() error {
 			r.cleaner.Stop()
 			return nil
 		})
@@ -1301,7 +1305,7 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 		}
 	}
 	if r.consensus != nil {
-		completed, err := runShutdownPhaseWithin(ctx, producerShutdownGrace, "stop consensus components", r.consensus.Stop)
+		completed, err := runShutdownPhase(ctx, "stop consensus components", r.consensus.Stop)
 		producersStopped = producersStopped && completed
 		if err != nil {
 			errs = append(errs, err)
@@ -1346,7 +1350,7 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 
 	serviceStopped := true
 	if r.ledger != nil {
-		completed, err := runShutdownPhaseWithin(ctx, serviceShutdownGrace, "stop ledger service", func() error {
+		completed, err := runShutdownPhase(ctx, "stop ledger service", func() error {
 			r.ledger.Stop()
 			return nil
 		})
