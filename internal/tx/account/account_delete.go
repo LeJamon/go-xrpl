@@ -55,6 +55,14 @@ func (a *AccountDelete) CheckExtraFeatures(rules *amendment.Rules) error {
 }
 
 func (a *AccountDelete) Validate() error {
+	return a.validate(nil)
+}
+
+func (a *AccountDelete) PreflightWithRules(rules *amendment.Rules) error {
+	return a.validate(rules)
+}
+
+func (a *AccountDelete) validate(rules *amendment.Rules) error {
 	if err := a.BaseTx.Validate(); err != nil {
 		return err
 	}
@@ -64,7 +72,7 @@ func (a *AccountDelete) Validate() error {
 	if a.Account == a.Destination {
 		return ter.Errorf(ter.TemDST_IS_SRC, "cannot delete account to self")
 	}
-	if err := credential.CheckFields(a.CredentialIDs, a.credentialIDsPresent(), "Duplicate credential ID"); err != nil {
+	if err := credential.CheckFields(a.CredentialIDs, a.credentialIDsPresent(), "Duplicate credential ID", rules); err != nil {
 		return err
 	}
 	return nil

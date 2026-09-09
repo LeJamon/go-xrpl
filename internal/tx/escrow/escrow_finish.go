@@ -100,9 +100,9 @@ func (e *EscrowFinish) CheckExtraFeatures(rules *amendment.Rules) error {
 // preflightSigValidated, AFTER the signature is verified, so a mis-signed
 // EscrowFinish surfaces temINVALID rather than this temMALFORMED.
 // Reference: rippled Escrow.cpp EscrowFinish::preflightSigValidated.
-func (e *EscrowFinish) PreflightSigValidated() error {
+func (e *EscrowFinish) PreflightSigValidated(rules *amendment.Rules) error {
 	present := e.CredentialIDs != nil || e.HasField("CredentialIDs")
-	return credential.CheckFields(e.CredentialIDs, present, "Duplicate credential ID")
+	return credential.CheckFields(e.CredentialIDs, present, "Duplicate credential ID", rules)
 }
 
 // CalculateBaseFee mirrors rippled's EscrowFinish::calculateBaseFee: the
@@ -157,7 +157,7 @@ func (e *EscrowFinish) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 		if acctErr != nil {
 			return ter.TemBAD_SRC_ACCOUNT
 		}
-		if result := credential.ValidCredentials(view, accountID, e.CredentialIDs); result != ter.TesSUCCESS {
+		if result := credential.ValidCredentials(view, accountID, e.CredentialIDs, config.RequireRules()); result != ter.TesSUCCESS {
 			return result
 		}
 	}

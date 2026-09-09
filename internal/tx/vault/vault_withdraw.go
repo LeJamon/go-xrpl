@@ -52,6 +52,14 @@ func (v *VaultWithdraw) GetFlagsMask(rules *amendment.Rules) uint32 {
 }
 
 func (v *VaultWithdraw) Validate() error {
+	return v.validate(nil)
+}
+
+func (v *VaultWithdraw) PreflightWithRules(rules *amendment.Rules) error {
+	return v.validate(rules)
+}
+
+func (v *VaultWithdraw) validate(rules *amendment.Rules) error {
 	if err := v.BaseTx.Validate(); err != nil {
 		return err
 	}
@@ -79,11 +87,15 @@ func (v *VaultWithdraw) Validate() error {
 		}
 	}
 
-	return credential.CheckFields(v.CredentialIDs, v.CredentialIDs != nil || v.HasField("CredentialIDs"), "duplicate credentials")
+	return credential.CheckFieldsWithRules(v.CredentialIDs, v.CredentialIDs != nil || v.HasField("CredentialIDs"), "duplicate credentials", rules)
 }
 
 func (v *VaultWithdraw) Flatten() (map[string]any, error) {
-	return tx.ReflectFlatten(v)
+	m, err := tx.ReflectFlatten(v)
+	if err == nil && v.CredentialIDs != nil {
+		m["CredentialIDs"] = v.CredentialIDs
+	}
+	return m, err
 }
 
 func (v *VaultWithdraw) CheckExtraFeatures(rules *amendment.Rules) error {
@@ -92,10 +104,6 @@ func (v *VaultWithdraw) CheckExtraFeatures(rules *amendment.Rules) error {
 		return ter.Errorf(ter.TemDISABLED, "withdrawal credentials are disabled")
 	}
 	return nil
-}
-
-func (v *VaultWithdraw) PreflightRules(rules *amendment.Rules) error {
-	return credential.CheckFieldsWithRules(v.CredentialIDs, v.CredentialIDs != nil || v.HasField("CredentialIDs"), "duplicate credentials", rules)
 }
 
 func (v *VaultWithdraw) RequiredAmendments() [][32]byte {
@@ -177,7 +185,7 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 	if vd.WithdrawalPolicy != VaultStrategyFirstComeFirstServe {
 		return ter.TefINTERNAL
 	}
-	if res := credential.ValidCredentials(view, accountID, v.CredentialIDs); res != ter.TesSUCCESS {
+	if res := credential.ValidCredentials(view, accountID, v.CredentialIDs, config.RequireRules()); res != ter.TesSUCCESS {
 		return res
 	}
 	fix340 := config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0)
@@ -546,4 +554,11 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	}
 
 	return ter.TesSUCCESS
+}
+
+func (v *VaultWithdraw) CheckExtraFeatures(rules *amendment.Rules) error {
+	if (v.CredentialIDs != nil || v.HasField("CredentialIDs")) && (!rules.Enabled(amendment.FeatureCredentials) || !rules.Enabled(amendment.FeatureFixCleanup3_4_0)) {
+		return ter.Errorf(ter.TemDISABLED, "CredentialIDs requires Credentials and fixCleanup3_4_0")
+	}
+	return nil
 }

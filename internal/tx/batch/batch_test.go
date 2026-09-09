@@ -618,7 +618,7 @@ func TestBatchValidation(t *testing.T) {
 
 			err := tt.tx.Validate()
 			if err == nil {
-				err = tt.tx.PreflightSigValidated()
+				err = tt.tx.PreflightSigValidated(nil)
 			}
 			if tt.wantErr {
 				require.Error(t, err)
@@ -825,7 +825,7 @@ func TestBatchRequiredSignersUseInnerAuthorizers(t *testing.T) {
 		b.SetFlags(BatchFlagAllOrNothing)
 
 		require.NoError(t, b.Validate())
-		require.ErrorIs(t, b.PreflightSigValidated(), ErrBatchMissingSigner)
+		require.ErrorIs(t, b.PreflightSigValidated(nil), ErrBatchMissingSigner)
 
 		b.BatchSigners = []BatchSigner{{BatchSigner: BatchSignerData{
 			Account:           testSigner2,
@@ -833,7 +833,7 @@ func TestBatchRequiredSignersUseInnerAuthorizers(t *testing.T) {
 			BatchTxnSignature: "AA",
 		}}}
 		require.NoError(t, b.Validate())
-		require.NoError(t, b.PreflightSigValidated())
+		require.NoError(t, b.PreflightSigValidated(nil))
 	})
 }
 
@@ -848,7 +848,7 @@ func TestBatchSignersMustBeStrictlyOrdered(t *testing.T) {
 	}
 
 	require.NoError(t, b.Validate())
-	require.ErrorIs(t, b.PreflightSigValidated(), ErrBatchUnsortedSigner)
+	require.ErrorIs(t, b.PreflightSigValidated(nil), ErrBatchUnsortedSigner)
 }
 
 // TestCalculateMinimumFee_MultiSignedInner pins

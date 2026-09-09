@@ -21,7 +21,7 @@ import (
 func TestCheckFieldsTreatsHexCaseAsTheSameCredential(t *testing.T) {
 	lower := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 	upper := "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789"
-	if result := CheckFields([]string{lower, upper}, true, "duplicate credential ID"); result == nil || !strings.Contains(result.Error(), "temMALFORMED") {
+	if result := CheckFields([]string{lower, upper}, true, "duplicate credential ID", nil); result == nil || !strings.Contains(result.Error(), "temMALFORMED") {
 		t.Fatalf("CheckFields() = %v, want temMALFORMED", result)
 	}
 }
@@ -286,5 +286,37 @@ func TestVerifyValidDomainDeletionFailureAmendmentArms(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, exists)
 		})
+	}
+}
+
+func TestCleanupZeroCredentialGuards(t *testing.T) {
+	for _, cleanup := range []bool{false, true} {
+		rules := amendment.NewRulesBuilder().Enable(amendment.FeatureCredentials).Build()
+		if cleanup {
+			rules = amendment.NewRulesBuilder().Enable(amendment.FeatureCredentials).Enable(amendment.FeatureFixCleanup3_4_0).Build()
+		}
+		for _, zero := range []string{"0", strings.Repeat("0", 64)} {
+			err := CheckFields([]string{zero}, true, "duplicate", rules)
+			if cleanup {
+				require.ErrorContains(t, err, "temMALFORMED")
+			} else {
+				require.NoError(t, err)
+			}
+			view := newMapView()
+			want := ter.TecBAD_CREDENTIALS
+			if cleanup {
+				want = ter.TecINTERNAL
+			}
+			require.Equal(t, want, ValidCredentials(view, [20]byte{1}, []string{zero}, rules))
+			ctx := &tx.ApplyContext{View: view, Config: tx.EngineConfig{Rules: rules}}
+			expired, result := RemoveExpiredCredentials(ctx, []string{zero})
+			require.False(t, expired)
+			if cleanup {
+				require.Equal(t, ter.TecINTERNAL, result)
+			} else {
+				require.Equal(t, ter.TesSUCCESS, result)
+			}
+			require.Empty(t, view.data)
+		}
 	}
 }

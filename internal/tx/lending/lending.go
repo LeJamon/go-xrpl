@@ -198,6 +198,14 @@ func (l *LoanBrokerCoverWithdraw) GetFlagsMask(rules *amendment.Rules) uint32 {
 }
 
 func (l *LoanBrokerCoverWithdraw) Validate() error {
+	return l.validate(nil)
+}
+
+func (l *LoanBrokerCoverWithdraw) PreflightWithRules(rules *amendment.Rules) error {
+	return l.validate(rules)
+}
+
+func (l *LoanBrokerCoverWithdraw) validate(rules *amendment.Rules) error {
 	if err := l.BaseTx.Validate(); err != nil {
 		return err
 	}
@@ -213,20 +221,22 @@ func (l *LoanBrokerCoverWithdraw) Validate() error {
 	if l.Destination != "" && isZeroAccount(l.Destination) {
 		return ter.Errorf(ter.TemMALFORMED, "Destination cannot be zero")
 	}
-	return credential.CheckFields(l.CredentialIDs, l.CredentialIDs != nil || l.HasField("CredentialIDs"), "duplicate credentials")
+	return credential.CheckFieldsWithRules(l.CredentialIDs, l.CredentialIDs != nil || l.HasField("CredentialIDs"), "duplicate credentials", rules)
 }
 
-func (l *LoanBrokerCoverWithdraw) Flatten() (map[string]any, error) { return tx.ReflectFlatten(l) }
+func (l *LoanBrokerCoverWithdraw) Flatten() (map[string]any, error) {
+	m, err := tx.ReflectFlatten(l)
+	if err == nil && l.CredentialIDs != nil {
+		m["CredentialIDs"] = l.CredentialIDs
+	}
+	return m, err
+}
 func (l *LoanBrokerCoverWithdraw) CheckExtraFeatures(rules *amendment.Rules) error {
 	if (l.CredentialIDs != nil || l.HasField("CredentialIDs")) &&
 		(!rules.Enabled(amendment.FeatureCredentials) || !rules.Enabled(amendment.FeatureFixCleanup3_4_0)) {
 		return ter.Errorf(ter.TemDISABLED, "withdrawal credentials are disabled")
 	}
 	return nil
-}
-
-func (l *LoanBrokerCoverWithdraw) PreflightRules(rules *amendment.Rules) error {
-	return credential.CheckFieldsWithRules(l.CredentialIDs, l.CredentialIDs != nil || l.HasField("CredentialIDs"), "duplicate credentials", rules)
 }
 
 func (l *LoanBrokerCoverWithdraw) RequiredAmendments() [][32]byte { return requiredLending() }
@@ -519,3 +529,10 @@ func (l *LoanPay) Validate() error {
 
 func (l *LoanPay) Flatten() (map[string]any, error) { return tx.ReflectFlatten(l) }
 func (l *LoanPay) RequiredAmendments() [][32]byte   { return requiredLending() }
+
+func (l *LoanBrokerCoverWithdraw) CheckExtraFeatures(rules *amendment.Rules) error {
+	if (l.CredentialIDs != nil || l.HasField("CredentialIDs")) && (!rules.Enabled(amendment.FeatureCredentials) || !rules.Enabled(amendment.FeatureFixCleanup3_4_0)) {
+		return ter.Errorf(ter.TemDISABLED, "CredentialIDs requires Credentials and fixCleanup3_4_0")
+	}
+	return nil
+}

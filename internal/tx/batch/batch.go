@@ -474,7 +474,7 @@ func (b *Batch) Validate() error {
 
 // PreflightSigValidated checks exact signer coverage only after all cryptographic
 // signatures have passed, matching Batch::preflightSigValidated.
-func (b *Batch) PreflightSigValidated() error {
+func (b *Batch) PreflightSigValidated(rules *amendment.Rules) error {
 	return b.validateBatchSigners(b.requiredBatchSigners())
 }
 

@@ -50,6 +50,14 @@ func (p *PaymentChannelClaim) TxType() tx.Type {
 
 // Reference: rippled PayChan.cpp PayChanClaim::preflight()
 func (p *PaymentChannelClaim) Validate() error {
+	return p.validate(nil)
+}
+
+func (p *PaymentChannelClaim) PreflightWithRules(rules *amendment.Rules) error {
+	return p.validate(rules)
+}
+
+func (p *PaymentChannelClaim) validate(rules *amendment.Rules) error {
 	if err := p.BaseTx.Validate(); err != nil {
 		return err
 	}
@@ -135,7 +143,7 @@ func (p *PaymentChannelClaim) Validate() error {
 	// after the Signature block. Use HasField to detect an empty array that binary
 	// parsing leaves as a nil Go slice. Reference: rippled credentials::checkFields.
 	present := p.CredentialIDs != nil || p.HasField("CredentialIDs")
-	if err := credential.CheckFields(p.CredentialIDs, present, "duplicates in credentials"); err != nil {
+	if err := credential.CheckFields(p.CredentialIDs, present, "duplicates in credentials", rules); err != nil {
 		return err
 	}
 
