@@ -470,7 +470,7 @@ func TestAMMClawbackRejectsRoundedLPWithdrawalAboveHolderBalance(t *testing.T) {
 func setupAMMClawbackHolderExhaustionPool(t *testing.T, fixAMMv1_3, largeMantissa bool) (*amm.AMMTestEnv, *jtx.Account) {
 	t.Helper()
 
-	env := amm.NewAMMTestEnv(t)
+	env := newPinnedAMMTestEnv(t)
 	if !largeMantissa {
 		env.DisableFeature("SingleAssetVault")
 		env.DisableFeature("LendingProtocol")
