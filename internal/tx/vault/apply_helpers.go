@@ -71,6 +71,32 @@ func canAddHolding(view tx.LedgerView, asset tx.Asset) ter.Result {
 	return ter.TesSUCCESS
 }
 
+func holdingExists(view tx.LedgerView, account [20]byte, asset tx.Asset) bool {
+	if asset.IsNative() {
+		return true
+	}
+	if asset.IsMPT() {
+		id, ok := assetMPTID(asset)
+		if !ok {
+			return false
+		}
+		if mptIDIssuer(id) == account {
+			return true
+		}
+		exists, _ := view.Exists(keylet.MPTokenByID(id, account))
+		return exists
+	}
+	issuer, err := state.DecodeAccountID(asset.Issuer)
+	if err != nil {
+		return false
+	}
+	if issuer == account {
+		return true
+	}
+	exists, _ := view.Exists(keylet.Line(account, issuer, asset.Currency))
+	return exists
+}
+
 func canTransfer(view tx.LedgerView, asset tx.Asset, from, to [20]byte, waiveMPTCanTransfer bool) ter.Result {
 	return mptutil.CanTransferAsset(view, asset, from, to, waiveMPTCanTransfer)
 }
@@ -265,8 +291,17 @@ func addEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset, p
 	if accountID == issuerID {
 		return 0, ter.TesSUCCESS
 	}
+	fix340 := ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0)
+	if fix340 && holdingExists(ctx.View, accountID, asset) {
+		return 0, ter.TecDUPLICATE
+	}
 	if tx.IsGlobalFrozen(ctx.View, asset.Issuer) {
 		return 0, ter.TecFROZEN
+	}
+	if fix340 {
+		if result := canAddHoldingIssue(ctx.View, asset); result != ter.TesSUCCESS {
+			return 0, result
+		}
 	}
 
 	lineKey := keylet.Line(issuerID, accountID, asset.Currency)

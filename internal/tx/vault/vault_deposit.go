@@ -313,6 +313,22 @@ func (v *VaultDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		return result
 	}
 
+	if rules.Enabled(amendment.FeatureFixCleanup3_4_0) {
+		assetsDepositedN, result = clampToAssetsTotalScale(assetsTotalN, assetsDepositedN, asset.IsNative() || asset.IsMPT())
+		if result != ter.TesSUCCESS {
+			return result
+		}
+		if !asset.IsNative() && !asset.IsMPT() {
+			balance, err := actualAssetHolding(ctx.View, ctx.AccountID, asset, rules)
+			if err != nil {
+				return ter.TefINTERNAL
+			}
+			if debitIsNonZeroDust(balance, assetsDepositedN, false) {
+				return ter.TecPRECISION_LOSS
+			}
+		}
+	}
+
 	// Update the vault totals.
 	newTotal := assetsTotalN.Add(assetsDepositedN)
 	availN, _ := vaultNumberForRules(vd.AssetsAvailable, rules)

@@ -173,6 +173,10 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 	if vd.WithdrawalPolicy != VaultStrategyFirstComeFirstServe {
 		return ter.TefINTERNAL
 	}
+	fix340 := config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0)
+	if fix340 && tx.IsPseudoAccountID(view, dstID) {
+		return ter.TecPSEUDO_ACCOUNT
+	}
 
 	if res := credential.ValidCredentials(view, accountID, v.CredentialIDs); res != ter.TesSUCCESS {
 		return res
@@ -207,6 +211,26 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 	}
 	if res := requireAuth(view, asset, dstID, authType, config.ParentCloseTime); res != ter.TesSUCCESS {
 		return res
+	}
+	if fix340 && dstID == accountID && !holdingExists(view, dstID, asset) {
+		if result := canAddHolding(view, asset); result != ter.TesSUCCESS {
+			return result
+		}
+	}
+	issuer, _ := vaultAssetIssuer(vd)
+	if fix340 && vd.Flags&VaultFlagPrivate != 0 && dstID != accountID && dstID != issuer {
+		issuance, err := readMPTIssuance(view, vd.ShareMPTID)
+		if err != nil || issuance == nil {
+			return ter.TefINTERNAL
+		}
+		if issuance.DomainID == nil {
+			return ter.TecNO_AUTH
+		}
+		for _, id := range [][20]byte{accountID, dstID} {
+			if result := mptutil.ValidDomain(view, *issuance.DomainID, id, config.ParentCloseTime); result != ter.TesSUCCESS {
+				return result
+			}
+		}
 	}
 	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
 		if res := mptutil.CheckWithdrawFreeze(view, vd.Account, accountID, dstID, asset); res != ter.TesSUCCESS {
@@ -275,9 +299,9 @@ func assetWithdrawalAmounts(
 	lossUnrealized,
 	shareTotal,
 	assets state.XRPLNumber,
-	integral bool,
+	integral, truncate bool,
 ) (sharesRedeemed, assetsWithdrawn state.XRPLNumber) {
-	sharesRedeemed = assetsToSharesWithdraw(assetsTotal, lossUnrealized, shareTotal, assets, false)
+	sharesRedeemed = assetsToSharesWithdraw(assetsTotal, lossUnrealized, shareTotal, assets, truncate)
 	assetsWithdrawn = sharesToAssetsWithdraw(
 		assetsTotal,
 		lossUnrealized,
@@ -343,19 +367,21 @@ func (v *VaultWithdraw) withdrawalAmounts(
 		if err != nil {
 			return assetsTotalN, availN, assetsWithdrawnN, 0, fix320, ter.TefINTERNAL
 		}
-		sharesRedeemedN, assetsWithdrawnN = assetWithdrawalAmounts(
-			assetsTotalN,
-			lossN,
-			shareTotalN,
-			assetsN,
-			integral,
-		)
+		sharesRedeemedN, assetsWithdrawnN = assetWithdrawalAmounts(assetsTotalN, lossN, shareTotalN, assetsN, integral, rules.Enabled(amendment.FeatureFixCleanup3_4_0))
 		if sharesRedeemedN.IsZero() {
 			return assetsTotalN, availN, assetsWithdrawnN, 0, fix320, ter.TecPRECISION_LOSS
 		}
 	}
 
 	shares = uint64(sharesRedeemedN.ToInt64WithMode(state.RoundTowardsZero))
+	if rules.Enabled(amendment.FeatureFixCleanup3_4_0) && shares != issuance.OutstandingAmount {
+		if v.amountIsShares(vd) && assetsWithdrawnN.IsZero() && !assetsTotalN.Sub(lossN).IsZero() {
+			return assetsTotalN, availN, assetsWithdrawnN, shares, fix320, ter.TecPRECISION_LOSS
+		}
+		if debitIsNonZeroDust(assetsTotalN, assetsWithdrawnN, integral) {
+			return assetsTotalN, availN, assetsWithdrawnN, shares, fix320, ter.TecPRECISION_LOSS
+		}
+	}
 	return assetsTotalN, availN, assetsWithdrawnN, shares, fix320, ter.TesSUCCESS
 }
 
@@ -430,6 +456,13 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecINSUFFICIENT_FUNDS
 	}
 
+	if rules.Enabled(amendment.FeatureFixCleanup3_4_0) && shares != issuance.OutstandingAmount && assetsWithdrawnN.Signum() > 0 {
+		assetsWithdrawnN, result = clampToAssetsTotalScale(assetsTotalN, assetsWithdrawnN.Negate(), asset.IsNative() || asset.IsMPT())
+		if result != ter.TesSUCCESS {
+			return result
+		}
+	}
+
 	if fix320 && shares == issuance.OutstandingAmount {
 		// Burning every outstanding share drains the vault: pay out all remaining
 		// available assets and leave no dust behind. Reaching here with a non-zero
@@ -469,7 +502,7 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 	if derr != nil {
 		return ter.TefINTERNAL
 	}
-	if dstID == ctx.AccountID {
+	if dstID == ctx.AccountID && (assetsWithdrawnN.Signum() > 0 || !rules.Enabled(amendment.FeatureFixCleanup3_4_0)) {
 		if res := addWithdrawDestinationHolding(ctx, asset); res != ter.TesSUCCESS {
 			return res
 		}
