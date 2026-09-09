@@ -22,7 +22,7 @@ func newPendingStateBaseCandidate(t *testing.T) (*Service, *ledger.Ledger, []*le
 	repositories := newTestRepositories(t, ctx)
 	writer := newFastLoadCheckpointService(t, tracked, repositories, true)
 	require.NoError(t, writer.Start())
-	var persisted []*ledger.Ledger
+	persisted := make([]*ledger.Ledger, 0, 2)
 	for range 2 {
 		_, err := writer.AcceptLedger(ctx)
 		require.NoError(t, err)
