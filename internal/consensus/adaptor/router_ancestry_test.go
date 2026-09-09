@@ -206,6 +206,7 @@ func TestRouter_HeaderDiscoveryRetriesUnavailableReply(t *testing.T) {
 			InfoType:   message.LedgerInfoBase,
 			Error:      message.ReplyErrorNoLedger,
 			ErrorSet:   true,
+			Nodes:      []message.LedgerNode{{}},
 		}),
 	})
 

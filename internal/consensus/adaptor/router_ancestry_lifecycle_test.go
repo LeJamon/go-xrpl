@@ -20,7 +20,11 @@ func TestHeaderDiscoveryLateCanceledReplyDoesNotChargePeer(t *testing.T) {
 		target = buildAlternativeReplaySuccessor(t, parent, time.Second)
 		parent = target.ledger
 	}
-	require.True(t, r.invalidFutureLedgerSequence(target.seq))
+	svc := r.adaptor.LedgerService()
+	signTime := base.CloseTime()
+	svc.SetValidatedLedgerAt(base.Sequence(), base.Hash(), signTime)
+	svc.SetValidatedLedgerAgeClock(func() time.Time { return signTime.Add(90 * time.Second) })
+	require.False(t, r.invalidFutureLedgerSequence(target.seq))
 	startTestHeaderDiscovery(t, r, base.Sequence(), target, 7, catchupSourceQuorum)
 	r.cancelHeaderDiscovery()
 	sendTestHeaderReply(t, r, 7, target)
@@ -30,7 +34,7 @@ func TestHeaderDiscoveryLateCanceledReplyDoesNotChargePeer(t *testing.T) {
 	require.False(t, published)
 }
 
-func TestRequestedRecoveryTransactionReplyBeyondValidationWindow(t *testing.T) {
+func TestRequestedRecoveryTransactionReplyRespectsValidationWindow(t *testing.T) {
 	r, sender := makeRouterWithBadDataRecorder(t)
 	seq := r.adaptor.LedgerService().GetValidatedLedgerIndex() + 30
 	paymentService := closedLedgerWithPayment(t)
@@ -61,14 +65,21 @@ func TestRequestedRecoveryTransactionReplyBeyondValidationWindow(t *testing.T) {
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID: 7, Type: message.TypeLedgerData, Payload: encodePayload(t, data),
 	})
-	require.Empty(t, sender.getBadDataCalls())
-	data.LedgerSeq++
-	r.handleMessage(&peermanagement.InboundMessage{
-		PeerID: 7, Type: message.TypeLedgerData, Payload: encodePayload(t, data),
-	})
 	bad := sender.getBadDataCalls()
 	require.Len(t, bad, 1)
 	require.Equal(t, "ledger-data-sequence", bad[0].reason)
+	require.False(t, il.IsComplete())
+	svc := r.adaptor.LedgerService()
+	base := svc.GetValidatedLedger()
+	signTime := base.CloseTime()
+	svc.SetValidatedLedgerAt(base.Sequence(), base.Hash(), signTime)
+	svc.SetValidatedLedgerAgeClock(func() time.Time { return signTime.Add(90 * time.Second) })
+	require.False(t, r.invalidFutureLedgerSequence(seq))
+	r.handleMessage(&peermanagement.InboundMessage{
+		PeerID: 7, Type: message.TypeLedgerData, Payload: encodePayload(t, data),
+	})
+	require.Len(t, sender.getBadDataCalls(), 1)
+	require.True(t, il.IsComplete())
 }
 
 func TestHeaderDiscoveryReplacesWeakerAcquiredBranch(t *testing.T) {

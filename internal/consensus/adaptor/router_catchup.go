@@ -3041,12 +3041,8 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) bool {
 		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-type")
 		return false
 	}
-	if r.handleHeaderDiscoveryReply(ld, uint64(msg.PeerID)) {
-		return false
-	}
 	if (ld.InfoType == message.LedgerInfoTsCandidate && ld.LedgerSeq != 0) ||
-		(ld.InfoType != message.LedgerInfoTsCandidate &&
-			r.invalidFutureLedgerSequence(ld.LedgerSeq) && !r.allowTrustedRecoveryLedgerData(ld)) {
+		(ld.InfoType != message.LedgerInfoTsCandidate && r.invalidFutureLedgerSequence(ld.LedgerSeq)) {
 		r.logger.Warn("invalid ledger_data ledger sequence", "peer", msg.PeerID, "seq", ld.LedgerSeq)
 		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-sequence")
 		return false
@@ -3076,6 +3072,9 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) bool {
 			"nodes", len(ld.Nodes),
 		)
 		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-count")
+		return false
+	}
+	if r.handleHeaderDiscoveryReply(ld, uint64(msg.PeerID)) {
 		return false
 	}
 	if ld.InfoType == message.LedgerInfoAsNode || ld.InfoType == message.LedgerInfoTxNode {

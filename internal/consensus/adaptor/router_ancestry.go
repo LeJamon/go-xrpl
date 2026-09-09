@@ -7,7 +7,6 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
-	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
@@ -157,33 +156,6 @@ func (r *Router) headerDiscoveryNeeded(base *ledger.Ledger, targetSeq uint32, ta
 	}
 }
 
-// Requested recovery data may exceed the normal future-sequence window when
-// its exact ledger hash is supported by the current quorum target.
-func (r *Router) allowTrustedRecoveryLedgerData(ld *message.LedgerData) bool {
-	if ld == nil || len(ld.LedgerHash) != 32 ||
-		(ld.InfoType != message.LedgerInfoBase && ld.InfoType != message.LedgerInfoTxNode && ld.InfoType != message.LedgerInfoAsNode) {
-		return false
-	}
-	var hash [32]byte
-	copy(hash[:], ld.LedgerHash)
-	il := r.fetchTracker.Find(hash)
-	if il == nil || il.Reason() != inbound.ReasonConsensus || il.Seq() != ld.LedgerSeq {
-		return false
-	}
-	target := r.credibleCatchupFrontier()
-	if target.source != catchupSourceQuorum || target.seq < ld.LedgerSeq {
-		return false
-	}
-	if target.seq == ld.LedgerSeq {
-		return target.hash == hash
-	}
-	entry, ok := r.lookupSeqHash(ld.LedgerSeq)
-	if !ok || entry.hash != hash || entry.source < seqHashSourceAcquired {
-		return false
-	}
-	return r.recoveryAnchorReachesTarget(ld.LedgerSeq, hash, target.hash)
-}
-
 // A peer-only pivot may already be collecting transactions when quorum
 // validation supplies the real target. Retire that pivot before a header walk
 // is admitted so its speculative anchor cannot win adoption while the walk is
@@ -235,6 +207,9 @@ func (r *Router) maybeStartHeaderParentDiscovery(target catchupTarget, peerHint 
 		target.seq-base.Sequence() > maxForwardDeltaGap ||
 		!r.headerDiscoveryNeeded(base, target.seq, target.hash) {
 		return false
+	}
+	if r.invalidFutureLedgerSequence(target.seq) {
+		return true
 	}
 	if peerHint == 0 {
 		peerHint = target.peerID

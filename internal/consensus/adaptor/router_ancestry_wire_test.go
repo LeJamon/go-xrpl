@@ -67,3 +67,79 @@ func TestHeaderDiscoveryWireHeaderForms(t *testing.T) {
 		})
 	}
 }
+
+func TestHeaderDiscoveryWireEnvelope(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		age        time.Duration
+		gap        int
+		emptyError bool
+		wantReason string
+	}{
+		{name: "fresh at sequence limit", age: 10 * time.Second, gap: 10},
+		{name: "fresh beyond sequence limit", age: 10 * time.Second, gap: 11, wantReason: "ledger-data-sequence"},
+		{name: "stale beyond sequence limit", age: 11 * time.Second, gap: 11},
+		{name: "empty unavailable reply", age: 90 * time.Second, gap: 1, emptyError: true, wantReason: "ledger-data-count"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, sender := makeRouterWithBadDataRecorder(t)
+			svc := r.adaptor.LedgerService()
+			base := svc.GetClosedLedger()
+			svc.SetValidatedLedgerAgeClock(func() time.Time { return base.CloseTime().Add(tc.age) })
+			require.Equal(t, tc.age, svc.GetValidatedLedgerAge())
+			parent := base
+			var target standardReplayTestLink
+			for range tc.gap {
+				target = buildAlternativeReplaySuccessor(t, parent, time.Second)
+				parent = target.ledger
+			}
+			startTestHeaderDiscovery(t, r, base.Sequence(), target, 7, catchupSourceQuorum)
+			data := &message.LedgerData{
+				LedgerHash: target.hash[:], LedgerSeq: target.seq, InfoType: message.LedgerInfoBase,
+				Nodes: []message.LedgerNode{{NodeData: target.response.LedgerHeader}},
+			}
+			if tc.emptyError {
+				data.Nodes = nil
+				data.Error = message.ReplyErrorNoLedger
+				data.ErrorSet = true
+			}
+			r.handleMessage(&peermanagement.InboundMessage{
+				PeerID: 7, Type: message.TypeLedgerData, Payload: encodePayload(t, data),
+			})
+			bad := sender.getBadDataCalls()
+			if tc.wantReason != "" {
+				require.Len(t, bad, 1)
+				require.Equal(t, tc.wantReason, bad[0].reason)
+				require.Len(t, sender.headerRequests(), 1)
+				require.Empty(t, r.headerDiscovery.headers)
+			} else {
+				require.Empty(t, bad)
+				require.Contains(t, r.headerDiscovery.headers, target.seq)
+				require.Len(t, sender.headerRequests(), 2)
+			}
+			require.Equal(t, base.Hash(), svc.GetValidatedLedger().Hash())
+		})
+	}
+}
+
+func TestHeaderDiscoveryWaitsForValidationWindow(t *testing.T) {
+	r, _, sender, svc := makeRouter(t)
+	base := svc.GetClosedLedger()
+	parent := base
+	var target standardReplayTestLink
+	for range 30 {
+		target = buildAlternativeReplaySuccessor(t, parent, time.Second)
+		parent = target.ledger
+	}
+	r.recordValidationCatchupTarget(target.seq, target.hash, 7, catchupSourceQuorum)
+	svc.SetValidatedLedgerAgeClock(func() time.Time { return base.CloseTime().Add(10 * time.Second) })
+	r.armCatchupTowardTargetWithPeer(7)
+	require.Nil(t, r.headerDiscovery)
+	require.Empty(t, sender.headerRequests())
+	require.Empty(t, sender.legacyCalls())
+	svc.SetValidatedLedgerAgeClock(func() time.Time { return base.CloseTime().Add(11 * time.Second) })
+	r.armCatchupTowardTargetWithPeer(7)
+	require.NotNil(t, r.headerDiscovery)
+	require.Len(t, sender.headerRequests(), 1)
+	require.Empty(t, sender.legacyCalls())
+}
