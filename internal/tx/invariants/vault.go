@@ -541,7 +541,11 @@ func (c *vvChecker) finalizeSet(afterVault vvVault, updatedShares vvShares, befo
 		return "set must not change assets outstanding"
 	}
 	if afterVault.assetsMaximum.Signum() > 0 && afterVault.assetsTotal.Cmp(afterVault.assetsMaximum) > 0 {
-		return "set assets outstanding must not exceed assets maximum"
+		_, suppliedMaximum := c.flat["AssetsMaximum"]
+		if c.rules == nil || !c.rules.Enabled(amendment.FeatureFixCleanup3_4_0) || suppliedMaximum ||
+			beforeVault.assetsMaximum.Cmp(afterVault.assetsMaximum) != 0 {
+			return "set assets outstanding must not exceed assets maximum"
+		}
 	}
 	if beforeVault.assetsAvailable.Cmp(afterVault.assetsAvailable) != 0 {
 		return "set must not change assets available"

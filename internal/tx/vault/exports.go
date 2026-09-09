@@ -2,7 +2,6 @@ package vault
 
 import (
 	"bytes"
-	"fmt"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -113,27 +112,7 @@ func CanAddHolding(view tx.LedgerView, asset tx.Asset) ter.Result {
 // HoldingExists reports whether accountID already has a holding for asset.
 // Issuers and native XRP always have an implicit holding.
 func HoldingExists(view tx.LedgerView, accountID [20]byte, asset tx.Asset) (bool, error) {
-	if asset.IsNative() {
-		return true, nil
-	}
-	if asset.IsMPT() {
-		id, ok := assetMPTID(asset)
-		if !ok {
-			return false, fmt.Errorf("invalid MPT issuance ID")
-		}
-		if mptIDIssuer(id) == accountID {
-			return true, nil
-		}
-		return view.Exists(keylet.MPTokenByID(id, accountID))
-	}
-	issuerID, err := state.DecodeAccountID(asset.Issuer)
-	if err != nil {
-		return false, err
-	}
-	if issuerID == accountID {
-		return true, nil
-	}
-	return view.Exists(keylet.Line(accountID, issuerID, asset.Currency))
+	return holdingExists(view, accountID, asset)
 }
 
 // AddEmptyHolding gives accountID a zero-balance holding for asset, returning the

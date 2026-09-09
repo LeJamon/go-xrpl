@@ -24,6 +24,24 @@ func newCashLendingEnv(t *testing.T) *jtx.TestEnv {
 	return env
 }
 
+func setupCashXRPVault(t *testing.T, env *jtx.TestEnv, owner *jtx.Account, deposit uint64) string {
+	t.Helper()
+	sequence := env.Seq(owner)
+	kind := vault.VaultKindClosedEnded
+	subscription := env.NowRipple() + 1
+	redemption := subscription + 1000
+	create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: "XRP"})
+	create.Fee = reserveIncrement
+	create.VaultKind = &kind
+	create.SubscriptionDate = &subscription
+	create.RedemptionDate = &redemption
+	jtx.RequireTxSuccess(t, env.Submit(create))
+	id := vaultID(owner, sequence)
+	jtx.RequireTxSuccess(t, env.Submit(vault.NewVaultDeposit(owner.Address, id, tx.NewXRPAmount(int64(deposit)))))
+	env.CloseToParentCloseTime(subscription + 1)
+	return id
+}
+
 func TestCashBasisLoanSetAndLoanPayXRP(t *testing.T) {
 	env := newCashLendingEnv(t)
 	owner := jtx.NewAccount("cash-owner")
@@ -32,7 +50,7 @@ func TestCashBasisLoanSetAndLoanPayXRP(t *testing.T) {
 	env.FundAmount(borrower, 10_000_000_000)
 
 	vaultSequence := env.Seq(owner)
-	vaultID := setupXRPVault(t, env, owner, 10_000_000)
+	vaultID := setupCashXRPVault(t, env, owner, 10_000_000)
 	vaultKey := keylet.Vault(owner.AccountID(), vaultSequence)
 	createdVault := decodeLendingEntry(t, env, vaultKey)
 	assertLendingField(t, "Vault", createdVault, "LEVersion", int(vault.VaultVersionCashBasis))
