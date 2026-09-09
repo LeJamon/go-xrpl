@@ -66,6 +66,19 @@ type loanDefaultFreezeExemption struct {
 	issuer   string
 	broker   string
 	vault    string
+	mptID    [24]byte
+	hasMPT   bool
+}
+
+func loanManageDefaultFields(tx Transaction) (map[string]any, bool) {
+	if tx == nil || tx.TxType() != txcore.TypeLoanManage {
+		return nil, false
+	}
+	fields, err := tx.Flatten()
+	if err != nil || u32Field(fields, "Flags")&lending.TfLoanDefault == 0 {
+		return nil, false
+	}
+	return fields, true
 }
 
 func checkTransfersNotFrozen(
@@ -283,11 +296,11 @@ func checkTransfersNotFrozen(
 }
 
 func findLoanDefaultFreezeExemption(tx Transaction, view ReadView, rules *amendment.Rules) *loanDefaultFreezeExemption {
-	if rules == nil || view == nil || !rules.Enabled(amendment.FeatureFixCleanup3_4_0) || tx.TxType() != txcore.TypeLoanManage {
+	if rules == nil || view == nil || !rules.Enabled(amendment.FeatureFixCleanup3_4_0) {
 		return nil
 	}
-	fields, err := tx.Flatten()
-	if err != nil || u32Field(fields, "Flags")&lending.TfLoanDefault == 0 {
+	fields, ok := loanManageDefaultFields(tx)
+	if !ok {
 		return nil
 	}
 	loanID, ok := fields["LoanID"].(string)
@@ -339,6 +352,20 @@ func findLoanDefaultFreezeExemption(tx Transaction, view ReadView, rules *amendm
 	asset, ok := vault.Asset.(map[string]any)
 	if !ok {
 		return nil
+	}
+	if mptIDString, isMPT := asset["mpt_issuance_id"].(string); isMPT {
+		mptID, err := hex.DecodeString(mptIDString)
+		if err != nil || len(mptID) != 24 || broker.Account == "" || vault.Account == "" {
+			return nil
+		}
+		var id [24]byte
+		copy(id[:], mptID)
+		return &loanDefaultFreezeExemption{
+			broker: broker.Account,
+			vault:  vault.Account,
+			mptID:  id,
+			hasMPT: true,
+		}
 	}
 	currency, currencyOK := asset["currency"].(string)
 	issuer, issuerOK := asset["issuer"].(string)

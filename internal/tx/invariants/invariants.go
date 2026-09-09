@@ -184,6 +184,9 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 		func() *InvariantViolation {
 			return checkTransfersNotFrozen(tx, entries, view, rules, numberContext...)
 		},
+		func() *InvariantViolation {
+			return checkLoanDefaultMPTTransfer(tx, result, entries, view, rules)
+		},
 		func() *InvariantViolation { return checkNoBadOffers(entries) },
 		func() *InvariantViolation { return checkNoZeroEscrow(entries) },
 		func() *InvariantViolation {
