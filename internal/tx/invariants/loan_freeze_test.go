@@ -26,7 +26,7 @@ func TestLoanDefaultFreezeExemptionIsScoped(t *testing.T) {
 			fixture := newLoanFreezeFixture(t, "USD", tc.lineFlags, tc.issuerFlags)
 			rules := amendment.NewRules([][32]byte{amendment.FeatureDeepFreeze, amendment.FeatureFixCleanup3_4_0})
 			defaultTx := vvTx{txType: protocol.TxTypeLoanManage, flat: map[string]any{
-				"Flags":  uint32(tfLoanDefault),
+				"Flags":  tfLoanDefault,
 				"LoanID": fixture.loanID,
 			}}
 			if violation := checkTransfersNotFrozen(defaultTx, fixture.entries, fixture.view, rules); violation != nil {
@@ -48,7 +48,7 @@ func TestLoanDefaultFreezeExemptionIsScoped(t *testing.T) {
 		fixture := newLoanFreezeFixtureWithLine(t, "EUR", "USD", state.LsfHighFreeze, 0)
 		rules := amendment.NewRules([][32]byte{amendment.FeatureDeepFreeze, amendment.FeatureFixCleanup3_4_0})
 		defaultTx := vvTx{txType: protocol.TxTypeLoanManage, flat: map[string]any{
-			"Flags":  uint32(tfLoanDefault),
+			"Flags":  tfLoanDefault,
 			"LoanID": fixture.loanID,
 		}}
 		if violation := checkTransfersNotFrozen(defaultTx, fixture.entries, fixture.view, rules); violation == nil {
@@ -152,4 +152,20 @@ func loanFreezeLineEntry(t *testing.T, account, issuer [20]byte, currency, befor
 		return result
 	}
 	return InvariantEntry{Key: keylet.Line(account, issuer, currency).Key, EntryType: entry.TypeRippleState, Before: encode(before), After: encode(after)}
+}
+
+func TestLoanDefaultDoesNotExemptUnrelatedAccount(t *testing.T) {
+	fixture := newLoanFreezeFixture(t, "USD", state.LsfHighFreeze, 0)
+	var issuer, other [20]byte
+	for i := range issuer {
+		issuer[i] = 0xf0
+		other[i] = 0x30
+	}
+	fixture.entries = append(fixture.entries, loanFreezeLineEntry(t, other, issuer, "USD", "100", "90", state.LsfHighFreeze))
+	fixture.view.data[keylet.Account(other).Key] = mustSerializeAccount(t, &state.AccountRoot{Account: state.EncodeAccountIDSafe(other), Balance: 1000000})
+	rules := amendment.NewRules([][32]byte{amendment.FeatureDeepFreeze, amendment.FeatureFixCleanup3_4_0})
+	transaction := vvTx{txType: protocol.TxTypeLoanManage, flat: map[string]any{"Flags": tfLoanDefault, "LoanID": fixture.loanID}}
+	if violation := checkTransfersNotFrozen(transaction, fixture.entries, fixture.view, rules); violation == nil {
+		t.Fatal("unrelated frozen holder bypassed freeze invariant")
+	}
 }
