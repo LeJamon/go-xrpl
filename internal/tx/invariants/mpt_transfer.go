@@ -13,7 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-type mptTransferChange struct {
+type mptInvariantTransferChange struct {
 	before    uint64
 	beforeSet bool
 	after     uint64
@@ -63,8 +63,9 @@ func checkValidMPTTransfer(tx Transaction, result Result, entries []InvariantEnt
 		parentCloseTime = provider.ParentCloseTime()
 	}
 	viewForMPT := mptInvariantView{ReadView: view, rules: rules, parentCloseTime: parentCloseTime}
+	loanDefault := findLoanDefaultFreezeExemption(tx, view, rules)
 
-	changes := make(map[[24]byte]map[[20]byte]*mptTransferChange)
+	changes := make(map[[24]byte]map[[20]byte]*mptInvariantTransferChange)
 	pseudoBefore := make(map[[20]byte]bool)
 	pseudoSeen := make(map[[20]byte]bool)
 	deletedAuthorized := make(map[[32]byte]bool)
@@ -94,12 +95,12 @@ func checkValidMPTTransfer(tx Transaction, result Result, entries []InvariantEnt
 			}
 			byHolder := changes[token.MPTokenIssuanceID]
 			if byHolder == nil {
-				byHolder = make(map[[20]byte]*mptTransferChange)
+				byHolder = make(map[[20]byte]*mptInvariantTransferChange)
 				changes[token.MPTokenIssuanceID] = byHolder
 			}
 			change := byHolder[token.Account]
 			if change == nil {
-				change = &mptTransferChange{}
+				change = &mptInvariantTransferChange{}
 				byHolder[token.Account] = change
 			}
 			if before {
@@ -155,7 +156,7 @@ func checkValidMPTTransfer(tx Transaction, result Result, entries []InvariantEnt
 		}
 		if issuanceRaw == nil {
 			for _, change := range byHolder {
-				if change.afterSet && change.before != change.after {
+				if !change.deleted && change.afterSet && change.before != change.after {
 					return invalidMPTTransfer("orphaned MPToken balance changed")
 				}
 			}
@@ -185,7 +186,7 @@ func checkValidMPTTransfer(tx Transaction, result Result, entries []InvariantEnt
 			} else {
 				senders++
 			}
-			if mptutil.IsFrozen(viewForMPT, issuanceID, account) ||
+			if (!loanDefaultMPTFreezeExempt(loanDefault, issuanceID, account) && mptutil.IsFrozen(viewForMPT, issuanceID, account)) ||
 				!mptTransferAuthorized(viewForMPT, issuanceID, issuer, account, issuance.Flags&entry.LsfMPTRequireAuth != 0, pseudoBefore, pseudoSeen, deletedAuthorized, change) {
 				invalid = true
 			}
@@ -215,7 +216,7 @@ func mptTransferAuthorized(
 	pseudoBefore map[[20]byte]bool,
 	pseudoSeen map[[20]byte]bool,
 	deletedAuthorized map[[32]byte]bool,
-	change *mptTransferChange,
+	change *mptInvariantTransferChange,
 ) bool {
 	if account == issuer || (pseudoSeen[account] && pseudoBefore[account]) {
 		return true
@@ -300,4 +301,17 @@ func sameMPTAsset(a, b Asset) bool {
 
 func invalidMPTTransfer(message string) *InvariantViolation {
 	return &InvariantViolation{Name: "ValidMPTTransfer", Message: message}
+}
+
+func loanDefaultMPTFreezeExempt(exemption *loanDefaultFreezeExemption, id [24]byte, account [20]byte) bool {
+	if exemption == nil || !exemption.hasMPT || exemption.mptID != id {
+		return false
+	}
+	for _, address := range []string{exemption.broker, exemption.vault} {
+		accountID, err := state.DecodeAccountID(address)
+		if err == nil && accountID == account {
+			return true
+		}
+	}
+	return false
 }

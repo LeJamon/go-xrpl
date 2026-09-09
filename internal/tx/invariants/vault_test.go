@@ -946,7 +946,10 @@ func TestValidVault_DirectCheckWithoutFeeContextDoesNotCreditDestination(t *test
 		acct:   ownerAddr,
 		flat:   map[string]any{"Destination": destinationAddr},
 	}
-	violation := CheckInvariants(tx, TesSUCCESS, 10, 10, entries, stubView{}, amendment.NewRules([][32]byte{
+	view := mapView{data: map[[32]byte][]byte{
+		keylet.MPTIssuance(shareMPTID).Key: vvCraftIssuance(t, pseudo, 1, 90),
+	}}
+	violation := CheckInvariants(tx, TesSUCCESS, 10, 10, entries, view, amendment.NewRules([][32]byte{
 		amendment.FeatureSingleAssetVault,
 		amendment.FeatureFixCleanup3_2_0,
 		amendment.FeatureFixCleanup3_4_0,

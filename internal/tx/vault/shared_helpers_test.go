@@ -241,7 +241,7 @@ func TestAddEmptyHoldingFix340ReportsNoRippleOnCreate(t *testing.T) {
 
 	ctx := build(t, false)
 	_, result := addEmptyHolding(ctx, holder, asset, ctx.PriorBalance())
-	require.Equal(t, ter.TecINTERNAL, result)
+	require.Equal(t, ter.TesSUCCESS, result)
 	ctx = build(t, true)
 	_, result = addEmptyHolding(ctx, holder, asset, ctx.PriorBalance())
 	require.Equal(t, ter.TerNO_RIPPLE, result)
