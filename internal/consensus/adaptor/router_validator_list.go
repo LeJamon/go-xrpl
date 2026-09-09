@@ -44,19 +44,7 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 		return
 	}
 
-	// Empty-blobs guard. An empty collection is the heaviest tier of
-	// protocol violation.
-	//
-	// IncPeerBadData does not yet expose tiered fee weights: every label
-	// increments the same counter. Two labels are used to make the tier
-	// difference visible in metrics so operators can wire alerting on
-	// heavy-tier abuse separately, even before the underlying weight
-	// machinery exists:
-	//   - "vl-coll-heavy-no-blobs"   → heaviest tier
-	//   - "vl-coll-no-blobs"          → general counter retained for
-	//                                   backwards-compatible dashboards
 	if len(coll.Blobs) == 0 {
-		r.gossip.IncPeerBadData(uint64(msg.PeerID), "vl-coll-heavy-no-blobs")
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), "vl-coll-no-blobs")
 		return
 	}

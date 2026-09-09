@@ -245,13 +245,9 @@ func TestRvl_HandleVLC_NoBlobs(t *testing.T) {
 		Payload: encodePayload(t, coll),
 	})
 	calls := rs.getBadDataCalls()
-	require.Len(t, calls, 2)
-	reasons := map[string]bool{}
-	for _, c := range calls {
-		reasons[c.reason] = true
-	}
-	assert.True(t, reasons["vl-coll-heavy-no-blobs"])
-	assert.True(t, reasons["vl-coll-no-blobs"])
+	require.Len(t, calls, 1)
+	assert.Equal(t, uint64(9), calls[0].peerID)
+	assert.Equal(t, "vl-coll-no-blobs", calls[0].reason)
 }
 
 func TestRvl_HandleVLC_MalformedPublisherManifest(t *testing.T) {
