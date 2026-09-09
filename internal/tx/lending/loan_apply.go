@@ -297,10 +297,11 @@ func (l *LoanManage) associateEntities(ctx *tx.ApplyContext, loanKey, brokerKey,
 }
 
 func (l *LoanManage) impairLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, loan *loanData, vaultKey keylet.Keylet, v *vault.VaultLending) ter.Result {
-	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && !lmath.IsPaymentLate(
+	fixCleanup340 := ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0)
+	if fixCleanup340 && !lmath.IsPaymentLate(
 		ctx.Config.ParentCloseTime,
 		loan.NextPaymentDueDate,
-		ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0),
+		fixCleanup340,
 	) {
 		return ter.TecTOO_SOON
 	}
@@ -318,7 +319,7 @@ func (l *LoanManage) impairLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, loa
 		return res
 	}
 	loan.Flags |= LsfLoanImpaired
-	if !hasExpired(ctx.Config.ParentCloseTime, loan.NextPaymentDueDate) {
+	if !fixCleanup340 && !lmath.IsPaymentLate(ctx.Config.ParentCloseTime, loan.NextPaymentDueDate, fixCleanup340) {
 		loan.NextPaymentDueDate = ctx.Config.ParentCloseTime
 	}
 	return updateLoan(ctx, loanKey, loan)
