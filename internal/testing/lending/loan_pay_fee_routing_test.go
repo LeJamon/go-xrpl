@@ -2,6 +2,7 @@ package lending_test
 
 import (
 	"encoding/hex"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -17,7 +18,16 @@ const loanPayServiceFee = int64(100)
 
 func setupLoanPayFeeRouting(t *testing.T, kind string, mptCreateFlags ...uint32) (*loanSetAssetFixture, string, *jtx.Account) {
 	t.Helper()
-	f := newLoanSetAssetFixture(t, kind, mptCreateFlags...)
+	return setupLoanPayFeeRoutingWithFixture(t, newLoanSetAssetFixture(t, kind, mptCreateFlags...), mptCreateFlags...)
+}
+
+func setupCashLoanPayFeeRouting(t *testing.T, kind string, mptCreateFlags ...uint32) (*loanSetAssetFixture, string, *jtx.Account) {
+	t.Helper()
+	return setupLoanPayFeeRoutingWithFixture(t, newCashLoanSetAssetFixture(t, kind, mptCreateFlags...), mptCreateFlags...)
+}
+
+func setupLoanPayFeeRoutingWithFixture(t *testing.T, f *loanSetAssetFixture, _ ...uint32) (*loanSetAssetFixture, string, *jtx.Account) {
+	t.Helper()
 	f.createHolding(f.owner)
 
 	loanSet := lending.NewLoanSet(f.borrower.Address, f.brokerID, "1000")
@@ -165,6 +175,54 @@ func TestLoanPayDeepFrozenBrokerOwnerAndPseudoFails(t *testing.T) {
 
 			jtx.RequireTxClaimed(t, f.env.Submit(loanPayFee(f, loanID)), test.want)
 			requireLoanPayFeeBalances(t, f, pseudo, 0, 0)
+		})
+	}
+}
+
+func TestCashLoanPayDeepFrozenRollback(t *testing.T) {
+	for _, test := range []struct {
+		kind           string
+		mptCreateFlags []uint32
+		freeze         func(*testing.T, *loanSetAssetFixture, *jtx.Account)
+		want           string
+	}{
+		{
+			kind: "IOU",
+			freeze: func(t *testing.T, f *loanSetAssetFixture, pseudo *jtx.Account) {
+				deepFreezeLoanSetTrustLine(t, f, f.owner.AccountID())
+				deepFreezeLoanSetTrustLine(t, f, pseudo.AccountID())
+			},
+			want: jtx.TecFROZEN,
+		},
+		{
+			kind:           "MPT",
+			mptCreateFlags: []uint32{mpttest.TfMPTCanLock},
+			freeze: func(_ *testing.T, f *loanSetAssetFixture, pseudo *jtx.Account) {
+				f.token.Set(mpttest.SetOpts{Holder: f.owner, Flags: mpttest.TfMPTLock})
+				f.token.Set(mpttest.SetOpts{Holder: pseudo, Flags: mpttest.TfMPTLock})
+			},
+			want: jtx.TecLOCKED,
+		},
+	} {
+		t.Run(test.kind, func(t *testing.T) {
+			f, loanID, pseudo := setupCashLoanPayFeeRouting(t, test.kind, test.mptCreateFlags...)
+			test.freeze(t, f, pseudo)
+			loanKey := keylet.Loan(f.brokerKey, 1)
+			brokerKey := keylet.LoanBrokerByID(f.brokerKey)
+			beforeLoan := decodeLendingEntry(t, f.env, loanKey)
+			beforeBroker := decodeLendingEntry(t, f.env, brokerKey)
+			beforeVault := decodeLendingEntry(t, f.env, f.vaultKey)
+
+			jtx.RequireTxClaimed(t, f.env.Submit(loanPayFee(f, loanID)), test.want)
+			if got := decodeLendingEntry(t, f.env, loanKey); !reflect.DeepEqual(got, beforeLoan) {
+				t.Fatalf("Loan changed after failed cash LoanPay: before=%v after=%v", beforeLoan, got)
+			}
+			if got := decodeLendingEntry(t, f.env, brokerKey); !reflect.DeepEqual(got, beforeBroker) {
+				t.Fatalf("LoanBroker changed after failed cash LoanPay: before=%v after=%v", beforeBroker, got)
+			}
+			if got := decodeLendingEntry(t, f.env, f.vaultKey); !reflect.DeepEqual(got, beforeVault) {
+				t.Fatalf("Vault changed after failed cash LoanPay: before=%v after=%v", beforeVault, got)
+			}
 		})
 	}
 }

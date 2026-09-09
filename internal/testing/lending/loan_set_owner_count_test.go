@@ -20,6 +20,8 @@ type loanSetAssetFixture struct {
 	env                     *jtx.TestEnv
 	issuer, owner, borrower *jtx.Account
 	asset                   tx.Asset
+	vaultID                 string
+	vaultKey                keylet.Keylet
 	brokerID                string
 	brokerKey               [32]byte
 	holdingKey              func(*jtx.Account) keylet.Keylet
@@ -33,6 +35,16 @@ type loanSetAssetFixture struct {
 func newLoanSetAssetFixture(t *testing.T, kind string, mptCreateFlags ...uint32) *loanSetAssetFixture {
 	t.Helper()
 	env := newLendingEnv(t)
+	return newLoanSetAssetFixtureWithEnv(t, env, kind, mptCreateFlags...)
+}
+
+func newCashLoanSetAssetFixture(t *testing.T, kind string, mptCreateFlags ...uint32) *loanSetAssetFixture {
+	t.Helper()
+	return newLoanSetAssetFixtureWithEnv(t, newCashLendingEnv(t), kind, mptCreateFlags...)
+}
+
+func newLoanSetAssetFixtureWithEnv(t *testing.T, env *jtx.TestEnv, kind string, mptCreateFlags ...uint32) *loanSetAssetFixture {
+	t.Helper()
 	issuer := jtx.NewAccount(kind + "-issuer")
 	owner := jtx.NewAccount(kind + "-owner")
 	depositor := jtx.NewAccount(kind + "-depositor")
@@ -129,6 +141,8 @@ func newLoanSetAssetFixture(t *testing.T, kind string, mptCreateFlags ...uint32)
 		owner:         owner,
 		borrower:      borrower,
 		asset:         asset,
+		vaultID:       vaultID,
+		vaultKey:      keylet.Vault(owner.AccountID(), vaultSeq),
 		brokerID:      brokerID,
 		brokerKey:     brokerKey,
 		holdingKey:    holdingKey,
