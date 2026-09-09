@@ -357,6 +357,7 @@ type Router struct {
 	headerDiscoveryMu         sync.Mutex
 	headerDiscovery           *headerDiscoverySession
 	headerDiscoveryGeneration uint64
+	retiredHeaderRequests     map[[32]byte]time.Time
 }
 
 type routerNetworkConfig struct {

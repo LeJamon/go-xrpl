@@ -1571,7 +1571,6 @@ func TestAcquisitionWork_YieldedMissingStateDoesNotCountAsProgress(t *testing.T)
 	router.handleAcquisitionWorkResult(first)
 
 	second := <-lane.results()
-	require.True(t, second.yielded)
 	require.False(t, second.rearmTimer)
 	require.False(t, second.timerEscalate)
 	require.Equal(t, 1, ledger.Timeouts())

@@ -81,11 +81,8 @@ type KVDatabase struct {
 	identityMu  sync.Mutex
 	mutationMu  sync.RWMutex
 
-	durableSnapshotMu        sync.Mutex
-	durableSnapshotRefs      uint64
-	durableSnapshotAcquiring bool
-	durableSnapshotReleasing bool
-	durableSnapshotChanged   chan struct{}
+	durableSnapshotMu   sync.Mutex
+	durableSnapshotRefs uint64
 
 	pruneMu       sync.RWMutex
 	writeMu       sync.Mutex
@@ -116,9 +113,8 @@ func NewKVDatabase(store kvstore.KeyValueStore, config DatabaseConfig) (*KVDatab
 	}
 
 	database := &KVDatabase{
-		store:                  store,
-		syncGate:               make(chan struct{}, 1),
-		durableSnapshotChanged: make(chan struct{}),
+		store:    store,
+		syncGate: make(chan struct{}, 1),
 	}
 	database.syncGate <- struct{}{}
 	if config.PositiveCache.Enabled {

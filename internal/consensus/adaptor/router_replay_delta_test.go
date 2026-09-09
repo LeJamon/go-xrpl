@@ -1133,17 +1133,6 @@ func TestSwitchedLedgerHistoryFloorFallsBackFromForkedClosedLedger(t *testing.T)
 // autoArmTarget returns the hash and seq of the single auto-armed
 // acquisition. seq is 0 when the replay-delta path was taken (hash-
 // keyed on the wire). Caller asserts totalAutoArmCalls == 1 first.
-func autoArmTarget(rs *recordingSender) ([32]byte, uint32) {
-	rs.mu.Lock()
-	defer rs.mu.Unlock()
-	if len(rs.replayDeltaCalls) == 1 {
-		return rs.replayDeltaCalls[0].hash, 0
-	}
-	if len(rs.legacyBaseCalls) == 1 {
-		return rs.legacyBaseCalls[0].hash, rs.legacyBaseCalls[0].seq
-	}
-	return [32]byte{}, 0
-}
 
 // A quorum target beyond the closed ledger must arm acquisition directly from
 // the validation lifecycle, even when the ledger is not yet available locally.

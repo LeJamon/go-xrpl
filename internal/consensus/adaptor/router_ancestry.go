@@ -50,7 +50,6 @@ type headerDiscoverySession struct {
 	attempts      uint16
 	pending       bool
 	terminal      bool
-	startedAt     time.Time
 	deadline      time.Time
 	lastSentAt    time.Time
 	excludedPeers map[uint64]struct{}
@@ -93,6 +92,7 @@ func (r *Router) startHeaderParentDiscovery(
 			// A completed fallback or ledger switch moved the replay anchor.
 			// Retire the old terminal session so a later outage gets a fresh
 			// bounded budget; a moving target alone must not reset a failed walk.
+			r.rememberHeaderRequestsLocked(current)
 			r.headerDiscoveryGeneration++
 			r.headerDiscovery = nil
 		} else {
@@ -116,7 +116,6 @@ func (r *Router) startHeaderParentDiscovery(
 		nextSeq:       targetSeq,
 		nextHash:      targetHash,
 		peerID:        peerHint,
-		startedAt:     now,
 		deadline:      now.Add(headerDiscoveryDeadline),
 		excludedPeers: make(map[uint64]struct{}),
 		headers:       make(map[uint32]header.LedgerHeader, targetSeq-baseSeq),
@@ -124,6 +123,7 @@ func (r *Router) startHeaderParentDiscovery(
 	r.headerDiscovery = current
 	r.headerDiscoveryMu.Unlock()
 
+	r.cancelFrozenPivotForHeaderDiscovery()
 	if err := r.issueHeaderDiscoveryRequest(current.generation); err != nil {
 		r.headerDiscoveryRequestFailed(current.generation, err)
 		r.retryHeaderDiscovery(current.generation)
@@ -145,36 +145,29 @@ func (r *Router) headerDiscoveryNeeded(base *ledger.Ledger, targetSeq uint32, ta
 		return false
 	}
 	parentHash := base.Hash()
-	for seq := base.Sequence() + 1; seq <= targetSeq; seq++ {
+	for seq := base.Sequence() + 1; ; seq++ {
 		entry, ok := r.lookupSeqHash(seq)
 		if !ok || entry.hash == ([32]byte{}) || !entry.haveParent || entry.parentHash != parentHash {
 			return true
 		}
-		if seq == targetSeq && entry.hash != targetHash {
-			return true
+		if seq == targetSeq {
+			return entry.hash != targetHash
 		}
 		parentHash = entry.hash
 	}
-	return false
 }
 
-// allowHeaderDiscoveryLedgerData narrows the future-sequence exception to a
-// transaction-only acquisition that was explicitly admitted by a trusted
-// target and whose exact hash is already established by the completed header
-// walk. Generic ledger requests and unsolicited future replies retain the
-// normal age/sequence guard.
-func (r *Router) allowHeaderDiscoveryLedgerData(ld *message.LedgerData) bool {
-	if ld == nil || len(ld.LedgerHash) != 32 || ld.InfoType != message.LedgerInfoBase {
+// Requested recovery data may exceed the normal future-sequence window when
+// its exact ledger hash is supported by the current quorum target.
+func (r *Router) allowTrustedRecoveryLedgerData(ld *message.LedgerData) bool {
+	if ld == nil || len(ld.LedgerHash) != 32 ||
+		(ld.InfoType != message.LedgerInfoBase && ld.InfoType != message.LedgerInfoTxNode && ld.InfoType != message.LedgerInfoAsNode) {
 		return false
 	}
 	var hash [32]byte
 	copy(hash[:], ld.LedgerHash)
-	entry, ok := r.lookupSeqHash(ld.LedgerSeq)
-	if !ok || entry.hash != hash || entry.source < seqHashSourceAcquired {
-		return false
-	}
 	il := r.fetchTracker.Find(hash)
-	if il == nil || il.Reason() != inbound.ReasonConsensus || !il.TransactionOnly() {
+	if il == nil || il.Reason() != inbound.ReasonConsensus || il.Seq() != ld.LedgerSeq {
 		return false
 	}
 	target := r.credibleCatchupFrontier()
@@ -184,6 +177,10 @@ func (r *Router) allowHeaderDiscoveryLedgerData(ld *message.LedgerData) bool {
 	if target.seq == ld.LedgerSeq {
 		return target.hash == hash
 	}
+	entry, ok := r.lookupSeqHash(ld.LedgerSeq)
+	if !ok || entry.hash != hash || entry.source < seqHashSourceAcquired {
+		return false
+	}
 	return r.recoveryAnchorReachesTarget(ld.LedgerSeq, hash, target.hash)
 }
 
@@ -191,19 +188,18 @@ func (r *Router) allowHeaderDiscoveryLedgerData(ld *message.LedgerData) bool {
 // validation supplies the real target. Retire that pivot before a header walk
 // is admitted so its speculative anchor cannot win adoption while the walk is
 // proving the target's ancestry.
-func (r *Router) cancelSupersededFrozenPivotForHeaderDiscovery(targetHash [32]byte) bool {
+func (r *Router) cancelFrozenPivotForHeaderDiscovery() {
 	r.replayCommitMu.Lock()
 	r.acquisitionMu.Lock()
-	if !r.standardReplay.active || r.standardReplay.pivotHash == targetHash {
+	if !r.standardReplay.active {
 		r.acquisitionMu.Unlock()
 		r.replayCommitMu.Unlock()
-		return false
+		return
 	}
 	retired := r.cancelStandardReplayPipelineLocked()
 	r.acquisitionMu.Unlock()
 	r.replayCommitMu.Unlock()
 	r.retireStandardReplay(retired)
-	return true
 }
 
 // maybeStartHeaderParentDiscovery is the common admission path used by
@@ -246,20 +242,7 @@ func (r *Router) maybeStartHeaderParentDiscovery(target catchupTarget, peerHint 
 	if !r.startHeaderParentDiscovery(base, target.seq, target.hash, peerHint, target.source) {
 		return false
 	}
-	r.cancelSupersededFrozenPivotForHeaderDiscovery(target.hash)
 	return true
-}
-
-// headerDiscoveryTargetStillTrusted checks the target while the discovery
-// session lock is held. A newer trusted target may supersede the walk and will
-// be re-armed after completion; a peer-only or withdrawn target invalidates it.
-func (r *Router) headerDiscoveryTargetStillTrusted(current *headerDiscoverySession) bool {
-	if current == nil || !trustedHeaderDiscoverySource(current.targetSource) {
-		return false
-	}
-	r.catchupMu.Lock()
-	defer r.catchupMu.Unlock()
-	return r.headerDiscoveryTargetStillTrustedLocked(current)
 }
 
 // Caller holds catchupMu.
@@ -332,7 +315,15 @@ func (r *Router) issueHeaderDiscoveryRequest(generation uint64) error {
 
 	r.headerDiscoveryMu.Lock()
 	current = r.headerDiscovery
-	if current == nil || current.generation != generation || current.terminal {
+	now = time.Now()
+	if current == nil || current.generation != generation || current.terminal ||
+		current.nextSeq != seq || current.nextHash != hash {
+		r.headerDiscoveryMu.Unlock()
+		return errHeaderDiscoveryUnavailable
+	}
+	if !current.deadline.IsZero() && !now.Before(current.deadline) {
+		current.terminal = true
+		current.pending = false
 		r.headerDiscoveryMu.Unlock()
 		return errHeaderDiscoveryUnavailable
 	}
@@ -434,30 +425,43 @@ func (r *Router) tickHeaderDiscovery(now time.Time) {
 
 func (r *Router) cancelHeaderDiscovery() {
 	r.headerDiscoveryMu.Lock()
+	r.rememberHeaderRequestsLocked(r.headerDiscovery)
 	r.headerDiscoveryGeneration++
 	r.headerDiscovery = nil
 	r.headerDiscoveryMu.Unlock()
 }
 
-// retireHeaderDiscoveryForRecovery releases a terminal walk once recovery has
-// produced a new local anchor. A failed walk keeps its bounded budget across
-// repeated status updates, but it must not prevent a later outage from
-// starting a fresh walk after a ledger completion or branch switch.
-func (r *Router) retireHeaderDiscoveryForRecovery(seq uint32, hash [32]byte) {
-	if seq == 0 || hash == ([32]byte{}) {
+func (r *Router) rememberHeaderRequestsLocked(current *headerDiscoverySession) {
+	if current == nil {
 		return
 	}
-	r.headerDiscoveryMu.Lock()
-	current := r.headerDiscovery
-	if current == nil ||
-		seq < current.baseSeq ||
-		(seq == current.baseSeq && hash == current.baseHash) {
-		r.headerDiscoveryMu.Unlock()
-		return
+	if r.retiredHeaderRequests == nil {
+		r.retiredHeaderRequests = make(map[[32]byte]time.Time)
 	}
-	r.headerDiscoveryGeneration++
-	r.headerDiscovery = nil
-	r.headerDiscoveryMu.Unlock()
+	expires := time.Now().Add(time.Minute)
+	r.retiredHeaderRequests[current.nextHash] = expires
+	for _, h := range current.headers {
+		r.retiredHeaderRequests[h.Hash] = expires
+	}
+	for len(r.retiredHeaderRequests) > headerDiscoveryMaxRequests {
+		var oldest [32]byte
+		oldestExpiry := expires
+		for hash, expiry := range r.retiredHeaderRequests {
+			if !expiry.After(oldestExpiry) {
+				oldest, oldestExpiry = hash, expiry
+			}
+		}
+		delete(r.retiredHeaderRequests, oldest)
+	}
+}
+
+func (r *Router) retiredHeaderRequestLocked(hash [32]byte) bool {
+	expires, known := r.retiredHeaderRequests[hash]
+	if known && !time.Now().Before(expires) {
+		delete(r.retiredHeaderRequests, hash)
+		return false
+	}
+	return known
 }
 
 func (r *Router) headerDiscoveryPeerDisconnected(peerID uint64) {
@@ -487,17 +491,20 @@ func (current *headerDiscoverySession) headerHashSeen(hash [32]byte) bool {
 }
 
 func (r *Router) handleHeaderDiscoveryReply(ld *message.LedgerData, peerID uint64) bool {
-	if ld == nil || ld.InfoType != message.LedgerInfoBase || len(ld.LedgerHash) != 32 {
+	if ld == nil || ld.HasRequestCookie() || ld.InfoType != message.LedgerInfoBase || len(ld.LedgerHash) != 32 {
 		return false
 	}
 	var responseHash [32]byte
 	copy(responseHash[:], ld.LedgerHash)
+	activeAcquisition := r.fetchTracker.Find(responseHash) != nil
 
 	r.headerDiscoveryMu.Lock()
 	current := r.headerDiscovery
 	if current == nil || current.terminal {
+		known := r.retiredHeaderRequestLocked(responseHash) ||
+			current != nil && (current.nextHash == responseHash || current.headerHashSeen(responseHash))
 		r.headerDiscoveryMu.Unlock()
-		return false
+		return known && !activeAcquisition
 	}
 	expected := current.nextHash
 	expectedPeer := current.peerID
@@ -506,7 +513,7 @@ func (r *Router) handleHeaderDiscoveryReply(ld *message.LedgerData, peerID uint6
 	generation := current.generation
 	baseSeq := current.baseSeq
 	baseHash := current.baseHash
-	seen := current.headerHashSeen(responseHash)
+	seen := current.headerHashSeen(responseHash) || responseHash != expected && r.retiredHeaderRequestLocked(responseHash) && !activeAcquisition
 	expired := !current.deadline.IsZero() && !time.Now().Before(current.deadline)
 	current.pending = current.pending && !expired
 	if expired {
@@ -524,13 +531,10 @@ func (r *Router) handleHeaderDiscoveryReply(ld *message.LedgerData, peerID uint6
 		return true
 	}
 	if !pending || expectedPeer == 0 || expectedPeer != peerID {
-		return false
+		return responseHash == expected && !activeAcquisition
 	}
-
 	if responseHash != expected {
-		r.retryHeaderDiscoveryPeer(generation, peerID,
-			fmt.Errorf("peer returned unexpected ledger hash %x while requesting %x", responseHash[:8], expected[:8]))
-		return true
+		return false
 	}
 
 	if ld.HasError() {
@@ -755,7 +759,8 @@ func (r *Router) finishHeaderDiscovery(generation uint64, peerID uint64) {
 	// the next arm rather than reported as a failed partially-published walk.
 	localAnchor := r.localSeqHashAnchor()
 	r.catchupMu.Lock()
-	trusted := r.headerDiscoveryTargetStillTrustedLocked(current)
+	trusted := r.headerDiscoveryTargetStillTrustedLocked(current) &&
+		(current.deadline.IsZero() || time.Now().Before(current.deadline))
 	committed := false
 	if trusted {
 		r.seqHashMu.Lock()
@@ -777,6 +782,7 @@ func (r *Router) finishHeaderDiscovery(generation uint64, peerID uint64) {
 
 	baseSeq := current.baseSeq
 	targetSeq := current.targetSeq
+	r.rememberHeaderRequestsLocked(current)
 	r.headerDiscovery = nil
 	r.headerDiscoveryMu.Unlock()
 

@@ -37,6 +37,8 @@ func (r *Router) beginFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint
 	if baseCtx == nil {
 		baseCtx = context.Background()
 	}
+	baseCtx, cancelBase := context.WithTimeout(baseCtx, time.Second)
+	defer cancelBase()
 	if r.adaptor != nil {
 		if svc := r.adaptor.LedgerService(); svc != nil {
 			root, release, ok, err := svc.AcquireValidatedStateBase(baseCtx)

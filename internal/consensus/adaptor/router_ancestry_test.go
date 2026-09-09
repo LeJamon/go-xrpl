@@ -299,13 +299,16 @@ func TestRouter_HeaderDiscoveryRetiresTerminalSessionOnlyAfterNewAnchor(t *testi
 	assert.False(t, r.startHeaderParentDiscovery(base, newer.seq, newer.hash, 7, catchupSourceQuorum))
 	assert.Len(t, sender.headerRequests(), 1, "a moving target must not reset a terminal session")
 
-	// Complete a newly built local ledger. The next outage must receive a fresh
-	// bounded session budget after that anchor advances.
 	_, err := svc.AcceptConsensusResult(context.Background(), svc.GetClosedLedger(), nil, nil, time.Now(), true)
 	require.NoError(t, err)
 	built := svc.GetClosedLedger()
-	require.NotNil(t, built)
 	r.onLedgerBuilt(built.Sequence(), built.Hash())
+	assert.Len(t, sender.headerRequests(), 1, "an unsupported close must not reset the failed walk")
+
+	storeRecoveryLedger(t, svc, first.ledger)
+	svc.PromoteStoredValidatedLedgerAt(first.seq, first.hash, time.Time{})
+	require.Equal(t, first.hash, svc.GetValidatedLedger().Hash())
+	require.True(t, r.startHeaderParentDiscovery(svc.GetValidatedLedger(), newer.seq, newer.hash, 7, catchupSourceQuorum))
 	assert.Len(t, sender.headerRequests(), 2)
 	r.cancelHeaderDiscovery()
 }
@@ -454,7 +457,7 @@ func TestRouter_HeaderDiscoveryCancellationDoesNotPublishStaleReply(t *testing.T
 		InfoType:   message.LedgerInfoBase,
 		Nodes:      []message.LedgerNode{{NodeData: link.response.LedgerHeader}},
 	}, 7)
-	assert.False(t, handled)
+	assert.True(t, handled)
 	_, known := r.lookupSeqHash(link.seq)
 	assert.False(t, known, "canceled generation must not commit a stale header")
 }

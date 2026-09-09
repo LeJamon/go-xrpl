@@ -386,21 +386,7 @@ func (r *Router) recordSeqHashFrom(
 
 	r.seqHashMu.Lock()
 	defer r.seqHashMu.Unlock()
-	r.recordSeqHashFromLocked(seq, hash, parentHash, haveParent, source, localAnchor)
-}
 
-// recordSeqHashFromLocked is the map update used by both individual evidence
-// callbacks and an ancestry walk. The caller holds seqHashMu.
-func (r *Router) recordSeqHashFromLocked(
-	seq uint32,
-	hash, parentHash [32]byte,
-	haveParent bool,
-	source seqHashSource,
-	localAnchor uint32,
-) {
-	if seq == 0 || hash == ([32]byte{}) {
-		return
-	}
 	if localAnchor > r.seqHashAnchor {
 		r.seqHashAnchor = localAnchor
 	}
@@ -453,20 +439,6 @@ func (r *Router) recordSeqHashFromLocked(
 	r.pruneSeqHashLocked()
 }
 
-// recordAcquiredSeqHashChain validates all existing entries while holding the
-// sequence-map lock, then publishes the complete walk as one transaction. A
-// concurrent trusted entry can therefore reject the walk before any element
-// is visible to replay policy.
-func (r *Router) recordAcquiredSeqHashChain(headers []header.LedgerHeader) bool {
-	if len(headers) == 0 {
-		return true
-	}
-	localAnchor := r.localSeqHashAnchor()
-	r.seqHashMu.Lock()
-	defer r.seqHashMu.Unlock()
-	return r.recordAcquiredSeqHashChainLocked(headers, localAnchor)
-}
-
 // Caller holds seqHashMu.
 func (r *Router) recordAcquiredSeqHashChainLocked(
 	headers []header.LedgerHeader,
@@ -491,18 +463,30 @@ func (r *Router) recordAcquiredSeqHashChainLocked(
 			return false
 		}
 	}
+	baseSeq := headers[0].LedgerIndex - 1
+	baseHash := headers[0].ParentHash
+	base := r.seqHash[baseSeq]
+	if base.hash != ([32]byte{}) && base.hash != baseHash && base.source >= seqHashSourceValidation {
+		return false
+	}
+	if base.hash != baseHash {
+		base = ledgerHashEntry{hash: baseHash}
+	}
+	base.source = max(base.source, seqHashSourceAcquired)
+	r.seqHash[baseSeq] = base
+	for _, h := range headers {
+		e := r.seqHash[h.LedgerIndex]
+		if e.hash != h.Hash {
+			e = ledgerHashEntry{hash: h.Hash}
+		}
+		e.source = max(e.source, seqHashSourceAcquired)
+		e.parentHash = h.ParentHash
+		e.haveParent = true
+		e.parentFrom = max(e.parentFrom, seqHashSourceAcquired)
+		r.seqHash[h.LedgerIndex] = e
+	}
 	r.seqHashAnchor = anchor
 	r.pruneSeqHashLocked()
-	for _, h := range headers {
-		r.recordSeqHashFromLocked(
-			h.LedgerIndex,
-			h.Hash,
-			h.ParentHash,
-			true,
-			seqHashSourceAcquired,
-			localAnchor,
-		)
-	}
 	return true
 }
 
@@ -1821,7 +1805,6 @@ func (r *Router) onLedgerFullyValidated(seq uint32, hash [32]byte) {
 	r.recordSeqHash(seq, hash, [32]byte{}, false)
 	if r.locallySatisfiesLedger(seq, hash) {
 		r.retireLocallySatisfiedLedger(seq, hash, "ledger_validated")
-		r.retireHeaderDiscoveryForRecovery(seq, hash)
 	}
 
 	removed := make(map[[32]byte]struct{})
@@ -2463,7 +2446,6 @@ func (r *Router) completeStoredConsensusRecovery(seq uint32, hash, parentHash [3
 	} else if !obsolete {
 		r.recordAcquiredSeqHash(seq, hash, parentHash)
 	}
-	r.retireHeaderDiscoveryForRecovery(seq, hash)
 	if obsolete {
 		r.obsoleteAcquisitionCompleted.Add(1)
 		r.armConsensusCatchup()
@@ -2878,7 +2860,6 @@ func (r *Router) isBuildingLedger(seq uint32) bool {
 
 func (r *Router) onLedgerBuilt(seq uint32, hash [32]byte) {
 	r.retireLocallySatisfiedLedger(seq, hash, "ledger_built")
-	r.retireHeaderDiscoveryForRecovery(seq, hash)
 	r.armCatchupTowardTarget()
 }
 
@@ -3065,7 +3046,7 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) bool {
 	}
 	if (ld.InfoType == message.LedgerInfoTsCandidate && ld.LedgerSeq != 0) ||
 		(ld.InfoType != message.LedgerInfoTsCandidate &&
-			r.invalidFutureLedgerSequence(ld.LedgerSeq) && !r.allowHeaderDiscoveryLedgerData(ld)) {
+			r.invalidFutureLedgerSequence(ld.LedgerSeq) && !r.allowTrustedRecoveryLedgerData(ld)) {
 		r.logger.Warn("invalid ledger_data ledger sequence", "peer", msg.PeerID, "seq", ld.LedgerSeq)
 		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-sequence")
 		return false
