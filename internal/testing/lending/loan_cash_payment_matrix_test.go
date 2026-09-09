@@ -163,6 +163,20 @@ func TestLoanPaymentAccountingMatchesCashAndLegacyModels(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/%s", kind, scenario), func(t *testing.T) {
 				legacy := runCashPaymentScenario(t, newLoanSetAssetFixture(t, kind), scenario)
 				cash := runCashPaymentScenario(t, newCashLoanSetAssetFixture(t, kind), scenario)
+				expectedRemaining := map[string]uint32{
+					"regular":     3,
+					"late":        3,
+					"full":        0,
+					"overpayment": 2,
+				}[scenario]
+				for model, observation := range map[string]cashPaymentObservation{"legacy": legacy, "cash": cash} {
+					if observation.principalPaid.Signum() <= 0 {
+						t.Fatalf("%s %s principal paid = %s, want positive", model, scenario, observation.principalPaid.String())
+					}
+					if observation.loanPaymentRemain != expectedRemaining {
+						t.Fatalf("%s %s PaymentRemaining = %d, want %d", model, scenario, observation.loanPaymentRemain, expectedRemaining)
+					}
+				}
 
 				requireMatrixNumberEqual(t, "principal paid parity", cash.principalPaid, legacy.principalPaid)
 				requireMatrixNumberEqual(t, "loan value paid parity", cash.loanValuePaid, legacy.loanValuePaid)
@@ -172,6 +186,9 @@ func TestLoanPaymentAccountingMatchesCashAndLegacyModels(t *testing.T) {
 				}
 
 				trackedInterest := legacy.loanValuePaid.Sub(legacy.principalPaid).Sub(legacy.managementFeePaid)
+				if trackedInterest.Signum() <= 0 {
+					t.Fatalf("%s recognized interest = %s, want positive", scenario, trackedInterest.String())
+				}
 				requireMatrixNumberEqual(t, "legacy DebtTotal delta", legacy.debtDelta, legacy.principalPaid.Add(trackedInterest).Negate())
 				requireMatrixNumberEqual(t, "cash DebtTotal delta", cash.debtDelta, cash.principalPaid.Negate())
 				requireMatrixNumberEqual(t, "cash AssetsTotal delta", cash.assetsDelta, legacy.assetsDelta.Add(trackedInterest))
@@ -196,6 +213,41 @@ func newCashLendingEnvWithCleanup(t *testing.T, cleanup bool) *jtx.TestEnv {
 	return env
 }
 
+func newPaymentLegacyLendingEnvWithCleanup(t *testing.T, cleanup bool) *jtx.TestEnv {
+	t.Helper()
+	env := jtx.NewTestEnv(t)
+	env.EnableFeature("SingleAssetVault")
+	env.EnableFeature("MPTokensV1")
+	env.EnableFeature("LendingProtocol")
+	if cleanup {
+		env.EnableFeature("fixCleanup3_4_0")
+	} else {
+		env.DisableFeature("fixCleanup3_4_0")
+	}
+	env.Close()
+	return env
+}
+
+func setupClosedEndedXRPVaultForAccounting(t *testing.T, env *jtx.TestEnv, owner *jtx.Account, deposit uint64) string {
+	t.Helper()
+	sequence := env.Seq(owner)
+	subscription := env.NowRipple() + 60
+	redemption := subscription + 100_000
+	kind := vault.VaultKindClosedEnded
+	create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: "XRP"})
+	create.Common.Fee = reserveIncrement
+	create.VaultKind = &kind
+	create.SubscriptionDate = &subscription
+	create.RedemptionDate = &redemption
+	jtx.RequireTxSuccess(t, env.Submit(create))
+	vaultID := vaultID(owner, sequence)
+	jtx.RequireTxSuccess(t, env.Submit(vault.NewVaultDeposit(owner.Address, vaultID, tx.NewXRPAmount(int64(deposit)))))
+	// Deposit during subscription, then exercise the lending transactions in
+	// investment. The redemption date leaves enough room for every test loan.
+	env.CloseToParentCloseTime(subscription + 1)
+	return vaultID
+}
+
 func TestCashBasisVaultSetDataUpdatePreservesExistingCap(t *testing.T) {
 	for _, cleanup := range []bool{false, true} {
 		t.Run(fmt.Sprintf("cleanup-%t", cleanup), func(t *testing.T) {
@@ -206,7 +258,7 @@ func TestCashBasisVaultSetDataUpdatePreservesExistingCap(t *testing.T) {
 			env.FundAmount(borrower, 10_000_000_000)
 
 			vaultSequence := env.Seq(owner)
-			vaultID := setupXRPVault(t, env, owner, 10_000_000)
+			vaultID := setupClosedEndedXRPVaultForAccounting(t, env, owner, 10_000_000)
 			vaultKey := keylet.Vault(owner.AccountID(), vaultSequence)
 			maximum := "10000000"
 			setMaximum := vault.NewVaultSet(owner.Address, vaultID)
@@ -275,86 +327,101 @@ func TestCashBasisVaultSetDataUpdatePreservesExistingCap(t *testing.T) {
 }
 
 func TestLoanPayConservesXRPWhenFeePayeeIsBelowReserve(t *testing.T) {
-	env := newLendingEnv(t)
-	owner := jtx.NewAccount("conservation-owner")
-	borrower := jtx.NewAccount("conservation-borrower")
-	issuer := jtx.NewAccount("conservation-issuer")
-	env.FundAmount(owner, 10_000_000_000)
-	env.FundAmount(borrower, 10_000_000_000)
-	env.FundAmount(issuer, 10_000_000_000)
+	for _, cash := range []bool{false, true} {
+		for _, cleanup := range []bool{false, true} {
+			t.Run(fmt.Sprintf("cash-%t/cleanup-%t", cash, cleanup), func(t *testing.T) {
+				var env *jtx.TestEnv
+				if cash {
+					env = newCashLendingEnvWithCleanup(t, cleanup)
+				} else {
+					env = newPaymentLegacyLendingEnvWithCleanup(t, cleanup)
+				}
+				owner := jtx.NewAccount(fmt.Sprintf("conservation-%t-%t-owner", cash, cleanup))
+				borrower := jtx.NewAccount(fmt.Sprintf("conservation-%t-%t-borrower", cash, cleanup))
+				issuer := jtx.NewAccount(fmt.Sprintf("conservation-%t-%t-issuer", cash, cleanup))
+				env.FundAmount(owner, 10_000_000_000)
+				env.FundAmount(borrower, 10_000_000_000)
+				env.FundAmount(issuer, 10_000_000_000)
 
-	vaultSequence := env.Seq(owner)
-	vaultID := setupXRPVault(t, env, owner, 10_000_000)
-	vaultKey := keylet.Vault(owner.AccountID(), vaultSequence)
-	vaultFields := decodeLendingEntry(t, env, vaultKey)
-	vaultAccount := jtx.NewAccountWithAddress("conservation-vault", state.EncodeAccountIDSafe(lendingAccountID(t, vaultFields, "Vault")))
+				vaultSequence := env.Seq(owner)
+				var vaultID string
+				if cash {
+					vaultID = setupClosedEndedXRPVaultForAccounting(t, env, owner, 10_000_000)
+				} else {
+					vaultID = setupXRPVault(t, env, owner, 10_000_000)
+				}
+				vaultKey := keylet.Vault(owner.AccountID(), vaultSequence)
+				vaultFields := decodeLendingEntry(t, env, vaultKey)
+				vaultAccount := jtx.NewAccountWithAddress("conservation-vault", state.EncodeAccountIDSafe(lendingAccountID(t, vaultFields, "Vault")))
 
-	brokerSequence := env.Seq(owner)
-	brokerSet := lending.NewLoanBrokerSet(owner.Address, vaultID)
-	jtx.RequireTxSuccess(t, env.Submit(brokerSet))
-	brokerID := brokerID(owner, brokerSequence)
-	brokerKey := keylet.LoanBroker(owner.AccountID(), brokerSequence)
+				brokerSequence := env.Seq(owner)
+				jtx.RequireTxSuccess(t, env.Submit(lending.NewLoanBrokerSet(owner.Address, vaultID)))
+				brokerID := brokerID(owner, brokerSequence)
+				brokerKey := keylet.LoanBroker(owner.AccountID(), brokerSequence)
 
-	loanSet := lending.NewLoanSet(borrower.Address, brokerID, "1000")
-	serviceFee := "2"
-	interestRate := uint32(12_000)
-	interval := uint32(3_600)
-	payments := uint32(12)
-	loanSet.LoanServiceFee = &serviceFee
-	loanSet.InterestRate = &interestRate
-	loanSet.PaymentInterval = &interval
-	loanSet.PaymentTotal = &payments
-	loanSet.Counterparty = owner.Address
-	loanSet.GetCommon().Fee = "20"
-	loanSet.GetCommon().SigningPubKey = strings.ToUpper(borrower.PublicKeyHex())
-	signature, err := txsign.SignCounterparty(
-		loanSet,
-		strings.ToUpper(owner.PublicKeyHex()),
-		"00"+strings.ToUpper(owner.PrivateKeyHex()),
-	)
-	if err != nil {
-		t.Fatalf("sign LoanSet: %v", err)
-	}
-	loanSet.GetCommon().CounterpartySignature = signature
-	jtx.RequireTxSuccess(t, env.Submit(loanSet))
+				loanSet := lending.NewLoanSet(borrower.Address, brokerID, "1000")
+				serviceFee := "2"
+				interestRate := uint32(12_000)
+				interval := uint32(3_600)
+				payments := uint32(12)
+				loanSet.LoanServiceFee = &serviceFee
+				loanSet.InterestRate = &interestRate
+				loanSet.PaymentInterval = &interval
+				loanSet.PaymentTotal = &payments
+				loanSet.Counterparty = owner.Address
+				loanSet.GetCommon().Fee = "20"
+				loanSet.GetCommon().SigningPubKey = strings.ToUpper(borrower.PublicKeyHex())
+				signature, err := txsign.SignCounterparty(
+					loanSet,
+					strings.ToUpper(owner.PublicKeyHex()),
+					"00"+strings.ToUpper(owner.PrivateKeyHex()),
+				)
+				if err != nil {
+					t.Fatalf("sign LoanSet: %v", err)
+				}
+				loanSet.GetCommon().CounterpartySignature = signature
+				jtx.RequireTxSuccess(t, env.Submit(loanSet))
 
-	loanKey := keylet.Loan(brokerKey.Key, 1)
-	loanID := strings.ToUpper(hex.EncodeToString(loanKey.Key[:]))
-	loan := decodeLendingEntry(t, env, loanKey)
-	nextDue, ok := loan["NextPaymentDueDate"].(uint32)
-	if !ok {
-		t.Fatalf("Loan NextPaymentDueDate = %v, want uint32", loan["NextPaymentDueDate"])
-	}
-	reserve := env.ReserveBase() + uint64(env.OwnerCount(owner))*env.ReserveIncrement()
-	ownerBalance := env.Balance(owner)
-	if ownerBalance <= reserve+env.BaseFee() {
-		t.Fatalf("owner balance %d is too small for reserve %d", ownerBalance, reserve)
-	}
-	jtx.RequireTxSuccess(t, env.Submit(paytest.Pay(owner, issuer, ownerBalance-reserve-env.BaseFee()).Build()))
-	env.NoopWithFee(owner, 100)
-	env.Close()
-	if got := env.Balance(owner); got >= reserve {
-		t.Fatalf("fee payee balance = %d, want below reserve %d", got, reserve)
-	}
+				loanKey := keylet.Loan(brokerKey.Key, 1)
+				loanID := strings.ToUpper(hex.EncodeToString(loanKey.Key[:]))
+				loan := decodeLendingEntry(t, env, loanKey)
+				nextDue, ok := loan["NextPaymentDueDate"].(uint32)
+				if !ok {
+					t.Fatalf("Loan NextPaymentDueDate = %v, want uint32", loan["NextPaymentDueDate"])
+				}
+				reserve := env.ReserveBase() + uint64(env.OwnerCount(owner))*env.ReserveIncrement()
+				ownerBalance := env.Balance(owner)
+				if ownerBalance <= reserve+env.BaseFee() {
+					t.Fatalf("owner balance %d is too small for reserve %d", ownerBalance, reserve)
+				}
+				jtx.RequireTxSuccess(t, env.Submit(paytest.Pay(owner, issuer, ownerBalance-reserve-env.BaseFee()).Build()))
+				env.NoopWithFee(owner, 100)
+				env.Close()
+				if got := env.Balance(owner); got >= reserve {
+					t.Fatalf("fee payee balance = %d, want below reserve %d", got, reserve)
+				}
 
-	env.CloseToParentCloseTime(nextDue - 10)
-	borrowerBefore := env.Balance(borrower)
-	vaultBefore := env.Balance(vaultAccount)
-	ownerBefore := env.Balance(owner)
-	paymentResult := env.Submit(lending.NewLoanPay(borrower.Address, loanID, tx.NewXRPAmount(100)))
-	jtx.RequireTxSuccess(t, paymentResult)
-	env.Close()
+				env.CloseToParentCloseTime(nextDue - 10)
+				borrowerBefore := env.Balance(borrower)
+				vaultBefore := env.Balance(vaultAccount)
+				ownerBefore := env.Balance(owner)
+				paymentResult := env.Submit(lending.NewLoanPay(borrower.Address, loanID, tx.NewXRPAmount(100)))
+				jtx.RequireTxSuccess(t, paymentResult)
+				env.Close()
 
-	borrowerAfter := env.Balance(borrower)
-	vaultAfter := env.Balance(vaultAccount)
-	ownerAfter := env.Balance(owner)
-	if ownerAfter <= ownerBefore {
-		t.Fatalf("fee payee balance = %d, want greater than %d", ownerAfter, ownerBefore)
-	}
-	if ownerAfter >= reserve {
-		t.Fatalf("fee payee balance = %d, want below reserve %d", ownerAfter, reserve)
-	}
-	if got, want := borrowerBefore-paymentResult.Fee+vaultBefore+ownerBefore, borrowerAfter+vaultAfter+ownerAfter; got != want {
-		t.Fatalf("XRP funds after LoanPay = %d, want %d", want, got)
+				borrowerAfter := env.Balance(borrower)
+				vaultAfter := env.Balance(vaultAccount)
+				ownerAfter := env.Balance(owner)
+				if ownerAfter <= ownerBefore {
+					t.Fatalf("fee payee balance = %d, want greater than %d", ownerAfter, ownerBefore)
+				}
+				if ownerAfter >= reserve {
+					t.Fatalf("fee payee balance = %d, want below reserve %d", ownerAfter, reserve)
+				}
+				if got, want := borrowerBefore-paymentResult.Fee+vaultBefore+ownerBefore, borrowerAfter+vaultAfter+ownerAfter; got != want {
+					t.Fatalf("XRP funds after LoanPay = %d, want %d", want, got)
+				}
+			})
+		}
 	}
 }
