@@ -173,27 +173,6 @@ func buildGetObjectByHash(n int) *GetObjectByHash {
 	return getObject
 }
 
-// buildValidatorList creates test validator list
-// Reference: rippled compression_test.cpp buildValidatorList()
-func buildValidatorList() *ValidatorList {
-	manifest := make([]byte, 200)
-	rand.Read(manifest)
-	manifest[0] = 0xED // ed25519 prefix
-
-	blob := make([]byte, 1000)
-	rand.Read(blob)
-
-	signature := make([]byte, 64)
-	rand.Read(signature)
-
-	return &ValidatorList{
-		Manifest:  manifest,
-		Blob:      blob,
-		Signature: signature,
-		Version:   3,
-	}
-}
-
 // Helper functions
 
 func randomBytes(n int) []byte {
@@ -293,13 +272,6 @@ func TestCompressionRoundtrip_GetObjectByHash(t *testing.T) {
 			testCompressionRoundtrip(t, msg)
 		})
 	}
-}
-
-// TestCompressionRoundtrip_ValidatorList tests validator list compression roundtrip
-// Reference: rippled compression_test.cpp - testValidatorList()
-func TestCompressionRoundtrip_ValidatorList(t *testing.T) {
-	msg := buildValidatorList()
-	testCompressionRoundtrip(t, msg)
 }
 
 // testCompressionRoundtrip performs compression roundtrip test for any message type

@@ -120,16 +120,6 @@ type HaveTransactionSet struct {
 
 func (h *HaveTransactionSet) Type() MessageType { return TypeHaveSet }
 
-// ValidatorList represents a validator list (UNL).
-type ValidatorList struct {
-	Manifest  []byte `json:"manifest"`
-	Blob      []byte `json:"blob"`
-	Signature []byte `json:"signature"`
-	Version   uint32 `json:"version"`
-}
-
-func (v *ValidatorList) Type() MessageType { return TypeValidatorList }
-
 // ValidatorBlobInfo represents v2 validator blob info.
 type ValidatorBlobInfo struct {
 	Manifest  []byte `json:"manifest,omitempty"`

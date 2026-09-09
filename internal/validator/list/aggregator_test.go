@@ -34,7 +34,7 @@ type publisherFixture struct {
 	ephPub     [33]byte
 	ephPriv    ed25519.PrivateKey
 	// manifestB64 is the base64-encoded manifest STObject bytes (the
-	// wire form TMValidatorList carries as `manifest`).
+	// wire collection envelope carries as `manifest`).
 	manifestB64 []byte
 }
 

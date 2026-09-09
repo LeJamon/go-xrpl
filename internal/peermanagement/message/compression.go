@@ -73,7 +73,6 @@ func ShouldCompress(msgType MessageType) bool {
 		TypeGetLedger,
 		TypeLedgerData,
 		TypeGetObjects,
-		TypeValidatorList,
 		TypeValidatorListCollection,
 		TypeReplayDeltaResponse,
 		TypeTransactions:

@@ -621,34 +621,6 @@ func (o *Overlay) PeerRemoteAddr(peerID PeerID) string {
 	return peer.Endpoint().String()
 }
 
-// PeerProtocolAtLeast reports whether the peer's negotiated
-// peer-protocol version is at least the given (major, minor). Used to
-// gate version-implicit features such as ValidatorList2Propagation.
-//
-// Returns false when the peer is unknown or has not completed the
-// handshake.
-func (o *Overlay) PeerProtocolAtLeast(peerID PeerID, major, minor uint16) bool {
-	peer, ok := o.getPeer(peerID)
-	if !ok {
-		return false
-	}
-	got := peer.ProtocolVersion()
-	if got == "" {
-		return false
-	}
-	pvs := parseProtocolVersions(got)
-	if len(pvs) == 0 {
-		return false
-	}
-	want := protocolVersion{major: major, minor: minor}
-	for _, v := range pvs {
-		if !v.less(want) {
-			return true
-		}
-	}
-	return false
-}
-
 // ListenAddr returns the resolved address the overlay is accepting
 // connections on, or the empty string if no listener is bound. Useful
 // when the overlay was configured with port 0 (ephemeral) and the

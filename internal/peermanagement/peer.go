@@ -421,7 +421,6 @@ func isConsensusPriorityMessageType(msgType message.MessageType) bool {
 	switch msgType {
 	case message.TypeProposeLedger,
 		message.TypeValidation,
-		message.TypeValidatorList,
 		message.TypeValidatorListCollection:
 		return true
 	default:

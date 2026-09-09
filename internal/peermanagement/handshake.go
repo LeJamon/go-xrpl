@@ -39,7 +39,7 @@ func (v protocolVersion) less(o protocolVersion) bool {
 // supportedProtocols lists the peer-protocol versions go-xrpl
 // advertises. Must stay strictly ascending — duplicates are forbidden;
 // enforced by init() below.
-var supportedProtocols = []protocolVersion{{2, 1}, {2, 2}, {2, 3}}
+var supportedProtocols = []protocolVersion{{2, 2}, {2, 3}}
 
 func init() {
 	if len(supportedProtocols) == 0 {
@@ -661,8 +661,7 @@ func VerifyOutboundProtocolVersion(upgradeHeader string) string {
 type Feature int
 
 const (
-	FeatureValidatorListPropagation Feature = iota
-	FeatureLedgerReplay
+	FeatureLedgerReplay Feature = iota
 	FeatureCompression
 	// vprr — validator-proposal reduce-relay (gates TMSquelch).
 	FeatureVpReduceRelay
@@ -676,8 +675,6 @@ const FeatureReduceRelay = FeatureVpReduceRelay
 
 func (f Feature) String() string {
 	switch f {
-	case FeatureValidatorListPropagation:
-		return "validatorListPropagation"
 	case FeatureLedgerReplay:
 		return "ledgerReplay"
 	case FeatureCompression:
@@ -696,8 +693,6 @@ func (f Feature) String() string {
 // ParseFeature accepts the legacy "reduceRelay" alias plus vprr/txrr.
 func ParseFeature(s string) (Feature, bool) {
 	switch strings.ToLower(s) {
-	case "validatorlistpropagation":
-		return FeatureValidatorListPropagation, true
 	case "ledgerreplay":
 		return FeatureLedgerReplay, true
 	case "compression":

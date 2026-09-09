@@ -597,30 +597,6 @@ var codecs = map[MessageType]msgCodec{
 			}, nil
 		},
 	},
-	TypeValidatorList: {
-		newProto: func() pb.Message { return &proto.TMValidatorList{} },
-		encode: func(msg Message) (pb.Message, error) {
-			m, err := assertMessage[*ValidatorList](msg)
-			if err != nil {
-				return nil, err
-			}
-			return &proto.TMValidatorList{
-				Manifest:  requiredBytes(m.Manifest),
-				Blob:      requiredBytes(m.Blob),
-				Signature: requiredBytes(m.Signature),
-				Version:   pb.Uint32(m.Version),
-			}, nil
-		},
-		decode: func(pmsg pb.Message) (Message, error) {
-			p := pmsg.(*proto.TMValidatorList)
-			return &ValidatorList{
-				Manifest:  p.GetManifest(),
-				Blob:      p.GetBlob(),
-				Signature: p.GetSignature(),
-				Version:   p.GetVersion(),
-			}, nil
-		},
-	},
 	TypeSquelch: {
 		newProto: func() pb.Message { return &proto.TMSquelch{} },
 		encode: func(msg Message) (pb.Message, error) {

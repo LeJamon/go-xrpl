@@ -51,7 +51,6 @@ func payloadSizeLimit(t MessageType) uint32 {
 		TypeReplayDeltaResponse:
 		return MaxMessageSize
 	case TypeManifests,
-		TypeValidatorList,
 		TypeValidatorListCollection,
 		TypeLedgerData,
 		TypeGetObjects,
@@ -62,7 +61,7 @@ func payloadSizeLimit(t MessageType) uint32 {
 		// softMaxReplyNodes fat nodes, TMGetObjectByHash carries
 		// fetch-pack data on the same type as its queries, a full
 		// TMManifests batches every stored manifest unsplit, and a single
-		// TMValidatorList / TMValidatorListCollection blob is bounded only
+		// TMValidatorListCollection blobs are bounded only
 		// by the ceiling. A tighter local cap would tear down a peer
 		// mid-sync, so these rely on the protocol ceiling (enforced in
 		// framing validation) rather than a stricter limit.
