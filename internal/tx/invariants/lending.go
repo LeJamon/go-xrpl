@@ -164,8 +164,6 @@ func transactionType(txn Transaction) TxType {
 	return txn.TxType()
 }
 
-// checkValidLoanForTx enforces ValidLoan, including the V1.1 lifecycle and
-// liveness rules that require the transaction and read view.
 func checkValidLoanForTx(txn Transaction, result Result, entries []InvariantEntry, view ReadView, rules *amendment.Rules, numberContexts ...state.NumberContext) *InvariantViolation {
 	if rules == nil {
 		return nil
@@ -183,10 +181,7 @@ func checkValidLoanForTx(txn Transaction, result Result, entries []InvariantEntr
 		if e.EntryType != entry.TypeLoan {
 			continue
 		}
-		// Closed-ended loan creation has a persisted-state invariant that is
-		// checked before the V1.1 feature gate. A malformed object can only be
-		// checked when its broker and vault are present; this mirrors rippled's
-		// optional reads and keeps the invariant inert for unrelated entries.
+		// Persisted closed-ended schedules are checked even before LendingProtocol.
 		if !lpEnabled {
 			if e.Before == nil && !e.IsDelete && e.After != nil && result == TesSUCCESS && view != nil {
 				after, err := decodeEntry(e.After)
@@ -347,10 +342,7 @@ func checkValidLoanForTx(txn Transaction, result Result, entries []InvariantEntr
 	return nil
 }
 
-// loanVaultForSchedule resolves the optional broker/vault chain used by the
-// closed-ended creation schedule check. Missing objects are deliberately
-// reported as not found; the persisted schedule invariant only applies when
-// both objects are available in the view.
+// Missing brokers and vaults do not impose a creation schedule constraint.
 func loanVaultForSchedule(view ReadView, loan map[string]any) ([]byte, bool, *InvariantViolation) {
 	brokerIDText, ok := loan["LoanBrokerID"].(string)
 	if !ok {
@@ -482,7 +474,6 @@ func loanVaultAsset(fields map[string]any, scale state.MantissaScale) (vvAsset, 
 	return vvAssetFromMap(asset, scale), true
 }
 
-// checkValidLoanBroker preserves the package-local helper used by existing tests.
 func checkValidLoanBroker(entries []InvariantEntry, view ReadView, rules *amendment.Rules, numberContexts ...state.NumberContext) *InvariantViolation {
 	return checkValidLoanBrokerForTx(nil, entries, view, rules, numberContexts...)
 }
@@ -526,10 +517,7 @@ func checkValidLoanBrokerForTx(txn Transaction, entries []InvariantEntry, view R
 				}
 				deletedBrokers = append(deletedBrokers, brokerState{before: beforeData, after: finalData, key: e.Key})
 				if e.Key != ([32]byte{}) {
-					// Keep the erased broker in the normal broker set. Rippled
-					// validates its final pre-erase image for sequence, vault,
-					// cover, and directory consistency after checking delete
-					// privileges against the original pre-transaction image.
+					// Erased brokers still undergo the ordinary consistency checks.
 					brokers[e.Key] = brokerState{before: beforeData, after: finalData, key: e.Key}
 				} else if finalData != nil {
 					unkeyedBrokers = append(unkeyedBrokers, brokerState{before: beforeData, after: finalData})

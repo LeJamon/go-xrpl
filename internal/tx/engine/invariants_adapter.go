@@ -5,12 +5,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
 )
 
-// invariantsTxAdapter wraps a tx.Transaction to satisfy the invariants.Transaction
-// interface and all optional invariant interfaces. This bridges the gap between
-// the tx package types and the invariants package types.
-//
-// Optional interfaces are implemented by delegating to the underlying transaction
-// and converting types where needed (e.g., tx.Asset -> invariants.Asset).
 type invariantsTxContext struct {
 	feePayerID            [20]byte
 	feePayerKnown         bool
@@ -19,6 +13,7 @@ type invariantsTxContext struct {
 	currentCloseTimeKnown bool
 }
 
+// invariantsTxAdapter supplies transaction fields and resolved apply context.
 type invariantsTxAdapter struct {
 	tx      txcore.Transaction
 	context invariantsTxContext
@@ -42,14 +37,10 @@ func (a *invariantsTxAdapter) Flatten() (map[string]any, error) {
 	return a.tx.Flatten()
 }
 
-// FeePayer implements invariants.FeePayerProvider. A pre-funded sponsorship
-// reports no AccountRoot payer, while all other paths identify the account whose
-// balance delta includes the fee.
 func (a *invariantsTxAdapter) FeePayer() ([20]byte, bool, bool) {
 	return a.context.feePayerID, a.context.feePayerPreFunded, a.context.feePayerKnown
 }
 
-// CurrentCloseTime implements invariants.CurrentCloseTimeProvider.
 func (a *invariantsTxAdapter) CurrentCloseTime() (uint32, bool) {
 	return a.context.currentCloseTime, a.context.currentCloseTimeKnown
 }

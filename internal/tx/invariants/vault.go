@@ -314,12 +314,8 @@ func (c *vvChecker) deltaAssets(vaultAsset vvAsset, id [20]byte) (vvDelta, bool)
 	return d, true
 }
 
-// feePayerForCorrection derives the fee payer when the engine did not provide
-// resolved fee-payer context. Direct invariant callers still have enough
-// transaction fields to preserve ordinary, delegated, and co-signed sponsor
-// behavior; malformed or absent optional fields conservatively fall back to
-// Account. A sponsor fee is treated as co-signed until the engine explicitly
-// identifies a pre-funded sponsorship.
+// Without resolved context, prefunded sponsorship cannot be distinguished
+// from cosigned sponsorship; engine callers always supply that context.
 func (c *vvChecker) feePayerForCorrection() ([20]byte, bool) {
 	if c.feePayerKnown {
 		return c.feePayerID, c.feePayerPreFunded
@@ -341,11 +337,8 @@ func (c *vvChecker) feePayerForCorrection() ([20]byte, bool) {
 	return c.txAccountID, false
 }
 
-// deltaAssetsForParty returns a party's asset delta, adding the fee back when
-// that party is the actual AccountRoot fee payer. The sponsorship relationship
-// itself pays a pre-funded fee without touching any AccountRoot, so it is left
-// unadjusted. A corrected zero delta is absent, matching rippled's economic
-// zero normalization.
+// Remove the actual fee payer's fee from economic XRP deltas. A prefunded
+// fee changes the Sponsorship object, so no AccountRoot needs correction.
 func (c *vvChecker) deltaAssetsForParty(vaultAsset vvAsset, id [20]byte) (vvDelta, bool) {
 	ret, ok := c.deltaAssets(vaultAsset, id)
 	if !ok || !vaultAsset.isXRP {
@@ -355,9 +348,7 @@ func (c *vvChecker) deltaAssetsForParty(vaultAsset vvAsset, id [20]byte) (vvDelt
 	feePayerID, feePayerPreFunded := c.feePayerForCorrection()
 	fix340 := c.rules != nil && c.fixCleanup3_4_0Enabled()
 	if !fix340 {
-		// Before fixCleanup3_4_0 only the transaction Account was eligible for
-		// fee correction, and only when it was the actual fee payer. A delegate or
-		// sponsor therefore leaves its AccountRoot delta untouched in this branch.
+		// Legacy correction applies only when Account also pays the fee.
 		if id != c.txAccountID || feePayerID != id {
 			return ret, ok
 		}
@@ -368,9 +359,6 @@ func (c *vvChecker) deltaAssetsForParty(vaultAsset vvAsset, id [20]byte) (vvDelt
 		return ret, true
 	}
 
-	// fixCleanup3_4_0 attributes the correction to the AccountRoot that actually
-	// paid the fee. A pre-funded sponsorship spends its Sponsorship object, so no
-	// AccountRoot delta is corrected.
 	if !feePayerPreFunded && feePayerID == id {
 		ret.delta = ret.delta.Add(vvNumFromI64(int64(c.fee), c.numberScale))
 	}
