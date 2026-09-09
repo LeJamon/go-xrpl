@@ -212,9 +212,15 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 	if res := requireAuth(view, asset, dstID, authType, config.ParentCloseTime); res != ter.TesSUCCESS {
 		return res
 	}
-	if fix340 && dstID == accountID && !holdingExists(view, dstID, asset) {
-		if result := canAddHolding(view, asset); result != ter.TesSUCCESS {
-			return result
+	if fix340 && dstID == accountID {
+		exists, err := holdingExists(view, dstID, asset)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if !exists {
+			if result := canAddHolding(view, asset); result != ter.TesSUCCESS {
+				return result
+			}
 		}
 	}
 	issuer, _ := vaultAssetIssuer(vd)
