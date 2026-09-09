@@ -20,8 +20,10 @@ const (
 )
 
 type feePayer struct {
-	keylet  keylet.Keylet
-	payerTy feePayerType
+	keylet    keylet.Keylet
+	payerTy   feePayerType
+	accountID [20]byte
+	known     bool
 }
 
 func isFeeSponsored(common *txcore.Common) bool {
@@ -52,26 +54,36 @@ func (e *Engine) getFeePayer(common *txcore.Common) (feePayer, ter.Result) {
 		}
 		if exists {
 			return feePayer{
-				keylet:  sponsorshipKey,
-				payerTy: feePayerSponsorPreFunded,
+				keylet:    sponsorshipKey,
+				payerTy:   feePayerSponsorPreFunded,
+				accountID: sponsorID,
+				known:     true,
 			}, ter.TesSUCCESS
 		}
 		return feePayer{
-			keylet:  keylet.Account(sponsorID),
-			payerTy: feePayerSponsorCoSigned,
+			keylet:    keylet.Account(sponsorID),
+			payerTy:   feePayerSponsorCoSigned,
+			accountID: sponsorID,
+			known:     true,
 		}, ter.TesSUCCESS
 	}
 
 	if common.Delegate == "" {
-		return feePayer{payerTy: feePayerAccount}, ter.TesSUCCESS
+		accountID, err := state.DecodeAccountID(common.Account)
+		if err != nil {
+			return feePayer{payerTy: feePayerAccount}, ter.TesSUCCESS
+		}
+		return feePayer{payerTy: feePayerAccount, accountID: accountID, known: true}, ter.TesSUCCESS
 	}
 	payerID, err := state.DecodeAccountID(common.Delegate)
 	if err != nil {
 		return feePayer{}, ter.TerNO_ACCOUNT
 	}
 	return feePayer{
-		keylet:  keylet.Account(payerID),
-		payerTy: feePayerDelegate,
+		keylet:    keylet.Account(payerID),
+		payerTy:   feePayerDelegate,
+		accountID: payerID,
+		known:     true,
 	}, ter.TesSUCCESS
 }
 

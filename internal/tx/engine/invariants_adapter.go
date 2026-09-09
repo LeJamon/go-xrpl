@@ -11,8 +11,17 @@ import (
 //
 // Optional interfaces are implemented by delegating to the underlying transaction
 // and converting types where needed (e.g., tx.Asset -> invariants.Asset).
+type invariantsTxContext struct {
+	feePayerID            [20]byte
+	feePayerKnown         bool
+	feePayerPreFunded     bool
+	currentCloseTime      uint32
+	currentCloseTimeKnown bool
+}
+
 type invariantsTxAdapter struct {
-	tx txcore.Transaction
+	tx      txcore.Transaction
+	context invariantsTxContext
 }
 
 // --- invariants.Transaction interface ---
@@ -31,6 +40,18 @@ func (a *invariantsTxAdapter) TxHasField(name string) bool {
 
 func (a *invariantsTxAdapter) Flatten() (map[string]any, error) {
 	return a.tx.Flatten()
+}
+
+// FeePayer implements invariants.FeePayerProvider. A pre-funded sponsorship
+// reports no AccountRoot payer, while all other paths identify the account whose
+// balance delta includes the fee.
+func (a *invariantsTxAdapter) FeePayer() ([20]byte, bool, bool) {
+	return a.context.feePayerID, a.context.feePayerPreFunded, a.context.feePayerKnown
+}
+
+// CurrentCloseTime implements invariants.CurrentCloseTimeProvider.
+func (a *invariantsTxAdapter) CurrentCloseTime() (uint32, bool) {
+	return a.context.currentCloseTime, a.context.currentCloseTimeKnown
 }
 
 // --- Optional interfaces ---
@@ -139,5 +160,30 @@ func (a *invariantsTxAdapter) GetAmount2Asset() invariants.Asset {
 // The adapter implements all optional invariant interfaces by delegating to
 // the underlying transaction and converting types where needed.
 func wrapTxForInvariants(tx txcore.Transaction) invariants.Transaction {
-	return &invariantsTxAdapter{tx: tx}
+	return wrapTxForInvariantsWithContext(tx, invariantsTxContext{})
+}
+
+func wrapTxForInvariantsWithContext(tx txcore.Transaction, context invariantsTxContext) invariants.Transaction {
+	return &invariantsTxAdapter{tx: tx, context: context}
+}
+
+func invariantsContextForApply(st *applyState, parentCloseTime uint32) invariantsTxContext {
+	context := invariantsTxContext{
+		currentCloseTime:      parentCloseTime,
+		currentCloseTimeKnown: true,
+	}
+	if st == nil {
+		return context
+	}
+	context.feePayerID = st.feePayer.accountID
+	context.feePayerKnown = st.feePayer.known
+	context.feePayerPreFunded = st.feePayer.payerTy == feePayerSponsorPreFunded
+	if context.feePayerPreFunded {
+		context.feePayerID = [20]byte{}
+	}
+	if !context.feePayerKnown && st.feePayer.payerTy == feePayerAccount {
+		context.feePayerID = st.accountID
+		context.feePayerKnown = true
+	}
+	return context
 }

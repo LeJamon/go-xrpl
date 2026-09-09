@@ -233,6 +233,15 @@ func TestValidLoanBroker_MPTCoverMatchesPseudoHolding(t *testing.T) {
 			},
 		},
 		{
+			name: "deleted MPToken",
+			entry: InvariantEntry{
+				Key:         keylet.MPTokenByID(mptID, pseudoID).Key,
+				EntryType:   entry.TypeMPToken,
+				DeleteFinal: modifiedTokenBytes,
+				IsDelete:    true,
+			},
+		},
+		{
 			name: "AccountRoot",
 			entry: InvariantEntry{
 				Key:       keylet.Account(pseudoID).Key,
@@ -337,11 +346,20 @@ func TestValidLoanBroker_DiscoversChangedRippleState(t *testing.T) {
 		amendment.FeatureLendingProtocol,
 		amendment.FeatureFixCleanup3_1_3,
 	})
-	entry := InvariantEntry{Key: lineKey.Key, EntryType: entry.TypeRippleState, After: lineBytes}
+	entryChange := InvariantEntry{Key: lineKey.Key, EntryType: entry.TypeRippleState, After: lineBytes}
 
-	violation := checkValidLoanBroker([]InvariantEntry{entry}, view, rules)
+	violation := checkValidLoanBroker([]InvariantEntry{entryChange}, view, rules)
 	if violation == nil || !strings.Contains(violation.Message, "less than") {
 		t.Fatalf("trust-line-only change violation = %v, want cover below holding", violation)
+	}
+	deletedLine := InvariantEntry{
+		Key:         lineKey.Key,
+		EntryType:   entry.TypeRippleState,
+		DeleteFinal: lineBytes,
+		IsDelete:    true,
+	}
+	if violation := checkValidLoanBroker([]InvariantEntry{deletedLine}, view, rules); violation == nil || !strings.Contains(violation.Message, "less than") {
+		t.Fatalf("deleted trust-line discovery violation = %v, want cover below holding", violation)
 	}
 }
 
