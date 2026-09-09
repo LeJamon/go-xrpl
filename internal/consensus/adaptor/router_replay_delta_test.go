@@ -32,6 +32,9 @@ type recordingSender struct {
 	mu               sync.Mutex
 	replayDeltaCalls []replayDeltaCall
 	replayDeltaErr   error
+	headerCalls      []headerCall
+	headerErr        error
+	headerErrs       map[uint64][]error
 	legacyBaseCalls  []legacyBaseCall
 	legacyBaseErr    error
 	legacyBaseErrs   map[uint64]error
@@ -60,6 +63,12 @@ type legacyBaseCall struct {
 	seq    uint32
 }
 
+type headerCall struct {
+	peerID uint64
+	hash   [32]byte
+	seq    uint32
+}
+
 func (s *recordingSender) RequestReplayDelta(peerID uint64, hash [32]byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -77,6 +86,18 @@ func (s *recordingSender) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte
 	return s.legacyBaseErr
 }
 
+func (s *recordingSender) RequestLedgerHeaderFromPeer(peerID uint64, hash [32]byte, seq uint32, _ bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.headerCalls = append(s.headerCalls, headerCall{peerID: peerID, hash: hash, seq: seq})
+	if errs := s.headerErrs[peerID]; len(errs) > 0 {
+		err := errs[0]
+		s.headerErrs[peerID] = errs[1:]
+		return err
+	}
+	return s.headerErr
+}
+
 func (s *recordingSender) replayCalls() []replayDeltaCall {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -90,6 +111,14 @@ func (s *recordingSender) legacyCalls() []legacyBaseCall {
 	defer s.mu.Unlock()
 	out := make([]legacyBaseCall, len(s.legacyBaseCalls))
 	copy(out, s.legacyBaseCalls)
+	return out
+}
+
+func (s *recordingSender) headerRequests() []headerCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]headerCall, len(s.headerCalls))
+	copy(out, s.headerCalls)
 	return out
 }
 

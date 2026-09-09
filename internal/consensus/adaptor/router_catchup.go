@@ -124,6 +124,7 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 						"gap", sc.LedgerSeq-ourSeq,
 						"left_full", leftFull,
 					)
+					r.notePeerStatusEvidence(sc.LedgerSeq, peerHash)
 					r.ensureCatchupAcquisition(sc.LedgerSeq, peerHash, uint64(msg.PeerID))
 					return
 				}
@@ -138,6 +139,7 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 				ourSeq := svc.GetClosedLedgerIndex()
 				if aheadByMoreThan(sc.LedgerSeq, ourSeq, 1) {
 					if r.peerLedgerIsPreferred(peerHash) {
+						r.notePeerStatusEvidence(sc.LedgerSeq, peerHash)
 						r.ensureCatchupAcquisition(sc.LedgerSeq, peerHash, uint64(msg.PeerID))
 					}
 					return
@@ -384,7 +386,21 @@ func (r *Router) recordSeqHashFrom(
 
 	r.seqHashMu.Lock()
 	defer r.seqHashMu.Unlock()
+	r.recordSeqHashFromLocked(seq, hash, parentHash, haveParent, source, localAnchor)
+}
 
+// recordSeqHashFromLocked is the map update used by both individual evidence
+// callbacks and an ancestry walk. The caller holds seqHashMu.
+func (r *Router) recordSeqHashFromLocked(
+	seq uint32,
+	hash, parentHash [32]byte,
+	haveParent bool,
+	source seqHashSource,
+	localAnchor uint32,
+) {
+	if seq == 0 || hash == ([32]byte{}) {
+		return
+	}
 	if localAnchor > r.seqHashAnchor {
 		r.seqHashAnchor = localAnchor
 	}
@@ -435,6 +451,54 @@ func (r *Router) recordSeqHashFrom(
 	}
 
 	r.pruneSeqHashLocked()
+}
+
+// recordAcquiredSeqHashChain validates all existing entries while holding the
+// sequence-map lock, then publishes the complete walk as one transaction. A
+// concurrent trusted entry can therefore reject the walk before any element
+// is visible to replay policy.
+func (r *Router) recordAcquiredSeqHashChain(headers []header.LedgerHeader) bool {
+	if len(headers) == 0 {
+		return true
+	}
+	localAnchor := r.localSeqHashAnchor()
+	r.seqHashMu.Lock()
+	defer r.seqHashMu.Unlock()
+	return r.recordAcquiredSeqHashChainLocked(headers, localAnchor)
+}
+
+// Caller holds seqHashMu.
+func (r *Router) recordAcquiredSeqHashChainLocked(
+	headers []header.LedgerHeader,
+	localAnchor uint32,
+) bool {
+	if len(headers) == 0 {
+		return true
+	}
+	if localAnchor > r.seqHashAnchor {
+		r.seqHashAnchor = localAnchor
+	}
+	r.pruneSeqHashLocked()
+	for _, h := range headers {
+		e := r.seqHash[h.LedgerIndex]
+		if e.hash != ([32]byte{}) && e.hash != h.Hash && e.source >= seqHashSourceValidation {
+			return false
+		}
+		if e.haveParent && e.parentHash != h.ParentHash && e.parentFrom >= seqHashSourceValidation {
+			return false
+		}
+	}
+	for _, h := range headers {
+		r.recordSeqHashFromLocked(
+			h.LedgerIndex,
+			h.Hash,
+			h.ParentHash,
+			true,
+			seqHashSourceAcquired,
+			localAnchor,
+		)
+	}
+	return true
 }
 
 func (r *Router) localSeqHashAnchor() uint32 {
@@ -602,6 +666,14 @@ func (r *Router) recordValidationCatchupTarget(
 	if previous.hash != ([32]byte{}) && previous.hash != r.catchup.hash &&
 		previous.source != catchupSourcePeer && r.catchup.source != catchupSourcePeer {
 		r.targetSuperseded.Add(1)
+	}
+	if source != catchupSourcePeer &&
+		(previous.seq != r.catchup.seq || previous.hash != r.catchup.hash) {
+		// Keep a status advertisement attached to the same target when quorum
+		// evidence arrives. That evidence is what makes a header walk
+		// actionable; a different trusted target must establish a fresh grace
+		// window instead of inheriting an old peer hint.
+		r.peerStatusEvidence = false
 	}
 	target := r.catchup
 	r.catchupMu.Unlock()
@@ -791,6 +863,13 @@ func (r *Router) armPendingConsensusLedger() bool {
 				return true
 			}
 		}
+		if svc != nil {
+			target := r.credibleCatchupFrontier()
+			if target.seq == seq && target.hash == hash &&
+				r.maybeStartHeaderParentDiscovery(target, target.peerID) {
+				return true
+			}
+		}
 
 		r.acquisitionMu.Lock()
 		if r.consensusRecovery.targetHash != hash {
@@ -865,7 +944,7 @@ func (r *Router) recoveryForwardStep(
 	if svc == nil {
 		return 0, [32]byte{}, nil, false, recovery.anchorHash != ([32]byte{})
 	}
-	parent := svc.GetClosedLedger()
+	parent := r.catchupReplayBase(svc)
 	if parent == nil || targetSeq <= parent.Sequence() {
 		return 0, [32]byte{}, nil, false, recovery.anchorHash != ([32]byte{})
 	}
@@ -936,11 +1015,30 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 	if tSeq == 0 {
 		return
 	}
+	base := r.catchupReplayBase(svc)
+	if base == nil {
+		return
+	}
+	if r.maybeStartHeaderParentDiscovery(target, peerHint) {
+		return
+	}
 	if r.continueFrozenPivotRecovery(tSeq, tHash, peerHint) {
 		return
 	}
 	r.reconcileStandardReplayTarget(tSeq, tHash)
-	closed := svc.GetClosedLedgerIndex()
+	actualClosed := svc.GetClosedLedgerIndex()
+	closed := base.Sequence()
+	closedLedger := base
+	if target.source == catchupSourcePeer || svc.IsFastLoadProvisional() {
+		// Peer status is a liveness hint. Keep its established forward-delta
+		// policy rooted at the observed closed ledger; only trusted targets use
+		// the validated anchor below when speculative closes have run ahead.
+		closedLedger = svc.GetClosedLedger()
+		if closedLedger == nil {
+			return
+		}
+		closed = actualClosed
+	}
 	if tSeq <= closed {
 		if target.source != catchupSourceQuorum {
 			return
@@ -960,10 +1058,9 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 	}
 	if target.source == catchupSourcePeer &&
 		!svc.NeedsInitialSync() && !svc.IsFastLoadProvisional() &&
-		!aheadByMoreThan(tSeq, closed, 1) {
+		!aheadByMoreThan(tSeq, actualClosed, 1) {
 		return
 	}
-	closedLedger := svc.GetClosedLedger()
 	if closedLedger != nil && tSeq-closed <= maxForwardDeltaGap &&
 		r.recoveryAnchorReachesTarget(closedLedger.Sequence(), closedLedger.Hash(), tHash) {
 		if _, replayPeerFound := r.resolveReplayPeer(closedLedger.Sequence()+1, peerHint); !replayPeerFound &&
@@ -975,7 +1072,37 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 		return
 	}
 
-	if seq, hash, ok := r.forwardDeltaStep(svc, closed, tSeq); ok {
+	if target.source == catchupSourcePeer || svc.IsFastLoadProvisional() {
+		if seq, hash, ok := r.forwardDeltaStep(svc, actualClosed, tSeq); ok {
+			r.clearPeerStatusEvidence(actualClosed, tSeq, tHash)
+			peer, found := r.resolveAcquisitionPeer(seq, peerHint)
+			if !found {
+				return
+			}
+			if r.isBuildingLedger(seq) {
+				return
+			}
+			r.startLedgerAcquisition(seq, hash, peer)
+			return
+		}
+	}
+	if target.source == catchupSourcePeer && !svc.NeedsInitialSync() &&
+		!svc.IsFastLoadProvisional() && r.peerStatusEvidencePending(actualClosed, tSeq, tHash) {
+		if r.forwardLinkagePending(svc, actualClosed, tSeq) {
+			if r.withinCatchupLinkageGrace(actualClosed, tSeq, tHash, time.Now()) {
+				return
+			}
+		}
+		r.clearPeerStatusEvidence(actualClosed, tSeq, tHash)
+	}
+
+	r.acquisitionMu.Lock()
+	recovery := r.consensusRecovery
+	if recovery.targetHash != tHash {
+		recovery = consensusRecovery{}
+	}
+	r.acquisitionMu.Unlock()
+	if seq, hash, parent, replay, _ := r.recoveryForwardStep(svc, tSeq, tHash, recovery); replay && parent != nil {
 		peer, found := r.resolveAcquisitionPeer(seq, peerHint)
 		if !found {
 			return
@@ -986,8 +1113,8 @@ func (r *Router) armCatchupTowardTargetWithPeer(peerHint uint64) {
 		r.startLedgerAcquisition(seq, hash, peer)
 		return
 	}
-	if svc.IsFastLoadProvisional() && r.forwardLinkagePending(svc, closed, tSeq) {
-		if r.withinCatchupLinkageGrace(closed, tSeq, tHash, time.Now()) {
+	if svc.IsFastLoadProvisional() && r.forwardLinkagePending(svc, actualClosed, tSeq) {
+		if r.withinCatchupLinkageGrace(actualClosed, tSeq, tHash, time.Now()) {
 			return
 		}
 	}
@@ -1020,6 +1147,51 @@ func (r *Router) withinCatchupLinkageGrace(
 	r.linkageWait.seq = seq
 	r.linkageWait.hash = hash
 	return now.Sub(r.linkageWait.since) < catchupLinkageGracePeriod
+}
+
+func (r *Router) notePeerStatusEvidence(seq uint32, hash [32]byte) {
+	if seq == 0 || hash == ([32]byte{}) || r.adaptor == nil {
+		return
+	}
+	svc := r.adaptor.LedgerService()
+	if svc == nil {
+		return
+	}
+	closed := svc.GetClosedLedgerIndex()
+	now := time.Now()
+	r.catchupMu.Lock()
+	if !r.peerStatusEvidence || r.linkageWait.closed != closed ||
+		r.linkageWait.seq != seq || r.linkageWait.hash != hash || r.linkageWait.since.IsZero() {
+		r.linkageWait = catchupLinkageWait{
+			closed: closed,
+			seq:    seq,
+			hash:   hash,
+			since:  now,
+		}
+	}
+	r.peerStatusEvidence = true
+	r.catchupMu.Unlock()
+}
+
+func (r *Router) peerStatusEvidencePending(closed, seq uint32, hash [32]byte) bool {
+	r.catchupMu.Lock()
+	pending := r.peerStatusEvidence &&
+		r.catchup.source == catchupSourcePeer &&
+		r.catchup.seq == seq && r.catchup.hash == hash &&
+		r.linkageWait.closed == closed &&
+		r.linkageWait.seq == seq && r.linkageWait.hash == hash &&
+		!r.linkageWait.since.IsZero()
+	r.catchupMu.Unlock()
+	return pending
+}
+
+func (r *Router) clearPeerStatusEvidence(closed, seq uint32, hash [32]byte) {
+	r.catchupMu.Lock()
+	if r.peerStatusEvidence && r.linkageWait.closed == closed &&
+		r.linkageWait.seq == seq && r.linkageWait.hash == hash {
+		r.peerStatusEvidence = false
+	}
+	r.catchupMu.Unlock()
 }
 
 func (r *Router) forwardLinkagePending(svc *service.Service, closed, tipSeq uint32) bool {
@@ -1151,6 +1323,10 @@ func (r *Router) refreshCatchupAcquisitionPeer(il *inbound.Ledger, peerID uint64
 func (r *Router) startLedgerAcquisition(seq uint32, hash [32]byte, peerID uint64) bool {
 	if seq != 0 && r.belowFloor(seq) {
 		return false
+	}
+	if target := r.credibleCatchupFrontier(); target.seq == seq && target.hash == hash &&
+		r.maybeStartHeaderParentDiscovery(target, peerID) {
+		return true
 	}
 	r.acquisitionMu.Lock()
 	defer r.acquisitionMu.Unlock()
@@ -2852,8 +3028,12 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) bool {
 		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-type")
 		return false
 	}
+	if r.handleHeaderDiscoveryReply(ld, uint64(msg.PeerID)) {
+		return false
+	}
 	if (ld.InfoType == message.LedgerInfoTsCandidate && ld.LedgerSeq != 0) ||
-		(ld.InfoType != message.LedgerInfoTsCandidate && r.invalidFutureLedgerSequence(ld.LedgerSeq)) {
+		(ld.InfoType != message.LedgerInfoTsCandidate &&
+			r.invalidFutureLedgerSequence(ld.LedgerSeq) && !r.allowHeaderDiscoveryLedgerData(ld)) {
 		r.logger.Warn("invalid ledger_data ledger sequence", "peer", msg.PeerID, "seq", ld.LedgerSeq)
 		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-sequence")
 		return false
