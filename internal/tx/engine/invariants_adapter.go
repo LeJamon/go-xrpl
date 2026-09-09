@@ -13,7 +13,6 @@ type invariantsTxContext struct {
 	currentCloseTimeKnown bool
 }
 
-// invariantsTxAdapter supplies transaction fields and resolved apply context.
 type invariantsTxAdapter struct {
 	tx      txcore.Transaction
 	context invariantsTxContext
