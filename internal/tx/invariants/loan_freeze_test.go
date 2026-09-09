@@ -113,11 +113,11 @@ func newLoanFreezeFixtureWithLine(t *testing.T, assetCurrency, lineCurrency stri
 		keylet.Account(broker).Key:          mustSerializeAccount(t, &state.AccountRoot{Account: brokerAddr, Balance: 1_000_000}),
 		keylet.Account(vault).Key:           mustSerializeAccount(t, &state.AccountRoot{Account: vaultAddr, Balance: 1_000_000}),
 	}}
-	entries := []InvariantEntry{{EntryType: entry.TypeAccountRoot, After: issuerRoot}}
-	entries = append(entries,
+	entries := []InvariantEntry{
+		{EntryType: entry.TypeAccountRoot, After: issuerRoot},
 		loanFreezeLineEntry(t, broker, issuer, lineCurrency, "100", "90", lineFlags),
 		loanFreezeLineEntry(t, vault, issuer, lineCurrency, "0", "10", lineFlags),
-	)
+	}
 	return loanFreezeFixture{view: view, entries: entries, loanID: loanIDHex}
 }
 
