@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/pierrec/lz4"
+	"github.com/pierrec/lz4/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -565,14 +565,29 @@ func requireAssetAuthWithTypeAt(view state.LedgerView, asset tx.Asset, account [
 	if err != nil {
 		return ter.TefINTERNAL
 	}
+	authFlag := state.LsfHighAuth
 	if state.CompareAccountIDs(account, issuer) > 0 {
-		if line.Flags&state.LsfLowAuth == 0 {
-			return ter.TecNO_AUTH
-		}
-	} else if line.Flags&state.LsfHighAuth == 0 {
-		return ter.TecNO_AUTH
+		authFlag = state.LsfLowAuth
 	}
-	return ter.TesSUCCESS
+	if line.Flags&authFlag != 0 {
+		return ter.TesSUCCESS
+	}
+	if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0) {
+		raw, err := view.Read(keylet.Account(account))
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if raw != nil {
+			root, err := state.ParseAccountRoot(raw)
+			if err != nil {
+				return ter.TefINTERNAL
+			}
+			if root.IsPseudoAccount() {
+				return ter.TesSUCCESS
+			}
+		}
+	}
+	return ter.TecNO_AUTH
 }
 
 func ValidDomain(view state.LedgerView, domainIDHex string, account [20]byte, parentCloseTime uint32) ter.Result {

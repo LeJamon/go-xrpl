@@ -146,6 +146,10 @@ func (v *VaultClawback) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 		return ter.TefINTERNAL
 	}
 
+	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0) && tx.IsPseudoAccountID(view, holderID) {
+		return ter.TecPSEUDO_ACCOUNT
+	}
+
 	// Ambiguous: when the vault asset's issuer is the vault owner, the clawback
 	// must name the asset explicitly.
 	if v.Amount == nil && !isNativeAsset(vaultAssetOf(vd)) {
@@ -330,6 +334,10 @@ func (v *VaultClawback) clawbackAmounts(
 	)
 	asset := vaultAssetOf(vd)
 	integral := asset.IsNative() || asset.IsMPT()
+	fix340 := rules.Enabled(amendment.FeatureFixCleanup3_4_0)
+	if fix340 && isSoleShareholder(ctx.View, holderID, vd.ShareMPTID, issuance.OutstandingAmount) {
+		lossN = state.NewXRPLNumberScaled(0, 0, numberScale, state.RoundToNearest)
+	}
 	held := holderMPTBalance(ctx.View, vd.ShareMPTID, holderID)
 	assetsRecoveredN = state.NewXRPLNumberScaled(0, 0, numberScale, state.RoundToNearest)
 	clampAssets := false
@@ -351,7 +359,7 @@ func (v *VaultClawback) clawbackAmounts(
 		if err != nil {
 			return assetsTotalN, availN, assetsRecoveredN, 0, ter.TefINTERNAL
 		}
-		sharesN := assetsToSharesWithdraw(assetsTotalN, lossN, shareTotalN, amountN, false)
+		sharesN := assetsToSharesWithdraw(assetsTotalN, lossN, shareTotalN, amountN, fix340)
 		sharesDestroyed = uint64(sharesN.ToInt64WithMode(state.RoundTowardsZero))
 		assetsRecoveredN = sharesToAssetsWithdraw(
 			assetsTotalN,
@@ -378,8 +386,17 @@ func (v *VaultClawback) clawbackAmounts(
 			return assetsTotalN, availN, assetsRecoveredN, sharesDestroyed, ter.TecINTERNAL
 		}
 	}
+	if fix340 && assetsRecoveredN.Signum() > 0 {
+		assetsRecoveredN, result = clampToAssetsTotalScale(assetsTotalN, assetsRecoveredN.Negate(), integral)
+		if result != ter.TesSUCCESS {
+			return assetsTotalN, availN, assetsRecoveredN, sharesDestroyed, result
+		}
+	}
 	if sharesDestroyed == 0 {
 		return assetsTotalN, availN, assetsRecoveredN, 0, ter.TecPRECISION_LOSS
+	}
+	if fix340 && debitIsNonZeroDust(assetsTotalN, assetsRecoveredN, integral) {
+		return assetsTotalN, availN, assetsRecoveredN, sharesDestroyed, ter.TecPRECISION_LOSS
 	}
 	return assetsTotalN, availN, assetsRecoveredN, sharesDestroyed, ter.TesSUCCESS
 }

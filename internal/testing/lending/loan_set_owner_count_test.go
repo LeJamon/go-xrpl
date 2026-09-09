@@ -20,6 +20,8 @@ type loanSetAssetFixture struct {
 	env                     *jtx.TestEnv
 	issuer, owner, borrower *jtx.Account
 	asset                   tx.Asset
+	vaultID                 string
+	vaultKey                keylet.Keylet
 	brokerID                string
 	brokerKey               [32]byte
 	holdingKey              func(*jtx.Account) keylet.Keylet
@@ -33,6 +35,16 @@ type loanSetAssetFixture struct {
 func newLoanSetAssetFixture(t *testing.T, kind string, mptCreateFlags ...uint32) *loanSetAssetFixture {
 	t.Helper()
 	env := newLendingEnv(t)
+	return newLoanSetAssetFixtureWithEnv(t, env, kind, false, mptCreateFlags...)
+}
+
+func newCashLoanSetAssetFixture(t *testing.T, kind string, mptCreateFlags ...uint32) *loanSetAssetFixture {
+	t.Helper()
+	return newLoanSetAssetFixtureWithEnv(t, newCashLendingEnv(t), kind, true, mptCreateFlags...)
+}
+
+func newLoanSetAssetFixtureWithEnv(t *testing.T, env *jtx.TestEnv, kind string, cashBasis bool, mptCreateFlags ...uint32) *loanSetAssetFixture {
+	t.Helper()
 	issuer := jtx.NewAccount(kind + "-issuer")
 	owner := jtx.NewAccount(kind + "-owner")
 	depositor := jtx.NewAccount(kind + "-depositor")
@@ -109,9 +121,22 @@ func newLoanSetAssetFixture(t *testing.T, kind string, mptCreateFlags ...uint32)
 	vaultSeq := env.Seq(owner)
 	create := vault.NewVaultCreate(owner.Address, asset)
 	create.Common.Fee = reserveIncrement
+	if cashBasis {
+		kind := vault.VaultKindClosedEnded
+		subscription := env.NowRipple() + 60
+		redemption := subscription + 100_000
+		create.VaultKind = &kind
+		create.SubscriptionDate = &subscription
+		create.RedemptionDate = &redemption
+	}
 	jtx.RequireTxSuccess(t, env.Submit(create))
 	vaultID := vaultID(owner, vaultSeq)
 	jtx.RequireTxSuccess(t, env.Submit(vault.NewVaultDeposit(depositor.Address, vaultID, deposit)))
+	if cashBasis {
+		// Closed-ended deposits belong to the subscription phase. Advance the
+		// ledger after the deposit so LoanBrokerSet and LoanSet run in investment.
+		env.CloseToParentCloseTime(*create.SubscriptionDate + 1)
+	}
 
 	brokerSeq := env.Seq(owner)
 	jtx.RequireTxSuccess(t, env.Submit(lending.NewLoanBrokerSet(owner.Address, vaultID)))
@@ -129,6 +154,8 @@ func newLoanSetAssetFixture(t *testing.T, kind string, mptCreateFlags ...uint32)
 		owner:         owner,
 		borrower:      borrower,
 		asset:         asset,
+		vaultID:       vaultID,
+		vaultKey:      keylet.Vault(owner.AccountID(), vaultSeq),
 		brokerID:      brokerID,
 		brokerKey:     brokerKey,
 		holdingKey:    holdingKey,

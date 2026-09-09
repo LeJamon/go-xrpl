@@ -259,7 +259,7 @@ func TestServerDefinitionsInvalidSentinel(t *testing.T) {
 	}
 }
 
-func TestServerDefinitions_3_3_0_Sections(t *testing.T) {
+func TestServerDefinitions_3_4_0_RC1_Sections(t *testing.T) {
 	method := &handlers.ServerDefinitionsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
@@ -304,8 +304,18 @@ func TestServerDefinitions_3_3_0_Sections(t *testing.T) {
 			},
 			{
 				name:   "VaultCreate",
-				fields: []string{"Asset", "AssetsMaximum", "MPTokenMetadata", "DomainID", "WithdrawalPolicy", "Data", "Scale"},
-				styles: []int{0, 1, 1, 1, 1, 1, 1},
+				fields: []string{"Asset", "AssetsMaximum", "MPTokenMetadata", "DomainID", "WithdrawalPolicy", "Data", "Scale", "VaultKind", "SubscriptionDate", "RedemptionDate"},
+				styles: []int{0, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+			},
+			{
+				name:   "VaultWithdraw",
+				fields: []string{"VaultID", "Amount", "Destination", "DestinationTag", "CredentialIDs"},
+				styles: []int{0, 0, 1, 1, 1},
+			},
+			{
+				name:   "LoanBrokerCoverWithdraw",
+				fields: []string{"LoanBrokerID", "Amount", "Destination", "DestinationTag", "CredentialIDs"},
+				styles: []int{0, 0, 1, 1, 1},
 			},
 			{
 				name:   "MPTokenIssuanceCreate",

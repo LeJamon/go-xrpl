@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending/lmath"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -79,6 +80,10 @@ func (l *LoanBrokerSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 			}
 		}
 	} else {
+		if config.RequireRules().Enabled(amendment.FeatureLendingProtocolV1_1) &&
+			vinfo.VaultKind != vault.VaultKindClosedEnded {
+			return ter.TecNO_PERMISSION
+		}
 		if res := vault.CanAddHolding(view, asset); res != ter.TesSUCCESS {
 			return res
 		}
@@ -466,8 +471,11 @@ func (l *LoanBrokerCoverWithdraw) Preclaim(view tx.LedgerView, config tx.EngineC
 	if res := mptutil.CanTransferAsset(view, asset, b.Account, dstID, fix320); res != ter.TesSUCCESS {
 		return res
 	}
+	if res := credential.ValidCredentials(view, accountID, l.CredentialIDs); res != ter.TesSUCCESS {
+		return res
+	}
 	if accountID != dstID {
-		if res := vault.CanWithdraw(view, accountID, dstID, l.Amount, l.DestinationTag != nil, config.NumberContext()); res != ter.TesSUCCESS {
+		if res := vault.CanWithdraw(view, accountID, dstID, l.Amount, l.DestinationTag != nil, l.CredentialIDs, config.NumberContext()); res != ter.TesSUCCESS {
 			return res
 		}
 	}
@@ -477,6 +485,17 @@ func (l *LoanBrokerCoverWithdraw) Preclaim(view tx.LedgerView, config tx.EngineC
 	}
 	if res := mptutil.RequireAssetAuthAt(view, asset, dstID, authType, config.ParentCloseTime); res != ter.TesSUCCESS {
 		return res
+	}
+	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0) && accountID == dstID {
+		holdingExists, herr := vault.HoldingExists(view, dstID, asset)
+		if herr != nil {
+			return ter.TefINTERNAL
+		}
+		if !holdingExists {
+			if res := vault.CanAddHolding(view, asset); res != ter.TesSUCCESS {
+				return res
+			}
+		}
 	}
 	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
 		if res := mptutil.CheckWithdrawFreeze(view, b.Account, accountID, dstID, asset); res != ter.TesSUCCESS {
@@ -542,8 +561,16 @@ func (l *LoanBrokerCoverWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	// Ensure the destination can hold the asset when it is the submitter.
-	if dstID == accountID {
+	if dstID == accountID && (amount.Signum() > 0 || !ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0)) {
 		if _, res := vault.AddEmptyHolding(ctx, dstID, asset, ctx.PriorBalance()); res != ter.TesSUCCESS && res != ter.TecDUPLICATE {
+			return res
+		}
+	} else {
+		dstAccount, err := tx.ReadAccountRoot(ctx.View, dstID)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if res := credential.VerifyDepositPreauth(ctx, l.CredentialIDs, accountID, dstID, dstAccount); res != ter.TesSUCCESS {
 			return res
 		}
 	}

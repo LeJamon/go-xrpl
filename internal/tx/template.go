@@ -388,6 +388,9 @@ var txTemplates = map[Type][]templateField{
 		{name: "WithdrawalPolicy", style: soeOPTIONAL},
 		{name: "Data", style: soeOPTIONAL},
 		{name: "Scale", style: soeOPTIONAL},
+		{name: "VaultKind", style: soeOPTIONAL},
+		{name: "SubscriptionDate", style: soeOPTIONAL},
+		{name: "RedemptionDate", style: soeOPTIONAL},
 	},
 	TypeVaultSet: {
 		{name: "VaultID", style: soeREQUIRED},
@@ -408,6 +411,7 @@ var txTemplates = map[Type][]templateField{
 		{name: "Amount", style: soeREQUIRED},
 		{name: "Destination", style: soeOPTIONAL},
 		{name: "DestinationTag", style: soeOPTIONAL},
+		{name: "CredentialIDs", style: soeOPTIONAL},
 	},
 	TypeVaultClawback: {
 		{name: "VaultID", style: soeREQUIRED},
@@ -439,6 +443,7 @@ var txTemplates = map[Type][]templateField{
 		{name: "Amount", style: soeREQUIRED},
 		{name: "Destination", style: soeOPTIONAL},
 		{name: "DestinationTag", style: soeOPTIONAL},
+		{name: "CredentialIDs", style: soeOPTIONAL},
 	},
 	TypeLoanBrokerCoverClawback: {
 		{name: "LoanBrokerID", style: soeOPTIONAL},

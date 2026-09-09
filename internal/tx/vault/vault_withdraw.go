@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -26,7 +27,8 @@ type VaultWithdraw struct {
 	Destination string `json:"Destination,omitempty" xrpl:"Destination,omitempty"`
 
 	// DestinationTag is the destination tag (optional)
-	DestinationTag *uint32 `json:"DestinationTag,omitempty" xrpl:"DestinationTag,omitempty"`
+	DestinationTag *uint32  `json:"DestinationTag,omitempty" xrpl:"DestinationTag,omitempty"`
+	CredentialIDs  []string `json:"CredentialIDs,omitempty" xrpl:"CredentialIDs,omitempty"`
 }
 
 // NewVaultWithdraw creates a new VaultWithdraw transaction
@@ -77,11 +79,23 @@ func (v *VaultWithdraw) Validate() error {
 		}
 	}
 
-	return nil
+	return credential.CheckFields(v.CredentialIDs, v.CredentialIDs != nil || v.HasField("CredentialIDs"), "duplicate credentials")
 }
 
 func (v *VaultWithdraw) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(v)
+}
+
+func (v *VaultWithdraw) CheckExtraFeatures(rules *amendment.Rules) error {
+	if (v.CredentialIDs != nil || v.HasField("CredentialIDs")) &&
+		(!rules.Enabled(amendment.FeatureCredentials) || !rules.Enabled(amendment.FeatureFixCleanup3_4_0)) {
+		return ter.Errorf(ter.TemDISABLED, "withdrawal credentials are disabled")
+	}
+	return nil
+}
+
+func (v *VaultWithdraw) PreflightRules(rules *amendment.Rules) error {
+	return credential.CheckFieldsWithRules(v.CredentialIDs, v.CredentialIDs != nil || v.HasField("CredentialIDs"), "duplicate credentials", rules)
 }
 
 func (v *VaultWithdraw) RequiredAmendments() [][32]byte {
@@ -136,6 +150,10 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 	if vd == nil {
 		return ter.TecNO_ENTRY
 	}
+	if config.RequireRules().Enabled(amendment.FeatureLendingProtocolV1_1) &&
+		GetVaultPhase(vd.VaultKind, vd.SubscriptionDate, vd.RedemptionDate, config.ParentCloseTime) == VaultPhaseInvestment {
+		return ter.TecTOO_SOON
+	}
 
 	if !assetMatches(v.Amount, vd) && !v.amountIsShares(vd) {
 		return ter.TecWRONG_ASSET
@@ -160,6 +178,14 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 		return ter.TefINTERNAL
 	}
 
+	if res := credential.ValidCredentials(view, accountID, v.CredentialIDs); res != ter.TesSUCCESS {
+		return res
+	}
+	fix340 := config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0)
+	if fix340 && tx.IsPseudoAccountID(view, dstID) {
+		return ter.TecPSEUDO_ACCOUNT
+	}
+
 	// canWithdraw's trust-limit branch is exempt for the share MPT, so a
 	// share-denominated withdrawal pre-amendment skipped the destination's IOU
 	// trust limit entirely. Post-fixCleanup3_1_3 the shares are converted to the
@@ -179,7 +205,7 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 		}
 		limitAmount = assets
 	}
-	if res := canWithdraw(view, accountID, dstID, limitAmount, v.DestinationTag != nil, config.NumberContext()); res != ter.TesSUCCESS {
+	if res := canWithdraw(view, accountID, dstID, limitAmount, v.DestinationTag != nil, v.CredentialIDs, config.NumberContext()); res != ter.TesSUCCESS {
 		return res
 	}
 
@@ -189,6 +215,32 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 	}
 	if res := requireAuth(view, asset, dstID, authType, config.ParentCloseTime); res != ter.TesSUCCESS {
 		return res
+	}
+	if fix340 && dstID == accountID {
+		exists, err := holdingExists(view, dstID, asset)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if !exists {
+			if result := canAddHolding(view, asset); result != ter.TesSUCCESS {
+				return result
+			}
+		}
+	}
+	issuer, _ := vaultAssetIssuer(vd)
+	if fix340 && vd.Flags&VaultFlagPrivate != 0 && dstID != accountID && dstID != issuer {
+		issuance, err := readMPTIssuance(view, vd.ShareMPTID)
+		if err != nil || issuance == nil {
+			return ter.TefINTERNAL
+		}
+		if issuance.DomainID == nil {
+			return ter.TecNO_AUTH
+		}
+		for _, id := range [][20]byte{accountID, dstID} {
+			if result := mptutil.ValidDomain(view, *issuance.DomainID, id, config.ParentCloseTime); result != ter.TesSUCCESS {
+				return result
+			}
+		}
 	}
 	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_3_0) {
 		if res := mptutil.CheckWithdrawFreeze(view, vd.Account, accountID, dstID, asset); res != ter.TesSUCCESS {
@@ -257,9 +309,9 @@ func assetWithdrawalAmounts(
 	lossUnrealized,
 	shareTotal,
 	assets state.XRPLNumber,
-	integral bool,
+	integral, truncate bool,
 ) (sharesRedeemed, assetsWithdrawn state.XRPLNumber) {
-	sharesRedeemed = assetsToSharesWithdraw(assetsTotal, lossUnrealized, shareTotal, assets, false)
+	sharesRedeemed = assetsToSharesWithdraw(assetsTotal, lossUnrealized, shareTotal, assets, truncate)
 	assetsWithdrawn = sharesToAssetsWithdraw(
 		assetsTotal,
 		lossUnrealized,
@@ -325,19 +377,21 @@ func (v *VaultWithdraw) withdrawalAmounts(
 		if err != nil {
 			return assetsTotalN, availN, assetsWithdrawnN, 0, fix320, ter.TefINTERNAL
 		}
-		sharesRedeemedN, assetsWithdrawnN = assetWithdrawalAmounts(
-			assetsTotalN,
-			lossN,
-			shareTotalN,
-			assetsN,
-			integral,
-		)
+		sharesRedeemedN, assetsWithdrawnN = assetWithdrawalAmounts(assetsTotalN, lossN, shareTotalN, assetsN, integral, rules.Enabled(amendment.FeatureFixCleanup3_4_0))
 		if sharesRedeemedN.IsZero() {
 			return assetsTotalN, availN, assetsWithdrawnN, 0, fix320, ter.TecPRECISION_LOSS
 		}
 	}
 
 	shares = uint64(sharesRedeemedN.ToInt64WithMode(state.RoundTowardsZero))
+	if rules.Enabled(amendment.FeatureFixCleanup3_4_0) && shares != issuance.OutstandingAmount {
+		if v.amountIsShares(vd) && assetsWithdrawnN.IsZero() && !assetsTotalN.Sub(lossN).IsZero() {
+			return assetsTotalN, availN, assetsWithdrawnN, shares, fix320, ter.TecPRECISION_LOSS
+		}
+		if debitIsNonZeroDust(assetsTotalN, assetsWithdrawnN, integral) {
+			return assetsTotalN, availN, assetsWithdrawnN, shares, fix320, ter.TecPRECISION_LOSS
+		}
+	}
 	return assetsTotalN, availN, assetsWithdrawnN, shares, fix320, ter.TesSUCCESS
 }
 
@@ -412,6 +466,13 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecINSUFFICIENT_FUNDS
 	}
 
+	if rules.Enabled(amendment.FeatureFixCleanup3_4_0) && shares != issuance.OutstandingAmount && assetsWithdrawnN.Signum() > 0 {
+		assetsWithdrawnN, result = clampToAssetsTotalScale(assetsTotalN, assetsWithdrawnN.Negate(), asset.IsNative() || asset.IsMPT())
+		if result != ter.TesSUCCESS {
+			return result
+		}
+	}
+
 	if fix320 && shares == issuance.OutstandingAmount {
 		// Burning every outstanding share drains the vault: pay out all remaining
 		// available assets and leave no dust behind. Reaching here with a non-zero
@@ -451,8 +512,16 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 	if derr != nil {
 		return ter.TefINTERNAL
 	}
-	if dstID == ctx.AccountID {
+	if dstID == ctx.AccountID && (assetsWithdrawnN.Signum() > 0 || !rules.Enabled(amendment.FeatureFixCleanup3_4_0)) {
 		if res := addWithdrawDestinationHolding(ctx, asset); res != ter.TesSUCCESS {
+			return res
+		}
+	} else {
+		dstAccount, err := tx.ReadAccountRoot(ctx.View, dstID)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if res := credential.VerifyDepositPreauth(ctx, v.CredentialIDs, ctx.AccountID, dstID, dstAccount); res != ter.TesSUCCESS {
 			return res
 		}
 	}

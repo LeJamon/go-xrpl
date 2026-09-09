@@ -104,6 +104,12 @@ func (v *VaultDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 	if vd == nil {
 		return ter.TecNO_ENTRY
 	}
+	if config.RequireRules().Enabled(amendment.FeatureLendingProtocolV1_1) {
+		switch GetVaultPhase(vd.VaultKind, vd.SubscriptionDate, vd.RedemptionDate, config.ParentCloseTime) {
+		case VaultPhaseInvestment, VaultPhaseRedemption:
+			return ter.TecEXPIRED
+		}
+	}
 
 	if !assetMatches(v.Amount, vd) {
 		return ter.TecWRONG_ASSET
@@ -311,6 +317,22 @@ func (v *VaultDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 	)
 	if result != ter.TesSUCCESS {
 		return result
+	}
+
+	if rules.Enabled(amendment.FeatureFixCleanup3_4_0) {
+		assetsDepositedN, result = clampToAssetsTotalScale(assetsTotalN, assetsDepositedN, asset.IsNative() || asset.IsMPT())
+		if result != ter.TesSUCCESS {
+			return result
+		}
+		if !asset.IsNative() && !asset.IsMPT() {
+			balance, err := actualAssetHolding(ctx.View, ctx.AccountID, asset, rules)
+			if err != nil {
+				return ter.TefINTERNAL
+			}
+			if debitIsNonZeroDust(balance, assetsDepositedN, false) {
+				return ter.TecPRECISION_LOSS
+			}
+		}
 	}
 
 	// Update the vault totals.

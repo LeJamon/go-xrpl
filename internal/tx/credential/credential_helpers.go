@@ -203,6 +203,10 @@ func CheckCredentialExpired(cred *CredentialEntry, closeTime uint32) bool {
 // field returns temMALFORMED.
 // Reference: rippled CredentialHelpers.cpp credentials::checkFields().
 func CheckFields(ids []string, present bool, dupDetail string) error {
+	return CheckFieldsWithRules(ids, present, dupDetail, nil)
+}
+
+func CheckFieldsWithRules(ids []string, present bool, dupDetail string, rules *amendment.Rules) error {
 	if !present {
 		return nil
 	}
@@ -214,6 +218,9 @@ func CheckFields(ids []string, present bool, dupDetail string) error {
 		credentialID, ok := parseCredentialID(id)
 		if !ok {
 			return ter.Errorf(ter.TemMALFORMED, "CredentialID is invalid")
+		}
+		if rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0) && credentialID == ([32]byte{}) {
+			return ter.Errorf(ter.TemMALFORMED, "CredentialID cannot be zero")
 		}
 		if _, exists := seen[credentialID]; exists {
 			return ter.Errorf(ter.TemMALFORMED, "%s", dupDetail)

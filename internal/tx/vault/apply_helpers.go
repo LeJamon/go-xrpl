@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -68,6 +69,30 @@ func canAddHolding(view tx.LedgerView, asset tx.Asset) ter.Result {
 		return ter.TecNO_AUTH
 	}
 	return ter.TesSUCCESS
+}
+
+func holdingExists(view tx.LedgerView, accountID [20]byte, asset tx.Asset) (bool, error) {
+	if asset.IsNative() {
+		return true, nil
+	}
+	if asset.IsMPT() {
+		id, ok := assetMPTID(asset)
+		if !ok {
+			return false, fmt.Errorf("invalid MPT issuance ID")
+		}
+		if mptIDIssuer(id) == accountID {
+			return true, nil
+		}
+		return view.Exists(keylet.MPTokenByID(id, accountID))
+	}
+	issuerID, err := state.DecodeAccountID(asset.Issuer)
+	if err != nil {
+		return false, err
+	}
+	if issuerID == accountID {
+		return true, nil
+	}
+	return view.Exists(keylet.Line(accountID, issuerID, asset.Currency))
 }
 
 func canTransfer(view tx.LedgerView, asset tx.Asset, from, to [20]byte, waiveMPTCanTransfer bool) ter.Result {
@@ -264,8 +289,23 @@ func addEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset, p
 	if accountID == issuerID {
 		return 0, ter.TesSUCCESS
 	}
+	fix340 := ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0)
+	if fix340 {
+		exists, err := holdingExists(ctx.View, accountID, asset)
+		if err != nil {
+			return 0, ter.TefINTERNAL
+		}
+		if exists {
+			return 0, ter.TecDUPLICATE
+		}
+	}
 	if tx.IsGlobalFrozen(ctx.View, asset.Issuer) {
 		return 0, ter.TecFROZEN
+	}
+	if fix340 {
+		if result := canAddHoldingIssue(ctx.View, asset); result != ter.TesSUCCESS {
+			return 0, result
+		}
 	}
 
 	lineKey := keylet.Line(issuerID, accountID, asset.Currency)
@@ -447,7 +487,7 @@ func vaultAssetOf(vd *vaultData) tx.Asset {
 // `to`: the destination must exist, satisfy any RequireDestTag / DepositAuth
 // requirement, and (for an IOU delivered to a third party) not exceed its trust
 // limit. Reference: rippled View.cpp canWithdraw.
-func canWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDestTag bool, numberContext state.NumberContext) ter.Result {
+func canWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDestTag bool, credentialIDs []string, numberContext state.NumberContext) ter.Result {
 	toAcct, err := tx.ReadAccountRoot(view, to)
 	if err != nil {
 		return ter.TefINTERNAL
@@ -461,10 +501,8 @@ func canWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDes
 	if from == to {
 		return ter.TesSUCCESS
 	}
-	if toAcct.Flags&state.LsfDepositAuth != 0 {
-		if exists, _ := view.Exists(keylet.DepositPreauth(to, from)); !exists {
-			return ter.TecNO_PERMISSION
-		}
+	if res := credential.CheckDepositPreauth(view, credentialIDs, credentialIDs != nil, from, to, toAcct); res != ter.TesSUCCESS {
+		return res
 	}
 	return withdrawToDestExceedsLimit(view, from, to, amount, numberContext)
 }

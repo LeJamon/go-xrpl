@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // vaultNumber parses a NUMBER field string ("" meaning zero) using the legacy
@@ -88,6 +89,37 @@ func roundToVaultScale(amount, assetsTotal state.XRPLNumber, integral bool) stat
 	}
 	postScale := assetsTotal.Add(amount).AssetExponent(false, state.RoundToNearest)
 	return amount.RoundToAssetScale(false, postScale, state.RoundDownward)
+}
+
+func clampToAssetsTotalScale(total, delta state.XRPLNumber, integral bool) (actual state.XRPLNumber, result ter.Result) {
+	result = ter.TesSUCCESS
+	defer func() {
+		if recover() != nil {
+			result = ter.TecPATH_DRY
+		}
+	}()
+	actual = delta
+	if delta.Signum() < 0 {
+		actual = delta.Negate()
+	}
+	if integral {
+		return actual, result
+	}
+	postScale := total.Add(delta).AssetExponent(false, state.RoundToNearest)
+	if delta.Signum() < 0 {
+		actual = actual.RoundToAssetScale(false, postScale, state.RoundDownward)
+	} else {
+		posterior := total.AddRounded(actual, state.RoundDownward)
+		actual = posterior.RoundToAssetScale(false, postScale, state.RoundDownward).Sub(total).RoundToAsset(false)
+	}
+	if actual.Signum() <= 0 {
+		return actual, ter.TecPRECISION_LOSS
+	}
+	return actual, result
+}
+
+func debitIsNonZeroDust(total, amount state.XRPLNumber, integral bool) bool {
+	return !amount.IsZero() && total.Sub(amount).RoundToAsset(integral).Cmp(total.RoundToAsset(integral)) == 0
 }
 
 // assetsToSharesDeposit converts a deposit of assets into freshly minted shares.

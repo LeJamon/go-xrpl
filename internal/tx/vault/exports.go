@@ -48,8 +48,11 @@ func PseudoAssetHoldsWithNumberContext(view AssetReadView, account [20]byte, vau
 	}
 	if isNativeAsset(vd.Asset) {
 		data, rerr := view.Read(keylet.Account(account))
-		if rerr != nil || data == nil {
+		if rerr != nil {
 			return zero(), false
+		}
+		if data == nil {
+			return zero(), true
 		}
 		ar, perr := state.ParseAccountRoot(data)
 		if perr != nil {
@@ -109,6 +112,12 @@ func CanAddHolding(view tx.LedgerView, asset tx.Asset) ter.Result {
 	return canAddHolding(view, asset)
 }
 
+// HoldingExists reports whether accountID already has a holding for asset.
+// Issuers and native XRP always have an implicit holding.
+func HoldingExists(view tx.LedgerView, accountID [20]byte, asset tx.Asset) (bool, error) {
+	return holdingExists(view, accountID, asset)
+}
+
 // AddEmptyHolding gives accountID a zero-balance holding for asset, returning the
 // owner-count delta to apply.
 func AddEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset, priorBalance uint64) (int32, ter.Result) {
@@ -129,8 +138,8 @@ func ApplyAssetHoldingOwnerCount(view tx.LedgerView, accountID [20]byte, delta i
 
 // CanWithdraw validates delivery of amount from → to (destination exists,
 // dest-tag / deposit-auth, IOU trust-limit).
-func CanWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDestTag bool, numberContext state.NumberContext) ter.Result {
-	return canWithdraw(view, from, to, amount, hasDestTag, numberContext)
+func CanWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDestTag bool, credentialIDs []string, numberContext state.NumberContext) ter.Result {
+	return canWithdraw(view, from, to, amount, hasDestTag, credentialIDs, numberContext)
 }
 
 // AccountHoldsFull returns how much of asset accountID can spend
@@ -196,11 +205,14 @@ func adjustXRPBalance(ctx *tx.ApplyContext, account [20]byte, delta int64) ter.R
 
 // VaultInfo is the subset of a vault entry the lending package reads.
 type VaultInfo struct {
-	Account    [20]byte // pseudo-account
-	Owner      [20]byte
-	ShareMPTID [24]byte
-	Asset      tx.Asset
-	OwnerNode  uint64
+	Account          [20]byte // pseudo-account
+	Owner            [20]byte
+	ShareMPTID       [24]byte
+	Asset            tx.Asset
+	OwnerNode        uint64
+	VaultKind        uint8
+	SubscriptionDate *uint32
+	RedemptionDate   *uint32
 }
 
 // ReadVaultInfo reads the vault at vaultKey, returning (nil, nil) when absent.
@@ -210,11 +222,14 @@ func ReadVaultInfo(view AssetReadView, vaultKey keylet.Keylet) (*VaultInfo, erro
 		return nil, err
 	}
 	return &VaultInfo{
-		Account:    vd.Account,
-		Owner:      vd.Owner,
-		ShareMPTID: vd.ShareMPTID,
-		Asset:      vaultAssetOf(vd),
-		OwnerNode:  vd.OwnerNode,
+		Account:          vd.Account,
+		Owner:            vd.Owner,
+		ShareMPTID:       vd.ShareMPTID,
+		Asset:            vaultAssetOf(vd),
+		OwnerNode:        vd.OwnerNode,
+		VaultKind:        vd.VaultKind,
+		SubscriptionDate: vd.SubscriptionDate,
+		RedemptionDate:   vd.RedemptionDate,
 	}, nil
 }
 
@@ -223,6 +238,9 @@ func ReadVaultInfo(view AssetReadView, vaultKey keylet.Keylet) (*VaultInfo, erro
 // codec's decimal-string form ("" = zero).
 type VaultLending struct {
 	VaultInfo
+	// LEVersion selects the vault's accounting model. An absent field decodes as
+	// zero (legacy accrual); version one is cash basis.
+	LEVersion       uint8
 	AssetsTotal     string
 	AssetsAvailable string
 	AssetsMaximum   string
@@ -238,9 +256,16 @@ func ReadVaultLending(view tx.LedgerView, vaultKey keylet.Keylet) (*VaultLending
 	}
 	return &VaultLending{
 		VaultInfo: VaultInfo{
-			Account: vd.Account, Owner: vd.Owner, ShareMPTID: vd.ShareMPTID,
-			Asset: vaultAssetOf(vd), OwnerNode: vd.OwnerNode,
+			Account:          vd.Account,
+			Owner:            vd.Owner,
+			ShareMPTID:       vd.ShareMPTID,
+			Asset:            vaultAssetOf(vd),
+			OwnerNode:        vd.OwnerNode,
+			VaultKind:        vd.VaultKind,
+			SubscriptionDate: vd.SubscriptionDate,
+			RedemptionDate:   vd.RedemptionDate,
 		},
+		LEVersion:       vd.LEVersion,
 		AssetsTotal:     vd.AssetsTotal,
 		AssetsAvailable: vd.AssetsAvailable,
 		AssetsMaximum:   vd.AssetsMaximum,

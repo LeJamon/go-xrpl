@@ -233,6 +233,15 @@ func TestValidLoanBroker_MPTCoverMatchesPseudoHolding(t *testing.T) {
 			},
 		},
 		{
+			name: "deleted MPToken",
+			entry: InvariantEntry{
+				Key:         keylet.MPTokenByID(mptID, pseudoID).Key,
+				EntryType:   entry.TypeMPToken,
+				DeleteFinal: modifiedTokenBytes,
+				IsDelete:    true,
+			},
+		},
+		{
 			name: "AccountRoot",
 			entry: InvariantEntry{
 				Key:       keylet.Account(pseudoID).Key,
@@ -337,19 +346,53 @@ func TestValidLoanBroker_DiscoversChangedRippleState(t *testing.T) {
 		amendment.FeatureLendingProtocol,
 		amendment.FeatureFixCleanup3_1_3,
 	})
-	entry := InvariantEntry{Key: lineKey.Key, EntryType: entry.TypeRippleState, After: lineBytes}
+	entryChange := InvariantEntry{Key: lineKey.Key, EntryType: entry.TypeRippleState, After: lineBytes}
 
-	violation := checkValidLoanBroker([]InvariantEntry{entry}, view, rules)
+	violation := checkValidLoanBroker([]InvariantEntry{entryChange}, view, rules)
 	if violation == nil || !strings.Contains(violation.Message, "less than") {
 		t.Fatalf("trust-line-only change violation = %v, want cover below holding", violation)
 	}
+	deletedLine := InvariantEntry{
+		Key:         lineKey.Key,
+		EntryType:   entry.TypeRippleState,
+		DeleteFinal: lineBytes,
+		IsDelete:    true,
+	}
+	if violation := checkValidLoanBroker([]InvariantEntry{deletedLine}, view, rules); violation == nil || !strings.Contains(violation.Message, "less than") {
+		t.Fatalf("deleted trust-line discovery violation = %v, want cover below holding", violation)
+	}
 }
 
-// TestValidLoanBroker_InertWhenLendingDisabled asserts the invariant does not run
-// (and cannot false-positive) while LendingProtocol is off.
-func TestValidLoanBroker_InertWhenLendingDisabled(t *testing.T) {
-	entries := []InvariantEntry{{EntryType: entry.TypeLoanBroker, After: []byte{0x01}}}
-	if v := checkValidLoanBroker(entries, stubView{}, amendment.EmptyRules()); v != nil {
-		t.Fatalf("expected inert check with LendingProtocol off, got %v", v)
+func TestValidLoanBroker_NoObjectsWhenLendingDisabled(t *testing.T) {
+	if v := checkValidLoanBroker(nil, stubView{}, amendment.EmptyRules()); v != nil {
+		t.Fatalf("empty lending-disabled ledger rejected: %v", v)
+	}
+}
+
+func TestValidLoanBroker_LendingDisabledStillChecksCorruptState(t *testing.T) {
+	broker := mustEncode(t, loanBrokerInvariantMap(0, "-1"))
+	entries := []InvariantEntry{{EntryType: entry.TypeLoanBroker, After: broker}}
+	violation := checkValidLoanBroker(entries, stubView{}, amendment.EmptyRules())
+	if violation == nil || !strings.Contains(violation.Message, "negative") {
+		t.Fatalf("lending-disabled broker violation = %v, want negative-debt failure", violation)
+	}
+}
+
+func TestValidLoanBroker_ExplicitZeroLoanBrokerIDIsDiscovered(t *testing.T) {
+	account := mustEncode(t, map[string]any{
+		"LedgerEntryType":   "AccountRoot",
+		"Account":           testPseudoAddr,
+		"Balance":           "0",
+		"Flags":             uint32(0),
+		"OwnerCount":        uint32(0),
+		"Sequence":          uint32(1),
+		"LoanBrokerID":      strings.Repeat("0", 64),
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(1),
+	})
+	entries := []InvariantEntry{{EntryType: entry.TypeAccountRoot, After: account}}
+	violation := checkValidLoanBroker(entries, stubView{}, amendment.NewRules([][32]byte{amendment.FeatureLendingProtocol}))
+	if violation == nil || !strings.Contains(violation.Message, "missing") {
+		t.Fatalf("explicit zero LoanBrokerID violation = %v, want missing-broker failure", violation)
 	}
 }

@@ -1,6 +1,7 @@
 package lending
 
 import (
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending/lmath"
@@ -101,7 +102,23 @@ func (l *LoanSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 	if verr != nil || vinfo == nil {
 		return ter.TefBAD_LEDGER
 	}
-	if number(vinfo.AssetsMaximum).Signum() != 0 && number(vinfo.AssetsTotal).Cmp(number(vinfo.AssetsMaximum)) >= 0 {
+	rules := config.RequireRules()
+	if rules.Enabled(amendment.FeatureLendingProtocolV1_1) {
+		switch vault.GetVaultPhase(vinfo.VaultKind, vinfo.SubscriptionDate, vinfo.RedemptionDate, config.ParentCloseTime) {
+		case vault.VaultPhaseSubscription:
+			return ter.TecTOO_SOON
+		case vault.VaultPhaseRedemption:
+			return ter.TecEXPIRED
+		case vault.VaultPhaseInvestment:
+			if vinfo.RedemptionDate != nil {
+				finalPayment := uint64(now) + uint64(interval)*uint64(total)
+				if finalPayment+vault.LoanRedemptionBuffer > uint64(*vinfo.RedemptionDate) {
+					return ter.TecNO_PERMISSION
+				}
+			}
+		}
+	}
+	if !cashBasisEnabled(vinfo) && number(vinfo.AssetsMaximum).Signum() != 0 && number(vinfo.AssetsTotal).Cmp(number(vinfo.AssetsMaximum)) >= 0 {
 		return ter.TecLIMIT_EXCEEDED
 	}
 	asset := vinfo.Asset
@@ -168,8 +185,7 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	props := lmath.ComputeLoanProperties(ctx.Rules().FixCleanup3_2_0Enabled(), mAsset, principal, interestRate, paymentInterval, paymentTotal, uint32(b.ManagementFeeRate), vaultScale)
 	loanState := lmath.ConstructLoanState(props.LoanState.ValueOutstanding, principal, props.LoanState.ManagementFeeDue)
 
-	vaultMaximum := number(vinfo.AssetsMaximum)
-	if vaultMaximum.Signum() != 0 && loanState.InterestDue.Cmp(vaultMaximum.Sub(vaultTotal)) > 0 {
+	if loanOriginationExceedsVaultMaximumForRules(vinfo, vaultTotal, loanState.InterestDue, ctx.Rules()) {
 		return ter.TecLIMIT_EXCEEDED
 	}
 	for _, f := range l.loanSetValueFields() {
@@ -190,7 +206,8 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 	loanToBorrower := principal.Sub(originationFee)
 
-	newDebtDelta := principal.Add(loanState.InterestDue)
+	accountingDeltas := loanOriginationDeltas(vinfo, principal, loanState.InterestDue)
+	newDebtDelta := accountingDeltas.debtTotal
 	newDebtTotal := number(b.DebtTotal).Add(newDebtDelta)
 	if number(b.DebtMaximum).Signum() != 0 && number(b.DebtMaximum).Cmp(newDebtTotal) < 0 {
 		return ter.TecLIMIT_EXCEEDED
@@ -310,9 +327,8 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 	associateLoanAsset(loan, integral, ctx.Rules())
 
-	// Vault: draw principal, book the interest into total value.
 	newAvailable := vaultAvailable.Sub(principal)
-	newTotal := vaultTotal.Add(loanState.InterestDue)
+	newTotal := vaultTotal.Add(accountingDeltas.assetsTotal)
 	if r := vault.UpdateVaultTotals(ctx, vaultKey, numStr(newTotal), numStr(newAvailable), vinfo.LossUnrealized); r != ter.TesSUCCESS {
 		return r
 	}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -16,15 +17,41 @@ import (
 // vvTx is a stub transaction exposing a type, account, and flattened fields for
 // the ValidVault checker.
 type vvTx struct {
+	txType            TxType
+	acct              string
+	flat              map[string]any
+	feePayer          [20]byte
+	feePayerKnown     bool
+	feePayerPreFunded bool
+	currentCloseTime  uint32
+	closeTimeKnown    bool
+}
+
+func (x vvTx) TxType() TxType    { return x.txType }
+func (x vvTx) TxAccount() string { return x.acct }
+func (x vvTx) TxHasField(name string) bool {
+	_, ok := x.flat[name]
+	return ok
+}
+func (x vvTx) Flatten() (map[string]any, error) { return x.flat, nil }
+func (x vvTx) FeePayer() ([20]byte, bool, bool) {
+	return x.feePayer, x.feePayerPreFunded, x.feePayerKnown
+}
+func (x vvTx) CurrentCloseTime() (uint32, bool) { return x.currentCloseTime, x.closeTimeKnown }
+
+type vvTxNoContext struct {
 	txType TxType
 	acct   string
 	flat   map[string]any
 }
 
-func (x vvTx) TxType() TxType                   { return x.txType }
-func (x vvTx) TxAccount() string                { return x.acct }
-func (x vvTx) TxHasField(string) bool           { return false }
-func (x vvTx) Flatten() (map[string]any, error) { return x.flat, nil }
+func (x vvTxNoContext) TxType() TxType    { return x.txType }
+func (x vvTxNoContext) TxAccount() string { return x.acct }
+func (x vvTxNoContext) TxHasField(name string) bool {
+	_, ok := x.flat[name]
+	return ok
+}
+func (x vvTxNoContext) Flatten() (map[string]any, error) { return x.flat, nil }
 
 func vvTestIDs() (owner, pseudo [20]byte, ownerAddr, pseudoAddr string, shareMPTID [24]byte) {
 	for i := range owner {
@@ -735,5 +762,215 @@ func TestValidVault_IOUWithdrawDevnetReplays(t *testing.T) {
 				t.Fatalf("checkValidVault = %q", violation.Message)
 			}
 		})
+	}
+}
+
+func TestValidVault_FeePayerAttributionAndZeroNormalization(t *testing.T) {
+	account, _ := vvTestAccount(t, 0x11)
+	delegate, delegateAddr := vvTestAccount(t, 0x22)
+	sponsor, sponsorAddr := vvTestAccount(t, 0x33)
+	destination, _ := vvTestAccount(t, 0x44)
+	const fee = uint64(10)
+	const scale = state.MantissaScaleSmall
+	asset := vvAsset{isXRP: true, numberScale: scale}
+	fixedRules := amendment.NewRules([][32]byte{
+		amendment.FeatureSingleAssetVault,
+		amendment.FeatureFixCleanup3_2_0,
+		amendment.FeatureFixCleanup3_4_0,
+	})
+	legacyRules := savRules()
+	negativeFeeDelta := vvDelta{delta: vvNumFromI64(-int64(fee), scale)}
+	zeroDelta := vvDelta{delta: vvZero(scale)}
+
+	tests := []struct {
+		name           string
+		rules          *amendment.Rules
+		flat           map[string]any
+		payer          [20]byte
+		payerKnown     bool
+		payerPreFunded bool
+		id             [20]byte
+		delta          vvDelta
+		wantPresent    bool
+		wantSign       int
+	}{
+		{
+			name:        "legacy ordinary sender is corrected",
+			rules:       legacyRules,
+			payer:       account,
+			id:          account,
+			delta:       negativeFeeDelta,
+			wantPresent: false,
+		},
+		{
+			name:        "legacy delegate leaves transaction account untouched",
+			rules:       legacyRules,
+			flat:        map[string]any{"Delegate": delegateAddr},
+			payer:       delegate,
+			id:          account,
+			delta:       negativeFeeDelta,
+			wantPresent: true,
+			wantSign:    -1,
+		},
+		{
+			name:        "legacy delegate payer is not corrected",
+			rules:       legacyRules,
+			flat:        map[string]any{"Delegate": delegateAddr},
+			payer:       delegate,
+			id:          delegate,
+			delta:       negativeFeeDelta,
+			wantPresent: true,
+			wantSign:    -1,
+		},
+		{
+			name:        "fixed ordinary sender is corrected",
+			rules:       fixedRules,
+			payer:       account,
+			id:          account,
+			delta:       negativeFeeDelta,
+			wantPresent: false,
+		},
+		{
+			name:        "fixed delegate payer is corrected",
+			rules:       fixedRules,
+			flat:        map[string]any{"Delegate": delegateAddr},
+			payer:       delegate,
+			id:          delegate,
+			delta:       negativeFeeDelta,
+			wantPresent: false,
+		},
+		{
+			name:        "fixed sender remains fee debit under delegation",
+			rules:       fixedRules,
+			flat:        map[string]any{"Delegate": delegateAddr},
+			payer:       delegate,
+			id:          account,
+			delta:       negativeFeeDelta,
+			wantPresent: true,
+			wantSign:    -1,
+		},
+		{
+			name:  "fixed co-signed sponsor is corrected",
+			rules: fixedRules,
+			flat: map[string]any{
+				"Sponsor":      sponsorAddr,
+				"SponsorFlags": txcore.SpfSponsorFee,
+			},
+			payer:       sponsor,
+			id:          sponsor,
+			delta:       negativeFeeDelta,
+			wantPresent: false,
+		},
+		{
+			name:           "fixed pre-funded sponsor is not corrected",
+			rules:          fixedRules,
+			payer:          sponsor,
+			payerKnown:     true,
+			payerPreFunded: true,
+			id:             sponsor,
+			delta:          negativeFeeDelta,
+			wantPresent:    true,
+			wantSign:       -1,
+		},
+		{
+			name:        "fixed unknown third-party zero is normalized",
+			rules:       fixedRules,
+			payer:       account,
+			id:          destination,
+			delta:       zeroDelta,
+			wantPresent: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			checker := &vvChecker{
+				deltas:            map[[32]byte]vvDelta{keylet.Account(tc.id).Key: tc.delta},
+				fee:               fee,
+				flat:              tc.flat,
+				txAccountID:       account,
+				feePayerID:        tc.payer,
+				feePayerKnown:     tc.payerKnown,
+				feePayerPreFunded: tc.payerPreFunded,
+				rules:             tc.rules,
+				numberScale:       scale,
+			}
+			got, present := checker.deltaAssetsForParty(asset, tc.id)
+			if present != tc.wantPresent {
+				t.Fatalf("present = %v, want %v (delta=%v)", present, tc.wantPresent, got.delta)
+			}
+			if present && got.delta.Signum() != tc.wantSign {
+				t.Fatalf("delta sign = %d, want %d (delta=%v)", got.delta.Signum(), tc.wantSign, got.delta)
+			}
+		})
+	}
+}
+
+func TestValidVault_DirectCheckWithoutFeeContextDoesNotCreditDestination(t *testing.T) {
+	owner, ownerAddr := vvTestAccount(t, 0x11)
+	pseudo, pseudoAddr := vvTestAccount(t, 0x22)
+	destination, destinationAddr := vvTestAccount(t, 0x33)
+	shareMPTID := keylet.MakeMPTID(1, pseudo)
+	vaultKey := [32]byte{0x55}
+	vault := func(total string) []byte {
+		return vvCraftVault(t, ownerAddr, pseudoAddr, shareMPTID, total, total, "", "")
+	}
+	account := func(address string, balance uint64, linkedVault ...[32]byte) []byte {
+		ar := &state.AccountRoot{Account: address, Balance: balance, Sequence: 1}
+		if len(linkedVault) != 0 {
+			ar.Sequence = 0
+			ar.VaultID = linkedVault[0]
+			ar.Flags = state.LsfDisableMaster | state.LsfDefaultRipple | state.LsfDepositAuth
+		}
+		return mustSerializeAccount(t, ar)
+	}
+	entries := []InvariantEntry{
+		{Key: vaultKey, EntryType: entry.TypeVault, Before: vault("100"), After: vault("90")},
+		vvIssuanceEntry(t, pseudo, shareMPTID, 100, 90),
+		vvMPTokenEntry(t, owner, shareMPTID, 100, 90),
+		{
+			Key:       keylet.Account(pseudo).Key,
+			EntryType: entry.TypeAccountRoot,
+			Before:    account(pseudoAddr, 100, vaultKey),
+			After:     account(pseudoAddr, 90, vaultKey),
+		},
+		{
+			Key:       keylet.Account(destination).Key,
+			EntryType: entry.TypeAccountRoot,
+			Before:    account(destinationAddr, 0),
+			After:     account(destinationAddr, 0),
+		},
+	}
+	tx := vvTxNoContext{
+		txType: protocol.TxTypeVaultWithdraw,
+		acct:   ownerAddr,
+		flat:   map[string]any{"Destination": destinationAddr},
+	}
+	violation := CheckInvariants(tx, TesSUCCESS, 10, 10, entries, stubView{}, amendment.NewRules([][32]byte{
+		amendment.FeatureSingleAssetVault,
+		amendment.FeatureFixCleanup3_2_0,
+		amendment.FeatureFixCleanup3_4_0,
+	}), state.NewNumberContext(state.MantissaScaleSmall, true))
+	if violation == nil || !strings.Contains(violation.Message, "one destination balance") {
+		t.Fatalf("direct invariant check = %v, want missing destination movement", violation)
+	}
+}
+
+func TestValidVault_SetCapUsesFlattenedFieldPresence(t *testing.T) {
+	const total = int64(100)
+	checker := &vvChecker{
+		beforeVault: []vvVault{{
+			assetsTotal:   vvNumFromI64(total, state.MantissaScaleSmall),
+			assetsMaximum: vvNumFromI64(50, state.MantissaScaleSmall),
+		}},
+		afterVault: []vvVault{{
+			assetsTotal:   vvNumFromI64(total, state.MantissaScaleSmall),
+			assetsMaximum: vvNumFromI64(50, state.MantissaScaleSmall),
+		}},
+		flat:  map[string]any{"AssetsMaximum": uint32(50)},
+		rules: savFixedRules(),
+	}
+	if got := checker.finalizeSet(checker.afterVault[0], vvShares{}, nil); got == "" {
+		t.Fatal("VaultSet with explicit AssetsMaximum must reject a cap below AssetsTotal")
 	}
 }

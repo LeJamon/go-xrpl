@@ -39,6 +39,11 @@ type VaultCreate struct {
 
 	// Scale is the asset scale for the share issuance (optional, IOU only, 0..18).
 	Scale *uint8 `json:"Scale,omitempty" xrpl:"Scale,omitempty"`
+
+	VaultKind *uint8 `json:"VaultKind,omitempty" xrpl:"VaultKind,omitempty"`
+
+	SubscriptionDate *uint32 `json:"SubscriptionDate,omitempty" xrpl:"SubscriptionDate,omitempty"`
+	RedemptionDate   *uint32 `json:"RedemptionDate,omitempty" xrpl:"RedemptionDate,omitempty"`
 }
 
 func (v *VaultCreate) UnmarshalJSON(data []byte) error {
@@ -155,7 +160,7 @@ func (v *VaultCreate) Validate() error {
 		}
 	}
 
-	return nil
+	return v.validateLifecycle()
 }
 
 // isNativeAsset reports whether a is the native XRP asset.
@@ -173,6 +178,52 @@ func (v *VaultCreate) RequiredAmendments() [][32]byte {
 		amendments = append(amendments, amendment.FeaturePermissionedDomains)
 	}
 	return amendments
+}
+
+func (v *VaultCreate) hasVaultKind() bool {
+	return v.VaultKind != nil || v.Common.HasField("VaultKind")
+}
+
+func (v *VaultCreate) hasLifecycleFields() bool {
+	return v.hasVaultKind() || v.SubscriptionDate != nil || v.Common.HasField("SubscriptionDate") ||
+		v.RedemptionDate != nil || v.Common.HasField("RedemptionDate")
+}
+
+func (v *VaultCreate) vaultKindValue() uint8 {
+	if v.VaultKind != nil {
+		return *v.VaultKind
+	}
+	return VaultKindOpenEnded
+}
+
+func (v *VaultCreate) validateLifecycle() error {
+	kind := v.vaultKindValue()
+	if kind != VaultKindOpenEnded && kind != VaultKindClosedEnded {
+		return ErrVaultKindInvalid
+	}
+	subscriptionPresent := v.SubscriptionDate != nil || v.Common.HasField("SubscriptionDate")
+	redemptionPresent := v.RedemptionDate != nil || v.Common.HasField("RedemptionDate")
+	if kind == VaultKindOpenEnded {
+		if subscriptionPresent || redemptionPresent {
+			return ErrVaultDatesForbidden
+		}
+		return nil
+	}
+	if !subscriptionPresent || !redemptionPresent || v.SubscriptionDate == nil || v.RedemptionDate == nil {
+		return ErrVaultDatesRequired
+	}
+	if !IsValidClosedEndedGap(*v.SubscriptionDate, *v.RedemptionDate) {
+		return ErrVaultDatesInvalid
+	}
+	return nil
+}
+
+// CheckExtraFeatures gates lifecycle fields before common preflight checks.
+func (v *VaultCreate) CheckExtraFeatures(rules *amendment.Rules) error {
+	if v.hasLifecycleFields() && (rules == nil || !rules.Enabled(amendment.FeatureLendingProtocolV1_1)) {
+		return ter.Errorf(ter.TemDISABLED, "LendingProtocolV1_1 amendment is disabled")
+	}
+	return nil
 }
 
 // Preclaim runs the stateful checks: the vault asset must be addable, must not
@@ -223,6 +274,13 @@ func (v *VaultCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 	vaultKey := keylet.Vault(accountID, v.GetCommon().SeqProxy())
 	if tx.PseudoAccountAddress(view, config.ParentHash, vaultKey.Key) == ([20]byte{}) {
 		return ter.TerADDRESS_COLLISION
+	}
+
+	if config.RequireRules().Enabled(amendment.FeatureLendingProtocolV1_1) {
+		if (v.SubscriptionDate != nil && config.ParentCloseTime >= *v.SubscriptionDate) ||
+			(v.RedemptionDate != nil && config.ParentCloseTime >= *v.RedemptionDate) {
+			return ter.TecEXPIRED
+		}
 	}
 
 	return ter.TesSUCCESS
@@ -356,6 +414,16 @@ func (v *VaultCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		Scale:            scale,
 		Flags:            txFlags & VaultFlagPrivate,
 		Data:             v.Data,
+	}
+	if ctx.Rules().Enabled(amendment.FeatureLendingProtocolV1_1) {
+		vd.VaultKind = v.vaultKindValue()
+		if vd.VaultKind == VaultKindClosedEnded {
+			subscriptionDate := *v.SubscriptionDate
+			redemptionDate := *v.RedemptionDate
+			vd.SubscriptionDate = &subscriptionDate
+			vd.RedemptionDate = &redemptionDate
+		}
+		vd.LEVersion = VaultVersionCashBasis
 	}
 	if asset.IsMPT() {
 		vd.AssetIsMPT = true

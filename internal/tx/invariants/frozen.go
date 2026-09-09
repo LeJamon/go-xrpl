@@ -1,11 +1,13 @@
 package invariants
 
 import (
+	"encoding/hex"
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/lending"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -57,6 +59,26 @@ type frozenIssuerChanges struct {
 type frozenIssueKey struct {
 	currency string
 	issuer   string // base58 address of the potential issuer
+}
+
+type loanDefaultFreezeExemption struct {
+	currency string
+	issuer   string
+	broker   string
+	vault    string
+	mptID    [24]byte
+	hasMPT   bool
+}
+
+func loanManageDefaultFields(tx Transaction) (map[string]any, bool) {
+	if tx == nil || tx.TxType() != txcore.TypeLoanManage {
+		return nil, false
+	}
+	fields, err := tx.Flatten()
+	if err != nil || u32Field(fields, "Flags")&lending.TfLoanDefault == 0 {
+		return nil, false
+	}
+	return fields, true
 }
 
 func checkTransfersNotFrozen(
@@ -247,6 +269,7 @@ func checkTransfersNotFrozen(
 	}
 
 	// Phase 2: finalize — validate each issuer's changes.
+	loanDefaultExemption := findLoanDefaultFreezeExemption(tx, view, rules)
 
 	for issueKey, changes := range balanceChanges {
 		// Find the issuer's AccountRoot.
@@ -264,12 +287,97 @@ func checkTransfersNotFrozen(
 		}
 
 		// Validate this issuer's changes.
-		if v := validateFrozenIssuerChanges(issuerAcct, changes, tx, enforce); v != nil {
+		if v := validateFrozenIssuerChanges(issuerAcct, changes, tx, enforce, loanDefaultExemption); v != nil {
 			return v
 		}
 	}
 
 	return nil
+}
+
+func findLoanDefaultFreezeExemption(tx Transaction, view ReadView, rules *amendment.Rules) *loanDefaultFreezeExemption {
+	if rules == nil || view == nil || !rules.Enabled(amendment.FeatureFixCleanup3_4_0) {
+		return nil
+	}
+	fields, ok := loanManageDefaultFields(tx)
+	if !ok {
+		return nil
+	}
+	loanID, ok := fields["LoanID"].(string)
+	if !ok {
+		return nil
+	}
+	loanHash, err := hex.DecodeString(loanID)
+	if err != nil || len(loanHash) != 32 {
+		return nil
+	}
+	var loanIDBytes [32]byte
+	copy(loanIDBytes[:], loanHash)
+	loanData, err := view.Read(keylet.LoanByID(loanIDBytes))
+	if err != nil || loanData == nil {
+		return nil
+	}
+	loan := &entry.Loan{}
+	if err := loan.Decode(loanData); err != nil {
+		return nil
+	}
+	brokerID, err := hex.DecodeString(loan.LoanBrokerID)
+	if err != nil || len(brokerID) != 32 {
+		return nil
+	}
+	var brokerIDBytes [32]byte
+	copy(brokerIDBytes[:], brokerID)
+	brokerData, err := view.Read(keylet.LoanBrokerByID(brokerIDBytes))
+	if err != nil || brokerData == nil {
+		return nil
+	}
+	broker := &entry.LoanBroker{}
+	if err := broker.Decode(brokerData); err != nil {
+		return nil
+	}
+	vaultID, err := hex.DecodeString(broker.VaultID)
+	if err != nil || len(vaultID) != 32 {
+		return nil
+	}
+	var vaultIDBytes [32]byte
+	copy(vaultIDBytes[:], vaultID)
+	vaultData, err := view.Read(keylet.VaultByID(vaultIDBytes))
+	if err != nil || vaultData == nil {
+		return nil
+	}
+	vault := &entry.Vault{}
+	if err := vault.Decode(vaultData); err != nil {
+		return nil
+	}
+	asset, ok := vault.Asset.(map[string]any)
+	if !ok {
+		return nil
+	}
+	if mptIDString, isMPT := asset["mpt_issuance_id"].(string); isMPT {
+		mptID, err := hex.DecodeString(mptIDString)
+		if err != nil || len(mptID) != 24 || broker.Account == "" || vault.Account == "" {
+			return nil
+		}
+		var id [24]byte
+		copy(id[:], mptID)
+		return &loanDefaultFreezeExemption{
+			broker: broker.Account,
+			vault:  vault.Account,
+			mptID:  id,
+			hasMPT: true,
+		}
+	}
+	currency, currencyOK := asset["currency"].(string)
+	issuer, issuerOK := asset["issuer"].(string)
+	if !currencyOK || !issuerOK || currency == "" || issuer == "" || broker.Account == "" || vault.Account == "" {
+		return nil
+	}
+	return &loanDefaultFreezeExemption{
+		currency: currency,
+		issuer:   issuer,
+		broker:   broker.Account,
+		vault:    vault.Account,
+	}
 }
 
 // recordFrozenBalance adds a balance change to the appropriate sender or
@@ -330,6 +438,7 @@ func validateFrozenIssuerChanges(
 	changes *frozenIssuerChanges,
 	tx Transaction,
 	enforce bool,
+	loanDefaultExemption *loanDefaultFreezeExemption,
 ) *InvariantViolation {
 	// If there are no receivers or no senders, the transfer is between
 	// holder(s) and the issuer directly. This is always allowed regardless
@@ -356,7 +465,7 @@ func validateFrozenIssuerChanges(
 		// Reference: rippled line 868 — high = (line->sfLowLimit.getIssuer() == issuer->sfAccount)
 		high := change.lineData.LowLimit.Issuer == issuerAddr
 
-		if v := validateFrozenState(change, high, tx, enforce, globalFreeze); v != nil {
+		if v := validateFrozenState(change, high, tx, enforce, globalFreeze, loanDefaultExemption, issuerAddr); v != nil {
 			return v
 		}
 	}
@@ -373,6 +482,8 @@ func validateFrozenState(
 	tx Transaction,
 	enforce bool,
 	globalFreeze bool,
+	loanDefaultExemption *loanDefaultFreezeExemption,
+	issuerAddr string,
 ) *InvariantViolation {
 	// "freeze" only applies to senders (balance decrease). Checks the freeze
 	// flag on the issuer's side of the trust line:
@@ -413,6 +524,17 @@ func validateFrozenState(
 	// Reference: rippled lines 904-911
 	if (!isAMMLine || globalFreeze) && hasPrivilege(tx.TxType(), overrideFreeze) {
 		return nil
+	}
+
+	if loanDefaultExemption != nil &&
+		change.lineData.Balance.Currency == loanDefaultExemption.currency &&
+		issuerAddr == loanDefaultExemption.issuer {
+		low := change.lineData.LowLimit.Issuer
+		highAccount := change.lineData.HighLimit.Issuer
+		if (low == loanDefaultExemption.issuer && (highAccount == loanDefaultExemption.broker || highAccount == loanDefaultExemption.vault)) ||
+			(highAccount == loanDefaultExemption.issuer && (low == loanDefaultExemption.broker || low == loanDefaultExemption.vault)) {
+			return nil
+		}
 	}
 
 	// Frozen transfer detected.

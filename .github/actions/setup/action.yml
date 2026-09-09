@@ -17,7 +17,12 @@ runs:
     - name: Install CGO dev headers (Linux)
       if: inputs.cgo == 'true' && runner.os == 'Linux'
       shell: bash
-      run: sudo apt-get update && sudo apt-get install -y libssl-dev libsecp256k1-dev pkg-config
+      run: |
+        cgo_apt_sources=/etc/apt/sources.list.d/ubuntu.sources
+        test -s "$cgo_apt_sources"
+        cgo_apt_options=(-o "Dir::Etc::sourcelist=$cgo_apt_sources" -o "Dir::Etc::sourceparts=-")
+        sudo apt-get "${cgo_apt_options[@]}" update
+        sudo apt-get "${cgo_apt_options[@]}" install -y libssl-dev libsecp256k1-dev pkg-config
 
     - name: Install CGO dev headers (macOS)
       if: inputs.cgo == 'true' && runner.os == 'macOS'
