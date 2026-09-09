@@ -1,8 +1,10 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"runtime"
+	"runtime/pprof"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -43,10 +45,13 @@ func benchmarkRefreshValidatedState(b *testing.B, warm bool, workers, batchNodes
 		cacheBefore := fixture.base.PromotionCacheMetrics()
 		ioBefore := fixture.base.PromotionIOMetrics()
 		b.StartTimer()
-		err := fixture.svc.refreshGenerationStateWithBatch(
-			b.Context(), fixture.root, fixture.seq, fixture.db, nil,
-			workers, batchNodes, storedSHAMapPromotionBatchBytes,
-		)
+		var err error
+		pprof.Do(b.Context(), pprof.Labels("phase", "refresh"), func(ctx context.Context) {
+			err = fixture.svc.refreshGenerationStateWithBatch(
+				ctx, fixture.root, fixture.seq, fixture.db, nil,
+				workers, batchNodes, storedSHAMapPromotionBatchBytes,
+			)
+		})
 		b.StopTimer()
 		require.NoError(b, err)
 		cacheAfter := fixture.base.PromotionCacheMetrics()

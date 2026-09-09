@@ -516,12 +516,6 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 				},
 				adaptor.IsTrusted,
 			)
-			r.validationWork.onUntrustedResultShed = func(result validationWorkResult, count uint64) {
-				if result.validation != nil {
-					r.messageSeen.allowRetry(result.validation.SuppressionHash)
-				}
-				r.logUntrustedValidationSaturation("result", count)
-			}
 		}
 		if svc := adaptor.LedgerService(); svc != nil {
 			r.prewarmSignatures = svc.PrewarmSignaturesContext
@@ -917,10 +911,9 @@ func (r *Router) Run(ctx context.Context) {
 		case result := <-r.trustedValidationWorkResults():
 			r.handleValidationWorkResult(result)
 		case result := <-r.untrustedValidationWorkResults():
-			if !r.drainTrustedValidationResults(runCtx) {
+			if !r.handleUntrustedValidationWorkResult(runCtx, result) {
 				return
 			}
-			r.handleValidationWorkResult(result)
 		case <-r.standardReplayDrainWake:
 			r.drainStandardReplayPipeline()
 		case <-r.peerConnectWake:
@@ -948,6 +941,18 @@ func (r *Router) drainTrustedValidationResults(ctx context.Context) bool {
 			return true
 		}
 	}
+	return true
+}
+
+func (r *Router) handleUntrustedValidationWorkResult(
+	ctx context.Context,
+	result validationWorkResult,
+) bool {
+	if !r.drainTrustedValidationResults(ctx) {
+		result.permit.release()
+		return false
+	}
+	r.handleValidationWorkResult(result)
 	return true
 }
 

@@ -74,7 +74,7 @@ func TestConsensus_Expired_NoCloseTimeConsensus_WaitsForResync(t *testing.T) {
 	expireRoundSetup(t, adaptor, engine, round, 0x30)
 	engine.closeTime.haveConsensus = false
 
-	engine.checkConvergence()
+	engine.checkConvergence(nil)
 
 	phaseAfter := engine.phase
 	modeAfter := engine.mode
@@ -125,7 +125,7 @@ func TestConsensus_Expired_WithCloseTimeConsensus_AcceptsAbandoned(t *testing.T)
 	expireRoundSetup(t, adaptor, engine, round, 0x40)
 	engine.closeTime.haveConsensus = true
 
-	engine.checkConvergence()
+	engine.checkConvergence(nil)
 
 	phaseAfter := engine.phase
 	engine.mu.Unlock()

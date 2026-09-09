@@ -2,6 +2,7 @@ package openledger_test
 
 import (
 	"encoding/hex"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -722,5 +723,209 @@ func TestOpenLedger_Accept_RetriesFirst_ReplaysHeldTx(t *testing.T) {
 	}
 	if len(retries) != 0 {
 		t.Errorf("retries: got %d, want 0 (tx should have applied)", len(retries))
+	}
+}
+
+func TestOpenLedger_Accept_SeededRetrySettlesAfterCurrentReplay(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+
+	alice := jtx.NewAccount("seed-current-alice")
+	bob := jtx.NewAccount("seed-current-bob")
+	carol := jtx.NewAccount("seed-current-carol")
+	env.Fund(alice, carol)
+	parent := closedParent(t, env)
+
+	ol, err := openledger.New(parent, openledger.Config{})
+	if err != nil {
+		t.Fatalf("openledger.New: %v", err)
+	}
+	cfg := openledger.ApplyConfig{
+		BaseFee:          10,
+		ReserveBase:      200_000_000,
+		ReserveIncrement: 50_000_000,
+		LedgerSequence:   ol.Current().Sequence(),
+		NetworkID:        0,
+		Rules:            amendment.AllSupportedRules(),
+	}
+
+	current := payment.Pay(alice, bob, 300_000_000).
+		Sequence(env.Seq(alice)).
+		Build()
+	currentBlob := buildSignedBlobOL(t, env, current, alice)
+	currentPending, err := openledger.ParsePendingTx(currentBlob)
+	if err != nil {
+		t.Fatalf("ParsePendingTx current: %v", err)
+	}
+	if changed, result := ol.Submit(currentPending, cfg, nil); !changed || result != openledger.ResultSuccess {
+		t.Fatalf("Submit current: changed=%v result=%v", changed, result)
+	}
+
+	// Bob is created by current, and rippled assigns a newly-created account
+	// the successor ledger sequence as its first sequence.
+	seeded := payment.Pay(bob, carol, 5_000_000).
+		Sequence(ol.Current().Sequence()).
+		Build()
+	seededBlob := buildSignedBlobOL(t, env, seeded, bob)
+	seededPending, err := openledger.ParsePendingTx(seededBlob)
+	if err != nil {
+		t.Fatalf("ParsePendingTx seeded retry: %v", err)
+	}
+
+	retries := []openledger.PendingTx{seededPending}
+	if err := ol.Accept(parent, nil, false, &retries, cfg, nil, nil, nil); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	if len(retries) != 0 {
+		t.Fatalf("retries = %d, want 0 after seeded retry settles", len(retries))
+	}
+	cur := ol.Current()
+	if !ledgerTxExists(t, cur, currentPending.Hash) {
+		t.Errorf("current replay transaction missing from new Current()")
+	}
+	if !ledgerTxExists(t, cur, seededPending.Hash) {
+		t.Errorf("seeded retry missing after current replay enabled its account")
+	}
+}
+
+func TestOpenLedger_Accept_SeededRetryVerifiesSignature(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+
+	alice := jtx.NewAccount("seed-signature-alice")
+	bob := jtx.NewAccount("seed-signature-bob")
+	env.Fund(alice, bob)
+	parent := closedParent(t, env)
+
+	ol, err := openledger.New(parent, openledger.Config{})
+	if err != nil {
+		t.Fatalf("openledger.New: %v", err)
+	}
+	cfg := openledger.ApplyConfig{
+		BaseFee:          10,
+		ReserveBase:      200_000_000,
+		ReserveIncrement: 50_000_000,
+		LedgerSequence:   ol.Current().Sequence(),
+		NetworkID:        0,
+		Rules:            amendment.AllSupportedRules(),
+	}
+
+	paymentTx := payment.Pay(alice, bob, 1_000_000).
+		Sequence(env.Seq(alice)).
+		Build()
+	blob := buildSignedBlobOL(t, env, paymentTx, alice)
+	corrupted, err := tx.ParseFromBinary(blob)
+	if err != nil {
+		t.Fatalf("ParseFromBinary signed payment: %v", err)
+	}
+	if corrupted.GetCommon() == nil || corrupted.GetCommon().TxnSignature == "" {
+		t.Fatal("signed payment has no transaction signature to corrupt")
+	}
+	signature := []byte(corrupted.GetCommon().TxnSignature)
+	for i := range signature {
+		signature[i] = '0'
+	}
+	corrupted.GetCommon().TxnSignature = string(signature)
+	fields, err := corrupted.Flatten()
+	if err != nil {
+		t.Fatalf("Flatten corrupted payment: %v", err)
+	}
+	corruptedHex, err := binarycodec.Encode(fields)
+	if err != nil {
+		t.Fatalf("Encode corrupted payment: %v", err)
+	}
+	corruptedBlob, err := hex.DecodeString(corruptedHex)
+	if err != nil {
+		t.Fatalf("Decode corrupted payment: %v", err)
+	}
+	held, err := openledger.ParsePendingTx(corruptedBlob)
+	if err != nil {
+		t.Fatalf("ParsePendingTx corrupted payment: %v", err)
+	}
+
+	retries := []openledger.PendingTx{held}
+	if err := ol.Accept(parent, nil, true, &retries, cfg, nil, nil, nil); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	if len(retries) != 0 {
+		t.Fatalf("retries = %d, want 0 after invalid-signature rejection", len(retries))
+	}
+	if ledgerTxExists(t, ol.Current(), held.Hash) {
+		t.Fatal("seeded retry with invalid signature committed to the open ledger")
+	}
+}
+
+func TestOpenLedger_Accept_RetriesFirstOrdersCompetingTransactions(t *testing.T) {
+	for _, retriesFirst := range []bool{true, false} {
+		t.Run(fmt.Sprintf("retriesFirst=%t", retriesFirst), func(t *testing.T) {
+			env := jtx.NewTestEnv(t)
+			env.SetVerifySignatures(true)
+
+			alice := jtx.NewAccount("competing-alice")
+			bob := jtx.NewAccount("competing-bob")
+			carol := jtx.NewAccount("competing-carol")
+			env.Fund(alice, bob, carol)
+			parent := closedParent(t, env)
+
+			ol, err := openledger.New(parent, openledger.Config{})
+			if err != nil {
+				t.Fatalf("openledger.New: %v", err)
+			}
+			cfg := openledger.ApplyConfig{
+				BaseFee:          10,
+				ReserveBase:      200_000_000,
+				ReserveIncrement: 50_000_000,
+				LedgerSequence:   ol.Current().Sequence(),
+				NetworkID:        0,
+				Rules:            amendment.AllSupportedRules(),
+			}
+
+			sequence := env.Seq(alice)
+			current := payment.Pay(alice, bob, 1_000_000).
+				Sequence(sequence).
+				Build()
+			currentBlob := buildSignedBlobOL(t, env, current, alice)
+			currentPending, err := openledger.ParsePendingTx(currentBlob)
+			if err != nil {
+				t.Fatalf("ParsePendingTx current: %v", err)
+			}
+			if changed, result := ol.Submit(currentPending, cfg, nil); !changed || result != openledger.ResultSuccess {
+				t.Fatalf("Submit current: changed=%v result=%v", changed, result)
+			}
+
+			disputed := payment.Pay(alice, carol, 1_000_000).
+				Sequence(sequence).
+				Build()
+			disputedBlob := buildSignedBlobOL(t, env, disputed, alice)
+			disputedPending, err := openledger.ParsePendingTx(disputedBlob)
+			if err != nil {
+				t.Fatalf("ParsePendingTx disputed: %v", err)
+			}
+
+			retries := []openledger.PendingTx{disputedPending}
+			if err := ol.Accept(parent, nil, retriesFirst, &retries, cfg, nil, nil, nil); err != nil {
+				t.Fatalf("Accept: %v", err)
+			}
+			if len(retries) != 0 {
+				t.Fatalf("retries = %d, want 0 after stale competing tx is rejected", len(retries))
+			}
+
+			cur := ol.Current()
+			if retriesFirst {
+				if !ledgerTxExists(t, cur, disputedPending.Hash) {
+					t.Errorf("retriesFirst=true: disputed retry missing from new Current()")
+				}
+				if ledgerTxExists(t, cur, currentPending.Hash) {
+					t.Errorf("retriesFirst=true: prior current tx won despite retry-first ordering")
+				}
+			} else {
+				if ledgerTxExists(t, cur, disputedPending.Hash) {
+					t.Errorf("retriesFirst=false: disputed retry won despite current replay ordering")
+				}
+				if !ledgerTxExists(t, cur, currentPending.Hash) {
+					t.Errorf("retriesFirst=false: prior current tx missing from new Current()")
+				}
+			}
+		})
 	}
 }

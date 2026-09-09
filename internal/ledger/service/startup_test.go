@@ -581,7 +581,7 @@ func persistStartupReplayChain(
 	return parent, target, txHash
 }
 
-func startupPaymentBlob(t *testing.T, destinationName string, sequence uint32) ([]byte, [32]byte) {
+func startupPaymentBlob(t testing.TB, destinationName string, sequence uint32) ([]byte, [32]byte) {
 	t.Helper()
 	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)

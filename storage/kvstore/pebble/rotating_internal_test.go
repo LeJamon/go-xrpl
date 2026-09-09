@@ -421,3 +421,33 @@ func assertBlocked(t *testing.T, done <-chan error, operation string) {
 	case <-time.After(20 * time.Millisecond):
 	}
 }
+
+func TestPromoteBatchWritableHitsNeverOpenArchive(t *testing.T) {
+	store := newPromoteRaceStore(t)
+	require.NoError(t, store.Put([]byte("key"), []byte("current")))
+	require.NoError(t, store.Put([]byte("empty"), nil))
+	store.archive.mu.Lock()
+	defer store.archive.mu.Unlock()
+	type result struct {
+		records []kvstore.Promotion
+		stats   kvstore.PromotionStats
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		records, stats, err := store.PromoteBatch([][]byte{[]byte("key"), []byte("empty")}, 1024)
+		done <- result{records, stats, err}
+	}()
+	select {
+	case got := <-done:
+		require.NoError(t, got.err)
+		require.Len(t, got.records, 2)
+		require.True(t, got.records[0].Found)
+		require.Empty(t, got.records[0].Value)
+		require.Equal(t, []byte("current"), got.records[1].Value)
+		require.Zero(t, got.stats.ArchiveLookups)
+		require.Equal(t, 2, got.stats.ArchiveLookupsAvoided)
+	case <-time.After(5 * time.Second):
+		t.Fatal("writable hits attempted to open archive")
+	}
+}

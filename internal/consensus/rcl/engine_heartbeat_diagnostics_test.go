@@ -198,7 +198,10 @@ func TestEngineHeartbeatSlowStageDiagnostics(t *testing.T) {
 		})
 
 		assertHeartbeatStageLog(t, out, "phase-establish", "establish", "observing")
-		assertOnlyHeartbeatStageLog(t, out, "phase-establish")
+		assertHeartbeatStageLog(t, out, "pause-validation", "establish", "observing")
+		if count := strings.Count(out, "event=heartbeat-stage-slow"); count != 2 {
+			t.Fatalf("got %d slow stage logs, want phase-establish and pause-validation:\n%s", count, out)
+		}
 	})
 }
 
@@ -225,6 +228,205 @@ func TestRecordSlowHeartbeatStageThreshold(t *testing.T) {
 	stages = recordSlowHeartbeatStage(nil, "phase-open", slowHeartbeatThreshold+time.Nanosecond, context)
 	if len(stages) != 1 || stages[0].name != "phase-open" || stages[0].context != context {
 		t.Fatalf("slow stage was not retained with its context: %+v", stages)
+	}
+}
+
+func TestEngineHeartbeatAcceptNestedStageDiagnostics(t *testing.T) {
+	base := newMockAdaptor()
+	base.opMode = consensus.OpModeConnected
+	clock := &heartbeatDiagnosticClock{now: time.Now()}
+	config := DefaultConfig()
+	config.Clock = clock.Now
+	config.ManualTick = true
+	config.Timing.LedgerMinConsensus = time.Millisecond
+	config.Timing.LedgerMaxConsensus = 10 * time.Millisecond
+	engine := NewEngine(base, config)
+	engine.heartbeatNow = clock.Now
+	if err := engine.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := engine.Stop(); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	})
+
+	round := consensus.RoundID{Seq: base.lastLCL.Seq() + 1, ParentHash: base.lastLCL.ID()}
+	if err := engine.StartRound(round, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	base.buildLedgerHook = func() {
+		clock.Advance(slowHeartbeatThreshold + time.Millisecond)
+	}
+
+	engine.mu.Lock()
+	engine.prevLedger = base.lastLCL
+	engine.setPhase(consensus.PhaseEstablish)
+	engine.roundStartTime = clock.Now().Add(-time.Second)
+	engine.ourTxSet = &mockTxSet{id: consensus.TxSetID{0xA1}}
+	engine.mu.Unlock()
+
+	out := captureHeartbeatDiagnosticLogs(engine.TimerEntry)
+	assertHeartbeatStageLog(t, out, "accept", "establish", "observing")
+	assertHeartbeatStageLog(t, out, "convergence", "establish", "observing")
+	if count := strings.Count(out, "event=heartbeat-stage-slow"); count != 3 {
+		t.Fatalf("got %d slow stage logs, want phase-establish, convergence, and accept:\n%s", count, out)
+	}
+}
+
+func TestClassifyHeartbeatDispatch(t *testing.T) {
+	base := time.Unix(100, 0)
+	interval := time.Second
+
+	tests := []struct {
+		name             string
+		scheduledAt      time.Time
+		receivedAt       time.Time
+		previousReceived time.Time
+		previousEnd      time.Time
+		previousWork     time.Duration
+		wantDispatch     time.Duration
+		wantWait         time.Duration
+		wantWork         time.Duration
+		wantMissed       int64
+		wantCause        string
+	}{
+		{
+			name:             "dispatch wait",
+			scheduledAt:      base.Add(time.Second),
+			receivedAt:       base.Add(time.Second + 7*time.Millisecond),
+			previousReceived: base,
+			previousEnd:      base.Add(900 * time.Millisecond),
+			previousWork:     100 * time.Millisecond,
+			wantDispatch:     7 * time.Millisecond,
+			wantWait:         7 * time.Millisecond,
+			wantWork:         100 * time.Millisecond,
+			wantCause:        "dispatch-wait",
+		},
+		{
+			name:             "prior tick work",
+			scheduledAt:      base.Add(time.Second),
+			receivedAt:       base.Add(2*time.Second + 4*time.Millisecond),
+			previousReceived: base.Add(time.Second),
+			previousEnd:      base.Add(2 * time.Second),
+			previousWork:     2 * time.Second,
+			wantDispatch:     time.Second + 4*time.Millisecond,
+			wantWait:         4 * time.Millisecond,
+			wantWork:         2 * time.Second,
+			wantCause:        "prior-tick-work",
+		},
+		{
+			name:             "exactly one coalesced tick",
+			scheduledAt:      base.Add(2 * time.Second),
+			receivedAt:       base.Add(3*time.Second + 2*time.Millisecond),
+			previousReceived: base.Add(time.Second),
+			previousEnd:      base.Add(3 * time.Second),
+			previousWork:     3 * time.Second,
+			wantDispatch:     time.Second + 2*time.Millisecond,
+			wantWait:         2 * time.Millisecond,
+			wantWork:         3 * time.Second,
+			wantMissed:       1,
+			wantCause:        "prior-tick-work",
+		},
+		{
+			name:             "material dispatch wait after prior work",
+			scheduledAt:      base.Add(time.Second),
+			receivedAt:       base.Add(2*time.Second + slowHeartbeatThreshold + time.Millisecond),
+			previousReceived: base.Add(time.Second),
+			previousEnd:      base.Add(2 * time.Second),
+			previousWork:     2 * time.Second,
+			wantDispatch:     time.Second + slowHeartbeatThreshold + time.Millisecond,
+			wantWait:         slowHeartbeatThreshold + time.Millisecond,
+			wantWork:         2 * time.Second,
+			wantCause:        "prior-tick-work-and-dispatch-wait",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := classifyHeartbeatDispatch(
+				tt.scheduledAt,
+				tt.receivedAt,
+				tt.previousReceived,
+				tt.previousEnd,
+				tt.previousWork,
+				interval,
+			)
+			if got.dispatchDelay != tt.wantDispatch || got.dispatchWait != tt.wantWait || got.priorTickWork != tt.wantWork ||
+				got.missed != tt.wantMissed || got.cause != tt.wantCause {
+				t.Fatalf("timing = %+v, want dispatch=%v wait=%v missed=%d cause=%q", got, tt.wantDispatch, tt.wantWait, tt.wantMissed, tt.wantCause)
+			}
+		})
+	}
+}
+
+func TestClassifyHeartbeatDispatchAttributesMissedGapToDelayedTick(t *testing.T) {
+	base := time.Unix(100, 0)
+	interval := time.Second
+
+	first := classifyHeartbeatDispatch(
+		base.Add(time.Second),
+		base.Add(time.Second),
+		time.Time{},
+		time.Time{},
+		0,
+		interval,
+	)
+	second := classifyHeartbeatDispatch(
+		base.Add(2*time.Second),
+		base.Add(6*time.Second),
+		base.Add(time.Second),
+		base.Add(6*time.Second),
+		5*time.Second,
+		interval,
+	)
+	third := classifyHeartbeatDispatch(
+		base.Add(7*time.Second),
+		base.Add(7*time.Second),
+		base.Add(6*time.Second),
+		base.Add(6*time.Second),
+		0,
+		interval,
+	)
+
+	if first.missed != 0 {
+		t.Fatalf("first dispatch missed = %d, want 0", first.missed)
+	}
+	if second.missed != 4 || second.cause != "prior-tick-work" {
+		t.Fatalf("delayed dispatch = %+v, want four misses attributed to prior work", second)
+	}
+	if third.missed != 0 || third.dispatchDelay != 0 || third.dispatchWait != 0 {
+		t.Fatalf("healthy follow-up dispatch = %+v, want no delay or misses", third)
+	}
+}
+
+func TestClassifyHeartbeatDispatchRoundsTickerJitter(t *testing.T) {
+	base := time.Unix(100, 0)
+	interval := time.Second
+	tests := []struct {
+		name string
+		gap  time.Duration
+		want int64
+	}{
+		{name: "one interval plus jitter", gap: interval + time.Nanosecond, want: 0},
+		{name: "two intervals minus jitter", gap: 2*interval - time.Nanosecond, want: 0},
+		{name: "two intervals plus jitter", gap: 2*interval + time.Nanosecond, want: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := classifyHeartbeatDispatch(
+				base.Add(tt.gap),
+				base.Add(tt.gap),
+				base,
+				base,
+				0,
+				interval,
+			)
+			if got.missed != tt.want {
+				t.Fatalf("missed = %d, want %d for gap %v", got.missed, tt.want, tt.gap)
+			}
+		})
 	}
 }
 

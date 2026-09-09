@@ -1,5 +1,7 @@
 package kvstore
 
+import "context"
+
 // Batch is a write-only key-value store that accumulates changes to be flushed.
 // A batch owns all key and value data passed to Put and Delete after those
 // methods return. Close must be called to release its resources.
@@ -41,6 +43,23 @@ type KeyValueStore interface {
 	// store) return nil.
 	Sync() error
 	Close() error
+}
+
+// BatchReadingStore optionally provides bounded, context-aware reads for an
+// explicit set of keys. Results are the sorted prefix of the sorted input and
+// retain duplicate requests. For a non-empty request, maxNodes and maxBytes
+// must be positive. Implementations must return caller-owned key and value
+// slices and must not mutate keys.
+type BatchReadingStore interface {
+	GetBatch(ctx context.Context, keys [][]byte, maxNodes, maxBytes int) ([]ReadResult, error)
+}
+
+// ReadResult is one result from a BatchReadingStore read. Found distinguishes
+// a missing key from a key whose stored value is empty.
+type ReadResult struct {
+	Key   []byte
+	Value []byte
+	Found bool
 }
 
 // RotatingStore keeps a writable generation and one read-only archive
@@ -86,6 +105,19 @@ type PromotionStats struct {
 	PromotedBytes  int
 	BufferedBytes  int
 	Batches        int
+	// ArchiveLookups counts archive-generation lookups, including retries and fallback rereads.
+	ArchiveLookups int
+	// ArchiveLookupsAvoided is the number of archive lookups skipped because
+	// the writable generation resolved the key first, including retries and fallback rereads.
+	ArchiveLookupsAvoided int
+	// PrefetchBytes is the payload size fetched while prefetching promotion
+	// records, including retry payloads and fallback rereads.
+	PrefetchBytes int
+	// VersionMismatches includes repeated invalidated observations of a key.
+	VersionMismatches int
+	Retries           int
+	// Fallbacks counts single-stripe rereads after the retry budget is exhausted.
+	Fallbacks int
 }
 
 // CacheMetrics is a point-in-time snapshot of shared block-cache activity.

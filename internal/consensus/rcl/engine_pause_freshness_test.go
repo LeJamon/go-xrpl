@@ -73,7 +73,7 @@ func TestPhaseEstablish_PauseStillRefreshesProposal(t *testing.T) {
 		t.Fatal("setup did not trigger the laggard pause")
 	}
 
-	engine.phaseEstablish()
+	engine.phaseEstablish(nil)
 	phase := engine.phase
 	position := engine.state.OurPosition.Position
 	timestamp := engine.state.OurPosition.Timestamp

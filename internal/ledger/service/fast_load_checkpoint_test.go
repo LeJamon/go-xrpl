@@ -787,3 +787,45 @@ func durableCheckpointServiceWithRepositories(
 	svc.Stop()
 	return svc
 }
+
+func TestService_FastLoadCheckpointRequiresConsensusDrain(t *testing.T) {
+	ctx := t.Context()
+	base := newTestNodeStore(t, 100_000)
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
+	svc := newFastLoadCheckpointService(t, base, newTestRepositories(t, ctx), true)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+	_, err := svc.AcceptLedger(ctx)
+	require.NoError(t, err)
+	svc.FlushPersists()
+	svc.lifecycleMu.Lock()
+	svc.consensusWG.Add(1)
+	svc.lifecycleMu.Unlock()
+	var once sync.Once
+	finish := func() { once.Do(svc.consensusWG.Done) }
+	defer finish()
+	stopped := make(chan struct{})
+	go func() { svc.Stop(); close(stopped) }()
+	require.Eventually(t, func() bool {
+		svc.lifecycleMu.Lock()
+		defer svc.lifecycleMu.Unlock()
+		return svc.lifecycleState == serviceStopping
+	}, time.Second, time.Millisecond)
+	prepared, err := svc.PrepareFastLoadCheckpoint(ctx)
+	require.False(t, prepared)
+	require.ErrorContains(t, err, "before ledger service stopped")
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned before consensus work drained")
+	default:
+	}
+	finish()
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not finish after consensus drain")
+	}
+	prepared, err = svc.PrepareFastLoadCheckpoint(ctx)
+	require.NoError(t, err)
+	require.True(t, prepared)
+}

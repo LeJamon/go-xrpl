@@ -375,10 +375,10 @@ func TestRouter_Issue1677ConsensusRecoveryCallbackDoesNotReenterEngineLock(t *te
 	require.Equal(t, consensus.PhaseEstablish, engine.Phase())
 
 	now = now.Add(time.Minute)
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	go func() {
 		engine.TimerEntry()
-		close(done)
+		done <- a.StopLedgerAccept()
 	}()
 
 	var target builtTarget
@@ -401,7 +401,8 @@ func TestRouter_Issue1677ConsensusRecoveryCallbackDoesNotReenterEngineLock(t *te
 		t.Fatal("completed-ledger acceptance check re-entered Engine.mu")
 	}
 	select {
-	case <-done:
+	case err := <-done:
+		require.NoError(t, err)
 	case <-time.After(time.Second):
 		t.Fatal("accepted-ledger recovery callback did not complete")
 	}

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -18,6 +19,9 @@ import (
 type Config struct {
 	NetworkID uint32
 	Logger    xrpllog.Logger
+	// Rules selects the amendment snapshot for the initial open view. A nil
+	// value preserves the inherited-rules behaviour used by standalone callers.
+	Rules *amendment.Rules
 }
 
 // OpenLedger is goxrpl's open-ledger view.
@@ -38,12 +42,13 @@ type OpenLedger struct {
 }
 
 // New creates a fresh OpenLedger anchored on closed; the initial Current() view is
-// an open ledger built on top of closed via ledger.NewOpen.
+// an open ledger built on top of closed via ledger.NewOpenWithRules. Config.Rules
+// fixes the rule snapshot for that view when supplied.
 func New(closed *ledger.Ledger, cfg Config) (*OpenLedger, error) {
 	if closed == nil {
 		return nil, errors.New("openledger.New: closed parent is nil")
 	}
-	initial, err := ledger.NewOpen(closed, time.Now())
+	initial, err := ledger.NewOpenWithRules(closed, time.Now(), cfg.Rules)
 	if err != nil {
 		return nil, err
 	}
@@ -136,11 +141,13 @@ func (o *OpenLedger) Accept(
 	modifier func(*ledger.Ledger),
 	relay func(hash [32]byte, blob []byte),
 ) error {
-	return o.accept(newLCL, locals, retriesFirst, retries, cfg, queue, nil, modifier, relay)
+	return o.accept(newLCL, locals, retriesFirst, retries, cfg, queue, nil, modifier, relay, nil)
 }
 
 // AcceptWithPrecommit runs precommit after every fallible rebuild step has
 // succeeded and immediately before TxQ mutation and open-view publication.
+// publication, when non-nil, must synchronously invoke its argument exactly once
+// to publish the open view together with the caller's ledger frontier.
 func (o *OpenLedger) AcceptWithPrecommit(
 	newLCL *ledger.Ledger,
 	locals []PendingTx,
@@ -151,8 +158,9 @@ func (o *OpenLedger) AcceptWithPrecommit(
 	precommit func(),
 	modifier func(*ledger.Ledger),
 	relay func(hash [32]byte, blob []byte),
+	publication func(publish func()),
 ) error {
-	return o.accept(newLCL, locals, retriesFirst, retries, cfg, queue, precommit, modifier, relay)
+	return o.accept(newLCL, locals, retriesFirst, retries, cfg, queue, precommit, modifier, relay, publication)
 }
 
 func (o *OpenLedger) accept(
@@ -165,12 +173,13 @@ func (o *OpenLedger) accept(
 	precommit func(),
 	modifier func(*ledger.Ledger),
 	relay func(hash [32]byte, blob []byte),
+	publication func(publish func()),
 ) error {
 	if newLCL == nil {
 		return errors.New("openledger.Accept: newLCL is nil")
 	}
 
-	next, err := ledger.NewOpen(newLCL, time.Now())
+	next, err := ledger.NewOpenWithRules(newLCL, time.Now(), cfg.Rules)
 	if err != nil {
 		return err
 	}
@@ -191,10 +200,10 @@ func (o *OpenLedger) accept(
 	}
 
 	// 1. retriesFirst — replay disputed/held txs first, OUTSIDE modifyMu.
+	// Pass an empty initial range so the seeded retries enter the shared retry
+	// loop directly, matching rippled OpenLedger::apply.
 	if retriesFirst && retryTarget != nil && len(*retryTarget) > 0 {
-		held := append([]PendingTx(nil), (*retryTarget)...)
-		*retryTarget = (*retryTarget)[:0]
-		if err := ApplyTxs(next, held, retryTarget, applyCfg); err != nil {
+		if err := ApplyTxs(next, nil, retryTarget, applyCfg); err != nil {
 			return err
 		}
 	}
@@ -246,7 +255,7 @@ func (o *OpenLedger) accept(
 			parsedLocals = append(parsedLocals, parsedLocal{pending: prepared, parsed: prepared.Parsed})
 		}
 	} else if len(eligibleLocals) > 0 {
-		if err := applyTxs(next, eligibleLocals, retryTarget, applyCfg, false); err != nil {
+		if err := applyTxs(next, eligibleLocals, retryTarget, applyCfg, false, false); err != nil {
 			return err
 		}
 	}
@@ -294,14 +303,21 @@ func (o *OpenLedger) accept(
 		})
 	}
 
-	// 6. Atomic publish.
-	o.currentMu.Lock()
-	o.current = next
-	o.cachedTxs = nil
-	o.currentMu.Unlock()
-	if retries != nil {
-		*retries = stagedRetries
+	publish := func() {
+		o.currentMu.Lock()
+		o.current = next
+		o.cachedTxs = nil
+		o.currentMu.Unlock()
+		if retries != nil {
+			*retries = stagedRetries
+		}
 	}
+	if publication != nil {
+		publication(publish)
+	} else {
+		publish()
+	}
+
 	return nil
 }
 

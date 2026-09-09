@@ -262,7 +262,6 @@ func validationDispositionStatus(status valStatus) consensus.ValidationStatus {
 func (e *Engine) OnTxSet(id consensus.TxSetID, txs [][]byte) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.purgePendingTrustLocked()
 
 	txSet, err := e.adaptor.BuildTxSet(txs)
 	if err != nil {
@@ -271,6 +270,9 @@ func (e *Engine) OnTxSet(id consensus.TxSetID, txs [][]byte) error {
 
 	if txSet.ID() != id {
 		return fmt.Errorf("tx set ID mismatch: expected %x, got %x", id, txSet.ID())
+	}
+	if e.phase == consensus.PhaseAccepted {
+		return nil
 	}
 	// Building a set can overlap a trust callback. Apply removals before the
 	// set can seed any dispute state, then use one trust epoch for the peer

@@ -259,7 +259,8 @@ func (s *Service) Stop() {
 	// callers recheck the stopping state after acquiring openLedgerMu and cannot
 	// mutate state, regardless of which side of this barrier they acquire it on.
 	s.validationWG.Wait()
-	s.openLedgerMu.Lock()
+	s.consensusWG.Wait()
+	s.openLedgerMu.LockRole(openLedgerShutdown)
 	s.openLedgerMu.Unlock()
 	s.stopNodeStoreSweeper()
 	s.persistenceWorker.stop()
@@ -630,11 +631,23 @@ func (s *Service) refreshGenerationStateWithBatch(
 	}
 	if batchNodes > 0 {
 		if batches, ok := generations.(nodestore.BatchGenerationDatabase); ok {
+			promotionMetrics := &onlineDeleteRefreshPromotionMetrics{}
+			progress.promotionMetrics = promotionMetrics
 			control.batchFetch = func(ctx context.Context, hashes []nodestore.Hash256, maxBytes int) ([]*nodestore.Node, kvstore.PromotionStats, error) {
-				if err := s.waitForNodePersists(ctx); err != nil {
-					return nil, kvstore.PromotionStats{}, err
+				waitStartedAt := time.Now()
+				waitErr := s.waitForNodePersists(ctx)
+				waitElapsed := time.Since(waitStartedAt)
+				if waitErr != nil {
+					promotionMetrics.recordWait(waitElapsed)
+					return nil, kvstore.PromotionStats{}, waitErr
 				}
-				return batches.FetchBatchForPromotion(ctx, hashes, maxBytes)
+				fetchStartedAt := time.Now()
+				nodes, stats, fetchErr := batches.FetchBatchForPromotion(ctx, hashes, maxBytes)
+				fetchElapsed := time.Since(fetchStartedAt)
+				// Record the backend's counters before propagating its error. The
+				// backend may return useful partial-prefix diagnostics on failure.
+				promotionMetrics.record(waitElapsed, fetchElapsed, stats, len(nodes), fetchErr)
+				return nodes, stats, fetchErr
 			}
 			control.batchNodes = batchNodes
 			control.batchBytes = batchBytes

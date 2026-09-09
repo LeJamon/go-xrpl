@@ -89,38 +89,46 @@ func (s *validationPeerSessions) Peers() []peermanagement.PeerInfo {
 	return append([]peermanagement.PeerInfo(nil), s.peers...)
 }
 
-func TestValidationWorkLanePrioritizesTrustedQueue(t *testing.T) {
+func TestValidationWorkLaneKeepsTrustedVerificationIndependent(t *testing.T) {
 	started := make(chan struct{})
 	unblock := make(chan struct{})
-	verified := make(chan byte, 3)
+	var unblockOnce sync.Once
+	release := func() { unblockOnce.Do(func() { close(unblock) }) }
 	lane := newValidationWorkLane(func(validation *consensus.Validation) error {
 		if validation.LedgerID[0] == 1 {
 			close(started)
 			<-unblock
 		}
-		verified <- validation.LedgerID[0]
 		return nil
 	}, nil, nil)
-	lane.workers = 1
+	lane.trustedWorkers = 1
+	lane.untrustedWorkers = 1
 	lane.start(t.Context())
 	defer lane.stop()
+	defer release()
 
 	require.Equal(t, validationQueueAccepted, lane.submit(validationWork{
 		validation: &consensus.Validation{LedgerID: consensus.LedgerID{1}},
 	}))
 	<-started
 	require.Equal(t, validationQueueAccepted, lane.submit(validationWork{
-		validation: &consensus.Validation{LedgerID: consensus.LedgerID{2}},
-	}))
-	require.Equal(t, validationQueueAccepted, lane.submit(validationWork{
 		validation: &consensus.Validation{LedgerID: consensus.LedgerID{3}},
 		trusted:    true,
 	}))
-	close(unblock)
-
-	require.Equal(t, byte(1), <-verified)
-	require.Equal(t, byte(3), <-verified)
-	require.Equal(t, byte(2), <-verified)
+	select {
+	case result := <-lane.trustedResultCh:
+		require.Equal(t, byte(3), result.validation.LedgerID[0])
+	case <-time.After(time.Second):
+		t.Fatal("trusted verification was blocked by untrusted verification")
+	}
+	release()
+	select {
+	case result := <-lane.untrustedResultCh:
+		require.Equal(t, byte(1), result.validation.LedgerID[0])
+		result.permit.release()
+	case <-time.After(time.Second):
+		t.Fatal("untrusted verification did not complete")
+	}
 }
 
 func TestValidationWorkLaneStopsWithoutClosingProducerChannels(t *testing.T) {
@@ -128,16 +136,49 @@ func TestValidationWorkLaneStopsWithoutClosingProducerChannels(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	lane.start(ctx)
 	cancel()
-	lane.stop()
+	var stops sync.WaitGroup
+	stops.Add(2)
+	go func() {
+		defer stops.Done()
+		lane.stop()
+	}()
+	go func() {
+		defer stops.Done()
+		lane.stop()
+	}()
+	stops.Wait()
 
 	require.False(t, lane.running())
 	require.Equal(t, validationQueueStopped,
 		lane.submit(validationWork{validation: &consensus.Validation{}}))
 }
 
+func TestValidationWorkLaneRestartDrainsOutstandingPermits(t *testing.T) {
+	lane := newValidationWorkLane(func(*consensus.Validation) error { return nil }, nil, nil)
+	lane.trustedWorkers = 0
+	lane.untrustedWorkers = 0
+	lane.start(t.Context())
+
+	require.Equal(t, validationQueueAccepted, lane.submit(validationWork{
+		validation: &consensus.Validation{},
+	}))
+	lane.stop()
+	require.Equal(t, cap(lane.untrustedPermits), len(lane.untrustedPermits))
+
+	lane.start(t.Context())
+	require.Equal(t, validationQueueAccepted, lane.submit(validationWork{
+		validation: &consensus.Validation{},
+	}))
+	work := <-lane.untrustedJobs
+	lane.untrustedResultCh <- validationWorkResult{permit: work.permit}
+	lane.stop()
+	require.Equal(t, cap(lane.untrustedPermits), len(lane.untrustedPermits))
+}
+
 func TestValidationWorkLaneLimitsTrustedClaimsPerPeer(t *testing.T) {
 	lane := newValidationWorkLane(func(*consensus.Validation) error { return nil }, nil, nil)
-	lane.workers = 0
+	lane.trustedWorkers = 0
+	lane.untrustedWorkers = 0
 	lane.start(t.Context())
 	defer lane.stop()
 
@@ -159,7 +200,7 @@ func TestValidationWorkLaneLimitsTrustedClaimsPerPeer(t *testing.T) {
 		trusted:    true,
 	}))
 
-	work, ok := lane.next(t.Context())
+	work, ok := lane.next(t.Context(), true)
 	require.True(t, ok)
 	require.Equal(t, uint64(10), work.origin.PeerID)
 	require.Equal(t, validationQueueAccepted, lane.submit(validationWork{
@@ -185,7 +226,8 @@ func TestRouterTrustedValidationQueueFullShedsWithoutCrypto(t *testing.T) {
 		verifyCalls++
 		return nil
 	}, nil, nil)
-	lane.workers = 0
+	lane.trustedWorkers = 0
+	lane.untrustedWorkers = 0
 	lane.start(t.Context())
 	defer lane.stop()
 	router.validationWork = lane
@@ -257,7 +299,8 @@ func TestRouterValidationAdmissionFailureAllowsDuplicateRetry(t *testing.T) {
 			adaptor := newTestAdaptor(t)
 			router := newTestRouter(&validationProcessorEngine{mockEngine: &mockEngine{}}, adaptor, nil)
 			lane := router.validationWork
-			lane.workers = 0
+			lane.trustedWorkers = 0
+			lane.untrustedWorkers = 0
 			lane.start(t.Context())
 			defer lane.stop()
 			router.setPeerSessionView(&validationPeerSessions{})
@@ -276,7 +319,8 @@ func TestRouterValidationAdmissionFailureAllowsDuplicateRetry(t *testing.T) {
 			router.handleValidation(&peermanagement.InboundMessage{PeerID: 12, Payload: payload})
 
 			require.False(t, router.messageSeen.seenRecently(suppressionHash))
-			<-jobs
+			work := <-jobs
+			work.permit.release()
 			router.handleValidation(&peermanagement.InboundMessage{PeerID: 13, Payload: payload})
 			require.Len(t, jobs, cap(jobs))
 		})
@@ -290,7 +334,8 @@ func TestRouterUntrustedValidationQueueSaturationRateLimited(t *testing.T) {
 	var logs bytes.Buffer
 	router.logger = slog.New(slog.NewTextHandler(&logs, nil))
 	lane := router.validationWork
-	lane.workers = 0
+	lane.trustedWorkers = 0
+	lane.untrustedWorkers = 0
 	lane.start(t.Context())
 	defer lane.stop()
 
@@ -312,46 +357,69 @@ func TestRouterUntrustedValidationQueueSaturationRateLimited(t *testing.T) {
 		"saturation logs should emit for counts 1, 64, and 128")
 }
 
-func TestValidationResultCapacityIsolatedAndRateLimited(t *testing.T) {
+func TestValidationResultBackpressureBoundsUntrustedVerification(t *testing.T) {
+	var verifyCalls atomic.Int64
 	adaptor := newTestAdaptor(t)
 	engine := &validationProcessorEngine{mockEngine: &mockEngine{}}
 	router := newTestRouter(engine, adaptor, nil)
-	var logs bytes.Buffer
-	router.logger = slog.New(slog.NewTextHandler(&logs, nil))
+	lane := newValidationWorkLane(func(*consensus.Validation) error {
+		verifyCalls.Add(1)
+		return nil
+	}, nil, nil)
+	lane.trustedWorkers = 0
+	lane.untrustedWorkers = cap(lane.untrustedPermits)
+	lane.start(t.Context())
+	defer lane.stop()
+
+	for range cap(lane.untrustedPermits) {
+		require.Equal(t, validationQueueAccepted, lane.submit(validationWork{
+			validation: &consensus.Validation{},
+		}))
+	}
+	require.Eventually(t, func() bool {
+		return verifyCalls.Load() == int64(cap(lane.untrustedPermits)) &&
+			len(lane.untrustedResultCh) == cap(lane.untrustedResultCh)
+	}, time.Second, time.Millisecond)
+	require.Equal(t, validationQueueSaturated, lane.submit(validationWork{
+		validation: &consensus.Validation{},
+	}))
+	require.Equal(t, int64(cap(lane.untrustedPermits)), verifyCalls.Load(),
+		"a full result lane must backpressure before another verification starts")
+
+	result := <-lane.untrustedResultCh
+	router.handleValidationWorkResult(result)
+	require.Equal(t, validationQueueAccepted, lane.submit(validationWork{
+		validation: &consensus.Validation{},
+	}))
+}
+
+func TestRouterReleasesUntrustedPermitWhenPriorityDrainCancels(t *testing.T) {
+	adaptor := newTestAdaptor(t)
+	router := newTestRouter(&validationProcessorEngine{mockEngine: &mockEngine{}}, adaptor, nil)
 	lane := router.validationWork
-	require.NotNil(t, lane)
+	lane.trustedWorkers = 0
+	lane.untrustedWorkers = 0
+	lane.start(t.Context())
+	defer lane.stop()
 
-	for range cap(lane.untrustedResultCh) {
-		lane.untrustedResultCh <- validationWorkResult{}
-	}
-	suppressionHash := [32]byte{1}
-	router.messageSeen.observe(suppressionHash)
-	for i := range 130 {
-		result := validationWorkResult{}
-		if i == 0 {
-			result.validation = &consensus.Validation{SuppressionHash: suppressionHash}
-		}
-		outcome := lane.deliverResult(t.Context(), result, false)
-		require.Equal(t, validationResultUntrustedSaturated, outcome)
-	}
-	require.False(t, router.messageSeen.seenRecently(suppressionHash))
-	firstSeen, _ := router.messageSeen.observe(suppressionHash)
-	require.True(t, firstSeen)
+	require.Equal(t, validationQueueAccepted, lane.submit(validationWork{
+		validation: &consensus.Validation{},
+	}))
+	work := <-lane.untrustedJobs
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
 
-	trusted := validationWorkResult{
-		validation: &consensus.Validation{LedgerID: consensus.LedgerID{9}},
-	}
-	require.Equal(t, validationResultDelivered,
-		lane.deliverResult(t.Context(), trusted, true))
-	require.Equal(t, trusted, <-lane.trustedResultCh)
-	require.Equal(t, uint64(130), lane.untrustedResultShed.Load())
-	require.Equal(t, 3, strings.Count(logs.String(), "untrusted validation verifier saturated"),
-		"saturation logs should emit for counts 1, 64, and 128")
+	require.False(t, router.handleUntrustedValidationWorkResult(ctx, validationWorkResult{
+		permit: work.permit,
+	}))
+	require.Equal(t, cap(lane.untrustedPermits), len(lane.untrustedPermits))
 }
 
 func TestUntrustedResultSaturationDoesNotBlockTrustedWorker(t *testing.T) {
 	untrustedStarted := make(chan struct{})
 	unblockUntrusted := make(chan struct{})
+	var unblockOnce sync.Once
+	release := func() { unblockOnce.Do(func() { close(unblockUntrusted) }) }
 	lane := newValidationWorkLane(func(validation *consensus.Validation) error {
 		if validation.LedgerID[0] == 1 {
 			close(untrustedStarted)
@@ -359,12 +427,14 @@ func TestUntrustedResultSaturationDoesNotBlockTrustedWorker(t *testing.T) {
 		}
 		return nil
 	}, nil, nil)
-	lane.workers = 1
+	lane.trustedWorkers = 1
+	lane.untrustedWorkers = 1
 	for range cap(lane.untrustedResultCh) {
 		lane.untrustedResultCh <- validationWorkResult{}
 	}
 	lane.start(t.Context())
 	defer lane.stop()
+	defer release()
 
 	require.Equal(t, validationQueueAccepted, lane.submit(validationWork{
 		validation: &consensus.Validation{LedgerID: consensus.LedgerID{1}},
@@ -374,7 +444,7 @@ func TestUntrustedResultSaturationDoesNotBlockTrustedWorker(t *testing.T) {
 		validation: &consensus.Validation{LedgerID: consensus.LedgerID{2}},
 		trusted:    true,
 	}))
-	close(unblockUntrusted)
+	release()
 
 	select {
 	case result := <-lane.trustedResultCh:
@@ -382,12 +452,13 @@ func TestUntrustedResultSaturationDoesNotBlockTrustedWorker(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("trusted worker result blocked behind saturated untrusted results")
 	}
-	require.Equal(t, uint64(1), lane.untrustedResultShed.Load())
 }
 
 func TestValidationWorkLanePromotesQueuedResultAfterTrustChange(t *testing.T) {
 	verificationStarted := make(chan struct{})
 	finishVerification := make(chan struct{})
+	var finishOnce sync.Once
+	finish := func() { finishOnce.Do(func() { close(finishVerification) }) }
 	nodeID := consensus.NodeID{0x31}
 	var trusted atomic.Bool
 	lane := newValidationWorkLane(
@@ -401,12 +472,14 @@ func TestValidationWorkLanePromotesQueuedResultAfterTrustChange(t *testing.T) {
 			return candidate == nodeID && trusted.Load()
 		},
 	)
-	lane.workers = 1
+	lane.trustedWorkers = 1
+	lane.untrustedWorkers = 1
 	for range cap(lane.untrustedResultCh) {
 		lane.untrustedResultCh <- validationWorkResult{}
 	}
 	lane.start(t.Context())
 	defer lane.stop()
+	defer finish()
 
 	validation := &consensus.Validation{
 		LedgerID: consensus.LedgerID{3},
@@ -418,15 +491,15 @@ func TestValidationWorkLanePromotesQueuedResultAfterTrustChange(t *testing.T) {
 	}))
 	<-verificationStarted
 	trusted.Store(true)
-	close(finishVerification)
+	finish()
 
 	select {
 	case result := <-lane.trustedResultCh:
 		require.Same(t, validation, result.validation)
+		result.permit.release()
 	case <-time.After(time.Second):
 		t.Fatal("newly trusted verified result was not routed to the trusted result lane")
 	}
-	require.Equal(t, uint64(0), lane.untrustedResultShed.Load())
 	require.Equal(t, cap(lane.untrustedResultCh), len(lane.untrustedResultCh),
 		"saturated untrusted results must remain isolated from a promoted result")
 }

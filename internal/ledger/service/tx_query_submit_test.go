@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -301,6 +302,14 @@ func TestService_SubmitTransaction_BatchSignerFailureIsNotHeld(t *testing.T) {
 		t.Fatalf("service.Start: %v", err)
 	}
 	t.Cleanup(svc.Stop)
+	parent := svc.GetClosedLedger()
+	if parent == nil {
+		t.Fatal("GetClosedLedger returned nil")
+	}
+	svc.SetValidatedLedger(parent.Sequence(), parent.Hash())
+	if _, err := svc.AcceptConsensusResult(t.Context(), parent, nil, nil, parent.CloseTime().Add(time.Second), true); err != nil {
+		t.Fatalf("AcceptConsensusResult: %v", err)
+	}
 	if !svc.TransactionRules().Enabled(amendment.FeatureBatchV1_1) {
 		t.Fatal("Batch amendment not enabled in service rules")
 	}

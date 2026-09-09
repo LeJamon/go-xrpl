@@ -414,6 +414,7 @@ func (r *Router) logTrustedValidationSaturation(peerID, count uint64) {
 }
 
 func (r *Router) handleValidationWorkResult(result validationWorkResult) {
+	defer result.permit.release()
 	if result.err != nil {
 		r.logger.Info("invalid validation signature",
 			"t", "consensus",

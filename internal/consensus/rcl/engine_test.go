@@ -2869,7 +2869,7 @@ func TestConsensus_NoSoftTimeoutAcceptAtLedgerMaxConsensus(t *testing.T) {
 	engine.setPhase(consensus.PhaseEstablish)
 	engine.roundStartTime = time.Now().Add(-16 * time.Second)
 	engine.prevRoundTime = 2 * time.Second
-	engine.phaseEstablish()
+	engine.phaseEstablish(nil)
 	engine.mu.Unlock()
 
 	sawTimeout := false
@@ -3007,7 +3007,7 @@ func TestConsensus_AbandonHardTimeout(t *testing.T) {
 		}
 	}
 	adaptor.notifyTrustChanged()
-	engine.phaseEstablish()
+	engine.phaseEstablish(nil)
 	phaseAfter := engine.phase
 	modeAfter := engine.mode
 	engine.mu.Unlock()
@@ -3122,7 +3122,7 @@ func TestConsensus_AbandonRetryGate(t *testing.T) {
 		}
 	}
 	adaptor.notifyTrustChanged()
-	engine.phaseEstablish()
+	engine.phaseEstablish(nil)
 	phaseAfter := engine.phase
 	modeAfter := engine.mode
 	engine.mu.Unlock()

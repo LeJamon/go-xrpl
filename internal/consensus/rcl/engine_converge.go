@@ -9,7 +9,8 @@ import (
 )
 
 // phaseEstablish re-evaluates convergence each heartbeat. Caller must hold e.mu.
-func (e *Engine) phaseEstablish() {
+// A nil stage sink disables nested timer diagnostics.
+func (e *Engine) phaseEstablish(stages *[]slowHeartbeatStage) {
 	roundTime := e.now().Sub(e.roundStartTime)
 
 	// Snapshot round time and converge percent each tick (before pause/accept)
@@ -33,19 +34,31 @@ func (e *Engine) phaseEstablish() {
 	// (rippled updateOurPositions prunes unconditionally, Consensus.h:
 	// 1509-1528): a bowed-out observer waiting at the close-time gate must
 	// not have its tally diluted forever by a silent peer's stale vote.
-	e.pruneUntrustedProposalsLocked()
-	e.pruneStaleProposalsLocked()
+	e.recordHeartbeatStageLocked(stages, "proposal-pruning", func() {
+		e.pruneUntrustedProposalsLocked()
+		e.pruneStaleProposalsLocked()
+	})
 
-	e.updatePosition()
-	e.updateCloseTimePosition()
+	e.recordHeartbeatStageLocked(stages, "dispute-position-update", func() {
+		e.updatePosition()
+	})
+	e.recordHeartbeatStageLocked(stages, "close-time-consensus", func() {
+		e.updateCloseTimePosition()
+	})
 
 	// Keep positions fresh while a quorum-blocking share of validators
 	// lags. The pause gates acceptance, not proposal maintenance.
-	if e.shouldPause(roundTime) {
+	paused := false
+	e.recordHeartbeatStageLocked(stages, "pause-validation", func() {
+		paused = e.shouldPause(roundTime)
+	})
+	if paused {
 		return
 	}
 
-	e.checkConvergence()
+	e.recordHeartbeatStageLocked(stages, "convergence", func() {
+		e.checkConvergence(stages)
+	})
 }
 
 // pruneUntrustedProposalsLocked removes current positions that lost trust
@@ -420,7 +433,7 @@ const (
 // close-time gate, exactly as in rippled where haveConsensus returns true
 // for all three and phaseEstablish then returns on !haveCloseTimeConsensus_
 // (Consensus.h:1406-1411). No→retry next heartbeat.
-func (e *Engine) checkConvergence() {
+func (e *Engine) checkConvergence(stages *[]slowHeartbeatStage) {
 	if e.phase != consensus.PhaseEstablish {
 		return
 	}
@@ -485,7 +498,9 @@ func (e *Engine) checkConvergence() {
 	// Close-time consensus gates every accept path. Re-try once here in case
 	// the caller (OnProposal/OnTxSet) skipped phaseEstablish.
 	if !e.closeTime.haveConsensus {
-		e.updateCloseTimePosition()
+		e.recordHeartbeatStageLocked(stages, "close-time-consensus", func() {
+			e.updateCloseTimePosition()
+		})
 		if !e.closeTime.haveConsensus {
 			return
 		}
@@ -493,7 +508,9 @@ func (e *Engine) checkConvergence() {
 
 	switch state {
 	case consensusStateYes:
-		e.acceptLedger(consensus.ResultSuccess)
+		e.recordHeartbeatStageLocked(stages, "accept", func() {
+			e.acceptLedger(consensus.ResultSuccess)
+		})
 	case consensusStateMovedOn:
 		finished := 0
 		if e.validationTracker != nil && e.prevLedger != nil {
@@ -508,9 +525,13 @@ func (e *Engine) checkConvergence() {
 			"prev_proposers", e.prevProposers,
 			"round_time_ms", roundTime.Milliseconds(),
 		)
-		e.acceptLedger(consensus.ResultMovedOn)
+		e.recordHeartbeatStageLocked(stages, "accept", func() {
+			e.acceptLedger(consensus.ResultMovedOn)
+		})
 	case consensusStateExpired:
-		e.acceptLedger(consensus.ResultAbandoned)
+		e.recordHeartbeatStageLocked(stages, "accept", func() {
+			e.acceptLedger(consensus.ResultAbandoned)
+		})
 	}
 }
 

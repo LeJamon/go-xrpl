@@ -104,16 +104,22 @@ type ApplyConfig struct {
 	// EnforceLoadFee, set by TxqAdapter.ApplyTransaction); the
 	// consensus-build path leaves it ignored.
 	FeeTrack *feetrack.LoadFeeTrack
+	// RetrySalt orders the shared retry set when it is supplied by a consensus
+	// acceptance. Rippled keeps this salt on the CanonicalTXSet that carries
+	// build leftovers and newly retriable open-ledger transactions.
+	RetrySalt *[32]byte
 }
 
 // ApplyTxs runs rippled's open-ledger 3-pass apply against view, which
-// is mutated in place. retries (if non-nil) is filled, in input order,
-// with PendingTxs whose final classification is Retry — caller decides
-// whether to hold them for the next ledger.
+// is mutated in place. retries (if non-nil) is filled with PendingTxs whose
+// final classification is Retry — caller decides whether to hold them for
+// the next ledger. Seeded retries are part of the same shared queue as
+// candidates returned by the initial pass.
 //
-// Caller is responsible for any canonical sort (the consensus build
-// path canonical-sorts with the agreed-set SHAMap-root salt per
-// RCLConsensus.cpp:512; the future OpenLedger.Modify will NOT sort).
+// The shared retry queue is ordered by ApplyConfig.RetrySalt when supplied.
+// Without it, insertion order is preserved. The consensus build path
+// canonical-sorts with the agreed-set SHAMap-root salt per RCLConsensus.cpp:
+// 512; the future OpenLedger.Modify will NOT sort.
 //
 // Mirrors OpenLedger::apply (OpenLedger.h:209-270) and apply_one
 // (OpenLedger.cpp:170-189). The "skip txs already in parent" guard from
@@ -202,14 +208,55 @@ func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte
 }
 
 func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg ApplyConfig) error {
-	return applyTxs(view, txs, retries, cfg, true)
+	return applyTxs(view, txs, retries, cfg, true, true)
 }
 
-func applyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg ApplyConfig, checkMembership bool) error {
+type retryCandidate struct {
+	pending PendingTx
+	parsed  tx.Transaction
+}
+
+func appendRetryCandidate(
+	queue []retryCandidate,
+	seen map[[32]byte]struct{},
+	ptx PendingTx,
+	parsed tx.Transaction,
+) []retryCandidate {
+	if _, exists := seen[ptx.Hash]; exists {
+		return queue
+	}
+	seen[ptx.Hash] = struct{}{}
+	return append(queue, retryCandidate{pending: ptx, parsed: parsed})
+}
+
+func orderRetryCandidates(queue []retryCandidate, salt *[32]byte) {
+	if salt == nil || len(queue) < 2 {
+		return
+	}
+	ordered := make([]PendingTx, len(queue))
+	byHash := make(map[[32]byte]retryCandidate, len(queue))
+	for i, candidate := range queue {
+		ordered[i] = candidate.pending
+		byHash[candidate.pending.Hash] = candidate
+	}
+	CanonicalSort(ordered, *salt)
+	for i, ptx := range ordered {
+		queue[i] = byHash[ptx.Hash]
+	}
+}
+
+func applyTxs(
+	view *ledger.Ledger,
+	txs []PendingTx,
+	retries *[]PendingTx,
+	cfg ApplyConfig,
+	checkMembership bool,
+	includeSeededRetries bool,
+) error {
 	if view == nil {
 		return errors.New("openledger.ApplyTxs: view is nil")
 	}
-	if len(txs) == 0 {
+	if len(txs) == 0 && (!includeSeededRetries || retries == nil || len(*retries) == 0) {
 		return nil
 	}
 	if cfg.Rules == nil {
@@ -244,10 +291,23 @@ func applyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 		}
 	}
 
-	// retrySet tracks the canonical retry queue (rippled's `OrderedTxs
-	// retries`). Each tx index either lives here (Retry classification on
-	// the previous pass) or has already been settled (Success/Failure).
-	retrySet := make([]int, 0, len(txs))
+	// retrySet is rippled's shared `OrderedTxs retries`: it starts with any
+	// seeded candidates and receives candidates returned by the prior-current
+	// pass. Seeded candidates are deliberately not applied in the initial txs
+	// pass; retriesFirst controls whether this shared loop runs before the
+	// previous open view is replayed.
+	retrySet := make([]retryCandidate, 0, len(txs))
+	retrySeen := make(map[[32]byte]struct{}, len(txs))
+	if includeSeededRetries && retries != nil {
+		for _, ptx := range *retries {
+			parsedRetry, err := tx.ParseFromBinary(ptx.Blob)
+			if err != nil {
+				return fmt.Errorf("openledger.ApplyTxs: parse seeded retry %x: %w", ptx.Hash, err)
+			}
+			parsedRetry.SetRawBytes(ptx.Blob)
+			retrySet = appendRetryCandidate(retrySet, retrySeen, ptx, parsedRetry)
+		}
+	}
 
 	buildEngine := func(certainRetry, skipSig bool) *txengine.BlockProcessor {
 		engineConfig := tx.EngineConfig{
@@ -303,9 +363,10 @@ func applyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 		case ResultSuccess:
 			initialChanges++
 		case ResultRetry:
-			retrySet = append(retrySet, i)
+			retrySet = appendRetryCandidate(retrySet, retrySeen, ptx, parsed[i])
 		}
 	}
+	orderRetryCandidates(retrySet, cfg.RetrySalt)
 
 	retryLoopCount := totalPasses
 	certainRetry := true
@@ -317,19 +378,18 @@ func applyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 	}
 	for pass := 0; pass < retryLoopCount && len(retrySet) > 0; pass++ {
 		// Signatures were verified on the initial pass; retry passes
-		// always skip.
-		bp = buildEngine(certainRetry, true)
+		// normally skip. Seeded retries have no initial tx pass, so verify
+		// them on the first shared retry pass before allowing later passes
+		// to use the cached verdict.
+		bp = buildEngine(certainRetry, cfg.SkipSignatureVerification || pass > 0)
 
 		changes := 0
-		// Reuse retrySet's backing array; the inner loop reads each idx
-		// before appending, so aliasing is safe.
+		// Reuse retrySet's backing array; the range length is fixed before
+		// appends and each candidate is read before its slot is reused.
 		nextRetries := retrySet[:0]
-		for _, idx := range retrySet {
-			ptx := txs[idx]
-			if parsed[idx] == nil {
-				continue
-			}
-			class, err := applyAndClassify(bp, parsed[idx], ptx.Blob, cfg.Mode, logger)
+		for _, candidate := range retrySet {
+			ptx := candidate.pending
+			class, err := applyAndClassify(bp, candidate.parsed, ptx.Blob, cfg.Mode, logger)
 			if err != nil {
 				return fmt.Errorf(
 					"openledger.ApplyTxs: apply transaction %x on retry pass %d: %w",
@@ -342,7 +402,7 @@ func applyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 			case ResultSuccess:
 				changes++
 			case ResultRetry:
-				nextRetries = append(nextRetries, idx)
+				nextRetries = append(nextRetries, candidate)
 			}
 		}
 		retrySet = nextRetries
@@ -355,21 +415,20 @@ func applyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 		certainRetry = nextRetryState(certainRetry, changes, pass+passOffset)
 	}
 
-	if retries != nil && len(retrySet) > 0 {
-		// Dedup against entries already in *retries — Accept calls
-		// ApplyTxs over multiple phases (retries-first, prior-current,
-		// locals) with the same slice, so the same hash can land in
-		// retrySet across phases.
+	if retries != nil {
+		if includeSeededRetries {
+			*retries = (*retries)[:0]
+		}
 		seen := make(map[[32]byte]struct{}, len(retrySet)+len(*retries))
 		for _, ptx := range *retries {
 			seen[ptx.Hash] = struct{}{}
 		}
-		for _, idx := range retrySet {
-			if _, ok := seen[txs[idx].Hash]; ok {
+		for _, candidate := range retrySet {
+			if _, ok := seen[candidate.pending.Hash]; ok {
 				continue
 			}
-			seen[txs[idx].Hash] = struct{}{}
-			*retries = append(*retries, txs[idx])
+			seen[candidate.pending.Hash] = struct{}{}
+			*retries = append(*retries, candidate.pending)
 		}
 	}
 

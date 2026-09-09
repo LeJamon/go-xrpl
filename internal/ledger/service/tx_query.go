@@ -145,7 +145,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		preprocessValid = txengine.PrewarmSignature(ptx.Parsed) == nil
 	}
 
-	if err := s.lockOpenLedgerIfRunning(); err != nil {
+	if err := s.lockOpenLedgerIfRunning(openLedgerIngress); err != nil {
 		return nil, err
 	}
 	defer s.openLedgerMu.Unlock()
@@ -434,22 +434,30 @@ func (s *Service) GetAutofillFee(parsedTx tx.Transaction, unlimited bool, mult, 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if s.openLedger == nil {
+	if s.openLedgerView == nil {
+		return 0, svcerr.ErrNoOpenLedger
+	}
+	current := s.openLedgerView.Current()
+	if current == nil {
 		return 0, svcerr.ErrNoOpenLedger
 	}
 
-	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.openLedger)
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(current)
+	rules := current.Rules()
+	if rules == nil {
+		rules = s.currentOpenLedgerRulesLocked()
+	}
 	feeCfg := tx.EngineConfig{
 		BaseFee:          baseFee,
 		ReserveBase:      reserveBase,
 		ReserveIncrement: reserveIncrement,
 		NetworkID:        s.config.NetworkID,
-		Rules:            rulesFromLedger(s.closedLedger, s.logger),
+		Rules:            rules,
 	}
 
 	feeDefault := baseFee
 	if parsedTx != nil && tx.PassesTransactionLocalChecks(parsedTx) == ter.TesSUCCESS {
-		feeDefault = computeBaseFeeForTx(s.openLedger, parsedTx, feeCfg)
+		feeDefault = computeBaseFeeForTx(current, parsedTx, feeCfg)
 	}
 
 	loadFee, scaleErr := feetrack.ScaleFeeLoad(feeDefault, s.feeTrack, unlimited)
@@ -458,7 +466,7 @@ func (s *Service) GetAutofillFee(parsedTx tx.Transaction, unlimited bool, mult, 
 	}
 	fee := loadFee
 	if s.txQueue != nil {
-		feeLevel := s.txQueue.RequiredFeeLevel(s.openLedger.TxCount())
+		feeLevel := s.txQueue.RequiredFeeLevel(current.TxCount())
 		if uint64(feeLevel) > txq.BaseLevel {
 			escalated := txq.FeeLevel(uint64(feeLevel)-1).ToDrops(baseFee) + 1
 			if escalated > fee {
@@ -886,34 +894,42 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if s.openLedger == nil {
+	if s.openLedgerView == nil {
+		return nil, svcerr.ErrNoOpenLedger
+	}
+	current := s.openLedgerView.Current()
+	if current == nil {
 		return nil, svcerr.ErrNoOpenLedger
 	}
 
 	// Create a snapshot of the open ledger's state map for isolation
-	snapshot, err := s.openLedger.StateMapSnapshot()
+	snapshot, err := current.StateMapSnapshot()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create ledger snapshot: %w", err)
 	}
 
 	// Create a temporary ledger view backed by the snapshot
-	simView := newSnapshotView(snapshot, s.openLedger)
+	simView := newSnapshotView(snapshot, current)
 
 	// Read fee settings from the FeeSettings SLE in the open ledger
-	simBaseFee, simReserveBase, simReserveIncrement := readFeesFromLedger(s.openLedger)
+	simBaseFee, simReserveBase, simReserveIncrement := readFeesFromLedger(current)
+	rules := current.Rules()
+	if rules == nil {
+		rules = s.currentOpenLedgerRulesLocked()
+	}
 
 	// Create engine config from current state
 	engineConfig := tx.EngineConfig{
 		BaseFee:          simBaseFee,
 		ReserveBase:      simReserveBase,
 		ReserveIncrement: simReserveIncrement,
-		LedgerSequence:   s.openLedger.Sequence(),
-		ParentHash:       s.openLedger.ParentHash(),
+		LedgerSequence:   current.Sequence(),
+		ParentHash:       current.ParentHash(),
 		OpenLedger:       true, // Check fee adequacy for simulation
 		ApplyFlags:       tx.TapDRY_RUN,
 		NetworkID:        s.config.NetworkID,
 		Logger:           s.config.Logger,
-		Rules:            rulesFromLedger(s.closedLedger, s.logger),
+		Rules:            rules,
 		FeeTrack:         s.feeTrack,
 	}
 
@@ -929,8 +945,8 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 		Fee:                    applyResult.Fee,
 		Metadata:               applyResult.Metadata,
 		Message:                applyResult.Message,
-		CurrentLedger:          s.openLedger.Sequence(),
-		CurrentLedgerCloseTime: protocol.RippleSeconds(s.openLedger.CloseTime()),
+		CurrentLedger:          current.Sequence(),
+		CurrentLedgerCloseTime: protocol.RippleSeconds(current.CloseTime()),
 		ValidatedLedger:        0,
 	}
 

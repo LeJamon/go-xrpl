@@ -10,29 +10,44 @@ import (
 )
 
 const (
-	trustedValidationQueueDepth   = 256
-	untrustedValidationQueueDepth = 64
-	validationWorkerCount         = 2
-	trustedValidationPerPeerDepth = trustedValidationQueueDepth / 4
+	trustedValidationQueueDepth    = 256
+	untrustedValidationQueueDepth  = 64
+	validationWorkerCount          = 2
+	trustedValidationWorkerCount   = 1
+	untrustedValidationWorkerCount = validationWorkerCount - trustedValidationWorkerCount
+	trustedValidationPerPeerDepth  = trustedValidationQueueDepth / 4
 )
+
+type validationPermit struct {
+	lane     *validationWorkLane
+	released atomic.Bool
+}
+
+func (p *validationPermit) release() {
+	if p == nil || p.lane == nil || p.released.Swap(true) {
+		return
+	}
+	p.lane.untrustedPermits <- struct{}{}
+}
 
 type validationWork struct {
 	validation *consensus.Validation
 	origin     consensus.ValidationOrigin
 	trusted    bool
+	permit     *validationPermit
 }
 
 type validationWorkResult struct {
 	validation *consensus.Validation
 	origin     consensus.ValidationOrigin
 	err        error
+	permit     *validationPermit
 }
 
 type validationResultDelivery uint8
 
 const (
 	validationResultDelivered validationResultDelivery = iota
-	validationResultUntrustedSaturated
 	validationResultCancelled
 )
 
@@ -53,17 +68,18 @@ type validationWorkLane struct {
 	untrustedJobs     chan validationWork
 	trustedResultCh   chan validationWorkResult
 	untrustedResultCh chan validationWorkResult
-	workers           int
-	trustedPending    map[peermanagement.PeerID]int
+	// Untrusted permits cover queueing, verification, and result consumption.
+	untrustedPermits chan struct{}
+	trustedWorkers   int
+	untrustedWorkers int
+	trustedPending   map[peermanagement.PeerID]int
 
-	// Set before start and immutable while workers run.
-	onUntrustedResultShed func(validationWorkResult, uint64)
-	untrustedResultShed   atomic.Uint64
-
-	mu     sync.Mutex
-	done   <-chan struct{}
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	mu       sync.Mutex
+	done     <-chan struct{}
+	cancel   context.CancelFunc
+	stopped  chan struct{}
+	stopping bool
+	wg       sync.WaitGroup
 }
 
 func newValidationWorkLane(
@@ -71,7 +87,7 @@ func newValidationWorkLane(
 	peerPresent func(peermanagement.PeerID) bool,
 	isTrusted func(consensus.NodeID) bool,
 ) *validationWorkLane {
-	return &validationWorkLane{
+	lane := &validationWorkLane{
 		verify:            verify,
 		peerPresent:       peerPresent,
 		isTrusted:         isTrusted,
@@ -79,9 +95,15 @@ func newValidationWorkLane(
 		untrustedJobs:     make(chan validationWork, untrustedValidationQueueDepth),
 		trustedResultCh:   make(chan validationWorkResult, trustedValidationQueueDepth),
 		untrustedResultCh: make(chan validationWorkResult, untrustedValidationQueueDepth),
-		workers:           validationWorkerCount,
+		untrustedPermits:  make(chan struct{}, untrustedValidationQueueDepth),
+		trustedWorkers:    trustedValidationWorkerCount,
+		untrustedWorkers:  untrustedValidationWorkerCount,
 		trustedPending:    make(map[peermanagement.PeerID]int),
 	}
+	for range untrustedValidationQueueDepth {
+		lane.untrustedPermits <- struct{}{}
+	}
+	return lane
 }
 
 func (l *validationWorkLane) start(ctx context.Context) {
@@ -94,15 +116,20 @@ func (l *validationWorkLane) start(ctx context.Context) {
 		l.mu.Unlock()
 		return
 	}
+	l.stopping = false
 	workerCtx, cancel := context.WithCancel(ctx)
 	l.cancel = cancel
 	l.done = workerCtx.Done()
-	l.mu.Unlock()
-
-	for range l.workers {
+	l.stopped = make(chan struct{})
+	for range l.trustedWorkers {
 		l.wg.Add(1)
-		go l.run(workerCtx)
+		go l.run(workerCtx, true)
 	}
+	for range l.untrustedWorkers {
+		l.wg.Add(1)
+		go l.run(workerCtx, false)
+	}
+	l.mu.Unlock()
 }
 
 func (l *validationWorkLane) stop() {
@@ -112,14 +139,28 @@ func (l *validationWorkLane) stop() {
 
 	l.mu.Lock()
 	cancel := l.cancel
-	l.cancel = nil
-	l.done = nil
-	l.mu.Unlock()
+	stopped := l.stopped
 	if cancel == nil {
+		l.mu.Unlock()
 		return
 	}
+	if l.stopping {
+		l.mu.Unlock()
+		<-stopped
+		return
+	}
+	l.stopping = true
+	l.mu.Unlock()
 	cancel()
 	l.wg.Wait()
+	l.drainPending()
+	l.mu.Lock()
+	l.cancel = nil
+	l.done = nil
+	l.stopping = false
+	l.stopped = nil
+	close(stopped)
+	l.mu.Unlock()
 }
 
 func (l *validationWorkLane) submit(work validationWork) validationQueueAdmission {
@@ -129,9 +170,27 @@ func (l *validationWorkLane) submit(work validationWork) validationQueueAdmissio
 
 	l.mu.Lock()
 	done := l.done
-	if done == nil {
+	if done == nil || l.stopping {
 		l.mu.Unlock()
 		return validationQueueStopped
+	}
+	select {
+	case <-done:
+		l.mu.Unlock()
+		return validationQueueStopped
+	default:
+	}
+
+	var permit *validationPermit
+	if !work.trusted {
+		select {
+		case <-l.untrustedPermits:
+			permit = &validationPermit{lane: l}
+		default:
+			l.mu.Unlock()
+			return validationQueueSaturated
+		}
+		work.permit = permit
 	}
 
 	jobs := l.untrustedJobs
@@ -151,9 +210,15 @@ func (l *validationWorkLane) submit(work validationWork) validationQueueAdmissio
 		l.mu.Unlock()
 		return validationQueueAccepted
 	case <-done:
+		if permit != nil {
+			permit.release()
+		}
 		l.mu.Unlock()
 		return validationQueueStopped
 	default:
+		if permit != nil {
+			permit.release()
+		}
 		l.mu.Unlock()
 		return validationQueueSaturated
 	}
@@ -196,22 +261,24 @@ func (r *Router) untrustedValidationWorkResults() <-chan validationWorkResult {
 	return r.validationWork.untrustedResults()
 }
 
-func (l *validationWorkLane) run(ctx context.Context) {
+func (l *validationWorkLane) run(ctx context.Context, trustedWorker bool) {
 	defer l.wg.Done()
 	for {
-		work, ok := l.next(ctx)
+		work, ok := l.next(ctx, trustedWorker)
 		if !ok {
 			return
 		}
 		if l.peerPresent != nil &&
 			work.origin.PeerID != 0 &&
 			!l.peerPresent(peermanagement.PeerID(work.origin.PeerID)) {
+			work.permit.release()
 			continue
 		}
 
 		result := validationWorkResult{
 			validation: work.validation,
 			origin:     work.origin,
+			permit:     work.permit,
 			err:        l.verify(work.validation),
 		}
 		trustedResult := work.trusted
@@ -219,6 +286,7 @@ func (l *validationWorkLane) run(ctx context.Context) {
 			trustedResult = l.isTrusted(work.validation.NodeID)
 		}
 		if l.deliverResult(ctx, result, trustedResult) == validationResultCancelled {
+			work.permit.release()
 			return
 		}
 	}
@@ -243,28 +311,26 @@ func (l *validationWorkLane) deliverResult(
 		return validationResultDelivered
 	case <-ctx.Done():
 		return validationResultCancelled
-	default:
-		count := l.untrustedResultShed.Add(1)
-		if l.onUntrustedResultShed != nil {
-			l.onUntrustedResultShed(result, count)
-		}
-		return validationResultUntrustedSaturated
 	}
 }
 
-func (l *validationWorkLane) next(ctx context.Context) (validationWork, bool) {
-	select {
-	case work := <-l.trustedJobs:
-		l.markDequeued(work)
-		return work, true
-	default:
+func (l *validationWorkLane) next(ctx context.Context, trustedWorker bool) (validationWork, bool) {
+	if ctx.Err() != nil {
+		return validationWork{}, false
 	}
-
+	jobs := l.untrustedJobs
+	if trustedWorker {
+		jobs = l.trustedJobs
+	}
 	select {
-	case work := <-l.trustedJobs:
-		l.markDequeued(work)
-		return work, true
-	case work := <-l.untrustedJobs:
+	case work := <-jobs:
+		if trustedWorker {
+			l.markDequeued(work)
+		}
+		if ctx.Err() != nil {
+			work.permit.release()
+			return validationWork{}, false
+		}
 		return work, true
 	case <-ctx.Done():
 		return validationWork{}, false
@@ -283,4 +349,32 @@ func (l *validationWorkLane) markDequeued(work validationWork) {
 		l.trustedPending[peerID]--
 	}
 	l.mu.Unlock()
+}
+
+func (l *validationWorkLane) drainPending() {
+	if l == nil {
+		return
+	}
+	for {
+		select {
+		case work := <-l.trustedJobs:
+			work.permit.release()
+		case work := <-l.untrustedJobs:
+			work.permit.release()
+		default:
+			l.mu.Lock()
+			l.trustedPending = make(map[peermanagement.PeerID]int)
+			l.mu.Unlock()
+			for {
+				select {
+				case result := <-l.trustedResultCh:
+					result.permit.release()
+				case result := <-l.untrustedResultCh:
+					result.permit.release()
+				default:
+					return
+				}
+			}
+		}
+	}
 }

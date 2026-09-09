@@ -233,6 +233,14 @@ type LedgerAcceptDeferrer interface {
 	DeferLedgerAccept(complete func()) bool
 }
 
+// LedgerAcceptDeferrerLifecycle is implemented by deferrers that own a
+// background acceptance worker. The engine calls StopLedgerAccept before
+// shutting down its event bus or any resources used by a completion callback.
+type LedgerAcceptDeferrerLifecycle interface {
+	LedgerAcceptDeferrer
+	StopLedgerAccept() error
+}
+
 // Adaptor is composed of the narrower per-subsystem interfaces below; depend
 // on the narrowest one that satisfies your needs.
 

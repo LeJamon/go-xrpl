@@ -33,6 +33,8 @@ var (
 
 // Compile-time interface check.
 var _ consensus.Adaptor = (*Adaptor)(nil)
+var _ consensus.LedgerAcceptDeferrer = (*Adaptor)(nil)
+var _ consensus.LedgerAcceptDeferrerLifecycle = (*Adaptor)(nil)
 
 // Adaptor implements consensus.Adaptor, bridging the consensus engine
 // to the ledger service, transaction queue, and P2P network.
@@ -146,6 +148,9 @@ type Adaptor struct {
 	// onTxSetBuilt fires when BuildTxSet caches a new tx set, so the overlay
 	// can broadcast mtHAVE_SET{tsHAVE} for it. nil-safe.
 	onTxSetBuilt func(consensus.TxSetID)
+
+	acceptWorkerMu sync.Mutex
+	acceptWorker   *ledgerAcceptWorker
 
 	// unlBlocked reports the validator-list aggregator's UNL lock-down flag.
 	// Wired at startup when publisher lists are configured; nil (no
@@ -436,12 +441,43 @@ func New(cfg Config) *Adaptor {
 		trustedVotes:      trustedVotes,
 		relayValidations:  cfg.RelayValidations,
 		logger:            logger,
+		acceptWorker:      newLedgerAcceptWorker(),
 	}
 	if cfg.LedgerService != nil {
 		cfg.LedgerService.SetValidatedLedgerAgeClock(a.Now)
 		cfg.LedgerService.SetOnValidatedLedger(a.onValidatedLedger)
 	}
 	return a
+}
+
+// DeferLedgerAccept schedules the accepted-ledger completion away from the
+// consensus heartbeat. The worker is single-flight and bounded; when it is
+// stopping or already occupied, false leaves the engine's synchronous
+// fallback responsible for the callback.
+func (a *Adaptor) DeferLedgerAccept(complete func()) bool {
+	a.acceptWorkerMu.Lock()
+	worker := a.acceptWorker
+	if worker == nil {
+		worker = newLedgerAcceptWorker()
+		a.acceptWorker = worker
+	}
+	a.acceptWorkerMu.Unlock()
+	return worker.deferAccept(complete)
+}
+
+// StopLedgerAccept drains and joins the acceptance worker before callers close
+// resources used by an in-flight completion callback. It is idempotent and
+// safe for adaptors created only for read-side tests.
+func (a *Adaptor) StopLedgerAccept() error {
+	a.acceptWorkerMu.Lock()
+	worker := a.acceptWorker
+	if worker == nil {
+		worker = newLedgerAcceptWorker()
+		a.acceptWorker = worker
+	}
+	a.acceptWorkerMu.Unlock()
+	worker.stopAndWait()
+	return nil
 }
 
 func (a *Adaptor) onValidatedLedger(seq uint32, hash, parentHash [32]byte) {

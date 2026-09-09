@@ -481,8 +481,8 @@ func TestPathFindRefreshSharesPathfindAdmissionPerConnection(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("latest queued connection job was not published")
 	}
+	require.NoError(t, manager.wait(t.Context()))
 	require.Equal(t, int64(0), shedder.PathfindActive())
-	_ = manager.wait(context.Background())
 }
 
 func TestPathFindRefreshCancellationStress(t *testing.T) {

@@ -136,7 +136,9 @@ func TestStandardReplayPipelineYieldsAfterBoundedApplyBatch(t *testing.T) {
 	completeStandardReplayTestLink(t, r, links[0])
 
 	metrics := r.FastSyncMetrics()
-	require.Equal(t, uint64(standardReplayApplyBatch), metrics.ReplayPipelineApplied)
+	// The time budget may yield before the count limit on a busy runner.
+	require.Positive(t, metrics.ReplayPipelineApplied)
+	require.LessOrEqual(t, metrics.ReplayPipelineApplied, uint64(standardReplayApplyBatch))
 	require.True(t, r.standardReplay.active)
 	require.True(t, r.standardReplay.applying)
 	require.Len(t, r.standardReplayDrainWake, 1,

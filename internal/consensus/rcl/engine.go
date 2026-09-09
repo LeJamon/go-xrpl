@@ -48,9 +48,10 @@ type Engine struct {
 	// validation extensions, resolved once at construction. Nil when the
 	// adaptor doesn't implement them: nothing is listed, only trusted
 	// validations relay.
-	listedOracle   consensus.ListedOracle
-	relayPolicy    consensus.ValidationRelayPolicy
-	acceptDeferrer consensus.LedgerAcceptDeferrer
+	listedOracle            consensus.ListedOracle
+	relayPolicy             consensus.ValidationRelayPolicy
+	acceptDeferrer          consensus.LedgerAcceptDeferrer
+	acceptDeferrerLifecycle consensus.LedgerAcceptDeferrerLifecycle
 
 	// Current state
 	mode  consensus.Mode
@@ -496,6 +497,7 @@ func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 	e.listedOracle, _ = adaptor.(consensus.ListedOracle)
 	e.relayPolicy, _ = adaptor.(consensus.ValidationRelayPolicy)
 	e.acceptDeferrer, _ = adaptor.(consensus.LedgerAcceptDeferrer)
+	e.acceptDeferrerLifecycle, _ = adaptor.(consensus.LedgerAcceptDeferrerLifecycle)
 	e.modeAtomic.Store(int32(e.mode))
 	return e
 }
@@ -799,6 +801,10 @@ func (e *Engine) Stop() error {
 	if e.ctx != nil {
 		cause = context.Cause(e.ctx)
 	}
+	var stopErr error
+	if e.acceptDeferrerLifecycle != nil {
+		stopErr = e.acceptDeferrerLifecycle.StopLedgerAccept()
+	}
 	e.finish(cause)
 	e.eventBus.Stop()
 
@@ -823,10 +829,10 @@ func (e *Engine) Stop() error {
 		err := arc.Close(ctx)
 		cancel()
 		if err != nil {
-			return fmt.Errorf("close validation archive: %w", err)
+			stopErr = errors.Join(stopErr, fmt.Errorf("close validation archive: %w", err))
 		}
 	}
-	return nil
+	return stopErr
 }
 
 func (e *Engine) StartRound(round consensus.RoundID, proposing bool) error {
