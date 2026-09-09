@@ -286,6 +286,9 @@ func (sm *SHAMap) walkBackedContext(
 	}
 	wg.Wait()
 	if firstErr != nil {
+		if errors.Is(firstErr, ErrTraversalBudget) && len(missing) != 0 {
+			return missing, nil
+		}
 		return nil, firstErr
 	}
 

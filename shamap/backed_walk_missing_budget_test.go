@@ -1,0 +1,64 @@
+package shamap
+
+import (
+	"errors"
+	"testing"
+)
+
+func TestBackedWalkBudgetReturnsPartialMissingFrontier(t *testing.T) {
+	source := New(TypeState)
+	for _, key := range [][32]byte{{0x01}, {0x02}, {0x03}} {
+		if err := source.Put(key, make([]byte, 12)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := collectDirtyForTest(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := newMemoryFamily()
+	for _, entry := range batch {
+		node, err := DeserializeFromPrefix(entry.Data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, inner := node.(InnerNodeReader); inner {
+			if err := base.StoreBatch(t.Context(), []FlushEntry{entry}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	family := &countingDurableFamily{base: base, reads: make(map[[32]byte]int)}
+	dest, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatal(err)
+	}
+	for range len(batch) + 1 {
+		missing, err := dest.GetMissingNodesContext(WithTraversalBudget(t.Context(), 1), 32, nil)
+		if errors.Is(err, ErrTraversalBudget) {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(missing) == 0 {
+			t.Fatal("missing leaves were not reported")
+		}
+		if reads := family.totalReads(); reads > len(batch) {
+			t.Fatalf("walk repeated missing reads before reporting the frontier: %d", reads)
+		}
+		return
+	}
+	t.Fatal("missing-node retries starved unvisited siblings across traversal slices")
+}
