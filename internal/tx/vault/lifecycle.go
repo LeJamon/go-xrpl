@@ -1,6 +1,5 @@
 package vault
 
-// Vault kinds determine whether a vault has a bounded lifecycle.
 const (
 	VaultKindOpenEnded   uint8 = 0
 	VaultKindClosedEnded uint8 = 1

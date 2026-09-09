@@ -109,7 +109,6 @@ func TestVaultClosedEndedDepositWithdrawPhases(t *testing.T) {
 	jtx.RequireTxClaimed(t, withdrawResult, "tecTOO_SOON")
 	require.Equal(t, env.BaseFee(), withdrawResult.Fee)
 
-	// Redemption continues to reject deposits while permitting withdrawals.
 	env.CloseToParentCloseTime(redemption)
 	depositResult = deposit()
 	jtx.RequireTxClaimed(t, depositResult, jtx.TecEXPIRED)

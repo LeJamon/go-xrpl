@@ -40,10 +40,8 @@ type VaultCreate struct {
 	// Scale is the asset scale for the share issuance (optional, IOU only, 0..18).
 	Scale *uint8 `json:"Scale,omitempty" xrpl:"Scale,omitempty"`
 
-	// VaultKind selects an open-ended or closed-ended vault (optional).
 	VaultKind *uint8 `json:"VaultKind,omitempty" xrpl:"VaultKind,omitempty"`
 
-	// SubscriptionDate and RedemptionDate bound a closed-ended vault's lifecycle.
 	SubscriptionDate *uint32 `json:"SubscriptionDate,omitempty" xrpl:"SubscriptionDate,omitempty"`
 	RedemptionDate   *uint32 `json:"RedemptionDate,omitempty" xrpl:"RedemptionDate,omitempty"`
 }
