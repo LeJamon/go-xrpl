@@ -113,6 +113,21 @@ func TestValidLoan_V11LifecycleFlagGates(t *testing.T) {
 	}
 }
 
+func TestValidLoan_LendingDisabledStillChecksLiveness(t *testing.T) {
+	loan := mustEncode(t, loanInvariantMap(0, 0))
+	entryChange := InvariantEntry{EntryType: entry.TypeLoan, After: loan}
+	violation := checkValidLoanForTx(
+		vvTx{txType: protocol.TxTypeLoanSet},
+		TesSUCCESS,
+		[]InvariantEntry{entryChange},
+		nil,
+		amendment.EmptyRules(),
+	)
+	if violation == nil || !strings.Contains(violation.Message, "zero payments") {
+		t.Fatalf("lending-disabled liveness violation = %v, want zero-payment failure", violation)
+	}
+}
+
 func TestValidLoan_V11DeletionRequiresLoanDelete(t *testing.T) {
 	before := mustEncode(t, loanInvariantMap(0, 0))
 	deleted := InvariantEntry{EntryType: entry.TypeLoan, Before: before, DeleteFinal: before, IsDelete: true}
@@ -203,6 +218,28 @@ func TestValidLoan_RedemptionScheduleRunsBeforeLendingGate(t *testing.T) {
 	view.data[keylet.VaultByID(vaultID).Key] = validVault
 	if violation := checkValidLoanForTx(vvTx{txType: protocol.TxTypeLoanSet}, TesSUCCESS, []InvariantEntry{entryChange}, view, amendment.EmptyRules()); violation != nil {
 		t.Fatalf("valid schedule rejected while lending disabled: %v", violation)
+	}
+
+	missingRedemption := mustEncode(t, map[string]any{
+		"LedgerEntryType": "Vault",
+		"VaultKind":       vaulttx.VaultKindClosedEnded,
+		"Asset":           map[string]any{"currency": "XRP"},
+	})
+	view.data[keylet.VaultByID(vaultID).Key] = missingRedemption
+	if violation := checkValidLoanForTx(vvTx{txType: protocol.TxTypeLoanSet}, TesSUCCESS, []InvariantEntry{entryChange}, view, amendment.EmptyRules()); violation == nil || !strings.Contains(violation.Message, "RedemptionDate") {
+		t.Fatalf("missing RedemptionDate violation = %v, want malformed-date failure", violation)
+	}
+
+	view.data[keylet.VaultByID(vaultID).Key] = validVault
+	for _, field := range []string{"StartDate", "PaymentInterval"} {
+		loanFields := loanInvariantMap(0, 1)
+		delete(loanFields, field)
+		missingFieldLoan := mustEncode(t, loanFields)
+		missingFieldEntry := InvariantEntry{EntryType: entry.TypeLoan, After: missingFieldLoan}
+		violation := checkValidLoanForTx(vvTx{txType: protocol.TxTypeLoanSet}, TesSUCCESS, []InvariantEntry{missingFieldEntry}, view, amendment.EmptyRules())
+		if violation == nil || !strings.Contains(violation.Message, field) {
+			t.Fatalf("missing %s violation = %v, want required-field failure", field, violation)
+		}
 	}
 }
 

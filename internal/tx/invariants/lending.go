@@ -16,9 +16,7 @@ import (
 )
 
 // XLS-66 lending invariants, ported from rippled InvariantCheck.cpp
-// (ValidLoanBroker, ValidLoan). Both are enforcement-gated on
-// featureLendingProtocol: while it is off the objects cannot exist, so the checks
-// are inert.
+// (ValidLoanBroker, ValidLoan).
 const lsfLoanOverpaymentFlag = entry.LsfLoanOverpayment
 
 // decodeEntry decodes a serialized SLE into its field map.
@@ -33,32 +31,41 @@ func numFieldIsNegative(fields map[string]any, key string) bool {
 	return ok && strings.HasPrefix(v, "-")
 }
 
-// u32Field reads a UInt32 field, tolerating the codec's numeric representations.
-func u32Field(fields map[string]any, key string) uint32 {
+// u32FieldPresent reads a UInt32 field, tolerating the codec's numeric representations.
+func u32FieldPresent(fields map[string]any, key string) (uint32, bool) {
+	if _, present := fields[key]; !present {
+		return 0, false
+	}
 	switch v := fields[key].(type) {
 	case uint8:
-		return uint32(v)
+		return uint32(v), true
 	case uint16:
-		return uint32(v)
+		return uint32(v), true
 	case uint32:
-		return v
+		return v, true
 	case uint64:
-		return uint32(v)
+		return uint32(v), true
 	case int8:
-		return uint32(v)
+		return uint32(v), true
 	case int16:
-		return uint32(v)
+		return uint32(v), true
 	case int32:
-		return uint32(v)
+		return uint32(v), true
 	case int:
-		return uint32(v)
+		return uint32(v), true
 	case int64:
-		return uint32(v)
+		return uint32(v), true
 	case float64:
-		return uint32(v)
+		return uint32(v), true
 	default:
-		return 0
+		return 0, false
 	}
+}
+
+// u32Field reads a UInt32 field, tolerating the codec's numeric representations.
+func u32Field(fields map[string]any, key string) uint32 {
+	v, _ := u32FieldPresent(fields, key)
+	return v
 }
 
 func i32Field(fields map[string]any, key string) int {
@@ -168,7 +175,6 @@ func checkValidLoanForTx(txn Transaction, result Result, entries []InvariantEntr
 	if rules == nil {
 		return nil
 	}
-	lpEnabled := rules.Enabled(amendment.FeatureLendingProtocol)
 	numberContext := tx.NumberContextForRules(rules)
 	if len(numberContexts) > 0 {
 		numberContext = numberContexts[0]
@@ -179,25 +185,6 @@ func checkValidLoanForTx(txn Transaction, result Result, entries []InvariantEntr
 
 	for _, e := range entries {
 		if e.EntryType != entry.TypeLoan {
-			continue
-		}
-		// Persisted closed-ended schedules are checked even before LendingProtocol.
-		if !lpEnabled {
-			if e.Before == nil && !e.IsDelete && e.After != nil && result == TesSUCCESS && view != nil {
-				after, err := decodeEntry(e.After)
-				if err != nil {
-					return lendingViolation("ValidLoan", fmt.Sprintf("could not decode Loan: %v", err))
-				}
-				vaultData, found, violation := loanVaultForSchedule(view, after)
-				if violation != nil {
-					return violation
-				}
-				if found {
-					if violation := checkLoanRedemptionSchedule(after, vaultData); violation != nil {
-						return violation
-					}
-				}
-			}
 			continue
 		}
 		if e.IsDelete || e.After == nil {
@@ -428,14 +415,20 @@ func checkLoanRedemptionSchedule(loan map[string]any, vaultData []byte) *Invaria
 	if !present || uint8(vaultKind) != vault.VaultKindClosedEnded {
 		return nil
 	}
-	start := uint64(u32Field(loan, "StartDate"))
-	interval := uint64(u32Field(loan, "PaymentInterval"))
+	start, present := u32FieldPresent(loan, "StartDate")
+	if !present {
+		return lendingViolation("ValidLoan", "closed-ended loan StartDate is malformed")
+	}
+	interval, present := u32FieldPresent(loan, "PaymentInterval")
+	if !present {
+		return lendingViolation("ValidLoan", "closed-ended loan PaymentInterval is malformed")
+	}
 	remaining := uint64(u32Field(loan, "PaymentRemaining"))
 	redemption, present := vvU64Present(vaultFields, "RedemptionDate")
 	if !present {
-		return nil
+		return lendingViolation("ValidLoan", "closed-ended vault RedemptionDate is malformed")
 	}
-	if start+interval*remaining+vault.LoanRedemptionBuffer > redemption {
+	if uint64(start)+uint64(interval)*remaining+vault.LoanRedemptionBuffer > redemption {
 		return lendingViolation("ValidLoan", "closed-ended loan final payment must precede RedemptionDate by at least the redemption buffer")
 	}
 	return nil
@@ -479,7 +472,7 @@ func checkValidLoanBroker(entries []InvariantEntry, view ReadView, rules *amendm
 }
 
 func checkValidLoanBrokerForTx(txn Transaction, entries []InvariantEntry, view ReadView, rules *amendment.Rules, numberContexts ...state.NumberContext) *InvariantViolation {
-	if rules == nil || !rules.Enabled(amendment.FeatureLendingProtocol) {
+	if rules == nil {
 		return nil
 	}
 	numberContext := tx.NumberContextForRules(rules)
@@ -499,12 +492,23 @@ func checkValidLoanBrokerForTx(txn Transaction, entries []InvariantEntry, view R
 	var deletedBrokers []brokerState
 	var lines, mpts [][]byte
 	addBroker := func(id [32]byte) {
-		if id == ([32]byte{}) {
-			return
-		}
 		if _, ok := brokers[id]; !ok {
 			brokers[id] = brokerState{key: id}
 		}
+	}
+	addBrokerAccount := func(data []byte) *InvariantViolation {
+		account, err := state.ParseAccountRoot(data)
+		if err != nil {
+			return lendingViolation("ValidLoanBroker", fmt.Sprintf("could not decode AccountRoot: %v", err))
+		}
+		fields, err := decodeEntry(data)
+		if err != nil {
+			return lendingViolation("ValidLoanBroker", fmt.Sprintf("could not decode AccountRoot: %v", err))
+		}
+		if _, present := fields["LoanBrokerID"]; present {
+			addBroker(account.LoanBrokerID)
+		}
+		return nil
 	}
 
 	for _, e := range entries {
@@ -541,12 +545,8 @@ func checkValidLoanBrokerForTx(txn Transaction, entries []InvariantEntry, view R
 		}
 		switch e.EntryType {
 		case entry.TypeAccountRoot:
-			account, err := state.ParseAccountRoot(data)
-			if err != nil {
-				return lendingViolation("ValidLoanBroker", fmt.Sprintf("could not decode AccountRoot: %v", err))
-			}
-			if account.HasLoanBrokerID() {
-				addBroker(account.LoanBrokerID)
+			if violation := addBrokerAccount(data); violation != nil {
+				return violation
 			}
 		case entry.TypeRippleState:
 			lines = append(lines, data)
@@ -631,12 +631,8 @@ func checkValidLoanBrokerForTx(txn Transaction, entries []InvariantEntry, view R
 		if data == nil {
 			return nil
 		}
-		account, err := state.ParseAccountRoot(data)
-		if err != nil {
-			return lendingViolation("ValidLoanBroker", fmt.Sprintf("could not decode AccountRoot: %v", err))
-		}
-		if account.HasLoanBrokerID() {
-			addBroker(account.LoanBrokerID)
+		if violation := addBrokerAccount(data); violation != nil {
+			return violation
 		}
 		return nil
 	}

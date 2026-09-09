@@ -363,11 +363,36 @@ func TestValidLoanBroker_DiscoversChangedRippleState(t *testing.T) {
 	}
 }
 
-// TestValidLoanBroker_InertWhenLendingDisabled asserts the invariant does not run
-// (and cannot false-positive) while LendingProtocol is off.
-func TestValidLoanBroker_InertWhenLendingDisabled(t *testing.T) {
-	entries := []InvariantEntry{{EntryType: entry.TypeLoanBroker, After: []byte{0x01}}}
-	if v := checkValidLoanBroker(entries, stubView{}, amendment.EmptyRules()); v != nil {
-		t.Fatalf("expected inert check with LendingProtocol off, got %v", v)
+func TestValidLoanBroker_NoObjectsWhenLendingDisabled(t *testing.T) {
+	if v := checkValidLoanBroker(nil, stubView{}, amendment.EmptyRules()); v != nil {
+		t.Fatalf("empty lending-disabled ledger rejected: %v", v)
+	}
+}
+
+func TestValidLoanBroker_LendingDisabledStillChecksCorruptState(t *testing.T) {
+	broker := mustEncode(t, loanBrokerInvariantMap(0, "-1"))
+	entries := []InvariantEntry{{EntryType: entry.TypeLoanBroker, After: broker}}
+	violation := checkValidLoanBroker(entries, stubView{}, amendment.EmptyRules())
+	if violation == nil || !strings.Contains(violation.Message, "negative") {
+		t.Fatalf("lending-disabled broker violation = %v, want negative-debt failure", violation)
+	}
+}
+
+func TestValidLoanBroker_ExplicitZeroLoanBrokerIDIsDiscovered(t *testing.T) {
+	account := mustEncode(t, map[string]any{
+		"LedgerEntryType":   "AccountRoot",
+		"Account":           testPseudoAddr,
+		"Balance":           "0",
+		"Flags":             uint32(0),
+		"OwnerCount":        uint32(0),
+		"Sequence":          uint32(1),
+		"LoanBrokerID":      strings.Repeat("0", 64),
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(1),
+	})
+	entries := []InvariantEntry{{EntryType: entry.TypeAccountRoot, After: account}}
+	violation := checkValidLoanBroker(entries, stubView{}, amendment.NewRules([][32]byte{amendment.FeatureLendingProtocol}))
+	if violation == nil || !strings.Contains(violation.Message, "missing") {
+		t.Fatalf("explicit zero LoanBrokerID violation = %v, want missing-broker failure", violation)
 	}
 }
