@@ -36,9 +36,6 @@ type LoanAccount struct {
 // fixCleanup340 makes the boundary exclusive: a payment at the due time is still
 // on time, while the legacy behavior treats that same close time as late.
 func IsPaymentLate(now, exp uint32, fixCleanup340 bool) bool {
-	if exp == 0 {
-		return false
-	}
 	if fixCleanup340 {
 		return now > exp
 	}
