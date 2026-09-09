@@ -34,7 +34,7 @@ func cashBasisEnabled(v *vault.VaultLending) bool {
 	return v != nil && v.LEVersion == vault.VaultVersionCashBasis
 }
 
-func loanOriginationDeltasForRules(
+func loanOriginationDeltas(
 	v *vault.VaultLending,
 	principal, interest lmath.N,
 ) loanAccountingDeltas {
@@ -56,7 +56,7 @@ func loanOriginationExceedsVaultMaximumForRules(
 	return vaultMaximum.Signum() != 0 && interest.Cmp(vaultMaximum.Sub(vaultTotal)) > 0
 }
 
-func loanPaymentDeltasForRules(
+func loanPaymentDeltas(
 	v *vault.VaultLending,
 	parts lmath.LoanPaymentParts,
 ) loanAccountingDeltas {

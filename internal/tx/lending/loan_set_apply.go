@@ -206,7 +206,7 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 	loanToBorrower := principal.Sub(originationFee)
 
-	accountingDeltas := loanOriginationDeltasForRules(vinfo, principal, loanState.InterestDue)
+	accountingDeltas := loanOriginationDeltas(vinfo, principal, loanState.InterestDue)
 	newDebtDelta := accountingDeltas.debtTotal
 	newDebtTotal := number(b.DebtTotal).Add(newDebtDelta)
 	if number(b.DebtMaximum).Signum() != 0 && number(b.DebtMaximum).Cmp(newDebtTotal) < 0 {

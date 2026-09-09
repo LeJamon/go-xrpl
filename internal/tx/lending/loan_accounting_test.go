@@ -20,11 +20,11 @@ func TestLoanAccountingDeltasByVaultVersion(t *testing.T) {
 	principal := lmath.FromInt(1000)
 	interest := lmath.FromInt(100)
 
-	legacyOrigination := loanOriginationDeltasForRules(legacy, principal, interest)
+	legacyOrigination := loanOriginationDeltas(legacy, principal, interest)
 	requireLoanNumberEqual(t, legacyOrigination.assetsTotal, interest, "legacy origination assets delta")
 	requireLoanNumberEqual(t, legacyOrigination.debtTotal, lmath.FromInt(1100), "legacy origination debt delta")
 
-	cashOrigination := loanOriginationDeltasForRules(cash, principal, interest)
+	cashOrigination := loanOriginationDeltas(cash, principal, interest)
 	requireLoanNumberEqual(t, cashOrigination.assetsTotal, lmath.Zero(), "cash origination assets delta")
 	requireLoanNumberEqual(t, cashOrigination.debtTotal, principal, "cash origination debt delta")
 
@@ -33,11 +33,11 @@ func TestLoanAccountingDeltasByVaultVersion(t *testing.T) {
 		InterestPaid:  lmath.FromInt(30),
 		ValueChange:   lmath.FromInt(20),
 	}
-	legacyPayment := loanPaymentDeltasForRules(legacy, parts)
+	legacyPayment := loanPaymentDeltas(legacy, parts)
 	requireLoanNumberEqual(t, legacyPayment.assetsTotal, parts.ValueChange, "legacy payment assets delta")
 	requireLoanNumberEqual(t, legacyPayment.debtTotal, lmath.FromInt(60), "legacy payment debt delta")
 
-	cashPayment := loanPaymentDeltasForRules(cash, parts)
+	cashPayment := loanPaymentDeltas(cash, parts)
 	requireLoanNumberEqual(t, cashPayment.assetsTotal, parts.InterestPaid, "cash payment assets delta")
 	requireLoanNumberEqual(t, cashPayment.debtTotal, parts.PrincipalPaid, "cash payment debt delta")
 }

@@ -257,7 +257,7 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Vault + broker accounting.
 	vaultScale := vaultScaleOfForRules(vinfo, integral, ctx.Rules())
-	accountingDeltas := loanPaymentDeltasForRules(vinfo, parts)
+	accountingDeltas := loanPaymentDeltas(vinfo, parts)
 	rawToVault := parts.PrincipalPaid.Add(parts.InterestPaid)
 	toVaultRounded := lmath.RoundAssetDownward(mAsset, rawToVault, vaultScale)
 	toBroker := parts.FeePaid
