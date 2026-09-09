@@ -1,6 +1,7 @@
 package inbound
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"sort"
@@ -139,8 +140,8 @@ func TestGotStateNodes_StopsOnFirstInvalid(t *testing.T) {
 		{NodeID: d1[1].NodeID, NodeData: d1[2].Data},
 		{NodeID: d1[2].NodeID, NodeData: d1[0].Data},
 	}
-	if err := il.GotStateNodes(bad); err != nil {
-		t.Fatalf("GotStateNodes: %v", err)
+	if err := il.GotStateNodes(bad); !errors.Is(err, ErrInvalidPeerNode) {
+		t.Fatalf("GotStateNodes: want ErrInvalidPeerNode, got %v", err)
 	}
 	if il.rejectCount != 1 {
 		t.Fatalf("stop-on-first-bad: want rejectCount=1, got %d", il.rejectCount)

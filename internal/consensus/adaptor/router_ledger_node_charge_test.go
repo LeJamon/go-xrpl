@@ -72,9 +72,12 @@ func TestRouter_HandleLedgerData_InvalidNodeReference_ChargesOnceAndRecovers(t *
 		infoType    message.LedgerInfoType
 		reason      string
 		transaction bool
+		badHash     bool
 	}{
 		{name: "state", infoType: message.LedgerInfoAsNode, reason: "ledger-data-state"},
 		{name: "transaction", infoType: message.LedgerInfoTxNode, reason: "ledger-data-tx", transaction: true},
+		{name: "state hash mismatch", infoType: message.LedgerInfoAsNode, reason: "ledger-data-state", badHash: true},
+		{name: "transaction hash mismatch", infoType: message.LedgerInfoTxNode, reason: "ledger-data-tx", transaction: true, badHash: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r, sender := makeRouterWithBadDataRecorder(t)
@@ -83,7 +86,20 @@ func TestRouter_HandleLedgerData_InvalidNodeReference_ChargesOnceAndRecovers(t *
 
 			before := ledger.Snapshot()
 			malformed := valid[0]
-			malformed.NodeID = []byte{1}
+			if tc.badHash {
+				malformed.NodeData = bytes.Clone(malformed.NodeData)
+				original := malformed.NodeData[0]
+				for delta := 1; delta < 256; delta++ {
+					malformed.NodeData[0] = original ^ byte(delta)
+					if _, err := malformed.SHAMapNodeID(); err == nil {
+						break
+					}
+				}
+				_, err := malformed.SHAMapNodeID()
+				require.NoError(t, err, "the mismatched hash must pass wire/reference validation")
+			} else {
+				malformed.NodeID = []byte{1}
+			}
 			r.handleMessage(&peermanagement.InboundMessage{
 				PeerID: 7,
 				Type:   message.TypeLedgerData,

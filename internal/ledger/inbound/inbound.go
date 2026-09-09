@@ -209,7 +209,7 @@ type Option func(*Ledger)
 // acquisition must terminate without accepting or persisting its roots.
 var ErrHeaderRejected = errors.New("inbound ledger header rejected")
 
-// ErrInvalidPeerNode identifies a ledger node that failed wire/reference
+// ErrInvalidPeerNode identifies a ledger node that failed wire, reference or hash
 // validation. The acquisition remains active so a later reply can recover,
 // while the router can charge the peer that supplied the malformed node.
 var ErrInvalidPeerNode = errors.New("invalid peer ledger node")
@@ -862,14 +862,7 @@ func (l *Ledger) GotStateNodesUsefulContext(ctx context.Context, nodes []message
 	added, stored, applyErr := l.applyKnownNodes(ctx, l.stateMap, nodes, "state")
 	l.stateRecv += uint64(len(nodes))
 	l.stateUseful += uint64(added)
-	if applyErr != nil {
-		if errors.Is(applyErr, ErrInvalidPeerNode) {
-			if added > 0 {
-				l.markProgressLocked()
-			}
-			l.publishSnapshotLocked()
-			return added, applyErr
-		}
+	if applyErr != nil && !errors.Is(applyErr, ErrInvalidPeerNode) {
 		l.state = StateFailed
 		l.err = applyErr
 		return added, applyErr
@@ -886,7 +879,7 @@ func (l *Ledger) GotStateNodesUsefulContext(ctx context.Context, nodes []message
 		"received_total", l.stateRecv,
 	)
 
-	return added, nil
+	return added, applyErr
 }
 
 // GotTransactionNodes processes transaction tree nodes received from the peer.
@@ -927,14 +920,7 @@ func (l *Ledger) GotTransactionNodesUsefulContext(ctx context.Context, nodes []m
 	added, stored, applyErr := l.applyKnownNodes(ctx, l.txMap, nodes, "tx")
 	l.txRecv += uint64(len(nodes))
 	l.txUseful += uint64(added)
-	if applyErr != nil {
-		if errors.Is(applyErr, ErrInvalidPeerNode) {
-			if added > 0 {
-				l.markProgressLocked()
-			}
-			l.publishSnapshotLocked()
-			return added, applyErr
-		}
+	if applyErr != nil && !errors.Is(applyErr, ErrInvalidPeerNode) {
 		l.state = StateFailed
 		l.err = applyErr
 		return added, applyErr
@@ -951,15 +937,15 @@ func (l *Ledger) GotTransactionNodesUsefulContext(ctx context.Context, nodes []m
 		"received_total", l.txRecv,
 	)
 
-	return added, nil
+	return added, applyErr
 }
 
 // applyKnownNodes places peer-supplied tree nodes by NodeID, returning the
 // number freshly attached. A node whose ancestor is still a hash-only stub
 // (NodeReRequest) is dropped without counting as a reject — the next
 // getMissingNodes walk re-requests the correct frontier and it returns on a
-// later reply. A malformed wire/reference node returns ErrInvalidPeerNode so
-// the caller can charge its source while keeping the acquisition recoverable.
+// later reply. Invalid nodes return ErrInvalidPeerNode so the caller can
+// charge their source while keeping the acquisition recoverable.
 // The first genuinely invalid node stops harvesting the rest of the reply.
 // Caller holds l.mu.
 func (l *Ledger) applyKnownNodes(ctx context.Context, m *shamap.SHAMap, nodes []message.LedgerNode, label string) (int, []shamap.FlushEntry, error) {
@@ -1003,7 +989,7 @@ func (l *Ledger) applyKnownNodes(ctx context.Context, m *shamap.SHAMap, nodes []
 				"node_id", fmt.Sprintf("%x", node.NodeID),
 				"node_data_len", len(node.NodeData),
 				"error", err)
-			return added, stored, nil
+			return added, stored, fmt.Errorf("%w: %s node rejected", ErrInvalidPeerNode, label)
 		}
 	}
 	return added, stored, nil
