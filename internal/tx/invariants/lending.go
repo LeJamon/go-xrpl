@@ -497,16 +497,15 @@ func checkValidLoanBrokerForTx(txn Transaction, entries []InvariantEntry, view R
 		}
 	}
 	addBrokerAccount := func(data []byte) *InvariantViolation {
-		account, err := state.ParseAccountRoot(data)
+		const loanBrokerIDFieldCode = 37
+		err := state.WalkFields(data, func(field state.Field) error {
+			if field.TypeCode == state.FieldTypeHash256 && field.FieldCode == loanBrokerIDFieldCode {
+				addBroker(field.Hash256())
+			}
+			return nil
+		})
 		if err != nil {
 			return lendingViolation("ValidLoanBroker", fmt.Sprintf("could not decode AccountRoot: %v", err))
-		}
-		fields, err := decodeEntry(data)
-		if err != nil {
-			return lendingViolation("ValidLoanBroker", fmt.Sprintf("could not decode AccountRoot: %v", err))
-		}
-		if _, present := fields["LoanBrokerID"]; present {
-			addBroker(account.LoanBrokerID)
 		}
 		return nil
 	}
