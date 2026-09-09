@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -79,6 +80,47 @@ func TestValidatedStateBaseOlderPersistencePreservesNewerCandidate(t *testing.T)
 			require.Equal(t, candidate.Header().AccountHash, root)
 			_, found = svc.currentValidatedStateBaseCandidate()
 			require.False(t, found)
+		})
+	}
+}
+
+func TestValidatedStateBaseSameSequencePersistencePreservesAlternateCandidate(t *testing.T) {
+	for _, matchingProof := range []bool{true, false} {
+		name := "mismatched proof"
+		if matchingProof {
+			name = "matching proof"
+		}
+		t.Run(name, func(t *testing.T) {
+			svc, candidate, _ := newPendingStateBaseCandidate(t)
+			h := candidate.Header()
+			h.CloseFlags ^= header.LCFNoConsensusTime
+			h.Hash = header.CalculateHash(h)
+			stateMap, err := candidate.StateMapSnapshot()
+			require.NoError(t, err)
+			txMap, err := candidate.TxMapSnapshot()
+			require.NoError(t, err)
+			older, err := ledger.NewFromHeader(h, stateMap, txMap, drops.Fees{})
+			require.NoError(t, err)
+			require.NoError(t, older.SetValidated())
+			if matchingProof {
+				proof, found := svc.currentValidatedStateBaseProof()
+				require.True(t, found)
+				svc.rememberValidatedStateBase(h, proof.nodeStoreFingerprint)
+				svc.rememberValidatedStateBaseCandidate(candidate.Header())
+			}
+			require.NoError(t, svc.persistValidatedLedger(t.Context(), older, true))
+			pending, found := svc.currentValidatedStateBaseCandidate()
+			require.True(t, found)
+			require.Equal(t, candidate.Hash(), pending.ledgerHash)
+
+			require.NoError(t, svc.SwitchToPreferredLedger(candidate))
+			svc.SetValidatedLedgerAt(candidate.Sequence(), candidate.Hash(), time.Time{})
+			svc.FlushPersists()
+			root, release, available, err := svc.AcquireValidatedStateBase(t.Context())
+			require.NoError(t, err)
+			require.True(t, available)
+			defer release()
+			require.Equal(t, candidate.Header().AccountHash, root)
 		})
 	}
 }
