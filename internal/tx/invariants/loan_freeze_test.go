@@ -169,3 +169,65 @@ func TestLoanDefaultDoesNotExemptUnrelatedAccount(t *testing.T) {
 		t.Fatal("unrelated frozen holder bypassed freeze invariant")
 	}
 }
+
+func TestLoanDefaultMPTLockExemptionScope(t *testing.T) {
+	for _, name := range []string{"default", "other issuance", "unrelated holder", "transfer disabled", "authorization required", "ordinary payment", "cleanup disabled"} {
+		t.Run(name, func(t *testing.T) {
+			flags := uint32(entry.LsfMPTCanTransfer | entry.LsfMPTLocked)
+			if name == "transfer disabled" {
+				flags &^= entry.LsfMPTCanTransfer
+			}
+			if name == "authorization required" {
+				flags |= entry.LsfMPTRequireAuth
+			}
+			view, id, source, destination, entries := mptTransferFixture(t, flags, 0, 0)
+			chain := newLoanFreezeFixture(t, "USD", 0, 0)
+			for key, raw := range chain.view.data {
+				fields, err := decodeEntry(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				switch fields["LedgerEntryType"] {
+				case "Loan":
+					view.data[key] = raw
+				case "LoanBroker":
+					account := source
+					if name == "unrelated holder" {
+						account = [20]byte{99}
+					}
+					fields["Account"] = state.EncodeAccountIDSafe(account)
+					view.data[key] = mustEncode(t, fields)
+				case "Vault":
+					vaultAsset := id
+					if name == "other issuance" {
+						vaultAsset[0]++
+					}
+					fields["Asset"] = map[string]any{"mpt_issuance_id": hex.EncodeToString(vaultAsset[:])}
+					fields["Account"] = state.EncodeAccountIDSafe(destination)
+					view.data[key] = mustEncode(t, fields)
+				}
+			}
+			sourceAccount := &state.AccountRoot{Account: state.EncodeAccountIDSafe(source), LoanBrokerID: [32]byte{1}}
+			if name == "authorization required" {
+				sourceAccount.LoanBrokerID = [32]byte{}
+			}
+			view.data[keylet.Account(source).Key] = mustSerializeAccount(t, sourceAccount)
+			view.data[keylet.Account(destination).Key] = mustSerializeAccount(t, &state.AccountRoot{Account: state.EncodeAccountIDSafe(destination), VaultID: [32]byte{2}})
+			rules := amendment.NewRules([][32]byte{amendment.FeatureFixCleanup3_4_0})
+			if name == "cleanup disabled" {
+				rules = amendment.NewRules([][32]byte{amendment.FeatureMPTokensV2})
+			}
+			transaction := vvTx{txType: protocol.TxTypeLoanManage, flat: map[string]any{"Flags": tfLoanDefault, "LoanID": chain.loanID}}
+			if name == "ordinary payment" {
+				transaction.txType = protocol.TxTypeLoanPay
+			}
+			violation := checkValidMPTTransfer(transaction, TesSUCCESS, entries, view, rules)
+			if name == "default" && violation != nil {
+				t.Fatalf("default rejected: %v", violation)
+			}
+			if name != "default" && violation == nil {
+				t.Fatalf("%s bypassed MPT invariant", name)
+			}
+		})
+	}
+}
