@@ -87,10 +87,14 @@ func TestValidatorListCollection_Interop_RippledDocker(t *testing.T) {
 	require.Equal(t, validatorlist.PublisherKey(publisher.masterPub), publisherKey)
 	require.Equal(t, uint32(7), maxSequence)
 
-	// A validly framed collection with a corrupted blob signature must not be
-	// relayed by the rc1 peer. Keep this opt-in negative check bounded so a
-	// broken peer cannot stall the interop suite.
-	bad := cloneValidatorListCollection(received)
+	// A fresh sequence with a corrupted blob signature must not be relayed by
+	// the rc1 peer. Using a new sequence keeps duplicate suppression from
+	// explaining the negative result.
+	blob8, signature8 := publisher.signList(t, 8, time.Now().Add(24*time.Hour))
+	correct8 := cloneValidatorListCollection(received)
+	correct8.Blobs[0].Blob = blob8
+	correct8.Blobs[0].Signature = signature8
+	bad := cloneValidatorListCollection(correct8)
 	sigBytes, err := hex.DecodeString(string(bad.Blobs[0].Signature))
 	require.NoError(t, err)
 	sigBytes[0] ^= 0xff
@@ -99,6 +103,24 @@ func TestValidatorListCollection_Interop_RippledDocker(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, sender.Send(badWire))
 	waitForNoValidatorCollection(t, witnessEvents, 8*time.Second, bad)
+
+	// The valid sequence 8 must still be accepted and relayed after the bad
+	// attempt. This proves the malformed signature did not poison rc1 state.
+	correctWire, err := message.EncodeFrame(correct8)
+	require.NoError(t, err)
+	require.NoError(t, sender.Send(correctWire))
+	received8 := waitForValidatorCollection(t, witnessEvents, 30*time.Second, publisher.manifestB64, blob8)
+	require.Equal(t, correct8.Version, received8.Version)
+	require.Equal(t, correct8.Manifest, received8.Manifest)
+	require.Len(t, received8.Blobs, 1)
+	require.True(t, received8.Blobs[0].HasManifest())
+	require.Equal(t, correct8.Blobs[0].Manifest, received8.Blobs[0].Manifest)
+	require.Equal(t, blob8, received8.Blobs[0].Blob)
+	require.Equal(t, signature8, received8.Blobs[0].Signature)
+	dispositions, publisherKey, maxSequence = agg.ApplyCollection(received8, "interop://rippled")
+	require.Equal(t, []validatorlist.Disposition{validatorlist.Accepted}, dispositions)
+	require.Equal(t, validatorlist.PublisherKey(publisher.masterPub), publisherKey)
+	require.Equal(t, uint32(8), maxSequence)
 }
 
 type interopValidatorPublisher struct {
@@ -240,7 +262,7 @@ func waitForNoValidatorCollection(t *testing.T, events <-chan Event, timeout tim
 				decoded, err := message.Decode(event.MessageType, event.Payload)
 				event.release()
 				if err == nil {
-					if collection, ok := decoded.(*message.ValidatorListCollection); ok && validatorListCollectionEqual(collection, bad) {
+					if collection, ok := decoded.(*message.ValidatorListCollection); ok && validatorListCollectionPayloadEqual(collection, bad) {
 						t.Fatal("rippled relayed a collection with an invalid blob signature")
 					}
 				}
@@ -253,7 +275,7 @@ func waitForNoValidatorCollection(t *testing.T, events <-chan Event, timeout tim
 	}
 }
 
-func validatorListCollectionEqual(left, right *message.ValidatorListCollection) bool {
+func validatorListCollectionPayloadEqual(left, right *message.ValidatorListCollection) bool {
 	if left == nil || right == nil || left.Version != right.Version ||
 		!bytes.Equal(left.Manifest, right.Manifest) || len(left.Blobs) != len(right.Blobs) {
 		return false
@@ -261,8 +283,7 @@ func validatorListCollectionEqual(left, right *message.ValidatorListCollection) 
 	for i := range left.Blobs {
 		if left.Blobs[i].HasManifest() != right.Blobs[i].HasManifest() ||
 			!bytes.Equal(left.Blobs[i].Manifest, right.Blobs[i].Manifest) ||
-			!bytes.Equal(left.Blobs[i].Blob, right.Blobs[i].Blob) ||
-			!bytes.Equal(left.Blobs[i].Signature, right.Blobs[i].Signature) {
+			!bytes.Equal(left.Blobs[i].Blob, right.Blobs[i].Blob) {
 			return false
 		}
 	}
