@@ -1162,10 +1162,6 @@ func (r *Router) canAdmitCatchupLocked(hash [32]byte, limit int) bool {
 	return r.protectedCatchupInFlightLocked() < limit
 }
 
-func (r *Router) startLedgerAcquisitionLocked(seq uint32, hash [32]byte, peerID uint64) {
-	r.startLedgerAcquisitionWithParentLocked(seq, hash, peerID, nil)
-}
-
 func (r *Router) startLedgerAcquisitionWithParentLocked(seq uint32, hash [32]byte, peerID uint64, parent *ledger.Ledger) {
 	if r.catchupRetryBlocked(hash, time.Now()) {
 		return
