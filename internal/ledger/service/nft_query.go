@@ -88,7 +88,6 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 	var markerKey [32]byte
 	var markerOffer *state.NFTokenOfferData
 	if marker != "" {
-		// Find the marker in the offer list and validate it
 		markerBytes, err := hex.DecodeString(marker)
 		if err != nil || len(markerBytes) != 32 {
 			return nil, svcerr.ErrInvalidMarker
