@@ -110,6 +110,15 @@ func newLoanFreezeFixtureWithLine(t *testing.T, assetCurrency, lineCurrency stri
 		"ShareMPTID": strings.Repeat("0", 48), "WithdrawalPolicy": uint32(1),
 		"PreviousTxnID": strings.Repeat("0", 64), "PreviousTxnLgrSeq": uint32(0),
 	})
+	for name, err := range map[string]error{
+		"loan":   new(entry.Loan).Decode(loan),
+		"broker": new(entry.LoanBroker).Decode(brokerEntry),
+		"vault":  new(entry.Vault).Decode(vaultEntry),
+	} {
+		if err != nil {
+			t.Fatalf("invalid %s fixture: %v", name, err)
+		}
+	}
 	issuerRoot := mustSerializeAccount(t, &state.AccountRoot{Account: issuerAddr, Flags: issuerFlags, Balance: 1_000_000})
 	view := mapView{data: map[[32]byte][]byte{
 		keylet.LoanByID(loanID).Key:         loan,
