@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
 )
 
@@ -28,24 +29,24 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 	decoded, err := message.Decode(message.TypeValidatorListCollection, msg.Payload)
 	if err != nil {
 		r.logger.Warn("failed to decode TMValidatorListCollection", "error", err, "peer", msg.PeerID)
-		r.gossip.IncPeerBadData(uint64(msg.PeerID), "vl-coll-decode")
+		selectPeerChargeOrRecord(r, msg, msg.PeerID, resource.FeeInvalidData(), "vl-coll-decode")
 		return
 	}
 	coll, ok := decoded.(*message.ValidatorListCollection)
 	if !ok || coll == nil {
-		r.gossip.IncPeerBadData(uint64(msg.PeerID), "vl-coll-decode")
+		selectPeerChargeOrRecord(r, msg, msg.PeerID, resource.FeeInvalidData(), "vl-coll-decode")
 		return
 	}
 
 	// Reject v1 collections upfront ("wrong version"). Decoding once and
 	// inspecting the version on the decoded message avoids a double-decode.
 	if coll.Version < 2 {
-		r.gossip.IncPeerBadData(uint64(msg.PeerID), "vl-coll-wrong-version")
+		selectPeerChargeOrRecord(r, msg, msg.PeerID, resource.FeeInvalidData(), "vl-coll-wrong-version")
 		return
 	}
 
 	if len(coll.Blobs) == 0 {
-		r.gossip.IncPeerBadData(uint64(msg.PeerID), "vl-coll-no-blobs")
+		selectPeerChargeOrRecord(r, msg, msg.PeerID, resource.FeeHeavyBurdenPeer(), "vl-coll-no-blobs")
 		return
 	}
 
@@ -53,7 +54,7 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 		hash := sha512half.Sum(validatorListCollectionSemanticHash(coll))
 		if firstSeen, _ := r.messageSeen.observe(hash); !firstSeen {
 			r.messageSeen.recordPeer(hash, uint64(msg.PeerID))
-			r.gossip.IncPeerBadData(uint64(msg.PeerID), "vl-coll-duplicate")
+			selectPeerChargeOrRecord(r, msg, msg.PeerID, resource.FeeUselessData(), "vl-coll-duplicate")
 			return
 		}
 		r.messageSeen.recordPeer(hash, uint64(msg.PeerID))
@@ -78,7 +79,7 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 		"worst", worst.String(),
 		"max_sequence", maxSeq)
 
-	chargePeerForDisposition(r, msg.PeerID, "vl-coll", worst)
+	chargePeerForDisposition(r, msg, msg.PeerID, "vl-coll", worst)
 
 	// Record per-peer sequence using the highest blob sequence observed
 	// across the collection.
@@ -125,6 +126,13 @@ func appendLengthPrefixed(out, data []byte) []byte {
 	return out
 }
 
+func selectPeerChargeOrRecord(r *Router, msg *peermanagement.InboundMessage, peer peermanagement.PeerID, fee resource.Charge, reason string) {
+	if msg != nil && msg.SelectPeerCharge(fee, reason) {
+		return
+	}
+	r.gossip.IncPeerBadData(uint64(peer), reason)
+}
+
 // chargePeerForDisposition maps a Disposition's fee tier
 // (Disposition.Charge) into a distinct IncPeerBadData label so operators
 // get per-tier metrics:
@@ -132,21 +140,25 @@ func appendLengthPrefixed(out, data []byte) []byte {
 //	useless data      -> "<prefix>-useless-<disposition>"
 //	invalid data      -> "<prefix>-baddata-<disposition>"
 //	invalid signature -> "<prefix>-badsig-<disposition>"
-func chargePeerForDisposition(r *Router, peer peermanagement.PeerID, prefix string, d validatorlist.Disposition) {
+func chargePeerForDisposition(r *Router, msg *peermanagement.InboundMessage, peer peermanagement.PeerID, prefix string, d validatorlist.Disposition) {
 	var tag string
+	var fee resource.Charge
 	switch d.Charge() {
 	case validatorlist.ChargeNone:
 		return
 	case validatorlist.ChargeUselessData:
 		tag = "useless"
+		fee = resource.FeeUselessData()
 	case validatorlist.ChargeInvalidData:
 		tag = "baddata"
+		fee = resource.FeeInvalidData()
 	case validatorlist.ChargeInvalidSignature:
 		tag = "badsig"
+		fee = resource.FeeInvalidSignature()
 	default:
 		return
 	}
-	r.gossip.IncPeerBadData(uint64(peer), prefix+"-"+tag+"-"+d.String())
+	selectPeerChargeOrRecord(r, msg, peer, fee, prefix+"-"+tag+"-"+d.String())
 }
 
 // peerSite formats a peer-sourced site URI for the aggregator's

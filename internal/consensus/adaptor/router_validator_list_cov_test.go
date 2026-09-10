@@ -111,19 +111,19 @@ func TestRvl_CollectionSemanticHashDistinguishesManifestPresence(t *testing.T) {
 
 func TestRvl_ChargePeer_None(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
-	chargePeerForDisposition(r, 1, "vl", validatorlist.Accepted)
+	chargePeerForDisposition(r, nil, 1, "vl", validatorlist.Accepted)
 	assert.Empty(t, rs.getBadDataCalls())
 	// Expired also has ChargeNone.
-	chargePeerForDisposition(r, 1, "vl", validatorlist.Expired)
+	chargePeerForDisposition(r, nil, 1, "vl", validatorlist.Expired)
 	assert.Empty(t, rs.getBadDataCalls())
 	// Pending also has ChargeNone.
-	chargePeerForDisposition(r, 1, "vl", validatorlist.Pending)
+	chargePeerForDisposition(r, nil, 1, "vl", validatorlist.Pending)
 	assert.Empty(t, rs.getBadDataCalls())
 }
 
 func TestRvl_ChargePeer_UselessData(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
-	chargePeerForDisposition(r, 42, "vl", validatorlist.SameSequence)
+	chargePeerForDisposition(r, nil, 42, "vl", validatorlist.SameSequence)
 	calls := rs.getBadDataCalls()
 	require.Len(t, calls, 1)
 	assert.Equal(t, uint64(42), calls[0].peerID)
@@ -132,7 +132,7 @@ func TestRvl_ChargePeer_UselessData(t *testing.T) {
 
 func TestRvl_ChargePeer_KnownSequence(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
-	chargePeerForDisposition(r, 7, "vl", validatorlist.KnownSequence)
+	chargePeerForDisposition(r, nil, 7, "vl", validatorlist.KnownSequence)
 	calls := rs.getBadDataCalls()
 	require.Len(t, calls, 1)
 	assert.Equal(t, "vl-useless-known_sequence", calls[0].reason)
@@ -140,7 +140,7 @@ func TestRvl_ChargePeer_KnownSequence(t *testing.T) {
 
 func TestRvl_ChargePeer_Untrusted(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
-	chargePeerForDisposition(r, 9, "pfx", validatorlist.Untrusted)
+	chargePeerForDisposition(r, nil, 9, "pfx", validatorlist.Untrusted)
 	calls := rs.getBadDataCalls()
 	require.Len(t, calls, 1)
 	assert.Equal(t, "pfx-useless-untrusted", calls[0].reason)
@@ -148,7 +148,7 @@ func TestRvl_ChargePeer_Untrusted(t *testing.T) {
 
 func TestRvl_ChargePeer_InvalidData(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
-	chargePeerForDisposition(r, 7, "vl-coll", validatorlist.Stale)
+	chargePeerForDisposition(r, nil, 7, "vl-coll", validatorlist.Stale)
 	calls := rs.getBadDataCalls()
 	require.Len(t, calls, 1)
 	assert.Equal(t, "vl-coll-baddata-stale", calls[0].reason)
@@ -156,7 +156,7 @@ func TestRvl_ChargePeer_InvalidData(t *testing.T) {
 
 func TestRvl_ChargePeer_UnsupportedVersion(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
-	chargePeerForDisposition(r, 3, "vl", validatorlist.UnsupportedVersion)
+	chargePeerForDisposition(r, nil, 3, "vl", validatorlist.UnsupportedVersion)
 	calls := rs.getBadDataCalls()
 	require.Len(t, calls, 1)
 	assert.Equal(t, "vl-baddata-unsupported_version", calls[0].reason)
@@ -164,7 +164,7 @@ func TestRvl_ChargePeer_UnsupportedVersion(t *testing.T) {
 
 func TestRvl_ChargePeer_InvalidSignature(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
-	chargePeerForDisposition(r, 3, "vl", validatorlist.Invalid)
+	chargePeerForDisposition(r, nil, 3, "vl", validatorlist.Invalid)
 	calls := rs.getBadDataCalls()
 	require.Len(t, calls, 1)
 	assert.Equal(t, "vl-badsig-invalid", calls[0].reason)
@@ -173,7 +173,7 @@ func TestRvl_ChargePeer_InvalidSignature(t *testing.T) {
 // TestRvl_ChargePeer_MalformedChargeNone verifies Malformed has ChargeNone (poller-only).
 func TestRvl_ChargePeer_MalformedChargeNone(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
-	chargePeerForDisposition(r, 5, "vl", validatorlist.Malformed)
+	chargePeerForDisposition(r, nil, 5, "vl", validatorlist.Malformed)
 	assert.Empty(t, rs.getBadDataCalls())
 }
 
