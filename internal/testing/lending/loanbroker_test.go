@@ -294,10 +294,11 @@ func TestLoanSet_UpwardPaymentCountXRP(t *testing.T) {
 	loanSet.Counterparty = owner.Address
 	loanSet.GetCommon().Fee = "20"
 	loanSet.GetCommon().SigningPubKey = strings.ToUpper(borrower.PublicKeyHex())
-	counterpartySignature, err := txsign.SignCounterparty(
+	counterpartySignature, err := txsign.SignCounterpartyWithRules(
 		loanSet,
 		strings.ToUpper(owner.PublicKeyHex()),
 		"00"+strings.ToUpper(owner.PrivateKeyHex()),
+		env.Ledger().Rules(),
 	)
 	if err != nil {
 		t.Fatalf("sign counterparty: %v", err)
@@ -428,10 +429,11 @@ func TestLoanSet_ReplayUsesApplicationViewCloseTime(t *testing.T) {
 	loanSet.Counterparty = owner.Address
 	loanSet.GetCommon().Fee = "20"
 	loanSet.GetCommon().SigningPubKey = strings.ToUpper(borrower.PublicKeyHex())
-	counterpartySignature, err := txsign.SignCounterparty(
+	counterpartySignature, err := txsign.SignCounterpartyWithRules(
 		loanSet,
 		strings.ToUpper(owner.PublicKeyHex()),
 		"00"+strings.ToUpper(owner.PrivateKeyHex()),
+		env.Ledger().Rules(),
 	)
 	if err != nil {
 		t.Fatalf("sign counterparty: %v", err)
@@ -500,10 +502,11 @@ func TestLoanSet_ReplayRechecksScheduleAgainstApplicationViewCloseTime(t *testin
 	loanSet.Counterparty = owner.Address
 	loanSet.GetCommon().Fee = "20"
 	loanSet.GetCommon().SigningPubKey = strings.ToUpper(borrower.PublicKeyHex())
-	counterpartySignature, err := txsign.SignCounterparty(
+	counterpartySignature, err := txsign.SignCounterpartyWithRules(
 		loanSet,
 		strings.ToUpper(owner.PublicKeyHex()),
 		"00"+strings.ToUpper(owner.PrivateKeyHex()),
+		env.Ledger().Rules(),
 	)
 	if err != nil {
 		t.Fatalf("sign counterparty: %v", err)
@@ -536,10 +539,11 @@ func TestLoanSet_ReplayRechecksScheduleAgainstApplicationViewCloseTime(t *testin
 	loanSet.Counterparty = owner.Address
 	loanSet.GetCommon().Fee = "20"
 	loanSet.GetCommon().SigningPubKey = strings.ToUpper(borrower.PublicKeyHex())
-	counterpartySignature, err = txsign.SignCounterparty(
+	counterpartySignature, err = txsign.SignCounterpartyWithRules(
 		loanSet,
 		strings.ToUpper(owner.PublicKeyHex()),
 		"00"+strings.ToUpper(owner.PrivateKeyHex()),
+		env.Ledger().Rules(),
 	)
 	if err != nil {
 		t.Fatalf("sign boundary counterparty: %v", err)

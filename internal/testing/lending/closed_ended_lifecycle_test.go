@@ -65,10 +65,11 @@ func closedEndedLoanSet(t *testing.T, f closedEndedLoanFixture, interval uint32)
 	loan.Counterparty = f.owner.Address
 	loan.GetCommon().Fee = "20"
 	loan.GetCommon().SigningPubKey = strings.ToUpper(f.borrower.PublicKeyHex())
-	signature, err := txsign.SignCounterparty(
+	signature, err := txsign.SignCounterpartyWithRules(
 		loan,
 		strings.ToUpper(f.owner.PublicKeyHex()),
 		"00"+strings.ToUpper(f.owner.PrivateKeyHex()),
+		f.env.Ledger().Rules(),
 	)
 	if err != nil {
 		t.Fatalf("sign counterparty: %v", err)

@@ -177,10 +177,11 @@ func submitLoanSet(t *testing.T, f *loanSetAssetFixture, submitter, counterparty
 		fee := "1"
 		loanSet.LoanOriginationFee = &fee
 	}
-	signature, err := txsign.SignCounterparty(
+	signature, err := txsign.SignCounterpartyWithRules(
 		loanSet,
 		strings.ToUpper(counterparty.PublicKeyHex()),
 		"00"+strings.ToUpper(counterparty.PrivateKeyHex()),
+		f.env.Ledger().Rules(),
 	)
 	if err != nil {
 		t.Fatalf("sign LoanSet counterparty: %v", err)

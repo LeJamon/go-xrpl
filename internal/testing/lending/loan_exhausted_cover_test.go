@@ -50,7 +50,7 @@ func TestLoanDefaultExhaustedCoverAndBrokerDeletion(t *testing.T) {
 					loanSet.PaymentInterval, loanSet.PaymentTotal, loanSet.GracePeriod = &interval, &payments, &grace
 					loanSet.Counterparty = f.owner.Address
 					loanSet.Fee, loanSet.SigningPubKey = "20", f.borrower.PublicKeyHex()
-					signature, err := txsign.SignCounterparty(loanSet, f.owner.PublicKeyHex(), "00"+f.owner.PrivateKeyHex())
+					signature, err := txsign.SignCounterpartyWithRules(loanSet, f.owner.PublicKeyHex(), "00"+f.owner.PrivateKeyHex(), env.Ledger().Rules())
 					require.NoError(t, err)
 					loanSet.CounterpartySignature = signature
 					jtx.RequireTxSuccess(t, env.Submit(loanSet))

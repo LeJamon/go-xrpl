@@ -142,10 +142,11 @@ func attachVaultSponsorSignature(
 	common.Sequence = &sequence
 	common.Fee = strconv.FormatUint(env.BaseFee(), 10)
 	common.SigningPubKey = source.PublicKeyHex()
-	signature, err := signtx.SignSponsor(
+	signature, err := signtx.SignSponsorWithRules(
 		transaction,
 		sponsor.PublicKeyHex(),
 		signingPrivateKey(sponsor),
+		env.Ledger().Rules(),
 	)
 	require.NoError(t, err)
 	common.SponsorSignature = signature

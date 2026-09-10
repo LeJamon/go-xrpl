@@ -96,7 +96,7 @@ func signingPrivateKey(account *jtx.Account) string {
 }
 
 // attachSponsorSignature fills every ordinary signed field first, then signs
-// the same STX projection as the transaction's top-level account.
+// the sponsor-role projection selected by the active ledger rules.
 func attachSponsorSignature(
 	t *testing.T,
 	env *jtx.TestEnv,
@@ -123,10 +123,11 @@ func attachSponsorSignatureFor(
 		common.Fee = "10"
 	}
 	common.SigningPubKey = transactionSigner.PublicKeyHex()
-	signature, err := signtx.SignSponsor(
+	signature, err := signtx.SignSponsorWithRules(
 		transaction,
 		sponsorSigner.PublicKeyHex(),
 		signingPrivateKey(sponsorSigner),
+		env.Ledger().Rules(),
 	)
 	require.NoError(t, err)
 	common.SponsorSignature = signature
@@ -149,10 +150,12 @@ func attachSponsorMultiSignature(
 
 	wrappers := make([]tx.SignerWrapper, 0, len(signers))
 	for _, signer := range signers {
-		signature, err := signtx.SignTransactionForMultiSignTarget(
+		signature, err := signtx.SignTransactionForMultiSignRole(
 			transaction,
 			signer.Address,
 			signingPrivateKey(signer),
+			binarycodec.SponsorRole,
+			env.Ledger().Rules(),
 		)
 		require.NoError(t, err)
 		wrappers = append(wrappers, tx.SignerWrapper{Signer: tx.Signer{
@@ -1018,10 +1021,11 @@ func TestTopLevelMultisignWithSponsorFee(t *testing.T) {
 	transaction.Sponsor = sponsor.Address
 	flags := tx.SpfSponsorFee
 	transaction.SponsorFlags = &flags
-	sponsorSignature, err := signtx.SignSponsor(
+	sponsorSignature, err := signtx.SignSponsorWithRules(
 		transaction,
 		sponsor.PublicKeyHex(),
 		signingPrivateKey(sponsor),
+		env.Ledger().Rules(),
 	)
 	require.NoError(t, err)
 	transaction.SponsorSignature = sponsorSignature
