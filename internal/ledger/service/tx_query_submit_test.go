@@ -260,6 +260,9 @@ func TestService_SubmitTransaction_BadSignatureIsNotQueryable(t *testing.T) {
 		t.Fatalf("DecodeBytes: %v", err)
 	}
 	wire["TxnSignature"] = strings.Repeat("00", 64)
+	wire["Memos"] = []map[string]any{{
+		"Memo": map[string]any{"MemoData": strings.Repeat("AA", 1020)},
+	}}
 	badHex, err := binarycodec.Encode(wire)
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
@@ -281,8 +284,8 @@ func TestService_SubmitTransaction_BadSignatureIsNotQueryable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitTransaction: %v", err)
 	}
-	if result.Result != ter.TemINVALID {
-		t.Fatalf("Result = %s, want temINVALID", result.Result)
+	if result.Result != ter.TemBAD_SIGNATURE {
+		t.Fatalf("Result = %s, want temBAD_SIGNATURE", result.Result)
 	}
 	if _, err := svc.GetTransaction(hash); !errors.Is(err, svcerr.ErrTxnNotFound) {
 		t.Fatalf("GetTransaction(bad signature) = %v, want svcerr.ErrTxnNotFound", err)
@@ -365,8 +368,8 @@ func TestService_SubmitTransaction_BatchSignerFailureIsNotHeld(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitTransaction: %v", err)
 	}
-	if result.Result != ter.TemINVALID {
-		t.Fatalf("Result = %s, want temINVALID", result.Result)
+	if result.Result != ter.TemBAD_SIGNATURE {
+		t.Fatalf("Result = %s, want temBAD_SIGNATURE", result.Result)
 	}
 	if result.Applied {
 		t.Fatal("invalid BatchSigner signature must not apply")
