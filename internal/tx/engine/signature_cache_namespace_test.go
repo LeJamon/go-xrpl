@@ -252,7 +252,9 @@ func TestRoleSignatureCacheConcurrentFreshObjects(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i, transaction := range transactions {
-		wg.Go(func() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 			validRules, invalidRules := oldRules, newRules
 			if i%2 != 0 {
 				validRules, invalidRules = newRules, oldRules
@@ -268,7 +270,7 @@ func TestRoleSignatureCacheConcurrentFreshObjects(t *testing.T) {
 					t.Errorf("matching-era verification after rejection = %s, want tesSUCCESS", got)
 				}
 			}
-		})
+		}()
 	}
 	wg.Wait()
 }
