@@ -25,7 +25,6 @@ type AMMLiquidity struct {
 	initialPoolIn  tx.Amount
 	initialPoolOut tx.Amount
 
-	// Amendment flags.
 	fixAMMv1_1 bool
 	fixAMMv1_2 bool
 }
@@ -163,9 +162,7 @@ func (l *AMMLiquidity) generateOffer(view *PaymentSandbox, poolIn, poolOut tx.Am
 		return nil
 	}
 
-	// ChangeSpotPriceQuality failed. In rippled this can be either:
 	// A failed quality calculation falls through to the fixAMMv1_2 max-offer check.
-	//
 	// fixAMMv1_2 fallback: try maxOffer if quality beats CLOB
 	if l.fixAMMv1_2 {
 		maxOff := l.safeMaxOffer(poolIn, poolOut)
