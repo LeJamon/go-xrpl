@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strconv"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -25,9 +26,38 @@ import (
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
-// counterpartySignatureField is the only inner-object SField a signature_target
-// may name, matching rippled (the LoanSet sfCounterpartySignature).
-const counterpartySignatureField = "CounterpartySignature"
+// signature_target names one of the nested signature objects supported by
+// rippled's sign and sign_for methods.
+const (
+	counterpartySignatureField = "CounterpartySignature"
+	sponsorSignatureField      = "SponsorSignature"
+)
+
+func signingRoleForTarget(target string) (binarycodec.SigningRole, bool) {
+	switch target {
+	case counterpartySignatureField:
+		return binarycodec.CounterpartyRole, true
+	case sponsorSignatureField:
+		return binarycodec.SponsorRole, true
+	default:
+		return binarycodec.TransactionRole, false
+	}
+}
+
+// transactionRulesForContext captures the rules used by the current open
+// ledger once for an RPC operation. Offline and sparse test contexts retain
+// the pre-amendment signing behavior by returning nil.
+func transactionRulesForContext(rpcCtx *types.RpcContext) *amendment.Rules {
+	if rpcCtx == nil || rpcCtx.Services == nil {
+		return nil
+	}
+	ledgerService := rpcCtx.Services.Ledger()
+	rulesSource, ok := ledgerService.(types.TransactionRulesSource)
+	if !ok {
+		return nil
+	}
+	return rulesSource.TransactionRules()
+}
 
 const (
 	signingDeprecation       = "This command has been deprecated and will be removed in a future version of the server. Please migrate to a standalone signing tool."
@@ -219,6 +249,10 @@ func jsonFieldPresent(params json.RawMessage, field string) bool {
 }
 
 func checkPayment(txMap map[string]any, params json.RawMessage, doPath bool, rpcCtx *types.RpcContext) *rpcerrors.RpcError {
+	return checkPaymentWithRules(txMap, params, doPath, rpcCtx, transactionRulesForContext(rpcCtx))
+}
+
+func checkPaymentWithRules(txMap map[string]any, params json.RawMessage, doPath bool, rpcCtx *types.RpcContext, rules *amendment.Rules) *rpcerrors.RpcError {
 	if txMap["TransactionType"] != "Payment" {
 		return nil
 	}
@@ -267,12 +301,6 @@ func checkPayment(txMap map[string]any, params json.RawMessage, doPath bool, rpc
 			return rpcerrors.RpcErrorInvalidParams(
 				"Field 'build_path' not allowed in this context.")
 		}
-		rulesSource, ok := rpcCtx.Services.Ledger().(types.TransactionRulesSource)
-		if !ok {
-			return rpcerrors.RpcErrorInvalidParams(
-				"Field 'build_path' not allowed in this context.")
-		}
-		rules := rulesSource.TransactionRules()
 		if rules == nil || !rules.MPTokensV2Enabled() {
 			return rpcerrors.RpcErrorInvalidParams(
 				"Field 'build_path' not allowed in this context.")
@@ -418,6 +446,7 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 	ctx := rpcCtx.Context
 	services := rpcCtx.Services
 	apiVersion := rpcCtx.ApiVersion
+	rules := transactionRulesForContext(rpcCtx)
 
 	// Parse credentials and derive keypair using the shared helper
 	privateKey, publicKey, _, rpcErr := creds.deriveKeypair(apiVersion, rawParams)
@@ -425,8 +454,13 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 		return nil, rpcErr
 	}
 	signatureTargetPresent := jsonFieldPresent(rawParams, "signature_target")
-	if signatureTargetPresent && signatureTarget != counterpartySignatureField {
-		return nil, rpcerrors.RpcErrorInvalidParams(signatureTarget)
+	signingRole := binarycodec.TransactionRole
+	if signatureTargetPresent {
+		var valid bool
+		signingRole, valid = signingRoleForTarget(signatureTarget)
+		if !valid {
+			return nil, rpcerrors.RpcErrorInvalidParams(signatureTarget)
+		}
 	}
 	if len(txJSON) == 0 {
 		return nil, rpcerrors.RpcErrorMissingField("tx_json")
@@ -460,9 +494,8 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 		return nil, rpcerrors.RpcErrorExpectedField("tx_json", "object")
 	}
 	// signature_target directs the signature into a nested inner object instead
-	// of the top level. Only CounterpartySignature is a valid target; any other
-	// field name is rejected with the field name as the message, matching
-	// rippled TransactionSign.cpp.
+	// of the top level. CounterpartySignature and SponsorSignature are the only
+	// valid targets, matching rippled TransactionSign.cpp.
 	// srcAddress is the account whose Sequence/Fee are autofilled and whose
 	// existence is checked. Without a target it is the signing key's account,
 	// which must match a supplied Account (rippled checkTxJsonFields →
@@ -571,7 +604,7 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 			return nil, rpcerrors.RpcErrorMissingField("tx_json.Fee")
 		}
 	}
-	if rpcErr := checkPayment(txMap, rawParams, !offline, rpcCtx); rpcErr != nil {
+	if rpcErr := checkPaymentWithRules(txMap, rawParams, !offline, rpcCtx, rules); rpcErr != nil {
 		return nil, rpcErr
 	}
 	if _, ok := txMap["Signers"]; ok {
@@ -618,7 +651,7 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 		return nil, rpcErr
 	}
 
-	signature, err := sign.SignTransaction(transaction, privateKey)
+	signature, err := sign.SignTransactionForRole(transaction, privateKey, signingRole, rules)
 	if err != nil {
 		return nil, rpcInternalError("sign: transaction signing failed", err)
 	}
@@ -626,10 +659,18 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 	if !signatureTargetPresent {
 		transaction.GetCommon().TxnSignature = signature
 	} else {
-		if transaction.GetCommon().CounterpartySignature == nil {
-			return nil, rpcInternalInvariantError("sign: counterparty signature target unavailable")
+		switch signingRole {
+		case binarycodec.CounterpartyRole:
+			if transaction.GetCommon().CounterpartySignature == nil {
+				return nil, rpcInternalInvariantError("sign: counterparty signature target unavailable")
+			}
+			transaction.GetCommon().CounterpartySignature.TxnSignature = signature
+		case binarycodec.SponsorRole:
+			if transaction.GetCommon().SponsorSignature == nil {
+				return nil, rpcInternalInvariantError("sign: sponsor signature target unavailable")
+			}
+			transaction.GetCommon().SponsorSignature.TxnSignature = signature
 		}
-		transaction.GetCommon().CounterpartySignature.TxnSignature = signature
 	}
 
 	canonicalMap, err := flattenCanonicalTransaction(transaction, txMap)

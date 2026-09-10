@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -57,6 +58,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	}
 
 	signatureTargetPresent := jsonFieldPresent(params, "signature_target")
+	signingRole := binarycodec.TransactionRole
 	var txMap map[string]any
 	decoder := json.NewDecoder(bytes.NewReader(request.TxJson))
 	decoder.UseNumber()
@@ -107,9 +109,14 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
-	if signatureTargetPresent && request.SignatureTarget != counterpartySignatureField {
-		return nil, rpcerrors.RpcErrorInvalidParams(request.SignatureTarget)
+	if signatureTargetPresent {
+		var valid bool
+		signingRole, valid = signingRoleForTarget(request.SignatureTarget)
+		if !valid {
+			return nil, rpcerrors.RpcErrorInvalidParams(request.SignatureTarget)
+		}
 	}
+	rules := transactionRulesForContext(ctx)
 	if rpcErr := validateSigningTxJSONShape(txMap); rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -119,7 +126,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	if rpcErr := rejectSigningWhenLoaded(ctx.Services, ctx.Role.IsUnlimited()); rpcErr != nil {
 		return nil, rpcErr
 	}
-	if rpcErr := validateSignForPreConflict(txMap, params); rpcErr != nil {
+	if rpcErr := validateSignForPreConflictWithRules(txMap, params, rules); rpcErr != nil {
 		return nil, rpcErr
 	}
 	if _, ok := txMap["TxnSignature"]; ok {
@@ -155,10 +162,18 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	common := transaction.GetCommon()
 	signers := common.Signers
 	if signatureTargetPresent {
-		if common.CounterpartySignature == nil {
-			return nil, rpcerrors.RpcErrorInvalidParams("Invalid field 'tx_json.CounterpartySignature'.")
+		switch signingRole {
+		case binarycodec.CounterpartyRole:
+			if common.CounterpartySignature == nil {
+				return nil, rpcerrors.RpcErrorInvalidParams("Invalid field 'tx_json.CounterpartySignature'.")
+			}
+			signers = common.CounterpartySignature.Signers
+		case binarycodec.SponsorRole:
+			if common.SponsorSignature == nil {
+				return nil, rpcerrors.RpcErrorInvalidParams("Invalid field 'tx_json.SponsorSignature'.")
+			}
+			signers = common.SponsorSignature.Signers
 		}
-		signers = common.CounterpartySignature.Signers
 	}
 	canonicalSigners, signerErr := normalizeTypedSigners(signers, feePayer)
 	if signerErr != nil {
@@ -170,11 +185,8 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	// object that receives the new signer and is flattened below.
 	var signature string
 	var err error
-	if signatureTargetPresent {
-		signature, err = sign.SignTransactionForMultiSignTarget(transaction, request.Account, privateKey)
-	} else {
-		signature, err = sign.SignTransactionForMultiSign(transaction, request.Account, privateKey)
-	}
+	signature, err = sign.SignTransactionForMultiSignRole(
+		transaction, request.Account, privateKey, signingRole, rules)
 	if err != nil {
 		return nil, rpcInternalError("sign_for: multisigning payload signing failed", err)
 	}
@@ -194,7 +206,12 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	}
 
 	if signatureTargetPresent {
-		common.CounterpartySignature.Signers = canonicalSigners
+		switch signingRole {
+		case binarycodec.CounterpartyRole:
+			common.CounterpartySignature.Signers = canonicalSigners
+		case binarycodec.SponsorRole:
+			common.SponsorSignature.Signers = canonicalSigners
+		}
 	} else {
 		common.Signers = canonicalSigners
 	}
@@ -248,6 +265,10 @@ func integralNetworkID(value any) (uint32, bool) {
 }
 
 func validateSignForPreConflict(txMap map[string]any, params json.RawMessage) *rpcerrors.RpcError {
+	return validateSignForPreConflictWithRules(txMap, params, nil)
+}
+
+func validateSignForPreConflictWithRules(txMap map[string]any, params json.RawMessage, rules *amendment.Rules) *rpcerrors.RpcError {
 	if _, ok := txMap["Fee"]; !ok {
 		return rpcerrors.RpcErrorMissingField("tx_json.Fee")
 	}
@@ -255,7 +276,7 @@ func validateSignForPreConflict(txMap map[string]any, params json.RawMessage) *r
 	if transactionType != "Payment" {
 		return nil
 	}
-	return checkPayment(txMap, params, false, nil)
+	return checkPaymentWithRules(txMap, params, false, nil, rules)
 }
 
 func validateSigningTxJSONShape(txMap map[string]any) *rpcerrors.RpcError {
