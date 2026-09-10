@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newCleanupLoan(t *testing.T, cleanup, cashBasis bool) (*jtx.TestEnv, *jtx.Account, *jtx.Account, keylet.Keylet, keylet.Keylet, uint32) {
+func newCleanupLoan(t *testing.T, cleanup, cashBasis bool, configure ...func(*lending.LoanSet)) (*jtx.TestEnv, *jtx.Account, *jtx.Account, keylet.Keylet, keylet.Keylet, uint32) {
 	t.Helper()
 	env := jtx.NewTestEnv(t)
 	env.EnableFeature("SingleAssetVault")
@@ -63,6 +63,9 @@ func newCleanupLoan(t *testing.T, cleanup, cashBasis bool) (*jtx.TestEnv, *jtx.A
 	loan.Fee = "20"
 	loan.Counterparty = owner.Address
 	loan.SigningPubKey = borrower.PublicKeyHex()
+	for _, configureLoan := range configure {
+		configureLoan(loan)
+	}
 	signature, err := txsign.SignCounterparty(loan, owner.PublicKeyHex(), "00"+owner.PrivateKeyHex())
 	require.NoError(t, err)
 	loan.CounterpartySignature = signature
@@ -195,7 +198,12 @@ func testCleanupLoanPaymentDueBoundary(t *testing.T, cashBasis bool) {
 		for _, late := range []bool{false, true} {
 			for _, delta := range []int64{-1, 0, 1} {
 				t.Run(fmt.Sprintf("cleanup=%t/late=%t/delta=%d", cleanup, late, delta), func(t *testing.T) {
-					env, _, borrower, lk, vk, due := newCleanupLoan(t, cleanup, cashBasis)
+					env, _, borrower, lk, vk, due := newCleanupLoan(t, cleanup, cashBasis, func(loan *lending.LoanSet) {
+						fee, rate, total := "50", uint32(100000), uint32(4)
+						loan.LatePaymentFee = &fee
+						loan.LateInterestRate = &rate
+						loan.PaymentTotal = &total
+					})
 					env.CloseToParentCloseTime(uint32(int64(due) + delta))
 					beforeLoan, err := env.LedgerEntry(lk)
 					require.NoError(t, err)
@@ -223,8 +231,13 @@ func testCleanupLoanPaymentDueBoundary(t *testing.T, cashBasis bool) {
 						require.Equal(t, balance-10, env.Balance(borrower))
 					} else {
 						jtx.RequireTxSuccess(t, result)
-						require.Equal(t, uint32(2), cleanupLoanFields(t, env, lk)["PaymentRemaining"])
+						require.Equal(t, uint32(3), cleanupLoanFields(t, env, lk)["PaymentRemaining"])
 						require.Equal(t, due+120, cleanupLoanFields(t, env, lk)["NextPaymentDueDate"])
+						charge := uint64(25000)
+						if late {
+							charge += 50
+						}
+						require.Equal(t, balance-charge-10, env.Balance(borrower))
 					}
 					require.Equal(t, seq+1, env.Seq(borrower))
 				})
@@ -233,7 +246,7 @@ func testCleanupLoanPaymentDueBoundary(t *testing.T, cashBasis bool) {
 	}
 }
 
-func testCleanupLoanDefaultFrozenCover(t *testing.T, cashBasis bool) {
+func testCleanupLoanDefaultFrozenCover(t *testing.T, cashBasis, impaired bool) {
 	for _, kind := range []string{"individual", "deep", "global", "holder lock", "issuance lock"} {
 		for _, cleanup := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/cleanup=%t", kind, cleanup), func(t *testing.T) {
@@ -275,6 +288,14 @@ func testCleanupLoanDefaultFrozenCover(t *testing.T, cashBasis bool) {
 				copy(vaultID[:], vaultBytes)
 				vk := keylet.VaultByID(vaultID)
 				vaultAccount := jtx.NewAccountWithAddress("vault-pseudo", cleanupLoanFields(t, f.env, vk)["Account"].(string))
+				if impaired {
+					f.env.CloseToParentCloseTime(due + 1)
+					m := lending.NewLoanManage(f.owner.Address, hex.EncodeToString(lk.Key[:]))
+					m.SetFlags(lending.TfLoanImpair)
+					jtx.RequireTxSuccess(t, f.env.Submit(m))
+					require.Equal(t, "1000", cleanupLoanFields(t, f.env, vk)["LossUnrealized"])
+					require.Equal(t, due, cleanupLoanFields(t, f.env, lk)["NextPaymentDueDate"])
+				}
 				switch kind {
 				case "individual":
 					f.env.FreezeTrustLine(f.issuer, brokerAccount, "USD")
@@ -346,7 +367,11 @@ func testCleanupLoanDefaultFrozenCover(t *testing.T, cashBasis bool) {
 					require.Empty(t, cleanupLoanFields(t, f.env, vk)["LossUnrealized"])
 					require.Empty(t, cleanupLoanFields(t, f.env, keylet.LoanBrokerByID(f.brokerKey))["DebtTotal"])
 					require.Empty(t, cleanupLoanFields(t, f.env, lk)["PaymentRemaining"])
-					require.EqualValues(t, lending.LsfLoanDefault, cleanupLoanFields(t, f.env, lk)["Flags"])
+					flags := lending.LsfLoanDefault
+					if impaired {
+						flags |= lending.LsfLoanImpaired
+					}
+					require.EqualValues(t, flags, cleanupLoanFields(t, f.env, lk)["Flags"])
 					found := map[string]bool{}
 					for _, node := range result.Metadata.AffectedNodes {
 						switch node.LedgerEntryType {
@@ -355,7 +380,7 @@ func testCleanupLoanDefaultFrozenCover(t *testing.T, cashBasis bool) {
 							require.Equal(t, "ModifiedNode", node.NodeType)
 							require.Equal(t, "1000", node.PreviousFields["PrincipalOutstanding"])
 							require.Equal(t, uint32(1), node.PreviousFields["PaymentRemaining"])
-							require.EqualValues(t, lending.LsfLoanDefault, node.FinalFields["Flags"])
+							require.EqualValues(t, flags, node.FinalFields["Flags"])
 						case "LoanBroker":
 							found["LoanBroker"] = true
 							require.Equal(t, "1000", node.PreviousFields["DebtTotal"])
@@ -414,7 +439,73 @@ func TestCleanupLoanPaymentDueBoundary(t *testing.T) {
 
 func TestCleanupLoanDefaultFrozenCover(t *testing.T) {
 	for _, cashBasis := range []bool{false, true} {
-		t.Run(fmt.Sprintf("LP1.1=%t", cashBasis), func(t *testing.T) { testCleanupLoanDefaultFrozenCover(t, cashBasis) })
+		for _, impaired := range []bool{false, true} {
+			t.Run(fmt.Sprintf("LP1.1=%t/impaired=%t", cashBasis, impaired), func(t *testing.T) { testCleanupLoanDefaultFrozenCover(t, cashBasis, impaired) })
+		}
+	}
+}
+
+func TestCleanupLoanImpairmentLateCharges(t *testing.T) {
+	for _, cashBasis := range []bool{false, true} {
+		for _, cleanup := range []bool{false, true} {
+			t.Run(fmt.Sprintf("LP1.1=%t/cleanup=%t", cashBasis, cleanup), func(t *testing.T) {
+				env, owner, borrower, lk, vk, due := newCleanupLoan(t, cleanup, cashBasis, func(loan *lending.LoanSet) {
+					fee, rate, total := "50", uint32(100000), uint32(4)
+					loan.LatePaymentFee = &fee
+					loan.LateInterestRate = &rate
+					loan.PaymentTotal = &total
+				})
+				id := hex.EncodeToString(lk.Key[:])
+				now := due + 31536
+				env.CloseToParentCloseTime(now)
+				m := lending.NewLoanManage(owner.Address, id)
+				m.SetFlags(lending.TfLoanImpair)
+				jtx.RequireTxSuccess(t, env.Submit(m))
+				require.Equal(t, "100000", cleanupLoanFields(t, env, vk)["LossUnrealized"])
+				beforeLoan, err := env.LedgerEntry(lk)
+				require.NoError(t, err)
+				beforeVault, err := env.LedgerEntry(vk)
+				require.NoError(t, err)
+				balance, seq := env.Balance(borrower), env.Seq(borrower)
+				payment := lending.NewLoanPay(borrower.Address, id, tx.NewXRPAmount(40000))
+				code := "tecEXPIRED"
+				if !cleanup {
+					payment.SetFlags(lending.TfLoanLatePayment)
+					code = "tecTOO_SOON"
+				}
+				jtx.RequireTxFail(t, env.Submit(payment), code)
+				afterLoan, err := env.LedgerEntry(lk)
+				require.NoError(t, err)
+				afterVault, err := env.LedgerEntry(vk)
+				require.NoError(t, err)
+				require.Equal(t, beforeLoan, afterLoan)
+				require.Equal(t, beforeVault, afterVault)
+				require.Equal(t, balance-10, env.Balance(borrower))
+				require.Equal(t, seq+1, env.Seq(borrower))
+				balance, seq = env.Balance(borrower), env.Seq(borrower)
+				ownerBalance := env.Balance(owner)
+				payment = lending.NewLoanPay(borrower.Address, id, tx.NewXRPAmount(40000))
+				charge, interest, fee := uint64(25000), uint64(0), uint64(0)
+				nextDue := now + 240
+				if cleanup {
+					payment.SetFlags(lending.TfLoanLatePayment)
+					charge, interest, fee = 25150, 100, 50
+					nextDue = due + 120
+				}
+				jtx.RequireTxSuccess(t, env.Submit(payment))
+				loan, vaultFields := cleanupLoanFields(t, env, lk), cleanupLoanFields(t, env, vk)
+				require.Equal(t, "75000", loan["PrincipalOutstanding"])
+				require.Equal(t, uint32(3), loan["PaymentRemaining"])
+				require.Equal(t, nextDue, loan["NextPaymentDueDate"])
+				requireLoanFlags(t, loan, lending.LsfLoanImpaired, false)
+				require.Empty(t, vaultFields["LossUnrealized"])
+				require.Equal(t, fmt.Sprint(925000+interest), vaultFields["AssetsAvailable"])
+				require.Equal(t, fmt.Sprint(1000000+interest), vaultFields["AssetsTotal"])
+				require.Equal(t, balance-charge-10, env.Balance(borrower))
+				require.Equal(t, seq+1, env.Seq(borrower))
+				require.Equal(t, ownerBalance+fee, env.Balance(owner))
+			})
+		}
 	}
 }
 
