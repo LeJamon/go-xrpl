@@ -128,11 +128,6 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 	var buyOffer, sellOffer *state.NFTokenOfferData
 	var buyOfferKey, sellOfferKey keylet.Keylet
 	var normalizedBrokerFee *tx.Amount
-	// Track whether offer amounts are negative (from raw binary, since
-	// NFTokenOfferData.Amount is uint64 and loses sign info).
-	// These flags are used both for fixNFTokenNegOffer (temBAD_OFFER)
-	// and for the pay() negative check (tecINTERNAL).
-	var buyOfferNegative, sellOfferNegative bool
 	// With fixCleanup3_1_3, an expired offer no longer fails at this point;
 	// it flows through the remaining checks and is deleted (with tecEXPIRED)
 	// once the rest of processing would otherwise have succeeded.
@@ -176,15 +171,8 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 			buyOfferExpired = true
 		}
 
-		// The parser records the amount's sign (uint64 Amount cannot).
-		buyOfferNegative = buyOffer.Negative
-
-		// fixNFTokenNegOffer: reject negative amount offers
-		// Reference: rippled NFTokenAcceptOffer.cpp checkOffer lines 80-87
-		if ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
-			if buyOfferNegative {
-				return ter.TemBAD_OFFER
-			}
+		if buyOffer.Negative {
+			return ter.TemBAD_OFFER
 		}
 	}
 
@@ -225,15 +213,8 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 			sellOfferExpired = true
 		}
 
-		// The parser records the amount's sign (uint64 Amount cannot).
-		sellOfferNegative = sellOffer.Negative
-
-		// fixNFTokenNegOffer: reject negative amount offers
-		// Reference: rippled NFTokenAcceptOffer.cpp checkOffer lines 80-87
-		if ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
-			if sellOfferNegative {
-				return ter.TemBAD_OFFER
-			}
+		if sellOffer.Negative {
+			return ter.TemBAD_OFFER
 		}
 	}
 
@@ -265,27 +246,21 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 
 		// Sell amount must not exceed buy amount.
-		// Skip this check when offers have negative amounts (pre-fixNFTokenNegOffer):
-		// negative amounts stored as uint64 lose their sign, making the
-		// comparison meaningless. In rippled, the signed comparison on negative
-		// amounts works naturally (e.g., -2M <= -1M is true).
-		if !(buyOfferNegative || sellOfferNegative) {
-			if buyIsXRP {
-				if sellOffer.Amount > buyOffer.Amount {
-					return ter.TecINSUFFICIENT_PAYMENT
-				}
-			} else {
-				buyAmount, err := offerIOUToAmount(buyOffer)
-				if err != nil {
-					return ter.TecINTERNAL
-				}
-				sellAmount, err := offerIOUToAmount(sellOffer)
-				if err != nil {
-					return ter.TecINTERNAL
-				}
-				if sellAmount.Compare(buyAmount) > 0 {
-					return ter.TecINSUFFICIENT_PAYMENT
-				}
+		if buyIsXRP {
+			if sellOffer.Amount > buyOffer.Amount {
+				return ter.TecINSUFFICIENT_PAYMENT
+			}
+		} else {
+			buyAmount, err := offerIOUToAmount(buyOffer)
+			if err != nil {
+				return ter.TecINTERNAL
+			}
+			sellAmount, err := offerIOUToAmount(sellOffer)
+			if err != nil {
+				return ter.TecINTERNAL
+			}
+			if sellAmount.Compare(buyAmount) > 0 {
+				return ter.TecINSUFFICIENT_PAYMENT
 			}
 		}
 
@@ -297,8 +272,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 			return ter.TecNO_PERMISSION
 		}
 
-		// Broker fee checks (skip when offers have negative amounts pre-amendment)
-		if n.NFTokenBrokerFee != nil && !(buyOfferNegative || sellOfferNegative) {
+		if n.NFTokenBrokerFee != nil {
 			brokerFeeIsXRP := n.NFTokenBrokerFee.Currency == ""
 			if brokerFeeIsXRP != buyIsXRP {
 				return ter.TecNFTOKEN_BUY_SELL_MISMATCH
@@ -397,7 +371,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 			if funds.Compare(buyAmount) < 0 {
 				return ter.TecINSUFFICIENT_FUNDS
 			}
-		} else if !buyOfferNegative {
+		} else {
 			// XRP buy offer: the buyer needs enough liquid XRP. accountFunds for a
 			// native amount returns balance minus reserve in both amendment eras.
 			needed := tx.NewXRPAmount(int64(buyOffer.Amount))
@@ -470,7 +444,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 					return ter.TecINSUFFICIENT_FUNDS
 				}
 			}
-		} else if !sellOfferNegative {
+		} else {
 			// XRP sell offer: in direct mode (buyOffer == nil) the acceptor needs
 			// enough liquid XRP (matching accountFunds with `!bo`).
 			if buyOffer == nil {
@@ -598,26 +572,16 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Brokered mode (both offers)
 	if buyOffer != nil && sellOffer != nil {
 		return n.executeBrokeredMode(ctx, accountID, buyOffer, sellOffer, buyOfferKey, sellOfferKey,
-			buyOfferNegative, sellOfferNegative, normalizedBrokerFee)
+			normalizedBrokerFee)
 	}
 
 	// Direct mode - sell offer only
-	// Pre-amendment negative amount guard: rippled's pay() (line 404) checks
-	// `if (amount < beast::zero) return tecINTERNAL;`. In direct mode,
-	// pay() is always called when amount != 0, so negative amounts hit this.
-	// Reference: rippled NFTokenAcceptOffer.cpp pay() line 404
 	if sellOffer != nil {
-		if sellOfferNegative && !ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
-			return ter.TecINTERNAL
-		}
 		return n.acceptNFTokenSellOfferDirect(ctx, accountID, sellOffer, sellOfferKey)
 	}
 
 	// Direct mode - buy offer only
 	if buyOffer != nil {
-		if buyOfferNegative && !ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
-			return ter.TecINTERNAL
-		}
 		return n.acceptNFTokenBuyOfferDirect(ctx, accountID, buyOffer, buyOfferKey)
 	}
 

@@ -28,9 +28,7 @@ func tokenOfferCreatePreflight(
 	owner string,
 	isSellOffer bool,
 ) error {
-	// An offer for a negative amount makes no sense (gated on fixNFTokenNegOffer,
-	// which the original implementation lacked).
-	if amount.IsNegative() && rules.Enabled(amendment.FeatureFixNFTokenNegOffer) {
+	if amount.IsNegative() {
 		return ter.Errorf(ter.TemBAD_AMOUNT, "offer amount cannot be negative")
 	}
 
@@ -66,11 +64,6 @@ func tokenOfferCreatePreflight(
 	}
 
 	if dest != "" {
-		// A Destination on a buy offer (used to pin a specific broker) was
-		// malformed before fixNFTokenNegOffer, which piggy-backed the relaxation.
-		if !isSellOffer && !rules.Enabled(amendment.FeatureFixNFTokenNegOffer) {
-			return ter.Errorf(ter.TemMALFORMED, "Destination not allowed on buy offer")
-		}
 		if dest == account {
 			return ter.Errorf(ter.TemMALFORMED, "Destination cannot be the same as Account")
 		}

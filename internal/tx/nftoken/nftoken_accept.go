@@ -132,7 +132,7 @@ func payNFTokenXRP(ctx *tx.ApplyContext, fromID, toID [20]byte, amount uint64) t
 // Reference: rippled NFTokenAcceptOffer.cpp doApply (brokered mode)
 func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID [20]byte,
 	buyOffer, sellOffer *state.NFTokenOfferData, buyOfferKey, sellOfferKey keylet.Keylet,
-	buyOfferNegative, sellOfferNegative bool, normalizedBrokerFee *tx.Amount) ter.Result {
+	normalizedBrokerFee *tx.Amount) ter.Result {
 	sellerID := sellOffer.Owner
 	buyerID := buyOffer.Owner
 
@@ -152,134 +152,128 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 	adjustOwnerCountViaView(ctx.View, buyerID, -1)
 	adjustOwnerCountViaView(ctx.View, sellerID, -1)
 
-	// When offers have negative amounts (pre-fixNFTokenNegOffer), rippled's
-	// brokered path skips payments because `amount > beast::zero` is false.
-	// Only the token transfer and offer cleanup happen.
-	// Reference: rippled NFTokenAcceptOffer.cpp doApply lines 593-597
-	if !(buyOfferNegative || sellOfferNegative) {
-		buyIsXRP := buyOffer.AmountIOU == nil
+	buyIsXRP := buyOffer.AmountIOU == nil
 
-		var brokerFee uint64
-		if n.NFTokenBrokerFee != nil && buyIsXRP {
-			brokerFee = uint64(n.NFTokenBrokerFee.Drops())
+	var brokerFee uint64
+	if n.NFTokenBrokerFee != nil && buyIsXRP {
+		brokerFee = uint64(n.NFTokenBrokerFee.Drops())
+	}
+
+	transferFee := getNFTTransferFee(sellOffer.NFTokenID)
+	nftIssuerID := getNFTIssuer(sellOffer.NFTokenID)
+
+	if !buyIsXRP {
+		// IOU brokered payment path
+		buyAmount, err := offerIOUToAmount(buyOffer)
+		if err != nil {
+			return ter.TecINTERNAL
 		}
 
-		transferFee := getNFTTransferFee(sellOffer.NFTokenID)
-		nftIssuerID := getNFTIssuer(sellOffer.NFTokenID)
-
-		if !buyIsXRP {
-			// IOU brokered payment path
-			buyAmount, err := offerIOUToAmount(buyOffer)
-			if err != nil {
-				return ter.TecINTERNAL
+		// Step 1: Pay broker fee
+		if normalizedBrokerFee != nil && !normalizedBrokerFee.IsZero() {
+			if r := payIOU(ctx, buyerID, accountID, *normalizedBrokerFee); r != ter.TesSUCCESS {
+				return r
 			}
+			buyAmount, _ = buyAmount.SubWithNumberContext(
+				*normalizedBrokerFee,
+				ctx.NumberContext(),
+				state.RoundToNearest,
+			)
+		}
 
-			// Step 1: Pay broker fee
-			if normalizedBrokerFee != nil && !normalizedBrokerFee.IsZero() {
-				if r := payIOU(ctx, buyerID, accountID, *normalizedBrokerFee); r != ter.TesSUCCESS {
+		// Step 2: Pay issuer cut from transfer fee
+		if transferFee != 0 && !buyAmount.IsZero() && sellerID != nftIssuerID && buyerID != nftIssuerID {
+			// Check issuer trust line (fixEnforceNFTokenTrustline)
+			nftFlags := getNFTFlagsFromID(sellOffer.NFTokenID)
+			if r := checkIssuerTrustLineForAccept(ctx, nftIssuerID, buyAmount, nftFlags); r != ter.TesSUCCESS {
+				return r
+			}
+			issuerCut := buyAmount.MulRatioWithNumberContext(
+				uint32(transferFee),
+				transferFeeDivisor32,
+				true,
+				ctx.NumberContext(),
+			)
+			if !issuerCut.IsZero() {
+				if r := payIOU(ctx, buyerID, nftIssuerID, issuerCut); r != ter.TesSUCCESS {
 					return r
 				}
 				buyAmount, _ = buyAmount.SubWithNumberContext(
-					*normalizedBrokerFee,
+					issuerCut,
 					ctx.NumberContext(),
 					state.RoundToNearest,
 				)
 			}
+		}
 
-			// Step 2: Pay issuer cut from transfer fee
-			if transferFee != 0 && !buyAmount.IsZero() && sellerID != nftIssuerID && buyerID != nftIssuerID {
-				// Check issuer trust line (fixEnforceNFTokenTrustline)
-				nftFlags := getNFTFlagsFromID(sellOffer.NFTokenID)
-				if r := checkIssuerTrustLineForAccept(ctx, nftIssuerID, buyAmount, nftFlags); r != ter.TesSUCCESS {
-					return r
-				}
-				issuerCut := buyAmount.MulRatioWithNumberContext(
-					uint32(transferFee),
-					transferFeeDivisor32,
-					true,
-					ctx.NumberContext(),
-				)
-				if !issuerCut.IsZero() {
-					if r := payIOU(ctx, buyerID, nftIssuerID, issuerCut); r != ter.TesSUCCESS {
-						return r
-					}
-					buyAmount, _ = buyAmount.SubWithNumberContext(
-						issuerCut,
-						ctx.NumberContext(),
-						state.RoundToNearest,
-					)
-				}
+		// Step 3: Pay seller remainder
+		if !buyAmount.IsZero() {
+			if r := payIOU(ctx, buyerID, sellerID, buyAmount); r != ter.TesSUCCESS {
+				return r
 			}
+		}
 
-			// Step 3: Pay seller remainder
-			if !buyAmount.IsZero() {
-				if r := payIOU(ctx, buyerID, sellerID, buyAmount); r != ter.TesSUCCESS {
-					return r
-				}
-			}
+		// Sync ctx.Account.OwnerCount after IOU payments that may auto-create trust lines
+		syncCtxOwnerCount(ctx)
+	} else {
+		// XRP brokered payment path — deduct from buyer, pay broker + issuer + seller
+		amount := buyOffer.Amount
 
-			// Sync ctx.Account.OwnerCount after IOU payments that may auto-create trust lines
-			syncCtxOwnerCount(ctx)
-		} else {
-			// XRP brokered payment path — deduct from buyer, pay broker + issuer + seller
-			amount := buyOffer.Amount
+		// Deduct full amount from buyer's account (funds already checked above)
+		buyerKey := keylet.Account(buyerID)
+		buyerData, err := ctx.View.Read(buyerKey)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		buyerAccount, err := state.ParseAccountRoot(buyerData)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		buyerAccount.Balance -= amount
+		buyerUpdated, _ := state.SerializeAccountRoot(buyerAccount)
+		if err := ctx.View.Update(buyerKey, buyerUpdated); err != nil {
+			return ter.TefINTERNAL
+		}
 
-			// Deduct full amount from buyer's account (funds already checked above)
-			buyerKey := keylet.Account(buyerID)
-			buyerData, err := ctx.View.Read(buyerKey)
-			if err != nil {
-				return ter.TefINTERNAL
+		var issuerCut uint64
+		if transferFee != 0 && amount > 0 {
+			issuerCut = nftTransferFeeXRP(amount-brokerFee, transferFee)
+			if sellerID == nftIssuerID || buyerID == nftIssuerID {
+				issuerCut = 0
 			}
-			buyerAccount, err := state.ParseAccountRoot(buyerData)
-			if err != nil {
-				return ter.TefINTERNAL
-			}
-			buyerAccount.Balance -= amount
-			buyerUpdated, _ := state.SerializeAccountRoot(buyerAccount)
-			if err := ctx.View.Update(buyerKey, buyerUpdated); err != nil {
-				return ter.TefINTERNAL
-			}
+		}
 
-			var issuerCut uint64
-			if transferFee != 0 && amount > 0 {
-				issuerCut = nftTransferFeeXRP(amount-brokerFee, transferFee)
-				if sellerID == nftIssuerID || buyerID == nftIssuerID {
-					issuerCut = 0
-				}
-			}
+		// Pay broker fee
+		if brokerFee > 0 {
+			ctx.Account.Balance += brokerFee
+			amount -= brokerFee
+		}
 
-			// Pay broker fee
-			if brokerFee > 0 {
-				ctx.Account.Balance += brokerFee
-				amount -= brokerFee
+		// Pay issuer cut
+		if issuerCut > 0 {
+			if r := creditNFTokenIssuerXRP(ctx, nftIssuerID, issuerCut); r != ter.TesSUCCESS {
+				return r
 			}
+			amount -= issuerCut
+		}
 
-			// Pay issuer cut
-			if issuerCut > 0 {
-				if r := creditNFTokenIssuerXRP(ctx, nftIssuerID, issuerCut); r != ter.TesSUCCESS {
-					return r
-				}
-				amount -= issuerCut
-			}
-
-			// Pay seller
-			sellerKey := keylet.Account(sellerID)
-			sellerData, err := ctx.View.Read(sellerKey)
-			if err != nil {
-				return ter.TefINTERNAL
-			}
-			sellerAccount, err := state.ParseAccountRoot(sellerData)
-			if err != nil {
-				return ter.TefINTERNAL
-			}
-			sellerAccount.Balance += amount
-			sellerUpdatedData, err := state.SerializeAccountRoot(sellerAccount)
-			if err != nil {
-				return ter.TefINTERNAL
-			}
-			if err := ctx.View.Update(sellerKey, sellerUpdatedData); err != nil {
-				return ter.TefINTERNAL
-			}
+		// Pay seller
+		sellerKey := keylet.Account(sellerID)
+		sellerData, err := ctx.View.Read(sellerKey)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		sellerAccount, err := state.ParseAccountRoot(sellerData)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		sellerAccount.Balance += amount
+		sellerUpdatedData, err := state.SerializeAccountRoot(sellerAccount)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if err := ctx.View.Update(sellerKey, sellerUpdatedData); err != nil {
+			return ter.TefINTERNAL
 		}
 	}
 
