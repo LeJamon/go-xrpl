@@ -645,6 +645,137 @@ func TestLedgerExpandedSyntheticMetadataForAccountDelete(t *testing.T) {
 	}
 }
 
+func TestLedgerExpandedSyntheticMetadataForNFTAndMPT(t *testing.T) {
+	nftTxJSON, nftMeta, _, nftMetaBlob, nftID := nftSyntheticRPCFixture(t)
+	mptTxJSON, mptMeta, _, mptMetaBlob, mptID := mptSyntheticRPCFixture(t)
+
+	fixtures := []struct {
+		txJSON   map[string]any
+		meta     map[string]any
+		metaBlob []byte
+		txType   string
+		field    string
+		want     string
+	}{
+		{
+			txJSON:   nftTxJSON,
+			meta:     nftMeta,
+			metaBlob: nftMetaBlob,
+			txType:   "NFTokenMint",
+			field:    "nftoken_id",
+			want:     nftID,
+		},
+		{
+			txJSON:   mptTxJSON,
+			meta:     mptMeta,
+			metaBlob: mptMetaBlob,
+			txType:   "MPTokenIssuanceCreate",
+			field:    "mpt_issuance_id",
+			want:     mptID,
+		},
+	}
+
+	reader := newDefaultLedgerReader(2, true)
+	reader.transactions = make([]struct {
+		hash [32]byte
+		data []byte
+	}, len(fixtures))
+	for i, fixture := range fixtures {
+		stored, err := json.Marshal(handlers.StoredTransaction{
+			TxJSON: fixture.txJSON,
+			Meta:   fixture.meta,
+		})
+		require.NoError(t, err)
+		reader.transactions[i] = struct {
+			hash [32]byte
+			data []byte
+		}{hash: [32]byte{byte(i + 1)}, data: stored}
+	}
+
+	mock := &ledgerMock{mockLedgerService: newMockLedgerService()}
+	mock.getLedgerBySequenceFn = func(sequence uint32) (types.LedgerReader, error) {
+		require.Equal(t, uint32(2), sequence)
+		return reader, nil
+	}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock})
+	method := &handlers.LedgerMethod{}
+
+	for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3} {
+		t.Run("json/api_v"+strconv.Itoa(apiVersion), func(t *testing.T) {
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: apiVersion,
+				Services:   services,
+			}
+			result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":2,"transactions":true,"expand":true}`))
+			require.Nil(t, rpcErr)
+			ledger := result.(map[string]any)["ledger"].(map[string]any)
+			transactions := ledger["transactions"].([]any)
+			require.Len(t, transactions, len(fixtures))
+
+			for i, transaction := range transactions {
+				fixture := fixtures[i]
+				entry := transaction.(map[string]any)
+				metaKey := "metaData"
+				var txJSON map[string]any
+				if apiVersion > 1 {
+					metaKey = "meta"
+					var ok bool
+					txJSON, ok = entry["tx_json"].(map[string]any)
+					require.True(t, ok)
+				} else {
+					txJSON = entry
+					require.NotContains(t, entry, "tx_json")
+				}
+
+				assert.Equal(t, fixture.txType, txJSON["TransactionType"])
+				meta, ok := entry[metaKey].(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, fixture.want, meta[fixture.field])
+				if fixture.field == "nftoken_id" {
+					assert.NotContains(t, meta, "mpt_issuance_id")
+				} else {
+					assert.NotContains(t, meta, "nftoken_id")
+				}
+			}
+		})
+
+		t.Run("binary/api_v"+strconv.Itoa(apiVersion), func(t *testing.T) {
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: apiVersion,
+				Services:   services,
+			}
+			result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":2,"transactions":true,"expand":true,"binary":true}`))
+			require.Nil(t, rpcErr)
+			ledger := result.(map[string]any)["ledger"].(map[string]any)
+			transactions := ledger["transactions"].([]any)
+			require.Len(t, transactions, len(fixtures))
+
+			metaKey := "meta"
+			if apiVersion > 1 {
+				metaKey = "meta_blob"
+			}
+			for i, transaction := range transactions {
+				entry := transaction.(map[string]any)
+				require.Contains(t, entry, "tx_blob")
+				metaBlob, ok := entry[metaKey].(string)
+				require.True(t, ok)
+				assert.Equal(t, strings.ToUpper(hex.EncodeToString(fixtures[i].metaBlob)), metaBlob)
+				assert.NotContains(t, entry, "nftoken_id")
+				assert.NotContains(t, entry, "mpt_issuance_id")
+				if apiVersion > 1 {
+					assert.NotContains(t, entry, "meta")
+				} else {
+					assert.NotContains(t, entry, "meta_blob")
+				}
+			}
+		})
+	}
+}
+
 func TestLedgerExpandedTransactionsStopAtMalformedLeaf(t *testing.T) {
 	storedTxData, err := json.Marshal(handlers.StoredTransaction{
 		TxJSON: map[string]any{
