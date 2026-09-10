@@ -56,6 +56,59 @@ func TestVaultLifecycleFieldSerialization(t *testing.T) {
 	}
 }
 
+func TestVaultOptionalDataPresenceRoundTrip(t *testing.T) {
+	tests := []struct {
+		name        string
+		data        string
+		dataPresent bool
+	}{
+		{name: "absent"},
+		{name: "present empty", dataPresent: true},
+		{name: "present nonempty", data: "abcd"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			v := &vaultData{
+				Owner:       [20]byte{1},
+				Account:     [20]byte{2},
+				Asset:       tx.Asset{Currency: "XRP"},
+				Data:        test.data,
+				DataPresent: test.dataPresent,
+			}
+			data, err := serializeVault(v)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			fields, err := binarycodec.Decode(hex.EncodeToString(data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantPresent := test.dataPresent || test.data != ""
+			_, gotPresent := fields["Data"]
+			if gotPresent != wantPresent {
+				t.Fatalf("Data presence = %v, want %v; fields = %#v", gotPresent, wantPresent, fields)
+			}
+
+			parsed, err := parseVault(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if parsed.DataPresent != wantPresent {
+				t.Fatalf("parsed DataPresent = %v, want %v", parsed.DataPresent, wantPresent)
+			}
+			again, err := serializeVault(parsed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(data, again) {
+				t.Fatalf("round trip changed bytes\n got: %s\nwant: %s", hex.EncodeToString(again), hex.EncodeToString(data))
+			}
+		})
+	}
+}
+
 func TestSerializeVaultCanonicalFieldStyles(t *testing.T) {
 	var owner, account [20]byte
 	for i := range owner {
