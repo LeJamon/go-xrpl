@@ -159,7 +159,6 @@ func TestLoanMakePaymentDueDateBoundary(t *testing.T) {
 		t.Fatalf("fix340 regular payment after due date: got %v, want tecEXPIRED", got)
 	}
 
-	// With the amendment disabled the due close remains an expired boundary.
 	if _, got := LoanMakePayment(asset, 100, newLoan(), 0, num(500, 0), PaymentRegular, false, false, false); got != ter.TecEXPIRED {
 		t.Fatalf("legacy regular payment at due date: got %v, want tecEXPIRED", got)
 	}
