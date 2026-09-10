@@ -36,10 +36,7 @@ func buildServerDefinitions() {
 	defs := definitions.Get()
 	defsFields := defs.Fields()
 
-	// Build FIELDS in rippled's order: the five non-SField sentinels first,
-	// followed by the known SFields sorted by their serialized field code.
-	// Each entry is [fieldName, {nth, isVLEncoded, isSerialized, isSigningField, type}].
-	const sentinelCount = 5
+	// Sentinel entries precede fields ordered by their serialization code.
 	sentinelNames := [...]string{
 		"Invalid",
 		"ObjectEndMarker",
@@ -47,8 +44,8 @@ func buildServerDefinitions() {
 		"taker_gets_funded",
 		"taker_pays_funded",
 	}
-	fieldNames := make([]string, 0, len(defsFields)-sentinelCount)
-	seen := make(map[string]struct{}, sentinelCount)
+	fieldNames := make([]string, 0, len(defsFields))
+	seen := make(map[string]struct{}, len(sentinelNames))
 	for _, name := range sentinelNames {
 		if _, ok := defsFields[name]; !ok {
 			panic("server_definitions: missing field sentinel " + name)
@@ -62,12 +59,6 @@ func buildServerDefinitions() {
 	}
 	sort.Slice(fieldNames, func(i, j int) bool {
 		left, right := defsFields[fieldNames[i]], defsFields[fieldNames[j]]
-		if fieldNames[i] == "Generic" {
-			return fieldNames[j] != "Generic"
-		}
-		if fieldNames[j] == "Generic" {
-			return false
-		}
 		if left.Ordinal != right.Ordinal {
 			return left.Ordinal < right.Ordinal
 		}
@@ -111,8 +102,7 @@ func buildServerDefinitions() {
 	serverDefsBase["LEDGER_ENTRY_FLAGS"] = ledgerFlagsTable
 	serverDefsBase["ACCOUNT_SET_FLAGS"] = accountSetFlagsTable
 
-	// Hash the compact JSON document, matching rippled's Json::FastWriter. Go's
-	// encoder sorts object keys and emits no trailing newline, as FastWriter does.
+	// The hash covers compact JSON without a trailing newline.
 	encoded, err := json.Marshal(serverDefsBase)
 	if err != nil {
 		panic("server_definitions: encode definitions: " + err.Error())
@@ -188,9 +178,7 @@ func ledgerFormatFieldsToJSON(fields []schema.FormatField) []any {
 	return arr
 }
 
-// isValidDefinitionsHash reports whether s is accepted by rippled's
-// uint256::parseHex (ServerInfo.cpp:307). The parser treats the literal "0"
-// as the zero value before checking the canonical 64-character form.
+// The literal "0" is also a valid representation of the zero hash.
 func isValidDefinitionsHash(s string) bool {
 	if s == "0" {
 		return true
