@@ -67,18 +67,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (re
 			return nil, rpcerrors.RpcErrorInvalidTransaction(bindErr.Error())
 		}
 
-		signatureReason := ""
-		signatureChecked := false
-		checkSigs := ctx.Services == nil || ctx.Services.Ledger() == nil || !ctx.Services.Ledger().IsStandalone()
-		if ctx.Services != nil && ctx.Services.Ledger() != nil {
-			if rulesSource, ok := ctx.Services.Ledger().(types.TransactionRulesSource); ok {
-				signatureReason = sign.CheckSTTxSignature(parsed, rulesSource.TransactionRules(), checkSigs)
-				signatureChecked = true
-			}
-		}
-		if !signatureChecked {
-			signatureReason = sign.CheckSTTxSignature(parsed, nil, checkSigs)
-		}
+		signatureReason := sign.CheckSTTxSignature(parsed, transactionRulesForContext(ctx), signingChecksEnabled(ctx))
 		if signatureReason != "" {
 			return nil, rpcerrors.RpcErrorInvalidTransaction("fails local checks: " + signatureReason)
 		}

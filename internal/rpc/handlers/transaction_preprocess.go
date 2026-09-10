@@ -265,8 +265,10 @@ func normalizeJSONContainers(value any) any {
 
 func normalizeSignerResponseContainers(transactionMap map[string]any) {
 	normalizeSignerResponseContainer(transactionMap)
-	if counterparty, ok := transactionMap["CounterpartySignature"].(map[string]any); ok {
-		normalizeSignerResponseContainer(counterparty)
+	for _, target := range []string{counterpartySignatureField, sponsorSignatureField} {
+		if nested, ok := transactionMap[target].(map[string]any); ok {
+			normalizeSignerResponseContainer(nested)
+		}
 	}
 }
 

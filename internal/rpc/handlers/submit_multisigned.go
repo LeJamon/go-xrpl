@@ -38,6 +38,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
+	rules := transactionRulesForContext(ctx)
 
 	// Parse the transaction JSON
 	var txMap map[string]any
@@ -90,7 +91,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, rpcInternalError("submit_multisigned: source account lookup failed", err)
 	}
 
-	if rpcErr := validateSignForPreConflict(txMap, params); rpcErr != nil {
+	if rpcErr := validateSignForPreConflictWithRules(txMap, params, rules); rpcErr != nil {
 		return nil, rpcErr
 	}
 	if feeString, ok := txMap["Fee"].(string); ok {
@@ -155,6 +156,9 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	txBlob, encErr := binarycodec.Encode(canonicalMap)
 	if encErr != nil {
 		return nil, rpcInternalError("submit_multisigned: transaction encoding failed", encErr)
+	}
+	if rpcErr := validateSigningConstruction(ctx, txBlob, rules); rpcErr != nil {
+		return nil, rpcErr
 	}
 
 	// Calculate transaction hash

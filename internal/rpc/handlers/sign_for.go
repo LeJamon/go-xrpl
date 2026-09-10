@@ -183,9 +183,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	// Sign the canonical transaction representation. The signature target only
 	// changes the multisigning preimage; the parsed transaction remains the
 	// object that receives the new signer and is flattened below.
-	var signature string
-	var err error
-	signature, err = sign.SignTransactionForMultiSignRole(
+	signature, err := sign.SignTransactionForMultiSignRole(
 		transaction, request.Account, privateKey, signingRole, rules)
 	if err != nil {
 		return nil, rpcInternalError("sign_for: multisigning payload signing failed", err)
@@ -225,6 +223,9 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	if err != nil {
 		return nil, rpcInternalError("sign_for: transaction encoding failed", err)
 	}
+	if rpcErr := validateSigningConstruction(ctx, txBlob, rules); rpcErr != nil {
+		return nil, rpcErr
+	}
 
 	txHash := CalculateTxHash(txBlob)
 	canonicalMap["hash"] = txHash
@@ -262,10 +263,6 @@ func integralNetworkID(value any) (uint32, bool) {
 	default:
 		return 0, false
 	}
-}
-
-func validateSignForPreConflict(txMap map[string]any, params json.RawMessage) *rpcerrors.RpcError {
-	return validateSignForPreConflictWithRules(txMap, params, nil)
 }
 
 func validateSignForPreConflictWithRules(txMap map[string]any, params json.RawMessage, rules *amendment.Rules) *rpcerrors.RpcError {

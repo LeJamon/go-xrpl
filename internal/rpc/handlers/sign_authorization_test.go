@@ -30,6 +30,10 @@ func (l *signingAuthorizationLedger) GetServerInfo() types.LedgerServerInfo {
 	return types.LedgerServerInfo{Standalone: true}
 }
 
+func (l *signingAuthorizationLedger) IsStandalone() bool {
+	return false
+}
+
 func signingAuthorizationContext(ledger types.LedgerService) *types.RpcContext {
 	return &types.RpcContext{
 		Context:    context.Background(),

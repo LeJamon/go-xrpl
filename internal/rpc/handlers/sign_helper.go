@@ -682,6 +682,9 @@ func signTransactionJSON(rpcCtx *types.RpcContext, txJSON json.RawMessage, creds
 	if err != nil {
 		return nil, rpcInternalError("sign: transaction encoding failed", err)
 	}
+	if rpcErr := validateSigningConstruction(rpcCtx, txBlob, rules); rpcErr != nil {
+		return nil, rpcErr
+	}
 
 	txHash := CalculateTxHash(txBlob)
 	canonicalMap["hash"] = txHash
