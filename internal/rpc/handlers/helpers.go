@@ -917,7 +917,6 @@ func decodeTxBlobWithMetadataMode(data []byte, requireMetadataFields, preserveEm
 		return st, nil
 	}
 
-	// Try VL-encoded binary format first
 	txBytes, metaBytes, err := tx.SplitTxWithMetaBlob(data)
 	if err == nil {
 		if requireBinaryMetadata && metaBytes == nil {
