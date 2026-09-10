@@ -14,7 +14,7 @@ func TestLoadDefinitions(t *testing.T) {
 	require.Equal(t, int32(97), defs.ledgerEntryTypes["AccountRoot"])
 	require.Equal(t, int32(-399), defs.transactionResults["telLOCAL_ERROR"])
 	require.Equal(t, int32(1), defs.transactionTypes["EscrowCreate"])
-	require.Equal(t, &FieldInfo{Nth: 0, IsVLEncoded: false, IsSerialized: false, IsSigningField: false, Type: "Unknown"}, defs.fields["Generic"].FieldInfo)
+	require.Equal(t, &FieldInfo{Nth: 0, IsVLEncoded: false, IsSerialized: true, IsSigningField: true, Type: "Unknown"}, defs.fields["Generic"].FieldInfo)
 	require.Equal(t, &FieldInfo{Nth: 28, IsVLEncoded: false, IsSerialized: true, IsSigningField: true, Type: "Hash256"}, defs.fields["NFTokenBuyOffer"].FieldInfo)
 	require.Equal(t, &FieldInfo{Nth: 16, IsVLEncoded: false, IsSerialized: true, IsSigningField: true, Type: "UInt8"}, defs.fields["TickSize"].FieldInfo)
 	require.Equal(t, &FieldHeader{TypeCode: 2, FieldCode: 4}, defs.fields["Sequence"].FieldHeader)
