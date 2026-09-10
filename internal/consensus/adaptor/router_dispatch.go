@@ -661,6 +661,8 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 	if r.adaptor != nil {
 		validatedRules, openRules, validatedAdmission = r.adaptor.peerSignatureSnapshot()
 	}
+	// Fetched TMTransactions are checked against the open ledger only.
+	validatedAdmission = validatedAdmission && msg.Tx == nil
 	roleBearing := pendingErr == nil && transactionHasRoleSignature(pending.Parsed)
 	admittedBad := false
 	if pendingErr == nil && r.txSeen != nil {
