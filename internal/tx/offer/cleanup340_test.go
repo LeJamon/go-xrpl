@@ -68,7 +68,7 @@ func TestOfferAcceptanceRetryResults(t *testing.T) {
 					}
 					if tc.line {
 						low, high := issuerAddr, holderAddr
-						auth := uint32(state.LsfLowAuth)
+						auth := state.LsfLowAuth
 						if issuerHigh {
 							low, high, auth = holderAddr, issuerAddr, state.LsfHighAuth
 						}
