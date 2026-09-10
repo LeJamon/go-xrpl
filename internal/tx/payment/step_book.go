@@ -1396,7 +1396,7 @@ func (s *BookStep) consumeAMMOffer(
 ) error {
 	// Check pool product invariant
 	if !ammOffer.CheckInvariant(eitherToAmount(consumedInNet), eitherToAmount(consumedOut)) {
-		return errors.New("AMM pool product invariant failed")
+		return ter.Errorf(ter.TecINVARIANT_FAILED, "AMM pool product invariant failed")
 	}
 
 	// Transfer input: book.in.account → AMM account.
