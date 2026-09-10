@@ -264,19 +264,25 @@ func TestFeatureRetiredEnabledFollowsLedger(t *testing.T) {
 
 	tests := []struct {
 		name       string
+		omitSLE    bool
 		amendments [][32]byte
 		enabled    bool
 	}{
+		{name: "no Amendments SLE", omitSLE: true, enabled: false},
 		{name: "omitted from ledger", enabled: false},
 		{name: "present in ledger", amendments: [][32]byte{retired.ID}, enabled: true},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			sleData, err := pseudo.SerializeAmendmentsSLE(&pseudo.AmendmentsSLE{
-				Amendments: tc.amendments,
-			})
-			require.NoError(t, err)
+			var sleData []byte
+			if !tc.omitSLE {
+				var err error
+				sleData, err = pseudo.SerializeAmendmentsSLE(&pseudo.AmendmentsSLE{
+					Amendments: tc.amendments,
+				})
+				require.NoError(t, err)
+			}
 
 			mock := &mockFeatureLedger{
 				mockLedgerService: newMockLedgerService(),
