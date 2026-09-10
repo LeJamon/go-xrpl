@@ -11,7 +11,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/validator/list"
 )
 
-// fakeBroadcaster records each collection sent to each active peer.
 type fakeBroadcaster struct {
 	mu     sync.Mutex
 	peers  []uint64
@@ -67,8 +66,6 @@ func cloneBroadcastBytes(raw []byte) []byte {
 	return append([]byte{}, raw...)
 }
 
-// TestBroadcastLatest_UsesCollectionForEveryPeer pins collection-only
-// propagation, including a publisher with no Remaining blobs.
 func TestBroadcastLatest_UsesCollectionForEveryPeer(t *testing.T) {
 	pub := newPublisher(t, 0x51, 0x52)
 	v1 := derivedValidatorKey(0x60)
