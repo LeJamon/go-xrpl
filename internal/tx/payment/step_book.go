@@ -1430,7 +1430,7 @@ func (s *BookStep) initAMMLiquidity(
 	view *PaymentSandbox,
 	ammCtx *AMMContext,
 	parentCloseTime uint32,
-	fixAMMv1_1, fixAMMv1_2, _ bool,
+	fixAMMv1_1, fixAMMv1_2 bool,
 ) {
 	ammKey := keylet.AMMAsset(bookSideFromIssue(s.book.In), bookSideFromIssue(s.book.Out))
 	ammData, err := view.Read(ammKey)
@@ -1457,7 +1457,7 @@ func (s *BookStep) initAMMLiquidity(
 		tradingFee,
 		s.book.In, s.book.Out,
 		ammCtx,
-		fixAMMv1_1, fixAMMv1_2, false,
+		fixAMMv1_1, fixAMMv1_2,
 	)
 }
 

@@ -167,7 +167,6 @@ func TestFlowCalculationSettingsUseLedgerRulesAndTiming(t *testing.T) {
 		amendment.FeatureFixReducedOffersV2,
 		amendment.FeatureFixAMMv1_1,
 		amendment.FeatureFixAMMv1_2,
-		amendment.FeatureFixAMMOverflowOffer,
 	})
 	ledger := &configuredPathfinderLedger{mockLedgerView: newMockLedger(), rules: rules, open: true}
 	settings := newFlowCalculationSettings(ledger, 1234)
@@ -175,7 +174,6 @@ func TestFlowCalculationSettingsUseLedgerRulesAndTiming(t *testing.T) {
 	require.True(t, settings.fixReducedOffersV2)
 	require.True(t, settings.fixAMMv1_1)
 	require.True(t, settings.fixAMMv1_2)
-	require.True(t, settings.fixAMMOverflowOffer)
 	require.True(t, settings.openLedger)
 }
 
