@@ -259,7 +259,7 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 	if !saTakerPays.IsNative() {
 		var result ter.Result
 		if saTakerPays.IsMPT() {
-			result = checkAcceptMPT(view, accountID, saTakerPays, config.ParentCloseTime)
+			result = checkAcceptMPT(view, accountID, saTakerPays, config)
 		} else {
 			paysIssuerID, err := state.DecodeAccountID(uPaysIssuerID)
 			if err != nil {
@@ -295,7 +295,7 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 	return ter.TesSUCCESS
 }
 
-func checkAcceptMPT(view tx.LedgerView, accountID [20]byte, amount tx.Amount, parentCloseTime uint32) ter.Result {
+func checkAcceptMPT(view tx.LedgerView, accountID [20]byte, amount tx.Amount, config tx.EngineConfig) ter.Result {
 	id, err := mptutil.DecodeID(amount.MPTIssuanceID())
 	if err != nil {
 		return ter.TefINTERNAL
@@ -303,12 +303,15 @@ func checkAcceptMPT(view tx.LedgerView, accountID [20]byte, amount tx.Amount, pa
 	issuer := mptutil.Issuer(id)
 	issuerAccount, readErr := tx.ReadAccountRoot(view, issuer)
 	if readErr != nil || issuerAccount == nil {
+		if config.ApplyFlags&tx.TapRETRY != 0 {
+			return ter.TerNO_ACCOUNT
+		}
 		return ter.TecNO_ISSUER
 	}
 	if accountID == issuer {
 		return ter.TesSUCCESS
 	}
-	if result := mptutil.RequireAuthAt(view, id, accountID, false, parentCloseTime); result != ter.TesSUCCESS {
+	if result := mptutil.RequireAuthAt(view, id, accountID, false, config.ParentCloseTime); result != ter.TesSUCCESS {
 		return result
 	}
 	if mptutil.IsFrozen(view, id, accountID) {
@@ -323,6 +326,9 @@ func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency
 	// Read issuer account
 	issuerAccount, err := tx.ReadAccountRoot(view, issuerID)
 	if err != nil || issuerAccount == nil {
+		if config.ApplyFlags&tx.TapRETRY != 0 {
+			return ter.TerNO_ACCOUNT
+		}
 		return ter.TecNO_ISSUER
 	}
 
@@ -348,6 +354,9 @@ func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency
 		trustLineKey := keylet.Line(accountID, issuerID, currency)
 		trustLineData, err := view.Read(trustLineKey)
 		if err != nil || trustLineData == nil {
+			if config.ApplyFlags&tx.TapRETRY != 0 {
+				return ter.TerNO_LINE
+			}
 			return ter.TecNO_LINE
 		}
 
@@ -366,6 +375,9 @@ func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency
 		}
 
 		if !isAuthorized {
+			if config.ApplyFlags&tx.TapRETRY != 0 {
+				return ter.TerNO_AUTH
+			}
 			return ter.TecNO_AUTH
 		}
 	}
