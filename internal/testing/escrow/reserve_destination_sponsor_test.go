@@ -42,7 +42,7 @@ func TestEscrowFinishDestinationIsReserveSponsor(t *testing.T) {
 				sequence := env.Seq(owner)
 				create := escrow.EscrowCreate(owner, destination, amount).
 					FinishTime(env.Now().Add(time.Second)).Build()
-				flags := uint32(tx.SpfSponsorReserve)
+				flags := tx.SpfSponsorReserve
 				create.Common.Sponsor = destination.Address
 				create.Common.SponsorFlags = &flags
 				jtx.RequireTxSuccess(t, env.Submit(create))
