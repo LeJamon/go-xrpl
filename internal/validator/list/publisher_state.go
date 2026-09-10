@@ -13,10 +13,9 @@ import (
 // ApplyList ingests a single (manifest, blob, signature) triple and returns
 // its disposition, publisher master key, and sequence when extractable.
 //
-// `manifestBytes` and `blob` carry the WIRE-FORM ascii strings as
-// received in TMValidatorList / TMValidatorListCollection (base64-
-// encoded). `signature` carries the WIRE-FORM hex string. `version`
-// is the protocol version negotiated at the message level.
+// `manifestBytes` and `blob` carry WIRE-FORM ascii strings (base64-encoded),
+// and `signature` carries the WIRE-FORM hex string. `version` is the list
+// format version supplied by the site or collection path.
 func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version uint32, siteURI string) (Disposition, PublisherKey, uint32) {
 	return a.applyListInternal(manifestBytes, nil, false, blob, signature, version, siteURI, false)
 }

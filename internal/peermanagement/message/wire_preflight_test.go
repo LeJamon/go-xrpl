@@ -308,7 +308,6 @@ func FuzzPreflight(f *testing.F) {
 		TypeHaveSet,
 		TypeValidation,
 		TypeGetObjects,
-		TypeValidatorList,
 		TypeSquelch,
 		TypeValidatorListCollection,
 		TypeProofPathReq,

@@ -172,11 +172,12 @@ func TestNid_SelectBranch_OddDepth(t *testing.T) {
 }
 
 func TestNid_SelectBranch_AtMaxDepth(t *testing.T) {
-	nid, _ := nodeID(maxDepth, nid_zeroKey)
-	// should return 0 as the guard
-	branch := selectBranch(nid, nid_fullKey)
-	if branch != 0 {
-		t.Errorf("branch = %d, want 0", branch)
+	for _, depth := range []uint8{maxDepth - 1, maxDepth} {
+		nid, _ := nodeID(depth, nid_zeroKey)
+		branch := selectBranch(nid, nid_fullKey)
+		if branch != 0x0F {
+			t.Errorf("depth %d: branch = %d, want 15", depth, branch)
+		}
 	}
 }
 

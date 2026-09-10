@@ -90,8 +90,12 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 	}
 
 	require.Eventually(t, func() bool {
-		return adaptorHasTx(t, a, consensus.TxID(txHash))
+		engine.mu.Lock()
+		defer engine.mu.Unlock()
+		return len(engine.txSets) == 1 && engine.txSets[0] == consensus.TxSetID(setID)
 	}, time.Second, 10*time.Millisecond,
+		"tx-set acquisition must finish before checking transaction relay bookkeeping")
+	require.True(t, adaptorHasTx(t, a, consensus.TxID(txHash)),
 		"tx-set acquisition must learn the carried transaction into the open ledger")
 	require.Empty(t, router.txSeen.releasePeers(txHash),
 		"acquired relay must consume peers already known to hold the transaction")

@@ -158,7 +158,7 @@ jobs:
             packages: ./internal/tx/...
             race: "-race"
           - group: core
-            packages: ./internal/ledger/... ./internal/txq/... ./internal/rpc/... ./internal/consensus/... ./internal/peermanagement/... ./internal/manifest/... ./internal/observability/... ./internal/node/... ./internal/cli/... ./internal/replaytool/...
+            packages: ./internal/ledger/... ./internal/txq/... ./internal/rpc/... ./internal/consensus/... ./internal/peermanagement/... ./internal/manifest/... ./internal/validator/... ./internal/observability/... ./internal/node/... ./internal/cli/... ./internal/replaytool/...
             race: "-race"
           - group: libs
             packages: ./codec/... ./crypto/... ./shamap/... ./storage/... ./keylet/... ./ledger/... ./amendment/... ./drops/... ./protocol/... ./config/... ./version/...
@@ -228,6 +228,28 @@ jobs:
       - uses: ./.github/actions/setup
       - name: Run live handshake and manifest interop
         run: PEERTLS_DOCKER_INTEROP=1 go test -tags docker -timeout 5m -v -run 'Test(Handshake|Manifest)_Interop_RippledDocker' ./internal/peermanagement/
+
+  peer-interop-rc1:
+    name: Peer interop (rippled 3.4.0-rc1)
+    runs-on: ubuntu-latest
+    env:
+      PEERTLS_DOCKER_INTEROP: "1"
+      PEERTLS_LEDGER_NODE_DEPTH_INTEROP: "1"
+      PEERTLS_VALIDATOR_LIST_INTEROP: "1"
+      PEERTLS_RIPPLED_VERSION: 3.4.0-rc1
+      PEERTLS_RIPPLED_IMAGE: goxrpl-oracle:3.4.0-rc1
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - name: Build pinned rc1 oracle image
+        run: docker build -t "$PEERTLS_RIPPLED_IMAGE" scripts/peer-interop
+      - name: Verify oracle version and source commit
+        run: |
+          version="$(docker run --rm --entrypoint /usr/bin/xrpld "$PEERTLS_RIPPLED_IMAGE" --version)"
+          grep --fixed-strings '3.4.0-rc1' <<<"$version"
+          grep --fixed-strings '2ad4def35fd8580da027462517ba3375cc005c94' <<<"$version"
+      - name: Run live rc1 peer interop
+        run: go test -race -tags docker -count=1 -timeout 10m -v -run 'Test(Handshake|Manifest|LedgerNodeDepth|ValidatorListCollection)_Interop_RippledDocker' ./internal/peermanagement/
 
   consensus-smoke:
     name: Consensus smoke (rippled ${{ matrix.rippled-version }})

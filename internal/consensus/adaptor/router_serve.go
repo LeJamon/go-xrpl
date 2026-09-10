@@ -13,6 +13,7 @@ import (
 )
 
 type ledgerServeNetwork interface {
+	PeerSupportsNodeDepth(peerID uint64) bool
 	SendToPeer(peerID uint64, frame []byte) error
 	ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool
 	PeerWithLedger(target [32]byte, seq uint32, exclude uint64) (uint64, bool)
@@ -196,6 +197,12 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		RequestCookieSet: req.HasRequestCookie(),
 	}
 
+	if r.serve.PeerSupportsNodeDepth(uint64(msg.PeerID)) && resp.InfoType != message.LedgerInfoBase {
+		if err := useLedgerNodeDepth(resp.Nodes); err != nil {
+			r.logger.Warn("failed to encode ledger node references", "error", err)
+			return
+		}
+	}
 	frame, err := message.EncodeFrame(resp)
 	if err != nil {
 		r.logger.Warn("failed to encode ledger_data response", "error", err)
@@ -310,6 +317,12 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 		RequestCookieSet: req.HasRequestCookie(),
 	}
 
+	if r.serve.PeerSupportsNodeDepth(uint64(peerID)) {
+		if err := useLedgerNodeDepth(resp.Nodes); err != nil {
+			r.logger.Warn("failed to encode tx-set node references", "error", err)
+			return
+		}
+	}
 	frame, err := message.EncodeFrame(resp)
 	if err != nil {
 		r.logger.Warn("failed to encode tx-set response", "error", err)

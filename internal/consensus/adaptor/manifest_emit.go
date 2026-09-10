@@ -161,6 +161,19 @@ func (r *Router) manifestEmitter() manifestSender {
 	return r.overlay
 }
 
+func (r *Router) peerIsInbound(peerID peermanagement.PeerID) bool {
+	sender := r.manifestEmitter()
+	if sender == nil {
+		return false
+	}
+	for _, peer := range sender.Peers() {
+		if peer.ID == peerID {
+			return peer.Inbound
+		}
+	}
+	return false
+}
+
 // HandlePeerConnect queues peer admission onto the Router goroutine.
 func (r *Router) HandlePeerConnect(peerID peermanagement.PeerID) {
 	r.pendingPeerConnects.Store(peerID, struct{}{})
@@ -191,6 +204,9 @@ func (r *Router) handlePeerConnect(peerID peermanagement.PeerID) {
 		}
 	}
 	r.addPeerToActiveAcquisitions(uint64(peerID))
+	if r.validatorList != nil && r.peerIsInbound(peerID) {
+		r.validatorList.SendCachedToPeer(uint64(peerID))
+	}
 	r.SendLocalManifestTo(peerID)
 }
 

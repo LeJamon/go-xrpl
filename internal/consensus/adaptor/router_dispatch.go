@@ -78,8 +78,6 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) (transferred 
 		r.handleReplayDeltaResponse(msg)
 	case message.TypeManifests:
 		r.submitManifestJob(msg)
-	case message.TypeValidatorList:
-		r.handleValidatorList(msg)
 	case message.TypeValidatorListCollection:
 		r.handleValidatorListCollection(msg)
 	default:

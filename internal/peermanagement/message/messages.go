@@ -120,16 +120,6 @@ type HaveTransactionSet struct {
 
 func (h *HaveTransactionSet) Type() MessageType { return TypeHaveSet }
 
-// ValidatorList represents a validator list (UNL).
-type ValidatorList struct {
-	Manifest  []byte `json:"manifest"`
-	Blob      []byte `json:"blob"`
-	Signature []byte `json:"signature"`
-	Version   uint32 `json:"version"`
-}
-
-func (v *ValidatorList) Type() MessageType { return TypeValidatorList }
-
 // ValidatorBlobInfo represents v2 validator blob info.
 type ValidatorBlobInfo struct {
 	Manifest  []byte `json:"manifest,omitempty"`
@@ -202,8 +192,10 @@ func (g *GetObjectByHash) HasLedgerHash() bool {
 
 // LedgerNode represents a node in the ledger.
 type LedgerNode struct {
-	NodeData []byte `json:"nodedata"`
-	NodeID   []byte `json:"nodeid,omitempty"`
+	NodeData []byte  `json:"nodedata"`
+	NodeID   []byte  `json:"nodeid,omitempty"`
+	ID       []byte  `json:"id,omitempty"`
+	Depth    *uint32 `json:"depth,omitempty"`
 }
 
 // GetLedger requests ledger data.

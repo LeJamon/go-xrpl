@@ -372,19 +372,37 @@ func (s *Service) buildBookOffer(
 	bookOffer.TakerGets = amountToJSON(offer.TakerGets)
 	bookOffer.TakerPays = amountToJSON(offer.TakerPays)
 
-	// firstOwnerOffer is per-iteration in rippled (NetworkOPs.cpp:4514).
-	// It only flips to false when the default branch finds an existing
-	// entry in umBalance — the own-IOU and global-freeze branches never
-	// touch it, so they emit owner_funds on every offer.
+	// Issuer IOUs and globally frozen offers report owner_funds on every offer.
 	firstOwnerOffer := true
 	var ownerFunds tx.Amount
 	ownerOwnsIssue := !takerGets.IsNative() && offer.Account == getsIssuer
 
 	switch {
 	case ownerOwnsIssue:
-		// rippled NetworkOPs.cpp:4516-4521: selling issuer's own IOUs ⇒
-		// fully funded. firstOwnerOffer stays true.
-		ownerFunds = offer.TakerGets
+		if id, ok := amountMPTID(takerGets); ok {
+			// Issuer offers share the remaining self-issuance headroom.
+			if prev, seen := balances[offer.Account]; seen {
+				ownerFunds = prev
+				firstOwnerOffer = false
+			} else {
+				funds, result := mptutil.IssuerFundsToSelfIssue(view, id)
+				if result == ter.TefINTERNAL {
+					return BookOffer{}, fmt.Errorf("book_offers MPT issuer funds: %s", result)
+				}
+				if result != ter.TesSUCCESS {
+					funds = 0
+				}
+				ownerFunds = state.NewMPTAmountWithIssuanceID(
+					funds,
+					getsIssuer,
+					takerGets.MPTIssuanceID(),
+				)
+			}
+		} else {
+			// IOU issuers can always self-issue the offered amount.
+			// firstOwnerOffer stays true for this per-iteration branch.
+			ownerFunds = offer.TakerGets
+		}
 	case bGlobalFreeze:
 		// rippled NetworkOPs.cpp:4522-4527: global freeze ⇒ treat as
 		// unfunded. firstOwnerOffer stays true.
@@ -453,12 +471,18 @@ func (s *Service) buildBookOffer(
 	// holds in both branches; surface a programming error if it isn't.
 	ownerPays := takerGetsFunded
 	if offerRate != tx.TransferRateParity {
-		scaled := takerGetsFunded.MulRatioWithNumberContext(
-			offerRate,
-			tx.TransferRateParity,
-			false,
-			numberContext,
-		)
+		var scaled tx.Amount
+		if takerGetsFunded.IsMPT() {
+			rateAmount := tx.NewIssuedAmount(int64(offerRate), -9, "", "")
+			scaled = multiplyByDirRate(takerGetsFunded, rateAmount, takerGetsFunded)
+		} else {
+			scaled = takerGetsFunded.MulRatioWithNumberContext(
+				offerRate,
+				tx.TransferRateParity,
+				false,
+				numberContext,
+			)
+		}
 		if scaled.Compare(ownerFunds) > 0 {
 			ownerPays = ownerFunds
 		} else {
@@ -534,11 +558,23 @@ func amountIssuer(amount tx.Amount) string {
 }
 
 func amountGlobalFrozen(view tx.LedgerView, amount tx.Amount) bool {
+	if id, ok := amountMPTID(amount); ok {
+		return mptutil.IsGlobalFrozen(view, id)
+	}
+	if amount.IsMPT() {
+		return false
+	}
 	issuer := amountIssuer(amount)
 	return issuer != "" && tx.IsGlobalFrozen(view, issuer)
 }
 
 func amountTransferRate(view tx.LedgerView, amount tx.Amount) uint32 {
+	if id, ok := amountMPTID(amount); ok {
+		return mptutil.TransferRate(view, id)
+	}
+	if amount.IsMPT() {
+		return tx.TransferRateParity
+	}
 	issuer := amountIssuer(amount)
 	if issuer == "" {
 		return tx.TransferRateParity

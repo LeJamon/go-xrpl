@@ -606,7 +606,7 @@ func (pf *Pathfinder) addMPTAccountLinks(
 			break
 		}
 	}
-	if asset == nil || asset.ZeroBalance || asset.MaxedOut ||
+	if asset == nil || !asset.CanSend(endAccount) ||
 		mptutil.RequireAuthAt(pf.ledger, endIssue.MPTID, issuer, false, pf.parentCloseTime) != ter.TesSUCCESS {
 		return
 	}
@@ -773,7 +773,7 @@ func (pf *Pathfinder) getPathsOut(issue payment.Issue, direction LineDirection, 
 		}
 		count := len(pf.books.GetBooksByTakerPays(issue))
 		for _, mpt := range pf.cache.GetMPTs(issue.Issuer) {
-			if mpt.ID != issue.MPTID || mpt.ZeroBalance || mpt.MaxedOut {
+			if mpt.ID != issue.MPTID || !mpt.CanSend(issue.Issuer) {
 				continue
 			}
 			if mptutil.RequireAuthAt(pf.ledger, issue.MPTID, issue.Issuer, false, pf.parentCloseTime) != ter.TesSUCCESS {

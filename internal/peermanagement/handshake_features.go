@@ -17,7 +17,6 @@ func DefaultFeatureSet() *FeatureSet {
 	fs := NewFeatureSet()
 	fs.Enable(FeatureCompression)
 	fs.Enable(FeatureReduceRelay)
-	fs.Enable(FeatureValidatorListPropagation)
 	return fs
 }
 

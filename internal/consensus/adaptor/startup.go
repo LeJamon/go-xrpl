@@ -38,7 +38,7 @@ type Components struct {
 
 	// ValidatorList is the publisher-trust subsystem. Nil when no
 	// validator_list_keys are configured. When non-nil, peer-gossiped
-	// TMValidatorList frames feed it via the router and the configured
+	// ValidatorListCollection frames feed it via the router and the configured
 	// validator_list_sites URLs are polled by ValidatorListPoller.
 	ValidatorList *validatorlist.Aggregator
 
@@ -548,7 +548,7 @@ func NewFromConfig(
 
 	// Build the publisher-list aggregator when validator_list_keys are
 	// configured. Lists are then ingested both via peer gossip
-	// (TMValidatorList through the router) and via HTTP polling of
+	// (ValidatorListCollection through the router) and via HTTP polling of
 	// validator_list_sites. The aggregator pushes its recomputed
 	// trusted UNL into adaptor.SetTrustedValidators on every change —
 	// the same write path SIGHUP reload uses.
@@ -598,7 +598,7 @@ func NewFromConfig(
 		// HTTP poller) can push accepted lists out through the single
 		// aggregator-owned BroadcastLatest entry point. The
 		// router-bound constructor plumbs the shared message
-		// suppression registry so SendList / SendCollection stamp the
+		// suppression registry so SendCollection stamps the
 		// (hash, peer) pair, preventing the same list from being echoed
 		// back to a peer that already sent it.
 		vlAgg.SetBroadcaster(router.newValidatorListBroadcaster(overlay, sender))

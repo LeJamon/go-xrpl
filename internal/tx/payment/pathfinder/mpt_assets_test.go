@@ -22,7 +22,8 @@ func TestAccountAssetsIncludeEligibleMPTs(t *testing.T) {
 	holder := testAccountID(0x42)
 	zeroHolder := testAccountID(0x43)
 	maxedIssuer := testAccountID(0x44)
-	for _, account := range [][20]byte{issuer, holder, zeroHolder, maxedIssuer} {
+	maxedHolder := testAccountID(0x45)
+	for _, account := range [][20]byte{issuer, holder, zeroHolder, maxedIssuer, maxedHolder} {
 		addAccount(t, ledger, account, 10_000_000, 0)
 	}
 
@@ -30,19 +31,22 @@ func TestAccountAssetsIncludeEligibleMPTs(t *testing.T) {
 	addPathfinderMPToken(t, ledger, holder, liveID, 5)
 	addPathfinderMPToken(t, ledger, zeroHolder, liveID, 0)
 	maxedID := addPathfinderMPTIssuance(t, ledger, maxedIssuer, 8, 100, 100)
+	addPathfinderMPToken(t, ledger, maxedHolder, maxedID, 5)
 
 	cache := NewRippleLineCache(ledger)
 	liveIssue := payment.NewMPTIssue(liveID)
 	maxedIssue := payment.NewMPTIssue(maxedID)
 
 	require.True(t, AccountSourceCurrencies(issuer, cache)[liveIssue])
-	require.False(t, AccountDestCurrencies(issuer, cache)[liveIssue])
+	require.True(t, AccountDestCurrencies(issuer, cache)[liveIssue])
 	require.True(t, AccountSourceCurrencies(holder, cache)[liveIssue])
-	require.False(t, AccountDestCurrencies(holder, cache)[liveIssue])
+	require.True(t, AccountDestCurrencies(holder, cache)[liveIssue])
 	require.False(t, AccountSourceCurrencies(zeroHolder, cache)[liveIssue])
 	require.True(t, AccountDestCurrencies(zeroHolder, cache)[liveIssue])
 	require.False(t, AccountSourceCurrencies(maxedIssuer, cache)[maxedIssue])
-	require.False(t, AccountDestCurrencies(maxedIssuer, cache)[maxedIssue])
+	require.True(t, AccountDestCurrencies(maxedIssuer, cache)[maxedIssue])
+	require.True(t, AccountSourceCurrencies(maxedHolder, cache)[maxedIssue])
+	require.True(t, AccountDestCurrencies(maxedHolder, cache)[maxedIssue])
 }
 
 func TestRippleLineCacheMPTsIgnoreOtherOwnedEntries(t *testing.T) {
@@ -98,7 +102,7 @@ func TestBookIndexIncludesAMMLiquidityInBothDirections(t *testing.T) {
 	require.Contains(t, index.GetBooksByTakerPays(mptBIssue), mptAIssue)
 }
 
-func TestMPTAccountLinksRejectMaxedIssuanceAndRetainAsset(t *testing.T) {
+func TestMPTAccountLinksAllowHolderBalanceWhenIssuanceIsMaxed(t *testing.T) {
 	ledger := newMockLedger()
 	issuer := testAccountID(0x71)
 	holder := testAccountID(0x72)
@@ -120,7 +124,8 @@ func TestMPTAccountLinksRejectMaxedIssuanceAndRetainAsset(t *testing.T) {
 
 	var incomplete [][]payment.PathStep
 	pf.addMPTAccountLinks(nil, &incomplete, 0, holder, issue, false, payment.Issue{Currency: "XRP"})
-	require.Empty(t, incomplete)
+	require.Len(t, incomplete, 1)
+	require.Equal(t, mptutil.EncodeID(id), incomplete[0][0].MPTIssuanceID)
 
 	issuance, _, result := mptutil.ReadIssuance(ledger, id)
 	require.True(t, result.IsSuccess())
@@ -129,6 +134,7 @@ func TestMPTAccountLinksRejectMaxedIssuanceAndRetainAsset(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, ledger.Update(keylet.MPTIssuance(id), raw))
 	pf.cache = NewRippleLineCache(ledger)
+	incomplete = nil
 	pf.addMPTAccountLinks(nil, &incomplete, 0, holder, issue, false, payment.Issue{Currency: "XRP"})
 	require.Len(t, incomplete, 1)
 	require.Equal(t, mptutil.EncodeID(id), incomplete[0][0].MPTIssuanceID)

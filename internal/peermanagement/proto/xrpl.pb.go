@@ -39,7 +39,6 @@ const (
 	MessageType_mtHAVE_SET                  MessageType = 35
 	MessageType_mtVALIDATION                MessageType = 41
 	MessageType_mtGET_OBJECTS               MessageType = 42
-	MessageType_mtVALIDATOR_LIST            MessageType = 54
 	MessageType_mtSQUELCH                   MessageType = 55
 	MessageType_mtVALIDATOR_LIST_COLLECTION MessageType = 56
 	MessageType_mtPROOF_PATH_REQ            MessageType = 57
@@ -65,7 +64,6 @@ var (
 		35: "mtHAVE_SET",
 		41: "mtVALIDATION",
 		42: "mtGET_OBJECTS",
-		54: "mtVALIDATOR_LIST",
 		55: "mtSQUELCH",
 		56: "mtVALIDATOR_LIST_COLLECTION",
 		57: "mtPROOF_PATH_REQ",
@@ -88,7 +86,6 @@ var (
 		"mtHAVE_SET":                  35,
 		"mtVALIDATION":                41,
 		"mtGET_OBJECTS":               42,
-		"mtVALIDATOR_LIST":            54,
 		"mtSQUELCH":                   55,
 		"mtVALIDATOR_LIST_COLLECTION": 56,
 		"mtPROOF_PATH_REQ":            57,
@@ -757,7 +754,7 @@ func (x *TMGetObjectByHash_ObjectType) UnmarshalJSON(b []byte) error {
 
 // Deprecated: Use TMGetObjectByHash_ObjectType.Descriptor instead.
 func (TMGetObjectByHash_ObjectType) EnumDescriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{18, 0}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{17, 0}
 }
 
 type TMPingPingType int32
@@ -813,7 +810,7 @@ func (x *TMPingPingType) UnmarshalJSON(b []byte) error {
 
 // Deprecated: Use TMPingPingType.Descriptor instead.
 func (TMPingPingType) EnumDescriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{22, 0}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{21, 0}
 }
 
 // Provides the current ephemeral key for a validator.
@@ -1590,75 +1587,6 @@ func (x *TMHaveTransactionSet) GetHash() []byte {
 	return nil
 }
 
-// Validator list (UNL)
-type TMValidatorList struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Manifest      []byte                 `protobuf:"bytes,1,req,name=manifest" json:"manifest,omitempty"`
-	Blob          []byte                 `protobuf:"bytes,2,req,name=blob" json:"blob,omitempty"`
-	Signature     []byte                 `protobuf:"bytes,3,req,name=signature" json:"signature,omitempty"`
-	Version       *uint32                `protobuf:"varint,4,req,name=version" json:"version,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *TMValidatorList) Reset() {
-	*x = TMValidatorList{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[12]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *TMValidatorList) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*TMValidatorList) ProtoMessage() {}
-
-func (x *TMValidatorList) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[12]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use TMValidatorList.ProtoReflect.Descriptor instead.
-func (*TMValidatorList) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{12}
-}
-
-func (x *TMValidatorList) GetManifest() []byte {
-	if x != nil {
-		return x.Manifest
-	}
-	return nil
-}
-
-func (x *TMValidatorList) GetBlob() []byte {
-	if x != nil {
-		return x.Blob
-	}
-	return nil
-}
-
-func (x *TMValidatorList) GetSignature() []byte {
-	if x != nil {
-		return x.Signature
-	}
-	return nil
-}
-
-func (x *TMValidatorList) GetVersion() uint32 {
-	if x != nil && x.Version != nil {
-		return *x.Version
-	}
-	return 0
-}
-
 // Validator List v2
 type ValidatorBlobInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1671,7 +1599,7 @@ type ValidatorBlobInfo struct {
 
 func (x *ValidatorBlobInfo) Reset() {
 	*x = ValidatorBlobInfo{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[13]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1683,7 +1611,7 @@ func (x *ValidatorBlobInfo) String() string {
 func (*ValidatorBlobInfo) ProtoMessage() {}
 
 func (x *ValidatorBlobInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[13]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1696,7 +1624,7 @@ func (x *ValidatorBlobInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidatorBlobInfo.ProtoReflect.Descriptor instead.
 func (*ValidatorBlobInfo) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{13}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ValidatorBlobInfo) GetManifest() []byte {
@@ -1732,7 +1660,7 @@ type TMValidatorListCollection struct {
 
 func (x *TMValidatorListCollection) Reset() {
 	*x = TMValidatorListCollection{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[14]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1744,7 +1672,7 @@ func (x *TMValidatorListCollection) String() string {
 func (*TMValidatorListCollection) ProtoMessage() {}
 
 func (x *TMValidatorListCollection) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[14]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1757,7 +1685,7 @@ func (x *TMValidatorListCollection) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMValidatorListCollection.ProtoReflect.Descriptor instead.
 func (*TMValidatorListCollection) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{14}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *TMValidatorListCollection) GetVersion() uint32 {
@@ -1800,7 +1728,7 @@ type TMValidation struct {
 
 func (x *TMValidation) Reset() {
 	*x = TMValidation{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[15]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1812,7 +1740,7 @@ func (x *TMValidation) String() string {
 func (*TMValidation) ProtoMessage() {}
 
 func (x *TMValidation) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[15]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1825,7 +1753,7 @@ func (x *TMValidation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMValidation.ProtoReflect.Descriptor instead.
 func (*TMValidation) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{15}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *TMValidation) GetValidation() []byte {
@@ -1864,7 +1792,7 @@ type TMEndpoints struct {
 
 func (x *TMEndpoints) Reset() {
 	*x = TMEndpoints{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[16]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1876,7 +1804,7 @@ func (x *TMEndpoints) String() string {
 func (*TMEndpoints) ProtoMessage() {}
 
 func (x *TMEndpoints) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[16]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1889,7 +1817,7 @@ func (x *TMEndpoints) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMEndpoints.ProtoReflect.Descriptor instead.
 func (*TMEndpoints) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{16}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *TMEndpoints) GetVersion() uint32 {
@@ -1919,7 +1847,7 @@ type TMIndexedObject struct {
 
 func (x *TMIndexedObject) Reset() {
 	*x = TMIndexedObject{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[17]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1931,7 +1859,7 @@ func (x *TMIndexedObject) String() string {
 func (*TMIndexedObject) ProtoMessage() {}
 
 func (x *TMIndexedObject) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[17]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1944,7 +1872,7 @@ func (x *TMIndexedObject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMIndexedObject.ProtoReflect.Descriptor instead.
 func (*TMIndexedObject) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{17}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *TMIndexedObject) GetHash() []byte {
@@ -1995,7 +1923,7 @@ type TMGetObjectByHash struct {
 
 func (x *TMGetObjectByHash) Reset() {
 	*x = TMGetObjectByHash{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[18]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2007,7 +1935,7 @@ func (x *TMGetObjectByHash) String() string {
 func (*TMGetObjectByHash) ProtoMessage() {}
 
 func (x *TMGetObjectByHash) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[18]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2020,7 +1948,7 @@ func (x *TMGetObjectByHash) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMGetObjectByHash.ProtoReflect.Descriptor instead.
 func (*TMGetObjectByHash) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{18}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *TMGetObjectByHash) GetType() TMGetObjectByHash_ObjectType {
@@ -2059,16 +1987,21 @@ func (x *TMGetObjectByHash) GetObjects() []*TMIndexedObject {
 }
 
 type TMLedgerNode struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Nodedata      []byte                 `protobuf:"bytes,1,req,name=nodedata" json:"nodedata,omitempty"`
-	Nodeid        []byte                 `protobuf:"bytes,2,opt,name=nodeid" json:"nodeid,omitempty"` // missing for ledger base data
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Nodedata []byte                 `protobuf:"bytes,1,req,name=nodedata" json:"nodedata,omitempty"`
+	Nodeid   []byte                 `protobuf:"bytes,2,opt,name=nodeid" json:"nodeid,omitempty"`
+	// Types that are valid to be assigned to Reference:
+	//
+	//	*TMLedgerNode_Id
+	//	*TMLedgerNode_Depth
+	Reference     isTMLedgerNode_Reference `protobuf_oneof:"reference"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TMLedgerNode) Reset() {
 	*x = TMLedgerNode{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[19]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2080,7 +2013,7 @@ func (x *TMLedgerNode) String() string {
 func (*TMLedgerNode) ProtoMessage() {}
 
 func (x *TMLedgerNode) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[19]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2093,7 +2026,7 @@ func (x *TMLedgerNode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMLedgerNode.ProtoReflect.Descriptor instead.
 func (*TMLedgerNode) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{19}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *TMLedgerNode) GetNodedata() []byte {
@@ -2109,6 +2042,47 @@ func (x *TMLedgerNode) GetNodeid() []byte {
 	}
 	return nil
 }
+
+func (x *TMLedgerNode) GetReference() isTMLedgerNode_Reference {
+	if x != nil {
+		return x.Reference
+	}
+	return nil
+}
+
+func (x *TMLedgerNode) GetId() []byte {
+	if x != nil {
+		if x, ok := x.Reference.(*TMLedgerNode_Id); ok {
+			return x.Id
+		}
+	}
+	return nil
+}
+
+func (x *TMLedgerNode) GetDepth() uint32 {
+	if x != nil {
+		if x, ok := x.Reference.(*TMLedgerNode_Depth); ok {
+			return x.Depth
+		}
+	}
+	return 0
+}
+
+type isTMLedgerNode_Reference interface {
+	isTMLedgerNode_Reference()
+}
+
+type TMLedgerNode_Id struct {
+	Id []byte `protobuf:"bytes,3,opt,name=id,oneof"`
+}
+
+type TMLedgerNode_Depth struct {
+	Depth uint32 `protobuf:"varint,4,opt,name=depth,oneof"`
+}
+
+func (*TMLedgerNode_Id) isTMLedgerNode_Reference() {}
+
+func (*TMLedgerNode_Depth) isTMLedgerNode_Reference() {}
 
 type TMGetLedger struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -2126,7 +2100,7 @@ type TMGetLedger struct {
 
 func (x *TMGetLedger) Reset() {
 	*x = TMGetLedger{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[20]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2138,7 +2112,7 @@ func (x *TMGetLedger) String() string {
 func (*TMGetLedger) ProtoMessage() {}
 
 func (x *TMGetLedger) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[20]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2151,7 +2125,7 @@ func (x *TMGetLedger) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMGetLedger.ProtoReflect.Descriptor instead.
 func (*TMGetLedger) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{20}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *TMGetLedger) GetItype() TMLedgerInfoType {
@@ -2224,7 +2198,7 @@ type TMLedgerData struct {
 
 func (x *TMLedgerData) Reset() {
 	*x = TMLedgerData{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[21]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2236,7 +2210,7 @@ func (x *TMLedgerData) String() string {
 func (*TMLedgerData) ProtoMessage() {}
 
 func (x *TMLedgerData) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[21]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2249,7 +2223,7 @@ func (x *TMLedgerData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMLedgerData.ProtoReflect.Descriptor instead.
 func (*TMLedgerData) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{21}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *TMLedgerData) GetLedgerHash() []byte {
@@ -2304,7 +2278,7 @@ type TMPing struct {
 
 func (x *TMPing) Reset() {
 	*x = TMPing{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[22]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2316,7 +2290,7 @@ func (x *TMPing) String() string {
 func (*TMPing) ProtoMessage() {}
 
 func (x *TMPing) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[22]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2329,7 +2303,7 @@ func (x *TMPing) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMPing.ProtoReflect.Descriptor instead.
 func (*TMPing) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{22}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *TMPing) GetType() TMPingPingType {
@@ -2357,7 +2331,7 @@ type TMSquelch struct {
 
 func (x *TMSquelch) Reset() {
 	*x = TMSquelch{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[23]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2369,7 +2343,7 @@ func (x *TMSquelch) String() string {
 func (*TMSquelch) ProtoMessage() {}
 
 func (x *TMSquelch) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[23]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2382,7 +2356,7 @@ func (x *TMSquelch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMSquelch.ProtoReflect.Descriptor instead.
 func (*TMSquelch) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{23}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *TMSquelch) GetSquelch() bool {
@@ -2417,7 +2391,7 @@ type TMProofPathRequest struct {
 
 func (x *TMProofPathRequest) Reset() {
 	*x = TMProofPathRequest{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[24]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2429,7 +2403,7 @@ func (x *TMProofPathRequest) String() string {
 func (*TMProofPathRequest) ProtoMessage() {}
 
 func (x *TMProofPathRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[24]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2442,7 +2416,7 @@ func (x *TMProofPathRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMProofPathRequest.ProtoReflect.Descriptor instead.
 func (*TMProofPathRequest) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{24}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *TMProofPathRequest) GetKey() []byte {
@@ -2480,7 +2454,7 @@ type TMProofPathResponse struct {
 
 func (x *TMProofPathResponse) Reset() {
 	*x = TMProofPathResponse{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[25]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2492,7 +2466,7 @@ func (x *TMProofPathResponse) String() string {
 func (*TMProofPathResponse) ProtoMessage() {}
 
 func (x *TMProofPathResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[25]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2505,7 +2479,7 @@ func (x *TMProofPathResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMProofPathResponse.ProtoReflect.Descriptor instead.
 func (*TMProofPathResponse) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{25}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *TMProofPathResponse) GetKey() []byte {
@@ -2559,7 +2533,7 @@ type TMReplayDeltaRequest struct {
 
 func (x *TMReplayDeltaRequest) Reset() {
 	*x = TMReplayDeltaRequest{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[26]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2571,7 +2545,7 @@ func (x *TMReplayDeltaRequest) String() string {
 func (*TMReplayDeltaRequest) ProtoMessage() {}
 
 func (x *TMReplayDeltaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[26]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2584,7 +2558,7 @@ func (x *TMReplayDeltaRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMReplayDeltaRequest.ProtoReflect.Descriptor instead.
 func (*TMReplayDeltaRequest) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{26}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *TMReplayDeltaRequest) GetLedgerHash() []byte {
@@ -2606,7 +2580,7 @@ type TMReplayDeltaResponse struct {
 
 func (x *TMReplayDeltaResponse) Reset() {
 	*x = TMReplayDeltaResponse{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[27]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2618,7 +2592,7 @@ func (x *TMReplayDeltaResponse) String() string {
 func (*TMReplayDeltaResponse) ProtoMessage() {}
 
 func (x *TMReplayDeltaResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[27]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2631,7 +2605,7 @@ func (x *TMReplayDeltaResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMReplayDeltaResponse.ProtoReflect.Descriptor instead.
 func (*TMReplayDeltaResponse) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{27}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *TMReplayDeltaResponse) GetLedgerHash() []byte {
@@ -2671,7 +2645,7 @@ type TMHaveTransactions struct {
 
 func (x *TMHaveTransactions) Reset() {
 	*x = TMHaveTransactions{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[28]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2683,7 +2657,7 @@ func (x *TMHaveTransactions) String() string {
 func (*TMHaveTransactions) ProtoMessage() {}
 
 func (x *TMHaveTransactions) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[28]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2696,7 +2670,7 @@ func (x *TMHaveTransactions) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMHaveTransactions.ProtoReflect.Descriptor instead.
 func (*TMHaveTransactions) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{28}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *TMHaveTransactions) GetHashes() [][]byte {
@@ -2718,7 +2692,7 @@ type TMEndpoints_TMEndpointv2 struct {
 
 func (x *TMEndpoints_TMEndpointv2) Reset() {
 	*x = TMEndpoints_TMEndpointv2{}
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[29]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2730,7 +2704,7 @@ func (x *TMEndpoints_TMEndpointv2) String() string {
 func (*TMEndpoints_TMEndpointv2) ProtoMessage() {}
 
 func (x *TMEndpoints_TMEndpointv2) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[29]
+	mi := &file_internal_peermanagement_proto_xrpl_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2743,7 +2717,7 @@ func (x *TMEndpoints_TMEndpointv2) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TMEndpoints_TMEndpointv2.ProtoReflect.Descriptor instead.
 func (*TMEndpoints_TMEndpointv2) Descriptor() ([]byte, []int) {
-	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{16, 0}
+	return file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP(), []int{15, 0}
 }
 
 func (x *TMEndpoints_TMEndpointv2) GetEndpoint() string {
@@ -2828,12 +2802,7 @@ const file_internal_peermanagement_proto_xrpl_proto_rawDesc = "" +
 	"\x04hops\x18\f \x01(\rB\x02\x18\x01R\x04hops\"Y\n" +
 	"\x14TMHaveTransactionSet\x12-\n" +
 	"\x06status\x18\x01 \x02(\x0e2\x15.protocol.TxSetStatusR\x06status\x12\x12\n" +
-	"\x04hash\x18\x02 \x02(\fR\x04hash\"y\n" +
-	"\x0fTMValidatorList\x12\x1a\n" +
-	"\bmanifest\x18\x01 \x02(\fR\bmanifest\x12\x12\n" +
-	"\x04blob\x18\x02 \x02(\fR\x04blob\x12\x1c\n" +
-	"\tsignature\x18\x03 \x02(\fR\tsignature\x12\x18\n" +
-	"\aversion\x18\x04 \x02(\rR\aversion\"a\n" +
+	"\x04hash\x18\x02 \x02(\fR\x04hash\"a\n" +
 	"\x11ValidatorBlobInfo\x12\x1a\n" +
 	"\bmanifest\x18\x01 \x01(\fR\bmanifest\x12\x12\n" +
 	"\x04blob\x18\x02 \x02(\fR\x04blob\x12\x1c\n" +
@@ -2877,10 +2846,13 @@ const file_internal_peermanagement_proto_xrpl_proto_rawDesc = "" +
 	"\fotSTATE_NODE\x10\x04\x12\x10\n" +
 	"\fotCAS_OBJECT\x10\x05\x12\x10\n" +
 	"\fotFETCH_PACK\x10\x06\x12\x12\n" +
-	"\x0eotTRANSACTIONS\x10\aJ\x04\b\x03\x10\x04\"B\n" +
+	"\x0eotTRANSACTIONS\x10\aJ\x04\b\x03\x10\x04\"y\n" +
 	"\fTMLedgerNode\x12\x1a\n" +
 	"\bnodedata\x18\x01 \x02(\fR\bnodedata\x12\x16\n" +
-	"\x06nodeid\x18\x02 \x01(\fR\x06nodeid\"\xc0\x02\n" +
+	"\x06nodeid\x18\x02 \x01(\fR\x06nodeid\x12\x10\n" +
+	"\x02id\x18\x03 \x01(\fH\x00R\x02id\x12\x16\n" +
+	"\x05depth\x18\x04 \x01(\rH\x00R\x05depthB\v\n" +
+	"\treference\"\xc0\x02\n" +
 	"\vTMGetLedger\x120\n" +
 	"\x05itype\x18\x01 \x02(\x0e2\x1a.protocol.TMLedgerInfoTypeR\x05itype\x12,\n" +
 	"\x05ltype\x18\x02 \x01(\x0e2\x16.protocol.TMLedgerTypeR\x05ltype\x12\x1e\n" +
@@ -2942,7 +2914,7 @@ const file_internal_peermanagement_proto_xrpl_proto_rawDesc = "" +
 	"\vtransaction\x18\x03 \x03(\fR\vtransaction\x12,\n" +
 	"\x05error\x18\x04 \x01(\x0e2\x16.protocol.TMReplyErrorR\x05error\",\n" +
 	"\x12TMHaveTransactions\x12\x16\n" +
-	"\x06hashes\x18\x01 \x03(\fR\x06hashes*\xbb\x03\n" +
+	"\x06hashes\x18\x01 \x03(\fR\x06hashes*\xcf\x03\n" +
 	"\vMessageType\x12\x0f\n" +
 	"\vmtMANIFESTS\x10\x02\x12\n" +
 	"\n" +
@@ -2957,8 +2929,7 @@ const file_internal_peermanagement_proto_xrpl_proto_rawDesc = "" +
 	"\n" +
 	"mtHAVE_SET\x10#\x12\x10\n" +
 	"\fmtVALIDATION\x10)\x12\x11\n" +
-	"\rmtGET_OBJECTS\x10*\x12\x14\n" +
-	"\x10mtVALIDATOR_LIST\x106\x12\r\n" +
+	"\rmtGET_OBJECTS\x10*\x12\r\n" +
 	"\tmtSQUELCH\x107\x12\x1f\n" +
 	"\x1bmtVALIDATOR_LIST_COLLECTION\x108\x12\x14\n" +
 	"\x10mtPROOF_PATH_REQ\x109\x12\x19\n" +
@@ -2966,7 +2937,7 @@ const file_internal_peermanagement_proto_xrpl_proto_rawDesc = "" +
 	"\x12mtREPLAY_DELTA_REQ\x10;\x12\x1b\n" +
 	"\x17mtREPLAY_DELTA_RESPONSE\x10<\x12\x17\n" +
 	"\x13mtHAVE_TRANSACTIONS\x10?\x12\x12\n" +
-	"\x0emtTRANSACTIONS\x10@*\xa2\x01\n" +
+	"\x0emtTRANSACTIONS\x10@\"\x04\b\x00\x10\x01\"\x04\b\x04\x10\x04\"\x04\b\x06\x10\x0e\"\x04\b\x10\x10\x1d\"\x04\b$\x10(\"\x04\b+\x106\"\x04\b=\x10>*\xa2\x01\n" +
 	"\x11TransactionStatus\x12\t\n" +
 	"\x05tsNEW\x10\x01\x12\r\n" +
 	"\ttsCURRENT\x10\x02\x12\x0f\n" +
@@ -3031,7 +3002,7 @@ func file_internal_peermanagement_proto_xrpl_proto_rawDescGZIP() []byte {
 }
 
 var file_internal_peermanagement_proto_xrpl_proto_enumTypes = make([]protoimpl.EnumInfo, 12)
-var file_internal_peermanagement_proto_xrpl_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_internal_peermanagement_proto_xrpl_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
 var file_internal_peermanagement_proto_xrpl_proto_goTypes = []any{
 	(MessageType)(0),                  // 0: protocol.MessageType
 	(TransactionStatus)(0),            // 1: protocol.TransactionStatus
@@ -3057,24 +3028,23 @@ var file_internal_peermanagement_proto_xrpl_proto_goTypes = []any{
 	(*TMStatusChange)(nil),            // 21: protocol.TMStatusChange
 	(*TMProposeSet)(nil),              // 22: protocol.TMProposeSet
 	(*TMHaveTransactionSet)(nil),      // 23: protocol.TMHaveTransactionSet
-	(*TMValidatorList)(nil),           // 24: protocol.TMValidatorList
-	(*ValidatorBlobInfo)(nil),         // 25: protocol.ValidatorBlobInfo
-	(*TMValidatorListCollection)(nil), // 26: protocol.TMValidatorListCollection
-	(*TMValidation)(nil),              // 27: protocol.TMValidation
-	(*TMEndpoints)(nil),               // 28: protocol.TMEndpoints
-	(*TMIndexedObject)(nil),           // 29: protocol.TMIndexedObject
-	(*TMGetObjectByHash)(nil),         // 30: protocol.TMGetObjectByHash
-	(*TMLedgerNode)(nil),              // 31: protocol.TMLedgerNode
-	(*TMGetLedger)(nil),               // 32: protocol.TMGetLedger
-	(*TMLedgerData)(nil),              // 33: protocol.TMLedgerData
-	(*TMPing)(nil),                    // 34: protocol.TMPing
-	(*TMSquelch)(nil),                 // 35: protocol.TMSquelch
-	(*TMProofPathRequest)(nil),        // 36: protocol.TMProofPathRequest
-	(*TMProofPathResponse)(nil),       // 37: protocol.TMProofPathResponse
-	(*TMReplayDeltaRequest)(nil),      // 38: protocol.TMReplayDeltaRequest
-	(*TMReplayDeltaResponse)(nil),     // 39: protocol.TMReplayDeltaResponse
-	(*TMHaveTransactions)(nil),        // 40: protocol.TMHaveTransactions
-	(*TMEndpoints_TMEndpointv2)(nil),  // 41: protocol.TMEndpoints.TMEndpointv2
+	(*ValidatorBlobInfo)(nil),         // 24: protocol.ValidatorBlobInfo
+	(*TMValidatorListCollection)(nil), // 25: protocol.TMValidatorListCollection
+	(*TMValidation)(nil),              // 26: protocol.TMValidation
+	(*TMEndpoints)(nil),               // 27: protocol.TMEndpoints
+	(*TMIndexedObject)(nil),           // 28: protocol.TMIndexedObject
+	(*TMGetObjectByHash)(nil),         // 29: protocol.TMGetObjectByHash
+	(*TMLedgerNode)(nil),              // 30: protocol.TMLedgerNode
+	(*TMGetLedger)(nil),               // 31: protocol.TMGetLedger
+	(*TMLedgerData)(nil),              // 32: protocol.TMLedgerData
+	(*TMPing)(nil),                    // 33: protocol.TMPing
+	(*TMSquelch)(nil),                 // 34: protocol.TMSquelch
+	(*TMProofPathRequest)(nil),        // 35: protocol.TMProofPathRequest
+	(*TMProofPathResponse)(nil),       // 36: protocol.TMProofPathResponse
+	(*TMReplayDeltaRequest)(nil),      // 37: protocol.TMReplayDeltaRequest
+	(*TMReplayDeltaResponse)(nil),     // 38: protocol.TMReplayDeltaResponse
+	(*TMHaveTransactions)(nil),        // 39: protocol.TMHaveTransactions
+	(*TMEndpoints_TMEndpointv2)(nil),  // 40: protocol.TMEndpoints.TMEndpointv2
 }
 var file_internal_peermanagement_proto_xrpl_proto_depIdxs = []int32{
 	12, // 0: protocol.TMManifests.list:type_name -> protocol.TMManifest
@@ -3085,15 +3055,15 @@ var file_internal_peermanagement_proto_xrpl_proto_depIdxs = []int32{
 	2,  // 5: protocol.TMStatusChange.newStatus:type_name -> protocol.NodeStatus
 	3,  // 6: protocol.TMStatusChange.newEvent:type_name -> protocol.NodeEvent
 	4,  // 7: protocol.TMHaveTransactionSet.status:type_name -> protocol.TxSetStatus
-	25, // 8: protocol.TMValidatorListCollection.blobs:type_name -> protocol.ValidatorBlobInfo
-	41, // 9: protocol.TMEndpoints.endpoints_v2:type_name -> protocol.TMEndpoints.TMEndpointv2
+	24, // 8: protocol.TMValidatorListCollection.blobs:type_name -> protocol.ValidatorBlobInfo
+	40, // 9: protocol.TMEndpoints.endpoints_v2:type_name -> protocol.TMEndpoints.TMEndpointv2
 	10, // 10: protocol.TMGetObjectByHash.type:type_name -> protocol.TMGetObjectByHash.ObjectType
-	29, // 11: protocol.TMGetObjectByHash.objects:type_name -> protocol.TMIndexedObject
+	28, // 11: protocol.TMGetObjectByHash.objects:type_name -> protocol.TMIndexedObject
 	5,  // 12: protocol.TMGetLedger.itype:type_name -> protocol.TMLedgerInfoType
 	6,  // 13: protocol.TMGetLedger.ltype:type_name -> protocol.TMLedgerType
 	7,  // 14: protocol.TMGetLedger.queryType:type_name -> protocol.TMQueryType
 	5,  // 15: protocol.TMLedgerData.type:type_name -> protocol.TMLedgerInfoType
-	31, // 16: protocol.TMLedgerData.nodes:type_name -> protocol.TMLedgerNode
+	30, // 16: protocol.TMLedgerData.nodes:type_name -> protocol.TMLedgerNode
 	8,  // 17: protocol.TMLedgerData.error:type_name -> protocol.TMReplyError
 	11, // 18: protocol.TMPing.type:type_name -> protocol.TMPing.pingType
 	9,  // 19: protocol.TMProofPathRequest.type:type_name -> protocol.TMLedgerMapType
@@ -3112,13 +3082,17 @@ func file_internal_peermanagement_proto_xrpl_proto_init() {
 	if File_internal_peermanagement_proto_xrpl_proto != nil {
 		return
 	}
+	file_internal_peermanagement_proto_xrpl_proto_msgTypes[18].OneofWrappers = []any{
+		(*TMLedgerNode_Id)(nil),
+		(*TMLedgerNode_Depth)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_peermanagement_proto_xrpl_proto_rawDesc), len(file_internal_peermanagement_proto_xrpl_proto_rawDesc)),
 			NumEnums:      12,
-			NumMessages:   30,
+			NumMessages:   29,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

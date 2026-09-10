@@ -953,18 +953,18 @@ func applyAcquisitionData(ctx context.Context, ledger *inbound.Ledger, data *mes
 		var added int
 		added, err = ledger.GotStateNodesUsefulContext(ctx, data.Nodes)
 		localFailure := errors.Is(err, shamap.ErrNodeSerialization)
-		badKind := "ledger-data-state"
-		if localFailure {
-			badKind = ""
+		badKind := ""
+		if errors.Is(err, inbound.ErrInvalidPeerNode) {
+			badKind = "ledger-data-state"
 		}
 		return added, badKind, localFailure, ledger.IsComplete(), err
 	case message.LedgerInfoTxNode:
 		var added int
 		added, err = ledger.GotTransactionNodesUsefulContext(ctx, data.Nodes)
 		localFailure := errors.Is(err, shamap.ErrNodeSerialization)
-		badKind := "ledger-data-tx"
-		if localFailure {
-			badKind = ""
+		badKind := ""
+		if errors.Is(err, inbound.ErrInvalidPeerNode) {
+			badKind = "ledger-data-tx"
 		}
 		return added, badKind, localFailure, ledger.IsComplete(), err
 	default:

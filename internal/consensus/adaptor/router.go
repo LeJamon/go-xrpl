@@ -215,8 +215,8 @@ type Router struct {
 	// validatorList is the publisher-trust subsystem. Wired by the
 	// Components bootstrap when validator_list_keys is configured. Nil
 	// in standalone-mode or when no publisher trust is configured —
-	// the dispatch switch silently drops TMValidatorList /
-	// TMValidatorListCollection frames in that case.
+	// the dispatch switch silently drops validator-list collection frames in
+	// that case.
 	validatorList *validatorlist.Aggregator
 
 	// overrideManifestSender, when non-nil, replaces r.overlay for the
@@ -683,8 +683,8 @@ func (r *Router) setPeerSessionView(view peerSessionView) {
 }
 
 // SetValidatorListAggregator installs the publisher-trust subsystem.
-// Calling with a nil aggregator disables the TMValidatorList /
-// TMValidatorListCollection paths — the dispatch switch silently
+// Calling with a nil aggregator disables the validator-list collection path —
+// the dispatch switch silently
 // drops inbound frames in that case. Safe to call before Run.
 func (r *Router) SetValidatorListAggregator(agg *validatorlist.Aggregator) {
 	r.validatorList = agg
