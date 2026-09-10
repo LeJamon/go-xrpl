@@ -235,6 +235,15 @@ func (s *SponsorshipTransfer) applyObject(
 	if result != ter.TesSUCCESS {
 		return ter.TefINTERNAL
 	}
+	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) {
+		balanceBeforeFee := sponsee.Balance
+		if sponseeID == ctx.AccountID {
+			balanceBeforeFee = ctx.PriorBalance()
+		}
+		if result := checkAccountReserve(ctx.Config, sponsee, balanceBeforeFee, target.ownerCount, 0, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
+			return result
+		}
+	}
 	if !decrementCount(&sponsee.SponsoredOwnerCount, target.ownerCount) ||
 		!decrementCount(&oldSponsor.SponsoringOwnerCount, target.ownerCount) {
 		return ter.TecINTERNAL
