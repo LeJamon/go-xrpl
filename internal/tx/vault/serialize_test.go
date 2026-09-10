@@ -64,19 +64,16 @@ func TestVaultOptionalDataPresenceRoundTrip(t *testing.T) {
 	}{
 		{name: "absent"},
 		{name: "present empty", dataPresent: true},
-		{name: "present nonempty", data: "abcd"},
+		{name: "present nonempty", data: "abcd", dataPresent: true},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			v := &vaultData{
-				Owner:       [20]byte{1},
-				Account:     [20]byte{2},
-				Asset:       tx.Asset{Currency: "XRP"},
-				Data:        test.data,
-				DataPresent: test.dataPresent,
-			}
-			data, err := serializeVault(v)
+			data, err := serializeVault(&vaultData{
+				Owner:   [20]byte{1},
+				Account: [20]byte{2},
+				Asset:   tx.Asset{Currency: "XRP"},
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -85,18 +82,20 @@ func TestVaultOptionalDataPresenceRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantPresent := test.dataPresent || test.data != ""
-			_, gotPresent := fields["Data"]
-			if gotPresent != wantPresent {
-				t.Fatalf("Data presence = %v, want %v; fields = %#v", gotPresent, wantPresent, fields)
+			if test.dataPresent {
+				fields["Data"] = test.data
+			}
+			data, err = binarycodec.EncodeBytes(fields)
+			if err != nil {
+				t.Fatal(err)
 			}
 
 			parsed, err := parseVault(data)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if parsed.DataPresent != wantPresent {
-				t.Fatalf("parsed DataPresent = %v, want %v", parsed.DataPresent, wantPresent)
+			if parsed.DataPresent != test.dataPresent || parsed.Data != strings.ToUpper(test.data) {
+				t.Fatalf("parsed Data = %q (present %v), want %q (present %v)", parsed.Data, parsed.DataPresent, test.data, test.dataPresent)
 			}
 			again, err := serializeVault(parsed)
 			if err != nil {

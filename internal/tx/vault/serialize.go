@@ -61,8 +61,6 @@ func (v *vaultData) assetToIssueMap() map[string]any {
 }
 
 // serializeVault encodes a vault ledger entry to its canonical binary form.
-// Default-valued fields are omitted to match rippled's STObject serialization;
-// optional Data is emitted when present, including an empty Blob.
 func serializeVault(v *vaultData) ([]byte, error) {
 	return serializeVaultForRules(v, nil)
 }
