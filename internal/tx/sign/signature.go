@@ -122,12 +122,12 @@ func CheckSTTxSignature(transaction txcore.Transaction, rules *amendment.Rules, 
 	}
 
 	if common.CounterpartySignature != nil {
-		if reason := checkSTTxCounterpartySignature(transaction, common.CounterpartySignature); reason != "" {
+		if reason := checkSTTxCounterpartySignature(transaction, common.CounterpartySignature, rules); reason != "" {
 			return reason
 		}
 	}
 	if common.SponsorSignature != nil {
-		if reason := checkSTTxSponsorSignature(transaction, common.SponsorSignature); reason != "" {
+		if reason := checkSTTxSponsorSignature(transaction, common.SponsorSignature, rules); reason != "" {
 			return reason
 		}
 	}
@@ -139,7 +139,7 @@ func CheckSTTxSignature(transaction txcore.Transaction, rules *amendment.Rules, 
 	return ""
 }
 
-func checkSTTxCounterpartySignature(transaction txcore.Transaction, cp *txcore.CounterpartySignature) string {
+func checkSTTxCounterpartySignature(transaction txcore.Transaction, cp *txcore.CounterpartySignature, rules *amendment.Rules) string {
 	hasSigners := len(cp.Signers) > 0 || cp.HasField("Signers")
 	hasTxnSignature := cp.TxnSignature != "" || cp.HasField("TxnSignature")
 	if raw := transaction.GetRawBytes(); len(raw) > 0 {
@@ -155,7 +155,7 @@ func checkSTTxCounterpartySignature(transaction txcore.Transaction, cp *txcore.C
 		if hasSigners {
 			return counterpartyPrefix + "Cannot both single- and multi-sign."
 		}
-		if err := VerifyCounterpartySignature(transaction, cp, true); err != nil {
+		if err := VerifyCounterpartySignatureWithRules(transaction, cp, true, rules); err != nil {
 			return err.Error()
 		}
 		return ""
@@ -169,13 +169,13 @@ func checkSTTxCounterpartySignature(transaction txcore.Transaction, cp *txcore.C
 	if len(cp.Signers) < MinMultiSigners || len(cp.Signers) > MaxMultiSigners {
 		return counterpartyPrefix + "Invalid Signers array size."
 	}
-	if err := VerifyCounterpartySignature(transaction, cp, true); err != nil {
+	if err := VerifyCounterpartySignatureWithRules(transaction, cp, true, rules); err != nil {
 		return err.Error()
 	}
 	return ""
 }
 
-func checkSTTxSponsorSignature(transaction txcore.Transaction, sponsor *txcore.SponsorSignature) string {
+func checkSTTxSponsorSignature(transaction txcore.Transaction, sponsor *txcore.SponsorSignature, rules *amendment.Rules) string {
 	hasSigners := len(sponsor.Signers) > 0 || sponsor.HasField("Signers")
 	hasTxnSignature := sponsor.TxnSignature != "" || sponsor.HasField("TxnSignature")
 	if raw := transaction.GetRawBytes(); len(raw) > 0 {
@@ -191,7 +191,7 @@ func checkSTTxSponsorSignature(transaction txcore.Transaction, sponsor *txcore.S
 		if hasSigners {
 			return sponsorPrefix + "Cannot both single- and multi-sign."
 		}
-		if err := VerifySponsorSignature(transaction, sponsor, true); err != nil {
+		if err := VerifySponsorSignatureWithRules(transaction, sponsor, true, rules); err != nil {
 			return err.Error()
 		}
 		return ""
@@ -205,7 +205,7 @@ func checkSTTxSponsorSignature(transaction txcore.Transaction, sponsor *txcore.S
 	if len(sponsor.Signers) < MinMultiSigners || len(sponsor.Signers) > MaxMultiSigners {
 		return sponsorPrefix + "Invalid Signers array size."
 	}
-	if err := VerifySponsorSignature(transaction, sponsor, true); err != nil {
+	if err := VerifySponsorSignatureWithRules(transaction, sponsor, true, rules); err != nil {
 		return err.Error()
 	}
 	return ""
@@ -539,44 +539,24 @@ const (
 	sponsorPrefix      = "Sponsor: "
 )
 
-// VerifyCounterpartySignature cryptographically verifies the nested
-// sfCounterpartySignature object, mirroring rippled STTx::checkSign(sigObject).
-// It runs after the top-level signature passes and is crypto-only: no
-// signer-list or quorum authorization applies, because there is no counterparty
-// account on the ledger to authorize against — this is wire-format groundwork
-// for future multi-role transactions.
-//
-// A single-signed object (non-empty SigningPubKey) is verified against the same
-// signing payload the top-level single signer covers; a multi-signed object
-// (empty SigningPubKey + Signers) has each nested signer verified against the
-// multi-signing payload. Unlike a top-level multi-sign, the counterparty may
-// sign for the transaction's own Account. Every error is prefixed
-// "Counterparty: " to match rippled's messages.
+// VerifyCounterpartySignature verifies using the pre-cleanup rules.
 func VerifyCounterpartySignature(tx txcore.Transaction, cp *txcore.CounterpartySignature, mustBeFullyCanonical bool) error {
-	return verifyNestedSignature(
-		tx,
-		cp.SigningPubKey,
-		cp.TxnSignature,
-		cp.Signers,
-		counterpartyPrefix,
-		mustBeFullyCanonical,
-	)
+	return VerifyCounterpartySignatureWithRules(tx, cp, mustBeFullyCanonical, nil)
 }
 
-// VerifySponsorSignature cryptographically verifies sfSponsorSignature. The
-// object signs the same canonical STX/SMT projection as the transaction's
-// ordinary signer; SponsorSignature itself is a non-signing field, so attaching
-// or replacing it cannot change that projection. Ledger authorization of the
-// sponsor's master/regular key or SignerList is performed later in preclaim.
+func VerifyCounterpartySignatureWithRules(tx txcore.Transaction, cp *txcore.CounterpartySignature, mustBeFullyCanonical bool, rules *amendment.Rules) error {
+	return verifyNestedSignature(tx, cp.SigningPubKey, cp.TxnSignature, cp.Signers,
+		counterpartyPrefix, mustBeFullyCanonical, binarycodec.CounterpartyRole, rules)
+}
+
+// VerifySponsorSignature verifies using the pre-cleanup rules.
 func VerifySponsorSignature(tx txcore.Transaction, sponsor *txcore.SponsorSignature, mustBeFullyCanonical bool) error {
-	return verifyNestedSignature(
-		tx,
-		sponsor.SigningPubKey,
-		sponsor.TxnSignature,
-		sponsor.Signers,
-		sponsorPrefix,
-		mustBeFullyCanonical,
-	)
+	return VerifySponsorSignatureWithRules(tx, sponsor, mustBeFullyCanonical, nil)
+}
+
+func VerifySponsorSignatureWithRules(tx txcore.Transaction, sponsor *txcore.SponsorSignature, mustBeFullyCanonical bool, rules *amendment.Rules) error {
+	return verifyNestedSignature(tx, sponsor.SigningPubKey, sponsor.TxnSignature, sponsor.Signers,
+		sponsorPrefix, mustBeFullyCanonical, binarycodec.SponsorRole, rules)
 }
 
 func verifyNestedSignature(
@@ -586,6 +566,8 @@ func verifyNestedSignature(
 	signers []txcore.SignerWrapper,
 	prefix string,
 	mustBeFullyCanonical bool,
+	role binarycodec.SigningRole,
+	rules *amendment.Rules,
 ) error {
 	if signingPubKey != "" {
 		return verifyNestedSingleSign(
@@ -595,9 +577,11 @@ func verifyNestedSignature(
 			signers,
 			prefix,
 			mustBeFullyCanonical,
+			role,
+			rules,
 		)
 	}
-	return verifyNestedMultiSign(tx, txnSignature, signers, prefix, mustBeFullyCanonical)
+	return verifyNestedMultiSign(tx, txnSignature, signers, prefix, mustBeFullyCanonical, role, rules)
 }
 
 // verifyNestedSingleSign verifies a single-signed nested object. A Signers
@@ -610,11 +594,13 @@ func verifyNestedSingleSign(
 	signers []txcore.SignerWrapper,
 	prefix string,
 	mustBeFullyCanonical bool,
+	role binarycodec.SigningRole,
+	rules *amendment.Rules,
 ) error {
 	if len(signers) > 0 {
 		return errors.New(prefix + "Cannot both single- and multi-sign.")
 	}
-	payload, err := getSigningPayload(tx)
+	payload, err := getSigningPayloadForRole(tx, role, rules)
 	if err != nil {
 		return errors.New(prefix + "Invalid signature.")
 	}
@@ -634,6 +620,8 @@ func verifyNestedMultiSign(
 	signers []txcore.SignerWrapper,
 	prefix string,
 	mustBeFullyCanonical bool,
+	role binarycodec.SigningRole,
+	rules *amendment.Rules,
 ) error {
 	// An empty SigningPubKey with no Signers is neither a single- nor a
 	// multi-signature (rippled multiSignHelper's !isFieldPresent(sfSigners) arm).
@@ -667,8 +655,8 @@ func verifyNestedMultiSign(
 		}
 		lastAccountID = accountID
 
-		payload, encErr := binarycodec.EncodeForMultisigningTarget(
-			copyMap(txMap), signer.Account)
+		payload, encErr := binarycodec.EncodeForMultisigningRole(
+			txMap, signer.Account, role, cleanupSigningEnabled(rules))
 		if encErr != nil {
 			return fmt.Errorf("%sInvalid signature on account %s.", prefix, signer.Account)
 		}
