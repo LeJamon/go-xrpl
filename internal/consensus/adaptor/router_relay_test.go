@@ -149,6 +149,50 @@ func TestRouter_GetLedger_RelayOnMiss_Ledger(t *testing.T) {
 	assert.Equal(t, message.QueryTypeIndirect, *relayed.QueryType)
 }
 
+func TestRouter_RelayedLedgerData_DropsReplyForDisconnectedRequester(t *testing.T) {
+	depth := uint32(0)
+
+	data := &message.LedgerData{
+		LedgerHash:       bytes.Repeat([]byte{0xAB}, 32),
+		LedgerSeq:        1,
+		InfoType:         message.LedgerInfoAsNode,
+		Nodes:            []message.LedgerNode{{NodeData: []byte{0xFF}, Depth: &depth}},
+		RequestCookie:    99,
+		RequestCookieSet: true,
+	}
+	send := func(t *testing.T, r *Router, data *message.LedgerData) {
+		t.Helper()
+		r.handleMessage(&peermanagement.InboundMessage{
+			PeerID:  42,
+			Type:    message.TypeLedgerData,
+			Payload: encodePayload(t, data),
+		})
+	}
+
+	t.Run("connected requester validates reply", func(t *testing.T) {
+		r, rs := makeRouterWithRelayRecorder(t)
+		r.setPeerSessionView(&testPeerSessions{connected: map[peermanagement.PeerID]bool{
+			42: true,
+			99: true,
+		}})
+
+		send(t, r, data)
+
+		assert.Empty(t, rs.sentFrames())
+		assert.Equal(t, []badDataCall{{peerID: 42, reason: "ledger-data-node"}}, rs.badDataCalls())
+	})
+
+	t.Run("disconnected requester is dropped before validation", func(t *testing.T) {
+		r, rs := makeRouterWithRelayRecorder(t)
+		r.setPeerSessionView(&testPeerSessions{connected: map[peermanagement.PeerID]bool{42: true}})
+
+		send(t, r, data)
+
+		assert.Empty(t, rs.sentFrames(), "a reply for a disconnected requester must be dropped")
+		assert.Empty(t, rs.badDataCalls(), "an unroutable reply must not charge its source")
+	})
+}
+
 // TestRouter_GetLedger_NoRelayWhenSeqOnly pins rippled's getLedger: a relay
 // is attempted only from the has_ledgerhash() branch (PeerImp.cpp:3165/3175).
 // A seq-only request (no ledger_hash) that misses locally is dropped, never

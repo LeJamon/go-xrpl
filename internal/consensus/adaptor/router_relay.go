@@ -75,6 +75,10 @@ func (r *Router) maybeRelayGetLedger(from peermanagement.PeerID, req *message.Ge
 // unroutable cookie (the requester has since disconnected) is dropped.
 func (r *Router) routeRelayedLedgerData(ld *message.LedgerData, from peermanagement.PeerID) {
 	target := uint64(ld.RequestCookie)
+	if r.peerSessions != nil &&
+		!r.peerSessions.IsPeerConnected(peermanagement.PeerID(target)) {
+		return
+	}
 	out := *ld
 	var err error
 	out.Nodes, err = relayLedgerNodes(ld, r.serve.PeerSupportsNodeDepth(target))
