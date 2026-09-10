@@ -33,9 +33,7 @@ func wantTER(t *testing.T, err error, want ter.Result) {
 // on mainnet.
 func mainnetRules() *amendment.Rules { return amendment.AllSupportedRules() }
 
-// preV2NFTRules enables NonFungibleTokensV1 only, so fixNFTokenNegOffer,
-// fixRemoveNFTokenAutoTrustLine and DynamicNFT all read as disabled — the
-// original NFToken behaviour.
+// preV2NFTRules enables only NonFungibleTokensV1, omitting retired amendment IDs.
 func preV2NFTRules() *amendment.Rules {
 	return amendment.NewRulesBuilder().EnableByName("NonFungibleTokensV1").Build()
 }
@@ -154,20 +152,26 @@ func TestNFTokenCreateOffer_PreflightRules_NegativeAmountFirst(t *testing.T) {
 	}
 }
 
-// --- Finding 7: destination on a buy offer is malformed pre-fixNFTokenNegOffer ---
-
 func TestNFTokenCreateOffer_PreflightRules_DestinationOnBuy(t *testing.T) {
 	// Buy offer (no tfSellNFToken), Owner required, Destination set.
 	o := NewNFTokenCreateOffer("rAlice", validNFTokenID, tx.NewXRPAmount(10))
 	o.Owner = "rOwner"
 	o.Destination = "rBroker"
 
-	t.Run("rejected before fixNFTokenNegOffer", func(t *testing.T) {
-		wantTER(t, o.PreflightRules(preV2NFTRules()), ter.TemMALFORMED)
-	})
-	t.Run("allowed with fixNFTokenNegOffer", func(t *testing.T) {
-		if err := o.PreflightRules(mainnetRules()); err != nil {
-			t.Fatalf("destination on buy offer should be allowed post-fix, got %v", err)
-		}
-	})
+	for _, tc := range []struct {
+		name  string
+		rules *amendment.Rules
+	}{
+		{"without retired amendment", preV2NFTRules()},
+		{"all supported", mainnetRules()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o.Destination = "rBroker"
+			if err := o.PreflightRules(tc.rules); err != nil {
+				t.Fatalf("distinct destination should be allowed, got %v", err)
+			}
+			o.Destination = o.Account
+			wantTER(t, o.PreflightRules(tc.rules), ter.TemMALFORMED)
+		})
+	}
 }

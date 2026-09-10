@@ -28,7 +28,6 @@ func TestNFTNegativeOffersWithoutRetiredFix(t *testing.T) {
 			})
 		}
 	}
-	require.NoError(t, tokenOfferCreatePreflight(rules, account, tx.NewXRPAmount(1), "rBroker", nil, 0, "rOwner", false))
 }
 
 func TestNFTAcceptNegativeStoredOfferWithoutRetiredFix(t *testing.T) {
