@@ -446,6 +446,31 @@ func TestEscrowReserve_CancelIOUDeletedHolding(t *testing.T) {
 	}
 }
 
+func TestEscrowReserve_CancelIOUMissingHoldingThirdParty(t *testing.T) {
+	for _, rules := range escrowReserveRuleCases() {
+		t.Run(rules.name, func(t *testing.T) {
+			fixture := newReserveIOUFixture(t, rules)
+			env := fixture.env
+			seq, escrowKey := createReserveIOUEscrow(t, fixture, fixture.destination, usd(10000, fixture.gateway))
+			deleteReserveIOUOwnerTrustLine(t, fixture)
+			snapshot := snapshotEscrowReserveState(t, env, escrowKey, fixture.owner, fixture.destination, fixture.gateway)
+			sourceSeq := env.Seq(fixture.thirdParty)
+			sourceBalance := env.Balance(fixture.thirdParty)
+			ownerBalance := env.Balance(fixture.owner)
+
+			result := env.Submit(escrow.EscrowCancel(fixture.thirdParty, fixture.owner, seq).Build())
+			jtx.RequireTxClaimed(t, result, "tecNO_LINE")
+			requireEscrowTxAccounting(t, env, result, fixture.thirdParty, sourceSeq)
+			requireEscrowFailureMetadata(t, result, fixture.thirdParty)
+			requireEscrowReserveStateUnchanged(t, env, snapshot, escrowKey, fixture.owner, fixture.destination, fixture.gateway)
+			require.Equal(t, sourceBalance-result.Fee, env.Balance(fixture.thirdParty))
+			require.Equal(t, ownerBalance, env.Balance(fixture.owner))
+			require.Equal(t, uint32(1), env.OwnerCount(fixture.owner))
+			require.False(t, env.TrustLineExists(fixture.owner, fixture.gateway, "USD"))
+		})
+	}
+}
+
 func TestEscrowReserve_CancelMPTExistingHolding(t *testing.T) {
 	// An ordinary MPT escrow keeps the escrowed amount in LockedAmount, so its
 	// holder entry cannot be deleted while this test's escrow is live. The
