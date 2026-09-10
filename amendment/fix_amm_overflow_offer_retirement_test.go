@@ -54,7 +54,18 @@ func TestFixAMMOverflowOfferRetirement(t *testing.T) {
 			t.Fatalf("retired %s must be excluded from default-yes voting", name)
 		}
 	}
-	if slices.Contains(NewTable().Desired(), wantID) {
+	table := NewTable()
+	if slices.Contains(table.Desired(), wantID) {
 		t.Fatalf("retired %s must not be proposed by a fresh amendment table", name)
+	}
+
+	table.UpVote(wantID)
+	if slices.Contains(table.Desired(), wantID) {
+		t.Fatalf("retired %s must not be proposed after an explicit upvote", name)
+	}
+
+	table.Veto(wantID)
+	if slices.Contains(table.Desired(), wantID) {
+		t.Fatalf("retired %s must not be proposed after a veto", name)
 	}
 }
