@@ -249,10 +249,6 @@ func TestFeatureMajorityFieldEndToEnd(t *testing.T) {
 	})
 }
 
-// TestFeatureRetiredEnabledFollowsLedger verifies that feature metadata reports
-// the Amendments SLE state for retired amendments. Rippled's AmendmentTable
-// keeps an obsolete amendment supported with an "Obsolete" vote, but enabled
-// remains false until the amendment is present in the ledger state.
 func TestFeatureRetiredEnabledFollowsLedger(t *testing.T) {
 	for _, featureCase := range []struct {
 		name    string
