@@ -127,7 +127,7 @@ func attachSponsorSignatureFor(
 		transaction,
 		sponsorSigner.PublicKeyHex(),
 		signingPrivateKey(sponsorSigner),
-		env.Ledger().Rules(),
+		env.Rules(),
 	)
 	require.NoError(t, err)
 	common.SponsorSignature = signature
@@ -155,7 +155,7 @@ func attachSponsorMultiSignature(
 			signer.Address,
 			signingPrivateKey(signer),
 			binarycodec.SponsorRole,
-			env.Ledger().Rules(),
+			env.Rules(),
 		)
 		require.NoError(t, err)
 		wrappers = append(wrappers, tx.SignerWrapper{Signer: tx.Signer{
@@ -1025,7 +1025,7 @@ func TestTopLevelMultisignWithSponsorFee(t *testing.T) {
 		transaction,
 		sponsor.PublicKeyHex(),
 		signingPrivateKey(sponsor),
-		env.Ledger().Rules(),
+		env.Rules(),
 	)
 	require.NoError(t, err)
 	transaction.SponsorSignature = sponsorSignature

@@ -40,7 +40,7 @@ func setupLoanPayFeeRoutingWithFixture(t *testing.T, f *loanSetAssetFixture, _ .
 		loanSet,
 		strings.ToUpper(f.owner.PublicKeyHex()),
 		"00"+strings.ToUpper(f.owner.PrivateKeyHex()),
-		f.env.Ledger().Rules(),
+		f.env.Rules(),
 	)
 	if err != nil {
 		t.Fatalf("sign LoanSet counterparty: %v", err)

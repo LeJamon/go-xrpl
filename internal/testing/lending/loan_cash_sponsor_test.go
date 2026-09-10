@@ -108,7 +108,7 @@ func testLoanAccountingWithSponsor(t *testing.T, cash, cleanup bool, mode string
 			common.Sponsor = feeSponsor.Address
 			common.SponsorFlags = &flags
 			if !prefunded {
-				signature, err := txsign.SignSponsorWithRules(transaction, feeSponsor.PublicKeyHex(), "00"+feeSponsor.PrivateKeyHex(), env.Ledger().Rules())
+				signature, err := txsign.SignSponsorWithRules(transaction, feeSponsor.PublicKeyHex(), "00"+feeSponsor.PrivateKeyHex(), env.Rules())
 				require.NoError(t, err)
 				common.SponsorSignature = signature
 			}
@@ -136,7 +136,7 @@ func testLoanAccountingWithSponsor(t *testing.T, cash, cleanup bool, mode string
 	originationFee, serviceFee := "20", "10"
 	loanSet.LoanOriginationFee, loanSet.LoanServiceFee = &originationFee, &serviceFee
 	prepare(loanSet, "20", true)
-	counterpartySignature, err := txsign.SignCounterpartyWithRules(loanSet, owner.PublicKeyHex(), "00"+owner.PrivateKeyHex(), env.Ledger().Rules())
+	counterpartySignature, err := txsign.SignCounterpartyWithRules(loanSet, owner.PublicKeyHex(), "00"+owner.PrivateKeyHex(), env.Rules())
 	require.NoError(t, err)
 	loanSet.CounterpartySignature = counterpartySignature
 	borrowerBefore, sponsorBefore, ownerBefore := env.Balance(borrower), env.Balance(feeSponsor), env.Balance(owner)

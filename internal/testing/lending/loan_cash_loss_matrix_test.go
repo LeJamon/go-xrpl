@@ -95,7 +95,7 @@ func newLossLifecycleFixture(t *testing.T, cash, cleanup bool) *lossLifecycleFix
 		loanSet,
 		strings.ToUpper(owner.PublicKeyHex()),
 		"00"+strings.ToUpper(owner.PrivateKeyHex()),
-		env.Ledger().Rules(),
+		env.Rules(),
 	)
 	if err != nil {
 		t.Fatalf("sign LoanSet: %v", err)

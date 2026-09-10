@@ -79,7 +79,7 @@ func TestLoanManageDefaultReconcilesIOUDust(t *testing.T) {
 		loanSet,
 		strings.ToUpper(lender.PublicKeyHex()),
 		"00"+strings.ToUpper(lender.PrivateKeyHex()),
-		env.Ledger().Rules(),
+		env.Rules(),
 	)
 	if err != nil {
 		t.Fatalf("sign LoanSet: %v", err)

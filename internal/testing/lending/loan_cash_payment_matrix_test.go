@@ -73,7 +73,7 @@ func createMatrixLoan(t *testing.T, f *loanSetAssetFixture, overpayment bool) (s
 		loanSet,
 		strings.ToUpper(f.owner.PublicKeyHex()),
 		"00"+strings.ToUpper(f.owner.PrivateKeyHex()),
-		f.env.Ledger().Rules(),
+		f.env.Rules(),
 	)
 	if err != nil {
 		t.Fatalf("sign LoanSet counterparty: %v", err)
@@ -326,7 +326,7 @@ func TestCashBasisVaultSetDataUpdatePreservesExistingCap(t *testing.T) {
 				loanSet,
 				strings.ToUpper(owner.PublicKeyHex()),
 				"00"+strings.ToUpper(owner.PrivateKeyHex()),
-				env.Ledger().Rules(),
+				env.Rules(),
 			)
 			if err != nil {
 				t.Fatalf("sign LoanSet: %v", err)
@@ -418,7 +418,7 @@ func TestLoanPayConservesXRPWhenFeePayeeIsBelowReserve(t *testing.T) {
 					loanSet,
 					strings.ToUpper(owner.PublicKeyHex()),
 					"00"+strings.ToUpper(owner.PrivateKeyHex()),
-					env.Ledger().Rules(),
+					env.Rules(),
 				)
 				if err != nil {
 					t.Fatalf("sign LoanSet: %v", err)

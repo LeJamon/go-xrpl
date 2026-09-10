@@ -69,7 +69,7 @@ func closedEndedLoanSet(t *testing.T, f closedEndedLoanFixture, interval uint32)
 		loan,
 		strings.ToUpper(f.owner.PublicKeyHex()),
 		"00"+strings.ToUpper(f.owner.PrivateKeyHex()),
-		f.env.Ledger().Rules(),
+		f.env.Rules(),
 	)
 	if err != nil {
 		t.Fatalf("sign counterparty: %v", err)

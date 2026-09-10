@@ -181,7 +181,7 @@ func submitLoanSet(t *testing.T, f *loanSetAssetFixture, submitter, counterparty
 		loanSet,
 		strings.ToUpper(counterparty.PublicKeyHex()),
 		"00"+strings.ToUpper(counterparty.PrivateKeyHex()),
-		f.env.Ledger().Rules(),
+		f.env.Rules(),
 	)
 	if err != nil {
 		t.Fatalf("sign LoanSet counterparty: %v", err)

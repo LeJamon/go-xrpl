@@ -42,7 +42,7 @@ func TestCashBasisLoanManageUsesPrincipalForLossAndDefault(t *testing.T) {
 		loanSet,
 		strings.ToUpper(owner.PublicKeyHex()),
 		"00"+strings.ToUpper(owner.PrivateKeyHex()),
-		env.Ledger().Rules(),
+		env.Rules(),
 	)
 	if err != nil {
 		t.Fatalf("sign counterparty: %v", err)

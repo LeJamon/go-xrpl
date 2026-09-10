@@ -146,7 +146,7 @@ func attachVaultSponsorSignature(
 		transaction,
 		sponsor.PublicKeyHex(),
 		signingPrivateKey(sponsor),
-		env.Ledger().Rules(),
+		env.Rules(),
 	)
 	require.NoError(t, err)
 	common.SponsorSignature = signature
