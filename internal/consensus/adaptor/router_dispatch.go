@@ -788,7 +788,8 @@ func transactionHasRoleSignature(transaction tx.Transaction) bool {
 		return false
 	}
 	common := transaction.GetCommon()
-	return common.CounterpartySignature != nil || common.SponsorSignature != nil
+	return common.FieldPresent("CounterpartySignature", common.CounterpartySignature != nil) ||
+		common.FieldPresent("SponsorSignature", common.SponsorSignature != nil)
 }
 
 func (r *Router) transactionRelaySkip(
