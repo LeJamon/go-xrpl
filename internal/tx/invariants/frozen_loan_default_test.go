@@ -61,6 +61,7 @@ func TestLoanDefaultFreezeExemptionScope(t *testing.T) {
 				false,
 				exemption,
 				addrIssuer,
+				true,
 			)
 			if test.allowed && violation != nil {
 				t.Fatalf("allowed default line rejected: %v", violation)
