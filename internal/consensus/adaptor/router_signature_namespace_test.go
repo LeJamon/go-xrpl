@@ -1,11 +1,14 @@
 package adaptor
 
 import (
+	"context"
 	"encoding/hex"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	ledgerservice "github.com/LeJamon/go-xrpl/internal/ledger/service"
@@ -15,7 +18,9 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending"
+	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	txsign "github.com/LeJamon/go-xrpl/internal/tx/sign"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,13 +36,22 @@ func newRouterRuleService(t *testing.T, cleanup bool) (*Adaptor, *ledgerservice.
 		genesisConfig.Amendments = append(genesisConfig.Amendments, amendment.FeatureFixCleanup3_4_0)
 	}
 	svc, err := ledgerservice.New(ledgerservice.Config{
-		Standalone:    true,
+		Standalone:    false,
 		Startup:       ledgerservice.StartupConfig{Mode: ledgerservice.StartupFresh},
 		GenesisConfig: genesisConfig,
 	})
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	svc.SetValidatedLedger(closed.Sequence(), closed.Hash())
+	require.Eventually(t, func() bool {
+		validated := svc.GetValidatedLedger()
+		return validated != nil && validated.Hash() == closed.Hash()
+	}, time.Second, time.Millisecond)
+	_, err = svc.AcceptConsensusResult(context.Background(), closed, nil, nil, time.Now(), true)
+	require.NoError(t, err)
 	require.Equal(t, cleanup, svc.TransactionRules().FixCleanup3_4_0Enabled())
 
 	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
@@ -45,7 +59,60 @@ func newRouterRuleService(t *testing.T, cleanup bool) (*Adaptor, *ledgerservice.
 	return New(Config{LedgerService: svc, Identity: identity}), svc
 }
 
-func routerRoleSignedAccountSet(t *testing.T, cleanup bool) []byte {
+func routerMixedRuleService(t *testing.T, validatedCleanup bool) (*Adaptor, *ledgerservice.Service) {
+	t.Helper()
+	// Start with the opposite snapshot so the successor promotion below leaves
+	// the requested validated/open rule pair.
+	adaptor, svc := newRouterRuleService(t, !validatedCleanup)
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+
+	// Switching to a successor whose Amendments SLE has the opposite cleanup
+	// bit leaves the published open view on the prior validated rules. Promoting
+	// that successor then gives the router two real, independently published
+	// rule snapshots.
+	candidate := routerSuccessorWithCleanupRules(t, parent, validatedCleanup)
+	require.NoError(t, svc.SwitchToPreferredLedger(candidate))
+	svc.SetValidatedLedger(candidate.Sequence(), candidate.Hash())
+	require.Eventually(t, func() bool {
+		validated := svc.GetValidatedLedger()
+		openRules := svc.TransactionRules()
+		return validated != nil && validated.Hash() == candidate.Hash() &&
+			validated.Rules().FixCleanup3_4_0Enabled() == validatedCleanup &&
+			openRules.FixCleanup3_4_0Enabled() != validatedCleanup
+	}, time.Second, time.Millisecond)
+
+	return adaptor, svc
+}
+
+func routerSuccessorWithCleanupRules(t *testing.T, parent *ledger.Ledger, cleanup bool) *ledger.Ledger {
+	t.Helper()
+	next, err := ledger.NewOpen(parent, time.Now())
+	require.NoError(t, err)
+
+	ids := parent.Rules().EnabledIDs()
+	filtered := make([][32]byte, 0, len(ids)+1)
+	for _, id := range ids {
+		if id == amendment.FeatureFixCleanup3_4_0 {
+			if cleanup {
+				filtered = append(filtered, id)
+			}
+			continue
+		}
+		filtered = append(filtered, id)
+	}
+	if cleanup && !parent.Rules().FixCleanup3_4_0Enabled() {
+		filtered = append(filtered, amendment.FeatureFixCleanup3_4_0)
+	}
+	amendments, err := pseudo.SerializeAmendmentsSLE(&pseudo.AmendmentsSLE{Amendments: filtered})
+	require.NoError(t, err)
+	require.NoError(t, next.Update(keylet.Amendments(), amendments))
+	require.NoError(t, next.Close(parent.CloseTime().Add(10*time.Second), 0))
+	require.Equal(t, cleanup, next.Rules().FixCleanup3_4_0Enabled())
+	return next
+}
+
+func routerRoleSignedLoanSet(t *testing.T, cleanup bool) []byte {
 	t.Helper()
 	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
@@ -83,7 +150,20 @@ func routerRoleSignedAccountSet(t *testing.T, cleanup bool) []byte {
 	return blob
 }
 
-func routerTransactionMessage(blob []byte, peer peermanagement.PeerID) *peermanagement.InboundMessage {
+func routerTransactionMessage(t *testing.T, blob []byte, peer peermanagement.PeerID) *peermanagement.InboundMessage {
+	t.Helper()
+	txMsg := &message.Transaction{
+		RawTransaction: blob,
+		Status:         message.TxStatusNew,
+	}
+	return &peermanagement.InboundMessage{
+		PeerID:  peer,
+		Type:    message.TypeTransaction,
+		Payload: encodePayload(t, txMsg),
+	}
+}
+
+func routerFetchedTransactionMessage(blob []byte, peer peermanagement.PeerID) *peermanagement.InboundMessage {
 	return &peermanagement.InboundMessage{
 		PeerID: peer,
 		Type:   message.TypeTransaction,
@@ -95,44 +175,83 @@ func routerTransactionMessage(blob []byte, peer peermanagement.PeerID) *peermana
 }
 
 func TestRouterSignatureSuppressionRetriesAfterCleanupTransition(t *testing.T) {
-	legacyAdaptor, _ := newRouterRuleService(t, false)
-	cleanupAdaptor, _ := newRouterRuleService(t, true)
-	router := newTestRouter(&mockEngine{}, legacyAdaptor, nil)
-	blob := routerRoleSignedAccountSet(t, true)
+	for _, tc := range []struct {
+		name                    string
+		initialValidatedCleanup bool
+		nextCleanup             bool
+		signatureCleanup        bool
+	}{
+		{
+			name:                    "legacy validated to cleanup validated",
+			initialValidatedCleanup: false,
+			nextCleanup:             true,
+			signatureCleanup:        true,
+		},
+		{
+			name:                    "cleanup validated to legacy validated",
+			initialValidatedCleanup: true,
+			nextCleanup:             false,
+			signatureCleanup:        false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adaptor, _ := routerMixedRuleService(t, tc.initialValidatedCleanup)
+			nextAdaptor, _ := newRouterRuleService(t, tc.nextCleanup)
+			router := newTestRouter(&mockEngine{}, adaptor, nil)
+			blob := routerRoleSignedLoanSet(t, tc.signatureCleanup)
 
-	legacy := router.handleTransaction(routerTransactionMessage(blob, 1))
-	require.Error(t, legacy.submitError)
-	require.ErrorIs(t, legacy.submitError, txengine.ErrInvalidSignature)
-	require.Equal(t, resource.FeeInvalidSignature(), legacy.charge)
-	require.Equal(t, "transaction-invalid-signature", legacy.chargeContext)
+			direct := router.handleTransaction(routerTransactionMessage(t, blob, 1))
+			require.Error(t, direct.submitError)
+			require.ErrorIs(t, direct.submitError, txengine.ErrInvalidSignature)
+			require.Equal(t, resource.FeeInvalidSignature(), direct.charge)
+			require.Equal(t, "transaction-invalid-signature", direct.chargeContext)
 
-	router.adaptor = cleanupAdaptor
-	cleanup := router.handleTransaction(routerTransactionMessage(blob, 2))
-	require.NoError(t, cleanup.submitError)
-	require.NotEqual(t, "transaction-known-bad", cleanup.chargeContext)
-	require.NotEqual(t, "transaction-known-bad-signature", cleanup.chargeContext)
-	require.Equal(t, openledger.ResultSuccess, cleanup.submitResult)
+			// The changed validated snapshot selects a new namespace immediately;
+			// the old scoped failure must not become a rules-independent BAD.
+			router.adaptor = nextAdaptor
+			retried := router.handleTransaction(routerTransactionMessage(t, blob, 2))
+			require.NoError(t, retried.submitError)
+			require.Equal(t, openledger.ResultSuccess, retried.submitResult)
+			require.True(t, retried.relayed)
+			require.Zero(t, retried.charge.Cost())
+		})
+	}
 }
 
 func TestRouterSignatureSuppressionRechecksLegacySignatureAfterCleanupTransition(t *testing.T) {
-	legacyAdaptor, _ := newRouterRuleService(t, false)
-	cleanupAdaptor, _ := newRouterRuleService(t, true)
-	router := newTestRouter(&mockEngine{}, legacyAdaptor, nil)
-	blob := routerRoleSignedAccountSet(t, false)
+	for _, tc := range []struct {
+		name             string
+		validatedCleanup bool
+	}{
+		{name: "validated legacy open cleanup", validatedCleanup: false},
+		{name: "validated cleanup open legacy", validatedCleanup: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adaptor, _ := routerMixedRuleService(t, tc.validatedCleanup)
+			router := newTestRouter(&mockEngine{}, adaptor, nil)
+			blob := routerRoleSignedLoanSet(t, false)
 
-	legacy := router.handleTransaction(routerTransactionMessage(blob, 1))
-	require.NoError(t, legacy.submitError)
-	require.Equal(t, openledger.ResultSuccess, legacy.submitResult)
+			direct := router.handleTransaction(routerTransactionMessage(t, blob, 1))
+			require.Error(t, direct.submitError)
+			require.ErrorIs(t, direct.submitError, txengine.ErrInvalidSignature)
+			require.Equal(t, resource.FeeInvalidSignature(), direct.charge)
+			require.Equal(t, "transaction-invalid-signature", direct.chargeContext)
 
-	router.adaptor = cleanupAdaptor
-	cleanup := router.handleTransaction(routerTransactionMessage(blob, 2))
-	require.Error(t, cleanup.submitError)
-	require.ErrorIs(t, cleanup.submitError, txengine.ErrInvalidSignature)
-	require.Equal(t, resource.FeeInvalidSignature(), cleanup.charge)
-	require.Equal(t, "transaction-invalid-signature", cleanup.chargeContext)
-
-	knownBad := router.handleTransaction(routerTransactionMessage(blob, 3))
-	require.NoError(t, knownBad.submitError)
-	require.Equal(t, resource.FeeUselessData(), knownBad.charge)
-	require.Equal(t, "transaction-known-bad", knownBad.chargeContext)
+			// A pre-decoded TMTransactions item is checked against the open
+			// snapshot only, so the same blob follows the open-role result.
+			fetchedRouter := newTestRouter(&mockEngine{}, adaptor, nil)
+			fetched := fetchedRouter.handleTransaction(routerFetchedTransactionMessage(blob, 2))
+			if tc.validatedCleanup {
+				require.NoError(t, fetched.submitError)
+				require.Equal(t, openledger.ResultSuccess, fetched.submitResult)
+				require.True(t, fetched.relayed)
+				require.Zero(t, fetched.charge.Cost())
+			} else {
+				require.Error(t, fetched.submitError)
+				require.ErrorIs(t, fetched.submitError, txengine.ErrInvalidSignature)
+				require.Equal(t, resource.FeeInvalidSignature(), fetched.charge)
+				require.Equal(t, "transaction-invalid-signature", fetched.chargeContext)
+			}
+		})
+	}
 }
