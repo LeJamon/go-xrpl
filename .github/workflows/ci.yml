@@ -248,7 +248,7 @@ jobs:
           grep --fixed-strings '3.4.0-rc1' <<<"$version"
           grep --fixed-strings '2ad4def35fd8580da027462517ba3375cc005c94' <<<"$version"
       - name: Run live rc1 peer interop
-        run: go test -tags docker -count=1 -timeout 10m -v -run 'Test(Handshake|Manifest|LedgerNodeDepth)_Interop_RippledDocker' ./internal/peermanagement/
+        run: go test -race -tags docker -count=1 -timeout 10m -v -run 'Test(Handshake|Manifest|LedgerNodeDepth)_Interop_RippledDocker' ./internal/peermanagement/
 
   consensus-smoke:
     name: Consensus smoke (rippled ${{ matrix.rippled-version }})
