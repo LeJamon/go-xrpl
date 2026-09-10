@@ -956,10 +956,6 @@ func (a *Adaptor) AddPendingTx(blob []byte, local bool) {
 	_, _ = a.SubmitPendingTx(blob, local)
 }
 
-// peerSignatureSnapshot captures both admission frontiers before a peer
-// transaction is checked. The validated snapshot is used for direct peer
-// admission when available; the open snapshot is always returned for the
-// serialized open-ledger recheck.
 func (a *Adaptor) peerSignatureSnapshot() (validatedRules, openRules *amendment.Rules, validatedAdmission bool) {
 	if a == nil || a.ledgerService == nil {
 		return nil, nil, false
@@ -974,10 +970,6 @@ func (a *Adaptor) peerSignatureSnapshot() (validatedRules, openRules *amendment.
 	return nil, openRules, false
 }
 
-// validatePeerSignature applies the validated-ledger admission check for a
-// transaction received directly from a peer. Transactions learned from a
-// transaction set use the open-ledger path, matching rippled's
-// processTransactionSet behavior.
 func (a *Adaptor) validatePeerSignature(ptx openledger.PendingTx, rules *amendment.Rules) error {
 	if a == nil || a.ledgerService == nil || a.ledgerService.IsStandalone() {
 		return nil

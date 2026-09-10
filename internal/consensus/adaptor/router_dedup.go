@@ -159,22 +159,7 @@ func (s *transactionSuppression) claim(hash [32]byte, peerID uint64) (shouldProc
 	return s.claimContextLocked(entry, now, 0, entry.bad)
 }
 
-// claimWithRules retains the single-rule helper used by focused cache tests.
-// Production ingress supplies both the validated and open-ledger snapshots via
-// claimWithSignatureContexts.
-func (s *transactionSuppression) claimWithRules(
-	hash [32]byte,
-	peerID uint64,
-	rules *amendment.Rules,
-) (shouldProcess, bad bool) {
-	return s.claimWithSignatureContexts(hash, peerID, true, rules, rules, true)
-}
-
-// claimWithSignatureContexts reserves the signature namespaces that the
-// ingress path will inspect. Role-bearing transactions keep one stable slot per
-// signature-prefix era; ordinary transactions retain the shared suppression
-// verdict. A validated-ledger failure therefore cannot poison the open-ledger
-// namespace during a cleanup transition.
+// Role signatures use separate suppression contexts across prefix changes.
 func (s *transactionSuppression) claimWithSignatureContexts(
 	hash [32]byte,
 	peerID uint64,
