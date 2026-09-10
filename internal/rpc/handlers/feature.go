@@ -144,11 +144,6 @@ func (m *FeatureMethod) getAmendmentState(services *types.ServiceGraph) (enabled
 	for _, hash := range sle.Amendments {
 		enabled[hash] = true
 	}
-	// Retired amendments are permanently enabled but never written to the
-	// Amendments object, so fold them in so `feature` reports them enabled.
-	for _, id := range amendment.PermanentlyEnabledIDs() {
-		enabled[id] = true
-	}
 	majorities = make(map[[32]byte]uint32, len(sle.Majorities))
 	for _, mj := range sle.Majorities {
 		majorities[mj.Amendment] = mj.CloseTime
@@ -172,9 +167,7 @@ func buildFeatureInfo(f *amendment.Feature, enabledSet map[[32]byte]bool, majori
 	if enabledSet != nil {
 		enabled = enabledSet[f.ID]
 	} else {
-		// Retired amendments are permanently enabled; otherwise fall back to
-		// the default-yes registry vote.
-		enabled = supported && (f.Vote == amendment.VoteDefaultYes || f.Retired)
+		enabled = supported && f.Vote == amendment.VoteDefaultYes
 	}
 
 	info := map[string]any{

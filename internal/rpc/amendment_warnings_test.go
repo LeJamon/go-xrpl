@@ -249,6 +249,65 @@ func TestFeatureMajorityFieldEndToEnd(t *testing.T) {
 	})
 }
 
+// TestFeatureRetiredEnabledFollowsLedger verifies that feature metadata reports
+// the Amendments SLE state for retired amendments. Rippled's AmendmentTable
+// keeps an obsolete amendment supported with an "Obsolete" vote, but enabled
+// remains false until the amendment is present in the ledger state.
+func TestFeatureRetiredEnabledFollowsLedger(t *testing.T) {
+	retired := amendment.FeatureByName("fixAMMOverflowOffer")
+	require.NotNil(t, retired)
+	require.Equal(t, amendment.SupportedYes, retired.Supported)
+	require.Equal(t, amendment.VoteObsolete, retired.Vote)
+
+	retiredHex := strings.ToUpper(hex.EncodeToString(retired.ID[:]))
+	method := &handlers.FeatureMethod{}
+
+	tests := []struct {
+		name       string
+		amendments [][32]byte
+		enabled    bool
+	}{
+		{name: "omitted from ledger", enabled: false},
+		{name: "present in ledger", amendments: [][32]byte{retired.ID}, enabled: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sleData, err := pseudo.SerializeAmendmentsSLE(&pseudo.AmendmentsSLE{
+				Amendments: tc.amendments,
+			})
+			require.NoError(t, err)
+
+			mock := &mockFeatureLedger{
+				mockLedgerService: newMockLedgerService(),
+				view:              &stubAmendmentsView{amendmentsData: sleData},
+			}
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleAdmin,
+				ApiVersion: types.ApiVersion1,
+				Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
+			}
+
+			params, err := json.Marshal(map[string]any{"feature": retired.Name})
+			require.NoError(t, err)
+			result, rpcErr := method.Handle(ctx, params)
+			require.Nil(t, rpcErr)
+
+			response := marshalToMap(t, result)
+			info, ok := response[retiredHex].(map[string]any)
+			require.True(t, ok, "response must contain retired amendment %s", retiredHex)
+			assert.Equal(t, tc.enabled, info["enabled"])
+			assert.Equal(t, true, info["supported"])
+			if tc.enabled {
+				assert.NotContains(t, info, "vetoed")
+			} else {
+				assert.Equal(t, "Obsolete", info["vetoed"])
+			}
+		})
+	}
+}
+
 func marshalToMap(t *testing.T, v any) map[string]any {
 	t.Helper()
 	b, err := json.Marshal(v)
