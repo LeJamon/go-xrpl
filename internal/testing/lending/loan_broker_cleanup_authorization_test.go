@@ -14,8 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestLoanBrokerDeleteAuthRequiredMPTUsesPreTransactionPseudoClassification
-// verifies the authorized cover transfer while deletion erases its pseudo-account.
 func TestLoanBrokerDeleteAuthRequiredMPTUsesPreTransactionPseudoClassification(t *testing.T) {
 	for _, cleanup := range []bool{false, true} {
 		name := "without fixCleanup3_4_0"
