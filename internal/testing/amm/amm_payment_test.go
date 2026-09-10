@@ -153,6 +153,8 @@ func TestInvalidAMMPayment(t *testing.T) {
 	// testAMM with pool {{XRP(100), USD(100)}}
 	t.Run("PoolConsumption", func(t *testing.T) {
 		env := amm.NewAMMTestEnv(t)
+		env.DisableFeature("fixAMMOverflowOffer")
+		env.Close()
 		env.FundWithIOUs(30000, 0)
 		env.Close()
 
@@ -162,6 +164,10 @@ func TestInvalidAMMPayment(t *testing.T) {
 			amm.IOUAmount(env.GW, "USD", 100)).Build()
 		jtx.RequireTxSuccess(t, env.Submit(createTx))
 		env.Close()
+		ammAcc := ammAccount(t, env, amm.XRP(), env.USD)
+		poolXRPBefore := env.AMMPoolXRP(ammAcc)
+		poolUSDBefore := env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD")
+		aliceBalanceBefore, aliceSequenceBefore := env.Balance(env.Alice), env.Seq(env.Alice)
 
 		// Can't consume whole pool: pay USD(100) with sendmax XRP(1B)
 		payTx := payment.PayIssued(env.Alice, env.Carol,
@@ -172,6 +178,20 @@ func TestInvalidAMMPayment(t *testing.T) {
 			Build()
 		result := env.Submit(payTx)
 		amm.ExpectTER(t, result, amm.TecPATH_PARTIAL)
+		if got, want := env.Balance(env.Alice), aliceBalanceBefore-env.BaseFee(); got != want {
+			t.Errorf("Alice balance after tecPATH_PARTIAL = %d, want fee-only %d", got, want)
+		}
+		if got, want := env.Seq(env.Alice), aliceSequenceBefore+1; got != want {
+			t.Errorf("Alice sequence after tecPATH_PARTIAL = %d, want %d", got, want)
+		}
+		if got := env.AMMPoolXRP(ammAcc); got != poolXRPBefore {
+			t.Errorf("AMM XRP changed after tecPATH_PARTIAL: got %d, want %d", got, poolXRPBefore)
+		}
+		poolUSDAfter := env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD")
+		if poolUSDAfter.Mantissa() != poolUSDBefore.Mantissa() || poolUSDAfter.Exponent() != poolUSDBefore.Exponent() {
+			t.Errorf("AMM USD changed after tecPATH_PARTIAL: got {%d, %d}, want {%d, %d}",
+				poolUSDAfter.Mantissa(), poolUSDAfter.Exponent(), poolUSDBefore.Mantissa(), poolUSDBefore.Exponent())
+		}
 
 		// Can't consume whole pool: pay XRP(100) with sendmax USD(1B)
 		payTx2 := payment.Pay(env.Alice, env.Carol,
@@ -180,8 +200,25 @@ func TestInvalidAMMPayment(t *testing.T) {
 			PathsXRP().
 			NoDirectRipple().
 			Build()
+		aliceBalanceBeforeSecond, aliceSequenceBeforeSecond := env.Balance(env.Alice), env.Seq(env.Alice)
+		poolXRPBeforeSecond := env.AMMPoolXRP(ammAcc)
+		poolUSDBeforeSecond := env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD")
 		result = env.Submit(payTx2)
 		amm.ExpectTER(t, result, amm.TecPATH_PARTIAL)
+		if got, want := env.Balance(env.Alice), aliceBalanceBeforeSecond-env.BaseFee(); got != want {
+			t.Errorf("Alice balance after second tecPATH_PARTIAL = %d, want fee-only %d", got, want)
+		}
+		if got, want := env.Seq(env.Alice), aliceSequenceBeforeSecond+1; got != want {
+			t.Errorf("Alice sequence after second tecPATH_PARTIAL = %d, want %d", got, want)
+		}
+		if got := env.AMMPoolXRP(ammAcc); got != poolXRPBeforeSecond {
+			t.Errorf("AMM XRP changed after second tecPATH_PARTIAL: got %d, want %d", got, poolXRPBeforeSecond)
+		}
+		poolUSDAfterSecond := env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD")
+		if poolUSDAfterSecond.Mantissa() != poolUSDBeforeSecond.Mantissa() || poolUSDAfterSecond.Exponent() != poolUSDBeforeSecond.Exponent() {
+			t.Errorf("AMM USD changed after second tecPATH_PARTIAL: got {%d, %d}, want {%d, %d}",
+				poolUSDAfterSecond.Mantissa(), poolUSDAfterSecond.Exponent(), poolUSDBeforeSecond.Mantissa(), poolUSDBeforeSecond.Exponent())
+		}
 	})
 
 	// Reference: lines 3725-3739 -- global freeze tests.
