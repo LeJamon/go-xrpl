@@ -86,6 +86,9 @@ func preprocessTransaction(
 		}
 		return nil, rpcErr
 	}
+	if options.mode == transactionPreprocessSubmitMultisigned && transaction.GetCommon().SigningPubKey != "" {
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid  SigningPubKey field.  Field must be empty when multi-signing.")
+	}
 	if options.rejectTxnSignature {
 		if _, present := txMap["TxnSignature"]; present {
 			return nil, rpcerrors.RpcErrorSigningMalformed()
