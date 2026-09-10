@@ -124,7 +124,7 @@ type FlagsMasker interface {
 // CredentialIDs shape check (credentials::checkFields), which rippled defers past
 // the signature. A non-nil error carries a tem* code via ter.Errorf.
 type SigValidatedPreflighter interface {
-	PreflightSigValidated() error
+	PreflightSigValidated(rules *amendment.Rules) error
 }
 
 // BatchInnerPreflightRunner owns the ordered validation of a Batch's inner

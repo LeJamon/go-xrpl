@@ -21,8 +21,8 @@ import (
 func TestCheckFieldsTreatsHexCaseAsTheSameCredential(t *testing.T) {
 	lower := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 	upper := "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789"
-	if result := CheckFields([]string{lower, upper}, true, "duplicate credential ID"); result == nil || !strings.Contains(result.Error(), "temMALFORMED") {
-		t.Fatalf("CheckFields() = %v, want temMALFORMED", result)
+	if result := CheckFieldsWithRules([]string{lower, upper}, true, "duplicate credential ID", nil); result == nil || !strings.Contains(result.Error(), "temMALFORMED") {
+		t.Fatalf("CheckFieldsWithRules() = %v, want temMALFORMED", result)
 	}
 }
 
@@ -123,6 +123,14 @@ func TestRemoveExpiredCredentials_DeletionFailure(t *testing.T) {
 		ctx := buildCtx(fix313Off)
 		result := VerifyDepositPreauth(ctx, []string{credIDHex}, subjectID, [20]byte{}, nil)
 		require.Equal(t, ter.TecEXPIRED, result)
+	})
+
+	t.Run("cleanup340 preserves cleanup313 deletion error gate", func(t *testing.T) {
+		rules := amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported).
+			Disable(amendment.FeatureFixCleanup3_1_3).
+			Enable(amendment.FeatureFixCleanup3_4_0).Build()
+		ctx := buildCtx(rules)
+		require.Equal(t, ter.TecEXPIRED, VerifyDepositPreauth(ctx, []string{credIDHex}, subjectID, [20]byte{}, nil))
 	})
 
 	t.Run("after fix: deletion failure aborts, tecINTERNAL", func(t *testing.T) {
@@ -286,5 +294,65 @@ func TestVerifyValidDomainDeletionFailureAmendmentArms(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, exists)
 		})
+	}
+}
+
+func TestCleanupZeroCredentialGuards(t *testing.T) {
+	for _, cleanup := range []bool{false, true} {
+		rules := amendment.NewRulesBuilder().Enable(amendment.FeatureCredentials).Build()
+		if cleanup {
+			rules = amendment.NewRulesBuilder().Enable(amendment.FeatureCredentials).Enable(amendment.FeatureFixCleanup3_4_0).Build()
+		}
+		for _, zero := range []string{"0", strings.Repeat("0", 64)} {
+			err := CheckFieldsWithRules([]string{zero}, true, "duplicate", rules)
+			if cleanup {
+				require.ErrorContains(t, err, "temMALFORMED")
+			} else {
+				require.NoError(t, err)
+			}
+			view := newMapView()
+			want := ter.TecBAD_CREDENTIALS
+			if cleanup {
+				want = ter.TecINTERNAL
+			}
+			require.Equal(t, want, ValidCredentials(view, [20]byte{1}, []string{zero}, rules))
+			ctx := &tx.ApplyContext{View: view, Config: tx.EngineConfig{Rules: rules}}
+			expired, result := RemoveExpiredCredentials(ctx, []string{zero})
+			require.False(t, expired)
+			if cleanup {
+				require.Equal(t, ter.TecINTERNAL, result)
+			} else {
+				require.Equal(t, ter.TesSUCCESS, result)
+			}
+			require.Empty(t, view.data)
+		}
+	}
+}
+
+type credentialRulesView struct {
+	*mapView
+	rules *amendment.Rules
+}
+
+func (v credentialRulesView) Rules() *amendment.Rules { return v.rules }
+
+func TestCleanupZeroCredentialPreauthGuard(t *testing.T) {
+	subject, issuer, destination := [20]byte{1}, [20]byte{2}, [20]byte{3}
+	credentialType := []byte("guard")
+	data, err := serializeCredentialEntry(&CredentialEntry{Subject: subject, Issuer: issuer, CredentialType: credentialType, Flags: LsfCredentialAccepted, HasSubjectNode: true})
+	require.NoError(t, err)
+	for _, cleanup := range []bool{false, true} {
+		builder := amendment.NewRulesBuilder()
+		if cleanup {
+			builder.Enable(amendment.FeatureFixCleanup3_4_0)
+		}
+		view := credentialRulesView{mapView: newMapView(), rules: builder.Build()}
+		require.NoError(t, view.Insert(keylet.CredentialByID([32]byte{}), data))
+		require.NoError(t, view.Insert(keylet.DepositPreauthCredentials(destination, []keylet.CredentialPair{{Issuer: issuer, CredentialType: credentialType}}), []byte{1}))
+		want := ter.TesSUCCESS
+		if cleanup {
+			want = ter.TefINTERNAL
+		}
+		require.Equal(t, want, authorizedDepositPreauth(view, []string{strings.Repeat("0", 64)}, destination))
 	}
 }

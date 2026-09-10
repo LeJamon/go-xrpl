@@ -50,6 +50,14 @@ func (p *PaymentChannelClaim) TxType() tx.Type {
 
 // Reference: rippled PayChan.cpp PayChanClaim::preflight()
 func (p *PaymentChannelClaim) Validate() error {
+	return p.validate(nil)
+}
+
+func (p *PaymentChannelClaim) PreflightWithRules(rules *amendment.Rules) error {
+	return p.validate(rules)
+}
+
+func (p *PaymentChannelClaim) validate(rules *amendment.Rules) error {
 	if err := p.BaseTx.Validate(); err != nil {
 		return err
 	}
@@ -63,6 +71,9 @@ func (p *PaymentChannelClaim) Validate() error {
 	channelBytes, err := hex.DecodeString(p.Channel)
 	if err != nil || len(channelBytes) != 32 {
 		return ter.Errorf(ter.TemMALFORMED, "Channel must be a valid 256-bit hash")
+	}
+	if rules != nil && rules.FixCleanup3_2_0Enabled() && isZeroChannel(p.Channel) {
+		return ter.Errorf(ter.TemMALFORMED, "Channel must not be zero")
 	}
 
 	// Validate Balance if present.
@@ -135,7 +146,7 @@ func (p *PaymentChannelClaim) Validate() error {
 	// after the Signature block. Use HasField to detect an empty array that binary
 	// parsing leaves as a nil Go slice. Reference: rippled credentials::checkFields.
 	present := p.CredentialIDs != nil || p.HasField("CredentialIDs")
-	if err := credential.CheckFields(p.CredentialIDs, present, "duplicates in credentials"); err != nil {
+	if err := credential.CheckFieldsWithRules(p.CredentialIDs, present, "duplicates in credentials", rules); err != nil {
 		return err
 	}
 
@@ -170,15 +181,6 @@ func (p *PaymentChannelClaim) CheckExtraFeatures(rules *amendment.Rules) error {
 	present := p.CredentialIDs != nil || p.HasField("CredentialIDs")
 	if present && !rules.Enabled(amendment.FeatureCredentials) {
 		return ter.Errorf(ter.TemDISABLED, "Credentials amendment not enabled")
-	}
-	return nil
-}
-
-// PreflightRules rejects a zero Channel once fixCleanup3_2_0 is enabled: a zero
-// hash cannot be a ledger key.
-func (p *PaymentChannelClaim) PreflightRules(rules *amendment.Rules) error {
-	if rules.FixCleanup3_2_0Enabled() && isZeroChannel(p.Channel) {
-		return ter.Errorf(ter.TemMALFORMED, "Channel must not be zero")
 	}
 	return nil
 }

@@ -493,6 +493,10 @@ func pseudoAccountAuthExempt(view state.LedgerView, account [20]byte, rules *ame
 	if rules == nil || (!rules.Enabled(amendment.FeatureSingleAssetVault) && !rules.Enabled(amendment.FeatureMPTokensV2)) {
 		return false, ter.TesSUCCESS
 	}
+	return pseudoAccount(view, account)
+}
+
+func pseudoAccount(view state.LedgerView, account [20]byte) (bool, ter.Result) {
 	accountRaw, err := view.Read(keylet.Account(account))
 	if err != nil {
 		return false, ter.TefINTERNAL
@@ -565,29 +569,32 @@ func requireAssetAuthWithTypeAt(view state.LedgerView, asset tx.Asset, account [
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	authFlag := state.LsfHighAuth
 	if state.CompareAccountIDs(account, issuer) > 0 {
-		authFlag = state.LsfLowAuth
+		if line.Flags&state.LsfLowAuth == 0 {
+			return requireAuthPseudoAccountException(view, account, ter.TecNO_AUTH)
+		}
+	} else if line.Flags&state.LsfHighAuth == 0 {
+		return requireAuthPseudoAccountException(view, account, ter.TecNO_AUTH)
 	}
-	if line.Flags&authFlag != 0 {
+	return ter.TesSUCCESS
+}
+
+// requireAuthPseudoAccountException preserves the implicit authorization that
+// pseudo-accounts receive for assets they hold. Cleanup 3.4.0 applies this to
+// IOU trust lines as well as MPT holdings.
+func requireAuthPseudoAccountException(view state.LedgerView, account [20]byte, fallback ter.Result) ter.Result {
+	rules := view.Rules()
+	if rules == nil || !rules.Enabled(amendment.FeatureFixCleanup3_4_0) {
+		return fallback
+	}
+	pseudo, result := pseudoAccount(view, account)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	if pseudo {
 		return ter.TesSUCCESS
 	}
-	if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0) {
-		raw, err := view.Read(keylet.Account(account))
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if raw != nil {
-			root, err := state.ParseAccountRoot(raw)
-			if err != nil {
-				return ter.TefINTERNAL
-			}
-			if root.IsPseudoAccount() {
-				return ter.TesSUCCESS
-			}
-		}
-	}
-	return ter.TecNO_AUTH
+	return fallback
 }
 
 func ValidDomain(view state.LedgerView, domainIDHex string, account [20]byte, parentCloseTime uint32) ter.Result {

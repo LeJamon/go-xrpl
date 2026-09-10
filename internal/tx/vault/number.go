@@ -2,6 +2,7 @@ package vault
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -93,11 +94,7 @@ func roundToVaultScale(amount, assetsTotal state.XRPLNumber, integral bool) stat
 
 func clampToAssetsTotalScale(total, delta state.XRPLNumber, integral bool) (actual state.XRPLNumber, result ter.Result) {
 	result = ter.TesSUCCESS
-	defer func() {
-		if recover() != nil {
-			result = ter.TecPATH_DRY
-		}
-	}()
+	defer recoverVaultNumberOverflow(&result)
 	actual = delta
 	if delta.Signum() < 0 {
 		actual = delta.Negate()
@@ -168,4 +165,14 @@ func sharesToAssetsWithdraw(
 		return effective
 	}
 	return effective.Mul(shares).Div(shareTotal).RoundToAsset(integral)
+}
+
+func recoverVaultNumberOverflow(result *ter.Result) {
+	if value := recover(); value != nil {
+		if message, ok := value.(string); ok && strings.HasPrefix(message, "XRPLNumber") && strings.Contains(message, "overflow") {
+			*result = ter.TecPATH_DRY
+			return
+		}
+		panic(value)
+	}
 }

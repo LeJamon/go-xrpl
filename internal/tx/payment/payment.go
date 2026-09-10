@@ -270,7 +270,7 @@ func (p *Payment) validate(rules *amendment.Rules) error {
 	}
 
 	present := p.CredentialIDs != nil || p.HasField("CredentialIDs")
-	if err := credential.CheckFields(p.CredentialIDs, present, "Duplicate credential ID"); err != nil {
+	if err := credential.CheckFieldsWithRules(p.CredentialIDs, present, "Duplicate credential ID", rules); err != nil {
 		return err
 	}
 
@@ -382,7 +382,7 @@ func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 		// exist, have the sender as its Subject, and be accepted. Expiry is not
 		// checked here (deferred to Apply).
 		// Reference: rippled Payment.cpp:362-365 / credentials::valid()
-		if result := credential.ValidCredentials(view, senderID, p.CredentialIDs); result != ter.TesSUCCESS {
+		if result := credential.ValidCredentials(view, senderID, p.CredentialIDs, config.RequireRules()); result != ter.TesSUCCESS {
 			return result
 		}
 

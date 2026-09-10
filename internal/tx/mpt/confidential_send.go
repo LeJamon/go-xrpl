@@ -41,6 +41,14 @@ func (c *ConfidentialMPTSend) RequiredAmendments() [][32]byte {
 func (c *ConfidentialMPTSend) Flatten() (map[string]any, error) { return tx.ReflectFlatten(c) }
 
 func (c *ConfidentialMPTSend) Validate() error {
+	return c.validate(nil)
+}
+
+func (c *ConfidentialMPTSend) PreflightWithRules(rules *amendment.Rules) error {
+	return c.validate(rules)
+}
+
+func (c *ConfidentialMPTSend) validate(rules *amendment.Rules) error {
 	if err := c.BaseTx.Validate(); err != nil {
 		return err
 	}
@@ -98,7 +106,7 @@ func (c *ConfidentialMPTSend) Validate() error {
 		}
 	}
 	credentialsPresent := c.CredentialIDs != nil || c.HasField("CredentialIDs")
-	return credential.CheckFields(c.CredentialIDs, credentialsPresent, "Duplicate credential ID")
+	return credential.CheckFieldsWithRules(c.CredentialIDs, credentialsPresent, "Duplicate credential ID", rules)
 }
 
 func (c *ConfidentialMPTSend) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
@@ -176,7 +184,7 @@ func (c *ConfidentialMPTSend) Preclaim(view tx.LedgerView, config tx.EngineConfi
 	if result := mptutil.RequireAuthWithTypeAt(view, id, destinationID, mptutil.LegacyAuth, config.ParentCloseTime); result != ter.TesSUCCESS {
 		return result
 	}
-	if result := credential.ValidCredentials(view, accountID, c.CredentialIDs); result != ter.TesSUCCESS {
+	if result := credential.ValidCredentials(view, accountID, c.CredentialIDs, config.RequireRules()); result != ter.TesSUCCESS {
 		return result
 	}
 	credentialsPresent := c.CredentialIDs != nil || c.HasField("CredentialIDs")

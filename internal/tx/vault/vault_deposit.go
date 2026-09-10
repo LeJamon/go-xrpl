@@ -253,7 +253,9 @@ func vaultDepositExchange(assetsTotal, shareTotal, assets state.XRPLNumber, scal
 
 // Apply mints shares to the depositor in exchange for the deposited asset.
 // Reference: rippled VaultDeposit::doApply.
-func (v *VaultDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
+func (v *VaultDeposit) Apply(ctx *tx.ApplyContext) (result ter.Result) {
+	defer recoverVaultNumberOverflow(&result)
+
 	vaultID, ok := v.vaultIDBytes()
 	if !ok {
 		return ter.TefINTERNAL
@@ -318,19 +320,31 @@ func (v *VaultDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 	if result != ter.TesSUCCESS {
 		return result
 	}
-
-	if rules.Enabled(amendment.FeatureFixCleanup3_4_0) {
-		assetsDepositedN, result = clampToAssetsTotalScale(assetsTotalN, assetsDepositedN, asset.IsNative() || asset.IsMPT())
+	if rules.FixCleanup3_4_0Enabled() {
+		assetsDepositedN, result = clampToAssetsTotalScale(
+			assetsTotalN,
+			assetsDepositedN,
+			asset.IsNative() || asset.IsMPT(),
+		)
 		if result != ter.TesSUCCESS {
 			return result
 		}
+		if assetsDepositedN.Cmp(assetsN) > 0 {
+			return ter.TefINTERNAL
+		}
 		if !asset.IsNative() && !asset.IsMPT() {
-			balance, err := actualAssetHolding(ctx.View, ctx.AccountID, asset, rules)
-			if err != nil {
+			issuerID, ok := vaultAssetIssuer(vd)
+			if !ok {
 				return ter.TefINTERNAL
 			}
-			if debitIsNonZeroDust(balance, assetsDepositedN, false) {
-				return ter.TecPRECISION_LOSS
+			if ctx.AccountID != issuerID {
+				holding, herr := actualAssetHolding(ctx.View, ctx.AccountID, asset, rules)
+				if herr != nil {
+					return ter.TefINTERNAL
+				}
+				if debitIsNonZeroDust(holding, assetsDepositedN, false) {
+					return ter.TecPRECISION_LOSS
+				}
 			}
 		}
 	}

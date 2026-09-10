@@ -308,6 +308,11 @@ func (l *LoanBrokerDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	if pseudo.Balance != 0 || pseudo.OwnerCount != 0 {
 		return ter.TecHAS_OBLIGATIONS
 	}
+	if exists, err := ctx.View.Exists(keylet.OwnerDir(b.Account)); err != nil {
+		return ter.TefINTERNAL
+	} else if exists {
+		return ter.TecHAS_OBLIGATIONS
+	}
 
 	// dirRemove from owner dir and vault-pseudo dir, then erase the broker.
 	if r, e := state.DirRemove(ctx.View, keylet.OwnerDir(accountID), b.OwnerNode, brokerKey.Key, false); e != nil || !r.Success {
@@ -471,7 +476,7 @@ func (l *LoanBrokerCoverWithdraw) Preclaim(view tx.LedgerView, config tx.EngineC
 	if res := mptutil.CanTransferAsset(view, asset, b.Account, dstID, fix320); res != ter.TesSUCCESS {
 		return res
 	}
-	if res := credential.ValidCredentials(view, accountID, l.CredentialIDs); res != ter.TesSUCCESS {
+	if res := credential.ValidCredentials(view, accountID, l.CredentialIDs, config.RequireRules()); res != ter.TesSUCCESS {
 		return res
 	}
 	if accountID != dstID {

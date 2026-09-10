@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -287,6 +288,44 @@ func TestVaultClawbackExplicitAmountRoundsSharesToNearest(t *testing.T) {
 	want := state.NewXRPLNumberScaled(2, 0, vaultNumberScale(f.ctx.Rules()), state.RoundToNearest)
 	if recovered.Cmp(want) != 0 {
 		t.Fatalf("assets recovered = %s, want asset-rounded 2", recovered.String())
+	}
+}
+
+func TestVaultClawbackExplicitAmountTruncatesSharesWithCleanup340(t *testing.T) {
+	f := newVaultClawbackFixture(t, 2)
+	vd, err := readVault(f.view, f.vaultKey)
+	if err != nil {
+		t.Fatalf("read vault: %v", err)
+	}
+	vd.AssetsTotal = "3"
+	vd.AssetsAvailable = "3"
+	issuance := clawbackTestIssuance(t, f.view, f.shareMPTID)
+	issuance.OutstandingAmount = 2
+	amount := state.NewMPTAmountWithIssuanceID(
+		1,
+		clawbackTestAddress(t, f.assetIssuerID),
+		hex.EncodeToString(f.assetMPTID[:]),
+	)
+	f.txn.Amount = &amount
+	f.ctx.Config.Rules = amendment.NewRules([][32]byte{
+		amendment.FeatureSingleAssetVault,
+		amendment.FeatureFixCleanup3_1_3,
+		amendment.FeatureFixCleanup3_2_0,
+		amendment.FeatureFixCleanup3_4_0,
+	})
+
+	_, _, recovered, shares, result := f.txn.clawbackAmounts(
+		f.ctx,
+		vd,
+		issuance,
+		f.assetIssuerID,
+		f.holderID,
+	)
+	if result != ter.TecPRECISION_LOSS {
+		t.Fatalf("clawbackAmounts() = %v, want tecPRECISION_LOSS", result)
+	}
+	if shares != 0 || !recovered.IsZero() {
+		t.Fatalf("truncated clawback = (%d, %s), want (0, 0)", shares, recovered)
 	}
 }
 

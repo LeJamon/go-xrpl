@@ -119,6 +119,30 @@ func TestPseudoAccountImplicitAuthorizationRequiresAmendment(t *testing.T) {
 	require.Equal(t, ter.TesSUCCESS, RequireAuth(view, id, pseudo, false))
 }
 
+func TestFixCleanup340ImplicitlyAuthorizesPseudoAccountIOU(t *testing.T) {
+	view := newMPTTestView()
+	var issuer, pseudo [20]byte
+	issuer[19] = 1
+	pseudo[19] = 2
+	issuerAddress := state.EncodeAccountIDSafe(issuer)
+	pseudoAddress := state.EncodeAccountIDSafe(pseudo)
+	putTestAccount(t, view, issuer, state.LsfRequireAuth, [32]byte{})
+	putTestAccount(t, view, pseudo, 0, [32]byte{1})
+	line, err := state.SerializeRippleState(&state.RippleState{
+		Balance:   state.NewIssuedAmountFromValue(0, state.MinExponent, "USD", issuerAddress),
+		LowLimit:  state.NewIssuedAmountFromValue(100, state.MinExponent, "USD", issuerAddress),
+		HighLimit: state.NewIssuedAmountFromValue(100, state.MinExponent, "USD", pseudoAddress),
+	})
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Line(pseudo, issuer, "USD"), line))
+	asset := tx.Asset{Currency: "USD", Issuer: issuerAddress}
+
+	view.rules = amendment.NewRules(nil)
+	require.Equal(t, ter.TecNO_AUTH, RequireAssetAuthAt(view, asset, pseudo, WeakAuth, 0))
+	view.rules = amendment.NewRules([][32]byte{amendment.FeatureFixCleanup3_4_0})
+	require.Equal(t, ter.TesSUCCESS, RequireAssetAuthAt(view, asset, pseudo, WeakAuth, 0))
+}
+
 func TestFixCleanup330AuthorizesPseudoAccountBeforeHoldingCheck(t *testing.T) {
 	view := newMPTTestView()
 	var issuer, pseudo [20]byte

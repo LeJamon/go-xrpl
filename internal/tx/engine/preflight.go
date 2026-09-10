@@ -71,7 +71,7 @@ func (e *Engine) preflight(tx txcore.Transaction) (result ter.Result) {
 	// bad-signature temINVALID, not the reverse. Reached only once verifySignatures
 	// succeeds, exactly as rippled reaches it only once preflight2 passes.
 	if svp, ok := tx.(txcore.SigValidatedPreflighter); ok {
-		if err := svp.PreflightSigValidated(); err != nil {
+		if err := svp.PreflightSigValidated(rules); err != nil {
 			return parseValidationError(err)
 		}
 	}
@@ -334,7 +334,7 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 		return result
 	}
 	if svp, ok := innerTx.(txcore.SigValidatedPreflighter); ok {
-		if err := svp.PreflightSigValidated(); err != nil {
+		if err := svp.PreflightSigValidated(rules); err != nil {
 			return parseValidationError(err)
 		}
 	}

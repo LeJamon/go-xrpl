@@ -249,16 +249,20 @@ func parseCredentialID(value string) ([32]byte, bool) {
 // checked here — it is deferred to RemoveExpiredCredentials.
 // Reference: rippled CredentialHelpers.cpp credentials::valid()
 func ValidateCredentialIDs(ctx *tx.ApplyContext, credentialIDs []string) ter.Result {
-	return ValidCredentials(ctx.View, ctx.AccountID, credentialIDs)
+	return ValidCredentials(ctx.View, ctx.AccountID, credentialIDs, ctx.Rules())
 }
 
 // ValidCredentials is the view-based form of ValidateCredentialIDs, usable from
 // Preclaim where only a LedgerView (not an ApplyContext) is available.
-func ValidCredentials(view tx.LedgerView, subject [20]byte, credentialIDs []string) ter.Result {
+func ValidCredentials(view tx.LedgerView, subject [20]byte, credentialIDs []string, rules *amendment.Rules) ter.Result {
 	for _, idHex := range credentialIDs {
 		credID, ok := parseCredentialID(idHex)
 		if !ok {
 			return ter.TecBAD_CREDENTIALS
+		}
+
+		if rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0) && credID == ([32]byte{}) {
+			return ter.TecINTERNAL
 		}
 
 		credData, err := view.Read(keylet.CredentialByID(credID))
@@ -413,6 +417,10 @@ func removeExpired(ctx *tx.ApplyContext, credentialIDs []string, stopOnFailure b
 			continue
 		}
 
+		if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && credID == ([32]byte{}) {
+			return anyExpired, ter.TecINTERNAL
+		}
+
 		credKey := keylet.CredentialByID(credID)
 		credData, err := ctx.View.Read(credKey)
 		if err != nil || credData == nil {
@@ -430,9 +438,6 @@ func removeExpired(ctx *tx.ApplyContext, credentialIDs []string, stopOnFailure b
 				if stopOnFailure {
 					return anyExpired, r
 				}
-				if failTER == ter.TesSUCCESS {
-					failTER = r
-				}
 			}
 			anyExpired = true
 		}
@@ -448,12 +453,7 @@ func removeExpired(ctx *tx.ApplyContext, credentialIDs []string, stopOnFailure b
 // TER); before the amendment the failure is swallowed (returns tesSUCCESS),
 // matching rippled removeExpired.
 func RemoveExpiredCredentials(ctx *tx.ApplyContext, credentialIDs []string) (bool, ter.Result) {
-	fix313 := ctx.Rules().Enabled(amendment.FeatureFixCleanup3_1_3)
-	anyExpired, failTER := removeExpired(ctx, credentialIDs, fix313)
-	if fix313 {
-		return anyExpired, failTER
-	}
-	return anyExpired, ter.TesSUCCESS
+	return removeExpired(ctx, credentialIDs, ctx.Rules().Enabled(amendment.FeatureFixCleanup3_1_3))
 }
 
 // VerifyDepositPreauth enforces deposit authorization for a transaction
@@ -518,6 +518,10 @@ func authorizedDepositPreauth(view tx.LedgerView, credentialIDs []string, dst [2
 	for _, idHex := range credentialIDs {
 		credID, ok := parseCredentialID(idHex)
 		if !ok {
+			return ter.TefINTERNAL
+		}
+
+		if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0) && credID == ([32]byte{}) {
 			return ter.TefINTERNAL
 		}
 

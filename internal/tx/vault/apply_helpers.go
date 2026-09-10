@@ -169,6 +169,10 @@ func addEmptyMPTHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset
 // sendMPTAsset moves amount of the MPT asset from `from` to `to`, crediting or
 // debiting OutstandingAmount when either party is the issuer.
 func sendMPTAsset(ctx *tx.ApplyContext, mptID [24]byte, from, to [20]byte, amount uint64) ter.Result {
+	if amount == 0 || from == to {
+		return ter.TesSUCCESS
+	}
+
 	issuanceKey := keylet.MPTIssuance(mptID)
 	issData, err := ctx.View.Read(issuanceKey)
 	if err != nil || len(issData) == 0 {
@@ -302,10 +306,15 @@ func addEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset, p
 	if tx.IsGlobalFrozen(ctx.View, asset.Issuer) {
 		return 0, ter.TecFROZEN
 	}
-	if fix340 {
-		if result := canAddHoldingIssue(ctx.View, asset); result != ter.TesSUCCESS {
-			return 0, result
+	issuer, err := tx.ReadAccountRoot(ctx.View, issuerID)
+	if err != nil || issuer == nil {
+		return 0, ter.TefINTERNAL
+	}
+	if issuer.Flags&state.LsfDefaultRipple == 0 {
+		if fix340 {
+			return 0, ter.TerNO_RIPPLE
 		}
+		return 0, ter.TecINTERNAL
 	}
 
 	lineKey := keylet.Line(issuerID, accountID, asset.Currency)
@@ -501,8 +510,31 @@ func canWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDes
 	if from == to {
 		return ter.TesSUCCESS
 	}
-	if res := credential.CheckDepositPreauth(view, credentialIDs, credentialIDs != nil, from, to, toAcct); res != ter.TesSUCCESS {
-		return res
+	if credentialIDs != nil && toAcct.Flags&state.LsfDepositAuth != 0 {
+		authorized, err := view.Exists(keylet.DepositPreauth(to, from))
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if !authorized {
+			for _, value := range credentialIDs {
+				raw, err := hex.DecodeString(value)
+				if err != nil || len(raw) != 32 {
+					return ter.TefINTERNAL
+				}
+				var id [32]byte
+				copy(id[:], raw)
+				exists, err := view.Exists(keylet.CredentialByID(id))
+				if err != nil {
+					return ter.TefINTERNAL
+				}
+				if !exists {
+					return ter.TecINTERNAL
+				}
+			}
+		}
+	}
+	if result := credential.CheckDepositPreauth(view, credentialIDs, credentialIDs != nil, from, to, toAcct); result != ter.TesSUCCESS {
+		return result
 	}
 	return withdrawToDestExceedsLimit(view, from, to, amount, numberContext)
 }

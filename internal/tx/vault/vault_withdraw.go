@@ -52,6 +52,14 @@ func (v *VaultWithdraw) GetFlagsMask(rules *amendment.Rules) uint32 {
 }
 
 func (v *VaultWithdraw) Validate() error {
+	return v.validate(nil)
+}
+
+func (v *VaultWithdraw) PreflightWithRules(rules *amendment.Rules) error {
+	return v.validate(rules)
+}
+
+func (v *VaultWithdraw) validate(rules *amendment.Rules) error {
 	if err := v.BaseTx.Validate(); err != nil {
 		return err
 	}
@@ -79,11 +87,15 @@ func (v *VaultWithdraw) Validate() error {
 		}
 	}
 
-	return credential.CheckFields(v.CredentialIDs, v.CredentialIDs != nil || v.HasField("CredentialIDs"), "duplicate credentials")
+	return credential.CheckFieldsWithRules(v.CredentialIDs, v.CredentialIDs != nil || v.HasField("CredentialIDs"), "duplicate credentials", rules)
 }
 
 func (v *VaultWithdraw) Flatten() (map[string]any, error) {
-	return tx.ReflectFlatten(v)
+	m, err := tx.ReflectFlatten(v)
+	if err == nil && v.CredentialIDs != nil {
+		m["CredentialIDs"] = v.CredentialIDs
+	}
+	return m, err
 }
 
 func (v *VaultWithdraw) CheckExtraFeatures(rules *amendment.Rules) error {
@@ -92,10 +104,6 @@ func (v *VaultWithdraw) CheckExtraFeatures(rules *amendment.Rules) error {
 		return ter.Errorf(ter.TemDISABLED, "withdrawal credentials are disabled")
 	}
 	return nil
-}
-
-func (v *VaultWithdraw) PreflightRules(rules *amendment.Rules) error {
-	return credential.CheckFieldsWithRules(v.CredentialIDs, v.CredentialIDs != nil || v.HasField("CredentialIDs"), "duplicate credentials", rules)
 }
 
 func (v *VaultWithdraw) RequiredAmendments() [][32]byte {
@@ -177,8 +185,7 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 	if vd.WithdrawalPolicy != VaultStrategyFirstComeFirstServe {
 		return ter.TefINTERNAL
 	}
-
-	if res := credential.ValidCredentials(view, accountID, v.CredentialIDs); res != ter.TesSUCCESS {
+	if res := credential.ValidCredentials(view, accountID, v.CredentialIDs, config.RequireRules()); res != ter.TesSUCCESS {
 		return res
 	}
 	fix340 := config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0)
@@ -425,7 +432,9 @@ func addWithdrawDestinationHolding(ctx *tx.ApplyContext, asset tx.Asset) ter.Res
 
 // Apply redeems the caller's shares for the underlying asset and delivers it to
 // the destination. Reference: rippled VaultWithdraw::doApply.
-func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
+func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
+	defer recoverVaultNumberOverflow(&result)
+
 	vaultID, ok := v.vaultIDBytes()
 	if !ok {
 		return ter.TefINTERNAL
@@ -451,7 +460,9 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 	if result != ter.TesSUCCESS {
 		return result
 	}
-
+	fix340 := rules.FixCleanup3_4_0Enabled()
+	integral := asset.IsNative() || asset.IsMPT()
+	isFinal := shares == issuance.OutstandingAmount
 	// The caller must hold enough shares.
 	token, terr := readMPToken(ctx.View, keylet.MPTokenByID(vd.ShareMPTID, ctx.AccountID))
 	if terr != nil {
@@ -461,16 +472,25 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecINSUFFICIENT_FUNDS
 	}
 
-	// The vault must have enough available assets.
-	if availN.Cmp(assetsWithdrawnN) < 0 {
-		return ter.TecINSUFFICIENT_FUNDS
-	}
-
-	if rules.Enabled(amendment.FeatureFixCleanup3_4_0) && shares != issuance.OutstandingAmount && assetsWithdrawnN.Signum() > 0 {
-		assetsWithdrawnN, result = clampToAssetsTotalScale(assetsTotalN, assetsWithdrawnN.Negate(), asset.IsNative() || asset.IsMPT())
+	if fix340 && !isFinal && assetsWithdrawnN.Signum() > 0 {
+		// Check availability before clamping so an overdraw reports insufficient
+		// funds even when the requested payout is below the posterior ULP.
+		if availN.Cmp(assetsWithdrawnN) < 0 {
+			return ter.TecINSUFFICIENT_FUNDS
+		}
+		assetsWithdrawnN, result = clampToAssetsTotalScale(
+			assetsTotalN,
+			assetsWithdrawnN.Negate(),
+			integral,
+		)
 		if result != ter.TesSUCCESS {
 			return result
 		}
+	}
+
+	// The vault must have enough available assets.
+	if availN.Cmp(assetsWithdrawnN) < 0 {
+		return ter.TecINSUFFICIENT_FUNDS
 	}
 
 	if fix320 && shares == issuance.OutstandingAmount {
@@ -512,9 +532,11 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 	if derr != nil {
 		return ter.TefINTERNAL
 	}
-	if dstID == ctx.AccountID && (assetsWithdrawnN.Signum() > 0 || !rules.Enabled(amendment.FeatureFixCleanup3_4_0)) {
-		if res := addWithdrawDestinationHolding(ctx, asset); res != ter.TesSUCCESS {
-			return res
+	if dstID == ctx.AccountID {
+		if !rules.Enabled(amendment.FeatureFixCleanup3_4_0) || !assetsWithdrawnN.IsZero() {
+			if res := addWithdrawDestinationHolding(ctx, asset); res != ter.TesSUCCESS {
+				return res
+			}
 		}
 	} else {
 		dstAccount, err := tx.ReadAccountRoot(ctx.View, dstID)

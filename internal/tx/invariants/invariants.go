@@ -85,6 +85,19 @@ type ReadView interface {
 	LedgerSeq() uint32
 }
 
+type parentCloseTimeView struct {
+	ReadView
+	parentCloseTime uint32
+}
+
+func (v parentCloseTimeView) ParentCloseTime() uint32 { return v.parentCloseTime }
+
+// WithParentCloseTime supplies the parent ledger close time to invariant
+// helpers that evaluate time-dependent ledger credentials.
+func WithParentCloseTime(view ReadView, parentCloseTime uint32) ReadView {
+	return parentCloseTimeView{ReadView: view, parentCloseTime: parentCloseTime}
+}
+
 // TxType is the transaction type code used by invariant checks. It aliases
 // protocol.TxType so the type table is single-sourced and never drifts; the
 // String() method (covering every type, including the XChain attestation types
@@ -198,9 +211,6 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 		func() *InvariantViolation {
 			return checkTransfersNotFrozen(tx, entries, view, rules, numberContext...)
 		},
-		func() *InvariantViolation {
-			return checkLoanDefaultMPTTransfer(tx, result, entries, view, rules)
-		},
 		func() *InvariantViolation { return checkNoBadOffers(entries) },
 		func() *InvariantViolation { return checkNoZeroEscrow(entries) },
 		func() *InvariantViolation {
@@ -214,6 +224,9 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 		},
 		func() *InvariantViolation {
 			return checkValidMPTIssuance(tx, result, entries, view, rules)
+		},
+		func() *InvariantViolation {
+			return checkValidMPTTransfer(tx, result, entries, view, rules)
 		},
 		func() *InvariantViolation {
 			return checkValidConfidentialMPToken(tx, result, entries, view, rules)
