@@ -6,7 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	mpttest "github.com/LeJamon/go-xrpl/internal/testing/mpt"
@@ -23,7 +26,16 @@ const (
 )
 
 func TestLoanBrokerDeleteIOUMetadataTransitions(t *testing.T) {
-	env := newLendingEnv(t)
+	cfg := genesis.DefaultConfig()
+	cfg.Fees.ReserveBase = drops.DropsPerXRP * 200
+	cfg.Fees.ReserveIncrement = drops.DropsPerXRP * 50
+	// Preserve the genesis hash used by these historical metadata vectors.
+	cfg.Amendments = append(cfg.Amendments, amendment.FeatureFixAMMOverflowOffer)
+	env := jtx.NewTestEnvWithConfig(t, cfg)
+	env.EnableFeature("SingleAssetVault")
+	env.EnableFeature("MPTokensV1")
+	env.EnableFeature("LendingProtocol")
+	env.Close()
 	issuer := jtx.NewAccount("issuer")
 	owner := jtx.NewAccount("owner")
 	env.Fund(issuer, owner)

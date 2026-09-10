@@ -516,6 +516,22 @@ func MPTSide(mptID [24]byte) BookSide {
 // BookDir, so existing books keep their keys.
 func BookBase(pays, gets BookSide, domainID *[32]byte) Keylet {
 	data := make([][]byte, 0, 5)
+	// Mixed Issue/MPT books need a discriminator because the variable-length
+	// asset fields would otherwise admit cross-kind preimage collisions. The
+	// tags are part of rippled's getBookBase preimage; Issue/Issue retains the
+	// historical layout for compatibility with existing books.
+	var mixedTag [1]byte
+	switch {
+	case !pays.IsMPT && gets.IsMPT:
+		mixedTag[0] = 0x01 // Issue -> MPT
+	case pays.IsMPT && !gets.IsMPT:
+		mixedTag[0] = 0x02 // MPT -> Issue
+	case pays.IsMPT && gets.IsMPT:
+		mixedTag[0] = 0x03 // MPT -> MPT
+	}
+	if mixedTag[0] != 0 {
+		data = append(data, mixedTag[:])
+	}
 	if pays.IsMPT {
 		data = append(data, pays.MPTID[:])
 	} else {

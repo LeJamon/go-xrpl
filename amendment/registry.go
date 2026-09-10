@@ -72,7 +72,7 @@ var (
 	FeatureFixXChainRewardRounding       = registerFix("fixXChainRewardRounding", SupportedYes, VoteDefaultNo)
 	FeatureFixEmptyDID                   = registerFix("fixEmptyDID", SupportedYes, VoteDefaultNo)
 	FeaturePriceOracle                   = registerFeature("PriceOracle", SupportedYes, VoteDefaultNo)
-	FeatureFixAMMOverflowOffer           = registerFix("fixAMMOverflowOffer", SupportedYes, VoteDefaultYes)
+	FeatureFixAMMOverflowOffer           = registerRetired("fixAMMOverflowOffer")
 	FeatureFixFillOrKill                 = registerFix("fixFillOrKill", SupportedYes, VoteDefaultNo)
 	FeatureDID                           = registerFeature("DID", SupportedYes, VoteDefaultNo)
 	FeatureXChainBridge                  = registerFeature("XChainBridge", SupportedYes, VoteDefaultNo)

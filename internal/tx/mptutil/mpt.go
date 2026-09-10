@@ -698,6 +698,56 @@ func CanTransferAsset(view state.LedgerView, asset tx.Asset, from, to [20]byte, 
 	return canTransferAssetWithWaive(view, asset, from, to, waiveMPTCanTransfer, 0)
 }
 
+// CanTransferLPToken checks the two assets backing an AMM-issued LP token.
+// The LP token issuer is an AMM account only when its AccountRoot carries an
+// AMMID; ordinary IOU issuers are intentionally a no-op. Every MPT pool asset
+// must permit the same holder-to-holder transfer, including any reference
+// holding's recursive transfer capability.
+func CanTransferLPToken(view state.LedgerView, from, to, lpTokenIssuer [20]byte) ter.Result {
+	issuerRaw, err := view.Read(keylet.Account(lpTokenIssuer))
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	if issuerRaw == nil {
+		return ter.TesSUCCESS
+	}
+	issuer, err := state.ParseAccountRoot(issuerRaw)
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	if !issuer.HasAMMID() {
+		return ter.TesSUCCESS
+	}
+
+	ammRaw, err := view.Read(keylet.AMMByID(issuer.AMMID))
+	if err != nil || ammRaw == nil {
+		return ter.TecINTERNAL
+	}
+	amm := new(entry.AMM)
+	if err := amm.Decode(ammRaw); err != nil {
+		return ter.TecINTERNAL
+	}
+	checkAsset := func(value any) ter.Result {
+		fields, ok := value.(map[string]any)
+		if !ok {
+			return ter.TesSUCCESS
+		}
+		idValue, ok := fields["mpt_issuance_id"].(string)
+		if !ok || idValue == "" {
+			return ter.TesSUCCESS
+		}
+		id, err := DecodeID(idValue)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		return CanTransfer(view, id, from, to)
+	}
+	if result := checkAsset(amm.Asset); result != ter.TesSUCCESS {
+		return result
+	}
+	return checkAsset(amm.Asset2)
+}
+
 func canTransferAsset(view state.LedgerView, asset tx.Asset, from, to [20]byte, depth uint8) ter.Result {
 	return canTransferAssetWithWaive(view, asset, from, to, false, depth)
 }

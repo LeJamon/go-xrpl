@@ -270,18 +270,9 @@ func TestRouter_Issue1668FrozenPivotCollectsAndReplaysMovingHead(t *testing.T) {
 	pivotHeader := pivot.Header()
 	require.True(t, r.completeFrozenPivotAcquisition(&pivotHeader, true))
 	require.True(t, r.standardReplay.initialCandidate)
-	// A drain can yield before filling the window when its time budget expires.
-drain:
-	for batch := range standardReplayPipelineWindow {
-		select {
-		case <-r.standardReplayDrainWake:
-			r.drainStandardReplayPipeline()
-		default:
-			require.Positive(t, batch, "replay apply batch did not reschedule through the router loop")
-			break drain
-		}
-	}
-	require.False(t, r.standardReplay.applying)
+	require.True(t, r.standardReplay.applying)
+	// A busy runner may exhaust the time budget before the full window is stored.
+	drainStandardReplayTestPipeline(t, r)
 	for i := range standardReplayPipelineWindow {
 		stored, lookupErr := svc.GetLedgerByHash(links[i].hash)
 		require.NoError(t, lookupErr)
@@ -290,6 +281,7 @@ drain:
 
 	completeStandardReplayTestLink(t, r, links[8])
 	completeStandardReplayTestLink(t, r, links[9])
+	drainStandardReplayTestPipeline(t, r)
 	require.Equal(t, links[9].seq, r.standardReplay.anchorSeq)
 
 	movedHead := links[maxForwardDeltaGap+8]

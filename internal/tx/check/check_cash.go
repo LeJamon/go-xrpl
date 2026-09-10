@@ -2,7 +2,6 @@ package check
 
 import (
 	"encoding/hex"
-	"math"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -516,50 +515,32 @@ func (c *CheckCash) applyCashMPTAmount(ctx *tx.ApplyContext, check *state.CheckD
 	if srcID != issuerID && dstID != issuerID {
 		rate = mptutil.TransferRate(ctx.View, mptID)
 	}
+	maxDebit := min(sendMax, srcFunds)
+	maximum := state.NewMPTAmountWithIssuanceID(maxDebit, "", requestedAmount.MPTIssuanceID())
+	maxDelivery, _ := maximum.MulRatio(mptutil.RateOne, rate, false).MPTRaw()
+	if requested > maxDelivery {
+		return ter.TecPATH_PARTIAL
+	}
 	delivered := requested
 	if isDeliverMin {
-		maxDebit := min(sendMax, srcFunds)
-		var ok bool
-		delivered, ok = mptutil.DivideRate(maxDebit, rate)
-		if !ok {
-			return ter.TefEXCEPTION
-		}
-		if delivered > math.MaxInt64/2 {
-			delivered = math.MaxInt64 / 2
-		}
-		gross, ok := mptutil.MultiplyRate(delivered, rate)
-		if !ok {
-			return ter.TefEXCEPTION
-		}
-		for delivered > 0 && gross > maxDebit {
-			delivered--
-			gross, ok = mptutil.MultiplyRate(delivered, rate)
-			if !ok {
-				return ter.TefEXCEPTION
-			}
-		}
-		if delivered < requested {
-			return ter.TecPATH_PARTIAL
-		}
+		delivered = maxDelivery
+	}
+	deliveredAmount := state.NewMPTAmountWithIssuanceID(delivered, "", requestedAmount.MPTIssuanceID())
+	debit, _ := deliveredAmount.MulRatio(rate, mptutil.RateOne, true).MPTRaw()
+	if srcID == issuerID || dstID == issuerID {
+		result = mptutil.Credit(ctx.View, mptID, srcID, dstID, delivered, false)
 	} else {
-		gross, ok := mptutil.MultiplyRate(delivered, rate)
-		if !ok {
-			return ter.TefEXCEPTION
-		}
-		if gross > sendMax {
-			return ter.TecPATH_PARTIAL
+		result = mptutil.Credit(ctx.View, mptID, issuerID, dstID, delivered, true)
+		if result == ter.TesSUCCESS {
+			result = mptutil.Credit(ctx.View, mptID, srcID, issuerID, debit, false)
 		}
 	}
-
-	_, result = mptutil.Send(ctx.View, mptID, srcID, dstID, delivered, false, false)
 	if result == ter.TecINSUFFICIENT_FUNDS || result == ter.TecPATH_DRY {
 		return ter.TecPATH_PARTIAL
 	}
 	if result != ter.TesSUCCESS {
 		return result
 	}
-
-	deliveredAmount := state.NewMPTAmountWithIssuanceID(delivered, "", requestedAmount.MPTIssuanceID())
 	ctx.Metadata.DeliveredAmount = &deliveredAmount
 
 	if result := removeCheckFromDirectories(ctx, check, checkKey.Key); result != ter.TesSUCCESS {

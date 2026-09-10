@@ -25,10 +25,8 @@ type AMMLiquidity struct {
 	initialPoolIn  tx.Amount
 	initialPoolOut tx.Amount
 
-	// Amendment flags
-	fixAMMv1_1          bool
-	fixAMMv1_2          bool
-	fixAMMOverflowOffer bool
+	fixAMMv1_1 bool
+	fixAMMv1_2 bool
 }
 
 // Fibonacci sequence for multi-path offer scaling.
@@ -46,17 +44,16 @@ func NewAMMLiquidity(
 	tradingFee uint16,
 	issueIn, issueOut Issue,
 	ammContext *AMMContext,
-	fixAMMv1_1, fixAMMv1_2, fixAMMOverflowOffer bool,
+	fixAMMv1_1, fixAMMv1_2, _ bool,
 ) *AMMLiquidity {
 	liq := &AMMLiquidity{
-		ammContext:          ammContext,
-		ammAccountID:        ammAccountID,
-		tradingFee:          tradingFee,
-		issueIn:             issueIn,
-		issueOut:            issueOut,
-		fixAMMv1_1:          fixAMMv1_1,
-		fixAMMv1_2:          fixAMMv1_2,
-		fixAMMOverflowOffer: fixAMMOverflowOffer,
+		ammContext:   ammContext,
+		ammAccountID: ammAccountID,
+		tradingFee:   tradingFee,
+		issueIn:      issueIn,
+		issueOut:     issueOut,
+		fixAMMv1_1:   fixAMMv1_1,
+		fixAMMv1_2:   fixAMMv1_2,
 	}
 	// Fetch initial balances
 	liq.initialPoolIn, liq.initialPoolOut = liq.fetchBalances(view)
@@ -119,17 +116,11 @@ func (l *AMMLiquidity) GetOffer(view *PaymentSandbox, clobQuality *Quality) (res
 
 // generateOffer creates the actual AMM offer based on path configuration.
 //
-// Overflow handling: In rippled, both generateFibSeqOffer() and
-// changeSpotPriceQuality() can throw std::overflow_error, which is caught
-// in a single catch block. When fixAMMOverflowOffer is NOT enabled, the
-// catch falls back to maxOffer() unconditionally. When it IS enabled, it
-// returns nullopt (no offer). Additionally, if maxOffer itself overflows,
-// a second catch (std::exception) catches it and returns nullopt.
+// Overflow from offer generation produces no AMM offer. maxOffer is bounded to
+// 99% of the pool output so it cannot consume the entire pool.
 //
-// In Go, these functions return ok=false instead of panicking. We replicate
-// the catch-block semantics by falling back to maxOffer when the computation
-// fails and fixAMMOverflowOffer is not enabled. maxOffer calls are wrapped
-// with panic recovery to match rippled's second catch block.
+// In Go, these functions return ok=false instead of panicking. The catch
+// semantics are represented by returning nil on failed generation.
 //
 // Reference: rippled AMMLiquidity.cpp getOffer() try/catch block lines 189-236
 func (l *AMMLiquidity) generateOffer(view *PaymentSandbox, poolIn, poolOut tx.Amount, clobQuality *Quality) *AMMOffer {
@@ -138,12 +129,7 @@ func (l *AMMLiquidity) generateOffer(view *PaymentSandbox, poolIn, poolOut tx.Am
 		offerIn, offerOut, ok := l.generateFibSeqOffer(poolIn, poolOut)
 		if !ok {
 			// Fibonacci output exceeds pool balance (equivalent to rippled's
-			// overflow_error from generateFibSeqOffer). Fall back to maxOffer
-			// when fixAMMOverflowOffer is not enabled.
-			// Reference: rippled AMMLiquidity.cpp catch (std::overflow_error)
-			if !l.fixAMMOverflowOffer {
-				return l.safeMaxOffer(poolIn, poolOut)
-			}
+			// overflow_error from generateFibSeqOffer).
 			return nil
 		}
 		if clobQuality != nil {
@@ -176,17 +162,7 @@ func (l *AMMLiquidity) generateOffer(view *PaymentSandbox, poolIn, poolOut tx.Am
 		return nil
 	}
 
-	// ChangeSpotPriceQuality failed. In rippled this can be either:
-	// 1. std::overflow_error → caught, falls back to maxOffer (pre-fix) or nullopt (post-fix)
-	// 2. Normal nullopt return → falls through to fixAMMv1_2 check
-	//
-	// Without fixAMMOverflowOffer: fall back to maxOffer unconditionally,
-	// matching rippled's overflow_error catch block behavior.
-	// Reference: rippled AMMLiquidity.cpp catch (std::overflow_error) lines 224-231
-	if !l.fixAMMOverflowOffer {
-		return l.safeMaxOffer(poolIn, poolOut)
-	}
-
+	// A failed quality calculation falls through to the fixAMMv1_2 max-offer check.
 	// fixAMMv1_2 fallback: try maxOffer if quality beats CLOB
 	if l.fixAMMv1_2 {
 		maxOff := l.safeMaxOffer(poolIn, poolOut)
@@ -269,15 +245,6 @@ func (l *AMMLiquidity) generateFibSeqOffer(poolIn, poolOut tx.Amount) (tx.Amount
 // Reference: rippled AMMLiquidity.cpp maxOffer()
 func (l *AMMLiquidity) maxOffer(poolIn, poolOut tx.Amount) *AMMOffer {
 	m := l.ammContext.numberMath()
-	if !l.fixAMMOverflowOffer {
-		// Pre-fix: takerPays = max, takerGets = swapIn(max)
-		// Quality uses pool balances (spot price), NOT the max amounts.
-		// Reference: rippled AMMLiquidity.cpp maxOffer() line 128-133
-		maxIn := maxAmountLike(poolIn)
-		maxOut := swapAssetIn(m, poolIn, poolOut, maxIn, l.tradingFee, l.fixAMMv1_1)
-		return NewAMMOfferWithBalanceQuality(l, maxIn, maxOut, poolIn, poolOut)
-	}
-
 	// Post-fix: takerGets = 99% * poolOut, takerPays = swapOut(takerGets)
 	// Quality uses pool balances (spot price).
 	// Reference: rippled AMMLiquidity.cpp maxOffer() line 140-144

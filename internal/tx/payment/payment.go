@@ -394,15 +394,14 @@ func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 			if err != nil {
 				return ter.TemMALFORMED
 			}
-			closeTime := config.ParentCloseTime
-			if !permissioneddomain.AccountInDomain(view, senderID, domainID, closeTime) {
+			if !permissioneddomain.DEXDomainPreclaim(view, senderID, domainID, config) {
 				return ter.TecNO_PERMISSION
 			}
 			destID, err := state.DecodeAccountID(p.Destination)
 			if err != nil {
 				return ter.TefINTERNAL
 			}
-			if !permissioneddomain.AccountInDomain(view, destID, domainID, closeTime) {
+			if !permissioneddomain.DEXDomainPreclaim(view, destID, domainID, config) {
 				return ter.TecNO_PERMISSION
 			}
 		}
@@ -481,6 +480,19 @@ func (p *Payment) SetNoDirectRipple() {
 }
 
 func (p *Payment) Apply(ctx *tx.ApplyContext) ter.Result {
+	if p.DomainID != nil {
+		domainID, err := permissioneddomain.ParseDomainID(*p.DomainID)
+		if err != nil {
+			return ter.TemMALFORMED
+		}
+		destination, err := state.DecodeAccountID(p.Destination)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if result := permissioneddomain.DEXDomainApply(ctx, domainID, ctx.AccountID, destination); result != ter.TesSUCCESS {
+			return result
+		}
+	}
 	isDstMPT := p.Amount.IsMPT()
 	mpTokensV2 := ctx.Rules().MPTokensV2Enabled()
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/lending"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -28,7 +29,7 @@ func TestLoanDefaultFreezeExemptionIsScoped(t *testing.T) {
 			fixture := newLoanFreezeFixture(t, "USD", tc.lineFlags, tc.issuerFlags)
 			rules := amendment.NewRules([][32]byte{amendment.FeatureDeepFreeze, amendment.FeatureFixCleanup3_4_0})
 			defaultTx := vvTx{txType: protocol.TxTypeLoanManage, flat: map[string]any{
-				"Flags":  tfLoanDefault,
+				"Flags":  lending.TfLoanDefault,
 				"LoanID": fixture.loanID,
 			}}
 			if violation := checkTransfersNotFrozen(defaultTx, fixture.entries, fixture.view, rules); violation != nil {
@@ -50,7 +51,7 @@ func TestLoanDefaultFreezeExemptionIsScoped(t *testing.T) {
 		fixture := newLoanFreezeFixtureWithLine(t, "EUR", "USD", state.LsfHighFreeze, 0)
 		rules := amendment.NewRules([][32]byte{amendment.FeatureDeepFreeze, amendment.FeatureFixCleanup3_4_0})
 		defaultTx := vvTx{txType: protocol.TxTypeLoanManage, flat: map[string]any{
-			"Flags":  tfLoanDefault,
+			"Flags":  lending.TfLoanDefault,
 			"LoanID": fixture.loanID,
 		}}
 		if violation := checkTransfersNotFrozen(defaultTx, fixture.entries, fixture.view, rules); violation == nil {
@@ -109,6 +110,15 @@ func newLoanFreezeFixtureWithLine(t *testing.T, assetCurrency, lineCurrency stri
 		"ShareMPTID": strings.Repeat("0", 48), "WithdrawalPolicy": uint32(1),
 		"PreviousTxnID": strings.Repeat("0", 64), "PreviousTxnLgrSeq": uint32(0),
 	})
+	for name, err := range map[string]error{
+		"loan":   new(entry.Loan).Decode(loan),
+		"broker": new(entry.LoanBroker).Decode(brokerEntry),
+		"vault":  new(entry.Vault).Decode(vaultEntry),
+	} {
+		if err != nil {
+			t.Fatalf("invalid %s fixture: %v", name, err)
+		}
+	}
 	issuerRoot := mustSerializeAccount(t, &state.AccountRoot{Account: issuerAddr, Flags: issuerFlags, Balance: 1_000_000})
 	view := mapView{data: map[[32]byte][]byte{
 		keylet.LoanByID(loanID).Key:         loan,
@@ -169,7 +179,7 @@ func TestLoanDefaultDoesNotExemptUnrelatedAccount(t *testing.T) {
 	fixture.entries = append(fixture.entries, loanFreezeLineEntry(t, other, issuer, "USD", "100", "90", state.LsfHighFreeze))
 	fixture.view.data[keylet.Account(other).Key] = mustSerializeAccount(t, &state.AccountRoot{Account: state.EncodeAccountIDSafe(other), Balance: 1000000})
 	rules := amendment.NewRules([][32]byte{amendment.FeatureDeepFreeze, amendment.FeatureFixCleanup3_4_0})
-	transaction := vvTx{txType: protocol.TxTypeLoanManage, flat: map[string]any{"Flags": tfLoanDefault, "LoanID": fixture.loanID}}
+	transaction := vvTx{txType: protocol.TxTypeLoanManage, flat: map[string]any{"Flags": lending.TfLoanDefault, "LoanID": fixture.loanID}}
 	if violation := checkTransfersNotFrozen(transaction, fixture.entries, fixture.view, rules); violation == nil {
 		t.Fatal("unrelated frozen holder bypassed freeze invariant")
 	}

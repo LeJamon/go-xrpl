@@ -199,7 +199,7 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 						Message: "issuer-submitted AMMWithdraw created an MPToken",
 					}
 				}
-				if mptokensCreated > 1 || mptokensDeleted > 2 {
+				if mptokensCreated > 2 || mptokensDeleted > 2 {
 					return &InvariantViolation{
 						Name:    "ValidMPTIssuance",
 						Message: "MPT authorize succeeded but created/deleted bad number of mptokens",

@@ -3,6 +3,7 @@ package invariants
 import (
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -320,4 +321,130 @@ func loanDefaultMPTFreezeExempt(exemption *loanDefaultFreezeExemption, id [24]by
 		}
 	}
 	return false
+}
+
+type mptBalanceChange struct {
+	outstanding [2]uint64
+	mptAmount   *big.Int
+}
+
+// checkValidMPTBalanceChanges enforces conservation between each issuance's
+// OutstandingAmount and the MPTAmount+LockedAmount values of its holdings.
+// Reference: rippled ValidMPTBalanceChanges in MPTInvariant.cpp.
+func checkValidMPTBalanceChanges(
+	tx Transaction,
+	result Result,
+	entries []InvariantEntry,
+	_ ReadView,
+	rules *amendment.Rules,
+) *InvariantViolation {
+	fix340 := rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0)
+	if result != TesSUCCESS && !fix340 {
+		return nil
+	}
+	if isConfidentialMPTTransaction(tx.TxType()) {
+		return nil
+	}
+
+	changes := make(map[[24]byte]*mptBalanceChange)
+	get := func(id [24]byte) *mptBalanceChange {
+		change := changes[id]
+		if change == nil {
+			change = &mptBalanceChange{mptAmount: new(big.Int)}
+			changes[id] = change
+		}
+		return change
+	}
+	var overflow bool
+	update := func(data []byte, before bool) error {
+		if data == nil {
+			return nil
+		}
+		typ, err := state.DecodeType(data)
+		if err != nil {
+			return err
+		}
+		switch typ {
+		case entry.TypeMPTokenIssuance:
+			issuance, err := state.ParseMPTokenIssuance(data)
+			if err != nil {
+				return err
+			}
+			if issuance.OutstandingAmount > protocol.MaxMPTokenAmount {
+				overflow = true
+				return nil
+			}
+			if !before && issuance.MaximumAmount != nil &&
+				issuance.OutstandingAmount > *issuance.MaximumAmount {
+				overflow = true
+			}
+			id := keylet.MakeMPTID(issuance.Sequence, issuance.Issuer)
+			order := 1
+			if before {
+				order = 0
+			}
+			get(id).outstanding[order] = issuance.OutstandingAmount
+		case entry.TypeMPToken:
+			token, err := state.ParseMPToken(data)
+			if err != nil {
+				return err
+			}
+			locked := uint64(0)
+			if token.LockedAmount != nil {
+				locked = *token.LockedAmount
+			}
+			if token.MPTAmount > protocol.MaxMPTokenAmount ||
+				locked > protocol.MaxMPTokenAmount ||
+				locked > protocol.MaxMPTokenAmount-token.MPTAmount {
+				overflow = true
+				return nil
+			}
+			total := new(big.Int).SetUint64(token.MPTAmount + locked)
+			if before {
+				get(token.MPTokenIssuanceID).mptAmount.Sub(get(token.MPTokenIssuanceID).mptAmount, total)
+			} else {
+				get(token.MPTokenIssuanceID).mptAmount.Add(get(token.MPTokenIssuanceID).mptAmount, total)
+			}
+		}
+		return nil
+	}
+
+	for _, change := range entries {
+		if err := update(change.Before, true); err != nil {
+			return mptBalanceViolation(rules, fmt.Sprintf("could not parse MPT entry: %v", err))
+		}
+		after := change.After
+		if change.IsDelete {
+			after = change.DeleteFinal
+		}
+		if err := update(after, false); err != nil {
+			return mptBalanceViolation(rules, fmt.Sprintf("could not parse MPT entry: %v", err))
+		}
+	}
+
+	if overflow {
+		return mptBalanceViolation(rules, "OutstandingAmount overflow")
+	}
+	for _, change := range changes {
+		before := new(big.Int).SetUint64(change.outstanding[0])
+		expected := new(big.Int).Add(before, change.mptAmount)
+		after := new(big.Int).SetUint64(change.outstanding[1])
+		if expected.Cmp(after) != 0 {
+			return mptBalanceViolation(rules, fmt.Sprintf(
+				"invalid OutstandingAmount balance %d %d %s",
+				change.outstanding[0], change.outstanding[1], change.mptAmount.String()))
+		}
+		if result != TesSUCCESS && change.mptAmount.Sign() != 0 {
+			return mptBalanceViolation(rules, "OutstandingAmount balance changed on failure")
+		}
+	}
+	return nil
+}
+
+func mptBalanceViolation(rules *amendment.Rules, message string) *InvariantViolation {
+	if rules == nil || (!rules.Enabled(amendment.FeatureMPTokensV2) &&
+		!rules.Enabled(amendment.FeatureFixCleanup3_4_0)) {
+		return nil
+	}
+	return &InvariantViolation{Name: "ValidMPTBalanceChanges", Message: message}
 }

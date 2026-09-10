@@ -483,11 +483,10 @@ func TestSupportedFeatures(t *testing.T) {
 func TestDefaultYesFeatures(t *testing.T) {
 	defaultYes := DefaultYesFeatures()
 
-	// After the 3.2.0 retirement wave, only a handful of active fixes still
-	// default to a yes vote (fixCleanup3_1_3, fixAMMOverflowOffer,
-	// fixRemoveNFTokenAutoTrustLine).
-	if len(defaultYes) < 3 {
-		t.Errorf("Expected at least 3 default yes features, got %d", len(defaultYes))
+	// Retired fixes are omitted from the default-yes list. The current active
+	// defaults include fixCleanup3_1_3 and fixRemoveNFTokenAutoTrustLine.
+	if len(defaultYes) < 2 {
+		t.Errorf("Expected at least 2 default yes features, got %d", len(defaultYes))
 	}
 
 	// All returned features should be default yes and not retired
