@@ -456,7 +456,8 @@ func TestCleanupLoanImpairmentLateCharges(t *testing.T) {
 					loan.PaymentTotal = &total
 				})
 				id := hex.EncodeToString(lk.Key[:])
-				now := due + 31536
+				// Legacy unimpairment must remain aligned with the payment interval under LP1.1.
+				now := due + 31560
 				env.CloseToParentCloseTime(now)
 				m := lending.NewLoanManage(owner.Address, id)
 				m.SetFlags(lending.TfLoanImpair)
