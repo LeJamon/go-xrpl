@@ -143,7 +143,7 @@ func validateHandshakeRequest(req *http.Request) error {
 	if !headerToken(req.Header, HeaderConnection, "upgrade") {
 		return fmt.Errorf("%w: %s header must include upgrade", ErrInvalidHandshake, HeaderConnection)
 	}
-	upgrade := strings.TrimSpace(req.Header.Get(HeaderUpgrade))
+	upgrade := strings.Trim(req.Header.Get(HeaderUpgrade), " \t")
 	if upgrade == "" {
 		return fmt.Errorf("%w: missing %s", ErrInvalidHandshake, HeaderUpgrade)
 	}
@@ -582,8 +582,7 @@ var protocolTokenRe = regexp.MustCompile(`^XRPL/([2-9]|[1-9][0-9]+)\.(0|[1-9][0-
 // XRPL versions in a comma-separated header value.
 func parseProtocolVersions(s string) []protocolVersion {
 	var out []protocolVersion
-	for tok := range strings.SplitSeq(s, ",") {
-		tok = strings.TrimSpace(tok)
+	for _, tok := range splitProtocolHeader(s) {
 		m := protocolTokenRe.FindStringSubmatch(tok)
 		if m == nil {
 			continue
@@ -610,6 +609,51 @@ func parseProtocolVersions(s string) []protocolVersion {
 		}
 	}
 	return out[:n]
+}
+
+func splitProtocolHeader(value string) []string {
+	var tokens []string
+	var token strings.Builder
+	emit := func(trim bool) {
+		text := token.String()
+		if trim {
+			text = strings.TrimRight(text, " \t\r\n\v\f")
+		}
+		if text != "" {
+			tokens = append(tokens, text)
+		}
+		token.Reset()
+	}
+	for i := 0; i < len(value); {
+		switch value[i] {
+		case '"':
+			i++
+			for i < len(value) && value[i] != '"' {
+				if value[i] == '\\' {
+					i++
+					if i == len(value) {
+						break
+					}
+				}
+				token.WriteByte(value[i])
+				i++
+			}
+			if i < len(value) {
+				i++
+			}
+			emit(false)
+		case ',':
+			emit(true)
+			i++
+		case ' ', '\t':
+			i++
+		default:
+			token.WriteByte(value[i])
+			i++
+		}
+	}
+	emit(true)
+	return tokens
 }
 
 func isProtocolSupported(v protocolVersion) bool {
