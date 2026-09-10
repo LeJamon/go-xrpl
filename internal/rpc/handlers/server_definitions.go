@@ -86,12 +86,17 @@ func buildServerDefinitions() {
 		appendField(name)
 	}
 
+	// These legacy enum values are absent from the RPC result-token table.
+	transactionResults := defs.TransactionResults()
+	delete(transactionResults, "tecHOOK_REJECTED")
+	delete(transactionResults, "tecNO_DELEGATE_PERMISSION")
+
 	serverDefsBase = map[string]any{
 		"TYPES":               defs.Types(),
 		"FIELDS":              fields,
 		"LEDGER_ENTRY_TYPES":  defs.LedgerEntryTypes(),
 		"TRANSACTION_TYPES":   defs.TransactionTypes(),
-		"TRANSACTION_RESULTS": defs.TransactionResults(),
+		"TRANSACTION_RESULTS": transactionResults,
 	}
 
 	// 3.2.0 (#6321): per-type field templates (with optionality) and flag maps.

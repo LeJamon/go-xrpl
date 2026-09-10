@@ -671,7 +671,6 @@ func TestServerDefinitions_3_4_0_RC1_Sections(t *testing.T) {
 		assert.EqualValues(t, 17, num(asf["asfAllowTrustLineLocking"]))
 		assert.NotContains(t, asf, "asfTshCollect", "asf 11 is intentionally absent")
 	})
-
 }
 
 // TestServerDefinitionsMethodMetadata tests the method's metadata functions.
