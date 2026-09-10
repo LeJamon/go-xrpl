@@ -7,10 +7,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 type oracleFieldSpec struct {
@@ -38,6 +39,9 @@ func TestRC1DefinitionsMatchRippled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(types) != 31 {
+		t.Fatalf("rippled v3.4.0-rc1 has %d type definitions, want 31", len(types))
+	}
 
 	fieldSpecs, err := parseOracleSFields(requireRC1OracleFile(t, "include/xrpl/protocol/detail/sfields.macro"))
 	if err != nil {
@@ -54,7 +58,7 @@ func TestRC1DefinitionsMatchRippled(t *testing.T) {
 		t.Fatalf("expected %d definitions fields, want 357", len(expectedFields))
 	}
 
-	transactionTypes, err := parseOracleTransactionTypes(requireRC1OracleFile(t, "include/xrpl/protocol/detail/transactions.macro"))
+	transactionTypes, err := parseOracleIDs(requireRC1OracleFile(t, "include/xrpl/protocol/detail/transactions.macro"), "TRANSACTION(", oracleTxLine)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +67,7 @@ func TestRC1DefinitionsMatchRippled(t *testing.T) {
 		t.Fatalf("rippled v3.4.0-rc1 has %d transaction definitions including Invalid, want 83", len(transactionTypes))
 	}
 
-	ledgerEntryTypes, err := parseOracleLedgerEntryTypes(requireRC1OracleFile(t, "include/xrpl/protocol/detail/ledger_entries.macro"))
+	ledgerEntryTypes, err := parseOracleIDs(requireRC1OracleFile(t, "include/xrpl/protocol/detail/ledger_entries.macro"), "LEDGER_ENTRY", oracleLELine)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,9 +299,6 @@ func parseOracleSFieldInvocation(invocation string, lineNumber int, path string)
 	if err != nil {
 		return "", oracleFieldSpec{}, fmt.Errorf("%s:%d: parse %s nth: %w", path, lineNumber, args[0], err)
 	}
-	if !knownOracleFieldType(args[1]) {
-		return "", oracleFieldSpec{}, fmt.Errorf("%s:%d: unknown SField type %q", path, lineNumber, args[1])
-	}
 	return strings.TrimPrefix(args[0], "sf"), oracleFieldSpec{
 		rawType: args[1],
 		nth:     int32(nth),
@@ -330,38 +331,6 @@ func splitOracleMacroArgs(body string) ([]string, error) {
 	}
 	args = append(args, strings.TrimSpace(body[start:]))
 	return args, nil
-}
-
-func knownOracleFieldType(raw string) bool {
-	_, found := map[string]struct{}{
-		"UINT8":         {},
-		"UINT16":        {},
-		"UINT32":        {},
-		"UINT64":        {},
-		"UINT128":       {},
-		"UINT160":       {},
-		"UINT192":       {},
-		"UINT256":       {},
-		"UINT384":       {},
-		"UINT512":       {},
-		"NUMBER":        {},
-		"INT32":         {},
-		"AMOUNT":        {},
-		"VL":            {},
-		"ACCOUNT":       {},
-		"VECTOR256":     {},
-		"PATHSET":       {},
-		"CURRENCY":      {},
-		"ISSUE":         {},
-		"XCHAIN_BRIDGE": {},
-		"OBJECT":        {},
-		"ARRAY":         {},
-		"LEDGERENTRY":   {},
-		"TRANSACTION":   {},
-		"VALIDATION":    {},
-		"METADATA":      {},
-	}[raw]
-	return found
 }
 
 func buildExpectedFields(types map[string]int32, specs map[string]oracleFieldSpec) (map[string]expectedField, error) {
@@ -431,7 +400,7 @@ func buildExpectedFields(types map[string]int32, specs map[string]oracleFieldSpe
 	return fields, nil
 }
 
-func parseOracleTransactionTypes(path string) (map[string]int32, error) {
+func parseOracleIDs(path, prefix string, pattern *regexp.Regexp) (map[string]int32, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -446,67 +415,24 @@ func parseOracleTransactionTypes(path string) (map[string]int32, error) {
 		if line == "" || strings.HasPrefix(line, "//") {
 			continue
 		}
-		if !strings.HasPrefix(line, "TRANSACTION(") {
+		if !strings.HasPrefix(line, prefix) {
 			continue
 		}
-		match := oracleTxLine.FindStringSubmatch(line)
+		match := pattern.FindStringSubmatch(line)
 		if match == nil {
-			return nil, fmt.Errorf("%s:%d: unparsed TRANSACTION definition %q", path, lineNumber, line)
-		}
-		code, err := strconv.ParseInt(match[2], 10, 32)
-		if err != nil {
-			return nil, fmt.Errorf("%s:%d: parse transaction code: %w", path, lineNumber, err)
-		}
-		name := match[3]
-		value := int32(code)
-		if _, found := types[name]; found {
-			return nil, fmt.Errorf("%s:%d: duplicate transaction %q", path, lineNumber, name)
-		}
-		if previous, found := codes[value]; found {
-			return nil, fmt.Errorf("%s:%d: transaction %q reuses code %d from %q", path, lineNumber, name, value, previous)
-		}
-		types[name] = value
-		codes[value] = name
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("scan %s: %w", path, err)
-	}
-	return types, nil
-}
-
-func parseOracleLedgerEntryTypes(path string) (map[string]int32, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	types := make(map[string]int32)
-	codes := make(map[int32]string)
-	scanner := bufio.NewScanner(file)
-	for lineNumber := 1; scanner.Scan(); lineNumber++ {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "//") {
-			continue
-		}
-		if !strings.HasPrefix(line, "LEDGER_ENTRY") {
-			continue
-		}
-		match := oracleLELine.FindStringSubmatch(line)
-		if match == nil {
-			return nil, fmt.Errorf("%s:%d: unparsed LEDGER_ENTRY definition %q", path, lineNumber, line)
+			return nil, fmt.Errorf("%s:%d: unparsed protocol ID definition %q", path, lineNumber, line)
 		}
 		code, err := strconv.ParseInt(match[2], 0, 32)
 		if err != nil {
-			return nil, fmt.Errorf("%s:%d: parse ledger-entry code: %w", path, lineNumber, err)
+			return nil, fmt.Errorf("%s:%d: parse protocol ID: %w", path, lineNumber, err)
 		}
 		name := match[3]
 		value := int32(code)
 		if _, found := types[name]; found {
-			return nil, fmt.Errorf("%s:%d: duplicate ledger-entry %q", path, lineNumber, name)
+			return nil, fmt.Errorf("%s:%d: duplicate protocol name %q", path, lineNumber, name)
 		}
 		if previous, found := codes[value]; found {
-			return nil, fmt.Errorf("%s:%d: ledger-entry %q reuses code %d from %q", path, lineNumber, name, value, previous)
+			return nil, fmt.Errorf("%s:%d: protocol name %q reuses code %d from %q", path, lineNumber, name, value, previous)
 		}
 		types[name] = value
 		codes[value] = name
@@ -600,97 +526,19 @@ func parseOracleTransactionResults(path string) (map[string]int32, error) {
 
 func compareFields(t *testing.T, got map[string]*FieldInstance, want map[string]expectedField) {
 	t.Helper()
-	if len(got) != len(want) {
-		t.Errorf("FIELDS has %d entries, want %d", len(got), len(want))
-	}
-	for _, name := range sortedUnion(fieldNames(got), expectedFieldNames(want)) {
-		expected, expectedOK := want[name]
-		actual, actualOK := got[name]
-		if !expectedOK {
-			t.Errorf("unexpected field %q", name)
-			continue
-		}
-		if !actualOK {
-			t.Errorf("missing field %q", name)
-			continue
-		}
-		if actual == nil || actual.FieldInfo == nil || actual.FieldHeader == nil {
+	actual := make(map[string]expectedField, len(got))
+	for name, field := range got {
+		if field == nil || field.FieldInfo == nil || field.FieldHeader == nil {
 			t.Errorf("field %q is missing decoded metadata", name)
 			continue
 		}
-		if actual.FieldName != name {
-			t.Errorf("field %q has FieldName %q", name, actual.FieldName)
-		}
-		if *actual.FieldInfo != expected.info {
-			t.Errorf("field %q metadata = %+v, want %+v", name, *actual.FieldInfo, expected.info)
-		}
-		if *actual.FieldHeader != expected.header {
-			t.Errorf("field %q header = %+v, want %+v", name, *actual.FieldHeader, expected.header)
-		}
-		if actual.Ordinal != expected.ordinal {
-			t.Errorf("field %q ordinal = %d, want %d", name, actual.Ordinal, expected.ordinal)
-		}
+		assert.Equal(t, name, field.FieldName)
+		actual[name] = expectedField{info: *field.FieldInfo, header: *field.FieldHeader, ordinal: field.Ordinal}
 	}
+	assert.Equal(t, want, actual, "FIELDS")
 }
 
 func compareIntMaps(t *testing.T, label string, got, want map[string]int32) {
 	t.Helper()
-	if len(got) != len(want) {
-		t.Errorf("%s has %d entries, want %d", label, len(got), len(want))
-	}
-	keys := make(map[string]struct{}, len(got)+len(want))
-	for key := range got {
-		keys[key] = struct{}{}
-	}
-	for key := range want {
-		keys[key] = struct{}{}
-	}
-	ordered := make([]string, 0, len(keys))
-	for key := range keys {
-		ordered = append(ordered, key)
-	}
-	sort.Strings(ordered)
-	for _, key := range ordered {
-		actual, actualOK := got[key]
-		expected, expectedOK := want[key]
-		switch {
-		case !actualOK:
-			t.Errorf("%s missing %q", label, key)
-		case !expectedOK:
-			t.Errorf("%s has unexpected %q=%d", label, key, actual)
-		case actual != expected:
-			t.Errorf("%s[%q] = %d, want %d", label, key, actual, expected)
-		}
-	}
-}
-
-func fieldNames(fields map[string]*FieldInstance) []string {
-	names := make([]string, 0, len(fields))
-	for name := range fields {
-		names = append(names, name)
-	}
-	return names
-}
-
-func expectedFieldNames(fields map[string]expectedField) []string {
-	names := make([]string, 0, len(fields))
-	for name := range fields {
-		names = append(names, name)
-	}
-	return names
-}
-
-func sortedUnion(groups ...[]string) []string {
-	set := make(map[string]struct{})
-	for _, group := range groups {
-		for _, value := range group {
-			set[value] = struct{}{}
-		}
-	}
-	values := make([]string, 0, len(set))
-	for value := range set {
-		values = append(values, value)
-	}
-	sort.Strings(values)
-	return values
+	assert.Equal(t, want, got, label)
 }
