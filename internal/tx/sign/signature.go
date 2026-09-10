@@ -679,25 +679,26 @@ func verifyNestedMultiSign(
 	return nil
 }
 
-// SignCounterparty produces a single-signed CounterpartySignature over the
-// transaction's signing payload — the same payload the top-level signer covers
-// (rippled STTx::sign with a signatureTarget writes into the nested object).
-// The transaction must already carry the top-level SigningPubKey the primary
-// signer used, since that key is part of the signed data. pubKeyHex is the
-// counterparty's public key, placed in the returned object.
+// SignCounterparty signs using the pre-cleanup rules.
 func SignCounterparty(tx txcore.Transaction, pubKeyHex, privateKeyHex string) (*txcore.CounterpartySignature, error) {
-	sig, err := SignTransaction(tx, privateKeyHex)
+	return SignCounterpartyWithRules(tx, pubKeyHex, privateKeyHex, nil)
+}
+
+func SignCounterpartyWithRules(tx txcore.Transaction, pubKeyHex, privateKeyHex string, rules *amendment.Rules) (*txcore.CounterpartySignature, error) {
+	sig, err := SignTransactionForRole(tx, privateKeyHex, binarycodec.CounterpartyRole, rules)
 	if err != nil {
 		return nil, err
 	}
 	return &txcore.CounterpartySignature{SigningPubKey: pubKeyHex, TxnSignature: sig}, nil
 }
 
-// SignSponsor produces a single-signed SponsorSignature over the transaction's
-// canonical signing projection. The caller must populate every signed field
-// (including Fee, Sequence, and the top-level SigningPubKey) first.
+// SignSponsor signs using the pre-cleanup rules.
 func SignSponsor(tx txcore.Transaction, pubKeyHex, privateKeyHex string) (*txcore.SponsorSignature, error) {
-	sig, err := SignTransaction(tx, privateKeyHex)
+	return SignSponsorWithRules(tx, pubKeyHex, privateKeyHex, nil)
+}
+
+func SignSponsorWithRules(tx txcore.Transaction, pubKeyHex, privateKeyHex string, rules *amendment.Rules) (*txcore.SponsorSignature, error) {
+	sig, err := SignTransactionForRole(tx, privateKeyHex, binarycodec.SponsorRole, rules)
 	if err != nil {
 		return nil, err
 	}
@@ -743,14 +744,19 @@ func flattenForSigning(tx txcore.Transaction) (map[string]any, error) {
 
 // getSigningPayload returns the binary data that should be signed
 func getSigningPayload(tx txcore.Transaction) (string, error) {
-	// Flatten the transaction to a map
+	return getSigningPayloadForRole(tx, binarycodec.TransactionRole, nil)
+}
+
+func getSigningPayloadForRole(tx txcore.Transaction, role binarycodec.SigningRole, rules *amendment.Rules) (string, error) {
 	txMap, err := flattenForSigning(tx)
 	if err != nil {
 		return "", err
 	}
+	return binarycodec.EncodeForSigningRole(txMap, role, cleanupSigningEnabled(rules))
+}
 
-	// Encode for signing (this adds the signing prefix and removes non-signing fields)
-	return binarycodec.EncodeForSigning(txMap)
+func cleanupSigningEnabled(rules *amendment.Rules) bool {
+	return rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0)
 }
 
 // verifySignatureForKey verifies a signature using the appropriate algorithm.
@@ -798,12 +804,18 @@ func verifySignatureForKey(messageHex, pubKeyHex, signatureHex string, mustBeFul
 // SignTransaction signs a transaction with the given private key
 // Returns the signature as a hex string
 func SignTransaction(tx txcore.Transaction, privateKeyHex string) (string, error) {
-	// Get the signing payload
-	signingPayload, err := getSigningPayload(tx)
+	return SignTransactionForRole(tx, privateKeyHex, binarycodec.TransactionRole, nil)
+}
+
+func SignTransactionForRole(tx txcore.Transaction, privateKeyHex string, role binarycodec.SigningRole, rules *amendment.Rules) (string, error) {
+	signingPayload, err := getSigningPayloadForRole(tx, role, rules)
 	if err != nil {
 		return "", fmt.Errorf("failed to get signing payload: %w", err)
 	}
+	return signPayload(signingPayload, privateKeyHex)
+}
 
+func signPayload(signingPayload, privateKeyHex string) (string, error) {
 	// Decode the private key to determine the algorithm
 	privKeyBytes, err := hex.DecodeString(privateKeyHex)
 	if err != nil || len(privKeyBytes) == 0 {
@@ -917,75 +929,25 @@ func CalculateBaseFee(transaction txcore.Transaction, view txcore.LedgerView, co
 // Each signer signs a message that includes their account ID as a suffix
 // Returns the signature as a hex string
 func SignTransactionForMultiSign(tx txcore.Transaction, signerAccount string, privateKeyHex string) (string, error) {
-	return signTransactionForMultiSign(tx, signerAccount, privateKeyHex, false)
+	return SignTransactionForMultiSignRole(tx, signerAccount, privateKeyHex, binarycodec.TransactionRole, nil)
 }
 
 // SignTransactionForMultiSignTarget signs for a nested signature object while
 // retaining the transaction's outer SigningPubKey in the payload.
 func SignTransactionForMultiSignTarget(tx txcore.Transaction, signerAccount string, privateKeyHex string) (string, error) {
-	return signTransactionForMultiSign(tx, signerAccount, privateKeyHex, true)
+	return SignTransactionForMultiSignRole(tx, signerAccount, privateKeyHex, binarycodec.CounterpartyRole, nil)
 }
 
-func signTransactionForMultiSign(tx txcore.Transaction, signerAccount string, privateKeyHex string, target bool) (string, error) {
-	// Flatten the transaction to a map
+func SignTransactionForMultiSignRole(tx txcore.Transaction, signerAccount, privateKeyHex string, role binarycodec.SigningRole, rules *amendment.Rules) (string, error) {
 	txMap, err := flattenForSigning(tx)
 	if err != nil {
 		return "", fmt.Errorf("failed to flatten transaction: %w", err)
 	}
-
-	// Get the multi-signing payload for this specific signer
-	var signingPayload string
-	if target {
-		signingPayload, err = binarycodec.EncodeForMultisigningTarget(txMap, signerAccount)
-	} else {
-		signingPayload, err = binarycodec.EncodeForMultisigning(txMap, signerAccount)
-	}
+	payload, err := binarycodec.EncodeForMultisigningRole(txMap, signerAccount, role, cleanupSigningEnabled(rules))
 	if err != nil {
 		return "", fmt.Errorf("failed to encode for multi-signing: %w", err)
 	}
-
-	// Decode the private key to determine the algorithm
-	privKeyBytes, err := hex.DecodeString(privateKeyHex)
-	if err != nil || len(privKeyBytes) == 0 {
-		return "", errors.New("invalid private key")
-	}
-
-	// Decode the message hex to bytes
-	msgBytes, err := hex.DecodeString(signingPayload)
-	if err != nil {
-		return "", errors.New("failed to decode signing payload")
-	}
-
-	// Convert message bytes to string for the crypto functions
-	msgStr := string(msgBytes)
-
-	// The first byte indicates the key type
-	keyType := privKeyBytes[0]
-
-	var signature string
-
-	switch keyType {
-	case 0xED:
-		// ED25519
-		algo := ed25519.Algorithm{}
-		signature, err = algo.Sign(msgStr, privateKeyHex)
-		if err != nil {
-			return "", fmt.Errorf("ED25519 signing failed: %w", err)
-		}
-
-	case 0x00:
-		// SECP256K1
-		algo := secp256k1.Algorithm{}
-		signature, err = algo.Sign(msgStr, privateKeyHex)
-		if err != nil {
-			return "", fmt.Errorf("SECP256K1 signing failed: %w", err)
-		}
-
-	default:
-		return "", ErrUnknownKeyType
-	}
-
-	return strings.ToUpper(signature), nil
+	return signPayload(payload, privateKeyHex)
 }
 
 // AddMultiSigner adds a signer to a transaction's Signers array
