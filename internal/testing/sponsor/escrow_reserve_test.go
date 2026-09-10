@@ -753,6 +753,8 @@ func TestSponsoredMPTEscrowFinishRecreatesHoldingWithReserveSponsor(t *testing.T
 				require.Zero(t, mpt.HolderLockedAmount(destination))
 				require.Zero(t, mpt.IssuanceLockedAmount())
 				require.Equal(t, uint64(10_000), mpt.IssuanceOutstandingAmount())
+				require.Equal(t, uint32(1), accountState(t, env, owner).OwnerCount)
+				require.Zero(t, accountState(t, env, owner).SponsoredOwnerCount)
 				require.Equal(t, uint32(1), accountState(t, env, destination).OwnerCount)
 				require.Equal(t, uint32(1), accountState(t, env, destination).SponsoredOwnerCount)
 				require.Equal(t, uint32(1), accountState(t, env, finishSponsor).SponsoringOwnerCount)
