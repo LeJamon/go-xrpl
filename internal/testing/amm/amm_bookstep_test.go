@@ -9,6 +9,8 @@ import (
 	"math"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
@@ -1517,124 +1519,109 @@ func TestAMMBookStep_SwapRounding(t *testing.T) {
 // Reference: rippled AMM_test.cpp testFixAMMOfferBlockedByLOB (line 7050)
 // A low-quality CLOB offer should not block AMM from being consumed.
 func TestAMMBookStep_FixAMMOfferBlockedByLOB(t *testing.T) {
-	// Scenario 2: No blocking offer — AMM consumed regardless of amendment.
-	// This tests the base case that AMM liquidity is accessible.
-	t.Run("NoBlockingOffer", func(t *testing.T) {
-		env := amm.NewAMMTestEnv(t)
-		env.DisableFeature("fixAMMOverflowOffer")
-		env.Close()
-		env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(1000000)))
-		env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(1000000)))
-		env.TestEnv.FundAmount(env.Carol, uint64(jtx.XRP(1000000)))
-		env.Close()
+	for _, receiveXRP := range []bool{false, true} {
+		for _, blockingOffer := range []bool{false, true} {
+			for _, fixAMMv1_1 := range []bool{false, true} {
+				for _, mptTokensV2 := range []bool{false, true} {
+					name := fmt.Sprintf("receiveXRP=%t/blocker=%t/fixAMMv1_1=%t/MPTokensV2=%t", receiveXRP, blockingOffer, fixAMMv1_1, mptTokensV2)
+					t.Run(name, func(t *testing.T) {
+						env := amm.NewAMMTestEnv(t)
+						env.DisableFeature("fixAMMOverflowOffer")
+						if !fixAMMv1_1 {
+							env.DisableFeature("fixAMMv1_1")
+						}
+						if !mptTokensV2 {
+							env.DisableFeature("MPTokensV2")
+						}
+						env.Close()
+						require.False(t, env.FeatureEnabled("fixAMMOverflowOffer"))
+						require.Equal(t, fixAMMv1_1, env.FeatureEnabled("fixAMMv1_1"))
+						require.Equal(t, mptTokensV2, env.FeatureEnabled("MPTokensV2"))
 
-		env.Trust(env.Alice, env.GW, "USD", 1000000)
-		env.Trust(env.Carol, env.GW, "USD", 1000000)
-		env.Close()
+						usd := func(mantissa int64, exponent int) tx.Amount {
+							return state.NewIssuedAmountFromValue(mantissa, exponent, "USD", env.GW.Address)
+						}
+						checkAmount := func(want, got tx.Amount) {
+							t.Helper()
+							require.Equal(t, want.IsNative(), got.IsNative())
+							require.Equal(t, want.Value(), got.Value())
+							if !want.IsNative() {
+								require.Equal(t, want.Currency, got.Currency)
+								require.Equal(t, want.Issuer, got.Issuer)
+							}
+						}
+						checkOffer := func(account *jtx.Account, pays, gets tx.Amount) {
+							t.Helper()
+							offers := env.AccountOffers(account)
+							require.Len(t, offers, 1)
+							checkAmount(pays, offers[0].TakerPays)
+							checkAmount(gets, offers[0].TakerGets)
+						}
 
-		env.PayIOU(env.GW, env.Alice, "USD", 1000000)
-		env.PayIOU(env.GW, env.Carol, "USD", 1000000)
-		env.Close()
+						fundXRP, fundUSD := int64(1_000_000), float64(1_000_000)
+						creator, blocker := env.GW, env.Alice
+						poolXRP, poolUSD := uint64(200_000_000_000), usd(100_000, 0)
+						blockerPays, blockerGets := tx.NewXRPAmount(1_000_000), usd(1, -2)
+						carolPays, carolGets := usd(49, -2), tx.NewXRPAmount(1_000_000)
+						if receiveXRP {
+							fundXRP, fundUSD = 10_000, 1_000
+							creator, blocker = env.Alice, env.Bob
+							poolXRP, poolUSD = 1_000_000_000, usd(500, 0)
+							blockerPays, blockerGets = usd(1, 0), tx.NewXRPAmount(500)
+							carolPays, carolGets = tx.NewXRPAmount(100_000_000), usd(55, 0)
+						}
+						for _, account := range []*jtx.Account{env.GW, env.Alice, env.Carol, env.Bob} {
+							env.TestEnv.FundAmount(account, uint64(fundXRP*1_000_000))
+						}
+						env.Close()
+						for _, account := range []*jtx.Account{env.Alice, env.Carol, env.Bob} {
+							env.Trust(account, env.GW, "USD", fundUSD)
+						}
+						env.Close()
+						for _, account := range []*jtx.Account{env.Alice, env.Carol, env.Bob} {
+							env.PayIOU(env.GW, account, "USD", fundUSD)
+						}
+						env.Close()
+						if blockingOffer {
+							jtx.RequireTxSuccess(t, env.Submit(offerbuild.OfferCreate(blocker, blockerPays, blockerGets).Build()))
+							env.Close()
+						}
+						jtx.RequireTxSuccess(t, env.Submit(amm.AMMCreate(creator, tx.NewXRPAmount(int64(poolXRP)), poolUSD).TradingFee(0).Build()))
+						env.Close()
+						ammAcc := amm.AMMAccount(t, env, amm.XRP(), env.USD)
+						lpBefore := env.ReadAMMData(amm.XRP(), env.USD).LPTokenBalance
+						carolXRPBefore, carolSeqBefore := env.Balance(env.Carol), env.Seq(env.Carol)
+						jtx.RequireTxSuccess(t, env.Submit(offerbuild.OfferCreate(env.Carol, carolPays, carolGets).Build()))
+						env.Close()
 
-		// No blocking offer
-		// GW creates AMM: XRP(200000)/USD(100000)
-		createTx := amm.AMMCreate(env.GW,
-			tx.NewXRPAmount(200_000*1_000_000),
-			amm.IOUAmount(env.GW, "USD", 100000)).
-			TradingFee(0).Build()
-		jtx.RequireTxSuccess(t, env.Submit(createTx))
-		env.Close()
-
-		ammAcc := amm.AMMAccount(t, env, amm.XRP(), env.USD)
-
-		// Carol creates offer: buy USD(0.49) sell XRP(1)
-		offerTx := offerbuild.OfferCreate(env.Carol,
-			amm.IOUAmount(env.GW, "USD", 0.49),
-			tx.NewXRPAmount(1*1_000_000)).Build()
-		carolBalanceBefore, carolSequenceBefore := env.Balance(env.Carol), env.Seq(env.Carol)
-		jtx.RequireTxSuccess(t, env.Submit(offerTx))
-		env.Close()
-		if got, want := env.Balance(env.Carol), carolBalanceBefore-980_005-env.BaseFee(); got != want {
-			t.Errorf("Carol XRP balance = %d, want %d after the crossed offer fee and fill", got, want)
+						wantXRP, wantUSD := poolXRP, poolUSD
+						if blockingOffer && !fixAMMv1_1 {
+							checkOffer(env.Carol, carolPays, carolGets)
+						} else if !receiveXRP {
+							wantXRP, wantUSD = 200_000_980_005, usd(9_999_951, -2)
+							require.Empty(t, env.AccountOffers(env.Carol))
+						} else if !mptTokensV2 {
+							wantXRP, wantUSD = 909_090_909, usd(550_000_000_055, -9)
+							checkOffer(env.Carol, tx.NewXRPAmount(9_090_909), usd(499_999_995, -8))
+						} else {
+							wantXRP, wantUSD = 909_090_910, usd(54_999_999_945, -8)
+							checkOffer(env.Carol, tx.NewXRPAmount(9_090_910), usd(50_000_005, -7))
+						}
+						if blockingOffer {
+							checkOffer(blocker, blockerPays, blockerGets)
+						} else {
+							require.Empty(t, env.AccountOffers(blocker))
+						}
+						require.Equal(t, wantXRP, env.AMMPoolXRP(ammAcc))
+						checkAmount(wantUSD, env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD"))
+						checkAmount(lpBefore, env.ReadAMMData(amm.XRP(), env.USD).LPTokenBalance)
+						require.Equal(t, carolXRPBefore+poolXRP-wantXRP-env.BaseFee(), env.Balance(env.Carol))
+						require.Equal(t, carolSeqBefore+1, env.Seq(env.Carol))
+					})
+				}
+			}
 		}
-		if got, want := env.Seq(env.Carol), carolSequenceBefore+1; got != want {
-			t.Errorf("Carol sequence = %d, want %d after the crossed offer", got, want)
-		}
-
-		// AMM should be consumed
-		// rippled expects: XRP(200000980005), USD(99999.51)
-		ammXRP := env.AMMPoolXRP(ammAcc)
-		ammUSD := env.AMMPoolIOU(ammAcc, env.GW, "USD")
-
-		if ammXRP <= 200_000*1_000_000 {
-			t.Errorf("AMM XRP should increase after offer crossing: got %d", ammXRP)
-		}
-		if ammUSD >= 100000 {
-			t.Errorf("AMM USD should decrease after offer crossing: got %f", ammUSD)
-		}
-
-		// Carol's offer should be consumed
-		carolOffers := env.AccountOffers(env.Carol)
-		if len(carolOffers) != 0 {
-			t.Errorf("Carol should have 0 offers (consumed), got %d", len(carolOffers))
-		}
-	})
-
-	// Scenario 3: XRP/USD direction, no blocking offer
-	t.Run("XRPUSDNoBlockingOffer", func(t *testing.T) {
-		env := amm.NewAMMTestEnv(t)
-		env.DisableFeature("fixAMMOverflowOffer")
-		env.Close()
-		env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(30000)))
-		env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(10000)))
-		env.TestEnv.FundAmount(env.Carol, uint64(jtx.XRP(10000)))
-		env.TestEnv.FundAmount(env.Bob, uint64(jtx.XRP(10000)))
-		env.Close()
-
-		env.Trust(env.Alice, env.GW, "USD", 100000)
-		env.Trust(env.Carol, env.GW, "USD", 100000)
-		env.Trust(env.Bob, env.GW, "USD", 100000)
-		env.Close()
-
-		env.PayIOU(env.GW, env.Alice, "USD", 1000)
-		env.PayIOU(env.GW, env.Carol, "USD", 1000)
-		env.PayIOU(env.GW, env.Bob, "USD", 1000)
-		env.Close()
-
-		// Alice creates AMM: XRP(1000)/USD(500)
-		createTx := amm.AMMCreate(env.Alice,
-			tx.NewXRPAmount(1000*1_000_000),
-			amm.IOUAmount(env.GW, "USD", 500)).
-			TradingFee(0).Build()
-		jtx.RequireTxSuccess(t, env.Submit(createTx))
-		env.Close()
-
-		ammAcc := amm.AMMAccount(t, env, amm.XRP(), env.USD)
-
-		// Carol creates offer: buy XRP(100) sell USD(55)
-		offerTx := offerbuild.OfferCreate(env.Carol,
-			tx.NewXRPAmount(100*1_000_000),
-			amm.IOUAmount(env.GW, "USD", 55)).Build()
-		jtx.RequireTxSuccess(t, env.Submit(offerTx))
-		env.Close()
-
-		// AMM should be consumed: XRP ~909090909 drops, USD ~550.00000005
-		ammXRP := env.AMMPoolXRP(ammAcc)
-		ammUSD := env.AMMPoolIOU(ammAcc, env.GW, "USD")
-
-		if ammXRP >= 1000*1_000_000 {
-			t.Errorf("AMM XRP should decrease: got %d", ammXRP)
-		}
-		if ammUSD <= 500 {
-			t.Errorf("AMM USD should increase: got %f", ammUSD)
-		}
-
-		// Carol should have remaining offer (partially filled)
-		carolOffers := env.AccountOffers(env.Carol)
-		if len(carolOffers) != 1 {
-			t.Errorf("Carol should have 1 remaining offer, got %d", len(carolOffers))
-		}
-	})
+	}
 }
 
 // TestAMMBookStep_LPTokenBalance tests LP token balance tracking after deposits/withdrawals.

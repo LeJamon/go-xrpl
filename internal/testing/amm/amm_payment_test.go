@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -70,39 +72,59 @@ func ammAccount(t *testing.T, env *amm.AMMTestEnv, asset1, asset2 tx.Asset) *jtx
 // TestInvalidAMMPayment tests that various payment-like transactions
 // targeting the AMM pseudo-account are rejected with tecNO_PERMISSION.
 func TestInvalidAMMPayment(t *testing.T) {
-	// Reference: lines 3618-3648 — direct payments to AMM account.
-	// The rippled test iterates over gw and alice as creators with varying XRP
-	// balances. The core assertion is that ANY payment to the AMM pseudo-account
-	// is rejected with tecNO_PERMISSION regardless of who created the AMM or
-	// the XRP balance of the AMM account.
-	t.Run("DirectPaymentsToAMM", func(t *testing.T) {
-		// Use setupAMM which creates XRP(10000)/USD(10000) AMM via alice.
-		env := setupAMM(t)
-		ammAcc := ammAccount(t, env, amm.XRP(), env.USD)
-
-		// Pay XRP to AMM -> tecNO_PERMISSION
-		t.Run("PayXRP", func(t *testing.T) {
-			payTx := payment.Pay(env.Carol, ammAcc, uint64(jtx.XRP(10))).Build()
-			result := env.Submit(payTx)
-			amm.ExpectTER(t, result, amm.TecNO_PERMISSION)
-		})
-
-		// Pay large XRP to AMM -> tecNO_PERMISSION
-		t.Run("PayLargeXRP", func(t *testing.T) {
-			payTx := payment.Pay(env.Carol, ammAcc, uint64(jtx.XRP(300))).Build()
-			result := env.Submit(payTx)
-			amm.ExpectTER(t, result, amm.TecNO_PERMISSION)
-		})
-
-		// Pay IOU to AMM -> tecNO_PERMISSION.
-		// Note: the payment engine may reject with tecPATH_DRY if the path-finding
-		// step fails before the AMM destination check is reached.
-		t.Run("PayIOU", func(t *testing.T) {
-			payTx := payment.PayIssued(env.Carol, ammAcc, amm.IOUAmount(env.GW, "USD", 10)).Build()
-			result := env.Submit(payTx)
-			amm.ExpectTER(t, result, amm.TecNO_PERMISSION, "tecPATH_DRY")
-		})
-	})
+	for _, issuerCreates := range []bool{false, true} {
+		for _, largePool := range []bool{false, true} {
+			t.Run(fmt.Sprintf("DirectPaymentsToAMM/issuerCreates=%t/largePool=%t", issuerCreates, largePool), func(t *testing.T) {
+				env := amm.NewAMMTestEnv(t)
+				env.DisableFeature("fixAMMOverflowOffer")
+				env.Close()
+				fundXRP, fundUSD := int64(1_000), float64(100)
+				poolXRP, poolUSD, largePayment := int64(10), float64(10), int64(300)
+				if largePool {
+					fundXRP, fundUSD = 10_000_000, 10_000
+					poolXRP, poolUSD, largePayment = 1_000_000, 100, 1_000_000
+				}
+				for _, account := range []*jtx.Account{env.GW, env.Alice, env.Carol} {
+					env.TestEnv.FundAmount(account, uint64(fundXRP*1_000_000))
+				}
+				env.Close()
+				for _, account := range []*jtx.Account{env.Alice, env.Carol} {
+					env.Trust(account, env.GW, "USD", fundUSD)
+				}
+				env.Close()
+				for _, account := range []*jtx.Account{env.Alice, env.Carol} {
+					env.PayIOU(env.GW, account, "USD", fundUSD)
+				}
+				env.Close()
+				creator := env.Alice
+				if issuerCreates {
+					creator = env.GW
+				}
+				jtx.RequireTxSuccess(t, env.Submit(amm.AMMCreate(creator,
+					tx.NewXRPAmount(poolXRP*1_000_000), amm.IOUAmount(env.GW, "USD", poolUSD)).Build()))
+				env.Close()
+				ammAcc := ammAccount(t, env, amm.XRP(), env.USD)
+				payments := []tx.Transaction{
+					payment.Pay(env.Carol, ammAcc, 10_000_000).Build(),
+					payment.Pay(env.Carol, ammAcc, uint64(largePayment*1_000_000)).Build(),
+				}
+				if !largePool {
+					payments = append(payments, payment.PayIssued(env.Carol, ammAcc, amm.IOUAmount(env.GW, "USD", 10)).Build())
+				}
+				for _, payTx := range payments {
+					balanceBefore, sequenceBefore := env.Balance(env.Carol), env.Seq(env.Carol)
+					usdBefore := env.IOUBalance(env.Carol, env.GW, "USD")
+					poolBefore := env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD")
+					amm.ExpectTER(t, env.Submit(payTx), amm.TecNO_PERMISSION)
+					require.Equal(t, balanceBefore-env.BaseFee(), env.Balance(env.Carol))
+					require.Equal(t, sequenceBefore+1, env.Seq(env.Carol))
+					require.Equal(t, usdBefore, env.IOUBalance(env.Carol, env.GW, "USD"))
+					require.Equal(t, uint64(poolXRP*1_000_000), env.AMMPoolXRP(ammAcc))
+					require.Equal(t, poolBefore, env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD"))
+				}
+			})
+		}
+	}
 
 	// Reference: lines 3651-3660 -- escrow to AMM account -> tecNO_PERMISSION.
 	t.Run("EscrowToAMM", func(t *testing.T) {
@@ -149,75 +171,53 @@ func TestInvalidAMMPayment(t *testing.T) {
 		amm.ExpectTER(t, result, amm.TecNO_PERMISSION)
 	})
 
-	// Reference: lines 3684-3723 -- pool consumption tests.
-	// testAMM with pool {{XRP(100), USD(100)}}
 	t.Run("PoolConsumption", func(t *testing.T) {
 		env := amm.NewAMMTestEnv(t)
 		env.DisableFeature("fixAMMOverflowOffer")
 		env.Close()
 		env.FundWithIOUs(30000, 0)
 		env.Close()
-
-		// Create small AMM pool: XRP(100)/USD(100)
-		createTx := amm.AMMCreate(env.Alice,
-			amm.XRPAmount(100),
-			amm.IOUAmount(env.GW, "USD", 100)).Build()
-		jtx.RequireTxSuccess(t, env.Submit(createTx))
+		jtx.RequireTxSuccess(t, env.Submit(amm.AMMCreate(env.Alice,
+			amm.XRPAmount(100), amm.IOUAmount(env.GW, "USD", 100)).Build()))
 		env.Close()
 		ammAcc := ammAccount(t, env, amm.XRP(), env.USD)
-		poolXRPBefore := env.AMMPoolXRP(ammAcc)
-		poolUSDBefore := env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD")
-		aliceBalanceBefore, aliceSequenceBefore := env.Balance(env.Alice), env.Seq(env.Alice)
-
-		// Can't consume whole pool: pay USD(100) with sendmax XRP(1B)
-		payTx := payment.PayIssued(env.Alice, env.Carol,
-			amm.IOUAmount(env.GW, "USD", 100)).
-			SendMax(amm.XRPAmount(1_000_000_000)).
-			PathsCurrency("USD", env.GW).
-			NoDirectRipple().
-			Build()
-		result := env.Submit(payTx)
-		amm.ExpectTER(t, result, amm.TecPATH_PARTIAL)
-		if got, want := env.Balance(env.Alice), aliceBalanceBefore-env.BaseFee(); got != want {
-			t.Errorf("Alice balance after tecPATH_PARTIAL = %d, want fee-only %d", got, want)
-		}
-		if got, want := env.Seq(env.Alice), aliceSequenceBefore+1; got != want {
-			t.Errorf("Alice sequence after tecPATH_PARTIAL = %d, want %d", got, want)
-		}
-		if got := env.AMMPoolXRP(ammAcc); got != poolXRPBefore {
-			t.Errorf("AMM XRP changed after tecPATH_PARTIAL: got %d, want %d", got, poolXRPBefore)
-		}
-		poolUSDAfter := env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD")
-		if poolUSDAfter.Mantissa() != poolUSDBefore.Mantissa() || poolUSDAfter.Exponent() != poolUSDBefore.Exponent() {
-			t.Errorf("AMM USD changed after tecPATH_PARTIAL: got {%d, %d}, want {%d, %d}",
-				poolUSDAfter.Mantissa(), poolUSDAfter.Exponent(), poolUSDBefore.Mantissa(), poolUSDBefore.Exponent())
-		}
-
-		// Can't consume whole pool: pay XRP(100) with sendmax USD(1B)
-		payTx2 := payment.Pay(env.Alice, env.Carol,
-			uint64(jtx.XRP(100))).
-			SendMax(amm.IOUAmount(env.GW, "USD", 1_000_000_000)).
-			PathsXRP().
-			NoDirectRipple().
-			Build()
-		aliceBalanceBeforeSecond, aliceSequenceBeforeSecond := env.Balance(env.Alice), env.Seq(env.Alice)
-		poolXRPBeforeSecond := env.AMMPoolXRP(ammAcc)
-		poolUSDBeforeSecond := env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD")
-		result = env.Submit(payTx2)
-		amm.ExpectTER(t, result, amm.TecPATH_PARTIAL)
-		if got, want := env.Balance(env.Alice), aliceBalanceBeforeSecond-env.BaseFee(); got != want {
-			t.Errorf("Alice balance after second tecPATH_PARTIAL = %d, want fee-only %d", got, want)
-		}
-		if got, want := env.Seq(env.Alice), aliceSequenceBeforeSecond+1; got != want {
-			t.Errorf("Alice sequence after second tecPATH_PARTIAL = %d, want %d", got, want)
-		}
-		if got := env.AMMPoolXRP(ammAcc); got != poolXRPBeforeSecond {
-			t.Errorf("AMM XRP changed after second tecPATH_PARTIAL: got %d, want %d", got, poolXRPBeforeSecond)
-		}
-		poolUSDAfterSecond := env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD")
-		if poolUSDAfterSecond.Mantissa() != poolUSDBeforeSecond.Mantissa() || poolUSDAfterSecond.Exponent() != poolUSDBeforeSecond.Exponent() {
-			t.Errorf("AMM USD changed after second tecPATH_PARTIAL: got {%d, %d}, want {%d, %d}",
-				poolUSDAfterSecond.Mantissa(), poolUSDAfterSecond.Exponent(), poolUSDBeforeSecond.Mantissa(), poolUSDBeforeSecond.Exponent())
+		for _, tc := range []struct {
+			name   string
+			amount tx.Amount
+		}{
+			{"WholeUSDPool", amm.IOUAmount(env.GW, "USD", 100)},
+			{"WholeXRPPool", amm.XRPAmount(100)},
+			{"IOUOverflowNearPool", state.NewIssuedAmountFromValue(99_999_999_999, -9, "USD", env.GW.Address)},
+			{"IOUOverflowBeyondPool", state.NewIssuedAmountFromValue(99_999_999_999, -8, "USD", env.GW.Address)},
+			{"XRPOverflow", tx.NewXRPAmount(99_999_999)},
+			{"InsufficientXRP", amm.IOUAmount(env.GW, "USD", 99.99)},
+			{"InsufficientUSD", tx.NewXRPAmount(99_990_000)},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var payTx tx.Transaction
+				if tc.amount.IsNative() {
+					payTx = payment.Pay(env.Alice, env.Carol, uint64(tc.amount.Drops())).
+						SendMax(amm.IOUAmount(env.GW, "USD", 1_000_000_000)).PathsXRP().NoDirectRipple().Build()
+				} else {
+					payTx = payment.PayIssued(env.Alice, env.Carol, tc.amount).
+						SendMax(amm.XRPAmount(1_000_000_000)).PathsCurrency("USD", env.GW).NoDirectRipple().Build()
+				}
+				aliceBalance, aliceSequence := env.Balance(env.Alice), env.Seq(env.Alice)
+				aliceUSD := env.IOUBalance(env.Alice, env.GW, "USD")
+				carolBalance, carolUSD := env.Balance(env.Carol), env.IOUBalance(env.Carol, env.GW, "USD")
+				poolXRP := env.AMMPoolXRP(ammAcc)
+				poolUSD := env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD")
+				lpBalance := env.ReadAMMData(amm.XRP(), env.USD).LPTokenBalance
+				amm.ExpectTER(t, env.Submit(payTx), amm.TecPATH_PARTIAL)
+				require.Equal(t, aliceBalance-env.BaseFee(), env.Balance(env.Alice))
+				require.Equal(t, aliceSequence+1, env.Seq(env.Alice))
+				require.Equal(t, aliceUSD, env.IOUBalance(env.Alice, env.GW, "USD"))
+				require.Equal(t, carolBalance, env.Balance(env.Carol))
+				require.Equal(t, carolUSD, env.IOUBalance(env.Carol, env.GW, "USD"))
+				require.Equal(t, poolXRP, env.AMMPoolXRP(ammAcc))
+				require.Equal(t, poolUSD, env.AMMPoolIOUPrecise(ammAcc, env.GW, "USD"))
+				require.Equal(t, lpBalance, env.ReadAMMData(amm.XRP(), env.USD).LPTokenBalance)
+			})
 		}
 	})
 
