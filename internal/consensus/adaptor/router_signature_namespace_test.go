@@ -218,7 +218,7 @@ func TestRouterSignatureSuppressionRetriesAfterCleanupTransition(t *testing.T) {
 	}
 }
 
-func TestRouterSignatureSuppressionRechecksLegacySignatureAfterCleanupTransition(t *testing.T) {
+func TestRouterSignatureSuppressionRechecksRoleSignaturesAfterCleanupTransition(t *testing.T) {
 	for _, tc := range []struct {
 		name             string
 		validatedCleanup bool
@@ -228,30 +228,70 @@ func TestRouterSignatureSuppressionRechecksLegacySignatureAfterCleanupTransition
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			adaptor, _ := routerMixedRuleService(t, tc.validatedCleanup)
-			router := newTestRouter(&mockEngine{}, adaptor, nil)
-			blob := routerRoleSignedLoanSet(t, false)
+			for _, signatureCleanup := range []bool{false, true} {
+				t.Run(map[bool]string{false: "legacy", true: "cleanup"}[signatureCleanup], func(t *testing.T) {
+					router := newTestRouter(&mockEngine{}, adaptor, nil)
+					blob := routerRoleSignedLoanSet(t, signatureCleanup)
 
-			direct := router.handleTransaction(routerTransactionMessage(t, blob, 1))
-			require.Error(t, direct.submitError)
-			require.ErrorIs(t, direct.submitError, txengine.ErrInvalidSignature)
-			require.Equal(t, resource.FeeInvalidSignature(), direct.charge)
-			require.Equal(t, "transaction-invalid-signature", direct.chargeContext)
+					direct := router.handleTransaction(routerTransactionMessage(t, blob, 1))
+					require.Error(t, direct.submitError)
+					require.ErrorIs(t, direct.submitError, txengine.ErrInvalidSignature)
+					require.Equal(t, resource.FeeInvalidSignature(), direct.charge)
+					require.Equal(t, "transaction-invalid-signature", direct.chargeContext)
 
-			// A pre-decoded TMTransactions item is checked against the open
-			// snapshot only, so the same blob follows the open-role result.
-			fetchedRouter := newTestRouter(&mockEngine{}, adaptor, nil)
-			fetched := fetchedRouter.handleTransaction(routerFetchedTransactionMessage(blob, 2))
-			if tc.validatedCleanup {
-				require.NoError(t, fetched.submitError)
-				require.Equal(t, openledger.ResultSuccess, fetched.submitResult)
-				require.True(t, fetched.relayed)
-				require.Zero(t, fetched.charge.Cost())
-			} else {
-				require.Error(t, fetched.submitError)
-				require.ErrorIs(t, fetched.submitError, txengine.ErrInvalidSignature)
-				require.Equal(t, resource.FeeInvalidSignature(), fetched.charge)
-				require.Equal(t, "transaction-invalid-signature", fetched.chargeContext)
+					openAccepts := signatureCleanup != tc.validatedCleanup
+					if openAccepts {
+						// The validated failure occupies the other role namespace;
+						// the same router must still try this open-only message.
+						fetched := router.handleTransaction(routerFetchedTransactionMessage(blob, 2))
+						require.NoError(t, fetched.submitError)
+						require.Equal(t, openledger.ResultSuccess, fetched.submitResult)
+						require.True(t, fetched.relayed)
+						require.Zero(t, fetched.charge.Cost())
+					} else {
+						// The fresh router isolates the open-role verification result
+						// from the direct attempt's scoped negative verdict.
+						fetchedRouter := newTestRouter(&mockEngine{}, adaptor, nil)
+						fetched := fetchedRouter.handleTransaction(routerFetchedTransactionMessage(blob, 2))
+						require.Error(t, fetched.submitError)
+						require.ErrorIs(t, fetched.submitError, txengine.ErrInvalidSignature)
+						require.Equal(t, resource.FeeInvalidSignature(), fetched.charge)
+						require.Equal(t, "transaction-invalid-signature", fetched.chargeContext)
+						require.False(t, fetched.relayed)
+					}
+				})
 			}
+		})
+	}
+}
+
+func TestRouterSignatureSuppressionRechecksGoodSignatureAfterCleanupTransition(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		initialClean   bool
+		signatureClean bool
+	}{
+		{name: "legacy signature becomes invalid after cleanup", initialClean: false, signatureClean: false},
+		{name: "cleanup signature becomes invalid after legacy", initialClean: true, signatureClean: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adaptor, _ := newRouterRuleService(t, tc.initialClean)
+			nextAdaptor, _ := newRouterRuleService(t, !tc.initialClean)
+			router := newTestRouter(&mockEngine{}, adaptor, nil)
+			blob := routerRoleSignedLoanSet(t, tc.signatureClean)
+
+			good := router.handleTransaction(routerTransactionMessage(t, blob, 1))
+			require.NoError(t, good.submitError)
+			require.Equal(t, openledger.ResultSuccess, good.submitResult)
+			require.True(t, good.relayed)
+
+			router.adaptor = nextAdaptor
+			bad := router.handleTransaction(routerTransactionMessage(t, blob, 2))
+			require.Error(t, bad.submitError)
+			require.ErrorIs(t, bad.submitError, txengine.ErrInvalidSignature)
+			require.Equal(t, resource.FeeInvalidSignature(), bad.charge)
+			require.Equal(t, "transaction-invalid-signature", bad.chargeContext)
+			require.False(t, bad.relayed)
 		})
 	}
 }
