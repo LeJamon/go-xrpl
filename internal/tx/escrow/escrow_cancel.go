@@ -174,6 +174,17 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 	// (because the engine writes ctx.Account back after Apply, which would
 	// overwrite any separate table updates for the same account).
 	ownerIsSelf := ownerID == ctx.AccountID
+	recycleReserve := rules.Enabled(amendment.FeatureFixCleanup3_4_0)
+	if recycleReserve {
+		if result := tx.DecreaseOwnerCountFor(ctx, ownerID, sponsorAddress, 1); result != ter.TesSUCCESS {
+			return result
+		}
+		if ownerIsSelf {
+			if result := ctx.UpdateAccountRoot(ownerID, ctx.Account); result != ter.TesSUCCESS {
+				return result
+			}
+		}
+	}
 
 	if isXRP {
 		// XRP: add balance directly
@@ -299,8 +310,10 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
-	if result := tx.DecreaseOwnerCountFor(ctx, ownerID, sponsorAddress, 1); result != ter.TesSUCCESS {
-		return result
+	if !recycleReserve {
+		if result := tx.DecreaseOwnerCountFor(ctx, ownerID, sponsorAddress, 1); result != ter.TesSUCCESS {
+			return result
+		}
 	}
 
 	// Delete the escrow
