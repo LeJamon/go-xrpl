@@ -2,7 +2,9 @@ package adaptor
 
 import (
 	"bytes"
+	"context"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
@@ -139,5 +141,72 @@ func TestRouter_HandleLedgerData_InvalidNodeReference_ChargesOnceAndRecovers(t *
 				require.Equal(t, before.StateUseful+1, afterValid.StateUseful)
 			}
 		})
+	}
+}
+
+func TestLedgerDataControlStatesDoNotCharge(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*testing.T, *Router) *inbound.Ledger
+	}{
+		{
+			name: "missing header",
+			setup: func(t *testing.T, _ *Router) *inbound.Ledger {
+				return inbound.New([32]byte{0xA1}, 42, 7, serveTestLogger())
+			},
+		},
+		{
+			name: "failed",
+			setup: func(t *testing.T, _ *Router) *inbound.Ledger {
+				ledger := inbound.New([32]byte{0xA2}, 42, 7, serveTestLogger())
+				now := time.Now().Add(time.Hour)
+				for range 8 {
+					ledger.OnTimer(now)
+					now = now.Add(time.Hour)
+				}
+				require.Equal(t, inbound.StateFailed, ledger.State())
+				return ledger
+			},
+		},
+		{
+			name: "completed",
+			setup: func(t *testing.T, r *Router) *inbound.Ledger {
+				ledger, valid := newLedgerNodeChargeAcquisition(t, r, false)
+				_, err := ledger.GotStateNodesUseful(valid)
+				require.NoError(t, err)
+				_, _, complete, err := ledger.CollectMissingRequestContext(context.Background(), false)
+				require.NoError(t, err)
+				require.True(t, complete)
+				return ledger
+			},
+		},
+	} {
+		for _, info := range []struct {
+			name     string
+			infoType message.LedgerInfoType
+		}{
+			{name: "state", infoType: message.LedgerInfoAsNode},
+			{name: "transaction", infoType: message.LedgerInfoTxNode},
+		} {
+			t.Run(tc.name+"/"+info.name, func(t *testing.T) {
+				r, sender := makeRouterWithBadDataRecorder(t)
+				ledger := tc.setup(t, r)
+				data := &message.LedgerData{
+					InfoType: info.infoType,
+					Nodes:    []message.LedgerNode{{NodeData: []byte{1}}},
+				}
+
+				require.True(t, r.handleInboundLedgerData(ledger, data, 7))
+				require.Empty(t, sender.getBadDataCalls(), "synchronous control states must not charge")
+
+				result := processAcquisitionWork(t.Context(), ledger, []acquisitionWorkEvent{{
+					kind:   acquisitionWorkData,
+					peerID: 7,
+					data:   data,
+				}})
+				require.NoError(t, result.err)
+				require.Empty(t, result.badData, "worker control states must not charge")
+			})
+		}
 	}
 }
