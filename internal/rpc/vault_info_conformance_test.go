@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"encoding/hex"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -196,4 +197,47 @@ func TestVaultInfoProjectsSharesFromResolvedLedger(t *testing.T) {
 	require.Len(t, mock.requests, 2)
 	assert.Equal(t, vaultKey, mock.requests[0])
 	assert.Equal(t, issuanceKey, mock.requests[1])
+}
+
+func TestVaultInfoRejectsWrongLedgerEntryTypes(t *testing.T) {
+	for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3} {
+		for _, wrongEntry := range []string{"vault", "shares"} {
+			t.Run(wrongEntry+"/api"+strconv.Itoa(apiVersion), func(t *testing.T) {
+				mock := newVaultInfoMockLedgerService()
+				method, ctx := vaultInfoTestContext(mock)
+				ctx.ApiVersion = apiVersion
+				ownerID := ledgerEntryTestAccountID(t, vaultInfoAccount)
+				vaultKey := keylet.Vault(ownerID, 1).Key
+				issuanceKey := keylet.MPTIssuance(vaultInfoShareID(t)).Key
+				mock.entries[vaultKey] = &types.LedgerEntryResult{
+					Node: encodeSyntheticRPCObject(t, map[string]any{
+						"LedgerEntryType": "Vault",
+						"ShareMPTID":      vaultShareMPTID,
+					}),
+				}
+				wrongKey := issuanceKey
+				wantLookups := 2
+				if wrongEntry == "vault" {
+					vaultKey = keylet.Account(ownerID).Key
+					wrongKey = vaultKey
+					wantLookups = 1
+				}
+				mock.entries[wrongKey] = &types.LedgerEntryResult{
+					Node: encodeSyntheticRPCObject(t, map[string]any{
+						"LedgerEntryType": "AccountRoot",
+						"Account":         vaultInfoAccount,
+					}),
+				}
+				result, rpcErr := method.Handle(ctx, []byte(`{"ledger_index":"validated","vault_id":"`+hex.EncodeToString(vaultKey[:])+`"}`))
+				require.Nil(t, result)
+				require.NotNil(t, rpcErr)
+				assert.Equal(t, rpcerrors.RpcENTRY_NOT_FOUND, rpcErr.Code)
+				assert.Equal(t, "entryNotFound", rpcErr.ErrorString)
+				assert.Equal(t, "Entry not found.", rpcErr.Message)
+				assert.Equal(t, uint32(2), rpcErr.Extra["ledger_index"])
+				assert.Equal(t, true, rpcErr.Extra["validated"])
+				assert.Len(t, mock.requests, wantLookups)
+			})
+		}
+	}
 }

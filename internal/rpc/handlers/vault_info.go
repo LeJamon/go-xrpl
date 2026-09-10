@@ -53,6 +53,9 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	if decodeErr != nil {
 		return nil, rpcInternalError("vault_info: vault decoding failed", decodeErr)
 	}
+	if vaultDecoded["LedgerEntryType"] != "Vault" {
+		return nil, rpcerrors.RpcErrorEntryNotFound("").WithExtra(response)
+	}
 
 	shareMPTIDHex, ok := vaultDecoded["ShareMPTID"].(string)
 	shareMPTIDBytes, shareErr := hex.DecodeString(shareMPTIDHex)
@@ -73,6 +76,9 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	mptIssuanceDecoded, mptDecodeErr := decodeLedgerEntryNode(mptIssuanceEntry.Node)
 	if mptDecodeErr != nil {
 		return nil, rpcInternalError("vault_info: MPTokenIssuance decoding failed", mptDecodeErr).WithExtra(response)
+	}
+	if mptIssuanceDecoded["LedgerEntryType"] != "MPTokenIssuance" {
+		return nil, rpcerrors.RpcErrorEntryNotFound("").WithExtra(response)
 	}
 
 	addLedgerEntryJSONFields(vaultDecoded, strings.ToUpper(hex.EncodeToString(vaultKey[:])))
