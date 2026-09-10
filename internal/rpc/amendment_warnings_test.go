@@ -301,15 +301,15 @@ func TestFeatureRetiredEnabledFollowsLedger(t *testing.T) {
 			require.Nil(t, rpcErr)
 
 			response := marshalToMap(t, result)
-			info, ok := response[retiredHex].(map[string]any)
-			require.True(t, ok, "response must contain retired amendment %s", retiredHex)
-			assert.Equal(t, tc.enabled, info["enabled"])
-			assert.Equal(t, true, info["supported"])
-			if tc.enabled {
-				assert.NotContains(t, info, "vetoed")
-			} else {
-				assert.Equal(t, "Obsolete", info["vetoed"])
+			expectedInfo := map[string]any{
+				"name":      retired.Name,
+				"enabled":   tc.enabled,
+				"supported": true,
 			}
+			if !tc.enabled {
+				expectedInfo["vetoed"] = "Obsolete"
+			}
+			require.Equal(t, map[string]any{retiredHex: expectedInfo}, response)
 		})
 	}
 }
