@@ -254,62 +254,74 @@ func TestFeatureMajorityFieldEndToEnd(t *testing.T) {
 // keeps an obsolete amendment supported with an "Obsolete" vote, but enabled
 // remains false until the amendment is present in the ledger state.
 func TestFeatureRetiredEnabledFollowsLedger(t *testing.T) {
-	retired := amendment.FeatureByName("fixAMMOverflowOffer")
-	require.NotNil(t, retired)
-	require.Equal(t, amendment.SupportedYes, retired.Supported)
-	require.Equal(t, amendment.VoteObsolete, retired.Vote)
-
-	retiredHex := strings.ToUpper(hex.EncodeToString(retired.ID[:]))
-	method := &handlers.FeatureMethod{}
-
-	tests := []struct {
-		name       string
-		omitSLE    bool
-		amendments [][32]byte
-		enabled    bool
+	for _, featureCase := range []struct {
+		name    string
+		retired bool
 	}{
-		{name: "no Amendments SLE", omitSLE: true, enabled: false},
-		{name: "omitted from ledger", enabled: false},
-		{name: "present in ledger", amendments: [][32]byte{retired.ID}, enabled: true},
-	}
+		{"fixAMMOverflowOffer", true},
+		{"fixCleanup3_1_3", false},
+	} {
+		t.Run(featureCase.name, func(t *testing.T) {
+			feature := amendment.FeatureByName(featureCase.name)
+			require.NotNil(t, feature)
+			require.Equal(t, amendment.SupportedYes, feature.Supported)
+			require.Equal(t, featureCase.retired, feature.Retired)
+			if featureCase.retired {
+				require.Equal(t, amendment.VoteObsolete, feature.Vote)
+			} else {
+				require.Equal(t, amendment.VoteDefaultYes, feature.Vote)
+			}
+			featureHex := strings.ToUpper(hex.EncodeToString(feature.ID[:]))
+			method := &handlers.FeatureMethod{}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var sleData []byte
-			if !tc.omitSLE {
-				var err error
-				sleData, err = pseudo.SerializeAmendmentsSLE(&pseudo.AmendmentsSLE{
-					Amendments: tc.amendments,
+			for _, tc := range []struct {
+				name       string
+				omitSLE    bool
+				amendments [][32]byte
+				enabled    bool
+			}{
+				{name: "no Amendments SLE", omitSLE: true},
+				{name: "omitted from ledger"},
+				{name: "present in ledger", amendments: [][32]byte{feature.ID}, enabled: true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					var sleData []byte
+					if !tc.omitSLE {
+						var err error
+						sleData, err = pseudo.SerializeAmendmentsSLE(&pseudo.AmendmentsSLE{
+							Amendments: tc.amendments,
+						})
+						require.NoError(t, err)
+					}
+					mock := &mockFeatureLedger{
+						mockLedgerService: newMockLedgerService(),
+						view:              &stubAmendmentsView{amendmentsData: sleData},
+					}
+					ctx := &types.RpcContext{
+						Context:    context.Background(),
+						Role:       types.RoleAdmin,
+						ApiVersion: types.ApiVersion1,
+						Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
+					}
+					params, err := json.Marshal(map[string]any{"feature": feature.Name})
+					require.NoError(t, err)
+					result, rpcErr := method.Handle(ctx, params)
+					require.Nil(t, rpcErr)
+
+					expectedInfo := map[string]any{
+						"name":      feature.Name,
+						"enabled":   tc.enabled,
+						"supported": true,
+					}
+					if !tc.enabled {
+						expectedInfo["vetoed"] = false
+						if featureCase.retired {
+							expectedInfo["vetoed"] = "Obsolete"
+						}
+					}
+					require.Equal(t, map[string]any{featureHex: expectedInfo}, marshalToMap(t, result))
 				})
-				require.NoError(t, err)
 			}
-
-			mock := &mockFeatureLedger{
-				mockLedgerService: newMockLedgerService(),
-				view:              &stubAmendmentsView{amendmentsData: sleData},
-			}
-			ctx := &types.RpcContext{
-				Context:    context.Background(),
-				Role:       types.RoleAdmin,
-				ApiVersion: types.ApiVersion1,
-				Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
-			}
-
-			params, err := json.Marshal(map[string]any{"feature": retired.Name})
-			require.NoError(t, err)
-			result, rpcErr := method.Handle(ctx, params)
-			require.Nil(t, rpcErr)
-
-			response := marshalToMap(t, result)
-			expectedInfo := map[string]any{
-				"name":      retired.Name,
-				"enabled":   tc.enabled,
-				"supported": true,
-			}
-			if !tc.enabled {
-				expectedInfo["vetoed"] = "Obsolete"
-			}
-			require.Equal(t, map[string]any{retiredHex: expectedInfo}, response)
 		})
 	}
 }

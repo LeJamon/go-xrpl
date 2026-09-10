@@ -131,7 +131,7 @@ func (m *FeatureMethod) getAmendmentState(services *types.ServiceGraph) (enabled
 	}
 
 	data, err := view.Read(keylet.Amendments())
-	if err != nil || data == nil {
+	if err != nil {
 		return nil, nil
 	}
 
