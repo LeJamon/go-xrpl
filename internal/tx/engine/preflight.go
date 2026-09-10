@@ -620,17 +620,23 @@ func (e *Engine) preflightBatchSignerStructure(tx txcore.Transaction) ter.Result
 // when SkipSignatureVerification is false. Authorization checks (master/regular
 // key) live in preclaim.
 func (e *Engine) verifySignatures(tx txcore.Transaction) ter.Result {
+	common := tx.GetCommon()
 	if e.config.SkipSignatureVerification || e.config.ApplyFlags&txcore.TapDRY_RUN != 0 {
 		return ter.TesSUCCESS
 	}
+	if common.GetFlags()&txcore.TfInnerBatchTxn != 0 {
+		return ter.TemINVALID
+	}
+	rules := e.rules()
+	legacyRole := common.SignatureCacheLegacyRole(rules)
 	if matches, err := txcore.CurrentFieldsMatchRaw(tx); err != nil || !matches {
 		return ter.TemINVALID
 	}
 	txID, idErr := txcore.ComputeCurrentTransactionHash(tx)
-	if idErr == nil && tx.GetCommon().SignatureVerified(txID) {
+	if idErr == nil && common.SignatureVerifiedWithRules(txID, rules) {
 		return ter.TesSUCCESS
 	}
-	if idErr == nil && sigcache.Verified(txID) {
+	if idErr == nil && sigcache.VerifiedWithRules(txID, legacyRole) {
 		return ter.TesSUCCESS
 	}
 	// Verify the outer single/multi-sign signature first, mirroring rippled's
@@ -642,16 +648,16 @@ func (e *Engine) verifySignatures(tx txcore.Transaction) ter.Result {
 	// sfCounterpartySignature if present, mirroring the counterparty arm of
 	// rippled STTx::checkSign. A failure is a bad signature (checkValidity's
 	// Validity::SigBad), which rippled maps to temINVALID.
-	if cp := tx.GetCommon().CounterpartySignature; cp != nil {
-		if err := sign.VerifyCounterpartySignature(tx, cp, true); err != nil {
+	if cp := common.CounterpartySignature; cp != nil {
+		if err := sign.VerifyCounterpartySignatureWithRules(tx, cp, true, rules); err != nil {
 			return ter.TemINVALID
 		}
 	}
 	// SponsorSignature is checked after CounterpartySignature, matching
 	// STTx::checkSign. Its contents are excluded from the signing projection,
 	// but every signature still binds all ordinary transaction fields.
-	if sponsor := tx.GetCommon().SponsorSignature; sponsor != nil {
-		if err := sign.VerifySponsorSignature(tx, sponsor, true); err != nil {
+	if sponsor := common.SponsorSignature; sponsor != nil {
+		if err := sign.VerifySponsorSignatureWithRules(tx, sponsor, true, rules); err != nil {
 			return ter.TemINVALID
 		}
 	}
@@ -666,8 +672,8 @@ func (e *Engine) verifySignatures(tx txcore.Transaction) ter.Result {
 		}
 	}
 	if idErr == nil {
-		tx.GetCommon().MarkSignatureVerified(txID)
-		sigcache.MarkVerified(txID)
+		common.MarkSignatureVerifiedWithRules(txID, rules)
+		sigcache.MarkVerifiedWithRules(txID, legacyRole)
 	}
 	return ter.TesSUCCESS
 }
@@ -720,7 +726,15 @@ func (e *Engine) verifyOuterSignature(tx txcore.Transaction) ter.Result {
 // verdict. Authorization against ledger signer lists remains in preclaim.
 var ErrInvalidSignature = errors.New("invalid transaction signature")
 
+// PrewarmSignature retains the legacy pre-cleanup rules behavior for callers
+// that do not have a ledger rules snapshot.
 func PrewarmSignature(txn txcore.Transaction) error {
+	return PrewarmSignatureWithRules(txn, nil)
+}
+
+// PrewarmSignatureWithRules is PrewarmSignature with the amendment rules that
+// determine the signature namespace and nested role-signature payload.
+func PrewarmSignatureWithRules(txn txcore.Transaction, rules *amendment.Rules) error {
 	if txn == nil {
 		return nil
 	}
@@ -728,20 +742,26 @@ func PrewarmSignature(txn txcore.Transaction) error {
 	if common == nil {
 		return nil
 	}
+	if common.GetFlags()&txcore.TfInnerBatchTxn != 0 {
+		if reason := sign.CheckSTTxSignature(txn, rules, true); reason != "" {
+			return fmt.Errorf("%w: %s", ErrInvalidSignature, reason)
+		}
+	}
 	txID, idErr := txcore.ComputeCurrentTransactionHash(txn)
-	if idErr == nil && common.SignatureVerified(txID) {
+	if idErr == nil && common.SignatureVerifiedWithRules(txID, rules) {
 		return nil
 	}
-	if reason := sign.CheckSTTxSignature(txn, nil, true); reason != "" {
+	if reason := sign.CheckSTTxSignature(txn, rules, true); reason != "" {
 		return fmt.Errorf("%w: %s", ErrInvalidSignature, reason)
 	}
 	if idErr != nil {
 		return nil
 	}
-	common.MarkSignatureVerified(txID)
+	legacyRole := common.SignatureCacheLegacyRole(rules)
+	common.MarkSignatureVerifiedWithRules(txID, rules)
 	// Publish to the tx-ID cache so the consensus build path (fresh object,
 	// cold flag) skips the redundant whole-transaction signature verify.
-	sigcache.MarkVerified(txID)
+	sigcache.MarkVerifiedWithRules(txID, legacyRole)
 	return nil
 }
 
