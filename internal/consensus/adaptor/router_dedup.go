@@ -190,7 +190,12 @@ func (s *transactionSuppression) claimWithSignatureContexts(
 			break
 		}
 	}
-	return s.claimContextLocked(entry, now, contextMask, badSignature)
+	shouldProcess, bad = s.claimContextLocked(entry, now, contextMask, badSignature)
+	if !shouldProcess {
+		// Legacy role failures do not carry the public BAD charge.
+		bad = contextMask&(1<<cleanupSignatureSlot) != 0 && entry.badSignature[cleanupSignatureSlot]
+	}
+	return shouldProcess, bad
 }
 
 func signatureCleanupEra(rules *amendment.Rules) bool {
