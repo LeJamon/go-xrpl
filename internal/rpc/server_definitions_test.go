@@ -3,13 +3,16 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
-
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/ledger/entry/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -107,6 +110,73 @@ func TestServerDefinitionsFieldsArrayFormat(t *testing.T) {
 	}
 }
 
+// TestServerDefinitionsFieldOrder pins the order produced by rippled's
+// ServerDefinitions constructor: fixed sentinel rows followed by known fields
+// in serialized field-code order.
+func TestServerDefinitionsFieldOrder(t *testing.T) {
+	method := &handlers.ServerDefinitionsMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+	}
+
+	result, rpcErr := method.Handle(ctx, nil)
+	require.Nil(t, rpcErr)
+	resp := result.(map[string]any)
+	fields, ok := resp["FIELDS"].([]any)
+	require.True(t, ok)
+
+	defsFields := definitions.Get().Fields()
+	sentinels := []string{
+		"Invalid",
+		"ObjectEndMarker",
+		"ArrayEndMarker",
+		"taker_gets_funded",
+		"taker_pays_funded",
+	}
+	require.Len(t, fields, len(defsFields))
+	for i, want := range sentinels {
+		pair, ok := fields[i].([]any)
+		require.True(t, ok)
+		require.Len(t, pair, 2)
+		assert.Equal(t, want, pair[0])
+	}
+
+	// The field-code order is derived from the same definitions source used by
+	// the codec, with Generic occupying the source's code-zero slot.
+	orderedNames := make([]string, 0, len(defsFields)-len(sentinels))
+	seen := make(map[string]struct{}, len(sentinels))
+	for _, name := range sentinels {
+		seen[name] = struct{}{}
+	}
+	for name := range defsFields {
+		if _, ok := seen[name]; !ok {
+			orderedNames = append(orderedNames, name)
+		}
+	}
+	sort.Slice(orderedNames, func(i, j int) bool {
+		left, right := defsFields[orderedNames[i]], defsFields[orderedNames[j]]
+		leftCode, rightCode := left.Ordinal, right.Ordinal
+		if orderedNames[i] == "Generic" {
+			leftCode = 0
+		}
+		if orderedNames[j] == "Generic" {
+			rightCode = 0
+		}
+		if leftCode != rightCode {
+			return leftCode < rightCode
+		}
+		return orderedNames[i] < orderedNames[j]
+	})
+	for i, want := range orderedNames {
+		pair, ok := fields[len(sentinels)+i].([]any)
+		require.True(t, ok)
+		require.Len(t, pair, 2)
+		assert.Equal(t, want, pair[0])
+	}
+}
+
 // TestServerDefinitionsNonEmptyResults verifies that all definition categories
 // contain actual data.
 func TestServerDefinitionsNonEmptyResults(t *testing.T) {
@@ -188,6 +258,9 @@ func TestServerDefinitionsHash(t *testing.T) {
 	hash, ok := resp["hash"].(string)
 	require.True(t, ok, "response should contain a string hash")
 	require.Len(t, hash, 64, "hash should be a 256-bit hex string")
+	// Pinned to the v3.4.0-rc1 ServerDefinitions document and its compact
+	// Json::FastWriter serialization (oracle commit 2ad4def35fd8580da027462517ba3375cc005c94).
+	assert.Equal(t, "FBBBB4E23DF1C20B543202A170ADADB09C16350B12DADAF4B490357DF67D4AE3", hash)
 
 	t.Run("matching hash short-circuits", func(t *testing.T) {
 		params, err := json.Marshal(map[string]any{"hash": hash})
@@ -220,8 +293,17 @@ func TestServerDefinitionsHash(t *testing.T) {
 		assert.Contains(t, full.(map[string]any), "FIELDS")
 	})
 
+	t.Run("literal zero hash returns full document", func(t *testing.T) {
+		params, err := json.Marshal(map[string]any{"hash": "0"})
+		require.NoError(t, err)
+
+		full, rpcErr := method.Handle(ctx, params)
+		require.Nil(t, rpcErr)
+		assert.Contains(t, full.(map[string]any), "FIELDS")
+	})
+
 	t.Run("invalid hash is rejected", func(t *testing.T) {
-		for _, bad := range []any{"nothex", 12345, strings.Repeat("a", 63)} {
+		for _, bad := range []any{nil, "", "nothex", 12345, strings.Repeat("a", 63)} {
 			params, err := json.Marshal(map[string]any{"hash": bad})
 			require.NoError(t, err)
 
@@ -471,6 +553,119 @@ func TestServerDefinitions_3_4_0_RC1_Sections(t *testing.T) {
 		assert.EqualValues(t, 1, num(asf["asfRequireDest"]))
 		assert.EqualValues(t, 17, num(asf["asfAllowTrustLineLocking"]))
 		assert.NotContains(t, asf, "asfTshCollect", "asf 11 is intentionally absent")
+	})
+
+	t.Run("all rc1 flag groups and entries are present", func(t *testing.T) {
+		transactionCounts := map[string]int{
+			"universal": 2, "AccountSet": 6, "OfferCreate": 5, "Payment": 4,
+			"TrustSet": 7, "EnableAmendment": 2, "PaymentChannelClaim": 2,
+			"NFTokenMint": 4, "MPTokenIssuanceCreate": 7, "MPTokenAuthorize": 1,
+			"MPTokenIssuanceSet": 9, "NFTokenCreateOffer": 1, "AMMDeposit": 6,
+			"AMMWithdraw": 7, "AMMClawback": 1, "XChainModifyBridge": 1,
+			"VaultCreate": 2, "Batch": 4, "LoanSet": 1, "LoanPay": 3,
+			"LoanManage": 3, "SponsorshipSet": 5, "SponsorshipTransfer": 3,
+		}
+		txFlags, ok := resp["TRANSACTION_FLAGS"].(map[string]any)
+		require.True(t, ok)
+		require.Len(t, txFlags, len(transactionCounts))
+		for name, count := range transactionCounts {
+			group, ok := txFlags[name].(map[string]any)
+			require.True(t, ok, "TRANSACTION_FLAGS.%s should be a map", name)
+			assert.Len(t, group, count, "TRANSACTION_FLAGS.%s", name)
+		}
+
+		ledgerCounts := map[string]int{
+			"AccountRoot": 15, "Offer": 3, "RippleState": 11, "SignerList": 1,
+			"DirNode": 2, "NFTokenOffer": 1, "MPTokenIssuance": 8, "MPToken": 3,
+			"Credential": 1, "Vault": 1, "Loan": 3, "Sponsorship": 2,
+		}
+		ledgerFlags, ok := resp["LEDGER_ENTRY_FLAGS"].(map[string]any)
+		require.True(t, ok)
+		require.Len(t, ledgerFlags, len(ledgerCounts))
+		for name, count := range ledgerCounts {
+			group, ok := ledgerFlags[name].(map[string]any)
+			require.True(t, ok, "LEDGER_ENTRY_FLAGS.%s should be a map", name)
+			assert.Len(t, group, count, "LEDGER_ENTRY_FLAGS.%s", name)
+		}
+
+		accountFlags, ok := resp["ACCOUNT_SET_FLAGS"].(map[string]any)
+		require.True(t, ok)
+		assert.Len(t, accountFlags, 16)
+	})
+}
+
+type serverDefinitionFormatField struct {
+	name        string
+	optionality int
+}
+
+func assertServerDefinitionFormat(
+	t *testing.T,
+	raw any,
+	want []serverDefinitionFormatField,
+) {
+	t.Helper()
+	section, ok := raw.([]any)
+	require.True(t, ok, "format section should be an array")
+	require.Len(t, section, len(want))
+	for i, expected := range want {
+		field, ok := section[i].(map[string]any)
+		require.True(t, ok, "format field %d should be an object", i)
+		assert.Equal(t, expected.name, field["name"], "format field %d name", i)
+		assert.EqualValues(t, expected.optionality, field["optionality"], "format field %d optionality", i)
+	}
+}
+
+func txFormatFields(fields []tx.FormatField) []serverDefinitionFormatField {
+	out := make([]serverDefinitionFormatField, len(fields))
+	for i, field := range fields {
+		out[i] = serverDefinitionFormatField{name: field.Name, optionality: field.Style}
+	}
+	return out
+}
+
+func ledgerFormatFields(fields []schema.FormatField) []serverDefinitionFormatField {
+	out := make([]serverDefinitionFormatField, len(fields))
+	for i, field := range fields {
+		out[i] = serverDefinitionFormatField{name: field.Name, optionality: field.Style}
+	}
+	return out
+}
+
+// TestServerDefinitionsFormatsAreComplete compares every response format to
+// the canonical transaction and ledger-entry templates. This catches omitted
+// type sections and fields in addition to the representative rc1 checks above.
+func TestServerDefinitionsFormatsAreComplete(t *testing.T) {
+	method := &handlers.ServerDefinitionsMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+	}
+	result, rpcErr := method.Handle(ctx, nil)
+	require.Nil(t, rpcErr)
+	resp := result.(map[string]any)
+
+	t.Run("transactions", func(t *testing.T) {
+		formats, ok := resp["TRANSACTION_FORMATS"].(map[string]any)
+		require.True(t, ok)
+		templates := tx.FormatTemplates()
+		require.Len(t, formats, len(templates)+1)
+		assertServerDefinitionFormat(t, formats["common"], txFormatFields(tx.FormatCommonFields()))
+		for name, fields := range templates {
+			assertServerDefinitionFormat(t, formats[name], txFormatFields(fields))
+		}
+	})
+
+	t.Run("ledger entries", func(t *testing.T) {
+		formats, ok := resp["LEDGER_ENTRY_FORMATS"].(map[string]any)
+		require.True(t, ok)
+		canonical := schema.Formats()
+		require.Len(t, formats, len(canonical)+1)
+		assertServerDefinitionFormat(t, formats["common"], ledgerFormatFields(schema.CommonFields()))
+		for name, fields := range canonical {
+			assertServerDefinitionFormat(t, formats[name], ledgerFormatFields(fields))
+		}
 	})
 }
 

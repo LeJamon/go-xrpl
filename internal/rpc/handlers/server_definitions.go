@@ -36,17 +36,46 @@ func buildServerDefinitions() {
 	defs := definitions.Get()
 	defsFields := defs.Fields()
 
-	// Collect field names for deterministic ordering.
-	fieldNames := make([]string, 0, len(defsFields))
-	for name := range defsFields {
-		fieldNames = append(fieldNames, name)
+	// Build FIELDS in rippled's order: the five non-SField sentinels first,
+	// followed by the known SFields sorted by their serialized field code.
+	// Each entry is [fieldName, {nth, isVLEncoded, isSerialized, isSigningField, type}].
+	const sentinelCount = 5
+	sentinelNames := [...]string{
+		"Invalid",
+		"ObjectEndMarker",
+		"ArrayEndMarker",
+		"taker_gets_funded",
+		"taker_pays_funded",
 	}
-	sort.Strings(fieldNames)
+	fieldNames := make([]string, 0, len(defsFields)-sentinelCount)
+	seen := make(map[string]struct{}, sentinelCount)
+	for _, name := range sentinelNames {
+		if _, ok := defsFields[name]; !ok {
+			panic("server_definitions: missing field sentinel " + name)
+		}
+		seen[name] = struct{}{}
+	}
+	for name := range defsFields {
+		if _, ok := seen[name]; !ok {
+			fieldNames = append(fieldNames, name)
+		}
+	}
+	sort.Slice(fieldNames, func(i, j int) bool {
+		left, right := defsFields[fieldNames[i]], defsFields[fieldNames[j]]
+		if fieldNames[i] == "Generic" {
+			return fieldNames[j] != "Generic"
+		}
+		if fieldNames[j] == "Generic" {
+			return false
+		}
+		if left.Ordinal != right.Ordinal {
+			return left.Ordinal < right.Ordinal
+		}
+		return fieldNames[i] < fieldNames[j]
+	})
 
-	// Build FIELDS array matching rippled format:
-	// Each entry is [fieldName, {nth, isVLEncoded, isSerialized, isSigningField, type}]
 	fields := make([]any, 0, len(defsFields))
-	for _, name := range fieldNames {
+	appendField := func(name string) {
 		fi := defsFields[name]
 		fields = append(fields, []any{
 			name,
@@ -58,6 +87,12 @@ func buildServerDefinitions() {
 				"type":           fi.Type,
 			},
 		})
+	}
+	for _, name := range sentinelNames {
+		appendField(name)
+	}
+	for _, name := range fieldNames {
+		appendField(name)
 	}
 
 	serverDefsBase = map[string]any{
@@ -76,14 +111,12 @@ func buildServerDefinitions() {
 	serverDefsBase["LEDGER_ENTRY_FLAGS"] = ledgerFlagsTable
 	serverDefsBase["ACCOUNT_SET_FLAGS"] = accountSetFlagsTable
 
-	// Hash follows rippled's approach (ServerInfo.cpp:288-293) — sha512Half over
-	// the serialized definitions document, emitted as the response `hash` field
-	// so clients can cache it and short-circuit on subsequent calls. encoding/json
-	// sorts map keys, so the serialization is deterministic across calls. The
-	// value is a per-server cache token (the client echoes back the hash this
-	// server gave it), not a cross-implementation constant: it intentionally
-	// need not equal rippled's, whose Json::FastWriter serializes differently.
-	encoded, _ := json.Marshal(serverDefsBase)
+	// Hash the compact JSON document, matching rippled's Json::FastWriter. Go's
+	// encoder sorts object keys and emits no trailing newline, as FastWriter does.
+	encoded, err := json.Marshal(serverDefsBase)
+	if err != nil {
+		panic("server_definitions: encode definitions: " + err.Error())
+	}
 	sum := sha512half.Sum(encoded)
 	serverDefsHash = strings.ToUpper(hex.EncodeToString(sum[:]))
 }
@@ -155,9 +188,13 @@ func ledgerFormatFieldsToJSON(fields []schema.FormatField) []any {
 	return arr
 }
 
-// isValidDefinitionsHash reports whether s is a 256-bit hash in hex form,
-// matching rippled's uint256::parseHex requirement (ServerInfo.cpp:307).
+// isValidDefinitionsHash reports whether s is accepted by rippled's
+// uint256::parseHex (ServerInfo.cpp:307). The parser treats the literal "0"
+// as the zero value before checking the canonical 64-character form.
 func isValidDefinitionsHash(s string) bool {
+	if s == "0" {
+		return true
+	}
 	if len(s) != 64 {
 		return false
 	}
