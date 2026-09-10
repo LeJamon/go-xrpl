@@ -2,20 +2,71 @@ package rpc
 
 import (
 	"context"
+	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
-	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/ledger/entry/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// This fixture is generated independently from the pinned rippled source
+// macros; see testdata/server_definitions_rc1_oracle.py.
+//
+//go:embed testdata/server_definitions_rc1_hashes.json
+var serverDefinitionsRC1HashFixture []byte
+
+type serverDefinitionsSectionFixture struct {
+	SHA512Half string `json:"sha512_half"`
+	Bytes      int    `json:"bytes"`
+	Groups     int    `json:"groups"`
+	Entries    int    `json:"entries"`
+}
+
+type serverDefinitionsHashFixture struct {
+	Oracle struct {
+		Tag    string `json:"tag"`
+		Commit string `json:"commit"`
+	} `json:"oracle"`
+	FullDocumentSHA512Half string                                     `json:"full_document_sha512_half"`
+	FullDocumentBytes      int                                        `json:"full_document_bytes"`
+	Sections               map[string]serverDefinitionsSectionFixture `json:"sections"`
+}
+
+func loadServerDefinitionsRC1HashFixture(t *testing.T) serverDefinitionsHashFixture {
+	t.Helper()
+	var fixture serverDefinitionsHashFixture
+	require.NoError(t, json.Unmarshal(serverDefinitionsRC1HashFixture, &fixture))
+	return fixture
+}
+
+func serverDefinitionsSectionStats(value any) (groups, entries int) {
+	switch value := value.(type) {
+	case []any:
+		return 0, len(value)
+	case map[string]any:
+		for _, child := range value {
+			groups++
+			switch child := child.(type) {
+			case []any:
+				entries += len(child)
+			case map[string]any:
+				entries += len(child)
+			default:
+				entries++
+			}
+		}
+	}
+	return groups, entries
+}
 
 // TestServerDefinitionsReturnsTypeDefinitions tests that server_definitions returns
 // all required definition categories: TYPES, FIELDS, LEDGER_ENTRY_TYPES,
@@ -260,7 +311,7 @@ func TestServerDefinitionsHash(t *testing.T) {
 	require.Len(t, hash, 64, "hash should be a 256-bit hex string")
 	// Pinned to the v3.4.0-rc1 ServerDefinitions document and its compact
 	// Json::FastWriter serialization (oracle commit 2ad4def35fd8580da027462517ba3375cc005c94).
-	assert.Equal(t, "FBBBB4E23DF1C20B543202A170ADADB09C16350B12DADAF4B490357DF67D4AE3", hash)
+	assert.Equal(t, "1EA05B0FC11101F7C500BD0DAC794A8BC746A7FBA6250B75489603EB820E0FF5", hash)
 
 	t.Run("matching hash short-circuits", func(t *testing.T) {
 		params, err := json.Marshal(map[string]any{"hash": hash})
@@ -303,7 +354,15 @@ func TestServerDefinitionsHash(t *testing.T) {
 	})
 
 	t.Run("invalid hash is rejected", func(t *testing.T) {
-		for _, bad := range []any{nil, "", "nothex", 12345, strings.Repeat("a", 63)} {
+		for _, bad := range []any{
+			nil,
+			"",
+			"nothex",
+			12345,
+			strings.Repeat("a", 63),
+			strings.Repeat("g", 64),
+			strings.Repeat("a", 65),
+		} {
 			params, err := json.Marshal(map[string]any{"hash": bad})
 			require.NoError(t, err)
 
@@ -312,6 +371,64 @@ func TestServerDefinitionsHash(t *testing.T) {
 			assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 		}
 	})
+}
+
+// TestServerDefinitionsMatchesRC1SourceFixture checks every response section
+// against hashes independently derived from rippled's rc1 protocol source.
+// The section checks make omissions in formats, flags, or type tables visible
+// even when the complete-document hash is accidentally updated.
+func TestServerDefinitionsMatchesRC1SourceFixture(t *testing.T) {
+	fixture := loadServerDefinitionsRC1HashFixture(t)
+	assert.Equal(t, "3.4.0-rc1", fixture.Oracle.Tag)
+	assert.Equal(t, "2ad4def35fd8580da027462517ba3375cc005c94", fixture.Oracle.Commit)
+	assert.Equal(t,
+		"1EA05B0FC11101F7C500BD0DAC794A8BC746A7FBA6250B75489603EB820E0FF5",
+		fixture.FullDocumentSHA512Half,
+	)
+
+	result, rpcErr := (&handlers.ServerDefinitionsMethod{}).Handle(&types.RpcContext{
+		Context: context.Background(), Role: types.RoleGuest, ApiVersion: types.ApiVersion1,
+	}, nil)
+	require.Nil(t, rpcErr)
+	response := result.(map[string]any)
+	document := make(map[string]any, len(response)-1)
+	for name, value := range response {
+		if name != "hash" {
+			document[name] = value
+		}
+	}
+
+	encoded, err := json.Marshal(document)
+	require.NoError(t, err)
+	sum := sha512half.Sum(encoded)
+	assert.Equal(t, fixture.FullDocumentBytes, len(encoded))
+	assert.Equal(t, fixture.FullDocumentSHA512Half, strings.ToUpper(hex.EncodeToString(sum[:])))
+	assert.Len(t, document, len(fixture.Sections))
+	codecResults := definitions.Get().TransactionResults()
+	assert.Len(t, codecResults, 197, "codec definitions retain the complete TER enum table")
+	assert.Contains(t, codecResults, "tecHOOK_REJECTED")
+	assert.Contains(t, codecResults, "tecNO_DELEGATE_PERMISSION")
+
+	for name, expected := range fixture.Sections {
+		section, ok := document[name]
+		require.True(t, ok, "source fixture section %s is missing", name)
+		encoded, err := json.Marshal(section)
+		require.NoError(t, err)
+		sum := sha512half.Sum(encoded)
+		var generic any
+		require.NoError(t, json.Unmarshal(encoded, &generic))
+		if name == "TRANSACTION_RESULTS" {
+			results, ok := generic.(map[string]any)
+			require.True(t, ok)
+			assert.NotContains(t, results, "tecHOOK_REJECTED")
+			assert.NotContains(t, results, "tecNO_DELEGATE_PERMISSION")
+		}
+		groups, entries := serverDefinitionsSectionStats(generic)
+		assert.Equal(t, expected.Bytes, len(encoded), "%s byte length", name)
+		assert.Equal(t, expected.Groups, groups, "%s group count", name)
+		assert.Equal(t, expected.Entries, entries, "%s entry count", name)
+		assert.Equal(t, expected.SHA512Half, strings.ToUpper(hex.EncodeToString(sum[:])), "%s hash", name)
+	}
 }
 
 // TestServerDefinitionsInvalidSentinel verifies the Invalid:-1 sentinel is
@@ -555,118 +672,6 @@ func TestServerDefinitions_3_4_0_RC1_Sections(t *testing.T) {
 		assert.NotContains(t, asf, "asfTshCollect", "asf 11 is intentionally absent")
 	})
 
-	t.Run("all rc1 flag groups and entries are present", func(t *testing.T) {
-		transactionCounts := map[string]int{
-			"universal": 2, "AccountSet": 6, "OfferCreate": 5, "Payment": 4,
-			"TrustSet": 7, "EnableAmendment": 2, "PaymentChannelClaim": 2,
-			"NFTokenMint": 4, "MPTokenIssuanceCreate": 7, "MPTokenAuthorize": 1,
-			"MPTokenIssuanceSet": 9, "NFTokenCreateOffer": 1, "AMMDeposit": 6,
-			"AMMWithdraw": 7, "AMMClawback": 1, "XChainModifyBridge": 1,
-			"VaultCreate": 2, "Batch": 4, "LoanSet": 1, "LoanPay": 3,
-			"LoanManage": 3, "SponsorshipSet": 5, "SponsorshipTransfer": 3,
-		}
-		txFlags, ok := resp["TRANSACTION_FLAGS"].(map[string]any)
-		require.True(t, ok)
-		require.Len(t, txFlags, len(transactionCounts))
-		for name, count := range transactionCounts {
-			group, ok := txFlags[name].(map[string]any)
-			require.True(t, ok, "TRANSACTION_FLAGS.%s should be a map", name)
-			assert.Len(t, group, count, "TRANSACTION_FLAGS.%s", name)
-		}
-
-		ledgerCounts := map[string]int{
-			"AccountRoot": 15, "Offer": 3, "RippleState": 11, "SignerList": 1,
-			"DirNode": 2, "NFTokenOffer": 1, "MPTokenIssuance": 8, "MPToken": 3,
-			"Credential": 1, "Vault": 1, "Loan": 3, "Sponsorship": 2,
-		}
-		ledgerFlags, ok := resp["LEDGER_ENTRY_FLAGS"].(map[string]any)
-		require.True(t, ok)
-		require.Len(t, ledgerFlags, len(ledgerCounts))
-		for name, count := range ledgerCounts {
-			group, ok := ledgerFlags[name].(map[string]any)
-			require.True(t, ok, "LEDGER_ENTRY_FLAGS.%s should be a map", name)
-			assert.Len(t, group, count, "LEDGER_ENTRY_FLAGS.%s", name)
-		}
-
-		accountFlags, ok := resp["ACCOUNT_SET_FLAGS"].(map[string]any)
-		require.True(t, ok)
-		assert.Len(t, accountFlags, 16)
-	})
-}
-
-type serverDefinitionFormatField struct {
-	name        string
-	optionality int
-}
-
-func assertServerDefinitionFormat(
-	t *testing.T,
-	raw any,
-	want []serverDefinitionFormatField,
-) {
-	t.Helper()
-	section, ok := raw.([]any)
-	require.True(t, ok, "format section should be an array")
-	require.Len(t, section, len(want))
-	for i, expected := range want {
-		field, ok := section[i].(map[string]any)
-		require.True(t, ok, "format field %d should be an object", i)
-		assert.Equal(t, expected.name, field["name"], "format field %d name", i)
-		assert.EqualValues(t, expected.optionality, field["optionality"], "format field %d optionality", i)
-	}
-}
-
-func txFormatFields(fields []tx.FormatField) []serverDefinitionFormatField {
-	out := make([]serverDefinitionFormatField, len(fields))
-	for i, field := range fields {
-		out[i] = serverDefinitionFormatField{name: field.Name, optionality: field.Style}
-	}
-	return out
-}
-
-func ledgerFormatFields(fields []schema.FormatField) []serverDefinitionFormatField {
-	out := make([]serverDefinitionFormatField, len(fields))
-	for i, field := range fields {
-		out[i] = serverDefinitionFormatField{name: field.Name, optionality: field.Style}
-	}
-	return out
-}
-
-// TestServerDefinitionsFormatsAreComplete compares every response format to
-// the canonical transaction and ledger-entry templates. This catches omitted
-// type sections and fields in addition to the representative rc1 checks above.
-func TestServerDefinitionsFormatsAreComplete(t *testing.T) {
-	method := &handlers.ServerDefinitionsMethod{}
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion1,
-	}
-	result, rpcErr := method.Handle(ctx, nil)
-	require.Nil(t, rpcErr)
-	resp := result.(map[string]any)
-
-	t.Run("transactions", func(t *testing.T) {
-		formats, ok := resp["TRANSACTION_FORMATS"].(map[string]any)
-		require.True(t, ok)
-		templates := tx.FormatTemplates()
-		require.Len(t, formats, len(templates)+1)
-		assertServerDefinitionFormat(t, formats["common"], txFormatFields(tx.FormatCommonFields()))
-		for name, fields := range templates {
-			assertServerDefinitionFormat(t, formats[name], txFormatFields(fields))
-		}
-	})
-
-	t.Run("ledger entries", func(t *testing.T) {
-		formats, ok := resp["LEDGER_ENTRY_FORMATS"].(map[string]any)
-		require.True(t, ok)
-		canonical := schema.Formats()
-		require.Len(t, formats, len(canonical)+1)
-		assertServerDefinitionFormat(t, formats["common"], ledgerFormatFields(schema.CommonFields()))
-		for name, fields := range canonical {
-			assertServerDefinitionFormat(t, formats[name], ledgerFormatFields(fields))
-		}
-	})
 }
 
 // TestServerDefinitionsMethodMetadata tests the method's metadata functions.
