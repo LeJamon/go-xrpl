@@ -1527,10 +1527,14 @@ func TestAMMBookStep_FixAMMOfferBlockedByLOB(t *testing.T) {
 					t.Run(name, func(t *testing.T) {
 						env := amm.NewAMMTestEnv(t)
 						env.DisableFeature("fixAMMOverflowOffer")
-						if !fixAMMv1_1 {
+						if fixAMMv1_1 {
+							env.EnableFeature("fixAMMv1_1")
+						} else {
 							env.DisableFeature("fixAMMv1_1")
 						}
-						if !mptTokensV2 {
+						if mptTokensV2 {
+							env.EnableFeature("MPTokensV2")
+						} else {
 							env.DisableFeature("MPTokensV2")
 						}
 						env.Close()
