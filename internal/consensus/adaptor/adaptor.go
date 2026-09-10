@@ -24,6 +24,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 )
 
 var (
@@ -953,6 +954,38 @@ func (a *Adaptor) GetTx(id consensus.TxID) ([]byte, error) {
 // out; local=false (peer-relay) leaves resends to the peer.
 func (a *Adaptor) AddPendingTx(blob []byte, local bool) {
 	_, _ = a.SubmitPendingTx(blob, local)
+}
+
+// peerSignatureSnapshot captures both admission frontiers before a peer
+// transaction is checked. The validated snapshot is used for direct peer
+// admission when available; the open snapshot is always returned for the
+// serialized open-ledger recheck.
+func (a *Adaptor) peerSignatureSnapshot() (validatedRules, openRules *amendment.Rules, validatedAdmission bool) {
+	if a == nil || a.ledgerService == nil {
+		return nil, nil, false
+	}
+	openRules = a.ledgerService.TransactionRules()
+	if a.ledgerService.IsStandalone() {
+		return nil, openRules, false
+	}
+	if validated := a.validatedLedger(); validated != nil {
+		return validated.Rules(), openRules, true
+	}
+	return nil, openRules, false
+}
+
+// validatePeerSignature applies the validated-ledger admission check for a
+// transaction received directly from a peer. Transactions learned from a
+// transaction set use the open-ledger path, matching rippled's
+// processTransactionSet behavior.
+func (a *Adaptor) validatePeerSignature(ptx openledger.PendingTx, rules *amendment.Rules) error {
+	if a == nil || a.ledgerService == nil || a.ledgerService.IsStandalone() {
+		return nil
+	}
+	if ptx.Parsed == nil {
+		return errors.New("peer transaction has no parsed form")
+	}
+	return txengine.PrewarmSignatureWithRules(ptx.Parsed, rules)
 }
 
 func (a *Adaptor) SubmitPendingTx(blob []byte, local bool) (openledger.SubmitOutcome, error) {

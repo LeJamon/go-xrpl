@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/rcl"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
@@ -655,9 +656,22 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 		msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
 		return dispatch
 	}
+	var validatedRules, openRules *amendment.Rules
+	validatedAdmission := false
+	if r.adaptor != nil {
+		validatedRules, openRules, validatedAdmission = r.adaptor.peerSignatureSnapshot()
+	}
+	roleBearing := pendingErr == nil && transactionHasRoleSignature(pending.Parsed)
 	admittedBad := false
 	if pendingErr == nil && r.txSeen != nil {
-		shouldProcess, bad := r.txSeen.claim(pending.Hash, uint64(msg.PeerID))
+		shouldProcess, bad := r.txSeen.claimWithSignatureContexts(
+			pending.Hash,
+			uint64(msg.PeerID),
+			roleBearing,
+			validatedRules,
+			openRules,
+			validatedAdmission,
+		)
 		if !shouldProcess {
 			if bad {
 				dispatch.charge = resource.FeeUselessData()
@@ -685,6 +699,25 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 		msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
 		return dispatch
 	}
+	if pendingErr == nil && validatedAdmission {
+		if err := r.adaptor.validatePeerSignature(pending, validatedRules); err != nil {
+			dispatch.submitResult = openledger.ResultFailure
+			dispatch.submitError = err
+			if r.txSeen != nil {
+				if errors.Is(err, txengine.ErrInvalidSignature) {
+					if roleBearing {
+						r.txSeen.markBadSignature(pending.Hash, validatedRules)
+					} else {
+						r.txSeen.markBad(pending.Hash)
+					}
+				}
+			}
+			dispatch.charge = resource.FeeInvalidSignature()
+			dispatch.chargeContext = "transaction-invalid-signature"
+			msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
+			return dispatch
+		}
+	}
 
 	// Peer-relay path — the originating peer manages its own resends,
 	// so we don't pin the blob in our LocalTxs held pool.
@@ -694,7 +727,14 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 	dispatch.deferred = outcome.Queued
 	if errors.Is(err, txengine.ErrInvalidSignature) {
 		if pendingErr == nil && r.txSeen != nil {
-			r.txSeen.markBad(pending.Hash)
+			if roleBearing {
+				var verificationErr *ledgerservice.SignatureVerificationError
+				if errors.As(err, &verificationErr) {
+					r.txSeen.markBadSignature(pending.Hash, verificationErr.Rules)
+				}
+			} else {
+				r.txSeen.markBad(pending.Hash)
+			}
 		}
 		dispatch.charge = resource.FeeInvalidSignature()
 		dispatch.chargeContext = "transaction-invalid-signature"
@@ -739,6 +779,14 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 		)
 	}
 	return dispatch
+}
+
+func transactionHasRoleSignature(transaction tx.Transaction) bool {
+	if transaction == nil || transaction.GetCommon() == nil {
+		return false
+	}
+	common := transaction.GetCommon()
+	return common.CounterpartySignature != nil || common.SponsorSignature != nil
 }
 
 func (r *Router) transactionRelaySkip(

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
@@ -320,6 +321,85 @@ func TestTransactionSuppressionValidDuplicateIsSilent(t *testing.T) {
 
 	shouldProcess, bad = cache.claim(hash, 0)
 	require.False(t, shouldProcess)
+	require.False(t, bad)
+}
+
+func TestTransactionSuppressionSignatureVerdictTracksCleanupEra(t *testing.T) {
+	cache := newTransactionSuppression(5*time.Minute, 64)
+	legacy := amendment.EmptyRules()
+	cleanup := amendment.NewRules([][32]byte{amendment.FeatureFixCleanup3_4_0})
+	var hash [32]byte
+	hash[0] = 1
+
+	shouldProcess, bad := cache.claimWithSignatureContexts(hash, 0, true, legacy, legacy, true)
+	require.True(t, shouldProcess)
+	require.False(t, bad)
+	cache.markBadSignature(hash, legacy)
+
+	shouldProcess, bad = cache.claimWithSignatureContexts(hash, 0, true, legacy, legacy, true)
+	require.False(t, shouldProcess)
+	require.True(t, bad)
+
+	// A failed pre-cleanup signature must not suppress a retry in the cleanup
+	// role-signature namespace.
+	shouldProcess, bad = cache.claimWithSignatureContexts(hash, 0, true, cleanup, cleanup, true)
+	require.True(t, shouldProcess)
+	require.False(t, bad)
+	cache.markBadSignature(hash, cleanup)
+
+	// The legacy verdict remains in its own slot; changing the active rules
+	// never clears it or turns it into a rules-independent BAD verdict.
+	shouldProcess, bad = cache.claimWithSignatureContexts(hash, 0, true, legacy, legacy, true)
+	require.False(t, shouldProcess)
+	require.True(t, bad)
+}
+
+func TestTransactionSuppressionValidVerdictRechecksOnCleanupEraChange(t *testing.T) {
+	cache := newTransactionSuppression(5*time.Minute, 64)
+	legacy := amendment.EmptyRules()
+	cleanup := amendment.NewRules([][32]byte{amendment.FeatureFixCleanup3_4_0})
+	var hash [32]byte
+	hash[0] = 2
+
+	shouldProcess, bad := cache.claimWithSignatureContexts(hash, 0, true, legacy, legacy, true)
+	require.True(t, shouldProcess)
+	require.False(t, bad)
+	shouldProcess, bad = cache.claimWithSignatureContexts(hash, 0, true, legacy, legacy, true)
+	require.False(t, shouldProcess)
+	require.False(t, bad)
+
+	shouldProcess, bad = cache.claimWithSignatureContexts(hash, 0, true, cleanup, cleanup, true)
+	require.True(t, shouldProcess)
+	require.False(t, bad)
+
+	// Both positive namespaces survive concurrently; returning to the old
+	// rules remains suppressed within the ordinary process interval.
+	shouldProcess, bad = cache.claimWithSignatureContexts(hash, 0, true, legacy, legacy, true)
+	require.False(t, shouldProcess)
+	require.False(t, bad)
+}
+
+func TestTransactionSuppressionValidatedBadDoesNotPoisonOpenNamespace(t *testing.T) {
+	cache := newTransactionSuppression(5*time.Minute, 64)
+	legacy := amendment.EmptyRules()
+	cleanup := amendment.NewRules([][32]byte{amendment.FeatureFixCleanup3_4_0})
+	var hash [32]byte
+	hash[0] = 3
+
+	shouldProcess, bad := cache.claimWithSignatureContexts(hash, 0, true, legacy, cleanup, true)
+	require.True(t, shouldProcess)
+	require.False(t, bad)
+	cache.markBadSignature(hash, legacy)
+
+	// The validated frontier is still legacy, so its cached bad result must
+	// reject the retry even though the open frontier has moved to cleanup.
+	shouldProcess, bad = cache.claimWithSignatureContexts(hash, 0, true, legacy, cleanup, true)
+	require.False(t, shouldProcess)
+	require.True(t, bad)
+
+	// Once validation catches up, the cleanup slot is fresh and may be checked.
+	shouldProcess, bad = cache.claimWithSignatureContexts(hash, 0, true, cleanup, cleanup, true)
+	require.True(t, shouldProcess)
 	require.False(t, bad)
 }
 
