@@ -1,19 +1,7 @@
-// Package sigcache implements a process-wide, bounded positive cache of
-// transaction IDs whose cryptographic signature has already been verified good.
-// It is the go-xrpl analog of rippled's SF_SIGGOOD HashRouter flag
-// (rippled apply.cpp:78 checkValidity): a signature verdict is keyed by the tx
-// ID (SHA-512Half of the signed blob) and the rules-era namespace. It survives
-// the re-parse the consensus closed-ledger build performs on the agreed tx set.
-// Without it the
-// build re-runs ECDSA/EdDSA verification on every already-verified transaction,
-// which does not scale to a full block.
-//
-// Security invariant: this is a POSITIVE cache only. An entry exists solely
-// after a genuine signature verification succeeded for that exact blob. A miss
-// therefore always triggers a full verification, so an unknown, never-verified,
-// or forged transaction can never skip the crypto check. The tx ID commits to
-// the entire signed blob (signature and public key included), and the namespace
-// commits to the rules era used for nested role signatures.
+// Package sigcache caches positive signature verdicts by transaction ID and
+// signing namespace. Legacy nested signatures have a separate namespace because
+// their signed bytes change when fixCleanup3_4_0 is enabled. Only successful
+// cryptographic verification may populate the cache.
 package sigcache
 
 import (

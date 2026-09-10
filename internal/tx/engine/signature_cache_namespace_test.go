@@ -240,43 +240,37 @@ func TestRoleSignatureCacheConcurrentFreshObjects(t *testing.T) {
 	oldRules := cleanupCacheRules(false)
 	newRules := cleanupCacheRules(true)
 
-	oldBad := roleCacheTransaction(t, binarycodec.CounterpartyRole, oldRules)
-	corruptRoleCacheSignature(oldBad, binarycodec.CounterpartyRole)
-	oldID := roleCacheID(t, oldBad)
-	sigcache.MarkVerifiedWithRules(oldID, true)
-	newBad := roleCacheTransaction(t, binarycodec.CounterpartyRole, newRules)
-	corruptRoleCacheSignatureTo(newBad, binarycodec.CounterpartyRole, "01")
-	newID := roleCacheID(t, newBad)
-	sigcache.MarkVerifiedWithRules(newID, false)
+	const workers = 32
+	transactions := make([]*txcore.BaseTx, workers)
+	for i := range transactions {
+		rules := oldRules
+		if i%2 != 0 {
+			rules = newRules
+		}
+		transactions[i] = roleCacheTransaction(t, binarycodec.CounterpartyRole, rules)
+	}
 
-	const workers = 64
 	var wg sync.WaitGroup
-	errCh := make(chan string, workers)
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			legacy := i%2 == 0
-			rules := newRules
-			if legacy {
-				rules = oldRules
+	for i, transaction := range transactions {
+		wg.Go(func() {
+			validRules, invalidRules := oldRules, newRules
+			if i%2 != 0 {
+				validRules, invalidRules = newRules, oldRules
 			}
-			txn := roleCacheTransaction(t, binarycodec.CounterpartyRole, rules)
-			if legacy {
-				corruptRoleCacheSignature(txn, binarycodec.CounterpartyRole)
-			} else {
-				corruptRoleCacheSignatureTo(txn, binarycodec.CounterpartyRole, "01")
+			for range 4 {
+				if got := verifyingEngine(invalidRules).verifySignatures(transaction); got != ter.TemINVALID {
+					t.Errorf("opposite-era verification = %s, want temINVALID", got)
+				}
+				if err := PrewarmSignatureWithRules(transaction, validRules); err != nil {
+					t.Errorf("matching-era prewarm after rejection: %v", err)
+				}
+				if got := verifyingEngine(validRules).verifySignatures(transaction); got != ter.TesSUCCESS {
+					t.Errorf("matching-era verification after rejection = %s, want tesSUCCESS", got)
+				}
 			}
-			if got := verifyingEngine(rules).verifySignatures(txn); got != ter.TesSUCCESS {
-				errCh <- got.String()
-			}
-		}(i)
+		})
 	}
 	wg.Wait()
-	close(errCh)
-	for got := range errCh {
-		t.Fatalf("concurrent namespace cache lookup = %s, want tesSUCCESS", got)
-	}
 }
 
 func roleName(role binarycodec.SigningRole) string {
