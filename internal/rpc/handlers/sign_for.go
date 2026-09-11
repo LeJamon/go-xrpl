@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -14,6 +15,7 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
@@ -125,6 +127,14 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	}
 	if rpcErr := rejectSigningWhenLoaded(ctx.Services, ctx.Role.IsUnlimited()); rpcErr != nil {
 		return nil, rpcErr
+	}
+	if !request.Offline && ctx.Services != nil && ctx.Services.Ledger() != nil {
+		if _, err := ctx.Services.Ledger().GetAccountInfo(ctx.Context, txMap["Account"].(string), "current"); err != nil {
+			if errors.Is(err, svcerr.ErrAccountNotFound) {
+				return nil, rpcerrors.RpcErrorSrcActNotFound("Source account not found.")
+			}
+			return nil, rpcInternalError("sign_for: source account lookup failed", err)
+		}
 	}
 	if rpcErr := validateSignForPreConflictWithRules(txMap, params, rules); rpcErr != nil {
 		return nil, rpcErr

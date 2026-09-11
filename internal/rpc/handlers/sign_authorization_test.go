@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
@@ -10,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/stretchr/testify/require"
 )
 
 type signingAuthorizationLedger struct {
@@ -293,5 +295,64 @@ func TestSignForSigningKeyAuthorization(t *testing.T) {
 			}
 			requireSigningDeprecation(t, rpcErr)
 		})
+	}
+}
+
+type signForSourceLedger struct {
+	*signingAuthorizationLedger
+	sourceError error
+}
+
+func (l *signForSourceLedger) GetAccountInfo(ctx context.Context, account, ledger string) (*types.AccountInfo, error) {
+	if account == loadAdmissionAccount && l.sourceError != nil {
+		return nil, l.sourceError
+	}
+	return l.signingAuthorizationLedger.GetAccountInfo(ctx, account, ledger)
+}
+
+func TestSignForSourceAccountPrecedesFeeValidation(t *testing.T) {
+	for _, target := range []string{"", "CounterpartySignature", "SponsorSignature"} {
+		for _, test := range []struct {
+			name        string
+			offline     bool
+			sourceError error
+			wantCode    int
+			wantToken   string
+			wantMessage string
+		}{
+			{"missing source", false, svcerr.ErrAccountNotFound, rpcerrors.RpcSRC_ACT_NOT_FOUND, "srcActNotFound", "Source account not found."},
+			{"backend error", false, errors.New("source lookup failed"), rpcerrors.RpcINTERNAL, "internal", "Internal error."},
+			{"offline", true, svcerr.ErrAccountNotFound, rpcerrors.RpcINVALID_PARAMS, "invalidParams", "Missing field 'tx_json.Fee'."},
+			{"source exists", false, nil, rpcerrors.RpcINVALID_PARAMS, "invalidParams", "Missing field 'tx_json.Fee'."},
+		} {
+			t.Run(target+"/"+test.name, func(t *testing.T) {
+				ledger := &signForSourceLedger{
+					signingAuthorizationLedger: &signingAuthorizationLedger{accounts: map[string]*types.AccountInfo{
+						loadAdmissionAccount: {}, loadAdmissionSigningAccount: {},
+					}},
+					sourceError: test.sourceError,
+				}
+				request := map[string]any{
+					"account": loadAdmissionSigningAccount, "seed_hex": loadAdmissionSeedHex,
+					"key_type": "ed25519", "offline": test.offline,
+					"tx_json": map[string]any{
+						"TransactionType": "LoanSet", "Account": loadAdmissionAccount,
+						"Sequence": 1, "SigningPubKey": "",
+					},
+				}
+				if target != "" {
+					request["signature_target"] = target
+				}
+				params, err := json.Marshal(request)
+				require.NoError(t, err)
+				result, rpcErr := (&SignForMethod{}).Handle(signingAuthorizationContext(ledger), params)
+				require.Nil(t, result)
+				require.NotNil(t, rpcErr)
+				require.Equal(t, map[string]any{
+					"error_code": test.wantCode, "error": test.wantToken, "error_message": test.wantMessage,
+				}, rpcErr.ErrorObject())
+				requireSigningDeprecation(t, rpcErr)
+			})
+		}
 	}
 }
