@@ -335,18 +335,19 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
-	sponsorEnabled := rules.Enabled(amendment.FeatureSponsor)
-	if sponsorEnabled {
-		if ownerID == escrowEntry.DestinationID && !destIsSelf {
-			if err := tx.DecreaseOwnerCount(ctx.View, destAccount, sponsorAddress, 1); err != nil {
-				return ctx.Internal("EscrowFinish.OwnerCount", err)
-			}
-			ctx.SyncSenderSponsorCounts(sponsorAddress)
-		} else if result := tx.DecreaseOwnerCountFor(ctx, ownerID, sponsorAddress, 1); result != ter.TesSUCCESS {
+	recycleReserve := rules.Enabled(amendment.FeatureSponsor) || rules.Enabled(amendment.FeatureFixCleanup3_4_0)
+	if recycleReserve {
+		if result := tx.DecreaseOwnerCountFor(ctx, ownerID, sponsorAddress, 1); result != ter.TesSUCCESS {
 			return result
 		}
 		if destIsSelf {
 			if result := ctx.UpdateAccountRoot(ctx.AccountID, ctx.Account); result != ter.TesSUCCESS {
+				return result
+			}
+		} else {
+			var result ter.Result
+			destAccount, result = readDestinationForEscrow(ctx.View, escrowEntry.DestinationID)
+			if result != ter.TesSUCCESS {
 				return result
 			}
 		}
@@ -496,17 +497,17 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
+	if !recycleReserve {
+		if result := tx.DecreaseOwnerCountFor(ctx, ownerID, sponsorAddress, 1); result != ter.TesSUCCESS {
+			return result
+		}
+	}
+
 	// Delete the escrow
 	// Reference: rippled Escrow.cpp doApply() line 1194: ctx_.view().erase(slep);
 	if err := ctx.View.Erase(escrowKey); err != nil {
 		ctx.Log.Error("escrow finish: failed to erase escrow", "error", err)
 		return ter.TefINTERNAL
-	}
-
-	if !sponsorEnabled {
-		if result := tx.DecreaseOwnerCountFor(ctx, ownerID, "", 1); result != ter.TesSUCCESS {
-			return result
-		}
 	}
 
 	return ter.TesSUCCESS
