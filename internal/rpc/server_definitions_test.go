@@ -161,9 +161,6 @@ func TestServerDefinitionsFieldsArrayFormat(t *testing.T) {
 	}
 }
 
-// TestServerDefinitionsFieldOrder pins the order produced by rippled's
-// ServerDefinitions constructor: fixed sentinel rows followed by known fields
-// in serialized field-code order.
 func TestServerDefinitionsFieldOrder(t *testing.T) {
 	method := &handlers.ServerDefinitionsMethod{}
 	ctx := &types.RpcContext{
@@ -373,8 +370,6 @@ func TestServerDefinitionsHash(t *testing.T) {
 	})
 }
 
-// TestServerDefinitionsMatchesRC1SourceFixture checks every response section
-// against hashes independently derived from rippled's rc1 protocol source.
 // The section checks make omissions in formats, flags, or type tables visible
 // even when the complete-document hash is accidentally updated.
 func TestServerDefinitionsMatchesRC1SourceFixture(t *testing.T) {
