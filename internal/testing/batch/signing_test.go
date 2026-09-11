@@ -312,7 +312,11 @@ func TestBatchSignerArrayBound(t *testing.T) {
 		batch := buildBatch(env, alice, bob, makeNestedSigners(env, 33))
 		env.Close()
 
-		result := env.Submit(batch)
+		// The nested signatures are valid; enable the engine's signature stage so
+		// its 32-entry structural bound is checked before signer-list
+		// authorization. SubmitSigned supplies a valid outer signature.
+		env.VerifySignatures = true
+		result := env.SubmitSigned(batch)
 		jtx.RequireTxFail(t, result, "temINVALID")
 	})
 }

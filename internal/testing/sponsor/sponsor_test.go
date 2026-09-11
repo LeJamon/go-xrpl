@@ -925,6 +925,7 @@ func TestSponsorSignatureStructuralFailures(t *testing.T) {
 			signature: &tx.SponsorSignature{TxnSignature: "AA"},
 		},
 	}
+	env.VerifySignatures = true
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -937,7 +938,10 @@ func TestSponsorSignatureStructuralFailures(t *testing.T) {
 			transaction.SponsorFlags = &flags
 			transaction.SponsorSignature = testCase.signature
 
-			require.Equal(t, "temINVALID", env.Submit(transaction).Code)
+			// The malformed sponsor object is intentionally not signed, but the
+			// outer transaction must be valid so verification reaches the sponsor
+			// structure checks before cryptographic failure handling.
+			require.Equal(t, "temINVALID", env.SubmitSigned(transaction).Code)
 			require.Equal(t, sequenceBefore, env.Seq(source))
 			require.Equal(t, sourceBefore, env.Balance(source))
 			require.Equal(t, sponsorBefore, env.Balance(sponsor))
