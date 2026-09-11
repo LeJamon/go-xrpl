@@ -129,8 +129,6 @@ func Verified(id [32]byte) bool {
 	return VerifiedWithRules(id, false)
 }
 
-// VerifiedWithRules reports whether id has a cached verified-good signature
-// verdict in the requested signature namespace.
 func VerifiedWithRules(id [32]byte, legacyRole bool) bool {
 	return global.HasWithRules(id, legacyRole)
 }

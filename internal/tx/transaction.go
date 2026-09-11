@@ -593,8 +593,6 @@ func (c *Common) MarkSignatureVerified(txID [32]byte) {
 	c.markSignatureVerified(txID, false)
 }
 
-// MarkSignatureVerifiedWithRules records that the transaction's cryptographic
-// signature has been verified under the supplied amendment rules.
 func (c *Common) MarkSignatureVerifiedWithRules(txID [32]byte, rules *amendment.Rules) {
 	c.markSignatureVerified(txID, c.SignatureCacheLegacyRole(rules))
 }
