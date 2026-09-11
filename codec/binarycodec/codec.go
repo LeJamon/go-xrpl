@@ -66,10 +66,8 @@ const (
 	sponsorMultiPrefix        = "53504D00"
 )
 
-// SigningRole identifies the transaction signature slot being encoded.
 type SigningRole uint8
 
-// Signing role values used by the role-specific signing helpers.
 const (
 	TransactionRole SigningRole = iota
 	CounterpartyRole
