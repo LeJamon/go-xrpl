@@ -186,6 +186,17 @@ jobs:
           repository: XRPLF/rippled
           ref: 2ad4def35fd8580da027462517ba3375cc005c94
           path: rippled-worktrees/v3.4.0-rc1-oracle
+      - name: Verify rc1 definitions fixture provenance and regeneration
+        if: matrix.group == 'libs'
+        run: |
+          generator=internal/rpc/testdata/server_definitions_rc1_oracle.py
+          if python3 "$generator" "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/wrong-oracle.json"; then
+            echo "::error::definitions generator accepted the wrong oracle"
+            exit 1
+          fi
+          test ! -e "$RUNNER_TEMP/wrong-oracle.json"
+          python3 "$generator" rippled-worktrees/v3.4.0-rc1-oracle --output "$RUNNER_TEMP/server_definitions_rc1_hashes.json"
+          diff -u internal/rpc/testdata/server_definitions_rc1_hashes.json "$RUNNER_TEMP/server_definitions_rc1_hashes.json"
       - uses: ./.github/actions/setup
       - run: go test ${{ matrix.race }} -count=1 -timeout 15m ${{ matrix.packages }}
 

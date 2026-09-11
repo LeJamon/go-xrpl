@@ -3,8 +3,8 @@
     [
       "Generic",
       {
-        "isSerialized": false,
-        "isSigningField": false,
+        "isSerialized": true,
+        "isSigningField": true,
         "isVLEncoded": false,
         "nth": 0,
         "type": "Unknown"
@@ -3912,8 +3912,8 @@
     "Transaction": 10001,
     "UInt16": 1,
     "UInt32": 2,
-    "UInt384": 22,
-    "UInt512": 23,
+    "Hash384": 22,
+    "Hash512": 23,
     "UInt64": 3,
     "UInt8": 16,
     "UInt96": 20,

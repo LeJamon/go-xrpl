@@ -1,0 +1,99 @@
+{
+  "oracle": {
+    "tag": "3.4.0-rc1",
+    "commit": "2ad4def35fd8580da027462517ba3375cc005c94"
+  },
+  "serialization": "compact UTF-8 JSON with lexicographically sorted object keys; no trailing newline",
+  "regeneration": {
+    "source": "python3 server_definitions_rc1_oracle.py <rippled-3.4.0-rc1> --output server_definitions_rc1_hashes.json",
+    "runtime": "xrpld --definitions"
+  },
+  "transaction_results": {
+    "source": "src/libxrpl/protocol/TER.cpp::transResults()",
+    "enum_only_excluded": [
+      "tecHOOK_REJECTED",
+      "tecNO_DELEGATE_PERMISSION"
+    ]
+  },
+  "full_document_sha512_half": "1EA05B0FC11101F7C500BD0DAC794A8BC746A7FBA6250B75489603EB820E0FF5",
+  "full_document_bytes": 79944,
+  "sections": {
+    "TYPES": {
+      "sha512_half": "1271A3D287130AFA02682AC752B376DA7C38CEC9DAB4AB4B10BAC3047B217281",
+      "bytes": 412,
+      "groups": 31,
+      "entries": 31
+    },
+    "FIELDS": {
+      "sha512_half": "9BEE52C97DCDF74F5B1C877F3DCDF0FC511A6866474A6F9DAFED75275B5C33AE",
+      "bytes": 38113,
+      "groups": 0,
+      "entries": 357
+    },
+    "LEDGER_ENTRY_TYPES": {
+      "sha512_half": "C970FBACA727B32DC13FC98DA55E284562E7D903FBB40D245F284788A3E6A71F",
+      "bytes": 536,
+      "groups": 32,
+      "entries": 32
+    },
+    "TRANSACTION_TYPES": {
+      "sha512_half": "441B7543A44BEE19F805708CDC604FAFD2EBE2B13F46D10B30392C8B790F97CA",
+      "bytes": 1671,
+      "groups": 83,
+      "entries": 83
+    },
+    "TRANSACTION_RESULTS": {
+      "sha512_half": "173577994C450773F766E21F1990721B886B1DCA61CC557A3D72461A4C3E7764",
+      "bytes": 4851,
+      "groups": 195,
+      "entries": 195
+    },
+    "TRANSACTION_FORMATS": {
+      "sha512_half": "EFE01E8C987740BF92AE740DF1E0D96B43290EB1AF3A9B6C69BD739AB513B72A",
+      "bytes": 15472,
+      "groups": 83,
+      "entries": 354
+    },
+    "LEDGER_ENTRY_FORMATS": {
+      "sha512_half": "A292FE85A1A274B197F4A3C7DBB4206C0149AA22C29BEE338FB126229198DCF3",
+      "bytes": 14286,
+      "groups": 32,
+      "entries": 343
+    },
+    "TRANSACTION_FLAGS": {
+      "sha512_half": "1284BECCDC3F81930847278B031DD86ED5B6A2DDD206E402CDF6ACE808573E3A",
+      "bytes": 2520,
+      "groups": 23,
+      "entries": 86
+    },
+    "LEDGER_ENTRY_FLAGS": {
+      "sha512_half": "30C3773280980D99CD04E41FF48CB9B07A2C46F4596AB787310C1B43E99C4564",
+      "bytes": 1485,
+      "groups": 12,
+      "entries": 51
+    },
+    "ACCOUNT_SET_FLAGS": {
+      "sha512_half": "8E135E94013751453676B34644740826DA520537916142EAEB43C6D92BCD1187",
+      "bytes": 401,
+      "groups": 16,
+      "entries": 16
+    }
+  },
+  "source_files": [
+    "include/xrpl/protocol/SField.h",
+    "include/xrpl/protocol/detail/sfields.macro",
+    "include/xrpl/protocol/TER.h",
+    "src/libxrpl/protocol/TER.cpp",
+    "include/xrpl/protocol/detail/transactions.macro",
+    "include/xrpl/protocol/detail/ledger_entries.macro",
+    "include/xrpl/protocol/TxFlags.h",
+    "include/xrpl/protocol/LedgerFormats.h"
+  ],
+  "transcribed_rule_sources": [
+    "include/xrpl/protocol/TxFlags.h",
+    "src/libxrpl/protocol/TxFormats.cpp",
+    "src/libxrpl/protocol/LedgerFormats.cpp",
+    "src/libxrpl/protocol/SField.cpp",
+    "src/xrpld/rpc/handlers/server_info/ServerDefinitions.cpp"
+  ]
+}

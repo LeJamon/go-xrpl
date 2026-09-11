@@ -78,6 +78,9 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 		}
 
 		st := SerializedTypeFor(v.Type)
+		if st == nil {
+			return nil, fmt.Errorf("unknown type %q for field %q", v.Type, v.FieldName)
+		}
 		setSkipJSONArrayLimit(st, t.skipJSONArrayLimit)
 		fieldValue := fimap[v]
 		if v.Type == "STObject" {
