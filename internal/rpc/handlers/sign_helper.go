@@ -44,9 +44,6 @@ func signingRoleForTarget(target string) (binarycodec.SigningRole, bool) {
 	}
 }
 
-// transactionRulesForContext captures the rules used by the current open
-// ledger once for an RPC operation. Offline and sparse test contexts retain
-// the pre-amendment signing behavior by returning nil.
 func transactionRulesForContext(rpcCtx *types.RpcContext) *amendment.Rules {
 	if rpcCtx == nil || rpcCtx.Services == nil {
 		return nil
