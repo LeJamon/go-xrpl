@@ -295,7 +295,8 @@ func TestBatchSignerArrayBound(t *testing.T) {
 		env.Close()
 
 		batch := buildBatch(env, alice, bob, signers)
-		result := env.Submit(batch)
+		env.VerifySignatures = true
+		result := env.SubmitSigned(batch)
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 		requireBatchLedgerData(t, env, batch, result, ter.TesSUCCESS, ter.TesSUCCESS)
