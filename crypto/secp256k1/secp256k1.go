@@ -27,8 +27,6 @@ var (
 
 	// ErrInvalidPrivateKey is returned when a private key is invalid
 	ErrInvalidPrivateKey = errors.New("invalid private key")
-	// ErrInvalidMessage is returned when a message is required but not provided
-	ErrInvalidMessage = errors.New("message is required")
 	// ErrScalarDerivation is returned when family-seed scalar derivation fails to
 	// find a valid scalar within the bounded retries. Reaching this is practically
 	// impossible (see deriveScalar).
@@ -146,9 +144,6 @@ func (c Algorithm) DeriveKeypairBytes(seed []byte, validator bool) (privateBytes
 func (c Algorithm) SignBytes(msg, privKey []byte) ([]byte, error) {
 	if err := validatePrivateKey(privKey); err != nil {
 		return nil, err
-	}
-	if len(msg) == 0 {
-		return nil, ErrInvalidMessage
 	}
 	hash := sha512half.Sum(msg)
 	sig, ok := shim.SignDigest(hash[:], privKey)
