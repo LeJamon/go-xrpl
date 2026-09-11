@@ -122,13 +122,13 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	if rpcErr := validateSigningTxJSONShape(txMap); rpcErr != nil {
 		return nil, rpcErr
 	}
-	if rpcErr := rejectOnlineSigningWithoutCurrentLedger(ctx.Services, request.Offline, ctx.ApiVersion); rpcErr != nil {
+	if rpcErr := rejectOnlineSigningWithoutCurrentLedger(ctx.Services, request.Offline.value, ctx.ApiVersion); rpcErr != nil {
 		return nil, rpcErr
 	}
 	if rpcErr := rejectSigningWhenLoaded(ctx.Services, ctx.Role.IsUnlimited()); rpcErr != nil {
 		return nil, rpcErr
 	}
-	if !request.Offline && ctx.Services != nil && ctx.Services.Ledger() != nil {
+	if !request.Offline.value && ctx.Services != nil && ctx.Services.Ledger() != nil {
 		if _, err := ctx.Services.Ledger().GetAccountInfo(ctx.Context, txMap["Account"].(string), "current"); err != nil {
 			if errors.Is(err, svcerr.ErrAccountNotFound) {
 				return nil, rpcerrors.RpcErrorSrcActNotFound("Source account not found.")

@@ -80,10 +80,9 @@ func (c signCredentials) deriveKeypair(apiVersion int, params json.RawMessage) (
 
 type signingRequest struct {
 	signCredentials
-	TxJson          json.RawMessage `json:"tx_json"`
-	Offline         bool            `json:"offline,omitempty"`
-	BuildPath       bool            `json:"build_path,omitempty"`
-	SignatureTarget string          `json:"signature_target,omitempty"`
+	TxJson          json.RawMessage  `json:"tx_json"`
+	Offline         jsonCppBoolField `json:"offline,omitempty"`
+	SignatureTarget string           `json:"signature_target,omitempty"`
 }
 
 // feeOptions holds the fee_mult_max and fee_div_max parameters for auto-fee.

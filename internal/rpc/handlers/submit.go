@@ -112,7 +112,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (re
 			ctx,
 			request.TxJson,
 			request.signCredentials,
-			request.Offline,
+			request.Offline.value,
 			params,
 			request.SignatureTarget,
 		)
