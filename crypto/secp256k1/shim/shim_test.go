@@ -292,7 +292,6 @@ func TestPublicKeyTweakAddBoundaries(t *testing.T) {
 	if !ok {
 		t.Fatal("PublicKeyCreate(three) failed")
 	}
-	// Use a valid uncompressed public key as a separate input form below.
 	pubOneUncompressed, ok := ParsePublicKey(pubOne, false)
 	if !ok {
 		t.Fatal("ParsePublicKey(pubOne, false) failed")

@@ -106,7 +106,6 @@ func (c Algorithm) DeriveKeypairBytes(seed []byte, validator bool) (privateBytes
 	}
 
 	if validator {
-		// For validator keys, use the root generator directly.
 		publicBytes, ok := shim.PublicKeyCreate(privateGen)
 		if !ok {
 			rootcrypto.SecureErase(privateGen)
@@ -116,7 +115,6 @@ func (c Algorithm) DeriveKeypairBytes(seed []byte, validator bool) (privateBytes
 	}
 
 	defer rootcrypto.SecureErase(privateGen)
-	// For regular keys, derive an additional scalar from the root public key.
 	rootPublic, ok := shim.PublicKeyCreate(privateGen)
 	if !ok {
 		return nil, nil, ErrInvalidPrivateKey
