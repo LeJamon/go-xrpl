@@ -53,7 +53,7 @@ func TestSendClusterUpdate_EmitsExportedConsumerGossip(t *testing.T) {
 	require.NoError(t, err)
 	peerIdentity, err := NewIdentity()
 	require.NoError(t, err)
-	peerToken := NewPublicKeyTokenFromBtcec(peerIdentity.BtcecPublicKey())
+	peerToken := NewPublicKeyTokenFromBytes(peerIdentity.PublicKey())
 
 	// Register the receiving peer as a cluster member so it both appears
 	// in the broadcast registry and is selected as a send target.
@@ -115,7 +115,7 @@ func TestSendClusterUpdate_GatesSelfLoadOnValidatedLedgerAge(t *testing.T) {
 			require.NoError(t, err)
 			peerIdentity, err := NewIdentity()
 			require.NoError(t, err)
-			peerToken := NewPublicKeyTokenFromBtcec(peerIdentity.BtcecPublicKey())
+			peerToken := NewPublicKeyTokenFromBytes(peerIdentity.PublicKey())
 
 			clusterReg := cluster.New()
 			require.True(t, clusterReg.Update(

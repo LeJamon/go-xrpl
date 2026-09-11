@@ -30,9 +30,18 @@ A `justfile` consolidates the toolchain (CGO + OpenSSL env vars, test groupings
 matching CI, conformance harness). Install `just` with `brew install just`. **All
 `just` recipes run from the repository root.**
 
-The daemon requires CGO and links OpenSSL / libsecp256k1 via `pkg-config`. On macOS:
+The daemon requires CGO and links OpenSSL / libsecp256k1 via `pkg-config`. All
+secp256k1 key, signing, and verification operations use the native C shim; there
+is no pure-Go secp256k1 fallback. On macOS:
 `brew install openssl@3 secp256k1 pkg-config`; on Debian/Ubuntu: `libssl-dev
-libsecp256k1-dev`. The justfile auto-resolves Homebrew's openssl@3 path.
+libsecp256k1-dev`. The justfile auto-resolves Homebrew's OpenSSL and
+libsecp256k1 pkg-config paths.
+
+`CGO_ENABLED=0` remains supported only for leaves whose production and test
+dependency graph avoids addresscodec: Ed25519, SHA-512Half, RFC 1751, drops,
+protocol, amendments, SHAMap, and the key-value/node stores. Binarycodec,
+relational storage, keylet, and ledger packages reach the native shim
+transitively. It cannot build the daemon or any package that imports secp256k1.
 
 ```bash
 just                 # discover recipes
@@ -82,7 +91,7 @@ The server exposes JSON-RPC at `http://localhost:8080/`, WebSocket subscriptions
   - `addresscodec/` — Address encoding/decoding
   - `binarycodec/` — Binary codec for XRPL data types
 - `config/` — Configuration system
-- `crypto/` — Cryptographic operations (secp256k1, ed25519); `common/` has SHA512-Half
+- `crypto/` — Cryptographic operations (native secp256k1, ed25519); `common/` has SHA512-Half
 - `drops/` — XRP amount utilities
 - `keylet/` — Ledger object key derivation
 - `ledger/entry/` — Serializable Ledger Entries (SLE) for all object types (40+ types)

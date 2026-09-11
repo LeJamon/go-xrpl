@@ -52,8 +52,15 @@ go build -o ../tmp/goxrpl ./cmd/goxrpl
 The binary is written to `../tmp/goxrpl`. To compile every package without
 producing the node binary, run `just build-all`.
 
-The daemon requires CGO. Its peer TLS handshake and production cryptographic
-verification paths depend on the OpenSSL and libsecp256k1 C shims.
+The daemon requires CGO. Its peer TLS handshake uses the OpenSSL C shim, and all
+secp256k1 operations — key derivation, signing, public-key operations, and
+verification — use the libsecp256k1 C shim. There is no supported pure-Go
+secp256k1 backend. `CGO_ENABLED=0` remains useful only for leaves whose
+production and test dependency graph avoids addresscodec, including Ed25519,
+SHA-512Half, RFC 1751, drops, protocol, amendments, SHAMap, the key-value/node
+stores, and binarycodec definitions, serdes, and decimal internals. Binarycodec,
+relational storage, keylet, and ledger packages reach the native shim
+transitively.
 
 ## Executable
 

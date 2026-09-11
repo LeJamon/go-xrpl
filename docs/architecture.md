@@ -36,7 +36,7 @@ cites the rippled source file it follows.
 | [`codec/addresscodec`](../codec/addresscodec) | base58 address/seed/key encoding (classic + X-addresses) | `tokens.cpp`, `AccountID.cpp` |
 | [`codec/binarycodec`](../codec/binarycodec) | Canonical binary serialization of XRPL objects | `STObject`, `Serializer` |
 | [`config`](../config) | `goxrpl.toml` parsing and defaults | `Config.cpp` (`rippled.cfg`) |
-| [`crypto`](../crypto) | secp256k1 + Ed25519 keys, signing, DER, multi-sign; `common` has SHA-512Half | `PublicKey.cpp`, `SecretKey.cpp` |
+| [`crypto`](../crypto) | native libsecp256k1-backed secp256k1 keys/signing/verification plus Ed25519; `common` has SHA-512Half | `PublicKey.cpp`, `SecretKey.cpp` |
 | [`drops`](../drops) | Type-safe XRP amount arithmetic and reserve math | `XRPAmount.h` |
 | [`keylet`](../keylet) | Derivation of the 256-bit keys identifying ledger entries | `Indexes.cpp` (`keylet::`) |
 | [`ledger/entry`](../ledger/entry) | Serializable Ledger Entries (SLEs) for all 40+ object types | `SLE`, `LedgerFormats` |

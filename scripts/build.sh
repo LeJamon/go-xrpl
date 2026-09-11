@@ -4,6 +4,8 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+./scripts/require-native.sh
+
 build_version="${VERSION:-$(git describe --tags --always --dirty)}"
 if [[ "$build_version" =~ [[:space:]] ]]; then
     echo "VERSION must not contain whitespace" >&2

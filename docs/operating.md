@@ -6,13 +6,16 @@ library API, see [pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/go-xrpl).
 
 ## Build requirements
 
-go-xrpl uses CGO for two subsystems:
+go-xrpl uses native C shims through CGO for two subsystems:
 
 - **OpenSSL** — the peer-to-peer TLS handshake (`peertls`), computing the
   session-signature shared value that matches rippled's `SSL_get_finished` flow.
-- **libsecp256k1** — ECDSA signature verification on the consensus hot path.
+- **libsecp256k1** — every secp256k1 operation, including key derivation,
+  signing, public-key operations, and ECDSA verification on the consensus hot path.
 
-Install the development headers before building:
+The secp256k1 package has no pure-Go fallback and needs libsecp256k1 plus
+`pkg-config`; the daemon also needs OpenSSL for peer TLS. Install the
+development headers before building:
 
 ```bash
 # macOS
@@ -26,15 +29,19 @@ sudo apt install -y libssl-dev libsecp256k1-dev pkg-config
 Then build:
 
 ```bash
-just build                 # → ../tmp/goxrpl (CGO + OpenSSL)
+just build                 # → ../tmp/goxrpl (CGO + OpenSSL + libsecp256k1)
 ```
 
 The recipe embeds `git describe --tags --always --dirty` in the binary. Set
 `VERSION` explicitly to override it for a packaged build.
 
-The `goxrpl` daemon requires CGO. Builds without CGO are not supported because
-the production peer TLS and cryptographic verification paths require their C
-shims.
+The `goxrpl` daemon and packages that reach addresscodec require CGO. Builds
+without CGO are limited to leaves such as Ed25519, SHA-512Half, RFC 1751,
+drops, protocol, amendments, SHAMap, and the key-value/node stores.
+Binarycodec, relational storage, keylet, and ledger packages reach the native
+secp256k1 shim transitively; `CGO_ENABLED=0 go build ./cmd/goxrpl` is
+unsupported. The `check-native` recipe fails early when CGO or the required
+pkg-config metadata is missing.
 
 ## Running
 

@@ -13,7 +13,7 @@ import (
 func newPeerWithRemoteKey(t *testing.T, o *Overlay, id PeerID, endpoint Endpoint, key *Identity) *Peer {
 	t.Helper()
 	peer := NewPeer(id, endpoint, false, o.identity, o.events)
-	peer.remotePubKey = NewPublicKeyTokenFromBtcec(key.BtcecPublicKey())
+	peer.remotePubKey = NewPublicKeyTokenFromBytes(key.PublicKey())
 	peer.setState(PeerStateConnected)
 	return peer
 }
@@ -151,7 +151,7 @@ func TestOverlayReleasesInboundIPAfterPeerClose(t *testing.T) {
 	remote, err := GenerateIdentity()
 	require.NoError(t, err)
 	peer := NewPeer(1, Endpoint{Host: "55.104.0.3", Port: 51235}, true, o.identity, o.events)
-	peer.remotePubKey = NewPublicKeyTokenFromBtcec(remote.BtcecPublicKey())
+	peer.remotePubKey = NewPublicKeyTokenFromBytes(remote.PublicKey())
 
 	require.True(t, o.reserveInboundIP(peer.Endpoint().Host))
 	require.NoError(t, o.addPeer(peer))

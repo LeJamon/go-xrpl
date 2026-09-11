@@ -11,8 +11,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/decred/dcrd/dcrec/secp256k1/v4"
-	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
+	"github.com/LeJamon/go-xrpl/crypto/secp256k1/shim"
 	"github.com/stretchr/testify/require"
 )
 
@@ -195,7 +194,7 @@ func loadWycheproofTestVectors(t *testing.T) *WycheproofTestVectors {
 }
 
 // parsePublicKey parses the public key from wx and wy hex strings.
-func parsePublicKey(t *testing.T, wxHex, wyHex string) *secp256k1.PublicKey {
+func parsePublicKey(t *testing.T, wxHex, wyHex string) []byte {
 	t.Helper()
 
 	wx, err := hex.DecodeString(wxHex)
@@ -225,17 +224,17 @@ func parsePublicKey(t *testing.T, wxHex, wyHex string) *secp256k1.PublicKey {
 		wy = wy[len(wy)-32:]
 	}
 
-	var xField, yField secp256k1.FieldVal
-	xField.SetByteSlice(wx)
-	yField.SetByteSlice(wy)
-
-	return secp256k1.NewPublicKey(&xField, &yField)
+	encoded := append([]byte{0x04}, wx...)
+	encoded = append(encoded, wy...)
+	public, ok := shim.ParsePublicKey(encoded, true)
+	require.True(t, ok, "invalid Wycheproof public key")
+	return public
 }
 
 // verifySignatureSHA256 verifies an ECDSA signature using SHA-256 hash.
 // This is the Bitcoin-style verification used by Wycheproof tests.
 // It includes the Bitcoin-specific malleability check (s must be <= n/2).
-func verifySignatureSHA256(msg []byte, sig []byte, pubKey *secp256k1.PublicKey) bool {
+func verifySignatureSHA256(msg []byte, sig []byte, pubKey []byte) bool {
 	// Parse the DER signature with strict validation (BIP 66)
 	r, s, err := parseStrictDERSignature(sig)
 	if err != nil {
@@ -267,33 +266,11 @@ func verifySignatureSHA256(msg []byte, sig []byte, pubKey *secp256k1.PublicKey) 
 		return false
 	}
 
-	// Convert r and s to [32]byte arrays
-	var rBytes, sBytes [32]byte
-	copy(rBytes[32-len(r):], r)
-	copy(sBytes[32-len(s):], s)
-
-	ecdsaR := &secp256k1.ModNScalar{}
-	ecdsaS := &secp256k1.ModNScalar{}
-
-	// Check for overflow when setting R and S values
-	if ecdsaR.SetBytes(&rBytes) != 0 {
+	if rInt.Sign() == 0 || sInt.Sign() == 0 {
 		return false
 	}
-	if ecdsaS.SetBytes(&sBytes) != 0 {
-		return false
-	}
-
-	// Check that r and s are not zero
-	if ecdsaR.IsZero() || ecdsaS.IsZero() {
-		return false
-	}
-
-	parsedSig := ecdsa.NewSignature(ecdsaR, ecdsaS)
-
-	// Hash the message with SHA-256 (Bitcoin style)
 	hash := sha256.Sum256(msg)
-
-	return parsedSig.Verify(hash[:], pubKey)
+	return verifyDigestRaw(hash[:], pubKey, sig)
 }
 
 func TestWycheproofECDSA(t *testing.T) {
