@@ -522,13 +522,10 @@ func escrowUnlockIOU(
 	trustLineExists := trustLineData != nil
 
 	if !trustLineExists && createAsset && !receiverIsIssuer {
-		// Post-fixCleanup3_2_0 the reserve check and owner-count bump are scoped to
-		// the destination account (bumpDestOwnerCount=true). Pre-amendment, cancel
-		// scoped them to the soon-erased escrow SLE, which has no sfOwnerCount:
-		// rippled throws reading it, yielding tefEXCEPTION whenever a new trust line
-		// must be created during a cancel refund.
+		// The legacy cancel path supplies an escrow entry to a reserve check
+		// that requires an AccountRoot.
 		if !bumpDestOwnerCount {
-			return ter.TefEXCEPTION
+			return ter.TefINTERNAL
 		}
 		reserveResult := ter.TesSUCCESS
 		if ctx != nil && destID == ctx.AccountID && bumpDestOwnerCount {
@@ -671,13 +668,10 @@ func escrowUnlockMPT(
 		}
 
 		if !receiverExists && createAsset {
-			// Post-fixCleanup3_2_0 the reserve check and owner-count bump are scoped
-			// to the destination account. Pre-amendment, cancel scoped them to the
-			// soon-erased escrow SLE, which has no sfOwnerCount: rippled throws
-			// reading it, yielding tefEXCEPTION whenever a new MPToken must be
-			// created during a cancel refund.
+			// The legacy cancel path supplies an escrow entry to a reserve check
+			// that requires an AccountRoot.
 			if !bumpDestOwnerCount {
-				return ter.TefEXCEPTION
+				return ter.TefINTERNAL
 			}
 			reserveResult := ter.TesSUCCESS
 			if ctx != nil && destID == ctx.AccountID && bumpDestOwnerCount {
