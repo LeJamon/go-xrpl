@@ -661,8 +661,6 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 	if r.adaptor != nil {
 		validatedRules, openRules, validatedAdmission = r.adaptor.peerSignatureSnapshot()
 	}
-	// Fetched TMTransactions are checked against the open ledger only.
-	validatedAdmission = validatedAdmission && msg.Tx == nil
 	roleBearing := pendingErr == nil && transactionHasRoleSignature(pending.Parsed)
 	admittedBad := false
 	if pendingErr == nil && r.txSeen != nil {
@@ -719,6 +717,17 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 			msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
 			return dispatch
 		}
+		if reason := tx.TransactionLocalChecksFailureReason(pending.Parsed); reason != "" {
+			dispatch.submitResult = openledger.ResultFailure
+			dispatch.submitError = fmt.Errorf("%w: %s", ledgerservice.ErrInvalidLocalTransaction, reason)
+			if r.txSeen != nil && (!roleBearing || signatureCleanupEra(validatedRules)) {
+				r.txSeen.markBad(pending.Hash)
+			}
+			dispatch.charge = resource.FeeInvalidSignature()
+			dispatch.chargeContext = "transaction-local-checks"
+			msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
+			return dispatch
+		}
 	}
 
 	// Peer-relay path — the originating peer manages its own resends,
@@ -742,7 +751,8 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) (dispatch
 		dispatch.chargeContext = "transaction-invalid-signature"
 		msg.SelectPeerCharge(dispatch.charge, dispatch.chargeContext)
 	} else if errors.Is(err, ledgerservice.ErrInvalidLocalTransaction) {
-		if pendingErr == nil && r.txSeen != nil {
+		if pendingErr == nil && r.txSeen != nil &&
+			(!roleBearing || signatureCleanupEra(validatedRules)) {
 			r.txSeen.markBad(pending.Hash)
 		}
 		dispatch.charge = resource.FeeInvalidSignature()

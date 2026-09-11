@@ -3,6 +3,7 @@ package adaptor
 import (
 	"context"
 	"encoding/hex"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
@@ -113,6 +116,10 @@ func routerSuccessorWithCleanupRules(t *testing.T, parent *ledger.Ledger, cleanu
 }
 
 func routerRoleSignedLoanSet(t *testing.T, cleanup bool) []byte {
+	return routerRoleSignedLoanSetWithMemo(t, cleanup, "")
+}
+
+func routerRoleSignedLoanSetWithMemo(t *testing.T, cleanup bool, memoData string) []byte {
 	t.Helper()
 	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
@@ -126,6 +133,9 @@ func routerRoleSignedLoanSet(t *testing.T, cleanup bool) []byte {
 	sequence := uint32(1)
 	txn.GetCommon().Sequence = &sequence
 	txn.GetCommon().Fee = "10"
+	if memoData != "" {
+		txn.GetCommon().Memos = []tx.MemoWrapper{{Memo: tx.Memo{MemoData: memoData}}}
+	}
 	env.SignWith(txn, primary)
 
 	rules := amendment.EmptyRules()
@@ -140,6 +150,27 @@ func routerRoleSignedLoanSet(t *testing.T, cleanup bool) []byte {
 	)
 	require.NoError(t, err)
 	txn.GetCommon().CounterpartySignature = roleSignature
+
+	txMap, err := txn.Flatten()
+	require.NoError(t, err)
+	hexBlob, err := binarycodec.Encode(txMap)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(hexBlob)
+	require.NoError(t, err)
+	return blob
+}
+
+func routerSignedPaymentWithMemo(t *testing.T, memoData string) []byte {
+	t.Helper()
+	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+	primary := jtx.MasterAccount()
+	destination := jtx.NewAccount("router-local-check-destination")
+	txn := payment.Pay(primary, destination, 100_000_000).
+		Sequence(1).
+		WithMemo("", memoData, "").
+		Build()
+	env.SignWith(txn, primary)
 
 	txMap, err := txn.Flatten()
 	require.NoError(t, err)
@@ -239,26 +270,16 @@ func TestRouterSignatureSuppressionRechecksRoleSignaturesAfterCleanupTransition(
 					require.Equal(t, resource.FeeInvalidSignature(), direct.charge)
 					require.Equal(t, "transaction-invalid-signature", direct.chargeContext)
 
-					openAccepts := signatureCleanup != tc.validatedCleanup
-					if openAccepts {
-						// The validated failure occupies the other role namespace;
-						// the same router must still try this open-only message.
-						fetched := router.handleTransaction(routerFetchedTransactionMessage(blob, 2))
-						require.NoError(t, fetched.submitError)
-						require.Equal(t, openledger.ResultSuccess, fetched.submitResult)
-						require.True(t, fetched.relayed)
-						require.Zero(t, fetched.charge.Cost())
-					} else {
-						// The fresh router isolates the open-role verification result
-						// from the direct attempt's scoped negative verdict.
-						fetchedRouter := newTestRouter(&mockEngine{}, adaptor, nil)
-						fetched := fetchedRouter.handleTransaction(routerFetchedTransactionMessage(blob, 2))
-						require.Error(t, fetched.submitError)
-						require.ErrorIs(t, fetched.submitError, txengine.ErrInvalidSignature)
-						require.Equal(t, resource.FeeInvalidSignature(), fetched.charge)
-						require.Equal(t, "transaction-invalid-signature", fetched.chargeContext)
-						require.False(t, fetched.relayed)
-					}
+					// A predecoded frame is the shape emitted by the
+					// TMTransactions fanout. It still gets the validated
+					// signature check before open-ledger admission.
+					fetchedRouter := newTestRouter(&mockEngine{}, adaptor, nil)
+					fetched := fetchedRouter.handleTransaction(routerFetchedTransactionMessage(blob, 2))
+					require.Error(t, fetched.submitError)
+					require.ErrorIs(t, fetched.submitError, txengine.ErrInvalidSignature)
+					require.Equal(t, resource.FeeInvalidSignature(), fetched.charge)
+					require.Equal(t, "transaction-invalid-signature", fetched.chargeContext)
+					require.False(t, fetched.relayed)
 				})
 			}
 		})
@@ -292,6 +313,91 @@ func TestRouterSignatureSuppressionRechecksGoodSignatureAfterCleanupTransition(t
 			require.Equal(t, resource.FeeInvalidSignature(), bad.charge)
 			require.Equal(t, "transaction-invalid-signature", bad.chargeContext)
 			require.False(t, bad.relayed)
+		})
+	}
+}
+
+func TestRouterLegacyRoleLocalFailureRemainsRetryable(t *testing.T) {
+	adaptor, _ := newRouterRuleService(t, false)
+	router := newTestRouter(&mockEngine{}, adaptor, nil)
+	blob := routerRoleSignedLoanSetWithMemo(t, false, strings.Repeat("AA", tx.MaxSerializedMemosSize))
+
+	first := router.handleTransaction(routerFetchedTransactionMessage(blob, 1))
+	require.ErrorIs(t, first.submitError, ledgerservice.ErrInvalidLocalTransaction)
+	require.Equal(t, resource.FeeInvalidSignature(), first.charge)
+	require.Equal(t, "transaction-local-checks", first.chargeContext)
+
+	router.txSeen.now = func() time.Time { return time.Now().Add(transactionProcessInterval) }
+	retry := router.handleTransaction(routerFetchedTransactionMessage(blob, 2))
+	require.ErrorIs(t, retry.submitError, ledgerservice.ErrInvalidLocalTransaction)
+	require.Equal(t, resource.FeeInvalidSignature(), retry.charge)
+	require.Equal(t, "transaction-local-checks", retry.chargeContext)
+}
+
+func TestRouterLegacyRoleLocalFailureDoesNotPoisonCleanupTransition(t *testing.T) {
+	legacyAdaptor, _ := newRouterRuleService(t, false)
+	router := newTestRouter(&mockEngine{}, legacyAdaptor, nil)
+	blob := routerRoleSignedLoanSetWithMemo(t, false, strings.Repeat("AA", tx.MaxSerializedMemosSize))
+
+	first := router.handleTransaction(routerFetchedTransactionMessage(blob, 1))
+	require.ErrorIs(t, first.submitError, ledgerservice.ErrInvalidLocalTransaction)
+	require.Equal(t, resource.FeeInvalidSignature(), first.charge)
+	require.Equal(t, "transaction-local-checks", first.chargeContext)
+
+	cleanupAdaptor, _ := newRouterRuleService(t, true)
+	router.adaptor = cleanupAdaptor
+	retry := router.handleTransaction(routerFetchedTransactionMessage(blob, 2))
+	require.ErrorIs(t, retry.submitError, txengine.ErrInvalidSignature)
+	require.Equal(t, resource.FeeInvalidSignature(), retry.charge)
+	require.Equal(t, "transaction-invalid-signature", retry.chargeContext)
+	require.False(t, retry.relayed)
+}
+
+func TestRouterValidatedLocalFailurePrecedesOpenSignature(t *testing.T) {
+	oversizedMemo := strings.Repeat("AA", tx.MaxSerializedMemosSize)
+	for _, validatedCleanup := range []bool{false, true} {
+		t.Run(map[bool]string{false: "validated legacy", true: "validated cleanup"}[validatedCleanup], func(t *testing.T) {
+			adaptor, _ := routerMixedRuleService(t, validatedCleanup)
+			router := newTestRouter(&mockEngine{}, adaptor, nil)
+			blob := routerRoleSignedLoanSetWithMemo(t, validatedCleanup, oversizedMemo)
+
+			dispatch := router.handleTransaction(routerFetchedTransactionMessage(blob, 1))
+			require.ErrorIs(t, dispatch.submitError, ledgerservice.ErrInvalidLocalTransaction)
+			require.Equal(t, resource.FeeInvalidSignature(), dispatch.charge)
+			require.Equal(t, "transaction-local-checks", dispatch.chargeContext)
+			require.False(t, dispatch.relayed)
+		})
+	}
+}
+
+func TestRouterCleanupRoleAndOrdinaryLocalFailuresUsePublicBad(t *testing.T) {
+	oversizedMemo := strings.Repeat("AA", tx.MaxSerializedMemosSize)
+	for _, tc := range []struct {
+		name    string
+		cleanup bool
+		role    bool
+	}{
+		{name: "cleanup role", cleanup: true, role: true},
+		{name: "ordinary legacy", cleanup: false, role: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adaptor, _ := newRouterRuleService(t, tc.cleanup)
+			router := newTestRouter(&mockEngine{}, adaptor, nil)
+			blob := routerSignedPaymentWithMemo(t, oversizedMemo)
+			if tc.role {
+				blob = routerRoleSignedLoanSetWithMemo(t, tc.cleanup, oversizedMemo)
+			}
+
+			first := router.handleTransaction(routerFetchedTransactionMessage(blob, 1))
+			require.ErrorIs(t, first.submitError, ledgerservice.ErrInvalidLocalTransaction)
+			require.Equal(t, resource.FeeInvalidSignature(), first.charge)
+			require.Equal(t, "transaction-local-checks", first.chargeContext)
+
+			duplicate := router.handleTransaction(routerFetchedTransactionMessage(blob, 2))
+			require.NoError(t, duplicate.submitError)
+			require.Equal(t, resource.FeeUselessData(), duplicate.charge)
+			require.Equal(t, "transaction-known-bad", duplicate.chargeContext)
+			require.False(t, duplicate.relayed)
 		})
 	}
 }
