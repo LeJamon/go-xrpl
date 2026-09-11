@@ -168,7 +168,7 @@ func TestSign_SignatureTarget_DisallowedForTransaction(t *testing.T) {
 	assert.Contains(t, err.Message, "disallowed location")
 }
 
-func TestSignFor_SignatureTarget(t *testing.T) {
+func TestSignFor_SignatureTargetPartialTransaction(t *testing.T) {
 	handler := &handlers.SignForMethod{}
 	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
 
@@ -201,6 +201,12 @@ func TestSignFor_SignatureTarget(t *testing.T) {
 	})
 	require.NoError(t, err)
 	result, rpcErr := handler.Handle(signingEnabledContext(ctx), params)
+	require.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	require.Equal(t, rpcerrors.RpcINTERNAL, rpcErr.Code)
+	require.Equal(t, "Invalid signature.", rpcErr.Message)
+	ctx.Services = newSubmitTestServices(newMockLedgerServiceSubmit())
+	result, rpcErr = handler.Handle(signingEnabledContext(ctx), params)
 	require.Nil(t, rpcErr)
 	response := result.(map[string]any)
 	resTx := response["tx_json"].(map[string]any)
@@ -671,7 +677,6 @@ func TestSign_SignersDoesNotMaskInvalidAccount(t *testing.T) {
 func TestSignFor_SortsSignersByAccountIDBytes(t *testing.T) {
 	const signerAccount = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	otherAccount := accountWithOppositeStringOrder(t, signerAccount)
-	existing := testSignerWrapper(otherAccount)
 	txJSON := map[string]any{
 		"TransactionType": "Payment",
 		"Account":         "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
@@ -680,8 +685,18 @@ func TestSignFor_SortsSignersByAccountIDBytes(t *testing.T) {
 		"Fee":             "10",
 		"Sequence":        1,
 		"SigningPubKey":   "",
-		"Signers":         []any{existing},
 	}
+	mock := newMockLedgerServiceSubmit()
+	mock.standalone = false
+	mock.accountInfo = &types.AccountInfo{Account: otherAccount, RegularKey: signerAccount}
+	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: newSubmitTestServices(mock)}
+	firstResult, rpcErr := (&handlers.SignForMethod{}).Handle(signingEnabledContext(ctx), signingRulesRequest(t, map[string]any{
+		"account": otherAccount, "tx_json": txJSON, "passphrase": "masterpassphrase", "key_type": "secp256k1",
+	}))
+	require.Nil(t, rpcErr)
+	txJSON = firstResult.(map[string]any)["tx_json"].(map[string]any)
+	delete(txJSON, "hash")
+	delete(txJSON, "DeliverMax")
 
 	result, rpcErr := callSignFor(t, txJSON, signerAccount)
 	require.Nil(t, rpcErr)

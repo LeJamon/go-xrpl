@@ -78,7 +78,7 @@ func jsonCppBoolRaw(raw json.RawMessage) bool {
 		number, err := value.Float64()
 		return err == nil && number != 0
 	case string:
-		return value != ""
+		return value != "" && value[0] != 0
 	case []any:
 		return len(value) != 0
 	case map[string]any:

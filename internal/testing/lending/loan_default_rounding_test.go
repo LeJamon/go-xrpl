@@ -59,10 +59,11 @@ func TestLoanManageDefaultRoundsLiquidationCoverUpward(t *testing.T) {
 	loanSet.Counterparty = owner.Address
 	loanSet.GetCommon().Fee = "20"
 	loanSet.GetCommon().SigningPubKey = strings.ToUpper(borrower.PublicKeyHex())
-	signature, err := txsign.SignCounterparty(
+	signature, err := txsign.SignCounterpartyWithRules(
 		loanSet,
 		strings.ToUpper(owner.PublicKeyHex()),
 		"00"+strings.ToUpper(owner.PrivateKeyHex()),
+		env.Rules(),
 	)
 	if err != nil {
 		t.Fatalf("sign LoanSet: %v", err)

@@ -69,10 +69,11 @@ func createMatrixLoan(t *testing.T, f *loanSetAssetFixture, overpayment bool) (s
 	loanSet.Counterparty = f.owner.Address
 	loanSet.GetCommon().Fee = "20"
 	loanSet.GetCommon().SigningPubKey = strings.ToUpper(f.borrower.PublicKeyHex())
-	signature, err := txsign.SignCounterparty(
+	signature, err := txsign.SignCounterpartyWithRules(
 		loanSet,
 		strings.ToUpper(f.owner.PublicKeyHex()),
 		"00"+strings.ToUpper(f.owner.PrivateKeyHex()),
+		f.env.Rules(),
 	)
 	if err != nil {
 		t.Fatalf("sign LoanSet counterparty: %v", err)
@@ -321,10 +322,11 @@ func TestCashBasisVaultSetDataUpdatePreservesExistingCap(t *testing.T) {
 			loanSet.Counterparty = owner.Address
 			loanSet.GetCommon().Fee = "20"
 			loanSet.GetCommon().SigningPubKey = strings.ToUpper(borrower.PublicKeyHex())
-			signature, err := txsign.SignCounterparty(
+			signature, err := txsign.SignCounterpartyWithRules(
 				loanSet,
 				strings.ToUpper(owner.PublicKeyHex()),
 				"00"+strings.ToUpper(owner.PrivateKeyHex()),
+				env.Rules(),
 			)
 			if err != nil {
 				t.Fatalf("sign LoanSet: %v", err)
@@ -412,10 +414,11 @@ func TestLoanPayConservesXRPWhenFeePayeeIsBelowReserve(t *testing.T) {
 				loanSet.Counterparty = owner.Address
 				loanSet.GetCommon().Fee = "20"
 				loanSet.GetCommon().SigningPubKey = strings.ToUpper(borrower.PublicKeyHex())
-				signature, err := txsign.SignCounterparty(
+				signature, err := txsign.SignCounterpartyWithRules(
 					loanSet,
 					strings.ToUpper(owner.PublicKeyHex()),
 					"00"+strings.ToUpper(owner.PrivateKeyHex()),
+					env.Rules(),
 				)
 				if err != nil {
 					t.Fatalf("sign LoanSet: %v", err)

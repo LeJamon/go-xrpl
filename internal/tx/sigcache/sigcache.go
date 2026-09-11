@@ -1,18 +1,7 @@
-// Package sigcache implements a process-wide, bounded positive cache of
-// transaction IDs whose cryptographic signature has already been verified good.
-// It is the go-xrpl analog of rippled's SF_SIGGOOD HashRouter flag
-// (rippled apply.cpp:78 checkValidity): a signature verdict is keyed by the tx
-// ID (SHA-512Half of the signed blob), so it survives the re-parse the
-// consensus closed-ledger build performs on the agreed tx set. Without it the
-// build re-runs ECDSA/EdDSA verification on every already-verified transaction,
-// which does not scale to a full block.
-//
-// Security invariant: this is a POSITIVE cache only. An entry exists solely
-// after a genuine signature verification succeeded for that exact blob. A miss
-// therefore always triggers a full verification, so an unknown, never-verified,
-// or forged transaction can never skip the crypto check. The tx ID commits to
-// the entire signed blob (signature and public key included), so a cache hit
-// proves the signature over that blob was previously verified good.
+// Package sigcache caches positive signature verdicts by transaction ID and
+// signing namespace. Legacy nested signatures have a separate namespace because
+// their signed bytes change when fixCleanup3_4_0 is enabled. Only successful
+// cryptographic verification may populate the cache.
 package sigcache
 
 import (
@@ -37,17 +26,25 @@ const (
 // with a TTL floor. Safe for concurrent use.
 type Cache struct {
 	mu         sync.Mutex
-	cur        map[[32]byte]struct{}
-	prev       map[[32]byte]struct{}
+	cur        map[cacheKey]struct{}
+	prev       map[cacheKey]struct{}
 	maxEntries int
 	ttl        time.Duration
 	lastRotate time.Time
 	now        func() time.Time
 }
 
+// cacheKey keeps the pre-cleanup role-signature namespace separate from the
+// normal signing namespace. Ordinary transactions and role-bearing
+// transactions after fixCleanup3_4_0 intentionally share the normal namespace.
+type cacheKey struct {
+	id         [32]byte
+	legacyRole bool
+}
+
 // NewCache builds a cache with the given per-generation size cap and TTL. A nil
 // clock defaults to time.Now. Exposed for unit tests; production code uses the
-// process-wide global via Verified/MarkVerified.
+// process-wide global via VerifiedWithRules/MarkVerifiedWithRules.
 func NewCache(maxEntries int, ttl time.Duration, clock func() time.Time) *Cache {
 	if maxEntries <= 0 {
 		maxEntries = defaultMaxEntries
@@ -59,8 +56,8 @@ func NewCache(maxEntries int, ttl time.Duration, clock func() time.Time) *Cache 
 		clock = time.Now
 	}
 	return &Cache{
-		cur:        make(map[[32]byte]struct{}),
-		prev:       make(map[[32]byte]struct{}),
+		cur:        make(map[cacheKey]struct{}),
+		prev:       make(map[cacheKey]struct{}),
 		maxEntries: maxEntries,
 		ttl:        ttl,
 		lastRotate: clock(),
@@ -70,30 +67,45 @@ func NewCache(maxEntries int, ttl time.Duration, clock func() time.Time) *Cache 
 
 // Has reports whether id is a known verified-good transaction.
 func (c *Cache) Has(id [32]byte) bool {
+	return c.HasWithRules(id, false)
+}
+
+// HasWithRules reports whether id is a known verified-good transaction in the
+// requested signature namespace. legacyRole is true only for a transaction
+// carrying a role signature while fixCleanup3_4_0 is disabled.
+func (c *Cache) HasWithRules(id [32]byte, legacyRole bool) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.maybeRotateLocked()
-	if _, ok := c.cur[id]; ok {
+	key := cacheKey{id: id, legacyRole: legacyRole}
+	if _, ok := c.cur[key]; ok {
 		return true
 	}
-	_, ok := c.prev[id]
+	_, ok := c.prev[key]
 	return ok
 }
 
 // Add records id as verified-good.
 func (c *Cache) Add(id [32]byte) {
+	c.AddWithRules(id, false)
+}
+
+// AddWithRules records id as verified-good in the requested signature
+// namespace. Callers must only add an id after genuine cryptographic
+// verification of the exact blob represented by that id.
+func (c *Cache) AddWithRules(id [32]byte, legacyRole bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.maybeRotateLocked()
-	c.cur[id] = struct{}{}
+	c.cur[cacheKey{id: id, legacyRole: legacyRole}] = struct{}{}
 }
 
 // Reset empties both generations. Intended for test isolation.
 func (c *Cache) Reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.cur = make(map[[32]byte]struct{})
-	c.prev = make(map[[32]byte]struct{})
+	c.cur = make(map[cacheKey]struct{})
+	c.prev = make(map[cacheKey]struct{})
 	c.lastRotate = c.now()
 }
 
@@ -104,7 +116,7 @@ func (c *Cache) maybeRotateLocked() {
 		return
 	}
 	c.prev = c.cur
-	c.cur = make(map[[32]byte]struct{})
+	c.cur = make(map[cacheKey]struct{})
 	c.lastRotate = c.now()
 }
 
@@ -114,7 +126,11 @@ var global = NewCache(defaultMaxEntries, defaultTTL, time.Now)
 // Verified reports whether the transaction id has a cached verified-good
 // signature verdict; a hit lets the caller skip re-verification.
 func Verified(id [32]byte) bool {
-	return global.Has(id)
+	return VerifiedWithRules(id, false)
+}
+
+func VerifiedWithRules(id [32]byte, legacyRole bool) bool {
+	return global.HasWithRules(id, legacyRole)
 }
 
 // MarkVerified records that the transaction id's signature was verified good.
@@ -122,7 +138,14 @@ func Verified(id [32]byte) bool {
 // of the exact blob that hashes to id — this upholds the positive-cache
 // security invariant.
 func MarkVerified(id [32]byte) {
-	global.Add(id)
+	MarkVerifiedWithRules(id, false)
+}
+
+// MarkVerifiedWithRules records that id's signature was verified good in the
+// requested signature namespace. Callers MUST only invoke this after a
+// successful cryptographic verification of the exact blob that hashes to id.
+func MarkVerifiedWithRules(id [32]byte, legacyRole bool) {
+	global.AddWithRules(id, legacyRole)
 }
 
 // Reset clears the process-wide cache. Intended for test isolation.

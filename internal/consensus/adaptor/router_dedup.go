@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -119,12 +120,20 @@ type transactionSuppression struct {
 	now     func() time.Time
 }
 
+const (
+	legacySignatureSlot = iota
+	cleanupSignatureSlot
+	signatureSlotCount
+	signatureContextCount = 1 << signatureSlotCount
+)
+
 type transactionSuppressionEntry struct {
-	processedAt time.Time
-	touchedAt   time.Time
-	bad         bool
-	peers       map[uint64]struct{}
-	order       *list.Element
+	processedAt  [signatureContextCount]time.Time
+	touchedAt    time.Time
+	bad          bool
+	badSignature [signatureSlotCount]bool
+	peers        map[uint64]struct{}
+	order        *list.Element
 }
 
 func newTransactionSuppression(ttl time.Duration, maxSize int) *transactionSuppression {
@@ -146,24 +155,90 @@ func (s *transactionSuppression) claim(hash [32]byte, peerID uint64) (shouldProc
 	defer s.mu.Unlock()
 	now := s.now()
 	s.evictExpiredLocked(now)
+	entry := s.entryLocked(hash, peerID, now)
+	return s.claimContextLocked(entry, now, 0, entry.bad)
+}
+
+// Role signatures use separate suppression contexts across prefix changes.
+func (s *transactionSuppression) claimWithSignatureContexts(
+	hash [32]byte,
+	peerID uint64,
+	roleBearing bool,
+	validatedRules, openRules *amendment.Rules,
+	validatedAdmission bool,
+) (shouldProcess, bad bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	s.evictExpiredLocked(now)
+	entry := s.entryLocked(hash, peerID, now)
+	if !roleBearing {
+		return s.claimContextLocked(entry, now, 0, entry.bad)
+	}
+	if entry.bad {
+		return s.claimContextLocked(entry, now, 0, true)
+	}
+
+	contextMask := 1 << signatureSlotForRules(openRules)
+	if validatedAdmission {
+		contextMask |= 1 << signatureSlotForRules(validatedRules)
+	}
+	badSignature := false
+	for slot, bit := range []int{1, 2} {
+		if contextMask&bit != 0 && entry.badSignature[slot] {
+			badSignature = true
+			break
+		}
+	}
+	shouldProcess, bad = s.claimContextLocked(entry, now, contextMask, badSignature)
+	if !shouldProcess {
+		// Legacy role failures do not carry the public BAD charge.
+		bad = contextMask&(1<<cleanupSignatureSlot) != 0 && entry.badSignature[cleanupSignatureSlot]
+	}
+	return shouldProcess, bad
+}
+
+func signatureCleanupEra(rules *amendment.Rules) bool {
+	return rules != nil && rules.FixCleanup3_4_0Enabled()
+}
+
+func signatureSlotForRules(rules *amendment.Rules) int {
+	if signatureCleanupEra(rules) {
+		return cleanupSignatureSlot
+	}
+	return legacySignatureSlot
+}
+
+func (s *transactionSuppression) entryLocked(hash [32]byte, peerID uint64, now time.Time) *transactionSuppressionEntry {
 	if entry, ok := s.entries[hash]; ok {
 		addTransactionPeer(entry, peerID)
 		entry.touchedAt = now
 		s.order.MoveToBack(entry.order)
-		if now.Sub(entry.processedAt) < transactionProcessInterval {
-			return false, entry.bad
-		}
-		entry.processedAt = now
-		return true, entry.bad
+		return entry
 	}
-	entry := &transactionSuppressionEntry{processedAt: now, touchedAt: now}
+	entry := &transactionSuppressionEntry{
+		touchedAt: now,
+	}
 	addTransactionPeer(entry, peerID)
 	entry.order = s.order.PushBack(hash)
 	s.entries[hash] = entry
 	for len(s.entries) > s.maxSize {
 		s.removeOldestLocked()
 	}
-	return true, false
+	return entry
+}
+
+func (s *transactionSuppression) claimContextLocked(
+	entry *transactionSuppressionEntry,
+	now time.Time,
+	contextMask int,
+	bad bool,
+) (shouldProcess, knownBad bool) {
+	if now.Sub(entry.processedAt[contextMask]) < transactionProcessInterval {
+		return false, bad
+	}
+	entry.processedAt[contextMask] = now
+	return true, bad
 }
 
 func addTransactionPeer(entry *transactionSuppressionEntry, peerID uint64) {
@@ -192,6 +267,17 @@ func (s *transactionSuppression) markBad(hash [32]byte) {
 	s.mu.Lock()
 	if entry := s.entries[hash]; entry != nil {
 		entry.bad = true
+		entry.processedAt[0] = s.now()
+	}
+	s.mu.Unlock()
+}
+
+// markBadSignature records a signature failure in the namespace that produced
+// it. It does not set the shared BAD verdict used by ordinary transactions.
+func (s *transactionSuppression) markBadSignature(hash [32]byte, rules *amendment.Rules) {
+	s.mu.Lock()
+	if entry := s.entries[hash]; entry != nil {
+		entry.badSignature[signatureSlotForRules(rules)] = true
 	}
 	s.mu.Unlock()
 }

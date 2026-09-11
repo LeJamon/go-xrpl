@@ -114,6 +114,8 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	// RPC ingress skips signature verification in standalone mode (the
 	// previous engine path did the same); the network path leaves it on.
 	cfg.SkipSignatureVerification = standalone
+	initialRules := cfg.Rules
+	initialSignatureCheck := !cfg.SkipSignatureVerification
 	if failHard {
 		cfg.ApplyFlags |= tx.TapFAIL_HARD
 	}
@@ -126,23 +128,20 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 			CurrentLedger: openLedgerView.Current().Sequence(),
 		}, nil
 	}
+	localReason := tx.TransactionLocalChecksFailureReason(ptx.Parsed)
 	// Local submission checks (rippled STTx::passesLocalChecks via NetworkOPs):
 	// memo size/charset limits are enforced on RPC and peer ingress, not in the
 	// consensus-critical engine preflight. A transaction already admitted to a
 	// consensus set remains governed only by consensus-critical checks.
-	if localResult := tx.PassesTransactionLocalChecks(ptx.Parsed); localResult != ter.TesSUCCESS {
-		return &SubmitResult{
-			Result:        localResult,
-			Message:       localResult.Message(),
-			CurrentLedger: openLedgerView.Current().Sequence(),
-		}, nil
-	}
-	preprocessValid := ptx.Parsed.GetCommon().GetFlags()&tx.TfInnerBatchTxn == 0
+	signatureEligible := ptx.Parsed.GetCommon().GetFlags()&tx.TfInnerBatchTxn == 0
+	preprocessValid := signatureEligible
+	var signatureErr error
 	// Verify the signature before SubmitDetailed acquires the apply mutex so the
 	// in-strand check reuses the cached verdict (#1105). Skipped in standalone
 	// mode, matching cfg.SkipSignatureVerification above.
-	if preprocessValid && !cfg.SkipSignatureVerification {
-		preprocessValid = txengine.PrewarmSignature(ptx.Parsed) == nil
+	if signatureEligible && initialSignatureCheck {
+		signatureErr = txengine.PrewarmSignatureWithRules(ptx.Parsed, cfg.Rules)
+		preprocessValid = signatureErr == nil
 	}
 
 	if err := s.lockOpenLedgerIfRunning(openLedgerIngress); err != nil {
@@ -165,6 +164,31 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	cfg.SkipSignatureVerification = standalone
 	if failHard {
 		cfg.ApplyFlags |= tx.TapFAIL_HARD
+	}
+	if !signatureEligible {
+		preprocessValid = false
+		signatureErr = nil
+	} else if cfg.SkipSignatureVerification {
+		preprocessValid = true
+		signatureErr = nil
+	} else if !initialSignatureCheck || cfg.Rules != initialRules {
+		signatureErr = txengine.PrewarmSignatureWithRules(ptx.Parsed, cfg.Rules)
+		preprocessValid = signatureErr == nil
+	}
+	currentBeforeSubmit := openLedgerView.Current()
+	if signatureErr != nil {
+		return &SubmitResult{
+			Result:        ter.TemBAD_SIGNATURE,
+			Message:       ter.TemBAD_SIGNATURE.Message(),
+			CurrentLedger: currentBeforeSubmit.Sequence(),
+		}, nil
+	}
+	if localReason != "" {
+		return &SubmitResult{
+			Result:        ter.TemMALFORMED,
+			Message:       ter.TemMALFORMED.Message(),
+			CurrentLedger: currentBeforeSubmit.Sequence(),
+		}, nil
 	}
 	outcome := openLedgerView.SubmitDetailed(ptx, cfg, txQueue)
 

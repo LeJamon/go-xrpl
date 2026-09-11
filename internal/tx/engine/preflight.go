@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -9,7 +8,6 @@ import (
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
 	"github.com/LeJamon/go-xrpl/internal/tx/sigcache"
@@ -42,8 +40,8 @@ func (e *Engine) preflight(tx txcore.Transaction) (result ter.Result) {
 
 	// Non-signature structural preflight is ledger-state-independent, so its
 	// verdict is memoised on the transaction and a re-preflight under the same
-	// rules skips the repeat (see Common.preflightedRules). Signature structure
-	// and verification stay out of the memo and always run below.
+	// rules skips the repeat (see Common.preflightedRules). Signature verification
+	// stays out of the memo and runs below.
 	if currentTxIDErr != nil || !common.PreflightVerified(rules, currentTxID) {
 		if result := e.preflightStructure(tx, common); result != ter.TesSUCCESS {
 			return result
@@ -52,8 +50,10 @@ func (e *Engine) preflight(tx txcore.Transaction) (result ter.Result) {
 			common.MarkPreflightVerified(rules, currentTxID)
 		}
 	}
-	if result := e.preflightSignatureStructure(tx, common); result != ter.TesSUCCESS {
-		return result
+	if e.config.ApplyFlags&txcore.TapDRY_RUN != 0 {
+		if result := preflightSimulateKeys(common); result != ter.TesSUCCESS {
+			return result
+		}
 	}
 
 	// preflight2 — cryptographic signature verification runs LAST, after the
@@ -132,22 +132,6 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 	}
 
 	return ter.TesSUCCESS
-}
-
-// preflightSignatureStructure runs the non-cryptographic parts of checkValidity.
-// rippled bypasses all of checkValidity for TapDryRun and performs signer-list
-// authorization later in preclaim.
-func (e *Engine) preflightSignatureStructure(tx txcore.Transaction, common *txcore.Common) ter.Result {
-	if e.config.ApplyFlags&txcore.TapDRY_RUN != 0 {
-		return preflightSimulateKeys(common)
-	}
-	if result := e.preflightMultiSignStructure(tx, common); result != ter.TesSUCCESS {
-		return result
-	}
-	if result := e.preflightSponsorSignStructure(common); result != ter.TesSUCCESS {
-		return result
-	}
-	return e.preflightBatchSignerStructure(tx)
 }
 
 func preflightSimulateKeys(common *txcore.Common) ter.Result {
@@ -501,210 +485,35 @@ func (e *Engine) preflightSequence(common *txcore.Common) ter.Result {
 	return ter.TesSUCCESS
 }
 
-// preflightMultiSignStructure performs the structural multi-sign validation
-// (bounds, sort, uniqueness, self-sign rejection). rippled runs these inside
-// STTx::multiSignHelper, reached via checkValidity in preflight2 — AFTER the
-// per-type preflight body — and a violation is Validity::SigBad → temINVALID
-// (NOT temBAD_SIGNATURE, which the submission layer reports separately).
-// Reference: rippled STTx.cpp multiSignHelper() + Transactor::preflight2.
-func (e *Engine) preflightMultiSignStructure(tx txcore.Transaction, common *txcore.Common) ter.Result {
-	hasSigners := len(common.Signers) > 0 || common.HasField("Signers")
-	if !hasSigners {
-		return ter.TesSUCCESS
-	}
-	if common.SigningPubKey != "" || common.TxnSignature != "" || common.HasField("TxnSignature") {
-		return ter.TemINVALID
-	}
-	// The signer array must lie within the multi-signer bounds.
-	if n := len(common.Signers); n < sign.MinMultiSigners || n > sign.MaxMultiSigners {
-		return ter.TemINVALID
-	}
-	idAccount := common.Account
-	if common.Delegate != "" {
-		idAccount = common.Delegate
-	}
-	idAccountID, acctErr := state.DecodeAccountID(idAccount)
-	if acctErr != nil {
-		return ter.TemBAD_SRC_ACCOUNT
-	}
-	var lastAccountID [20]byte // zero-initialized — less than any real ID
-	for _, sw := range common.Signers {
-		signerID, decErr := state.DecodeAccountID(sw.Signer.Account)
-		if decErr != nil {
-			return ter.TemINVALID
-		}
-		if signerID == idAccountID {
-			return ter.TemINVALID
-		}
-		// No duplicate signers allowed.
-		if signerID == lastAccountID {
-			return ter.TemINVALID
-		}
-		// Accounts must be in order by binary AccountID.
-		if bytes.Compare(lastAccountID[:], signerID[:]) > 0 {
-			return ter.TemINVALID
-		}
-		lastAccountID = signerID
-	}
-	return ter.TesSUCCESS
-}
-
-// preflightSponsorSignStructure enforces the signature-object shape even when
-// generic cryptographic verification is disabled.
-// Nested multisigners are ordered and unique by binary AccountID, but unlike
-// top-level Signers they are not compared with the transaction Account.
-func (e *Engine) preflightSponsorSignStructure(common *txcore.Common) ter.Result {
-	sponsor := common.SponsorSignature
-	if sponsor == nil {
-		return ter.TesSUCCESS
-	}
-	hasSigners := len(sponsor.Signers) > 0 || sponsor.HasField("Signers")
-	if sponsor.SigningPubKey != "" {
-		if hasSigners {
-			return ter.TemINVALID
-		}
-		return ter.TesSUCCESS
-	}
-	if !hasSigners {
-		if sponsor.TxnSignature != "" {
-			return ter.TemINVALID
-		}
-		// An empty object is accepted only by dry-run/test configurations.
-		// The crypto verifier rejects it on a normal submission.
-		return ter.TesSUCCESS
-	}
-	if sponsor.TxnSignature != "" || sponsor.HasField("TxnSignature") {
-		return ter.TemINVALID
-	}
-	if n := len(sponsor.Signers); n < sign.MinMultiSigners || n > sign.MaxMultiSigners {
-		return ter.TemINVALID
-	}
-	var lastAccountID [20]byte
-	for _, sw := range sponsor.Signers {
-		signerID, err := state.DecodeAccountID(sw.Signer.Account)
-		if err != nil {
-			return ter.TemINVALID
-		}
-		if signerID == lastAccountID || bytes.Compare(lastAccountID[:], signerID[:]) > 0 {
-			return ter.TemINVALID
-		}
-		lastAccountID = signerID
-	}
-	return ter.TesSUCCESS
-}
-
-// preflightBatchSignerStructure enforces the upper bound on each
-// multi-signed BatchSigner's nested Signers array. rippled checks this inside
-// multiSignHelper through STTx::checkBatchSign; an out-of-range array is a
-// bad-signature validity result and surfaces as temINVALID.
-func (e *Engine) preflightBatchSignerStructure(tx txcore.Transaction) ter.Result {
-	bsp, ok := tx.(txcore.BatchSignerProvider)
-	if !ok {
-		return ter.TesSUCCESS
-	}
-	maxSigners := sign.MaxMultiSigners
-	for _, signer := range bsp.GetBatchSigners() {
-		// A single-signed BatchSigner has no nested array; multi-sign is keyed
-		// off an empty SigningPubKey, matching Batch.verifyBatchSignatures.
-		if signer.SigningPubKey != "" {
-			continue
-		}
-		if n := len(signer.Signers); n < sign.MinMultiSigners || n > maxSigners {
-			return ter.TemINVALID
-		}
-	}
-	return ter.TesSUCCESS
-}
-
 // verifySignatures performs cryptographic signature verification (single or multi)
 // when SkipSignatureVerification is false. Authorization checks (master/regular
 // key) live in preclaim.
 func (e *Engine) verifySignatures(tx txcore.Transaction) ter.Result {
+	common := tx.GetCommon()
 	if e.config.SkipSignatureVerification || e.config.ApplyFlags&txcore.TapDRY_RUN != 0 {
 		return ter.TesSUCCESS
 	}
+	if common.GetFlags()&txcore.TfInnerBatchTxn != 0 {
+		return ter.TemINVALID
+	}
+	rules := e.rules()
+	legacyRole := common.SignatureCacheLegacyRole(rules)
 	if matches, err := txcore.CurrentFieldsMatchRaw(tx); err != nil || !matches {
 		return ter.TemINVALID
 	}
 	txID, idErr := txcore.ComputeCurrentTransactionHash(tx)
-	if idErr == nil && tx.GetCommon().SignatureVerified(txID) {
+	if idErr == nil && common.SignatureVerifiedWithRules(txID, rules) {
 		return ter.TesSUCCESS
 	}
-	if idErr == nil && sigcache.Verified(txID) {
+	if idErr == nil && sigcache.VerifiedWithRules(txID, legacyRole) {
 		return ter.TesSUCCESS
 	}
-	// Verify the outer single/multi-sign signature first, mirroring rippled's
-	// preflight2 (checkValidity) which precedes the batch-signer check.
-	if result := e.verifyOuterSignature(tx); result != ter.TesSUCCESS {
-		return result
-	}
-	// After the top-level signature passes, verify a nested
-	// sfCounterpartySignature if present, mirroring the counterparty arm of
-	// rippled STTx::checkSign. A failure is a bad signature (checkValidity's
-	// Validity::SigBad), which rippled maps to temINVALID.
-	if cp := tx.GetCommon().CounterpartySignature; cp != nil {
-		if err := sign.VerifyCounterpartySignature(tx, cp, true); err != nil {
-			return ter.TemINVALID
-		}
-	}
-	// SponsorSignature is checked after CounterpartySignature, matching
-	// STTx::checkSign. Its contents are excluded from the signing projection,
-	// but every signature still binds all ordinary transaction fields.
-	if sponsor := tx.GetCommon().SponsorSignature; sponsor != nil {
-		if err := sign.VerifySponsorSignature(tx, sponsor, true); err != nil {
-			return ter.TemINVALID
-		}
-	}
-	// Batch-signer signatures are verified over the batch signing digest, the same
-	// stage rippled runs STTx::checkBatchSign (always RequireFullyCanonicalSig::yes).
-	// Structural bounds run before hashing; coverage/order runs in
-	// PreflightSigValidated. Only cryptographic verification is gated here so it honours
-	// SkipSignatureVerification like every other signature.
-	if bsv, ok := tx.(txcore.BatchSignatureVerifier); ok {
-		if err := bsv.VerifyBatchSignatures(); err != nil {
-			return ter.TemINVALID
-		}
+	if sign.CheckSTTxSignature(tx, rules, true) != "" {
+		return ter.TemINVALID
 	}
 	if idErr == nil {
-		tx.GetCommon().MarkSignatureVerified(txID)
-		sigcache.MarkVerified(txID)
-	}
-	return ter.TesSUCCESS
-}
-
-// verifyOuterSignature performs the cryptographic single/multi-sign verification
-// of the transaction's own signature. Reference: rippled STTx::checkSingleSign /
-// checkMultiSign via preflight2's checkValidity.
-func (e *Engine) verifyOuterSignature(tx txcore.Transaction) ter.Result {
-	// Full canonicality (low-S secp256k1) is unconditionally required.
-	// Reference: rippled STTx::checkSingleSign/checkMultiSign (verify() defaults
-	// to fullyCanonical).
-	mustBeFullyCanonical := true
-	if sign.IsMultiSigned(tx) {
-		// Preflight verifies only the multi-sign structure (already checked in
-		// preflightMultiSignStructure) and the per-signer cryptographic
-		// signatures. The view-dependent signer-list authorization — quorum,
-		// master/regular key, and list membership — is a preclaim check
-		// (checkMultiSign), so that an under-quorum multi-signed tx whose
-		// LastLedgerSequence has passed reports tefMAX_LEDGER (from preclaim's
-		// checkPriorTxAndLastLedger) rather than tefBAD_QUORUM. This mirrors
-		// rippled, where STTx::checkMultiSign (preflight2) is crypto-only and
-		// Transactor::checkMultiSign (preclaim) does authorization. A crypto
-		// failure is preflight2's Validity::SigBad → temINVALID.
-		if err := sign.VerifyMultiSignatureCrypto(tx, mustBeFullyCanonical); err != nil {
-			return ter.TemINVALID
-		}
-		return ter.TesSUCCESS
-	}
-	// Single-signed transaction — verify cryptographic signature validity.
-	// The signing key authorization (master vs regular key) is checked in preclaim.
-	// A failed crypto check is preflight2's `Validity::SigBad`, which rippled
-	// maps to temINVALID (Transactor.cpp:198-201) — NOT temBAD_SIGNATURE. The
-	// malformed-key-type case that does warrant temBAD_SIGNATURE is already
-	// caught unconditionally in preflight1 (preflightCommon).
-	//
-	if err := sign.VerifySignature(tx, mustBeFullyCanonical); err != nil {
-		return ter.TemINVALID
+		common.MarkSignatureVerifiedWithRules(txID, rules)
+		sigcache.MarkVerifiedWithRules(txID, legacyRole)
 	}
 	return ter.TesSUCCESS
 }
@@ -720,7 +529,15 @@ func (e *Engine) verifyOuterSignature(tx txcore.Transaction) ter.Result {
 // verdict. Authorization against ledger signer lists remains in preclaim.
 var ErrInvalidSignature = errors.New("invalid transaction signature")
 
+// PrewarmSignature retains the legacy pre-cleanup rules behavior for callers
+// that do not have a ledger rules snapshot.
 func PrewarmSignature(txn txcore.Transaction) error {
+	return PrewarmSignatureWithRules(txn, nil)
+}
+
+// PrewarmSignatureWithRules is PrewarmSignature with the amendment rules that
+// determine the signature namespace and nested role-signature payload.
+func PrewarmSignatureWithRules(txn txcore.Transaction, rules *amendment.Rules) error {
 	if txn == nil {
 		return nil
 	}
@@ -728,20 +545,26 @@ func PrewarmSignature(txn txcore.Transaction) error {
 	if common == nil {
 		return nil
 	}
+	if common.GetFlags()&txcore.TfInnerBatchTxn != 0 {
+		if reason := sign.CheckSTTxSignature(txn, rules, true); reason != "" {
+			return fmt.Errorf("%w: %s", ErrInvalidSignature, reason)
+		}
+	}
 	txID, idErr := txcore.ComputeCurrentTransactionHash(txn)
-	if idErr == nil && common.SignatureVerified(txID) {
+	if idErr == nil && common.SignatureVerifiedWithRules(txID, rules) {
 		return nil
 	}
-	if reason := sign.CheckSTTxSignature(txn, nil, true); reason != "" {
+	if reason := sign.CheckSTTxSignature(txn, rules, true); reason != "" {
 		return fmt.Errorf("%w: %s", ErrInvalidSignature, reason)
 	}
 	if idErr != nil {
 		return nil
 	}
-	common.MarkSignatureVerified(txID)
+	legacyRole := common.SignatureCacheLegacyRole(rules)
+	common.MarkSignatureVerifiedWithRules(txID, rules)
 	// Publish to the tx-ID cache so the consensus build path (fresh object,
 	// cold flag) skips the redundant whole-transaction signature verify.
-	sigcache.MarkVerified(txID)
+	sigcache.MarkVerifiedWithRules(txID, legacyRole)
 	return nil
 }
 

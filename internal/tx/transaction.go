@@ -464,6 +464,9 @@ type Common struct {
 	// before the parsed transaction is shared with any other goroutine.
 	sigVerified     bool
 	sigVerifiedTxID [32]byte
+	// sigVerifiedLegacyRole records the namespace selected when the verdict was
+	// written; it is meaningful only while sigVerified is true.
+	sigVerifiedLegacyRole bool
 
 	// cachedTxID memoises this transaction's id. The id is a pure function of
 	// RawBytes, so the cache stays valid until SetRawBytes replaces them (which
@@ -519,6 +522,18 @@ func (c *Common) FieldPresent(name string, typedPresent bool) bool {
 	return typedPresent || c != nil && c.HasField(name)
 }
 
+// SignatureCacheLegacyRole reports whether this transaction uses the
+// pre-cleanup role-signature namespace. Only nested role-signature prefixes
+// change with fixCleanup3_4_0; their legacy verdicts remain separate from the
+// normal namespace so a later rules-era check cannot reuse them.
+func (c *Common) SignatureCacheLegacyRole(rules *amendment.Rules) bool {
+	if c == nil || rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0) {
+		return false
+	}
+	return c.FieldPresent("CounterpartySignature", c.CounterpartySignature != nil) ||
+		c.FieldPresent("SponsorSignature", c.SponsorSignature != nil)
+}
+
 // SetPresentFields sets the map of fields that were present in the original parsed data.
 func (c *Common) SetPresentFields(fields map[string]bool) {
 	c.PresentFields = fields
@@ -536,6 +551,7 @@ func (c *Common) SetRawBytes(data []byte) {
 	c.rawBytes = append([]byte(nil), data...)
 	c.sigVerified = false
 	c.sigVerifiedTxID = [32]byte{}
+	c.sigVerifiedLegacyRole = false
 	c.txIDCached = false
 	c.cachedTxID = [32]byte{}
 	c.preflightedRules = nil
@@ -570,20 +586,39 @@ func (c *Common) GetFlags() uint32 {
 	return *c.Flags
 }
 
-// MarkSignatureVerified records that the transaction's cryptographic signature
-// has been verified, so a later in-strand check can skip re-verifying it.
+// MarkSignatureVerified retains the legacy ID-only API and records a verdict in
+// the normal namespace. Rules-aware callers should use
+// MarkSignatureVerifiedWithRules.
 func (c *Common) MarkSignatureVerified(txID [32]byte) {
+	c.markSignatureVerified(txID, false)
+}
+
+func (c *Common) MarkSignatureVerifiedWithRules(txID [32]byte, rules *amendment.Rules) {
+	c.markSignatureVerified(txID, c.SignatureCacheLegacyRole(rules))
+}
+
+func (c *Common) markSignatureVerified(txID [32]byte, legacyRole bool) {
 	c.sigVerified = true
 	c.sigVerifiedTxID = txID
+	c.sigVerifiedLegacyRole = legacyRole
 }
 
 // SignatureVerified reports whether the transaction's signature was already
-// verified off-strand (see MarkSignatureVerified).
+// verified off-strand using the legacy ID-only contract. Rules-aware callers
+// should use SignatureVerifiedWithRules.
 func (c *Common) SignatureVerified(txID ...[32]byte) bool {
 	if !c.sigVerified {
 		return false
 	}
 	return len(txID) == 0 || c.sigVerifiedTxID == txID[0]
+}
+
+// SignatureVerifiedWithRules reports whether the transaction's signature was
+// verified under the supplied amendment rules and for the current transaction
+// contents.
+func (c *Common) SignatureVerifiedWithRules(txID [32]byte, rules *amendment.Rules) bool {
+	return c.sigVerified && c.sigVerifiedTxID == txID &&
+		c.sigVerifiedLegacyRole == c.SignatureCacheLegacyRole(rules)
 }
 
 // PreflightVerified reports whether this transaction's structural preflight

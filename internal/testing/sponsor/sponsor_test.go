@@ -96,7 +96,7 @@ func signingPrivateKey(account *jtx.Account) string {
 }
 
 // attachSponsorSignature fills every ordinary signed field first, then signs
-// the same STX projection as the transaction's top-level account.
+// the sponsor-role projection selected by the active ledger rules.
 func attachSponsorSignature(
 	t *testing.T,
 	env *jtx.TestEnv,
@@ -123,10 +123,11 @@ func attachSponsorSignatureFor(
 		common.Fee = "10"
 	}
 	common.SigningPubKey = transactionSigner.PublicKeyHex()
-	signature, err := signtx.SignSponsor(
+	signature, err := signtx.SignSponsorWithRules(
 		transaction,
 		sponsorSigner.PublicKeyHex(),
 		signingPrivateKey(sponsorSigner),
+		env.Rules(),
 	)
 	require.NoError(t, err)
 	common.SponsorSignature = signature
@@ -149,10 +150,12 @@ func attachSponsorMultiSignature(
 
 	wrappers := make([]tx.SignerWrapper, 0, len(signers))
 	for _, signer := range signers {
-		signature, err := signtx.SignTransactionForMultiSignTarget(
+		signature, err := signtx.SignTransactionForMultiSignRole(
 			transaction,
 			signer.Address,
 			signingPrivateKey(signer),
+			binarycodec.SponsorRole,
+			env.Rules(),
 		)
 		require.NoError(t, err)
 		wrappers = append(wrappers, tx.SignerWrapper{Signer: tx.Signer{
@@ -885,43 +888,46 @@ func TestSponsorSignatureStructuralFailures(t *testing.T) {
 	signer2 := jtx.NewAccount("sponsor-structure-signer-2")
 	flags := tx.SpfSponsorFee
 
-	sorted := []tx.SignerWrapper{
-		{Signer: tx.Signer{Account: signer1.Address}},
-		{Signer: tx.Signer{Account: signer2.Address}},
-	}
-	sort.Slice(sorted, func(i, j int) bool {
-		left, _ := state.DecodeAccountID(sorted[i].Signer.Account)
-		right, _ := state.DecodeAccountID(sorted[j].Signer.Account)
-		return string(left[:]) < string(right[:])
-	})
-	unsorted := append([]tx.SignerWrapper(nil), sorted...)
-	unsorted[0], unsorted[1] = unsorted[1], unsorted[0]
-
 	testCases := []struct {
-		name      string
-		signature *tx.SponsorSignature
+		name           string
+		expectedReason string
+		multi          bool
+		mutate         func(*tx.SponsorSignature)
 	}{
 		{
-			name: "single and multi",
-			signature: &tx.SponsorSignature{
-				SigningPubKey: sponsor.PublicKeyHex(),
-				TxnSignature:  "AA",
-				Signers:       sorted,
+			name:           "single and multi",
+			expectedReason: "Sponsor: Cannot both single- and multi-sign.",
+			multi:          true,
+			mutate: func(signature *tx.SponsorSignature) {
+				signature.SigningPubKey = sponsor.PublicKeyHex()
+				signature.TxnSignature = "AA"
 			},
 		},
 		{
-			name:      "unsorted multisigners",
-			signature: &tx.SponsorSignature{Signers: unsorted},
+			name:           "unsorted multisigners",
+			expectedReason: "Sponsor: Unsorted Signers array.",
+			multi:          true,
+			mutate: func(signature *tx.SponsorSignature) {
+				signature.Signers[0], signature.Signers[1] = signature.Signers[1], signature.Signers[0]
+			},
 		},
 		{
-			name:      "duplicate multisigners",
-			signature: &tx.SponsorSignature{Signers: []tx.SignerWrapper{sorted[0], sorted[0]}},
+			name:           "duplicate multisigners",
+			expectedReason: "Sponsor: Duplicate Signers not allowed.",
+			multi:          true,
+			mutate: func(signature *tx.SponsorSignature) {
+				signature.Signers[1] = signature.Signers[0]
+			},
 		},
 		{
-			name:      "signature without key",
-			signature: &tx.SponsorSignature{TxnSignature: "AA"},
+			name:           "signature without key",
+			expectedReason: "Sponsor: Empty SigningPubKey.",
+			mutate: func(signature *tx.SponsorSignature) {
+				signature.TxnSignature = "AA"
+			},
 		},
 	}
+	env.VerifySignatures = true
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -932,9 +938,22 @@ func TestSponsorSignatureStructuralFailures(t *testing.T) {
 			transaction.Fee = "10"
 			transaction.Sponsor = sponsor.Address
 			transaction.SponsorFlags = &flags
-			transaction.SponsorSignature = testCase.signature
+			var signature *tx.SponsorSignature
+			if testCase.multi {
+				attachSponsorMultiSignature(t, env, transaction, source, signer1, signer2)
+				signature = transaction.SponsorSignature
+			} else {
+				signature = &tx.SponsorSignature{}
+			}
+			testCase.mutate(signature)
+			transaction.SponsorSignature = signature
 
-			require.Equal(t, "temINVALID", env.Submit(transaction).Code)
+			// The sponsor object carries intentionally malformed structure; nested
+			// entries, when present, are validly signed. The outer transaction must
+			// also be valid so verification reaches these structure checks.
+			result := env.SubmitSigned(transaction)
+			require.Equal(t, testCase.expectedReason, signtx.CheckSTTxSignature(transaction, env.Rules(), true))
+			require.Equal(t, "temINVALID", result.Code)
 			require.Equal(t, sequenceBefore, env.Seq(source))
 			require.Equal(t, sourceBefore, env.Balance(source))
 			require.Equal(t, sponsorBefore, env.Balance(sponsor))
@@ -1018,10 +1037,11 @@ func TestTopLevelMultisignWithSponsorFee(t *testing.T) {
 	transaction.Sponsor = sponsor.Address
 	flags := tx.SpfSponsorFee
 	transaction.SponsorFlags = &flags
-	sponsorSignature, err := signtx.SignSponsor(
+	sponsorSignature, err := signtx.SignSponsorWithRules(
 		transaction,
 		sponsor.PublicKeyHex(),
 		signingPrivateKey(sponsor),
+		env.Rules(),
 	)
 	require.NoError(t, err)
 	transaction.SponsorSignature = sponsorSignature

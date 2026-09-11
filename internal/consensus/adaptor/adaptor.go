@@ -24,6 +24,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 )
 
 var (
@@ -953,6 +954,30 @@ func (a *Adaptor) GetTx(id consensus.TxID) ([]byte, error) {
 // out; local=false (peer-relay) leaves resends to the peer.
 func (a *Adaptor) AddPendingTx(blob []byte, local bool) {
 	_, _ = a.SubmitPendingTx(blob, local)
+}
+
+func (a *Adaptor) peerSignatureSnapshot() (validatedRules, openRules *amendment.Rules, validatedAdmission bool) {
+	if a == nil || a.ledgerService == nil {
+		return nil, nil, false
+	}
+	openRules = a.ledgerService.TransactionRules()
+	if a.ledgerService.IsStandalone() {
+		return nil, openRules, false
+	}
+	if validated := a.validatedLedger(); validated != nil {
+		return validated.Rules(), openRules, true
+	}
+	return nil, openRules, false
+}
+
+func (a *Adaptor) validatePeerSignature(ptx openledger.PendingTx, rules *amendment.Rules) error {
+	if a == nil || a.ledgerService == nil || a.ledgerService.IsStandalone() {
+		return nil
+	}
+	if ptx.Parsed == nil {
+		return errors.New("peer transaction has no parsed form")
+	}
+	return txengine.PrewarmSignatureWithRules(ptx.Parsed, rules)
 }
 
 func (a *Adaptor) SubmitPendingTx(blob []byte, local bool) (openledger.SubmitOutcome, error) {

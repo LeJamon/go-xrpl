@@ -66,7 +66,7 @@ func newCleanupLoan(t *testing.T, cleanup, cashBasis bool, configure ...func(*le
 	for _, configureLoan := range configure {
 		configureLoan(loan)
 	}
-	signature, err := txsign.SignCounterparty(loan, owner.PublicKeyHex(), "00"+owner.PrivateKeyHex())
+	signature, err := txsign.SignCounterpartyWithRules(loan, owner.PublicKeyHex(), "00"+owner.PrivateKeyHex(), env.Rules())
 	require.NoError(t, err)
 	loan.CounterpartySignature = signature
 	result := env.Submit(loan)
