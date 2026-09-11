@@ -112,3 +112,42 @@ func TestRC1RetainsEmitDetails(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "53545800"+want, signing)
 }
+
+func TestRC1GenericEncodingReturnsError(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		encode func(map[string]any) ([]byte, error)
+	}{
+		{"bytes", EncodeBytes},
+		{"trusted bytes", EncodeBytesTrusted},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := map[string]any{"Generic": 0}
+			encoded, err := test.encode(input)
+			require.ErrorContains(t, err, "Generic")
+			require.Empty(t, encoded)
+			require.Equal(t, map[string]any{"Generic": 0}, input)
+		})
+	}
+	for _, test := range []struct {
+		name   string
+		encode func(map[string]any) (string, error)
+	}{
+		{"hex", Encode},
+		{"signing", EncodeForSigning},
+		{"multisigning", func(input map[string]any) (string, error) {
+			return EncodeForMultisigning(input, "rrrrrrrrrrrrrrrrrrrrrhoLvTp")
+		}},
+		{"multisigning target", func(input map[string]any) (string, error) {
+			return EncodeForMultisigningTarget(input, "rrrrrrrrrrrrrrrrrrrrrhoLvTp")
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := map[string]any{"Generic": 0}
+			encoded, err := test.encode(input)
+			require.ErrorContains(t, err, "Generic")
+			require.Empty(t, encoded)
+			require.Equal(t, map[string]any{"Generic": 0}, input)
+		})
+	}
+}
