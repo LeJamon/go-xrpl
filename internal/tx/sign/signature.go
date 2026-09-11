@@ -110,7 +110,7 @@ func CheckSTTxSignature(transaction txcore.Transaction, rules *amendment.Rules, 
 	if common.SigningPubKey == "" {
 		reason = checkSTTxMultiSign(transaction)
 	} else {
-		if common.HasField("Signers") {
+		if common.FieldPresent("Signers", len(common.Signers) > 0) {
 			return "Cannot both single- and multi-sign."
 		}
 		if err := VerifySignature(transaction, true); err != nil {
@@ -213,10 +213,10 @@ func checkSTTxSponsorSignature(transaction txcore.Transaction, sponsor *txcore.S
 
 func checkSTTxMultiSign(transaction txcore.Transaction) string {
 	common := transaction.GetCommon()
-	if !common.HasField("Signers") {
+	if !common.FieldPresent("Signers", len(common.Signers) > 0) {
 		return "Empty SigningPubKey."
 	}
-	if common.HasField("TxnSignature") {
+	if common.FieldPresent("TxnSignature", common.TxnSignature != "") {
 		return "Cannot both single- and multi-sign."
 	}
 	if len(common.Signers) < MinMultiSigners || len(common.Signers) > MaxMultiSigners {

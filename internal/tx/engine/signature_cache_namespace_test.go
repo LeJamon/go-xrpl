@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 
@@ -280,4 +281,44 @@ func roleName(role binarycodec.SigningRole) string {
 		return "counterparty"
 	}
 	return "sponsor"
+}
+
+func TestEngineRoleSignatureFieldPresence(t *testing.T) {
+	for _, cleanup := range []bool{false, true} {
+		for _, role := range []binarycodec.SigningRole{binarycodec.CounterpartyRole, binarycodec.SponsorRole} {
+			t.Run(fmt.Sprintf("cleanup=%t/%s", cleanup, roleName(role)), func(t *testing.T) {
+				sigcache.Reset()
+				rules := cleanupCacheRules(cleanup)
+				txn := roleCacheTransaction(t, role, rules)
+				if role == binarycodec.CounterpartyRole {
+					txn.CounterpartySignature.MarkFieldPresent("Signers")
+				} else {
+					txn.SponsorSignature.MarkFieldPresent("Signers")
+				}
+				if got := verifyingEngine(rules).verifySignatures(txn); got != ter.TemINVALID {
+					t.Fatalf("single signature with present empty Signers = %s, want temINVALID", got)
+				}
+			})
+		}
+	}
+}
+
+func TestPreflightSignatureStructureHonorsDisabledChecks(t *testing.T) {
+	for _, skip := range []bool{false, true} {
+		t.Run(fmt.Sprintf("skip=%t", skip), func(t *testing.T) {
+			sigcache.Reset()
+			txn := cacheMutationBaseTx(t)
+			txn.SetPresentFields(map[string]bool{"Signers": true})
+			engine := NewEngine(newMockBaseView(), txcore.EngineConfig{
+				Rules: amendment.AllSupportedRules(), SkipSignatureVerification: skip,
+			})
+			want := ter.TemINVALID
+			if skip {
+				want = ter.TesSUCCESS
+			}
+			if got := engine.preflight(txn); got != want {
+				t.Fatalf("preflight with conflicting signing fields = %s, want %s", got, want)
+			}
+		})
+	}
 }
