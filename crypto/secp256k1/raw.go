@@ -3,8 +3,7 @@ package secp256k1
 import (
 	"errors"
 
-	"github.com/decred/dcrd/dcrec/secp256k1/v4"
-	ecdsa "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
+	"github.com/LeJamon/go-xrpl/crypto/secp256k1/shim"
 )
 
 // SignDigestBytes signs a pre-hashed 32-byte digest. Result is DER-encoded.
@@ -15,9 +14,11 @@ func SignDigestBytes(digest, privKey []byte) ([]byte, error) {
 	if err := validatePrivateKey(privKey); err != nil {
 		return nil, err
 	}
-	sk := secp256k1.PrivKeyFromBytes(privKey)
-	defer sk.Zero()
-	return ecdsa.Sign(sk, digest).Serialize(), nil
+	sig, ok := shim.SignDigest(digest, privKey)
+	if !ok {
+		return nil, ErrInvalidPrivateKey
+	}
+	return sig, nil
 }
 
 // VerifyDigestBytes verifies a DER-encoded signature against a 32-byte digest.

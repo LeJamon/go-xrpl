@@ -7,22 +7,10 @@ import (
 
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 
-	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/LeJamon/go-xrpl/crypto/secp256k1/shim"
 	"github.com/stretchr/testify/require"
 )
 
-// These tests call verifyDigestRaw directly — the build-tagged seam where
-// the cgo (libsecp256k1) and purego (decred) backends diverge. Each binary
-// compiles exactly one backend, so the cross-backend agreement claim is
-// proven by running this suite under both CGO_ENABLED=1 (CI "libs" group)
-// and CGO_ENABLED=0 (CI "libs-purego" job): both must produce the accept/
-// reject verdicts asserted here for every vector.
-
-// TestVerifyDigestRaw_GoldenVectors pins the low-level relaxed-verify
-// contract that verifyDigestRaw exposes (canonicality gating happens in the
-// caller, so high-S must verify here). The high-S case is the one the shim
-// was written to normalize for — the most likely place for the two backends
-// to drift apart.
 func TestVerifyDigestRaw_GoldenVectors(t *testing.T) {
 	t.Parallel()
 
@@ -37,8 +25,8 @@ func TestVerifyDigestRaw_GoldenVectors(t *testing.T) {
 	wrongPub := mustDecodeHex(t, otherPub)
 	lowS := mustDecodeHex(t, lowSDER)
 	highS := mustDecodeHex(t, flipSToHighS(t, lowSDER))
-	parsedPub, err := btcec.ParsePubKey(pub)
-	require.NoError(t, err)
+	uncompressed, ok := shim.ParsePublicKey(pub, false)
+	require.True(t, ok)
 	invalidPrefix := append([]byte(nil), pub...)
 	invalidPrefix[0] = 0x04
 	invalidPoint := append([]byte{0x02}, make([]byte, 32)...)
@@ -64,7 +52,7 @@ func TestVerifyDigestRaw_GoldenVectors(t *testing.T) {
 		{"garbage sig", digest[:], pub, []byte("not a der signature"), false},
 		{"empty sig", digest[:], pub, nil, false},
 		{"invalid digest length", digest[:len(digest)-1], pub, lowS, false},
-		{"uncompressed key", digest[:], parsedPub.SerializeUncompressed(), lowS, false},
+		{"uncompressed key", digest[:], uncompressed, lowS, false},
 		{"invalid key prefix", digest[:], invalidPrefix, lowS, false},
 		{"invalid key length", digest[:], pub[:len(pub)-1], lowS, false},
 		{"invalid key point", digest[:], invalidPoint, lowS, false},
@@ -78,18 +66,12 @@ func TestVerifyDigestRaw_GoldenVectors(t *testing.T) {
 	}
 }
 
-// TestVerifyDigestRaw_WycheproofValidCorpus routes every Wycheproof vector
-// the corpus marks "valid" through the active backend. A fully-canonical,
-// in-range, well-formed signature must verify regardless of which backend is
-// compiled — so both must accept the entire valid corpus. This is the gap
-// the existing Wycheproof tests leave open: they call decred directly and so
-// never exercise verifyDigestRaw / the cgo path.
 func TestVerifyDigestRaw_WycheproofValidCorpus(t *testing.T) {
 	vectors := loadWycheproofTestVectors(t)
 
 	checked := 0
 	for _, group := range vectors.TestGroups {
-		pub := parsePublicKey(t, group.PublicKey.Wx, group.PublicKey.Wy).SerializeCompressed()
+		pub := parsePublicKey(t, group.PublicKey.Wx, group.PublicKey.Wy)
 		for _, tc := range group.Tests {
 			if tc.Result != "valid" {
 				continue

@@ -5,8 +5,7 @@ package secp256k1
 import "github.com/LeJamon/go-xrpl/crypto/secp256k1/shim"
 
 // verifyDigestRaw assumes the caller has already rejected CanonicalityNone.
-// High-S signatures are normalized inside the shim so cgo and purego
-// backends agree on accept/reject.
+// High-S signatures are normalized inside the shim for relaxed verification.
 func verifyDigestRaw(hash32, pubkey, sigDER []byte) bool {
 	return shim.VerifyDigest(hash32, pubkey, sigDER)
 }

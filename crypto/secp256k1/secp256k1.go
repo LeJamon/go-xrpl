@@ -1,18 +1,14 @@
 package secp256k1
 
 import (
-	"crypto/sha512"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
-	"math/big"
 	"strings"
 
 	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
+	"github.com/LeJamon/go-xrpl/crypto/secp256k1/shim"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
-
-	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/decred/dcrd/dcrec/secp256k1/v4"
-	ecdsa "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 )
 
 const (
@@ -55,62 +51,36 @@ func (c Algorithm) FamilySeedPrefix() []byte {
 }
 
 // deriveScalar derives a scalar from a seed using the rippled "XRP Family
-// Generator" construction: SHA512(seed | optional discrim | i++) truncated to
-// 32 bytes, retrying until the result is in (0, n). The loop almost always
-// exits on the first iteration; it returns ErrScalarDerivation if no valid
-// scalar is found within 128 retries, mirroring rippled's bounded retry.
-func (c Algorithm) deriveScalar(seed []byte, discrim *big.Int) (*big.Int, error) {
-	order := btcec.S256().N
-	hasher := sha512.New()
-	sum := make([]byte, 0, sha512.Size)
-	defer func() {
-		rootcrypto.SecureErase(sum)
-	}()
+// Generator" construction: SHA512(seed | optional discriminator | i+)
+// truncated to 32 bytes, retrying until libsecp256k1 accepts the candidate.
+// The loop almost always exits on the first iteration; it returns
+// ErrScalarDerivation if no valid scalar is found within 128 retries.
+func (c Algorithm) deriveScalar(seed []byte, discriminator *uint32) ([]byte, error) {
+	bufLen := len(seed) + 4
+	if discriminator != nil {
+		bufLen += 4
+	}
+	buf := make([]byte, bufLen)
+	defer rootcrypto.SecureErase(buf)
+	copy(buf, seed)
 
-	var discrimWord uint32
-	var hasDiscrim bool
-	if discrim != nil {
-		discrimWord = uint32(discrim.Uint64())
-		hasDiscrim = true
+	counterOffset := len(seed)
+	if discriminator != nil {
+		binary.BigEndian.PutUint32(buf[counterOffset:], *discriminator)
+		counterOffset += 4
 	}
 
-	var tailBuf [8]byte
-	tail := tailBuf[:0]
-	if hasDiscrim {
-		tail = append(tail,
-			byte(discrimWord>>24),
-			byte(discrimWord>>16),
-			byte(discrimWord>>8),
-			byte(discrimWord),
-		)
-	}
-	tailLen := len(tail)
-	// Reserve four bytes for the loop counter.
-	tail = tail[:tailLen+4]
-
-	zero := big.NewInt(0)
-	key := new(big.Int)
-
-	for i := range uint32(128) {
-		tail[tailLen] = byte(i >> 24)
-		tail[tailLen+1] = byte(i >> 16)
-		tail[tailLen+2] = byte(i >> 8)
-		tail[tailLen+3] = byte(i)
-
-		hasher.Reset()
-		hasher.Write(seed)
-		hasher.Write(tail)
-		sum = hasher.Sum(sum[:0])
-
-		key.SetBytes(sum[:32])
-		if key.Cmp(zero) > 0 && key.Cmp(order) < 0 {
-			// Return a fresh allocation so callers can mutate the result freely.
-			return new(big.Int).Set(key), nil
+	for counter := uint32(0); counter < 128; counter++ {
+		binary.BigEndian.PutUint32(buf[counterOffset:], counter)
+		hash := sha512half.Sum(buf)
+		if shim.SecretKeyValid(hash[:]) {
+			candidate := append([]byte(nil), hash[:]...)
+			rootcrypto.SecureErase(hash[:])
+			return candidate, nil
 		}
+		rootcrypto.SecureErase(hash[:])
 	}
-	// Practically unreachable: the odds of 128 consecutive candidates failing
-	// the curve-order check are negligible. rippled likewise gives up here
-	// (SecretKey.cpp deriveDeterministicRootKey / Generator::calculateTweak).
+
 	return nil, ErrScalarDerivation
 }
 
@@ -131,44 +101,44 @@ func (c Algorithm) DeriveKeypair(seed []byte, validator bool) (privHex, pubHex s
 // buffers. The private key is a 32-byte scalar and the public key is compressed.
 // Callers should erase the private-key buffer when it is no longer needed.
 func (c Algorithm) DeriveKeypairBytes(seed []byte, validator bool) (privateBytes, publicBytes []byte, err error) {
-	curve := btcec.S256()
-	order := curve.N
-
 	// Derive the root private generator from the seed
 	privateGen, err := c.deriveScalar(seed, nil)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	var privateKey *big.Int
 	if validator {
-		// For validator keys, use the root generator directly
-		privateKey = privateGen
-	} else {
-		// For regular keys, derive an additional scalar from the root public key
-		privateGenBytes := privateGen.Bytes()
-		defer rootcrypto.SecureErase(privateGenBytes)
-		rootPrivateKey, _ := btcec.PrivKeyFromBytes(privateGenBytes)
-		defer rootPrivateKey.Zero()
-		derivatedScalar, err := c.deriveScalar(rootPrivateKey.PubKey().SerializeCompressed(), big.NewInt(0))
-		if err != nil {
-			return nil, nil, err
+		// For validator keys, use the root generator directly.
+		publicBytes, ok := shim.PublicKeyCreate(privateGen)
+		if !ok {
+			rootcrypto.SecureErase(privateGen)
+			return nil, nil, ErrInvalidPrivateKey
 		}
-		scalarWithPrivateGen := derivatedScalar.Add(derivatedScalar, privateGen)
-		privateKey = scalarWithPrivateGen.Mod(scalarWithPrivateGen, order)
+		return privateGen, publicBytes, nil
 	}
 
-	// Ensure private key is 32 bytes with leading zeros if needed
-	privKeyBytes := make([]byte, 32)
-	keyBytes := privateKey.Bytes()
-	defer rootcrypto.SecureErase(keyBytes)
-	copy(privKeyBytes[32-len(keyBytes):], keyBytes)
-
-	privateKeyObject, pubKey := btcec.PrivKeyFromBytes(privKeyBytes)
-	defer privateKeyObject.Zero()
-	pubKeyBytes := pubKey.SerializeCompressed()
-
-	return privKeyBytes, pubKeyBytes, nil
+	defer rootcrypto.SecureErase(privateGen)
+	// For regular keys, derive an additional scalar from the root public key.
+	rootPublic, ok := shim.PublicKeyCreate(privateGen)
+	if !ok {
+		return nil, nil, ErrInvalidPrivateKey
+	}
+	var zero uint32
+	derivedScalar, err := c.deriveScalar(rootPublic, &zero)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rootcrypto.SecureErase(derivedScalar)
+	privateBytes, ok = shim.SecretKeyTweakAdd(privateGen, derivedScalar)
+	if !ok {
+		return nil, nil, ErrInvalidPrivateKey
+	}
+	publicBytes, ok = shim.PublicKeyCreate(privateBytes)
+	if !ok {
+		rootcrypto.SecureErase(privateBytes)
+		return nil, nil, ErrInvalidPrivateKey
+	}
+	return privateBytes, publicBytes, nil
 }
 
 // SignBytes signs msg with a 32-byte raw secp256k1 private key and returns
@@ -180,11 +150,12 @@ func (c Algorithm) SignBytes(msg, privKey []byte) ([]byte, error) {
 	if len(msg) == 0 {
 		return nil, ErrInvalidMessage
 	}
-	secpPrivKey := secp256k1.PrivKeyFromBytes(privKey)
-	defer secpPrivKey.Zero()
 	hash := sha512half.Sum(msg)
-	sig := ecdsa.Sign(secpPrivKey, hash[:])
-	return derFromRS(sig.R(), sig.S()), nil
+	sig, ok := shim.SignDigest(hash[:], privKey)
+	if !ok {
+		return nil, ErrInvalidPrivateKey
+	}
+	return sig, nil
 }
 
 func validatePrivateKey(privKey []byte) error {
@@ -192,9 +163,7 @@ func validatePrivateKey(privKey []byte) error {
 		return ErrInvalidPrivateKey
 	}
 
-	var scalar secp256k1.ModNScalar
-	defer scalar.Zero()
-	if scalar.SetByteSlice(privKey) || scalar.IsZero() {
+	if !shim.SecretKeyValid(privKey) {
 		return ErrInvalidPrivateKey
 	}
 	return nil
@@ -318,43 +287,22 @@ func (c Algorithm) ValidateDigestWithCanonicality(digest [32]byte, pubkeyBytes [
 
 // DerivePublicKeyFromPublicGenerator derives a public key from a public generator.
 func (c Algorithm) DerivePublicKeyFromPublicGenerator(pubKey []byte) ([]byte, error) {
-	curve := btcec.S256()
-
-	// Parse the input public key as a point
-	rootPubKey, err := btcec.ParsePubKey(pubKey)
+	// Parse the input public key to validate it, while retaining the original
+	// serialization for the XRPL family-generator hash.
+	if _, ok := shim.ParsePublicKey(pubKey, true); !ok {
+		return nil, errors.New("invalid public key")
+	}
+	var zero uint32
+	scalar, err := c.deriveScalar(pubKey, &zero)
 	if err != nil {
 		return nil, err
 	}
-
-	// Derive scalar using existing function
-	scalar, err := c.deriveScalar(pubKey, big.NewInt(0))
-	if err != nil {
-		return nil, err
+	defer rootcrypto.SecureErase(scalar)
+	publicKey, ok := shim.PublicKeyTweakAdd(pubKey, scalar)
+	if !ok {
+		return nil, errors.New("invalid public key tweak")
 	}
-
-	// Multiply base point with scalar
-	x, y := curve.ScalarBaseMult(scalar.Bytes())
-	xField, yField := secp256k1.FieldVal{}, secp256k1.FieldVal{}
-
-	xField.SetByteSlice(x.Bytes())
-	yField.SetByteSlice(y.Bytes())
-
-	scalarPoint := secp256k1.NewPublicKey(&xField, &yField)
-
-	// Add the points
-	resultX, resultY := curve.Add(
-		rootPubKey.X(), rootPubKey.Y(),
-		scalarPoint.X(), scalarPoint.Y(),
-	)
-
-	resultXField, resultYField := secp256k1.FieldVal{}, secp256k1.FieldVal{}
-	resultXField.SetByteSlice(resultX.Bytes())
-	resultYField.SetByteSlice(resultY.Bytes())
-
-	// Create the final public key
-	finalPubKey := secp256k1.NewPublicKey(&resultXField, &resultYField)
-
-	return finalPubKey.SerializeCompressed(), nil
+	return publicKey, nil
 }
 
 // DerivePublicKeyFromSecret returns the 33-byte compressed secp256k1
@@ -366,18 +314,9 @@ func (c Algorithm) DerivePublicKeyFromSecret(secret []byte) ([]byte, error) {
 	if err := validatePrivateKey(secret); err != nil {
 		return nil, err
 	}
-	privateKey, pubKey := btcec.PrivKeyFromBytes(secret)
-	defer privateKey.Zero()
-	return pubKey.SerializeCompressed(), nil
-}
-
-// derFromRS builds a DER-encoded signature directly from a decred ModNScalar
-// r/s pair, avoiding a string→hex→bytes round-trip.
-func derFromRS(r, s secp256k1.ModNScalar) []byte {
-	rBytes := r.Bytes()
-	sBytes := s.Bytes()
-	return rootcrypto.EncodeDERSignature(
-		new(big.Int).SetBytes(rBytes[:]),
-		new(big.Int).SetBytes(sBytes[:]),
-	)
+	publicKey, ok := shim.PublicKeyCreate(secret)
+	if !ok {
+		return nil, ErrInvalidPrivateKey
+	}
+	return publicKey, nil
 }

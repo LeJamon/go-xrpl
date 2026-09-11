@@ -90,10 +90,10 @@ jobs:
   # rippled"; an `int`-width or endianness assumption in the codec / hashing
   # paths silently forks account_hash / transaction_hash. `int` is 64-bit on the
   # amd64 matrix, so an overflow like `len(x) > math.MaxUint32` only fails to
-  # compile on a 32-bit target. The daemon requires CGO, so this compiles the
-  # protocol and storage libraries for linux/386, then exercises the SQLite
-  # pagination boundaries whose correctness depends on runtime int width.
-  # Broader runtime 386 library tests run in the nightly workflow.
+  # compile on a 32-bit target. The native secp256k1 shim reaches addresscodec,
+  # binarycodec, keylet, ledger, and relational storage, so this no-CGO leg
+  # compiles only the verified portable package leaves for linux/386. Broader
+  # native coverage remains in the regular library and nightly jobs.
   build-386:
     name: Test (libraries, linux/386 — word-size guard)
     runs-on: ubuntu-latest
@@ -106,8 +106,26 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           cgo: "false"
-      - run: go build ./...
-      - run: go test -count=1 -timeout 5m ./storage/relationaldb/sqlite/...
+      - name: Compile portable no-CGO library leaves
+        run: >
+          go build
+          ./codec/binarycodec/definitions/...
+          ./codec/binarycodec/serdes/...
+          ./codec/binarycodec/internal/decimal/...
+          ./shamap/...
+          ./storage/kvstore/...
+          ./storage/nodestore/...
+          ./ledger/entry/schema/...
+          ./ledger/entry/cmd/entrygen/...
+          ./amendment/...
+          ./drops/...
+          ./protocol/...
+          ./config/...
+          ./version/...
+          ./crypto
+          ./crypto/ed25519/...
+          ./crypto/rfc1751/...
+          ./crypto/sha512half/...
 
   postgres:
     name: Test (PostgreSQL)
@@ -182,22 +200,6 @@ jobs:
       - uses: ./.github/actions/setup
       - run: go test ${{ matrix.race }} -count=1 -timeout 15m ${{ matrix.packages }}
 
-  test-purego:
-    name: Test (libs, CGO_ENABLED=0)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: ./.github/actions/setup
-        with:
-          cgo: "false"
-      # Exercises the pure-Go crypto backends that ship in CGO-disabled
-      # builds — most importantly secp256k1's decred verify path, which the
-      # CGO=1 legs never compile. Asserts it agrees with the libsecp256k1
-      # path on signature accept/reject. No -race here: the detector needs
-      # cgo, and no CGO dev headers are installed for this leg.
-      - run: CGO_ENABLED=0 go test -count=1 -timeout 15m ./crypto/...
-      - run: CGO_ENABLED=0 go test -tags mptcrypto -count=1 -timeout 15m ./amendment/... ./crypto/mptcrypto/...
-
   test-mpt-crypto:
     name: Test (Confidential MPT native backend, ${{ matrix.os }})
     strategy:
@@ -211,7 +213,12 @@ jobs:
       - name: Install Conan
         run: pipx install conan==2.18.1
       - name: Build and test native backend
-        run: ./scripts/setup-mpt-crypto.sh test ./amendment/... ./crypto/mptcrypto/... ./internal/tx/mpt/... ./internal/testing/mpt/...
+        run: ./scripts/setup-mpt-crypto.sh test ./amendment/... ./crypto/mptcrypto/... ./crypto/secp256k1/... ./internal/tx/mpt/... ./internal/testing/mpt/...
+      - name: Exercise native secp under race and cgocheck2
+        run: |
+          eval "$(./scripts/setup-mpt-crypto.sh env)"
+          GOEXPERIMENT=cgocheck2 CGO_ENABLED=1 \
+            go test -race -count=1 -timeout 15m ./crypto/secp256k1/...
 
   peer-interop:
     name: Peer interop (rippled 3.3.0)

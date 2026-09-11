@@ -233,8 +233,8 @@ func TestSecp256k1_Validate(t *testing.T) {
 
 // TestSignDigest_RejectsMalformedKeys verifies SignDigest rejects private keys
 // that don't hex-decode to exactly 32 bytes (optionally 0x00-prefixed), the
-// same contract as Sign. Without that validation, decred's scalar parser
-// silently truncates/reduces malformed keys and "signs" with different key
+// same contract as Sign. Without that validation, a scalar parser could
+// silently truncate/reduce malformed keys and "sign" with different key
 // material than the caller supplied.
 func TestSignDigest_RejectsMalformedKeys(t *testing.T) {
 	t.Parallel()

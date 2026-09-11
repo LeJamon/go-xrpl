@@ -5,10 +5,8 @@ go 1.24.0
 toolchain go1.24.4
 
 require (
-	github.com/btcsuite/btcd/btcec/v2 v2.3.4
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/decred/dcrd/crypto/ripemd160 v1.0.2
-	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0
 	github.com/go-viper/mapstructure/v2 v2.2.1
 	github.com/lib/pq v1.10.9
 	github.com/pierrec/lz4 v2.6.1+incompatible

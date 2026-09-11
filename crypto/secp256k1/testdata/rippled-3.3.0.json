@@ -1,0 +1,57 @@
+{
+  "oracle": "rippled 3.3.0",
+  "commit": "00a178fb92ca49521b937ae1a99d863765ea8a90",
+  "source": "src/test/protocol/SecretKey_test.cpp:kSecP256K1TestVectors",
+  "message": "Hello World",
+  "digest": "2c74fd17edafd80e8447b0d46741ee243b7eb74dd2149a0ab1b9246fb30382f2",
+  "vectors": [
+    {
+      "seed": "dedce9ce67b451d852fd4e846fcde31c",
+      "account_private": "1acaaedece405b2a958212629e16f2eb46b153eee94cdd350fdeff52795525b7",
+      "account_public": "0330e7fc9d56bb25d6893ba3f317ae5bcf33b3291bd63db32654a313222f7fd020",
+      "validator_private": "395898665728f57de5d90f1de102278a967d6941a45a6c9a98cb123394489e55",
+      "validator_public": "03d49c56e1b185f1be899ae66a02efc17f78ea6fc53af85e0fe54c6e8b7f8c71a8",
+      "signature": "3045022100e5e4edb64740f257035ea111a766f8c7ea71e966367bc9c3284ddd717bce26d402207a70b7f1a2dafa3db9cf76d4e7b31c2dd1374a95b868a7b58c9406941ccf4ab6"
+    },
+    {
+      "seed": "f75c48fec46d4d64928b795f3fbabba0",
+      "account_private": "5b8ab0e7cdaf48874d5d9934bf3e7b2cb06bc4c7eaaaf762682ed8d0a31e3c70",
+      "account_public": "03af53e8011e85b36664f1710890501c3e86fc2c6658c2ee83ca580dc9972541b1",
+      "validator_private": "efb90b1a1d9a90307d89361d51743064f12ae8cd9bc9c32ac0d780d66096f8fa",
+      "validator_public": "039847364242d6d0d68c573f277428f93e3262e9913fdd6bf938d785ff59829a6a",
+      "signature": "3045022100bc439f8402d83262a5b5692f4bbb719c14348c9c2730832dd5b5913e2bd0d1af022049b85980847e2262ae2f7cd69f81c171753ba3d6cee252f6a435815a8059de16"
+    },
+    {
+      "seed": "7aea88c148a8c4a89069f98a3733167b",
+      "account_private": "3ddc5fe16378ae8503e974233017791cc07c1077653ab723c8f65b17b9980da1",
+      "account_public": "037ad930b31b0f81036d65a62d4e1131ef605f738e7d7f95465bbecbcbffa7076e",
+      "validator_private": "642b388ac22bc5ede0153724c5307bbf9f9e28443a24be59c9837b44a30eab26",
+      "validator_public": "02784c52e1bc5e66433f3869534f5bf57c944c2b7498cd77a6c540c6f7b0a0d295",
+      "signature": "304402206ac461c01b285a00c171a87832ff2b492fa09ee3689b68a18a1ed050c989b94102204f1efadfa8affb900cf9e77010e9d534ee3121afa6006d167ab46d243b93ef19"
+    },
+    {
+      "seed": "e4249bff02b7669199a23faf488c179e",
+      "account_private": "84bfd92268ca02019ce6d935efa9944baec33e234134def4f2a8e77519f342be",
+      "account_public": "02ef888e93b9a850fc93cf00f6a93c3cdef2860dbf3a4f11cd0ae8e6454d2095e3",
+      "validator_private": "2b5dcf4ffa7711cee6f679769a00ea04447d4e9d69574aa44a3ac2c59bfac3b7",
+      "validator_public": "0357bc32bc574bd722d53e96b0843e72abc2878cbe945b39267c132bff5cd63e4a",
+      "signature": "3045022100d3d0384915b4e09e5763e5da0d63b6cf216d7faf61bc663960df8a31b21cad5f02206534f25dd289c518c34153cab07c3fab9517ba33b4bb78ea92ae537b82e010cd"
+    },
+    {
+      "seed": "44211c1cab7883a46256a62d5939477b",
+      "account_private": "317d2f06fabcc2e1378958577662db764d5f431935a4b69564ba9853ca9c94af",
+      "account_public": "0288ecdf6a6c38634df9a10282dd655a845026126fa960662025d9bcc4421ce076",
+      "validator_private": "14a52b393d4d13c2bea159ebe6fd8c8ed91ed63cb0da0caf9b52388c73f4501c",
+      "validator_public": "026e7f4c866a4685a75ec2f9258ade7f1608c976ca393230211ac7d998a6afc944",
+      "signature": "3044022062afc3a153bcc664b9b8db17546b6515dbf3df33a1f84fa2d7c034917653cb3802204ffb88dc173f698c0d682b6310a23451a39066b125cb69b3bbbc5c6f317c10bb"
+    },
+    {
+      "seed": "dbebf6c61d6425afb4528583a4212e57",
+      "account_private": "ff37b9d10e215235187637a7b896b969b9a35bc9b16a18149fdbe269ef592870",
+      "account_public": "022087c0bacd25ec514be7735e1c2839a182fbc6812be8c40f22f4e527977e31fc",
+      "validator_private": "a98c478928c81a40460d6396e24e8e01a14468b964ca276e525409c71b8e9b1a",
+      "validator_public": "028f0d5798f376c85bb52b16464ab7ee6021132febdb656f5d2ac096a8ffec373a",
+      "signature": "3045022100f7c5cb38c4f18fa3ba2206e071d9290d3f9d6dd23cfc7f3f93659bcce87f6a8f022046405f32a03c1edb198f85b887b80ab098a38f131cc8362ebdd0fed2b3321ed3"
+    }
+  ]
+}

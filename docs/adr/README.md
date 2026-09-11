@@ -11,5 +11,6 @@ record rather than editing history.
 | [0002](0002-native-go-not-a-port.md) | Native Go implementation, not a line-by-line port | Accepted |
 | [0003](0003-single-writer-engine.md) | Single-writer transaction engine | Accepted |
 | [0004](0004-storage-architecture.md) | Content-addressed node store + relational indexes | Accepted |
-| [0005](0005-cgo-for-crypto-and-tls.md) | CGO for peer TLS and secp256k1, with a pure-Go fallback | Superseded for daemon builds by ADR 0006 |
+| [0005](0005-cgo-for-crypto-and-tls.md) | CGO for peer TLS and secp256k1, with a pure-Go fallback | Superseded by ADRs 0006 and 0007 |
 | [0006](0006-cgo-required-for-daemon.md) | CGO required for the goxrpl daemon | Accepted |
+| [0007](0007-native-secp256k1.md) | Native libsecp256k1 for all secp256k1 operations | Accepted |
