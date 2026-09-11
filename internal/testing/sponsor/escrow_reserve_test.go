@@ -154,26 +154,67 @@ func mptTokenSponsor(t *testing.T, env *jtx.TestEnv, issuanceID string, holder *
 func requireFeeSequenceOnlyMetadata(t *testing.T, result jtx.TxResult, source *jtx.Account, feePayers ...*jtx.Account) {
 	t.Helper()
 	require.NotNil(t, result.Metadata)
-	allowed := map[string]struct{}{source.Address: {}}
+	allowed := map[string]*jtx.Account{source.Address: source}
 	for _, feePayer := range feePayers {
-		allowed[feePayer.Address] = struct{}{}
+		allowed[feePayer.Address] = feePayer
 	}
+	require.Len(t, result.Metadata.AffectedNodes, len(allowed))
 	seen := make(map[string]struct{}, len(allowed))
 	for _, node := range result.Metadata.AffectedNodes {
 		require.Equal(t, "ModifiedNode", node.NodeType)
 		require.Equal(t, "AccountRoot", node.LedgerEntryType)
 		account, ok := node.FinalFields["Account"].(string)
 		require.True(t, ok)
-		_, ok = allowed[account]
+		entry, ok := allowed[account]
 		require.True(t, ok, "unexpected metadata account %s", account)
+		require.NotContains(t, seen, account)
 		seen[account] = struct{}{}
-		for field := range node.PreviousFields {
-			require.Contains(t, []string{"Balance", "Sequence"}, field)
+		require.Equal(t, fmt.Sprintf("%X", keylet.Account(entry.ID).Key), node.LedgerIndex)
+		fields := []string{"Balance"}
+		if account == source.Address {
+			fields = []string{"Sequence"}
+			if len(feePayers) == 0 {
+				fields = append(fields, "Balance")
+			}
+		}
+		require.Len(t, node.PreviousFields, len(fields))
+		for _, field := range fields {
+			require.Contains(t, node.PreviousFields, field)
 		}
 	}
 	require.Contains(t, seen, source.Address)
 	for _, feePayer := range feePayers {
 		require.Contains(t, seen, feePayer.Address)
+	}
+}
+
+func snapshotEscrowAccounts(t *testing.T, env *jtx.TestEnv, accounts ...*jtx.Account) map[*jtx.Account]*state.AccountRoot {
+	t.Helper()
+	snapshot := make(map[*jtx.Account]*state.AccountRoot, len(accounts))
+	for _, account := range accounts {
+		snapshot[account] = accountState(t, env, account)
+	}
+	return snapshot
+}
+
+func requireEscrowAccountRollback(t *testing.T, env *jtx.TestEnv, before map[*jtx.Account]*state.AccountRoot, result jtx.TxResult, source, feePayer *jtx.Account) {
+	t.Helper()
+	for account, root := range before {
+		expected := *root
+		if account == source {
+			expected.Sequence++
+		}
+		if account == feePayer {
+			expected.Balance -= result.Fee
+		}
+		after := accountState(t, env, account)
+		expected.PreviousTxnID = after.PreviousTxnID
+		expected.PreviousTxnLgrSeq = after.PreviousTxnLgrSeq
+		expectedBytes, err := state.SerializeAccountRoot(&expected)
+		require.NoError(t, err)
+		afterBytes, err := state.SerializeAccountRoot(after)
+		require.NoError(t, err)
+		require.Equal(t, expectedBytes, afterBytes, "account %s", account.Address)
 	}
 }
 
@@ -303,84 +344,102 @@ func TestSponsoredEscrowCancelPrefundedFeeDoesNotRestoreReserveBudget(t *testing
 
 func TestSponsoredIOUEscrowCancelRecreatesHoldingAfterReserveRecycle(t *testing.T) {
 	for _, cleanupEnabled := range []bool{false, true} {
-		t.Run(fmt.Sprintf("cleanup=%t", cleanupEnabled), func(t *testing.T) {
-			env, owner, destination, issuer, sponsor, _ := newSponsoredIOUEnv(t, cleanupEnabled)
-			remaining := int32(2)
-			require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, owner, 0, &remaining).Code)
+		for _, sameSponsor := range []bool{false, true} {
+			t.Run(fmt.Sprintf("cleanup=%t/sameSponsor=%t", cleanupEnabled, sameSponsor), func(t *testing.T) {
+				env, owner, destination, issuer, sponsor, sponsor2 := newSponsoredIOUEnv(t, cleanupEnabled)
+				remaining := int32(2)
+				require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor, owner, 0, &remaining).Code)
 
-			sequence := env.Seq(owner)
-			cancelAfter := env.Now().Add(2 * time.Second)
-			create := escrow.EscrowCreate(owner, destination, 0).
-				IOUAmount(issuer.IOU("USD", 100)).
-				FinishTime(env.Now().Add(time.Second)).
-				CancelTime(cancelAfter).
-				Build()
-			withReserveSponsor(create, sponsor)
-			jtx.RequireTxSuccess(t, env.Submit(create))
-			env.Close()
-			require.Equal(t, uint32(1), sponsorshipEntry(t, env, sponsor, owner).RemainingOwnerCount)
+				sequence := env.Seq(owner)
+				cancelAfter := env.Now().Add(2 * time.Second)
+				create := escrow.EscrowCreate(owner, destination, 0).
+					IOUAmount(issuer.IOU("USD", 100)).
+					FinishTime(env.Now().Add(time.Second)).
+					CancelTime(cancelAfter).
+					Build()
+				withReserveSponsor(create, sponsor)
+				jtx.RequireTxSuccess(t, env.Submit(create))
+				env.Close()
+				require.Equal(t, uint32(1), sponsorshipEntry(t, env, sponsor, owner).RemainingOwnerCount)
 
-			clear := trustsettx.NewTrustSet(owner.Address, issuer.IOU("USD", 0))
-			jtx.RequireTxSuccess(t, env.Submit(clear))
-			env.Close()
-			require.False(t, env.TrustLineExists(owner, issuer, "USD"))
-			require.Equal(t, uint32(1), accountState(t, env, owner).OwnerCount)
-			require.Equal(t, uint32(1), accountState(t, env, owner).SponsoredOwnerCount)
-			require.Equal(t, uint32(1), accountState(t, env, sponsor).SponsoringOwnerCount)
+				cancelSponsor := sponsor
+				if !sameSponsor {
+					cancelSponsor = sponsor2
+					remaining := int32(1)
+					require.Equal(t, "tesSUCCESS", setSponsorship(env, cancelSponsor, owner, 0, &remaining).Code)
+				}
 
-			env.AdvanceTime(5 * time.Second)
-			env.Close()
-			setAccountBalance(t, env, owner, env.ReserveBase()+env.ReserveIncrement())
-			requiredSponsorReserve := reserveForOneMoreObject(t, env, sponsor, true)
-			setAccountBalance(t, env, sponsor, requiredSponsorReserve-1)
-			ownerBefore := accountState(t, env, owner)
-			sponsorBefore := accountState(t, env, sponsor)
-			ownerBalanceBefore := env.Balance(owner)
-			ownerSequenceBefore := env.Seq(owner)
+				clear := trustsettx.NewTrustSet(owner.Address, issuer.IOU("USD", 0))
+				jtx.RequireTxSuccess(t, env.Submit(clear))
+				env.Close()
+				require.False(t, env.TrustLineExists(owner, issuer, "USD"))
+				require.Equal(t, uint32(1), accountState(t, env, owner).OwnerCount)
+				require.Equal(t, uint32(1), accountState(t, env, owner).SponsoredOwnerCount)
+				require.Equal(t, uint32(1), accountState(t, env, sponsor).SponsoringOwnerCount)
 
-			cancel := escrow.EscrowCancel(owner, owner, sequence).Build()
-			withReserveSponsor(cancel, sponsor)
-			failed := env.Submit(cancel)
-			jtx.RequireTxFail(t, failed, "tecNO_LINE_INSUF_RESERVE")
-			requireFeeSequenceOnlyMetadata(t, failed, owner)
-			require.True(t, failed.Applied)
-			require.Equal(t, env.BaseFee(), failed.Fee)
-			require.Equal(t, ownerBalanceBefore-failed.Fee, env.Balance(owner))
-			require.Equal(t, ownerSequenceBefore+1, env.Seq(owner))
-			require.Equal(t, requiredSponsorReserve-1, env.Balance(sponsor))
-			require.True(t, env.LedgerEntryExists(keylet.Escrow(owner.ID, sequence)))
-			require.Equal(t, ownerBefore.OwnerCount, accountState(t, env, owner).OwnerCount)
-			require.Equal(t, ownerBefore.SponsoredOwnerCount, accountState(t, env, owner).SponsoredOwnerCount)
-			require.Equal(t, sponsorBefore.SponsoringOwnerCount, accountState(t, env, sponsor).SponsoringOwnerCount)
-			require.Equal(t, uint32(1), sponsorshipEntry(t, env, sponsor, owner).RemainingOwnerCount)
-			if !cleanupEnabled {
-				return
-			}
+				env.AdvanceTime(5 * time.Second)
+				env.Close()
+				setAccountBalance(t, env, owner, env.ReserveBase()+env.ReserveIncrement())
+				requiredSponsorReserve := reserveForOneMoreObject(t, env, cancelSponsor, sameSponsor)
+				setAccountBalance(t, env, cancelSponsor, requiredSponsorReserve-1)
+				ownerBefore := accountState(t, env, owner)
+				sponsorBefore := accountState(t, env, sponsor)
+				cancelSponsorBefore := accountState(t, env, cancelSponsor)
+				ownerBalanceBefore := env.Balance(owner)
+				ownerSequenceBefore := env.Seq(owner)
 
-			setAccountBalance(t, env, sponsor, requiredSponsorReserve)
-			cancel = escrow.EscrowCancel(owner, owner, sequence).Build()
-			withReserveSponsor(cancel, sponsor)
-			result := env.Submit(cancel)
-			jtx.RequireTxSuccess(t, result)
-			requireDeletedEscrowMetadata(t, result, sponsor.Address)
-			requireCreatedMetadata(t, result, "RippleState")
-			require.Equal(t, env.BaseFee(), result.Fee)
-			require.Equal(t, requiredSponsorReserve, env.Balance(sponsor))
-			require.False(t, env.LedgerEntryExists(keylet.Escrow(owner.ID, sequence)))
-			require.True(t, env.TrustLineExists(owner, issuer, "USD"))
-			require.Equal(t, issuer.IOU("USD", 100), *env.IOUBalance(owner, issuer, "USD"))
-			require.Equal(t, ownerSequenceBefore+2, env.Seq(owner))
-			require.Equal(t, ownerBalanceBefore-2*env.BaseFee(), env.Balance(owner))
-			require.Equal(t, uint32(1), accountState(t, env, owner).OwnerCount)
-			require.Equal(t, uint32(1), accountState(t, env, owner).SponsoredOwnerCount)
-			require.Equal(t, uint32(1), accountState(t, env, sponsor).SponsoringOwnerCount)
-			require.Equal(t, sponsor.Address, trustLineSponsor(t, env, owner, issuer, "USD"))
-			require.Zero(t, sponsorshipEntry(t, env, sponsor, owner).RemainingOwnerCount)
-		})
+				accountsBefore := snapshotEscrowAccounts(t, env, owner, destination, issuer, sponsor, cancelSponsor)
+				cancel := escrow.EscrowCancel(owner, owner, sequence).Build()
+				withReserveSponsor(cancel, cancelSponsor)
+				failed := env.Submit(cancel)
+				jtx.RequireTxFail(t, failed, "tecNO_LINE_INSUF_RESERVE")
+				requireFeeSequenceOnlyMetadata(t, failed, owner)
+				requireEscrowAccountRollback(t, env, accountsBefore, failed, owner, owner)
+				require.True(t, failed.Applied)
+				require.Equal(t, env.BaseFee(), failed.Fee)
+				require.Equal(t, ownerBalanceBefore-failed.Fee, env.Balance(owner))
+				require.Equal(t, ownerSequenceBefore+1, env.Seq(owner))
+				require.Equal(t, requiredSponsorReserve-1, env.Balance(cancelSponsor))
+				require.True(t, env.LedgerEntryExists(keylet.Escrow(owner.ID, sequence)))
+				require.Equal(t, ownerBefore.OwnerCount, accountState(t, env, owner).OwnerCount)
+				require.Equal(t, ownerBefore.SponsoredOwnerCount, accountState(t, env, owner).SponsoredOwnerCount)
+				require.Equal(t, sponsorBefore.SponsoringOwnerCount, accountState(t, env, sponsor).SponsoringOwnerCount)
+				require.Equal(t, cancelSponsorBefore.SponsoringOwnerCount, accountState(t, env, cancelSponsor).SponsoringOwnerCount)
+				require.Equal(t, uint32(1), sponsorshipEntry(t, env, cancelSponsor, owner).RemainingOwnerCount)
+				require.Equal(t, uint32(1), sponsorshipEntry(t, env, sponsor, owner).RemainingOwnerCount)
+				if !cleanupEnabled && sameSponsor {
+					return
+				}
+
+				setAccountBalance(t, env, cancelSponsor, requiredSponsorReserve)
+				cancel = escrow.EscrowCancel(owner, owner, sequence).Build()
+				withReserveSponsor(cancel, cancelSponsor)
+				result := env.Submit(cancel)
+				jtx.RequireTxSuccess(t, result)
+				requireDeletedEscrowMetadata(t, result, sponsor.Address)
+				requireCreatedMetadata(t, result, "RippleState")
+				require.Equal(t, env.BaseFee(), result.Fee)
+				require.Equal(t, requiredSponsorReserve, env.Balance(cancelSponsor))
+				require.False(t, env.LedgerEntryExists(keylet.Escrow(owner.ID, sequence)))
+				require.True(t, env.TrustLineExists(owner, issuer, "USD"))
+				require.Equal(t, issuer.IOU("USD", 100), *env.IOUBalance(owner, issuer, "USD"))
+				require.Equal(t, ownerSequenceBefore+2, env.Seq(owner))
+				require.Equal(t, ownerBalanceBefore-2*env.BaseFee(), env.Balance(owner))
+				require.Equal(t, uint32(1), accountState(t, env, owner).OwnerCount)
+				require.Equal(t, uint32(1), accountState(t, env, owner).SponsoredOwnerCount)
+				require.Equal(t, uint32(1), accountState(t, env, cancelSponsor).SponsoringOwnerCount)
+				require.Equal(t, cancelSponsor.Address, trustLineSponsor(t, env, owner, issuer, "USD"))
+				require.Zero(t, sponsorshipEntry(t, env, cancelSponsor, owner).RemainingOwnerCount)
+				if !sameSponsor {
+					require.Zero(t, accountState(t, env, sponsor).SponsoringOwnerCount)
+					require.Equal(t, uint32(1), sponsorshipEntry(t, env, sponsor, owner).RemainingOwnerCount)
+				}
+			})
+		}
 	}
 }
 
-func TestDelegatedIOUEscrowCancelUsesSourcePreFeeReserve(t *testing.T) {
+func TestDelegatedIOUEscrowCancelUsesSourceReserveAndDelegateFee(t *testing.T) {
 	for _, cleanupEnabled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("cleanup=%t", cleanupEnabled), func(t *testing.T) {
 			env, owner, destination, issuer, sponsor, delegate := newSponsoredIOUEnv(t, cleanupEnabled)
@@ -418,6 +477,7 @@ func TestDelegatedIOUEscrowCancelUsesSourcePreFeeReserve(t *testing.T) {
 			delegateBalanceBefore := env.Balance(delegate)
 			delegateSequenceBefore := env.Seq(delegate)
 
+			accountsBefore := snapshotEscrowAccounts(t, env, owner, destination, issuer, sponsor, delegate)
 			buildCancel := func() tx.Transaction {
 				cancel := escrow.EscrowCancel(owner, owner, sequence).Build()
 				cancel.Delegate = delegate.Address
@@ -427,6 +487,7 @@ func TestDelegatedIOUEscrowCancelUsesSourcePreFeeReserve(t *testing.T) {
 			failed := env.SubmitSignedWith(buildCancel(), delegate)
 			jtx.RequireTxFail(t, failed, "tecNO_LINE_INSUF_RESERVE")
 			requireFeeSequenceOnlyMetadata(t, failed, owner, delegate)
+			requireEscrowAccountRollback(t, env, accountsBefore, failed, owner, delegate)
 			require.True(t, failed.Applied)
 			require.Equal(t, env.BaseFee(), failed.Fee)
 			require.Equal(t, ownerBalanceBefore, env.Balance(owner))
@@ -465,7 +526,7 @@ func TestDelegatedIOUEscrowCancelUsesSourcePreFeeReserve(t *testing.T) {
 	}
 }
 
-func TestDelegatedIOUEscrowFinishUsesSourcePreFeeReserve(t *testing.T) {
+func TestDelegatedIOUEscrowFinishUsesSourceReserveAndDelegateFee(t *testing.T) {
 	for _, cleanupEnabled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("cleanup=%t", cleanupEnabled), func(t *testing.T) {
 			env, owner, destination, issuer, sponsor, delegate := newSponsoredIOUEnv(t, cleanupEnabled)
@@ -502,6 +563,7 @@ func TestDelegatedIOUEscrowFinishUsesSourcePreFeeReserve(t *testing.T) {
 			delegateBalanceBefore := env.Balance(delegate)
 			delegateSequenceBefore := env.Seq(delegate)
 
+			accountsBefore := snapshotEscrowAccounts(t, env, owner, destination, issuer, sponsor, delegate)
 			buildFinish := func() tx.Transaction {
 				finish := escrow.EscrowFinish(destination, owner, sequence).Build()
 				finish.Delegate = delegate.Address
@@ -511,6 +573,7 @@ func TestDelegatedIOUEscrowFinishUsesSourcePreFeeReserve(t *testing.T) {
 			failed := env.SubmitSignedWith(buildFinish(), delegate)
 			jtx.RequireTxFail(t, failed, "tecNO_LINE_INSUF_RESERVE")
 			requireFeeSequenceOnlyMetadata(t, failed, destination, delegate)
+			requireEscrowAccountRollback(t, env, accountsBefore, failed, destination, delegate)
 			require.True(t, failed.Applied)
 			require.Equal(t, env.BaseFee(), failed.Fee)
 			require.Equal(t, destinationBalanceBefore, env.Balance(destination))
@@ -559,6 +622,10 @@ func TestSponsoredEscrowFinishReserveSponsorMatrix(t *testing.T) {
 		{name: "same reserve sponsor pre-funded", sameSponsor: true, prefunded: true, createPrefunded: true},
 		{name: "different reserve sponsor co-signed"},
 		{name: "different reserve sponsor pre-funded", prefunded: true},
+		{name: "same reserve sponsor co-signed to pre-funded", sameSponsor: true, prefunded: true},
+		{name: "same reserve sponsor pre-funded to co-signed", sameSponsor: true, createPrefunded: true},
+		{name: "different reserve sponsor pre-funded to co-signed", createPrefunded: true},
+		{name: "different reserve sponsor pre-funded to pre-funded", prefunded: true, createPrefunded: true},
 	}
 
 	for _, cleanupEnabled := range []bool{false, true} {
@@ -582,6 +649,9 @@ func TestSponsoredEscrowFinishReserveSponsorMatrix(t *testing.T) {
 					jtx.RequireTxSuccess(t, env.SubmitSigned(create))
 				}
 				env.Close()
+				if testCase.createPrefunded {
+					require.Zero(t, sponsorshipEntry(t, env, sponsor1, owner).RemainingOwnerCount)
+				}
 
 				finishSponsor := sponsor2
 				if testCase.sameSponsor {
@@ -605,6 +675,7 @@ func TestSponsoredEscrowFinishReserveSponsorMatrix(t *testing.T) {
 				required := reserveForOneMoreObject(t, env, finishSponsor, testCase.sameSponsor)
 				setAccountBalance(t, env, finishSponsor, required-1)
 				finishSponsorBalanceBefore := env.Balance(finishSponsor)
+				accountsBefore := snapshotEscrowAccounts(t, env, owner, destination, issuer, sponsor1, finishSponsor)
 				finish := escrow.EscrowFinish(destination, owner, sequence).Build()
 				withReserveSponsor(finish, finishSponsor)
 				var failed jtx.TxResult
@@ -618,6 +689,7 @@ func TestSponsoredEscrowFinishReserveSponsorMatrix(t *testing.T) {
 				}
 
 				requireFeeSequenceOnlyMetadata(t, failed, destination)
+				requireEscrowAccountRollback(t, env, accountsBefore, failed, destination, destination)
 				require.True(t, failed.Applied)
 				require.Equal(t, env.BaseFee(), failed.Fee)
 				require.Equal(t, destinationBalanceBefore-failed.Fee, env.Balance(destination))
@@ -628,6 +700,9 @@ func TestSponsoredEscrowFinishReserveSponsorMatrix(t *testing.T) {
 				require.Equal(t, ownerBefore.SponsoredOwnerCount, accountState(t, env, owner).SponsoredOwnerCount)
 				require.Equal(t, sponsor1Before.SponsoringOwnerCount, accountState(t, env, sponsor1).SponsoringOwnerCount)
 				require.Equal(t, finishSponsorBefore.SponsoringOwnerCount, accountState(t, env, finishSponsor).SponsoringOwnerCount)
+				if testCase.createPrefunded {
+					require.Zero(t, sponsorshipEntry(t, env, sponsor1, owner).RemainingOwnerCount)
+				}
 				if testCase.prefunded {
 					require.Equal(t, budgetBefore, sponsorshipEntry(t, env, finishSponsor, destination).RemainingOwnerCount)
 				}
@@ -664,6 +739,9 @@ func TestSponsoredEscrowFinishReserveSponsorMatrix(t *testing.T) {
 				require.Equal(t, uint32(1), accountState(t, env, finishSponsor).SponsoringOwnerCount)
 				require.True(t, env.TrustLineExists(destination, issuer, "USD"))
 				require.Equal(t, finishSponsor.Address, trustLineSponsor(t, env, destination, issuer, "USD"))
+				if testCase.createPrefunded {
+					require.Zero(t, sponsorshipEntry(t, env, sponsor1, owner).RemainingOwnerCount)
+				}
 				if testCase.prefunded {
 					require.Zero(t, sponsorshipEntry(t, env, finishSponsor, destination).RemainingOwnerCount)
 				}
@@ -674,96 +752,131 @@ func TestSponsoredEscrowFinishReserveSponsorMatrix(t *testing.T) {
 
 func TestSponsoredMPTEscrowFinishRecreatesHoldingWithReserveSponsor(t *testing.T) {
 	for _, cleanupEnabled := range []bool{false, true} {
-		for _, sameSponsor := range []bool{false, true} {
-			name := "different reserve sponsor"
-			if sameSponsor {
-				name = "same reserve sponsor"
+		for _, prefunded := range []bool{false, true} {
+			for _, sameSponsor := range []bool{false, true} {
+				name := "different reserve sponsor"
+				if sameSponsor {
+					name = "same reserve sponsor"
+				}
+				t.Run(fmt.Sprintf("cleanup=%t/prefunded=%t/%s", cleanupEnabled, prefunded, name), func(t *testing.T) {
+					env, owner, destination, issuer, sponsor1, sponsor2, mpt := newSponsoredMPTEnv(t, cleanupEnabled)
+					sequence := env.Seq(owner)
+					if prefunded {
+						remaining := int32(1)
+						require.Equal(t, "tesSUCCESS", setSponsorship(env, sponsor1, owner, 0, &remaining).Code)
+					}
+					create := escrow.EscrowCreate(owner, destination, 0).
+						MPTAmount(mpt.MPTAmount(100)).
+						FinishTime(env.Now().Add(time.Second)).
+						Build()
+					withReserveSponsor(create, sponsor1)
+					if prefunded {
+						jtx.RequireTxSuccess(t, env.Submit(create))
+						require.Zero(t, sponsorshipEntry(t, env, sponsor1, owner).RemainingOwnerCount)
+					} else {
+						attachSponsorSignature(t, env, create, owner, sponsor1)
+						jtx.RequireTxSuccess(t, env.SubmitSigned(create))
+					}
+					env.Close()
+
+					finishSponsor := sponsor2
+					if sameSponsor {
+						finishSponsor = sponsor1
+					}
+					if prefunded {
+						remaining := int32(1)
+						require.Equal(t, "tesSUCCESS", setSponsorship(env, finishSponsor, destination, 0, &remaining).Code)
+					}
+					issuanceID, err := mptutil.DecodeID(mpt.IssuanceID())
+					require.NoError(t, err)
+					holdingKey := keylet.MPTokenByID(issuanceID, destination.ID)
+					require.False(t, env.LedgerEntryExists(holdingKey))
+					required := reserveForOneMoreObject(t, env, finishSponsor, sameSponsor)
+					setAccountBalance(t, env, finishSponsor, required-1)
+					finishSponsorBalanceBefore := env.Balance(finishSponsor)
+					ownerBefore := accountState(t, env, owner)
+					sponsor1Before := accountState(t, env, sponsor1)
+					finishSponsorBefore := accountState(t, env, finishSponsor)
+					destinationBalanceBefore := env.Balance(destination)
+					destinationSequenceBefore := env.Seq(destination)
+
+					accountsBefore := snapshotEscrowAccounts(t, env, owner, destination, issuer, sponsor1, finishSponsor)
+					finish := escrow.EscrowFinish(destination, owner, sequence).Build()
+					withReserveSponsor(finish, finishSponsor)
+					var failed jtx.TxResult
+					if prefunded {
+						failed = env.Submit(finish)
+					} else {
+						attachSponsorSignature(t, env, finish, destination, finishSponsor)
+						failed = env.SubmitSigned(finish)
+					}
+					jtx.RequireTxFail(t, failed, "tecINSUFFICIENT_RESERVE")
+					requireFeeSequenceOnlyMetadata(t, failed, destination)
+					requireEscrowAccountRollback(t, env, accountsBefore, failed, destination, destination)
+					require.True(t, failed.Applied)
+					require.Equal(t, env.BaseFee(), failed.Fee)
+					require.Equal(t, destinationBalanceBefore-failed.Fee, env.Balance(destination))
+					require.Equal(t, destinationSequenceBefore+1, env.Seq(destination))
+					require.Equal(t, finishSponsorBalanceBefore, env.Balance(finishSponsor))
+					require.True(t, env.LedgerEntryExists(keylet.Escrow(owner.ID, sequence)))
+					require.False(t, env.LedgerEntryExists(holdingKey))
+					require.Equal(t, ownerBefore.OwnerCount, accountState(t, env, owner).OwnerCount)
+					require.Equal(t, ownerBefore.SponsoredOwnerCount, accountState(t, env, owner).SponsoredOwnerCount)
+					require.Equal(t, sponsor1Before.SponsoringOwnerCount, accountState(t, env, sponsor1).SponsoringOwnerCount)
+					require.Equal(t, finishSponsorBefore.SponsoringOwnerCount, accountState(t, env, finishSponsor).SponsoringOwnerCount)
+					mpt.RequireMPTokenAmount(owner, 9_900)
+					mpt.RequireMPTokenAmount(destination, 0)
+					require.Equal(t, uint64(100), mpt.HolderLockedAmount(owner))
+					require.Zero(t, mpt.HolderLockedAmount(destination))
+					require.Equal(t, uint64(100), mpt.IssuanceLockedAmount())
+					require.Equal(t, uint64(10_000), mpt.IssuanceOutstandingAmount())
+					if prefunded {
+						require.Zero(t, sponsorshipEntry(t, env, sponsor1, owner).RemainingOwnerCount)
+						require.Equal(t, uint32(1), sponsorshipEntry(t, env, finishSponsor, destination).RemainingOwnerCount)
+					}
+
+					setAccountBalance(t, env, finishSponsor, required)
+					finish = escrow.EscrowFinish(destination, owner, sequence).Build()
+					withReserveSponsor(finish, finishSponsor)
+					var result jtx.TxResult
+					if prefunded {
+						result = env.Submit(finish)
+					} else {
+						attachSponsorSignature(t, env, finish, destination, finishSponsor)
+						result = env.SubmitSigned(finish)
+					}
+					jtx.RequireTxSuccess(t, result)
+					requireDeletedEscrowMetadata(t, result, sponsor1.Address)
+					requireCreatedMetadata(t, result, "MPToken")
+					require.Equal(t, env.BaseFee(), result.Fee)
+					require.Equal(t, required, env.Balance(finishSponsor))
+					require.Equal(t, destinationBalanceBefore-2*env.BaseFee(), env.Balance(destination))
+					require.Equal(t, destinationSequenceBefore+2, env.Seq(destination))
+					require.False(t, env.LedgerEntryExists(keylet.Escrow(owner.ID, sequence)))
+					require.True(t, env.LedgerEntryExists(holdingKey))
+					require.Equal(t, finishSponsor.Address, mptTokenSponsor(t, env, mpt.IssuanceID(), destination))
+					mpt.RequireMPTokenAmount(owner, 9_900)
+					mpt.RequireMPTokenAmount(destination, 100)
+					require.Zero(t, mpt.HolderLockedAmount(owner))
+					require.Zero(t, mpt.HolderLockedAmount(destination))
+					require.Zero(t, mpt.IssuanceLockedAmount())
+					require.Equal(t, uint64(10_000), mpt.IssuanceOutstandingAmount())
+					if prefunded {
+						require.Zero(t, sponsorshipEntry(t, env, sponsor1, owner).RemainingOwnerCount)
+						require.Zero(t, sponsorshipEntry(t, env, finishSponsor, destination).RemainingOwnerCount)
+					}
+					require.Equal(t, uint32(1), accountState(t, env, owner).OwnerCount)
+					require.Zero(t, accountState(t, env, owner).SponsoredOwnerCount)
+					require.Equal(t, uint32(1), accountState(t, env, destination).OwnerCount)
+					require.Equal(t, uint32(1), accountState(t, env, destination).SponsoredOwnerCount)
+					require.Equal(t, uint32(1), accountState(t, env, finishSponsor).SponsoringOwnerCount)
+					if sameSponsor {
+						require.Equal(t, uint32(1), accountState(t, env, sponsor1).SponsoringOwnerCount)
+					} else {
+						require.Zero(t, accountState(t, env, sponsor1).SponsoringOwnerCount)
+					}
+				})
 			}
-			t.Run(fmt.Sprintf("cleanup=%t/%s", cleanupEnabled, name), func(t *testing.T) {
-				env, owner, destination, _, sponsor1, sponsor2, mpt := newSponsoredMPTEnv(t, cleanupEnabled)
-				sequence := env.Seq(owner)
-				create := escrow.EscrowCreate(owner, destination, 0).
-					MPTAmount(mpt.MPTAmount(100)).
-					FinishTime(env.Now().Add(time.Second)).
-					Build()
-				withReserveSponsor(create, sponsor1)
-				attachSponsorSignature(t, env, create, owner, sponsor1)
-				jtx.RequireTxSuccess(t, env.SubmitSigned(create))
-				env.Close()
-
-				finishSponsor := sponsor2
-				if sameSponsor {
-					finishSponsor = sponsor1
-				}
-				issuanceID, err := mptutil.DecodeID(mpt.IssuanceID())
-				require.NoError(t, err)
-				holdingKey := keylet.MPTokenByID(issuanceID, destination.ID)
-				require.False(t, env.LedgerEntryExists(holdingKey))
-				required := reserveForOneMoreObject(t, env, finishSponsor, sameSponsor)
-				setAccountBalance(t, env, finishSponsor, required-1)
-				finishSponsorBalanceBefore := env.Balance(finishSponsor)
-				ownerBefore := accountState(t, env, owner)
-				sponsor1Before := accountState(t, env, sponsor1)
-				finishSponsorBefore := accountState(t, env, finishSponsor)
-				destinationBalanceBefore := env.Balance(destination)
-				destinationSequenceBefore := env.Seq(destination)
-
-				finish := escrow.EscrowFinish(destination, owner, sequence).Build()
-				withReserveSponsor(finish, finishSponsor)
-				attachSponsorSignature(t, env, finish, destination, finishSponsor)
-				failed := env.SubmitSigned(finish)
-				jtx.RequireTxFail(t, failed, "tecINSUFFICIENT_RESERVE")
-				requireFeeSequenceOnlyMetadata(t, failed, destination)
-				require.True(t, failed.Applied)
-				require.Equal(t, env.BaseFee(), failed.Fee)
-				require.Equal(t, destinationBalanceBefore-failed.Fee, env.Balance(destination))
-				require.Equal(t, destinationSequenceBefore+1, env.Seq(destination))
-				require.Equal(t, finishSponsorBalanceBefore, env.Balance(finishSponsor))
-				require.True(t, env.LedgerEntryExists(keylet.Escrow(owner.ID, sequence)))
-				require.False(t, env.LedgerEntryExists(holdingKey))
-				require.Equal(t, ownerBefore.OwnerCount, accountState(t, env, owner).OwnerCount)
-				require.Equal(t, ownerBefore.SponsoredOwnerCount, accountState(t, env, owner).SponsoredOwnerCount)
-				require.Equal(t, sponsor1Before.SponsoringOwnerCount, accountState(t, env, sponsor1).SponsoringOwnerCount)
-				require.Equal(t, finishSponsorBefore.SponsoringOwnerCount, accountState(t, env, finishSponsor).SponsoringOwnerCount)
-				mpt.RequireMPTokenAmount(owner, 9_900)
-				mpt.RequireMPTokenAmount(destination, 0)
-				require.Equal(t, uint64(100), mpt.HolderLockedAmount(owner))
-				require.Zero(t, mpt.HolderLockedAmount(destination))
-				require.Equal(t, uint64(100), mpt.IssuanceLockedAmount())
-				require.Equal(t, uint64(10_000), mpt.IssuanceOutstandingAmount())
-
-				setAccountBalance(t, env, finishSponsor, required)
-				finish = escrow.EscrowFinish(destination, owner, sequence).Build()
-				withReserveSponsor(finish, finishSponsor)
-				attachSponsorSignature(t, env, finish, destination, finishSponsor)
-				result := env.SubmitSigned(finish)
-				jtx.RequireTxSuccess(t, result)
-				requireDeletedEscrowMetadata(t, result, sponsor1.Address)
-				requireCreatedMetadata(t, result, "MPToken")
-				require.Equal(t, env.BaseFee(), result.Fee)
-				require.Equal(t, required, env.Balance(finishSponsor))
-				require.Equal(t, destinationBalanceBefore-2*env.BaseFee(), env.Balance(destination))
-				require.Equal(t, destinationSequenceBefore+2, env.Seq(destination))
-				require.False(t, env.LedgerEntryExists(keylet.Escrow(owner.ID, sequence)))
-				require.True(t, env.LedgerEntryExists(holdingKey))
-				require.Equal(t, finishSponsor.Address, mptTokenSponsor(t, env, mpt.IssuanceID(), destination))
-				mpt.RequireMPTokenAmount(owner, 9_900)
-				mpt.RequireMPTokenAmount(destination, 100)
-				require.Zero(t, mpt.HolderLockedAmount(owner))
-				require.Zero(t, mpt.HolderLockedAmount(destination))
-				require.Zero(t, mpt.IssuanceLockedAmount())
-				require.Equal(t, uint64(10_000), mpt.IssuanceOutstandingAmount())
-				require.Equal(t, uint32(1), accountState(t, env, owner).OwnerCount)
-				require.Zero(t, accountState(t, env, owner).SponsoredOwnerCount)
-				require.Equal(t, uint32(1), accountState(t, env, destination).OwnerCount)
-				require.Equal(t, uint32(1), accountState(t, env, destination).SponsoredOwnerCount)
-				require.Equal(t, uint32(1), accountState(t, env, finishSponsor).SponsoringOwnerCount)
-				if sameSponsor {
-					require.Equal(t, uint32(1), accountState(t, env, sponsor1).SponsoringOwnerCount)
-				} else {
-					require.Zero(t, accountState(t, env, sponsor1).SponsoringOwnerCount)
-				}
-			})
 		}
 	}
 }
