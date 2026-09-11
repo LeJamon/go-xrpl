@@ -467,7 +467,7 @@ func TestDelegatedIOUEscrowCancelUsesSourceReserveAndDelegateFee(t *testing.T) {
 			env.Close()
 
 			// The delegate pays the fee, so the source reserve check uses its
-			// pre-fee balance. Start one drop below the boundary to pin rollback.
+			// pre-fee balance.
 			requiredSourceReserve := env.ReserveBase() + 2*env.ReserveIncrement()
 			setAccountBalance(t, env, owner, requiredSourceReserve-1)
 			ownerBefore := accountState(t, env, owner)
@@ -903,7 +903,6 @@ func TestSponsoredSelfEscrowFinishUsesPreFeeBalanceAfterReserveRecycle(t *testin
 	require.Equal(t, uint32(1), accountState(t, env, owner).SponsoredOwnerCount)
 
 	// Reserve checks use the source's pre-fee balance after escrow recycling.
-	// One drop above the one-owner reserve is sufficient.
 	setAccountBalance(t, env, owner, env.ReserveBase()+env.ReserveIncrement()+1)
 	result := env.Submit(escrow.EscrowFinish(owner, owner, sequence).Build())
 	jtx.RequireTxSuccess(t, result)
