@@ -64,19 +64,18 @@ func (o *OfferCreate) invokeFlowCross(
 		ctx.TxHash,
 		ctx.Config.LedgerSequence,
 		payment.FlowCrossParams{
-			Passive:             bPassive,    // For passive offers, only cross against strictly better quality
-			Sell:                bSell,       // For sell offers, deliver MAX (sell all input regardless of output)
-			FillOrKill:          bFillOrKill, // FillOrKill runs the flow with partialPayment disabled (rippled CreateOffer.cpp:411)
-			ParentCloseTime:     ctx.Config.ParentCloseTime,
-			ReserveBase:         ctx.Config.ReserveBase,
-			ReserveIncrement:    ctx.Config.ReserveIncrement,
-			FixReducedOffersV2:  rules.Enabled(amendment.FeatureFixReducedOffersV2),
-			FixFillOrKill:       rules.Enabled(amendment.FeatureFixFillOrKill),
-			FixAMMv1_1:          rules.Enabled(amendment.FeatureFixAMMv1_1),
-			FixAMMv1_2:          rules.Enabled(amendment.FeatureFixAMMv1_2),
-			FixAMMOverflowOffer: rules.Enabled(amendment.FeatureFixAMMOverflowOffer),
-			NumberContext:       &numberContext,
-			DomainID:            o.DomainID,
+			Passive:            bPassive,    // For passive offers, only cross against strictly better quality
+			Sell:               bSell,       // For sell offers, deliver MAX (sell all input regardless of output)
+			FillOrKill:         bFillOrKill, // FillOrKill runs the flow with partialPayment disabled (rippled CreateOffer.cpp:411)
+			ParentCloseTime:    ctx.Config.ParentCloseTime,
+			ReserveBase:        ctx.Config.ReserveBase,
+			ReserveIncrement:   ctx.Config.ReserveIncrement,
+			FixReducedOffersV2: rules.Enabled(amendment.FeatureFixReducedOffersV2),
+			FixFillOrKill:      rules.Enabled(amendment.FeatureFixFillOrKill),
+			FixAMMv1_1:         rules.Enabled(amendment.FeatureFixAMMv1_1),
+			FixAMMv1_2:         rules.Enabled(amendment.FeatureFixAMMv1_2),
+			NumberContext:      &numberContext,
+			DomainID:           o.DomainID,
 		},
 	)
 }

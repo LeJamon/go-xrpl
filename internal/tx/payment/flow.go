@@ -700,7 +700,7 @@ func RippleCalculate(
 	// Initialize AMM liquidity on BookSteps.
 	// Reference: rippled BookStep constructor reads AMM SLE and creates AMMLiquidity.
 	configureAMMOnBookSteps(sandbox, strands, ammCtx, rcOpts.parentCloseTime,
-		rcOpts.fixAMMv1_1, rcOpts.fixAMMv1_2, rcOpts.fixAMMOverflowOffer)
+		rcOpts.fixAMMv1_1, rcOpts.fixAMMv1_2)
 
 	// Set multiPath after strands are built
 	// Reference: rippled Flow.cpp line 112: ammContext.setMultiPath(strands.size() > 1)
@@ -766,10 +766,9 @@ type rippleCalculateOpts struct {
 	fixReducedOffersV2 bool
 	domainID           *[32]byte
 	// AMM amendment flags
-	fixAMMv1_1          bool
-	fixAMMv1_2          bool
-	fixAMMOverflowOffer bool
-	numberContext       *state.NumberContext
+	fixAMMv1_1    bool
+	fixAMMv1_2    bool
+	numberContext *state.NumberContext
 
 	// openLedger mirrors rippled's view.open() (Payment.cpp: rcInput.isLedgerOpen
 	// = view().open()). It selects the FAILED_PROCESSING TER variant in the
@@ -788,11 +787,10 @@ func WithAmendments(parentCloseTime uint32, fixReducedOffersV2 bool) RippleCalcu
 
 // WithAMMAmendments passes AMM-specific amendment flags to RippleCalculate.
 // Reference: rippled BookStep reads these from ctx.view.rules()
-func WithAMMAmendments(fixAMMv1_1, fixAMMv1_2, fixAMMOverflowOffer bool) RippleCalculateOption {
+func WithAMMAmendments(fixAMMv1_1, fixAMMv1_2 bool) RippleCalculateOption {
 	return func(o *rippleCalculateOpts) {
 		o.fixAMMv1_1 = fixAMMv1_1
 		o.fixAMMv1_2 = fixAMMv1_2
-		o.fixAMMOverflowOffer = fixAMMOverflowOffer
 	}
 }
 
@@ -861,7 +859,7 @@ func configureAMMOnBookSteps(
 	strands []Strand,
 	ammCtx *AMMContext,
 	parentCloseTime uint32,
-	fixAMMv1_1, fixAMMv1_2, fixAMMOverflowOffer bool,
+	fixAMMv1_1, fixAMMv1_2 bool,
 ) {
 	for _, strand := range strands {
 		for _, step := range strand {
@@ -870,7 +868,7 @@ func configureAMMOnBookSteps(
 				continue
 			}
 			bookStep.initAMMLiquidity(view, ammCtx, parentCloseTime,
-				fixAMMv1_1, fixAMMv1_2, fixAMMOverflowOffer)
+				fixAMMv1_1, fixAMMv1_2)
 		}
 	}
 }

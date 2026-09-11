@@ -170,7 +170,7 @@ func (t *Table) Desired() [][32]byte {
 
 	result := make([][32]byte, 0)
 	for _, feature := range AllFeatures() {
-		if feature.Supported != SupportedYes || t.vetoed[feature.ID] {
+		if feature.Supported != SupportedYes || feature.Vote == VoteObsolete || t.vetoed[feature.ID] {
 			continue
 		}
 		if t.upVoted[feature.ID] ||

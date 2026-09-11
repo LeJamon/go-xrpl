@@ -62,14 +62,13 @@ type Pathfinder struct {
 }
 
 type flowCalculationSettings struct {
-	parentCloseTime     uint32
-	fixReducedOffersV2  bool
-	fixAMMv1_1          bool
-	fixAMMv1_2          bool
-	fixAMMOverflowOffer bool
-	openLedger          bool
-	domainID            *[32]byte
-	numberContext       state.NumberContext
+	parentCloseTime    uint32
+	fixReducedOffersV2 bool
+	fixAMMv1_1         bool
+	fixAMMv1_2         bool
+	openLedger         bool
+	domainID           *[32]byte
+	numberContext      state.NumberContext
 }
 
 func newFlowCalculationSettings(ledger tx.LedgerView, parentCloseTime uint32) flowCalculationSettings {
@@ -82,7 +81,6 @@ func newFlowCalculationSettings(ledger tx.LedgerView, parentCloseTime uint32) fl
 		settings.fixReducedOffersV2 = rules.Enabled(amendment.FeatureFixReducedOffersV2)
 		settings.fixAMMv1_1 = rules.Enabled(amendment.FeatureFixAMMv1_1)
 		settings.fixAMMv1_2 = rules.Enabled(amendment.FeatureFixAMMv1_2)
-		settings.fixAMMOverflowOffer = rules.Enabled(amendment.FeatureFixAMMOverflowOffer)
 	}
 	if openView, ok := ledger.(interface{ IsOpen() bool }); ok {
 		settings.openLedger = openView.IsOpen()
@@ -93,7 +91,7 @@ func newFlowCalculationSettings(ledger tx.LedgerView, parentCloseTime uint32) fl
 func (s flowCalculationSettings) options() []payment.RippleCalculateOption {
 	options := []payment.RippleCalculateOption{
 		payment.WithAmendments(s.parentCloseTime, s.fixReducedOffersV2),
-		payment.WithAMMAmendments(s.fixAMMv1_1, s.fixAMMv1_2, s.fixAMMOverflowOffer),
+		payment.WithAMMAmendments(s.fixAMMv1_1, s.fixAMMv1_2),
 		payment.WithOpenLedger(s.openLedger),
 	}
 	if s.domainID != nil {

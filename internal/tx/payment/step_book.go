@@ -1396,7 +1396,7 @@ func (s *BookStep) consumeAMMOffer(
 ) error {
 	// Check pool product invariant
 	if !ammOffer.CheckInvariant(eitherToAmount(consumedInNet), eitherToAmount(consumedOut)) {
-		return errors.New("AMM pool product invariant failed")
+		return ter.Errorf(ter.TecINVARIANT_FAILED, "AMM pool product invariant failed")
 	}
 
 	// Transfer input: book.in.account → AMM account.
@@ -1430,7 +1430,7 @@ func (s *BookStep) initAMMLiquidity(
 	view *PaymentSandbox,
 	ammCtx *AMMContext,
 	parentCloseTime uint32,
-	fixAMMv1_1, fixAMMv1_2, _ bool,
+	fixAMMv1_1, fixAMMv1_2 bool,
 ) {
 	ammKey := keylet.AMMAsset(bookSideFromIssue(s.book.In), bookSideFromIssue(s.book.Out))
 	ammData, err := view.Read(ammKey)
@@ -1457,7 +1457,7 @@ func (s *BookStep) initAMMLiquidity(
 		tradingFee,
 		s.book.In, s.book.Out,
 		ammCtx,
-		fixAMMv1_1, fixAMMv1_2, false,
+		fixAMMv1_1, fixAMMv1_2,
 	)
 }
 

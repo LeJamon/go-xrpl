@@ -44,7 +44,7 @@ func NewAMMLiquidity(
 	tradingFee uint16,
 	issueIn, issueOut Issue,
 	ammContext *AMMContext,
-	fixAMMv1_1, fixAMMv1_2, _ bool,
+	fixAMMv1_1, fixAMMv1_2 bool,
 ) *AMMLiquidity {
 	liq := &AMMLiquidity{
 		ammContext:   ammContext,
