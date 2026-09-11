@@ -81,16 +81,19 @@
   },
   "source_files": [
     "include/xrpl/protocol/SField.h",
-    "src/libxrpl/protocol/SField.cpp",
     "include/xrpl/protocol/detail/sfields.macro",
     "include/xrpl/protocol/TER.h",
     "src/libxrpl/protocol/TER.cpp",
     "include/xrpl/protocol/detail/transactions.macro",
-    "src/libxrpl/protocol/TxFormats.cpp",
     "include/xrpl/protocol/detail/ledger_entries.macro",
-    "src/libxrpl/protocol/LedgerFormats.cpp",
     "include/xrpl/protocol/TxFlags.h",
-    "include/xrpl/protocol/LedgerFormats.h",
+    "include/xrpl/protocol/LedgerFormats.h"
+  ],
+  "transcribed_rule_sources": [
+    "include/xrpl/protocol/TxFlags.h",
+    "src/libxrpl/protocol/TxFormats.cpp",
+    "src/libxrpl/protocol/LedgerFormats.cpp",
+    "src/libxrpl/protocol/SField.cpp",
     "src/xrpld/rpc/handlers/server_info/ServerDefinitions.cpp"
   ]
 }

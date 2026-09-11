@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Derive rc1 server_definitions data from the pinned rippled source tree.
 
-This is intentionally independent of go-xrpl.  It reads the C++ protocol
-macros and the ServerDefinitions construction rules, then emits SHA512-Half
-checksums for the complete document and each large section.
+It parses the C++ protocol macros and combines them with construction rules
+transcribed from the pinned rc1 sources, independently of go-xrpl. The input
+must be a clean checkout of the pinned commit.
 
 Regenerate the checked-in fixture from the pinned source checkout with:
 
@@ -19,7 +19,23 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 from pathlib import Path
+
+
+ORACLE_COMMIT = "2ad4def35fd8580da027462517ba3375cc005c94"
+
+
+def verify_oracle(root):
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
+
+    if Path(git("rev-parse", "--show-toplevel")).resolve() != root:
+        raise ValueError("oracle_root must be the checkout root")
+    if git("rev-parse", "HEAD") != ORACLE_COMMIT:
+        raise ValueError(f"oracle must be rippled 3.4.0-rc1 at {ORACLE_COMMIT}")
+    if git("status", "--porcelain", "--untracked-files=normal"):
+        raise ValueError("oracle checkout must be clean")
 
 
 def without_comments(text):
@@ -325,12 +341,16 @@ def main():
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     root = args.oracle_root.resolve()
+    try:
+        verify_oracle(root)
+    except (OSError, subprocess.CalledProcessError, ValueError) as error:
+        parser.error(str(error))
     document = build(root)
     full_hash, full_payload = digest(document)
     output = {
         "oracle": {
             "tag": "3.4.0-rc1",
-            "commit": "2ad4def35fd8580da027462517ba3375cc005c94",
+            "commit": ORACLE_COMMIT,
         },
         "serialization": "compact UTF-8 JSON with lexicographically sorted object keys; no trailing newline",
         "regeneration": {
@@ -346,16 +366,19 @@ def main():
         "sections": {},
         "source_files": [
             "include/xrpl/protocol/SField.h",
-            "src/libxrpl/protocol/SField.cpp",
             "include/xrpl/protocol/detail/sfields.macro",
             "include/xrpl/protocol/TER.h",
             "src/libxrpl/protocol/TER.cpp",
             "include/xrpl/protocol/detail/transactions.macro",
-            "src/libxrpl/protocol/TxFormats.cpp",
             "include/xrpl/protocol/detail/ledger_entries.macro",
-            "src/libxrpl/protocol/LedgerFormats.cpp",
             "include/xrpl/protocol/TxFlags.h",
             "include/xrpl/protocol/LedgerFormats.h",
+        ],
+        "transcribed_rule_sources": [
+            "include/xrpl/protocol/TxFlags.h",
+            "src/libxrpl/protocol/TxFormats.cpp",
+            "src/libxrpl/protocol/LedgerFormats.cpp",
+            "src/libxrpl/protocol/SField.cpp",
             "src/xrpld/rpc/handlers/server_info/ServerDefinitions.cpp",
         ],
     }
