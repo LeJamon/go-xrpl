@@ -401,7 +401,26 @@ func boolInt(value bool) int {
 // InvalidateFastLoadCheckpointEligibility prevents shutdown from publishing a
 // proof across a destructive NodeStore mutation.
 func (s *Service) InvalidateFastLoadCheckpointEligibility() {
+	s.invalidateFastLoadCheckpointEligibility("managed NodeStore mutation requires durable re-certification")
+}
+
+func (s *Service) invalidateFastLoadCheckpointEligibility(reason string) {
+	s.validatedStateBaseMu.Lock()
+	proof := s.validatedStateBaseProof
+	s.stateBaseMutationEpoch++
+	s.stateBaseRecertification = nil
+	s.validatedStateBaseProof = nil
+	s.validatedStateBaseCandidate = nil
 	s.fastLoadCheckpointState.Store(fastLoadCheckpointInvalidated)
+	s.validatedStateBaseMu.Unlock()
+	var sequence uint32
+	var root [32]byte
+	if proof != nil {
+		sequence, root = proof.sequence, proof.stateRoot
+	}
+	s.logger.Info("Fast-load checkpoint eligibility invalidated",
+		"reason", reason,
+		"sequence", sequence, "state_root", fmt.Sprintf("%x", root))
 }
 
 func (s *Service) markFastLoadCheckpointEligible() {
@@ -533,8 +552,14 @@ func (s *Service) proveValidatedStateBase(
 		return errors.New("validated state base ledger identity changed during proof")
 	}
 	proof, found := s.currentValidatedStateBaseProof()
-	if !found || !validatedStateBaseProofMatchesLedger(proof, h, fingerprint) {
-		return errors.New("validated state base has no matching completeness proof")
+	if !found {
+		return fmt.Errorf("validated state base has no matching completeness proof: sequence %d state root %x requires durable re-certification", h.LedgerIndex, h.AccountHash)
+	}
+	if proof.nodeStoreFingerprint != fingerprint {
+		return fmt.Errorf("validated state base has no matching completeness proof: NodeStore fingerprint changed for sequence %d state root %x", h.LedgerIndex, h.AccountHash)
+	}
+	if !validatedStateBaseProofMatchesLedger(proof, h, fingerprint) {
+		return fmt.Errorf("validated state base has no matching completeness proof: certificate ledger %d/%x differs from validated ledger %d/%x", proof.sequence, proof.ledgerHash, h.LedgerIndex, h.Hash)
 	}
 	if err := s.durableValidatedHeader(ctx, h); err != nil {
 		return err
@@ -584,8 +609,14 @@ func (s *Service) PrepareFastLoadCheckpoint(ctx context.Context) (bool, error) {
 		return false, errors.New("prepare fast-load checkpoint before ledger service stopped")
 	}
 	if s.fastLoadCheckpointState.Load() != fastLoadCheckpointEligible {
-		s.logger.Info("Fast-load checkpoint not prepared", "reason", "run is not eligible")
-		return false, nil
+		if s.fastLoadCheckpointState.Load() != fastLoadCheckpointInvalidated {
+			s.logger.Info("Fast-load checkpoint not prepared", "reason", "run is not eligible")
+			return false, nil
+		}
+		if err := s.recertifyValidatedStateBase(ctx); err != nil {
+			s.logger.Warn("Fast-load checkpoint not prepared", "reason", "durable re-certification required", "err", err)
+			return false, fmt.Errorf("re-certify checkpoint state base: %w", err)
+		}
 	}
 	if err := s.nodeStore.Sync(ctx); err != nil {
 		return false, fmt.Errorf("sync NodeStore before fast-load checkpoint: %w", err)
@@ -632,6 +663,27 @@ func (s *Service) PrepareFastLoadCheckpoint(ctx context.Context) (bool, error) {
 	}
 	prepared := false
 	err = durable.WithDurableSnapshot(ctx, func(nodeFingerprint [32]byte) error {
+		s.validatedStateBaseMu.RLock()
+		mutated := s.stateBaseMutationEpoch != 0
+		s.validatedStateBaseMu.RUnlock()
+		if mutated {
+			proof, found := s.currentValidatedStateBaseProof()
+			if !found || !validatedStateBaseProofMatchesLedger(proof, h, nodeFingerprint) {
+				if err := s.recertifyValidatedStateBase(ctx); err != nil {
+					return fmt.Errorf("re-certify changed checkpoint base: %w", err)
+				}
+				proof, found = s.currentValidatedStateBaseProof()
+				if !found || !validatedStateBaseProofMatchesLedger(proof, h, nodeFingerprint) {
+					return errors.New("checkpoint base changed after durable re-certification")
+				}
+			}
+		}
+		s.mu.RLock()
+		minimumOnline := s.minimumOnlineFunc
+		s.mu.RUnlock()
+		if s.stateBaseBelowRetention(h.LedgerIndex, minimumOnline) {
+			return errors.New("checkpoint ledger is below retention")
+		}
 		if s.fastLoadCheckpointState.Load() != fastLoadCheckpointEligible {
 			s.logger.Info("Fast-load checkpoint not prepared", "reason", "run was invalidated during preparation")
 			return nil

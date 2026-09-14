@@ -343,9 +343,14 @@ func (r *nodeRuntime) configureMaintenance() error {
 					r.nodeFamily.SetMinimumLedgerSeq,
 					func() func() {
 						r.ledger.InvalidateFastLoadCheckpointEligibility()
-						return r.nodeFamily.BeginPrune()
+						finish := r.nodeFamily.BeginPrune()
+						return func() {
+							finish()
+							r.ledger.RequestStateBaseRecertification()
+						}
 					},
 				)
+				r.rotator.SetRetentionGuard(r.ledger.BeginStateBaseRetentionChange)
 				if err := context.Cause(ctx); err != nil {
 					return err
 				}
@@ -1260,6 +1265,19 @@ func (r *nodeRuntime) shutdownWithin(timeout time.Duration) error {
 	}
 
 	producersStopped := true
+	// Release verification snapshots before waiting for a queued rotation.
+	if r.ledger != nil {
+		completed, err := runShutdownPhase(ctx, "stop state base re-certification", func() error {
+			r.ledger.StopStateBaseRecertification()
+			return nil
+		})
+		if err != nil {
+			errs = append(errs, err)
+		}
+		if !completed {
+			return errors.Join(append(errs, errors.New("shutdown incomplete: stores left open because state base re-certification did not stop"))...)
+		}
+	}
 	// Storage-backed producers can be finishing a cold read when canceled.
 	// Let them drain within the overall shutdown budget; the old five-second
 	// cap could abandon a producer just before it stopped, skipping the durable

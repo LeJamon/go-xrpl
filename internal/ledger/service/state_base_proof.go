@@ -13,7 +13,7 @@ import (
 )
 
 // validatedStateBaseProof is an in-memory completeness certificate for one
-// validated ledger. It is created after a full durable startup walk (or a
+// validated ledger. It is created after a full durable walk (or a
 // checkpoint derived from one), or promoted from a fully fetched initial-sync
 // candidate after persistence. It is then inherited by consecutive persisted
 // ledgers while the NodeStore generation remains unchanged. The generation
@@ -97,13 +97,6 @@ func (s *Service) currentValidatedStateBaseCandidate() (validatedStateBaseProof,
 		return validatedStateBaseProof{}, false
 	}
 	return *s.validatedStateBaseCandidate, true
-}
-
-func (s *Service) clearValidatedStateBase() {
-	s.validatedStateBaseMu.Lock()
-	s.validatedStateBaseProof = nil
-	s.validatedStateBaseCandidate = nil
-	s.validatedStateBaseMu.Unlock()
 }
 
 func validatedStateBaseProofMatchesLedger(
@@ -257,7 +250,7 @@ func (s *Service) prepareValidatedStateBaseCache(fingerprint [32]byte) bool {
 // advanceValidatedStateBaseProof extends an existing complete-tree proof over
 // one consecutive persisted ledger, or promotes a fully fetched initial-sync
 // candidate. It deliberately declines when neither exists: a full tree walk
-// belongs to startup/acquisition validation, never to ordinary persistence.
+// belongs to startup, acquisition or background verification, never to ordinary persistence.
 func (s *Service) advanceValidatedStateBaseProof(ctx context.Context, l *ledger.Ledger) error {
 	if l == nil || !l.IsValidated() || s.nodeStore == nil || s.shamapFamily == nil {
 		return nil
@@ -331,7 +324,14 @@ func (s *Service) advanceValidatedStateBaseProof(ctx context.Context, l *ledger.
 }
 
 func (s *Service) tryAdvanceValidatedStateBaseProof(ctx context.Context, l *ledger.Ledger) {
+	s.advanceStateBaseRecertification(ctx, l)
 	if err := s.advanceValidatedStateBaseProof(ctx, l); err != nil {
 		s.logger.Warn("validated state base proof unavailable", "sequence", l.Sequence(), "err", err)
+	}
+	s.validatedStateBaseMu.RLock()
+	recertify := s.stateBaseMutationEpoch != 0 && s.validatedStateBaseProof == nil && s.stateBaseRecertification == nil
+	s.validatedStateBaseMu.RUnlock()
+	if recertify {
+		s.RequestStateBaseRecertification()
 	}
 }

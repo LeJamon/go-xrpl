@@ -265,6 +265,7 @@ func (s *Service) Stop() {
 	s.stopDone = make(chan struct{})
 	done := s.stopDone
 	s.lifecycleMu.Unlock()
+	s.StopStateBaseRecertification()
 
 	// Drain validation lookups before the underlying stores can be closed, then
 	// wait for an in-flight submission or ledger transition. Queued open-ledger
@@ -280,7 +281,10 @@ func (s *Service) Stop() {
 	s.mu.Lock()
 	s.clearFastLoadBaseLocked()
 	s.mu.Unlock()
-	s.clearValidatedStateBase()
+	// Retain the final proof for stopped-service checkpoint preparation.
+	s.validatedStateBaseMu.Lock()
+	s.validatedStateBaseCandidate = nil
+	s.validatedStateBaseMu.Unlock()
 
 	s.lifecycleMu.Lock()
 	s.lifecycleState = serviceStopped
@@ -570,6 +574,7 @@ func (s *Service) invalidatePersistedValidatedTipMatching(start, end uint32, exp
 	if expectedHash != nil && !bytes.Equal(current.Data, expectedHash[:]) {
 		return
 	}
+	s.invalidateFastLoadCheckpointEligibility("durable validated tip invalidated")
 	if err := s.nodeStore.Store(ctx, &nodestore.Node{
 		Type:      nodestore.NodeLedger,
 		Hash:      validatedTipKey,

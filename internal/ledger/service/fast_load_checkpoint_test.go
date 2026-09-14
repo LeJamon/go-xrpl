@@ -832,7 +832,7 @@ func TestService_FastLoadCheckpointDeadlinePreservesTombstone(t *testing.T) {
 	require.True(t, tombstone)
 }
 
-func TestService_FastLoadCheckpointRefusesInvalidTipAndPrune(t *testing.T) {
+func TestService_FastLoadCheckpointRefusesInvalidTipAndReverifiesPrune(t *testing.T) {
 	ctx := context.Background()
 	t.Run("tip mismatch", func(t *testing.T) {
 		base := newTestNodeStore(t, 100_000)
@@ -854,12 +854,14 @@ func TestService_FastLoadCheckpointRefusesInvalidTipAndPrune(t *testing.T) {
 		svc := durableCheckpointService(t, ctx, db)
 		svc.InvalidateFastLoadCheckpointEligibility()
 		svc.markFastLoadCheckpointEligible()
+		require.Equal(t, uint32(fastLoadCheckpointInvalidated), svc.fastLoadCheckpointState.Load())
 		prepared, err := svc.PrepareFastLoadCheckpoint(ctx)
 		require.NoError(t, err)
-		require.False(t, prepared)
+		require.True(t, prepared)
+		require.Positive(t, svc.fastLoadStrictNodes.Load())
 		stored, err := db.Fetch(ctx, fastLoadCheckpointKey)
 		require.NoError(t, err)
-		require.Nil(t, stored)
+		require.NotNil(t, stored)
 	})
 }
 
