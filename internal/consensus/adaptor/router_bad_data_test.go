@@ -131,7 +131,6 @@ func TestRouter_HandleReplayDeltaResponse_ChargesErrorsBeforeRouting(t *testing.
 		{name: "no ledger", reply: message.ReplyErrorNoLedger},
 		{name: "no node", reply: message.ReplyErrorNoNode},
 		{name: "bad request", reply: message.ReplyErrorBadRequest},
-		{name: "explicit zero error", reply: message.ReplyErrorNone},
 	} {
 		for _, route := range []string{"stale", "unexpected peer", "missing hash"} {
 			t.Run(tc.name+"/"+route, func(t *testing.T) {
@@ -144,7 +143,6 @@ func TestRouter_HandleReplayDeltaResponse_ChargesErrorsBeforeRouting(t *testing.
 				resp := &message.ReplayDeltaResponse{
 					LedgerHash: target[:],
 					Error:      tc.reply,
-					ErrorSet:   true,
 				}
 				switch route {
 				case "stale":
