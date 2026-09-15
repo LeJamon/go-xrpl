@@ -109,6 +109,12 @@ func validatedStateBaseProofMatchesLedger(
 		proof.txRoot == h.TxHash && proof.nodeStoreFingerprint == fingerprint
 }
 
+func validatedStateBaseProofMatchesIdentity(proof validatedStateBaseProof, h header.LedgerHeader) bool {
+	return proof.sequence == h.LedgerIndex && proof.ledgerHash == h.Hash &&
+		proof.parentHash == h.ParentHash && proof.stateRoot == h.AccountHash &&
+		proof.txRoot == h.TxHash
+}
+
 func validatedStateBaseProofCanBeInherited(
 	proof validatedStateBaseProof,
 	h header.LedgerHeader,
@@ -323,15 +329,41 @@ func (s *Service) advanceValidatedStateBaseProof(ctx context.Context, l *ledger.
 	return nil
 }
 
-func (s *Service) tryAdvanceValidatedStateBaseProof(ctx context.Context, l *ledger.Ledger) {
+func (s *Service) requestStateBaseRecertification(reason string) {
+	if s.nodeStore == nil || s.shamapFamily == nil {
+		return
+	}
+	if s.logger != nil {
+		s.logger.Info("Validated state base re-certification requested", "reason", reason)
+	}
+	s.RequestStateBaseRecertification()
+}
+
+func (s *Service) requestStateBaseRecertificationIfNeeded(l *ledger.Ledger) {
+	if l == nil || !l.IsValidated() || !s.hasDurableCompleteLedger(l) {
+		return
+	}
+	h := l.Header()
+	s.validatedStateBaseMu.RLock()
+	pending := s.stateBaseRecertification != nil
+	proof := s.validatedStateBaseProof
+	needsRecovery := proof == nil || (proof.sequence <= h.LedgerIndex &&
+		!validatedStateBaseProofMatchesIdentity(*proof, h))
+	s.validatedStateBaseMu.RUnlock()
+	if pending || !needsRecovery {
+		return
+	}
+	s.requestStateBaseRecertification("validated ledger has no matching completeness proof")
+}
+
+func (s *Service) tryAdvanceValidatedStateBaseProof(ctx context.Context, l *ledger.Ledger) bool {
 	s.advanceStateBaseRecertification(ctx, l)
 	if err := s.advanceValidatedStateBaseProof(ctx, l); err != nil {
 		s.logger.Warn("validated state base proof unavailable", "sequence", l.Sequence(), "err", err)
 	}
+	_, proofFoundAfter := s.currentValidatedStateBaseProof()
 	s.validatedStateBaseMu.RLock()
-	recertify := s.stateBaseMutationEpoch != 0 && s.validatedStateBaseProof == nil && s.stateBaseRecertification == nil
+	pending := s.stateBaseRecertification != nil
 	s.validatedStateBaseMu.RUnlock()
-	if recertify {
-		s.RequestStateBaseRecertification()
-	}
+	return !pending && !proofFoundAfter
 }

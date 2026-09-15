@@ -507,7 +507,7 @@ func TestStandardReplayPipelineStaleCancellationKeepsReplacement(t *testing.T) {
 		targetHash: replacement.hash,
 	}
 
-	_, current := r.cancelStandardReplayPipelineIdentity(stale)
+	_, current := r.cancelStandardReplayPipelineIdentity(stale, "test_stale_identity")
 
 	assert.False(t, current)
 	assert.True(t, r.standardReplay.active)

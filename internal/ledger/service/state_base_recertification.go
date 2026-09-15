@@ -290,6 +290,9 @@ func (s *Service) publishStateBaseRecertification(
 		(current.Sequence() == tip.LedgerIndex && current.Hash() != tip.Hash) {
 		return header.LedgerHeader{}, errors.New("validated ledger identity changed during re-certification")
 	}
+	if current := s.validatedStateBaseProof; current != nil && current.sequence > tip.LedgerIndex {
+		return header.LedgerHeader{}, errors.New("newer validated state base proof cannot be replaced")
+	}
 	proof, valid := newValidatedStateBaseProof(tip, fingerprint)
 	if !valid {
 		return header.LedgerHeader{}, errors.New("re-certified ledger identity is invalid")

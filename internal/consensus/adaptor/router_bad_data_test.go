@@ -89,10 +89,9 @@ func TestRouter_HandleReplayDeltaResponse_DecodeFailure_ChargesPeer(t *testing.T
 }
 
 // TestRouter_HandleReplayDeltaResponse_VerifyFailure_ChargesPeer
-// verifies the router charges the peer when GotResponse rejects the
-// payload (e.g. peer-signaled error code). Mirrors the behavior flow
-// that rippled's LedgerDeltaAcquire uses to charge feeInvalidData on
-// verification failure.
+// verifies the router charges the peer when GotResponse rejects an invalid
+// response. Availability replies are covered separately because they describe
+// a peer's missing data rather than malformed data.
 func TestRouter_HandleReplayDeltaResponse_VerifyFailure_ChargesPeer(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
 
@@ -103,11 +102,11 @@ func TestRouter_HandleReplayDeltaResponse_VerifyFailure_ChargesPeer(t *testing.T
 	require.NotNil(t, parent)
 	require.NoError(t, r.startReplayDeltaAcquisition(parent.Sequence()+1, target, 7, parent))
 
-	// A response with matching hash but a peer-signaled error — the
+	// A response with matching hash but an invalid request error — the
 	// verifier in GotResponse rejects it.
 	bad := &message.ReplayDeltaResponse{
 		LedgerHash: target[:],
-		Error:      message.ReplyErrorNoLedger,
+		Error:      message.ReplyErrorBadRequest,
 	}
 	payload, err := message.Encode(bad)
 	require.NoError(t, err)

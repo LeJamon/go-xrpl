@@ -43,6 +43,7 @@ type recordingSender struct {
 	// ledger-replay" path without extra setup; tests that want to cover
 	// the no-support fallback flip this to false.
 	peerSupportsReplay bool
+	peerReplaySupport  map[uint64]bool
 
 	// availableReplayPeers is the pool returned by
 	// ReplayCapablePeersExcluding. Empty by default — tests exercising
@@ -126,9 +127,12 @@ func (s *recordingSender) headerRequests() []headerCall {
 // Overrides the noopSender default (false) so tests that set up the
 // recordingSender without extra configuration still exercise the
 // replay-delta-preferred path.
-func (s *recordingSender) PeerSupportsReplay(uint64) bool {
+func (s *recordingSender) PeerSupportsReplay(peerID uint64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if supported, ok := s.peerReplaySupport[peerID]; ok {
+		return supported
+	}
 	return s.peerSupportsReplay
 }
 

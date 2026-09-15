@@ -553,12 +553,15 @@ func (s *Service) proveValidatedStateBase(
 	}
 	proof, found := s.currentValidatedStateBaseProof()
 	if !found {
+		s.requestStateBaseRecertification("validated ledger has no completeness proof")
 		return fmt.Errorf("validated state base has no matching completeness proof: sequence %d state root %x requires durable re-certification", h.LedgerIndex, h.AccountHash)
 	}
 	if proof.nodeStoreFingerprint != fingerprint {
+		s.requestStateBaseRecertification("validated ledger completeness proof has a different NodeStore generation")
 		return fmt.Errorf("validated state base has no matching completeness proof: NodeStore fingerprint changed for sequence %d state root %x", h.LedgerIndex, h.AccountHash)
 	}
 	if !validatedStateBaseProofMatchesLedger(proof, h, fingerprint) {
+		s.requestStateBaseRecertification("validated ledger completeness proof has a different ledger identity")
 		return fmt.Errorf("validated state base has no matching completeness proof: certificate ledger %d/%x differs from validated ledger %d/%x", proof.sequence, proof.ledgerHash, h.LedgerIndex, h.Hash)
 	}
 	if err := s.durableValidatedHeader(ctx, h); err != nil {
