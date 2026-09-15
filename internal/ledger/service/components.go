@@ -69,6 +69,8 @@ type historyComponent struct {
 	validatedStateBaseMu        sync.RWMutex
 	validatedStateBaseProof     *validatedStateBaseProof
 	validatedStateBaseCandidate *validatedStateBaseProof
+	stateBaseRecertification    *stateBaseRecertification
+	stateBaseMutationEpoch      uint64
 
 	nextCompleteLedgerToken uint64
 	sweepMu                 sync.Mutex

@@ -197,6 +197,14 @@ type Service struct {
 	fastLoadBaseFingerprint   [32]byte
 	fastLoadBaseVerified      bool
 
+	// recertificationMu owns the background verifier's admission and shutdown.
+	recertificationMu      sync.Mutex
+	recertificationWake    chan struct{}
+	recertificationDone    chan struct{}
+	recertificationCancel  context.CancelFunc
+	recertificationStopped bool
+	stateBaseRetentionMu   sync.RWMutex
+
 	// startupReplay is the one-shot replay staged for the first close and is
 	// guarded by mu together with the closed/open ledger frontier.
 	startupReplay *inbound.ReplayDelta
