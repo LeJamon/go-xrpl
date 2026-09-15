@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -2541,13 +2542,6 @@ func (r *Router) selectAcquisitionPeerExcluding(seq uint32, excluded map[uint64]
 	return fallback, haveFallback
 }
 
-// handleReplayDeltaResponse verifies an inbound mtREPLAY_DELTA_RESPONSE
-// against its matching in-flight acquisition (routed by ledger hash)
-// and adopts the resulting ledger. On verification or apply failure the
-// acquisition is abandoned and the legacy path is started for the same
-// target. Unsolicited/stale responses (no matching acquisition) are
-// silently dropped — a normal race when a peer batch-forwards replies
-// after we've already moved on.
 func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 	decoded, err := message.Decode(message.TypeReplayDeltaResponse, msg.Payload)
 	if err != nil {
@@ -2559,13 +2553,12 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 	if !ok || resp == nil {
 		return
 	}
+	if resp.HasError() && !msg.SelectPeerCharge(resource.FeeInvalidData(), "replay-delta-verify") {
+		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "replay-delta-verify")
+	}
 
 	rd, err := r.replayer.HandleResponseFrom(uint64(msg.PeerID), resp)
 	if errors.Is(err, inbound.ErrNoMatchingAcquisition) {
-		// Stale or unsolicited — drop silently without charging the
-		// peer. A misbehaving peer sending genuinely bogus data would
-		// fail its ACTIVE acquisition's verifier (branch below), which
-		// IS attributed via IncPeerBadData.
 		r.logger.Debug("replay delta response with no matching acquisition",
 			"peer", msg.PeerID)
 		return
@@ -2585,7 +2578,9 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 			"expected_peer", rd.PeerID(),
 			"hash", fmt.Sprintf("%x", hash[:8]),
 		)
-		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "replay-delta-peer")
+		if !resp.HasError() {
+			r.acquisition.IncPeerBadData(uint64(msg.PeerID), "replay-delta-peer")
+		}
 		return
 	}
 	if err != nil {
@@ -2616,7 +2611,7 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 		)
 		routeMismatch := errors.Is(err, inbound.ErrReplayParentMismatch) ||
 			errors.Is(err, inbound.ErrReplaySequenceMismatch)
-		if !routeMismatch {
+		if !routeMismatch && !resp.HasError() {
 			r.acquisition.IncPeerBadData(peerID, "replay-delta-verify")
 		}
 		r.fallbackReplayAcquisition(seq, hash, peerID)

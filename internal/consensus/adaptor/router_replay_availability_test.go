@@ -105,7 +105,11 @@ func TestRouter_ReplayDeltaAvailabilityIgnoresDelayedPriorPeer(t *testing.T) {
 		{peerID: 8, hash: target},
 	}, sender.replayCalls())
 	assert.True(t, r.replayer.Has(target))
-	assert.Empty(t, sender.getBadDataCalls())
+	charges := []badDataCall{
+		{peerID: 7, reason: "replay-delta-verify"},
+		{peerID: 7, reason: "replay-delta-verify"},
+	}
+	assert.Equal(t, charges, sender.getBadDataCalls())
 
 	payload, err := message.Encode(resp)
 	require.NoError(t, err)
@@ -119,7 +123,7 @@ func TestRouter_ReplayDeltaAvailabilityIgnoresDelayedPriorPeer(t *testing.T) {
 	stored, err := svc.GetLedgerByHash(target)
 	require.NoError(t, err)
 	assert.NotNil(t, stored)
-	assert.Empty(t, sender.getBadDataCalls())
+	assert.Equal(t, charges, sender.getBadDataCalls())
 }
 
 func TestRouter_ReplayDeltaAvailabilityFallsBackToTransactionReplayAfterBound(t *testing.T) {
@@ -204,7 +208,7 @@ func TestRouter_ReplayDeltaAvailabilityExpiredBudgetDoesNotRestart(t *testing.T)
 	assert.False(t, retained)
 }
 
-func TestRouter_ReplayDeltaAvailabilityIsNotBadData(t *testing.T) {
+func TestRouter_ReplayDeltaAvailabilityChargesPeerAndPreservesRecovery(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		reply message.ReplyError
@@ -223,7 +227,7 @@ func TestRouter_ReplayDeltaAvailabilityIsNotBadData(t *testing.T) {
 			require.NoError(t, r.startReplayDeltaAcquisition(seq, target, 7, parent))
 			sendReplayAvailabilityResponse(t, r, 7, target, tc.reply)
 
-			assert.Empty(t, sender.getBadDataCalls(), "availability is recoverable peer lack of data")
+			assert.Equal(t, []badDataCall{{peerID: 7, reason: "replay-delta-verify"}}, sender.getBadDataCalls())
 			legacy := sender.legacyCalls()
 			require.Len(t, legacy, 1)
 			il := r.fetchTracker.Find(target)
