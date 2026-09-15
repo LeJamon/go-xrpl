@@ -1732,8 +1732,6 @@ func (r *Router) fallbackReplayAcquisitionForTargetMode(
 		r.clearReplayAvailabilityRetryLocked(hash)
 	}
 
-	// Verification and engine failures, or an unavailable/incompatible
-	// parent, still require the ordinary full-state path.
 	r.clearReplayAvailabilityRetryLocked(hash)
 	r.startLedgerAcquisitionLegacyLocked(seq, hash, peerID)
 	if target != ([32]byte{}) && r.fetchTracker.Find(hash) != nil {

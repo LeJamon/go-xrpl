@@ -101,8 +101,6 @@ func TestRouter_HandleReplayDeltaResponse_VerifyFailure_ChargesPeer(t *testing.T
 	require.NotNil(t, parent)
 	require.NoError(t, r.startReplayDeltaAcquisition(parent.Sequence()+1, target, 7, parent))
 
-	// A response with matching hash but an invalid request error — the
-	// verifier in GotResponse rejects it.
 	bad := &message.ReplayDeltaResponse{
 		LedgerHash: target[:],
 		Error:      message.ReplyErrorBadRequest,
