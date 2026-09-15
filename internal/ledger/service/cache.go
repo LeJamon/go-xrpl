@@ -90,6 +90,31 @@ func (s *Service) invalidateCompleteLedger(seq uint32) {
 	s.invalidatePersistedValidatedTip(seq, seq)
 }
 
+// invalidateCompleteLedgerMetadataHash removes in-memory completion state for
+// an evicted ledger without touching persistent storage. The expected hash
+// prevents an eviction of an old fork from clearing replacement state that
+// was installed at the same sequence.
+func (s *Service) invalidateCompleteLedgerMetadataHash(seq uint32, hash [32]byte) {
+	s.persistMu.Lock()
+	if job := s.validatedPersistJobs[seq]; job != nil {
+		if job.l != nil && job.l.Hash() != hash {
+			s.persistMu.Unlock()
+			return
+		}
+		job.canceled.Store(true)
+		delete(s.validatedPersistJobs, seq)
+	}
+	s.completeMu.Lock()
+	s.ensureCompleteLedgerStateLocked()
+	if trackedHash, tracked := s.completeLedgerHashes[seq]; !tracked || trackedHash == hash {
+		delete(s.completeLedgerTokens, seq)
+		delete(s.completeLedgerHashes, seq)
+		s.completedLedgers.remove(seq)
+	}
+	s.completeMu.Unlock()
+	s.persistMu.Unlock()
+}
+
 func (s *Service) invalidateCompleteLedgerHash(seq uint32, hash [32]byte) {
 	s.persistMu.Lock()
 	job := s.validatedPersistJobs[seq]
@@ -241,19 +266,25 @@ func (s *Service) evictOldHistoryLocked(latestValidatedSeq uint32) {
 		return
 	}
 	cutoff := latestValidatedSeq - window
-	for seq, l := range s.ledgerHistory {
+	for seq := range s.ledgerHistory {
 		if seq > cutoff {
 			continue
 		}
 		if tracked, durable := s.completeLedgerEvictionStatus(seq); tracked && !durable {
-			s.invalidateCompleteLedger(seq)
+			if l := s.ledgerHistory[seq]; l != nil {
+				s.invalidateCompleteLedgerMetadataHash(seq, l.Hash())
+			}
 		}
-		_ = l.ForEachTransaction(func(txHash [32]byte, _ []byte) bool {
+		s.deleteHistoryLocked(seq)
+	}
+	// The transaction indexes are authoritative for the in-memory lookup
+	// window. Sweeping them by sequence avoids reopening an evicted ledger's
+	// transaction SHAMap, which may be backed by cold storage.
+	for txHash, txSeq := range s.txIndex {
+		if txSeq <= cutoff {
 			delete(s.txIndex, txHash)
 			delete(s.txPositionIndex, txHash)
-			return true
-		})
-		s.deleteHistoryLocked(seq)
+		}
 	}
 }
 
