@@ -497,3 +497,70 @@ func TestStateBaseRecertificationRejectsMutationAtPublication(t *testing.T) {
 		})
 	}
 }
+
+type publicationRetentionFamily struct {
+	*backend.NodeStore
+	acquired chan struct{}
+}
+
+func (f *publicationRetentionFamily) AcquireMinimumLedgerSeq() (uint32, func()) {
+	floor, release := f.NodeStore.AcquireMinimumLedgerSeq()
+	close(f.acquired)
+	return floor, release
+}
+
+func TestStateBasePublicationWaitingForServiceDoesNotBlockRetention(t *testing.T) {
+	f := newStateBaseRecertificationFixture(t)
+	f.svc.StopStateBaseRecertification()
+	f.invalidate(t)
+	family := &publicationRetentionFamily{
+		NodeStore: f.svc.shamapFamily.(*backend.NodeStore),
+		acquired:  make(chan struct{}),
+	}
+	f.svc.shamapFamily = family
+	pending := &stateBaseRecertification{
+		tip: f.validated.Header(), epoch: f.svc.stateBaseMutationEpoch,
+	}
+	f.svc.stateBaseRecertification = pending
+	fingerprint, err := f.db.DurableFingerprint(t.Context())
+	require.NoError(t, err)
+
+	f.svc.mu.Lock()
+	var unlockOnce sync.Once
+	unlock := func() { unlockOnce.Do(f.svc.mu.Unlock) }
+	defer unlock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.svc.publishStateBaseRecertification(t.Context(), pending, fingerprint)
+		done <- err
+	}()
+	require.Eventually(t, func() bool {
+		if !f.svc.stateBaseRetentionMu.TryLock() {
+			return true
+		}
+		f.svc.stateBaseRetentionMu.Unlock()
+		return false
+	}, time.Second, time.Millisecond)
+	select {
+	case <-family.acquired:
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	advanced := make(chan struct{})
+	go func() {
+		family.SetMinimumLedgerSeq(f.validated.Sequence() + 1)
+		close(advanced)
+	}()
+	var progressed bool
+	select {
+	case <-advanced:
+		progressed = true
+	case <-time.After(time.Second):
+	}
+	unlock()
+	publicationErr := <-done
+	<-advanced
+	require.True(t, progressed, "proof publication blocked retention while waiting for the service")
+	require.ErrorContains(t, publicationErr, "below retention")
+	requireStateBaseRecertificationUnavailable(t, f)
+}

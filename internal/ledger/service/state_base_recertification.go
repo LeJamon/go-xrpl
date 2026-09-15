@@ -264,14 +264,14 @@ func (s *Service) publishStateBaseRecertification(
 ) (header.LedgerHeader, error) {
 	s.stateBaseRetentionMu.RLock()
 	defer s.stateBaseRetentionMu.RUnlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if family, ok := s.shamapFamily.(interface{ AcquireMinimumLedgerSeq() (uint32, func()) }); ok {
 		_, release := family.AcquireMinimumLedgerSeq()
 		defer release()
 	} else if _, hasFloor := s.shamapFamily.(interface{ MinimumLedgerSeq() uint32 }); hasFloor {
 		return header.LedgerHeader{}, errors.New("SHAMap family cannot fence retention during re-certification")
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	s.validatedStateBaseMu.Lock()
 	defer s.validatedStateBaseMu.Unlock()
 	if err := ctx.Err(); err != nil {
