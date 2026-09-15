@@ -113,7 +113,7 @@ func (r *Router) beginFrozenPivotRecovery(seq uint32, hash [32]byte, peerID uint
 	if r.standardReplay.active && r.standardReplay.generation == identity.generation &&
 		!r.standardReplay.pivotReady && r.standardReplay.pivotSeq == identity.pivotSeq &&
 		r.standardReplay.pivotHash == identity.pivotHash {
-		retired := r.cancelStandardReplayPipelineLocked()
+		retired := r.cancelStandardReplayPipelineLocked("pivot_start_failed")
 		r.acquisitionMu.Unlock()
 		r.replayCommitMu.Unlock()
 		r.retireStandardReplay(retired)
@@ -181,15 +181,14 @@ func (r *Router) continueFrozenPivotRecovery(seq uint32, hash [32]byte, peerID u
 
 	conflict := (seq == r.standardReplay.pivotSeq && hash != r.standardReplay.pivotHash) ||
 		(seq == r.standardReplay.anchorSeq && hash != r.standardReplay.anchorHash) ||
-		(seq == r.standardReplay.targetSeq && hash != r.standardReplay.targetHash) ||
-		(trustedReplacement && seq < r.standardReplay.targetSeq)
+		(seq == r.standardReplay.targetSeq && hash != r.standardReplay.targetHash)
 	if entry := r.standardReplay.entries[seq]; entry != nil && entry.hash != hash {
 		conflict = true
 	}
 	if conflict {
 		identity := r.standardReplayIdentityLocked()
 		r.acquisitionMu.Unlock()
-		r.cancelStandardReplayPipelineIdentity(identity)
+		r.cancelStandardReplayPipelineIdentity(identity, "pivot_conflict")
 		return false
 	}
 	if seq > r.standardReplay.targetSeq {
@@ -272,7 +271,7 @@ func (r *Router) retireLocallySatisfiedLedger(seq uint32, hash [32]byte, reason 
 	retiredPipeline := r.standardReplay.active && !r.standardReplay.pivotReady && r.standardReplay.pivotSeq == seq &&
 		r.standardReplay.pivotHash == hash
 	if retiredPipeline {
-		retirement = r.cancelStandardReplayPipelineLocked()
+		retirement = r.cancelStandardReplayPipelineLocked(reason)
 	}
 	if acquisition := r.fetchTracker.Find(hash); acquisition != nil &&
 		r.fetchTracker.DiscardExpected(acquisition) {
@@ -582,7 +581,7 @@ func (r *Router) retargetFrozenPivot(
 			pivotStateRate = uint64(float64(pivot.Snapshot().StateUseful) / elapsed.Seconds())
 		}
 	}
-	retired := r.cancelStandardReplayPipelineLocked()
+	retired := r.cancelStandardReplayPipelineLocked(string(reason))
 	retired.ledgers = append(retired.ledgers, r.discardSupersededProvisionalFullStateLocked(target.hash)...)
 	r.consensusRecovery.targetHash = target.hash
 	r.consensusRecovery.anchorSeq = 0
@@ -623,7 +622,7 @@ func (r *Router) failFrozenPivotHandoff(handoff standardReplayPivotHandoff) bool
 		r.replayCommitMu.Unlock()
 		return false
 	}
-	retired := r.cancelStandardReplayPipelineLocked()
+	retired := r.cancelStandardReplayPipelineLocked("pivot_handoff_failed")
 	if r.consensusRecovery.stepHash == handoff.hash {
 		r.consensusRecovery.stepHash = [32]byte{}
 	}

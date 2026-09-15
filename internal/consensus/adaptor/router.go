@@ -326,11 +326,14 @@ type Router struct {
 	replayPipelineApplyUs                atomic.Uint64
 	replayPipelinePersistUs              atomic.Uint64
 
-	acquisitionMu     sync.Mutex
-	replayCommitMu    sync.Mutex
-	consensusRecovery consensusRecovery
-	lastHandoffSeq    uint32
-	standardReplay    standardReplayPipeline
+	// acquisitionMu protects replayAvailabilityRetries along with the
+	// acquisition registries below.
+	acquisitionMu             sync.Mutex
+	replayAvailabilityRetries map[[32]byte]replayAvailabilityRetryState
+	replayCommitMu            sync.Mutex
+	consensusRecovery         consensusRecovery
+	lastHandoffSeq            uint32
+	standardReplay            standardReplayPipeline
 
 	// historyMu guards history, the single backward history-backfill target: the
 	// next ledger a jump-adopt skipped (rippled Reason::HISTORY). The walk is
@@ -703,7 +706,7 @@ func (r *Router) StopAcquisitions() (legacy, replay int) {
 	if r.replayer != nil {
 		replay = r.replayer.Stop()
 	}
-	retirement := r.cancelStandardReplayPipelineLocked()
+	retirement := r.cancelStandardReplayPipelineLocked("shutdown")
 	r.consensusRecovery = consensusRecovery{}
 	r.lastHandoffSeq = 0
 	r.acquisitionMu.Unlock()
@@ -1177,6 +1180,7 @@ func (r *Router) submitManifestJob(msg *peermanagement.InboundMessage) {
 // timeout fallback for the same hash).
 func (r *Router) maintenanceTick() {
 	r.reconcilePeerAvailability()
+	r.expireReplayAvailabilityRetries()
 
 	// Sub-task retry loop: rotate peers on silent-peer timeouts BEFORE
 	// the outer budget kicks in (250ms × 10 rotations inside a larger

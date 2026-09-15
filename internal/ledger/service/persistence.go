@@ -49,6 +49,7 @@ func (s *Service) persistValidatedLedgerAtToken(
 ) error {
 	seq := l.Sequence()
 	var persistErr error
+	var recertificationNeeded bool
 
 	if s.nodeStore != nil {
 		if err := s.persistToNodeStore(ctx, l, seq); err != nil {
@@ -74,7 +75,7 @@ func (s *Service) persistValidatedLedgerAtToken(
 			if err := s.persistValidatedTipLocked(ctx, l, allowTipReplacement); err != nil {
 				persistErr = err
 			} else {
-				s.tryAdvanceValidatedStateBaseProof(ctx, l)
+				recertificationNeeded = s.tryAdvanceValidatedStateBaseProof(ctx, l)
 			}
 		}
 	} else if persistErr == nil && updateTip && s.nodeStore != nil {
@@ -82,7 +83,7 @@ func (s *Service) persistValidatedLedgerAtToken(
 			if err := s.persistValidatedTipLocked(ctx, l, allowTipReplacement); err != nil {
 				persistErr = err
 			} else {
-				s.tryAdvanceValidatedStateBaseProof(ctx, l)
+				recertificationNeeded = s.tryAdvanceValidatedStateBaseProof(ctx, l)
 			}
 		}
 	}
@@ -91,6 +92,9 @@ func (s *Service) persistValidatedLedgerAtToken(
 		s.recordValidatedPersistence(seq, token, persistErr == nil)
 		if persistErr == nil && s.nodeStore != nil && s.shamapFamily != nil {
 			s.markFastLoadCheckpointEligible()
+			if recertificationNeeded {
+				s.requestStateBaseRecertificationIfNeeded(l)
+			}
 		}
 	}
 	return persistErr
@@ -527,7 +531,9 @@ func (s *Service) persistValidatedTipJob(
 	if err := s.persistValidatedTipLocked(ctx, l, allowSameSequenceReplacement); err != nil {
 		return err
 	}
-	s.tryAdvanceValidatedStateBaseProof(ctx, l)
+	if s.tryAdvanceValidatedStateBaseProof(ctx, l) {
+		s.requestStateBaseRecertificationIfNeeded(l)
+	}
 	return nil
 }
 

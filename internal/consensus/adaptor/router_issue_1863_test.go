@@ -144,7 +144,7 @@ func TestIssue1863StalePivotCompletionCannotInstallReplacementGeneration(t *test
 
 	r.replayCommitMu.Lock()
 	r.acquisitionMu.Lock()
-	retirement := r.cancelStandardReplayPipelineLocked()
+	retirement := r.cancelStandardReplayPipelineLocked("test_cancellation")
 	r.acquisitionMu.Unlock()
 	r.replayCommitMu.Unlock()
 	r.retireStandardReplay(retirement)

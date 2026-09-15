@@ -32,6 +32,9 @@ func newStateBaseRecertificationFixture(t *testing.T) *stateBaseRecertificationF
 	repositories := newTestRepositories(t, ctx)
 	svc := newFastLoadCheckpointService(t, db, repositories, true)
 	require.NoError(t, svc.Start())
+	svc.recertificationMu.Lock()
+	svc.recertificationStopped = true
+	svc.recertificationMu.Unlock()
 	t.Cleanup(func() {
 		svc.Stop()
 		require.NoError(t, db.Close())
@@ -67,6 +70,9 @@ func newStateBaseRecertificationFixture(t *testing.T) *stateBaseRecertificationF
 		svc.rememberValidatedStateBase(h, fingerprint)
 		return nil
 	}))
+	svc.recertificationMu.Lock()
+	svc.recertificationStopped = false
+	svc.recertificationMu.Unlock()
 
 	rootNode, err := db.Fetch(ctx, nodestore.Hash256(h.AccountHash))
 	require.NoError(t, err)
@@ -93,6 +99,28 @@ func newStateBaseRecertificationFixture(t *testing.T) *stateBaseRecertificationF
 		svc: svc, db: db, validated: validated,
 		stateRoot: h.AccountHash, childHash: childHash,
 	}
+}
+
+func TestStateBaseRecertificationDoesNotReplaceNewerProof(t *testing.T) {
+	f := newStateBaseRecertificationFixture(t)
+	f.svc.StopStateBaseRecertification()
+	fingerprint, err := f.db.DurableFingerprint(t.Context())
+	require.NoError(t, err)
+	newerHeader := f.validated.Header()
+	newerHeader.LedgerIndex++
+	newerHeader.ParentHash = f.validated.Hash()
+	newerHeader.Hash = header.CalculateHash(newerHeader)
+	newerProof, ok := newValidatedStateBaseProof(newerHeader, fingerprint)
+	require.True(t, ok)
+	f.svc.validatedStateBaseMu.Lock()
+	f.svc.validatedStateBaseProof = &newerProof
+	f.svc.validatedStateBaseMu.Unlock()
+
+	err = f.svc.recertifyValidatedStateBase(t.Context())
+	require.ErrorContains(t, err, "newer validated state base proof cannot be replaced")
+	proof, found := f.svc.currentValidatedStateBaseProof()
+	require.True(t, found)
+	require.Equal(t, newerProof, proof)
 }
 
 func (f *stateBaseRecertificationFixture) invalidate(t *testing.T) {

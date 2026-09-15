@@ -182,3 +182,106 @@ func TestValidatedStateBaseLateTipPublicationPromotesCandidate(t *testing.T) {
 	_, found = svc.currentValidatedStateBaseCandidate()
 	require.False(t, found)
 }
+
+func TestValidatedStateBaseMissingProofRequestsRecertification(t *testing.T) {
+	f := newStateBaseRecertificationFixture(t)
+	f.svc.validatedStateBaseMu.Lock()
+	f.svc.validatedStateBaseProof = nil
+	epoch := f.svc.stateBaseMutationEpoch
+	f.svc.validatedStateBaseMu.Unlock()
+	require.Zero(t, epoch)
+
+	_, release, available, err := f.svc.AcquireValidatedStateBase(t.Context())
+	require.ErrorContains(t, err, "no matching completeness proof")
+	require.False(t, available)
+	require.Nil(t, release)
+	require.Eventually(t, func() bool {
+		proof, found := f.svc.currentValidatedStateBaseProof()
+		return found && proof.ledgerHash == f.validated.Hash() &&
+			f.svc.fastLoadCheckpointState.Load() == fastLoadCheckpointEligible
+	}, 2*time.Second, 5*time.Millisecond)
+}
+
+func TestValidatedStateBaseMismatchingProofRequestsRecertification(t *testing.T) {
+	f := newStateBaseRecertificationFixture(t)
+	fingerprint, err := f.db.DurableFingerprint(t.Context())
+	require.NoError(t, err)
+	alternateHeader := f.validated.Header()
+	alternateHeader.CloseFlags ^= header.LCFNoConsensusTime
+	alternateHeader.Hash = header.CalculateHash(alternateHeader)
+	alternateProof, ok := newValidatedStateBaseProof(alternateHeader, fingerprint)
+	require.True(t, ok)
+	f.svc.validatedStateBaseMu.Lock()
+	f.svc.validatedStateBaseProof = &alternateProof
+	f.svc.validatedStateBaseMu.Unlock()
+
+	_, release, available, err := f.svc.AcquireValidatedStateBase(t.Context())
+	require.ErrorContains(t, err, "no matching completeness proof")
+	require.False(t, available)
+	require.Nil(t, release)
+	require.Eventually(t, func() bool {
+		proof, found := f.svc.currentValidatedStateBaseProof()
+		return found && proof.ledgerHash == f.validated.Hash()
+	}, 2*time.Second, 5*time.Millisecond)
+}
+
+func TestValidatedStateBaseNonConsecutivePromotionRequestsRecertification(t *testing.T) {
+	svc, _, _ := newPendingStateBaseCandidate(t)
+	current := svc.GetValidatedLedger()
+	require.NotNil(t, current)
+	h := current.Header()
+	h.LedgerIndex += 2
+	h.ParentHash = current.Hash()
+	h.Validated = false
+	h.Hash = header.CalculateHash(h)
+	stateMap, err := current.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := current.TxMapSnapshot()
+	require.NoError(t, err)
+	target, err := ledger.NewFromHeader(h, stateMap, txMap, drops.Fees{})
+	require.NoError(t, err)
+	require.NoError(t, target.SetValidated())
+
+	svc.mu.Lock()
+	svc.validatedLedger = target
+	svc.mu.Unlock()
+	require.NoError(t, svc.persistValidatedLedger(t.Context(), target, false))
+	require.NoError(t, svc.persistValidatedTip(t.Context(), target))
+	require.Zero(t, svc.stateBaseMutationEpoch)
+	require.Eventually(t, func() bool {
+		proof, found := svc.currentValidatedStateBaseProof()
+		return found && proof.sequence == target.Sequence() && proof.ledgerHash == target.Hash()
+	}, 2*time.Second, 5*time.Millisecond)
+}
+
+func TestValidatedStateBaseConsecutivePromotionPreservesProof(t *testing.T) {
+	svc, _, _ := newPendingStateBaseCandidate(t)
+	current := svc.GetValidatedLedger()
+	require.NotNil(t, current)
+	h := current.Header()
+	h.LedgerIndex++
+	h.ParentHash = current.Hash()
+	h.Validated = false
+	h.Hash = header.CalculateHash(h)
+	stateMap, err := current.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := current.TxMapSnapshot()
+	require.NoError(t, err)
+	target, err := ledger.NewFromHeader(h, stateMap, txMap, drops.Fees{})
+	require.NoError(t, err)
+	require.NoError(t, target.SetValidated())
+
+	svc.mu.Lock()
+	svc.validatedLedger = target
+	svc.mu.Unlock()
+	require.NoError(t, svc.persistValidatedLedger(t.Context(), target, false))
+	require.NoError(t, svc.persistValidatedTip(t.Context(), target))
+	proof, found := svc.currentValidatedStateBaseProof()
+	require.True(t, found)
+	require.Equal(t, target.Sequence(), proof.sequence)
+	require.Equal(t, target.Hash(), proof.ledgerHash)
+	svc.recertificationMu.Lock()
+	recertificationStarted := svc.recertificationWake != nil
+	svc.recertificationMu.Unlock()
+	require.False(t, recertificationStarted)
+}
