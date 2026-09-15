@@ -90,17 +90,11 @@ func (s *Service) invalidateCompleteLedger(seq uint32) {
 	s.invalidatePersistedValidatedTip(seq, seq)
 }
 
-// invalidateCompleteLedgerMetadataHash removes in-memory completion state for
-// an evicted ledger without touching persistent storage. The expected hash
-// prevents an eviction of an old fork from clearing replacement state that
-// was installed at the same sequence.
-func (s *Service) invalidateCompleteLedgerMetadataHash(seq uint32, hash [32]byte) {
+// Eviction cancels completion immediately; the FIFO cleanup follows any
+// in-flight tip write and precedes subsequently queued replacements.
+func (s *Service) invalidateEvictedLedger(seq uint32, hash [32]byte) {
 	s.persistMu.Lock()
-	if job := s.validatedPersistJobs[seq]; job != nil {
-		if job.l != nil && job.l.Hash() != hash {
-			s.persistMu.Unlock()
-			return
-		}
+	if job := s.validatedPersistJobs[seq]; job != nil && (job.l == nil || job.l.Hash() == hash) {
 		job.canceled.Store(true)
 		delete(s.validatedPersistJobs, seq)
 	}
@@ -112,6 +106,12 @@ func (s *Service) invalidateCompleteLedgerMetadataHash(seq uint32, hash [32]byte
 		s.completedLedgers.remove(seq)
 	}
 	s.completeMu.Unlock()
+	if s.nodeStore != nil {
+		s.persistQueue = append(s.persistQueue, &persistJob{
+			evictedTip: &evictedLedgerTip{sequence: seq, hash: hash},
+		})
+		s.signalPersistLocked()
+	}
 	s.persistMu.Unlock()
 }
 
@@ -272,7 +272,7 @@ func (s *Service) evictOldHistoryLocked(latestValidatedSeq uint32) {
 		}
 		if tracked, durable := s.completeLedgerEvictionStatus(seq); tracked && !durable {
 			if l := s.ledgerHistory[seq]; l != nil {
-				s.invalidateCompleteLedgerMetadataHash(seq, l.Hash())
+				s.invalidateEvictedLedger(seq, l.Hash())
 			}
 		}
 		s.deleteHistoryLocked(seq)
