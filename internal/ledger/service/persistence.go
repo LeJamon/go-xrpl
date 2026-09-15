@@ -59,13 +59,15 @@ func (s *Service) persistValidatedLedgerAtToken(
 		return nil
 	}
 
-	if s.relationalDB != nil {
+	if s.relationalDB != nil || (updateTip && s.nodeStore != nil) {
 		s.canonicalPersistMu.Lock()
+		defer s.canonicalPersistMu.Unlock()
+	}
+	if s.relationalDB != nil {
 		if err := s.persistToRelationalDB(ctx, l); err != nil {
 			persistErr = errors.Join(persistErr, err)
 		}
 		if canceled != nil && canceled() {
-			s.canonicalPersistMu.Unlock()
 			return nil
 		}
 		if persistErr == nil && updateTip && s.nodeStore != nil {
@@ -75,9 +77,7 @@ func (s *Service) persistValidatedLedgerAtToken(
 				s.tryAdvanceValidatedStateBaseProof(ctx, l)
 			}
 		}
-		s.canonicalPersistMu.Unlock()
 	} else if persistErr == nil && updateTip && s.nodeStore != nil {
-		s.canonicalPersistMu.Lock()
 		if canceled == nil || !canceled() {
 			if err := s.persistValidatedTipLocked(ctx, l, allowTipReplacement); err != nil {
 				persistErr = err
@@ -85,7 +85,6 @@ func (s *Service) persistValidatedLedgerAtToken(
 				s.tryAdvanceValidatedStateBaseProof(ctx, l)
 			}
 		}
-		s.canonicalPersistMu.Unlock()
 	}
 
 	if l.IsValidated() {
@@ -97,17 +96,21 @@ func (s *Service) persistValidatedLedgerAtToken(
 	return persistErr
 }
 
-// persistJob is one unit of persistence work: a ledger to persist, or a
-// barrier (nil ledger + done) that flushes the FIFO queue for callers that
-// need persistence to be observable (tests, shutdown paths).
+// persistJob is a ledger write, an eviction cleanup, or a FIFO barrier.
 type persistJob struct {
 	l               *ledger.Ledger
+	evictedTip      *evictedLedgerTip
 	done            chan struct{}
 	validated       bool
 	tipOnly         bool
 	canceled        atomic.Bool
 	updatesTip      atomic.Bool
 	completionToken uint64
+}
+
+type evictedLedgerTip struct {
+	sequence uint32
+	hash     [32]byte
 }
 
 func (p *persistenceWorker) enqueuePersist(l *ledger.Ledger) {
@@ -206,6 +209,11 @@ func (p *persistenceWorker) start() {
 
 func (p *persistenceWorker) stop() {
 	p.persistMu.Lock()
+	startPending := !p.persistStarted && len(p.persistQueue) != 0
+	if startPending {
+		p.persistStarted = true
+		p.persistWG.Add(1)
+	}
 	started := p.persistStarted
 	if !p.persistStopping {
 		p.persistStopping = true
@@ -214,6 +222,9 @@ func (p *persistenceWorker) stop() {
 		}
 	}
 	p.persistMu.Unlock()
+	if startPending {
+		go p.runPersistWorker()
+	}
 	if started {
 		p.persistWG.Wait()
 	}
@@ -230,6 +241,11 @@ func (s *Service) flushPersists(ctx context.Context) error {
 func (p *persistenceWorker) flushPersists(ctx context.Context) error {
 	done := make(chan struct{})
 	p.persistMu.Lock()
+	startPending := !p.persistStarted && !p.persistStopping && len(p.persistQueue) != 0
+	if startPending {
+		p.persistStarted = true
+		p.persistWG.Add(1)
+	}
 	if !p.persistStarted || p.persistStopping {
 		p.persistMu.Unlock()
 		return nil
@@ -237,6 +253,9 @@ func (p *persistenceWorker) flushPersists(ctx context.Context) error {
 	p.persistQueue = append(p.persistQueue, &persistJob{done: done})
 	p.signalPersistLocked()
 	p.persistMu.Unlock()
+	if startPending {
+		go p.runPersistWorker()
+	}
 	select {
 	case <-done:
 		return nil
@@ -316,6 +335,9 @@ func (p *persistenceWorker) runPersistWorker() {
 func (s *Service) runPersistJob(job *persistJob) {
 	if job == nil {
 		return
+	}
+	if job.evictedTip != nil {
+		s.invalidateEvictedValidatedTip(*job.evictedTip)
 	}
 	if job.l != nil {
 		updateTip := job.updatesTip.Load()
@@ -560,7 +582,30 @@ func (s *Service) invalidatePersistedValidatedTipMatching(start, end uint32, exp
 	}
 	s.canonicalPersistMu.Lock()
 	defer s.canonicalPersistMu.Unlock()
+	s.invalidatePersistedValidatedTipMatchingLocked(start, end, expectedHash)
+}
 
+func (s *Service) invalidateEvictedValidatedTip(tip evictedLedgerTip) {
+	if s.nodeStore == nil {
+		return
+	}
+	s.canonicalPersistMu.Lock()
+	defer s.canonicalPersistMu.Unlock()
+	// A direct persist can overtake the FIFO. Its completion is published
+	// under canonicalPersistMu, so cleanup cannot erase a newly durable tip.
+	s.completeMu.RLock()
+	_, pending := s.completeLedgerTokens[tip.sequence]
+	durable := s.shamapFamily != nil && !pending &&
+		s.completedLedgers != nil && s.completedLedgers.contains(tip.sequence) &&
+		s.completeLedgerHashes[tip.sequence] == tip.hash
+	s.completeMu.RUnlock()
+	if durable {
+		return
+	}
+	s.invalidatePersistedValidatedTipMatchingLocked(tip.sequence, tip.sequence, &tip.hash)
+}
+
+func (s *Service) invalidatePersistedValidatedTipMatchingLocked(start, end uint32, expectedHash *[32]byte) {
 	ctx := context.Background()
 	current, err := s.nodeStore.Fetch(ctx, validatedTipKey)
 	if err != nil {
