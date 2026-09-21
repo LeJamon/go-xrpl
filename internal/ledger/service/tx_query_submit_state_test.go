@@ -1,11 +1,13 @@
 package service
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
@@ -128,4 +130,37 @@ func TestSubmitLedgerStateOmitsFailedBaseFee(t *testing.T) {
 	state := svc.submitLedgerState(current, txn, openledger.ApplyConfig{}, validated, nil)
 	require.NotNil(t, state)
 	require.Equal(t, uint64(30), state.OpenLedgerCost)
+}
+
+func TestAutofillFeeReferenceFallbackUsesLedgerFloor(t *testing.T) {
+	for _, referenceFee := range []uint64{5, 10, 42} {
+		t.Run(fmt.Sprintf("reference fee %d", referenceFee), func(t *testing.T) {
+			svc, err := New(Config{
+				Standalone: true, GenesisConfig: genesis.DefaultConfig(),
+				ConfiguredFees: &drops.Fees{Base: drops.XRPAmount(referenceFee)},
+			})
+			require.NoError(t, err)
+			require.NoError(t, svc.Start())
+			t.Cleanup(svc.Stop)
+			txn := payment.Pay(jtx.MasterAccount(), jtx.NewAccount("autofill-floor"), 100_000_000).Fee(10).Sequence(1).Build()
+			for _, failed := range []tx.Transaction{nil, submitStateFeeFailure{txn}} {
+				fee, err := svc.GetAutofillFee(failed, false, 10, 1)
+				require.NoError(t, err)
+				require.Equal(t, max(referenceFee, uint64(10)), fee)
+				fee, err = svc.GetAutofillFee(failed, false, 1, 1)
+				if referenceFee < 10 {
+					var highFee *svcerr.HighFeeError
+					require.ErrorAs(t, err, &highFee)
+					require.Equal(t, uint64(10), highFee.Fee)
+					require.Equal(t, referenceFee, highFee.Limit)
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, referenceFee, fee)
+				}
+			}
+			fee, err := svc.GetAutofillFee(txn, false, 1, 1)
+			require.NoError(t, err)
+			require.Equal(t, uint64(10), fee)
+		})
+	}
 }

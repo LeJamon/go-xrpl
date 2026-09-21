@@ -494,12 +494,8 @@ func (s *Service) GetAutofillFee(parsedTx tx.Transaction, unlimited bool, mult, 
 	fee := loadFee
 	if s.txQueue != nil {
 		feeLevel := s.txQueue.RequiredFeeLevel(current.TxCount())
-		if uint64(feeLevel) > txq.BaseLevel {
-			escalated := txq.FeeLevel(uint64(feeLevel)-1).ToDrops(baseFee) + 1
-			if escalated > fee {
-				fee = escalated
-			}
-		}
+		escalated := txq.FeeLevel(uint64(feeLevel)-1).ToDrops(baseFee) + 1
+		fee = max(fee, escalated)
 	}
 
 	ceiling, ok := mulDivU64(feeDefault, uint64(mult), uint64(div))
