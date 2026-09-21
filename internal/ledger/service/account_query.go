@@ -417,7 +417,7 @@ type AccountObjectItem struct {
 // GetAccountObjects enumerates an account's owned objects, paginated by an opaque
 // marker: NFTokenPages first (not linked into the owner directory), then
 // owner-directory entries. Marker is "<dirIndex>,<entryIndex>" ("0,<pageKey>" in
-// the NFTokenPage region). limit counts every directory entry visited, not just
+// the NFTokenPage region). limit counts every readable directory child, not just
 // type-filter matches, so a filtered page can come back short with a marker.
 func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32, marker string) (*AccountObjectsResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*AccountObjectsResult, error) {
@@ -496,7 +496,7 @@ func markerUint256(s string) ([32]byte, bool) {
 
 // enumerateAccountObjects walks an account's NFTokenPages then owner directory
 // into result, resuming from (dirIndex, entryIndex) and visiting at most limit
-// entries (charged per directory entry, not per type-match); sets result.Marker
+// entries (charged per readable child, not per type-match); sets result.Marker
 // when more remain. A missing dirIndex page or absent entryIndex is an invalid
 // marker.
 func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [20]byte, objType string, dirIndex, entryIndex [32]byte, limit uint32, result *AccountObjectsResult) error {
@@ -625,19 +625,22 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 			if rerr != nil {
 				return rerr
 			}
-			if data != nil {
-				t, derr := state.DecodeType(data)
-				if derr != nil {
-					if objTypeID == entry.TypeSignerList {
-						return derr
-					}
-				} else if wantType(t) {
-					result.AccountObjects = append(result.AccountObjects, AccountObjectItem{
-						Index:           protocol.Hash256Hex(itemKey),
-						LedgerEntryType: t.String(),
-						Data:            data,
-					})
+			if data == nil {
+				continue
+			}
+			t, derr := state.DecodeType(data)
+			if derr != nil {
+				if objTypeID == entry.TypeSignerList {
+					return derr
 				}
+			} else if t == entry.TypeDirectoryNode {
+				continue
+			} else if wantType(t) {
+				result.AccountObjects = append(result.AccountObjects, AccountObjectItem{
+					Index:           protocol.Hash256Hex(itemKey),
+					LedgerEntryType: t.String(),
+					Data:            data,
+				})
 			}
 			i++
 			if i == mlimit {
