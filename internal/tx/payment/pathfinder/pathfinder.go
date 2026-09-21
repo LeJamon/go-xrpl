@@ -1,6 +1,9 @@
 package pathfinder
 
 import (
+	"bytes"
+	"encoding/binary"
+	"encoding/hex"
 	"sort"
 	"strings"
 
@@ -11,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // Pathfinder discovers payment paths through the XRPL using DFS.
@@ -38,10 +42,7 @@ type Pathfinder struct {
 	// completePaths holds all discovered complete paths.
 	completePaths [][]payment.PathStep
 
-	// completePathKeys is a set of fingerprints (built by pathKey) for paths
-	// already in completePaths. Used to O(1)-dedup new candidates instead of
-	// an O(N) scan + element-wise compare. Kept in sync with completePaths
-	// by addUniquePath.
+	// Candidate keys retain the search context omitted from serialized steps.
 	completePathKeys map[string]struct{}
 
 	// pathRanks holds ranked paths after computePathRanks.
@@ -360,7 +361,18 @@ func (pf *Pathfinder) addLinks(parentPaths [][]payment.PathStep, addFlags uint32
 		pf.addLink(currentPath, &incompletePaths, addFlags)
 	}
 
-	return incompletePaths
+	seen := make(map[string]struct{}, len(incompletePaths))
+	uniquePaths := incompletePaths[:0]
+	for _, path := range incompletePaths {
+		key := pathKey(path)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		uniquePaths = append(uniquePaths, path)
+	}
+	clear(incompletePaths[len(uniquePaths):])
+	return uniquePaths
 }
 
 // addLink extends a single path by one hop.
@@ -550,7 +562,10 @@ func (pf *Pathfinder) addAccountLinks(
 
 	// Sort candidates by priority (descending)
 	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].Priority > candidates[j].Priority
+		if candidates[i].Priority != candidates[j].Priority {
+			return candidates[i].Priority > candidates[j].Priority
+		}
+		return bytes.Compare(candidates[i].Account[:], candidates[j].Account[:]) > 0
 	})
 
 	// Limit candidates
@@ -903,14 +918,16 @@ func (pf *Pathfinder) isNoRipple(fromAccount, toAccount [20]byte, currency strin
 	return rs.Flags&state.LsfHighNoRipple != 0
 }
 
-// addUniquePath adds a path to completePaths if it's not already present.
-// Path steps are sanitized: account-type steps keep only Account,
-// currency/issuer-type steps keep only Currency and Issuer.
-// This matches rippled's STPathElement serialization where typeAccount
-// elements do not include currency/issuer fields.
-//
-// Dedup is O(1) via the completePathKeys fingerprint set.
 func (pf *Pathfinder) addUniquePath(path []payment.PathStep) {
+	key := pathKey(path)
+	if _, exists := pf.completePathKeys[key]; exists {
+		return
+	}
+	if pf.completePathKeys == nil {
+		pf.completePathKeys = make(map[string]struct{})
+	}
+	pf.completePathKeys[key] = struct{}{}
+
 	pathCopy := make([]payment.PathStep, len(path))
 	for i, step := range path {
 		if step.Type == 0x01 {
@@ -923,38 +940,46 @@ func (pf *Pathfinder) addUniquePath(path []payment.PathStep) {
 		}
 	}
 
-	if pf.completePathKeys == nil {
-		pf.completePathKeys = make(map[string]struct{})
-	}
-	key := pathKey(pathCopy)
-	if _, exists := pf.completePathKeys[key]; exists {
-		return
-	}
-	pf.completePathKeys[key] = struct{}{}
 	pf.completePaths = append(pf.completePaths, pathCopy)
 }
 
-// pathKey builds a deterministic string fingerprint over the path steps. Each
-// step contributes its four fields plus a separator that cannot appear in any
-// of them (a NUL byte), so concatenated keys cannot alias. Used as the map
-// key for completePathKeys.
+// pathKey encodes element equality for generated candidates, not transaction bytes.
+// Only the account type bit participates; asset and issuer presence bits do not.
 func pathKey(path []payment.PathStep) string {
-	var b strings.Builder
-	// Avoid grow-resize: every step contributes ~50 bytes at the high end.
-	b.Grow(len(path) * 48)
-	for _, step := range path {
-		b.WriteByte(byte(step.Type))
-		b.WriteByte(0)
-		b.WriteString(step.Account)
-		b.WriteByte(0)
-		b.WriteString(step.Currency)
-		b.WriteByte(0)
-		b.WriteString(step.Issuer)
-		b.WriteByte(0)
-		b.WriteString(step.MPTIssuanceID)
-		b.WriteByte(0)
+	key := make([]byte, 0, len(path)*128)
+	appendField := func(value string) {
+		key = binary.AppendUvarint(key, uint64(len(value)))
+		key = append(key, value...)
 	}
-	return b.String()
+	for _, step := range path {
+		key = append(key, byte(step.Type&0x01))
+		account, issuer := step.Account, step.Issuer
+		if account == protocol.ZeroAccount {
+			account = ""
+		}
+		if issuer == protocol.ZeroAccount {
+			issuer = ""
+		}
+		appendField(account)
+		if step.MPTIssuanceID != "" {
+			key = append(key, 1)
+			id := step.MPTIssuanceID
+			if parsed, err := mptutil.DecodeID(id); err == nil {
+				id = mptutil.EncodeID(parsed)
+			}
+			appendField(id)
+		} else {
+			key = append(key, 0)
+			currency := step.Currency
+			if keylet.IsValidCurrencyCode(currency) {
+				id := keylet.CurrencyBytes(currency)
+				currency = hex.EncodeToString(id[:])
+			}
+			appendField(currency)
+		}
+		appendField(issuer)
+	}
+	return string(key)
 }
 
 // issueMatchesOrigin returns true if the given issue matches the source currency/issuer.
