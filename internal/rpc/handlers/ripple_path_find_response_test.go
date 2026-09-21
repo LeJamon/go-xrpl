@@ -1,6 +1,7 @@
 package handlers_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
@@ -81,6 +82,9 @@ func TestRipplePathFindResponsePreservesDistinctIOUPaths(t *testing.T) {
 	bob := jtx.NewAccount("path-response-bob")
 	gw1 := jtx.NewAccount("path-response-gateway-1")
 	gw2 := jtx.NewAccount("path-response-gateway-2")
+	if bytes.Compare(gw1.ID[:], gw2.ID[:]) < 0 {
+		gw1, gw2 = gw2, gw1
+	}
 	env.FundAmount(alice, uint64(jtx.XRP(10_000)))
 	env.FundAmount(bob, uint64(jtx.XRP(10_000)))
 	env.FundAmount(gw1, uint64(jtx.XRP(10_000)))

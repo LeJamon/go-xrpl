@@ -139,3 +139,71 @@ func TestAddLinksDeduplicatesCompressedCandidates(t *testing.T) {
 	}
 	require.Empty(t, pf.CompletePaths())
 }
+
+func TestAddLinksOrdersAccountCandidatesBeforeLimiting(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		count      int
+		fromSource bool
+		wantCount  int
+	}{
+		{"uncapped", 3, true, 3},
+		{"source limit", 52, true, 50},
+		{"intermediary limit", 12, false, 10},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, reverse := range []bool{false, true} {
+				source, destination := testAccountID(1), testAccountID(3)
+				endpoint := source
+				var parent []payment.PathStep
+				if !test.fromSource {
+					endpoint = testAccountID(2)
+					parent = []payment.PathStep{{Type: 1, Account: testAccountAddress(endpoint), Currency: "USD", Issuer: testAccountAddress(endpoint)}}
+				}
+				ledger := newMockLedger()
+				addAccount(t, ledger, endpoint, 100_000_000, 0)
+				cache := NewRippleLineCache(ledger)
+				lines := make([]PathFindTrustLine, test.count)
+				priorities := make(map[payment.Issue]int, test.count)
+				for i := range test.count {
+					peer := testAccountID(byte(i + 10))
+					index := i
+					if reverse {
+						index = test.count - 1 - i
+					}
+					lines[index] = PathFindTrustLine{
+						AccountID:     endpoint,
+						AccountIDPeer: peer,
+						Currency:      "USD",
+						Balance:       state.NewIssuedAmountFromFloat64(1, "USD", testAccountAddress(peer)),
+					}
+					priority := 1
+					if i == 0 {
+						priority = 2
+					}
+					priorities[payment.Issue{Currency: "USD", Issuer: peer}] = priority
+				}
+				cache.lines[accountKey{Account: endpoint, Direction: LineDirectionOutgoing}] = lines
+				pf := &Pathfinder{
+					srcAccount:    source,
+					dstAccount:    destination,
+					effectiveDst:  destination,
+					srcIssue:      payment.Issue{Currency: "USD", Issuer: source},
+					dstAmount:     state.NewIssuedAmountFromFloat64(1, "JPY", testAccountAddress(destination)),
+					ledger:        ledger,
+					cache:         cache,
+					pathsOutCount: priorities,
+				}
+				paths := pf.addLinks([][]payment.PathStep{parent}, afADD_ACCOUNTS)
+				require.Len(t, paths, test.wantCount)
+				for i, path := range paths {
+					peer := byte(test.count + 10 - i)
+					if i == 0 {
+						peer = 10
+					}
+					require.Equal(t, testAccountAddress(testAccountID(peer)), path[len(path)-1].Account, "reverse=%v candidate=%d", reverse, i)
+				}
+			}
+		})
+	}
+}

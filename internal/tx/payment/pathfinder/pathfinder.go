@@ -1,6 +1,7 @@
 package pathfinder
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"sort"
@@ -561,7 +562,10 @@ func (pf *Pathfinder) addAccountLinks(
 
 	// Sort candidates by priority (descending)
 	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].Priority > candidates[j].Priority
+		if candidates[i].Priority != candidates[j].Priority {
+			return candidates[i].Priority > candidates[j].Priority
+		}
+		return bytes.Compare(candidates[i].Account[:], candidates[j].Account[:]) > 0
 	})
 
 	// Limit candidates
