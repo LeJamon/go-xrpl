@@ -186,6 +186,7 @@ func (e *Event) retainedInboundMessage() *InboundMessage {
 		Payload:       e.Payload,
 		ManifestFrame: e.ManifestFrame,
 		reservation:   e.reservation.retain(),
+		charge:        e.charge.retain(),
 	}
 }
 
@@ -216,6 +217,7 @@ type InboundMessage struct {
 
 	reservation *inboundReservation
 	charge      *messageCharge
+	chargeMu    sync.Mutex
 	closeOnce   sync.Once
 	closeErr    error
 }
@@ -231,32 +233,48 @@ func (m *InboundMessage) Close() error {
 		}
 		m.reservation.release()
 		m.reservation = nil
-		m.charge.finish()
-		m.charge = nil
+		m.completePeerCharge()
 	})
 	return m.closeErr
 }
 
 func (m *InboundMessage) SelectPeerCharge(fee resource.Charge, chargeContext string) bool {
-	if m == nil || m.charge == nil {
+	if m == nil {
 		return false
 	}
-	m.charge.update(fee, chargeContext)
+	m.chargeMu.Lock()
+	charge := m.charge
+	m.chargeMu.Unlock()
+	if charge == nil {
+		return false
+	}
+	charge.update(fee, chargeContext)
 	return true
 }
 
 // ChargePeer applies an additional resource charge immediately, without
 // replacing the per-message charge selected for Close.
 func (m *InboundMessage) ChargePeer(fee resource.Charge, chargeContext string) bool {
-	if m == nil || m.charge == nil {
+	if m == nil {
 		return false
 	}
-	return m.charge.charge(fee, chargeContext)
+	m.chargeMu.Lock()
+	charge := m.charge
+	m.chargeMu.Unlock()
+	return charge.charge(fee, chargeContext)
 }
 
 // CompletePeerCharge applies the selected per-message charge exactly once.
 func (m *InboundMessage) CompletePeerCharge() {
 	if m != nil {
-		m.charge.finish()
+		m.completePeerCharge()
 	}
+}
+
+func (m *InboundMessage) completePeerCharge() {
+	m.chargeMu.Lock()
+	charge := m.charge
+	m.charge = nil
+	m.chargeMu.Unlock()
+	charge.finish()
 }

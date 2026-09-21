@@ -3,6 +3,7 @@ package adaptor
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sync"
@@ -319,17 +320,31 @@ func verifyProposal(proposal *consensus.Proposal) error {
 
 // SignValidation signs a consensus validation. The signed data is
 // SHA-512Half(HashPrefixValidation + serialized validation fields).
+// Parsed validations cannot be re-signed because their wire data may include
+// fields that are not represented in Validation.
 func (vi *ValidatorIdentity) SignValidation(validation *consensus.Validation) error {
 	if vi == nil {
 		return errNoValidatorKey
 	}
+	if validation == nil {
+		return errors.New("nil validation")
+	}
+	if len(validation.SigningData) > 0 {
+		return errors.New("cannot sign parsed validation")
+	}
+	validation.ResetSignatureCheck()
+	validation.Raw = nil
 	validation.SigningPubKey = consensus.SigningPubKey(vi.SigningKey)
 	validation.NodeID = vi.NodeID
 	validation.Flags |= vfFullyCanonicalSig
+	validation.Flags &^= vfFullValidation
 	if validation.Full {
 		validation.Flags |= vfFullValidation
 	}
-	data := buildValidationSigningData(validation)
+	data, err := buildValidationSigningDataChecked(validation)
+	if err != nil {
+		return fmt.Errorf("serialize validation signing data: %w", err)
+	}
 	sig, err := vi.Sign(data)
 	if err != nil {
 		return err
@@ -343,10 +358,29 @@ func (vi *ValidatorIdentity) SignValidation(validation *consensus.Validation) er
 // is not a verification key — only the ephemeral SigningPubKey
 // (sfSigningPubKey on the wire) is what the validation was signed
 // with.
-func verifyValidation(validation *consensus.Validation) error {
-	data := buildValidationSigningData(validation)
+func verifyValidation(validation *consensus.Validation) (err error) {
+	if validation == nil {
+		return errors.New("nil validation")
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("cannot check validation signature: %v", recovered)
+		}
+	}()
+
+	data, err := buildValidationSigningDataChecked(validation)
+	if err != nil {
+		return fmt.Errorf("cannot check validation signature: %w", err)
+	}
 	mustBeFullyCanonical := validation.Flags&vfFullyCanonicalSig != 0
-	if !verifyWithCanonicality(validation.SigningPubKey[:], data, validation.Signature, mustBeFullyCanonical) {
+	cacheKey := validationSignatureCacheKey(validation, data, mustBeFullyCanonical)
+	valid, checkErr := validation.CheckSignature(cacheKey, func() (bool, error) {
+		return verifyWithCanonicality(validation.SigningPubKey[:], data, validation.Signature, mustBeFullyCanonical), nil
+	})
+	if checkErr != nil {
+		return fmt.Errorf("cannot check validation signature: %w", checkErr)
+	}
+	if !valid {
 		return errors.New("invalid validation signature")
 	}
 	return nil
@@ -375,36 +409,44 @@ func buildProposalSigningData(p *consensus.Proposal) []byte {
 	return hash[:]
 }
 
-// buildValidationSigningData constructs the signing digest for a validation.
-//
-// For inbound validations (SigningData populated by parseSTValidation), the
-// exact non-signing bytes from the wire are used — including any optional
-// fields the sender included that we don't model explicitly. That keeps us
-// compatible with senders emitting fields we don't ourselves understand.
-//
-// For outbound validations (SigningData nil), we regenerate the preimage
-// from struct fields. It MUST stay byte-identical to what
-// serializeSTValidation emits (minus sfSignature); otherwise a freshly-
-// signed validation would fail verification when parsed back from the
-// wire. When extending the wire format, update both functions together.
-func buildValidationSigningData(v *consensus.Validation) []byte {
+func validationSignatureCacheKey(
+	validation *consensus.Validation,
+	digest []byte,
+	mustBeFullyCanonical bool,
+) [32]byte {
+	h := sha256.New()
+	_, _ = h.Write(digest)
+	_, _ = h.Write(validation.SigningPubKey[:])
+	_, _ = h.Write(validation.Signature)
+	if mustBeFullyCanonical {
+		_, _ = h.Write([]byte{1})
+	} else {
+		_, _ = h.Write([]byte{0})
+	}
+	var key [32]byte
+	copy(key[:], h.Sum(nil))
+	return key
+}
+
+// buildValidationSigningDataChecked preserves inbound signing bytes, including
+// optional fields not represented in Validation. Outbound signing uses the same
+// serializer as the wire message, with sfSignature omitted.
+func buildValidationSigningDataChecked(v *consensus.Validation) ([]byte, error) {
+	if v == nil {
+		return nil, errors.New("nil validation")
+	}
 	if len(v.SigningData) > 0 {
 		// Inbound: use the exact non-signing bytes from the wire.
 		hash := sha512half.Sum(protocol.HashPrefixValidation().Bytes(), v.SigningData)
-		return hash[:]
+		return hash[:], nil
 	}
 
-	// Outbound: the signing preimage is the canonical wire serialization
-	// with sfSignature omitted. Derive it from serializeSTValidation — the
-	// single STValidation serializer — so the preimage and the wire bytes
-	// can never drift (the previous hand-rolled copy of every field was a
-	// standing fork hazard). serializeSTValidation emits sfSignature only
-	// when v.Signature is non-empty and as a distinct field between
-	// sfSigningPubKey and sfAmendments, so clearing it yields exactly the
-	// non-signature preimage. SignValidation stamps outbound flags before
-	// this function is called.
-	unsigned := *v
-	unsigned.Signature = nil
-	hash := sha512half.Sum(protocol.HashPrefixValidation().Bytes(), serializeSTValidation(&unsigned))
-	return hash[:]
+	// Use the explicit signing mode so the cache state attached to Validation
+	// is never copied while another verifier initializes it.
+	serialized, err := serializeSTValidationWithoutSignatureChecked(v)
+	if err != nil {
+		return nil, err
+	}
+	hash := sha512half.Sum(protocol.HashPrefixValidation().Bytes(), serialized)
+	return hash[:], nil
 }

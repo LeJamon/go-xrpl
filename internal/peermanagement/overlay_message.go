@@ -106,12 +106,10 @@ func (o *Overlay) onMessageReceived(evt Event) {
 	defer evt.release()
 	msgType := evt.MessageType
 
-	// Record reduce-relay traffic metrics before dispatch: counted on
-	// the inbound path, by message type and on-wire payload size, gated
-	// on the negotiated tx-reduce-relay feature or the metrics-only
-	// override.
-	if o.cfg.EnableTxReduceRelayMetrics ||
-		(o.cfg.EnableTxReduceRelay && o.PeerSupports(evt.PeerID, FeatureTxReduceRelay)) {
+	// Record transport metrics before dispatch, including TMTransactions
+	// frames that the batch handler later rejects. Transaction-processing
+	// metrics for the batch contents are recorded only after admission.
+	if o.shouldRecordTxMetrics(evt.PeerID) {
 		o.recordInboundTxMetric(msgType, evt.Payload, evt.WireSize)
 	}
 
@@ -259,6 +257,11 @@ func (o *Overlay) onMessageReceived(evt Event) {
 			o.RejectPeerBootstrap(evt.PeerID)
 		}
 	}
+}
+
+func (o *Overlay) shouldRecordTxMetrics(peerID PeerID) bool {
+	return o.cfg.EnableTxReduceRelayMetrics ||
+		(o.cfg.EnableTxReduceRelay && o.PeerSupports(peerID, FeatureTxReduceRelay))
 }
 
 func (o *Overlay) forwardConsensus(msg *InboundMessage) {

@@ -165,7 +165,11 @@ func (r *streamReader) readVariableLength() (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		return 12481 + (int(b1)-241)*65536 + int(b2)*256 + int(b3), nil
+		length := 12481 + (int(b1)-241)*65536 + int(b2)*256 + int(b3)
+		if length > 918744 {
+			return 0, serdes.ErrVariableLengthTooLong
+		}
+		return length, nil
 	default:
 		return 0, errors.New("ledgerfields: invalid VL prefix")
 	}

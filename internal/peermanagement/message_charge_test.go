@@ -59,14 +59,13 @@ func TestMessageChargePreservesBaseAndSelectedContexts(t *testing.T) {
 	charge := newMessageCharge(nil, "mtPING")
 	charge.update(resource.FeeModerateBurdenPeer(), "request")
 	charge.update(resource.FeeInvalidData(), "malformed")
-	latest := resource.NewCharge(resource.FeeInvalidData().Cost(), "latest")
-	charge.update(latest, "duplicate evidence")
+	charge.update(resource.FeeInvalidData(), "duplicate evidence")
 	charge.update(resource.FeeUselessData(), "ignored lower tier")
 
 	charge.mu.Lock()
 	defer charge.mu.Unlock()
-	require.Equal(t, latest, charge.fee)
-	require.Equal(t, "mtPING request malformed duplicate evidence", charge.context)
+	require.Equal(t, resource.FeeInvalidData(), charge.fee)
+	require.Equal(t, "mtPING request malformed", charge.context)
 }
 
 func TestInboundPingChargesModerateAndPongChargesTrivial(t *testing.T) {

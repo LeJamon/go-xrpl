@@ -51,8 +51,8 @@ func TestPeerWirePreflightChargesAndDropsBeforeDispatch(t *testing.T) {
 			name:    "transactions",
 			msgType: message.TypeTransactions,
 			payload: peerRepeatedMessageField(1, 10_001),
-			reason:  "wire-invalid",
-			charge:  resource.FeeInvalidData(),
+			reason:  "transactions-batch-too-large",
+			charge:  resource.FeeMalformedRequest(),
 		},
 		{
 			name:    "get object transactions",
