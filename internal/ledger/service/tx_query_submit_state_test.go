@@ -85,6 +85,36 @@ func TestSubmitTransactionBaseFeeFailureLeavesLedgerUnchanged(t *testing.T) {
 	require.Equal(t, before, after)
 }
 
+func TestSubmitTransactionMissingAccountPrecedesBaseFeeFailure(t *testing.T) {
+	svc, current, loanID := feeFailureLedger(t)
+	unfunded := jtx.NewAccount("fee-failure-unfunded")
+	pay := lending.NewLoanPay(unfunded.Address, loanID, tx.NewXRPAmount(10))
+	pay.Fee = "10"
+	pay.SetSequence(1)
+	env := jtx.NewTestEnv(t)
+	env.SignWith(pay, unfunded)
+	blob, err := tx.SerializeTransaction(pay)
+	require.NoError(t, err)
+	parsed, err := tx.ParseFromBinary(blob)
+	require.NoError(t, err)
+
+	before, err := current.Read(keylet.Account(unfunded.ID))
+	require.NoError(t, err)
+	beforeTxCount := current.TxCount()
+	result, err := svc.SubmitTransaction(parsed, blob, false)
+	require.NoError(t, err)
+	require.Equal(t, ter.TerNO_ACCOUNT, result.Result)
+	require.False(t, result.Applied)
+	require.Zero(t, result.Fee)
+	require.Nil(t, result.Metadata)
+	require.Nil(t, result.CurrentLedgerState)
+	require.Zero(t, svc.txQueue.Size())
+	require.Equal(t, beforeTxCount, svc.openLedgerView.Current().TxCount())
+	after, err := svc.openLedgerView.Current().Read(keylet.Account(unfunded.ID))
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+}
+
 type submitStateFeeFailure struct{ tx.Transaction }
 
 func (submitStateFeeFailure) CalculateBaseFee(tx.LedgerView, tx.EngineConfig) uint64 {

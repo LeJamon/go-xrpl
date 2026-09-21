@@ -59,24 +59,30 @@ type batchSeqTx struct{ *seqTx }
 
 func (m *batchSeqTx) TxType() tx.Type { return tx.TypeBatch }
 
+type blockerSeqTx struct{ *seqTx }
+
+func (m *blockerSeqTx) TxType() tx.Type { return tx.TypeRegularKeySet }
+
 // stubApplyCtx is a configurable txq.ApplyContext for admission tests. The
 // preflight/preclaim/apply results are dialled in per test so we can pin which
 // admission path rejects (or queues) a submission.
 type stubApplyCtx struct {
-	seq         uint32
-	sequenceErr error
-	balance     uint64
-	balanceErr  error
-	reserve     uint64
-	exists      bool
-	existsErr   error
-	tickets     map[uint32]bool
-	ticketErr   error
-	baseFee     uint64
-	baseFeeErr  error
-	txInLedger  uint32
-	ledgerSeq   uint32
-	flags       tx.ApplyFlags
+	seq          uint32
+	sequenceErr  error
+	balance      uint64
+	balanceErr   error
+	reserve      uint64
+	exists       bool
+	existsErr    error
+	tickets      map[uint32]bool
+	ticketErr    error
+	baseFee      uint64
+	baseFeeErr   error
+	baseFeeErrs  []error
+	baseFeeCalls int
+	txInLedger   uint32
+	ledgerSeq    uint32
+	flags        tx.ApplyFlags
 
 	preflight ter.Result
 	preclaim  ter.Result
@@ -114,6 +120,14 @@ func (c *stubApplyCtx) GetAccountReserve(uint32) uint64 {
 }
 func (c *stubApplyCtx) GetBaseFees(tx.Transaction) (uint64, uint64, error) {
 	c.observeRead()
+	c.baseFeeCalls++
+	if len(c.baseFeeErrs) > 0 {
+		index := c.baseFeeCalls - 1
+		if index >= len(c.baseFeeErrs) {
+			index = len(c.baseFeeErrs) - 1
+		}
+		return c.baseFee, c.baseFee, c.baseFeeErrs[index]
+	}
 	return c.baseFee, c.baseFee, c.baseFeeErr
 }
 func (c *stubApplyCtx) GetReferenceFee() uint64 {
@@ -784,6 +798,7 @@ func TestApplyAccountRootReadErrorsAreFatal(t *testing.T) {
 		{
 			name: "sequence",
 			ctx: &stubApplyCtx{
+				exists:      true,
 				sequenceErr: errors.New("sequence read failed"),
 				baseFee:     10,
 			},
