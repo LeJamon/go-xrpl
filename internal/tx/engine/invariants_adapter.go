@@ -71,13 +71,22 @@ func (a *invariantsTxAdapter) ClawbackHolder() string {
 
 // HasHolder implements invariants.HolderFieldProvider.
 func (a *invariantsTxAdapter) HasHolder() bool {
+	if a.TxHasField("Holder") {
+		return true
+	}
 	type provider interface {
 		HasHolder() bool
 	}
 	if p, ok := a.tx.(provider); ok {
 		return p.HasHolder()
 	}
-	return false
+	fields, err := a.tx.Flatten()
+	if err != nil {
+		// Retain issuer restrictions when field inspection fails.
+		return true
+	}
+	_, present := fields["Holder"]
+	return present
 }
 
 // GetDomainID implements invariants.DomainIDProvider.
