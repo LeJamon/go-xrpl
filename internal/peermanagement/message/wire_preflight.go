@@ -14,6 +14,7 @@ const (
 	maxWireFieldCount  = 131_072
 	maxTransactions    = 10_000
 	maxGetObjects      = 12_288
+	maxGetLedgerNodes  = 12_288
 	maxLedgerDataNodes = 12_288
 	maxEndpoints       = 1_023
 	maxValidatorBlobs  = 5
@@ -34,6 +35,7 @@ const (
 	WireLimitTransactions          WireLimitReason = "transactions"
 	WireLimitGetObjects            WireLimitReason = "get-objects"
 	WireLimitGetObjectTransactions WireLimitReason = "get-object-transactions"
+	WireLimitGetLedger             WireLimitReason = "get-ledger-nodes"
 	WireLimitLedgerData            WireLimitReason = "ledger-data-nodes"
 	WireLimitEndpoints             WireLimitReason = "endpoints"
 	WireLimitValidatorBlobs        WireLimitReason = "validator-blobs"
@@ -70,6 +72,8 @@ type wireScanState struct {
 	loadSources           int
 	getObjects            int
 	getObjectTransactions bool
+	getLedgerNodes        int
+	getLedgerInfoType     protoreflect.EnumNumber
 }
 
 func Preflight(msgType MessageType, data []byte) error {
@@ -95,6 +99,10 @@ func Preflight(msgType MessageType, data []byte) error {
 		if state.getObjects > limit {
 			return wireLimit(reason, limit, state.getObjects)
 		}
+	}
+	if msgType == TypeGetLedger && state.getLedgerInfoType != protoreflect.EnumNumber(proto.TMLedgerInfoType_liBASE) &&
+		state.getLedgerNodes > maxGetLedgerNodes {
+		return wireLimit(WireLimitGetLedger, maxGetLedgerNodes, state.getLedgerNodes)
 	}
 	return nil
 }
@@ -207,7 +215,7 @@ func (s *wireScanState) observeRootField(
 	if field == nil {
 		return nil
 	}
-	if s.msgType == TypeGetObjects && field.Number() == 1 &&
+	if (s.msgType == TypeGetObjects || s.msgType == TypeGetLedger) && field.Number() == 1 &&
 		field.Kind() == protoreflect.EnumKind && wireType == protowire.VarintType {
 		value, n := protowire.ConsumeVarint(data)
 		if n < 0 {
@@ -215,8 +223,16 @@ func (s *wireScanState) observeRootField(
 		}
 		number := protoreflect.EnumNumber(value)
 		if field.Enum().Values().ByNumber(number) != nil {
-			s.getObjectTransactions = number == protoreflect.EnumNumber(proto.TMGetObjectByHash_otTRANSACTIONS)
+			switch s.msgType {
+			case TypeGetObjects:
+				s.getObjectTransactions = number == protoreflect.EnumNumber(proto.TMGetObjectByHash_otTRANSACTIONS)
+			case TypeGetLedger:
+				s.getLedgerInfoType = number
+			}
 		}
+	}
+	if s.msgType == TypeGetLedger && field.Number() == 5 && wireType == protowire.BytesType {
+		s.getLedgerNodes++
 	}
 	if wireType != protowire.BytesType || !field.IsList() || field.Kind() != protoreflect.MessageKind {
 		return nil

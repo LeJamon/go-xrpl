@@ -2,6 +2,7 @@ package message
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"unsafe"
 
@@ -114,6 +115,72 @@ func TestPreflightGetObjectsUsesLastRecognizedType(t *testing.T) {
 
 	overGeneral := repeatedMessageField(6, maxGetObjects+1, nil)
 	requireWireLimit(t, Preflight(TypeGetObjects, overGeneral), WireLimitGetObjects, maxGetObjects, maxGetObjects+1)
+}
+
+func TestPreflightGetLedgerNodeLimit(t *testing.T) {
+	for _, infoType := range []LedgerInfoType{LedgerInfoBase, LedgerInfoTxNode, LedgerInfoAsNode, LedgerInfoTsCandidate} {
+		for _, count := range []int{0, 1, 12_287, 12_288, 12_289} {
+			t.Run(fmt.Sprintf("type_%d/count_%d", infoType, count), func(t *testing.T) {
+				wire := repeatedMessageField(5, count, make([]byte, 33))
+				wire = append(wire, enumField(1, uint64(infoType))...)
+				if infoType != LedgerInfoBase && count > 12_288 {
+					requireWireLimit(t, Preflight(TypeGetLedger, wire), WireLimitGetLedger, 12_288, count)
+					_, err := Decode(TypeGetLedger, wire)
+					requireWireLimit(t, err, WireLimitGetLedger, 12_288, count)
+					return
+				}
+				require.NoError(t, Preflight(TypeGetLedger, wire))
+				decoded, err := Decode(TypeGetLedger, wire)
+				require.NoError(t, err)
+				require.Len(t, decoded.(*GetLedger).NodeIDs, count)
+			})
+		}
+	}
+}
+
+func TestPreflightGetLedgerUsesLastRecognizedType(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		types  []uint64
+		reject bool
+	}{
+		{name: "base then nodes", types: []uint64{0, 2}, reject: true},
+		{name: "nodes then base", types: []uint64{2, 0}},
+		{name: "nodes then unknown", types: []uint64{2, 99}, reject: true},
+		{name: "base then unknown", types: []uint64{0, 99}},
+		{name: "unknown then nodes", types: []uint64{99, 2}, reject: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wire := enumField(1, tc.types[0])
+			wire = append(wire, repeatedMessageField(5, 12_289, nil)...)
+			wire = append(wire, enumField(1, tc.types[1])...)
+			err := Preflight(TypeGetLedger, wire)
+			if tc.reject {
+				requireWireLimit(t, err, WireLimitGetLedger, 12_288, 12_289)
+				return
+			}
+			require.NoError(t, err)
+			decoded, err := Decode(TypeGetLedger, wire)
+			require.NoError(t, err)
+			require.Equal(t, LedgerInfoBase, decoded.(*GetLedger).InfoType)
+		})
+	}
+}
+
+func TestPreflightGetLedgerCountsOnlyNodeIDBytes(t *testing.T) {
+	wire := enumField(1, uint64(LedgerInfoAsNode))
+	wire = append(wire, repeatedMessageField(5, 12_288, nil)...)
+	wire = append(wire, enumField(5, 0)...)
+	wire = append(wire, repeatedMessageField(100, 1, nil)...)
+	require.NoError(t, Preflight(TypeGetLedger, wire))
+	decoded, err := Decode(TypeGetLedger, wire)
+	require.NoError(t, err)
+	require.Len(t, decoded.(*GetLedger).NodeIDs, 12_288)
+
+	wire = protowire.AppendTag(wire, 5, protowire.BytesType)
+	wire = protowire.AppendVarint(wire, 33)
+	wire = append(wire, 0)
+	require.ErrorIs(t, Preflight(TypeGetLedger, wire), ErrMalformedWire)
 }
 
 func TestPreflightMalformedWire(t *testing.T) {

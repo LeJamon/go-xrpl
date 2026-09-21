@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
@@ -110,4 +111,50 @@ func TestPeerWirePreflightMalformedUsesInvalidDataClass(t *testing.T) {
 	reason := wirePreflightChargeReason(errors.Join(message.ErrMalformedWire, errors.New("bad tag")))
 	require.Equal(t, "wire-invalid", reason)
 	require.Equal(t, resource.FeeInvalidData(), chargeForReason(reason))
+}
+
+func TestPeerGetLedgerLimitChargesOnceAndReleasesBudget(t *testing.T) {
+	for _, compress := range []bool{false, true} {
+		t.Run(map[bool]string{false: "plain", true: "compressed"}[compress], func(t *testing.T) {
+			payload := protowire.AppendTag(nil, 1, protowire.VarintType)
+			payload = protowire.AppendVarint(payload, uint64(message.LedgerInfoAsNode))
+			payload = protowire.AppendTag(payload, 3, protowire.BytesType)
+			payload = protowire.AppendBytes(payload, make([]byte, 32))
+			for range 12_289 {
+				payload = protowire.AppendTag(payload, 5, protowire.BytesType)
+				payload = protowire.AppendBytes(payload, make([]byte, 33))
+			}
+			frame, err := message.BuildWireMessage(message.TypeGetLedger, payload)
+			require.NoError(t, err)
+			if compress {
+				var compressed bool
+				frame, compressed = message.CompressFrameIfWorthwhile(frame)
+				require.True(t, compressed)
+			}
+
+			identity, err := NewIdentity()
+			require.NoError(t, err)
+			events := make(chan Event, 1)
+			peer := NewPeer(1, Endpoint{Host: "192.0.2.1", Port: 51235}, false, identity, events)
+			now := time.Now()
+			manager := resource.NewManager(func() time.Time { return now }, nil)
+			consumer := manager.NewInboundEndpoint(peer.Endpoint().String())
+			peer.attachUsage(consumer, func() {})
+			t.Cleanup(func() { require.NoError(t, peer.Close()) })
+			peer.handshakeCfg.EnableCompression = compress
+			if compress {
+				peer.capabilities = NewPeerCapabilities()
+				peer.capabilities.Features.Enable(FeatureCompression)
+			}
+			budget := newReadBudget(int64(len(frame) + len(payload)))
+			peer.SetInboundReadBudget(budget)
+			peer.bufReader = bufio.NewReader(bytes.NewReader(frame))
+
+			require.ErrorIs(t, peer.readLoop(t.Context()), io.EOF)
+			require.Empty(t, events)
+			require.Equal(t, int64(resource.FeeInvalidData().Cost()/resource.DecayWindowSeconds), consumer.Balance())
+			require.Zero(t, readBudgetUsed(budget))
+			require.False(t, peer.closed.Load())
+		})
+	}
 }
