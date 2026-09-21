@@ -205,6 +205,8 @@ func TestAcceptDropsTefCategory(t *testing.T) {
 		wantSize int
 	}{
 		{name: "category lower boundary", result: ter.TefFAILURE},
+		{name: "fee calculation exception", result: ter.TefEXCEPTION},
+		{name: "apply fee recomputation failure", result: ter.TefINTERNAL},
 		{name: "nftoken not transferable", result: ter.TefNFTOKEN_IS_NOT_TRANSFERABLE},
 		{name: "invalid ledger fix type", result: ter.TefINVALID_LEDGER_FIX_TYPE},
 		{name: "partial payment to new destination", result: ter.TefNO_DST_PARTIAL},
