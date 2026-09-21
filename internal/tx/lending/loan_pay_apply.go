@@ -72,6 +72,9 @@ func accountToLoan(loan *loanData, acc *lmath.LoanAccount) {
 func (l *LoanPay) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) uint64 {
 	number := func(value string) lmath.N { return lendNumForRules(value, config.RequireRules()) }
 	normal := sign.CalculateDefaultBaseFee(l, config)
+	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0) && l.Amount.Signum() <= 0 {
+		return normal
+	}
 	if l.GetFlags()&(TfLoanFullPayment|TfLoanLatePayment) != 0 {
 		return normal
 	}
@@ -107,9 +110,6 @@ func (l *LoanPay) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) u
 	mAsset := mathAsset(vinfo.Asset)
 	scale := int(loan.LoanScale)
 	regular := lmath.RoundAssetUpward(mAsset, number(loan.PeriodicPayment), scale).Add(number(loan.LoanServiceFee))
-	if regular.Signum() <= 0 {
-		return normal
-	}
 	// Post-fixCleanup3_1_3: cap the estimate at the maximum number of payments the
 	// handler will process, so a large Amount does not inflate the fee unboundedly.
 	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_1_3) {

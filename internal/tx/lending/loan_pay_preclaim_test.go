@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -200,10 +201,78 @@ func TestLoanPay_CalculateBaseFeeCap(t *testing.T) {
 		t.Errorf("multisigned overpayment: got %d, want %d", got, 6*10)
 	}
 
+	for _, v11 := range []bool{false, true} {
+		for _, cleanup := range []bool{false, true} {
+			ids := [][32]byte{
+				amendment.FeatureLendingProtocol,
+				amendment.FeatureSingleAssetVault,
+				amendment.FeatureMPTokensV1,
+				amendment.FeatureFixCleanup3_1_3,
+				amendment.FeatureFixCleanup3_2_0,
+			}
+			if v11 {
+				ids = append(ids, amendment.FeatureLendingProtocolV1_1)
+			}
+			if cleanup {
+				ids = append(ids, amendment.FeatureFixCleanup3_4_0)
+			}
+			rules := amendment.NewRules(ids)
+			if rules.Enabled(amendment.FeatureLendingProtocol) != true {
+				t.Fatalf("LendingProtocol must be enabled for v11=%t cleanup=%t", v11, cleanup)
+			}
+			if rules.Enabled(amendment.FeatureLendingProtocolV1_1) != v11 {
+				t.Fatalf("LendingProtocolV1_1=%t, want %t", rules.Enabled(amendment.FeatureLendingProtocolV1_1), v11)
+			}
+			if rules.Enabled(amendment.FeatureFixCleanup3_4_0) != cleanup {
+				t.Fatalf("fixCleanup3_4_0=%t, want %t", rules.Enabled(amendment.FeatureFixCleanup3_4_0), cleanup)
+			}
+			config := tx.EngineConfig{BaseFee: 10, Rules: rules}
+
+			for _, drops := range []int64{0, -1} {
+				pay := NewLoanPay(ownerAddr, loanIDHex, tx.NewXRPAmount(drops))
+				feeView := tx.LedgerView(view)
+				if cleanup {
+					feeView = nil
+				}
+				if got := pay.CalculateBaseFee(feeView, config); got != 10 {
+					t.Errorf("v11=%t cleanup=%t amount=%d: fee=%d, want 10", v11, cleanup, drops, got)
+				}
+				if err := pay.Validate(); err == nil || !strings.Contains(err.Error(), "temBAD_AMOUNT") {
+					t.Errorf("v11=%t cleanup=%t amount=%d: Validate()=%v, want temBAD_AMOUNT", v11, cleanup, drops, err)
+				}
+			}
+
+			full := NewLoanPay(ownerAddr, loanIDHex, tx.NewXRPAmount(2000))
+			full.Common.SetFlags(TfLoanFullPayment)
+			if got := full.CalculateBaseFee(nil, config); got != 10 {
+				t.Errorf("v11=%t cleanup=%t full payment fee=%d, want 10", v11, cleanup, got)
+			}
+		}
+	}
+
 	loan, err := parseLoan(loanBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
+	zeroRegularLoan := *loan
+	zeroRegularLoan.PeriodicPayment = "0"
+	zeroRegularLoan.LoanServiceFee = "0"
+	zeroRegularBytes, err := serializeLoan(&zeroRegularLoan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view.data[keylet.LoanByID(loanID).Key] = zeroRegularBytes
+	zeroRegularPay := NewLoanPay(ownerAddr, loanIDHex, tx.NewXRPAmount(1))
+	fee, feeErr := sign.CalculateBaseFee(zeroRegularPay, view, cfg(false, true))
+	if fee != 0 {
+		t.Errorf("zero regular payment fee=%d, want 0 on calculation failure", fee)
+	}
+	resultErr, ok := ter.AsResultError(feeErr)
+	if !ok || resultErr.Code != ter.TefEXCEPTION {
+		t.Fatalf("zero regular payment error=%v, want tefEXCEPTION", feeErr)
+	}
+	view.data[keylet.LoanByID(loanID).Key] = loanBytes
+
 	for _, due := range []uint32{0, 1000} {
 		loan.NextPaymentDueDate = due
 		loanBytes, err = serializeLoan(loan)
