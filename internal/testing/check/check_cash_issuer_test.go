@@ -18,9 +18,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const fixCleanup340 = "fixCleanup3_4_0"
-
-const maxTrustLineLimit = "9999999999999999e80"
+const (
+	fixCleanup340     = "fixCleanup3_4_0"
+	maxTrustLineLimit = "9999999999999999e80"
+)
 
 func TestCheckCashIssuerDestinationCleanup(t *testing.T) {
 	for _, cleanup := range []bool{false, true} {
@@ -46,8 +47,6 @@ func testCheckCashIssuerDestinationCleanup(t *testing.T, cleanup, sourceLow bool
 	jtx.RequireTxSuccess(t, result)
 	requireDeliveredAmount(t, result, amount)
 
-	// The issuer is the transaction sender. It pays exactly one base fee and
-	// consumes one sequence; the source account's sequence is unchanged.
 	jtx.RequireSequence(t, env, issuer, issuerSequence+1)
 	require.Equal(t, issuerBalance-env.BaseFee(), env.Balance(issuer))
 	jtx.RequireSequence(t, env, source, sourceSequence)
@@ -59,11 +58,7 @@ func testCheckCashIssuerDestinationCleanup(t *testing.T, cleanup, sourceLow bool
 	jtx.RequireOwnerDirectoryContains(t, env, source, checkKey.Key, false)
 	jtx.RequireOwnerDirectoryContains(t, env, issuer, checkKey.Key, false)
 
-	// The source line is zero-limit before cashing. With fixCleanup3_4_0 on,
-	// the issuer destination skips the temporary limit widening and the flow
-	// deletes that fully redeemed line. Legacy behavior retains the line only
-	// when the source is the high account, because the old unconditional
-	// HighLimit widening keeps that line alive until restoration.
+	// The legacy HighLimit waiver prevents deletion when the source is high.
 	wantLine := !cleanup && !sourceLow
 	require.Equal(t, wantLine, env.TrustLineExists(source, issuer, "USD"))
 	lineDeleted := metadata.FindNode(result.Metadata, "DeletedNode", "RippleState")
@@ -94,9 +89,6 @@ func testCheckCashIssuerDestinationCleanup(t *testing.T, cleanup, sourceLow bool
 
 func TestCheckCashIssuerDestinationInsufficientFunds(t *testing.T) {
 	env, source, issuer, _, checkID, checkKey, lineKey := newIssuerCheckFixture(t, true, false)
-	// Leave less than DeliverMin on the source line while keeping the check's
-	// SendMax unchanged. The issuer destination must reject the flow before any
-	// temporary trust-line setup and retain the check for a later cash attempt.
 	partial := tx.NewIssuedAmountFromFloat64(500, "USD", issuer.Address)
 	jtx.RequireTxSuccess(t, env.Submit(payment.PayIssued(source, issuer, partial).Build()))
 	env.Close()
@@ -111,12 +103,10 @@ func TestCheckCashIssuerDestinationInsufficientFunds(t *testing.T) {
 	jtx.RequireSequence(t, env, source, sourceSequence)
 	jtx.RequireSequence(t, env, issuer, issuerSequence+1)
 	require.Equal(t, issuerBalance-env.BaseFee(), env.Balance(issuer))
-	if result.Metadata != nil {
-		require.Nil(t, result.Metadata.DeliveredAmount)
-		require.Empty(t, metadata.FindNodes(result.Metadata, "CreatedNode", "RippleState"))
-		require.Empty(t, metadata.FindNodes(result.Metadata, "ModifiedNode", "RippleState"))
-		require.Empty(t, metadata.FindNodes(result.Metadata, "DeletedNode", "RippleState"))
-	}
+	require.NotNil(t, result.Metadata)
+	require.Nil(t, result.Metadata.DeliveredAmount)
+	require.Len(t, result.Metadata.AffectedNodes, 1)
+	require.NotNil(t, metadata.FindNode(result.Metadata, "ModifiedNode", "AccountRoot"))
 	jtx.RequireLedgerEntryExists(t, env, checkKey)
 	jtx.RequireOwnerDirectoryContains(t, env, source, checkKey.Key, true)
 	jtx.RequireOwnerDirectoryContains(t, env, issuer, checkKey.Key, true)
@@ -278,9 +268,10 @@ func TestCheckCashNonIssuerAutoTrustLineCleanup(t *testing.T) {
 		jtx.RequireTxClaimed(t, result, "tecNO_LINE_INSUF_RESERVE")
 		jtx.RequireSequence(t, env, holder, holderSequence+1)
 		require.Equal(t, holderBalance-env.BaseFee(), env.Balance(holder))
-		if result.Metadata != nil {
-			require.Nil(t, result.Metadata.DeliveredAmount)
-		}
+		require.NotNil(t, result.Metadata)
+		require.Nil(t, result.Metadata.DeliveredAmount)
+		require.Len(t, result.Metadata.AffectedNodes, 1)
+		require.NotNil(t, metadata.FindNode(result.Metadata, "ModifiedNode", "AccountRoot"))
 		lineKey := keylet.Line(holder.ID, issuer.ID, "USD")
 		jtx.RequireLedgerEntryExists(t, env, checkKey)
 		jtx.RequireLedgerEntryNotExists(t, env, lineKey)
@@ -305,9 +296,7 @@ func TestCheckCashNonIssuerAutoTrustLineCleanup(t *testing.T) {
 		require.False(t, result.Success)
 		require.Equal(t, holderSequence, env.Seq(holder))
 		require.Equal(t, holderBalance, env.Balance(holder))
-		if result.Metadata != nil {
-			require.Nil(t, result.Metadata.DeliveredAmount)
-		}
+		require.Nil(t, result.Metadata)
 		jtx.RequireLedgerEntryNotExists(t, env, lineKey)
 		jtx.RequireLedgerEntryExists(t, env, checkKey)
 		jtx.RequireOwnerDirectoryContains(t, env, source, checkKey.Key, true)
