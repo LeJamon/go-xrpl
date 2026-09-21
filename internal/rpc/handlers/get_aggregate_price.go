@@ -280,6 +280,9 @@ func parseCurrencyParam(raw json.RawMessage) (string, error) {
 	if err := json.Unmarshal(raw, &value); err != nil || value == "" {
 		return "", fmt.Errorf("invalid currency")
 	}
+	if value == "0" {
+		return value, nil
+	}
 	if _, err := keylet.ParseCurrency(value); err != nil {
 		return "", err
 	}

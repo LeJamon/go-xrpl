@@ -206,6 +206,7 @@ func TestIssue1902AggregatePriceReservedCurrencies(t *testing.T) {
 				{"no currency", "0000000000000000000000000000000000000001", true},
 				{"bad currency", "0000000000000000000000005852500000000000", true},
 				{"native hex", strings.Repeat("0", 40), false},
+				{"native shorthand", "0", false},
 				{"issued hex", "0000000000000000000000005553440000000000", false},
 				{"issued code", "USD", false},
 			} {
