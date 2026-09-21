@@ -9,11 +9,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestComputeBaseFeeForTx_Multisign verifies that the fee dispatch matches
+// TestEstimateSigningBaseFee_Multisign verifies that the fee dispatch matches
 // rippled Transactor::calculateBaseFee (Transactor.cpp:229-245):
 // baseFee + signerCount * baseFee. The dispatch must not be gated on
 // SigningPubKey being empty — rippled counts sfSigners entries directly.
-func TestComputeBaseFeeForTx_Multisign(t *testing.T) {
+func TestEstimateSigningBaseFee_Multisign(t *testing.T) {
 	cfg := tx.EngineConfig{BaseFee: 10}
 
 	t.Run("no signers → baseFee", func(t *testing.T) {
@@ -22,7 +22,7 @@ func TestComputeBaseFeeForTx_Multisign(t *testing.T) {
 			"Account":"rEFNJWaJN6JYW9zXxFq1KqtaqgsMcLs9wK"
 		}`))
 		require.NoError(t, err)
-		assert.Equal(t, uint64(10), computeBaseFeeForTx(nil, parsed, cfg))
+		assert.Equal(t, uint64(10), estimateSigningBaseFee(nil, parsed, cfg, cfg.BaseFee))
 	})
 
 	t.Run("one signer with empty SigningPubKey → 2 * baseFee", func(t *testing.T) {
@@ -35,7 +35,7 @@ func TestComputeBaseFeeForTx_Multisign(t *testing.T) {
 			]
 		}`))
 		require.NoError(t, err)
-		assert.Equal(t, uint64(20), computeBaseFeeForTx(nil, parsed, cfg))
+		assert.Equal(t, uint64(20), estimateSigningBaseFee(nil, parsed, cfg, cfg.BaseFee))
 	})
 
 	t.Run("one signer with non-empty SigningPubKey still gets multisign fee", func(t *testing.T) {
@@ -53,7 +53,7 @@ func TestComputeBaseFeeForTx_Multisign(t *testing.T) {
 			]
 		}`))
 		require.NoError(t, err)
-		assert.Equal(t, uint64(20), computeBaseFeeForTx(nil, parsed, cfg),
+		assert.Equal(t, uint64(20), estimateSigningBaseFee(nil, parsed, cfg, cfg.BaseFee),
 			"rippled Transactor.cpp:229-245 counts sfSigners regardless of SigningPubKey")
 	})
 
@@ -68,25 +68,25 @@ func TestComputeBaseFeeForTx_Multisign(t *testing.T) {
 			]
 		}`))
 		require.NoError(t, err)
-		assert.Equal(t, uint64(40), computeBaseFeeForTx(nil, parsed, cfg))
+		assert.Equal(t, uint64(40), estimateSigningBaseFee(nil, parsed, cfg, cfg.BaseFee))
 	})
 
 	t.Run("nil parsedTx falls back to baseFee", func(t *testing.T) {
-		assert.Equal(t, uint64(10), computeBaseFeeForTx(nil, nil, cfg))
+		assert.Equal(t, uint64(10), estimateSigningBaseFee(nil, nil, cfg, cfg.BaseFee))
 	})
 }
 
-// TestComputeBaseFeeForTx_MaxMultiSigners verifies the rippled-faithful
+// TestEstimateSigningBaseFee_MaxMultiSigners verifies the rippled-faithful
 // fallback to baseFee when the supplied Signers count exceeds the multi-signer
 // cap (STTx::kMaxMultiSigners = 32, unconditional since ExpandedSignerList
 // retired).
-func TestComputeBaseFeeForTx_MaxMultiSigners(t *testing.T) {
+func TestEstimateSigningBaseFee_MaxMultiSigners(t *testing.T) {
 	t.Run("9 signers charges multisign fee", func(t *testing.T) {
 		cfg := tx.EngineConfig{BaseFee: 10}
 
 		parsed, err := tx.ParseJSON([]byte(buildSignersTxJSON(9)))
 		require.NoError(t, err)
-		assert.Equal(t, uint64(100), computeBaseFeeForTx(nil, parsed, cfg),
+		assert.Equal(t, uint64(100), estimateSigningBaseFee(nil, parsed, cfg, cfg.BaseFee),
 			"9 ≤ 32 ⇒ baseFee * (1 + 9) = 100")
 	})
 
@@ -95,7 +95,7 @@ func TestComputeBaseFeeForTx_MaxMultiSigners(t *testing.T) {
 
 		parsed, err := tx.ParseJSON([]byte(buildSignersTxJSON(32)))
 		require.NoError(t, err)
-		assert.Equal(t, uint64(330), computeBaseFeeForTx(nil, parsed, cfg),
+		assert.Equal(t, uint64(330), estimateSigningBaseFee(nil, parsed, cfg, cfg.BaseFee),
 			"32 ≤ 32 ⇒ baseFee * (1 + 32) = 330")
 	})
 
@@ -104,7 +104,7 @@ func TestComputeBaseFeeForTx_MaxMultiSigners(t *testing.T) {
 
 		parsed, err := tx.ParseJSON([]byte(buildSignersTxJSON(33)))
 		require.NoError(t, err)
-		assert.Equal(t, uint64(10), computeBaseFeeForTx(nil, parsed, cfg),
+		assert.Equal(t, uint64(10), estimateSigningBaseFee(nil, parsed, cfg, cfg.BaseFee),
 			"33 > 32 → reference_fee fallback")
 	})
 }
@@ -112,7 +112,7 @@ func TestComputeBaseFeeForTx_MaxMultiSigners(t *testing.T) {
 // buildSignersTxJSON returns a tx_json AccountSet with `count` synthetic
 // signer entries. The signer accounts are not unique but ParseJSON does
 // not enforce uniqueness — only structural shape matters for the
-// computeBaseFeeForTx path under test.
+// estimateSigningBaseFee path under test.
 func buildSignersTxJSON(count int) string {
 	signerAccounts := []string{
 		"rPmsLuwgD3yp6mvCXyz44itC9V2qZpDvm6",
@@ -139,7 +139,7 @@ func buildSignersTxJSON(count int) string {
 
 // panickingCustomFeeTx is a minimal tx.Transaction that implements
 // CustomBaseFeeCalculator and panics inside CalculateBaseFee, used to
-// verify computeBaseFeeForTx falls back to cfg.BaseFee on panic — the
+// verify estimateSigningBaseFee falls back to cfg.BaseFee on panic — the
 // Go-side equivalent of rippled getTxFee's reference_fee fallback on
 // any exception (TransactionSign.cpp:832-835).
 type panickingCustomFeeTx struct{}
@@ -155,9 +155,9 @@ func (panickingCustomFeeTx) CalculateBaseFee(_ tx.LedgerView, _ tx.EngineConfig)
 	panic("simulated inconsistent view state")
 }
 
-func TestComputeBaseFeeForTx_CustomCalculatorPanicFallsBack(t *testing.T) {
+func TestEstimateSigningBaseFee_CustomCalculatorPanicFallsBack(t *testing.T) {
 	cfg := tx.EngineConfig{BaseFee: 42}
-	got := computeBaseFeeForTx(nil, panickingCustomFeeTx{}, cfg)
+	got := estimateSigningBaseFee(nil, panickingCustomFeeTx{}, cfg, cfg.BaseFee)
 	assert.Equal(t, uint64(42), got,
 		"CustomBaseFeeCalculator panic must fall back to cfg.BaseFee — "+
 			"mirrors rippled getTxFee reference_fee fallback (TransactionSign.cpp:832-835)")

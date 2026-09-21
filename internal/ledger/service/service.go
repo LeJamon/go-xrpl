@@ -90,7 +90,7 @@ type Config struct {
 	NetworkID uint32
 
 	GenesisConfig genesis.Config
-	// ConfiguredFees seeds fields absent from a persisted FeeSettings entry.
+	// ConfiguredFees supplies the signing fallback and seeds absent FeeSettings fields.
 	ConfiguredFees *drops.Fees
 
 	// NodeStore is the persistent storage for ledger nodes (optional, nil for in-memory only)
@@ -758,6 +758,13 @@ func (c *closedLedgerCtx) GetLedgerSequence() uint32 {
 	return c.ledger.Sequence()
 }
 
+func (c *closedLedgerCtx) GetTransactionCount() uint32 {
+	if c.ledger == nil {
+		return 0
+	}
+	return c.ledger.TxCount()
+}
+
 func (c *closedLedgerCtx) feeConfig() tx.EngineConfig {
 	return tx.EngineConfig{
 		BaseFee:          c.baseFee,
@@ -793,7 +800,10 @@ func (c *closedLedgerCtx) GetTransactionFeeLevels() []txq.FeeLevel {
 		if err != nil {
 			return true
 		}
-		baseFee := sign.CalculateBaseFee(parsed, c.ledger, config)
+		baseFee, err := sign.CalculateBaseFee(parsed, c.ledger, config)
+		if err != nil {
+			return true
+		}
 		defaultBaseFee := sign.CalculateDefaultBaseFee(parsed, config)
 		levels = append(levels, txq.ToFeeLevelWithDefaultBaseFee(fee, baseFee, defaultBaseFee))
 		return true

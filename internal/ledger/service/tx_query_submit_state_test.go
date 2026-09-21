@@ -3,10 +3,18 @@ package service
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/lending"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	"github.com/LeJamon/go-xrpl/internal/txq"
+	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSubmitTransactionOmitsStateWithoutValidatedLedger(t *testing.T) {
@@ -43,4 +51,81 @@ func TestSubmitTransactionOmitsStateWithoutValidatedLedger(t *testing.T) {
 	if result.CurrentLedgerState != nil {
 		t.Fatalf("submit state = %+v, want nil without validated ledger", result.CurrentLedgerState)
 	}
+}
+
+func TestSubmitTransactionBaseFeeFailureLeavesLedgerUnchanged(t *testing.T) {
+	svc, current, loanID := feeFailureLedger(t)
+	master := jtx.MasterAccount()
+	before, err := current.Read(keylet.Account(master.ID))
+	require.NoError(t, err)
+	account, err := state.ParseAccountRoot(before)
+	require.NoError(t, err)
+	pay := lending.NewLoanPay(master.Address, loanID, tx.NewXRPAmount(10))
+	pay.Fee = "10"
+	pay.SetSequence(account.Sequence)
+	env := jtx.NewTestEnv(t)
+	env.SignWith(pay, master)
+	blob, err := tx.SerializeTransaction(pay)
+	require.NoError(t, err)
+	parsed, err := tx.ParseFromBinary(blob)
+	require.NoError(t, err)
+	result, err := svc.SubmitTransaction(parsed, blob, false)
+	require.NoError(t, err)
+	require.Equal(t, ter.TefEXCEPTION, result.Result)
+	require.False(t, result.Applied)
+	require.Zero(t, result.Fee)
+	require.Nil(t, result.Metadata)
+	require.Nil(t, result.CurrentLedgerState)
+	require.Zero(t, svc.txQueue.Size())
+	require.Zero(t, svc.openLedgerView.Current().TxCount())
+	after, err := svc.openLedgerView.Current().Read(keylet.Account(master.ID))
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+}
+
+type submitStateFeeFailure struct{ tx.Transaction }
+
+func (submitStateFeeFailure) CalculateBaseFee(tx.LedgerView, tx.EngineConfig) uint64 {
+	panic("controlled fee failure")
+}
+
+func TestSubmitLedgerStateOmitsFailedBaseFee(t *testing.T) {
+	svc, err := New(Config{
+		Standalone: true, GenesisConfig: genesis.DefaultConfig(),
+		ConfiguredFees: &drops.Fees{Base: 42, Reserve: 10_000_000, Increment: 2_000_000},
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+	current := svc.openLedgerView.Current()
+	validated := svc.GetValidatedLedger()
+	master := jtx.MasterAccount()
+	destination := jtx.NewAccount("fee-failure-destination")
+	txn := payment.Pay(master, destination, 100_000_000).Fee(10).Sequence(1).Build()
+
+	for _, queue := range []*txq.TxQ{nil, svc.txQueue} {
+		state := svc.submitLedgerState(current, txn, openledger.ApplyConfig{}, validated, queue)
+		require.NotNil(t, state)
+		require.Equal(t, uint64(10), state.OpenLedgerCost)
+		require.Equal(t, uint32(1), state.AccountSequenceNext)
+		require.Equal(t, uint32(1), state.AccountSequenceAvailable)
+		require.Nil(t, svc.submitLedgerState(current, submitStateFeeFailure{txn}, openledger.ApplyConfig{}, validated, queue))
+	}
+	fee, err := svc.GetAutofillFee(submitStateFeeFailure{txn}, false, 10, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(42), fee)
+	fee, err = svc.GetAutofillFee(txn, false, 10, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(10), fee)
+	fee, err = svc.GetAutofillFee(nil, false, 10, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(42), fee)
+
+	// Submission reporting uses the complete normal-fee formula, including sponsors.
+	txn.GetCommon().SponsorSignature = &tx.SponsorSignature{
+		Signers: make([]tx.SignerWrapper, 2),
+	}
+	state := svc.submitLedgerState(current, txn, openledger.ApplyConfig{}, validated, nil)
+	require.NotNil(t, state)
+	require.Equal(t, uint64(30), state.OpenLedgerCost)
 }

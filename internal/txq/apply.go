@@ -43,7 +43,7 @@ type ApplyContext interface {
 
 	// GetBaseFees returns the contextual minimum fee and the ordinary fee used
 	// to normalize a contextually free transaction's fee level.
-	GetBaseFees(txn tx.Transaction) (baseFee, defaultBaseFee uint64)
+	GetBaseFees(txn tx.Transaction) (baseFee, defaultBaseFee uint64, err error)
 
 	// GetReferenceFee returns the ledger's base reference fee.
 	GetReferenceFee() uint64
@@ -144,7 +144,13 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	// structurally invalid or badly-signed transaction is rejected with its
 	// preflight TER instead of being silently held as terQUEUED.
 	// Reference: rippled TxQ.cpp:743-745.
-	baseFee, defaultBaseFee := ctx.GetBaseFees(txn)
+	baseFee, defaultBaseFee, err := ctx.GetBaseFees(txn)
+	if err != nil {
+		if result, ok := ter.AsResultError(err); ok {
+			return ApplyResult{Result: result.Code}
+		}
+		return ApplyResult{Result: ter.TefEXCEPTION}
+	}
 	feePaid, err := strconv.ParseUint(common.Fee, 10, 64)
 	if err != nil {
 		return ApplyResult{Result: ter.TemBAD_FEE, Applied: false}

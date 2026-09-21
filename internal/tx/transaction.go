@@ -153,17 +153,12 @@ const BadCurrency = "XRP"
 
 // BatchFeeCalculator is implemented by transaction types that need custom minimum fee calculation.
 // Used by Batch transactions which require a higher fee based on inner tx count and signers.
-// CalculateBaseFee converts panics from this method into a typed tefEXCEPTION
-// error; the method keeps a uint64 return so Batch can use a payable placeholder
-// and reject an uncomputable fee in its own preclaim path.
 type BatchFeeCalculator interface {
 	CalculateMinimumFee(view LedgerView, config EngineConfig) uint64
 }
 
 // CustomBaseFeeCalculator is implemented by transaction types that override calculateBaseFee()
 // and need access to the ledger view and engine config for their minimum fee.
-// CalculateBaseFee converts panics from this method into a typed tefEXCEPTION
-// error while preserving this interface's uint64 return contract.
 // Reference: rippled Transactor::calculateBaseFee() virtual override pattern —
 // rippled's version has access to the view (view.fees().increment).
 type CustomBaseFeeCalculator interface {

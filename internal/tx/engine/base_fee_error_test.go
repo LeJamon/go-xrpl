@@ -67,6 +67,31 @@ func TestApply_BaseFeePanicOnApplyReturnsTefInternalWithoutMutation(t *testing.T
 	}
 }
 
+func TestApply_BaseFeeSuccessRetainsFeeSequenceAndMetadata(t *testing.T) {
+	view := newRecordingBaseView()
+	accountKey := fundRecoveryAccount(t, view, 1_000_000, 1)
+	tx := newControlledBaseFeeTx(10, 1)
+
+	result := recoveryEngine(view, txcore.TapNONE).Apply(tx)
+
+	if result.Result != ter.TesSUCCESS || !result.Applied {
+		t.Fatalf("result/applied = %s/%v, want tesSUCCESS/true", result.Result, result.Applied)
+	}
+	if result.Fee != 10 || result.Metadata == nil {
+		t.Fatalf("fee/metadata = %d/%#v, want 10/non-nil", result.Fee, result.Metadata)
+	}
+	if view.destroyed != drops.XRPAmount(10) {
+		t.Fatalf("destroyed drops = %d, want 10", view.destroyed)
+	}
+	account := readRecoveryAccount(t, view, accountKey)
+	if account.Balance != 999_990 || account.Sequence != 2 {
+		t.Fatalf("payer balance/sequence = %d/%d, want 999990/2", account.Balance, account.Sequence)
+	}
+	if tx.calls != 2 {
+		t.Fatalf("base-fee calculator calls = %d, want 2", tx.calls)
+	}
+}
+
 func TestApply_PreclaimTecBaseFeePanicOnApplyReturnsTefInternalWithoutMutation(t *testing.T) {
 	view := newRecordingBaseView()
 	accountKey := fundRecoveryAccount(t, view, 1_000_000, 1)

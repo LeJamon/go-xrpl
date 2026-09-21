@@ -73,6 +73,7 @@ type stubApplyCtx struct {
 	tickets     map[uint32]bool
 	ticketErr   error
 	baseFee     uint64
+	baseFeeErr  error
 	txInLedger  uint32
 	ledgerSeq   uint32
 	flags       tx.ApplyFlags
@@ -111,9 +112,9 @@ func (c *stubApplyCtx) GetAccountReserve(uint32) uint64 {
 	c.observeRead()
 	return c.reserve
 }
-func (c *stubApplyCtx) GetBaseFees(tx.Transaction) (uint64, uint64) {
+func (c *stubApplyCtx) GetBaseFees(tx.Transaction) (uint64, uint64, error) {
 	c.observeRead()
-	return c.baseFee, c.baseFee
+	return c.baseFee, c.baseFee, c.baseFeeErr
 }
 func (c *stubApplyCtx) GetReferenceFee() uint64 {
 	c.observeRead()
@@ -174,6 +175,8 @@ func (c *stubApplyCtx) NewSandbox() (SandboxContext, error) {
 }
 
 type stubClosedLedgerCtx struct{}
+
+func (*stubClosedLedgerCtx) GetTransactionCount() uint32 { return 0 }
 
 func (*stubClosedLedgerCtx) GetLedgerSequence() uint32           { return 0 }
 func (*stubClosedLedgerCtx) GetTransactionFeeLevels() []FeeLevel { return nil }
