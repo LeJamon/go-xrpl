@@ -40,14 +40,27 @@ func TestBinarySerializer_EncodeVariableLength(t *testing.T) {
 			expected:    nil,
 			expectedErr: ErrLengthPrefixTooLong,
 		},
+		{
+			name:        "negative length",
+			len:         -1,
+			expected:    nil,
+			expectedErr: ErrLengthPrefixTooLong,
+		},
 	}
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-			s := strings.Repeat("A2", tc.len)
-			b, _ := hex.DecodeString(s)
-			require.Equal(t, tc.len, len(b))
-			actual, err := encodeVariableLength(len(b))
+			var b []byte
+			if tc.len >= 0 {
+				s := strings.Repeat("A2", tc.len)
+				b, _ = hex.DecodeString(s)
+			}
+			length := tc.len
+			if tc.len >= 0 {
+				require.Equal(t, tc.len, len(b))
+				length = len(b)
+			}
+			actual, err := encodeVariableLength(length)
 			if tc.expectedErr != nil {
 				require.Error(t, err, tc.expectedErr.Error())
 				require.Nil(t, actual)

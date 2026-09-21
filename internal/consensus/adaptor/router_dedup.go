@@ -3,6 +3,8 @@ package adaptor
 import (
 	"container/list"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -32,7 +34,10 @@ import (
 // same proposal would compute different keys, breaking suppression parity
 // across mixed-implementation peer sets and desynchronizing reduce-relay
 // slot feeding.
-func hashProposalSuppression(p *consensus.Proposal) [32]byte {
+func hashProposalSuppressionChecked(p *consensus.Proposal) ([32]byte, error) {
+	if p == nil {
+		return [32]byte{}, errors.New("nil proposal")
+	}
 	// Preallocate enough for the fixed-size segments plus VL-encoded
 	// pubkey and signature: one allocation, no resizing on the common path.
 	buf := make([]byte, 0, 180)
@@ -45,12 +50,19 @@ func hashProposalSuppression(p *consensus.Proposal) [32]byte {
 	buf = binary.BigEndian.AppendUint32(buf, closeTimeSec)
 	// Hash the wire signing pubkey, NOT the master-derived NodeID: using
 	// NodeID would break suppression-hash parity with other peers.
-	buf = appendVLPrefix(buf, len(p.SigningPubKey))
+	var err error
+	buf, err = appendVLPrefixChecked(buf, len(p.SigningPubKey))
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("encode proposal signing pubkey length: %w", err)
+	}
 	buf = append(buf, p.SigningPubKey[:]...)
-	buf = appendVLPrefix(buf, len(p.Signature))
+	buf, err = appendVLPrefixChecked(buf, len(p.Signature))
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("encode proposal signature length: %w", err)
+	}
 	buf = append(buf, p.Signature...)
 
-	return sha512half.Sum(buf)
+	return sha512half.Sum(buf), nil
 }
 
 // hashValidationSuppression returns the suppression key for a
@@ -71,22 +83,12 @@ func hashValidationSuppression(serializedSTValidation []byte) [32]byte {
 // signatures (64-72 B) always fit in the single-byte range — but keeping
 // the full encoder ensures we can't silently desync if a future caller
 // passes a larger slice.
-func appendVLPrefix(buf []byte, n int) []byte {
-	switch {
-	case n <= 192:
-		return append(buf, byte(n))
-	case n <= 12480:
-		v := n - 193
-		return append(buf, byte(193+(v>>8)), byte(v&0xff))
-	case n <= 918744:
-		v := n - 12481
-		return append(buf, byte(241+(v>>16)), byte((v>>8)&0xff), byte(v&0xff))
+func appendVLPrefixChecked(buf []byte, n int) ([]byte, error) {
+	prefix, err := encodeVLPrefix(n)
+	if err != nil {
+		return nil, err
 	}
-	// Caller error: emit a sentinel prefix so the resulting hash can never
-	// match a peer's. This is loud failure by design — a suppression hash
-	// for a 900KB+ field cannot exist in any real proposal/validation, so
-	// any mismatch downstream will surface the misuse immediately.
-	return append(buf, 0xFF, 0xFF, 0xFF, 0xFF)
+	return append(buf, prefix...), nil
 }
 
 // messageSuppression tracks recently-seen proposal/validation message

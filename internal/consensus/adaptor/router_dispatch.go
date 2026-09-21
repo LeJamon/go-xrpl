@@ -233,7 +233,12 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 	//
 	// Stash the hash on the Proposal so the downstream relay path
 	// can thread it to Overlay's reverse index without recomputing.
-	suppressionHash := hashProposalSuppression(proposal)
+	suppressionHash, err := hashProposalSuppressionChecked(proposal)
+	if err != nil {
+		r.logger.Debug("dropping malformed proposal", "error", err, "peer", msg.PeerID)
+		r.gossip.IncPeerBadData(uint64(msg.PeerID), "proposal-malformed-vl-length")
+		return
+	}
 	proposal.SuppressionHash = suppressionHash
 	r.gossip.RecordMessageSource(suppressionHash, originPeer)
 	// Drop duplicates before the engine path (re-running OnProposal
