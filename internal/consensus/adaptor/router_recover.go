@@ -4,6 +4,7 @@ import (
 	"runtime/debug"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 )
 
 // recoverFrame is the router's panic boundary for peer-frame dispatch. The
@@ -17,7 +18,32 @@ import (
 // frame. Mirrors Overlay.handleInbound's recover and rippled's per-job
 // try/catch on the JobQueue.
 func (r *Router) recoverFrame(msg *peermanagement.InboundMessage, stage string) {
-	rec := recover()
+	r.finishFrameRecovery(msg, stage, recover(), nil)
+}
+
+func (r *Router) recoverTransactionFrame(
+	msg *peermanagement.InboundMessage,
+	jobPhase *bool,
+	jobHash *[32]byte,
+) {
+	charge := func() bool {
+		if jobPhase != nil && *jobPhase {
+			if r.txSeen != nil && jobHash != nil {
+				r.txSeen.markBad(*jobHash)
+			}
+			return msg.ChargePeer(resource.FeeInvalidData(), "panic-transaction")
+		}
+		return msg.SelectPeerCharge(resource.FeeInvalidData(), "panic-transaction")
+	}
+	r.finishFrameRecovery(msg, "transaction", recover(), charge)
+}
+
+func (r *Router) finishFrameRecovery(
+	msg *peermanagement.InboundMessage,
+	stage string,
+	rec any,
+	charge func() bool,
+) {
 	if rec == nil {
 		return
 	}
@@ -25,5 +51,8 @@ func (r *Router) recoverFrame(msg *peermanagement.InboundMessage, stage string) 
 		"t", "consensus", "stage", stage,
 		"peer", msg.PeerID, "msgType", msg.Type,
 		"panic", rec, "stack", string(debug.Stack()))
+	if charge != nil && charge() {
+		return
+	}
 	r.gossip.IncPeerBadData(uint64(msg.PeerID), "panic-"+stage)
 }

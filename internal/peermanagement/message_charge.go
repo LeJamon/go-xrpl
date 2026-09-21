@@ -12,6 +12,7 @@ type messageCharge struct {
 	peer     *Peer
 	fee      resource.Charge
 	context  string
+	refs     int
 	finished bool
 }
 
@@ -20,7 +21,21 @@ func newMessageCharge(peer *Peer, messageName string) *messageCharge {
 		peer:    peer,
 		fee:     resource.FeeTrivialPeer(),
 		context: messageName,
+		refs:    1,
 	}
+}
+
+func (c *messageCharge) retain() *messageCharge {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.finished || c.refs == 0 {
+		return nil
+	}
+	c.refs++
+	return c
 }
 
 func (c *messageCharge) update(fee resource.Charge, chargeContext string) {
@@ -28,7 +43,7 @@ func (c *messageCharge) update(fee resource.Charge, chargeContext string) {
 		return
 	}
 	c.mu.Lock()
-	if c.finished || fee.Cost() < c.fee.Cost() {
+	if c.finished || fee.Cost() <= c.fee.Cost() {
 		c.mu.Unlock()
 		return
 	}
@@ -59,10 +74,16 @@ func (c *messageCharge) finish() {
 		return
 	}
 	c.mu.Lock()
-	if c.finished {
+	if c.finished || c.refs == 0 {
 		c.mu.Unlock()
 		return
 	}
+	if c.refs > 1 {
+		c.refs--
+		c.mu.Unlock()
+		return
+	}
+	c.refs = 0
 	c.finished = true
 	peer := c.peer
 	fee := c.fee
