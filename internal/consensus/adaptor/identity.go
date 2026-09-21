@@ -402,18 +402,6 @@ func buildProposalSigningData(p *consensus.Proposal) []byte {
 	return hash[:]
 }
 
-// buildValidationSigningData constructs the signing digest for a validation.
-//
-// For inbound validations (SigningData populated by parseSTValidation), the
-// exact non-signing bytes from the wire are used — including any optional
-// fields the sender included that we don't model explicitly. That keeps us
-// compatible with senders emitting fields we don't ourselves understand.
-//
-// For outbound validations (SigningData nil), we regenerate the preimage
-// from struct fields. It MUST stay byte-identical to what
-// serializeSTValidation emits (minus sfSignature); otherwise a freshly-
-// signed validation would fail verification when parsed back from the
-// wire. When extending the wire format, update both functions together.
 func validationSignatureCacheKey(
 	validation *consensus.Validation,
 	digest []byte,
@@ -433,6 +421,9 @@ func validationSignatureCacheKey(
 	return key
 }
 
+// buildValidationSigningDataChecked preserves inbound signing bytes, including
+// optional fields not represented in Validation. Outbound signing uses the same
+// serializer as the wire message, with sfSignature omitted.
 func buildValidationSigningDataChecked(v *consensus.Validation) ([]byte, error) {
 	if v == nil {
 		return nil, errors.New("nil validation")
@@ -443,12 +434,6 @@ func buildValidationSigningDataChecked(v *consensus.Validation) ([]byte, error) 
 		return hash[:], nil
 	}
 
-	// Outbound: the signing preimage is the canonical wire serialization
-	// with sfSignature omitted. Derive it from serializeSTValidation — the
-	// single STValidation serializer — so the preimage and the wire bytes
-	// can never drift (the previous hand-rolled copy of every field was a
-	// standing fork hazard). SignValidation stamps outbound flags before
-	// this function is called.
 	// Use the explicit signing mode so the cache state attached to Validation
 	// is never copied while another verifier initializes it.
 	serialized, err := serializeSTValidationWithoutSignatureChecked(v)
