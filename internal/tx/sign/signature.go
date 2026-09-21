@@ -922,7 +922,7 @@ func CalculateBaseFee(transaction txcore.Transaction, view txcore.LedgerView, co
 		return calculateConfidentialBaseFee(transaction, config), nil
 	}
 	if calculator, ok := transaction.(txcore.CustomBaseFeeCalculator); ok {
-		return calculator.CalculateBaseFee(view, config), nil
+		return calculator.CalculateBaseFee(view, config)
 	}
 	return CalculateDefaultBaseFee(transaction, config), nil
 }

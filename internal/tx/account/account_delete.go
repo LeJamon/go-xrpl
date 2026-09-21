@@ -78,16 +78,16 @@ func (a *AccountDelete) validate(rules *amendment.Rules) error {
 	return nil
 }
 
-func (a *AccountDelete) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) uint64 {
+func (a *AccountDelete) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) (uint64, error) {
 	if view != nil {
 		data, err := view.Read(keylet.Fees())
 		if err == nil && data != nil {
 			if fs, err := state.ParseFeeSettings(data); err == nil {
-				return fs.GetReserveIncrement()
+				return fs.GetReserveIncrement(), nil
 			}
 		}
 	}
-	return config.ReserveIncrement
+	return config.ReserveIncrement, nil
 }
 
 func (a *AccountDelete) Flatten() (map[string]any, error) { return tx.ReflectFlatten(a) }

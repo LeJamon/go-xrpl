@@ -25,7 +25,7 @@ func TestLoanSetCalculateBaseFee(t *testing.T) {
 			loanSet := NewLoanSet("rAccount", strings.Repeat("1", 64), "1")
 			loanSet.GetCommon().Signers = make([]tx.SignerWrapper, tc.outerSigners)
 			loanSet.GetCommon().CounterpartySignature = tc.counterparty
-			if got := loanSet.CalculateBaseFee(nil, tx.EngineConfig{BaseFee: 10}); got != tc.expectedFeeInDrops {
+			if got, err := loanSet.CalculateBaseFee(nil, tx.EngineConfig{BaseFee: 10}); err != nil || got != tc.expectedFeeInDrops {
 				t.Fatalf("CalculateBaseFee = %d, want %d", got, tc.expectedFeeInDrops)
 			}
 		})

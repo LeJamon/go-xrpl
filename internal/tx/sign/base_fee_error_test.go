@@ -16,7 +16,7 @@ type panicBaseFeeTx struct {
 	*txcore.BaseTx
 }
 
-func (panicBaseFeeTx) CalculateBaseFee(txcore.LedgerView, txcore.EngineConfig) uint64 {
+func (panicBaseFeeTx) CalculateBaseFee(txcore.LedgerView, txcore.EngineConfig) (uint64, error) {
 	panic("controlled base-fee failure")
 }
 

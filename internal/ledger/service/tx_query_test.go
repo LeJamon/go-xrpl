@@ -151,7 +151,7 @@ func (panickingCustomFeeTx) Flatten() (map[string]any, error) { return nil, nil 
 func (panickingCustomFeeTx) GetRawBytes() []byte              { return nil }
 func (panickingCustomFeeTx) SetRawBytes([]byte)               {}
 func (panickingCustomFeeTx) RequiredAmendments() [][32]byte   { return nil }
-func (panickingCustomFeeTx) CalculateBaseFee(_ tx.LedgerView, _ tx.EngineConfig) uint64 {
+func (panickingCustomFeeTx) CalculateBaseFee(_ tx.LedgerView, _ tx.EngineConfig) (uint64, error) {
 	panic("simulated inconsistent view state")
 }
 

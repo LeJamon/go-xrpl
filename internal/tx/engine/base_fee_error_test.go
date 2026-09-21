@@ -19,12 +19,12 @@ type controlledBaseFeeTx struct {
 	preclaim    ter.Result
 }
 
-func (t *controlledBaseFeeTx) CalculateBaseFee(_ txcore.LedgerView, config txcore.EngineConfig) uint64 {
+func (t *controlledBaseFeeTx) CalculateBaseFee(_ txcore.LedgerView, config txcore.EngineConfig) (uint64, error) {
 	t.calls++
 	if t.panicAlways || t.calls == t.panicOnCall {
 		panic("controlled base-fee failure")
 	}
-	return config.BaseFee
+	return config.BaseFee, nil
 }
 
 func (t *controlledBaseFeeTx) Apply(*txcore.ApplyContext) ter.Result {
