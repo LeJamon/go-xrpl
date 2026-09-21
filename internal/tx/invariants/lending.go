@@ -308,8 +308,19 @@ func checkValidLoanForTx(txn Transaction, result Result, entries []InvariantEntr
 			if !bok || !aok {
 				return lendingViolation("ValidLoan", "loan principal is malformed")
 			}
-			if afterPrincipal.Cmp(beforePrincipal) >= 0 {
-				return lendingViolation("ValidLoan", "loan pay must strictly decrease PrincipalOutstanding on a non-full-repayment")
+			if afterPrincipal.Cmp(beforePrincipal) > 0 {
+				return lendingViolation("ValidLoan", "loan pay must not increase PrincipalOutstanding on a non-full-repayment")
+			}
+			beforeTotal, tok := loanNumber(before, "TotalValueOutstanding", numberContext)
+			afterTotal, aok := loanNumber(after, "TotalValueOutstanding", numberContext)
+			if !tok || !aok {
+				return lendingViolation("ValidLoan", "loan total value is malformed")
+			}
+			if afterTotal.Cmp(beforeTotal) > 0 {
+				return lendingViolation("ValidLoan", "loan pay must not increase TotalValueOutstanding on a non-full-repayment")
+			}
+			if afterPrincipal.Cmp(beforePrincipal) == 0 && afterTotal.Cmp(beforeTotal) == 0 {
+				return lendingViolation("ValidLoan", "loan pay must decrease PrincipalOutstanding or TotalValueOutstanding on a non-full-repayment")
 			}
 			if paymentRemaining >= beforeRemaining {
 				return lendingViolation("ValidLoan", "loan pay must decrease PaymentRemaining on a non-full-repayment")

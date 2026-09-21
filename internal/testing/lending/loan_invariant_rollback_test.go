@@ -8,6 +8,7 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,6 +29,7 @@ func TestLoanPayRejectsUnalignedLegacyImpairmentSchedule(t *testing.T) {
 			borrowerBalance := f.env.Balance(f.borrower)
 			ownerBalance := f.env.Balance(f.owner)
 			sequence := f.env.Seq(f.borrower)
+			stateBefore := loanSetLedgerState(t, f.env)
 			amount := lossNumber(t, loanBefore, "PeriodicPayment").ToInt64WithMode(state.RoundUpward) + 1
 			payment := lending.NewLoanPay(f.borrower.Address, f.loanID, tx.NewXRPAmount(amount))
 			payment.Fee = "20"
@@ -38,6 +40,11 @@ func TestLoanPayRejectsUnalignedLegacyImpairmentSchedule(t *testing.T) {
 			require.Equal(t, borrowerBalance-20, f.env.Balance(f.borrower))
 			require.Equal(t, ownerBalance, f.env.Balance(f.owner))
 			require.Equal(t, sequence+1, f.env.Seq(f.borrower))
+			requireLoanSetFailureMetadata(t, result, f.borrower, borrowerBalance, sequence)
+			stateAfter := loanSetLedgerState(t, f.env)
+			delete(stateBefore, keylet.Account(f.borrower.AccountID()).Key)
+			delete(stateAfter, keylet.Account(f.borrower.AccountID()).Key)
+			require.Equal(t, stateBefore, stateAfter)
 			require.Equal(t, loanBefore, decodeLendingEntry(t, f.env, f.loanKey))
 			require.Equal(t, vaultBefore, decodeLendingEntry(t, f.env, f.vaultKey))
 			require.Equal(t, brokerBefore, decodeLendingEntry(t, f.env, f.brokerKey))
