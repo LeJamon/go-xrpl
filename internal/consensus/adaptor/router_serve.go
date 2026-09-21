@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -30,72 +31,119 @@ func (r *Router) invalidFutureLedgerSequence(seq uint32) bool {
 	return seq > validated && seq-validated > 10
 }
 
-func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
-	defer r.recoverFrame(msg, "get_ledger")
-
+// validateGetLedgerMessage performs the request checks that rippled applies
+// before placing TMGetLedger on its ledger-request job queue. Node ID contents
+// are intentionally left to the worker so the dispatch path only does the
+// bounded protobuf decode and count checks.
+func (r *Router) validateGetLedgerMessage(msg *peermanagement.InboundMessage) string {
 	decoded, err := message.Decode(message.TypeGetLedger, msg.Payload)
 	if err != nil {
-		r.logger.Warn("failed to decode get_ledger", "error", err, "peer", msg.PeerID)
-		return
+		return "get-ledger-decode"
 	}
 	req, ok := decoded.(*message.GetLedger)
 	if !ok {
-		return
+		return "get-ledger-decode"
+	}
+	if reason := r.validateGetLedgerRequest(req); reason != "" {
+		return reason
+	}
+	msg.GetLedger = req
+	return ""
+}
+
+func (r *Router) validateGetLedgerRequest(req *message.GetLedger) string {
+	if req == nil {
+		return "get-ledger-invalid-request"
 	}
 	if req.InfoType < message.LedgerInfoBase || req.InfoType > message.LedgerInfoTsCandidate {
-		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-itype")
-		return
+		return "get-ledger-invalid-itype"
 	}
 	if req.InfoType == message.LedgerInfoTsCandidate && !req.HasLedgerHash() {
-		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-missing-txset-hash")
-		return
+		return "get-ledger-missing-txset-hash"
 	}
 	if req.InfoType != message.LedgerInfoTsCandidate &&
 		!req.HasLedgerHash() && !req.HasLedgerSeq() &&
 		(!req.HasLType() || req.LType != message.LedgerTypeClosed) {
-		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-request")
-		return
+		return "get-ledger-invalid-request"
 	}
 	if req.HasLType() && (req.LType < message.LedgerTypeAccepted || req.LType > message.LedgerTypeClosed) {
-		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-ltype")
-		return
+		return "get-ledger-invalid-ltype"
 	}
 	if req.HasLedgerHash() && len(req.LedgerHash) != 32 {
-		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-hash")
-		return
+		return "get-ledger-invalid-hash"
 	}
 	if req.HasLedgerSeq() && r.invalidFutureLedgerSequence(req.LedgerSeq) {
-		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-sequence")
-		return
+		return "get-ledger-invalid-sequence"
 	}
 	if req.InfoType != message.LedgerInfoBase {
-		if len(req.NodeIDs) == 0 {
-			r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-nodeids")
+		if len(req.NodeIDs) == 0 || len(req.NodeIDs) > txSetHardMaxReplyNodes {
+			return "get-ledger-invalid-nodeids"
+		}
+	}
+	if req.QueryType != nil && *req.QueryType != message.QueryTypeIndirect {
+		return "get-ledger-bad-querytype"
+	}
+	if req.HasQueryDepth() && (req.InfoType == message.LedgerInfoBase || req.QueryDepth > maxQueryDepth) {
+		return "get-ledger-bad-querydepth"
+	}
+	return ""
+}
+
+func (r *Router) chargeGetLedgerAdmission(msg *peermanagement.InboundMessage, reason string) {
+	if !msg.SelectPeerCharge(resource.FeeInvalidData(), reason) {
+		r.serve.IncPeerBadData(uint64(msg.PeerID), reason)
+	}
+}
+
+func (r *Router) chargeGetLedgerWorker(msg *peermanagement.InboundMessage, fee resource.Charge, reason string) {
+	if !msg.ChargePeer(fee, reason) {
+		r.serve.IncPeerBadData(uint64(msg.PeerID), reason)
+	}
+}
+
+func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
+	defer r.recoverFrame(msg, "get_ledger")
+
+	req := msg.GetLedger
+	if req == nil {
+		decoded, err := message.Decode(message.TypeGetLedger, msg.Payload)
+		if err != nil {
+			r.logger.Warn("failed to decode get_ledger", "error", err, "peer", msg.PeerID)
+			r.chargeGetLedgerAdmission(msg, "get-ledger-decode")
 			return
 		}
-		for _, rawID := range req.NodeIDs {
-			if _, _, valid := parseSHAMapNodeID(rawID); !valid {
-				r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-nodeid")
-				return
-			}
+		var ok bool
+		req, ok = decoded.(*message.GetLedger)
+		if !ok {
+			r.chargeGetLedgerAdmission(msg, "get-ledger-decode")
+			return
+		}
+		if reason := r.validateGetLedgerRequest(req); reason != "" {
+			r.chargeGetLedgerAdmission(msg, reason)
+			return
 		}
 	}
 
-	// qtINDIRECT is the only valid query_type. A present-but-different
-	// value is invalid data: charge the peer and drop the request without
-	// disconnecting, mirroring rippled's onMessage(TMGetLedger). Absence of
-	// the field (the common case) is always accepted.
-	if req.QueryType != nil && *req.QueryType != message.QueryTypeIndirect {
-		r.logger.Debug("get_ledger rejected: invalid query_type",
-			"peer", msg.PeerID, "query_type", int32(*req.QueryType))
-		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-bad-querytype")
-		return
+	tooManyNodeIDs := false
+	if req.InfoType != message.LedgerInfoBase {
+		limit := len(req.NodeIDs)
+		if limit > txSetSoftMaxReplyNodes {
+			limit = txSetSoftMaxReplyNodes
+			tooManyNodeIDs = true
+		}
+		for _, rawID := range req.NodeIDs[:limit] {
+			if _, _, valid := parseSHAMapNodeID(rawID); !valid {
+				r.chargeGetLedgerWorker(msg, resource.FeeInvalidData(), "get-ledger-invalid-nodeid")
+				return
+			}
+		}
+		if tooManyNodeIDs {
+			_ = msg.ChargePeer(resource.FeeModerateBurdenPeer(), "get-ledger-too-many-nodeids")
+			req.NodeIDs = req.NodeIDs[:limit]
+		}
 	}
-	if req.HasQueryDepth() && (req.InfoType == message.LedgerInfoBase || req.QueryDepth > maxQueryDepth) {
-		r.logger.Debug("get_ledger rejected: invalid query_depth",
-			"peer", msg.PeerID, "itype", req.InfoType, "query_depth", req.QueryDepth)
-		r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-bad-querydepth")
-		return
+	if !req.HasRequestCookie() {
+		_ = msg.ChargePeer(resource.FeeModerateBurdenPeer(), "get-ledger-request")
 	}
 
 	r.logger.Debug("peer requests ledger",
@@ -133,7 +181,10 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	var l *ledger.Ledger
+	var (
+		l   *ledger.Ledger
+		err error
+	)
 	if req.HasLedgerHash() {
 		var hash [32]byte
 		copy(hash[:], req.LedgerHash)
@@ -156,7 +207,7 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	if req.HasLedgerSeq() {
 		if l.Sequence() != req.LedgerSeq {
 			if !req.HasRequestCookie() {
-				r.serve.IncPeerBadData(uint64(msg.PeerID), "get-ledger-sequence-mismatch")
+				r.chargeGetLedgerWorker(msg, resource.FeeMalformedRequest(), "get-ledger-sequence-mismatch")
 			}
 			return
 		}
