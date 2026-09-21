@@ -195,6 +195,54 @@ func TestIssue1902AggregatePriceDeduplicatesPairsAndPreservesLimit(t *testing.T)
 	assert.Equal(t, rpcerrors.RpcORACLE_MALFORMED, rpcErr.Code)
 }
 
+func TestIssue1902AggregatePriceReservedCurrencies(t *testing.T) {
+	for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3} {
+		for _, field := range []string{"base_asset", "quote_asset"} {
+			for _, tc := range []struct {
+				name     string
+				currency string
+				reserved bool
+			}{
+				{"no currency", "0000000000000000000000000000000000000001", true},
+				{"bad currency", "0000000000000000000000005852500000000000", true},
+				{"native hex", strings.Repeat("0", 40), false},
+				{"native shorthand", "0", false},
+				{"issued hex", "0000000000000000000000005553440000000000", false},
+				{"issued code", "USD", false},
+			} {
+				t.Run(strings.Join([]string{field, tc.name, "api", strconv.Itoa(apiVersion)}, "/"), func(t *testing.T) {
+					service := &countedAggregatePriceLedgerService{
+						aggregatePriceLedgerService: newAggregatePriceLedgerService(),
+						lookups:                     make(map[[32]byte]int),
+					}
+					ctx := &types.RpcContext{
+						Context: t.Context(), Role: types.RoleGuest, ApiVersion: apiVersion,
+						Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: service}),
+					}
+					params := map[string]any{
+						"base_asset": "XRP", "quote_asset": "USD",
+						"oracles": []map[string]any{{"account": ownerForAggregatePriceTest, "oracle_document_id": 1}},
+					}
+					params[field] = tc.currency
+					raw, err := json.Marshal(params)
+					require.NoError(t, err)
+					result, rpcErr := (&handlers.GetAggregatePriceMethod{}).Handle(ctx, raw)
+					require.Nil(t, result)
+					if tc.reserved {
+						require.Equal(t, rpcerrors.RpcErrorInvalidParams("Invalid parameters."), rpcErr)
+						require.Empty(t, service.lookups)
+					} else {
+						require.Equal(t, rpcerrors.RpcErrorObjectNotFound("The requested object was not found.").WithExtra(map[string]any{
+							"ledger_current_index": uint32(3), "validated": false,
+						}), rpcErr)
+						require.Len(t, service.lookups, 1)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestIssue1902NFTOfferMarkerLookupErrorsFallThroughToFetcher(t *testing.T) {
 	service := newMockNFTOffersLedgerService()
 	service.nftBuyOffersErr = errors.New("ledger unavailable")
