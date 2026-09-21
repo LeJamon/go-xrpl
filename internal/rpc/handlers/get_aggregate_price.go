@@ -277,8 +277,11 @@ func parseUintParam(raw json.RawMessage) (uint32, error) {
 
 func parseCurrencyParam(raw json.RawMessage) (string, error) {
 	var value string
-	if err := json.Unmarshal(raw, &value); err != nil || value == "" || !keylet.IsValidCurrencyCode(value) {
+	if err := json.Unmarshal(raw, &value); err != nil || value == "" {
 		return "", fmt.Errorf("invalid currency")
+	}
+	if _, err := keylet.ParseCurrency(value); err != nil {
+		return "", err
 	}
 	return value, nil
 }
