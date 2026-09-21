@@ -86,9 +86,10 @@ func TestBinaryParser_ReadVariableLength(t *testing.T) {
 			p := NewBinaryParser(tc.input, definitions.Get())
 			actual, err := p.ReadVariableLength()
 			if tc.expectedErr != nil {
-				require.Error(t, err)
+				require.ErrorIs(t, err, tc.expectedErr)
 				return
 			}
+			require.NoError(t, err)
 			require.Equal(t, tc.output, actual)
 		})
 	}

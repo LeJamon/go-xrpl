@@ -57,6 +57,50 @@ func TestVerifyValidationCacheTracksSignedFieldMutation(t *testing.T) {
 	require.NoError(t, verifyValidation(validation))
 }
 
+func TestSignValidationCachedWire(t *testing.T) {
+	for _, parsed := range []bool{false, true} {
+		name := "outbound"
+		if parsed {
+			name = "parsed"
+		}
+		t.Run(name, func(t *testing.T) {
+			identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, identity.Close()) })
+			validation := &consensus.Validation{Full: true, LedgerSeq: 42}
+			validation.LedgerID[0] = 1
+			require.NoError(t, identity.SignValidation(validation))
+			original, err := validationToMessageChecked(validation)
+			require.NoError(t, err)
+			if parsed {
+				validation, err = parseSTValidation(original.Validation)
+				require.NoError(t, err)
+			}
+			require.NoError(t, verifyValidation(validation))
+
+			validation.LedgerSeq++
+			validation.Full = false
+			if parsed {
+				signingData := append([]byte(nil), validation.SigningData...)
+				require.ErrorContains(t, identity.SignValidation(validation), "cannot sign parsed validation")
+				require.Equal(t, original.Validation, validation.Raw)
+				require.Equal(t, signingData, validation.SigningData)
+				return
+			}
+			require.NoError(t, identity.SignValidation(validation))
+			require.NoError(t, verifyValidation(validation))
+			replacement, err := validationToMessageChecked(validation)
+			require.NoError(t, err)
+			require.NotEqual(t, original.Validation, replacement.Validation)
+			decoded, err := parseSTValidation(replacement.Validation)
+			require.NoError(t, err)
+			require.Equal(t, validation.LedgerSeq, decoded.LedgerSeq)
+			require.False(t, decoded.Full)
+			require.NoError(t, verifyValidation(decoded))
+		})
+	}
+}
+
 func TestVerifyValidationConcurrentInitialCache(t *testing.T) {
 	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
 	require.NoError(t, err)

@@ -320,6 +320,8 @@ func verifyProposal(proposal *consensus.Proposal) error {
 
 // SignValidation signs a consensus validation. The signed data is
 // SHA-512Half(HashPrefixValidation + serialized validation fields).
+// Parsed validations cannot be re-signed because their wire data may include
+// fields that are not represented in Validation.
 func (vi *ValidatorIdentity) SignValidation(validation *consensus.Validation) error {
 	if vi == nil {
 		return errNoValidatorKey
@@ -327,10 +329,15 @@ func (vi *ValidatorIdentity) SignValidation(validation *consensus.Validation) er
 	if validation == nil {
 		return errors.New("nil validation")
 	}
+	if len(validation.SigningData) > 0 {
+		return errors.New("cannot sign parsed validation")
+	}
 	validation.ResetSignatureCheck()
+	validation.Raw = nil
 	validation.SigningPubKey = consensus.SigningPubKey(vi.SigningKey)
 	validation.NodeID = vi.NodeID
 	validation.Flags |= vfFullyCanonicalSig
+	validation.Flags &^= vfFullValidation
 	if validation.Full {
 		validation.Flags |= vfFullValidation
 	}

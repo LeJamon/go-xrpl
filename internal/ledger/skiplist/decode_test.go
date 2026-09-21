@@ -201,11 +201,20 @@ func TestDecodeLedgerHashesVariableLengthBounds(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 918744, length)
 
-	for _, prefix := range [][]byte{{0xFE, 0xD4, 0x18}, {0xFE, 0xFF, 0xFF}} {
-		data := append(append([]byte(nil), valid[:marker+2]...), prefix...)
-		data = append(data, make([]byte, 918745)...)
+	for _, test := range []struct {
+		prefix []byte
+		length int
+	}{
+		{[]byte{0xFE, 0xD4, 0x18}, 918745},
+		{[]byte{0xFE, 0xD4, 0x1F}, 918752},
+		{[]byte{0xFE, 0xFF, 0xFF}, 929984},
+	} {
+		data := append(append([]byte(nil), valid[:marker+2]...), test.prefix...)
+		data = append(data, make([]byte, test.length)...)
 		_, _, err := decodeLedgerHashes(data)
 		assert.ErrorIs(t, err, serdes.ErrVariableLengthTooLong)
+		var public ledgerfields.LedgerHashes
+		assert.ErrorIs(t, public.Decode(data), serdes.ErrVariableLengthTooLong)
 	}
 
 	reader = ledgerHashesReader{data: []byte{0xFE, 0xD4}}
