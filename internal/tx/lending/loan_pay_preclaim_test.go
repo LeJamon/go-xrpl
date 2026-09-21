@@ -256,14 +256,25 @@ func TestLoanPay_CalculateBaseFeeCap(t *testing.T) {
 	}
 	zeroRegularLoan := *loan
 	zeroRegularLoan.PeriodicPayment = "0"
-	zeroRegularLoan.LoanServiceFee = "0"
 	zeroRegularBytes, err := serializeLoan(&zeroRegularLoan)
 	if err != nil {
 		t.Fatal(err)
 	}
 	view.data[keylet.LoanByID(loanID).Key] = zeroRegularBytes
 	zeroRegularPay := NewLoanPay(ownerAddr, loanIDHex, tx.NewXRPAmount(1))
-	fee, feeErr := sign.CalculateBaseFee(zeroRegularPay, view, cfg(false, true))
+	zeroRegularCappedConfig := tx.EngineConfig{BaseFee: 10, Rules: amendment.NewRules([][32]byte{
+		amendment.FeatureLendingProtocol,
+		amendment.FeatureSingleAssetVault,
+		amendment.FeatureMPTokensV1,
+		amendment.FeatureFixCleanup3_1_3,
+		amendment.FeatureFixCleanup3_2_0,
+		amendment.FeatureFixCleanup3_4_0,
+	})}
+	fee, feeErr := sign.CalculateBaseFee(zeroRegularPay, view, zeroRegularCappedConfig)
+	if fee != 20*10 || feeErr != nil {
+		t.Errorf("zero regular payment with cleanup3.4 and cap: fee=%d err=%v, want %d and no error", fee, feeErr, 20*10)
+	}
+	fee, feeErr = sign.CalculateBaseFee(zeroRegularPay, view, cfg(false, true))
 	if fee != 0 {
 		t.Errorf("zero regular payment fee=%d, want 0 on calculation failure", fee)
 	}

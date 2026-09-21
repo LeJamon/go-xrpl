@@ -895,10 +895,7 @@ func TestCalculateMinimumFee_InvalidStructureFallsBackAndPreclaimRejects(t *test
 func TestCalculateMinimumFee_InnerFeeErrorFallsBackAndPreclaimRejects(t *testing.T) {
 	outer := NewBatch(testOuter)
 	outer.AddInnerTransaction(makeTestPayment())
-	// A non-full LoanPay needs ledger state to estimate its fee. A nil view is a
-	// controlled fee-calculation failure for the sign.CalculateBaseFee recovery
-	// seam; Batch must preserve that error for preclaim instead of accepting the
-	// outer transaction at the fallback fee.
+	// A non-full LoanPay needs ledger state; nil view drives the controlled recovery failure.
 	outer.AddInnerTransaction(lending.NewLoanPay(
 		testOuter,
 		strings.Repeat("1", 64),
