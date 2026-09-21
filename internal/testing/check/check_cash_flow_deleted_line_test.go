@@ -43,6 +43,9 @@ func TestCheckCashExactAmountSkipsRestoreWhenFlowDeletesTrustLine(t *testing.T) 
 
 func TestCheckCashToIssuerRestoresSourceTrustLine(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.DisableFeature("fixCleanup3_4_0")
+	env.Close()
+	require.False(t, env.Rules().FixCleanup3_4_0Enabled())
 	issuer := jtx.NewAccount("check-cash-line-issuer")
 	source := jtx.NewAccount("check-cash-line-casher")
 	require.Greater(t, state.CompareAccountIDs(source.ID, issuer.ID), 0)
