@@ -399,7 +399,10 @@ func TestEscrowFinishCalculateBaseFee(t *testing.T) {
 				e.Common.Signers = make([]tx.SignerWrapper, tt.numSigners)
 			}
 
-			got := e.CalculateBaseFee(nil, config)
+			got, err := e.CalculateBaseFee(nil, config)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if got != tt.expected {
 				t.Errorf("CalculateBaseFee = %d, want %d", got, tt.expected)
 			}

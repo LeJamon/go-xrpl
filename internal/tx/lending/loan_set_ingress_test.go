@@ -37,7 +37,7 @@ func TestLoanSetCounterpartySignatureIngress(t *testing.T) {
 		if counterparty == nil || counterparty.TxnSignature != "AA" {
 			t.Fatalf("%s CounterpartySignature = %#v", name, counterparty)
 		}
-		if got := loanSet.CalculateBaseFee(nil, tx.EngineConfig{BaseFee: 10}); got != 20 {
+		if got, err := loanSet.CalculateBaseFee(nil, tx.EngineConfig{BaseFee: 10}); err != nil || got != 20 {
 			t.Fatalf("%s CalculateBaseFee = %d, want 20", name, got)
 		}
 		return loanSet

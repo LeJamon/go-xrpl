@@ -69,54 +69,63 @@ func accountToLoan(loan *loanData, acc *lmath.LoanAccount) {
 // capped: the payment handler never processes more than
 // loanMaximumPaymentsPerTransaction payments, so the fee never exceeds
 // loanMaximumPaymentsPerTransaction / loanPaymentsPerFeeIncrement increments.
-func (l *LoanPay) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) uint64 {
+func (l *LoanPay) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) (uint64, error) {
 	number := func(value string) lmath.N { return lendNumForRules(value, config.RequireRules()) }
 	normal := sign.CalculateDefaultBaseFee(l, config)
+	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0) && l.Amount.Signum() <= 0 {
+		return normal, nil
+	}
 	if l.GetFlags()&(TfLoanFullPayment|TfLoanLatePayment) != 0 {
-		return normal
+		return normal, nil
 	}
 	loanID, ok := hashBytes(l.LoanID)
 	if !ok {
-		return normal
+		return normal, nil
 	}
 	loan, err := readLoan(view, keylet.LoanByID(loanID))
-	if err != nil || loan == nil {
-		return normal
+	if err != nil {
+		return 0, ter.Errorf(ter.TefEXCEPTION, "base fee loan read failed: %v", err)
+	}
+	if loan == nil {
+		return normal, nil
 	}
 	if loan.PaymentRemaining <= protocol.LoanPaymentsPerFeeIncrement {
-		return normal
+		return normal, nil
 	}
 	if lmath.IsPaymentLate(
 		config.ParentCloseTime,
 		loan.NextPaymentDueDate,
 		config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0),
 	) {
-		return normal
+		return normal, nil
 	}
 	b, berr := readLoanBroker(view, keylet.LoanBrokerByID(loan.LoanBrokerID))
-	if berr != nil || b == nil {
-		return normal
+	if berr != nil {
+		return 0, ter.Errorf(ter.TefEXCEPTION, "base fee loan broker read failed: %v", berr)
+	}
+	if b == nil {
+		return normal, nil
 	}
 	vinfo, verr := vault.ReadVaultInfo(view, keylet.VaultByID(b.VaultID))
-	if verr != nil || vinfo == nil {
-		return normal
+	if verr != nil {
+		return 0, ter.Errorf(ter.TefEXCEPTION, "base fee vault read failed: %v", verr)
+	}
+	if vinfo == nil {
+		return normal, nil
 	}
 	if !amountAssetMatches(l.Amount, vinfo.Asset) {
-		return normal
+		return normal, nil
 	}
 	mAsset := mathAsset(vinfo.Asset)
 	scale := int(loan.LoanScale)
 	regular := lmath.RoundAssetUpward(mAsset, number(loan.PeriodicPayment), scale).Add(number(loan.LoanServiceFee))
-	if regular.Signum() <= 0 {
-		return normal
-	}
 	// Post-fixCleanup3_1_3: cap the estimate at the maximum number of payments the
 	// handler will process, so a large Amount does not inflate the fee unboundedly.
 	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_1_3) {
 		threshold := regular.Mul(lmath.FromInt(int64(protocol.LoanMaximumPaymentsPerTransaction)))
 		if amountToLendNumForRules(l.Amount, config.RequireRules()).Cmp(threshold) >= 0 {
 			maxFeeIncrements := protocol.LoanMaximumPaymentsPerTransaction / protocol.LoanPaymentsPerFeeIncrement
-			return uint64(maxFeeIncrements) * normal
+			return uint64(maxFeeIncrements) * normal, nil
 		}
 	}
 	mode := state.RoundDownward
@@ -131,7 +140,7 @@ func (l *LoanPay) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) u
 	if feeIncrements < 1 {
 		feeIncrements = 1
 	}
-	return uint64(feeIncrements) * normal
+	return uint64(feeIncrements) * normal, nil
 }
 
 func (l *LoanPay) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {

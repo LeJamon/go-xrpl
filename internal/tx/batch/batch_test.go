@@ -892,6 +892,35 @@ func TestCalculateMinimumFee_InvalidStructureFallsBackAndPreclaimRejects(t *test
 	require.Equal(t, ter.TecINSUFF_FEE, outer.Preclaim(nil, config))
 }
 
+func TestCalculateMinimumFee_InnerFeeErrorFallsBackAndPreclaimRejects(t *testing.T) {
+	outer := NewBatch(testOuter)
+	outer.AddInnerTransaction(makeTestPayment())
+	// A non-full LoanPay needs ledger state; nil view drives the controlled recovery failure.
+	outer.AddInnerTransaction(lending.NewLoanPay(
+		testOuter,
+		strings.Repeat("1", 64),
+		tx.NewXRPAmount(1),
+	))
+	config := tx.EngineConfig{
+		BaseFee: 10,
+		Rules: amendment.NewRules([][32]byte{
+			amendment.FeatureLendingProtocol,
+			amendment.FeatureSingleAssetVault,
+			amendment.FeatureMPTokensV1,
+		}),
+	}
+
+	require.Equal(t, uint64(10), outer.CalculateMinimumFee(nil, config))
+	require.Equal(t, ter.TecINSUFF_FEE, outer.Preclaim(nil, config))
+
+	control := NewBatch(testOuter)
+	control.AddInnerTransaction(makeTestPayment())
+	fullPayment := lending.NewLoanPay(testOuter, strings.Repeat("1", 64), tx.NewXRPAmount(1))
+	fullPayment.Common.SetFlags(lending.TfLoanFullPayment)
+	control.AddInnerTransaction(fullPayment)
+	require.Equal(t, uint64(40), control.CalculateMinimumFee(nil, config))
+}
+
 func TestCalculateMinimumFeeCountsPresentEmptyBatchTxnSignature(t *testing.T) {
 	outer := NewBatch(testOuter)
 	outer.Fee = "50"

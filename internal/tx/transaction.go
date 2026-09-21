@@ -162,7 +162,7 @@ type BatchFeeCalculator interface {
 // Reference: rippled Transactor::calculateBaseFee() virtual override pattern —
 // rippled's version has access to the view (view.fees().increment).
 type CustomBaseFeeCalculator interface {
-	CalculateBaseFee(view LedgerView, config EngineConfig) uint64
+	CalculateBaseFee(view LedgerView, config EngineConfig) (uint64, error)
 }
 
 // BatchSignerInfo represents a single batch signer entry for authorization checking.

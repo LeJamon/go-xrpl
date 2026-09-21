@@ -66,8 +66,8 @@ func (c *mockClearCtx) GetAccountBalance([20]byte) (uint64, error) {
 	return 0, nil
 }
 func (c *mockClearCtx) GetAccountReserve(uint32) uint64 { return 0 }
-func (c *mockClearCtx) GetBaseFees(tx.Transaction) (uint64, uint64) {
-	return 10, 10
+func (c *mockClearCtx) GetBaseFees(tx.Transaction) (uint64, uint64, error) {
+	return 10, 10, nil
 }
 func (c *mockClearCtx) GetReferenceFee() uint64   { return 10 }
 func (c *mockClearCtx) GetTxInLedger() uint32     { return 0 }

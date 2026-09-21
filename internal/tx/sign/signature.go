@@ -885,19 +885,33 @@ func SponsorSignerCount(transaction txcore.Transaction) int {
 }
 
 // CalculateBaseFee dispatches transaction-specific fees before falling back to
-// the standard single-sign or multisign fee.
-func CalculateBaseFee(transaction txcore.Transaction, view txcore.LedgerView, config txcore.EngineConfig) uint64 {
-	if transaction.TxType() == txcore.TypeRegularKeySet && view != nil {
+// the standard single-sign or multisign fee. Calculator panics are converted to
+// a typed tefEXCEPTION error so callers can reject the transaction without
+// treating a zero fee as a valid result.
+func CalculateBaseFee(transaction txcore.Transaction, view txcore.LedgerView, config txcore.EngineConfig) (fee uint64, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			fee = 0
+			err = ter.Errorf(ter.TefEXCEPTION, "base fee calculation panicked: %v", recovered)
+		}
+	}()
+
+	if transaction.TxType() == txcore.TypeRegularKeySet && view != nil &&
+		transaction.GetCommon().GetFlags()&txcore.TfInnerBatchTxn == 0 &&
+		txcore.SignedWithMasterKey(config.SkipSignatureVerification, transaction.GetCommon()) {
 		accountID, err := state.DecodeAccountID(transaction.GetCommon().Account)
 		if err == nil {
 			account, readErr := txcore.ReadAccountRoot(view, accountID)
-			if readErr == nil && txcore.SetRegularKeyFeeWaived(config.SkipSignatureVerification, transaction.GetCommon(), account) {
-				return 0
+			if readErr != nil {
+				return 0, ter.Errorf(ter.TefEXCEPTION, "base fee account read failed: %v", readErr)
+			}
+			if txcore.SetRegularKeyFeeWaived(config.SkipSignatureVerification, transaction.GetCommon(), account) {
+				return 0, nil
 			}
 		}
 	}
 	if calculator, ok := transaction.(txcore.BatchFeeCalculator); ok {
-		return calculator.CalculateMinimumFee(view, config)
+		return calculator.CalculateMinimumFee(view, config), nil
 	}
 	switch transaction.TxType() {
 	case txcore.TypeConfidentialMPTConvert,
@@ -905,12 +919,12 @@ func CalculateBaseFee(transaction txcore.Transaction, view txcore.LedgerView, co
 		txcore.TypeConfidentialMPTConvertBack,
 		txcore.TypeConfidentialMPTSend,
 		txcore.TypeConfidentialMPTClawback:
-		return calculateConfidentialBaseFee(transaction, config)
+		return calculateConfidentialBaseFee(transaction, config), nil
 	}
 	if calculator, ok := transaction.(txcore.CustomBaseFeeCalculator); ok {
 		return calculator.CalculateBaseFee(view, config)
 	}
-	return CalculateDefaultBaseFee(transaction, config)
+	return CalculateDefaultBaseFee(transaction, config), nil
 }
 
 // SignTransactionForMultiSign signs a transaction for multi-signing

@@ -309,7 +309,10 @@ func (s *Service) submitLedgerState(
 		FeeTrack:                  s.feeTrack,
 		Logger:                    s.config.Logger,
 	}
-	baseFeeForTx := computeBaseFeeForTx(current, parsedTx, feeConfig)
+	baseFeeForTx, err := sign.CalculateBaseFee(parsedTx, current, feeConfig)
+	if err != nil {
+		return nil
+	}
 	availableSeq := accountSeq
 	openLedgerCost := baseFeeForTx
 	if txQueue != nil {
@@ -479,9 +482,9 @@ func (s *Service) GetAutofillFee(parsedTx tx.Transaction, unlimited bool, mult, 
 		Rules:            rules,
 	}
 
-	feeDefault := baseFee
+	feeDefault := uint64(s.configuredFees.Base)
 	if parsedTx != nil && tx.PassesTransactionLocalChecks(parsedTx) == ter.TesSUCCESS {
-		feeDefault = computeBaseFeeForTx(current, parsedTx, feeCfg)
+		feeDefault = estimateSigningBaseFee(current, parsedTx, feeCfg, uint64(s.configuredFees.Base))
 	}
 
 	loadFee, scaleErr := feetrack.ScaleFeeLoad(feeDefault, s.feeTrack, unlimited)
@@ -491,12 +494,8 @@ func (s *Service) GetAutofillFee(parsedTx tx.Transaction, unlimited bool, mult, 
 	fee := loadFee
 	if s.txQueue != nil {
 		feeLevel := s.txQueue.RequiredFeeLevel(current.TxCount())
-		if uint64(feeLevel) > txq.BaseLevel {
-			escalated := txq.FeeLevel(uint64(feeLevel)-1).ToDrops(baseFee) + 1
-			if escalated > fee {
-				fee = escalated
-			}
-		}
+		escalated := txq.FeeLevel(uint64(feeLevel)-1).ToDrops(baseFee) + 1
+		fee = max(fee, escalated)
 	}
 
 	ceiling, ok := mulDivU64(feeDefault, uint64(mult), uint64(div))
@@ -569,50 +568,17 @@ func (s *Service) GetAutofillSequence(account string, hasTicketSequence bool) (u
 	return acct.Sequence, nil
 }
 
-// computeBaseFeeForTx mirrors rippled getTxFee → calculateBaseFee dispatch:
-// transaction-specific calculators and SetRegularKey's contextual waiver win;
-// otherwise the default Transactor::calculateBaseFee applies, which charges
-// one extra baseFee per entry in sfSigners regardless of SigningPubKey
-// (rippled Transactor.cpp:229-245).
-//
-// Signer counts above STTx::maxMultiSigners fall back to baseFee,
-// mirroring rippled's reference_fee fallback at
-// TransactionSign.cpp:795-796. The cap is 32 by default and 8 only when
-// cfg.Rules is supplied AND ExpandedSignerList is disabled — see
-// maxMultiSigners and rippled STTx.h:55-63.
-//
-// Transaction-specific dispatch is wrapped in a recover so a panic
-// reading inconsistent view state cannot escape the autofill path. This
-// mirrors the reference_fee fallback rippled's getTxFee performs on any
-// exception (TransactionSign.cpp:832-835).
-func computeBaseFeeForTx(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.EngineConfig) (fee uint64) {
-	if parsedTx == nil {
-		return cfg.BaseFee
+// estimateSigningBaseFee may use the configured reference fee because it only
+// supplies an advisory signing estimate. Admission and application must propagate errors.
+func estimateSigningBaseFee(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.EngineConfig, referenceFee uint64) uint64 {
+	if parsedTx == nil || parsedTx.GetCommon() == nil || len(parsedTx.GetCommon().Signers) > sign.MaxMultiSigners {
+		return referenceFee
 	}
-	_, batchFee := parsedTx.(tx.BatchFeeCalculator)
-	_, customFee := parsedTx.(tx.CustomBaseFeeCalculator)
-	txType := parsedTx.TxType()
-	confidentialFee := txType == tx.TypeConfidentialMPTConvert ||
-		txType == tx.TypeConfidentialMPTMergeInbox ||
-		txType == tx.TypeConfidentialMPTConvertBack ||
-		txType == tx.TypeConfidentialMPTSend ||
-		txType == tx.TypeConfidentialMPTClawback
-	if batchFee || customFee || confidentialFee || txType == tx.TypeRegularKeySet {
-		defer func() {
-			if r := recover(); r != nil {
-				fee = cfg.BaseFee
-			}
-		}()
-		return sign.CalculateBaseFee(parsedTx, view, cfg)
+	fee, err := sign.CalculateBaseFee(parsedTx, view, cfg)
+	if err != nil {
+		return referenceFee
 	}
-	signerCount := len(parsedTx.GetCommon().Signers)
-	if signerCount == 0 {
-		return cfg.BaseFee
-	}
-	if signerCount > sign.MaxMultiSigners {
-		return cfg.BaseFee
-	}
-	return sign.CalculateMultiSigFee(cfg.BaseFee, signerCount)
+	return fee
 }
 
 // mulDivU64 returns (a * b) / c; ok=false on uint64 overflow or c == 0.

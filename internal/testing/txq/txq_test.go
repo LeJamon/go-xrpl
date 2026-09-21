@@ -31,6 +31,8 @@ type mockClosedLedgerContext struct {
 	feeLevels []txq.FeeLevel
 }
 
+func (m *mockClosedLedgerContext) GetTransactionCount() uint32 { return uint32(len(m.feeLevels)) }
+
 func (m *mockClosedLedgerContext) GetLedgerSequence() uint32               { return m.ledgerSeq }
 func (m *mockClosedLedgerContext) GetTransactionFeeLevels() []txq.FeeLevel { return m.feeLevels }
 
