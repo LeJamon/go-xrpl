@@ -1944,6 +1944,7 @@ func chargeForReason(reason string) resource.Charge {
 		return resource.FeeModerateBurdenPeer()
 	case "proposal-malformed-prev-ledger-size",
 		"proposal-malformed-txset-size",
+		"get-ledger-sequence-mismatch",
 		"validation-malformed-ledger-hash-zero",
 		"validation-malformed-node-id-zero",
 		"handshake-malformed-networkid",

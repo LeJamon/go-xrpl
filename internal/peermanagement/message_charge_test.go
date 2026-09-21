@@ -3,6 +3,7 @@ package peermanagement
 import (
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
@@ -25,6 +26,33 @@ func TestMessageChargeSelectsOneFeeAndFinishesOnce(t *testing.T) {
 		charge.finish()
 	}
 	require.Equal(t, int64(resource.FeeInvalidData().Cost()), consumer.Balance())
+}
+
+func TestInboundMessageChargePeerAddsToCloseCharge(t *testing.T) {
+	identity, err := NewIdentity()
+	require.NoError(t, err)
+	peer := NewPeer(1, Endpoint{Host: "192.0.2.5", Port: 51235}, false, identity, nil)
+	now := time.Now()
+	manager := resource.NewManager(func() time.Time { return now }, nil)
+	consumer := manager.NewInboundEndpoint(peer.Endpoint().String())
+	peer.attachUsage(consumer, nil)
+	t.Cleanup(peer.releaseUsage)
+
+	for range resource.DecayWindowSeconds {
+		msg := &InboundMessage{
+			charge: newMessageCharge(peer, "mtGET_LEDGER"),
+		}
+		require.True(t, msg.ChargePeer(resource.FeeModerateBurdenPeer(), "oversized node list"))
+		require.True(t, msg.ChargePeer(resource.FeeModerateBurdenPeer(), "uncookied request"))
+		require.NoError(t, msg.Close())
+		require.False(t, msg.ChargePeer(resource.FeeInvalidData(), "after close"))
+		require.NoError(t, msg.Close())
+	}
+
+	require.Equal(t,
+		int64(2*resource.FeeModerateBurdenPeer().Cost()+resource.FeeTrivialPeer().Cost()),
+		consumer.Balance(),
+		"worker charges must be additive to the message's final trivial charge")
 }
 
 func TestMessageChargePreservesBaseAndSelectedContexts(t *testing.T) {

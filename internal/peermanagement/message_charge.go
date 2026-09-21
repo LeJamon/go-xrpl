@@ -39,6 +39,21 @@ func (c *messageCharge) update(fee resource.Charge, chargeContext string) {
 	c.mu.Unlock()
 }
 
+func (c *messageCharge) charge(fee resource.Charge, chargeContext string) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	if c.finished || c.peer == nil {
+		c.mu.Unlock()
+		return false
+	}
+	peer := c.peer
+	c.mu.Unlock()
+	peer.Charge(fee, chargeContext)
+	return true
+}
+
 func (c *messageCharge) finish() {
 	if c == nil {
 		return

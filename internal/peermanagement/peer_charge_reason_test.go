@@ -24,6 +24,7 @@ func TestChargeForReasonProtocolTiers(t *testing.T) {
 		"cluster-no-pubkey":               resource.FeeUselessData(),
 		"cluster-not-member":              resource.FeeUselessData(),
 		"get-objects-txn-unnegotiated":    resource.FeeMalformedRequest(),
+		"get-ledger-sequence-mismatch":    resource.FeeMalformedRequest(),
 		"have-transactions-unnegotiated":  resource.FeeMalformedRequest(),
 		"have-transactions-hashsize":      resource.FeeMalformedRequest(),
 		"transactions-batch-unnegotiated": resource.FeeMalformedRequest(),

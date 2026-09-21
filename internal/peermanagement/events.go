@@ -210,6 +210,10 @@ type InboundMessage struct {
 	// form lives in Payload.
 	Tx *message.Transaction
 
+	// GetLedger carries an admitted, decoded ledger request so the router's
+	// worker does not repeat time-sensitive admission checks.
+	GetLedger *message.GetLedger
+
 	reservation *inboundReservation
 	charge      *messageCharge
 	closeOnce   sync.Once
@@ -239,6 +243,15 @@ func (m *InboundMessage) SelectPeerCharge(fee resource.Charge, chargeContext str
 	}
 	m.charge.update(fee, chargeContext)
 	return true
+}
+
+// ChargePeer applies an additional resource charge immediately, without
+// replacing the per-message charge selected for Close.
+func (m *InboundMessage) ChargePeer(fee resource.Charge, chargeContext string) bool {
+	if m == nil || m.charge == nil {
+		return false
+	}
+	return m.charge.charge(fee, chargeContext)
 }
 
 // CompletePeerCharge applies the selected per-message charge exactly once.

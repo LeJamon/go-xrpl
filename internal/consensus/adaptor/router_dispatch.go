@@ -61,6 +61,10 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) (transferred 
 	case message.TypeStatusChange:
 		r.handleStatusChange(msg)
 	case message.TypeGetLedger:
+		if reason := r.validateGetLedgerMessage(msg); reason != "" {
+			r.chargeGetLedgerAdmission(msg, reason)
+			return false
+		}
 		// Offload the serve to the bounded worker pool so building a large
 		// reply (notably the 15k-tx tx-set in serveTxSet) can't stall
 		// proposal / validation / acquisition-reply handling on this
