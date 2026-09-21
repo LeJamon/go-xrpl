@@ -153,7 +153,6 @@ func TestSubmitLedgerStateOmitsFailedBaseFee(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(42), fee)
 
-	// Submission reporting uses the complete normal-fee formula, including sponsors.
 	txn.GetCommon().SponsorSignature = &tx.SponsorSignature{
 		Signers: make([]tx.SignerWrapper, 2),
 	}
