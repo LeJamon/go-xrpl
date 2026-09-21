@@ -2,6 +2,7 @@ package peermanagement
 
 import (
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
@@ -19,7 +20,8 @@ func newTransactionAccountingOverlay(t *testing.T, txCapacity int, enabled bool)
 		caps.Features.Enable(FeatureTxReduceRelay)
 		peer.capabilities = caps
 	}
-	manager := resource.NewManager(nil, nil)
+	now := time.Unix(0, 0)
+	manager := resource.NewManager(func() time.Time { return now }, nil)
 	consumer := manager.NewInboundEndpoint(peer.Endpoint().String())
 	peer.attachUsage(consumer, nil)
 	t.Cleanup(peer.releaseUsage)
