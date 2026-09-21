@@ -896,11 +896,16 @@ func CalculateBaseFee(transaction txcore.Transaction, view txcore.LedgerView, co
 		}
 	}()
 
-	if transaction.TxType() == txcore.TypeRegularKeySet && view != nil {
+	if transaction.TxType() == txcore.TypeRegularKeySet && view != nil &&
+		transaction.GetCommon().GetFlags()&txcore.TfInnerBatchTxn == 0 &&
+		txcore.SignedWithMasterKey(config.SkipSignatureVerification, transaction.GetCommon()) {
 		accountID, err := state.DecodeAccountID(transaction.GetCommon().Account)
 		if err == nil {
 			account, readErr := txcore.ReadAccountRoot(view, accountID)
-			if readErr == nil && txcore.SetRegularKeyFeeWaived(config.SkipSignatureVerification, transaction.GetCommon(), account) {
+			if readErr != nil {
+				return 0, ter.Errorf(ter.TefEXCEPTION, "base fee account read failed: %v", readErr)
+			}
+			if txcore.SetRegularKeyFeeWaived(config.SkipSignatureVerification, transaction.GetCommon(), account) {
 				return 0, nil
 			}
 		}
