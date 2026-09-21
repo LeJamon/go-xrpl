@@ -19,14 +19,22 @@ func TestCalculateBaseFeeConfidentialMPT(t *testing.T) {
 	} {
 		t.Run(transactionType.String(), func(t *testing.T) {
 			txn := txcore.NewBaseTx(transactionType, "account")
-			if got := CalculateBaseFee(txn, nil, config); got != 100 {
+			got, err := CalculateBaseFee(txn, nil, config)
+			if err != nil {
+				t.Fatalf("CalculateBaseFee() error = %v", err)
+			}
+			if got != 100 {
 				t.Fatalf("CalculateBaseFee() = %d, want 100", got)
 			}
 		})
 	}
 
 	control := txcore.NewBaseTx(txcore.TypePayment, "account")
-	if got := CalculateBaseFee(control, nil, config); got != ledgerBaseFee {
+	got, err := CalculateBaseFee(control, nil, config)
+	if err != nil {
+		t.Fatalf("CalculateBaseFee() error = %v", err)
+	}
+	if got != ledgerBaseFee {
 		t.Fatalf("non-confidential CalculateBaseFee() = %d, want %d", got, ledgerBaseFee)
 	}
 }
@@ -91,7 +99,10 @@ func TestCalculateBaseFeeConfidentialMPTSigners(t *testing.T) {
 			if test.prepare != nil {
 				test.prepare(txn)
 			}
-			got := CalculateBaseFee(txn, nil, txcore.EngineConfig{BaseFee: ledgerBaseFee})
+			got, err := CalculateBaseFee(txn, nil, txcore.EngineConfig{BaseFee: ledgerBaseFee})
+			if err != nil {
+				t.Fatalf("CalculateBaseFee() error = %v", err)
+			}
 			if got != test.expected {
 				t.Fatalf("CalculateBaseFee() = %d, want %d", got, test.expected)
 			}
