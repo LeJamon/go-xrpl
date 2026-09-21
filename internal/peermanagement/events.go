@@ -252,9 +252,8 @@ func (m *InboundMessage) SelectPeerCharge(fee resource.Charge, chargeContext str
 	return true
 }
 
-// ChargePeer applies a charge immediately to the message's peer. This is
-// separate from SelectPeerCharge, which chooses the single envelope charge;
-// transaction jobs use this for per-transaction validation work.
+// ChargePeer applies an additional resource charge immediately, without
+// replacing the per-message charge selected for Close.
 func (m *InboundMessage) ChargePeer(fee resource.Charge, chargeContext string) bool {
 	if m == nil {
 		return false
@@ -262,20 +261,7 @@ func (m *InboundMessage) ChargePeer(fee resource.Charge, chargeContext string) b
 	m.chargeMu.Lock()
 	charge := m.charge
 	m.chargeMu.Unlock()
-	if charge == nil || charge.peer == nil {
-		return false
-	}
-	charge.peer.Charge(fee, chargeContext)
-	return true
-}
-
-// ChargePeer applies an additional resource charge immediately, without
-// replacing the per-message charge selected for Close.
-func (m *InboundMessage) ChargePeer(fee resource.Charge, chargeContext string) bool {
-	if m == nil || m.charge == nil {
-		return false
-	}
-	return m.charge.charge(fee, chargeContext)
+	return charge.charge(fee, chargeContext)
 }
 
 // CompletePeerCharge applies the selected per-message charge exactly once.
