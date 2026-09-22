@@ -1938,7 +1938,8 @@ func chargeForReason(reason string) resource.Charge {
 		return resource.FeeInvalidData()
 	case "endpoints-too-large",
 		"cluster-no-pubkey",
-		"cluster-not-member":
+		"cluster-not-member",
+		"validation-not-current":
 		return resource.FeeUselessData()
 	case "manifests-oversize":
 		return resource.FeeModerateBurdenPeer()
