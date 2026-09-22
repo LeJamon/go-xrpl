@@ -32,6 +32,8 @@ func TestPermissionedDEXCleanup340ConsumedOffer(t *testing.T) {
 				rules := amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported)
 				if enabled {
 					rules.Enable(amendment.FeatureFixCleanup3_4_0)
+				} else {
+					rules.Disable(amendment.FeatureFixCleanup3_4_0)
 				}
 				violation := checkValidPermissionedDEX(transaction, TesSUCCESS, []InvariantEntry{change}, existsView{exists: true}, rules.Build())
 				if enabled && deleted {

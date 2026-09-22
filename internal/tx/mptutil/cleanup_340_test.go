@@ -18,6 +18,8 @@ func TestCleanupIOUPseudoAuthorization(t *testing.T) {
 				builder := amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported)
 				if cleanup {
 					builder.Enable(amendment.FeatureFixCleanup3_4_0)
+				} else {
+					builder.Disable(amendment.FeatureFixCleanup3_4_0)
 				}
 				view.rules = builder.Build()
 				issuer, holder := [20]byte{1}, [20]byte{2}
