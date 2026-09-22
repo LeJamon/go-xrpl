@@ -48,12 +48,6 @@ GENESIS_SECRET="snoPBrXtMeMyMHUVTgbuqAfg1SUTb"
 DEST_ADDRS=(
     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
     "rJrxi4Wxev4bnAGVNP9YCdKPdAoKfAmcsi"
-    "rL5UkXrkSXjGdpvw1WhDqVgPVbtCFhmf6t"
-    "rGCMm9wPv4eX2vTo1y31QFEpYwy4iWUkzS"
-    "rDgmpqPjy91PMzrjPzL2jiBp8e6Pe1qMaq"
-    "rwxnPSzpzm6FzKR42hQp8R8KSpsfBs5XAg"
-    "rB4PvunRJqLptmFDFnG3PdjvAvqLGD7qx5"
-    "rE6vqcJW4f3HpV5fjFp6drJUuKzVkVZWfA"
 )
 
 # --- helpers ------------------------------------------------------------

@@ -14,7 +14,6 @@ func TestConformance(t *testing.T) {
 		t.Fatalf("conformance corpus rejected: %v", err)
 	}
 	for _, fixture := range corpus.InScope {
-		fixture := fixture
 		t.Run(fixture.Name, func(t *testing.T) {
 			t.Parallel()
 			defer func() {

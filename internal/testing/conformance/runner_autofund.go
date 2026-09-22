@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/amm"
 )
@@ -478,16 +477,4 @@ func remapAmountFields(v reflect.Value, addrMap map[string]string) {
 			remapAmountFields(v.Index(i), addrMap)
 		}
 	}
-}
-
-// accountByAddress looks up a test account by address in the runner's
-// account map. If no registered account matches, creates a temporary
-// reference so the caller can interact with the ledger.
-func (r *runner) accountByAddress(address string) *jtx.Account {
-	for _, acc := range r.accounts {
-		if acc.Address == address {
-			return acc
-		}
-	}
-	return jtx.NewAccountWithAddress("tmp_"+address[len(address)-8:], address)
 }

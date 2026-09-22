@@ -378,6 +378,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Check out rippled v3.4.0 oracle
+        uses: actions/checkout@v5
+        with:
+          repository: XRPLF/rippled
+          ref: 4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17
+          path: rippled-worktrees/v3.4.0-oracle
       - uses: ./.github/actions/setup
       - name: Run focused release regressions twice
         run: go test -count=2 -timeout 20m ./codec/binarycodec/definitions ./ledger/entry/schema ./ledger/entry ./internal/rpc
