@@ -29,6 +29,23 @@ jobs:
       # package in the static-analysis path as well.
       - name: Vet tag-gated postgres backend
         run: go vet -tags postgres ./storage/relationaldb/postgres/
+      - name: Record producer evidence
+        if: always()
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-lint
+          EVIDENCE_LABEL: lint
+          EVIDENCE_STATUS: ${{ job.status }}
+          EVIDENCE_COMMAND: >-
+            golangci/golangci-lint-action@v8 version=v2.11.3;
+            go vet -tags postgres ./storage/relationaldb/postgres/
+        run: scripts/acceptance/final-evidence.sh producer
+      - name: Upload producer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-1908-producer-${{ github.sha }}-lint
+          path: ${{ runner.temp }}/issue-1908-producer-lint
+          if-no-files-found: error
 
   # Advisory linters (security smells, leaked HTTP bodies, missing request
   # contexts, slice preallocation). The codebase is currently clean against this
@@ -46,6 +63,21 @@ jobs:
         with:
           version: v2.11.3
           args: --config .golangci-warnings.yml
+      - name: Record producer evidence
+        if: always()
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-lint-advisory
+          EVIDENCE_LABEL: lint-advisory
+          EVIDENCE_STATUS: ${{ job.status }}
+          EVIDENCE_COMMAND: golangci/golangci-lint-action@v8 version=v2.11.3 args=--config .golangci-warnings.yml
+        run: scripts/acceptance/final-evidence.sh producer
+      - name: Upload producer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-1908-producer-${{ github.sha }}-lint-advisory
+          path: ${{ runner.temp }}/issue-1908-producer-lint-advisory
+          if-no-files-found: error
 
   generate:
     name: Generate (drift check)
@@ -71,6 +103,23 @@ jobs:
             echo "Then commit the regenerated files."
             exit 1
           fi
+      - name: Record producer evidence
+        if: always()
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-generate
+          EVIDENCE_LABEL: generate
+          EVIDENCE_STATUS: ${{ job.status }}
+          EVIDENCE_COMMAND: >-
+            go generate ./ledger/entry/... ./internal/peermanagement/proto;
+            git diff --exit-code -- ledger/entry internal/peermanagement/proto/xrpl.pb.go
+        run: scripts/acceptance/final-evidence.sh producer
+      - name: Upload producer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-1908-producer-${{ github.sha }}-generate
+          path: ${{ runner.temp }}/issue-1908-producer-generate
+          if-no-files-found: error
 
   build:
     name: Build
@@ -85,6 +134,21 @@ jobs:
           expected="$(git describe --tags --always --dirty)"
           ../tmp/goxrpl version |
             grep --fixed-strings --line-regexp "go-xrpl version ${expected}"
+      - name: Record producer evidence
+        if: always()
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-build
+          EVIDENCE_LABEL: build
+          EVIDENCE_STATUS: ${{ job.status }}
+          EVIDENCE_COMMAND: ./scripts/build.sh; ../tmp/goxrpl version | grep --fixed-strings --line-regexp "go-xrpl version $(git describe --tags --always --dirty)"
+        run: scripts/acceptance/final-evidence.sh producer
+      - name: Upload producer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-1908-producer-${{ github.sha }}-build
+          path: ${{ runner.temp }}/issue-1908-producer-build
+          if-no-files-found: error
 
   # 32-bit library word-size guard. go-xrpl's correctness is "produce the same bytes as
   # rippled"; an `int`-width or endianness assumption in the codec / hashing
@@ -108,6 +172,21 @@ jobs:
           cgo: "false"
       - run: go build ./...
       - run: go test -count=1 -timeout 5m ./storage/relationaldb/sqlite/...
+      - name: Record producer evidence
+        if: always()
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-build-386
+          EVIDENCE_LABEL: build-386
+          EVIDENCE_STATUS: ${{ job.status }}
+          EVIDENCE_COMMAND: GOOS=linux GOARCH=386 CGO_ENABLED=0 go build ./...; GOOS=linux GOARCH=386 CGO_ENABLED=0 go test -count=1 -timeout 5m ./storage/relationaldb/sqlite/...
+        run: scripts/acceptance/final-evidence.sh producer
+      - name: Upload producer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-1908-producer-${{ github.sha }}-build-386
+          path: ${{ runner.temp }}/issue-1908-producer-build-386
+          if-no-files-found: error
 
   postgres:
     name: Test (PostgreSQL)
@@ -133,6 +212,21 @@ jobs:
         run: go test -race -tags postgres -count=1 -timeout 10m ./storage/relationaldb/postgres/...
         env:
           GOXRPL_TEST_POSTGRES_DSN: postgres://xrpl:xrpl@localhost:5432/xrpl_test?sslmode=disable
+      - name: Record producer evidence
+        if: always()
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-postgres
+          EVIDENCE_LABEL: postgres
+          EVIDENCE_STATUS: ${{ job.status }}
+          EVIDENCE_COMMAND: go test -race -tags postgres -count=1 -timeout 10m ./storage/relationaldb/postgres/...
+        run: scripts/acceptance/final-evidence.sh producer
+      - name: Upload producer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-1908-producer-${{ github.sha }}-postgres
+          path: ${{ runner.temp }}/issue-1908-producer-postgres
+          if-no-files-found: error
 
   test:
     name: Test (${{ matrix.group }})
@@ -199,6 +293,22 @@ jobs:
           diff -u internal/rpc/testdata/server_definitions_final_hashes.json "$RUNNER_TEMP/server_definitions_final_hashes.json"
       - uses: ./.github/actions/setup
       - run: go test ${{ matrix.race }} -count=1 -timeout 15m ${{ matrix.packages }}
+      - name: Record producer evidence
+        if: always()
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-test-${{ matrix.group }}
+          EVIDENCE_LABEL: test-${{ matrix.group }}
+          EVIDENCE_STATUS: ${{ job.status }}
+          EVIDENCE_COMMAND: >-
+            go test ${{ matrix.race }} -count=1 -timeout 15m ${{ matrix.packages }}
+        run: scripts/acceptance/final-evidence.sh producer
+      - name: Upload producer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-1908-producer-${{ github.sha }}-test-${{ matrix.group }}
+          path: ${{ runner.temp }}/issue-1908-producer-test-${{ matrix.group }}
+          if-no-files-found: error
 
   test-purego:
     name: Test (libs, CGO_ENABLED=0)
@@ -215,6 +325,23 @@ jobs:
       # cgo, and no CGO dev headers are installed for this leg.
       - run: CGO_ENABLED=0 go test -count=1 -timeout 15m ./crypto/...
       - run: CGO_ENABLED=0 go test -tags mptcrypto -count=1 -timeout 15m ./amendment/... ./crypto/mptcrypto/...
+      - name: Record producer evidence
+        if: always()
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-test-purego
+          EVIDENCE_LABEL: test-purego
+          EVIDENCE_STATUS: ${{ job.status }}
+          EVIDENCE_COMMAND: >-
+            CGO_ENABLED=0 go test -count=1 -timeout 15m ./crypto/...;
+            CGO_ENABLED=0 go test -tags mptcrypto -count=1 -timeout 15m ./amendment/... ./crypto/mptcrypto/...
+        run: scripts/acceptance/final-evidence.sh producer
+      - name: Upload producer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-1908-producer-${{ github.sha }}-test-purego
+          path: ${{ runner.temp }}/issue-1908-producer-test-purego
+          if-no-files-found: error
 
   test-mpt-crypto:
     name: Test (Confidential MPT native backend, ${{ matrix.os }})
@@ -230,6 +357,103 @@ jobs:
         run: pipx install conan==2.18.1
       - name: Build and test native backend
         run: ./scripts/setup-mpt-crypto.sh test ./amendment/... ./crypto/mptcrypto/... ./internal/tx/mpt/... ./internal/testing/mpt/...
+      - name: Record producer evidence
+        if: always()
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-test-mpt-crypto-${{ matrix.os }}
+          EVIDENCE_LABEL: test-mpt-crypto-${{ matrix.os }}
+          EVIDENCE_STATUS: ${{ job.status }}
+          EVIDENCE_COMMAND: ./scripts/setup-mpt-crypto.sh test ./amendment/... ./crypto/mptcrypto/... ./internal/tx/mpt/... ./internal/testing/mpt/...
+        run: scripts/acceptance/final-evidence.sh producer
+      - name: Upload producer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-1908-producer-${{ github.sha }}-test-mpt-crypto-${{ matrix.os }}
+          path: ${{ runner.temp }}/issue-1908-producer-test-mpt-crypto-${{ matrix.os }}
+          if-no-files-found: error
+
+  test-repeated:
+    name: Test (final focused, repeated)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - name: Run focused release regressions twice
+        run: go test -count=2 -timeout 20m ./codec/binarycodec/definitions ./ledger/entry/schema ./ledger/entry ./internal/rpc
+      - name: Record producer evidence
+        if: always()
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-test-repeated
+          EVIDENCE_LABEL: test-repeated
+          EVIDENCE_STATUS: ${{ job.status }}
+          EVIDENCE_COMMAND: go test -count=2 -timeout 20m ./codec/binarycodec/definitions ./ledger/entry/schema ./ledger/entry ./internal/rpc
+        run: scripts/acceptance/final-evidence.sh producer
+      - name: Upload producer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-1908-producer-${{ github.sha }}-test-repeated
+          path: ${{ runner.temp }}/issue-1908-producer-test-repeated
+          if-no-files-found: error
+
+  conformance-final:
+    name: Conformance (final 3.4.0 corpus)
+    runs-on: ubuntu-latest
+    env:
+      ORACLE_TAG: 3.4.0
+      ORACLE_REPOSITORY: XRPLF/rippled
+      ORACLE_COMMIT: 4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17
+      # These repository variables are intentionally required. The source is
+      # fetched at a full commit; no corpus or recorder is embedded here.
+      FINAL_CONFORMANCE_REPOSITORY: ${{ vars.XRPL_FINAL_CONFORMANCE_REPOSITORY }}
+      FINAL_CONFORMANCE_COMMIT: ${{ vars.XRPL_FINAL_CONFORMANCE_COMMIT }}
+      FINAL_CONFORMANCE_CORPUS: ${{ github.workspace }}/fixtures/rippled-3.4.0-v3
+      FINAL_CONFORMANCE_MANIFEST: ${{ github.workspace }}/fixtures/rippled-3.4.0-v3/manifest.json
+      EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-conformance-final
+    steps:
+      - uses: actions/checkout@v5
+      - name: Require externally configured final corpus source
+        if: always()
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: scripts/acceptance/final-evidence.sh conformance-source
+      - name: Check out final corpus at the configured commit
+        if: ${{ vars.XRPL_FINAL_CONFORMANCE_REPOSITORY != '' && vars.XRPL_FINAL_CONFORMANCE_COMMIT != '' }}
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ vars.XRPL_FINAL_CONFORMANCE_REPOSITORY }}
+          ref: ${{ vars.XRPL_FINAL_CONFORMANCE_COMMIT }}
+          path: fixtures/rippled-3.4.0-v3
+          fetch-depth: 1
+      - uses: ./.github/actions/setup
+        if: always()
+        with:
+          cgo: "false"
+      - name: Replay final corpus against goXRPL
+        if: always()
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: scripts/acceptance/final-evidence.sh conformance
+      - name: Record producer evidence
+        if: always()
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          EVIDENCE_LABEL: conformance-final
+          EVIDENCE_STATUS: ${{ job.status }}
+          EVIDENCE_COMMAND: >-
+            actions/checkout@v5 repository=$XRPL_FINAL_CONFORMANCE_REPOSITORY
+            ref=$XRPL_FINAL_CONFORMANCE_COMMIT;
+            go test -count=1 -timeout 30m -v ./internal/testing/conformance/...
+            (requires the pinned final corpus manifest)
+        run: scripts/acceptance/final-evidence.sh producer
+      - name: Upload producer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-1908-producer-${{ github.sha }}-conformance-final
+          path: ${{ runner.temp }}/issue-1908-producer-conformance-final
+          if-no-files-found: error
 
   peer-interop:
     name: Peer interop (rippled 3.3.0)
@@ -239,6 +463,21 @@ jobs:
       - uses: ./.github/actions/setup
       - name: Run live handshake and manifest interop
         run: PEERTLS_DOCKER_INTEROP=1 go test -tags docker -timeout 5m -v -run 'Test(Handshake|Manifest)_Interop_RippledDocker' ./internal/peermanagement/
+      - name: Record producer evidence
+        if: always()
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-peer-interop
+          EVIDENCE_LABEL: peer-interop
+          EVIDENCE_STATUS: ${{ job.status }}
+          EVIDENCE_COMMAND: PEERTLS_DOCKER_INTEROP=1 go test -tags docker -timeout 5m -v -run 'Test(Handshake|Manifest)_Interop_RippledDocker' ./internal/peermanagement/
+        run: scripts/acceptance/final-evidence.sh producer
+      - name: Upload producer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-1908-producer-${{ github.sha }}-peer-interop
+          path: ${{ runner.temp }}/issue-1908-producer-peer-interop
+          if-no-files-found: error
 
   peer-interop-final:
     name: Peer interop (rippled 3.4.0)
@@ -261,6 +500,24 @@ jobs:
           grep --fixed-strings --line-regexp 'Git commit hash: 4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17' <<<"$version"
       - name: Run live final 3.4.0 peer interop
         run: go test -race -tags docker -count=1 -timeout 10m -v -run 'Test(Handshake|Manifest|LedgerNodeDepth|ValidatorListCollection)_Interop_RippledDocker' ./internal/peermanagement/
+      - name: Record producer evidence
+        if: always()
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-peer-interop-final
+          EVIDENCE_LABEL: peer-interop-final
+          EVIDENCE_STATUS: ${{ job.status }}
+          EVIDENCE_COMMAND: >-
+            docker build -t goxrpl-oracle:3.4.0 scripts/peer-interop;
+            docker run --rm --entrypoint /usr/bin/xrpld goxrpl-oracle:3.4.0 --version;
+            go test -race -tags docker -count=1 -timeout 10m -v -run 'Test(Handshake|Manifest|LedgerNodeDepth|ValidatorListCollection)_Interop_RippledDocker' ./internal/peermanagement/
+        run: scripts/acceptance/final-evidence.sh producer
+      - name: Upload producer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-1908-producer-${{ github.sha }}-peer-interop-final
+          path: ${{ runner.temp }}/issue-1908-producer-peer-interop-final
+          if-no-files-found: error
 
   consensus-smoke:
     name: Consensus smoke (rippled ${{ matrix.rippled-version }})
@@ -295,18 +552,43 @@ jobs:
       - name: Dump container logs on failure
         if: failure()
         run: docker compose -f scripts/consensus-smoke/docker-compose.yml logs --no-color --tail=200 || true
+      - name: Record producer evidence
+        if: always()
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-consensus-smoke-${{ matrix.rippled-version }}
+          EVIDENCE_LABEL: consensus-smoke-${{ matrix.rippled-version }}
+          EVIDENCE_STATUS: ${{ job.status }}
+          EVIDENCE_COMMAND: >-
+            docker build --build-arg VERSION=${{ github.sha }} -t goxrpl:latest .;
+            GOXRPL_IMAGE=goxrpl:latest RIPPLED_IMAGE=xrpllabsofficial/xrpld:${{ matrix.rippled-version }} PAYMENT_COUNT=3 MIN_SEQ_EMPTY=15 BOOT_TIMEOUT=240 TX_TIMEOUT=180 bash scripts/consensus-smoke/smoke.sh
+        run: scripts/acceptance/final-evidence.sh producer
+      - name: Upload producer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-1908-producer-${{ github.sha }}-consensus-smoke-${{ matrix.rippled-version }}
+          path: ${{ runner.temp }}/issue-1908-producer-consensus-smoke-${{ matrix.rippled-version }}
+          if-no-files-found: error
 
   consensus-smoke-final:
     name: Consensus smoke (rippled 3.4.0 final)
     runs-on: ubuntu-latest
     env:
       ORACLE_TAG: 3.4.0
+      ORACLE_REPOSITORY: XRPLF/rippled
       ORACLE_COMMIT: 4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17
       ORACLE_IMAGE: goxrpl-oracle:3.4.0
       GOXRPL_IMAGE: goxrpl-final:${{ github.sha }}
       EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-final-evidence
     steps:
+      - name: Initialize final evidence directory
+        shell: bash
+        run: mkdir -p "$EVIDENCE_DIR"
       - uses: actions/checkout@v5
+
+      - name: Record Go checkout provenance
+        shell: bash
+        run: scripts/acceptance/final-evidence.sh source
 
       - name: Check out final rippled oracle
         uses: actions/checkout@v5
@@ -339,7 +621,7 @@ jobs:
           }
 
           run_recorded tested_sha 'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'
-          run_recorded go_worktree_clean 'git diff --quiet && git diff --cached --quiet'
+          run_recorded go_worktree_clean 'test -z "$(git status --porcelain=v1 --untracked-files=all -- . ":(exclude)rippled-worktrees/v3.4.0-oracle")"'
           run_recorded oracle_checkout_sha 'test "$(git -C rippled-worktrees/v3.4.0-oracle rev-parse HEAD)" = "$ORACLE_COMMIT"'
           run_recorded oracle_checkout_clean 'test -z "$(git -C rippled-worktrees/v3.4.0-oracle status --porcelain)"'
           run_recorded tool_go_version 'go version'
@@ -364,7 +646,8 @@ jobs:
           run_recorded consensus_smoke_log 'test -s "$EVIDENCE_DIR/consensus-smoke.log" && cat "$EVIDENCE_DIR/consensus-smoke.log"'
 
           go_sha="$(git rev-parse HEAD 2>/dev/null || true)"
-          if ! git diff --quiet || ! git diff --cached --quiet; then
+          dirty_status="$(git status --porcelain=v1 --untracked-files=all -- . ":(exclude)rippled-worktrees/v3.4.0-oracle")"
+          if [[ -n "$dirty_status" ]]; then
             go_dirty=true
           else
             go_dirty=false
@@ -378,11 +661,10 @@ jobs:
             printf 'go_sha=%s\n' "$go_sha"
             printf 'go_dirty=%s\n' "$go_dirty"
             printf 'oracle_tag=%s\n' "$ORACLE_TAG"
+            printf 'oracle_repository=%s\n' "$ORACLE_REPOSITORY"
             printf 'oracle_commit=%s\n' "$ORACLE_COMMIT"
             printf 'oracle_image=%s\n' "$ORACLE_IMAGE"
-            printf 'peer_oracle_image=%s\n' "$ORACLE_IMAGE"
             printf 'consensus_oracle_image=%s\n' "$ORACLE_IMAGE"
-            printf 'compatibility_images=xrpllabsofficial/xrpld:3.3.0,xrpllabsofficial/xrpld:3.2.0\n'
             printf 'oracle_image_id=%s\n' "$oracle_image_id"
             printf 'goxrpl_image=%s\n' "$GOXRPL_IMAGE"
             printf 'goxrpl_image_id=%s\n' "$goxrpl_image_id"
@@ -397,8 +679,8 @@ jobs:
             "go_sha=$GITHUB_SHA" \
             "go_dirty=false" \
             "oracle_tag=$ORACLE_TAG" \
+            "oracle_repository=$ORACLE_REPOSITORY" \
             "oracle_commit=$ORACLE_COMMIT" \
-            "peer_oracle_image=$ORACLE_IMAGE" \
             "consensus_oracle_image=$ORACLE_IMAGE" \
             "overall_status=0"; do
             if ! grep --fixed-strings --line-regexp "$required" "$evidence" >/dev/null; then
@@ -423,14 +705,132 @@ jobs:
             exit 1
           fi
 
+      - name: Record final consensus producer evidence
+        if: always()
+        env:
+          EVIDENCE_LABEL: consensus-smoke-final
+          EVIDENCE_STATUS: ${{ job.status }}
+          EVIDENCE_COMMAND: >-
+            python3 internal/rpc/testdata/server_definitions_final_oracle.py
+            rippled-worktrees/v3.4.0-oracle;
+            docker build -t "$ORACLE_IMAGE" scripts/peer-interop;
+            docker build --build-arg VERSION="$GITHUB_SHA" -t "$GOXRPL_IMAGE" .;
+            GOXRPL_IMAGE="$GOXRPL_IMAGE" RIPPLED_IMAGE="$ORACLE_IMAGE" PAYMENT_COUNT=3 MIN_SEQ_EMPTY=15 BOOT_TIMEOUT=240 TX_TIMEOUT=180 bash scripts/consensus-smoke/smoke.sh
+        run: scripts/acceptance/final-evidence.sh producer
+
+      - name: Upload final consensus producer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-1908-producer-${{ github.sha }}-consensus-smoke-final
+          path: ${{ runner.temp }}/issue-1908-final-evidence
+          if-no-files-found: error
+
       - name: Upload final acceptance evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: issue-1908-final-acceptance-${{ github.sha }}
+          name: issue-1908-final-consensus-${{ github.sha }}
           path: ${{ runner.temp }}/issue-1908-final-evidence
           if-no-files-found: error
 
       - name: Dump final consensus logs on failure
         if: failure()
         run: docker compose -f scripts/consensus-smoke/docker-compose.yml logs --no-color --tail=200 || true
+
+  acceptance-evidence:
+    name: Acceptance evidence (final SHA)
+    if: always()
+    needs:
+      - lint
+      - lint-advisory
+      - generate
+      - build
+      - build-386
+      - postgres
+      - test
+      - test-purego
+      - test-mpt-crypto
+      - peer-interop
+      - peer-interop-final
+      - consensus-smoke
+      - consensus-smoke-final
+      - test-repeated
+      - conformance-final
+    runs-on: ubuntu-latest
+    env:
+      EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-final-acceptance
+      EXPECTED_SHA: ${{ github.sha }}
+    steps:
+      - name: Initialize final evidence directory
+        shell: bash
+        run: mkdir -p "$EVIDENCE_DIR/producers"
+
+      - uses: actions/checkout@v5
+        if: always()
+
+      - name: Download producer evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: issue-1908-producer-${{ github.sha }}-*
+          path: ${{ runner.temp }}/issue-1908-final-acceptance/producers
+          merge-multiple: true
+
+      - name: Record producer job results
+        if: always()
+        shell: bash
+        run: |
+          {
+            printf 'lint=%s\n' "${{ needs.lint.result }}"
+            printf 'lint-advisory=%s\n' "${{ needs['lint-advisory'].result }}"
+            printf 'generate=%s\n' "${{ needs.generate.result }}"
+            printf 'build=%s\n' "${{ needs.build.result }}"
+            printf 'build-386=%s\n' "${{ needs['build-386'].result }}"
+            printf 'postgres=%s\n' "${{ needs.postgres.result }}"
+            printf 'test=%s\n' "${{ needs.test.result }}"
+            printf 'test-purego=%s\n' "${{ needs['test-purego'].result }}"
+            printf 'test-mpt-crypto=%s\n' "${{ needs['test-mpt-crypto'].result }}"
+            printf 'peer-interop=%s\n' "${{ needs['peer-interop'].result }}"
+            printf 'peer-interop-final=%s\n' "${{ needs['peer-interop-final'].result }}"
+            printf 'consensus-smoke=%s\n' "${{ needs['consensus-smoke'].result }}"
+            printf 'consensus-smoke-final=%s\n' "${{ needs['consensus-smoke-final'].result }}"
+            printf 'test-repeated=%s\n' "${{ needs['test-repeated'].result }}"
+            printf 'conformance-final=%s\n' "${{ needs['conformance-final'].result }}"
+          } > "$EVIDENCE_DIR/needs-results.txt"
+
+      - name: Record exact workflow commands
+        if: always()
+        shell: bash
+        run: |
+          cat > "$EVIDENCE_DIR/workflow-commands.txt" <<'EOF'
+          lint: golangci/golangci-lint-action@v8 version=v2.11.3; go vet -tags postgres ./storage/relationaldb/postgres/
+          lint-advisory: golangci/golangci-lint-action@v8 version=v2.11.3 args=--config .golangci-warnings.yml (non-blocking)
+          generate: go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11; go generate ./ledger/entry/... ./internal/peermanagement/proto; git diff --exit-code -- ledger/entry internal/peermanagement/proto/xrpl.pb.go
+          build: ./scripts/build.sh; ../tmp/goxrpl version
+          build-386: GOOS=linux GOARCH=386 CGO_ENABLED=0 go build ./...; GOOS=linux GOARCH=386 CGO_ENABLED=0 go test -count=1 -timeout 5m ./storage/relationaldb/sqlite/...
+          postgres: go test -race -tags postgres -count=1 -timeout 10m ./storage/relationaldb/postgres/...
+          test: go test <matrix.race> -count=1 -timeout 15m <matrix.packages> (one producer artifact per matrix group)
+          test-purego: CGO_ENABLED=0 go test -count=1 -timeout 15m ./crypto/...; CGO_ENABLED=0 go test -tags mptcrypto -count=1 -timeout 15m ./amendment/... ./crypto/mptcrypto/...
+          test-mpt-crypto: ./scripts/setup-mpt-crypto.sh test ./amendment/... ./crypto/mptcrypto/... ./internal/tx/mpt/... ./internal/testing/mpt/... (one producer artifact per OS)
+          test-repeated: go test -count=2 -timeout 20m ./codec/binarycodec/definitions ./ledger/entry/schema ./ledger/entry ./internal/rpc
+          peer-interop: PEERTLS_DOCKER_INTEROP=1 go test -tags docker -timeout 5m -v -run Test(Handshake|Manifest)_Interop_RippledDocker ./internal/peermanagement/
+          peer-interop-final: docker build -t goxrpl-oracle:3.4.0 scripts/peer-interop; verify xrpld tag/commit; go test -race -tags docker -count=1 -timeout 10m -v -run Test(Handshake|Manifest|LedgerNodeDepth|ValidatorListCollection)_Interop_RippledDocker ./internal/peermanagement/
+          consensus-smoke: docker build goxrpl; bash scripts/consensus-smoke/smoke.sh against official rippled 3.3.0 and 3.2.0 (one producer artifact per version)
+          consensus-smoke-final: regenerate definitions; build/check final rippled 3.4.0 and Go images; bash scripts/consensus-smoke/smoke.sh
+          conformance-final: actions/checkout@v5 at XRPL_FINAL_CONFORMANCE_COMMIT into fixtures/rippled-3.4.0-v3; GOXRPL_FIXTURES_DIR=FINAL_CONFORMANCE_CORPUS GOXRPL_CONFORMANCE_REQUIRED=1 go test -count=1 -timeout 30m -v ./internal/testing/conformance/... (requires pinned corpus manifest)
+          EOF
+
+      - name: Aggregate and validate final evidence
+        if: always()
+        shell: bash
+        run: scripts/acceptance/final-evidence.sh aggregate
+
+      - name: Upload final acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-1908-final-acceptance-${{ github.sha }}
+          path: ${{ runner.temp }}/issue-1908-final-acceptance
+          if-no-files-found: error
