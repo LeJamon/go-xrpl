@@ -14,7 +14,8 @@ import (
 var (
 	// noAccountBytes is the marker used to identify MPT issues in the binary format.
 	// This is the special account ID "0000000000000000000000000000000000000001".
-	noAccountBytes = []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01}
+	noAccountBytes   = []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01}
+	badCurrencyBytes = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'X', 'R', 'P', 0, 0, 0, 0, 0}
 
 	// noCurrencyBytes is rippled's noCurrency() sentinel — the 160-bit value 1
 	// (UintTypes.cpp:126-130), which to_string(Currency) renders as "1".
@@ -82,18 +83,31 @@ func (i *Issue) FromJSON(json any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	issuer, ok := mapObj["issuer"]
-	if issuerString, okstring := issuer.(string); ok && okstring {
-		_, issuerBytes, err := addresscodec.DecodeClassicAddressToAccountID(issuerString)
-		if err != nil {
-			return nil, err
-		}
-
-		return append(currencyBytes, issuerBytes...), nil
+	if bytes.Equal(currencyBytes, noCurrencyBytes) || bytes.Equal(currencyBytes, badCurrencyBytes) {
+		return nil, ErrInvalidCurrency
 	}
 
-	return currencyBytes, nil
+	issuer, hasIssuer := mapObj["issuer"]
+	if bytes.Equal(currencyBytes, zeroByteArray) {
+		if hasIssuer && issuer != nil {
+			return nil, ErrInvalidIssuer
+		}
+		return currencyBytes, nil
+	}
+
+	issuerString, ok := issuer.(string)
+	if !hasIssuer || !ok {
+		return nil, ErrInvalidIssuer
+	}
+	_, issuerBytes, err := addresscodec.DecodeClassicAddressToAccountID(issuerString)
+	if err != nil {
+		return nil, err
+	}
+	if bytes.Equal(issuerBytes, zeroByteArray) || bytes.Equal(issuerBytes, noAccountBytes) {
+		return nil, ErrInvalidIssuer
+	}
+
+	return append(currencyBytes, issuerBytes...), nil
 }
 
 // ToJSON converts a binary Issue representation back to a JSON object.
@@ -165,22 +179,11 @@ func (i *Issue) isIssueObject(obj any) bool {
 		return false
 	}
 
-	nKeys := len(mapObj)
-
-	_, okMptIssuanceID := mapObj["mpt_issuance_id"]
-	if nKeys == 1 && okMptIssuanceID {
-		return true
+	_, hasMPTIssuanceID := mapObj["mpt_issuance_id"]
+	_, hasCurrency := mapObj["currency"]
+	_, hasIssuer := mapObj["issuer"]
+	if hasMPTIssuanceID {
+		return !hasCurrency && !hasIssuer
 	}
-
-	_, okCurrency := mapObj["currency"]
-	if nKeys == 1 && okCurrency {
-		return true
-	}
-
-	_, okIssuer := mapObj["issuer"]
-	if nKeys == 2 && okCurrency && okIssuer {
-		return true
-	}
-
-	return false
+	return hasCurrency
 }

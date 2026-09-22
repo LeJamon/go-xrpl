@@ -3,6 +3,7 @@ package types
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	"github.com/stretchr/testify/require"
 )
@@ -24,6 +25,15 @@ func TestIssue_FromJson(t *testing.T) {
 				0, 0, 0, 0, 0, 0, 0,
 				0, 0, 0, 0, 0, 0,
 			},
+			expectedErr: nil,
+		},
+		{
+			name: "pass - valid xrp issue object with null issuer",
+			input: map[string]any{
+				"currency": "XRP",
+				"issuer":   nil,
+			},
+			expected:    make([]byte, 20),
 			expectedErr: nil,
 		},
 		{
@@ -78,6 +88,69 @@ func TestIssue_FromJson(t *testing.T) {
 			input:       "r3e7qTG44Mg8pHXgxPtyRx286Re5Urtx2p2",
 			expected:    nil,
 			expectedErr: ErrInvalidIssueObject,
+		},
+		{
+			name: "fail - iou missing issuer",
+			input: map[string]any{
+				"currency": "USD",
+			},
+			expectedErr: ErrInvalidIssuer,
+		},
+		{
+			name: "fail - iou non-string issuer",
+			input: map[string]any{
+				"currency": "USD",
+				"issuer":   nil,
+			},
+			expectedErr: ErrInvalidIssuer,
+		},
+		{
+			name: "fail - xrp with issuer",
+			input: map[string]any{
+				"currency": "XRP",
+				"issuer":   "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+			},
+			expectedErr: ErrInvalidIssuer,
+		},
+		{
+			name: "fail - iou with xrp account issuer",
+			input: map[string]any{
+				"currency": "USD",
+				"issuer":   "rrrrrrrrrrrrrrrrrrrrrhoLvTp",
+			},
+			expectedErr: ErrInvalidIssuer,
+		},
+		{
+			name: "fail - iou with no account issuer",
+			input: map[string]any{
+				"currency": "USD",
+				"issuer":   "rrrrrrrrrrrrrrrrrrrrBZbvji",
+			},
+			expectedErr: ErrInvalidIssuer,
+		},
+		{
+			name: "fail - iou with invalid base58 issuer",
+			input: map[string]any{
+				"currency": "USD",
+				"issuer":   "not_a_valid_address",
+			},
+			expectedErr: addresscodec.ErrInvalidClassicAddress,
+		},
+		{
+			name: "fail - no currency sentinel",
+			input: map[string]any{
+				"currency": "1",
+				"issuer":   "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+			},
+			expectedErr: ErrInvalidCurrency,
+		},
+		{
+			name: "fail - bad currency sentinel",
+			input: map[string]any{
+				"currency": "0000000000000000000000005852500000000000",
+				"issuer":   "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+			},
+			expectedErr: ErrInvalidCurrency,
 		},
 	}
 
@@ -156,6 +229,67 @@ func TestIssue_ToJson(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, tc.expected, actual)
 			}
+		})
+	}
+}
+
+func TestIssue_MPTSequenceEndianVectors(t *testing.T) {
+	tests := []struct {
+		name        string
+		canonicalID string
+		wire        []byte
+	}{
+		{
+			name:        "sequence 00000001",
+			canonicalID: "00000001AE123A8556F3CF91154711376AFB0F894F832B3D",
+			wire: []byte{
+				0xAE, 0x12, 0x3A, 0x85, 0x56, 0xF3, 0xCF, 0x91, 0x15, 0x47,
+				0x11, 0x37, 0x6A, 0xFB, 0x0F, 0x89, 0x4F, 0x83, 0x2B, 0x3D,
+				0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+				0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+				0x01, 0x00, 0x00, 0x00,
+			},
+		},
+		{
+			name:        "sequence 01020304",
+			canonicalID: "01020304AE123A8556F3CF91154711376AFB0F894F832B3D",
+			wire: []byte{
+				0xAE, 0x12, 0x3A, 0x85, 0x56, 0xF3, 0xCF, 0x91, 0x15, 0x47,
+				0x11, 0x37, 0x6A, 0xFB, 0x0F, 0x89, 0x4F, 0x83, 0x2B, 0x3D,
+				0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+				0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+				0x04, 0x03, 0x02, 0x01,
+			},
+		},
+		{
+			name:        "sequence A1B2C3D4",
+			canonicalID: "A1B2C3D4AE123A8556F3CF91154711376AFB0F894F832B3D",
+			wire: []byte{
+				0xAE, 0x12, 0x3A, 0x85, 0x56, 0xF3, 0xCF, 0x91, 0x15, 0x47,
+				0x11, 0x37, 0x6A, 0xFB, 0x0F, 0x89, 0x4F, 0x83, 0x2B, 0x3D,
+				0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+				0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+				0xD4, 0xC3, 0xB2, 0xA1,
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			issue := &Issue{}
+			json := map[string]any{"mpt_issuance_id": tc.canonicalID}
+
+			encoded, err := issue.FromJSON(json)
+			require.NoError(t, err)
+			require.Equal(t, tc.wire, encoded)
+
+			decoded, err := issue.ToJSON(testParser(tc.wire))
+			require.NoError(t, err)
+			require.Equal(t, json, decoded)
+
+			reencoded, err := issue.FromJSON(decoded)
+			require.NoError(t, err)
+			require.Equal(t, tc.wire, reencoded)
 		})
 	}
 }

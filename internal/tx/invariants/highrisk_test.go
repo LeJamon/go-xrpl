@@ -133,7 +133,7 @@ func ammSLE(t *testing.T, account, lptValue string) []byte {
 			"currency": "USD", "issuer": account, "value": lptValue,
 		},
 		"Asset":     map[string]any{"currency": "XRP"},
-		"Asset2":    map[string]any{"currency": "USD", "issuer": account},
+		"Asset2":    map[string]any{"currency": "USD", "issuer": addrIssuer},
 		"OwnerNode": "0",
 		"Flags":     uint32(0),
 	})
