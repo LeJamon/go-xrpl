@@ -259,13 +259,16 @@ case "$mode" in
       )
       for pattern in "${producer_patterns[@]}"; do
         if [[ "$pattern" == *.txt ]]; then
-          matches=("$evidence_dir/producers/producer-$pattern")
+          if [[ ! -f "$evidence_dir/producers/producer-$pattern" ]]; then
+            printf 'producer_evidence_missing=%s\n' "$pattern" >> "$output"
+            status_failed=1
+          fi
         else
           matches=("$evidence_dir"/producers/producer-${pattern})
-        fi
-        if (( ${#matches[@]} == 0 )); then
-          printf 'producer_evidence_missing=%s\n' "$pattern" >> "$output"
-          status_failed=1
+          if (( ${#matches[@]} == 0 )); then
+            printf 'producer_evidence_missing=%s\n' "$pattern" >> "$output"
+            status_failed=1
+          fi
         fi
       done
     fi

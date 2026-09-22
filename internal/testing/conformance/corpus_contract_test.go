@@ -210,6 +210,27 @@ func TestFixtureValidationRejectsMalformedTransactions(t *testing.T) {
 	}
 }
 
+func TestModifyStateValidationAllowsInferredAccountForDirectoryBump(t *testing.T) {
+	step := Step{
+		Op: "modify_state",
+		ModifyState: &ModifyState{
+			BumpLastPage: &BumpLastPage{
+				Directory:   "owner",
+				TargetPage:  1,
+				AdjustField: "IssuerNode",
+			},
+		},
+	}
+	if err := validateStep(&step, "contract.json", 0); err != nil {
+		t.Fatalf("validateStep rejected an inferred-account directory bump: %v", err)
+	}
+
+	step.ModifyState.BumpLastPage = nil
+	if err := validateStep(&step, "contract.json", 0); err == nil {
+		t.Fatal("validateStep accepted an empty state modification")
+	}
+}
+
 func TestResultExpectationRejectsUnsupportedBoundaryAndMissingState(t *testing.T) {
 	ter := "tesSUCCESS"
 	boundary := "rpc"

@@ -571,7 +571,10 @@ func validateStep(step *Step, fixturePath string, index int) error {
 		if step.ModifyState == nil {
 			return fmt.Errorf("%s (modify_state): modify_state is required", context)
 		}
-		if strings.TrimSpace(step.ModifyState.Account) == "" {
+		if step.ModifyState.MintedNFTokens == nil && step.ModifyState.FirstNFTokenSequence == nil && step.ModifyState.BumpLastPage == nil {
+			return fmt.Errorf("%s (modify_state): at least one state modification is required", context)
+		}
+		if strings.TrimSpace(step.ModifyState.Account) == "" && step.ModifyState.BumpLastPage == nil {
 			return fmt.Errorf("%s (modify_state): account is required", context)
 		}
 		if bump := step.ModifyState.BumpLastPage; bump != nil {
