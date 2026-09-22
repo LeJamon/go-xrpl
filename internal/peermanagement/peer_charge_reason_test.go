@@ -19,6 +19,13 @@ func TestChargeForReasonHaveSetDuplicate(t *testing.T) {
 	assert.Equal(t, resource.FeeUselessData(), charge)
 }
 
+func TestChargeForReasonValidationNotCurrent(t *testing.T) {
+	charge := chargeForReason("validation-not-current")
+
+	assert.Equal(t, resource.FeeUselessData(), charge)
+	assert.Equal(t, 150, charge.Cost())
+}
+
 func TestChargeForReasonProtocolTiers(t *testing.T) {
 	tests := map[string]resource.Charge{
 		"cluster-no-pubkey":               resource.FeeUselessData(),

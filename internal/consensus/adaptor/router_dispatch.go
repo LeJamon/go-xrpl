@@ -301,7 +301,9 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 			"peer", msg.PeerID,
 			"seq", validation.LedgerSeq,
 			"sign_time", validation.SignTime)
-		r.gossip.IncPeerBadData(uint64(msg.PeerID), "validation-not-current")
+		if !msg.SelectPeerCharge(resource.FeeUselessData(), "validation-not-current") {
+			r.gossip.IncPeerBadData(uint64(msg.PeerID), "validation-not-current")
+		}
 		return
 	}
 
