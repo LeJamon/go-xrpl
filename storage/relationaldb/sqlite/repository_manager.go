@@ -84,7 +84,7 @@ func NewRepositoryManager(ctx context.Context, dbDir string, settings Settings) 
 		cleanup()
 		return nil, relationaldb.NewSchemaError("new_repository_manager", "migrate ledger database", err)
 	}
-	if err := migrate(ctx, txRaw, transactionMigrations); err != nil {
+	if err := migrateTransactions(ctx, txRaw, filepath.Join(dbDir, "ledger.db"), transactionMigrations); err != nil {
 		cleanup()
 		return nil, relationaldb.NewSchemaError("new_repository_manager", "migrate transaction database", err)
 	}
@@ -99,7 +99,7 @@ func NewRepositoryManager(ctx context.Context, dbDir string, settings Settings) 
 		ledgerDB: sqlutil.NewDB(ledgerRaw),
 		txDB:     sqlutil.NewDB(txRaw),
 	}
-	rm.ledgerRepo = newLedgerRepository(rm.ledgerDB)
+	rm.ledgerRepo = newLedgerRepository(rm.txDB)
 	rm.transactionRepo = newTransactionRepository(rm.txDB)
 	rm.accountTransactionRepo = newAccountTransactionRepository(rm.txDB)
 	rm.validationRepo = sqlutil.NewGatedValidationRepository(&rm.gate, newValidationRepository(rm.ledgerDB))
@@ -246,6 +246,8 @@ func (rm *RepositoryManager) Amendment() relationaldb.AmendmentVoteRepository {
 }
 
 // WithTransaction invokes fn with transaction-bound repositories.
+// The callback must access indexes through those repositories and perform any
+// ledger queries outside the callback, as they share the same connection.
 func (rm *RepositoryManager) WithTransaction(ctx context.Context, fn func(relationaldb.TransactionRepositories) error) (err error) {
 	end, err := rm.gate.Begin()
 	if err != nil {
@@ -276,7 +278,7 @@ func (rm *RepositoryManager) withTransaction(ctx context.Context, fn func(relati
 	return nil
 }
 
-// PersistValidatedLedger stores complete indexes before publishing the header.
+// PersistValidatedLedger commits the header and its complete indexes atomically.
 func (rm *RepositoryManager) PersistValidatedLedger(ctx context.Context, value relationaldb.ValidatedLedger) error {
 	if err := value.Validate(); err != nil {
 		return err
@@ -289,10 +291,7 @@ func (rm *RepositoryManager) PersistValidatedLedger(ctx context.Context, value r
 	rm.persistMu.Lock()
 	defer rm.persistMu.Unlock()
 
-	if err := rm.ledgerRepo.deleteLedgerBySequence(ctx, value.Ledger.Sequence); err != nil {
-		return err
-	}
-	if err := rm.withTransaction(ctx, func(repos relationaldb.TransactionRepositories) error {
+	return rm.withTransaction(ctx, func(repos relationaldb.TransactionRepositories) error {
 		scoped := repos.(*transactionRepositories)
 		if err := scoped.accountTransaction.deleteByLedgerSequence(ctx, value.Ledger.Sequence); err != nil {
 			return err
@@ -326,14 +325,17 @@ func (rm *RepositoryManager) PersistValidatedLedger(ctx context.Context, value r
 				}
 			}
 		}
-		return nil
-	}); err != nil {
-		return err
-	}
-	if rm.persistHook != nil {
-		if err := rm.persistHook("ledger", len(value.Transactions)); err != nil {
+		if rm.persistHook != nil {
+			if err := rm.persistHook("ledger", len(value.Transactions)); err != nil {
+				return err
+			}
+		}
+		if err := newLedgerRepository(scoped.transaction.executor).SaveValidatedLedger(ctx, value.Ledger); err != nil {
 			return err
 		}
-	}
-	return rm.ledgerRepo.SaveValidatedLedger(ctx, value.Ledger)
+		if rm.persistHook != nil {
+			return rm.persistHook("commit", len(value.Transactions))
+		}
+		return nil
+	})
 }
