@@ -9,9 +9,9 @@
 # Pass criteria:
 #   - empty phase: all three nodes report the same validated ledger_hash and
 #     account_hash for the same seq >= MIN_SEQ_EMPTY (default 15)
-#   - tx phase: PAYMENT_COUNT genesis-funded payments all reach tesSUCCESS,
-#     and all three nodes still agree on the validated hashes for the
-#     ledger that includes the last payment
+#   - tx phase: PAYMENT_COUNT genesis-funded payments are accepted, all
+#     eventually validate with tesSUCCESS, and all three nodes still agree on
+#     every ledger that contains one of those payments
 #
 # Run locally:
 #   bash scripts/consensus-smoke/smoke.sh
@@ -20,13 +20,9 @@
 #   GOXRPL_IMAGE        image to use for goxrpl-0 (default: goxrpl:latest)
 #   RIPPLED_IMAGE       image to use for rippled-0,1 (default: xrpllabsofficial/xrpld:3.3.0)
 #   MIN_SEQ_EMPTY       minimum validated seq for the empty-ledger phase (default 15)
-#   (phase 2 no longer takes a MIN_SEQ_TX — it waits for one submitted
-#    payment to land in a validated ledger, then asserts hash agreement at
-#    exactly that seq, which catches "nodes diverged on a ledger that
-#    actually contained transactions".)
 #   PAYMENT_COUNT       payments to submit (default 5)
 #   BOOT_TIMEOUT        seconds to wait for the network to validate seq>=MIN_SEQ_EMPTY (default 180)
-#   TX_TIMEOUT          seconds to wait for tx-phase to validate seq>=MIN_SEQ_TX (default 180)
+#   TX_TIMEOUT          seconds to wait for every submitted payment to validate (default 180)
 #   KEEP_RUNNING        if "1", do not tear down on exit (for debugging)
 
 set -uo pipefail
@@ -37,7 +33,6 @@ COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 GOXRPL_IMAGE="${GOXRPL_IMAGE:-goxrpl:latest}"
 RIPPLED_IMAGE="${RIPPLED_IMAGE:-xrpllabsofficial/xrpld:3.3.0}"
 MIN_SEQ_EMPTY="${MIN_SEQ_EMPTY:-15}"
-MIN_SEQ_TX="${MIN_SEQ_TX:-12}"
 PAYMENT_COUNT="${PAYMENT_COUNT:-5}"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-180}"
 TX_TIMEOUT="${TX_TIMEOUT:-180}"
@@ -264,10 +259,13 @@ run_tx_burst() {
         resp="$(submit_payment "$url" "$dest" "$((20000000 + i))")"
         engine="$(echo "$resp" | jq -r '.result.engine_result // "rpc_error"')"
         if [[ "$engine" == "tesSUCCESS" || "$engine" == "terQUEUED" ]]; then
-            ok=$((ok + 1))
             txh="$(echo "$resp" | jq -r '.result.tx_json.hash // empty')"
-            if [[ -n "$txh" ]]; then
+            if [[ -n "$txh" && "$txh" != "null" ]]; then
+                ok=$((ok + 1))
                 SUBMITTED_TX_HASHES+=("$txh")
+            else
+                fail=$((fail + 1))
+                log "submit $((i+1))/$PAYMENT_COUNT: $engine response did not include a transaction hash"
             fi
         else
             fail=$((fail + 1))
@@ -278,32 +276,52 @@ run_tx_burst() {
         # ~50% of submissions to sequence races on the same account.
         sleep 1
     done
-    log "tx burst: $ok submitted, $fail rejected"
-    if (( ok == 0 )); then
-        log "every payment was rejected — aborting tx phase"
+    log "tx burst: $ok accepted, $fail rejected"
+    if (( ok != PAYMENT_COUNT )); then
+        log "only $ok/$PAYMENT_COUNT payments were accepted — aborting tx phase"
         return 1
     fi
 }
 
-# Echoes the seq of the first validated ledger that contains one of the
-# submitted payments. Polls rippled-0's tx RPC; deadline is `timeout` seconds.
-wait_for_tx_in_ledger() {
+# Ledger sequence for each submitted hash, populated by
+# wait_for_all_txs_in_ledger after every payment is validated successfully.
+TX_LEDGER_SEQS=()
+
+# Polls rippled-0's tx RPC until every submitted payment is validated with a
+# successful transaction result. A queued submission is accepted in the burst,
+# but it must still settle as tesSUCCESS before the smoke can pass.
+wait_for_all_txs_in_ledger() {
     local timeout="$1"
     local deadline=$(($(date +%s) + timeout))
-    local url h resp validated seq
+    local url h resp validated result seq pending i
     url="$(rpc_url rippled-0)"
     while (( $(date +%s) < deadline )); do
-        for h in "${SUBMITTED_TX_HASHES[@]}"; do
+        pending=0
+        TX_LEDGER_SEQS=()
+        for i in "${!SUBMITTED_TX_HASHES[@]}"; do
+            h="${SUBMITTED_TX_HASHES[i]}"
             resp="$(rpc_call "$url" "{\"method\":\"tx\",\"params\":[{\"transaction\":\"$h\"}]}")"
             validated="$(echo "$resp" | jq -r '.result.validated // false')"
+            result="$(echo "$resp" | jq -r '.result.meta.TransactionResult // .result.engine_result // empty')"
             seq="$(echo "$resp" | jq -r '.result.ledger_index // empty')"
-            if [[ "$validated" == "true" && -n "$seq" && "$seq" != "null" ]]; then
-                echo "$seq"
-                return 0
+            if [[ "$validated" == "true" && "$result" != "tesSUCCESS" ]]; then
+                log "payment $((i+1))/$PAYMENT_COUNT validated with unexpected result ${result:-unknown}"
+                return 1
+            fi
+            if [[ "$validated" != "true" || -z "$seq" || "$seq" == "null" || "$result" != "tesSUCCESS" ]]; then
+                pending=$((pending + 1))
+            else
+                TX_LEDGER_SEQS[i]="$seq"
             fi
         done
+        if (( pending == 0 )); then
+            log "all $PAYMENT_COUNT submitted payments validated with tesSUCCESS"
+            return 0
+        fi
+        log "waiting for $pending/$PAYMENT_COUNT submitted payments to validate"
         sleep 2
     done
+    log "timeout waiting for all $PAYMENT_COUNT submitted payments to validate after ${timeout}s"
     return 1
 }
 
@@ -331,9 +349,13 @@ assert_hashes_at_seq() {
 # --- main ---------------------------------------------------------------
 
 require docker jq curl awk
+if ! [[ "$PAYMENT_COUNT" =~ ^[1-9][0-9]*$ ]]; then
+    log "PAYMENT_COUNT must be a positive integer, got '$PAYMENT_COUNT'"
+    exit 2
+fi
 trap teardown EXIT INT TERM
 
-log "smoke config: goxrpl=$GOXRPL_IMAGE rippled=$RIPPLED_IMAGE empty_seq=$MIN_SEQ_EMPTY tx_seq=$MIN_SEQ_TX payments=$PAYMENT_COUNT"
+log "smoke config: goxrpl=$GOXRPL_IMAGE rippled=$RIPPLED_IMAGE empty_seq=$MIN_SEQ_EMPTY payments=$PAYMENT_COUNT"
 
 log "bringing up topology"
 compose down -v --remove-orphans >/dev/null 2>&1 || true
@@ -354,30 +376,44 @@ if ! assert_hashes_agree "phase 1 / empty"; then
     exit 1
 fi
 
-log "phase 2 (tx): submit $PAYMENT_COUNT payments, wait for one to validate"
+log "phase 2 (tx): submit $PAYMENT_COUNT payments, wait for every payment to validate"
 if ! run_tx_burst; then
     compose logs --no-color --tail=80
     exit 1
 fi
-TX_LEDGER_SEQ="$(wait_for_tx_in_ledger "$TX_TIMEOUT")"
-if [[ -z "$TX_LEDGER_SEQ" ]]; then
-    log "phase 2: no submitted payment reached a validated ledger in ${TX_TIMEOUT}s"
+if ! wait_for_all_txs_in_ledger "$TX_TIMEOUT"; then
+    log "phase 2: not every submitted payment reached a validated ledger in ${TX_TIMEOUT}s"
     compose logs --no-color --tail=80
     exit 1
 fi
-log "phase 2: first payment validated in seq=$TX_LEDGER_SEQ"
 
-# Wait briefly for goxrpl-0 to catch up to that seq before comparing.
-if ! wait_validated_at_least "$TX_LEDGER_SEQ" "$TX_TIMEOUT"; then
-    log "phase 2: goxrpl-0 didn't catch up to seq=$TX_LEDGER_SEQ — dumping logs"
-    compose logs --no-color --tail=80
-    exit 1
-fi
-if ! assert_hashes_at_seq "phase 2 / tx" "$TX_LEDGER_SEQ"; then
-    log "phase 2 hash divergence — dumping container logs"
-    compose logs --no-color --tail=80
-    exit 1
-fi
+# Compare every distinct transaction-containing ledger. This keeps the
+# consensus claim aligned with the acceptance claim above when payments span
+# more than one close.
+TX_ASSERTED_SEQS=()
+for TX_LEDGER_SEQ in "${TX_LEDGER_SEQS[@]}"; do
+    TX_ALREADY_ASSERTED=0
+    for TX_ASSERTED_SEQ in "${TX_ASSERTED_SEQS[@]}"; do
+        if [[ "$TX_ASSERTED_SEQ" == "$TX_LEDGER_SEQ" ]]; then
+            TX_ALREADY_ASSERTED=1
+            break
+        fi
+    done
+    if (( TX_ALREADY_ASSERTED )); then
+        continue
+    fi
+    TX_ASSERTED_SEQS+=("$TX_LEDGER_SEQ")
+    if ! wait_validated_at_least "$TX_LEDGER_SEQ" "$TX_TIMEOUT"; then
+        log "phase 2: a node didn't catch up to seq=$TX_LEDGER_SEQ — dumping logs"
+        compose logs --no-color --tail=80
+        exit 1
+    fi
+    if ! assert_hashes_at_seq "phase 2 / tx seq=$TX_LEDGER_SEQ" "$TX_LEDGER_SEQ"; then
+        log "phase 2 hash divergence at seq=$TX_LEDGER_SEQ — dumping container logs"
+        compose logs --no-color --tail=80
+        exit 1
+    fi
+done
 
 log "consensus smoke PASSED"
 exit 0

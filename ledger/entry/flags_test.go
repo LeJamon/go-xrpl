@@ -140,7 +140,7 @@ func readOracleLedgerFlags(t *testing.T) map[string]uint32 {
 	}
 	dir := filepath.Dir(file)
 	for range 12 {
-		path := filepath.Join(dir, "rippled-worktrees", "v3.3.0-oracle", "include", "xrpl", "protocol", "LedgerFormats.h")
+		path := filepath.Join(dir, "rippled-worktrees", "v3.4.0-oracle", "include", "xrpl", "protocol", "LedgerFormats.h")
 		data, err := os.ReadFile(path)
 		if err == nil {
 			flags := make(map[string]uint32)
@@ -161,7 +161,7 @@ func readOracleLedgerFlags(t *testing.T) map[string]uint32 {
 		}
 		dir = parent
 	}
-	t.Fatalf("required rippled v3.3.0 LedgerFormats.h not found from %s", file)
+	t.Fatalf("required rippled v3.4.0 LedgerFormats.h not found from %s", file)
 	return nil
 }
 

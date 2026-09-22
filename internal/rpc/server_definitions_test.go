@@ -19,10 +19,10 @@ import (
 )
 
 // This fixture is generated independently from the pinned rippled source
-// macros; see testdata/server_definitions_rc1_oracle.py.
+// macros; see testdata/server_definitions_final_oracle.py.
 //
-//go:embed testdata/server_definitions_rc1_hashes.json
-var serverDefinitionsRC1HashFixture []byte
+//go:embed testdata/server_definitions_final_hashes.json
+var serverDefinitionsFinalHashFixture []byte
 
 type serverDefinitionsSectionFixture struct {
 	SHA512Half string `json:"sha512_half"`
@@ -41,10 +41,10 @@ type serverDefinitionsHashFixture struct {
 	Sections               map[string]serverDefinitionsSectionFixture `json:"sections"`
 }
 
-func loadServerDefinitionsRC1HashFixture(t *testing.T) serverDefinitionsHashFixture {
+func loadServerDefinitionsFinalHashFixture(t *testing.T) serverDefinitionsHashFixture {
 	t.Helper()
 	var fixture serverDefinitionsHashFixture
-	require.NoError(t, json.Unmarshal(serverDefinitionsRC1HashFixture, &fixture))
+	require.NoError(t, json.Unmarshal(serverDefinitionsFinalHashFixture, &fixture))
 	return fixture
 }
 
@@ -306,8 +306,8 @@ func TestServerDefinitionsHash(t *testing.T) {
 	hash, ok := resp["hash"].(string)
 	require.True(t, ok, "response should contain a string hash")
 	require.Len(t, hash, 64, "hash should be a 256-bit hex string")
-	// Pinned to the v3.4.0-rc1 ServerDefinitions document and its compact
-	// Json::FastWriter serialization (oracle commit 2ad4def35fd8580da027462517ba3375cc005c94).
+	// Pinned to the v3.4.0 ServerDefinitions document and its compact
+	// Json::FastWriter serialization (oracle commit 4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17).
 	assert.Equal(t, "1EA05B0FC11101F7C500BD0DAC794A8BC746A7FBA6250B75489603EB820E0FF5", hash)
 
 	t.Run("matching hash short-circuits", func(t *testing.T) {
@@ -372,10 +372,10 @@ func TestServerDefinitionsHash(t *testing.T) {
 
 // The section checks make omissions in formats, flags, or type tables visible
 // even when the complete-document hash is accidentally updated.
-func TestServerDefinitionsMatchesRC1SourceFixture(t *testing.T) {
-	fixture := loadServerDefinitionsRC1HashFixture(t)
-	assert.Equal(t, "3.4.0-rc1", fixture.Oracle.Tag)
-	assert.Equal(t, "2ad4def35fd8580da027462517ba3375cc005c94", fixture.Oracle.Commit)
+func TestServerDefinitionsMatchesFinalSourceFixture(t *testing.T) {
+	fixture := loadServerDefinitionsFinalHashFixture(t)
+	assert.Equal(t, "3.4.0", fixture.Oracle.Tag)
+	assert.Equal(t, "4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17", fixture.Oracle.Commit)
 	assert.Equal(t,
 		"1EA05B0FC11101F7C500BD0DAC794A8BC746A7FBA6250B75489603EB820E0FF5",
 		fixture.FullDocumentSHA512Half,
@@ -453,7 +453,7 @@ func TestServerDefinitionsInvalidSentinel(t *testing.T) {
 	}
 }
 
-func TestServerDefinitions_3_4_0_RC1_Sections(t *testing.T) {
+func TestServerDefinitions_3_4_0_Final_Sections(t *testing.T) {
 	method := &handlers.ServerDefinitionsMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),

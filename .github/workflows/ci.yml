@@ -179,24 +179,24 @@ jobs:
           repository: XRPLF/rippled
           ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
           path: rippled-worktrees/v3.3.0-oracle
-      - name: Check out rippled v3.4.0-rc1 oracle
+      - name: Check out rippled v3.4.0 oracle
         if: matrix.group == 'libs'
         uses: actions/checkout@v5
         with:
           repository: XRPLF/rippled
-          ref: 2ad4def35fd8580da027462517ba3375cc005c94
-          path: rippled-worktrees/v3.4.0-rc1-oracle
-      - name: Verify rc1 definitions fixture provenance and regeneration
+          ref: 4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17
+          path: rippled-worktrees/v3.4.0-oracle
+      - name: Verify final definitions fixture provenance and regeneration
         if: matrix.group == 'libs'
         run: |
-          generator=internal/rpc/testdata/server_definitions_rc1_oracle.py
+          generator=internal/rpc/testdata/server_definitions_final_oracle.py
           if python3 "$generator" "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/wrong-oracle.json"; then
             echo "::error::definitions generator accepted the wrong oracle"
             exit 1
           fi
           test ! -e "$RUNNER_TEMP/wrong-oracle.json"
-          python3 "$generator" rippled-worktrees/v3.4.0-rc1-oracle --output "$RUNNER_TEMP/server_definitions_rc1_hashes.json"
-          diff -u internal/rpc/testdata/server_definitions_rc1_hashes.json "$RUNNER_TEMP/server_definitions_rc1_hashes.json"
+          python3 "$generator" rippled-worktrees/v3.4.0-oracle --output "$RUNNER_TEMP/server_definitions_final_hashes.json"
+          diff -u internal/rpc/testdata/server_definitions_final_hashes.json "$RUNNER_TEMP/server_definitions_final_hashes.json"
       - uses: ./.github/actions/setup
       - run: go test ${{ matrix.race }} -count=1 -timeout 15m ${{ matrix.packages }}
 
@@ -293,5 +293,146 @@ jobs:
           TX_TIMEOUT: "180"
 
       - name: Dump container logs on failure
+        if: failure()
+        run: docker compose -f scripts/consensus-smoke/docker-compose.yml logs --no-color --tail=200 || true
+
+  consensus-smoke-final:
+    name: Consensus smoke (rippled 3.4.0 final)
+    runs-on: ubuntu-latest
+    env:
+      ORACLE_TAG: 3.4.0
+      ORACLE_COMMIT: 4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17
+      ORACLE_IMAGE: goxrpl-oracle:3.4.0
+      GOXRPL_IMAGE: goxrpl-final:${{ github.sha }}
+      EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-final-evidence
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check out final rippled oracle
+        uses: actions/checkout@v5
+        with:
+          repository: XRPLF/rippled
+          ref: 4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17
+          path: rippled-worktrees/v3.4.0-oracle
+
+      - name: Capture final acceptance evidence and run checks
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          evidence="$EVIDENCE_DIR/evidence.txt"
+          : > "$evidence"
+          overall_status=0
+          export ORACLE_TAG ORACLE_COMMIT ORACLE_IMAGE GOXRPL_IMAGE EVIDENCE_DIR
+
+          run_recorded() {
+            local label="$1"
+            local command="$2"
+            local rc
+            printf '\nCOMMAND[%s]: %s\n' "$label" "$command" | tee -a "$evidence"
+            bash -o pipefail -c "$command" 2>&1 | tee -a "$evidence"
+            rc="${PIPESTATUS[0]}"
+            printf 'STATUS[%s]: %s\n' "$label" "$rc" | tee -a "$evidence"
+            if (( rc != 0 )); then
+              overall_status=1
+            fi
+          }
+
+          run_recorded tested_sha 'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'
+          run_recorded go_worktree_clean 'git diff --quiet && git diff --cached --quiet'
+          run_recorded oracle_checkout_sha 'test "$(git -C rippled-worktrees/v3.4.0-oracle rev-parse HEAD)" = "$ORACLE_COMMIT"'
+          run_recorded oracle_checkout_clean 'test -z "$(git -C rippled-worktrees/v3.4.0-oracle status --porcelain)"'
+          run_recorded tool_go_version 'go version'
+          run_recorded tool_python_version 'python3 --version'
+          run_recorded tool_bash_version 'bash --version | awk "NR == 1 {print}"'
+          run_recorded tool_docker_version 'docker --version'
+          run_recorded tool_compose_version 'docker compose version'
+          run_recorded tool_jq_version 'jq --version'
+          run_recorded definitions_regeneration 'python3 internal/rpc/testdata/server_definitions_final_oracle.py rippled-worktrees/v3.4.0-oracle --output "$EVIDENCE_DIR/server_definitions_final_hashes.json" && diff -u internal/rpc/testdata/server_definitions_final_hashes.json "$EVIDENCE_DIR/server_definitions_final_hashes.json"'
+          run_recorded definition_fixture_metadata 'jq -c "{oracle,full_document_sha512_half,full_document_bytes}" internal/rpc/testdata/server_definitions_final_hashes.json'
+          run_recorded definition_fixture_sha256 'sha256sum internal/rpc/testdata/server_definitions_final_hashes.json'
+          run_recorded oracle_dockerfile_checksum 'grep -oE "sha256:[0-9a-f]{64}" scripts/peer-interop/Dockerfile'
+          run_recorded oracle_build 'docker build -t "$ORACLE_IMAGE" scripts/peer-interop'
+          run_recorded oracle_image_id 'docker image inspect "$ORACLE_IMAGE" --format "{{.Id}} {{json .RepoDigests}}"'
+          run_recorded oracle_version 'docker run --rm --entrypoint /usr/bin/xrpld "$ORACLE_IMAGE" --version > "$EVIDENCE_DIR/oracle-version.txt"'
+          run_recorded oracle_version_tag 'grep --fixed-strings --line-regexp "xrpld version $ORACLE_TAG" "$EVIDENCE_DIR/oracle-version.txt"'
+          run_recorded oracle_version_commit 'grep --fixed-strings --line-regexp "Git commit hash: $ORACLE_COMMIT" "$EVIDENCE_DIR/oracle-version.txt"'
+          run_recorded goxrpl_image_build 'docker build --build-arg "VERSION=$GITHUB_SHA" -t "$GOXRPL_IMAGE" .'
+          run_recorded goxrpl_image_id 'docker image inspect "$GOXRPL_IMAGE" --format "{{.Id}} {{json .RepoDigests}}"'
+          run_recorded goxrpl_version 'docker run --rm "$GOXRPL_IMAGE" version > "$EVIDENCE_DIR/goxrpl-version.txt" && grep --fixed-strings --line-regexp "go-xrpl version $GITHUB_SHA" "$EVIDENCE_DIR/goxrpl-version.txt"'
+          run_recorded consensus_smoke 'GOXRPL_IMAGE="$GOXRPL_IMAGE" RIPPLED_IMAGE="$ORACLE_IMAGE" PAYMENT_COUNT=3 MIN_SEQ_EMPTY=15 BOOT_TIMEOUT=240 TX_TIMEOUT=180 bash scripts/consensus-smoke/smoke.sh > "$EVIDENCE_DIR/consensus-smoke.log" 2>&1'
+          run_recorded consensus_smoke_log 'test -s "$EVIDENCE_DIR/consensus-smoke.log" && cat "$EVIDENCE_DIR/consensus-smoke.log"'
+
+          go_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+          if ! git diff --quiet || ! git diff --cached --quiet; then
+            go_dirty=true
+          else
+            go_dirty=false
+          fi
+          definition_sha256="$(sha256sum internal/rpc/testdata/server_definitions_final_hashes.json 2>/dev/null | awk '{print $1}' || true)"
+          definition_sha512_half="$(jq -r '.full_document_sha512_half // empty' internal/rpc/testdata/server_definitions_final_hashes.json 2>/dev/null || true)"
+          oracle_image_id="$(docker image inspect "$ORACLE_IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
+          goxrpl_image_id="$(docker image inspect "$GOXRPL_IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
+          {
+            printf 'tested_sha=%s\n' "$GITHUB_SHA"
+            printf 'go_sha=%s\n' "$go_sha"
+            printf 'go_dirty=%s\n' "$go_dirty"
+            printf 'oracle_tag=%s\n' "$ORACLE_TAG"
+            printf 'oracle_commit=%s\n' "$ORACLE_COMMIT"
+            printf 'oracle_image=%s\n' "$ORACLE_IMAGE"
+            printf 'peer_oracle_image=%s\n' "$ORACLE_IMAGE"
+            printf 'consensus_oracle_image=%s\n' "$ORACLE_IMAGE"
+            printf 'compatibility_images=xrpllabsofficial/xrpld:3.3.0,xrpllabsofficial/xrpld:3.2.0\n'
+            printf 'oracle_image_id=%s\n' "$oracle_image_id"
+            printf 'goxrpl_image=%s\n' "$GOXRPL_IMAGE"
+            printf 'goxrpl_image_id=%s\n' "$goxrpl_image_id"
+            printf 'definition_sha256=%s\n' "$definition_sha256"
+            printf 'definition_full_document_sha512_half=%s\n' "$definition_sha512_half"
+            printf 'overall_status=%s\n' "$overall_status"
+          } >> "$evidence"
+
+          evidence_status=0
+          for required in \
+            "tested_sha=$GITHUB_SHA" \
+            "go_sha=$GITHUB_SHA" \
+            "go_dirty=false" \
+            "oracle_tag=$ORACLE_TAG" \
+            "oracle_commit=$ORACLE_COMMIT" \
+            "peer_oracle_image=$ORACLE_IMAGE" \
+            "consensus_oracle_image=$ORACLE_IMAGE" \
+            "definition_sha256=" \
+            "definition_full_document_sha512_half=" \
+            "overall_status=0"; do
+            if ! grep --fixed-strings --line-regexp "$required" "$evidence" >/dev/null; then
+              printf 'MISSING_REQUIRED_EVIDENCE=%s\n' "$required" | tee -a "$evidence"
+              evidence_status=1
+            fi
+          done
+          for required_value in \
+            "definition_sha256=$definition_sha256" \
+            "definition_full_document_sha512_half=$definition_sha512_half" \
+            "oracle_image_id=$oracle_image_id" \
+            "goxrpl_image_id=$goxrpl_image_id"; do
+            required_key="${required_value%%=*}"
+            required_value="${required_value#*=}"
+            if [[ -z "$required_value" ]]; then
+              printf 'MISSING_REQUIRED_EVIDENCE=%s\n' "$required_key" | tee -a "$evidence"
+              evidence_status=1
+            fi
+          done
+          printf 'evidence_validation_status=%s\n' "$evidence_status" | tee -a "$evidence"
+          if (( evidence_status != 0 || overall_status != 0 )); then
+            exit 1
+          fi
+
+      - name: Upload final acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-1908-final-acceptance-${{ github.sha }}
+          path: ${{ runner.temp }}/issue-1908-final-evidence
+          if-no-files-found: error
+
+      - name: Dump final consensus logs on failure
         if: failure()
         run: docker compose -f scripts/consensus-smoke/docker-compose.yml logs --no-color --tail=200 || true
