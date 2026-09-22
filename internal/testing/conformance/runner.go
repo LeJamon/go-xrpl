@@ -575,7 +575,6 @@ func RunFixture(t *testing.T, fixturePath string) {
 			r.replaySteps(prereq.Steps, prereq.DependsOn != "")
 		}
 	} else {
-		// Normal fixture: set up only the state explicitly recorded by the fixture.
 		envCfg := fixture.Env
 		if envCfg == nil {
 			cfg := defaultEnvConfig()
@@ -811,7 +810,6 @@ func findScopeBoundary(steps []Step) int {
 	return firstFund
 }
 
-// replayTx submits a prerequisite transaction and asserts its recorded TER.
 func (r *runner) replayTx(step Step) error {
 	blob, err := hex.DecodeString(step.TxBlob)
 	if err != nil || len(blob) == 0 {

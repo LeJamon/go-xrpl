@@ -38,9 +38,6 @@ var (
 	errCorpusNoInScope     = errors.New("conformance corpus has no in-scope fixtures")
 )
 
-// corpusManifest is the only metadata accepted at the corpus root. The
-// manifest is external to this repository because the final oracle fixture
-// corpus is intentionally not checked in.
 type corpusManifest struct {
 	Schema              int
 	FixtureVersion      string

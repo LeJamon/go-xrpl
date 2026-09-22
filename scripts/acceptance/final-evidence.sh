@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Record producer results and assemble the final release evidence manifest.
 
 set -euo pipefail
 

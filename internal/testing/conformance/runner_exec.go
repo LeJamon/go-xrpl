@@ -611,8 +611,6 @@ func (r *runner) execRetryBatch(batch []struct {
 	}
 	r.env.SetBypassTxQ(false)
 
-	// Check every retry's TER code exactly. A missing predecessor is a fixture
-	// error, not a reason to accept terPRE_SEQ as a substitute result.
 	for _, retry := range retries {
 		if err := resultExpectationError(retry.step, retry.result, retry.stateHash); err != nil {
 			r.t.Errorf("Step %d (retry seq=%d): %v", retry.idx, retry.seq, err)
