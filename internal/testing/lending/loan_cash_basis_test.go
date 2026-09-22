@@ -20,6 +20,7 @@ func newCashLendingEnv(t *testing.T) *jtx.TestEnv {
 	env.EnableFeature("MPTokensV1")
 	env.EnableFeature("LendingProtocol")
 	env.EnableFeature("LendingProtocolV1_1")
+	env.DisableFeature("fixCleanup3_4_0")
 	env.Close()
 	return env
 }

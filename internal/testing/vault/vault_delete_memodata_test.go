@@ -11,8 +11,10 @@ import (
 
 func TestVaultDeleteMemoData(t *testing.T) {
 	env := newVaultEnv(t)
+	env.DisableFeature("LendingProtocolV1_1")
 	owner := jtx.NewAccount("owner")
 	env.Fund(owner)
+	env.Close()
 
 	missingID := strings.Repeat("01", 32)
 	maximumData := strings.Repeat("AA", vault.MaxVaultDataLength)

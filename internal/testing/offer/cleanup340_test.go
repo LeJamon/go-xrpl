@@ -18,6 +18,8 @@ func TestOfferCleanup340DisallowIncomingTrustline(t *testing.T) {
 				env := jtx.NewTestEnv(t)
 				if enabled {
 					env.EnableFeature("fixCleanup3_4_0")
+				} else {
+					env.DisableFeature("fixCleanup3_4_0")
 				}
 				issuer, alice := jtx.NewAccount("issuer"), jtx.NewAccount("alice")
 				env.FundAmount(issuer, uint64(jtx.XRP(1000)))

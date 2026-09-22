@@ -18,6 +18,8 @@ func TestNFTCleanup340FakeXRP(t *testing.T) {
 				env := jtx.NewTestEnv(t)
 				if enabled {
 					env.EnableFeature("fixCleanup3_4_0")
+				} else {
+					env.DisableFeature("fixCleanup3_4_0")
 				}
 				alice, buyer, broker, gw := jtx.NewAccount("alice"), jtx.NewAccount("buyer"), jtx.NewAccount("broker"), jtx.NewAccount("gw")
 				env.Fund(alice, buyer, broker, gw)
@@ -57,6 +59,8 @@ func TestNFTCleanup340IssuerGlobalFreeze(t *testing.T) {
 				env := jtx.NewTestEnv(t)
 				if enabled {
 					env.EnableFeature("fixCleanup3_4_0")
+				} else {
+					env.DisableFeature("fixCleanup3_4_0")
 				}
 				issuer, buyer := jtx.NewAccount("issuer"), jtx.NewAccount("buyer")
 				env.Fund(issuer, buyer)

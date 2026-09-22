@@ -24,6 +24,8 @@ func TestPermissionedDEXCleanup340ExpiredCredentials(t *testing.T) {
 				env := jtx.NewTestEnv(t)
 				if enabled {
 					env.EnableFeature("fixCleanup3_4_0")
+				} else {
+					env.DisableFeature("fixCleanup3_4_0")
 				}
 				dex := SetupPermissionedDEX(t, env)
 				members := []*jtx.Account{dex.Alice}
@@ -99,6 +101,8 @@ func TestPermissionedDEXCleanup340ReplaceDomain(t *testing.T) {
 			env := jtx.NewTestEnv(t)
 			if enabled {
 				env.EnableFeature("fixCleanup3_4_0")
+			} else {
+				env.DisableFeature("fixCleanup3_4_0")
 			}
 			dex := SetupPermissionedDEX(t, env)
 			seq := env.Seq(dex.DomainOwner)

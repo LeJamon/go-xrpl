@@ -29,6 +29,8 @@ func newLendingEnv(t *testing.T) *jtx.TestEnv {
 	env.EnableFeature("SingleAssetVault")
 	env.EnableFeature("MPTokensV1")
 	env.EnableFeature("LendingProtocol")
+	env.DisableFeature("LendingProtocolV1_1")
+	env.DisableFeature("fixCleanup3_4_0")
 	env.Close()
 	return env
 }

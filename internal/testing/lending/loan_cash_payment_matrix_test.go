@@ -261,6 +261,7 @@ func newPaymentLegacyLendingEnvWithCleanup(t *testing.T, cleanup bool) *jtx.Test
 	env.EnableFeature("SingleAssetVault")
 	env.EnableFeature("MPTokensV1")
 	env.EnableFeature("LendingProtocol")
+	env.DisableFeature("LendingProtocolV1_1")
 	if cleanup {
 		env.EnableFeature("fixCleanup3_4_0")
 	} else {

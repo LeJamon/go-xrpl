@@ -19,6 +19,9 @@ func TestAMMBidCleanup340Floor(t *testing.T) {
 						if enabled {
 							env.EnableFeature("fixCleanup3_4_0")
 							env.Close()
+						} else {
+							env.DisableFeature("fixCleanup3_4_0")
+							env.Close()
 						}
 						if expired {
 							env.AdvanceTime(86401 * time.Second)
@@ -63,6 +66,9 @@ func TestAMMBidCleanup340Limits(t *testing.T) {
 				amm.TestAMM(t, nil, 0, func(env *amm.AMMTestEnv, _ *jtx.Account) {
 					if enabled {
 						env.EnableFeature("fixCleanup3_4_0")
+						env.Close()
+					} else {
+						env.DisableFeature("fixCleanup3_4_0")
 						env.Close()
 					}
 					bid := amm.AMMBid(env.Alice, amm.XRP(), env.USD)

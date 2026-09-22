@@ -32,6 +32,8 @@ func TestLoanBrokerDeleteIOUMetadataTransitions(t *testing.T) {
 	// Preserve the genesis hash used by these historical metadata vectors.
 	cfg.Amendments = append(cfg.Amendments, amendment.FeatureFixAMMOverflowOffer)
 	env := jtx.NewTestEnvWithConfig(t, cfg)
+	env.DisableFeature("LendingProtocolV1_1")
+	env.DisableFeature("fixCleanup3_4_0")
 	env.EnableFeature("SingleAssetVault")
 	env.EnableFeature("MPTokensV1")
 	env.EnableFeature("LendingProtocol")

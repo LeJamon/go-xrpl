@@ -127,6 +127,7 @@ func TestAccountDelete_CredentialAuthorization(t *testing.T) {
 
 	t.Run("zero credential id reaches ledger validation", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
+		env.DisableFeature("fixCleanup3_4_0")
 		alice := jtx.NewAccount("alice")
 		destination := jtx.NewAccount("destination")
 		env.Fund(alice, destination)
