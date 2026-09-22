@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
@@ -29,7 +30,6 @@ func (r *runner) setupEnv(cfg EnvConfig) {
 	// consuming a sequence number in the new scope and causing tefPAST_SEQ.
 	r.pendingHeld = nil
 	r.pendingQueued = nil
-	r.disabledTxBySeq = nil
 	genCfg := genesis.DefaultConfig()
 	genCfg.Fees.BaseFee = drops.NewXRPAmount(int64(cfg.BaseFee))
 	genCfg.Fees.ReserveBase = drops.XRPAmount(cfg.ReserveBase)
@@ -111,6 +111,14 @@ func (r *runner) setupEnv(cfg EnvConfig) {
 	}
 	r.env.SetTime(rippleEpoch.Add(-setupResolution))
 	r.env.Close()
+	if cfg.InitialLedgerSeq != nil {
+		for r.env.LedgerSeq() < *cfg.InitialLedgerSeq {
+			r.env.Close()
+		}
+		if r.env.LedgerSeq() != *cfg.InitialLedgerSeq {
+			r.t.Fatalf("initial_ledger_seq=%d cannot be represented (got %d)", *cfg.InitialLedgerSeq, r.env.LedgerSeq())
+		}
+	}
 
 	// Reinitialize the still-empty TxQ after the initial close. In rippled,
 	// startGenesisLedger() does NOT call TxQ::processClosedLedger, so
@@ -123,14 +131,8 @@ func (r *runner) setupEnv(cfg EnvConfig) {
 	}
 
 	// For non-TxQ suites, disable open-ledger fee adequacy checks by default.
-	// Many fixture tx_blobs use a fee lower than the tx-type-specific minimum
-	// (e.g., AccountDelete blobs with fee < increment) because the rippled test
-	// framework adjusts fees at submission time, but the fixture exporter captures
-	// the pre-adjustment blob. With OpenLedger=true, these would get telINSUF_FEE_P
-	// instead of the expected TER (tecHAS_OBLIGATIONS, tecTOO_SOON, etc.).
-	//
-	// Steps that explicitly expect telINSUF_FEE_P temporarily enable OpenLedger
-	// in execTx() so the fee adequacy check fires.
+	// The fixture's recorded environment, rather than its expected TER, selects
+	// this mode; a fee-floor result must still match exactly at submission.
 	//
 	// TxQ suites need open-ledger mode so fee escalation triggers queuing.
 	//
@@ -248,11 +250,11 @@ func (r *runner) applyLoadFeeEvent(stepIdx int) {
 	}
 }
 
-// execClose handles a "close" step. With v2 fixtures, the close_time field
+// execClose handles a "close" step. With v3 fixtures, the close_time field
 // provides the exact close time, eliminating the need for time calibration.
 func (r *runner) execClose(stepIdx int, step Step) {
 	if step.CloseTime != nil {
-		// v2 fixture: set clock so that after Close()'s resolution-based advance
+		// v3 fixture: set clock so that after Close()'s resolution-based advance
 		// (default 10s), the resulting close time matches the fixture's close_time.
 		// close_time is in seconds since Ripple epoch (Jan 1, 2000).
 		targetTime := rippleEpoch.Add(time.Duration(*step.CloseTime) * time.Second)
@@ -363,27 +365,12 @@ func (r *runner) execTx(stepIdx int, step Step) {
 	if err != nil {
 		r.t.Fatalf("Step %d (tx): invalid tx_blob hex: %v", stepIdx, err)
 	}
-
-	// Empty blob means the transaction was constructed without required fields
-	// and couldn't be serialized. If the expected result is tem* (malformed)
-	// or telENV_RPC_FAILED, treat this as a conformance match — both rippled
-	// and go-xrpl reject it.
 	if len(blob) == 0 {
-		if strings.HasPrefix(step.ExpectTER, "tem") || step.ExpectTER == "telENV_RPC_FAILED" {
-			return
-		}
-		r.t.Fatalf("Step %d (tx): empty tx_blob with expected %s", stepIdx, step.ExpectTER)
+		r.t.Fatalf("Step %d (tx): empty tx_blob", stepIdx)
 	}
 
 	parsed, err := tx.ParseFromBinary(blob)
 	if err != nil {
-		// If the tx_blob can't be parsed and the expected result is a tem
-		// (malformed) or telENV_RPC_FAILED code, treat this as a conformance
-		// match — both rippled and go-xrpl reject the transaction, just at
-		// different stages.
-		if strings.HasPrefix(step.ExpectTER, "tem") || step.ExpectTER == "telENV_RPC_FAILED" {
-			return
-		}
 		r.t.Fatalf("Step %d (tx): failed to parse tx_blob: %v", stepIdx, err)
 	}
 
@@ -399,17 +386,6 @@ func (r *runner) execTx(stepIdx int, step Step) {
 	if step.ParentCloseTime != nil {
 		targetTime := rippleEpoch.Add(time.Duration(*step.ParentCloseTime) * time.Second)
 		r.env.SetTime(targetTime)
-	}
-
-	// When the fixture expects telINSUF_FEE_P, temporarily enable
-	// open-ledger fee adequacy checks so the engine can produce that code.
-	// Many fixture tx_blobs have fees lower than the tx-type-specific minimum
-	// (e.g., AccountDelete with fee < increment) because rippled's test
-	// framework adjusts fees at submission. Without OpenLedger, the engine
-	// skips fee adequacy and the tx proceeds to a later check (tecTOO_SOON).
-	if step.ExpectTER == "telINSUF_FEE_P" {
-		r.env.SetOpenLedger(true)
-		defer r.env.SetOpenLedger(false)
 	}
 
 	// Some rippled tests use openLedger().modify() to apply transactions
@@ -428,86 +404,21 @@ func (r *runner) execTx(stepIdx int, step Step) {
 			SkipSignature: true,
 		})
 	}
+	beforeState, err := r.env.Ledger().StateMapHash()
+	if err != nil {
+		r.t.Fatalf("Step %d (tx): read pre-state hash: %v", stepIdx, err)
+	}
 	result := submitParsed(parsed)
-
-	// When go-xrpl returns terPRE_SEQ but the fixture expects a different result,
-	// the account's ledger sequence is behind the fixture's baked-in sequence.
-	// This happens when rippled's test framework consumed sequences for tem*
-	// results (via type-specific preflight inside doApply) but go-xrpl did not.
-	// Bump the account sequence (and deduct fee for each skipped seq) to align
-	// with the fixture, then resubmit.
-	//
-	// The fee deducted per bump must match the transaction's declared Fee, not
-	// the base fee. Multi-signed transactions have Fee = baseFee * (1 + numSigners),
-	// so using the base fee alone under-deducts and causes balance mismatches.
-	if result.Code == "terPRE_SEQ" && step.ExpectTER != "terPRE_SEQ" {
-		common := parsed.GetCommon()
-		if common.Account != "" && common.Sequence != nil {
-			acc := r.accountByAddress(common.Account)
-			if acc != nil && r.env.Exists(acc) {
-				currentSeq := r.env.Seq(acc)
-				targetSeq := *common.Sequence
-				const maxSeqBump = 50
-				if targetSeq > currentSeq && targetSeq-currentSeq <= maxSeqBump {
-					// Use the transaction's declared fee for the bump amount.
-					// This matches what rippled would have charged for each
-					// consumed sequence (e.g., multi-sign fee for multi-signed txns).
-					bumpFee := r.env.BaseFee()
-					if common.Fee != "" {
-						if parsedFee, err := strconv.ParseUint(common.Fee, 10, 64); err == nil && parsedFee > 0 {
-							bumpFee = parsedFee
-						}
-					}
-					for currentSeq < targetSeq {
-						// Check if this sequence corresponds to a previously
-						// temDISABLED transaction. If so, resubmit that
-						// transaction instead of a plain sequence bump. The
-						// amendment may now be enabled, so the transaction
-						// should pass preflight and be applied normally.
-						// This matches rippled's open ledger behavior where
-						// submitted transactions are retained and re-applied
-						// when the required amendment is enabled.
-						key := fmt.Sprintf("%s:%d", common.Account, currentSeq)
-						if disabledTx, ok := r.disabledTxBySeq[key]; ok {
-							delete(r.disabledTxBySeq, key)
-							submitParsed(disabledTx)
-						} else {
-							r.env.BumpSequenceAndDeductAmount(acc, bumpFee)
-						}
-						currentSeq++
-					}
-					result = submitParsed(parsed)
-				}
-			}
-		}
+	afterState, err := r.env.Ledger().StateMapHash()
+	if err != nil {
+		r.t.Fatalf("Step %d (tx): read post-state hash: %v", stepIdx, err)
+	}
+	if !result.Applied && beforeState != afterState {
+		r.t.Errorf("Step %d (tx): rejected transaction mutated ledger state", stepIdx)
 	}
 
-	// Assert TER code.
-	//
-	// Special handling for telENV_RPC_FAILED: this is rippled's test-framework
-	// code meaning the transaction was rejected at the RPC layer before
-	// reaching the engine (e.g., duplicate multi-signers, malformed blobs,
-	// or fee too low for the RPC layer). go-xrpl's conformance runner submits
-	// directly to the engine, so the rejection may happen at a different
-	// stage. Any non-applied result (tel*, tef*, tem*, ter*) is an acceptable
-	// match because both implementations reject the transaction.
-	if result.Code != step.ExpectTER {
-		if step.ExpectTER == "telENV_RPC_FAILED" && !result.Success &&
-			!strings.HasPrefix(result.Code, "tec") {
-			// Both reject the transaction — acceptable match.
-			return
-		}
-		txType := "unknown"
-		if step.TxJSON != nil {
-			var txj map[string]any
-			if json.Unmarshal(step.TxJSON, &txj) == nil {
-				if tt, ok := txj["TransactionType"].(string); ok {
-					txType = tt
-				}
-			}
-		}
-		r.t.Errorf("Step %d (tx %s): TER mismatch: got %q, want %q",
-			stepIdx, txType, result.Code, step.ExpectTER)
+	if err := resultExpectationError(step, result, hex.EncodeToString(afterState[:])); err != nil {
+		r.t.Errorf("Step %d (tx): %v", stepIdx, err)
 		return
 	}
 
@@ -525,20 +436,6 @@ func (r *runner) execTx(stepIdx int, step Step) {
 			r.pendingHeld = append(r.pendingHeld, parsed)
 		} else if strings.HasPrefix(result.Code, "ter") && result.Code != "terNO_ACCOUNT" {
 			r.pendingQueued = append(r.pendingQueued, parsed)
-		}
-	}
-
-	// Store temDISABLED transactions keyed by (account, sequence) so they
-	// can be replayed when BumpSequenceAndDeductAmount hits a gap that
-	// matches a previously-disabled transaction.
-	if result.Code == "temDISABLED" {
-		common := parsed.GetCommon()
-		if common.Account != "" && common.Sequence != nil {
-			key := fmt.Sprintf("%s:%d", common.Account, *common.Sequence)
-			if r.disabledTxBySeq == nil {
-				r.disabledTxBySeq = make(map[string]tx.Transaction)
-			}
-			r.disabledTxBySeq[key] = parsed
 		}
 	}
 
@@ -560,17 +457,47 @@ func (r *runner) execTx(stepIdx int, step Step) {
 		r.retryHeldTxs()
 	}
 
-	// Assert post-state only for applied results (tesSUCCESS or tec).
-	// Failed transactions (tem/tef/tel/ter) don't modify ledger state,
-	// so post-state checks would compare against pre-transaction state
-	// which may not match expectations (e.g., accounts not yet funded).
-	if step.PostState != nil && result.Success {
+	if step.PostState != nil {
 		r.assertPostState(stepIdx, step.PostState)
 	}
-	// Also check post-state for tec results (applied but with error)
-	if step.PostState != nil && strings.HasPrefix(result.Code, "tec") {
-		r.assertPostState(stepIdx, step.PostState)
+}
+
+func resultExpectationError(step Step, result jtx.TxResult, stateHash string) error {
+	expected := step.ExpectedResult
+	if expected == nil || expected.TERCode == nil || expected.Applied == nil || expected.Queued == nil || expected.Fee == nil || expected.MetadataSHA512Half == nil || expected.StateSHA512Half == nil {
+		return fmt.Errorf("missing expected_result for %q", step.ExpectTER)
 	}
+	if result.Code != step.ExpectTER {
+		return fmt.Errorf("TER mismatch: got %q, want %q", result.Code, step.ExpectTER)
+	}
+	if int(result.Result) != *expected.TERCode {
+		return fmt.Errorf("numeric TER mismatch: got %d, want %d", result.Result, *expected.TERCode)
+	}
+	if result.Applied != *expected.Applied {
+		return fmt.Errorf("applied mismatch: got %t, want %t", result.Applied, *expected.Applied)
+	}
+	if result.Queued != *expected.Queued {
+		return fmt.Errorf("queued mismatch: got %t, want %t", result.Queued, *expected.Queued)
+	}
+	if result.Fee != *expected.Fee {
+		return fmt.Errorf("fee mismatch: got %d, want %d", result.Fee, *expected.Fee)
+	}
+	actualMetadataHash := ""
+	if result.Metadata != nil {
+		metadata, err := tx.SerializeMetadata(result.Metadata)
+		if err != nil {
+			return fmt.Errorf("serialize metadata: %w", err)
+		}
+		sum := sha512half.Sum(metadata)
+		actualMetadataHash = hex.EncodeToString(sum[:])
+	}
+	if !strings.EqualFold(actualMetadataHash, strings.TrimSpace(*expected.MetadataSHA512Half)) {
+		return fmt.Errorf("metadata hash mismatch: got %q, want %q", actualMetadataHash, strings.TrimSpace(*expected.MetadataSHA512Half))
+	}
+	if !strings.EqualFold(stateHash, strings.TrimSpace(*expected.StateSHA512Half)) {
+		return fmt.Errorf("state hash mismatch: got %q, want %q", stateHash, strings.TrimSpace(*expected.StateSHA512Half))
+	}
+	return nil
 }
 
 // retryHeldTxs retries transactions that returned terPRE_TICKET or
@@ -618,30 +545,31 @@ func (r *runner) retryQueuedTxs() {
 // after the close step because that is when they become visible.
 //
 // All retries in a batch are sorted by sequence and applied directly
-// (bypassing TxQ). Some retry batches may have sequence gaps where the
-// fixture did not capture intermediate tx submissions (e.g., fillQueue
-// noops or blocked txns). In those cases, terPRE_SEQ failures are
-// tolerated because the predecessor is unavailable. The post_state of the
-// LAST retry in the batch is verified (all retries in a batch share the
-// same final post_state since they were applied atomically in rippled).
+// (bypassing TxQ). Every recorded retry must have a parseable blob and its
+// exact recorded TER; a missing predecessor is a malformed corpus, not a
+// reason to accept a substitute result. Each supplied post_state is checked.
 func (r *runner) execRetryBatch(batch []struct {
 	idx  int
 	step Step
 }) {
 	// Parse all retry transactions up front.
 	type parsedRetry struct {
-		idx    int
-		step   Step
-		txn    tx.Transaction
-		seq    uint32
-		result jtx.TxResult
+		idx       int
+		step      Step
+		txn       tx.Transaction
+		seq       uint32
+		result    jtx.TxResult
+		stateHash string
 	}
 	var retries []parsedRetry
 
 	for _, entry := range batch {
 		blob, err := hex.DecodeString(entry.step.TxBlob)
-		if err != nil || len(blob) == 0 {
-			continue
+		if err != nil {
+			r.t.Fatalf("Step %d (retry): invalid tx_blob hex: %v", entry.idx, err)
+		}
+		if len(blob) == 0 {
+			r.t.Fatalf("Step %d (retry): empty tx_blob", entry.idx)
 		}
 		parsed, err := tx.ParseFromBinary(blob)
 		if err != nil {
@@ -675,48 +603,27 @@ func (r *runner) execRetryBatch(batch []struct {
 	r.env.SetBypassTxQ(true)
 	for i := range retries {
 		retries[i].result = r.env.Submit(retries[i].txn)
+		state, err := r.env.Ledger().StateMapHash()
+		if err != nil {
+			r.t.Fatalf("Step %d (retry): read post-state hash: %v", retries[i].idx, err)
+		}
+		retries[i].stateHash = hex.EncodeToString(state[:])
 	}
 	r.env.SetBypassTxQ(false)
 
-	// Check TER codes for each retry, tolerating terPRE_SEQ when the
-	// fixture has sequence gaps (intermediate tx submissions not captured).
+	// Check every retry's TER code exactly. A missing predecessor is a fixture
+	// error, not a reason to accept terPRE_SEQ as a substitute result.
 	for _, retry := range retries {
-		if retry.result.Code != retry.step.ExpectTER {
-			// terPRE_SEQ is expected when the fixture has gaps in the
-			// sequence chain — the predecessor tx was not captured.
-			if retry.result.Code == "terPRE_SEQ" {
-				continue
-			}
-			txType := "unknown"
-			if retry.step.TxJSON != nil {
-				var txj map[string]any
-				if json.Unmarshal(retry.step.TxJSON, &txj) == nil {
-					if tt, ok := txj["TransactionType"].(string); ok {
-						txType = tt
-					}
-				}
-			}
-			r.t.Errorf("Step %d (retry %s seq=%d): TER mismatch: got %q, want %q",
-				retry.idx, txType, retry.seq, retry.result.Code, retry.step.ExpectTER)
+		if err := resultExpectationError(retry.step, retry.result, retry.stateHash); err != nil {
+			r.t.Errorf("Step %d (retry seq=%d): %v", retry.idx, retry.seq, err)
 		}
 	}
 
-	// Check post_state using the last retry in the batch. All retries in a
-	// batch share the same final post_state since they were applied
-	// atomically in rippled. We skip this check if any retries failed due
-	// to sequence gaps, because the balance/state will not match without
-	// the missing intermediate transactions.
-	allApplied := true
+	// Retry observations are recorded after the atomic close. Compare every
+	// supplied checkpoint, including rejected outcomes.
 	for _, retry := range retries {
-		if !retry.result.Success && !strings.HasPrefix(retry.result.Code, "tec") {
-			allApplied = false
-			break
-		}
-	}
-	if allApplied && len(batch) > 0 {
-		lastEntry := batch[len(batch)-1]
-		if lastEntry.step.PostState != nil {
-			r.assertPostState(lastEntry.idx, lastEntry.step.PostState)
+		if retry.step.PostState != nil {
+			r.assertPostState(retry.idx, retry.step.PostState)
 		}
 	}
 }
@@ -752,7 +659,7 @@ func (r *runner) execModifyState(stepIdx int, step Step) {
 	}
 	ms := step.ModifyState
 
-	// Look up the account. If no account is specified (v2 fixtures may omit
+	// Look up the account. If no account is specified (v3 fixtures may omit
 	// it for bump_last_page), find the first non-master registered account.
 	var acc *jtx.Account
 	if ms.Account != "" {
@@ -824,13 +731,6 @@ func (r *runner) execModifyState(stepIdx int, step Step) {
 
 // assertPostState validates account states against expected values.
 func (r *runner) assertPostState(stepIdx int, ps *PostState) {
-	// Collect owner_count mismatches to evaluate as a batch after the loop.
-	type ocEntry struct {
-		name      string
-		got, want uint32
-	}
-	var ocMismatches []ocEntry
-
 	for _, expected := range ps.Accounts {
 		acc, ok := r.accounts[expected.Name]
 		if !ok {
@@ -854,40 +754,27 @@ func (r *runner) assertPostState(stepIdx int, ps *PostState) {
 				int64(gotBalance)-int64(expectedBalance))
 		}
 
-		// Collect owner count mismatches for batch evaluation below.
 		gotOwnerCount := r.env.OwnerCount(acc)
 		if gotOwnerCount != expected.OwnerCount {
-			ocMismatches = append(ocMismatches, ocEntry{
-				name: expected.Name,
-				got:  gotOwnerCount,
-				want: expected.OwnerCount,
-			})
-		}
-
-		// Note: sequence and flags fields are parsed from v2 fixtures but not
-		// asserted yet. The runner's account setup (auto-fund, setupEnv) does not
-		// yet produce identical starting sequences to rippled, so sequence checks
-		// would fail for reasons unrelated to transaction logic correctness.
-	}
-
-	// Evaluate owner_count mismatches as a batch.
-	//
-	// When AMM address remapping is active, the AMM pseudo-account address
-	// differs between rippled and go-xrpl (because parentHash differs). This
-	// causes trust line keylets — and thus directory positions — to differ.
-	// When deleteAMMTrustLines hits its 512-entry limit, a different subset
-	// of trust lines is left undeleted, producing small owner_count swaps
-	// (each account off by at most ±1). These differences are cosmetic —
-	// the AMM deletion logic is correct, just applied to a different
-	// directory iteration order.
-	for _, m := range ocMismatches {
-		delta := int(m.got) - int(m.want)
-		if len(r.ammAddrMap) > 0 && delta >= -1 && delta <= 1 {
-			r.t.Logf("Step %d: owner_count mismatch for %s: got %d, want %d (tolerated: AMM directory ordering difference)",
-				stepIdx, m.name, m.got, m.want)
-		} else {
 			r.t.Errorf("Step %d: owner_count mismatch for %s: got %d, want %d",
-				stepIdx, m.name, m.got, m.want)
+				stepIdx, expected.Name, gotOwnerCount, expected.OwnerCount)
+		}
+
+		if expected.Sequence != nil || expected.Flags != nil {
+			info := r.env.AccountInfo(acc)
+			if info == nil {
+				r.t.Errorf("Step %d: account %s missing while checking metadata", stepIdx, expected.Name)
+				continue
+			}
+			if expected.Sequence != nil && info.Sequence != *expected.Sequence {
+				r.t.Errorf("Step %d: sequence mismatch for %s: got %d, want %d",
+					stepIdx, expected.Name, info.Sequence, *expected.Sequence)
+			}
+			if expected.Flags != nil && info.Flags != *expected.Flags {
+				r.t.Errorf("Step %d: flags mismatch for %s: got %#x, want %#x",
+					stepIdx, expected.Name, info.Flags, *expected.Flags)
+			}
 		}
 	}
+
 }

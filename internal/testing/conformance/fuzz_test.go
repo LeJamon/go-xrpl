@@ -1,61 +1,10 @@
 package conformance
 
 import (
-	"bufio"
-	"os"
-	"path/filepath"
-	"sort"
+	"errors"
 	"strings"
 	"testing"
 )
-
-// diffCorpusRoot resolves the recorded-rippled fixture corpus directory, or ""
-// if it cannot be found. GOXRPL_FIXTURES_DIR overrides the location (useful from
-// a git worktree, where the default relative path does not reach the sibling
-// fixtures tree); otherwise it falls back to the same default TestConformance
-// uses.
-func diffCorpusRoot() string {
-	if dir := os.Getenv("GOXRPL_FIXTURES_DIR"); dir != "" {
-		if abs, err := filepath.Abs(dir); err == nil && isDir(abs) {
-			return abs
-		}
-		return ""
-	}
-	if abs, err := filepath.Abs(fixturesRoot); err == nil && isDir(abs) {
-		return abs
-	}
-	return ""
-}
-
-func isDir(p string) bool {
-	fi, err := os.Stat(p)
-	return err == nil && fi.IsDir()
-}
-
-// outOfScopeSuites loads the suite paths conformance treats as out of scope
-// (scripts/conformance-out-of-scope.txt), so the differential fuzzer does not
-// flag intentional stubs / known gaps (e.g. Vault, XChain) as divergences.
-func outOfScopeSuites() map[string]bool {
-	set := map[string]bool{}
-	path, err := filepath.Abs("../../../scripts/conformance-out-of-scope.txt")
-	if err != nil {
-		return set
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return set
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		set[strings.ReplaceAll(line, " ", "")] = true
-	}
-	return set
-}
 
 // suiteOf returns the "app/<Suite>" (or "ledger/<Suite>") prefix of a fixture's
 // relative name, matching conformance-summary.sh's suite bucketing.
@@ -65,37 +14,6 @@ func suiteOf(relName string) string {
 		return relName
 	}
 	return parts[0] + "/" + parts[1]
-}
-
-// inScopeFixtures returns the relative names and absolute paths of every fixture
-// under root that is in scope (suite not out of scope, and not in skipTests),
-// sorted by name for stable indexing.
-func inScopeFixtures(root string) (names, paths []string) {
-	oos := outOfScopeSuites()
-	relToPath := map[string]string{}
-	var rels []string
-	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".json") {
-			return nil
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return nil
-		}
-		name := strings.TrimSuffix(rel, ".json")
-		if oos[suiteOf(name)] || skipTests[name] != "" {
-			return nil
-		}
-		rels = append(rels, name)
-		relToPath[name] = path
-		return nil
-	})
-	sort.Strings(rels)
-	for _, r := range rels {
-		names = append(names, r)
-		paths = append(paths, relToPath[r])
-	}
-	return names, paths
 }
 
 // FuzzEngineDifferential is the differential-vs-rippled property (issue #682,
@@ -113,13 +31,18 @@ func inScopeFixtures(root string) (names, paths []string) {
 // point at it, or run from the main checkout. Skips when the corpus is absent so
 // plain `go test` / CI stay green.
 func FuzzEngineDifferential(f *testing.F) {
-	root := diffCorpusRoot()
-	if root == "" {
-		f.Skip("recorded-rippled fixture corpus not found; set GOXRPL_FIXTURES_DIR")
+	corpus, err := resolveCorpus(false)
+	if err != nil {
+		if errors.Is(err, errCorpusNotConfigured) || errors.Is(err, errCorpusNoInScope) {
+			f.Skip("recorded-rippled fixture corpus is not configured or has no in-scope fixtures")
+		}
+		f.Fatalf("conformance corpus rejected: %v", err)
 	}
-	names, paths := inScopeFixtures(root)
-	if len(names) == 0 {
-		f.Skip("no in-scope fixtures found in corpus")
+	names := make([]string, 0, len(corpus.InScope))
+	paths := make([]string, 0, len(corpus.InScope))
+	for _, fixture := range corpus.InScope {
+		names = append(names, fixture.Name)
+		paths = append(paths, fixture.Path)
 	}
 
 	// Seed with one fixture from each of a few suites conformance passes in

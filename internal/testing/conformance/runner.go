@@ -6,6 +6,7 @@ package conformance
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -36,20 +37,13 @@ func defaultEnvConfig() EnvConfig {
 	}
 }
 
-// knownAmendments filters a fixture's captured amendment list to names still
-// registered in go-xrpl. Fixtures recorded against an older rippled carry
-// amendments that have since been deleted from the protocol (e.g.
-// PermissionDelegation / fixDelegateV1_1, replaced by PermissionDelegationV1_1);
-// those names are dropped so the vast majority of fixtures that only list them
-// incidentally keep running. Fixtures that genuinely depend on a deleted
-// amendment are excluded via skipTests.
+// knownAmendments preserves the fixture's amendment set after validation. It
+// intentionally does not drop names: silently removing an amendment changes
+// the protocol rules under test and turns stale fixture data into a false
+// conformance match.
 func knownAmendments(names []string) []string {
 	out := make([]string, 0, len(names))
-	for _, name := range names {
-		if amendment.FeatureByName(name) != nil {
-			out = append(out, name)
-		}
-	}
+	out = append(out, names...)
 	return out
 }
 
@@ -143,14 +137,6 @@ type runner struct {
 	// (e.g., terNO_RIPPLE). In rippled, these are queued in the TxQ and
 	// retried during TxQ::accept() on ledger close.
 	pendingQueued []tx.Transaction
-
-	// disabledTxBySeq maps (account address, sequence) to transactions that
-	// returned temDISABLED. When the BumpSequenceAndDeductAmount path bumps
-	// the sequence past one of these, the stored transaction is resubmitted
-	// instead of a plain sequence bump. This matches rippled's behavior where
-	// the open ledger retains submitted transactions and re-applies them when
-	// the required amendment is later enabled.
-	disabledTxBySeq map[string]tx.Transaction // key: "address:seq"
 
 	// initFee stores the post-initFee fee configuration for fixtures that
 	// use rippled's initFee() pattern. Applied after the initial close sequence.
@@ -463,9 +449,12 @@ func RunFixture(t *testing.T, fixturePath string) {
 		t.Fatalf("Failed to read fixture %s: %v", fixturePath, err)
 	}
 
-	var fixture Fixture
-	if err := json.Unmarshal(data, &fixture); err != nil {
+	fixture, err := decodeFixture(data)
+	if err != nil {
 		t.Fatalf("Failed to parse fixture %s: %v", fixturePath, err)
+	}
+	if err := validateFixture(&fixture, fixturePath); err != nil {
+		t.Fatal(err)
 	}
 
 	// A fixture that records a retired amendment as disabled — in its top-level
@@ -475,7 +464,7 @@ func RunFixture(t *testing.T, fixturePath string) {
 	// rippled deleting these FeatureBitset variations; the fixtures should be
 	// re-recorded from the current protocol oracle.
 	if missing := fixtureDisablesRetiredAmendments(&fixture); len(missing) > 0 {
-		t.Skipf("Skipped: fixture disables retired amendment(s) %s — unreachable after retirement; re-record from rippled 3.3.0", strings.Join(missing, ", "))
+		t.Skipf("Skipped: fixture disables retired amendment(s) %s — unreachable after retirement; re-record from rippled 3.4.0", strings.Join(missing, ", "))
 	}
 
 	// Detect TxQ suites by fixture path.
@@ -569,37 +558,30 @@ func RunFixture(t *testing.T, fixturePath string) {
 	// If this fixture depends on a predecessor, build the dependency chain
 	// using the depends_on field and replay predecessors first.
 	if fixture.DependsOn != "" {
-		chain := loadDependsOnChain(t, fixturePath, fixture.DependsOn)
-		if len(chain) > 0 {
-			envCfg := chain[0].Env
-			if envCfg == nil {
-				cfg := defaultEnvConfig()
-				envCfg = &cfg
-			}
-			r.setupEnv(*envCfg)
-			for _, prereq := range chain {
-				r.replaySteps(prereq.Steps, prereq.DependsOn != "")
-			}
-		} else {
-			// Chain broken — fall back to defaults
+		chain, err := loadDependsOnChain(t, fixturePath, fixture.DependsOn)
+		if err != nil {
+			t.Fatalf("fixture %s dependency chain: %v", fixturePath, err)
+		}
+		if len(chain) == 0 {
+			t.Fatalf("fixture %s dependency chain is empty", fixturePath)
+		}
+		envCfg := chain[0].Env
+		if envCfg == nil {
 			cfg := defaultEnvConfig()
-			r.setupEnv(cfg)
-			if r.shouldAutoFund(fixture.Steps) {
-				r.autoFundAccounts(fixture.Steps)
-			}
+			envCfg = &cfg
+		}
+		r.setupEnv(*envCfg)
+		for _, prereq := range chain {
+			r.replaySteps(prereq.Steps, prereq.DependsOn != "")
 		}
 	} else {
-		// Normal fixture: set up env and optionally auto-fund
+		// Normal fixture: set up only the state explicitly recorded by the fixture.
 		envCfg := fixture.Env
 		if envCfg == nil {
 			cfg := defaultEnvConfig()
 			envCfg = &cfg
 		}
 		r.setupEnv(*envCfg)
-
-		if r.shouldAutoFund(fixture.Steps) {
-			r.autoFundAccounts(fixture.Steps)
-		}
 	}
 
 	// Execute steps sequentially
@@ -625,7 +607,6 @@ func RunFixture(t *testing.T, fixturePath string) {
 						r.feeVoteApplied = false
 						r.pendingHeld = nil
 						r.pendingQueued = nil
-						r.disabledTxBySeq = nil
 						r.setupEnv(r.lastEnvCfg)
 					}
 				}
@@ -658,9 +639,10 @@ func RunFixture(t *testing.T, fixturePath string) {
 		case "env_reset":
 			r.execEnvReset(i, step)
 		case "enable_amendment":
-			if amendment.FeatureByName(step.Amendment) != nil {
-				r.env.EnableFeatureNow(step.Amendment)
+			if amendment.FeatureByName(step.Amendment) == nil {
+				t.Fatalf("Step %d (enable_amendment): unknown amendment %q", i, step.Amendment)
 			}
+			r.env.EnableFeatureNow(step.Amendment)
 		case "modify_state":
 			r.execModifyState(i, step)
 		default:
@@ -671,43 +653,45 @@ func RunFixture(t *testing.T, fixturePath string) {
 
 // loadDependsOnChain follows depends_on links backwards to build the full
 // prerequisite chain. Returns fixtures in order from root to immediate parent.
-func loadDependsOnChain(t *testing.T, fixturePath string, firstDep string) []Fixture {
+// Any missing, malformed, partial, or cyclic chain is an execution error; a
+// declared dependency is never replaced with a fresh/autofunded environment.
+func loadDependsOnChain(t *testing.T, fixturePath string, firstDep string) ([]Fixture, error) {
 	t.Helper()
 	dir := filepath.Dir(fixturePath)
 
 	var chain []Fixture
-	dep := firstDep
+	dep := strings.TrimSuffix(firstDep, ".json")
 	seen := make(map[string]bool) // cycle protection
 
 	for dep != "" {
 		if seen[dep] {
-			t.Logf("depends_on cycle detected at %q", dep)
-			break
+			return nil, fmt.Errorf("cycle detected at %q", dep)
 		}
 		seen[dep] = true
 
 		depPath := filepath.Join(dir, dep+".json")
 		data, err := os.ReadFile(depPath)
 		if err != nil {
-			t.Logf("depends_on: cannot read %s: %v", depPath, err)
-			return nil
+			return nil, fmt.Errorf("cannot read %s: %w", depPath, err)
 		}
-		var f Fixture
-		if err := json.Unmarshal(data, &f); err != nil {
-			t.Logf("depends_on: cannot parse %s: %v", depPath, err)
-			return nil
+		f, err := decodeFixture(data)
+		if err != nil {
+			return nil, fmt.Errorf("cannot parse %s: %w", depPath, err)
+		}
+		if err := validateFixture(&f, depPath); err != nil {
+			return nil, err
 		}
 
-		chain = append([]Fixture{f}, chain...) // prepend
-		dep = f.DependsOn                      // follow the chain
+		chain = append([]Fixture{f}, chain...)         // prepend
+		dep = strings.TrimSuffix(f.DependsOn, ".json") // follow the chain
 	}
 
-	return chain
+	return chain, nil
 }
 
-// replaySteps executes fixture steps silently (without asserting TER codes
-// or post-state). This is used to establish prerequisite ledger state for
-// continuation fixtures.
+// replaySteps establishes prerequisite ledger state for continuation fixtures.
+// Transaction TERs and all parse/operation errors remain fatal; post-state is
+// intentionally checked only by the owning fixture's recorded step.
 func (r *runner) replaySteps(steps []Step, isContinuation bool) {
 	// Determine the start index for replay.
 	//
@@ -764,19 +748,28 @@ func (r *runner) replaySteps(steps []Step, isContinuation bool) {
 			r.execClose(i, step)
 		case "tx":
 			hadReplayTx = true
-			r.replayTx(step)
-		case "retry":
-			// Retry ops are post-close observations of queued txns.
-			// During replay, the txns were already applied by Close().
-			// Nothing to do here.
-		case "enable_amendment":
-			if amendment.FeatureByName(step.Amendment) != nil {
-				r.env.EnableFeatureNow(step.Amendment)
+			if err := r.replayTx(step); err != nil {
+				r.t.Fatalf("dependency replay: %v", err)
 			}
+		case "retry":
+			blob, err := hex.DecodeString(step.TxBlob)
+			if err != nil || len(blob) == 0 {
+				r.t.Fatalf("dependency replay: step %d (retry): invalid tx_blob: %v", i, err)
+			}
+			if _, err := tx.ParseFromBinary(blob); err != nil {
+				r.t.Fatalf("dependency replay: step %d (retry): failed to parse tx_blob: %v", i, err)
+			}
+		case "enable_amendment":
+			if amendment.FeatureByName(step.Amendment) == nil {
+				r.t.Fatalf("dependency replay: step %d (enable_amendment): unknown amendment %q", i, step.Amendment)
+			}
+			r.env.EnableFeatureNow(step.Amendment)
 		case "modify_state":
 			r.execModifyState(i, step)
 		case "env_reset":
 			r.execEnvReset(i, step)
+		default:
+			r.t.Fatalf("dependency replay: step %d: unknown op %q", i, step.Op)
 		}
 	}
 }
@@ -818,19 +811,25 @@ func findScopeBoundary(steps []Step) int {
 	return firstFund
 }
 
-// replayTx submits a transaction silently without asserting TER codes.
-// Used for replaying prerequisite fixture steps.
-func (r *runner) replayTx(step Step) {
+// replayTx submits a prerequisite transaction and asserts its recorded TER.
+func (r *runner) replayTx(step Step) error {
 	blob, err := hex.DecodeString(step.TxBlob)
 	if err != nil || len(blob) == 0 {
-		return
+		return fmt.Errorf("invalid tx_blob: %v", err)
 	}
 	parsed, err := tx.ParseFromBinary(blob)
 	if err != nil {
-		return
+		return fmt.Errorf("failed to parse tx_blob: %v", err)
 	}
 	r.remapAMMAddresses(parsed)
 	result := r.env.Submit(parsed)
+	state, err := r.env.Ledger().StateMapHash()
+	if err != nil {
+		return fmt.Errorf("read post-state hash: %w", err)
+	}
+	if err := resultExpectationError(step, result, hex.EncodeToString(state[:])); err != nil {
+		return err
+	}
 
 	// Register AMM mapping after successful AMMCreate
 	if result.Success && step.TxJSON != nil {
@@ -841,4 +840,5 @@ func (r *runner) replayTx(step Step) {
 			}
 		}
 	}
+	return nil
 }
