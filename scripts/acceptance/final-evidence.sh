@@ -39,7 +39,8 @@ worktree_status() {
   # The oracle is a deliberately nested checkout. Exclude it from the Go
   # checkout status, then inspect it separately in the consensus producer.
   git status --porcelain=v1 --untracked-files=all -- . \
-    ':(exclude)rippled-worktrees/v3.4.0-oracle' 2>/dev/null || true
+    ':(exclude)rippled-worktrees/v3.4.0-oracle' \
+    ':(exclude)fixtures/rippled-3.4.0-v3' 2>/dev/null || true
 }
 
 write_common_metadata() {
@@ -240,6 +241,15 @@ case "$mode" in
       for producer_file in "${producer_files[@]}"; do
         cat "$producer_file" >> "$output"
         printf '\n' >> "$output"
+        if [[ -n "$expected_sha" ]] &&
+          ! grep --fixed-strings --line-regexp "tested_sha=$expected_sha" "$producer_file" >/dev/null; then
+          printf 'producer_sha_mismatch=%s\n' "$producer_file" >> "$output"
+          status_failed=1
+        fi
+        if ! grep --fixed-strings --line-regexp 'go_dirty=false' "$producer_file" >/dev/null; then
+          printf 'producer_dirty=%s\n' "$producer_file" >> "$output"
+          status_failed=1
+        fi
       done
       producer_patterns=(
         lint generate build build-386 postgres test-integration-offer.txt test-integration.txt
