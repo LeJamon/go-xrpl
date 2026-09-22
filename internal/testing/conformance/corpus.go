@@ -180,11 +180,9 @@ func resolveCorpusPath(root string) (*corpus, error) {
 			return fmt.Errorf("relativize fixture %q: %w", path, err)
 		}
 		name := strings.TrimSuffix(filepath.ToSlash(rel), ".json")
-		skipReason := skipTests[name]
-		if skipReason == "" {
-			if retired := fixtureDisablesRetiredAmendments(&fixture); len(retired) > 0 {
-				skipReason = fmt.Sprintf("fixture disables retired amendment(s): %s", strings.Join(retired, ", "))
-			}
+		skipReason := ""
+		if retired := fixtureDisablesRetiredAmendments(&fixture); len(retired) > 0 {
+			skipReason = fmt.Sprintf("fixture disables retired amendment(s): %s", strings.Join(retired, ", "))
 		}
 		inScope := !scope[suiteOf(name)] && skipReason == ""
 		fixtureInfo := corpusFixture{Name: name, Path: path, InScope: inScope}
@@ -229,6 +227,15 @@ func resolveCorpusPath(root string) (*corpus, error) {
 	}
 
 	return result, nil
+}
+
+// suiteOf returns the app/<Suite> or ledger/<Suite> prefix used by scope policy.
+func suiteOf(relName string) string {
+	parts := strings.Split(relName, "/")
+	if len(parts) < 2 {
+		return relName
+	}
+	return parts[0] + "/" + parts[1]
 }
 
 func findCorpusManifest(root string) (string, error) {

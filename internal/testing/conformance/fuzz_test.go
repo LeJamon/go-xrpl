@@ -6,16 +6,6 @@ import (
 	"testing"
 )
 
-// suiteOf returns the "app/<Suite>" (or "ledger/<Suite>") prefix of a fixture's
-// relative name, matching conformance-summary.sh's suite bucketing.
-func suiteOf(relName string) string {
-	parts := strings.Split(relName, "/")
-	if len(parts) < 2 {
-		return relName
-	}
-	return parts[0] + "/" + parts[1]
-}
-
 // FuzzEngineDifferential is the differential-vs-rippled property (issue #682,
 // scope 2). It replays recorded rippled fixtures through the goXRPL engine and
 // fails when the per-step transaction result (TER) or recorded post-state does
