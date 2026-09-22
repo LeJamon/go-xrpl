@@ -297,6 +297,13 @@ reused, but every live node is read again.
 
 ### `[sqlite]` — relational index databases
 
+Schema version 6 stores ledger headers alongside transaction and account indexes
+in `transaction.db`, allowing each validated ledger to commit atomically.
+`ledger.db` retains validations and amendment votes. The first startup imports
+existing headers and removes indexes without a published header. Its legacy
+header table is no longer used. Older binaries reject the upgraded schema;
+restore a backup of both databases to return to an older version.
+
 | Key | Example | Meaning |
 |-----|---------|---------|
 | `journal_mode` | `"wal"` | `delete`, `truncate`, `persist`, `memory`, `wal`, `off`. |

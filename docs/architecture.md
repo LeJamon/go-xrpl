@@ -136,7 +136,7 @@ rippled's split between its NodeStore and its relational databases:
 - **`storage/relationaldb`** — SQL-backed secondary indexes (ledgers,
   transactions, the account-transaction index, validations, amendment votes) that
   answer history queries the content-addressed store cannot. Default backend is
-  `sqlite` (pure-Go, mirroring rippled's `ledger.db`/`transaction.db` layout);
+  `sqlite` (pure-Go, with ledger headers and indexes committed together in `transaction.db`);
   `postgres` is an alternative for shared deployments.
 
 ## Where to go next
