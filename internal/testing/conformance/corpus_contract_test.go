@@ -224,6 +224,13 @@ func TestModifyStateValidationAllowsInferredAccountForDirectoryBump(t *testing.T
 	if err := validateStep(&step, "contract.json", 0); err != nil {
 		t.Fatalf("validateStep rejected an inferred-account directory bump: %v", err)
 	}
+	for _, account := range []string{" ", "\t", "\n"} {
+		step.ModifyState.Account = account
+		if err := validateStep(&step, "contract.json", 0); err == nil {
+			t.Fatalf("validateStep accepted a whitespace-only account %q", account)
+		}
+	}
+	step.ModifyState.Account = ""
 
 	step.ModifyState.BumpLastPage = nil
 	if err := validateStep(&step, "contract.json", 0); err == nil {

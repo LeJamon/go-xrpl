@@ -250,24 +250,18 @@ case "$mode" in
           status_failed=1
         fi
       done
-      producer_patterns=(
+      required_producers=(
         lint.txt generate.txt build.txt build-386.txt postgres.txt test-integration-offer.txt test-integration.txt
-        test-tx.txt test-core.txt test-libs.txt test-purego.txt 'test-mpt-crypto-*'
-        peer-interop.txt peer-interop-final.txt 'consensus-smoke-*' consensus-smoke-final.txt
+        test-tx.txt test-core.txt test-libs.txt test-purego.txt
+        test-mpt-crypto-ubuntu-latest.txt test-mpt-crypto-macos-latest.txt
+        peer-interop.txt peer-interop-final.txt
+        consensus-smoke-3.3.0.txt consensus-smoke-3.2.0.txt consensus-smoke-final.txt
         test-repeated.txt conformance-final.txt
       )
-      for pattern in "${producer_patterns[@]}"; do
-        if [[ "$pattern" != *'*'* ]]; then
-          if [[ ! -f "$evidence_dir/producers/producer-$pattern" ]]; then
-            printf 'producer_evidence_missing=%s\n' "$pattern" >> "$output"
-            status_failed=1
-          fi
-        else
-          matches=("$evidence_dir"/producers/producer-${pattern})
-          if (( ${#matches[@]} == 0 )); then
-            printf 'producer_evidence_missing=%s\n' "$pattern" >> "$output"
-            status_failed=1
-          fi
+      for producer in "${required_producers[@]}"; do
+        if [[ ! -f "$evidence_dir/producers/producer-$producer" ]]; then
+          printf 'producer_evidence_missing=%s\n' "$producer" >> "$output"
+          status_failed=1
         fi
       done
     fi
