@@ -410,7 +410,7 @@ jobs:
       FINAL_CONFORMANCE_COMMIT: ${{ vars.XRPL_FINAL_CONFORMANCE_COMMIT }}
       FINAL_CONFORMANCE_CORPUS: ${{ github.workspace }}/fixtures/rippled-3.4.0-v3
       FINAL_CONFORMANCE_MANIFEST: ${{ github.workspace }}/fixtures/rippled-3.4.0-v3/manifest.json
-      EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-conformance-final
+      EVIDENCE_DIR: /tmp/issue-1908-producer-conformance-final
     steps:
       - uses: actions/checkout@v5
       - name: Require externally configured final corpus source
@@ -452,7 +452,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: issue-1908-producer-${{ github.sha }}-conformance-final
-          path: ${{ runner.temp }}/issue-1908-producer-conformance-final
+          path: /tmp/issue-1908-producer-conformance-final
           if-no-files-found: error
 
   peer-interop:
@@ -579,7 +579,7 @@ jobs:
       ORACLE_COMMIT: 4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17
       ORACLE_IMAGE: goxrpl-oracle:3.4.0
       GOXRPL_IMAGE: goxrpl-final:${{ github.sha }}
-      EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-final-evidence
+      EVIDENCE_DIR: /tmp/issue-1908-final-evidence
     steps:
       - name: Initialize final evidence directory
         shell: bash
@@ -723,7 +723,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: issue-1908-producer-${{ github.sha }}-consensus-smoke-final
-          path: ${{ runner.temp }}/issue-1908-final-evidence
+          path: /tmp/issue-1908-final-evidence
           if-no-files-found: error
 
       - name: Upload final acceptance evidence
@@ -731,7 +731,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: issue-1908-final-consensus-${{ github.sha }}
-          path: ${{ runner.temp }}/issue-1908-final-evidence
+          path: /tmp/issue-1908-final-evidence
           if-no-files-found: error
 
       - name: Dump final consensus logs on failure
@@ -759,7 +759,7 @@ jobs:
       - conformance-final
     runs-on: ubuntu-latest
     env:
-      EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-final-acceptance
+      EVIDENCE_DIR: /tmp/issue-1908-final-acceptance
       EXPECTED_SHA: ${{ github.sha }}
     steps:
       - name: Initialize final evidence directory
@@ -775,7 +775,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: issue-1908-producer-${{ github.sha }}-*
-          path: ${{ runner.temp }}/issue-1908-final-acceptance/producers
+          path: /tmp/issue-1908-final-acceptance/producers
           merge-multiple: true
 
       - name: Record producer job results
@@ -832,5 +832,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: issue-1908-final-acceptance-${{ github.sha }}
-          path: ${{ runner.temp }}/issue-1908-final-acceptance
+          path: /tmp/issue-1908-final-acceptance
           if-no-files-found: error
