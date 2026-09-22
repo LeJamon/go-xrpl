@@ -252,13 +252,13 @@ case "$mode" in
         fi
       done
       producer_patterns=(
-        lint generate build build-386 postgres test-integration-offer.txt test-integration.txt
+        lint.txt generate.txt build.txt build-386.txt postgres.txt test-integration-offer.txt test-integration.txt
         test-tx.txt test-core.txt test-libs.txt test-purego.txt 'test-mpt-crypto-*'
         peer-interop.txt peer-interop-final.txt 'consensus-smoke-*' consensus-smoke-final.txt
-        test-repeated conformance-final
+        test-repeated.txt conformance-final.txt
       )
       for pattern in "${producer_patterns[@]}"; do
-        if [[ "$pattern" == *.txt ]]; then
+        if [[ "$pattern" != *'*'* ]]; then
           if [[ ! -f "$evidence_dir/producers/producer-$pattern" ]]; then
             printf 'producer_evidence_missing=%s\n' "$pattern" >> "$output"
             status_failed=1
