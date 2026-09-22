@@ -3,6 +3,7 @@ package types
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	"github.com/stretchr/testify/require"
 )
@@ -24,6 +25,15 @@ func TestIssue_FromJson(t *testing.T) {
 				0, 0, 0, 0, 0, 0, 0,
 				0, 0, 0, 0, 0, 0,
 			},
+			expectedErr: nil,
+		},
+		{
+			name: "pass - valid xrp issue object with null issuer",
+			input: map[string]any{
+				"currency": "XRP",
+				"issuer":   nil,
+			},
+			expected:    make([]byte, 20),
 			expectedErr: nil,
 		},
 		{
@@ -78,6 +88,69 @@ func TestIssue_FromJson(t *testing.T) {
 			input:       "r3e7qTG44Mg8pHXgxPtyRx286Re5Urtx2p2",
 			expected:    nil,
 			expectedErr: ErrInvalidIssueObject,
+		},
+		{
+			name: "fail - iou missing issuer",
+			input: map[string]any{
+				"currency": "USD",
+			},
+			expectedErr: ErrInvalidIssuer,
+		},
+		{
+			name: "fail - iou non-string issuer",
+			input: map[string]any{
+				"currency": "USD",
+				"issuer":   nil,
+			},
+			expectedErr: ErrInvalidIssuer,
+		},
+		{
+			name: "fail - xrp with issuer",
+			input: map[string]any{
+				"currency": "XRP",
+				"issuer":   "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+			},
+			expectedErr: ErrInvalidIssuer,
+		},
+		{
+			name: "fail - iou with xrp account issuer",
+			input: map[string]any{
+				"currency": "USD",
+				"issuer":   "rrrrrrrrrrrrrrrrrrrrrhoLvTp",
+			},
+			expectedErr: ErrInvalidIssuer,
+		},
+		{
+			name: "fail - iou with no account issuer",
+			input: map[string]any{
+				"currency": "USD",
+				"issuer":   "rrrrrrrrrrrrrrrrrrrrBZbvji",
+			},
+			expectedErr: ErrInvalidIssuer,
+		},
+		{
+			name: "fail - iou with invalid base58 issuer",
+			input: map[string]any{
+				"currency": "USD",
+				"issuer":   "not_a_valid_address",
+			},
+			expectedErr: addresscodec.ErrInvalidClassicAddress,
+		},
+		{
+			name: "fail - no currency sentinel",
+			input: map[string]any{
+				"currency": "1",
+				"issuer":   "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+			},
+			expectedErr: ErrInvalidCurrency,
+		},
+		{
+			name: "fail - bad currency sentinel",
+			input: map[string]any{
+				"currency": "0000000000000000000000005852500000000000",
+				"issuer":   "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+			},
+			expectedErr: ErrInvalidCurrency,
 		},
 	}
 
