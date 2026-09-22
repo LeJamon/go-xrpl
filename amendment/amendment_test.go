@@ -292,15 +292,18 @@ func TestTableDesired(t *testing.T) {
 		t.Fatal("Desired retained a vetoed amendment")
 	}
 
-	for _, featureID := range [][32]byte{FeatureAMM, FeatureFixCleanup3_4_0, FeatureLendingProtocolV1_1} {
+	defaultNo := [][32]byte{FeatureAMM, FeatureFixCleanup3_4_0, FeatureLendingProtocolV1_1}
+	for _, featureID := range defaultNo {
 		if slices.Contains(table.Desired(), featureID) {
 			t.Fatalf("Desired included default-no amendment %X before an explicit upvote", featureID)
 		}
 	}
 
-	table.UpVote(FeatureAMM)
-	if !slices.Contains(table.Desired(), FeatureAMM) {
-		t.Fatal("Desired omitted an explicitly upvoted supported amendment")
+	for _, featureID := range defaultNo {
+		table.UpVote(featureID)
+		if !slices.Contains(table.Desired(), featureID) {
+			t.Fatalf("Desired omitted explicitly upvoted supported amendment %X", featureID)
+		}
 	}
 }
 

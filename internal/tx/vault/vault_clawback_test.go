@@ -257,6 +257,7 @@ func TestVaultClawbackExplicitAmountDoesNotClampToHolderShares(t *testing.T) {
 
 func TestVaultClawbackExplicitAmountRoundsSharesToNearest(t *testing.T) {
 	f := newVaultClawbackFixture(t, 2)
+	f.ctx.Config.Rules = amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported).Disable(amendment.FeatureFixCleanup3_4_0).Build()
 	vd, err := readVault(f.view, f.vaultKey)
 	if err != nil {
 		t.Fatalf("read vault: %v", err)

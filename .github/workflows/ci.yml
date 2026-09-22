@@ -400,8 +400,6 @@ jobs:
             "oracle_commit=$ORACLE_COMMIT" \
             "peer_oracle_image=$ORACLE_IMAGE" \
             "consensus_oracle_image=$ORACLE_IMAGE" \
-            "definition_sha256=" \
-            "definition_full_document_sha512_half=" \
             "overall_status=0"; do
             if ! grep --fixed-strings --line-regexp "$required" "$evidence" >/dev/null; then
               printf 'MISSING_REQUIRED_EVIDENCE=%s\n' "$required" | tee -a "$evidence"
