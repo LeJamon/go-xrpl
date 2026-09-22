@@ -35,9 +35,11 @@ go_sha="$(git rev-parse HEAD 2>/dev/null || true)"
 [[ -n "$go_sha" ]] || die 'could not determine the tested Go SHA'
 
 worktree_status() {
-  # The oracle is a deliberately nested checkout. Exclude it from the Go
-  # checkout status, then inspect it separately in the consensus producer.
+  # Reference checkouts are separate from the Go source. Final-oracle
+  # provenance is recorded independently by the consensus producer.
   git status --porcelain=v1 --untracked-files=all -- . \
+    ':(exclude)rippled-worktrees/v3.2.0-oracle' \
+    ':(exclude)rippled-worktrees/v3.3.0-oracle' \
     ':(exclude)rippled-worktrees/v3.4.0-oracle' \
     ':(exclude)fixtures/rippled-3.4.0-v3' 2>/dev/null || true
 }
@@ -238,6 +240,9 @@ case "$mode" in
       status_failed=1
     else
       for producer_file in "${producer_files[@]}"; do
+        if [[ "$producer_file" == *.git-status.txt ]]; then
+          continue
+        fi
         cat "$producer_file" >> "$output"
         printf '\n' >> "$output"
         if [[ -n "$expected_sha" ]] &&

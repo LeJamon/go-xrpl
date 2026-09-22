@@ -10,25 +10,7 @@ import (
 )
 
 func TestAcceptanceEvidenceRequiresEveryProducer(t *testing.T) {
-	script, err := filepath.Abs("../../../scripts/acceptance/final-evidence.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	repo := t.TempDir()
-	runGit := func(args ...string) string {
-		t.Helper()
-		cmd := exec.CommandContext(t.Context(), "git", args...)
-		cmd.Dir = repo
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, output)
-		}
-		return strings.TrimSpace(string(output))
-	}
-	runGit("init", "--quiet")
-	runGit("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
-		"-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", "fixture")
-	sha := runGit("rev-parse", "HEAD")
+	script, repo, sha := acceptanceEvidenceRepo(t)
 	jobs := []string{
 		"lint", "generate", "build", "build-386", "postgres", "test", "test-purego",
 		"test-mpt-crypto", "peer-interop", "peer-interop-final", "consensus-smoke",
@@ -59,6 +41,7 @@ func TestAcceptanceEvidenceRequiresEveryProducer(t *testing.T) {
 			}
 			write("needs-results.txt", strings.Join(jobs, "=success\n")+"=success\n")
 			write("workflow-commands.txt", "fixture commands\n")
+			write(filepath.Join("producers", "producer-test-libs.git-status.txt"), "?? diagnostic-only.txt\n")
 			for _, producer := range producers {
 				if producer != missing {
 					write(filepath.Join("producers", "producer-"+producer+".txt"),
@@ -88,4 +71,67 @@ func TestAcceptanceEvidenceRequiresEveryProducer(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProducerEvidenceExcludesReferenceCheckouts(t *testing.T) {
+	script, repo, sha := acceptanceEvidenceRepo(t)
+	for _, path := range []string{
+		"rippled-worktrees/v3.2.0-oracle", "rippled-worktrees/v3.3.0-oracle",
+		"rippled-worktrees/v3.4.0-oracle", "fixtures/rippled-3.4.0-v3",
+	} {
+		dir := filepath.Join(repo, path)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "reference.txt"), []byte("reference"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, dirty := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dirty_%t", dirty), func(t *testing.T) {
+			if dirty {
+				if err := os.WriteFile(filepath.Join(repo, "unexpected.txt"), []byte("changed"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			evidenceDir := t.TempDir()
+			cmd := exec.CommandContext(t.Context(), "bash", script, "producer")
+			cmd.Dir = repo
+			cmd.Env = append(os.Environ(), "EVIDENCE_DIR="+evidenceDir, "EXPECTED_SHA="+sha,
+				"EVIDENCE_LABEL=test-libs", "EVIDENCE_STATUS=success", "EVIDENCE_COMMAND=fixture")
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("producer: %v\n%s", err, output)
+			}
+			metadata, err := os.ReadFile(filepath.Join(evidenceDir, "producer-test-libs.txt"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := fmt.Sprintf("go_dirty=%t\n", dirty); !strings.Contains(string(metadata), want) {
+				t.Fatalf("want %q in producer metadata:\n%s", want, metadata)
+			}
+		})
+	}
+}
+
+func acceptanceEvidenceRepo(t *testing.T) (script, repo, sha string) {
+	t.Helper()
+	script, err := filepath.Abs("../../../scripts/acceptance/final-evidence.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo = t.TempDir()
+	runGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", args...)
+		cmd.Dir = repo
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	runGit("init", "--quiet")
+	runGit("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+		"-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", "fixture")
+	return script, repo, runGit("rev-parse", "HEAD")
 }
