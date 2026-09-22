@@ -14,10 +14,12 @@ behavior is deliberately mirrored, the Go code cites the rippled source file it
 follows (e.g. `Transactor.cpp`, `applySteps.h`), so a reviewer can check the port
 against the original.
 
-The local `rippled-worktrees/<version>-oracle/` tree is the working reference.
-Its transaction logic lives under `src/xrpld/app/tx/detail/`, ledger objects
-under `src/xrpld/ledger/detail/`, protocol definitions under
-`src/libxrpl/protocol/`, and the upstream unit tests — which the Go conformance
+The pinned local `rippled-worktrees/v3.4.0-oracle/` tree at commit
+`4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17` is the working reference. Its
+transaction implementations live under `src/libxrpl/tx/transactors/`, headers
+under `include/xrpl/tx/transactors/`, ledger code under `src/libxrpl/ledger/`,
+protocol definitions under `src/libxrpl/protocol/` and
+`include/xrpl/protocol/`, and the upstream unit tests — which the Go conformance
 suites mirror — under `src/test/app/`.
 
 ## The conformance suite

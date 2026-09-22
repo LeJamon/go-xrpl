@@ -12,7 +12,7 @@ ledger data. The client can participate in the peer network, process
 transactions, maintain ledger state, take part in consensus, and expose
 JSON-RPC, WebSocket, and optional gRPC services.
 
-Protocol compatibility is current through **rippled v3.3.0**. go-xrpl has its
+Protocol compatibility is current through **rippled v3.4.0**. go-xrpl has its
 own architecture and follows Go conventions.
 
 > [!IMPORTANT]

@@ -63,11 +63,11 @@ func TestFixCleanup340Registration(t *testing.T) {
 	if got := f.ID[:]; !bytes.Equal(got, want) {
 		t.Fatalf("fixCleanup3_4_0 ID = %X, want %s", got, amendmentID)
 	}
-	if f.Supported != SupportedNo || f.Vote != VoteDefaultNo {
-		t.Fatalf("fixCleanup3_4_0 status = (%v, %v), want (SupportedNo, VoteDefaultNo)", f.Supported, f.Vote)
+	if f.Supported != SupportedYes || f.Vote != VoteDefaultNo {
+		t.Fatalf("fixCleanup3_4_0 status = (%v, %v), want (SupportedYes, VoteDefaultNo)", f.Supported, f.Vote)
 	}
-	if AllSupportedRules().Enabled(FeatureFixCleanup3_4_0) {
-		t.Fatal("unsupported fixCleanup3_4_0 must not be enabled by all-supported rules")
+	if !AllSupportedRules().Enabled(FeatureFixCleanup3_4_0) {
+		t.Fatal("supported fixCleanup3_4_0 must be enabled by all-supported rules")
 	}
 	if GenesisRules().Enabled(FeatureFixCleanup3_4_0) {
 		t.Fatal("default-no fixCleanup3_4_0 must not be enabled by genesis rules")
@@ -292,6 +292,12 @@ func TestTableDesired(t *testing.T) {
 		t.Fatal("Desired retained a vetoed amendment")
 	}
 
+	for _, featureID := range [][32]byte{FeatureAMM, FeatureFixCleanup3_4_0, FeatureLendingProtocolV1_1} {
+		if slices.Contains(table.Desired(), featureID) {
+			t.Fatalf("Desired included default-no amendment %X before an explicit upvote", featureID)
+		}
+	}
+
 	table.UpVote(FeatureAMM)
 	if !slices.Contains(table.Desired(), FeatureAMM) {
 		t.Fatal("Desired omitted an explicitly upvoted supported amendment")
@@ -440,6 +446,12 @@ func TestAllSupportedRules(t *testing.T) {
 	}
 	if !rules.Enabled(FeatureAMM) {
 		t.Error("AllSupported rules should have AMM enabled")
+	}
+	if !rules.Enabled(FeatureFixCleanup3_4_0) {
+		t.Error("AllSupported rules should have fixCleanup3_4_0 enabled")
+	}
+	if !rules.Enabled(FeatureLendingProtocolV1_1) {
+		t.Error("AllSupported rules should have LendingProtocolV1_1 enabled")
 	}
 
 	// Count should match supported features
