@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -99,7 +100,13 @@ func resolveCorpus(required bool) (*corpus, error) {
 }
 
 func resolveCorpusPath(root string) (*corpus, error) {
-	info, err := os.Stat(root)
+	corpusRoot, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, fmt.Errorf("open conformance corpus %q: %w", root, err)
+	}
+	defer corpusRoot.Close()
+
+	info, err := corpusRoot.Stat(".")
 	if err != nil {
 		return nil, fmt.Errorf("stat conformance corpus %q: %w", root, err)
 	}
@@ -107,33 +114,27 @@ func resolveCorpusPath(root string) (*corpus, error) {
 		return nil, fmt.Errorf("conformance corpus %q is not a directory", root)
 	}
 
-	// Opening the directory catches unreadable roots before WalkDir starts.
-	dir, err := os.Open(root)
+	manifestInfo, err := corpusRoot.Stat(corpusManifestName)
 	if err != nil {
-		return nil, fmt.Errorf("open conformance corpus %q: %w", root, err)
+		manifestPath := filepath.Join(root, corpusManifestName)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("conformance corpus manifest %q is missing", manifestPath)
+		}
+		return nil, fmt.Errorf("stat conformance corpus manifest %q: %w", manifestPath, err)
 	}
-	if _, err := dir.Readdirnames(1); err != nil && !errors.Is(err, io.EOF) {
-		_ = dir.Close()
-		return nil, fmt.Errorf("read conformance corpus %q: %w", root, err)
+	if !manifestInfo.Mode().IsRegular() {
+		return nil, fmt.Errorf("conformance corpus manifest %q is not a regular file", filepath.Join(root, corpusManifestName))
 	}
-	if err := dir.Close(); err != nil {
-		return nil, fmt.Errorf("close conformance corpus %q: %w", root, err)
-	}
-
-	manifestPath, err := findCorpusManifest(root)
+	manifestData, err := readRootFile(corpusRoot, corpusManifestName)
 	if err != nil {
-		return nil, err
-	}
-	manifestData, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return nil, fmt.Errorf("read conformance manifest %q: %w", manifestPath, err)
+		return nil, fmt.Errorf("read conformance manifest %q: %w", filepath.Join(root, corpusManifestName), err)
 	}
 	manifest, err := decodeCorpusManifest(manifestData)
 	if err != nil {
-		return nil, fmt.Errorf("decode conformance manifest %q: %w", manifestPath, err)
+		return nil, fmt.Errorf("decode conformance manifest %q: %w", filepath.Join(root, corpusManifestName), err)
 	}
 	if err := validateCorpusManifest(manifest); err != nil {
-		return nil, fmt.Errorf("validate conformance manifest %q: %w", manifestPath, err)
+		return nil, fmt.Errorf("validate conformance manifest %q: %w", filepath.Join(root, corpusManifestName), err)
 	}
 
 	scope, err := outOfScopeSuitesStrict()
@@ -143,17 +144,17 @@ func resolveCorpusPath(root string) (*corpus, error) {
 
 	result := &corpus{Root: root, Manifest: manifest}
 	skipped := make(map[string]bool)
-	walkErr := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+	walkErr := fs.WalkDir(corpusRoot.FS(), ".", func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return fmt.Errorf("walk %q: %w", path, walkErr)
 		}
 		if entry.IsDir() {
 			return nil
 		}
-		if filepath.Clean(path) == filepath.Clean(manifestPath) {
+		if path == corpusManifestName {
 			return nil
 		}
-		if filepath.Ext(path) != ".json" {
+		if filepath.Ext(filepath.FromSlash(path)) != ".json" {
 			return nil
 		}
 		fileInfo, err := entry.Info()
@@ -163,7 +164,7 @@ func resolveCorpusPath(root string) (*corpus, error) {
 		if !fileInfo.Mode().IsRegular() {
 			return fmt.Errorf("fixture %q is not a regular file", path)
 		}
-		data, err := os.ReadFile(path)
+		data, err := readRootFile(corpusRoot, path)
 		if err != nil {
 			return fmt.Errorf("read fixture %q: %w", path, err)
 		}
@@ -175,17 +176,13 @@ func resolveCorpusPath(root string) (*corpus, error) {
 			return err
 		}
 
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return fmt.Errorf("relativize fixture %q: %w", path, err)
-		}
-		name := strings.TrimSuffix(filepath.ToSlash(rel), ".json")
+		name := strings.TrimSuffix(path, ".json")
 		skipReason := ""
 		if retired := fixtureDisablesRetiredAmendments(&fixture); len(retired) > 0 {
 			skipReason = fmt.Sprintf("fixture disables retired amendment(s): %s", strings.Join(retired, ", "))
 		}
 		inScope := !scope[suiteOf(name)] && skipReason == ""
-		fixtureInfo := corpusFixture{Name: name, Path: path, InScope: inScope}
+		fixtureInfo := corpusFixture{Name: name, Path: filepath.Join(root, filepath.FromSlash(path)), InScope: inScope}
 		result.Fixtures = append(result.Fixtures, fixtureInfo)
 		if inScope {
 			result.InScope = append(result.InScope, fixtureInfo)
@@ -229,6 +226,15 @@ func resolveCorpusPath(root string) (*corpus, error) {
 	return result, nil
 }
 
+func readRootFile(root *os.Root, name string) ([]byte, error) {
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return io.ReadAll(file)
+}
+
 // suiteOf returns the app/<Suite> or ledger/<Suite> prefix used by scope policy.
 func suiteOf(relName string) string {
 	parts := strings.Split(relName, "/")
@@ -236,17 +242,6 @@ func suiteOf(relName string) string {
 		return relName
 	}
 	return parts[0] + "/" + parts[1]
-}
-
-func findCorpusManifest(root string) (string, error) {
-	path := filepath.Join(root, corpusManifestName)
-	if _, err := os.Stat(path); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("conformance corpus manifest %q is missing", path)
-		}
-		return "", fmt.Errorf("stat conformance corpus manifest %q: %w", path, err)
-	}
-	return path, nil
 }
 
 func decodeCorpusManifest(data []byte) (corpusManifest, error) {
