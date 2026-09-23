@@ -34,21 +34,21 @@ var (
 	oracleTERLine   = regexp.MustCompile(`^(te[A-Za-z0-9_]+)(?:\s+\[\[[^]]*\]\])?\s*(?:=\s*(-?\d+))?\s*,?\s*$`)
 )
 
-func TestRC1DefinitionsMatchRippled(t *testing.T) {
-	types, err := parseOracleTypes(requireRC1OracleFile(t, "include/xrpl/protocol/SField.h"))
+func TestFinalDefinitionsMatchRippled(t *testing.T) {
+	types, err := parseOracleTypes(requireFinalOracleFile(t, "include/xrpl/protocol/SField.h"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(types) != 31 {
-		t.Fatalf("rippled v3.4.0-rc1 has %d type definitions, want 31", len(types))
+		t.Fatalf("rippled v3.4.0 has %d type definitions, want 31", len(types))
 	}
 
-	fieldSpecs, err := parseOracleSFields(requireRC1OracleFile(t, "include/xrpl/protocol/detail/sfields.macro"))
+	fieldSpecs, err := parseOracleSFields(requireFinalOracleFile(t, "include/xrpl/protocol/detail/sfields.macro"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(fieldSpecs) != 349 {
-		t.Fatalf("rippled v3.4.0-rc1 has %d active SFields, want 349", len(fieldSpecs))
+		t.Fatalf("rippled v3.4.0 has %d active SFields, want 349", len(fieldSpecs))
 	}
 	expectedFields, err := buildExpectedFields(types, fieldSpecs)
 	if err != nil {
@@ -58,30 +58,30 @@ func TestRC1DefinitionsMatchRippled(t *testing.T) {
 		t.Fatalf("expected %d definitions fields, want 357", len(expectedFields))
 	}
 
-	transactionTypes, err := parseOracleIDs(requireRC1OracleFile(t, "include/xrpl/protocol/detail/transactions.macro"), "TRANSACTION(", oracleTxLine)
+	transactionTypes, err := parseOracleIDs(requireFinalOracleFile(t, "include/xrpl/protocol/detail/transactions.macro"), "TRANSACTION(", oracleTxLine)
 	if err != nil {
 		t.Fatal(err)
 	}
 	transactionTypes["Invalid"] = -1
 	if len(transactionTypes) != 83 {
-		t.Fatalf("rippled v3.4.0-rc1 has %d transaction definitions including Invalid, want 83", len(transactionTypes))
+		t.Fatalf("rippled v3.4.0 has %d transaction definitions including Invalid, want 83", len(transactionTypes))
 	}
 
-	ledgerEntryTypes, err := parseOracleIDs(requireRC1OracleFile(t, "include/xrpl/protocol/detail/ledger_entries.macro"), "LEDGER_ENTRY", oracleLELine)
+	ledgerEntryTypes, err := parseOracleIDs(requireFinalOracleFile(t, "include/xrpl/protocol/detail/ledger_entries.macro"), "LEDGER_ENTRY", oracleLELine)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ledgerEntryTypes["Invalid"] = -1
 	if len(ledgerEntryTypes) != 32 {
-		t.Fatalf("rippled v3.4.0-rc1 has %d ledger-entry definitions including Invalid, want 32", len(ledgerEntryTypes))
+		t.Fatalf("rippled v3.4.0 has %d ledger-entry definitions including Invalid, want 32", len(ledgerEntryTypes))
 	}
 
-	transactionResults, err := parseOracleTransactionResults(requireRC1OracleFile(t, "include/xrpl/protocol/TER.h"))
+	transactionResults, err := parseOracleTransactionResults(requireFinalOracleFile(t, "include/xrpl/protocol/TER.h"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(transactionResults) != 197 {
-		t.Fatalf("rippled v3.4.0-rc1 has %d transaction results, want 197", len(transactionResults))
+		t.Fatalf("rippled v3.4.0 has %d transaction results, want 197", len(transactionResults))
 	}
 
 	defs := Get()
@@ -102,7 +102,7 @@ func TestRC1DefinitionsMatchRippled(t *testing.T) {
 	})
 }
 
-func requireRC1OracleFile(t *testing.T, relative string) string {
+func requireFinalOracleFile(t *testing.T, relative string) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
@@ -110,7 +110,7 @@ func requireRC1OracleFile(t *testing.T, relative string) string {
 	}
 	dir := filepath.Dir(file)
 	for range 12 {
-		candidate := filepath.Join(dir, "rippled-worktrees", "v3.4.0-rc1-oracle", filepath.FromSlash(relative))
+		candidate := filepath.Join(dir, "rippled-worktrees", "v3.4.0-oracle", filepath.FromSlash(relative))
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 			return candidate
 		}
@@ -120,7 +120,7 @@ func requireRC1OracleFile(t *testing.T, relative string) string {
 		}
 		dir = parent
 	}
-	t.Fatalf("required rippled v3.4.0-rc1 oracle file %q not found from %s", relative, file)
+	t.Fatalf("required rippled v3.4.0 oracle file %q not found from %s", relative, file)
 	return ""
 }
 

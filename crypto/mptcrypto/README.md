@@ -2,7 +2,7 @@
 
 The optional `mptcrypto` build tag links the official XRPLF `mpt-crypto` 1.0.2
 package through a fixed C ABI. The dependency graph is the graph locked by
-rippled 3.3.0:
+rippled 3.4.0 (`4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17`):
 
 - `mpt-crypto/1.0.2#b313cef0c1a493eb970ad185b2e9bab7`
 - source tag object `bec300394509a0d1bc82fee63b5365dc9e5db20e`

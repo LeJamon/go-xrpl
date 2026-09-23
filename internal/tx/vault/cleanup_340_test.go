@@ -54,6 +54,8 @@ func TestVaultCleanupExistingIOUHoldingPrecedesFreeze(t *testing.T) {
 			builder := amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported)
 			if cleanup {
 				builder.Enable(amendment.FeatureFixCleanup3_4_0)
+			} else {
+				builder.Disable(amendment.FeatureFixCleanup3_4_0)
 			}
 			ctx := buildArmsCtx(t, view, holder, builder.Build())
 			issuerAddress := state.EncodeAccountIDSafe(issuer)
@@ -116,6 +118,8 @@ func TestVaultCleanupClawbackTruncatesRequestedAssets(t *testing.T) {
 		f := newVaultClawbackFixture(t, 2)
 		if cleanup {
 			f.ctx.Config.Rules = amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported).Enable(amendment.FeatureFixCleanup3_4_0).Build()
+		} else {
+			f.ctx.Config.Rules = amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported).Disable(amendment.FeatureFixCleanup3_4_0).Build()
 		}
 		vd, err := readVault(f.view, f.vaultKey)
 		if err != nil {

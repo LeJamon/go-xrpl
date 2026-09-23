@@ -450,6 +450,8 @@ func TestSponsorshipSetPreclaimMatrix(t *testing.T) {
 
 func TestSponsorshipTransferObjectCreateReassignEnd(t *testing.T) {
 	env, sponsee, destination, sponsor1, sponsor2 := sponsorEnv(t)
+	env.DisableFeature("fixCleanup3_4_0")
+	env.Close()
 
 	checkSequence := env.Seq(sponsee)
 	createCheck := checktx.NewCheckCreate(sponsee.Address, destination.Address, tx.NewXRPAmount(jtx.XRP(1)))

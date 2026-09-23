@@ -38,6 +38,8 @@ func oppositeRoleRules(cleanup bool) *amendment.Rules {
 
 func TestRulesAccessorReflectsCommittedAmendments(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.DisableFeature("fixCleanup3_4_0")
+	env.Close()
 	require.False(t, env.Rules().Enabled(amendment.FeatureFixCleanup3_4_0))
 
 	env.EnableFeature("fixCleanup3_4_0")

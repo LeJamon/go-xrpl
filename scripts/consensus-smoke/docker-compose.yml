@@ -15,9 +15,15 @@ services:
     volumes:
       - ./configs/rippled-0.cfg:/config/xrpld.cfg:ro
       - ./configs/validators.txt:/config/validators.txt:ro
+      # The checksum-pinned final oracle image starts xrpld with its package
+      # config path; official images use /config. Keep both contracts mounted
+      # so RIPPLED_IMAGE can switch without changing the topology.
+      - ./configs/rippled-0.cfg:/etc/xrpld/xrpld.cfg:ro
+      - ./configs/validators.txt:/etc/xrpld/validators.txt:ro
+      - ./xrpld-healthcheck.sh:/usr/local/bin/xrpld-healthcheck.sh:ro
     networks: [smoke]
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- --post-data='{\"method\":\"server_info\"}' http://localhost:5005 || exit 1"]
+      test: ["CMD-SHELL", "bash /usr/local/bin/xrpld-healthcheck.sh"]
       interval: 3s
       timeout: 2s
       retries: 30
@@ -32,9 +38,12 @@ services:
     volumes:
       - ./configs/rippled-1.cfg:/config/xrpld.cfg:ro
       - ./configs/validators.txt:/config/validators.txt:ro
+      - ./configs/rippled-1.cfg:/etc/xrpld/xrpld.cfg:ro
+      - ./configs/validators.txt:/etc/xrpld/validators.txt:ro
+      - ./xrpld-healthcheck.sh:/usr/local/bin/xrpld-healthcheck.sh:ro
     networks: [smoke]
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- --post-data='{\"method\":\"server_info\"}' http://localhost:5005 || exit 1"]
+      test: ["CMD-SHELL", "bash /usr/local/bin/xrpld-healthcheck.sh"]
       interval: 3s
       timeout: 2s
       retries: 30

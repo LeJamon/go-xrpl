@@ -27,9 +27,13 @@ func newCleanupLoan(t *testing.T, cleanup, cashBasis bool, configure ...func(*le
 	env.EnableFeature("LendingProtocol")
 	if cashBasis {
 		env.EnableFeature("LendingProtocolV1_1")
+	} else {
+		env.DisableFeature("LendingProtocolV1_1")
 	}
 	if cleanup {
 		env.EnableFeature("fixCleanup3_4_0")
+	} else {
+		env.DisableFeature("fixCleanup3_4_0")
 	}
 	owner, borrower := jtx.NewAccount("owner"), jtx.NewAccount("borrower")
 	env.Fund(owner, borrower)
@@ -262,6 +266,8 @@ func testCleanupLoanDefaultFrozenCover(t *testing.T, cashBasis, impaired bool) {
 				}
 				if cleanup {
 					f.env.EnableFeature("fixCleanup3_4_0")
+				} else {
+					f.env.DisableFeature("fixCleanup3_4_0")
 				}
 				f.env.EnableFeature("MPTokensV2")
 				f.createHolding(f.owner)

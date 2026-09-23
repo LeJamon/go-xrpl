@@ -21,6 +21,8 @@ func TestBookCleanup340CorruptDomainMembership(t *testing.T) {
 				rules := amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported)
 				if enabled {
 					rules.Enable(amendment.FeatureFixCleanup3_4_0)
+				} else {
+					rules.Disable(amendment.FeatureFixCleanup3_4_0)
 				}
 				f.base.rules = rules.Build()
 				domain := [32]byte{3}

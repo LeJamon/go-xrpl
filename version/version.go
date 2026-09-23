@@ -3,7 +3,7 @@ package version
 
 // SemanticVersion is the canonical go-xrpl software version advertised in
 // protocol messages.
-const SemanticVersion = "3.3.0"
+const SemanticVersion = "3.4.0"
 
 // Version is set at build time via:
 //

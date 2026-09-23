@@ -669,6 +669,9 @@ func TestWithdrawExactPriceZeroDenominator(t *testing.T) {
 			env, _ := setupGBPEURPoolAliceOnly(t, 100, 100, 1000, true)
 			if !tc.cleanup {
 				env.DisableFeature("fixCleanup3_3_0")
+				if !tc.cleanup340 {
+					env.DisableFeature("fixCleanup3_4_0")
+				}
 				env.Close()
 			}
 

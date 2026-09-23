@@ -1,6 +1,6 @@
 # MPT market fixtures
 
-`Books()` and `MPTFees()` return fresh vectors shared by transaction flow and market RPC tests. These are source-derived expectations from the clean rippled `3.4.0-rc1` oracle at `2ad4def35fd8580da027462517ba3375cc005c94`, not captured RPC responses.
+`Books()` and `MPTFees()` return fresh vectors shared by transaction flow and market RPC tests. These are source-derived expectations from the clean rippled `3.4.0` oracle at `4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17`, not captured RPC responses.
 
 `Books()` covers XRP/MPT, IOU/MPT and MPT/MPT in both directions, with and without a permissioned domain. The fixed base hashes follow `Indexes.cpp::getBookBase`: the book namespace, the MPT asset tag (1, 2 or 3), ordered asset fields, any IOU issuer, then the optional domain; the last eight bytes are cleared for quality. An all-zero MPT ID represents an ordinary issue. An all-zero currency and issuer represents XRP.
 

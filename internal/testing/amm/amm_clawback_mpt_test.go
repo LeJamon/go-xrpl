@@ -99,6 +99,8 @@ func setupAMMClawbackReserveFixture(t *testing.T, cleanup bool) (*ammtest.AMMTes
 	env := ammtest.NewAMMTestEnv(t)
 	if cleanup {
 		env.EnableFeature("fixCleanup3_4_0")
+	} else {
+		env.DisableFeature("fixCleanup3_4_0")
 	}
 	gw2 := jtx.NewAccount("gw2")
 	carol := env.Carol
@@ -220,6 +222,8 @@ func setupAMMClawbackZeroRoundedMPT(t *testing.T, cleanup bool) (*ammtest.AMMTes
 	env.EnableFeature("MPTokensV2")
 	if cleanup {
 		env.EnableFeature("fixCleanup3_4_0")
+	} else {
+		env.DisableFeature("fixCleanup3_4_0")
 	}
 	for _, account := range []*jtx.Account{env.GW, env.Alice, env.Bob} {
 		env.FundAmount(account, uint64(jtx.XRP(10_000_000)))
@@ -257,6 +261,8 @@ func setupAMMClawbackPairedZeroRoundedMPT(t *testing.T, cleanup bool) (*ammtest.
 	env.EnableFeature("MPTokensV2")
 	if cleanup {
 		env.EnableFeature("fixCleanup3_4_0")
+	} else {
+		env.DisableFeature("fixCleanup3_4_0")
 	}
 	for _, account := range []*jtx.Account{env.GW, env.Alice, env.Bob} {
 		env.FundAmount(account, uint64(jtx.XRP(10_000_000)))

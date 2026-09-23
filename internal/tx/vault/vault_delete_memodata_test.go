@@ -21,14 +21,14 @@ func TestLendingProtocolV1_1Registration(t *testing.T) {
 	if got := strings.ToUpper(hex.EncodeToString(feature.ID[:])); got != wantID {
 		t.Fatalf("LendingProtocolV1_1 ID = %s, want %s", got, wantID)
 	}
-	if feature.Supported != amendment.SupportedNo {
-		t.Fatalf("LendingProtocolV1_1 support = %v, want SupportedNo", feature.Supported)
+	if feature.Supported != amendment.SupportedYes {
+		t.Fatalf("LendingProtocolV1_1 support = %v, want SupportedYes", feature.Supported)
 	}
 	if feature.Vote != amendment.VoteDefaultNo {
 		t.Fatalf("LendingProtocolV1_1 vote = %v, want VoteDefaultNo", feature.Vote)
 	}
-	if amendment.AllSupportedRules().Enabled(feature.ID) {
-		t.Fatal("unsupported LendingProtocolV1_1 must not be enabled by AllSupportedRules")
+	if !amendment.AllSupportedRules().Enabled(feature.ID) {
+		t.Fatal("supported LendingProtocolV1_1 must be enabled by AllSupportedRules")
 	}
 }
 

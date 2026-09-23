@@ -50,12 +50,12 @@ jobs:
           repository: XRPLF/rippled
           ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
           path: rippled-worktrees/v3.3.0-oracle
-      - name: Check out rippled v3.4.0-rc1 oracle
+      - name: Check out rippled v3.4.0 oracle
         uses: actions/checkout@v5
         with:
           repository: XRPLF/rippled
-          ref: 2ad4def35fd8580da027462517ba3375cc005c94
-          path: rippled-worktrees/v3.4.0-rc1-oracle
+          ref: 4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17
+          path: rippled-worktrees/v3.4.0-oracle
       - uses: ./.github/actions/setup
       - run: go test -count=1 -timeout 30m ./codec/... ./crypto/... ./shamap/... ./ledger/... ./keylet/... ./drops/... ./internal/tx/...
 
@@ -82,12 +82,12 @@ jobs:
           repository: XRPLF/rippled
           ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
           path: rippled-worktrees/v3.3.0-oracle
-      - name: Check out rippled v3.4.0-rc1 oracle
+      - name: Check out rippled v3.4.0 oracle
         uses: actions/checkout@v5
         with:
           repository: XRPLF/rippled
-          ref: 2ad4def35fd8580da027462517ba3375cc005c94
-          path: rippled-worktrees/v3.4.0-rc1-oracle
+          ref: 4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17
+          path: rippled-worktrees/v3.4.0-oracle
       - uses: ./.github/actions/setup
         with:
           cgo: "false"
@@ -140,12 +140,12 @@ jobs:
           repository: XRPLF/rippled
           ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
           path: rippled-worktrees/v3.3.0-oracle
-      - name: Check out rippled v3.4.0-rc1 oracle
+      - name: Check out rippled v3.4.0 oracle
         uses: actions/checkout@v5
         with:
           repository: XRPLF/rippled
-          ref: 2ad4def35fd8580da027462517ba3375cc005c94
-          path: rippled-worktrees/v3.4.0-rc1-oracle
+          ref: 4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17
+          path: rippled-worktrees/v3.4.0-oracle
       - uses: ./.github/actions/setup
       - name: Run tests with coverage
         run: >

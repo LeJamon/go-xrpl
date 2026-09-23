@@ -586,8 +586,8 @@ func TestBuildValidationEvent_ServerVersionDecimal(t *testing.T) {
 	// decimal (NetworkOPs.cpp:2426).
 	v := &consensus.Validation{ServerVersion: version.EncodedServerVersion()}
 	ev := mustBuildValidationEvent(t, v, 0)
-	if ev.ServerVersion != "4611689329859756032" {
-		t.Errorf("server_version = %q, want decimal \"4611689329859756032\"", ev.ServerVersion)
+	if ev.ServerVersion != "4611689334154723328" {
+		t.Errorf("server_version = %q, want decimal \"4611689334154723328\"", ev.ServerVersion)
 	}
 
 	// ServerVersion 0 is the absent proxy → field omitted.

@@ -386,6 +386,8 @@ func setupAMMClawbackExactLPBoundary(t *testing.T, cleanup bool) (*amm.AMMTestEn
 	env := amm.NewAMMTestEnv(t)
 	if cleanup {
 		env.EnableFeature("fixCleanup3_4_0")
+	} else {
+		env.DisableFeature("fixCleanup3_4_0")
 	}
 	for _, account := range []*jtx.Account{env.GW, env.Alice, env.Bob} {
 		env.FundAmount(account, uint64(jtx.XRP(1_000_000)))

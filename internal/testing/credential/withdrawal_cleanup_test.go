@@ -36,6 +36,9 @@ func newCredentialWithdrawalFixture(t *testing.T, broker bool) credentialWithdra
 	env.EnableFeature("fixCleanup3_4_0")
 	env.EnableFeature("SingleAssetVault")
 	env.EnableFeature("LendingProtocol")
+	if broker {
+		env.DisableFeature("LendingProtocolV1_1")
+	}
 	owner, destination, issuer := jtx.NewAccount("owner"), jtx.NewAccount("destination"), jtx.NewAccount("issuer")
 	env.Fund(owner, destination, issuer)
 	env.Close()

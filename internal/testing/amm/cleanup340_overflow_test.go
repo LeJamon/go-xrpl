@@ -27,6 +27,9 @@ func TestAMMDepositOverflowResultsAndRollback(t *testing.T) {
 				env := amm.NewAMMTestEnv(t)
 				if cleanup {
 					env.EnableFeatureNow("fixCleanup3_4_0")
+				} else {
+					env.DisableFeature("fixCleanup3_4_0")
+					env.Close()
 				}
 				env.Fund()
 				env.Trust(env.Alice, env.GW, "USD", 1e20)

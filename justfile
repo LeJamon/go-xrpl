@@ -58,7 +58,7 @@ test-libs:
 test-pkg pkg:
     go test -v {{pkg}}
 
-# Production handshake and manifest interop against rippled 3.3.0 on network_id=1.
+# Production handshake and manifest interop against rippled 3.4.0 on network_id=1.
 test-docker:
     PEERTLS_DOCKER_INTEROP=1 go test -tags docker -timeout 300s -v -run 'Test(Handshake|Manifest)_Interop_RippledDocker' ./internal/peermanagement/
 
@@ -81,9 +81,9 @@ fuzz-determinism fuzztime="60s":
     go test -run '^$' -fuzz '^FuzzEngineDeterminism$' -fuzztime {{fuzztime}} ./internal/testing/enginefuzz/
 
 # Differential-vs-rippled fuzzer (issue #682, scope 2): replays recorded rippled
-# fixtures and diffs goXRPL's TER + post-state. Needs the conformance corpus;
-# set GOXRPL_FIXTURES_DIR or run from the main checkout. e.g.
-# `GOXRPL_FIXTURES_DIR=../fixtures/rippled-2.6.2-v2 just fuzz-differential 5m`.
+# fixtures and diffs goXRPL's TER + post-state. Needs the pinned final-3.4.0
+# conformance corpus; set GOXRPL_FIXTURES_DIR explicitly. e.g.
+# `GOXRPL_FIXTURES_DIR=/path/to/rippled-3.4.0-v3 just fuzz-differential 5m`.
 fuzz-differential fuzztime="60s":
     go test -run '^$' -fuzz '^FuzzEngineDifferential$' -fuzztime {{fuzztime}} ./internal/testing/conformance/
 
@@ -138,7 +138,9 @@ fmt:
 tidy:
     go mod tidy
 
-# Conformance summary; args pass through. e.g. `just conformance --failing`.
+# Required final-oracle conformance summary. Pass the corpus explicitly, e.g.
+# `just conformance --corpus /path/to/rippled-3.4.0-v3` or use
+# `GOXRPL_FIXTURES_DIR=/path/to/rippled-3.4.0-v3 just conformance`.
 conformance *args:
     ./scripts/conformance-summary.sh {{args}}
 

@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Derive rc1 server_definitions data from the pinned rippled source tree.
+"""Derive final 3.4.0 server_definitions data from the pinned rippled source tree.
 
 It parses the C++ protocol macros and combines them with construction rules
-transcribed from the pinned rc1 sources, independently of go-xrpl. The input
+transcribed from the pinned final sources, independently of go-xrpl. The input
 must be a clean checkout of the pinned commit.
 
 Regenerate the checked-in fixture from the pinned source checkout with:
 
-    python3 server_definitions_rc1_oracle.py \
-        /path/to/rippled-worktrees/v3.4.0-rc1 --output server_definitions_rc1_hashes.json
+    python3 server_definitions_final_oracle.py \
+        /path/to/rippled-worktrees/v3.4.0 --output server_definitions_final_hashes.json
 
-A built rc1 daemon can independently dump the runtime document with
+A built final 3.4.0 daemon can independently dump the runtime document with
 `xrpld --definitions`; the source-derived checksums below are kept in the Go
 suite so normal tests do not require a daemon or a C++ build.
 """
@@ -23,7 +23,7 @@ import subprocess
 from pathlib import Path
 
 
-ORACLE_COMMIT = "2ad4def35fd8580da027462517ba3375cc005c94"
+ORACLE_COMMIT = "4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17"
 
 
 def verify_oracle(root):
@@ -33,7 +33,7 @@ def verify_oracle(root):
     if Path(git("rev-parse", "--show-toplevel")).resolve() != root:
         raise ValueError("oracle_root must be the checkout root")
     if git("rev-parse", "HEAD") != ORACLE_COMMIT:
-        raise ValueError(f"oracle must be rippled 3.4.0-rc1 at {ORACLE_COMMIT}")
+        raise ValueError(f"oracle must be rippled 3.4.0 at {ORACLE_COMMIT}")
     if git("status", "--porcelain", "--untracked-files=normal"):
         raise ValueError("oracle checkout must be clean")
 
@@ -349,12 +349,12 @@ def main():
     full_hash, full_payload = digest(document)
     output = {
         "oracle": {
-            "tag": "3.4.0-rc1",
+            "tag": "3.4.0",
             "commit": ORACLE_COMMIT,
         },
         "serialization": "compact UTF-8 JSON with lexicographically sorted object keys; no trailing newline",
         "regeneration": {
-            "source": "python3 server_definitions_rc1_oracle.py <rippled-3.4.0-rc1> --output server_definitions_rc1_hashes.json",
+            "source": "python3 server_definitions_final_oracle.py <rippled-3.4.0> --output server_definitions_final_hashes.json",
             "runtime": "xrpld --definitions",
         },
         "transaction_results": {

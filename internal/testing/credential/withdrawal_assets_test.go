@@ -51,6 +51,9 @@ func newAssetWithdrawalFixture(t *testing.T, assetKind string, broker bool) *ass
 	env.EnableFeature("SingleAssetVault")
 	env.EnableFeature("MPTokensV1")
 	env.EnableFeature("LendingProtocol")
+	if broker {
+		env.DisableFeature("LendingProtocolV1_1")
+	}
 
 	issuer := jtx.NewAccount(assetKind + "-issuer")
 	owner := jtx.NewAccount(assetKind + "-owner")

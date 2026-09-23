@@ -15,6 +15,8 @@ func precisionRules(fix340 bool) *amendment.Rules {
 	b := amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported)
 	if fix340 {
 		b.Enable(amendment.FeatureFixCleanup3_4_0)
+	} else {
+		b.Disable(amendment.FeatureFixCleanup3_4_0)
 	}
 	return b.Build()
 }

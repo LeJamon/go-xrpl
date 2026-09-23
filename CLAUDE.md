@@ -13,9 +13,11 @@ maintaining behavioral parity with the XRPL protocol.
 ### Implementation Philosophy
 
 - **Rippled is the source of behavioural truth.** There is no formal XRPL
-  specification, so the C++ rippled implementation (kept locally at `../rippled`,
-  read-only) is the de facto spec for *protocol behaviour* — validation logic,
-  error/TER codes, and ledger effects. Check it before changing protocol behaviour.
+  specification, so the C++ rippled implementation (kept locally at
+  `../rippled-worktrees/v3.4.0-oracle`, read-only, commit
+  `4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17`) is the de facto spec for *protocol
+  behaviour* — validation logic, error/TER codes, and ledger effects. Check it
+  before changing protocol behaviour.
   It is **not** a template for code shape: go-xrpl is an idiomatic Go implementation
   of XRPL, not a transliteration of rippled's C++.
 - **Idiomatic Go.** Prefer Go interfaces, composition, and table-driven designs over
@@ -46,7 +48,7 @@ just test-core          # ledger / txq / rpc / consensus / peermanagement
 just test-libs          # codec / crypto / shamap / storage / ...
 just test-pkg ./internal/tx/offer/...                  # one package
 just test-pkg './internal/tx/payment/... -run TestX'   # one test (quote args)
-just test-docker        # production handshake against rippled 3.2.0 (network_id=1)
+just test-docker        # production handshake against rippled 3.4.0 (network_id=1)
 
 just vet
 just lint            # auto-installs golangci-lint at the CI-pinned version
@@ -131,13 +133,14 @@ transactions to ledger state. Transaction types self-register via `init()` +
 
 ## Rippled reference locations
 
-Use the local `rippled/` tree (do not fetch from the web):
+Use the pinned local `rippled-worktrees/v3.4.0-oracle` tree (do not fetch from
+the web):
 
-- Transaction implementations: `rippled/src/xrpld/app/tx/detail/`
-- Transaction headers: `rippled/src/xrpld/app/tx/`
-- Ledger objects: `rippled/src/xrpld/ledger/detail/`
-- Protocol definitions: `rippled/src/libxrpl/protocol/`
-- Tests: `rippled/src/test/app/` (e.g. `AccountSet_test.cpp`, `Offer_test.cpp`)
+- Transaction implementations: `src/libxrpl/tx/transactors/`
+- Transaction headers: `include/xrpl/tx/transactors/`
+- Ledger implementation and helpers: `src/libxrpl/ledger/`
+- Protocol definitions: `src/libxrpl/protocol/` and `include/xrpl/protocol/`
+- Tests: `src/test/app/` (e.g. `AccountSet_test.cpp`, `Offer_test.cpp`)
 
 When implementing or fixing a feature: look up the rippled implementation and its
 unit tests, then implement matching Go tests under

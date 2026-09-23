@@ -20,6 +20,8 @@ func TestNFTCleanup340AmountPrecedence(t *testing.T) {
 					rules := amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported)
 					if enabled {
 						rules.Enable(amendment.FeatureFixCleanup3_4_0)
+					} else {
+						rules.Disable(amendment.FeatureFixCleanup3_4_0)
 					}
 					amount := tx.NewIssuedAmountFromFloat64(value, currency, account)
 					expected := ter.TesSUCCESS
