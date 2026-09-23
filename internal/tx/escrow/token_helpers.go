@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	entry "github.com/LeJamon/go-xrpl/ledger/entry"
@@ -129,7 +130,7 @@ func escrowCreatePreclaimIOU(
 
 // escrowCreatePreclaimMPT validates MPT escrow creation preconditions.
 // Reference: rippled Escrow.cpp escrowCreatePreclaimHelper<MPTIssue> lines 283-359
-func escrowCreatePreclaimMPT(view tx.LedgerView, rules *amendment.Rules, accountID, destID [20]byte, amount tx.Amount) ter.Result {
+func escrowCreatePreclaimMPT(view tx.LedgerView, rules *amendment.Rules, accountID, destID [20]byte, amount tx.Amount, parentCloseTime uint32) ter.Result {
 	// FeatureMPTokensV1 must be enabled
 	if !rules.Enabled(amendment.FeatureMPTokensV1) {
 		return ter.TemDISABLED
@@ -186,12 +187,12 @@ func escrowCreatePreclaimMPT(view tx.LedgerView, rules *amendment.Rules, account
 	}
 
 	// requireAuth for sender (WeakAuth)
-	if tr := requireMPTAuthForEscrow(view, issuance.Flags, issuanceKey, accountID, issuerID); tr != ter.TesSUCCESS {
+	if tr := requireMPTAuthForEscrow(view, amount.MPTIssuanceID(), accountID, parentCloseTime); tr != ter.TesSUCCESS {
 		return tr
 	}
 
 	// requireAuth for destination (WeakAuth)
-	if tr := requireMPTAuthForEscrow(view, issuance.Flags, issuanceKey, destID, issuerID); tr != ter.TesSUCCESS {
+	if tr := requireMPTAuthForEscrow(view, amount.MPTIssuanceID(), destID, parentCloseTime); tr != ter.TesSUCCESS {
 		return tr
 	}
 
@@ -267,7 +268,7 @@ func escrowFinishPreclaimIOU(view tx.LedgerView, destID [20]byte, amount tx.Amou
 
 // escrowFinishPreclaimMPT validates MPT escrow finish preconditions.
 // Reference: rippled Escrow.cpp lines 726-758
-func escrowFinishPreclaimMPT(view tx.LedgerView, destID [20]byte, amount tx.Amount) ter.Result {
+func escrowFinishPreclaimMPT(view tx.LedgerView, destID [20]byte, amount tx.Amount, parentCloseTime uint32) ter.Result {
 	// MPT amounts store the issuer in the MPTIssuanceID (last 20 bytes),
 	// not in Amount.Issuer which is empty for MPT.
 	issuerID, err := mptIssuerAccountID(amount.MPTIssuanceID())
@@ -299,7 +300,7 @@ func escrowFinishPreclaimMPT(view tx.LedgerView, destID [20]byte, amount tx.Amou
 	}
 
 	// requireAuth on destination (WeakAuth)
-	if tr := requireMPTAuthForEscrow(view, issuance.Flags, issuanceKey, destID, issuerID); tr != ter.TesSUCCESS {
+	if tr := requireMPTAuthForEscrow(view, amount.MPTIssuanceID(), destID, parentCloseTime); tr != ter.TesSUCCESS {
 		return tr
 	}
 
@@ -338,7 +339,7 @@ func escrowCancelPreclaimIOU(view tx.LedgerView, accountID [20]byte, amount tx.A
 
 // escrowCancelPreclaimMPT validates MPT escrow cancel preconditions.
 // Reference: rippled Escrow.cpp lines 1239-1267
-func escrowCancelPreclaimMPT(view tx.LedgerView, accountID [20]byte, amount tx.Amount) ter.Result {
+func escrowCancelPreclaimMPT(view tx.LedgerView, accountID [20]byte, amount tx.Amount, parentCloseTime uint32) ter.Result {
 	// MPT amounts store the issuer in the MPTIssuanceID (last 20 bytes),
 	// not in Amount.Issuer which is empty for MPT.
 	issuerID, err := mptIssuerAccountID(amount.MPTIssuanceID())
@@ -351,26 +352,8 @@ func escrowCancelPreclaimMPT(view tx.LedgerView, accountID [20]byte, amount tx.A
 		return ter.TecINTERNAL
 	}
 
-	// MPTIssuance must exist
-	issuanceKey, err := mptIssuanceKeyFromHex(amount.MPTIssuanceID())
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	issuanceData, err := view.Read(issuanceKey)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if issuanceData == nil {
-		return ter.TecOBJECT_NOT_FOUND
-	}
-
-	issuance, err := state.ParseMPTokenIssuance(issuanceData)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-
 	// requireAuth on account (WeakAuth)
-	if tr := requireMPTAuthForEscrow(view, issuance.Flags, issuanceKey, accountID, issuerID); tr != ter.TesSUCCESS {
+	if tr := requireMPTAuthForEscrow(view, amount.MPTIssuanceID(), accountID, parentCloseTime); tr != ter.TesSUCCESS {
 		return tr
 	}
 
@@ -939,43 +922,12 @@ func requireAuthIOU(view tx.LedgerView, issuerID, accountID [20]byte, currency s
 	return ter.TesSUCCESS
 }
 
-// requireMPTAuthForEscrow checks MPT authorization for escrow operations.
-// Uses WeakAuth semantics: if account has no MPToken, pass (don't fail).
-// Only fail if lsfMPTRequireAuth is set AND MPToken exists but is not authorized.
-// Reference: rippled View.cpp requireAuth(view, MPTIssue, account, WeakAuth)
-func requireMPTAuthForEscrow(view tx.LedgerView, issuanceFlags uint32, issuanceKey keylet.Keylet, accountID, issuerID [20]byte) ter.Result {
-	// Issuer is always authorized
-	if issuerID == accountID {
-		return ter.TesSUCCESS
-	}
-
-	// If requireAuth is not set, pass
-	if issuanceFlags&entry.LsfMPTRequireAuth == 0 {
-		return ter.TesSUCCESS
-	}
-
-	// WeakAuth: if MPToken doesn't exist, pass (destination may not hold yet)
-	tokenKey := keylet.MPToken(issuanceKey.Key, accountID)
-	tokenData, err := view.Read(tokenKey)
+func requireMPTAuthForEscrow(view tx.LedgerView, issuanceID string, accountID [20]byte, parentCloseTime uint32) ter.Result {
+	id, err := mptutil.DecodeID(issuanceID)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	if tokenData == nil {
-		// WeakAuth: no token is OK
-		return ter.TesSUCCESS
-	}
-
-	token, err := state.ParseMPToken(tokenData)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-
-	// Token exists but is not authorized
-	if token.Flags&entry.LsfMPTAuthorized == 0 {
-		return ter.TecNO_AUTH
-	}
-
-	return ter.TesSUCCESS
+	return mptutil.RequireAuthWithTypeAt(view, id, accountID, mptutil.WeakAuth, parentCloseTime)
 }
 
 // isMPTFrozen checks if an MPT is frozen for a given account.
