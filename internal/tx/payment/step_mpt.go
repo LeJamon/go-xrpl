@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 type mptEndpointCache struct {
@@ -98,6 +99,13 @@ func (s *MPTEndpointStep) ensureDestinationHolding(sb *PaymentSandbox) ter.Resul
 	return mptutil.EnsureHolding(sb, s.issue.MPTID, s.dst, 0, true)
 }
 
+func (s *MPTEndpointStep) sendWithMPTCreate(sb *PaymentSandbox, amount int64) ter.Result {
+	if result := s.ensureDestinationHolding(sb); result != ter.TesSUCCESS {
+		return result
+	}
+	return s.send(sb, amount)
+}
+
 func (s *MPTEndpointStep) send(sb *PaymentSandbox, amount int64) ter.Result {
 	return mptutil.Credit(sb, s.issue.MPTID, s.src, s.dst, amount, true)
 }
@@ -144,16 +152,27 @@ func (s *MPTEndpointStep) Rev(
 		zero := ZeroMPTEitherAmount(s.issue.MPTID)
 		return zero, zero
 	}
-	if result := s.ensureDestinationHolding(sb); result != ter.TesSUCCESS {
+	maxRepresentable, ok := tryMPTMulRatio(
+		int64(protocol.MaxMPTokenAmount),
+		QualityOne,
+		srcQOut,
+		false,
+	)
+	if !ok {
 		s.resetCache(dir)
 		zero := ZeroMPTEitherAmount(s.issue.MPTID)
 		return zero, zero
 	}
 
-	srcToDst := min(out.MPT, maxSrcToDst)
-	in := mptMulRatio(srcToDst, srcQOut, QualityOne, true)
+	srcToDst := min(out.MPT, min(maxSrcToDst, maxRepresentable))
+	in, ok := tryMPTMulRatio(srcToDst, srcQOut, QualityOne, true)
+	if !ok {
+		s.resetCache(dir)
+		zero := ZeroMPTEitherAmount(s.issue.MPTID)
+		return zero, zero
+	}
 	s.cache = &mptEndpointCache{in: in, srcToDst: srcToDst, out: srcToDst, dir: dir}
-	if result := s.send(sb, srcToDst); result != ter.TesSUCCESS {
+	if result := s.sendWithMPTCreate(sb, srcToDst); result != ter.TesSUCCESS {
 		s.resetCache(dir)
 		zero := ZeroMPTEitherAmount(s.issue.MPTID)
 		return zero, zero
@@ -178,20 +197,25 @@ func (s *MPTEndpointStep) Fwd(
 		zero := ZeroMPTEitherAmount(s.issue.MPTID)
 		return zero, zero
 	}
-	if result := s.ensureDestinationHolding(sb); result != ter.TesSUCCESS {
+	srcToDst, ok := tryMPTMulRatio(in.MPT, QualityOne, srcQOut, false)
+	if !ok {
 		s.resetCache(dir)
 		zero := ZeroMPTEitherAmount(s.issue.MPTID)
 		return zero, zero
 	}
-
-	srcToDst := mptMulRatio(in.MPT, QualityOne, srcQOut, false)
 	actualIn := in.MPT
 	if srcToDst > maxSrcToDst {
 		srcToDst = maxSrcToDst
-		actualIn = mptMulRatio(maxSrcToDst, srcQOut, QualityOne, true)
+		actualInAmount, ratioOK := tryMPTMulRatio(maxSrcToDst, srcQOut, QualityOne, true)
+		if !ratioOK {
+			s.resetCache(dir)
+			zero := ZeroMPTEitherAmount(s.issue.MPTID)
+			return zero, zero
+		}
+		actualIn = actualInAmount
 	}
 	s.setCacheLimiting(actualIn, srcToDst, srcToDst, dir)
-	if result := s.send(sb, s.cache.srcToDst); result != ter.TesSUCCESS {
+	if result := s.sendWithMPTCreate(sb, s.cache.srcToDst); result != ter.TesSUCCESS {
 		s.resetCache(dir)
 		zero := ZeroMPTEitherAmount(s.issue.MPTID)
 		return zero, zero

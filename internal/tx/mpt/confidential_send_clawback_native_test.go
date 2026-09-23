@@ -520,7 +520,7 @@ func TestConfidentialMPTSendNativePreclaimFailures(t *testing.T) {
 			candidate := *valid
 			candidateView := cloneConfidentialView(view)
 			test.edit(t, candidateView, &candidate)
-			if got := candidate.Preclaim(candidateView, tx.EngineConfig{}); got != test.want {
+			if got := candidate.Preclaim(candidateView, tx.EngineConfig{Rules: candidateView.rules}); got != test.want {
 				t.Fatalf("Preclaim = %v, want %v", got, test.want)
 			}
 		})
@@ -530,7 +530,7 @@ func TestConfidentialMPTSendNativePreclaimFailures(t *testing.T) {
 		candidateView := cloneConfidentialView(view)
 		serializeAccount(t, candidateView, destination, func(a *state.AccountRoot) { a.Flags |= state.LsfDepositAuth })
 		candidateView.entries[keylet.DepositPreauth(destination, sender).Key] = []byte{1}
-		if got := candidate.Preclaim(candidateView, tx.EngineConfig{}); got != ter.TesSUCCESS {
+		if got := candidate.Preclaim(candidateView, tx.EngineConfig{Rules: candidateView.rules}); got != ter.TesSUCCESS {
 			t.Fatalf("Preclaim = %v, want %v", got, ter.TesSUCCESS)
 		}
 	})
@@ -544,7 +544,7 @@ func TestConfidentialMPTSendNativePreclaimFailures(t *testing.T) {
 		serializeAccount(t, candidateView, destination, func(a *state.AccountRoot) { a.Flags |= state.LsfDepositAuth })
 		preauth := keylet.DepositPreauthCredentials(destination, []keylet.CredentialPair{{Issuer: credentialIssuer, CredentialType: credentialType}})
 		candidateView.entries[preauth.Key] = []byte{1}
-		if got := candidate.Preclaim(candidateView, tx.EngineConfig{}); got != ter.TesSUCCESS {
+		if got := candidate.Preclaim(candidateView, tx.EngineConfig{Rules: candidateView.rules}); got != ter.TesSUCCESS {
 			t.Fatalf("Preclaim = %v, want %v", got, ter.TesSUCCESS)
 		}
 	})
@@ -796,10 +796,10 @@ func TestConfidentialMPTSendNativePreclaimAndApply(t *testing.T) {
 			if err := transaction.Validate(); err != nil {
 				t.Fatalf("Validate: %v", err)
 			}
-			if got := transaction.Preclaim(view, tx.EngineConfig{ParentCloseTime: 100}); got != ter.TesSUCCESS {
+			if got := transaction.Preclaim(view, tx.EngineConfig{Rules: view.rules, ParentCloseTime: 100}); got != ter.TesSUCCESS {
 				t.Fatalf("Preclaim = %v", got)
 			}
-			if got := transaction.Preclaim(view, tx.EngineConfig{ParentCloseTime: 101}); got != ter.TecNO_AUTH {
+			if got := transaction.Preclaim(view, tx.EngineConfig{Rules: view.rules, ParentCloseTime: 101}); got != ter.TecNO_AUTH {
 				t.Fatalf("Preclaim after domain credential expiration = %v, want %v", got, ter.TecNO_AUTH)
 			}
 			t.Run("missing destination account", func(t *testing.T) {

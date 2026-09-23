@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -142,4 +143,54 @@ func TestComputeMPTTransferFeeUsesCanonicalRounding(t *testing.T) {
 			)
 		})
 	})
+}
+
+type cleanupEscrowView struct {
+	*mapView
+	rules *amendment.Rules
+}
+
+func (v *cleanupEscrowView) Rules() *amendment.Rules { return v.rules }
+
+func TestComputeMPTTransferFeeCleanup(t *testing.T) {
+	var issuer, sender, receiver [20]byte
+	issuer[19], sender[19], receiver[19] = 1, 2, 3
+	id := keylet.MakeMPTID(1, issuer)
+	hexID := hex.EncodeToString(id[:])
+	rules := amendment.NewRulesBuilder().Enable(amendment.FeatureFixCleanup3_4_0).Build()
+	for _, tc := range []struct {
+		name                         string
+		amount                       uint64
+		locked                       uint32
+		fee                          uint16
+		senderIssuer, receiverIssuer bool
+		want                         uint64
+	}{
+		{name: "maximum supply", amount: math.MaxInt64, locked: 1_001_000_000, fee: 100, want: 9_214_157_878_975_800_006},
+		{name: "fractional fee", amount: 4, locked: 1_500_000_000, fee: 50_000, want: 2},
+		{name: "dust", amount: 1, locked: 1_500_000_000, fee: 50_000, want: 0},
+		{name: "locked rate lower", amount: 7, locked: 1_250_000_000, fee: 50_000, want: 5},
+		{name: "current rate lower", amount: 7, locked: 1_500_000_000, fee: 25_000, want: 5},
+		{name: "unlocked rate", amount: 7, fee: 25_000, want: 5},
+		{name: "sender issuer", amount: 7, locked: 1_500_000_000, fee: 50_000, senderIssuer: true, want: 7},
+		{name: "receiver issuer", amount: 7, locked: 1_500_000_000, fee: 50_000, receiverIssuer: true, want: 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			view := &cleanupEscrowView{mapView: newMapView(), rules: rules}
+			raw, err := state.SerializeMPTokenIssuance(&state.MPTokenIssuanceData{Issuer: issuer, Sequence: 1, TransferFee: tc.fee})
+			require.NoError(t, err)
+			require.NoError(t, view.Insert(keylet.MPTIssuance(id), raw))
+			src, dst := sender, receiver
+			if tc.senderIssuer {
+				src = issuer
+			}
+			if tc.receiverIssuer {
+				dst = issuer
+			}
+			original, final, result := computeMPTTransferFee(view, tc.locked, hexID, src, dst, tc.amount, state.NewNumberContext(state.MantissaScaleLarge, true))
+			require.Equal(t, ter.TesSUCCESS, result)
+			require.Equal(t, tc.amount, original)
+			require.Equal(t, tc.want, final)
+		})
+	}
 }

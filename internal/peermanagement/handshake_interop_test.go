@@ -4,6 +4,7 @@ package peermanagement
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -20,10 +21,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	rippledInteropVersion = "3.3.0"
-	rippledInteropImage   = "xrpllabsofficial/xrpld:" + rippledInteropVersion
-	rippledInteropConfig  = `[server]
+var (
+	rippledInteropVersion = cmp.Or(os.Getenv("PEERTLS_RIPPLED_VERSION"), "3.3.0")
+	rippledInteropImage   = cmp.Or(os.Getenv("PEERTLS_RIPPLED_IMAGE"), "xrpllabsofficial/xrpld:"+rippledInteropVersion)
+)
+
+const rippledInteropConfig = `[server]
 port_rpc_admin_local
 port_peer
 
@@ -66,7 +69,6 @@ tiny
 [ssl_verify]
 0
 `
-)
 
 type rippledInteropNode struct {
 	cid  string

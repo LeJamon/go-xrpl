@@ -1014,21 +1014,30 @@ func (o *Overlay) handleTransactionsBatchMessage(evt Event) {
 	if !o.cfg.EnableTxReduceRelay || !o.PeerSupports(evt.PeerID, FeatureTxReduceRelay) {
 		slog.Debug("TMTransactions batch without negotiated tx-reduce-relay; dropping",
 			"t", "Overlay", "peer", evt.PeerID)
-		o.IncPeerBadData(evt.PeerID, "transactions-batch-unnegotiated")
+		o.selectMessageCharge(&evt, resource.FeeMalformedRequest(), "transactions-batch-unnegotiated")
 		return
 	}
 	decoded, err := message.Decode(message.TypeTransactions, evt.Payload)
 	if err != nil {
-		o.IncPeerBadData(evt.PeerID, "transactions-batch-decode")
+		var limitErr *message.WireLimitError
+		if errors.As(err, &limitErr) && limitErr.Reason == message.WireLimitTransactions {
+			o.selectMessageCharge(&evt, resource.FeeMalformedRequest(), "transactions-batch-too-large")
+		} else {
+			o.selectMessageCharge(&evt, resource.FeeInvalidData(), "transactions-batch-decode")
+		}
 		return
 	}
 	batch, ok := decoded.(*message.Transactions)
 	if !ok {
+		o.selectMessageCharge(&evt, resource.FeeInvalidData(), "transactions-batch-type")
+		return
+	}
+	if len(batch.Transactions) > MaxTxQueueSize {
+		o.selectMessageCharge(&evt, resource.FeeMalformedRequest(), "transactions-batch-too-large")
 		return
 	}
 
-	// Record the number of transactions carried in this batch, mirroring
-	// rippled addTxMetrics(m->transactions_size()) at PeerImp.cpp:2680.
+	// Record the number of transactions only after the batch has been admitted.
 	o.txm.addMissingTx(uint64(len(batch.Transactions)))
 
 	// Fan out each inner TMTransaction onto the tx lane so the router's

@@ -185,3 +185,25 @@ func TestLoanBrokerCoverWithdrawAuthModeDependsOnDestination(t *testing.T) {
 		}
 	})
 }
+
+func TestLoanBrokerCoverWithdrawCleanupChecksNewSelfHolding(t *testing.T) {
+	fixture := newCoverAuthFixture(t)
+	fixture.setIssuanceFlags(t, 0)
+	fixture.base.view.rules = amendment.NewRules([][32]byte{
+		amendment.FeatureMPTokensV1,
+		amendment.FeatureSingleAssetVault,
+		amendment.FeatureLendingProtocol,
+		amendment.FeatureFixCleanup3_2_0,
+		amendment.FeatureFixCleanup3_4_0,
+	})
+	fixture.base.config.Rules = fixture.base.view.rules
+	withdraw := NewLoanBrokerCoverWithdraw(fixture.ownerAddress(t), fixture.broker, fixture.amount)
+
+	if got := withdraw.Preclaim(fixture.base.view, fixture.base.config); got != ter.TecNO_AUTH {
+		t.Fatalf("missing self holding: got %v, want tecNO_AUTH", got)
+	}
+	fixture.putHolding(t, fixture.owner)
+	if got := withdraw.Preclaim(fixture.base.view, fixture.base.config); got != ter.TesSUCCESS {
+		t.Fatalf("existing self holding: got %v, want tesSUCCESS", got)
+	}
+}

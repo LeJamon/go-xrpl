@@ -306,7 +306,7 @@ func TestCheckCashMPTCreatesHoldingAndAppliesTransferFee(t *testing.T) {
 	}
 }
 
-func TestCheckCashMPTTransferFeeRoundsToNearest(t *testing.T) {
+func TestCheckCashMPTTransferFeeRoundsUp(t *testing.T) {
 	issuerID := checkMPTAccountID(0x61)
 	srcID := checkMPTAccountID(0x62)
 	dstID := checkMPTAccountID(0x63)
@@ -316,8 +316,8 @@ func TestCheckCashMPTTransferFeeRoundsToNearest(t *testing.T) {
 	putCheckMPTAccount(t, view, issuerID, 1)
 	putCheckMPTAccount(t, view, srcID, 1)
 	dst := putCheckMPTAccount(t, view, dstID, 1)
-	putCheckMPTIssuance(t, view, mptID, issuerID, entry.LsfMPTCanTransfer, 25_000, 1)
-	putCheckMPTHolding(t, view, mptID, srcID, 1, 0)
+	putCheckMPTIssuance(t, view, mptID, issuerID, entry.LsfMPTCanTransfer, 25_000, 2)
+	putCheckMPTHolding(t, view, mptID, srcID, 2, 0)
 	putCheckMPTHolding(t, view, mptID, dstID, 0, 0)
 
 	checkKey := keylet.Check(srcID, 1)
@@ -337,7 +337,7 @@ func TestCheckCashMPTTransferFeeRoundsToNearest(t *testing.T) {
 		OwnerNode:       srcDir.Page,
 		DestinationNode: dstDir.Page,
 		HasDestNode:     true,
-		SendMaxAmount:   amount,
+		SendMaxAmount:   state.NewMPTAmountWithIssuanceID(2, "", mptHex),
 	}
 	checkData, err := state.SerializeCheckFromData(check)
 	if err != nil {
@@ -360,7 +360,7 @@ func TestCheckCashMPTTransferFeeRoundsToNearest(t *testing.T) {
 	}
 }
 
-func TestCheckCashMPTTransferFeeOverflowReturnsTefException(t *testing.T) {
+func TestCheckCashMPTTransferFeeExceedsRepresentableInput(t *testing.T) {
 	issuerID := checkMPTAccountID(0x64)
 	srcID := checkMPTAccountID(0x65)
 	dstID := checkMPTAccountID(0x66)
@@ -384,8 +384,8 @@ func TestCheckCashMPTTransferFeeOverflowReturnsTefException(t *testing.T) {
 		amount,
 		false,
 	)
-	if result != ter.TefEXCEPTION {
-		t.Fatalf("cash MPT check = %v, want tefEXCEPTION", result)
+	if result != ter.TecPATH_PARTIAL {
+		t.Fatalf("cash MPT check = %v, want tecPATH_PARTIAL", result)
 	}
 
 	source, _, result := mptutil.ReadHolding(view, mptID, srcID)

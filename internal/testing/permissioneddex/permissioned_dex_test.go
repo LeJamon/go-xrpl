@@ -249,6 +249,7 @@ func TestPermissionedDEX_OfferCreate(t *testing.T) {
 	// preclaim - expired credential cannot create domain offer
 	t.Run("ExpiredCredential", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
+		env.DisableFeature("fixCleanup3_4_0")
 		dex := SetupPermissionedDEX(t, env)
 
 		devin := jtx.NewAccount("devin")
@@ -1942,6 +1943,7 @@ func TestPermissionedDEX_HybridInvalidOfferFixCleanup330(t *testing.T) {
 // Reference: rippled PermissionedDEX_test::testHybridOpenBookAfterCredentialExpiry.
 func TestPermissionedDEX_HybridOpenBookAfterCredentialExpiry(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.DisableFeature("fixCleanup3_4_0")
 	dex := SetupPermissionedDEX(t, env)
 	env.EnableFeature("fixCleanup3_3_0")
 	env.Close()

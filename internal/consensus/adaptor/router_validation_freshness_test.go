@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,6 +11,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type validationFreshnessSender struct {
+	badDataRecordingSender
+	relayed atomic.Int32
+}
+
+func (s *validationFreshnessSender) RelayValidation(*consensus.Validation, uint64) error {
+	s.relayed.Add(1)
+	return nil
+}
 
 func buildValidationAt(t *testing.T, peerID peermanagement.PeerID, signTime time.Time) *peermanagement.InboundMessage {
 	t.Helper()
@@ -49,7 +60,7 @@ func TestRouter_ValidationFreshnessGate(t *testing.T) {
 			engine := &mockEngine{}
 			identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
 			require.NoError(t, err)
-			rs := &badDataRecordingSender{}
+			rs := &validationFreshnessSender{}
 			a := New(Config{
 				LedgerService: newTestLedgerService(t),
 				Sender:        rs,
@@ -65,6 +76,7 @@ func TestRouter_ValidationFreshnessGate(t *testing.T) {
 				return
 			}
 			assert.Empty(t, engine.getValidations(), "non-current validation must be shed before the engine")
+			assert.Zero(t, rs.relayed.Load(), "non-current validation must not be relayed")
 			calls := rs.getBadDataCalls()
 			require.Len(t, calls, 1)
 			assert.Equal(t, uint64(7), calls[0].peerID)

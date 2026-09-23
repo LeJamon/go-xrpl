@@ -9,7 +9,104 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
+
+func TestVaultLifecycleFieldSerialization(t *testing.T) {
+	for _, dates := range []bool{false, true} {
+		v := &vaultData{Owner: [20]byte{1}, Account: [20]byte{2}, Asset: tx.Asset{Currency: "XRP"}, LEVersion: 1, VaultKind: 1}
+		if dates {
+			subscription, redemption := uint32(0), ^uint32(0)
+			v.SubscriptionDate, v.RedemptionDate = &subscription, &redemption
+		}
+		data, err := serializeVault(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := parseVault(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if parsed.LEVersion != 1 || parsed.VaultKind != 1 || (parsed.SubscriptionDate != nil) != dates || (parsed.RedemptionDate != nil) != dates {
+			t.Fatalf("lost lifecycle fields: %+v", parsed)
+		}
+		if dates && (*parsed.SubscriptionDate != 0 || *parsed.RedemptionDate != ^uint32(0)) {
+			t.Fatal("changed dates")
+		}
+		again, err := serializeVault(parsed)
+		if err != nil || !bytes.Equal(data, again) {
+			t.Fatalf("round trip: %v", err)
+		}
+		fields, err := binarycodec.Decode(hex.EncodeToString(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"LEVersion", "VaultKind"} {
+			original := fields[name]
+			fields[name] = 0
+			malformed, err := binarycodec.EncodeBytes(fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := new(entry.Vault).Decode(malformed); err == nil {
+				t.Errorf("accepted explicit default %s", name)
+			}
+			fields[name] = original
+		}
+	}
+}
+
+func TestVaultOptionalDataPresenceRoundTrip(t *testing.T) {
+	tests := []struct {
+		name        string
+		data        string
+		dataPresent bool
+	}{
+		{name: "absent"},
+		{name: "present empty", dataPresent: true},
+		{name: "present nonempty", data: "abcd", dataPresent: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data, err := serializeVault(&vaultData{
+				Owner:   [20]byte{1},
+				Account: [20]byte{2},
+				Asset:   tx.Asset{Currency: "XRP"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			fields, err := binarycodec.Decode(hex.EncodeToString(data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.dataPresent {
+				fields["Data"] = test.data
+			}
+			data, err = binarycodec.EncodeBytes(fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			parsed, err := parseVault(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if parsed.DataPresent != test.dataPresent || parsed.Data != strings.ToUpper(test.data) {
+				t.Fatalf("parsed Data = %q (present %v), want %q (present %v)", parsed.Data, parsed.DataPresent, test.data, test.dataPresent)
+			}
+			again, err := serializeVault(parsed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(data, again) {
+				t.Fatalf("round trip changed bytes\n got: %s\nwant: %s", hex.EncodeToString(again), hex.EncodeToString(data))
+			}
+		})
+	}
+}
 
 func TestSerializeVaultCanonicalFieldStyles(t *testing.T) {
 	var owner, account [20]byte

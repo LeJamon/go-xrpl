@@ -2,7 +2,6 @@ package check
 
 import (
 	"encoding/hex"
-	"math"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -516,50 +515,32 @@ func (c *CheckCash) applyCashMPTAmount(ctx *tx.ApplyContext, check *state.CheckD
 	if srcID != issuerID && dstID != issuerID {
 		rate = mptutil.TransferRate(ctx.View, mptID)
 	}
+	maxDebit := min(sendMax, srcFunds)
+	maximum := state.NewMPTAmountWithIssuanceID(maxDebit, "", requestedAmount.MPTIssuanceID())
+	maxDelivery, _ := maximum.MulRatio(mptutil.RateOne, rate, false).MPTRaw()
+	if requested > maxDelivery {
+		return ter.TecPATH_PARTIAL
+	}
 	delivered := requested
 	if isDeliverMin {
-		maxDebit := min(sendMax, srcFunds)
-		var ok bool
-		delivered, ok = mptutil.DivideRate(maxDebit, rate)
-		if !ok {
-			return ter.TefEXCEPTION
-		}
-		if delivered > math.MaxInt64/2 {
-			delivered = math.MaxInt64 / 2
-		}
-		gross, ok := mptutil.MultiplyRate(delivered, rate)
-		if !ok {
-			return ter.TefEXCEPTION
-		}
-		for delivered > 0 && gross > maxDebit {
-			delivered--
-			gross, ok = mptutil.MultiplyRate(delivered, rate)
-			if !ok {
-				return ter.TefEXCEPTION
-			}
-		}
-		if delivered < requested {
-			return ter.TecPATH_PARTIAL
-		}
+		delivered = maxDelivery
+	}
+	deliveredAmount := state.NewMPTAmountWithIssuanceID(delivered, "", requestedAmount.MPTIssuanceID())
+	debit, _ := deliveredAmount.MulRatio(rate, mptutil.RateOne, true).MPTRaw()
+	if srcID == issuerID || dstID == issuerID {
+		result = mptutil.Credit(ctx.View, mptID, srcID, dstID, delivered, false)
 	} else {
-		gross, ok := mptutil.MultiplyRate(delivered, rate)
-		if !ok {
-			return ter.TefEXCEPTION
-		}
-		if gross > sendMax {
-			return ter.TecPATH_PARTIAL
+		result = mptutil.Credit(ctx.View, mptID, issuerID, dstID, delivered, true)
+		if result == ter.TesSUCCESS {
+			result = mptutil.Credit(ctx.View, mptID, srcID, issuerID, debit, false)
 		}
 	}
-
-	_, result = mptutil.Send(ctx.View, mptID, srcID, dstID, delivered, false, false)
 	if result == ter.TecINSUFFICIENT_FUNDS || result == ter.TecPATH_DRY {
 		return ter.TecPATH_PARTIAL
 	}
 	if result != ter.TesSUCCESS {
 		return result
 	}
-
-	deliveredAmount := state.NewMPTAmountWithIssuanceID(delivered, "", requestedAmount.MPTIssuanceID())
 	ctx.Metadata.DeliveredAmount = &deliveredAmount
 
 	if result := removeCheckFromDirectories(ctx, check, checkKey.Key); result != ter.TesSUCCESS {
@@ -722,40 +703,39 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		}
 	}
 
-	// Temporarily tweak the trust line limit on destination's side to allow
-	// the flow engine to deliver through it. This matches rippled's behavior:
-	// CashCheck.cpp L418-439 - saves the limit, sets it to max, runs flow,
-	// then restores it via scope_exit.
-	// Reference: CashCheck.cpp L422-439
-	trustLineKey := keylet.Line(trustLineAccountID, issuerID, sendMax.Currency)
-	trustLineData, err := ctx.View.Read(trustLineKey)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if trustLineData == nil {
-		return ter.TecNO_LINE
-	}
-	rs, err := state.ParseRippleState(trustLineData)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-
 	var savedLimit state.Amount
-	bigLimit := state.NewIssuedAmountFromValue(state.MaxMantissa, state.MaxExponent, sendMax.Currency, sendMax.Issuer)
-	if destLow {
-		savedLimit = rs.LowLimit
-		rs.LowLimit = bigLimit
-	} else {
-		savedLimit = rs.HighLimit
-		rs.HighLimit = bigLimit
-	}
+	tweakLimit := accountID != issuerID || !ctx.Rules().FixCleanup3_4_0Enabled()
+	if tweakLimit {
+		// The casher accepts funds above the holder limit; restore it after flow.
+		trustLineKey := keylet.Line(trustLineAccountID, issuerID, sendMax.Currency)
+		trustLineData, err := ctx.View.Read(trustLineKey)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if trustLineData == nil {
+			return ter.TecNO_LINE
+		}
+		rs, err := state.ParseRippleState(trustLineData)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
 
-	updatedData, err := state.SerializeRippleState(rs)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if err := ctx.View.Update(trustLineKey, updatedData); err != nil {
-		return ter.TefINTERNAL
+		bigLimit := state.NewIssuedAmountFromValue(state.MaxMantissa, state.MaxExponent, sendMax.Currency, sendMax.Issuer)
+		if destLow {
+			savedLimit = rs.LowLimit
+			rs.LowLimit = bigLimit
+		} else {
+			savedLimit = rs.HighLimit
+			rs.HighLimit = bigLimit
+		}
+
+		updatedData, err := state.SerializeRippleState(rs)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if err := ctx.View.Update(trustLineKey, updatedData); err != nil {
+			return ter.TefINTERNAL
+		}
 	}
 
 	// Determine flow parameters
@@ -789,8 +769,10 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	if flowResult != ter.TesSUCCESS && flowResult != ter.TecPATH_PARTIAL {
 		ctx.Log.Warn("check cash: flow failed", "result", flowResult)
 		// Restore the trust line limit before returning
-		if result := restoreTrustLineLimit(ctx, trustLineAccountID, issuerID, sendMax.Currency, destLow, savedLimit); result != ter.TesSUCCESS {
-			return result
+		if tweakLimit {
+			if result := restoreTrustLineLimit(ctx, trustLineAccountID, issuerID, sendMax.Currency, destLow, savedLimit); result != ter.TesSUCCESS {
+				return result
+			}
 		}
 		return flowResult
 	}
@@ -802,8 +784,10 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		if actualOutAmount.Compare(requestedAmount) < 0 {
 			ctx.Log.Warn("check cash: flow did not produce DeliverMin", "actual", actualOutAmount, "deliverMin", requestedAmount)
 			// Restore the trust line limit before returning
-			if result := restoreTrustLineLimit(ctx, trustLineAccountID, issuerID, sendMax.Currency, destLow, savedLimit); result != ter.TesSUCCESS {
-				return result
+			if tweakLimit {
+				if result := restoreTrustLineLimit(ctx, trustLineAccountID, issuerID, sendMax.Currency, destLow, savedLimit); result != ter.TesSUCCESS {
+					return result
+				}
 			}
 			return ter.TecPATH_PARTIAL
 		}
@@ -812,8 +796,10 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	// For exact Amount, flow must have succeeded
 	if !isDeliverMin && flowResult != ter.TesSUCCESS {
 		// Restore the trust line limit before returning
-		if result := restoreTrustLineLimit(ctx, trustLineAccountID, issuerID, sendMax.Currency, destLow, savedLimit); result != ter.TesSUCCESS {
-			return result
+		if tweakLimit {
+			if result := restoreTrustLineLimit(ctx, trustLineAccountID, issuerID, sendMax.Currency, destLow, savedLimit); result != ter.TesSUCCESS {
+				return result
+			}
 		}
 		return ter.TecPATH_PARTIAL
 	}
@@ -829,8 +815,10 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	// The flow engine may have modified the balance, but we need to
 	// restore the original limit that was tweaked.
 	// Reference: CashCheck.cpp scope_exit at L426-429
-	if result := restoreTrustLineLimit(ctx, trustLineAccountID, issuerID, sendMax.Currency, destLow, savedLimit); result != ter.TesSUCCESS {
-		return result
+	if tweakLimit {
+		if result := restoreTrustLineLimit(ctx, trustLineAccountID, issuerID, sendMax.Currency, destLow, savedLimit); result != ter.TesSUCCESS {
+			return result
+		}
 	}
 
 	// Set the delivered amount metadata in all cases, not just for DeliverMin.

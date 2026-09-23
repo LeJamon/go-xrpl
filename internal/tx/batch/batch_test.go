@@ -618,7 +618,7 @@ func TestBatchValidation(t *testing.T) {
 
 			err := tt.tx.Validate()
 			if err == nil {
-				err = tt.tx.PreflightSigValidated()
+				err = tt.tx.PreflightSigValidated(nil)
 			}
 			if tt.wantErr {
 				require.Error(t, err)
@@ -825,7 +825,7 @@ func TestBatchRequiredSignersUseInnerAuthorizers(t *testing.T) {
 		b.SetFlags(BatchFlagAllOrNothing)
 
 		require.NoError(t, b.Validate())
-		require.ErrorIs(t, b.PreflightSigValidated(), ErrBatchMissingSigner)
+		require.ErrorIs(t, b.PreflightSigValidated(nil), ErrBatchMissingSigner)
 
 		b.BatchSigners = []BatchSigner{{BatchSigner: BatchSignerData{
 			Account:           testSigner2,
@@ -833,7 +833,7 @@ func TestBatchRequiredSignersUseInnerAuthorizers(t *testing.T) {
 			BatchTxnSignature: "AA",
 		}}}
 		require.NoError(t, b.Validate())
-		require.NoError(t, b.PreflightSigValidated())
+		require.NoError(t, b.PreflightSigValidated(nil))
 	})
 }
 
@@ -848,7 +848,7 @@ func TestBatchSignersMustBeStrictlyOrdered(t *testing.T) {
 	}
 
 	require.NoError(t, b.Validate())
-	require.ErrorIs(t, b.PreflightSigValidated(), ErrBatchUnsortedSigner)
+	require.ErrorIs(t, b.PreflightSigValidated(nil), ErrBatchUnsortedSigner)
 }
 
 // TestCalculateMinimumFee_MultiSignedInner pins
@@ -890,6 +890,35 @@ func TestCalculateMinimumFee_InvalidStructureFallsBackAndPreclaimRejects(t *test
 	config := tx.EngineConfig{BaseFee: 10}
 	require.Equal(t, uint64(10), outer.CalculateMinimumFee(nil, config))
 	require.Equal(t, ter.TecINSUFF_FEE, outer.Preclaim(nil, config))
+}
+
+func TestCalculateMinimumFee_InnerFeeErrorFallsBackAndPreclaimRejects(t *testing.T) {
+	outer := NewBatch(testOuter)
+	outer.AddInnerTransaction(makeTestPayment())
+	// A non-full LoanPay needs ledger state; nil view drives the controlled recovery failure.
+	outer.AddInnerTransaction(lending.NewLoanPay(
+		testOuter,
+		strings.Repeat("1", 64),
+		tx.NewXRPAmount(1),
+	))
+	config := tx.EngineConfig{
+		BaseFee: 10,
+		Rules: amendment.NewRules([][32]byte{
+			amendment.FeatureLendingProtocol,
+			amendment.FeatureSingleAssetVault,
+			amendment.FeatureMPTokensV1,
+		}),
+	}
+
+	require.Equal(t, uint64(10), outer.CalculateMinimumFee(nil, config))
+	require.Equal(t, ter.TecINSUFF_FEE, outer.Preclaim(nil, config))
+
+	control := NewBatch(testOuter)
+	control.AddInnerTransaction(makeTestPayment())
+	fullPayment := lending.NewLoanPay(testOuter, strings.Repeat("1", 64), tx.NewXRPAmount(1))
+	fullPayment.Common.SetFlags(lending.TfLoanFullPayment)
+	control.AddInnerTransaction(fullPayment)
+	require.Equal(t, uint64(40), control.CalculateMinimumFee(nil, config))
 }
 
 func TestCalculateMinimumFeeCountsPresentEmptyBatchTxnSignature(t *testing.T) {

@@ -13,6 +13,8 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func ledgerHashesFixture(tb testing.TB, count int) ([]byte, [][32]byte, []string) {
@@ -185,6 +187,39 @@ func TestDecodeLedgerHashesMatchesPublicErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDecodeLedgerHashesVariableLengthBounds(t *testing.T) {
+	valid, _, _ := ledgerHashesFixture(t, 1)
+	marker := bytes.Index(valid, []byte{0x02, 0x13, 0x20})
+	if marker < 0 {
+		t.Fatal("Hashes field marker not found")
+	}
+
+	reader := ledgerHashesReader{data: []byte{0xFE, 0xD4, 0x17}}
+	length, err := reader.readVariableLength()
+	require.NoError(t, err)
+	assert.Equal(t, 918744, length)
+
+	for _, test := range []struct {
+		prefix []byte
+		length int
+	}{
+		{[]byte{0xFE, 0xD4, 0x18}, 918745},
+		{[]byte{0xFE, 0xD4, 0x1F}, 918752},
+		{[]byte{0xFE, 0xFF, 0xFF}, 929984},
+	} {
+		data := append(append([]byte(nil), valid[:marker+2]...), test.prefix...)
+		data = append(data, make([]byte, test.length)...)
+		_, _, err := decodeLedgerHashes(data)
+		assert.ErrorIs(t, err, serdes.ErrVariableLengthTooLong)
+		var public ledgerfields.LedgerHashes
+		assert.ErrorIs(t, public.Decode(data), serdes.ErrVariableLengthTooLong)
+	}
+
+	reader = ledgerHashesReader{data: []byte{0xFE, 0xD4}}
+	_, err = reader.readVariableLength()
+	assert.Error(t, err)
 }
 
 func TestDecodeLedgerHashesRejectsNonCanonicalFieldHeaders(t *testing.T) {

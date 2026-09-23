@@ -59,6 +59,20 @@ type Transaction interface {
 	Flatten() (map[string]any, error)
 }
 
+// FeePayerProvider supplies the account that actually pays an XRP fee. A
+// pre-funded sponsorship has no AccountRoot payer and therefore reports
+// preFunded=true with a zero account ID.
+type FeePayerProvider interface {
+	FeePayer() (accountID [20]byte, preFunded bool, known bool)
+}
+
+// CurrentCloseTimeProvider supplies the parent-ledger close time used by
+// closed-ended vault phase derivation. It is optional so invariant unit tests
+// and non-ledger callers can retain the minimal Transaction interface.
+type CurrentCloseTimeProvider interface {
+	CurrentCloseTime() (uint32, bool)
+}
+
 // ReadView provides read-only access to ledger state for invariant checks.
 // This is satisfied by tx.LedgerView and ApplyStateTable without importing the tx package.
 type ReadView interface {
@@ -69,6 +83,19 @@ type ReadView interface {
 	// rippled ReadView::seq(), used by ValidNewAccountRoot when
 	// featureDeletableAccounts is enabled.
 	LedgerSeq() uint32
+}
+
+type parentCloseTimeView struct {
+	ReadView
+	parentCloseTime uint32
+}
+
+func (v parentCloseTimeView) ParentCloseTime() uint32 { return v.parentCloseTime }
+
+// WithParentCloseTime supplies the parent ledger close time to invariant
+// helpers that evaluate time-dependent ledger credentials.
+func WithParentCloseTime(view ReadView, parentCloseTime uint32) ReadView {
+	return parentCloseTimeView{ReadView: view, parentCloseTime: parentCloseTime}
 }
 
 // TxType is the transaction type code used by invariant checks. It aliases
@@ -202,6 +229,9 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 			return checkValidConfidentialMPToken(tx, result, entries, view, rules)
 		},
 		func() *InvariantViolation {
+			return checkValidMPTBalanceChanges(tx, result, entries, view, rules)
+		},
+		func() *InvariantViolation {
 			return checkValidPermissionedDomain(tx, result, entries, rules)
 		},
 		func() *InvariantViolation {
@@ -226,10 +256,10 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 			return checkValidPseudoAccounts(entries, rules)
 		},
 		func() *InvariantViolation {
-			return checkValidLoan(entries, rules)
+			return checkValidLoanForTx(tx, result, entries, view, rules, numberContext...)
 		},
 		func() *InvariantViolation {
-			return checkValidLoanBroker(entries, view, rules, numberContext...)
+			return checkValidLoanBrokerForTx(tx, entries, view, rules, numberContext...)
 		},
 		func() *InvariantViolation {
 			return checkValidVault(tx, result, fee, entries, view, rules, numberContext...)
@@ -239,6 +269,9 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 		},
 		func() *InvariantViolation {
 			return checkValidAmounts(entries, rules)
+		},
+		func() *InvariantViolation {
+			return checkValidMPTTransfer(tx, result, entries, view, rules)
 		},
 	}
 	for _, check := range checks {

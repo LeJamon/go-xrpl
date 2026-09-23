@@ -99,7 +99,6 @@ func TestPeer_DispatchEvent_BackpressuresConsensusSeparately(t *testing.T) {
 	for _, msgType := range []message.MessageType{
 		message.TypeProposeLedger,
 		message.TypeValidation,
-		message.TypeValidatorList,
 		message.TypeValidatorListCollection,
 	} {
 		t.Run(msgType.String(), func(t *testing.T) {
@@ -209,7 +208,6 @@ func TestConsensusMessageClassification(t *testing.T) {
 	for _, msgType := range []message.MessageType{
 		message.TypeProposeLedger,
 		message.TypeValidation,
-		message.TypeValidatorList,
 		message.TypeValidatorListCollection,
 	} {
 		assert.True(t, isConsensusPriorityMessageType(msgType), msgType.String())
@@ -250,7 +248,7 @@ func TestConsensusPriorityLanePreservesValidatorListValidationOrder(t *testing.T
 	require.True(t, peer.dispatchEvent(Event{
 		Type:        EventMessageReceived,
 		PeerID:      PeerID(1),
-		MessageType: message.TypeValidatorList,
+		MessageType: message.TypeValidatorListCollection,
 		Payload:     []byte{0x01},
 	}))
 	require.True(t, peer.dispatchEvent(Event{
@@ -262,7 +260,7 @@ func TestConsensusPriorityLanePreservesValidatorListValidationOrder(t *testing.T
 
 	first := <-o.consensusMessages
 	second := <-o.consensusMessages
-	assert.Equal(t, message.TypeValidatorList, first.Type)
+	assert.Equal(t, message.TypeValidatorListCollection, first.Type)
 	assert.Equal(t, []byte{0x01}, first.Payload)
 	assert.Equal(t, message.TypeValidation, second.Type)
 	assert.Equal(t, []byte{0x02}, second.Payload)

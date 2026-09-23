@@ -146,6 +146,10 @@ func (v *VaultClawback) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 		return ter.TefINTERNAL
 	}
 
+	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0) && tx.IsPseudoAccountID(view, holderID) {
+		return ter.TecPSEUDO_ACCOUNT
+	}
+
 	// Ambiguous: when the vault asset's issuer is the vault owner, the clawback
 	// must name the asset explicitly.
 	if v.Amount == nil && !isNativeAsset(vaultAssetOf(vd)) {
@@ -226,7 +230,9 @@ func (v *VaultClawback) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 
 // Apply burns the holder's shares and, for an issuer asset clawback, recovers
 // the corresponding assets to the issuer. Reference: rippled VaultClawback::doApply.
-func (v *VaultClawback) Apply(ctx *tx.ApplyContext) ter.Result {
+func (v *VaultClawback) Apply(ctx *tx.ApplyContext) (result ter.Result) {
+	defer recoverVaultNumberOverflow(&result)
+
 	accountID := ctx.AccountID
 	holderID, herr := state.DecodeAccountID(v.Holder)
 	if herr != nil {
@@ -262,7 +268,6 @@ func (v *VaultClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	if result != ter.TesSUCCESS {
 		return result
 	}
-
 	vd.AssetsTotal = numberToString(assetsTotalN.Sub(assetsRecoveredN))
 	vd.AssetsAvailable = numberToString(availN.Sub(assetsRecoveredN))
 	if err := associateVaultAsset(vd, rules); err != nil {
@@ -276,9 +281,14 @@ func (v *VaultClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	// Burn the holder's shares.
-	if res := burnShares(ctx, vd.ShareMPTID, holderID, sharesDestroyed); res != ter.TesSUCCESS {
-		return res
+	// Sending shares from the vault pseudo-account back to the same account is
+	// a no-op. Rippled's accountSend returns success before touching the share
+	// issuance or an MPToken, allowing the invariant pass to report the
+	// resulting invalid clawback as tecINVARIANT_FAILED before the cleanup fix.
+	if holderID != vd.Account {
+		if res := burnShares(ctx, vd.ShareMPTID, holderID, sharesDestroyed); res != ter.TesSUCCESS {
+			return res
+		}
 	}
 	if holderID != vd.Owner {
 		if res := removeEmptyShareMPToken(ctx, holderID, vd.ShareMPTID); res != ter.TesSUCCESS && res != ter.TecHAS_OBLIGATIONS {
@@ -318,6 +328,7 @@ func (v *VaultClawback) clawbackAmounts(
 	}()
 
 	rules := ctx.Rules()
+	fix340 := rules.FixCleanup3_4_0Enabled()
 	numberScale := vaultNumberScale(rules)
 	assetsTotalN, _ = vaultNumberForRules(vd.AssetsTotal, rules)
 	availN, _ = vaultNumberForRules(vd.AssetsAvailable, rules)
@@ -333,16 +344,23 @@ func (v *VaultClawback) clawbackAmounts(
 	held := holderMPTBalance(ctx.View, vd.ShareMPTID, holderID)
 	assetsRecoveredN = state.NewXRPLNumberScaled(0, 0, numberScale, state.RoundToNearest)
 	clampAssets := false
+	waiveLoss := fix340 && isSoleShareholder(ctx.View, holderID, vd.ShareMPTID, issuance.OutstandingAmount)
+	if waiveLoss {
+		lossN = state.NewXRPLNumberScaled(0, 0, numberScale, state.RoundToNearest)
+	}
 
 	if v.clawsBackShares(vd, accountID) {
 		sharesDestroyed = held
 	} else if v.Amount == nil || v.Amount.Signum() == 0 {
 		sharesDestroyed = held
+		if waiveLoss {
+			sharesDestroyed = issuance.OutstandingAmount
+		}
 		assetsRecoveredN = sharesToAssetsWithdraw(
 			assetsTotalN,
 			lossN,
 			shareTotalN,
-			state.NewXRPLNumberScaled(int64(held), 0, numberScale, state.RoundToNearest),
+			state.NewXRPLNumberScaled(int64(sharesDestroyed), 0, numberScale, state.RoundToNearest),
 			integral,
 		)
 		clampAssets = rules.Enabled(amendment.FeatureFixCleanup3_1_3)
@@ -351,7 +369,7 @@ func (v *VaultClawback) clawbackAmounts(
 		if err != nil {
 			return assetsTotalN, availN, assetsRecoveredN, 0, ter.TefINTERNAL
 		}
-		sharesN := assetsToSharesWithdraw(assetsTotalN, lossN, shareTotalN, amountN, false)
+		sharesN := assetsToSharesWithdraw(assetsTotalN, lossN, shareTotalN, amountN, fix340)
 		sharesDestroyed = uint64(sharesN.ToInt64WithMode(state.RoundTowardsZero))
 		assetsRecoveredN = sharesToAssetsWithdraw(
 			assetsTotalN,
@@ -378,8 +396,17 @@ func (v *VaultClawback) clawbackAmounts(
 			return assetsTotalN, availN, assetsRecoveredN, sharesDestroyed, ter.TecINTERNAL
 		}
 	}
+	if fix340 && assetsRecoveredN.Signum() > 0 {
+		assetsRecoveredN, result = clampToAssetsTotalScale(assetsTotalN, assetsRecoveredN.Negate(), integral)
+		if result != ter.TesSUCCESS {
+			return assetsTotalN, availN, assetsRecoveredN, sharesDestroyed, result
+		}
+	}
 	if sharesDestroyed == 0 {
 		return assetsTotalN, availN, assetsRecoveredN, 0, ter.TecPRECISION_LOSS
+	}
+	if fix340 && debitIsNonZeroDust(assetsTotalN, assetsRecoveredN, integral) {
+		return assetsTotalN, availN, assetsRecoveredN, sharesDestroyed, ter.TecPRECISION_LOSS
 	}
 	return assetsTotalN, availN, assetsRecoveredN, sharesDestroyed, ter.TesSUCCESS
 }

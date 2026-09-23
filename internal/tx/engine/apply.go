@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -125,6 +126,19 @@ func (e *Engine) applyWithContext(
 			Result:  result,
 			Applied: false,
 			Message: result.Message(),
+		}
+	}
+
+	// Rippled recomputes the transaction-specific base fee immediately before
+	// application. A failure here means the preclaim result cannot safely enter
+	// apply, including a tec result that would otherwise claim a fee.
+	if _, err := sign.CalculateBaseFee(tx, e.view, e.config); err != nil {
+		e.logger.Error("transaction base fee recomputation failed",
+			"txHash", hex.EncodeToString(txHash[:]), "error", err)
+		return txcore.ApplyResult{
+			Result:  ter.TefINTERNAL,
+			Applied: false,
+			Message: ter.TefINTERNAL.Message(),
 		}
 	}
 

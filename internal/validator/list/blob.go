@@ -41,7 +41,7 @@ const (
 const maxSupportedBlobs = 5
 
 // blobJSON is the schema published in vl.ripple.com-style envelopes and
-// embedded in TMValidatorList / TMValidatorListCollection messages.
+// embedded in ValidatorListCollection messages.
 // Decoded from the base64-encoded blob bytes.
 //
 // Fields beyond these are tolerated and ignored — rippled's JSON parser

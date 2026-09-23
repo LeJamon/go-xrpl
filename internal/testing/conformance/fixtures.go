@@ -1,8 +1,10 @@
 package conformance
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 	"time"
 
@@ -31,23 +33,38 @@ type EnvConfig struct {
 
 // Step represents a single operation in a fixture.
 type Step struct {
-	Op               string          `json:"op"`
-	Account          string          `json:"account,omitempty"`
-	Address          string          `json:"address,omitempty"`
-	Amount           json.RawMessage `json:"amount,omitempty"`
-	SetDefaultRipple *bool           `json:"set_default_ripple,omitempty"`
-	LimitAmount      *LimitAmount    `json:"limit_amount,omitempty"`
-	TxBlob           string          `json:"tx_blob,omitempty"`
-	TxJSON           json.RawMessage `json:"tx_json,omitempty"`
-	ExpectTER        string          `json:"expect_ter,omitempty"`
-	PostState        *PostState      `json:"post_state,omitempty"`
-	Env              *EnvConfig      `json:"env,omitempty"`
-	Amendment        string          `json:"amendment,omitempty"`
-	ModifyState      *ModifyState    `json:"modify_state,omitempty"`
-	CloseTime        *uint32         `json:"close_time,omitempty"`
-	LedgerSeq        *uint32         `json:"ledger_seq,omitempty"`
-	ParentCloseTime  *uint32         `json:"parent_close_time,omitempty"`
-	TxSetHash        *string         `json:"tx_set_hash,omitempty"`
+	Op               string             `json:"op"`
+	Account          string             `json:"account,omitempty"`
+	Address          string             `json:"address,omitempty"`
+	Amount           json.RawMessage    `json:"amount,omitempty"`
+	SetDefaultRipple *bool              `json:"set_default_ripple,omitempty"`
+	LimitAmount      *LimitAmount       `json:"limit_amount,omitempty"`
+	TxBlob           string             `json:"tx_blob,omitempty"`
+	TxJSON           json.RawMessage    `json:"tx_json,omitempty"`
+	ExpectTER        string             `json:"expect_ter,omitempty"`
+	ExpectedResult   *ResultExpectation `json:"expected_result,omitempty"`
+	PostState        *PostState         `json:"post_state,omitempty"`
+	Env              *EnvConfig         `json:"env,omitempty"`
+	Amendment        string             `json:"amendment,omitempty"`
+	ModifyState      *ModifyState       `json:"modify_state,omitempty"`
+	CloseTime        *uint32            `json:"close_time,omitempty"`
+	LedgerSeq        *uint32            `json:"ledger_seq,omitempty"`
+	ParentCloseTime  *uint32            `json:"parent_close_time,omitempty"`
+	TxSetHash        *string            `json:"tx_set_hash,omitempty"`
+}
+
+// ResultExpectation is the versioned result contract emitted by the final
+// oracle recorder. All fields are pointers so an omitted boundary observation
+// cannot be confused with a legitimate zero/false result.
+type ResultExpectation struct {
+	Boundary           *string `json:"boundary"`
+	TER                *string `json:"ter"`
+	TERCode            *int    `json:"ter_code"`
+	Applied            *bool   `json:"applied"`
+	Queued             *bool   `json:"queued"`
+	Fee                *uint64 `json:"fee"`
+	MetadataSHA512Half *string `json:"metadata_sha512_half"`
+	StateSHA512Half    *string `json:"state_sha512_half"`
 }
 
 // ModifyState describes direct ledger state modifications that bypass normal
@@ -73,7 +90,7 @@ type BumpLastPage struct {
 }
 
 // UnmarshalJSON implements custom unmarshaling for BumpLastPage to handle
-// target_page as either a JSON string or number. v2 fixtures serialize
+// target_page as either a JSON string or number. v3 fixtures serialize
 // uint64 values as strings.
 func (b *BumpLastPage) UnmarshalJSON(data []byte) error {
 	// Use an alias to avoid infinite recursion
@@ -83,7 +100,16 @@ func (b *BumpLastPage) UnmarshalJSON(data []byte) error {
 		AdjustField string          `json:"adjust_field"`
 	}
 	var a Alias
-	if err := json.Unmarshal(data, &a); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&a); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("trailing JSON value")
+		}
 		return err
 	}
 	b.Directory = a.Directory

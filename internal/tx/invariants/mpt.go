@@ -199,28 +199,42 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 						Message: "issuer-submitted AMMWithdraw created an MPToken",
 					}
 				}
-				if mptokensCreated > 1 || mptokensDeleted > 2 {
+				if mptokensCreated > 2 || mptokensDeleted > 2 {
 					return &InvariantViolation{
 						Name:    "ValidMPTIssuance",
 						Message: "MPT authorize succeeded but created/deleted bad number of mptokens",
 					}
 				}
-			} else if lendingEnabled &&
-				mptokensCreated+mptokensDeleted > 1 {
-				return &InvariantViolation{
-					Name:    "ValidMPTIssuance",
-					Message: "MPT authorize succeeded but created/deleted bad number of mptokens",
+			} else {
+				if lendingEnabled {
+					exceedsCap := mptokensCreated+mptokensDeleted > 1
+					if rules.Enabled(amendment.FeatureFixCleanup3_4_0) {
+						switch txType {
+						case protocol.TxTypeLoanSet:
+							exceedsCap = mptokensCreated > 2 || mptokensDeleted != 0
+						case protocol.TxTypeVaultWithdraw:
+							exceedsCap = mptokensCreated > 1 || mptokensDeleted > 1
+						}
+					}
+					if exceedsCap {
+						return &InvariantViolation{
+							Name:    "ValidMPTIssuance",
+							Message: "MPT authorize succeeded but created/deleted bad number of mptokens",
+						}
+					}
 				}
-			} else if submittedByIssuer && (mptokensCreated > 0 || mptokensDeleted > 0) {
-				return &InvariantViolation{
-					Name:    "ValidMPTIssuance",
-					Message: "MPT authorize submitted by issuer succeeded but created/deleted mptokens",
+				if submittedByIssuer && (mptokensCreated > 0 || mptokensDeleted > 0) {
+					return &InvariantViolation{
+						Name:    "ValidMPTIssuance",
+						Message: "MPT authorize submitted by issuer succeeded but created/deleted mptokens",
+					}
 				}
-			} else if !submittedByIssuer && hasPrivilege(txType, mustAuthorizeMPT) &&
-				(mptokensCreated+mptokensDeleted != 1) {
-				return &InvariantViolation{
-					Name:    "ValidMPTIssuance",
-					Message: "MPT authorize submitted by holder succeeded but created/deleted bad number of mptokens",
+				if !submittedByIssuer && hasPrivilege(txType, mustAuthorizeMPT) &&
+					(mptokensCreated+mptokensDeleted != 1) {
+					return &InvariantViolation{
+						Name:    "ValidMPTIssuance",
+						Message: "MPT authorize submitted by holder succeeded but created/deleted bad number of mptokens",
+					}
 				}
 			}
 			return nil

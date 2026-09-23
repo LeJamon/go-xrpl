@@ -12,12 +12,16 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
 	ammtest "github.com/LeJamon/go-xrpl/internal/testing/amm"
+	offertest "github.com/LeJamon/go-xrpl/internal/testing/offer"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	coreamm "github.com/LeJamon/go-xrpl/internal/tx/amm"
+	corepayment "github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/payment/pathfinder"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/stretchr/testify/require"
 )
 
 func signedBlob(t *testing.T, env *jtx.TestEnv, txn tx.Transaction, signer *jtx.Account) []byte {
@@ -60,6 +64,18 @@ func accountSeq(t *testing.T, svc *service.Service, address string) uint32 {
 		t.Fatalf("GetAccountInfo(%s): %v", address, err)
 	}
 	return info.Sequence
+}
+
+func requireSimulatedCreatedNode(t *testing.T, metadata *tx.Metadata, entryType string, key [32]byte) {
+	t.Helper()
+	require.NotNil(t, metadata)
+	wantIndex := strings.ToUpper(hex.EncodeToString(key[:]))
+	for _, node := range metadata.AffectedNodes {
+		if node.NodeType == "CreatedNode" && node.LedgerEntryType == entryType && strings.EqualFold(node.LedgerIndex, wantIndex) {
+			return
+		}
+	}
+	t.Fatalf("simulate metadata has no CreatedNode for %s %s", entryType, wantIndex)
 }
 
 // TestService_SimulateTransaction_AMMCreateUsesParentHash is the simulate-path
@@ -207,4 +223,109 @@ func TestService_SimulateTransaction_DoesNotAssumeMasterSignature(t *testing.T) 
 	if result.Metadata == nil {
 		t.Fatal("simulate returned nil metadata")
 	}
+}
+
+func TestService_SimulateTransaction_OrderBooksRemainIsolated(t *testing.T) {
+	cfg := defaultServiceConfig()
+	cfg.Startup = service.StartupConfig{Mode: service.StartupFresh}
+	cfg.GenesisConfig.Amendments = append(cfg.GenesisConfig.Amendments, amendment.FeatureAMM)
+	svc, err := service.New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	env := jtx.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+	master := jtx.MasterAccount()
+	gw := jtx.NewAccount("simulation-orderbook-gateway")
+	alice := jtx.NewAccount("simulation-orderbook-alice")
+
+	masterSeq := accountSeq(t, svc, master.Address)
+	mustApply(t, svc, signedBlob(t, env, payment.Pay(master, gw, 100_000_000).Sequence(masterSeq).Build(), master))
+	mustApply(t, svc, signedBlob(t, env, payment.Pay(master, alice, 200_000_000).Sequence(masterSeq+1).Build(), master))
+	closeLedger(t, svc)
+
+	gwSeq := accountSeq(t, svc, gw.Address)
+	aliceSeq := accountSeq(t, svc, alice.Address)
+	mustApply(t, svc, signedBlob(t, env, accountset.AccountSet(gw).
+		DefaultRipple().Fee(env.BaseFee()).Sequence(gwSeq).Build(), gw))
+	mustApply(t, svc, signedBlob(t, env, trustset.TrustUSD(alice, gw, "1000").Sequence(aliceSeq).Build(), alice))
+	mustApply(t, svc, signedBlob(t, env, payment.PayIssued(gw, alice, gw.IOU("USD", 100)).Sequence(gwSeq+1).Build(), gw))
+	closeLedger(t, svc)
+
+	xrpIssue := corepayment.Issue{Currency: "XRP"}
+	usdIssue := corepayment.Issue{Currency: "USD", Issuer: gw.ID}
+	require.Empty(t, pathfinder.NewBookIndex(svc.GetOpenLedger()).GetBooksByTakerPays(xrpIssue))
+
+	offerSeq := accountSeq(t, svc, alice.Address)
+	offerTx := offertest.OfferCreate(alice, gw.IOU("USD", 10), tx.NewXRPAmount(10_000_000)).
+		Sequence(offerSeq).
+		Build()
+	offerKey := keylet.Offer(alice.ID, offerSeq)
+	for range 2 {
+		result, simulateErr := svc.SimulateTransaction(offerTx)
+		require.NoError(t, simulateErr)
+		require.Equal(t, ter.TesSUCCESS, result.Result)
+		require.False(t, result.Applied)
+		requireSimulatedCreatedNode(t, result.Metadata, "Offer", offerKey.Key)
+	}
+	require.Equal(t, offerSeq, accountSeq(t, svc, alice.Address))
+	offerData, err := svc.GetOpenLedger().Read(offerKey)
+	require.NoError(t, err)
+	require.Empty(t, offerData)
+	require.Empty(t, pathfinder.NewBookIndex(svc.GetOpenLedger()).GetBooksByTakerPays(usdIssue))
+
+	rejectedOffer := offertest.OfferCreate(alice, gw.IOU("USD", 10), tx.NewXRPAmount(10_000_000)).
+		Sequence(offerSeq + 1).
+		Build()
+	rejected, err := svc.SimulateTransaction(rejectedOffer)
+	require.NoError(t, err)
+	require.Equal(t, ter.TerPRE_SEQ, rejected.Result)
+	require.False(t, rejected.Applied)
+	require.Equal(t, offerSeq, accountSeq(t, svc, alice.Address))
+
+	mustApply(t, svc, signedBlob(t, env, offerTx, alice))
+	closeLedger(t, svc)
+	offerData, err = svc.GetOpenLedger().Read(offerKey)
+	require.NoError(t, err)
+	require.NotEmpty(t, offerData)
+	require.Contains(t, pathfinder.NewBookIndex(svc.GetOpenLedger()).GetBooksByTakerPays(usdIssue), xrpIssue)
+
+	amount1 := ammtest.XRPAmount(50)
+	amount2 := gw.IOU("USD", 50)
+	ammSeq := accountSeq(t, svc, alice.Address)
+	ammTx := ammtest.AMMCreate(alice, amount1, amount2).Fee("2000000").Build()
+	ammTx.GetCommon().Sequence = &ammSeq
+	ammKey := coreamm.ComputeAMMKeylet(
+		tx.Asset{Currency: amount1.Currency, Issuer: amount1.Issuer},
+		tx.Asset{Currency: amount2.Currency, Issuer: amount2.Issuer},
+	)
+	for range 2 {
+		result, simulateErr := svc.SimulateTransaction(ammTx)
+		require.NoError(t, simulateErr)
+		require.Equal(t, ter.TesSUCCESS, result.Result)
+		require.False(t, result.Applied)
+		requireSimulatedCreatedNode(t, result.Metadata, "AMM", ammKey.Key)
+	}
+	require.Equal(t, ammSeq, accountSeq(t, svc, alice.Address))
+	ammData, err := svc.GetOpenLedger().Read(ammKey)
+	require.NoError(t, err)
+	require.Empty(t, ammData)
+
+	ammTx.GetCommon().Sequence = new(uint32)
+	*ammTx.GetCommon().Sequence = ammSeq + 1
+	rejected, err = svc.SimulateTransaction(ammTx)
+	require.NoError(t, err)
+	require.Equal(t, ter.TerPRE_SEQ, rejected.Result)
+	require.False(t, rejected.Applied)
+	ammTx.GetCommon().Sequence = &ammSeq
+
+	mustApply(t, svc, signedBlob(t, env, ammTx, alice))
+	closeLedger(t, svc)
+	ammData, err = svc.GetOpenLedger().Read(ammKey)
+	require.NoError(t, err)
+	require.NotEmpty(t, ammData)
+	books := pathfinder.NewBookIndex(svc.GetOpenLedger())
+	require.Contains(t, books.GetBooksByTakerPays(xrpIssue), usdIssue)
+	require.Contains(t, books.GetBooksByTakerPays(usdIssue), xrpIssue)
 }

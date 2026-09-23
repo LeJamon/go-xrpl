@@ -73,6 +73,9 @@ func (v *VaultSet) Validate() error {
 	if err := v.BaseTx.Validate(); err != nil {
 		return err
 	}
+	if v.Common.HasField("VaultKind") || v.Common.HasField("SubscriptionDate") || v.Common.HasField("RedemptionDate") {
+		return ErrVaultLifecycleImmutable
+	}
 
 	// VaultID is required and cannot be zero
 	if v.VaultID == "" {

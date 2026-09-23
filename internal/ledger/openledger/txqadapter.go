@@ -130,23 +130,18 @@ func (a *TxqAdapter) GetReferenceFee() uint64 {
 	return a.cfg.BaseFee
 }
 
-func (a *TxqAdapter) GetBaseFees(transaction tx.Transaction) (fee, defaultFee uint64) {
-	defaultFee = a.cfg.BaseFee
-	fee = defaultFee
-	defer func() {
-		if recover() != nil {
-			fee = defaultFee
-		}
-	}()
+func (a *TxqAdapter) GetBaseFees(transaction tx.Transaction) (fee, defaultFee uint64, err error) {
 	config := a.baseFeeConfig()
-	defaultFee = sign.CalculateDefaultBaseFee(transaction, config)
-	fee = sign.CalculateBaseFee(transaction, a.view, config)
-	return fee, defaultFee
+	fee, err = sign.CalculateBaseFee(transaction, a.view, config)
+	if err != nil {
+		return 0, 0, err
+	}
+	return fee, sign.CalculateDefaultBaseFee(transaction, config), nil
 }
 
-func (a *TxqAdapter) GetBaseFee(transaction tx.Transaction) uint64 {
-	fee, _ := a.GetBaseFees(transaction)
-	return fee
+func (a *TxqAdapter) GetBaseFee(transaction tx.Transaction) (uint64, error) {
+	fee, _, err := a.GetBaseFees(transaction)
+	return fee, err
 }
 
 func (a *TxqAdapter) baseFeeConfig() tx.EngineConfig {

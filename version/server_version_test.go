@@ -6,12 +6,12 @@ import (
 )
 
 func TestEncodedServerVersion(t *testing.T) {
-	if got, want := EncodedServerVersion(), uint64(0x4000_0303_00C0_0000); got != want {
+	if got, want := EncodedServerVersion(), uint64(0x4000_0304_00C0_0000); got != want {
 		t.Fatalf("EncodedServerVersion() = %#018x, want %#018x", got, want)
 	}
 	var wire [8]byte
 	binary.BigEndian.PutUint64(wire[:], EncodedServerVersion())
-	wantWire := [8]byte{0x40, 0x00, 0x03, 0x03, 0x00, 0xC0, 0x00, 0x00}
+	wantWire := [8]byte{0x40, 0x00, 0x03, 0x04, 0x00, 0xC0, 0x00, 0x00}
 	if wire != wantWire {
 		t.Fatalf("wire encoding = %x, want %x", wire, wantWire)
 	}

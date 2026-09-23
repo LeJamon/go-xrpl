@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/escrow"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,12 +19,13 @@ import (
 // line. Pre-amendment the refund used the (erased) escrow entry and the cancel fails.
 // Reference: rippled EscrowToken_test.cpp testIOUCancelDoApply (PR 6171).
 func TestIOUEscrow_CancelRecreatesTrustLine(t *testing.T) {
-	run := func(t *testing.T, fixOn bool) {
-		env := jtx.NewTestEnv(t)
-		if !fixOn {
+	run := func(t *testing.T, fixOn bool, rules escrowReserveRules) {
+		env := newEscrowReserveEnv(t, rules)
+		if fixOn {
+			env.EnableFeature("fixCleanup3_2_0")
+		} else {
 			env.DisableFeature("fixCleanup3_2_0")
 		}
-		env.EnableFeature("TokenEscrow")
 
 		gw := jtx.NewAccount("gateway")
 		alice := jtx.NewAccount("alice")
@@ -60,6 +62,9 @@ func TestIOUEscrow_CancelRecreatesTrustLine(t *testing.T) {
 		// Advance past the cancel time and cancel the escrow.
 		env.SetTime(env.Now().Add(10 * time.Second))
 		env.Close()
+		escrowKey := keylet.Escrow(alice.ID, seq)
+		snapshot := snapshotEscrowReserveState(t, env, escrowKey, alice, bob, gw)
+		accountBefore := cloneEscrowLedgerEntry(t, env, keylet.Account(alice.ID))
 		res := env.Submit(escrow.EscrowCancel(alice, alice, seq).Build())
 
 		if fixOn {
@@ -67,11 +72,24 @@ func TestIOUEscrow_CancelRecreatesTrustLine(t *testing.T) {
 			require.True(t, env.TrustLineExists(alice, gw, "USD"), "cancel must re-create the trust line")
 			require.Equal(t, usd(1000, gw), *env.IOUBalance(alice, gw, "USD"))
 			require.Equal(t, ownerCountBeforeCancel, env.OwnerCount(alice))
+			require.False(t, env.LedgerEntryExists(escrowKey))
 		} else {
-			require.Equal(t, "tefEXCEPTION", res.Code, "pre-fix cancel must fail reading the escrow SLE owner count")
+			jtx.RequireTxFail(t, res, "tefINTERNAL")
+			require.False(t, res.Applied)
+			require.Zero(t, res.Fee)
+			require.Equal(t, accountBefore, cloneEscrowLedgerEntry(t, env, keylet.Account(alice.ID)))
+			requireEscrowReserveStateUnchanged(t, env, snapshot, escrowKey, alice, bob, gw)
+			require.False(t, env.TrustLineExists(alice, gw, "USD"))
+			if res.Metadata != nil {
+				require.Empty(t, res.Metadata.AffectedNodes)
+			}
 		}
 	}
 
-	t.Run("fixOn", func(t *testing.T) { run(t, true) })
-	t.Run("fixOff", func(t *testing.T) { run(t, false) })
+	for _, rules := range escrowReserveRuleCases() {
+		t.Run(rules.name, func(t *testing.T) {
+			t.Run("fixOn", func(t *testing.T) { run(t, true, rules) })
+			t.Run("fixOff", func(t *testing.T) { run(t, false, rules) })
+		})
+	}
 }

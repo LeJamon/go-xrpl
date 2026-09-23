@@ -14,10 +14,12 @@ behavior is deliberately mirrored, the Go code cites the rippled source file it
 follows (e.g. `Transactor.cpp`, `applySteps.h`), so a reviewer can check the port
 against the original.
 
-The local `rippled-worktrees/<version>-oracle/` tree is the working reference.
-Its transaction logic lives under `src/xrpld/app/tx/detail/`, ledger objects
-under `src/xrpld/ledger/detail/`, protocol definitions under
-`src/libxrpl/protocol/`, and the upstream unit tests — which the Go conformance
+The pinned local `rippled-worktrees/v3.4.0-oracle/` tree at commit
+`4a4fded2eba11427c48ce3f24d9c1aea5e7a9d17` is the working reference. Its
+transaction implementations live under `src/libxrpl/tx/transactors/`, headers
+under `include/xrpl/tx/transactors/`, ledger code under `src/libxrpl/ledger/`,
+protocol definitions under `src/libxrpl/protocol/` and
+`include/xrpl/protocol/`, and the upstream unit tests — which the Go conformance
 suites mirror — under `src/test/app/`.
 
 ## The conformance suite
@@ -26,25 +28,35 @@ Conformance tests live in `internal/testing/conformance/` and run rippled-derive
 fixtures against the go-xrpl transaction engine and ledger. They are exposed as Go
 subtests under `TestConformance/app/<Suite>` and `TestConformance/ledger/<Suite>`.
 
-Run them with the summary harness:
+Final-release conformance requires an explicit v3 corpus recorded from rippled
+3.4.0 at the commit above. The corpus manifest pins the oracle repository,
+recorder commit, build and amendment configuration, all four
+`fixCleanup3_4_0`/`LendingProtocolV1_1` combinations, fixture counts, and every
+skip reason. Transaction observations include the execution boundary, symbolic
+and numeric TER, applied/queued/fee values, metadata hash, and state root.
+
+Run the corpus with the summary harness:
 
 ```bash
-just conformance                 # full suite, per-suite breakdown
-just conformance TxQ             # only suites matching a name (TxQ, AMM, Vault, …)
-just conformance --failing       # only suites that have failures
-just conformance --list-fail     # list every failing test name
-just conformance TxQ --list-fail # combine a filter with a listing
+just conformance --corpus /path/to/rippled-3.4.0-v3
+just conformance --corpus /path/to/rippled-3.4.0-v3 TxQ
+just conformance --corpus /path/to/rippled-3.4.0-v3 --failing
+just conformance --corpus /path/to/rippled-3.4.0-v3 --list-fail
 ```
 
 `just conformance` forwards its arguments to
 [`scripts/conformance-summary.sh`](../scripts/conformance-summary.sh), so the raw
-script accepts the same flags. The suite timeout defaults to `300s` and can be
-overridden with the `CONFORMANCE_TIMEOUT` environment variable.
+script accepts the same flags. `GOXRPL_FIXTURES_DIR` may supply the corpus path
+instead. A missing, unreadable, empty, stale, malformed, or all-skipped corpus is
+a failure; ordinary `go test` skips only the external corpus while still running
+the committed harness-contract tests. The suite timeout defaults to `300s` and
+can be overridden with the `CONFORMANCE_TIMEOUT` environment variable.
 
 ## Reading the results
 
-The summary prints overall pass/fail counts, then splits them into **in scope**
-and **out of scope**, then a per-suite breakdown:
+The summary prints executed pass/fail counts and a per-suite breakdown. Fixtures
+declared out of scope are accounted for, with reasons, by the validated manifest
+and are not executed:
 
 ```
 =========================================
@@ -52,13 +64,11 @@ and **out of scope**, then a per-suite breakdown:
 =========================================
  Total:     NNN pass /  NN fail /  NNN  (PP.P%)
  In scope:  NNN pass /   0 fail /  NNN  (100.0%)
- Out:        NN pass /  NN fail /   NN
 =========================================
 ```
 
-In the per-suite table, suites are colored green (all pass), yellow (partial), red
-(none pass), or dimmed (out of scope). The **in-scope** percentage is the number
-that matters: it excludes suites that are intentionally not yet covered (below).
+In the per-suite table, suites are colored green (all pass), yellow (partial), or
+red (none pass). The in-scope result is the release gate.
 
 ## What is intentionally out of scope
 

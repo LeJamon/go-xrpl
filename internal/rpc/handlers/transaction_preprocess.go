@@ -86,6 +86,9 @@ func preprocessTransaction(
 		}
 		return nil, rpcErr
 	}
+	if options.mode == transactionPreprocessSubmitMultisigned && transaction.GetCommon().SigningPubKey != "" {
+		return nil, rpcerrors.RpcErrorInvalidParams("Invalid  SigningPubKey field.  Field must be empty when multi-signing.")
+	}
 	if options.rejectTxnSignature {
 		if _, present := txMap["TxnSignature"]; present {
 			return nil, rpcerrors.RpcErrorSigningMalformed()
@@ -265,8 +268,10 @@ func normalizeJSONContainers(value any) any {
 
 func normalizeSignerResponseContainers(transactionMap map[string]any) {
 	normalizeSignerResponseContainer(transactionMap)
-	if counterparty, ok := transactionMap["CounterpartySignature"].(map[string]any); ok {
-		normalizeSignerResponseContainer(counterparty)
+	for _, target := range []string{counterpartySignatureField, sponsorSignatureField} {
+		if nested, ok := transactionMap[target].(map[string]any); ok {
+			normalizeSignerResponseContainer(nested)
+		}
 	}
 }
 

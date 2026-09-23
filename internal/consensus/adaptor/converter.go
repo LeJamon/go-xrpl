@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -73,7 +74,10 @@ func validationFromMessage(msg *message.Validation, seen time.Time) (*consensus.
 // Caches the wire bytes on v.Raw if not already populated, so downstream
 // consumers (the validation archive, suppression-hash computation) can
 // reuse the canonical blob without a second serialize pass.
-func validationToMessage(v *consensus.Validation) *message.Validation {
+func validationToMessageChecked(v *consensus.Validation) (*message.Validation, error) {
+	if v == nil {
+		return nil, errors.New("nil validation")
+	}
 	// Forward v.Raw verbatim — the signature only verifies against the
 	// original preimage, so any re-serialization (VL encoding drift,
 	// dropped optional fields, ordering) causes downstream peers to
@@ -82,13 +86,16 @@ func validationToMessage(v *consensus.Validation) *message.Validation {
 	if len(v.Raw) > 0 {
 		return &message.Validation{
 			Validation: append([]byte(nil), v.Raw...),
-		}
+		}, nil
 	}
-	blob := serializeSTValidation(v)
+	blob, err := serializeSTValidationChecked(v)
+	if err != nil {
+		return nil, err
+	}
 	v.Raw = append([]byte(nil), blob...)
 	return &message.Validation{
 		Validation: blob,
-	}
+	}, nil
 }
 
 func transactionFromMessage(msg *message.Transaction) []byte {

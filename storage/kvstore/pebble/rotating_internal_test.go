@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sync"
 	"testing"
 	"time"
 
@@ -245,7 +244,7 @@ func TestPromoteDoesNotOverwriteConcurrentPut(t *testing.T) {
 		_, err := store.Promote([]byte("key"))
 		promoteDone <- err
 	}()
-	waitForLocked(t, &store.mu)
+	waitForLocked(t, &store.mutations[mutationStripe([]byte("key"))])
 
 	putDone := make(chan error, 1)
 	go func() {
@@ -279,7 +278,7 @@ func TestPromoteDoesNotBlockUnrelatedPut(t *testing.T) {
 		_, err := store.Promote([]byte("key"))
 		promoteDone <- err
 	}()
-	waitForLocked(t, &store.mu)
+	waitForLocked(t, &store.mutations[mutationStripe([]byte("key"))])
 
 	putDone := make(chan error, 1)
 	go func() {
@@ -316,7 +315,7 @@ func TestPromoteDoesNotResurrectConcurrentDelete(t *testing.T) {
 		_, err := store.Promote([]byte("key"))
 		promoteDone <- err
 	}()
-	waitForLocked(t, &store.mu)
+	waitForLocked(t, &store.mutations[mutationStripe([]byte("key"))])
 
 	deleteDone := make(chan error, 1)
 	go func() {
@@ -399,7 +398,10 @@ func newPromoteRaceStore(t *testing.T) *RotatingStore {
 	return store
 }
 
-func waitForLocked(t *testing.T, mutex *sync.RWMutex) {
+func waitForLocked(t *testing.T, mutex interface {
+	TryLock() bool
+	Unlock()
+}) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {

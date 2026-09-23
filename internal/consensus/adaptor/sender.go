@@ -52,7 +52,10 @@ func (s *OverlaySender) BroadcastProposal(proposal *consensus.Proposal) error {
 // WITHOUT applying the squelch filter. Same rationale as
 // BroadcastProposal.
 func (s *OverlaySender) BroadcastValidation(validation *consensus.Validation) error {
-	msg := validationToMessage(validation)
+	msg, err := validationToMessageChecked(validation)
+	if err != nil {
+		return fmt.Errorf("serialize validation: %w", err)
+	}
 	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode validation: %w", err)
@@ -82,7 +85,10 @@ func (s *OverlaySender) RelayProposal(proposal *consensus.Proposal, exceptPeer u
 // with the same filter semantics as RelayProposal. Uses
 // validation.SuppressionHash for the reverse-index record.
 func (s *OverlaySender) RelayValidation(validation *consensus.Validation, exceptPeer uint64) error {
-	msg := validationToMessage(validation)
+	msg, err := validationToMessageChecked(validation)
+	if err != nil {
+		return fmt.Errorf("serialize validation: %w", err)
+	}
 	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode validation: %w", err)
@@ -392,4 +398,8 @@ func indirectQueryType(indirect bool) *message.LedgerQueryType {
 	}
 	qt := message.QueryTypeIndirect
 	return &qt
+}
+
+func (s *OverlaySender) PeerSupportsNodeDepth(peerID uint64) bool {
+	return s.overlay.PeerSupportsNodeDepth(peermanagement.PeerID(peerID))
 }

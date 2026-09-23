@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
@@ -231,7 +232,11 @@ func readVLLength(data []byte, start int) (length, prefixLen int, err error) {
 		}
 		b2 := int(data[start+1])
 		b3 := int(data[start+2])
-		return 12481 + ((b1 - 241) * 65536) + (b2 * 256) + b3, 3, nil
+		length := 12481 + ((b1 - 241) * 65536) + (b2 * 256) + b3
+		if length > 918744 {
+			return 0, 0, serdes.ErrVariableLengthTooLong
+		}
+		return length, 3, nil
 	default:
 		return 0, 0, fmt.Errorf("invalid length prefix byte 0x%02x at offset %d", b1, start)
 	}

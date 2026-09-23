@@ -37,18 +37,24 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	if parseErr != nil {
 		return nil, parseErr.WithExtra(response)
 	}
+	if vaultKey == ([32]byte{}) {
+		return nil, rpcerrors.RpcErrorEntryNotFound("").WithExtra(response)
+	}
 
 	vaultEntry, err := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, vaultKey, ledgerIndex)
 	if err != nil || vaultEntry == nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr.WithExtra(response)
 		}
-		return nil, rpcerrors.RpcErrorEntryNotFoundBare("").WithExtra(response)
+		return nil, rpcerrors.RpcErrorEntryNotFound("").WithExtra(response)
 	}
 
 	vaultDecoded, decodeErr := decodeLedgerEntryNode(vaultEntry.Node)
 	if decodeErr != nil {
 		return nil, rpcInternalError("vault_info: vault decoding failed", decodeErr)
+	}
+	if vaultDecoded["LedgerEntryType"] != "Vault" {
+		return nil, rpcerrors.RpcErrorEntryNotFound("").WithExtra(response)
 	}
 
 	shareMPTIDHex, ok := vaultDecoded["ShareMPTID"].(string)
@@ -65,11 +71,14 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		if rerr := mapLedgerLookupErr(mptErr); rerr != nil {
 			return nil, rerr.WithExtra(response)
 		}
-		return nil, rpcerrors.RpcErrorEntryNotFoundBare("").WithExtra(response)
+		return nil, rpcerrors.RpcErrorEntryNotFound("").WithExtra(response)
 	}
 	mptIssuanceDecoded, mptDecodeErr := decodeLedgerEntryNode(mptIssuanceEntry.Node)
 	if mptDecodeErr != nil {
 		return nil, rpcInternalError("vault_info: MPTokenIssuance decoding failed", mptDecodeErr).WithExtra(response)
+	}
+	if mptIssuanceDecoded["LedgerEntryType"] != "MPTokenIssuance" {
+		return nil, rpcerrors.RpcErrorEntryNotFound("").WithExtra(response)
 	}
 
 	addLedgerEntryJSONFields(vaultDecoded, strings.ToUpper(hex.EncodeToString(vaultKey[:])))
@@ -85,53 +94,50 @@ func parseVaultInfoKey(params map[string]json.RawMessage) ([32]byte, *rpcerrors.
 	seqRaw, hasSeq := params["seq"]
 
 	if hasVaultID && !hasOwner && !hasSeq {
-		var vaultID string
-		_ = json.Unmarshal(vaultIDRaw, &vaultID)
-		vaultIDBytes, err := hex.DecodeString(vaultID)
-		if err != nil || len(vaultIDBytes) != 32 {
-			return [32]byte{}, vaultInfoMalformedInvalidParams()
+		vaultID, ok := rawJSONString(vaultIDRaw)
+		if !ok {
+			return [32]byte{}, rpcerrors.RpcErrorExpectedField("vault_id", "hex string")
 		}
-		var vaultKey [32]byte
-		copy(vaultKey[:], vaultIDBytes)
-		if vaultKey == ([32]byte{}) {
-			return [32]byte{}, rpcerrors.RpcErrorMalformedRequestBare()
+		vaultKey, ok := parseVaultInfoID(vaultID)
+		if !ok {
+			return [32]byte{}, rpcerrors.RpcErrorExpectedField("vault_id", "hex string")
 		}
 		return vaultKey, nil
 	}
 
 	if !hasVaultID && hasOwner && hasSeq {
-		var owner string
-		_ = json.Unmarshal(ownerRaw, &owner)
+		owner, ok := rawJSONString(ownerRaw)
+		if !ok {
+			return [32]byte{}, rpcerrors.RpcErrorActMalformed("Invalid field 'owner', not AccountID.")
+		}
 		ownerID, err := decodeAccountID(owner)
 		if err != nil {
-			return [32]byte{}, vaultInfoMalformedActMalformed()
+			return [32]byte{}, rpcerrors.RpcErrorActMalformed("Invalid field 'owner', not AccountID.")
 		}
 		sequence, ok := parseJSONUInt32(seqRaw)
 		if !ok || sequence == 0 {
-			return [32]byte{}, vaultInfoMalformedInvalidParams()
+			return [32]byte{}, rpcerrors.RpcErrorExpectedField("seq", "a positive 32-bit integer")
 		}
 		return keylet.Vault(ownerID, sequence).Key, nil
 	}
 
-	return [32]byte{}, vaultInfoMalformedInvalidParams()
+	return [32]byte{}, rpcerrors.RpcErrorInvalidParams("Must specify either 'vault_id' or both 'owner' and 'seq'.")
 }
 
-func vaultInfoMalformedInvalidParams() *rpcerrors.RpcError {
-	return rpcerrors.NewRpcError(
-		rpcerrors.RpcINVALID_PARAMS,
-		"malformedRequest",
-		"invalidParams",
-		"Invalid parameters.",
-	)
-}
-
-func vaultInfoMalformedActMalformed() *rpcerrors.RpcError {
-	return rpcerrors.NewRpcError(
-		rpcerrors.RpcACT_MALFORMED,
-		"malformedRequest",
-		"actMalformed",
-		"Account malformed.",
-	)
+func parseVaultInfoID(value string) ([32]byte, bool) {
+	var key [32]byte
+	if value == "0" {
+		return key, true
+	}
+	if len(value) != 64 {
+		return key, false
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		return key, false
+	}
+	copy(key[:], decoded)
+	return key, true
 }
 
 func vaultInfoLedgerFields(ledger types.LedgerReader, validated bool) map[string]any {

@@ -60,6 +60,20 @@ const (
 	paymentChannelClaimPrefix = "434C4D00"
 	txSigPrefix               = "53545800"
 	batchPrefix               = "42434800"
+	counterpartySigPrefix     = "43505400"
+	counterpartyMultiPrefix   = "43504D00"
+	sponsorSigPrefix          = "53504E00"
+	sponsorMultiPrefix        = "53504D00"
+)
+
+// SigningRole identifies the transaction signature slot being encoded.
+type SigningRole uint8
+
+// Signing role values used by the role-specific signing helpers.
+const (
+	TransactionRole SigningRole = iota
+	CounterpartyRole
+	SponsorRole
 )
 
 // hexUpperTable mirrors encoding/hex.encodeStd but in uppercase so we can
@@ -125,20 +139,59 @@ func Encode(json map[string]any) (string, error) {
 // signature towards a multi-signed transaction. Only signing fields are
 // encoded. The caller's map is never mutated.
 func EncodeForMultisigning(json map[string]any, xrpAccountID string) (string, error) {
+	return EncodeForMultisigningRole(json, xrpAccountID, TransactionRole, false)
+}
+
+// EncodeForSigningRole encodes a transaction for a role-specific signature.
+// Counterparty and sponsor prefixes are enabled by cleanupEnabled; ordinary
+// transaction signatures always use the legacy transaction prefix.
+func EncodeForSigningRole(json map[string]any, role SigningRole, cleanupEnabled bool) (string, error) {
+	prefix, err := signingPrefix(role, false, cleanupEnabled)
+	if err != nil {
+		return "", err
+	}
+
+	encoded, err := Encode(removeNonSigningFields(json))
+	if err != nil {
+		return "", err
+	}
+
+	return prefix + encoded, nil
+}
+
+// EncodeForMultisigningRole encodes a transaction for a role-specific
+// multisignature. Ordinary transaction multisigning blanks SigningPubKey;
+// nested counterparty and sponsor multisigning preserve the outer key.
+func EncodeForMultisigningRole(
+	json map[string]any,
+	xrpAccountID string,
+	role SigningRole,
+	cleanupEnabled bool,
+) (string, error) {
+	prefix, err := signingPrefix(role, true, cleanupEnabled)
+	if err != nil {
+		return "", err
+	}
+
 	signing := removeNonSigningFields(json)
-	signing["SigningPubKey"] = ""
-	return encodeForMultisigning(signing, xrpAccountID)
+	if role == TransactionRole {
+		signing["SigningPubKey"] = ""
+	}
+	return encodeForMultisigningWithPrefix(signing, xrpAccountID, prefix)
 }
 
 // EncodeForMultisigningTarget encodes a transaction for a multi-signature held
 // in a nested signing object. The outer SigningPubKey remains part of the
 // payload while the non-signing target object is excluded.
 func EncodeForMultisigningTarget(json map[string]any, xrpAccountID string) (string, error) {
-	signing := removeNonSigningFields(json)
-	return encodeForMultisigning(signing, xrpAccountID)
+	return EncodeForMultisigningRole(json, xrpAccountID, CounterpartyRole, false)
 }
 
-func encodeForMultisigning(signing map[string]any, xrpAccountID string) (string, error) {
+func encodeForMultisigningWithPrefix(
+	signing map[string]any,
+	xrpAccountID string,
+	prefix string,
+) (string, error) {
 	st := &types.AccountID{}
 	suffix, err := st.FromJSON(xrpAccountID)
 	if err != nil {
@@ -150,18 +203,39 @@ func encodeForMultisigning(signing map[string]any, xrpAccountID string) (string,
 		return "", err
 	}
 
-	return txMultiSigPrefix + encoded + hexUpper(suffix), nil
+	return prefix + encoded + hexUpper(suffix), nil
+}
+
+func signingPrefix(role SigningRole, multiSigning, cleanupEnabled bool) (string, error) {
+	var singlePrefix, multiPrefix string
+
+	switch role {
+	case TransactionRole:
+		singlePrefix, multiPrefix = txSigPrefix, txMultiSigPrefix
+	case CounterpartyRole:
+		if cleanupEnabled {
+			singlePrefix, multiPrefix = counterpartySigPrefix, counterpartyMultiPrefix
+		} else {
+			singlePrefix, multiPrefix = txSigPrefix, txMultiSigPrefix
+		}
+	case SponsorRole:
+		if cleanupEnabled {
+			singlePrefix, multiPrefix = sponsorSigPrefix, sponsorMultiPrefix
+		} else {
+			singlePrefix, multiPrefix = txSigPrefix, txMultiSigPrefix
+		}
+	default:
+		return "", fmt.Errorf("invalid signing role: %d", role)
+	}
+	if multiSigning {
+		return multiPrefix, nil
+	}
+	return singlePrefix, nil
 }
 
 // EncodeForSigning encodes a transaction into binary format in preparation for signing.
 func EncodeForSigning(json map[string]any) (string, error) {
-	encoded, err := Encode(removeNonSigningFields(json))
-
-	if err != nil {
-		return "", err
-	}
-
-	return txSigPrefix + encoded, nil
+	return EncodeForSigningRole(json, TransactionRole, false)
 }
 
 // EncodeForSigningClaim encodes a payment channel claim into binary format in preparation for signing.

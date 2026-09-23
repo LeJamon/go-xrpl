@@ -590,16 +590,16 @@ func decrementKey(key [32]byte) [32]byte {
 // CalculateBaseFee returns the minimum fee for LedgerStateFix transactions:
 // one owner reserve increment, read from the live FeeSettings, just like
 // AccountDelete.
-func (l *LedgerStateFix) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) uint64 {
+func (l *LedgerStateFix) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) (uint64, error) {
 	if view != nil {
 		data, err := view.Read(keylet.Fees())
 		if err == nil && data != nil {
 			if fs, err := state.ParseFeeSettings(data); err == nil {
-				return fs.GetReserveIncrement()
+				return fs.GetReserveIncrement(), nil
 			}
 		}
 	}
-	return config.ReserveIncrement
+	return config.ReserveIncrement, nil
 }
 
 var _ tx.Appliable = (*LedgerStateFix)(nil)

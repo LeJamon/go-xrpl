@@ -257,6 +257,36 @@ func TestVaultCreateApplyRemovesRoundedZeroAssetsMaximum(t *testing.T) {
 	}
 }
 
+func TestVaultCreateSetsCashBasisVersionForLendingProtocolV11(t *testing.T) {
+	view := newMPTArmsView()
+	rules := amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		Enable(amendment.FeatureLendingProtocolV1_1).
+		Build()
+	var ownerID [20]byte
+	for i := range ownerID {
+		ownerID[i] = 2
+	}
+	ctx := buildArmsCtx(t, view, ownerID, rules)
+	sequence := uint32(1)
+	create := NewVaultCreate(ctx.Account.Account, tx.Asset{Currency: "XRP"})
+	create.Common.Sequence = &sequence
+
+	if got := create.Apply(ctx); got != ter.TesSUCCESS {
+		t.Fatalf("Apply() = %v, want tesSUCCESS", got)
+	}
+	created, err := readVault(view, keylet.Vault(ownerID, sequence))
+	if err != nil {
+		t.Fatalf("read created vault: %v", err)
+	}
+	if created == nil {
+		t.Fatal("created vault is missing")
+	}
+	if created.LEVersion != VaultVersionCashBasis {
+		t.Fatalf("LEVersion = %d, want %d", created.LEVersion, VaultVersionCashBasis)
+	}
+}
+
 func TestVaultNumberSerializationPreservesLargeMantissa(t *testing.T) {
 	encoded, err := encodeVaultNumber("9223372036854775807e0", state.MantissaScaleLarge)
 	if err != nil {

@@ -57,51 +57,63 @@ func TestGetBookOffersMPTFunding(t *testing.T) {
 	require.Equal(t, "80", offer.OwnerFunds)
 	require.Equal(t, map[string]string{
 		"mpt_issuance_id": idString,
-		"value":           "80",
+		"value":           "64",
 	}, offer.TakerGetsFunded)
-	require.Equal(t, "8000000", offer.TakerPaysFunded)
+	require.Equal(t, "6400000", offer.TakerPaysFunded)
 }
 
 func TestGetBookOffersMPTFundedPays(t *testing.T) {
-	svc := newOfferTestService(t)
-	issuerAddr, issuer := addressFromBytes(t, 0x62)
-	ownerAddr, _ := addressFromBytes(t, 0x72)
-	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000, 0)
-	insertAccountRoot(t, svc, ownerAddr, 10_000_080, 0)
+	for _, locked := range []bool{false, true} {
+		t.Run(map[bool]string{false: "funded", true: "globally frozen"}[locked], func(t *testing.T) {
+			svc := newOfferTestService(t)
+			issuerAddr, issuer := addressFromBytes(t, 0x62)
+			ownerAddr, _ := addressFromBytes(t, 0x72)
+			insertAccountRoot(t, svc, issuerAddr, 1_000_000_000, 0)
+			insertAccountRoot(t, svc, ownerAddr, 10_000_080, 0)
 
-	maximum := uint64(1_000)
-	id := keylet.MakeMPTID(8, issuer)
-	issuanceData, err := state.SerializeMPTokenIssuance(&state.MPTokenIssuanceData{
-		Issuer:        issuer,
-		Sequence:      8,
-		MaximumAmount: &maximum,
-		Flags:         entry.LsfMPTLocked,
-	})
-	require.NoError(t, err)
-	require.NoError(t, svc.openLedger.Insert(keylet.MPTIssuance(id), issuanceData))
+			maximum := uint64(1_000)
+			flags := uint32(0)
+			if locked {
+				flags = entry.LsfMPTLocked
+			}
+			id := keylet.MakeMPTID(8, issuer)
+			issuanceData, err := state.SerializeMPTokenIssuance(&state.MPTokenIssuanceData{
+				Issuer:        issuer,
+				Sequence:      8,
+				MaximumAmount: &maximum,
+				Flags:         flags,
+			})
+			require.NoError(t, err)
+			require.NoError(t, svc.openLedger.Insert(keylet.MPTIssuance(id), issuanceData))
 
-	idString := mptutil.EncodeID(id)
-	mptModel := state.NewMPTAmountWithIssuanceID(0, issuerAddr, idString)
-	insertOffer(t, svc, ownerAddr, 1,
-		state.NewMPTAmountWithIssuanceID(1_000, issuerAddr, idString),
-		tx.NewXRPAmount(100),
-	)
+			idString := mptutil.EncodeID(id)
+			mptModel := state.NewMPTAmountWithIssuanceID(0, issuerAddr, idString)
+			insertOffer(t, svc, ownerAddr, 1,
+				state.NewMPTAmountWithIssuanceID(1_000, issuerAddr, idString),
+				tx.NewXRPAmount(100),
+			)
 
-	result, err := svc.GetBookOffers(
-		context.Background(), tx.NewXRPAmount(0), mptModel, "", "", "current", 10, "", false,
-	)
-	require.NoError(t, err)
-	require.Len(t, result.Offers, 1)
-	offer := result.Offers[0]
-	require.Equal(t, "80", offer.OwnerFunds)
-	require.Equal(t, "80", offer.TakerGetsFunded)
-	require.Equal(t, map[string]string{
-		"mpt_issuance_id": idString,
-		"value":           "800",
-	}, offer.TakerPaysFunded)
+			result, err := svc.GetBookOffers(
+				context.Background(), tx.NewXRPAmount(0), mptModel, "", "", "current", 10, "", false,
+			)
+			require.NoError(t, err)
+			require.Len(t, result.Offers, 1)
+			offer := result.Offers[0]
+			funds, pays := "80", "800"
+			if locked {
+				funds, pays = "0", "0"
+			}
+			require.Equal(t, funds, offer.OwnerFunds)
+			require.Equal(t, funds, offer.TakerGetsFunded)
+			require.Equal(t, map[string]string{
+				"mpt_issuance_id": idString,
+				"value":           pays,
+			}, offer.TakerPaysFunded)
+		})
+	}
 }
 
-func TestGetBookOffersIssuerOwnedMPTIsFullyFunded(t *testing.T) {
+func TestGetBookOffersIssuerOwnedMPTAtIssuanceLimit(t *testing.T) {
 	svc := newOfferTestService(t)
 	issuerAddr, issuer := addressFromBytes(t, 0x63)
 	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000, 0)
@@ -129,9 +141,103 @@ func TestGetBookOffersIssuerOwnedMPTIsFullyFunded(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, result.Offers, 1)
-	require.Equal(t, "100", result.Offers[0].OwnerFunds)
-	require.Nil(t, result.Offers[0].TakerGetsFunded)
-	require.Nil(t, result.Offers[0].TakerPaysFunded)
+	require.Equal(t, "0", result.Offers[0].OwnerFunds)
+	require.Equal(t, map[string]string{
+		"mpt_issuance_id": idString,
+		"value":           "0",
+	}, result.Offers[0].TakerGetsFunded)
+	require.Equal(t, "0", result.Offers[0].TakerPaysFunded)
+}
+
+func TestGetBookOffersIssuerOwnedMPTUsesRunningIssuanceHeadroom(t *testing.T) {
+	svc := newOfferTestService(t)
+	issuerAddr, issuer := addressFromBytes(t, 0x65)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000, 0)
+
+	maximum := uint64(100)
+	id := keylet.MakeMPTID(11, issuer)
+	issuanceData, err := state.SerializeMPTokenIssuance(&state.MPTokenIssuanceData{
+		Issuer:            issuer,
+		Sequence:          11,
+		OutstandingAmount: 40,
+		TransferFee:       25_000,
+		MaximumAmount:     &maximum,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.openLedger.Insert(keylet.MPTIssuance(id), issuanceData))
+
+	idString := mptutil.EncodeID(id)
+	mptModel := state.NewMPTAmountWithIssuanceID(0, issuerAddr, idString)
+	insertOffer(t, svc, issuerAddr, 1,
+		tx.NewXRPAmount(10_000_000),
+		state.NewMPTAmountWithIssuanceID(20, issuerAddr, idString),
+	)
+	insertOffer(t, svc, issuerAddr, 2,
+		tx.NewXRPAmount(80_000_000),
+		state.NewMPTAmountWithIssuanceID(80, issuerAddr, idString),
+	)
+
+	result, err := svc.GetBookOffers(
+		context.Background(), mptModel, tx.NewXRPAmount(0), "", "", "current", 10, "", false,
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Offers, 2)
+	first, second := result.Offers[0], result.Offers[1]
+	require.Equal(t, "60", first.OwnerFunds)
+	require.Nil(t, first.TakerGetsFunded)
+	require.Nil(t, first.TakerPaysFunded)
+	require.Empty(t, second.OwnerFunds)
+	require.Equal(t, map[string]string{
+		"mpt_issuance_id": idString,
+		"value":           "40",
+	}, second.TakerGetsFunded)
+	require.Equal(t, "40000000", second.TakerPaysFunded)
+}
+
+func TestGetBookOffersMPTRejectsUnauthorizedHolding(t *testing.T) {
+	svc := newOfferTestService(t)
+	issuerAddr, issuer := addressFromBytes(t, 0x66)
+	ownerAddr, owner := addressFromBytes(t, 0x76)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000, 0)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000, 0)
+
+	maximum := uint64(100)
+	id := keylet.MakeMPTID(12, issuer)
+	issuanceData, err := state.SerializeMPTokenIssuance(&state.MPTokenIssuanceData{
+		Issuer:            issuer,
+		Sequence:          12,
+		OutstandingAmount: 50,
+		MaximumAmount:     &maximum,
+		Flags:             entry.LsfMPTRequireAuth,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.openLedger.Insert(keylet.MPTIssuance(id), issuanceData))
+	holdingData, err := state.SerializeMPToken(&state.MPTokenData{
+		Account:           owner,
+		MPTokenIssuanceID: id,
+		MPTAmount:         50,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.openLedger.Insert(keylet.MPTokenByID(id, owner), holdingData))
+
+	idString := mptutil.EncodeID(id)
+	mptModel := state.NewMPTAmountWithIssuanceID(0, issuerAddr, idString)
+	insertOffer(t, svc, ownerAddr, 1,
+		tx.NewXRPAmount(10_000_000),
+		state.NewMPTAmountWithIssuanceID(50, issuerAddr, idString),
+	)
+
+	result, err := svc.GetBookOffers(
+		context.Background(), mptModel, tx.NewXRPAmount(0), "", "", "current", 10, "", false,
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Offers, 1)
+	require.Equal(t, "0", result.Offers[0].OwnerFunds)
+	require.Equal(t, map[string]string{
+		"mpt_issuance_id": idString,
+		"value":           "0",
+	}, result.Offers[0].TakerGetsFunded)
+	require.Equal(t, "0", result.Offers[0].TakerPaysFunded)
 }
 
 func TestMultiplyByDirRateUsesRPCNumberSemantics(t *testing.T) {
@@ -204,4 +310,46 @@ func TestGetBookOffersMPTFundedPaysNearestEven(t *testing.T) {
 		"mpt_issuance_id": idString,
 		"value":           "2",
 	}, result.Offers[0].TakerPaysFunded)
+}
+
+func TestGetBookOffersMPTTransferFeeConsumesRoundedBalance(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		first  int64
+		second string
+	}{
+		{"fraction rounds up", 3, "60"},
+		{"even tie rounds down", 2, "62"},
+		{"odd tie rounds up", 6, "57"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			svc := newOfferTestService(t)
+			issuerAddr, issuer := addressFromBytes(t, 0x61)
+			ownerAddr, owner := addressFromBytes(t, 0x71)
+			insertAccountRoot(t, svc, issuerAddr, 1_000_000_000, 0)
+			insertAccountRoot(t, svc, ownerAddr, 1_000_000_000, 0)
+			id := keylet.MakeMPTID(7, issuer)
+			issuanceData, err := state.SerializeMPTokenIssuance(&state.MPTokenIssuanceData{
+				Issuer: issuer, Sequence: 7, OutstandingAmount: 80, TransferFee: 25_000,
+			})
+			require.NoError(t, err)
+			require.NoError(t, svc.openLedger.Insert(keylet.MPTIssuance(id), issuanceData))
+			holdingData, err := state.SerializeMPToken(&state.MPTokenData{
+				Account: owner, MPTokenIssuanceID: id, MPTAmount: 80,
+			})
+			require.NoError(t, err)
+			require.NoError(t, svc.openLedger.Insert(keylet.MPTokenByID(id, owner), holdingData))
+			idString := mptutil.EncodeID(id)
+			for i, amount := range []int64{test.first, 100} {
+				insertOffer(t, svc, ownerAddr, uint32(i+1), tx.NewXRPAmount(amount*1_000_000), state.NewMPTAmountWithIssuanceID(amount, issuerAddr, idString))
+			}
+			result, err := svc.GetBookOffers(context.Background(), state.NewMPTAmountWithIssuanceID(0, issuerAddr, idString), tx.NewXRPAmount(0), "", "", "current", 10, "", false)
+			require.NoError(t, err)
+			require.Len(t, result.Offers, 2)
+			require.Equal(t, "80", result.Offers[0].OwnerFunds)
+			require.Nil(t, result.Offers[0].TakerGetsFunded)
+			require.Empty(t, result.Offers[1].OwnerFunds)
+			require.Equal(t, map[string]string{"mpt_issuance_id": idString, "value": test.second}, result.Offers[1].TakerGetsFunded)
+		})
+	}
 }

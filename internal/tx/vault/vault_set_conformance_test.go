@@ -131,3 +131,54 @@ func TestVaultSetAssetsMaximumUsesRawValueForLimitThenCanonicalizes(t *testing.T
 		}
 	})
 }
+
+func TestVaultSetPreservesOptionalDataPresence(t *testing.T) {
+	var vaultID [32]byte
+	for i := range vaultID {
+		vaultID[i] = 1
+	}
+	vaultKey := keylet.VaultByID(vaultID)
+	rules := amendment.NewRules([][32]byte{amendment.FeatureSingleAssetVault})
+
+	for _, dataPresent := range []bool{false, true} {
+		name := "absent"
+		if dataPresent {
+			name = "present empty"
+		}
+		t.Run(name, func(t *testing.T) {
+			view := newMPTArmsView()
+			encoded, err := serializeVault(&vaultData{
+				Owner:            [20]byte{1},
+				Account:          [20]byte{2},
+				Sequence:         1,
+				ShareMPTID:       [24]byte{3},
+				Asset:            tx.Asset{Currency: "XRP"},
+				WithdrawalPolicy: VaultStrategyFirstComeFirstServe,
+				DataPresent:      dataPresent,
+			})
+			if err != nil {
+				t.Fatalf("serialize vault: %v", err)
+			}
+			view.data[vaultKey.Key] = encoded
+
+			maximum := "0.4"
+			set := NewVaultSet("rOwner", strings.ToUpper(hex.EncodeToString(vaultID[:])))
+			set.AssetsMaximum = &maximum
+			ctx := &tx.ApplyContext{View: view, Config: tx.EngineConfig{Rules: rules}}
+			if got := set.Apply(ctx); got != ter.TesSUCCESS {
+				t.Fatalf("Apply() = %v, want tesSUCCESS", got)
+			}
+
+			updated, err := readVault(view, vaultKey)
+			if err != nil {
+				t.Fatalf("read updated vault: %v", err)
+			}
+			if updated.DataPresent != dataPresent {
+				t.Fatalf("DataPresent = %v, want %v", updated.DataPresent, dataPresent)
+			}
+			if updated.Data != "" {
+				t.Fatalf("Data = %q, want empty", updated.Data)
+			}
+		})
+	}
+}

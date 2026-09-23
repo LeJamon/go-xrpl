@@ -64,6 +64,21 @@ func TestBinaryParser_ReadVariableLength(t *testing.T) {
 			input:  []byte{254, 0, 0},
 			output: 12481 + 13*65536,
 		},
+		{
+			name:   "pass - max encodable three-byte prefix",
+			input:  []byte{0xFE, 0xD4, 0x17},
+			output: 918744,
+		},
+		{
+			name:        "fail - three-byte prefix is above encoder maximum",
+			input:       []byte{0xFE, 0xD4, 0x18},
+			expectedErr: ErrVariableLengthTooLong,
+		},
+		{
+			name:        "fail - three-byte prefix reaches unencodable range",
+			input:       []byte{0xFE, 0xFF, 0xFF},
+			expectedErr: ErrVariableLengthTooLong,
+		},
 	}
 
 	for _, tc := range tt {
@@ -71,9 +86,10 @@ func TestBinaryParser_ReadVariableLength(t *testing.T) {
 			p := NewBinaryParser(tc.input, definitions.Get())
 			actual, err := p.ReadVariableLength()
 			if tc.expectedErr != nil {
-				require.Error(t, err)
+				require.ErrorIs(t, err, tc.expectedErr)
 				return
 			}
+			require.NoError(t, err)
 			require.Equal(t, tc.output, actual)
 		})
 	}

@@ -119,6 +119,30 @@ func TestPseudoAccountImplicitAuthorizationRequiresAmendment(t *testing.T) {
 	require.Equal(t, ter.TesSUCCESS, RequireAuth(view, id, pseudo, false))
 }
 
+func TestFixCleanup340ImplicitlyAuthorizesPseudoAccountIOU(t *testing.T) {
+	view := newMPTTestView()
+	var issuer, pseudo [20]byte
+	issuer[19] = 1
+	pseudo[19] = 2
+	issuerAddress := state.EncodeAccountIDSafe(issuer)
+	pseudoAddress := state.EncodeAccountIDSafe(pseudo)
+	putTestAccount(t, view, issuer, state.LsfRequireAuth, [32]byte{})
+	putTestAccount(t, view, pseudo, 0, [32]byte{1})
+	line, err := state.SerializeRippleState(&state.RippleState{
+		Balance:   state.NewIssuedAmountFromValue(0, state.MinExponent, "USD", issuerAddress),
+		LowLimit:  state.NewIssuedAmountFromValue(100, state.MinExponent, "USD", issuerAddress),
+		HighLimit: state.NewIssuedAmountFromValue(100, state.MinExponent, "USD", pseudoAddress),
+	})
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Line(pseudo, issuer, "USD"), line))
+	asset := tx.Asset{Currency: "USD", Issuer: issuerAddress}
+
+	view.rules = amendment.NewRules(nil)
+	require.Equal(t, ter.TecNO_AUTH, RequireAssetAuthAt(view, asset, pseudo, WeakAuth, 0))
+	view.rules = amendment.NewRules([][32]byte{amendment.FeatureFixCleanup3_4_0})
+	require.Equal(t, ter.TesSUCCESS, RequireAssetAuthAt(view, asset, pseudo, WeakAuth, 0))
+}
+
 func TestFixCleanup330AuthorizesPseudoAccountBeforeHoldingCheck(t *testing.T) {
 	view := newMPTTestView()
 	var issuer, pseudo [20]byte
@@ -746,4 +770,112 @@ func putTestVault(t *testing.T, view *mptTestView, vaultID [32]byte, owner, pseu
 	raw, err := hex.DecodeString(hexRaw)
 	require.NoError(t, err)
 	require.NoError(t, view.Insert(keylet.VaultByID(vaultID), raw))
+}
+
+func TestCanTransferLPTokenChecksBothMPTPoolAssets(t *testing.T) {
+	view := newMPTTestView()
+	var ammAccount, from, to, issuerOne, issuerTwo [20]byte
+	ammAccount[19] = 1
+	from[19] = 2
+	to[19] = 3
+	issuerOne[19] = 4
+	issuerTwo[19] = 5
+	ammID := [32]byte{9}
+	idOne := keylet.MakeMPTID(1, issuerOne)
+	idTwo := keylet.MakeMPTID(1, issuerTwo)
+
+	accountRaw, err := state.SerializeAccountRoot(&state.AccountRoot{
+		Account:  state.EncodeAccountIDSafe(ammAccount),
+		Balance:  1_000_000,
+		Sequence: 1,
+		AMMID:    ammID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Account(ammAccount), accountRaw))
+	putTestIssuance(t, view, idOne, entry.LsfMPTCanTransfer, nil)
+	putTestIssuance(t, view, idTwo, 0, nil)
+
+	ammHex, err := binarycodec.Encode(map[string]any{
+		"LedgerEntryType": "AMM",
+		"Account":         state.EncodeAccountIDSafe(ammAccount),
+		"LPTokenBalance": map[string]any{
+			"value": "1", "currency": "USD", "issuer": state.EncodeAccountIDSafe(ammAccount),
+		},
+		"Asset":     map[string]any{"mpt_issuance_id": EncodeID(idOne)},
+		"Asset2":    map[string]any{"mpt_issuance_id": EncodeID(idTwo)},
+		"OwnerNode": "0",
+		"Flags":     uint32(0),
+	})
+	require.NoError(t, err)
+	ammRaw, err := hex.DecodeString(ammHex)
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.AMMByID(ammID), ammRaw))
+
+	require.Equal(t, ter.TecNO_AUTH, CanTransferLPToken(view, from, to, ammAccount))
+	putTestIssuance(t, view, idTwo, entry.LsfMPTCanTransfer, nil)
+	require.Equal(t, ter.TesSUCCESS, CanTransferLPToken(view, from, to, ammAccount))
+
+	var ordinaryIssuer [20]byte
+	ordinaryIssuer[19] = 8
+	ordinaryRaw, err := state.SerializeAccountRoot(&state.AccountRoot{
+		Account: state.EncodeAccountIDSafe(ordinaryIssuer), Balance: 1_000_000, Sequence: 1,
+	})
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Account(ordinaryIssuer), ordinaryRaw))
+	require.Equal(t, ter.TesSUCCESS, CanTransferLPToken(view, from, to, ordinaryIssuer))
+}
+
+func TestCanTransferLPTokenBoundsReferenceHoldingCycles(t *testing.T) {
+	view := newMPTTestView()
+	view.rules = amendment.NewRulesBuilder().
+		Enable(amendment.FeatureMPTokensV2).
+		Enable(amendment.FeatureFixCleanup3_2_0).
+		Build()
+
+	var ammAccount, from, to, issuerOne, issuerTwo, vaultPseudo [20]byte
+	ammAccount[19] = 1
+	from[19] = 2
+	to[19] = 3
+	issuerOne[19] = 4
+	issuerTwo[19] = 5
+	vaultPseudo[19] = 6
+	ammID := [32]byte{9}
+	idOne := keylet.MakeMPTID(1, issuerOne)
+	idTwo := keylet.MakeMPTID(1, issuerTwo)
+
+	accountRaw, err := state.SerializeAccountRoot(&state.AccountRoot{
+		Account:  state.EncodeAccountIDSafe(ammAccount),
+		Balance:  1_000_000,
+		Sequence: 1,
+		AMMID:    ammID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Account(ammAccount), accountRaw))
+
+	firstReference := keylet.MPTokenByID(idTwo, vaultPseudo)
+	secondReference := keylet.MPTokenByID(idOne, vaultPseudo)
+	firstReferenceHex := strings.ToUpper(hex.EncodeToString(firstReference.Key[:]))
+	secondReferenceHex := strings.ToUpper(hex.EncodeToString(secondReference.Key[:]))
+	putTestIssuance(t, view, idOne, entry.LsfMPTCanTransfer, &firstReferenceHex)
+	putTestIssuance(t, view, idTwo, entry.LsfMPTCanTransfer, &secondReferenceHex)
+	putTestHolding(t, view, idOne, vaultPseudo, 0)
+	putTestHolding(t, view, idTwo, vaultPseudo, 0)
+
+	ammHex, err := binarycodec.Encode(map[string]any{
+		"LedgerEntryType": "AMM",
+		"Account":         state.EncodeAccountIDSafe(ammAccount),
+		"LPTokenBalance": map[string]any{
+			"value": "1", "currency": "USD", "issuer": state.EncodeAccountIDSafe(ammAccount),
+		},
+		"Asset":     map[string]any{"mpt_issuance_id": EncodeID(idOne)},
+		"Asset2":    map[string]any{"currency": "USD", "issuer": state.EncodeAccountIDSafe(issuerOne)},
+		"OwnerNode": "0",
+		"Flags":     uint32(0),
+	})
+	require.NoError(t, err)
+	ammRaw, err := hex.DecodeString(ammHex)
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.AMMByID(ammID), ammRaw))
+
+	require.Equal(t, ter.TecINTERNAL, CanTransferLPToken(view, from, to, ammAccount))
 }

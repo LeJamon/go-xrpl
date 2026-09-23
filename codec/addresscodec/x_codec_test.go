@@ -1,12 +1,47 @@
 package addresscodec
 
 import (
+	"bytes"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestIsValidXAddressEncodedLength(t *testing.T) {
+	zero, max := uint32(0), uint32(math.MaxUint32)
+	for _, network := range []Network{Mainnet, Testnet} {
+		prefix := mainnetXAddressPrefix
+		if network == Testnet {
+			prefix = testnetXAddressPrefix
+		}
+		for _, fill := range []byte{0, 0xFF} {
+			raw := bytes.Repeat([]byte{fill}, XAddressLength)
+			copy(raw, prefix)
+			require.Len(t, EncodeBase58(raw), 47)
+			for _, tag := range []*uint32{nil, &zero, &max} {
+				encoded, err := EncodeXAddress(bytes.Repeat([]byte{fill}, AccountAddressLength), tag, network)
+				require.NoError(t, err)
+				require.Len(t, encoded, 47)
+				require.True(t, IsValidXAddress(encoded))
+				require.False(t, IsValidXAddress(encoded[:46]))
+				require.False(t, IsValidXAddress("r"+encoded))
+			}
+		}
+	}
+}
+
+func TestIsValidXAddressRejectsOversizedInputWithoutDecoding(t *testing.T) {
+	input := strings.Repeat("A5", 4096)
+	var valid bool
+	allocations := testing.AllocsPerRun(10, func() {
+		valid = IsValidXAddress(input)
+	})
+	require.False(t, valid)
+	require.Zero(t, allocations)
+}
 
 func TestIsValidXAddress(t *testing.T) {
 	testcases := []struct {

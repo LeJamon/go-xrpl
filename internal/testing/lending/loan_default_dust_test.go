@@ -75,10 +75,11 @@ func TestLoanManageDefaultReconcilesIOUDust(t *testing.T) {
 	loanSet.Counterparty = lender.Address
 	loanSet.GetCommon().Fee = "20"
 	loanSet.GetCommon().SigningPubKey = strings.ToUpper(borrower.PublicKeyHex())
-	signature, err := txsign.SignCounterparty(
+	signature, err := txsign.SignCounterpartyWithRules(
 		loanSet,
 		strings.ToUpper(lender.PublicKeyHex()),
 		"00"+strings.ToUpper(lender.PrivateKeyHex()),
+		env.Rules(),
 	)
 	if err != nil {
 		t.Fatalf("sign LoanSet: %v", err)

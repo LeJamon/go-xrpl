@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/pierrec/lz4"
+	"github.com/pierrec/lz4/v4"
 )
 
 // MinCompressibleSize is the compression size threshold: payloads at or
@@ -73,7 +73,6 @@ func ShouldCompress(msgType MessageType) bool {
 		TypeGetLedger,
 		TypeLedgerData,
 		TypeGetObjects,
-		TypeValidatorList,
 		TypeValidatorListCollection,
 		TypeReplayDeltaResponse,
 		TypeTransactions:

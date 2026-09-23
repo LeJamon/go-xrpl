@@ -421,3 +421,35 @@ func TestSubmitMultisigned_ValidationOrder_TxnSignatureBeforeFee(t *testing.T) {
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, rpcerrors.RpcSIGNING_MALFORMED, rpcErr.Code)
 }
+
+func TestSubmitMultisignedSignatureTargetPresence(t *testing.T) {
+	for _, target := range []any{"CounterpartySignature", "SponsorSignature", "", nil, true, 123, map[string]any{}} {
+		targetJSON, err := json.Marshal(target)
+		require.NoError(t, err)
+		t.Run(string(targetJSON), func(t *testing.T) {
+			txJSON := validMultisignedTxJSON()
+			txJSON["SigningPubKey"] = "0379F17CFA0FFD7518181594BE69FE9A10C2089E0FF0C4AE1DEF230657210000ED"
+			txJSON["TxnSignature"] = "00"
+			request := map[string]any{"tx_json": txJSON}
+			handler := &handlers.SubmitMultisignedMethod{}
+			ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: newSubmitTestServices(newMockLedgerServiceSubmit())}
+			check := func(want string) {
+				t.Helper()
+				params, err := json.Marshal(request)
+				require.NoError(t, err)
+				response, rpcErr := handler.Handle(ctx, params)
+				require.Nil(t, response)
+				require.NotNil(t, rpcErr)
+				require.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+				require.Equal(t, want, rpcErr.Message)
+			}
+			check("When multi-signing 'tx_json.SigningPubKey' must be empty.")
+			request["signature_target"] = target
+			check("Invalid  SigningPubKey field.  Field must be empty when multi-signing.")
+			delete(txJSON, "Fee")
+			check("Missing field 'tx_json.Fee'.")
+			delete(txJSON, "TransactionType")
+			check("Missing field 'tx_json.TransactionType'.")
+		})
+	}
+}

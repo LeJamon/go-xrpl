@@ -421,7 +421,6 @@ func isConsensusPriorityMessageType(msgType message.MessageType) bool {
 	switch msgType {
 	case message.TypeProposeLedger,
 		message.TypeValidation,
-		message.TypeValidatorList,
 		message.TypeValidatorListCollection:
 		return true
 	default:
@@ -1939,12 +1938,14 @@ func chargeForReason(reason string) resource.Charge {
 		return resource.FeeInvalidData()
 	case "endpoints-too-large",
 		"cluster-no-pubkey",
-		"cluster-not-member":
+		"cluster-not-member",
+		"validation-not-current":
 		return resource.FeeUselessData()
 	case "manifests-oversize":
 		return resource.FeeModerateBurdenPeer()
 	case "proposal-malformed-prev-ledger-size",
 		"proposal-malformed-txset-size",
+		"get-ledger-sequence-mismatch",
 		"validation-malformed-ledger-hash-zero",
 		"validation-malformed-node-id-zero",
 		"handshake-malformed-networkid",
@@ -1964,6 +1965,7 @@ func chargeForReason(reason string) resource.Charge {
 		"get-objects-transactions-oversize",
 		"get-objects-ledgerhash",
 		"have-transactions-unnegotiated",
+		"transactions-batch-too-large",
 		"have-transactions-hashsize",
 		"transactions-batch-unnegotiated",
 		"have-set-hashsize",
@@ -2002,6 +2004,8 @@ func wirePreflightChargeReason(err error) string {
 			return "endpoints-too-large"
 		case message.WireLimitGetObjectTransactions:
 			return "get-objects-transactions-oversize"
+		case message.WireLimitTransactions:
+			return "transactions-batch-too-large"
 		case message.WireLimitValidatorBlobs:
 			return "vl-coll-heavy-too-many-blobs"
 		}

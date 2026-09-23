@@ -25,6 +25,27 @@ func TestCache_MissThenHit(t *testing.T) {
 	}
 }
 
+func TestCache_RoleNamespacesAreIndependent(t *testing.T) {
+	c := NewCache(16, time.Hour, nil)
+	id := id(3)
+
+	c.AddWithRules(id, true)
+	if !c.HasWithRules(id, true) {
+		t.Fatal("legacy-role entry must hit in its own namespace")
+	}
+	if c.HasWithRules(id, false) {
+		t.Fatal("legacy-role entry must not hit in the normal namespace")
+	}
+
+	c.AddWithRules(id, false)
+	if !c.HasWithRules(id, false) {
+		t.Fatal("normal entry must hit in its own namespace")
+	}
+	if !c.HasWithRules(id, true) {
+		t.Fatal("adding the normal entry must not evict the legacy-role entry")
+	}
+}
+
 // A verdict survives one size-driven rotation (moves to prev), evicted after two.
 func TestCache_SizeRotationEviction(t *testing.T) {
 	c := NewCache(4, time.Hour, nil)

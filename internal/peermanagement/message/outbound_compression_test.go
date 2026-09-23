@@ -73,7 +73,6 @@ func TestShouldCompressMatchesRippledMessageTypes(t *testing.T) {
 		TypeGetLedger,
 		TypeLedgerData,
 		TypeGetObjects,
-		TypeValidatorList,
 		TypeValidatorListCollection,
 		TypeReplayDeltaResponse,
 		TypeTransactions,

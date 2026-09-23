@@ -6,7 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
@@ -16,6 +19,36 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/stretchr/testify/require"
 )
+
+func newPinnedAMMTestEnv(t *testing.T) *amm.AMMTestEnv {
+	t.Helper()
+
+	cfg := genesis.DefaultConfig()
+	cfg.Fees.ReserveBase = drops.DropsPerXRP * 200
+	cfg.Fees.ReserveIncrement = drops.DropsPerXRP * 50
+	// These metadata vectors include the retired amendment in their genesis
+	// ledger. It is still active unconditionally; pinning it here preserves the
+	// historical parent hash used to derive the AMM pseudo-account address.
+	cfg.Amendments = append(cfg.Amendments, amendment.FeatureFixAMMOverflowOffer)
+
+	testEnv := jtx.NewTestEnvWithConfig(t, cfg)
+	gw := jtx.NewAccount("gw")
+	alice := jtx.NewAccount("alice")
+	carol := jtx.NewAccount("carol")
+	bob := jtx.NewAccount("bob")
+	return &amm.AMMTestEnv{
+		TestEnv: testEnv,
+		T:       t,
+		GW:      gw,
+		Alice:   alice,
+		Carol:   carol,
+		Bob:     bob,
+		USD:     tx.Asset{Currency: "USD", Issuer: gw.Address},
+		EUR:     tx.Asset{Currency: "EUR", Issuer: gw.Address},
+		BTC:     tx.Asset{Currency: "BTC", Issuer: gw.Address},
+		GBP:     tx.Asset{Currency: "GBP", Issuer: gw.Address},
+	}
+}
 
 func accountRootMetadataNode(meta *tx.Metadata, accountID [20]byte) *tx.AffectedNode {
 	key := keylet.Account(accountID).Key
@@ -30,7 +63,7 @@ func accountRootMetadataNode(meta *tx.Metadata, accountID [20]byte) *tx.Affected
 }
 
 func TestAMMClawbackIOUPoolEmitsBareThreadedAMMAccount(t *testing.T) {
-	env := amm.NewAMMTestEnv(t)
+	env := newPinnedAMMTestEnv(t)
 	gw2 := jtx.NewAccount("gw2")
 	env.EnableOpenLedgerReplay()
 	env.FundAmount(env.GW, uint64(jtx.XRP(1_000_000)))

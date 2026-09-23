@@ -17,7 +17,6 @@ import (
 	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/rpc/txprojection"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
-	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -433,9 +432,6 @@ type ledgerOwnerFundsAnnotator struct {
 }
 
 func (a *ledgerOwnerFundsAnnotator) annotate(txEntry, txJSON map[string]any) (bool, error) {
-	if ledgerOwnerFundsUnsupportedMPT(txJSON) {
-		return false, nil
-	}
 	applicable, needsReserves := TransactionOwnerFundsRequirements(txJSON)
 	if !applicable {
 		return true, nil
@@ -470,10 +466,6 @@ func annotateOwnerFunds(
 	view types.LedgerStateView,
 	reserveBase, reserveInc uint64,
 ) (bool, error) {
-	if ledgerOwnerFundsUnsupportedMPT(txJSON) {
-		return false, nil
-	}
-
 	funds, ok, err := TransactionOwnerFunds(txJSON, view, reserveBase, reserveInc)
 	if err != nil {
 		return false, err
@@ -482,31 +474,6 @@ func annotateOwnerFunds(
 		txEntry["owner_funds"] = funds
 	}
 	return true, nil
-}
-
-func ledgerOwnerFundsUnsupportedMPT(txJSON map[string]any) bool {
-	// Released rippled 3.2.0 stops expanded transaction enumeration when
-	// owner_funds reaches a non-issuer MPT offer.
-	if txJSON["TransactionType"] != "OfferCreate" {
-		return false
-	}
-	amount, ok := parseTransactionAmount(txJSON["TakerGets"])
-	if !ok || !amount.IsMPT() {
-		return false
-	}
-	account, _ := txJSON["Account"].(string)
-	_, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
-	if err != nil || len(accountBytes) != 20 {
-		return false
-	}
-	issuanceID, err := mptutil.DecodeID(amount.MPTIssuanceID())
-	if err != nil {
-		return false
-	}
-	var accountID [20]byte
-	copy(accountID[:], accountBytes)
-	issuerID := mptutil.Issuer(issuanceID)
-	return accountID != issuerID
 }
 
 // dumpAccountState walks the full state tree and returns the accountState
@@ -746,28 +713,21 @@ func expandStoredTransaction(
 		return txEntry, nil
 	}
 
+	if storedTx.Meta != nil {
+		InjectSyntheticFields(storedTx.TxJSON, storedTx.Meta, ctx)
+	}
+
 	if apiVersion > 1 {
 		txEntry["tx_json"] = txprojection.ProjectJSON(storedTx.TxJSON, "", apiVersion)
 		txEntry["hash"] = hashStr
 		if storedTx.Meta != nil {
-			injectExpandedLedgerDeliveredAmount(storedTx.TxJSON, storedTx.Meta, ctx)
-			injectMPTokenIssuanceID(storedTx.TxJSON, storedTx.Meta)
 			txEntry["meta"] = storedTx.Meta
 		}
 	} else {
 		maps.Copy(txEntry, txprojection.ProjectJSON(storedTx.TxJSON, hashStr, apiVersion))
 		if storedTx.Meta != nil {
-			injectExpandedLedgerDeliveredAmount(storedTx.TxJSON, storedTx.Meta, ctx)
-			injectMPTokenIssuanceID(storedTx.TxJSON, storedTx.Meta)
 			txEntry["metaData"] = storedTx.Meta
 		}
 	}
 	return txEntry, nil
-}
-
-func injectExpandedLedgerDeliveredAmount(txJSON, meta map[string]any, ctx SyntheticMetadataContext) {
-	txType, _ := txJSON["TransactionType"].(string)
-	if txType == "Payment" || txType == "CheckCash" {
-		InjectDeliveredAmount(txJSON, meta, ctx)
-	}
 }

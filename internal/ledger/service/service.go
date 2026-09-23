@@ -39,6 +39,35 @@ var (
 	ErrInvalidLocalTransaction = errors.New("transaction failed local checks")
 )
 
+// SignatureVerificationError retains the immutable rules snapshot used by an
+// ingress signature check so callers can scope any admission memo to that
+// snapshot.
+type SignatureVerificationError struct {
+	Rules *amendment.Rules
+	Err   error
+}
+
+func (e *SignatureVerificationError) Error() string {
+	if e == nil || e.Err == nil {
+		return "signature verification failed"
+	}
+	return e.Err.Error()
+}
+
+func (e *SignatureVerificationError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func signatureVerificationError(err error, rules *amendment.Rules) error {
+	if err == nil {
+		return nil
+	}
+	return &SignatureVerificationError{Rules: rules, Err: err}
+}
+
 // Config holds configuration for the LedgerService
 type Config struct {
 	Standalone bool
@@ -61,7 +90,7 @@ type Config struct {
 	NetworkID uint32
 
 	GenesisConfig genesis.Config
-	// ConfiguredFees seeds fields absent from a persisted FeeSettings entry.
+	// ConfiguredFees supplies the signing fallback and seeds absent FeeSettings fields.
 	ConfiguredFees *drops.Fees
 
 	// NodeStore is the persistent storage for ledger nodes (optional, nil for in-memory only)
@@ -737,6 +766,13 @@ func (c *closedLedgerCtx) GetLedgerSequence() uint32 {
 	return c.ledger.Sequence()
 }
 
+func (c *closedLedgerCtx) GetTransactionCount() uint32 {
+	if c.ledger == nil {
+		return 0
+	}
+	return c.ledger.TxCount()
+}
+
 func (c *closedLedgerCtx) feeConfig() tx.EngineConfig {
 	return tx.EngineConfig{
 		BaseFee:          c.baseFee,
@@ -772,7 +808,10 @@ func (c *closedLedgerCtx) GetTransactionFeeLevels() []txq.FeeLevel {
 		if err != nil {
 			return true
 		}
-		baseFee := sign.CalculateBaseFee(parsed, c.ledger, config)
+		baseFee, err := sign.CalculateBaseFee(parsed, c.ledger, config)
+		if err != nil {
+			return true
+		}
 		defaultBaseFee := sign.CalculateDefaultBaseFee(parsed, config)
 		levels = append(levels, txq.ToFeeLevelWithDefaultBaseFee(fee, baseFee, defaultBaseFee))
 		return true
@@ -1071,18 +1110,20 @@ func (s *Service) SubmitOpenLedgerTxDetailed(blob []byte, local bool) (openledge
 			txengine.ErrInvalidSignature,
 		)
 	}
+	initialRules := cfg.Rules
+	initialSignatureCheck := !cfg.SkipSignatureVerification
+	var signatureErr error
+	localReason := tx.TransactionLocalChecksFailureReason(ptx.Parsed)
 	// Verify the signature off the open-ledger apply mutex so the dominant
 	// per-tx cost runs concurrently across ingress workers instead of serialising
 	// under modifyMu; the in-strand check then reuses the cached verdict (#1105).
-	if !cfg.SkipSignatureVerification {
-		if err := txengine.PrewarmSignature(ptx.Parsed); err != nil {
-			return failure, err
-		}
+	if initialSignatureCheck {
+		signatureErr = signatureVerificationError(
+			txengine.PrewarmSignatureWithRules(ptx.Parsed, initialRules), initialRules)
 	}
-	if reason := tx.TransactionLocalChecksFailureReason(ptx.Parsed); reason != "" {
-		return failure, fmt.Errorf("%w: %s", ErrInvalidLocalTransaction, reason)
+	if signatureErr == nil && localReason == "" {
+		s.prefetchIngressState(ptx)
 	}
-	s.prefetchIngressState(ptx)
 
 	if err := s.lockOpenLedgerIfRunning(openLedgerIngress); err != nil {
 		return failure, err
@@ -1100,6 +1141,21 @@ func (s *Service) SubmitOpenLedgerTxDetailed(blob []byte, local bool) (openledge
 	s.mu.RUnlock()
 	if cfgErr != nil {
 		return failure, cfgErr
+	}
+	// The open-ledger view can advance while the off-strand verification runs.
+	// Recheck with the final published snapshot whenever its rules or bypass
+	// policy changed, so a stale verdict cannot decide this submission.
+	if cfg.SkipSignatureVerification {
+		signatureErr = nil
+	} else if !initialSignatureCheck || cfg.Rules != initialRules {
+		signatureErr = signatureVerificationError(
+			txengine.PrewarmSignatureWithRules(ptx.Parsed, cfg.Rules), cfg.Rules)
+	}
+	if signatureErr != nil {
+		return failure, signatureErr
+	}
+	if localReason != "" {
+		return failure, fmt.Errorf("%w: %s", ErrInvalidLocalTransaction, localReason)
 	}
 	outcome := openLedgerView.SubmitDetailed(ptx, cfg, txQueue)
 	if outcome.Class == openledger.ResultSuccess {
@@ -1150,7 +1206,7 @@ func (s *Service) PrewarmSignaturesContext(ctx context.Context, blobs [][]byte) 
 						return
 					}
 					if ptx, err := openledger.ParsePendingTx(blob); err == nil {
-						txengine.PrewarmSignature(ptx.Parsed)
+						txengine.PrewarmSignatureWithRules(ptx.Parsed, cfg.Rules)
 					}
 				}
 			}

@@ -16,7 +16,7 @@ func TestSchemaProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const expected = "f920a631f343959b5a582e7089d06c678001d2c5a5ccd07acc6c7d2a994ddbcf"
+	const expected = "934f2cd4d66fad12165f5f695b3fe719ccd044d2287cc1203dcb99aac357eccf"
 	if actual := fmt.Sprintf("%x", sha256.Sum256(schema)); actual != expected {
 		t.Fatalf("xrpl.proto SHA256 = %s, want %s", actual, expected)
 	}
@@ -42,8 +42,8 @@ func TestSchemaDescriptorShape(t *testing.T) {
 	}
 
 	messages, required, optional, repeated := descriptorCounts(file.Messages())
-	if messages != 30 || required != 48 || optional != 41 || repeated != 14 {
-		t.Fatalf("descriptor counts = messages:%d required:%d optional:%d repeated:%d, want 30/48/41/14", messages, required, optional, repeated)
+	if messages != 29 || required != 44 || optional != 43 || repeated != 14 {
+		t.Fatalf("descriptor counts = messages:%d required:%d optional:%d repeated:%d, want 29/44/43/14", messages, required, optional, repeated)
 	}
 
 	endpoints := file.Messages().ByName("TMEndpoints")
@@ -60,6 +60,13 @@ func TestSchemaDescriptorShape(t *testing.T) {
 	}
 	if file.Messages().ByName("TMLink") == nil {
 		t.Fatal("TMLink descriptor is missing")
+	}
+	messageTypes := file.Enums().ByName("MessageType")
+	if messageTypes == nil || messageTypes.Values().ByName("mtVALIDATOR_LIST") != nil {
+		t.Fatal("legacy mtVALIDATOR_LIST must be removed")
+	}
+	if !messageTypes.ReservedRanges().Has(54) {
+		t.Fatal("removed validator-list message type 54 must remain reserved")
 	}
 }
 
@@ -94,7 +101,7 @@ func TestSchemaEnums(t *testing.T) {
 		fullName   protoreflect.FullName
 		values     map[protoreflect.Name]protoreflect.EnumNumber
 	}{
-		{file.Enums().ByName("MessageType"), "protocol.MessageType", map[protoreflect.Name]protoreflect.EnumNumber{"mtMANIFESTS": 2, "mtPING": 3, "mtCLUSTER": 5, "mtENDPOINTS": 15, "mtTRANSACTION": 30, "mtGET_LEDGER": 31, "mtLEDGER_DATA": 32, "mtPROPOSE_LEDGER": 33, "mtSTATUS_CHANGE": 34, "mtHAVE_SET": 35, "mtVALIDATION": 41, "mtGET_OBJECTS": 42, "mtVALIDATOR_LIST": 54, "mtSQUELCH": 55, "mtVALIDATOR_LIST_COLLECTION": 56, "mtPROOF_PATH_REQ": 57, "mtPROOF_PATH_RESPONSE": 58, "mtREPLAY_DELTA_REQ": 59, "mtREPLAY_DELTA_RESPONSE": 60, "mtHAVE_TRANSACTIONS": 63, "mtTRANSACTIONS": 64}},
+		{file.Enums().ByName("MessageType"), "protocol.MessageType", map[protoreflect.Name]protoreflect.EnumNumber{"mtMANIFESTS": 2, "mtPING": 3, "mtCLUSTER": 5, "mtENDPOINTS": 15, "mtTRANSACTION": 30, "mtGET_LEDGER": 31, "mtLEDGER_DATA": 32, "mtPROPOSE_LEDGER": 33, "mtSTATUS_CHANGE": 34, "mtHAVE_SET": 35, "mtVALIDATION": 41, "mtGET_OBJECTS": 42, "mtSQUELCH": 55, "mtVALIDATOR_LIST_COLLECTION": 56, "mtPROOF_PATH_REQ": 57, "mtPROOF_PATH_RESPONSE": 58, "mtREPLAY_DELTA_REQ": 59, "mtREPLAY_DELTA_RESPONSE": 60, "mtHAVE_TRANSACTIONS": 63, "mtTRANSACTIONS": 64}},
 		{file.Enums().ByName("TransactionStatus"), "protocol.TransactionStatus", map[protoreflect.Name]protoreflect.EnumNumber{"tsNEW": 1, "tsCURRENT": 2, "tsCOMMITTED": 3, "tsREJECT_CONFLICT": 4, "tsREJECT_INVALID": 5, "tsREJECT_FUNDS": 6, "tsHELD_SEQ": 7, "tsHELD_LEDGER": 8}},
 		{file.Enums().ByName("NodeStatus"), "protocol.NodeStatus", map[protoreflect.Name]protoreflect.EnumNumber{"nsCONNECTING": 1, "nsCONNECTED": 2, "nsMONITORING": 3, "nsVALIDATING": 4, "nsSHUTTING": 5}},
 		{file.Enums().ByName("NodeEvent"), "protocol.NodeEvent", map[protoreflect.Name]protoreflect.EnumNumber{"neCLOSING_LEDGER": 1, "neACCEPTED_LEDGER": 2, "neSWITCHED_LEDGER": 3, "neLOST_SYNC": 4}},

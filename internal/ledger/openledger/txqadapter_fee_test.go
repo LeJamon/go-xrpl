@@ -10,14 +10,16 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
+	"github.com/stretchr/testify/require"
 )
 
 type panicBaseFeeTransaction struct {
 	tx.BaseTx
 }
 
-func (p *panicBaseFeeTransaction) CalculateBaseFee(tx.LedgerView, tx.EngineConfig) uint64 {
+func (p *panicBaseFeeTransaction) CalculateBaseFee(tx.LedgerView, tx.EngineConfig) (uint64, error) {
 	panic("fee calculation failed")
 }
 
@@ -26,20 +28,22 @@ func TestTxqAdapterGetBaseFeeDispatchesTransactionType(t *testing.T) {
 
 	loanSet := lending.NewLoanSet("rAccount", strings.Repeat("1", 64), "1")
 	loanSet.GetCommon().CounterpartySignature = &tx.CounterpartySignature{TxnSignature: "AA"}
-	if got := adapter.GetBaseFee(loanSet); got != 20 {
+	if got, err := adapter.GetBaseFee(loanSet); got != 20 || err != nil {
 		t.Fatalf("LoanSet base fee = %d, want 20", got)
 	}
 
 	multisigned := payment.NewPayment("rAccount", "rDestination", tx.NewXRPAmount(1))
 	multisigned.GetCommon().Signers = make([]tx.SignerWrapper, 2)
-	if got := adapter.GetBaseFee(multisigned); got != 30 {
+	if got, err := adapter.GetBaseFee(multisigned); got != 30 || err != nil {
 		t.Fatalf("multisigned base fee = %d, want 30", got)
 	}
 
 	panicking := &panicBaseFeeTransaction{BaseTx: *tx.NewBaseTx(tx.TypePayment, "rAccount")}
-	if got := adapter.GetBaseFee(panicking); got != 10 {
-		t.Fatalf("panicking calculator fallback = %d, want 10", got)
-	}
+	fee, err := adapter.GetBaseFee(panicking)
+	require.Zero(t, fee)
+	var result *ter.ResultError
+	require.ErrorAs(t, err, &result)
+	require.Equal(t, ter.TefEXCEPTION, result.Code)
 }
 
 func TestTxqAdapterGetBaseFeeWaivesEligibleSetRegularKey(t *testing.T) {
@@ -64,7 +68,8 @@ func TestTxqAdapterGetBaseFeeWaivesEligibleSetRegularKey(t *testing.T) {
 		Rules:                     amendment.AllSupportedRules(),
 		SkipSignatureVerification: true,
 	})
-	baseFee, defaultBaseFee := adapter.GetBaseFees(setRegularKey)
+	baseFee, defaultBaseFee, err := adapter.GetBaseFees(setRegularKey)
+	require.NoError(t, err)
 	if baseFee != 0 || defaultBaseFee != 10 {
 		t.Fatalf("eligible SetRegularKey fees = (%d, %d), want (0, 10)", baseFee, defaultBaseFee)
 	}
@@ -76,7 +81,7 @@ func TestTxqAdapterGetBaseFeeWaivesEligibleSetRegularKey(t *testing.T) {
 	innerFlags := tx.TfInnerBatchTxn
 	inner.GetCommon().Flags = &innerFlags
 	inner.GetCommon().SigningPubKey = ""
-	if got := adapter.GetBaseFee(inner); got != 10 {
+	if got, err := adapter.GetBaseFee(inner); got != 10 || err != nil {
 		t.Fatalf("inner SetRegularKey base fee = %d, want 10", got)
 	}
 }

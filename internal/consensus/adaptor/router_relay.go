@@ -3,6 +3,7 @@ package adaptor
 import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 )
 
 // maybeRelayGetLedger forwards an unsatisfiable GetLedger to a peer that
@@ -73,9 +74,25 @@ func (r *Router) maybeRelayGetLedger(from peermanagement.PeerID, req *message.Ge
 // so the requester consumes the reply locally rather than re-relaying it.
 // Mirrors rippled onMessage(TMLedgerData)'s findPeerByShortID branch: an
 // unroutable cookie (the requester has since disconnected) is dropped.
-func (r *Router) routeRelayedLedgerData(ld *message.LedgerData, from peermanagement.PeerID) {
+func (r *Router) routeRelayedLedgerData(
+	ld *message.LedgerData,
+	from peermanagement.PeerID,
+	owner *peermanagement.InboundMessage,
+) {
 	target := uint64(ld.RequestCookie)
+	if r.peerSessions != nil &&
+		!r.peerSessions.IsPeerConnected(peermanagement.PeerID(target)) {
+		return
+	}
 	out := *ld
+	var err error
+	out.Nodes, err = relayLedgerNodes(ld, r.serve.PeerSupportsNodeDepth(target))
+	if err != nil {
+		if !owner.SelectPeerCharge(resource.FeeInvalidData(), "ledger-data-node") {
+			r.serve.IncPeerBadData(uint64(from), "ledger-data-node")
+		}
+		return
+	}
 	out.RequestCookie = 0
 	out.RequestCookieSet = false
 	frame, err := message.EncodeFrame(&out)

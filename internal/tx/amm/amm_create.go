@@ -92,8 +92,8 @@ func (a *AMMCreate) Flatten() (map[string]any, error) {
 // CalculateBaseFee returns the minimum fee for AMMCreate transactions.
 // AMMCreate requires one owner reserve as the fee (not the standard base fee).
 // Reference: rippled AMMCreate.cpp calculateBaseFee — returns view.fees().increment
-func (a *AMMCreate) CalculateBaseFee(_ tx.LedgerView, config tx.EngineConfig) uint64 {
-	return config.ReserveIncrement
+func (a *AMMCreate) CalculateBaseFee(_ tx.LedgerView, config tx.EngineConfig) (uint64, error) {
+	return config.ReserveIncrement, nil
 }
 
 func (a *AMMCreate) RequiredAmendments() [][32]byte {

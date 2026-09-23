@@ -292,6 +292,17 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
+	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && amm.TradingFee == 0 {
+		floor := math.div(
+			math.fromAmount(lptAMMBalance).MulRounded(getFee(math, 1), state.RoundToNearest),
+			math.int(auctionSlotMinFeeFraction),
+			state.RoundToNearest,
+		)
+		if computedPrice.Cmp(floor) < 0 {
+			computedPrice = floor
+		}
+	}
+
 	payPrice := computedPrice
 	hasBidMin := !bidMin.IsZero()
 	hasBidMax := !bidMax.IsZero()

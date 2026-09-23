@@ -329,6 +329,8 @@ type Validation struct {
 	// Used by the validation archive to persist the canonical blob
 	// without a parse → re-serialize round-trip.
 	Raw []byte
+
+	signatureCheck *signatureCheckState
 }
 
 // SetLoadFee records sfLoadFee as present, including when fee is zero.

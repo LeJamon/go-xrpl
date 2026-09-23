@@ -702,38 +702,6 @@ func TestProposeSetRoundtrip(t *testing.T) {
 	}
 }
 
-func TestValidatorListRoundtrip(t *testing.T) {
-	original := &ValidatorList{
-		Manifest:  bytes.Repeat([]byte{0xAA}, 100),
-		Blob:      bytes.Repeat([]byte{0xBB}, 500),
-		Signature: bytes.Repeat([]byte{0xCC}, 64),
-		Version:   1,
-	}
-
-	encoded, err := Encode(original)
-	if err != nil {
-		t.Fatalf("Encode error: %v", err)
-	}
-	msg, err := Decode(TypeValidatorList, encoded)
-	if err != nil {
-		t.Fatalf("Decode error: %v", err)
-	}
-	decoded := msg.(*ValidatorList)
-
-	if !bytes.Equal(decoded.Manifest, original.Manifest) {
-		t.Error("Manifest mismatch")
-	}
-	if !bytes.Equal(decoded.Blob, original.Blob) {
-		t.Error("Blob mismatch")
-	}
-	if !bytes.Equal(decoded.Signature, original.Signature) {
-		t.Error("Signature mismatch")
-	}
-	if decoded.Version != original.Version {
-		t.Errorf("Version = %d, want %d", decoded.Version, original.Version)
-	}
-}
-
 func TestGenericEncodeDecode(t *testing.T) {
 	messages := []Message{
 		&Ping{PType: PingTypePing, Seq: 1},

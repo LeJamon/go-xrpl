@@ -19,11 +19,19 @@ func TestChargeForReasonHaveSetDuplicate(t *testing.T) {
 	assert.Equal(t, resource.FeeUselessData(), charge)
 }
 
+func TestChargeForReasonValidationNotCurrent(t *testing.T) {
+	charge := chargeForReason("validation-not-current")
+
+	assert.Equal(t, resource.FeeUselessData(), charge)
+	assert.Equal(t, 150, charge.Cost())
+}
+
 func TestChargeForReasonProtocolTiers(t *testing.T) {
 	tests := map[string]resource.Charge{
 		"cluster-no-pubkey":               resource.FeeUselessData(),
 		"cluster-not-member":              resource.FeeUselessData(),
 		"get-objects-txn-unnegotiated":    resource.FeeMalformedRequest(),
+		"get-ledger-sequence-mismatch":    resource.FeeMalformedRequest(),
 		"have-transactions-unnegotiated":  resource.FeeMalformedRequest(),
 		"have-transactions-hashsize":      resource.FeeMalformedRequest(),
 		"transactions-batch-unnegotiated": resource.FeeMalformedRequest(),

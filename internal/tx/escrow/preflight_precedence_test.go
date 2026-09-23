@@ -88,7 +88,7 @@ func TestEscrowFinish_PreflightPrecedence(t *testing.T) {
 		CredentialIDs: []string{"AB", "AB"},
 	}
 	require.NoError(t, valid.Validate())
-	require.Equal(t, ter.TemMALFORMED, preflightCode(t, valid.PreflightSigValidated()))
+	require.Equal(t, ter.TemMALFORMED, preflightCode(t, valid.PreflightSigValidated(nil)))
 }
 
 // TestEscrowCancel_PreflightPrecedence pins the EscrowCancel mask-position finding.

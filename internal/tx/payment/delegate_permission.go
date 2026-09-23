@@ -68,11 +68,21 @@ func paymentMintBurn(pc tx.DelegatePermissionContext, amt state.Amount, account,
 	if accountIsLow {
 		accountIsHolder = line.Balance.Signum() > 0
 	}
-	if pc.HasGranular(tx.GranularPaymentMint) && destinationLimit.Signum() > 0 && !accountIsHolder {
+	mayIssue := pc.HasGranular(tx.GranularPaymentMint) && destinationLimit.Signum() > 0
+	if mayIssue && !accountIsHolder {
 		return ter.TesSUCCESS
 	}
 	if pc.HasGranular(tx.GranularPaymentBurn) && accountIsHolder {
-		return ter.TesSUCCESS
+		if pc.Rules == nil || !pc.Rules.FixCleanup3_4_0Enabled() {
+			return ter.TesSUCCESS
+		}
+		held := line.Balance
+		if !accountIsLow {
+			held = held.Negate()
+		}
+		if amt.Compare(held) <= 0 || mayIssue {
+			return ter.TesSUCCESS
+		}
 	}
 	return ter.TerNO_DELEGATE_PERMISSION
 }

@@ -596,6 +596,7 @@ func newWideWorkSource(t *testing.T, firstBranches byte) *shamap.SHAMap {
 					var key [32]byte
 					key[0] = first<<4 | second
 					key[1] = third<<4 | fourth
+					key[31] = 0xA5
 					data := make([]byte, 12)
 					copy(data, []byte{first, second, third, fourth})
 					require.NoError(t, source.Put(key, data))
@@ -1526,7 +1527,9 @@ func TestAcquisitionWork_EscalationDoesNotRearmPreemptedTraversal(t *testing.T) 
 
 func TestAcquisitionWork_YieldedMissingStateDoesNotCountAsProgress(t *testing.T) {
 	source := newWideWorkSource(t, 16)
-	require.NoError(t, source.Delete([32]byte{}))
+	var removed [32]byte
+	removed[31] = 0xA5
+	require.NoError(t, source.Delete(removed))
 	rootHash, err := source.Hash()
 	require.NoError(t, err)
 	rootData, err := source.SerializeRoot()

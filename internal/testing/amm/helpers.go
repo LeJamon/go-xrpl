@@ -246,7 +246,7 @@ func IOU(issuer *jtx.Account, currency string, amount float64) tx.Amount {
 // in builders that do not require the real issuer (e.g. Currency-only
 // validation in AMMDeposit/AMMWithdraw).
 func LPTokenAmount(env *AMMTestEnv, asset1, asset2 tx.Asset, amount float64) tx.Amount {
-	lptCurrency := coreAmm.GenerateAMMLPTCurrency(asset1.Currency, asset2.Currency)
+	lptCurrency := coreAmm.GenerateAMMLPTCurrencyForAssets(asset1, asset2)
 	var issuer string
 	if env != nil {
 		if ammAcc := env.ReadAMMAccount(asset1, asset2); ammAcc != nil {
@@ -268,7 +268,7 @@ func (e *AMMTestEnv) LPTokenAmountFromLedger(asset1, asset2 tx.Asset, amount flo
 	if ammAcc == nil {
 		e.T.Fatalf("LPTokenAmountFromLedger: AMM not found for %s/%s", asset1.Currency, asset2.Currency)
 	}
-	lptCurrency := coreAmm.GenerateAMMLPTCurrency(asset1.Currency, asset2.Currency)
+	lptCurrency := coreAmm.GenerateAMMLPTCurrencyForAssets(asset1, asset2)
 	return tx.NewIssuedAmountFromFloat64(amount, lptCurrency, ammAcc.Address)
 }
 
@@ -599,13 +599,7 @@ func (e *AMMTestEnv) AMMTradingFee(asset1, asset2 tx.Asset) uint16 {
 // ReadAMMData reads and parses the AMM SLE for the given asset pair.
 func (e *AMMTestEnv) ReadAMMData(asset1, asset2 tx.Asset) *coreAmm.AMMData {
 	e.T.Helper()
-	// Build the keylet the same way the amm code does internally
-	issuer1 := decodeIssuer(asset1.Issuer)
-	currency1 := keylet.CurrencyBytes(asset1.Currency)
-	issuer2 := decodeIssuer(asset2.Issuer)
-	currency2 := keylet.CurrencyBytes(asset2.Currency)
-
-	ammKey := keylet.AMM(issuer1, currency1, issuer2, currency2)
+	ammKey := coreAmm.ComputeAMMKeylet(asset1, asset2)
 	data, err := e.Ledger().Read(ammKey)
 	if err != nil || data == nil {
 		return nil
@@ -615,20 +609,6 @@ func (e *AMMTestEnv) ReadAMMData(asset1, asset2 tx.Asset) *coreAmm.AMMData {
 		e.T.Fatalf("ReadAMMData: parse error: %v", err)
 	}
 	return ammData
-}
-
-// decodeIssuer converts issuer address to [20]byte.
-func decodeIssuer(issuer string) [20]byte {
-	if issuer == "" {
-		return [20]byte{}
-	}
-	_, bytes, err := addresscodec.DecodeClassicAddressToAccountID(issuer)
-	if err != nil {
-		return [20]byte{}
-	}
-	var id [20]byte
-	copy(id[:], bytes)
-	return id
 }
 
 // AMMAssetOut computes the asset amount received for burning LP tokens.
@@ -650,7 +630,7 @@ func (e *AMMTestEnv) ExpectLPTokens(account *jtx.Account, asset1, asset2 tx.Asse
 		}
 		return
 	}
-	lptCurrency := coreAmm.GenerateAMMLPTCurrency(asset1.Currency, asset2.Currency)
+	lptCurrency := coreAmm.GenerateAMMLPTCurrencyForAssets(asset1, asset2)
 
 	balance := e.TestEnv.IOUBalance(account, ammAcc, lptCurrency)
 	if balance == nil {
@@ -687,7 +667,7 @@ func (e *AMMTestEnv) ExpectLPTokensPrecise(account *jtx.Account, asset1, asset2 
 		e.T.Errorf("ExpectLPTokensPrecise(%s): AMM not found", account.Name)
 		return
 	}
-	lptCurrency := coreAmm.GenerateAMMLPTCurrency(asset1.Currency, asset2.Currency)
+	lptCurrency := coreAmm.GenerateAMMLPTCurrencyForAssets(asset1, asset2)
 
 	balance := e.TestEnv.IOUBalance(account, ammAcc, lptCurrency)
 	if balance == nil {

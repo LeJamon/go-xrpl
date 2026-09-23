@@ -34,6 +34,10 @@ func (n Network) String() string {
 
 // IsValidXAddress returns true if the x-address is valid. Otherwise, it returns false.
 func IsValidXAddress(xAddress string) bool {
+	// Both network prefixes produce exactly 47 Base58 characters.
+	if len(xAddress) != 47 {
+		return false
+	}
 	_, _, _, err := DecodeXAddress(xAddress)
 	return err == nil
 }

@@ -10,9 +10,6 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// hasExpired reports whether exp has passed at the given close time.
-func hasExpired(now, exp uint32) bool { return exp != 0 && now >= exp }
-
 // updateLoan serializes and updates a loan entry.
 func updateLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, l *loanData) ter.Result {
 	data, serr := serializeLoanForRules(l, ctx.Rules())
@@ -23,6 +20,58 @@ func updateLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, l *loanData) ter.Re
 		return ter.TefINTERNAL
 	}
 	return ter.TesSUCCESS
+}
+
+type loanAccountingDeltas struct {
+	assetsTotal lmath.N
+	debtTotal   lmath.N
+}
+
+func cashBasisEnabled(v *vault.VaultLending) bool {
+	return v != nil && v.LEVersion == vault.VaultVersionCashBasis
+}
+
+func loanOriginationDeltas(
+	v *vault.VaultLending,
+	principal, interest lmath.N,
+) loanAccountingDeltas {
+	if cashBasisEnabled(v) {
+		return loanAccountingDeltas{assetsTotal: principal.Sub(principal), debtTotal: principal}
+	}
+	return loanAccountingDeltas{assetsTotal: interest, debtTotal: principal.Add(interest)}
+}
+
+func loanOriginationExceedsVaultMaximumForRules(
+	v *vault.VaultLending,
+	vaultTotal, interest lmath.N,
+	rules *amendment.Rules,
+) bool {
+	if cashBasisEnabled(v) {
+		return false
+	}
+	vaultMaximum := lendNumForRules(v.AssetsMaximum, rules)
+	return vaultMaximum.Signum() != 0 && interest.Cmp(vaultMaximum.Sub(vaultTotal)) > 0
+}
+
+func loanPaymentDeltas(
+	v *vault.VaultLending,
+	parts lmath.LoanPaymentParts,
+) loanAccountingDeltas {
+	if cashBasisEnabled(v) {
+		return loanAccountingDeltas{assetsTotal: parts.InterestPaid, debtTotal: parts.PrincipalPaid}
+	}
+	rawToVault := parts.PrincipalPaid.Add(parts.InterestPaid)
+	return loanAccountingDeltas{
+		assetsTotal: parts.ValueChange,
+		debtTotal:   rawToVault.Sub(parts.ValueChange),
+	}
+}
+
+func loanVaultExposureForRules(v *vault.VaultLending, l *loanData, rules *amendment.Rules) lmath.N {
+	if cashBasisEnabled(v) {
+		return lendNumForRules(l.PrincipalOutstanding, rules)
+	}
+	return owedToVaultForRules(l, rules)
 }
 
 func owedToVaultForRules(l *loanData, rules *amendment.Rules) lmath.N {
@@ -153,7 +202,11 @@ func (l *LoanManage) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Re
 	if loan.PaymentRemaining == 0 {
 		return ter.TecNO_PERMISSION
 	}
-	if flags&TfLoanDefault != 0 && !hasExpired(config.ParentCloseTime, loan.NextPaymentDueDate+loan.GracePeriod) {
+	if flags&TfLoanDefault != 0 && !lmath.IsPaymentLate(
+		config.ParentCloseTime,
+		loan.NextPaymentDueDate+loan.GracePeriod,
+		config.RequireRules().Enabled(amendment.FeatureFixCleanup3_4_0),
+	) {
 		return ter.TecTOO_SOON
 	}
 	b, berr := readLoanBroker(view, keylet.LoanBrokerByID(loan.LoanBrokerID))
@@ -241,10 +294,18 @@ func (l *LoanManage) associateEntities(ctx *tx.ApplyContext, loanKey, brokerKey,
 }
 
 func (l *LoanManage) impairLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, loan *loanData, vaultKey keylet.Keylet, v *vault.VaultLending) ter.Result {
+	fixCleanup340 := ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0)
+	if fixCleanup340 && !lmath.IsPaymentLate(
+		ctx.Config.ParentCloseTime,
+		loan.NextPaymentDueDate,
+		fixCleanup340,
+	) {
+		return ter.TecTOO_SOON
+	}
 	asset := mathAsset(v.Asset)
 	integral := asset.Integral
 	scale := vaultScaleOfForRules(v, integral, ctx.Rules())
-	loss := owedToVaultForRules(loan, ctx.Rules())
+	loss := loanVaultExposureForRules(v, loan, ctx.Rules())
 	newLoss := lmath.AdjustImprecise(asset, lendNumForRules(v.LossUnrealized, ctx.Rules()), loss, scale)
 	// Loss cannot exceed the vault's committed-but-unavailable assets.
 	committed := lendNumForRules(v.AssetsTotal, ctx.Rules()).Sub(lendNumForRules(v.AssetsAvailable, ctx.Rules()))
@@ -255,7 +316,7 @@ func (l *LoanManage) impairLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, loa
 		return res
 	}
 	loan.Flags |= LsfLoanImpaired
-	if !hasExpired(ctx.Config.ParentCloseTime, loan.NextPaymentDueDate) {
+	if !fixCleanup340 && !lmath.IsPaymentLate(ctx.Config.ParentCloseTime, loan.NextPaymentDueDate, fixCleanup340) {
 		loan.NextPaymentDueDate = ctx.Config.ParentCloseTime
 	}
 	return updateLoan(ctx, loanKey, loan)
@@ -265,7 +326,7 @@ func (l *LoanManage) unimpairLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, l
 	asset := mathAsset(v.Asset)
 	integral := asset.Integral
 	scale := vaultScaleOfForRules(v, integral, ctx.Rules())
-	loss := owedToVaultForRules(loan, ctx.Rules())
+	loss := loanVaultExposureForRules(v, loan, ctx.Rules())
 	if lendNumForRules(v.LossUnrealized, ctx.Rules()).Cmp(loss) < 0 {
 		return ter.TefBAD_LEDGER
 	}
@@ -274,15 +335,17 @@ func (l *LoanManage) unimpairLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, l
 		return res
 	}
 	loan.Flags &^= LsfLoanImpaired
-	prev := loan.PreviousPaymentDueDate
-	if loan.StartDate > prev {
-		prev = loan.StartDate
-	}
-	normalDue := prev + loan.PaymentInterval
-	if !hasExpired(ctx.Config.ParentCloseTime, normalDue) {
-		loan.NextPaymentDueDate = normalDue
-	} else {
-		loan.NextPaymentDueDate = ctx.Config.ParentCloseTime + loan.PaymentInterval
+	if !ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) {
+		prev := loan.PreviousPaymentDueDate
+		if loan.StartDate > prev {
+			prev = loan.StartDate
+		}
+		normalDue := prev + loan.PaymentInterval
+		if !lmath.IsPaymentLate(ctx.Config.ParentCloseTime, normalDue, false) {
+			loan.NextPaymentDueDate = normalDue
+		} else {
+			loan.NextPaymentDueDate = ctx.Config.ParentCloseTime + loan.PaymentInterval
+		}
 	}
 	return updateLoan(ctx, loanKey, loan)
 }
@@ -293,7 +356,7 @@ func (l *LoanManage) defaultLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, lo
 	loanScale := int(loan.LoanScale)
 	vaultScale := vaultScaleOfForRules(v, integral, ctx.Rules())
 	debtTotal := lendNumForRules(b.DebtTotal, ctx.Rules())
-	totalDefault := owedToVaultForRules(loan, ctx.Rules())
+	totalDefault := loanVaultExposureForRules(v, loan, ctx.Rules())
 
 	// Liquidation cover: min(debtTotal * coverMin * coverLiq, totalDefault),
 	// capped at the broker's available cover.

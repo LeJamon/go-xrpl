@@ -431,6 +431,26 @@ func TestRouter_HandlePeerConnect_DelegatesToSendLocalManifest(t *testing.T) {
 	}
 }
 
+func TestRouterPeerIsInboundDistinguishesConnectDirection(t *testing.T) {
+	sender := &fakeManifestSender{
+		peers: []peermanagement.PeerInfo{
+			{ID: 42, Inbound: true},
+			{ID: 43, Inbound: false},
+		},
+	}
+	router, _, _ := routerWithCache(t, sender, 0, 0)
+
+	if !router.peerIsInbound(42) {
+		t.Fatal("inbound peer was not recognized")
+	}
+	if router.peerIsInbound(43) {
+		t.Fatal("outbound peer was recognized as inbound")
+	}
+	if router.peerIsInbound(44) {
+		t.Fatal("unknown peer was recognized as inbound")
+	}
+}
+
 func TestRouterHandlePeerConnectSeedsHandshakeLedgerHint(t *testing.T) {
 	ad := newTestAdaptor(t)
 	router := newTestRouter(&mockEngine{}, ad, nil)

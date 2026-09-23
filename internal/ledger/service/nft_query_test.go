@@ -238,6 +238,7 @@ func TestGetNFTOffers_InvalidMarkers(t *testing.T) {
 	}{
 		{"non-hex", strings.Repeat("Z", 64)},
 		{"wrong-length", "DEADBEEF"},
+		{"missing", strings.Repeat("F", 64)},
 		{"wrong-nft", formatHashHex(wrongNFTKey)},
 		{"not-in-directory", formatHashHex(notInDirKey)},
 	}
@@ -286,6 +287,44 @@ func TestParseNFTokenOfferForQuery_OwnerDualRead(t *testing.T) {
 			}
 			if offer.Owner != ownerID {
 				t.Fatalf("owner = %x, want %x", offer.Owner, ownerID)
+			}
+		})
+	}
+}
+
+func TestGetNFTOffersMarkerSideBeforeDirectoryWalk(t *testing.T) {
+	for _, sell := range []bool{false, true} {
+		t.Run(map[bool]string{false: "buy", true: "sell"}[sell], func(t *testing.T) {
+			svc := newOfferTestService(t)
+			owner, _ := addressFromBytes(t, 0x30)
+			nftID := nftIDFromByte(0x10)
+			flags := uint32(0)
+			if sell {
+				flags = 1
+			}
+			matching := insertNFTokenOfferEntry(t, svc, owner, 1, nftID, "100", flags, "", nil)
+			opposite := insertNFTokenOfferEntry(t, svc, owner, 2, nftID, "200", flags^1, "", nil)
+			insertNFTDir(t, svc, nftID, [][32]byte{matching, opposite}, sell)
+			query := svc.GetNFTBuyOffers
+			if sell {
+				query = svc.GetNFTSellOffers
+			}
+			result, err := query(context.Background(), nftID, "current", 2, formatHashHex(matching))
+			if err != nil || len(result.Offers) == 0 || result.Offers[0].NFTOfferIndex != formatHashHex(matching) {
+				t.Fatalf("same-side marker result=%+v error=%v", result, err)
+			}
+			if _, err := query(context.Background(), nftID, "current", 2, formatHashHex(opposite)); !errors.Is(err, svcerr.ErrInvalidMarker) {
+				t.Fatalf("opposite-side marker: %v", err)
+			}
+			dir := keylet.NFTBuys(nftID)
+			if sell {
+				dir = keylet.NFTSells(nftID)
+			}
+			if err := svc.openLedger.Update(dir, []byte{0x11, 0, 0x64, 255, 255, 255, 255, 255, 255, 255, 255, 255}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := query(context.Background(), nftID, "current", 2, formatHashHex(opposite)); !errors.Is(err, svcerr.ErrInvalidMarker) {
+				t.Fatalf("opposite-side marker must be rejected before unreadable directory: %v", err)
 			}
 		})
 	}

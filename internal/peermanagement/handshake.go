@@ -39,7 +39,7 @@ func (v protocolVersion) less(o protocolVersion) bool {
 // supportedProtocols lists the peer-protocol versions go-xrpl
 // advertises. Must stay strictly ascending — duplicates are forbidden;
 // enforced by init() below.
-var supportedProtocols = []protocolVersion{{2, 1}, {2, 2}}
+var supportedProtocols = []protocolVersion{{2, 2}, {2, 3}}
 
 func init() {
 	if len(supportedProtocols) == 0 {
@@ -143,7 +143,7 @@ func validateHandshakeRequest(req *http.Request) error {
 	if !headerToken(req.Header, HeaderConnection, "upgrade") {
 		return fmt.Errorf("%w: %s header must include upgrade", ErrInvalidHandshake, HeaderConnection)
 	}
-	upgrade := strings.TrimSpace(req.Header.Get(HeaderUpgrade))
+	upgrade := strings.Trim(req.Header.Get(HeaderUpgrade), " \t")
 	if upgrade == "" {
 		return fmt.Errorf("%w: missing %s", ErrInvalidHandshake, HeaderUpgrade)
 	}
@@ -582,8 +582,7 @@ var protocolTokenRe = regexp.MustCompile(`^XRPL/([2-9]|[1-9][0-9]+)\.(0|[1-9][0-
 // XRPL versions in a comma-separated header value.
 func parseProtocolVersions(s string) []protocolVersion {
 	var out []protocolVersion
-	for tok := range strings.SplitSeq(s, ",") {
-		tok = strings.TrimSpace(tok)
+	for _, tok := range splitProtocolHeader(s) {
 		m := protocolTokenRe.FindStringSubmatch(tok)
 		if m == nil {
 			continue
@@ -610,6 +609,51 @@ func parseProtocolVersions(s string) []protocolVersion {
 		}
 	}
 	return out[:n]
+}
+
+func splitProtocolHeader(value string) []string {
+	var tokens []string
+	var token strings.Builder
+	emit := func(trim bool) {
+		text := token.String()
+		if trim {
+			text = strings.TrimRight(text, " \t\r\n\v\f")
+		}
+		if text != "" {
+			tokens = append(tokens, text)
+		}
+		token.Reset()
+	}
+	for i := 0; i < len(value); {
+		switch value[i] {
+		case '"':
+			i++
+			for i < len(value) && value[i] != '"' {
+				if value[i] == '\\' {
+					i++
+					if i == len(value) {
+						break
+					}
+				}
+				token.WriteByte(value[i])
+				i++
+			}
+			if i < len(value) {
+				i++
+			}
+			emit(false)
+		case ',':
+			emit(true)
+			i++
+		case ' ', '\t':
+			i++
+		default:
+			token.WriteByte(value[i])
+			i++
+		}
+	}
+	emit(true)
+	return tokens
 }
 
 func isProtocolSupported(v protocolVersion) bool {
@@ -661,8 +705,7 @@ func VerifyOutboundProtocolVersion(upgradeHeader string) string {
 type Feature int
 
 const (
-	FeatureValidatorListPropagation Feature = iota
-	FeatureLedgerReplay
+	FeatureLedgerReplay Feature = iota
 	FeatureCompression
 	// vprr — validator-proposal reduce-relay (gates TMSquelch).
 	FeatureVpReduceRelay
@@ -676,8 +719,6 @@ const FeatureReduceRelay = FeatureVpReduceRelay
 
 func (f Feature) String() string {
 	switch f {
-	case FeatureValidatorListPropagation:
-		return "validatorListPropagation"
 	case FeatureLedgerReplay:
 		return "ledgerReplay"
 	case FeatureCompression:
@@ -696,8 +737,6 @@ func (f Feature) String() string {
 // ParseFeature accepts the legacy "reduceRelay" alias plus vprr/txrr.
 func ParseFeature(s string) (Feature, bool) {
 	switch strings.ToLower(s) {
-	case "validatorlistpropagation":
-		return FeatureValidatorListPropagation, true
 	case "ledgerreplay":
 		return FeatureLedgerReplay, true
 	case "compression":

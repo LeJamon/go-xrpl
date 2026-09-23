@@ -16,6 +16,10 @@ import "time"
 //
 // See: https://xrpl.org/blog/2021/message-routing-optimizations-pt-1-proposal-validation-relaying.html
 const (
+	// MaxTxQueueSize is the largest transaction list accepted in one peer
+	// message.
+	MaxTxQueueSize = 10000
+
 	// MinUnsquelchExpire is the minimum squelch duration (5 minutes).
 	MinUnsquelchExpire = 300 * time.Second
 

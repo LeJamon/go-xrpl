@@ -167,6 +167,21 @@ func (qf *QualityFunction) OutFromAvgQ(q Quality) *state.XRPLNumber {
 	return &out
 }
 
+// SatisfiesAvgQ reports whether out realizes at least the requested average
+// quality. It is used after rounding integral output amounts: a rounded-up
+// MPT/XRP value can otherwise cross the quality boundary solved by
+// OutFromAvgQ.
+//
+// Reference: rippled QualityFunction::satisfiesAvgQ.
+func (qf *QualityFunction) SatisfiesAvgQ(q Quality, out state.XRPLNumber) bool {
+	if q.Rate().Signum() == 0 {
+		return false
+	}
+	left := qf.m.Mul(out).Add(qf.b)
+	right := qf.math.one().Div(qf.math.fromAmount(q.Rate(), state.RoundToNearest))
+	return left.Cmp(right) >= 0
+}
+
 // withinRelativeDistanceAmounts checks if two EitherAmounts are within
 // a relative distance threshold: |a - b| / max(a, b) < dist.
 // Reference: rippled AMMHelpers.h withinRelativeDistance() for amounts

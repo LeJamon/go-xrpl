@@ -70,6 +70,20 @@ func completeStandardReplayTestLink(t *testing.T, r *Router, link standardReplay
 	r.completeInboundLedger(il)
 }
 
+func drainStandardReplayTestPipeline(t *testing.T, r *Router) {
+	t.Helper()
+	maxDrains := len(r.standardReplay.entries) + 1
+	for drains := 0; r.standardReplay.applying; drains++ {
+		require.Less(t, drains, maxDrains, "replay drain did not finish")
+		select {
+		case <-r.standardReplayDrainWake:
+			r.drainStandardReplayPipeline()
+		default:
+			require.FailNow(t, "replay apply batch did not reschedule through the router loop")
+		}
+	}
+}
+
 func armStandardReplayTestPipeline(
 	t *testing.T,
 	r *Router,
@@ -108,6 +122,7 @@ func TestStandardReplayPipelineAppliesReadySuccessorsInOrder(t *testing.T) {
 	assert.False(t, r.standardReplay.headBlockedAt.IsZero())
 
 	completeStandardReplayTestLink(t, r, links[0])
+	drainStandardReplayTestPipeline(t, r)
 	for _, link := range links {
 		stored, lookupErr := svc.GetLedgerByHash(link.hash)
 		require.NoError(t, lookupErr)
@@ -718,6 +733,7 @@ func TestStandardReplayHandoffKeepsSessionWhenTargetAdvances(t *testing.T) {
 	generation := r.standardReplay.generation
 	pivotHash := r.standardReplay.pivotHash
 	completeStandardReplayTestLink(t, r, links[0])
+	drainStandardReplayTestPipeline(t, r)
 
 	final := r.fetchTracker.Find(links[1].hash)
 	require.NotNil(t, final)

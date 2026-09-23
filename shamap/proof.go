@@ -123,6 +123,10 @@ func verifyProofPath(rootHash [32]byte, key [32]byte, path [][]byte) []byte {
 
 		switch typed := node.(type) {
 		case *innerNode:
+			if depth >= maxDepth {
+				return nil
+			}
+
 			// This is an inner node, follow the branch toward our key.
 			// Create node ID at this depth to determine which branch to follow.
 			nodeID, err := createNodeID(uint8(depth), key)

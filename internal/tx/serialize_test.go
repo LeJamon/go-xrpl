@@ -12,6 +12,16 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
+func TestEncodeVLRejectsNegativeLength(t *testing.T) {
+	prefix, err := EncodeVL(-1)
+	if prefix != nil {
+		t.Fatalf("EncodeVL(-1) prefix = %x, want nil", prefix)
+	}
+	if err != ErrLengthPrefixTooLong {
+		t.Fatalf("EncodeVL(-1) error = %v, want %v", err, ErrLengthPrefixTooLong)
+	}
+}
+
 func TestCreateTxWithMetaBlob_TrustedMetadataOverJSONLimit(t *testing.T) {
 	const (
 		inputOffers   = 500

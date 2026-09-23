@@ -23,8 +23,9 @@ type SubmitMultisignedMethod struct{ baseHandler }
 func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	setLoadHeavy(ctx)
 	var request struct {
-		TxJson   json.RawMessage `json:"tx_json"`
-		FailHard bool            `json:"fail_hard,omitempty"`
+		TxJson          json.RawMessage `json:"tx_json"`
+		FailHard        bool            `json:"fail_hard,omitempty"`
+		SignatureTarget json.RawMessage `json:"signature_target"`
 	}
 
 	if err := parseParams(params, &request); err != nil {
@@ -38,6 +39,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	if err := requireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
+	rules := transactionRulesForContext(ctx)
 
 	// Parse the transaction JSON
 	var txMap map[string]any
@@ -62,8 +64,10 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	if !spkPresent {
 		return nil, rpcerrors.RpcErrorMissingField("tx_json.SigningPubKey")
 	}
-	if spkStr, ok := signingPubKey.(string); !ok || spkStr != "" {
-		return nil, rpcerrors.RpcErrorInvalidParams("When multi-signing 'tx_json.SigningPubKey' must be empty.")
+	if len(request.SignatureTarget) == 0 {
+		if spkStr, ok := signingPubKey.(string); !ok || spkStr != "" {
+			return nil, rpcerrors.RpcErrorInvalidParams("When multi-signing 'tx_json.SigningPubKey' must be empty.")
+		}
 	}
 
 	// --- checkTxJsonFields (rippled TransactionSign.cpp:315-375) ---
@@ -90,7 +94,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, rpcInternalError("submit_multisigned: source account lookup failed", err)
 	}
 
-	if rpcErr := validateSignForPreConflict(txMap, params); rpcErr != nil {
+	if rpcErr := validateSignForPreConflictWithRules(txMap, params, rules); rpcErr != nil {
 		return nil, rpcErr
 	}
 	if feeString, ok := txMap["Fee"].(string); ok {
@@ -155,6 +159,9 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	txBlob, encErr := binarycodec.Encode(canonicalMap)
 	if encErr != nil {
 		return nil, rpcInternalError("submit_multisigned: transaction encoding failed", encErr)
+	}
+	if rpcErr := validateSigningConstruction(ctx, txBlob, rules); rpcErr != nil {
+		return nil, rpcErr
 	}
 
 	// Calculate transaction hash

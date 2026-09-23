@@ -137,7 +137,6 @@ func TestOverlay_ConsensusTrafficBackpressures(t *testing.T) {
 	for _, msgType := range []message.MessageType{
 		message.TypeProposeLedger,
 		message.TypeValidation,
-		message.TypeValidatorList,
 		message.TypeValidatorListCollection,
 	} {
 		t.Run(msgType.String(), func(t *testing.T) {
@@ -277,7 +276,6 @@ func TestOverlay_ServiceSaturationDoesNotBlockConsensusLanes(t *testing.T) {
 	priorityTypes := []message.MessageType{
 		message.TypeProposeLedger,
 		message.TypeValidation,
-		message.TypeValidatorList,
 		message.TypeValidatorListCollection,
 	}
 	for _, msgType := range priorityTypes {
@@ -301,7 +299,7 @@ func TestOverlay_ServiceSaturationDoesNotBlockConsensusLanes(t *testing.T) {
 		})
 	}
 
-	assert.Len(t, o.consensusMessages, 4)
+	assert.Len(t, o.consensusMessages, len(priorityTypes))
 	assert.Len(t, o.consensusControlMessages, 2)
 	for _, want := range priorityTypes {
 		assert.Equal(t, want, (<-o.consensusMessages).Type)

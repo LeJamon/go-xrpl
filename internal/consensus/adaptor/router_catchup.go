@@ -3350,7 +3350,9 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) bool {
 	decoded, err := message.Decode(message.TypeLedgerData, msg.Payload)
 	if err != nil {
 		r.logger.Warn("failed to decode ledger_data", "error", err, "peer", msg.PeerID)
-		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-decode")
+		if !msg.SelectPeerCharge(resource.FeeMalformedRequest(), "ledger-data-decode") {
+			r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-decode")
+		}
 		return false
 	}
 	ld, ok := decoded.(*message.LedgerData)
@@ -3359,24 +3361,32 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) bool {
 	}
 	if len(ld.LedgerHash) != 32 {
 		r.logger.Warn("invalid ledger_data ledger hash", "peer", msg.PeerID, "length", len(ld.LedgerHash))
-		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-hash")
+		if !msg.SelectPeerCharge(resource.FeeInvalidData(), "ledger-data-hash") {
+			r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-hash")
+		}
 		return false
 	}
 	if ld.InfoType < message.LedgerInfoBase || ld.InfoType > message.LedgerInfoTsCandidate {
 		r.logger.Warn("invalid ledger_data info type", "peer", msg.PeerID, "info_type", ld.InfoType)
-		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-type")
+		if !msg.SelectPeerCharge(resource.FeeInvalidData(), "ledger-data-type") {
+			r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-type")
+		}
 		return false
 	}
 	if (ld.InfoType == message.LedgerInfoTsCandidate && ld.LedgerSeq != 0) ||
 		(ld.InfoType != message.LedgerInfoTsCandidate && r.invalidFutureLedgerSequence(ld.LedgerSeq)) {
 		r.logger.Warn("invalid ledger_data ledger sequence", "peer", msg.PeerID, "seq", ld.LedgerSeq)
-		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-sequence")
+		if !msg.SelectPeerCharge(resource.FeeInvalidData(), "ledger-data-sequence") {
+			r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-sequence")
+		}
 		return false
 	}
 	if ld.HasError() &&
 		(ld.Error < message.ReplyErrorNoLedger || ld.Error > message.ReplyErrorBadRequest) {
 		r.logger.Warn("invalid ledger_data reply error", "peer", msg.PeerID, "error", ld.Error)
-		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-error")
+		if !msg.SelectPeerCharge(resource.FeeInvalidData(), "ledger-data-error") {
+			r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-error")
+		}
 		return false
 	}
 	if ld.HasError() {
@@ -3397,23 +3407,13 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) bool {
 			"reply_error", ld.Error,
 			"nodes", len(ld.Nodes),
 		)
-		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-count")
+		if !msg.SelectPeerCharge(resource.FeeInvalidData(), "ledger-data-count") {
+			r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-count")
+		}
 		return false
 	}
 	if r.handleHeaderDiscoveryReply(ld, uint64(msg.PeerID)) {
 		return false
-	}
-	if ld.InfoType == message.LedgerInfoAsNode || ld.InfoType == message.LedgerInfoTxNode {
-		for _, node := range ld.Nodes {
-			if len(node.NodeData) == 0 {
-				r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-node")
-				return false
-			}
-			if _, err := shamap.ParseNodeID(node.NodeID); err != nil {
-				r.acquisition.IncPeerBadData(uint64(msg.PeerID), "ledger-data-node")
-				return false
-			}
-		}
 	}
 
 	// A reply carrying a request_cookie answers a GetLedger we relayed on
@@ -3421,7 +3421,7 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) bool {
 	// by the cookie and do not consume it locally. Mirrors rippled
 	// onMessage(TMLedgerData).
 	if ld.HasRequestCookie() {
-		r.routeRelayedLedgerData(ld, msg.PeerID)
+		r.routeRelayedLedgerData(ld, msg.PeerID, msg)
 		return false
 	}
 
@@ -3461,7 +3461,7 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) bool {
 func (r *Router) cacheStaleStateNodes(ld *message.LedgerData) {
 	now := time.Now()
 	for _, node := range ld.Nodes {
-		if len(node.NodeID) == 0 || len(node.NodeData) == 0 {
+		if _, err := node.SHAMapNodeID(); err != nil {
 			return
 		}
 		entry, err := shamap.FlushEntryFromWire(node.NodeData, ld.LedgerSeq, shamap.TypeState)
@@ -3543,7 +3543,9 @@ func (r *Router) handleInboundLedgerDataOwned(
 		useful, err := il.GotStateNodesUseful(ld.Nodes)
 		if err != nil {
 			r.logger.Warn("inbound ledger: GotStateNodes failed", "error", err)
-			r.acquisition.IncPeerBadData(peerID, "ledger-data-state")
+			if errors.Is(err, inbound.ErrInvalidPeerNode) {
+				r.acquisition.IncPeerBadData(peerID, "ledger-data-state")
+			}
 			return true, false
 		}
 
@@ -3562,7 +3564,9 @@ func (r *Router) handleInboundLedgerDataOwned(
 		useful, err := il.GotTransactionNodesUseful(ld.Nodes)
 		if err != nil {
 			r.logger.Warn("inbound ledger: GotTransactionNodes failed", "error", err)
-			r.acquisition.IncPeerBadData(peerID, "ledger-data-tx")
+			if errors.Is(err, inbound.ErrInvalidPeerNode) {
+				r.acquisition.IncPeerBadData(peerID, "ledger-data-tx")
+			}
 			return true, false
 		}
 

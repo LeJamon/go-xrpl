@@ -38,6 +38,19 @@ func TestAdaptSubmitResultCopiesLedgerState(t *testing.T) {
 	require.Equal(t, uint32(9), source.CurrentLedgerState.AccountSequenceNext)
 }
 
+func TestAdaptSubmitResultPreservesFeeFailure(t *testing.T) {
+	for _, code := range []ter.Result{ter.TefEXCEPTION, ter.TefINTERNAL} {
+		t.Run(code.String(), func(t *testing.T) {
+			adapted := adaptSubmitResult(&service.SubmitResult{Result: code}, false, false)
+			require.Equal(t, code.String(), adapted.EngineResult)
+			require.Equal(t, int(code), adapted.EngineResultCode)
+			require.False(t, adapted.Applied)
+			require.False(t, adapted.Queued)
+			require.Nil(t, adapted.CurrentLedgerState)
+		})
+	}
+}
+
 func TestAdapterSubmissionSmoke(t *testing.T) {
 	svc, err := service.New(service.Config{Standalone: true, GenesisConfig: genesis.DefaultConfig()})
 	require.NoError(t, err)

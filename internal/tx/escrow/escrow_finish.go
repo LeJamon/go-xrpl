@@ -100,9 +100,9 @@ func (e *EscrowFinish) CheckExtraFeatures(rules *amendment.Rules) error {
 // preflightSigValidated, AFTER the signature is verified, so a mis-signed
 // EscrowFinish surfaces temINVALID rather than this temMALFORMED.
 // Reference: rippled Escrow.cpp EscrowFinish::preflightSigValidated.
-func (e *EscrowFinish) PreflightSigValidated() error {
+func (e *EscrowFinish) PreflightSigValidated(rules *amendment.Rules) error {
 	present := e.CredentialIDs != nil || e.HasField("CredentialIDs")
-	return credential.CheckFields(e.CredentialIDs, present, "Duplicate credential ID")
+	return credential.CheckFieldsWithRules(e.CredentialIDs, present, "Duplicate credential ID", rules)
 }
 
 // CalculateBaseFee mirrors rippled's EscrowFinish::calculateBaseFee: the
@@ -111,7 +111,7 @@ func (e *EscrowFinish) PreflightSigValidated() error {
 // fulfillment.size() is the decoded byte length. The CustomBaseFeeCalculator
 // dispatch in preclaim.go skips the multisig multiplier, so it is applied here.
 // Reference: rippled Escrow.cpp:682-693, Transactor.cpp:229-244
-func (e *EscrowFinish) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) uint64 {
+func (e *EscrowFinish) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) (uint64, error) {
 	base := config.BaseFee
 	if view != nil {
 		if data, err := view.Read(keylet.Fees()); err == nil && data != nil {
@@ -134,7 +134,7 @@ func (e *EscrowFinish) CalculateBaseFee(view tx.LedgerView, config tx.EngineConf
 		fee += base * (32 + uint64(fulfillmentLen)/16)
 	}
 
-	return fee
+	return fee, nil
 }
 
 // Apply applies an EscrowFinish transaction
@@ -157,7 +157,7 @@ func (e *EscrowFinish) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 		if acctErr != nil {
 			return ter.TemBAD_SRC_ACCOUNT
 		}
-		if result := credential.ValidCredentials(view, accountID, e.CredentialIDs); result != ter.TesSUCCESS {
+		if result := credential.ValidCredentials(view, accountID, e.CredentialIDs, config.RequireRules()); result != ter.TesSUCCESS {
 			return result
 		}
 	}
@@ -335,18 +335,19 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
-	sponsorEnabled := rules.Enabled(amendment.FeatureSponsor)
-	if sponsorEnabled {
-		if ownerID == escrowEntry.DestinationID && !destIsSelf {
-			if err := tx.DecreaseOwnerCount(ctx.View, destAccount, sponsorAddress, 1); err != nil {
-				return ctx.Internal("EscrowFinish.OwnerCount", err)
-			}
-			ctx.SyncSenderSponsorCounts(sponsorAddress)
-		} else if result := tx.DecreaseOwnerCountFor(ctx, ownerID, sponsorAddress, 1); result != ter.TesSUCCESS {
+	recycleReserve := rules.Enabled(amendment.FeatureSponsor) || rules.Enabled(amendment.FeatureFixCleanup3_4_0)
+	if recycleReserve {
+		if result := tx.DecreaseOwnerCountFor(ctx, ownerID, sponsorAddress, 1); result != ter.TesSUCCESS {
 			return result
 		}
 		if destIsSelf {
 			if result := ctx.UpdateAccountRoot(ctx.AccountID, ctx.Account); result != ter.TesSUCCESS {
+				return result
+			}
+		} else {
+			var result ter.Result
+			destAccount, result = readDestinationForEscrow(ctx.View, escrowEntry.DestinationID)
+			if result != ter.TesSUCCESS {
 				return result
 			}
 		}
@@ -496,17 +497,17 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
+	if !recycleReserve {
+		if result := tx.DecreaseOwnerCountFor(ctx, ownerID, sponsorAddress, 1); result != ter.TesSUCCESS {
+			return result
+		}
+	}
+
 	// Delete the escrow
 	// Reference: rippled Escrow.cpp doApply() line 1194: ctx_.view().erase(slep);
 	if err := ctx.View.Erase(escrowKey); err != nil {
 		ctx.Log.Error("escrow finish: failed to erase escrow", "error", err)
 		return ter.TefINTERNAL
-	}
-
-	if !sponsorEnabled {
-		if result := tx.DecreaseOwnerCountFor(ctx, ownerID, "", 1); result != ter.TesSUCCESS {
-			return result
-		}
 	}
 
 	return ter.TesSUCCESS

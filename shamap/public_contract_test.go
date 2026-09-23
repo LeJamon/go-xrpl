@@ -265,6 +265,69 @@ func TestPublicProofRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPublicProofDepthAndMalformedPaths(t *testing.T) {
+	key := mapKey(0x12)
+	empty := shamap.New(shamap.TypeState)
+	emptyRoot, err := empty.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyProof, err := empty.GetProofPath(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if emptyProof.Found || len(emptyProof.Path) != 0 || shamap.VerifyProofPath(emptyRoot, key, emptyProof.Path) {
+		t.Fatal("empty map returned a verifying proof")
+	}
+
+	single := shamap.New(shamap.TypeState)
+	if err := single.Put(key, stateValue("single")); err != nil {
+		t.Fatal(err)
+	}
+	singleRoot, err := single.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	singleProof, err := single.GetProofPath(key)
+	if err != nil || !singleProof.Found || !shamap.VerifyProofPath(singleRoot, key, singleProof.Path) {
+		t.Fatal("single-leaf proof did not verify")
+	}
+
+	first, second := [32]byte{}, [32]byte{}
+	for i := range first {
+		first[i], second[i] = 0xAB, 0xAB
+	}
+	first[31], second[31] = 0xA1, 0xA2
+	deep := shamap.New(shamap.TypeState)
+	for _, deepKey := range [][32]byte{first, second} {
+		if err := deep.Put(deepKey, stateValue("deep")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deepRoot, err := deep.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	deepProof, err := deep.GetProofPath(first)
+	if err != nil || !deepProof.Found || len(deepProof.Path) != 65 {
+		t.Fatalf("deep proof = err %v, found %v, path length %d", err, deepProof.Found, len(deepProof.Path))
+	}
+	if !shamap.VerifyProofPath(deepRoot, first, deepProof.Path) {
+		t.Fatal("deep proof did not verify through public API")
+	}
+	if shamap.VerifyProofPath(deepRoot, second, deepProof.Path) {
+		t.Fatal("deep proof verified for the wrong key")
+	}
+	truncated := deepProof.Path[1:]
+	if shamap.VerifyProofPath(deepRoot, first, truncated) {
+		t.Fatal("truncated proof verified")
+	}
+	oversized := append(append([][]byte(nil), deepProof.Path...), nil)
+	if shamap.VerifyProofPath(deepRoot, first, oversized) {
+		t.Fatal("oversized proof verified")
+	}
+}
+
 func TestPublicFamilyPersistenceAndRootLoading(t *testing.T) {
 	family := newContractFamily()
 	sm, err := shamap.NewBacked(shamap.TypeState, family)

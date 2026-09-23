@@ -284,7 +284,8 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 		// Calculate LP tokens needed
 		lpTokensNeeded := math.multiplyToAmount(math.fromAmount(lptAMMBalance), frac, lptAMMBalance, state.RoundToNearest)
 
-		if isGreater(lpTokensNeeded, holdLPTokens) {
+		if (ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && isGreaterOrEqual(lpTokensNeeded, holdLPTokens)) ||
+			(!ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) && isGreater(lpTokensNeeded, holdLPTokens)) {
 			// Holder doesn't have enough LP tokens — clawback all they have.
 			lpTokensToWithdraw = holdLPTokens
 			if math.fromAmount(holdLPTokens).Equal(math.fromAmount(lptAMMBalance)) {
@@ -308,6 +309,10 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 				frac = adjustFracByTokens(math, fixV1_3, lptAMMBalance, tokensAdj, frac)
 				amountRounded := getRoundedAsset(math, fixV1_3, assetBalance1, frac, false)
 				amount2Rounded := getRoundedAsset(math, fixV1_3, assetBalance2, frac, false)
+				if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) &&
+					(amountRounded.IsZero() || amount2Rounded.IsZero()) {
+					return ter.TecAMM_FAILED
+				}
 				lpTokensToWithdraw = tokensAdj
 				withdrawAmount1 = amountRounded
 				withdrawAmount2 = amount2Rounded
@@ -364,7 +369,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	if !isXRP1 && !withdrawAmount1.IsZero() {
 		if a.Asset.IsMPT() {
 			if result := withdrawAssetToAccount(ctx, holderID, ammAccountID, a.Asset, withdrawAmount1,
-				ctx.Rules().Enabled(amendment.FeatureFixAMMv1_2)); result != ter.TesSUCCESS {
+				clawbackWithdrawalOptions(issuerID)); result != ter.TesSUCCESS {
 				return result
 			}
 			if result := sendMPT(ctx.View, holderID, issuerID, withdrawAmount1, true); result != ter.TesSUCCESS {
@@ -381,7 +386,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 		if !isXRP2 && !withdrawAmount2.IsZero() {
 			if a.Asset2.IsMPT() {
 				if result := withdrawAssetToAccount(ctx, holderID, ammAccountID, a.Asset2, withdrawAmount2,
-					ctx.Rules().Enabled(amendment.FeatureFixAMMv1_2)); result != ter.TesSUCCESS {
+					clawbackWithdrawalOptions(issuerID)); result != ter.TesSUCCESS {
 					return result
 				}
 				if result := sendMPT(ctx.View, holderID, issuerID, withdrawAmount2, true); result != ter.TesSUCCESS {
@@ -402,18 +407,17 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 		if !isXRP2 && !withdrawAmount2.IsZero() {
 			if a.Asset2.IsMPT() {
 				if result := withdrawAssetToAccount(ctx, holderID, ammAccountID, a.Asset2, withdrawAmount2,
-					ctx.Rules().Enabled(amendment.FeatureFixAMMv1_2)); result != ter.TesSUCCESS {
+					clawbackWithdrawalOptions(issuerID)); result != ter.TesSUCCESS {
 					return result
 				}
 			} else {
-				if err := debitAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2, ctx.View, ctx.NumberContext()); err != nil {
-					return ammResultFromError(err, ter.TefINTERNAL)
+				issuer2ID, err := state.DecodeAccountID(a.Asset2.Issuer)
+				if err != nil {
+					return ter.TefINTERNAL
 				}
-				issuer2ID, _ := state.DecodeAccountID(a.Asset2.Issuer)
-				if holderID != issuer2ID {
-					if err := updateTrustlineBalanceInView(holderID, issuer2ID, a.Asset2.Currency, withdrawAmount2, ctx.View, ctx.NumberContext()); err != nil {
-						return ammResultFromError(err, ter.TefINTERNAL)
-					}
+				if result := withdrawIOUToAccount(ctx, holderID, issuer2ID, ammAccountID, a.Asset2, withdrawAmount2,
+					clawbackWithdrawalOptions(issuerID)); result != ter.TesSUCCESS {
+					return result
 				}
 			}
 		} else if isXRP2 && !withdrawAmount2.IsZero() {

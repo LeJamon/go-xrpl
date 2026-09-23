@@ -27,6 +27,18 @@ func TestAMMMPTNumberConversionsPreserveIntegralIssue(t *testing.T) {
 	require.Equal(t, ammMPTID, upward.MPTIssuanceID())
 }
 
+func TestAMMNumberMathUsesIntegralRoundingForMPT(t *testing.T) {
+	ctx := state.NewNumberContext(state.MantissaScaleLarge, true)
+	m := numberMath{ctx: ctx}
+	fractional := ctx.Number(11, -1, state.RoundToNearest)
+	prototype := state.NewMPTAmountWithIssuanceID(0, "rIssuer", ammMPTID)
+
+	got := m.toAmountWithNativeRounding(fractional, prototype, state.RoundUpward, state.RoundToNearest)
+	raw, ok := got.MPTRaw()
+	require.True(t, ok)
+	require.Equal(t, int64(2), raw)
+}
+
 func TestAMMMPTAmountFactoriesPreserveIssue(t *testing.T) {
 	original := state.NewMPTAmountWithIssuanceID(7, "rIssuer", ammMPTID)
 

@@ -50,6 +50,30 @@ func TestFixCleanup330Registration(t *testing.T) {
 	}
 }
 
+func TestFixCleanup340Registration(t *testing.T) {
+	f := FeatureByName("fixCleanup3_4_0")
+	if f == nil {
+		t.Fatal("fixCleanup3_4_0 is not registered")
+	}
+	const amendmentID = "98433DD001A5737F773D74F8CA2A25A065089C73B2E611C760BAF369E4FECA76"
+	want, err := hex.DecodeString(amendmentID)
+	if err != nil {
+		t.Fatalf("decode fixCleanup3_4_0 amendment ID: %v", err)
+	}
+	if got := f.ID[:]; !bytes.Equal(got, want) {
+		t.Fatalf("fixCleanup3_4_0 ID = %X, want %s", got, amendmentID)
+	}
+	if f.Supported != SupportedYes || f.Vote != VoteDefaultNo {
+		t.Fatalf("fixCleanup3_4_0 status = (%v, %v), want (SupportedYes, VoteDefaultNo)", f.Supported, f.Vote)
+	}
+	if !AllSupportedRules().Enabled(FeatureFixCleanup3_4_0) {
+		t.Fatal("supported fixCleanup3_4_0 must be enabled by all-supported rules")
+	}
+	if GenesisRules().Enabled(FeatureFixCleanup3_4_0) {
+		t.Fatal("default-no fixCleanup3_4_0 must not be enabled by genesis rules")
+	}
+}
+
 func TestFeatureRegistry(t *testing.T) {
 	count := len(AllFeatures())
 	if count < 80 {
@@ -268,9 +292,18 @@ func TestTableDesired(t *testing.T) {
 		t.Fatal("Desired retained a vetoed amendment")
 	}
 
-	table.UpVote(FeatureAMM)
-	if !slices.Contains(table.Desired(), FeatureAMM) {
-		t.Fatal("Desired omitted an explicitly upvoted supported amendment")
+	defaultNo := [][32]byte{FeatureAMM, FeatureFixCleanup3_4_0, FeatureLendingProtocolV1_1}
+	for _, featureID := range defaultNo {
+		if slices.Contains(table.Desired(), featureID) {
+			t.Fatalf("Desired included default-no amendment %X before an explicit upvote", featureID)
+		}
+	}
+
+	for _, featureID := range defaultNo {
+		table.UpVote(featureID)
+		if !slices.Contains(table.Desired(), featureID) {
+			t.Fatalf("Desired omitted explicitly upvoted supported amendment %X", featureID)
+		}
 	}
 }
 
@@ -417,6 +450,12 @@ func TestAllSupportedRules(t *testing.T) {
 	if !rules.Enabled(FeatureAMM) {
 		t.Error("AllSupported rules should have AMM enabled")
 	}
+	if !rules.Enabled(FeatureFixCleanup3_4_0) {
+		t.Error("AllSupported rules should have fixCleanup3_4_0 enabled")
+	}
+	if !rules.Enabled(FeatureLendingProtocolV1_1) {
+		t.Error("AllSupported rules should have LendingProtocolV1_1 enabled")
+	}
 
 	// Count should match supported features
 	supportedCount := len(SupportedFeatures())
@@ -459,11 +498,10 @@ func TestSupportedFeatures(t *testing.T) {
 func TestDefaultYesFeatures(t *testing.T) {
 	defaultYes := DefaultYesFeatures()
 
-	// After the 3.2.0 retirement wave, only a handful of active fixes still
-	// default to a yes vote (fixCleanup3_1_3, fixAMMOverflowOffer,
-	// fixRemoveNFTokenAutoTrustLine).
-	if len(defaultYes) < 3 {
-		t.Errorf("Expected at least 3 default yes features, got %d", len(defaultYes))
+	// Retired fixes are omitted from the default-yes list. The current active
+	// defaults include fixCleanup3_1_3 and fixRemoveNFTokenAutoTrustLine.
+	if len(defaultYes) < 2 {
+		t.Errorf("Expected at least 2 default yes features, got %d", len(defaultYes))
 	}
 
 	// All returned features should be default yes and not retired

@@ -311,17 +311,13 @@ func TestTxSetRetry_BadNonRootInvalidatesWholeReply(t *testing.T) {
 		rootNode := wireNodes[0]
 		require.Greater(t, len(wireNodes), 1)
 
-		// rootPlusJunkLD: valid root + a non-root NodeID with garbage
-		// data so AddKnownNodeByID fails. The non-root NodeID itself is
-		// well-formed (33 bytes, non-zero depth) so it survives the
-		// UnmarshalBinary check; the failure is on the data side.
 		nonRootID := wireNodes[1].NodeID
 		rootPlusJunkLD := &message.LedgerData{
 			InfoType:   message.LedgerInfoTsCandidate,
 			LedgerHash: txSetID[:],
 			Nodes: []message.LedgerNode{
 				{NodeID: rootNode.NodeID, NodeData: rootNode.Data},
-				{NodeID: nonRootID, NodeData: []byte{0xde, 0xad, 0xbe, 0xef}},
+				{NodeID: nonRootID, NodeData: mismatchedInnerNode(t)},
 			},
 		}
 		const badPeer = uint64(42)
