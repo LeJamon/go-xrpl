@@ -1082,6 +1082,7 @@ func (s *Service) SubmitOpenLedgerTxDetailed(blob []byte, local bool) (openledge
 	if reason := tx.TransactionLocalChecksFailureReason(ptx.Parsed); reason != "" {
 		return failure, fmt.Errorf("%w: %s", ErrInvalidLocalTransaction, reason)
 	}
+	s.prefetchIngressState(ptx)
 
 	if err := s.lockOpenLedgerIfRunning(openLedgerIngress); err != nil {
 		return failure, err

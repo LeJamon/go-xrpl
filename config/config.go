@@ -33,6 +33,7 @@ type Config struct {
 	RelayProposals   string        `toml:"relay_proposals" mapstructure:"relay_proposals"`     // optional; "" = default ("trusted")
 	RelayValidations string        `toml:"relay_validations" mapstructure:"relay_validations"` // optional; "" = default ("all")
 	LedgerHistory    LedgerHistory `toml:"ledger_history" mapstructure:"ledger_history"`       // integer, "full", or "none"; absent = 256
+	Backfill         *bool         `toml:"backfill" mapstructure:"backfill"`                   // acquire missing historical ledgers; absent = true
 	LedgerCacheSize  *int          `toml:"ledger_cache_size" mapstructure:"ledger_cache_size"` // in-memory ledger and persisted lookup caches; absent = 256
 	FetchDepth       FetchDepth    `toml:"fetch_depth" mapstructure:"fetch_depth"`             // integer, "full", or "none"; absent = "full"; values < 10 are raised to 10
 	ValidationSeed   string        `toml:"validation_seed" mapstructure:"validation_seed"`
@@ -157,6 +158,19 @@ func (c *Config) ResolvedLedgerHistory() int {
 		return defaultLedgerHistory
 	}
 	return c.LedgerHistory.Value()
+}
+
+// ResolvedBackfill preserves history acquisition unless explicitly disabled.
+func (c *Config) ResolvedBackfill() bool {
+	return c.Backfill == nil || *c.Backfill
+}
+
+// GetLedgerHistoryUint32 preserves the full protocol range for "full".
+func (c *Config) GetLedgerHistoryUint32() uint32 {
+	if c.LedgerHistory.Full {
+		return ^uint32(0)
+	}
+	return uint32(c.ResolvedLedgerHistory())
 }
 
 // ResolvedLedgerCacheSize returns the configured size or DefaultLedgerCacheSize when unset.

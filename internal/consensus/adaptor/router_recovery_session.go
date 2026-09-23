@@ -452,6 +452,9 @@ func (r *Router) rearmFrozenPivotAcquisition(
 }
 
 func (r *Router) rebootstrapFrozenPivotIfStalled(now time.Time) bool {
+	if r.headerDiscoveryRepairPending(now) {
+		return false
+	}
 	r.acquisitionMu.Lock()
 	if !r.standardReplay.active {
 		r.acquisitionMu.Unlock()
@@ -474,8 +477,18 @@ func (r *Router) rebootstrapFrozenPivotIfStalled(now time.Time) bool {
 		return r.rearmFrozenPivotAcquisition(generation, pivotSeq, pivotHash, now)
 	}
 
-	if r.standardReplay.applying ||
-		r.standardReplay.targetSeq <= r.standardReplay.anchorSeq {
+	if r.standardReplayDrainOwner != nil {
+		r.acquisitionMu.Unlock()
+		return false
+	}
+	if r.scheduleReadyStandardReplayDrainLocked() {
+		r.acquisitionMu.Unlock()
+		return true
+	}
+	// A flag without an executing owner or a ready head is not progress.
+	// Clear it so a missing-head stall can still reach normal recovery.
+	r.standardReplay.applying = false
+	if r.standardReplay.targetSeq <= r.standardReplay.anchorSeq {
 		r.acquisitionMu.Unlock()
 		return false
 	}

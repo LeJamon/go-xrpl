@@ -25,6 +25,11 @@ func LoadConfig(paths Paths) (*Config, error) {
 	if err := validateManifestCounts(v); err != nil {
 		return nil, fmt.Errorf("failed to load main config: %w", err)
 	}
+	if v.IsSet("backfill") {
+		if _, ok := v.Get("backfill").(bool); !ok {
+			return nil, fmt.Errorf("backfill must be a boolean")
+		}
+	}
 	if err := validateIntegerSetting(v, "ledger_cache_size", MinLedgerCacheSize, MaxLedgerCacheSize); err != nil {
 		return nil, fmt.Errorf("failed to load main config: %w", err)
 	}

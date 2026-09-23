@@ -144,6 +144,9 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	if preprocessValid && !cfg.SkipSignatureVerification {
 		preprocessValid = txengine.PrewarmSignature(ptx.Parsed) == nil
 	}
+	if preprocessValid {
+		s.prefetchIngressState(ptx)
+	}
 
 	if err := s.lockOpenLedgerIfRunning(openLedgerIngress); err != nil {
 		return nil, err

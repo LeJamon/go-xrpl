@@ -530,6 +530,7 @@ func NewFromConfig(
 		inboundSweepInterval: appCfg.ResolvedSweepInterval(),
 	})
 	router.SetConsensusControlInbox(overlay.ConsensusControlMessages())
+	router.configureHistoryBackfill(appCfg.ResolvedBackfill(), appCfg.GetLedgerHistoryUint32())
 	router.SetServiceInbox(overlay.Messages())
 	router.SetTxInbox(overlay.TxMessages())
 	router.SetAcqInbox(overlay.LedgerDataMessages())

@@ -152,6 +152,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		roundDuration:    roundDuration,
 	}
 	e.buildInProgress = true
+	e.buildingLedgerSeq.Store(work.prevLedger.Seq() + 1)
 	e.setPhase(consensus.PhaseAccepted)
 	if e.acceptDeferrer != nil {
 		complete := sync.OnceFunc(func() {
@@ -207,6 +208,7 @@ func (e *Engine) commitAcceptedLedgerLocked(work ledgerAcceptWork, newLedger con
 
 	if err != nil {
 		e.buildInProgress = false
+		e.buildingLedgerSeq.Store(0)
 		// Build/validate/store failed off-lock; unwind to Establish so the next
 		// heartbeat retries (matches the pre-offload early-return).
 		e.setPhase(consensus.PhaseEstablish)
