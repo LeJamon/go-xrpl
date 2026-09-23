@@ -7,6 +7,8 @@ import (
 	"strconv"
 )
 
+const maxPProfRequestBodyBytes = 64 << 10
+
 func EnablePProf() {
 	runtime.SetMutexProfileFraction(100)
 	runtime.SetBlockProfileRate(1_000_000)
@@ -24,6 +26,7 @@ func PProfHandler() http.Handler {
 }
 
 func serveGoroutineProfile(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxPProfRequestBodyBytes)
 	// debug >= 2 calls runtime.Stack(all=true). A live Go 1.24/amd64 node
 	// suffered a fatal SIGSEGV in runtime.(*unwinder).next on this path during
 	// periodic collection. This is a process-fatal runtime fault, not a panic

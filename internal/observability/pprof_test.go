@@ -22,6 +22,42 @@ func TestPProfHandlerRejectsFullGoroutineStacks(t *testing.T) {
 	}
 }
 
+func TestPProfHandlerLimitsGoroutineRequestBody(t *testing.T) {
+	t.Parallel()
+	padding := strings.Repeat("x", 2*maxPProfRequestBodyBytes)
+	for _, tc := range []struct {
+		name, contentType, body string
+	}{
+		{"urlencoded", "application/x-www-form-urlencoded", "padding=" + padding},
+		{"multipart", "multipart/form-data; boundary=profile", "--profile\r\nContent-Disposition: form-data; name=\"padding\"\r\n\r\n" + padding + "\r\n--profile--\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := &countingProfileReader{Reader: strings.NewReader(tc.body)}
+			request := httptest.NewRequest(http.MethodPost, "/debug/pprof/goroutine?debug=1", body)
+			request.Header.Set("Content-Type", tc.contentType)
+			response := httptest.NewRecorder()
+			PProfHandler().ServeHTTP(response, request)
+			if body.read > maxPProfRequestBodyBytes+1 {
+				t.Fatalf("read %d request bytes, limit is %d", body.read, maxPProfRequestBodyBytes)
+			}
+			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "goroutine profile: total") {
+				t.Fatalf("grouped profile: status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+type countingProfileReader struct {
+	io.Reader
+	read int
+}
+
+func (r *countingProfileReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	r.read += n
+	return n, err
+}
+
 func TestPProfHandlerPreservesGroupedAndBinaryGoroutineProfiles(t *testing.T) {
 	t.Parallel()
 	t.Run("grouped text", func(t *testing.T) {
