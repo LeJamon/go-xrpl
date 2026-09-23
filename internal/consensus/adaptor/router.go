@@ -336,6 +336,7 @@ type Router struct {
 	// acquisition registries below.
 	acquisitionMu             sync.Mutex
 	replayAvailabilityRetries map[[32]byte]replayAvailabilityRetryState
+	replayFallbackRequired    map[[32]byte]uint32
 	replayCommitMu            sync.Mutex
 	consensusRecovery         consensusRecovery
 	lastHandoffSeq            uint32
@@ -1247,7 +1248,10 @@ func (r *Router) maintenanceTick() {
 			"hash", fmt.Sprintf("%x", entry.Hash[:8]),
 			"peer", entry.PeerID,
 		)
+		r.acquisitionMu.Lock()
+		r.requireReplayFullStateLocked(entry.Seq, entry.Hash)
 		r.replayer.Abandon(entry.Hash)
+		r.acquisitionMu.Unlock()
 		r.fallbackReplayAcquisition(entry.Seq, entry.Hash, entry.PeerID)
 	}
 

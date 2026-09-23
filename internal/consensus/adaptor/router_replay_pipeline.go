@@ -712,6 +712,10 @@ func (r *Router) tryArmStandardReplayPipeline(
 		if !ok {
 			break
 		}
+		if r.replayNeedsFullStateLocked(link.hash) {
+			r.startLedgerAcquisitionLegacyLocked(link.seq, link.hash, peerID)
+			break
+		}
 		// Consensus may have started a full-state fetch before replay proved
 		// this successor chain. The hash-keyed tracker would return that fetch
 		// to the tx-only collector forever. Once the pivot is verified, replay
@@ -922,6 +926,9 @@ func (r *Router) cancelStandardReplayPipelineLocked(reason string) standardRepla
 		}
 	}
 	for _, entry := range r.standardReplay.entries {
+		if entry.failed {
+			r.requireReplayFullStateLocked(entry.seq, entry.hash)
+		}
 		if entry.acquisition != nil && r.fetchTracker.DiscardExpected(entry.acquisition) {
 			retired = append(retired, entry.acquisition)
 		}
@@ -1298,6 +1305,7 @@ func (r *Router) discardStandardReplayHeadLocked(
 		}
 		return standardReplayRetirement{}, standardReplayTarget{}, false
 	}
+	r.requireReplayFullStateLocked(entry.seq, entry.hash)
 	retired := r.cancelStandardReplayPipelineLocked("head_failure")
 	if r.consensusRecovery.targetHash != ([32]byte{}) {
 		r.consensusRecovery.stepHash = entry.hash
