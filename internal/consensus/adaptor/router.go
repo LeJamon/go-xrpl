@@ -351,7 +351,8 @@ type Router struct {
 	history       catchupTarget
 	historyFloor  uint32
 	historySeeded bool
-	// Immutable after startup; the retention count includes the validated tip.
+	// Immutable after startup; historyDepth is the maximum sequence distance
+	// from the validated tip accepted for historical backfill.
 	historyBackfill bool
 	historyDepth    uint32
 

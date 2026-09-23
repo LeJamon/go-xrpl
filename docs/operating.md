@@ -230,7 +230,8 @@ keys to precede any `[section]` header.
 |-----|---------|---------|
 | `relay_proposals` | `"trusted"` | `all`, `trusted`, or `drop_untrusted`. |
 | `relay_validations` | `"all"` | `all`, `trusted`, or `drop_untrusted`. |
-| `ledger_history` | `256` | Ledgers to retain: integer, `"full"`, or `"none"`. |
+| `ledger_history` | `256` | Maximum sequence distance from the latest validated ledger for history: integer, `"full"`, or `"none"`; the boundary is inclusive. |
+| `backfill` | `true` | Acquire missing historical ledgers within `ledger_history`; set to `false` to disable history acquisition while retaining live sync and validation. |
 | `ledger_cache_size` | `256` | Recent in-memory ledger/transaction-index window and persisted-ledger lookup cache; integer from 1 to 384. |
 | `fetch_depth` | `"full"` | Back-fill depth: integer, `"full"`, or `"none"` (values < 10 clamp to 10). |
 | `network_id` | `"main"` | `"main"`, `"testnet"`, `"devnet"`, or an integer. |

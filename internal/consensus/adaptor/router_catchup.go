@@ -2039,7 +2039,7 @@ func (r *Router) invalidateHistoryPeer(peerID uint64) {
 // contiguous). The walk is serial and backward, each header naming its parent;
 // the maintenance tick arms the fetches.
 func (r *Router) startHistoryBackfill(seq uint32, hash [32]byte, peerID uint64, floor uint32) {
-	if !r.historyBackfill || r.historyDepth <= 1 || seq == 0 || seq <= floor || hash == ([32]byte{}) {
+	if !r.historyBackfill || r.historyDepth == 0 || seq == 0 || seq <= floor || hash == ([32]byte{}) {
 		return
 	}
 	r.historyMu.Lock()
@@ -2189,7 +2189,7 @@ func (r *Router) armHistoryBackfill() {
 		return
 	}
 	r.pruneHistoryBackfill(tip.Sequence())
-	if !r.historyBackfill || r.historyDepth <= 1 {
+	if !r.historyBackfill || r.historyDepth == 0 {
 		return
 	}
 	if targetSeq, _, _ := r.bestCatchupTarget(); targetSeq > svc.GetClosedLedgerIndex() {

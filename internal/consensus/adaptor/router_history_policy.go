@@ -15,14 +15,14 @@ func (r *Router) configureHistoryBackfill(enabled bool, depth uint32) {
 }
 
 func historyWindowMinimum(tip, depth uint32) uint32 {
-	if depth == 0 || tip < depth {
+	if depth == 0 || tip <= depth {
 		return 1
 	}
-	return tip - depth + 1
+	return tip - depth
 }
 
 func (r *Router) historySequenceAllowed(seq uint32) bool {
-	if !r.historyBackfill || r.historyDepth <= 1 || seq == 0 || r.adaptor == nil {
+	if !r.historyBackfill || r.historyDepth == 0 || seq == 0 || r.adaptor == nil {
 		return false
 	}
 	svc := r.adaptor.LedgerService()
@@ -38,7 +38,7 @@ func (r *Router) historySequenceAllowed(seq uint32) bool {
 // dropping only the cursor would leave a yielding full-state walk running.
 func (r *Router) pruneHistoryBackfill(tip uint32) {
 	minimum := historyWindowMinimum(tip, r.historyDepth)
-	disabled := !r.historyBackfill || r.historyDepth <= 1
+	disabled := !r.historyBackfill || r.historyDepth == 0
 	r.historyMu.Lock()
 	if disabled || (r.history.seq != 0 && (r.history.seq < minimum || r.belowFloor(r.history.seq))) {
 		r.history = catchupTarget{}
