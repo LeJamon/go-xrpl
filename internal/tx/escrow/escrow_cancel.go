@@ -87,7 +87,7 @@ func (e *EscrowCancel) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 	}
 	escrowAmount := reconstructAmountFromEscrow(escrowEntry)
 	if escrowAmount.IsMPT() {
-		return escrowCancelPreclaimMPT(view, escrowEntry.Account, escrowAmount)
+		return escrowCancelPreclaimMPT(view, escrowEntry.Account, escrowAmount, config.ParentCloseTime)
 	}
 	if escrowAmount.Issuer != "" {
 		return escrowCancelPreclaimIOU(view, escrowEntry.Account, escrowAmount)

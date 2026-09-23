@@ -180,7 +180,7 @@ func (e *EscrowCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 	// Reference: rippled Escrow.cpp:380-393
 	if !e.Amount.IsNative() {
 		if e.Amount.IsMPT() {
-			if result := escrowCreatePreclaimMPT(view, rules, accountID, destID, e.Amount); result != ter.TesSUCCESS {
+			if result := escrowCreatePreclaimMPT(view, rules, accountID, destID, e.Amount, config.ParentCloseTime); result != ter.TesSUCCESS {
 				return result
 			}
 		} else {

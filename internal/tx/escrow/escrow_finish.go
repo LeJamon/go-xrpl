@@ -184,7 +184,7 @@ func (e *EscrowFinish) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 	}
 	escrowAmount := reconstructAmountFromEscrow(escrowEntry)
 	if escrowEntry.MPTIssuanceID != "" {
-		return escrowFinishPreclaimMPT(view, escrowEntry.DestinationID, escrowAmount)
+		return escrowFinishPreclaimMPT(view, escrowEntry.DestinationID, escrowAmount, config.ParentCloseTime)
 	}
 	if escrowAmount.Issuer != "" {
 		return escrowFinishPreclaimIOU(view, escrowEntry.DestinationID, escrowAmount)
