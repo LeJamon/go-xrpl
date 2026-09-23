@@ -602,6 +602,10 @@ func (r *Router) tryArmStandardReplayPipeline(
 	targetHash [32]byte,
 	peerHint uint64,
 ) bool {
+	// Retire superseded walkers only after releasing acquisitionMu: their
+	// cancellation/cleanup may need locks owned by acquisition workers.
+	var superseded []*inbound.Ledger
+	defer func() { r.retireLegacyAcquisitions(superseded) }()
 	anchor, identity, current := r.standardReplayBase(svc, anchor, targetSeq, targetHash)
 	if !current {
 		return false
@@ -667,6 +671,7 @@ func (r *Router) tryArmStandardReplayPipeline(
 	if initial {
 		r.standardReplay.generation++
 		r.standardReplay.active = true
+		r.standardReplay.applying = false
 		r.standardReplay.pivotReady = true
 		r.standardReplay.pivotSeq = anchor.Sequence()
 		r.standardReplay.pivotHash = anchor.Hash()
@@ -706,6 +711,18 @@ func (r *Router) tryArmStandardReplayPipeline(
 		peerID, ok := r.resolveAcquisitionPeer(link.seq, peerHint)
 		if !ok {
 			break
+		}
+		// Consensus may have started a full-state fetch before replay proved
+		// this successor chain. The hash-keyed tracker would return that fetch
+		// to the tx-only collector forever. Once the pivot is verified, replay
+		// owns these proven successors; replace the redundant state walk.
+		if r.standardReplay.pivotReady && link.seq > r.standardReplay.anchorSeq {
+			if existing := r.fetchTracker.Find(link.hash); existing != nil && !existing.TransactionOnly() &&
+				r.fetchTracker.DiscardExpected(existing) {
+				superseded = append(superseded, existing)
+				r.logger.Info("replacing full-state acquisition with verified-chain transaction replay",
+					"seq", link.seq, "hash", fmt.Sprintf("%x", link.hash[:8]))
+			}
 		}
 		il, created := r.startLedgerReplayAcquisitionLegacyLocked(link.seq, link.hash, peerID)
 		if il == nil || !il.TransactionOnly() {
@@ -918,6 +935,7 @@ func (r *Router) cancelStandardReplayPipelineLocked(reason string) standardRepla
 	}
 	r.standardReplay.generation++
 	r.standardReplay.active = false
+	r.standardReplay.applying = false
 	r.standardReplay.pivotReady = false
 	r.standardReplay.initialCandidate = false
 	r.standardReplay.pivotSeq = 0
@@ -1131,10 +1149,19 @@ func (r *Router) scheduleStandardReplayDrain() {
 }
 
 func (r *Router) drainStandardReplayPipeline() {
+	owner := r.beginStandardReplayDrain()
+	if owner == nil {
+		return
+	}
+	defer r.finishStandardReplayDrain(owner)
 	batchStarted := time.Now()
 	applied := 0
 	for {
 		r.acquisitionMu.Lock()
+		if r.standardReplay.generation != owner.generation {
+			r.acquisitionMu.Unlock()
+			return
+		}
 		if !r.standardReplay.active {
 			r.standardReplay.applying = false
 			r.acquisitionMu.Unlock()
@@ -1171,7 +1198,7 @@ func (r *Router) drainStandardReplayPipeline() {
 		if err != nil {
 			r.acquisitionMu.Lock()
 			retired, target, current := r.discardStandardReplayHeadLocked(entry, generation)
-			continueDrain := !current && r.standardReplay.active
+			continueDrain := !current && r.standardReplay.active && r.standardReplay.generation == owner.generation
 			r.acquisitionMu.Unlock()
 			r.waitStandardReplayCommit()
 			r.retireStandardReplay(retired)
@@ -1194,12 +1221,11 @@ func (r *Router) drainStandardReplayPipeline() {
 		current := r.standardReplay.active && r.standardReplay.generation == generation &&
 			r.standardReplay.entries[entry.seq] == entry && r.standardReplay.anchorSeq+1 == entry.seq
 		if !current {
-			if r.standardReplay.active {
+			if r.standardReplay.active && r.standardReplay.generation == owner.generation {
 				r.acquisitionMu.Unlock()
 				releaseCommit()
 				continue
 			}
-			r.standardReplay.applying = false
 			r.acquisitionMu.Unlock()
 			releaseCommit()
 			return
@@ -1249,10 +1275,9 @@ func (r *Router) drainStandardReplayPipeline() {
 		}
 		applied++
 		if active && (applied >= standardReplayApplyBatch || time.Since(batchStarted) >= standardReplayApplyBudget) {
-			// Keep applying set while the edge-triggered wake is pending. A
-			// completion that lands before the wake is consumed joins this same
-			// drain instead of starting a concurrent applier.
-			r.scheduleStandardReplayDrain()
+			// Release actual execution ownership before the next router-loop
+			// batch. A replacement generation is re-armed only if ready.
+			owner.yielded = true
 			return
 		}
 	}

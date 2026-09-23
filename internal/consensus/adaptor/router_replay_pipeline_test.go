@@ -120,6 +120,31 @@ func TestStandardReplayPipelineAppliesReadySuccessorsInOrder(t *testing.T) {
 	assert.Zero(t, metrics.ReplayPipelineReadyDepth)
 }
 
+func TestStandardReplayReplacesFullStateSuccessor(t *testing.T) {
+	r, a, sender, svc := makeRouter(t)
+	_, err := svc.AcceptLedger(context.Background())
+	require.NoError(t, err)
+	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 3)
+	old, created := r.fetchTracker.GetOrCreate(links[0].hash, func() *inbound.Ledger {
+		return inbound.New(links[0].hash, links[0].seq, 7, r.logger, r.acquisitionOpts()...)
+	})
+	require.True(t, created)
+	require.False(t, old.TransactionOnly())
+	armStandardReplayTestPipeline(t, r, a, sender, links)
+	replacement := r.fetchTracker.Find(links[0].hash)
+	require.NotNil(t, replacement)
+	require.NotSame(t, old, replacement)
+	require.True(t, replacement.TransactionOnly())
+	// A late completion/removal from the retired walker cannot erase replay.
+	require.False(t, r.fetchTracker.DiscardExpected(old))
+	for _, link := range links {
+		completeStandardReplayTestLink(t, r, link)
+	}
+	require.Eventually(t, func() bool {
+		return r.replayPipelineApplied.Load() == 3
+	}, 5*time.Second, 10*time.Millisecond)
+}
+
 func TestStandardReplayPipelineYieldsAfterBoundedApplyBatch(t *testing.T) {
 	r, a, sender, svc := makeRouter(t)
 	_, err := svc.AcceptLedger(context.Background())
@@ -269,7 +294,7 @@ func TestStandardReplayPipelineLeavesFullStateSlotAvailable(t *testing.T) {
 	assert.False(t, fullState.TransactionOnly())
 }
 
-func TestStandardReplayPipelineDoesNotClaimFullStateAcquisition(t *testing.T) {
+func TestStandardReplayPipelineReplacesRedundantFullStateAcquisition(t *testing.T) {
 	r, a, sender, svc := makeRouter(t)
 	_, err := svc.AcceptLedger(context.Background())
 	require.NoError(t, err)
@@ -286,10 +311,11 @@ func TestStandardReplayPipelineDoesNotClaimFullStateAcquisition(t *testing.T) {
 
 	head := r.fetchTracker.Find(links[0].hash)
 	require.NotNil(t, head)
-	assert.False(t, head.TransactionOnly())
-	assert.False(t, r.standardReplay.active)
+	assert.True(t, head.TransactionOnly())
+	assert.True(t, r.standardReplay.active)
 	for _, link := range links[1:] {
-		assert.Nil(t, r.fetchTracker.Find(link.hash))
+		require.NotNil(t, r.fetchTracker.Find(link.hash))
+		assert.True(t, r.fetchTracker.Find(link.hash).TransactionOnly())
 	}
 }
 

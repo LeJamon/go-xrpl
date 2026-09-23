@@ -730,6 +730,10 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 		return
 	}
 	ledger := result.ledger
+	if ledger != nil && ledger.Reason() == inbound.ReasonHistory && !r.historySequenceAllowed(ledger.Seq()) {
+		r.discardHistoryAcquisition(ledger, "outside_history_window")
+		return
+	}
 	if ledger == nil || r.fetchTracker.Find(ledger.Hash()) != ledger {
 		if ledger != nil {
 			for _, request := range result.requests {

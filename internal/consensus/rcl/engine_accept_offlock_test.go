@@ -33,7 +33,6 @@ func driveToEstablish(t *testing.T, e *Engine, a *mockAdaptor) {
 	t.Helper()
 	e.mu.Lock()
 	e.prevLedger = a.lastLCL
-	e.buildingLedgerSeq.Store(e.state.Round.Seq)
 	e.setPhase(consensus.PhaseEstablish)
 	e.mu.Unlock()
 }
@@ -59,8 +58,8 @@ func TestEngine_AcceptLedger_OffLockDoesNotBlockPeerHandlers(t *testing.T) {
 	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
 	engine.StartRound(round, true)
 	driveToEstablish(t, engine, adaptor)
-	if got := engine.BuildingLedgerSeq(); got != round.Seq {
-		t.Fatalf("building ledger sequence after close = %d, want %d", got, round.Seq)
+	if got := engine.BuildingLedgerSeq(); got != 0 {
+		t.Fatalf("establish is not an active ledger build: sequence = %d, want 0", got)
 	}
 
 	// The parent is seq 100; the mock mints its child as ID {101}. A proposal
@@ -237,7 +236,7 @@ func TestEngine_AcceptLedger_BroadcastsValidationAfterFinality(t *testing.T) {
 	}
 }
 
-func TestEngine_AcceptLedger_BuildFailureRetainsBuildingSequence(t *testing.T) {
+func TestEngine_AcceptLedger_BuildFailureReleasesBuildingSequence(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.buildLedgerErr = errors.New("build failed")
 	engine := NewEngine(adaptor, DefaultConfig())
@@ -249,8 +248,8 @@ func TestEngine_AcceptLedger_BuildFailureRetainsBuildingSequence(t *testing.T) {
 	engine.acceptLedger(consensus.ResultSuccess)
 	engine.mu.Unlock()
 
-	if got := engine.BuildingLedgerSeq(); got != round.Seq {
-		t.Fatalf("building ledger sequence after failed apply = %d, want %d", got, round.Seq)
+	if got := engine.BuildingLedgerSeq(); got != 0 {
+		t.Fatalf("building ledger sequence after failed apply = %d, want 0", got)
 	}
 	if got := engine.Phase(); got != consensus.PhaseEstablish {
 		t.Fatalf("phase after failed apply = %s, want establish", got)

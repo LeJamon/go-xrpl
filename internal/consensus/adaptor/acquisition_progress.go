@@ -16,7 +16,15 @@ func (r *Router) reportAcquisitionProgress(ledger *inbound.Ledger, yielded bool)
 	identity := r.standardReplayIdentityLocked()
 	occupancy := len(r.standardReplay.entries)
 	r.acquisitionMu.Unlock()
+	purpose := "consensus"
+	switch ledger.Reason() {
+	case inbound.ReasonHistory:
+		purpose = "history"
+	case inbound.ReasonGeneric:
+		purpose = "rpc"
+	}
 	r.logger.Info("inbound ledger acquisition progress",
+		"purpose", purpose,
 		"seq", snapshot.Seq, "hash", fmt.Sprintf("%x", snapshot.Hash[:8]),
 		"phase", snapshot.Phase(), "yielded", yielded,
 		"timeouts", snapshot.Timeouts,

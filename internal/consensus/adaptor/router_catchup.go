@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
@@ -2026,12 +2027,13 @@ func (r *Router) invalidateHistoryPeer(peerID uint64) {
 // contiguous). The walk is serial and backward, each header naming its parent;
 // the maintenance tick arms the fetches.
 func (r *Router) startHistoryBackfill(seq uint32, hash [32]byte, peerID uint64, floor uint32) {
-	if seq == 0 || seq <= floor || hash == ([32]byte{}) {
+	if !r.historyBackfill || r.historyDepth <= 1 || seq == 0 || seq <= floor || hash == ([32]byte{}) {
 		return
 	}
 	r.historyMu.Lock()
 	r.history = catchupTarget{seq: seq, hash: hash, peerID: peerID}
 	r.historyFloor = floor
+	r.historySeeded = true
 	r.historyMu.Unlock()
 }
 
@@ -2043,6 +2045,11 @@ func (r *Router) onLedgerSwitched(seq uint32, _ [32]byte, parentHash [32]byte, h
 }
 
 func (r *Router) onLedgerFullyValidated(seq uint32, hash [32]byte) {
+	// This callback also observes remote quorums before their ledger is local.
+	// Retention follows our installed validated state, not an uninstalled head.
+	if r.adaptor != nil && r.adaptor.LedgerService() != nil {
+		r.pruneHistoryBackfill(r.adaptor.LedgerService().GetValidatedLedgerIndex())
+	}
 	r.recordSeqHash(seq, hash, [32]byte{}, false)
 	if r.locallySatisfiesLedger(seq, hash) {
 		r.retireLocallySatisfiedLedger(seq, hash, "ledger_validated")
@@ -2158,8 +2165,19 @@ func (r *Router) completeHistoryBackfill(seq uint32, hash, parentHash [32]byte, 
 // online-delete floor, or genesis. At most one ReasonHistory acquisition runs,
 // never in the consensus catch-up slot.
 func (r *Router) armHistoryBackfill() {
+	if r.adaptor == nil {
+		return
+	}
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
+		return
+	}
+	tip := svc.GetValidatedLedger()
+	if tip == nil {
+		return
+	}
+	r.pruneHistoryBackfill(tip.Sequence())
+	if !r.historyBackfill || r.historyDepth <= 1 {
 		return
 	}
 	if targetSeq, _, _ := r.bestCatchupTarget(); targetSeq > svc.GetClosedLedgerIndex() {
@@ -2169,14 +2187,21 @@ func (r *Router) armHistoryBackfill() {
 		return
 	}
 	r.historyMu.Lock()
+	// A restart may have a valid tip but missing history without a new pivot
+	// switch. Seed once, then keep the backward cursor as live ledgers arrive.
+	if !r.historySeeded && tip.Sequence() > 1 {
+		r.history = catchupTarget{seq: tip.Sequence() - 1, hash: tip.ParentHash()}
+		r.historyFloor = 0
+		r.historySeeded = true
+	}
 	target := r.history
 	floor := r.historyFloor
 	r.historyMu.Unlock()
 	if target.seq == 0 {
 		return
 	}
-	for {
-		if target.seq == 0 || target.seq <= floor || target.hash == ([32]byte{}) || r.belowFloor(target.seq) {
+	for skipped := 0; ; skipped++ {
+		if !r.historySequenceAllowed(target.seq) || target.seq <= floor || target.hash == ([32]byte{}) {
 			r.historyMu.Lock()
 			if r.history == target && r.historyFloor == floor {
 				r.history = catchupTarget{}
@@ -2185,27 +2210,40 @@ func (r *Router) armHistoryBackfill() {
 			r.historyMu.Unlock()
 			return
 		}
-		held, err := svc.GetLedgerByHash(target.hash)
-		if err != nil || held == nil {
+		// Do not perform an unbounded history scan on the consensus router.
+		if skipped == historySkipBudget {
+			return
+		}
+		lookupCtx, cancelLookup := context.WithTimeout(r.lifecycleContext(), 100*time.Millisecond)
+		held, err := svc.GetLedgerByHashContext(lookupCtx, target.hash)
+		cancelLookup()
+		if errors.Is(err, svcerr.ErrLedgerNotFound) || (err == nil && held == nil) {
 			break
 		}
-		hdr := held.Header()
-		stateMap, err := held.StateMapSnapshot()
 		if err != nil {
-			r.logger.Warn("history backfill: snapshot held ledger state failed",
-				"error", err, "seq", target.seq)
+			// A transient read failure of known-complete history is not a
+			// reason to start another full-state network acquisition.
 			return
 		}
-		txMap, err := held.TxMapSnapshot()
-		if err != nil {
-			r.logger.Warn("history backfill: snapshot held ledger transactions failed",
-				"error", err, "seq", target.seq)
-			return
-		}
-		if err = svc.IngestHistoricalLedgerWithState(r.lifecycleContext(), &hdr, stateMap, txMap); err != nil {
-			r.logger.Warn("history backfill: held ledger ingest failed",
-				"error", err, "seq", target.seq)
-			return
+		// Fully acquired ledgers can already be stored by hash without being
+		// adopted into canonical history (e.g. a previous startup candidate).
+		// Preserve that local promotion path; merely cached headers are not
+		// returned by this service lookup. Already-complete history needs no
+		// repeated transaction indexing or persistence enqueue.
+		if !svc.HasCompleteLedgerHash(target.seq, target.hash) {
+			hdr := held.Header()
+			stateMap, err := held.StateMapSnapshot()
+			if err != nil {
+				return
+			}
+			txMap, err := held.TxMapSnapshot()
+			if err != nil {
+				return
+			}
+			if err := svc.IngestHistoricalLedgerWithState(r.lifecycleContext(), &hdr, stateMap, txMap); err != nil {
+				r.logger.Warn("history backfill: held ledger ingest failed", "error", err, "seq", target.seq)
+				return
+			}
 		}
 		next := catchupTarget{seq: target.seq - 1, hash: held.ParentHash(), peerID: target.peerID}
 		r.historyMu.Lock()
@@ -2222,6 +2260,13 @@ func (r *Router) armHistoryBackfill() {
 	r.historyMu.Unlock()
 	if !stillCurrent {
 		return
+	}
+	// A newer jump can leave an older, still-in-window history walk alive.
+	// Prefer the newest missing ledger instead of waiting for that walk.
+	for _, candidate := range r.fetchTracker.Active() {
+		if candidate.Reason() == inbound.ReasonHistory && candidate.Hash() != target.hash {
+			r.discardHistoryAcquisition(candidate, "newer_history_target")
+		}
 	}
 	if r.fetchTracker.CountReason(inbound.ReasonHistory) >= 1 || r.isAcquiring(target.hash) {
 		return
@@ -2244,7 +2289,7 @@ func (r *Router) armHistoryBackfill() {
 }
 
 func (r *Router) prepareHistoryAcquisition(seq uint32, hash [32]byte, peerID uint64) *inbound.Ledger {
-	if r.replayer.Has(hash) {
+	if !r.historySequenceAllowed(seq) || r.replayer.Has(hash) {
 		return nil
 	}
 	il, created := r.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
@@ -2265,6 +2310,7 @@ func (r *Router) requestHistoryAcquisition(il *inbound.Ledger, peerID uint64) {
 		"seq", il.Seq(),
 		"hash", fmt.Sprintf("%x", hash[:8]),
 		"peer", peerID,
+		"ledger_history", r.historyDepth,
 	)
 	r.requestLedgerBase(il, peerID, "failed to request history ledger base from peer")
 }
@@ -3906,6 +3952,10 @@ func (r *Router) completeInboundLedger(il *inbound.Ledger) {
 }
 
 func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
+	if il.Reason() == inbound.ReasonHistory && !r.historySequenceAllowed(il.Seq()) {
+		r.discardHistoryAcquisition(il, "outside_history_window")
+		return
+	}
 	h, stateMap, txMap, err := il.Result()
 	if err != nil {
 		r.logger.Warn("inbound ledger: failed to get result", "error", err)

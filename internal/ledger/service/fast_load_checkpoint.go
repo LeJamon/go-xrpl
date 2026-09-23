@@ -408,7 +408,7 @@ func (s *Service) invalidateFastLoadCheckpointEligibility(reason string) {
 	s.validatedStateBaseMu.Lock()
 	proof := s.validatedStateBaseProof
 	s.stateBaseMutationEpoch++
-	s.stateBaseRecertification = nil
+	s.cancelStateBaseRecertificationLocked(reason)
 	s.validatedStateBaseProof = nil
 	s.validatedStateBaseCandidate = nil
 	s.fastLoadCheckpointState.Store(fastLoadCheckpointInvalidated)
