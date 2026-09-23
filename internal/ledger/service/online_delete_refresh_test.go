@@ -788,6 +788,9 @@ func newRotatingRefreshFixture(
 	})
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
+	svc.recertificationMu.Lock()
+	svc.recertificationStopped = true
+	svc.recertificationMu.Unlock()
 	t.Cleanup(svc.Stop)
 
 	for i := range entries {
@@ -803,6 +806,9 @@ func newRotatingRefreshFixture(
 	committed, err := db.RotateGeneration(t.Context(), seq, 1)
 	require.True(t, committed)
 	require.NoError(t, err)
+	svc.recertificationMu.Lock()
+	svc.recertificationStopped = false
+	svc.recertificationMu.Unlock()
 	return svc, db, seq
 }
 

@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted.
+Superseded by [ADR 0006](0006-cgo-required-for-daemon.md) and
+[ADR 0007](0007-native-secp256k1.md).
 
 ## Context
 

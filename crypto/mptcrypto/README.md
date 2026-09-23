@@ -16,6 +16,12 @@ the complete upstream 1.0.2 C/C++ suite before the Go bridge tests. Setup uses t
 repository-local `.conan-home` as `CONAN_HOME`, so it neither reads
 nor changes the user's global Conan remotes or cache.
 
+The MPT package and the goXRPL secp256k1 shim resolve to the same locked Conan
+`secp256k1/0.7.1` package. Setup creates the `libsecp256k1.pc` alias beside
+Conan's `secp256k1.pc`, and validates that both names have the same prefix and
+library directory before linking. This keeps one native secp256k1 library in the
+MPT-enabled process rather than combining the Conan package with a system copy.
+
 The upstream source archive does not contain a license or notice. This
 repository therefore does not vendor or redistribute its sources, headers,
 libraries, or linked binaries. Obtain legal clearance before distributing an

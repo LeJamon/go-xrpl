@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -105,8 +106,25 @@ func TestNodeShutdownTimeoutIncludesConfiguredCheckpointGrace(t *testing.T) {
 	require.Equal(t, maxDuration, nodeShutdownTimeoutFor(maxDuration))
 }
 
-func checkpointShutdownTestLogger() (*bytes.Buffer, xrpllog.Logger) {
-	logs := &bytes.Buffer{}
+type checkpointLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *checkpointLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *checkpointLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func checkpointShutdownTestLogger() (*checkpointLogBuffer, xrpllog.Logger) {
+	logs := &checkpointLogBuffer{}
 	cfg := &xrpllog.Config{Level: xrpllog.LevelInfo, Format: "text", Output: logs}
 	return logs, xrpllog.New(xrpllog.NewHandler(cfg), cfg)
 }

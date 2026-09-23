@@ -10,9 +10,18 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/protocol"
-	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/stretchr/testify/require"
 )
+
+const secp256k1OrderHex = "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"
+
+func highSValue(s []byte) *big.Int {
+	order, ok := new(big.Int).SetString(secp256k1OrderHex, 16)
+	if !ok {
+		panic("invalid secp256k1 order")
+	}
+	return order.Sub(order, new(big.Int).SetBytes(s))
+}
 
 func TestVerifyValidationEnforcesCanonicalFlag(t *testing.T) {
 	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
@@ -28,7 +37,7 @@ func TestVerifyValidationEnforcesCanonicalFlag(t *testing.T) {
 
 	r, s, err := rootcrypto.DERSigToRS(validation.Signature)
 	require.NoError(t, err)
-	highS := new(big.Int).Sub(btcec.S256().N, new(big.Int).SetBytes(s))
+	highS := highSValue(s)
 	validation.Signature = rootcrypto.EncodeDERSignature(new(big.Int).SetBytes(r), highS)
 	require.Error(t, verifyValidation(validation))
 
@@ -37,7 +46,7 @@ func TestVerifyValidationEnforcesCanonicalFlag(t *testing.T) {
 	require.NoError(t, err)
 	r, s, err = rootcrypto.DERSigToRS(validation.Signature)
 	require.NoError(t, err)
-	highS.Sub(btcec.S256().N, new(big.Int).SetBytes(s))
+	highS = highSValue(s)
 	validation.Signature = rootcrypto.EncodeDERSignature(new(big.Int).SetBytes(r), highS)
 	require.NoError(t, verifyValidation(validation))
 }

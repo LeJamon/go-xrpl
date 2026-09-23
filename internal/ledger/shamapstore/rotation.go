@@ -94,18 +94,19 @@ type RotationConfig struct {
 // blocks the consensus / ledger-accept path; an in-flight rotation coalesces
 // further notifications to the newest validated sequence.
 type Rotator struct {
-	store      *Store
-	nodes      NodePruner
-	rel        RelationalPruner
-	cfg        RotationConfig
-	logger     xrpllog.Logger
-	hooksMu    sync.RWMutex
-	refresh    StateRefresh
-	advance    func(uint32)
-	beginPrune func() func()
-	healthMu   sync.RWMutex
-	healthy    func() bool
-	recovery   time.Duration
+	store          *Store
+	nodes          NodePruner
+	rel            RelationalPruner
+	cfg            RotationConfig
+	logger         xrpllog.Logger
+	hooksMu        sync.RWMutex
+	refresh        StateRefresh
+	advance        func(uint32)
+	beginPrune     func() func()
+	retentionGuard func() func()
+	healthMu       sync.RWMutex
+	healthy        func() bool
+	recovery       time.Duration
 
 	notifyCh chan uint32
 	stopCh   chan struct{}
@@ -154,6 +155,16 @@ func (r *Rotator) SetStateRefresh(refresh StateRefresh, advance func(uint32), be
 	r.hooksMu.Unlock()
 }
 
+// SetRetentionGuard coordinates floor updates with state-base proof publication.
+func (r *Rotator) SetRetentionGuard(begin func() func()) {
+	if r == nil {
+		return
+	}
+	r.hooksMu.Lock()
+	r.retentionGuard = begin
+	r.hooksMu.Unlock()
+}
+
 // NewRotator constructs a Rotator. store and nodes are required; rel may be nil
 // when no relational index is configured. A nil logger is replaced with a
 // discard logger. NewRotator returns nil when rotation is disabled
@@ -194,6 +205,13 @@ func (r *Rotator) ReconcileGenerationState() error {
 	generations, ok := r.nodes.(NodeGenerationRotator)
 	if !ok {
 		return nil
+	}
+	r.hooksMu.RLock()
+	begin := r.retentionGuard
+	r.hooksMu.RUnlock()
+	if begin != nil {
+		release := begin()
+		defer release()
 	}
 	generationLast, generationMinimum := generations.GenerationState()
 	storedLast := r.store.GetLastRotated()
@@ -287,6 +305,13 @@ func (r *Rotator) MinimumOnline() uint32 {
 func (r *Rotator) SetMinimumOnlineFloor(seq uint32) error {
 	if r == nil || seq == 0 {
 		return nil
+	}
+	r.hooksMu.RLock()
+	begin := r.retentionGuard
+	r.hooksMu.RUnlock()
+	if begin != nil {
+		release := begin()
+		defer release()
 	}
 	if err := r.store.SetMinimumOnline(seq); err != nil {
 		return err

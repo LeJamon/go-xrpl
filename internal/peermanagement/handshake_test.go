@@ -366,7 +366,7 @@ func TestVerifyPeerHandshake_MissingSignature(t *testing.T) {
 // requires secp256k1 for node public keys (Handshake.cpp:294-295) —
 // an ed25519 validator key is different from a node key, and a peer
 // advertising the wrong family is either misconfigured or hostile.
-// Regression guard against a future btcec refactor that might
+// Regression guard against a future parser refactor that might
 // accidentally accept 33-byte ed25519 keys (which share the same
 // compressed length).
 func TestParsePublicKeyToken_RejectsEd25519Prefix(t *testing.T) {

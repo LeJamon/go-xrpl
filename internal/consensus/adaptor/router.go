@@ -151,6 +151,9 @@ type Router struct {
 	// buffered prevents a ready replay window from monopolising the same loop
 	// that must drain consensus, control, and acquisition traffic.
 	standardReplayDrainWake chan struct{}
+	// Protected by acquisitionMu. Unlike the pipeline's scheduled/applying
+	// flag, a running drain survives cancellation until its owner returns.
+	standardReplayDrainOwner *standardReplayDrainOwner
 
 	// replayer coordinates concurrent mtREPLAY_DELTA_REQUEST acquisitions
 	// keyed by target ledger hash, under a configurable concurrency cap, so a
@@ -275,6 +278,9 @@ type Router struct {
 	// Run message loop, mirroring rippled's jtTRANSACTION job queue. It is nil
 	// before Run and after shutdown.
 	txJobs chan *peermanagement.InboundMessage
+	// txSetLearnJobs shares the transaction workers, but never makes delivery
+	// of an acquired consensus set wait for open-ledger membership or apply.
+	txSetLearnJobs chan txSetLearnJob
 
 	// droppedTxJobs counts inbound transactions shed because the worker pool
 	// was saturated — the originating peer resends and reduce-relay covers
@@ -326,20 +332,29 @@ type Router struct {
 	replayPipelineApplyUs                atomic.Uint64
 	replayPipelinePersistUs              atomic.Uint64
 
-	acquisitionMu     sync.Mutex
-	replayCommitMu    sync.Mutex
-	consensusRecovery consensusRecovery
-	lastHandoffSeq    uint32
-	standardReplay    standardReplayPipeline
+	// acquisitionMu protects replayAvailabilityRetries along with the
+	// acquisition registries below.
+	acquisitionMu             sync.Mutex
+	replayAvailabilityRetries map[[32]byte]replayAvailabilityRetryState
+	replayFallbackRequired    map[[32]byte]uint32
+	replayCommitMu            sync.Mutex
+	consensusRecovery         consensusRecovery
+	lastHandoffSeq            uint32
+	standardReplay            standardReplayPipeline
 
 	// historyMu guards history, the single backward history-backfill target: the
 	// next ledger a jump-adopt skipped (rippled Reason::HISTORY). The walk is
 	// serial (each header names its parent) and tick-driven. historyFloor bounds
 	// it to the jump gap; below it history is already contiguous, so descending
 	// further would re-fetch persisted ledgers evicted from the in-memory window.
-	historyMu    sync.Mutex
-	history      catchupTarget
-	historyFloor uint32
+	historyMu     sync.Mutex
+	history       catchupTarget
+	historyFloor  uint32
+	historySeeded bool
+	// Immutable after startup; historyDepth is the maximum sequence distance
+	// from the validated tip accepted for historical backfill.
+	historyBackfill bool
+	historyDepth    uint32
 
 	// seqHashMu guards the seqHash table: the network's hash (and, when known,
 	// parent hash) per ledger sequence, from trusted validations and peer
@@ -516,6 +531,8 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 		txSetRetryKnobs:        defaultTxSetRetryKnobs(),
 		seqHash:                make(map[uint32]ledgerHashEntry),
 		lifecycleCtx:           context.Background(),
+		historyBackfill:        true,
+		historyDepth:           256,
 	}
 	if adaptor != nil {
 		if _, ok := engine.(consensus.VerifiedValidationProcessor); ok {
@@ -703,7 +720,7 @@ func (r *Router) StopAcquisitions() (legacy, replay int) {
 	if r.replayer != nil {
 		replay = r.replayer.Stop()
 	}
-	retirement := r.cancelStandardReplayPipelineLocked()
+	retirement := r.cancelStandardReplayPipelineLocked("shutdown")
 	r.consensusRecovery = consensusRecovery{}
 	r.lastHandoffSeq = 0
 	r.acquisitionMu.Unlock()
@@ -1037,8 +1054,8 @@ func (r *Router) submitTxJob(msg *peermanagement.InboundMessage) {
 	r.lifecycleMu.RUnlock()
 }
 
-// DroppedTxJobs returns the cumulative count of inbound transactions shed
-// because the worker pool was saturated.
+// DroppedTxJobs returns the cumulative count of inbound transactions and
+// acquired transaction learning jobs shed at saturation or shutdown.
 func (r *Router) DroppedTxJobs() uint64 {
 	return r.droppedTxJobs.Load()
 }
@@ -1177,6 +1194,7 @@ func (r *Router) submitManifestJob(msg *peermanagement.InboundMessage) {
 // timeout fallback for the same hash).
 func (r *Router) maintenanceTick() {
 	r.reconcilePeerAvailability()
+	r.expireReplayAvailabilityRetries()
 
 	// Sub-task retry loop: rotate peers on silent-peer timeouts BEFORE
 	// the outer budget kicks in (250ms × 10 rotations inside a larger
@@ -1231,7 +1249,10 @@ func (r *Router) maintenanceTick() {
 			"hash", fmt.Sprintf("%x", entry.Hash[:8]),
 			"peer", entry.PeerID,
 		)
+		r.acquisitionMu.Lock()
+		r.requireReplayFullStateLocked(entry.Seq, entry.Hash)
 		r.replayer.Abandon(entry.Hash)
+		r.acquisitionMu.Unlock()
 		r.fallbackReplayAcquisition(entry.Seq, entry.Hash, entry.PeerID)
 	}
 
@@ -1246,8 +1267,8 @@ func (r *Router) maintenanceTick() {
 
 	r.fetchTracker.Sweep()
 	r.retryInboundLedgerAcquisitions(now)
-	r.rebootstrapFrozenPivotIfStalled(now)
 	r.tickHeaderDiscovery(now)
+	r.rebootstrapFrozenPivotIfStalled(now)
 
 	// Timer-driven catch-up re-arm (rippled LedgerMaster::doAdvance cadence): a
 	// reaped/failed sole acquisition (cap=1) can't park catch-up until the next

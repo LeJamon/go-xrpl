@@ -154,10 +154,10 @@ jobs:
   # rippled"; an `int`-width or endianness assumption in the codec / hashing
   # paths silently forks account_hash / transaction_hash. `int` is 64-bit on the
   # amd64 matrix, so an overflow like `len(x) > math.MaxUint32` only fails to
-  # compile on a 32-bit target. The daemon requires CGO, so this compiles the
-  # protocol and storage libraries for linux/386, then exercises the SQLite
-  # pagination boundaries whose correctness depends on runtime int width.
-  # Broader runtime 386 library tests run in the nightly workflow.
+  # compile on a 32-bit target. The native secp256k1 shim reaches addresscodec,
+  # binarycodec, keylet, ledger, and relational storage, so this no-CGO leg
+  # compiles only the verified portable package leaves for linux/386. Broader
+  # native coverage remains in the regular library and nightly jobs.
   build-386:
     name: Test (libraries, linux/386 — word-size guard)
     runs-on: ubuntu-latest
@@ -170,15 +170,40 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           cgo: "false"
-      - run: go build ./...
-      - run: go test -count=1 -timeout 5m ./storage/relationaldb/sqlite/...
+      - name: Compile portable no-CGO library leaves
+        run: >
+          go build
+          ./codec/binarycodec/definitions/...
+          ./codec/binarycodec/serdes/...
+          ./codec/binarycodec/internal/decimal/...
+          ./shamap/...
+          ./storage/kvstore/...
+          ./storage/nodestore/...
+          ./ledger/entry/schema/...
+          ./ledger/entry/cmd/entrygen/...
+          ./amendment/...
+          ./drops/...
+          ./protocol/...
+          ./config/...
+          ./version/...
+          ./crypto
+          ./crypto/ed25519/...
+          ./crypto/rfc1751/...
+          ./crypto/sha512half/...
       - name: Record producer evidence
         if: always()
         env:
           EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-build-386
           EVIDENCE_LABEL: build-386
           EVIDENCE_STATUS: ${{ job.status }}
-          EVIDENCE_COMMAND: GOOS=linux GOARCH=386 CGO_ENABLED=0 go build ./...; GOOS=linux GOARCH=386 CGO_ENABLED=0 go test -count=1 -timeout 5m ./storage/relationaldb/sqlite/...
+          EVIDENCE_COMMAND: >-
+            GOOS=linux GOARCH=386 CGO_ENABLED=0 go build
+            ./codec/binarycodec/definitions/... ./codec/binarycodec/serdes/...
+            ./codec/binarycodec/internal/decimal/... ./shamap/...
+            ./storage/kvstore/... ./storage/nodestore/...
+            ./ledger/entry/schema/... ./ledger/entry/cmd/entrygen/...
+            ./amendment/... ./drops/... ./protocol/... ./config/... ./version/...
+            ./crypto ./crypto/ed25519/... ./crypto/rfc1751/... ./crypto/sha512half/...
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload producer evidence
         if: always()
@@ -310,39 +335,6 @@ jobs:
           path: ${{ runner.temp }}/issue-1908-producer-test-${{ matrix.group }}
           if-no-files-found: error
 
-  test-purego:
-    name: Test (libs, CGO_ENABLED=0)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: ./.github/actions/setup
-        with:
-          cgo: "false"
-      # Exercises the pure-Go crypto backends that ship in CGO-disabled
-      # builds — most importantly secp256k1's decred verify path, which the
-      # CGO=1 legs never compile. Asserts it agrees with the libsecp256k1
-      # path on signature accept/reject. No -race here: the detector needs
-      # cgo, and no CGO dev headers are installed for this leg.
-      - run: CGO_ENABLED=0 go test -count=1 -timeout 15m ./crypto/...
-      - run: CGO_ENABLED=0 go test -tags mptcrypto -count=1 -timeout 15m ./amendment/... ./crypto/mptcrypto/...
-      - name: Record producer evidence
-        if: always()
-        env:
-          EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-test-purego
-          EVIDENCE_LABEL: test-purego
-          EVIDENCE_STATUS: ${{ job.status }}
-          EVIDENCE_COMMAND: >-
-            CGO_ENABLED=0 go test -count=1 -timeout 15m ./crypto/...;
-            CGO_ENABLED=0 go test -tags mptcrypto -count=1 -timeout 15m ./amendment/... ./crypto/mptcrypto/...
-        run: scripts/acceptance/final-evidence.sh producer
-      - name: Upload producer evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: issue-1908-producer-${{ github.sha }}-test-purego
-          path: ${{ runner.temp }}/issue-1908-producer-test-purego
-          if-no-files-found: error
-
   test-mpt-crypto:
     name: Test (Confidential MPT native backend, ${{ matrix.os }})
     strategy:
@@ -356,14 +348,22 @@ jobs:
       - name: Install Conan
         run: pipx install conan==2.18.1
       - name: Build and test native backend
-        run: ./scripts/setup-mpt-crypto.sh test ./amendment/... ./crypto/mptcrypto/... ./internal/tx/mpt/... ./internal/testing/mpt/...
+        run: ./scripts/setup-mpt-crypto.sh test ./amendment/... ./crypto/mptcrypto/... ./crypto/secp256k1/... ./internal/tx/mpt/... ./internal/testing/mpt/...
+      - name: Exercise native secp under race and cgocheck2
+        run: |
+          eval "$(./scripts/setup-mpt-crypto.sh env)"
+          GOEXPERIMENT=cgocheck2 CGO_ENABLED=1 \
+            go test -race -count=1 -timeout 15m ./crypto/secp256k1/...
       - name: Record producer evidence
         if: always()
         env:
           EVIDENCE_DIR: ${{ runner.temp }}/issue-1908-producer-test-mpt-crypto-${{ matrix.os }}
           EVIDENCE_LABEL: test-mpt-crypto-${{ matrix.os }}
           EVIDENCE_STATUS: ${{ job.status }}
-          EVIDENCE_COMMAND: ./scripts/setup-mpt-crypto.sh test ./amendment/... ./crypto/mptcrypto/... ./internal/tx/mpt/... ./internal/testing/mpt/...
+          EVIDENCE_COMMAND: >-
+            ./scripts/setup-mpt-crypto.sh test ./amendment/... ./crypto/mptcrypto/... ./crypto/secp256k1/... ./internal/tx/mpt/... ./internal/testing/mpt/...;
+            eval "$(./scripts/setup-mpt-crypto.sh env)";
+            GOEXPERIMENT=cgocheck2 CGO_ENABLED=1 go test -race -count=1 -timeout 15m ./crypto/secp256k1/...
         run: scripts/acceptance/final-evidence.sh producer
       - name: Upload producer evidence
         if: always()
@@ -434,8 +434,6 @@ jobs:
           fetch-depth: 1
       - uses: ./.github/actions/setup
         if: always()
-        with:
-          cgo: "false"
       - name: Replay final corpus against goXRPL
         if: always()
         env:
@@ -448,8 +446,9 @@ jobs:
           EVIDENCE_LABEL: conformance-final
           EVIDENCE_STATUS: ${{ job.status }}
           EVIDENCE_COMMAND: >-
-            actions/checkout@v5 repository=$XRPL_FINAL_CONFORMANCE_REPOSITORY
-            ref=$XRPL_FINAL_CONFORMANCE_COMMIT;
+            actions/checkout@v5 repository=$FINAL_CONFORMANCE_REPOSITORY
+            ref=$FINAL_CONFORMANCE_COMMIT path=fixtures/rippled-3.4.0-v3;
+            GOXRPL_FIXTURES_DIR="$FINAL_CONFORMANCE_CORPUS" GOXRPL_CONFORMANCE_REQUIRED=1
             go test -count=1 -timeout 30m -v ./internal/testing/conformance/...
             (requires the pinned final corpus manifest)
         run: scripts/acceptance/final-evidence.sh producer
@@ -755,7 +754,6 @@ jobs:
       - build-386
       - postgres
       - test
-      - test-purego
       - test-mpt-crypto
       - peer-interop
       - peer-interop-final
@@ -796,7 +794,6 @@ jobs:
             printf 'build-386=%s\n' "${{ needs['build-386'].result }}"
             printf 'postgres=%s\n' "${{ needs.postgres.result }}"
             printf 'test=%s\n' "${{ needs.test.result }}"
-            printf 'test-purego=%s\n' "${{ needs['test-purego'].result }}"
             printf 'test-mpt-crypto=%s\n' "${{ needs['test-mpt-crypto'].result }}"
             printf 'peer-interop=%s\n' "${{ needs['peer-interop'].result }}"
             printf 'peer-interop-final=%s\n' "${{ needs['peer-interop-final'].result }}"
@@ -815,17 +812,16 @@ jobs:
           lint-advisory: golangci/golangci-lint-action@v8 version=v2.11.3 args=--config .golangci-warnings.yml (non-blocking)
           generate: go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11; go generate ./ledger/entry/... ./internal/peermanagement/proto; git diff --exit-code -- ledger/entry internal/peermanagement/proto/xrpl.pb.go
           build: ./scripts/build.sh; ../tmp/goxrpl version
-          build-386: GOOS=linux GOARCH=386 CGO_ENABLED=0 go build ./...; GOOS=linux GOARCH=386 CGO_ENABLED=0 go test -count=1 -timeout 5m ./storage/relationaldb/sqlite/...
+          build-386: GOOS=linux GOARCH=386 CGO_ENABLED=0 go build ./codec/binarycodec/definitions/... ./codec/binarycodec/serdes/... ./codec/binarycodec/internal/decimal/... ./shamap/... ./storage/kvstore/... ./storage/nodestore/... ./ledger/entry/schema/... ./ledger/entry/cmd/entrygen/... ./amendment/... ./drops/... ./protocol/... ./config/... ./version/... ./crypto ./crypto/ed25519/... ./crypto/rfc1751/... ./crypto/sha512half/...
           postgres: go test -race -tags postgres -count=1 -timeout 10m ./storage/relationaldb/postgres/...
           test: go test <matrix.race> -count=1 -timeout 15m <matrix.packages> (one producer artifact per matrix group)
-          test-purego: CGO_ENABLED=0 go test -count=1 -timeout 15m ./crypto/...; CGO_ENABLED=0 go test -tags mptcrypto -count=1 -timeout 15m ./amendment/... ./crypto/mptcrypto/...
-          test-mpt-crypto: ./scripts/setup-mpt-crypto.sh test ./amendment/... ./crypto/mptcrypto/... ./internal/tx/mpt/... ./internal/testing/mpt/... (one producer artifact per OS)
+          test-mpt-crypto: ./scripts/setup-mpt-crypto.sh test ./amendment/... ./crypto/mptcrypto/... ./crypto/secp256k1/... ./internal/tx/mpt/... ./internal/testing/mpt/...; eval "$(./scripts/setup-mpt-crypto.sh env)"; GOEXPERIMENT=cgocheck2 CGO_ENABLED=1 go test -race -count=1 -timeout 15m ./crypto/secp256k1/... (one producer artifact per OS)
           test-repeated: go test -count=2 -timeout 20m ./codec/binarycodec/definitions ./ledger/entry/schema ./ledger/entry ./internal/rpc
           peer-interop: PEERTLS_DOCKER_INTEROP=1 go test -tags docker -timeout 5m -v -run Test(Handshake|Manifest)_Interop_RippledDocker ./internal/peermanagement/
           peer-interop-final: docker build -t goxrpl-oracle:3.4.0 scripts/peer-interop; verify xrpld tag/commit; go test -race -tags docker -count=1 -timeout 10m -v -run Test(Handshake|Manifest|LedgerNodeDepth|ValidatorListCollection)_Interop_RippledDocker ./internal/peermanagement/
           consensus-smoke: docker build goxrpl; bash scripts/consensus-smoke/smoke.sh against official rippled 3.3.0 and 3.2.0 (one producer artifact per version)
           consensus-smoke-final: regenerate definitions; build/check final rippled 3.4.0 and Go images; bash scripts/consensus-smoke/smoke.sh
-          conformance-final: actions/checkout@v5 at XRPL_FINAL_CONFORMANCE_COMMIT into fixtures/rippled-3.4.0-v3; GOXRPL_FIXTURES_DIR=FINAL_CONFORMANCE_CORPUS GOXRPL_CONFORMANCE_REQUIRED=1 go test -count=1 -timeout 30m -v ./internal/testing/conformance/... (requires pinned corpus manifest)
+          conformance-final: actions/checkout@v5 repository=$FINAL_CONFORMANCE_REPOSITORY ref=$FINAL_CONFORMANCE_COMMIT path=fixtures/rippled-3.4.0-v3; GOXRPL_FIXTURES_DIR="$FINAL_CONFORMANCE_CORPUS" GOXRPL_CONFORMANCE_REQUIRED=1 go test -count=1 -timeout 30m -v ./internal/testing/conformance/... (requires pinned corpus manifest)
           EOF
 
       - name: Aggregate and validate final evidence

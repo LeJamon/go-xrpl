@@ -28,7 +28,7 @@ func TestHandleClusterMessage_DropsNonClusterPeer(t *testing.T) {
 	require.NoError(t, err)
 	peerIdentity, err := NewIdentity()
 	require.NoError(t, err)
-	peerToken := NewPublicKeyTokenFromBtcec(peerIdentity.BtcecPublicKey())
+	peerToken := NewPublicKeyTokenFromBytes(peerIdentity.PublicKey())
 
 	o := &Overlay{
 		peers:   make(map[PeerID]*Peer),
@@ -74,7 +74,7 @@ func TestHandleClusterMessage_FiresClusterFeeSink(t *testing.T) {
 	require.NoError(t, err)
 	peerIdentity, err := NewIdentity()
 	require.NoError(t, err)
-	peerToken := NewPublicKeyTokenFromBtcec(peerIdentity.BtcecPublicKey())
+	peerToken := NewPublicKeyTokenFromBytes(peerIdentity.PublicKey())
 
 	// Register the peer's node identity in the cluster registry so the
 	// gate at handleClusterMessage admits the frame.
@@ -102,7 +102,7 @@ func TestHandleClusterMessage_FiresClusterFeeSink(t *testing.T) {
 	// median over those two should be 400 (sort middle).
 	otherIdent, err := NewIdentity()
 	require.NoError(t, err)
-	otherToken := NewPublicKeyTokenFromBtcec(otherIdent.BtcecPublicKey())
+	otherToken := NewPublicKeyTokenFromBytes(otherIdent.PublicKey())
 	otherPub, err := addresscodec.EncodeNodePublicKey(otherToken.Bytes())
 	require.NoError(t, err)
 	// Pre-register the other identity so the registry update accepts it.
@@ -136,7 +136,7 @@ func TestHandleClusterMessage_ClearsStaleClusterFee(t *testing.T) {
 	require.NoError(t, err)
 	peerIdentity, err := NewIdentity()
 	require.NoError(t, err)
-	peerToken := NewPublicKeyTokenFromBtcec(peerIdentity.BtcecPublicKey())
+	peerToken := NewPublicKeyTokenFromBytes(peerIdentity.PublicKey())
 	peerNodePubEncoded, err := addresscodec.EncodeNodePublicKey(peerToken.Bytes())
 	require.NoError(t, err)
 
@@ -172,7 +172,7 @@ func TestHandleClusterMessage_ClearsClusterFeeAfterReportAgesOut(t *testing.T) {
 	require.NoError(t, err)
 	peerIdentity, err := NewIdentity()
 	require.NoError(t, err)
-	peerToken := NewPublicKeyTokenFromBtcec(peerIdentity.BtcecPublicKey())
+	peerToken := NewPublicKeyTokenFromBytes(peerIdentity.PublicKey())
 	peerNodePubEncoded, err := addresscodec.EncodeNodePublicKey(peerToken.Bytes())
 	require.NoError(t, err)
 
@@ -223,7 +223,7 @@ func TestHandleClusterMessage_ImportsLoadSourceGossip(t *testing.T) {
 	require.NoError(t, err)
 	peerIdentity, err := NewIdentity()
 	require.NoError(t, err)
-	peerToken := NewPublicKeyTokenFromBtcec(peerIdentity.BtcecPublicKey())
+	peerToken := NewPublicKeyTokenFromBytes(peerIdentity.PublicKey())
 
 	clusterReg := cluster.New()
 	peerNodePubEncoded, err := addresscodec.EncodeNodePublicKey(peerToken.Bytes())
@@ -283,7 +283,7 @@ func TestHandleClusterMessage_ReimportReplacesPriorGossip(t *testing.T) {
 	require.NoError(t, err)
 	peerIdentity, err := NewIdentity()
 	require.NoError(t, err)
-	peerToken := NewPublicKeyTokenFromBtcec(peerIdentity.BtcecPublicKey())
+	peerToken := NewPublicKeyTokenFromBytes(peerIdentity.PublicKey())
 
 	clusterReg := cluster.New()
 	peerNodePubEncoded, err := addresscodec.EncodeNodePublicKey(peerToken.Bytes())

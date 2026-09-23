@@ -1,7 +1,9 @@
 package secp256k1
 
 import (
+	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -140,13 +142,6 @@ func TestSecp256k1_Sign(t *testing.T) {
 			wantErr:           true,
 		},
 		{
-			name:              "fail - invalid message length",
-			message:           "",
-			privKey:           "00B167A9F3B9E60A4F93695713682C102438620AA1785C3AE635F53E5B6261071A",
-			expectedSignature: "",
-			wantErr:           true,
-		},
-		{
 			name:              "fail - invalid private key hex",
 			message:           "Hello World",
 			privKey:           "00B167A9F3B9E60A4F93695713682C102438620AA1785C3AE635F53E5B6261071X",
@@ -166,6 +161,31 @@ func TestSecp256k1_Sign(t *testing.T) {
 				require.Equal(t, tc.expectedSignature, signature)
 			}
 		})
+	}
+}
+
+func TestSecp256k1_SignEmptyMessage(t *testing.T) {
+	t.Parallel()
+	const privateHex = "B167A9F3B9E60A4F93695713682C102438620AA1785C3AE635F53E5B6261071A"
+	private := mustDecodeHex(t, privateHex)
+	public := mustDecodeHex(t, "02950F4710101A25073BF37086D73FBBD00C7A6B0F91097D8F0BC6D268C400D56E")
+	digest := mustDecodeHex(t, "CF83E1357EEFB8BDF1542850D66D8007D620E4050B5715DC83F4A921D36CE9CE")
+	expected, err := SignDigestBytes(digest, private)
+	require.NoError(t, err)
+	algo := Algorithm{}
+	for _, message := range [][]byte{nil, {}} {
+		signature, err := algo.SignBytes(message, private)
+		require.NoError(t, err)
+		require.Equal(t, expected, signature)
+		require.True(t, algo.ValidateBytes(message, public, signature))
+		require.False(t, algo.ValidateBytes([]byte(" "), public, signature))
+		_, err = algo.SignBytes(message, make([]byte, 32))
+		require.ErrorIs(t, err, ErrInvalidPrivateKey)
+	}
+	for _, key := range []string{privateHex, "00" + privateHex} {
+		signature, err := algo.Sign("", key)
+		require.NoError(t, err)
+		require.Equal(t, strings.ToUpper(hex.EncodeToString(expected)), signature)
 	}
 }
 
@@ -233,8 +253,8 @@ func TestSecp256k1_Validate(t *testing.T) {
 
 // TestSignDigest_RejectsMalformedKeys verifies SignDigest rejects private keys
 // that don't hex-decode to exactly 32 bytes (optionally 0x00-prefixed), the
-// same contract as Sign. Without that validation, decred's scalar parser
-// silently truncates/reduces malformed keys and "signs" with different key
+// same contract as Sign. Without that validation, a scalar parser could
+// silently truncate/reduce malformed keys and "sign" with different key
 // material than the caller supplied.
 func TestSignDigest_RejectsMalformedKeys(t *testing.T) {
 	t.Parallel()

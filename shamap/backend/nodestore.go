@@ -195,6 +195,13 @@ func (f *NodeStore) MinimumLedgerSeq() uint32 {
 	return f.minimum.Load()
 }
 
+// AcquireMinimumLedgerSeq pins the retention floor until the returned guard is
+// released. It is intended for short proof-publication checks, not tree walks.
+func (f *NodeStore) AcquireMinimumLedgerSeq() (uint32, func()) {
+	f.storeMu.RLock()
+	return f.minimum.Load(), f.storeMu.RUnlock
+}
+
 // Sweep removes expired entries from the NodeStore and SHAMap caches.
 func (f *NodeStore) Sweep() error {
 	f.fullBelow.Sweep()

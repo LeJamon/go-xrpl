@@ -341,6 +341,9 @@ func newStoredVerificationFixture(
 	})
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
+	svc.recertificationMu.Lock()
+	svc.recertificationStopped = true
+	svc.recertificationMu.Unlock()
 	t.Cleanup(svc.Stop)
 
 	for branch := range branches {
@@ -364,6 +367,9 @@ func newStoredVerificationFixture(
 			return nil
 		},
 	))
+	svc.recertificationMu.Lock()
+	svc.recertificationStopped = false
+	svc.recertificationMu.Unlock()
 	rootNode, _, err := svc.loadStoredSHAMapNode(ctx, storedSHAMapNode{hash: root}, shamap.TypeState)
 	require.NoError(t, err)
 	inner, ok := rootNode.(shamap.InnerNodeReader)

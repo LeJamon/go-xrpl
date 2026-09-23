@@ -2,21 +2,31 @@ package secp256k1
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/asn1"
 	"encoding/hex"
+	"math/big"
 	"strings"
 	"testing"
 
-	"github.com/btcsuite/btcd/btcec/v2"
-	btcecdsa "github.com/btcsuite/btcd/btcec/v2/ecdsa"
+	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
+	"github.com/stretchr/testify/require"
 )
 
-func newTestKey(t *testing.T) (*btcec.PrivateKey, []byte, []byte) {
+func newTestKey(t *testing.T) ([]byte, []byte) {
 	t.Helper()
-	priv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatalf("NewPrivateKey: %v", err)
+	secret := make([]byte, 32)
+	for range 128 {
+		_, err := rand.Read(secret)
+		require.NoError(t, err)
+		public, err := (Algorithm{}).DerivePublicKeyFromSecret(secret)
+		if err == nil {
+			t.Cleanup(func() { rootcrypto.SecureErase(secret) })
+			return secret, public
+		}
 	}
-	return priv, priv.Serialize(), priv.PubKey().SerializeCompressed()
+	t.Fatal("could not generate a valid private key")
+	return nil, nil
 }
 
 func sampleDigest(b byte) []byte {
@@ -28,7 +38,7 @@ func sampleDigest(b byte) []byte {
 }
 
 func TestSignVerifyDigestBytes_RoundTrip(t *testing.T) {
-	_, priv, pub := newTestKey(t)
+	priv, pub := newTestKey(t)
 	digest := sampleDigest(0x42)
 
 	sig, err := SignDigestBytes(digest, priv)
@@ -41,7 +51,7 @@ func TestSignVerifyDigestBytes_RoundTrip(t *testing.T) {
 }
 
 func TestVerifyDigestBytes_WrongDigest(t *testing.T) {
-	_, priv, pub := newTestKey(t)
+	priv, pub := newTestKey(t)
 	digest := sampleDigest(0x42)
 
 	sig, err := SignDigestBytes(digest, priv)
@@ -54,8 +64,8 @@ func TestVerifyDigestBytes_WrongDigest(t *testing.T) {
 }
 
 func TestVerifyDigestBytes_WrongKey(t *testing.T) {
-	_, priv, _ := newTestKey(t)
-	_, _, otherPub := newTestKey(t)
+	priv, _ := newTestKey(t)
+	_, otherPub := newTestKey(t)
 	digest := sampleDigest(0x42)
 
 	sig, err := SignDigestBytes(digest, priv)
@@ -68,50 +78,30 @@ func TestVerifyDigestBytes_WrongKey(t *testing.T) {
 }
 
 func TestVerifyDigestBytes_GarbageSig(t *testing.T) {
-	_, _, pub := newTestKey(t)
+	_, pub := newTestKey(t)
 	if VerifyDigestBytes(sampleDigest(0x01), pub, []byte("not a der signature")) {
 		t.Fatalf("VerifyDigestBytes accepted garbage signature")
 	}
 }
 
-// Cross-impl: a signature produced via btcecdsa.Sign + Serialize (the
-// path peermanagement/identity.go used pre-consolidation) must verify
-// via VerifyDigestBytes. Locks in wire-compatibility with any peer
-// already using that path.
-func TestVerifyDigestBytes_AcceptsBtcecdsaSignature(t *testing.T) {
-	priv, _, pub := newTestKey(t)
-	digest := sampleDigest(0x55)
-
-	sig := btcecdsa.Sign(priv, digest).Serialize()
-	if !VerifyDigestBytes(digest, pub, sig) {
-		t.Fatalf("VerifyDigestBytes did not accept a btcecdsa-produced signature")
-	}
-}
-
-// Inverse: a signature produced via SignDigestBytes must verify with
-// the btcec/btcecdsa parser too. Catches divergence in DER encoding.
-func TestSignDigestBytes_AcceptedByBtcecdsa(t *testing.T) {
-	priv, privBytes, _ := newTestKey(t)
-	digest := sampleDigest(0xAA)
-
-	sig, err := SignDigestBytes(digest, privBytes)
-	if err != nil {
-		t.Fatalf("SignDigestBytes: %v", err)
-	}
-	parsed, err := btcecdsa.ParseDERSignature(sig)
-	if err != nil {
-		t.Fatalf("btcecdsa.ParseDERSignature: %v", err)
-	}
-	if !parsed.Verify(digest, priv.PubKey()) {
-		t.Fatalf("btcecdsa rejected signature produced by SignDigestBytes")
-	}
+// The fixed digest, key and signature come from rippled's canonicality vectors.
+func TestDigestBytes_RippledSignature(t *testing.T) {
+	digest := mustDecodeHex(t, "34C19028C80D21F3F48C9354895F8D5BF0D5EE7FF457647CF655F5530A3022A7")
+	secret := mustDecodeHex(t, "AA921417E7E5C299DA4EEC16D1CAA92F19B19F2A68511F68EC73BBB2F5236F3D")
+	defer rootcrypto.SecureErase(secret)
+	public := mustDecodeHex(t, "025096EB12D3E924234E7162369C11D8BF877EDA238778E7A31FF0AAC5D0DBCF37")
+	expected := mustDecodeHex(t, "3045022100B49D07F0E934BA468C0EFC78117791408D1FB8B63A6492AD395AC2F360F246600220508739DB0A2EF81676E39F459C8BBB07A09C3E9F9BEB696294D524D479D62740")
+	require.True(t, VerifyDigestBytes(digest, public, expected))
+	signature, err := SignDigestBytes(digest, secret)
+	require.NoError(t, err)
+	require.Equal(t, expected, signature)
 }
 
 // Cross-impl: a signature produced by the existing Algorithm{}.SignDigest
 // (hex API) must verify via VerifyDigestBytes. Confirms the byte-form
 // API is interchangeable with the legacy hex one.
 func TestVerifyDigestBytes_AcceptsLegacyHexSign(t *testing.T) {
-	_, privBytes, pub := newTestKey(t)
+	privBytes, pub := newTestKey(t)
 	digest := sampleDigest(0x77)
 
 	var d [32]byte
@@ -126,7 +116,7 @@ func TestVerifyDigestBytes_AcceptsLegacyHexSign(t *testing.T) {
 }
 
 func TestSignDigestBytes_BadInputs(t *testing.T) {
-	_, priv, _ := newTestKey(t)
+	priv, _ := newTestKey(t)
 
 	if _, err := SignDigestBytes(make([]byte, 31), priv); err == nil {
 		t.Fatalf("SignDigestBytes accepted a 31-byte digest")
@@ -140,7 +130,7 @@ func TestSignDigestBytes_BadInputs(t *testing.T) {
 }
 
 func TestVerifyDigestBytes_BadDigestLen(t *testing.T) {
-	_, priv, pub := newTestKey(t)
+	priv, pub := newTestKey(t)
 	sig, err := SignDigestBytes(sampleDigest(0x10), priv)
 	if err != nil {
 		t.Fatalf("SignDigestBytes: %v", err)
@@ -155,16 +145,20 @@ func TestVerifyDigestBytes_BadDigestLen(t *testing.T) {
 // round-trip (i.e., they're well-formed DER, not just bytes that happen
 // to pass our verifier).
 func TestSignDigestBytes_OutputIsValidDER(t *testing.T) {
-	_, priv, _ := newTestKey(t)
+	priv, _ := newTestKey(t)
 	sig, err := SignDigestBytes(sampleDigest(0x33), priv)
 	if err != nil {
 		t.Fatalf("SignDigestBytes: %v", err)
 	}
-	parsed, err := btcecdsa.ParseDERSignature(sig)
-	if err != nil {
-		t.Fatalf("ParseDERSignature: %v", err)
-	}
-	if !bytes.Equal(parsed.Serialize(), sig) {
+	var parsed struct{ R, S *big.Int }
+	rest, err := asn1.Unmarshal(sig, &parsed)
+	require.NoError(t, err)
+	require.Empty(t, rest)
+	require.Positive(t, parsed.R.Sign())
+	require.Positive(t, parsed.S.Sign())
+	encoded, err := asn1.Marshal(parsed)
+	require.NoError(t, err)
+	if !bytes.Equal(encoded, sig) {
 		t.Fatalf("DER bytes did not survive parse-serialize round-trip")
 	}
 }

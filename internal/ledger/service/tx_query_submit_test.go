@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 )
@@ -286,6 +287,13 @@ func TestService_SubmitTransaction_BadSignatureIsNotQueryable(t *testing.T) {
 	}
 	if result.Result != ter.TemBAD_SIGNATURE {
 		t.Fatalf("Result = %s, want temBAD_SIGNATURE", result.Result)
+	}
+	outcome, err := svc.SubmitOpenLedgerTxDetailed(badBlob, true)
+	if !errors.Is(err, txengine.ErrInvalidSignature) {
+		t.Fatalf("SubmitOpenLedgerTxDetailed = %v, want invalid signature before local memo rejection", err)
+	}
+	if outcome.Applied || outcome.Queued || outcome.Fee != 0 || outcome.Metadata != nil {
+		t.Fatalf("invalid signature changed submission state: %+v", outcome)
 	}
 	if _, err := svc.GetTransaction(hash); !errors.Is(err, svcerr.ErrTxnNotFound) {
 		t.Fatalf("GetTransaction(bad signature) = %v, want svcerr.ErrTxnNotFound", err)

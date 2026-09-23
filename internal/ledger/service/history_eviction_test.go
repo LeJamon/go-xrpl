@@ -111,6 +111,140 @@ func testEvictOldHistoryLocked(t *testing.T, window uint32) {
 	}
 }
 
+func TestEvictOldHistoryLocked_DoesNotReadColdTransactionMap(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.LedgerCacheSize = 1
+	svc, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(svc.Stop)
+
+	parent := svc.GetClosedLedger()
+	old, err := ledger.NewOpen(parent, parent.CloseTime().Add(time.Second))
+	if err != nil {
+		t.Fatalf("NewOpen: %v", err)
+	}
+	txHash := [32]byte{0x51}
+	if err := old.AddTransactionWithMeta(txHash, make([]byte, 16)); err != nil {
+		t.Fatalf("AddTransactionWithMeta: %v", err)
+	}
+	if err := old.Close(parent.CloseTime().Add(time.Second), 0); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	txMap, err := old.TxMapSnapshot()
+	if err != nil {
+		t.Fatalf("TxMapSnapshot: %v", err)
+	}
+	memory := shamapbackend.NewMemory()
+	if err := txMap.StoreDirty(func(entries []shamap.FlushEntry) error {
+		return memory.StoreBatch(t.Context(), entries)
+	}); err != nil {
+		t.Fatalf("StoreDirty: %v", err)
+	}
+	root, err := txMap.Hash()
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+	family := &acceptanceBlockingFamily{
+		Family:  memory,
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	coldTx, err := shamap.NewFromRootHash(shamap.TypeTransaction, root, family)
+	if err != nil {
+		t.Fatalf("NewFromRootHash: %v", err)
+	}
+	state, err := old.StateMapSnapshot()
+	if err != nil {
+		t.Fatalf("StateMapSnapshot: %v", err)
+	}
+	coldOld, err := ledger.NewFromHeader(old.Header(), state, coldTx, old.Fees())
+	if err != nil {
+		t.Fatalf("NewFromHeader: %v", err)
+	}
+
+	latestSeq := coldOld.Sequence() + 2
+	latestState, err := svc.genesisLedger.StateMapSnapshot()
+	if err != nil {
+		t.Fatalf("latest StateMapSnapshot: %v", err)
+	}
+	latestTx, err := svc.genesisLedger.TxMapSnapshot()
+	if err != nil {
+		t.Fatalf("latest TxMapSnapshot: %v", err)
+	}
+	var latestHeader header.LedgerHeader
+	latestHeader.LedgerIndex = latestSeq
+	latestHeader.Hash[0] = 0x77
+	latest := mustNewOpenWithHeader(t, latestHeader, latestState, latestTx)
+
+	family.fetches.Store(0)
+	svc.mu.Lock()
+	svc.historyComponent.mu.Lock()
+	svc.putHistoryLocked(coldOld)
+	svc.putHistoryLocked(latest)
+	svc.txIndex[txHash] = coldOld.Sequence()
+	svc.txPositionIndex[txHash] = 0
+	svc.evictOldHistoryLocked(latest.Sequence())
+	svc.historyComponent.mu.Unlock()
+	svc.mu.Unlock()
+
+	if got := family.fetches.Load(); got != 0 {
+		t.Fatalf("eviction read cold transaction map %d times", got)
+	}
+	if _, ok := svc.txIndex[txHash]; ok {
+		t.Fatal("evicted transaction remained in txIndex")
+	}
+	if _, ok := svc.txPositionIndex[txHash]; ok {
+		t.Fatal("evicted transaction remained in txPositionIndex")
+	}
+}
+
+func TestEvictOldHistoryLocked_PreservesReplacementCompletionState(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.LedgerCacheSize = 1
+	svc, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	svc.persistMu.Lock()
+	svc.persistStarted = true
+	svc.persistMu.Unlock()
+
+	const seq uint32 = 20
+	old := makeStubLedger(t, seq, [32]byte{0x20}, [32]byte{0x19})
+	replacement := makeStubLedger(t, seq, [32]byte{0x21}, [32]byte{0x19})
+	svc.enqueuePersist(replacement)
+
+	svc.persistMu.Lock()
+	job := svc.validatedPersistJobs[seq]
+	svc.persistMu.Unlock()
+	if job == nil {
+		t.Fatal("replacement persistence job was not tracked")
+	}
+
+	svc.mu.Lock()
+	svc.historyComponent.mu.Lock()
+	svc.putHistoryLocked(old)
+	svc.evictOldHistoryLocked(seq + 1)
+	svc.historyComponent.mu.Unlock()
+	svc.mu.Unlock()
+
+	if job.canceled.Load() {
+		t.Fatal("eviction canceled a replacement persistence job")
+	}
+	svc.completeMu.RLock()
+	trackedHash, tracked := svc.completeLedgerHashes[seq]
+	svc.completeMu.RUnlock()
+	if !tracked || trackedHash != replacement.Hash() {
+		t.Fatalf("replacement completion hash = %x, tracked=%t; want %x", trackedHash, tracked, replacement.Hash())
+	}
+}
+
 func TestEvictOldHistoryLocked_BelowWindow(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.LedgerCacheSize = 64

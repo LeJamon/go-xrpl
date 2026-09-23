@@ -341,15 +341,16 @@ func TestRouter_DisconnectRemovesPeerFromActiveAcquisitions(t *testing.T) {
 
 func TestRouter_HistoryPeerNotFoundDoesNotHotLoop(t *testing.T) {
 	r, _, sender, svc := makeRouter(t)
-	targetSeq := svc.GetClosedLedgerIndex() + 40
+	// History is strictly below the local validated tip, not a future target.
+	targetSeq := svc.GetClosedLedgerIndex() - 1
 	targetHash := [32]byte{0xD8}
 	sessions := &testPeerSessions{connected: map[peermanagement.PeerID]bool{1: true}}
 	r.setPeerSessionView(sessions)
-	trackCatchupPeer(r, 1, targetSeq, targetHash)
+	trackCatchupPeer(r, 1, svc.GetClosedLedgerIndex())
 	sender.mu.Lock()
 	sender.legacyBaseErrs = map[uint64]error{1: peermanagement.ErrPeerNotFound}
 	sender.mu.Unlock()
-	r.startHistoryBackfill(targetSeq, targetHash, 1, svc.GetClosedLedgerIndex())
+	r.startHistoryBackfill(targetSeq, targetHash, 1, 0)
 
 	for range 20 {
 		r.maintenanceTick()

@@ -7,8 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
+	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,6 +27,11 @@ var privateKeyTestVectors = []struct {
 	},
 }
 
+const (
+	identitySigningPrivateKey = "00D78B9735C3F26501C7337B8A5727FD53A6EFDBC6AA55984F098488561F985E23"
+	identitySigningSignature  = "30440220583A91C95E54E6A651C47BEC22744E0B101E2C4060E7B08F6341657DAD9BC3EE02207D1489C7395DB0188D3A56A977ECBA54B36FA9371B40319655B1B4429E33EF2D"
+)
+
 // TestNewIdentity tests creating a new random identity
 // Reference: rippled SecretKey_test.cpp testSigning
 func TestNewIdentity(t *testing.T) {
@@ -36,7 +40,11 @@ func TestNewIdentity(t *testing.T) {
 	require.NotNil(t, id)
 
 	// Public key should be 33 bytes (compressed)
-	assert.Len(t, id.PublicKey(), 33)
+	publicKey := id.PublicKey()
+	assert.Len(t, publicKey, 33)
+	publicKeyCopy := append([]byte(nil), publicKey...)
+	publicKey[0] ^= 0xff
+	assert.Equal(t, publicKeyCopy, id.PublicKey(), "public key getter must return an owned copy")
 
 	// Private key hex should be 66 chars (with 00 prefix)
 	assert.Len(t, id.PrivateKeyHex(), 66)
@@ -67,6 +75,15 @@ func TestNewIdentityFromSeed(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotEqual(t, id1.PublicKeyHex(), id3.PublicKeyHex())
+}
+
+func TestNewIdentityFromSeed_PreservesLegacyScalar(t *testing.T) {
+	seed := []byte("test_seed_16bytes")
+	hash := sha512.Sum512(seed)
+
+	id, err := NewIdentityFromSeed(seed)
+	require.NoError(t, err)
+	assert.Equal(t, "00"+hex.EncodeToString(hash[:32]), id.PrivateKeyHex())
 }
 
 // TestNewIdentityFromSeed_TooShort tests that short seeds are rejected
@@ -129,30 +146,23 @@ func TestNewIdentityFromPrivateKey_Invalid(t *testing.T) {
 // TestSign tests signing a message
 // Reference: rippled SecretKey_test.cpp testDigestSigning
 func TestSign(t *testing.T) {
-	id, err := NewIdentity()
+	id, err := NewIdentityFromPrivateKey(identitySigningPrivateKey)
 	require.NoError(t, err)
 
-	message := []byte("test message to sign")
+	message := []byte("test message")
 
 	sig, err := id.Sign(message)
 	require.NoError(t, err)
 	require.NotNil(t, sig)
 
-	// Signature should be DER-encoded, typically 70-72 bytes
-	assert.True(t, len(sig) >= 68 && len(sig) <= 73,
-		"signature length %d outside expected range", len(sig))
-
-	// Verify the signature
-	parsedSig, err := ecdsa.ParseDERSignature(sig)
-	require.NoError(t, err)
+	// Keep an independent wire vector for the DER signature.
+	assert.Equal(t, identitySigningSignature, strings.ToUpper(hex.EncodeToString(sig)))
 
 	// Hash the message the same way Sign does
-	h := sha512.New()
-	h.Write(message)
-	hash := h.Sum(nil)[:32]
+	hash := sha512.Sum512(message)
 
 	// Verify signature is valid
-	assert.True(t, parsedSig.Verify(hash, id.BtcecPublicKey()),
+	assert.True(t, secp256k1.VerifyDigestBytes(hash[:32], id.PublicKey(), sig),
 		"signature verification failed")
 }
 
@@ -174,15 +184,21 @@ func TestSign_DifferentMessages(t *testing.T) {
 	assert.False(t, bytes.Equal(sig1, sig2))
 
 	// Verify sig1 doesn't verify msg2
-	parsedSig1, err := ecdsa.ParseDERSignature(sig1)
+	wrongHash := sha512.Sum512(msg2)
+
+	assert.False(t, secp256k1.VerifyDigestBytes(wrongHash[:32], id.PublicKey(), sig1),
+		"signature should not verify wrong message")
+}
+
+func TestSign_EmptyMessage(t *testing.T) {
+	id, err := NewIdentityFromPrivateKey(identitySigningPrivateKey)
 	require.NoError(t, err)
 
-	h := sha512.New()
-	h.Write(msg2)
-	wrongHash := h.Sum(nil)[:32]
+	signature, err := id.Sign(nil)
+	require.NoError(t, err)
 
-	assert.False(t, parsedSig1.Verify(wrongHash, id.BtcecPublicKey()),
-		"signature should not verify wrong message")
+	digest := sha512.Sum512(nil)
+	assert.True(t, secp256k1.VerifyDigestBytes(digest[:32], id.PublicKey(), signature))
 }
 
 // TestEncodedPublicKey tests the Base58 encoding of public keys
@@ -239,14 +255,9 @@ func TestIdentityRoundTrip(t *testing.T) {
 	sig, err := original.Sign(message)
 	require.NoError(t, err)
 
-	parsedSig, err := ecdsa.ParseDERSignature(sig)
-	require.NoError(t, err)
+	hash := sha512.Sum512(message)
 
-	h := sha512.New()
-	h.Write(message)
-	hash := h.Sum(nil)[:32]
-
-	assert.True(t, parsedSig.Verify(hash, restored.BtcecPublicKey()))
+	assert.True(t, secp256k1.VerifyDigestBytes(hash[:32], restored.PublicKey(), sig))
 }
 
 // Test vectors from rippled PublicKey_test.cpp testBase58
@@ -267,12 +278,18 @@ func TestNewPublicKeyToken(t *testing.T) {
 			pubKeyBytes, err := hex.DecodeString(tv.publicKey)
 			require.NoError(t, err)
 
-			pk, err := NewPublicKeyToken(pubKeyBytes)
+			input := append([]byte(nil), pubKeyBytes...)
+			pk, err := NewPublicKeyToken(input)
 			require.NoError(t, err)
 			require.NotNil(t, pk)
 
-			// Round-trip: bytes should match
+			input[0] ^= 0xff
+			// The token owns a parsed serialization independent of its input.
 			assert.Equal(t, pubKeyBytes, pk.Bytes())
+
+			owned := pk.Bytes()
+			owned[0] ^= 0xff
+			assert.Equal(t, pubKeyBytes, pk.Bytes(), "token bytes getter must return an owned copy")
 		})
 	}
 }
@@ -286,6 +303,8 @@ func TestNewPublicKeyToken_Invalid(t *testing.T) {
 		{"empty", []byte{}},
 		{"too_short", make([]byte, 32)},
 		{"too_long", make([]byte, 34)},
+		{"invalid_prefix", append([]byte{0x04}, make([]byte, 32)...)},
+		{"invalid_point", append([]byte{0x02}, make([]byte, 32)...)},
 	}
 
 	for _, tt := range tests {
@@ -341,11 +360,10 @@ func TestPublicKeyTokenEncodeDecodeRoundTrip(t *testing.T) {
 	// Generate multiple random keys and verify round-trip
 	for i := range 10 {
 		t.Run("key_"+string(rune('A'+i)), func(t *testing.T) {
-			// Generate random key
-			privKey, err := btcec.NewPrivateKey()
+			id, err := NewIdentity()
 			require.NoError(t, err)
 
-			pk := NewPublicKeyTokenFromBtcec(privKey.PubKey())
+			pk := NewPublicKeyTokenFromBytes(id.PublicKey())
 
 			// Encode
 			encoded := pk.Encode()
@@ -369,11 +387,13 @@ func TestPublicKeyTokenEncodeDecodeRoundTrip(t *testing.T) {
 // TestPublicKeyTokenEquality tests the Equal method
 func TestPublicKeyTokenEquality(t *testing.T) {
 	// Generate two different keys
-	privKey1, _ := btcec.NewPrivateKey()
-	privKey2, _ := btcec.NewPrivateKey()
+	id1, err := NewIdentity()
+	require.NoError(t, err)
+	id2, err := NewIdentity()
+	require.NoError(t, err)
 
-	pk1 := NewPublicKeyTokenFromBtcec(privKey1.PubKey())
-	pk2 := NewPublicKeyTokenFromBtcec(privKey2.PubKey())
+	pk1 := NewPublicKeyTokenFromBytes(id1.PublicKey())
+	pk2 := NewPublicKeyTokenFromBytes(id2.PublicKey())
 
 	// Same key should be equal to itself
 	assert.True(t, pk1.Equal(pk1))
@@ -390,8 +410,9 @@ func TestPublicKeyTokenEquality(t *testing.T) {
 
 // TestPublicKeyTokenEquality_Nil tests Equal with nil values
 func TestPublicKeyTokenEquality_Nil(t *testing.T) {
-	privKey, _ := btcec.NewPrivateKey()
-	pk := NewPublicKeyTokenFromBtcec(privKey.PubKey())
+	id, err := NewIdentity()
+	require.NoError(t, err)
+	pk := NewPublicKeyTokenFromBytes(id.PublicKey())
 
 	assert.False(t, pk.Equal(nil))
 
@@ -402,8 +423,9 @@ func TestPublicKeyTokenEquality_Nil(t *testing.T) {
 // TestChecksumValidation tests that invalid checksums are rejected
 func TestChecksumValidation(t *testing.T) {
 	// Generate a valid encoded key
-	privKey, _ := btcec.NewPrivateKey()
-	pk := NewPublicKeyTokenFromBtcec(privKey.PubKey())
+	id, err := NewIdentity()
+	require.NoError(t, err)
+	pk := NewPublicKeyTokenFromBytes(id.PublicKey())
 	valid := pk.Encode()
 
 	// Corrupt the last character (part of checksum). Pick a replacement
@@ -414,7 +436,7 @@ func TestChecksumValidation(t *testing.T) {
 		replacement = 'Y'
 	}
 	corrupted := valid[:len(valid)-1] + string(replacement)
-	_, err := ParsePublicKeyToken(corrupted)
+	_, err = ParsePublicKeyToken(corrupted)
 	assert.Error(t, err)
 }
 

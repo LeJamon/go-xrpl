@@ -9,7 +9,7 @@ import (
 	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 
-	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/LeJamon/go-xrpl/crypto/secp256k1/shim"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,8 +24,8 @@ func TestVerificationPublicKeyEncoding(t *testing.T) {
 
 	pub := mustDecodeHex(t, pubHex)
 	sig := mustDecodeHex(t, lowSDER)
-	parsedPub, err := btcec.ParsePubKey(pub)
-	require.NoError(t, err)
+	uncompressed, ok := shim.ParsePublicKey(pub, false)
+	require.True(t, ok)
 	digest := sha512half.Sum([]byte(msg))
 	algo := Algorithm{}
 
@@ -65,7 +65,7 @@ func TestVerificationPublicKeyEncoding(t *testing.T) {
 		want bool
 	}{
 		{"compressed", pub, true},
-		{"uncompressed", parsedPub.SerializeUncompressed(), false},
+		{"uncompressed", uncompressed, false},
 		{"invalid prefix", invalidPrefix, false},
 		{"invalid length", pub[:len(pub)-1], false},
 		{"invalid point", invalidPoint, false},
@@ -84,15 +84,6 @@ func TestVerificationPublicKeyEncoding(t *testing.T) {
 	}
 }
 
-// TestValidateWithCanonicality_HighS locks in the relaxed-verify
-// contract: with mustBeFullyCanonical=false, a high-S signature must
-// verify. Both backends must agree:
-//   - cgo: shim normalizes high-S to low-S before secp256k1_ecdsa_verify
-//   - !cgo: decred's Verify accepts arbitrary-S
-//
-// The manifest path itself runs strict (mustBeFullyCanonical=true) per
-// rippled PublicKey.h:256 — this test only guards the low-level relaxed
-// branch.
 func TestValidateWithCanonicality_HighS(t *testing.T) {
 	t.Parallel()
 

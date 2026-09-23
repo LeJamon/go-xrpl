@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
@@ -1435,7 +1436,11 @@ func (r *Router) isAcquiringLocked(hash [32]byte) bool {
 // if the coordinator is at cap (caller falls back to legacy), or the
 // wire-send error if the request itself failed (coordinator slot is
 // freed before returning so the caller can retry).
+// Caller holds acquisitionMu.
 func (r *Router) startReplayDeltaAcquisition(seq uint32, hash [32]byte, peerID uint64, parent *ledger.Ledger) error {
+	if r.replayNeedsFullStateLocked(hash) {
+		return errors.New("ledger requires full-state acquisition after replay failure")
+	}
 	rd, err := r.replayer.Acquire(hash, peerID, parent)
 	if err != nil {
 		return err
@@ -1471,6 +1476,10 @@ func (r *Router) startLedgerAcquisitionLegacy(seq uint32, hash [32]byte, peerID 
 
 // Caller holds acquisitionMu.
 func (r *Router) startLedgerReplayAcquisitionLegacyLocked(seq uint32, hash [32]byte, peerID uint64) (*inbound.Ledger, bool) {
+	if r.replayNeedsFullStateLocked(hash) {
+		r.startLedgerAcquisitionLegacyLocked(seq, hash, peerID)
+		return r.fetchTracker.Find(hash), false
+	}
 	if seq != 0 && r.belowFloor(seq) {
 		return nil, false
 	}
@@ -1596,6 +1605,18 @@ func (r *Router) fallbackReplayAcquisition(seq uint32, hash [32]byte, peerID uin
 	r.fallbackReplayAcquisitionForTarget(seq, hash, peerID, standardReplayTarget{})
 }
 
+func (r *Router) fallbackReplayAvailability(
+	seq uint32,
+	hash [32]byte,
+	peerID uint64,
+	parent *ledger.Ledger,
+	triedPeers []uint64,
+) {
+	r.fallbackReplayAcquisitionForTargetMode(
+		seq, hash, peerID, parent, triedPeers, standardReplayTarget{}, true,
+	)
+}
+
 func (r *Router) fallbackStandardReplayAcquisition(
 	seq uint32,
 	hash [32]byte,
@@ -1611,12 +1632,29 @@ func (r *Router) fallbackReplayAcquisitionForTarget(
 	peerID uint64,
 	expected standardReplayTarget,
 ) {
+	r.fallbackReplayAcquisitionForTargetMode(seq, hash, peerID, nil, nil, expected, false)
+}
+
+func (r *Router) fallbackReplayAcquisitionForTargetMode(
+	seq uint32,
+	hash [32]byte,
+	peerID uint64,
+	parent *ledger.Ledger,
+	triedPeers []uint64,
+	expected standardReplayTarget,
+	availability bool,
+) {
 	r.acquisitionMu.Lock()
 
+	if !availability {
+		r.requireReplayFullStateLocked(seq, hash)
+	}
+	availability = availability && !r.replayNeedsFullStateLocked(hash)
 	target := r.consensusRecovery.targetHash
 	if expected.hash != ([32]byte{}) {
 		if target != ([32]byte{}) {
 			if target != expected.hash {
+				r.clearReplayAvailabilityRetryLocked(hash)
 				r.acquisitionMu.Unlock()
 				return
 			}
@@ -1625,18 +1663,21 @@ func (r *Router) fallbackReplayAcquisitionForTarget(
 			current := r.catchup.seq == expected.seq && r.catchup.hash == expected.hash
 			r.catchupMu.Unlock()
 			if !current {
+				r.clearReplayAvailabilityRetryLocked(hash)
 				r.acquisitionMu.Unlock()
 				return
 			}
 		}
 	}
 	if target != ([32]byte{}) && r.consensusRecovery.stepHash != hash && target != hash {
+		r.clearReplayAvailabilityRetryLocked(hash)
 		r.acquisitionMu.Unlock()
 		return
 	}
 	if target != ([32]byte{}) && target != hash {
 		targetSeq, known := r.lookupSeqForHash(target)
 		if !known {
+			r.clearReplayAvailabilityRetryLocked(hash)
 			r.consensusRecovery.stepHash = [32]byte{}
 			r.acquisitionMu.Unlock()
 			r.armConsensusCatchup()
@@ -1649,21 +1690,217 @@ func (r *Router) fallbackReplayAcquisitionForTarget(
 			r.consensusRecovery,
 		)
 		if !replay || nextSeq != seq || nextHash != hash {
+			r.clearReplayAvailabilityRetryLocked(hash)
 			r.consensusRecovery.stepHash = [32]byte{}
 			r.acquisitionMu.Unlock()
 			r.armConsensusCatchup()
 			return
 		}
 	}
+	var parentUsable bool
+	if availability {
+		parentUsable = r.replayParentUsable(seq, parent)
+		if prepared, startDrain := r.useCompatiblePreparedReplayLocked(seq, hash, parentUsable, parent); prepared {
+			r.clearReplayAvailabilityRetryLocked(hash)
+			r.acquisitionMu.Unlock()
+			if startDrain {
+				r.drainStandardReplayPipeline()
+			}
+			return
+		}
+	}
+
 	if !r.canAdmitCatchupLocked(hash, maxConcurrentCatchup) {
 		r.acquisitionMu.Unlock()
 		return
 	}
+
+	if availability {
+		if parentUsable && !r.standardReplayOwnsLocked(hash) && !r.isAcquiringLocked(hash) {
+			if alternate, ok := r.nextReplayAvailabilityPeerLocked(seq, hash, peerID, triedPeers); ok {
+				if err := r.startReplayDeltaAcquisition(seq, hash, alternate, parent); err == nil {
+					if target != ([32]byte{}) {
+						r.consensusRecovery.stepHash = hash
+					}
+					r.acquisitionMu.Unlock()
+					return
+				}
+			}
+		}
+
+		// A locally verified parent allows the standard protocol to fetch only
+		// the target header and transaction tree. Its replay verifier still
+		// checks the derived state root before adoption.
+		if parentUsable {
+			il, _ := r.startLedgerReplayAcquisitionLegacyLocked(seq, hash, peerID)
+			if il != nil && il.TransactionOnly() {
+				if target != ([32]byte{}) {
+					r.consensusRecovery.stepHash = hash
+				}
+				r.clearReplayAvailabilityRetryLocked(hash)
+				r.acquisitionMu.Unlock()
+				return
+			}
+		}
+		r.clearReplayAvailabilityRetryLocked(hash)
+	}
+
+	r.clearReplayAvailabilityRetryLocked(hash)
 	r.startLedgerAcquisitionLegacyLocked(seq, hash, peerID)
 	if target != ([32]byte{}) && r.fetchTracker.Find(hash) != nil {
 		r.consensusRecovery.stepHash = hash
 	}
 	r.acquisitionMu.Unlock()
+}
+
+func (r *Router) replayParentUsable(seq uint32, parent *ledger.Ledger) bool {
+	if parent == nil || !parent.IsClosed() || parent.Sequence()+1 != seq || parent.Hash() == ([32]byte{}) {
+		return false
+	}
+	if r.adaptor == nil {
+		return false
+	}
+	svc := r.adaptor.LedgerService()
+	if svc == nil {
+		return false
+	}
+	held, err := svc.GetLedgerByHash(parent.Hash())
+	return err == nil && held != nil && held.IsClosed() && held.Sequence()+1 == seq && held.Hash() == parent.Hash()
+}
+
+// useCompatiblePreparedReplayLocked leaves an already collected standard
+// replay entry in place. The caller holds acquisitionMu.
+func (r *Router) useCompatiblePreparedReplayLocked(
+	seq uint32,
+	hash [32]byte,
+	parentUsable bool,
+	parent *ledger.Ledger,
+) (prepared, startDrain bool) {
+	if !parentUsable || parent == nil || !r.standardReplay.active {
+		return false, false
+	}
+	entry := r.standardReplay.entries[seq]
+	if entry == nil || entry.generation != r.standardReplay.generation || entry.hash != hash ||
+		entry.parentHash != parent.Hash() || entry.seq != seq || entry.failed {
+		return false, false
+	}
+	if entry.acquisition == nil && entry.readyAt.IsZero() {
+		return false, false
+	}
+	if entry.acquisition != nil && !entry.acquisition.TransactionOnly() {
+		return false, false
+	}
+	startDrain = r.standardReplay.pivotReady && !r.standardReplay.applying &&
+		entry.seq == r.standardReplay.anchorSeq+1 && !entry.readyAt.IsZero()
+	if startDrain {
+		r.standardReplay.applying = true
+	}
+	return true, startDrain
+}
+
+func (r *Router) nextReplayAvailabilityPeerLocked(
+	seq uint32,
+	hash [32]byte,
+	peerID uint64,
+	triedPeers []uint64,
+) (uint64, bool) {
+	now := time.Now()
+	if r.replayAvailabilityRetries == nil {
+		r.replayAvailabilityRetries = make(map[[32]byte]replayAvailabilityRetryState)
+	}
+	retry, exists := r.replayAvailabilityRetries[hash]
+	if exists && !retry.expiresAt.IsZero() && !now.Before(retry.expiresAt) {
+		// An expired budget is terminal for this recovery attempt. Keep the
+		// marker while the replacement replay is in flight so a delayed
+		// availability reply cannot reopen the budget; the next call clears
+		// it after the acquisition has been abandoned.
+		if !r.replayer.Has(hash) {
+			delete(r.replayAvailabilityRetries, hash)
+		}
+		return 0, false
+	}
+	if !exists && len(r.replayAvailabilityRetries) >= inbound.DefaultMaxInFlightReplays {
+		return 0, false
+	}
+	for _, tried := range triedPeers {
+		retry.peers = appendUniquePeer(retry.peers, tried)
+	}
+	retry.peers = appendUniquePeer(retry.peers, peerID)
+	if retry.retries >= replayAvailabilityRetryLimit {
+		delete(r.replayAvailabilityRetries, hash)
+		return 0, false
+	}
+	// SelectLedgerPeers keeps the retry on a connected peer and prioritizes
+	// peers that advertise the requested ledger. Filter that bounded set by
+	// the replay handshake feature before choosing an alternative.
+	candidates := r.acquisition.SelectLedgerPeers(hash, seq, retry.peers, replayAvailabilityPeerSelectionLimit)
+	var next uint64
+	for _, candidate := range candidates {
+		if candidate != 0 && r.acquisition.PeerSupportsReplay(candidate) {
+			next = candidate
+			break
+		}
+	}
+	if next == 0 {
+		delete(r.replayAvailabilityRetries, hash)
+		return 0, false
+	}
+	retry.peers = appendUniquePeer(retry.peers, next)
+	retry.retries++
+	if retry.expiresAt.IsZero() {
+		retry.expiresAt = now.Add(replayAvailabilityRetryTTL)
+	}
+	r.replayAvailabilityRetries[hash] = retry
+	return next, true
+}
+
+func appendUniquePeer(peers []uint64, peerID uint64) []uint64 {
+	if peerID == 0 {
+		return peers
+	}
+	for _, existing := range peers {
+		if existing == peerID {
+			return peers
+		}
+	}
+	return append(peers, peerID)
+}
+
+func (r *Router) clearReplayAvailabilityRetry(hash [32]byte) {
+	r.acquisitionMu.Lock()
+	r.clearReplayAvailabilityRetryLocked(hash)
+	r.acquisitionMu.Unlock()
+}
+
+func (r *Router) clearReplayAvailabilityRetryLocked(hash [32]byte) {
+	if r.replayAvailabilityRetries != nil {
+		delete(r.replayAvailabilityRetries, hash)
+	}
+}
+
+func (r *Router) isReplayAvailabilityPeer(hash [32]byte, peerID uint64) bool {
+	r.acquisitionMu.Lock()
+	defer r.acquisitionMu.Unlock()
+	retry, ok := r.replayAvailabilityRetries[hash]
+	if !ok {
+		return false
+	}
+	for _, tried := range retry.peers {
+		if tried == peerID {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Router) expireReplayAvailabilityRetries() {
+	r.acquisitionMu.Lock()
+	defer r.acquisitionMu.Unlock()
+	for hash := range r.replayAvailabilityRetries {
+		if !r.replayer.Has(hash) {
+			delete(r.replayAvailabilityRetries, hash)
+		}
+	}
 }
 
 func (r *Router) requestConsensusLedger(id consensus.LedgerID) error {
@@ -1723,6 +1960,18 @@ func (r *Router) requestConsensusLedger(id consensus.LedgerID) error {
 
 const acquisitionPeerStart = 5
 
+const (
+	replayAvailabilityRetryLimit         = 3
+	replayAvailabilityRetryTTL           = 10 * time.Second
+	replayAvailabilityPeerSelectionLimit = 16
+)
+
+type replayAvailabilityRetryState struct {
+	peers     []uint64
+	retries   uint8
+	expiresAt time.Time
+}
+
 func (r *Router) seedAcquisitionPeers(il *inbound.Ledger) {
 	peers := il.Peers()
 	remaining := acquisitionPeerStart - len(peers)
@@ -1773,6 +2022,10 @@ func isAcquisitionDisconnectError(err error) bool {
 		errors.Is(err, peermanagement.ErrConnectionClosed)
 }
 
+func isReplayAvailabilityError(err message.ReplyError) bool {
+	return err == message.ReplyErrorNoNode || err == message.ReplyErrorNoLedger
+}
+
 func (r *Router) invalidateHistoryPeer(peerID uint64) {
 	r.historyMu.Lock()
 	defer r.historyMu.Unlock()
@@ -1786,12 +2039,13 @@ func (r *Router) invalidateHistoryPeer(peerID uint64) {
 // contiguous). The walk is serial and backward, each header naming its parent;
 // the maintenance tick arms the fetches.
 func (r *Router) startHistoryBackfill(seq uint32, hash [32]byte, peerID uint64, floor uint32) {
-	if seq == 0 || seq <= floor || hash == ([32]byte{}) {
+	if !r.historyBackfill || r.historyDepth == 0 || seq == 0 || seq <= floor || hash == ([32]byte{}) {
 		return
 	}
 	r.historyMu.Lock()
 	r.history = catchupTarget{seq: seq, hash: hash, peerID: peerID}
 	r.historyFloor = floor
+	r.historySeeded = true
 	r.historyMu.Unlock()
 }
 
@@ -1803,6 +2057,11 @@ func (r *Router) onLedgerSwitched(seq uint32, _ [32]byte, parentHash [32]byte, h
 }
 
 func (r *Router) onLedgerFullyValidated(seq uint32, hash [32]byte) {
+	// This callback also observes remote quorums before their ledger is local.
+	// Retention follows our installed validated state, not an uninstalled head.
+	if r.adaptor != nil && r.adaptor.LedgerService() != nil {
+		r.pruneHistoryBackfill(r.adaptor.LedgerService().GetValidatedLedgerIndex())
+	}
 	r.recordSeqHash(seq, hash, [32]byte{}, false)
 	if r.locallySatisfiesLedger(seq, hash) {
 		r.retireLocallySatisfiedLedger(seq, hash, "ledger_validated")
@@ -1837,7 +2096,7 @@ func (r *Router) onLedgerFullyValidated(seq uint32, hash [32]byte) {
 		for _, pipelineEntry := range r.standardReplay.entries {
 			removed[pipelineEntry.hash] = struct{}{}
 		}
-		pipelineRetirement = r.cancelStandardReplayPipelineLocked()
+		pipelineRetirement = r.cancelStandardReplayPipelineLocked("validation_conflict")
 		legacy = append(legacy, pipelineRetirement.ledgers...)
 		pipelineRetirement.ledgers = nil
 	}
@@ -1918,8 +2177,19 @@ func (r *Router) completeHistoryBackfill(seq uint32, hash, parentHash [32]byte, 
 // online-delete floor, or genesis. At most one ReasonHistory acquisition runs,
 // never in the consensus catch-up slot.
 func (r *Router) armHistoryBackfill() {
+	if r.adaptor == nil {
+		return
+	}
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
+		return
+	}
+	tip := svc.GetValidatedLedger()
+	if tip == nil {
+		return
+	}
+	r.pruneHistoryBackfill(tip.Sequence())
+	if !r.historyBackfill || r.historyDepth == 0 {
 		return
 	}
 	if targetSeq, _, _ := r.bestCatchupTarget(); targetSeq > svc.GetClosedLedgerIndex() {
@@ -1929,14 +2199,21 @@ func (r *Router) armHistoryBackfill() {
 		return
 	}
 	r.historyMu.Lock()
+	// A restart may have a valid tip but missing history without a new pivot
+	// switch. Seed once, then keep the backward cursor as live ledgers arrive.
+	if !r.historySeeded && tip.Sequence() > 1 {
+		r.history = catchupTarget{seq: tip.Sequence() - 1, hash: tip.ParentHash()}
+		r.historyFloor = 0
+		r.historySeeded = true
+	}
 	target := r.history
 	floor := r.historyFloor
 	r.historyMu.Unlock()
 	if target.seq == 0 {
 		return
 	}
-	for {
-		if target.seq == 0 || target.seq <= floor || target.hash == ([32]byte{}) || r.belowFloor(target.seq) {
+	for skipped := 0; ; skipped++ {
+		if !r.historySequenceAllowed(target.seq) || target.seq <= floor || target.hash == ([32]byte{}) {
 			r.historyMu.Lock()
 			if r.history == target && r.historyFloor == floor {
 				r.history = catchupTarget{}
@@ -1945,27 +2222,40 @@ func (r *Router) armHistoryBackfill() {
 			r.historyMu.Unlock()
 			return
 		}
-		held, err := svc.GetLedgerByHash(target.hash)
-		if err != nil || held == nil {
+		// Do not perform an unbounded history scan on the consensus router.
+		if skipped == historySkipBudget {
+			return
+		}
+		lookupCtx, cancelLookup := context.WithTimeout(r.lifecycleContext(), 100*time.Millisecond)
+		held, err := svc.GetLedgerByHashContext(lookupCtx, target.hash)
+		cancelLookup()
+		if errors.Is(err, svcerr.ErrLedgerNotFound) || (err == nil && held == nil) {
 			break
 		}
-		hdr := held.Header()
-		stateMap, err := held.StateMapSnapshot()
 		if err != nil {
-			r.logger.Warn("history backfill: snapshot held ledger state failed",
-				"error", err, "seq", target.seq)
+			// A transient read failure of known-complete history is not a
+			// reason to start another full-state network acquisition.
 			return
 		}
-		txMap, err := held.TxMapSnapshot()
-		if err != nil {
-			r.logger.Warn("history backfill: snapshot held ledger transactions failed",
-				"error", err, "seq", target.seq)
-			return
-		}
-		if err = svc.IngestHistoricalLedgerWithState(r.lifecycleContext(), &hdr, stateMap, txMap); err != nil {
-			r.logger.Warn("history backfill: held ledger ingest failed",
-				"error", err, "seq", target.seq)
-			return
+		// Fully acquired ledgers can already be stored by hash without being
+		// adopted into canonical history (e.g. a previous startup candidate).
+		// Preserve that local promotion path; merely cached headers are not
+		// returned by this service lookup. Already-complete history needs no
+		// repeated transaction indexing or persistence enqueue.
+		if !svc.HasCompleteLedgerHash(target.seq, target.hash) {
+			hdr := held.Header()
+			stateMap, err := held.StateMapSnapshot()
+			if err != nil {
+				return
+			}
+			txMap, err := held.TxMapSnapshot()
+			if err != nil {
+				return
+			}
+			if err := svc.IngestHistoricalLedgerWithState(r.lifecycleContext(), &hdr, stateMap, txMap); err != nil {
+				r.logger.Warn("history backfill: held ledger ingest failed", "error", err, "seq", target.seq)
+				return
+			}
 		}
 		next := catchupTarget{seq: target.seq - 1, hash: held.ParentHash(), peerID: target.peerID}
 		r.historyMu.Lock()
@@ -1982,6 +2272,13 @@ func (r *Router) armHistoryBackfill() {
 	r.historyMu.Unlock()
 	if !stillCurrent {
 		return
+	}
+	// A newer jump can leave an older, still-in-window history walk alive.
+	// Prefer the newest missing ledger instead of waiting for that walk.
+	for _, candidate := range r.fetchTracker.Active() {
+		if candidate.Reason() == inbound.ReasonHistory && candidate.Hash() != target.hash {
+			r.discardHistoryAcquisition(candidate, "newer_history_target")
+		}
 	}
 	if r.fetchTracker.CountReason(inbound.ReasonHistory) >= 1 || r.isAcquiring(target.hash) {
 		return
@@ -2004,7 +2301,7 @@ func (r *Router) armHistoryBackfill() {
 }
 
 func (r *Router) prepareHistoryAcquisition(seq uint32, hash [32]byte, peerID uint64) *inbound.Ledger {
-	if r.replayer.Has(hash) {
+	if !r.historySequenceAllowed(seq) || r.replayer.Has(hash) {
 		return nil
 	}
 	il, created := r.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
@@ -2025,6 +2322,7 @@ func (r *Router) requestHistoryAcquisition(il *inbound.Ledger, peerID uint64) {
 		"seq", il.Seq(),
 		"hash", fmt.Sprintf("%x", hash[:8]),
 		"peer", peerID,
+		"ledger_history", r.historyDepth,
 	)
 	r.requestLedgerBase(il, peerID, "failed to request history ledger base from peer")
 }
@@ -2125,7 +2423,7 @@ func (r *Router) ClearFetchInfo() {
 	r.replayCommitMu.Lock()
 	r.acquisitionMu.Lock()
 	ledgers := r.fetchTracker.Clear()
-	retirement := r.cancelStandardReplayPipelineLocked()
+	retirement := r.cancelStandardReplayPipelineLocked("fetch_info_clear")
 	r.acquisitionMu.Unlock()
 	r.replayCommitMu.Unlock()
 	r.retireLegacyAcquisitions(ledgers)
@@ -2300,13 +2598,6 @@ func (r *Router) selectAcquisitionPeerExcluding(seq uint32, excluded map[uint64]
 	return fallback, haveFallback
 }
 
-// handleReplayDeltaResponse verifies an inbound mtREPLAY_DELTA_RESPONSE
-// against its matching in-flight acquisition (routed by ledger hash)
-// and adopts the resulting ledger. On verification or apply failure the
-// acquisition is abandoned and the legacy path is started for the same
-// target. Unsolicited/stale responses (no matching acquisition) are
-// silently dropped — a normal race when a peer batch-forwards replies
-// after we've already moved on.
 func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 	decoded, err := message.Decode(message.TypeReplayDeltaResponse, msg.Payload)
 	if err != nil {
@@ -2318,25 +2609,34 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 	if !ok || resp == nil {
 		return
 	}
+	if resp.HasError() && !msg.SelectPeerCharge(resource.FeeInvalidData(), "replay-delta-verify") {
+		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "replay-delta-verify")
+	}
 
 	rd, err := r.replayer.HandleResponseFrom(uint64(msg.PeerID), resp)
 	if errors.Is(err, inbound.ErrNoMatchingAcquisition) {
-		// Stale or unsolicited — drop silently without charging the
-		// peer. A misbehaving peer sending genuinely bogus data would
-		// fail its ACTIVE acquisition's verifier (branch below), which
-		// IS attributed via IncPeerBadData.
 		r.logger.Debug("replay delta response with no matching acquisition",
 			"peer", msg.PeerID)
 		return
 	}
 	if errors.Is(err, inbound.ErrUnexpectedReplayPeer) {
 		hash := rd.Hash()
+		if resp.HasError() && isReplayAvailabilityError(resp.Error) &&
+			r.isReplayAvailabilityPeer(hash, uint64(msg.PeerID)) {
+			r.logger.Debug("ignoring delayed replay availability response",
+				"peer", msg.PeerID,
+				"hash", fmt.Sprintf("%x", hash[:8]),
+			)
+			return
+		}
 		r.logger.Warn("replay delta response from unexpected peer",
 			"peer", msg.PeerID,
 			"expected_peer", rd.PeerID(),
 			"hash", fmt.Sprintf("%x", hash[:8]),
 		)
-		r.acquisition.IncPeerBadData(uint64(msg.PeerID), "replay-delta-peer")
+		if !resp.HasError() {
+			r.acquisition.IncPeerBadData(uint64(msg.PeerID), "replay-delta-peer")
+		}
 		return
 	}
 	if err != nil {
@@ -2345,7 +2645,25 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 		seq := rd.Seq()
 		hash := rd.Hash()
 		peerID := uint64(msg.PeerID)
+		availability := resp.HasError() && isReplayAvailabilityError(resp.Error)
+		parent := rd.Parent()
+		triedPeers := rd.TriedPeers()
+		r.acquisitionMu.Lock()
+		if !availability {
+			r.requireReplayFullStateLocked(seq, hash)
+		}
 		r.replayer.Abandon(hash)
+		r.acquisitionMu.Unlock()
+		if availability {
+			r.logger.Warn("replay delta unavailable; trying recovery fallback",
+				"seq", seq,
+				"hash", fmt.Sprintf("%x", hash[:8]),
+				"peer", peerID,
+				"reply_error", resp.Error,
+			)
+			r.fallbackReplayAvailability(seq, hash, peerID, parent, triedPeers)
+			return
+		}
 		r.logger.Warn("replay delta verification failed; falling back to legacy",
 			"seq", seq,
 			"hash", fmt.Sprintf("%x", hash[:8]),
@@ -2354,7 +2672,7 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 		)
 		routeMismatch := errors.Is(err, inbound.ErrReplayParentMismatch) ||
 			errors.Is(err, inbound.ErrReplaySequenceMismatch)
-		if !routeMismatch {
+		if !routeMismatch && !resp.HasError() {
 			r.acquisition.IncPeerBadData(peerID, "replay-delta-verify")
 		}
 		r.fallbackReplayAcquisition(seq, hash, peerID)
@@ -2375,7 +2693,10 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 		seq := rd.Seq()
 		hash := rd.Hash()
 		peerID := rd.PeerID()
+		r.acquisitionMu.Lock()
+		r.requireReplayFullStateLocked(seq, hash)
 		r.replayer.Abandon(hash)
+		r.acquisitionMu.Unlock()
 		// DO NOT charge the peer here. GotResponse already verified the
 		// peer's header hash and tx-map root; a subsequent Apply failure
 		// means OUR engine produced a divergent AccountHash — an engine
@@ -2391,6 +2712,7 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 		return
 	}
 	r.replayer.Complete(rd.Hash())
+	r.clearReplayAvailabilityRetry(rd.Hash())
 	if err := r.adoptVerifiedLedger(derived); err != nil {
 		r.logger.Warn("failed to store replay-delta ledger", "error", err)
 	}
@@ -2438,6 +2760,9 @@ func (r *Router) storeVerifiedLedger(l *ledger.Ledger) (header.LedgerHeader, boo
 }
 
 func (r *Router) completeStoredConsensusRecovery(seq uint32, hash, parentHash [32]byte, initialCandidate bool) bool {
+	r.acquisitionMu.Lock()
+	delete(r.replayFallbackRequired, hash)
+	r.acquisitionMu.Unlock()
 	_, result := r.adaptor.recheckFullyValidated(seq, hash)
 	r.recordCompletionRecheck(result)
 	obsolete := r.isObsoleteRecoveryCompletion(seq, hash)
@@ -3504,7 +3829,7 @@ func (r *Router) removeInboundAcquisitionWithSession(
 	}
 	retirement := standardReplayRetirement{}
 	if removed && owned {
-		retirement = r.cancelStandardReplayPipelineLocked()
+		retirement = r.cancelStandardReplayPipelineLocked("pivot_acquisition_failed")
 		if r.consensusRecovery.stepHash == il.Hash() {
 			r.consensusRecovery.stepHash = [32]byte{}
 		}
@@ -3654,6 +3979,10 @@ func (r *Router) completeInboundLedger(il *inbound.Ledger) {
 }
 
 func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
+	if il.Reason() == inbound.ReasonHistory && !r.historySequenceAllowed(il.Seq()) {
+		r.discardHistoryAcquisition(il, "outside_history_window")
+		return
+	}
 	h, stateMap, txMap, err := il.Result()
 	if err != nil {
 		r.logger.Warn("inbound ledger: failed to get result", "error", err)
@@ -3795,6 +4124,7 @@ func (r *Router) completeStandardTransactionReplay(
 	if svc == nil {
 		return
 	}
+	parentHeld := false
 	fallback := func(err error) {
 		r.logger.Warn("standard transaction replay failed; falling back to full-state acquisition",
 			"seq", h.LedgerIndex,
@@ -3802,7 +4132,12 @@ func (r *Router) completeStandardTransactionReplay(
 			"peer", peerID,
 			"error", err,
 		)
-		r.startLedgerAcquisitionLegacy(h.LedgerIndex, h.Hash, peerID)
+		r.acquisitionMu.Lock()
+		if parentHeld {
+			r.requireReplayFullStateLocked(h.LedgerIndex, h.Hash)
+		}
+		r.startLedgerAcquisitionLegacyLocked(h.LedgerIndex, h.Hash, peerID)
+		r.acquisitionMu.Unlock()
 	}
 
 	parent, err := svc.GetLedgerByHash(h.ParentHash)
@@ -3817,6 +4152,7 @@ func (r *Router) completeStandardTransactionReplay(
 		fallback(fmt.Errorf("replay parent sequence %d is not predecessor of %d", parent.Sequence(), h.LedgerIndex))
 		return
 	}
+	parentHeld = true
 
 	stateMap, err := parent.StateMapSnapshot()
 	if err != nil {

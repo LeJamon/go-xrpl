@@ -12,13 +12,13 @@ import (
 func TestAcceptanceEvidenceRequiresEveryProducer(t *testing.T) {
 	script, repo, sha := acceptanceEvidenceRepo(t)
 	jobs := []string{
-		"lint", "generate", "build", "build-386", "postgres", "test", "test-purego",
+		"lint", "generate", "build", "build-386", "postgres", "test",
 		"test-mpt-crypto", "peer-interop", "peer-interop-final", "consensus-smoke",
 		"consensus-smoke-final", "test-repeated", "conformance-final",
 	}
 	producers := []string{
 		"lint", "generate", "build", "build-386", "postgres", "test-integration-offer",
-		"test-integration", "test-tx", "test-core", "test-libs", "test-purego",
+		"test-integration", "test-tx", "test-core", "test-libs",
 		"test-mpt-crypto-ubuntu-latest", "test-mpt-crypto-macos-latest",
 		"peer-interop", "peer-interop-final", "consensus-smoke-3.3.0",
 		"consensus-smoke-3.2.0", "consensus-smoke-final", "test-repeated", "conformance-final",

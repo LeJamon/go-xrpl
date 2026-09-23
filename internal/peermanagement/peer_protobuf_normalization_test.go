@@ -155,7 +155,7 @@ func TestPeerReadLoopDispatchesNestedNormalizedClusterForBothWireModes(t *testin
 			require.NoError(t, err)
 			peerIdentity, err := NewIdentity()
 			require.NoError(t, err)
-			peerToken := NewPublicKeyTokenFromBtcec(peerIdentity.BtcecPublicKey())
+			peerToken := NewPublicKeyTokenFromBytes(peerIdentity.PublicKey())
 			peerPublicKey, err := addresscodec.EncodeNodePublicKey(peerToken.Bytes())
 			require.NoError(t, err)
 			events := make(chan Event, 1)

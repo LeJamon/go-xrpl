@@ -13,7 +13,7 @@ import (
 )
 
 // validatedStateBaseProof is an in-memory completeness certificate for one
-// validated ledger. It is created after a full durable startup walk (or a
+// validated ledger. It is created after a full durable walk (or a
 // checkpoint derived from one), or promoted from a fully fetched initial-sync
 // candidate after persistence. It is then inherited by consecutive persisted
 // ledgers while the NodeStore generation remains unchanged. The generation
@@ -99,13 +99,6 @@ func (s *Service) currentValidatedStateBaseCandidate() (validatedStateBaseProof,
 	return *s.validatedStateBaseCandidate, true
 }
 
-func (s *Service) clearValidatedStateBase() {
-	s.validatedStateBaseMu.Lock()
-	s.validatedStateBaseProof = nil
-	s.validatedStateBaseCandidate = nil
-	s.validatedStateBaseMu.Unlock()
-}
-
 func validatedStateBaseProofMatchesLedger(
 	proof validatedStateBaseProof,
 	h header.LedgerHeader,
@@ -114,6 +107,12 @@ func validatedStateBaseProofMatchesLedger(
 	return proof.sequence == h.LedgerIndex && proof.ledgerHash == h.Hash &&
 		proof.parentHash == h.ParentHash && proof.stateRoot == h.AccountHash &&
 		proof.txRoot == h.TxHash && proof.nodeStoreFingerprint == fingerprint
+}
+
+func validatedStateBaseProofMatchesIdentity(proof validatedStateBaseProof, h header.LedgerHeader) bool {
+	return proof.sequence == h.LedgerIndex && proof.ledgerHash == h.Hash &&
+		proof.parentHash == h.ParentHash && proof.stateRoot == h.AccountHash &&
+		proof.txRoot == h.TxHash
 }
 
 func validatedStateBaseProofCanBeInherited(
@@ -257,7 +256,7 @@ func (s *Service) prepareValidatedStateBaseCache(fingerprint [32]byte) bool {
 // advanceValidatedStateBaseProof extends an existing complete-tree proof over
 // one consecutive persisted ledger, or promotes a fully fetched initial-sync
 // candidate. It deliberately declines when neither exists: a full tree walk
-// belongs to startup/acquisition validation, never to ordinary persistence.
+// belongs to startup, acquisition or background verification, never to ordinary persistence.
 func (s *Service) advanceValidatedStateBaseProof(ctx context.Context, l *ledger.Ledger) error {
 	if l == nil || !l.IsValidated() || s.nodeStore == nil || s.shamapFamily == nil {
 		return nil
@@ -330,8 +329,41 @@ func (s *Service) advanceValidatedStateBaseProof(ctx context.Context, l *ledger.
 	return nil
 }
 
-func (s *Service) tryAdvanceValidatedStateBaseProof(ctx context.Context, l *ledger.Ledger) {
+func (s *Service) requestStateBaseRecertification(reason string) {
+	if s.nodeStore == nil || s.shamapFamily == nil {
+		return
+	}
+	if s.logger != nil {
+		s.logger.Info("Validated state base re-certification requested", "reason", reason)
+	}
+	s.RequestStateBaseRecertification()
+}
+
+func (s *Service) requestStateBaseRecertificationIfNeeded(l *ledger.Ledger) {
+	if l == nil || !l.IsValidated() || !s.hasDurableCompleteLedger(l) {
+		return
+	}
+	h := l.Header()
+	s.validatedStateBaseMu.RLock()
+	pending := s.stateBaseRecertification != nil
+	proof := s.validatedStateBaseProof
+	needsRecovery := proof == nil || (proof.sequence <= h.LedgerIndex &&
+		!validatedStateBaseProofMatchesIdentity(*proof, h))
+	s.validatedStateBaseMu.RUnlock()
+	if pending || !needsRecovery {
+		return
+	}
+	s.requestStateBaseRecertification("validated ledger has no matching completeness proof")
+}
+
+func (s *Service) tryAdvanceValidatedStateBaseProof(ctx context.Context, l *ledger.Ledger) bool {
+	s.advanceStateBaseRecertification(ctx, l)
 	if err := s.advanceValidatedStateBaseProof(ctx, l); err != nil {
 		s.logger.Warn("validated state base proof unavailable", "sequence", l.Sequence(), "err", err)
 	}
+	_, proofFoundAfter := s.currentValidatedStateBaseProof()
+	s.validatedStateBaseMu.RLock()
+	pending := s.stateBaseRecertification != nil
+	s.validatedStateBaseMu.RUnlock()
+	return !pending && !proofFoundAfter
 }

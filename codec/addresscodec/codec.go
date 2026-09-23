@@ -113,6 +113,9 @@ func DecodeClassicAddressToAccountID(cAddress string) (typePrefix, accountID []b
 	if len(decoded) != 21 {
 		return nil, nil, ErrInvalidClassicAddress
 	}
+	if decoded[0] != AccountAddressPrefix {
+		return nil, nil, ErrInvalidClassicAddress
+	}
 
 	return decoded[:1], decoded[1:21], nil
 }

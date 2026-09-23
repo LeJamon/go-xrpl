@@ -26,12 +26,14 @@ func (r *Router) startLifecycle(parent context.Context) (context.Context, bool) 
 	r.lifecycleCtx = ctx
 	r.lifecycleCancel = cancel
 	r.txJobs = make(chan *peermanagement.InboundMessage, txQueueDepth)
+	r.txSetLearnJobs = make(chan txSetLearnJob, txSetLearnQueueDepth)
 	r.serveJobs = make(chan *peermanagement.InboundMessage, serveQueueDepth)
 	if r.lifecycleReady == nil {
 		r.lifecycleReady = make(chan struct{})
 	}
 
 	txJobs := r.txJobs
+	txSetLearnJobs := r.txSetLearnJobs
 	serveJobs := r.serveJobs
 	r.lifecycleWG.Add(txWorkerCount + serveWorkerCount)
 	for range txWorkerCount {
@@ -51,6 +53,8 @@ func (r *Router) startLifecycle(parent context.Context) (context.Context, bool) 
 						defer func() { _ = msg.Close() }()
 						r.handleTransaction(msg)
 					}()
+				case job := <-txSetLearnJobs:
+					r.handleTxSetLearnJob(job)
 				}
 			}
 		}()
@@ -99,6 +103,10 @@ func (r *Router) stopLifecycle() {
 	txJobs := r.txJobs
 	serveJobs := r.serveJobs
 	r.txJobs = nil
+	// Queued learning owns detached blobs, not overlay reservations. It can
+	// be discarded at shutdown; the acquired consensus set was delivered
+	// independently. In-flight workers are still joined below.
+	r.txSetLearnJobs = nil
 	r.serveJobs = nil
 	cancel := r.lifecycleCancel
 	r.lifecycleCancel = nil

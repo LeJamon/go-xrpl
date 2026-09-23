@@ -269,6 +269,7 @@ func TestDecodeSeed(t *testing.T) {
 }
 
 func TestDecodeAddressToAccountID(t *testing.T) {
+	wrongPrefix := Base58CheckEncode(make([]byte, AccountAddressLength), AccountAddressPrefix+1)
 	tt := []struct {
 		name              string
 		input             string
@@ -300,6 +301,13 @@ func TestDecodeAddressToAccountID(t *testing.T) {
 		{
 			name:              "fail - unsuccessful decode - 2",
 			input:             "davidschwartz",
+			expectedPrefix:    nil,
+			expectedAccountID: nil,
+			expectedErr:       ErrInvalidClassicAddress,
+		},
+		{
+			name:              "fail - valid checksum with non-account prefix",
+			input:             wrongPrefix,
 			expectedPrefix:    nil,
 			expectedAccountID: nil,
 			expectedErr:       ErrInvalidClassicAddress,

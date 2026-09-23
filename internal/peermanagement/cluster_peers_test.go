@@ -18,7 +18,7 @@ import (
 func makeClusterTestPeer(t *testing.T, id *Identity, host string, port uint16) *Peer {
 	t.Helper()
 	endpoint := Endpoint{Host: host, Port: port}
-	tok := NewPublicKeyTokenFromBtcec(id.BtcecPublicKey())
+	tok := NewPublicKeyTokenFromBytes(id.PublicKey())
 	return &Peer{
 		id:           PeerID(1),
 		endpoint:     endpoint,

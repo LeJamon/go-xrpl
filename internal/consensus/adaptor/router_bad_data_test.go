@@ -89,10 +89,8 @@ func TestRouter_HandleReplayDeltaResponse_DecodeFailure_ChargesPeer(t *testing.T
 }
 
 // TestRouter_HandleReplayDeltaResponse_VerifyFailure_ChargesPeer
-// verifies the router charges the peer when GotResponse rejects the
-// payload (e.g. peer-signaled error code). Mirrors the behavior flow
-// that rippled's LedgerDeltaAcquire uses to charge feeInvalidData on
-// verification failure.
+// verifies that a bad-request reply is charged once despite also failing
+// acquisition verification.
 func TestRouter_HandleReplayDeltaResponse_VerifyFailure_ChargesPeer(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
 
@@ -103,11 +101,9 @@ func TestRouter_HandleReplayDeltaResponse_VerifyFailure_ChargesPeer(t *testing.T
 	require.NotNil(t, parent)
 	require.NoError(t, r.startReplayDeltaAcquisition(parent.Sequence()+1, target, 7, parent))
 
-	// A response with matching hash but a peer-signaled error — the
-	// verifier in GotResponse rejects it.
 	bad := &message.ReplayDeltaResponse{
 		LedgerHash: target[:],
-		Error:      message.ReplyErrorNoLedger,
+		Error:      message.ReplyErrorBadRequest,
 	}
 	payload, err := message.Encode(bad)
 	require.NoError(t, err)
@@ -123,6 +119,50 @@ func TestRouter_HandleReplayDeltaResponse_VerifyFailure_ChargesPeer(t *testing.T
 		"verification failure must trigger exactly one IncPeerBadData call")
 	assert.Equal(t, uint64(7), calls[0].peerID)
 	assert.Equal(t, "replay-delta-verify", calls[0].reason)
+}
+
+func TestRouter_HandleReplayDeltaResponse_ChargesErrorsBeforeRouting(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		reply message.ReplyError
+	}{
+		{name: "no ledger", reply: message.ReplyErrorNoLedger},
+		{name: "no node", reply: message.ReplyErrorNoNode},
+		{name: "bad request", reply: message.ReplyErrorBadRequest},
+	} {
+		for _, route := range []string{"stale", "unexpected peer", "missing hash"} {
+			t.Run(tc.name+"/"+route, func(t *testing.T) {
+				r, sender := makeRouterWithBadDataRecorder(t)
+				parent := r.adaptor.LedgerService().GetClosedLedger()
+				require.NotNil(t, parent)
+				target := [32]byte{0xAC}
+				require.NoError(t, r.startReplayDeltaAcquisition(parent.Sequence()+1, target, 7, parent))
+				peerID := uint64(7)
+				resp := &message.ReplayDeltaResponse{
+					LedgerHash: target[:],
+					Error:      tc.reply,
+				}
+				switch route {
+				case "stale":
+					r.replayer.Abandon(target)
+				case "unexpected peer":
+					peerID = 8
+				case "missing hash":
+					resp.LedgerHash = nil
+				}
+				r.handleMessage(&peermanagement.InboundMessage{
+					PeerID:  peermanagement.PeerID(peerID),
+					Type:    message.TypeReplayDeltaResponse,
+					Payload: encodePayload(t, resp),
+				})
+
+				assert.Equal(t, []badDataCall{{peerID: peerID, reason: "replay-delta-verify"}}, sender.getBadDataCalls())
+				assert.Equal(t, route != "stale", r.replayer.Has(target))
+				assert.Equal(t, []replayDeltaCall{{peerID: 7, hash: target}}, sender.replayCalls())
+				assert.Empty(t, sender.legacyCalls())
+			})
+		}
+	}
 }
 
 func TestRouter_HandleReplayDeltaResponse_RouteMismatchDoesNotChargePeer(t *testing.T) {

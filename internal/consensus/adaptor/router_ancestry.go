@@ -17,6 +17,8 @@ const (
 	headerDiscoveryMaxRequests   = maxForwardDeltaGap * 2
 	headerDiscoveryRetryInterval = 500 * time.Millisecond
 	headerDiscoveryDeadline      = 10 * time.Second
+	headerDiscoveryRepairBackoff = 5 * time.Second
+	headerDiscoveryMaxRepairs    = 3
 )
 
 var (
@@ -49,6 +51,8 @@ type headerDiscoverySession struct {
 	attempts      uint16
 	pending       bool
 	terminal      bool
+	repairAfter   time.Time
+	repairRound   uint8
 	deadline      time.Time
 	lastSentAt    time.Time
 	excludedPeers map[uint64]struct{}
@@ -85,6 +89,7 @@ func (r *Router) startHeaderParentDiscovery(
 	}
 
 	r.headerDiscoveryMu.Lock()
+	var repairRound uint8
 	if current := r.headerDiscovery; current != nil {
 		if current.terminal &&
 			(baseSeq > current.baseSeq || current.baseHash != base.Hash()) {
@@ -94,6 +99,26 @@ func (r *Router) startHeaderParentDiscovery(
 			r.rememberHeaderRequestsLocked(current)
 			r.headerDiscoveryGeneration++
 			r.headerDiscovery = nil
+		} else if current.terminal && !current.repairAfter.IsZero() {
+			// A failed walk can prevent its own anchor from advancing. Retry
+			// the frozen trusted target after backoff, not the moving head, with
+			// a bounded number of fresh request/deadline budgets per anchor.
+			if time.Now().Before(current.repairAfter) {
+				r.headerDiscoveryMu.Unlock()
+				return true
+			}
+			r.catchupMu.Lock()
+			trusted := r.headerDiscoveryTargetStillTrustedLocked(current)
+			r.catchupMu.Unlock()
+			if !trusted {
+				current.repairAfter = time.Time{}
+				r.headerDiscoveryMu.Unlock()
+				return false
+			}
+			targetSeq, targetHash, targetSource = current.targetSeq, current.targetHash, current.targetSource
+			repairRound = current.repairRound + 1
+			peerHint = 0
+			r.rememberHeaderRequestsLocked(current)
 		} else {
 			// The admitted target and replay base are immutable for this walk.
 			// A newer validation is re-armed after it completes, so it cannot
@@ -115,14 +140,19 @@ func (r *Router) startHeaderParentDiscovery(
 		nextSeq:       targetSeq,
 		nextHash:      targetHash,
 		peerID:        peerHint,
+		repairRound:   repairRound,
 		deadline:      now.Add(headerDiscoveryDeadline),
 		excludedPeers: make(map[uint64]struct{}),
 		headers:       make(map[uint32]header.LedgerHeader, targetSeq-baseSeq),
 	}
 	r.headerDiscovery = current
 	r.headerDiscoveryMu.Unlock()
+	if repairRound > 0 {
+		r.logger.Info("retrying header ancestry from preserved replay base",
+			"base_seq", baseSeq, "target_seq", targetSeq, "repair_round", repairRound)
+	}
 
-	r.cancelFrozenPivotForHeaderDiscovery()
+	r.cancelFrozenPivotForHeaderDiscovery(baseSeq, base.Hash(), targetSeq, targetHash)
 	if err := r.issueHeaderDiscoveryRequest(current.generation); err != nil {
 		r.headerDiscoveryRequestFailed(current.generation, err)
 		r.retryHeaderDiscovery(current.generation)
@@ -157,10 +187,15 @@ func (r *Router) headerDiscoveryNeeded(base *ledger.Ledger, targetSeq uint32, ta
 }
 
 // A peer-only pivot may already be collecting transactions when quorum
-// validation supplies the real target. Retire that pivot before a header walk
-// is admitted so its speculative anchor cannot win adoption while the walk is
-// proving the target's ancestry.
-func (r *Router) cancelFrozenPivotForHeaderDiscovery() {
+// validation supplies the real target. Retire an unverified pivot before a
+// header walk is admitted; a verified pivot may keep its prepared successors
+// when the walk starts from the same accepted anchor and target branch.
+func (r *Router) cancelFrozenPivotForHeaderDiscovery(
+	baseSeq uint32,
+	baseHash [32]byte,
+	targetSeq uint32,
+	targetHash [32]byte,
+) {
 	r.replayCommitMu.Lock()
 	r.acquisitionMu.Lock()
 	if !r.standardReplay.active {
@@ -168,7 +203,17 @@ func (r *Router) cancelFrozenPivotForHeaderDiscovery() {
 		r.replayCommitMu.Unlock()
 		return
 	}
-	retired := r.cancelStandardReplayPipelineLocked()
+	if r.standardReplay.pivotReady &&
+		r.standardReplayHeaderDiscoveryCompatibleLocked(baseSeq, baseHash, targetSeq, targetHash) {
+		r.acquisitionMu.Unlock()
+		r.replayCommitMu.Unlock()
+		return
+	}
+	reason := "header_discovery_speculative"
+	if r.standardReplay.pivotReady {
+		reason = "header_discovery_conflict"
+	}
+	retired := r.cancelStandardReplayPipelineLocked(reason)
 	r.acquisitionMu.Unlock()
 	r.replayCommitMu.Unlock()
 	r.retireStandardReplay(retired)
@@ -252,14 +297,12 @@ func (r *Router) issueHeaderDiscoveryRequest(generation uint64) error {
 	}
 	now := time.Now()
 	if !current.deadline.IsZero() && !now.Before(current.deadline) {
-		current.terminal = true
-		current.pending = false
+		current.markUnavailable(now)
 		r.headerDiscoveryMu.Unlock()
 		return errHeaderDiscoveryUnavailable
 	}
 	if current.attempts >= headerDiscoveryMaxRequests {
-		current.terminal = true
-		current.pending = false
+		current.markUnavailable(now)
 		r.headerDiscoveryMu.Unlock()
 		return errHeaderDiscoveryUnavailable
 	}
@@ -281,7 +324,7 @@ func (r *Router) issueHeaderDiscoveryRequest(generation uint64) error {
 			current.pending = false
 			current.lastSentAt = now
 			if current.attempts >= headerDiscoveryMaxRequests {
-				current.terminal = true
+				current.markUnavailable(now)
 			}
 		}
 		r.headerDiscoveryMu.Unlock()
@@ -297,8 +340,7 @@ func (r *Router) issueHeaderDiscoveryRequest(generation uint64) error {
 		return errHeaderDiscoveryUnavailable
 	}
 	if !current.deadline.IsZero() && !now.Before(current.deadline) {
-		current.terminal = true
-		current.pending = false
+		current.markUnavailable(now)
 		r.headerDiscoveryMu.Unlock()
 		return errHeaderDiscoveryUnavailable
 	}
@@ -345,7 +387,7 @@ func (r *Router) headerDiscoveryRequestFailed(generation uint64, err error) {
 	}
 	if current.attempts >= headerDiscoveryMaxRequests ||
 		(!current.deadline.IsZero() && !time.Now().Before(current.deadline)) {
-		current.terminal = true
+		current.markUnavailable(time.Now())
 	}
 	r.headerDiscoveryMu.Unlock()
 	r.logger.Debug("header ancestry request unavailable",
@@ -364,18 +406,20 @@ func (r *Router) tickHeaderDiscovery(now time.Time) {
 	r.headerDiscoveryMu.Lock()
 	current := r.headerDiscovery
 	if current == nil || current.terminal {
+		repair := current != nil && !current.repairAfter.IsZero() && !now.Before(current.repairAfter)
 		r.headerDiscoveryMu.Unlock()
+		if repair {
+			r.armCatchupTowardTarget()
+		}
 		return
 	}
 	if current.attempts >= headerDiscoveryMaxRequests {
-		current.pending = false
-		current.terminal = true
+		current.markUnavailable(now)
 		r.headerDiscoveryMu.Unlock()
 		return
 	}
 	if !current.deadline.IsZero() && !now.Before(current.deadline) {
-		current.pending = false
-		current.terminal = true
+		current.markUnavailable(now)
 		r.headerDiscoveryMu.Unlock()
 		return
 	}
@@ -630,8 +674,18 @@ func (r *Router) failHeaderDiscovery(generation uint64, kind error, peerID uint6
 	}
 	current.pending = false
 	current.terminal = true
+	if kind == errHeaderDiscoveryUnavailable {
+		current.markUnavailable(time.Now())
+	} else {
+		current.repairAfter = time.Time{}
+	}
+	baseSeq := current.baseSeq
+	baseHash := current.baseHash
+	targetSeq := current.targetSeq
+	targetHash := current.targetHash
 	seq := current.nextSeq
 	hash := current.nextHash
+	repairRound, repairAfter := current.repairRound, current.repairAfter
 	r.headerDiscoveryMu.Unlock()
 
 	r.logger.Warn("header ancestry discovery failed",
@@ -640,7 +694,12 @@ func (r *Router) failHeaderDiscovery(generation uint64, kind error, peerID uint6
 		"seq", seq,
 		"hash", fmt.Sprintf("%x", hash[:8]),
 		"peer", peerID,
+		"base_seq", baseSeq, "target_seq", targetSeq,
+		"repair_round", repairRound, "retry_at", repairAfter,
 	)
+	if kind == errHeaderDiscoveryConflict {
+		r.cancelFrozenPivotForHeaderDiscovery(baseSeq, baseHash, targetSeq, targetHash)
+	}
 	r.armCatchupTowardTargetWithPeer(peerID)
 }
 
@@ -732,7 +791,9 @@ func (r *Router) finishHeaderDiscovery(generation uint64, peerID uint64) {
 	}
 
 	baseSeq := current.baseSeq
+	baseHash := current.baseHash
 	targetSeq := current.targetSeq
+	targetHash := current.targetHash
 	r.rememberHeaderRequestsLocked(current)
 	r.headerDiscovery = nil
 	r.headerDiscoveryMu.Unlock()
@@ -742,5 +803,9 @@ func (r *Router) finishHeaderDiscovery(generation uint64, peerID uint64) {
 		"target_seq", targetSeq,
 		"peer", peerID,
 	)
+	r.reconcileStandardReplayAfterHeaderDiscovery(baseSeq, baseHash, targetSeq, targetHash, chain)
+	// Consume the proven prefix before another moving-head header walk can
+	// take over the catch-up arm and starve an otherwise ready replay queue.
+	r.refillStandardReplayCollector(peerID)
 	r.armCatchupTowardTargetWithPeer(peerID)
 }

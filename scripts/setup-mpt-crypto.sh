@@ -234,6 +234,7 @@ print_env() {
     # %q makes this output safe for `eval "$(just mpt-crypto-env)"`.
     printf 'export CONAN_HOME=%q\n' "$conan_home"
     printf 'export PKG_CONFIG_PATH=%q\n' "$pkg_config_path"
+    printf 'export GOCACHE=%q\n' "$go_cache"
     printf 'export GOXRPL_MPT_CRYPTO_CXX_RUNTIME=%q\n' "$runtime_flags"
     printf 'export CGO_LDFLAGS=%q\n' "$cgo_ldflags"
     printf 'export CGO_CXXFLAGS=%q\n' "$cgo_cxxflags"

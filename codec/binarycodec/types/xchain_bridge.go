@@ -10,10 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
-var (
-	errNotValidXChainBridge = errors.New("not a valid xchain bridge")
-	badXRPCurrencyBytes     = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'X', 'R', 'P', 0, 0, 0, 0, 0}
-)
+var errNotValidXChainBridge = errors.New("not a valid xchain bridge")
 
 // accountVLLength is the length prefix a door account carries on the wire: a
 // bridge door is serialized like an STAccount, a VL-prefixed 160-bit value.
@@ -129,7 +126,7 @@ func xchainIssueFromJSON(issue map[string]any) ([]byte, error) {
 		return nil, ErrInvalidCurrency
 	}
 	currencyBytes, err := (&Currency{}).FromJSON(currency)
-	if err != nil || bytes.Equal(currencyBytes, noCurrencyBytes) || bytes.Equal(currencyBytes, badXRPCurrencyBytes) {
+	if err != nil || bytes.Equal(currencyBytes, noCurrencyBytes) || bytes.Equal(currencyBytes, badCurrencyBytes) {
 		return nil, ErrInvalidCurrency
 	}
 

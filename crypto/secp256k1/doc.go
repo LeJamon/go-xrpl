@@ -7,7 +7,6 @@
 // and verifying. As rippled requires, signatures must be fully canonical: the
 // strict Validate path rejects non-canonical signatures by returning false.
 //
-// Signature verification is on the consensus hot path. With cgo enabled it links
-// libsecp256k1 (verify_cgo.go); under CGO_ENABLED=0 it falls back to a slower
-// pure-Go implementation (verify_purego.go).
+// All secp256k1 operations use the process-lifetime libsecp256k1 context through
+// the cgo shim. The context is randomized before concurrent use.
 package secp256k1

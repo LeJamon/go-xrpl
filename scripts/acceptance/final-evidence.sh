@@ -205,7 +205,7 @@ case "$mode" in
     write_common_metadata "$output"
     status_failed=0
     {
-      printf 'required_jobs=lint,generate,build,build-386,postgres,test,test-purego,test-mpt-crypto,peer-interop,peer-interop-final,consensus-smoke,consensus-smoke-final,test-repeated,conformance-final\n'
+      printf 'required_jobs=lint,generate,build,build-386,postgres,test,test-mpt-crypto,peer-interop,peer-interop-final,consensus-smoke,consensus-smoke-final,test-repeated,conformance-final\n'
       printf 'needs_results=%s\n' "$results_file"
       printf '\n[producer-evidence]\n'
     } >> "$output"
@@ -221,7 +221,7 @@ case "$mode" in
     fi
 
     required_jobs=(
-      lint generate build build-386 postgres test test-purego test-mpt-crypto
+      lint generate build build-386 postgres test test-mpt-crypto
       peer-interop peer-interop-final consensus-smoke consensus-smoke-final
       test-repeated conformance-final
     )
@@ -257,7 +257,7 @@ case "$mode" in
       done
       required_producers=(
         lint.txt generate.txt build.txt build-386.txt postgres.txt test-integration-offer.txt test-integration.txt
-        test-tx.txt test-core.txt test-libs.txt test-purego.txt
+        test-tx.txt test-core.txt test-libs.txt
         test-mpt-crypto-ubuntu-latest.txt test-mpt-crypto-macos-latest.txt
         peer-interop.txt peer-interop-final.txt
         consensus-smoke-3.3.0.txt consensus-smoke-3.2.0.txt consensus-smoke-final.txt

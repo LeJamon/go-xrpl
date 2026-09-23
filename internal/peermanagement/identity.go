@@ -18,10 +18,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/btcsuite/btcd/btcec/v2"
-
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	secp256k1shim "github.com/LeJamon/go-xrpl/crypto/secp256k1/shim"
 )
 
 var (
@@ -39,8 +39,8 @@ const (
 // authentication. The TLS keypair is generated lazily and cached —
 // RSA-2048 keygen is 50–200 ms and we'd otherwise pay it on every dial.
 type Identity struct {
-	privateKey *btcec.PrivateKey
-	publicKey  *btcec.PublicKey
+	privateKey []byte
+	publicKey  []byte
 
 	tlsOnce    sync.Once
 	tlsCertPEM []byte
@@ -49,15 +49,18 @@ type Identity struct {
 }
 
 func NewIdentity() (*Identity, error) {
-	privateKey, err := btcec.NewPrivateKey()
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate private key: %w", err)
+	privateKey := make([]byte, 32)
+	for {
+		if _, err := rand.Read(privateKey); err != nil {
+			rootcrypto.SecureErase(privateKey)
+			return nil, fmt.Errorf("failed to generate private key: %w", err)
+		}
+		if secp256k1shim.SecretKeyValid(privateKey) {
+			break
+		}
 	}
 
-	return &Identity{
-		privateKey: privateKey,
-		publicKey:  privateKey.PubKey(),
-	}, nil
+	return newIdentityFromPrivateKey(privateKey)
 }
 
 func NewIdentityFromSeed(seed []byte) (*Identity, error) {
@@ -65,16 +68,13 @@ func NewIdentityFromSeed(seed []byte) (*Identity, error) {
 		return nil, errors.New("seed must be at least 16 bytes")
 	}
 
-	h := sha512.New()
-	h.Write(seed)
-	hash := h.Sum(nil)
-
-	privateKey, _ := btcec.PrivKeyFromBytes(hash[:32])
-
-	return &Identity{
-		privateKey: privateKey,
-		publicKey:  privateKey.PubKey(),
-	}, nil
+	hash := sha512.Sum512(seed)
+	defer rootcrypto.SecureErase(hash[:])
+	privateKey, ok := secp256k1shim.SecretKeyReduce(hash[:32])
+	if !ok {
+		return nil, ErrInvalidPrivateKey
+	}
+	return newIdentityFromPrivateKey(privateKey)
 }
 
 func NewIdentityFromPrivateKey(privKeyHex string) (*Identity, error) {
@@ -96,15 +96,26 @@ func NewIdentityFromPrivateKey(privKeyHex string) (*Identity, error) {
 		return nil, ErrInvalidPrivateKey
 	}
 
-	_, err = secp256k1.Algorithm{}.DerivePublicKeyFromSecret(privKeyBytes)
-	if err != nil {
+	return newIdentityFromPrivateKey(privKeyBytes)
+}
+
+// newIdentityFromPrivateKey takes ownership of privateKey. The caller must
+// pass a newly allocated buffer because it is retained by the identity.
+func newIdentityFromPrivateKey(privateKey []byte) (*Identity, error) {
+	if !secp256k1shim.SecretKeyValid(privateKey) {
+		rootcrypto.SecureErase(privateKey)
 		return nil, ErrInvalidPrivateKey
 	}
-	privateKey, _ := btcec.PrivKeyFromBytes(privKeyBytes)
+
+	publicKey, ok := secp256k1shim.PublicKeyCreate(privateKey)
+	if !ok || len(publicKey) != CompressedPubKeyLen {
+		rootcrypto.SecureErase(privateKey)
+		return nil, ErrInvalidPrivateKey
+	}
 
 	return &Identity{
 		privateKey: privateKey,
-		publicKey:  privateKey.PubKey(),
+		publicKey:  publicKey,
 	}, nil
 }
 
@@ -119,37 +130,34 @@ func GenerateSeed() ([]byte, error) {
 
 // Sign hashes message with sha512Half then signs (DER ECDSA).
 func (i *Identity) Sign(message []byte) ([]byte, error) {
-	if i.privateKey == nil {
+	if len(i.privateKey) == 0 {
 		return nil, ErrInvalidPrivateKey
 	}
 
-	h := sha512.New()
-	h.Write(message)
-	hash := h.Sum(nil)[:32]
-
-	return secp256k1.SignDigestBytes(hash, i.privateKey.Serialize())
+	hash := sha512.Sum512(message)
+	return i.SignDigest(hash[:32])
 }
 
 // SignDigest signs a pre-hashed 32-byte digest (used for session sigs).
 func (i *Identity) SignDigest(digest []byte) ([]byte, error) {
-	if i.privateKey == nil {
+	if len(i.privateKey) == 0 {
 		return nil, ErrInvalidPrivateKey
 	}
-	return secp256k1.SignDigestBytes(digest, i.privateKey.Serialize())
+	return secp256k1.SignDigestBytes(digest, i.privateKey)
 }
 
 // PublicKey returns the raw compressed public key bytes.
 func (i *Identity) PublicKey() []byte {
-	return i.publicKey.SerializeCompressed()
+	return append([]byte(nil), i.publicKey...)
 }
 
 func (i *Identity) PublicKeyHex() string {
-	return hex.EncodeToString(i.publicKey.SerializeCompressed())
+	return hex.EncodeToString(i.publicKey)
 }
 
 // EncodedPublicKey returns the base58 'n...' form used in XRPL handshakes.
 func (i *Identity) EncodedPublicKey() string {
-	pubKeyBytes := i.publicKey.SerializeCompressed()
+	pubKeyBytes := i.PublicKey()
 
 	payload := make([]byte, 1+len(pubKeyBytes), 1+len(pubKeyBytes)+ChecksumLen)
 	payload[0] = NodePublicKeyPrefix
@@ -163,11 +171,7 @@ func (i *Identity) EncodedPublicKey() string {
 
 // PrivateKeyHex returns the private key as hex with the "00" prefix.
 func (i *Identity) PrivateKeyHex() string {
-	return "00" + hex.EncodeToString(i.privateKey.Serialize())
-}
-
-func (i *Identity) BtcecPublicKey() *btcec.PublicKey {
-	return i.publicKey
+	return "00" + hex.EncodeToString(i.privateKey)
 }
 
 // GenerateIdentity is an alias for NewIdentity.
@@ -301,7 +305,7 @@ func (i *Identity) TLSCertificate() tls.Certificate {
 
 // PublicKeyToken is a peer's secp256k1 node public key.
 type PublicKeyToken struct {
-	key *btcec.PublicKey
+	key []byte
 }
 
 func NewPublicKeyToken(data []byte) (*PublicKeyToken, error) {
@@ -309,8 +313,8 @@ func NewPublicKeyToken(data []byte) (*PublicKeyToken, error) {
 		return nil, ErrInvalidPublicKey
 	}
 
-	key, err := btcec.ParsePubKey(data)
-	if err != nil {
+	key, ok := secp256k1shim.ParsePublicKey(data, true)
+	if !ok || len(key) != CompressedPubKeyLen {
 		return nil, ErrInvalidPublicKey
 	}
 
@@ -344,7 +348,7 @@ func ParsePublicKeyToken(encoded string) (*PublicKeyToken, error) {
 	keyBytes := payload[1:]
 
 	// Reject ed25519 keys explicitly so the error is clear instead of
-	// an opaque btcec parse failure.
+	// an opaque secp256k1 parse failure.
 	if len(keyBytes) > 0 && keyBytes[0] == 0xED {
 		return nil, errors.New("unsupported node public key type: ed25519 (rippled requires secp256k1)")
 	}
@@ -353,11 +357,11 @@ func ParsePublicKeyToken(encoded string) (*PublicKeyToken, error) {
 }
 
 func (p *PublicKeyToken) Bytes() []byte {
-	return p.key.SerializeCompressed()
+	return append([]byte(nil), p.key...)
 }
 
 func (p *PublicKeyToken) Encode() string {
-	keyBytes := p.key.SerializeCompressed()
+	keyBytes := p.Bytes()
 
 	payload := make([]byte, 1+len(keyBytes), 1+len(keyBytes)+ChecksumLen)
 	payload[0] = NodePublicKeyPrefix
@@ -369,15 +373,11 @@ func (p *PublicKeyToken) Encode() string {
 	return addresscodec.EncodeBase58(full)
 }
 
-func (p *PublicKeyToken) BtcecKey() *btcec.PublicKey {
-	return p.key
-}
-
 func (p *PublicKeyToken) Equal(other *PublicKeyToken) bool {
 	if p == nil || other == nil {
 		return p == other
 	}
-	return p.key.IsEqual(other.key)
+	return equalBytesIdentity(p.key, other.key)
 }
 
 func doubleSHA256Identity(data []byte) []byte {

@@ -14,12 +14,16 @@ golangci_version := "v2.11.3"
 default:
     @just --list --unsorted
 
-# Build the goxrpl binary into ../tmp/goxrpl (CGO + OpenSSL).
+# Check the native CGO dependencies used by the daemon and secp256k1 package.
+check-native:
+    ./scripts/require-native.sh
+
+# Build the goxrpl binary into ../tmp/goxrpl (CGO + OpenSSL + libsecp256k1).
 build:
     ./scripts/build.sh
 
 # Compile every package in the module.
-build-all:
+build-all: check-native
     go build ./...
 
 # Install the locked optional mpt-crypto dependency into a project-local cache.
@@ -31,7 +35,7 @@ mpt-crypto-env:
     @./scripts/setup-mpt-crypto.sh env
 
 # Build mpt-crypto from its lockfile and run the native backend tests.
-test-mpt-crypto package="./amendment/... ./crypto/mptcrypto/... ./internal/tx/mpt/... ./internal/testing/mpt/...":
+test-mpt-crypto package="./amendment/... ./crypto/mptcrypto/... ./crypto/secp256k1/... ./internal/tx/mpt/... ./internal/testing/mpt/...":
     ./scripts/setup-mpt-crypto.sh test {{package}}
 
 # Run every test in the module.

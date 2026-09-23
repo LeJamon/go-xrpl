@@ -143,6 +143,9 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		signatureErr = txengine.PrewarmSignatureWithRules(ptx.Parsed, cfg.Rules)
 		preprocessValid = signatureErr == nil
 	}
+	if preprocessValid && localReason == "" {
+		s.prefetchIngressState(ptx)
+	}
 
 	if err := s.lockOpenLedgerIfRunning(openLedgerIngress); err != nil {
 		return nil, err

@@ -22,24 +22,38 @@ func (l *Ledger) TxMapSnapshot() (*shamap.SHAMap, error) {
 	return l.txMap.SnapshotMutable()
 }
 
+// Mutable ledgers may have temporary SHAMap forks in flight, so retain the
+// ledger read lock through persistence to keep fork ownership serialized.
+// Closed and validated ledgers own immutable maps; their map pointers remain
+// valid after the ledger lock is released for storage I/O.
 func (l *Ledger) StoreStateDirty(store func([]shamap.FlushEntry) error) error {
-	// The SHAMap owns its persistence lock. Keep the map reference stable
-	// without blocking immutable header reads behind storage I/O.
 	l.mu.RLock()
-	defer l.mu.RUnlock()
-	if l.stateMap == nil {
+	stateMap := l.stateMap
+	if stateMap == nil {
+		l.mu.RUnlock()
 		return nil
 	}
-	return l.stateMap.StoreDirty(store)
+	if l.state != StateOpen {
+		l.mu.RUnlock()
+	} else {
+		defer l.mu.RUnlock()
+	}
+	return stateMap.StoreDirty(store)
 }
 
 func (l *Ledger) StoreTransactionDirty(store func([]shamap.FlushEntry) error) error {
 	l.mu.RLock()
-	defer l.mu.RUnlock()
-	if l.txMap == nil {
+	txMap := l.txMap
+	if txMap == nil {
+		l.mu.RUnlock()
 		return nil
 	}
-	return l.txMap.StoreDirty(store)
+	if l.state != StateOpen {
+		l.mu.RUnlock()
+	} else {
+		defer l.mu.RUnlock()
+	}
+	return txMap.StoreDirty(store)
 }
 
 // SetSHAMapFamily backs both ledger maps with the same node family.
