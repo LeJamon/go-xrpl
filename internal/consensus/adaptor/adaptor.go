@@ -224,35 +224,18 @@ type openLedgerTxLookup interface {
 	OpenLedgerHasTx([32]byte) (bool, error)
 }
 
-// validatorDutyGate is deliberately kept private to the adaptor. The ledger
-// service owns the durable replay-fault registry, while consensus only needs
-// the small operation boundary that protects local validator duties. Keeping
-// this optional lets focused adaptor tests and non-consensus service fixtures
-// retain their existing in-memory behavior.
-type validatorDutyGate interface {
-	WithValidatorDuty(func() error) error
-}
-
-type replayFaultGate interface {
-	ReplayBlocked() bool
-}
-
 func (a *Adaptor) withValidatorDuty(fn func() error) error {
 	if a == nil || a.ledgerService == nil {
 		return fn()
 	}
-	if gate, ok := any(a.ledgerService).(validatorDutyGate); ok {
-		return gate.WithValidatorDuty(fn)
-	}
-	return fn()
+	return a.ledgerService.WithValidatorDuty(fn)
 }
 
 func (a *Adaptor) replayBlocked() bool {
 	if a == nil || a.ledgerService == nil {
 		return false
 	}
-	gate, ok := any(a.ledgerService).(replayFaultGate)
-	return ok && gate.ReplayBlocked()
+	return a.ledgerService.ReplayBlocked()
 }
 
 // FeeVoteStance is this validator's desired fee structure. The Set fields

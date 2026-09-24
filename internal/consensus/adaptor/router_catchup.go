@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	"github.com/LeJamon/go-xrpl/internal/ledger/replayfault"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
@@ -780,6 +781,9 @@ func (r *Router) armCatchupTowardTarget() {
 }
 
 func (r *Router) armConsensusCatchup() {
+	if r.replayFaultBlocked() {
+		return
+	}
 	r.retireLocallySatisfiedFrozenPivot("local_frontier")
 	if r.armPendingConsensusLedger() {
 		return
@@ -1438,6 +1442,9 @@ func (r *Router) isAcquiringLocked(hash [32]byte) bool {
 // freed before returning so the caller can retry).
 // Caller holds acquisitionMu.
 func (r *Router) startReplayDeltaAcquisition(seq uint32, hash [32]byte, peerID uint64, parent *ledger.Ledger) error {
+	if r.replayFaultBlocked() {
+		return replayfault.ErrBlocked
+	}
 	if r.replayNeedsFullStateLocked(hash) {
 		return errors.New("ledger requires full-state acquisition after replay failure")
 	}
@@ -1476,6 +1483,9 @@ func (r *Router) startLedgerAcquisitionLegacy(seq uint32, hash [32]byte, peerID 
 
 // Caller holds acquisitionMu.
 func (r *Router) startLedgerReplayAcquisitionLegacyLocked(seq uint32, hash [32]byte, peerID uint64) (*inbound.Ledger, bool) {
+	if r.replayFaultBlocked() {
+		return nil, false
+	}
 	if r.replayNeedsFullStateLocked(hash) {
 		r.startLedgerAcquisitionLegacyLocked(seq, hash, peerID)
 		return r.fetchTracker.Find(hash), false
@@ -1524,17 +1534,25 @@ func (r *Router) startLedgerReplayAcquisitionLegacyLocked(seq uint32, hash [32]b
 }
 
 func (r *Router) startLedgerAcquisitionLegacyLocked(seq uint32, hash [32]byte, peerID uint64) {
+	r.startLedgerAcquisitionLegacyModeLocked(seq, hash, peerID, false)
+}
+
+func (r *Router) startLedgerAcquisitionLegacyModeLocked(seq uint32, hash [32]byte, peerID uint64, repair bool) {
+	repairParent := repair && r.replayFaultBlocked() && r.adaptor.LedgerService().ReplayRecoveryParent(hash)
+	if r.replayFaultBlocked() && !repairParent {
+		return
+	}
 	if r.catchupRetryBlocked(hash, time.Now()) {
 		return
 	}
-	if seq != 0 && r.belowFloor(seq) {
+	if !repairParent && seq != 0 && r.belowFloor(seq) {
 		return
 	}
 	if r.standardReplay.pivotHandoff != nil &&
 		r.standardReplay.pivotHandoff.acquisition.Hash() == hash {
 		return
 	}
-	if svc := r.adaptor.LedgerService(); svc != nil {
+	if svc := r.adaptor.LedgerService(); svc != nil && !repairParent {
 		if held, err := svc.GetLedgerByHash(hash); err == nil && held != nil {
 			return
 		}
@@ -2520,6 +2538,12 @@ func (r *Router) RequestLedger(hash [32]byte, seq uint32) (acquiring map[string]
 // fetchTracker's GetOrCreate is atomic, so a concurrent consensus catch-up
 // arming the same hash is joined rather than duplicated.
 func (r *Router) startGenericAcquisition(hash [32]byte, seq uint32) (map[string]any, bool) {
+	if svc := r.adaptor.LedgerService(); svc != nil {
+		status := svc.ReplayFaultStatus()
+		if status.Blocked && (status.Fault == nil || hash == status.Fault.ParentHash || hash == status.Fault.TargetHash) {
+			return nil, false
+		}
+	}
 	if il := r.fetchTracker.Find(hash); il != nil {
 		return inbound.AcquisitionJSON(il.Snapshot()), true
 	}
@@ -2688,7 +2712,7 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 	// stale state map, breaking consensus on the next round.
 	parent := rd.Parent()
 	engineCfg := r.adaptor.EngineConfigForReplay(parent)
-	derived, err := rd.Apply(engineCfg)
+	derived, err := r.adaptor.LedgerService().ApplyReplay(r.lifecycleContext(), rd, engineCfg, r.replayTargetAuthenticated(rd.TargetHeader()))
 	if err != nil {
 		seq := rd.Seq()
 		hash := rd.Hash()
@@ -2697,12 +2721,9 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 		r.requireReplayFullStateLocked(seq, hash)
 		r.replayer.Abandon(hash)
 		r.acquisitionMu.Unlock()
-		// DO NOT charge the peer here. GotResponse already verified the
-		// peer's header hash and tx-map root; a subsequent Apply failure
-		// means OUR engine produced a divergent AccountHash — an engine
-		// bug, not peer misbehavior. Charging here would wrongly evict
-		// honest peers for our bugs.
-		r.logger.Error("ENGINE DIVERGENCE: replay delta apply failed; falling back to legacy",
+		// The header and transaction tree passed verification; diagnose local
+		// state and execution before attributing the failure to a peer.
+		r.logger.Error("replay delta apply failed; validator duties blocked",
 			"seq", seq,
 			"hash", fmt.Sprintf("%x", hash[:8]),
 			"peer", peerID,
@@ -2760,6 +2781,9 @@ func (r *Router) storeVerifiedLedger(l *ledger.Ledger) (header.LedgerHeader, boo
 }
 
 func (r *Router) completeStoredConsensusRecovery(seq uint32, hash, parentHash [32]byte, initialCandidate bool) bool {
+	if r.replayFaultBlocked() {
+		return false
+	}
 	r.acquisitionMu.Lock()
 	delete(r.replayFallbackRequired, hash)
 	r.acquisitionMu.Unlock()
@@ -3869,6 +3893,9 @@ func (r *Router) failInboundAcquisitionWithSnapshot(il *inbound.Ledger, snapshot
 }
 
 func (r *Router) discardFailedInboundAcquisition(il *inbound.Ledger) {
+	if r.replayFaultBlocked() {
+		r.adaptor.LedgerService().RecordReplayAcquisitionFailure(il.Hash(), errors.New("transient parent-state acquisition failure"))
+	}
 	retirement, pivotRetired, removed := r.removeInboundAcquisitionWithSession(il, inbound.Snapshot{}, true)
 	if !removed {
 		return
@@ -4126,7 +4153,11 @@ func (r *Router) completeStandardTransactionReplay(
 	}
 	parentHeld := false
 	fallback := func(err error) {
-		r.logger.Warn("standard transaction replay failed; falling back to full-state acquisition",
+		parent, _ := svc.GetLedgerByHash(h.ParentHash)
+		if parent != nil {
+			svc.RecordReplayPreparationFailure(r.lifecycleContext(), *h, txMap, parent, r.replayTargetAuthenticated(*h), err)
+		}
+		r.logger.Warn("standard transaction replay unavailable",
 			"seq", h.LedgerIndex,
 			"hash", fmt.Sprintf("%x", h.Hash[:8]),
 			"peer", peerID,
@@ -4181,12 +4212,9 @@ func (r *Router) completeStandardTransactionReplay(
 		fallback(fmt.Errorf("prepare standard transaction replay: %w", err))
 		return
 	}
-	derived, err := replay.Apply(r.adaptor.EngineConfigForReplay(parent))
+	derived, err := svc.ApplyReplay(r.lifecycleContext(), replay, r.adaptor.EngineConfigForReplay(parent), r.replayTargetAuthenticated(*h))
 	if err != nil {
-		// The transaction SHAMap root was proven against the canonical header;
-		// failure here means local transaction-engine divergence, not bad peer
-		// data. Preserve the full-state fallback as a safe recovery path.
-		r.logger.Error("ENGINE DIVERGENCE: standard transaction replay apply failed",
+		r.logger.Error("standard transaction replay apply failed; validator duties blocked",
 			"seq", h.LedgerIndex,
 			"hash", fmt.Sprintf("%x", h.Hash[:8]),
 			"error", err,

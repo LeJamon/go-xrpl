@@ -333,7 +333,8 @@ func TestReplayDelta_Apply_RejectsBatchInnerMetadataMismatch(t *testing.T) {
 	outerLeaf, err := tx.CreateTxWithMetaBlob(outerBlob, previewResult.Metadata)
 	require.NoError(t, err)
 	require.NoError(t, preview.AddTransactionWithMeta(outerHash, outerLeaf))
-	transactionLeaves := [][]byte{outerLeaf}
+	transactionLeaves := make([][]byte, 1, 1+len(previewResult.AppliedInnerTransactions))
+	transactionLeaves[0] = outerLeaf
 	for _, inner := range previewResult.AppliedInnerTransactions {
 		require.NotNil(t, inner.Metadata)
 		innerBlob, innerErr := tx.SerializeTransaction(inner.Transaction)

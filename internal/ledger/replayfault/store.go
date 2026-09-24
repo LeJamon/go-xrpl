@@ -31,27 +31,32 @@ const (
 
 // Fault is the durable description of an unresolved replay failure.
 type Fault struct {
-	ID         string          `json:"id"`
-	Class      Class           `json:"class"`
-	ParentHash [32]byte        `json:"parent_hash"`
-	TargetHash [32]byte        `json:"target_hash"`
-	Sequence   uint32          `json:"sequence"`
-	Message    string          `json:"message"`
-	Revision   string          `json:"revision"`
-	CreatedAt  time.Time       `json:"created_at"`
-	Evidence   json.RawMessage `json:"evidence,omitempty"`
-	Attempts   int             `json:"attempts"`
+	AcquisitionAttempts int             `json:"acquisition_attempts,omitempty"`
+	AcquisitionError    string          `json:"acquisition_error,omitempty"`
+	RecoveryError       string          `json:"recovery_error,omitempty"`
+	ID                  string          `json:"id"`
+	Class               Class           `json:"class"`
+	ParentHash          [32]byte        `json:"parent_hash"`
+	TargetHash          [32]byte        `json:"target_hash"`
+	Sequence            uint32          `json:"sequence"`
+	Message             string          `json:"message"`
+	Revision            string          `json:"revision"`
+	CreatedAt           time.Time       `json:"created_at"`
+	Evidence            json.RawMessage `json:"evidence,omitempty"`
+	Attempts            int             `json:"attempts"`
 }
 
 // RecoveryProgress describes the current or most recent explicit
 // revalidation attempt.
 type RecoveryProgress struct {
-	InFlight   bool      `json:"in_flight"`
-	ID         string    `json:"id,omitempty"`
-	Generation uint64    `json:"generation,omitempty"`
-	Attempts   int       `json:"attempts,omitempty"`
-	StartedAt  time.Time `json:"started_at,omitempty"`
-	LastError  string    `json:"last_error,omitempty"`
+	AcquisitionAttempts int       `json:"acquisition_attempts,omitempty"`
+	AcquisitionError    string    `json:"acquisition_error,omitempty"`
+	InFlight            bool      `json:"in_flight"`
+	ID                  string    `json:"id,omitempty"`
+	Generation          uint64    `json:"generation,omitempty"`
+	Attempts            int       `json:"attempts,omitempty"`
+	StartedAt           time.Time `json:"started_at,omitempty"`
+	LastError           string    `json:"last_error,omitempty"`
 }
 
 // MarshalJSON omits the zero start time, which keeps healthy status output
@@ -63,28 +68,35 @@ func (p RecoveryProgress) MarshalJSON() ([]byte, error) {
 		startedAt = &started
 	}
 	return json.Marshal(struct {
-		InFlight   bool       `json:"in_flight"`
-		ID         string     `json:"id,omitempty"`
-		Generation uint64     `json:"generation,omitempty"`
-		Attempts   int        `json:"attempts,omitempty"`
-		StartedAt  *time.Time `json:"started_at,omitempty"`
-		LastError  string     `json:"last_error,omitempty"`
+		AcquisitionAttempts int        `json:"acquisition_attempts,omitempty"`
+		AcquisitionError    string     `json:"acquisition_error,omitempty"`
+		InFlight            bool       `json:"in_flight"`
+		ID                  string     `json:"id,omitempty"`
+		Generation          uint64     `json:"generation,omitempty"`
+		Attempts            int        `json:"attempts,omitempty"`
+		StartedAt           *time.Time `json:"started_at,omitempty"`
+		LastError           string     `json:"last_error,omitempty"`
 	}{
-		InFlight:   p.InFlight,
-		ID:         p.ID,
-		Generation: p.Generation,
-		Attempts:   p.Attempts,
-		StartedAt:  startedAt,
-		LastError:  p.LastError,
+		AcquisitionAttempts: p.AcquisitionAttempts,
+		AcquisitionError:    p.AcquisitionError,
+		InFlight:            p.InFlight,
+		ID:                  p.ID,
+		Generation:          p.Generation,
+		Attempts:            p.Attempts,
+		StartedAt:           startedAt,
+		LastError:           p.LastError,
 	})
 }
 
 // Status is a point-in-time view of the replay fault gate.
 type Status struct {
-	Fault            *Fault           `json:"fault,omitempty"`
-	Blocked          bool             `json:"blocked"`
-	Recovery         RecoveryProgress `json:"recovery"`
-	PersistenceError error            `json:"-"`
+	TransitionVerification string           `json:"transition_verification"`
+	LastTransitionHash     [32]byte         `json:"last_transition_hash"`
+	FollowerMode           bool             `json:"follower_mode"`
+	Fault                  *Fault           `json:"fault,omitempty"`
+	Blocked                bool             `json:"blocked"`
+	Recovery               RecoveryProgress `json:"recovery"`
+	PersistenceError       error            `json:"-"`
 }
 
 // MarshalJSON keeps errors concise and makes status suitable for diagnostics.
@@ -94,15 +106,21 @@ func (s Status) MarshalJSON() ([]byte, error) {
 		persistenceError = s.PersistenceError.Error()
 	}
 	return json.Marshal(struct {
-		Fault            *Fault           `json:"fault,omitempty"`
-		Blocked          bool             `json:"blocked"`
-		Recovery         RecoveryProgress `json:"recovery"`
-		PersistenceError string           `json:"persistence_error,omitempty"`
+		TransitionVerification string           `json:"transition_verification"`
+		LastTransitionHash     [32]byte         `json:"last_transition_hash"`
+		FollowerMode           bool             `json:"follower_mode"`
+		Fault                  *Fault           `json:"fault,omitempty"`
+		Blocked                bool             `json:"blocked"`
+		Recovery               RecoveryProgress `json:"recovery"`
+		PersistenceError       string           `json:"persistence_error,omitempty"`
 	}{
-		Fault:            s.Fault,
-		Blocked:          s.Blocked,
-		Recovery:         s.Recovery,
-		PersistenceError: persistenceError,
+		TransitionVerification: s.TransitionVerification,
+		LastTransitionHash:     s.LastTransitionHash,
+		FollowerMode:           s.FollowerMode,
+		Fault:                  s.Fault,
+		Blocked:                s.Blocked,
+		Recovery:               s.Recovery,
+		PersistenceError:       persistenceError,
 	})
 }
 
@@ -182,6 +200,8 @@ func Open(path string) (*Store, error) {
 	}
 	fault.Evidence = cloneRaw(fault.Evidence)
 	s.fault = &fault
+	s.recovery.LastError = fault.RecoveryError
+	s.recovery.Attempts = fault.Attempts
 	s.blocked = true
 	s.generation = 1
 	return s, nil
@@ -223,6 +243,31 @@ func (s *Store) Record(fault Fault) error {
 	return nil
 }
 
+// ReserveAcquisition persists the retry budget before network work begins.
+func (s *Store) ReserveAcquisition(id string, limit int) error {
+	s.operation.Lock()
+	defer s.operation.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fault == nil {
+		return ErrNoFault
+	}
+	if s.fault.ID != id {
+		return ErrFaultIDMismatch
+	}
+	if s.fault.AcquisitionAttempts >= limit {
+		return errors.New("replay acquisition budget exhausted")
+	}
+	s.fault.AcquisitionAttempts++
+	s.generation++
+	if err := s.persistLocked(s.fault); err != nil {
+		s.persistenceErr = err
+		return err
+	}
+	s.persistenceErr = nil
+	return nil
+}
+
 // Update enriches the current fault without changing its identity, creation
 // time, or recovery attempt count. It invalidates any revalidation in flight.
 func (s *Store) Update(id string, fault Fault) error {
@@ -246,8 +291,12 @@ func (s *Store) Update(id string, fault Fault) error {
 
 	next := fault
 	next.ID = s.fault.ID
+	next.ParentHash = s.fault.ParentHash
+	next.TargetHash = s.fault.TargetHash
+	next.Sequence = s.fault.Sequence
 	next.CreatedAt = s.fault.CreatedAt
 	next.Attempts = s.fault.Attempts
+	next.AcquisitionAttempts = max(next.AcquisitionAttempts, s.fault.AcquisitionAttempts)
 	if next.Class == "" {
 		next.Class = s.fault.Class
 	}
@@ -295,7 +344,7 @@ func (s *Store) Status() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return Status{
-		Fault:            cloneFault(s.fault),
+		Fault:            faultSummary(s.fault),
 		Blocked:          s.blocked,
 		Recovery:         s.recovery.RecoveryProgress,
 		PersistenceError: s.persistenceErr,
@@ -357,6 +406,7 @@ func (s *Store) Revalidate(ctx context.Context, id string, verify func(context.C
 	}
 
 	s.fault.Attempts++
+	s.fault.RecoveryError = ""
 	generation := s.generation
 	fault := *cloneFault(s.fault)
 	s.recovery = recoveryState{RecoveryProgress: RecoveryProgress{
@@ -371,7 +421,7 @@ func (s *Store) Revalidate(ctx context.Context, id string, verify func(context.C
 	}
 	s.mu.Unlock()
 
-	err := verify(ctx, fault)
+	err := runVerifier(ctx, fault, verify)
 	if err == nil && ctx.Err() != nil {
 		err = ctx.Err()
 	}
@@ -379,6 +429,12 @@ func (s *Store) Revalidate(ctx context.Context, id string, verify func(context.C
 		s.mu.Lock()
 		s.recovery.InFlight = false
 		s.recovery.LastError = err.Error()
+		if s.fault != nil && s.fault.ID == fault.ID {
+			s.fault.RecoveryError = err.Error()
+			if persistErr := s.persistLocked(s.fault); persistErr != nil {
+				s.persistenceErr = persistErr
+			}
+		}
 		s.mu.Unlock()
 		return err
 	}
@@ -395,7 +451,14 @@ func (s *Store) Revalidate(ctx context.Context, id string, verify func(context.C
 		s.recovery.LastError = err.Error()
 		return err
 	}
-	if err := clearDurable(s.path); err != nil {
+	faultToArchive := *s.fault
+	if err := archiveDurable(s.path, faultToArchive); err != nil {
+		s.persistenceErr = err
+		s.recovery.InFlight = false
+		s.recovery.LastError = err.Error()
+		return err
+	}
+	if err := clearDurable(s.path, faultToArchive); err != nil {
 		s.persistenceErr = err
 		s.recovery.InFlight = false
 		s.recovery.LastError = err.Error()
@@ -476,6 +539,13 @@ func (s *Store) persistLocked(fault *Fault) error {
 	return writeAtomic(s.path, fault)
 }
 
+func archiveDurable(path string, fault Fault) error {
+	if path == "" {
+		return nil
+	}
+	return writeAtomic(path+"."+fault.ID+".resolved", &fault)
+}
+
 func writeAtomic(path string, value any) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -516,24 +586,27 @@ func writeAtomic(path string, value any) error {
 		return fmt.Errorf("publish replay fault: %w", err)
 	}
 	committed = true
-	if err := syncDirectory(dir); err != nil {
+	if err := syncDirectoryFn(dir); err != nil {
 		return fmt.Errorf("sync replay fault directory: %w", err)
 	}
 	return nil
 }
 
-func clearDurable(path string) error {
+func clearDurable(path string, fault Fault) error {
 	if path == "" {
 		return nil
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove replay fault: %w", err)
-	}
-	if err := syncDirectory(filepath.Dir(path)); err != nil {
-		return fmt.Errorf("sync replay fault directory after clear: %w", err)
+	if err := writeAtomic(path, nil); err != nil {
+		restoreErr := writeAtomic(path, &fault)
+		if restoreErr != nil {
+			return errors.Join(err, fmt.Errorf("restore replay fault after clear failure: %w", restoreErr))
+		}
+		return err
 	}
 	return nil
 }
+
+var syncDirectoryFn = syncDirectory
 
 func syncDirectory(path string) error {
 	dir, err := os.Open(path)
@@ -543,4 +616,22 @@ func syncDirectory(path string) error {
 	syncErr := dir.Sync()
 	closeErr := dir.Close()
 	return errors.Join(syncErr, closeErr)
+}
+
+func runVerifier(ctx context.Context, fault Fault, verify func(context.Context, Fault) error) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("unclassified recovery panic: %v", recovered)
+		}
+	}()
+	return verify(ctx, fault)
+}
+
+func faultSummary(fault *Fault) *Fault {
+	if fault == nil {
+		return nil
+	}
+	summary := *fault
+	summary.Evidence = nil
+	return &summary
 }

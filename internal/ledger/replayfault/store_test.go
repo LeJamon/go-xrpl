@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestRecordPersistsAndRestarts(t *testing.T) {
@@ -207,6 +209,89 @@ func TestRevalidateFailureThenSuccess(t *testing.T) {
 	}
 }
 
+func TestRevalidateArchivesResolvedFault(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "replay-fault.json")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Record(Fault{ID: "fault", Class: ExecutionDisagreement, Evidence: json.RawMessage(`{"target":true}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Revalidate(context.Background(), "fault", func(context.Context, Fault) error { return nil }); err != nil {
+		t.Fatalf("Revalidate: %v", err)
+	}
+
+	archivePath := path + ".fault.resolved"
+	data, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatalf("ReadFile archive: %v", err)
+	}
+	var archived Fault
+	if err := json.Unmarshal(data, &archived); err != nil {
+		t.Fatalf("decode archive: %v", err)
+	}
+	if archived.ID != "fault" || archived.Class != ExecutionDisagreement || archived.Attempts != 1 {
+		t.Fatalf("archived fault = %+v", archived)
+	}
+	var evidence map[string]bool
+	if err := json.Unmarshal(archived.Evidence, &evidence); err != nil || !evidence["target"] {
+		t.Fatalf("archived evidence = %s", archived.Evidence)
+	}
+
+	restarted, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open after clear: %v", err)
+	}
+	if restarted.Blocked() {
+		t.Fatal("durable clear left the store blocked")
+	}
+}
+
+func TestRevalidateClearFailureRestoresFault(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "replay-fault.json")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Record(Fault{ID: "fault", Class: MissingState}); err != nil {
+		t.Fatal(err)
+	}
+
+	originalSync := syncDirectoryFn
+	failNextSync := false
+	syncDirectoryFn = func(dir string) error {
+		if failNextSync {
+			failNextSync = false
+			return errors.New("injected directory sync failure")
+		}
+		return originalSync(dir)
+	}
+	defer func() { syncDirectoryFn = originalSync }()
+
+	err = store.Revalidate(context.Background(), "fault", func(context.Context, Fault) error {
+		failNextSync = true
+		return nil
+	})
+	if err == nil {
+		t.Fatal("Revalidate unexpectedly succeeded after clear sync failure")
+	}
+	if !store.Blocked() || store.Snapshot() == nil {
+		t.Fatalf("clear failure lost in-memory gate: status=%+v", store.Status())
+	}
+
+	restarted, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open after failed clear: %v", err)
+	}
+	if !restarted.Blocked() || restarted.Snapshot() == nil {
+		t.Fatalf("restart lost unresolved fault: status=%+v", restarted.Status())
+	}
+	if _, err := os.Stat(path + ".fault.resolved"); err != nil {
+		t.Fatalf("resolved archive missing after failed clear: %v", err)
+	}
+}
+
 func TestRevalidateRequiresCallbackAndOnlyOneInflight(t *testing.T) {
 	store, err := Open("")
 	if err != nil {
@@ -257,4 +342,47 @@ func TestUpdatePreservesIdentityAndAttempts(t *testing.T) {
 	if got.ID != "fault" || !got.CreatedAt.Equal(created) || got.Attempts != 1 || got.Class != CorruptState {
 		t.Fatalf("updated fault = %+v", got)
 	}
+}
+
+func TestRevalidationPanicRemainsBlockedAcrossRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fault.json")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Record(Fault{Class: ExecutionDisagreement, Message: "fixture"}); err != nil {
+		t.Fatal(err)
+	}
+	id := store.Snapshot().ID
+	err = store.Revalidate(context.Background(), id, func(context.Context, Fault) error { panic("broken verifier") })
+	if err == nil || !store.Blocked() || store.Status().Recovery.InFlight {
+		t.Fatal("panic did not leave a responsive blocked gate", err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reopened.Blocked() || reopened.Status().Recovery.LastError == "" {
+		t.Fatal("failed recovery diagnostics lost on restart")
+	}
+	if err := reopened.Revalidate(context.Background(), id, func(context.Context, Fault) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAcquisitionBudgetCannotBeRolledBack(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fault.json")
+	store, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, store.Record(Fault{Class: MissingState}))
+	stale := store.Snapshot()
+	for range 3 {
+		require.NoError(t, store.ReserveAcquisition(stale.ID, 3))
+	}
+	require.NoError(t, store.Update(stale.ID, *stale))
+	require.Error(t, store.ReserveAcquisition(stale.ID, 3))
+	reopened, err := Open(path)
+	require.NoError(t, err)
+	require.Equal(t, 3, reopened.Snapshot().AcquisitionAttempts)
+	require.Error(t, reopened.ReserveAcquisition(stale.ID, 3))
 }

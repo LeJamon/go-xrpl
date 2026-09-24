@@ -602,6 +602,9 @@ func (r *Router) tryArmStandardReplayPipeline(
 	targetHash [32]byte,
 	peerHint uint64,
 ) bool {
+	if r.replayFaultBlocked() {
+		return false
+	}
 	// Retire superseded walkers only after releasing acquisitionMu: their
 	// cancellation/cleanup may need locks owned by acquisition workers.
 	var superseded []*inbound.Ledger
@@ -1211,7 +1214,7 @@ func (r *Router) drainStandardReplayPipeline() {
 			r.retireStandardReplay(retired)
 			if current {
 				r.replayPipelineFallbacks.Add(1)
-				r.logger.Error("standard transaction replay pipeline apply failed; falling back to full-state acquisition",
+				r.logger.Error("standard transaction replay pipeline apply failed; recovery gated",
 					"seq", entry.seq,
 					"hash", fmt.Sprintf("%x", entry.hash[:8]),
 					"error", err,
@@ -1317,11 +1320,29 @@ func (r *Router) discardStandardReplayHeadLocked(
 func (r *Router) applyStandardReplayEntry(
 	entry, activeEntry *standardReplayEntry,
 	generation uint64,
-) (header.LedgerHeader, bool, time.Duration, func(), error) {
+) (out header.LedgerHeader, initial bool, duration time.Duration, release func(), retErr error) {
 	if entry == nil {
 		return header.LedgerHeader{}, false, 0, nil, errors.New("nil standard replay pipeline entry")
 	}
 	h := entry.header
+	defer func() {
+		if retErr == nil || errors.Is(retErr, context.Canceled) || r.replayFaultBlocked() {
+			return
+		}
+		r.acquisitionMu.Lock()
+		current := r.standardReplay.active && r.standardReplay.generation == generation && r.standardReplay.entries[entry.seq] == activeEntry
+		r.acquisitionMu.Unlock()
+		if !current {
+			return
+		}
+		svc := r.adaptor.LedgerService()
+		if svc == nil {
+			return
+		}
+		parent, _ := svc.GetLedgerByHash(h.ParentHash)
+		txMap, _ := r.loadStandardReplayTransactionMap(r.lifecycleContext(), entry)
+		svc.RecordReplayPreparationFailure(r.lifecycleContext(), h, txMap, parent, r.replayTargetAuthenticated(h), retErr)
+	}()
 	if h.Hash != entry.hash {
 		return header.LedgerHeader{}, false, 0, nil, errors.New("prepared ledger hash changed")
 	}
@@ -1364,7 +1385,7 @@ func (r *Router) applyStandardReplayEntry(
 	if err != nil {
 		return header.LedgerHeader{}, false, 0, nil, fmt.Errorf("prepare transaction-only replay: %w", err)
 	}
-	derived, err := replay.Apply(r.adaptor.EngineConfigForReplay(parent))
+	derived, err := svc.ApplyReplay(r.lifecycleContext(), replay, r.adaptor.EngineConfigForReplay(parent), r.replayTargetAuthenticated(h))
 	if err != nil {
 		return header.LedgerHeader{}, false, 0, nil, err
 	}

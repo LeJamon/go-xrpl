@@ -556,6 +556,18 @@ func newRouter(engine consensus.RouterEngine, adaptor *Adaptor, inbox <-chan *pe
 		adaptor.setOnLedgerFullyValidated(r.onLedgerFullyValidated)
 		adaptor.setOnLedgerBuilt(r.onLedgerBuilt)
 	}
+	if adaptor != nil && adaptor.LedgerService() != nil {
+		adaptor.LedgerService().SetReplayTargetAuthenticator(r.replayTargetAuthenticated)
+		adaptor.LedgerService().SetReplayParentAcquirer(func(seq uint32, hash [32]byte) error {
+			r.acquisitionMu.Lock()
+			defer r.acquisitionMu.Unlock()
+			r.startLedgerAcquisitionLegacyModeLocked(seq, hash, 0, true)
+			if !r.isAcquiringLocked(hash) {
+				return fmt.Errorf("could not acquire replay parent %x", hash)
+			}
+			return nil
+		})
+	}
 	return r
 }
 

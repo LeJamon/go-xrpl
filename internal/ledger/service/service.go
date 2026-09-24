@@ -16,9 +16,11 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/ledger/localtxs"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/replayfault"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
@@ -70,8 +72,9 @@ func signatureVerificationError(err error, rules *amendment.Rules) error {
 
 // Config holds configuration for the LedgerService
 type Config struct {
-	Standalone bool
-	Startup    StartupConfig
+	ReplayFaultPath string
+	Standalone      bool
+	Startup         StartupConfig
 	// NodeSize selects rippled's cache sweep cadence. Empty uses the medium
 	// profile, matching the top-level configuration default.
 	NodeSize string
@@ -139,9 +142,17 @@ func networkLedgerStateFor(enabled bool, state networkLedgerState) networkLedger
 
 // Service manages the ledger lifecycle
 type Service struct {
-	lifecycleMu    sync.Mutex
-	lifecycleState serviceLifecycleState
-	stopDone       chan struct{}
+	replayRepairTarget  *ledger.Ledger
+	replayAuthenticate  func(header.LedgerHeader) bool
+	replayAcquiredHash  [32]byte
+	replayFaults        *replayfault.Store
+	replayVerifiedHash  [32]byte
+	replayRecoveryMu    sync.Mutex
+	replayRepairParent  *ledger.Ledger
+	replayAcquireParent func(uint32, [32]byte) error
+	lifecycleMu         sync.Mutex
+	lifecycleState      serviceLifecycleState
+	stopDone            chan struct{}
 	// Add is serialized with Stop's state transition by lifecycleMu.
 	validationWG sync.WaitGroup
 	// consensusWG drains detached builds; Add is serialized with Stop by lifecycleMu.
@@ -456,6 +467,10 @@ func New(cfg Config) (*Service, error) {
 		relayTxCacheLimit:    relayTxCacheMaxBytes,
 		feeTrack:             feetrack.New(),
 		validatedAgeNow:      time.Now,
+	}
+	s.replayFaults, err = replayfault.Open(cfg.ReplayFaultPath)
+	if err != nil {
+		s.logger.Error("replay fault journal unavailable; validator duties blocked", "error", err)
 	}
 	s.openLedgerMu.setSlowLogger(func(event openLedgerGateSlowEvent) {
 		s.logger.Warn("open-ledger gate slow",

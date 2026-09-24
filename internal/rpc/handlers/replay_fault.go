@@ -91,7 +91,7 @@ func replayFaultStatusJSON(status replayfault.Status, blocked bool) map[string]a
 	if fault := status.Fault; fault != nil {
 		result["fault"] = map[string]any{
 			"id":          fault.ID,
-			"class":       fault.Class,
+			"class":       string(fault.Class),
 			"parent_hash": strings.ToUpper(hex.EncodeToString(fault.ParentHash[:])),
 			"target_hash": strings.ToUpper(hex.EncodeToString(fault.TargetHash[:])),
 			"sequence":    fault.Sequence,
