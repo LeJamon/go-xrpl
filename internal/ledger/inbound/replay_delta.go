@@ -521,12 +521,13 @@ func (r *ReplayDelta) Result() (*ledger.Ledger, error) {
 }
 
 // OrderedTxs returns the verified transactions sorted by sfTransactionIndex
-// so a consumer can re-apply them in the original execution order. Only
-// valid once the response is verified so Apply can consume them.
+// so a consumer can re-apply them in the original execution order. The
+// authenticated inputs remain available after Apply fails so the service can
+// persist complete transaction and metadata evidence for diagnosis.
 func (r *ReplayDelta) OrderedTxs() []DecodedTx {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.state != StateReplayReady && r.state != StateComplete {
+	if r.state != StateReplayReady && r.state != StateComplete && r.state != StateFailed {
 		return nil
 	}
 	out := make([]DecodedTx, len(r.txs))
