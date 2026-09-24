@@ -236,6 +236,7 @@ func (r *nodeRuntime) configureLedger() error {
 	}
 
 	cfg := service.Config{
+		ReplayFaultPath: replayFaultPath(r.appConfig),
 		Standalone:      r.standalone,
 		NodeSize:        r.appConfig.NodeSize,
 		SweepInterval:   r.appConfig.ResolvedSweepInterval(),
@@ -268,6 +269,16 @@ func (r *nodeRuntime) configureLedger() error {
 		return err
 	}
 	return nil
+}
+
+func replayFaultPath(appCfg *config.Config) string {
+	if appCfg == nil {
+		return ""
+	}
+	if dataDir := appCfg.LocalStateDir(); dataDir != "" {
+		return filepath.Join(dataDir, "replay-fault.json")
+	}
+	return ""
 }
 
 func (r *nodeRuntime) configureMaintenance() error {

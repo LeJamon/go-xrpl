@@ -17,7 +17,7 @@ import (
 )
 
 func (a *Adaptor) IsValidator() bool {
-	return a.identity != nil
+	return a.identity != nil && !a.replayBlocked()
 }
 
 func (a *Adaptor) GetValidatorKey() (consensus.NodeID, error) {
@@ -41,14 +41,18 @@ func (a *Adaptor) SignProposal(proposal *consensus.Proposal) error {
 	if a.identity == nil {
 		return errNoValidatorKey
 	}
-	return a.identity.SignProposal(proposal)
+	return a.withValidatorDuty(func() error {
+		return a.identity.SignProposal(proposal)
+	})
 }
 
 func (a *Adaptor) SignValidation(validation *consensus.Validation) error {
 	if a.identity == nil {
 		return errNoValidatorKey
 	}
-	return a.identity.SignValidation(validation)
+	return a.withValidatorDuty(func() error {
+		return a.identity.SignValidation(validation)
+	})
 }
 
 func (a *Adaptor) VerifyProposal(proposal *consensus.Proposal) error {

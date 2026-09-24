@@ -21,7 +21,7 @@ func TestMethodDescriptorsMatchHandlerMetadata(t *testing.T) {
 
 func TestMethodDescriptorCatalogue(t *testing.T) {
 	descriptors := handlers.MethodDescriptors()
-	require.Len(t, descriptors, 74)
+	require.Len(t, descriptors, 75)
 
 	roleCounts := map[types.Role]int{}
 	seen := make(map[string]struct{}, len(descriptors))
@@ -36,7 +36,7 @@ func TestMethodDescriptorCatalogue(t *testing.T) {
 		roleCounts[descriptor.Role]++
 	}
 
-	assert.Equal(t, 24, roleCounts[types.RoleAdmin])
+	assert.Equal(t, 25, roleCounts[types.RoleAdmin])
 	assert.Equal(t, 40, roleCounts[types.RoleGuest])
 	assert.Equal(t, 10, roleCounts[types.RoleUser])
 
