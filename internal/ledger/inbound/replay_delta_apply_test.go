@@ -272,6 +272,115 @@ func TestReplayDelta_Apply_RequiresExpectedBatchInnerLeaves(t *testing.T) {
 	assert.Contains(t, err.Error(), "replay ended before all batch inner transactions")
 }
 
+func TestReplayDelta_Apply_RejectsBatchInnerMetadataMismatch(t *testing.T) {
+	all.RegisterAll()
+	parent := makeGenesisLedger(t)
+	_, account, err := genesis.GenerateGenesisAccountID()
+	require.NoError(t, err)
+
+	inner1 := accounttx.NewAccountSet(account)
+	inner1.GetCommon().Fee = "0"
+	inner1.GetCommon().SigningPubKey = ""
+	inner1.GetCommon().SetSequence(2)
+	inner1.GetCommon().SetFlags(tx.TfInnerBatchTxn)
+	inner2 := accounttx.NewAccountSet(account)
+	inner2.GetCommon().Fee = "0"
+	inner2.GetCommon().SigningPubKey = ""
+	inner2.GetCommon().SetSequence(3)
+	inner2.GetCommon().SetFlags(tx.TfInnerBatchTxn)
+	outer := batchtx.NewBatch(account)
+	outer.GetCommon().Fee = "40"
+	outer.GetCommon().SigningPubKey = ""
+	outer.GetCommon().SetSequence(1)
+	outer.GetCommon().SetFlags(batchtx.BatchFlagAllOrNothing)
+	outer.AddInnerTransaction(inner1)
+	outer.AddInnerTransaction(inner2)
+	outerBlob, err := tx.SerializeTransaction(outer)
+	require.NoError(t, err)
+	outer.SetRawBytes(outerBlob)
+	outerHash, err := tx.ComputeTransactionHash(outer)
+	require.NoError(t, err)
+
+	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	rules := amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		Enable(amendment.FeatureBatchV1_1).
+		Build()
+	preview, err := ledger.NewOpen(parent, closeTime)
+	require.NoError(t, err)
+	previewConfig := tx.EngineConfig{
+		BaseFee:                   10,
+		ReserveBase:               200_000_000,
+		ReserveIncrement:          50_000_000,
+		SkipSignatureVerification: true,
+		Rules:                     rules,
+		LedgerSequence:            preview.Sequence(),
+		ParentCloseTime:           protocol.ToRippleTime(parent.CloseTime()),
+		ApplicationCloseTime:      protocol.ToRippleTime(closeTime),
+		ApplicationCloseTimeSet:   true,
+		ParentHash:                parent.Hash(),
+		ApplyFlags:                tx.TapNONE,
+		OpenLedger:                false,
+		ViewOpen:                  false,
+		EnforceLoadFee:            false,
+	}
+	previewEngine := txengine.NewEngine(preview, previewConfig)
+	previewResult := previewEngine.Apply(outer)
+	previewResult = previewEngine.ApplyBatchInnerTransactions(context.Background(), outer, previewResult)
+	require.True(t, previewResult.Result.IsApplied(), previewResult.Result.String())
+	require.Len(t, previewResult.AppliedInnerTransactions, 2)
+
+	outerLeaf, err := tx.CreateTxWithMetaBlob(outerBlob, previewResult.Metadata)
+	require.NoError(t, err)
+	require.NoError(t, preview.AddTransactionWithMeta(outerHash, outerLeaf))
+	transactionLeaves := [][]byte{outerLeaf}
+	for _, inner := range previewResult.AppliedInnerTransactions {
+		require.NotNil(t, inner.Metadata)
+		innerBlob, innerErr := tx.SerializeTransaction(inner.Transaction)
+		require.NoError(t, innerErr)
+		innerHash, innerErr := tx.ComputeTransactionHash(inner.Transaction)
+		require.NoError(t, innerErr)
+		innerLeaf, innerErr := tx.CreateTxWithMetaBlob(innerBlob, inner.Metadata)
+		require.NoError(t, innerErr)
+		require.NoError(t, preview.AddTransactionWithMeta(innerHash, innerLeaf))
+		transactionLeaves = append(transactionLeaves, innerLeaf)
+	}
+	require.NoError(t, preview.Close(closeTime, 0))
+	hdr := preview.Header()
+	resp := &message.ReplayDeltaResponse{
+		LedgerHash:   hdr.Hash[:],
+		LedgerHeader: header.AddRaw(hdr, false),
+		Transactions: transactionLeaves,
+	}
+	rd := armReplayDeltaWith(t, parent, resp, hdr)
+	rd.mu.Lock()
+	var innerIndex int
+	for i := range rd.txs {
+		if rd.txs[i].Index != 0 {
+			innerIndex = i
+			break
+		}
+	}
+	require.NotEmpty(t, rd.txs[innerIndex].MetaBytes)
+	rd.txs[innerIndex].MetaBytes[len(rd.txs[innerIndex].MetaBytes)-1] ^= 0x01
+	rd.mu.Unlock()
+
+	_, err = rd.Apply(tx.EngineConfig{
+		BaseFee:                   10,
+		ReserveBase:               200_000_000,
+		ReserveIncrement:          50_000_000,
+		SkipSignatureVerification: true,
+		Rules:                     rules,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrReplayMetadataDiverged)
+	var failure *ReplayFailure
+	require.ErrorAs(t, err, &failure)
+	assert.Equal(t, rd.txs[innerIndex].Index, failure.TxIndex)
+	assert.Equal(t, rd.txs[innerIndex].Hash, failure.TxHash)
+	assert.NotEqual(t, failure.ExpectedMetadata, failure.ActualMetadata)
+}
+
 // TestReplayDelta_Apply_StateRootMismatch verifies the engine
 // divergence path: a target header carrying a deliberately-wrong
 // AccountHash causes Apply to fail with a state-map mismatch error.
