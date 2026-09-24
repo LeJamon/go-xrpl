@@ -319,7 +319,11 @@ func (s *Service) applyStartupReplayLocked() (*ledger.Ledger, bool, error) {
 		s.startupReplay = nil
 		return nil, false, nil
 	}
-	replayed, err := s.startupReplay.Apply(s.EngineConfigForReplay(s.closedLedger))
+	cfg := s.EngineConfigForReplay(s.closedLedger)
+	replayed, err := s.startupReplay.Apply(cfg)
+	if err != nil {
+		s.recordReplayFailure(context.Background(), s.startupReplay, cfg, false, err, true)
+	}
 	if err != nil {
 		return nil, true, fmt.Errorf("apply startup replay: %w", err)
 	}

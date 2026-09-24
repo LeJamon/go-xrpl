@@ -224,6 +224,20 @@ type openLedgerTxLookup interface {
 	OpenLedgerHasTx([32]byte) (bool, error)
 }
 
+func (a *Adaptor) withValidatorDuty(fn func() error) error {
+	if a == nil || a.ledgerService == nil {
+		return fn()
+	}
+	return a.ledgerService.WithValidatorDuty(fn)
+}
+
+func (a *Adaptor) replayBlocked() bool {
+	if a == nil || a.ledgerService == nil {
+		return false
+	}
+	return a.ledgerService.ReplayBlocked()
+}
+
 // FeeVoteStance is this validator's desired fee structure. The Set fields
 // distinguish an explicit zero from an omitted configuration value.
 type FeeVoteStance struct {
@@ -566,20 +580,24 @@ func (a *Adaptor) PeerReportedLedgers() []consensus.LedgerID {
 }
 
 func (a *Adaptor) BroadcastProposal(proposal *consensus.Proposal) error {
-	return a.sender.BroadcastProposal(proposal)
+	return a.withValidatorDuty(func() error {
+		return a.sender.BroadcastProposal(proposal)
+	})
 }
 
 func (a *Adaptor) BroadcastValidation(validation *consensus.Validation) error {
-	if validation != nil {
-		for {
-			cur := a.lastIssuedValidationSeq.Load()
-			if validation.LedgerSeq <= cur ||
-				a.lastIssuedValidationSeq.CompareAndSwap(cur, validation.LedgerSeq) {
-				break
+	return a.withValidatorDuty(func() error {
+		if validation != nil {
+			for {
+				cur := a.lastIssuedValidationSeq.Load()
+				if validation.LedgerSeq <= cur ||
+					a.lastIssuedValidationSeq.CompareAndSwap(cur, validation.LedgerSeq) {
+					break
+				}
 			}
 		}
-	}
-	return a.sender.BroadcastValidation(validation)
+		return a.sender.BroadcastValidation(validation)
+	})
 }
 
 // RelayProposal forwards a peer-originated proposal, excluding exceptPeer

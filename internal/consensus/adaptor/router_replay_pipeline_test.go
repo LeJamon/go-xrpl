@@ -391,7 +391,7 @@ func TestStandardReplayPipelineFallsBackWhenHeadFails(t *testing.T) {
 	require.Empty(t, sender.replayCalls())
 }
 
-func TestReplayPreservesMismatchFallbackUntilStored(t *testing.T) {
+func TestReplayFaultBlocksMismatchFallback(t *testing.T) {
 	for _, mode := range []string{"pipeline", "standard", "delta"} {
 		t.Run(mode, func(t *testing.T) {
 			r, a, sender, svc := makeRouter(t)
@@ -440,37 +440,19 @@ func TestReplayPreservesMismatchFallbackUntilStored(t *testing.T) {
 			sender.mu.Unlock()
 			trackCatchupPeer(r, 7, links[2].seq, links[2].hash)
 			require.NoError(t, a.RequestLedger(consensus.LedgerID(links[2].hash)))
-			fallback := r.fetchTracker.Find(first.hash)
-			require.NotNil(t, fallback)
-			require.False(t, fallback.TransactionOnly())
+			require.True(t, svc.ReplayBlocked())
+			require.Nil(t, r.fetchTracker.Find(first.hash))
 			require.Equal(t, pipelineFallbacks, r.FastSyncMetrics().ReplayPipelineFallbacks)
 			for range 3 {
 				r.ensureCatchupAcquisition(links[2].seq, links[2].hash, 7)
-				require.Same(t, fallback, r.fetchTracker.Find(first.hash))
-				require.False(t, fallback.TransactionOnly())
+				r.armConsensusCatchup()
+				require.Nil(t, r.fetchTracker.Find(first.hash))
+				require.True(t, svc.ReplayBlocked())
 			}
-
-			root, err := state.SerializeRoot()
-			require.NoError(t, err)
-			require.NoError(t, fallback.GotBase([]message.LedgerNode{
-				{NodeData: first.response.LedgerHeader}, {NodeData: root},
-			}))
-			nodes, err := state.WalkWireNodes()
-			require.NoError(t, err)
-			for _, node := range nodes {
-				require.NoError(t, fallback.GotStateNodes([]message.LedgerNode{{NodeID: node.NodeID, NodeData: node.Data}}))
-			}
-			fallback.CollectMissingRequest(false)
-			require.True(t, fallback.IsComplete())
-			r.completeInboundLedger(fallback)
-			for _, link := range links[1:] {
-				completeStandardReplayTestLink(t, r, link)
-			}
-			stored, err := svc.GetLedgerByHash(links[2].hash)
-			require.NoError(t, err)
-			require.NotNil(t, stored)
-			require.Equal(t, pipelineFallbacks, r.FastSyncMetrics().ReplayPipelineFallbacks)
-			require.Equal(t, uint64(2), r.FastSyncMetrics().ReplayPipelineApplied)
+			require.Same(t, parent, svc.GetClosedLedger())
+			_, err = svc.GetLedgerByHash(first.hash)
+			require.Error(t, err)
+			require.Zero(t, r.FastSyncMetrics().ReplayPipelineApplied)
 		})
 	}
 }

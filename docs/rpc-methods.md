@@ -7,7 +7,7 @@ the method descriptors (`internal/rpc/handlers`). **Role** is the minimum role a
 caller needs; **Condition** is the dispatch precondition; **API versions** are
 the API versions each method supports.
 
-Total: 74 methods.
+Total: 75 methods.
 
 | Method | Role | Condition | API versions |
 |--------|------|-----------|--------------|
@@ -61,6 +61,7 @@ Total: 74 methods.
 | `ping` | guest | none | 1, 2, 3 |
 | `print` | admin | none | 1, 2, 3 |
 | `random` | guest | none | 1, 2, 3 |
+| `replay_recover` | admin | none | 1, 2, 3 |
 | `ripple_path_find` | guest | none | 1, 2, 3 |
 | `server_definitions` | guest | none | 1, 2, 3 |
 | `server_info` | guest | none | 1, 2, 3 |
