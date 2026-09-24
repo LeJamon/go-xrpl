@@ -8,11 +8,9 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/drops"
@@ -53,6 +51,26 @@ var (
 	// Fail loudly instead so the replay falls back to legacy catchup.
 	ErrReplayTxDiverged = errors.New("replay delta: tx result diverges from peer")
 
+	// ErrReplayMetadataDiverged means the engine produced metadata whose
+	// serialized bytes differ from the authenticated peer leaf. Metadata is
+	// part of the transaction-tree value, so semantic equivalence is not
+	// sufficient for replay.
+	ErrReplayMetadataDiverged = errors.New("replay delta: transaction metadata diverges from peer")
+
+	// ErrReplayStateDiverged means replay produced a different state-map root
+	// from the authenticated target header.
+	ErrReplayStateDiverged = errors.New("replay delta: state root diverges from peer")
+
+	// ErrReplayHeaderDiverged means replay produced a different transaction
+	// root or ledger hash from the authenticated target header.
+	ErrReplayHeaderDiverged = errors.New("replay delta: header diverges from peer")
+
+	// ErrReplayApplyPanic marks an apply panic as an unclassified operational
+	// failure. It deliberately does not unwrap to an engine-divergence
+	// sentinel: callers must not publish a diagnostic panic as proof of a
+	// reproducible protocol disagreement.
+	ErrReplayApplyPanic = errors.New("replay delta: apply panic recovered")
+
 	// ErrReplayLeafInstall wraps SHAMap AddTransactionWithMeta
 	// failures when installing a verified leaf blob into the child
 	// ledger's tx map. Rare — indicates a corrupt leaf byte stream
@@ -89,20 +107,20 @@ const subTaskRetryMax = 10
 type DecodedTx struct {
 	// Index is sfTransactionIndex from the metadata. Mirrors the key
 	// rippled uses when ordering txs at LedgerReplayMsgHandler.cpp:266.
-	Index uint32
+	Index uint32 `json:"index"`
 	// Hash is the canonical XRPL transaction ID
 	// (sha512Half(HashPrefix::transactionID, txBytes)).
-	Hash [32]byte
+	Hash [32]byte `json:"hash"`
 	// TxBytes is the binary-codec serialization of the transaction.
-	TxBytes []byte
+	TxBytes []byte `json:"tx_bytes"`
 	// MetaBytes is the binary-codec serialization of the transaction
 	// metadata (includes sfTransactionIndex). Carried alongside TxBytes
 	// because tec/tef metadata is required to recompute the new state.
-	MetaBytes []byte
+	MetaBytes []byte `json:"meta_bytes"`
 	// LeafBlob is the original wire blob (VL(tx) + VL(meta)) as inserted
 	// into the tx SHAMap. Re-emitting this avoids a second VL pass when
 	// the consumer wants to mirror rippled's tx-with-meta leaf format.
-	LeafBlob []byte
+	LeafBlob []byte `json:"leaf_blob"`
 }
 
 // ReplayDelta tracks an outbound mtREPLAY_DELTA_REQUEST and verifies the
@@ -516,6 +534,62 @@ func (r *ReplayDelta) OrderedTxs() []DecodedTx {
 	return out
 }
 
+// TargetHeader returns the authenticated target header, including after Apply
+// has failed. A zero header is returned before GotResponse has verified a
+// target. The returned value is a copy and is safe for callers to retain.
+func (r *ReplayDelta) TargetHeader() header.LedgerHeader {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.result == nil {
+		return header.LedgerHeader{}
+	}
+	return r.result.Header()
+}
+
+// Retry creates a fresh replay in StateReplayReady using the authenticated
+// target and a newly supplied parent. It never mutates the failed replay or
+// retries Apply itself; callers own the policy and must bound how often this
+// method is used. The parent is revalidated against the target's linkage and
+// the target transaction map is decoded again so the returned replay does not
+// share mutable apply state with the original.
+func (r *ReplayDelta) Retry(parent *ledger.Ledger) (*ReplayDelta, error) {
+	if parent == nil {
+		return nil, errors.New("replay delta retry parent is nil")
+	}
+
+	r.mu.Lock()
+	state := r.state
+	target := r.result
+	logger := r.logger
+	peerID := r.peerID
+	requestedHash := r.hash
+	r.mu.Unlock()
+
+	if state != StateReplayReady && state != StateFailed && state != StateComplete {
+		return nil, fmt.Errorf("replay delta retry requires verified target (state=%d)", state)
+	}
+	if target == nil {
+		return nil, errors.New("replay delta retry target is unavailable")
+	}
+	targetHash := target.Hash()
+	if targetHash != requestedHash {
+		return nil, fmt.Errorf("%w: retry target hash %x, requested %x",
+			ErrReplayHeaderDiverged, targetHash[:8], requestedHash[:8])
+	}
+
+	retry, err := NewStoredLedgerReplay(parent, target, logger)
+	if err != nil {
+		return nil, err
+	}
+	// NewStoredLedgerReplay creates a fresh acquisition with a neutral peer;
+	// retain the source peer only as provenance for evidence. The retry has
+	// no outstanding network request and therefore no retry timer state.
+	retry.mu.Lock()
+	retry.peerID = peerID
+	retry.mu.Unlock()
+	return retry, nil
+}
+
 // Err returns the verification error (nil unless state is StateFailed).
 func (r *ReplayDelta) Err() error {
 	r.mu.Lock()
@@ -718,6 +792,11 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (derived *ledger.Ledger, 
 		return nil, fmt.Errorf("Apply called before response verified (state=%d)", r.state)
 	}
 	defer func() {
+		if recovered := recover(); recovered != nil {
+			derived = nil
+			err = newReplayFailure(ErrReplayApplyPanic, "apply_panic",
+				"recovered panic while applying replay delta: %v", recovered)
+		}
 		if err != nil {
 			r.state = StateFailed
 			r.err = err
@@ -825,24 +904,45 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (derived *ledger.Ledger, 
 		isBatchInner := txn.GetCommon().GetFlags()&tx.TfInnerBatchTxn != 0
 		if isBatchInner {
 			if len(expectedBatchInners) == 0 {
-				return nil, fmt.Errorf("%w: unexpected batch inner tx %x", ErrReplayTxDiverged, dtx.Hash[:8])
+				failure := newReplayFailure(ErrReplayTxDiverged, "batch_inner_result",
+					"unexpected batch inner transaction")
+				failure.TxIndex = dtx.Index
+				failure.TxHash = dtx.Hash
+				return nil, failure
 			}
 			expected := expectedBatchInners[0]
 			expectedHash, hashErr := tx.ComputeTransactionHash(expected.Transaction)
 			if hashErr != nil || expectedHash != dtx.Hash || expected.Metadata == nil ||
 				expected.Metadata.TransactionIndex != dtx.Index {
-				return nil, fmt.Errorf("%w: batch inner tx %x does not match outer execution", ErrReplayTxDiverged, dtx.Hash[:8])
+				failure := newReplayFailure(ErrReplayTxDiverged, "batch_inner_result",
+					"batch inner transaction does not match outer execution")
+				failure.TxIndex = dtx.Index
+				failure.TxHash = dtx.Hash
+				if expected.Metadata != nil {
+					failure.ExpectedResult = expected.Metadata.TransactionResult.String()
+				}
+				return nil, failure
 			}
-			peerMeta, metaErr := binarycodec.Decode(hex.EncodeToString(dtx.MetaBytes))
+			expectedMeta, metaErr := tx.SerializeMetadata(expected.Metadata)
 			if metaErr != nil {
-				return nil, fmt.Errorf("%w: decode batch inner metadata %x: %v", ErrReplayTxDiverged, dtx.Hash[:8], metaErr)
+				failure := newReplayFailure(ErrReplayMetadataDiverged, "batch_inner_metadata",
+					"serialize engine-generated batch inner metadata: %v", metaErr)
+				failure.TxIndex = dtx.Index
+				failure.TxHash = dtx.Hash
+				failure.ExpectedMetadata = append([]byte(nil), dtx.MetaBytes...)
+				failure.ActualMetadata = append([]byte(nil), expectedMeta...)
+				return nil, failure
 			}
-			parentBatchID, _ := peerMeta["ParentBatchID"].(string)
-			transactionResult, _ := peerMeta["TransactionResult"].(string)
-			if expected.Metadata.ParentBatchID == nil ||
-				!strings.EqualFold(parentBatchID, hex.EncodeToString(expected.Metadata.ParentBatchID[:])) ||
-				transactionResult != expected.Metadata.TransactionResult.String() {
-				return nil, fmt.Errorf("%w: batch inner metadata %x does not match outer execution", ErrReplayTxDiverged, dtx.Hash[:8])
+			if !bytes.Equal(expectedMeta, dtx.MetaBytes) {
+				failure := newReplayFailure(ErrReplayMetadataDiverged, "batch_inner_metadata",
+					"batch inner metadata bytes differ from authenticated peer metadata")
+				failure.TxIndex = dtx.Index
+				failure.TxHash = dtx.Hash
+				failure.ExpectedMetadata = append([]byte(nil), dtx.MetaBytes...)
+				failure.ActualMetadata = append([]byte(nil), expectedMeta...)
+				failure.ExpectedResult = transactionResultFromMetadata(dtx.MetaBytes)
+				failure.ActualResult = expected.Metadata.TransactionResult.String()
+				return nil, failure
 			}
 			if err := child.AddTransactionWithMeta(dtx.Hash, dtx.LeafBlob); err != nil {
 				return nil, fmt.Errorf("%w: tx %x: %w", ErrReplayLeafInstall, dtx.Hash[:8], err)
@@ -860,27 +960,6 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (derived *ledger.Ledger, 
 		} else {
 			result = engine.Apply(txn)
 			result = engine.ApplyBatchInnerTransactions(context.Background(), txn, result)
-		}
-
-		// R6b.2a: compare engine-generated meta against the peer-supplied
-		// meta so operators can see when our engine drifts from rippled's
-		// AffectedNodes semantics. We still INSTALL peer meta (below) for
-		// byte-parity of the tx map root with header.TxHash — the log is
-		// pure telemetry for now. A later round can gate adoption on this
-		// comparison and fall back to legacy on mismatch, but today we
-		// don't have enough data on go-xrpl-vs-rippled meta drift rates to
-		// risk catchup regressions. Rippled's BuildLedger.cpp:244-247
-		// uses engine meta exclusively — that's the end-state we want.
-		if result.Metadata != nil && len(dtx.MetaBytes) > 0 {
-			if engineMeta, mErr := tx.SerializeMetadata(result.Metadata); mErr == nil {
-				if len(engineMeta) > 0 && !bytes.Equal(engineMeta, dtx.MetaBytes) {
-					r.logger.Warn("replay tx: engine-generated meta differs from peer meta — engine may diverge from rippled AffectedNodes semantics",
-						"tx", fmt.Sprintf("%x", dtx.Hash[:8]),
-						"engine_meta_len", len(engineMeta),
-						"peer_meta_len", len(dtx.MetaBytes),
-					)
-				}
-			}
 		}
 
 		// D5 — install the peer-supplied leaf only on applied==true
@@ -903,13 +982,35 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (derived *ledger.Ledger, 
 		// unreachable from our engine regardless, so preserving the
 		// leaf bought nothing and obscured the real divergence.
 		if !result.Result.IsApplied() {
-			r.logger.Warn("replay tx returned non-applied result — engine diverges from peer",
-				"tx", fmt.Sprintf("%x", dtx.Hash[:8]),
-				"ter", result.Result.String(),
-				"note", "rippled only rawTxInsert's when applied==true (Transactor.cpp:1108,1215-1267)",
-			)
-			return nil, fmt.Errorf("%w: tx %x returned %s; rippled only embeds tes/tec txs",
-				ErrReplayTxDiverged, dtx.Hash[:8], result.Result.String())
+			failure := newReplayFailure(ErrReplayTxDiverged, "transaction_result",
+				"engine returned a non-applied result; rippled only embeds tes/tec transactions")
+			failure.TxIndex = dtx.Index
+			failure.TxHash = dtx.Hash
+			failure.ExpectedResult = transactionResultFromMetadata(dtx.MetaBytes)
+			failure.ActualResult = result.Result.String()
+			return nil, failure
+		}
+		engineMeta, metaErr := tx.SerializeMetadata(result.Metadata)
+		if metaErr != nil {
+			failure := newReplayFailure(ErrReplayMetadataDiverged, "transaction_metadata",
+				"serialize engine-generated transaction metadata: %v", metaErr)
+			failure.TxIndex = dtx.Index
+			failure.TxHash = dtx.Hash
+			failure.ExpectedMetadata = append([]byte(nil), dtx.MetaBytes...)
+			return nil, failure
+		}
+		if !bytes.Equal(engineMeta, dtx.MetaBytes) {
+			failure := newReplayFailure(ErrReplayMetadataDiverged, "transaction_metadata",
+				"transaction metadata bytes differ from authenticated peer metadata")
+			failure.TxIndex = dtx.Index
+			failure.TxHash = dtx.Hash
+			failure.ExpectedMetadata = append([]byte(nil), dtx.MetaBytes...)
+			failure.ActualMetadata = append([]byte(nil), engineMeta...)
+			failure.ExpectedResult = transactionResultFromMetadata(dtx.MetaBytes)
+			if result.Metadata != nil {
+				failure.ActualResult = result.Metadata.TransactionResult.String()
+			}
+			return nil, failure
 		}
 		expectedBatchInners = append(expectedBatchInners, result.AppliedInnerTransactions...)
 		// Applied path (tes / tec): anchor the verified peer leaf so the
@@ -941,8 +1042,12 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (derived *ledger.Ledger, 
 		return nil, fmt.Errorf("compute replayed tx map hash: %w", err)
 	}
 	if gotTxRoot != hdr.TxHash {
-		return nil, fmt.Errorf("tx map root mismatch after replay: computed %x header %x",
+		failure := newReplayFailure(ErrReplayHeaderDiverged, "transaction_root",
+			"transaction map root mismatch after replay: computed %x header %x",
 			gotTxRoot[:8], hdr.TxHash[:8])
+		failure.ExpectedRoot = hdr.TxHash
+		failure.ActualRoot = gotTxRoot
+		return nil, failure
 	}
 
 	// The critical correctness check: replayed state-map root must equal
@@ -954,9 +1059,12 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (derived *ledger.Ledger, 
 		return nil, fmt.Errorf("compute replayed state map hash: %w", err)
 	}
 	if gotStateRoot != hdr.AccountHash {
-		return nil, fmt.Errorf(
+		failure := newReplayFailure(ErrReplayStateDiverged, "state_root",
 			"state map root mismatch: expected %x got %x — engine diverges from rippled (seq=%d hash=%x)",
 			hdr.AccountHash[:8], gotStateRoot[:8], hdr.LedgerIndex, hdr.Hash[:8])
+		failure.ExpectedRoot = hdr.AccountHash
+		failure.ActualRoot = gotStateRoot
+		return nil, failure
 	}
 
 	// Sanity check: the canonical hash Close() computed from our maps
@@ -965,8 +1073,13 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (derived *ledger.Ledger, 
 	// but we double-check rather than silently emitting a different hash
 	// to downstream consumers.
 	if child.Hash() != hdr.Hash {
-		return nil, fmt.Errorf("ledger hash mismatch after close: got %x expected %x",
-			child.Hash(), hdr.Hash)
+		actualHash := child.Hash()
+		failure := newReplayFailure(ErrReplayHeaderDiverged, "ledger_hash",
+			"ledger hash mismatch after close: got %x expected %x",
+			actualHash, hdr.Hash)
+		failure.ExpectedHash = hdr.Hash
+		failure.ActualHash = actualHash
+		return nil, failure
 	}
 
 	r.logger.Info("replay delta applied",

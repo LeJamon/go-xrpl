@@ -1,6 +1,9 @@
 package inbound
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -14,7 +17,7 @@ import (
 	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
 	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
-	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -202,16 +205,6 @@ func TestReplayDelta_Apply_RequiresExpectedBatchInnerLeaves(t *testing.T) {
 	outer.SetRawBytes(outerBlob)
 	outerHash, err := tx.ComputeTransactionHash(outer)
 	require.NoError(t, err)
-	outerMeta := &tx.Metadata{
-		AffectedNodes:     []tx.AffectedNode{},
-		TransactionIndex:  0,
-		TransactionResult: ter.TesSUCCESS,
-	}
-	outerMetaBytes, err := tx.SerializeMetadata(outerMeta)
-	require.NoError(t, err)
-	outerLeaf, err := tx.CreateTxWithMetaBlob(outerBlob, outerMeta)
-	require.NoError(t, err)
-
 	resHdr := parent.Header()
 	resHdr.LedgerIndex = parent.Sequence() + 1
 	resHdr.ParentHash = parent.Hash()
@@ -220,6 +213,37 @@ func TestReplayDelta_Apply_RequiresExpectedBatchInnerLeaves(t *testing.T) {
 	stateMap, err := parent.StateMapSnapshot()
 	require.NoError(t, err)
 	txMap, err := parent.TxMapSnapshot()
+	require.NoError(t, err)
+
+	rules := amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		Enable(amendment.FeatureBatchV1_1).
+		Build()
+	preview, err := ledger.NewOpen(parent, resHdr.CloseTime)
+	require.NoError(t, err)
+	previewConfig := tx.EngineConfig{
+		BaseFee:                   10,
+		ReserveBase:               200_000_000,
+		ReserveIncrement:          50_000_000,
+		SkipSignatureVerification: true,
+		Rules:                     rules,
+		LedgerSequence:            resHdr.LedgerIndex,
+		ParentCloseTime:           protocol.ToRippleTime(parent.CloseTime()),
+		ApplicationCloseTime:      protocol.ToRippleTime(resHdr.CloseTime),
+		ApplicationCloseTimeSet:   true,
+		ParentHash:                parent.Hash(),
+		ApplyFlags:                tx.TapNONE,
+		OpenLedger:                false,
+		ViewOpen:                  false,
+		EnforceLoadFee:            false,
+	}
+	previewEngine := txengine.NewEngine(preview, previewConfig)
+	previewResult := previewEngine.Apply(outer)
+	previewResult = previewEngine.ApplyBatchInnerTransactions(context.Background(), outer, previewResult)
+	require.True(t, previewResult.Result.IsApplied(), previewResult.Result.String())
+	outerMetaBytes, err := tx.SerializeMetadata(previewResult.Metadata)
+	require.NoError(t, err)
+	outerLeaf, err := tx.CreateTxWithMetaBlob(outerBlob, previewResult.Metadata)
 	require.NoError(t, err)
 
 	rd := NewReplayDelta([32]byte{}, 7, parent, nil)
@@ -236,10 +260,6 @@ func TestReplayDelta_Apply_RequiresExpectedBatchInnerLeaves(t *testing.T) {
 	}}
 	rd.mu.Unlock()
 
-	rules := amendment.NewRulesBuilder().
-		FromPreset(amendment.PresetAllSupported).
-		Enable(amendment.FeatureBatchV1_1).
-		Build()
 	_, err = rd.Apply(tx.EngineConfig{
 		BaseFee:                   10,
 		ReserveBase:               200_000_000,
@@ -287,8 +307,68 @@ func TestReplayDelta_Apply_StateRootMismatch(t *testing.T) {
 
 	_, err = rd.Apply(tx.EngineConfig{})
 	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrReplayStateDiverged)
+	var failure *ReplayFailure
+	require.ErrorAs(t, err, &failure)
+	assert.Equal(t, hdr.AccountHash, failure.ExpectedRoot)
+	assert.NotEqual(t, failure.ExpectedRoot, failure.ActualRoot)
 	assert.Contains(t, err.Error(), "state map root mismatch",
 		"Apply must surface a clear state-map divergence message")
+
+	evidence := rd.Evidence()
+	assert.Equal(t, parent.Hash(), evidence.ParentHash)
+	assert.Equal(t, hdr.Hash, evidence.Hash)
+	assert.NotNil(t, evidence.Failure)
+	encoded, jsonErr := rd.EvidenceJSON()
+	require.NoError(t, jsonErr)
+	assert.NotEmpty(t, encoded)
+}
+
+func TestReplayDelta_RetryUsesFreshVerifiedReplay(t *testing.T) {
+	t.Parallel()
+	parent := makeGenesisLedger(t)
+	resp, hdr := buildEmptyClosedSuccessorResponse(t, parent)
+	rd := armReplayDeltaWith(t, parent, resp, hdr)
+
+	_, err := rd.Apply(tx.EngineConfig{})
+	require.NoError(t, err)
+
+	retry, err := rd.Retry(parent)
+	require.NoError(t, err)
+	require.NotNil(t, retry)
+	assert.NotSame(t, rd, retry)
+	assert.Equal(t, StateReplayReady, retry.State())
+	assert.Equal(t, hdr.Hash, retry.TargetHeader().Hash)
+	assert.Equal(t, hdr.LedgerIndex, retry.TargetHeader().LedgerIndex)
+	assert.Equal(t, rd.Evidence().Transactions, retry.Evidence().Transactions)
+
+	derived, err := retry.Apply(tx.EngineConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, hdr.Hash, derived.Hash())
+}
+
+func TestReplayDelta_ApplyPanicIsUnclassifiedAndRetained(t *testing.T) {
+	parent := makeGenesisLedger(t)
+	resp, hdr := buildEmptyClosedSuccessorResponse(t, parent)
+	rd := armReplayDeltaWith(t, parent, resp, hdr)
+
+	// The logger is normally initialized by NewReplayDelta. Clearing it here
+	// forces the final success log call to panic after all ledger checks, which
+	// exercises Apply's recovery path without changing engine behavior.
+	rd.mu.Lock()
+	rd.logger = nil
+	rd.mu.Unlock()
+	_, err := rd.Apply(tx.EngineConfig{})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrReplayApplyPanic)
+	assert.False(t, errors.Is(err, ErrReplayStateDiverged))
+	assert.Equal(t, StateFailed, rd.State())
+
+	evidence := rd.Evidence()
+	assert.NotNil(t, evidence.Failure)
+	encoded, jsonErr := json.Marshal(evidence)
+	require.NoError(t, jsonErr)
+	assert.Contains(t, string(encoded), "apply_panic")
 }
 
 // TestReplayDelta_Apply_BeforeComplete verifies the precondition guard:
