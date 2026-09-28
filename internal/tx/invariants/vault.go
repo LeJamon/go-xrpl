@@ -2,6 +2,7 @@ package invariants
 
 import (
 	"bytes"
+	"encoding/json"
 	"math/big"
 	"strconv"
 
@@ -319,7 +320,7 @@ func (c *vvChecker) feePayerForCorrection() ([20]byte, bool) {
 		return c.feePayerID, c.feePayerPreFunded
 	}
 	if c.flat != nil {
-		if u32Field(c.flat, "SponsorFlags")&txcore.SpfSponsorFee != 0 {
+		if flattenedUint32Field(c.flat, "SponsorFlags")&txcore.SpfSponsorFee != 0 {
 			if sponsor, ok := c.flat["Sponsor"].(string); ok {
 				if id, err := state.DecodeAccountID(sponsor); err == nil {
 					return id, false

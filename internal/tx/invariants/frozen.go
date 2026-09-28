@@ -75,10 +75,33 @@ func loanManageDefaultFields(tx Transaction) (map[string]any, bool) {
 		return nil, false
 	}
 	fields, err := tx.Flatten()
-	if err != nil || u32Field(fields, "Flags")&lending.TfLoanDefault == 0 {
+	if err != nil || flattenedUint32Field(fields, "Flags")&lending.TfLoanDefault == 0 {
 		return nil, false
 	}
 	return fields, true
+}
+
+func flattenedUint32Field(fields map[string]any, key string) uint32 {
+	value, ok := fields[key]
+	if !ok {
+		return 0
+	}
+	switch value := value.(type) {
+	case uint32:
+		return value
+	case uint64:
+		return uint32(value)
+	case uint:
+		return uint32(value)
+	case int:
+		return uint32(value)
+	case int64:
+		return uint32(value)
+	case float64:
+		return uint32(value)
+	default:
+		return 0
+	}
 }
 
 func checkTransfersNotFrozen(

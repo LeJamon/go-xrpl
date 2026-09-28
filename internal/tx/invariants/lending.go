@@ -186,6 +186,12 @@ func (d decodedLendingEntry) uint32(key string) (uint32, bool) {
 		}
 	case *entry.Vault:
 		switch key {
+		case "VaultKind":
+			value, err := model.GetVaultKind()
+			if !model.HasVaultKind() || err != nil {
+				return 0, false
+			}
+			return uint32(value), true
 		case "SubscriptionDate":
 			return generatedUint32(model.HasSubscriptionDate, model.GetSubscriptionDate)
 		case "RedemptionDate":

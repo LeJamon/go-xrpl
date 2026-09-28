@@ -216,3 +216,24 @@ func filledHash(value byte) [32]byte {
 	}
 	return hash
 }
+
+func toUint32(value any) uint32 {
+	switch value := value.(type) {
+	case uint8:
+		return uint32(value)
+	case uint16:
+		return uint32(value)
+	case uint32:
+		return value
+	case uint64:
+		return uint32(value)
+	case int:
+		return uint32(value)
+	case int64:
+		return uint32(value)
+	case float64:
+		return uint32(value)
+	default:
+		return 0
+	}
+}

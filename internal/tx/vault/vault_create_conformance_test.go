@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 func TestVaultCreateRejectsPresentEmptyBlobs(t *testing.T) {
@@ -321,6 +322,74 @@ func TestSerializeVaultPreservesLargeAssetsMaximum(t *testing.T) {
 	if got := fields["AssetsMaximum"]; got != data.AssetsMaximum {
 		t.Fatalf("AssetsMaximum = %q, want %q", got, data.AssetsMaximum)
 	}
+}
+
+func TestSerializeVaultPreservesNineteenDigitNumberAcrossLendingModes(t *testing.T) {
+	rules := []struct {
+		name  string
+		rules *amendment.Rules
+	}{
+		{name: "legacy", rules: amendment.NewRules([][32]byte{amendment.FeatureSingleAssetVault})},
+		{name: "cleanup320", rules: amendment.NewRules([][32]byte{
+			amendment.FeatureSingleAssetVault,
+			amendment.FeatureFixCleanup3_2_0,
+		})},
+	}
+	for _, test := range rules {
+		t.Run(test.name, func(t *testing.T) {
+			data := &vaultData{
+				Owner:           [20]byte{1},
+				Account:         [20]byte{2},
+				Sequence:        1,
+				ShareMPTID:      [24]byte{3},
+				Asset:           tx.Asset{Currency: "XRP"},
+				AssetsMaximum:   "9223372036854775807e0",
+				AssetsTotal:     "9223372036854775807e0",
+				AssetsAvailable: "9223372036854775807e0",
+			}
+			encoded, err := serializeVaultForRules(data, test.rules)
+			if err != nil {
+				t.Fatalf("serializeVaultForRules: %v", err)
+			}
+			fields, err := readVaultNumberFields(encoded)
+			if err != nil {
+				t.Fatalf("readVaultNumberFields: %v", err)
+			}
+			for _, name := range []string{"AssetsTotal", "AssetsAvailable", "AssetsMaximum"} {
+				if got := fields[name]; got != data.AssetsMaximum {
+					t.Fatalf("%s = %q, want %q", name, got, data.AssetsMaximum)
+				}
+			}
+		})
+	}
+}
+
+func readVaultNumberFields(data []byte) (map[string]string, error) {
+	model := &ledgerfields.Vault{}
+	if err := model.Decode(data); err != nil {
+		return nil, err
+	}
+	fields := make(map[string]string)
+	for _, field := range []struct {
+		name string
+		has  func() bool
+		get  func() (ledgerfields.NumberValue, error)
+	}{
+		{"AssetsTotal", model.HasAssetsTotal, model.GetAssetsTotal},
+		{"AssetsAvailable", model.HasAssetsAvailable, model.GetAssetsAvailable},
+		{"AssetsMaximum", model.HasAssetsMaximum, model.GetAssetsMaximum},
+		{"LossUnrealized", model.HasLossUnrealized, model.GetLossUnrealized},
+	} {
+		if !field.has() {
+			continue
+		}
+		value, err := field.get()
+		if err != nil {
+			return nil, err
+		}
+		fields[field.name] = string(value)
+	}
+	return fields, nil
 }
 
 func vaultResultCode(t *testing.T, err error) ter.Result {
