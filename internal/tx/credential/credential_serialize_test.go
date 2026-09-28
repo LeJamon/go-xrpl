@@ -114,14 +114,27 @@ func TestSerializeCredentialRequiredFieldErrors(t *testing.T) {
 		Issuer:  [20]byte{0x02},
 	})
 	require.ErrorContains(t, err, "empty credential type")
+}
 
-	_, err = serializeCredentialEntry(&CredentialEntry{
+func TestSerializeCredentialIndependentThreadingFields(t *testing.T) {
+	cred := &CredentialEntry{
 		Subject:           [20]byte{0x01},
 		Issuer:            [20]byte{0x02},
 		CredentialType:    []byte{0x01},
-		PreviousTxnLgrSeq: 1,
-	})
-	require.ErrorContains(t, err, "PreviousTxnLgrSeq set without PreviousTxnID")
+		IssuerNode:        ^uint64(0),
+		SubjectNode:       ^uint64(0),
+		HasSubjectNode:    true,
+		PreviousTxnLgrSeq: 7,
+	}
+	data, err := serializeCredentialEntry(cred)
+	require.NoError(t, err)
+	require.Equal(t, referenceCredentialBytes(t, cred), data)
+	parsed, err := ParseCredentialEntry(data)
+	require.NoError(t, err)
+	require.Equal(t, cred, parsed)
+	reencoded, err := serializeCredentialEntry(parsed)
+	require.NoError(t, err)
+	require.Equal(t, data, reencoded)
 }
 
 func referenceCredentialBytes(t *testing.T, cred *CredentialEntry) []byte {
@@ -149,10 +162,8 @@ func referenceCredentialBytes(t *testing.T, cred *CredentialEntry) []byte {
 	if cred.HasSubjectNode && cred.Subject != cred.Issuer {
 		fields["SubjectNode"] = tx.FormatUint64Hex(cred.SubjectNode)
 	}
-	if cred.PreviousTxnID != ([32]byte{}) {
-		fields["PreviousTxnID"] = hex.EncodeToString(cred.PreviousTxnID[:])
-		fields["PreviousTxnLgrSeq"] = cred.PreviousTxnLgrSeq
-	}
+	fields["PreviousTxnID"] = hex.EncodeToString(cred.PreviousTxnID[:])
+	fields["PreviousTxnLgrSeq"] = cred.PreviousTxnLgrSeq
 
 	data, err := binarycodec.EncodeBytes(fields)
 	require.NoError(t, err)

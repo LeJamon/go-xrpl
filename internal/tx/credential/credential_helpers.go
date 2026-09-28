@@ -143,31 +143,19 @@ func serializeCredentialEntry(cred *CredentialEntry) ([]byte, error) {
 		return nil, errors.New("serialize credential: nil entry")
 	}
 
-	subjectStr, err := state.EncodeAccountID(cred.Subject)
-	if err != nil {
-		return nil, fmt.Errorf("serialize credential subject: %w", err)
-	}
-	if subjectStr == "" {
-		return nil, errors.New("serialize credential: empty subject")
-	}
-
-	issuerStr, err := state.EncodeAccountID(cred.Issuer)
-	if err != nil {
-		return nil, fmt.Errorf("serialize credential issuer: %w", err)
-	}
-	if issuerStr == "" {
-		return nil, errors.New("serialize credential: empty issuer")
-	}
-
 	if len(cred.CredentialType) == 0 {
 		return nil, errors.New("serialize credential: empty credential type")
 	}
 
 	var sle entry.Credential
-	sle.SetSubject(subjectStr)
-	sle.SetIssuer(issuerStr)
+	if err := sle.SetSubjectValue(cred.Subject); err != nil {
+		return nil, fmt.Errorf("serialize credential subject: %w", err)
+	}
+	if err := sle.SetIssuerValue(cred.Issuer); err != nil {
+		return nil, fmt.Errorf("serialize credential issuer: %w", err)
+	}
 	sle.SetCredentialTypeValue(cred.CredentialType)
-	sle.SetIssuerNode(tx.FormatUint64Hex(cred.IssuerNode))
+	sle.SetIssuerNodeValue(cred.IssuerNode)
 	sle.SetFlags(cred.Flags)
 	if cred.Sponsor != "" {
 		sle.SetSponsor(cred.Sponsor)
@@ -182,16 +170,11 @@ func serializeCredentialEntry(cred *CredentialEntry) ([]byte, error) {
 	}
 
 	if cred.HasSubjectNode && cred.Subject != cred.Issuer {
-		sle.SetSubjectNode(tx.FormatUint64Hex(cred.SubjectNode))
+		sle.SetSubjectNodeValue(cred.SubjectNode)
 	}
 
-	var zeroHash [32]byte
-	if cred.PreviousTxnID != zeroHash {
-		sle.SetPreviousTxnIDValue(cred.PreviousTxnID)
-		sle.SetPreviousTxnLgrSeq(cred.PreviousTxnLgrSeq)
-	} else if cred.PreviousTxnLgrSeq != 0 {
-		return nil, errors.New("serialize credential: PreviousTxnLgrSeq set without PreviousTxnID")
-	}
+	sle.SetPreviousTxnIDValue(cred.PreviousTxnID)
+	sle.SetPreviousTxnLgrSeq(cred.PreviousTxnLgrSeq)
 
 	data, err := sle.Encode()
 	if err != nil {
