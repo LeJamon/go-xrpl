@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
@@ -19,93 +18,240 @@ import (
 // (ValidLoanBroker, ValidLoan).
 const lsfLoanOverpaymentFlag = entry.LsfLoanOverpayment
 
-// decodeEntry decodes a serialized SLE into its field map.
-func decodeEntry(data []byte) (map[string]any, error) {
-	return binarycodec.Decode(hex.EncodeToString(data))
+type decodedLendingEntry struct {
+	typ   entry.Type
+	model entry.Entry
+}
+
+// decodeEntry decodes a serialized lending SLE into its generated model.
+func decodeEntry(data []byte) (decodedLendingEntry, error) {
+	typ, err := state.DecodeType(data)
+	if err != nil {
+		return decodedLendingEntry{}, err
+	}
+	model := entry.New(typ)
+	if model == nil {
+		return decodedLendingEntry{}, fmt.Errorf("no generated decoder for %s", typ)
+	}
+	if err := model.Decode(data); err != nil {
+		return decodedLendingEntry{}, err
+	}
+	return decodedLendingEntry{typ: typ, model: model}, nil
 }
 
 // numFieldIsNegative reports whether a NUMBER field is present and negative (the
 // codec renders negatives with a leading '-').
-func numFieldIsNegative(fields map[string]any, key string) bool {
-	v, ok := fields[key].(string)
+func numFieldIsNegative(fields decodedLendingEntry, key string) bool {
+	v, ok := fields.number(key)
 	return ok && strings.HasPrefix(v, "-")
 }
 
-// u32FieldPresent reads a UInt32 field, tolerating the codec's numeric representations.
-func u32FieldPresent(fields map[string]any, key string) (uint32, bool) {
-	if _, present := fields[key]; !present {
-		return 0, false
-	}
-	switch v := fields[key].(type) {
-	case uint8:
-		return uint32(v), true
-	case uint16:
-		return uint32(v), true
-	case uint32:
-		return v, true
-	case uint64:
-		return uint32(v), true
-	case int8:
-		return uint32(v), true
-	case int16:
-		return uint32(v), true
-	case int32:
-		return uint32(v), true
-	case int:
-		return uint32(v), true
-	case int64:
-		return uint32(v), true
-	case float64:
-		return uint32(v), true
-	default:
-		return 0, false
-	}
+func u32FieldPresent(fields decodedLendingEntry, key string) (uint32, bool) {
+	return fields.uint32(key)
 }
 
 // u32Field reads a UInt32 field, tolerating the codec's numeric representations.
-func u32Field(fields map[string]any, key string) uint32 {
+func u32Field(fields decodedLendingEntry, key string) uint32 {
 	v, _ := u32FieldPresent(fields, key)
 	return v
 }
 
-func i32Field(fields map[string]any, key string) int {
-	switch v := fields[key].(type) {
-	case int8:
-		return int(v)
-	case int16:
-		return int(v)
-	case int32:
-		return int(v)
-	case int:
-		return v
-	case int64:
-		return int(v)
-	case uint8:
-		return int(v)
-	case uint16:
-		return int(v)
-	case uint32:
-		return int(v)
-	case uint64:
-		return int(v)
-	case float64:
-		return int(v)
-	default:
-		return 0
+func i32Field(fields decodedLendingEntry, key string) int {
+	v, _ := fields.int32(key)
+	return int(v)
+}
+
+func generatedUint32(has func() bool, get func() (uint32, error)) (uint32, bool) {
+	if !has() {
+		return 0, false
 	}
+	value, err := get()
+	return value, err == nil
 }
 
 func lendingViolation(name, msg string) *InvariantViolation {
 	return &InvariantViolation{Name: name, Message: msg}
 }
 
-func loanNumber(fields map[string]any, key string, numberContext state.NumberContext) (state.XRPLNumber, bool) {
-	zero := numberContext.Int(0)
-	raw, present := fields[key]
-	if !present {
-		return zero, true
+func (d decodedLendingEntry) number(key string) (string, bool) {
+	get := func(present bool, value entry.NumberValue, err error) (string, bool) {
+		if err != nil {
+			return "", false
+		}
+		if !present {
+			return "", true
+		}
+		return string(value), true
 	}
-	s, ok := raw.(string)
+	switch model := d.model.(type) {
+	case *entry.Loan:
+		switch key {
+		case "LoanOriginationFee":
+			value, err := model.GetLoanOriginationFee()
+			return get(model.HasLoanOriginationFee(), value, err)
+		case "LoanServiceFee":
+			value, err := model.GetLoanServiceFee()
+			return get(model.HasLoanServiceFee(), value, err)
+		case "LatePaymentFee":
+			value, err := model.GetLatePaymentFee()
+			return get(model.HasLatePaymentFee(), value, err)
+		case "ClosePaymentFee":
+			value, err := model.GetClosePaymentFee()
+			return get(model.HasClosePaymentFee(), value, err)
+		case "PeriodicPayment":
+			value, err := model.GetPeriodicPayment()
+			return get(model.HasPeriodicPayment(), value, err)
+		case "PrincipalOutstanding":
+			value, err := model.GetPrincipalOutstanding()
+			return get(model.HasPrincipalOutstanding(), value, err)
+		case "TotalValueOutstanding":
+			value, err := model.GetTotalValueOutstanding()
+			return get(model.HasTotalValueOutstanding(), value, err)
+		case "ManagementFeeOutstanding":
+			value, err := model.GetManagementFeeOutstanding()
+			return get(model.HasManagementFeeOutstanding(), value, err)
+		}
+	case *entry.LoanBroker:
+		switch key {
+		case "DebtTotal":
+			value, err := model.GetDebtTotal()
+			return get(model.HasDebtTotal(), value, err)
+		case "DebtMaximum":
+			value, err := model.GetDebtMaximum()
+			return get(model.HasDebtMaximum(), value, err)
+		case "CoverAvailable":
+			value, err := model.GetCoverAvailable()
+			return get(model.HasCoverAvailable(), value, err)
+		}
+	case *entry.Vault:
+		switch key {
+		case "AssetsTotal":
+			value, err := model.GetAssetsTotal()
+			return get(model.HasAssetsTotal(), value, err)
+		case "AssetsAvailable":
+			value, err := model.GetAssetsAvailable()
+			return get(model.HasAssetsAvailable(), value, err)
+		case "AssetsMaximum":
+			value, err := model.GetAssetsMaximum()
+			return get(model.HasAssetsMaximum(), value, err)
+		case "LossUnrealized":
+			value, err := model.GetLossUnrealized()
+			return get(model.HasLossUnrealized(), value, err)
+		}
+	}
+	return "", false
+}
+
+func (d decodedLendingEntry) uint32(key string) (uint32, bool) {
+	switch model := d.model.(type) {
+	case *entry.Loan:
+		switch key {
+		case "LoanSequence":
+			return generatedUint32(model.HasLoanSequence, model.GetLoanSequence)
+		case "OverpaymentFee":
+			return generatedUint32(model.HasOverpaymentFee, model.GetOverpaymentFee)
+		case "InterestRate":
+			return generatedUint32(model.HasInterestRate, model.GetInterestRate)
+		case "LateInterestRate":
+			return generatedUint32(model.HasLateInterestRate, model.GetLateInterestRate)
+		case "CloseInterestRate":
+			return generatedUint32(model.HasCloseInterestRate, model.GetCloseInterestRate)
+		case "OverpaymentInterestRate":
+			return generatedUint32(model.HasOverpaymentInterestRate, model.GetOverpaymentInterestRate)
+		case "StartDate":
+			return generatedUint32(model.HasStartDate, model.GetStartDate)
+		case "PaymentInterval":
+			return generatedUint32(model.HasPaymentInterval, model.GetPaymentInterval)
+		case "GracePeriod":
+			return generatedUint32(model.HasGracePeriod, model.GetGracePeriod)
+		case "PreviousPaymentDueDate":
+			return generatedUint32(model.HasPreviousPaymentDueDate, model.GetPreviousPaymentDueDate)
+		case "NextPaymentDueDate":
+			return generatedUint32(model.HasNextPaymentDueDate, model.GetNextPaymentDueDate)
+		case "PaymentRemaining":
+			return generatedUint32(model.HasPaymentRemaining, model.GetPaymentRemaining)
+		case "Flags":
+			return generatedUint32(model.HasFlags, model.GetFlags)
+		}
+	case *entry.LoanBroker:
+		switch key {
+		case "Sequence":
+			return generatedUint32(model.HasSequence, model.GetSequence)
+		case "LoanSequence":
+			return generatedUint32(model.HasLoanSequence, model.GetLoanSequence)
+		case "OwnerCount":
+			return generatedUint32(model.HasOwnerCount, model.GetOwnerCount)
+		case "Flags":
+			return generatedUint32(model.HasFlags, model.GetFlags)
+		}
+	case *entry.Vault:
+		switch key {
+		case "SubscriptionDate":
+			return generatedUint32(model.HasSubscriptionDate, model.GetSubscriptionDate)
+		case "RedemptionDate":
+			return generatedUint32(model.HasRedemptionDate, model.GetRedemptionDate)
+		case "Flags":
+			return generatedUint32(model.HasFlags, model.GetFlags)
+		}
+	}
+	return 0, false
+}
+
+func (d decodedLendingEntry) int32(key string) (int32, bool) {
+	model, ok := d.model.(*entry.Loan)
+	if !ok || key != "LoanScale" {
+		return 0, false
+	}
+	return int32(model.LoanScale), model.HasLoanScale()
+}
+
+func (d decodedLendingEntry) hash32(key string) ([32]byte, bool) {
+	switch model := d.model.(type) {
+	case *entry.Loan:
+		if key == "LoanBrokerID" && model.HasLoanBrokerID() {
+			value, err := model.GetLoanBrokerID()
+			return value, err == nil
+		}
+	case *entry.LoanBroker:
+		if key == "VaultID" && model.HasVaultID() {
+			value, err := model.GetVaultID()
+			return value, err == nil
+		}
+	}
+	return [32]byte{}, false
+}
+
+func (d decodedLendingEntry) account(key string) ([20]byte, bool) {
+	if key != "Account" {
+		return [20]byte{}, false
+	}
+	switch model := d.model.(type) {
+	case *entry.LoanBroker:
+		if model.HasAccount() {
+			value, err := model.GetAccount()
+			return value, err == nil
+		}
+	case *entry.Vault:
+		if model.HasAccount() {
+			value, err := model.GetAccount()
+			return value, err == nil
+		}
+	}
+	return [20]byte{}, false
+}
+
+func (d decodedLendingEntry) issue(key string) (entry.IssueValue, bool) {
+	model, ok := d.model.(*entry.Vault)
+	if !ok || key != "Asset" || !model.HasAsset() {
+		return entry.IssueValue{}, false
+	}
+	value, err := model.GetAsset()
+	return value, err == nil
+}
+
+func loanNumber(fields decodedLendingEntry, key string, numberContext state.NumberContext) (state.XRPLNumber, bool) {
+	zero := numberContext.Int(0)
+	s, ok := fields.number(key)
 	if !ok {
 		return zero, false
 	}
@@ -116,7 +262,7 @@ func loanNumber(fields map[string]any, key string, numberContext state.NumberCon
 	return n, ok
 }
 
-func loanAllZero(fields map[string]any, numberContext state.NumberContext) (bool, bool) {
+func loanAllZero(fields decodedLendingEntry, numberContext state.NumberContext) (bool, bool) {
 	for _, field := range []string{"TotalValueOutstanding", "PrincipalOutstanding", "ManagementFeeOutstanding"} {
 		n, ok := loanNumber(fields, field, numberContext)
 		if !ok {
@@ -129,39 +275,12 @@ func loanAllZero(fields map[string]any, numberContext state.NumberContext) (bool
 	return true, true
 }
 
-func loanFlag(fields map[string]any, flag uint32) bool {
+func loanFlag(fields decodedLendingEntry, flag uint32) bool {
 	return u32Field(fields, "Flags")&flag != 0
 }
 
-func loanDueDate(fields map[string]any) (uint32, bool) {
-	raw, present := fields["NextPaymentDueDate"]
-	if !present {
-		return 0, true
-	}
-	switch v := raw.(type) {
-	case uint8:
-		return uint32(v), true
-	case uint16:
-		return uint32(v), true
-	case uint32:
-		return v, true
-	case uint64:
-		return uint32(v), true
-	case int8:
-		return uint32(v), true
-	case int16:
-		return uint32(v), true
-	case int32:
-		return uint32(v), true
-	case int:
-		return uint32(v), true
-	case int64:
-		return uint32(v), true
-	case float64:
-		return uint32(v), true
-	default:
-		return 0, false
-	}
+func loanDueDate(fields decodedLendingEntry) (uint32, bool) {
+	return u32FieldPresent(fields, "NextPaymentDueDate")
 }
 
 func transactionType(txn Transaction) TxType {
@@ -210,14 +329,16 @@ func checkValidLoanForTx(txn Transaction, result Result, entries []InvariantEntr
 		if err != nil {
 			return lendingViolation("ValidLoan", fmt.Sprintf("could not decode Loan: %v", err))
 		}
-		var before map[string]any
+		var before decodedLendingEntry
+		beforePresent := false
 		if e.Before != nil {
 			before, err = decodeEntry(e.Before)
 			if err != nil {
 				return lendingViolation("ValidLoan", fmt.Sprintf("could not decode prior Loan: %v", err))
 			}
+			beforePresent = true
 		}
-		if before == nil && result == TesSUCCESS && view != nil {
+		if !beforePresent && result == TesSUCCESS && view != nil {
 			vaultData, found, violation := loanVaultForSchedule(view, after)
 			if violation != nil {
 				return violation
@@ -241,7 +362,7 @@ func checkValidLoanForTx(txn Transaction, result Result, entries []InvariantEntr
 			return lendingViolation("ValidLoan", "loan with payments remaining is fully paid off")
 		}
 
-		if !lpV11 && before != nil && loanFlag(before, lsfLoanOverpaymentFlag) != loanFlag(after, lsfLoanOverpaymentFlag) {
+		if !lpV11 && beforePresent && loanFlag(before, lsfLoanOverpaymentFlag) != loanFlag(after, lsfLoanOverpaymentFlag) {
 			return lendingViolation("ValidLoan", "loan overpayment flag changed")
 		}
 		for _, field := range []string{"LoanServiceFee", "LatePaymentFee", "ClosePaymentFee", "PrincipalOutstanding", "TotalValueOutstanding", "ManagementFeeOutstanding"} {
@@ -264,7 +385,7 @@ func checkValidLoanForTx(txn Transaction, result Result, entries []InvariantEntr
 		if !lpV11 {
 			continue
 		}
-		if before == nil && txType != protocol.TxTypeLoanSet {
+		if !beforePresent && txType != protocol.TxTypeLoanSet {
 			return lendingViolation("ValidLoan", "loan created by a transaction other than LoanSet")
 		}
 		if paymentRemaining == 0 {
@@ -276,7 +397,7 @@ func checkValidLoanForTx(txn Transaction, result Result, entries []InvariantEntr
 				return lendingViolation("ValidLoan", "loan with zero payments must have zero next payment due date")
 			}
 		}
-		if before != nil {
+		if beforePresent {
 			if loanFlag(before, entry.LsfLoanImpaired) != loanFlag(after, entry.LsfLoanImpaired) &&
 				txType != protocol.TxTypeLoanManage && txType != protocol.TxTypeLoanPay {
 				return lendingViolation("ValidLoan", "loan impaired flag changed outside LoanManage or LoanPay")
@@ -301,7 +422,7 @@ func checkValidLoanForTx(txn Transaction, result Result, entries []InvariantEntr
 			_ = broker
 		}
 
-		if result == TesSUCCESS && txType == protocol.TxTypeLoanPay && before != nil && paymentRemaining != 0 {
+		if result == TesSUCCESS && txType == protocol.TxTypeLoanPay && beforePresent && paymentRemaining != 0 {
 			beforePrincipal, bok := loanNumber(before, "PrincipalOutstanding", numberContext)
 			afterPrincipal, aok := loanNumber(after, "PrincipalOutstanding", numberContext)
 			beforeRemaining := u32Field(before, "PaymentRemaining")
@@ -341,15 +462,12 @@ func checkValidLoanForTx(txn Transaction, result Result, entries []InvariantEntr
 }
 
 // Missing brokers and vaults do not impose a creation schedule constraint.
-func loanVaultForSchedule(view ReadView, loan map[string]any) ([]byte, bool, *InvariantViolation) {
-	brokerIDText, ok := loan["LoanBrokerID"].(string)
+func loanVaultForSchedule(view ReadView, loan decodedLendingEntry) ([]byte, bool, *InvariantViolation) {
+	brokerID, ok := loan.hash32("LoanBrokerID")
 	if !ok {
 		return nil, false, lendingViolation("ValidLoan", "loan broker ID is malformed")
 	}
-	brokerID, err := hexDecode32(brokerIDText)
-	if err != nil {
-		return nil, false, lendingViolation("ValidLoan", "loan broker ID is malformed")
-	}
+	var err error
 	brokerData, err := view.Read(keylet.LoanBrokerByID(brokerID))
 	if err != nil {
 		return nil, false, lendingViolation("ValidLoan", fmt.Sprintf("could not read LoanBroker: %v", err))
@@ -361,12 +479,8 @@ func loanVaultForSchedule(view ReadView, loan map[string]any) ([]byte, bool, *In
 	if err != nil {
 		return nil, false, lendingViolation("ValidLoan", fmt.Sprintf("could not decode LoanBroker: %v", err))
 	}
-	vaultIDText, ok := broker["VaultID"].(string)
+	vaultID, ok := broker.hash32("VaultID")
 	if !ok {
-		return nil, false, lendingViolation("ValidLoan", "loan broker vault ID is malformed")
-	}
-	vaultID, err := hexDecode32(vaultIDText)
-	if err != nil {
 		return nil, false, lendingViolation("ValidLoan", "loan broker vault ID is malformed")
 	}
 	vaultData, err := view.Read(keylet.VaultByID(vaultID))
@@ -379,50 +493,43 @@ func loanVaultForSchedule(view ReadView, loan map[string]any) ([]byte, bool, *In
 	return vaultData, true, nil
 }
 
-func loanBrokerVault(view ReadView, loan map[string]any) (map[string]any, []byte, *InvariantViolation) {
-	brokerIDText, ok := loan["LoanBrokerID"].(string)
+func loanBrokerVault(view ReadView, loan decodedLendingEntry) (decodedLendingEntry, []byte, *InvariantViolation) {
+	brokerID, ok := loan.hash32("LoanBrokerID")
 	if !ok {
-		return nil, nil, lendingViolation("ValidLoan", "loan broker ID is malformed")
+		return decodedLendingEntry{}, nil, lendingViolation("ValidLoan", "loan broker ID is malformed")
 	}
-	brokerID, err := hexDecode32(brokerIDText)
-	if err != nil {
-		return nil, nil, lendingViolation("ValidLoan", "loan broker ID is malformed")
-	}
+	var err error
 	brokerData, err := view.Read(keylet.LoanBrokerByID(brokerID))
 	if err != nil {
-		return nil, nil, lendingViolation("ValidLoan", fmt.Sprintf("could not read LoanBroker: %v", err))
+		return decodedLendingEntry{}, nil, lendingViolation("ValidLoan", fmt.Sprintf("could not read LoanBroker: %v", err))
 	}
 	if brokerData == nil {
-		return nil, nil, lendingViolation("ValidLoan", "loan broker does not exist")
+		return decodedLendingEntry{}, nil, lendingViolation("ValidLoan", "loan broker does not exist")
 	}
 	broker, err := decodeEntry(brokerData)
 	if err != nil {
-		return nil, nil, lendingViolation("ValidLoan", fmt.Sprintf("could not decode LoanBroker: %v", err))
+		return decodedLendingEntry{}, nil, lendingViolation("ValidLoan", fmt.Sprintf("could not decode LoanBroker: %v", err))
 	}
-	vaultIDText, ok := broker["VaultID"].(string)
+	vaultID, ok := broker.hash32("VaultID")
 	if !ok {
-		return nil, nil, lendingViolation("ValidLoan", "loan broker vault ID is malformed")
-	}
-	vaultID, err := hexDecode32(vaultIDText)
-	if err != nil {
-		return nil, nil, lendingViolation("ValidLoan", "loan broker vault ID is malformed")
+		return decodedLendingEntry{}, nil, lendingViolation("ValidLoan", "loan broker vault ID is malformed")
 	}
 	vaultData, err := view.Read(keylet.VaultByID(vaultID))
 	if err != nil {
-		return nil, nil, lendingViolation("ValidLoan", fmt.Sprintf("could not read Vault: %v", err))
+		return decodedLendingEntry{}, nil, lendingViolation("ValidLoan", fmt.Sprintf("could not read Vault: %v", err))
 	}
 	if vaultData == nil {
-		return nil, nil, lendingViolation("ValidLoan", "loan broker vault does not exist")
+		return decodedLendingEntry{}, nil, lendingViolation("ValidLoan", "loan broker vault does not exist")
 	}
 	return broker, vaultData, nil
 }
 
-func checkLoanRedemptionSchedule(loan map[string]any, vaultData []byte) *InvariantViolation {
+func checkLoanRedemptionSchedule(loan decodedLendingEntry, vaultData []byte) *InvariantViolation {
 	vaultFields, err := decodeEntry(vaultData)
 	if err != nil {
 		return lendingViolation("ValidLoan", fmt.Sprintf("could not decode Vault: %v", err))
 	}
-	vaultKind, present := vvU64Present(vaultFields, "VaultKind")
+	vaultKind, present := u32FieldPresent(vaultFields, "VaultKind")
 	if !present || uint8(vaultKind) != vault.VaultKindClosedEnded {
 		return nil
 	}
@@ -435,17 +542,17 @@ func checkLoanRedemptionSchedule(loan map[string]any, vaultData []byte) *Invaria
 		return lendingViolation("ValidLoan", "closed-ended loan PaymentInterval is malformed")
 	}
 	remaining := uint64(u32Field(loan, "PaymentRemaining"))
-	redemption, present := vvU64Present(vaultFields, "RedemptionDate")
+	redemption, present := u32FieldPresent(vaultFields, "RedemptionDate")
 	if !present {
 		return lendingViolation("ValidLoan", "closed-ended vault RedemptionDate is malformed")
 	}
-	if uint64(start)+uint64(interval)*remaining+vault.LoanRedemptionBuffer > redemption {
+	if uint64(start)+uint64(interval)*remaining+vault.LoanRedemptionBuffer > uint64(redemption) {
 		return lendingViolation("ValidLoan", "closed-ended loan final payment must precede RedemptionDate by at least the redemption buffer")
 	}
 	return nil
 }
 
-func checkLoanInterest(loan, vaultData map[string]any, numberContext state.NumberContext) *InvariantViolation {
+func checkLoanInterest(loan, vaultData decodedLendingEntry, numberContext state.NumberContext) *InvariantViolation {
 	vaultAsset, ok := loanVaultAsset(vaultData, numberContext.Scale())
 	if !ok {
 		return lendingViolation("ValidLoan", "loan broker vault asset is malformed")
@@ -470,12 +577,34 @@ func checkLoanInterest(loan, vaultData map[string]any, numberContext state.Numbe
 	return nil
 }
 
-func loanVaultAsset(fields map[string]any, scale state.MantissaScale) (vvAsset, bool) {
-	asset, ok := fields["Asset"].(map[string]any)
+func loanVaultAsset(fields decodedLendingEntry, scale state.MantissaScale) (vvAsset, bool) {
+	asset, ok := fields.issue("Asset")
 	if !ok {
 		return vvAsset{}, false
 	}
-	return vvAssetFromMap(asset, scale), true
+	return vvAssetFromIssue(asset, scale)
+}
+
+func vvAssetFromIssue(issue entry.IssueValue, scale state.MantissaScale) (vvAsset, bool) {
+	if issue.MPTIssuanceID != "" {
+		decoded, err := hex.DecodeString(issue.MPTIssuanceID)
+		if err != nil || len(decoded) != 24 {
+			return vvAsset{}, false
+		}
+		asset := vvAsset{isMPT: true, numberScale: scale}
+		copy(asset.mptID[:], decoded)
+		return asset, true
+	}
+	if isNativeXRPCurrency(issue.Currency) && issue.Issuer == "" {
+		return vvAsset{isXRP: true, numberScale: scale}, true
+	}
+	asset := vvAsset{currency: issue.Currency, numberScale: scale}
+	issuer, err := state.DecodeAccountID(issue.Issuer)
+	if err != nil {
+		return vvAsset{}, false
+	}
+	asset.issuer = issuer
+	return asset, true
 }
 
 func checkValidLoanBroker(entries []InvariantEntry, view ReadView, rules *amendment.Rules, numberContexts ...state.NumberContext) *InvariantViolation {
@@ -598,12 +727,8 @@ func checkValidLoanBrokerForTx(txn Transaction, entries []InvariantEntry, view R
 				if view == nil {
 					return lendingViolation("ValidLoanBroker", "deleted LoanBroker debt has no live Vault scale")
 				}
-				vaultIDText, ok := fields["VaultID"].(string)
+				vaultID, ok := fields.hash32("VaultID")
 				if !ok {
-					return lendingViolation("ValidLoanBroker", "deleted LoanBroker vault ID is malformed")
-				}
-				vaultID, err := hexDecode32(vaultIDText)
-				if err != nil {
 					return lendingViolation("ValidLoanBroker", "deleted LoanBroker vault ID is malformed")
 				}
 				vaultData, err := view.Read(keylet.VaultByID(vaultID))
@@ -722,25 +847,17 @@ func checkValidLoanBrokerForTx(txn Transaction, entries []InvariantEntry, view R
 				return lendingViolation("ValidLoanBroker", "loan sequence number decreased")
 			}
 		}
-		vaultIDText, ok := after["VaultID"].(string)
+		vaultID, ok := after.hash32("VaultID")
 		if !ok {
 			return lendingViolation("ValidLoanBroker", "loan broker has no vault ID")
-		}
-		vaultID, err := hexDecode32(vaultIDText)
-		if err != nil {
-			return lendingViolation("ValidLoanBroker", "loan broker vault ID is malformed")
 		}
 		vaultData, err := view.Read(keylet.VaultByID(vaultID))
 		if err != nil || vaultData == nil {
 			return lendingViolation("ValidLoanBroker", "loan broker vault ID is invalid")
 		}
-		pseudoAddr, ok := after["Account"].(string)
+		pseudoID, ok := after.account("Account")
 		if !ok {
 			return lendingViolation("ValidLoanBroker", "loan broker has no account")
-		}
-		pseudoID, err := state.DecodeAccountID(pseudoAddr)
-		if err != nil {
-			return lendingViolation("ValidLoanBroker", "loan broker account is malformed")
 		}
 		pseudoBalance, ok := vault.PseudoAssetHoldsWithNumberContext(view, pseudoID, vaultData, numberContext)
 		if !ok {
@@ -786,18 +903,4 @@ func checkValidLoanBrokerForTx(txn Transaction, entries []InvariantEntry, view R
 		}
 	}
 	return nil
-}
-
-// hexDecode32 decodes a 64-char hex string to a [32]byte.
-func hexDecode32(s string) ([32]byte, error) {
-	var h [32]byte
-	b, err := hex.DecodeString(s)
-	if err != nil {
-		return h, err
-	}
-	if len(b) != 32 {
-		return h, fmt.Errorf("expected 32 bytes, got %d", len(b))
-	}
-	copy(h[:], b)
-	return h, nil
 }

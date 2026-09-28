@@ -7,7 +7,6 @@ import (
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -380,31 +379,45 @@ func IsLPTokenFrozen(view ReadOnlyLedgerView, accountID [20]byte, asset, asset2 
 // AMM ledger entry without depending on the amm package (which would form an
 // import cycle).
 func decodeAMMPoolAssets(data []byte) (Asset, Asset, bool) {
-	fields, err := binarycodec.Decode(hex.EncodeToString(data))
+	typ, err := state.DecodeType(data)
+	if err != nil || typ != entry.TypeAMM {
+		return Asset{}, Asset{}, false
+	}
+	decoded := entry.New(typ)
+	if decoded == nil {
+		return Asset{}, Asset{}, false
+	}
+	if err := decoded.Decode(data); err != nil {
+		return Asset{}, Asset{}, false
+	}
+	amm, ok := decoded.(*entry.AMM)
+	if !ok {
+		return Asset{}, Asset{}, false
+	}
+	assetValue, err := amm.GetAsset()
 	if err != nil {
 		return Asset{}, Asset{}, false
 	}
-	asset, ok1 := issueFromField(fields["Asset"])
-	asset2, ok2 := issueFromField(fields["Asset2"])
+	asset2Value, err := amm.GetAsset2()
+	if err != nil {
+		return Asset{}, Asset{}, false
+	}
+	asset, ok1 := issueFromField(assetValue)
+	asset2, ok2 := issueFromField(asset2Value)
 	if !ok1 || !ok2 {
 		return Asset{}, Asset{}, false
 	}
 	return asset, asset2, true
 }
 
-func issueFromField(field any) (Asset, bool) {
-	m, ok := field.(map[string]any)
-	if !ok {
+func issueFromField(field entry.IssueValue) (Asset, bool) {
+	if field.MPTIssuanceID != "" {
+		return Asset{MPTIssuanceID: field.MPTIssuanceID}, true
+	}
+	if field.Currency == "" {
 		return Asset{}, false
 	}
-	asset := Asset{}
-	if currency, ok := m["currency"].(string); ok {
-		asset.Currency = currency
-	}
-	if issuer, ok := m["issuer"].(string); ok {
-		asset.Issuer = issuer
-	}
-	return asset, true
+	return Asset{Currency: field.Currency, Issuer: field.Issuer}, true
 }
 
 // LPTokenFreezeStatus reports the outcome of probing whether a token's issuer is

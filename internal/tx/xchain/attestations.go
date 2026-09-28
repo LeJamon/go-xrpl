@@ -1,8 +1,8 @@
 package xchain
 
 import (
+	"encoding/hex"
 	"errors"
-	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -19,15 +19,15 @@ type signerSet struct {
 }
 
 func loadSignerSet(view tx.ReadOnlyLedgerView, bridge *entry.Bridge) (signerSet, ter.Result) {
-	doorID, err := state.DecodeAccountID(bridge.Account)
+	door, err := bridge.GetAccount()
 	if err != nil {
 		return signerSet{}, ter.TecINTERNAL
 	}
-	door, err := state.ReadAccountRoot(view, doorID)
-	if err != nil || door == nil {
+	doorRoot, err := state.ReadAccountRoot(view, door)
+	if err != nil || doorRoot == nil {
 		return signerSet{}, ter.TecINTERNAL
 	}
-	data, err := view.Read(keylet.SignerList(doorID))
+	data, err := view.Read(keylet.SignerList(door))
 	if err != nil {
 		return signerSet{}, ter.TecINTERNAL
 	}
@@ -127,137 +127,261 @@ type storedCreateAttestation struct {
 
 const maxStoredAttestations = 256
 
-func attestationsWithinLimit(values []any) bool {
-	return len(values) <= maxStoredAttestations
-}
-
-func unwrapAttestation(value any, name string) (map[string]any, bool) {
-	wrapper, ok := value.(map[string]any)
-	if !ok {
-		return nil, false
-	}
-	inner, ok := wrapper[name].(map[string]any)
-	return inner, ok
-}
-
-func boolValue(value any) (bool, bool) {
-	switch v := value.(type) {
-	case bool:
-		return v, true
-	case int:
-		return v != 0, true
-	case uint8:
-		return v != 0, true
-	case uint32:
-		return v != 0, true
-	case uint64:
-		return v != 0, true
-	case float64:
-		return v != 0, true
+func attestationsWithinLimit(values any) bool {
+	switch values := values.(type) {
+	case []entry.XChainClaimProofSigValue:
+		return len(values) <= maxStoredAttestations
+	case []entry.XChainCreateAccountProofSigValue:
+		return len(values) <= maxStoredAttestations
 	default:
-		return false, false
+		return false
 	}
 }
 
-func parseStoredClaim(value any) (storedClaimAttestation, bool) {
-	fields, ok := unwrapAttestation(value, "XChainClaimProofSig")
+func accountString(value [20]byte) (string, bool) {
+	account, err := state.EncodeAccountID(value)
+	return account, err == nil
+}
+
+func parseStoredClaim(value entry.XChainClaimProofSigValue) (storedClaimAttestation, bool) {
+	signer, err := value.GetAttestationSignerAccount()
+	if err != nil {
+		return storedClaimAttestation{}, false
+	}
+	signerAccount, ok := accountString(signer)
 	if !ok {
 		return storedClaimAttestation{}, false
 	}
-	amount, err := amountFromAny(fields["Amount"])
-	locking, okLock := boolValue(fields["WasLockingChainSend"])
-	result := storedClaimAttestation{
-		signerAccount: stringField(fields, "AttestationSignerAccount"),
-		publicKey:     stringField(fields, "PublicKey"),
-		amount:        amount, rewardAccount: stringField(fields, "AttestationRewardAccount"),
-		lockingSend: locking, destination: stringField(fields, "Destination"),
+	reward, err := value.GetAttestationRewardAccount()
+	if err != nil {
+		return storedClaimAttestation{}, false
 	}
-	return result, err == nil && okLock && result.signerAccount != "" && result.publicKey != ""
+	rewardAccount, ok := accountString(reward)
+	if !ok {
+		return storedClaimAttestation{}, false
+	}
+	amountValue, err := value.GetAmount()
+	if err != nil {
+		return storedClaimAttestation{}, false
+	}
+	amount, err := state.AmountFromLedgerValue(amountValue)
+	if err != nil {
+		return storedClaimAttestation{}, false
+	}
+	locking, err := value.GetWasLockingChainSend()
+	if err != nil {
+		return storedClaimAttestation{}, false
+	}
+	destination := ""
+	if value.HasDestination() {
+		destinationID, err := value.GetDestination()
+		if err != nil {
+			return storedClaimAttestation{}, false
+		}
+		destination, ok = accountString(destinationID)
+		if !ok {
+			return storedClaimAttestation{}, false
+		}
+	}
+	publicKey, err := value.GetPublicKey()
+	if err != nil {
+		return storedClaimAttestation{}, false
+	}
+	return storedClaimAttestation{
+		signerAccount: signerAccount,
+		publicKey:     hex.EncodeToString(publicKey),
+		amount:        amount,
+		rewardAccount: rewardAccount,
+		lockingSend:   locking != 0,
+		destination:   destination,
+	}, true
 }
 
-func parseStoredCreate(value any) (storedCreateAttestation, bool) {
-	fields, ok := unwrapAttestation(value, "XChainCreateAccountProofSig")
-	if !ok {
-		return storedCreateAttestation{}, false
-	}
-	amount, err := amountFromAny(fields["Amount"])
+func parseStoredCreate(value entry.XChainCreateAccountProofSigValue) (storedCreateAttestation, bool) {
+	signer, err := value.GetAttestationSignerAccount()
 	if err != nil {
 		return storedCreateAttestation{}, false
 	}
-	reward, err := amountFromAny(fields["SignatureReward"])
-	locking, okLock := boolValue(fields["WasLockingChainSend"])
-	result := storedCreateAttestation{
-		signerAccount: stringField(fields, "AttestationSignerAccount"),
-		publicKey:     stringField(fields, "PublicKey"), amount: amount, reward: reward,
-		rewardAccount: stringField(fields, "AttestationRewardAccount"),
-		lockingSend:   locking, destination: stringField(fields, "Destination"),
+	signerAccount, ok := accountString(signer)
+	if !ok {
+		return storedCreateAttestation{}, false
 	}
-	return result, err == nil && okLock && result.signerAccount != "" && result.publicKey != ""
+	rewardAccountID, err := value.GetAttestationRewardAccount()
+	if err != nil {
+		return storedCreateAttestation{}, false
+	}
+	rewardAccount, ok := accountString(rewardAccountID)
+	if !ok {
+		return storedCreateAttestation{}, false
+	}
+	amountValue, err := value.GetAmount()
+	if err != nil {
+		return storedCreateAttestation{}, false
+	}
+	amount, err := state.AmountFromLedgerValue(amountValue)
+	if err != nil {
+		return storedCreateAttestation{}, false
+	}
+	rewardValue, err := value.GetSignatureReward()
+	if err != nil {
+		return storedCreateAttestation{}, false
+	}
+	reward, err := state.AmountFromLedgerValue(rewardValue)
+	if err != nil {
+		return storedCreateAttestation{}, false
+	}
+	locking, err := value.GetWasLockingChainSend()
+	if err != nil {
+		return storedCreateAttestation{}, false
+	}
+	destinationID, err := value.GetDestination()
+	if err != nil {
+		return storedCreateAttestation{}, false
+	}
+	destination, ok := accountString(destinationID)
+	if !ok {
+		return storedCreateAttestation{}, false
+	}
+	publicKey, err := value.GetPublicKey()
+	if err != nil {
+		return storedCreateAttestation{}, false
+	}
+	return storedCreateAttestation{
+		signerAccount: signerAccount,
+		publicKey:     hex.EncodeToString(publicKey),
+		amount:        amount,
+		reward:        reward,
+		rewardAccount: rewardAccount,
+		lockingSend:   locking != 0,
+		destination:   destination,
+	}, true
 }
 
-func stringField(fields map[string]any, name string) string {
-	value, _ := fields[name].(string)
+func claimProofValue(x *XChainAddClaimAttestation) (entry.XChainClaimProofSigValue, error) {
+	var value entry.XChainClaimProofSigValue
+	signer, err := state.DecodeAccountID(x.AttestationSignerAccount)
+	if err != nil {
+		return value, err
+	}
+	if err := value.SetAttestationSignerAccountValue(signer); err != nil {
+		return value, err
+	}
+	rewardAccount, err := state.DecodeAccountID(x.AttestationRewardAccount)
+	if err != nil {
+		return value, err
+	}
+	if err := value.SetAttestationRewardAccountValue(rewardAccount); err != nil {
+		return value, err
+	}
+	publicKey, err := hex.DecodeString(x.PublicKey)
+	if err != nil {
+		return value, err
+	}
+	value.SetPublicKeyValue(publicKey)
+	if err := value.SetAmountValue(ledgerAmountValue(x.Amount)); err != nil {
+		return value, err
+	}
+	value.SetWasLockingChainSendValue(boolInt(x.WasLockingChainSend != 0))
+	if x.Destination != "" {
+		destination, err := state.DecodeAccountID(x.Destination)
+		if err != nil {
+			return value, err
+		}
+		if err := value.SetDestinationValue(destination); err != nil {
+			return value, err
+		}
+	}
+	return value, nil
+}
+
+func createProofValue(x *XChainAddAccountCreateAttestation) (entry.XChainCreateAccountProofSigValue, error) {
+	var value entry.XChainCreateAccountProofSigValue
+	signer, err := state.DecodeAccountID(x.AttestationSignerAccount)
+	if err != nil {
+		return value, err
+	}
+	if err := value.SetAttestationSignerAccountValue(signer); err != nil {
+		return value, err
+	}
+	rewardAccount, err := state.DecodeAccountID(x.AttestationRewardAccount)
+	if err != nil {
+		return value, err
+	}
+	if err := value.SetAttestationRewardAccountValue(rewardAccount); err != nil {
+		return value, err
+	}
+	publicKey, err := hex.DecodeString(x.PublicKey)
+	if err != nil {
+		return value, err
+	}
+	value.SetPublicKeyValue(publicKey)
+	if err := value.SetAmountValue(ledgerAmountValue(x.Amount)); err != nil {
+		return value, err
+	}
+	if err := value.SetSignatureRewardValue(ledgerAmountValue(x.SignatureReward)); err != nil {
+		return value, err
+	}
+	value.SetWasLockingChainSendValue(boolInt(x.WasLockingChainSend != 0))
+	destination, err := state.DecodeAccountID(x.Destination)
+	if err != nil {
+		return value, err
+	}
+	if err := value.SetDestinationValue(destination); err != nil {
+		return value, err
+	}
+	return value, nil
+}
+
+func ledgerAmountValue(amount tx.Amount) entry.AmountValue {
+	value := entry.AmountValue{Value: amount.Value(), Currency: amount.Currency, Issuer: amount.Issuer}
+	if amount.IsMPT() {
+		value.Currency = ""
+		value.Issuer = ""
+		value.MPTIssuanceID = amount.MPTIssuanceID()
+	}
 	return value
 }
 
-func storedClaimMap(x *XChainAddClaimAttestation) map[string]any {
-	fields := map[string]any{
-		"AttestationSignerAccount": x.AttestationSignerAccount,
-		"PublicKey":                x.PublicKey,
-		"Amount":                   mustAmountAny(x.Amount),
-		"AttestationRewardAccount": x.AttestationRewardAccount,
-		"WasLockingChainSend":      boolInt(x.WasLockingChainSend != 0),
+func addOrReplaceClaim(values []entry.XChainClaimProofSigValue, x *XChainAddClaimAttestation) ([]entry.XChainClaimProofSigValue, error) {
+	newValue, err := claimProofValue(x)
+	if err != nil {
+		return values, err
 	}
-	if x.Destination != "" {
-		fields["Destination"] = x.Destination
-	}
-	return map[string]any{"XChainClaimProofSig": fields}
-}
-
-func storedCreateMap(x *XChainAddAccountCreateAttestation) map[string]any {
-	return map[string]any{"XChainCreateAccountProofSig": map[string]any{
-		"AttestationSignerAccount": x.AttestationSignerAccount,
-		"PublicKey":                x.PublicKey,
-		"Amount":                   mustAmountAny(x.Amount),
-		"SignatureReward":          mustAmountAny(x.SignatureReward),
-		"AttestationRewardAccount": x.AttestationRewardAccount,
-		"WasLockingChainSend":      boolInt(x.WasLockingChainSend != 0),
-		"Destination":              x.Destination,
-	}}
-}
-
-func addOrReplaceClaim(values []any, x *XChainAddClaimAttestation) []any {
 	for i, value := range values {
 		att, ok := parseStoredClaim(value)
 		if ok && att.signerAccount == x.AttestationSignerAccount {
-			values[i] = storedClaimMap(x)
-			return values
+			values[i] = newValue
+			return values, nil
 		}
 	}
-	return append(values, storedClaimMap(x))
+	return append(values, newValue), nil
 }
 
-func addOrReplaceCreate(values []any, x *XChainAddAccountCreateAttestation) []any {
+func addOrReplaceCreate(values []entry.XChainCreateAccountProofSigValue, x *XChainAddAccountCreateAttestation) ([]entry.XChainCreateAccountProofSigValue, error) {
+	newValue, err := createProofValue(x)
+	if err != nil {
+		return values, err
+	}
 	for i, value := range values {
 		att, ok := parseStoredCreate(value)
 		if ok && att.signerAccount == x.AttestationSignerAccount {
-			values[i] = storedCreateMap(x)
-			return values
+			values[i] = newValue
+			return values, nil
 		}
 	}
-	return append(values, storedCreateMap(x))
+	return append(values, newValue), nil
 }
 
 func claimQuorum(
 	view tx.ReadOnlyLedgerView,
-	values []any,
+	values []entry.XChainClaimProofSigValue,
 	signers signerSet,
 	amount tx.Amount,
 	lockingSend bool,
 	destination string,
 	checkDestination bool,
-) ([]any, []string, bool) {
-	valid := make([]any, 0, len(values))
+) ([]entry.XChainClaimProofSigValue, []string, bool) {
+	valid := make([]entry.XChainClaimProofSigValue, 0, len(values))
 	rewards := make([]string, 0, len(values))
 	var weight uint64
 	for _, value := range values {
@@ -280,11 +404,11 @@ func claimQuorum(
 
 func createQuorum(
 	view tx.ReadOnlyLedgerView,
-	values []any,
+	values []entry.XChainCreateAccountProofSigValue,
 	signers signerSet,
 	x *XChainAddAccountCreateAttestation,
-) ([]any, []string, bool) {
-	valid := make([]any, 0, len(values))
+) ([]entry.XChainCreateAccountProofSigValue, []string, bool) {
+	valid := make([]entry.XChainCreateAccountProofSigValue, 0, len(values))
 	rewards := make([]string, 0, len(values))
 	var weight uint64
 	for _, value := range values {
@@ -487,28 +611,74 @@ func rewardShare(pool tx.Amount, count uint64, numberContext state.NumberContext
 func claimOwnerFields(data []byte) (string, uint64, string, ter.Result) {
 	var claim entry.XChainOwnedClaimID
 	if err := claim.Decode(data); err == nil {
-		page, err := parseHexUint(claim.OwnerNode)
+		page, err := claim.GetOwnerNode()
 		if err != nil {
 			return "", 0, "", ter.TecINTERNAL
 		}
-		return claim.Account, page, claim.Sponsor, ter.TesSUCCESS
+		account, err := claim.GetAccount()
+		if err != nil {
+			return "", 0, "", ter.TecINTERNAL
+		}
+		owner, err := state.EncodeAccountID(account)
+		if err != nil {
+			return "", 0, "", ter.TecINTERNAL
+		}
+		sponsor := ""
+		if claim.HasSponsor() {
+			sponsorID, err := claim.GetSponsor()
+			if err != nil {
+				return "", 0, "", ter.TecINTERNAL
+			}
+			sponsor, err = state.EncodeAccountID(sponsorID)
+			if err != nil {
+				return "", 0, "", ter.TecINTERNAL
+			}
+		}
+		return owner, page, sponsor, ter.TesSUCCESS
 	}
 	var create entry.XChainOwnedCreateAccountClaimID
 	if err := create.Decode(data); err != nil {
 		return "", 0, "", ter.TecINTERNAL
 	}
-	page, err := parseHexUint(create.OwnerNode)
+	page, err := create.GetOwnerNode()
 	if err != nil {
 		return "", 0, "", ter.TecINTERNAL
 	}
-	return create.Account, page, create.Sponsor, ter.TesSUCCESS
+	account, err := create.GetAccount()
+	if err != nil {
+		return "", 0, "", ter.TecINTERNAL
+	}
+	owner, err := state.EncodeAccountID(account)
+	if err != nil {
+		return "", 0, "", ter.TecINTERNAL
+	}
+	sponsor := ""
+	if create.HasSponsor() {
+		sponsorID, err := create.GetSponsor()
+		if err != nil {
+			return "", 0, "", ter.TecINTERNAL
+		}
+		sponsor, err = state.EncodeAccountID(sponsorID)
+		if err != nil {
+			return "", 0, "", ter.TecINTERNAL
+		}
+	}
+	return owner, page, sponsor, ter.TesSUCCESS
 }
 
 func bridgeDestinationSide(bridge *entry.Bridge, spec XChainBridge) (chainType, ter.Result) {
-	if bridge.Account == spec.LockingChainDoor {
+	account, err := bridge.GetAccount()
+	if err != nil {
+		return lockingChain, ter.TecINTERNAL
+	}
+	accountString, err := state.EncodeAccountID(account)
+	if err != nil {
+		return lockingChain, ter.TecINTERNAL
+	}
+	if accountString == spec.LockingChainDoor {
 		return lockingChain, ter.TesSUCCESS
 	}
-	if bridge.Account == spec.IssuingChainDoor {
+	if accountString == spec.IssuingChainDoor {
 		return issuingChain, ter.TesSUCCESS
 	}
 	return lockingChain, ter.TecINTERNAL
@@ -552,23 +722,39 @@ func (x *XChainAddClaimAttestation) Apply(ctx *tx.ApplyContext) ter.Result {
 	if _, ok := signers.weights[x.AttestationSignerAccount]; !ok {
 		return ter.TecXCHAIN_PROOF_UNKNOWN_KEY
 	}
-	if claim.OtherChainSource != x.OtherChainSource {
+	otherChainSource, err := claim.GetOtherChainSource()
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	otherChainSourceAddress, err := state.EncodeAccountID(otherChainSource)
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	if otherChainSourceAddress != x.OtherChainSource {
 		return ter.TecXCHAIN_SENDING_ACCOUNT_MISMATCH
 	}
 	if destinationChain(x.WasLockingChainSend != 0) != dstChain {
 		return ter.TecXCHAIN_WRONG_CHAIN
 	}
-	values := append([]any(nil), claim.XChainClaimAttestations...)
+	values, err := claim.GetXChainClaimAttestations()
+	if err != nil {
+		return ter.TecINTERNAL
+	}
 	if !attestationsWithinLimit(values) {
 		return ter.TefEXCEPTION
 	}
 	didModify := false
 	if checkAttestationPublicKey(outer, signers, x.AttestationSignerAccount, x.PublicKey) == ter.TesSUCCESS {
-		values = addOrReplaceClaim(values, x)
+		values, err = addOrReplaceClaim(values, x)
+		if err != nil {
+			return ter.TecINTERNAL
+		}
 		didModify = true
 	}
 	values, rewards, quorum := claimQuorum(outer, values, signers, x.Amount, x.WasLockingChainSend != 0, x.Destination, true)
-	claim.SetXChainClaimAttestations(values)
+	if err := claim.SetXChainClaimAttestationsValue(values); err != nil {
+		return ter.TecINTERNAL
+	}
 	data, encodeResult := encodeEntry(&claim)
 	if encodeResult != ter.TesSUCCESS {
 		return encodeResult
@@ -577,13 +763,25 @@ func (x *XChainAddClaimAttestation) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecINTERNAL
 	}
 	if quorum && x.Destination != "" {
-		reward, err := amountFromAny(claim.SignatureReward)
+		rewardValue, err := claim.GetSignatureReward()
+		if err != nil {
+			return ter.TecINTERNAL
+		}
+		reward, err := state.AmountFromLedgerValue(rewardValue)
+		if err != nil {
+			return ter.TecINTERNAL
+		}
+		claimOwner, err := claim.GetAccount()
+		if err != nil {
+			return ter.TecINTERNAL
+		}
+		claimOwnerAddress, err := state.EncodeAccountID(claimOwner)
 		if err != nil {
 			return ter.TecINTERNAL
 		}
 		final := finalizeClaim(
-			ctx, outer, x.XChainBridge, x.Destination, nil, claim.Account, x.Amount,
-			claim.Account, reward, rewards, srcChain, claimKey, keepClaim, false,
+			ctx, outer, x.XChainBridge, x.Destination, nil, claimOwnerAddress, x.Amount,
+			claimOwnerAddress, reward, rewards, srcChain, claimKey, keepClaim, false,
 		)
 		finalResult := final.result()
 		if finalResult != ter.TesSUCCESS {
@@ -624,7 +822,15 @@ func (x *XChainAddAccountCreateAttestation) Apply(ctx *tx.ApplyContext) ter.Resu
 	if result != ter.TesSUCCESS {
 		return result
 	}
-	claimCount, err := parseHexUint(bridge.XChainAccountClaimCount)
+	claimCount, err := bridge.GetXChainAccountClaimCount()
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	bridgeAccountID, err := bridge.GetAccount()
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	bridgeAccountAddress, err := state.EncodeAccountID(bridgeAccountID)
 	if err != nil {
 		return ter.TecINTERNAL
 	}
@@ -644,22 +850,21 @@ func (x *XChainAddAccountCreateAttestation) Apply(ctx *tx.ApplyContext) ter.Resu
 		return ter.TecINTERNAL
 	}
 	createClaim := data == nil
-	values := []any{}
+	values := []entry.XChainCreateAccountProofSigValue{}
 	var existing entry.XChainOwnedCreateAccountClaimID
 	if !createClaim {
 		if err := existing.Decode(data); err != nil {
 			return ter.TecINTERNAL
 		}
-		values = append(values, existing.XChainCreateAccountAttestations...)
+		values, err = existing.GetXChainCreateAccountAttestations()
+		if err != nil {
+			return ter.TecINTERNAL
+		}
 		if !attestationsWithinLimit(values) {
 			return ter.TefEXCEPTION
 		}
 	} else {
-		doorID, err := state.DecodeAccountID(bridge.Account)
-		if err != nil {
-			return ter.TecINTERNAL
-		}
-		door, err := state.ReadAccountRoot(outer, doorID)
+		door, err := state.ReadAccountRoot(outer, bridgeAccountID)
 		if err != nil || door == nil {
 			return ter.TecINTERNAL
 		}
@@ -672,11 +877,16 @@ func (x *XChainAddAccountCreateAttestation) Apply(ctx *tx.ApplyContext) ter.Resu
 		return ter.TecXCHAIN_PROOF_UNKNOWN_KEY
 	}
 	if checkAttestationPublicKey(outer, signers, x.AttestationSignerAccount, x.PublicKey) == ter.TesSUCCESS {
-		values = addOrReplaceCreate(values, x)
+		values, err = addOrReplaceCreate(values, x)
+		if err != nil {
+			return ter.TecINTERNAL
+		}
 	}
 	values, rewards, quorum := createQuorum(outer, values, signers, x)
 	if !createClaim {
-		existing.SetXChainCreateAccountAttestations(values)
+		if err := existing.SetXChainCreateAccountAttestationsValue(values); err != nil {
+			return ter.TecINTERNAL
+		}
 		data, result := encodeEntry(&existing)
 		if result != ter.TesSUCCESS {
 			return result
@@ -688,8 +898,8 @@ func (x *XChainAddAccountCreateAttestation) Apply(ctx *tx.ApplyContext) ter.Resu
 
 	if quorum && claimCount+1 == x.XChainAccountCreateCount {
 		final := finalizeClaim(
-			ctx, outer, x.XChainBridge, x.Destination, nil, bridge.Account, x.Amount,
-			bridge.Account, x.SignatureReward, rewards, srcChain, claimKey, removeClaim, false,
+			ctx, outer, x.XChainBridge, x.Destination, nil, bridgeAccountAddress, x.Amount,
+			bridgeAccountAddress, x.SignatureReward, rewards, srcChain, claimKey, removeClaim, false,
 		)
 		if fatalResult := final.accountCreateAttestationFatalResult(); fatalResult != ter.TesSUCCESS {
 			return fatalResult
@@ -698,7 +908,7 @@ func (x *XChainAddAccountCreateAttestation) Apply(ctx *tx.ApplyContext) ter.Resu
 		if err != nil || bridge == nil {
 			return ter.TecINTERNAL
 		}
-		bridge.SetXChainAccountClaimCount(strconv.FormatUint(x.XChainAccountCreateCount, 16))
+		bridge.SetXChainAccountClaimCountValue(x.XChainAccountCreateCount)
 		bridgeData, result := encodeEntry(bridge)
 		if result != ter.TesSUCCESS {
 			return result
@@ -707,12 +917,8 @@ func (x *XChainAddAccountCreateAttestation) Apply(ctx *tx.ApplyContext) ter.Resu
 			return ter.TecINTERNAL
 		}
 	} else if createClaim {
-		doorID, err := state.DecodeAccountID(bridge.Account)
-		if err != nil {
-			return ter.TecINTERNAL
-		}
-		dirResult, err := state.DirInsert(outer, keylet.OwnerDir(doorID), claimKey.Key, false, func(dir *state.DirectoryNode) {
-			dir.Owner = doorID
+		dirResult, err := state.DirInsert(outer, keylet.OwnerDir(bridgeAccountID), claimKey.Key, false, func(dir *state.DirectoryNode) {
+			dir.Owner = bridgeAccountID
 		})
 		if err != nil {
 			if errors.Is(err, state.ErrDirFull) {
@@ -721,13 +927,23 @@ func (x *XChainAddAccountCreateAttestation) Apply(ctx *tx.ApplyContext) ter.Resu
 			return ter.TecINTERNAL
 		}
 		claim := &entry.XChainOwnedCreateAccountClaimID{}
-		claim.SetAccount(bridge.Account)
-		claim.SetXChainBridge(bridgeMap(x.XChainBridge))
-		claim.SetXChainAccountCreateCount(strconv.FormatUint(x.XChainAccountCreateCount, 16))
-		claim.SetXChainCreateAccountAttestations(values)
-		claim.SetOwnerNode(strconv.FormatUint(dirResult.Page, 16))
+		if err := claim.SetAccountValue(bridgeAccountID); err != nil {
+			return ter.TecINTERNAL
+		}
+		bridgeSpecValue, err := bridgeValue(x.XChainBridge)
+		if err != nil {
+			return ter.TecINTERNAL
+		}
+		if err := claim.SetXChainBridgeValue(bridgeSpecValue); err != nil {
+			return ter.TecINTERNAL
+		}
+		claim.SetXChainAccountCreateCountValue(x.XChainAccountCreateCount)
+		if err := claim.SetXChainCreateAccountAttestationsValue(values); err != nil {
+			return ter.TecINTERNAL
+		}
+		claim.SetOwnerNodeValue(dirResult.Page)
 		claim.SetFlags(0)
-		door, err := state.ReadAccountRoot(outer, doorID)
+		door, err := state.ReadAccountRoot(outer, bridgeAccountID)
 		if err != nil || door == nil {
 			return ter.TecINTERNAL
 		}
@@ -736,7 +952,7 @@ func (x *XChainAddAccountCreateAttestation) Apply(ctx *tx.ApplyContext) ter.Resu
 		if err != nil {
 			return ter.TecINTERNAL
 		}
-		if err := outer.Update(keylet.Account(doorID), doorData); err != nil {
+		if err := outer.Update(keylet.Account(bridgeAccountID), doorData); err != nil {
 			return ter.TecINTERNAL
 		}
 		claimData, result := encodeEntry(claim)

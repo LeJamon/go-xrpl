@@ -727,13 +727,9 @@ func CanTransferLPToken(view state.ReadOnlyLedgerView, from, to, lpTokenIssuer [
 	if err := amm.Decode(ammRaw); err != nil {
 		return ter.TecINTERNAL
 	}
-	checkAsset := func(value any) ter.Result {
-		fields, ok := value.(map[string]any)
-		if !ok {
-			return ter.TesSUCCESS
-		}
-		idValue, ok := fields["mpt_issuance_id"].(string)
-		if !ok || idValue == "" {
+	checkAsset := func(value entry.IssueValue) ter.Result {
+		idValue := value.MPTIssuanceID
+		if idValue == "" {
 			return ter.TesSUCCESS
 		}
 		id, err := DecodeID(idValue)
@@ -742,10 +738,18 @@ func CanTransferLPToken(view state.ReadOnlyLedgerView, from, to, lpTokenIssuer [
 		}
 		return CanTransfer(view, id, from, to)
 	}
-	if result := checkAsset(amm.Asset); result != ter.TesSUCCESS {
+	asset, err := amm.GetAsset()
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if result := checkAsset(asset); result != ter.TesSUCCESS {
 		return result
 	}
-	return checkAsset(amm.Asset2)
+	asset2, err := amm.GetAsset2()
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	return checkAsset(asset2)
 }
 
 func canTransferAsset(view state.ReadOnlyLedgerView, asset tx.Asset, from, to [20]byte, depth uint8) ter.Result {
@@ -862,22 +866,20 @@ func vaultAsset(view state.ReadOnlyLedgerView, vaultID [32]byte) (tx.Asset, ter.
 	if err := decoded.Decode(raw); err != nil {
 		return tx.Asset{}, ter.TefINTERNAL
 	}
-	issue, ok := decoded.Asset.(map[string]any)
-	if !ok {
+	issue, err := decoded.GetAsset()
+	if err != nil {
 		return tx.Asset{}, ter.TefINTERNAL
 	}
-	if id, ok := issue["mpt_issuance_id"].(string); ok {
+	if id := issue.MPTIssuanceID; id != "" {
 		if _, err := DecodeID(id); err != nil {
 			return tx.Asset{}, ter.TefINTERNAL
 		}
 		return tx.Asset{MPTIssuanceID: id}, ter.TesSUCCESS
 	}
-	currency, ok := issue["currency"].(string)
-	if !ok || currency == "" {
+	if issue.Currency == "" {
 		return tx.Asset{}, ter.TefINTERNAL
 	}
-	issuer, _ := issue["issuer"].(string)
-	return tx.Asset{Currency: currency, Issuer: issuer}, ter.TesSUCCESS
+	return tx.Asset{Currency: issue.Currency, Issuer: issue.Issuer}, ter.TesSUCCESS
 }
 
 func Funds(view state.ReadOnlyLedgerView, id [24]byte, account [20]byte, zeroIfFrozen bool) (int64, ter.Result) {

@@ -1,10 +1,8 @@
 package nftoken
 
 import (
-	"fmt"
-
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // ---------------------------------------------------------------------------
@@ -23,26 +21,12 @@ func serializeNFTokenPage(page *state.NFTokenPageData) ([]byte, error) {
 	return state.SerializeNFTokenPage(page)
 }
 
-// amountToCodecFormat converts a tx.Amount to the format expected by binarycodec.Encode.
-// XRP → string of drops ("1000000"), IOU → map[string]any{"value":"10","currency":"USD","issuer":"rAddr"}
-func amountToCodecFormat(amt tx.Amount) any {
-	if amt.IsNative() {
-		return fmt.Sprintf("%d", amt.Drops())
-	}
-	return map[string]any{
-		"value":    amt.IOU().String(),
-		"currency": amt.Currency,
-		"issuer":   amt.Issuer,
-	}
-}
-
 // serializeNFTokenOfferRaw serializes an NFToken offer ledger entry from
-// primitive parameters. amount can be a string (XRP drops) or map[string]any
-// (IOU). The serialization logic lives in internal/ledger/state alongside
-// ParseNFTokenOffer.
+// primitive parameters. The serialization logic lives in internal/ledger/state
+// alongside ParseNFTokenOffer.
 func serializeNFTokenOfferRaw(
 	ownerID [20]byte, tokenID [32]byte,
-	amount any, flags uint32,
+	amount entry.AmountValue, flags uint32,
 	ownerNode, offerNode uint64,
 	destination string, expiration *uint32,
 ) ([]byte, error) {
@@ -56,7 +40,7 @@ func serializeNFTokenOffer(nftTx *NFTokenCreateOffer, ownerID [20]byte, tokenID 
 	// sfFlags. rippled sets (*offer)[sfFlags] = isSell ? lsfSellNFToken : 0.
 	return serializeNFTokenOfferRaw(
 		ownerID, tokenID,
-		amountToCodecFormat(nftTx.Amount), nftTx.GetFlags()&NFTokenCreateOfferFlagSellNFToken,
+		nftTx.Amount.LedgerValue(), nftTx.GetFlags()&NFTokenCreateOfferFlagSellNFToken,
 		ownerNode, offerNode,
 		nftTx.Destination, nftTx.Expiration,
 	)

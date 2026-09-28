@@ -2,10 +2,8 @@ package pseudo
 
 import (
 	"bytes"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
 
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -59,52 +57,53 @@ func ParseNegativeUNLSLE(data []byte) (*NegativeUNLSLE, error) {
 		return nil, fmt.Errorf("failed to decode NegativeUNL SLE: %w", err)
 	}
 
+	disabledValidators, err := decoded.GetDisabledValidators()
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode NegativeUNL SLE DisabledValidators: %w", err)
+	}
 	sle := &NegativeUNLSLE{
-		DisabledValidators: make([]DisabledValidator, 0, len(decoded.DisabledValidators)),
+		DisabledValidators: make([]DisabledValidator, 0, len(disabledValidators)),
 	}
 
-	for i, item := range decoded.DisabledValidators {
-		wrapper, ok := item.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("failed to decode NegativeUNL SLE DisabledValidators[%d]: unexpected entry type %T", i, item)
-		}
-		inner, ok := wrapper["DisabledValidator"].(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("failed to decode NegativeUNL SLE DisabledValidators[%d]: missing DisabledValidator", i)
-		}
-		publicKey, ok := inner["PublicKey"].(string)
-		if !ok {
-			return nil, fmt.Errorf("failed to decode NegativeUNL SLE DisabledValidators[%d]: unexpected PublicKey type %T", i, inner["PublicKey"])
-		}
-		publicKeyBytes, err := hex.DecodeString(publicKey)
+	for i, validator := range disabledValidators {
+		publicKeyBytes, err := validator.GetPublicKey()
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode NegativeUNL SLE DisabledValidators[%d] PublicKey: %w", i, err)
 		}
+		firstLedgerSequence, err := validator.GetFirstLedgerSequence()
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode NegativeUNL SLE DisabledValidators[%d] FirstLedgerSequence: %w", i, err)
+		}
 		sle.DisabledValidators = append(sle.DisabledValidators, DisabledValidator{
 			PublicKey:           publicKeyBytes,
-			FirstLedgerSequence: toUint32(inner["FirstLedgerSequence"]),
+			FirstLedgerSequence: firstLedgerSequence,
 		})
 	}
 
 	var err error
-	if decoded.ValidatorToDisable != "" {
-		sle.ValidatorToDisable, err = hex.DecodeString(decoded.ValidatorToDisable)
+	if decoded.HasValidatorToDisable() {
+		sle.ValidatorToDisable, err = decoded.GetValidatorToDisable()
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode NegativeUNL SLE ValidatorToDisable: %w", err)
 		}
 	}
-	if decoded.ValidatorToReEnable != "" {
-		sle.ValidatorToReEnable, err = hex.DecodeString(decoded.ValidatorToReEnable)
+	if decoded.HasValidatorToReEnable() {
+		sle.ValidatorToReEnable, err = decoded.GetValidatorToReEnable()
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode NegativeUNL SLE ValidatorToReEnable: %w", err)
 		}
 	}
-	if decoded.PreviousTxnID != "" {
-		sle.PreviousTxnID, err = hex.DecodeString(decoded.PreviousTxnID)
+	if decoded.HasPreviousTxnID() {
+		previousTxnID, err := decoded.GetPreviousTxnID()
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode NegativeUNL SLE PreviousTxnID: %w", err)
 		}
-		sle.PreviousTxnLgrSeq = decoded.PreviousTxnLgrSeq
+		previousTxnLgrSeq, err := decoded.GetPreviousTxnLgrSeq()
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode NegativeUNL SLE PreviousTxnLgrSeq: %w", err)
+		}
+		sle.PreviousTxnID = append([]byte(nil), previousTxnID[:]...)
+		sle.PreviousTxnLgrSeq = previousTxnLgrSeq
 	}
 
 	return sle, nil
@@ -120,31 +119,31 @@ func SerializeNegativeUNLSLE(sle *NegativeUNLSLE) ([]byte, error) {
 	entry.SetFlags(0)
 
 	if len(sle.DisabledValidators) > 0 {
-		arr := make([]any, len(sle.DisabledValidators))
+		validators := make([]ledgerfields.DisabledValidatorValue, len(sle.DisabledValidators))
 		for i, dv := range sle.DisabledValidators {
-			arr[i] = map[string]any{
-				"DisabledValidator": map[string]any{
-					"PublicKey":           strings.ToUpper(hex.EncodeToString(dv.PublicKey)),
-					"FirstLedgerSequence": dv.FirstLedgerSequence,
-				},
-			}
+			validators[i].SetPublicKeyValue(dv.PublicKey)
+			validators[i].SetFirstLedgerSequence(dv.FirstLedgerSequence)
 		}
-		entry.SetDisabledValidators(arr)
+		if err := entry.SetDisabledValidatorsValue(validators); err != nil {
+			return nil, fmt.Errorf("failed to encode NegativeUNL SLE disabled validators: %w", err)
+		}
 	}
 
 	if len(sle.ValidatorToDisable) > 0 {
-		entry.SetValidatorToDisable(strings.ToUpper(hex.EncodeToString(sle.ValidatorToDisable)))
+		entry.SetValidatorToDisableValue(sle.ValidatorToDisable)
 	}
 
 	if len(sle.ValidatorToReEnable) > 0 {
-		entry.SetValidatorToReEnable(strings.ToUpper(hex.EncodeToString(sle.ValidatorToReEnable)))
+		entry.SetValidatorToReEnableValue(sle.ValidatorToReEnable)
 	}
 
 	if len(sle.PreviousTxnID) > 0 {
 		if len(sle.PreviousTxnID) != 32 {
 			return nil, fmt.Errorf("failed to encode NegativeUNL SLE: PreviousTxnID is %d bytes, want 32", len(sle.PreviousTxnID))
 		}
-		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(sle.PreviousTxnID)))
+		var previousTxnID [32]byte
+		copy(previousTxnID[:], sle.PreviousTxnID)
+		entry.SetPreviousTxnIDValue(previousTxnID)
 		entry.SetPreviousTxnLgrSeq(sle.PreviousTxnLgrSeq)
 	} else if sle.PreviousTxnLgrSeq != 0 {
 		return nil, errors.New("failed to encode NegativeUNL SLE: PreviousTxnLgrSeq set without PreviousTxnID")
@@ -165,11 +164,4 @@ func (sle *NegativeUNLSLE) ContainsValidator(key []byte) bool {
 		}
 	}
 	return false
-}
-
-// toUint32 returns v as a uint32. The binarycodec decodes UInt32 fields as
-// uint32; an absent or wrongly-typed value yields 0.
-func toUint32(v any) uint32 {
-	n, _ := v.(uint32)
-	return n
 }

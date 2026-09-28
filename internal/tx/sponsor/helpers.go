@@ -5,7 +5,6 @@ import (
 	"errors"
 	"math"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -192,7 +191,7 @@ func decrementCount(value *uint32, delta uint32) bool {
 
 type sponsoredTarget struct {
 	key          keylet.Keylet
-	fields       map[string]any
+	model        entry.Entry
 	entryType    entry.Type
 	sponsorField string
 	ownerCount   uint32
@@ -208,18 +207,24 @@ func readSponsoredTarget(view tx.ReadOnlyLedgerView, objectID [32]byte, sponseeI
 		return nil, ter.TecNO_ENTRY
 	}
 
-	entryType := entry.Type(state.EntryTypeCode(data))
+	entryType, err := state.DecodeType(data)
+	if err != nil {
+		return nil, ter.TefINTERNAL
+	}
 	if !isSupportedObjectType(entryType) {
 		return nil, ter.TecNO_PERMISSION
 	}
-	fields, err := binarycodec.DecodeBytes(data)
-	if err != nil {
+	model := entry.New(entryType)
+	if model == nil {
+		return nil, ter.TefINTERNAL
+	}
+	if err := model.Decode(data); err != nil {
 		return nil, ter.TefINTERNAL
 	}
 
 	target := &sponsoredTarget{
 		key:          objectKey,
-		fields:       fields,
+		model:        model,
 		entryType:    entryType,
 		sponsorField: "Sponsor",
 		ownerCount:   1,
@@ -249,6 +254,7 @@ func isSupportedObjectType(entryType entry.Type) bool {
 }
 
 func (target *sponsoredTarget) resolveOwner(sponseeID [20]byte, sponsee string) bool {
+	_ = sponsee
 	switch target.entryType {
 	case entry.TypeCheck,
 		entry.TypeEscrow,
@@ -256,31 +262,75 @@ func (target *sponsoredTarget) resolveOwner(sponseeID [20]byte, sponsee string) 
 		entry.TypeMPToken,
 		entry.TypeDelegate,
 		entry.TypeDepositPreauth:
-		return stringField(target.fields, "Account") == sponsee
+		model, ok := target.model.(interface{ GetAccount() ([20]byte, error) })
+		if !ok {
+			return false
+		}
+		account, err := model.GetAccount()
+		return err == nil && account == sponseeID
 	case entry.TypeMPTokenIssuance:
-		return stringField(target.fields, "Issuer") == sponsee
+		model, ok := target.model.(*entry.MPTokenIssuance)
+		if !ok {
+			return false
+		}
+		issuer, err := model.GetIssuer()
+		return err == nil && issuer == sponseeID
 	case entry.TypeSignerList:
 		if target.key.Key != keylet.SignerList(sponseeID).Key {
 			return false
 		}
-		flags := uint32Field(target.fields, "Flags")
+		model, ok := target.model.(*entry.SignerList)
+		if !ok {
+			return false
+		}
+		flags, err := model.GetFlags()
+		if err != nil {
+			return false
+		}
 		if flags&entry.LsfOneOwnerCount == 0 {
-			target.ownerCount = 2 + uint32(sliceLength(target.fields["SignerEntries"]))
+			signerEntries, err := model.GetSignerEntries()
+			if err != nil {
+				return false
+			}
+			target.ownerCount = 2 + uint32(len(signerEntries))
 		}
 		return true
 	case entry.TypeCredential:
-		ownerField := "Issuer"
-		if uint32Field(target.fields, "Flags")&entry.LsfAccepted != 0 {
-			ownerField = "Subject"
+		model, ok := target.model.(*entry.Credential)
+		if !ok {
+			return false
 		}
-		return stringField(target.fields, ownerField) == sponsee
+		owner, err := model.GetIssuer()
+		flags, flagsErr := model.GetFlags()
+		if flagsErr != nil {
+			return false
+		}
+		if flags&entry.LsfAccepted != 0 {
+			owner, err = model.GetSubject()
+		}
+		return err == nil && owner == sponseeID
 	case entry.TypeRippleState:
-		flags := uint32Field(target.fields, "Flags")
-		if flags&entry.LsfHighReserve != 0 && amountIssuer(target.fields["HighLimit"]) == sponsee {
+		model, ok := target.model.(*entry.RippleState)
+		if !ok {
+			return false
+		}
+		flags, err := model.GetFlags()
+		if err != nil {
+			return false
+		}
+		highLimit, err := model.GetHighLimit()
+		if err != nil {
+			return false
+		}
+		lowLimit, err := model.GetLowLimit()
+		if err != nil {
+			return false
+		}
+		if flags&entry.LsfHighReserve != 0 && highLimit.Issuer == sponsee {
 			target.sponsorField = "HighSponsor"
 			return true
 		}
-		if flags&entry.LsfLowReserve != 0 && amountIssuer(target.fields["LowLimit"]) == sponsee {
+		if flags&entry.LsfLowReserve != 0 && lowLimit.Issuer == sponsee {
 			target.sponsorField = "LowSponsor"
 			return true
 		}
@@ -289,64 +339,90 @@ func (target *sponsoredTarget) resolveOwner(sponseeID [20]byte, sponsee string) 
 }
 
 func (target *sponsoredTarget) sponsor() (string, bool) {
-	value, ok := target.fields[target.sponsorField]
-	if !ok {
+	var (
+		account [20]byte
+		has     bool
+		err     error
+	)
+	switch model := target.model.(type) {
+	case *entry.RippleState:
+		switch target.sponsorField {
+		case "HighSponsor":
+			has = model.HasHighSponsor()
+			if has {
+				account, err = model.GetHighSponsor()
+			}
+		case "LowSponsor":
+			has = model.HasLowSponsor()
+			if has {
+				account, err = model.GetLowSponsor()
+			}
+		}
+	default:
+		value, ok := target.model.(interface {
+			HasSponsor() bool
+			GetSponsor() ([20]byte, error)
+		})
+		if !ok {
+			return "", false
+		}
+		has = value.HasSponsor()
+		if has {
+			account, err = value.GetSponsor()
+		}
+	}
+	if !has || err != nil {
 		return "", false
 	}
-	sponsor, ok := value.(string)
-	return sponsor, ok && sponsor != ""
+	sponsor, err := state.EncodeAccountID(account)
+	return sponsor, err == nil
 }
 
 func (target *sponsoredTarget) encodeWithSponsor(sponsor string) ([]byte, error) {
 	if sponsor == "" {
-		delete(target.fields, target.sponsorField)
+		switch model := target.model.(type) {
+		case *entry.RippleState:
+			if target.sponsorField == "HighSponsor" {
+				model.ClearHighSponsor()
+			} else {
+				model.ClearLowSponsor()
+			}
+		default:
+			value, ok := target.model.(interface{ ClearSponsor() })
+			if !ok {
+				return nil, errors.New("ledger entry does not support Sponsor")
+			}
+			value.ClearSponsor()
+		}
 	} else {
-		target.fields[target.sponsorField] = sponsor
+		account, err := state.DecodeAccountID(sponsor)
+		if err != nil {
+			return nil, err
+		}
+		switch model := target.model.(type) {
+		case *entry.RippleState:
+			if target.sponsorField == "HighSponsor" {
+				if err := model.SetHighSponsorValue(account); err != nil {
+					return nil, err
+				}
+			} else if err := model.SetLowSponsorValue(account); err != nil {
+				return nil, err
+			}
+		default:
+			value, ok := target.model.(interface{ SetSponsorValue([20]byte) error })
+			if !ok {
+				return nil, errors.New("ledger entry does not support Sponsor")
+			}
+			if err := value.SetSponsorValue(account); err != nil {
+				return nil, err
+			}
+		}
 	}
-	return binarycodec.EncodeBytes(target.fields)
-}
-
-func stringField(fields map[string]any, name string) string {
-	value, _ := fields[name].(string)
-	return value
-}
-
-func uint32Field(fields map[string]any, name string) uint32 {
-	switch value := fields[name].(type) {
-	case uint32:
-		return value
-	case uint64:
-		return uint32(value)
-	case int:
-		return uint32(value)
-	case float64:
-		return uint32(value)
-	default:
-		return 0
-	}
-}
-
-func amountIssuer(value any) string {
-	amount, ok := value.(map[string]any)
+	encoder, ok := target.model.(interface{ Encode() ([]byte, error) })
 	if !ok {
-		return ""
+		return nil, errors.New("ledger entry does not support encoding")
 	}
-	issuer, _ := amount["issuer"].(string)
-	if issuer == "" {
-		issuer, _ = amount["Issuer"].(string)
-	}
-	return issuer
-}
-
-func sliceLength(value any) int {
-	switch values := value.(type) {
-	case []any:
-		return len(values)
-	case []map[string]any:
-		return len(values)
-	default:
-		return 0
-	}
+	return encoder.Encode()
 }
 
 func consumePrefundedReserve(view tx.LedgerView, sponsorID, sponseeID [20]byte, delta uint32) ter.Result {

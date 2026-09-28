@@ -322,12 +322,10 @@ func findLoanDefaultFreezeExemption(tx Transaction, view ReadView, rules *amendm
 	if err := loan.Decode(loanData); err != nil {
 		return nil
 	}
-	brokerID, err := hex.DecodeString(loan.LoanBrokerID)
-	if err != nil || len(brokerID) != 32 {
+	brokerIDBytes, err := loan.GetLoanBrokerID()
+	if err != nil {
 		return nil
 	}
-	var brokerIDBytes [32]byte
-	copy(brokerIDBytes[:], brokerID)
 	brokerData, err := view.Read(keylet.LoanBrokerByID(brokerIDBytes))
 	if err != nil || brokerData == nil {
 		return nil
@@ -336,12 +334,10 @@ func findLoanDefaultFreezeExemption(tx Transaction, view ReadView, rules *amendm
 	if err := broker.Decode(brokerData); err != nil {
 		return nil
 	}
-	vaultID, err := hex.DecodeString(broker.VaultID)
-	if err != nil || len(vaultID) != 32 {
+	vaultIDBytes, err := broker.GetVaultID()
+	if err != nil {
 		return nil
 	}
-	var vaultIDBytes [32]byte
-	copy(vaultIDBytes[:], vaultID)
 	vaultData, err := view.Read(keylet.VaultByID(vaultIDBytes))
 	if err != nil || vaultData == nil {
 		return nil
@@ -350,34 +346,49 @@ func findLoanDefaultFreezeExemption(tx Transaction, view ReadView, rules *amendm
 	if err := vault.Decode(vaultData); err != nil {
 		return nil
 	}
-	asset, ok := vault.Asset.(map[string]any)
-	if !ok {
+	asset, err := vault.GetAsset()
+	if err != nil {
 		return nil
 	}
-	if mptIDString, isMPT := asset["mpt_issuance_id"].(string); isMPT {
+	brokerAccount, err := broker.GetAccount()
+	if err != nil {
+		return nil
+	}
+	vaultAccount, err := vault.GetAccount()
+	if err != nil {
+		return nil
+	}
+	brokerAddress, err := state.EncodeAccountID(brokerAccount)
+	if err != nil {
+		return nil
+	}
+	vaultAddress, err := state.EncodeAccountID(vaultAccount)
+	if err != nil {
+		return nil
+	}
+	if mptIDString := asset.MPTIssuanceID; mptIDString != "" {
 		mptID, err := hex.DecodeString(mptIDString)
-		if err != nil || len(mptID) != 24 || broker.Account == "" || vault.Account == "" {
+		if err != nil || len(mptID) != 24 {
 			return nil
 		}
 		var id [24]byte
 		copy(id[:], mptID)
 		return &loanDefaultFreezeExemption{
-			broker: broker.Account,
-			vault:  vault.Account,
+			broker: brokerAddress,
+			vault:  vaultAddress,
 			mptID:  id,
 			hasMPT: true,
 		}
 	}
-	currency, currencyOK := asset["currency"].(string)
-	issuer, issuerOK := asset["issuer"].(string)
-	if !currencyOK || !issuerOK || currency == "" || issuer == "" || broker.Account == "" || vault.Account == "" {
+	currency, issuer := asset.Currency, asset.Issuer
+	if currency == "" || issuer == "" {
 		return nil
 	}
 	return &loanDefaultFreezeExemption{
 		currency: currency,
 		issuer:   issuer,
-		broker:   broker.Account,
-		vault:    vault.Account,
+		broker:   brokerAddress,
+		vault:    vaultAddress,
 	}
 }
 

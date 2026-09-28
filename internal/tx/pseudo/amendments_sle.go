@@ -1,11 +1,9 @@
 package pseudo
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -46,65 +44,44 @@ func ParseAmendmentsSLE(data []byte) (*AmendmentsSLE, error) {
 		return nil, fmt.Errorf("failed to decode Amendments SLE: %w", err)
 	}
 
+	amendments, err := decoded.GetAmendments()
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode Amendments SLE Amendments: %w", err)
+	}
+	majorities, err := decoded.GetMajorities()
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode Amendments SLE Majorities: %w", err)
+	}
 	sle := &AmendmentsSLE{
-		Amendments: make([][32]byte, 0, len(decoded.Amendments)),
-		Majorities: make([]MajorityEntry, 0, len(decoded.Majorities)),
+		Amendments: amendments,
+		Majorities: make([]MajorityEntry, 0, len(majorities)),
+	}
+	for i, majority := range majorities {
+		amendment, err := majority.GetAmendment()
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode Amendments SLE Majorities[%d] Amendment: %w", i, err)
+		}
+		closeTime, err := majority.GetCloseTime()
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode Amendments SLE Majorities[%d] CloseTime: %w", i, err)
+		}
+		sle.Majorities = append(sle.Majorities, MajorityEntry{Amendment: amendment, CloseTime: closeTime})
 	}
 
-	for i, hashHex := range decoded.Amendments {
-		hash, err := decodeAmendmentHash(fmt.Sprintf("Amendments[%d]", i), hashHex)
+	if decoded.HasPreviousTxnID() {
+		previousTxnID, err := decoded.GetPreviousTxnID()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to decode Amendments SLE PreviousTxnID: %w", err)
 		}
-		sle.Amendments = append(sle.Amendments, hash)
-	}
-
-	for i, item := range decoded.Majorities {
-		wrapper, ok := item.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("failed to decode Amendments SLE Majorities[%d]: unexpected entry type %T", i, item)
-		}
-		inner, ok := wrapper["Majority"].(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("failed to decode Amendments SLE Majorities[%d]: missing Majority", i)
-		}
-		amendmentHex, ok := inner["Amendment"].(string)
-		if !ok {
-			return nil, fmt.Errorf("failed to decode Amendments SLE Majorities[%d]: unexpected Amendment type %T", i, inner["Amendment"])
-		}
-		amendment, err := decodeAmendmentHash(fmt.Sprintf("Majorities[%d].Amendment", i), amendmentHex)
+		previousTxnLgrSeq, err := decoded.GetPreviousTxnLgrSeq()
 		if err != nil {
-			return nil, err
-		}
-		sle.Majorities = append(sle.Majorities, MajorityEntry{
-			Amendment: amendment,
-			CloseTime: toUint32(inner["CloseTime"]),
-		})
-	}
-
-	if decoded.PreviousTxnID != "" {
-		previousTxnID, err := decodeAmendmentHash("PreviousTxnID", decoded.PreviousTxnID)
-		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to decode Amendments SLE PreviousTxnLgrSeq: %w", err)
 		}
 		sle.PreviousTxnID = previousTxnID
-		sle.PreviousTxnLgrSeq = decoded.PreviousTxnLgrSeq
+		sle.PreviousTxnLgrSeq = previousTxnLgrSeq
 	}
 
 	return sle, nil
-}
-
-func decodeAmendmentHash(field, value string) ([32]byte, error) {
-	var hash [32]byte
-	decoded, err := hex.DecodeString(value)
-	if err != nil {
-		return hash, fmt.Errorf("failed to decode Amendments SLE %s: %w", field, err)
-	}
-	if len(decoded) != len(hash) {
-		return hash, fmt.Errorf("failed to decode Amendments SLE %s: decoded length %d, want %d", field, len(decoded), len(hash))
-	}
-	copy(hash[:], decoded)
-	return hash, nil
 }
 
 // SerializeAmendmentsSLE serializes an AmendmentsSLE to binary data.
@@ -117,29 +94,23 @@ func SerializeAmendmentsSLE(sle *AmendmentsSLE) ([]byte, error) {
 	entry.SetFlags(0)
 
 	if len(sle.Amendments) > 0 {
-		hashes := make([]string, len(sle.Amendments))
-		for i, hash := range sle.Amendments {
-			hashes[i] = strings.ToUpper(hex.EncodeToString(hash[:]))
-		}
-		entry.SetAmendments(hashes)
+		entry.SetAmendmentsValue(sle.Amendments)
 	}
 
 	if len(sle.Majorities) > 0 {
-		arr := make([]any, len(sle.Majorities))
-		for i, entry := range sle.Majorities {
-			arr[i] = map[string]any{
-				"Majority": map[string]any{
-					"Amendment": strings.ToUpper(hex.EncodeToString(entry.Amendment[:])),
-					"CloseTime": entry.CloseTime,
-				},
-			}
+		majorities := make([]ledgerfields.MajorityValue, len(sle.Majorities))
+		for i, majority := range sle.Majorities {
+			majorities[i].SetAmendmentValue(majority.Amendment)
+			majorities[i].SetCloseTime(majority.CloseTime)
 		}
-		entry.SetMajorities(arr)
+		if err := entry.SetMajoritiesValue(majorities); err != nil {
+			return nil, fmt.Errorf("failed to encode Amendments SLE majorities: %w", err)
+		}
 	}
 
 	var emptyHash [32]byte
 	if sle.PreviousTxnID != emptyHash {
-		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(sle.PreviousTxnID[:])))
+		entry.SetPreviousTxnIDValue(sle.PreviousTxnID)
 		entry.SetPreviousTxnLgrSeq(sle.PreviousTxnLgrSeq)
 	} else if sle.PreviousTxnLgrSeq != 0 {
 		return nil, errors.New("failed to encode Amendments SLE: PreviousTxnLgrSeq set without PreviousTxnID")

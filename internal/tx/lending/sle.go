@@ -3,7 +3,6 @@ package lending
 import (
 	"encoding/hex"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -76,22 +75,18 @@ func serializeLoanBroker(b *loanBrokerData) ([]byte, error) {
 }
 
 func serializeLoanBrokerForRules(b *loanBrokerData, rules *amendment.Rules) ([]byte, error) {
-	ownerAddr, err := state.EncodeAccountID(b.Owner)
-	if err != nil {
-		return nil, fmt.Errorf("encode owner: %w", err)
-	}
-	pseudoAddr, err := state.EncodeAccountID(b.Account)
-	if err != nil {
-		return nil, fmt.Errorf("encode account: %w", err)
-	}
 	entry := &ledgerfields.LoanBroker{}
 	entry.SetFlags(b.Flags)
 	entry.SetSequence(b.Sequence)
-	entry.SetOwnerNode(fmt.Sprintf("%X", b.OwnerNode))
-	entry.SetVaultNode(fmt.Sprintf("%X", b.VaultNode))
-	entry.SetVaultID(strings.ToUpper(hex.EncodeToString(b.VaultID[:])))
-	entry.SetAccount(pseudoAddr)
-	entry.SetOwner(ownerAddr)
+	entry.SetOwnerNodeValue(b.OwnerNode)
+	entry.SetVaultNodeValue(b.VaultNode)
+	entry.SetVaultIDValue(b.VaultID)
+	if err := entry.SetAccountValue(b.Account); err != nil {
+		return nil, fmt.Errorf("encode account: %w", err)
+	}
+	if err := entry.SetOwnerValue(b.Owner); err != nil {
+		return nil, fmt.Errorf("encode owner: %w", err)
+	}
 	entry.SetLoanSequence(b.LoanSequence)
 	entry.SetData(strings.ToUpper(b.Data))
 	entry.SetManagementFeeRate(b.ManagementFeeRate)
@@ -100,14 +95,20 @@ func serializeLoanBrokerForRules(b *loanBrokerData, rules *amendment.Rules) ([]b
 	if err != nil {
 		return nil, fmt.Errorf("encode loan broker Number: %w", err)
 	}
-	entry.SetDebtTotal(numbers[0])
-	entry.SetDebtMaximum(numbers[1])
-	entry.SetCoverAvailable(numbers[2])
+	if err := entry.SetDebtTotalValue(ledgerfields.NumberValue(numbers[0])); err != nil {
+		return nil, fmt.Errorf("encode DebtTotal: %w", err)
+	}
+	if err := entry.SetDebtMaximumValue(ledgerfields.NumberValue(numbers[1])); err != nil {
+		return nil, fmt.Errorf("encode DebtMaximum: %w", err)
+	}
+	if err := entry.SetCoverAvailableValue(ledgerfields.NumberValue(numbers[2])); err != nil {
+		return nil, fmt.Errorf("encode CoverAvailable: %w", err)
+	}
 	entry.SetCoverRateMinimum(b.CoverRateMinimum)
 	entry.SetCoverRateLiquidation(b.CoverRateLiquidation)
 	var zeroHash [32]byte
 	if b.PreviousTxnID != zeroHash {
-		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(b.PreviousTxnID[:])))
+		entry.SetPreviousTxnIDValue(b.PreviousTxnID)
 		entry.SetPreviousTxnLgrSeq(b.PreviousTxnLgrSeq)
 	}
 	data, err := entry.Encode()
@@ -123,30 +124,94 @@ func parseLoanBroker(data []byte) (*loanBrokerData, error) {
 	if err := lb.Decode(data); err != nil {
 		return nil, err
 	}
+	account, err := lb.GetAccount()
+	if err != nil {
+		return nil, err
+	}
+	owner, err := lb.GetOwner()
+	if err != nil {
+		return nil, err
+	}
+	vaultID, err := lb.GetVaultID()
+	if err != nil {
+		return nil, err
+	}
+	previousTxnID, err := lb.GetPreviousTxnID()
+	if err != nil {
+		return nil, err
+	}
+	ownerNode, err := lb.GetOwnerNode()
+	if err != nil {
+		return nil, err
+	}
+	vaultNode, err := lb.GetVaultNode()
+	if err != nil {
+		return nil, err
+	}
+	sequence, err := lb.GetSequence()
+	if err != nil {
+		return nil, err
+	}
+	loanSequence, err := lb.GetLoanSequence()
+	if err != nil {
+		return nil, err
+	}
+	managementFeeRate, err := lb.GetManagementFeeRate()
+	if err != nil {
+		return nil, err
+	}
+	ownerCount, err := lb.GetOwnerCount()
+	if err != nil {
+		return nil, err
+	}
+	coverRateMinimum, err := lb.GetCoverRateMinimum()
+	if err != nil {
+		return nil, err
+	}
+	coverRateLiquidation, err := lb.GetCoverRateLiquidation()
+	if err != nil {
+		return nil, err
+	}
+	flags, err := lb.GetFlags()
+	if err != nil {
+		return nil, err
+	}
+	previousTxnLgrSeq, err := lb.GetPreviousTxnLgrSeq()
+	if err != nil {
+		return nil, err
+	}
+	debtTotal, err := readNumber(lb.HasDebtTotal, lb.GetDebtTotal)
+	if err != nil {
+		return nil, err
+	}
+	debtMaximum, err := readNumber(lb.HasDebtMaximum, lb.GetDebtMaximum)
+	if err != nil {
+		return nil, err
+	}
+	coverAvailable, err := readNumber(lb.HasCoverAvailable, lb.GetCoverAvailable)
+	if err != nil {
+		return nil, err
+	}
 	b := &loanBrokerData{
-		Sequence:             lb.Sequence,
-		LoanSequence:         lb.LoanSequence,
+		Sequence:             sequence,
+		LoanSequence:         loanSequence,
 		Data:                 lb.Data,
-		ManagementFeeRate:    uint16(lb.ManagementFeeRate),
-		OwnerCount:           lb.OwnerCount,
-		DebtTotal:            normNum(lb.DebtTotal),
-		DebtMaximum:          normNum(lb.DebtMaximum),
-		CoverAvailable:       normNum(lb.CoverAvailable),
-		CoverRateMinimum:     lb.CoverRateMinimum,
-		CoverRateLiquidation: lb.CoverRateLiquidation,
-		Flags:                lb.Flags,
-		PreviousTxnLgrSeq:    lb.PreviousTxnLgrSeq,
+		ManagementFeeRate:    managementFeeRate,
+		OwnerCount:           ownerCount,
+		DebtTotal:            debtTotal,
+		DebtMaximum:          debtMaximum,
+		CoverAvailable:       coverAvailable,
+		CoverRateMinimum:     coverRateMinimum,
+		CoverRateLiquidation: coverRateLiquidation,
+		Flags:                flags,
+		PreviousTxnID:        previousTxnID,
+		PreviousTxnLgrSeq:    previousTxnLgrSeq,
+		Account:              account,
+		Owner:                owner,
+		VaultID:              vaultID,
+		OwnerNode:            ownerNode,
+		VaultNode:            vaultNode,
 	}
-	if id, err := state.DecodeAccountID(lb.Account); err == nil {
-		b.Account = id
-	}
-	if id, err := state.DecodeAccountID(lb.Owner); err == nil {
-		b.Owner = id
-	}
-	b.VaultID = hash256(lb.VaultID)
-	b.PreviousTxnID = hash256(lb.PreviousTxnID)
-	b.OwnerNode = hexU64(lb.OwnerNode)
-	b.VaultNode = hexU64(lb.VaultNode)
 	return b, nil
 }
 
@@ -188,17 +253,15 @@ func serializeLoan(l *loanData) ([]byte, error) {
 }
 
 func serializeLoanForRules(l *loanData, rules *amendment.Rules) ([]byte, error) {
-	borrowerAddr, err := state.EncodeAccountID(l.Borrower)
-	if err != nil {
-		return nil, fmt.Errorf("encode borrower: %w", err)
-	}
 	entry := &ledgerfields.Loan{}
 	entry.SetFlags(l.Flags)
-	entry.SetOwnerNode(fmt.Sprintf("%X", l.OwnerNode))
-	entry.SetLoanBrokerNode(fmt.Sprintf("%X", l.LoanBrokerNode))
-	entry.SetLoanBrokerID(strings.ToUpper(hex.EncodeToString(l.LoanBrokerID[:])))
+	entry.SetOwnerNodeValue(l.OwnerNode)
+	entry.SetLoanBrokerNodeValue(l.LoanBrokerNode)
+	entry.SetLoanBrokerIDValue(l.LoanBrokerID)
 	entry.SetLoanSequence(l.LoanSequence)
-	entry.SetBorrower(borrowerAddr)
+	if err := entry.SetBorrowerValue(l.Borrower); err != nil {
+		return nil, fmt.Errorf("encode borrower: %w", err)
+	}
 	numbers, err := lendingWireNumbers(
 		lendingNumberScale(rules),
 		l.LoanOriginationFee,
@@ -213,10 +276,18 @@ func serializeLoanForRules(l *loanData, rules *amendment.Rules) ([]byte, error) 
 	if err != nil {
 		return nil, fmt.Errorf("encode loan Number: %w", err)
 	}
-	entry.SetLoanOriginationFee(numbers[0])
-	entry.SetLoanServiceFee(numbers[1])
-	entry.SetLatePaymentFee(numbers[2])
-	entry.SetClosePaymentFee(numbers[3])
+	if err := entry.SetLoanOriginationFeeValue(ledgerfields.NumberValue(numbers[0])); err != nil {
+		return nil, fmt.Errorf("encode LoanOriginationFee: %w", err)
+	}
+	if err := entry.SetLoanServiceFeeValue(ledgerfields.NumberValue(numbers[1])); err != nil {
+		return nil, fmt.Errorf("encode LoanServiceFee: %w", err)
+	}
+	if err := entry.SetLatePaymentFeeValue(ledgerfields.NumberValue(numbers[2])); err != nil {
+		return nil, fmt.Errorf("encode LatePaymentFee: %w", err)
+	}
+	if err := entry.SetClosePaymentFeeValue(ledgerfields.NumberValue(numbers[3])); err != nil {
+		return nil, fmt.Errorf("encode ClosePaymentFee: %w", err)
+	}
 	entry.SetOverpaymentFee(l.OverpaymentFee)
 	entry.SetInterestRate(l.InterestRate)
 	entry.SetLateInterestRate(l.LateInterestRate)
@@ -228,14 +299,22 @@ func serializeLoanForRules(l *loanData, rules *amendment.Rules) ([]byte, error) 
 	entry.SetPreviousPaymentDueDate(l.PreviousPaymentDueDate)
 	entry.SetNextPaymentDueDate(l.NextPaymentDueDate)
 	entry.SetPaymentRemaining(l.PaymentRemaining)
-	entry.SetPeriodicPayment(numbers[4])
-	entry.SetPrincipalOutstanding(numbers[5])
-	entry.SetTotalValueOutstanding(numbers[6])
-	entry.SetManagementFeeOutstanding(numbers[7])
+	if err := entry.SetPeriodicPaymentValue(ledgerfields.NumberValue(numbers[4])); err != nil {
+		return nil, fmt.Errorf("encode PeriodicPayment: %w", err)
+	}
+	if err := entry.SetPrincipalOutstandingValue(ledgerfields.NumberValue(numbers[5])); err != nil {
+		return nil, fmt.Errorf("encode PrincipalOutstanding: %w", err)
+	}
+	if err := entry.SetTotalValueOutstandingValue(ledgerfields.NumberValue(numbers[6])); err != nil {
+		return nil, fmt.Errorf("encode TotalValueOutstanding: %w", err)
+	}
+	if err := entry.SetManagementFeeOutstandingValue(ledgerfields.NumberValue(numbers[7])); err != nil {
+		return nil, fmt.Errorf("encode ManagementFeeOutstanding: %w", err)
+	}
 	entry.SetLoanScale(l.LoanScale)
 	var zeroHash [32]byte
 	if l.PreviousTxnID != zeroHash {
-		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(l.PreviousTxnID[:])))
+		entry.SetPreviousTxnIDValue(l.PreviousTxnID)
 		entry.SetPreviousTxnLgrSeq(l.PreviousTxnLgrSeq)
 	}
 	data, err := entry.Encode()
@@ -251,49 +330,156 @@ func parseLoan(data []byte) (*loanData, error) {
 	if err := ll.Decode(data); err != nil {
 		return nil, err
 	}
+	borrower, err := ll.GetBorrower()
+	if err != nil {
+		return nil, err
+	}
+	loanBrokerID, err := ll.GetLoanBrokerID()
+	if err != nil {
+		return nil, err
+	}
+	previousTxnID, err := ll.GetPreviousTxnID()
+	if err != nil {
+		return nil, err
+	}
+	ownerNode, err := ll.GetOwnerNode()
+	if err != nil {
+		return nil, err
+	}
+	loanBrokerNode, err := ll.GetLoanBrokerNode()
+	if err != nil {
+		return nil, err
+	}
+	loanSequence, err := ll.GetLoanSequence()
+	if err != nil {
+		return nil, err
+	}
+	overpaymentFee, err := ll.GetOverpaymentFee()
+	if err != nil {
+		return nil, err
+	}
+	interestRate, err := ll.GetInterestRate()
+	if err != nil {
+		return nil, err
+	}
+	lateInterestRate, err := ll.GetLateInterestRate()
+	if err != nil {
+		return nil, err
+	}
+	closeInterestRate, err := ll.GetCloseInterestRate()
+	if err != nil {
+		return nil, err
+	}
+	overpaymentInterestRate, err := ll.GetOverpaymentInterestRate()
+	if err != nil {
+		return nil, err
+	}
+	startDate, err := ll.GetStartDate()
+	if err != nil {
+		return nil, err
+	}
+	paymentInterval, err := ll.GetPaymentInterval()
+	if err != nil {
+		return nil, err
+	}
+	gracePeriod, err := ll.GetGracePeriod()
+	if err != nil {
+		return nil, err
+	}
+	previousPaymentDueDate, err := ll.GetPreviousPaymentDueDate()
+	if err != nil {
+		return nil, err
+	}
+	nextPaymentDueDate, err := ll.GetNextPaymentDueDate()
+	if err != nil {
+		return nil, err
+	}
+	paymentRemaining, err := ll.GetPaymentRemaining()
+	if err != nil {
+		return nil, err
+	}
+	flags, err := ll.GetFlags()
+	if err != nil {
+		return nil, err
+	}
+	previousTxnLgrSeq, err := ll.GetPreviousTxnLgrSeq()
+	if err != nil {
+		return nil, err
+	}
+	numbers := make([]string, 8)
+	getters := []struct {
+		has  func() bool
+		get  func() (ledgerfields.NumberValue, error)
+		dest *string
+	}{
+		{ll.HasLoanOriginationFee, ll.GetLoanOriginationFee, &numbers[0]},
+		{ll.HasLoanServiceFee, ll.GetLoanServiceFee, &numbers[1]},
+		{ll.HasLatePaymentFee, ll.GetLatePaymentFee, &numbers[2]},
+		{ll.HasClosePaymentFee, ll.GetClosePaymentFee, &numbers[3]},
+		{ll.HasPeriodicPayment, ll.GetPeriodicPayment, &numbers[4]},
+		{ll.HasPrincipalOutstanding, ll.GetPrincipalOutstanding, &numbers[5]},
+		{ll.HasTotalValueOutstanding, ll.GetTotalValueOutstanding, &numbers[6]},
+		{ll.HasManagementFeeOutstanding, ll.GetManagementFeeOutstanding, &numbers[7]},
+	}
+	for _, getter := range getters {
+		value, err := readNumber(getter.has, getter.get)
+		if err != nil {
+			return nil, err
+		}
+		*getter.dest = value
+	}
 	l := &loanData{
-		LoanSequence:             ll.LoanSequence,
-		LoanOriginationFee:       normNum(ll.LoanOriginationFee),
-		LoanServiceFee:           normNum(ll.LoanServiceFee),
-		LatePaymentFee:           normNum(ll.LatePaymentFee),
-		ClosePaymentFee:          normNum(ll.ClosePaymentFee),
-		OverpaymentFee:           ll.OverpaymentFee,
-		InterestRate:             ll.InterestRate,
-		LateInterestRate:         ll.LateInterestRate,
-		CloseInterestRate:        ll.CloseInterestRate,
-		OverpaymentInterestRate:  ll.OverpaymentInterestRate,
-		StartDate:                ll.StartDate,
-		PaymentInterval:          ll.PaymentInterval,
-		GracePeriod:              ll.GracePeriod,
-		PreviousPaymentDueDate:   ll.PreviousPaymentDueDate,
-		NextPaymentDueDate:       ll.NextPaymentDueDate,
-		PaymentRemaining:         ll.PaymentRemaining,
-		PeriodicPayment:          normNum(ll.PeriodicPayment),
-		PrincipalOutstanding:     normNum(ll.PrincipalOutstanding),
-		TotalValueOutstanding:    normNum(ll.TotalValueOutstanding),
-		ManagementFeeOutstanding: normNum(ll.ManagementFeeOutstanding),
+		LoanSequence:             loanSequence,
+		LoanOriginationFee:       numbers[0],
+		LoanServiceFee:           numbers[1],
+		LatePaymentFee:           numbers[2],
+		ClosePaymentFee:          numbers[3],
+		OverpaymentFee:           overpaymentFee,
+		InterestRate:             interestRate,
+		LateInterestRate:         lateInterestRate,
+		CloseInterestRate:        closeInterestRate,
+		OverpaymentInterestRate:  overpaymentInterestRate,
+		StartDate:                startDate,
+		PaymentInterval:          paymentInterval,
+		GracePeriod:              gracePeriod,
+		PreviousPaymentDueDate:   previousPaymentDueDate,
+		NextPaymentDueDate:       nextPaymentDueDate,
+		PaymentRemaining:         paymentRemaining,
+		PeriodicPayment:          numbers[4],
+		PrincipalOutstanding:     numbers[5],
+		TotalValueOutstanding:    numbers[6],
+		ManagementFeeOutstanding: numbers[7],
 		LoanScale:                int32(ll.LoanScale),
-		Flags:                    ll.Flags,
-		PreviousTxnLgrSeq:        ll.PreviousTxnLgrSeq,
+		Flags:                    flags,
+		PreviousTxnID:            previousTxnID,
+		PreviousTxnLgrSeq:        previousTxnLgrSeq,
+		Borrower:                 borrower,
+		LoanBrokerID:             loanBrokerID,
+		OwnerNode:                ownerNode,
+		LoanBrokerNode:           loanBrokerNode,
 	}
-	if id, err := state.DecodeAccountID(ll.Borrower); err == nil {
-		l.Borrower = id
-	}
-	l.LoanBrokerID = hash256(ll.LoanBrokerID)
-	l.PreviousTxnID = hash256(ll.PreviousTxnID)
-	l.OwnerNode = hexU64(ll.OwnerNode)
-	l.LoanBrokerNode = hexU64(ll.LoanBrokerNode)
 	return l, nil
 }
 
 // --- small encoding helpers ---
 
-func normNum(v any) string {
-	s, ok := v.(string)
-	if !ok || s == "" || s == "0" {
+func normNum(v ledgerfields.NumberValue) string {
+	s := string(v)
+	if s == "" || s == "0" {
 		return ""
 	}
 	return s
+}
+
+func readNumber(has func() bool, get func() (ledgerfields.NumberValue, error)) (string, error) {
+	if !has() {
+		return "", nil
+	}
+	value, err := get()
+	if err != nil {
+		return "", err
+	}
+	return normNum(value), nil
 }
 
 func lendingWireNumbers(scale state.MantissaScale, values ...string) ([]string, error) {
@@ -310,17 +496,4 @@ func lendingWireNumbers(scale state.MantissaScale, values ...string) ([]string, 
 		numbers[i] = fmt.Sprintf("%de%d", number.Mantissa(), number.Exponent())
 	}
 	return numbers, nil
-}
-
-func hash256(s string) [32]byte {
-	var h [32]byte
-	if b, err := hex.DecodeString(s); err == nil && len(b) == 32 {
-		copy(h[:], b)
-	}
-	return h
-}
-
-func hexU64(s string) uint64 {
-	n, _ := strconv.ParseUint(s, 16, 64)
-	return n
 }

@@ -37,9 +37,9 @@ func TestNFTAcceptNegativeStoredOfferWithoutRetiredFix(t *testing.T) {
 		for _, iou := range []bool{false, true} {
 			t.Run(fmt.Sprintf("sell=%t/iou=%t", sell, iou), func(t *testing.T) {
 				view := newMockView()
-				var amount any = "-1"
+				amount := tx.NewXRPAmount(-1).LedgerValue()
 				if iou {
-					amount = map[string]any{"currency": "USD", "issuer": state.EncodeAccountIDSafe(owner), "value": "-1"}
+					amount = tx.NewIssuedAmountFromFloat64(-1, "USD", state.EncodeAccountIDSafe(owner)).LedgerValue()
 				}
 				flags := uint32(0)
 				if sell {
