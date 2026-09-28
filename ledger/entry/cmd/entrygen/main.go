@@ -1800,7 +1800,7 @@ const (
 {{ end }}{{ end }})
 
 {{ range .Fields }}func (v {{ $inner.Type }}) Has{{ .GoField }}() bool { return v.present&{{ .BitConst }} != 0 }
-{{ if isOptional .Style }}func (v *{{ $inner.Type }}) Clear{{ .GoField }}() { if v == nil { return }; v.{{ .GoField }} = {{ if eq .GoType "[]byte" }}nil{{ else if hasPrefix .GoType "[]" }}nil{{ else if eq .GoType "string" }}""{{ else }}{{ zeroValue .GoType }}{{ end }}; v.present &^= {{ .BitConst }} }
+{{ if isOptional .Style }}func (v *{{ $inner.Type }}) Clear{{ .GoField }}() { if v == nil { return }; v.{{ .GoField }} = {{ if eq .GoType "[]byte" }}nil{{ else if hasPrefix .GoType "[]" }}nil{{ else if eq .GoType "string" }}""{{ else }}{{ zeroValue .GoType }}{{ end }}; v.present &^= {{ .BitConst }}{{ if eq .XRPLType "AccountID" }}; v.emptyAccounts &^= {{ .BitConst }}{{ end }} }
 {{ end }}func (v {{ $inner.Type }}) Get{{ .GoField }}() ({{ .GoType }}, error) { return {{ cloneExpr .GoType .NestedType (printf "v.%s" .GoField) }}, nil }
 {{ if eq .XRPLType "AccountID" }}func (v {{ $inner.Type }}) Get{{ .GoField }}Address() (string, error) { if v.emptyAccounts&{{ .BitConst }} != 0 && v.{{ .GoField }} == [20]byte{} { return "", nil }; return accountIDValueToString(v.{{ .GoField }}) }
 func (v *{{ $inner.Type }}) Set{{ .GoField }}Address(value string) error { if v == nil { return fmt.Errorf("ledgerfields: nil {{ $inner.Type }}") }; decoded, err := accountIDValueFromString(value, "{{ $inner.Type }}.{{ .Name }}"); if err != nil { return err }; v.{{ .GoField }} = decoded; v.present |= {{ .BitConst }}; if value == "" { v.emptyAccounts |= {{ .BitConst }} } else { v.emptyAccounts &^= {{ .BitConst }} }; return nil }

@@ -489,3 +489,41 @@ func TestNestedHexAccessorsCanonicalizeAndValidate(t *testing.T) {
 		t.Fatalf("GetCredentialTypeHex = %q, %v; want 0ABC", got, err)
 	}
 }
+
+func TestNestedAccountClearResetsEmptyEncoding(t *testing.T) {
+	type destinationValue interface {
+		SetDestinationAddress(string) error
+		GetDestinationAddress() (string, error)
+		HasDestination() bool
+		ClearDestination()
+	}
+	for _, value := range []destinationValue{
+		&XChainClaimAttestationCollectionElementValue{},
+		&XChainClaimProofSigValue{},
+	} {
+		t.Run(reflect.TypeOf(value).Elem().Name(), func(t *testing.T) {
+			absent, err := value.GetDestinationAddress()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := value.SetDestinationAddress(""); err != nil {
+				t.Fatal(err)
+			}
+			empty, err := value.GetDestinationAddress()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !value.HasDestination() || empty != "" {
+				t.Fatal("empty account encoding was not retained")
+			}
+			value.ClearDestination()
+			cleared, err := value.GetDestinationAddress()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if value.HasDestination() || cleared != absent {
+				t.Fatalf("cleared destination = %q, want absent value %q", cleared, absent)
+			}
+		})
+	}
+}
