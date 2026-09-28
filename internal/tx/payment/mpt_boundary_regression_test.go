@@ -256,7 +256,7 @@ func TestMPTBookTransferFeeOverflowRemovesOffer(t *testing.T) {
 	}
 }
 
-func TestMPTBookAccumulatorOverflowPreservesEarlierAndLaterLiquidity(t *testing.T) {
+func TestMPTBookAccumulatorOverflowDiscardsStrand(t *testing.T) {
 	issuerA, issuerB := [20]byte{1}, [20]byte{2}
 	taker, recipient := [20]byte{3}, [20]byte{6}
 	first, poison, last := [20]byte{4}, [20]byte{5}, [20]byte{7}
@@ -293,30 +293,27 @@ func TestMPTBookAccumulatorOverflowPreservesEarlierAndLaterLiquidity(t *testing.
 	require.Equal(t, ter.TesSUCCESS, result)
 	sendMax := ToEitherAmount(send)
 	flow := Flow(sandbox, strands, ToEitherAmount(deliver), true, nil, &sendMax, nil, false)
-	require.Equal(t, ter.TesSUCCESS, flow.Result)
-	require.Equal(t, int64(7_500_000_000_000_000_003), flow.In.MPT)
-	require.Equal(t, int64(2_500_000_000_000_000_001), flow.Out.MPT)
-	require.Contains(t, flow.RemovableOffers, poisonKey)
-	require.NotContains(t, flow.RemovableOffers, firstKey)
-	require.NotContains(t, flow.RemovableOffers, lastKey)
-	require.NoError(t, flow.Sandbox.Apply(sandbox))
-	require.NoError(t, sandbox.ApplyToView(view))
+	require.Equal(t, ter.TecPATH_DRY, flow.Result)
+	require.True(t, flow.In.IsZero())
+	require.True(t, flow.Out.IsZero())
+	require.Empty(t, flow.RemovableOffers)
+	require.Nil(t, flow.Sandbox)
 	for _, key := range [][32]byte{firstKey, poisonKey, lastKey} {
 		data, err := view.Read(keylet.Keylet{Key: key})
 		require.NoError(t, err)
-		require.Nil(t, data)
+		require.NotEmpty(t, data)
 	}
 	outstandingA, balancesA := readMPTAmounts(t, view, idA, taker, first, poison, last)
-	require.Equal(t, uint64(6_723_372_036_854_775_806), outstandingA)
-	require.Equal(t, []uint64{1_723_372_036_854_775_804, 5_000_000_000_000_000_000, 0, 2}, balancesA)
+	require.Equal(t, protocol.MaxMPTokenAmount, outstandingA)
+	require.Equal(t, []uint64{protocol.MaxMPTokenAmount, 0, 0, 0}, balancesA)
 	outstandingB, balancesB := readMPTAmounts(t, view, idB, recipient, first, poison, last)
 	require.Equal(t, uint64(5_000_000_000_000_000_001), outstandingB)
-	require.Equal(t, []uint64{2_500_000_000_000_000_001, 0, 2_500_000_000_000_000_000, 0}, balancesB)
+	require.Equal(t, []uint64{0, 2_500_000_000_000_000_000, 2_500_000_000_000_000_000, 1}, balancesB)
 	for _, owner := range [][20]byte{first, poison, last} {
 		raw, err := view.Read(keylet.Account(owner))
 		require.NoError(t, err)
 		account, err := state.ParseAccountRoot(raw)
 		require.NoError(t, err)
-		require.Equal(t, uint32(2), account.OwnerCount)
+		require.Equal(t, uint32(3), account.OwnerCount)
 	}
 }
