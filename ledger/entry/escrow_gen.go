@@ -186,7 +186,7 @@ func (e *Escrow) SetSponsor(value string) {
 	e.present |= escrowBitSponsor
 }
 
-// HasAccount reports whether Account was present in the serialized entry.
+// HasAccount reports whether Account is present.
 func (e *Escrow) HasAccount() bool {
 	return e != nil && e.present&escrowBitAccount != 0
 }
@@ -209,7 +209,7 @@ func (e *Escrow) SetAccountValue(value [20]byte) error {
 	return nil
 }
 
-// HasSequence reports whether Sequence was present in the serialized entry.
+// HasSequence reports whether Sequence is present.
 func (e *Escrow) HasSequence() bool {
 	return e != nil && e.present&escrowBitSequence != 0
 }
@@ -224,7 +224,7 @@ func (e *Escrow) ClearSequence() {
 	e.dirty = true
 }
 
-// HasDestination reports whether Destination was present in the serialized entry.
+// HasDestination reports whether Destination is present.
 func (e *Escrow) HasDestination() bool {
 	return e != nil && e.present&escrowBitDestination != 0
 }
@@ -247,7 +247,7 @@ func (e *Escrow) SetDestinationValue(value [20]byte) error {
 	return nil
 }
 
-// HasAmount reports whether Amount was present in the serialized entry.
+// HasAmount reports whether Amount is present.
 func (e *Escrow) HasAmount() bool {
 	return e != nil && e.present&escrowBitAmount != 0
 }
@@ -270,7 +270,7 @@ func (e *Escrow) SetAmountValue(value AmountValue) error {
 	return nil
 }
 
-// HasCondition reports whether Condition was present in the serialized entry.
+// HasCondition reports whether Condition is present.
 func (e *Escrow) HasCondition() bool {
 	return e != nil && e.present&escrowBitCondition != 0
 }
@@ -298,7 +298,7 @@ func (e *Escrow) SetConditionValue(value []byte) {
 	e.SetCondition(blobValueToString(value))
 }
 
-// HasCancelAfter reports whether CancelAfter was present in the serialized entry.
+// HasCancelAfter reports whether CancelAfter is present.
 func (e *Escrow) HasCancelAfter() bool {
 	return e != nil && e.present&escrowBitCancelAfter != 0
 }
@@ -313,7 +313,7 @@ func (e *Escrow) ClearCancelAfter() {
 	e.dirty = true
 }
 
-// HasFinishAfter reports whether FinishAfter was present in the serialized entry.
+// HasFinishAfter reports whether FinishAfter is present.
 func (e *Escrow) HasFinishAfter() bool {
 	return e != nil && e.present&escrowBitFinishAfter != 0
 }
@@ -328,7 +328,7 @@ func (e *Escrow) ClearFinishAfter() {
 	e.dirty = true
 }
 
-// HasSourceTag reports whether SourceTag was present in the serialized entry.
+// HasSourceTag reports whether SourceTag is present.
 func (e *Escrow) HasSourceTag() bool {
 	return e != nil && e.present&escrowBitSourceTag != 0
 }
@@ -343,7 +343,7 @@ func (e *Escrow) ClearSourceTag() {
 	e.dirty = true
 }
 
-// HasDestinationTag reports whether DestinationTag was present in the serialized entry.
+// HasDestinationTag reports whether DestinationTag is present.
 func (e *Escrow) HasDestinationTag() bool {
 	return e != nil && e.present&escrowBitDestinationTag != 0
 }
@@ -358,7 +358,7 @@ func (e *Escrow) ClearDestinationTag() {
 	e.dirty = true
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (e *Escrow) HasOwnerNode() bool {
 	return e != nil && e.present&escrowBitOwnerNode != 0
 }
@@ -376,7 +376,7 @@ func (e *Escrow) SetOwnerNodeValue(value uint64) {
 	e.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasDestinationNode reports whether DestinationNode was present in the serialized entry.
+// HasDestinationNode reports whether DestinationNode is present.
 func (e *Escrow) HasDestinationNode() bool {
 	return e != nil && e.present&escrowBitDestinationNode != 0
 }
@@ -404,7 +404,7 @@ func (e *Escrow) SetDestinationNodeValue(value uint64) {
 	e.SetDestinationNode(uint64ValueToString(value, false))
 }
 
-// HasTransferRate reports whether TransferRate was present in the serialized entry.
+// HasTransferRate reports whether TransferRate is present.
 func (e *Escrow) HasTransferRate() bool {
 	return e != nil && e.present&escrowBitTransferRate != 0
 }
@@ -419,7 +419,7 @@ func (e *Escrow) ClearTransferRate() {
 	e.dirty = true
 }
 
-// HasIssuerNode reports whether IssuerNode was present in the serialized entry.
+// HasIssuerNode reports whether IssuerNode is present.
 func (e *Escrow) HasIssuerNode() bool {
 	return e != nil && e.present&escrowBitIssuerNode != 0
 }
@@ -447,12 +447,12 @@ func (e *Escrow) SetIssuerNodeValue(value uint64) {
 	e.SetIssuerNode(uint64ValueToString(value, false))
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (e *Escrow) HasFlags() bool {
 	return e != nil && e.present&escrowBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (e *Escrow) HasPreviousTxnID() bool {
 	return e != nil && e.present&escrowBitPreviousTxnID != 0
 }
@@ -473,12 +473,12 @@ func (e *Escrow) SetPreviousTxnIDValue(value [32]byte) {
 	e.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (e *Escrow) HasPreviousTxnLgrSeq() bool {
 	return e != nil && e.present&escrowBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (e *Escrow) HasSponsor() bool {
 	return e != nil && e.present&escrowBitSponsor != 0
 }

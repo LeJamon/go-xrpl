@@ -105,7 +105,7 @@ func (d *DepositPreauth) SetSponsor(value string) {
 	d.present |= depositpreauthBitSponsor
 }
 
-// HasAccount reports whether Account was present in the serialized entry.
+// HasAccount reports whether Account is present.
 func (d *DepositPreauth) HasAccount() bool {
 	return d != nil && d.present&depositpreauthBitAccount != 0
 }
@@ -128,7 +128,7 @@ func (d *DepositPreauth) SetAccountValue(value [20]byte) error {
 	return nil
 }
 
-// HasAuthorize reports whether Authorize was present in the serialized entry.
+// HasAuthorize reports whether Authorize is present.
 func (d *DepositPreauth) HasAuthorize() bool {
 	return d != nil && d.present&depositpreauthBitAuthorize != 0
 }
@@ -161,7 +161,7 @@ func (d *DepositPreauth) SetAuthorizeValue(value [20]byte) error {
 	return nil
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (d *DepositPreauth) HasOwnerNode() bool {
 	return d != nil && d.present&depositpreauthBitOwnerNode != 0
 }
@@ -179,7 +179,7 @@ func (d *DepositPreauth) SetOwnerNodeValue(value uint64) {
 	d.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasAuthorizeCredentials reports whether AuthorizeCredentials was present in the serialized entry.
+// HasAuthorizeCredentials reports whether AuthorizeCredentials is present.
 func (d *DepositPreauth) HasAuthorizeCredentials() bool {
 	return d != nil && d.present&depositpreauthBitAuthorizeCredentials != 0
 }
@@ -194,12 +194,12 @@ func (d *DepositPreauth) ClearAuthorizeCredentials() {
 	d.dirty = true
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (d *DepositPreauth) HasFlags() bool {
 	return d != nil && d.present&depositpreauthBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (d *DepositPreauth) HasPreviousTxnID() bool {
 	return d != nil && d.present&depositpreauthBitPreviousTxnID != 0
 }
@@ -220,12 +220,12 @@ func (d *DepositPreauth) SetPreviousTxnIDValue(value [32]byte) {
 	d.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (d *DepositPreauth) HasPreviousTxnLgrSeq() bool {
 	return d != nil && d.present&depositpreauthBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (d *DepositPreauth) HasSponsor() bool {
 	return d != nil && d.present&depositpreauthBitSponsor != 0
 }

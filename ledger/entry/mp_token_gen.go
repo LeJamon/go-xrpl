@@ -176,7 +176,7 @@ func (m *MPToken) SetSponsor(value string) {
 	m.present |= mptokenBitSponsor
 }
 
-// HasAccount reports whether Account was present in the serialized entry.
+// HasAccount reports whether Account is present.
 func (m *MPToken) HasAccount() bool {
 	return m != nil && m.present&mptokenBitAccount != 0
 }
@@ -199,7 +199,7 @@ func (m *MPToken) SetAccountValue(value [20]byte) error {
 	return nil
 }
 
-// HasMPTokenIssuanceID reports whether MPTokenIssuanceID was present in the serialized entry.
+// HasMPTokenIssuanceID reports whether MPTokenIssuanceID is present.
 func (m *MPToken) HasMPTokenIssuanceID() bool {
 	return m != nil && m.present&mptokenBitMPTokenIssuanceID != 0
 }
@@ -220,7 +220,7 @@ func (m *MPToken) SetMPTokenIssuanceIDValue(value [24]byte) {
 	m.SetMPTokenIssuanceID(hashValueToString(value[:]))
 }
 
-// HasMPTAmount reports whether MPTAmount was present in the serialized entry.
+// HasMPTAmount reports whether MPTAmount is present.
 func (m *MPToken) HasMPTAmount() bool {
 	return m != nil && m.present&mptokenBitMPTAmount != 0
 }
@@ -248,7 +248,7 @@ func (m *MPToken) SetMPTAmountValue(value uint64) {
 	m.SetMPTAmount(uint64ValueToString(value, true))
 }
 
-// HasLockedAmount reports whether LockedAmount was present in the serialized entry.
+// HasLockedAmount reports whether LockedAmount is present.
 func (m *MPToken) HasLockedAmount() bool {
 	return m != nil && m.present&mptokenBitLockedAmount != 0
 }
@@ -276,7 +276,7 @@ func (m *MPToken) SetLockedAmountValue(value uint64) {
 	m.SetLockedAmount(uint64ValueToString(value, true))
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (m *MPToken) HasOwnerNode() bool {
 	return m != nil && m.present&mptokenBitOwnerNode != 0
 }
@@ -294,12 +294,12 @@ func (m *MPToken) SetOwnerNodeValue(value uint64) {
 	m.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (m *MPToken) HasFlags() bool {
 	return m != nil && m.present&mptokenBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (m *MPToken) HasPreviousTxnID() bool {
 	return m != nil && m.present&mptokenBitPreviousTxnID != 0
 }
@@ -320,12 +320,12 @@ func (m *MPToken) SetPreviousTxnIDValue(value [32]byte) {
 	m.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (m *MPToken) HasPreviousTxnLgrSeq() bool {
 	return m != nil && m.present&mptokenBitPreviousTxnLgrSeq != 0
 }
 
-// HasConfidentialBalanceInbox reports whether ConfidentialBalanceInbox was present in the serialized entry.
+// HasConfidentialBalanceInbox reports whether ConfidentialBalanceInbox is present.
 func (m *MPToken) HasConfidentialBalanceInbox() bool {
 	return m != nil && m.present&mptokenBitConfidentialBalanceInbox != 0
 }
@@ -353,7 +353,7 @@ func (m *MPToken) SetConfidentialBalanceInboxValue(value []byte) {
 	m.SetConfidentialBalanceInbox(blobValueToString(value))
 }
 
-// HasConfidentialBalanceSpending reports whether ConfidentialBalanceSpending was present in the serialized entry.
+// HasConfidentialBalanceSpending reports whether ConfidentialBalanceSpending is present.
 func (m *MPToken) HasConfidentialBalanceSpending() bool {
 	return m != nil && m.present&mptokenBitConfidentialBalanceSpending != 0
 }
@@ -381,7 +381,7 @@ func (m *MPToken) SetConfidentialBalanceSpendingValue(value []byte) {
 	m.SetConfidentialBalanceSpending(blobValueToString(value))
 }
 
-// HasConfidentialBalanceVersion reports whether ConfidentialBalanceVersion was present in the serialized entry.
+// HasConfidentialBalanceVersion reports whether ConfidentialBalanceVersion is present.
 func (m *MPToken) HasConfidentialBalanceVersion() bool {
 	return m != nil && m.present&mptokenBitConfidentialBalanceVersion != 0
 }
@@ -396,7 +396,7 @@ func (m *MPToken) ClearConfidentialBalanceVersion() {
 	m.dirty = true
 }
 
-// HasIssuerEncryptedBalance reports whether IssuerEncryptedBalance was present in the serialized entry.
+// HasIssuerEncryptedBalance reports whether IssuerEncryptedBalance is present.
 func (m *MPToken) HasIssuerEncryptedBalance() bool {
 	return m != nil && m.present&mptokenBitIssuerEncryptedBalance != 0
 }
@@ -424,7 +424,7 @@ func (m *MPToken) SetIssuerEncryptedBalanceValue(value []byte) {
 	m.SetIssuerEncryptedBalance(blobValueToString(value))
 }
 
-// HasAuditorEncryptedBalance reports whether AuditorEncryptedBalance was present in the serialized entry.
+// HasAuditorEncryptedBalance reports whether AuditorEncryptedBalance is present.
 func (m *MPToken) HasAuditorEncryptedBalance() bool {
 	return m != nil && m.present&mptokenBitAuditorEncryptedBalance != 0
 }
@@ -452,7 +452,7 @@ func (m *MPToken) SetAuditorEncryptedBalanceValue(value []byte) {
 	m.SetAuditorEncryptedBalance(blobValueToString(value))
 }
 
-// HasHolderEncryptionKey reports whether HolderEncryptionKey was present in the serialized entry.
+// HasHolderEncryptionKey reports whether HolderEncryptionKey is present.
 func (m *MPToken) HasHolderEncryptionKey() bool {
 	return m != nil && m.present&mptokenBitHolderEncryptionKey != 0
 }
@@ -480,7 +480,7 @@ func (m *MPToken) SetHolderEncryptionKeyValue(value []byte) {
 	m.SetHolderEncryptionKey(blobValueToString(value))
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (m *MPToken) HasSponsor() bool {
 	return m != nil && m.present&mptokenBitSponsor != 0
 }

@@ -105,7 +105,7 @@ func (p *PermissionedDomain) SetSponsor(value string) {
 	p.present |= permissioneddomainBitSponsor
 }
 
-// HasOwner reports whether Owner was present in the serialized entry.
+// HasOwner reports whether Owner is present.
 func (p *PermissionedDomain) HasOwner() bool {
 	return p != nil && p.present&permissioneddomainBitOwner != 0
 }
@@ -128,17 +128,17 @@ func (p *PermissionedDomain) SetOwnerValue(value [20]byte) error {
 	return nil
 }
 
-// HasSequence reports whether Sequence was present in the serialized entry.
+// HasSequence reports whether Sequence is present.
 func (p *PermissionedDomain) HasSequence() bool {
 	return p != nil && p.present&permissioneddomainBitSequence != 0
 }
 
-// HasAcceptedCredentials reports whether AcceptedCredentials was present in the serialized entry.
+// HasAcceptedCredentials reports whether AcceptedCredentials is present.
 func (p *PermissionedDomain) HasAcceptedCredentials() bool {
 	return p != nil && p.present&permissioneddomainBitAcceptedCredentials != 0
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (p *PermissionedDomain) HasOwnerNode() bool {
 	return p != nil && p.present&permissioneddomainBitOwnerNode != 0
 }
@@ -156,12 +156,12 @@ func (p *PermissionedDomain) SetOwnerNodeValue(value uint64) {
 	p.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (p *PermissionedDomain) HasFlags() bool {
 	return p != nil && p.present&permissioneddomainBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (p *PermissionedDomain) HasPreviousTxnID() bool {
 	return p != nil && p.present&permissioneddomainBitPreviousTxnID != 0
 }
@@ -182,12 +182,12 @@ func (p *PermissionedDomain) SetPreviousTxnIDValue(value [32]byte) {
 	p.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (p *PermissionedDomain) HasPreviousTxnLgrSeq() bool {
 	return p != nil && p.present&permissioneddomainBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (p *PermissionedDomain) HasSponsor() bool {
 	return p != nil && p.present&permissioneddomainBitSponsor != 0
 }

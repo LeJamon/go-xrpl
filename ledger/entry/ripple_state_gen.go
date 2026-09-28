@@ -169,12 +169,12 @@ func (r *RippleState) SetSponsor(value string) {
 	r.present |= ripplestateBitSponsor
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (r *RippleState) HasFlags() bool {
 	return r != nil && r.present&ripplestateBitFlags != 0
 }
 
-// HasBalance reports whether Balance was present in the serialized entry.
+// HasBalance reports whether Balance is present.
 func (r *RippleState) HasBalance() bool {
 	return r != nil && r.present&ripplestateBitBalance != 0
 }
@@ -197,7 +197,7 @@ func (r *RippleState) SetBalanceValue(value AmountValue) error {
 	return nil
 }
 
-// HasLowLimit reports whether LowLimit was present in the serialized entry.
+// HasLowLimit reports whether LowLimit is present.
 func (r *RippleState) HasLowLimit() bool {
 	return r != nil && r.present&ripplestateBitLowLimit != 0
 }
@@ -220,7 +220,7 @@ func (r *RippleState) SetLowLimitValue(value AmountValue) error {
 	return nil
 }
 
-// HasHighLimit reports whether HighLimit was present in the serialized entry.
+// HasHighLimit reports whether HighLimit is present.
 func (r *RippleState) HasHighLimit() bool {
 	return r != nil && r.present&ripplestateBitHighLimit != 0
 }
@@ -243,7 +243,7 @@ func (r *RippleState) SetHighLimitValue(value AmountValue) error {
 	return nil
 }
 
-// HasLowNode reports whether LowNode was present in the serialized entry.
+// HasLowNode reports whether LowNode is present.
 func (r *RippleState) HasLowNode() bool {
 	return r != nil && r.present&ripplestateBitLowNode != 0
 }
@@ -271,7 +271,7 @@ func (r *RippleState) SetLowNodeValue(value uint64) {
 	r.SetLowNode(uint64ValueToString(value, false))
 }
 
-// HasHighNode reports whether HighNode was present in the serialized entry.
+// HasHighNode reports whether HighNode is present.
 func (r *RippleState) HasHighNode() bool {
 	return r != nil && r.present&ripplestateBitHighNode != 0
 }
@@ -299,7 +299,7 @@ func (r *RippleState) SetHighNodeValue(value uint64) {
 	r.SetHighNode(uint64ValueToString(value, false))
 }
 
-// HasLowQualityIn reports whether LowQualityIn was present in the serialized entry.
+// HasLowQualityIn reports whether LowQualityIn is present.
 func (r *RippleState) HasLowQualityIn() bool {
 	return r != nil && r.present&ripplestateBitLowQualityIn != 0
 }
@@ -314,7 +314,7 @@ func (r *RippleState) ClearLowQualityIn() {
 	r.dirty = true
 }
 
-// HasLowQualityOut reports whether LowQualityOut was present in the serialized entry.
+// HasLowQualityOut reports whether LowQualityOut is present.
 func (r *RippleState) HasLowQualityOut() bool {
 	return r != nil && r.present&ripplestateBitLowQualityOut != 0
 }
@@ -329,7 +329,7 @@ func (r *RippleState) ClearLowQualityOut() {
 	r.dirty = true
 }
 
-// HasHighQualityIn reports whether HighQualityIn was present in the serialized entry.
+// HasHighQualityIn reports whether HighQualityIn is present.
 func (r *RippleState) HasHighQualityIn() bool {
 	return r != nil && r.present&ripplestateBitHighQualityIn != 0
 }
@@ -344,7 +344,7 @@ func (r *RippleState) ClearHighQualityIn() {
 	r.dirty = true
 }
 
-// HasHighQualityOut reports whether HighQualityOut was present in the serialized entry.
+// HasHighQualityOut reports whether HighQualityOut is present.
 func (r *RippleState) HasHighQualityOut() bool {
 	return r != nil && r.present&ripplestateBitHighQualityOut != 0
 }
@@ -359,7 +359,7 @@ func (r *RippleState) ClearHighQualityOut() {
 	r.dirty = true
 }
 
-// HasHighSponsor reports whether HighSponsor was present in the serialized entry.
+// HasHighSponsor reports whether HighSponsor is present.
 func (r *RippleState) HasHighSponsor() bool {
 	return r != nil && r.present&ripplestateBitHighSponsor != 0
 }
@@ -392,7 +392,7 @@ func (r *RippleState) SetHighSponsorValue(value [20]byte) error {
 	return nil
 }
 
-// HasLowSponsor reports whether LowSponsor was present in the serialized entry.
+// HasLowSponsor reports whether LowSponsor is present.
 func (r *RippleState) HasLowSponsor() bool {
 	return r != nil && r.present&ripplestateBitLowSponsor != 0
 }
@@ -425,7 +425,7 @@ func (r *RippleState) SetLowSponsorValue(value [20]byte) error {
 	return nil
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (r *RippleState) HasPreviousTxnID() bool {
 	return r != nil && r.present&ripplestateBitPreviousTxnID != 0
 }
@@ -446,12 +446,12 @@ func (r *RippleState) SetPreviousTxnIDValue(value [32]byte) {
 	r.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (r *RippleState) HasPreviousTxnLgrSeq() bool {
 	return r != nil && r.present&ripplestateBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (r *RippleState) HasSponsor() bool {
 	return r != nil && r.present&ripplestateBitSponsor != 0
 }

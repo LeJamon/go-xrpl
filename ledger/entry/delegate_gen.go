@@ -114,7 +114,7 @@ func (d *Delegate) SetSponsor(value string) {
 	d.present |= delegateBitSponsor
 }
 
-// HasAccount reports whether Account was present in the serialized entry.
+// HasAccount reports whether Account is present.
 func (d *Delegate) HasAccount() bool {
 	return d != nil && d.present&delegateBitAccount != 0
 }
@@ -137,7 +137,7 @@ func (d *Delegate) SetAccountValue(value [20]byte) error {
 	return nil
 }
 
-// HasAuthorize reports whether Authorize was present in the serialized entry.
+// HasAuthorize reports whether Authorize is present.
 func (d *Delegate) HasAuthorize() bool {
 	return d != nil && d.present&delegateBitAuthorize != 0
 }
@@ -160,12 +160,12 @@ func (d *Delegate) SetAuthorizeValue(value [20]byte) error {
 	return nil
 }
 
-// HasPermissions reports whether Permissions was present in the serialized entry.
+// HasPermissions reports whether Permissions is present.
 func (d *Delegate) HasPermissions() bool {
 	return d != nil && d.present&delegateBitPermissions != 0
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (d *Delegate) HasOwnerNode() bool {
 	return d != nil && d.present&delegateBitOwnerNode != 0
 }
@@ -183,7 +183,7 @@ func (d *Delegate) SetOwnerNodeValue(value uint64) {
 	d.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasDestinationNode reports whether DestinationNode was present in the serialized entry.
+// HasDestinationNode reports whether DestinationNode is present.
 func (d *Delegate) HasDestinationNode() bool {
 	return d != nil && d.present&delegateBitDestinationNode != 0
 }
@@ -211,12 +211,12 @@ func (d *Delegate) SetDestinationNodeValue(value uint64) {
 	d.SetDestinationNode(uint64ValueToString(value, false))
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (d *Delegate) HasFlags() bool {
 	return d != nil && d.present&delegateBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (d *Delegate) HasPreviousTxnID() bool {
 	return d != nil && d.present&delegateBitPreviousTxnID != 0
 }
@@ -237,12 +237,12 @@ func (d *Delegate) SetPreviousTxnIDValue(value [32]byte) {
 	d.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (d *Delegate) HasPreviousTxnLgrSeq() bool {
 	return d != nil && d.present&delegateBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (d *Delegate) HasSponsor() bool {
 	return d != nil && d.present&delegateBitSponsor != 0
 }

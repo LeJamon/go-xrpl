@@ -547,7 +547,7 @@ func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}(value {{ .SetterGo
 	{{ $.Receiver }}.present |= {{ .BitConst }}
 }
 
-{{ end }}{{ range .Fields }}// Has{{ .GoField }} reports whether {{ .Name }} was present in the serialized entry.
+{{ end }}{{ range .Fields }}// Has{{ .GoField }} reports whether {{ .Name }} is present.
 func ({{ $.Receiver }} *{{ $.StructName }}) Has{{ .GoField }}() bool {
 	return {{ $.Receiver }} != nil && {{ $.Receiver }}.present&{{ .BitConst }} != 0
 }

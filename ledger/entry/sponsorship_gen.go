@@ -136,7 +136,7 @@ func (s *Sponsorship) SetSponsor(value string) {
 	s.present |= sponsorshipBitSponsor
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (s *Sponsorship) HasPreviousTxnID() bool {
 	return s != nil && s.present&sponsorshipBitPreviousTxnID != 0
 }
@@ -157,12 +157,12 @@ func (s *Sponsorship) SetPreviousTxnIDValue(value [32]byte) {
 	s.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (s *Sponsorship) HasPreviousTxnLgrSeq() bool {
 	return s != nil && s.present&sponsorshipBitPreviousTxnLgrSeq != 0
 }
 
-// HasOwner reports whether Owner was present in the serialized entry.
+// HasOwner reports whether Owner is present.
 func (s *Sponsorship) HasOwner() bool {
 	return s != nil && s.present&sponsorshipBitOwner != 0
 }
@@ -185,7 +185,7 @@ func (s *Sponsorship) SetOwnerValue(value [20]byte) error {
 	return nil
 }
 
-// HasSponsee reports whether Sponsee was present in the serialized entry.
+// HasSponsee reports whether Sponsee is present.
 func (s *Sponsorship) HasSponsee() bool {
 	return s != nil && s.present&sponsorshipBitSponsee != 0
 }
@@ -208,7 +208,7 @@ func (s *Sponsorship) SetSponseeValue(value [20]byte) error {
 	return nil
 }
 
-// HasFeeAmount reports whether FeeAmount was present in the serialized entry.
+// HasFeeAmount reports whether FeeAmount is present.
 func (s *Sponsorship) HasFeeAmount() bool {
 	return s != nil && s.present&sponsorshipBitFeeAmount != 0
 }
@@ -241,7 +241,7 @@ func (s *Sponsorship) SetFeeAmountValue(value AmountValue) error {
 	return nil
 }
 
-// HasMaxFee reports whether MaxFee was present in the serialized entry.
+// HasMaxFee reports whether MaxFee is present.
 func (s *Sponsorship) HasMaxFee() bool {
 	return s != nil && s.present&sponsorshipBitMaxFee != 0
 }
@@ -274,7 +274,7 @@ func (s *Sponsorship) SetMaxFeeValue(value AmountValue) error {
 	return nil
 }
 
-// HasRemainingOwnerCount reports whether RemainingOwnerCount was present in the serialized entry.
+// HasRemainingOwnerCount reports whether RemainingOwnerCount is present.
 func (s *Sponsorship) HasRemainingOwnerCount() bool {
 	return s != nil && s.present&sponsorshipBitRemainingOwnerCount != 0
 }
@@ -289,7 +289,7 @@ func (s *Sponsorship) ClearRemainingOwnerCount() {
 	s.dirty = true
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (s *Sponsorship) HasOwnerNode() bool {
 	return s != nil && s.present&sponsorshipBitOwnerNode != 0
 }
@@ -307,7 +307,7 @@ func (s *Sponsorship) SetOwnerNodeValue(value uint64) {
 	s.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasSponseeNode reports whether SponseeNode was present in the serialized entry.
+// HasSponseeNode reports whether SponseeNode is present.
 func (s *Sponsorship) HasSponseeNode() bool {
 	return s != nil && s.present&sponsorshipBitSponseeNode != 0
 }
@@ -325,12 +325,12 @@ func (s *Sponsorship) SetSponseeNodeValue(value uint64) {
 	s.SetSponseeNode(uint64ValueToString(value, false))
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (s *Sponsorship) HasFlags() bool {
 	return s != nil && s.present&sponsorshipBitFlags != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (s *Sponsorship) HasSponsor() bool {
 	return s != nil && s.present&sponsorshipBitSponsor != 0
 }

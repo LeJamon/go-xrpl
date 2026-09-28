@@ -305,7 +305,7 @@ func (a *AccountRoot) SetSponsor(value string) {
 	a.present |= accountrootBitSponsor
 }
 
-// HasAccount reports whether Account was present in the serialized entry.
+// HasAccount reports whether Account is present.
 func (a *AccountRoot) HasAccount() bool {
 	return a != nil && a.present&accountrootBitAccount != 0
 }
@@ -328,7 +328,7 @@ func (a *AccountRoot) SetAccountValue(value [20]byte) error {
 	return nil
 }
 
-// HasBalance reports whether Balance was present in the serialized entry.
+// HasBalance reports whether Balance is present.
 func (a *AccountRoot) HasBalance() bool {
 	return a != nil && a.present&accountrootBitBalance != 0
 }
@@ -351,17 +351,17 @@ func (a *AccountRoot) SetBalanceValue(value AmountValue) error {
 	return nil
 }
 
-// HasSequence reports whether Sequence was present in the serialized entry.
+// HasSequence reports whether Sequence is present.
 func (a *AccountRoot) HasSequence() bool {
 	return a != nil && a.present&accountrootBitSequence != 0
 }
 
-// HasOwnerCount reports whether OwnerCount was present in the serialized entry.
+// HasOwnerCount reports whether OwnerCount is present.
 func (a *AccountRoot) HasOwnerCount() bool {
 	return a != nil && a.present&accountrootBitOwnerCount != 0
 }
 
-// HasSponsoredOwnerCount reports whether SponsoredOwnerCount was present in the serialized entry.
+// HasSponsoredOwnerCount reports whether SponsoredOwnerCount is present.
 func (a *AccountRoot) HasSponsoredOwnerCount() bool {
 	return a != nil && a.present&accountrootBitSponsoredOwnerCount != 0
 }
@@ -376,7 +376,7 @@ func (a *AccountRoot) ClearSponsoredOwnerCount() {
 	a.dirty = true
 }
 
-// HasSponsoringOwnerCount reports whether SponsoringOwnerCount was present in the serialized entry.
+// HasSponsoringOwnerCount reports whether SponsoringOwnerCount is present.
 func (a *AccountRoot) HasSponsoringOwnerCount() bool {
 	return a != nil && a.present&accountrootBitSponsoringOwnerCount != 0
 }
@@ -391,7 +391,7 @@ func (a *AccountRoot) ClearSponsoringOwnerCount() {
 	a.dirty = true
 }
 
-// HasSponsoringAccountCount reports whether SponsoringAccountCount was present in the serialized entry.
+// HasSponsoringAccountCount reports whether SponsoringAccountCount is present.
 func (a *AccountRoot) HasSponsoringAccountCount() bool {
 	return a != nil && a.present&accountrootBitSponsoringAccountCount != 0
 }
@@ -406,12 +406,12 @@ func (a *AccountRoot) ClearSponsoringAccountCount() {
 	a.dirty = true
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (a *AccountRoot) HasFlags() bool {
 	return a != nil && a.present&accountrootBitFlags != 0
 }
 
-// HasRegularKey reports whether RegularKey was present in the serialized entry.
+// HasRegularKey reports whether RegularKey is present.
 func (a *AccountRoot) HasRegularKey() bool {
 	return a != nil && a.present&accountrootBitRegularKey != 0
 }
@@ -444,7 +444,7 @@ func (a *AccountRoot) SetRegularKeyValue(value [20]byte) error {
 	return nil
 }
 
-// HasDomain reports whether Domain was present in the serialized entry.
+// HasDomain reports whether Domain is present.
 func (a *AccountRoot) HasDomain() bool {
 	return a != nil && a.present&accountrootBitDomain != 0
 }
@@ -472,7 +472,7 @@ func (a *AccountRoot) SetDomainValue(value []byte) {
 	a.SetDomain(blobValueToString(value))
 }
 
-// HasEmailHash reports whether EmailHash was present in the serialized entry.
+// HasEmailHash reports whether EmailHash is present.
 func (a *AccountRoot) HasEmailHash() bool {
 	return a != nil && a.present&accountrootBitEmailHash != 0
 }
@@ -503,7 +503,7 @@ func (a *AccountRoot) SetEmailHashValue(value [16]byte) {
 	a.SetEmailHash(hashValueToString(value[:]))
 }
 
-// HasMessageKey reports whether MessageKey was present in the serialized entry.
+// HasMessageKey reports whether MessageKey is present.
 func (a *AccountRoot) HasMessageKey() bool {
 	return a != nil && a.present&accountrootBitMessageKey != 0
 }
@@ -531,7 +531,7 @@ func (a *AccountRoot) SetMessageKeyValue(value []byte) {
 	a.SetMessageKey(blobValueToString(value))
 }
 
-// HasTransferRate reports whether TransferRate was present in the serialized entry.
+// HasTransferRate reports whether TransferRate is present.
 func (a *AccountRoot) HasTransferRate() bool {
 	return a != nil && a.present&accountrootBitTransferRate != 0
 }
@@ -546,7 +546,7 @@ func (a *AccountRoot) ClearTransferRate() {
 	a.dirty = true
 }
 
-// HasTickSize reports whether TickSize was present in the serialized entry.
+// HasTickSize reports whether TickSize is present.
 func (a *AccountRoot) HasTickSize() bool {
 	return a != nil && a.present&accountrootBitTickSize != 0
 }
@@ -572,7 +572,7 @@ func (a *AccountRoot) GetTickSize() (uint8, error) {
 	return uint8(a.TickSize), nil
 }
 
-// HasNFTokenMinter reports whether NFTokenMinter was present in the serialized entry.
+// HasNFTokenMinter reports whether NFTokenMinter is present.
 func (a *AccountRoot) HasNFTokenMinter() bool {
 	return a != nil && a.present&accountrootBitNFTokenMinter != 0
 }
@@ -605,7 +605,7 @@ func (a *AccountRoot) SetNFTokenMinterValue(value [20]byte) error {
 	return nil
 }
 
-// HasMintedNFTokens reports whether MintedNFTokens was present in the serialized entry.
+// HasMintedNFTokens reports whether MintedNFTokens is present.
 func (a *AccountRoot) HasMintedNFTokens() bool {
 	return a != nil && a.present&accountrootBitMintedNFTokens != 0
 }
@@ -620,7 +620,7 @@ func (a *AccountRoot) ClearMintedNFTokens() {
 	a.dirty = true
 }
 
-// HasBurnedNFTokens reports whether BurnedNFTokens was present in the serialized entry.
+// HasBurnedNFTokens reports whether BurnedNFTokens is present.
 func (a *AccountRoot) HasBurnedNFTokens() bool {
 	return a != nil && a.present&accountrootBitBurnedNFTokens != 0
 }
@@ -635,7 +635,7 @@ func (a *AccountRoot) ClearBurnedNFTokens() {
 	a.dirty = true
 }
 
-// HasFirstNFTokenSequence reports whether FirstNFTokenSequence was present in the serialized entry.
+// HasFirstNFTokenSequence reports whether FirstNFTokenSequence is present.
 func (a *AccountRoot) HasFirstNFTokenSequence() bool {
 	return a != nil && a.present&accountrootBitFirstNFTokenSequence != 0
 }
@@ -650,7 +650,7 @@ func (a *AccountRoot) ClearFirstNFTokenSequence() {
 	a.dirty = true
 }
 
-// HasAccountTxnID reports whether AccountTxnID was present in the serialized entry.
+// HasAccountTxnID reports whether AccountTxnID is present.
 func (a *AccountRoot) HasAccountTxnID() bool {
 	return a != nil && a.present&accountrootBitAccountTxnID != 0
 }
@@ -681,7 +681,7 @@ func (a *AccountRoot) SetAccountTxnIDValue(value [32]byte) {
 	a.SetAccountTxnID(hashValueToString(value[:]))
 }
 
-// HasWalletLocator reports whether WalletLocator was present in the serialized entry.
+// HasWalletLocator reports whether WalletLocator is present.
 func (a *AccountRoot) HasWalletLocator() bool {
 	return a != nil && a.present&accountrootBitWalletLocator != 0
 }
@@ -712,7 +712,7 @@ func (a *AccountRoot) SetWalletLocatorValue(value [32]byte) {
 	a.SetWalletLocator(hashValueToString(value[:]))
 }
 
-// HasTicketCount reports whether TicketCount was present in the serialized entry.
+// HasTicketCount reports whether TicketCount is present.
 func (a *AccountRoot) HasTicketCount() bool {
 	return a != nil && a.present&accountrootBitTicketCount != 0
 }
@@ -727,7 +727,7 @@ func (a *AccountRoot) ClearTicketCount() {
 	a.dirty = true
 }
 
-// HasAMMID reports whether AMMID was present in the serialized entry.
+// HasAMMID reports whether AMMID is present.
 func (a *AccountRoot) HasAMMID() bool {
 	return a != nil && a.present&accountrootBitAMMID != 0
 }
@@ -758,7 +758,7 @@ func (a *AccountRoot) SetAMMIDValue(value [32]byte) {
 	a.SetAMMID(hashValueToString(value[:]))
 }
 
-// HasVaultID reports whether VaultID was present in the serialized entry.
+// HasVaultID reports whether VaultID is present.
 func (a *AccountRoot) HasVaultID() bool {
 	return a != nil && a.present&accountrootBitVaultID != 0
 }
@@ -789,7 +789,7 @@ func (a *AccountRoot) SetVaultIDValue(value [32]byte) {
 	a.SetVaultID(hashValueToString(value[:]))
 }
 
-// HasLoanBrokerID reports whether LoanBrokerID was present in the serialized entry.
+// HasLoanBrokerID reports whether LoanBrokerID is present.
 func (a *AccountRoot) HasLoanBrokerID() bool {
 	return a != nil && a.present&accountrootBitLoanBrokerID != 0
 }
@@ -820,7 +820,7 @@ func (a *AccountRoot) SetLoanBrokerIDValue(value [32]byte) {
 	a.SetLoanBrokerID(hashValueToString(value[:]))
 }
 
-// HasWalletSize reports whether WalletSize was present in the serialized entry.
+// HasWalletSize reports whether WalletSize is present.
 func (a *AccountRoot) HasWalletSize() bool {
 	return a != nil && a.present&accountrootBitWalletSize != 0
 }
@@ -835,7 +835,7 @@ func (a *AccountRoot) ClearWalletSize() {
 	a.dirty = true
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (a *AccountRoot) HasPreviousTxnID() bool {
 	return a != nil && a.present&accountrootBitPreviousTxnID != 0
 }
@@ -856,12 +856,12 @@ func (a *AccountRoot) SetPreviousTxnIDValue(value [32]byte) {
 	a.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (a *AccountRoot) HasPreviousTxnLgrSeq() bool {
 	return a != nil && a.present&accountrootBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (a *AccountRoot) HasSponsor() bool {
 	return a != nil && a.present&accountrootBitSponsor != 0
 }

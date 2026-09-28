@@ -132,7 +132,7 @@ func (x *XChainOwnedClaimID) SetSponsor(value string) {
 	x.present |= xchainownedclaimidBitSponsor
 }
 
-// HasAccount reports whether Account was present in the serialized entry.
+// HasAccount reports whether Account is present.
 func (x *XChainOwnedClaimID) HasAccount() bool {
 	return x != nil && x.present&xchainownedclaimidBitAccount != 0
 }
@@ -155,12 +155,12 @@ func (x *XChainOwnedClaimID) SetAccountValue(value [20]byte) error {
 	return nil
 }
 
-// HasXChainBridge reports whether XChainBridge was present in the serialized entry.
+// HasXChainBridge reports whether XChainBridge is present.
 func (x *XChainOwnedClaimID) HasXChainBridge() bool {
 	return x != nil && x.present&xchainownedclaimidBitXChainBridge != 0
 }
 
-// HasXChainClaimID reports whether XChainClaimID was present in the serialized entry.
+// HasXChainClaimID reports whether XChainClaimID is present.
 func (x *XChainOwnedClaimID) HasXChainClaimID() bool {
 	return x != nil && x.present&xchainownedclaimidBitXChainClaimID != 0
 }
@@ -178,7 +178,7 @@ func (x *XChainOwnedClaimID) SetXChainClaimIDValue(value uint64) {
 	x.SetXChainClaimID(uint64ValueToString(value, false))
 }
 
-// HasOtherChainSource reports whether OtherChainSource was present in the serialized entry.
+// HasOtherChainSource reports whether OtherChainSource is present.
 func (x *XChainOwnedClaimID) HasOtherChainSource() bool {
 	return x != nil && x.present&xchainownedclaimidBitOtherChainSource != 0
 }
@@ -201,12 +201,12 @@ func (x *XChainOwnedClaimID) SetOtherChainSourceValue(value [20]byte) error {
 	return nil
 }
 
-// HasXChainClaimAttestations reports whether XChainClaimAttestations was present in the serialized entry.
+// HasXChainClaimAttestations reports whether XChainClaimAttestations is present.
 func (x *XChainOwnedClaimID) HasXChainClaimAttestations() bool {
 	return x != nil && x.present&xchainownedclaimidBitXChainClaimAttestations != 0
 }
 
-// HasSignatureReward reports whether SignatureReward was present in the serialized entry.
+// HasSignatureReward reports whether SignatureReward is present.
 func (x *XChainOwnedClaimID) HasSignatureReward() bool {
 	return x != nil && x.present&xchainownedclaimidBitSignatureReward != 0
 }
@@ -229,7 +229,7 @@ func (x *XChainOwnedClaimID) SetSignatureRewardValue(value AmountValue) error {
 	return nil
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (x *XChainOwnedClaimID) HasOwnerNode() bool {
 	return x != nil && x.present&xchainownedclaimidBitOwnerNode != 0
 }
@@ -247,12 +247,12 @@ func (x *XChainOwnedClaimID) SetOwnerNodeValue(value uint64) {
 	x.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (x *XChainOwnedClaimID) HasFlags() bool {
 	return x != nil && x.present&xchainownedclaimidBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (x *XChainOwnedClaimID) HasPreviousTxnID() bool {
 	return x != nil && x.present&xchainownedclaimidBitPreviousTxnID != 0
 }
@@ -273,12 +273,12 @@ func (x *XChainOwnedClaimID) SetPreviousTxnIDValue(value [32]byte) {
 	x.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (x *XChainOwnedClaimID) HasPreviousTxnLgrSeq() bool {
 	return x != nil && x.present&xchainownedclaimidBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (x *XChainOwnedClaimID) HasSponsor() bool {
 	return x != nil && x.present&xchainownedclaimidBitSponsor != 0
 }

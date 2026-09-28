@@ -87,12 +87,12 @@ func (a *Amendments) SetSponsor(value string) {
 	a.present |= amendmentsBitSponsor
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (a *Amendments) HasFlags() bool {
 	return a != nil && a.present&amendmentsBitFlags != 0
 }
 
-// HasAmendments reports whether Amendments was present in the serialized entry.
+// HasAmendments reports whether Amendments is present.
 func (a *Amendments) HasAmendments() bool {
 	return a != nil && a.present&amendmentsBitAmendments != 0
 }
@@ -107,7 +107,7 @@ func (a *Amendments) ClearAmendments() {
 	a.dirty = true
 }
 
-// HasMajorities reports whether Majorities was present in the serialized entry.
+// HasMajorities reports whether Majorities is present.
 func (a *Amendments) HasMajorities() bool {
 	return a != nil && a.present&amendmentsBitMajorities != 0
 }
@@ -122,7 +122,7 @@ func (a *Amendments) ClearMajorities() {
 	a.dirty = true
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (a *Amendments) HasPreviousTxnID() bool {
 	return a != nil && a.present&amendmentsBitPreviousTxnID != 0
 }
@@ -153,7 +153,7 @@ func (a *Amendments) SetPreviousTxnIDValue(value [32]byte) {
 	a.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (a *Amendments) HasPreviousTxnLgrSeq() bool {
 	return a != nil && a.present&amendmentsBitPreviousTxnLgrSeq != 0
 }
@@ -168,7 +168,7 @@ func (a *Amendments) ClearPreviousTxnLgrSeq() {
 	a.dirty = true
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (a *Amendments) HasSponsor() bool {
 	return a != nil && a.present&amendmentsBitSponsor != 0
 }

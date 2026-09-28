@@ -159,7 +159,7 @@ func (c *Check) SetSponsor(value string) {
 	c.present |= checkBitSponsor
 }
 
-// HasAccount reports whether Account was present in the serialized entry.
+// HasAccount reports whether Account is present.
 func (c *Check) HasAccount() bool {
 	return c != nil && c.present&checkBitAccount != 0
 }
@@ -182,7 +182,7 @@ func (c *Check) SetAccountValue(value [20]byte) error {
 	return nil
 }
 
-// HasDestination reports whether Destination was present in the serialized entry.
+// HasDestination reports whether Destination is present.
 func (c *Check) HasDestination() bool {
 	return c != nil && c.present&checkBitDestination != 0
 }
@@ -205,7 +205,7 @@ func (c *Check) SetDestinationValue(value [20]byte) error {
 	return nil
 }
 
-// HasSendMax reports whether SendMax was present in the serialized entry.
+// HasSendMax reports whether SendMax is present.
 func (c *Check) HasSendMax() bool {
 	return c != nil && c.present&checkBitSendMax != 0
 }
@@ -228,12 +228,12 @@ func (c *Check) SetSendMaxValue(value AmountValue) error {
 	return nil
 }
 
-// HasSequence reports whether Sequence was present in the serialized entry.
+// HasSequence reports whether Sequence is present.
 func (c *Check) HasSequence() bool {
 	return c != nil && c.present&checkBitSequence != 0
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (c *Check) HasOwnerNode() bool {
 	return c != nil && c.present&checkBitOwnerNode != 0
 }
@@ -251,7 +251,7 @@ func (c *Check) SetOwnerNodeValue(value uint64) {
 	c.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasDestinationNode reports whether DestinationNode was present in the serialized entry.
+// HasDestinationNode reports whether DestinationNode is present.
 func (c *Check) HasDestinationNode() bool {
 	return c != nil && c.present&checkBitDestinationNode != 0
 }
@@ -269,7 +269,7 @@ func (c *Check) SetDestinationNodeValue(value uint64) {
 	c.SetDestinationNode(uint64ValueToString(value, false))
 }
 
-// HasExpiration reports whether Expiration was present in the serialized entry.
+// HasExpiration reports whether Expiration is present.
 func (c *Check) HasExpiration() bool {
 	return c != nil && c.present&checkBitExpiration != 0
 }
@@ -284,7 +284,7 @@ func (c *Check) ClearExpiration() {
 	c.dirty = true
 }
 
-// HasInvoiceID reports whether InvoiceID was present in the serialized entry.
+// HasInvoiceID reports whether InvoiceID is present.
 func (c *Check) HasInvoiceID() bool {
 	return c != nil && c.present&checkBitInvoiceID != 0
 }
@@ -315,7 +315,7 @@ func (c *Check) SetInvoiceIDValue(value [32]byte) {
 	c.SetInvoiceID(hashValueToString(value[:]))
 }
 
-// HasSourceTag reports whether SourceTag was present in the serialized entry.
+// HasSourceTag reports whether SourceTag is present.
 func (c *Check) HasSourceTag() bool {
 	return c != nil && c.present&checkBitSourceTag != 0
 }
@@ -330,7 +330,7 @@ func (c *Check) ClearSourceTag() {
 	c.dirty = true
 }
 
-// HasDestinationTag reports whether DestinationTag was present in the serialized entry.
+// HasDestinationTag reports whether DestinationTag is present.
 func (c *Check) HasDestinationTag() bool {
 	return c != nil && c.present&checkBitDestinationTag != 0
 }
@@ -345,12 +345,12 @@ func (c *Check) ClearDestinationTag() {
 	c.dirty = true
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (c *Check) HasFlags() bool {
 	return c != nil && c.present&checkBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (c *Check) HasPreviousTxnID() bool {
 	return c != nil && c.present&checkBitPreviousTxnID != 0
 }
@@ -371,12 +371,12 @@ func (c *Check) SetPreviousTxnIDValue(value [32]byte) {
 	c.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (c *Check) HasPreviousTxnLgrSeq() bool {
 	return c != nil && c.present&checkBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (c *Check) HasSponsor() bool {
 	return c != nil && c.present&checkBitSponsor != 0
 }

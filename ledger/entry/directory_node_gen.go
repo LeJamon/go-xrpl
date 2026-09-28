@@ -195,12 +195,12 @@ func (d *DirectoryNode) SetSponsor(value string) {
 	d.present |= directorynodeBitSponsor
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (d *DirectoryNode) HasFlags() bool {
 	return d != nil && d.present&directorynodeBitFlags != 0
 }
 
-// HasRootIndex reports whether RootIndex was present in the serialized entry.
+// HasRootIndex reports whether RootIndex is present.
 func (d *DirectoryNode) HasRootIndex() bool {
 	return d != nil && d.present&directorynodeBitRootIndex != 0
 }
@@ -221,12 +221,12 @@ func (d *DirectoryNode) SetRootIndexValue(value [32]byte) {
 	d.SetRootIndex(hashValueToString(value[:]))
 }
 
-// HasIndexes reports whether Indexes was present in the serialized entry.
+// HasIndexes reports whether Indexes is present.
 func (d *DirectoryNode) HasIndexes() bool {
 	return d != nil && d.present&directorynodeBitIndexes != 0
 }
 
-// HasIndexNext reports whether IndexNext was present in the serialized entry.
+// HasIndexNext reports whether IndexNext is present.
 func (d *DirectoryNode) HasIndexNext() bool {
 	return d != nil && d.present&directorynodeBitIndexNext != 0
 }
@@ -254,7 +254,7 @@ func (d *DirectoryNode) SetIndexNextValue(value uint64) {
 	d.SetIndexNext(uint64ValueToString(value, false))
 }
 
-// HasIndexPrevious reports whether IndexPrevious was present in the serialized entry.
+// HasIndexPrevious reports whether IndexPrevious is present.
 func (d *DirectoryNode) HasIndexPrevious() bool {
 	return d != nil && d.present&directorynodeBitIndexPrevious != 0
 }
@@ -282,7 +282,7 @@ func (d *DirectoryNode) SetIndexPreviousValue(value uint64) {
 	d.SetIndexPrevious(uint64ValueToString(value, false))
 }
 
-// HasOwner reports whether Owner was present in the serialized entry.
+// HasOwner reports whether Owner is present.
 func (d *DirectoryNode) HasOwner() bool {
 	return d != nil && d.present&directorynodeBitOwner != 0
 }
@@ -315,7 +315,7 @@ func (d *DirectoryNode) SetOwnerValue(value [20]byte) error {
 	return nil
 }
 
-// HasTakerPaysCurrency reports whether TakerPaysCurrency was present in the serialized entry.
+// HasTakerPaysCurrency reports whether TakerPaysCurrency is present.
 func (d *DirectoryNode) HasTakerPaysCurrency() bool {
 	return d != nil && d.present&directorynodeBitTakerPaysCurrency != 0
 }
@@ -346,7 +346,7 @@ func (d *DirectoryNode) SetTakerPaysCurrencyValue(value [20]byte) {
 	d.SetTakerPaysCurrency(hashValueToString(value[:]))
 }
 
-// HasTakerPaysIssuer reports whether TakerPaysIssuer was present in the serialized entry.
+// HasTakerPaysIssuer reports whether TakerPaysIssuer is present.
 func (d *DirectoryNode) HasTakerPaysIssuer() bool {
 	return d != nil && d.present&directorynodeBitTakerPaysIssuer != 0
 }
@@ -377,7 +377,7 @@ func (d *DirectoryNode) SetTakerPaysIssuerValue(value [20]byte) {
 	d.SetTakerPaysIssuer(hashValueToString(value[:]))
 }
 
-// HasTakerPaysMPT reports whether TakerPaysMPT was present in the serialized entry.
+// HasTakerPaysMPT reports whether TakerPaysMPT is present.
 func (d *DirectoryNode) HasTakerPaysMPT() bool {
 	return d != nil && d.present&directorynodeBitTakerPaysMPT != 0
 }
@@ -408,7 +408,7 @@ func (d *DirectoryNode) SetTakerPaysMPTValue(value [24]byte) {
 	d.SetTakerPaysMPT(hashValueToString(value[:]))
 }
 
-// HasTakerGetsCurrency reports whether TakerGetsCurrency was present in the serialized entry.
+// HasTakerGetsCurrency reports whether TakerGetsCurrency is present.
 func (d *DirectoryNode) HasTakerGetsCurrency() bool {
 	return d != nil && d.present&directorynodeBitTakerGetsCurrency != 0
 }
@@ -439,7 +439,7 @@ func (d *DirectoryNode) SetTakerGetsCurrencyValue(value [20]byte) {
 	d.SetTakerGetsCurrency(hashValueToString(value[:]))
 }
 
-// HasTakerGetsIssuer reports whether TakerGetsIssuer was present in the serialized entry.
+// HasTakerGetsIssuer reports whether TakerGetsIssuer is present.
 func (d *DirectoryNode) HasTakerGetsIssuer() bool {
 	return d != nil && d.present&directorynodeBitTakerGetsIssuer != 0
 }
@@ -470,7 +470,7 @@ func (d *DirectoryNode) SetTakerGetsIssuerValue(value [20]byte) {
 	d.SetTakerGetsIssuer(hashValueToString(value[:]))
 }
 
-// HasTakerGetsMPT reports whether TakerGetsMPT was present in the serialized entry.
+// HasTakerGetsMPT reports whether TakerGetsMPT is present.
 func (d *DirectoryNode) HasTakerGetsMPT() bool {
 	return d != nil && d.present&directorynodeBitTakerGetsMPT != 0
 }
@@ -501,7 +501,7 @@ func (d *DirectoryNode) SetTakerGetsMPTValue(value [24]byte) {
 	d.SetTakerGetsMPT(hashValueToString(value[:]))
 }
 
-// HasExchangeRate reports whether ExchangeRate was present in the serialized entry.
+// HasExchangeRate reports whether ExchangeRate is present.
 func (d *DirectoryNode) HasExchangeRate() bool {
 	return d != nil && d.present&directorynodeBitExchangeRate != 0
 }
@@ -529,7 +529,7 @@ func (d *DirectoryNode) SetExchangeRateValue(value uint64) {
 	d.SetExchangeRate(uint64ValueToString(value, false))
 }
 
-// HasNFTokenID reports whether NFTokenID was present in the serialized entry.
+// HasNFTokenID reports whether NFTokenID is present.
 func (d *DirectoryNode) HasNFTokenID() bool {
 	return d != nil && d.present&directorynodeBitNFTokenID != 0
 }
@@ -560,7 +560,7 @@ func (d *DirectoryNode) SetNFTokenIDValue(value [32]byte) {
 	d.SetNFTokenID(hashValueToString(value[:]))
 }
 
-// HasDomainID reports whether DomainID was present in the serialized entry.
+// HasDomainID reports whether DomainID is present.
 func (d *DirectoryNode) HasDomainID() bool {
 	return d != nil && d.present&directorynodeBitDomainID != 0
 }
@@ -591,7 +591,7 @@ func (d *DirectoryNode) SetDomainIDValue(value [32]byte) {
 	d.SetDomainID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (d *DirectoryNode) HasPreviousTxnID() bool {
 	return d != nil && d.present&directorynodeBitPreviousTxnID != 0
 }
@@ -622,7 +622,7 @@ func (d *DirectoryNode) SetPreviousTxnIDValue(value [32]byte) {
 	d.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (d *DirectoryNode) HasPreviousTxnLgrSeq() bool {
 	return d != nil && d.present&directorynodeBitPreviousTxnLgrSeq != 0
 }
@@ -637,7 +637,7 @@ func (d *DirectoryNode) ClearPreviousTxnLgrSeq() {
 	d.dirty = true
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (d *DirectoryNode) HasSponsor() bool {
 	return d != nil && d.present&directorynodeBitSponsor != 0
 }

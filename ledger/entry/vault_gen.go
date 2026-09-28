@@ -250,12 +250,12 @@ func (v *Vault) SetSponsor(value string) {
 	v.present |= vaultBitSponsor
 }
 
-// HasSequence reports whether Sequence was present in the serialized entry.
+// HasSequence reports whether Sequence is present.
 func (v *Vault) HasSequence() bool {
 	return v != nil && v.present&vaultBitSequence != 0
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (v *Vault) HasOwnerNode() bool {
 	return v != nil && v.present&vaultBitOwnerNode != 0
 }
@@ -273,7 +273,7 @@ func (v *Vault) SetOwnerNodeValue(value uint64) {
 	v.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasOwner reports whether Owner was present in the serialized entry.
+// HasOwner reports whether Owner is present.
 func (v *Vault) HasOwner() bool {
 	return v != nil && v.present&vaultBitOwner != 0
 }
@@ -296,7 +296,7 @@ func (v *Vault) SetOwnerValue(value [20]byte) error {
 	return nil
 }
 
-// HasAccount reports whether Account was present in the serialized entry.
+// HasAccount reports whether Account is present.
 func (v *Vault) HasAccount() bool {
 	return v != nil && v.present&vaultBitAccount != 0
 }
@@ -319,7 +319,7 @@ func (v *Vault) SetAccountValue(value [20]byte) error {
 	return nil
 }
 
-// HasData reports whether Data was present in the serialized entry.
+// HasData reports whether Data is present.
 func (v *Vault) HasData() bool {
 	return v != nil && v.present&vaultBitData != 0
 }
@@ -347,12 +347,12 @@ func (v *Vault) SetDataValue(value []byte) {
 	v.SetData(blobValueToString(value))
 }
 
-// HasAsset reports whether Asset was present in the serialized entry.
+// HasAsset reports whether Asset is present.
 func (v *Vault) HasAsset() bool {
 	return v != nil && v.present&vaultBitAsset != 0
 }
 
-// HasAssetsTotal reports whether AssetsTotal was present in the serialized entry.
+// HasAssetsTotal reports whether AssetsTotal is present.
 func (v *Vault) HasAssetsTotal() bool {
 	return v != nil && v.present&vaultBitAssetsTotal != 0
 }
@@ -367,7 +367,7 @@ func (v *Vault) ClearAssetsTotal() {
 	v.dirty = true
 }
 
-// HasAssetsAvailable reports whether AssetsAvailable was present in the serialized entry.
+// HasAssetsAvailable reports whether AssetsAvailable is present.
 func (v *Vault) HasAssetsAvailable() bool {
 	return v != nil && v.present&vaultBitAssetsAvailable != 0
 }
@@ -382,7 +382,7 @@ func (v *Vault) ClearAssetsAvailable() {
 	v.dirty = true
 }
 
-// HasAssetsMaximum reports whether AssetsMaximum was present in the serialized entry.
+// HasAssetsMaximum reports whether AssetsMaximum is present.
 func (v *Vault) HasAssetsMaximum() bool {
 	return v != nil && v.present&vaultBitAssetsMaximum != 0
 }
@@ -397,7 +397,7 @@ func (v *Vault) ClearAssetsMaximum() {
 	v.dirty = true
 }
 
-// HasLossUnrealized reports whether LossUnrealized was present in the serialized entry.
+// HasLossUnrealized reports whether LossUnrealized is present.
 func (v *Vault) HasLossUnrealized() bool {
 	return v != nil && v.present&vaultBitLossUnrealized != 0
 }
@@ -412,7 +412,7 @@ func (v *Vault) ClearLossUnrealized() {
 	v.dirty = true
 }
 
-// HasShareMPTID reports whether ShareMPTID was present in the serialized entry.
+// HasShareMPTID reports whether ShareMPTID is present.
 func (v *Vault) HasShareMPTID() bool {
 	return v != nil && v.present&vaultBitShareMPTID != 0
 }
@@ -433,7 +433,7 @@ func (v *Vault) SetShareMPTIDValue(value [24]byte) {
 	v.SetShareMPTID(hashValueToString(value[:]))
 }
 
-// HasWithdrawalPolicy reports whether WithdrawalPolicy was present in the serialized entry.
+// HasWithdrawalPolicy reports whether WithdrawalPolicy is present.
 func (v *Vault) HasWithdrawalPolicy() bool {
 	return v != nil && v.present&vaultBitWithdrawalPolicy != 0
 }
@@ -449,7 +449,7 @@ func (v *Vault) GetWithdrawalPolicy() (uint8, error) {
 	return uint8(v.WithdrawalPolicy), nil
 }
 
-// HasScale reports whether Scale was present in the serialized entry.
+// HasScale reports whether Scale is present.
 func (v *Vault) HasScale() bool {
 	return v != nil && v.present&vaultBitScale != 0
 }
@@ -475,7 +475,7 @@ func (v *Vault) GetScale() (uint8, error) {
 	return uint8(v.Scale), nil
 }
 
-// HasLEVersion reports whether LEVersion was present in the serialized entry.
+// HasLEVersion reports whether LEVersion is present.
 func (v *Vault) HasLEVersion() bool {
 	return v != nil && v.present&vaultBitLEVersion != 0
 }
@@ -501,7 +501,7 @@ func (v *Vault) GetLEVersion() (uint8, error) {
 	return uint8(v.LEVersion), nil
 }
 
-// HasVaultKind reports whether VaultKind was present in the serialized entry.
+// HasVaultKind reports whether VaultKind is present.
 func (v *Vault) HasVaultKind() bool {
 	return v != nil && v.present&vaultBitVaultKind != 0
 }
@@ -527,7 +527,7 @@ func (v *Vault) GetVaultKind() (uint8, error) {
 	return uint8(v.VaultKind), nil
 }
 
-// HasSubscriptionDate reports whether SubscriptionDate was present in the serialized entry.
+// HasSubscriptionDate reports whether SubscriptionDate is present.
 func (v *Vault) HasSubscriptionDate() bool {
 	return v != nil && v.present&vaultBitSubscriptionDate != 0
 }
@@ -542,7 +542,7 @@ func (v *Vault) ClearSubscriptionDate() {
 	v.dirty = true
 }
 
-// HasRedemptionDate reports whether RedemptionDate was present in the serialized entry.
+// HasRedemptionDate reports whether RedemptionDate is present.
 func (v *Vault) HasRedemptionDate() bool {
 	return v != nil && v.present&vaultBitRedemptionDate != 0
 }
@@ -557,12 +557,12 @@ func (v *Vault) ClearRedemptionDate() {
 	v.dirty = true
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (v *Vault) HasFlags() bool {
 	return v != nil && v.present&vaultBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (v *Vault) HasPreviousTxnID() bool {
 	return v != nil && v.present&vaultBitPreviousTxnID != 0
 }
@@ -583,12 +583,12 @@ func (v *Vault) SetPreviousTxnIDValue(value [32]byte) {
 	v.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (v *Vault) HasPreviousTxnLgrSeq() bool {
 	return v != nil && v.present&vaultBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (v *Vault) HasSponsor() bool {
 	return v != nil && v.present&vaultBitSponsor != 0
 }

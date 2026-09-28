@@ -132,7 +132,7 @@ func (c *Credential) SetSponsor(value string) {
 	c.present |= credentialBitSponsor
 }
 
-// HasSubject reports whether Subject was present in the serialized entry.
+// HasSubject reports whether Subject is present.
 func (c *Credential) HasSubject() bool {
 	return c != nil && c.present&credentialBitSubject != 0
 }
@@ -155,7 +155,7 @@ func (c *Credential) SetSubjectValue(value [20]byte) error {
 	return nil
 }
 
-// HasIssuer reports whether Issuer was present in the serialized entry.
+// HasIssuer reports whether Issuer is present.
 func (c *Credential) HasIssuer() bool {
 	return c != nil && c.present&credentialBitIssuer != 0
 }
@@ -178,7 +178,7 @@ func (c *Credential) SetIssuerValue(value [20]byte) error {
 	return nil
 }
 
-// HasCredentialType reports whether CredentialType was present in the serialized entry.
+// HasCredentialType reports whether CredentialType is present.
 func (c *Credential) HasCredentialType() bool {
 	return c != nil && c.present&credentialBitCredentialType != 0
 }
@@ -196,7 +196,7 @@ func (c *Credential) SetCredentialTypeValue(value []byte) {
 	c.SetCredentialType(blobValueToString(value))
 }
 
-// HasExpiration reports whether Expiration was present in the serialized entry.
+// HasExpiration reports whether Expiration is present.
 func (c *Credential) HasExpiration() bool {
 	return c != nil && c.present&credentialBitExpiration != 0
 }
@@ -211,7 +211,7 @@ func (c *Credential) ClearExpiration() {
 	c.dirty = true
 }
 
-// HasURI reports whether URI was present in the serialized entry.
+// HasURI reports whether URI is present.
 func (c *Credential) HasURI() bool {
 	return c != nil && c.present&credentialBitURI != 0
 }
@@ -239,7 +239,7 @@ func (c *Credential) SetURIValue(value []byte) {
 	c.SetURI(blobValueToString(value))
 }
 
-// HasIssuerNode reports whether IssuerNode was present in the serialized entry.
+// HasIssuerNode reports whether IssuerNode is present.
 func (c *Credential) HasIssuerNode() bool {
 	return c != nil && c.present&credentialBitIssuerNode != 0
 }
@@ -257,7 +257,7 @@ func (c *Credential) SetIssuerNodeValue(value uint64) {
 	c.SetIssuerNode(uint64ValueToString(value, false))
 }
 
-// HasSubjectNode reports whether SubjectNode was present in the serialized entry.
+// HasSubjectNode reports whether SubjectNode is present.
 func (c *Credential) HasSubjectNode() bool {
 	return c != nil && c.present&credentialBitSubjectNode != 0
 }
@@ -285,12 +285,12 @@ func (c *Credential) SetSubjectNodeValue(value uint64) {
 	c.SetSubjectNode(uint64ValueToString(value, false))
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (c *Credential) HasFlags() bool {
 	return c != nil && c.present&credentialBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (c *Credential) HasPreviousTxnID() bool {
 	return c != nil && c.present&credentialBitPreviousTxnID != 0
 }
@@ -311,12 +311,12 @@ func (c *Credential) SetPreviousTxnIDValue(value [32]byte) {
 	c.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (c *Credential) HasPreviousTxnLgrSeq() bool {
 	return c != nil && c.present&credentialBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (c *Credential) HasSponsor() bool {
 	return c != nil && c.present&credentialBitSponsor != 0
 }

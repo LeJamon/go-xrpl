@@ -96,7 +96,7 @@ func (n *NFTokenPage) SetSponsor(value string) {
 	n.present |= nftokenpageBitSponsor
 }
 
-// HasPreviousPageMin reports whether PreviousPageMin was present in the serialized entry.
+// HasPreviousPageMin reports whether PreviousPageMin is present.
 func (n *NFTokenPage) HasPreviousPageMin() bool {
 	return n != nil && n.present&nftokenpageBitPreviousPageMin != 0
 }
@@ -127,7 +127,7 @@ func (n *NFTokenPage) SetPreviousPageMinValue(value [32]byte) {
 	n.SetPreviousPageMin(hashValueToString(value[:]))
 }
 
-// HasNextPageMin reports whether NextPageMin was present in the serialized entry.
+// HasNextPageMin reports whether NextPageMin is present.
 func (n *NFTokenPage) HasNextPageMin() bool {
 	return n != nil && n.present&nftokenpageBitNextPageMin != 0
 }
@@ -158,17 +158,17 @@ func (n *NFTokenPage) SetNextPageMinValue(value [32]byte) {
 	n.SetNextPageMin(hashValueToString(value[:]))
 }
 
-// HasNFTokens reports whether NFTokens was present in the serialized entry.
+// HasNFTokens reports whether NFTokens is present.
 func (n *NFTokenPage) HasNFTokens() bool {
 	return n != nil && n.present&nftokenpageBitNFTokens != 0
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (n *NFTokenPage) HasFlags() bool {
 	return n != nil && n.present&nftokenpageBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (n *NFTokenPage) HasPreviousTxnID() bool {
 	return n != nil && n.present&nftokenpageBitPreviousTxnID != 0
 }
@@ -189,12 +189,12 @@ func (n *NFTokenPage) SetPreviousTxnIDValue(value [32]byte) {
 	n.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (n *NFTokenPage) HasPreviousTxnLgrSeq() bool {
 	return n != nil && n.present&nftokenpageBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (n *NFTokenPage) HasSponsor() bool {
 	return n != nil && n.present&nftokenpageBitSponsor != 0
 }

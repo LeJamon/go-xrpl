@@ -186,7 +186,7 @@ func (p *PayChannel) SetSponsor(value string) {
 	p.present |= paychannelBitSponsor
 }
 
-// HasAccount reports whether Account was present in the serialized entry.
+// HasAccount reports whether Account is present.
 func (p *PayChannel) HasAccount() bool {
 	return p != nil && p.present&paychannelBitAccount != 0
 }
@@ -209,7 +209,7 @@ func (p *PayChannel) SetAccountValue(value [20]byte) error {
 	return nil
 }
 
-// HasDestination reports whether Destination was present in the serialized entry.
+// HasDestination reports whether Destination is present.
 func (p *PayChannel) HasDestination() bool {
 	return p != nil && p.present&paychannelBitDestination != 0
 }
@@ -232,7 +232,7 @@ func (p *PayChannel) SetDestinationValue(value [20]byte) error {
 	return nil
 }
 
-// HasSequence reports whether Sequence was present in the serialized entry.
+// HasSequence reports whether Sequence is present.
 func (p *PayChannel) HasSequence() bool {
 	return p != nil && p.present&paychannelBitSequence != 0
 }
@@ -247,7 +247,7 @@ func (p *PayChannel) ClearSequence() {
 	p.dirty = true
 }
 
-// HasAmount reports whether Amount was present in the serialized entry.
+// HasAmount reports whether Amount is present.
 func (p *PayChannel) HasAmount() bool {
 	return p != nil && p.present&paychannelBitAmount != 0
 }
@@ -270,7 +270,7 @@ func (p *PayChannel) SetAmountValue(value AmountValue) error {
 	return nil
 }
 
-// HasBalance reports whether Balance was present in the serialized entry.
+// HasBalance reports whether Balance is present.
 func (p *PayChannel) HasBalance() bool {
 	return p != nil && p.present&paychannelBitBalance != 0
 }
@@ -293,7 +293,7 @@ func (p *PayChannel) SetBalanceValue(value AmountValue) error {
 	return nil
 }
 
-// HasPublicKey reports whether PublicKey was present in the serialized entry.
+// HasPublicKey reports whether PublicKey is present.
 func (p *PayChannel) HasPublicKey() bool {
 	return p != nil && p.present&paychannelBitPublicKey != 0
 }
@@ -311,12 +311,12 @@ func (p *PayChannel) SetPublicKeyValue(value []byte) {
 	p.SetPublicKey(blobValueToString(value))
 }
 
-// HasSettleDelay reports whether SettleDelay was present in the serialized entry.
+// HasSettleDelay reports whether SettleDelay is present.
 func (p *PayChannel) HasSettleDelay() bool {
 	return p != nil && p.present&paychannelBitSettleDelay != 0
 }
 
-// HasExpiration reports whether Expiration was present in the serialized entry.
+// HasExpiration reports whether Expiration is present.
 func (p *PayChannel) HasExpiration() bool {
 	return p != nil && p.present&paychannelBitExpiration != 0
 }
@@ -331,7 +331,7 @@ func (p *PayChannel) ClearExpiration() {
 	p.dirty = true
 }
 
-// HasCancelAfter reports whether CancelAfter was present in the serialized entry.
+// HasCancelAfter reports whether CancelAfter is present.
 func (p *PayChannel) HasCancelAfter() bool {
 	return p != nil && p.present&paychannelBitCancelAfter != 0
 }
@@ -346,7 +346,7 @@ func (p *PayChannel) ClearCancelAfter() {
 	p.dirty = true
 }
 
-// HasSourceTag reports whether SourceTag was present in the serialized entry.
+// HasSourceTag reports whether SourceTag is present.
 func (p *PayChannel) HasSourceTag() bool {
 	return p != nil && p.present&paychannelBitSourceTag != 0
 }
@@ -361,7 +361,7 @@ func (p *PayChannel) ClearSourceTag() {
 	p.dirty = true
 }
 
-// HasDestinationTag reports whether DestinationTag was present in the serialized entry.
+// HasDestinationTag reports whether DestinationTag is present.
 func (p *PayChannel) HasDestinationTag() bool {
 	return p != nil && p.present&paychannelBitDestinationTag != 0
 }
@@ -376,7 +376,7 @@ func (p *PayChannel) ClearDestinationTag() {
 	p.dirty = true
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (p *PayChannel) HasOwnerNode() bool {
 	return p != nil && p.present&paychannelBitOwnerNode != 0
 }
@@ -394,7 +394,7 @@ func (p *PayChannel) SetOwnerNodeValue(value uint64) {
 	p.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasDestinationNode reports whether DestinationNode was present in the serialized entry.
+// HasDestinationNode reports whether DestinationNode is present.
 func (p *PayChannel) HasDestinationNode() bool {
 	return p != nil && p.present&paychannelBitDestinationNode != 0
 }
@@ -422,12 +422,12 @@ func (p *PayChannel) SetDestinationNodeValue(value uint64) {
 	p.SetDestinationNode(uint64ValueToString(value, false))
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (p *PayChannel) HasFlags() bool {
 	return p != nil && p.present&paychannelBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (p *PayChannel) HasPreviousTxnID() bool {
 	return p != nil && p.present&paychannelBitPreviousTxnID != 0
 }
@@ -448,12 +448,12 @@ func (p *PayChannel) SetPreviousTxnIDValue(value [32]byte) {
 	p.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (p *PayChannel) HasPreviousTxnLgrSeq() bool {
 	return p != nil && p.present&paychannelBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (p *PayChannel) HasSponsor() bool {
 	return p != nil && p.present&paychannelBitSponsor != 0
 }

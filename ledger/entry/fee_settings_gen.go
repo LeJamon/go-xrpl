@@ -132,7 +132,7 @@ func (f *FeeSettings) SetSponsor(value string) {
 	f.present |= feesettingsBitSponsor
 }
 
-// HasBaseFee reports whether BaseFee was present in the serialized entry.
+// HasBaseFee reports whether BaseFee is present.
 func (f *FeeSettings) HasBaseFee() bool {
 	return f != nil && f.present&feesettingsBitBaseFee != 0
 }
@@ -160,7 +160,7 @@ func (f *FeeSettings) SetBaseFeeValue(value uint64) {
 	f.SetBaseFee(uint64ValueToString(value, false))
 }
 
-// HasReferenceFeeUnits reports whether ReferenceFeeUnits was present in the serialized entry.
+// HasReferenceFeeUnits reports whether ReferenceFeeUnits is present.
 func (f *FeeSettings) HasReferenceFeeUnits() bool {
 	return f != nil && f.present&feesettingsBitReferenceFeeUnits != 0
 }
@@ -175,7 +175,7 @@ func (f *FeeSettings) ClearReferenceFeeUnits() {
 	f.dirty = true
 }
 
-// HasReserveBase reports whether ReserveBase was present in the serialized entry.
+// HasReserveBase reports whether ReserveBase is present.
 func (f *FeeSettings) HasReserveBase() bool {
 	return f != nil && f.present&feesettingsBitReserveBase != 0
 }
@@ -190,7 +190,7 @@ func (f *FeeSettings) ClearReserveBase() {
 	f.dirty = true
 }
 
-// HasReserveIncrement reports whether ReserveIncrement was present in the serialized entry.
+// HasReserveIncrement reports whether ReserveIncrement is present.
 func (f *FeeSettings) HasReserveIncrement() bool {
 	return f != nil && f.present&feesettingsBitReserveIncrement != 0
 }
@@ -205,7 +205,7 @@ func (f *FeeSettings) ClearReserveIncrement() {
 	f.dirty = true
 }
 
-// HasBaseFeeDrops reports whether BaseFeeDrops was present in the serialized entry.
+// HasBaseFeeDrops reports whether BaseFeeDrops is present.
 func (f *FeeSettings) HasBaseFeeDrops() bool {
 	return f != nil && f.present&feesettingsBitBaseFeeDrops != 0
 }
@@ -238,7 +238,7 @@ func (f *FeeSettings) SetBaseFeeDropsValue(value AmountValue) error {
 	return nil
 }
 
-// HasReserveBaseDrops reports whether ReserveBaseDrops was present in the serialized entry.
+// HasReserveBaseDrops reports whether ReserveBaseDrops is present.
 func (f *FeeSettings) HasReserveBaseDrops() bool {
 	return f != nil && f.present&feesettingsBitReserveBaseDrops != 0
 }
@@ -271,7 +271,7 @@ func (f *FeeSettings) SetReserveBaseDropsValue(value AmountValue) error {
 	return nil
 }
 
-// HasReserveIncrementDrops reports whether ReserveIncrementDrops was present in the serialized entry.
+// HasReserveIncrementDrops reports whether ReserveIncrementDrops is present.
 func (f *FeeSettings) HasReserveIncrementDrops() bool {
 	return f != nil && f.present&feesettingsBitReserveIncrementDrops != 0
 }
@@ -304,12 +304,12 @@ func (f *FeeSettings) SetReserveIncrementDropsValue(value AmountValue) error {
 	return nil
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (f *FeeSettings) HasFlags() bool {
 	return f != nil && f.present&feesettingsBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (f *FeeSettings) HasPreviousTxnID() bool {
 	return f != nil && f.present&feesettingsBitPreviousTxnID != 0
 }
@@ -340,7 +340,7 @@ func (f *FeeSettings) SetPreviousTxnIDValue(value [32]byte) {
 	f.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (f *FeeSettings) HasPreviousTxnLgrSeq() bool {
 	return f != nil && f.present&feesettingsBitPreviousTxnLgrSeq != 0
 }
@@ -355,7 +355,7 @@ func (f *FeeSettings) ClearPreviousTxnLgrSeq() {
 	f.dirty = true
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (f *FeeSettings) HasSponsor() bool {
 	return f != nil && f.present&feesettingsBitSponsor != 0
 }

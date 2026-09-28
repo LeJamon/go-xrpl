@@ -220,7 +220,7 @@ func (m *MPTokenIssuance) SetSponsor(value string) {
 	m.present |= mptokenissuanceBitSponsor
 }
 
-// HasIssuer reports whether Issuer was present in the serialized entry.
+// HasIssuer reports whether Issuer is present.
 func (m *MPTokenIssuance) HasIssuer() bool {
 	return m != nil && m.present&mptokenissuanceBitIssuer != 0
 }
@@ -243,12 +243,12 @@ func (m *MPTokenIssuance) SetIssuerValue(value [20]byte) error {
 	return nil
 }
 
-// HasSequence reports whether Sequence was present in the serialized entry.
+// HasSequence reports whether Sequence is present.
 func (m *MPTokenIssuance) HasSequence() bool {
 	return m != nil && m.present&mptokenissuanceBitSequence != 0
 }
 
-// HasTransferFee reports whether TransferFee was present in the serialized entry.
+// HasTransferFee reports whether TransferFee is present.
 func (m *MPTokenIssuance) HasTransferFee() bool {
 	return m != nil && m.present&mptokenissuanceBitTransferFee != 0
 }
@@ -263,7 +263,7 @@ func (m *MPTokenIssuance) ClearTransferFee() {
 	m.dirty = true
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (m *MPTokenIssuance) HasOwnerNode() bool {
 	return m != nil && m.present&mptokenissuanceBitOwnerNode != 0
 }
@@ -281,7 +281,7 @@ func (m *MPTokenIssuance) SetOwnerNodeValue(value uint64) {
 	m.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasAssetScale reports whether AssetScale was present in the serialized entry.
+// HasAssetScale reports whether AssetScale is present.
 func (m *MPTokenIssuance) HasAssetScale() bool {
 	return m != nil && m.present&mptokenissuanceBitAssetScale != 0
 }
@@ -307,7 +307,7 @@ func (m *MPTokenIssuance) GetAssetScale() (uint8, error) {
 	return uint8(m.AssetScale), nil
 }
 
-// HasMaximumAmount reports whether MaximumAmount was present in the serialized entry.
+// HasMaximumAmount reports whether MaximumAmount is present.
 func (m *MPTokenIssuance) HasMaximumAmount() bool {
 	return m != nil && m.present&mptokenissuanceBitMaximumAmount != 0
 }
@@ -335,7 +335,7 @@ func (m *MPTokenIssuance) SetMaximumAmountValue(value uint64) {
 	m.SetMaximumAmount(uint64ValueToString(value, true))
 }
 
-// HasOutstandingAmount reports whether OutstandingAmount was present in the serialized entry.
+// HasOutstandingAmount reports whether OutstandingAmount is present.
 func (m *MPTokenIssuance) HasOutstandingAmount() bool {
 	return m != nil && m.present&mptokenissuanceBitOutstandingAmount != 0
 }
@@ -353,7 +353,7 @@ func (m *MPTokenIssuance) SetOutstandingAmountValue(value uint64) {
 	m.SetOutstandingAmount(uint64ValueToString(value, true))
 }
 
-// HasLockedAmount reports whether LockedAmount was present in the serialized entry.
+// HasLockedAmount reports whether LockedAmount is present.
 func (m *MPTokenIssuance) HasLockedAmount() bool {
 	return m != nil && m.present&mptokenissuanceBitLockedAmount != 0
 }
@@ -381,7 +381,7 @@ func (m *MPTokenIssuance) SetLockedAmountValue(value uint64) {
 	m.SetLockedAmount(uint64ValueToString(value, true))
 }
 
-// HasMPTokenMetadata reports whether MPTokenMetadata was present in the serialized entry.
+// HasMPTokenMetadata reports whether MPTokenMetadata is present.
 func (m *MPTokenIssuance) HasMPTokenMetadata() bool {
 	return m != nil && m.present&mptokenissuanceBitMPTokenMetadata != 0
 }
@@ -409,7 +409,7 @@ func (m *MPTokenIssuance) SetMPTokenMetadataValue(value []byte) {
 	m.SetMPTokenMetadata(blobValueToString(value))
 }
 
-// HasDomainID reports whether DomainID was present in the serialized entry.
+// HasDomainID reports whether DomainID is present.
 func (m *MPTokenIssuance) HasDomainID() bool {
 	return m != nil && m.present&mptokenissuanceBitDomainID != 0
 }
@@ -440,7 +440,7 @@ func (m *MPTokenIssuance) SetDomainIDValue(value [32]byte) {
 	m.SetDomainID(hashValueToString(value[:]))
 }
 
-// HasImmutableFlags reports whether ImmutableFlags was present in the serialized entry.
+// HasImmutableFlags reports whether ImmutableFlags is present.
 func (m *MPTokenIssuance) HasImmutableFlags() bool {
 	return m != nil && m.present&mptokenissuanceBitImmutableFlags != 0
 }
@@ -455,7 +455,7 @@ func (m *MPTokenIssuance) ClearImmutableFlags() {
 	m.dirty = true
 }
 
-// HasReferenceHolding reports whether ReferenceHolding was present in the serialized entry.
+// HasReferenceHolding reports whether ReferenceHolding is present.
 func (m *MPTokenIssuance) HasReferenceHolding() bool {
 	return m != nil && m.present&mptokenissuanceBitReferenceHolding != 0
 }
@@ -486,7 +486,7 @@ func (m *MPTokenIssuance) SetReferenceHoldingValue(value [32]byte) {
 	m.SetReferenceHolding(hashValueToString(value[:]))
 }
 
-// HasIssuerEncryptionKey reports whether IssuerEncryptionKey was present in the serialized entry.
+// HasIssuerEncryptionKey reports whether IssuerEncryptionKey is present.
 func (m *MPTokenIssuance) HasIssuerEncryptionKey() bool {
 	return m != nil && m.present&mptokenissuanceBitIssuerEncryptionKey != 0
 }
@@ -514,7 +514,7 @@ func (m *MPTokenIssuance) SetIssuerEncryptionKeyValue(value []byte) {
 	m.SetIssuerEncryptionKey(blobValueToString(value))
 }
 
-// HasAuditorEncryptionKey reports whether AuditorEncryptionKey was present in the serialized entry.
+// HasAuditorEncryptionKey reports whether AuditorEncryptionKey is present.
 func (m *MPTokenIssuance) HasAuditorEncryptionKey() bool {
 	return m != nil && m.present&mptokenissuanceBitAuditorEncryptionKey != 0
 }
@@ -542,7 +542,7 @@ func (m *MPTokenIssuance) SetAuditorEncryptionKeyValue(value []byte) {
 	m.SetAuditorEncryptionKey(blobValueToString(value))
 }
 
-// HasConfidentialOutstandingAmount reports whether ConfidentialOutstandingAmount was present in the serialized entry.
+// HasConfidentialOutstandingAmount reports whether ConfidentialOutstandingAmount is present.
 func (m *MPTokenIssuance) HasConfidentialOutstandingAmount() bool {
 	return m != nil && m.present&mptokenissuanceBitConfidentialOutstandingAmount != 0
 }
@@ -570,12 +570,12 @@ func (m *MPTokenIssuance) SetConfidentialOutstandingAmountValue(value uint64) {
 	m.SetConfidentialOutstandingAmount(uint64ValueToString(value, true))
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (m *MPTokenIssuance) HasFlags() bool {
 	return m != nil && m.present&mptokenissuanceBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (m *MPTokenIssuance) HasPreviousTxnID() bool {
 	return m != nil && m.present&mptokenissuanceBitPreviousTxnID != 0
 }
@@ -596,12 +596,12 @@ func (m *MPTokenIssuance) SetPreviousTxnIDValue(value [32]byte) {
 	m.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (m *MPTokenIssuance) HasPreviousTxnLgrSeq() bool {
 	return m != nil && m.present&mptokenissuanceBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (m *MPTokenIssuance) HasSponsor() bool {
 	return m != nil && m.present&mptokenissuanceBitSponsor != 0
 }

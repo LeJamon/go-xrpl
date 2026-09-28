@@ -132,7 +132,7 @@ func (n *NFTokenOffer) SetSponsor(value string) {
 	n.present |= nftokenofferBitSponsor
 }
 
-// HasOwner reports whether Owner was present in the serialized entry.
+// HasOwner reports whether Owner is present.
 func (n *NFTokenOffer) HasOwner() bool {
 	return n != nil && n.present&nftokenofferBitOwner != 0
 }
@@ -155,7 +155,7 @@ func (n *NFTokenOffer) SetOwnerValue(value [20]byte) error {
 	return nil
 }
 
-// HasNFTokenID reports whether NFTokenID was present in the serialized entry.
+// HasNFTokenID reports whether NFTokenID is present.
 func (n *NFTokenOffer) HasNFTokenID() bool {
 	return n != nil && n.present&nftokenofferBitNFTokenID != 0
 }
@@ -176,7 +176,7 @@ func (n *NFTokenOffer) SetNFTokenIDValue(value [32]byte) {
 	n.SetNFTokenID(hashValueToString(value[:]))
 }
 
-// HasAmount reports whether Amount was present in the serialized entry.
+// HasAmount reports whether Amount is present.
 func (n *NFTokenOffer) HasAmount() bool {
 	return n != nil && n.present&nftokenofferBitAmount != 0
 }
@@ -199,7 +199,7 @@ func (n *NFTokenOffer) SetAmountValue(value AmountValue) error {
 	return nil
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (n *NFTokenOffer) HasOwnerNode() bool {
 	return n != nil && n.present&nftokenofferBitOwnerNode != 0
 }
@@ -217,7 +217,7 @@ func (n *NFTokenOffer) SetOwnerNodeValue(value uint64) {
 	n.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasNFTokenOfferNode reports whether NFTokenOfferNode was present in the serialized entry.
+// HasNFTokenOfferNode reports whether NFTokenOfferNode is present.
 func (n *NFTokenOffer) HasNFTokenOfferNode() bool {
 	return n != nil && n.present&nftokenofferBitNFTokenOfferNode != 0
 }
@@ -235,7 +235,7 @@ func (n *NFTokenOffer) SetNFTokenOfferNodeValue(value uint64) {
 	n.SetNFTokenOfferNode(uint64ValueToString(value, false))
 }
 
-// HasDestination reports whether Destination was present in the serialized entry.
+// HasDestination reports whether Destination is present.
 func (n *NFTokenOffer) HasDestination() bool {
 	return n != nil && n.present&nftokenofferBitDestination != 0
 }
@@ -268,7 +268,7 @@ func (n *NFTokenOffer) SetDestinationValue(value [20]byte) error {
 	return nil
 }
 
-// HasExpiration reports whether Expiration was present in the serialized entry.
+// HasExpiration reports whether Expiration is present.
 func (n *NFTokenOffer) HasExpiration() bool {
 	return n != nil && n.present&nftokenofferBitExpiration != 0
 }
@@ -283,12 +283,12 @@ func (n *NFTokenOffer) ClearExpiration() {
 	n.dirty = true
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (n *NFTokenOffer) HasFlags() bool {
 	return n != nil && n.present&nftokenofferBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (n *NFTokenOffer) HasPreviousTxnID() bool {
 	return n != nil && n.present&nftokenofferBitPreviousTxnID != 0
 }
@@ -309,12 +309,12 @@ func (n *NFTokenOffer) SetPreviousTxnIDValue(value [32]byte) {
 	n.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (n *NFTokenOffer) HasPreviousTxnLgrSeq() bool {
 	return n != nil && n.present&nftokenofferBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (n *NFTokenOffer) HasSponsor() bool {
 	return n != nil && n.present&nftokenofferBitSponsor != 0
 }

@@ -159,7 +159,7 @@ func (o *Offer) SetSponsor(value string) {
 	o.present |= offerBitSponsor
 }
 
-// HasAccount reports whether Account was present in the serialized entry.
+// HasAccount reports whether Account is present.
 func (o *Offer) HasAccount() bool {
 	return o != nil && o.present&offerBitAccount != 0
 }
@@ -182,12 +182,12 @@ func (o *Offer) SetAccountValue(value [20]byte) error {
 	return nil
 }
 
-// HasSequence reports whether Sequence was present in the serialized entry.
+// HasSequence reports whether Sequence is present.
 func (o *Offer) HasSequence() bool {
 	return o != nil && o.present&offerBitSequence != 0
 }
 
-// HasTakerPays reports whether TakerPays was present in the serialized entry.
+// HasTakerPays reports whether TakerPays is present.
 func (o *Offer) HasTakerPays() bool {
 	return o != nil && o.present&offerBitTakerPays != 0
 }
@@ -210,7 +210,7 @@ func (o *Offer) SetTakerPaysValue(value AmountValue) error {
 	return nil
 }
 
-// HasTakerGets reports whether TakerGets was present in the serialized entry.
+// HasTakerGets reports whether TakerGets is present.
 func (o *Offer) HasTakerGets() bool {
 	return o != nil && o.present&offerBitTakerGets != 0
 }
@@ -233,7 +233,7 @@ func (o *Offer) SetTakerGetsValue(value AmountValue) error {
 	return nil
 }
 
-// HasBookDirectory reports whether BookDirectory was present in the serialized entry.
+// HasBookDirectory reports whether BookDirectory is present.
 func (o *Offer) HasBookDirectory() bool {
 	return o != nil && o.present&offerBitBookDirectory != 0
 }
@@ -254,7 +254,7 @@ func (o *Offer) SetBookDirectoryValue(value [32]byte) {
 	o.SetBookDirectory(hashValueToString(value[:]))
 }
 
-// HasBookNode reports whether BookNode was present in the serialized entry.
+// HasBookNode reports whether BookNode is present.
 func (o *Offer) HasBookNode() bool {
 	return o != nil && o.present&offerBitBookNode != 0
 }
@@ -272,7 +272,7 @@ func (o *Offer) SetBookNodeValue(value uint64) {
 	o.SetBookNode(uint64ValueToString(value, false))
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (o *Offer) HasOwnerNode() bool {
 	return o != nil && o.present&offerBitOwnerNode != 0
 }
@@ -290,7 +290,7 @@ func (o *Offer) SetOwnerNodeValue(value uint64) {
 	o.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasExpiration reports whether Expiration was present in the serialized entry.
+// HasExpiration reports whether Expiration is present.
 func (o *Offer) HasExpiration() bool {
 	return o != nil && o.present&offerBitExpiration != 0
 }
@@ -305,12 +305,12 @@ func (o *Offer) ClearExpiration() {
 	o.dirty = true
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (o *Offer) HasFlags() bool {
 	return o != nil && o.present&offerBitFlags != 0
 }
 
-// HasDomainID reports whether DomainID was present in the serialized entry.
+// HasDomainID reports whether DomainID is present.
 func (o *Offer) HasDomainID() bool {
 	return o != nil && o.present&offerBitDomainID != 0
 }
@@ -341,7 +341,7 @@ func (o *Offer) SetDomainIDValue(value [32]byte) {
 	o.SetDomainID(hashValueToString(value[:]))
 }
 
-// HasAdditionalBooks reports whether AdditionalBooks was present in the serialized entry.
+// HasAdditionalBooks reports whether AdditionalBooks is present.
 func (o *Offer) HasAdditionalBooks() bool {
 	return o != nil && o.present&offerBitAdditionalBooks != 0
 }
@@ -356,7 +356,7 @@ func (o *Offer) ClearAdditionalBooks() {
 	o.dirty = true
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (o *Offer) HasPreviousTxnID() bool {
 	return o != nil && o.present&offerBitPreviousTxnID != 0
 }
@@ -377,12 +377,12 @@ func (o *Offer) SetPreviousTxnIDValue(value [32]byte) {
 	o.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (o *Offer) HasPreviousTxnLgrSeq() bool {
 	return o != nil && o.present&offerBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (o *Offer) HasSponsor() bool {
 	return o != nil && o.present&offerBitSponsor != 0
 }

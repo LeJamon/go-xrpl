@@ -141,7 +141,7 @@ func (o *Oracle) SetSponsor(value string) {
 	o.present |= oracleBitSponsor
 }
 
-// HasOwner reports whether Owner was present in the serialized entry.
+// HasOwner reports whether Owner is present.
 func (o *Oracle) HasOwner() bool {
 	return o != nil && o.present&oracleBitOwner != 0
 }
@@ -164,7 +164,7 @@ func (o *Oracle) SetOwnerValue(value [20]byte) error {
 	return nil
 }
 
-// HasOracleDocumentID reports whether OracleDocumentID was present in the serialized entry.
+// HasOracleDocumentID reports whether OracleDocumentID is present.
 func (o *Oracle) HasOracleDocumentID() bool {
 	return o != nil && o.present&oracleBitOracleDocumentID != 0
 }
@@ -179,7 +179,7 @@ func (o *Oracle) ClearOracleDocumentID() {
 	o.dirty = true
 }
 
-// HasProvider reports whether Provider was present in the serialized entry.
+// HasProvider reports whether Provider is present.
 func (o *Oracle) HasProvider() bool {
 	return o != nil && o.present&oracleBitProvider != 0
 }
@@ -197,12 +197,12 @@ func (o *Oracle) SetProviderValue(value []byte) {
 	o.SetProvider(blobValueToString(value))
 }
 
-// HasPriceDataSeries reports whether PriceDataSeries was present in the serialized entry.
+// HasPriceDataSeries reports whether PriceDataSeries is present.
 func (o *Oracle) HasPriceDataSeries() bool {
 	return o != nil && o.present&oracleBitPriceDataSeries != 0
 }
 
-// HasAssetClass reports whether AssetClass was present in the serialized entry.
+// HasAssetClass reports whether AssetClass is present.
 func (o *Oracle) HasAssetClass() bool {
 	return o != nil && o.present&oracleBitAssetClass != 0
 }
@@ -220,12 +220,12 @@ func (o *Oracle) SetAssetClassValue(value []byte) {
 	o.SetAssetClass(blobValueToString(value))
 }
 
-// HasLastUpdateTime reports whether LastUpdateTime was present in the serialized entry.
+// HasLastUpdateTime reports whether LastUpdateTime is present.
 func (o *Oracle) HasLastUpdateTime() bool {
 	return o != nil && o.present&oracleBitLastUpdateTime != 0
 }
 
-// HasURI reports whether URI was present in the serialized entry.
+// HasURI reports whether URI is present.
 func (o *Oracle) HasURI() bool {
 	return o != nil && o.present&oracleBitURI != 0
 }
@@ -253,7 +253,7 @@ func (o *Oracle) SetURIValue(value []byte) {
 	o.SetURI(blobValueToString(value))
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (o *Oracle) HasOwnerNode() bool {
 	return o != nil && o.present&oracleBitOwnerNode != 0
 }
@@ -271,12 +271,12 @@ func (o *Oracle) SetOwnerNodeValue(value uint64) {
 	o.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (o *Oracle) HasFlags() bool {
 	return o != nil && o.present&oracleBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (o *Oracle) HasPreviousTxnID() bool {
 	return o != nil && o.present&oracleBitPreviousTxnID != 0
 }
@@ -297,12 +297,12 @@ func (o *Oracle) SetPreviousTxnIDValue(value [32]byte) {
 	o.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (o *Oracle) HasPreviousTxnLgrSeq() bool {
 	return o != nil && o.present&oracleBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (o *Oracle) HasSponsor() bool {
 	return o != nil && o.present&oracleBitSponsor != 0
 }

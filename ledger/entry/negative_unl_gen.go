@@ -96,12 +96,12 @@ func (n *NegativeUNL) SetSponsor(value string) {
 	n.present |= negativeunlBitSponsor
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (n *NegativeUNL) HasFlags() bool {
 	return n != nil && n.present&negativeunlBitFlags != 0
 }
 
-// HasDisabledValidators reports whether DisabledValidators was present in the serialized entry.
+// HasDisabledValidators reports whether DisabledValidators is present.
 func (n *NegativeUNL) HasDisabledValidators() bool {
 	return n != nil && n.present&negativeunlBitDisabledValidators != 0
 }
@@ -116,7 +116,7 @@ func (n *NegativeUNL) ClearDisabledValidators() {
 	n.dirty = true
 }
 
-// HasValidatorToDisable reports whether ValidatorToDisable was present in the serialized entry.
+// HasValidatorToDisable reports whether ValidatorToDisable is present.
 func (n *NegativeUNL) HasValidatorToDisable() bool {
 	return n != nil && n.present&negativeunlBitValidatorToDisable != 0
 }
@@ -144,7 +144,7 @@ func (n *NegativeUNL) SetValidatorToDisableValue(value []byte) {
 	n.SetValidatorToDisable(blobValueToString(value))
 }
 
-// HasValidatorToReEnable reports whether ValidatorToReEnable was present in the serialized entry.
+// HasValidatorToReEnable reports whether ValidatorToReEnable is present.
 func (n *NegativeUNL) HasValidatorToReEnable() bool {
 	return n != nil && n.present&negativeunlBitValidatorToReEnable != 0
 }
@@ -172,7 +172,7 @@ func (n *NegativeUNL) SetValidatorToReEnableValue(value []byte) {
 	n.SetValidatorToReEnable(blobValueToString(value))
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (n *NegativeUNL) HasPreviousTxnID() bool {
 	return n != nil && n.present&negativeunlBitPreviousTxnID != 0
 }
@@ -203,7 +203,7 @@ func (n *NegativeUNL) SetPreviousTxnIDValue(value [32]byte) {
 	n.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (n *NegativeUNL) HasPreviousTxnLgrSeq() bool {
 	return n != nil && n.present&negativeunlBitPreviousTxnLgrSeq != 0
 }
@@ -218,7 +218,7 @@ func (n *NegativeUNL) ClearPreviousTxnLgrSeq() {
 	n.dirty = true
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (n *NegativeUNL) HasSponsor() bool {
 	return n != nil && n.present&negativeunlBitSponsor != 0
 }

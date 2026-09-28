@@ -141,7 +141,7 @@ func (b *Bridge) SetSponsor(value string) {
 	b.present |= bridgeBitSponsor
 }
 
-// HasAccount reports whether Account was present in the serialized entry.
+// HasAccount reports whether Account is present.
 func (b *Bridge) HasAccount() bool {
 	return b != nil && b.present&bridgeBitAccount != 0
 }
@@ -164,7 +164,7 @@ func (b *Bridge) SetAccountValue(value [20]byte) error {
 	return nil
 }
 
-// HasSignatureReward reports whether SignatureReward was present in the serialized entry.
+// HasSignatureReward reports whether SignatureReward is present.
 func (b *Bridge) HasSignatureReward() bool {
 	return b != nil && b.present&bridgeBitSignatureReward != 0
 }
@@ -187,7 +187,7 @@ func (b *Bridge) SetSignatureRewardValue(value AmountValue) error {
 	return nil
 }
 
-// HasMinAccountCreateAmount reports whether MinAccountCreateAmount was present in the serialized entry.
+// HasMinAccountCreateAmount reports whether MinAccountCreateAmount is present.
 func (b *Bridge) HasMinAccountCreateAmount() bool {
 	return b != nil && b.present&bridgeBitMinAccountCreateAmount != 0
 }
@@ -220,12 +220,12 @@ func (b *Bridge) SetMinAccountCreateAmountValue(value AmountValue) error {
 	return nil
 }
 
-// HasXChainBridge reports whether XChainBridge was present in the serialized entry.
+// HasXChainBridge reports whether XChainBridge is present.
 func (b *Bridge) HasXChainBridge() bool {
 	return b != nil && b.present&bridgeBitXChainBridge != 0
 }
 
-// HasXChainClaimID reports whether XChainClaimID was present in the serialized entry.
+// HasXChainClaimID reports whether XChainClaimID is present.
 func (b *Bridge) HasXChainClaimID() bool {
 	return b != nil && b.present&bridgeBitXChainClaimID != 0
 }
@@ -243,7 +243,7 @@ func (b *Bridge) SetXChainClaimIDValue(value uint64) {
 	b.SetXChainClaimID(uint64ValueToString(value, false))
 }
 
-// HasXChainAccountCreateCount reports whether XChainAccountCreateCount was present in the serialized entry.
+// HasXChainAccountCreateCount reports whether XChainAccountCreateCount is present.
 func (b *Bridge) HasXChainAccountCreateCount() bool {
 	return b != nil && b.present&bridgeBitXChainAccountCreateCount != 0
 }
@@ -261,7 +261,7 @@ func (b *Bridge) SetXChainAccountCreateCountValue(value uint64) {
 	b.SetXChainAccountCreateCount(uint64ValueToString(value, false))
 }
 
-// HasXChainAccountClaimCount reports whether XChainAccountClaimCount was present in the serialized entry.
+// HasXChainAccountClaimCount reports whether XChainAccountClaimCount is present.
 func (b *Bridge) HasXChainAccountClaimCount() bool {
 	return b != nil && b.present&bridgeBitXChainAccountClaimCount != 0
 }
@@ -279,7 +279,7 @@ func (b *Bridge) SetXChainAccountClaimCountValue(value uint64) {
 	b.SetXChainAccountClaimCount(uint64ValueToString(value, false))
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (b *Bridge) HasOwnerNode() bool {
 	return b != nil && b.present&bridgeBitOwnerNode != 0
 }
@@ -297,12 +297,12 @@ func (b *Bridge) SetOwnerNodeValue(value uint64) {
 	b.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (b *Bridge) HasFlags() bool {
 	return b != nil && b.present&bridgeBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (b *Bridge) HasPreviousTxnID() bool {
 	return b != nil && b.present&bridgeBitPreviousTxnID != 0
 }
@@ -323,12 +323,12 @@ func (b *Bridge) SetPreviousTxnIDValue(value [32]byte) {
 	b.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (b *Bridge) HasPreviousTxnLgrSeq() bool {
 	return b != nil && b.present&bridgeBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (b *Bridge) HasSponsor() bool {
 	return b != nil && b.present&bridgeBitSponsor != 0
 }

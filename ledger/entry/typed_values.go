@@ -21,6 +21,12 @@ type AmountValue struct {
 	MPTIssuanceID string
 }
 
+// ParseAmountValue converts a binary codec's decoded amount to its typed wire
+// representation. It checks the asset shape without rounding the decimal value.
+func ParseAmountValue(value any) (AmountValue, error) {
+	return amountValueFromAny(value, "Amount", false)
+}
+
 func amountValueFromAny(value any, field string, xrpOnly bool) (AmountValue, error) {
 	if value == nil {
 		return AmountValue{}, nil

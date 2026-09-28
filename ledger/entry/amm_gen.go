@@ -145,7 +145,7 @@ func (a *AMM) SetSponsor(value string) {
 	a.present |= ammBitSponsor
 }
 
-// HasAccount reports whether Account was present in the serialized entry.
+// HasAccount reports whether Account is present.
 func (a *AMM) HasAccount() bool {
 	return a != nil && a.present&ammBitAccount != 0
 }
@@ -168,7 +168,7 @@ func (a *AMM) SetAccountValue(value [20]byte) error {
 	return nil
 }
 
-// HasTradingFee reports whether TradingFee was present in the serialized entry.
+// HasTradingFee reports whether TradingFee is present.
 func (a *AMM) HasTradingFee() bool {
 	return a != nil && a.present&ammBitTradingFee != 0
 }
@@ -183,7 +183,7 @@ func (a *AMM) ClearTradingFee() {
 	a.dirty = true
 }
 
-// HasVoteSlots reports whether VoteSlots was present in the serialized entry.
+// HasVoteSlots reports whether VoteSlots is present.
 func (a *AMM) HasVoteSlots() bool {
 	return a != nil && a.present&ammBitVoteSlots != 0
 }
@@ -198,7 +198,7 @@ func (a *AMM) ClearVoteSlots() {
 	a.dirty = true
 }
 
-// HasAuctionSlot reports whether AuctionSlot was present in the serialized entry.
+// HasAuctionSlot reports whether AuctionSlot is present.
 func (a *AMM) HasAuctionSlot() bool {
 	return a != nil && a.present&ammBitAuctionSlot != 0
 }
@@ -213,7 +213,7 @@ func (a *AMM) ClearAuctionSlot() {
 	a.dirty = true
 }
 
-// HasLPTokenBalance reports whether LPTokenBalance was present in the serialized entry.
+// HasLPTokenBalance reports whether LPTokenBalance is present.
 func (a *AMM) HasLPTokenBalance() bool {
 	return a != nil && a.present&ammBitLPTokenBalance != 0
 }
@@ -236,17 +236,17 @@ func (a *AMM) SetLPTokenBalanceValue(value AmountValue) error {
 	return nil
 }
 
-// HasAsset reports whether Asset was present in the serialized entry.
+// HasAsset reports whether Asset is present.
 func (a *AMM) HasAsset() bool {
 	return a != nil && a.present&ammBitAsset != 0
 }
 
-// HasAsset2 reports whether Asset2 was present in the serialized entry.
+// HasAsset2 reports whether Asset2 is present.
 func (a *AMM) HasAsset2() bool {
 	return a != nil && a.present&ammBitAsset2 != 0
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (a *AMM) HasOwnerNode() bool {
 	return a != nil && a.present&ammBitOwnerNode != 0
 }
@@ -264,12 +264,12 @@ func (a *AMM) SetOwnerNodeValue(value uint64) {
 	a.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (a *AMM) HasFlags() bool {
 	return a != nil && a.present&ammBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (a *AMM) HasPreviousTxnID() bool {
 	return a != nil && a.present&ammBitPreviousTxnID != 0
 }
@@ -300,7 +300,7 @@ func (a *AMM) SetPreviousTxnIDValue(value [32]byte) {
 	a.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (a *AMM) HasPreviousTxnLgrSeq() bool {
 	return a != nil && a.present&ammBitPreviousTxnLgrSeq != 0
 }
@@ -315,7 +315,7 @@ func (a *AMM) ClearPreviousTxnLgrSeq() {
 	a.dirty = true
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (a *AMM) HasSponsor() bool {
 	return a != nil && a.present&ammBitSponsor != 0
 }

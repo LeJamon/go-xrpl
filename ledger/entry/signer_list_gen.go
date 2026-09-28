@@ -114,7 +114,7 @@ func (s *SignerList) SetSponsor(value string) {
 	s.present |= signerlistBitSponsor
 }
 
-// HasOwner reports whether Owner was present in the serialized entry.
+// HasOwner reports whether Owner is present.
 func (s *SignerList) HasOwner() bool {
 	return s != nil && s.present&signerlistBitOwner != 0
 }
@@ -147,7 +147,7 @@ func (s *SignerList) SetOwnerValue(value [20]byte) error {
 	return nil
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (s *SignerList) HasOwnerNode() bool {
 	return s != nil && s.present&signerlistBitOwnerNode != 0
 }
@@ -165,27 +165,27 @@ func (s *SignerList) SetOwnerNodeValue(value uint64) {
 	s.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasSignerQuorum reports whether SignerQuorum was present in the serialized entry.
+// HasSignerQuorum reports whether SignerQuorum is present.
 func (s *SignerList) HasSignerQuorum() bool {
 	return s != nil && s.present&signerlistBitSignerQuorum != 0
 }
 
-// HasSignerEntries reports whether SignerEntries was present in the serialized entry.
+// HasSignerEntries reports whether SignerEntries is present.
 func (s *SignerList) HasSignerEntries() bool {
 	return s != nil && s.present&signerlistBitSignerEntries != 0
 }
 
-// HasSignerListID reports whether SignerListID was present in the serialized entry.
+// HasSignerListID reports whether SignerListID is present.
 func (s *SignerList) HasSignerListID() bool {
 	return s != nil && s.present&signerlistBitSignerListID != 0
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (s *SignerList) HasFlags() bool {
 	return s != nil && s.present&signerlistBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (s *SignerList) HasPreviousTxnID() bool {
 	return s != nil && s.present&signerlistBitPreviousTxnID != 0
 }
@@ -206,12 +206,12 @@ func (s *SignerList) SetPreviousTxnIDValue(value [32]byte) {
 	s.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (s *SignerList) HasPreviousTxnLgrSeq() bool {
 	return s != nil && s.present&signerlistBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (s *SignerList) HasSponsor() bool {
 	return s != nil && s.present&signerlistBitSponsor != 0
 }

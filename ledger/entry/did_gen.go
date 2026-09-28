@@ -114,7 +114,7 @@ func (d *DID) SetSponsor(value string) {
 	d.present |= didBitSponsor
 }
 
-// HasAccount reports whether Account was present in the serialized entry.
+// HasAccount reports whether Account is present.
 func (d *DID) HasAccount() bool {
 	return d != nil && d.present&didBitAccount != 0
 }
@@ -137,7 +137,7 @@ func (d *DID) SetAccountValue(value [20]byte) error {
 	return nil
 }
 
-// HasDIDDocument reports whether DIDDocument was present in the serialized entry.
+// HasDIDDocument reports whether DIDDocument is present.
 func (d *DID) HasDIDDocument() bool {
 	return d != nil && d.present&didBitDIDDocument != 0
 }
@@ -165,7 +165,7 @@ func (d *DID) SetDIDDocumentValue(value []byte) {
 	d.SetDIDDocument(blobValueToString(value))
 }
 
-// HasURI reports whether URI was present in the serialized entry.
+// HasURI reports whether URI is present.
 func (d *DID) HasURI() bool {
 	return d != nil && d.present&didBitURI != 0
 }
@@ -193,7 +193,7 @@ func (d *DID) SetURIValue(value []byte) {
 	d.SetURI(blobValueToString(value))
 }
 
-// HasData reports whether Data was present in the serialized entry.
+// HasData reports whether Data is present.
 func (d *DID) HasData() bool {
 	return d != nil && d.present&didBitData != 0
 }
@@ -221,7 +221,7 @@ func (d *DID) SetDataValue(value []byte) {
 	d.SetData(blobValueToString(value))
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (d *DID) HasOwnerNode() bool {
 	return d != nil && d.present&didBitOwnerNode != 0
 }
@@ -239,12 +239,12 @@ func (d *DID) SetOwnerNodeValue(value uint64) {
 	d.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (d *DID) HasFlags() bool {
 	return d != nil && d.present&didBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (d *DID) HasPreviousTxnID() bool {
 	return d != nil && d.present&didBitPreviousTxnID != 0
 }
@@ -265,12 +265,12 @@ func (d *DID) SetPreviousTxnIDValue(value [32]byte) {
 	d.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (d *DID) HasPreviousTxnLgrSeq() bool {
 	return d != nil && d.present&didBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (d *DID) HasSponsor() bool {
 	return d != nil && d.present&didBitSponsor != 0
 }

@@ -96,7 +96,7 @@ func (t *Ticket) SetSponsor(value string) {
 	t.present |= ticketBitSponsor
 }
 
-// HasAccount reports whether Account was present in the serialized entry.
+// HasAccount reports whether Account is present.
 func (t *Ticket) HasAccount() bool {
 	return t != nil && t.present&ticketBitAccount != 0
 }
@@ -119,7 +119,7 @@ func (t *Ticket) SetAccountValue(value [20]byte) error {
 	return nil
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (t *Ticket) HasOwnerNode() bool {
 	return t != nil && t.present&ticketBitOwnerNode != 0
 }
@@ -137,17 +137,17 @@ func (t *Ticket) SetOwnerNodeValue(value uint64) {
 	t.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasTicketSequence reports whether TicketSequence was present in the serialized entry.
+// HasTicketSequence reports whether TicketSequence is present.
 func (t *Ticket) HasTicketSequence() bool {
 	return t != nil && t.present&ticketBitTicketSequence != 0
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (t *Ticket) HasFlags() bool {
 	return t != nil && t.present&ticketBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (t *Ticket) HasPreviousTxnID() bool {
 	return t != nil && t.present&ticketBitPreviousTxnID != 0
 }
@@ -168,12 +168,12 @@ func (t *Ticket) SetPreviousTxnIDValue(value [32]byte) {
 	t.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (t *Ticket) HasPreviousTxnLgrSeq() bool {
 	return t != nil && t.present&ticketBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (t *Ticket) HasSponsor() bool {
 	return t != nil && t.present&ticketBitSponsor != 0
 }

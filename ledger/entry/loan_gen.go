@@ -362,7 +362,7 @@ func (l *Loan) SetSponsor(value string) {
 	l.present |= loanBitSponsor
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (l *Loan) HasOwnerNode() bool {
 	return l != nil && l.present&loanBitOwnerNode != 0
 }
@@ -380,7 +380,7 @@ func (l *Loan) SetOwnerNodeValue(value uint64) {
 	l.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasLoanBrokerNode reports whether LoanBrokerNode was present in the serialized entry.
+// HasLoanBrokerNode reports whether LoanBrokerNode is present.
 func (l *Loan) HasLoanBrokerNode() bool {
 	return l != nil && l.present&loanBitLoanBrokerNode != 0
 }
@@ -398,7 +398,7 @@ func (l *Loan) SetLoanBrokerNodeValue(value uint64) {
 	l.SetLoanBrokerNode(uint64ValueToString(value, false))
 }
 
-// HasLoanBrokerID reports whether LoanBrokerID was present in the serialized entry.
+// HasLoanBrokerID reports whether LoanBrokerID is present.
 func (l *Loan) HasLoanBrokerID() bool {
 	return l != nil && l.present&loanBitLoanBrokerID != 0
 }
@@ -419,12 +419,12 @@ func (l *Loan) SetLoanBrokerIDValue(value [32]byte) {
 	l.SetLoanBrokerID(hashValueToString(value[:]))
 }
 
-// HasLoanSequence reports whether LoanSequence was present in the serialized entry.
+// HasLoanSequence reports whether LoanSequence is present.
 func (l *Loan) HasLoanSequence() bool {
 	return l != nil && l.present&loanBitLoanSequence != 0
 }
 
-// HasBorrower reports whether Borrower was present in the serialized entry.
+// HasBorrower reports whether Borrower is present.
 func (l *Loan) HasBorrower() bool {
 	return l != nil && l.present&loanBitBorrower != 0
 }
@@ -447,7 +447,7 @@ func (l *Loan) SetBorrowerValue(value [20]byte) error {
 	return nil
 }
 
-// HasLoanOriginationFee reports whether LoanOriginationFee was present in the serialized entry.
+// HasLoanOriginationFee reports whether LoanOriginationFee is present.
 func (l *Loan) HasLoanOriginationFee() bool {
 	return l != nil && l.present&loanBitLoanOriginationFee != 0
 }
@@ -462,7 +462,7 @@ func (l *Loan) ClearLoanOriginationFee() {
 	l.dirty = true
 }
 
-// HasLoanServiceFee reports whether LoanServiceFee was present in the serialized entry.
+// HasLoanServiceFee reports whether LoanServiceFee is present.
 func (l *Loan) HasLoanServiceFee() bool {
 	return l != nil && l.present&loanBitLoanServiceFee != 0
 }
@@ -477,7 +477,7 @@ func (l *Loan) ClearLoanServiceFee() {
 	l.dirty = true
 }
 
-// HasLatePaymentFee reports whether LatePaymentFee was present in the serialized entry.
+// HasLatePaymentFee reports whether LatePaymentFee is present.
 func (l *Loan) HasLatePaymentFee() bool {
 	return l != nil && l.present&loanBitLatePaymentFee != 0
 }
@@ -492,7 +492,7 @@ func (l *Loan) ClearLatePaymentFee() {
 	l.dirty = true
 }
 
-// HasClosePaymentFee reports whether ClosePaymentFee was present in the serialized entry.
+// HasClosePaymentFee reports whether ClosePaymentFee is present.
 func (l *Loan) HasClosePaymentFee() bool {
 	return l != nil && l.present&loanBitClosePaymentFee != 0
 }
@@ -507,7 +507,7 @@ func (l *Loan) ClearClosePaymentFee() {
 	l.dirty = true
 }
 
-// HasOverpaymentFee reports whether OverpaymentFee was present in the serialized entry.
+// HasOverpaymentFee reports whether OverpaymentFee is present.
 func (l *Loan) HasOverpaymentFee() bool {
 	return l != nil && l.present&loanBitOverpaymentFee != 0
 }
@@ -522,7 +522,7 @@ func (l *Loan) ClearOverpaymentFee() {
 	l.dirty = true
 }
 
-// HasInterestRate reports whether InterestRate was present in the serialized entry.
+// HasInterestRate reports whether InterestRate is present.
 func (l *Loan) HasInterestRate() bool {
 	return l != nil && l.present&loanBitInterestRate != 0
 }
@@ -537,7 +537,7 @@ func (l *Loan) ClearInterestRate() {
 	l.dirty = true
 }
 
-// HasLateInterestRate reports whether LateInterestRate was present in the serialized entry.
+// HasLateInterestRate reports whether LateInterestRate is present.
 func (l *Loan) HasLateInterestRate() bool {
 	return l != nil && l.present&loanBitLateInterestRate != 0
 }
@@ -552,7 +552,7 @@ func (l *Loan) ClearLateInterestRate() {
 	l.dirty = true
 }
 
-// HasCloseInterestRate reports whether CloseInterestRate was present in the serialized entry.
+// HasCloseInterestRate reports whether CloseInterestRate is present.
 func (l *Loan) HasCloseInterestRate() bool {
 	return l != nil && l.present&loanBitCloseInterestRate != 0
 }
@@ -567,7 +567,7 @@ func (l *Loan) ClearCloseInterestRate() {
 	l.dirty = true
 }
 
-// HasOverpaymentInterestRate reports whether OverpaymentInterestRate was present in the serialized entry.
+// HasOverpaymentInterestRate reports whether OverpaymentInterestRate is present.
 func (l *Loan) HasOverpaymentInterestRate() bool {
 	return l != nil && l.present&loanBitOverpaymentInterestRate != 0
 }
@@ -582,17 +582,17 @@ func (l *Loan) ClearOverpaymentInterestRate() {
 	l.dirty = true
 }
 
-// HasStartDate reports whether StartDate was present in the serialized entry.
+// HasStartDate reports whether StartDate is present.
 func (l *Loan) HasStartDate() bool {
 	return l != nil && l.present&loanBitStartDate != 0
 }
 
-// HasPaymentInterval reports whether PaymentInterval was present in the serialized entry.
+// HasPaymentInterval reports whether PaymentInterval is present.
 func (l *Loan) HasPaymentInterval() bool {
 	return l != nil && l.present&loanBitPaymentInterval != 0
 }
 
-// HasGracePeriod reports whether GracePeriod was present in the serialized entry.
+// HasGracePeriod reports whether GracePeriod is present.
 func (l *Loan) HasGracePeriod() bool {
 	return l != nil && l.present&loanBitGracePeriod != 0
 }
@@ -607,7 +607,7 @@ func (l *Loan) ClearGracePeriod() {
 	l.dirty = true
 }
 
-// HasPreviousPaymentDueDate reports whether PreviousPaymentDueDate was present in the serialized entry.
+// HasPreviousPaymentDueDate reports whether PreviousPaymentDueDate is present.
 func (l *Loan) HasPreviousPaymentDueDate() bool {
 	return l != nil && l.present&loanBitPreviousPaymentDueDate != 0
 }
@@ -622,7 +622,7 @@ func (l *Loan) ClearPreviousPaymentDueDate() {
 	l.dirty = true
 }
 
-// HasNextPaymentDueDate reports whether NextPaymentDueDate was present in the serialized entry.
+// HasNextPaymentDueDate reports whether NextPaymentDueDate is present.
 func (l *Loan) HasNextPaymentDueDate() bool {
 	return l != nil && l.present&loanBitNextPaymentDueDate != 0
 }
@@ -637,7 +637,7 @@ func (l *Loan) ClearNextPaymentDueDate() {
 	l.dirty = true
 }
 
-// HasPaymentRemaining reports whether PaymentRemaining was present in the serialized entry.
+// HasPaymentRemaining reports whether PaymentRemaining is present.
 func (l *Loan) HasPaymentRemaining() bool {
 	return l != nil && l.present&loanBitPaymentRemaining != 0
 }
@@ -652,12 +652,12 @@ func (l *Loan) ClearPaymentRemaining() {
 	l.dirty = true
 }
 
-// HasPeriodicPayment reports whether PeriodicPayment was present in the serialized entry.
+// HasPeriodicPayment reports whether PeriodicPayment is present.
 func (l *Loan) HasPeriodicPayment() bool {
 	return l != nil && l.present&loanBitPeriodicPayment != 0
 }
 
-// HasPrincipalOutstanding reports whether PrincipalOutstanding was present in the serialized entry.
+// HasPrincipalOutstanding reports whether PrincipalOutstanding is present.
 func (l *Loan) HasPrincipalOutstanding() bool {
 	return l != nil && l.present&loanBitPrincipalOutstanding != 0
 }
@@ -672,7 +672,7 @@ func (l *Loan) ClearPrincipalOutstanding() {
 	l.dirty = true
 }
 
-// HasTotalValueOutstanding reports whether TotalValueOutstanding was present in the serialized entry.
+// HasTotalValueOutstanding reports whether TotalValueOutstanding is present.
 func (l *Loan) HasTotalValueOutstanding() bool {
 	return l != nil && l.present&loanBitTotalValueOutstanding != 0
 }
@@ -687,7 +687,7 @@ func (l *Loan) ClearTotalValueOutstanding() {
 	l.dirty = true
 }
 
-// HasManagementFeeOutstanding reports whether ManagementFeeOutstanding was present in the serialized entry.
+// HasManagementFeeOutstanding reports whether ManagementFeeOutstanding is present.
 func (l *Loan) HasManagementFeeOutstanding() bool {
 	return l != nil && l.present&loanBitManagementFeeOutstanding != 0
 }
@@ -702,7 +702,7 @@ func (l *Loan) ClearManagementFeeOutstanding() {
 	l.dirty = true
 }
 
-// HasLoanScale reports whether LoanScale was present in the serialized entry.
+// HasLoanScale reports whether LoanScale is present.
 func (l *Loan) HasLoanScale() bool {
 	return l != nil && l.present&loanBitLoanScale != 0
 }
@@ -717,12 +717,12 @@ func (l *Loan) ClearLoanScale() {
 	l.dirty = true
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (l *Loan) HasFlags() bool {
 	return l != nil && l.present&loanBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (l *Loan) HasPreviousTxnID() bool {
 	return l != nil && l.present&loanBitPreviousTxnID != 0
 }
@@ -743,12 +743,12 @@ func (l *Loan) SetPreviousTxnIDValue(value [32]byte) {
 	l.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (l *Loan) HasPreviousTxnLgrSeq() bool {
 	return l != nil && l.present&loanBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (l *Loan) HasSponsor() bool {
 	return l != nil && l.present&loanBitSponsor != 0
 }

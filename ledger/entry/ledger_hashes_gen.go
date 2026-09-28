@@ -78,12 +78,12 @@ func (l *LedgerHashes) SetSponsor(value string) {
 	l.present |= ledgerhashesBitSponsor
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (l *LedgerHashes) HasFlags() bool {
 	return l != nil && l.present&ledgerhashesBitFlags != 0
 }
 
-// HasFirstLedgerSequence reports whether FirstLedgerSequence was present in the serialized entry.
+// HasFirstLedgerSequence reports whether FirstLedgerSequence is present.
 func (l *LedgerHashes) HasFirstLedgerSequence() bool {
 	return l != nil && l.present&ledgerhashesBitFirstLedgerSequence != 0
 }
@@ -98,7 +98,7 @@ func (l *LedgerHashes) ClearFirstLedgerSequence() {
 	l.dirty = true
 }
 
-// HasLastLedgerSequence reports whether LastLedgerSequence was present in the serialized entry.
+// HasLastLedgerSequence reports whether LastLedgerSequence is present.
 func (l *LedgerHashes) HasLastLedgerSequence() bool {
 	return l != nil && l.present&ledgerhashesBitLastLedgerSequence != 0
 }
@@ -113,12 +113,12 @@ func (l *LedgerHashes) ClearLastLedgerSequence() {
 	l.dirty = true
 }
 
-// HasHashes reports whether Hashes was present in the serialized entry.
+// HasHashes reports whether Hashes is present.
 func (l *LedgerHashes) HasHashes() bool {
 	return l != nil && l.present&ledgerhashesBitHashes != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (l *LedgerHashes) HasSponsor() bool {
 	return l != nil && l.present&ledgerhashesBitSponsor != 0
 }

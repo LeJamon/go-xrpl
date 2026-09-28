@@ -114,7 +114,7 @@ func (x *XChainOwnedCreateAccountClaimID) SetSponsor(value string) {
 	x.present |= xchainownedcreateaccountclaimidBitSponsor
 }
 
-// HasAccount reports whether Account was present in the serialized entry.
+// HasAccount reports whether Account is present.
 func (x *XChainOwnedCreateAccountClaimID) HasAccount() bool {
 	return x != nil && x.present&xchainownedcreateaccountclaimidBitAccount != 0
 }
@@ -137,12 +137,12 @@ func (x *XChainOwnedCreateAccountClaimID) SetAccountValue(value [20]byte) error 
 	return nil
 }
 
-// HasXChainBridge reports whether XChainBridge was present in the serialized entry.
+// HasXChainBridge reports whether XChainBridge is present.
 func (x *XChainOwnedCreateAccountClaimID) HasXChainBridge() bool {
 	return x != nil && x.present&xchainownedcreateaccountclaimidBitXChainBridge != 0
 }
 
-// HasXChainAccountCreateCount reports whether XChainAccountCreateCount was present in the serialized entry.
+// HasXChainAccountCreateCount reports whether XChainAccountCreateCount is present.
 func (x *XChainOwnedCreateAccountClaimID) HasXChainAccountCreateCount() bool {
 	return x != nil && x.present&xchainownedcreateaccountclaimidBitXChainAccountCreateCount != 0
 }
@@ -160,12 +160,12 @@ func (x *XChainOwnedCreateAccountClaimID) SetXChainAccountCreateCountValue(value
 	x.SetXChainAccountCreateCount(uint64ValueToString(value, false))
 }
 
-// HasXChainCreateAccountAttestations reports whether XChainCreateAccountAttestations was present in the serialized entry.
+// HasXChainCreateAccountAttestations reports whether XChainCreateAccountAttestations is present.
 func (x *XChainOwnedCreateAccountClaimID) HasXChainCreateAccountAttestations() bool {
 	return x != nil && x.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations != 0
 }
 
-// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+// HasOwnerNode reports whether OwnerNode is present.
 func (x *XChainOwnedCreateAccountClaimID) HasOwnerNode() bool {
 	return x != nil && x.present&xchainownedcreateaccountclaimidBitOwnerNode != 0
 }
@@ -183,12 +183,12 @@ func (x *XChainOwnedCreateAccountClaimID) SetOwnerNodeValue(value uint64) {
 	x.SetOwnerNode(uint64ValueToString(value, false))
 }
 
-// HasFlags reports whether Flags was present in the serialized entry.
+// HasFlags reports whether Flags is present.
 func (x *XChainOwnedCreateAccountClaimID) HasFlags() bool {
 	return x != nil && x.present&xchainownedcreateaccountclaimidBitFlags != 0
 }
 
-// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+// HasPreviousTxnID reports whether PreviousTxnID is present.
 func (x *XChainOwnedCreateAccountClaimID) HasPreviousTxnID() bool {
 	return x != nil && x.present&xchainownedcreateaccountclaimidBitPreviousTxnID != 0
 }
@@ -209,12 +209,12 @@ func (x *XChainOwnedCreateAccountClaimID) SetPreviousTxnIDValue(value [32]byte) 
 	x.SetPreviousTxnID(hashValueToString(value[:]))
 }
 
-// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (x *XChainOwnedCreateAccountClaimID) HasPreviousTxnLgrSeq() bool {
 	return x != nil && x.present&xchainownedcreateaccountclaimidBitPreviousTxnLgrSeq != 0
 }
 
-// HasSponsor reports whether Sponsor was present in the serialized entry.
+// HasSponsor reports whether Sponsor is present.
 func (x *XChainOwnedCreateAccountClaimID) HasSponsor() bool {
 	return x != nil && x.present&xchainownedcreateaccountclaimidBitSponsor != 0
 }
