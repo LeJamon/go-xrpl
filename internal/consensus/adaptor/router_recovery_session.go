@@ -281,7 +281,7 @@ func (c *catchupReplayCoordinator) retireLocallySatisfiedLedger(seq uint32, hash
 		retirement = c.cancelStandardReplayPipelineLocked(reason)
 	}
 	if acquisition := c.fetchTracker.Find(hash); acquisition != nil &&
-		c.fetchTracker.DiscardExpected(acquisition) {
+		c.discardInboundAcquisitionLocked(acquisition) {
 		retirement.ledgers = append(retirement.ledgers, acquisition)
 	}
 	retiredReplay := c.replayer.Has(hash)

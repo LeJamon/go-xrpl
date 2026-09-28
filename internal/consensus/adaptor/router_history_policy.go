@@ -44,18 +44,20 @@ func (c *catchupReplayCoordinator) pruneHistoryBackfill(tip uint32) {
 		c.history = catchupTarget{}
 		c.historyFloor = 0
 	}
+	c.historyMu.Unlock()
 	var retired []*inbound.Ledger
+	c.acquisitionMu.Lock()
 	for _, candidate := range c.fetchTracker.Active() {
 		if candidate.Reason() != inbound.ReasonHistory {
 			continue
 		}
 		if disabled || candidate.Seq() < minimum || c.belowFloor(candidate.Seq()) {
-			if c.fetchTracker.DiscardExpected(candidate) {
+			if c.discardInboundAcquisitionLocked(candidate) {
 				retired = append(retired, candidate)
 			}
 		}
 	}
-	c.historyMu.Unlock()
+	c.acquisitionMu.Unlock()
 	c.retireLegacyAcquisitions(retired)
 	if len(retired) != 0 {
 		c.logger.Info("Canceled historical acquisitions outside retention window",
@@ -64,7 +66,10 @@ func (c *catchupReplayCoordinator) pruneHistoryBackfill(tip uint32) {
 }
 
 func (c *catchupReplayCoordinator) discardHistoryAcquisition(il *inbound.Ledger, reason string) {
-	if c.fetchTracker.DiscardExpected(il) {
+	c.acquisitionMu.Lock()
+	removed := c.discardInboundAcquisitionLocked(il)
+	c.acquisitionMu.Unlock()
+	if removed {
 		c.retireLegacyAcquisitions([]*inbound.Ledger{il})
 		c.logger.Info("Canceled historical acquisition", "seq", il.Seq(), "reason", reason)
 	}

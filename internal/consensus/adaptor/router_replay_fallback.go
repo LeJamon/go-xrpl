@@ -46,11 +46,19 @@ func (c *catchupReplayCoordinator) requireReplayFullStateLocked(seq uint32, hash
 	c.replayFallbackRequired[hash] = seq
 }
 
-func (c *catchupReplayCoordinator) restoreReplayFallback(il *inbound.Ledger) {
+// Caller holds acquisitionMu.
+func (c *catchupReplayCoordinator) restoreReplayFallbackLocked(il *inbound.Ledger) {
 	if !il.FullStateRequired() || c.stoppedForShutdown() {
 		return
 	}
-	c.acquisitionMu.Lock()
 	c.requireReplayFullStateLocked(il.Seq(), il.Hash())
-	c.acquisitionMu.Unlock()
+}
+
+// Caller holds acquisitionMu.
+func (c *catchupReplayCoordinator) discardInboundAcquisitionLocked(il *inbound.Ledger) bool {
+	if !c.fetchTracker.DiscardExpected(il) {
+		return false
+	}
+	c.restoreReplayFallbackLocked(il)
+	return true
 }

@@ -266,7 +266,7 @@ func (c *catchupReplayCoordinator) advanceStandardReplayAnchor(
 	var retirement standardReplayRetirement
 	for _, link := range links {
 		if entry := c.standardReplay.entries[link.seq]; entry != nil {
-			if entry.acquisition != nil && c.fetchTracker.DiscardExpected(entry.acquisition) {
+			if entry.acquisition != nil && c.discardInboundAcquisitionLocked(entry.acquisition) {
 				retirement.ledgers = append(retirement.ledgers, entry.acquisition)
 			}
 			if c.consensusRecovery.stepHash == entry.hash {
@@ -517,7 +517,7 @@ func (c *catchupReplayCoordinator) reconcileStandardReplayAfterHeaderDiscovery(
 			if seq < firstDiscard {
 				continue
 			}
-			if entry.acquisition != nil && c.fetchTracker.DiscardExpected(entry.acquisition) {
+			if entry.acquisition != nil && c.discardInboundAcquisitionLocked(entry.acquisition) {
 				retirement.ledgers = append(retirement.ledgers, entry.acquisition)
 			}
 			if c.consensusRecovery.stepHash == entry.hash {
@@ -725,7 +725,7 @@ func (c *catchupReplayCoordinator) tryArmStandardReplayPipeline(
 		// owns these proven successors; replace the redundant state walk.
 		if c.standardReplay.pivotReady && link.seq > c.standardReplay.anchorSeq {
 			if existing := c.fetchTracker.Find(link.hash); existing != nil && !existing.TransactionOnly() &&
-				c.fetchTracker.DiscardExpected(existing) {
+				c.discardInboundAcquisitionLocked(existing) {
 				superseded = append(superseded, existing)
 				c.logger.Info("replacing full-state acquisition with verified-chain transaction replay",
 					"seq", link.seq, "hash", fmt.Sprintf("%x", link.hash[:8]))
@@ -924,7 +924,7 @@ func (c *catchupReplayCoordinator) cancelStandardReplayPipelineLocked(reason str
 	var retired []*inbound.Ledger
 	if !c.standardReplay.pivotReady {
 		if pivot := c.fetchTracker.Find(c.standardReplay.pivotHash); pivot != nil &&
-			!pivot.TransactionOnly() && c.fetchTracker.DiscardExpected(pivot) {
+			!pivot.TransactionOnly() && c.discardInboundAcquisitionLocked(pivot) {
 			retired = append(retired, pivot)
 		}
 	}
@@ -932,7 +932,7 @@ func (c *catchupReplayCoordinator) cancelStandardReplayPipelineLocked(reason str
 		if entry.failed {
 			c.requireReplayFullStateLocked(entry.seq, entry.hash)
 		}
-		if entry.acquisition != nil && c.fetchTracker.DiscardExpected(entry.acquisition) {
+		if entry.acquisition != nil && c.discardInboundAcquisitionLocked(entry.acquisition) {
 			retired = append(retired, entry.acquisition)
 		}
 		if c.consensusRecovery.stepHash == entry.hash {
@@ -1022,7 +1022,7 @@ func (c *catchupReplayCoordinator) discardSupersededProvisionalFullStateLocked(k
 		if candidate.Hash() == keepHash || candidate.Reason() != inbound.ReasonConsensus || candidate.TransactionOnly() {
 			continue
 		}
-		if c.fetchTracker.DiscardExpected(candidate) {
+		if c.discardInboundAcquisitionLocked(candidate) {
 			retired = append(retired, candidate)
 		}
 	}

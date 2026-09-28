@@ -2126,7 +2126,7 @@ func (c *catchupReplayCoordinator) onLedgerFullyValidated(seq uint32, hash [32]b
 			candidate.Seq() != seq || candidate.Hash() == hash {
 			continue
 		}
-		if c.fetchTracker.DiscardExpected(candidate) {
+		if c.discardInboundAcquisitionLocked(candidate) {
 			legacy = append(legacy, candidate)
 			removed[candidate.Hash()] = struct{}{}
 		}
@@ -2149,7 +2149,7 @@ func (c *catchupReplayCoordinator) onLedgerFullyValidated(seq uint32, hash [32]b
 		legacy = append(legacy, pipelineRetirement.ledgers...)
 		pipelineRetirement.ledgers = nil
 	}
-	if victim := c.obsoleteCatchupVictimLocked(seq); victim != nil && c.fetchTracker.DiscardExpected(victim) {
+	if victim := c.obsoleteCatchupVictimLocked(seq); victim != nil && c.discardInboundAcquisitionLocked(victim) {
 		legacy = append(legacy, victim)
 		removed[victim.Hash()] = struct{}{}
 	}
@@ -2481,6 +2481,9 @@ func (c *catchupReplayCoordinator) ClearFetchInfo() {
 	c.replayCommitMu.Lock()
 	c.acquisitionMu.Lock()
 	ledgers := c.fetchTracker.Clear()
+	for _, il := range ledgers {
+		c.restoreReplayFallbackLocked(il)
+	}
 	retirement := c.cancelStandardReplayPipelineLocked("fetch_info_clear")
 	c.acquisitionMu.Unlock()
 	c.replayCommitMu.Unlock()
@@ -2490,7 +2493,6 @@ func (c *catchupReplayCoordinator) ClearFetchInfo() {
 
 func (c *catchupReplayCoordinator) retireLegacyAcquisitions(ledgers []*inbound.Ledger) {
 	for _, ledger := range ledgers {
-		c.restoreReplayFallback(ledger)
 		if lane := c.currentAcquisitionWork(); lane != nil {
 			lane.cancelLedger(ledger)
 		}
@@ -3999,8 +4001,8 @@ func (c *catchupReplayCoordinator) removeInboundAcquisitionWithSession(
 	} else {
 		removed = c.fetchTracker.RemoveExpectedWithSnapshot(il, snapshot, false)
 	}
-	if removed && il.FullStateRequired() {
-		c.requireReplayFullStateLocked(il.Seq(), il.Hash())
+	if removed {
+		c.restoreReplayFallbackLocked(il)
 	}
 	retirement := standardReplayRetirement{}
 	if removed && owned {
@@ -4244,8 +4246,8 @@ func (c *catchupReplayCoordinator) completeInboundLedgerReady(il *inbound.Ledger
 		handoff, pivotHandoff = c.claimStandardReplayPivotHandoffLocked(il)
 	}
 	removed := c.fetchTracker.RemoveExpectedWithSnapshot(il, il.Snapshot(), true)
-	if removed && il.FullStateRequired() {
-		c.requireReplayFullStateLocked(il.Seq(), il.Hash())
+	if removed {
+		c.restoreReplayFallbackLocked(il)
 	}
 	if !removed && pivotHandoff {
 		c.clearStandardReplayPivotHandoffLocked(handoff)

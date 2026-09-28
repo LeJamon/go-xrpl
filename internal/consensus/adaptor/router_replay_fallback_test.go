@@ -57,11 +57,51 @@ func TestReplayFallbackHistoryBoundsActiveGenericAcquisitions(t *testing.T) {
 
 	canceled := active[3]
 	require.True(t, canceled.FullStateRequired())
-	require.True(t, c.fetchTracker.DiscardExpected(canceled))
-	c.retireLegacyAcquisitions([]*inbound.Ledger{canceled})
 	c.acquisitionMu.Lock()
+	require.True(t, c.discardInboundAcquisitionLocked(canceled))
 	assert.True(t, c.replayNeedsFullStateLocked(canceled.Hash()), "cancellation must retain fallback across retry")
 	assert.True(t, c.replayNeedsFullStateLocked(retried.Hash()), "restoring history must preserve other active retries")
 	assert.LessOrEqual(t, len(c.replayFallbackRequired), replayFallbackHistoryLimit)
+	c.acquisitionMu.Unlock()
+	c.retireLegacyAcquisitions([]*inbound.Ledger{canceled})
+}
+
+func TestReplayFallbackRetirementDoesNotRestoreCompletedReplacement(t *testing.T) {
+	r := newTestRouter(nil, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
+	c := r.catchupReplay
+	hash := [32]byte{0xF2}
+	old := inbound.NewGeneric(hash, 100, 1, serveTestLogger())
+	old.RequireFullState()
+	c.fetchTracker.Track(old)
+
+	c.acquisitionMu.Lock()
+	require.True(t, c.discardInboundAcquisitionLocked(old))
+	require.True(t, c.replayNeedsFullStateLocked(hash))
+	replacement := inbound.NewGeneric(hash, 100, 1, serveTestLogger())
+	c.fetchTracker.Track(replacement)
+	require.True(t, c.fetchTracker.RemoveExpectedWithSnapshot(replacement, replacement.Snapshot(), true))
+	// The replacement completes before the old acquisition's storage work retires.
+	delete(c.replayFallbackRequired, hash)
+	c.acquisitionMu.Unlock()
+
+	c.retireLegacyAcquisitions([]*inbound.Ledger{old})
+	c.acquisitionMu.Lock()
+	assert.False(t, c.replayNeedsFullStateLocked(hash))
+	c.acquisitionMu.Unlock()
+}
+
+func TestReplayFallbackClearRetainsActiveRequirement(t *testing.T) {
+	r := newTestRouter(nil, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
+	c := r.catchupReplay
+	hash := [32]byte{0xF3}
+	il := inbound.NewGeneric(hash, 100, 1, serveTestLogger())
+	il.RequireFullState()
+	c.fetchTracker.Track(il)
+
+	c.ClearFetchInfo()
+
+	c.acquisitionMu.Lock()
+	assert.Nil(t, c.fetchTracker.Find(hash))
+	assert.True(t, c.replayNeedsFullStateLocked(hash))
 	c.acquisitionMu.Unlock()
 }
