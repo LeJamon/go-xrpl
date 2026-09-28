@@ -48,7 +48,7 @@ func threadItem(data []byte, txHash [32]byte, ledgerSeq uint32) (prevTxnID [32]b
 	}
 	decoded := entry.New(typ)
 	setter, ok := decoded.(interface {
-		entry.Entry
+		Encode() ([]byte, error)
 		HasPreviousTxnID() bool
 		GetPreviousTxnID() ([32]byte, error)
 		SetPreviousTxnIDValue([32]byte)
@@ -67,8 +67,8 @@ func threadItem(data []byte, txHash [32]byte, ledgerSeq uint32) (prevTxnID [32]b
 		if err != nil {
 			return [32]byte{}, 0, data, false
 		}
-		_, prevLgrSeq = decoded.PreviousTxn()
 	}
+	_, prevLgrSeq = decoded.PreviousTxn()
 
 	// Check if already threaded to this transaction
 	if prevTxnID == txHash {
@@ -78,7 +78,7 @@ func threadItem(data []byte, txHash [32]byte, ledgerSeq uint32) (prevTxnID [32]b
 	// Update with new transaction info and re-encode the entry.
 	setter.SetPreviousTxnIDValue(txHash)
 	setter.SetPreviousTxnLgrSeq(ledgerSeq)
-	newData, err = decoded.Encode()
+	newData, err = setter.Encode()
 	if err != nil {
 		return prevTxnID, prevLgrSeq, data, false
 	}

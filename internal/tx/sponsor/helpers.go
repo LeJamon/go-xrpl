@@ -254,7 +254,6 @@ func isSupportedObjectType(entryType entry.Type) bool {
 }
 
 func (target *sponsoredTarget) resolveOwner(sponseeID [20]byte, sponsee string) bool {
-	_ = sponsee
 	switch target.entryType {
 	case entry.TypeCheck,
 		entry.TypeEscrow,
