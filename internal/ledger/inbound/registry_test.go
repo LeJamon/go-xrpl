@@ -41,10 +41,22 @@ func TestTracker_GetOrCreateWithSequenceUpdatesHashOnlyJoin(t *testing.T) {
 	first := New(h, 0, 7, slog.Default())
 	tr.Track(first)
 
-	joined, created := tr.GetOrCreateWithSequence(h, 42, func() *Ledger {
+	factory := func() *Ledger {
 		t.Fatal("sequence join must not create a replacement acquisition")
 		return nil
-	})
+	}
+	joined, created := tr.GetOrCreateWithSequence(h, 0, factory)
+	if created || joined != first {
+		t.Fatalf("zero-sequence join returned (%p,%v), want (%p,false)", joined, created, first)
+	}
+	if got := joined.Seq(); got != 0 {
+		t.Fatalf("zero-sequence join changed seq to %d, want 0", got)
+	}
+	if !joined.SequenceInitiallyUnknown() {
+		t.Fatal("zero-sequence join changed hash-only origin")
+	}
+
+	joined, created = tr.GetOrCreateWithSequence(h, 42, factory)
 	if created || joined != first {
 		t.Fatalf("sequence join returned (%p,%v), want (%p,false)", joined, created, first)
 	}
@@ -53,6 +65,27 @@ func TestTracker_GetOrCreateWithSequenceUpdatesHashOnlyJoin(t *testing.T) {
 	}
 	if !joined.SequenceInitiallyUnknown() {
 		t.Fatal("sequence join changed hash-only origin")
+	}
+
+	conflicting, created := tr.GetOrCreateWithSequence(h, 99, factory)
+	if created || conflicting != first {
+		t.Fatalf("conflicting sequence join returned (%p,%v), want (%p,false)", conflicting, created, first)
+	}
+	if got := conflicting.Seq(); got != 42 {
+		t.Fatalf("conflicting sequence join replaced seq with %d, want first known seq 42", got)
+	}
+	if !conflicting.SequenceInitiallyUnknown() {
+		t.Fatal("conflicting sequence join changed hash-only origin")
+	}
+	zeroAgain, created := tr.GetOrCreateWithSequence(h, 0, factory)
+	if created || zeroAgain != first {
+		t.Fatalf("later zero-sequence join returned (%p,%v), want (%p,false)", zeroAgain, created, first)
+	}
+	if got := zeroAgain.Seq(); got != 42 {
+		t.Fatalf("later zero-sequence join cleared seq to %d, want 42", got)
+	}
+	if !zeroAgain.SequenceInitiallyUnknown() {
+		t.Fatal("later zero-sequence join changed hash-only origin")
 	}
 
 	tr.Remove(h, false)

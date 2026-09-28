@@ -57,6 +57,39 @@ func TestRouter_RequestLedger_TriggersGenericAcquisition(t *testing.T) {
 	assert.Contains(t, r.catchupReplay.FetchInfo(), "42")
 }
 
+func TestRouter_RequestLedgerRetryUsesJoinedSequenceOnWire(t *testing.T) {
+	r, _, rs, svc := makeRouter(t)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	r.handleMessage(statusChangeMessage(t, peermanagement.PeerID(7), closed.Sequence(), closed.Hash()))
+
+	var target [32]byte
+	target[0] = 0x43
+	_, started, _ := r.RequestLedger(target, 0)
+	require.True(t, started)
+	il := r.catchupReplay.fetchTracker.Find(target)
+	require.NotNil(t, il)
+	require.Len(t, rs.legacyCalls(), 1, "initial hash-only request must be sent once")
+
+	_, joined, _ := r.RequestLedger(target, 42)
+	require.True(t, joined)
+	require.Len(t, rs.legacyCalls(), 1, "joining with a sequence must not issue a duplicate initial fetch")
+	assert.Equal(t, uint32(42), il.Seq())
+
+	r.catchupReplay.requestAcquisitionBase(il)
+	require.Len(t, rs.legacyCalls(), 2, "retry must issue one base request")
+	frames := rs.legacyFrames()
+	require.Len(t, frames, 2)
+	header, err := message.DecodeHeader(frames[1])
+	require.NoError(t, err)
+	decoded, err := message.Decode(header.MessageType, frames[1][header.HeaderSize():])
+	require.NoError(t, err)
+	req, ok := decoded.(*message.GetLedger)
+	require.True(t, ok)
+	assert.Equal(t, target[:], req.LedgerHash)
+	assert.Equal(t, uint32(42), req.LedgerSeq)
+}
+
 func TestRouter_RequestLedger_NoPeerDoesNotPoisonLaterRetry(t *testing.T) {
 	r, _, rs, _ := makeRouter(t)
 

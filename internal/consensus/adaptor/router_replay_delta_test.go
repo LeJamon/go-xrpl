@@ -36,6 +36,7 @@ type recordingSender struct {
 	headerErr        error
 	headerErrs       map[uint64][]error
 	legacyBaseCalls  []legacyBaseCall
+	legacyBaseFrames [][]byte
 	legacyBaseErr    error
 	legacyBaseErrs   map[uint64]error
 	// peerSupportsReplay controls the handshake-feature answer. Defaults
@@ -80,7 +81,12 @@ func (s *recordingSender) RequestReplayDelta(peerID uint64, hash [32]byte) error
 func (s *recordingSender) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32, indirect bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	frame, err := encodeLedgerBaseRequest(hash, seq, indirect)
+	if err != nil {
+		return err
+	}
 	s.legacyBaseCalls = append(s.legacyBaseCalls, legacyBaseCall{peerID: peerID, hash: hash, seq: seq})
+	s.legacyBaseFrames = append(s.legacyBaseFrames, frame)
 	if err, ok := s.legacyBaseErrs[peerID]; ok {
 		return err
 	}
@@ -113,6 +119,16 @@ func (s *recordingSender) legacyCalls() []legacyBaseCall {
 	out := make([]legacyBaseCall, len(s.legacyBaseCalls))
 	copy(out, s.legacyBaseCalls)
 	return out
+}
+
+func (s *recordingSender) legacyFrames() [][]byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	frames := make([][]byte, len(s.legacyBaseFrames))
+	for i, frame := range s.legacyBaseFrames {
+		frames[i] = append([]byte(nil), frame...)
+	}
+	return frames
 }
 
 func (s *recordingSender) headerRequests() []headerCall {
