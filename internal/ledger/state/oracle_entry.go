@@ -151,12 +151,8 @@ func SerializeOracle(o *OracleData) ([]byte, error) {
 		entry.SetOracleDocumentID(o.OracleDocumentID)
 	}
 
-	// Emit only once threaded; a fresh entry's pointers are stamped by the apply layer.
-	var emptyHash [32]byte
-	if o.PreviousTxnID != emptyHash {
-		entry.SetPreviousTxnIDValue(o.PreviousTxnID)
-		entry.SetPreviousTxnLgrSeqValue(o.PreviousTxnLgrSeq)
-	}
+	entry.SetPreviousTxnIDValue(o.PreviousTxnID)
+	entry.SetPreviousTxnLgrSeqValue(o.PreviousTxnLgrSeq)
 
 	series := make([]ledgerfields.PriceDataValue, len(o.PriceDataSeries))
 	for i, pd := range o.PriceDataSeries {
@@ -167,6 +163,9 @@ func SerializeOracle(o *OracleData) ([]byte, error) {
 			priceData.SetAssetPrice(pd.AssetPrice)
 		}
 		if pd.HasScale {
+			if pd.Scale == 0 {
+				return nil, fmt.Errorf("failed to encode Oracle.PriceDataSeries[%d]: default field Scale is explicitly set", i)
+			}
 			priceData.SetScale(pd.Scale)
 		}
 		series[i] = priceData

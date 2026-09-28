@@ -112,3 +112,22 @@ func TestOracle_RejectsPresentZeroScale(t *testing.T) {
 		t.Fatalf("SerializeOracle error = %v, want explicit default rejection", err)
 	}
 }
+
+func TestOracleRetainsThreadingSequenceWithZeroHash(t *testing.T) {
+	in := &OracleData{
+		Owner: [20]byte{1}, Provider: "AB", AssetClass: "CD", LastUpdateTime: 100,
+		PreviousTxnLgrSeq: 7,
+		PriceDataSeries:   []OraclePriceData{{BaseAsset: "XRP", QuoteAsset: "USD"}},
+	}
+	raw, err := SerializeOracle(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := ParseOracle(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.PreviousTxnID != ([32]byte{}) || out.PreviousTxnLgrSeq != 7 {
+		t.Fatalf("threading = (%X, %d), want (zero hash, 7)", out.PreviousTxnID, out.PreviousTxnLgrSeq)
+	}
+}
