@@ -511,7 +511,7 @@ public:
                                 recorder,
                                 *this,
                                 profile,
-                                 "Payment",
+                                "Payment",
                                 "valid",
                                 {Account{"alice"}, Account{"bob"}},
                                 makePayment);
@@ -522,7 +522,7 @@ public:
                             recorder,
                             *this,
                             profile,
-                             "Batch",
+                            "Batch",
                             "canonical",
                             {Account{"alice"}, Account{"bob"}, Account{"carol"}},
                             makeBatch);
@@ -530,7 +530,7 @@ public:
                             recorder,
                             *this,
                             profile,
-                             "Batch",
+                            "Batch",
                             "poisoned-created-node-wrapper",
                             {Account{"alice"}, Account{"bob"}},
                             makePoisonedBatch);
