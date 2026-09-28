@@ -1,7 +1,6 @@
 package state
 
 import (
-	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -46,18 +45,6 @@ func ParseOracle(data []byte) (*OracleData, error) {
 	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("failed to decode Oracle: %w", err)
 	}
-	provider, err := decoded.GetProvider()
-	if err != nil {
-		return nil, err
-	}
-	assetClass, err := decoded.GetAssetClass()
-	if err != nil {
-		return nil, err
-	}
-	uri, err := decoded.GetURI()
-	if err != nil {
-		return nil, err
-	}
 	lastUpdateTime, err := decoded.GetLastUpdateTime()
 	if err != nil {
 		return nil, err
@@ -84,10 +71,10 @@ func ParseOracle(data []byte) (*OracleData, error) {
 	}
 	oracle := &OracleData{
 		Owner:             owner,
-		Provider:          strings.ToLower(hex.EncodeToString(provider)),
-		AssetClass:        strings.ToLower(hex.EncodeToString(assetClass)),
+		Provider:          strings.ToLower(decoded.Provider),
+		AssetClass:        strings.ToLower(decoded.AssetClass),
 		LastUpdateTime:    lastUpdateTime,
-		URI:               strings.ToLower(hex.EncodeToString(uri)),
+		URI:               strings.ToLower(decoded.URI),
 		Flags:             flags,
 		OwnerNode:         ownerNode,
 		PreviousTxnID:     previousTxnID,

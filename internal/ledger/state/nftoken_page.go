@@ -1,7 +1,6 @@
 package state
 
 import (
-	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -32,11 +31,9 @@ func SerializeNFTokenPage(page *NFTokenPageData) ([]byte, error) {
 		var nfToken ledgerfields.NFTokenValue
 		nfToken.SetNFTokenID(token.NFTokenID)
 		if token.URI != "" {
-			uri, err := decodeNFTokenBlob("NFTokenPage.NFTokens.URI", token.URI)
-			if err != nil {
+			if err := nfToken.SetURIHex(token.URI); err != nil {
 				return nil, err
 			}
-			nfToken.SetURI(uri)
 		}
 		nfTokens[i] = nfToken
 	}
@@ -48,12 +45,12 @@ func SerializeNFTokenPage(page *NFTokenPageData) ([]byte, error) {
 }
 
 // SerializeNFTokenOffer serializes an NFTokenOffer ledger entry from its
-// primitive fields. amount is a string of XRP drops or an IOU map. rippled's
+// primitive fields. rippled's
 // NFTokenOffer object uses sfOwner (not sfAccount) and stores only lsfSellNFToken
 // in sfFlags; emitting anything else forks account_hash.
 func SerializeNFTokenOffer(
 	ownerID [20]byte, tokenID [32]byte,
-	amount any, flags uint32,
+	amount ledgerfields.AmountValue, flags uint32,
 	ownerNode, offerNode uint64,
 	destination string, expiration *uint32,
 ) ([]byte, error) {
@@ -61,15 +58,7 @@ func SerializeNFTokenOffer(
 	if err := entry.SetOwnerValue(ownerID); err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
 	}
-	typedAmount, ok := amount.(ledgerfields.AmountValue)
-	if !ok {
-		parsedAmount, err := ledgerfields.ParseAmountValue(amount)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode NFTokenOffer amount: %w", err)
-		}
-		typedAmount = parsedAmount
-	}
-	if err := entry.SetAmountValue(typedAmount); err != nil {
+	if err := entry.SetAmountValue(amount); err != nil {
 		return nil, fmt.Errorf("failed to encode NFTokenOffer amount: %w", err)
 	}
 	entry.SetNFTokenIDValue(tokenID)
@@ -169,13 +158,13 @@ func ParseNFTokenPage(data []byte) (*NFTokenPageData, error) {
 		if err != nil {
 			return nil, err
 		}
-		uri, err := value.GetURI()
+		uri, err := value.GetURIHex()
 		if err != nil {
 			return nil, err
 		}
 		page.NFTokens = append(page.NFTokens, NFTokenData{
 			NFTokenID: tokenID,
-			URI:       strings.ToLower(hex.EncodeToString(uri)),
+			URI:       strings.ToLower(uri),
 		})
 	}
 	return page, nil
@@ -256,7 +245,7 @@ func parseNFTokenOffer(entry *ledgerfields.NFTokenOffer) (*NFTokenOfferData, err
 		offer.Negative = amount.IsNegative()
 	case !amount.IsMPT():
 		offer.Negative = amount.IsNegative()
-		issuer, err := decodeLedgerAccount("NFTokenOffer.Amount.issuer", amount.Issuer)
+		issuer, err := DecodeAccountID(amount.Issuer)
 		if err != nil {
 			return nil, err
 		}
@@ -268,18 +257,4 @@ func parseNFTokenOffer(entry *ledgerfields.NFTokenOffer) (*NFTokenOfferData, err
 	}
 
 	return offer, nil
-}
-
-func decodeNFTokenBlob(field, value string) ([]byte, error) {
-	if value == "" {
-		return nil, nil
-	}
-	if len(value)%2 != 0 {
-		value = "0" + value
-	}
-	decoded, err := hex.DecodeString(value)
-	if err != nil {
-		return nil, fmt.Errorf("%s: invalid hex: %w", field, err)
-	}
-	return decoded, nil
 }
