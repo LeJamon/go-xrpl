@@ -19,8 +19,8 @@ ledger objects keyed by their SHA-512Half hash, with the key computed by the
 SHAMap/ledger layers and the payload treated as opaque (never re-hashed by the
 store). `storage/relationaldb` holds the secondary indexes — ledgers,
 transactions, the account-transaction index, validations, amendment votes. SQLite
-is the default backend (pure-Go, no external service, matching rippled's
-`ledger.db`/`transaction.db` layout); PostgreSQL is available for shared
+is the default backend (pure-Go, no external service, with ledger headers and
+indexes committed together in `transaction.db`); PostgreSQL is available for shared
 deployments. A low-level `storage/kvstore` abstraction (memory + Pebble) backs the
 node store.
 

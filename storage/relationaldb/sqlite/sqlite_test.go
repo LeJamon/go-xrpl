@@ -43,7 +43,7 @@ func TestCurrentSchemaRejectsMalformedRows(t *testing.T) {
 	}{
 		{
 			name: "ledger hash",
-			db:   ledgerDB,
+			db:   txDB,
 			sql: `INSERT INTO ledgers (
 				ledger_hash, ledger_seq, prev_hash, total_coins, closing_time,
 				prev_closing_time, close_time_res, close_flags, account_set_hash, trans_set_hash
@@ -86,7 +86,7 @@ func TestMalformedStoredRowsRejectedByScanners(t *testing.T) {
 	t.Run("ledger hash", func(t *testing.T) {
 		rm := setupTestDB(t)
 		ctx := context.Background()
-		db := rm.ledgerDB.Raw()
+		db := rm.txDB.Raw()
 		if _, err := db.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
 			t.Fatal(err)
 		}
@@ -329,7 +329,7 @@ func TestPersistValidatedLedgerFailureRecovery(t *testing.T) {
 	})
 }
 
-func TestPersistValidatedLedgerReplacementFailureUnpublishesHeader(t *testing.T) {
+func TestPersistValidatedLedgerReplacementFailurePreservesOriginal(t *testing.T) {
 	ctx := context.Background()
 	rm := setupTestDB(t)
 	neighbor := makePersistValue(19)
@@ -357,8 +357,9 @@ func TestPersistValidatedLedgerReplacementFailureUnpublishesHeader(t *testing.T)
 	if err := rm.PersistValidatedLedger(ctx, replacement); err == nil {
 		t.Fatal("expected injected replacement error")
 	}
-	if info, err := rm.Ledger().GetLedgerInfoBySeq(ctx, replacement.Ledger.Sequence); info != nil || !errors.Is(err, relationaldb.ErrLedgerNotFound) {
-		t.Fatalf("replacement left old header published: info=%v err=%v", info, err)
+	assertPersisted(t, rm, original)
+	if info, err := rm.Ledger().GetLedgerInfoBySeq(ctx, original.Ledger.Sequence); err != nil || info.Hash != original.Ledger.Hash {
+		t.Fatalf("replacement changed original header: info=%v err=%v", info, err)
 	}
 	if _, err := rm.Ledger().GetLedgerInfoBySeq(ctx, neighbor.Ledger.Sequence); err != nil {
 		t.Fatalf("unpublished neighboring ledger: %v", err)
@@ -664,7 +665,7 @@ func createHistoricalSQLiteDatabases(t *testing.T, dir string, version int) {
 	if err := migrate(ctx, ledgerDB, ledgerMigrations[:version]); err != nil {
 		t.Fatal(err)
 	}
-	if err := migrate(ctx, txDB, transactionMigrations[:version]); err != nil {
+	if err := migrateTransactions(ctx, txDB, filepath.Join(dir, "ledger.db"), transactionMigrations[:version]); err != nil {
 		t.Fatal(err)
 	}
 	if version == 0 {
@@ -674,7 +675,11 @@ func createHistoricalSQLiteDatabases(t *testing.T, dir string, version int) {
 	hash[0] = 40
 	parent := make([]byte, 32)
 	parent[0] = 39
-	if _, err := ledgerDB.ExecContext(ctx, `INSERT INTO ledgers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	headerDB := ledgerDB
+	if version >= 6 {
+		headerDB = txDB
+	}
+	if _, err := headerDB.ExecContext(ctx, `INSERT INTO ledgers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		hash, 40, parent, 100, 10, 9, 1, 0, hash, parent); err != nil {
 		t.Fatal(err)
 	}

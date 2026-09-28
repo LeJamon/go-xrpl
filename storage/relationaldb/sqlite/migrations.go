@@ -3,7 +3,10 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"net/url"
+	"path/filepath"
 
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
@@ -13,7 +16,31 @@ type migration struct {
 	apply   func(context.Context, *sql.Tx) error
 }
 
-func migrate(ctx context.Context, db *sql.DB, migrations []migration) error {
+type migrationDB interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+}
+
+func migrateTransactions(ctx context.Context, db *sql.DB, ledgerPath string, migrations []migration) error {
+	ledgerPath, err := filepath.Abs(ledgerPath)
+	if err != nil {
+		return err
+	}
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	legacy := url.URL{Scheme: "file", Path: ledgerPath, RawQuery: "mode=ro"}
+	if _, err := conn.ExecContext(ctx, "ATTACH DATABASE ? AS legacy", legacy.String()); err != nil {
+		return err
+	}
+	err = migrate(ctx, conn, migrations)
+	_, detachErr := conn.ExecContext(context.WithoutCancel(ctx), "DETACH DATABASE legacy")
+	return errors.Join(err, detachErr)
+}
+
+func migrate(ctx context.Context, db migrationDB, migrations []migration) error {
 	latest, err := validateMigrationDefinitions(migrations)
 	if err != nil {
 		return err
@@ -126,6 +153,8 @@ var ledgerMigrations = []migration{
 			`ALTER TABLE feature_votes_new RENAME TO feature_votes`,
 		)
 	}},
+	// Older binaries must not resume writing the retired ledger header table.
+	{version: 6, apply: func(context.Context, *sql.Tx) error { return nil }},
 }
 
 func migrateLedgerWidths(ctx context.Context, tx *sql.Tx) error {
@@ -207,6 +236,7 @@ var transactionMigrations = []migration{
 	{version: 3, apply: func(context.Context, *sql.Tx) error { return nil }},
 	{version: 4, apply: migrateTransactionWidths},
 	{version: 5, apply: func(context.Context, *sql.Tx) error { return nil }},
+	{version: 6, apply: migrateLedgerPublication},
 }
 
 func migrateTransactionWidths(ctx context.Context, tx *sql.Tx) error {
@@ -235,5 +265,35 @@ func migrateTransactionWidths(ctx context.Context, tx *sql.Tx) error {
 		`CREATE INDEX idx_acct_tx_id ON account_transactions(trans_id)`,
 		`CREATE INDEX idx_acct_tx ON account_transactions(account, ledger_seq, txn_seq, trans_id)`,
 		`CREATE INDEX idx_acct_lgr ON account_transactions(ledger_seq, account, trans_id)`,
+	)
+}
+
+func migrateLedgerPublication(ctx context.Context, tx *sql.Tx) error {
+	// Only transaction.db is written: the import and its version commit together,
+	// even in WAL mode. The legacy header table is never read after this migration.
+	return execAll(ctx, tx,
+		`CREATE TABLE ledgers (
+			ledger_hash BLOB PRIMARY KEY CHECK(length(ledger_hash) = 32),
+			ledger_seq INTEGER UNIQUE NOT NULL CHECK(ledger_seq BETWEEN 0 AND 4294967295),
+			prev_hash BLOB NOT NULL CHECK(length(prev_hash) = 32),
+			total_coins INTEGER NOT NULL,
+			closing_time INTEGER NOT NULL,
+			prev_closing_time INTEGER NOT NULL,
+			close_time_res INTEGER NOT NULL,
+			close_flags INTEGER NOT NULL CHECK(close_flags BETWEEN 0 AND 4294967295),
+			account_set_hash BLOB NOT NULL CHECK(length(account_set_hash) = 32),
+			trans_set_hash BLOB NOT NULL CHECK(length(trans_set_hash) = 32)
+		)`,
+		`CREATE INDEX idx_ledgers_seq ON ledgers(ledger_seq)`,
+		`INSERT INTO ledgers SELECT ledger_hash, ledger_seq, prev_hash, total_coins,
+			closing_time, prev_closing_time, close_time_res, close_flags,
+			account_set_hash, trans_set_hash FROM legacy.ledgers`,
+		`DELETE FROM transactions WHERE NOT EXISTS (
+			SELECT 1 FROM ledgers WHERE ledgers.ledger_seq = transactions.ledger_seq
+		)`,
+		`DELETE FROM account_transactions WHERE NOT EXISTS (
+			SELECT 1 FROM transactions WHERE transactions.trans_id = account_transactions.trans_id
+				AND transactions.ledger_seq = account_transactions.ledger_seq
+		)`,
 	)
 }

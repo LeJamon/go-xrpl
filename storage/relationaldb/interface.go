@@ -258,10 +258,8 @@ type RepositoryManager interface {
 	Close() error
 	WithTransaction(ctx context.Context, fn func(TransactionRepositories) error) error
 	// PersistValidatedLedger stores a header, transactions, and account indexes
-	// as one recoverable unit. PostgreSQL commits them in one transaction.
-	// SQLite removes any same-sequence header, commits the complete indexes, and
-	// publishes the replacement header last. A failed call is safe to retry and
-	// never exposes a header whose indexes are only partially persisted.
+	// atomically. A failed call is safe to retry and leaves any previously
+	// published ledger and its indexes unchanged.
 	PersistValidatedLedger(ctx context.Context, ledger ValidatedLedger) error
 }
 

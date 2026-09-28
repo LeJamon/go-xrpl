@@ -8,11 +8,6 @@ import (
 )
 
 // validationRepository is the SQLite-backed on-disk validation archive.
-// Schema deliberately cohabits ledger.db — validations are heavily
-// joined with the Ledgers table in rippled's forensic queries (they
-// mirror ledger-seq + ledger-hash), and opening a third DB file for a
-// single table would bloat the file layout without any write-concurrency
-// win (SQLite serializes writes across files in the same process).
 type validationRepository struct {
 	db       *sqlutil.DB
 	executor executor

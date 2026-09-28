@@ -187,13 +187,6 @@ func (r *ledgerRepository) SaveValidatedLedger(ctx context.Context, ledger relat
 	return nil
 }
 
-func (r *ledgerRepository) deleteLedgerBySequence(ctx context.Context, seq relationaldb.LedgerIndex) error {
-	if _, err := r.db.ExecContext(ctx, "DELETE FROM ledgers WHERE ledger_seq = ?", seq); err != nil {
-		return relationaldb.NewQueryError("unpublish_ledger", "failed to unpublish ledger", err)
-	}
-	return nil
-}
-
 // DeleteLedgersBySeq deletes all ledgers at or below maxSeq.
 func (r *ledgerRepository) DeleteLedgersBySeq(ctx context.Context, maxSeq relationaldb.LedgerIndex) error {
 	_, err := r.db.ExecContext(ctx, "DELETE FROM ledgers WHERE ledger_seq <= ?", maxSeq)

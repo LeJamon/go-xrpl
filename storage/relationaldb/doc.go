@@ -9,7 +9,6 @@
 // indexes needed to answer "what transactions touched this account" style queries.
 //
 // The interfaces here are implemented by backend subpackages — see
-// [github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite] (the default, matching
-// rippled's ledger.db / transaction.db layout) and
+// [github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite] (the default) and
 // [github.com/LeJamon/go-xrpl/storage/relationaldb/postgres].
 package relationaldb
