@@ -170,9 +170,43 @@ func (s *SignerList) HasSignerQuorum() bool {
 	return s != nil && s.present&signerlistBitSignerQuorum != 0
 }
 
+// GetSignerQuorum returns the typed UInt32 value.
+func (s *SignerList) GetSignerQuorum() (uint32, error) {
+	if s == nil {
+		return 0, nil
+	}
+	return s.SignerQuorum, nil
+}
+
+// SetSignerQuorumValue assigns a typed UInt32 value.
+func (s *SignerList) SetSignerQuorumValue(value uint32) {
+	s.SetSignerQuorum(value)
+}
+
 // HasSignerEntries reports whether SignerEntries is present.
 func (s *SignerList) HasSignerEntries() bool {
 	return s != nil && s.present&signerlistBitSignerEntries != 0
+}
+
+// GetSignerEntries returns typed nested objects.
+func (s *SignerList) GetSignerEntries() ([]SignerEntryValue, error) {
+	if s == nil {
+		return nil, nil
+	}
+	if !s.HasSignerEntries() {
+		return nil, nil
+	}
+	return signerEntryValueSliceFromAny(s.SignerEntries, "SignerList.SignerEntries")
+}
+
+// SetSignerEntriesValue assigns typed nested objects.
+func (s *SignerList) SetSignerEntriesValue(value []SignerEntryValue) error {
+	encoded, err := signerEntryValueSliceToAny(value, "SignerList.SignerEntries")
+	if err != nil {
+		return err
+	}
+	s.SetSignerEntries(encoded)
+	return nil
 }
 
 // HasSignerListID reports whether SignerListID is present.
@@ -180,9 +214,35 @@ func (s *SignerList) HasSignerListID() bool {
 	return s != nil && s.present&signerlistBitSignerListID != 0
 }
 
+// GetSignerListID returns the typed UInt32 value.
+func (s *SignerList) GetSignerListID() (uint32, error) {
+	if s == nil {
+		return 0, nil
+	}
+	return s.SignerListID, nil
+}
+
+// SetSignerListIDValue assigns a typed UInt32 value.
+func (s *SignerList) SetSignerListIDValue(value uint32) {
+	s.SetSignerListID(value)
+}
+
 // HasFlags reports whether Flags is present.
 func (s *SignerList) HasFlags() bool {
 	return s != nil && s.present&signerlistBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (s *SignerList) GetFlags() (uint32, error) {
+	if s == nil {
+		return 0, nil
+	}
+	return s.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (s *SignerList) SetFlagsValue(value uint32) {
+	s.SetFlags(value)
 }
 
 // HasPreviousTxnID reports whether PreviousTxnID is present.
@@ -209,6 +269,19 @@ func (s *SignerList) SetPreviousTxnIDValue(value [32]byte) {
 // HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (s *SignerList) HasPreviousTxnLgrSeq() bool {
 	return s != nil && s.present&signerlistBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (s *SignerList) GetPreviousTxnLgrSeq() (uint32, error) {
+	if s == nil {
+		return 0, nil
+	}
+	return s.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (s *SignerList) SetPreviousTxnLgrSeqValue(value uint32) {
+	s.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

@@ -175,6 +175,19 @@ func (f *FeeSettings) ClearReferenceFeeUnits() {
 	f.dirty = true
 }
 
+// GetReferenceFeeUnits returns the typed UInt32 value.
+func (f *FeeSettings) GetReferenceFeeUnits() (uint32, error) {
+	if f == nil {
+		return 0, nil
+	}
+	return f.ReferenceFeeUnits, nil
+}
+
+// SetReferenceFeeUnitsValue assigns a typed UInt32 value.
+func (f *FeeSettings) SetReferenceFeeUnitsValue(value uint32) {
+	f.SetReferenceFeeUnits(value)
+}
+
 // HasReserveBase reports whether ReserveBase is present.
 func (f *FeeSettings) HasReserveBase() bool {
 	return f != nil && f.present&feesettingsBitReserveBase != 0
@@ -190,6 +203,19 @@ func (f *FeeSettings) ClearReserveBase() {
 	f.dirty = true
 }
 
+// GetReserveBase returns the typed UInt32 value.
+func (f *FeeSettings) GetReserveBase() (uint32, error) {
+	if f == nil {
+		return 0, nil
+	}
+	return f.ReserveBase, nil
+}
+
+// SetReserveBaseValue assigns a typed UInt32 value.
+func (f *FeeSettings) SetReserveBaseValue(value uint32) {
+	f.SetReserveBase(value)
+}
+
 // HasReserveIncrement reports whether ReserveIncrement is present.
 func (f *FeeSettings) HasReserveIncrement() bool {
 	return f != nil && f.present&feesettingsBitReserveIncrement != 0
@@ -203,6 +229,19 @@ func (f *FeeSettings) ClearReserveIncrement() {
 	f.ReserveIncrement = 0
 	f.present &^= feesettingsBitReserveIncrement
 	f.dirty = true
+}
+
+// GetReserveIncrement returns the typed UInt32 value.
+func (f *FeeSettings) GetReserveIncrement() (uint32, error) {
+	if f == nil {
+		return 0, nil
+	}
+	return f.ReserveIncrement, nil
+}
+
+// SetReserveIncrementValue assigns a typed UInt32 value.
+func (f *FeeSettings) SetReserveIncrementValue(value uint32) {
+	f.SetReserveIncrement(value)
 }
 
 // HasBaseFeeDrops reports whether BaseFeeDrops is present.
@@ -309,6 +348,19 @@ func (f *FeeSettings) HasFlags() bool {
 	return f != nil && f.present&feesettingsBitFlags != 0
 }
 
+// GetFlags returns the typed UInt32 value.
+func (f *FeeSettings) GetFlags() (uint32, error) {
+	if f == nil {
+		return 0, nil
+	}
+	return f.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (f *FeeSettings) SetFlagsValue(value uint32) {
+	f.SetFlags(value)
+}
+
 // HasPreviousTxnID reports whether PreviousTxnID is present.
 func (f *FeeSettings) HasPreviousTxnID() bool {
 	return f != nil && f.present&feesettingsBitPreviousTxnID != 0
@@ -353,6 +405,19 @@ func (f *FeeSettings) ClearPreviousTxnLgrSeq() {
 	f.PreviousTxnLgrSeq = 0
 	f.present &^= feesettingsBitPreviousTxnLgrSeq
 	f.dirty = true
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (f *FeeSettings) GetPreviousTxnLgrSeq() (uint32, error) {
+	if f == nil {
+		return 0, nil
+	}
+	return f.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (f *FeeSettings) SetPreviousTxnLgrSeqValue(value uint32) {
+	f.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

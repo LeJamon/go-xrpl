@@ -183,6 +183,22 @@ func (a *AMM) ClearTradingFee() {
 	a.dirty = true
 }
 
+// GetTradingFee returns the typed UInt16 value.
+func (a *AMM) GetTradingFee() (uint16, error) {
+	if a == nil {
+		return 0, nil
+	}
+	if a.TradingFee < 0 || a.TradingFee > 65535 {
+		return 0, fmt.Errorf("ledgerfields: AMM.TradingFee: value %d is out of range for UInt16", a.TradingFee)
+	}
+	return uint16(a.TradingFee), nil
+}
+
+// SetTradingFeeValue assigns a typed UInt16 value.
+func (a *AMM) SetTradingFeeValue(value uint16) {
+	a.SetTradingFee(value)
+}
+
 // HasVoteSlots reports whether VoteSlots is present.
 func (a *AMM) HasVoteSlots() bool {
 	return a != nil && a.present&ammBitVoteSlots != 0
@@ -198,6 +214,27 @@ func (a *AMM) ClearVoteSlots() {
 	a.dirty = true
 }
 
+// GetVoteSlots returns typed nested objects.
+func (a *AMM) GetVoteSlots() ([]VoteEntryValue, error) {
+	if a == nil {
+		return nil, nil
+	}
+	if !a.HasVoteSlots() {
+		return nil, nil
+	}
+	return voteEntryValueSliceFromAny(a.VoteSlots, "AMM.VoteSlots")
+}
+
+// SetVoteSlotsValue assigns typed nested objects.
+func (a *AMM) SetVoteSlotsValue(value []VoteEntryValue) error {
+	encoded, err := voteEntryValueSliceToAny(value, "AMM.VoteSlots")
+	if err != nil {
+		return err
+	}
+	a.SetVoteSlots(encoded)
+	return nil
+}
+
 // HasAuctionSlot reports whether AuctionSlot is present.
 func (a *AMM) HasAuctionSlot() bool {
 	return a != nil && a.present&ammBitAuctionSlot != 0
@@ -211,6 +248,27 @@ func (a *AMM) ClearAuctionSlot() {
 	a.AuctionSlot = nil
 	a.present &^= ammBitAuctionSlot
 	a.dirty = true
+}
+
+// GetAuctionSlot returns the typed nested object.
+func (a *AMM) GetAuctionSlot() (AuctionSlotValue, error) {
+	if a == nil {
+		return AuctionSlotValue{}, nil
+	}
+	if !a.HasAuctionSlot() {
+		return AuctionSlotValue{}, nil
+	}
+	return auctionSlotValueFromAny(a.AuctionSlot, "AMM.AuctionSlot")
+}
+
+// SetAuctionSlotValue assigns the typed nested object.
+func (a *AMM) SetAuctionSlotValue(value AuctionSlotValue) error {
+	encoded, err := auctionSlotValueToAny(value, "AMM.AuctionSlot")
+	if err != nil {
+		return err
+	}
+	a.SetAuctionSlot(encoded)
+	return nil
 }
 
 // HasLPTokenBalance reports whether LPTokenBalance is present.
@@ -241,9 +299,51 @@ func (a *AMM) HasAsset() bool {
 	return a != nil && a.present&ammBitAsset != 0
 }
 
+// GetAsset returns the typed Issue value.
+func (a *AMM) GetAsset() (IssueValue, error) {
+	if a == nil {
+		return IssueValue{}, nil
+	}
+	if !a.HasAsset() {
+		return IssueValue{}, nil
+	}
+	return issueValueFromAny(a.Asset, "AMM.Asset")
+}
+
+// SetAssetValue assigns a typed Issue value.
+func (a *AMM) SetAssetValue(value IssueValue) error {
+	encoded, err := issueValueToAny(value, "AMM.Asset")
+	if err != nil {
+		return err
+	}
+	a.SetAsset(encoded)
+	return nil
+}
+
 // HasAsset2 reports whether Asset2 is present.
 func (a *AMM) HasAsset2() bool {
 	return a != nil && a.present&ammBitAsset2 != 0
+}
+
+// GetAsset2 returns the typed Issue value.
+func (a *AMM) GetAsset2() (IssueValue, error) {
+	if a == nil {
+		return IssueValue{}, nil
+	}
+	if !a.HasAsset2() {
+		return IssueValue{}, nil
+	}
+	return issueValueFromAny(a.Asset2, "AMM.Asset2")
+}
+
+// SetAsset2Value assigns a typed Issue value.
+func (a *AMM) SetAsset2Value(value IssueValue) error {
+	encoded, err := issueValueToAny(value, "AMM.Asset2")
+	if err != nil {
+		return err
+	}
+	a.SetAsset2(encoded)
+	return nil
 }
 
 // HasOwnerNode reports whether OwnerNode is present.
@@ -267,6 +367,19 @@ func (a *AMM) SetOwnerNodeValue(value uint64) {
 // HasFlags reports whether Flags is present.
 func (a *AMM) HasFlags() bool {
 	return a != nil && a.present&ammBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (a *AMM) GetFlags() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (a *AMM) SetFlagsValue(value uint32) {
+	a.SetFlags(value)
 }
 
 // HasPreviousTxnID reports whether PreviousTxnID is present.
@@ -313,6 +426,19 @@ func (a *AMM) ClearPreviousTxnLgrSeq() {
 	a.PreviousTxnLgrSeq = 0
 	a.present &^= ammBitPreviousTxnLgrSeq
 	a.dirty = true
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (a *AMM) GetPreviousTxnLgrSeq() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (a *AMM) SetPreviousTxnLgrSeqValue(value uint32) {
+	a.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

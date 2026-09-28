@@ -225,6 +225,27 @@ func (b *Bridge) HasXChainBridge() bool {
 	return b != nil && b.present&bridgeBitXChainBridge != 0
 }
 
+// GetXChainBridge returns the typed XChainBridge value.
+func (b *Bridge) GetXChainBridge() (XChainBridgeValue, error) {
+	if b == nil {
+		return XChainBridgeValue{}, nil
+	}
+	if !b.HasXChainBridge() {
+		return XChainBridgeValue{}, nil
+	}
+	return xchainBridgeValueFromAny(b.XChainBridge, "Bridge.XChainBridge")
+}
+
+// SetXChainBridgeValue assigns a typed XChainBridge value.
+func (b *Bridge) SetXChainBridgeValue(value XChainBridgeValue) error {
+	encoded, err := xchainBridgeValueToAny(value, "Bridge.XChainBridge")
+	if err != nil {
+		return err
+	}
+	b.SetXChainBridge(encoded)
+	return nil
+}
+
 // HasXChainClaimID reports whether XChainClaimID is present.
 func (b *Bridge) HasXChainClaimID() bool {
 	return b != nil && b.present&bridgeBitXChainClaimID != 0
@@ -302,6 +323,19 @@ func (b *Bridge) HasFlags() bool {
 	return b != nil && b.present&bridgeBitFlags != 0
 }
 
+// GetFlags returns the typed UInt32 value.
+func (b *Bridge) GetFlags() (uint32, error) {
+	if b == nil {
+		return 0, nil
+	}
+	return b.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (b *Bridge) SetFlagsValue(value uint32) {
+	b.SetFlags(value)
+}
+
 // HasPreviousTxnID reports whether PreviousTxnID is present.
 func (b *Bridge) HasPreviousTxnID() bool {
 	return b != nil && b.present&bridgeBitPreviousTxnID != 0
@@ -326,6 +360,19 @@ func (b *Bridge) SetPreviousTxnIDValue(value [32]byte) {
 // HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (b *Bridge) HasPreviousTxnLgrSeq() bool {
 	return b != nil && b.present&bridgeBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (b *Bridge) GetPreviousTxnLgrSeq() (uint32, error) {
+	if b == nil {
+		return 0, nil
+	}
+	return b.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (b *Bridge) SetPreviousTxnLgrSeqValue(value uint32) {
+	b.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

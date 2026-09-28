@@ -248,6 +248,19 @@ func (m *MPTokenIssuance) HasSequence() bool {
 	return m != nil && m.present&mptokenissuanceBitSequence != 0
 }
 
+// GetSequence returns the typed UInt32 value.
+func (m *MPTokenIssuance) GetSequence() (uint32, error) {
+	if m == nil {
+		return 0, nil
+	}
+	return m.Sequence, nil
+}
+
+// SetSequenceValue assigns a typed UInt32 value.
+func (m *MPTokenIssuance) SetSequenceValue(value uint32) {
+	m.SetSequence(value)
+}
+
 // HasTransferFee reports whether TransferFee is present.
 func (m *MPTokenIssuance) HasTransferFee() bool {
 	return m != nil && m.present&mptokenissuanceBitTransferFee != 0
@@ -261,6 +274,22 @@ func (m *MPTokenIssuance) ClearTransferFee() {
 	m.TransferFee = 0
 	m.present &^= mptokenissuanceBitTransferFee
 	m.dirty = true
+}
+
+// GetTransferFee returns the typed UInt16 value.
+func (m *MPTokenIssuance) GetTransferFee() (uint16, error) {
+	if m == nil {
+		return 0, nil
+	}
+	if m.TransferFee < 0 || m.TransferFee > 65535 {
+		return 0, fmt.Errorf("ledgerfields: MPTokenIssuance.TransferFee: value %d is out of range for UInt16", m.TransferFee)
+	}
+	return uint16(m.TransferFee), nil
+}
+
+// SetTransferFeeValue assigns a typed UInt16 value.
+func (m *MPTokenIssuance) SetTransferFeeValue(value uint16) {
+	m.SetTransferFee(value)
 }
 
 // HasOwnerNode reports whether OwnerNode is present.
@@ -455,6 +484,19 @@ func (m *MPTokenIssuance) ClearImmutableFlags() {
 	m.dirty = true
 }
 
+// GetImmutableFlags returns the typed UInt32 value.
+func (m *MPTokenIssuance) GetImmutableFlags() (uint32, error) {
+	if m == nil {
+		return 0, nil
+	}
+	return m.ImmutableFlags, nil
+}
+
+// SetImmutableFlagsValue assigns a typed UInt32 value.
+func (m *MPTokenIssuance) SetImmutableFlagsValue(value uint32) {
+	m.SetImmutableFlags(value)
+}
+
 // HasReferenceHolding reports whether ReferenceHolding is present.
 func (m *MPTokenIssuance) HasReferenceHolding() bool {
 	return m != nil && m.present&mptokenissuanceBitReferenceHolding != 0
@@ -575,6 +617,19 @@ func (m *MPTokenIssuance) HasFlags() bool {
 	return m != nil && m.present&mptokenissuanceBitFlags != 0
 }
 
+// GetFlags returns the typed UInt32 value.
+func (m *MPTokenIssuance) GetFlags() (uint32, error) {
+	if m == nil {
+		return 0, nil
+	}
+	return m.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (m *MPTokenIssuance) SetFlagsValue(value uint32) {
+	m.SetFlags(value)
+}
+
 // HasPreviousTxnID reports whether PreviousTxnID is present.
 func (m *MPTokenIssuance) HasPreviousTxnID() bool {
 	return m != nil && m.present&mptokenissuanceBitPreviousTxnID != 0
@@ -599,6 +654,19 @@ func (m *MPTokenIssuance) SetPreviousTxnIDValue(value [32]byte) {
 // HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (m *MPTokenIssuance) HasPreviousTxnLgrSeq() bool {
 	return m != nil && m.present&mptokenissuanceBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (m *MPTokenIssuance) GetPreviousTxnLgrSeq() (uint32, error) {
+	if m == nil {
+		return 0, nil
+	}
+	return m.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (m *MPTokenIssuance) SetPreviousTxnLgrSeqValue(value uint32) {
+	m.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

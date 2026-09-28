@@ -225,3 +225,175 @@ func TestPresenceClearAndMetadataSemantics(t *testing.T) {
 		t.Fatal("MetaNever Indexes was emitted in FinalFields")
 	}
 }
+
+func TestTypedVector256AccessorPreservesPresenceAndCopies(t *testing.T) {
+	var directory DirectoryNode
+	if got, err := directory.GetIndexes(); err != nil || got != nil {
+		t.Fatalf("absent Indexes = %#v, %v; want nil, nil", got, err)
+	}
+
+	value := Vector256Value{{0x00, 0x11, 0x22, 0x33}}
+	directory.SetIndexesValue(value)
+	value[0][0] = 0xFF
+	got, err := directory.GetIndexes()
+	if err != nil {
+		t.Fatalf("GetIndexes: %v", err)
+	}
+	if got[0][0] != 0x00 {
+		t.Fatalf("SetIndexesValue retained caller alias: %#x", got[0][0])
+	}
+	got[0][1] = 0xEE
+	again, err := directory.GetIndexes()
+	if err != nil {
+		t.Fatalf("GetIndexes after mutation: %v", err)
+	}
+	if again[0][1] != 0x11 {
+		t.Fatalf("GetIndexes retained returned-slice alias: %#x", again[0][1])
+	}
+
+	directory.SetIndexesValue(Vector256Value{})
+	if !directory.HasIndexes() {
+		t.Fatal("empty Vector256 value lost explicit field presence")
+	}
+	if got, err := directory.GetIndexes(); err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("explicit empty Indexes = %#v, %v; want non-nil empty vector", got, err)
+	}
+
+	directory.Indexes = []string{"not-a-hash"}
+	if _, err := directory.GetIndexes(); err == nil {
+		t.Fatal("GetIndexes accepted malformed hash")
+	}
+}
+
+func TestTypedIssueNumberBridgeAndNestedAccessors(t *testing.T) {
+	iou := IssueValue{Currency: "USD", Issuer: "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn"}
+	var amm AMM
+	if err := amm.SetAssetValue(iou); err != nil {
+		t.Fatalf("SetAssetValue: %v", err)
+	}
+	gotIssue, err := amm.GetAsset()
+	if err != nil {
+		t.Fatalf("GetAsset: %v", err)
+	}
+	if !reflect.DeepEqual(gotIssue, iou) {
+		t.Fatalf("GetAsset = %#v, want %#v", gotIssue, iou)
+	}
+	amm.Asset = map[string]any{"currency": "USD"}
+	if _, err := amm.GetAsset(); err == nil {
+		t.Fatal("GetAsset accepted issued currency without issuer")
+	}
+
+	var vault Vault
+	if got, err := vault.GetAssetsTotal(); err != nil || got != NumberValue("0") {
+		t.Fatalf("absent Number = %q, %v; want 0, nil", got, err)
+	}
+	if err := vault.SetAssetsTotalValue(NumberValue("123.4500")); err != nil {
+		t.Fatalf("SetAssetsTotalValue: %v", err)
+	}
+	if got, err := vault.GetAssetsTotal(); err != nil || got != NumberValue("123.4500") {
+		t.Fatalf("Number round-trip = %q, %v", got, err)
+	}
+
+	bridgeValue := XChainBridgeValue{
+		LockingChainDoor:  [20]byte{1},
+		LockingChainIssue: IssueValue{Currency: "XRP"},
+		IssuingChainDoor:  [20]byte{2},
+		IssuingChainIssue: iou,
+	}
+	var bridge Bridge
+	if err := bridge.SetXChainBridgeValue(bridgeValue); err != nil {
+		t.Fatalf("SetXChainBridgeValue: %v", err)
+	}
+	gotBridge, err := bridge.GetXChainBridge()
+	if err != nil {
+		t.Fatalf("GetXChainBridge: %v", err)
+	}
+	if !reflect.DeepEqual(gotBridge, bridgeValue) {
+		t.Fatalf("GetXChainBridge = %#v, want %#v", gotBridge, bridgeValue)
+	}
+}
+
+func TestNestedWrapperPresenceAndCopySemantics(t *testing.T) {
+	var credential CredentialValue
+	credentialType := []byte{0x01, 0x02, 0x03}
+	credential.SetCredentialType(credentialType)
+	credentialType[0] = 0xFF
+	gotType, err := credential.GetCredentialType()
+	if err != nil || !bytes.Equal(gotType, []byte{0x01, 0x02, 0x03}) {
+		t.Fatalf("CredentialType after input mutation = %X, %v", gotType, err)
+	}
+	gotType[1] = 0xEE
+	againType, err := credential.GetCredentialType()
+	if err != nil || !bytes.Equal(againType, []byte{0x01, 0x02, 0x03}) {
+		t.Fatalf("CredentialType after output mutation = %X, %v", againType, err)
+	}
+
+	var slot AuctionSlotValue
+	if err := slot.SetAccount([20]byte{4}); err != nil {
+		t.Fatalf("SetAccount: %v", err)
+	}
+	slot.SetExpiration(10)
+	if err := slot.SetPrice(AmountValue{Value: "1"}); err != nil {
+		t.Fatalf("SetPrice: %v", err)
+	}
+	if err := slot.SetAuthAccountsValue(nil); err != nil {
+		t.Fatalf("SetAuthAccountsValue(nil): %v", err)
+	}
+	if !slot.HasAuthAccounts() {
+		t.Fatal("SetAuthAccountsValue(nil) lost explicit presence")
+	}
+	serialized := slot.ToMap()
+	if _, ok := serialized["AuthAccounts"]; !ok {
+		t.Fatalf("ToMap omitted present empty AuthAccounts: %#v", serialized)
+	}
+
+	copySlot := slot
+	copySlot.SetExpiration(11)
+	if got, _ := slot.GetExpiration(); got != 10 {
+		t.Fatalf("copy mutation changed original wrapper: %d", got)
+	}
+
+	var amm AMM
+	amm.SetAuctionSlot(map[string]any{
+		"Account":    "",
+		"Expiration": uint32(1),
+		"Price":      "1",
+	})
+	decodedSlot, err := amm.GetAuctionSlot()
+	if err != nil {
+		t.Fatalf("GetAuctionSlot(empty account): %v", err)
+	}
+	if mapped := decodedSlot.ToMap(); mapped["Account"] != "" {
+		t.Fatalf("empty nested Account became %#v", mapped["Account"])
+	}
+
+	amm.SetAuctionSlot(map[string]any{
+		"Account":    innerTemplateAccount,
+		"Expiration": uint32(1),
+		"Price":      "1",
+		"Unexpected": true,
+	})
+	if _, err := amm.GetAuctionSlot(); err == nil {
+		t.Fatal("GetAuctionSlot accepted an unknown nested field")
+	}
+
+	var bridge Bridge
+	bridge.SetXChainBridge(map[string]any{
+		"LockingChainDoor":  "",
+		"LockingChainIssue": map[string]any{"currency": "XRP"},
+		"IssuingChainDoor":  "",
+		"IssuingChainIssue": map[string]any{"currency": "XRP"},
+	})
+	decodedBridge, err := bridge.GetXChainBridge()
+	if err != nil {
+		t.Fatalf("GetXChainBridge(empty doors): %v", err)
+	}
+	encodedBridge, err := xchainBridgeValueToAny(decodedBridge, "Bridge.XChainBridge")
+	if err != nil {
+		t.Fatalf("XChainBridge empty-door encode: %v", err)
+	}
+	bridgeMap, ok := encodedBridge.(map[string]any)
+	if !ok || bridgeMap["LockingChainDoor"] != "" || bridgeMap["IssuingChainDoor"] != "" {
+		t.Fatalf("empty XChainBridge doors became %#v", encodedBridge)
+	}
+}

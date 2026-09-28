@@ -211,6 +211,19 @@ func (c *Credential) ClearExpiration() {
 	c.dirty = true
 }
 
+// GetExpiration returns the typed UInt32 value.
+func (c *Credential) GetExpiration() (uint32, error) {
+	if c == nil {
+		return 0, nil
+	}
+	return c.Expiration, nil
+}
+
+// SetExpirationValue assigns a typed UInt32 value.
+func (c *Credential) SetExpirationValue(value uint32) {
+	c.SetExpiration(value)
+}
+
 // HasURI reports whether URI is present.
 func (c *Credential) HasURI() bool {
 	return c != nil && c.present&credentialBitURI != 0
@@ -290,6 +303,19 @@ func (c *Credential) HasFlags() bool {
 	return c != nil && c.present&credentialBitFlags != 0
 }
 
+// GetFlags returns the typed UInt32 value.
+func (c *Credential) GetFlags() (uint32, error) {
+	if c == nil {
+		return 0, nil
+	}
+	return c.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (c *Credential) SetFlagsValue(value uint32) {
+	c.SetFlags(value)
+}
+
 // HasPreviousTxnID reports whether PreviousTxnID is present.
 func (c *Credential) HasPreviousTxnID() bool {
 	return c != nil && c.present&credentialBitPreviousTxnID != 0
@@ -314,6 +340,19 @@ func (c *Credential) SetPreviousTxnIDValue(value [32]byte) {
 // HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (c *Credential) HasPreviousTxnLgrSeq() bool {
 	return c != nil && c.present&credentialBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (c *Credential) GetPreviousTxnLgrSeq() (uint32, error) {
+	if c == nil {
+		return 0, nil
+	}
+	return c.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (c *Credential) SetPreviousTxnLgrSeqValue(value uint32) {
+	c.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

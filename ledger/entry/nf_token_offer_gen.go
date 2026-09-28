@@ -283,9 +283,35 @@ func (n *NFTokenOffer) ClearExpiration() {
 	n.dirty = true
 }
 
+// GetExpiration returns the typed UInt32 value.
+func (n *NFTokenOffer) GetExpiration() (uint32, error) {
+	if n == nil {
+		return 0, nil
+	}
+	return n.Expiration, nil
+}
+
+// SetExpirationValue assigns a typed UInt32 value.
+func (n *NFTokenOffer) SetExpirationValue(value uint32) {
+	n.SetExpiration(value)
+}
+
 // HasFlags reports whether Flags is present.
 func (n *NFTokenOffer) HasFlags() bool {
 	return n != nil && n.present&nftokenofferBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (n *NFTokenOffer) GetFlags() (uint32, error) {
+	if n == nil {
+		return 0, nil
+	}
+	return n.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (n *NFTokenOffer) SetFlagsValue(value uint32) {
+	n.SetFlags(value)
 }
 
 // HasPreviousTxnID reports whether PreviousTxnID is present.
@@ -312,6 +338,19 @@ func (n *NFTokenOffer) SetPreviousTxnIDValue(value [32]byte) {
 // HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (n *NFTokenOffer) HasPreviousTxnLgrSeq() bool {
 	return n != nil && n.present&nftokenofferBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (n *NFTokenOffer) GetPreviousTxnLgrSeq() (uint32, error) {
+	if n == nil {
+		return 0, nil
+	}
+	return n.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (n *NFTokenOffer) SetPreviousTxnLgrSeqValue(value uint32) {
+	n.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

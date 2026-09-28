@@ -142,6 +142,27 @@ func (x *XChainOwnedCreateAccountClaimID) HasXChainBridge() bool {
 	return x != nil && x.present&xchainownedcreateaccountclaimidBitXChainBridge != 0
 }
 
+// GetXChainBridge returns the typed XChainBridge value.
+func (x *XChainOwnedCreateAccountClaimID) GetXChainBridge() (XChainBridgeValue, error) {
+	if x == nil {
+		return XChainBridgeValue{}, nil
+	}
+	if !x.HasXChainBridge() {
+		return XChainBridgeValue{}, nil
+	}
+	return xchainBridgeValueFromAny(x.XChainBridge, "XChainOwnedCreateAccountClaimID.XChainBridge")
+}
+
+// SetXChainBridgeValue assigns a typed XChainBridge value.
+func (x *XChainOwnedCreateAccountClaimID) SetXChainBridgeValue(value XChainBridgeValue) error {
+	encoded, err := xchainBridgeValueToAny(value, "XChainOwnedCreateAccountClaimID.XChainBridge")
+	if err != nil {
+		return err
+	}
+	x.SetXChainBridge(encoded)
+	return nil
+}
+
 // HasXChainAccountCreateCount reports whether XChainAccountCreateCount is present.
 func (x *XChainOwnedCreateAccountClaimID) HasXChainAccountCreateCount() bool {
 	return x != nil && x.present&xchainownedcreateaccountclaimidBitXChainAccountCreateCount != 0
@@ -165,6 +186,27 @@ func (x *XChainOwnedCreateAccountClaimID) HasXChainCreateAccountAttestations() b
 	return x != nil && x.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations != 0
 }
 
+// GetXChainCreateAccountAttestations returns typed nested objects.
+func (x *XChainOwnedCreateAccountClaimID) GetXChainCreateAccountAttestations() ([]XChainCreateAccountProofSigValue, error) {
+	if x == nil {
+		return nil, nil
+	}
+	if !x.HasXChainCreateAccountAttestations() {
+		return nil, nil
+	}
+	return xChainCreateAccountProofSigValueSliceFromAny(x.XChainCreateAccountAttestations, "XChainOwnedCreateAccountClaimID.XChainCreateAccountAttestations")
+}
+
+// SetXChainCreateAccountAttestationsValue assigns typed nested objects.
+func (x *XChainOwnedCreateAccountClaimID) SetXChainCreateAccountAttestationsValue(value []XChainCreateAccountProofSigValue) error {
+	encoded, err := xChainCreateAccountProofSigValueSliceToAny(value, "XChainOwnedCreateAccountClaimID.XChainCreateAccountAttestations")
+	if err != nil {
+		return err
+	}
+	x.SetXChainCreateAccountAttestations(encoded)
+	return nil
+}
+
 // HasOwnerNode reports whether OwnerNode is present.
 func (x *XChainOwnedCreateAccountClaimID) HasOwnerNode() bool {
 	return x != nil && x.present&xchainownedcreateaccountclaimidBitOwnerNode != 0
@@ -186,6 +228,19 @@ func (x *XChainOwnedCreateAccountClaimID) SetOwnerNodeValue(value uint64) {
 // HasFlags reports whether Flags is present.
 func (x *XChainOwnedCreateAccountClaimID) HasFlags() bool {
 	return x != nil && x.present&xchainownedcreateaccountclaimidBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (x *XChainOwnedCreateAccountClaimID) GetFlags() (uint32, error) {
+	if x == nil {
+		return 0, nil
+	}
+	return x.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (x *XChainOwnedCreateAccountClaimID) SetFlagsValue(value uint32) {
+	x.SetFlags(value)
 }
 
 // HasPreviousTxnID reports whether PreviousTxnID is present.
@@ -212,6 +267,19 @@ func (x *XChainOwnedCreateAccountClaimID) SetPreviousTxnIDValue(value [32]byte) 
 // HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (x *XChainOwnedCreateAccountClaimID) HasPreviousTxnLgrSeq() bool {
 	return x != nil && x.present&xchainownedcreateaccountclaimidBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (x *XChainOwnedCreateAccountClaimID) GetPreviousTxnLgrSeq() (uint32, error) {
+	if x == nil {
+		return 0, nil
+	}
+	return x.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (x *XChainOwnedCreateAccountClaimID) SetPreviousTxnLgrSeqValue(value uint32) {
+	x.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

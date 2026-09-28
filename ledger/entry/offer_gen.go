@@ -187,6 +187,19 @@ func (o *Offer) HasSequence() bool {
 	return o != nil && o.present&offerBitSequence != 0
 }
 
+// GetSequence returns the typed UInt32 value.
+func (o *Offer) GetSequence() (uint32, error) {
+	if o == nil {
+		return 0, nil
+	}
+	return o.Sequence, nil
+}
+
+// SetSequenceValue assigns a typed UInt32 value.
+func (o *Offer) SetSequenceValue(value uint32) {
+	o.SetSequence(value)
+}
+
 // HasTakerPays reports whether TakerPays is present.
 func (o *Offer) HasTakerPays() bool {
 	return o != nil && o.present&offerBitTakerPays != 0
@@ -305,9 +318,35 @@ func (o *Offer) ClearExpiration() {
 	o.dirty = true
 }
 
+// GetExpiration returns the typed UInt32 value.
+func (o *Offer) GetExpiration() (uint32, error) {
+	if o == nil {
+		return 0, nil
+	}
+	return o.Expiration, nil
+}
+
+// SetExpirationValue assigns a typed UInt32 value.
+func (o *Offer) SetExpirationValue(value uint32) {
+	o.SetExpiration(value)
+}
+
 // HasFlags reports whether Flags is present.
 func (o *Offer) HasFlags() bool {
 	return o != nil && o.present&offerBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (o *Offer) GetFlags() (uint32, error) {
+	if o == nil {
+		return 0, nil
+	}
+	return o.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (o *Offer) SetFlagsValue(value uint32) {
+	o.SetFlags(value)
 }
 
 // HasDomainID reports whether DomainID is present.
@@ -356,6 +395,27 @@ func (o *Offer) ClearAdditionalBooks() {
 	o.dirty = true
 }
 
+// GetAdditionalBooks returns typed nested objects.
+func (o *Offer) GetAdditionalBooks() ([]BookValue, error) {
+	if o == nil {
+		return nil, nil
+	}
+	if !o.HasAdditionalBooks() {
+		return nil, nil
+	}
+	return bookValueSliceFromAny(o.AdditionalBooks, "Offer.AdditionalBooks")
+}
+
+// SetAdditionalBooksValue assigns typed nested objects.
+func (o *Offer) SetAdditionalBooksValue(value []BookValue) error {
+	encoded, err := bookValueSliceToAny(value, "Offer.AdditionalBooks")
+	if err != nil {
+		return err
+	}
+	o.SetAdditionalBooks(encoded)
+	return nil
+}
+
 // HasPreviousTxnID reports whether PreviousTxnID is present.
 func (o *Offer) HasPreviousTxnID() bool {
 	return o != nil && o.present&offerBitPreviousTxnID != 0
@@ -380,6 +440,19 @@ func (o *Offer) SetPreviousTxnIDValue(value [32]byte) {
 // HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (o *Offer) HasPreviousTxnLgrSeq() bool {
 	return o != nil && o.present&offerBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (o *Offer) GetPreviousTxnLgrSeq() (uint32, error) {
+	if o == nil {
+		return 0, nil
+	}
+	return o.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (o *Offer) SetPreviousTxnLgrSeqValue(value uint32) {
+	o.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

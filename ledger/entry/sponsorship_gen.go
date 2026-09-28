@@ -162,6 +162,19 @@ func (s *Sponsorship) HasPreviousTxnLgrSeq() bool {
 	return s != nil && s.present&sponsorshipBitPreviousTxnLgrSeq != 0
 }
 
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (s *Sponsorship) GetPreviousTxnLgrSeq() (uint32, error) {
+	if s == nil {
+		return 0, nil
+	}
+	return s.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (s *Sponsorship) SetPreviousTxnLgrSeqValue(value uint32) {
+	s.SetPreviousTxnLgrSeq(value)
+}
+
 // HasOwner reports whether Owner is present.
 func (s *Sponsorship) HasOwner() bool {
 	return s != nil && s.present&sponsorshipBitOwner != 0
@@ -289,6 +302,19 @@ func (s *Sponsorship) ClearRemainingOwnerCount() {
 	s.dirty = true
 }
 
+// GetRemainingOwnerCount returns the typed UInt32 value.
+func (s *Sponsorship) GetRemainingOwnerCount() (uint32, error) {
+	if s == nil {
+		return 0, nil
+	}
+	return s.RemainingOwnerCount, nil
+}
+
+// SetRemainingOwnerCountValue assigns a typed UInt32 value.
+func (s *Sponsorship) SetRemainingOwnerCountValue(value uint32) {
+	s.SetRemainingOwnerCount(value)
+}
+
 // HasOwnerNode reports whether OwnerNode is present.
 func (s *Sponsorship) HasOwnerNode() bool {
 	return s != nil && s.present&sponsorshipBitOwnerNode != 0
@@ -328,6 +354,19 @@ func (s *Sponsorship) SetSponseeNodeValue(value uint64) {
 // HasFlags reports whether Flags is present.
 func (s *Sponsorship) HasFlags() bool {
 	return s != nil && s.present&sponsorshipBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (s *Sponsorship) GetFlags() (uint32, error) {
+	if s == nil {
+		return 0, nil
+	}
+	return s.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (s *Sponsorship) SetFlagsValue(value uint32) {
+	s.SetFlags(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

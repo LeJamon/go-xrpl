@@ -200,6 +200,19 @@ func (d *DirectoryNode) HasFlags() bool {
 	return d != nil && d.present&directorynodeBitFlags != 0
 }
 
+// GetFlags returns the typed UInt32 value.
+func (d *DirectoryNode) GetFlags() (uint32, error) {
+	if d == nil {
+		return 0, nil
+	}
+	return d.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (d *DirectoryNode) SetFlagsValue(value uint32) {
+	d.SetFlags(value)
+}
+
 // HasRootIndex reports whether RootIndex is present.
 func (d *DirectoryNode) HasRootIndex() bool {
 	return d != nil && d.present&directorynodeBitRootIndex != 0
@@ -224,6 +237,22 @@ func (d *DirectoryNode) SetRootIndexValue(value [32]byte) {
 // HasIndexes reports whether Indexes is present.
 func (d *DirectoryNode) HasIndexes() bool {
 	return d != nil && d.present&directorynodeBitIndexes != 0
+}
+
+// GetIndexes returns the typed Vector256 values.
+func (d *DirectoryNode) GetIndexes() (Vector256Value, error) {
+	if d == nil {
+		return nil, nil
+	}
+	if !d.HasIndexes() {
+		return nil, nil
+	}
+	return vector256ValueFromStrings(d.Indexes, "DirectoryNode.Indexes")
+}
+
+// SetIndexesValue assigns typed Vector256 values.
+func (d *DirectoryNode) SetIndexesValue(value Vector256Value) {
+	d.SetIndexes(vector256ValueToStrings(value))
 }
 
 // HasIndexNext reports whether IndexNext is present.
@@ -635,6 +664,19 @@ func (d *DirectoryNode) ClearPreviousTxnLgrSeq() {
 	d.PreviousTxnLgrSeq = 0
 	d.present &^= directorynodeBitPreviousTxnLgrSeq
 	d.dirty = true
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (d *DirectoryNode) GetPreviousTxnLgrSeq() (uint32, error) {
+	if d == nil {
+		return 0, nil
+	}
+	return d.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (d *DirectoryNode) SetPreviousTxnLgrSeqValue(value uint32) {
+	d.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

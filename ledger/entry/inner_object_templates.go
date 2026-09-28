@@ -7,175 +7,31 @@ import (
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	codecTypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
+	"github.com/LeJamon/go-xrpl/ledger/entry/schema"
 )
 
-type innerFieldStyle uint8
+type innerFieldStyle = schema.InnerFieldStyle
 
 const (
-	innerRequired innerFieldStyle = iota
-	innerOptional
-	innerDefault
+	innerRequired = schema.InnerRequired
+	innerOptional = schema.InnerOptional
+	innerDefault  = schema.InnerDefault
 )
 
-type innerFieldTemplate struct {
-	style innerFieldStyle
-	kind  innerValueKind
-}
-
-type innerValueKind uint8
+type innerFieldTemplate = schema.InnerFieldTemplate
+type innerValueKind = schema.InnerValueKind
+type innerObjectTemplate = schema.InnerObjectTemplate
 
 const (
-	innerAny innerValueKind = iota
-	innerString
-	innerUInt8
-	innerUInt16
-	innerUInt32
-	innerUInt64
-	innerPermissionValue
-	innerArray
+	innerAny             = schema.InnerAny
+	innerString          = schema.InnerString
+	innerUInt8           = schema.InnerUInt8
+	innerUInt16          = schema.InnerUInt16
+	innerUInt32          = schema.InnerUInt32
+	innerUInt64          = schema.InnerUInt64
+	innerPermissionValue = schema.InnerPermissionValue
+	innerArray           = schema.InnerArray
 )
-
-type innerObjectTemplate struct {
-	fields map[string]innerFieldTemplate
-}
-
-var arrayElementTemplates = map[string]string{
-	"AcceptedCredentials":             "Credential",
-	"AdditionalBooks":                 "Book",
-	"AuthAccounts":                    "AuthAccount",
-	"AuthorizeCredentials":            "Credential",
-	"DisabledValidators":              "DisabledValidator",
-	"Majorities":                      "Majority",
-	"NFTokens":                        "NFToken",
-	"Permissions":                     "Permission",
-	"PriceDataSeries":                 "PriceData",
-	"SignerEntries":                   "SignerEntry",
-	"VoteSlots":                       "VoteEntry",
-	"XChainClaimAttestations":         "XChainClaimProofSig",
-	"XChainCreateAccountAttestations": "XChainCreateAccountProofSig",
-}
-
-var innerObjectTemplates = map[string]innerObjectTemplate{
-	"SignerEntry": {
-		fields: map[string]innerFieldTemplate{
-			"Account":       {style: innerRequired, kind: innerString},
-			"SignerWeight":  {style: innerRequired, kind: innerUInt16},
-			"WalletLocator": {style: innerOptional, kind: innerString},
-		},
-	},
-	"Majority": {
-		fields: map[string]innerFieldTemplate{
-			"Amendment": {style: innerRequired, kind: innerString},
-			"CloseTime": {style: innerRequired, kind: innerUInt32},
-		},
-	},
-	"DisabledValidator": {
-		fields: map[string]innerFieldTemplate{
-			"PublicKey":           {style: innerRequired, kind: innerString},
-			"FirstLedgerSequence": {style: innerRequired, kind: innerUInt32},
-		},
-	},
-	"NFToken": {
-		fields: map[string]innerFieldTemplate{
-			"NFTokenID": {style: innerRequired, kind: innerString},
-			"URI":       {style: innerOptional, kind: innerString},
-		},
-	},
-	"VoteEntry": {
-		fields: map[string]innerFieldTemplate{
-			"Account":    {style: innerRequired, kind: innerString},
-			"TradingFee": {style: innerDefault, kind: innerUInt16},
-			"VoteWeight": {style: innerRequired, kind: innerUInt32},
-		},
-	},
-	"AuctionSlot": {
-		fields: map[string]innerFieldTemplate{
-			"Account":       {style: innerRequired, kind: innerString},
-			"Expiration":    {style: innerRequired, kind: innerUInt32},
-			"DiscountedFee": {style: innerDefault, kind: innerUInt16},
-			"Price":         {style: innerRequired},
-			"AuthAccounts":  {style: innerOptional, kind: innerArray},
-		},
-	},
-	"XChainClaimAttestationCollectionElement": {
-		fields: map[string]innerFieldTemplate{
-			"AttestationSignerAccount": {style: innerRequired, kind: innerString},
-			"PublicKey":                {style: innerRequired, kind: innerString},
-			"Signature":                {style: innerRequired, kind: innerString},
-			"Amount":                   {style: innerRequired},
-			"Account":                  {style: innerRequired, kind: innerString},
-			"AttestationRewardAccount": {style: innerRequired, kind: innerString},
-			"WasLockingChainSend":      {style: innerRequired, kind: innerUInt8},
-			"XChainClaimID":            {style: innerRequired, kind: innerUInt64},
-			"Destination":              {style: innerOptional, kind: innerString},
-		},
-	},
-	"XChainCreateAccountAttestationCollectionElement": {
-		fields: map[string]innerFieldTemplate{
-			"AttestationSignerAccount": {style: innerRequired, kind: innerString},
-			"PublicKey":                {style: innerRequired, kind: innerString},
-			"Signature":                {style: innerRequired, kind: innerString},
-			"Amount":                   {style: innerRequired},
-			"Account":                  {style: innerRequired, kind: innerString},
-			"AttestationRewardAccount": {style: innerRequired, kind: innerString},
-			"WasLockingChainSend":      {style: innerRequired, kind: innerUInt8},
-			"XChainAccountCreateCount": {style: innerRequired, kind: innerUInt64},
-			"Destination":              {style: innerRequired, kind: innerString},
-			"SignatureReward":          {style: innerRequired},
-		},
-	},
-	"XChainClaimProofSig": {
-		fields: map[string]innerFieldTemplate{
-			"AttestationSignerAccount": {style: innerRequired, kind: innerString},
-			"PublicKey":                {style: innerRequired, kind: innerString},
-			"Amount":                   {style: innerRequired},
-			"AttestationRewardAccount": {style: innerRequired, kind: innerString},
-			"WasLockingChainSend":      {style: innerRequired, kind: innerUInt8},
-			"Destination":              {style: innerOptional, kind: innerString},
-		},
-	},
-	"XChainCreateAccountProofSig": {
-		fields: map[string]innerFieldTemplate{
-			"AttestationSignerAccount": {style: innerRequired, kind: innerString},
-			"PublicKey":                {style: innerRequired, kind: innerString},
-			"Amount":                   {style: innerRequired},
-			"SignatureReward":          {style: innerRequired},
-			"AttestationRewardAccount": {style: innerRequired, kind: innerString},
-			"WasLockingChainSend":      {style: innerRequired, kind: innerUInt8},
-			"Destination":              {style: innerRequired, kind: innerString},
-		},
-	},
-	"AuthAccount": {
-		fields: map[string]innerFieldTemplate{
-			"Account": {style: innerRequired, kind: innerString},
-		},
-	},
-	"PriceData": {
-		fields: map[string]innerFieldTemplate{
-			"BaseAsset":  {style: innerRequired, kind: innerString},
-			"QuoteAsset": {style: innerRequired, kind: innerString},
-			"AssetPrice": {style: innerOptional, kind: innerUInt64},
-			"Scale":      {style: innerDefault, kind: innerUInt8},
-		},
-	},
-	"Credential": {
-		fields: map[string]innerFieldTemplate{
-			"Issuer":         {style: innerRequired, kind: innerString},
-			"CredentialType": {style: innerRequired, kind: innerString},
-		},
-	},
-	"Permission": {
-		fields: map[string]innerFieldTemplate{
-			"PermissionValue": {style: innerRequired, kind: innerPermissionValue},
-		},
-	},
-	"Book": {
-		fields: map[string]innerFieldTemplate{
-			"BookDirectory": {style: innerRequired, kind: innerString},
-			"BookNode":      {style: innerRequired, kind: innerUInt64},
-		},
-	},
-}
 
 func validateDecodedSTArray(fieldName string, value []any) error {
 	return validateTypedSTArray(fieldName, value, false)
@@ -186,7 +42,7 @@ func validateSTArrayForEncode(fieldName string, value []any) error {
 }
 
 func validateTypedSTArray(fieldName string, value []any, forEncode bool) error {
-	wrapper, ok := arrayElementTemplates[fieldName]
+	wrapper, ok := schema.ArrayElementTemplate(fieldName)
 	if !ok {
 		return fmt.Errorf("ledgerfields: STArray field %s has no inner-object template", fieldName)
 	}
@@ -222,12 +78,12 @@ func validateInnerObjectForEncode(name string, object map[string]any) error {
 }
 
 func validateInnerObject(name string, object map[string]any, forEncode bool) error {
-	template, ok := innerObjectTemplates[name]
+	template, ok := schema.InnerObjectTemplateByName(name)
 	if !ok {
 		return fmt.Errorf("no template for inner object %s", name)
 	}
 	for fieldName, value := range object {
-		field, ok := template.fields[fieldName]
+		field, ok := template.Fields[fieldName]
 		if !ok {
 			if forEncode {
 				discardable, err := validateDiscardableInnerField(fieldName, value)
@@ -240,15 +96,15 @@ func validateInnerObject(name string, object map[string]any, forEncode bool) err
 			}
 			return fmt.Errorf("field %s is not allowed", fieldName)
 		}
-		if !validInnerValue(field.kind, value, forEncode) {
-			return fmt.Errorf("field %s has type %T, want %s", fieldName, value, field.kind)
+		if !validInnerValue(field.Kind, value, forEncode) {
+			return fmt.Errorf("field %s has type %T, want %s", fieldName, value, field.Kind)
 		}
-		if field.style == innerDefault && innerValueIsZero(field.kind, value) {
+		if field.Style == innerDefault && innerValueIsZero(field.Kind, value) {
 			return fmt.Errorf("default field %s is explicitly set", fieldName)
 		}
 	}
-	for fieldName, field := range template.fields {
-		if field.style == innerRequired {
+	for fieldName, field := range template.Fields {
+		if field.Style == innerRequired {
 			if _, ok := object[fieldName]; !ok {
 				return fmt.Errorf("required field %s is missing", fieldName)
 			}
@@ -444,27 +300,4 @@ func validateDiscardableInnerField(name string, value any) (bool, error) {
 		return true, fmt.Errorf("discardable field %s: %w", name, err)
 	}
 	return true, nil
-}
-
-func (k innerValueKind) String() string {
-	switch k {
-	case innerAny:
-		return "value"
-	case innerString:
-		return "string"
-	case innerUInt8:
-		return "UInt8"
-	case innerUInt16:
-		return "UInt16"
-	case innerUInt32:
-		return "UInt32"
-	case innerUInt64:
-		return "UInt64"
-	case innerPermissionValue:
-		return "PermissionValue"
-	case innerArray:
-		return "array"
-	default:
-		return "unknown"
-	}
 }

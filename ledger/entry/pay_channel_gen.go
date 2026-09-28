@@ -247,6 +247,19 @@ func (p *PayChannel) ClearSequence() {
 	p.dirty = true
 }
 
+// GetSequence returns the typed UInt32 value.
+func (p *PayChannel) GetSequence() (uint32, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return p.Sequence, nil
+}
+
+// SetSequenceValue assigns a typed UInt32 value.
+func (p *PayChannel) SetSequenceValue(value uint32) {
+	p.SetSequence(value)
+}
+
 // HasAmount reports whether Amount is present.
 func (p *PayChannel) HasAmount() bool {
 	return p != nil && p.present&paychannelBitAmount != 0
@@ -316,6 +329,19 @@ func (p *PayChannel) HasSettleDelay() bool {
 	return p != nil && p.present&paychannelBitSettleDelay != 0
 }
 
+// GetSettleDelay returns the typed UInt32 value.
+func (p *PayChannel) GetSettleDelay() (uint32, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return p.SettleDelay, nil
+}
+
+// SetSettleDelayValue assigns a typed UInt32 value.
+func (p *PayChannel) SetSettleDelayValue(value uint32) {
+	p.SetSettleDelay(value)
+}
+
 // HasExpiration reports whether Expiration is present.
 func (p *PayChannel) HasExpiration() bool {
 	return p != nil && p.present&paychannelBitExpiration != 0
@@ -329,6 +355,19 @@ func (p *PayChannel) ClearExpiration() {
 	p.Expiration = 0
 	p.present &^= paychannelBitExpiration
 	p.dirty = true
+}
+
+// GetExpiration returns the typed UInt32 value.
+func (p *PayChannel) GetExpiration() (uint32, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return p.Expiration, nil
+}
+
+// SetExpirationValue assigns a typed UInt32 value.
+func (p *PayChannel) SetExpirationValue(value uint32) {
+	p.SetExpiration(value)
 }
 
 // HasCancelAfter reports whether CancelAfter is present.
@@ -346,6 +385,19 @@ func (p *PayChannel) ClearCancelAfter() {
 	p.dirty = true
 }
 
+// GetCancelAfter returns the typed UInt32 value.
+func (p *PayChannel) GetCancelAfter() (uint32, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return p.CancelAfter, nil
+}
+
+// SetCancelAfterValue assigns a typed UInt32 value.
+func (p *PayChannel) SetCancelAfterValue(value uint32) {
+	p.SetCancelAfter(value)
+}
+
 // HasSourceTag reports whether SourceTag is present.
 func (p *PayChannel) HasSourceTag() bool {
 	return p != nil && p.present&paychannelBitSourceTag != 0
@@ -361,6 +413,19 @@ func (p *PayChannel) ClearSourceTag() {
 	p.dirty = true
 }
 
+// GetSourceTag returns the typed UInt32 value.
+func (p *PayChannel) GetSourceTag() (uint32, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return p.SourceTag, nil
+}
+
+// SetSourceTagValue assigns a typed UInt32 value.
+func (p *PayChannel) SetSourceTagValue(value uint32) {
+	p.SetSourceTag(value)
+}
+
 // HasDestinationTag reports whether DestinationTag is present.
 func (p *PayChannel) HasDestinationTag() bool {
 	return p != nil && p.present&paychannelBitDestinationTag != 0
@@ -374,6 +439,19 @@ func (p *PayChannel) ClearDestinationTag() {
 	p.DestinationTag = 0
 	p.present &^= paychannelBitDestinationTag
 	p.dirty = true
+}
+
+// GetDestinationTag returns the typed UInt32 value.
+func (p *PayChannel) GetDestinationTag() (uint32, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return p.DestinationTag, nil
+}
+
+// SetDestinationTagValue assigns a typed UInt32 value.
+func (p *PayChannel) SetDestinationTagValue(value uint32) {
+	p.SetDestinationTag(value)
 }
 
 // HasOwnerNode reports whether OwnerNode is present.
@@ -427,6 +505,19 @@ func (p *PayChannel) HasFlags() bool {
 	return p != nil && p.present&paychannelBitFlags != 0
 }
 
+// GetFlags returns the typed UInt32 value.
+func (p *PayChannel) GetFlags() (uint32, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return p.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (p *PayChannel) SetFlagsValue(value uint32) {
+	p.SetFlags(value)
+}
+
 // HasPreviousTxnID reports whether PreviousTxnID is present.
 func (p *PayChannel) HasPreviousTxnID() bool {
 	return p != nil && p.present&paychannelBitPreviousTxnID != 0
@@ -451,6 +542,19 @@ func (p *PayChannel) SetPreviousTxnIDValue(value [32]byte) {
 // HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (p *PayChannel) HasPreviousTxnLgrSeq() bool {
 	return p != nil && p.present&paychannelBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (p *PayChannel) GetPreviousTxnLgrSeq() (uint32, error) {
+	if p == nil {
+		return 0, nil
+	}
+	return p.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (p *PayChannel) SetPreviousTxnLgrSeqValue(value uint32) {
+	p.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

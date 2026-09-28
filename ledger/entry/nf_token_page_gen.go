@@ -163,9 +163,43 @@ func (n *NFTokenPage) HasNFTokens() bool {
 	return n != nil && n.present&nftokenpageBitNFTokens != 0
 }
 
+// GetNFTokens returns typed nested objects.
+func (n *NFTokenPage) GetNFTokens() ([]NFTokenValue, error) {
+	if n == nil {
+		return nil, nil
+	}
+	if !n.HasNFTokens() {
+		return nil, nil
+	}
+	return nFTokenValueSliceFromAny(n.NFTokens, "NFTokenPage.NFTokens")
+}
+
+// SetNFTokensValue assigns typed nested objects.
+func (n *NFTokenPage) SetNFTokensValue(value []NFTokenValue) error {
+	encoded, err := nFTokenValueSliceToAny(value, "NFTokenPage.NFTokens")
+	if err != nil {
+		return err
+	}
+	n.SetNFTokens(encoded)
+	return nil
+}
+
 // HasFlags reports whether Flags is present.
 func (n *NFTokenPage) HasFlags() bool {
 	return n != nil && n.present&nftokenpageBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (n *NFTokenPage) GetFlags() (uint32, error) {
+	if n == nil {
+		return 0, nil
+	}
+	return n.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (n *NFTokenPage) SetFlagsValue(value uint32) {
+	n.SetFlags(value)
 }
 
 // HasPreviousTxnID reports whether PreviousTxnID is present.
@@ -192,6 +226,19 @@ func (n *NFTokenPage) SetPreviousTxnIDValue(value [32]byte) {
 // HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (n *NFTokenPage) HasPreviousTxnLgrSeq() bool {
 	return n != nil && n.present&nftokenpageBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (n *NFTokenPage) GetPreviousTxnLgrSeq() (uint32, error) {
+	if n == nil {
+		return 0, nil
+	}
+	return n.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (n *NFTokenPage) SetPreviousTxnLgrSeqValue(value uint32) {
+	n.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

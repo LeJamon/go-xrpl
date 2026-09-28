@@ -299,6 +299,19 @@ func (m *MPToken) HasFlags() bool {
 	return m != nil && m.present&mptokenBitFlags != 0
 }
 
+// GetFlags returns the typed UInt32 value.
+func (m *MPToken) GetFlags() (uint32, error) {
+	if m == nil {
+		return 0, nil
+	}
+	return m.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (m *MPToken) SetFlagsValue(value uint32) {
+	m.SetFlags(value)
+}
+
 // HasPreviousTxnID reports whether PreviousTxnID is present.
 func (m *MPToken) HasPreviousTxnID() bool {
 	return m != nil && m.present&mptokenBitPreviousTxnID != 0
@@ -323,6 +336,19 @@ func (m *MPToken) SetPreviousTxnIDValue(value [32]byte) {
 // HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (m *MPToken) HasPreviousTxnLgrSeq() bool {
 	return m != nil && m.present&mptokenBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (m *MPToken) GetPreviousTxnLgrSeq() (uint32, error) {
+	if m == nil {
+		return 0, nil
+	}
+	return m.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (m *MPToken) SetPreviousTxnLgrSeqValue(value uint32) {
+	m.SetPreviousTxnLgrSeq(value)
 }
 
 // HasConfidentialBalanceInbox reports whether ConfidentialBalanceInbox is present.
@@ -394,6 +420,19 @@ func (m *MPToken) ClearConfidentialBalanceVersion() {
 	m.ConfidentialBalanceVersion = 0
 	m.present &^= mptokenBitConfidentialBalanceVersion
 	m.dirty = true
+}
+
+// GetConfidentialBalanceVersion returns the typed UInt32 value.
+func (m *MPToken) GetConfidentialBalanceVersion() (uint32, error) {
+	if m == nil {
+		return 0, nil
+	}
+	return m.ConfidentialBalanceVersion, nil
+}
+
+// SetConfidentialBalanceVersionValue assigns a typed UInt32 value.
+func (m *MPToken) SetConfidentialBalanceVersionValue(value uint32) {
+	m.SetConfidentialBalanceVersion(value)
 }
 
 // HasIssuerEncryptedBalance reports whether IssuerEncryptedBalance is present.

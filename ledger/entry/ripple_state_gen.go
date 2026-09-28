@@ -174,6 +174,19 @@ func (r *RippleState) HasFlags() bool {
 	return r != nil && r.present&ripplestateBitFlags != 0
 }
 
+// GetFlags returns the typed UInt32 value.
+func (r *RippleState) GetFlags() (uint32, error) {
+	if r == nil {
+		return 0, nil
+	}
+	return r.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (r *RippleState) SetFlagsValue(value uint32) {
+	r.SetFlags(value)
+}
+
 // HasBalance reports whether Balance is present.
 func (r *RippleState) HasBalance() bool {
 	return r != nil && r.present&ripplestateBitBalance != 0
@@ -314,6 +327,19 @@ func (r *RippleState) ClearLowQualityIn() {
 	r.dirty = true
 }
 
+// GetLowQualityIn returns the typed UInt32 value.
+func (r *RippleState) GetLowQualityIn() (uint32, error) {
+	if r == nil {
+		return 0, nil
+	}
+	return r.LowQualityIn, nil
+}
+
+// SetLowQualityInValue assigns a typed UInt32 value.
+func (r *RippleState) SetLowQualityInValue(value uint32) {
+	r.SetLowQualityIn(value)
+}
+
 // HasLowQualityOut reports whether LowQualityOut is present.
 func (r *RippleState) HasLowQualityOut() bool {
 	return r != nil && r.present&ripplestateBitLowQualityOut != 0
@@ -327,6 +353,19 @@ func (r *RippleState) ClearLowQualityOut() {
 	r.LowQualityOut = 0
 	r.present &^= ripplestateBitLowQualityOut
 	r.dirty = true
+}
+
+// GetLowQualityOut returns the typed UInt32 value.
+func (r *RippleState) GetLowQualityOut() (uint32, error) {
+	if r == nil {
+		return 0, nil
+	}
+	return r.LowQualityOut, nil
+}
+
+// SetLowQualityOutValue assigns a typed UInt32 value.
+func (r *RippleState) SetLowQualityOutValue(value uint32) {
+	r.SetLowQualityOut(value)
 }
 
 // HasHighQualityIn reports whether HighQualityIn is present.
@@ -344,6 +383,19 @@ func (r *RippleState) ClearHighQualityIn() {
 	r.dirty = true
 }
 
+// GetHighQualityIn returns the typed UInt32 value.
+func (r *RippleState) GetHighQualityIn() (uint32, error) {
+	if r == nil {
+		return 0, nil
+	}
+	return r.HighQualityIn, nil
+}
+
+// SetHighQualityInValue assigns a typed UInt32 value.
+func (r *RippleState) SetHighQualityInValue(value uint32) {
+	r.SetHighQualityIn(value)
+}
+
 // HasHighQualityOut reports whether HighQualityOut is present.
 func (r *RippleState) HasHighQualityOut() bool {
 	return r != nil && r.present&ripplestateBitHighQualityOut != 0
@@ -357,6 +409,19 @@ func (r *RippleState) ClearHighQualityOut() {
 	r.HighQualityOut = 0
 	r.present &^= ripplestateBitHighQualityOut
 	r.dirty = true
+}
+
+// GetHighQualityOut returns the typed UInt32 value.
+func (r *RippleState) GetHighQualityOut() (uint32, error) {
+	if r == nil {
+		return 0, nil
+	}
+	return r.HighQualityOut, nil
+}
+
+// SetHighQualityOutValue assigns a typed UInt32 value.
+func (r *RippleState) SetHighQualityOutValue(value uint32) {
+	r.SetHighQualityOut(value)
 }
 
 // HasHighSponsor reports whether HighSponsor is present.
@@ -449,6 +514,19 @@ func (r *RippleState) SetPreviousTxnIDValue(value [32]byte) {
 // HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (r *RippleState) HasPreviousTxnLgrSeq() bool {
 	return r != nil && r.present&ripplestateBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (r *RippleState) GetPreviousTxnLgrSeq() (uint32, error) {
+	if r == nil {
+		return 0, nil
+	}
+	return r.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (r *RippleState) SetPreviousTxnLgrSeqValue(value uint32) {
+	r.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

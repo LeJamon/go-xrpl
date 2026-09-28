@@ -92,6 +92,19 @@ func (a *Amendments) HasFlags() bool {
 	return a != nil && a.present&amendmentsBitFlags != 0
 }
 
+// GetFlags returns the typed UInt32 value.
+func (a *Amendments) GetFlags() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (a *Amendments) SetFlagsValue(value uint32) {
+	a.SetFlags(value)
+}
+
 // HasAmendments reports whether Amendments is present.
 func (a *Amendments) HasAmendments() bool {
 	return a != nil && a.present&amendmentsBitAmendments != 0
@@ -107,6 +120,22 @@ func (a *Amendments) ClearAmendments() {
 	a.dirty = true
 }
 
+// GetAmendments returns the typed Vector256 values.
+func (a *Amendments) GetAmendments() (Vector256Value, error) {
+	if a == nil {
+		return nil, nil
+	}
+	if !a.HasAmendments() {
+		return nil, nil
+	}
+	return vector256ValueFromStrings(a.Amendments, "Amendments.Amendments")
+}
+
+// SetAmendmentsValue assigns typed Vector256 values.
+func (a *Amendments) SetAmendmentsValue(value Vector256Value) {
+	a.SetAmendments(vector256ValueToStrings(value))
+}
+
 // HasMajorities reports whether Majorities is present.
 func (a *Amendments) HasMajorities() bool {
 	return a != nil && a.present&amendmentsBitMajorities != 0
@@ -120,6 +149,27 @@ func (a *Amendments) ClearMajorities() {
 	a.Majorities = nil
 	a.present &^= amendmentsBitMajorities
 	a.dirty = true
+}
+
+// GetMajorities returns typed nested objects.
+func (a *Amendments) GetMajorities() ([]MajorityValue, error) {
+	if a == nil {
+		return nil, nil
+	}
+	if !a.HasMajorities() {
+		return nil, nil
+	}
+	return majorityValueSliceFromAny(a.Majorities, "Amendments.Majorities")
+}
+
+// SetMajoritiesValue assigns typed nested objects.
+func (a *Amendments) SetMajoritiesValue(value []MajorityValue) error {
+	encoded, err := majorityValueSliceToAny(value, "Amendments.Majorities")
+	if err != nil {
+		return err
+	}
+	a.SetMajorities(encoded)
+	return nil
 }
 
 // HasPreviousTxnID reports whether PreviousTxnID is present.
@@ -166,6 +216,19 @@ func (a *Amendments) ClearPreviousTxnLgrSeq() {
 	a.PreviousTxnLgrSeq = 0
 	a.present &^= amendmentsBitPreviousTxnLgrSeq
 	a.dirty = true
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (a *Amendments) GetPreviousTxnLgrSeq() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (a *Amendments) SetPreviousTxnLgrSeqValue(value uint32) {
+	a.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

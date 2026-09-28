@@ -160,6 +160,27 @@ func (x *XChainOwnedClaimID) HasXChainBridge() bool {
 	return x != nil && x.present&xchainownedclaimidBitXChainBridge != 0
 }
 
+// GetXChainBridge returns the typed XChainBridge value.
+func (x *XChainOwnedClaimID) GetXChainBridge() (XChainBridgeValue, error) {
+	if x == nil {
+		return XChainBridgeValue{}, nil
+	}
+	if !x.HasXChainBridge() {
+		return XChainBridgeValue{}, nil
+	}
+	return xchainBridgeValueFromAny(x.XChainBridge, "XChainOwnedClaimID.XChainBridge")
+}
+
+// SetXChainBridgeValue assigns a typed XChainBridge value.
+func (x *XChainOwnedClaimID) SetXChainBridgeValue(value XChainBridgeValue) error {
+	encoded, err := xchainBridgeValueToAny(value, "XChainOwnedClaimID.XChainBridge")
+	if err != nil {
+		return err
+	}
+	x.SetXChainBridge(encoded)
+	return nil
+}
+
 // HasXChainClaimID reports whether XChainClaimID is present.
 func (x *XChainOwnedClaimID) HasXChainClaimID() bool {
 	return x != nil && x.present&xchainownedclaimidBitXChainClaimID != 0
@@ -204,6 +225,27 @@ func (x *XChainOwnedClaimID) SetOtherChainSourceValue(value [20]byte) error {
 // HasXChainClaimAttestations reports whether XChainClaimAttestations is present.
 func (x *XChainOwnedClaimID) HasXChainClaimAttestations() bool {
 	return x != nil && x.present&xchainownedclaimidBitXChainClaimAttestations != 0
+}
+
+// GetXChainClaimAttestations returns typed nested objects.
+func (x *XChainOwnedClaimID) GetXChainClaimAttestations() ([]XChainClaimProofSigValue, error) {
+	if x == nil {
+		return nil, nil
+	}
+	if !x.HasXChainClaimAttestations() {
+		return nil, nil
+	}
+	return xChainClaimProofSigValueSliceFromAny(x.XChainClaimAttestations, "XChainOwnedClaimID.XChainClaimAttestations")
+}
+
+// SetXChainClaimAttestationsValue assigns typed nested objects.
+func (x *XChainOwnedClaimID) SetXChainClaimAttestationsValue(value []XChainClaimProofSigValue) error {
+	encoded, err := xChainClaimProofSigValueSliceToAny(value, "XChainOwnedClaimID.XChainClaimAttestations")
+	if err != nil {
+		return err
+	}
+	x.SetXChainClaimAttestations(encoded)
+	return nil
 }
 
 // HasSignatureReward reports whether SignatureReward is present.
@@ -252,6 +294,19 @@ func (x *XChainOwnedClaimID) HasFlags() bool {
 	return x != nil && x.present&xchainownedclaimidBitFlags != 0
 }
 
+// GetFlags returns the typed UInt32 value.
+func (x *XChainOwnedClaimID) GetFlags() (uint32, error) {
+	if x == nil {
+		return 0, nil
+	}
+	return x.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (x *XChainOwnedClaimID) SetFlagsValue(value uint32) {
+	x.SetFlags(value)
+}
+
 // HasPreviousTxnID reports whether PreviousTxnID is present.
 func (x *XChainOwnedClaimID) HasPreviousTxnID() bool {
 	return x != nil && x.present&xchainownedclaimidBitPreviousTxnID != 0
@@ -276,6 +331,19 @@ func (x *XChainOwnedClaimID) SetPreviousTxnIDValue(value [32]byte) {
 // HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (x *XChainOwnedClaimID) HasPreviousTxnLgrSeq() bool {
 	return x != nil && x.present&xchainownedclaimidBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (x *XChainOwnedClaimID) GetPreviousTxnLgrSeq() (uint32, error) {
+	if x == nil {
+		return 0, nil
+	}
+	return x.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (x *XChainOwnedClaimID) SetPreviousTxnLgrSeqValue(value uint32) {
+	x.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

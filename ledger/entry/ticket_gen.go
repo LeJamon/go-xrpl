@@ -142,9 +142,35 @@ func (t *Ticket) HasTicketSequence() bool {
 	return t != nil && t.present&ticketBitTicketSequence != 0
 }
 
+// GetTicketSequence returns the typed UInt32 value.
+func (t *Ticket) GetTicketSequence() (uint32, error) {
+	if t == nil {
+		return 0, nil
+	}
+	return t.TicketSequence, nil
+}
+
+// SetTicketSequenceValue assigns a typed UInt32 value.
+func (t *Ticket) SetTicketSequenceValue(value uint32) {
+	t.SetTicketSequence(value)
+}
+
 // HasFlags reports whether Flags is present.
 func (t *Ticket) HasFlags() bool {
 	return t != nil && t.present&ticketBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (t *Ticket) GetFlags() (uint32, error) {
+	if t == nil {
+		return 0, nil
+	}
+	return t.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (t *Ticket) SetFlagsValue(value uint32) {
+	t.SetFlags(value)
 }
 
 // HasPreviousTxnID reports whether PreviousTxnID is present.
@@ -171,6 +197,19 @@ func (t *Ticket) SetPreviousTxnIDValue(value [32]byte) {
 // HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (t *Ticket) HasPreviousTxnLgrSeq() bool {
 	return t != nil && t.present&ticketBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (t *Ticket) GetPreviousTxnLgrSeq() (uint32, error) {
+	if t == nil {
+		return 0, nil
+	}
+	return t.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (t *Ticket) SetPreviousTxnLgrSeqValue(value uint32) {
+	t.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

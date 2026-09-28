@@ -179,6 +179,19 @@ func (o *Oracle) ClearOracleDocumentID() {
 	o.dirty = true
 }
 
+// GetOracleDocumentID returns the typed UInt32 value.
+func (o *Oracle) GetOracleDocumentID() (uint32, error) {
+	if o == nil {
+		return 0, nil
+	}
+	return o.OracleDocumentID, nil
+}
+
+// SetOracleDocumentIDValue assigns a typed UInt32 value.
+func (o *Oracle) SetOracleDocumentIDValue(value uint32) {
+	o.SetOracleDocumentID(value)
+}
+
 // HasProvider reports whether Provider is present.
 func (o *Oracle) HasProvider() bool {
 	return o != nil && o.present&oracleBitProvider != 0
@@ -202,6 +215,27 @@ func (o *Oracle) HasPriceDataSeries() bool {
 	return o != nil && o.present&oracleBitPriceDataSeries != 0
 }
 
+// GetPriceDataSeries returns typed nested objects.
+func (o *Oracle) GetPriceDataSeries() ([]PriceDataValue, error) {
+	if o == nil {
+		return nil, nil
+	}
+	if !o.HasPriceDataSeries() {
+		return nil, nil
+	}
+	return priceDataValueSliceFromAny(o.PriceDataSeries, "Oracle.PriceDataSeries")
+}
+
+// SetPriceDataSeriesValue assigns typed nested objects.
+func (o *Oracle) SetPriceDataSeriesValue(value []PriceDataValue) error {
+	encoded, err := priceDataValueSliceToAny(value, "Oracle.PriceDataSeries")
+	if err != nil {
+		return err
+	}
+	o.SetPriceDataSeries(encoded)
+	return nil
+}
+
 // HasAssetClass reports whether AssetClass is present.
 func (o *Oracle) HasAssetClass() bool {
 	return o != nil && o.present&oracleBitAssetClass != 0
@@ -223,6 +257,19 @@ func (o *Oracle) SetAssetClassValue(value []byte) {
 // HasLastUpdateTime reports whether LastUpdateTime is present.
 func (o *Oracle) HasLastUpdateTime() bool {
 	return o != nil && o.present&oracleBitLastUpdateTime != 0
+}
+
+// GetLastUpdateTime returns the typed UInt32 value.
+func (o *Oracle) GetLastUpdateTime() (uint32, error) {
+	if o == nil {
+		return 0, nil
+	}
+	return o.LastUpdateTime, nil
+}
+
+// SetLastUpdateTimeValue assigns a typed UInt32 value.
+func (o *Oracle) SetLastUpdateTimeValue(value uint32) {
+	o.SetLastUpdateTime(value)
 }
 
 // HasURI reports whether URI is present.
@@ -276,6 +323,19 @@ func (o *Oracle) HasFlags() bool {
 	return o != nil && o.present&oracleBitFlags != 0
 }
 
+// GetFlags returns the typed UInt32 value.
+func (o *Oracle) GetFlags() (uint32, error) {
+	if o == nil {
+		return 0, nil
+	}
+	return o.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (o *Oracle) SetFlagsValue(value uint32) {
+	o.SetFlags(value)
+}
+
 // HasPreviousTxnID reports whether PreviousTxnID is present.
 func (o *Oracle) HasPreviousTxnID() bool {
 	return o != nil && o.present&oracleBitPreviousTxnID != 0
@@ -300,6 +360,19 @@ func (o *Oracle) SetPreviousTxnIDValue(value [32]byte) {
 // HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (o *Oracle) HasPreviousTxnLgrSeq() bool {
 	return o != nil && o.present&oracleBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (o *Oracle) GetPreviousTxnLgrSeq() (uint32, error) {
+	if o == nil {
+		return 0, nil
+	}
+	return o.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (o *Oracle) SetPreviousTxnLgrSeqValue(value uint32) {
+	o.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

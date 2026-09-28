@@ -224,6 +224,19 @@ func (e *Escrow) ClearSequence() {
 	e.dirty = true
 }
 
+// GetSequence returns the typed UInt32 value.
+func (e *Escrow) GetSequence() (uint32, error) {
+	if e == nil {
+		return 0, nil
+	}
+	return e.Sequence, nil
+}
+
+// SetSequenceValue assigns a typed UInt32 value.
+func (e *Escrow) SetSequenceValue(value uint32) {
+	e.SetSequence(value)
+}
+
 // HasDestination reports whether Destination is present.
 func (e *Escrow) HasDestination() bool {
 	return e != nil && e.present&escrowBitDestination != 0
@@ -313,6 +326,19 @@ func (e *Escrow) ClearCancelAfter() {
 	e.dirty = true
 }
 
+// GetCancelAfter returns the typed UInt32 value.
+func (e *Escrow) GetCancelAfter() (uint32, error) {
+	if e == nil {
+		return 0, nil
+	}
+	return e.CancelAfter, nil
+}
+
+// SetCancelAfterValue assigns a typed UInt32 value.
+func (e *Escrow) SetCancelAfterValue(value uint32) {
+	e.SetCancelAfter(value)
+}
+
 // HasFinishAfter reports whether FinishAfter is present.
 func (e *Escrow) HasFinishAfter() bool {
 	return e != nil && e.present&escrowBitFinishAfter != 0
@@ -326,6 +352,19 @@ func (e *Escrow) ClearFinishAfter() {
 	e.FinishAfter = 0
 	e.present &^= escrowBitFinishAfter
 	e.dirty = true
+}
+
+// GetFinishAfter returns the typed UInt32 value.
+func (e *Escrow) GetFinishAfter() (uint32, error) {
+	if e == nil {
+		return 0, nil
+	}
+	return e.FinishAfter, nil
+}
+
+// SetFinishAfterValue assigns a typed UInt32 value.
+func (e *Escrow) SetFinishAfterValue(value uint32) {
+	e.SetFinishAfter(value)
 }
 
 // HasSourceTag reports whether SourceTag is present.
@@ -343,6 +382,19 @@ func (e *Escrow) ClearSourceTag() {
 	e.dirty = true
 }
 
+// GetSourceTag returns the typed UInt32 value.
+func (e *Escrow) GetSourceTag() (uint32, error) {
+	if e == nil {
+		return 0, nil
+	}
+	return e.SourceTag, nil
+}
+
+// SetSourceTagValue assigns a typed UInt32 value.
+func (e *Escrow) SetSourceTagValue(value uint32) {
+	e.SetSourceTag(value)
+}
+
 // HasDestinationTag reports whether DestinationTag is present.
 func (e *Escrow) HasDestinationTag() bool {
 	return e != nil && e.present&escrowBitDestinationTag != 0
@@ -356,6 +408,19 @@ func (e *Escrow) ClearDestinationTag() {
 	e.DestinationTag = 0
 	e.present &^= escrowBitDestinationTag
 	e.dirty = true
+}
+
+// GetDestinationTag returns the typed UInt32 value.
+func (e *Escrow) GetDestinationTag() (uint32, error) {
+	if e == nil {
+		return 0, nil
+	}
+	return e.DestinationTag, nil
+}
+
+// SetDestinationTagValue assigns a typed UInt32 value.
+func (e *Escrow) SetDestinationTagValue(value uint32) {
+	e.SetDestinationTag(value)
 }
 
 // HasOwnerNode reports whether OwnerNode is present.
@@ -419,6 +484,19 @@ func (e *Escrow) ClearTransferRate() {
 	e.dirty = true
 }
 
+// GetTransferRate returns the typed UInt32 value.
+func (e *Escrow) GetTransferRate() (uint32, error) {
+	if e == nil {
+		return 0, nil
+	}
+	return e.TransferRate, nil
+}
+
+// SetTransferRateValue assigns a typed UInt32 value.
+func (e *Escrow) SetTransferRateValue(value uint32) {
+	e.SetTransferRate(value)
+}
+
 // HasIssuerNode reports whether IssuerNode is present.
 func (e *Escrow) HasIssuerNode() bool {
 	return e != nil && e.present&escrowBitIssuerNode != 0
@@ -452,6 +530,19 @@ func (e *Escrow) HasFlags() bool {
 	return e != nil && e.present&escrowBitFlags != 0
 }
 
+// GetFlags returns the typed UInt32 value.
+func (e *Escrow) GetFlags() (uint32, error) {
+	if e == nil {
+		return 0, nil
+	}
+	return e.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (e *Escrow) SetFlagsValue(value uint32) {
+	e.SetFlags(value)
+}
+
 // HasPreviousTxnID reports whether PreviousTxnID is present.
 func (e *Escrow) HasPreviousTxnID() bool {
 	return e != nil && e.present&escrowBitPreviousTxnID != 0
@@ -476,6 +567,19 @@ func (e *Escrow) SetPreviousTxnIDValue(value [32]byte) {
 // HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (e *Escrow) HasPreviousTxnLgrSeq() bool {
 	return e != nil && e.present&escrowBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (e *Escrow) GetPreviousTxnLgrSeq() (uint32, error) {
+	if e == nil {
+		return 0, nil
+	}
+	return e.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (e *Escrow) SetPreviousTxnLgrSeqValue(value uint32) {
+	e.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

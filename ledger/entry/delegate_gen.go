@@ -165,6 +165,27 @@ func (d *Delegate) HasPermissions() bool {
 	return d != nil && d.present&delegateBitPermissions != 0
 }
 
+// GetPermissions returns typed nested objects.
+func (d *Delegate) GetPermissions() ([]PermissionValue, error) {
+	if d == nil {
+		return nil, nil
+	}
+	if !d.HasPermissions() {
+		return nil, nil
+	}
+	return permissionValueSliceFromAny(d.Permissions, "Delegate.Permissions")
+}
+
+// SetPermissionsValue assigns typed nested objects.
+func (d *Delegate) SetPermissionsValue(value []PermissionValue) error {
+	encoded, err := permissionValueSliceToAny(value, "Delegate.Permissions")
+	if err != nil {
+		return err
+	}
+	d.SetPermissions(encoded)
+	return nil
+}
+
 // HasOwnerNode reports whether OwnerNode is present.
 func (d *Delegate) HasOwnerNode() bool {
 	return d != nil && d.present&delegateBitOwnerNode != 0
@@ -216,6 +237,19 @@ func (d *Delegate) HasFlags() bool {
 	return d != nil && d.present&delegateBitFlags != 0
 }
 
+// GetFlags returns the typed UInt32 value.
+func (d *Delegate) GetFlags() (uint32, error) {
+	if d == nil {
+		return 0, nil
+	}
+	return d.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (d *Delegate) SetFlagsValue(value uint32) {
+	d.SetFlags(value)
+}
+
 // HasPreviousTxnID reports whether PreviousTxnID is present.
 func (d *Delegate) HasPreviousTxnID() bool {
 	return d != nil && d.present&delegateBitPreviousTxnID != 0
@@ -240,6 +274,19 @@ func (d *Delegate) SetPreviousTxnIDValue(value [32]byte) {
 // HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (d *Delegate) HasPreviousTxnLgrSeq() bool {
 	return d != nil && d.present&delegateBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (d *Delegate) GetPreviousTxnLgrSeq() (uint32, error) {
+	if d == nil {
+		return 0, nil
+	}
+	return d.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (d *Delegate) SetPreviousTxnLgrSeqValue(value uint32) {
+	d.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

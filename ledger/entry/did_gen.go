@@ -244,6 +244,19 @@ func (d *DID) HasFlags() bool {
 	return d != nil && d.present&didBitFlags != 0
 }
 
+// GetFlags returns the typed UInt32 value.
+func (d *DID) GetFlags() (uint32, error) {
+	if d == nil {
+		return 0, nil
+	}
+	return d.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (d *DID) SetFlagsValue(value uint32) {
+	d.SetFlags(value)
+}
+
 // HasPreviousTxnID reports whether PreviousTxnID is present.
 func (d *DID) HasPreviousTxnID() bool {
 	return d != nil && d.present&didBitPreviousTxnID != 0
@@ -268,6 +281,19 @@ func (d *DID) SetPreviousTxnIDValue(value [32]byte) {
 // HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (d *DID) HasPreviousTxnLgrSeq() bool {
 	return d != nil && d.present&didBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (d *DID) GetPreviousTxnLgrSeq() (uint32, error) {
+	if d == nil {
+		return 0, nil
+	}
+	return d.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (d *DID) SetPreviousTxnLgrSeqValue(value uint32) {
+	d.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

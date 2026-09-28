@@ -356,9 +356,35 @@ func (a *AccountRoot) HasSequence() bool {
 	return a != nil && a.present&accountrootBitSequence != 0
 }
 
+// GetSequence returns the typed UInt32 value.
+func (a *AccountRoot) GetSequence() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.Sequence, nil
+}
+
+// SetSequenceValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetSequenceValue(value uint32) {
+	a.SetSequence(value)
+}
+
 // HasOwnerCount reports whether OwnerCount is present.
 func (a *AccountRoot) HasOwnerCount() bool {
 	return a != nil && a.present&accountrootBitOwnerCount != 0
+}
+
+// GetOwnerCount returns the typed UInt32 value.
+func (a *AccountRoot) GetOwnerCount() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.OwnerCount, nil
+}
+
+// SetOwnerCountValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetOwnerCountValue(value uint32) {
+	a.SetOwnerCount(value)
 }
 
 // HasSponsoredOwnerCount reports whether SponsoredOwnerCount is present.
@@ -376,6 +402,19 @@ func (a *AccountRoot) ClearSponsoredOwnerCount() {
 	a.dirty = true
 }
 
+// GetSponsoredOwnerCount returns the typed UInt32 value.
+func (a *AccountRoot) GetSponsoredOwnerCount() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.SponsoredOwnerCount, nil
+}
+
+// SetSponsoredOwnerCountValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetSponsoredOwnerCountValue(value uint32) {
+	a.SetSponsoredOwnerCount(value)
+}
+
 // HasSponsoringOwnerCount reports whether SponsoringOwnerCount is present.
 func (a *AccountRoot) HasSponsoringOwnerCount() bool {
 	return a != nil && a.present&accountrootBitSponsoringOwnerCount != 0
@@ -389,6 +428,19 @@ func (a *AccountRoot) ClearSponsoringOwnerCount() {
 	a.SponsoringOwnerCount = 0
 	a.present &^= accountrootBitSponsoringOwnerCount
 	a.dirty = true
+}
+
+// GetSponsoringOwnerCount returns the typed UInt32 value.
+func (a *AccountRoot) GetSponsoringOwnerCount() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.SponsoringOwnerCount, nil
+}
+
+// SetSponsoringOwnerCountValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetSponsoringOwnerCountValue(value uint32) {
+	a.SetSponsoringOwnerCount(value)
 }
 
 // HasSponsoringAccountCount reports whether SponsoringAccountCount is present.
@@ -406,9 +458,35 @@ func (a *AccountRoot) ClearSponsoringAccountCount() {
 	a.dirty = true
 }
 
+// GetSponsoringAccountCount returns the typed UInt32 value.
+func (a *AccountRoot) GetSponsoringAccountCount() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.SponsoringAccountCount, nil
+}
+
+// SetSponsoringAccountCountValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetSponsoringAccountCountValue(value uint32) {
+	a.SetSponsoringAccountCount(value)
+}
+
 // HasFlags reports whether Flags is present.
 func (a *AccountRoot) HasFlags() bool {
 	return a != nil && a.present&accountrootBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (a *AccountRoot) GetFlags() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetFlagsValue(value uint32) {
+	a.SetFlags(value)
 }
 
 // HasRegularKey reports whether RegularKey is present.
@@ -546,6 +624,19 @@ func (a *AccountRoot) ClearTransferRate() {
 	a.dirty = true
 }
 
+// GetTransferRate returns the typed UInt32 value.
+func (a *AccountRoot) GetTransferRate() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.TransferRate, nil
+}
+
+// SetTransferRateValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetTransferRateValue(value uint32) {
+	a.SetTransferRate(value)
+}
+
 // HasTickSize reports whether TickSize is present.
 func (a *AccountRoot) HasTickSize() bool {
 	return a != nil && a.present&accountrootBitTickSize != 0
@@ -620,6 +711,19 @@ func (a *AccountRoot) ClearMintedNFTokens() {
 	a.dirty = true
 }
 
+// GetMintedNFTokens returns the typed UInt32 value.
+func (a *AccountRoot) GetMintedNFTokens() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.MintedNFTokens, nil
+}
+
+// SetMintedNFTokensValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetMintedNFTokensValue(value uint32) {
+	a.SetMintedNFTokens(value)
+}
+
 // HasBurnedNFTokens reports whether BurnedNFTokens is present.
 func (a *AccountRoot) HasBurnedNFTokens() bool {
 	return a != nil && a.present&accountrootBitBurnedNFTokens != 0
@@ -635,6 +739,19 @@ func (a *AccountRoot) ClearBurnedNFTokens() {
 	a.dirty = true
 }
 
+// GetBurnedNFTokens returns the typed UInt32 value.
+func (a *AccountRoot) GetBurnedNFTokens() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.BurnedNFTokens, nil
+}
+
+// SetBurnedNFTokensValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetBurnedNFTokensValue(value uint32) {
+	a.SetBurnedNFTokens(value)
+}
+
 // HasFirstNFTokenSequence reports whether FirstNFTokenSequence is present.
 func (a *AccountRoot) HasFirstNFTokenSequence() bool {
 	return a != nil && a.present&accountrootBitFirstNFTokenSequence != 0
@@ -648,6 +765,19 @@ func (a *AccountRoot) ClearFirstNFTokenSequence() {
 	a.FirstNFTokenSequence = 0
 	a.present &^= accountrootBitFirstNFTokenSequence
 	a.dirty = true
+}
+
+// GetFirstNFTokenSequence returns the typed UInt32 value.
+func (a *AccountRoot) GetFirstNFTokenSequence() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.FirstNFTokenSequence, nil
+}
+
+// SetFirstNFTokenSequenceValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetFirstNFTokenSequenceValue(value uint32) {
+	a.SetFirstNFTokenSequence(value)
 }
 
 // HasAccountTxnID reports whether AccountTxnID is present.
@@ -725,6 +855,19 @@ func (a *AccountRoot) ClearTicketCount() {
 	a.TicketCount = 0
 	a.present &^= accountrootBitTicketCount
 	a.dirty = true
+}
+
+// GetTicketCount returns the typed UInt32 value.
+func (a *AccountRoot) GetTicketCount() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.TicketCount, nil
+}
+
+// SetTicketCountValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetTicketCountValue(value uint32) {
+	a.SetTicketCount(value)
 }
 
 // HasAMMID reports whether AMMID is present.
@@ -835,6 +978,19 @@ func (a *AccountRoot) ClearWalletSize() {
 	a.dirty = true
 }
 
+// GetWalletSize returns the typed UInt32 value.
+func (a *AccountRoot) GetWalletSize() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.WalletSize, nil
+}
+
+// SetWalletSizeValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetWalletSizeValue(value uint32) {
+	a.SetWalletSize(value)
+}
+
 // HasPreviousTxnID reports whether PreviousTxnID is present.
 func (a *AccountRoot) HasPreviousTxnID() bool {
 	return a != nil && a.present&accountrootBitPreviousTxnID != 0
@@ -859,6 +1015,19 @@ func (a *AccountRoot) SetPreviousTxnIDValue(value [32]byte) {
 // HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (a *AccountRoot) HasPreviousTxnLgrSeq() bool {
 	return a != nil && a.present&accountrootBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (a *AccountRoot) GetPreviousTxnLgrSeq() (uint32, error) {
+	if a == nil {
+		return 0, nil
+	}
+	return a.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (a *AccountRoot) SetPreviousTxnLgrSeqValue(value uint32) {
+	a.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

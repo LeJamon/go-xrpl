@@ -101,6 +101,19 @@ func (n *NegativeUNL) HasFlags() bool {
 	return n != nil && n.present&negativeunlBitFlags != 0
 }
 
+// GetFlags returns the typed UInt32 value.
+func (n *NegativeUNL) GetFlags() (uint32, error) {
+	if n == nil {
+		return 0, nil
+	}
+	return n.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (n *NegativeUNL) SetFlagsValue(value uint32) {
+	n.SetFlags(value)
+}
+
 // HasDisabledValidators reports whether DisabledValidators is present.
 func (n *NegativeUNL) HasDisabledValidators() bool {
 	return n != nil && n.present&negativeunlBitDisabledValidators != 0
@@ -114,6 +127,27 @@ func (n *NegativeUNL) ClearDisabledValidators() {
 	n.DisabledValidators = nil
 	n.present &^= negativeunlBitDisabledValidators
 	n.dirty = true
+}
+
+// GetDisabledValidators returns typed nested objects.
+func (n *NegativeUNL) GetDisabledValidators() ([]DisabledValidatorValue, error) {
+	if n == nil {
+		return nil, nil
+	}
+	if !n.HasDisabledValidators() {
+		return nil, nil
+	}
+	return disabledValidatorValueSliceFromAny(n.DisabledValidators, "NegativeUNL.DisabledValidators")
+}
+
+// SetDisabledValidatorsValue assigns typed nested objects.
+func (n *NegativeUNL) SetDisabledValidatorsValue(value []DisabledValidatorValue) error {
+	encoded, err := disabledValidatorValueSliceToAny(value, "NegativeUNL.DisabledValidators")
+	if err != nil {
+		return err
+	}
+	n.SetDisabledValidators(encoded)
+	return nil
 }
 
 // HasValidatorToDisable reports whether ValidatorToDisable is present.
@@ -216,6 +250,19 @@ func (n *NegativeUNL) ClearPreviousTxnLgrSeq() {
 	n.PreviousTxnLgrSeq = 0
 	n.present &^= negativeunlBitPreviousTxnLgrSeq
 	n.dirty = true
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (n *NegativeUNL) GetPreviousTxnLgrSeq() (uint32, error) {
+	if n == nil {
+		return 0, nil
+	}
+	return n.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (n *NegativeUNL) SetPreviousTxnLgrSeqValue(value uint32) {
+	n.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

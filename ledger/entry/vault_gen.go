@@ -255,6 +255,19 @@ func (v *Vault) HasSequence() bool {
 	return v != nil && v.present&vaultBitSequence != 0
 }
 
+// GetSequence returns the typed UInt32 value.
+func (v *Vault) GetSequence() (uint32, error) {
+	if v == nil {
+		return 0, nil
+	}
+	return v.Sequence, nil
+}
+
+// SetSequenceValue assigns a typed UInt32 value.
+func (v *Vault) SetSequenceValue(value uint32) {
+	v.SetSequence(value)
+}
+
 // HasOwnerNode reports whether OwnerNode is present.
 func (v *Vault) HasOwnerNode() bool {
 	return v != nil && v.present&vaultBitOwnerNode != 0
@@ -352,6 +365,27 @@ func (v *Vault) HasAsset() bool {
 	return v != nil && v.present&vaultBitAsset != 0
 }
 
+// GetAsset returns the typed Issue value.
+func (v *Vault) GetAsset() (IssueValue, error) {
+	if v == nil {
+		return IssueValue{}, nil
+	}
+	if !v.HasAsset() {
+		return IssueValue{}, nil
+	}
+	return issueValueFromAny(v.Asset, "Vault.Asset")
+}
+
+// SetAssetValue assigns a typed Issue value.
+func (v *Vault) SetAssetValue(value IssueValue) error {
+	encoded, err := issueValueToAny(value, "Vault.Asset")
+	if err != nil {
+		return err
+	}
+	v.SetAsset(encoded)
+	return nil
+}
+
 // HasAssetsTotal reports whether AssetsTotal is present.
 func (v *Vault) HasAssetsTotal() bool {
 	return v != nil && v.present&vaultBitAssetsTotal != 0
@@ -365,6 +399,27 @@ func (v *Vault) ClearAssetsTotal() {
 	v.AssetsTotal = nil
 	v.present &^= vaultBitAssetsTotal
 	v.dirty = true
+}
+
+// GetAssetsTotal returns the exact decoded Number text.
+func (v *Vault) GetAssetsTotal() (NumberValue, error) {
+	if v == nil {
+		return "0", nil
+	}
+	if !v.HasAssetsTotal() {
+		return "0", nil
+	}
+	return numberValueFromAny(v.AssetsTotal, "Vault.AssetsTotal")
+}
+
+// SetAssetsTotalValue assigns an exact Number text value.
+func (v *Vault) SetAssetsTotalValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "Vault.AssetsTotal")
+	if err != nil {
+		return err
+	}
+	v.SetAssetsTotal(encoded)
+	return nil
 }
 
 // HasAssetsAvailable reports whether AssetsAvailable is present.
@@ -382,6 +437,27 @@ func (v *Vault) ClearAssetsAvailable() {
 	v.dirty = true
 }
 
+// GetAssetsAvailable returns the exact decoded Number text.
+func (v *Vault) GetAssetsAvailable() (NumberValue, error) {
+	if v == nil {
+		return "0", nil
+	}
+	if !v.HasAssetsAvailable() {
+		return "0", nil
+	}
+	return numberValueFromAny(v.AssetsAvailable, "Vault.AssetsAvailable")
+}
+
+// SetAssetsAvailableValue assigns an exact Number text value.
+func (v *Vault) SetAssetsAvailableValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "Vault.AssetsAvailable")
+	if err != nil {
+		return err
+	}
+	v.SetAssetsAvailable(encoded)
+	return nil
+}
+
 // HasAssetsMaximum reports whether AssetsMaximum is present.
 func (v *Vault) HasAssetsMaximum() bool {
 	return v != nil && v.present&vaultBitAssetsMaximum != 0
@@ -397,6 +473,27 @@ func (v *Vault) ClearAssetsMaximum() {
 	v.dirty = true
 }
 
+// GetAssetsMaximum returns the exact decoded Number text.
+func (v *Vault) GetAssetsMaximum() (NumberValue, error) {
+	if v == nil {
+		return "0", nil
+	}
+	if !v.HasAssetsMaximum() {
+		return "0", nil
+	}
+	return numberValueFromAny(v.AssetsMaximum, "Vault.AssetsMaximum")
+}
+
+// SetAssetsMaximumValue assigns an exact Number text value.
+func (v *Vault) SetAssetsMaximumValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "Vault.AssetsMaximum")
+	if err != nil {
+		return err
+	}
+	v.SetAssetsMaximum(encoded)
+	return nil
+}
+
 // HasLossUnrealized reports whether LossUnrealized is present.
 func (v *Vault) HasLossUnrealized() bool {
 	return v != nil && v.present&vaultBitLossUnrealized != 0
@@ -410,6 +507,27 @@ func (v *Vault) ClearLossUnrealized() {
 	v.LossUnrealized = nil
 	v.present &^= vaultBitLossUnrealized
 	v.dirty = true
+}
+
+// GetLossUnrealized returns the exact decoded Number text.
+func (v *Vault) GetLossUnrealized() (NumberValue, error) {
+	if v == nil {
+		return "0", nil
+	}
+	if !v.HasLossUnrealized() {
+		return "0", nil
+	}
+	return numberValueFromAny(v.LossUnrealized, "Vault.LossUnrealized")
+}
+
+// SetLossUnrealizedValue assigns an exact Number text value.
+func (v *Vault) SetLossUnrealizedValue(value NumberValue) error {
+	encoded, err := numberValueToAny(value, "Vault.LossUnrealized")
+	if err != nil {
+		return err
+	}
+	v.SetLossUnrealized(encoded)
+	return nil
 }
 
 // HasShareMPTID reports whether ShareMPTID is present.
@@ -542,6 +660,19 @@ func (v *Vault) ClearSubscriptionDate() {
 	v.dirty = true
 }
 
+// GetSubscriptionDate returns the typed UInt32 value.
+func (v *Vault) GetSubscriptionDate() (uint32, error) {
+	if v == nil {
+		return 0, nil
+	}
+	return v.SubscriptionDate, nil
+}
+
+// SetSubscriptionDateValue assigns a typed UInt32 value.
+func (v *Vault) SetSubscriptionDateValue(value uint32) {
+	v.SetSubscriptionDate(value)
+}
+
 // HasRedemptionDate reports whether RedemptionDate is present.
 func (v *Vault) HasRedemptionDate() bool {
 	return v != nil && v.present&vaultBitRedemptionDate != 0
@@ -557,9 +688,35 @@ func (v *Vault) ClearRedemptionDate() {
 	v.dirty = true
 }
 
+// GetRedemptionDate returns the typed UInt32 value.
+func (v *Vault) GetRedemptionDate() (uint32, error) {
+	if v == nil {
+		return 0, nil
+	}
+	return v.RedemptionDate, nil
+}
+
+// SetRedemptionDateValue assigns a typed UInt32 value.
+func (v *Vault) SetRedemptionDateValue(value uint32) {
+	v.SetRedemptionDate(value)
+}
+
 // HasFlags reports whether Flags is present.
 func (v *Vault) HasFlags() bool {
 	return v != nil && v.present&vaultBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (v *Vault) GetFlags() (uint32, error) {
+	if v == nil {
+		return 0, nil
+	}
+	return v.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (v *Vault) SetFlagsValue(value uint32) {
+	v.SetFlags(value)
 }
 
 // HasPreviousTxnID reports whether PreviousTxnID is present.
@@ -586,6 +743,19 @@ func (v *Vault) SetPreviousTxnIDValue(value [32]byte) {
 // HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (v *Vault) HasPreviousTxnLgrSeq() bool {
 	return v != nil && v.present&vaultBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (v *Vault) GetPreviousTxnLgrSeq() (uint32, error) {
+	if v == nil {
+		return 0, nil
+	}
+	return v.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (v *Vault) SetPreviousTxnLgrSeqValue(value uint32) {
+	v.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.

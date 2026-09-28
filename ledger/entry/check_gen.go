@@ -233,6 +233,19 @@ func (c *Check) HasSequence() bool {
 	return c != nil && c.present&checkBitSequence != 0
 }
 
+// GetSequence returns the typed UInt32 value.
+func (c *Check) GetSequence() (uint32, error) {
+	if c == nil {
+		return 0, nil
+	}
+	return c.Sequence, nil
+}
+
+// SetSequenceValue assigns a typed UInt32 value.
+func (c *Check) SetSequenceValue(value uint32) {
+	c.SetSequence(value)
+}
+
 // HasOwnerNode reports whether OwnerNode is present.
 func (c *Check) HasOwnerNode() bool {
 	return c != nil && c.present&checkBitOwnerNode != 0
@@ -284,6 +297,19 @@ func (c *Check) ClearExpiration() {
 	c.dirty = true
 }
 
+// GetExpiration returns the typed UInt32 value.
+func (c *Check) GetExpiration() (uint32, error) {
+	if c == nil {
+		return 0, nil
+	}
+	return c.Expiration, nil
+}
+
+// SetExpirationValue assigns a typed UInt32 value.
+func (c *Check) SetExpirationValue(value uint32) {
+	c.SetExpiration(value)
+}
+
 // HasInvoiceID reports whether InvoiceID is present.
 func (c *Check) HasInvoiceID() bool {
 	return c != nil && c.present&checkBitInvoiceID != 0
@@ -330,6 +356,19 @@ func (c *Check) ClearSourceTag() {
 	c.dirty = true
 }
 
+// GetSourceTag returns the typed UInt32 value.
+func (c *Check) GetSourceTag() (uint32, error) {
+	if c == nil {
+		return 0, nil
+	}
+	return c.SourceTag, nil
+}
+
+// SetSourceTagValue assigns a typed UInt32 value.
+func (c *Check) SetSourceTagValue(value uint32) {
+	c.SetSourceTag(value)
+}
+
 // HasDestinationTag reports whether DestinationTag is present.
 func (c *Check) HasDestinationTag() bool {
 	return c != nil && c.present&checkBitDestinationTag != 0
@@ -345,9 +384,35 @@ func (c *Check) ClearDestinationTag() {
 	c.dirty = true
 }
 
+// GetDestinationTag returns the typed UInt32 value.
+func (c *Check) GetDestinationTag() (uint32, error) {
+	if c == nil {
+		return 0, nil
+	}
+	return c.DestinationTag, nil
+}
+
+// SetDestinationTagValue assigns a typed UInt32 value.
+func (c *Check) SetDestinationTagValue(value uint32) {
+	c.SetDestinationTag(value)
+}
+
 // HasFlags reports whether Flags is present.
 func (c *Check) HasFlags() bool {
 	return c != nil && c.present&checkBitFlags != 0
+}
+
+// GetFlags returns the typed UInt32 value.
+func (c *Check) GetFlags() (uint32, error) {
+	if c == nil {
+		return 0, nil
+	}
+	return c.Flags, nil
+}
+
+// SetFlagsValue assigns a typed UInt32 value.
+func (c *Check) SetFlagsValue(value uint32) {
+	c.SetFlags(value)
 }
 
 // HasPreviousTxnID reports whether PreviousTxnID is present.
@@ -374,6 +439,19 @@ func (c *Check) SetPreviousTxnIDValue(value [32]byte) {
 // HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq is present.
 func (c *Check) HasPreviousTxnLgrSeq() bool {
 	return c != nil && c.present&checkBitPreviousTxnLgrSeq != 0
+}
+
+// GetPreviousTxnLgrSeq returns the typed UInt32 value.
+func (c *Check) GetPreviousTxnLgrSeq() (uint32, error) {
+	if c == nil {
+		return 0, nil
+	}
+	return c.PreviousTxnLgrSeq, nil
+}
+
+// SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
+func (c *Check) SetPreviousTxnLgrSeqValue(value uint32) {
+	c.SetPreviousTxnLgrSeq(value)
 }
 
 // HasSponsor reports whether Sponsor is present.
