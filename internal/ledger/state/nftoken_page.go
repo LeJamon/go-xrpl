@@ -5,40 +5,44 @@ import (
 	"fmt"
 	"strings"
 
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // SerializeNFTokenPage serializes an NFToken page ledger entry.
 func SerializeNFTokenPage(page *NFTokenPageData) ([]byte, error) {
 	entry := &ledgerfields.NFTokenPage{}
-	entry.SetFlags(0)
+	entry.SetFlagsValue(0)
 
 	var emptyHash [32]byte
 	if page.PreviousPageMin != emptyHash {
-		entry.SetPreviousPageMin(strings.ToUpper(hex.EncodeToString(page.PreviousPageMin[:])))
+		entry.SetPreviousPageMinValue(page.PreviousPageMin)
 	}
 
 	if page.NextPageMin != emptyHash {
-		entry.SetNextPageMin(strings.ToUpper(hex.EncodeToString(page.NextPageMin[:])))
+		entry.SetNextPageMinValue(page.NextPageMin)
 	}
 
 	if page.PreviousTxnID != emptyHash {
-		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(page.PreviousTxnID[:])))
-		entry.SetPreviousTxnLgrSeq(page.PreviousTxnLgrSeq)
+		entry.SetPreviousTxnIDValue(page.PreviousTxnID)
+		entry.SetPreviousTxnLgrSeqValue(page.PreviousTxnLgrSeq)
 	}
 
-	nfTokens := make([]any, len(page.NFTokens))
+	nfTokens := make([]ledgerfields.NFTokenValue, len(page.NFTokens))
 	for i, token := range page.NFTokens {
-		nfTokenFields := map[string]any{
-			"NFTokenID": strings.ToUpper(hex.EncodeToString(token.NFTokenID[:])),
-		}
+		var nfToken ledgerfields.NFTokenValue
+		nfToken.SetNFTokenID(token.NFTokenID)
 		if token.URI != "" {
-			nfTokenFields["URI"] = token.URI
+			uri, err := decodeNFTokenBlob("NFTokenPage.NFTokens.URI", token.URI)
+			if err != nil {
+				return nil, err
+			}
+			nfToken.SetURI(uri)
 		}
-		nfTokens[i] = map[string]any{"NFToken": nfTokenFields}
+		nfTokens[i] = nfToken
 	}
-	entry.SetNFTokens(nfTokens)
+	if err := entry.SetNFTokensValue(nfTokens); err != nil {
+		return nil, err
+	}
 
 	return entry.Encode()
 }
@@ -53,21 +57,28 @@ func SerializeNFTokenOffer(
 	ownerNode, offerNode uint64,
 	destination string, expiration *uint32,
 ) ([]byte, error) {
-	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
-	if err != nil {
+	entry := &ledgerfields.NFTokenOffer{}
+	if err := entry.SetOwnerValue(ownerID); err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
 	}
-
-	entry := &ledgerfields.NFTokenOffer{}
-	entry.SetOwner(ownerAddress)
-	entry.SetAmount(amount)
-	entry.SetNFTokenID(strings.ToUpper(hex.EncodeToString(tokenID[:])))
-	entry.SetOwnerNode(fmt.Sprintf("%x", ownerNode))
-	entry.SetNFTokenOfferNode(fmt.Sprintf("%x", offerNode))
-	entry.SetFlags(flags)
+	typedAmount, ok := amount.(ledgerfields.AmountValue)
+	if !ok {
+		parsedAmount, err := ledgerfields.ParseAmountValue(amount)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode NFTokenOffer amount: %w", err)
+		}
+		typedAmount = parsedAmount
+	}
+	if err := entry.SetAmountValue(typedAmount); err != nil {
+		return nil, fmt.Errorf("failed to encode NFTokenOffer amount: %w", err)
+	}
+	entry.SetNFTokenIDValue(tokenID)
+	entry.SetOwnerNodeValue(ownerNode)
+	entry.SetNFTokenOfferNodeValue(offerNode)
+	entry.SetFlagsValue(flags)
 
 	if expiration != nil {
-		entry.SetExpiration(*expiration)
+		entry.SetExpirationValue(*expiration)
 	}
 
 	if destination != "" {
@@ -126,50 +137,46 @@ func ParseNFTokenPage(data []byte) (*NFTokenPageData, error) {
 	if err := entry.Decode(data); err != nil {
 		return nil, err
 	}
-	fields := entry.ToMap()
+	previousPageMin, err := entry.GetPreviousPageMin()
+	if err != nil {
+		return nil, err
+	}
+	nextPageMin, err := entry.GetNextPageMin()
+	if err != nil {
+		return nil, err
+	}
+	previousTxnID, err := entry.GetPreviousTxnID()
+	if err != nil {
+		return nil, err
+	}
+	previousTxnLgrSeq, err := entry.GetPreviousTxnLgrSeq()
+	if err != nil {
+		return nil, err
+	}
+	tokens, err := entry.GetNFTokens()
+	if err != nil {
+		return nil, err
+	}
 	page := &NFTokenPageData{
-		NFTokens:          make([]NFTokenData, 0, len(entry.NFTokens)),
-		PreviousTxnLgrSeq: entry.PreviousTxnLgrSeq,
+		PreviousPageMin:   previousPageMin,
+		NextPageMin:       nextPageMin,
+		NFTokens:          make([]NFTokenData, 0, len(tokens)),
+		PreviousTxnID:     previousTxnID,
+		PreviousTxnLgrSeq: previousTxnLgrSeq,
 	}
-
-	if fields["PreviousPageMin"] != nil {
-		if err := decodeLedgerHex("NFTokenPage.PreviousPageMin", entry.PreviousPageMin, page.PreviousPageMin[:]); err != nil {
+	for _, value := range tokens {
+		tokenID, err := value.GetNFTokenID()
+		if err != nil {
 			return nil, err
 		}
-	}
-	if fields["NextPageMin"] != nil {
-		if err := decodeLedgerHex("NFTokenPage.NextPageMin", entry.NextPageMin, page.NextPageMin[:]); err != nil {
+		uri, err := value.GetURI()
+		if err != nil {
 			return nil, err
 		}
-	}
-	if fields["PreviousTxnID"] != nil {
-		if err := decodeLedgerHex("NFTokenPage.PreviousTxnID", entry.PreviousTxnID, page.PreviousTxnID[:]); err != nil {
-			return nil, err
-		}
-	}
-	for i, value := range entry.NFTokens {
-		wrapper, ok := value.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("NFTokenPage.NFTokens[%d]: expected object, got %T", i, value)
-		}
-		value, ok = wrapper["NFToken"]
-		if !ok {
-			continue
-		}
-		tokenFields, ok := value.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("NFTokenPage.NFTokens[%d].NFToken: expected object, got %T", i, value)
-		}
-		var token NFTokenData
-		if tokenID, ok := tokenFields["NFTokenID"].(string); ok {
-			if err := decodeLedgerHex("NFTokenPage.NFTokenID", tokenID, token.NFTokenID[:]); err != nil {
-				return nil, err
-			}
-		}
-		if uri, ok := tokenFields["URI"].(string); ok {
-			token.URI = strings.ToLower(uri)
-		}
-		page.NFTokens = append(page.NFTokens, token)
+		page.NFTokens = append(page.NFTokens, NFTokenData{
+			NFTokenID: tokenID,
+			URI:       strings.ToLower(hex.EncodeToString(uri)),
+		})
 	}
 	return page, nil
 }
@@ -193,69 +200,86 @@ func ParseNFTokenOfferLegacy(data []byte) (*NFTokenOfferData, error) {
 }
 
 func parseNFTokenOffer(entry *ledgerfields.NFTokenOffer) (*NFTokenOfferData, error) {
-	fields := entry.ToMap()
+	flags, err := entry.GetFlags()
+	if err != nil {
+		return nil, err
+	}
+	expiration, err := entry.GetExpiration()
+	if err != nil {
+		return nil, err
+	}
+	owner, err := entry.GetOwner()
+	if err != nil {
+		return nil, err
+	}
+	destination, err := entry.GetDestination()
+	if err != nil {
+		return nil, err
+	}
+	tokenID, err := entry.GetNFTokenID()
+	if err != nil {
+		return nil, err
+	}
+	ownerNode, err := entry.GetOwnerNode()
+	if err != nil {
+		return nil, err
+	}
+	offerNode, err := entry.GetNFTokenOfferNode()
+	if err != nil {
+		return nil, err
+	}
+	amountValue, err := entry.GetAmount()
+	if err != nil {
+		return nil, err
+	}
 	offer := &NFTokenOfferData{
-		Flags:          entry.Flags,
-		Expiration:     entry.Expiration,
-		HasDestination: fields["Destination"] != nil,
+		Owner:            owner,
+		NFTokenID:        tokenID,
+		Flags:            flags,
+		Expiration:       expiration,
+		Destination:      destination,
+		HasDestination:   entry.HasDestination(),
+		OwnerNode:        ownerNode,
+		NFTokenOfferNode: offerNode,
 	}
-
-	var err error
-	if fields["Owner"] != nil {
-		offer.Owner, err = decodeLedgerAccount("NFTokenOffer.Owner", entry.Owner)
+	amount, err := decodeLedgerAmount("NFTokenOffer.Amount", amountValue)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case amount.IsNative():
+		drops := amount.Drops()
+		if drops < 0 {
+			drops = -drops
+		}
+		offer.Amount = uint64(drops)
+		offer.Negative = amount.IsNegative()
+	case !amount.IsMPT():
+		offer.Negative = amount.IsNegative()
+		issuer, err := decodeLedgerAccount("NFTokenOffer.Amount.issuer", amount.Issuer)
 		if err != nil {
 			return nil, err
 		}
-	}
-	if offer.HasDestination {
-		offer.Destination, err = decodeLedgerAccount("NFTokenOffer.Destination", entry.Destination)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if fields["NFTokenID"] != nil {
-		if err := decodeLedgerHex("NFTokenOffer.NFTokenID", entry.NFTokenID, offer.NFTokenID[:]); err != nil {
-			return nil, err
-		}
-	}
-	if fields["OwnerNode"] != nil {
-		offer.OwnerNode, err = parseLedgerUint64("NFTokenOffer.OwnerNode", entry.OwnerNode)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if fields["NFTokenOfferNode"] != nil {
-		offer.NFTokenOfferNode, err = parseLedgerUint64("NFTokenOffer.NFTokenOfferNode", entry.NFTokenOfferNode)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if fields["Amount"] != nil {
-		amount, err := decodeLedgerAmount("NFTokenOffer.Amount", entry.Amount)
-		if err != nil {
-			return nil, err
-		}
-		switch {
-		case amount.IsNative():
-			drops := amount.Drops()
-			if drops < 0 {
-				drops = -drops
-			}
-			offer.Amount = uint64(drops)
-			offer.Negative = amount.IsNegative()
-		case !amount.IsMPT():
-			offer.Negative = amount.IsNegative()
-			issuer, err := decodeLedgerAccount("NFTokenOffer.Amount.issuer", amount.Issuer)
-			if err != nil {
-				return nil, err
-			}
-			offer.AmountIOU = &NFTIOUAmount{
-				Currency: amount.Currency,
-				Issuer:   issuer,
-				Value:    amount.IOU().String(),
-			}
+		offer.AmountIOU = &NFTIOUAmount{
+			Currency: amount.Currency,
+			Issuer:   issuer,
+			Value:    amount.IOU().String(),
 		}
 	}
 
 	return offer, nil
+}
+
+func decodeNFTokenBlob(field, value string) ([]byte, error) {
+	if value == "" {
+		return nil, nil
+	}
+	if len(value)%2 != 0 {
+		value = "0" + value
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("%s: invalid hex: %w", field, err)
+	}
+	return decoded, nil
 }

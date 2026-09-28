@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
@@ -47,37 +46,61 @@ func ParseOracle(data []byte) (*OracleData, error) {
 	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("failed to decode Oracle: %w", err)
 	}
-	fields := decoded.ToMap()
+	provider, err := decoded.GetProvider()
+	if err != nil {
+		return nil, err
+	}
+	assetClass, err := decoded.GetAssetClass()
+	if err != nil {
+		return nil, err
+	}
+	uri, err := decoded.GetURI()
+	if err != nil {
+		return nil, err
+	}
+	lastUpdateTime, err := decoded.GetLastUpdateTime()
+	if err != nil {
+		return nil, err
+	}
+	flags, err := decoded.GetFlags()
+	if err != nil {
+		return nil, err
+	}
+	ownerNode, err := decoded.GetOwnerNode()
+	if err != nil {
+		return nil, err
+	}
+	owner, err := decoded.GetOwner()
+	if err != nil {
+		return nil, err
+	}
+	previousTxnLgrSeq, err := decoded.GetPreviousTxnLgrSeq()
+	if err != nil {
+		return nil, err
+	}
+	previousTxnID, err := decoded.GetPreviousTxnID()
+	if err != nil {
+		return nil, err
+	}
 	oracle := &OracleData{
-		Provider:            strings.ToLower(decoded.Provider),
-		AssetClass:          strings.ToLower(decoded.AssetClass),
-		LastUpdateTime:      decoded.LastUpdateTime,
-		URI:                 strings.ToLower(decoded.URI),
-		Flags:               decoded.Flags,
-		OracleDocumentID:    decoded.OracleDocumentID,
-		HasOracleDocumentID: fields["OracleDocumentID"] != nil,
-		PreviousTxnLgrSeq:   decoded.PreviousTxnLgrSeq,
+		Owner:             owner,
+		Provider:          strings.ToLower(hex.EncodeToString(provider)),
+		AssetClass:        strings.ToLower(hex.EncodeToString(assetClass)),
+		LastUpdateTime:    lastUpdateTime,
+		URI:               strings.ToLower(hex.EncodeToString(uri)),
+		Flags:             flags,
+		OwnerNode:         ownerNode,
+		PreviousTxnID:     previousTxnID,
+		PreviousTxnLgrSeq: previousTxnLgrSeq,
 	}
-
-	var err error
-	if _, ok := fields["Owner"]; ok {
-		oracle.Owner, err = decodeLedgerAccount("Oracle.Owner", decoded.Owner)
+	if decoded.HasOracleDocumentID() {
+		oracle.OracleDocumentID, err = decoded.GetOracleDocumentID()
 		if err != nil {
 			return nil, err
 		}
+		oracle.HasOracleDocumentID = true
 	}
-	if _, ok := fields["OwnerNode"]; ok {
-		oracle.OwnerNode, err = parseLedgerUint64("Oracle.OwnerNode", decoded.OwnerNode)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if _, ok := fields["PreviousTxnID"]; ok {
-		if err := decodeLedgerHex("Oracle.PreviousTxnID", decoded.PreviousTxnID, oracle.PreviousTxnID[:]); err != nil {
-			return nil, err
-		}
-	}
-	oracle.PriceDataSeries, err = decodeOraclePriceDataSeries(decoded.PriceDataSeries)
+	oracle.PriceDataSeries, err = decodeOraclePriceDataSeries(decoded)
 	if err != nil {
 		return nil, err
 	}
@@ -85,42 +108,34 @@ func ParseOracle(data []byte) (*OracleData, error) {
 	return oracle, nil
 }
 
-func decodeOraclePriceDataSeries(values []any) ([]OraclePriceData, error) {
-	var series []OraclePriceData
+func decodeOraclePriceDataSeries(decoded ledgerfields.Oracle) ([]OraclePriceData, error) {
+	values, err := decoded.GetPriceDataSeries()
+	if err != nil {
+		return nil, err
+	}
+	series := make([]OraclePriceData, 0, len(values))
 	for i, value := range values {
-		wrapper, ok := value.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("Oracle.PriceDataSeries[%d]: expected object, got %T", i, value)
+		baseAsset, err := value.GetBaseAsset()
+		if err != nil {
+			return nil, fmt.Errorf("Oracle.PriceDataSeries[%d].PriceData.BaseAsset: %w", i, err)
 		}
-		value, ok = wrapper["PriceData"]
-		if !ok {
-			continue
+		quoteAsset, err := value.GetQuoteAsset()
+		if err != nil {
+			return nil, fmt.Errorf("Oracle.PriceDataSeries[%d].PriceData.QuoteAsset: %w", i, err)
 		}
-		fields, ok := value.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("Oracle.PriceDataSeries[%d].PriceData: expected object, got %T", i, value)
-		}
-
-		price := OraclePriceData{}
-		if value, ok := fields["BaseAsset"].(string); ok {
-			price.BaseAsset = value
-		}
-		if value, ok := fields["QuoteAsset"].(string); ok {
-			price.QuoteAsset = value
-		}
-		if value, ok := fields["AssetPrice"].(string); ok {
-			assetPrice, err := parseLedgerUint64(fmt.Sprintf("Oracle.PriceDataSeries[%d].PriceData.AssetPrice", i), value)
+		price := OraclePriceData{BaseAsset: baseAsset, QuoteAsset: quoteAsset}
+		if value.HasAssetPrice() {
+			price.AssetPrice, err = value.GetAssetPrice()
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("Oracle.PriceDataSeries[%d].PriceData.AssetPrice: %w", i, err)
 			}
-			price.AssetPrice = assetPrice
 			price.HasPrice = true
 		}
-		if value, ok := fields["Scale"].(int); ok {
-			if value < 0 || value > 255 {
-				return nil, fmt.Errorf("Oracle.PriceDataSeries[%d].PriceData.Scale: decoded value %d is out of range", i, value)
+		if value.HasScale() {
+			price.Scale, err = value.GetScale()
+			if err != nil {
+				return nil, fmt.Errorf("Oracle.PriceDataSeries[%d].PriceData.Scale: %w", i, err)
 			}
-			price.Scale = uint8(value)
 			price.HasScale = true
 		}
 		series = append(series, price)
@@ -130,18 +145,15 @@ func decodeOraclePriceDataSeries(values []any) ([]OraclePriceData, error) {
 
 // SerializeOracle serializes an Oracle ledger entry to binary format.
 func SerializeOracle(o *OracleData) ([]byte, error) {
-	ownerAddr, err := addresscodec.EncodeAccountIDToClassicAddress(o.Owner[:])
-	if err != nil {
+	entry := &ledgerfields.Oracle{}
+	if err := entry.SetOwnerValue(o.Owner); err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
 	}
-
-	entry := &ledgerfields.Oracle{}
-	entry.SetOwner(ownerAddr)
 	entry.SetProvider(o.Provider)
 	entry.SetAssetClass(o.AssetClass)
 	entry.SetLastUpdateTime(o.LastUpdateTime)
-	entry.SetOwnerNode(fmt.Sprintf("%X", o.OwnerNode))
-	entry.SetFlags(o.Flags)
+	entry.SetOwnerNodeValue(o.OwnerNode)
+	entry.SetFlagsValue(o.Flags)
 
 	if o.URI != "" {
 		entry.SetURI(o.URI)
@@ -155,25 +167,26 @@ func SerializeOracle(o *OracleData) ([]byte, error) {
 	// Emit only once threaded; a fresh entry's pointers are stamped by the apply layer.
 	var emptyHash [32]byte
 	if o.PreviousTxnID != emptyHash {
-		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(o.PreviousTxnID[:])))
-		entry.SetPreviousTxnLgrSeq(o.PreviousTxnLgrSeq)
+		entry.SetPreviousTxnIDValue(o.PreviousTxnID)
+		entry.SetPreviousTxnLgrSeqValue(o.PreviousTxnLgrSeq)
 	}
 
-	series := make([]any, 0, len(o.PriceDataSeries))
-	for _, pd := range o.PriceDataSeries {
-		priceData := map[string]any{
-			"BaseAsset":  pd.BaseAsset,
-			"QuoteAsset": pd.QuoteAsset,
-		}
+	series := make([]ledgerfields.PriceDataValue, len(o.PriceDataSeries))
+	for i, pd := range o.PriceDataSeries {
+		var priceData ledgerfields.PriceDataValue
+		priceData.SetBaseAsset(pd.BaseAsset)
+		priceData.SetQuoteAsset(pd.QuoteAsset)
 		if pd.HasPrice {
-			priceData["AssetPrice"] = fmt.Sprintf("%X", pd.AssetPrice)
+			priceData.SetAssetPrice(pd.AssetPrice)
 		}
 		if pd.HasScale {
-			priceData["Scale"] = pd.Scale
+			priceData.SetScale(pd.Scale)
 		}
-		series = append(series, map[string]any{"PriceData": priceData})
+		series[i] = priceData
 	}
-	entry.SetPriceDataSeries(series)
+	if err := entry.SetPriceDataSeriesValue(series); err != nil {
+		return nil, fmt.Errorf("failed to encode Oracle price data: %w", err)
+	}
 
 	data, err := entry.Encode()
 	if err != nil {
