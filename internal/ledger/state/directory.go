@@ -349,8 +349,6 @@ func SerializeDirectoryNode(dir *DirectoryNode, isBookDir bool) ([]byte, error) 
 		entry.ClearDomainID()
 	}
 
-	// Preserve threading fields across the round-trip. PreviousTxnLgrSeq is
-	// meaningful alongside PreviousTxnID, so gate both on the id.
 	previousTxnIDUnchanged := false
 	if entry.HasPreviousTxnID() {
 		original, err := entry.GetPreviousTxnID()

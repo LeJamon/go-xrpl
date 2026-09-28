@@ -75,7 +75,6 @@ func threadItem(data []byte, txHash [32]byte, ledgerSeq uint32) (prevTxnID [32]b
 		return prevTxnID, prevLgrSeq, data, false
 	}
 
-	// Update with new transaction info and re-encode the entry.
 	setter.SetPreviousTxnIDValue(txHash)
 	setter.SetPreviousTxnLgrSeq(ledgerSeq)
 	newData, err = setter.Encode()

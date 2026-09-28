@@ -18,7 +18,6 @@ func decodeLedgerAmount(field string, value ledgerfields.AmountValue) (Amount, e
 	return amount, nil
 }
 
-// AmountFromLedgerValue converts a typed ledger amount to the execution amount representation.
 func AmountFromLedgerValue(value ledgerfields.AmountValue) (amount Amount, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -29,7 +28,6 @@ func AmountFromLedgerValue(value ledgerfields.AmountValue) (amount Amount, err e
 	return decodeLedgerAmountTyped(value.Value, value.Currency, value.Issuer, value.MPTIssuanceID)
 }
 
-// LedgerValue returns the typed ledger representation of an execution amount.
 func (a Amount) LedgerValue() ledgerfields.AmountValue {
 	value := ledgerfields.AmountValue{Value: a.Value()}
 	if a.IsMPT() {

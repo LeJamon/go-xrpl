@@ -48,7 +48,6 @@ type vaultData struct {
 	PreviousTxnLgrSeq uint32
 }
 
-// assetToIssueValue renders the vault asset as a typed Issue value.
 func (v *vaultData) assetToIssueValue() ledgerfields.IssueValue {
 	if v.AssetIsMPT {
 		return ledgerfields.IssueValue{MPTIssuanceID: strings.ToUpper(hex.EncodeToString(v.AssetMPTID[:]))}

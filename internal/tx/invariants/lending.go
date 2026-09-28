@@ -23,7 +23,6 @@ type decodedLendingEntry struct {
 	model entry.Entry
 }
 
-// decodeEntry decodes a serialized lending SLE into its generated model.
 func decodeEntry(data []byte) (decodedLendingEntry, error) {
 	typ, err := state.DecodeType(data)
 	if err != nil {
@@ -50,7 +49,6 @@ func u32FieldPresent(fields decodedLendingEntry, key string) (uint32, bool) {
 	return fields.uint32(key)
 }
 
-// u32Field reads a UInt32 field, tolerating the codec's numeric representations.
 func u32Field(fields decodedLendingEntry, key string) uint32 {
 	v, _ := u32FieldPresent(fields, key)
 	return v
