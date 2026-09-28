@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/big"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -59,12 +60,9 @@ func checkXRPBalanceImage(data []byte) *InvariantViolation {
 }
 
 // checkXRPNotCreated verifies that the net XRP change across all touched entries
-// equals at most -fee (XRP can only decrease, never increase, per transaction).
-// Reference: rippled InvariantCheck.cpp — XRPNotCreated
+// equals exactly -fee, even when intermediate totals exceed 64 bits.
 func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *InvariantViolation {
-	// Sum of (after_balance - before_balance) across AccountRoot entries.
-	// Using int64 arithmetic; values are at most ~10^17 drops which fits.
-	var netChange int64
+	var netChange, amount big.Int
 
 	for _, e := range entries {
 		switch e.EntryType {
@@ -77,14 +75,19 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 				}
 				before = acct.Balance
 			}
-			if e.After != nil {
-				acct, err := state.ParseAccountRoot(e.After)
+			afterImage := e.After
+			if e.IsDelete && e.DeleteFinal != nil {
+				afterImage = e.DeleteFinal
+			}
+			if afterImage != nil {
+				acct, err := state.ParseAccountRoot(afterImage)
 				if err != nil {
 					return xrpNotCreatedParseViolation("AccountRoot", err)
 				}
 				after = acct.Balance
 			}
-			netChange += int64(after) - int64(before)
+			netChange.Sub(&netChange, amount.SetUint64(before))
+			netChange.Add(&netChange, amount.SetUint64(after))
 
 		case entry.TypeEscrow:
 			// Escrow holds XRP in escrow — count as a balance change.
@@ -102,7 +105,7 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 					before = esc.Amount
 				}
 			}
-			if e.After != nil {
+			if e.After != nil && !e.IsDelete {
 				esc, err := state.ParseEscrow(e.After)
 				if err != nil {
 					return xrpNotCreatedParseViolation("Escrow", err)
@@ -111,27 +114,28 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 					after = esc.Amount
 				}
 			}
-			netChange += int64(after) - int64(before)
+			netChange.Sub(&netChange, amount.SetUint64(before))
+			netChange.Add(&netChange, amount.SetUint64(after))
 
 		case entry.TypePayChannel:
 			// PayChannel holds XRP as Amount - Balance (total minus claimed).
 			// Reference: rippled InvariantCheck.cpp:107-131
-			var before, after uint64
 			if e.Before != nil {
 				pc, err := state.ParsePayChannel(e.Before)
 				if err != nil {
 					return xrpNotCreatedParseViolation("PayChannel", err)
 				}
-				before = pc.Amount - pc.Balance
+				netChange.Sub(&netChange, amount.SetUint64(pc.Amount))
+				netChange.Add(&netChange, amount.SetUint64(pc.Balance))
 			}
 			if e.After != nil && !e.IsDelete {
 				pc, err := state.ParsePayChannel(e.After)
 				if err != nil {
 					return xrpNotCreatedParseViolation("PayChannel", err)
 				}
-				after = pc.Amount - pc.Balance
+				netChange.Add(&netChange, amount.SetUint64(pc.Amount))
+				netChange.Sub(&netChange, amount.SetUint64(pc.Balance))
 			}
-			netChange += int64(after) - int64(before)
 
 		case entry.TypeSponsorship:
 			// Sponsorship may hold prefunded XRP in FeeAmount. It is part of
@@ -156,7 +160,8 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 					after = sponsorship.FeeAmount
 				}
 			}
-			netChange += int64(after) - int64(before)
+			netChange.Sub(&netChange, amount.SetUint64(before))
+			netChange.Add(&netChange, amount.SetUint64(after))
 		}
 	}
 
@@ -165,16 +170,16 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 	// XRP was burned beyond what the fee accounts for — also a violation, since
 	// only the fee should destroy XRP.
 	// Reference: rippled InvariantCheck.cpp:153-166.
-	if netChange > 0 {
+	if netChange.Sign() > 0 {
 		return &InvariantViolation{
 			Name:    "XRPNotCreated",
-			Message: fmt.Sprintf("net XRP change +%d drops: XRP was created (fee=%d)", netChange, fee),
+			Message: fmt.Sprintf("net XRP change +%d drops: XRP was created (fee=%d)", &netChange, fee),
 		}
 	}
-	if -netChange != int64(fee) {
+	if netChange.Cmp(amount.Neg(amount.SetUint64(fee))) != 0 {
 		return &InvariantViolation{
 			Name:    "XRPNotCreated",
-			Message: fmt.Sprintf("net XRP change of %d drops doesn't match fee %d", netChange, fee),
+			Message: fmt.Sprintf("net XRP change of %d drops doesn't match fee %d", &netChange, fee),
 		}
 	}
 	return nil
