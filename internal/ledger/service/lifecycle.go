@@ -57,7 +57,7 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 
 	// Re-apply pending in canonical order on a fresh ledger built from the LCL.
 	var retriableTxs []openledger.PendingTx
-	closed, replayed, err := s.applyStartupReplayLocked()
+	closed, replayed, err := s.applyStartupReplayLocked(ctx)
 	if err != nil {
 		return 0, err
 	}
