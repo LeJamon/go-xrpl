@@ -149,7 +149,7 @@ func SerializeFeeSettings(fee *FeeSettings) ([]byte, error) {
 	// post-fee-vote FeeSettings state diverges (account_hash fork).
 	entry := fee.decoded
 	if !entry.HasFlags() {
-		entry.SetFlags(0)
+		entry.SetFlagsValue(0)
 	}
 
 	if fee.XRPFeesMode {
@@ -168,23 +168,32 @@ func SerializeFeeSettings(fee *FeeSettings) ([]byte, error) {
 		entry.ClearReserveIncrement()
 	} else {
 		entry.SetBaseFeeValue(fee.BaseFee)
-		entry.SetReferenceFeeUnits(fee.ReferenceFeeUnits)
-		entry.SetReserveBase(fee.ReserveBase)
-		entry.SetReserveIncrement(fee.ReserveIncrement)
+		entry.SetReferenceFeeUnitsValue(fee.ReferenceFeeUnits)
+		entry.SetReserveBaseValue(fee.ReserveBase)
+		entry.SetReserveIncrementValue(fee.ReserveIncrement)
 		entry.ClearBaseFeeDrops()
 		entry.ClearReserveBaseDrops()
 		entry.ClearReserveIncrementDrops()
 	}
 
 	var zeroHash [32]byte
-	if fee.PreviousTxnID != zeroHash {
+	previousTxnIDUnchanged := false
+	if entry.HasPreviousTxnID() {
+		original, err := entry.GetPreviousTxnID()
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode FeeSettings.PreviousTxnID: %w", err)
+		}
+		previousTxnIDUnchanged = original == fee.PreviousTxnID
+	}
+	if fee.PreviousTxnID != zeroHash || previousTxnIDUnchanged {
 		entry.SetPreviousTxnIDValue(fee.PreviousTxnID)
-	} else if !entry.HasPreviousTxnID() {
+	} else {
 		entry.ClearPreviousTxnID()
 	}
-	if fee.PreviousTxnLgrSeq != 0 {
-		entry.SetPreviousTxnLgrSeq(fee.PreviousTxnLgrSeq)
-	} else if !entry.HasPreviousTxnLgrSeq() {
+	previousTxnLgrSeqUnchanged := entry.HasPreviousTxnLgrSeq() && entry.PreviousTxnLgrSeq == fee.PreviousTxnLgrSeq
+	if fee.PreviousTxnLgrSeq != 0 || previousTxnLgrSeqUnchanged {
+		entry.SetPreviousTxnLgrSeqValue(fee.PreviousTxnLgrSeq)
+	} else {
 		entry.ClearPreviousTxnLgrSeq()
 	}
 

@@ -16,7 +16,6 @@ type LedgerOffer struct {
 	BookNode          uint64
 	OwnerNode         uint64
 	Expiration        uint32
-	HasExpiration     bool
 	Flags             uint32
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
@@ -29,8 +28,6 @@ type LedgerOffer struct {
 	// that are placed in both domain and open books
 	AdditionalBookDirectory [32]byte
 	AdditionalBookNode      uint64
-	HasDomainID             bool
-	HasSponsor              bool
 	decoded                 ledgerfields.Offer
 }
 
@@ -42,15 +39,9 @@ type offerBookLink struct {
 // SerializeLedgerOffer serializes a LedgerOffer to binary for storage
 func SerializeLedgerOffer(offer *LedgerOffer) ([]byte, error) {
 	entry := offer.decoded
-	account, err := DecodeAccountID(offer.Account)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode Offer.Account: %w", err)
-	}
-	if err := entry.SetAccountValue(account); err != nil {
-		return nil, fmt.Errorf("failed to encode Offer.Account: %w", err)
-	}
-	entry.SetFlags(offer.Flags)
-	entry.SetSequence(offer.Sequence)
+	entry.SetAccount(offer.Account)
+	entry.SetFlagsValue(offer.Flags)
+	entry.SetSequenceValue(offer.Sequence)
 	if err := entry.SetTakerPaysValue(offer.TakerPays.LedgerValue()); err != nil {
 		return nil, err
 	}
@@ -61,25 +52,27 @@ func SerializeLedgerOffer(offer *LedgerOffer) ([]byte, error) {
 	entry.SetBookNodeValue(offer.BookNode)
 	entry.SetOwnerNodeValue(offer.OwnerNode)
 	entry.SetPreviousTxnIDValue(offer.PreviousTxnID)
-	entry.SetPreviousTxnLgrSeq(offer.PreviousTxnLgrSeq)
-	if offer.HasSponsor || offer.Sponsor != "" {
-		sponsor, err := DecodeAccountID(offer.Sponsor)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode Offer.Sponsor: %w", err)
-		}
-		if err := entry.SetSponsorValue(sponsor); err != nil {
-			return nil, fmt.Errorf("failed to encode Offer.Sponsor: %w", err)
-		}
+	entry.SetPreviousTxnLgrSeqValue(offer.PreviousTxnLgrSeq)
+	if offer.Sponsor != "" || (entry.HasSponsor() && offer.Sponsor == entry.Sponsor) {
+		entry.SetSponsor(offer.Sponsor)
 	} else {
 		entry.ClearSponsor()
 	}
 
-	if offer.HasExpiration || offer.Expiration > 0 {
-		entry.SetExpiration(offer.Expiration)
+	if offer.Expiration > 0 || (entry.HasExpiration() && offer.Expiration == entry.Expiration) {
+		entry.SetExpirationValue(offer.Expiration)
 	} else {
 		entry.ClearExpiration()
 	}
-	if offer.HasDomainID || offer.DomainID != [32]byte{} {
+	domainIDUnchanged := false
+	if entry.HasDomainID() {
+		original, err := entry.GetDomainID()
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode Offer.DomainID: %w", err)
+		}
+		domainIDUnchanged = original == offer.DomainID
+	}
+	if offer.DomainID != [32]byte{} || domainIDUnchanged {
 		entry.SetDomainIDValue(offer.DomainID)
 	} else {
 		entry.ClearDomainID()
@@ -134,22 +127,12 @@ func parseLedgerOffer(data []byte) (*LedgerOffer, error) {
 		BookNode:          bookNode,
 		OwnerNode:         ownerNode,
 		Expiration:        decoded.Expiration,
-		HasExpiration:     decoded.HasExpiration(),
 		Flags:             decoded.Flags,
 		PreviousTxnLgrSeq: decoded.PreviousTxnLgrSeq,
-		HasDomainID:       decoded.HasDomainID(),
-		HasSponsor:        decoded.HasSponsor(),
 		decoded:           decoded,
 	}
 	if decoded.HasAccount() {
-		account, err := decoded.GetAccount()
-		if err != nil {
-			return nil, err
-		}
-		offer.Account, err = EncodeAccountID(account)
-		if err != nil {
-			return nil, err
-		}
+		offer.Account = decoded.Account
 	}
 	if decoded.HasPreviousTxnID() {
 		offer.PreviousTxnID, err = decoded.GetPreviousTxnID()
@@ -164,14 +147,7 @@ func parseLedgerOffer(data []byte) (*LedgerOffer, error) {
 		}
 	}
 	if decoded.HasSponsor() {
-		sponsor, err := decoded.GetSponsor()
-		if err != nil {
-			return nil, err
-		}
-		offer.Sponsor, err = EncodeAccountID(sponsor)
-		if err != nil {
-			return nil, err
-		}
+		offer.Sponsor = decoded.Sponsor
 	}
 	if decoded.HasAdditionalBooks() {
 		books, err := decoded.GetAdditionalBooks()
@@ -203,6 +179,10 @@ func setOfferAdditionalBooks(entry *ledgerfields.Offer, offer *LedgerOffer) erro
 			if directory == offer.AdditionalBookDirectory && node == offer.AdditionalBookNode {
 				return nil
 			}
+		} else if offer.AdditionalBookDirectory == [32]byte{} {
+			// Preserve an explicitly present empty array when the modeled
+			// values are unchanged.
+			return nil
 		}
 	}
 	if offer.AdditionalBookDirectory == [32]byte{} {

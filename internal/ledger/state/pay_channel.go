@@ -1,7 +1,6 @@
 package state
 
 import (
-	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -20,15 +19,12 @@ type PayChannelData struct {
 	CancelAfter     uint32
 	SourceTag       uint32
 	DestinationTag  uint32
-	HasExpiration   bool
-	HasCancelAfter  bool
 	HasSourceTag    bool
 	HasDestTag      bool
 	OwnerNode       uint64
 	DestinationNode uint64
 	HasDestNode     bool
 	Sponsor         string
-	HasSponsor      bool
 
 	// Sequence records the creating tx/ticket sequence (a keylet input),
 	// stored once fixIncludeKeyletFields is active.
@@ -75,43 +71,33 @@ func SerializePayChannelFromData(channel *PayChannelData) ([]byte, error) {
 	if err := entry.SetBalanceValue(ledgerfields.AmountValue{Value: fmt.Sprintf("%d", channel.Balance)}); err != nil {
 		return nil, err
 	}
-	entry.SetSettleDelay(channel.SettleDelay)
+	entry.SetSettleDelayValue(channel.SettleDelay)
 	entry.SetOwnerNodeValue(channel.OwnerNode)
-	entry.SetFlags(0)
-	publicKey, err := hex.DecodeString(channel.PublicKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode public key: %w", err)
-	}
-	entry.SetPublicKeyValue(publicKey)
-	if channel.HasSponsor || channel.Sponsor != "" {
-		sponsor, err := DecodeAccountID(channel.Sponsor)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode sponsor: %w", err)
-		}
-		if err := entry.SetSponsorValue(sponsor); err != nil {
-			return nil, fmt.Errorf("failed to encode sponsor: %w", err)
-		}
+	entry.SetFlagsValue(0)
+	entry.SetPublicKey(channel.PublicKey)
+	if channel.Sponsor != "" || (entry.HasSponsor() && channel.Sponsor == entry.Sponsor) {
+		entry.SetSponsor(channel.Sponsor)
 	} else {
 		entry.ClearSponsor()
 	}
 
-	if channel.HasCancelAfter || channel.CancelAfter > 0 {
-		entry.SetCancelAfter(channel.CancelAfter)
+	if channel.CancelAfter > 0 || (entry.HasCancelAfter() && channel.CancelAfter == entry.CancelAfter) {
+		entry.SetCancelAfterValue(channel.CancelAfter)
 	} else {
 		entry.ClearCancelAfter()
 	}
-	if channel.HasExpiration || channel.Expiration > 0 {
-		entry.SetExpiration(channel.Expiration)
+	if channel.Expiration > 0 || (entry.HasExpiration() && channel.Expiration == entry.Expiration) {
+		entry.SetExpirationValue(channel.Expiration)
 	} else {
 		entry.ClearExpiration()
 	}
 	if channel.HasSourceTag {
-		entry.SetSourceTag(channel.SourceTag)
+		entry.SetSourceTagValue(channel.SourceTag)
 	} else {
 		entry.ClearSourceTag()
 	}
 	if channel.HasDestTag {
-		entry.SetDestinationTag(channel.DestinationTag)
+		entry.SetDestinationTagValue(channel.DestinationTag)
 	} else {
 		entry.ClearDestinationTag()
 	}
@@ -121,12 +107,17 @@ func SerializePayChannelFromData(channel *PayChannelData) ([]byte, error) {
 		entry.ClearDestinationNode()
 	}
 	if channel.HasSequence {
-		entry.SetSequence(channel.Sequence)
+		entry.SetSequenceValue(channel.Sequence)
 	} else {
 		entry.ClearSequence()
 	}
-	entry.SetPreviousTxnIDValue(channel.PreviousTxnID)
-	entry.SetPreviousTxnLgrSeq(channel.PreviousTxnLgrSeq)
+	if channel.PreviousTxnID != ([32]byte{}) {
+		entry.SetPreviousTxnIDValue(channel.PreviousTxnID)
+		entry.SetPreviousTxnLgrSeqValue(channel.PreviousTxnLgrSeq)
+	} else {
+		entry.SetPreviousTxnIDValue([32]byte{})
+		entry.SetPreviousTxnLgrSeqValue(0)
+	}
 
 	return entry.Encode()
 }
@@ -137,35 +128,22 @@ func ParsePayChannel(data []byte) (*PayChannelData, error) {
 	if err := entry.Decode(data); err != nil {
 		return nil, err
 	}
-	publicKey, err := entry.GetPublicKey()
-	if err != nil {
-		return nil, err
-	}
+	var err error
 	channel := &PayChannelData{
 		SettleDelay:       entry.SettleDelay,
-		PublicKey:         strings.ToLower(hex.EncodeToString(publicKey)),
+		PublicKey:         strings.ToLower(entry.PublicKey),
 		Expiration:        entry.Expiration,
 		CancelAfter:       entry.CancelAfter,
 		Sequence:          entry.Sequence,
 		PreviousTxnLgrSeq: entry.PreviousTxnLgrSeq,
-		HasExpiration:     entry.HasExpiration(),
-		HasCancelAfter:    entry.HasCancelAfter(),
 		HasSourceTag:      entry.HasSourceTag(),
 		HasDestTag:        entry.HasDestinationTag(),
 		HasDestNode:       entry.HasDestinationNode(),
 		HasSequence:       entry.HasSequence(),
-		HasSponsor:        entry.HasSponsor(),
+		SourceTag:         entry.SourceTag,
+		DestinationTag:    entry.DestinationTag,
+		Sponsor:           entry.Sponsor,
 		decoded:           *entry,
-	}
-	if channel.HasSponsor {
-		sponsor, err := entry.GetSponsor()
-		if err != nil {
-			return nil, err
-		}
-		channel.Sponsor, err = EncodeAccountID(sponsor)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	if entry.HasAccount() {

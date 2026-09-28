@@ -16,7 +16,7 @@ func DeleteOffer(view LedgerView, offerKey keylet.Keylet, offer *LedgerOffer) (b
 		return false, nil
 	}
 
-	owner, err := DecodeAccountID(offer.Account)
+	owner, err := offerOwnerAccount(offer)
 	if err != nil {
 		return false, fmt.Errorf("decode offer owner: %w", err)
 	}
@@ -52,6 +52,13 @@ func DeleteOffer(view LedgerView, offerKey keylet.Keylet, offer *LedgerOffer) (b
 		return false, err
 	}
 	return true, nil
+}
+
+func offerOwnerAccount(offer *LedgerOffer) ([20]byte, error) {
+	if offer.decoded.HasAccount() {
+		return offer.decoded.GetAccount()
+	}
+	return DecodeAccountID(offer.Account)
 }
 
 func offerAdditionalBookLinks(offer *LedgerOffer) ([]offerBookLink, error) {

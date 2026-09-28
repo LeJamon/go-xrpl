@@ -188,7 +188,7 @@ func rateMantissa(a Amount) (uint64, int) {
 // SerializeDirectoryNode serializes a DirectoryNode to binary format
 func SerializeDirectoryNode(dir *DirectoryNode, isBookDir bool) ([]byte, error) {
 	entry := dir.decoded
-	entry.SetFlags(dir.Flags)
+	entry.SetFlagsValue(dir.Flags)
 	entry.SetRootIndexValue(dir.RootIndex)
 
 	// sfIndexes is soeREQUIRED on ltDIR_NODE, so it is always serialized —
@@ -213,10 +213,20 @@ func SerializeDirectoryNode(dir *DirectoryNode, isBookDir bool) ([]byte, error) 
 	}
 
 	var zeroAccount [20]byte
-	if dir.Owner != zeroAccount || entry.HasOwner() {
+	ownerUnchanged := false
+	if entry.HasOwner() {
+		original, err := entry.GetOwner()
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode directory owner: %w", err)
+		}
+		ownerUnchanged = original == dir.Owner
+	}
+	if dir.Owner != zeroAccount || ownerUnchanged {
 		if err := entry.SetOwnerValue(dir.Owner); err != nil {
 			return nil, fmt.Errorf("failed to encode directory owner: %w", err)
 		}
+	} else {
+		entry.ClearOwner()
 	}
 
 	// Include book directory fields if they exist. These fields may exist even
@@ -231,49 +241,134 @@ func SerializeDirectoryNode(dir *DirectoryNode, isBookDir bool) ([]byte, error) 
 
 	if hasBookFields {
 		if dir.TakerPaysMPT != nil {
+			entry.ClearTakerPaysCurrency()
+			entry.ClearTakerPaysIssuer()
 			entry.SetTakerPaysMPTValue(*dir.TakerPaysMPT)
-		} else if entry.HasTakerPaysMPT() {
-			// The parsed value is already retained in entry.
 		} else {
-			if isBookDir || dir.TakerPaysCurrency != [20]byte{} || entry.HasTakerPaysCurrency() {
-				entry.SetTakerPaysCurrencyValue(dir.TakerPaysCurrency)
+			entry.ClearTakerPaysMPT()
+			paysCurrencyUnchanged := false
+			if entry.HasTakerPaysCurrency() {
+				original, err := entry.GetTakerPaysCurrency()
+				if err != nil {
+					return nil, err
+				}
+				paysCurrencyUnchanged = original == dir.TakerPaysCurrency
 			}
-			if isBookDir || dir.TakerPaysIssuer != [20]byte{} || entry.HasTakerPaysIssuer() {
+			if isBookDir || dir.TakerPaysCurrency != [20]byte{} || paysCurrencyUnchanged {
+				entry.SetTakerPaysCurrencyValue(dir.TakerPaysCurrency)
+			} else {
+				entry.ClearTakerPaysCurrency()
+			}
+			paysIssuerUnchanged := false
+			if entry.HasTakerPaysIssuer() {
+				original, err := entry.GetTakerPaysIssuer()
+				if err != nil {
+					return nil, err
+				}
+				paysIssuerUnchanged = original == dir.TakerPaysIssuer
+			}
+			if isBookDir || dir.TakerPaysIssuer != [20]byte{} || paysIssuerUnchanged {
 				entry.SetTakerPaysIssuerValue(dir.TakerPaysIssuer)
+			} else {
+				entry.ClearTakerPaysIssuer()
 			}
 		}
 		if dir.TakerGetsMPT != nil {
+			entry.ClearTakerGetsCurrency()
+			entry.ClearTakerGetsIssuer()
 			entry.SetTakerGetsMPTValue(*dir.TakerGetsMPT)
-		} else if entry.HasTakerGetsMPT() {
-			// The parsed value is already retained in entry.
 		} else {
-			if isBookDir || dir.TakerGetsCurrency != [20]byte{} || entry.HasTakerGetsCurrency() {
-				entry.SetTakerGetsCurrencyValue(dir.TakerGetsCurrency)
+			entry.ClearTakerGetsMPT()
+			getsCurrencyUnchanged := false
+			if entry.HasTakerGetsCurrency() {
+				original, err := entry.GetTakerGetsCurrency()
+				if err != nil {
+					return nil, err
+				}
+				getsCurrencyUnchanged = original == dir.TakerGetsCurrency
 			}
-			if isBookDir || dir.TakerGetsIssuer != [20]byte{} || entry.HasTakerGetsIssuer() {
+			if isBookDir || dir.TakerGetsCurrency != [20]byte{} || getsCurrencyUnchanged {
+				entry.SetTakerGetsCurrencyValue(dir.TakerGetsCurrency)
+			} else {
+				entry.ClearTakerGetsCurrency()
+			}
+			getsIssuerUnchanged := false
+			if entry.HasTakerGetsIssuer() {
+				original, err := entry.GetTakerGetsIssuer()
+				if err != nil {
+					return nil, err
+				}
+				getsIssuerUnchanged = original == dir.TakerGetsIssuer
+			}
+			if isBookDir || dir.TakerGetsIssuer != [20]byte{} || getsIssuerUnchanged {
 				entry.SetTakerGetsIssuerValue(dir.TakerGetsIssuer)
+			} else {
+				entry.ClearTakerGetsIssuer()
 			}
 		}
-		if dir.ExchangeRate != 0 || entry.HasExchangeRate() {
+		exchangeRateUnchanged := false
+		if entry.HasExchangeRate() {
+			original, err := entry.GetExchangeRate()
+			if err != nil {
+				return nil, err
+			}
+			exchangeRateUnchanged = original == dir.ExchangeRate
+		}
+		if dir.ExchangeRate != 0 || exchangeRateUnchanged {
 			entry.SetExchangeRateValue(dir.ExchangeRate)
+		} else {
+			entry.ClearExchangeRate()
 		}
 	}
 
 	var zeroHash [32]byte
-	if dir.NFTokenID != zeroHash || entry.HasNFTokenID() {
-		entry.SetNFTokenIDValue(dir.NFTokenID)
+	nfTokenIDUnchanged := false
+	if entry.HasNFTokenID() {
+		original, err := entry.GetNFTokenID()
+		if err != nil {
+			return nil, err
+		}
+		nfTokenIDUnchanged = original == dir.NFTokenID
 	}
-	if dir.DomainID != zeroHash || entry.HasDomainID() {
+	if dir.NFTokenID != zeroHash || nfTokenIDUnchanged {
+		entry.SetNFTokenIDValue(dir.NFTokenID)
+	} else {
+		entry.ClearNFTokenID()
+	}
+	domainIDUnchanged := false
+	if entry.HasDomainID() {
+		original, err := entry.GetDomainID()
+		if err != nil {
+			return nil, err
+		}
+		domainIDUnchanged = original == dir.DomainID
+	}
+	if dir.DomainID != zeroHash || domainIDUnchanged {
 		entry.SetDomainIDValue(dir.DomainID)
+	} else {
+		entry.ClearDomainID()
 	}
 
 	// Preserve threading fields across the round-trip. PreviousTxnLgrSeq is
 	// meaningful alongside PreviousTxnID, so gate both on the id.
-	if dir.PreviousTxnID != zeroHash || entry.HasPreviousTxnID() {
-		entry.SetPreviousTxnIDValue(dir.PreviousTxnID)
+	previousTxnIDUnchanged := false
+	if entry.HasPreviousTxnID() {
+		original, err := entry.GetPreviousTxnID()
+		if err != nil {
+			return nil, err
+		}
+		previousTxnIDUnchanged = original == dir.PreviousTxnID
 	}
-	if dir.PreviousTxnLgrSeq != 0 || entry.HasPreviousTxnLgrSeq() {
-		entry.SetPreviousTxnLgrSeq(dir.PreviousTxnLgrSeq)
+	if dir.PreviousTxnID != zeroHash || previousTxnIDUnchanged {
+		entry.SetPreviousTxnIDValue(dir.PreviousTxnID)
+	} else {
+		entry.ClearPreviousTxnID()
+	}
+	previousTxnLgrSeqUnchanged := entry.HasPreviousTxnLgrSeq() && entry.PreviousTxnLgrSeq == dir.PreviousTxnLgrSeq
+	if dir.PreviousTxnLgrSeq != 0 || previousTxnLgrSeqUnchanged {
+		entry.SetPreviousTxnLgrSeqValue(dir.PreviousTxnLgrSeq)
+	} else {
+		entry.ClearPreviousTxnLgrSeq()
 	}
 
 	return entry.Encode()

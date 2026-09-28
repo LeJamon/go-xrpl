@@ -43,10 +43,8 @@ type RippleState struct {
 	HighQualityOut    uint32
 	HasHighQualityOut bool
 
-	HighSponsor    string
-	LowSponsor     string
-	HasHighSponsor bool
-	HasLowSponsor  bool
+	HighSponsor string
+	LowSponsor  string
 
 	// PreviousTxnID is the hash of the previous transaction that modified this entry
 	PreviousTxnID [32]byte
@@ -147,8 +145,6 @@ func ParseRippleState(data []byte) (*RippleState, error) {
 		HasLowQualityOut:  decoded.HasLowQualityOut(),
 		HasHighQualityIn:  decoded.HasHighQualityIn(),
 		HasHighQualityOut: decoded.HasHighQualityOut(),
-		HasHighSponsor:    decoded.HasHighSponsor(),
-		HasLowSponsor:     decoded.HasLowSponsor(),
 		decoded:           decoded,
 		binaryBadCurrency: badCurrencyAmounts == 3,
 	}
@@ -164,25 +160,11 @@ func ParseRippleState(data []byte) (*RippleState, error) {
 			return nil, err
 		}
 	}
-	if rs.HasHighSponsor {
-		sponsor, err := decoded.GetHighSponsor()
-		if err != nil {
-			return nil, err
-		}
-		rs.HighSponsor, err = EncodeAccountID(sponsor)
-		if err != nil {
-			return nil, err
-		}
+	if decoded.HasHighSponsor() {
+		rs.HighSponsor = decoded.HighSponsor
 	}
-	if rs.HasLowSponsor {
-		sponsor, err := decoded.GetLowSponsor()
-		if err != nil {
-			return nil, err
-		}
-		rs.LowSponsor, err = EncodeAccountID(sponsor)
-		if err != nil {
-			return nil, err
-		}
+	if decoded.HasLowSponsor() {
+		rs.LowSponsor = decoded.LowSponsor
 	}
 	if decoded.HasPreviousTxnID() {
 		rs.PreviousTxnID, err = decoded.GetPreviousTxnID()
@@ -273,7 +255,7 @@ func SerializeRippleState(rs *RippleState) ([]byte, error) {
 	}
 
 	entry := rs.decoded
-	entry.SetFlags(rs.Flags)
+	entry.SetFlagsValue(rs.Flags)
 	if err := entry.SetBalanceValue(serializeAmountValue(rs.Balance, encodedCurrency, true)); err != nil {
 		return nil, err
 	}
@@ -294,55 +276,53 @@ func SerializeRippleState(rs *RippleState) ([]byte, error) {
 		entry.ClearHighNode()
 	}
 	if rs.HasLowQualityIn || rs.LowQualityIn != 0 {
-		entry.SetLowQualityIn(rs.LowQualityIn)
+		entry.SetLowQualityInValue(rs.LowQualityIn)
 	} else {
 		entry.ClearLowQualityIn()
 	}
 	if rs.HasLowQualityOut || rs.LowQualityOut != 0 {
-		entry.SetLowQualityOut(rs.LowQualityOut)
+		entry.SetLowQualityOutValue(rs.LowQualityOut)
 	} else {
 		entry.ClearLowQualityOut()
 	}
 	if rs.HasHighQualityIn || rs.HighQualityIn != 0 {
-		entry.SetHighQualityIn(rs.HighQualityIn)
+		entry.SetHighQualityInValue(rs.HighQualityIn)
 	} else {
 		entry.ClearHighQualityIn()
 	}
 	if rs.HasHighQualityOut || rs.HighQualityOut != 0 {
-		entry.SetHighQualityOut(rs.HighQualityOut)
+		entry.SetHighQualityOutValue(rs.HighQualityOut)
 	} else {
 		entry.ClearHighQualityOut()
 	}
-	if rs.HasHighSponsor || rs.HighSponsor != "" {
-		sponsor, err := DecodeAccountID(rs.HighSponsor)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode RippleState.HighSponsor: %w", err)
-		}
-		if err := entry.SetHighSponsorValue(sponsor); err != nil {
-			return nil, fmt.Errorf("failed to encode RippleState.HighSponsor: %w", err)
-		}
+	if rs.HighSponsor != "" || (entry.HasHighSponsor() && rs.HighSponsor == entry.HighSponsor) {
+		entry.SetHighSponsor(rs.HighSponsor)
 	} else {
 		entry.ClearHighSponsor()
 	}
-	if rs.HasLowSponsor || rs.LowSponsor != "" {
-		sponsor, err := DecodeAccountID(rs.LowSponsor)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode RippleState.LowSponsor: %w", err)
-		}
-		if err := entry.SetLowSponsorValue(sponsor); err != nil {
-			return nil, fmt.Errorf("failed to encode RippleState.LowSponsor: %w", err)
-		}
+	if rs.LowSponsor != "" || (entry.HasLowSponsor() && rs.LowSponsor == entry.LowSponsor) {
+		entry.SetLowSponsor(rs.LowSponsor)
 	} else {
 		entry.ClearLowSponsor()
 	}
 
-	if rs.PreviousTxnID != [32]byte{} || entry.HasPreviousTxnID() {
-		entry.SetPreviousTxnIDValue(rs.PreviousTxnID)
+	originalPreviousTxnID := [32]byte{}
+	if entry.HasPreviousTxnID() {
+		var err error
+		originalPreviousTxnID, err = entry.GetPreviousTxnID()
+		if err != nil {
+			return nil, err
+		}
 	}
-	if rs.PreviousTxnLgrSeq != 0 || entry.HasPreviousTxnLgrSeq() {
-		entry.SetPreviousTxnLgrSeq(rs.PreviousTxnLgrSeq)
+	if rs.PreviousTxnID != [32]byte{} || (entry.HasPreviousTxnID() && rs.PreviousTxnID == originalPreviousTxnID) {
+		entry.SetPreviousTxnIDValue(rs.PreviousTxnID)
 	} else {
-		entry.ClearPreviousTxnLgrSeq()
+		entry.SetPreviousTxnIDValue([32]byte{})
+	}
+	if rs.PreviousTxnLgrSeq != 0 || (entry.HasPreviousTxnLgrSeq() && rs.PreviousTxnLgrSeq == entry.PreviousTxnLgrSeq) {
+		entry.SetPreviousTxnLgrSeqValue(rs.PreviousTxnLgrSeq)
+	} else {
+		entry.SetPreviousTxnLgrSeqValue(0)
 	}
 
 	data, err := entry.Encode()

@@ -29,7 +29,7 @@ func SerializeEscrow(ownerID, destID [20]byte, amount Amount, transferRate uint3
 		return nil, err
 	}
 	entry.SetOwnerNodeValue(ownerNode)
-	entry.SetFlags(0)
+	entry.SetFlagsValue(0)
 
 	if hasDestNode {
 		entry.SetDestinationNodeValue(destNode)
@@ -38,25 +38,25 @@ func SerializeEscrow(ownerID, destID [20]byte, amount Amount, transferRate uint3
 		entry.SetIssuerNodeValue(issuerNode)
 	}
 	if finishAfter != nil {
-		entry.SetFinishAfter(*finishAfter)
+		entry.SetFinishAfterValue(*finishAfter)
 	}
 	if cancelAfter != nil {
-		entry.SetCancelAfter(*cancelAfter)
+		entry.SetCancelAfterValue(*cancelAfter)
 	}
 	if condition != "" {
 		entry.SetCondition(condition)
 	}
 	if sourceTag != nil {
-		entry.SetSourceTag(*sourceTag)
+		entry.SetSourceTagValue(*sourceTag)
 	}
 	if destinationTag != nil {
-		entry.SetDestinationTag(*destinationTag)
+		entry.SetDestinationTagValue(*destinationTag)
 	}
 	if transferRate > 0 && transferRate != 1_000_000_000 {
-		entry.SetTransferRate(transferRate)
+		entry.SetTransferRateValue(transferRate)
 	}
 	if sequence != nil {
-		entry.SetSequence(*sequence)
+		entry.SetSequenceValue(*sequence)
 	}
 
 	return entry.Encode()
@@ -94,23 +94,50 @@ func ParseEscrow(data []byte) (*EscrowData, error) {
 	if err := entry.Decode(data); err != nil {
 		return nil, err
 	}
-	condition, err := entry.GetCondition()
-	if err != nil {
-		return nil, err
-	}
+	var err error
 	escrow := &EscrowData{
-		Condition:       strings.ToLower(fmt.Sprintf("%X", condition)),
-		CancelAfter:     entry.CancelAfter,
-		FinishAfter:     entry.FinishAfter,
-		SourceTag:       entry.SourceTag,
+		Condition:       strings.ToLower(entry.Condition),
 		HasSourceTag:    entry.HasSourceTag(),
-		DestinationTag:  entry.DestinationTag,
 		HasDestTag:      entry.HasDestinationTag(),
 		HasDestNode:     entry.HasDestinationNode(),
 		HasIssuerNode:   entry.HasIssuerNode(),
-		TransferRate:    entry.TransferRate,
 		HasTransferRate: entry.HasTransferRate(),
-		Flags:           entry.Flags,
+	}
+	if entry.HasFlags() {
+		escrow.Flags, err = entry.GetFlags()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if entry.HasCancelAfter() {
+		escrow.CancelAfter, err = entry.GetCancelAfter()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if entry.HasFinishAfter() {
+		escrow.FinishAfter, err = entry.GetFinishAfter()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if escrow.HasSourceTag {
+		escrow.SourceTag, err = entry.GetSourceTag()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if escrow.HasDestTag {
+		escrow.DestinationTag, err = entry.GetDestinationTag()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if escrow.HasTransferRate {
+		escrow.TransferRate, err = entry.GetTransferRate()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if entry.HasAccount() {

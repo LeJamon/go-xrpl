@@ -1,7 +1,7 @@
 package state
 
 import (
-	"encoding/hex"
+	"bytes"
 	"fmt"
 	"strings"
 
@@ -68,18 +68,24 @@ func ParseMPTokenIssuance(data []byte) (*MPTokenIssuanceData, error) {
 		return nil, err
 	}
 	issuance := &MPTokenIssuanceData{
-		Flags:   decoded.Flags,
 		decoded: decoded,
 	}
+	var err error
+	issuance.Flags, err = decoded.GetFlags()
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode MPTokenIssuance.Flags: %w", err)
+	}
 	if decoded.HasIssuer() {
-		var err error
 		issuance.Issuer, err = decoded.GetIssuer()
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode MPTokenIssuance.Issuer: %w", err)
 		}
 	}
 	if decoded.HasSequence() {
-		issuance.Sequence = decoded.Sequence
+		issuance.Sequence, err = decoded.GetSequence()
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode MPTokenIssuance.Sequence: %w", err)
+		}
 	}
 	if decoded.HasTransferFee() {
 		transferFee, err := decoded.GetTransferFee()
@@ -124,30 +130,21 @@ func ParseMPTokenIssuance(data []byte) (*MPTokenIssuanceData, error) {
 		issuance.LockedAmount = &value
 	}
 	if decoded.HasMPTokenMetadata() {
-		value, err := decoded.GetMPTokenMetadata()
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode MPTokenIssuance.MPTokenMetadata: %w", err)
-		}
-		issuance.MPTokenMetadata = strings.ToLower(hex.EncodeToString(value))
+		issuance.MPTokenMetadata = strings.ToLower(decoded.MPTokenMetadata)
 	}
 	if decoded.HasDomainID() {
-		value, err := decoded.GetDomainID()
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode MPTokenIssuance.DomainID: %w", err)
-		}
-		encoded := strings.ToLower(hex.EncodeToString(value[:]))
-		issuance.DomainID = &encoded
+		value := strings.ToLower(decoded.DomainID)
+		issuance.DomainID = &value
 	}
 	if decoded.HasReferenceHolding() {
-		value, err := decoded.GetReferenceHolding()
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode MPTokenIssuance.ReferenceHolding: %w", err)
-		}
-		encoded := strings.ToLower(hex.EncodeToString(value[:]))
-		issuance.ReferenceHolding = &encoded
+		value := strings.ToLower(decoded.ReferenceHolding)
+		issuance.ReferenceHolding = &value
 	}
 	if decoded.HasImmutableFlags() {
-		issuance.ImmutableFlags = decoded.ImmutableFlags
+		issuance.ImmutableFlags, err = decoded.GetImmutableFlags()
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode MPTokenIssuance.ImmutableFlags: %w", err)
+		}
 	}
 	if decoded.HasIssuerEncryptionKey() {
 		value, err := decoded.GetIssuerEncryptionKey()
@@ -171,14 +168,7 @@ func ParseMPTokenIssuance(data []byte) (*MPTokenIssuanceData, error) {
 		}
 	}
 	if decoded.HasSponsor() {
-		value, err := decoded.GetSponsor()
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode MPTokenIssuance.Sponsor: %w", err)
-		}
-		issuance.Sponsor, err = EncodeAccountID(value)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode MPTokenIssuance.Sponsor: %w", err)
-		}
+		issuance.Sponsor = decoded.Sponsor
 	}
 	if decoded.HasPreviousTxnID() {
 		var err error
@@ -188,7 +178,10 @@ func ParseMPTokenIssuance(data []byte) (*MPTokenIssuanceData, error) {
 		}
 	}
 	if decoded.HasPreviousTxnLgrSeq() {
-		issuance.PreviousTxnLgrSeq = decoded.PreviousTxnLgrSeq
+		issuance.PreviousTxnLgrSeq, err = decoded.GetPreviousTxnLgrSeq()
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode MPTokenIssuance.PreviousTxnLgrSeq: %w", err)
+		}
 	}
 
 	return issuance, nil
@@ -197,97 +190,79 @@ func ParseMPTokenIssuance(data []byte) (*MPTokenIssuanceData, error) {
 // SerializeMPTokenIssuance serializes an MPTokenIssuance to binary format.
 func SerializeMPTokenIssuance(issuance *MPTokenIssuanceData) ([]byte, error) {
 	entry := issuance.decoded
-	var zeroIssuer [20]byte
-	if issuance.Issuer != zeroIssuer || !entry.HasIssuer() {
+	issuerUnchanged := false
+	if entry.HasIssuer() {
+		original, err := entry.GetIssuer()
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode MPTokenIssuance.Issuer: %w", err)
+		}
+		issuerUnchanged = original == issuance.Issuer
+	}
+	if !entry.HasIssuer() || !issuerUnchanged {
 		if err := entry.SetIssuerValue(issuance.Issuer); err != nil {
 			return nil, fmt.Errorf("failed to encode MPTokenIssuance.Issuer: %w", err)
 		}
 	}
-	entry.SetSequence(issuance.Sequence)
-	entry.SetFlags(issuance.Flags)
+	entry.SetSequenceValue(issuance.Sequence)
+	entry.SetFlagsValue(issuance.Flags)
 	entry.SetOwnerNodeValue(issuance.OwnerNode)
 	entry.SetOutstandingAmountValue(issuance.OutstandingAmount)
-	if issuance.TransferFee != 0 || !entry.HasTransferFee() {
-		entry.SetTransferFee(issuance.TransferFee)
-	}
-	if issuance.AssetScale != 0 || !entry.HasAssetScale() {
-		entry.SetAssetScale(issuance.AssetScale)
-	}
+	entry.SetTransferFeeValue(issuance.TransferFee)
+	entry.SetAssetScale(issuance.AssetScale)
 	if issuance.MaximumAmount != nil {
 		entry.SetMaximumAmountValue(*issuance.MaximumAmount)
-	} else if !entry.HasMaximumAmount() {
+	} else {
 		entry.ClearMaximumAmount()
 	}
 	if issuance.LockedAmount != nil {
 		entry.SetLockedAmountValue(*issuance.LockedAmount)
-	} else if !entry.HasLockedAmount() {
+	} else {
 		entry.ClearLockedAmount()
 	}
-	if issuance.MPTokenMetadata != "" {
-		value, err := decodeMPTModelHex(issuance.MPTokenMetadata, "MPTokenIssuance.MPTokenMetadata", 0)
-		if err != nil {
-			return nil, err
-		}
-		entry.SetMPTokenMetadataValue(value)
-	} else if !entry.HasMPTokenMetadata() {
+	if issuance.MPTokenMetadata != "" || (entry.HasMPTokenMetadata() && strings.EqualFold(issuance.MPTokenMetadata, entry.MPTokenMetadata)) {
+		entry.SetMPTokenMetadata(issuance.MPTokenMetadata)
+	} else {
 		entry.ClearMPTokenMetadata()
 	}
-	if issuance.DomainID != nil {
-		value, err := decodeMPTModelHex(*issuance.DomainID, "MPTokenIssuance.DomainID", 32)
-		if err != nil {
-			return nil, err
-		}
-		var id [32]byte
-		copy(id[:], value)
-		entry.SetDomainIDValue(id)
-	} else if !entry.HasDomainID() {
+	if issuance.DomainID != nil && (*issuance.DomainID != "" || strings.EqualFold(*issuance.DomainID, entry.DomainID)) {
+		entry.SetDomainID(*issuance.DomainID)
+	} else {
 		entry.ClearDomainID()
 	}
-	if issuance.ReferenceHolding != nil {
-		value, err := decodeMPTModelHex(*issuance.ReferenceHolding, "MPTokenIssuance.ReferenceHolding", 32)
-		if err != nil {
-			return nil, err
-		}
-		var id [32]byte
-		copy(id[:], value)
-		entry.SetReferenceHoldingValue(id)
-	} else if !entry.HasReferenceHolding() {
+	if issuance.ReferenceHolding != nil && (*issuance.ReferenceHolding != "" || strings.EqualFold(*issuance.ReferenceHolding, entry.ReferenceHolding)) {
+		entry.SetReferenceHolding(*issuance.ReferenceHolding)
+	} else {
 		entry.ClearReferenceHolding()
 	}
-	if issuance.ImmutableFlags != 0 || !entry.HasImmutableFlags() {
-		entry.SetImmutableFlags(issuance.ImmutableFlags)
+	entry.SetImmutableFlagsValue(issuance.ImmutableFlags)
+	if err := setOptionalMPTokenBlob(
+		"MPTokenIssuance.IssuerEncryptionKey",
+		issuance.IssuerEncryptionKey,
+		entry.HasIssuerEncryptionKey,
+		entry.GetIssuerEncryptionKey,
+		entry.SetIssuerEncryptionKeyValue,
+		entry.ClearIssuerEncryptionKey,
+	); err != nil {
+		return nil, err
 	}
-	if len(issuance.IssuerEncryptionKey) != 0 {
-		entry.SetIssuerEncryptionKeyValue(issuance.IssuerEncryptionKey)
-	} else if !entry.HasIssuerEncryptionKey() {
-		entry.ClearIssuerEncryptionKey()
+	if err := setOptionalMPTokenBlob(
+		"MPTokenIssuance.AuditorEncryptionKey",
+		issuance.AuditorEncryptionKey,
+		entry.HasAuditorEncryptionKey,
+		entry.GetAuditorEncryptionKey,
+		entry.SetAuditorEncryptionKeyValue,
+		entry.ClearAuditorEncryptionKey,
+	); err != nil {
+		return nil, err
 	}
-	if len(issuance.AuditorEncryptionKey) != 0 {
-		entry.SetAuditorEncryptionKeyValue(issuance.AuditorEncryptionKey)
-	} else if !entry.HasAuditorEncryptionKey() {
-		entry.ClearAuditorEncryptionKey()
-	}
-	if issuance.ConfidentialOutstandingAmount != 0 || !entry.HasConfidentialOutstandingAmount() {
-		entry.SetConfidentialOutstandingAmountValue(issuance.ConfidentialOutstandingAmount)
-	}
-	if issuance.Sponsor != "" {
-		sponsor, err := DecodeAccountID(issuance.Sponsor)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode MPTokenIssuance.Sponsor: %w", err)
-		}
-		if err := entry.SetSponsorValue(sponsor); err != nil {
-			return nil, fmt.Errorf("failed to encode MPTokenIssuance.Sponsor: %w", err)
-		}
-	} else if !entry.HasSponsor() {
+	entry.SetConfidentialOutstandingAmountValue(issuance.ConfidentialOutstandingAmount)
+	if issuance.Sponsor != "" || (entry.HasSponsor() && issuance.Sponsor == entry.Sponsor) {
+		entry.SetSponsor(issuance.Sponsor)
+	} else {
 		entry.ClearSponsor()
 	}
-	var zeroHash [32]byte
-	if issuance.PreviousTxnID != zeroHash {
-		entry.SetPreviousTxnIDValue(issuance.PreviousTxnID)
-	}
-	if issuance.PreviousTxnLgrSeq != 0 {
-		entry.SetPreviousTxnLgrSeq(issuance.PreviousTxnLgrSeq)
-	}
+	entry.SetPreviousTxnIDValue(issuance.PreviousTxnID)
+	entry.SetPreviousTxnLgrSeqValue(issuance.PreviousTxnLgrSeq)
 
 	return entry.Encode()
 }
@@ -299,11 +274,14 @@ func ParseMPToken(data []byte) (*MPTokenData, error) {
 		return nil, err
 	}
 	token := &MPTokenData{
-		Flags:   decoded.Flags,
 		decoded: decoded,
 	}
+	var err error
+	token.Flags, err = decoded.GetFlags()
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode MPToken.Flags: %w", err)
+	}
 	if decoded.HasAccount() {
-		var err error
 		token.Account, err = decoded.GetAccount()
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode MPToken.Account: %w", err)
@@ -338,14 +316,7 @@ func ParseMPToken(data []byte) (*MPTokenData, error) {
 		token.LockedAmount = &value
 	}
 	if decoded.HasSponsor() {
-		value, err := decoded.GetSponsor()
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode MPToken.Sponsor: %w", err)
-		}
-		token.Sponsor, err = EncodeAccountID(value)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode MPToken.Sponsor: %w", err)
-		}
+		token.Sponsor = decoded.Sponsor
 	}
 	if decoded.HasConfidentialBalanceInbox() {
 		var err error
@@ -364,7 +335,10 @@ func ParseMPToken(data []byte) (*MPTokenData, error) {
 		token.ConfidentialBalanceSpending = append([]byte(nil), token.ConfidentialBalanceSpending...)
 	}
 	if decoded.HasConfidentialBalanceVersion() {
-		token.ConfidentialBalanceVersion = decoded.ConfidentialBalanceVersion
+		token.ConfidentialBalanceVersion, err = decoded.GetConfidentialBalanceVersion()
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode MPToken.ConfidentialBalanceVersion: %w", err)
+		}
 	}
 	if decoded.HasIssuerEncryptedBalance() {
 		var err error
@@ -398,7 +372,10 @@ func ParseMPToken(data []byte) (*MPTokenData, error) {
 		}
 	}
 	if decoded.HasPreviousTxnLgrSeq() {
-		token.PreviousTxnLgrSeq = decoded.PreviousTxnLgrSeq
+		token.PreviousTxnLgrSeq, err = decoded.GetPreviousTxnLgrSeq()
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode MPToken.PreviousTxnLgrSeq: %w", err)
+		}
 	}
 
 	return token, nil
@@ -407,77 +384,105 @@ func ParseMPToken(data []byte) (*MPTokenData, error) {
 // SerializeMPToken serializes an MPToken to binary format.
 func SerializeMPToken(token *MPTokenData) ([]byte, error) {
 	entry := token.decoded
-	var zeroAccount [20]byte
-	if token.Account != zeroAccount || !entry.HasAccount() {
+	accountUnchanged := false
+	if entry.HasAccount() {
+		original, err := entry.GetAccount()
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode MPToken.Account: %w", err)
+		}
+		accountUnchanged = original == token.Account
+	}
+	if !entry.HasAccount() || !accountUnchanged {
 		if err := entry.SetAccountValue(token.Account); err != nil {
 			return nil, fmt.Errorf("failed to encode MPToken.Account: %w", err)
 		}
 	}
-	entry.SetFlags(token.Flags)
+	entry.SetFlagsValue(token.Flags)
 	entry.SetMPTokenIssuanceIDValue(token.MPTokenIssuanceID)
 	entry.SetOwnerNodeValue(token.OwnerNode)
 	entry.SetMPTAmountValue(token.MPTAmount)
 	if token.LockedAmount != nil {
 		entry.SetLockedAmountValue(*token.LockedAmount)
-	} else if !entry.HasLockedAmount() {
+	} else {
 		entry.ClearLockedAmount()
 	}
-	if token.Sponsor != "" {
-		sponsor, err := DecodeAccountID(token.Sponsor)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode MPToken.Sponsor: %w", err)
-		}
-		if err := entry.SetSponsorValue(sponsor); err != nil {
-			return nil, fmt.Errorf("failed to encode MPToken.Sponsor: %w", err)
-		}
-	} else if !entry.HasSponsor() {
+	if token.Sponsor != "" || (entry.HasSponsor() && token.Sponsor == entry.Sponsor) {
+		entry.SetSponsor(token.Sponsor)
+	} else {
 		entry.ClearSponsor()
 	}
-	if len(token.ConfidentialBalanceInbox) != 0 {
-		entry.SetConfidentialBalanceInboxValue(token.ConfidentialBalanceInbox)
-	} else if !entry.HasConfidentialBalanceInbox() {
-		entry.ClearConfidentialBalanceInbox()
+	if err := setOptionalMPTokenBlob(
+		"MPToken.ConfidentialBalanceInbox",
+		token.ConfidentialBalanceInbox,
+		entry.HasConfidentialBalanceInbox,
+		entry.GetConfidentialBalanceInbox,
+		entry.SetConfidentialBalanceInboxValue,
+		entry.ClearConfidentialBalanceInbox,
+	); err != nil {
+		return nil, err
 	}
-	if len(token.ConfidentialBalanceSpending) != 0 {
-		entry.SetConfidentialBalanceSpendingValue(token.ConfidentialBalanceSpending)
-	} else if !entry.HasConfidentialBalanceSpending() {
-		entry.ClearConfidentialBalanceSpending()
+	if err := setOptionalMPTokenBlob(
+		"MPToken.ConfidentialBalanceSpending",
+		token.ConfidentialBalanceSpending,
+		entry.HasConfidentialBalanceSpending,
+		entry.GetConfidentialBalanceSpending,
+		entry.SetConfidentialBalanceSpendingValue,
+		entry.ClearConfidentialBalanceSpending,
+	); err != nil {
+		return nil, err
 	}
-	if token.ConfidentialBalanceVersion != 0 || !entry.HasConfidentialBalanceVersion() {
-		entry.SetConfidentialBalanceVersion(token.ConfidentialBalanceVersion)
+	entry.SetConfidentialBalanceVersionValue(token.ConfidentialBalanceVersion)
+	if err := setOptionalMPTokenBlob(
+		"MPToken.IssuerEncryptedBalance",
+		token.IssuerEncryptedBalance,
+		entry.HasIssuerEncryptedBalance,
+		entry.GetIssuerEncryptedBalance,
+		entry.SetIssuerEncryptedBalanceValue,
+		entry.ClearIssuerEncryptedBalance,
+	); err != nil {
+		return nil, err
 	}
-	if len(token.IssuerEncryptedBalance) != 0 {
-		entry.SetIssuerEncryptedBalanceValue(token.IssuerEncryptedBalance)
-	} else if !entry.HasIssuerEncryptedBalance() {
-		entry.ClearIssuerEncryptedBalance()
+	if err := setOptionalMPTokenBlob(
+		"MPToken.AuditorEncryptedBalance",
+		token.AuditorEncryptedBalance,
+		entry.HasAuditorEncryptedBalance,
+		entry.GetAuditorEncryptedBalance,
+		entry.SetAuditorEncryptedBalanceValue,
+		entry.ClearAuditorEncryptedBalance,
+	); err != nil {
+		return nil, err
 	}
-	if len(token.AuditorEncryptedBalance) != 0 {
-		entry.SetAuditorEncryptedBalanceValue(token.AuditorEncryptedBalance)
-	} else if !entry.HasAuditorEncryptedBalance() {
-		entry.ClearAuditorEncryptedBalance()
+	if err := setOptionalMPTokenBlob(
+		"MPToken.HolderEncryptionKey",
+		token.HolderEncryptionKey,
+		entry.HasHolderEncryptionKey,
+		entry.GetHolderEncryptionKey,
+		entry.SetHolderEncryptionKeyValue,
+		entry.ClearHolderEncryptionKey,
+	); err != nil {
+		return nil, err
 	}
-	if len(token.HolderEncryptionKey) != 0 {
-		entry.SetHolderEncryptionKeyValue(token.HolderEncryptionKey)
-	} else if !entry.HasHolderEncryptionKey() {
-		entry.ClearHolderEncryptionKey()
-	}
-	if token.PreviousTxnID != ([32]byte{}) {
-		entry.SetPreviousTxnIDValue(token.PreviousTxnID)
-	}
-	if token.PreviousTxnLgrSeq != 0 {
-		entry.SetPreviousTxnLgrSeq(token.PreviousTxnLgrSeq)
-	}
+	entry.SetPreviousTxnIDValue(token.PreviousTxnID)
+	entry.SetPreviousTxnLgrSeqValue(token.PreviousTxnLgrSeq)
 
 	return entry.Encode()
 }
 
-func decodeMPTModelHex(value, field string, wantLen int) ([]byte, error) {
-	decoded, err := hex.DecodeString(value)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode %s: %w", field, err)
+func setOptionalMPTokenBlob(field string, value []byte, present func() bool, get func() ([]byte, error), set func([]byte), clear func()) error {
+	if len(value) != 0 {
+		set(value)
+		return nil
 	}
-	if wantLen != 0 && len(decoded) != wantLen {
-		return nil, fmt.Errorf("failed to encode %s: got %d bytes, want %d", field, len(decoded), wantLen)
+	if present() {
+		original, err := get()
+		if err != nil {
+			return fmt.Errorf("failed to decode %s: %w", field, err)
+		}
+		if bytes.Equal(original, value) {
+			set(value)
+			return nil
+		}
 	}
-	return decoded, nil
+	clear()
+	return nil
 }
