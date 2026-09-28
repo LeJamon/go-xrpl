@@ -29,8 +29,12 @@ func TestLoanBrokerDeleteIOUMetadataTransitions(t *testing.T) {
 	cfg := genesis.DefaultConfig()
 	cfg.Fees.ReserveBase = drops.DropsPerXRP * 200
 	cfg.Fees.ReserveIncrement = drops.DropsPerXRP * 50
-	// Preserve the genesis hash used by these historical metadata vectors.
-	cfg.Amendments = append(cfg.Amendments, amendment.FeatureFixAMMOverflowOffer)
+	// Preserve the genesis amendment set used by these historical vectors.
+	cfg.Amendments = [][32]byte{
+		amendment.FeatureFixCleanup3_1_3,
+		amendment.FeatureFixRemoveNFTokenAutoTrustLine,
+		amendment.FeatureFixAMMOverflowOffer,
+	}
 	env := jtx.NewTestEnvWithConfig(t, cfg)
 	env.DisableFeature("LendingProtocolV1_1")
 	env.DisableFeature("fixCleanup3_4_0")

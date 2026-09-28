@@ -54,6 +54,38 @@ func TestDoValidatedLedger_EnablesAndBlocks(t *testing.T) {
 	}
 }
 
+func TestDoValidatedLedger_ActivationSupportBoundary(t *testing.T) {
+	feature := FeatureByName("fixBatchV1_2")
+	if feature == nil {
+		t.Fatal("fixBatchV1_2 is not registered")
+	}
+
+	tests := []struct {
+		name        string
+		id          [32]byte
+		wantBlocked bool
+	}{
+		{name: "supported fixBatchV1_2", id: feature.ID},
+		{name: "unknown amendment", id: unknownAmendment, wantBlocked: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tbl := NewTable()
+			tbl.DoValidatedLedger(256, map[[32]byte]bool{test.id: true}, nil)
+
+			if !tbl.IsEnabled(test.id) {
+				t.Fatalf("validated ledger did not enable %x", test.id)
+			}
+			if got := tbl.IsBlocked(); got != test.wantBlocked {
+				t.Fatalf("IsBlocked = %v, want %v", got, test.wantBlocked)
+			}
+			if got := tbl.HasUnsupportedEnabled(); got != test.wantBlocked {
+				t.Fatalf("HasUnsupportedEnabled = %v, want %v", got, test.wantBlocked)
+			}
+		})
+	}
+}
+
 func TestDoValidatedLedger_FirstUnsupportedExpected(t *testing.T) {
 	tbl := NewTable()
 

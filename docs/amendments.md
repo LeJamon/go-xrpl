@@ -7,7 +7,7 @@ XRPL amendments known to this node, generated from the amendment registry
 amendment's behavior; **Default vote** is whether the node votes for it by
 default (operators override via the `[amendments]` config section).
 
-Total: 111 amendments.
+Total: 112 amendments.
 
 | Amendment | Supported | Default vote |
 |-----------|-----------|--------------|
@@ -83,6 +83,7 @@ Total: 111 amendments.
 | `fixAMMv1_2` | yes | no |
 | `fixAMMv1_3` | yes | no |
 | `fixAmendmentMajorityCalc` | yes | no |
+| `fixBatchV1_2` | yes | yes |
 | `fixCheckThreading` | yes | no |
 | `fixCleanup3_1_3` | yes | yes |
 | `fixCleanup3_2_0` | yes | no |

@@ -47,3 +47,25 @@ func TestSetOperatingMode_AmendmentBlockedCapsAtConnected(t *testing.T) {
 	a.SetOperatingMode(consensus.OpModeDisconnected)
 	assert.Equal(t, consensus.OpModeDisconnected, a.GetOperatingMode())
 }
+
+func TestSetOperatingMode_SupportedFixBatchV12RemainsUnblocked(t *testing.T) {
+	feature := amendment.FeatureByName("fixBatchV1_2")
+	require.NotNil(t, feature)
+
+	tbl := amendment.NewTable()
+	svc, err := service.New(service.Config{
+		Standalone:    true,
+		GenesisConfig: genesis.DefaultConfig(),
+		Table:         tbl,
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+
+	a := New(Config{LedgerService: svc})
+	tbl.DoValidatedLedger(256, map[[32]byte]bool{feature.ID: true}, nil)
+
+	assert.False(t, a.IsAmendmentBlocked(), "supported fixBatchV1_2 activation must not block the node")
+	a.SetOperatingMode(consensus.OpModeFull)
+	assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode())
+}

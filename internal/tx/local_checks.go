@@ -9,6 +9,7 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
@@ -109,7 +110,7 @@ func batchMapLocalChecksFailureReason(fields map[string]any) string {
 	rawTransactions, _ := fields["RawTransactions"].([]any)
 	for _, raw := range rawTransactions {
 		wrapper, _ := raw.(map[string]any)
-		inner, _ := wrapper["RawTransaction"].(map[string]any)
+		_, inner := batchInnerObject(wrapper)
 		innerType, ok := transactionTypeFromCanonicalMap(inner)
 		if !ok {
 			continue
@@ -141,9 +142,12 @@ func batchMapConstructionChecksFailureReason(fields map[string]any) string {
 		if !ok {
 			continue
 		}
-		inner, ok := wrapper["RawTransaction"].(map[string]any)
-		if !ok {
+		name, inner := batchInnerObject(wrapper)
+		if inner == nil {
 			continue
+		}
+		if !binarytypes.MeetsInnerObjectTemplate(name, inner) {
+			return fmt.Sprintf("invalid inner object template for %s", name)
 		}
 		innerTypeValue, present := inner["TransactionType"]
 		if !present {

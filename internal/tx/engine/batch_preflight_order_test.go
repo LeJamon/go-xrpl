@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -12,6 +13,64 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
+
+func TestBatchWrapperPreflightOrder(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	const destination = "rN7n7otQDd6FczFgLdSqtcsAUxDkw6fzRH"
+	tests := []struct {
+		name   string
+		mutate func(*batch.Batch)
+		before ter.Result
+		after  ter.Result
+	}{
+		{"valid", func(*batch.Batch) {}, ter.TesSUCCESS, ter.TemMALFORMED},
+		{"inner fee", func(b *batch.Batch) { b.InnerTransactions()[0].GetCommon().Fee = "1" }, ter.TemBAD_FEE, ter.TemMALFORMED},
+		{"inner flag", func(b *batch.Batch) { b.InnerTransactions()[0].GetCommon().Flags = nil }, ter.TemINVALID_FLAG, ter.TemMALFORMED},
+		{"inner signature", func(b *batch.Batch) { b.InnerTransactions()[0].GetCommon().TxnSignature = "00" }, ter.TemBAD_SIGNATURE, ter.TemMALFORMED},
+		{"inner preflight", func(b *batch.Batch) { b.InnerTransactions()[0].(*payment.Payment).Amount = txcore.NewXRPAmount(0) }, ter.TemINVALID_INNER_BATCH, ter.TemMALFORMED},
+		{"duplicate", func(b *batch.Batch) {
+			b.RawTransactions[0].Wrapper = "RawTransaction"
+			b.RawTransactions[1] = b.RawTransactions[0]
+			b.RawTransactions[1].Wrapper = "CreatedNode"
+		}, ter.TemREDUNDANT, ter.TemMALFORMED},
+		{"earlier inner error", func(b *batch.Batch) {
+			b.RawTransactions[0].Wrapper = "RawTransaction"
+			b.RawTransactions[1].Wrapper = "CreatedNode"
+			b.InnerTransactions()[0].GetCommon().Fee = "1"
+		}, ter.TemBAD_FEE, ter.TemBAD_FEE},
+		{"outer mode", func(b *batch.Batch) { b.SetFlags(0) }, ter.TemINVALID_FLAG, ter.TemINVALID_FLAG},
+		{"outer fee", func(b *batch.Batch) { b.Fee = "-1" }, ter.TemBAD_FEE, ter.TemBAD_FEE},
+		{"outer count", func(b *batch.Batch) { b.RawTransactions = b.RawTransactions[:1] }, ter.TemARRAY_EMPTY, ter.TemARRAY_EMPTY},
+	}
+	for _, enabled := range []bool{false, true} {
+		for _, test := range tests {
+			t.Run(fmt.Sprintf("fix=%t/%s", enabled, test.name), func(t *testing.T) {
+				outer := batch.NewBatch(account)
+				outer.SetSequence(1)
+				outer.Fee = "40"
+				outer.SetFlags(batch.BatchFlagAllOrNothing)
+				for seq := uint32(2); seq <= 3; seq++ {
+					inner := payment.NewPayment(account, destination, txcore.NewXRPAmount(1))
+					inner.Fee = "0"
+					inner.SetSequence(seq)
+					inner.SetFlags(txcore.TfInnerBatchTxn)
+					outer.AddInnerTransaction(inner)
+				}
+				outer.RawTransactions[0].Wrapper = "CreatedNode"
+				test.mutate(outer)
+				rules := amendment.NewRulesBuilder().Enable(amendment.FeatureBatchV1_1)
+				want := test.before
+				if enabled {
+					rules.Enable(amendment.FeatureFixBatchV1_2)
+					want = test.after
+				}
+				if got := dedupEngine(rules.Build()).preflight(outer); got != want {
+					t.Fatalf("preflight = %v, want %v", got, want)
+				}
+			})
+		}
+	}
+}
 
 func TestBatchInnerPreflightPrecedesSequenceAndDuplicateChecks(t *testing.T) {
 	const (

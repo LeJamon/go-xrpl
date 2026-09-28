@@ -27,6 +27,43 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func TestRawTransactionRejectsInvalidWrapperJSON(t *testing.T) {
+	for _, data := range []string{
+		`null`, `{}`, `[]`, `{"CreatedNode": null}`,
+		`{"CreatedNode": {}, "RawTransaction": {}}`,
+		`{"Account": {}}`, `{"UnknownWrapper": {}}`, `{"ObjectEndMarker": {}}`,
+	} {
+		t.Run(data, func(t *testing.T) {
+			var raw RawTransaction
+			require.Error(t, json.Unmarshal([]byte(data), &raw))
+		})
+	}
+}
+
+func TestBatchJSONRejectsTemplatedWrappers(t *testing.T) {
+	outer := NewBatch(testOuter)
+	outer.Fee = "40"
+	outer.SetSequence(1)
+	outer.SetFlags(BatchFlagAllOrNothing)
+	outer.AddInnerTransaction(makeTestPayment())
+	outer.AddInnerTransaction(makeTestPayment())
+	for _, wrapper := range []string{"SignerEntry", "Signer", "BatchSigner", "PriceData"} {
+		t.Run(wrapper, func(t *testing.T) {
+			outer.RawTransactions[0].Wrapper = wrapper
+			fields, err := outer.Flatten()
+			require.NoError(t, err)
+			data, err := json.Marshal(fields)
+			require.NoError(t, err)
+			_, err = tx.ParseJSON(data)
+			require.ErrorContains(t, err, "invalid inner object template")
+			data, err = json.Marshal(fields["RawTransactions"].([]map[string]any)[0])
+			require.NoError(t, err)
+			var raw RawTransaction
+			require.ErrorContains(t, json.Unmarshal(data, &raw), "invalid inner object template")
+		})
+	}
+}
+
 func TestBatchBinaryRoundTripPreservesInnerTransactions(t *testing.T) {
 	outer := NewBatch(testOuter)
 	outer.Fee = "40"
@@ -78,40 +115,47 @@ func TestBatchBinaryRoundTripPreservesInnerTransactions(t *testing.T) {
 }
 
 func TestBatchNoCurrencyJSONBoundary(t *testing.T) {
-	outer := NewBatch(testOuter)
-	outer.Fee = "40"
-	outer.SetSequence(1)
-	outer.SetFlags(BatchFlagAllOrNothing)
+	for _, wrapper := range []string{"RawTransaction", "CreatedNode"} {
+		t.Run(wrapper, func(t *testing.T) {
+			outer := NewBatch(testOuter)
+			outer.Fee = "40"
+			outer.SetSequence(1)
+			outer.SetFlags(BatchFlagAllOrNothing)
 
-	sequence := uint32(2)
-	flags := tx.TfInnerBatchTxn
-	inner := trustsettx.NewTrustSet(testOuter, tx.NewIssuedAmountFromFloat64(1, "1", testSigner1))
-	inner.Fee = "0"
-	inner.Sequence = &sequence
-	inner.Flags = &flags
-	outer.AddInnerTransaction(inner)
-	outer.AddInnerTransaction(makeTestPayment())
+			sequence := uint32(2)
+			flags := tx.TfInnerBatchTxn
+			inner := trustsettx.NewTrustSet(testOuter, tx.NewIssuedAmountFromFloat64(1, "1", testSigner1))
+			inner.Fee = "0"
+			inner.Sequence = &sequence
+			inner.Flags = &flags
+			outer.AddInnerTransaction(inner)
+			outer.AddInnerTransaction(makeTestPayment())
 
-	fields, err := outer.Flatten()
-	require.NoError(t, err)
-	jsonBlob, err := json.Marshal(fields)
-	require.NoError(t, err)
-	_, err = tx.ParseJSON(jsonBlob)
-	require.Error(t, err)
-	require.ErrorContains(t, err, "currency")
+			for i := range outer.RawTransactions {
+				outer.RawTransactions[i].Wrapper = wrapper
+			}
+			fields, err := outer.Flatten()
+			require.NoError(t, err)
+			jsonBlob, err := json.Marshal(fields)
+			require.NoError(t, err)
+			_, err = tx.ParseJSON(jsonBlob)
+			require.Error(t, err)
+			require.ErrorContains(t, err, "currency")
 
-	encoded, err := binarycodec.Encode(fields)
-	require.NoError(t, err)
-	blob, err := hex.DecodeString(encoded)
-	require.NoError(t, err)
-	parsed, err := tx.ParseFromBinary(blob)
-	require.NoError(t, err)
-	parsedBatch := parsed.(*Batch)
-	parsedInner := parsedBatch.RawTransactions[0].RawTransaction.InnerTx.(*trustsettx.TrustSet)
-	require.Equal(t, "1", parsedInner.LimitAmount.Currency)
-	reencoded, err := tx.SerializeTransaction(parsed)
-	require.NoError(t, err)
-	require.Equal(t, blob, reencoded)
+			encoded, err := binarycodec.Encode(fields)
+			require.NoError(t, err)
+			blob, err := hex.DecodeString(encoded)
+			require.NoError(t, err)
+			parsed, err := tx.ParseFromBinary(blob)
+			require.NoError(t, err)
+			parsedBatch := parsed.(*Batch)
+			parsedInner := parsedBatch.RawTransactions[0].RawTransaction.InnerTx.(*trustsettx.TrustSet)
+			require.Equal(t, "1", parsedInner.LimitAmount.Currency)
+			reencoded, err := tx.SerializeTransaction(parsed)
+			require.NoError(t, err)
+			require.Equal(t, blob, reencoded)
+		})
+	}
 }
 
 func TestBatchBinaryRoundTripPreservesEmptyNestedSignature(t *testing.T) {
@@ -166,77 +210,94 @@ func TestBatchBinaryRoundTripPreservesEmptyNestedSignature(t *testing.T) {
 }
 
 func TestBatchBinaryParseRejectsStructuralAbuseBeforeInnerConstruction(t *testing.T) {
-	outer := NewBatch(testOuter)
-	outer.Fee = "40"
-	outerSequence := uint32(1)
-	outer.Sequence = &outerSequence
-	flags := BatchFlagAllOrNothing
-	outer.Flags = &flags
-	for range MaxBatchTransactions + 1 {
-		outer.AddInnerTransaction(makeTestPayment())
+	for _, wrapper := range []string{"RawTransaction", "CreatedNode"} {
+		t.Run(wrapper, func(t *testing.T) {
+			outer := NewBatch(testOuter)
+			outer.Fee = "40"
+			outerSequence := uint32(1)
+			outer.Sequence = &outerSequence
+			flags := BatchFlagAllOrNothing
+			outer.Flags = &flags
+			for range MaxBatchTransactions + 1 {
+				outer.AddInnerTransaction(makeTestPayment())
+			}
+
+			for i := range outer.RawTransactions {
+				outer.RawTransactions[i].Wrapper = wrapper
+			}
+			flat, err := outer.Flatten()
+			require.NoError(t, err)
+			encoded, err := binarycodec.Encode(flat)
+			require.NoError(t, err)
+			blob, err := hex.DecodeString(encoded)
+			require.NoError(t, err)
+			_, err = tx.ParseFromBinary(blob)
+			require.ErrorContains(t, err, "Raw Transactions array exceeds max entries")
+			jsonBlob, err := json.Marshal(flat)
+			require.NoError(t, err)
+			_, err = tx.ParseJSON(jsonBlob)
+			require.ErrorContains(t, err, "Raw Transactions array exceeds max entries")
+
+			nested := NewBatch(testOuter)
+			nested.Fee = "0"
+			nested.Sequence = &outerSequence
+			nested.Flags = &flags
+			nested.AddInnerTransaction(makeTestPayment())
+			nested.AddInnerTransaction(makeTestPayment())
+			outer = NewBatch(testOuter)
+			outer.Fee = "40"
+			outer.Sequence = &outerSequence
+			outer.Flags = &flags
+			outer.AddInnerTransaction(nested)
+			outer.AddInnerTransaction(makeTestPayment())
+			for i := range outer.RawTransactions {
+				outer.RawTransactions[i].Wrapper = wrapper
+			}
+			flat, err = outer.Flatten()
+			require.NoError(t, err)
+			encoded, err = binarycodec.Encode(flat)
+			require.NoError(t, err)
+			blob, err = hex.DecodeString(encoded)
+			require.NoError(t, err)
+			_, err = tx.ParseFromBinary(blob)
+			require.ErrorContains(t, err, "Raw Transactions may not contain batch transactions")
+			jsonBlob, err = json.Marshal(flat)
+			require.NoError(t, err)
+			_, err = tx.ParseJSON(jsonBlob)
+			require.ErrorContains(t, err, "Raw Transactions may not contain batch transactions")
+		})
 	}
-
-	flat, err := outer.Flatten()
-	require.NoError(t, err)
-	encoded, err := binarycodec.Encode(flat)
-	require.NoError(t, err)
-	blob, err := hex.DecodeString(encoded)
-	require.NoError(t, err)
-	_, err = tx.ParseFromBinary(blob)
-	require.ErrorContains(t, err, "Raw Transactions array exceeds max entries")
-	jsonBlob, err := json.Marshal(flat)
-	require.NoError(t, err)
-	_, err = tx.ParseJSON(jsonBlob)
-	require.ErrorContains(t, err, "Raw Transactions array exceeds max entries")
-
-	nested := NewBatch(testOuter)
-	nested.Fee = "0"
-	nested.Sequence = &outerSequence
-	nested.Flags = &flags
-	nested.AddInnerTransaction(makeTestPayment())
-	nested.AddInnerTransaction(makeTestPayment())
-	outer = NewBatch(testOuter)
-	outer.Fee = "40"
-	outer.Sequence = &outerSequence
-	outer.Flags = &flags
-	outer.AddInnerTransaction(nested)
-	outer.AddInnerTransaction(makeTestPayment())
-	flat, err = outer.Flatten()
-	require.NoError(t, err)
-	encoded, err = binarycodec.Encode(flat)
-	require.NoError(t, err)
-	blob, err = hex.DecodeString(encoded)
-	require.NoError(t, err)
-	_, err = tx.ParseFromBinary(blob)
-	require.ErrorContains(t, err, "Raw Transactions may not contain batch transactions")
-	jsonBlob, err = json.Marshal(flat)
-	require.NoError(t, err)
-	_, err = tx.ParseJSON(jsonBlob)
-	require.ErrorContains(t, err, "Raw Transactions may not contain batch transactions")
 }
 
 func TestBatchLocalChecksRecurseIntoBinaryInners(t *testing.T) {
-	outer := NewBatch(testOuter)
-	outer.Fee = "40"
-	outerSequence := uint32(1)
-	outer.Sequence = &outerSequence
-	flags := BatchFlagAllOrNothing
-	outer.Flags = &flags
-	inner := makeTestPayment()
-	inner.GetCommon().Memos = []tx.MemoWrapper{{Memo: tx.Memo{MemoData: strings.Repeat("AA", 1100)}}}
-	outer.AddInnerTransaction(inner)
-	outer.AddInnerTransaction(makeTestPayment())
+	for _, wrapper := range []string{"RawTransaction", "CreatedNode"} {
+		t.Run(wrapper, func(t *testing.T) {
+			outer := NewBatch(testOuter)
+			outer.Fee = "40"
+			outerSequence := uint32(1)
+			outer.Sequence = &outerSequence
+			flags := BatchFlagAllOrNothing
+			outer.Flags = &flags
+			inner := makeTestPayment()
+			inner.GetCommon().Memos = []tx.MemoWrapper{{Memo: tx.Memo{MemoData: strings.Repeat("AA", 1100)}}}
+			outer.AddInnerTransaction(inner)
+			outer.AddInnerTransaction(makeTestPayment())
 
-	flat, err := outer.Flatten()
-	require.NoError(t, err)
-	encoded, err := binarycodec.Encode(flat)
-	require.NoError(t, err)
-	blob, err := hex.DecodeString(encoded)
-	require.NoError(t, err)
-	parsed, err := tx.ParseFromBinary(blob)
-	require.NoError(t, err)
-	require.Equal(t, ter.TemMALFORMED, tx.PassesTransactionLocalChecks(parsed))
-	require.Contains(t, tx.TransactionLocalChecksFailureReason(parsed), "memo exceeds")
+			for i := range outer.RawTransactions {
+				outer.RawTransactions[i].Wrapper = wrapper
+			}
+			flat, err := outer.Flatten()
+			require.NoError(t, err)
+			encoded, err := binarycodec.Encode(flat)
+			require.NoError(t, err)
+			blob, err := hex.DecodeString(encoded)
+			require.NoError(t, err)
+			parsed, err := tx.ParseFromBinary(blob)
+			require.NoError(t, err)
+			require.Equal(t, ter.TemMALFORMED, tx.PassesTransactionLocalChecks(parsed))
+			require.Contains(t, tx.TransactionLocalChecksFailureReason(parsed), "memo exceeds")
+		})
+	}
 }
 
 func TestBatchBinaryRoundTripPreservesTicketedInnerSequence(t *testing.T) {
@@ -682,7 +743,7 @@ func TestBatchFlatten(t *testing.T) {
 		)})
 
 		_, err := b.Flatten()
-		require.EqualError(t, err, "temMALFORMED: invalid inner transaction 0: Field 'MPTokenIssuanceID' found in disallowed location.")
+		require.EqualError(t, err, "failed to flatten inner tx 0: temMALFORMED: invalid inner transaction: Field 'MPTokenIssuanceID' found in disallowed location.")
 	})
 }
 

@@ -126,7 +126,7 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 		return result
 	}
 	if outer, ok := tx.(txcore.BatchInnerPreflightRunner); ok {
-		if err := outer.PreflightInnerTransactions(e.preflightInner); err != nil {
+		if err := outer.PreflightInnerTransactions(rules, e.preflightInner); err != nil {
 			return parseValidationError(err)
 		}
 	}
