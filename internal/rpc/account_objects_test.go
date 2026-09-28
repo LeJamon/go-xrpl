@@ -593,6 +593,25 @@ func TestAccountObjectsSponsoredFilter(t *testing.T) {
 	const sponsor = "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
 
 	encode := func(fields map[string]any) []byte {
+		fields["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+		fields["PreviousTxnLgrSeq"] = uint32(0)
+		switch fields["LedgerEntryType"] {
+		case "Check":
+			fields["Account"], fields["Destination"] = account, sponsor
+			fields["Sequence"], fields["SendMax"] = uint32(1), "1000"
+			fields["OwnerNode"], fields["DestinationNode"] = "0", "0"
+		case "RippleState":
+			fields["Balance"] = map[string]any{"value": "0", "currency": "USD", "issuer": "rrrrrrrrrrrrrrrrrrrrBZbvji"}
+			fields["LowLimit"] = map[string]any{"value": "0", "currency": "USD", "issuer": account}
+			fields["HighLimit"] = map[string]any{"value": "0", "currency": "USD", "issuer": sponsor}
+		case "Offer":
+			fields["Account"], fields["Sequence"] = account, uint32(1)
+			fields["TakerPays"], fields["TakerGets"] = "1", "2"
+			fields["BookNode"], fields["OwnerNode"] = "0", "0"
+			fields["BookDirectory"] = "0000000000000000000000000000000000000000000000000000000000000000"
+		case "NFTokenPage":
+			fields["NFTokens"] = []any{}
+		}
 		serialized, err := binarycodec.Encode(fields)
 		require.NoError(t, err)
 		data, err := hex.DecodeString(serialized)

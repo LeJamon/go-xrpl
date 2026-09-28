@@ -449,7 +449,7 @@ func TestNestedAccountAddressAccessorsPreserveEmptyValues(t *testing.T) {
 		t.Fatalf("GetAccountAddress = %q, %v; want %q", got, err, account)
 	}
 
-	var empty AuctionSlotValue
+	var empty AuthAccountValue
 	if err := empty.SetAccountAddress(""); err != nil {
 		t.Fatalf("SetAccountAddress(empty): %v", err)
 	}

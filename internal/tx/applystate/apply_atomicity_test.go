@@ -115,12 +115,14 @@ func encodeApplyTestEntry(t *testing.T, fields map[string]any) []byte {
 
 func applyTestAccountRootFields() map[string]any {
 	return map[string]any{
-		"LedgerEntryType": "AccountRoot",
-		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-		"Balance":         "1000000",
-		"Sequence":        uint32(1),
-		"OwnerCount":      uint32(0),
-		"Flags":           uint32(0),
+		"LedgerEntryType":   "AccountRoot",
+		"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
+		"PreviousTxnLgrSeq": uint32(0),
+		"Account":           "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Balance":           "1000000",
+		"Sequence":          uint32(1),
+		"OwnerCount":        uint32(0),
+		"Flags":             uint32(0),
 	}
 }
 
@@ -409,15 +411,17 @@ func TestApplyThreadsTrackedItemsInKeyOrder(t *testing.T) {
 			t.Fatalf("encode account %d: %v", i, err)
 		}
 		entry := encodeApplyTestEntry(t, map[string]any{
-			"LedgerEntryType": "Offer",
-			"Account":         account,
-			"Sequence":        uint32(i),
-			"TakerPays":       "1",
-			"TakerGets":       "1",
-			"BookDirectory":   "0000000000000000000000000000000000000000000000000000000000000000",
-			"BookNode":        "0",
-			"OwnerNode":       "0",
-			"Flags":           uint32(0),
+			"LedgerEntryType":   "Offer",
+			"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
+			"PreviousTxnLgrSeq": uint32(0),
+			"Account":           account,
+			"Sequence":          uint32(i),
+			"TakerPays":         "1",
+			"TakerGets":         "1",
+			"BookDirectory":     "0000000000000000000000000000000000000000000000000000000000000000",
+			"BookNode":          "0",
+			"OwnerNode":         "0",
+			"Flags":             uint32(0),
 		})
 		if err := table.Insert(kl(byte(i)), entry); err != nil {
 			t.Fatalf("insert entry %d: %v", i, err)

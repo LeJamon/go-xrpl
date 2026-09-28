@@ -51,14 +51,18 @@ func accountObjectsDirectoryFixture(t *testing.T, missingOnly bool) (*service.Se
 			"LedgerEntryType": "Check", "Account": accountObjectsOwner,
 			"Flags": uint32(0), "Sequence": uint32(i + 1),
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK", "SendMax": "1000",
+			"OwnerNode": "0", "DestinationNode": "0",
 		}
 		if i == 1 || i == 5 {
 			object = map[string]any{
 				"LedgerEntryType": "Offer", "Account": accountObjectsOwner,
 				"Flags": uint32(0), "Sequence": uint32(i + 1),
 				"TakerGets": "1000", "TakerPays": "2000",
+				"OwnerNode": "0", "BookNode": "0", "BookDirectory": protocol.Hash256Hex([32]byte{}),
 			}
 		}
+		object["PreviousTxnID"] = protocol.Hash256Hex([32]byte{})
+		object["PreviousTxnLgrSeq"] = uint32(0)
 		encoded, err := binarycodec.Encode(object)
 		require.NoError(t, err)
 		data, err := hex.DecodeString(encoded)
