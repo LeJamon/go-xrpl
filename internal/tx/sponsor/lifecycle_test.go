@@ -263,7 +263,12 @@ func TestSponsoredTargetOwnershipMatrix(t *testing.T) {
 		}, true, "Sponsor", 1},
 		{"legacy signer list", func() sponsoredTarget {
 			model := &entry.SignerList{}
-			mustNoError(t, model.SetSignerEntriesValue([]entry.SignerEntryValue{{}, {}, {}}))
+			entries := make([]entry.SignerEntryValue, 3)
+			for i := range entries {
+				mustNoError(t, entries[i].SetAccountValue(ownerID))
+				entries[i].SetSignerWeight(1)
+			}
+			mustNoError(t, model.SetSignerEntriesValue(entries))
 			return sponsoredTarget{key: keylet.SignerList(ownerID), model: model, entryType: entry.TypeSignerList, ownerCount: 1, sponsorField: "Sponsor"}
 		}, true, "Sponsor", 5},
 		{"high trust line", func() sponsoredTarget {

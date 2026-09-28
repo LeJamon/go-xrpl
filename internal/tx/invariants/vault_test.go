@@ -93,16 +93,16 @@ func vvCraftVaultAsset(t *testing.T, ownerAddr, pseudoAddr string, asset map[str
 		"PreviousTxnID":     strings.Repeat("0", 64),
 		"PreviousTxnLgrSeq": uint32(0),
 	}
-	if total != "" {
+	if total != "" && total != "0" {
 		m["AssetsTotal"] = total
 	}
-	if available != "" {
+	if available != "" && available != "0" {
 		m["AssetsAvailable"] = available
 	}
-	if maximum != "" {
+	if maximum != "" && maximum != "0" {
 		m["AssetsMaximum"] = maximum
 	}
-	if loss != "" {
+	if loss != "" && loss != "0" {
 		m["LossUnrealized"] = loss
 	}
 	return mustEncode(t, m)

@@ -21,30 +21,31 @@ func lendingV11Rules() *amendment.Rules {
 }
 
 func loanInvariantMap(flags uint32, paymentRemaining uint32) map[string]any {
-	return map[string]any{
-		"LedgerEntryType":          "Loan",
-		"OwnerNode":                "0",
-		"LoanBrokerNode":           "0",
-		"LoanBrokerID":             strings.Repeat("1", 64),
-		"LoanSequence":             uint32(1),
-		"Borrower":                 testPseudoAddr,
-		"StartDate":                uint32(1000),
-		"PaymentInterval":          uint32(100),
-		"NextPaymentDueDate":       uint32(1100),
-		"PaymentRemaining":         paymentRemaining,
-		"PeriodicPayment":          "1",
-		"PrincipalOutstanding":     "1",
-		"TotalValueOutstanding":    "1",
-		"ManagementFeeOutstanding": "0",
-		"LoanScale":                int32(0),
-		"Flags":                    flags,
-		"PreviousTxnID":            strings.Repeat("0", 64),
-		"PreviousTxnLgrSeq":        uint32(1),
+	fields := map[string]any{
+		"LedgerEntryType":       "Loan",
+		"OwnerNode":             "0",
+		"LoanBrokerNode":        "0",
+		"LoanBrokerID":          strings.Repeat("1", 64),
+		"LoanSequence":          uint32(1),
+		"Borrower":              testPseudoAddr,
+		"StartDate":             uint32(1000),
+		"PaymentInterval":       uint32(100),
+		"NextPaymentDueDate":    uint32(1100),
+		"PeriodicPayment":       "1",
+		"PrincipalOutstanding":  "1",
+		"TotalValueOutstanding": "1",
+		"Flags":                 flags,
+		"PreviousTxnID":         strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq":     uint32(1),
 	}
+	if paymentRemaining != 0 {
+		fields["PaymentRemaining"] = paymentRemaining
+	}
+	return fields
 }
 
 func loanBrokerInvariantMap(ownerCount uint32, debt string) map[string]any {
-	return map[string]any{
+	fields := map[string]any{
 		"LedgerEntryType":   "LoanBroker",
 		"Sequence":          uint32(1),
 		"OwnerNode":         "0",
@@ -53,13 +54,18 @@ func loanBrokerInvariantMap(ownerCount uint32, debt string) map[string]any {
 		"Account":           testPseudoAddr,
 		"Owner":             testPseudoAddr,
 		"LoanSequence":      uint32(1),
-		"OwnerCount":        ownerCount,
 		"DebtTotal":         debt,
-		"CoverAvailable":    "0",
 		"Flags":             uint32(0),
 		"PreviousTxnID":     strings.Repeat("0", 64),
 		"PreviousTxnLgrSeq": uint32(1),
 	}
+	if ownerCount != 0 {
+		fields["OwnerCount"] = ownerCount
+	}
+	if debt == "0" {
+		delete(fields, "DebtTotal")
+	}
+	return fields
 }
 
 func loanScheduleVaultMap(redemptionDate *uint32) map[string]any {
