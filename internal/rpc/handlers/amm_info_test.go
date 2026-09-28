@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -156,6 +157,40 @@ func TestExtractIssue(t *testing.T) {
 				assert.Equal(t, tc.xrp, issue.IsXRP())
 				assert.Equal(t, tc.value.Currency, issue.Currency)
 				assert.Equal(t, tc.value.Issuer, issue.IssuerR)
+			}
+		})
+	}
+}
+
+func TestParseAMMAsset(t *testing.T) {
+	const id = "00000001B5F762798A53D543A014CAF8B297CFF8F2F937E8"
+	for _, tc := range []struct {
+		name, raw  string
+		valid, mpt bool
+	}{
+		{"XRP", `{"currency":"XRP"}`, true, false},
+		{"IOU", `{"currency":"USD","issuer":"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}`, true, false},
+		{"MPT", `{"mpt_issuance_id":"` + id + `"}`, true, true},
+		{"zero MPT", `{"mpt_issuance_id":"0"}`, true, true},
+		{"mixed currency", `{"currency":"XRP","mpt_issuance_id":"` + id + `"}`, false, false},
+		{"mixed issuer", `{"issuer":null,"mpt_issuance_id":"` + id + `"}`, false, false},
+		{"numeric MPT", `{"mpt_issuance_id":1}`, false, false},
+		{"short MPT", `{"mpt_issuance_id":"01"}`, false, false},
+		{"empty MPT", `{"mpt_issuance_id":""}`, false, false},
+		{"null MPT", `{"mpt_issuance_id":null}`, false, false},
+		{"null", `null`, false, false},
+		{"array", `[]`, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			issue, err := parseAMMAsset(json.RawMessage(tc.raw))
+			if !tc.valid {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.mpt, issue.MPTID != nil)
+			if tc.mpt {
+				require.False(t, issue.IsXRP())
 			}
 		})
 	}

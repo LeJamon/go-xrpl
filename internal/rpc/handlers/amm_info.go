@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/keylet"
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -67,17 +68,17 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
-	var issue1Issuer, issue1Currency, issue2Issuer, issue2Currency [20]byte
+	var requestAsset1, requestAsset2 ammIssue
 	if hasAsset {
 		var parseErr error
-		issue1Issuer, issue1Currency, parseErr = parseIssue(request.Asset)
+		requestAsset1, parseErr = parseAMMAsset(request.Asset)
 		if parseErr != nil {
 			return nil, rpcerrors.RpcErrorIssueMalformed()
 		}
 	}
 	if hasAsset2 {
 		var parseErr error
-		issue2Issuer, issue2Currency, parseErr = parseIssue(request.Asset2)
+		requestAsset2, parseErr = parseAMMAsset(request.Asset2)
 		if parseErr != nil {
 			return nil, rpcerrors.RpcErrorIssueMalformed()
 		}
@@ -132,7 +133,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	}
 
 	if !hasAMMAccount {
-		ammKey = keylet.AMM(issue1Issuer, issue1Currency, issue2Issuer, issue2Currency).Key
+		ammKey = keylet.AMMAsset(requestAsset1.bookSide(), requestAsset2.bookSide()).Key
 	}
 
 	ammEntry, err := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, ammKey, ledgerIndex)
@@ -164,37 +165,44 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	}
 	ammResult["trading_fee"] = decoded.TradingFee
 
-	// amount/amount2 mirror rippled's ammPoolHolds(): the AMM account's actual
-	// trust-line (or XRP) balance for each issue, not the sfAsset/sfAsset2 issue
-	// definitions. asset_frozen/asset2_frozen surface isFrozen() on the same
-	// trust lines (non-XRP only). See rippled AMMInfo.cpp:188-262.
-	asset1, decodeErr := decoded.GetAsset()
-	if decodeErr != nil {
-		return nil, rpcInternalError("amm_info: asset decoding failed", decodeErr)
-	}
-	asset2, decodeErr := decoded.GetAsset2()
-	if decodeErr != nil {
-		return nil, rpcInternalError("amm_info: asset2 decoding failed", decodeErr)
-	}
-	asset1Issue, asset1OK := extractIssue(asset1)
-	asset2Issue, asset2OK := extractIssue(asset2)
-
-	if asset1OK {
-		ammResult["amount"] = ammPoolBalanceJSON(ctx, ledgerIndex, ammAccountID, asset1Issue)
-		if !asset1Issue.IsXRP() {
-			ammResult["asset_frozen"] = ammIssueFrozen(ctx, ledgerIndex, ammAccountID, asset1Issue)
+	asset1Issue, asset2Issue := requestAsset1, requestAsset2
+	if hasAMMAccount {
+		asset1, err := decoded.GetAsset()
+		if err != nil {
+			return nil, rpcInternalError("amm_info: asset decoding failed", err)
 		}
-	} else {
-		ammResult["amount"] = decoded.Asset
-	}
-
-	if asset2OK {
-		ammResult["amount2"] = ammPoolBalanceJSON(ctx, ledgerIndex, ammAccountID, asset2Issue)
-		if !asset2Issue.IsXRP() {
-			ammResult["asset2_frozen"] = ammIssueFrozen(ctx, ledgerIndex, ammAccountID, asset2Issue)
+		asset2, err := decoded.GetAsset2()
+		if err != nil {
+			return nil, rpcInternalError("amm_info: asset2 decoding failed", err)
 		}
-	} else {
-		ammResult["amount2"] = decoded.Asset2
+		var asset1OK, asset2OK bool
+		asset1Issue, asset1OK = extractIssue(asset1)
+		asset2Issue, asset2OK = extractIssue(asset2)
+		if !asset1OK || !asset2OK {
+			return nil, rpcInternalInvariantError("amm_info: invalid pool asset")
+		}
+	}
+	var assetView types.LedgerStateView
+	if asset1Issue.MPTID != nil || asset2Issue.MPTID != nil {
+		var err error
+		assetView, err = resolvedLedgerStateView(ctx, resolvedLedger.Value)
+		if err != nil {
+			return nil, rpcInternalError("amm_info: asset state lookup failed", err)
+		}
+	}
+	for _, field := range []struct {
+		amount, frozen string
+		issue          ammIssue
+	}{
+		{"amount", "asset_frozen", asset1Issue},
+		{"amount2", "asset2_frozen", asset2Issue},
+	} {
+		ammResult[field.amount] = ammPoolBalanceJSON(ctx, ledgerIndex, ammAccountID, field.issue)
+		if field.issue.MPTID != nil {
+			ammResult[field.frozen] = mptutil.IsFrozen(assetView, *field.issue.MPTID, ammAccountID)
+		} else if !field.issue.IsXRP() {
+			ammResult[field.frozen] = ammIssueFrozen(ctx, ledgerIndex, ammAccountID, field.issue)
+		}
 	}
 
 	voteSlots, decodeErr := decoded.GetVoteSlots()
@@ -333,6 +341,35 @@ func buildAuctionSlot(slot ledgerfields.AuctionSlotValue, parentCloseTime uint64
 	return auction, nil
 }
 
+func parseAMMAsset(raw json.RawMessage) (ammIssue, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return ammIssue{}, err
+	}
+	if _, hasCurrency := fields["currency"]; hasCurrency {
+		issuer, currency, err := parseIssue(raw)
+		if err != nil {
+			return ammIssue{}, err
+		}
+		if currency == [20]byte{} {
+			return ammIssue{Currency: "XRP"}, nil
+		}
+		return ammIssue{Currency: stringField(fields["currency"]), Issuer: issuer, IssuerR: state.EncodeAccountIDSafe(issuer)}, nil
+	}
+	if _, hasIssuer := fields["issuer"]; hasIssuer {
+		return ammIssue{}, errors.New("MPT asset cannot carry issuer")
+	}
+	var text string
+	if err := json.Unmarshal(fields["mpt_issuance_id"], &text); err != nil {
+		return ammIssue{}, err
+	}
+	id, ok := parseBookMPTID(text)
+	if !ok {
+		return ammIssue{}, errors.New("invalid MPT issuance ID")
+	}
+	return ammIssue{MPTID: &id}, nil
+}
+
 // parseIssue parses an asset/issue object, enforcing rippled's issueFromJson
 // rules (Issue.cpp:94-145): a JSON object with a valid currency code, an
 // issuer exactly when the currency is not XRP, and no mpt_issuance_id.
@@ -400,6 +437,7 @@ func currencyFromString(code string) ([20]byte, error) {
 // 40-char hex) so it can be passed straight to keylet.Line and re-emitted
 // in the response unchanged.
 type ammIssue struct {
+	MPTID    *[24]byte
 	Currency string
 	Issuer   [20]byte
 	IssuerR  string // r-address form of Issuer; empty for XRP
@@ -407,11 +445,22 @@ type ammIssue struct {
 
 // IsXRP reports whether this issue is native XRP.
 func (i ammIssue) IsXRP() bool {
-	return i.Currency == "XRP" || i.Currency == ""
+	return i.MPTID == nil && (i.Currency == "XRP" || i.Currency == "")
+}
+
+func (i ammIssue) bookSide() keylet.BookSide {
+	if i.MPTID != nil {
+		return keylet.MPTSide(*i.MPTID)
+	}
+	return keylet.IssueSide(keylet.CurrencyBytes(i.Currency), i.Issuer)
 }
 
 func extractIssue(value ledgerfields.IssueValue) (ammIssue, bool) {
-	if value.Currency == "" || value.MPTIssuanceID != "" {
+	if value.MPTIssuanceID != "" {
+		id, ok := parseBookMPTID(value.MPTIssuanceID)
+		return ammIssue{MPTID: &id}, ok
+	}
+	if value.Currency == "" {
 		return ammIssue{}, false
 	}
 	issue := ammIssue{Currency: value.Currency, IssuerR: value.Issuer}
@@ -488,6 +537,17 @@ func ammLPHoldsJSON(ctx *types.RpcContext, ledgerIndex string, ammAccountID, lpA
 // calls accountHolds with fhIGNORE_FREEZE — i.e. the balance is reported even
 // when the trust line is frozen).
 func ammPoolBalanceJSON(ctx *types.RpcContext, ledgerIndex string, ammAccountID [20]byte, issue ammIssue) any {
+	if issue.MPTID != nil {
+		var amount uint64
+		result, err := ctx.Services.Ledger().GetLedgerEntry(ctx.Context, keylet.MPTokenByID(*issue.MPTID, ammAccountID).Key, ledgerIndex)
+		if err == nil && result != nil {
+			var holding ledgerfields.MPToken
+			if err := holding.Decode(result.Node); err == nil {
+				amount, _ = holding.GetMPTAmount()
+			}
+		}
+		return map[string]any{"mpt_issuance_id": strings.ToUpper(hex.EncodeToString(issue.MPTID[:])), "value": strconv.FormatUint(amount, 10)}
+	}
 	if issue.IsXRP() {
 		drops := readAMMXRPBalance(ctx, ledgerIndex, ammAccountID)
 		return strconv.FormatUint(drops, 10)

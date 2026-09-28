@@ -393,11 +393,8 @@ func ledgerDefaultResponse(ctx *types.RpcContext) (map[string]any, *rpcerrors.Rp
 	}, nil
 }
 
-// ownerFundsLedgerView resolves the state view for the target ledger so
-// owner_funds can be computed against that ledger rather than current state.
-// Missing capabilities, lookup failures, and nil results are operational
-// errors because silently omitting owner_funds would produce a partial reply.
-func ownerFundsLedgerView(ctx *types.RpcContext, l types.LedgerReader) (types.LedgerStateView, error) {
+// resolvedLedgerStateView uses the selected ledger for state-dependent RPC fields.
+func resolvedLedgerStateView(ctx *types.RpcContext, l types.LedgerReader) (types.LedgerStateView, error) {
 	src, ok := ctx.Services.Ledger().(types.LedgerViewSource)
 	if !ok {
 		return nil, errors.New("ledger service does not expose state views")
@@ -437,7 +434,7 @@ func (a *ledgerOwnerFundsAnnotator) annotate(txEntry, txJSON map[string]any) (bo
 		return true, nil
 	}
 	if a.view == nil {
-		view, err := ownerFundsLedgerView(a.ctx, a.ledger)
+		view, err := resolvedLedgerStateView(a.ctx, a.ledger)
 		if err != nil {
 			return false, fmt.Errorf("owner_funds view lookup: %w", err)
 		}
