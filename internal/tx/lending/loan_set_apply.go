@@ -261,14 +261,11 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		return r
 	}
 
-	// Disburse principal to the borrower and the origination fee to the owner.
-	if r := vault.SendAsset(ctx, vinfo.Account, borrower, asset, loanToBorrower); r != ter.TesSUCCESS {
+	if r := vault.SendAssets(ctx, vinfo.Account, asset, []vault.AssetPayment{
+		{Account: borrower, Amount: loanToBorrower},
+		{Account: b.Owner, Amount: originationFee},
+	}); r != ter.TesSUCCESS {
 		return r
-	}
-	if originationFee.Signum() != 0 {
-		if r := vault.SendAsset(ctx, vinfo.Account, b.Owner, asset, originationFee); r != ter.TesSUCCESS {
-			return r
-		}
 	}
 
 	startDate := ctx.Config.CurrentCloseTime()
