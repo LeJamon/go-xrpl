@@ -125,7 +125,7 @@ func lendingFieldValue(decoded decodedLendingEntry, name string) (any, bool) {
 		}
 	case *entry.Loan:
 		switch name {
-		case "Sequence", "LoanSequence":
+		case "LoanSequence":
 			return typedLendingField(model.HasLoanSequence, model.GetLoanSequence)
 		case "OwnerNode":
 			return typedLendingField(model.HasOwnerNode, model.GetOwnerNode)
