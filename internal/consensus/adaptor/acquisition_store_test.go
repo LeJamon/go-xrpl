@@ -497,7 +497,7 @@ func TestRouterAcquisitionOptionsUseScopedDurableStore(t *testing.T) {
 	headerData := header.AddRaw(header.LedgerHeader{LedgerIndex: 88, AccountHash: rootHash}, false)
 	ledgerHash := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), headerData)
 
-	acquired := inbound.New(ledgerHash, 88, 7, serveTestLogger(), router.acquisitionOpts()...)
+	acquired := inbound.New(ledgerHash, 88, 7, serveTestLogger(), router.catchupReplay.acquisitionOpts()...)
 	require.NoError(t, acquired.GotBase([]message.LedgerNode{{NodeData: headerData}, {NodeData: rootData}}))
 	for !acquired.IsComplete() {
 		base.mu.Lock()
@@ -939,7 +939,7 @@ func TestRouterAcquisitionStoreLifecycle(t *testing.T) {
 	router := newTestRouter(nil, nil, inbox)
 	base := newAcquisitionStoreTestFamily()
 	router.SetAcquisitionFamily(base)
-	require.Same(t, router.acquisitionStore, router.acquisitionFamily)
+	require.Same(t, router.catchupReplay.acquisitionStore, router.catchupReplay.acquisitionFamily)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
@@ -948,9 +948,9 @@ func TestRouterAcquisitionStoreLifecycle(t *testing.T) {
 		close(done)
 	}()
 	require.Eventually(t, func() bool {
-		router.acquisitionStore.lifecycleMu.RLock()
-		defer router.acquisitionStore.lifecycleMu.RUnlock()
-		return router.acquisitionStore.done != nil
+		router.catchupReplay.acquisitionStore.lifecycleMu.RLock()
+		defer router.catchupReplay.acquisitionStore.lifecycleMu.RUnlock()
+		return router.catchupReplay.acquisitionStore.done != nil
 	}, time.Second, time.Millisecond)
 	cancel()
 	select {
@@ -958,9 +958,9 @@ func TestRouterAcquisitionStoreLifecycle(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("router did not drain acquisition persistence on shutdown")
 	}
-	router.acquisitionStore.lifecycleMu.RLock()
-	running := router.acquisitionStore.done != nil
-	router.acquisitionStore.lifecycleMu.RUnlock()
+	router.catchupReplay.acquisitionStore.lifecycleMu.RLock()
+	running := router.catchupReplay.acquisitionStore.done != nil
+	router.catchupReplay.acquisitionStore.lifecycleMu.RUnlock()
 	require.False(t, running)
 }
 
@@ -969,17 +969,17 @@ func TestCompleteInboundLedgerDiscardsItsOwnPersistenceFailure(t *testing.T) {
 	base.failFirst = true
 	router := newTestRouter(nil, nil, make(chan *peermanagement.InboundMessage))
 	router.SetAcquisitionFamily(base)
-	router.acquisitionStore.start(t.Context())
-	defer router.acquisitionStore.stopDrain()
+	router.catchupReplay.acquisitionStore.start(t.Context())
+	defer router.catchupReplay.acquisitionStore.stopDrain()
 
 	hash := [32]byte{0xc3}
-	family := router.acquisitionStore.scope()
+	family := router.catchupReplay.acquisitionStore.scope()
 	ledger := inbound.New(hash, 44, 7, serveTestLogger(), inbound.WithFamily(family))
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 	require.NoError(t, family.StoreBatch(t.Context(), []shamap.FlushEntry{acquisitionEntry(3)}))
 
-	router.completeInboundLedger(ledger)
-	require.Nil(t, router.fetchTracker.Find(hash))
+	router.catchupReplay.completeInboundLedger(ledger)
+	require.Nil(t, router.catchupReplay.fetchTracker.Find(hash))
 	require.NoError(t, family.(*acquisitionStoreScope).Flush(t.Context()))
 }
 
@@ -987,15 +987,15 @@ func TestCompleteInboundLedgerPromotesResultMapPersistence(t *testing.T) {
 	base := newAcquisitionStoreTestFamily()
 	router := newTestRouter(nil, newTestAdaptor(t), make(chan *peermanagement.InboundMessage))
 	router.SetAcquisitionFamily(base)
-	router.acquisitionStore.start(t.Context())
-	defer router.acquisitionStore.stopDrain()
+	router.catchupReplay.acquisitionStore.start(t.Context())
+	defer router.catchupReplay.acquisitionStore.stopDrain()
 
-	scope := router.acquisitionStore.scope().(*acquisitionStoreScope)
+	scope := router.catchupReplay.acquisitionStore.scope().(*acquisitionStoreScope)
 	acquired, ledgerHash := completedScopedAcquisition(t, scope, 45)
-	router.fetchTracker.Track(acquired)
+	router.catchupReplay.fetchTracker.Track(acquired)
 
-	router.completeInboundLedger(acquired)
-	require.Nil(t, router.fetchTracker.Find(ledgerHash))
+	router.catchupReplay.completeInboundLedger(acquired)
+	require.Nil(t, router.catchupReplay.fetchTracker.Find(ledgerHash))
 	scope.mu.Lock()
 	promoted, retired := scope.promoted, scope.retired
 	scope.mu.Unlock()
@@ -1039,15 +1039,15 @@ func TestStandardReplayReloadsPromotedTransactionMap(t *testing.T) {
 	base := newAcquisitionStoreTestFamily()
 	router := newTestRouter(nil, nil, make(chan *peermanagement.InboundMessage))
 	router.SetAcquisitionFamily(base)
-	router.acquisitionStore.start(t.Context())
-	defer router.acquisitionStore.stopDrain()
+	router.catchupReplay.acquisitionStore.start(t.Context())
+	defer router.catchupReplay.acquisitionStore.stopDrain()
 
 	txMap := shamap.New(shamap.TypeTransaction)
 	blob, txID := txWithMetaBlob(t, []byte{0x10, 0x20, 0x30, 0x40}, 1)
 	require.NoError(t, txMap.PutWithNodeType(txID, blob, shamap.NodeTypeTransactionWithMeta))
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
-	scope := router.acquisitionStore.scope().(*acquisitionStoreScope)
+	scope := router.catchupReplay.acquisitionStore.scope().(*acquisitionStoreScope)
 	require.NoError(t, txMap.StoreDirty(func(entries []shamap.FlushEntry) error {
 		return scope.StoreBatch(t.Context(), entries)
 	}))
@@ -1058,7 +1058,7 @@ func TestStandardReplayReloadsPromotedTransactionMap(t *testing.T) {
 		header:  header.LedgerHeader{TxHash: txRoot},
 		durable: true,
 	}
-	reloaded, err := router.loadStandardReplayTransactionMap(t.Context(), entry)
+	reloaded, err := router.catchupReplay.loadStandardReplayTransactionMap(t.Context(), entry)
 	require.NoError(t, err)
 	reloadedRoot, err := reloaded.Hash()
 	require.NoError(t, err)
@@ -1070,15 +1070,15 @@ func TestCompleteInboundLedgerReadyReleasesUnconsumedScopes(t *testing.T) {
 		base := newAcquisitionStoreTestFamily()
 		router := newTestRouter(nil, &Adaptor{}, make(chan *peermanagement.InboundMessage))
 		router.SetAcquisitionFamily(base)
-		router.acquisitionStore.start(t.Context())
-		defer router.acquisitionStore.stopDrain()
+		router.catchupReplay.acquisitionStore.start(t.Context())
+		defer router.catchupReplay.acquisitionStore.stopDrain()
 
-		scope := router.acquisitionStore.scope().(*acquisitionStoreScope)
+		scope := router.catchupReplay.acquisitionStore.scope().(*acquisitionStoreScope)
 		hash := [32]byte{0xe2}
 		acquired := inbound.New(hash, 46, 7, serveTestLogger(), inbound.WithFamily(scope))
-		router.fetchTracker.Track(acquired)
-		router.completeInboundLedgerReady(acquired)
-		require.Nil(t, router.fetchTracker.Find(hash))
+		router.catchupReplay.fetchTracker.Track(acquired)
+		router.catchupReplay.completeInboundLedgerReady(acquired)
+		require.Nil(t, router.catchupReplay.fetchTracker.Find(hash))
 		require.ErrorContains(t, scope.StoreBatch(t.Context(), []shamap.FlushEntry{acquisitionEntry(46)}), "scope retired")
 	})
 
@@ -1086,14 +1086,14 @@ func TestCompleteInboundLedgerReadyReleasesUnconsumedScopes(t *testing.T) {
 		base := newAcquisitionStoreTestFamily()
 		router := newTestRouter(nil, &Adaptor{}, make(chan *peermanagement.InboundMessage))
 		router.SetAcquisitionFamily(base)
-		router.acquisitionStore.start(t.Context())
-		defer router.acquisitionStore.stopDrain()
+		router.catchupReplay.acquisitionStore.start(t.Context())
+		defer router.catchupReplay.acquisitionStore.stopDrain()
 
-		scope := router.acquisitionStore.scope().(*acquisitionStoreScope)
+		scope := router.catchupReplay.acquisitionStore.scope().(*acquisitionStoreScope)
 		acquired, hash := completedScopedAcquisition(t, scope, 47)
-		router.fetchTracker.Track(acquired)
-		router.completeInboundLedger(acquired)
-		require.Nil(t, router.fetchTracker.Find(hash))
+		router.catchupReplay.fetchTracker.Track(acquired)
+		router.catchupReplay.completeInboundLedger(acquired)
+		require.Nil(t, router.catchupReplay.fetchTracker.Find(hash))
 		require.ErrorContains(t, scope.StoreBatch(t.Context(), []shamap.FlushEntry{acquisitionEntry(47)}), "scope retired")
 	})
 
@@ -1101,14 +1101,14 @@ func TestCompleteInboundLedgerReadyReleasesUnconsumedScopes(t *testing.T) {
 		base := newAcquisitionStoreTestFamily()
 		router := newTestRouter(nil, nil, make(chan *peermanagement.InboundMessage))
 		router.SetAcquisitionFamily(base)
-		router.acquisitionStore.start(t.Context())
-		defer router.acquisitionStore.stopDrain()
+		router.catchupReplay.acquisitionStore.start(t.Context())
+		defer router.catchupReplay.acquisitionStore.stopDrain()
 
-		scope := router.acquisitionStore.scope().(*acquisitionStoreScope)
+		scope := router.catchupReplay.acquisitionStore.scope().(*acquisitionStoreScope)
 		acquired, hash := completedScopedAcquisition(t, scope, 48)
-		router.fetchTracker.Track(acquired)
-		router.completeInboundLedger(acquired)
-		require.Nil(t, router.fetchTracker.Find(hash))
+		router.catchupReplay.fetchTracker.Track(acquired)
+		router.catchupReplay.completeInboundLedger(acquired)
+		require.Nil(t, router.catchupReplay.fetchTracker.Find(hash))
 		require.ErrorContains(t, scope.StoreBatch(t.Context(), []shamap.FlushEntry{acquisitionEntry(48)}), "scope retired")
 	})
 }
@@ -1144,14 +1144,14 @@ func TestRouterRetiresPersistenceOnAbandonedAcquisitionPaths(t *testing.T) {
 		{
 			name: "stale worker result",
 			finish: func(t *testing.T, router *Router, ledger *inbound.Ledger) {
-				require.True(t, router.fetchTracker.RemoveExpectedWithSnapshot(ledger, ledger.Snapshot(), false))
-				router.handleAcquisitionWorkResult(acquisitionWorkResult{ledger: ledger})
+				require.True(t, router.catchupReplay.fetchTracker.RemoveExpectedWithSnapshot(ledger, ledger.Snapshot(), false))
+				router.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{ledger: ledger})
 			},
 		},
 		{
 			name: "rejected worker result",
 			finish: func(_ *testing.T, router *Router, ledger *inbound.Ledger) {
-				router.handleAcquisitionWorkResult(acquisitionWorkResult{
+				router.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{
 					ledger: ledger, remove: true, haveSnapshot: true, snapshot: ledger.Snapshot(),
 				})
 			},
@@ -1159,7 +1159,7 @@ func TestRouterRetiresPersistenceOnAbandonedAcquisitionPaths(t *testing.T) {
 		{
 			name: "terminal timer result",
 			finish: func(_ *testing.T, router *Router, ledger *inbound.Ledger) {
-				router.handleAcquisitionWorkResult(acquisitionWorkResult{
+				router.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{
 					ledger: ledger, remove: true, timerFailure: true, snapshot: ledger.Snapshot(),
 				})
 			},
@@ -1167,7 +1167,7 @@ func TestRouterRetiresPersistenceOnAbandonedAcquisitionPaths(t *testing.T) {
 		{
 			name: "completion persistence failure",
 			finish: func(_ *testing.T, router *Router, ledger *inbound.Ledger) {
-				router.handleAcquisitionWorkResult(acquisitionWorkResult{
+				router.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{
 					ledger: ledger, complete: true, persistenceErr: errors.New("persistence failed"),
 				})
 			},
@@ -1189,17 +1189,17 @@ func TestRouterRetiresPersistenceOnAbandonedAcquisitionPaths(t *testing.T) {
 			base.failFirst = true
 			router := newTestRouter(nil, nil, make(chan *peermanagement.InboundMessage))
 			router.SetAcquisitionFamily(base)
-			router.acquisitionStore.start(t.Context())
-			defer router.acquisitionStore.stopDrain()
+			router.catchupReplay.acquisitionStore.start(t.Context())
+			defer router.catchupReplay.acquisitionStore.stopDrain()
 
-			scope := router.acquisitionStore.scope().(*acquisitionStoreScope)
+			scope := router.catchupReplay.acquisitionStore.scope().(*acquisitionStoreScope)
 			hash := [32]byte{0xd0, byte(i)}
 			ledger := inbound.New(hash, uint32(100+i), 7, serveTestLogger(), inbound.WithFamily(scope))
-			router.fetchTracker.Track(ledger)
+			router.catchupReplay.fetchTracker.Track(ledger)
 			require.NoError(t, scope.StoreBatch(t.Context(), []shamap.FlushEntry{acquisitionEntry(byte(20 + i))}))
 
 			test.finish(t, router, ledger)
-			require.Nil(t, router.fetchTracker.Find(hash))
+			require.Nil(t, router.catchupReplay.fetchTracker.Find(hash))
 			require.NoError(t, scope.Flush(t.Context()))
 		})
 	}
@@ -1211,13 +1211,13 @@ func TestClearThenStaleResultRetiresLaterPersistenceFailure(t *testing.T) {
 	base.failFirst = true
 	router := newTestRouter(nil, nil, make(chan *peermanagement.InboundMessage))
 	router.SetAcquisitionFamily(base)
-	router.acquisitionStore.start(t.Context())
-	defer router.acquisitionStore.stopDrain()
+	router.catchupReplay.acquisitionStore.start(t.Context())
+	defer router.catchupReplay.acquisitionStore.stopDrain()
 
-	scope := router.acquisitionStore.scope().(*acquisitionStoreScope)
+	scope := router.catchupReplay.acquisitionStore.scope().(*acquisitionStoreScope)
 	hash := [32]byte{0xe1}
 	ledger := inbound.New(hash, 201, 7, serveTestLogger(), inbound.WithFamily(scope))
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 	require.NoError(t, scope.StoreBatch(t.Context(), []shamap.FlushEntry{acquisitionEntry(31)}))
 	require.Equal(t, [32]byte{31}, <-base.started)
 
@@ -1233,6 +1233,6 @@ func TestClearThenStaleResultRetiresLaterPersistenceFailure(t *testing.T) {
 	}
 
 	close(base.blockFirst)
-	router.handleAcquisitionWorkResult(acquisitionWorkResult{ledger: ledger})
+	router.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{ledger: ledger})
 	require.NoError(t, scope.Flush(t.Context()))
 }

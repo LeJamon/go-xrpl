@@ -43,6 +43,7 @@ func TestRouterHaveSetMalformedHashReturnsBeforeStateMutation(t *testing.T) {
 			r, sender := makeRouterWithRelayRecorder(t)
 			engine := &mockEngine{}
 			r.engine = engine
+			r.catchupReplay.engine = r.engine
 
 			empty, err := newTxSet(nil)
 			require.NoError(t, err)
@@ -73,6 +74,7 @@ func TestRouterHaveSetNeedDoesNotMutatePeerOrEngineState(t *testing.T) {
 	r, sender := makeRouterWithRelayRecorder(t)
 	engine := &mockEngine{}
 	r.engine = engine
+	r.catchupReplay.engine = r.engine
 
 	txSet, err := newTxSet([][]byte{bytes.Repeat([]byte{0x01}, 12)})
 	require.NoError(t, err)

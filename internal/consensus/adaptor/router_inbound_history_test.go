@@ -13,11 +13,11 @@ import (
 func TestRouterMaintenancePrunesInboundHistory(t *testing.T) {
 	router := newTestRouter(nil, New(Config{}), nil)
 	clock := inboundtest.NewFakeClock(time.Unix(1_700_000_000, 0))
-	router.fetchTracker = inbound.NewTrackerWithClock(clock)
+	router.catchupReplay.fetchTracker = inbound.NewTrackerWithClock(clock)
 	hash := [32]byte{0xA3}
 	ledger := inbound.New(hash, 1828, 1, slog.Default())
-	router.fetchTracker.Track(ledger)
-	require.True(t, router.fetchTracker.RemoveExpectedWithSnapshot(
+	router.catchupReplay.fetchTracker.Track(ledger)
+	require.True(t, router.catchupReplay.fetchTracker.RemoveExpectedWithSnapshot(
 		ledger,
 		inbound.Snapshot{Hash: hash, Seq: 1828},
 		true,
@@ -37,8 +37,8 @@ func TestRouterMaintenanceUsesConfiguredInboundSweepInterval(t *testing.T) {
 	})
 	hash := [32]byte{0xA4}
 	ledger := inbound.New(hash, 1829, 1, slog.Default())
-	router.fetchTracker.Track(ledger)
-	require.True(t, router.fetchTracker.RemoveExpectedWithSnapshot(
+	router.catchupReplay.fetchTracker.Track(ledger)
+	require.True(t, router.catchupReplay.fetchTracker.RemoveExpectedWithSnapshot(
 		ledger,
 		inbound.Snapshot{Hash: hash, Seq: 1829},
 		true,

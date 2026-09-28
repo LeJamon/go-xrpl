@@ -39,7 +39,7 @@ func TestRouter_LateAccountStateNodesEnterFetchPackOnly(t *testing.T) {
 		Payload: encodePayload(t, stateReply),
 	})
 
-	stored, ok := r.fetchPacks.get(entry.Hash, time.Now())
+	stored, ok := r.catchupReplay.fetchPacks.get(entry.Hash, time.Now())
 	require.True(t, ok)
 	assert.Equal(t, entry.Data, stored)
 	calls := sender.getBadDataCalls()
@@ -52,13 +52,13 @@ func TestRouter_LateAccountStateNodesEnterFetchPackOnly(t *testing.T) {
 		InfoType:   message.LedgerInfoTxNode,
 		Nodes:      []message.LedgerNode{{NodeID: wire[0].NodeID, NodeData: wire[0].Data}},
 	}
-	r.fetchPacks = newFetchPackCache()
+	r.catchupReplay.fetchPacks = newFetchPackCache()
 	r.handleMessage(&peermanagement.InboundMessage{
 		PeerID:  8,
 		Type:    message.TypeLedgerData,
 		Payload: encodePayload(t, txReply),
 	})
-	_, ok = r.fetchPacks.get(entry.Hash, time.Now())
+	_, ok = r.catchupReplay.fetchPacks.get(entry.Hash, time.Now())
 	assert.False(t, ok, "late transaction nodes must not enter the stale state cache")
 }
 
@@ -94,7 +94,7 @@ func TestRouter_RejectsInvalidLedgerDataNodeCountsBeforeCaching(t *testing.T) {
 		})
 	}
 
-	_, ok := r.fetchPacks.get(entry.Hash, time.Now())
+	_, ok := r.catchupReplay.fetchPacks.get(entry.Hash, time.Now())
 	assert.False(t, ok, "oversized reply must be rejected before any node is cached")
 	calls := sender.getBadDataCalls()
 	require.Len(t, calls, 2)
@@ -127,7 +127,7 @@ func TestRouter_LateAccountStateNodeWithoutReferenceIsIgnored(t *testing.T) {
 		Payload: encodePayload(t, reply),
 	})
 
-	_, ok := r.fetchPacks.get(entry.Hash, time.Now())
+	_, ok := r.catchupReplay.fetchPacks.get(entry.Hash, time.Now())
 	assert.False(t, ok)
 	calls := sender.getBadDataCalls()
 	assert.Empty(t, calls, "an orphan state-node reply is not charged synchronously")

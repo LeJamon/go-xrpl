@@ -25,6 +25,9 @@ func (r *Router) startLifecycle(parent context.Context) (context.Context, bool) 
 	r.lifecycleState = routerLifecycleRunning
 	r.lifecycleCtx = ctx
 	r.lifecycleCancel = cancel
+	if r.catchupReplay != nil {
+		r.catchupReplay.startTasks(ctx)
+	}
 	r.txJobs = make(chan *peermanagement.InboundMessage, txQueueDepth)
 	r.txSetLearnJobs = make(chan txSetLearnJob, txSetLearnQueueDepth)
 	r.serveJobs = make(chan *peermanagement.InboundMessage, serveQueueDepth)
@@ -112,6 +115,9 @@ func (r *Router) stopLifecycle() {
 	r.lifecycleCancel = nil
 	cancel()
 	r.lifecycleMu.Unlock()
+	if r.catchupReplay != nil {
+		r.catchupReplay.stopTasks()
+	}
 
 	r.lifecycleWG.Wait()
 	drainInboundMessages(txJobs)

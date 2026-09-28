@@ -107,6 +107,7 @@ func TestRouterTransactionWireCharges(t *testing.T) {
 				before = len(journal.snapshot())
 				// Force submission to panic after the transaction passes admission.
 				router.adaptor = nil
+				router.catchupReplay.adaptor = router.adaptor
 				frame, err := message.EncodeFrame(&message.Transactions{Transactions: []message.Transaction{
 					{RawTransaction: routerSignedPaymentWithMemo(t, "03"), Status: message.TxStatusCurrent},
 					{RawTransaction: []byte{1, 2, 3}, Status: message.TxStatusCurrent},

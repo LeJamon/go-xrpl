@@ -113,11 +113,11 @@ func TestAcquisitionWork_DoesNotBlockRouter(t *testing.T) {
 			return acquisitionWorkResult{ledger: ledger}
 		}
 	}
-	router.acquisitionWork = lane
+	router.catchupReplay.acquisitionWork = lane
 
 	hash := [32]byte{0xA1}
 	ledger := inbound.New(hash, 42, 7, serveTestLogger())
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
@@ -174,15 +174,15 @@ func TestAcquisitionWork_DropsRetiredResult(t *testing.T) {
 	router := newTestRouter(nil, adaptor, nil)
 	hash := [32]byte{0xB2}
 	old := inbound.New(hash, 50, 7, serveTestLogger())
-	router.fetchTracker.Track(old)
-	router.fetchTracker.RemoveWithSnapshot(hash, old.Snapshot(), false)
-	replacement, created := router.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
+	router.catchupReplay.fetchTracker.Track(old)
+	router.catchupReplay.fetchTracker.RemoveWithSnapshot(hash, old.Snapshot(), false)
+	replacement, created := router.catchupReplay.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
 		return inbound.New(hash, 50, 8, serveTestLogger())
 	})
 	require.True(t, created)
 	require.NotSame(t, old, replacement)
 
-	router.handleAcquisitionWorkResult(acquisitionWorkResult{
+	router.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{
 		ledger:   old,
 		targets:  []uint64{7},
 		stateIDs: [][]byte{make([]byte, 33)},
@@ -313,8 +313,9 @@ func TestHandleAcquisitionWorkResult_TimeoutRequestsPrecedeLocalRefresh(t *testi
 	adaptor.sender = sender
 	router := newTestRouter(nil, adaptor, nil)
 	router.acquisition = sender
+	router.catchupReplay.acquisition = router.acquisition
 	ledger, _ := newWideWorkLedger(t)
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 
 	result := processAcquisitionWork(t.Context(), ledger, []acquisitionWorkEvent{{
 		kind:  acquisitionWorkTimer,
@@ -327,7 +328,7 @@ func TestHandleAcquisitionWorkResult_TimeoutRequestsPrecedeLocalRefresh(t *testi
 	require.NoError(t, result.err)
 	require.NotEmpty(t, result.stateIDs)
 
-	router.handleAcquisitionWorkResult(result)
+	router.catchupReplay.handleAcquisitionWorkResult(result)
 	got := events.snapshot()
 	require.NotEmpty(t, got)
 	assert.Equal(t, "state request", got[0])
@@ -447,11 +448,13 @@ func TestHandlePeerConnect_EmitsManifestBeforeAcquisitionTraversalCompletes(t *t
 	}
 	inbox := make(chan *peermanagement.InboundMessage, 1)
 	router.engine = engine
+	router.catchupReplay.engine = router.engine
 	router.inbox = inbox
 	acquisitionSender := &orderedAcquisitionSender{events: events}
 	router.acquisition = acquisitionSender
+	router.catchupReplay.acquisition = router.acquisition
 	ledger, _ := newWideWorkLedger(t)
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 
 	lane := newAcquisitionWorkLane(1)
 	entered := make(chan struct{})
@@ -465,7 +468,7 @@ func TestHandlePeerConnect_EmitsManifestBeforeAcquisitionTraversalCompletes(t *t
 			return processAcquisitionWork(ctx, ledger, work)
 		}
 	}
-	router.acquisitionWork = lane
+	router.catchupReplay.acquisitionWork = lane
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
@@ -534,9 +537,10 @@ func TestHandlePeerConnect_RollsBackAdmissionWhenWorkSubmissionFails(t *testing.
 	router, _, _ := routerWithCache(t, manifestSender, 0x79, 11)
 	recorder := &acqRecordingSender{}
 	router.acquisition = recorder
+	router.catchupReplay.acquisition = router.acquisition
 	ledger, _ := newWideWorkLedger(t)
-	router.fetchTracker.Track(ledger)
-	router.acquisitionWork = newAcquisitionWorkLane(1)
+	router.catchupReplay.fetchTracker.Track(ledger)
+	router.catchupReplay.acquisitionWork = newAcquisitionWorkLane(1)
 
 	router.handlePeerConnect(22)
 
@@ -552,7 +556,7 @@ func TestHandlePeerConnect_AdmitsPeerToActiveAcquisition(t *testing.T) {
 	adaptor.sender = recorder
 	router := newTestRouter(nil, adaptor, nil)
 	ledger, _ := newWideWorkLedger(t)
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 
 	router.handlePeerConnect(22)
 
@@ -703,8 +707,8 @@ func TestAcquisitionWorkResultPromotesResolvedHashOnlyConsensusLedger(t *testing
 	}
 	pivotHeader.Hash = header.CalculateHash(pivotHeader)
 
-	require.NoError(t, router.requestConsensusLedger(consensus.LedgerID(pivotHeader.Hash)))
-	pivotAcquisition := router.fetchTracker.Find(pivotHeader.Hash)
+	require.NoError(t, router.catchupReplay.requestConsensusLedger(consensus.LedgerID(pivotHeader.Hash)))
+	pivotAcquisition := router.catchupReplay.fetchTracker.Find(pivotHeader.Hash)
 	require.NotNil(t, pivotAcquisition)
 	require.True(t, pivotAcquisition.SequenceInitiallyUnknown())
 
@@ -726,13 +730,13 @@ func TestAcquisitionWorkResultPromotesResolvedHashOnlyConsensusLedger(t *testing
 
 	result := <-lane.results()
 	require.Equal(t, pivotHeader.LedgerIndex, pivotAcquisition.Seq())
-	require.False(t, router.standardReplay.active)
-	router.handleAcquisitionWorkResult(result)
+	require.False(t, router.catchupReplay.standardReplay.active)
+	router.catchupReplay.handleAcquisitionWorkResult(result)
 
-	require.True(t, router.standardReplay.active)
-	require.Equal(t, pivotHeader.LedgerIndex, router.standardReplay.pivotSeq)
-	require.Equal(t, pivotHeader.Hash, router.standardReplay.pivotHash)
-	require.Same(t, pivotAcquisition, router.fetchTracker.Find(pivotHeader.Hash))
+	require.True(t, router.catchupReplay.standardReplay.active)
+	require.Equal(t, pivotHeader.LedgerIndex, router.catchupReplay.standardReplay.pivotSeq)
+	require.Equal(t, pivotHeader.Hash, router.catchupReplay.standardReplay.pivotHash)
+	require.Same(t, pivotAcquisition, router.catchupReplay.fetchTracker.Find(pivotHeader.Hash))
 }
 
 func TestProcessAcquisitionWork_DuplicatePartialBaseDoesNotRetry(t *testing.T) {
@@ -779,24 +783,24 @@ func TestSendMissingReplyRequest_UsesPeerLatencyDepth(t *testing.T) {
 	}
 	router := newTestRouter(nil, New(Config{Sender: sender}), nil)
 	ledger := inbound.New([32]byte{1}, 1, 1, serveTestLogger())
-	router.sendMissingReplyRequest(ledger, inbound.MissingRequest{PeerID: 1, NodeIDs: [][]byte{make([]byte, 33)}})
-	router.sendMissingReplyRequest(ledger, inbound.MissingRequest{PeerID: 2, NodeIDs: [][]byte{make([]byte, 33)}})
+	router.catchupReplay.sendMissingReplyRequest(ledger, inbound.MissingRequest{PeerID: 1, NodeIDs: [][]byte{make([]byte, 33)}})
+	router.catchupReplay.sendMissingReplyRequest(ledger, inbound.MissingRequest{PeerID: 2, NodeIDs: [][]byte{make([]byte, 33)}})
 	assert.Equal(t, []uint32{1, 2}, recorder.queryDepths())
 }
 
 func TestAcquisitionWork_PersistenceFailureDoesNotAdoptOrRecordPeerFailure(t *testing.T) {
 	router := newTestRouter(&mockEngine{}, newTestAdaptor(t), nil)
 	ledger := inbound.New([32]byte{0xB3}, 51, 7, serveTestLogger())
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 
-	router.handleAcquisitionWorkResult(acquisitionWorkResult{
+	router.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{
 		ledger:         ledger,
 		complete:       true,
 		persistenceErr: errors.New("store failed"),
 	})
 
-	assert.Nil(t, router.fetchTracker.Find(ledger.Hash()))
-	assert.Empty(t, router.fetchTracker.Info(),
+	assert.Nil(t, router.catchupReplay.fetchTracker.Find(ledger.Hash()))
+	assert.Empty(t, router.catchupReplay.fetchTracker.Info(),
 		"a local store failure must not enter the network-failure cooldown")
 }
 
@@ -1039,7 +1043,7 @@ func TestRouter_PendingAcquisitionStillReceivesTimerCheck(t *testing.T) {
 		ledger.RearmTimer(clock)
 	}
 	timerAt := clock.Add(4 * time.Second)
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -1058,20 +1062,20 @@ func TestRouter_PendingAcquisitionStillReceivesTimerCheck(t *testing.T) {
 		cancel()
 		lane.stop()
 	}()
-	router.acquisitionWork = lane
+	router.catchupReplay.acquisitionWork = lane
 
 	require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
 	<-entered
-	router.retryInboundLedgerAcquisitions(timerAt)
+	router.catchupReplay.retryInboundLedgerAcquisitions(timerAt)
 	close(release)
 
 	result := <-lane.results()
-	router.handleAcquisitionWorkResult(result)
+	router.catchupReplay.handleAcquisitionWorkResult(result)
 	result = <-lane.results()
 	require.True(t, result.timerFailure)
-	router.handleAcquisitionWorkResult(result)
+	router.catchupReplay.handleAcquisitionWorkResult(result)
 	require.Equal(t, 7, ledger.Timeouts())
-	require.Nil(t, router.fetchTracker.Find(ledger.Hash()))
+	require.Nil(t, router.catchupReplay.fetchTracker.Find(ledger.Hash()))
 }
 
 func TestAcquisitionWork_FailureControlPreemptsBatchedData(t *testing.T) {
@@ -1263,7 +1267,7 @@ func TestAcquisitionWorkLane_CancelLedgerPreemptsObsoleteTraversal(t *testing.T)
 func TestRouterClearFetchInfoCancelsActiveAcquisitionWork(t *testing.T) {
 	router := newTestRouter(&mockEngine{}, newTestAdaptor(t), nil)
 	lane := newAcquisitionWorkLane(1)
-	router.acquisitionWork = lane
+	router.catchupReplay.acquisitionWork = lane
 
 	started := make(chan struct{})
 	lane.process = func(ctx context.Context, ledger *inbound.Ledger, _ []acquisitionWorkEvent) acquisitionWorkResult {
@@ -1275,7 +1279,7 @@ func TestRouterClearFetchInfoCancelsActiveAcquisitionWork(t *testing.T) {
 	defer lane.stop()
 
 	ledger := inbound.New([32]byte{0x91}, 42, 7, serveTestLogger())
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 	require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
 	<-started
 
@@ -1315,21 +1319,21 @@ func TestAcquisitionWork_PendingReservesTimerEvent(t *testing.T) {
 			}
 		}
 	}()
-	router.acquisitionWork = lane
+	router.catchupReplay.acquisitionWork = lane
 	running := inbound.New([32]byte{8}, 8, 8, serveTestLogger())
 	queued := inbound.New([32]byte{9}, 9, 9, serveTestLogger())
 	base := time.Now()
 	for i := 1; i <= 6; i++ {
 		require.Equal(t, inbound.TimerEscalate, queued.OnTimer(base.Add(time.Duration(i)*4*time.Second)))
 	}
-	router.fetchTracker.Track(queued)
+	router.catchupReplay.fetchTracker.Track(queued)
 	require.True(t, lane.submit(running, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
 	<-entered
 	require.True(t, lane.submit(queued, acquisitionWorkEvent{kind: acquisitionWorkData}))
 
 	now := base.Add(time.Hour)
 	before := queued.Timeouts()
-	router.retryInboundLedgerAcquisitions(now)
+	router.catchupReplay.retryInboundLedgerAcquisitions(now)
 	assert.Equal(t, before, queued.Timeouts())
 	assert.True(t, lane.has(queued))
 	assert.NotEqual(t, inbound.StateFailed, queued.State(),
@@ -1356,7 +1360,7 @@ func TestAcquisitionWork_UsefulLargeReplyPrecedesTerminalTimerCheck(t *testing.T
 	timerAt := primeAcquisitionForTerminalTimer(t, ledger)
 
 	router := newTestRouter(nil, newTestAdaptor(t), nil)
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 	lane := newAcquisitionWorkLane(1)
 	blocker := inbound.New([32]byte{0xB7}, 201, 8, serveTestLogger())
 	blockerEntered := make(chan struct{})
@@ -1384,11 +1388,11 @@ func TestAcquisitionWork_UsefulLargeReplyPrecedesTerminalTimerCheck(t *testing.T
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	lane.start(ctx)
-	router.acquisitionWork = lane
+	router.catchupReplay.acquisitionWork = lane
 
 	require.True(t, lane.submit(blocker, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
 	<-blockerEntered
-	router.retryInboundLedgerAcquisitions(timerAt)
+	router.catchupReplay.retryInboundLedgerAcquisitions(timerAt)
 	require.True(t, lane.has(ledger))
 	require.True(t, lane.submit(ledger, acquisitionWorkEvent{
 		kind:   acquisitionWorkData,
@@ -1410,10 +1414,10 @@ func TestAcquisitionWork_UsefulLargeReplyPrecedesTerminalTimerCheck(t *testing.T
 	assert.False(t, result.remove)
 	assert.False(t, result.timerEscalate)
 	assert.False(t, result.complete)
-	router.handleAcquisitionWorkResult(result)
+	router.catchupReplay.handleAcquisitionWorkResult(result)
 	require.Eventually(t, func() bool { return !lane.has(ledger) }, time.Second, time.Millisecond)
 
-	assert.Same(t, ledger, router.fetchTracker.Find(ledger.Hash()))
+	assert.Same(t, ledger, router.catchupReplay.fetchTracker.Find(ledger.Hash()))
 	assert.NotEqual(t, inbound.StateFailed, ledger.State())
 	assert.Equal(t, 6, ledger.Timeouts(), "rippled keeps prior timeouts cumulative but does not count a progressing interval")
 	duplicate, err := ledger.GotStateNodesUseful(nodes)
@@ -1546,7 +1550,7 @@ func TestAcquisitionWork_YieldedMissingStateDoesNotCountAsProgress(t *testing.T)
 	timerAt := base.Add(8 * time.Second)
 
 	router := newTestRouter(nil, newTestAdaptor(t), nil)
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 	lane := newAcquisitionWorkLane(1)
 	lane.process = func(ctx context.Context, current *inbound.Ledger, events []acquisitionWorkEvent) acquisitionWorkResult {
 		// Force the yield boundary after discovery so worker scheduling cannot return a partial batch instead.
@@ -1558,7 +1562,7 @@ func TestAcquisitionWork_YieldedMissingStateDoesNotCountAsProgress(t *testing.T)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	lane.start(ctx)
-	router.acquisitionWork = lane
+	router.catchupReplay.acquisitionWork = lane
 	defer func() {
 		cancel()
 		lane.stop()
@@ -1578,14 +1582,14 @@ func TestAcquisitionWork_YieldedMissingStateDoesNotCountAsProgress(t *testing.T)
 		kind: acquisitionWorkTimerCheck,
 		at:   timerAt,
 	}))
-	router.handleAcquisitionWorkResult(first)
+	router.catchupReplay.handleAcquisitionWorkResult(first)
 
 	second := <-lane.results()
 	require.True(t, second.yielded)
 	require.False(t, second.rearmTimer)
 	require.False(t, second.timerEscalate)
 	require.Equal(t, 1, ledger.Timeouts())
-	router.handleAcquisitionWorkResult(second)
+	router.catchupReplay.handleAcquisitionWorkResult(second)
 	assert.False(t, ledger.TimerDue(time.Now()), "timer was not rearmed after the traversal slice")
 }
 
@@ -1593,7 +1597,7 @@ func TestRouter_MaintenanceDrainsBufferedReplyBeforeTerminalTimer(t *testing.T) 
 	ledger, replies := newWideWorkLedger(t)
 	timerAt := primeAcquisitionForTerminalTimer(t, ledger)
 	router := newTestRouter(nil, newTestAdaptor(t), nil)
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 	inbox := make(chan *peermanagement.InboundMessage, 1)
 	router.SetAcqInbox(inbox)
 	lane := newAcquisitionWorkLane(1)
@@ -1613,7 +1617,7 @@ func TestRouter_MaintenanceDrainsBufferedReplyBeforeTerminalTimer(t *testing.T) 
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	lane.start(ctx)
-	router.acquisitionWork = lane
+	router.catchupReplay.acquisitionWork = lane
 	require.True(t, lane.submit(blocker, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
 	<-entered
 
@@ -1629,17 +1633,17 @@ func TestRouter_MaintenanceDrainsBufferedReplyBeforeTerminalTimer(t *testing.T) 
 	}
 	require.Equal(t, 1, router.drainAcquisitionInboxBeforeMaintenance(lane))
 	require.True(t, lane.has(ledger))
-	router.retryInboundLedgerAcquisitions(timerAt)
+	router.catchupReplay.retryInboundLedgerAcquisitions(timerAt)
 	assert.Equal(t, 6, ledger.Timeouts(), "a buffered useful reply must reserve the ledger before its terminal timer")
 
 	close(release)
 	blockerResult := <-lane.results()
 	close(blockerResult.ack)
 	result := <-lane.results()
-	router.handleAcquisitionWorkResult(result)
+	router.catchupReplay.handleAcquisitionWorkResult(result)
 	require.Eventually(t, func() bool { return !lane.has(ledger) }, time.Second, time.Millisecond)
 	assert.NotEqual(t, inbound.StateFailed, ledger.State())
-	assert.Same(t, ledger, router.fetchTracker.Find(ledger.Hash()))
+	assert.Same(t, ledger, router.catchupReplay.fetchTracker.Find(ledger.Hash()))
 
 	cancel()
 	lane.stop()
@@ -1652,7 +1656,7 @@ func TestRouter_MaintenanceRunsUnderSustainedAcquisitionInput(t *testing.T) {
 	router := newTestRouter(nil, adaptor, nil)
 	ledger := inbound.New([32]byte{0xB9}, 203, 7, serveTestLogger())
 	ledger.RearmTimer(time.Now().Add(-time.Hour))
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 	inbox := make(chan *peermanagement.InboundMessage, 64)
 	router.SetAcqInbox(inbox)
 
@@ -1709,10 +1713,10 @@ func TestAcquisitionWorkLane_RearmsAfterResultHandling(t *testing.T) {
 
 	ledger := inbound.New([32]byte{0xA2}, 43, 7, serveTestLogger())
 	ledger.RearmTimer(time.Now().Add(-time.Hour))
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 	require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkTimer}))
 	result := <-lane.results()
-	router.handleAcquisitionWorkResult(result)
+	router.catchupReplay.handleAcquisitionWorkResult(result)
 	assert.Equal(t, inbound.TimerNone, ledger.OnTimer(time.Now()),
 		"result handling must start the next acquisition timeout interval")
 
@@ -1725,16 +1729,16 @@ func TestAcquisitionWorkLane_BaseTimerCheckRearmsAfterRequest(t *testing.T) {
 	lane := newAcquisitionWorkLane(1)
 	ctx, cancel := context.WithCancel(t.Context())
 	lane.start(ctx)
-	router.acquisitionWork = lane
+	router.catchupReplay.acquisitionWork = lane
 
 	ledger := inbound.New([32]byte{0xA5}, 46, 7, serveTestLogger())
 	ledger.RearmTimer(time.Now().Add(-time.Hour))
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 	now := time.Now()
 	require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkTimerCheck, at: now}))
 	result := <-lane.results()
 	require.True(t, result.timerEscalate)
-	router.handleAcquisitionWorkResult(result)
+	router.catchupReplay.handleAcquisitionWorkResult(result)
 	assert.False(t, ledger.TimerDue(time.Now()), "base request must start a fresh timeout interval")
 
 	cancel()
@@ -1753,10 +1757,10 @@ func TestAcquisitionWorkLane_UselessDataDoesNotRearmTimer(t *testing.T) {
 	ledger := inbound.New([32]byte{0xA3}, 44, 7, serveTestLogger())
 	old := time.Now().Add(-time.Hour)
 	ledger.RearmTimer(old)
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 	require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkData}))
 	result := <-lane.results()
-	router.handleAcquisitionWorkResult(result)
+	router.catchupReplay.handleAcquisitionWorkResult(result)
 	assert.Equal(t, inbound.TimerEscalate, ledger.OnTimer(time.Now()),
 		"an unusable peer reply must not postpone acquisition escalation")
 
@@ -1776,10 +1780,10 @@ func TestAcquisitionWorkLane_UselessLocalWorkDoesNotRearmTimer(t *testing.T) {
 	ledger := inbound.New([32]byte{0xA4}, 45, 7, serveTestLogger())
 	old := time.Now().Add(-time.Hour)
 	ledger.RearmTimer(old)
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 	require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
 	result := <-lane.results()
-	router.handleAcquisitionWorkResult(result)
+	router.catchupReplay.handleAcquisitionWorkResult(result)
 	assert.Equal(t, inbound.TimerEscalate, ledger.OnTimer(time.Now()),
 		"an unproductive local scan must not postpone acquisition escalation")
 
@@ -1815,7 +1819,7 @@ func TestAcquisitionWork_SaturationDefersTimer(t *testing.T) {
 			}
 		}
 	}()
-	router.acquisitionWork = lane
+	router.catchupReplay.acquisitionWork = lane
 
 	running := inbound.New([32]byte{1}, 1, 1, serveTestLogger())
 	queued := inbound.New([32]byte{2}, 2, 2, serveTestLogger())
@@ -1824,9 +1828,9 @@ func TestAcquisitionWork_SaturationDefersTimer(t *testing.T) {
 	<-entered
 	require.True(t, lane.submit(queued, acquisitionWorkEvent{kind: acquisitionWorkLocal}))
 	require.False(t, lane.canAcceptNew())
-	router.fetchTracker.Track(waiting)
+	router.catchupReplay.fetchTracker.Track(waiting)
 
-	router.retryInboundLedgerAcquisitions(time.Now().Add(time.Hour))
+	router.catchupReplay.retryInboundLedgerAcquisitions(time.Now().Add(time.Hour))
 	assert.Equal(t, 0, waiting.Timeouts())
 
 	close(release)

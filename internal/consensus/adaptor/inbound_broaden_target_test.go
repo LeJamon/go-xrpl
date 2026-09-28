@@ -83,7 +83,7 @@ func TestBroadenAcquisitionPeers_AddsMultiple(t *testing.T) {
 	router, _ := newPeerTargetRouter(t, rs)
 
 	il := inbound.New([32]byte{0xAB}, 42, 7, serveTestLogger())
-	router.broadenAcquisitionPeers(il)
+	router.catchupReplay.broadenAcquisitionPeers(il)
 
 	assert.ElementsMatch(t, []uint64{7, 8, 9, 10}, il.Peers(),
 		"broaden must add all peers SelectLedgerPeers returned")
@@ -97,7 +97,7 @@ func TestBroadenAcquisitionPeers_SeedsFiveWhenPeerless(t *testing.T) {
 	router, _ := newPeerTargetRouter(t, rs)
 	il := inbound.New([32]byte{0xAC}, 42, 0, serveTestLogger())
 
-	router.broadenAcquisitionPeers(il)
+	router.catchupReplay.broadenAcquisitionPeers(il)
 
 	assert.ElementsMatch(t, []uint64{8, 9, 10, 11, 12}, il.Peers())
 	assert.Empty(t, rs.excludedSet())
@@ -120,13 +120,13 @@ func TestRequestMissingAcquisitionNodes_ReplyTargetsReplier(t *testing.T) {
 	il.AddPeer(9)
 
 	// Reply path: target the replier only.
-	router.requestMissingAcquisitionNodes(il, 9)
+	router.catchupReplay.requestMissingAcquisitionNodes(il, 9)
 	assert.Equal(t, []uint64{9}, rs.statePeerList(),
 		"a reply must re-request from only the peer that answered")
 
 	// Timeout path: fan out to the whole broadened set.
 	rs.statePeers = nil
-	router.requestMissingAcquisitionNodes(il, 0)
+	router.catchupReplay.requestMissingAcquisitionNodes(il, 0)
 	assert.ElementsMatch(t, []uint64{7, 8, 9}, rs.statePeerList(),
 		"the no-progress path must fan out to every source peer")
 }

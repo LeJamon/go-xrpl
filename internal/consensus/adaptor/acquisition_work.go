@@ -703,26 +703,35 @@ func selectUsefulAcquisitionPeers(counts map[uint64]int) []uint64 {
 	return peers
 }
 
-func (r *Router) submitAcquisitionWork(ledger *inbound.Ledger, event acquisitionWorkEvent) bool {
-	if lane := r.currentAcquisitionWork(); lane != nil {
+func (c *catchupReplayCoordinator) submitAcquisitionWork(ledger *inbound.Ledger, event acquisitionWorkEvent) bool {
+	if c.stoppedForShutdown() {
+		return false
+	}
+	if lane := c.currentAcquisitionWork(); lane != nil {
 		if lane.submit(ledger, event) {
 			return true
 		}
 		return false
 	}
 	result := processAcquisitionWork(context.Background(), ledger, []acquisitionWorkEvent{event})
-	r.handleAcquisitionWorkResult(result)
+	c.handleAcquisitionWorkResult(result)
 	return true
 }
 
-func (r *Router) currentAcquisitionWork() *acquisitionWorkLane {
-	r.acquisitionWorkMu.RLock()
-	lane := r.acquisitionWork
-	r.acquisitionWorkMu.RUnlock()
+func (c *catchupReplayCoordinator) currentAcquisitionWork() *acquisitionWorkLane {
+	c.acquisitionWorkMu.RLock()
+	lane := c.acquisitionWork
+	c.acquisitionWorkMu.RUnlock()
 	return lane
 }
 
-func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
+func (c *catchupReplayCoordinator) handleAcquisitionWorkResult(result acquisitionWorkResult) {
+	if c.stoppedForShutdown() {
+		if result.ack != nil {
+			close(result.ack)
+		}
+		return
+	}
 	if result.ack != nil {
 		defer close(result.ack)
 	}
@@ -730,40 +739,40 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 		return
 	}
 	ledger := result.ledger
-	if ledger != nil && ledger.Reason() == inbound.ReasonHistory && !r.historySequenceAllowed(ledger.Seq()) {
-		r.discardHistoryAcquisition(ledger, "outside_history_window")
+	if ledger != nil && ledger.Reason() == inbound.ReasonHistory && !c.historySequenceAllowed(ledger.Seq()) {
+		c.discardHistoryAcquisition(ledger, "outside_history_window")
 		return
 	}
-	if ledger == nil || r.fetchTracker.Find(ledger.Hash()) != ledger {
+	if ledger == nil || c.fetchTracker.Find(ledger.Hash()) != ledger {
 		if ledger != nil {
 			for _, request := range result.requests {
 				ledger.ReleaseMissingRequest(request.PeerID, request.NodeHashes)
 			}
-			r.retireAcquisitionStore(r.lifecycleContext(), ledger)
+			c.retireAcquisitionStore(c.lifecycleContext(), ledger)
 		}
 		return
 	}
 	if result.rearmTimer && !result.complete && !result.remove {
 		defer ledger.RearmTimer(time.Now())
 	}
-	r.reportAcquisitionProgress(ledger, result.yielded)
+	c.reportAcquisitionProgress(ledger, result.yielded)
 	for _, bad := range result.badData {
 		if bad.kind != "" {
-			r.acquisition.IncPeerBadData(bad.peerID, bad.kind)
+			c.acquisition.IncPeerBadData(bad.peerID, bad.kind)
 		}
 	}
 	if result.err != nil && !result.remove {
-		r.logger.Warn("inbound ledger: acquisition worker failed", "error", result.err)
+		c.logger.Warn("inbound ledger: acquisition worker failed", "error", result.err)
 		return
 	}
 	if result.persistenceErr != nil {
-		r.logger.Warn("inbound ledger: verified-node persistence failed", "error", result.persistenceErr, "seq", ledger.Seq())
-		r.discardFailedInboundAcquisition(ledger, result.persistenceErr)
+		c.logger.Warn("inbound ledger: verified-node persistence failed", "error", result.persistenceErr, "seq", ledger.Seq())
+		c.discardFailedInboundAcquisition(ledger, result.persistenceErr)
 		return
 	}
 	if result.remove {
 		if result.err != nil {
-			r.logger.Warn("inbound ledger: acquisition data rejected", "error", result.err)
+			c.logger.Warn("inbound ledger: acquisition data rejected", "error", result.err)
 		}
 		cause := result.err
 		if result.timerFailure {
@@ -772,32 +781,32 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 			cause = errors.New("inbound ledger acquisition rejected by local policy")
 		}
 		if result.timerFailure || result.policyFailure {
-			r.failInboundAcquisitionWithSnapshot(ledger, result.snapshot, cause)
+			c.failInboundAcquisitionWithSnapshot(ledger, result.snapshot, cause)
 		} else {
 			snapshot := result.snapshot
 			if !result.haveSnapshot {
 				snapshot = ledger.Snapshot()
 			}
-			r.discardFailedInboundAcquisitionWithSnapshot(ledger, snapshot, cause)
+			c.discardFailedInboundAcquisitionWithSnapshot(ledger, snapshot, cause)
 		}
 		return
 	}
-	r.promoteResolvedFrozenPivot(ledger, ledger.PeerID())
+	c.promoteResolvedFrozenPivot(ledger, ledger.PeerID())
 	if result.complete {
-		r.completeInboundLedgerReady(ledger)
+		c.completeInboundLedgerReady(ledger)
 		return
 	}
 	if result.timerEscalate {
-		if !r.escalateAcquisition(ledger, result.timerAt) {
+		if !c.escalateAcquisition(ledger, result.timerAt) {
 			ledger.RearmTimer(time.Now())
 		}
 		return
 	}
 	if result.retryBase {
-		r.requestAcquisitionBase(ledger)
+		c.requestAcquisitionBase(ledger)
 	}
 	for _, reply := range result.replies {
-		r.logger.Debug("inbound ledger reply processed",
+		c.logger.Debug("inbound ledger reply processed",
 			"seq", ledger.Seq(),
 			"peer", reply.peerID,
 			"info_type", reply.infoType,
@@ -807,7 +816,7 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 	}
 	retry := missingNodeRetry{queryDepth: result.queryDepth}
 	if len(result.stateIDs) > 0 || len(result.txIDs) > 0 {
-		retry = r.sendMissingAcquisitionNodes(
+		retry = c.sendMissingAcquisitionNodes(
 			ledger,
 			result.targets,
 			result.stateIDs,
@@ -817,7 +826,7 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 	}
 	released := 0
 	for _, request := range result.requests {
-		if r.sendMissingReplyRequest(ledger, request) {
+		if c.sendMissingReplyRequest(ledger, request) {
 			released++
 		}
 	}
@@ -832,7 +841,7 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 				stateNodes += len(request.NodeIDs)
 			}
 		}
-		r.logger.Debug("inbound ledger requests scheduled",
+		c.logger.Debug("inbound ledger requests scheduled",
 			"seq", ledger.Seq(),
 			"peers", requestPeers,
 			"state_nodes", stateNodes,
@@ -842,44 +851,44 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 	if result.retarget && (len(retry.stateIDs) > 0 || len(retry.txIDs) > 0) {
 		ledger.ReleaseUnreservedMissingNodes()
 	} else if !result.retarget {
-		r.retryMissingAcquisitionNodes(ledger, retry, released)
+		c.retryMissingAcquisitionNodes(ledger, retry, released)
 	}
 	if len(result.byHashState) > 0 || len(result.byHashTx) > 0 {
 		peers := ledger.Peers()
-		r.sendNodesByHash(peers, ledger.Hash(), ledger.Seq(), result.byHashState, message.ObjectTypeStateNode)
-		r.sendNodesByHash(peers, ledger.Hash(), ledger.Seq(), result.byHashTx, message.ObjectTypeTransactionNode)
+		c.sendNodesByHash(peers, ledger.Hash(), ledger.Seq(), result.byHashState, message.ObjectTypeStateNode)
+		c.sendNodesByHash(peers, ledger.Hash(), ledger.Seq(), result.byHashTx, message.ObjectTypeTransactionNode)
 	}
-	if result.localFetch != nil && !r.submitAcquisitionWork(ledger, acquisitionWorkEvent{
+	if result.localFetch != nil && !c.submitAcquisitionWork(ledger, acquisitionWorkEvent{
 		kind: acquisitionWorkLocal, fetch: result.localFetch,
 	}) {
-		r.logger.Warn("inbound ledger: post-timeout local refresh deferred; acquisition worker unavailable", "seq", ledger.Seq())
+		c.logger.Warn("inbound ledger: post-timeout local refresh deferred; acquisition worker unavailable", "seq", ledger.Seq())
 	}
 }
 
-func (r *Router) sendMissingReplyRequest(ledger *inbound.Ledger, request inbound.MissingRequest) bool {
+func (c *catchupReplayCoordinator) sendMissingReplyRequest(ledger *inbound.Ledger, request inbound.MissingRequest) bool {
 	indirect := ledger.Timeouts() > 0
 	queryDepth := uint32(1)
 	if request.Blind {
 		queryDepth = 0
-	} else if latency, ok := r.acquisition.PeerLatency(request.PeerID); ok && latency >= 300*time.Millisecond {
+	} else if latency, ok := c.acquisition.PeerLatency(request.PeerID); ok && latency >= 300*time.Millisecond {
 		queryDepth = 2
 	}
-	if !r.acquisitionPeerConnected(request.PeerID) {
+	if !c.acquisitionPeerConnected(request.PeerID) {
 		ledger.ReleaseMissingRequest(request.PeerID, request.NodeHashes)
-		r.removeStaleAcquisitionPeer(ledger, request.PeerID)
+		c.removeStaleAcquisitionPeer(ledger, request.PeerID)
 		return true
 	}
 	var err error
 	if request.Transaction {
-		err = r.acquisition.RequestTransactionNodes(request.PeerID, ledger.Hash(), request.NodeIDs, queryDepth, indirect)
+		err = c.acquisition.RequestTransactionNodes(request.PeerID, ledger.Hash(), request.NodeIDs, queryDepth, indirect)
 	} else {
-		err = r.acquisition.RequestStateNodes(request.PeerID, ledger.Hash(), request.NodeIDs, queryDepth, indirect)
+		err = c.acquisition.RequestStateNodes(request.PeerID, ledger.Hash(), request.NodeIDs, queryDepth, indirect)
 	}
 	if err == nil {
 		return false
 	}
 	ledger.ReleaseMissingRequest(request.PeerID, request.NodeHashes)
-	return r.handleMissingNodeSendFailure(ledger, request.PeerID, request.Transaction, err)
+	return c.handleMissingNodeSendFailure(ledger, request.PeerID, request.Transaction, err)
 }
 
 type missingNodeRetry struct {
@@ -888,7 +897,7 @@ type missingNodeRetry struct {
 	queryDepth uint32
 }
 
-func (r *Router) sendMissingAcquisitionNodes(
+func (c *catchupReplayCoordinator) sendMissingAcquisitionNodes(
 	ledger *inbound.Ledger,
 	peers []uint64,
 	stateIDs, txIDs [][]byte,
@@ -899,15 +908,15 @@ func (r *Router) sendMissingAcquisitionNodes(
 	var txSent, txDisconnected bool
 	for _, peerID := range peers {
 		disconnected := false
-		if !r.acquisitionPeerConnected(peerID) {
-			r.removeStaleAcquisitionPeer(ledger, peerID)
+		if !c.acquisitionPeerConnected(peerID) {
+			c.removeStaleAcquisitionPeer(ledger, peerID)
 			stateDisconnected = stateDisconnected || len(stateIDs) > 0
 			txDisconnected = txDisconnected || len(txIDs) > 0
 			continue
 		}
 		if len(stateIDs) > 0 {
-			if err := r.acquisition.RequestStateNodes(peerID, ledger.Hash(), stateIDs, queryDepth, indirect); err != nil {
-				disconnected = r.handleMissingNodeSendFailure(ledger, peerID, false, err)
+			if err := c.acquisition.RequestStateNodes(peerID, ledger.Hash(), stateIDs, queryDepth, indirect); err != nil {
+				disconnected = c.handleMissingNodeSendFailure(ledger, peerID, false, err)
 				stateDisconnected = stateDisconnected || disconnected
 			} else {
 				stateSent = true
@@ -918,8 +927,8 @@ func (r *Router) sendMissingAcquisitionNodes(
 			continue
 		}
 		if len(txIDs) > 0 {
-			if err := r.acquisition.RequestTransactionNodes(peerID, ledger.Hash(), txIDs, queryDepth, indirect); err != nil {
-				disconnected = r.handleMissingNodeSendFailure(ledger, peerID, true, err)
+			if err := c.acquisition.RequestTransactionNodes(peerID, ledger.Hash(), txIDs, queryDepth, indirect); err != nil {
+				disconnected = c.handleMissingNodeSendFailure(ledger, peerID, true, err)
 				txDisconnected = txDisconnected || disconnected
 			} else {
 				txSent = true
@@ -936,13 +945,13 @@ func (r *Router) sendMissingAcquisitionNodes(
 	return retry
 }
 
-func (r *Router) acquisitionPeerConnected(peerID uint64) bool {
-	return r.peerSessions == nil || r.peerSessions.IsPeerConnected(peermanagement.PeerID(peerID))
+func (c *catchupReplayCoordinator) acquisitionPeerConnected(peerID uint64) bool {
+	return c.peerSessions == nil || c.peerSessions.IsPeerConnected(peermanagement.PeerID(peerID))
 }
 
-func (r *Router) removeStaleAcquisitionPeer(ledger *inbound.Ledger, peerID uint64) {
+func (c *catchupReplayCoordinator) removeStaleAcquisitionPeer(ledger *inbound.Ledger, peerID uint64) {
 	ledger.RemovePeer(peerID)
-	r.HandlePeerDisconnect(peermanagement.PeerID(peerID))
+	c.onPeerDisconnect(peermanagement.PeerID(peerID))
 }
 
 func applyAcquisitionData(ctx context.Context, ledger *inbound.Ledger, data *message.LedgerData) (useful int, badKind string, remove, complete bool, err error) {

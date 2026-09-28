@@ -33,7 +33,7 @@ func TestRouter_AdoptVerifiedLedger_NotifiesEngine(t *testing.T) {
 	resp, expectedHash, seq := buildEmptyClosedSuccessorResponse(t, svc)
 
 	parent := svc.GetClosedLedger()
-	require.NoError(t, r.startReplayDeltaAcquisition(seq, expectedHash, 7, parent))
+	require.NoError(t, r.catchupReplay.startReplayDeltaAcquisition(seq, expectedHash, 7, parent))
 
 	payload, err := message.Encode(resp)
 	require.NoError(t, err)

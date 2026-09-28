@@ -24,7 +24,7 @@ func TestRouter_MalformedMatchingBaseCannotFallThrough(t *testing.T) {
 	r := newTestRouter(engine, a, make(chan *peermanagement.InboundMessage, 1))
 	target := [32]byte{0x72}
 	seq := svc.GetClosedLedgerIndex() + 100
-	r.fetchTracker.Track(inbound.New(target, seq, 7, nil))
+	r.catchupReplay.fetchTracker.Track(inbound.New(target, seq, 7, nil))
 
 	ld := &message.LedgerData{
 		LedgerHash: target[:],
@@ -38,7 +38,7 @@ func TestRouter_MalformedMatchingBaseCannotFallThrough(t *testing.T) {
 		Payload: encodePayload(t, ld),
 	})
 
-	require.Nil(t, r.fetchTracker.Find(target))
+	require.Nil(t, r.catchupReplay.fetchTracker.Find(target))
 	require.True(t, svc.NeedsInitialSync())
 	require.Empty(t, engine.getLedgers())
 }
@@ -127,25 +127,25 @@ func TestRouter_InitialSyncFarPeerStatusRequiresCorroboration(t *testing.T) {
 
 	r.handleStatusChange(statusChangeMessage(t, 7, targetSeq, targetHash))
 
-	r.peersMu.RLock()
-	_, admitted := r.peerStates[7]
-	_, staged := r.peerStatusCandidates[7]
-	r.peersMu.RUnlock()
+	r.catchupReplay.peersMu.RLock()
+	_, admitted := r.catchupReplay.peerStates[7]
+	_, staged := r.catchupReplay.peerStatusCandidates[7]
+	r.catchupReplay.peersMu.RUnlock()
 	require.False(t, admitted)
 	require.True(t, staged)
 	require.Empty(t, a.PeerReportedLedgers())
 	require.Zero(t, acquireCount(sender))
-	require.Equal(t, catchupTarget{}, r.catchup)
+	require.Equal(t, catchupTarget{}, r.catchupReplay.catchup)
 
 	r.handleStatusChange(statusChangeMessage(t, 8, targetSeq, targetHash))
 
-	r.peersMu.RLock()
-	require.Len(t, r.peerStates, 2)
-	require.Empty(t, r.peerStatusCandidates)
-	r.peersMu.RUnlock()
+	r.catchupReplay.peersMu.RLock()
+	require.Len(t, r.catchupReplay.peerStates, 2)
+	require.Empty(t, r.catchupReplay.peerStatusCandidates)
+	r.catchupReplay.peersMu.RUnlock()
 	require.Len(t, a.PeerReportedLedgers(), 2)
 	require.GreaterOrEqual(t, acquireCount(sender), 1)
-	seq, hash, _ := r.bestCatchupTarget()
+	seq, hash, _ := r.catchupReplay.bestCatchupTarget()
 	require.Equal(t, targetSeq, seq)
 	require.Equal(t, targetHash, hash)
 }
@@ -158,18 +158,18 @@ func TestRouter_InitialSyncStagedFarPeerPromotedByTrustedTarget(t *testing.T) {
 	targetHash := [32]byte{0x92}
 
 	r.handleStatusChange(statusChangeMessage(t, 7, targetSeq, targetHash))
-	r.peersMu.RLock()
-	_, staged := r.peerStatusCandidates[7]
-	r.peersMu.RUnlock()
+	r.catchupReplay.peersMu.RLock()
+	_, staged := r.catchupReplay.peerStatusCandidates[7]
+	r.catchupReplay.peersMu.RUnlock()
 	require.True(t, staged)
 	require.Zero(t, acquireCount(sender))
 
-	r.onLedgerFullyValidated(targetSeq, targetHash)
+	r.catchupReplay.onLedgerFullyValidated(targetSeq, targetHash)
 
-	r.peersMu.RLock()
-	_, admitted := r.peerStates[7]
-	_, staged = r.peerStatusCandidates[7]
-	r.peersMu.RUnlock()
+	r.catchupReplay.peersMu.RLock()
+	_, admitted := r.catchupReplay.peerStates[7]
+	_, staged = r.catchupReplay.peerStatusCandidates[7]
+	r.catchupReplay.peersMu.RUnlock()
 	require.True(t, admitted)
 	require.False(t, staged)
 	require.Equal(t, []consensus.LedgerID{consensus.LedgerID(targetHash)}, a.PeerReportedLedgers())

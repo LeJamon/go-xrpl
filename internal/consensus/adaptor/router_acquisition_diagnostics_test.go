@@ -36,6 +36,7 @@ func TestRouter_LedgerDataDiagnostics(t *testing.T) {
 			r, _, _, svc := makeRouter(t)
 			var output bytes.Buffer
 			r.logger = slog.New(slog.NewJSONHandler(&output, nil))
+			r.catchupReplay.logger = r.logger
 
 			seq := svc.GetClosedLedgerIndex() + 1
 			hash := [32]byte{0xA4}

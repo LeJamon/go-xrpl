@@ -472,7 +472,7 @@ func TestRouterQueuedPeerConnectCannotResurrectDisconnectedPeer(t *testing.T) {
 	sender := &fakeManifestSender{}
 	router, _, _ := routerWithCache(t, sender, 0x75, 2)
 	ledger, _ := newWideWorkLedger(t)
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 	sessions := &testPeerSessions{connected: map[peermanagement.PeerID]bool{22: true}}
 	router.setPeerSessionView(sessions)
 

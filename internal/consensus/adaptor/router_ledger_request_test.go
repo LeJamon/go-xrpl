@@ -42,7 +42,7 @@ func TestRouter_RequestLedger_TriggersGenericAcquisition(t *testing.T) {
 	assert.Equal(t, target, calls[0].hash)
 	assert.Equal(t, uint64(7), calls[0].peerID)
 
-	il := r.fetchTracker.Find(target)
+	il := r.catchupReplay.fetchTracker.Find(target)
 	require.NotNil(t, il, "the acquisition must be registered")
 	assert.Equal(t, inbound.ReasonGeneric, il.Reason())
 
@@ -62,7 +62,7 @@ func TestRouter_RequestLedger_NoPeerDoesNotPoisonLaterRetry(t *testing.T) {
 	require.False(t, started)
 	require.Nil(t, snap)
 	assert.Empty(t, rs.legacyCalls())
-	require.Nil(t, r.fetchTracker.Find(target))
+	require.Nil(t, r.catchupReplay.fetchTracker.Find(target))
 
 	trackCatchupPeer(r, 7, 1)
 	snap, started, reference := r.RequestLedger(target, 0)
@@ -73,7 +73,7 @@ func TestRouter_RequestLedger_NoPeerDoesNotPoisonLaterRetry(t *testing.T) {
 	calls := rs.legacyCalls()
 	require.Len(t, calls, 1)
 	assert.Equal(t, uint64(7), calls[0].peerID)
-	il := r.fetchTracker.Find(target)
+	il := r.catchupReplay.fetchTracker.Find(target)
 	require.NotNil(t, il)
 	assert.Equal(t, []uint64{7}, il.Peers())
 }
@@ -82,6 +82,7 @@ func TestGenericAcquisitionJoinedByConsensusNotifiesExactTarget(t *testing.T) {
 	r, _, _, svc := makeRouter(t)
 	engine := &mockEngine{switchResult: consensus.LedgerSwitchAccepted}
 	r.engine = engine
+	r.catchupReplay.engine = r.engine
 	rootHash, rootData, wire := buildSelfHealSourceState(t)
 	closed := svc.GetClosedLedger()
 	require.NotNil(t, closed)
@@ -100,11 +101,11 @@ func TestGenericAcquisitionJoinedByConsensusNotifiesExactTarget(t *testing.T) {
 	require.NoError(t, acquired.GotStateNodes(wire))
 	acquired.CollectMissingRequest(false)
 	require.True(t, acquired.IsComplete())
-	r.fetchTracker.Track(acquired)
-	r.consensusRecovery = consensusRecovery{targetHash: target, stepHash: target}
+	r.catchupReplay.fetchTracker.Track(acquired)
+	r.catchupReplay.consensusRecovery = consensusRecovery{targetHash: target, stepHash: target}
 
-	r.completeInboundLedger(acquired)
+	r.catchupReplay.completeInboundLedger(acquired)
 
 	require.Equal(t, []consensus.LedgerID{consensus.LedgerID(target)}, engine.getLedgers())
-	require.Equal(t, consensusRecovery{anchorHash: target, anchorSeq: hdr.LedgerIndex}, r.consensusRecovery)
+	require.Equal(t, consensusRecovery{anchorHash: target, anchorSeq: hdr.LedgerIndex}, r.catchupReplay.consensusRecovery)
 }

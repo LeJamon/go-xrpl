@@ -38,29 +38,29 @@ func TestIssue1863AutomaticPivotSurvivesNoProgressAndDistanceEviction(t *testing
 			pivotSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
 			pivotHash := [32]byte{0x18}
 			trackCatchupPeer(r, 7, pivotSeq, pivotHash)
-			require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
-			pivot := r.fetchTracker.Find(pivotHash)
+			require.True(t, r.catchupReplay.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+			pivot := r.catchupReplay.fetchTracker.Find(pivotHash)
 			require.NotNil(t, pivot)
 
 			otherSeq := pivotSeq + 1
 			otherHash := [32]byte{0x19}
 			other := inbound.New(otherHash, otherSeq, 7, serveTestLogger())
-			r.fetchTracker.Track(other)
+			r.catchupReplay.fetchTracker.Track(other)
 			if tt.pivotStep {
-				timeoutInboundAcquisition(t, r.fetchTracker.Find(pivotHash))
+				timeoutInboundAcquisition(t, r.catchupReplay.fetchTracker.Find(pivotHash))
 				timeoutInboundAcquisition(t, other)
 			}
 
 			targetSeq := pivotSeq + tt.targetStep
-			r.acquisitionMu.Lock()
-			victim := r.obsoleteCatchupVictimLocked(targetSeq)
-			r.acquisitionMu.Unlock()
+			r.catchupReplay.acquisitionMu.Lock()
+			victim := r.catchupReplay.obsoleteCatchupVictimLocked(targetSeq)
+			r.catchupReplay.acquisitionMu.Unlock()
 
 			require.Same(t, other, victim)
-			assert.Same(t, pivot, r.fetchTracker.Find(pivotHash))
-			assert.True(t, r.standardReplay.active)
-			assert.False(t, r.standardReplay.pivotReady)
-			assert.Equal(t, pivotHash, r.standardReplay.pivotHash)
+			assert.Same(t, pivot, r.catchupReplay.fetchTracker.Find(pivotHash))
+			assert.True(t, r.catchupReplay.standardReplay.active)
+			assert.False(t, r.catchupReplay.standardReplay.pivotReady)
+			assert.Equal(t, pivotHash, r.catchupReplay.standardReplay.pivotHash)
 		})
 	}
 }
@@ -70,22 +70,22 @@ func TestIssue1863OrphanedAutomaticPivotRearmsSameGeneration(t *testing.T) {
 	pivotSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
 	pivotHash := [32]byte{0x1a}
 	trackCatchupPeer(r, 7, pivotSeq, pivotHash)
-	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
-	pivot := r.fetchTracker.Find(pivotHash)
+	require.True(t, r.catchupReplay.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+	pivot := r.catchupReplay.fetchTracker.Find(pivotHash)
 	require.NotNil(t, pivot)
-	generation := r.standardReplay.generation
+	generation := r.catchupReplay.standardReplay.generation
 
-	require.True(t, r.fetchTracker.DiscardExpected(pivot))
-	assert.Nil(t, r.fetchTracker.Find(pivotHash))
-	require.True(t, r.rebootstrapFrozenPivotIfStalled(time.Now().Add(24*time.Hour)))
+	require.True(t, r.catchupReplay.fetchTracker.DiscardExpected(pivot))
+	assert.Nil(t, r.catchupReplay.fetchTracker.Find(pivotHash))
+	require.True(t, r.catchupReplay.rebootstrapFrozenPivotIfStalled(time.Now().Add(24*time.Hour)))
 
-	rearmed := r.fetchTracker.Find(pivotHash)
+	rearmed := r.catchupReplay.fetchTracker.Find(pivotHash)
 	require.NotNil(t, rearmed)
 	assert.NotSame(t, pivot, rearmed)
-	assert.Equal(t, generation, r.standardReplay.generation)
-	assert.True(t, r.standardReplay.active)
-	assert.False(t, r.standardReplay.pivotReady)
-	assert.Equal(t, pivotHash, r.standardReplay.pivotHash)
+	assert.Equal(t, generation, r.catchupReplay.standardReplay.generation)
+	assert.True(t, r.catchupReplay.standardReplay.active)
+	assert.False(t, r.catchupReplay.standardReplay.pivotReady)
+	assert.Equal(t, pivotHash, r.catchupReplay.standardReplay.pivotHash)
 	assert.Len(t, sender.legacyCalls(), 2)
 }
 
@@ -94,35 +94,35 @@ func TestIssue1863PivotHandoffCountsCapacityAndRejectsDuplicate(t *testing.T) {
 	pivotSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
 	pivotHash := [32]byte{0x1b}
 	trackCatchupPeer(r, 7, pivotSeq, pivotHash)
-	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
-	pivot := r.fetchTracker.Find(pivotHash)
+	require.True(t, r.catchupReplay.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+	pivot := r.catchupReplay.fetchTracker.Find(pivotHash)
 	require.NotNil(t, pivot)
 
-	r.replayCommitMu.Lock()
-	r.acquisitionMu.Lock()
-	handoff, claimed := r.claimStandardReplayPivotHandoffLocked(pivot)
+	r.catchupReplay.replayCommitMu.Lock()
+	r.catchupReplay.acquisitionMu.Lock()
+	handoff, claimed := r.catchupReplay.claimStandardReplayPivotHandoffLocked(pivot)
 	require.True(t, claimed)
-	require.True(t, r.fetchTracker.RemoveExpectedWithSnapshot(pivot, pivot.Snapshot(), true))
-	r.acquisitionMu.Unlock()
-	r.replayCommitMu.Unlock()
+	require.True(t, r.catchupReplay.fetchTracker.RemoveExpectedWithSnapshot(pivot, pivot.Snapshot(), true))
+	r.catchupReplay.acquisitionMu.Unlock()
+	r.catchupReplay.replayCommitMu.Unlock()
 
-	assert.True(t, r.isAcquiring(pivotHash))
-	assert.Equal(t, 1, r.protectedCatchupInFlight())
-	duplicateStarted := r.startLedgerAcquisition(pivotSeq, pivotHash, 7)
+	assert.True(t, r.catchupReplay.isAcquiring(pivotHash))
+	assert.Equal(t, 1, r.catchupReplay.protectedCatchupInFlight())
+	duplicateStarted := r.catchupReplay.startLedgerAcquisition(pivotSeq, pivotHash, 7)
 	assert.True(t, duplicateStarted)
-	assert.Nil(t, r.fetchTracker.Find(pivotHash))
+	assert.Nil(t, r.catchupReplay.fetchTracker.Find(pivotHash))
 
 	otherHash := [32]byte{0x1c}
 	other := inbound.New(otherHash, pivotSeq+1, 7, serveTestLogger())
-	r.fetchTracker.Track(other)
-	assert.Equal(t, maxConcurrentSpeculativeCatchup, r.protectedCatchupInFlight())
+	r.catchupReplay.fetchTracker.Track(other)
+	assert.Equal(t, maxConcurrentSpeculativeCatchup, r.catchupReplay.protectedCatchupInFlight())
 	thirdHash := [32]byte{0x1d}
-	assert.False(t, r.startLedgerAcquisition(pivotSeq+2, thirdHash, 7))
-	assert.Nil(t, r.fetchTracker.Find(thirdHash))
+	assert.False(t, r.catchupReplay.startLedgerAcquisition(pivotSeq+2, thirdHash, 7))
+	assert.Nil(t, r.catchupReplay.fetchTracker.Find(thirdHash))
 
-	r.acquisitionMu.Lock()
-	assert.True(t, r.standardReplayPivotHandoffMatchesLocked(handoff))
-	r.acquisitionMu.Unlock()
+	r.catchupReplay.acquisitionMu.Lock()
+	assert.True(t, r.catchupReplay.standardReplayPivotHandoffMatchesLocked(handoff))
+	r.catchupReplay.acquisitionMu.Unlock()
 }
 
 func TestIssue1863StalePivotCompletionCannotInstallReplacementGeneration(t *testing.T) {
@@ -130,41 +130,41 @@ func TestIssue1863StalePivotCompletionCannotInstallReplacementGeneration(t *test
 	pivotSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
 	pivotHash := [32]byte{0x1e}
 	trackCatchupPeer(r, 7, pivotSeq, pivotHash)
-	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
-	pivot := r.fetchTracker.Find(pivotHash)
+	require.True(t, r.catchupReplay.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+	pivot := r.catchupReplay.fetchTracker.Find(pivotHash)
 	require.NotNil(t, pivot)
 
-	r.replayCommitMu.Lock()
-	r.acquisitionMu.Lock()
-	handoff, claimed := r.claimStandardReplayPivotHandoffLocked(pivot)
+	r.catchupReplay.replayCommitMu.Lock()
+	r.catchupReplay.acquisitionMu.Lock()
+	handoff, claimed := r.catchupReplay.claimStandardReplayPivotHandoffLocked(pivot)
 	require.True(t, claimed)
-	require.True(t, r.fetchTracker.RemoveExpectedWithSnapshot(pivot, pivot.Snapshot(), true))
-	r.acquisitionMu.Unlock()
-	r.replayCommitMu.Unlock()
+	require.True(t, r.catchupReplay.fetchTracker.RemoveExpectedWithSnapshot(pivot, pivot.Snapshot(), true))
+	r.catchupReplay.acquisitionMu.Unlock()
+	r.catchupReplay.replayCommitMu.Unlock()
 
-	r.replayCommitMu.Lock()
-	r.acquisitionMu.Lock()
-	retirement := r.cancelStandardReplayPipelineLocked("test_cancellation")
-	r.acquisitionMu.Unlock()
-	r.replayCommitMu.Unlock()
-	r.retireStandardReplay(retirement)
+	r.catchupReplay.replayCommitMu.Lock()
+	r.catchupReplay.acquisitionMu.Lock()
+	retirement := r.catchupReplay.cancelStandardReplayPipelineLocked("test_cancellation")
+	r.catchupReplay.acquisitionMu.Unlock()
+	r.catchupReplay.replayCommitMu.Unlock()
+	r.catchupReplay.retireStandardReplay(retirement)
 
-	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
-	replacementGeneration := r.standardReplay.generation
+	require.True(t, r.catchupReplay.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+	replacementGeneration := r.catchupReplay.standardReplay.generation
 	pivotHeader := header.LedgerHeader{LedgerIndex: pivotSeq, Hash: pivotHash}
-	require.False(t, r.completeFrozenPivotAcquisitionOwned(&pivotHeader, false, handoff))
-	assert.True(t, r.standardReplay.active)
-	assert.False(t, r.standardReplay.pivotReady)
-	assert.Equal(t, replacementGeneration, r.standardReplay.generation)
-	assert.Equal(t, pivotHash, r.standardReplay.pivotHash)
+	require.False(t, r.catchupReplay.completeFrozenPivotAcquisitionOwned(&pivotHeader, false, handoff))
+	assert.True(t, r.catchupReplay.standardReplay.active)
+	assert.False(t, r.catchupReplay.standardReplay.pivotReady)
+	assert.Equal(t, replacementGeneration, r.catchupReplay.standardReplay.generation)
+	assert.Equal(t, pivotHash, r.catchupReplay.standardReplay.pivotHash)
 }
 
 func TestIssue1863MalformedPivotReplyRetiresSession(t *testing.T) {
 	r, _, _, svc := makeRouter(t)
 	pivotSeq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
 	pivotHash := [32]byte{0x1f}
-	require.True(t, r.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
-	pivot := r.fetchTracker.Find(pivotHash)
+	require.True(t, r.catchupReplay.beginFrozenPivotRecovery(pivotSeq, pivotHash, 7))
+	pivot := r.catchupReplay.fetchTracker.Find(pivotHash)
 	require.NotNil(t, pivot)
 
 	consumed := r.handleInboundLedgerData(pivot, &message.LedgerData{
@@ -173,8 +173,8 @@ func TestIssue1863MalformedPivotReplyRetiresSession(t *testing.T) {
 	}, 7)
 
 	assert.True(t, consumed)
-	assert.False(t, r.standardReplay.active)
-	assert.Nil(t, r.fetchTracker.Find(pivotHash))
+	assert.False(t, r.catchupReplay.standardReplay.active)
+	assert.Nil(t, r.catchupReplay.fetchTracker.Find(pivotHash))
 }
 
 type pivotHandoffLogBarrier struct {
@@ -194,19 +194,20 @@ func (h *pivotHandoffLogBarrier) Handle(ctx context.Context, record slog.Record)
 func TestIssue1863MaintenancePreservesCompletionHandoff(t *testing.T) {
 	r, _, _, svc := makeRouter(t)
 	pivot := completedCatchUpAcquisition(t, svc.GetClosedLedgerIndex()+10)
-	r.fetchTracker.Track(pivot)
+	r.catchupReplay.fetchTracker.Track(pivot)
 	trackCatchupPeer(r, 7, pivot.Seq(), pivot.Hash())
-	require.True(t, r.beginFrozenPivotRecovery(pivot.Seq(), pivot.Hash(), 7))
-	generation := r.standardReplay.generation
+	require.True(t, r.catchupReplay.beginFrozenPivotRecovery(pivot.Seq(), pivot.Hash(), 7))
+	generation := r.catchupReplay.standardReplay.generation
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	t.Cleanup(unblock)
 	r.logger = slog.New(&pivotHandoffLogBarrier{Handler: r.logger.Handler(), entered: entered, release: release})
+	r.catchupReplay.logger = r.logger
 	done := make(chan struct{})
 	go func() {
-		r.completeInboundLedger(pivot)
+		r.catchupReplay.completeInboundLedger(pivot)
 		close(done)
 	}()
 	select {
@@ -214,27 +215,27 @@ func TestIssue1863MaintenancePreservesCompletionHandoff(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("completion did not reach the handoff")
 	}
-	require.Nil(t, r.fetchTracker.Find(pivot.Hash()))
+	require.Nil(t, r.catchupReplay.fetchTracker.Find(pivot.Hash()))
 	stored, err := svc.GetLedgerByHash(pivot.Hash())
 	require.NoError(t, err)
 	require.Equal(t, pivot.Hash(), stored.Hash())
 	r.maintenanceTick()
-	require.False(t, r.rebootstrapFrozenPivotIfStalled(time.Now().Add(24*time.Hour)))
-	r.acquisitionMu.Lock()
-	assert.True(t, r.standardReplay.active)
-	assert.False(t, r.standardReplay.pivotReady)
-	assert.Equal(t, generation, r.standardReplay.generation)
-	assert.NotNil(t, r.standardReplay.pivotHandoff)
-	r.acquisitionMu.Unlock()
+	require.False(t, r.catchupReplay.rebootstrapFrozenPivotIfStalled(time.Now().Add(24*time.Hour)))
+	r.catchupReplay.acquisitionMu.Lock()
+	assert.True(t, r.catchupReplay.standardReplay.active)
+	assert.False(t, r.catchupReplay.standardReplay.pivotReady)
+	assert.Equal(t, generation, r.catchupReplay.standardReplay.generation)
+	assert.NotNil(t, r.catchupReplay.standardReplay.pivotHandoff)
+	r.catchupReplay.acquisitionMu.Unlock()
 	unblock()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("completion did not finish")
 	}
-	assert.False(t, r.standardReplay.active)
-	assert.True(t, r.standardReplay.pivotReady)
-	assert.Nil(t, r.standardReplay.pivotHandoff)
+	assert.False(t, r.catchupReplay.standardReplay.active)
+	assert.True(t, r.catchupReplay.standardReplay.pivotReady)
+	assert.Nil(t, r.catchupReplay.standardReplay.pivotHandoff)
 }
 
 func TestIssue1863OrphanRearmHonorsCapacityAndGeneration(t *testing.T) {
@@ -242,25 +243,25 @@ func TestIssue1863OrphanRearmHonorsCapacityAndGeneration(t *testing.T) {
 	seq := svc.GetClosedLedgerIndex() + maxForwardDeltaGap + 1
 	hash := [32]byte{0x71}
 	trackCatchupPeer(r, 7, seq, hash)
-	require.True(t, r.beginFrozenPivotRecovery(seq, hash, 7))
-	generation := r.standardReplay.generation
-	require.True(t, r.fetchTracker.DiscardExpected(r.fetchTracker.Find(hash)))
+	require.True(t, r.catchupReplay.beginFrozenPivotRecovery(seq, hash, 7))
+	generation := r.catchupReplay.standardReplay.generation
+	require.True(t, r.catchupReplay.fetchTracker.DiscardExpected(r.catchupReplay.fetchTracker.Find(hash)))
 	for i := range maxConcurrentSpeculativeCatchup {
-		r.fetchTracker.Track(inbound.New([32]byte{byte(0x72 + i)}, seq+1, 7, serveTestLogger()))
+		r.catchupReplay.fetchTracker.Track(inbound.New([32]byte{byte(0x72 + i)}, seq+1, 7, serveTestLogger()))
 	}
-	require.False(t, r.rearmFrozenPivotAcquisition(generation, seq, hash, time.Now()))
-	require.Nil(t, r.fetchTracker.Find(hash))
-	r.discardFailedInboundAcquisition(r.fetchTracker.Find([32]byte{0x72}), nil)
-	require.True(t, r.rearmFrozenPivotAcquisition(generation, seq, hash, time.Now()))
-	assert.Equal(t, maxConcurrentSpeculativeCatchup, r.protectedCatchupInFlight())
+	require.False(t, r.catchupReplay.rearmFrozenPivotAcquisition(generation, seq, hash, time.Now()))
+	require.Nil(t, r.catchupReplay.fetchTracker.Find(hash))
+	r.catchupReplay.discardFailedInboundAcquisition(r.catchupReplay.fetchTracker.Find([32]byte{0x72}), nil)
+	require.True(t, r.catchupReplay.rearmFrozenPivotAcquisition(generation, seq, hash, time.Now()))
+	assert.Equal(t, maxConcurrentSpeculativeCatchup, r.catchupReplay.protectedCatchupInFlight())
 
 	r.ClearFetchInfo()
-	require.True(t, r.beginFrozenPivotRecovery(seq, hash, 7))
-	replacementGeneration := r.standardReplay.generation
+	require.True(t, r.catchupReplay.beginFrozenPivotRecovery(seq, hash, 7))
+	replacementGeneration := r.catchupReplay.standardReplay.generation
 	require.Greater(t, replacementGeneration, generation)
-	require.True(t, r.fetchTracker.DiscardExpected(r.fetchTracker.Find(hash)))
-	require.False(t, r.rearmFrozenPivotAcquisition(generation, seq, hash, time.Now()))
-	require.Nil(t, r.fetchTracker.Find(hash))
-	require.True(t, r.rearmFrozenPivotAcquisition(replacementGeneration, seq, hash, time.Now()))
-	assert.Equal(t, replacementGeneration, r.standardReplay.generation)
+	require.True(t, r.catchupReplay.fetchTracker.DiscardExpected(r.catchupReplay.fetchTracker.Find(hash)))
+	require.False(t, r.catchupReplay.rearmFrozenPivotAcquisition(generation, seq, hash, time.Now()))
+	require.Nil(t, r.catchupReplay.fetchTracker.Find(hash))
+	require.True(t, r.catchupReplay.rearmFrozenPivotAcquisition(replacementGeneration, seq, hash, time.Now()))
+	assert.Equal(t, replacementGeneration, r.catchupReplay.standardReplay.generation)
 }

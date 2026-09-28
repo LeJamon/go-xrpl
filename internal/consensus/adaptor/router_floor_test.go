@@ -39,7 +39,7 @@ func TestRouter_RequestLedger_Floor_DeclinesBelowBoundary(t *testing.T) {
 	assert.Nil(t, snap)
 	assert.Empty(t, rs.legacyCalls(), "no base fetch may be issued below the floor")
 	assert.Empty(t, rs.replayCalls(), "no replay-delta fetch may be issued below the floor")
-	assert.Nil(t, r.fetchTracker.Find(target), "no acquisition may be registered below the floor")
+	assert.Nil(t, r.catchupReplay.fetchTracker.Find(target), "no acquisition may be registered below the floor")
 }
 
 func TestRouter_InternalAcquisitionEntrypointsDeclineKnownSeqBelowFloor(t *testing.T) {
@@ -47,11 +47,11 @@ func TestRouter_InternalAcquisitionEntrypointsDeclineKnownSeqBelowFloor(t *testi
 	r.SetMinimumOnlineFloor(stubFloor(100))
 	target := [32]byte{0x43}
 
-	assert.False(t, r.startLedgerAcquisition(99, target, 7))
-	r.startLedgerAcquisitionLegacy(99, target, 7)
+	assert.False(t, r.catchupReplay.startLedgerAcquisition(99, target, 7))
+	r.catchupReplay.startLedgerAcquisitionLegacy(99, target, 7)
 	assert.Empty(t, sender.legacyCalls())
 	assert.Empty(t, sender.replayCalls())
-	assert.Nil(t, r.fetchTracker.Find(target))
+	assert.Nil(t, r.catchupReplay.fetchTracker.Find(target))
 }
 
 // TestRouter_RequestLedger_Floor_AllowsAtOrAboveBoundary verifies a request at
@@ -92,13 +92,14 @@ func TestRouter_HashOnlyHeaderBelowFloorTerminatesConsensusTarget(t *testing.T) 
 	r, _, _, _ := makeRouter(t)
 	engine := &mockEngine{}
 	r.engine = engine
+	r.catchupReplay.engine = r.engine
 	r.SetMinimumOnlineFloor(stubFloor(100))
 	rootHash, rootData, _ := buildSelfHealSourceState(t)
 	headerData := header.AddRaw(header.LedgerHeader{LedgerIndex: 50, AccountHash: rootHash}, false)
 	target := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), headerData)
-	r.consensusRecovery = consensusRecovery{targetHash: target, stepHash: target}
-	acquisition := inbound.New(target, 0, 7, serveTestLogger(), r.acquisitionOpts()...)
-	r.fetchTracker.Track(acquisition)
+	r.catchupReplay.consensusRecovery = consensusRecovery{targetHash: target, stepHash: target}
+	acquisition := inbound.New(target, 0, 7, serveTestLogger(), r.catchupReplay.acquisitionOpts()...)
+	r.catchupReplay.fetchTracker.Track(acquisition)
 
 	result := processAcquisitionWork(context.Background(), acquisition, []acquisitionWorkEvent{{
 		kind: acquisitionWorkData,
@@ -111,14 +112,14 @@ func TestRouter_HashOnlyHeaderBelowFloorTerminatesConsensusTarget(t *testing.T) 
 	require.True(t, result.remove)
 	require.True(t, result.policyFailure)
 	require.Empty(t, result.badData, "a valid but locally stale header must not blame its peer")
-	r.handleAcquisitionWorkResult(result)
+	r.catchupReplay.handleAcquisitionWorkResult(result)
 
-	assert.Nil(t, r.fetchTracker.Find(target))
-	assert.Equal(t, consensusRecovery{}, r.consensusRecovery)
+	assert.Nil(t, r.catchupReplay.fetchTracker.Find(target))
+	assert.Equal(t, consensusRecovery{}, r.catchupReplay.consensusRecovery)
 	assert.Equal(t, []consensus.LedgerID{consensus.LedgerID(target)}, engine.getAcquireFailed())
-	assert.True(t, r.catchupRetryBlocked(target, time.Now()))
-	r.armConsensusCatchup()
-	assert.Nil(t, r.fetchTracker.Find(target), "terminal stale target must not be re-armed")
+	assert.True(t, r.catchupReplay.catchupRetryBlocked(target, time.Now()))
+	r.catchupReplay.armConsensusCatchup()
+	assert.Nil(t, r.catchupReplay.fetchTracker.Find(target), "terminal stale target must not be re-armed")
 }
 
 func TestRouter_HashOnlyHeaderAtFloorIsAdmitted(t *testing.T) {
@@ -127,7 +128,7 @@ func TestRouter_HashOnlyHeaderAtFloorIsAdmitted(t *testing.T) {
 	rootHash, rootData, _ := buildSelfHealSourceState(t)
 	headerData := header.AddRaw(header.LedgerHeader{LedgerIndex: 100, AccountHash: rootHash}, false)
 	target := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), headerData)
-	acquisition := inbound.New(target, 0, 7, serveTestLogger(), r.acquisitionOpts()...)
+	acquisition := inbound.New(target, 0, 7, serveTestLogger(), r.catchupReplay.acquisitionOpts()...)
 
 	require.NoError(t, acquisition.GotBase([]message.LedgerNode{
 		{NodeData: headerData},

@@ -44,7 +44,7 @@ func TestConsensusRecoveryLegacyFallbackPipelinesProvenSuccessors(t *testing.T) 
 		{child2Seq, child2Hash, child1Hash},
 		{targetSeq, targetHash, child2Hash},
 	} {
-		r.recordSeqHash(link.seq, link.hash, link.parent, true)
+		r.catchupReplay.recordSeqHash(link.seq, link.hash, link.parent, true)
 	}
 	storeRecoveryLedger(t, svc, anchor)
 	trackCatchupPeer(r, 7, targetSeq)
@@ -52,15 +52,15 @@ func TestConsensusRecoveryLegacyFallbackPipelinesProvenSuccessors(t *testing.T) 
 	sender.peerSupportsReplay = false
 	sender.mu.Unlock()
 
-	r.consensusRecovery = consensusRecovery{targetHash: targetHash, stepHash: anchorHash}
-	r.completeStoredConsensusRecovery(anchorSeq, anchorHash, closed.Hash(), false)
+	r.catchupReplay.consensusRecovery = consensusRecovery{targetHash: targetHash, stepHash: anchorHash}
+	r.catchupReplay.completeStoredConsensusRecovery(anchorSeq, anchorHash, closed.Hash(), false)
 
 	require.Equal(t, consensusRecovery{
 		targetHash: targetHash,
 		stepHash:   child1Hash,
 		anchorHash: anchorHash,
 		anchorSeq:  anchorSeq,
-	}, r.consensusRecovery)
+	}, r.catchupReplay.consensusRecovery)
 	require.Equal(t, []legacyBaseCall{
 		{peerID: 7, hash: child1Hash, seq: child1Seq},
 		{peerID: 7, hash: child2Hash, seq: child2Seq},
@@ -68,7 +68,7 @@ func TestConsensusRecoveryLegacyFallbackPipelinesProvenSuccessors(t *testing.T) 
 	}, sender.legacyCalls())
 	require.Empty(t, sender.replayCalls())
 	for _, hash := range [][32]byte{child1Hash, child2Hash, targetHash} {
-		acquisition := r.fetchTracker.Find(hash)
+		acquisition := r.catchupReplay.fetchTracker.Find(hash)
 		require.NotNil(t, acquisition)
 		require.True(t, acquisition.TransactionOnly())
 	}
@@ -84,28 +84,28 @@ func TestConsensusRecoveryReplayIssueFailureFallsBackToNextChild(t *testing.T) {
 	_, anchor, anchorHash, anchorSeq := buildSuccessorAgainstParent(t, closed)
 	_, child, childHash, childSeq := buildSuccessorAgainstParent(t, anchor)
 	_, _, targetHash, targetSeq := buildSuccessorAgainstParent(t, child)
-	r.recordSeqHash(anchorSeq, anchorHash, closed.Hash(), true)
-	r.recordSeqHash(childSeq, childHash, anchorHash, true)
-	r.recordSeqHash(targetSeq, targetHash, childHash, true)
+	r.catchupReplay.recordSeqHash(anchorSeq, anchorHash, closed.Hash(), true)
+	r.catchupReplay.recordSeqHash(childSeq, childHash, anchorHash, true)
+	r.catchupReplay.recordSeqHash(targetSeq, targetHash, childHash, true)
 	storeRecoveryLedger(t, svc, anchor)
 	trackCatchupPeer(r, 7, targetSeq)
 	sender.mu.Lock()
 	sender.replayDeltaErr = errors.New("replay request failed")
 	sender.mu.Unlock()
-	r.consensusRecovery = consensusRecovery{
+	r.catchupReplay.consensusRecovery = consensusRecovery{
 		targetHash: targetHash,
 		anchorHash: anchorHash,
 		anchorSeq:  anchorSeq,
 	}
 
-	require.True(t, r.armPendingConsensusLedger())
+	require.True(t, r.catchupReplay.armPendingConsensusLedger())
 	require.Equal(t, []replayDeltaCall{{peerID: 7, hash: childHash}}, sender.replayCalls())
 	require.Equal(t, []legacyBaseCall{{peerID: 7, hash: childHash, seq: childSeq}}, sender.legacyCalls())
-	require.Equal(t, childHash, r.consensusRecovery.stepHash)
-	require.Zero(t, r.replayer.Count())
-	require.NotNil(t, r.fetchTracker.Find(childHash))
-	require.True(t, r.fetchTracker.Find(childHash).TransactionOnly())
-	require.Nil(t, r.fetchTracker.Find(targetHash))
+	require.Equal(t, childHash, r.catchupReplay.consensusRecovery.stepHash)
+	require.Zero(t, r.catchupReplay.replayer.Count())
+	require.NotNil(t, r.catchupReplay.fetchTracker.Find(childHash))
+	require.True(t, r.catchupReplay.fetchTracker.Find(childHash).TransactionOnly())
+	require.Nil(t, r.catchupReplay.fetchTracker.Find(targetHash))
 }
 
 func TestConsensusRecoveryReplayFailureKeepsChildOfMovingTarget(t *testing.T) {
@@ -129,17 +129,17 @@ func TestConsensusRecoveryReplayFailureKeepsChildOfMovingTarget(t *testing.T) {
 		{oldTargetSeq, oldTargetHash, childHash},
 		{newTargetSeq, newTargetHash, oldTargetHash},
 	} {
-		r.recordSeqHash(link.seq, link.hash, link.parent, true)
+		r.catchupReplay.recordSeqHash(link.seq, link.hash, link.parent, true)
 	}
 	storeRecoveryLedger(t, svc, anchor)
 	trackCatchupPeer(r, 7, newTargetSeq)
-	r.consensusRecovery = consensusRecovery{
+	r.catchupReplay.consensusRecovery = consensusRecovery{
 		targetHash: oldTargetHash,
 		anchorHash: anchorHash,
 		anchorSeq:  anchorSeq,
 	}
-	require.True(t, r.armPendingConsensusLedger())
-	require.Equal(t, childHash, r.consensusRecovery.stepHash)
+	require.True(t, r.catchupReplay.armPendingConsensusLedger())
+	require.Equal(t, childHash, r.catchupReplay.consensusRecovery.stepHash)
 	require.NoError(t, a.RequestLedger(consensus.LedgerID(newTargetHash)))
 
 	bad := &message.ReplayDeltaResponse{LedgerHash: childHash[:], Error: message.ReplyErrorNoLedger}
@@ -157,8 +157,8 @@ func TestConsensusRecoveryReplayFailureKeepsChildOfMovingTarget(t *testing.T) {
 		stepHash:   childHash,
 		anchorHash: anchorHash,
 		anchorSeq:  anchorSeq,
-	}, r.consensusRecovery)
-	require.Nil(t, r.fetchTracker.Find(newTargetHash))
+	}, r.catchupReplay.consensusRecovery)
+	require.Nil(t, r.catchupReplay.fetchTracker.Find(newTargetHash))
 }
 
 func TestConsensusRecoveryLegacyFallbackRequiresCompleteAncestry(t *testing.T) {
@@ -180,23 +180,23 @@ func TestConsensusRecoveryLegacyFallbackRequiresCompleteAncestry(t *testing.T) {
 			_, anchor, anchorHash, anchorSeq := buildSuccessorAgainstParent(t, closed)
 			_, child, childHash, childSeq := buildSuccessorAgainstParent(t, anchor)
 			_, _, targetHash, targetSeq := buildSuccessorAgainstParent(t, child)
-			r.recordSeqHash(anchorSeq, anchorHash, closed.Hash(), true)
-			r.recordSeqHash(childSeq, childHash, tc.parentHash, true)
+			r.catchupReplay.recordSeqHash(anchorSeq, anchorHash, closed.Hash(), true)
+			r.catchupReplay.recordSeqHash(childSeq, childHash, tc.parentHash, true)
 			if tc.recordTarget {
-				r.recordSeqHash(targetSeq, targetHash, childHash, true)
+				r.catchupReplay.recordSeqHash(targetSeq, targetHash, childHash, true)
 			}
 			storeRecoveryLedger(t, svc, anchor)
 			trackCatchupPeer(r, 7, targetSeq)
 			sender.mu.Lock()
 			sender.peerSupportsReplay = false
 			sender.mu.Unlock()
-			r.consensusRecovery = consensusRecovery{
+			r.catchupReplay.consensusRecovery = consensusRecovery{
 				targetHash: targetHash,
 				anchorHash: anchorHash,
 				anchorSeq:  anchorSeq,
 			}
 
-			require.True(t, r.armPendingConsensusLedger())
+			require.True(t, r.catchupReplay.armPendingConsensusLedger())
 			expectedSeq := uint32(0)
 			expectedRecovery := consensusRecovery{
 				targetHash: targetHash,
@@ -210,8 +210,8 @@ func TestConsensusRecoveryLegacyFallbackRequiresCompleteAncestry(t *testing.T) {
 				expectedRecovery.anchorSeq = 0
 			}
 			require.Equal(t, []legacyBaseCall{{peerID: 7, hash: targetHash, seq: expectedSeq}}, sender.legacyCalls())
-			require.Equal(t, expectedRecovery, r.consensusRecovery)
-			require.Nil(t, r.fetchTracker.Find(childHash))
+			require.Equal(t, expectedRecovery, r.catchupReplay.consensusRecovery)
+			require.Nil(t, r.catchupReplay.fetchTracker.Find(childHash))
 		})
 	}
 }

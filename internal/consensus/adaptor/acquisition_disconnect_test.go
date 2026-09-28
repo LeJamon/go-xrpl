@@ -203,14 +203,14 @@ func TestAcquisitionWorkResult_RecoversStaleTimerTargets(t *testing.T) {
 		}
 		router := newMissingNodeChurnRouter(t, sender)
 		ledger, _ := newDisconnectFrontier(t, false)
-		router.fetchTracker.Track(ledger)
+		router.catchupReplay.fetchTracker.Track(ledger)
 		trackCatchupPeer(router, 1, ledger.Seq())
 		stateIDs, _, complete, err := ledger.CollectMissingRequestContext(t.Context(), false)
 		require.NoError(t, err)
 		require.False(t, complete)
 		require.NotEmpty(t, stateIDs)
 
-		router.handleAcquisitionWorkResult(acquisitionWorkResult{
+		router.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{
 			ledger:   ledger,
 			targets:  []uint64{1},
 			stateIDs: stateIDs,
@@ -222,9 +222,9 @@ func TestAcquisitionWorkResult_RecoversStaleTimerTargets(t *testing.T) {
 		assert.Equal(t, calls[0].nodeIDs, calls[1].nodeIDs)
 		assert.NotContains(t, ledger.Peers(), uint64(1))
 		assert.Contains(t, ledger.Peers(), uint64(2))
-		router.peersMu.RLock()
-		_, stale := router.peerStates[1]
-		router.peersMu.RUnlock()
+		router.catchupReplay.peersMu.RLock()
+		_, stale := router.catchupReplay.peerStates[1]
+		router.catchupReplay.peersMu.RUnlock()
 		assert.False(t, stale)
 	})
 
@@ -237,12 +237,12 @@ func TestAcquisitionWorkResult_RecoversStaleTimerTargets(t *testing.T) {
 		router := newMissingNodeChurnRouter(t, sender)
 		ledger, _ := newDisconnectFrontier(t, false)
 		require.True(t, ledger.AddPeer(2))
-		router.fetchTracker.Track(ledger)
+		router.catchupReplay.fetchTracker.Track(ledger)
 		stateIDs, _, complete, err := ledger.CollectMissingRequestContext(t.Context(), false)
 		require.NoError(t, err)
 		require.False(t, complete)
 
-		router.handleAcquisitionWorkResult(acquisitionWorkResult{
+		router.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{
 			ledger:   ledger,
 			targets:  []uint64{1, 2},
 			stateIDs: stateIDs,
@@ -275,7 +275,7 @@ func TestMissingReplyRequest_DisconnectErrorsReleaseAndRetarget(t *testing.T) {
 			}
 			router := newMissingNodeChurnRouter(t, sender)
 			ledger, _ := newDisconnectFrontier(t, tc.transaction)
-			router.fetchTracker.Track(ledger)
+			router.catchupReplay.fetchTracker.Track(ledger)
 			trackCatchupPeer(router, 1, ledger.Seq())
 			requests, complete, err := ledger.CollectMissingReplyRequestsContext(t.Context(), []uint64{1})
 			require.NoError(t, err)
@@ -283,7 +283,7 @@ func TestMissingReplyRequest_DisconnectErrorsReleaseAndRetarget(t *testing.T) {
 			require.Len(t, requests, 1)
 			require.Equal(t, tc.transaction, requests[0].Transaction)
 
-			router.handleAcquisitionWorkResult(acquisitionWorkResult{
+			router.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{
 				ledger:   ledger,
 				requests: requests,
 			})
@@ -314,14 +314,14 @@ func TestMissingReplyRequest_StaleSessionSkipsSendAndRetargets(t *testing.T) {
 				connected: map[peermanagement.PeerID]bool{2: true},
 			})
 			ledger, _ := newDisconnectFrontier(t, transaction)
-			router.fetchTracker.Track(ledger)
+			router.catchupReplay.fetchTracker.Track(ledger)
 			trackCatchupPeer(router, 1, ledger.Seq())
 			requests, complete, err := ledger.CollectMissingReplyRequestsContext(t.Context(), []uint64{1})
 			require.NoError(t, err)
 			require.False(t, complete)
 			require.Len(t, requests, 1)
 
-			router.handleAcquisitionWorkResult(acquisitionWorkResult{
+			router.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{
 				ledger:   ledger,
 				requests: requests,
 			})
@@ -343,13 +343,13 @@ func TestAcquisitionWorkResult_StaleTimerSessionSkipsSendAndRetargets(t *testing
 		connected: map[peermanagement.PeerID]bool{2: true},
 	})
 	ledger, _ := newDisconnectFrontier(t, false)
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 	stateIDs, _, complete, err := ledger.CollectMissingRequestContext(t.Context(), false)
 	require.NoError(t, err)
 	require.False(t, complete)
 	require.NotEmpty(t, stateIDs)
 
-	router.handleAcquisitionWorkResult(acquisitionWorkResult{
+	router.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{
 		ledger:   ledger,
 		targets:  []uint64{1},
 		stateIDs: stateIDs,
@@ -371,9 +371,9 @@ func TestRequestMissingAcquisitionNodes_MixedStaleLiveFanout(t *testing.T) {
 	router := newMissingNodeChurnRouter(t, sender)
 	ledger, _ := newDisconnectFrontier(t, false)
 	require.True(t, ledger.AddPeer(2))
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 
-	router.requestMissingAcquisitionNodes(ledger, 0)
+	router.catchupReplay.requestMissingAcquisitionNodes(ledger, 0)
 
 	calls := sender.snapshotCalls()
 	require.Len(t, calls, 2)
@@ -392,12 +392,12 @@ func TestMissingNodeRecovery_ChurnIsBoundedAndCompletes(t *testing.T) {
 	}
 	router := newMissingNodeChurnRouter(t, sender)
 	ledger, replies := newDisconnectFrontier(t, false)
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 	stateIDs, _, complete, err := ledger.CollectMissingRequestContext(t.Context(), false)
 	require.NoError(t, err)
 	require.False(t, complete)
 
-	router.handleAcquisitionWorkResult(acquisitionWorkResult{
+	router.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{
 		ledger:   ledger,
 		targets:  []uint64{1},
 		stateIDs: stateIDs,
@@ -430,12 +430,12 @@ func TestMissingNodeRecovery_LatePeerAfterNoReplacement(t *testing.T) {
 	}
 	router := newMissingNodeChurnRouter(t, sender)
 	ledger, _ := newDisconnectFrontier(t, false)
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 	stateIDs, _, complete, err := ledger.CollectMissingRequestContext(t.Context(), false)
 	require.NoError(t, err)
 	require.False(t, complete)
 
-	router.handleAcquisitionWorkResult(acquisitionWorkResult{
+	router.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{
 		ledger:   ledger,
 		targets:  []uint64{1},
 		stateIDs: stateIDs,
@@ -463,13 +463,13 @@ func TestMissingReplyRequest_NonDisconnectErrorDoesNotEvictOrRetarget(t *testing
 	}
 	router := newMissingNodeChurnRouter(t, sender)
 	ledger, _ := newDisconnectFrontier(t, false)
-	router.fetchTracker.Track(ledger)
+	router.catchupReplay.fetchTracker.Track(ledger)
 	requests, complete, err := ledger.CollectMissingReplyRequestsContext(t.Context(), []uint64{1})
 	require.NoError(t, err)
 	require.False(t, complete)
 	require.Len(t, requests, 1)
 
-	router.handleAcquisitionWorkResult(acquisitionWorkResult{
+	router.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{
 		ledger:   ledger,
 		requests: requests,
 	})

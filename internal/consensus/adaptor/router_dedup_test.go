@@ -184,6 +184,7 @@ func TestProposalSuppression_AdmitsOnlyAfterEngineAcceptance(t *testing.T) {
 	router, _ := newRetryRouter(t)
 	engine := &proposalAdmissionEngine{err: errors.New("invalid proposal")}
 	router.engine = engine
+	router.catchupReplay.engine = router.engine
 	router.messageSeen = newMessageSuppression(time.Minute, 2)
 
 	first := [32]byte{1}

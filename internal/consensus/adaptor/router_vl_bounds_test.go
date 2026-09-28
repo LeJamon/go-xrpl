@@ -49,6 +49,7 @@ func TestRouterValidationVariableLengthBounds(t *testing.T) {
 			router, sender := makeRouterWithBadDataRecorder(t)
 			engine := &mockEngine{}
 			router.engine = engine
+			router.catchupReplay.engine = router.engine
 			router.handleMessage(&peermanagement.InboundMessage{
 				PeerID:  7,
 				Type:    message.TypeValidation,

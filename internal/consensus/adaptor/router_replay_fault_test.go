@@ -20,23 +20,23 @@ func TestReplayFaultAuthenticationRequiresVerifiedAncestry(t *testing.T) {
 		consensus.LedgerID(last.hash): {{Full: true, LedgerSeq: last.seq, SignTime: time.Now()}},
 	}}}
 	a.SetValidationHistorian(historian)
-	r.acquisitionMu.Lock()
-	r.standardReplay.targetSeq = last.seq
-	r.standardReplay.targetHash = last.hash
-	r.acquisitionMu.Unlock()
-	r.seqHashMu.Lock()
-	delete(r.seqHash, last.seq)
-	r.seqHashMu.Unlock()
-	r.recordPeerSeqHash(last.seq, last.hash, first.hash, true)
-	require.False(t, r.replayTargetAuthenticated(first.ledger.Header()))
-	r.recordAcquiredSeqHash(last.seq, last.hash, first.hash)
-	require.True(t, r.replayTargetAuthenticated(first.ledger.Header()))
-	require.True(t, r.replayTargetAuthenticated(last.ledger.Header()))
+	r.catchupReplay.acquisitionMu.Lock()
+	r.catchupReplay.standardReplay.targetSeq = last.seq
+	r.catchupReplay.standardReplay.targetHash = last.hash
+	r.catchupReplay.acquisitionMu.Unlock()
+	r.catchupReplay.seqHashMu.Lock()
+	delete(r.catchupReplay.seqHash, last.seq)
+	r.catchupReplay.seqHashMu.Unlock()
+	r.catchupReplay.recordPeerSeqHash(last.seq, last.hash, first.hash, true)
+	require.False(t, r.catchupReplay.replayTargetAuthenticated(first.ledger.Header()))
+	r.catchupReplay.recordAcquiredSeqHash(last.seq, last.hash, first.hash)
+	require.True(t, r.catchupReplay.replayTargetAuthenticated(first.ledger.Header()))
+	require.True(t, r.catchupReplay.replayTargetAuthenticated(last.ledger.Header()))
 	fork := first.ledger.Header()
 	fork.Hash[0] ^= 1
-	require.False(t, r.replayTargetAuthenticated(fork))
+	require.False(t, r.catchupReplay.replayTargetAuthenticated(fork))
 	historian.byLedger = nil
-	require.False(t, r.replayTargetAuthenticated(first.ledger.Header()))
+	require.False(t, r.catchupReplay.replayTargetAuthenticated(first.ledger.Header()))
 }
 
 func TestReplayFaultRepairCannotBeRearmedByValidationNotifications(t *testing.T) {
@@ -46,20 +46,20 @@ func TestReplayFaultRepairCannotBeRearmedByValidationNotifications(t *testing.T)
 	trackCatchupPeer(r, 7, target.Sequence(), target.Hash())
 	svc.RecordReplayPreparationFailure(context.Background(), target.Header(), shamap.New(shamap.TypeTransaction), nil, true, shamap.ErrNodeNotInStore)
 	require.True(t, svc.ReplayBlocked())
-	repair := r.fetchTracker.Find(parent.Hash())
+	repair := r.catchupReplay.fetchTracker.Find(parent.Hash())
 	require.NotNil(t, repair)
 	before := len(sender.legacyCalls())
-	r.failInboundAcquisition(repair)
+	r.catchupReplay.failInboundAcquisition(repair)
 	for range 5 {
-		r.onLedgerFullyValidated(parent.Sequence(), parent.Hash())
-		r.armConsensusCatchup()
-		_, started := r.startGenericAcquisition(parent.Hash(), parent.Sequence())
+		r.catchupReplay.onLedgerFullyValidated(parent.Sequence(), parent.Hash())
+		r.catchupReplay.armConsensusCatchup()
+		_, started := r.catchupReplay.startGenericAcquisition(parent.Hash(), parent.Sequence())
 		require.False(t, started)
-		r.acquisitionMu.Lock()
-		r.startLedgerAcquisitionLegacyLocked(parent.Sequence(), parent.Hash(), 7)
-		r.acquisitionMu.Unlock()
+		r.catchupReplay.acquisitionMu.Lock()
+		r.catchupReplay.startLedgerAcquisitionLegacyLocked(parent.Sequence(), parent.Hash(), 7)
+		r.catchupReplay.acquisitionMu.Unlock()
 	}
-	require.Nil(t, r.fetchTracker.Find(parent.Hash()))
+	require.Nil(t, r.catchupReplay.fetchTracker.Find(parent.Hash()))
 	require.Equal(t, before, len(sender.legacyCalls()))
 	require.Equal(t, 1, svc.ReplayFaultStatus().Recovery.AcquisitionAttempts)
 }
@@ -78,7 +78,7 @@ func newReplayFaultRepair(t *testing.T) (*Router, *inbound.Ledger) {
 		true,
 		shamap.ErrNodeNotInStore,
 	)
-	repair := r.fetchTracker.Find(parent.Hash())
+	repair := r.catchupReplay.fetchTracker.Find(parent.Hash())
 	require.NotNil(t, repair)
 	return r, repair
 }
@@ -145,10 +145,10 @@ func TestReplayFaultRepairPersistsTerminalAcquisitionCauses(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			r, repair := newReplayFaultRepair(t)
-			r.handleAcquisitionWorkResult(test.result(repair))
+			r.catchupReplay.handleAcquisitionWorkResult(test.result(repair))
 			status := r.adaptor.LedgerService().ReplayFaultStatus()
 			require.Contains(t, status.Recovery.AcquisitionError, test.want)
-			require.Nil(t, r.fetchTracker.Find(repair.Hash()))
+			require.Nil(t, r.catchupReplay.fetchTracker.Find(repair.Hash()))
 		})
 	}
 }
@@ -158,14 +158,14 @@ func TestReplayFaultRepairIgnoresStaleAndUnrelatedAcquisitionResults(t *testing.
 		r, repair := newReplayFaultRepair(t)
 		svc := r.adaptor.LedgerService()
 		svc.RecordReplayAcquisitionFailure(repair.Hash(), errors.New("first terminal failure"))
-		require.True(t, r.fetchTracker.RemoveExpectedWithSnapshot(repair, repair.Snapshot(), false))
-		replacement, created := r.fetchTracker.GetOrCreate(repair.Hash(), func() *inbound.Ledger {
+		require.True(t, r.catchupReplay.fetchTracker.RemoveExpectedWithSnapshot(repair, repair.Snapshot(), false))
+		replacement, created := r.catchupReplay.fetchTracker.GetOrCreate(repair.Hash(), func() *inbound.Ledger {
 			return inbound.New(repair.Hash(), repair.Seq(), 8, serveTestLogger())
 		})
 		require.True(t, created)
 		require.NotSame(t, repair, replacement)
 
-		r.handleAcquisitionWorkResult(acquisitionWorkResult{
+		r.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{
 			ledger:       repair,
 			remove:       true,
 			timerFailure: true,
@@ -179,9 +179,9 @@ func TestReplayFaultRepairIgnoresStaleAndUnrelatedAcquisitionResults(t *testing.
 		r, repair := newReplayFaultRepair(t)
 		svc := r.adaptor.LedgerService()
 		other := inbound.New([32]byte{0xee}, repair.Seq()+1, 9, serveTestLogger())
-		r.fetchTracker.Track(other)
+		r.catchupReplay.fetchTracker.Track(other)
 
-		r.handleAcquisitionWorkResult(acquisitionWorkResult{
+		r.catchupReplay.handleAcquisitionWorkResult(acquisitionWorkResult{
 			ledger:       other,
 			remove:       true,
 			timerFailure: true,

@@ -69,7 +69,7 @@ func TestRuntimeRecoveryRepairsThirtyLedgerOutage(t *testing.T) {
 				}
 				r := newTestRouter(engine, a, nil)
 				family := &runtimeRecoveryFamily{Family: backend.NewMemory(), delay: delay}
-				r.acquisitionFamily = family
+				r.catchupReplay.acquisitionFamily = family
 				a.SetOperatingMode(consensus.OpModeTracking)
 
 				links := make([]standardReplayTestLink, 0, 30)
@@ -86,7 +86,7 @@ func TestRuntimeRecoveryRepairsThirtyLedgerOutage(t *testing.T) {
 				require.Equal(t, base.Hash(), svc.GetValidatedLedger().Hash())
 				require.Equal(t, base.Sequence()+uint32(speculativeCloses), svc.GetClosedLedgerIndex())
 				target := links[len(links)-1]
-				require.False(t, r.recoveryAnchorReachesTarget(base.Sequence(), base.Hash(), target.hash))
+				require.False(t, r.catchupReplay.recoveryAnchorReachesTarget(base.Sequence(), base.Hash(), target.hash))
 
 				started := time.Now()
 				r.handleStatusChange(statusChangeMessage(t, 7, target.seq, target.hash))
@@ -104,16 +104,16 @@ func TestRuntimeRecoveryRepairsThirtyLedgerOutage(t *testing.T) {
 						NodeID: node, SignTime: target.ledger.CloseTime(), SeenTime: target.ledger.CloseTime(), Full: true,
 					}))
 				}
-				r.onLedgerFullyValidated(target.seq, target.hash)
-				r.armConsensusCatchup()
+				r.catchupReplay.onLedgerFullyValidated(target.seq, target.hash)
+				r.catchupReplay.armConsensusCatchup()
 				require.Equal(t, 90*time.Second, svc.GetValidatedLedgerAge())
-				require.NotNil(t, r.headerDiscovery)
-				generation := r.headerDiscovery.generation
-				deadline := r.headerDiscovery.deadline
-				r.onLedgerBuilt(svc.GetClosedLedgerIndex(), svc.GetClosedLedger().Hash())
-				require.NotNil(t, r.headerDiscovery)
-				require.Equal(t, generation, r.headerDiscovery.generation)
-				require.Equal(t, deadline, r.headerDiscovery.deadline)
+				require.NotNil(t, r.catchupReplay.headerDiscovery)
+				generation := r.catchupReplay.headerDiscovery.generation
+				deadline := r.catchupReplay.headerDiscovery.deadline
+				r.catchupReplay.onLedgerBuilt(svc.GetClosedLedgerIndex(), svc.GetClosedLedger().Hash())
+				require.NotNil(t, r.catchupReplay.headerDiscovery)
+				require.Equal(t, generation, r.catchupReplay.headerDiscovery.generation)
+				require.Equal(t, deadline, r.catchupReplay.headerDiscovery.deadline)
 				for i := len(links) - 1; i >= 0; i-- {
 					link := links[i]
 					requests := sender.headerRequests()
@@ -129,8 +129,8 @@ func TestRuntimeRecoveryRepairsThirtyLedgerOutage(t *testing.T) {
 				}
 				require.Equal(t, base.Hash(), svc.GetValidatedLedger().Hash(), "headers alone cannot advance validation")
 				for _, link := range links {
-					r.armConsensusCatchup()
-					acquisition := r.fetchTracker.Find(link.hash)
+					r.catchupReplay.armConsensusCatchup()
+					acquisition := r.catchupReplay.fetchTracker.Find(link.hash)
 					require.NotNil(t, acquisition, "missing transaction acquisition at %d", link.seq)
 					require.True(t, acquisition.TransactionOnly())
 					r.handleMessage(&peermanagement.InboundMessage{
@@ -141,8 +141,8 @@ func TestRuntimeRecoveryRepairsThirtyLedgerOutage(t *testing.T) {
 						}),
 					})
 					select {
-					case <-r.standardReplayDrainWake:
-						r.drainStandardReplayPipeline()
+					case <-r.catchupReplay.standardReplayDrainWake:
+						r.catchupReplay.drainStandardReplayPipeline()
 					default:
 					}
 					stored, lookupErr := svc.GetLedgerByHash(link.hash)
@@ -153,7 +153,7 @@ func TestRuntimeRecoveryRepairsThirtyLedgerOutage(t *testing.T) {
 					require.Equal(t, link.hash, stored.Hash())
 				}
 				require.Equal(t, target.hash, svc.GetValidatedLedger().Hash())
-				r.checkBehind(target.seq, target.hash, 7)
+				r.catchupReplay.checkBehind(target.seq, target.hash, 7)
 				require.Equal(t, consensus.OpModeFull, a.GetOperatingMode())
 				require.Zero(t, family.reads.Load(), "recovery must avoid full-state discovery reads")
 				t.Logf("gap=30 header_requests=%d transaction_requests=%d recovery_elapsed=%s state_reads=%d configured_read_delay=%s",
