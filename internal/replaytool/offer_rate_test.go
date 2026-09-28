@@ -29,6 +29,7 @@ func TestIssue2003HistoricalOfferRateMatchesPeer(t *testing.T) {
 	all.RegisterAll()
 	var fixture struct {
 		Parent struct {
+			LedgerIndex  uint32              `json:"ledger_index"`
 			LedgerHash   string              `json:"ledger_hash"`
 			CloseTime    uint32              `json:"close_time"`
 			TotalCoins   uint64              `json:"total_coins,string"`
@@ -67,6 +68,7 @@ func TestIssue2003HistoricalOfferRateMatchesPeer(t *testing.T) {
 	parentHash, err := protocol.Hash256FromHex(fixture.Parent.LedgerHash)
 	require.NoError(t, err)
 	require.Equal(t, fixture.Parent.LedgerHash, fixture.Target.ParentHash)
+	require.Equal(t, fixture.Parent.LedgerIndex+1, fixture.Target.LedgerIndex)
 	view, err := ledger.NewOpenWithHeader(header.LedgerHeader{
 		LedgerIndex:         fixture.Target.LedgerIndex,
 		ParentHash:          parentHash,
