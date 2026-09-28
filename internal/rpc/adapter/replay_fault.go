@@ -30,6 +30,15 @@ func (a *LedgerServiceAdapter) ReplayBlocked() bool {
 	return a.svc.ReplayBlocked()
 }
 
+// StartReplayFaultRecovery admits an explicit recovery worker owned by the
+// ledger service. The RPC request is not used as the worker's context.
+func (a *LedgerServiceAdapter) StartReplayFaultRecovery(id string) error {
+	if a == nil || a.svc == nil {
+		return errors.New("ledger service is unavailable")
+	}
+	return a.svc.StartReplayFaultRecovery(id)
+}
+
 // RevalidateReplayFault runs the service-owned explicit transition verifier.
 // The service clears the durable gate only after that verifier succeeds.
 func (a *LedgerServiceAdapter) RevalidateReplayFault(ctx context.Context, id string) error {

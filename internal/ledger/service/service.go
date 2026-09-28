@@ -142,17 +142,21 @@ func networkLedgerStateFor(enabled bool, state networkLedgerState) networkLedger
 
 // Service manages the ledger lifecycle
 type Service struct {
-	replayRepairTarget  *ledger.Ledger
-	replayAuthenticate  func(header.LedgerHeader) bool
-	replayAcquiredHash  [32]byte
-	replayFaults        *replayfault.Store
-	replayVerifiedHash  [32]byte
-	replayRecoveryMu    sync.Mutex
-	replayRepairParent  *ledger.Ledger
-	replayAcquireParent func(uint32, [32]byte) error
-	lifecycleMu         sync.Mutex
-	lifecycleState      serviceLifecycleState
-	stopDone            chan struct{}
+	replayRepairTarget *ledger.Ledger
+	replayAuthenticate func(header.LedgerHeader) bool
+	replayAcquiredHash [32]byte
+	replayFaults       *replayfault.Store
+	replayVerifiedHash [32]byte
+	replayRecoveryMu   sync.Mutex
+	// replayRecoveryCancel is owned by lifecycleMu. It is set before a
+	// recovery worker is launched and canceled when Stop begins so an admitted
+	// recovery cannot outlive the service.
+	replayRecoveryCancel context.CancelFunc
+	replayRepairParent   *ledger.Ledger
+	replayAcquireParent  func(uint32, [32]byte) error
+	lifecycleMu          sync.Mutex
+	lifecycleState       serviceLifecycleState
+	stopDone             chan struct{}
 	// Add is serialized with Stop's state transition by lifecycleMu.
 	validationWG sync.WaitGroup
 	// consensusWG drains detached builds; Add is serialized with Stop by lifecycleMu.

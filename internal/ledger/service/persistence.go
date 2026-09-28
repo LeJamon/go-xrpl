@@ -287,7 +287,11 @@ func (s *Service) Stop() {
 	s.lifecycleState = serviceStopping
 	s.stopDone = make(chan struct{})
 	done := s.stopDone
+	replayRecoveryCancel := s.replayRecoveryCancel
 	s.lifecycleMu.Unlock()
+	if replayRecoveryCancel != nil {
+		replayRecoveryCancel()
+	}
 	s.StopStateBaseRecertification()
 
 	// Drain validation lookups before the underlying stores can be closed, then

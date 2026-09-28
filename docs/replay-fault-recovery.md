@@ -33,16 +33,27 @@ admin-only `replay_recover` method with the exact fault ID from the status:
 }
 ```
 
-The service replays and verifies the persisted transition, including the
-network and trusted-validation context. It archives the journal as `replay-fault.json.<fault-id>.resolved` and
-clears the active fault only after verification succeeds. A failed or canceled
-request leaves the fault active. `recovery.in_flight` and `recovery.last_error`
-report explicit revalidation progress. `transition_verification` describes the
-current closed ledger as `locally_replayed`, `acquired_state`, or `unknown`; a
-matching downloaded state root alone does not verify its transition. A fault
-without trusted-validation evidence cannot be cleared unless the running
-node can authenticate that target through its trusted-validation rules. Repeating the
-request is safe after the underlying problem is fixed.
+The service first persists and fsyncs the exact transition intent before it
+executes the replay. If the intent cannot be written, execution does not
+start. It then replays and verifies the transition, including the network and
+trusted-validation context. A verified success archives the journal as
+`replay-fault.json.<fault-id>.resolved` and clears the active fault. If the
+node crashes or a detailed-fault write fails after the intent is recorded, the
+intent remains durable and blocks validator duties on restart until an
+explicitly verified recovery completes. The journal is an exact transition
+record; it is not a generic whole-run dirty marker.
+
+`replay_recover` admits a service-owned recovery worker and returns an accepted
+response while the worker is in flight. `recovery.in_flight` and
+`recovery.last_error` report explicit revalidation progress. Canceling or
+timing out the RPC request after admission does not cancel the worker; stopping
+the service cancels and drains it. A failed or canceled worker leaves the fault
+active. `transition_verification` describes the current closed ledger as
+`locally_replayed`, `acquired_state`, or `unknown`; a matching downloaded state
+root alone does not verify its transition. A fault without trusted-validation
+evidence cannot be cleared unless the running node can authenticate that target
+through its trusted-validation rules. Repeating the request is safe after the
+underlying problem is fixed.
 
 Do not delete `replay-fault.json` or its `.parent-<fault-id>` evidence file to
 resume the node. Deleting either file removes the recovery evidence and does

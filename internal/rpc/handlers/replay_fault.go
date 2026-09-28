@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"encoding/hex"
 	"strings"
 	"time"
@@ -20,7 +19,7 @@ type replayFaultStatusReader interface {
 }
 
 type replayFaultRecovery interface {
-	RevalidateReplayFault(context.Context, string) error
+	StartReplayFaultRecovery(string) error
 }
 
 func replayFaultStatus(services *types.ServiceGraph) (map[string]any, bool) {

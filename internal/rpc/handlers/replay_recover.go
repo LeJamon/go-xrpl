@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -15,8 +14,8 @@ type replayRecoverRequest struct {
 }
 
 // ReplayRecoverMethod handles the admin-only replay_recover RPC. A fault ID is
-// mandatory: the service verifies the exact persisted transition identified by
-// that ID before it can clear the durable validator-duty gate.
+// mandatory: the service admits asynchronous verification for the exact
+// persisted transition identified by that ID before returning.
 type ReplayRecoverMethod struct{ adminHandler }
 
 func (m *ReplayRecoverMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
@@ -27,24 +26,30 @@ func (m *ReplayRecoverMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	if ctx == nil || ctx.Services == nil || ctx.Services.Ledger() == nil {
 		return nil, rpcInternalInvariantError("replay_recover: ledger service unavailable")
 	}
+	if ctx.Context != nil {
+		if err := ctx.Context.Err(); err != nil {
+			return nil, rpcInternalError("replay_recover: request canceled before admission", err)
+		}
+	}
 	operator, ok := ctx.Services.Ledger().(replayFaultRecovery)
 	if !ok {
 		return nil, rpcerrors.RpcErrorNotEnabled("replay recovery is unavailable")
 	}
-	requestContext := ctx.Context
-	if requestContext == nil {
-		requestContext = context.Background()
-	}
-	if err := operator.RevalidateReplayFault(requestContext, faultID); err != nil {
-		return nil, rpcInternalError("replay_recover: transition revalidation failed", err)
+	if err := operator.StartReplayFaultRecovery(faultID); err != nil {
+		return nil, rpcInternalError("replay_recover: recovery admission failed", err)
 	}
 
 	response := map[string]any{
-		"fault_id":  faultID,
-		"recovered": true,
+		"accepted": true,
+		"fault_id": faultID,
 	}
 	if status, available := replayFaultStatus(ctx.Services); available {
 		response["replay_fault"] = status
+		recovery, _ := status["recovery"].(map[string]any)
+		inFlight, _ := recovery["in_flight"].(bool)
+		response["in_flight"] = inFlight
+	} else {
+		response["in_flight"] = true
 	}
 	return response, nil
 }

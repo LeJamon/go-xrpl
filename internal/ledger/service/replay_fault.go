@@ -151,22 +151,18 @@ func (s *Service) recordReplayFailure(ctx context.Context, id string, replay *in
 		return
 	}
 	// Evidence capture and independent reproduction must not hold the router or
-	// consensus thread while a large parent state is traversed.
-	s.lifecycleMu.Lock()
-	if s.lifecycleState != serviceRunning {
-		s.lifecycleMu.Unlock()
-		return
-	}
-	s.consensusWG.Add(1)
-	s.lifecycleMu.Unlock()
-	go func() {
-		defer s.consensusWG.Done()
-		s.replayRecoveryMu.Lock()
-		defer s.replayRecoveryMu.Unlock()
-		captureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+	// consensus thread while a large parent state is traversed. It shares the
+	// same admitted worker as explicit recovery, so the two operations cannot
+	// overlap or outlive the service lifecycle.
+	_, err = s.admitReplayRecoveryJob(func(workerCtx context.Context) error {
+		captureCtx, cancel := context.WithTimeout(workerCtx, 5*time.Minute)
 		defer cancel()
 		s.diagnoseReplayFault(captureCtx, *fault, evidence, parent, replay, cfg, cause)
-	}()
+		return nil
+	})
+	if err != nil && !errors.Is(err, errReplayRecoveryWorkerRunning) {
+		s.logger.Error("start replay evidence capture", "error", err)
+	}
 }
 
 func (s *Service) diagnoseReplayFault(ctx context.Context, fault replayfault.Fault, evidence replayEvidence, parent *ledger.Ledger, replay *inbound.ReplayDelta, cfg tx.EngineConfig, cause error) {
@@ -396,10 +392,17 @@ func (s *Service) RevalidateReplayFault(ctx context.Context, id string) error {
 	s.lifecycleMu.Unlock()
 	defer s.consensusWG.Done()
 	if !s.replayRecoveryMu.TryLock() {
-		return errors.New("replay evidence capture or recovery already running")
+		return errReplayRecoveryWorkerRunning
 	}
 	defer s.replayRecoveryMu.Unlock()
+	return s.revalidateReplayFault(ctx, id, nil)
+}
+
+func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarted func()) error {
 	return s.replayFaults.Revalidate(ctx, id, func(ctx context.Context, fault replayfault.Fault) error {
+		if onStarted != nil {
+			onStarted()
+		}
 		var evidence replayEvidence
 		if err := json.Unmarshal(fault.Evidence, &evidence); err != nil {
 			return err

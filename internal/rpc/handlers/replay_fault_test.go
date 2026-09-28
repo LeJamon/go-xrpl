@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -10,6 +11,24 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type replayRecoverLedgerFixture struct {
+	types.LedgerService
+	start  func(string) error
+	status replayfault.Status
+}
+
+func (f *replayRecoverLedgerFixture) StartReplayFaultRecovery(id string) error {
+	return f.start(id)
+}
+
+func (f *replayRecoverLedgerFixture) ReplayFaultStatus() replayfault.Status {
+	return f.status
+}
+
+func (f *replayRecoverLedgerFixture) ReplayBlocked() bool {
+	return f.status.Blocked
+}
 
 func TestReplayFaultStatusJSONOmitsEvidence(t *testing.T) {
 	created := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
@@ -70,4 +89,37 @@ func TestReplayRecoverMethodIsAdminOnly(t *testing.T) {
 	method := &ReplayRecoverMethod{}
 	assert.Equal(t, types.RoleAdmin, method.RequiredRole())
 	assert.Equal(t, types.NoCondition, method.RequiredCondition())
+}
+
+func TestReplayRecoverMethodAdmitsCanceledRequestAsInFlight(t *testing.T) {
+	called := ""
+	requestContext, cancel := context.WithCancel(context.Background())
+	ledger := &replayRecoverLedgerFixture{
+		start: func(id string) error {
+			called = id
+			cancel()
+			return nil
+		},
+		status: replayfault.Status{
+			Blocked: true,
+			Fault:   &replayfault.Fault{ID: "fault-1"},
+			Recovery: replayfault.RecoveryProgress{
+				InFlight: true,
+				ID:       "fault-1",
+			},
+		},
+	}
+	services := types.NewTestServiceGraph(&types.ServiceContainer{Ledger: ledger})
+
+	result, rpcErr := (&ReplayRecoverMethod{}).Handle(&types.RpcContext{
+		Context:  requestContext,
+		Services: services,
+	}, json.RawMessage(`{"fault_id":"fault-1"}`))
+	require.Nil(t, rpcErr)
+	require.Equal(t, "fault-1", called)
+	response, ok := result.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, true, response["accepted"])
+	require.Equal(t, true, response["in_flight"])
+	require.NotContains(t, response, "recovered")
 }
