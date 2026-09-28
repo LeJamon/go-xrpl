@@ -296,5 +296,4 @@ func TestGeneratedDecoderAdaptersRejectMalformedConversions(t *testing.T) {
 	if _, err := ParseRippleState(data); err == nil || !strings.Contains(err.Error(), "expected issued-currency amount") {
 		t.Fatalf("ParseRippleState error = %v, want issued-currency conversion error", err)
 	}
-
 }
