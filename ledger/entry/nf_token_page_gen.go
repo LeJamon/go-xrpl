@@ -96,6 +96,137 @@ func (n *NFTokenPage) SetSponsor(value string) {
 	n.present |= nftokenpageBitSponsor
 }
 
+// HasPreviousPageMin reports whether PreviousPageMin was present in the serialized entry.
+func (n *NFTokenPage) HasPreviousPageMin() bool {
+	return n != nil && n.present&nftokenpageBitPreviousPageMin != 0
+}
+
+// ClearPreviousPageMin removes PreviousPageMin from the serialized entry.
+func (n *NFTokenPage) ClearPreviousPageMin() {
+	if n == nil {
+		return
+	}
+	n.PreviousPageMin = ""
+	n.present &^= nftokenpageBitPreviousPageMin
+	n.dirty = true
+}
+
+// GetPreviousPageMin returns the typed 256-bit hash.
+func (n *NFTokenPage) GetPreviousPageMin() ([32]byte, error) {
+	var result [32]byte
+	if n == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(n.PreviousPageMin, "NFTokenPage.PreviousPageMin", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousPageMinValue assigns a typed 256-bit hash.
+func (n *NFTokenPage) SetPreviousPageMinValue(value [32]byte) {
+	n.SetPreviousPageMin(hashValueToString(value[:]))
+}
+
+// HasNextPageMin reports whether NextPageMin was present in the serialized entry.
+func (n *NFTokenPage) HasNextPageMin() bool {
+	return n != nil && n.present&nftokenpageBitNextPageMin != 0
+}
+
+// ClearNextPageMin removes NextPageMin from the serialized entry.
+func (n *NFTokenPage) ClearNextPageMin() {
+	if n == nil {
+		return
+	}
+	n.NextPageMin = ""
+	n.present &^= nftokenpageBitNextPageMin
+	n.dirty = true
+}
+
+// GetNextPageMin returns the typed 256-bit hash.
+func (n *NFTokenPage) GetNextPageMin() ([32]byte, error) {
+	var result [32]byte
+	if n == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(n.NextPageMin, "NFTokenPage.NextPageMin", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetNextPageMinValue assigns a typed 256-bit hash.
+func (n *NFTokenPage) SetNextPageMinValue(value [32]byte) {
+	n.SetNextPageMin(hashValueToString(value[:]))
+}
+
+// HasNFTokens reports whether NFTokens was present in the serialized entry.
+func (n *NFTokenPage) HasNFTokens() bool {
+	return n != nil && n.present&nftokenpageBitNFTokens != 0
+}
+
+// HasFlags reports whether Flags was present in the serialized entry.
+func (n *NFTokenPage) HasFlags() bool {
+	return n != nil && n.present&nftokenpageBitFlags != 0
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+func (n *NFTokenPage) HasPreviousTxnID() bool {
+	return n != nil && n.present&nftokenpageBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (n *NFTokenPage) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if n == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(n.PreviousTxnID, "NFTokenPage.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (n *NFTokenPage) SetPreviousTxnIDValue(value [32]byte) {
+	n.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+func (n *NFTokenPage) HasPreviousTxnLgrSeq() bool {
+	return n != nil && n.present&nftokenpageBitPreviousTxnLgrSeq != 0
+}
+
+// HasSponsor reports whether Sponsor was present in the serialized entry.
+func (n *NFTokenPage) HasSponsor() bool {
+	return n != nil && n.present&nftokenpageBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (n *NFTokenPage) ClearSponsor() {
+	if n == nil {
+		return
+	}
+	n.Sponsor = ""
+	n.present &^= nftokenpageBitSponsor
+	n.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (n *NFTokenPage) GetSponsor() ([20]byte, error) {
+	if n == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(n.Sponsor, "NFTokenPage.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (n *NFTokenPage) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	n.SetSponsor(address)
+	return nil
+}
+
 func (n *NFTokenPage) validateRequired() error {
 	if n.decoded && !n.dirty {
 		return nil

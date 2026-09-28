@@ -220,6 +220,440 @@ func (m *MPTokenIssuance) SetSponsor(value string) {
 	m.present |= mptokenissuanceBitSponsor
 }
 
+// HasIssuer reports whether Issuer was present in the serialized entry.
+func (m *MPTokenIssuance) HasIssuer() bool {
+	return m != nil && m.present&mptokenissuanceBitIssuer != 0
+}
+
+// GetIssuer returns the 20-byte AccountID.
+func (m *MPTokenIssuance) GetIssuer() ([20]byte, error) {
+	if m == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(m.Issuer, "MPTokenIssuance.Issuer")
+}
+
+// SetIssuerValue assigns a 20-byte AccountID.
+func (m *MPTokenIssuance) SetIssuerValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	m.SetIssuer(address)
+	return nil
+}
+
+// HasSequence reports whether Sequence was present in the serialized entry.
+func (m *MPTokenIssuance) HasSequence() bool {
+	return m != nil && m.present&mptokenissuanceBitSequence != 0
+}
+
+// HasTransferFee reports whether TransferFee was present in the serialized entry.
+func (m *MPTokenIssuance) HasTransferFee() bool {
+	return m != nil && m.present&mptokenissuanceBitTransferFee != 0
+}
+
+// ClearTransferFee removes TransferFee from the serialized entry.
+func (m *MPTokenIssuance) ClearTransferFee() {
+	if m == nil {
+		return
+	}
+	m.TransferFee = 0
+	m.present &^= mptokenissuanceBitTransferFee
+	m.dirty = true
+}
+
+// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+func (m *MPTokenIssuance) HasOwnerNode() bool {
+	return m != nil && m.present&mptokenissuanceBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (m *MPTokenIssuance) GetOwnerNode() (uint64, error) {
+	if m == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(m.OwnerNode, "MPTokenIssuance.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (m *MPTokenIssuance) SetOwnerNodeValue(value uint64) {
+	m.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasAssetScale reports whether AssetScale was present in the serialized entry.
+func (m *MPTokenIssuance) HasAssetScale() bool {
+	return m != nil && m.present&mptokenissuanceBitAssetScale != 0
+}
+
+// ClearAssetScale removes AssetScale from the serialized entry.
+func (m *MPTokenIssuance) ClearAssetScale() {
+	if m == nil {
+		return
+	}
+	m.AssetScale = 0
+	m.present &^= mptokenissuanceBitAssetScale
+	m.dirty = true
+}
+
+// GetAssetScale returns the typed UInt8 value.
+func (m *MPTokenIssuance) GetAssetScale() (uint8, error) {
+	if m == nil {
+		return 0, nil
+	}
+	if m.AssetScale < 0 || m.AssetScale > 255 {
+		return 0, fmt.Errorf("ledgerfields: MPTokenIssuance.AssetScale: value %d is out of range for UInt8", m.AssetScale)
+	}
+	return uint8(m.AssetScale), nil
+}
+
+// SetAssetScaleValue assigns a typed UInt8 value.
+func (m *MPTokenIssuance) SetAssetScaleValue(value uint8) {
+	m.SetAssetScale(value)
+}
+
+// HasMaximumAmount reports whether MaximumAmount was present in the serialized entry.
+func (m *MPTokenIssuance) HasMaximumAmount() bool {
+	return m != nil && m.present&mptokenissuanceBitMaximumAmount != 0
+}
+
+// ClearMaximumAmount removes MaximumAmount from the serialized entry.
+func (m *MPTokenIssuance) ClearMaximumAmount() {
+	if m == nil {
+		return
+	}
+	m.MaximumAmount = ""
+	m.present &^= mptokenissuanceBitMaximumAmount
+	m.dirty = true
+}
+
+// GetMaximumAmount returns the typed UInt64 value.
+func (m *MPTokenIssuance) GetMaximumAmount() (uint64, error) {
+	if m == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(m.MaximumAmount, "MPTokenIssuance.MaximumAmount", true)
+}
+
+// SetMaximumAmountValue assigns a typed UInt64 value.
+func (m *MPTokenIssuance) SetMaximumAmountValue(value uint64) {
+	m.SetMaximumAmount(uint64ValueToString(value, true))
+}
+
+// HasOutstandingAmount reports whether OutstandingAmount was present in the serialized entry.
+func (m *MPTokenIssuance) HasOutstandingAmount() bool {
+	return m != nil && m.present&mptokenissuanceBitOutstandingAmount != 0
+}
+
+// GetOutstandingAmount returns the typed UInt64 value.
+func (m *MPTokenIssuance) GetOutstandingAmount() (uint64, error) {
+	if m == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(m.OutstandingAmount, "MPTokenIssuance.OutstandingAmount", true)
+}
+
+// SetOutstandingAmountValue assigns a typed UInt64 value.
+func (m *MPTokenIssuance) SetOutstandingAmountValue(value uint64) {
+	m.SetOutstandingAmount(uint64ValueToString(value, true))
+}
+
+// HasLockedAmount reports whether LockedAmount was present in the serialized entry.
+func (m *MPTokenIssuance) HasLockedAmount() bool {
+	return m != nil && m.present&mptokenissuanceBitLockedAmount != 0
+}
+
+// ClearLockedAmount removes LockedAmount from the serialized entry.
+func (m *MPTokenIssuance) ClearLockedAmount() {
+	if m == nil {
+		return
+	}
+	m.LockedAmount = ""
+	m.present &^= mptokenissuanceBitLockedAmount
+	m.dirty = true
+}
+
+// GetLockedAmount returns the typed UInt64 value.
+func (m *MPTokenIssuance) GetLockedAmount() (uint64, error) {
+	if m == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(m.LockedAmount, "MPTokenIssuance.LockedAmount", true)
+}
+
+// SetLockedAmountValue assigns a typed UInt64 value.
+func (m *MPTokenIssuance) SetLockedAmountValue(value uint64) {
+	m.SetLockedAmount(uint64ValueToString(value, true))
+}
+
+// HasMPTokenMetadata reports whether MPTokenMetadata was present in the serialized entry.
+func (m *MPTokenIssuance) HasMPTokenMetadata() bool {
+	return m != nil && m.present&mptokenissuanceBitMPTokenMetadata != 0
+}
+
+// ClearMPTokenMetadata removes MPTokenMetadata from the serialized entry.
+func (m *MPTokenIssuance) ClearMPTokenMetadata() {
+	if m == nil {
+		return
+	}
+	m.MPTokenMetadata = ""
+	m.present &^= mptokenissuanceBitMPTokenMetadata
+	m.dirty = true
+}
+
+// GetMPTokenMetadata returns the raw bytes of the Blob field.
+func (m *MPTokenIssuance) GetMPTokenMetadata() ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return blobValueFromString(m.MPTokenMetadata, "MPTokenIssuance.MPTokenMetadata")
+}
+
+// SetMPTokenMetadataValue assigns a Blob from raw bytes.
+func (m *MPTokenIssuance) SetMPTokenMetadataValue(value []byte) {
+	m.SetMPTokenMetadata(blobValueToString(value))
+}
+
+// SetMPTokenMetadataBytes is an alias for SetMPTokenMetadataValue.
+func (m *MPTokenIssuance) SetMPTokenMetadataBytes(value []byte) {
+	m.SetMPTokenMetadataValue(value)
+}
+
+// HasDomainID reports whether DomainID was present in the serialized entry.
+func (m *MPTokenIssuance) HasDomainID() bool {
+	return m != nil && m.present&mptokenissuanceBitDomainID != 0
+}
+
+// ClearDomainID removes DomainID from the serialized entry.
+func (m *MPTokenIssuance) ClearDomainID() {
+	if m == nil {
+		return
+	}
+	m.DomainID = ""
+	m.present &^= mptokenissuanceBitDomainID
+	m.dirty = true
+}
+
+// GetDomainID returns the typed 256-bit hash.
+func (m *MPTokenIssuance) GetDomainID() ([32]byte, error) {
+	var result [32]byte
+	if m == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(m.DomainID, "MPTokenIssuance.DomainID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetDomainIDValue assigns a typed 256-bit hash.
+func (m *MPTokenIssuance) SetDomainIDValue(value [32]byte) {
+	m.SetDomainID(hashValueToString(value[:]))
+}
+
+// HasImmutableFlags reports whether ImmutableFlags was present in the serialized entry.
+func (m *MPTokenIssuance) HasImmutableFlags() bool {
+	return m != nil && m.present&mptokenissuanceBitImmutableFlags != 0
+}
+
+// ClearImmutableFlags removes ImmutableFlags from the serialized entry.
+func (m *MPTokenIssuance) ClearImmutableFlags() {
+	if m == nil {
+		return
+	}
+	m.ImmutableFlags = 0
+	m.present &^= mptokenissuanceBitImmutableFlags
+	m.dirty = true
+}
+
+// HasReferenceHolding reports whether ReferenceHolding was present in the serialized entry.
+func (m *MPTokenIssuance) HasReferenceHolding() bool {
+	return m != nil && m.present&mptokenissuanceBitReferenceHolding != 0
+}
+
+// ClearReferenceHolding removes ReferenceHolding from the serialized entry.
+func (m *MPTokenIssuance) ClearReferenceHolding() {
+	if m == nil {
+		return
+	}
+	m.ReferenceHolding = ""
+	m.present &^= mptokenissuanceBitReferenceHolding
+	m.dirty = true
+}
+
+// GetReferenceHolding returns the typed 256-bit hash.
+func (m *MPTokenIssuance) GetReferenceHolding() ([32]byte, error) {
+	var result [32]byte
+	if m == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(m.ReferenceHolding, "MPTokenIssuance.ReferenceHolding", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetReferenceHoldingValue assigns a typed 256-bit hash.
+func (m *MPTokenIssuance) SetReferenceHoldingValue(value [32]byte) {
+	m.SetReferenceHolding(hashValueToString(value[:]))
+}
+
+// HasIssuerEncryptionKey reports whether IssuerEncryptionKey was present in the serialized entry.
+func (m *MPTokenIssuance) HasIssuerEncryptionKey() bool {
+	return m != nil && m.present&mptokenissuanceBitIssuerEncryptionKey != 0
+}
+
+// ClearIssuerEncryptionKey removes IssuerEncryptionKey from the serialized entry.
+func (m *MPTokenIssuance) ClearIssuerEncryptionKey() {
+	if m == nil {
+		return
+	}
+	m.IssuerEncryptionKey = ""
+	m.present &^= mptokenissuanceBitIssuerEncryptionKey
+	m.dirty = true
+}
+
+// GetIssuerEncryptionKey returns the raw bytes of the Blob field.
+func (m *MPTokenIssuance) GetIssuerEncryptionKey() ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return blobValueFromString(m.IssuerEncryptionKey, "MPTokenIssuance.IssuerEncryptionKey")
+}
+
+// SetIssuerEncryptionKeyValue assigns a Blob from raw bytes.
+func (m *MPTokenIssuance) SetIssuerEncryptionKeyValue(value []byte) {
+	m.SetIssuerEncryptionKey(blobValueToString(value))
+}
+
+// SetIssuerEncryptionKeyBytes is an alias for SetIssuerEncryptionKeyValue.
+func (m *MPTokenIssuance) SetIssuerEncryptionKeyBytes(value []byte) {
+	m.SetIssuerEncryptionKeyValue(value)
+}
+
+// HasAuditorEncryptionKey reports whether AuditorEncryptionKey was present in the serialized entry.
+func (m *MPTokenIssuance) HasAuditorEncryptionKey() bool {
+	return m != nil && m.present&mptokenissuanceBitAuditorEncryptionKey != 0
+}
+
+// ClearAuditorEncryptionKey removes AuditorEncryptionKey from the serialized entry.
+func (m *MPTokenIssuance) ClearAuditorEncryptionKey() {
+	if m == nil {
+		return
+	}
+	m.AuditorEncryptionKey = ""
+	m.present &^= mptokenissuanceBitAuditorEncryptionKey
+	m.dirty = true
+}
+
+// GetAuditorEncryptionKey returns the raw bytes of the Blob field.
+func (m *MPTokenIssuance) GetAuditorEncryptionKey() ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return blobValueFromString(m.AuditorEncryptionKey, "MPTokenIssuance.AuditorEncryptionKey")
+}
+
+// SetAuditorEncryptionKeyValue assigns a Blob from raw bytes.
+func (m *MPTokenIssuance) SetAuditorEncryptionKeyValue(value []byte) {
+	m.SetAuditorEncryptionKey(blobValueToString(value))
+}
+
+// SetAuditorEncryptionKeyBytes is an alias for SetAuditorEncryptionKeyValue.
+func (m *MPTokenIssuance) SetAuditorEncryptionKeyBytes(value []byte) {
+	m.SetAuditorEncryptionKeyValue(value)
+}
+
+// HasConfidentialOutstandingAmount reports whether ConfidentialOutstandingAmount was present in the serialized entry.
+func (m *MPTokenIssuance) HasConfidentialOutstandingAmount() bool {
+	return m != nil && m.present&mptokenissuanceBitConfidentialOutstandingAmount != 0
+}
+
+// ClearConfidentialOutstandingAmount removes ConfidentialOutstandingAmount from the serialized entry.
+func (m *MPTokenIssuance) ClearConfidentialOutstandingAmount() {
+	if m == nil {
+		return
+	}
+	m.ConfidentialOutstandingAmount = ""
+	m.present &^= mptokenissuanceBitConfidentialOutstandingAmount
+	m.dirty = true
+}
+
+// GetConfidentialOutstandingAmount returns the typed UInt64 value.
+func (m *MPTokenIssuance) GetConfidentialOutstandingAmount() (uint64, error) {
+	if m == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(m.ConfidentialOutstandingAmount, "MPTokenIssuance.ConfidentialOutstandingAmount", true)
+}
+
+// SetConfidentialOutstandingAmountValue assigns a typed UInt64 value.
+func (m *MPTokenIssuance) SetConfidentialOutstandingAmountValue(value uint64) {
+	m.SetConfidentialOutstandingAmount(uint64ValueToString(value, true))
+}
+
+// HasFlags reports whether Flags was present in the serialized entry.
+func (m *MPTokenIssuance) HasFlags() bool {
+	return m != nil && m.present&mptokenissuanceBitFlags != 0
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+func (m *MPTokenIssuance) HasPreviousTxnID() bool {
+	return m != nil && m.present&mptokenissuanceBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (m *MPTokenIssuance) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if m == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(m.PreviousTxnID, "MPTokenIssuance.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (m *MPTokenIssuance) SetPreviousTxnIDValue(value [32]byte) {
+	m.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+func (m *MPTokenIssuance) HasPreviousTxnLgrSeq() bool {
+	return m != nil && m.present&mptokenissuanceBitPreviousTxnLgrSeq != 0
+}
+
+// HasSponsor reports whether Sponsor was present in the serialized entry.
+func (m *MPTokenIssuance) HasSponsor() bool {
+	return m != nil && m.present&mptokenissuanceBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (m *MPTokenIssuance) ClearSponsor() {
+	if m == nil {
+		return
+	}
+	m.Sponsor = ""
+	m.present &^= mptokenissuanceBitSponsor
+	m.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (m *MPTokenIssuance) GetSponsor() ([20]byte, error) {
+	if m == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(m.Sponsor, "MPTokenIssuance.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (m *MPTokenIssuance) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	m.SetSponsor(address)
+	return nil
+}
+
 func (m *MPTokenIssuance) validateRequired() error {
 	if m.decoded && !m.dirty {
 		return nil

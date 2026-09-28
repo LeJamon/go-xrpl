@@ -176,6 +176,368 @@ func (m *MPToken) SetSponsor(value string) {
 	m.present |= mptokenBitSponsor
 }
 
+// HasAccount reports whether Account was present in the serialized entry.
+func (m *MPToken) HasAccount() bool {
+	return m != nil && m.present&mptokenBitAccount != 0
+}
+
+// GetAccount returns the 20-byte AccountID.
+func (m *MPToken) GetAccount() ([20]byte, error) {
+	if m == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(m.Account, "MPToken.Account")
+}
+
+// SetAccountValue assigns a 20-byte AccountID.
+func (m *MPToken) SetAccountValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	m.SetAccount(address)
+	return nil
+}
+
+// HasMPTokenIssuanceID reports whether MPTokenIssuanceID was present in the serialized entry.
+func (m *MPToken) HasMPTokenIssuanceID() bool {
+	return m != nil && m.present&mptokenBitMPTokenIssuanceID != 0
+}
+
+// GetMPTokenIssuanceID returns the typed 192-bit hash.
+func (m *MPToken) GetMPTokenIssuanceID() ([24]byte, error) {
+	var result [24]byte
+	if m == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(m.MPTokenIssuanceID, "MPToken.MPTokenIssuanceID", 24)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetMPTokenIssuanceIDValue assigns a typed 192-bit hash.
+func (m *MPToken) SetMPTokenIssuanceIDValue(value [24]byte) {
+	m.SetMPTokenIssuanceID(hashValueToString(value[:]))
+}
+
+// HasMPTAmount reports whether MPTAmount was present in the serialized entry.
+func (m *MPToken) HasMPTAmount() bool {
+	return m != nil && m.present&mptokenBitMPTAmount != 0
+}
+
+// ClearMPTAmount removes MPTAmount from the serialized entry.
+func (m *MPToken) ClearMPTAmount() {
+	if m == nil {
+		return
+	}
+	m.MPTAmount = ""
+	m.present &^= mptokenBitMPTAmount
+	m.dirty = true
+}
+
+// GetMPTAmount returns the typed UInt64 value.
+func (m *MPToken) GetMPTAmount() (uint64, error) {
+	if m == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(m.MPTAmount, "MPToken.MPTAmount", true)
+}
+
+// SetMPTAmountValue assigns a typed UInt64 value.
+func (m *MPToken) SetMPTAmountValue(value uint64) {
+	m.SetMPTAmount(uint64ValueToString(value, true))
+}
+
+// HasLockedAmount reports whether LockedAmount was present in the serialized entry.
+func (m *MPToken) HasLockedAmount() bool {
+	return m != nil && m.present&mptokenBitLockedAmount != 0
+}
+
+// ClearLockedAmount removes LockedAmount from the serialized entry.
+func (m *MPToken) ClearLockedAmount() {
+	if m == nil {
+		return
+	}
+	m.LockedAmount = ""
+	m.present &^= mptokenBitLockedAmount
+	m.dirty = true
+}
+
+// GetLockedAmount returns the typed UInt64 value.
+func (m *MPToken) GetLockedAmount() (uint64, error) {
+	if m == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(m.LockedAmount, "MPToken.LockedAmount", true)
+}
+
+// SetLockedAmountValue assigns a typed UInt64 value.
+func (m *MPToken) SetLockedAmountValue(value uint64) {
+	m.SetLockedAmount(uint64ValueToString(value, true))
+}
+
+// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+func (m *MPToken) HasOwnerNode() bool {
+	return m != nil && m.present&mptokenBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (m *MPToken) GetOwnerNode() (uint64, error) {
+	if m == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(m.OwnerNode, "MPToken.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (m *MPToken) SetOwnerNodeValue(value uint64) {
+	m.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasFlags reports whether Flags was present in the serialized entry.
+func (m *MPToken) HasFlags() bool {
+	return m != nil && m.present&mptokenBitFlags != 0
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+func (m *MPToken) HasPreviousTxnID() bool {
+	return m != nil && m.present&mptokenBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (m *MPToken) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if m == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(m.PreviousTxnID, "MPToken.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (m *MPToken) SetPreviousTxnIDValue(value [32]byte) {
+	m.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+func (m *MPToken) HasPreviousTxnLgrSeq() bool {
+	return m != nil && m.present&mptokenBitPreviousTxnLgrSeq != 0
+}
+
+// HasConfidentialBalanceInbox reports whether ConfidentialBalanceInbox was present in the serialized entry.
+func (m *MPToken) HasConfidentialBalanceInbox() bool {
+	return m != nil && m.present&mptokenBitConfidentialBalanceInbox != 0
+}
+
+// ClearConfidentialBalanceInbox removes ConfidentialBalanceInbox from the serialized entry.
+func (m *MPToken) ClearConfidentialBalanceInbox() {
+	if m == nil {
+		return
+	}
+	m.ConfidentialBalanceInbox = ""
+	m.present &^= mptokenBitConfidentialBalanceInbox
+	m.dirty = true
+}
+
+// GetConfidentialBalanceInbox returns the raw bytes of the Blob field.
+func (m *MPToken) GetConfidentialBalanceInbox() ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return blobValueFromString(m.ConfidentialBalanceInbox, "MPToken.ConfidentialBalanceInbox")
+}
+
+// SetConfidentialBalanceInboxValue assigns a Blob from raw bytes.
+func (m *MPToken) SetConfidentialBalanceInboxValue(value []byte) {
+	m.SetConfidentialBalanceInbox(blobValueToString(value))
+}
+
+// SetConfidentialBalanceInboxBytes is an alias for SetConfidentialBalanceInboxValue.
+func (m *MPToken) SetConfidentialBalanceInboxBytes(value []byte) {
+	m.SetConfidentialBalanceInboxValue(value)
+}
+
+// HasConfidentialBalanceSpending reports whether ConfidentialBalanceSpending was present in the serialized entry.
+func (m *MPToken) HasConfidentialBalanceSpending() bool {
+	return m != nil && m.present&mptokenBitConfidentialBalanceSpending != 0
+}
+
+// ClearConfidentialBalanceSpending removes ConfidentialBalanceSpending from the serialized entry.
+func (m *MPToken) ClearConfidentialBalanceSpending() {
+	if m == nil {
+		return
+	}
+	m.ConfidentialBalanceSpending = ""
+	m.present &^= mptokenBitConfidentialBalanceSpending
+	m.dirty = true
+}
+
+// GetConfidentialBalanceSpending returns the raw bytes of the Blob field.
+func (m *MPToken) GetConfidentialBalanceSpending() ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return blobValueFromString(m.ConfidentialBalanceSpending, "MPToken.ConfidentialBalanceSpending")
+}
+
+// SetConfidentialBalanceSpendingValue assigns a Blob from raw bytes.
+func (m *MPToken) SetConfidentialBalanceSpendingValue(value []byte) {
+	m.SetConfidentialBalanceSpending(blobValueToString(value))
+}
+
+// SetConfidentialBalanceSpendingBytes is an alias for SetConfidentialBalanceSpendingValue.
+func (m *MPToken) SetConfidentialBalanceSpendingBytes(value []byte) {
+	m.SetConfidentialBalanceSpendingValue(value)
+}
+
+// HasConfidentialBalanceVersion reports whether ConfidentialBalanceVersion was present in the serialized entry.
+func (m *MPToken) HasConfidentialBalanceVersion() bool {
+	return m != nil && m.present&mptokenBitConfidentialBalanceVersion != 0
+}
+
+// ClearConfidentialBalanceVersion removes ConfidentialBalanceVersion from the serialized entry.
+func (m *MPToken) ClearConfidentialBalanceVersion() {
+	if m == nil {
+		return
+	}
+	m.ConfidentialBalanceVersion = 0
+	m.present &^= mptokenBitConfidentialBalanceVersion
+	m.dirty = true
+}
+
+// HasIssuerEncryptedBalance reports whether IssuerEncryptedBalance was present in the serialized entry.
+func (m *MPToken) HasIssuerEncryptedBalance() bool {
+	return m != nil && m.present&mptokenBitIssuerEncryptedBalance != 0
+}
+
+// ClearIssuerEncryptedBalance removes IssuerEncryptedBalance from the serialized entry.
+func (m *MPToken) ClearIssuerEncryptedBalance() {
+	if m == nil {
+		return
+	}
+	m.IssuerEncryptedBalance = ""
+	m.present &^= mptokenBitIssuerEncryptedBalance
+	m.dirty = true
+}
+
+// GetIssuerEncryptedBalance returns the raw bytes of the Blob field.
+func (m *MPToken) GetIssuerEncryptedBalance() ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return blobValueFromString(m.IssuerEncryptedBalance, "MPToken.IssuerEncryptedBalance")
+}
+
+// SetIssuerEncryptedBalanceValue assigns a Blob from raw bytes.
+func (m *MPToken) SetIssuerEncryptedBalanceValue(value []byte) {
+	m.SetIssuerEncryptedBalance(blobValueToString(value))
+}
+
+// SetIssuerEncryptedBalanceBytes is an alias for SetIssuerEncryptedBalanceValue.
+func (m *MPToken) SetIssuerEncryptedBalanceBytes(value []byte) {
+	m.SetIssuerEncryptedBalanceValue(value)
+}
+
+// HasAuditorEncryptedBalance reports whether AuditorEncryptedBalance was present in the serialized entry.
+func (m *MPToken) HasAuditorEncryptedBalance() bool {
+	return m != nil && m.present&mptokenBitAuditorEncryptedBalance != 0
+}
+
+// ClearAuditorEncryptedBalance removes AuditorEncryptedBalance from the serialized entry.
+func (m *MPToken) ClearAuditorEncryptedBalance() {
+	if m == nil {
+		return
+	}
+	m.AuditorEncryptedBalance = ""
+	m.present &^= mptokenBitAuditorEncryptedBalance
+	m.dirty = true
+}
+
+// GetAuditorEncryptedBalance returns the raw bytes of the Blob field.
+func (m *MPToken) GetAuditorEncryptedBalance() ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return blobValueFromString(m.AuditorEncryptedBalance, "MPToken.AuditorEncryptedBalance")
+}
+
+// SetAuditorEncryptedBalanceValue assigns a Blob from raw bytes.
+func (m *MPToken) SetAuditorEncryptedBalanceValue(value []byte) {
+	m.SetAuditorEncryptedBalance(blobValueToString(value))
+}
+
+// SetAuditorEncryptedBalanceBytes is an alias for SetAuditorEncryptedBalanceValue.
+func (m *MPToken) SetAuditorEncryptedBalanceBytes(value []byte) {
+	m.SetAuditorEncryptedBalanceValue(value)
+}
+
+// HasHolderEncryptionKey reports whether HolderEncryptionKey was present in the serialized entry.
+func (m *MPToken) HasHolderEncryptionKey() bool {
+	return m != nil && m.present&mptokenBitHolderEncryptionKey != 0
+}
+
+// ClearHolderEncryptionKey removes HolderEncryptionKey from the serialized entry.
+func (m *MPToken) ClearHolderEncryptionKey() {
+	if m == nil {
+		return
+	}
+	m.HolderEncryptionKey = ""
+	m.present &^= mptokenBitHolderEncryptionKey
+	m.dirty = true
+}
+
+// GetHolderEncryptionKey returns the raw bytes of the Blob field.
+func (m *MPToken) GetHolderEncryptionKey() ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return blobValueFromString(m.HolderEncryptionKey, "MPToken.HolderEncryptionKey")
+}
+
+// SetHolderEncryptionKeyValue assigns a Blob from raw bytes.
+func (m *MPToken) SetHolderEncryptionKeyValue(value []byte) {
+	m.SetHolderEncryptionKey(blobValueToString(value))
+}
+
+// SetHolderEncryptionKeyBytes is an alias for SetHolderEncryptionKeyValue.
+func (m *MPToken) SetHolderEncryptionKeyBytes(value []byte) {
+	m.SetHolderEncryptionKeyValue(value)
+}
+
+// HasSponsor reports whether Sponsor was present in the serialized entry.
+func (m *MPToken) HasSponsor() bool {
+	return m != nil && m.present&mptokenBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (m *MPToken) ClearSponsor() {
+	if m == nil {
+		return
+	}
+	m.Sponsor = ""
+	m.present &^= mptokenBitSponsor
+	m.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (m *MPToken) GetSponsor() ([20]byte, error) {
+	if m == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(m.Sponsor, "MPToken.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (m *MPToken) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	m.SetSponsor(address)
+	return nil
+}
+
 func (m *MPToken) validateRequired() error {
 	if m.decoded && !m.dirty {
 		return nil

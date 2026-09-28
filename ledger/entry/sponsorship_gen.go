@@ -136,6 +136,233 @@ func (s *Sponsorship) SetSponsor(value string) {
 	s.present |= sponsorshipBitSponsor
 }
 
+// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+func (s *Sponsorship) HasPreviousTxnID() bool {
+	return s != nil && s.present&sponsorshipBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (s *Sponsorship) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if s == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(s.PreviousTxnID, "Sponsorship.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (s *Sponsorship) SetPreviousTxnIDValue(value [32]byte) {
+	s.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+func (s *Sponsorship) HasPreviousTxnLgrSeq() bool {
+	return s != nil && s.present&sponsorshipBitPreviousTxnLgrSeq != 0
+}
+
+// HasOwner reports whether Owner was present in the serialized entry.
+func (s *Sponsorship) HasOwner() bool {
+	return s != nil && s.present&sponsorshipBitOwner != 0
+}
+
+// GetOwner returns the 20-byte AccountID.
+func (s *Sponsorship) GetOwner() ([20]byte, error) {
+	if s == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(s.Owner, "Sponsorship.Owner")
+}
+
+// SetOwnerValue assigns a 20-byte AccountID.
+func (s *Sponsorship) SetOwnerValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	s.SetOwner(address)
+	return nil
+}
+
+// HasSponsee reports whether Sponsee was present in the serialized entry.
+func (s *Sponsorship) HasSponsee() bool {
+	return s != nil && s.present&sponsorshipBitSponsee != 0
+}
+
+// GetSponsee returns the 20-byte AccountID.
+func (s *Sponsorship) GetSponsee() ([20]byte, error) {
+	if s == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(s.Sponsee, "Sponsorship.Sponsee")
+}
+
+// SetSponseeValue assigns a 20-byte AccountID.
+func (s *Sponsorship) SetSponseeValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	s.SetSponsee(address)
+	return nil
+}
+
+// HasFeeAmount reports whether FeeAmount was present in the serialized entry.
+func (s *Sponsorship) HasFeeAmount() bool {
+	return s != nil && s.present&sponsorshipBitFeeAmount != 0
+}
+
+// ClearFeeAmount removes FeeAmount from the serialized entry.
+func (s *Sponsorship) ClearFeeAmount() {
+	if s == nil {
+		return
+	}
+	s.FeeAmount = nil
+	s.present &^= sponsorshipBitFeeAmount
+	s.dirty = true
+}
+
+// GetFeeAmount returns the typed Amount value.
+func (s *Sponsorship) GetFeeAmount() (AmountValue, error) {
+	if s == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny(s.FeeAmount, "Sponsorship.FeeAmount", false)
+}
+
+// SetFeeAmountValue assigns a typed Amount value.
+func (s *Sponsorship) SetFeeAmountValue(value AmountValue) error {
+	encoded, err := amountValueToAny(value, "Sponsorship.FeeAmount", false)
+	if err != nil {
+		return err
+	}
+	s.SetFeeAmount(encoded)
+	return nil
+}
+
+// HasMaxFee reports whether MaxFee was present in the serialized entry.
+func (s *Sponsorship) HasMaxFee() bool {
+	return s != nil && s.present&sponsorshipBitMaxFee != 0
+}
+
+// ClearMaxFee removes MaxFee from the serialized entry.
+func (s *Sponsorship) ClearMaxFee() {
+	if s == nil {
+		return
+	}
+	s.MaxFee = nil
+	s.present &^= sponsorshipBitMaxFee
+	s.dirty = true
+}
+
+// GetMaxFee returns the typed Amount value.
+func (s *Sponsorship) GetMaxFee() (AmountValue, error) {
+	if s == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny(s.MaxFee, "Sponsorship.MaxFee", false)
+}
+
+// SetMaxFeeValue assigns a typed Amount value.
+func (s *Sponsorship) SetMaxFeeValue(value AmountValue) error {
+	encoded, err := amountValueToAny(value, "Sponsorship.MaxFee", false)
+	if err != nil {
+		return err
+	}
+	s.SetMaxFee(encoded)
+	return nil
+}
+
+// HasRemainingOwnerCount reports whether RemainingOwnerCount was present in the serialized entry.
+func (s *Sponsorship) HasRemainingOwnerCount() bool {
+	return s != nil && s.present&sponsorshipBitRemainingOwnerCount != 0
+}
+
+// ClearRemainingOwnerCount removes RemainingOwnerCount from the serialized entry.
+func (s *Sponsorship) ClearRemainingOwnerCount() {
+	if s == nil {
+		return
+	}
+	s.RemainingOwnerCount = 0
+	s.present &^= sponsorshipBitRemainingOwnerCount
+	s.dirty = true
+}
+
+// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+func (s *Sponsorship) HasOwnerNode() bool {
+	return s != nil && s.present&sponsorshipBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (s *Sponsorship) GetOwnerNode() (uint64, error) {
+	if s == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(s.OwnerNode, "Sponsorship.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (s *Sponsorship) SetOwnerNodeValue(value uint64) {
+	s.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasSponseeNode reports whether SponseeNode was present in the serialized entry.
+func (s *Sponsorship) HasSponseeNode() bool {
+	return s != nil && s.present&sponsorshipBitSponseeNode != 0
+}
+
+// GetSponseeNode returns the typed UInt64 value.
+func (s *Sponsorship) GetSponseeNode() (uint64, error) {
+	if s == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(s.SponseeNode, "Sponsorship.SponseeNode", false)
+}
+
+// SetSponseeNodeValue assigns a typed UInt64 value.
+func (s *Sponsorship) SetSponseeNodeValue(value uint64) {
+	s.SetSponseeNode(uint64ValueToString(value, false))
+}
+
+// HasFlags reports whether Flags was present in the serialized entry.
+func (s *Sponsorship) HasFlags() bool {
+	return s != nil && s.present&sponsorshipBitFlags != 0
+}
+
+// HasSponsor reports whether Sponsor was present in the serialized entry.
+func (s *Sponsorship) HasSponsor() bool {
+	return s != nil && s.present&sponsorshipBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (s *Sponsorship) ClearSponsor() {
+	if s == nil {
+		return
+	}
+	s.Sponsor = ""
+	s.present &^= sponsorshipBitSponsor
+	s.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (s *Sponsorship) GetSponsor() ([20]byte, error) {
+	if s == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(s.Sponsor, "Sponsorship.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (s *Sponsorship) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	s.SetSponsor(address)
+	return nil
+}
+
 func (s *Sponsorship) validateRequired() error {
 	if s.decoded && !s.dirty {
 		return nil

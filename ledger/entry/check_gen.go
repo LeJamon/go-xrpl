@@ -159,6 +159,256 @@ func (c *Check) SetSponsor(value string) {
 	c.present |= checkBitSponsor
 }
 
+// HasAccount reports whether Account was present in the serialized entry.
+func (c *Check) HasAccount() bool {
+	return c != nil && c.present&checkBitAccount != 0
+}
+
+// GetAccount returns the 20-byte AccountID.
+func (c *Check) GetAccount() ([20]byte, error) {
+	if c == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(c.Account, "Check.Account")
+}
+
+// SetAccountValue assigns a 20-byte AccountID.
+func (c *Check) SetAccountValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	c.SetAccount(address)
+	return nil
+}
+
+// HasDestination reports whether Destination was present in the serialized entry.
+func (c *Check) HasDestination() bool {
+	return c != nil && c.present&checkBitDestination != 0
+}
+
+// GetDestination returns the 20-byte AccountID.
+func (c *Check) GetDestination() ([20]byte, error) {
+	if c == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(c.Destination, "Check.Destination")
+}
+
+// SetDestinationValue assigns a 20-byte AccountID.
+func (c *Check) SetDestinationValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	c.SetDestination(address)
+	return nil
+}
+
+// HasSendMax reports whether SendMax was present in the serialized entry.
+func (c *Check) HasSendMax() bool {
+	return c != nil && c.present&checkBitSendMax != 0
+}
+
+// GetSendMax returns the typed Amount value.
+func (c *Check) GetSendMax() (AmountValue, error) {
+	if c == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny(c.SendMax, "Check.SendMax", false)
+}
+
+// SetSendMaxValue assigns a typed Amount value.
+func (c *Check) SetSendMaxValue(value AmountValue) error {
+	encoded, err := amountValueToAny(value, "Check.SendMax", false)
+	if err != nil {
+		return err
+	}
+	c.SetSendMax(encoded)
+	return nil
+}
+
+// HasSequence reports whether Sequence was present in the serialized entry.
+func (c *Check) HasSequence() bool {
+	return c != nil && c.present&checkBitSequence != 0
+}
+
+// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+func (c *Check) HasOwnerNode() bool {
+	return c != nil && c.present&checkBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (c *Check) GetOwnerNode() (uint64, error) {
+	if c == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(c.OwnerNode, "Check.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (c *Check) SetOwnerNodeValue(value uint64) {
+	c.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasDestinationNode reports whether DestinationNode was present in the serialized entry.
+func (c *Check) HasDestinationNode() bool {
+	return c != nil && c.present&checkBitDestinationNode != 0
+}
+
+// GetDestinationNode returns the typed UInt64 value.
+func (c *Check) GetDestinationNode() (uint64, error) {
+	if c == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(c.DestinationNode, "Check.DestinationNode", false)
+}
+
+// SetDestinationNodeValue assigns a typed UInt64 value.
+func (c *Check) SetDestinationNodeValue(value uint64) {
+	c.SetDestinationNode(uint64ValueToString(value, false))
+}
+
+// HasExpiration reports whether Expiration was present in the serialized entry.
+func (c *Check) HasExpiration() bool {
+	return c != nil && c.present&checkBitExpiration != 0
+}
+
+// ClearExpiration removes Expiration from the serialized entry.
+func (c *Check) ClearExpiration() {
+	if c == nil {
+		return
+	}
+	c.Expiration = 0
+	c.present &^= checkBitExpiration
+	c.dirty = true
+}
+
+// HasInvoiceID reports whether InvoiceID was present in the serialized entry.
+func (c *Check) HasInvoiceID() bool {
+	return c != nil && c.present&checkBitInvoiceID != 0
+}
+
+// ClearInvoiceID removes InvoiceID from the serialized entry.
+func (c *Check) ClearInvoiceID() {
+	if c == nil {
+		return
+	}
+	c.InvoiceID = ""
+	c.present &^= checkBitInvoiceID
+	c.dirty = true
+}
+
+// GetInvoiceID returns the typed 256-bit hash.
+func (c *Check) GetInvoiceID() ([32]byte, error) {
+	var result [32]byte
+	if c == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(c.InvoiceID, "Check.InvoiceID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetInvoiceIDValue assigns a typed 256-bit hash.
+func (c *Check) SetInvoiceIDValue(value [32]byte) {
+	c.SetInvoiceID(hashValueToString(value[:]))
+}
+
+// HasSourceTag reports whether SourceTag was present in the serialized entry.
+func (c *Check) HasSourceTag() bool {
+	return c != nil && c.present&checkBitSourceTag != 0
+}
+
+// ClearSourceTag removes SourceTag from the serialized entry.
+func (c *Check) ClearSourceTag() {
+	if c == nil {
+		return
+	}
+	c.SourceTag = 0
+	c.present &^= checkBitSourceTag
+	c.dirty = true
+}
+
+// HasDestinationTag reports whether DestinationTag was present in the serialized entry.
+func (c *Check) HasDestinationTag() bool {
+	return c != nil && c.present&checkBitDestinationTag != 0
+}
+
+// ClearDestinationTag removes DestinationTag from the serialized entry.
+func (c *Check) ClearDestinationTag() {
+	if c == nil {
+		return
+	}
+	c.DestinationTag = 0
+	c.present &^= checkBitDestinationTag
+	c.dirty = true
+}
+
+// HasFlags reports whether Flags was present in the serialized entry.
+func (c *Check) HasFlags() bool {
+	return c != nil && c.present&checkBitFlags != 0
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+func (c *Check) HasPreviousTxnID() bool {
+	return c != nil && c.present&checkBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (c *Check) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if c == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(c.PreviousTxnID, "Check.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (c *Check) SetPreviousTxnIDValue(value [32]byte) {
+	c.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+func (c *Check) HasPreviousTxnLgrSeq() bool {
+	return c != nil && c.present&checkBitPreviousTxnLgrSeq != 0
+}
+
+// HasSponsor reports whether Sponsor was present in the serialized entry.
+func (c *Check) HasSponsor() bool {
+	return c != nil && c.present&checkBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (c *Check) ClearSponsor() {
+	if c == nil {
+		return
+	}
+	c.Sponsor = ""
+	c.present &^= checkBitSponsor
+	c.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (c *Check) GetSponsor() ([20]byte, error) {
+	if c == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(c.Sponsor, "Check.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (c *Check) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	c.SetSponsor(address)
+	return nil
+}
+
 func (c *Check) validateRequired() error {
 	if c.decoded && !c.dirty {
 		return nil

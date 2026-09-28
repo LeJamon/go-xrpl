@@ -96,6 +96,171 @@ func (n *NegativeUNL) SetSponsor(value string) {
 	n.present |= negativeunlBitSponsor
 }
 
+// HasFlags reports whether Flags was present in the serialized entry.
+func (n *NegativeUNL) HasFlags() bool {
+	return n != nil && n.present&negativeunlBitFlags != 0
+}
+
+// HasDisabledValidators reports whether DisabledValidators was present in the serialized entry.
+func (n *NegativeUNL) HasDisabledValidators() bool {
+	return n != nil && n.present&negativeunlBitDisabledValidators != 0
+}
+
+// ClearDisabledValidators removes DisabledValidators from the serialized entry.
+func (n *NegativeUNL) ClearDisabledValidators() {
+	if n == nil {
+		return
+	}
+	n.DisabledValidators = nil
+	n.present &^= negativeunlBitDisabledValidators
+	n.dirty = true
+}
+
+// HasValidatorToDisable reports whether ValidatorToDisable was present in the serialized entry.
+func (n *NegativeUNL) HasValidatorToDisable() bool {
+	return n != nil && n.present&negativeunlBitValidatorToDisable != 0
+}
+
+// ClearValidatorToDisable removes ValidatorToDisable from the serialized entry.
+func (n *NegativeUNL) ClearValidatorToDisable() {
+	if n == nil {
+		return
+	}
+	n.ValidatorToDisable = ""
+	n.present &^= negativeunlBitValidatorToDisable
+	n.dirty = true
+}
+
+// GetValidatorToDisable returns the raw bytes of the Blob field.
+func (n *NegativeUNL) GetValidatorToDisable() ([]byte, error) {
+	if n == nil {
+		return nil, nil
+	}
+	return blobValueFromString(n.ValidatorToDisable, "NegativeUNL.ValidatorToDisable")
+}
+
+// SetValidatorToDisableValue assigns a Blob from raw bytes.
+func (n *NegativeUNL) SetValidatorToDisableValue(value []byte) {
+	n.SetValidatorToDisable(blobValueToString(value))
+}
+
+// SetValidatorToDisableBytes is an alias for SetValidatorToDisableValue.
+func (n *NegativeUNL) SetValidatorToDisableBytes(value []byte) {
+	n.SetValidatorToDisableValue(value)
+}
+
+// HasValidatorToReEnable reports whether ValidatorToReEnable was present in the serialized entry.
+func (n *NegativeUNL) HasValidatorToReEnable() bool {
+	return n != nil && n.present&negativeunlBitValidatorToReEnable != 0
+}
+
+// ClearValidatorToReEnable removes ValidatorToReEnable from the serialized entry.
+func (n *NegativeUNL) ClearValidatorToReEnable() {
+	if n == nil {
+		return
+	}
+	n.ValidatorToReEnable = ""
+	n.present &^= negativeunlBitValidatorToReEnable
+	n.dirty = true
+}
+
+// GetValidatorToReEnable returns the raw bytes of the Blob field.
+func (n *NegativeUNL) GetValidatorToReEnable() ([]byte, error) {
+	if n == nil {
+		return nil, nil
+	}
+	return blobValueFromString(n.ValidatorToReEnable, "NegativeUNL.ValidatorToReEnable")
+}
+
+// SetValidatorToReEnableValue assigns a Blob from raw bytes.
+func (n *NegativeUNL) SetValidatorToReEnableValue(value []byte) {
+	n.SetValidatorToReEnable(blobValueToString(value))
+}
+
+// SetValidatorToReEnableBytes is an alias for SetValidatorToReEnableValue.
+func (n *NegativeUNL) SetValidatorToReEnableBytes(value []byte) {
+	n.SetValidatorToReEnableValue(value)
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+func (n *NegativeUNL) HasPreviousTxnID() bool {
+	return n != nil && n.present&negativeunlBitPreviousTxnID != 0
+}
+
+// ClearPreviousTxnID removes PreviousTxnID from the serialized entry.
+func (n *NegativeUNL) ClearPreviousTxnID() {
+	if n == nil {
+		return
+	}
+	n.PreviousTxnID = ""
+	n.present &^= negativeunlBitPreviousTxnID
+	n.dirty = true
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (n *NegativeUNL) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if n == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(n.PreviousTxnID, "NegativeUNL.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (n *NegativeUNL) SetPreviousTxnIDValue(value [32]byte) {
+	n.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+func (n *NegativeUNL) HasPreviousTxnLgrSeq() bool {
+	return n != nil && n.present&negativeunlBitPreviousTxnLgrSeq != 0
+}
+
+// ClearPreviousTxnLgrSeq removes PreviousTxnLgrSeq from the serialized entry.
+func (n *NegativeUNL) ClearPreviousTxnLgrSeq() {
+	if n == nil {
+		return
+	}
+	n.PreviousTxnLgrSeq = 0
+	n.present &^= negativeunlBitPreviousTxnLgrSeq
+	n.dirty = true
+}
+
+// HasSponsor reports whether Sponsor was present in the serialized entry.
+func (n *NegativeUNL) HasSponsor() bool {
+	return n != nil && n.present&negativeunlBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (n *NegativeUNL) ClearSponsor() {
+	if n == nil {
+		return
+	}
+	n.Sponsor = ""
+	n.present &^= negativeunlBitSponsor
+	n.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (n *NegativeUNL) GetSponsor() ([20]byte, error) {
+	if n == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(n.Sponsor, "NegativeUNL.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (n *NegativeUNL) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	n.SetSponsor(address)
+	return nil
+}
+
 func (n *NegativeUNL) validateRequired() error {
 	if n.decoded && !n.dirty {
 		return nil

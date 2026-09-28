@@ -236,6 +236,321 @@ func (l *LoanBroker) SetSponsor(value string) {
 	l.present |= loanbrokerBitSponsor
 }
 
+// HasSequence reports whether Sequence was present in the serialized entry.
+func (l *LoanBroker) HasSequence() bool {
+	return l != nil && l.present&loanbrokerBitSequence != 0
+}
+
+// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+func (l *LoanBroker) HasOwnerNode() bool {
+	return l != nil && l.present&loanbrokerBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (l *LoanBroker) GetOwnerNode() (uint64, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(l.OwnerNode, "LoanBroker.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (l *LoanBroker) SetOwnerNodeValue(value uint64) {
+	l.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasVaultNode reports whether VaultNode was present in the serialized entry.
+func (l *LoanBroker) HasVaultNode() bool {
+	return l != nil && l.present&loanbrokerBitVaultNode != 0
+}
+
+// GetVaultNode returns the typed UInt64 value.
+func (l *LoanBroker) GetVaultNode() (uint64, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(l.VaultNode, "LoanBroker.VaultNode", false)
+}
+
+// SetVaultNodeValue assigns a typed UInt64 value.
+func (l *LoanBroker) SetVaultNodeValue(value uint64) {
+	l.SetVaultNode(uint64ValueToString(value, false))
+}
+
+// HasVaultID reports whether VaultID was present in the serialized entry.
+func (l *LoanBroker) HasVaultID() bool {
+	return l != nil && l.present&loanbrokerBitVaultID != 0
+}
+
+// GetVaultID returns the typed 256-bit hash.
+func (l *LoanBroker) GetVaultID() ([32]byte, error) {
+	var result [32]byte
+	if l == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(l.VaultID, "LoanBroker.VaultID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetVaultIDValue assigns a typed 256-bit hash.
+func (l *LoanBroker) SetVaultIDValue(value [32]byte) {
+	l.SetVaultID(hashValueToString(value[:]))
+}
+
+// HasAccount reports whether Account was present in the serialized entry.
+func (l *LoanBroker) HasAccount() bool {
+	return l != nil && l.present&loanbrokerBitAccount != 0
+}
+
+// GetAccount returns the 20-byte AccountID.
+func (l *LoanBroker) GetAccount() ([20]byte, error) {
+	if l == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(l.Account, "LoanBroker.Account")
+}
+
+// SetAccountValue assigns a 20-byte AccountID.
+func (l *LoanBroker) SetAccountValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	l.SetAccount(address)
+	return nil
+}
+
+// HasOwner reports whether Owner was present in the serialized entry.
+func (l *LoanBroker) HasOwner() bool {
+	return l != nil && l.present&loanbrokerBitOwner != 0
+}
+
+// GetOwner returns the 20-byte AccountID.
+func (l *LoanBroker) GetOwner() ([20]byte, error) {
+	if l == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(l.Owner, "LoanBroker.Owner")
+}
+
+// SetOwnerValue assigns a 20-byte AccountID.
+func (l *LoanBroker) SetOwnerValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	l.SetOwner(address)
+	return nil
+}
+
+// HasLoanSequence reports whether LoanSequence was present in the serialized entry.
+func (l *LoanBroker) HasLoanSequence() bool {
+	return l != nil && l.present&loanbrokerBitLoanSequence != 0
+}
+
+// HasData reports whether Data was present in the serialized entry.
+func (l *LoanBroker) HasData() bool {
+	return l != nil && l.present&loanbrokerBitData != 0
+}
+
+// ClearData removes Data from the serialized entry.
+func (l *LoanBroker) ClearData() {
+	if l == nil {
+		return
+	}
+	l.Data = ""
+	l.present &^= loanbrokerBitData
+	l.dirty = true
+}
+
+// GetData returns the raw bytes of the Blob field.
+func (l *LoanBroker) GetData() ([]byte, error) {
+	if l == nil {
+		return nil, nil
+	}
+	return blobValueFromString(l.Data, "LoanBroker.Data")
+}
+
+// SetDataValue assigns a Blob from raw bytes.
+func (l *LoanBroker) SetDataValue(value []byte) {
+	l.SetData(blobValueToString(value))
+}
+
+// SetDataBytes is an alias for SetDataValue.
+func (l *LoanBroker) SetDataBytes(value []byte) {
+	l.SetDataValue(value)
+}
+
+// HasManagementFeeRate reports whether ManagementFeeRate was present in the serialized entry.
+func (l *LoanBroker) HasManagementFeeRate() bool {
+	return l != nil && l.present&loanbrokerBitManagementFeeRate != 0
+}
+
+// ClearManagementFeeRate removes ManagementFeeRate from the serialized entry.
+func (l *LoanBroker) ClearManagementFeeRate() {
+	if l == nil {
+		return
+	}
+	l.ManagementFeeRate = 0
+	l.present &^= loanbrokerBitManagementFeeRate
+	l.dirty = true
+}
+
+// HasOwnerCount reports whether OwnerCount was present in the serialized entry.
+func (l *LoanBroker) HasOwnerCount() bool {
+	return l != nil && l.present&loanbrokerBitOwnerCount != 0
+}
+
+// ClearOwnerCount removes OwnerCount from the serialized entry.
+func (l *LoanBroker) ClearOwnerCount() {
+	if l == nil {
+		return
+	}
+	l.OwnerCount = 0
+	l.present &^= loanbrokerBitOwnerCount
+	l.dirty = true
+}
+
+// HasDebtTotal reports whether DebtTotal was present in the serialized entry.
+func (l *LoanBroker) HasDebtTotal() bool {
+	return l != nil && l.present&loanbrokerBitDebtTotal != 0
+}
+
+// ClearDebtTotal removes DebtTotal from the serialized entry.
+func (l *LoanBroker) ClearDebtTotal() {
+	if l == nil {
+		return
+	}
+	l.DebtTotal = nil
+	l.present &^= loanbrokerBitDebtTotal
+	l.dirty = true
+}
+
+// HasDebtMaximum reports whether DebtMaximum was present in the serialized entry.
+func (l *LoanBroker) HasDebtMaximum() bool {
+	return l != nil && l.present&loanbrokerBitDebtMaximum != 0
+}
+
+// ClearDebtMaximum removes DebtMaximum from the serialized entry.
+func (l *LoanBroker) ClearDebtMaximum() {
+	if l == nil {
+		return
+	}
+	l.DebtMaximum = nil
+	l.present &^= loanbrokerBitDebtMaximum
+	l.dirty = true
+}
+
+// HasCoverAvailable reports whether CoverAvailable was present in the serialized entry.
+func (l *LoanBroker) HasCoverAvailable() bool {
+	return l != nil && l.present&loanbrokerBitCoverAvailable != 0
+}
+
+// ClearCoverAvailable removes CoverAvailable from the serialized entry.
+func (l *LoanBroker) ClearCoverAvailable() {
+	if l == nil {
+		return
+	}
+	l.CoverAvailable = nil
+	l.present &^= loanbrokerBitCoverAvailable
+	l.dirty = true
+}
+
+// HasCoverRateMinimum reports whether CoverRateMinimum was present in the serialized entry.
+func (l *LoanBroker) HasCoverRateMinimum() bool {
+	return l != nil && l.present&loanbrokerBitCoverRateMinimum != 0
+}
+
+// ClearCoverRateMinimum removes CoverRateMinimum from the serialized entry.
+func (l *LoanBroker) ClearCoverRateMinimum() {
+	if l == nil {
+		return
+	}
+	l.CoverRateMinimum = 0
+	l.present &^= loanbrokerBitCoverRateMinimum
+	l.dirty = true
+}
+
+// HasCoverRateLiquidation reports whether CoverRateLiquidation was present in the serialized entry.
+func (l *LoanBroker) HasCoverRateLiquidation() bool {
+	return l != nil && l.present&loanbrokerBitCoverRateLiquidation != 0
+}
+
+// ClearCoverRateLiquidation removes CoverRateLiquidation from the serialized entry.
+func (l *LoanBroker) ClearCoverRateLiquidation() {
+	if l == nil {
+		return
+	}
+	l.CoverRateLiquidation = 0
+	l.present &^= loanbrokerBitCoverRateLiquidation
+	l.dirty = true
+}
+
+// HasFlags reports whether Flags was present in the serialized entry.
+func (l *LoanBroker) HasFlags() bool {
+	return l != nil && l.present&loanbrokerBitFlags != 0
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+func (l *LoanBroker) HasPreviousTxnID() bool {
+	return l != nil && l.present&loanbrokerBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (l *LoanBroker) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if l == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(l.PreviousTxnID, "LoanBroker.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (l *LoanBroker) SetPreviousTxnIDValue(value [32]byte) {
+	l.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+func (l *LoanBroker) HasPreviousTxnLgrSeq() bool {
+	return l != nil && l.present&loanbrokerBitPreviousTxnLgrSeq != 0
+}
+
+// HasSponsor reports whether Sponsor was present in the serialized entry.
+func (l *LoanBroker) HasSponsor() bool {
+	return l != nil && l.present&loanbrokerBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (l *LoanBroker) ClearSponsor() {
+	if l == nil {
+		return
+	}
+	l.Sponsor = ""
+	l.present &^= loanbrokerBitSponsor
+	l.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (l *LoanBroker) GetSponsor() ([20]byte, error) {
+	if l == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(l.Sponsor, "LoanBroker.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (l *LoanBroker) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	l.SetSponsor(address)
+	return nil
+}
+
 func (l *LoanBroker) validateRequired() error {
 	if l.decoded && !l.dirty {
 		return nil

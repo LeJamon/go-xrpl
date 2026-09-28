@@ -114,6 +114,167 @@ func (d *Delegate) SetSponsor(value string) {
 	d.present |= delegateBitSponsor
 }
 
+// HasAccount reports whether Account was present in the serialized entry.
+func (d *Delegate) HasAccount() bool {
+	return d != nil && d.present&delegateBitAccount != 0
+}
+
+// GetAccount returns the 20-byte AccountID.
+func (d *Delegate) GetAccount() ([20]byte, error) {
+	if d == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(d.Account, "Delegate.Account")
+}
+
+// SetAccountValue assigns a 20-byte AccountID.
+func (d *Delegate) SetAccountValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	d.SetAccount(address)
+	return nil
+}
+
+// HasAuthorize reports whether Authorize was present in the serialized entry.
+func (d *Delegate) HasAuthorize() bool {
+	return d != nil && d.present&delegateBitAuthorize != 0
+}
+
+// GetAuthorize returns the 20-byte AccountID.
+func (d *Delegate) GetAuthorize() ([20]byte, error) {
+	if d == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(d.Authorize, "Delegate.Authorize")
+}
+
+// SetAuthorizeValue assigns a 20-byte AccountID.
+func (d *Delegate) SetAuthorizeValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	d.SetAuthorize(address)
+	return nil
+}
+
+// HasPermissions reports whether Permissions was present in the serialized entry.
+func (d *Delegate) HasPermissions() bool {
+	return d != nil && d.present&delegateBitPermissions != 0
+}
+
+// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+func (d *Delegate) HasOwnerNode() bool {
+	return d != nil && d.present&delegateBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (d *Delegate) GetOwnerNode() (uint64, error) {
+	if d == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(d.OwnerNode, "Delegate.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (d *Delegate) SetOwnerNodeValue(value uint64) {
+	d.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasDestinationNode reports whether DestinationNode was present in the serialized entry.
+func (d *Delegate) HasDestinationNode() bool {
+	return d != nil && d.present&delegateBitDestinationNode != 0
+}
+
+// ClearDestinationNode removes DestinationNode from the serialized entry.
+func (d *Delegate) ClearDestinationNode() {
+	if d == nil {
+		return
+	}
+	d.DestinationNode = ""
+	d.present &^= delegateBitDestinationNode
+	d.dirty = true
+}
+
+// GetDestinationNode returns the typed UInt64 value.
+func (d *Delegate) GetDestinationNode() (uint64, error) {
+	if d == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(d.DestinationNode, "Delegate.DestinationNode", false)
+}
+
+// SetDestinationNodeValue assigns a typed UInt64 value.
+func (d *Delegate) SetDestinationNodeValue(value uint64) {
+	d.SetDestinationNode(uint64ValueToString(value, false))
+}
+
+// HasFlags reports whether Flags was present in the serialized entry.
+func (d *Delegate) HasFlags() bool {
+	return d != nil && d.present&delegateBitFlags != 0
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+func (d *Delegate) HasPreviousTxnID() bool {
+	return d != nil && d.present&delegateBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (d *Delegate) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if d == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(d.PreviousTxnID, "Delegate.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (d *Delegate) SetPreviousTxnIDValue(value [32]byte) {
+	d.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+func (d *Delegate) HasPreviousTxnLgrSeq() bool {
+	return d != nil && d.present&delegateBitPreviousTxnLgrSeq != 0
+}
+
+// HasSponsor reports whether Sponsor was present in the serialized entry.
+func (d *Delegate) HasSponsor() bool {
+	return d != nil && d.present&delegateBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (d *Delegate) ClearSponsor() {
+	if d == nil {
+		return
+	}
+	d.Sponsor = ""
+	d.present &^= delegateBitSponsor
+	d.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (d *Delegate) GetSponsor() ([20]byte, error) {
+	if d == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(d.Sponsor, "Delegate.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (d *Delegate) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	d.SetSponsor(address)
+	return nil
+}
+
 func (d *Delegate) validateRequired() error {
 	if d.decoded && !d.dirty {
 		return nil

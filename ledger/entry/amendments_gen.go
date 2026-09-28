@@ -87,6 +87,120 @@ func (a *Amendments) SetSponsor(value string) {
 	a.present |= amendmentsBitSponsor
 }
 
+// HasFlags reports whether Flags was present in the serialized entry.
+func (a *Amendments) HasFlags() bool {
+	return a != nil && a.present&amendmentsBitFlags != 0
+}
+
+// HasAmendments reports whether Amendments was present in the serialized entry.
+func (a *Amendments) HasAmendments() bool {
+	return a != nil && a.present&amendmentsBitAmendments != 0
+}
+
+// ClearAmendments removes Amendments from the serialized entry.
+func (a *Amendments) ClearAmendments() {
+	if a == nil {
+		return
+	}
+	a.Amendments = nil
+	a.present &^= amendmentsBitAmendments
+	a.dirty = true
+}
+
+// HasMajorities reports whether Majorities was present in the serialized entry.
+func (a *Amendments) HasMajorities() bool {
+	return a != nil && a.present&amendmentsBitMajorities != 0
+}
+
+// ClearMajorities removes Majorities from the serialized entry.
+func (a *Amendments) ClearMajorities() {
+	if a == nil {
+		return
+	}
+	a.Majorities = nil
+	a.present &^= amendmentsBitMajorities
+	a.dirty = true
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+func (a *Amendments) HasPreviousTxnID() bool {
+	return a != nil && a.present&amendmentsBitPreviousTxnID != 0
+}
+
+// ClearPreviousTxnID removes PreviousTxnID from the serialized entry.
+func (a *Amendments) ClearPreviousTxnID() {
+	if a == nil {
+		return
+	}
+	a.PreviousTxnID = ""
+	a.present &^= amendmentsBitPreviousTxnID
+	a.dirty = true
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (a *Amendments) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if a == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(a.PreviousTxnID, "Amendments.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (a *Amendments) SetPreviousTxnIDValue(value [32]byte) {
+	a.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+func (a *Amendments) HasPreviousTxnLgrSeq() bool {
+	return a != nil && a.present&amendmentsBitPreviousTxnLgrSeq != 0
+}
+
+// ClearPreviousTxnLgrSeq removes PreviousTxnLgrSeq from the serialized entry.
+func (a *Amendments) ClearPreviousTxnLgrSeq() {
+	if a == nil {
+		return
+	}
+	a.PreviousTxnLgrSeq = 0
+	a.present &^= amendmentsBitPreviousTxnLgrSeq
+	a.dirty = true
+}
+
+// HasSponsor reports whether Sponsor was present in the serialized entry.
+func (a *Amendments) HasSponsor() bool {
+	return a != nil && a.present&amendmentsBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (a *Amendments) ClearSponsor() {
+	if a == nil {
+		return
+	}
+	a.Sponsor = ""
+	a.present &^= amendmentsBitSponsor
+	a.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (a *Amendments) GetSponsor() ([20]byte, error) {
+	if a == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(a.Sponsor, "Amendments.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (a *Amendments) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	a.SetSponsor(address)
+	return nil
+}
+
 func (a *Amendments) validateRequired() error {
 	if a.decoded && !a.dirty {
 		return nil

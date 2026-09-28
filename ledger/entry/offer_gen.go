@@ -159,6 +159,262 @@ func (o *Offer) SetSponsor(value string) {
 	o.present |= offerBitSponsor
 }
 
+// HasAccount reports whether Account was present in the serialized entry.
+func (o *Offer) HasAccount() bool {
+	return o != nil && o.present&offerBitAccount != 0
+}
+
+// GetAccount returns the 20-byte AccountID.
+func (o *Offer) GetAccount() ([20]byte, error) {
+	if o == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(o.Account, "Offer.Account")
+}
+
+// SetAccountValue assigns a 20-byte AccountID.
+func (o *Offer) SetAccountValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	o.SetAccount(address)
+	return nil
+}
+
+// HasSequence reports whether Sequence was present in the serialized entry.
+func (o *Offer) HasSequence() bool {
+	return o != nil && o.present&offerBitSequence != 0
+}
+
+// HasTakerPays reports whether TakerPays was present in the serialized entry.
+func (o *Offer) HasTakerPays() bool {
+	return o != nil && o.present&offerBitTakerPays != 0
+}
+
+// GetTakerPays returns the typed Amount value.
+func (o *Offer) GetTakerPays() (AmountValue, error) {
+	if o == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny(o.TakerPays, "Offer.TakerPays", false)
+}
+
+// SetTakerPaysValue assigns a typed Amount value.
+func (o *Offer) SetTakerPaysValue(value AmountValue) error {
+	encoded, err := amountValueToAny(value, "Offer.TakerPays", false)
+	if err != nil {
+		return err
+	}
+	o.SetTakerPays(encoded)
+	return nil
+}
+
+// HasTakerGets reports whether TakerGets was present in the serialized entry.
+func (o *Offer) HasTakerGets() bool {
+	return o != nil && o.present&offerBitTakerGets != 0
+}
+
+// GetTakerGets returns the typed Amount value.
+func (o *Offer) GetTakerGets() (AmountValue, error) {
+	if o == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny(o.TakerGets, "Offer.TakerGets", false)
+}
+
+// SetTakerGetsValue assigns a typed Amount value.
+func (o *Offer) SetTakerGetsValue(value AmountValue) error {
+	encoded, err := amountValueToAny(value, "Offer.TakerGets", false)
+	if err != nil {
+		return err
+	}
+	o.SetTakerGets(encoded)
+	return nil
+}
+
+// HasBookDirectory reports whether BookDirectory was present in the serialized entry.
+func (o *Offer) HasBookDirectory() bool {
+	return o != nil && o.present&offerBitBookDirectory != 0
+}
+
+// GetBookDirectory returns the typed 256-bit hash.
+func (o *Offer) GetBookDirectory() ([32]byte, error) {
+	var result [32]byte
+	if o == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(o.BookDirectory, "Offer.BookDirectory", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetBookDirectoryValue assigns a typed 256-bit hash.
+func (o *Offer) SetBookDirectoryValue(value [32]byte) {
+	o.SetBookDirectory(hashValueToString(value[:]))
+}
+
+// HasBookNode reports whether BookNode was present in the serialized entry.
+func (o *Offer) HasBookNode() bool {
+	return o != nil && o.present&offerBitBookNode != 0
+}
+
+// GetBookNode returns the typed UInt64 value.
+func (o *Offer) GetBookNode() (uint64, error) {
+	if o == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(o.BookNode, "Offer.BookNode", false)
+}
+
+// SetBookNodeValue assigns a typed UInt64 value.
+func (o *Offer) SetBookNodeValue(value uint64) {
+	o.SetBookNode(uint64ValueToString(value, false))
+}
+
+// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+func (o *Offer) HasOwnerNode() bool {
+	return o != nil && o.present&offerBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (o *Offer) GetOwnerNode() (uint64, error) {
+	if o == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(o.OwnerNode, "Offer.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (o *Offer) SetOwnerNodeValue(value uint64) {
+	o.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasExpiration reports whether Expiration was present in the serialized entry.
+func (o *Offer) HasExpiration() bool {
+	return o != nil && o.present&offerBitExpiration != 0
+}
+
+// ClearExpiration removes Expiration from the serialized entry.
+func (o *Offer) ClearExpiration() {
+	if o == nil {
+		return
+	}
+	o.Expiration = 0
+	o.present &^= offerBitExpiration
+	o.dirty = true
+}
+
+// HasFlags reports whether Flags was present in the serialized entry.
+func (o *Offer) HasFlags() bool {
+	return o != nil && o.present&offerBitFlags != 0
+}
+
+// HasDomainID reports whether DomainID was present in the serialized entry.
+func (o *Offer) HasDomainID() bool {
+	return o != nil && o.present&offerBitDomainID != 0
+}
+
+// ClearDomainID removes DomainID from the serialized entry.
+func (o *Offer) ClearDomainID() {
+	if o == nil {
+		return
+	}
+	o.DomainID = ""
+	o.present &^= offerBitDomainID
+	o.dirty = true
+}
+
+// GetDomainID returns the typed 256-bit hash.
+func (o *Offer) GetDomainID() ([32]byte, error) {
+	var result [32]byte
+	if o == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(o.DomainID, "Offer.DomainID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetDomainIDValue assigns a typed 256-bit hash.
+func (o *Offer) SetDomainIDValue(value [32]byte) {
+	o.SetDomainID(hashValueToString(value[:]))
+}
+
+// HasAdditionalBooks reports whether AdditionalBooks was present in the serialized entry.
+func (o *Offer) HasAdditionalBooks() bool {
+	return o != nil && o.present&offerBitAdditionalBooks != 0
+}
+
+// ClearAdditionalBooks removes AdditionalBooks from the serialized entry.
+func (o *Offer) ClearAdditionalBooks() {
+	if o == nil {
+		return
+	}
+	o.AdditionalBooks = nil
+	o.present &^= offerBitAdditionalBooks
+	o.dirty = true
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+func (o *Offer) HasPreviousTxnID() bool {
+	return o != nil && o.present&offerBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (o *Offer) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if o == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(o.PreviousTxnID, "Offer.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (o *Offer) SetPreviousTxnIDValue(value [32]byte) {
+	o.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+func (o *Offer) HasPreviousTxnLgrSeq() bool {
+	return o != nil && o.present&offerBitPreviousTxnLgrSeq != 0
+}
+
+// HasSponsor reports whether Sponsor was present in the serialized entry.
+func (o *Offer) HasSponsor() bool {
+	return o != nil && o.present&offerBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (o *Offer) ClearSponsor() {
+	if o == nil {
+		return
+	}
+	o.Sponsor = ""
+	o.present &^= offerBitSponsor
+	o.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (o *Offer) GetSponsor() ([20]byte, error) {
+	if o == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(o.Sponsor, "Offer.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (o *Offer) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	o.SetSponsor(address)
+	return nil
+}
+
 func (o *Offer) validateRequired() error {
 	if o.decoded && !o.dirty {
 		return nil

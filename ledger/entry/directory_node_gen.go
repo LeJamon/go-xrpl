@@ -195,6 +195,481 @@ func (d *DirectoryNode) SetSponsor(value string) {
 	d.present |= directorynodeBitSponsor
 }
 
+// HasFlags reports whether Flags was present in the serialized entry.
+func (d *DirectoryNode) HasFlags() bool {
+	return d != nil && d.present&directorynodeBitFlags != 0
+}
+
+// HasRootIndex reports whether RootIndex was present in the serialized entry.
+func (d *DirectoryNode) HasRootIndex() bool {
+	return d != nil && d.present&directorynodeBitRootIndex != 0
+}
+
+// GetRootIndex returns the typed 256-bit hash.
+func (d *DirectoryNode) GetRootIndex() ([32]byte, error) {
+	var result [32]byte
+	if d == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(d.RootIndex, "DirectoryNode.RootIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetRootIndexValue assigns a typed 256-bit hash.
+func (d *DirectoryNode) SetRootIndexValue(value [32]byte) {
+	d.SetRootIndex(hashValueToString(value[:]))
+}
+
+// HasIndexes reports whether Indexes was present in the serialized entry.
+func (d *DirectoryNode) HasIndexes() bool {
+	return d != nil && d.present&directorynodeBitIndexes != 0
+}
+
+// HasIndexNext reports whether IndexNext was present in the serialized entry.
+func (d *DirectoryNode) HasIndexNext() bool {
+	return d != nil && d.present&directorynodeBitIndexNext != 0
+}
+
+// ClearIndexNext removes IndexNext from the serialized entry.
+func (d *DirectoryNode) ClearIndexNext() {
+	if d == nil {
+		return
+	}
+	d.IndexNext = ""
+	d.present &^= directorynodeBitIndexNext
+	d.dirty = true
+}
+
+// GetIndexNext returns the typed UInt64 value.
+func (d *DirectoryNode) GetIndexNext() (uint64, error) {
+	if d == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(d.IndexNext, "DirectoryNode.IndexNext", false)
+}
+
+// SetIndexNextValue assigns a typed UInt64 value.
+func (d *DirectoryNode) SetIndexNextValue(value uint64) {
+	d.SetIndexNext(uint64ValueToString(value, false))
+}
+
+// HasIndexPrevious reports whether IndexPrevious was present in the serialized entry.
+func (d *DirectoryNode) HasIndexPrevious() bool {
+	return d != nil && d.present&directorynodeBitIndexPrevious != 0
+}
+
+// ClearIndexPrevious removes IndexPrevious from the serialized entry.
+func (d *DirectoryNode) ClearIndexPrevious() {
+	if d == nil {
+		return
+	}
+	d.IndexPrevious = ""
+	d.present &^= directorynodeBitIndexPrevious
+	d.dirty = true
+}
+
+// GetIndexPrevious returns the typed UInt64 value.
+func (d *DirectoryNode) GetIndexPrevious() (uint64, error) {
+	if d == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(d.IndexPrevious, "DirectoryNode.IndexPrevious", false)
+}
+
+// SetIndexPreviousValue assigns a typed UInt64 value.
+func (d *DirectoryNode) SetIndexPreviousValue(value uint64) {
+	d.SetIndexPrevious(uint64ValueToString(value, false))
+}
+
+// HasOwner reports whether Owner was present in the serialized entry.
+func (d *DirectoryNode) HasOwner() bool {
+	return d != nil && d.present&directorynodeBitOwner != 0
+}
+
+// ClearOwner removes Owner from the serialized entry.
+func (d *DirectoryNode) ClearOwner() {
+	if d == nil {
+		return
+	}
+	d.Owner = ""
+	d.present &^= directorynodeBitOwner
+	d.dirty = true
+}
+
+// GetOwner returns the 20-byte AccountID.
+func (d *DirectoryNode) GetOwner() ([20]byte, error) {
+	if d == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(d.Owner, "DirectoryNode.Owner")
+}
+
+// SetOwnerValue assigns a 20-byte AccountID.
+func (d *DirectoryNode) SetOwnerValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	d.SetOwner(address)
+	return nil
+}
+
+// HasTakerPaysCurrency reports whether TakerPaysCurrency was present in the serialized entry.
+func (d *DirectoryNode) HasTakerPaysCurrency() bool {
+	return d != nil && d.present&directorynodeBitTakerPaysCurrency != 0
+}
+
+// ClearTakerPaysCurrency removes TakerPaysCurrency from the serialized entry.
+func (d *DirectoryNode) ClearTakerPaysCurrency() {
+	if d == nil {
+		return
+	}
+	d.TakerPaysCurrency = ""
+	d.present &^= directorynodeBitTakerPaysCurrency
+	d.dirty = true
+}
+
+// GetTakerPaysCurrency returns the typed 160-bit hash.
+func (d *DirectoryNode) GetTakerPaysCurrency() ([20]byte, error) {
+	var result [20]byte
+	if d == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(d.TakerPaysCurrency, "DirectoryNode.TakerPaysCurrency", 20)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetTakerPaysCurrencyValue assigns a typed 160-bit hash.
+func (d *DirectoryNode) SetTakerPaysCurrencyValue(value [20]byte) {
+	d.SetTakerPaysCurrency(hashValueToString(value[:]))
+}
+
+// HasTakerPaysIssuer reports whether TakerPaysIssuer was present in the serialized entry.
+func (d *DirectoryNode) HasTakerPaysIssuer() bool {
+	return d != nil && d.present&directorynodeBitTakerPaysIssuer != 0
+}
+
+// ClearTakerPaysIssuer removes TakerPaysIssuer from the serialized entry.
+func (d *DirectoryNode) ClearTakerPaysIssuer() {
+	if d == nil {
+		return
+	}
+	d.TakerPaysIssuer = ""
+	d.present &^= directorynodeBitTakerPaysIssuer
+	d.dirty = true
+}
+
+// GetTakerPaysIssuer returns the typed 160-bit hash.
+func (d *DirectoryNode) GetTakerPaysIssuer() ([20]byte, error) {
+	var result [20]byte
+	if d == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(d.TakerPaysIssuer, "DirectoryNode.TakerPaysIssuer", 20)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetTakerPaysIssuerValue assigns a typed 160-bit hash.
+func (d *DirectoryNode) SetTakerPaysIssuerValue(value [20]byte) {
+	d.SetTakerPaysIssuer(hashValueToString(value[:]))
+}
+
+// HasTakerPaysMPT reports whether TakerPaysMPT was present in the serialized entry.
+func (d *DirectoryNode) HasTakerPaysMPT() bool {
+	return d != nil && d.present&directorynodeBitTakerPaysMPT != 0
+}
+
+// ClearTakerPaysMPT removes TakerPaysMPT from the serialized entry.
+func (d *DirectoryNode) ClearTakerPaysMPT() {
+	if d == nil {
+		return
+	}
+	d.TakerPaysMPT = ""
+	d.present &^= directorynodeBitTakerPaysMPT
+	d.dirty = true
+}
+
+// GetTakerPaysMPT returns the typed 192-bit hash.
+func (d *DirectoryNode) GetTakerPaysMPT() ([24]byte, error) {
+	var result [24]byte
+	if d == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(d.TakerPaysMPT, "DirectoryNode.TakerPaysMPT", 24)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetTakerPaysMPTValue assigns a typed 192-bit hash.
+func (d *DirectoryNode) SetTakerPaysMPTValue(value [24]byte) {
+	d.SetTakerPaysMPT(hashValueToString(value[:]))
+}
+
+// HasTakerGetsCurrency reports whether TakerGetsCurrency was present in the serialized entry.
+func (d *DirectoryNode) HasTakerGetsCurrency() bool {
+	return d != nil && d.present&directorynodeBitTakerGetsCurrency != 0
+}
+
+// ClearTakerGetsCurrency removes TakerGetsCurrency from the serialized entry.
+func (d *DirectoryNode) ClearTakerGetsCurrency() {
+	if d == nil {
+		return
+	}
+	d.TakerGetsCurrency = ""
+	d.present &^= directorynodeBitTakerGetsCurrency
+	d.dirty = true
+}
+
+// GetTakerGetsCurrency returns the typed 160-bit hash.
+func (d *DirectoryNode) GetTakerGetsCurrency() ([20]byte, error) {
+	var result [20]byte
+	if d == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(d.TakerGetsCurrency, "DirectoryNode.TakerGetsCurrency", 20)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetTakerGetsCurrencyValue assigns a typed 160-bit hash.
+func (d *DirectoryNode) SetTakerGetsCurrencyValue(value [20]byte) {
+	d.SetTakerGetsCurrency(hashValueToString(value[:]))
+}
+
+// HasTakerGetsIssuer reports whether TakerGetsIssuer was present in the serialized entry.
+func (d *DirectoryNode) HasTakerGetsIssuer() bool {
+	return d != nil && d.present&directorynodeBitTakerGetsIssuer != 0
+}
+
+// ClearTakerGetsIssuer removes TakerGetsIssuer from the serialized entry.
+func (d *DirectoryNode) ClearTakerGetsIssuer() {
+	if d == nil {
+		return
+	}
+	d.TakerGetsIssuer = ""
+	d.present &^= directorynodeBitTakerGetsIssuer
+	d.dirty = true
+}
+
+// GetTakerGetsIssuer returns the typed 160-bit hash.
+func (d *DirectoryNode) GetTakerGetsIssuer() ([20]byte, error) {
+	var result [20]byte
+	if d == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(d.TakerGetsIssuer, "DirectoryNode.TakerGetsIssuer", 20)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetTakerGetsIssuerValue assigns a typed 160-bit hash.
+func (d *DirectoryNode) SetTakerGetsIssuerValue(value [20]byte) {
+	d.SetTakerGetsIssuer(hashValueToString(value[:]))
+}
+
+// HasTakerGetsMPT reports whether TakerGetsMPT was present in the serialized entry.
+func (d *DirectoryNode) HasTakerGetsMPT() bool {
+	return d != nil && d.present&directorynodeBitTakerGetsMPT != 0
+}
+
+// ClearTakerGetsMPT removes TakerGetsMPT from the serialized entry.
+func (d *DirectoryNode) ClearTakerGetsMPT() {
+	if d == nil {
+		return
+	}
+	d.TakerGetsMPT = ""
+	d.present &^= directorynodeBitTakerGetsMPT
+	d.dirty = true
+}
+
+// GetTakerGetsMPT returns the typed 192-bit hash.
+func (d *DirectoryNode) GetTakerGetsMPT() ([24]byte, error) {
+	var result [24]byte
+	if d == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(d.TakerGetsMPT, "DirectoryNode.TakerGetsMPT", 24)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetTakerGetsMPTValue assigns a typed 192-bit hash.
+func (d *DirectoryNode) SetTakerGetsMPTValue(value [24]byte) {
+	d.SetTakerGetsMPT(hashValueToString(value[:]))
+}
+
+// HasExchangeRate reports whether ExchangeRate was present in the serialized entry.
+func (d *DirectoryNode) HasExchangeRate() bool {
+	return d != nil && d.present&directorynodeBitExchangeRate != 0
+}
+
+// ClearExchangeRate removes ExchangeRate from the serialized entry.
+func (d *DirectoryNode) ClearExchangeRate() {
+	if d == nil {
+		return
+	}
+	d.ExchangeRate = ""
+	d.present &^= directorynodeBitExchangeRate
+	d.dirty = true
+}
+
+// GetExchangeRate returns the typed UInt64 value.
+func (d *DirectoryNode) GetExchangeRate() (uint64, error) {
+	if d == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(d.ExchangeRate, "DirectoryNode.ExchangeRate", false)
+}
+
+// SetExchangeRateValue assigns a typed UInt64 value.
+func (d *DirectoryNode) SetExchangeRateValue(value uint64) {
+	d.SetExchangeRate(uint64ValueToString(value, false))
+}
+
+// HasNFTokenID reports whether NFTokenID was present in the serialized entry.
+func (d *DirectoryNode) HasNFTokenID() bool {
+	return d != nil && d.present&directorynodeBitNFTokenID != 0
+}
+
+// ClearNFTokenID removes NFTokenID from the serialized entry.
+func (d *DirectoryNode) ClearNFTokenID() {
+	if d == nil {
+		return
+	}
+	d.NFTokenID = ""
+	d.present &^= directorynodeBitNFTokenID
+	d.dirty = true
+}
+
+// GetNFTokenID returns the typed 256-bit hash.
+func (d *DirectoryNode) GetNFTokenID() ([32]byte, error) {
+	var result [32]byte
+	if d == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(d.NFTokenID, "DirectoryNode.NFTokenID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetNFTokenIDValue assigns a typed 256-bit hash.
+func (d *DirectoryNode) SetNFTokenIDValue(value [32]byte) {
+	d.SetNFTokenID(hashValueToString(value[:]))
+}
+
+// HasDomainID reports whether DomainID was present in the serialized entry.
+func (d *DirectoryNode) HasDomainID() bool {
+	return d != nil && d.present&directorynodeBitDomainID != 0
+}
+
+// ClearDomainID removes DomainID from the serialized entry.
+func (d *DirectoryNode) ClearDomainID() {
+	if d == nil {
+		return
+	}
+	d.DomainID = ""
+	d.present &^= directorynodeBitDomainID
+	d.dirty = true
+}
+
+// GetDomainID returns the typed 256-bit hash.
+func (d *DirectoryNode) GetDomainID() ([32]byte, error) {
+	var result [32]byte
+	if d == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(d.DomainID, "DirectoryNode.DomainID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetDomainIDValue assigns a typed 256-bit hash.
+func (d *DirectoryNode) SetDomainIDValue(value [32]byte) {
+	d.SetDomainID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+func (d *DirectoryNode) HasPreviousTxnID() bool {
+	return d != nil && d.present&directorynodeBitPreviousTxnID != 0
+}
+
+// ClearPreviousTxnID removes PreviousTxnID from the serialized entry.
+func (d *DirectoryNode) ClearPreviousTxnID() {
+	if d == nil {
+		return
+	}
+	d.PreviousTxnID = ""
+	d.present &^= directorynodeBitPreviousTxnID
+	d.dirty = true
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (d *DirectoryNode) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if d == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(d.PreviousTxnID, "DirectoryNode.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (d *DirectoryNode) SetPreviousTxnIDValue(value [32]byte) {
+	d.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+func (d *DirectoryNode) HasPreviousTxnLgrSeq() bool {
+	return d != nil && d.present&directorynodeBitPreviousTxnLgrSeq != 0
+}
+
+// ClearPreviousTxnLgrSeq removes PreviousTxnLgrSeq from the serialized entry.
+func (d *DirectoryNode) ClearPreviousTxnLgrSeq() {
+	if d == nil {
+		return
+	}
+	d.PreviousTxnLgrSeq = 0
+	d.present &^= directorynodeBitPreviousTxnLgrSeq
+	d.dirty = true
+}
+
+// HasSponsor reports whether Sponsor was present in the serialized entry.
+func (d *DirectoryNode) HasSponsor() bool {
+	return d != nil && d.present&directorynodeBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (d *DirectoryNode) ClearSponsor() {
+	if d == nil {
+		return
+	}
+	d.Sponsor = ""
+	d.present &^= directorynodeBitSponsor
+	d.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (d *DirectoryNode) GetSponsor() ([20]byte, error) {
+	if d == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(d.Sponsor, "DirectoryNode.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (d *DirectoryNode) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	d.SetSponsor(address)
+	return nil
+}
+
 func (d *DirectoryNode) validateRequired() error {
 	if d.decoded && !d.dirty {
 		return nil

@@ -362,6 +362,425 @@ func (l *Loan) SetSponsor(value string) {
 	l.present |= loanBitSponsor
 }
 
+// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+func (l *Loan) HasOwnerNode() bool {
+	return l != nil && l.present&loanBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (l *Loan) GetOwnerNode() (uint64, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(l.OwnerNode, "Loan.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (l *Loan) SetOwnerNodeValue(value uint64) {
+	l.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasLoanBrokerNode reports whether LoanBrokerNode was present in the serialized entry.
+func (l *Loan) HasLoanBrokerNode() bool {
+	return l != nil && l.present&loanBitLoanBrokerNode != 0
+}
+
+// GetLoanBrokerNode returns the typed UInt64 value.
+func (l *Loan) GetLoanBrokerNode() (uint64, error) {
+	if l == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(l.LoanBrokerNode, "Loan.LoanBrokerNode", false)
+}
+
+// SetLoanBrokerNodeValue assigns a typed UInt64 value.
+func (l *Loan) SetLoanBrokerNodeValue(value uint64) {
+	l.SetLoanBrokerNode(uint64ValueToString(value, false))
+}
+
+// HasLoanBrokerID reports whether LoanBrokerID was present in the serialized entry.
+func (l *Loan) HasLoanBrokerID() bool {
+	return l != nil && l.present&loanBitLoanBrokerID != 0
+}
+
+// GetLoanBrokerID returns the typed 256-bit hash.
+func (l *Loan) GetLoanBrokerID() ([32]byte, error) {
+	var result [32]byte
+	if l == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(l.LoanBrokerID, "Loan.LoanBrokerID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLoanBrokerIDValue assigns a typed 256-bit hash.
+func (l *Loan) SetLoanBrokerIDValue(value [32]byte) {
+	l.SetLoanBrokerID(hashValueToString(value[:]))
+}
+
+// HasLoanSequence reports whether LoanSequence was present in the serialized entry.
+func (l *Loan) HasLoanSequence() bool {
+	return l != nil && l.present&loanBitLoanSequence != 0
+}
+
+// HasBorrower reports whether Borrower was present in the serialized entry.
+func (l *Loan) HasBorrower() bool {
+	return l != nil && l.present&loanBitBorrower != 0
+}
+
+// GetBorrower returns the 20-byte AccountID.
+func (l *Loan) GetBorrower() ([20]byte, error) {
+	if l == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(l.Borrower, "Loan.Borrower")
+}
+
+// SetBorrowerValue assigns a 20-byte AccountID.
+func (l *Loan) SetBorrowerValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	l.SetBorrower(address)
+	return nil
+}
+
+// HasLoanOriginationFee reports whether LoanOriginationFee was present in the serialized entry.
+func (l *Loan) HasLoanOriginationFee() bool {
+	return l != nil && l.present&loanBitLoanOriginationFee != 0
+}
+
+// ClearLoanOriginationFee removes LoanOriginationFee from the serialized entry.
+func (l *Loan) ClearLoanOriginationFee() {
+	if l == nil {
+		return
+	}
+	l.LoanOriginationFee = nil
+	l.present &^= loanBitLoanOriginationFee
+	l.dirty = true
+}
+
+// HasLoanServiceFee reports whether LoanServiceFee was present in the serialized entry.
+func (l *Loan) HasLoanServiceFee() bool {
+	return l != nil && l.present&loanBitLoanServiceFee != 0
+}
+
+// ClearLoanServiceFee removes LoanServiceFee from the serialized entry.
+func (l *Loan) ClearLoanServiceFee() {
+	if l == nil {
+		return
+	}
+	l.LoanServiceFee = nil
+	l.present &^= loanBitLoanServiceFee
+	l.dirty = true
+}
+
+// HasLatePaymentFee reports whether LatePaymentFee was present in the serialized entry.
+func (l *Loan) HasLatePaymentFee() bool {
+	return l != nil && l.present&loanBitLatePaymentFee != 0
+}
+
+// ClearLatePaymentFee removes LatePaymentFee from the serialized entry.
+func (l *Loan) ClearLatePaymentFee() {
+	if l == nil {
+		return
+	}
+	l.LatePaymentFee = nil
+	l.present &^= loanBitLatePaymentFee
+	l.dirty = true
+}
+
+// HasClosePaymentFee reports whether ClosePaymentFee was present in the serialized entry.
+func (l *Loan) HasClosePaymentFee() bool {
+	return l != nil && l.present&loanBitClosePaymentFee != 0
+}
+
+// ClearClosePaymentFee removes ClosePaymentFee from the serialized entry.
+func (l *Loan) ClearClosePaymentFee() {
+	if l == nil {
+		return
+	}
+	l.ClosePaymentFee = nil
+	l.present &^= loanBitClosePaymentFee
+	l.dirty = true
+}
+
+// HasOverpaymentFee reports whether OverpaymentFee was present in the serialized entry.
+func (l *Loan) HasOverpaymentFee() bool {
+	return l != nil && l.present&loanBitOverpaymentFee != 0
+}
+
+// ClearOverpaymentFee removes OverpaymentFee from the serialized entry.
+func (l *Loan) ClearOverpaymentFee() {
+	if l == nil {
+		return
+	}
+	l.OverpaymentFee = 0
+	l.present &^= loanBitOverpaymentFee
+	l.dirty = true
+}
+
+// HasInterestRate reports whether InterestRate was present in the serialized entry.
+func (l *Loan) HasInterestRate() bool {
+	return l != nil && l.present&loanBitInterestRate != 0
+}
+
+// ClearInterestRate removes InterestRate from the serialized entry.
+func (l *Loan) ClearInterestRate() {
+	if l == nil {
+		return
+	}
+	l.InterestRate = 0
+	l.present &^= loanBitInterestRate
+	l.dirty = true
+}
+
+// HasLateInterestRate reports whether LateInterestRate was present in the serialized entry.
+func (l *Loan) HasLateInterestRate() bool {
+	return l != nil && l.present&loanBitLateInterestRate != 0
+}
+
+// ClearLateInterestRate removes LateInterestRate from the serialized entry.
+func (l *Loan) ClearLateInterestRate() {
+	if l == nil {
+		return
+	}
+	l.LateInterestRate = 0
+	l.present &^= loanBitLateInterestRate
+	l.dirty = true
+}
+
+// HasCloseInterestRate reports whether CloseInterestRate was present in the serialized entry.
+func (l *Loan) HasCloseInterestRate() bool {
+	return l != nil && l.present&loanBitCloseInterestRate != 0
+}
+
+// ClearCloseInterestRate removes CloseInterestRate from the serialized entry.
+func (l *Loan) ClearCloseInterestRate() {
+	if l == nil {
+		return
+	}
+	l.CloseInterestRate = 0
+	l.present &^= loanBitCloseInterestRate
+	l.dirty = true
+}
+
+// HasOverpaymentInterestRate reports whether OverpaymentInterestRate was present in the serialized entry.
+func (l *Loan) HasOverpaymentInterestRate() bool {
+	return l != nil && l.present&loanBitOverpaymentInterestRate != 0
+}
+
+// ClearOverpaymentInterestRate removes OverpaymentInterestRate from the serialized entry.
+func (l *Loan) ClearOverpaymentInterestRate() {
+	if l == nil {
+		return
+	}
+	l.OverpaymentInterestRate = 0
+	l.present &^= loanBitOverpaymentInterestRate
+	l.dirty = true
+}
+
+// HasStartDate reports whether StartDate was present in the serialized entry.
+func (l *Loan) HasStartDate() bool {
+	return l != nil && l.present&loanBitStartDate != 0
+}
+
+// HasPaymentInterval reports whether PaymentInterval was present in the serialized entry.
+func (l *Loan) HasPaymentInterval() bool {
+	return l != nil && l.present&loanBitPaymentInterval != 0
+}
+
+// HasGracePeriod reports whether GracePeriod was present in the serialized entry.
+func (l *Loan) HasGracePeriod() bool {
+	return l != nil && l.present&loanBitGracePeriod != 0
+}
+
+// ClearGracePeriod removes GracePeriod from the serialized entry.
+func (l *Loan) ClearGracePeriod() {
+	if l == nil {
+		return
+	}
+	l.GracePeriod = 0
+	l.present &^= loanBitGracePeriod
+	l.dirty = true
+}
+
+// HasPreviousPaymentDueDate reports whether PreviousPaymentDueDate was present in the serialized entry.
+func (l *Loan) HasPreviousPaymentDueDate() bool {
+	return l != nil && l.present&loanBitPreviousPaymentDueDate != 0
+}
+
+// ClearPreviousPaymentDueDate removes PreviousPaymentDueDate from the serialized entry.
+func (l *Loan) ClearPreviousPaymentDueDate() {
+	if l == nil {
+		return
+	}
+	l.PreviousPaymentDueDate = 0
+	l.present &^= loanBitPreviousPaymentDueDate
+	l.dirty = true
+}
+
+// HasNextPaymentDueDate reports whether NextPaymentDueDate was present in the serialized entry.
+func (l *Loan) HasNextPaymentDueDate() bool {
+	return l != nil && l.present&loanBitNextPaymentDueDate != 0
+}
+
+// ClearNextPaymentDueDate removes NextPaymentDueDate from the serialized entry.
+func (l *Loan) ClearNextPaymentDueDate() {
+	if l == nil {
+		return
+	}
+	l.NextPaymentDueDate = 0
+	l.present &^= loanBitNextPaymentDueDate
+	l.dirty = true
+}
+
+// HasPaymentRemaining reports whether PaymentRemaining was present in the serialized entry.
+func (l *Loan) HasPaymentRemaining() bool {
+	return l != nil && l.present&loanBitPaymentRemaining != 0
+}
+
+// ClearPaymentRemaining removes PaymentRemaining from the serialized entry.
+func (l *Loan) ClearPaymentRemaining() {
+	if l == nil {
+		return
+	}
+	l.PaymentRemaining = 0
+	l.present &^= loanBitPaymentRemaining
+	l.dirty = true
+}
+
+// HasPeriodicPayment reports whether PeriodicPayment was present in the serialized entry.
+func (l *Loan) HasPeriodicPayment() bool {
+	return l != nil && l.present&loanBitPeriodicPayment != 0
+}
+
+// HasPrincipalOutstanding reports whether PrincipalOutstanding was present in the serialized entry.
+func (l *Loan) HasPrincipalOutstanding() bool {
+	return l != nil && l.present&loanBitPrincipalOutstanding != 0
+}
+
+// ClearPrincipalOutstanding removes PrincipalOutstanding from the serialized entry.
+func (l *Loan) ClearPrincipalOutstanding() {
+	if l == nil {
+		return
+	}
+	l.PrincipalOutstanding = nil
+	l.present &^= loanBitPrincipalOutstanding
+	l.dirty = true
+}
+
+// HasTotalValueOutstanding reports whether TotalValueOutstanding was present in the serialized entry.
+func (l *Loan) HasTotalValueOutstanding() bool {
+	return l != nil && l.present&loanBitTotalValueOutstanding != 0
+}
+
+// ClearTotalValueOutstanding removes TotalValueOutstanding from the serialized entry.
+func (l *Loan) ClearTotalValueOutstanding() {
+	if l == nil {
+		return
+	}
+	l.TotalValueOutstanding = nil
+	l.present &^= loanBitTotalValueOutstanding
+	l.dirty = true
+}
+
+// HasManagementFeeOutstanding reports whether ManagementFeeOutstanding was present in the serialized entry.
+func (l *Loan) HasManagementFeeOutstanding() bool {
+	return l != nil && l.present&loanBitManagementFeeOutstanding != 0
+}
+
+// ClearManagementFeeOutstanding removes ManagementFeeOutstanding from the serialized entry.
+func (l *Loan) ClearManagementFeeOutstanding() {
+	if l == nil {
+		return
+	}
+	l.ManagementFeeOutstanding = nil
+	l.present &^= loanBitManagementFeeOutstanding
+	l.dirty = true
+}
+
+// HasLoanScale reports whether LoanScale was present in the serialized entry.
+func (l *Loan) HasLoanScale() bool {
+	return l != nil && l.present&loanBitLoanScale != 0
+}
+
+// ClearLoanScale removes LoanScale from the serialized entry.
+func (l *Loan) ClearLoanScale() {
+	if l == nil {
+		return
+	}
+	l.LoanScale = 0
+	l.present &^= loanBitLoanScale
+	l.dirty = true
+}
+
+// HasFlags reports whether Flags was present in the serialized entry.
+func (l *Loan) HasFlags() bool {
+	return l != nil && l.present&loanBitFlags != 0
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+func (l *Loan) HasPreviousTxnID() bool {
+	return l != nil && l.present&loanBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (l *Loan) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if l == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(l.PreviousTxnID, "Loan.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (l *Loan) SetPreviousTxnIDValue(value [32]byte) {
+	l.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+func (l *Loan) HasPreviousTxnLgrSeq() bool {
+	return l != nil && l.present&loanBitPreviousTxnLgrSeq != 0
+}
+
+// HasSponsor reports whether Sponsor was present in the serialized entry.
+func (l *Loan) HasSponsor() bool {
+	return l != nil && l.present&loanBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (l *Loan) ClearSponsor() {
+	if l == nil {
+		return
+	}
+	l.Sponsor = ""
+	l.present &^= loanBitSponsor
+	l.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (l *Loan) GetSponsor() ([20]byte, error) {
+	if l == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(l.Sponsor, "Loan.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (l *Loan) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	l.SetSponsor(address)
+	return nil
+}
+
 func (l *Loan) validateRequired() error {
 	if l.decoded && !l.dirty {
 		return nil

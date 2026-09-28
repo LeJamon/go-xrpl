@@ -78,6 +78,79 @@ func (l *LedgerHashes) SetSponsor(value string) {
 	l.present |= ledgerhashesBitSponsor
 }
 
+// HasFlags reports whether Flags was present in the serialized entry.
+func (l *LedgerHashes) HasFlags() bool {
+	return l != nil && l.present&ledgerhashesBitFlags != 0
+}
+
+// HasFirstLedgerSequence reports whether FirstLedgerSequence was present in the serialized entry.
+func (l *LedgerHashes) HasFirstLedgerSequence() bool {
+	return l != nil && l.present&ledgerhashesBitFirstLedgerSequence != 0
+}
+
+// ClearFirstLedgerSequence removes FirstLedgerSequence from the serialized entry.
+func (l *LedgerHashes) ClearFirstLedgerSequence() {
+	if l == nil {
+		return
+	}
+	l.FirstLedgerSequence = 0
+	l.present &^= ledgerhashesBitFirstLedgerSequence
+	l.dirty = true
+}
+
+// HasLastLedgerSequence reports whether LastLedgerSequence was present in the serialized entry.
+func (l *LedgerHashes) HasLastLedgerSequence() bool {
+	return l != nil && l.present&ledgerhashesBitLastLedgerSequence != 0
+}
+
+// ClearLastLedgerSequence removes LastLedgerSequence from the serialized entry.
+func (l *LedgerHashes) ClearLastLedgerSequence() {
+	if l == nil {
+		return
+	}
+	l.LastLedgerSequence = 0
+	l.present &^= ledgerhashesBitLastLedgerSequence
+	l.dirty = true
+}
+
+// HasHashes reports whether Hashes was present in the serialized entry.
+func (l *LedgerHashes) HasHashes() bool {
+	return l != nil && l.present&ledgerhashesBitHashes != 0
+}
+
+// HasSponsor reports whether Sponsor was present in the serialized entry.
+func (l *LedgerHashes) HasSponsor() bool {
+	return l != nil && l.present&ledgerhashesBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (l *LedgerHashes) ClearSponsor() {
+	if l == nil {
+		return
+	}
+	l.Sponsor = ""
+	l.present &^= ledgerhashesBitSponsor
+	l.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (l *LedgerHashes) GetSponsor() ([20]byte, error) {
+	if l == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(l.Sponsor, "LedgerHashes.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (l *LedgerHashes) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	l.SetSponsor(address)
+	return nil
+}
+
 func (l *LedgerHashes) validateRequired() error {
 	if l.decoded && !l.dirty {
 		return nil

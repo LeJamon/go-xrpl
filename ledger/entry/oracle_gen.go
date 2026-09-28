@@ -141,6 +141,215 @@ func (o *Oracle) SetSponsor(value string) {
 	o.present |= oracleBitSponsor
 }
 
+// HasOwner reports whether Owner was present in the serialized entry.
+func (o *Oracle) HasOwner() bool {
+	return o != nil && o.present&oracleBitOwner != 0
+}
+
+// GetOwner returns the 20-byte AccountID.
+func (o *Oracle) GetOwner() ([20]byte, error) {
+	if o == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(o.Owner, "Oracle.Owner")
+}
+
+// SetOwnerValue assigns a 20-byte AccountID.
+func (o *Oracle) SetOwnerValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	o.SetOwner(address)
+	return nil
+}
+
+// HasOracleDocumentID reports whether OracleDocumentID was present in the serialized entry.
+func (o *Oracle) HasOracleDocumentID() bool {
+	return o != nil && o.present&oracleBitOracleDocumentID != 0
+}
+
+// ClearOracleDocumentID removes OracleDocumentID from the serialized entry.
+func (o *Oracle) ClearOracleDocumentID() {
+	if o == nil {
+		return
+	}
+	o.OracleDocumentID = 0
+	o.present &^= oracleBitOracleDocumentID
+	o.dirty = true
+}
+
+// HasProvider reports whether Provider was present in the serialized entry.
+func (o *Oracle) HasProvider() bool {
+	return o != nil && o.present&oracleBitProvider != 0
+}
+
+// GetProvider returns the raw bytes of the Blob field.
+func (o *Oracle) GetProvider() ([]byte, error) {
+	if o == nil {
+		return nil, nil
+	}
+	return blobValueFromString(o.Provider, "Oracle.Provider")
+}
+
+// SetProviderValue assigns a Blob from raw bytes.
+func (o *Oracle) SetProviderValue(value []byte) {
+	o.SetProvider(blobValueToString(value))
+}
+
+// SetProviderBytes is an alias for SetProviderValue.
+func (o *Oracle) SetProviderBytes(value []byte) {
+	o.SetProviderValue(value)
+}
+
+// HasPriceDataSeries reports whether PriceDataSeries was present in the serialized entry.
+func (o *Oracle) HasPriceDataSeries() bool {
+	return o != nil && o.present&oracleBitPriceDataSeries != 0
+}
+
+// HasAssetClass reports whether AssetClass was present in the serialized entry.
+func (o *Oracle) HasAssetClass() bool {
+	return o != nil && o.present&oracleBitAssetClass != 0
+}
+
+// GetAssetClass returns the raw bytes of the Blob field.
+func (o *Oracle) GetAssetClass() ([]byte, error) {
+	if o == nil {
+		return nil, nil
+	}
+	return blobValueFromString(o.AssetClass, "Oracle.AssetClass")
+}
+
+// SetAssetClassValue assigns a Blob from raw bytes.
+func (o *Oracle) SetAssetClassValue(value []byte) {
+	o.SetAssetClass(blobValueToString(value))
+}
+
+// SetAssetClassBytes is an alias for SetAssetClassValue.
+func (o *Oracle) SetAssetClassBytes(value []byte) {
+	o.SetAssetClassValue(value)
+}
+
+// HasLastUpdateTime reports whether LastUpdateTime was present in the serialized entry.
+func (o *Oracle) HasLastUpdateTime() bool {
+	return o != nil && o.present&oracleBitLastUpdateTime != 0
+}
+
+// HasURI reports whether URI was present in the serialized entry.
+func (o *Oracle) HasURI() bool {
+	return o != nil && o.present&oracleBitURI != 0
+}
+
+// ClearURI removes URI from the serialized entry.
+func (o *Oracle) ClearURI() {
+	if o == nil {
+		return
+	}
+	o.URI = ""
+	o.present &^= oracleBitURI
+	o.dirty = true
+}
+
+// GetURI returns the raw bytes of the Blob field.
+func (o *Oracle) GetURI() ([]byte, error) {
+	if o == nil {
+		return nil, nil
+	}
+	return blobValueFromString(o.URI, "Oracle.URI")
+}
+
+// SetURIValue assigns a Blob from raw bytes.
+func (o *Oracle) SetURIValue(value []byte) {
+	o.SetURI(blobValueToString(value))
+}
+
+// SetURIBytes is an alias for SetURIValue.
+func (o *Oracle) SetURIBytes(value []byte) {
+	o.SetURIValue(value)
+}
+
+// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+func (o *Oracle) HasOwnerNode() bool {
+	return o != nil && o.present&oracleBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (o *Oracle) GetOwnerNode() (uint64, error) {
+	if o == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(o.OwnerNode, "Oracle.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (o *Oracle) SetOwnerNodeValue(value uint64) {
+	o.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasFlags reports whether Flags was present in the serialized entry.
+func (o *Oracle) HasFlags() bool {
+	return o != nil && o.present&oracleBitFlags != 0
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+func (o *Oracle) HasPreviousTxnID() bool {
+	return o != nil && o.present&oracleBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (o *Oracle) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if o == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(o.PreviousTxnID, "Oracle.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (o *Oracle) SetPreviousTxnIDValue(value [32]byte) {
+	o.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+func (o *Oracle) HasPreviousTxnLgrSeq() bool {
+	return o != nil && o.present&oracleBitPreviousTxnLgrSeq != 0
+}
+
+// HasSponsor reports whether Sponsor was present in the serialized entry.
+func (o *Oracle) HasSponsor() bool {
+	return o != nil && o.present&oracleBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (o *Oracle) ClearSponsor() {
+	if o == nil {
+		return
+	}
+	o.Sponsor = ""
+	o.present &^= oracleBitSponsor
+	o.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (o *Oracle) GetSponsor() ([20]byte, error) {
+	if o == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(o.Sponsor, "Oracle.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (o *Oracle) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	o.SetSponsor(address)
+	return nil
+}
+
 func (o *Oracle) validateRequired() error {
 	if o.decoded && !o.dirty {
 		return nil

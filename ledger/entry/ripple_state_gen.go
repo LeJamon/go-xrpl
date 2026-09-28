@@ -169,6 +169,321 @@ func (r *RippleState) SetSponsor(value string) {
 	r.present |= ripplestateBitSponsor
 }
 
+// HasFlags reports whether Flags was present in the serialized entry.
+func (r *RippleState) HasFlags() bool {
+	return r != nil && r.present&ripplestateBitFlags != 0
+}
+
+// HasBalance reports whether Balance was present in the serialized entry.
+func (r *RippleState) HasBalance() bool {
+	return r != nil && r.present&ripplestateBitBalance != 0
+}
+
+// GetBalance returns the typed Amount value.
+func (r *RippleState) GetBalance() (AmountValue, error) {
+	if r == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny(r.Balance, "RippleState.Balance", false)
+}
+
+// SetBalanceValue assigns a typed Amount value.
+func (r *RippleState) SetBalanceValue(value AmountValue) error {
+	encoded, err := amountValueToAny(value, "RippleState.Balance", false)
+	if err != nil {
+		return err
+	}
+	r.SetBalance(encoded)
+	return nil
+}
+
+// HasLowLimit reports whether LowLimit was present in the serialized entry.
+func (r *RippleState) HasLowLimit() bool {
+	return r != nil && r.present&ripplestateBitLowLimit != 0
+}
+
+// GetLowLimit returns the typed Amount value.
+func (r *RippleState) GetLowLimit() (AmountValue, error) {
+	if r == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny(r.LowLimit, "RippleState.LowLimit", false)
+}
+
+// SetLowLimitValue assigns a typed Amount value.
+func (r *RippleState) SetLowLimitValue(value AmountValue) error {
+	encoded, err := amountValueToAny(value, "RippleState.LowLimit", false)
+	if err != nil {
+		return err
+	}
+	r.SetLowLimit(encoded)
+	return nil
+}
+
+// HasHighLimit reports whether HighLimit was present in the serialized entry.
+func (r *RippleState) HasHighLimit() bool {
+	return r != nil && r.present&ripplestateBitHighLimit != 0
+}
+
+// GetHighLimit returns the typed Amount value.
+func (r *RippleState) GetHighLimit() (AmountValue, error) {
+	if r == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny(r.HighLimit, "RippleState.HighLimit", false)
+}
+
+// SetHighLimitValue assigns a typed Amount value.
+func (r *RippleState) SetHighLimitValue(value AmountValue) error {
+	encoded, err := amountValueToAny(value, "RippleState.HighLimit", false)
+	if err != nil {
+		return err
+	}
+	r.SetHighLimit(encoded)
+	return nil
+}
+
+// HasLowNode reports whether LowNode was present in the serialized entry.
+func (r *RippleState) HasLowNode() bool {
+	return r != nil && r.present&ripplestateBitLowNode != 0
+}
+
+// ClearLowNode removes LowNode from the serialized entry.
+func (r *RippleState) ClearLowNode() {
+	if r == nil {
+		return
+	}
+	r.LowNode = ""
+	r.present &^= ripplestateBitLowNode
+	r.dirty = true
+}
+
+// GetLowNode returns the typed UInt64 value.
+func (r *RippleState) GetLowNode() (uint64, error) {
+	if r == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(r.LowNode, "RippleState.LowNode", false)
+}
+
+// SetLowNodeValue assigns a typed UInt64 value.
+func (r *RippleState) SetLowNodeValue(value uint64) {
+	r.SetLowNode(uint64ValueToString(value, false))
+}
+
+// HasHighNode reports whether HighNode was present in the serialized entry.
+func (r *RippleState) HasHighNode() bool {
+	return r != nil && r.present&ripplestateBitHighNode != 0
+}
+
+// ClearHighNode removes HighNode from the serialized entry.
+func (r *RippleState) ClearHighNode() {
+	if r == nil {
+		return
+	}
+	r.HighNode = ""
+	r.present &^= ripplestateBitHighNode
+	r.dirty = true
+}
+
+// GetHighNode returns the typed UInt64 value.
+func (r *RippleState) GetHighNode() (uint64, error) {
+	if r == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(r.HighNode, "RippleState.HighNode", false)
+}
+
+// SetHighNodeValue assigns a typed UInt64 value.
+func (r *RippleState) SetHighNodeValue(value uint64) {
+	r.SetHighNode(uint64ValueToString(value, false))
+}
+
+// HasLowQualityIn reports whether LowQualityIn was present in the serialized entry.
+func (r *RippleState) HasLowQualityIn() bool {
+	return r != nil && r.present&ripplestateBitLowQualityIn != 0
+}
+
+// ClearLowQualityIn removes LowQualityIn from the serialized entry.
+func (r *RippleState) ClearLowQualityIn() {
+	if r == nil {
+		return
+	}
+	r.LowQualityIn = 0
+	r.present &^= ripplestateBitLowQualityIn
+	r.dirty = true
+}
+
+// HasLowQualityOut reports whether LowQualityOut was present in the serialized entry.
+func (r *RippleState) HasLowQualityOut() bool {
+	return r != nil && r.present&ripplestateBitLowQualityOut != 0
+}
+
+// ClearLowQualityOut removes LowQualityOut from the serialized entry.
+func (r *RippleState) ClearLowQualityOut() {
+	if r == nil {
+		return
+	}
+	r.LowQualityOut = 0
+	r.present &^= ripplestateBitLowQualityOut
+	r.dirty = true
+}
+
+// HasHighQualityIn reports whether HighQualityIn was present in the serialized entry.
+func (r *RippleState) HasHighQualityIn() bool {
+	return r != nil && r.present&ripplestateBitHighQualityIn != 0
+}
+
+// ClearHighQualityIn removes HighQualityIn from the serialized entry.
+func (r *RippleState) ClearHighQualityIn() {
+	if r == nil {
+		return
+	}
+	r.HighQualityIn = 0
+	r.present &^= ripplestateBitHighQualityIn
+	r.dirty = true
+}
+
+// HasHighQualityOut reports whether HighQualityOut was present in the serialized entry.
+func (r *RippleState) HasHighQualityOut() bool {
+	return r != nil && r.present&ripplestateBitHighQualityOut != 0
+}
+
+// ClearHighQualityOut removes HighQualityOut from the serialized entry.
+func (r *RippleState) ClearHighQualityOut() {
+	if r == nil {
+		return
+	}
+	r.HighQualityOut = 0
+	r.present &^= ripplestateBitHighQualityOut
+	r.dirty = true
+}
+
+// HasHighSponsor reports whether HighSponsor was present in the serialized entry.
+func (r *RippleState) HasHighSponsor() bool {
+	return r != nil && r.present&ripplestateBitHighSponsor != 0
+}
+
+// ClearHighSponsor removes HighSponsor from the serialized entry.
+func (r *RippleState) ClearHighSponsor() {
+	if r == nil {
+		return
+	}
+	r.HighSponsor = ""
+	r.present &^= ripplestateBitHighSponsor
+	r.dirty = true
+}
+
+// GetHighSponsor returns the 20-byte AccountID.
+func (r *RippleState) GetHighSponsor() ([20]byte, error) {
+	if r == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(r.HighSponsor, "RippleState.HighSponsor")
+}
+
+// SetHighSponsorValue assigns a 20-byte AccountID.
+func (r *RippleState) SetHighSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	r.SetHighSponsor(address)
+	return nil
+}
+
+// HasLowSponsor reports whether LowSponsor was present in the serialized entry.
+func (r *RippleState) HasLowSponsor() bool {
+	return r != nil && r.present&ripplestateBitLowSponsor != 0
+}
+
+// ClearLowSponsor removes LowSponsor from the serialized entry.
+func (r *RippleState) ClearLowSponsor() {
+	if r == nil {
+		return
+	}
+	r.LowSponsor = ""
+	r.present &^= ripplestateBitLowSponsor
+	r.dirty = true
+}
+
+// GetLowSponsor returns the 20-byte AccountID.
+func (r *RippleState) GetLowSponsor() ([20]byte, error) {
+	if r == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(r.LowSponsor, "RippleState.LowSponsor")
+}
+
+// SetLowSponsorValue assigns a 20-byte AccountID.
+func (r *RippleState) SetLowSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	r.SetLowSponsor(address)
+	return nil
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+func (r *RippleState) HasPreviousTxnID() bool {
+	return r != nil && r.present&ripplestateBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (r *RippleState) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if r == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(r.PreviousTxnID, "RippleState.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (r *RippleState) SetPreviousTxnIDValue(value [32]byte) {
+	r.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+func (r *RippleState) HasPreviousTxnLgrSeq() bool {
+	return r != nil && r.present&ripplestateBitPreviousTxnLgrSeq != 0
+}
+
+// HasSponsor reports whether Sponsor was present in the serialized entry.
+func (r *RippleState) HasSponsor() bool {
+	return r != nil && r.present&ripplestateBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (r *RippleState) ClearSponsor() {
+	if r == nil {
+		return
+	}
+	r.Sponsor = ""
+	r.present &^= ripplestateBitSponsor
+	r.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (r *RippleState) GetSponsor() ([20]byte, error) {
+	if r == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(r.Sponsor, "RippleState.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (r *RippleState) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	r.SetSponsor(address)
+	return nil
+}
+
 func (r *RippleState) validateRequired() error {
 	if r.decoded && !r.dirty {
 		return nil

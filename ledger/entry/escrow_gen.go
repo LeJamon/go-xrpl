@@ -186,6 +186,336 @@ func (e *Escrow) SetSponsor(value string) {
 	e.present |= escrowBitSponsor
 }
 
+// HasAccount reports whether Account was present in the serialized entry.
+func (e *Escrow) HasAccount() bool {
+	return e != nil && e.present&escrowBitAccount != 0
+}
+
+// GetAccount returns the 20-byte AccountID.
+func (e *Escrow) GetAccount() ([20]byte, error) {
+	if e == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(e.Account, "Escrow.Account")
+}
+
+// SetAccountValue assigns a 20-byte AccountID.
+func (e *Escrow) SetAccountValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	e.SetAccount(address)
+	return nil
+}
+
+// HasSequence reports whether Sequence was present in the serialized entry.
+func (e *Escrow) HasSequence() bool {
+	return e != nil && e.present&escrowBitSequence != 0
+}
+
+// ClearSequence removes Sequence from the serialized entry.
+func (e *Escrow) ClearSequence() {
+	if e == nil {
+		return
+	}
+	e.Sequence = 0
+	e.present &^= escrowBitSequence
+	e.dirty = true
+}
+
+// HasDestination reports whether Destination was present in the serialized entry.
+func (e *Escrow) HasDestination() bool {
+	return e != nil && e.present&escrowBitDestination != 0
+}
+
+// GetDestination returns the 20-byte AccountID.
+func (e *Escrow) GetDestination() ([20]byte, error) {
+	if e == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(e.Destination, "Escrow.Destination")
+}
+
+// SetDestinationValue assigns a 20-byte AccountID.
+func (e *Escrow) SetDestinationValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	e.SetDestination(address)
+	return nil
+}
+
+// HasAmount reports whether Amount was present in the serialized entry.
+func (e *Escrow) HasAmount() bool {
+	return e != nil && e.present&escrowBitAmount != 0
+}
+
+// GetAmount returns the typed Amount value.
+func (e *Escrow) GetAmount() (AmountValue, error) {
+	if e == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny(e.Amount, "Escrow.Amount", false)
+}
+
+// SetAmountValue assigns a typed Amount value.
+func (e *Escrow) SetAmountValue(value AmountValue) error {
+	encoded, err := amountValueToAny(value, "Escrow.Amount", false)
+	if err != nil {
+		return err
+	}
+	e.SetAmount(encoded)
+	return nil
+}
+
+// HasCondition reports whether Condition was present in the serialized entry.
+func (e *Escrow) HasCondition() bool {
+	return e != nil && e.present&escrowBitCondition != 0
+}
+
+// ClearCondition removes Condition from the serialized entry.
+func (e *Escrow) ClearCondition() {
+	if e == nil {
+		return
+	}
+	e.Condition = ""
+	e.present &^= escrowBitCondition
+	e.dirty = true
+}
+
+// GetCondition returns the raw bytes of the Blob field.
+func (e *Escrow) GetCondition() ([]byte, error) {
+	if e == nil {
+		return nil, nil
+	}
+	return blobValueFromString(e.Condition, "Escrow.Condition")
+}
+
+// SetConditionValue assigns a Blob from raw bytes.
+func (e *Escrow) SetConditionValue(value []byte) {
+	e.SetCondition(blobValueToString(value))
+}
+
+// SetConditionBytes is an alias for SetConditionValue.
+func (e *Escrow) SetConditionBytes(value []byte) {
+	e.SetConditionValue(value)
+}
+
+// HasCancelAfter reports whether CancelAfter was present in the serialized entry.
+func (e *Escrow) HasCancelAfter() bool {
+	return e != nil && e.present&escrowBitCancelAfter != 0
+}
+
+// ClearCancelAfter removes CancelAfter from the serialized entry.
+func (e *Escrow) ClearCancelAfter() {
+	if e == nil {
+		return
+	}
+	e.CancelAfter = 0
+	e.present &^= escrowBitCancelAfter
+	e.dirty = true
+}
+
+// HasFinishAfter reports whether FinishAfter was present in the serialized entry.
+func (e *Escrow) HasFinishAfter() bool {
+	return e != nil && e.present&escrowBitFinishAfter != 0
+}
+
+// ClearFinishAfter removes FinishAfter from the serialized entry.
+func (e *Escrow) ClearFinishAfter() {
+	if e == nil {
+		return
+	}
+	e.FinishAfter = 0
+	e.present &^= escrowBitFinishAfter
+	e.dirty = true
+}
+
+// HasSourceTag reports whether SourceTag was present in the serialized entry.
+func (e *Escrow) HasSourceTag() bool {
+	return e != nil && e.present&escrowBitSourceTag != 0
+}
+
+// ClearSourceTag removes SourceTag from the serialized entry.
+func (e *Escrow) ClearSourceTag() {
+	if e == nil {
+		return
+	}
+	e.SourceTag = 0
+	e.present &^= escrowBitSourceTag
+	e.dirty = true
+}
+
+// HasDestinationTag reports whether DestinationTag was present in the serialized entry.
+func (e *Escrow) HasDestinationTag() bool {
+	return e != nil && e.present&escrowBitDestinationTag != 0
+}
+
+// ClearDestinationTag removes DestinationTag from the serialized entry.
+func (e *Escrow) ClearDestinationTag() {
+	if e == nil {
+		return
+	}
+	e.DestinationTag = 0
+	e.present &^= escrowBitDestinationTag
+	e.dirty = true
+}
+
+// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+func (e *Escrow) HasOwnerNode() bool {
+	return e != nil && e.present&escrowBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (e *Escrow) GetOwnerNode() (uint64, error) {
+	if e == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(e.OwnerNode, "Escrow.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (e *Escrow) SetOwnerNodeValue(value uint64) {
+	e.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasDestinationNode reports whether DestinationNode was present in the serialized entry.
+func (e *Escrow) HasDestinationNode() bool {
+	return e != nil && e.present&escrowBitDestinationNode != 0
+}
+
+// ClearDestinationNode removes DestinationNode from the serialized entry.
+func (e *Escrow) ClearDestinationNode() {
+	if e == nil {
+		return
+	}
+	e.DestinationNode = ""
+	e.present &^= escrowBitDestinationNode
+	e.dirty = true
+}
+
+// GetDestinationNode returns the typed UInt64 value.
+func (e *Escrow) GetDestinationNode() (uint64, error) {
+	if e == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(e.DestinationNode, "Escrow.DestinationNode", false)
+}
+
+// SetDestinationNodeValue assigns a typed UInt64 value.
+func (e *Escrow) SetDestinationNodeValue(value uint64) {
+	e.SetDestinationNode(uint64ValueToString(value, false))
+}
+
+// HasTransferRate reports whether TransferRate was present in the serialized entry.
+func (e *Escrow) HasTransferRate() bool {
+	return e != nil && e.present&escrowBitTransferRate != 0
+}
+
+// ClearTransferRate removes TransferRate from the serialized entry.
+func (e *Escrow) ClearTransferRate() {
+	if e == nil {
+		return
+	}
+	e.TransferRate = 0
+	e.present &^= escrowBitTransferRate
+	e.dirty = true
+}
+
+// HasIssuerNode reports whether IssuerNode was present in the serialized entry.
+func (e *Escrow) HasIssuerNode() bool {
+	return e != nil && e.present&escrowBitIssuerNode != 0
+}
+
+// ClearIssuerNode removes IssuerNode from the serialized entry.
+func (e *Escrow) ClearIssuerNode() {
+	if e == nil {
+		return
+	}
+	e.IssuerNode = ""
+	e.present &^= escrowBitIssuerNode
+	e.dirty = true
+}
+
+// GetIssuerNode returns the typed UInt64 value.
+func (e *Escrow) GetIssuerNode() (uint64, error) {
+	if e == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(e.IssuerNode, "Escrow.IssuerNode", false)
+}
+
+// SetIssuerNodeValue assigns a typed UInt64 value.
+func (e *Escrow) SetIssuerNodeValue(value uint64) {
+	e.SetIssuerNode(uint64ValueToString(value, false))
+}
+
+// HasFlags reports whether Flags was present in the serialized entry.
+func (e *Escrow) HasFlags() bool {
+	return e != nil && e.present&escrowBitFlags != 0
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+func (e *Escrow) HasPreviousTxnID() bool {
+	return e != nil && e.present&escrowBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (e *Escrow) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if e == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(e.PreviousTxnID, "Escrow.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (e *Escrow) SetPreviousTxnIDValue(value [32]byte) {
+	e.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+func (e *Escrow) HasPreviousTxnLgrSeq() bool {
+	return e != nil && e.present&escrowBitPreviousTxnLgrSeq != 0
+}
+
+// HasSponsor reports whether Sponsor was present in the serialized entry.
+func (e *Escrow) HasSponsor() bool {
+	return e != nil && e.present&escrowBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (e *Escrow) ClearSponsor() {
+	if e == nil {
+		return
+	}
+	e.Sponsor = ""
+	e.present &^= escrowBitSponsor
+	e.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (e *Escrow) GetSponsor() ([20]byte, error) {
+	if e == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(e.Sponsor, "Escrow.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (e *Escrow) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	e.SetSponsor(address)
+	return nil
+}
+
 func (e *Escrow) validateRequired() error {
 	if e.decoded && !e.dirty {
 		return nil

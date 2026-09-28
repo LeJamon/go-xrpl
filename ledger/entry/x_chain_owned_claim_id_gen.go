@@ -132,6 +132,185 @@ func (x *XChainOwnedClaimID) SetSponsor(value string) {
 	x.present |= xchainownedclaimidBitSponsor
 }
 
+// HasAccount reports whether Account was present in the serialized entry.
+func (x *XChainOwnedClaimID) HasAccount() bool {
+	return x != nil && x.present&xchainownedclaimidBitAccount != 0
+}
+
+// GetAccount returns the 20-byte AccountID.
+func (x *XChainOwnedClaimID) GetAccount() ([20]byte, error) {
+	if x == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(x.Account, "XChainOwnedClaimID.Account")
+}
+
+// SetAccountValue assigns a 20-byte AccountID.
+func (x *XChainOwnedClaimID) SetAccountValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	x.SetAccount(address)
+	return nil
+}
+
+// HasXChainBridge reports whether XChainBridge was present in the serialized entry.
+func (x *XChainOwnedClaimID) HasXChainBridge() bool {
+	return x != nil && x.present&xchainownedclaimidBitXChainBridge != 0
+}
+
+// HasXChainClaimID reports whether XChainClaimID was present in the serialized entry.
+func (x *XChainOwnedClaimID) HasXChainClaimID() bool {
+	return x != nil && x.present&xchainownedclaimidBitXChainClaimID != 0
+}
+
+// GetXChainClaimID returns the typed UInt64 value.
+func (x *XChainOwnedClaimID) GetXChainClaimID() (uint64, error) {
+	if x == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(x.XChainClaimID, "XChainOwnedClaimID.XChainClaimID", false)
+}
+
+// SetXChainClaimIDValue assigns a typed UInt64 value.
+func (x *XChainOwnedClaimID) SetXChainClaimIDValue(value uint64) {
+	x.SetXChainClaimID(uint64ValueToString(value, false))
+}
+
+// HasOtherChainSource reports whether OtherChainSource was present in the serialized entry.
+func (x *XChainOwnedClaimID) HasOtherChainSource() bool {
+	return x != nil && x.present&xchainownedclaimidBitOtherChainSource != 0
+}
+
+// GetOtherChainSource returns the 20-byte AccountID.
+func (x *XChainOwnedClaimID) GetOtherChainSource() ([20]byte, error) {
+	if x == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(x.OtherChainSource, "XChainOwnedClaimID.OtherChainSource")
+}
+
+// SetOtherChainSourceValue assigns a 20-byte AccountID.
+func (x *XChainOwnedClaimID) SetOtherChainSourceValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	x.SetOtherChainSource(address)
+	return nil
+}
+
+// HasXChainClaimAttestations reports whether XChainClaimAttestations was present in the serialized entry.
+func (x *XChainOwnedClaimID) HasXChainClaimAttestations() bool {
+	return x != nil && x.present&xchainownedclaimidBitXChainClaimAttestations != 0
+}
+
+// HasSignatureReward reports whether SignatureReward was present in the serialized entry.
+func (x *XChainOwnedClaimID) HasSignatureReward() bool {
+	return x != nil && x.present&xchainownedclaimidBitSignatureReward != 0
+}
+
+// GetSignatureReward returns the typed Amount value.
+func (x *XChainOwnedClaimID) GetSignatureReward() (AmountValue, error) {
+	if x == nil {
+		return AmountValue{}, nil
+	}
+	return amountValueFromAny(x.SignatureReward, "XChainOwnedClaimID.SignatureReward", false)
+}
+
+// SetSignatureRewardValue assigns a typed Amount value.
+func (x *XChainOwnedClaimID) SetSignatureRewardValue(value AmountValue) error {
+	encoded, err := amountValueToAny(value, "XChainOwnedClaimID.SignatureReward", false)
+	if err != nil {
+		return err
+	}
+	x.SetSignatureReward(encoded)
+	return nil
+}
+
+// HasOwnerNode reports whether OwnerNode was present in the serialized entry.
+func (x *XChainOwnedClaimID) HasOwnerNode() bool {
+	return x != nil && x.present&xchainownedclaimidBitOwnerNode != 0
+}
+
+// GetOwnerNode returns the typed UInt64 value.
+func (x *XChainOwnedClaimID) GetOwnerNode() (uint64, error) {
+	if x == nil {
+		return 0, nil
+	}
+	return uint64ValueFromString(x.OwnerNode, "XChainOwnedClaimID.OwnerNode", false)
+}
+
+// SetOwnerNodeValue assigns a typed UInt64 value.
+func (x *XChainOwnedClaimID) SetOwnerNodeValue(value uint64) {
+	x.SetOwnerNode(uint64ValueToString(value, false))
+}
+
+// HasFlags reports whether Flags was present in the serialized entry.
+func (x *XChainOwnedClaimID) HasFlags() bool {
+	return x != nil && x.present&xchainownedclaimidBitFlags != 0
+}
+
+// HasPreviousTxnID reports whether PreviousTxnID was present in the serialized entry.
+func (x *XChainOwnedClaimID) HasPreviousTxnID() bool {
+	return x != nil && x.present&xchainownedclaimidBitPreviousTxnID != 0
+}
+
+// GetPreviousTxnID returns the typed 256-bit hash.
+func (x *XChainOwnedClaimID) GetPreviousTxnID() ([32]byte, error) {
+	var result [32]byte
+	if x == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(x.PreviousTxnID, "XChainOwnedClaimID.PreviousTxnID", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetPreviousTxnIDValue assigns a typed 256-bit hash.
+func (x *XChainOwnedClaimID) SetPreviousTxnIDValue(value [32]byte) {
+	x.SetPreviousTxnID(hashValueToString(value[:]))
+}
+
+// HasPreviousTxnLgrSeq reports whether PreviousTxnLgrSeq was present in the serialized entry.
+func (x *XChainOwnedClaimID) HasPreviousTxnLgrSeq() bool {
+	return x != nil && x.present&xchainownedclaimidBitPreviousTxnLgrSeq != 0
+}
+
+// HasSponsor reports whether Sponsor was present in the serialized entry.
+func (x *XChainOwnedClaimID) HasSponsor() bool {
+	return x != nil && x.present&xchainownedclaimidBitSponsor != 0
+}
+
+// ClearSponsor removes Sponsor from the serialized entry.
+func (x *XChainOwnedClaimID) ClearSponsor() {
+	if x == nil {
+		return
+	}
+	x.Sponsor = ""
+	x.present &^= xchainownedclaimidBitSponsor
+	x.dirty = true
+}
+
+// GetSponsor returns the 20-byte AccountID.
+func (x *XChainOwnedClaimID) GetSponsor() ([20]byte, error) {
+	if x == nil {
+		return [20]byte{}, nil
+	}
+	return accountIDValueFromString(x.Sponsor, "XChainOwnedClaimID.Sponsor")
+}
+
+// SetSponsorValue assigns a 20-byte AccountID.
+func (x *XChainOwnedClaimID) SetSponsorValue(value [20]byte) error {
+	address, err := accountIDValueToString(value)
+	if err != nil {
+		return err
+	}
+	x.SetSponsor(address)
+	return nil
+}
+
 func (x *XChainOwnedClaimID) validateRequired() error {
 	if x.decoded && !x.dirty {
 		return nil
