@@ -26,6 +26,7 @@ import (
 // (rippled View.cpp adjustOwnerCount only touches OwnerCount).
 func TestPayment_NetZeroOwnerCount_EmitsBareThreadedNode(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.EnableOpenLedgerReplay()
 
 	gw := jtx.NewAccount("gateway")
 	// "mm990" hashes to account key 000B614F… — low enough that the deleted
@@ -86,6 +87,7 @@ func TestPayment_NetZeroOwnerCount_EmitsBareThreadedNode(t *testing.T) {
 	jtx.RequireIOUBalance(t, env, mm, gw, "USD", 100)
 	jtx.RequireIOUBalance(t, env, mm, gw, "EUR", 900)
 	jtx.RequireIOUBalance(t, env, bob, gw, "EUR", 100)
+	env.Close()
 
 	afterData, err := env.LedgerEntry(mmAcctKL)
 	require.NoError(t, err)

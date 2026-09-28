@@ -54,6 +54,7 @@ func accountIDBytes(t *testing.T, addr string) []byte {
 
 func TestSignerListReplace_MetaBlob_NoAccount_SortedEntries_NoPrevTxn(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.EnableOpenLedgerReplay()
 	alice := jtx.NewAccount("alice")
 	b1 := jtx.NewAccount("b1")
 	b2 := jtx.NewAccount("b2")
