@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -258,6 +259,9 @@ func Run(t *testing.T, factory Factory) {
 	t.Run("transaction repository", func(t *testing.T) {
 		runTransactionRepository(t, factory)
 	})
+	t.Run("transaction range boundaries", func(t *testing.T) {
+		runTransactionRangeBoundaries(t, factory)
+	})
 	t.Run("account transaction repository", func(t *testing.T) {
 		runAccountTransactionRepository(t, factory)
 	})
@@ -366,6 +370,70 @@ func runLedgerRepository(t *testing.T, factory Factory) {
 	}
 	if got, err := repository.GetLedgerInfoBySeq(ctx, 12); err != nil || !sameLedger(got, &values[1]) {
 		t.Fatalf("preserved ledger = %+v, %v; want %+v, nil", got, err, values[1])
+	}
+}
+
+func runTransactionRangeBoundaries(t *testing.T, factory Factory) {
+	t.Helper()
+	ctx := context.Background()
+	missing := relationaldb.Hash{99}
+	maximum := transactionAt(1, math.MaxUint32, 1)
+
+	for _, populated := range []bool{false, true} {
+		name := "empty"
+		if populated {
+			name = "populated"
+		}
+		t.Run(name, func(t *testing.T) {
+			repository := factory(t).Transaction()
+			if populated {
+				if err := repository.SaveTransaction(ctx, maximum); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, test := range []struct {
+				name    string
+				min     relationaldb.LedgerIndex
+				max     relationaldb.LedgerIndex
+				invalid bool
+			}{
+				{name: "maximum singleton", min: math.MaxUint32, max: math.MaxUint32},
+				{name: "full uint32 range", min: 0, max: math.MaxUint32},
+				{name: "partial maximum range", min: math.MaxUint32 - 1, max: math.MaxUint32},
+				{name: "adjacent inverted range", min: 1, max: 0, invalid: true},
+				{name: "inverted maximum range", min: math.MaxUint32, max: 0, invalid: true},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					ledgerRange := &relationaldb.LedgerRange{Min: test.min, Max: test.max}
+					found, searched, err := repository.GetTransaction(ctx, missing, ledgerRange)
+					if test.invalid {
+						if !errors.Is(err, relationaldb.ErrInvalidData) || found != nil || searched != relationaldb.TxSearchUnknown {
+							t.Fatalf("invalid range = %v, %v, %v; want nil, unknown, ErrInvalidData", found, searched, err)
+						}
+						if populated {
+							found, searched, err = repository.GetTransaction(ctx, maximum.Hash, ledgerRange)
+							if !errors.Is(err, relationaldb.ErrInvalidData) || found != nil || searched != relationaldb.TxSearchUnknown {
+								t.Fatalf("known hash with invalid range = %v, %v, %v; want nil, unknown, ErrInvalidData", found, searched, err)
+							}
+						}
+						return
+					}
+					want := relationaldb.TxSearchSome
+					if populated && test.min == math.MaxUint32 {
+						want = relationaldb.TxSearchAll
+					}
+					if err != nil || found != nil || searched != want {
+						t.Fatalf("range search = %v, %v, %v; want nil, %v, nil", found, searched, err, want)
+					}
+				})
+			}
+			if populated {
+				found, searched, err := repository.GetTransaction(ctx, maximum.Hash, &relationaldb.LedgerRange{Min: math.MaxUint32, Max: math.MaxUint32})
+				if err != nil || searched != relationaldb.TxSearchAll || !sameStoredTransaction(found, &maximum) {
+					t.Fatalf("maximum index round trip = %+v, %v, %v; want %+v, all, nil", found, searched, err, maximum)
+				}
+			}
+		})
 	}
 }
 
