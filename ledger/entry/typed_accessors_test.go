@@ -342,7 +342,10 @@ func TestNestedWrapperPresenceAndCopySemantics(t *testing.T) {
 	if !slot.HasAuthAccounts() {
 		t.Fatal("SetAuthAccountsValue(nil) lost explicit presence")
 	}
-	serialized := slot.ToMap()
+	serialized, err := slot.ToMap()
+	if err != nil {
+		t.Fatalf("ToMap: %v", err)
+	}
 	if _, ok := serialized["AuthAccounts"]; !ok {
 		t.Fatalf("ToMap omitted present empty AuthAccounts: %#v", serialized)
 	}
@@ -363,7 +366,11 @@ func TestNestedWrapperPresenceAndCopySemantics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAuctionSlot(empty account): %v", err)
 	}
-	if mapped := decodedSlot.ToMap(); mapped["Account"] != "" {
+	mapped, err := decodedSlot.ToMap()
+	if err != nil {
+		t.Fatalf("empty AuctionSlot ToMap: %v", err)
+	}
+	if mapped["Account"] != "" {
 		t.Fatalf("empty nested Account became %#v", mapped["Account"])
 	}
 
@@ -395,5 +402,38 @@ func TestNestedWrapperPresenceAndCopySemantics(t *testing.T) {
 	bridgeMap, ok := encodedBridge.(map[string]any)
 	if !ok || bridgeMap["LockingChainDoor"] != "" || bridgeMap["IssuingChainDoor"] != "" {
 		t.Fatalf("empty XChainBridge doors became %#v", encodedBridge)
+	}
+
+	var token NFTokenValue
+	tokenID := [32]byte{0x01, 0x23, 0x45, 0x67}
+	token.SetNFTokenID(tokenID)
+	tokenMap, err := token.ToMap()
+	if err != nil {
+		t.Fatalf("NFToken ToMap: %v", err)
+	}
+	decodedToken, err := nFTokenValueFromAny(tokenMap, "NFToken")
+	if err != nil {
+		t.Fatalf("NFToken from map: %v", err)
+	}
+	gotTokenID, err := decodedToken.GetNFTokenID()
+	if err != nil || gotTokenID != tokenID {
+		t.Fatalf("NFTokenID round-trip = %X, %v", gotTokenID, err)
+	}
+
+	var book BookValue
+	bookDirectory := [32]byte{0x89, 0xAB, 0xCD, 0xEF}
+	book.SetBookDirectory(bookDirectory)
+	book.SetBookNode(0x1234)
+	bookMap, err := book.ToMap()
+	if err != nil {
+		t.Fatalf("Book ToMap: %v", err)
+	}
+	decodedBook, err := bookValueFromAny(bookMap, "Book")
+	if err != nil {
+		t.Fatalf("Book from map: %v", err)
+	}
+	gotBookDirectory, err := decodedBook.GetBookDirectory()
+	if err != nil || gotBookDirectory != bookDirectory {
+		t.Fatalf("BookDirectory round-trip = %X, %v", gotBookDirectory, err)
 	}
 }

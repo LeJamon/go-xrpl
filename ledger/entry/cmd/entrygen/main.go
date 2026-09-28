@@ -1502,7 +1502,7 @@ func vector256ValueFromStrings(values []string, field string) (Vector256Value, e
 	}
 	result := make(Vector256Value, len(values))
 	for i, value := range values {
-		raw, err := hashValueFromString(fmt.Sprintf("%s[%d]", field, i), value, 32)
+		raw, err := hashValueFromString(value, fmt.Sprintf("%s[%d]", field, i), 32)
 		if err != nil {
 			return nil, err
 		}
@@ -1691,7 +1691,7 @@ func innerUnsigned(value any, field string, max uint64) (uint64, error) {
 	case uint32: n = uint64(v)
 	case uint64: n = v
 	case float64:
-		if v < 0 || v != math.Trunc(v) { return 0, fmt.Errorf("ledgerfields: %s: invalid integer", field) }; n = uint64(v)
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > float64(max) || v != math.Trunc(v) { return 0, fmt.Errorf("ledgerfields: %s: invalid integer", field) }; n = uint64(v)
 	default:
 		return 0, fmt.Errorf("ledgerfields: %s: integer has type %T", field, value)
 	}
@@ -1712,16 +1712,16 @@ func innerValueFromAny(value any, field, xrplType string, baseTen bool) (any, er
 		if !ok {
 			return nil, fmt.Errorf("ledgerfields: %s: Hash128 has type %T, want string", field, value)
 		}
-		raw, err := hashValueFromString(field, s, 16)
+		raw, err := hashValueFromString(s, field, 16)
 		var result [16]byte
 		copy(result[:], raw)
 		return result, err
 	case "Hash160", "Currency":
 		s, ok := value.(string); if !ok { return nil, fmt.Errorf("ledgerfields: %s: %T, want string", field, value) }
 		if xrplType == "Currency" { return s, nil }
-		raw, err := hashValueFromString(field, s, 20); var result [20]byte; copy(result[:], raw); return result, err
-	case "Hash192": s, ok := value.(string); if !ok { return nil, fmt.Errorf("ledgerfields: %s: %T, want string", field, value) }; raw, err := hashValueFromString(field, s, 24); var result [24]byte; copy(result[:], raw); return result, err
-	case "Hash256": s, ok := value.(string); if !ok { return nil, fmt.Errorf("ledgerfields: %s: %T, want string", field, value) }; raw, err := hashValueFromString(field, s, 32); var result [32]byte; copy(result[:], raw); return result, err
+		raw, err := hashValueFromString(s, field, 20); var result [20]byte; copy(result[:], raw); return result, err
+	case "Hash192": s, ok := value.(string); if !ok { return nil, fmt.Errorf("ledgerfields: %s: %T, want string", field, value) }; raw, err := hashValueFromString(s, field, 24); var result [24]byte; copy(result[:], raw); return result, err
+	case "Hash256": s, ok := value.(string); if !ok { return nil, fmt.Errorf("ledgerfields: %s: %T, want string", field, value) }; raw, err := hashValueFromString(s, field, 32); var result [32]byte; copy(result[:], raw); return result, err
 	case "AccountID": return accountIDValueFromStringValue(value, field)
 	case "Blob": s, ok := value.(string); if !ok { return nil, fmt.Errorf("ledgerfields: %s: Blob has type %T", field, value) }; return blobValueFromString(s, field)
 	case "Amount": return amountValueFromAny(value, field, false)
@@ -1871,8 +1871,7 @@ func {{ lowerFirst .Type }}ToAny(value {{ .Type }}, field string) (map[string]an
 {{ end }}	return result, nil
 }
 
-func (v {{ .Type }}) ToMapWithError() (map[string]any, error) { return {{ lowerFirst .Type }}ToAny(v, "{{ .Name }}") }
-func (v {{ .Type }}) ToMap() map[string]any { result, _ := v.ToMapWithError(); return result }
+func (v {{ .Type }}) ToMap() (map[string]any, error) { return {{ lowerFirst .Type }}ToAny(v, "{{ .Name }}") }
 
 func {{ lowerFirst .Type }}SliceFromAny(value any, field string) ([]{{ .Type }}, error) {
 	array, ok := normalizeInnerArray(value)
