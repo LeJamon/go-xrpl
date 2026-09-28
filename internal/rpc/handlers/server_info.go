@@ -614,6 +614,9 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	if services.Ledger().IsAmendmentBlocked() {
 		info["amendment_blocked"] = true
 	}
+	if replayStatus, available := replayFaultStatus(services); available {
+		info["replay_fault"] = replayStatus
+	}
 
 	return info
 }

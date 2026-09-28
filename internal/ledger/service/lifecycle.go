@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/replayfault"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -34,6 +35,9 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	s.historyComponent.mu.Lock()
 	defer s.historyComponent.mu.Unlock()
 
+	if s.ReplayBlocked() {
+		return 0, replayfault.ErrBlocked
+	}
 	if !s.config.Standalone {
 		return 0, svcerr.ErrNotStandalone
 	}
@@ -404,6 +408,9 @@ func (s *Service) switchToPreferredLedger(parent *ledger.Ledger, beforeLock func
 		notification.notify()
 	}()
 
+	if s.ReplayBlocked() {
+		return replayfault.ErrBlocked
+	}
 	if s.closedLedger == nil {
 		return svcerr.ErrNoClosedLedger
 	}
@@ -607,6 +614,11 @@ func (s *Service) setValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 	for {
 		s.mu.Lock()
 		s.historyComponent.mu.Lock()
+		if s.ReplayBlocked() {
+			s.historyComponent.mu.Unlock()
+			s.mu.Unlock()
+			return
+		}
 		previousValidated = s.validatedLedger
 		l, fromStored = s.ledgerHistory[seq], false
 		if l != nil {
@@ -860,7 +872,7 @@ func (s *Service) StoreLedgerWithState(ctx context.Context, h *header.LedgerHead
 	// Runtime catch-up can complete a full acquired state after startup has
 	// already left initial-sync mode. Keep only its identity until persistence
 	// and the generation-bound FullBelow proof authorize promotion.
-	if h != nil {
+	if h != nil && !s.ReplayBlocked() {
 		s.rememberValidatedStateBaseCandidate(*h)
 	}
 	return nil
@@ -875,7 +887,7 @@ func (s *Service) BootstrapLedgerWithState(ctx context.Context, h *header.Ledger
 	defer s.historyComponent.mu.Unlock()
 	initialCandidate := s.networkLedgerState != networkLedgerReady
 	err := s.storeLedgerWithStateLocked(ctx, h, stateMap, txMap)
-	if err == nil && initialCandidate {
+	if err == nil && initialCandidate && !s.ReplayBlocked() {
 		s.rememberValidatedStateBaseCandidate(*h)
 	}
 	return initialCandidate, err
@@ -1002,6 +1014,21 @@ func (s *Service) ledgerWithStateLocked(h *header.LedgerHeader, stateMap *shamap
 }
 
 func (s *Service) storeLedgerWithStateLocked(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
+	if s.ReplayBlocked() {
+		if h == nil || !s.ReplayRecoveryParent(h.Hash) {
+			return replayfault.ErrBlocked
+		}
+		repaired, err := s.ledgerWithStateLocked(h, stateMap, txMap)
+		if err != nil {
+			return err
+		}
+		if fault := s.replayFaults.Snapshot(); fault != nil && repaired.Hash() == fault.TargetHash {
+			s.replayRepairTarget = repaired
+		} else {
+			s.replayRepairParent = repaired
+		}
+		return nil
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -1010,6 +1037,7 @@ func (s *Service) storeLedgerWithStateLocked(ctx context.Context, h *header.Ledg
 		return err
 	}
 
+	s.replayAcquiredHash = stored.Hash()
 	s.cachePersistedLedgerLocked(stored)
 	s.enqueueNodePersist(stored)
 

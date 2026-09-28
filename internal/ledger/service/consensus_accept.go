@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/replayfault"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -21,6 +22,9 @@ func (s *Service) acceptConsensusResult(
 	closeTime time.Time,
 	closeTimeCorrect bool,
 ) (uint32, error) {
+	if s.ReplayBlocked() {
+		return 0, replayfault.ErrBlocked
+	}
 	started := time.Now()
 	var timings consensusAcceptanceTimings
 	lifecycleStarted := time.Now()
@@ -103,7 +107,7 @@ func (s *Service) acceptConsensusResult(
 		replayParent := replay.Parent()
 		if replayParent != nil && replayParent.Sequence() == expectedClosed.Sequence() && replayParent.Hash() == expectedClosed.Hash() {
 			replayed = true
-			closed, err = replay.Apply(s.EngineConfigForReplay(expectedClosed))
+			closed, err = s.ApplyReplay(ctx, replay, s.EngineConfigForReplay(expectedClosed), false)
 			if err != nil {
 				return 0, fmt.Errorf("apply startup replay: %w", err)
 			}
@@ -194,6 +198,10 @@ func (s *Service) acceptConsensusResult(
 	lockStarted = time.Now()
 	s.mu.Lock()
 	timings.serviceWait += time.Since(lockStarted)
+	if s.ReplayBlocked() {
+		s.mu.Unlock()
+		return 0, replayfault.ErrBlocked
+	}
 	if s.closedLedger != expectedClosed || s.openLedger != expectedOpen || s.startupReplay != replay {
 		s.mu.Unlock()
 		return 0, fmt.Errorf("%w: ledger ownership changed during build", ErrConsensusParentMismatch)
@@ -211,6 +219,9 @@ func (s *Service) acceptConsensusResult(
 		s.mu.Lock()
 		timings.serviceWait += time.Since(lockStarted)
 		defer s.mu.Unlock()
+		if s.ReplayBlocked() {
+			return
+		}
 		previousValidated := s.validatedLedger
 		historyStarted := time.Now()
 		s.historyComponent.mu.Lock()
@@ -277,6 +288,9 @@ func (s *Service) acceptConsensusResult(
 		return 0, err
 	}
 
+	if s.ReplayBlocked() {
+		return 0, replayfault.ErrBlocked
+	}
 	timings.gateHold = time.Since(gateAcquiredAt)
 	s.openLedgerMu.Unlock()
 	gateHeld = false

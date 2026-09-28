@@ -189,7 +189,7 @@ func TestFrozenPivotRecoveryFailureReleasesPivotGeneration(t *testing.T) {
 	released := 0
 	r.standardReplay.baseRelease = func() { released++ }
 
-	r.discardFailedInboundAcquisition(r.fetchTracker.Find(pivotHash))
+	r.discardFailedInboundAcquisition(r.fetchTracker.Find(pivotHash), nil)
 	assert.False(t, r.standardReplay.active)
 	assert.Greater(t, r.standardReplay.generation, generation)
 	assert.Nil(t, r.fetchTracker.Find(pivotHash))

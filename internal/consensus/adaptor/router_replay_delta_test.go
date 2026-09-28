@@ -562,15 +562,7 @@ func TestRouter_ReplayDeltaApplyStoresDerivedLedger(t *testing.T) {
 		"adopted state map must reflect the post-Close skip-list update — proves Apply ran")
 }
 
-// TestRouter_ReplayDeltaApply_StateMismatchFallsBack verifies that
-// when the response carries a tx-map root that GotResponse accepts
-// but a state-map root that Apply rejects (post-state derivation
-// disagrees with the header), the router abandons the replay-delta
-// acquisition and re-issues via the legacy mtGET_LEDGER path. This is
-// the safety net: a peer that lies about AccountHash, or our own
-// engine diverging from rippled, must NOT silently produce a corrupt
-// closed ledger.
-func TestRouter_ReplayDeltaApply_StateMismatchFallsBack(t *testing.T) {
+func TestRouter_ReplayDeltaApply_StateMismatchBlocksRecovery(t *testing.T) {
 	r, _, rs, svc := makeRouter(t)
 	parent := svc.GetClosedLedger()
 	require.NotNil(t, parent)
@@ -579,7 +571,7 @@ func TestRouter_ReplayDeltaApply_StateMismatchFallsBack(t *testing.T) {
 	// AccountHash and re-derive the byte-level header hash so
 	// GotResponse still passes (header hash + tx-map root remain
 	// internally consistent). Apply will then catch the state-map
-	// divergence and fall back.
+	// divergence and stop automatic recovery.
 	resp, _, _ := buildEmptyClosedSuccessorResponse(t, svc)
 	parsed, err := header.DeserializeHeader(resp.LedgerHeader, false)
 	require.NoError(t, err)
@@ -602,10 +594,12 @@ func TestRouter_ReplayDeltaApply_StateMismatchFallsBack(t *testing.T) {
 
 	assert.Equal(t, 0, r.replayer.Count(),
 		"failed Apply must clear the replay state")
-	require.Len(t, rs.legacyCalls(), 1,
-		"router must fall back to the legacy path on state-map mismatch")
-	assert.Equal(t, tampered, rs.legacyCalls()[0].hash)
-	assert.NotNil(t, r.fetchTracker.Find(tampered), "legacy acquisition must be armed for retry")
+	require.Empty(t, rs.legacyCalls())
+	require.Nil(t, r.fetchTracker.Find(tampered))
+	require.True(t, svc.ReplayBlocked())
+	require.Same(t, parent, svc.GetClosedLedger())
+	r.armConsensusCatchup()
+	require.Empty(t, rs.legacyCalls())
 }
 
 // TestRouter_ConcurrentAcquisitions_RouteCorrectly verifies that two

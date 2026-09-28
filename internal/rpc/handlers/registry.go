@@ -111,6 +111,7 @@ var methodDescriptors = []MethodDescriptor{
 	guest("nft_sell_offers", &NftSellOffersMethod{}),
 
 	admin("stop", &StopMethod{}),
+	admin("replay_recover", &ReplayRecoverMethod{}),
 	admin("validation_create", &ValidationCreateMethod{}),
 	user("manifest", &ManifestMethod{}),
 	admin("peer_reservations_add", &PeerReservationsAddMethod{}),

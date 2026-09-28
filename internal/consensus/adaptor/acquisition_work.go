@@ -758,21 +758,27 @@ func (r *Router) handleAcquisitionWorkResult(result acquisitionWorkResult) {
 	}
 	if result.persistenceErr != nil {
 		r.logger.Warn("inbound ledger: verified-node persistence failed", "error", result.persistenceErr, "seq", ledger.Seq())
-		r.discardFailedInboundAcquisition(ledger)
+		r.discardFailedInboundAcquisition(ledger, result.persistenceErr)
 		return
 	}
 	if result.remove {
 		if result.err != nil {
 			r.logger.Warn("inbound ledger: acquisition data rejected", "error", result.err)
 		}
+		cause := result.err
+		if result.timerFailure {
+			cause = inboundAcquisitionTimerFailure(ledger)
+		} else if cause == nil && result.policyFailure {
+			cause = errors.New("inbound ledger acquisition rejected by local policy")
+		}
 		if result.timerFailure || result.policyFailure {
-			r.failInboundAcquisitionWithSnapshot(ledger, result.snapshot)
+			r.failInboundAcquisitionWithSnapshot(ledger, result.snapshot, cause)
 		} else {
 			snapshot := result.snapshot
 			if !result.haveSnapshot {
 				snapshot = ledger.Snapshot()
 			}
-			r.discardFailedInboundAcquisitionWithSnapshot(ledger, snapshot)
+			r.discardFailedInboundAcquisitionWithSnapshot(ledger, snapshot, cause)
 		}
 		return
 	}

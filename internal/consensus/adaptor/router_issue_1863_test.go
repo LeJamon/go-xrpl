@@ -250,7 +250,7 @@ func TestIssue1863OrphanRearmHonorsCapacityAndGeneration(t *testing.T) {
 	}
 	require.False(t, r.rearmFrozenPivotAcquisition(generation, seq, hash, time.Now()))
 	require.Nil(t, r.fetchTracker.Find(hash))
-	r.discardFailedInboundAcquisition(r.fetchTracker.Find([32]byte{0x72}))
+	r.discardFailedInboundAcquisition(r.fetchTracker.Find([32]byte{0x72}), nil)
 	require.True(t, r.rearmFrozenPivotAcquisition(generation, seq, hash, time.Now()))
 	assert.Equal(t, maxConcurrentSpeculativeCatchup, r.protectedCatchupInFlight())
 
