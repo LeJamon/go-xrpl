@@ -221,11 +221,11 @@ func SerializeDirectoryNode(dir *DirectoryNode, isBookDir bool) ([]byte, error) 
 		}
 		ownerUnchanged = original == dir.Owner
 	}
-	if dir.Owner != zeroAccount || ownerUnchanged {
+	if !ownerUnchanged && dir.Owner != zeroAccount {
 		if err := entry.SetOwnerValue(dir.Owner); err != nil {
 			return nil, fmt.Errorf("failed to encode directory owner: %w", err)
 		}
-	} else {
+	} else if !ownerUnchanged {
 		entry.ClearOwner()
 	}
 

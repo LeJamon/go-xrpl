@@ -111,13 +111,8 @@ func SerializePayChannelFromData(channel *PayChannelData) ([]byte, error) {
 	} else {
 		entry.ClearSequence()
 	}
-	if channel.PreviousTxnID != ([32]byte{}) {
-		entry.SetPreviousTxnIDValue(channel.PreviousTxnID)
-		entry.SetPreviousTxnLgrSeqValue(channel.PreviousTxnLgrSeq)
-	} else {
-		entry.SetPreviousTxnIDValue([32]byte{})
-		entry.SetPreviousTxnLgrSeqValue(0)
-	}
+	entry.SetPreviousTxnIDValue(channel.PreviousTxnID)
+	entry.SetPreviousTxnLgrSeqValue(channel.PreviousTxnLgrSeq)
 
 	return entry.Encode()
 }

@@ -306,24 +306,8 @@ func SerializeRippleState(rs *RippleState) ([]byte, error) {
 		entry.ClearLowSponsor()
 	}
 
-	originalPreviousTxnID := [32]byte{}
-	if entry.HasPreviousTxnID() {
-		var err error
-		originalPreviousTxnID, err = entry.GetPreviousTxnID()
-		if err != nil {
-			return nil, err
-		}
-	}
-	if rs.PreviousTxnID != [32]byte{} || (entry.HasPreviousTxnID() && rs.PreviousTxnID == originalPreviousTxnID) {
-		entry.SetPreviousTxnIDValue(rs.PreviousTxnID)
-	} else {
-		entry.SetPreviousTxnIDValue([32]byte{})
-	}
-	if rs.PreviousTxnLgrSeq != 0 || (entry.HasPreviousTxnLgrSeq() && rs.PreviousTxnLgrSeq == entry.PreviousTxnLgrSeq) {
-		entry.SetPreviousTxnLgrSeqValue(rs.PreviousTxnLgrSeq)
-	} else {
-		entry.SetPreviousTxnLgrSeqValue(0)
-	}
+	entry.SetPreviousTxnIDValue(rs.PreviousTxnID)
+	entry.SetPreviousTxnLgrSeqValue(rs.PreviousTxnLgrSeq)
 
 	data, err := entry.Encode()
 	if err != nil {

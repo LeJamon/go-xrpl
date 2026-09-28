@@ -95,7 +95,7 @@ func TestPayChannelSnapshotTimesClearAndTagsRoundTrip(t *testing.T) {
 		"SourceTag":         uint32(11),
 		"DestinationTag":    uint32(12),
 		"PreviousTxnID":     zeroHash256,
-		"PreviousTxnLgrSeq": uint32(0),
+		"PreviousTxnLgrSeq": uint32(17),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -106,6 +106,13 @@ func TestPayChannelSnapshotTimesClearAndTagsRoundTrip(t *testing.T) {
 	}
 	if channel.SourceTag != 11 || channel.DestinationTag != 12 {
 		t.Fatalf("tags = (%d, %d), want (11, 12)", channel.SourceTag, channel.DestinationTag)
+	}
+	unchanged, err := SerializePayChannelFromData(channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(raw, unchanged) {
+		t.Fatalf("unchanged channel differs: %X != %X", raw, unchanged)
 	}
 	channel.Expiration = 0
 	channel.CancelAfter = 0
@@ -320,5 +327,26 @@ func TestMPTokenPreservesPresentEmptyAccountAndBlobs(t *testing.T) {
 	}
 	if !bytes.Equal(encoded, raw) {
 		t.Fatalf("present-empty account/blob fields changed bytes\nwant %X\n got %X", raw, encoded)
+	}
+}
+
+func TestDirectoryPreservesEmptyOwnerWireValue(t *testing.T) {
+	raw, err := binarycodec.EncodeBytes(map[string]any{
+		"LedgerEntryType": "DirectoryNode", "Flags": uint32(0), "RootIndex": zeroHash256,
+		"Indexes": []string{}, "Owner": "",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := ParseDirectoryNode(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := SerializeDirectoryNode(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(raw, encoded) {
+		t.Fatalf("empty Owner changed bytes: %X != %X", raw, encoded)
 	}
 }
