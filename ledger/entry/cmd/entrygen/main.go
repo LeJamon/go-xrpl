@@ -479,7 +479,7 @@ func generateInnerValues(defs *definitions.Definitions, outDir string) (string, 
 		sort.Slice(fields, func(i, j int) bool {
 			left, _ := defs.FieldInstanceByName(fields[i].Name)
 			right, _ := defs.FieldInstanceByName(fields[j].Name)
-			return left.Nth < right.Nth
+			return left.Ordinal < right.Ordinal
 		})
 		renders = append(renders, innerObjectRender{Name: name, Type: innerTypeName(name), Fields: fields})
 	}
