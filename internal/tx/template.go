@@ -51,7 +51,8 @@ var commonFields = []templateField{
 // of each transaction format). A field is allowed on a transaction if it is in
 // commonFields or in this type's template; any other codec-known field is
 // rejected at parse time, matching rippled's applyTemplate which throws for a
-// field "found in disallowed location".
+// field "found in disallowed location". Declaration order also determines
+// required-field validation order.
 var txTemplates = map[Type][]templateField{
 	TypePayment: {
 		{name: "Destination", style: soeREQUIRED},
@@ -566,86 +567,6 @@ var innerObjectTemplateStyles = map[string]map[string]fieldStyle{
 		{name: "Signers", style: soeOPTIONAL},
 	}),
 }
-var commonRequiredFields = []string{
-	"TransactionType",
-	"Account",
-	"Sequence",
-	"Fee",
-	"SigningPubKey",
-}
-
-var txRequiredFields = map[Type][]string{
-	TypePayment:                      {"Destination", "Amount"},
-	TypeEscrowCreate:                 {"Destination", "Amount"},
-	TypeEscrowFinish:                 {"Owner", "OfferSequence"},
-	TypeEscrowCancel:                 {"Owner", "OfferSequence"},
-	TypeOfferCreate:                  {"TakerPays", "TakerGets"},
-	TypeOfferCancel:                  {"OfferSequence"},
-	TypeTicketCreate:                 {"TicketCount"},
-	TypeSignerListSet:                {"SignerQuorum"},
-	TypePaymentChannelCreate:         {"Destination", "Amount", "SettleDelay", "PublicKey"},
-	TypePaymentChannelFund:           {"Channel", "Amount"},
-	TypePaymentChannelClaim:          {"Channel"},
-	TypeCheckCreate:                  {"Destination", "SendMax"},
-	TypeCheckCash:                    {"CheckID"},
-	TypeCheckCancel:                  {"CheckID"},
-	TypeAccountDelete:                {"Destination"},
-	TypeNFTokenMint:                  {"NFTokenTaxon"},
-	TypeNFTokenBurn:                  {"NFTokenID"},
-	TypeNFTokenCreateOffer:           {"NFTokenID", "Amount"},
-	TypeNFTokenCancelOffer:           {"NFTokenOffers"},
-	TypeClawback:                     {"Amount"},
-	TypeAMMClawback:                  {"Holder", "Asset", "Asset2"},
-	TypeAMMCreate:                    {"Amount", "Amount2", "TradingFee"},
-	TypeAMMDeposit:                   {"Asset", "Asset2"},
-	TypeAMMWithdraw:                  {"Asset", "Asset2"},
-	TypeAMMVote:                      {"Asset", "Asset2", "TradingFee"},
-	TypeAMMBid:                       {"Asset", "Asset2"},
-	TypeAMMDelete:                    {"Asset", "Asset2"},
-	TypeXChainCreateClaimID:          {"XChainBridge", "SignatureReward", "OtherChainSource"},
-	TypeXChainCommit:                 {"XChainBridge", "XChainClaimID", "Amount"},
-	TypeXChainClaim:                  {"XChainBridge", "XChainClaimID", "Destination", "Amount"},
-	TypeXChainAccountCreateCommit:    {"XChainBridge", "Destination", "Amount", "SignatureReward"},
-	TypeXChainAddClaimAttestation:    {"XChainBridge", "AttestationSignerAccount", "PublicKey", "Signature", "OtherChainSource", "Amount", "AttestationRewardAccount", "WasLockingChainSend", "XChainClaimID"},
-	TypeXChainAddAccountCreateAttest: {"XChainBridge", "AttestationSignerAccount", "PublicKey", "Signature", "OtherChainSource", "Amount", "AttestationRewardAccount", "WasLockingChainSend", "XChainAccountCreateCount", "Destination", "SignatureReward"},
-	TypeXChainModifyBridge:           {"XChainBridge"},
-	TypeXChainCreateBridge:           {"XChainBridge", "SignatureReward"},
-	TypeOracleSet:                    {"OracleDocumentID", "LastUpdateTime", "PriceDataSeries"},
-	TypeOracleDelete:                 {"OracleDocumentID"},
-	TypeLedgerStateFix:               {"LedgerFixType"},
-	TypeMPTokenIssuanceDestroy:       {"MPTokenIssuanceID"},
-	TypeMPTokenIssuanceSet:           {"MPTokenIssuanceID"},
-	TypeMPTokenAuthorize:             {"MPTokenIssuanceID"},
-	TypeCredentialCreate:             {"Subject", "CredentialType"},
-	TypeCredentialAccept:             {"Issuer", "CredentialType"},
-	TypeCredentialDelete:             {"CredentialType"},
-	TypeNFTokenModify:                {"NFTokenID"},
-	TypePermissionedDomainSet:        {"AcceptedCredentials"},
-	TypePermissionedDomainDelete:     {"DomainID"},
-	TypeDelegateSet:                  {"Authorize", "Permissions"},
-	TypeVaultCreate:                  {"Asset"},
-	TypeVaultSet:                     {"VaultID"},
-	TypeVaultDelete:                  {"VaultID"},
-	TypeVaultDeposit:                 {"VaultID", "Amount"},
-	TypeVaultWithdraw:                {"VaultID", "Amount"},
-	TypeVaultClawback:                {"VaultID", "Holder"},
-	TypeBatch:                        {"RawTransactions"},
-	TypeLoanBrokerSet:                {"VaultID"},
-	TypeLoanBrokerDelete:             {"LoanBrokerID"},
-	TypeLoanBrokerCoverDeposit:       {"LoanBrokerID", "Amount"},
-	TypeLoanBrokerCoverWithdraw:      {"LoanBrokerID", "Amount"},
-	TypeLoanSet:                      {"LoanBrokerID", "PrincipalRequested"},
-	TypeLoanDelete:                   {"LoanID"},
-	TypeLoanManage:                   {"LoanID"},
-	TypeLoanPay:                      {"LoanID", "Amount"},
-	TypeConfidentialMPTConvert:       {"MPTokenIssuanceID", "MPTAmount", "HolderEncryptedAmount", "IssuerEncryptedAmount", "BlindingFactor"},
-	TypeConfidentialMPTMergeInbox:    {"MPTokenIssuanceID"},
-	TypeConfidentialMPTConvertBack:   {"MPTokenIssuanceID", "MPTAmount", "HolderEncryptedAmount", "IssuerEncryptedAmount", "BlindingFactor", "ZKProof", "BalanceCommitment"},
-	TypeConfidentialMPTSend:          {"MPTokenIssuanceID", "Destination", "SenderEncryptedAmount", "DestinationEncryptedAmount", "IssuerEncryptedAmount", "ZKProof", "AmountCommitment", "BalanceCommitment"},
-	TypeConfidentialMPTClawback:      {"MPTokenIssuanceID", "Holder", "MPTAmount", "ZKProof"},
-	TypeAmendment:                    {"LedgerSequence", "Amendment"},
-	TypeUNLModify:                    {"UNLModifyDisabling", "LedgerSequence", "UNLModifyValidator"},
-}
 
 // FormatField is one field of a transaction SOTemplate, exported for the
 // server_definitions RPC TRANSACTION_FORMATS section. Style is rippled's
@@ -709,14 +630,14 @@ func ValidateTemplateFields(txType Type, values map[string]any) error {
 	for name := range values {
 		fields[name] = true
 	}
-	for _, name := range txRequiredFields[txType] {
-		if !fields[name] {
-			return errors.New("Field '" + name + "' is required but missing.")
+	for _, field := range txTemplates[txType] {
+		if field.style == soeREQUIRED && !fields[field.name] {
+			return errors.New("Field '" + field.name + "' is required but missing.")
 		}
 	}
-	for _, name := range commonRequiredFields {
-		if !fields[name] {
-			return errors.New("Field '" + name + "' is required but missing.")
+	for _, field := range commonFields {
+		if field.style == soeREQUIRED && !fields[field.name] {
+			return errors.New("Field '" + field.name + "' is required but missing.")
 		}
 	}
 	for _, field := range txTemplates[txType] {

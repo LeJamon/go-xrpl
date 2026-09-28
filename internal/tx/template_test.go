@@ -308,3 +308,98 @@ func TestValidateTemplateFieldsRejectsExplicitDefault(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestValidateTemplateFieldsMatchesFormats(t *testing.T) {
+	for name, format := range FormatTemplates() {
+		t.Run(name, func(t *testing.T) {
+			txType, ok := TypeFromName(name)
+			if !ok {
+				t.Fatalf("unknown format %q", name)
+			}
+			fields := append(format, FormatCommonFields()...)
+			values := make(map[string]any)
+			for _, field := range fields {
+				if field.Style != int(soeREQUIRED) {
+					continue
+				}
+				want := "Field '" + field.Name + "' is required but missing."
+				if err := ValidateTemplateFields(txType, values); err == nil || err.Error() != want {
+					t.Fatalf("error = %v, want %q", err, want)
+				}
+				values[field.Name] = nil
+			}
+			if err := ValidateTemplateFields(txType, values); err != nil {
+				t.Fatalf("required fields present: %v", err)
+			}
+			for _, field := range fields {
+				if field.Style != int(soeREQUIRED) {
+					continue
+				}
+				delete(values, field.Name)
+				want := "Field '" + field.Name + "' is required but missing."
+				if err := ValidateTemplateFields(txType, values); err == nil || err.Error() != want {
+					t.Errorf("error = %v, want %q", err, want)
+				}
+				values[field.Name] = nil
+			}
+		})
+	}
+}
+
+func TestValidateTemplateFieldsErrorPrecedence(t *testing.T) {
+	values := map[string]any{
+		"Paths":            []any{},
+		"NFTokenID":        "00",
+		"SponsorSignature": map[string]any{"Amount": "1"},
+	}
+	for _, name := range []string{"Destination", "Amount", "TransactionType", "Account", "Sequence", "Fee", "SigningPubKey"} {
+		want := "Field '" + name + "' is required but missing."
+		if err := ValidateTemplateFields(TypePayment, values); err == nil || err.Error() != want {
+			t.Fatalf("error = %v, want %q", err, want)
+		}
+		values[name] = nil
+	}
+	for _, tc := range []struct {
+		remove string
+		want   string
+	}{
+		{"Paths", "Field 'Paths' may not be explicitly set to default."},
+		{"NFTokenID", "Field 'NFTokenID' found in disallowed location."},
+		{"SponsorSignature", "Field 'SponsorSignature.Amount' found in disallowed location."},
+	} {
+		if err := ValidateTemplateFields(TypePayment, values); err == nil || err.Error() != tc.want {
+			t.Fatalf("error = %v, want %q", err, tc.want)
+		}
+		delete(values, tc.remove)
+	}
+	if err := ValidateTemplateFields(TypePayment, values); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestParseFromBinaryRequiredFieldOrder(t *testing.T) {
+	for _, tc := range []struct {
+		txType string
+		want   string
+	}{
+		{"Payment", "Destination"},
+		{"Batch", "RawTransactions"},
+		{"EnableAmendment", "LedgerSequence"},
+		{"UNLModify", "UNLModifyDisabling"},
+		{"SetFee", "Sequence"},
+	} {
+		t.Run(tc.txType, func(t *testing.T) {
+			fields := baseCommon(tc.txType)
+			delete(fields, "Sequence")
+			_, err := ParseFromBinary(encodeTx(t, fields))
+			want := "Field '" + tc.want + "' is required but missing."
+			result, ok := ter.AsResultError(err)
+			if !ok || result.Code != ter.TemMALFORMED {
+				t.Fatalf("error = %v, want temMALFORMED", err)
+			}
+			if err.Error() != "temMALFORMED: "+want {
+				t.Fatalf("error = %v, want temMALFORMED: %s", err, want)
+			}
+		})
+	}
+}
