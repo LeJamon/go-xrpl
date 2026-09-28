@@ -3531,22 +3531,20 @@ func (r *Router) handleInboundLedgerDataOwned(
 	case message.LedgerInfoBase:
 		if len(ld.Nodes) < 2 {
 			r.logger.Debug("inbound ledger: response has < 2 nodes", "nodes", len(ld.Nodes))
-			retirement, pivotRetired, removed := r.removeInboundAcquisitionWithSession(il, il.Snapshot(), false)
-			if removed {
-				r.finishDiscardedInboundAcquisitionOwned(il, retirement, pivotRetired)
-			}
+			r.discardFailedInboundAcquisitionWithSnapshot(
+				il,
+				il.Snapshot(),
+				fmt.Errorf("inbound ledger base response has %d nodes; expected at least 2", len(ld.Nodes)),
+			)
 			return true, false
 		}
 		if err := il.GotBase(ld.Nodes); err != nil {
 			r.logger.Warn("inbound ledger: GotBase failed", "error", err)
 			if errors.Is(err, inbound.ErrHeaderRejected) {
-				r.failInboundAcquisition(il)
+				r.failInboundAcquisitionWithSnapshot(il, il.Snapshot(), err)
 			} else {
 				r.acquisition.IncPeerBadData(peerID, "ledger-data-base")
-				retirement, pivotRetired, removed := r.removeInboundAcquisitionWithSession(il, il.Snapshot(), false)
-				if removed {
-					r.finishDiscardedInboundAcquisitionOwned(il, retirement, pivotRetired)
-				}
+				r.discardFailedInboundAcquisitionWithSnapshot(il, il.Snapshot(), err)
 			}
 			return true, false
 		}
@@ -3831,7 +3829,50 @@ func (r *Router) broadenAcquisitionPeers(il *inbound.Ledger) []uint64 {
 // in wrongLedger on an unacquirable ledger can drop to a recoverable resync
 // rather than starving the ledger loop into a fatal watchdog abort (issue #985).
 func (r *Router) failInboundAcquisition(il *inbound.Ledger) {
-	r.failInboundAcquisitionWithSnapshot(il, il.Snapshot())
+	if il == nil {
+		return
+	}
+	r.failInboundAcquisitionWithSnapshot(il, il.Snapshot(), inboundAcquisitionTimerFailure(il))
+}
+
+func inboundAcquisitionTimerFailure(il *inbound.Ledger) error {
+	if il == nil {
+		return errors.New("inbound ledger acquisition timer expired")
+	}
+	return fmt.Errorf("inbound ledger acquisition timer expired after %d timeouts", il.Timeouts())
+}
+
+func inboundAcquisitionFailureCause(cause error) error {
+	if cause != nil {
+		return cause
+	}
+	return errors.New("inbound ledger acquisition failed")
+}
+
+// recordReplayAcquisitionFailure records a terminal cause only for the
+// consensus acquisition that was reserved for the current replay fault. The
+// tracker check keeps a late result for an old acquisition from overwriting a
+// replacement's diagnostic.
+func (r *Router) recordReplayAcquisitionFailure(il *inbound.Ledger, cause error) {
+	if il == nil || cause == nil || il.Reason() != inbound.ReasonConsensus || r.adaptor == nil {
+		return
+	}
+	r.acquisitionMu.Lock()
+	defer r.acquisitionMu.Unlock()
+	svc := r.adaptor.LedgerService()
+	if svc == nil {
+		return
+	}
+	hash := il.Hash()
+	if !svc.ReplayRecoveryParent(hash) {
+		return
+	}
+	if r.fetchTracker != nil {
+		if current := r.fetchTracker.Find(hash); current != nil && current != il {
+			return
+		}
+	}
+	svc.RecordReplayAcquisitionFailure(hash, cause)
 }
 
 func (r *Router) removeInboundAcquisitionWithSession(
@@ -3863,13 +3904,21 @@ func (r *Router) removeInboundAcquisitionWithSession(
 	return retirement, owned, removed
 }
 
-func (r *Router) failInboundAcquisitionWithSnapshot(il *inbound.Ledger, snapshot inbound.Snapshot) {
+func (r *Router) failInboundAcquisitionWithSnapshot(
+	il *inbound.Ledger,
+	snapshot inbound.Snapshot,
+	cause error,
+) {
+	if il == nil {
+		return
+	}
 	hash := il.Hash()
 	reason := il.Reason()
 	retirement, _, removed := r.removeInboundAcquisitionWithSession(il, snapshot, false)
 	if !removed {
 		return
 	}
+	r.recordReplayAcquisitionFailure(il, inboundAcquisitionFailureCause(cause))
 	r.retireStandardReplay(retirement)
 	r.retireAcquisitionStore(r.lifecycleContext(), il)
 	r.logger.Warn("inbound ledger acquisition failed",
@@ -3892,22 +3941,34 @@ func (r *Router) failInboundAcquisitionWithSnapshot(il *inbound.Ledger, snapshot
 	}
 }
 
-func (r *Router) discardFailedInboundAcquisition(il *inbound.Ledger) {
-	if r.replayFaultBlocked() {
-		r.adaptor.LedgerService().RecordReplayAcquisitionFailure(il.Hash(), errors.New("transient parent-state acquisition failure"))
+func (r *Router) discardFailedInboundAcquisition(il *inbound.Ledger, cause error) {
+	if il == nil {
+		return
+	}
+	if cause == nil {
+		cause = errors.New("transient parent-state acquisition failure")
 	}
 	retirement, pivotRetired, removed := r.removeInboundAcquisitionWithSession(il, inbound.Snapshot{}, true)
 	if !removed {
 		return
 	}
+	r.recordReplayAcquisitionFailure(il, inboundAcquisitionFailureCause(cause))
 	r.finishDiscardedInboundAcquisitionOwned(il, retirement, pivotRetired)
 }
 
-func (r *Router) discardFailedInboundAcquisitionWithSnapshot(il *inbound.Ledger, snapshot inbound.Snapshot) {
+func (r *Router) discardFailedInboundAcquisitionWithSnapshot(
+	il *inbound.Ledger,
+	snapshot inbound.Snapshot,
+	cause error,
+) {
+	if il == nil {
+		return
+	}
 	retirement, pivotRetired, removed := r.removeInboundAcquisitionWithSession(il, snapshot, false)
 	if !removed {
 		return
 	}
+	r.recordReplayAcquisitionFailure(il, inboundAcquisitionFailureCause(cause))
 	r.finishDiscardedInboundAcquisitionOwned(il, retirement, pivotRetired)
 }
 
@@ -3999,7 +4060,7 @@ func (r *Router) sendNodesByHash(peers []uint64, ledgerHash [32]byte, seq uint32
 func (r *Router) completeInboundLedger(il *inbound.Ledger) {
 	if err := r.flushAcquisitionStore(r.lifecycleContext(), il); err != nil {
 		r.logger.Warn("inbound ledger: verified-node persistence failed", "error", err, "seq", il.Seq())
-		r.discardFailedInboundAcquisition(il)
+		r.discardFailedInboundAcquisition(il, err)
 		return
 	}
 	r.completeInboundLedgerReady(il)
@@ -4013,21 +4074,21 @@ func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
 	h, stateMap, txMap, err := il.Result()
 	if err != nil {
 		r.logger.Warn("inbound ledger: failed to get result", "error", err)
-		r.discardFailedInboundAcquisition(il)
+		r.discardFailedInboundAcquisition(il, err)
 		return
 	}
 	if r.adaptor == nil {
-		r.discardFailedInboundAcquisition(il)
+		r.discardFailedInboundAcquisition(il, errors.New("inbound ledger: adaptor unavailable"))
 		return
 	}
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
-		r.discardFailedInboundAcquisition(il)
+		r.discardFailedInboundAcquisition(il, errors.New("inbound ledger: ledger service unavailable"))
 		return
 	}
 	if err = r.promoteAcquisitionStore(r.lifecycleContext(), il); err != nil {
 		r.logger.Warn("inbound ledger: failed to promote persistence scope", "error", err, "seq", il.Seq())
-		r.discardFailedInboundAcquisition(il)
+		r.discardFailedInboundAcquisition(il, err)
 		return
 	}
 	peerID := il.PeerID()
@@ -4118,6 +4179,7 @@ func (r *Router) completeInboundLedgerReady(il *inbound.Ledger) {
 	r.replayCommitMu.Unlock()
 	if err != nil {
 		r.logger.Warn("inbound ledger: failed to store consensus ledger", "error", err, "seq", h.LedgerIndex)
+		r.recordReplayAcquisitionFailure(il, fmt.Errorf("store consensus ledger: %w", err))
 		frozenPivot := r.failFrozenPivotHandoff(handoff)
 		r.retireAcquisitionStore(r.lifecycleContext(), il)
 		if frozenPivot {
