@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -198,7 +199,7 @@ func TestLoanDefaultMPTLockExemptionScope(t *testing.T) {
 			view, id, source, destination, entries := mptTransferFixture(t, flags, 0, 0)
 			chain := newLoanFreezeFixture(t, "USD", 0, 0)
 			for key, raw := range chain.view.data {
-				fields, err := decodeEntry(raw)
+				fields, err := binarycodec.DecodeBytes(raw)
 				if err != nil {
 					t.Fatal(err)
 				}
